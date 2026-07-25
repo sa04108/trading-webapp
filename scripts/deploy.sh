@@ -30,12 +30,26 @@ sudo mkdir -p "/opt/quant-platform/releases/${RELEASE}"
 sudo tar -xzf "/tmp/${ARCHIVE}" -C "/opt/quant-platform/releases/${RELEASE}"
 cd "/opt/quant-platform/releases/${RELEASE}"
 sudo corepack pnpm install --prod --frozen-lockfile
+
+# 롤백 대비: 전환 전의 release 를 기억한다 (최초 배포면 비어 있음)
+PREVIOUS_RELEASE="\$(readlink -f /opt/quant-platform/current 2>/dev/null || true)"
+
 sudo ln -sfn "/opt/quant-platform/releases/${RELEASE}" /opt/quant-platform/current
 sudo systemctl restart quant-platform
 sleep 3
-curl -fsS http://127.0.0.1:3000/api/v1/health/ready
+if ! curl -fsS http://127.0.0.1:3000/api/v1/health/ready; then
+  echo "health check 실패 — 이전 release 로 롤백합니다 (스펙 §30)" >&2
+  if [ -n "\${PREVIOUS_RELEASE}" ] && [ -d "\${PREVIOUS_RELEASE}" ]; then
+    sudo ln -sfn "\${PREVIOUS_RELEASE}" /opt/quant-platform/current
+    sudo systemctl restart quant-platform
+    echo "rolled back to \${PREVIOUS_RELEASE}" >&2
+  else
+    echo "롤백할 이전 release 가 없습니다 — 서비스 상태를 직접 확인하세요" >&2
+  fi
+  exit 1
+fi
 echo "release ${RELEASE} live"
 EOF
 
 rm -f "${ARCHIVE}"
-echo "==> 완료. 롤백: 이전 release 로 symlink 교체 후 restart"
+echo "==> 완료"
