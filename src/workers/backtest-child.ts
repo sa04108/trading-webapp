@@ -157,7 +157,6 @@ async function main(): Promise<void> {
 
     if (result.cancelled) {
       finish('CANCELLED');
-      send({ type: 'cancelled' });
       return;
     }
 
@@ -275,12 +274,11 @@ async function main(): Promise<void> {
       .where(eq(backtestJobs.id, jobId))
       .run();
 
+    // 종료 상태는 DB 가 유일한 진실이다 — 부모는 exit 이벤트에서 DB 를 읽는다
     finish('COMPLETED');
-    send({ type: 'completed' });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     finish(cancelRequested ? 'CANCELLED' : 'FAILED', cancelRequested ? undefined : reason);
-    send(cancelRequested ? { type: 'cancelled' } : { type: 'failed', reason });
     process.exitCode = cancelRequested ? 0 : 1;
   } finally {
     duckdb.close();

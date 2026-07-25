@@ -7,12 +7,13 @@ import type { Logger } from '../../../shared/logger.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
 import type { BacktestJobRow, JobQueue } from './job-queue.js';
 
-/** 자식 → 부모 IPC 메시지 */
-export type ChildMessage =
-  | { type: 'progress'; processedBars: number; totalBars: number; progressLabel: string | null }
-  | { type: 'completed' }
-  | { type: 'cancelled' }
-  | { type: 'failed'; reason: string };
+/** 자식 → 부모 IPC 메시지. 종료 상태는 IPC 가 아니라 DB 에 기록된다 (exit 시 부모가 읽음). */
+export type ChildMessage = {
+  type: 'progress';
+  processedBars: number;
+  totalBars: number;
+  progressLabel: string | null;
+};
 
 export interface JobEvent {
   jobId: string;
