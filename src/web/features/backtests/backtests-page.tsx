@@ -5,7 +5,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useBacktests } from './api';
-import { formatDateTime, formatSignedPct, pnlClass } from './format';
+import { formatDateTime, formatSignedPct, pnlClass } from '@/lib/format';
 import { StatusBadge } from './status-badge';
 import { isTerminal, type JobSummary } from './types';
 

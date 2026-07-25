@@ -42,7 +42,7 @@ import {
   formatSignedKrw,
   formatSignedPct,
   pnlClass,
-} from './format';
+} from '@/lib/format';
 import { DrawdownChart, EquityChart, MonthlyReturnsChart } from './result-charts';
 import { StatusBadge } from './status-badge';
 import { isTerminal, type BacktestMetrics, type JobSummary, type RunMetadata } from './types';

@@ -17,7 +17,7 @@ import {
 import { Separator } from '@/components/ui/separator';
 import { api, ApiError, postJson } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
-import { formatKrw } from './format';
+import { formatKrw } from '@/lib/format';
 import type { BacktestRequestBody } from './types';
 
 const STEPS = ['전략', '데이터·종목', '기간', '자본·비용', '검토', '실행'] as const;

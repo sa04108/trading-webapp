@@ -24,6 +24,7 @@ import {
 } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { api, postForm } from '@/lib/api-client';
+import { formatDate } from '@/lib/format';
 
 interface DatasetSummary {
   id: string;
@@ -41,11 +42,6 @@ interface CoverageRow {
   barCount: number;
   expectedBarCount: number | null;
   missingRanges: Array<{ fromTsMs: number; toTsMs: number }>;
-}
-
-function formatDate(tsMs: number | null): string {
-  if (tsMs === null) return '-';
-  return new Date(tsMs).toISOString().slice(0, 10);
 }
 
 function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
