@@ -82,16 +82,21 @@ export function createContainer(config: AppConfig): Container {
   const database = openDatabase(config.databasePath);
   const clock = systemClock;
 
-  // 무한 증가 방지: 만료 세션·오래된 로그인 시도·보존 기간 지난 감사 로그 정리
+  // 무한 증가 방지: 만료 세션·오래된 로그인 시도·보존 기간 지난 감사 로그 정리.
+  // 부팅 시 1회는 fail-fast(throw 허용), 주기 실행은 일시적 잠금(SQLITE_BUSY)이
+  // 프로세스를 죽이지 않도록 로그만 남기고 다음 사이클로 넘어간다.
   const sessionTimeouts = {
     idleTimeoutMs: config.sessionIdleTimeoutSeconds * 1000,
     absoluteTimeoutMs: config.sessionAbsoluteTimeoutSeconds * 1000,
   };
   pruneExpiredRows(database.db, clock.now(), sessionTimeouts);
-  const pruneTimer = setInterval(
-    () => pruneExpiredRows(database.db, clock.now(), sessionTimeouts),
-    6 * 3_600_000,
-  );
+  const pruneTimer = setInterval(() => {
+    try {
+      pruneExpiredRows(database.db, clock.now(), sessionTimeouts);
+    } catch (error) {
+      logger.warn({ module: 'maintenance', err: error }, 'periodic prune failed — skipping cycle');
+    }
+  }, 6 * 3_600_000);
   pruneTimer.unref();
 
   const auditLog = createAuditLogService(database.db, clock, logger);
