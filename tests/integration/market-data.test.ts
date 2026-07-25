@@ -289,8 +289,36 @@ describe('market data (스펙 §11, §13)', () => {
       cookies: { qp_session: cookie },
       payload,
     });
-    // 파서가 헤더를 검증하고 import job 이 FAILED 로 기록된다
-    expect(response.statusCode).toBe(422);
-    expect((response.json().job as { status: string }).status).toBe('FAILED');
+    // 파싱은 메타데이터 변경 전에 일어난다 — 명시적 400, 빈 데이터셋이 생기지 않는다
+    expect(response.statusCode).toBe(400);
+    expect(ctx.container.datasetService.listDatasets()).toHaveLength(0);
+  });
+
+  it('does not add a symbol to dataset metadata when its CSV fails to parse', async () => {
+    const service = ctx.container.datasetService;
+    const good = await service.importCsv({
+      datasetName: 'meta-guard',
+      market: 'KR',
+      timeframe: '1m',
+      symbol: '005930',
+      fileName: 'good.csv',
+      csvContent: buildCsv(60),
+    });
+    expect(good.status).toBe('COMPLETED');
+
+    // 새 심볼의 전량 불량 업로드 — symbolsJson 에 유령 심볼이 남으면 안 된다
+    await expect(
+      service.importCsv({
+        datasetName: 'meta-guard',
+        market: 'KR',
+        timeframe: '1m',
+        symbol: '000660',
+        fileName: 'bad.csv',
+        csvContent: 'timestamp,open,high,low,close,volume\nnot-a-number,x,x,x,x,x',
+      }),
+    ).rejects.toThrow();
+
+    const dataset = service.listDatasets().find((d) => d.name === 'meta-guard')!;
+    expect(dataset.symbols).toEqual(['005930']);
   });
 });

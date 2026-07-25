@@ -96,6 +96,18 @@ export class DatasetService {
     }
     // 세션이 정의되지 않은 시장(US 등)은 조용한 빈 집계 대신 여기서 명시적으로 거부한다
     const session = getSessionForMarket(request.market);
+
+    // CSV 는 데이터셋 메타데이터를 만지기 전에 파싱한다 — 전량 불량인 업로드가
+    // 빈 데이터셋을 만들거나 존재하지 않는 심볼을 symbolsJson 에 남기지 않는다
+    const parsed = parseCandleCsv(request.csvContent, {
+      market: request.market,
+      timeframe: request.timeframe,
+      symbol: request.symbol,
+    });
+    if (parsed.candles.length === 0) {
+      throw new Error(parsed.errors[0] ?? 'CSV 에 유효한 봉이 없습니다');
+    }
+
     const now = this.clock.now();
     const dataset = this.ensureDataset(request, now);
 
@@ -114,15 +126,6 @@ export class DatasetService {
       .run();
 
     try {
-      const parsed = parseCandleCsv(request.csvContent, {
-        market: request.market,
-        timeframe: request.timeframe,
-        symbol: request.symbol,
-      });
-      if (parsed.candles.length === 0) {
-        throw new Error(parsed.errors[0] ?? 'CSV 에 유효한 봉이 없습니다');
-      }
-
       await this.candleRepository.saveCandles(dataset.id, parsed.candles);
 
       // 스펙 §11: 백테스트는 사전 집계 1시간봉 우선 — 1m import 시 1h 를 함께 생성
