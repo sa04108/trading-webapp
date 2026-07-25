@@ -135,7 +135,7 @@ export class DatasetService {
         await this.candleRepository.saveCandles(dataset.id, hourly);
       }
 
-      await this.refreshCoverage(dataset.id, request.market, dataset.timeframe as Timeframe, request.symbol);
+      await this.refreshCoverage(dataset.id, request.market, dataset.timeframe as Timeframe);
       this.bumpVersion(dataset.id, request, now);
 
       const completedAt = this.clock.now();
@@ -237,43 +237,38 @@ export class DatasetService {
       .run();
   }
 
-  async refreshCoverage(
-    datasetId: string,
-    market: Market,
-    timeframe: Timeframe,
-    symbol: string,
-  ): Promise<void> {
+  async refreshCoverage(datasetId: string, market: Market, timeframe: Timeframe): Promise<void> {
     const session = getSessionForMarket(market);
-    const timestamps = await this.candleRepository.getTimestamps(datasetId, market, timeframe, symbol);
-    const coverage = computeCoverage(timeframe, timestamps, session);
-
-    this.db
-      .delete(dataCoverage)
-      .where(eq(dataCoverage.datasetId, datasetId))
-      .run();
-    // 심볼 단위 재계산: 동일 datasetId 의 다른 심볼 행도 다시 계산
     const dataset = this.db.select().from(datasets).where(eq(datasets.id, datasetId)).get();
     if (!dataset) return;
     const symbols = JSON.parse(dataset.symbolsJson) as string[];
-    for (const eachSymbol of symbols) {
-      const ts =
-        eachSymbol === symbol
-          ? timestamps
-          : await this.candleRepository.getTimestamps(datasetId, market, timeframe, eachSymbol);
-      const each = eachSymbol === symbol ? coverage : computeCoverage(timeframe, ts, session);
-      this.db
-        .insert(dataCoverage)
-        .values({
-          datasetId,
-          symbol: eachSymbol,
-          firstTsMs: each.firstTsMs,
-          lastTsMs: each.lastTsMs,
-          barCount: each.barCount,
-          expectedBarCount: each.expectedBarCount,
-          missingRangesJson: JSON.stringify(each.missingRanges),
-          computedAtMs: this.clock.now(),
-        })
-        .run();
+
+    // 계산(비동기)을 끝낸 뒤 삭제+삽입은 단일 트랜잭션으로 —
+    // 동시 조회가 비어 있거나 반쯤 채워진 coverage 를 보지 않는다
+    const rows: (typeof dataCoverage.$inferInsert)[] = [];
+    for (const symbol of symbols) {
+      const timestamps = await this.candleRepository.getTimestamps(
+        datasetId,
+        market,
+        timeframe,
+        symbol,
+      );
+      const coverage = computeCoverage(timeframe, timestamps, session);
+      rows.push({
+        datasetId,
+        symbol,
+        firstTsMs: coverage.firstTsMs,
+        lastTsMs: coverage.lastTsMs,
+        barCount: coverage.barCount,
+        expectedBarCount: coverage.expectedBarCount,
+        missingRangesJson: JSON.stringify(coverage.missingRanges),
+        computedAtMs: this.clock.now(),
+      });
     }
+
+    this.db.transaction((tx) => {
+      tx.delete(dataCoverage).where(eq(dataCoverage.datasetId, datasetId)).run();
+      for (const row of rows) tx.insert(dataCoverage).values(row).run();
+    });
   }
 }
