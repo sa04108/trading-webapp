@@ -13,7 +13,7 @@
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "test": "vitest run",
-    "test:e2e": "playwright test",
+    "test:e2e": "pnpm build && playwright test",
     "build": "pnpm build:server && pnpm build:web",
     "build:server": "tsc -p tsconfig.build.json",
     "build:web": "vite build",

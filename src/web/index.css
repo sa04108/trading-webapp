@@ -5,6 +5,22 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* 손익 색상 (KR 관례: 빨강=수익, 파랑=손실) — dataviz 검증 통과 쌍.
+   색상만으로 손익을 표현하지 않는다: 항상 부호·텍스트와 함께 사용 (스펙 §17). */
+:root {
+  --gain: #dc2626;
+  --loss: #2563eb;
+}
+.dark {
+  --gain: #ef4444;
+  --loss: #3b82f6;
+}
+
+@theme inline {
+  --color-gain: var(--gain);
+  --color-loss: var(--loss);
+}
+
 @theme inline {
     --font-heading: var(--font-sans);
     --font-sans: 'Geist Variable', sans-serif;

@@ -19,9 +19,16 @@ import { registerStrategyRoutes } from '../modules/strategy/presentation/strateg
 import { registerBacktestRoutes } from '../modules/backtest/presentation/backtest-routes.js';
 
 function resolvePublicDir(): string | null {
-  // 빌드 후: dist/server/bootstrap → dist/public. 개발 중에는 Vite dev 서버를 사용한다.
-  const candidate = fileURLToPath(new URL('../../public', import.meta.url));
-  return fs.existsSync(path.join(candidate, 'index.html')) ? candidate : null;
+  // 빌드 후: dist/server/bootstrap → dist/public.
+  // 소스 트리(tsx)에서 실행 중이면 cwd 의 dist/public 로 폴백 (E2E 서버 등).
+  const candidates = [
+    fileURLToPath(new URL('../../public', import.meta.url)),
+    path.resolve(process.cwd(), 'dist', 'public'),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(path.join(candidate, 'index.html'))) return candidate;
+  }
+  return null;
 }
 
 export async function buildServer(container: Container): Promise<FastifyInstance> {

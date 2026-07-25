@@ -1,0 +1,532 @@
+import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router';
+import { toast } from 'sonner';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Separator } from '@/components/ui/separator';
+import { api, ApiError, postJson } from '@/lib/api-client';
+import { cn } from '@/lib/utils';
+import { formatKrw } from './format';
+import type { BacktestRequestBody } from './types';
+
+const STEPS = ['전략', '데이터·종목', '기간', '자본·비용', '검토', '실행'] as const;
+
+interface StrategySummary {
+  id: string;
+  version: string;
+  name: string;
+  description: string;
+}
+
+interface DatasetSummary {
+  id: string;
+  name: string;
+  market: string;
+  timeframe: string;
+  symbols: string[];
+}
+
+interface ProfileSummary {
+  id: string;
+  version: string;
+}
+
+interface NumberParamSpec {
+  key: string;
+  minimum?: number;
+  maximum?: number;
+  isInteger: boolean;
+  optional: boolean;
+}
+
+/** hourly-breakout 기본값 (스펙 §15 예시 기반) */
+const DEFAULT_PARAMS: Record<string, Record<string, number>> = {
+  'hourly-breakout': {
+    lookbackBars: 20,
+    atrPeriod: 14,
+    stopAtrMultiplier: 2,
+    riskPerTradePercent: 1,
+    maxPositions: 5,
+  },
+};
+
+function extractNumberParams(schema: Record<string, unknown> | undefined): NumberParamSpec[] {
+  if (!schema) return [];
+  const properties = (schema.properties ?? {}) as Record<string, Record<string, unknown>>;
+  const required = new Set((schema.required as string[] | undefined) ?? []);
+  return Object.entries(properties)
+    .filter(([, def]) => def.type === 'number' || def.type === 'integer')
+    .map(([key, def]) => ({
+      key,
+      ...(typeof def.minimum === 'number' ? { minimum: def.minimum } : {}),
+      ...(typeof def.maximum === 'number' ? { maximum: def.maximum } : {}),
+      isInteger: def.type === 'integer',
+      optional: !required.has(key),
+    }));
+}
+
+export function NewBacktestWizard() {
+  const navigate = useNavigate();
+  const [step, setStep] = useState(0);
+  const [strategyId, setStrategyId] = useState<string | null>(null);
+  const [parameters, setParameters] = useState<Record<string, string>>({});
+  const [datasetId, setDatasetId] = useState<string | null>(null);
+  const [symbols, setSymbols] = useState<string[]>([]);
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [initialCash, setInitialCash] = useState('10000000');
+  const [commissionProfileId, setCommissionProfileId] = useState('kr-equity-default');
+  const [slippageProfileId, setSlippageProfileId] = useState('fixed-5bps');
+  const [randomSeed, setRandomSeed] = useState('42');
+  const [stepError, setStepError] = useState<string | null>(null);
+
+  const strategies = useQuery({
+    queryKey: ['strategies'],
+    queryFn: () => api<{ strategies: StrategySummary[] }>('/strategies'),
+  });
+  const schema = useQuery({
+    queryKey: ['strategies', strategyId, 'schema'],
+    queryFn: () => api<{ schema: Record<string, unknown> }>(`/strategies/${strategyId}/schema`),
+    enabled: strategyId !== null,
+  });
+  const datasets = useQuery({
+    queryKey: ['datasets'],
+    queryFn: () => api<{ datasets: DatasetSummary[] }>('/datasets'),
+  });
+  const profiles = useQuery({
+    queryKey: ['backtests', 'profiles'],
+    queryFn: () =>
+      api<{ commissionProfiles: ProfileSummary[]; slippageProfiles: ProfileSummary[] }>(
+        '/backtests/profiles',
+      ),
+  });
+
+  const selectedStrategy = strategies.data?.strategies.find((s) => s.id === strategyId) ?? null;
+  const selectedDataset = datasets.data?.datasets.find((d) => d.id === datasetId) ?? null;
+  const paramSpecs = useMemo(() => extractNumberParams(schema.data?.schema), [schema.data]);
+
+  const pickStrategy = (id: string): void => {
+    setStrategyId(id);
+    const defaults = DEFAULT_PARAMS[id] ?? {};
+    setParameters(
+      Object.fromEntries(Object.entries(defaults).map(([key, value]) => [key, String(value)])),
+    );
+  };
+
+  const buildRequest = (): BacktestRequestBody | string => {
+    if (!selectedStrategy) return '전략을 선택하세요';
+    if (!selectedDataset || symbols.length === 0) return '데이터셋과 종목을 선택하세요';
+    if (!from || !to || from > to) return '기간이 올바르지 않습니다';
+    const cash = Number(initialCash);
+    if (!Number.isFinite(cash) || cash <= 0) return '초기 자본이 올바르지 않습니다';
+
+    const parsedParams: Record<string, number> = {};
+    for (const spec of paramSpecs) {
+      const raw = parameters[spec.key];
+      if (raw === undefined || raw === '') {
+        if (spec.optional) continue;
+        return `파라미터 ${spec.key} 를 입력하세요`;
+      }
+      const value = Number(raw);
+      if (!Number.isFinite(value)) return `파라미터 ${spec.key} 가 숫자가 아닙니다`;
+      if (spec.minimum !== undefined && value < spec.minimum)
+        return `${spec.key} ≥ ${spec.minimum} 이어야 합니다`;
+      if (spec.maximum !== undefined && value > spec.maximum)
+        return `${spec.key} ≤ ${spec.maximum} 이어야 합니다`;
+      parsedParams[spec.key] = spec.isInteger ? Math.round(value) : value;
+    }
+
+    return {
+      strategyId: selectedStrategy.id,
+      strategyVersion: selectedStrategy.version,
+      parameters: parsedParams,
+      datasetId: selectedDataset.id,
+      universe: { type: 'SYMBOLS', symbols },
+      period: { from, to },
+      capital: { initialCash: cash, currency: 'KRW' },
+      execution: { fillTiming: 'NEXT_BAR_OPEN', commissionProfileId, slippageProfileId },
+      randomSeed: Number(randomSeed) || 42,
+    };
+  };
+
+  const submitMutation = useMutation({
+    mutationFn: (body: BacktestRequestBody) =>
+      postJson<{ job: { id: string } }>('/backtests', body),
+    onSuccess: (data) => {
+      toast.success('백테스트가 대기열에 추가되었습니다');
+      void navigate(`/backtests/${data.job.id}`);
+    },
+    onError: (error: unknown) => {
+      setStepError(error instanceof ApiError ? error.message : '제출에 실패했습니다');
+    },
+  });
+
+  const canProceed = (): string | null => {
+    switch (step) {
+      case 0:
+        return strategyId ? null : '전략을 선택하세요';
+      case 1:
+        if (!datasetId) return '데이터셋을 선택하세요';
+        if (symbols.length === 0) return '종목을 1개 이상 선택하세요';
+        return null;
+      case 2:
+        if (!from || !to) return '시작일과 종료일을 입력하세요';
+        if (from > to) return '시작일이 종료일보다 늦습니다';
+        return null;
+      case 3: {
+        const cash = Number(initialCash);
+        return Number.isFinite(cash) && cash > 0 ? null : '초기 자본이 올바르지 않습니다';
+      }
+      default:
+        return null;
+    }
+  };
+
+  const goNext = (): void => {
+    const error = canProceed();
+    if (error) {
+      setStepError(error);
+      return;
+    }
+    setStepError(null);
+    setStep((s) => Math.min(s + 1, STEPS.length - 1));
+  };
+
+  const request = step >= 4 ? buildRequest() : null;
+
+  return (
+    <div className="mx-auto max-w-2xl space-y-4">
+      <h2 className="text-lg font-semibold">새 백테스트</h2>
+
+      <ol className="flex flex-wrap gap-1 text-xs" aria-label="진행 단계">
+        {STEPS.map((label, index) => (
+          <li
+            key={label}
+            aria-current={index === step ? 'step' : undefined}
+            className={cn(
+              'rounded-full px-2.5 py-1',
+              index === step
+                ? 'bg-primary text-primary-foreground'
+                : index < step
+                  ? 'bg-muted text-foreground'
+                  : 'bg-muted/50 text-muted-foreground',
+            )}
+          >
+            {index + 1}. {label}
+          </li>
+        ))}
+      </ol>
+
+      {stepError ? (
+        <Alert variant="destructive" role="alert">
+          <AlertDescription>{stepError}</AlertDescription>
+        </Alert>
+      ) : null}
+
+      {step === 0 ? (
+        <div className="space-y-3">
+          {(strategies.data?.strategies ?? []).map((strategy) => (
+            <button
+              key={strategy.id}
+              type="button"
+              onClick={() => pickStrategy(strategy.id)}
+              className={cn(
+                'w-full rounded-xl border p-4 text-left transition-colors',
+                strategyId === strategy.id ? 'border-primary bg-muted/50' : 'hover:bg-muted/30',
+              )}
+            >
+              <p className="font-medium">
+                {strategy.name}{' '}
+                <span className="text-xs text-muted-foreground">v{strategy.version}</span>
+              </p>
+              <p className="mt-1 text-sm text-muted-foreground">{strategy.description}</p>
+            </button>
+          ))}
+          {selectedStrategy && paramSpecs.length > 0 ? (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">파라미터</CardTitle>
+                <CardDescription>검증된 범위 내에서만 조정할 수 있습니다.</CardDescription>
+              </CardHeader>
+              <CardContent className="grid grid-cols-2 gap-4">
+                {paramSpecs.map((spec) => (
+                  <div key={spec.key} className="space-y-1">
+                    <Label htmlFor={`param-${spec.key}`} className="text-xs">
+                      {spec.key}
+                      {spec.optional ? ' (선택)' : ''}
+                    </Label>
+                    <Input
+                      id={`param-${spec.key}`}
+                      type="number"
+                      inputMode="decimal"
+                      className="h-11"
+                      min={spec.minimum}
+                      max={spec.maximum}
+                      step={spec.isInteger ? 1 : 'any'}
+                      value={parameters[spec.key] ?? ''}
+                      onChange={(e) =>
+                        setParameters((prev) => ({ ...prev, [spec.key]: e.target.value }))
+                      }
+                    />
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          ) : null}
+        </div>
+      ) : null}
+
+      {step === 1 ? (
+        <div className="space-y-3">
+          {(datasets.data?.datasets ?? []).length === 0 ? (
+            <Alert>
+              <AlertDescription>
+                데이터셋이 없습니다. 데이터 메뉴에서 CSV 를 먼저 가져오세요.
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          {(datasets.data?.datasets ?? []).map((dataset) => (
+            <button
+              key={dataset.id}
+              type="button"
+              onClick={() => {
+                setDatasetId(dataset.id);
+                setSymbols(dataset.symbols);
+              }}
+              className={cn(
+                'w-full rounded-xl border p-4 text-left transition-colors',
+                datasetId === dataset.id ? 'border-primary bg-muted/50' : 'hover:bg-muted/30',
+              )}
+            >
+              <p className="font-medium">{dataset.name}</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {dataset.market} · {dataset.timeframe} · {dataset.symbols.length}종목
+              </p>
+            </button>
+          ))}
+          {selectedDataset ? (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">종목 선택</CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-wrap gap-2">
+                {selectedDataset.symbols.map((symbol) => {
+                  const checked = symbols.includes(symbol);
+                  return (
+                    <label
+                      key={symbol}
+                      className={cn(
+                        'flex min-h-11 cursor-pointer items-center gap-2 rounded-lg border px-3 text-sm',
+                        checked ? 'border-primary bg-muted/50' : '',
+                      )}
+                    >
+                      <input
+                        type="checkbox"
+                        className="size-4"
+                        checked={checked}
+                        onChange={(e) =>
+                          setSymbols((prev) =>
+                            e.target.checked
+                              ? [...prev, symbol]
+                              : prev.filter((s) => s !== symbol),
+                          )
+                        }
+                      />
+                      {symbol}
+                    </label>
+                  );
+                })}
+              </CardContent>
+            </Card>
+          ) : null}
+        </div>
+      ) : null}
+
+      {step === 2 ? (
+        <Card>
+          <CardContent className="grid grid-cols-1 gap-4 py-4 sm:grid-cols-2">
+            <div className="space-y-1">
+              <Label htmlFor="from">시작일</Label>
+              <Input
+                id="from"
+                type="date"
+                className="h-11"
+                value={from}
+                onChange={(e) => setFrom(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="to">종료일</Label>
+              <Input
+                id="to"
+                type="date"
+                className="h-11"
+                value={to}
+                onChange={(e) => setTo(e.target.value)}
+              />
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {step === 3 ? (
+        <Card>
+          <CardContent className="space-y-4 py-4">
+            <div className="space-y-1">
+              <Label htmlFor="cash">초기 자본 (KRW)</Label>
+              <Input
+                id="cash"
+                type="number"
+                inputMode="numeric"
+                className="h-11"
+                value={initialCash}
+                onChange={(e) => setInitialCash(e.target.value)}
+              />
+            </div>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="space-y-1">
+                <Label htmlFor="commission">수수료 프로파일</Label>
+                <Select value={commissionProfileId} onValueChange={setCommissionProfileId}>
+                  <SelectTrigger id="commission" className="h-11 w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(profiles.data?.commissionProfiles ?? []).map((profile) => (
+                      <SelectItem key={profile.id} value={profile.id}>
+                        {profile.id} (v{profile.version})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="slippage">슬리피지 프로파일</Label>
+                <Select value={slippageProfileId} onValueChange={setSlippageProfileId}>
+                  <SelectTrigger id="slippage" className="h-11 w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(profiles.data?.slippageProfiles ?? []).map((profile) => (
+                      <SelectItem key={profile.id} value={profile.id}>
+                        {profile.id} (v{profile.version})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="seed">Random seed</Label>
+              <Input
+                id="seed"
+                type="number"
+                inputMode="numeric"
+                className="h-11"
+                value={randomSeed}
+                onChange={(e) => setRandomSeed(e.target.value)}
+              />
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {step >= 4 ? (
+        typeof request === 'string' ? (
+          <Alert variant="destructive">
+            <AlertDescription>{request}</AlertDescription>
+          </Alert>
+        ) : request ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">
+                {step === 4 ? '검토' : '실행 준비 완료'}
+              </CardTitle>
+              <CardDescription>제출 전 설정을 확인하세요.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">전략</span>
+                <span>
+                  {request.strategyId} v{request.strategyVersion}
+                </span>
+              </div>
+              <Separator />
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">종목</span>
+                <span>{request.universe.symbols.join(', ')}</span>
+              </div>
+              <Separator />
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">기간</span>
+                <span>
+                  {request.period.from} ~ {request.period.to}
+                </span>
+              </div>
+              <Separator />
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">초기 자본</span>
+                <span>{formatKrw(request.capital.initialCash)}</span>
+              </div>
+              <Separator />
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">비용</span>
+                <span>
+                  {request.execution.commissionProfileId} / {request.execution.slippageProfileId}
+                </span>
+              </div>
+              <Separator />
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">파라미터</span>
+                <span className="text-right font-mono text-xs">
+                  {Object.entries(request.parameters)
+                    .map(([k, v]) => `${k}=${String(v)}`)
+                    .join(' ')}
+                </span>
+              </div>
+            </CardContent>
+          </Card>
+        ) : null
+      ) : null}
+
+      <div className="flex items-center justify-between gap-2">
+        <Button
+          variant="outline"
+          className="h-11"
+          disabled={step === 0}
+          onClick={() => {
+            setStepError(null);
+            setStep((s) => Math.max(0, s - 1));
+          }}
+        >
+          이전
+        </Button>
+        {step < STEPS.length - 1 ? (
+          <Button className="h-11" onClick={goNext}>
+            다음
+          </Button>
+        ) : (
+          <Button
+            className="h-11"
+            disabled={typeof request === 'string' || submitMutation.isPending}
+            onClick={() => {
+              if (request && typeof request !== 'string') submitMutation.mutate(request);
+            }}
+          >
+            {submitMutation.isPending ? '제출 중…' : '백테스트 실행'}
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
