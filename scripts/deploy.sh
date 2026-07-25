@@ -63,8 +63,20 @@ if ! curl -fsS http://127.0.0.1:3000/api/v1/health/ready; then
   fi
   exit 1
 fi
-sudo rm -f "\${DB_SNAPSHOT}"
+# 성공한 배포의 스냅샷도 즉시 지우지 않는다 (D-010): health check 통과 뒤에 발견된 문제는
+# 수동 롤백으로 되돌리는데, 짝이 맞는 스냅샷이 없으면 이전 코드가 새 스키마를 만나 죽는다.
+# 최근 KEEP_SNAPSHOTS 개만 남긴다 — backup.sh 의 정리 규칙은 backup-* 디렉터리만 훑는다.
+KEEP_SNAPSHOTS=5
+sudo sh -c "ls -1t /var/lib/quant-platform/backups/pre-deploy-*.sqlite 2>/dev/null | tail -n +\$((KEEP_SNAPSHOTS + 1)) | xargs -r rm -f" || true
+
 echo "release ${RELEASE} live"
+if [ -f "\${DB_SNAPSHOT}" ]; then
+  echo "수동 롤백 시 코드와 스키마를 짝으로 되돌린다 (D-010):"
+  echo "  sudo systemctl stop quant-platform"
+  echo "  sudo ln -sfn <이전 release 경로> /opt/quant-platform/current"
+  echo "  sudo cp \${DB_SNAPSHOT} \${DB_PATH} && sudo rm -f \${DB_PATH}-wal \${DB_PATH}-shm"
+  echo "  sudo systemctl start quant-platform"
+fi
 EOF
 
 rm -f "${ARCHIVE}"
