@@ -43,7 +43,7 @@ function serializeJob(job: BacktestJobRow) {
     request: JSON.parse(job.requestJson) as unknown,
     progressBars: job.progressBars,
     totalBars: job.totalBars,
-    currentSymbol: job.currentSymbol,
+    progressLabel: job.progressLabel,
     error: job.error,
     createdAtMs: job.createdAtMs,
     startedAtMs: job.startedAtMs,

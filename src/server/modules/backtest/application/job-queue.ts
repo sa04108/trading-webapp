@@ -126,11 +126,11 @@ export class JobQueue {
     jobId: string,
     progressBars: number,
     totalBars: number,
-    currentSymbol: string | null,
+    progressLabel: string | null,
   ): void {
     this.db
       .update(backtestJobs)
-      .set({ progressBars, totalBars, currentSymbol })
+      .set({ progressBars, totalBars, progressLabel })
       .where(and(eq(backtestJobs.id, jobId), inArray(backtestJobs.status, ACTIVE_STATUSES)))
       .run();
   }

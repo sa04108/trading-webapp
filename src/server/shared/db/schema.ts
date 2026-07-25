@@ -152,7 +152,8 @@ export const backtestJobs = sqliteTable(
     datasetHash: text('dataset_hash'),
     progressBars: integer('progress_bars'),
     totalBars: integer('total_bars'),
-    currentSymbol: text('current_symbol'),
+    // 진행 위치 표시용 텍스트 (엔진이 시간 우선이라 날짜가 들어간다) — "심볼" 이 아니다
+    progressLabel: text('progress_label'),
     error: text('error'),
     workerId: text('worker_id'),
     pid: integer('pid'),

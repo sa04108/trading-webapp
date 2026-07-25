@@ -379,8 +379,8 @@ export function BacktestDetailPage() {
               </span>
             </div>
             <Progress value={progress ?? 0} aria-label="백테스트 진행률" />
-            {job.currentSymbol ? (
-              <p className="text-xs text-muted-foreground">처리 중: {job.currentSymbol}</p>
+            {job.progressLabel ? (
+              <p className="text-xs text-muted-foreground">처리 중: {job.progressLabel}</p>
             ) : null}
           </CardContent>
         </Card>

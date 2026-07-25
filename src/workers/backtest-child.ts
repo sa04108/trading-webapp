@@ -129,7 +129,6 @@ async function main(): Promise<void> {
 
     const startedAtMs = Date.now();
     let lastProgressSentAt = 0;
-    let lastSymbol: string | null = null;
 
     const parameters = validated.value as Record<string, unknown>;
 
@@ -150,8 +149,9 @@ async function main(): Promise<void> {
         const now = Date.now();
         if (now - lastProgressSentAt < 200 && processedBars < totalBars) return;
         lastProgressSentAt = now;
-        lastSymbol = new Date(currentTsMs).toISOString().slice(0, 10);
-        send({ type: 'progress', processedBars, totalBars, currentSymbol: lastSymbol });
+        // 엔진은 시간 우선으로 돌기 때문에 "현재 심볼" 은 존재하지 않는다 — 처리 중인 날짜를 표시
+        const progressLabel = new Date(currentTsMs).toISOString().slice(0, 10);
+        send({ type: 'progress', processedBars, totalBars, progressLabel });
       },
     });
 

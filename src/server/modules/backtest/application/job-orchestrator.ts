@@ -9,7 +9,7 @@ import type { BacktestJobRow, JobQueue } from './job-queue.js';
 
 /** 자식 → 부모 IPC 메시지 */
 export type ChildMessage =
-  | { type: 'progress'; processedBars: number; totalBars: number; currentSymbol: string | null }
+  | { type: 'progress'; processedBars: number; totalBars: number; progressLabel: string | null }
   | { type: 'completed' }
   | { type: 'cancelled' }
   | { type: 'failed'; reason: string };
@@ -169,7 +169,7 @@ export class JobOrchestrator {
           job.id,
           message.processedBars,
           message.totalBars,
-          message.currentSymbol,
+          message.progressLabel,
         );
         this.events.emit('job', { jobId: job.id, kind: 'progress' } satisfies JobEvent);
       } catch (error) {

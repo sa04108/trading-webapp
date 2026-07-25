@@ -1,0 +1,1 @@
+ALTER TABLE `backtest_jobs` ADD `progress_label` text;
