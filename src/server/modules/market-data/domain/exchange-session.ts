@@ -53,12 +53,6 @@ export function toLocalTime(tsMs: number, session: ExchangeSession): LocalTime {
   return { dayIndex, minuteOfDay, dayOfWeek };
 }
 
-export function isWithinSession(tsMs: number, session: ExchangeSession): boolean {
-  const local = toLocalTime(tsMs, session);
-  if (local.dayOfWeek === 0 || local.dayOfWeek === 6) return false;
-  return local.minuteOfDay >= session.openMinutes && local.minuteOfDay < session.closeMinutes;
-}
-
 /** 현지 (dayIndex, minuteOfDay) → UTC epoch ms */
 export function fromLocalTime(
   dayIndex: number,

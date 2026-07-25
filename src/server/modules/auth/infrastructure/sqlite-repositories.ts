@@ -82,9 +82,6 @@ export function createSqliteSessionRepository(db: AppDatabase): SessionRepositor
     delete(id) {
       db.delete(sessions).where(eq(sessions.id, id)).run();
     },
-    deleteAllForUser(userId) {
-      db.delete(sessions).where(eq(sessions.userId, userId)).run();
-    },
   };
 }
 
