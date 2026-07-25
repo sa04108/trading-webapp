@@ -48,10 +48,26 @@ if [ -f "\${DB_PATH}" ]; then
 fi
 
 sudo ln -sfn "/opt/quant-platform/releases/${RELEASE}" /opt/quant-platform/current
-sudo systemctl restart quant-platform
-sleep 3
-if ! curl -fsS http://127.0.0.1:3000/api/v1/health/ready; then
-  echo "health check 실패 — 이전 release 로 롤백합니다 (스펙 §30)" >&2
+
+# 기동과 준비 확인은 같은 롤백 핸들러 아래에 둔다. restart 자체가 실패하면
+# set -e 로 셸이 먼저 죽어버려, 심볼릭 링크와 마이그레이션된 DB 는 새 릴리스에
+# 남은 채 롤백이 아예 돌지 않는다 (D-010 이 막으려던 바로 그 상태).
+DEPLOY_FAILED=0
+sudo systemctl restart quant-platform || DEPLOY_FAILED=1
+
+# 준비될 때까지 재시도한다 — 단발 curl 은 부팅이 조금만 느려도 정상 릴리스를 롤백시키고,
+# 롤백은 이제 DB 스냅샷 복원까지 동반하므로 헛된 롤백에 쓰기 유실이 따라온다.
+if [ "\${DEPLOY_FAILED}" -eq 0 ]; then
+  READY=0
+  for _ in \$(seq 1 10); do
+    if curl -fsS http://127.0.0.1:3000/api/v1/health/ready; then READY=1; break; fi
+    sleep 2
+  done
+  [ "\${READY}" -eq 1 ] || DEPLOY_FAILED=1
+fi
+
+if [ "\${DEPLOY_FAILED}" -ne 0 ]; then
+  echo "기동 또는 health check 실패 — 이전 release 로 롤백합니다 (스펙 §30)" >&2
   if [ -n "\${PREVIOUS_RELEASE}" ] && [ -d "\${PREVIOUS_RELEASE}" ]; then
     sudo systemctl stop quant-platform
     if [ -f "\${DB_SNAPSHOT}" ]; then
