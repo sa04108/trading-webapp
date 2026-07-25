@@ -1,8 +1,10 @@
+import { configureZodLocale } from '../shared/zod-locale.js';
 import { loadConfig } from './config.js';
 import { createContainer } from './container.js';
 import { buildServer } from './server.js';
 
 async function main(): Promise<void> {
+  configureZodLocale();
   const config = loadConfig();
   const container = createContainer(config);
   const app = await buildServer(container);

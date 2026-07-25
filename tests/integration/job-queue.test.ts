@@ -411,4 +411,17 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
     expect(badParams.statusCode).toBe(400);
   });
+
+  it('reports schema violations in Korean, not raw Zod English (M9 마무리)', async () => {
+    const badBody = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: { ...buildRequest(datasetId), capital: { initialCash: -1, currency: 'KRW' } },
+    });
+    expect(badBody.statusCode).toBe(400);
+    const message = (badBody.json() as { error: string }).error;
+    expect(message).toMatch(/[가-힣]/);
+    expect(message).not.toMatch(/Too small|Invalid|expected/i);
+  });
 });

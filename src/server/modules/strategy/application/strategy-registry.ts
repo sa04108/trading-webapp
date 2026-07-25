@@ -46,7 +46,7 @@ export class StrategyRegistry {
 
   validateParameters(strategyId: string, parameters: unknown): { ok: true; value: unknown } | { ok: false; error: string } {
     const strategy = this.get(strategyId);
-    if (!strategy) return { ok: false, error: `unknown strategy: ${strategyId}` };
+    if (!strategy) return { ok: false, error: `알 수 없는 전략: ${strategyId}` };
     const result = (strategy.parameterSchema as z.ZodType).safeParse(parameters);
     if (!result.success) {
       return {

@@ -5,6 +5,7 @@ import { createLogger, type Logger } from '../shared/logger.js';
 import { openDatabase, type DatabaseHandle } from '../shared/db/database.js';
 import { pruneExpiredRows } from '../shared/db/maintenance.js';
 import { systemClock, type Clock } from '../shared/clock.js';
+import { configureZodLocale } from '../shared/zod-locale.js';
 import { createAuditLogService, type AuditLogService } from '../modules/audit/audit-service.js';
 import { AuthService } from '../modules/auth/application/auth-service.js';
 import type {
@@ -73,6 +74,7 @@ function readAppVersion(): string {
 }
 
 export function createContainer(config: AppConfig): Container {
+  configureZodLocale();
   const logger = createLogger(config);
 
   for (const dir of [config.dataRoot, config.importRoot, config.exportRoot, config.tempRoot]) {
