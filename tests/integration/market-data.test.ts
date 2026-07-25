@@ -321,4 +321,41 @@ describe('market data (스펙 §11, §13)', () => {
     const dataset = service.listDatasets().find((d) => d.name === 'meta-guard')!;
     expect(dataset.symbols).toEqual(['005930']);
   });
+
+  it('does not add a symbol whose bars all fall outside the trading session', async () => {
+    const service = ctx.container.datasetService;
+    await service.importCsv({
+      datasetName: 'session-guard',
+      market: 'KR',
+      timeframe: '1m',
+      symbol: '005930',
+      fileName: 'good.csv',
+      csvContent: buildCsv(60),
+    });
+
+    // 구문은 멀쩡하지만 전 봉이 03:00 KST — 1h 집계 결과가 비어 있다.
+    // 파싱만 앞세우면 이 업로드가 ensureDataset 을 통과해 유령 심볼을 남긴다.
+    const outsideSession = Date.UTC(2026, 6, 5, 18, 0);
+    await expect(
+      service.importCsv({
+        datasetName: 'session-guard',
+        market: 'KR',
+        timeframe: '1m',
+        symbol: '000660',
+        fileName: 'off-hours.csv',
+        csvContent: buildCsv(60, outsideSession),
+      }),
+    ).rejects.toThrow(/세션 밖/);
+
+    const dataset = service.listDatasets().find((d) => d.name === 'session-guard')!;
+    expect(dataset.symbols).toEqual(['005930']);
+    // 유령 심볼의 원본 봉도 저장되지 않아야 한다
+    const timestamps = await ctx.container.candleRepository.getTimestamps(
+      dataset.id,
+      'KR',
+      '1m',
+      '000660',
+    );
+    expect(timestamps).toHaveLength(0);
+  });
 });

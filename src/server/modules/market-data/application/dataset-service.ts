@@ -11,7 +11,7 @@ import type { Clock } from '../../../shared/clock.js';
 import { newId } from '../../../shared/ids.js';
 import type { Logger } from '../../../shared/logger.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
-import { SYMBOL_PATTERN, type Market, type Timeframe } from '../domain/candle.js';
+import { SYMBOL_PATTERN, type Candle, type Market, type Timeframe } from '../domain/candle.js';
 import { aggregateToHourly } from '../domain/aggregate.js';
 import { computeCoverage } from '../domain/coverage.js';
 import { getSessionForMarket } from '../domain/exchange-session.js';
@@ -97,15 +97,31 @@ export class DatasetService {
     // 세션이 정의되지 않은 시장(US 등)은 조용한 빈 집계 대신 여기서 명시적으로 거부한다
     const session = getSessionForMarket(request.market);
 
-    // CSV 는 데이터셋 메타데이터를 만지기 전에 파싱한다 — 전량 불량인 업로드가
-    // 빈 데이터셋을 만들거나 존재하지 않는 심볼을 symbolsJson 에 남기지 않는다
+    // 내용 검증은 데이터셋 메타데이터를 만지기 전에 **전부** 끝낸다.
+    // 파싱만 앞세우면, 구문은 멀쩡하지만 전 봉이 세션 밖인 1m CSV 가 ensureDataset 을
+    // 통과해 symbolsJson 에 유령 심볼을 남긴다 — 위저드는 그 심볼을 광고하고
+    // 제출 검증도 통과시키지만 1h 데이터는 존재하지 않는다.
     const parsed = parseCandleCsv(request.csvContent, {
       market: request.market,
       timeframe: request.timeframe,
       symbol: request.symbol,
     });
     if (parsed.candles.length === 0) {
-      throw new Error(parsed.errors[0] ?? 'CSV 에 유효한 봉이 없습니다');
+      this.rejectImport(request, parsed.errors[0] ?? 'CSV 에 유효한 봉이 없습니다');
+    }
+
+    // 스펙 §11: 백테스트는 사전 집계 1시간봉 우선 — 1m import 시 1h 를 함께 생성한다.
+    // 집계는 저장·메타데이터 변경 전에 끝내 완료로 위장할 여지를 없앤다.
+    let hourly: Candle[] | null = null;
+    if (request.timeframe === '1m') {
+      hourly = aggregateToHourly(parsed.candles, session);
+      if (hourly.length === 0) {
+        // 모든 봉이 세션 밖 → 세션 불일치·잘못된 데이터
+        this.rejectImport(
+          request,
+          '모든 봉이 거래 세션 밖입니다. 타임스탬프와 시장 설정을 확인하세요.',
+        );
+      }
     }
 
     const now = this.clock.now();
@@ -127,16 +143,7 @@ export class DatasetService {
 
     try {
       await this.candleRepository.saveCandles(dataset.id, parsed.candles);
-
-      // 스펙 §11: 백테스트는 사전 집계 1시간봉 우선 — 1m import 시 1h 를 함께 생성
-      if (request.timeframe === '1m') {
-        const hourly = aggregateToHourly(parsed.candles, session);
-        if (hourly.length === 0) {
-          // 모든 봉이 세션 밖 → 세션 불일치·잘못된 데이터. 완료로 위장하지 않는다.
-          throw new Error('모든 봉이 거래 세션 밖입니다. 타임스탬프와 시장 설정을 확인하세요.');
-        }
-        await this.candleRepository.saveCandles(dataset.id, hourly);
-      }
+      if (hourly !== null) await this.candleRepository.saveCandles(dataset.id, hourly);
 
       await this.refreshCoverage(dataset.id, request.market, dataset.timeframe as Timeframe);
       this.bumpVersion(dataset.id, request, now);
@@ -171,6 +178,24 @@ export class DatasetService {
     }
 
     return this.getImportJob(jobId) as typeof dataImportJobs.$inferSelect;
+  }
+
+  /**
+   * 내용 검증 실패. 데이터셋도 job 레코드도 만들지 않으므로 (§13 의 FK 대상이 없다)
+   * 흔적은 감사 로그에 남긴다 — 거부된 업로드도 "무슨 일이 있었는지" 는 조회 가능해야 한다.
+   */
+  private rejectImport(request: ImportRequest, reason: string): never {
+    this.audit.record('system', 'data.import.rejected', {
+      datasetName: request.datasetName,
+      symbol: request.symbol,
+      fileName: request.fileName,
+      reason,
+    });
+    this.logger.warn(
+      { module: 'market-data', event: 'data.import.rejected', symbol: request.symbol },
+      reason,
+    );
+    throw new Error(reason);
   }
 
   private ensureDataset(request: ImportRequest, nowMs: number): typeof datasets.$inferSelect {
