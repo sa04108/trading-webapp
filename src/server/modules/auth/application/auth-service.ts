@@ -54,14 +54,17 @@ function newSessionId(): string {
 }
 
 export class AuthService {
-  /** 사용자 부재 시 타이밍 균등화용 더미 해시 — 최초 1회만 생성 */
-  private dummyHashPromise: Promise<string> | null = null;
+  /**
+   * 사용자 부재 시 타이밍 균등화용 더미 해시.
+   * 기동 시점에 미리 계산한다 — 첫 로그인 시도부터 두 경로가 검증 1회로 균등하다
+   * (지연 생성이면 콜드스타트 첫 시도가 해시+검증 2회로 구별 가능).
+   */
+  private readonly dummyHashPromise: Promise<string>;
 
-  constructor(private readonly deps: AuthServiceDeps) {}
-
-  private dummyHash(): Promise<string> {
-    this.dummyHashPromise ??= this.deps.passwordHasher.hash('timing-equalizer-dummy');
-    return this.dummyHashPromise;
+  constructor(private readonly deps: AuthServiceDeps) {
+    this.dummyHashPromise = deps.passwordHasher.hash('timing-equalizer-dummy');
+    // 로그인 요청 전에 실패해도 프로세스를 죽이지 않는다 — 실제 소비 시점에 다시 던져진다
+    void this.dummyHashPromise.catch(() => undefined);
   }
 
   async login(username: string, password: string, ip: string): Promise<LoginResult> {
@@ -80,7 +83,7 @@ export class AuthService {
       passwordOk = await passwordHasher.verify(user.passwordHash, password);
     } else {
       // 사용자 부재 시에도 더미 해시를 검증해 응답 시간 차이로 계정 존재가 드러나지 않게 한다
-      await passwordHasher.verify(await this.dummyHash(), password);
+      await passwordHasher.verify(await this.dummyHashPromise, password);
     }
 
     if (!user || !passwordOk) {
