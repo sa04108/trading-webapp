@@ -54,7 +54,15 @@ function newSessionId(): string {
 }
 
 export class AuthService {
+  /** 사용자 부재 시 타이밍 균등화용 더미 해시 — 최초 1회만 생성 */
+  private dummyHashPromise: Promise<string> | null = null;
+
   constructor(private readonly deps: AuthServiceDeps) {}
+
+  private dummyHash(): Promise<string> {
+    this.dummyHashPromise ??= this.deps.passwordHasher.hash('timing-equalizer-dummy');
+    return this.dummyHashPromise;
+  }
 
   async login(username: string, password: string, ip: string): Promise<LoginResult> {
     const { users, sessions, loginAttempts, passwordHasher, clock, audit } = this.deps;
@@ -67,10 +75,13 @@ export class AuthService {
     }
 
     const user = users.findByUsername(username);
-    const passwordOk = user
-      ? await passwordHasher.verify(user.passwordHash, password)
-      : // 사용자 부재 시에도 타이밍 차이를 줄이기 위해 더미 검증을 수행하지 않고 즉시 실패 기록
-        false;
+    let passwordOk = false;
+    if (user) {
+      passwordOk = await passwordHasher.verify(user.passwordHash, password);
+    } else {
+      // 사용자 부재 시에도 더미 해시를 검증해 응답 시간 차이로 계정 존재가 드러나지 않게 한다
+      await passwordHasher.verify(await this.dummyHash(), password);
+    }
 
     if (!user || !passwordOk) {
       loginAttempts.record(username, ip, false, now);
