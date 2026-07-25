@@ -160,12 +160,16 @@ export class JobOrchestrator {
       this.logger.warn({ module: 'backtest-child', jobId: job.id }, chunk.toString().trim()),
     );
 
+    let markedRunning = false;
     child.on('message', (message: ChildMessage) => {
       if (this.stopped || message.type !== 'progress') return;
       try {
         // STARTING → RUNNING 은 여기서만 일어나는 명시적 1회 전이다.
         // 진행률 갱신은 상태를 건드리지 않는다 — 종료 상태를 되돌릴 수 없다.
-        this.queue.markRunning(job.id);
+        if (!markedRunning) {
+          markedRunning = true;
+          this.queue.markRunning(job.id);
+        }
         this.queue.updateProgress(
           job.id,
           message.processedBars,
