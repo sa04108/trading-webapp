@@ -7,6 +7,10 @@ DATA_DIR="/var/lib/quant-platform"
 BACKUP_DIR="${DATA_DIR}/backups"
 STAMP="$(date -u +%Y%m%d-%H%M%S)"
 TARGET="${BACKUP_DIR}/backup-${STAMP}"
+# 작성 중에는 backup-* 이름을 쓰지 않는다 — 완성된 것만 rename 으로 그 이름을 얻는다.
+# 반쪽 디렉터리가 backup-* 로 보이면 보관 개수에 끼어 BACKUP_MIN_KEEP 의 보장
+# ("복원 가능한 백업이 항상 남는다") 이 빈 껍데기로 채워진다.
+STAGING="${BACKUP_DIR}/.incomplete-${STAMP}"
 
 # 로컬 보관은 일수가 아니라 총 용량으로 제한한다 (D-013). 디스크는 40GB 고정인데
 # 백업 1벌의 크기는 시간봉 데이터와 함께 자라므로 "30일" 은 총량을 묶어주지 못한다.
@@ -16,6 +20,10 @@ BACKUP_MAX_TOTAL_MB="${BACKUP_MAX_TOTAL_MB:-10240}"
 BACKUP_MIN_KEEP="${BACKUP_MIN_KEEP:-2}"
 
 mkdir -p "${BACKUP_DIR}"
+
+# 강제 종료(OOM·정전)로 남은 과거 작업본 정리. 하루가 지난 것만 건드려
+# 동시 실행 중인 백업의 작업본을 지우지 않는다.
+find "${BACKUP_DIR}" -maxdepth 1 -type d -name '.incomplete-*' -mtime +1 -exec rm -rf {} + 2>/dev/null || true
 
 # 이름이 backup-YYYYmmdd-HHMMSS 라 사전순 = 시간순 (오래된 것부터)
 list_backups() {
@@ -55,10 +63,12 @@ if [ -n "${NEWEST}" ]; then
 fi
 prune_to_cap "$(( BACKUP_MAX_TOTAL_MB > RESERVE_MB ? BACKUP_MAX_TOTAL_MB - RESERVE_MB : 0 ))"
 
-mkdir -p "${TARGET}"
+# 어느 단계에서 실패하든 작업본은 남기지 않는다 (성공 시 rename 후 trap 해제)
+trap 'rm -rf "${STAGING}"' EXIT
+mkdir -p "${STAGING}"
 
 # SQLite 는 온라인 백업 API 사용 (WAL 안전)
-sqlite3 "${DATA_DIR}/app.sqlite" ".backup '${TARGET}/app.sqlite'"
+sqlite3 "${DATA_DIR}/app.sqlite" ".backup '${STAGING}/app.sqlite'"
 
 # 시간봉 Parquet (1분봉은 필요 시 S3 아카이브).
 # 주의: tar 생성 시 인자는 리터럴 경로다 — --wildcards 는 생성에 적용되지 않으므로
@@ -71,7 +81,7 @@ if [ -d "${DATA_DIR}/market-data" ]; then
     (
       cd "${DATA_DIR}"
       find market-data -type d -name 'timeframe=1h' -print0 \
-        | tar -czf "${TARGET}/market-data-1h.tar.gz" --null -T -
+        | tar -czf "${STAGING}/market-data-1h.tar.gz" --null -T -
     )
   else
     echo "warning: no 1h market data found — skipping market-data archive" >&2
@@ -79,8 +89,12 @@ if [ -d "${DATA_DIR}/market-data" ]; then
 fi
 
 if [ -d "${DATA_DIR}/exports" ]; then
-  tar -czf "${TARGET}/exports.tar.gz" -C "${DATA_DIR}" exports
+  tar -czf "${STAGING}/exports.tar.gz" -C "${DATA_DIR}" exports
 fi
+
+# 여기까지 왔으면 완성본이다 — 같은 디렉터리 안 rename 이라 원자적이다
+mv "${STAGING}" "${TARGET}"
+trap - EXIT
 
 # 이번 백업을 포함해 상한을 다시 적용한다
 prune_to_cap "${BACKUP_MAX_TOTAL_MB}"
