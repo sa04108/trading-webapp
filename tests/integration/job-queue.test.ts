@@ -231,6 +231,38 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(ctx.container.jobQueue.getJob(jobId)!.status).toBe('CANCELLED');
   });
 
+  it('never regresses a terminal status via late progress or status writes (C1)', () => {
+    const queue = ctx.container.jobQueue;
+    const job = queue.enqueue(buildRequest(datasetId));
+    queue.claimNext('w1'); // QUEUED → STARTING
+    queue.markRunning(job.id); // STARTING → RUNNING
+    expect(queue.getJob(job.id)!.status).toBe('RUNNING');
+
+    // 자식이 COMPLETED 를 기록한 뒤 늦게 도착한 진행률·전이 시도들
+    queue.setStatus(job.id, 'COMPLETED');
+    queue.updateProgress(job.id, 999, 999, 'late');
+    queue.markRunning(job.id);
+    expect(queue.setStatus(job.id, 'FAILED', {}, ['STARTING', 'RUNNING'])).toBe(false);
+
+    const final = queue.getJob(job.id)!;
+    expect(final.status).toBe('COMPLETED');
+    expect(final.progressBars).not.toBe(999); // 종료 후 진행률도 동결
+  });
+
+  it('does not let progress writes disturb CANCELLING (C1)', () => {
+    const queue = ctx.container.jobQueue;
+    const job = queue.enqueue(buildRequest(datasetId));
+    queue.claimNext('w1');
+    queue.markRunning(job.id);
+    queue.setStatus(job.id, 'CANCELLING', {}, ['RUNNING', 'STARTING']);
+
+    queue.updateProgress(job.id, 50, 100, 'mid'); // 취소 중 진행률은 상태를 못 바꾼다
+    queue.markRunning(job.id);
+    expect(queue.getJob(job.id)!.status).toBe('CANCELLING');
+    // 진행률 자체는 활성 상태라 반영된다
+    expect(queue.getJob(job.id)!.progressBars).toBe(50);
+  });
+
   it('recovers orphaned active jobs as INTERRUPTED on restart (스펙 §10)', () => {
     const queue = ctx.container.jobQueue;
     const job = queue.enqueue(buildRequest(datasetId));

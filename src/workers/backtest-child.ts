@@ -4,7 +4,7 @@
  * 환경변수는 §5 화이트리스트만 받는다. 종료 전 최종 상태를 DB 에 직접 기록한다.
  */
 import { createHash } from 'node:crypto';
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq, notInArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { readGitCommitSha } from '../server/shared/build-info.js';
 import { openDatabase } from '../server/shared/db/database.js';
@@ -21,6 +21,7 @@ import {
   datasets,
 } from '../server/shared/db/schema.js';
 import { newId } from '../server/shared/ids.js';
+import { TERMINAL_STATUSES } from '../server/modules/backtest/application/job-queue.js';
 import { ENGINE_VERSION, runBacktest } from '../server/modules/backtest/domain/engine.js';
 import {
   DEFAULT_EXECUTION_RULES,
@@ -61,9 +62,10 @@ async function main(): Promise<void> {
   });
 
   const finish = (status: 'COMPLETED' | 'FAILED' | 'CANCELLED', error?: string): void => {
+    // 부모와의 경합에서 이미 확정된 종료 상태를 되돌리지 않는다
     db.update(backtestJobs)
       .set({ status, error: error ?? null, completedAtMs: Date.now() })
-      .where(eq(backtestJobs.id, jobId))
+      .where(and(eq(backtestJobs.id, jobId), notInArray(backtestJobs.status, TERMINAL_STATUSES)))
       .run();
   };
 

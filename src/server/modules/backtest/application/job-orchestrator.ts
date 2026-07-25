@@ -88,7 +88,7 @@ export class JobOrchestrator {
     if (!job) return 'NOT_CANCELLABLE';
 
     if (job.status === 'QUEUED') {
-      this.queue.setStatus(jobId, 'CANCELLED');
+      if (!this.queue.setStatus(jobId, 'CANCELLED', {}, ['QUEUED'])) return 'NOT_CANCELLABLE';
       this.audit.record('admin', 'backtest.cancelled', { jobId });
       this.events.emit('job', { jobId, kind: 'status' } satisfies JobEvent);
       return 'CANCELLED';
@@ -97,7 +97,7 @@ export class JobOrchestrator {
     const child = this.children.get(jobId);
     if ((job.status === 'RUNNING' || job.status === 'STARTING') && child) {
       // 취소 시퀀스 (스펙 §10): CANCELLING → IPC → SIGTERM → SIGKILL
-      this.queue.setStatus(jobId, 'CANCELLING');
+      this.queue.setStatus(jobId, 'CANCELLING', {}, ['RUNNING', 'STARTING']);
       this.events.emit('job', { jobId, kind: 'status' } satisfies JobEvent);
       child.send({ type: 'cancel' });
       const sigterm = setTimeout(() => child.kill('SIGTERM'), CANCEL_SIGTERM_DELAY_MS);
@@ -148,7 +148,7 @@ export class JobOrchestrator {
     });
 
     this.children.set(job.id, child);
-    this.queue.setStatus(job.id, 'STARTING', { pid: child.pid ?? null });
+    this.queue.setStatus(job.id, 'STARTING', { pid: child.pid ?? null }, ['STARTING']);
     this.audit.record('system', 'backtest.started', { jobId: job.id, pid: child.pid });
     this.events.emit('job', { jobId: job.id, kind: 'status' } satisfies JobEvent);
 
@@ -162,6 +162,9 @@ export class JobOrchestrator {
     child.on('message', (message: ChildMessage) => {
       if (this.stopped || message.type !== 'progress') return;
       try {
+        // STARTING → RUNNING 은 여기서만 일어나는 명시적 1회 전이다.
+        // 진행률 갱신은 상태를 건드리지 않는다 — 종료 상태를 되돌릴 수 없다.
+        this.queue.markRunning(job.id);
         this.queue.updateProgress(
           job.id,
           message.processedBars,
@@ -185,11 +188,16 @@ export class JobOrchestrator {
         // 자식이 종료 전 최종 상태를 DB 에 기록한다. 기록 없이 죽었으면 여기서 정리.
         if (!this.queue.isTerminal(current.status)) {
           if (current.status === 'CANCELLING') {
-            this.queue.setStatus(job.id, 'CANCELLED');
+            this.queue.setStatus(job.id, 'CANCELLED', {}, ['CANCELLING']);
           } else {
-            this.queue.setStatus(job.id, 'FAILED', {
-              error: `백테스트 프로세스가 비정상 종료되었습니다 (code=${code}, signal=${signal ?? 'none'})`,
-            });
+            this.queue.setStatus(
+              job.id,
+              'FAILED',
+              {
+                error: `백테스트 프로세스가 비정상 종료되었습니다 (code=${code}, signal=${signal ?? 'none'})`,
+              },
+              ['STARTING', 'RUNNING'],
+            );
           }
         }
         this.audit.record('system', 'backtest.finished', {
