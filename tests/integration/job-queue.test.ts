@@ -213,6 +213,39 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(claimA?.status).toBe('STARTING');
   });
 
+  it(
+    'cancels an active job through the child process (스펙 §10 취소 시퀀스)',
+    { timeout: 60_000 },
+    async () => {
+      const created = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/backtests',
+        cookies: { qp_session: cookie },
+        payload: buildRequest(datasetId),
+      });
+      const jobId = (created.json().job as { id: string }).id;
+
+      // 자식 프로세스 기동 직후(STARTING) 취소 — IPC 로 전달되어 CANCELLED 로 끝나야 한다
+      ctx.container.jobOrchestrator.tick();
+      const cancelled = await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/backtests/${jobId}/cancel`,
+        cookies: { qp_session: cookie },
+      });
+      expect(cancelled.json().status).toBe('CANCELLING');
+      expect(ctx.container.jobQueue.getJob(jobId)!.status).toBe('CANCELLING');
+
+      await waitFor(() => {
+        const job = ctx.container.jobQueue.getJob(jobId);
+        return job !== null && ctx.container.jobQueue.isTerminal(job.status);
+      }, 45_000);
+
+      const final = ctx.container.jobQueue.getJob(jobId)!;
+      expect(final.status).toBe('CANCELLED');
+      expect(final.error).toBeNull();
+    },
+  );
+
   it('cancels a QUEUED job immediately', async () => {
     const created = await ctx.app.inject({
       method: 'POST',
