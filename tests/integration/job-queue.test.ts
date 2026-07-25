@@ -327,6 +327,24 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(allowed.statusCode).toBe(204);
   });
 
+  it('rejects cloning a stored request that predates the current schema (400, not 500)', async () => {
+    // 구 스키마 형태: risk 없음, maxPositions 가 parameters 안에 있음
+    const legacy = {
+      ...buildRequest(datasetId),
+      parameters: { ...buildRequest(datasetId).parameters, maxPositions: 5 },
+    } as Record<string, unknown>;
+    delete legacy.risk;
+    const job = ctx.container.jobQueue.enqueue(legacy as never);
+
+    const cloned = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${job.id}/clone`,
+      cookies: { qp_session: cookie },
+    });
+    expect(cloned.statusCode).toBe(400);
+    expect((cloned.json() as { error: string }).error).toContain('호환');
+  });
+
   it('rejects requests referencing unknown entities', async () => {
     const badStrategy = await ctx.app.inject({
       method: 'POST',

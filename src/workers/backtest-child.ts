@@ -73,7 +73,14 @@ async function main(): Promise<void> {
     const job = db.select().from(backtestJobs).where(eq(backtestJobs.id, jobId)).get();
     if (!job) throw new Error(`job not found: ${jobId}`);
 
-    const request = backtestRequestSchema.parse(JSON.parse(job.requestJson));
+    // 스키마 변경 이전에 저장된 요청은 zod 원문 대신 이해 가능한 메시지로 실패시킨다
+    const parsedRequest = backtestRequestSchema.safeParse(JSON.parse(job.requestJson));
+    if (!parsedRequest.success) {
+      throw new Error(
+        '저장된 요청이 현재 요청 스키마와 호환되지 않습니다. 복제 대신 새 백테스트를 생성하세요.',
+      );
+    }
+    const request = parsedRequest.data;
 
     const registry = new StrategyRegistry();
     const strategy = registry.get(request.strategyId);

@@ -210,7 +210,14 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const { id } = request.params as { id: string };
     const job = queue.getJob(id);
     if (!job) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
-    const cloneRequest = backtestRequestSchema.parse(JSON.parse(job.requestJson));
+    // 스키마가 바뀐 뒤 남은 과거 요청은 500 이 아니라 명시적 400 으로 거부한다
+    const parsedStored = backtestRequestSchema.safeParse(JSON.parse(job.requestJson));
+    if (!parsedStored.success) {
+      return reply.code(400).send({
+        error: '저장된 요청이 현재 요청 스키마와 호환되지 않습니다. 새 백테스트로 다시 생성하세요.',
+      });
+    }
+    const cloneRequest = parsedStored.data;
     // 복제는 새 제출이다 — POST 와 동일한 검증 관문을 거치고 버전을 다시 고정한다.
     // (예: 전략 버전이 그 사이 올라갔다면 여기서 명시적으로 거부된다)
     const validated = validateSubmission(cloneRequest);
