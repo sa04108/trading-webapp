@@ -23,6 +23,7 @@ import { DatasetService } from '../modules/market-data/application/dataset-servi
 import type { CandleRepository } from '../modules/market-data/application/ports.js';
 import { DuckDbService } from '../modules/market-data/infrastructure/duckdb-service.js';
 import { ParquetCandleRepository } from '../modules/market-data/infrastructure/parquet-candle-repository.js';
+import { StrategyRegistry } from '../modules/strategy/application/strategy-registry.js';
 
 export interface SystemStatusProviders {
   queueLength: () => number;
@@ -47,6 +48,7 @@ export interface Container {
   readonly duckdb: DuckDbService;
   readonly candleRepository: CandleRepository;
   readonly datasetService: DatasetService;
+  readonly strategyRegistry: StrategyRegistry;
   close(): void;
 }
 
@@ -125,6 +127,7 @@ export function createContainer(config: AppConfig): Container {
     duckdb,
     candleRepository,
     datasetService,
+    strategyRegistry: new StrategyRegistry(),
     close: () => {
       duckdb.close();
       database.close();

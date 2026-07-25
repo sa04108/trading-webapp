@@ -15,6 +15,7 @@ import {
   registerAuthRoutes,
 } from '../modules/auth/presentation/auth-routes.js';
 import { registerDatasetRoutes } from '../modules/market-data/presentation/dataset-routes.js';
+import { registerStrategyRoutes } from '../modules/strategy/presentation/strategy-routes.js';
 
 function resolvePublicDir(): string | null {
   // 빌드 후: dist/server/bootstrap → dist/public. 개발 중에는 Vite dev 서버를 사용한다.
@@ -49,6 +50,7 @@ export async function buildServer(container: Container): Promise<FastifyInstance
       registerSystemRoutes(api, container, requireAuth);
       registerAuthRoutes(api, authDeps);
       registerDatasetRoutes(api, container.datasetService, requireAuth);
+      registerStrategyRoutes(api, container.strategyRegistry, requireAuth);
     },
     { prefix: '/api/v1' },
   );
