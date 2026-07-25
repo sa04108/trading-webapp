@@ -34,12 +34,27 @@ sudo corepack pnpm install --prod --frozen-lockfile
 # 롤백 대비: 전환 전의 release 를 기억한다 (최초 배포면 비어 있음)
 PREVIOUS_RELEASE="\$(readlink -f /opt/quant-platform/current 2>/dev/null || true)"
 
+# 파괴적 마이그레이션 대비 (D-010): 재시작(=마이그레이션 적용) 전 DB 스냅샷.
+# 롤백 시 코드와 스키마가 짝으로 되돌아가도록 스냅샷을 함께 복원한다.
+DB_PATH="/var/lib/quant-platform/app.sqlite"
+DB_SNAPSHOT="/var/lib/quant-platform/backups/pre-deploy-${RELEASE}.sqlite"
+if [ -f "\${DB_PATH}" ]; then
+  sudo mkdir -p /var/lib/quant-platform/backups
+  sudo sqlite3 "\${DB_PATH}" ".backup '\${DB_SNAPSHOT}'"
+fi
+
 sudo ln -sfn "/opt/quant-platform/releases/${RELEASE}" /opt/quant-platform/current
 sudo systemctl restart quant-platform
 sleep 3
 if ! curl -fsS http://127.0.0.1:3000/api/v1/health/ready; then
   echo "health check 실패 — 이전 release 로 롤백합니다 (스펙 §30)" >&2
   if [ -n "\${PREVIOUS_RELEASE}" ] && [ -d "\${PREVIOUS_RELEASE}" ]; then
+    sudo systemctl stop quant-platform
+    if [ -f "\${DB_SNAPSHOT}" ]; then
+      sudo cp "\${DB_SNAPSHOT}" "\${DB_PATH}"
+      sudo rm -f "\${DB_PATH}-wal" "\${DB_PATH}-shm"
+      echo "DB 를 배포 전 스냅샷으로 복원했습니다" >&2
+    fi
     sudo ln -sfn "\${PREVIOUS_RELEASE}" /opt/quant-platform/current
     sudo systemctl restart quant-platform
     echo "rolled back to \${PREVIOUS_RELEASE}" >&2
@@ -48,6 +63,7 @@ if ! curl -fsS http://127.0.0.1:3000/api/v1/health/ready; then
   fi
   exit 1
 fi
+sudo rm -f "\${DB_SNAPSHOT}"
 echo "release ${RELEASE} live"
 EOF
 
