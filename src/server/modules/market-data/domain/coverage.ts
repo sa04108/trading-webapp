@@ -1,5 +1,6 @@
 import type { Timeframe } from './candle.js';
 import {
+  dayOfWeekFromDayIndex,
   fromLocalTime,
   hourlyBucketStarts,
   toLocalTime,
@@ -46,7 +47,7 @@ export function computeHourlyCoverage(
   let runEnd: number | null = null;
 
   for (let dayIndex = firstLocal.dayIndex; dayIndex <= lastLocal.dayIndex; dayIndex += 1) {
-    const dayOfWeek = ((dayIndex % 7) + 7 + 4) % 7;
+    const dayOfWeek = dayOfWeekFromDayIndex(dayIndex);
     if (dayOfWeek === 0 || dayOfWeek === 6) continue;
 
     for (const startMinute of bucketStarts) {
