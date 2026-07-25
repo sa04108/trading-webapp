@@ -155,6 +155,20 @@ describe('market data (스펙 §11, §13)', () => {
     expect(jobLookup.statusCode).toBe(200);
   });
 
+  it('serializes concurrent writes to the same partition (행 유실 방지)', async () => {
+    const repo = ctx.container.candleRepository;
+    const first = Array.from({ length: 30 }, (_, i) => minuteCandle(i));
+    const second = Array.from({ length: 30 }, (_, i) => minuteCandle(i + 30));
+
+    await Promise.all([
+      repo.saveCandles('ds_conc', first),
+      repo.saveCandles('ds_conc', second),
+    ]);
+
+    const timestamps = await repo.getTimestamps('ds_conc', 'KR', '1m', '005930');
+    expect(timestamps).toHaveLength(60); // 어느 쪽도 상대의 쓰기를 덮어쓰지 않는다
+  });
+
   it('isolates candle storage per dataset — same symbol never merges (Codex 리뷰)', async () => {
     const service = ctx.container.datasetService;
     const repo = ctx.container.candleRepository;

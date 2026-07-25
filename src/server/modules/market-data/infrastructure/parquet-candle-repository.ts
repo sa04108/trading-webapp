@@ -16,6 +16,10 @@ const DATASET_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
  * 저장은 파티션 단위 재작성(기존 병합→임시 파일→교체)으로 idempotent 하다.
  */
 export class ParquetCandleRepository implements CandleRepository {
+  /** 파티션별 쓰기 직렬화 — 동시 import 의 read-merge-write 경합으로 행이 유실되지 않게 한다 */
+  private readonly partitionLocks = new Map<string, Promise<unknown>>();
+  private tmpCounter = 0;
+
   constructor(
     private readonly dataRoot: string,
     private readonly duckdb: DuckDbService,
@@ -90,14 +94,32 @@ export class ParquetCandleRepository implements CandleRepository {
     }
 
     for (const { dir, items } of groups.values()) {
-      await this.writePartition(dir, items);
+      await this.writePartitionLocked(dir, items);
     }
+  }
+
+  private async writePartitionLocked(dir: string, items: Candle[]): Promise<void> {
+    const prev = this.partitionLocks.get(dir) ?? Promise.resolve();
+    const run = prev.then(
+      () => this.writePartition(dir, items),
+      () => this.writePartition(dir, items), // 앞선 쓰기 실패는 이번 쓰기를 막지 않는다
+    );
+    const guard = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.partitionLocks.set(dir, guard);
+    void guard.then(() => {
+      if (this.partitionLocks.get(dir) === guard) this.partitionLocks.delete(dir);
+    });
+    await run;
   }
 
   private async writePartition(dir: string, incoming: Candle[]): Promise<void> {
     fs.mkdirSync(dir, { recursive: true });
     const filePath = path.join(dir, 'data.parquet');
-    const tmpPath = path.join(dir, `data.parquet.tmp-${process.pid}`);
+    this.tmpCounter += 1;
+    const tmpPath = path.join(dir, `data.parquet.tmp-${process.pid}-${this.tmpCounter}`);
     const fileExists = fs.existsSync(filePath);
 
     let merged = incoming;
