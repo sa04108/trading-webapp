@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -109,17 +109,30 @@ export function NewBacktestWizard() {
   const selectedDataset = datasets.data?.datasets.find((d) => d.id === datasetId) ?? null;
   const paramSpecs = useMemo(() => extractNumberParams(schema.data?.schema), [schema.data]);
 
+  // 스키마 기본값은 입력 상태에 한 번 심는다. 렌더 시점에 빈 값을 기본값으로 되돌리면
+  // 필드를 비울 수 없어 (전체 선택 후 삭제 → 즉시 기본값 복귀) 지우고 다시 쓰기가 막힌다.
+  const seededFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (strategyId === null || paramSpecs.length === 0) return;
+    if (seededFor.current === strategyId) return;
+    seededFor.current = strategyId;
+    setParameters(
+      Object.fromEntries(
+        paramSpecs.map((spec) => [
+          spec.key,
+          spec.defaultValue !== undefined ? String(spec.defaultValue) : '',
+        ]),
+      ),
+    );
+  }, [strategyId, paramSpecs]);
+
   const pickStrategy = (id: string): void => {
     setStrategyId(id);
-    setParameters({}); // 기본값은 스키마에서 오고, 빈 입력은 스키마 기본값으로 해석된다
+    setParameters({}); // 스키마가 도착하면 위 effect 가 기본값을 심는다
+    seededFor.current = null;
   };
 
-  /** 사용자 입력이 없으면 스키마 기본값을 사용한다 */
-  const paramValue = (spec: NumberParamSpec): string => {
-    const raw = parameters[spec.key];
-    if (raw !== undefined && raw !== '') return raw;
-    return spec.defaultValue !== undefined ? String(spec.defaultValue) : '';
-  };
+  const paramValue = (spec: NumberParamSpec): string => parameters[spec.key] ?? '';
 
   const buildRequest = (): BacktestRequestBody | string => {
     if (!selectedStrategy) return '전략을 선택하세요';
