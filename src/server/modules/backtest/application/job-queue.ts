@@ -147,10 +147,14 @@ export class JobQueue {
     for (const job of active) {
       const alive = job.pid !== null && isPidAlive(job.pid);
       if (!alive) {
-        this.setStatus(job.id, 'INTERRUPTED', {
-          error: '서버 재시작으로 작업이 중단되었습니다. 복제 후 재실행하세요.',
-        });
-        recovered.push(job.id);
+        // 죽은 자식이 종료 직전에 남긴 쓰기와 경합하지 않도록 여기서도 활성 상태일 때만 쓴다
+        const written = this.setStatus(
+          job.id,
+          'INTERRUPTED',
+          { error: '서버 재시작으로 작업이 중단되었습니다. 복제 후 재실행하세요.' },
+          ACTIVE_STATUSES,
+        );
+        if (written) recovered.push(job.id);
       }
     }
     return recovered;
