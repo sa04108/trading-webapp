@@ -7,6 +7,12 @@ import { DuckDbService, sqlString } from './duckdb-service.js';
 const DATASET_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
 /**
+ * 임시 파일 이름의 유일성은 프로세스 단위로 보장한다 — 파티션 락은 인스턴스별이므로
+ * 한 프로세스에 리포지터리가 둘 있으면 인스턴스 카운터로는 같은 tmp 경로가 나온다.
+ */
+let tmpCounter = 0;
+
+/**
  * Parquet 기반 CandleRepository (스펙 §11 레이아웃):
  *   dataset=<id>/market=KR/timeframe=1h/symbol=005930/year=2026/data.parquet
  *   dataset=<id>/market=KR/timeframe=1m/symbol=005930/year=2026/month=07/data.parquet
@@ -18,7 +24,6 @@ const DATASET_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 export class ParquetCandleRepository implements CandleRepository {
   /** 파티션별 쓰기 직렬화 — 동시 import 의 read-merge-write 경합으로 행이 유실되지 않게 한다 */
   private readonly partitionLocks = new Map<string, Promise<unknown>>();
-  private tmpCounter = 0;
 
   constructor(
     private readonly dataRoot: string,
@@ -118,8 +123,8 @@ export class ParquetCandleRepository implements CandleRepository {
   private async writePartition(dir: string, incoming: Candle[]): Promise<void> {
     fs.mkdirSync(dir, { recursive: true });
     const filePath = path.join(dir, 'data.parquet');
-    this.tmpCounter += 1;
-    const tmpPath = path.join(dir, `data.parquet.tmp-${process.pid}-${this.tmpCounter}`);
+    tmpCounter += 1;
+    const tmpPath = path.join(dir, `data.parquet.tmp-${process.pid}-${tmpCounter}`);
     const fileExists = fs.existsSync(filePath);
 
     let merged = incoming;
