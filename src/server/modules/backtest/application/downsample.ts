@@ -5,7 +5,7 @@ export interface XyPoint {
 
 /**
  * LTTB (Largest-Triangle-Three-Buckets) 다운샘플링.
- * Recharts(SVG) 모바일 성능을 위해 차트 시리즈를 ~threshold 포인트로 줄인다 (DECISIONS.md D-005).
+ * Recharts(SVG) 모바일 성능을 위해 차트 시리즈를 ~threshold 포인트로 줄인다 (docs/DECISIONS.md D-005).
  * 지표 계산에는 절대 사용하지 않는다 — 표시 전용.
  */
 export function downsampleLttb(points: readonly XyPoint[], threshold: number): XyPoint[] {

@@ -330,9 +330,11 @@ quant-platform/
 │  ├─ deploy.sh
 │  ├─ backup.sh
 │  └─ restore.sh
-├─ PLAN.md
-├─ DECISIONS.md
-├─ IMPLEMENTATION_STATUS.md
+├─ docs/
+│  ├─ quant_trading_platform_spec.md
+│  ├─ PLAN.md
+│  ├─ DECISIONS.md
+│  └─ IMPLEMENTATION_STATUS.md
 └─ README.md
 ```
 
@@ -1882,14 +1884,14 @@ quant-platform-live.service
 Claude는 구현 전에 다음을 만든다.
 
 ```text
-PLAN.md
-DECISIONS.md
-IMPLEMENTATION_STATUS.md
+docs/PLAN.md
+docs/DECISIONS.md
+docs/IMPLEMENTATION_STATUS.md
 ```
 
-- `PLAN.md`: 파일 단위 작업 계획
-- `DECISIONS.md`: 명세 밖 선택과 이유
-- `IMPLEMENTATION_STATUS.md`: 완료·진행·미완료
+- `docs/PLAN.md`: 파일 단위 작업 계획
+- `docs/DECISIONS.md`: 명세 밖 선택과 이유
+- `docs/IMPLEMENTATION_STATUS.md`: 완료·진행·미완료
 
 각 단계 완료 전 실행:
 
@@ -1916,7 +1918,7 @@ Claude가 임의로 변경하면 안 되는 결정:
 - live trading disabled
 - shadcn/ui mobile-first
 
-명세 변경이 필요하면 구현 전에 `DECISIONS.md`에 다음을 기록한다.
+명세 변경이 필요하면 구현 전에 `docs/DECISIONS.md`에 다음을 기록한다.
 
 - 변경 내용
 - 이유

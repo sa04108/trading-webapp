@@ -20,7 +20,7 @@ export interface KiwoomConfig {
 }
 
 /**
- * 키움 REST API 어댑터 (1차 증권사 어댑터, DECISIONS.md D-002).
+ * 키움 REST API 어댑터 (1차 증권사 어댑터, docs/DECISIONS.md D-002).
  *
  * App Key 발급 전까지는 비활성 상태이며 fetchCandles 가 BrokerNotConfiguredError 를 던진다.
  * 엔드포인트 경로·TR 코드는 자격 증명 발급 후 openapi.kiwoom.com 문서 기준으로
