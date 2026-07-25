@@ -2,6 +2,23 @@ import fs from 'node:fs';
 import type { AppConfig } from './config.js';
 import { createLogger, type Logger } from '../shared/logger.js';
 import { openDatabase, type DatabaseHandle } from '../shared/db/database.js';
+import { systemClock, type Clock } from '../shared/clock.js';
+import { createAuditLogService, type AuditLogService } from '../modules/audit/audit-service.js';
+import { AuthService } from '../modules/auth/application/auth-service.js';
+import type {
+  LoginAttemptRepository,
+  PasswordHasher,
+  SessionRepository,
+  TotpService,
+  UserRepository,
+} from '../modules/auth/application/ports.js';
+import { argon2PasswordHasher } from '../modules/auth/infrastructure/argon2-password-hasher.js';
+import { otpauthTotpService } from '../modules/auth/infrastructure/otpauth-totp.js';
+import {
+  createSqliteLoginAttemptRepository,
+  createSqliteSessionRepository,
+  createSqliteUserRepository,
+} from '../modules/auth/infrastructure/sqlite-repositories.js';
 
 export interface SystemStatusProviders {
   queueLength: () => number;
@@ -12,9 +29,17 @@ export interface Container {
   readonly config: AppConfig;
   readonly logger: Logger;
   readonly database: DatabaseHandle;
+  readonly clock: Clock;
   readonly appVersion: string;
   readonly gitCommitSha: string;
   readonly systemStatus: SystemStatusProviders;
+  readonly auditLog: AuditLogService;
+  readonly userRepository: UserRepository;
+  readonly sessionRepository: SessionRepository;
+  readonly loginAttemptRepository: LoginAttemptRepository;
+  readonly passwordHasher: PasswordHasher;
+  readonly totpService: TotpService;
+  readonly authService: AuthService;
   close(): void;
 }
 
@@ -38,6 +63,24 @@ export function createContainer(config: AppConfig): Container {
   }
 
   const database = openDatabase(config.databasePath);
+  const clock = systemClock;
+
+  const auditLog = createAuditLogService(database.db, clock, logger);
+  const userRepository = createSqliteUserRepository(database.db);
+  const sessionRepository = createSqliteSessionRepository(database.db);
+  const loginAttemptRepository = createSqliteLoginAttemptRepository(database.db);
+
+  const authService = new AuthService({
+    users: userRepository,
+    sessions: sessionRepository,
+    loginAttempts: loginAttemptRepository,
+    passwordHasher: argon2PasswordHasher,
+    totp: otpauthTotpService,
+    clock,
+    audit: auditLog,
+    idleTimeoutMs: config.sessionIdleTimeoutSeconds * 1000,
+    absoluteTimeoutMs: config.sessionAbsoluteTimeoutSeconds * 1000,
+  });
 
   const systemStatus: SystemStatusProviders = {
     queueLength: () => 0,
@@ -48,9 +91,17 @@ export function createContainer(config: AppConfig): Container {
     config,
     logger,
     database,
+    clock,
     appVersion: readAppVersion(),
     gitCommitSha: process.env.BUILD_GIT_SHA ?? 'unknown',
     systemStatus,
+    auditLog,
+    userRepository,
+    sessionRepository,
+    loginAttemptRepository,
+    passwordHasher: argon2PasswordHasher,
+    totpService: otpauthTotpService,
+    authService,
     close: () => database.close(),
   };
 }

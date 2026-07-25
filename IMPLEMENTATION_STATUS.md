@@ -5,8 +5,8 @@
 | Phase | 내용 | 상태 |
 |---|---|---|
 | 0 | 기반 (스캐폴딩, config, health, 경계 검사) | 완료 |
-| 1 | 인증·UI shell (Argon2id, TOTP, 세션, 감사 로그, 내비게이션) | 진행 중 |
-| 2 | 데이터 (Candle, Parquet/DuckDB, CSV import, coverage, 집계) | 미착수 |
+| 1 | 인증·UI shell (Argon2id, TOTP, 세션, 감사 로그, 내비게이션) | 완료 |
+| 2 | 데이터 (Candle, Parquet/DuckDB, CSV import, coverage, 집계) | 진행 중 |
 | 3 | 엔진 (체결, 비용, 이벤트 루프, 지표, 결정성, look-ahead) | 미착수 |
 | 4 | 작업 큐 (SQLite 큐, 자식 프로세스, IPC, 취소, 복구) | 미착수 |
 | 5 | 결과 UI (지표 카드, 차트, 거래 테이블, 위저드, SSE) | 미착수 |
@@ -23,3 +23,4 @@
 | 일자 | Phase | lint | typecheck | test | build |
 |---|---|---|---|---|---|
 | 2026-07-25 | 0 | ✅ | ✅ | ✅ 5/5 | ✅ (기동 스모크 통과) |
+| 2026-07-25 | 1 | ✅ | ✅ | ✅ 16/16 | ✅ |
