@@ -43,14 +43,13 @@ function buildTrendingHourlyCsv(): string {
 function buildRequest(datasetId: string): BacktestRequest {
   return {
     strategyId: 'hourly-breakout',
-    strategyVersion: '1.1.0',
+    strategyVersion: '1.2.0',
     parameters: {
       lookbackBars: 10,
       atrPeriod: 5,
       stopAtrMultiplier: 2,
       takeProfitAtrMultiplier: 3,
       riskPerTradePercent: 2,
-      maxPositions: 5,
     },
     datasetId,
     universe: { type: 'SYMBOLS', symbols: ['005930'] },
@@ -61,6 +60,7 @@ function buildRequest(datasetId: string): BacktestRequest {
       commissionProfileId: 'kr-equity-default',
       slippageProfileId: 'fixed-5bps',
     },
+    risk: { maxPositions: 5 },
     randomSeed: 42,
   };
 }

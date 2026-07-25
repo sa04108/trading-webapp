@@ -9,7 +9,6 @@ describe('hourly-breakout parameters (스펙 §32)', () => {
       atrPeriod: 14,
       stopAtrMultiplier: 2,
       riskPerTradePercent: 1,
-      maxPositions: 5,
     });
     expect(result.success).toBe(true);
   });
@@ -21,7 +20,6 @@ describe('hourly-breakout parameters (스펙 §32)', () => {
         atrPeriod: 14,
         stopAtrMultiplier: 2,
         riskPerTradePercent: 1,
-        maxPositions: 5,
       }).success,
     ).toBe(false);
     expect(
@@ -30,7 +28,6 @@ describe('hourly-breakout parameters (스펙 §32)', () => {
         atrPeriod: 14,
         stopAtrMultiplier: 2,
         riskPerTradePercent: 10, // max 5
-        maxPositions: 5,
       }).success,
     ).toBe(false);
   });
@@ -47,7 +44,6 @@ describe('StrategyRegistry', () => {
       atrPeriod: 14,
       stopAtrMultiplier: 2,
       riskPerTradePercent: 1,
-      maxPositions: 5,
     });
     expect(valid.ok).toBe(true);
 

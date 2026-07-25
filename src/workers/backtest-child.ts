@@ -132,8 +132,6 @@ async function main(): Promise<void> {
     let lastSymbol: string | null = null;
 
     const parameters = validated.value as Record<string, unknown>;
-    const maxPositions =
-      typeof parameters.maxPositions === 'number' ? parameters.maxPositions : 10;
 
     const result = runBacktest(strategy, {
       candles,
@@ -145,7 +143,7 @@ async function main(): Promise<void> {
       },
       parameters,
       randomSeed: request.randomSeed,
-      maxPositions,
+      maxPositions: request.risk.maxPositions,
     }, {
       shouldCancel: () => cancelRequested,
       onProgress: ({ processedBars, totalBars, currentTsMs }) => {

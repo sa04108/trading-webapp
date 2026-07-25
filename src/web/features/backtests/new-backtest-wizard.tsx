@@ -57,7 +57,6 @@ const DEFAULT_PARAMS: Record<string, Record<string, number>> = {
     atrPeriod: 14,
     stopAtrMultiplier: 2,
     riskPerTradePercent: 1,
-    maxPositions: 5,
   },
 };
 
@@ -86,6 +85,7 @@ export function NewBacktestWizard() {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [initialCash, setInitialCash] = useState('10000000');
+  const [maxPositions, setMaxPositions] = useState('10');
   const [commissionProfileId, setCommissionProfileId] = useState('kr-equity-default');
   const [slippageProfileId, setSlippageProfileId] = useState('fixed-5bps');
   const [randomSeed, setRandomSeed] = useState('42');
@@ -130,6 +130,10 @@ export function NewBacktestWizard() {
     if (!from || !to || from > to) return '기간이 올바르지 않습니다';
     const cash = Number(initialCash);
     if (!Number.isFinite(cash) || cash <= 0) return '초기 자본이 올바르지 않습니다';
+    const positions = Number(maxPositions);
+    if (!Number.isInteger(positions) || positions < 1 || positions > 20) {
+      return '동시 보유 종목 상한은 1~20 이어야 합니다';
+    }
 
     const parsedParams: Record<string, number> = {};
     for (const spec of paramSpecs) {
@@ -156,6 +160,7 @@ export function NewBacktestWizard() {
       period: { from, to },
       capital: { initialCash: cash, currency: 'KRW' },
       execution: { fillTiming: 'NEXT_BAR_OPEN', commissionProfileId, slippageProfileId },
+      risk: { maxPositions: positions },
       randomSeed: Number(randomSeed) || 42,
     };
   };
@@ -425,6 +430,20 @@ export function NewBacktestWizard() {
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="max-positions">동시 보유 종목 상한</Label>
+              <Input
+                id="max-positions"
+                type="number"
+                inputMode="numeric"
+                className="h-11"
+                min={1}
+                max={20}
+                step={1}
+                value={maxPositions}
+                onChange={(e) => setMaxPositions(e.target.value)}
+              />
             </div>
             <div className="space-y-1">
               <Label htmlFor="seed">Random seed</Label>

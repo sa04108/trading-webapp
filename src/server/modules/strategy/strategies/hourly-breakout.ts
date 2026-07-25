@@ -25,7 +25,6 @@ export const hourlyBreakoutParameters = z.object({
   stopAtrMultiplier: z.number().positive().max(20),
   takeProfitAtrMultiplier: z.number().positive().max(50).optional(),
   riskPerTradePercent: z.number().positive().max(5),
-  maxPositions: z.number().int().min(1).max(20),
 });
 
 export type HourlyBreakoutParameters = z.infer<typeof hourlyBreakoutParameters>;
@@ -69,7 +68,7 @@ export const hourlyBreakoutStrategy: TradingStrategy<
   HourlyBreakoutState
 > = {
   id: 'hourly-breakout',
-  version: '1.1.0',
+  version: '1.2.0',
   name: '시간봉 돌파',
   description:
     '직전 N개 시간봉 최고가 돌파 시 진입, ATR 기반 손절·익절. 엔진 검증용 기준 전략.',
