@@ -1,0 +1,25 @@
+{
+  "// note": "에디터 편의용 통합 설정. 실제 게이트는 tsconfig.server.json / tsconfig.web.json / tsconfig.build.json 이 담당한다.",
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "noEmit": true,
+    "types": ["node", "vite/client"],
+    "paths": {
+      "@/*": ["./src/web/*"],
+      "@shared/*": ["./src/shared/*"]
+    }
+  },
+  "include": ["src", "tests", "*.ts", "*.config.ts"]
+}

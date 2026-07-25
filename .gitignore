@@ -104,3 +104,8 @@ $RECYCLE.BIN/
 
 # Built Visual Studio Code Extensions
 *.vsix
+### Project
+data/
+test-results/
+playwright-report/
+
