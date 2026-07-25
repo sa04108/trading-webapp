@@ -26,10 +26,10 @@ export function registerSecurity(app: FastifyInstance): void {
     try {
       originHost = new URL(origin).host;
     } catch {
-      return reply.code(403).send({ error: 'Invalid Origin' });
+      return reply.code(403).send({ error: 'Origin 이 올바르지 않습니다' });
     }
     if (originHost !== request.headers.host) {
-      return reply.code(403).send({ error: 'Cross-origin request denied' });
+      return reply.code(403).send({ error: '교차 출처 요청이 거부되었습니다' });
     }
   });
 }

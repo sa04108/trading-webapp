@@ -188,7 +188,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
   app.get('/backtests/:id', { preHandler: requireAuth }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const job = queue.getJob(id);
-    if (!job) return reply.code(404).send({ error: 'Job not found' });
+    if (!job) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
     return {
       job: serializeJob(job),
       run: results.getRun(id),
@@ -208,7 +208,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
   app.post('/backtests/:id/clone', { preHandler: requireAuth }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const job = queue.getJob(id);
-    if (!job) return reply.code(404).send({ error: 'Job not found' });
+    if (!job) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
     const cloneRequest = backtestRequestSchema.parse(JSON.parse(job.requestJson));
     // 복제는 새 제출이다 — POST 와 동일한 검증 관문을 거치고 버전을 다시 고정한다.
     // (예: 전략 버전이 그 사이 올라갔다면 여기서 명시적으로 거부된다)
@@ -234,7 +234,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
 
   app.get('/backtests/:id/trades', { preHandler: requireAuth }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    if (!queue.getJob(id)) return reply.code(404).send({ error: 'Job not found' });
+    if (!queue.getJob(id)) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
     const parsedQuery = z
       .object({
         limit: z.coerce.number().int().min(1).max(500).default(100),
@@ -259,14 +259,14 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
 
   app.get('/backtests/:id/series', { preHandler: requireAuth }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    if (!queue.getJob(id)) return reply.code(404).send({ error: 'Job not found' });
+    if (!queue.getJob(id)) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
     return results.getChartSeries(id);
   });
 
   app.get('/backtests/:id/export', { preHandler: requireAuth }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const job = queue.getJob(id);
-    if (!job) return reply.code(404).send({ error: 'Job not found' });
+    if (!job) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
     reply.header('content-disposition', `attachment; filename="backtest-${id}.json"`);
     return { job: serializeJob(job), ...results.getFullExport(id) };
   });
@@ -275,7 +275,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
   app.get('/backtests/:id/events', { preHandler: requireAuth }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const job = queue.getJob(id);
-    if (!job) return reply.code(404).send({ error: 'Job not found' });
+    if (!job) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
 
     reply.hijack();
     reply.raw.writeHead(200, {

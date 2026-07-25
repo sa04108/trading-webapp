@@ -92,10 +92,10 @@ export async function buildServer(container: Container): Promise<FastifyInstance
       if (request.method === 'GET' && !request.url.startsWith('/api/')) {
         return reply.type('text/html').send(fs.createReadStream(path.join(publicDir, 'index.html')));
       }
-      return reply.code(404).send({ error: 'Not Found' });
+      return reply.code(404).send({ error: '요청한 리소스를 찾을 수 없습니다' });
     });
   } else {
-    app.setNotFoundHandler((_request, reply) => reply.code(404).send({ error: 'Not Found' }));
+    app.setNotFoundHandler((_request, reply) => reply.code(404).send({ error: '요청한 리소스를 찾을 수 없습니다' }));
   }
 
   return app;

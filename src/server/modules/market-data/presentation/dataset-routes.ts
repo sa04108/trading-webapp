@@ -25,14 +25,14 @@ export function registerDatasetRoutes(
   app.get('/datasets/:datasetId', { preHandler: requireAuth }, async (request, reply) => {
     const { datasetId } = request.params as { datasetId: string };
     const dataset = datasetService.getDataset(datasetId);
-    if (!dataset) return reply.code(404).send({ error: 'Dataset not found' });
+    if (!dataset) return reply.code(404).send({ error: '데이터셋을 찾을 수 없습니다' });
     return dataset;
   });
 
   app.get('/datasets/:datasetId/coverage', { preHandler: requireAuth }, async (request, reply) => {
     const { datasetId } = request.params as { datasetId: string };
     const dataset = datasetService.getDataset(datasetId);
-    if (!dataset) return reply.code(404).send({ error: 'Dataset not found' });
+    if (!dataset) return reply.code(404).send({ error: '데이터셋을 찾을 수 없습니다' });
     return {
       coverage: datasetService.getCoverage(datasetId).map((row) => ({
         symbol: row.symbol,
@@ -124,7 +124,7 @@ export function registerDatasetRoutes(
   app.get('/data-jobs/:jobId', { preHandler: requireAuth }, async (request, reply) => {
     const { jobId } = request.params as { jobId: string };
     const job = datasetService.getImportJob(jobId);
-    if (!job) return reply.code(404).send({ error: 'Job not found' });
+    if (!job) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
     return { job };
   });
 }

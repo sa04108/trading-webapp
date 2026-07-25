@@ -41,16 +41,16 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
   app.post('/auth/login', async (request, reply) => {
     const parsed = loginBodySchema.safeParse(request.body);
     if (!parsed.success) {
-      return reply.code(400).send({ error: 'Invalid request body' });
+      return reply.code(400).send({ error: '요청 본문이 올바르지 않습니다' });
     }
     const { username, password } = parsed.data;
     const result = await authService.login(username, password, request.ip);
 
     switch (result.status) {
       case 'LOCKED':
-        return reply.code(429).send({ error: 'Too many failed attempts. Try again later.' });
+        return reply.code(429).send({ error: '로그인 실패가 누적되어 잠겼습니다. 잠시 후 다시 시도하세요.' });
       case 'INVALID_CREDENTIALS':
-        return reply.code(401).send({ error: 'Invalid credentials' });
+        return reply.code(401).send({ error: '아이디 또는 비밀번호가 올바르지 않습니다' });
       case 'TOTP_REQUIRED':
         setSessionCookie(reply, deps, result.sessionId);
         return reply.send({ status: 'TOTP_REQUIRED' });
@@ -63,14 +63,14 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
   app.post('/auth/totp/verify', async (request, reply) => {
     const parsed = totpBodySchema.safeParse(request.body);
     if (!parsed.success) {
-      return reply.code(400).send({ error: 'Invalid request body' });
+      return reply.code(400).send({ error: '요청 본문이 올바르지 않습니다' });
     }
     const sessionId = readSessionId(request);
-    if (!sessionId) return reply.code(401).send({ error: 'No pending session' });
+    if (!sessionId) return reply.code(401).send({ error: '진행 중인 로그인 세션이 없습니다' });
 
     const result = await authService.verifyTotp(sessionId, parsed.data.token, request.ip);
     if (result.status !== 'SUCCESS') {
-      return reply.code(401).send({ error: 'Invalid code' });
+      return reply.code(401).send({ error: '인증 코드가 올바르지 않습니다' });
     }
     setSessionCookie(reply, deps, result.sessionId);
     return reply.send({ status: 'OK' });
@@ -86,7 +86,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
   app.get('/auth/me', async (request, reply) => {
     const sessionId = readSessionId(request);
     const user = sessionId ? authService.authenticate(sessionId) : null;
-    if (!user) return reply.code(401).send({ error: 'Unauthorized' });
+    if (!user) return reply.code(401).send({ error: '인증이 필요합니다' });
     return reply.send({ id: user.id, username: user.username });
   });
 }
@@ -97,7 +97,7 @@ export function createRequireAuth(deps: AuthRouteDeps) {
     const sessionId = readSessionId(request);
     const user = sessionId ? deps.authService.authenticate(sessionId) : null;
     if (!user) {
-      await reply.code(401).send({ error: 'Unauthorized' });
+      await reply.code(401).send({ error: '인증이 필요합니다' });
       return;
     }
     request.authUser = user;
