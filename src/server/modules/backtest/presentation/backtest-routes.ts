@@ -34,6 +34,23 @@ export interface BacktestRouteDeps {
 const MIN_FREE_DISK_BYTES = 500 * 1024 * 1024;
 const MIN_FREE_MEMORY_BYTES = 75 * 1024 * 1024;
 
+/**
+ * 회수 가능 메모리 (§34 리소스 가드).
+ * Linux 의 os.freemem() 은 MemFree 라 페이지 캐시를 제외한다 — 장기 구동 서버에서
+ * 항상 낮게 나와 건강한 호스트가 영구적으로 507 을 반환하게 된다.
+ * /proc/meminfo 의 MemAvailable 을 우선 사용하고, 없는 플랫폼은 freemem 으로 fallback.
+ */
+function availableMemoryBytes(): number {
+  try {
+    const meminfo = fs.readFileSync('/proc/meminfo', 'utf8');
+    const match = /MemAvailable:\s+(\d+)\s*kB/.exec(meminfo);
+    if (match) return Number(match[1]) * 1024;
+  } catch {
+    // /proc 이 없는 플랫폼 (Windows, macOS)
+  }
+  return os.freemem();
+}
+
 function serializeJob(job: BacktestJobRow) {
   return {
     id: job.id,
@@ -52,7 +69,7 @@ function serializeJob(job: BacktestJobRow) {
 }
 
 async function checkResources(dataRoot: string): Promise<string | null> {
-  if (os.freemem() < MIN_FREE_MEMORY_BYTES) {
+  if (availableMemoryBytes() < MIN_FREE_MEMORY_BYTES) {
     return '여유 메모리가 부족해 신규 백테스트를 거부합니다 (스펙 §34)';
   }
   try {
