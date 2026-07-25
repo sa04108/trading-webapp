@@ -30,6 +30,8 @@ ssh "ubuntu@${HOST}" bash -s <<EOF
 set -euo pipefail
 sudo mkdir -p "/opt/quant-platform/releases/${RELEASE}"
 sudo tar -xzf "/tmp/${ARCHIVE}" -C "/opt/quant-platform/releases/${RELEASE}"
+# 업로드본은 풀고 나면 쓸모없다 — 40GB 디스크에 배포마다 쌓이지 않게 즉시 지운다
+rm -f "/tmp/${ARCHIVE}"
 cd "/opt/quant-platform/releases/${RELEASE}"
 sudo corepack pnpm install --prod --frozen-lockfile
 
