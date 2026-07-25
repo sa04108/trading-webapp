@@ -19,6 +19,7 @@ import {
 import type { JobOrchestrator, JobEvent } from '../application/job-orchestrator.js';
 import type { BacktestJobRow, JobQueue } from '../application/job-queue.js';
 import type { ResultsService } from '../application/results-service.js';
+import { rebaseStoredRequest } from '../application/stored-request.js';
 
 type PreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -210,24 +211,24 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const { id } = request.params as { id: string };
     const job = queue.getJob(id);
     if (!job) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
-    // 스키마가 바뀐 뒤 남은 과거 요청은 500 이 아니라 명시적 400 으로 거부한다
-    const parsedStored = backtestRequestSchema.safeParse(JSON.parse(job.requestJson));
-    if (!parsedStored.success) {
-      return reply.code(400).send({
-        error: '저장된 요청이 현재 요청 스키마와 호환되지 않습니다. 새 백테스트로 다시 생성하세요.',
-      });
-    }
-    const cloneRequest = parsedStored.data;
-    // 복제는 새 제출이다 — POST 와 동일한 검증 관문을 거치고 버전을 다시 고정한다.
-    // (예: 전략 버전이 그 사이 올라갔다면 여기서 명시적으로 거부된다)
+    // 복제는 §10 이 지정한 중단 작업 복구 경로다 — 스키마·전략 버전이 올라갔다고 막지 않고,
+    // 현재 기준으로 재기준한 뒤 무엇이 달라졌는지 경고로 알린다.
+    const rebased = rebaseStoredRequest(
+      job.requestJson,
+      strategies.get(job.strategyId)?.version ?? null,
+    );
+    if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
+    const cloneRequest = rebased.request;
+    // 재기준 후에도 새 제출이다 — POST 와 동일한 검증 관문을 거치고 버전을 다시 고정한다
     const validated = validateSubmission(cloneRequest);
     if (!validated.ok) return reply.code(400).send({ error: validated.error });
     const cloned = queue.enqueue(cloneRequest, validated.datasetVersion);
     audit.record(request.authUser?.username ?? 'admin', 'backtest.cloned', {
       sourceJobId: id,
       jobId: cloned.id,
+      ...(rebased.warnings.length > 0 ? { rebaseWarnings: rebased.warnings } : {}),
     });
-    return reply.code(201).send({ job: serializeJob(cloned) });
+    return reply.code(201).send({ job: serializeJob(cloned), warnings: rebased.warnings });
   });
 
   app.delete('/backtests/:id', { preHandler: requireAuth }, async (request, reply) => {

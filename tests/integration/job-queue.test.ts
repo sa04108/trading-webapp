@@ -327,10 +327,11 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(allowed.statusCode).toBe(204);
   });
 
-  it('rejects cloning a stored request that predates the current schema (400, not 500)', async () => {
-    // 구 스키마 형태: risk 없음, maxPositions 가 parameters 안에 있음
+  it('rebases a stored request that predates the current schema, and warns', async () => {
+    // 구 스키마 형태: risk 없음, maxPositions 가 parameters 안에 있고, 전략 버전도 낮다
     const legacy = {
       ...buildRequest(datasetId),
+      strategyVersion: '1.1.0',
       parameters: { ...buildRequest(datasetId).parameters, maxPositions: 5 },
     } as Record<string, unknown>;
     delete legacy.risk;
@@ -341,8 +342,33 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       url: `/api/v1/backtests/${job.id}/clone`,
       cookies: { qp_session: cookie },
     });
+    // 복제는 §10 의 복구 경로다 — 스키마가 올라갔다고 막히면 안 된다
+    expect(cloned.statusCode).toBe(201);
+    const body = cloned.json() as { job: { id: string }; warnings: string[] };
+    expect(body.warnings.some((w) => w.includes('maxPositions=5'))).toBe(true);
+    expect(body.warnings.some((w) => w.includes('1.1.0') && w.includes('1.2.0'))).toBe(true);
+
+    // 재기준 결과가 실제로 현재 스키마를 만족해야 한다
+    const stored = JSON.parse(
+      ctx.container.jobQueue.getJob(body.job.id)!.requestJson,
+    ) as BacktestRequest & { parameters: Record<string, unknown> };
+    expect(stored.risk.maxPositions).toBe(5);
+    expect(stored.strategyVersion).toBe('1.2.0');
+    expect(stored.parameters.maxPositions).toBeUndefined();
+  });
+
+  it('refuses to clone a stored request that cannot be rebased (400, not 500)', async () => {
+    const broken = { ...buildRequest(datasetId) } as Record<string, unknown>;
+    delete broken.period; // 기계적으로 되살릴 수 없는 편차
+    const job = ctx.container.jobQueue.enqueue(broken as never);
+
+    const cloned = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${job.id}/clone`,
+      cookies: { qp_session: cookie },
+    });
     expect(cloned.statusCode).toBe(400);
-    expect((cloned.json() as { error: string }).error).toContain('호환');
+    expect((cloned.json() as { error: string }).error).toContain('복원할 수 없습니다');
   });
 
   it('rejects requests referencing unknown entities', async () => {
