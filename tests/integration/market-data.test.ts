@@ -275,6 +275,8 @@ describe('market data (스펙 §11, §13)', () => {
       cookies: { qp_session: cookie },
       payload,
     });
-    expect(response.statusCode).toBe(400);
+    // 파서가 헤더를 검증하고 import job 이 FAILED 로 기록된다
+    expect(response.statusCode).toBe(422);
+    expect((response.json().job as { status: string }).status).toBe('FAILED');
   });
 });

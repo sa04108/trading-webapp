@@ -89,11 +89,7 @@ export function registerDatasetRoutes(
     if (!csvContent || !fileName) {
       return reply.code(400).send({ error: 'CSV 파일이 필요합니다' });
     }
-    // 실제 포맷 검증 (스펙 §16): 헤더 시그니처 확인
-    const firstLine = csvContent.slice(0, 200).split(/\r?\n/)[0]?.toLowerCase() ?? '';
-    if (!firstLine.includes('timestamp') || !firstLine.includes('open')) {
-      return reply.code(400).send({ error: 'CSV 헤더가 올바르지 않습니다 (timestamp,open,high,low,close,volume)' });
-    }
+    // 포맷 검증은 parseCandleCsv 가 담당한다 (헤더·행 단위) — 여기서 중복 검사하지 않는다
 
     let job: Awaited<ReturnType<DatasetService['importCsv']>>;
     try {
