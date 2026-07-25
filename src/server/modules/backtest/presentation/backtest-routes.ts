@@ -6,6 +6,7 @@ import {
   backtestRequestSchema,
   type BacktestRequest,
 } from '../../../../shared/schemas/backtest-request.js';
+import { SECURITY_HEADERS } from '../../../shared/security.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
 import type { DatasetService } from '../../market-data/application/dataset-service.js';
 import type { StrategyRegistry } from '../../strategy/application/strategy-registry.js';
@@ -278,7 +279,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (!job) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
 
     reply.hijack();
+    // hijack 은 onSend hook 을 우회하므로 §16 보안 헤더를 직접 포함한다
     reply.raw.writeHead(200, {
+      ...SECURITY_HEADERS,
       'content-type': 'text/event-stream',
       'cache-control': 'no-cache',
       connection: 'keep-alive',
