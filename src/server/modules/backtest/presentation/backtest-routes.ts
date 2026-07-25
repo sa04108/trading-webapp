@@ -2,7 +2,10 @@ import os from 'node:os';
 import fs from 'node:fs';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { backtestRequestSchema } from '../../../../shared/schemas/backtest-request.js';
+import {
+  backtestRequestSchema,
+  type BacktestRequest,
+} from '../../../../shared/schemas/backtest-request.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
 import type { DatasetService } from '../../market-data/application/dataset-service.js';
 import type { StrategyRegistry } from '../../strategy/application/strategy-registry.js';
@@ -66,6 +69,46 @@ async function checkResources(dataRoot: string): Promise<string | null> {
 export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRouteDeps, requireAuth: PreHandler): void {
   const { queue, orchestrator, results, strategies, datasets, audit } = deps;
 
+  /**
+   * 제출 검증 관문 — 신규 제출(POST)과 복제(clone)가 동일한 기준을 거친다.
+   * 통과 시 제출 시점의 데이터셋 버전을 함께 반환한다 (재현성 §9.5).
+   */
+  const validateSubmission = (
+    body: BacktestRequest,
+  ):
+    | { ok: true; datasetVersion: { version: number; contentHash: string } }
+    | { ok: false; error: string } => {
+    const strategy = strategies.get(body.strategyId);
+    if (!strategy) return { ok: false, error: `알 수 없는 전략: ${body.strategyId}` };
+    if (strategy.version !== body.strategyVersion) {
+      return {
+        ok: false,
+        error: `전략 버전 불일치: 요청 ${body.strategyVersion}, 등록 ${strategy.version}`,
+      };
+    }
+    const paramCheck = strategies.validateParameters(body.strategyId, body.parameters);
+    if (!paramCheck.ok) return { ok: false, error: paramCheck.error };
+
+    if (!datasets.getDataset(body.datasetId)) {
+      return { ok: false, error: `알 수 없는 데이터셋: ${body.datasetId}` };
+    }
+    // 제출 시점의 데이터셋 버전을 고정 — 대기 중 import 가 끼어들어도 메타데이터가 어긋나지 않는다
+    const datasetVersion = datasets.getLatestVersion(body.datasetId);
+    if (!datasetVersion) {
+      return { ok: false, error: '데이터가 없는 데이터셋입니다. 먼저 import 하세요.' };
+    }
+    if (!getCostProfile(body.execution.commissionProfileId)) {
+      return { ok: false, error: '알 수 없는 수수료 프로파일' };
+    }
+    if (!getSlippageProfile(body.execution.slippageProfileId)) {
+      return { ok: false, error: '알 수 없는 슬리피지 프로파일' };
+    }
+    if (body.period.from > body.period.to) {
+      return { ok: false, error: '기간이 올바르지 않습니다 (from > to)' };
+    }
+    return { ok: true, datasetVersion };
+  };
+
   app.get('/backtests/profiles', { preHandler: requireAuth }, async () => ({
     commissionProfiles: listCostProfiles(),
     slippageProfiles: listSlippageProfiles(),
@@ -80,38 +123,13 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     }
     const body = parsed.data;
 
-    const strategy = strategies.get(body.strategyId);
-    if (!strategy) return reply.code(400).send({ error: `알 수 없는 전략: ${body.strategyId}` });
-    if (strategy.version !== body.strategyVersion) {
-      return reply.code(400).send({
-        error: `전략 버전 불일치: 요청 ${body.strategyVersion}, 등록 ${strategy.version}`,
-      });
-    }
-    const paramCheck = strategies.validateParameters(body.strategyId, body.parameters);
-    if (!paramCheck.ok) return reply.code(400).send({ error: paramCheck.error });
-
-    if (!datasets.getDataset(body.datasetId)) {
-      return reply.code(400).send({ error: `알 수 없는 데이터셋: ${body.datasetId}` });
-    }
-    // 제출 시점의 데이터셋 버전을 고정 — 대기 중 import 가 끼어들어도 메타데이터가 어긋나지 않는다
-    const datasetVersion = datasets.getLatestVersion(body.datasetId);
-    if (!datasetVersion) {
-      return reply.code(400).send({ error: '데이터가 없는 데이터셋입니다. 먼저 import 하세요.' });
-    }
-    if (!getCostProfile(body.execution.commissionProfileId)) {
-      return reply.code(400).send({ error: '알 수 없는 수수료 프로파일' });
-    }
-    if (!getSlippageProfile(body.execution.slippageProfileId)) {
-      return reply.code(400).send({ error: '알 수 없는 슬리피지 프로파일' });
-    }
-    if (body.period.from > body.period.to) {
-      return reply.code(400).send({ error: '기간이 올바르지 않습니다 (from > to)' });
-    }
+    const validated = validateSubmission(body);
+    if (!validated.ok) return reply.code(400).send({ error: validated.error });
 
     const resourceError = await checkResources(deps.dataRoot);
     if (resourceError) return reply.code(507).send({ error: resourceError });
 
-    const job = queue.enqueue(body, datasetVersion);
+    const job = queue.enqueue(body, validated.datasetVersion);
     audit.record(request.authUser?.username ?? 'admin', 'backtest.created', {
       jobId: job.id,
       strategyId: body.strategyId,
@@ -165,12 +183,11 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const job = queue.getJob(id);
     if (!job) return reply.code(404).send({ error: 'Job not found' });
     const cloneRequest = backtestRequestSchema.parse(JSON.parse(job.requestJson));
-    // 복제는 새 제출이다 — 복제 시점의 최신 버전으로 다시 고정한다
-    const cloneVersion = datasets.getLatestVersion(cloneRequest.datasetId);
-    if (!cloneVersion) {
-      return reply.code(400).send({ error: '데이터가 없는 데이터셋입니다. 먼저 import 하세요.' });
-    }
-    const cloned = queue.enqueue(cloneRequest, cloneVersion);
+    // 복제는 새 제출이다 — POST 와 동일한 검증 관문을 거치고 버전을 다시 고정한다.
+    // (예: 전략 버전이 그 사이 올라갔다면 여기서 명시적으로 거부된다)
+    const validated = validateSubmission(cloneRequest);
+    if (!validated.ok) return reply.code(400).send({ error: validated.error });
+    const cloned = queue.enqueue(cloneRequest, validated.datasetVersion);
     audit.record(request.authUser?.username ?? 'admin', 'backtest.cloned', {
       sourceJobId: id,
       jobId: cloned.id,
