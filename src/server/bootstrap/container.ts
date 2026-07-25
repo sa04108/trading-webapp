@@ -85,8 +85,11 @@ export function createContainer(config: AppConfig): Container {
   const clock = systemClock;
 
   // 무한 증가 방지: 만료 세션·오래된 로그인 시도·보존 기간 지난 감사 로그 정리.
-  // 부팅 시 1회는 fail-fast(throw 허용), 주기 실행은 일시적 잠금(SQLITE_BUSY)이
-  // 프로세스를 죽이지 않도록 로그만 남기고 다음 사이클로 넘어간다.
+  // 부팅 시 1회 + 6시간 주기. 정리는 정확성에 필요한 작업이 아니므로 어느 쪽도
+  // 프로세스를 죽이지 않는다 — 부팅 시 남아있는 고아 자식 프로세스가 쓰기 잠금을
+  // 쥐고 있으면(§10 복구 경로가 상정하는 상황) busy_timeout 5s 를 넘길 수 있고,
+  // 그때 throw 하면 systemd Restart=on-failure 와 맞물려 재시작 루프가 된다.
+  // DB 자체가 못 쓸 상태라면 첫 질의에서 드러나고 health check 가 걸러낸다.
   const pruneOptions = {
     idleTimeoutMs: config.sessionIdleTimeoutSeconds * 1000,
     absoluteTimeoutMs: config.sessionAbsoluteTimeoutSeconds * 1000,
@@ -98,14 +101,15 @@ export function createContainer(config: AppConfig): Container {
       'audit log retention active',
     );
   }
-  pruneExpiredRows(database.db, clock.now(), pruneOptions);
-  const pruneTimer = setInterval(() => {
+  const prune = (phase: 'boot' | 'periodic'): void => {
     try {
       pruneExpiredRows(database.db, clock.now(), pruneOptions);
     } catch (error) {
-      logger.warn({ module: 'maintenance', err: error }, 'periodic prune failed — skipping cycle');
+      logger.warn({ module: 'maintenance', phase, err: error }, 'prune failed — skipping cycle');
     }
-  }, 6 * 3_600_000);
+  };
+  prune('boot');
+  const pruneTimer = setInterval(() => prune('periodic'), 6 * 3_600_000);
   pruneTimer.unref();
 
   const auditLog = createAuditLogService(database.db, clock, logger);
