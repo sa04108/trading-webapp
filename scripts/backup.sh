@@ -17,7 +17,10 @@ sqlite3 "${DATA_DIR}/app.sqlite" ".backup '${TARGET}/app.sqlite'"
 # 주의: tar 생성 시 인자는 리터럴 경로다 — --wildcards 는 생성에 적용되지 않으므로
 # find 로 실제 경로를 열거해서 넘긴다 (깊이 무관: dataset=<id>/ 계층 포함).
 if [ -d "${DATA_DIR}/market-data" ]; then
-  if find "${DATA_DIR}/market-data" -type d -name 'timeframe=1h' | grep -q .; then
+  # 존재 확인은 파이프 없이 -print -quit 사용 — pipefail 환경에서 find | grep -q 는
+  # grep 조기 종료의 SIGPIPE(141) 로 데이터가 있어도 거짓이 될 수 있다
+  first_hourly_dir="$(find "${DATA_DIR}/market-data" -type d -name 'timeframe=1h' -print -quit)"
+  if [ -n "${first_hourly_dir}" ]; then
     (
       cd "${DATA_DIR}"
       find market-data -type d -name 'timeframe=1h' -print0 \
