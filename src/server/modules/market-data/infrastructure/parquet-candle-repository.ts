@@ -4,10 +4,14 @@ import { SYMBOL_PATTERN, normalizeCandles, type Candle, type Market, type Timefr
 import type { CandleQuery, CandleRepository } from '../application/ports.js';
 import { DuckDbService, sqlString } from './duckdb-service.js';
 
+const DATASET_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
 /**
  * Parquet 기반 CandleRepository (스펙 §11 레이아웃):
- *   market=KR/timeframe=1h/symbol=005930/year=2026/data.parquet
- *   market=KR/timeframe=1m/symbol=005930/year=2026/month=07/data.parquet
+ *   dataset=<id>/market=KR/timeframe=1h/symbol=005930/year=2026/data.parquet
+ *   dataset=<id>/market=KR/timeframe=1m/symbol=005930/year=2026/month=07/data.parquet
+ * 데이터셋이 경로 최상위 파티션이다 — 다른 데이터셋이 같은 심볼을 import 해도
+ * 물리적으로 격리되어 버전·해시·coverage 가 섞이지 않는다.
  * 컬럼: ts_ms BIGINT, open/high/low/close/volume DOUBLE. UTC epoch ms 저장.
  * 저장은 파티션 단위 재작성(기존 병합→임시 파일→교체)으로 idempotent 하다.
  */
@@ -17,12 +21,19 @@ export class ParquetCandleRepository implements CandleRepository {
     private readonly duckdb: DuckDbService,
   ) {}
 
-  private partitionDir(market: Market, timeframe: Timeframe, symbol: string, tsMs: number): string {
+  private partitionDir(
+    datasetId: string,
+    market: Market,
+    timeframe: Timeframe,
+    symbol: string,
+    tsMs: number,
+  ): string {
     const date = new Date(tsMs);
     const year = date.getUTCFullYear();
     const month = String(date.getUTCMonth() + 1).padStart(2, '0');
     const base = path.join(
       this.dataRoot,
+      `dataset=${datasetId}`,
       `market=${market}`,
       `timeframe=${timeframe}`,
       `symbol=${symbol}`,
@@ -31,9 +42,22 @@ export class ParquetCandleRepository implements CandleRepository {
     return timeframe === '1m' ? path.join(base, `month=${month}`) : base;
   }
 
-  private symbolGlob(market: Market, timeframe: Timeframe, symbol: string): string {
+  private symbolGlob(
+    datasetId: string,
+    market: Market,
+    timeframe: Timeframe,
+    symbol: string,
+  ): string {
     return path
-      .join(this.dataRoot, `market=${market}`, `timeframe=${timeframe}`, `symbol=${symbol}`, '**', '*.parquet')
+      .join(
+        this.dataRoot,
+        `dataset=${datasetId}`,
+        `market=${market}`,
+        `timeframe=${timeframe}`,
+        `symbol=${symbol}`,
+        '**',
+        '*.parquet',
+      )
       .replaceAll('\\', '/');
   }
 
@@ -41,14 +65,25 @@ export class ParquetCandleRepository implements CandleRepository {
     if (!SYMBOL_PATTERN.test(symbol)) throw new Error(`invalid symbol: ${symbol}`);
   }
 
-  async saveCandles(candles: readonly Candle[]): Promise<void> {
+  private assertDatasetId(datasetId: string): void {
+    if (!DATASET_ID_PATTERN.test(datasetId)) throw new Error(`invalid datasetId: ${datasetId}`);
+  }
+
+  async saveCandles(datasetId: string, candles: readonly Candle[]): Promise<void> {
     if (candles.length === 0) return;
+    this.assertDatasetId(datasetId);
 
     // 파티션별 그룹화
     const groups = new Map<string, { dir: string; items: Candle[] }>();
     for (const candle of candles) {
       this.assertSymbol(candle.symbol);
-      const dir = this.partitionDir(candle.market, candle.timeframe, candle.symbol, candle.tsMs);
+      const dir = this.partitionDir(
+        datasetId,
+        candle.market,
+        candle.timeframe,
+        candle.symbol,
+        candle.tsMs,
+      );
       const group = groups.get(dir) ?? { dir, items: [] };
       group.items.push(candle);
       groups.set(dir, group);
@@ -127,10 +162,11 @@ export class ParquetCandleRepository implements CandleRepository {
   }
 
   async *getCandles(query: CandleQuery): AsyncIterable<Candle> {
+    this.assertDatasetId(query.datasetId);
     for (const symbol of query.symbols) {
       this.assertSymbol(symbol);
-      const glob = this.symbolGlob(query.market, query.timeframe, symbol);
-      if (!this.hasAnyFile(query.market, query.timeframe, symbol)) continue;
+      const glob = this.symbolGlob(query.datasetId, query.market, query.timeframe, symbol);
+      if (!this.hasAnyFile(query.datasetId, query.market, query.timeframe, symbol)) continue;
 
       const conditions: string[] = [];
       if (query.fromTsMs !== undefined) conditions.push(`ts_ms >= ${query.fromTsMs}`);
@@ -170,19 +206,31 @@ export class ParquetCandleRepository implements CandleRepository {
     }
   }
 
-  async getTimestamps(market: Market, timeframe: Timeframe, symbol: string): Promise<number[]> {
+  async getTimestamps(
+    datasetId: string,
+    market: Market,
+    timeframe: Timeframe,
+    symbol: string,
+  ): Promise<number[]> {
+    this.assertDatasetId(datasetId);
     this.assertSymbol(symbol);
-    if (!this.hasAnyFile(market, timeframe, symbol)) return [];
-    const glob = this.symbolGlob(market, timeframe, symbol);
+    if (!this.hasAnyFile(datasetId, market, timeframe, symbol)) return [];
+    const glob = this.symbolGlob(datasetId, market, timeframe, symbol);
     const rows = await this.duckdb.query<{ ts_ms: bigint | number }>(
       `SELECT ts_ms FROM read_parquet(${sqlString(glob)}) ORDER BY ts_ms`,
     );
     return rows.map((row) => Number(row.ts_ms));
   }
 
-  private hasAnyFile(market: Market, timeframe: Timeframe, symbol: string): boolean {
+  private hasAnyFile(
+    datasetId: string,
+    market: Market,
+    timeframe: Timeframe,
+    symbol: string,
+  ): boolean {
     const dir = path.join(
       this.dataRoot,
+      `dataset=${datasetId}`,
       `market=${market}`,
       `timeframe=${timeframe}`,
       `symbol=${symbol}`,

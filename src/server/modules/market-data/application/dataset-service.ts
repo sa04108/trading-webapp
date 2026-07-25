@@ -123,7 +123,7 @@ export class DatasetService {
         throw new Error(parsed.errors[0] ?? 'CSV 에 유효한 봉이 없습니다');
       }
 
-      await this.candleRepository.saveCandles(parsed.candles);
+      await this.candleRepository.saveCandles(dataset.id, parsed.candles);
 
       // 스펙 §11: 백테스트는 사전 집계 1시간봉 우선 — 1m import 시 1h 를 함께 생성
       if (request.timeframe === '1m') {
@@ -132,7 +132,7 @@ export class DatasetService {
           // 모든 봉이 세션 밖 → 세션 불일치·잘못된 데이터. 완료로 위장하지 않는다.
           throw new Error('모든 봉이 거래 세션 밖입니다. 타임스탬프와 시장 설정을 확인하세요.');
         }
-        await this.candleRepository.saveCandles(hourly);
+        await this.candleRepository.saveCandles(dataset.id, hourly);
       }
 
       await this.refreshCoverage(dataset.id, request.market, dataset.timeframe as Timeframe, request.symbol);
@@ -244,7 +244,7 @@ export class DatasetService {
     symbol: string,
   ): Promise<void> {
     const session = getSessionForMarket(market);
-    const timestamps = await this.candleRepository.getTimestamps(market, timeframe, symbol);
+    const timestamps = await this.candleRepository.getTimestamps(datasetId, market, timeframe, symbol);
     const coverage = computeCoverage(timeframe, timestamps, session);
 
     this.db
@@ -259,7 +259,7 @@ export class DatasetService {
       const ts =
         eachSymbol === symbol
           ? timestamps
-          : await this.candleRepository.getTimestamps(market, timeframe, eachSymbol);
+          : await this.candleRepository.getTimestamps(datasetId, market, timeframe, eachSymbol);
       const each = eachSymbol === symbol ? coverage : computeCoverage(timeframe, ts, session);
       this.db
         .insert(dataCoverage)

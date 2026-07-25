@@ -112,6 +112,7 @@ async function main(): Promise<void> {
     const toTsMs = Date.parse(`${request.period.to}T23:59:59.999Z`);
     const candles: Candle[] = [];
     for await (const candle of repository.getCandles({
+      datasetId: dataset.id,
       market: dataset.market as Market,
       timeframe: '1h',
       symbols: request.universe.symbols,
