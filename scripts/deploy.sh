@@ -8,6 +8,8 @@ HOST="${1:?usage: deploy.sh <wireguard-host>}"
 RELEASE="$(date -u +%Y%m%d-%H%M%S)-$(git rev-parse --short HEAD)"
 GIT_SHA="$(git rev-parse HEAD)"
 ARCHIVE="quant-platform-${RELEASE}.tar.gz"
+# 배포가 어디서 실패하든 (검증 게이트, 업로드, health check 롤백) 아카이브는 남기지 않는다
+trap 'rm -f "${ARCHIVE}"' EXIT
 
 echo "==> 검증 게이트"
 pnpm install --frozen-lockfile
@@ -79,5 +81,4 @@ if [ -f "\${DB_SNAPSHOT}" ]; then
 fi
 EOF
 
-rm -f "${ARCHIVE}"
 echo "==> 완료"
