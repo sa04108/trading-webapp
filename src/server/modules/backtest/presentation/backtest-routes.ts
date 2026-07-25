@@ -222,6 +222,11 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     // 재기준 후에도 새 제출이다 — POST 와 동일한 검증 관문을 거치고 버전을 다시 고정한다
     const validated = validateSubmission(cloneRequest);
     if (!validated.ok) return reply.code(400).send({ error: validated.error });
+
+    // §34 리소스 가드도 관문의 일부다 — 복제라고 디스크·메모리 한계를 넘어설 이유는 없다
+    const resourceError = await checkResources(deps.dataRoot);
+    if (resourceError) return reply.code(507).send({ error: resourceError });
+
     const cloned = queue.enqueue(cloneRequest, validated.datasetVersion);
     audit.record(request.authUser?.username ?? 'admin', 'backtest.cloned', {
       sourceJobId: id,
