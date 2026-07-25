@@ -31,13 +31,19 @@ export class JobQueue {
     this.db = handle.db;
   }
 
-  enqueue(request: BacktestRequest): BacktestJobRow {
+  enqueue(
+    request: BacktestRequest,
+    /** 제출 시점 데이터셋 스냅샷 — 실행 시점의 latest 로 대체되지 않도록 고정한다 */
+    pinnedDataset?: { version: number; contentHash: string },
+  ): BacktestJobRow {
     const row: typeof backtestJobs.$inferInsert = {
       id: newId('bt'),
       status: 'QUEUED',
       requestJson: JSON.stringify(request),
       strategyId: request.strategyId,
       datasetId: request.datasetId,
+      datasetVersion: pinnedDataset?.version ?? null,
+      datasetHash: pinnedDataset?.contentHash ?? null,
       createdAtMs: this.clock.now(),
     };
     this.db.insert(backtestJobs).values(row).run();

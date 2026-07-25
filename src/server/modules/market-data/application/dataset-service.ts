@@ -14,7 +14,7 @@ import type { AuditLogService } from '../../audit/audit-service.js';
 import { SYMBOL_PATTERN, type Market, type Timeframe } from '../domain/candle.js';
 import { aggregateToHourly } from '../domain/aggregate.js';
 import { computeCoverage } from '../domain/coverage.js';
-import { KR_SESSION } from '../domain/exchange-session.js';
+import { getSessionForMarket } from '../domain/exchange-session.js';
 import { parseCandleCsv } from './csv-parser.js';
 import type { CandleRepository } from './ports.js';
 
@@ -94,6 +94,8 @@ export class DatasetService {
     if (!SYMBOL_PATTERN.test(request.symbol)) {
       throw new Error(`invalid symbol: ${request.symbol}`);
     }
+    // 세션이 정의되지 않은 시장(US 등)은 조용한 빈 집계 대신 여기서 명시적으로 거부한다
+    const session = getSessionForMarket(request.market);
     const now = this.clock.now();
     const dataset = this.ensureDataset(request, now);
 
@@ -125,12 +127,16 @@ export class DatasetService {
 
       // 스펙 §11: 백테스트는 사전 집계 1시간봉 우선 — 1m import 시 1h 를 함께 생성
       if (request.timeframe === '1m') {
-        const hourly = aggregateToHourly(parsed.candles, KR_SESSION);
-        if (hourly.length > 0) await this.candleRepository.saveCandles(hourly);
+        const hourly = aggregateToHourly(parsed.candles, session);
+        if (hourly.length === 0) {
+          // 모든 봉이 세션 밖 → 세션 불일치·잘못된 데이터. 완료로 위장하지 않는다.
+          throw new Error('모든 봉이 거래 세션 밖입니다. 타임스탬프와 시장 설정을 확인하세요.');
+        }
+        await this.candleRepository.saveCandles(hourly);
       }
 
       await this.refreshCoverage(dataset.id, request.market, dataset.timeframe as Timeframe, request.symbol);
-      this.bumpVersion(dataset.id, request.csvContent, now);
+      this.bumpVersion(dataset.id, request, now);
 
       const completedAt = this.clock.now();
       this.db
@@ -199,7 +205,7 @@ export class DatasetService {
     return row as typeof datasets.$inferSelect;
   }
 
-  private bumpVersion(datasetId: string, content: string, nowMs: number): void {
+  getLatestVersion(datasetId: string): { version: number; contentHash: string } | null {
     const latest = this.db
       .select()
       .from(datasetVersions)
@@ -207,13 +213,24 @@ export class DatasetService {
       .orderBy(desc(datasetVersions.version))
       .limit(1)
       .get();
+    return latest ? { version: latest.version, contentHash: latest.contentHash } : null;
+  }
+
+  private bumpVersion(datasetId: string, request: ImportRequest, nowMs: number): void {
+    const latest = this.getLatestVersion(datasetId);
+    // 체인 해시: 이전 버전 해시에 이번 업로드를 연결해 전체 import 이력이 해시에 반영되게 한다.
+    // 마지막 파일만 해싱하면 서로 다른 데이터셋이 같은 지문을 가질 수 있다 (재현성 §9.5).
+    const csvHash = createHash('sha256').update(request.csvContent).digest('hex');
+    const contentHash = createHash('sha256')
+      .update(`${latest?.contentHash ?? ''}:${request.symbol}:${request.timeframe}:${csvHash}`)
+      .digest('hex');
     this.db
       .insert(datasetVersions)
       .values({
         id: newId('dsv'),
         datasetId,
         version: (latest?.version ?? 0) + 1,
-        contentHash: createHash('sha256').update(content).digest('hex'),
+        contentHash,
         note: null,
         createdAtMs: nowMs,
       })
@@ -226,8 +243,9 @@ export class DatasetService {
     timeframe: Timeframe,
     symbol: string,
   ): Promise<void> {
+    const session = getSessionForMarket(market);
     const timestamps = await this.candleRepository.getTimestamps(market, timeframe, symbol);
-    const coverage = computeCoverage(timeframe, timestamps, KR_SESSION);
+    const coverage = computeCoverage(timeframe, timestamps, session);
 
     this.db
       .delete(dataCoverage)
@@ -242,7 +260,7 @@ export class DatasetService {
         eachSymbol === symbol
           ? timestamps
           : await this.candleRepository.getTimestamps(market, timeframe, eachSymbol);
-      const each = eachSymbol === symbol ? coverage : computeCoverage(timeframe, ts, KR_SESSION);
+      const each = eachSymbol === symbol ? coverage : computeCoverage(timeframe, ts, session);
       this.db
         .insert(dataCoverage)
         .values({

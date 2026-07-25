@@ -14,8 +14,10 @@ import type {
  * 규칙:
  *  - 진입: 포지션이 없고, 종가가 직전 lookbackBars 개 봉의 최고 high 를 돌파하면 매수.
  *  - 수량: equity × riskPerTradePercent% ÷ (stopAtrMultiplier × ATR).
- *  - 청산: 종가 < 진입가 - stopAtrMultiplier × ATR(진입 시점), 또는
- *          takeProfitAtrMultiplier 가 있으면 종가 > 진입가 + tp × ATR.
+ *  - 청산: 종가 < 체결가 - stopAtrMultiplier × ATR(신호 시점), 또는
+ *          takeProfitAtrMultiplier 가 있으면 종가 > 체결가 + tp × ATR.
+ *    레벨은 신호봉 종가가 아니라 실제 체결가(다음 봉 시가 + 슬리피지) 기준이다 —
+ *    갭 진입 시 의도한 리스크 폭이 유지된다.
  */
 export const hourlyBreakoutParameters = z.object({
   lookbackBars: z.number().int().min(2).max(200),
@@ -33,10 +35,14 @@ interface SymbolState {
   atr: number | null;
   prevClose: number | null;
   barsSeen: number;
-  /** 보유 중 손절·익절 레벨 (진입 시 고정) */
+  /** 신호 시점 ATR — 체결 확인 후 레벨 계산에 사용 */
+  entryAtr: number | null;
+  /** 보유 중 손절·익절 레벨 (체결 확인 시 실제 진입가 기준으로 고정) */
   stopLevel: number | null;
   takeProfitLevel: number | null;
   pendingEntry: boolean;
+  /** 청산 주문 대기 중 — 체결 전까지 중복 청산 금지 */
+  exitPending: boolean;
 }
 
 export interface HourlyBreakoutState {
@@ -63,7 +69,7 @@ export const hourlyBreakoutStrategy: TradingStrategy<
   HourlyBreakoutState
 > = {
   id: 'hourly-breakout',
-  version: '1.0.0',
+  version: '1.1.0',
   name: '시간봉 돌파',
   description:
     '직전 N개 시간봉 최고가 돌파 시 진입, ATR 기반 손절·익절. 엔진 검증용 기준 전략.',
@@ -87,9 +93,11 @@ export const hourlyBreakoutStrategy: TradingStrategy<
           atr: null,
           prevClose: null,
           barsSeen: 0,
+          entryAtr: null,
           stopLevel: null,
           takeProfitLevel: null,
           pendingEntry: false,
+          exitPending: false,
         };
         state.bySymbol.set(symbol, symbolState);
       }
@@ -104,6 +112,19 @@ export const hourlyBreakoutStrategy: TradingStrategy<
 
       if (position && position.quantity > 0) {
         symbolState.pendingEntry = false;
+        if (symbolState.exitPending) continue;
+
+        // 체결이 확인된 시점에 실제 진입가 기준으로 레벨을 고정한다
+        if (symbolState.stopLevel === null && symbolState.entryAtr !== null) {
+          symbolState.stopLevel =
+            position.avgEntryPrice - parameters.stopAtrMultiplier * symbolState.entryAtr;
+          symbolState.takeProfitLevel =
+            parameters.takeProfitAtrMultiplier !== undefined
+              ? position.avgEntryPrice +
+                parameters.takeProfitAtrMultiplier * symbolState.entryAtr
+              : null;
+        }
+
         const stop = symbolState.stopLevel;
         const takeProfit = symbolState.takeProfitLevel;
         if (
@@ -116,11 +137,16 @@ export const hourlyBreakoutStrategy: TradingStrategy<
             quantity: position.quantity,
             reason: stop !== null && bar.close < stop ? 'STOP' : 'TAKE_PROFIT',
           });
+          symbolState.exitPending = true;
+          symbolState.entryAtr = null;
           symbolState.stopLevel = null;
           symbolState.takeProfitLevel = null;
         }
         continue;
       }
+
+      // 포지션 없음 — 직전 청산이 체결된 상태
+      symbolState.exitPending = false;
 
       // 미체결 진입 주문이 있으면 중복 진입 금지
       if (symbolState.pendingEntry) {
@@ -148,11 +174,10 @@ export const hourlyBreakoutStrategy: TradingStrategy<
 
         orders.push({ symbol, side: 'BUY', quantity, reason: 'BREAKOUT' });
         symbolState.pendingEntry = true;
-        symbolState.stopLevel = bar.close - stopDistance;
-        symbolState.takeProfitLevel =
-          parameters.takeProfitAtrMultiplier !== undefined
-            ? bar.close + parameters.takeProfitAtrMultiplier * symbolState.atr
-            : null;
+        // 레벨은 여기서 정하지 않는다 — 체결 확인 후 실제 진입가 기준으로 계산 (갭 대응)
+        symbolState.entryAtr = symbolState.atr;
+        symbolState.stopLevel = null;
+        symbolState.takeProfitLevel = null;
       }
     }
 

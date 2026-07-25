@@ -148,6 +148,63 @@ describe('market data (스펙 §11, §13)', () => {
     expect(jobLookup.statusCode).toBe(200);
   });
 
+  it('rejects US imports until a US session is defined (Codex 리뷰)', async () => {
+    const { username, password } = await createTestAdmin(ctx.container);
+    const login = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { username, password },
+    });
+    const cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+
+    const { payload, contentType } = multipartBody(
+      { datasetName: 'us-set', market: 'US', timeframe: '1m', symbol: 'AAPL' },
+      'us.csv',
+      buildCsv(60),
+    );
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/datasets/import',
+      headers: { 'content-type': contentType },
+      cookies: { qp_session: cookie },
+      payload,
+    });
+    // 빈 1h 집계로 조용히 COMPLETED 되면 안 된다 — 명시적 거부
+    expect(response.statusCode).toBe(400);
+    expect((response.json() as { error: string }).error).toContain('세션');
+  });
+
+  it('chains dataset version hashes so identical last uploads differ (재현성 §9.5)', async () => {
+    const service = ctx.container.datasetService;
+    const csv = buildCsv(390);
+
+    const first = await service.importCsv({
+      datasetName: 'hash-chain',
+      market: 'KR',
+      timeframe: '1m',
+      symbol: '005930',
+      fileName: 'a.csv',
+      csvContent: csv,
+    });
+    expect(first.status).toBe('COMPLETED');
+    const v1 = service.getLatestVersion(first.datasetId)!;
+
+    // 같은 파일을 다시 import — 마지막 업로드가 동일해도 해시는 이력에 따라 달라야 한다
+    const second = await service.importCsv({
+      datasetName: 'hash-chain',
+      market: 'KR',
+      timeframe: '1m',
+      symbol: '005930',
+      fileName: 'a.csv',
+      csvContent: csv,
+    });
+    expect(second.status).toBe('COMPLETED');
+    const v2 = service.getLatestVersion(second.datasetId)!;
+
+    expect(v2.version).toBe(v1.version + 1);
+    expect(v2.contentHash).not.toBe(v1.contentHash);
+  });
+
   it('rejects invalid CSV headers', async () => {
     const { username, password } = await createTestAdmin(ctx.container);
     const login = await ctx.app.inject({

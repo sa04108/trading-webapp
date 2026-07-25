@@ -93,6 +93,11 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (!datasets.getDataset(body.datasetId)) {
       return reply.code(400).send({ error: `알 수 없는 데이터셋: ${body.datasetId}` });
     }
+    // 제출 시점의 데이터셋 버전을 고정 — 대기 중 import 가 끼어들어도 메타데이터가 어긋나지 않는다
+    const datasetVersion = datasets.getLatestVersion(body.datasetId);
+    if (!datasetVersion) {
+      return reply.code(400).send({ error: '데이터가 없는 데이터셋입니다. 먼저 import 하세요.' });
+    }
     if (!getCostProfile(body.execution.commissionProfileId)) {
       return reply.code(400).send({ error: '알 수 없는 수수료 프로파일' });
     }
@@ -106,7 +111,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const resourceError = await checkResources(deps.dataRoot);
     if (resourceError) return reply.code(507).send({ error: resourceError });
 
-    const job = queue.enqueue(body);
+    const job = queue.enqueue(body, datasetVersion);
     audit.record(request.authUser?.username ?? 'admin', 'backtest.created', {
       jobId: job.id,
       strategyId: body.strategyId,
@@ -156,7 +161,12 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const job = queue.getJob(id);
     if (!job) return reply.code(404).send({ error: 'Job not found' });
     const cloneRequest = backtestRequestSchema.parse(JSON.parse(job.requestJson));
-    const cloned = queue.enqueue(cloneRequest);
+    // 복제는 새 제출이다 — 복제 시점의 최신 버전으로 다시 고정한다
+    const cloneVersion = datasets.getLatestVersion(cloneRequest.datasetId);
+    if (!cloneVersion) {
+      return reply.code(400).send({ error: '데이터가 없는 데이터셋입니다. 먼저 import 하세요.' });
+    }
+    const cloned = queue.enqueue(cloneRequest, cloneVersion);
     audit.record(request.authUser?.username ?? 'admin', 'backtest.cloned', {
       sourceJobId: id,
       jobId: cloned.id,

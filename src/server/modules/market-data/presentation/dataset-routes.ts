@@ -95,14 +95,22 @@ export function registerDatasetRoutes(
       return reply.code(400).send({ error: 'CSV 헤더가 올바르지 않습니다 (timestamp,open,high,low,close,volume)' });
     }
 
-    const job = await datasetService.importCsv({
-      datasetName: parsedFields.data.datasetName,
-      market: parsedFields.data.market,
-      timeframe: parsedFields.data.timeframe,
-      symbol: parsedFields.data.symbol,
-      fileName,
-      csvContent,
-    });
+    let job: Awaited<ReturnType<DatasetService['importCsv']>>;
+    try {
+      job = await datasetService.importCsv({
+        datasetName: parsedFields.data.datasetName,
+        market: parsedFields.data.market,
+        timeframe: parsedFields.data.timeframe,
+        symbol: parsedFields.data.symbol,
+        fileName,
+        csvContent,
+      });
+    } catch (error) {
+      // 세션 미지원 시장 등 job 생성 이전의 검증 실패
+      return reply
+        .code(400)
+        .send({ error: error instanceof Error ? error.message : String(error) });
+    }
 
     return reply.code(job.status === 'FAILED' ? 422 : 201).send({ job });
   });

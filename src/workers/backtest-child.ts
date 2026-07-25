@@ -6,6 +6,7 @@
 import { createHash } from 'node:crypto';
 import { desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
+import { readGitCommitSha } from '../server/shared/build-info.js';
 import { openDatabase } from '../server/shared/db/database.js';
 import {
   backtestDrawdownPoints,
@@ -84,13 +85,26 @@ async function main(): Promise<void> {
 
     const dataset = db.select().from(datasets).where(eq(datasets.id, request.datasetId)).get();
     if (!dataset) throw new Error(`dataset not found: ${request.datasetId}`);
-    const datasetVersion = db
+
+    // 제출 시점에 고정된 버전을 사용한다 (스펙 §9.5). 실행 시점의 latest 가 다르면
+    // 대기 중 import 가 데이터를 바꿨다는 뜻 — Parquet 은 파티션 재작성 방식이라
+    // 물리적 스냅샷 격리가 없으므로 경고로 명시한다.
+    const latestVersion = db
       .select()
       .from(datasetVersions)
       .where(eq(datasetVersions.datasetId, dataset.id))
       .orderBy(desc(datasetVersions.version))
       .limit(1)
       .get();
+    const pinnedVersion = job.datasetVersion ?? latestVersion?.version ?? 0;
+    const pinnedHash = job.datasetHash ?? latestVersion?.contentHash ?? 'unknown';
+    const datasetWarnings: string[] = [];
+    if (job.datasetVersion !== null && latestVersion && latestVersion.version !== job.datasetVersion) {
+      datasetWarnings.push(
+        `제출 시점 데이터셋 버전(v${job.datasetVersion})과 실행 시점 최신 버전(v${latestVersion.version})이 다릅니다. ` +
+          '대기 중 데이터가 변경되어 결과가 제출 당시 데이터와 다를 수 있습니다.',
+      );
+    }
 
     // 캔들 로드 (1h 사전 집계 우선, 스펙 §11)
     const repository = new ParquetCandleRepository(dataRoot, duckdb);
@@ -165,14 +179,14 @@ async function main(): Promise<void> {
           strategySourceHash,
           parameterJson: JSON.stringify(parameters),
           datasetId: dataset.id,
-          datasetVersion: datasetVersion?.version ?? 0,
-          datasetHash: datasetVersion?.contentHash ?? 'unknown',
+          datasetVersion: pinnedVersion,
+          datasetHash: pinnedHash,
           engineVersion: ENGINE_VERSION,
           feeModelVersion: `${costProfile.id}@${costProfile.version}`,
           slippageModelVersion: `${slippageProfile.id}@${slippageProfile.version}`,
           randomSeed: request.randomSeed,
-          gitCommitSha: process.env.BUILD_GIT_SHA ?? 'unknown',
-          warningsJson: JSON.stringify(result.warnings),
+          gitCommitSha: readGitCommitSha(),
+          warningsJson: JSON.stringify([...datasetWarnings, ...result.warnings]),
           startedAtMs,
           completedAtMs: Date.now(),
         })

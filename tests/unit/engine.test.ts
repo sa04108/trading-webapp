@@ -206,6 +206,46 @@ describe('runBacktest 이벤트 순서 (스펙 §9.1, §9.2)', () => {
     expect(result.metrics.finalEquity).toBeCloseTo(10_000 + 200 - 4.6);
   });
 
+  it('counts pending BUY orders against maxPositions (동시 신호 상한 방어)', () => {
+    // 두 심볼이 같은 봉에서 동시에 BUY 신호 → maxPositions=1 이면 1건만 체결돼야 한다
+    const strategy: TradingStrategy<unknown, { fired: boolean }> = {
+      id: 'dual-buy',
+      version: '1.0.0',
+      name: 't',
+      description: 't',
+      parameterSchema: z.unknown(),
+      initialize: () => ({ fired: false }),
+      onBars(_context, state) {
+        if (state.fired) return { orders: [] };
+        state.fired = true;
+        return {
+          orders: [
+            { symbol: 'A', side: 'BUY' as const, quantity: 1 },
+            { symbol: 'B', side: 'BUY' as const, quantity: 1 },
+          ],
+        };
+      },
+    };
+
+    const candles = [
+      bar(0, 100),
+      bar(1, 100),
+      bar(0, 200, { symbol: 'B' }),
+      bar(1, 200, { symbol: 'B' }),
+    ];
+    const result = runBacktest(strategy as never, {
+      candles,
+      initialCash: 10_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 1,
+    });
+
+    expect(result.fills).toHaveLength(1);
+    expect(result.metrics.maxConcurrentPositions).toBeLessThanOrEqual(1);
+  });
+
   it('is deterministic: same input and seed produce identical results (스펙 §9.5)', () => {
     const candles = Array.from({ length: 300 }, (_, i) =>
       bar(i, 100 + 10 * Math.sin(i / 7) + (i % 13)),
@@ -238,6 +278,45 @@ describe('runBacktest 이벤트 순서 (스펙 §9.1, §9.2)', () => {
     expect(hash(first.trades)).toBe(hash(second.trades));
     expect(hash(first.equityPoints)).toBe(hash(second.equityPoints));
     expect(hash(first.metrics)).toBe(hash(second.metrics));
+  });
+});
+
+describe('hourly-breakout 갭 진입 손·익절 기준 (Codex 리뷰)', () => {
+  it('anchors stop/take-profit to the actual fill price, not the signal close', () => {
+    // 평탄 20봉(ATR≈2) → 신호봉 close 105 → 다음 봉 시가 130 으로 갭 진입 → 115 로 하락.
+    // 신호봉 기준이면 TP(105+3×ATR≈113.4)에 걸려 손실이 TAKE_PROFIT 으로 라벨되고,
+    // 체결가 기준이면 stop(130-2×ATR≈124.4)에 걸려 STOP 으로 기록돼야 한다.
+    const flat = Array.from({ length: 20 }, (_, i) =>
+      bar(i, 100, { open: 100, high: 101, low: 99, close: 100 }),
+    );
+    const signal = bar(20, 105, { open: 100, high: 106, low: 100, close: 105 });
+    const gapUp = bar(21, 130, { open: 130, high: 131, low: 129, close: 130 });
+    const drop = bar(22, 115, { open: 115, high: 116, low: 114, close: 115 });
+    const exitBar = bar(23, 115, { open: 115, high: 116, low: 114, close: 115 });
+
+    const parameters: HourlyBreakoutParameters = {
+      lookbackBars: 10,
+      atrPeriod: 5,
+      stopAtrMultiplier: 2,
+      takeProfitAtrMultiplier: 3,
+      riskPerTradePercent: 2,
+      maxPositions: 5,
+    };
+
+    const result = runBacktest(hourlyBreakoutStrategy as never, {
+      candles: [...flat, signal, gapUp, drop, exitBar],
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters,
+      randomSeed: 42,
+      maxPositions: 5,
+    });
+
+    expect(result.trades).toHaveLength(1);
+    const trade = result.trades[0]!;
+    expect(trade.entryPrice).toBe(130); // 갭 봉 시가 체결
+    expect(trade.exitReason).toBe('STOP');
+    expect(trade.netPnl).toBeLessThan(0); // 라벨과 손익 부호가 일치해야 한다
   });
 });
 

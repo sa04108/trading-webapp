@@ -60,7 +60,7 @@ export interface BacktestRunResult {
 }
 
 /** 재현성 메타데이터에 기록되는 엔진 버전 (스펙 §9.5) — 체결·지표 로직 변경 시 올린다 */
-export const ENGINE_VERSION = '1.0.0';
+export const ENGINE_VERSION = '1.1.0';
 
 const PROGRESS_INTERVAL_BARS = 500;
 
@@ -229,8 +229,22 @@ export function runBacktest(
       return { ...order, quantity: Math.min(quantity, position.quantity) };
     }
 
-    // BUY: 신규 심볼이면 동시 포지션 상한 확인
-    if (!positions.has(order.symbol) && positions.size >= input.maxPositions) return null;
+    // BUY: 신규 심볼이면 동시 포지션 상한 확인.
+    // 대기 중인 신규 매수도 슬롯을 소비한다 — 같은 봉에서 여러 심볼이 동시에
+    // 신호를 내면 보유 수만으로는 상한이 뚫린다.
+    if (!positions.has(order.symbol)) {
+      const pendingNewBuySymbols = new Set(
+        pendingOrders
+          .filter((o) => o.side === 'BUY' && !positions.has(o.symbol))
+          .map((o) => o.symbol),
+      );
+      if (
+        !pendingNewBuySymbols.has(order.symbol) &&
+        positions.size + pendingNewBuySymbols.size >= input.maxPositions
+      ) {
+        return null;
+      }
+    }
     return { ...order, quantity };
   }
 

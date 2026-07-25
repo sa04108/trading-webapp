@@ -14,7 +14,10 @@ pnpm install --frozen-lockfile
 pnpm lint
 pnpm typecheck
 pnpm test
-BUILD_GIT_SHA="${GIT_SHA}" pnpm build
+pnpm build
+
+# 릴리스 SHA 를 산출물에 포함 — 런타임(서버·백테스트 워커)이 읽어 §9.5 메타데이터에 기록한다
+printf '{"gitSha":"%s","builtAt":"%s"}\n' "${GIT_SHA}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > dist/build-info.json
 
 echo "==> 아티팩트 생성: ${ARCHIVE}"
 tar -czf "${ARCHIVE}" dist migrations package.json pnpm-lock.yaml

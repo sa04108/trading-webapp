@@ -43,7 +43,7 @@ function buildTrendingHourlyCsv(): string {
 function buildRequest(datasetId: string): BacktestRequest {
   return {
     strategyId: 'hourly-breakout',
-    strategyVersion: '1.0.0',
+    strategyVersion: '1.1.0',
     parameters: {
       lookbackBars: 10,
       atrPeriod: 5,
@@ -135,11 +135,15 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       run: Record<string, unknown>;
       metrics: Record<string, unknown>;
     };
-    expect(body.run.engineVersion).toBe('1.0.0');
+    expect(body.run.engineVersion).toBe('1.1.0');
     expect(body.run.strategyId).toBe('hourly-breakout');
     expect(body.run.feeModelVersion).toBe('kr-equity-default@1.0.0');
     expect(body.run.randomSeed).toBe(42);
     expect(body.run.datasetHash).not.toBe('unknown');
+    // 제출 시점에 고정된 데이터셋 버전이 그대로 기록돼야 한다 (재현성 §9.5)
+    const pinned = ctx.container.datasetService.getLatestVersion(datasetId)!;
+    expect(body.run.datasetVersion).toBe(pinned.version);
+    expect(body.run.datasetHash).toBe(pinned.contentHash);
     expect(typeof body.metrics.totalReturnPct).toBe('number');
     expect(body.metrics.tradeCount as number).toBeGreaterThan(0);
 

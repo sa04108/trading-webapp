@@ -147,6 +147,9 @@ export const backtestJobs = sqliteTable(
     requestJson: text('request_json').notNull(),
     strategyId: text('strategy_id').notNull(),
     datasetId: text('dataset_id').notNull(),
+    // 제출 시점에 고정된 데이터셋 버전·해시 — 실행 시점의 latest 로 대체 금지 (재현성 §9.5)
+    datasetVersion: integer('dataset_version'),
+    datasetHash: text('dataset_hash'),
     progressBars: integer('progress_bars'),
     totalBars: integer('total_bars'),
     currentSymbol: text('current_symbol'),

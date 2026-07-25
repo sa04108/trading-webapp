@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import type { AppConfig } from './config.js';
+import { readGitCommitSha } from '../shared/build-info.js';
 import { createLogger, type Logger } from '../shared/logger.js';
 import { openDatabase, type DatabaseHandle } from '../shared/db/database.js';
 import { systemClock, type Clock } from '../shared/clock.js';
@@ -125,7 +126,7 @@ export function createContainer(config: AppConfig): Container {
     database,
     clock,
     appVersion: readAppVersion(),
-    gitCommitSha: process.env.BUILD_GIT_SHA ?? 'unknown',
+    gitCommitSha: readGitCommitSha(),
     systemStatus,
     auditLog,
     userRepository,

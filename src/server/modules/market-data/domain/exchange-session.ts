@@ -1,3 +1,5 @@
+import type { Market } from './candle.js';
+
 /**
  * 거래소 정규 세션 정의. MVP 는 고정 UTC 오프셋만 지원한다 (KR: KST, DST 없음).
  * 미국 시장 DST 는 MVP 한계로 결과 화면에 명시한다 (docs/DECISIONS.md D-006).
@@ -16,6 +18,19 @@ export const KR_SESSION: ExchangeSession = {
   openMinutes: 9 * 60,
   closeMinutes: 15 * 60 + 30,
 };
+
+export class UnsupportedMarketSessionError extends Error {
+  constructor(market: Market) {
+    super(`${market} 시장의 세션은 아직 지원되지 않습니다 (DST 미지원, docs/DECISIONS.md D-006)`);
+    this.name = 'UnsupportedMarketSessionError';
+  }
+}
+
+/** 시장별 세션 해석. 세션이 정의되지 않은 시장은 명시적으로 거부한다. */
+export function getSessionForMarket(market: Market): ExchangeSession {
+  if (market === 'KR') return KR_SESSION;
+  throw new UnsupportedMarketSessionError(market);
+}
 
 const MS_PER_MINUTE = 60_000;
 const MS_PER_DAY = 86_400_000;
