@@ -23,6 +23,10 @@ export const backtestRequestSchema = z.object({
     commissionProfileId: z.string().min(1),
     slippageProfileId: z.string().min(1),
   }),
+  /** 엔진 리스크 상한 (§9.2-6) — 전략 파라미터가 아니라 요청의 명시 필드다 */
+  risk: z.object({
+    maxPositions: z.number().int().min(1).max(20),
+  }),
   randomSeed: z.number().int().nonnegative().default(42),
 });
 

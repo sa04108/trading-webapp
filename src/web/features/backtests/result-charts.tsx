@@ -13,7 +13,7 @@ import {
   YAxis,
 } from 'recharts';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { formatDate, formatKrw, formatSignedPct } from './format';
+import { formatDate, formatKrw, formatSignedPct } from '@/lib/format';
 import type { SeriesPoint } from './types';
 
 const GAIN = 'var(--gain)';

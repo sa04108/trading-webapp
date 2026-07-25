@@ -54,12 +54,6 @@ export const auditLogs = sqliteTable(
   (table) => [index('idx_audit_logs_time').on(table.createdAtMs)],
 );
 
-export const applicationSettings = sqliteTable('application_settings', {
-  key: text('key').primaryKey(),
-  value: text('value').notNull(),
-  updatedAtMs: integer('updated_at_ms').notNull(),
-});
-
 // ── 데이터 (스펙 §12) ──────────────────────────────────────────────
 
 export const datasets = sqliteTable('datasets', {
@@ -125,17 +119,6 @@ export const dataImportJobs = sqliteTable(
   (table) => [index('idx_data_import_jobs_dataset').on(table.datasetId)],
 );
 
-export const dataSyncJobs = sqliteTable('data_sync_jobs', {
-  id: text('id').primaryKey(),
-  datasetId: text('dataset_id')
-    .notNull()
-    .references(() => datasets.id, { onDelete: 'cascade' }),
-  status: text('status').notNull(),
-  detailJson: text('detail_json'),
-  createdAtMs: integer('created_at_ms').notNull(),
-  completedAtMs: integer('completed_at_ms'),
-});
-
 // ── 백테스트 (스펙 §10, §12) ──────────────────────────────────────
 
 export const backtestJobs = sqliteTable(
@@ -152,7 +135,8 @@ export const backtestJobs = sqliteTable(
     datasetHash: text('dataset_hash'),
     progressBars: integer('progress_bars'),
     totalBars: integer('total_bars'),
-    currentSymbol: text('current_symbol'),
+    // 진행 위치 표시용 텍스트 (엔진이 시간 우선이라 날짜가 들어간다) — "심볼" 이 아니다
+    progressLabel: text('progress_label'),
     error: text('error'),
     workerId: text('worker_id'),
     pid: integer('pid'),

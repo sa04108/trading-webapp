@@ -54,7 +54,28 @@ function newSessionId(): string {
 }
 
 export class AuthService {
-  constructor(private readonly deps: AuthServiceDeps) {}
+  /**
+   * 사용자 부재 시 타이밍 균등화용 더미 해시.
+   * 기동 시점에 미리 계산한다 — 첫 로그인 시도부터 두 경로가 검증 1회로 균등하다
+   * (지연 생성이면 콜드스타트 첫 시도가 해시+검증 2회로 구별 가능).
+   */
+  private readonly dummyHashPromise: Promise<string>;
+
+  constructor(private readonly deps: AuthServiceDeps) {
+    this.dummyHashPromise = deps.passwordHasher.hash('timing-equalizer-dummy');
+    // ready() 를 기다리지 않는 경로에서도 unhandled rejection 이 되지 않게 한다
+    void this.dummyHashPromise.catch(() => undefined);
+  }
+
+  /**
+   * 더미 해시 계산 완료를 기다린다. 요청을 받기 전에 호출해야 한다 —
+   * 생성자는 계산을 시작만 하므로, 그 사이에 도착한 미존재 사용자 로그인은
+   * 남은 해시 시간 + 검증을 치르고 존재하는 사용자는 검증만 치른다. 콜드스타트
+   * 구간에서만 존재 여부가 응답 시간으로 드러나는 창이 열린다.
+   */
+  async ready(): Promise<void> {
+    await this.dummyHashPromise;
+  }
 
   async login(username: string, password: string, ip: string): Promise<LoginResult> {
     const { users, sessions, loginAttempts, passwordHasher, clock, audit } = this.deps;
@@ -67,10 +88,13 @@ export class AuthService {
     }
 
     const user = users.findByUsername(username);
-    const passwordOk = user
-      ? await passwordHasher.verify(user.passwordHash, password)
-      : // 사용자 부재 시에도 타이밍 차이를 줄이기 위해 더미 검증을 수행하지 않고 즉시 실패 기록
-        false;
+    let passwordOk = false;
+    if (user) {
+      passwordOk = await passwordHasher.verify(user.passwordHash, password);
+    } else {
+      // 사용자 부재 시에도 더미 해시를 검증해 응답 시간 차이로 계정 존재가 드러나지 않게 한다
+      await passwordHasher.verify(await this.dummyHashPromise, password);
+    }
 
     if (!user || !passwordOk) {
       loginAttempts.record(username, ip, false, now);

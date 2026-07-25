@@ -7,12 +7,13 @@ import type { Logger } from '../../../shared/logger.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
 import type { BacktestJobRow, JobQueue } from './job-queue.js';
 
-/** 자식 → 부모 IPC 메시지 */
-export type ChildMessage =
-  | { type: 'progress'; processedBars: number; totalBars: number; currentSymbol: string | null }
-  | { type: 'completed' }
-  | { type: 'cancelled' }
-  | { type: 'failed'; reason: string };
+/** 자식 → 부모 IPC 메시지. 종료 상태는 IPC 가 아니라 DB 에 기록된다 (exit 시 부모가 읽음). */
+export type ChildMessage = {
+  type: 'progress';
+  processedBars: number;
+  totalBars: number;
+  progressLabel: string | null;
+};
 
 export interface JobEvent {
   jobId: string;
@@ -20,7 +21,8 @@ export interface JobEvent {
 }
 
 const POLL_INTERVAL_MS = 1_000;
-const CANCEL_SIGTERM_DELAY_MS = 5_000;
+/** IPC 취소가 이 시간 안에 처리되지 않으면 신호로 강제한다 — 테스트가 두 경로를 구분하는 기준이기도 하다 */
+export const CANCEL_SIGTERM_DELAY_MS = 5_000;
 const CANCEL_SIGKILL_DELAY_MS = 10_000;
 
 function isPidAlive(pid: number): boolean {
@@ -88,7 +90,7 @@ export class JobOrchestrator {
     if (!job) return 'NOT_CANCELLABLE';
 
     if (job.status === 'QUEUED') {
-      this.queue.setStatus(jobId, 'CANCELLED');
+      if (!this.queue.setStatus(jobId, 'CANCELLED', {}, ['QUEUED'])) return 'NOT_CANCELLABLE';
       this.audit.record('admin', 'backtest.cancelled', { jobId });
       this.events.emit('job', { jobId, kind: 'status' } satisfies JobEvent);
       return 'CANCELLED';
@@ -97,7 +99,7 @@ export class JobOrchestrator {
     const child = this.children.get(jobId);
     if ((job.status === 'RUNNING' || job.status === 'STARTING') && child) {
       // 취소 시퀀스 (스펙 §10): CANCELLING → IPC → SIGTERM → SIGKILL
-      this.queue.setStatus(jobId, 'CANCELLING');
+      this.queue.setStatus(jobId, 'CANCELLING', {}, ['RUNNING', 'STARTING']);
       this.events.emit('job', { jobId, kind: 'status' } satisfies JobEvent);
       child.send({ type: 'cancel' });
       const sigterm = setTimeout(() => child.kill('SIGTERM'), CANCEL_SIGTERM_DELAY_MS);
@@ -148,7 +150,7 @@ export class JobOrchestrator {
     });
 
     this.children.set(job.id, child);
-    this.queue.setStatus(job.id, 'STARTING', { pid: child.pid ?? null });
+    this.queue.setStatus(job.id, 'STARTING', { pid: child.pid ?? null }, ['STARTING']);
     this.audit.record('system', 'backtest.started', { jobId: job.id, pid: child.pid });
     this.events.emit('job', { jobId: job.id, kind: 'status' } satisfies JobEvent);
 
@@ -159,14 +161,21 @@ export class JobOrchestrator {
       this.logger.warn({ module: 'backtest-child', jobId: job.id }, chunk.toString().trim()),
     );
 
+    let markedRunning = false;
     child.on('message', (message: ChildMessage) => {
       if (this.stopped || message.type !== 'progress') return;
       try {
+        // STARTING → RUNNING 은 여기서만 일어나는 명시적 1회 전이다.
+        // 진행률 갱신은 상태를 건드리지 않는다 — 종료 상태를 되돌릴 수 없다.
+        if (!markedRunning) {
+          markedRunning = true;
+          this.queue.markRunning(job.id);
+        }
         this.queue.updateProgress(
           job.id,
           message.processedBars,
           message.totalBars,
-          message.currentSymbol,
+          message.progressLabel,
         );
         this.events.emit('job', { jobId: job.id, kind: 'progress' } satisfies JobEvent);
       } catch (error) {
@@ -185,11 +194,16 @@ export class JobOrchestrator {
         // 자식이 종료 전 최종 상태를 DB 에 기록한다. 기록 없이 죽었으면 여기서 정리.
         if (!this.queue.isTerminal(current.status)) {
           if (current.status === 'CANCELLING') {
-            this.queue.setStatus(job.id, 'CANCELLED');
+            this.queue.setStatus(job.id, 'CANCELLED', {}, ['CANCELLING']);
           } else {
-            this.queue.setStatus(job.id, 'FAILED', {
-              error: `백테스트 프로세스가 비정상 종료되었습니다 (code=${code}, signal=${signal ?? 'none'})`,
-            });
+            this.queue.setStatus(
+              job.id,
+              'FAILED',
+              {
+                error: `백테스트 프로세스가 비정상 종료되었습니다 (code=${code}, signal=${signal ?? 'none'})`,
+              },
+              ['STARTING', 'RUNNING'],
+            );
           }
         }
         this.audit.record('system', 'backtest.finished', {

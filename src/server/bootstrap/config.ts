@@ -23,6 +23,8 @@ const envSchema = z.object({
   SESSION_SECRET: z.string().min(32).optional(),
   SESSION_IDLE_TIMEOUT_SECONDS: z.coerce.number().int().min(60).default(43200),
   SESSION_ABSOLUTE_TIMEOUT_SECONDS: z.coerce.number().int().min(60).default(604800),
+  /** 감사 로그 보존 일수 (D-011). 0 = 삭제하지 않음 */
+  AUDIT_LOG_RETENTION_DAYS: z.coerce.number().int().min(0).max(3650).default(90),
   LOG_LEVEL: z
     .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace'])
     .default('info'),
@@ -45,6 +47,7 @@ export interface AppConfig {
   readonly sessionSecret: string;
   readonly sessionIdleTimeoutSeconds: number;
   readonly sessionAbsoluteTimeoutSeconds: number;
+  readonly auditLogRetentionDays: number;
   readonly logLevel: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace';
   readonly trustProxyLoopback: boolean;
   readonly liveTradingEnabled: boolean;
@@ -87,6 +90,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     sessionSecret: raw.SESSION_SECRET ?? randomBytes(48).toString('base64'),
     sessionIdleTimeoutSeconds: raw.SESSION_IDLE_TIMEOUT_SECONDS,
     sessionAbsoluteTimeoutSeconds: raw.SESSION_ABSOLUTE_TIMEOUT_SECONDS,
+    auditLogRetentionDays: raw.AUDIT_LOG_RETENTION_DAYS,
     logLevel: raw.LOG_LEVEL,
     trustProxyLoopback: raw.TRUST_PROXY_LOOPBACK,
     liveTradingEnabled: raw.LIVE_TRADING_ENABLED,

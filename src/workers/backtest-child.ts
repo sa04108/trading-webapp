@@ -4,7 +4,7 @@
  * 환경변수는 §5 화이트리스트만 받는다. 종료 전 최종 상태를 DB 에 직접 기록한다.
  */
 import { createHash } from 'node:crypto';
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq, notInArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { readGitCommitSha } from '../server/shared/build-info.js';
 import { openDatabase } from '../server/shared/db/database.js';
@@ -21,6 +21,7 @@ import {
   datasets,
 } from '../server/shared/db/schema.js';
 import { newId } from '../server/shared/ids.js';
+import { TERMINAL_STATUSES } from '../server/modules/backtest/application/job-queue.js';
 import { ENGINE_VERSION, runBacktest } from '../server/modules/backtest/domain/engine.js';
 import {
   DEFAULT_EXECUTION_RULES,
@@ -61,9 +62,10 @@ async function main(): Promise<void> {
   });
 
   const finish = (status: 'COMPLETED' | 'FAILED' | 'CANCELLED', error?: string): void => {
+    // 부모와의 경합에서 이미 확정된 종료 상태를 되돌리지 않는다
     db.update(backtestJobs)
       .set({ status, error: error ?? null, completedAtMs: Date.now() })
-      .where(eq(backtestJobs.id, jobId))
+      .where(and(eq(backtestJobs.id, jobId), notInArray(backtestJobs.status, TERMINAL_STATUSES)))
       .run();
   };
 
@@ -71,7 +73,14 @@ async function main(): Promise<void> {
     const job = db.select().from(backtestJobs).where(eq(backtestJobs.id, jobId)).get();
     if (!job) throw new Error(`job not found: ${jobId}`);
 
-    const request = backtestRequestSchema.parse(JSON.parse(job.requestJson));
+    // 스키마 변경 이전에 저장된 요청은 zod 원문 대신 이해 가능한 메시지로 실패시킨다
+    const parsedRequest = backtestRequestSchema.safeParse(JSON.parse(job.requestJson));
+    if (!parsedRequest.success) {
+      throw new Error(
+        '저장된 요청이 현재 요청 스키마와 호환되지 않습니다. 복제 대신 새 백테스트를 생성하세요.',
+      );
+    }
+    const request = parsedRequest.data;
 
     const registry = new StrategyRegistry();
     const strategy = registry.get(request.strategyId);
@@ -127,11 +136,8 @@ async function main(): Promise<void> {
 
     const startedAtMs = Date.now();
     let lastProgressSentAt = 0;
-    let lastSymbol: string | null = null;
 
     const parameters = validated.value as Record<string, unknown>;
-    const maxPositions =
-      typeof parameters.maxPositions === 'number' ? parameters.maxPositions : 10;
 
     const result = runBacktest(strategy, {
       candles,
@@ -143,21 +149,21 @@ async function main(): Promise<void> {
       },
       parameters,
       randomSeed: request.randomSeed,
-      maxPositions,
+      maxPositions: request.risk.maxPositions,
     }, {
       shouldCancel: () => cancelRequested,
       onProgress: ({ processedBars, totalBars, currentTsMs }) => {
         const now = Date.now();
         if (now - lastProgressSentAt < 200 && processedBars < totalBars) return;
         lastProgressSentAt = now;
-        lastSymbol = new Date(currentTsMs).toISOString().slice(0, 10);
-        send({ type: 'progress', processedBars, totalBars, currentSymbol: lastSymbol });
+        // 엔진은 시간 우선으로 돌기 때문에 "현재 심볼" 은 존재하지 않는다 — 처리 중인 날짜를 표시
+        const progressLabel = new Date(currentTsMs).toISOString().slice(0, 10);
+        send({ type: 'progress', processedBars, totalBars, progressLabel });
       },
     });
 
     if (result.cancelled) {
       finish('CANCELLED');
-      send({ type: 'cancelled' });
       return;
     }
 
@@ -275,12 +281,11 @@ async function main(): Promise<void> {
       .where(eq(backtestJobs.id, jobId))
       .run();
 
+    // 종료 상태는 DB 가 유일한 진실이다 — 부모는 exit 이벤트에서 DB 를 읽는다
     finish('COMPLETED');
-    send({ type: 'completed' });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     finish(cancelRequested ? 'CANCELLED' : 'FAILED', cancelRequested ? undefined : reason);
-    send(cancelRequested ? { type: 'cancelled' } : { type: 'failed', reason });
     process.exitCode = cancelRequested ? 0 : 1;
   } finally {
     duckdb.close();

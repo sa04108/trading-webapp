@@ -11,7 +11,7 @@ import type { Clock } from '../../../shared/clock.js';
 import { newId } from '../../../shared/ids.js';
 import type { Logger } from '../../../shared/logger.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
-import { SYMBOL_PATTERN, type Market, type Timeframe } from '../domain/candle.js';
+import { SYMBOL_PATTERN, type Candle, type Market, type Timeframe } from '../domain/candle.js';
 import { aggregateToHourly } from '../domain/aggregate.js';
 import { computeCoverage } from '../domain/coverage.js';
 import { getSessionForMarket } from '../domain/exchange-session.js';
@@ -96,6 +96,34 @@ export class DatasetService {
     }
     // 세션이 정의되지 않은 시장(US 등)은 조용한 빈 집계 대신 여기서 명시적으로 거부한다
     const session = getSessionForMarket(request.market);
+
+    // 내용 검증은 데이터셋 메타데이터를 만지기 전에 **전부** 끝낸다.
+    // 파싱만 앞세우면, 구문은 멀쩡하지만 전 봉이 세션 밖인 1m CSV 가 ensureDataset 을
+    // 통과해 symbolsJson 에 유령 심볼을 남긴다 — 위저드는 그 심볼을 광고하고
+    // 제출 검증도 통과시키지만 1h 데이터는 존재하지 않는다.
+    const parsed = parseCandleCsv(request.csvContent, {
+      market: request.market,
+      timeframe: request.timeframe,
+      symbol: request.symbol,
+    });
+    if (parsed.candles.length === 0) {
+      this.rejectImport(request, parsed.errors[0] ?? 'CSV 에 유효한 봉이 없습니다');
+    }
+
+    // 스펙 §11: 백테스트는 사전 집계 1시간봉 우선 — 1m import 시 1h 를 함께 생성한다.
+    // 집계는 저장·메타데이터 변경 전에 끝내 완료로 위장할 여지를 없앤다.
+    let hourly: Candle[] | null = null;
+    if (request.timeframe === '1m') {
+      hourly = aggregateToHourly(parsed.candles, session);
+      if (hourly.length === 0) {
+        // 모든 봉이 세션 밖 → 세션 불일치·잘못된 데이터
+        this.rejectImport(
+          request,
+          '모든 봉이 거래 세션 밖입니다. 타임스탬프와 시장 설정을 확인하세요.',
+        );
+      }
+    }
+
     const now = this.clock.now();
     const dataset = this.ensureDataset(request, now);
 
@@ -114,28 +142,10 @@ export class DatasetService {
       .run();
 
     try {
-      const parsed = parseCandleCsv(request.csvContent, {
-        market: request.market,
-        timeframe: request.timeframe,
-        symbol: request.symbol,
-      });
-      if (parsed.candles.length === 0) {
-        throw new Error(parsed.errors[0] ?? 'CSV 에 유효한 봉이 없습니다');
-      }
-
       await this.candleRepository.saveCandles(dataset.id, parsed.candles);
+      if (hourly !== null) await this.candleRepository.saveCandles(dataset.id, hourly);
 
-      // 스펙 §11: 백테스트는 사전 집계 1시간봉 우선 — 1m import 시 1h 를 함께 생성
-      if (request.timeframe === '1m') {
-        const hourly = aggregateToHourly(parsed.candles, session);
-        if (hourly.length === 0) {
-          // 모든 봉이 세션 밖 → 세션 불일치·잘못된 데이터. 완료로 위장하지 않는다.
-          throw new Error('모든 봉이 거래 세션 밖입니다. 타임스탬프와 시장 설정을 확인하세요.');
-        }
-        await this.candleRepository.saveCandles(dataset.id, hourly);
-      }
-
-      await this.refreshCoverage(dataset.id, request.market, dataset.timeframe as Timeframe, request.symbol);
+      await this.refreshCoverage(dataset.id, request.market, dataset.timeframe as Timeframe);
       this.bumpVersion(dataset.id, request, now);
 
       const completedAt = this.clock.now();
@@ -168,6 +178,24 @@ export class DatasetService {
     }
 
     return this.getImportJob(jobId) as typeof dataImportJobs.$inferSelect;
+  }
+
+  /**
+   * 내용 검증 실패. 데이터셋도 job 레코드도 만들지 않으므로 (§13 의 FK 대상이 없다)
+   * 흔적은 감사 로그에 남긴다 — 거부된 업로드도 "무슨 일이 있었는지" 는 조회 가능해야 한다.
+   */
+  private rejectImport(request: ImportRequest, reason: string): never {
+    this.audit.record('system', 'data.import.rejected', {
+      datasetName: request.datasetName,
+      symbol: request.symbol,
+      fileName: request.fileName,
+      reason,
+    });
+    this.logger.warn(
+      { module: 'market-data', event: 'data.import.rejected', symbol: request.symbol },
+      reason,
+    );
+    throw new Error(reason);
   }
 
   private ensureDataset(request: ImportRequest, nowMs: number): typeof datasets.$inferSelect {
@@ -237,43 +265,38 @@ export class DatasetService {
       .run();
   }
 
-  async refreshCoverage(
-    datasetId: string,
-    market: Market,
-    timeframe: Timeframe,
-    symbol: string,
-  ): Promise<void> {
+  async refreshCoverage(datasetId: string, market: Market, timeframe: Timeframe): Promise<void> {
     const session = getSessionForMarket(market);
-    const timestamps = await this.candleRepository.getTimestamps(datasetId, market, timeframe, symbol);
-    const coverage = computeCoverage(timeframe, timestamps, session);
-
-    this.db
-      .delete(dataCoverage)
-      .where(eq(dataCoverage.datasetId, datasetId))
-      .run();
-    // 심볼 단위 재계산: 동일 datasetId 의 다른 심볼 행도 다시 계산
     const dataset = this.db.select().from(datasets).where(eq(datasets.id, datasetId)).get();
     if (!dataset) return;
     const symbols = JSON.parse(dataset.symbolsJson) as string[];
-    for (const eachSymbol of symbols) {
-      const ts =
-        eachSymbol === symbol
-          ? timestamps
-          : await this.candleRepository.getTimestamps(datasetId, market, timeframe, eachSymbol);
-      const each = eachSymbol === symbol ? coverage : computeCoverage(timeframe, ts, session);
-      this.db
-        .insert(dataCoverage)
-        .values({
-          datasetId,
-          symbol: eachSymbol,
-          firstTsMs: each.firstTsMs,
-          lastTsMs: each.lastTsMs,
-          barCount: each.barCount,
-          expectedBarCount: each.expectedBarCount,
-          missingRangesJson: JSON.stringify(each.missingRanges),
-          computedAtMs: this.clock.now(),
-        })
-        .run();
+
+    // 계산(비동기)을 끝낸 뒤 삭제+삽입은 단일 트랜잭션으로 —
+    // 동시 조회가 비어 있거나 반쯤 채워진 coverage 를 보지 않는다
+    const rows: (typeof dataCoverage.$inferInsert)[] = [];
+    for (const symbol of symbols) {
+      const timestamps = await this.candleRepository.getTimestamps(
+        datasetId,
+        market,
+        timeframe,
+        symbol,
+      );
+      const coverage = computeCoverage(timeframe, timestamps, session);
+      rows.push({
+        datasetId,
+        symbol,
+        firstTsMs: coverage.firstTsMs,
+        lastTsMs: coverage.lastTsMs,
+        barCount: coverage.barCount,
+        expectedBarCount: coverage.expectedBarCount,
+        missingRangesJson: JSON.stringify(coverage.missingRanges),
+        computedAtMs: this.clock.now(),
+      });
     }
+
+    this.db.transaction((tx) => {
+      tx.delete(dataCoverage).where(eq(dataCoverage.datasetId, datasetId)).run();
+      for (const row of rows) tx.insert(dataCoverage).values(row).run();
+    });
   }
 }

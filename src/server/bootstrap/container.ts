@@ -3,7 +3,9 @@ import type { AppConfig } from './config.js';
 import { readGitCommitSha } from '../shared/build-info.js';
 import { createLogger, type Logger } from '../shared/logger.js';
 import { openDatabase, type DatabaseHandle } from '../shared/db/database.js';
+import { pruneExpiredRows } from '../shared/db/maintenance.js';
 import { systemClock, type Clock } from '../shared/clock.js';
+import { configureZodLocale } from '../shared/zod-locale.js';
 import { createAuditLogService, type AuditLogService } from '../modules/audit/audit-service.js';
 import { AuthService } from '../modules/auth/application/auth-service.js';
 import type {
@@ -72,6 +74,7 @@ function readAppVersion(): string {
 }
 
 export function createContainer(config: AppConfig): Container {
+  configureZodLocale();
   const logger = createLogger(config);
 
   for (const dir of [config.dataRoot, config.importRoot, config.exportRoot, config.tempRoot]) {
@@ -80,6 +83,34 @@ export function createContainer(config: AppConfig): Container {
 
   const database = openDatabase(config.databasePath);
   const clock = systemClock;
+
+  // 무한 증가 방지: 만료 세션·오래된 로그인 시도·보존 기간 지난 감사 로그 정리.
+  // 부팅 시 1회 + 6시간 주기. 정리는 정확성에 필요한 작업이 아니므로 어느 쪽도
+  // 프로세스를 죽이지 않는다 — 부팅 시 남아있는 고아 자식 프로세스가 쓰기 잠금을
+  // 쥐고 있으면(§10 복구 경로가 상정하는 상황) busy_timeout 5s 를 넘길 수 있고,
+  // 그때 throw 하면 systemd Restart=on-failure 와 맞물려 재시작 루프가 된다.
+  // DB 자체가 못 쓸 상태라면 첫 질의에서 드러나고 health check 가 걸러낸다.
+  const pruneOptions = {
+    idleTimeoutMs: config.sessionIdleTimeoutSeconds * 1000,
+    absoluteTimeoutMs: config.sessionAbsoluteTimeoutSeconds * 1000,
+    auditLogRetentionMs: config.auditLogRetentionDays * 86_400_000,
+  };
+  if (pruneOptions.auditLogRetentionMs > 0) {
+    logger.info(
+      { module: 'maintenance', auditLogRetentionDays: config.auditLogRetentionDays },
+      'audit log retention active',
+    );
+  }
+  const prune = (phase: 'boot' | 'periodic'): void => {
+    try {
+      pruneExpiredRows(database.db, clock.now(), pruneOptions);
+    } catch (error) {
+      logger.warn({ module: 'maintenance', phase, err: error }, 'prune failed — skipping cycle');
+    }
+  };
+  prune('boot');
+  const pruneTimer = setInterval(() => prune('periodic'), 6 * 3_600_000);
+  pruneTimer.unref();
 
   const auditLog = createAuditLogService(database.db, clock, logger);
   const userRepository = createSqliteUserRepository(database.db);
@@ -143,6 +174,7 @@ export function createContainer(config: AppConfig): Container {
     jobOrchestrator,
     resultsService,
     close: () => {
+      clearInterval(pruneTimer);
       jobOrchestrator.stop();
       duckdb.close();
       database.close();

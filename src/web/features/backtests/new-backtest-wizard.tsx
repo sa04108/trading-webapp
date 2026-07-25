@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -17,7 +17,7 @@ import {
 import { Separator } from '@/components/ui/separator';
 import { api, ApiError, postJson } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
-import { formatKrw } from './format';
+import { formatKrw } from '@/lib/format';
 import type { BacktestRequestBody } from './types';
 
 const STEPS = ['전략', '데이터·종목', '기간', '자본·비용', '검토', '실행'] as const;
@@ -46,20 +46,11 @@ interface NumberParamSpec {
   key: string;
   minimum?: number;
   maximum?: number;
+  /** 서버 전략 스키마가 선언한 기본값 — 클라이언트 사본을 두지 않는다 */
+  defaultValue?: number;
   isInteger: boolean;
   optional: boolean;
 }
-
-/** hourly-breakout 기본값 (스펙 §15 예시 기반) */
-const DEFAULT_PARAMS: Record<string, Record<string, number>> = {
-  'hourly-breakout': {
-    lookbackBars: 20,
-    atrPeriod: 14,
-    stopAtrMultiplier: 2,
-    riskPerTradePercent: 1,
-    maxPositions: 5,
-  },
-};
 
 function extractNumberParams(schema: Record<string, unknown> | undefined): NumberParamSpec[] {
   if (!schema) return [];
@@ -71,6 +62,7 @@ function extractNumberParams(schema: Record<string, unknown> | undefined): Numbe
       key,
       ...(typeof def.minimum === 'number' ? { minimum: def.minimum } : {}),
       ...(typeof def.maximum === 'number' ? { maximum: def.maximum } : {}),
+      ...(typeof def.default === 'number' ? { defaultValue: def.default } : {}),
       isInteger: def.type === 'integer',
       optional: !required.has(key),
     }));
@@ -86,6 +78,7 @@ export function NewBacktestWizard() {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [initialCash, setInitialCash] = useState('10000000');
+  const [maxPositions, setMaxPositions] = useState('10');
   const [commissionProfileId, setCommissionProfileId] = useState('kr-equity-default');
   const [slippageProfileId, setSlippageProfileId] = useState('fixed-5bps');
   const [randomSeed, setRandomSeed] = useState('42');
@@ -116,13 +109,30 @@ export function NewBacktestWizard() {
   const selectedDataset = datasets.data?.datasets.find((d) => d.id === datasetId) ?? null;
   const paramSpecs = useMemo(() => extractNumberParams(schema.data?.schema), [schema.data]);
 
+  // 스키마 기본값은 입력 상태에 한 번 심는다. 렌더 시점에 빈 값을 기본값으로 되돌리면
+  // 필드를 비울 수 없어 (전체 선택 후 삭제 → 즉시 기본값 복귀) 지우고 다시 쓰기가 막힌다.
+  const seededFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (strategyId === null || paramSpecs.length === 0) return;
+    if (seededFor.current === strategyId) return;
+    seededFor.current = strategyId;
+    setParameters(
+      Object.fromEntries(
+        paramSpecs.map((spec) => [
+          spec.key,
+          spec.defaultValue !== undefined ? String(spec.defaultValue) : '',
+        ]),
+      ),
+    );
+  }, [strategyId, paramSpecs]);
+
   const pickStrategy = (id: string): void => {
     setStrategyId(id);
-    const defaults = DEFAULT_PARAMS[id] ?? {};
-    setParameters(
-      Object.fromEntries(Object.entries(defaults).map(([key, value]) => [key, String(value)])),
-    );
+    setParameters({}); // 스키마가 도착하면 위 effect 가 기본값을 심는다
+    seededFor.current = null;
   };
+
+  const paramValue = (spec: NumberParamSpec): string => parameters[spec.key] ?? '';
 
   const buildRequest = (): BacktestRequestBody | string => {
     if (!selectedStrategy) return '전략을 선택하세요';
@@ -130,11 +140,15 @@ export function NewBacktestWizard() {
     if (!from || !to || from > to) return '기간이 올바르지 않습니다';
     const cash = Number(initialCash);
     if (!Number.isFinite(cash) || cash <= 0) return '초기 자본이 올바르지 않습니다';
+    const positions = Number(maxPositions);
+    if (!Number.isInteger(positions) || positions < 1 || positions > 20) {
+      return '동시 보유 종목 상한은 1~20 이어야 합니다';
+    }
 
     const parsedParams: Record<string, number> = {};
     for (const spec of paramSpecs) {
-      const raw = parameters[spec.key];
-      if (raw === undefined || raw === '') {
+      const raw = paramValue(spec);
+      if (raw === '') {
         if (spec.optional) continue;
         return `파라미터 ${spec.key} 를 입력하세요`;
       }
@@ -156,6 +170,7 @@ export function NewBacktestWizard() {
       period: { from, to },
       capital: { initialCash: cash, currency: 'KRW' },
       execution: { fillTiming: 'NEXT_BAR_OPEN', commissionProfileId, slippageProfileId },
+      risk: { maxPositions: positions },
       randomSeed: Number(randomSeed) || 42,
     };
   };
@@ -274,7 +289,7 @@ export function NewBacktestWizard() {
                       min={spec.minimum}
                       max={spec.maximum}
                       step={spec.isInteger ? 1 : 'any'}
-                      value={parameters[spec.key] ?? ''}
+                      value={paramValue(spec)}
                       onChange={(e) =>
                         setParameters((prev) => ({ ...prev, [spec.key]: e.target.value }))
                       }
@@ -425,6 +440,20 @@ export function NewBacktestWizard() {
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="max-positions">동시 보유 종목 상한</Label>
+              <Input
+                id="max-positions"
+                type="number"
+                inputMode="numeric"
+                className="h-11"
+                min={1}
+                max={20}
+                step={1}
+                value={maxPositions}
+                onChange={(e) => setMaxPositions(e.target.value)}
+              />
             </div>
             <div className="space-y-1">
               <Label htmlFor="seed">Random seed</Label>

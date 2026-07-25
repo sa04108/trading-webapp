@@ -28,7 +28,6 @@ export interface SessionRepository {
   findById(id: string): SessionRecord | null;
   touch(id: string, nowMs: number): void;
   delete(id: string): void;
-  deleteAllForUser(userId: string): void;
 }
 
 export interface LoginAttemptRepository {

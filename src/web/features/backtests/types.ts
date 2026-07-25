@@ -21,6 +21,7 @@ export interface BacktestRequestBody {
     commissionProfileId: string;
     slippageProfileId: string;
   };
+  risk: { maxPositions: number };
   randomSeed: number;
 }
 
@@ -32,7 +33,7 @@ export interface JobSummary {
   request: BacktestRequestBody;
   progressBars: number | null;
   totalBars: number | null;
-  currentSymbol: string | null;
+  progressLabel: string | null;
   error: string | null;
   createdAtMs: number;
   startedAtMs: number | null;

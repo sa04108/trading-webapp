@@ -29,6 +29,27 @@
       "when": 1784972692228,
       "tag": "0003_awesome_salo",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1784980491195,
+      "tag": "0004_old_hitman",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1784980543683,
+      "tag": "0005_talented_blizzard",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1784980925842,
+      "tag": "0006_outgoing_living_lightning",
+      "breakpoints": true
     }
   ]
 }

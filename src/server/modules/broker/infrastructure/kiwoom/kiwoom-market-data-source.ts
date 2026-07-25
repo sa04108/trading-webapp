@@ -52,10 +52,11 @@ export function createKiwoomMarketDataSource(
       if (!response.ok) {
         throw new Error(`kiwoom token issue failed: ${response.status}`);
       }
-      const body = (await response.json()) as { token: string; expires_dt?: string };
+      const body = (await response.json()) as { token: string };
       return {
         accessToken: body.token,
-        // expires_dt 파싱 실패 시 12시간 보수 캐싱
+        // 응답의 expires_dt 는 아직 파싱하지 않는다 (자격 증명 발급 후 형식 검증 예정) —
+        // 그때까지는 12시간 보수 캐싱으로 고정
         expiresAtMs: Date.now() + 12 * 3600 * 1000,
       };
     },

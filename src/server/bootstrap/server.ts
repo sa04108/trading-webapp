@@ -92,11 +92,15 @@ export async function buildServer(container: Container): Promise<FastifyInstance
       if (request.method === 'GET' && !request.url.startsWith('/api/')) {
         return reply.type('text/html').send(fs.createReadStream(path.join(publicDir, 'index.html')));
       }
-      return reply.code(404).send({ error: 'Not Found' });
+      return reply.code(404).send({ error: '요청한 리소스를 찾을 수 없습니다' });
     });
   } else {
-    app.setNotFoundHandler((_request, reply) => reply.code(404).send({ error: 'Not Found' }));
+    app.setNotFoundHandler((_request, reply) => reply.code(404).send({ error: '요청한 리소스를 찾을 수 없습니다' }));
   }
+
+  // 첫 요청 전에 로그인 타이밍 균등화용 더미 해시를 준비한다 (콜드스타트 타이밍 노출 차단).
+  // buildServer 를 거치는 모든 진입점(main, E2E, 테스트)이 자동으로 포함된다.
+  await container.authService.ready();
 
   return app;
 }

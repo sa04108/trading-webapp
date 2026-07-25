@@ -1,4 +1,4 @@
-import { count, desc, eq, inArray } from 'drizzle-orm';
+import { and, count, desc, eq, inArray } from 'drizzle-orm';
 import type { AppDatabase, DatabaseHandle } from '../../../shared/db/database.js';
 import { backtestJobs } from '../../../shared/db/schema.js';
 import type { Clock } from '../../../shared/clock.js';
@@ -18,7 +18,12 @@ export type BacktestJobStatus =
 export type BacktestJobRow = typeof backtestJobs.$inferSelect;
 
 const ACTIVE_STATUSES: BacktestJobStatus[] = ['STARTING', 'RUNNING', 'CANCELLING'];
-const TERMINAL_STATUSES: BacktestJobStatus[] = ['CANCELLED', 'COMPLETED', 'FAILED', 'INTERRUPTED'];
+export const TERMINAL_STATUSES: BacktestJobStatus[] = [
+  'CANCELLED',
+  'COMPLETED',
+  'FAILED',
+  'INTERRUPTED',
+];
 
 /** SQLite 지속성 작업 큐 (스펙 §10) */
 export class JobQueue {
@@ -85,29 +90,48 @@ export class JobQueue {
       .all();
   }
 
-  setStatus(jobId: string, status: BacktestJobStatus, patch: Partial<BacktestJobRow> = {}): void {
+  /**
+   * 상태 변경. expectedCurrent 를 주면 현재 상태가 그중 하나일 때만 쓴다 —
+   * 프로세스 간 경합에서 종료 상태가 뒤늦은 쓰기로 되돌아가는 것을 막는다.
+   */
+  setStatus(
+    jobId: string,
+    status: BacktestJobStatus,
+    patch: Partial<BacktestJobRow> = {},
+    expectedCurrent?: BacktestJobStatus[],
+  ): boolean {
     const terminal = TERMINAL_STATUSES.includes(status);
-    this.db
+    const where = expectedCurrent
+      ? and(eq(backtestJobs.id, jobId), inArray(backtestJobs.status, expectedCurrent))
+      : eq(backtestJobs.id, jobId);
+    const result = this.db
       .update(backtestJobs)
       .set({
         status,
         ...(terminal ? { completedAtMs: this.clock.now() } : {}),
         ...patch,
       })
-      .where(eq(backtestJobs.id, jobId))
+      .where(where)
       .run();
+    return result.changes > 0;
   }
 
+  /** 첫 진행률 수신 시 1회 전이 — STARTING 이 아닐 때는 아무것도 하지 않는다 */
+  markRunning(jobId: string): void {
+    this.setStatus(jobId, 'RUNNING', {}, ['STARTING']);
+  }
+
+  /** 진행률만 갱신한다. 상태는 건드리지 않으며, 활성 상태가 아니면 무시된다. */
   updateProgress(
     jobId: string,
     progressBars: number,
     totalBars: number,
-    currentSymbol: string | null,
+    progressLabel: string | null,
   ): void {
     this.db
       .update(backtestJobs)
-      .set({ progressBars, totalBars, currentSymbol, status: 'RUNNING' })
-      .where(eq(backtestJobs.id, jobId))
+      .set({ progressBars, totalBars, progressLabel })
+      .where(and(eq(backtestJobs.id, jobId), inArray(backtestJobs.status, ACTIVE_STATUSES)))
       .run();
   }
 
@@ -123,10 +147,14 @@ export class JobQueue {
     for (const job of active) {
       const alive = job.pid !== null && isPidAlive(job.pid);
       if (!alive) {
-        this.setStatus(job.id, 'INTERRUPTED', {
-          error: '서버 재시작으로 작업이 중단되었습니다. 복제 후 재실행하세요.',
-        });
-        recovered.push(job.id);
+        // 죽은 자식이 종료 직전에 남긴 쓰기와 경합하지 않도록 여기서도 활성 상태일 때만 쓴다
+        const written = this.setStatus(
+          job.id,
+          'INTERRUPTED',
+          { error: '서버 재시작으로 작업이 중단되었습니다. 복제 후 재실행하세요.' },
+          ACTIVE_STATUSES,
+        );
+        if (written) recovered.push(job.id);
       }
     }
     return recovered;

@@ -8,7 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { api } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 import { useBacktests } from '../backtests/api';
-import { formatDateTime, formatSignedPct, pnlClass } from '../backtests/format';
+import { formatDateTime, formatSignedPct, pnlClass } from '@/lib/format';
 import { StatusBadge } from '../backtests/status-badge';
 import { isTerminal } from '../backtests/types';
 

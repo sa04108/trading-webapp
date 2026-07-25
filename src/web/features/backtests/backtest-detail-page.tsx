@@ -42,7 +42,7 @@ import {
   formatSignedKrw,
   formatSignedPct,
   pnlClass,
-} from './format';
+} from '@/lib/format';
 import { DrawdownChart, EquityChart, MonthlyReturnsChart } from './result-charts';
 import { StatusBadge } from './status-badge';
 import { isTerminal, type BacktestMetrics, type JobSummary, type RunMetadata } from './types';
@@ -284,9 +284,14 @@ export function BacktestDetailPage() {
   });
 
   const cloneMutation = useMutation({
-    mutationFn: () => api<{ job: { id: string } }>(`/backtests/${id}/clone`, { method: 'POST' }),
+    mutationFn: () =>
+      api<{ job: { id: string }; warnings?: string[] }>(`/backtests/${id}/clone`, {
+        method: 'POST',
+      }),
     onSuccess: (data) => {
       toast.success('복제되어 대기열에 추가되었습니다');
+      // 재기준된 항목은 조용히 넘기지 않는다 — 원본과 결과가 달라질 수 있다
+      for (const warning of data.warnings ?? []) toast.warning(warning, { duration: 10_000 });
       void queryClient.invalidateQueries({ queryKey: ['backtests'] });
       void navigate(`/backtests/${data.job.id}`);
     },
@@ -379,8 +384,8 @@ export function BacktestDetailPage() {
               </span>
             </div>
             <Progress value={progress ?? 0} aria-label="백테스트 진행률" />
-            {job.currentSymbol ? (
-              <p className="text-xs text-muted-foreground">처리 중: {job.currentSymbol}</p>
+            {job.progressLabel ? (
+              <p className="text-xs text-muted-foreground">처리 중: {job.progressLabel}</p>
             ) : null}
           </CardContent>
         </Card>

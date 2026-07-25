@@ -44,19 +44,16 @@ export interface LocalTime {
   readonly dayOfWeek: number;
 }
 
+/** 현지 일 인덱스 → 요일 (0=일요일). 1970-01-01 은 목요일(4). */
+export function dayOfWeekFromDayIndex(dayIndex: number): number {
+  return ((dayIndex % 7) + 7 + 4) % 7;
+}
+
 export function toLocalTime(tsMs: number, session: ExchangeSession): LocalTime {
   const localMs = tsMs + session.utcOffsetMinutes * MS_PER_MINUTE;
   const dayIndex = Math.floor(localMs / MS_PER_DAY);
   const minuteOfDay = Math.floor((localMs - dayIndex * MS_PER_DAY) / MS_PER_MINUTE);
-  // 1970-01-01 은 목요일(4)
-  const dayOfWeek = ((dayIndex % 7) + 7 + 4) % 7;
-  return { dayIndex, minuteOfDay, dayOfWeek };
-}
-
-export function isWithinSession(tsMs: number, session: ExchangeSession): boolean {
-  const local = toLocalTime(tsMs, session);
-  if (local.dayOfWeek === 0 || local.dayOfWeek === 6) return false;
-  return local.minuteOfDay >= session.openMinutes && local.minuteOfDay < session.closeMinutes;
+  return { dayIndex, minuteOfDay, dayOfWeek: dayOfWeekFromDayIndex(dayIndex) };
 }
 
 /** 현지 (dayIndex, minuteOfDay) → UTC epoch ms */

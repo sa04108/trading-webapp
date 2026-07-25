@@ -255,7 +255,6 @@ describe('runBacktest 이벤트 순서 (스펙 §9.1, §9.2)', () => {
       atrPeriod: 5,
       stopAtrMultiplier: 2,
       riskPerTradePercent: 2,
-      maxPositions: 5,
     };
 
     const run = () =>
@@ -265,7 +264,7 @@ describe('runBacktest 이벤트 순서 (스펙 §9.1, §9.2)', () => {
         execution: ZERO_COST,
         parameters,
         randomSeed: 42,
-        maxPositions: parameters.maxPositions,
+        maxPositions: 5,
       });
 
     const first = run();
@@ -300,7 +299,6 @@ describe('hourly-breakout 갭 진입 손·익절 기준 (Codex 리뷰)', () => {
       stopAtrMultiplier: 2,
       takeProfitAtrMultiplier: 3,
       riskPerTradePercent: 2,
-      maxPositions: 5,
     };
 
     const result = runBacktest(hourlyBreakoutStrategy as never, {
@@ -339,7 +337,6 @@ describe('hourly-breakout look-ahead fixture (스펙 §33)', () => {
       atrPeriod: 5,
       stopAtrMultiplier: 2,
       riskPerTradePercent: 2,
-      maxPositions: 5,
     };
 
     const result = runBacktest(hourlyBreakoutStrategy as never, {

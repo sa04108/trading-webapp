@@ -155,6 +155,20 @@ describe('market data (스펙 §11, §13)', () => {
     expect(jobLookup.statusCode).toBe(200);
   });
 
+  it('serializes concurrent writes to the same partition (행 유실 방지)', async () => {
+    const repo = ctx.container.candleRepository;
+    const first = Array.from({ length: 30 }, (_, i) => minuteCandle(i));
+    const second = Array.from({ length: 30 }, (_, i) => minuteCandle(i + 30));
+
+    await Promise.all([
+      repo.saveCandles('ds_conc', first),
+      repo.saveCandles('ds_conc', second),
+    ]);
+
+    const timestamps = await repo.getTimestamps('ds_conc', 'KR', '1m', '005930');
+    expect(timestamps).toHaveLength(60); // 어느 쪽도 상대의 쓰기를 덮어쓰지 않는다
+  });
+
   it('isolates candle storage per dataset — same symbol never merges (Codex 리뷰)', async () => {
     const service = ctx.container.datasetService;
     const repo = ctx.container.candleRepository;
@@ -275,6 +289,73 @@ describe('market data (스펙 §11, §13)', () => {
       cookies: { qp_session: cookie },
       payload,
     });
+    // 파싱은 메타데이터 변경 전에 일어난다 — 명시적 400, 빈 데이터셋이 생기지 않는다
     expect(response.statusCode).toBe(400);
+    expect(ctx.container.datasetService.listDatasets()).toHaveLength(0);
+  });
+
+  it('does not add a symbol to dataset metadata when its CSV fails to parse', async () => {
+    const service = ctx.container.datasetService;
+    const good = await service.importCsv({
+      datasetName: 'meta-guard',
+      market: 'KR',
+      timeframe: '1m',
+      symbol: '005930',
+      fileName: 'good.csv',
+      csvContent: buildCsv(60),
+    });
+    expect(good.status).toBe('COMPLETED');
+
+    // 새 심볼의 전량 불량 업로드 — symbolsJson 에 유령 심볼이 남으면 안 된다
+    await expect(
+      service.importCsv({
+        datasetName: 'meta-guard',
+        market: 'KR',
+        timeframe: '1m',
+        symbol: '000660',
+        fileName: 'bad.csv',
+        csvContent: 'timestamp,open,high,low,close,volume\nnot-a-number,x,x,x,x,x',
+      }),
+    ).rejects.toThrow();
+
+    const dataset = service.listDatasets().find((d) => d.name === 'meta-guard')!;
+    expect(dataset.symbols).toEqual(['005930']);
+  });
+
+  it('does not add a symbol whose bars all fall outside the trading session', async () => {
+    const service = ctx.container.datasetService;
+    await service.importCsv({
+      datasetName: 'session-guard',
+      market: 'KR',
+      timeframe: '1m',
+      symbol: '005930',
+      fileName: 'good.csv',
+      csvContent: buildCsv(60),
+    });
+
+    // 구문은 멀쩡하지만 전 봉이 03:00 KST — 1h 집계 결과가 비어 있다.
+    // 파싱만 앞세우면 이 업로드가 ensureDataset 을 통과해 유령 심볼을 남긴다.
+    const outsideSession = Date.UTC(2026, 6, 5, 18, 0);
+    await expect(
+      service.importCsv({
+        datasetName: 'session-guard',
+        market: 'KR',
+        timeframe: '1m',
+        symbol: '000660',
+        fileName: 'off-hours.csv',
+        csvContent: buildCsv(60, outsideSession),
+      }),
+    ).rejects.toThrow(/세션 밖/);
+
+    const dataset = service.listDatasets().find((d) => d.name === 'session-guard')!;
+    expect(dataset.symbols).toEqual(['005930']);
+    // 유령 심볼의 원본 봉도 저장되지 않아야 한다
+    const timestamps = await ctx.container.candleRepository.getTimestamps(
+      dataset.id,
+      'KR',
+      '1m',
+      '000660',
+    );
+    expect(timestamps).toHaveLength(0);
   });
 });

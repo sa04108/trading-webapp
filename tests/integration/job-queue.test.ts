@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { CANCEL_SIGTERM_DELAY_MS } from '../../src/server/modules/backtest/application/job-orchestrator.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
 
@@ -43,14 +44,13 @@ function buildTrendingHourlyCsv(): string {
 function buildRequest(datasetId: string): BacktestRequest {
   return {
     strategyId: 'hourly-breakout',
-    strategyVersion: '1.1.0',
+    strategyVersion: '1.2.0',
     parameters: {
       lookbackBars: 10,
       atrPeriod: 5,
       stopAtrMultiplier: 2,
       takeProfitAtrMultiplier: 3,
       riskPerTradePercent: 2,
-      maxPositions: 5,
     },
     datasetId,
     universe: { type: 'SYMBOLS', symbols: ['005930'] },
@@ -61,6 +61,7 @@ function buildRequest(datasetId: string): BacktestRequest {
       commissionProfileId: 'kr-equity-default',
       slippageProfileId: 'fixed-5bps',
     },
+    risk: { maxPositions: 5 },
     randomSeed: 42,
   };
 }
@@ -213,6 +214,44 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(claimA?.status).toBe('STARTING');
   });
 
+  it(
+    'cancels an active job through the child process (스펙 §10 취소 시퀀스)',
+    { timeout: 60_000 },
+    async () => {
+      const created = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/backtests',
+        cookies: { qp_session: cookie },
+        payload: buildRequest(datasetId),
+      });
+      const jobId = (created.json().job as { id: string }).id;
+
+      // 자식 프로세스 기동 직후(STARTING) 취소 — IPC 로 전달되어 CANCELLED 로 끝나야 한다
+      ctx.container.jobOrchestrator.tick();
+      const requestedAt = Date.now();
+      const cancelled = await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/backtests/${jobId}/cancel`,
+        cookies: { qp_session: cookie },
+      });
+      expect(cancelled.json().status).toBe('CANCELLING');
+      expect(ctx.container.jobQueue.getJob(jobId)!.status).toBe('CANCELLING');
+
+      await waitFor(() => {
+        const job = ctx.container.jobQueue.getJob(jobId);
+        return job !== null && ctx.container.jobQueue.isTerminal(job.status);
+      }, 45_000);
+      const elapsedMs = Date.now() - requestedAt;
+
+      const final = ctx.container.jobQueue.getJob(jobId)!;
+      expect(final.status).toBe('CANCELLED');
+      expect(final.error).toBeNull();
+      // SIGTERM·SIGKILL 폴백도 결국 CANCELLED 로 끝나므로 상태만으로는 두 경로가 구분되지 않는다.
+      // 신호가 나가기 전에 끝났다는 것이 IPC 경로로 취소됐다는 유일한 증거다.
+      expect(elapsedMs).toBeLessThan(CANCEL_SIGTERM_DELAY_MS);
+    },
+  );
+
   it('cancels a QUEUED job immediately', async () => {
     const created = await ctx.app.inject({
       method: 'POST',
@@ -229,6 +268,38 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
     expect(cancelled.json().status).toBe('CANCELLED');
     expect(ctx.container.jobQueue.getJob(jobId)!.status).toBe('CANCELLED');
+  });
+
+  it('never regresses a terminal status via late progress or status writes (C1)', () => {
+    const queue = ctx.container.jobQueue;
+    const job = queue.enqueue(buildRequest(datasetId));
+    queue.claimNext('w1'); // QUEUED → STARTING
+    queue.markRunning(job.id); // STARTING → RUNNING
+    expect(queue.getJob(job.id)!.status).toBe('RUNNING');
+
+    // 자식이 COMPLETED 를 기록한 뒤 늦게 도착한 진행률·전이 시도들
+    queue.setStatus(job.id, 'COMPLETED');
+    queue.updateProgress(job.id, 999, 999, 'late');
+    queue.markRunning(job.id);
+    expect(queue.setStatus(job.id, 'FAILED', {}, ['STARTING', 'RUNNING'])).toBe(false);
+
+    const final = queue.getJob(job.id)!;
+    expect(final.status).toBe('COMPLETED');
+    expect(final.progressBars).not.toBe(999); // 종료 후 진행률도 동결
+  });
+
+  it('does not let progress writes disturb CANCELLING (C1)', () => {
+    const queue = ctx.container.jobQueue;
+    const job = queue.enqueue(buildRequest(datasetId));
+    queue.claimNext('w1');
+    queue.markRunning(job.id);
+    queue.setStatus(job.id, 'CANCELLING', {}, ['RUNNING', 'STARTING']);
+
+    queue.updateProgress(job.id, 50, 100, 'mid'); // 취소 중 진행률은 상태를 못 바꾼다
+    queue.markRunning(job.id);
+    expect(queue.getJob(job.id)!.status).toBe('CANCELLING');
+    // 진행률 자체는 활성 상태라 반영된다
+    expect(queue.getJob(job.id)!.progressBars).toBe(50);
   });
 
   it('recovers orphaned active jobs as INTERRUPTED on restart (스펙 §10)', () => {
@@ -262,6 +333,50 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(allowed.statusCode).toBe(204);
   });
 
+  it('rebases a stored request that predates the current schema, and warns', async () => {
+    // 구 스키마 형태: risk 없음, maxPositions 가 parameters 안에 있고, 전략 버전도 낮다
+    const legacy = {
+      ...buildRequest(datasetId),
+      strategyVersion: '1.1.0',
+      parameters: { ...buildRequest(datasetId).parameters, maxPositions: 5 },
+    } as Record<string, unknown>;
+    delete legacy.risk;
+    const job = ctx.container.jobQueue.enqueue(legacy as never);
+
+    const cloned = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${job.id}/clone`,
+      cookies: { qp_session: cookie },
+    });
+    // 복제는 §10 의 복구 경로다 — 스키마가 올라갔다고 막히면 안 된다
+    expect(cloned.statusCode).toBe(201);
+    const body = cloned.json() as { job: { id: string }; warnings: string[] };
+    expect(body.warnings.some((w) => w.includes('maxPositions=5'))).toBe(true);
+    expect(body.warnings.some((w) => w.includes('1.1.0') && w.includes('1.2.0'))).toBe(true);
+
+    // 재기준 결과가 실제로 현재 스키마를 만족해야 한다
+    const stored = JSON.parse(
+      ctx.container.jobQueue.getJob(body.job.id)!.requestJson,
+    ) as BacktestRequest & { parameters: Record<string, unknown> };
+    expect(stored.risk.maxPositions).toBe(5);
+    expect(stored.strategyVersion).toBe('1.2.0');
+    expect(stored.parameters.maxPositions).toBeUndefined();
+  });
+
+  it('refuses to clone a stored request that cannot be rebased (400, not 500)', async () => {
+    const broken = { ...buildRequest(datasetId) } as Record<string, unknown>;
+    delete broken.period; // 기계적으로 되살릴 수 없는 편차
+    const job = ctx.container.jobQueue.enqueue(broken as never);
+
+    const cloned = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${job.id}/clone`,
+      cookies: { qp_session: cookie },
+    });
+    expect(cloned.statusCode).toBe(400);
+    expect((cloned.json() as { error: string }).error).toContain('복원할 수 없습니다');
+  });
+
   it('rejects requests referencing unknown entities', async () => {
     const badStrategy = await ctx.app.inject({
       method: 'POST',
@@ -279,6 +394,18 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
     expect(badDataset.statusCode).toBe(400);
 
+    const badSymbol = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: {
+        ...buildRequest(datasetId),
+        universe: { type: 'SYMBOLS', symbols: ['005930', '005935'] }, // 005935 는 데이터셋에 없음
+      },
+    });
+    expect(badSymbol.statusCode).toBe(400);
+    expect((badSymbol.json() as { error: string }).error).toContain('005935');
+
     const badParams = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
@@ -289,5 +416,18 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       },
     });
     expect(badParams.statusCode).toBe(400);
+  });
+
+  it('reports schema violations in Korean, not raw Zod English (M9 마무리)', async () => {
+    const badBody = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: { ...buildRequest(datasetId), capital: { initialCash: -1, currency: 'KRW' } },
+    });
+    expect(badBody.statusCode).toBe(400);
+    const message = (badBody.json() as { error: string }).error;
+    expect(message).toMatch(/[가-힣]/);
+    expect(message).not.toMatch(/Too small|Invalid|expected/i);
   });
 });
