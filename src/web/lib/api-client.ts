@@ -34,3 +34,23 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const postJson = <T>(path: string, body: unknown): Promise<T> =>
   api<T>(path, { method: 'POST', body: JSON.stringify(body) });
+
+/** multipart 업로드 — Content-Type 은 브라우저가 boundary 와 함께 설정한다 */
+export async function postForm<T>(path: string, form: FormData): Promise<T> {
+  const response = await fetch(`/api/v1${path}`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    body: form,
+  });
+  if (!response.ok) {
+    let message = response.statusText;
+    try {
+      const body = (await response.json()) as { error?: string };
+      if (body.error) message = body.error;
+    } catch {
+      // ignore
+    }
+    throw new ApiError(response.status, message);
+  }
+  return (await response.json()) as T;
+}

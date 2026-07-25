@@ -1,0 +1,42 @@
+export type Market = 'KR' | 'US';
+export type Timeframe = '1m' | '1h' | '1d';
+
+/** tsMs 는 봉 시작 시각의 UTC epoch milliseconds (스펙 §11: UTC 저장) */
+export interface Candle {
+  readonly symbol: string;
+  readonly market: Market;
+  readonly timeframe: Timeframe;
+  readonly tsMs: number;
+  readonly open: number;
+  readonly high: number;
+  readonly low: number;
+  readonly close: number;
+  readonly volume: number;
+}
+
+export const SYMBOL_PATTERN = /^[A-Za-z0-9._-]{1,20}$/;
+
+export function isValidCandle(candle: Candle): boolean {
+  const { open, high, low, close, volume, tsMs, symbol } = candle;
+  if (!SYMBOL_PATTERN.test(symbol)) return false;
+  if (!Number.isFinite(tsMs) || tsMs <= 0) return false;
+  for (const value of [open, high, low, close]) {
+    if (!Number.isFinite(value) || value <= 0) return false;
+  }
+  if (!Number.isFinite(volume) || volume < 0) return false;
+  if (high < low) return false;
+  if (high < open || high < close) return false;
+  if (low > open || low > close) return false;
+  return true;
+}
+
+/** 시간순 정렬 + 같은 (심볼, ts) 중복 제거(뒤에 온 것이 이긴다 — idempotent 재수집, 스펙 §11) */
+export function normalizeCandles(candles: readonly Candle[]): Candle[] {
+  const byKey = new Map<string, Candle>();
+  for (const candle of candles) {
+    byKey.set(`${candle.symbol}:${candle.market}:${candle.timeframe}:${candle.tsMs}`, candle);
+  }
+  return [...byKey.values()].sort((a, b) =>
+    a.symbol === b.symbol ? a.tsMs - b.tsMs : a.symbol < b.symbol ? -1 : 1,
+  );
+}

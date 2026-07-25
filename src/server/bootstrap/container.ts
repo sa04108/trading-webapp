@@ -19,6 +19,10 @@ import {
   createSqliteSessionRepository,
   createSqliteUserRepository,
 } from '../modules/auth/infrastructure/sqlite-repositories.js';
+import { DatasetService } from '../modules/market-data/application/dataset-service.js';
+import type { CandleRepository } from '../modules/market-data/application/ports.js';
+import { DuckDbService } from '../modules/market-data/infrastructure/duckdb-service.js';
+import { ParquetCandleRepository } from '../modules/market-data/infrastructure/parquet-candle-repository.js';
 
 export interface SystemStatusProviders {
   queueLength: () => number;
@@ -40,6 +44,9 @@ export interface Container {
   readonly passwordHasher: PasswordHasher;
   readonly totpService: TotpService;
   readonly authService: AuthService;
+  readonly duckdb: DuckDbService;
+  readonly candleRepository: CandleRepository;
+  readonly datasetService: DatasetService;
   close(): void;
 }
 
@@ -82,6 +89,19 @@ export function createContainer(config: AppConfig): Container {
     absoluteTimeoutMs: config.sessionAbsoluteTimeoutSeconds * 1000,
   });
 
+  const duckdb = new DuckDbService({
+    threads: config.duckdbThreads,
+    memoryLimit: config.duckdbMemoryLimit,
+  });
+  const candleRepository = new ParquetCandleRepository(config.dataRoot, duckdb);
+  const datasetService = new DatasetService(
+    database.db,
+    candleRepository,
+    clock,
+    logger,
+    auditLog,
+  );
+
   const systemStatus: SystemStatusProviders = {
     queueLength: () => 0,
     runningJobs: () => 0,
@@ -102,6 +122,12 @@ export function createContainer(config: AppConfig): Container {
     passwordHasher: argon2PasswordHasher,
     totpService: otpauthTotpService,
     authService,
-    close: () => database.close(),
+    duckdb,
+    candleRepository,
+    datasetService,
+    close: () => {
+      duckdb.close();
+      database.close();
+    },
   };
 }

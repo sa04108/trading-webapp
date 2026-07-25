@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
+import fastifyMultipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import type { Container } from './container.js';
 import { buildPinoOptions } from '../shared/logger.js';
@@ -13,6 +14,7 @@ import {
   createRequireAuth,
   registerAuthRoutes,
 } from '../modules/auth/presentation/auth-routes.js';
+import { registerDatasetRoutes } from '../modules/market-data/presentation/dataset-routes.js';
 
 function resolvePublicDir(): string | null {
   // 빌드 후: dist/server/bootstrap → dist/public. 개발 중에는 Vite dev 서버를 사용한다.
@@ -32,6 +34,9 @@ export async function buildServer(container: Container): Promise<FastifyInstance
   registerSecurity(app);
 
   await app.register(fastifyCookie, { secret: config.sessionSecret });
+  await app.register(fastifyMultipart, {
+    limits: { fileSize: 50 * 1024 * 1024, files: 1 },
+  });
 
   const authDeps = {
     authService: container.authService,
@@ -43,6 +48,7 @@ export async function buildServer(container: Container): Promise<FastifyInstance
     async (api) => {
       registerSystemRoutes(api, container, requireAuth);
       registerAuthRoutes(api, authDeps);
+      registerDatasetRoutes(api, container.datasetService, requireAuth);
     },
     { prefix: '/api/v1' },
   );
