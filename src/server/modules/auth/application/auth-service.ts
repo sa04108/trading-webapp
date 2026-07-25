@@ -63,8 +63,18 @@ export class AuthService {
 
   constructor(private readonly deps: AuthServiceDeps) {
     this.dummyHashPromise = deps.passwordHasher.hash('timing-equalizer-dummy');
-    // 로그인 요청 전에 실패해도 프로세스를 죽이지 않는다 — 실제 소비 시점에 다시 던져진다
+    // ready() 를 기다리지 않는 경로에서도 unhandled rejection 이 되지 않게 한다
     void this.dummyHashPromise.catch(() => undefined);
+  }
+
+  /**
+   * 더미 해시 계산 완료를 기다린다. 요청을 받기 전에 호출해야 한다 —
+   * 생성자는 계산을 시작만 하므로, 그 사이에 도착한 미존재 사용자 로그인은
+   * 남은 해시 시간 + 검증을 치르고 존재하는 사용자는 검증만 치른다. 콜드스타트
+   * 구간에서만 존재 여부가 응답 시간으로 드러나는 창이 열린다.
+   */
+  async ready(): Promise<void> {
+    await this.dummyHashPromise;
   }
 
   async login(username: string, password: string, ip: string): Promise<LoginResult> {
