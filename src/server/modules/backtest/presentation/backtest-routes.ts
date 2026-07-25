@@ -120,13 +120,17 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     return reply.code(201).send({ job: serializeJob(job) });
   });
 
-  app.get('/backtests', { preHandler: requireAuth }, async (request) => {
-    const query = z
+  app.get('/backtests', { preHandler: requireAuth }, async (request, reply) => {
+    const parsedQuery = z
       .object({
         limit: z.coerce.number().int().min(1).max(200).default(50),
         offset: z.coerce.number().int().min(0).default(0),
       })
-      .parse(request.query ?? {});
+      .safeParse(request.query ?? {});
+    if (!parsedQuery.success) {
+      return reply.code(400).send({ error: '쿼리 파라미터가 올바르지 않습니다 (limit/offset)' });
+    }
+    const query = parsedQuery.data;
     const jobs = queue.listJobs(query.limit, query.offset);
     return {
       jobs: jobs.map((job) => ({
@@ -187,13 +191,19 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
   app.get('/backtests/:id/trades', { preHandler: requireAuth }, async (request, reply) => {
     const { id } = request.params as { id: string };
     if (!queue.getJob(id)) return reply.code(404).send({ error: 'Job not found' });
-    const query = z
+    const parsedQuery = z
       .object({
         limit: z.coerce.number().int().min(1).max(500).default(100),
         offset: z.coerce.number().int().min(0).default(0),
         symbol: z.string().optional(),
       })
-      .parse(request.query ?? {});
+      .safeParse(request.query ?? {});
+    if (!parsedQuery.success) {
+      return reply
+        .code(400)
+        .send({ error: '쿼리 파라미터가 올바르지 않습니다 (limit/offset/symbol)' });
+    }
+    const query = parsedQuery.data;
     return {
       trades: results.getTrades(id, {
         limit: query.limit,
