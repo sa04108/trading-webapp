@@ -344,6 +344,18 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
     expect(badDataset.statusCode).toBe(400);
 
+    const badSymbol = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: {
+        ...buildRequest(datasetId),
+        universe: { type: 'SYMBOLS', symbols: ['005930', '005935'] }, // 005935 는 데이터셋에 없음
+      },
+    });
+    expect(badSymbol.statusCode).toBe(400);
+    expect((badSymbol.json() as { error: string }).error).toContain('005935');
+
     const badParams = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',

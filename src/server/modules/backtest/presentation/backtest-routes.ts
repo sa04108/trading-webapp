@@ -106,8 +106,18 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const paramCheck = strategies.validateParameters(body.strategyId, body.parameters);
     if (!paramCheck.ok) return { ok: false, error: paramCheck.error };
 
-    if (!datasets.getDataset(body.datasetId)) {
+    const dataset = datasets.getDataset(body.datasetId);
+    if (!dataset) {
       return { ok: false, error: `알 수 없는 데이터셋: ${body.datasetId}` };
+    }
+    // 데이터셋에 없는 심볼은 조용히 0 거래로 "성공" 하게 된다 — 제출 시점에 거부
+    const datasetSymbols = new Set(dataset.symbols);
+    const missingSymbols = body.universe.symbols.filter((s) => !datasetSymbols.has(s));
+    if (missingSymbols.length > 0) {
+      return {
+        ok: false,
+        error: `데이터셋에 없는 종목입니다: ${missingSymbols.join(', ')}`,
+      };
     }
     // 제출 시점의 데이터셋 버전을 고정 — 대기 중 import 가 끼어들어도 메타데이터가 어긋나지 않는다
     const datasetVersion = datasets.getLatestVersion(body.datasetId);
