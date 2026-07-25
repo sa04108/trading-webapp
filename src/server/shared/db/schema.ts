@@ -3,7 +3,7 @@
  * 테이블은 Phase 진행에 따라 추가된다. drizzle-kit generate 로 migrations/ 를 생성한다.
  * schema_migrations 역할은 drizzle 의 __drizzle_migrations 테이블이 담당한다.
  */
-import { index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { index, integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
 export const users = sqliteTable('users', {
   id: text('id').primaryKey(),
@@ -135,3 +135,145 @@ export const dataSyncJobs = sqliteTable('data_sync_jobs', {
   createdAtMs: integer('created_at_ms').notNull(),
   completedAtMs: integer('completed_at_ms'),
 });
+
+// ── 백테스트 (스펙 §10, §12) ──────────────────────────────────────
+
+export const backtestJobs = sqliteTable(
+  'backtest_jobs',
+  {
+    id: text('id').primaryKey(),
+    // QUEUED | STARTING | RUNNING | CANCELLING | CANCELLED | COMPLETED | FAILED | INTERRUPTED
+    status: text('status').notNull(),
+    requestJson: text('request_json').notNull(),
+    strategyId: text('strategy_id').notNull(),
+    datasetId: text('dataset_id').notNull(),
+    progressBars: integer('progress_bars'),
+    totalBars: integer('total_bars'),
+    currentSymbol: text('current_symbol'),
+    error: text('error'),
+    workerId: text('worker_id'),
+    pid: integer('pid'),
+    createdAtMs: integer('created_at_ms').notNull(),
+    startedAtMs: integer('started_at_ms'),
+    completedAtMs: integer('completed_at_ms'),
+  },
+  (table) => [
+    index('idx_backtest_jobs_status').on(table.status, table.createdAtMs),
+    index('idx_backtest_jobs_created').on(table.createdAtMs),
+  ],
+);
+
+/** 재현성 메타데이터 (스펙 §9.5) */
+export const backtestRuns = sqliteTable('backtest_runs', {
+  id: text('id').primaryKey(),
+  jobId: text('job_id')
+    .notNull()
+    .unique()
+    .references(() => backtestJobs.id, { onDelete: 'cascade' }),
+  strategyId: text('strategy_id').notNull(),
+  strategyVersion: text('strategy_version').notNull(),
+  strategySourceHash: text('strategy_source_hash').notNull(),
+  parameterJson: text('parameter_json').notNull(),
+  datasetId: text('dataset_id').notNull(),
+  datasetVersion: integer('dataset_version').notNull(),
+  datasetHash: text('dataset_hash').notNull(),
+  engineVersion: text('engine_version').notNull(),
+  feeModelVersion: text('fee_model_version').notNull(),
+  slippageModelVersion: text('slippage_model_version').notNull(),
+  randomSeed: integer('random_seed').notNull(),
+  gitCommitSha: text('git_commit_sha').notNull(),
+  warningsJson: text('warnings_json'),
+  startedAtMs: integer('started_at_ms').notNull(),
+  completedAtMs: integer('completed_at_ms'),
+});
+
+export const backtestMetrics = sqliteTable('backtest_metrics', {
+  jobId: text('job_id')
+    .primaryKey()
+    .references(() => backtestJobs.id, { onDelete: 'cascade' }),
+  totalReturnPct: real('total_return_pct').notNull(),
+  cagrPct: real('cagr_pct'),
+  maxDrawdownPct: real('max_drawdown_pct').notNull(),
+  sharpe: real('sharpe'),
+  winRate: real('win_rate'),
+  tradeCount: integer('trade_count').notNull(),
+  metricsJson: text('metrics_json').notNull(),
+});
+
+export const backtestEquityPoints = sqliteTable(
+  'backtest_equity_points',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    jobId: text('job_id')
+      .notNull()
+      .references(() => backtestJobs.id, { onDelete: 'cascade' }),
+    tsMs: integer('ts_ms').notNull(),
+    equity: real('equity').notNull(),
+  },
+  (table) => [index('idx_backtest_equity_job').on(table.jobId, table.tsMs)],
+);
+
+export const backtestDrawdownPoints = sqliteTable(
+  'backtest_drawdown_points',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    jobId: text('job_id')
+      .notNull()
+      .references(() => backtestJobs.id, { onDelete: 'cascade' }),
+    tsMs: integer('ts_ms').notNull(),
+    drawdown: real('drawdown').notNull(),
+  },
+  (table) => [index('idx_backtest_drawdown_job').on(table.jobId, table.tsMs)],
+);
+
+export const backtestTrades = sqliteTable(
+  'backtest_trades',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    jobId: text('job_id')
+      .notNull()
+      .references(() => backtestJobs.id, { onDelete: 'cascade' }),
+    symbol: text('symbol').notNull(),
+    quantity: real('quantity').notNull(),
+    entryTsMs: integer('entry_ts_ms').notNull(),
+    exitTsMs: integer('exit_ts_ms').notNull(),
+    entryPrice: real('entry_price').notNull(),
+    exitPrice: real('exit_price').notNull(),
+    grossPnl: real('gross_pnl').notNull(),
+    costs: real('costs').notNull(),
+    netPnl: real('net_pnl').notNull(),
+    returnPct: real('return_pct').notNull(),
+    holdingTimeMs: integer('holding_time_ms').notNull(),
+    exitReason: text('exit_reason'),
+  },
+  (table) => [index('idx_backtest_trades_job').on(table.jobId, table.exitTsMs)],
+);
+
+export const backtestMonthlyReturns = sqliteTable(
+  'backtest_monthly_returns',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    jobId: text('job_id')
+      .notNull()
+      .references(() => backtestJobs.id, { onDelete: 'cascade' }),
+    year: integer('year').notNull(),
+    month: integer('month').notNull(),
+    returnPct: real('return_pct').notNull(),
+  },
+  (table) => [index('idx_backtest_monthly_job').on(table.jobId)],
+);
+
+export const backtestSymbolMetrics = sqliteTable(
+  'backtest_symbol_metrics',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    jobId: text('job_id')
+      .notNull()
+      .references(() => backtestJobs.id, { onDelete: 'cascade' }),
+    symbol: text('symbol').notNull(),
+    tradeCount: integer('trade_count').notNull(),
+    netPnl: real('net_pnl').notNull(),
+    winRate: real('win_rate'),
+  },
+  (table) => [index('idx_backtest_symbol_job').on(table.jobId)],
+);

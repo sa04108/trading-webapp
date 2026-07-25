@@ -80,9 +80,17 @@ export class ParquetCandleRepository implements CandleRepository {
       )
       .join(',\n');
 
+    // DuckDB 의 VALUES 타입 추론(DECIMAL/BIGINT)을 피하려고 명시적으로 CAST 한다
     await this.duckdb.run(
       `COPY (
-         SELECT * FROM (VALUES ${values}) AS t(ts_ms, open, high, low, close, volume)
+         SELECT
+           CAST(ts_ms AS BIGINT) AS ts_ms,
+           CAST(open AS DOUBLE) AS open,
+           CAST(high AS DOUBLE) AS high,
+           CAST(low AS DOUBLE) AS low,
+           CAST(close AS DOUBLE) AS close,
+           CAST(volume AS DOUBLE) AS volume
+         FROM (VALUES ${values}) AS t(ts_ms, open, high, low, close, volume)
          ORDER BY ts_ms
        ) TO ${sqlString(tmpPath.replaceAll('\\', '/'))} (FORMAT PARQUET, COMPRESSION ZSTD)`,
     );
@@ -98,7 +106,13 @@ export class ParquetCandleRepository implements CandleRepository {
       low: number;
       close: number;
       volume: number;
-    }>(`SELECT ts_ms, open, high, low, close, volume FROM read_parquet(${sqlString(filePath.replaceAll('\\', '/'))})`);
+    }>(
+      `SELECT CAST(ts_ms AS BIGINT) AS ts_ms,
+              CAST(open AS DOUBLE) AS open, CAST(high AS DOUBLE) AS high,
+              CAST(low AS DOUBLE) AS low, CAST(close AS DOUBLE) AS close,
+              CAST(volume AS DOUBLE) AS volume
+       FROM read_parquet(${sqlString(filePath.replaceAll('\\', '/'))})`,
+    );
     return rows.map((row) => ({
       symbol: template.symbol,
       market: template.market,
@@ -131,7 +145,10 @@ export class ParquetCandleRepository implements CandleRepository {
         close: number;
         volume: number;
       }>(
-        `SELECT ts_ms, open, high, low, close, volume
+        `SELECT CAST(ts_ms AS BIGINT) AS ts_ms,
+                CAST(open AS DOUBLE) AS open, CAST(high AS DOUBLE) AS high,
+                CAST(low AS DOUBLE) AS low, CAST(close AS DOUBLE) AS close,
+                CAST(volume AS DOUBLE) AS volume
          FROM read_parquet(${sqlString(glob)})
          ${where}
          ORDER BY ts_ms`,

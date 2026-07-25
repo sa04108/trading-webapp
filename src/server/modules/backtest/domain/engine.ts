@@ -59,6 +59,9 @@ export interface BacktestRunResult {
   readonly processedBars: number;
 }
 
+/** 재현성 메타데이터에 기록되는 엔진 버전 (스펙 §9.5) — 체결·지표 로직 변경 시 올린다 */
+export const ENGINE_VERSION = '1.0.0';
+
 const PROGRESS_INTERVAL_BARS = 500;
 
 /**

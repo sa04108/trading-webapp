@@ -8,6 +8,7 @@ async function main(): Promise<void> {
   const app = await buildServer(container);
 
   await app.listen({ host: config.bindAddress, port: config.port });
+  container.jobOrchestrator.start();
   container.logger.info(
     { module: 'bootstrap', event: 'server.started', address: config.bindAddress, port: config.port },
     'server started',

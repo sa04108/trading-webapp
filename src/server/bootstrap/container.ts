@@ -24,6 +24,9 @@ import type { CandleRepository } from '../modules/market-data/application/ports.
 import { DuckDbService } from '../modules/market-data/infrastructure/duckdb-service.js';
 import { ParquetCandleRepository } from '../modules/market-data/infrastructure/parquet-candle-repository.js';
 import { StrategyRegistry } from '../modules/strategy/application/strategy-registry.js';
+import { JobOrchestrator } from '../modules/backtest/application/job-orchestrator.js';
+import { JobQueue } from '../modules/backtest/application/job-queue.js';
+import { ResultsService } from '../modules/backtest/application/results-service.js';
 
 export interface SystemStatusProviders {
   queueLength: () => number;
@@ -49,6 +52,9 @@ export interface Container {
   readonly candleRepository: CandleRepository;
   readonly datasetService: DatasetService;
   readonly strategyRegistry: StrategyRegistry;
+  readonly jobQueue: JobQueue;
+  readonly jobOrchestrator: JobOrchestrator;
+  readonly resultsService: ResultsService;
   close(): void;
 }
 
@@ -104,9 +110,13 @@ export function createContainer(config: AppConfig): Container {
     auditLog,
   );
 
+  const jobQueue = new JobQueue(database, clock);
+  const jobOrchestrator = new JobOrchestrator(jobQueue, config, logger, auditLog, clock);
+  const resultsService = new ResultsService(database.db);
+
   const systemStatus: SystemStatusProviders = {
-    queueLength: () => 0,
-    runningJobs: () => 0,
+    queueLength: () => jobQueue.countByStatus(['QUEUED']),
+    runningJobs: () => jobQueue.countByStatus(['STARTING', 'RUNNING', 'CANCELLING']),
   };
 
   return {
@@ -128,7 +138,11 @@ export function createContainer(config: AppConfig): Container {
     candleRepository,
     datasetService,
     strategyRegistry: new StrategyRegistry(),
+    jobQueue,
+    jobOrchestrator,
+    resultsService,
     close: () => {
+      jobOrchestrator.stop();
       duckdb.close();
       database.close();
     },
