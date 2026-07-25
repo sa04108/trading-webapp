@@ -3,6 +3,7 @@ import type { Candle } from '../../src/server/modules/market-data/domain/candle.
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
 
 const MONDAY_0900_KST_UTC = Date.UTC(2026, 6, 6, 0, 0);
+const DAY = 86_400_000;
 
 function minuteCandle(offsetMinutes: number): Candle {
   return {
@@ -18,10 +19,10 @@ function minuteCandle(offsetMinutes: number): Candle {
   };
 }
 
-function buildCsv(rows: number): string {
+function buildCsv(rows: number, startTsMs = MONDAY_0900_KST_UTC): string {
   const lines = ['timestamp,open,high,low,close,volume'];
   for (let i = 0; i < rows; i += 1) {
-    lines.push(`${MONDAY_0900_KST_UTC + i * 60_000},100,110,90,105,10`);
+    lines.push(`${startTsMs + i * 60_000},100,110,90,105,10`);
   }
   return lines.join('\n');
 }
@@ -62,15 +63,16 @@ describe('market data (스펙 §11, §13)', () => {
     const repo = ctx.container.candleRepository;
     const candles = Array.from({ length: 120 }, (_, i) => minuteCandle(i));
 
-    await repo.saveCandles(candles);
-    await repo.saveCandles(candles); // 중복 수집 — idempotent (스펙 §11)
+    await repo.saveCandles('ds_test', candles);
+    await repo.saveCandles('ds_test', candles); // 중복 수집 — idempotent (스펙 §11)
 
-    const timestamps = await repo.getTimestamps('KR', '1m', '005930');
+    const timestamps = await repo.getTimestamps('ds_test', 'KR', '1m', '005930');
     expect(timestamps).toHaveLength(120);
     expect(timestamps[0]).toBe(MONDAY_0900_KST_UTC);
 
     const loaded: Candle[] = [];
     for await (const candle of repo.getCandles({
+      datasetId: 'ds_test',
       market: 'KR',
       timeframe: '1m',
       symbols: ['005930'],
@@ -123,7 +125,12 @@ describe('market data (스펙 §11, §13)', () => {
     expect(datasets[0]!.timeframe).toBe('1h');
 
     // 1h 사전 집계 확인 (스펙 §11: 백테스트는 1시간봉 우선)
-    const hourlyTs = await ctx.container.candleRepository.getTimestamps('KR', '1h', '005930');
+    const hourlyTs = await ctx.container.candleRepository.getTimestamps(
+      datasets[0]!.id,
+      'KR',
+      '1h',
+      '005930',
+    );
     expect(hourlyTs).toHaveLength(7);
 
     // coverage
@@ -146,6 +153,48 @@ describe('market data (스펙 §11, §13)', () => {
       cookies: { qp_session: cookie },
     });
     expect(jobLookup.statusCode).toBe(200);
+  });
+
+  it('isolates candle storage per dataset — same symbol never merges (Codex 리뷰)', async () => {
+    const service = ctx.container.datasetService;
+    const repo = ctx.container.candleRepository;
+
+    // 데이터셋 A: 월요일 하루치
+    const importA = await service.importCsv({
+      datasetName: 'set-a',
+      market: 'KR',
+      timeframe: '1m',
+      symbol: '005930',
+      fileName: 'a.csv',
+      csvContent: buildCsv(390),
+    });
+    expect(importA.status).toBe('COMPLETED');
+    const dsA = service.listDatasets().find((d) => d.name === 'set-a')!;
+    const versionBefore = service.getLatestVersion(dsA.id)!;
+    const hourlyBefore = await repo.getTimestamps(dsA.id, 'KR', '1h', '005930');
+    expect(hourlyBefore).toHaveLength(7);
+
+    // 같은 심볼을 '다른' 데이터셋 B 로 화요일 하루치 import
+    const importB = await service.importCsv({
+      datasetName: 'set-b',
+      market: 'KR',
+      timeframe: '1m',
+      symbol: '005930',
+      fileName: 'b.csv',
+      csvContent: buildCsv(390, MONDAY_0900_KST_UTC + DAY),
+    });
+    expect(importB.status).toBe('COMPLETED');
+    const dsB = service.listDatasets().find((d) => d.name === 'set-b')!;
+
+    // A 의 데이터·버전은 B 의 import 에 영향받지 않아야 한다
+    const hourlyAfter = await repo.getTimestamps(dsA.id, 'KR', '1h', '005930');
+    expect(hourlyAfter).toEqual(hourlyBefore);
+    expect(service.getLatestVersion(dsA.id)).toEqual(versionBefore);
+
+    // B 는 자기 데이터만 갖는다 (화요일 7봉)
+    const hourlyB = await repo.getTimestamps(dsB.id, 'KR', '1h', '005930');
+    expect(hourlyB).toHaveLength(7);
+    expect(hourlyB[0]).toBe(MONDAY_0900_KST_UTC + DAY);
   });
 
   it('rejects US imports until a US session is defined (Codex 리뷰)', async () => {

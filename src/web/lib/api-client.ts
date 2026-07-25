@@ -29,6 +29,8 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(response.status, message);
   }
 
+  // 204 No Content (예: DELETE) — 본문이 없으므로 JSON 파싱하지 않는다
+  if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
 

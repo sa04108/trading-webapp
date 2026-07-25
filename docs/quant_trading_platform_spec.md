@@ -625,12 +625,13 @@ COMMIT;
 /var/lib/quant-platform/
 ├─ app.sqlite
 ├─ market-data/
-│  ├─ market=KR/
-│  │  ├─ timeframe=1m/
-│  │  │  └─ symbol=005930/year=2026/month=07/data.parquet
-│  │  └─ timeframe=1h/
-│  │     └─ symbol=005930/year=2026/data.parquet
-│  └─ market=US/
+│  └─ dataset=<datasetId>/          # 데이터셋 단위 물리 격리 — 다른 데이터셋의
+│     ├─ market=KR/                 # 같은 심볼 import 와 섞이지 않는다
+│     │  ├─ timeframe=1m/
+│     │  │  └─ symbol=005930/year=2026/month=07/data.parquet
+│     │  └─ timeframe=1h/
+│     │     └─ symbol=005930/year=2026/data.parquet
+│     └─ market=US/
 ├─ imports/
 ├─ exports/
 ├─ temp/
