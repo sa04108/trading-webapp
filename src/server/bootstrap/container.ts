@@ -3,6 +3,7 @@ import type { AppConfig } from './config.js';
 import { readGitCommitSha } from '../shared/build-info.js';
 import { createLogger, type Logger } from '../shared/logger.js';
 import { openDatabase, type DatabaseHandle } from '../shared/db/database.js';
+import { pruneExpiredRows } from '../shared/db/maintenance.js';
 import { systemClock, type Clock } from '../shared/clock.js';
 import { createAuditLogService, type AuditLogService } from '../modules/audit/audit-service.js';
 import { AuthService } from '../modules/auth/application/auth-service.js';
@@ -81,6 +82,18 @@ export function createContainer(config: AppConfig): Container {
   const database = openDatabase(config.databasePath);
   const clock = systemClock;
 
+  // 무한 증가 방지: 만료 세션·오래된 로그인 시도·보존 기간 지난 감사 로그 정리
+  const sessionTimeouts = {
+    idleTimeoutMs: config.sessionIdleTimeoutSeconds * 1000,
+    absoluteTimeoutMs: config.sessionAbsoluteTimeoutSeconds * 1000,
+  };
+  pruneExpiredRows(database.db, clock.now(), sessionTimeouts);
+  const pruneTimer = setInterval(
+    () => pruneExpiredRows(database.db, clock.now(), sessionTimeouts),
+    6 * 3_600_000,
+  );
+  pruneTimer.unref();
+
   const auditLog = createAuditLogService(database.db, clock, logger);
   const userRepository = createSqliteUserRepository(database.db);
   const sessionRepository = createSqliteSessionRepository(database.db);
@@ -143,6 +156,7 @@ export function createContainer(config: AppConfig): Container {
     jobOrchestrator,
     resultsService,
     close: () => {
+      clearInterval(pruneTimer);
       jobOrchestrator.stop();
       duckdb.close();
       database.close();
