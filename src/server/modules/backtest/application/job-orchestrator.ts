@@ -21,7 +21,8 @@ export interface JobEvent {
 }
 
 const POLL_INTERVAL_MS = 1_000;
-const CANCEL_SIGTERM_DELAY_MS = 5_000;
+/** IPC 취소가 이 시간 안에 처리되지 않으면 신호로 강제한다 — 테스트가 두 경로를 구분하는 기준이기도 하다 */
+export const CANCEL_SIGTERM_DELAY_MS = 5_000;
 const CANCEL_SIGKILL_DELAY_MS = 10_000;
 
 function isPidAlive(pid: number): boolean {

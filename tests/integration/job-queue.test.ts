@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { CANCEL_SIGTERM_DELAY_MS } from '../../src/server/modules/backtest/application/job-orchestrator.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
 
@@ -227,6 +228,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
 
       // 자식 프로세스 기동 직후(STARTING) 취소 — IPC 로 전달되어 CANCELLED 로 끝나야 한다
       ctx.container.jobOrchestrator.tick();
+      const requestedAt = Date.now();
       const cancelled = await ctx.app.inject({
         method: 'POST',
         url: `/api/v1/backtests/${jobId}/cancel`,
@@ -239,10 +241,14 @@ describe('backtest job queue (스펙 §10, §14)', () => {
         const job = ctx.container.jobQueue.getJob(jobId);
         return job !== null && ctx.container.jobQueue.isTerminal(job.status);
       }, 45_000);
+      const elapsedMs = Date.now() - requestedAt;
 
       const final = ctx.container.jobQueue.getJob(jobId)!;
       expect(final.status).toBe('CANCELLED');
       expect(final.error).toBeNull();
+      // SIGTERM·SIGKILL 폴백도 결국 CANCELLED 로 끝나므로 상태만으로는 두 경로가 구분되지 않는다.
+      // 신호가 나가기 전에 끝났다는 것이 IPC 경로로 취소됐다는 유일한 증거다.
+      expect(elapsedMs).toBeLessThan(CANCEL_SIGTERM_DELAY_MS);
     },
   );
 
