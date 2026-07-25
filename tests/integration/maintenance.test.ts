@@ -20,7 +20,11 @@ describe('DB maintenance (무한 증가 방지)', () => {
   it('prunes expired sessions, stale login attempts, and old audit logs', () => {
     const db = ctx.container.database.db;
     const now = Date.now();
-    const timeouts = { idleTimeoutMs: 12 * HOUR, absoluteTimeoutMs: 7 * DAY };
+    const options = {
+      idleTimeoutMs: 12 * HOUR,
+      absoluteTimeoutMs: 7 * DAY,
+      auditLogRetentionMs: 90 * DAY,
+    };
 
     db.insert(users)
       .values({
@@ -55,10 +59,30 @@ describe('DB maintenance (무한 증가 방지)', () => {
       ])
       .run();
 
-    pruneExpiredRows(db, now, timeouts);
+    pruneExpiredRows(db, now, options);
 
     expect(db.select().from(sessions).all().map((s) => s.id)).toEqual(['s_live']);
     expect(db.select().from(loginAttempts).all()).toHaveLength(1);
     expect(db.select().from(auditLogs).all().map((a) => a.event)).toEqual(['recent']);
+  });
+
+  it('keeps every audit log when retention is disabled (D-011)', () => {
+    const db = ctx.container.database.db;
+    const now = Date.now();
+
+    db.insert(auditLogs)
+      .values([
+        { actor: 'a', event: 'ancient', detailJson: null, createdAtMs: now - 3650 * DAY },
+        { actor: 'a', event: 'recent', detailJson: null, createdAtMs: now - DAY },
+      ])
+      .run();
+
+    pruneExpiredRows(db, now, {
+      idleTimeoutMs: 12 * HOUR,
+      absoluteTimeoutMs: 7 * DAY,
+      auditLogRetentionMs: 0,
+    });
+
+    expect(db.select().from(auditLogs).all().map((a) => a.event)).toEqual(['ancient', 'recent']);
   });
 });
