@@ -19,12 +19,14 @@ import type {
  *    레벨은 신호봉 종가가 아니라 실제 체결가(다음 봉 시가 + 슬리피지) 기준이다 —
  *    갭 진입 시 의도한 리스크 폭이 유지된다.
  */
+// 기본값(스펙 §15 예시)은 스키마에 선언한다 — JSON 스키마의 `default` 로 노출되어
+// 위저드가 그대로 읽는다. 클라이언트에 별도 기본값 사본을 두지 않는다.
 export const hourlyBreakoutParameters = z.object({
-  lookbackBars: z.number().int().min(2).max(200),
-  atrPeriod: z.number().int().min(2).max(100),
-  stopAtrMultiplier: z.number().positive().max(20),
+  lookbackBars: z.number().int().min(2).max(200).default(20),
+  atrPeriod: z.number().int().min(2).max(100).default(14),
+  stopAtrMultiplier: z.number().positive().max(20).default(2),
   takeProfitAtrMultiplier: z.number().positive().max(50).optional(),
-  riskPerTradePercent: z.number().positive().max(5),
+  riskPerTradePercent: z.number().positive().max(5).default(1),
 });
 
 export type HourlyBreakoutParameters = z.infer<typeof hourlyBreakoutParameters>;

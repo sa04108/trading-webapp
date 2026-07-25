@@ -46,19 +46,11 @@ interface NumberParamSpec {
   key: string;
   minimum?: number;
   maximum?: number;
+  /** 서버 전략 스키마가 선언한 기본값 — 클라이언트 사본을 두지 않는다 */
+  defaultValue?: number;
   isInteger: boolean;
   optional: boolean;
 }
-
-/** hourly-breakout 기본값 (스펙 §15 예시 기반) */
-const DEFAULT_PARAMS: Record<string, Record<string, number>> = {
-  'hourly-breakout': {
-    lookbackBars: 20,
-    atrPeriod: 14,
-    stopAtrMultiplier: 2,
-    riskPerTradePercent: 1,
-  },
-};
 
 function extractNumberParams(schema: Record<string, unknown> | undefined): NumberParamSpec[] {
   if (!schema) return [];
@@ -70,6 +62,7 @@ function extractNumberParams(schema: Record<string, unknown> | undefined): Numbe
       key,
       ...(typeof def.minimum === 'number' ? { minimum: def.minimum } : {}),
       ...(typeof def.maximum === 'number' ? { maximum: def.maximum } : {}),
+      ...(typeof def.default === 'number' ? { defaultValue: def.default } : {}),
       isInteger: def.type === 'integer',
       optional: !required.has(key),
     }));
@@ -118,10 +111,14 @@ export function NewBacktestWizard() {
 
   const pickStrategy = (id: string): void => {
     setStrategyId(id);
-    const defaults = DEFAULT_PARAMS[id] ?? {};
-    setParameters(
-      Object.fromEntries(Object.entries(defaults).map(([key, value]) => [key, String(value)])),
-    );
+    setParameters({}); // 기본값은 스키마에서 오고, 빈 입력은 스키마 기본값으로 해석된다
+  };
+
+  /** 사용자 입력이 없으면 스키마 기본값을 사용한다 */
+  const paramValue = (spec: NumberParamSpec): string => {
+    const raw = parameters[spec.key];
+    if (raw !== undefined && raw !== '') return raw;
+    return spec.defaultValue !== undefined ? String(spec.defaultValue) : '';
   };
 
   const buildRequest = (): BacktestRequestBody | string => {
@@ -137,8 +134,8 @@ export function NewBacktestWizard() {
 
     const parsedParams: Record<string, number> = {};
     for (const spec of paramSpecs) {
-      const raw = parameters[spec.key];
-      if (raw === undefined || raw === '') {
+      const raw = paramValue(spec);
+      if (raw === '') {
         if (spec.optional) continue;
         return `파라미터 ${spec.key} 를 입력하세요`;
       }
@@ -279,7 +276,7 @@ export function NewBacktestWizard() {
                       min={spec.minimum}
                       max={spec.maximum}
                       step={spec.isInteger ? 1 : 'any'}
-                      value={parameters[spec.key] ?? ''}
+                      value={paramValue(spec)}
                       onChange={(e) =>
                         setParameters((prev) => ({ ...prev, [spec.key]: e.target.value }))
                       }
