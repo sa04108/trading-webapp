@@ -18,7 +18,9 @@
 - **멱등**: provision.sh 의 모든 단계는 현재 상태를 확인하고 필요할 때만 변경한다. 2 회 실행 = 1 회 실행.
 - 주석은 한국어, 스펙 절 번호(§n)와 결정 번호(D-nnn) 인용 — 리포 관례.
 - 기존 게이트 유지: `pnpm lint && pnpm typecheck && pnpm test && pnpm build`. Node `>=24 <25`, TS ~5.9.
-- `scripts/deploy.sh` 는 수정하지 않는다.
+- `scripts/deploy.sh` 는 수정하지 않는다. (예외: 2026-07-26 최종 리뷰 후 사용자가 이번
+  한 번만 명시적으로 승인 — usage 문자열·헤더 주석의 `<wireguard-host>` 표현만 tailnet
+  FQDN 예시로 교체했다. 동작은 한 줄도 바꾸지 않았다.)
 
 ---
 

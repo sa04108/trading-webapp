@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# 스펙 §30 — 릴리스 배포. 개발 PC 에서 빌드·검증 후 WireGuard IP 로 배포한다.
-# 사용법: ./scripts/deploy.sh <wireguard-host>   (예: ./scripts/deploy.sh 10.20.0.15)
+# 스펙 §30 — 릴리스 배포. 개발 PC 에서 빌드·검증 후 tailnet FQDN 으로 배포한다.
+# 사용법: ./scripts/deploy.sh <tailnet-fqdn>   (예: ./scripts/deploy.sh quant-platform.example.ts.net)
 # 비밀값을 command line argument 로 넘기지 않는다.
 set -euo pipefail
 
-HOST="${1:?usage: deploy.sh <wireguard-host>}"
+HOST="${1:?usage: deploy.sh <tailnet-fqdn>}"
 RELEASE="$(date -u +%Y%m%d-%H%M%S)-$(git rev-parse --short HEAD)"
 GIT_SHA="$(git rev-parse HEAD)"
 ARCHIVE="quant-platform-${RELEASE}.tar.gz"
