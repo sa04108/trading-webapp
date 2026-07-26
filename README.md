@@ -55,9 +55,12 @@ WireGuard·Caddy 에서 Tailscale 로 옮긴 이유와 트레이드오프는
 
 ### 서버 구축 (인스턴스마다)
 
-1. 인스턴스 생성 — Lightsail 기준: Seoul → Linux/Unix → **OS Only** →
-   Ubuntu 24.04 LTS → SSH 공개키 업로드 → Micro $7 → Static IP 연결
-   (Static IP 는 증권사 허용 출발 IP 용도다. launch script 는 쓰지 않는다.)
+1. 호스트 준비 — Ubuntu 24.04 LTS, 고정 공인 IP 연결, SSH 공개키 등록, passwordless sudo.
+   고정 IP 는 증권사 허용 출발 IP 용도다. first-boot / launch script 는 쓰지 않는다
+   (auth key 가 비밀값이라 인스턴스 메타데이터에 넣을 수 없다).
+
+   AWS Lightsail 예: `Seoul → Linux/Unix → OS Only → Ubuntu 24.04 LTS →
+   SSH 공개키 업로드 → Micro $7 → Static IP 연결`
 2. Tailscale 콘솔에서 auth key 발급 — **pre-authorized ✅ / `tag:server` ✅ /
    ephemeral ❌** (태그가 노드 키 만료를 막는다)
 3. 부트스트랩. 서버 주소와 auth key 를 순서대로 물어본다 (키는 화면에 표시되지 않는다):
@@ -66,25 +69,38 @@ WireGuard·Caddy 에서 Tailscale 로 옮긴 이유와 트레이드오프는
    ./scripts/bootstrap.sh
    ```
 
-   **SSH 키 지정** — 서버 인증은 공개키뿐이다 (Lightsail Ubuntu 는 처음부터
-   `PasswordAuthentication no` 다). 키를 알려주는 방법은 두 가지고, 둘 다 된다:
+   **서버 주소는 `[user@]host` 형식이다.** 로그인 사용자명은 호스트마다 다르므로
+   (클라우드 이미지 관례가 `ubuntu`·`admin`·`ec2-user` 등으로 갈리고 자체 설치는 임의)
+   스크립트가 가정하지 않는다. 생략하면 `~/.ssh/config` 의 `User` 나 로컬 사용자명이 쓰인다.
+
+   **인증은 공개키만 지원한다.** 비밀번호 인증을 넣지 않는 이유는 특정 클라우드의
+   기본값이 아니라 **이 도구가 하드닝 단계에서 `PasswordAuthentication no` 를 직접
+   쓰기 때문**이다 — 어떤 호스트에서든 프로비저닝이 끝나면 비밀번호로는 다시 들어올 수
+   없고, 재실행과 배포 경로가 전부 막힌다. 한 실행에 `ssh`/`scp` 가 5~6회 호출되므로
+   매번 프롬프트가 뜨는 문제도 있고, `sudo` 확인은 어차피 passwordless sudo 를 요구한다.
+
+   키를 알려주는 방법은 두 가지고 둘 다 된다:
 
    ```bash
-   SSH_KEY=~/.ssh/your-key.pem ./scripts/bootstrap.sh    # 이번 실행만
+   SSH_KEY=~/.ssh/your-key ./scripts/bootstrap.sh    # 이번 실행만
    ```
 
    매번 적기 싫으면 `~/.ssh/config` 에 등록해 두면 `SSH_KEY` 없이 돌아간다:
 
    ```
    Host <public-ip> quant-platform.*.ts.net
-     User ubuntu
-     IdentityFile ~/.ssh/<your-key>.pem
+     User <로그인 사용자명>
+     IdentityFile ~/.ssh/<your-key>
      IdentitiesOnly yes
    ```
 
    퍼블릭 IP 와 tailnet FQDN 을 함께 적는다 — 부트스트랩은 IP 로 시작하고 하드닝 후에는
    FQDN 으로만 붙는다. 둘 다 없으면 스크립트가 `~/.ssh` 에서 키 후보를 찾아 그대로
    복사해 쓸 수 있는 명령을 출력하고 멈춘다.
+
+   **`sudo` 는 비밀번호 없이 되어야 한다** — `provision.sh` 가 root 로 돌아야 하고
+   프롬프트에 답할 TTY 가 없다. 클라우드 이미지는 보통 그렇게 오지만 자체 설치
+   호스트라면 직접 설정해야 한다.
 
    비대화형(스크립트·자동화)으로 돌리려면 `TS_HOST` 와 `TS_AUTHKEY` 를 미리 넣는다.
    단 env 할당 prefix 는 셸 히스토리에 평문으로 남으니 앞에 공백을 두거나
@@ -118,33 +134,29 @@ WireGuard·Caddy 에서 Tailscale 로 옮긴 이유와 트레이드오프는
      태그 없이 조인한 노드는 지금은 멀쩡하지만 노드 키가 만료되면(약 180일)
      tailnet 에서 떨어지고, 그때는 퍼블릭 22 가 닫혀 있어 들어갈 방법이 없다
    - UFW: 인바운드 기본 거부, 아웃바운드 허용, `tailscale0` 의 22 만 허용.
-     **여기서 퍼블릭 22 가 닫히고 Lightsail 브라우저 SSH 콘솔도 함께 죽는다**
+     **여기서 퍼블릭 22 가 닫힌다** — 클라우드가 제공하는 브라우저 SSH 콘솔도 대개
+     퍼블릭 22 를 쓰므로 함께 죽는다. out-of-band 복구 경로가 사라지는 지점이다
    - SSH 하드닝: `PermitRootLogin no`, `PasswordAuthentication no`,
      `KbdInteractiveAuthentication no`, `MaxAuthTries 3`, `LoginGraceTime 30`,
      `X11Forwarding no` (`sshd -t` 로 검증한 뒤 재시작)
    - 하드닝 후 새 연결로 tailnet SSH 를 한 번 더 확인한다
 
-   스크립트 자동화 등으로 env var 가 꼭 필요하면 `TS_AUTHKEY=tskey-...
-   ./scripts/bootstrap.sh <ip>` 도 되지만, 이 형태는 셸 히스토리에 평문으로 남는다 —
-   앞에 공백을 두거나(`HISTCONTROL=ignorespace`) 실행 뒤 히스토리에서 지울 것.
-
-   **하드닝 후 재실행은 퍼블릭 IP 가 아니라 FQDN 으로 한다**
-   (`./scripts/bootstrap.sh quant-platform.<tailnet>.ts.net`, 완료 메시지에 그대로
-   나온다) — UFW 가 퍼블릭 22 를 닫아서 그 경로로는 첫 명령부터 실패한다. 드물게
-   재실행이 `apt full-upgrade` 도중 tailnet 세션이 끊겨 멈춘 것처럼 보일 수 있는데
-   (tailscale 패키지 갱신이 tailscaled 를 재시작시킨다), 락아웃이 아니니 한 번 더
-   실행하면 된다.
+   **하드닝 후 재실행은 서버 주소로 퍼블릭 IP 가 아니라 FQDN 을 입력한다** — UFW 가
+   퍼블릭 22 를 닫아서 그 경로로는 첫 명령부터 실패한다. 완료 메시지가 그대로 쓸 수 있는
+   형태로 알려준다. 드물게 재실행이 `apt full-upgrade` 도중 멈춘 것처럼 보일 수 있는데
+   (tailscale 패키지 갱신이 tailscaled 를 재시작해 tailnet 세션이 끊긴다), 락아웃이
+   아니니 한 번 더 실행하면 된다.
 4. 첫 배포와 관리자 생성 (정확한 명령은 bootstrap 출력에 나온다):
 
    ```bash
-   ./scripts/deploy.sh <fqdn>    # 검증 게이트 → 릴리스 전환 → health check → 실패 시 자동 롤백
+   ./scripts/deploy.sh [user@]<fqdn>   # 검증 게이트 → 릴리스 전환 → health check → 실패 시 자동 롤백
    ```
 
-   `deploy.sh` 도 `SSH_KEY` 를 같은 방식으로 받는다 (`SSH_KEY=... ./scripts/deploy.sh <fqdn>`).
+   `deploy.sh` 도 주소를 `[user@]host` 로 받고 `SSH_KEY` 를 같은 방식으로 인식한다.
 
-5. (선택) 클라우드 방화벽 정리 — Lightsail Networking 에서 TCP 22·80·443·3000 과
-   UDP 51820 을 제거하고, **IPv4 와 IPv6 를 각각** 확인한다. Lightsail OS-Only
-   Ubuntu 기본값이 22 와 80 을 퍼블릭에 열어 두기 때문이다. UFW 가 이미 막고 있고
+5. (선택) 클라우드 방화벽 정리 — 제공자의 네트워크 설정에서 TCP 22·80·443·3000 과
+   UDP 51820 을 제거하고, **IPv4 와 IPv6 를 각각** 확인한다. 클라우드
+   이미지가 22(또는 22·80)를 퍼블릭에 열어 둔 채로 오는 경우가 많기 때문이다. UFW 가 이미 막고 있고
    그 포트에서 듣는 것도 없으므로 실질 효과는 없다 — 심층방어이자 포트 스캔 표면을
    줄이는 정리다.
 

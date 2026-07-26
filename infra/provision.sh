@@ -4,7 +4,7 @@
 #   기본:   printf '%s\n' "$TS_AUTHKEY" | sudo sh provision.sh
 #   하드닝: sudo sh provision.sh --harden   (tailnet 경유 SSH 검증 후에만!)
 #
-# POSIX sh 로만 쓴다 — bashism 금지. Lightsail launch script 가 dash 로 실행되어
+# POSIX sh 로만 쓴다 — bashism 금지. 클라우드의 first-boot 스크립트가 dash 로 실행되어
 # `set -o pipefail` 에 즉사한 전례가 있다 (2026-07-26). 이 파일은 launch script 가
 # 아니지만 같은 규율을 유지한다: pipefail·brace expansion·[[ ]]·배열 금지.
 #
@@ -45,7 +45,8 @@ if [ "${MODE}" = "--harden" ]; then
 
   echo "==> §25 UFW — tailscale0 만 허용"
   # 전제: bootstrap.sh 가 tailnet 경유 SSH 를 실증한 뒤에만 이 모드를 호출한다.
-  # 여기서 퍼블릭 22 가 닫힌다 — Lightsail 브라우저 SSH 콘솔도 함께 죽는다.
+  # 여기서 퍼블릭 22 가 닫힌다 — 클라우드가 제공하는 브라우저 SSH 콘솔도 대개 퍼블릭
+  # 22 를 쓰므로 함께 죽는다. 되돌릴 out-of-band 경로가 사라지는 지점이다.
   ufw default deny incoming
   ufw default allow outgoing
   ufw allow in on tailscale0 to any port 22 proto tcp
@@ -163,7 +164,7 @@ else
   printf '%s' "${TS_AUTHKEY}" > "${KEY_FILE}"
   # tag:server 가 노드 키 만료를 막는다 — 태그 없이 조인하면 몇 달 뒤
   # 헤드리스 서버가 조용히 tailnet 에서 떨어진다 (설계 §6-3)
-  # §18/§23: 증권사 API 아웃바운드는 Lightsail Static IP 로만 나가야 한다 — 이 노드에
+  # §18/§23: 증권사 API 아웃바운드는 이 호스트의 고정 공인 IP 로만 나가야 한다 — 이 노드에
   # exit-node 를 걸지 않는다. `tailscale set --exit-node=...` 는 이 불변식을 조용히
   # 우회시키는, WireGuard 에는 없었던 새 경로다.
   tailscale up --authkey "file:${KEY_FILE}" \
@@ -208,7 +209,7 @@ systemctl daemon-reload
 systemctl enable quant-platform
 
 echo "==> §18/§23 고정 아웃바운드 IP 확인 (정보성)"
-# 증권사 API 트래픽은 이 Lightsail Static IP 로 나가야 한다(§18/§23). 실패해도 프로비저닝을
+# 증권사 API 트래픽은 이 호스트의 고정 공인 IP 로 나가야 한다(§18/§23). 실패해도 프로비저닝을
 # 죽이지 않는다 — 일시적 네트워크 문제로 배포 자체가 막히면 안 되므로 참고용으로만 쓴다.
 OUTBOUND_IP="$(curl -4 -fsS https://checkip.amazonaws.com 2>/dev/null || echo "확인 실패")"
 echo "아웃바운드 IP: ${OUTBOUND_IP} — 증권사에 등록한 Static IP 와 일치해야 한다"

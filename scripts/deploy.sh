@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
 # 스펙 §30 — 릴리스 배포. 개발 PC 에서 빌드·검증 후 tailnet FQDN 으로 배포한다.
-# 사용법: ./scripts/deploy.sh <tailnet-fqdn>   (예: ./scripts/deploy.sh quant-platform.example.ts.net)
+#
+# 사용법: ./scripts/deploy.sh [user@]<tailnet-fqdn>
+#         예: ./scripts/deploy.sh admin@quant-platform.example.ts.net
+#             ./scripts/deploy.sh quant-platform.example.ts.net   (사용자는 ssh 규칙에 맡김)
 #
 #   SSH_KEY  개인키 경로 (선택). 지정하면 -i 로 넘긴다. 없으면 ~/.ssh/config 나
 #            기본 이름 키(id_ed25519 등)에 의존한다 — bootstrap.sh 와 같은 규칙이다.
 #
+# 로그인 사용자명을 가정하지 않는다 — 클라우드 이미지마다 다르고(ubuntu / admin /
+# ec2-user) 자체 설치 호스트는 임의다 (스펙 §2.1).
 # 비밀값을 command line argument 로 넘기지 않는다.
 set -euo pipefail
 
-HOST="${1:?usage: deploy.sh <tailnet-fqdn>}"
+TARGET="${1:?usage: deploy.sh [user@]<tailnet-fqdn>}"
 
 # IdentitiesOnly 를 함께 켜는 이유: 하드닝이 MaxAuthTries 3 을 걸기 때문에 agent 의
 # 다른 키들이 먼저 제시되면 맞는 키가 4번째가 되어 서버가 먼저 연결을 끊을 수 있다.
@@ -37,8 +42,8 @@ echo "==> 아티팩트 생성: ${ARCHIVE}"
 tar -czf "${ARCHIVE}" dist migrations package.json pnpm-lock.yaml
 
 echo "==> 업로드 및 릴리스 전환"
-scp "${SSH_OPTS[@]}" "${ARCHIVE}" "ubuntu@${HOST}:/tmp/"
-ssh "${SSH_OPTS[@]}" "ubuntu@${HOST}" bash -s <<EOF
+scp "${SSH_OPTS[@]}" "${ARCHIVE}" "${TARGET}:/tmp/"
+ssh "${SSH_OPTS[@]}" "${TARGET}" bash -s <<EOF
 set -euo pipefail
 sudo mkdir -p "/opt/quant-platform/releases/${RELEASE}"
 sudo tar -xzf "/tmp/${ARCHIVE}" -C "/opt/quant-platform/releases/${RELEASE}"

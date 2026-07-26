@@ -1,15 +1,27 @@
 #!/usr/bin/env bash
-# 서버 부트스트랩 — 새 인스턴스를 배포 가능 상태로 만든다 (설계 문서 §3·§4).
+# 서버 부트스트랩 — 새 호스트를 배포 가능 상태로 만든다 (설계 문서 §3·§4).
 #
 # 사용법: ./scripts/bootstrap.sh
 #         서버 주소와 auth key 를 순서대로 물어본다. 비대화형으로 돌리려면
 #         TS_HOST / TS_AUTHKEY / SSH_KEY 환경변수를 미리 설정한다.
 #
-#   TS_HOST    서버 주소. 첫 실행은 퍼블릭 IP, 하드닝 이후에는 tailnet FQDN 이어야 한다 —
-#              UFW 가 퍼블릭 22 를 닫아서 그 경로로는 첫 명령(ssh)부터 죽는다.
+#   TS_HOST    서버 주소, `[user@]host` 형식. 첫 실행은 퍼블릭 IP, 하드닝 이후에는
+#              tailnet FQDN 이어야 한다 — UFW 가 퍼블릭 22 를 닫아서 그 경로로는
+#              첫 명령(ssh)부터 죽는다. user 를 생략하면 ssh 의 규칙에 맡긴다
+#              (~/.ssh/config 의 User, 없으면 로컬 사용자명).
 #   TS_AUTHKEY Tailscale auth key. 이미 조인된 서버 재실행이면 비워도 된다.
 #   SSH_KEY    개인키 경로. 지정하면 -i 로 넘긴다. 없으면 ~/.ssh/config 나
 #              기본 이름 키(id_ed25519 등)에 의존한다.
+#
+# 이 스크립트는 로그인 사용자명을 가정하지 않는다 — 클라우드 이미지마다 다르고
+# (ubuntu / admin / ec2-user), 자체 설치 호스트는 임의다. 스펙 §2.1 의 "애플리케이션과
+# 도구는 특정 클라우드를 모른다" 를 따른다.
+#
+# 인증은 공개키만 지원한다. 비밀번호 인증을 넣지 않는 이유는 이 도구가
+# --harden 단계에서 PasswordAuthentication no 를 직접 쓰기 때문이다 (스펙 §26) —
+# 어떤 호스트에서든 프로비저닝이 끝나면 비밀번호로는 다시 들어올 수 없고,
+# 재실행·배포 경로가 전부 막힌다. 한 실행에 ssh/scp 가 5~6회 호출되므로 매번
+# 프롬프트가 뜨는 문제도 있고, 아래 sudo 확인은 어차피 passwordless sudo 를 요구한다.
 #
 # 순서가 락아웃 가드다: 기본 프로비저닝(퍼블릭 SSH) → tailnet 경유 SSH 를 "실제로"
 # 검증 → 성공했을 때만 --harden(UFW 가 퍼블릭 22 를 닫는다). 스펙 §25 의
@@ -20,11 +32,18 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REMOTE_DIR=/tmp/quant-provision
 
-HOST="${TS_HOST:-}"
-if [ -z "${HOST}" ]; then
-  read -rp "서버 주소 (첫 실행은 퍼블릭 IP, 하드닝 후에는 tailnet FQDN): " HOST
+TARGET="${TS_HOST:-}"
+if [ -z "${TARGET}" ]; then
+  read -rp "서버 주소 [user@]host (첫 실행은 퍼블릭 IP, 하드닝 후에는 tailnet FQDN): " TARGET
 fi
-[ -n "${HOST}" ] || { echo "서버 주소가 필요합니다" >&2; exit 1; }
+[ -n "${TARGET}" ] || { echo "서버 주소가 필요합니다" >&2; exit 1; }
+
+# 뒤에서 tailnet FQDN 으로 다시 붙을 때 같은 사용자를 이어 쓰기 위해 user 부분을 떼어둔다.
+# user 를 안 적었으면 빈 문자열 — 그대로 ssh 의 기본 규칙에 맡긴다.
+USER_PREFIX=""
+case "${TARGET}" in
+  *@*) USER_PREFIX="${TARGET%@*}@" ;;
+esac
 
 if [ -z "${TS_AUTHKEY:-}" ]; then
   read -rsp "Tailscale auth key (재실행이면 Enter): " TS_AUTHKEY
@@ -41,20 +60,26 @@ if [ -n "${SSH_KEY:-}" ]; then
   SSH_OPTS=(-i "${SSH_KEY}" -o IdentitiesOnly=yes)
 fi
 
-echo "==> SSH 접속 확인: ubuntu@${HOST}"
+echo "==> SSH 접속 확인: ${TARGET}"
 # 이 확인이 없으면 아래 ssh/scp 가 set -e 로 조용히 죽어, 실패 원인이 그 다음 단계
 # (auth key 입력 직후처럼) 엉뚱한 곳을 가리킨다 — 실제로 그렇게 오진한 적이 있다.
-ssh "${SSH_OPTS[@]}" -o ConnectTimeout=15 -o BatchMode=yes "ubuntu@${HOST}" true 2>/dev/null || {
+ssh "${SSH_OPTS[@]}" -o ConnectTimeout=15 -o BatchMode=yes "${TARGET}" true 2>/dev/null || {
   {
-    echo "SSH 접속 실패: ubuntu@${HOST}"
+    echo "SSH 접속 실패: ${TARGET}"
     echo
+    if [ -z "${USER_PREFIX}" ]; then
+      echo "주소에 사용자명이 없다. ssh 가 ~/.ssh/config 의 User 나 로컬 사용자명을 쓴다 —"
+      echo "의도한 계정이 아니면 user@host 형식으로 다시 지정하라."
+      echo "(클라우드 이미지의 관례는 제각각이다: ubuntu / admin / ec2-user 등)"
+      echo
+    fi
     if [ -n "${SSH_KEY:-}" ]; then
       echo "지정한 키로 붙지 못했다: ${SSH_KEY}"
     else
       # 키를 안 넘겼을 때가 가장 흔한 실패다 — ~/.ssh 에서 후보를 찾아
       # 그대로 복사해 쓸 수 있는 명령을 만들어 준다.
       echo "키를 지정하지 않았다. ssh 는 ~/.ssh/config 나 기본 이름 키만 시도한다 —"
-      echo "Lightsail 이 내려준 <name>.pem 처럼 다른 이름의 키는 시도조차 하지 않는다."
+      echo "다른 이름의 키(예: 클라우드 콘솔에서 내려받은 <name>.pem)는 시도조차 하지 않는다."
       CANDIDATES="$(ls -1 ~/.ssh/*.pem ~/.ssh/id_* 2>/dev/null | grep -v '\.pub$' || true)"
       if [ -n "${CANDIDATES}" ]; then
         echo
@@ -64,46 +89,47 @@ ssh "${SSH_OPTS[@]}" -o ConnectTimeout=15 -o BatchMode=yes "ubuntu@${HOST}" true
         done <<< "${CANDIDATES}"
       else
         echo
-        echo "~/.ssh 에서 키 후보를 찾지 못했다. Lightsail 콘솔에서 .pem 을 내려받거나"
-        echo "인스턴스에 등록한 공개키의 짝을 확인하세요."
+        echo "~/.ssh 에서 키 후보를 찾지 못했다. 호스트에 등록한 공개키의 짝을 확인하거나,"
+        echo "새로 만들어 등록하라: ssh-keygen -t ed25519 -f ~/.ssh/quant-platform"
       fi
       echo
       echo "매번 지정하지 않으려면 ~/.ssh/config 에 등록해도 된다:"
-      echo "  Host ${HOST} quant-platform.*.ts.net"
-      echo "    User ubuntu"
-      echo "    IdentityFile ~/.ssh/<your-key>.pem"
+      echo "  Host ${TARGET##*@} quant-platform.*.ts.net"
+      echo "    User <로그인 사용자명>"
+      echo "    IdentityFile ~/.ssh/<your-key>"
       echo "    IdentitiesOnly yes"
     fi
     echo
-    echo "원인 가르기: ssh -v ${SSH_KEY:+-i ${SSH_KEY} }ubuntu@${HOST} true"
-    echo "  Permission denied (publickey) → 키가 없거나 틀렸다"
-    echo "  Connection timed out          → 클라우드 방화벽에서 TCP 22 가 닫혀 있다"
+    echo "원인 가르기: ssh -v ${SSH_KEY:+-i ${SSH_KEY} }${TARGET} true"
+    echo "  Permission denied (publickey) → 키가 없거나 틀렸다 (또는 사용자명이 다르다)"
+    echo "  Connection timed out          → 방화벽에서 TCP 22 가 닫혀 있다"
     echo "  Unprotected private key file  → 키 파일 권한 (Windows: icacls /inheritance:r /grant:r)"
   } >&2
   exit 1
 }
 
 echo "==> 프로비저닝 파일 업로드"
-ssh "${SSH_OPTS[@]}" "ubuntu@${HOST}" "mkdir -p ${REMOTE_DIR}" \
+ssh "${SSH_OPTS[@]}" "${TARGET}" "mkdir -p ${REMOTE_DIR}" \
   || { echo "원격 디렉터리 생성 실패: ${REMOTE_DIR}" >&2; exit 1; }
 scp "${SSH_OPTS[@]}" "${REPO_ROOT}/infra/provision.sh" \
     "${REPO_ROOT}/infra/systemd/quant-platform.service" \
     "${REPO_ROOT}/infra/app.env.example" \
-    "ubuntu@${HOST}:${REMOTE_DIR}/" \
+    "${TARGET}:${REMOTE_DIR}/" \
   || { echo "파일 업로드 실패 — ${REPO_ROOT}/infra 아래 3개 파일과 원격 디스크 여유를 확인하세요" >&2; exit 1; }
 
-# TTY 없이 파이프로 붙는 다음 단계는 sudo 가 비밀번호를 물으면 auth key 줄을
-# 비밀번호 시도로 먹어버린다. Lightsail Ubuntu 이미지는 ubuntu 에 NOPASSWD sudo 를
-# 주므로 보통은 문제가 안 되지만, 그렇지 않은 이미지에서는 여기서 먼저 분명하게 실패시킨다.
-ssh "${SSH_OPTS[@]}" "ubuntu@${HOST}" "sudo -n true" \
-  || { echo "sudo 에 비밀번호가 필요합니다 — ubuntu 사용자에 NOPASSWD sudo 를 설정한 뒤 재실행하세요" >&2; exit 1; }
+# provision.sh 는 root 로 돌아야 하고, 다음 단계는 TTY 없이 파이프로 붙는다.
+# sudo 가 비밀번호를 물으면 그 프롬프트에 답할 방법이 없으므로 여기서 먼저 분명하게
+# 실패시킨다. passwordless sudo 는 이 도구의 전제다 (클라우드 이미지는 보통 그렇게
+# 오지만, 자체 설치 호스트라면 직접 설정해야 한다).
+ssh "${SSH_OPTS[@]}" "${TARGET}" "sudo -n true" \
+  || { echo "sudo 에 비밀번호가 필요합니다 — 이 계정에 passwordless sudo 를 설정한 뒤 재실행하세요" >&2; exit 1; }
 
 echo "==> 기본 프로비저닝 (§21·22·23·28·29)"
 OUT="$(mktemp)"
 trap 'rm -f "${OUT}"' EXIT
 # 키는 stdin 으로 — argv·원격 히스토리에 남기지 않는다
 printf '%s\n' "${TS_AUTHKEY}" \
-  | ssh "${SSH_OPTS[@]}" "ubuntu@${HOST}" "sudo sh ${REMOTE_DIR}/provision.sh" \
+  | ssh "${SSH_OPTS[@]}" "${TARGET}" "sudo sh ${REMOTE_DIR}/provision.sh" \
   | tee "${OUT}"
 
 # pipeline 이 매치 실패로 비어있는 값을 낼 때 grep 의 실패 종료 코드가 `set -e` 로
@@ -114,23 +140,26 @@ printf '%s\n' "${TS_AUTHKEY}" \
 FQDN="$(grep '^FQDN=' "${OUT}" | tail -1 | cut -d= -f2-)" || true
 [ -n "${FQDN}" ] || { echo "출력에서 FQDN= 마커를 찾지 못했습니다" >&2; exit 1; }
 
-echo "==> tailnet 경유 SSH 검증: ${FQDN}"
-# StrictHostKeyChecking=accept-new: ${FQDN} 는 이 PC 가 처음 접속하는 이름이라
-# (HOST 와 다른 known_hosts 항목) BatchMode=yes 하의 기본값(ask)이면 비대화형으로
+# tailnet 경유로 붙을 때도 처음 지정한 사용자를 그대로 이어 쓴다
+TAILNET_TARGET="${USER_PREFIX}${FQDN}"
+
+echo "==> tailnet 경유 SSH 검증: ${TAILNET_TARGET}"
+# StrictHostKeyChecking=accept-new: FQDN 은 이 PC 가 처음 접속하는 이름이라
+# (첫 주소와 다른 known_hosts 항목) BatchMode=yes 하의 기본값(ask)이면 비대화형으로
 # 즉시 실패한다. 첫 접속을 자동 신뢰해도 되는 이유는 이 이름이 tailnet 안에서만
 # 해석되고 Tailscale 자체가 노드 신원을 인증하기 때문 — 다만 "바뀐" 키(재접속 시
 # 불일치, MITM 의심)는 accept-new 에서도 여전히 거부된다. StrictHostKeyChecking=no
 # 는 그 거부까지 없애버리므로 쓰지 않는다.
 if ssh "${SSH_OPTS[@]}" -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-       "ubuntu@${FQDN}" true; then
+       "${TAILNET_TARGET}" true; then
   echo "==> 하드닝 (§25 UFW + §26 SSH) — 퍼블릭 22 가 닫힌다"
-  ssh "${SSH_OPTS[@]}" "ubuntu@${FQDN}" "sudo sh ${REMOTE_DIR}/provision.sh --harden"
+  ssh "${SSH_OPTS[@]}" "${TAILNET_TARGET}" "sudo sh ${REMOTE_DIR}/provision.sh --harden"
 
   # harden 의 ssh 가 접근이 증명된 마지막 순간이다. UFW 규칙이 실제 사용 경로와
-  # 어긋나거나(예: IPv6) sshd 가 안 돌아오면 퍼블릭 22 도 닫히고 브라우저 콘솔도 죽은
+  # 어긋나거나(예: IPv6) sshd 가 안 돌아오면 퍼블릭 22 도 닫히고 콘솔 경로도 죽은
   # 뒤에야 알게 된다 — 새 연결로 즉시 재검증해 그 순간 크게 알린다.
   echo "==> 하드닝 후 재확인 — 새 연결로 tailnet SSH 재검증"
-  ssh "${SSH_OPTS[@]}" -o ConnectTimeout=15 -o BatchMode=yes "ubuntu@${FQDN}" true \
+  ssh "${SSH_OPTS[@]}" -o ConnectTimeout=15 -o BatchMode=yes "${TAILNET_TARGET}" true \
     || { echo "하드닝 후 tailnet SSH 가 끊겼습니다 — 즉시 확인하세요" >&2; exit 1; }
 else
   cat >&2 <<MSG
@@ -139,7 +168,7 @@ else
     1) 이 PC 가 tailnet 에 없음 — 확인: tailscale status
     2) 호스트 키 검증 실패 — known_hosts 충돌(키가 바뀐 경우만; 최초 접속은 자동 수락됨)
   해결 후 하드닝만 재실행:
-     ssh ${SSH_KEY:+-i ${SSH_KEY} }ubuntu@${FQDN} sudo sh ${REMOTE_DIR}/provision.sh --harden
+     ssh ${SSH_KEY:+-i ${SSH_KEY} }${TAILNET_TARGET} sudo sh ${REMOTE_DIR}/provision.sh --harden
 MSG
   exit 1
 fi
@@ -149,16 +178,16 @@ cat <<MSG
 부트스트랩 완료: https://${FQDN}
 
 다음 단계:
-  1) 첫 배포:      ${SSH_KEY:+SSH_KEY=${SSH_KEY} }./scripts/deploy.sh ${FQDN}
+  1) 첫 배포:      ${SSH_KEY:+SSH_KEY=${SSH_KEY} }./scripts/deploy.sh ${TAILNET_TARGET}
   2) 관리자 생성 (1회, 서버에서):
-     ssh ${SSH_KEY:+-i ${SSH_KEY} }ubuntu@${FQDN}
+     ssh ${SSH_KEY:+-i ${SSH_KEY} }${TAILNET_TARGET}
      sudo systemd-run --pty --uid=quant --gid=quant \\
        --property=EnvironmentFile=/etc/quant-platform/app.env \\
        --working-directory=/opt/quant-platform/current \\
        /usr/local/bin/node /opt/quant-platform/current/dist/server/cli.js admin:create
-  3) (선택) Lightsail Networking 에서 TCP 22 제거 — UFW 심층방어
+  3) (선택) 클라우드 방화벽에서 퍼블릭 TCP 22 제거 — UFW 가 이미 막는 것의 심층방어
 
 참고: 이 스크립트를 다시 실행할 일이 있으면 서버 주소를 퍼블릭 IP 가 아니라 FQDN 으로
       입력하라 — 하드닝이 퍼블릭 22 를 닫아서 그 경로는 첫 명령부터 실패한다.
-      비대화형으로 돌리려면: ${SSH_KEY:+SSH_KEY=${SSH_KEY} }TS_HOST=${FQDN} ./scripts/bootstrap.sh
+      비대화형으로 돌리려면: ${SSH_KEY:+SSH_KEY=${SSH_KEY} }TS_HOST=${TAILNET_TARGET} ./scripts/bootstrap.sh
 MSG
