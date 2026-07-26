@@ -200,7 +200,7 @@ import fastifyCompress from '@fastify/compress';
 - [ ] **Step 6: 통과 확인 + 전체 게이트**
 
 Run: `pnpm vitest run tests/unit/compression.test.ts` → PASS (2 tests)
-Run: `pnpm lint && pnpm typecheck && pnpm test` → 전부 green (기존 64 + 신규 3)
+Run: `pnpm lint && pnpm typecheck && pnpm test` → 전부 green (기존 82 + 신규 3 = 85)
 
 - [ ] **Step 7: 커밋**
 
@@ -211,16 +211,16 @@ git commit -m "feat(server): @fastify/compress 등록 — Caddy encode 대체 (D
 
 ---
 
-### Task 3: infra/provision.sh — 기본 모드
+### Task 3: infra/provision.sh
 
-서버에서 root 로 실행되는 프로비저닝 본체. 이 태스크에서는 기본 모드(§21·22·23·28·29)까지, `--harden` 은 Task 4.
+서버에서 root 로 실행되는 프로비저닝 본체 — 기본 모드(§21·22·23·28·29)와 `--harden` 모드(§25·26)를 한 파일에 담는다.
 
 **Files:**
 - Create: `infra/provision.sh`
 
 **Interfaces:**
 - Consumes: stdin 첫 줄 = Tailscale auth key (없으면 빈 값 허용 — 이미 조인된 재실행), 같은 디렉터리의 `quant-platform.service`·`app.env.example` (bootstrap.sh 가 함께 업로드)
-- Produces: stdout 마지막에 `FQDN=<Self.DNSName>` 마커 한 줄 (bootstrap.sh 가 grep), `--harden` 인자 처리 스텁 (Task 4 에서 구현)
+- Produces: stdout 마지막에 `FQDN=<Self.DNSName>` 마커 한 줄 (Task 4 의 bootstrap.sh 가 grep), `--harden` 인자로 진입하는 하드닝 모드
 
 - [ ] **Step 1: provision.sh 작성**
 
@@ -334,6 +334,10 @@ fi
 node --version
 
 echo "==> §23 Tailscale"
+# Tailscale 공식 설치 절차를 그대로 쓴다. 위 Node 설치와 달리 파이프를 허용하는 이유:
+# 검증할 체크섬이 애초에 공개돼 있지 않고(설치 스크립트가 서명 검증을 자체 수행한다),
+# curl 이 실패하면 바로 다음 `tailscale status`/`tailscale up` 이 command not found 로
+# 죽어 조용히 넘어가지 않는다. Node 쪽은 SHA 검증이 파이프에 가려지는 게 문제였다.
 command -v tailscale >/dev/null 2>&1 || curl -fsSL https://tailscale.com/install.sh | sh
 
 BACKEND_STATE="$(tailscale status --json 2>/dev/null | jq -r '.BackendState' || echo "NoState")"
@@ -397,48 +401,49 @@ Expected: `OK`
 Run: `grep -nE 'pipefail|\[\[|\{[a-z-]+,[a-z-]+\}|<<<|function |local ' infra/provision.sh`
 Expected: 매치 없음 (주석 제외 — 있으면 bashism)
 
-- [ ] **Step 3: 커밋**
+- [ ] **Step 3: harden 분기 도달 검증**
+
+`--harden` 인자가 base 경로를 건너뛰고 harden 블록으로 가는지 확인한다. root 검사에
+걸리지 않도록 실제 실행이 아니라 분기 로직만 dash 로 재현한다:
 
 ```bash
-git add infra/provision.sh
-git commit -m "feat(infra): provision.sh 기본 모드 — §21·22·23·28·29 멱등 프로비저닝 (D-016)"
-```
-
----
-
-### Task 4: provision.sh — 검증
-
-Task 3 의 파일에 `--harden` 이 이미 포함돼 있으므로 (파일 상단 분기), 이 태스크는 harden 경로의 동작 검증이다.
-
-**Files:**
-- Modify: 없음 (Task 3 에서 작성 완료)
-
-- [ ] **Step 1: harden 분기 로직 검증 (dash 로 dry-run)**
-
-```bash
-dash -c '
-set -eu
-MODE="--harden"
+dash -c 'set -eu; MODE="--harden"
 if [ "${MODE}" = "--harden" ]; then echo "harden branch OK"; exit 0; fi
-echo "base branch (틀림)"
-' 
+echo "base branch (틀림)"'
 ```
 
 Expected: `harden branch OK`
 
-- [ ] **Step 2: stdin read 가드 검증 — EOF 에서 set -e 로 죽지 않는지**
+- [ ] **Step 4: stdin read 가드 검증**
+
+auth key 가 없는 재실행(stdin EOF)에서 `set -e` 로 죽지 않아야 한다:
 
 ```bash
 dash -c 'set -eu; IFS= read -r K || K=""; echo "key=[${K}]"' < /dev/null
 ```
 
-Expected: `key=[]` (종료코드 0)
+Expected: `key=[]`, 종료코드 0
 
-- [ ] **Step 3: 커밋 불요** — 검증만. 실패 시 Task 3 코드를 수정하고 재커밋.
+- [ ] **Step 5: SESSION_SECRET 치환 구분자 검증**
+
+base64 는 `+/=` 를 포함할 수 있다. `#` 구분자가 안전한지 확인한다:
+
+```bash
+dash -c 'S="ab+c/d=ef"; echo "SESSION_SECRET=<48_BYTE_RANDOM_VALUE>" | sed "s#<48_BYTE_RANDOM_VALUE>#${S}#"'
+```
+
+Expected: `SESSION_SECRET=ab+c/d=ef`
+
+- [ ] **Step 6: 커밋**
+
+```bash
+git add infra/provision.sh
+git commit -m "feat(infra): provision.sh — §21·22·23·25·26·28·29 멱등 프로비저닝 (D-016)"
+```
 
 ---
 
-### Task 5: scripts/bootstrap.sh — 개발 PC 래퍼
+### Task 4: scripts/bootstrap.sh — 개발 PC 래퍼
 
 업로드 → 기본 프로비저닝 → **tailnet SSH 실증** → 하드닝. 락아웃 가드가 이 파일의 존재 이유다.
 
@@ -543,7 +548,7 @@ git commit -m "feat(scripts): bootstrap.sh — 단일 명령 프로비저닝, �
 
 ---
 
-### Task 6: 구 인프라 파일 삭제
+### Task 5: 구 인프라 파일 삭제
 
 전부 provision.sh 또는 Tailscale 로 대체됐다. 남기면 §21·§22 의 진실이 두 곳이 된다.
 
@@ -563,7 +568,7 @@ git rm infra/lightsail/launch-script.sh \
 - [ ] **Step 2: 잔여 참조 확인**
 
 Run: `grep -rn "Caddy\|wireguard\|wg0\|caddy" --include="*.sh" --include="*.service" --include="*.example" infra/ scripts/`
-Expected: 매치 없음 (문서·스펙은 Task 7·8 에서 처리)
+Expected: 매치 없음 (문서·스펙은 Task 6·7 에서 처리)
 
 - [ ] **Step 3: 남은 infra/ 구조 확인**
 
@@ -578,7 +583,7 @@ git commit -m "chore(infra): WireGuard·Caddy·UFW 스크립트·launch script �
 
 ---
 
-### Task 7: README 배포 섹션 교체
+### Task 6: README 배포 섹션 교체
 
 **Files:**
 - Modify: `README.md:28-30` (「## 배포 (스펙 §18~§31)」 섹션)
@@ -640,7 +645,7 @@ git commit -m "docs(readme): 배포 섹션을 Tailscale 기반 절차로 교체 
 
 ---
 
-### Task 8: DECISIONS.md — D-016
+### Task 7: DECISIONS.md — D-016
 
 **Files:**
 - Modify: `docs/DECISIONS.md` (파일 끝, D-015 뒤에 추가)
@@ -681,14 +686,14 @@ git commit -m "docs(decisions): D-016 — Tailscale 전환 기록"
 
 ---
 
-### Task 9: 최종 게이트 + 실서버 검증 체크리스트
+### Task 8: 최종 게이트 + 실서버 검증 체크리스트
 
 **Files:** 없음 (검증만)
 
 - [ ] **Step 1: 전체 게이트**
 
 Run: `pnpm lint && pnpm typecheck && pnpm test && pnpm build`
-Expected: 전부 green (기존 64 + Task 1·2 의 신규 3)
+Expected: 전부 green (기존 82 + Task 1·2 의 신규 3 = 85)
 
 - [ ] **Step 2: 스크립트 구문 재확인**
 
