@@ -1,4 +1,3 @@
-import * as OTPAuth from 'otpauth';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
 
@@ -6,15 +5,6 @@ function sessionCookie(response: { cookies: Array<{ name: string; value: string 
   const cookie = response.cookies.find((c) => c.name === 'qp_session');
   if (!cookie) throw new Error('session cookie not set');
   return cookie.value;
-}
-
-function totpToken(secret: string): string {
-  return new OTPAuth.TOTP({
-    issuer: 'Quant Platform',
-    secret: OTPAuth.Secret.fromBase32(secret),
-    digits: 6,
-    period: 30,
-  }).generate();
 }
 
 describe('auth flow (스펙 §14, §16)', () => {
@@ -35,7 +25,7 @@ describe('auth flow (스펙 §14, §16)', () => {
     expect(info.statusCode).toBe(401);
   });
 
-  it('logs in without TOTP when disabled, then logs out', async () => {
+  it('logs in with a password alone, then logs out', async () => {
     const { username, password } = await createTestAdmin(ctx.container);
 
     const login = await ctx.app.inject({
@@ -70,89 +60,22 @@ describe('auth flow (스펙 §14, §16)', () => {
     expect(meAfter.statusCode).toBe(401);
   });
 
-  it('requires TOTP as a second step and rotates the session id', async () => {
-    const { username, password, totpSecret } = await createTestAdmin(ctx.container, {
-      totpEnabled: true,
-    });
+  // TOTP 제거(D-014) 후에도 세션 고정 방어는 로그인마다의 새 세션 ID 발급이 담당한다
+  it('issues a fresh session id on every login', async () => {
+    const { username, password } = await createTestAdmin(ctx.container);
 
-    const login = await ctx.app.inject({
+    const first = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/auth/login',
       payload: { username, password },
     });
-    expect(login.json()).toEqual({ status: 'TOTP_REQUIRED' });
-    const pendingCookie = sessionCookie(login);
-
-    // TOTP 완료 전에는 인증되지 않는다
-    const mePending = await ctx.app.inject({
-      method: 'GET',
-      url: '/api/v1/auth/me',
-      cookies: { qp_session: pendingCookie },
-    });
-    expect(mePending.statusCode).toBe(401);
-
-    const wrong = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/auth/totp/verify',
-      payload: { token: '000000' },
-      cookies: { qp_session: pendingCookie },
-    });
-    expect(wrong.statusCode).toBe(401);
-
-    const verify = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/auth/totp/verify',
-      payload: { token: totpToken(totpSecret ?? '') },
-      cookies: { qp_session: pendingCookie },
-    });
-    expect(verify.statusCode).toBe(200);
-    const fullCookie = sessionCookie(verify);
-    expect(fullCookie).not.toBe(pendingCookie); // 세션 회전
-
-    const me = await ctx.app.inject({
-      method: 'GET',
-      url: '/api/v1/auth/me',
-      cookies: { qp_session: fullCookie },
-    });
-    expect(me.statusCode).toBe(200);
-  });
-
-  it('accepts a recovery code once', async () => {
-    const recoveryCodes = ['aaaa11112222', 'bbbb33334444'];
-    const { username, password } = await createTestAdmin(ctx.container, {
-      totpEnabled: true,
-      recoveryCodes,
-    });
-
-    const login = await ctx.app.inject({
+    const second = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/auth/login',
       payload: { username, password },
     });
-    const pendingCookie = sessionCookie(login);
 
-    const verify = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/auth/totp/verify',
-      payload: { token: recoveryCodes[0] },
-      cookies: { qp_session: pendingCookie },
-    });
-    expect(verify.statusCode).toBe(200);
-
-    // 같은 복구 코드는 재사용 불가
-    const secondLogin = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/auth/login',
-      payload: { username, password },
-    });
-    const secondPending = sessionCookie(secondLogin);
-    const reuse = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/auth/totp/verify',
-      payload: { token: recoveryCodes[0] },
-      cookies: { qp_session: secondPending },
-    });
-    expect(reuse.statusCode).toBe(401);
+    expect(sessionCookie(first)).not.toBe(sessionCookie(second));
   });
 
   it('locks the account after 5 failed attempts (스펙 §16 로그인 rate limit)', async () => {

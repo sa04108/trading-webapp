@@ -4,12 +4,10 @@
  *   node dist/server/cli.js admin:create
  *   pnpm cli admin:create
  */
-import { randomBytes } from 'node:crypto';
 import readline from 'node:readline';
 import { Writable } from 'node:stream';
 import { loadConfig } from './bootstrap/config.js';
 import { createContainer } from './bootstrap/container.js';
-import { sha256Hex } from './modules/auth/application/auth-service.js';
 import { newId } from './shared/ids.js';
 
 function ask(question: string, hidden = false): Promise<string> {
@@ -58,29 +56,15 @@ async function adminCreate(): Promise<void> {
     }
 
     const passwordHash = await container.passwordHasher.hash(password);
-    const totpSecret = container.totpService.generateSecret();
-    const recoveryCodes = Array.from({ length: 8 }, () => randomBytes(5).toString('hex'));
 
     container.userRepository.create(
-      {
-        id: newId('usr'),
-        username,
-        passwordHash,
-        totpSecret,
-        totpEnabled: true,
-        recoveryCodeHashes: recoveryCodes.map(sha256Hex),
-      },
+      { id: newId('usr'), username, passwordHash },
       container.clock.now(),
     );
     container.auditLog.record(username, 'auth.admin.created');
 
-    console.log('\n관리자 계정이 생성되었습니다.\n');
-    console.log('1) 인증 앱(Google Authenticator 등)에 아래 URI 또는 secret 을 등록하세요:');
-    console.log(`   otpauth URI: ${container.totpService.buildUri(totpSecret, username)}`);
-    console.log(`   TOTP secret (base32): ${totpSecret}`);
-    console.log('\n2) 복구 코드를 안전한 곳에 보관하세요 (각 1회용, 재표시 불가):');
-    for (const code of recoveryCodes) console.log(`   ${code}`);
-    console.log('\n이 정보는 다시 표시되지 않습니다. (스펙 §16 TOTP secret 재노출 금지)');
+    console.log(`\n관리자 계정 '${username}' 이 생성되었습니다.`);
+    console.log('로그인은 사용자 이름과 비밀번호만으로 합니다. (D-014)');
   } finally {
     container.close();
   }

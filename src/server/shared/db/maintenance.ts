@@ -17,7 +17,7 @@ export interface PruneOptions {
 
 /**
  * 무한 증가 방지 정리 (부팅 시 + 주기 실행).
- * 만료 세션(대기 TOTP 포함)·오래된 로그인 시도·보존 기간 지난 감사 로그를 삭제한다.
+ * 만료 세션·오래된 로그인 시도·보존 기간 지난 감사 로그를 삭제한다.
  */
 export function pruneExpiredRows(db: AppDatabase, nowMs: number, options: PruneOptions): void {
   db.delete(sessions)

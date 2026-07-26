@@ -5,7 +5,7 @@
 | Phase | 내용 | 상태 |
 |---|---|---|
 | 0 | 기반 (스캐폴딩, config, health, 경계 검사) | 완료 |
-| 1 | 인증·UI shell (Argon2id, TOTP, 세션, 감사 로그, 내비게이션) | 완료 |
+| 1 | 인증·UI shell (Argon2id, 세션, 감사 로그, 내비게이션) | 완료 |
 | 2 | 데이터 (Candle, Parquet/DuckDB, CSV import, coverage, 집계) | 완료 |
 | 3 | 엔진 (체결, 비용, 이벤트 루프, 지표, 결정성, look-ahead) | 완료 |
 | 4 | 작업 큐 (SQLite 큐, 자식 프로세스, IPC, 취소, 복구) | 완료 |
@@ -18,7 +18,7 @@
 
 - ✅ 백테스트: 동일 입력 재현(해시 검증), next-bar-open 체결, look-ahead 테스트, 비용 반영, 데이터 버전 저장, 취소, 재시작 INTERRUPTED 복구, 동시 실행 1, 결과·거래 표시
 - ✅ 모바일: 390px 가로 스크롤 없음(E2E 검증), 휴대폰 전 과정 가능(위저드), 진행률·취소, 차트 툴팁
-- ✅ 보안(앱 계층): 127.0.0.1 bind, 로그인+TOTP, 세션 회전·만료, 안전한 쿠키, redaction, 임의 코드 실행 없음, 도메인 계층 인프라 비인지(dependency-cruiser 강제)
+- ✅ 보안(앱 계층): 127.0.0.1 bind, 로그인(비밀번호 단일 단계 — D-014), 세션 회전·만료, 안전한 쿠키, redaction, 임의 코드 실행 없음, 도메인 계층 인프라 비인지(dependency-cruiser 강제)
 - ⬜ 보안(인프라): 퍼블릭 포트 차단·VPN 접근은 서버 구축 시 검증 (infra/ 파일 준비됨)
 - ⬜ 운영: systemd 자동 시작·backup/restore 검증은 서버 구축 시
 

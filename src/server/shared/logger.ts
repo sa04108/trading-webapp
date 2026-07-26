@@ -12,8 +12,6 @@ const REDACT_PATHS = [
   'appsecret',
   'accountNumber',
   'password',
-  'totp',
-  'recoveryCode',
   'awsSecretAccessKey',
   'req.headers.authorization',
   'req.headers.cookie',
@@ -24,8 +22,6 @@ const REDACT_PATHS = [
   '*.appsecret',
   '*.accountNumber',
   '*.password',
-  '*.totp',
-  '*.recoveryCode',
   '*.awsSecretAccessKey',
 ];
 

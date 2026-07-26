@@ -14,11 +14,6 @@ function toUserRecord(row: typeof users.$inferSelect): UserRecord {
     id: row.id,
     username: row.username,
     passwordHash: row.passwordHash,
-    totpSecret: row.totpSecret,
-    totpEnabled: row.totpEnabled,
-    recoveryCodeHashes: row.recoveryCodeHashesJson
-      ? (JSON.parse(row.recoveryCodeHashesJson) as string[])
-      : [],
   };
 }
 
@@ -38,18 +33,9 @@ export function createSqliteUserRepository(db: AppDatabase): UserRepository {
           id: user.id,
           username: user.username,
           passwordHash: user.passwordHash,
-          totpSecret: user.totpSecret,
-          totpEnabled: user.totpEnabled,
-          recoveryCodeHashesJson: JSON.stringify(user.recoveryCodeHashes),
           createdAtMs: nowMs,
           updatedAtMs: nowMs,
         })
-        .run();
-    },
-    updateRecoveryCodeHashes(userId, hashes, nowMs) {
-      db.update(users)
-        .set({ recoveryCodeHashesJson: JSON.stringify(hashes), updatedAtMs: nowMs })
-        .where(eq(users.id, userId))
         .run();
     },
     countUsers() {
@@ -66,7 +52,6 @@ export function createSqliteSessionRepository(db: AppDatabase): SessionRepositor
         .values({
           id: session.id,
           userId: session.userId,
-          pendingTotp: session.pendingTotp,
           createdAtMs: session.createdAtMs,
           lastSeenAtMs: session.lastSeenAtMs,
         })

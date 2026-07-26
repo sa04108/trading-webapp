@@ -31,19 +31,16 @@ describe('DB maintenance (무한 증가 방지)', () => {
         id: 'usr_prune',
         username: 'prune-user',
         passwordHash: 'x',
-        totpSecret: null,
-        totpEnabled: false,
-        recoveryCodeHashesJson: '[]',
         createdAtMs: now,
         updatedAtMs: now,
       })
       .run();
     db.insert(sessions)
       .values([
-        // 유휴 만료 (대기 TOTP 세션 포함) / 절대 만료 / 유효
-        { id: 's_idle', userId: 'usr_prune', pendingTotp: true, createdAtMs: now - HOUR, lastSeenAtMs: now - 13 * HOUR },
-        { id: 's_abs', userId: 'usr_prune', pendingTotp: false, createdAtMs: now - 8 * DAY, lastSeenAtMs: now },
-        { id: 's_live', userId: 'usr_prune', pendingTotp: false, createdAtMs: now, lastSeenAtMs: now },
+        // 유휴 만료 / 절대 만료 / 유효
+        { id: 's_idle', userId: 'usr_prune', createdAtMs: now - HOUR, lastSeenAtMs: now - 13 * HOUR },
+        { id: 's_abs', userId: 'usr_prune', createdAtMs: now - 8 * DAY, lastSeenAtMs: now },
+        { id: 's_live', userId: 'usr_prune', createdAtMs: now, lastSeenAtMs: now },
       ])
       .run();
     db.insert(loginAttempts)

@@ -12,11 +12,9 @@ import type {
   LoginAttemptRepository,
   PasswordHasher,
   SessionRepository,
-  TotpService,
   UserRepository,
 } from '../modules/auth/application/ports.js';
 import { argon2PasswordHasher } from '../modules/auth/infrastructure/argon2-password-hasher.js';
-import { otpauthTotpService } from '../modules/auth/infrastructure/otpauth-totp.js';
 import {
   createSqliteLoginAttemptRepository,
   createSqliteSessionRepository,
@@ -49,7 +47,6 @@ export interface Container {
   readonly sessionRepository: SessionRepository;
   readonly loginAttemptRepository: LoginAttemptRepository;
   readonly passwordHasher: PasswordHasher;
-  readonly totpService: TotpService;
   readonly authService: AuthService;
   readonly duckdb: DuckDbService;
   readonly candleRepository: CandleRepository;
@@ -122,7 +119,6 @@ export function createContainer(config: AppConfig): Container {
     sessions: sessionRepository,
     loginAttempts: loginAttemptRepository,
     passwordHasher: argon2PasswordHasher,
-    totp: otpauthTotpService,
     clock,
     audit: auditLog,
     idleTimeoutMs: config.sessionIdleTimeoutSeconds * 1000,
@@ -164,7 +160,6 @@ export function createContainer(config: AppConfig): Container {
     sessionRepository,
     loginAttemptRepository,
     passwordHasher: argon2PasswordHasher,
-    totpService: otpauthTotpService,
     authService,
     duckdb,
     candleRepository,

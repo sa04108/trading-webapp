@@ -5,7 +5,6 @@ import type { FastifyInstance } from 'fastify';
 import { loadConfig } from '../../src/server/bootstrap/config.js';
 import { createContainer, type Container } from '../../src/server/bootstrap/container.js';
 import { buildServer } from '../../src/server/bootstrap/server.js';
-import { sha256Hex } from '../../src/server/modules/auth/application/auth-service.js';
 import { newId } from '../../src/server/shared/ids.js';
 
 export interface TestApp {
@@ -47,30 +46,23 @@ export async function createTestApp(env: Record<string, string> = {}): Promise<T
 export interface TestAdminOptions {
   username?: string;
   password?: string;
-  totpEnabled?: boolean;
-  recoveryCodes?: string[];
 }
 
 export async function createTestAdmin(
   container: Container,
   options: TestAdminOptions = {},
-): Promise<{ username: string; password: string; totpSecret: string | null }> {
+): Promise<{ username: string; password: string }> {
   const username = options.username ?? 'operator';
   const password = options.password ?? 'correct-horse-battery-staple';
-  const totpEnabled = options.totpEnabled ?? false;
-  const totpSecret = totpEnabled ? container.totpService.generateSecret() : null;
 
   container.userRepository.create(
     {
       id: newId('usr'),
       username,
       passwordHash: await container.passwordHasher.hash(password),
-      totpSecret,
-      totpEnabled,
-      recoveryCodeHashes: (options.recoveryCodes ?? []).map(sha256Hex),
     },
     container.clock.now(),
   );
 
-  return { username, password, totpSecret };
+  return { username, password };
 }

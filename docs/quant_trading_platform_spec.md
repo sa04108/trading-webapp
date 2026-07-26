@@ -125,8 +125,7 @@ Strategy Core
 
 ## 포함
 
-- 단일 관리자 로그인
-- TOTP 2단계 인증
+- 단일 관리자 로그인 (비밀번호 단일 단계 — D-014)
 - 모바일 대응 내부 웹 UI
 - 등록 전략 목록
 - 전략 파라미터 스키마
@@ -765,7 +764,6 @@ Prefix:
 POST /api/v1/auth/login
 POST /api/v1/auth/logout
 GET  /api/v1/auth/me
-POST /api/v1/auth/totp/verify
 ```
 
 ## 전략
@@ -881,12 +879,6 @@ node dist/server/cli.js admin:create
 - 유휴 만료 12시간
 - 절대 만료 7일
 
-## TOTP
-
-- 비밀번호 + TOTP
-- 복구 코드 hash 저장
-- 설정 완료 후 TOTP secret 재노출 금지
-
 ## HTTP
 
 - CSRF 방어
@@ -913,8 +905,6 @@ appkey
 appsecret
 accountNumber
 password
-totp
-recoveryCode
 awsSecretAccessKey
 ```
 
@@ -979,7 +969,6 @@ Content
 
 - 사용자 이름
 - 비밀번호
-- TOTP
 - 서버 연결 상태
 - 회원가입 링크 없음
 
@@ -1705,7 +1694,6 @@ Playwright viewport:
 
 - 로그인 성공·실패
 - 로그아웃
-- TOTP 변경
 - 백테스트 생성·취소
 - 데이터 가져오기·동기화
 - 설정 변경
@@ -1796,7 +1784,6 @@ quant-platform-live.service
 - 관리자 CLI
 - Argon2id
 - 로그인
-- TOTP
 - 세션
 - 모바일 navigation
 - 데스크톱 sidebar
@@ -1938,7 +1925,7 @@ Claude가 임의로 변경하면 안 되는 결정:
 - VPN IP의 443 접근 성공
 - 앱은 `127.0.0.1:3000`만 Listen
 - 도메인·애플리케이션 계층에 WireGuard 문자열 없음
-- 로그인·TOTP 필요
+- 로그인 필요
 - 안전한 cookie
 - 로그에 secret 없음
 - 임의 코드 실행 없음

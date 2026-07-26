@@ -8,12 +8,10 @@ import path from 'node:path';
 import { loadConfig } from '../src/server/bootstrap/config.js';
 import { createContainer } from '../src/server/bootstrap/container.js';
 import { buildServer } from '../src/server/bootstrap/server.js';
-import { sha256Hex } from '../src/server/modules/auth/application/auth-service.js';
 import { newId } from '../src/server/shared/ids.js';
 
 export const E2E_USERNAME = 'e2e-operator';
 export const E2E_PASSWORD = 'correct-horse-battery-staple';
-export const E2E_TOTP_SECRET = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP';
 
 const HOUR = 3_600_000;
 const DAY = 86_400_000;
@@ -66,9 +64,6 @@ async function main(): Promise<void> {
       id: newId('usr'),
       username: E2E_USERNAME,
       passwordHash: await container.passwordHasher.hash(E2E_PASSWORD),
-      totpSecret: E2E_TOTP_SECRET,
-      totpEnabled: true,
-      recoveryCodeHashes: [sha256Hex('e2e-recovery-code')],
     },
     container.clock.now(),
   );

@@ -6,7 +6,7 @@
 
 **Architecture:** Fastify 서버가 React 정적 파일과 `/api/v1`을 제공하고, 백테스트는 SQLite 큐에서 확보되어 동일 아티팩트의 자식 프로세스에서 실행된다. 시장 데이터는 Parquet + DuckDB, 메타데이터는 SQLite(WAL). 모듈 내부는 domain → application → infrastructure/presentation 의존 방향을 dependency-cruiser로 강제한다.
 
-**Tech Stack:** Node 24(운영)/22(개발), TypeScript strict, Fastify 5, Zod 4, Pino, better-sqlite3 + Drizzle, @duckdb/node-api, argon2, otpauth, React 19 + Vite + shadcn/ui + Tailwind 4, TanStack Query/Table, Recharts, Vitest, Playwright, pnpm.
+**Tech Stack:** Node 24(운영)/22(개발), TypeScript strict, Fastify 5, Zod 4, Pino, better-sqlite3 + Drizzle, @duckdb/node-api, argon2, React 19 + Vite + shadcn/ui + Tailwind 4, TanStack Query/Table, Recharts, Vitest, Playwright, pnpm.
 
 ## Global Constraints (스펙 §2, §37 — 임의 변경 금지)
 
@@ -44,16 +44,16 @@
 **Files:**
 - Create: `migrations/0000_*.sql` (drizzle 생성) — users, sessions, login_attempts, audit_logs, application_settings
 - Create: `src/server/modules/auth/domain/` — `User`, `Session` 타입, 세션 만료 정책(순수 함수)
-- Create: `src/server/modules/auth/application/auth-service.ts` — `login(username, password, totp)`, `logout(sessionId)`, `verifySession(sessionId)` (idle 12h/절대 7d, 로그인 시 세션 회전)
-- Create: `src/server/modules/auth/infrastructure/` — `argon2-password-hasher.ts`, `otpauth-totp.ts`, `sqlite-user-repository.ts`, `sqlite-session-repository.ts`, `sqlite-login-attempt-repository.ts`
+- Create: `src/server/modules/auth/application/auth-service.ts` — `login(username, password)`, `logout(sessionId)`, `verifySession(sessionId)` (idle 12h/절대 7d, 로그인 시 세션 회전)
+- Create: `src/server/modules/auth/infrastructure/` — `argon2-password-hasher.ts`, `sqlite-user-repository.ts`, `sqlite-session-repository.ts`, `sqlite-login-attempt-repository.ts`
 - Create: `src/server/modules/auth/presentation/auth-routes.ts` — §14 인증 4종 + 로그인 rate limit(login_attempts 기반)
 - Create: `src/server/modules/audit/` — `AuditLogService.record(event, detail)` + SQLite repo
-- Create: `src/server/cli.ts` — `admin:create` (사용자명·비밀번호 입력, TOTP secret 생성, otpauth URI 출력, 복구 코드 hash 저장)
+- Create: `src/server/cli.ts` — `admin:create` (사용자명·비밀번호 입력, Argon2id 해시 저장)
 - Create: `src/server/shared/security-headers.ts` — CSP, nosniff, DENY, no-referrer; Origin==Host 검사 훅(CSRF)
-- Create: `src/web/features/auth/` — 로그인 화면(사용자명/비밀번호/TOTP, 서버 연결 상태)
+- Create: `src/web/features/auth/` — 로그인 화면(사용자명/비밀번호, 서버 연결 상태)
 - Create: `src/web/app/shell.tsx` — 모바일 하단 내비(대시보드/백테스트/데이터/설정) + 데스크톱 사이드바, 라이트·다크 테마
 - Create: `src/web/lib/api-client.ts` — fetch 래퍼(credentials, 401 → 로그인 리다이렉트)
-- Test: unit(세션 만료 정책, TOTP 검증, 비밀번호 해시 왕복), integration(로그인 성공/실패/rate limit/세션 만료, Origin 검사)
+- Test: unit(세션 만료 정책, 비밀번호 해시 왕복), integration(로그인 성공/실패/rate limit/세션 만료, Origin 검사)
 
 **Interfaces (Produces):**
 - Fastify `preHandler` `requireAuth` — 이후 모든 보호 라우트가 사용

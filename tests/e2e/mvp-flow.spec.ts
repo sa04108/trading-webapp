@@ -1,29 +1,16 @@
 import { expect, test } from '@playwright/test';
-import * as OTPAuth from 'otpauth';
 
 const USERNAME = 'e2e-operator';
 const PASSWORD = 'correct-horse-battery-staple';
-const TOTP_SECRET = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP';
-
-function totpToken(): string {
-  return new OTPAuth.TOTP({
-    issuer: 'Quant Platform',
-    secret: OTPAuth.Secret.fromBase32(TOTP_SECRET),
-    digits: 6,
-    period: 30,
-  }).generate();
-}
 
 /** 스펙 §33 E2E 흐름: 로그인 → 생성 → 제출 → 완료 → 결과 → 거래 필터 → clone → 로그아웃 */
 test('full MVP flow', async ({ page }) => {
-  // 1. 로그인 (비밀번호 + TOTP 2단계)
+  // 1. 로그인 (비밀번호 단일 단계, D-014)
   await page.goto('/');
   await expect(page).toHaveURL(/\/login/);
   await page.getByLabel('사용자 이름').fill(USERNAME);
   await page.getByLabel('비밀번호').fill(PASSWORD);
   await page.getByRole('button', { name: '로그인' }).click();
-  await page.getByLabel('TOTP 코드').fill(totpToken());
-  await page.getByRole('button', { name: '확인', exact: true }).click();
   await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
 
   // 2. 백테스트 생성 (6단계 위저드) — 픽스처에서 완결 거래가 나오도록 파라미터 조정
@@ -85,8 +72,6 @@ test('mobile layout has no horizontal scroll on core screens (스펙 §38)', asy
   await page.getByLabel('사용자 이름').fill(USERNAME);
   await page.getByLabel('비밀번호').fill(PASSWORD);
   await page.getByRole('button', { name: '로그인' }).click();
-  await page.getByLabel('TOTP 코드').fill(totpToken());
-  await page.getByRole('button', { name: '확인', exact: true }).click();
   await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
 
   for (const path of ['/', '/backtests', '/datasets', '/settings']) {
