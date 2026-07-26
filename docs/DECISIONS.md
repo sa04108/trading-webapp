@@ -125,10 +125,23 @@
   서버가 몇 달 뒤 조용히 떨어진다.
 - **락아웃 가드:** provision.sh 를 기본/`--harden` 2 단계로 나누고, bootstrap.sh 가
   tailnet 경유 SSH 를 실제로 시도해 성공했을 때만 하드닝을 실행한다. 스펙 §25 의
-  "검증 전 차단 금지" 가 제어 흐름으로 강제된다.
+  "검증 전 차단 금지" 가 제어 흐름으로 강제된다. `--harden` 게이트는 `BackendState`
+  뿐 아니라 `tag:server` 소유도 확인한다 — Running 이어도 태그 없이 조인했으면
+  거부한다(최종 리뷰 F1). 태그 없는 조인은 지금은 멀쩡히 동작하다가 노드 키 만료
+  시점(약 180일 뒤)에 조용히 락아웃으로 이어지는데, 그 확인을 되돌릴 수 없는 UFW
+  적용 직전으로 옮겨 무경고 실패를 막았다.
+- **고정 아웃바운드 IP:** §18/§23 요구사항은 그대로 유지된다 — 증권사 API 트래픽은
+  Lightsail Static IP 로 나가야 한다. provision.sh 기본 모드가 `checkip.amazonaws.com`
+  확인을 정보성으로 출력한다. Tailscale 은 WireGuard 에 없던 새 우회 경로가 있다 —
+  이 노드에 `tailscale set --exit-node=...` 를 걸지 않는다(걸면 아웃바운드가 조용히
+  우회된다).
+- **CT 로그 노출:** `tailscale serve --https=443` 도 `<host>.<tailnet>.ts.net` 앞으로
+  Let's Encrypt 인증서를 받아 CT 로그에 공개된다 — 설계 §2 가 기각한 다른 대안과 같은
+  성질이지만, 이름이 tailnet 안에서만 해석되고 퍼블릭에 아무것도 듣지 않으므로 무해하다.
 - **스펙 관계:** §23(WireGuard)·§24(퍼블릭 방화벽 마감, 선택으로 강등)·§25(UFW 규칙,
   tailscale0 으로)·§27(Caddy, 제거) 편차. §18 의 호스트 요구사항과 §30 배포 절차는
-  그대로다. deploy.sh 는 수정하지 않았다.
+  그대로다. deploy.sh 는 동작을 바꾸지 않았다 — 최종 리뷰에서 usage 문자열·주석의
+  `<wireguard-host>` 예시만 tailnet FQDN 으로 교체했다(사용자 승인 예외).
 - **Git 설정:** 셸 스크립트를 Windows 개발 머신에서도 LF 로 체크아웃하도록 `.gitattributes` 에
   `*.sh text eol=lf` 를 추가했다. scripts/bootstrap.sh 가 infra/provision.sh 를 scp 로
   서버에 전달하는데, 개발 PC 가 core.autocrlf=true 이고 CRLF 로 체크아웃되면 Ubuntu 에서
