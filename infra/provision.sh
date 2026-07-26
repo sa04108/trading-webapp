@@ -32,6 +32,17 @@ if [ "${MODE}" = "--harden" ]; then
     exit 1
   }
 
+  # D-016 §6-3: Running 만으로는 부족하다 — 운영자가 디버깅 중 손으로 tailscale up 을
+  # 태그 없이 돌렸을 수 있다(이 파일 헤더가 직접 실행을 문서화한다). 태그 없는 조인은
+  # 지금은 멀쩡히 동작하지만 노드 키가 만료되면(약 180일) tailscaled 가 NeedsLogin 으로
+  # 떨어지고, 그때는 퍼블릭 22 가 이미 닫혀 있어 들어갈 방법이 없다(락아웃, 무경고).
+  # 되돌릴 수 없는 UFW 적용 직전에 태그 소유를 실제로 확인한다.
+  tailscale status --json 2>/dev/null | jq -e '(.Self.Tags // []) | index("tag:server")' >/dev/null 2>&1 || {
+    echo "노드가 tag:server 로 태그되지 않았습니다 — 노드 키가 만료되면 락아웃입니다." >&2
+    echo "tailscale 콘솔에서 노드를 삭제하고 tag:server 키로 다시 조인하세요." >&2
+    exit 1
+  }
+
   echo "==> §25 UFW — tailscale0 만 허용"
   # 전제: bootstrap.sh 가 tailnet 경유 SSH 를 실증한 뒤에만 이 모드를 호출한다.
   # 여기서 퍼블릭 22 가 닫힌다 — Lightsail 브라우저 SSH 콘솔도 함께 죽는다.
@@ -72,6 +83,10 @@ export DEBIAN_FRONTEND=noninteractive
 # 첫 부팅 직후에는 unattended-upgrades 가 apt 락을 잡고 있을 수 있다 — 기다린다.
 APT="apt-get -o DPkg::Lock::Timeout=600 -y"
 $APT update
+# 하드닝 후 재실행은 tailnet SSH 가 유일한 경로다. full-upgrade 가 tailscale
+# 패키지를 올리면 tailscaled 재시작으로 tailscale0 이 잠깐 내려가 이 세션이 SIGHUP 으로
+# 끊길 수 있다 — 락아웃은 아니다(UFW·sshd 무관, tailscaled 는 돌아온다) 그저 재실행이
+# 한 번 더 필요할 수 있다는 뜻이니, 설명 없이 멈춘 것처럼 보이면 다시 실행하라.
 $APT full-upgrade
 $APT install ca-certificates curl git jq openssl unzip xz-utils build-essential \
              python3 pkg-config sqlite3 ufw unattended-upgrades
@@ -140,17 +155,23 @@ else
   umask 077
   KEY_FILE="$(mktemp)"
   # tailscale up 이 실패하면 set -e 로 즉시 종료된다 — trap 없이는 rm -f 가 실행되지
-  # 않고 평문 키 파일이 /tmp 에 남는다. 모든 종료 경로에서 지우도록 trap 을 건다
-  trap 'rm -f "${KEY_FILE}"' EXIT
+  # 않고 평문 키 파일이 /tmp 에 남는다. 모든 종료 경로에서 지우도록 trap 을 건다.
+  # POSIX 셸은 트랩되지 않은 시그널로 죽으면 EXIT 트랩을 실행하지 않는다 — 이
+  # 스크립트를 실어 나르는 bootstrap.sh 의 ssh 채널이 Ctrl-C 로 끊기면 여기서
+  # SIGHUP 을 받는 게 현실적인 중단 경로이므로 EXIT 외에 HUP·INT·TERM 도 잡는다
+  trap 'rm -f "${KEY_FILE}"' EXIT HUP INT TERM
   printf '%s' "${TS_AUTHKEY}" > "${KEY_FILE}"
   # tag:server 가 노드 키 만료를 막는다 — 태그 없이 조인하면 몇 달 뒤
   # 헤드리스 서버가 조용히 tailnet 에서 떨어진다 (설계 §6-3)
+  # §18/§23: 증권사 API 아웃바운드는 Lightsail Static IP 로만 나가야 한다 — 이 노드에
+  # exit-node 를 걸지 않는다. `tailscale set --exit-node=...` 는 이 불변식을 조용히
+  # 우회시키는, WireGuard 에는 없었던 새 경로다.
   tailscale up --authkey "file:${KEY_FILE}" \
     --hostname quant-platform --advertise-tags=tag:server
   rm -f "${KEY_FILE}"
   # 성공 경로에서는 trap 을 해제한다 — 이후 실패가 이미 지워진 경로를 다시
   # 건드리지 않게 하고, 뒤 단계에 다른 EXIT trap 이 필요해질 때 충돌을 막는다
-  trap - EXIT
+  trap - EXIT HUP INT TERM
 fi
 
 # 이름을 가정하지 않는다 — 동명 노드가 있으면 quant-platform-1 처럼 접미사가 붙는다
@@ -166,11 +187,17 @@ if [ -f /etc/quant-platform/app.env ]; then
   echo "이미 존재 — 건너뜀"
 else
   SECRET="$(openssl rand -base64 48 | tr -d '\n')"
-  # base64 는 +/= 를 포함할 수 있으므로 sed 구분자는 # (base64 알파벳 밖)
-  sed "s#<48_BYTE_RANDOM_VALUE>#${SECRET}#" "${SELF_DIR}/app.env.example" \
-    > /etc/quant-platform/app.env
-  chown root:root /etc/quant-platform/app.env
-  chmod 600 /etc/quant-platform/app.env
+  # sed 로 치환하면 비밀값이 별도 프로세스(sed)의 argv 로 넘어가 호출 동안
+  # /proc/<pid>/cmdline·ps 에 노출된다 — printf 는 빌트인이라 노출되지 않는다.
+  # 목적지 파일에 바로 쓰지 않고 임시 파일에 완성한 뒤 mv 로 원자적 교체한다.
+  # 중간에 실패(디스크 꽉 참·시그널)해도 잘린 app.env 가 생기지 않는다 — 잘린 파일이
+  # 생기면 위 "이미 존재 — 건너뜀" 이 그 상태를 영구 고착시키고 재실행도 못 고친다.
+  umask 077
+  TMP_ENV="$(mktemp)"
+  grep -v '^SESSION_SECRET=' "${SELF_DIR}/app.env.example" > "${TMP_ENV}"
+  printf 'SESSION_SECRET=%s\n' "${SECRET}" >> "${TMP_ENV}"
+  chown root:root "${TMP_ENV}" && chmod 600 "${TMP_ENV}"
+  mv "${TMP_ENV}" /etc/quant-platform/app.env
 fi
 
 echo "==> §29 systemd 유닛"
@@ -179,6 +206,12 @@ install -m 644 -o root -g root "${SELF_DIR}/quant-platform.service" \
 systemctl daemon-reload
 # start 는 하지 않는다 — dist 가 아직 없다. 첫 기동은 deploy.sh 가 한다.
 systemctl enable quant-platform
+
+echo "==> §18/§23 고정 아웃바운드 IP 확인 (정보성)"
+# 증권사 API 트래픽은 이 Lightsail Static IP 로 나가야 한다(§18/§23). 실패해도 프로비저닝을
+# 죽이지 않는다 — 일시적 네트워크 문제로 배포 자체가 막히면 안 되므로 참고용으로만 쓴다.
+OUTBOUND_IP="$(curl -4 -fsS https://checkip.amazonaws.com 2>/dev/null || echo "확인 실패")"
+echo "아웃바운드 IP: ${OUTBOUND_IP} — 증권사에 등록한 Static IP 와 일치해야 한다"
 
 echo ""
 echo "기본 프로비저닝 완료. 다음: bootstrap.sh 가 tailnet SSH 검증 후 --harden 실행."
