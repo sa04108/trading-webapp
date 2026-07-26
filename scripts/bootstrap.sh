@@ -63,8 +63,8 @@ if [ -z "${TS_AUTHKEY:-}" ]; then
 fi
 
 # ── 여기서부터 모든 출력을 로그 파일에도 남긴다 ───────────────────────────────
-# 화면에 의존하지 않는 것이 요점이다. 스크롤백 한도, 터미널 제어 시퀀스(pnpm·vitest
-# 등이 진행 표시를 지우며 앞 줄까지 함께 지운다), 창 크기에 흔들리지 않는다.
+# 화면에 의존하지 않는 것이 요점이다 — 터미널 종류·스크롤백 한도·창 크기와 무관하게
+# 실행 기록이 남아야 한다.
 # 파일명은 *.log 로 .gitignore 에 이미 걸려 있다. QP_LOG 로 경로를 바꿀 수 있다.
 LOG="${QP_LOG:-${REPO_ROOT}/.logs/bootstrap-$(date -u +%Y%m%d-%H%M%S).log}"
 mkdir -p "$(dirname "${LOG}")"
@@ -78,11 +78,7 @@ on_exit() {
   if [ -n "${OUT:-}" ]; then rm -f "${OUT}"; fi
   if [ "${status}" -ne 0 ]; then
     echo
-    echo "실패 (exit ${status}). 화면이 지워졌어도 전체 기록은 여기 있다:"
-    echo "  ${LOG}"
-  else
-    echo
-    echo "전체 로그: ${LOG}"
+    echo "실패 (exit ${status}). 로그: ${LOG}"
   fi
   # tee 가 마지막 줄까지 쓰도록 fd 를 닫고 기다린다 — 안 하면 끝이 잘릴 수 있다
   exec 1>&- 2>&-
