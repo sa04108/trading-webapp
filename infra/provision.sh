@@ -209,10 +209,26 @@ systemctl daemon-reload
 systemctl enable quant-platform
 
 echo "==> §18/§23 고정 아웃바운드 IP 확인 (정보성)"
-# 증권사 API 트래픽은 이 호스트의 고정 공인 IP 로 나가야 한다(§18/§23). 실패해도 프로비저닝을
-# 죽이지 않는다 — 일시적 네트워크 문제로 배포 자체가 막히면 안 되므로 참고용으로만 쓴다.
-OUTBOUND_IP="$(curl -4 -fsS https://checkip.amazonaws.com 2>/dev/null || echo "확인 실패")"
-echo "아웃바운드 IP: ${OUTBOUND_IP} — 증권사에 등록한 Static IP 와 일치해야 한다"
+# 증권사 API 트래픽은 이 호스트의 고정 공인 IP 로 나가야 한다(§18/§23) — 증권사가 허용
+# 출발 IP 를 등록제로 운영하기 때문이다. 실패해도 프로비저닝을 죽이지 않는다 — 일시적
+# 네트워크 문제로 배포 자체가 막히면 안 되므로 참고용으로만 쓴다.
+#
+# 특정 업체에 묶지 않는다 (스펙 §2.1): OUTBOUND_IP_URL 로 원하는 엔드포인트를 지정할 수
+# 있고(사내 서비스도 가능), 미지정이면 아래 목록을 순서대로 시도해 첫 성공을 쓴다.
+# 한 곳이 죽었을 때 "확인 실패" 로 오인되지 않게 하려는 것이다.
+# --max-time: 아웃바운드가 막힌 호스트에서 curl 의 기본 연결 타임아웃(300초)까지
+# 프로비저닝이 멈춘 것처럼 보이지 않게 한다.
+OUTBOUND_IP="확인 실패"
+# 아래 ${...} 는 여러 URL 을 순회하기 위해 의도적으로 인용하지 않는다 (단어 분리 필요)
+for url in ${OUTBOUND_IP_URL:-https://ifconfig.me/ip https://icanhazip.com https://api.ipify.org}; do
+  ip="$(curl -4 -fsS --max-time 10 "${url}" 2>/dev/null | tr -d '[:space:]' || true)"
+  # HTML 에러 페이지 등을 IP 로 오인하지 않게 숫자·점만 허용한다
+  case "${ip}" in
+    ''|*[!0-9.]*) : ;;
+    *) OUTBOUND_IP="${ip}"; break ;;
+  esac
+done
+echo "아웃바운드 IP: ${OUTBOUND_IP} — 증권사에 등록한 고정 공인 IP 와 일치해야 한다"
 
 echo ""
 echo "기본 프로비저닝 완료. 다음: bootstrap.sh 가 tailnet SSH 검증 후 --harden 실행."
