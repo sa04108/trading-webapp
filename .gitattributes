@@ -1,0 +1,8 @@
+# 셸 스크립트는 항상 LF 로 체크아웃한다 (D-016).
+# 개발 PC 가 Windows(core.autocrlf=true)이고 scripts/bootstrap.sh 는 워킹트리 사본을
+# 그대로 서버로 scp 한다 — CRLF 로 체크아웃되면 Ubuntu 에서 `#!/bin/sh\r` 이 되어
+# 프로비저닝이 통째로 죽는다. scripts/backup.sh 는 서버에서 도는 스크립트다.
+*.sh text eol=lf
+
+# 리포 기본값: 텍스트 파일은 저장소에 LF 로 정규화한다
+* text=auto
