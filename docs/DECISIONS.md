@@ -129,8 +129,8 @@
 - **스펙 관계:** §23(WireGuard)·§24(퍼블릭 방화벽 마감, 선택으로 강등)·§25(UFW 규칙,
   tailscale0 으로)·§27(Caddy, 제거) 편차. §18 의 호스트 요구사항과 §30 배포 절차는
   그대로다. deploy.sh 는 수정하지 않았다.
-- **Git 설정:** scripts/bootstrap.sh 를 Windows 개발 머신에서도 LF 로 체크아웃하도록
-  `.gitattributes` 에 `*.sh text eol=lf` 를 추가했다. 개발 PC 가 core.autocrlf=true 이고
-  스크립트를 그대로 scp 로 서버에 전달하는데, CRLF 로 체크아웃되면 Ubuntu 에서 shebang 이
-  `#!/bin/sh\r` 이 되어 프로비저닝이 실패한다.
+- **Git 설정:** 셸 스크립트를 Windows 개발 머신에서도 LF 로 체크아웃하도록 `.gitattributes` 에
+  `*.sh text eol=lf` 를 추가했다. scripts/bootstrap.sh 가 infra/provision.sh 를 scp 로
+  서버에 전달하는데, 개발 PC 가 core.autocrlf=true 이고 CRLF 로 체크아웃되면 Ubuntu 에서
+  shebang 이 `#!/bin/sh\r` 이 되어 프로비저닝이 실패한다.
 - **설계 문서:** `docs/superpowers/specs/2026-07-26-tailscale-provisioning-design.md`
