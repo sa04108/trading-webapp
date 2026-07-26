@@ -443,6 +443,86 @@ git commit -m "feat(infra): provision.sh — §21·22·23·25·26·28·29 멱등
 
 ---
 
+### Task 3B: .gitattributes — 셸 스크립트 LF 강제
+
+**구현 중 발견된 결함.** 계획 작성 시점에는 몰랐던 것으로, Task 4 가 여기에 의존한다.
+
+이 리포에는 `.gitattributes` 가 없고 개발 PC 의 `core.autocrlf=true` 다. 그 결과 blob 은
+전부 LF 인데 **워킹트리 사본에 CR 이 들어간다** — 측정값: `scripts/deploy.sh` 102 bytes,
+`scripts/backup.sh` 107, `scripts/restore.sh` 29. `infra/provision.sh` 가 지금 깨끗한 것은
+방금 쓴 파일이라 체크아웃을 거치지 않았기 때문이며, 다음 `git checkout` 이면 CRLF 가 된다.
+
+Task 4 의 bootstrap.sh 는 **워킹트리 사본을 scp** 한다. CRLF 인 채로 올라가면 Ubuntu 에서
+`#!/bin/sh\r` 이 되어 프로비저닝 전체가 죽는다 — 기능의 핵심 약속이 무너지는 자리다.
+`scripts/backup.sh` 는 서버에서 도는 스크립트라 같은 위험을 공유한다.
+
+**Files:**
+- Create: `.gitattributes`
+- Renormalize: `scripts/deploy.sh`, `scripts/backup.sh`, `scripts/restore.sh` (워킹트리만 — blob 은 이미 LF)
+
+**Interfaces:**
+- Produces: 모든 `*.sh` 가 체크아웃 후에도 LF 를 유지한다. Task 4 의 scp 가 이것에 의존한다.
+
+- [ ] **Step 1: 현재 상태를 증거로 남긴다**
+
+```bash
+for f in infra/provision.sh scripts/deploy.sh scripts/backup.sh scripts/restore.sh; do
+  printf '%-28s worktree CR: %s  blob CR: %s\n' "$f" \
+    "$(tr -dc '\r' < "$f" | wc -c)" "$(git show "HEAD:$f" | tr -dc '\r' | wc -c)"
+done
+```
+
+Expected: deploy/backup/restore 의 worktree CR 이 0 이 아니고, blob CR 은 전부 0
+
+- [ ] **Step 2: .gitattributes 작성**
+
+```gitattributes
+# 셸 스크립트는 항상 LF 로 체크아웃한다 (D-016).
+# 개발 PC 가 Windows(core.autocrlf=true)이고 scripts/bootstrap.sh 는 워킹트리 사본을
+# 그대로 서버로 scp 한다 — CRLF 로 체크아웃되면 Ubuntu 에서 `#!/bin/sh\r` 이 되어
+# 프로비저닝이 통째로 죽는다. scripts/backup.sh 는 서버에서 도는 스크립트다.
+*.sh text eol=lf
+
+# 리포 기본값: 텍스트 파일은 저장소에 LF 로 정규화한다
+* text=auto
+```
+
+- [ ] **Step 3: 워킹트리 재정규화**
+
+```bash
+git add --renormalize .
+git status --short
+```
+
+blob 이 이미 LF 이므로 스테이지에는 `.gitattributes` 만 올라오는 것이 정상이다.
+워킹트리 CR 을 실제로 걷어내려면 재체크아웃이 필요하다:
+
+```bash
+rm -f scripts/deploy.sh scripts/backup.sh scripts/restore.sh
+git checkout -- scripts/deploy.sh scripts/backup.sh scripts/restore.sh
+```
+
+- [ ] **Step 4: 검증 — CR 이 0 이어야 한다**
+
+```bash
+for f in infra/provision.sh scripts/deploy.sh scripts/backup.sh scripts/restore.sh; do
+  printf '%-28s worktree CR: %s\n' "$f" "$(tr -dc '\r' < "$f" | wc -c)"
+done
+bash -n scripts/deploy.sh && bash -n scripts/backup.sh && bash -n scripts/restore.sh && \
+  dash -n infra/provision.sh && echo "구문 OK"
+```
+
+Expected: 네 파일 모두 `worktree CR: 0`, 그리고 `구문 OK`
+
+- [ ] **Step 5: 커밋**
+
+```bash
+git add .gitattributes
+git commit -m "fix(repo): .gitattributes 로 *.sh LF 강제 — CRLF 가 서버 스크립트를 깨뜨린다 (D-016)"
+```
+
+---
+
 ### Task 4: scripts/bootstrap.sh — 개발 PC 래퍼
 
 업로드 → 기본 프로비저닝 → **tailnet SSH 실증** → 하드닝. 락아웃 가드가 이 파일의 존재 이유다.
