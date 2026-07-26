@@ -164,8 +164,8 @@ bootstrap.sh 는 이 값을 **stdin** 으로 원격 provision.sh 에 전달한�
 | 삭제 | `infra/ufw/setup-ufw.sh` | provision.sh `--harden` 에 흡수 |
 | 추가 | `infra/provision.sh` | 서버 프로비저닝 본체 (POSIX sh) |
 | 추가 | `scripts/bootstrap.sh` | 개발 PC 래퍼 (bash, deploy.sh 와 동일 관례) |
-| 추가 | `src/server/bootstrap/security-headers.ts` | Caddy 가 주던 응답 헤더 |
-| 수정 | `src/server/bootstrap/server.ts` | 위 플러그인과 `@fastify/compress` 등록 |
+| 수정 | `src/server/shared/security.ts` | 기존 `SECURITY_HEADERS` 에 HSTS 추가 |
+| 수정 | `src/server/bootstrap/server.ts` | `@fastify/compress` 등록 |
 | 수정 | `package.json` | `@fastify/compress` 추가 |
 | 수정 | `README.md` | 배포 섹션 교체 |
 | 수정 | `docs/DECISIONS.md` | D-016 추가 |
@@ -175,27 +175,27 @@ bootstrap.sh 는 이 값을 **stdin** 으로 원격 provision.sh 에 전달한�
 
 ## 8. Caddy 제거의 애플리케이션 영향
 
-현재 앱에는 보안 헤더가 **하나도 없다.** `server.ts` 에는 `trustProxy` 설정만 있고 나머지는
-전부 Caddy 가 주던 것이다. Caddy 를 빼면 반드시 앱으로 옮겨야 한다.
+앱은 이미 `src/server/shared/security.ts` 의 `SECURITY_HEADERS`(onSend 훅)로
+CSP·`X-Content-Type-Options`·`X-Frame-Options`·`Referrer-Policy` 를 설정하고 있다
+(스펙 §16). Caddyfile 과 겹치는 세 헤더는 중복이었고, Caddy 를 빼도 사라지지 않는다.
 
-Caddyfile 이 하던 다섯 가지의 귀속:
+Caddyfile 이 하던 것 중 앱에 없는 것은 **HSTS 하나**다.
 
 | Caddy 기능 | 이전 후 |
 |---|---|
 | TLS 종단 (자체서명 CA) | `tailscale serve` — 신뢰되는 인증서, 갱신 포함 |
 | `:443` → `127.0.0.1:3000` | `tailscale serve` |
-| 보안 응답 헤더 4 종 | Fastify 신규 플러그인 |
+| `Strict-Transport-Security` | `SECURITY_HEADERS` 에 1 줄 추가 |
+| 나머지 보안 헤더 3 종 | 이미 앱에 있음 — 변경 없음 |
 | `encode zstd gzip` | `@fastify/compress` |
 | `-Server` | 불필요 — Fastify 는 `Server` 헤더를 보내지 않는다. 해당 지시어는 Caddy 자신의 헤더를 지우던 것이다 |
 
-`src/server/bootstrap/security-headers.ts` 는 `onSend` 훅 플러그인으로 다음을 설정한다.
-
 ```
 Strict-Transport-Security: max-age=31536000
-X-Content-Type-Options: nosniff
-X-Frame-Options: DENY
-Referrer-Policy: no-referrer
 ```
+
+SSE 응답은 `reply.hijack()` 으로 훅을 우회하므로 `@fastify/compress` 의 영향을 받지
+않는다 (`security.ts` 가 같은 이유로 `SECURITY_HEADERS` 를 상수로 노출한다).
 
 `trustProxy` 는 변경하지 않는다. `tailscale serve` 도 `127.0.0.1` 에서 프록시하므로
 `TRUST_PROXY_LOOPBACK=true` 가 여전히 올바르다.
