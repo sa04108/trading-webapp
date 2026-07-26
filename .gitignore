@@ -51,7 +51,8 @@ out/
 ._*
 
 # Custom folder icons
-Icon
+Icon
+
 
 # Volume root files
 .DocumentRevisions-V100
@@ -106,6 +107,6 @@ $RECYCLE.BIN/
 *.vsix
 ### Project
 data/
+.e2e-data/
 test-results/
 playwright-report/
-
