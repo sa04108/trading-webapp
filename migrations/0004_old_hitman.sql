@@ -1,1 +1,0 @@
-ALTER TABLE `backtest_jobs` DROP COLUMN `current_symbol`;

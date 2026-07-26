@@ -5,57 +5,8 @@
     {
       "idx": 0,
       "version": "6",
-      "when": 1784961637971,
-      "tag": "0000_damp_agent_zero",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "6",
-      "when": 1784962275879,
-      "tag": "0001_goofy_sage",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "6",
-      "when": 1784963382686,
-      "tag": "0002_whole_marvel_zombies",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "6",
-      "when": 1784972692228,
-      "tag": "0003_awesome_salo",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "6",
-      "when": 1784980491195,
-      "tag": "0004_old_hitman",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "6",
-      "when": 1784980543683,
-      "tag": "0005_talented_blizzard",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "6",
-      "when": 1784980925842,
-      "tag": "0006_outgoing_living_lightning",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "6",
-      "when": 1785027320621,
-      "tag": "0007_shocking_thor",
+      "when": 1785028388085,
+      "tag": "0000_ambiguous_bedlam",
       "breakpoints": true
     }
   ]

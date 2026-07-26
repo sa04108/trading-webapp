@@ -1,3 +1,12 @@
+CREATE TABLE `audit_logs` (
+	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+	`actor` text NOT NULL,
+	`event` text NOT NULL,
+	`detail_json` text,
+	`created_at_ms` integer NOT NULL
+);
+--> statement-breakpoint
+CREATE INDEX `idx_audit_logs_time` ON `audit_logs` (`created_at_ms`);--> statement-breakpoint
 CREATE TABLE `backtest_drawdown_points` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`job_id` text NOT NULL,
@@ -22,9 +31,11 @@ CREATE TABLE `backtest_jobs` (
 	`request_json` text NOT NULL,
 	`strategy_id` text NOT NULL,
 	`dataset_id` text NOT NULL,
+	`dataset_version` integer,
+	`dataset_hash` text,
 	`progress_bars` integer,
 	`total_bars` integer,
-	`current_symbol` text,
+	`progress_label` text,
 	`error` text,
 	`worker_id` text,
 	`pid` integer,
@@ -108,4 +119,83 @@ CREATE TABLE `backtest_trades` (
 	FOREIGN KEY (`job_id`) REFERENCES `backtest_jobs`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE INDEX `idx_backtest_trades_job` ON `backtest_trades` (`job_id`,`exit_ts_ms`);
+CREATE INDEX `idx_backtest_trades_job` ON `backtest_trades` (`job_id`,`exit_ts_ms`);--> statement-breakpoint
+CREATE TABLE `data_coverage` (
+	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+	`dataset_id` text NOT NULL,
+	`symbol` text NOT NULL,
+	`first_ts_ms` integer,
+	`last_ts_ms` integer,
+	`bar_count` integer DEFAULT 0 NOT NULL,
+	`expected_bar_count` integer,
+	`missing_ranges_json` text,
+	`computed_at_ms` integer NOT NULL,
+	FOREIGN KEY (`dataset_id`) REFERENCES `datasets`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE INDEX `idx_data_coverage_dataset_symbol` ON `data_coverage` (`dataset_id`,`symbol`);--> statement-breakpoint
+CREATE TABLE `data_import_jobs` (
+	`id` text PRIMARY KEY NOT NULL,
+	`dataset_id` text NOT NULL,
+	`status` text NOT NULL,
+	`source_type` text NOT NULL,
+	`file_name` text,
+	`symbol` text,
+	`rows_imported` integer,
+	`error` text,
+	`created_at_ms` integer NOT NULL,
+	`completed_at_ms` integer,
+	FOREIGN KEY (`dataset_id`) REFERENCES `datasets`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE INDEX `idx_data_import_jobs_dataset` ON `data_import_jobs` (`dataset_id`);--> statement-breakpoint
+CREATE TABLE `dataset_versions` (
+	`id` text PRIMARY KEY NOT NULL,
+	`dataset_id` text NOT NULL,
+	`version` integer NOT NULL,
+	`content_hash` text NOT NULL,
+	`note` text,
+	`created_at_ms` integer NOT NULL,
+	FOREIGN KEY (`dataset_id`) REFERENCES `datasets`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE INDEX `idx_dataset_versions_dataset` ON `dataset_versions` (`dataset_id`);--> statement-breakpoint
+CREATE TABLE `datasets` (
+	`id` text PRIMARY KEY NOT NULL,
+	`name` text NOT NULL,
+	`market` text NOT NULL,
+	`timeframe` text NOT NULL,
+	`symbols_json` text NOT NULL,
+	`description` text,
+	`created_at_ms` integer NOT NULL,
+	`updated_at_ms` integer NOT NULL
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `datasets_name_unique` ON `datasets` (`name`);--> statement-breakpoint
+CREATE TABLE `login_attempts` (
+	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+	`username` text NOT NULL,
+	`ip` text NOT NULL,
+	`success` integer NOT NULL,
+	`attempted_at_ms` integer NOT NULL
+);
+--> statement-breakpoint
+CREATE INDEX `idx_login_attempts_username_time` ON `login_attempts` (`username`,`attempted_at_ms`);--> statement-breakpoint
+CREATE TABLE `sessions` (
+	`id` text PRIMARY KEY NOT NULL,
+	`user_id` text NOT NULL,
+	`created_at_ms` integer NOT NULL,
+	`last_seen_at_ms` integer NOT NULL,
+	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE INDEX `idx_sessions_user` ON `sessions` (`user_id`);--> statement-breakpoint
+CREATE TABLE `users` (
+	`id` text PRIMARY KEY NOT NULL,
+	`username` text NOT NULL,
+	`password_hash` text NOT NULL,
+	`created_at_ms` integer NOT NULL,
+	`updated_at_ms` integer NOT NULL
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `users_username_unique` ON `users` (`username`);
