@@ -1,10 +1,22 @@
 #!/usr/bin/env bash
 # 스펙 §30 — 릴리스 배포. 개발 PC 에서 빌드·검증 후 tailnet FQDN 으로 배포한다.
 # 사용법: ./scripts/deploy.sh <tailnet-fqdn>   (예: ./scripts/deploy.sh quant-platform.example.ts.net)
+#
+#   SSH_KEY  개인키 경로 (선택). 지정하면 -i 로 넘긴다. 없으면 ~/.ssh/config 나
+#            기본 이름 키(id_ed25519 등)에 의존한다 — bootstrap.sh 와 같은 규칙이다.
+#
 # 비밀값을 command line argument 로 넘기지 않는다.
 set -euo pipefail
 
 HOST="${1:?usage: deploy.sh <tailnet-fqdn>}"
+
+# IdentitiesOnly 를 함께 켜는 이유: 하드닝이 MaxAuthTries 3 을 걸기 때문에 agent 의
+# 다른 키들이 먼저 제시되면 맞는 키가 4번째가 되어 서버가 먼저 연결을 끊을 수 있다.
+SSH_OPTS=()
+if [ -n "${SSH_KEY:-}" ]; then
+  [ -f "${SSH_KEY}" ] || { echo "SSH_KEY 파일이 없습니다: ${SSH_KEY}" >&2; exit 1; }
+  SSH_OPTS=(-i "${SSH_KEY}" -o IdentitiesOnly=yes)
+fi
 RELEASE="$(date -u +%Y%m%d-%H%M%S)-$(git rev-parse --short HEAD)"
 GIT_SHA="$(git rev-parse HEAD)"
 ARCHIVE="quant-platform-${RELEASE}.tar.gz"
@@ -25,8 +37,8 @@ echo "==> 아티팩트 생성: ${ARCHIVE}"
 tar -czf "${ARCHIVE}" dist migrations package.json pnpm-lock.yaml
 
 echo "==> 업로드 및 릴리스 전환"
-scp "${ARCHIVE}" "ubuntu@${HOST}:/tmp/"
-ssh "ubuntu@${HOST}" bash -s <<EOF
+scp "${SSH_OPTS[@]}" "${ARCHIVE}" "ubuntu@${HOST}:/tmp/"
+ssh "${SSH_OPTS[@]}" "ubuntu@${HOST}" bash -s <<EOF
 set -euo pipefail
 sudo mkdir -p "/opt/quant-platform/releases/${RELEASE}"
 sudo tar -xzf "/tmp/${ARCHIVE}" -C "/opt/quant-platform/releases/${RELEASE}"

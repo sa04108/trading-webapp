@@ -58,9 +58,22 @@ WireGuard·Caddy 에서 Tailscale 로 옮긴 이유와 트레이드오프는
 1. 인스턴스 생성 — Lightsail 기준: Seoul → Linux/Unix → **OS Only** →
    Ubuntu 24.04 LTS → SSH 공개키 업로드 → Micro $7 → Static IP 연결
    (Static IP 는 증권사 허용 출발 IP 용도다. launch script 는 쓰지 않는다.)
-2. **개발 PC 의 `~/.ssh/config` 에 키를 등록한다.** `bootstrap.sh` 와 `deploy.sh` 는
-   `-i` 를 넘기지 않고 bare `ssh`/`scp` 를 쓴다 — Lightsail 이 내려준 `<name>.pem` 처럼
-   기본 이름(`id_ed25519` 등)이 아닌 키는 ssh 가 시도조차 하지 않는다.
+2. Tailscale 콘솔에서 auth key 발급 — **pre-authorized ✅ / `tag:server` ✅ /
+   ephemeral ❌** (태그가 노드 키 만료를 막는다)
+3. 부트스트랩. 서버 주소와 auth key 를 순서대로 물어본다 (키는 화면에 표시되지 않는다):
+
+   ```bash
+   ./scripts/bootstrap.sh
+   ```
+
+   **SSH 키 지정** — 서버 인증은 공개키뿐이다 (Lightsail Ubuntu 는 처음부터
+   `PasswordAuthentication no` 다). 키를 알려주는 방법은 두 가지고, 둘 다 된다:
+
+   ```bash
+   SSH_KEY=~/.ssh/your-key.pem ./scripts/bootstrap.sh    # 이번 실행만
+   ```
+
+   매번 적기 싫으면 `~/.ssh/config` 에 등록해 두면 `SSH_KEY` 없이 돌아간다:
 
    ```
    Host <public-ip> quant-platform.*.ts.net
@@ -70,14 +83,12 @@ WireGuard·Caddy 에서 Tailscale 로 옮긴 이유와 트레이드오프는
    ```
 
    퍼블릭 IP 와 tailnet FQDN 을 함께 적는다 — 부트스트랩은 IP 로 시작하고 하드닝 후에는
-   FQDN 으로만 붙는다. 확인: `ssh ubuntu@<public-ip> true` 가 조용히 성공해야 한다.
-3. Tailscale 콘솔에서 auth key 발급 — **pre-authorized ✅ / `tag:server` ✅ /
-   ephemeral ❌** (태그가 노드 키 만료를 막는다)
-4. 부트스트랩 (auth key 는 프롬프트가 화면에 표시하지 않고 물어본다):
+   FQDN 으로만 붙는다. 둘 다 없으면 스크립트가 `~/.ssh` 에서 키 후보를 찾아 그대로
+   복사해 쓸 수 있는 명령을 출력하고 멈춘다.
 
-   ```bash
-   ./scripts/bootstrap.sh <public-ip>
-   ```
+   비대화형(스크립트·자동화)으로 돌리려면 `TS_HOST` 와 `TS_AUTHKEY` 를 미리 넣는다.
+   단 env 할당 prefix 는 셸 히스토리에 평문으로 남으니 앞에 공백을 두거나
+   (`HISTCONTROL=ignorespace`) 실행 뒤 지울 것.
 
    `infra/provision.sh` 를 서버로 올려 두 단계로 실행한다. 멱등하므로 몇 번을 돌려도
    결과가 같다.
@@ -123,13 +134,15 @@ WireGuard·Caddy 에서 Tailscale 로 옮긴 이유와 트레이드오프는
    재실행이 `apt full-upgrade` 도중 tailnet 세션이 끊겨 멈춘 것처럼 보일 수 있는데
    (tailscale 패키지 갱신이 tailscaled 를 재시작시킨다), 락아웃이 아니니 한 번 더
    실행하면 된다.
-5. 첫 배포와 관리자 생성 (정확한 명령은 bootstrap 출력에 나온다):
+4. 첫 배포와 관리자 생성 (정확한 명령은 bootstrap 출력에 나온다):
 
    ```bash
    ./scripts/deploy.sh <fqdn>    # 검증 게이트 → 릴리스 전환 → health check → 실패 시 자동 롤백
    ```
 
-6. (선택) 클라우드 방화벽 정리 — Lightsail Networking 에서 TCP 22·80·443·3000 과
+   `deploy.sh` 도 `SSH_KEY` 를 같은 방식으로 받는다 (`SSH_KEY=... ./scripts/deploy.sh <fqdn>`).
+
+5. (선택) 클라우드 방화벽 정리 — Lightsail Networking 에서 TCP 22·80·443·3000 과
    UDP 51820 을 제거하고, **IPv4 와 IPv6 를 각각** 확인한다. Lightsail OS-Only
    Ubuntu 기본값이 22 와 80 을 퍼블릭에 열어 두기 때문이다. UFW 가 이미 막고 있고
    그 포트에서 듣는 것도 없으므로 실질 효과는 없다 — 심층방어이자 포트 스캔 표면을
