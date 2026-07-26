@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # 스펙 §30 — 릴리스 배포. 개발 PC 에서 빌드·검증 후 tailnet FQDN 으로 배포한다.
 #
-# 사용법: ./scripts/deploy.sh [user@]<tailnet-fqdn>
-#         예: ./scripts/deploy.sh admin@quant-platform.example.ts.net
-#             ./scripts/deploy.sh quant-platform.example.ts.net   (사용자는 ssh 규칙에 맡김)
+# 사용법: ./scripts/deploy.sh
+#         실행 후 서버 주소를 물어본다. 비대화형으로 돌리려면 환경변수를 미리 설정한다.
 #
+#   QP_HOST  서버 주소, `[user@]host` 형식. 미설정이면 첫 단계에서 물어본다.
+#            (bootstrap.sh 와 같은 변수·같은 형식이다)
 #   SSH_KEY  개인키 경로 (선택). 지정하면 -i 로 넘긴다. 없으면 ~/.ssh/config 나
 #            기본 이름 키(id_ed25519 등)에 의존한다 — bootstrap.sh 와 같은 규칙이다.
 #
@@ -13,7 +14,12 @@
 # 비밀값을 command line argument 로 넘기지 않는다.
 set -euo pipefail
 
-TARGET="${1:?usage: deploy.sh [user@]<tailnet-fqdn>}"
+# 주소를 먼저 받는다 — 아래 검증 게이트가 몇 분 걸리므로 그 뒤에 묻지 않는다.
+TARGET="${QP_HOST:-}"
+if [ -z "${TARGET}" ]; then
+  read -rp "서버 주소 [user@]host (tailnet FQDN): " TARGET
+fi
+[ -n "${TARGET}" ] || { echo "서버 주소가 필요합니다" >&2; exit 1; }
 
 # IdentitiesOnly 를 함께 켜는 이유: 하드닝이 MaxAuthTries 3 을 걸기 때문에 agent 의
 # 다른 키들이 먼저 제시되면 맞는 키가 4번째가 되어 서버가 먼저 연결을 끊을 수 있다.
@@ -22,6 +28,19 @@ if [ -n "${SSH_KEY:-}" ]; then
   [ -f "${SSH_KEY}" ] || { echo "SSH_KEY 파일이 없습니다: ${SSH_KEY}" >&2; exit 1; }
   SSH_OPTS=(-i "${SSH_KEY}" -o IdentitiesOnly=yes)
 fi
+
+# 업로드 전에 접속을 확인한다 — 검증 게이트(수 분)를 다 돌린 뒤 SSH 로 실패하면
+# 그 시간이 통째로 버려진다. bootstrap.sh 와 같은 이유의 preflight 다.
+echo "==> SSH 접속 확인: ${TARGET}"
+ssh "${SSH_OPTS[@]}" -o ConnectTimeout=15 -o BatchMode=yes "${TARGET}" true 2>/dev/null || {
+  {
+    echo "SSH 접속 실패: ${TARGET}"
+    echo "  키를 지정하려면: SSH_KEY=~/.ssh/<your-key> ./scripts/deploy.sh"
+    echo "  원인 가르기:     ssh -v ${SSH_KEY:+-i ${SSH_KEY} }${TARGET} true"
+  } >&2
+  exit 1
+}
+
 RELEASE="$(date -u +%Y%m%d-%H%M%S)-$(git rev-parse --short HEAD)"
 GIT_SHA="$(git rev-parse HEAD)"
 ARCHIVE="quant-platform-${RELEASE}.tar.gz"

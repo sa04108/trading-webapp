@@ -102,7 +102,7 @@ WireGuard·Caddy 에서 Tailscale 로 옮긴 이유와 트레이드오프는
    프롬프트에 답할 TTY 가 없다. 클라우드 이미지는 보통 그렇게 오지만 자체 설치
    호스트라면 직접 설정해야 한다.
 
-   비대화형(스크립트·자동화)으로 돌리려면 `TS_HOST` 와 `TS_AUTHKEY` 를 미리 넣는다.
+   비대화형(스크립트·자동화)으로 돌리려면 `QP_HOST` 와 `TS_AUTHKEY` 를 미리 넣는다.
    단 env 할당 prefix 는 셸 히스토리에 평문으로 남으니 앞에 공백을 두거나
    (`HISTCONTROL=ignorespace`) 실행 뒤 지울 것.
 
@@ -149,10 +149,13 @@ WireGuard·Caddy 에서 Tailscale 로 옮긴 이유와 트레이드오프는
 4. 첫 배포와 관리자 생성 (정확한 명령은 bootstrap 출력에 나온다):
 
    ```bash
-   ./scripts/deploy.sh [user@]<fqdn>   # 검증 게이트 → 릴리스 전환 → health check → 실패 시 자동 롤백
+   ./scripts/deploy.sh   # 검증 게이트 → 릴리스 전환 → health check → 실패 시 자동 롤백
    ```
 
-   `deploy.sh` 도 주소를 `[user@]host` 로 받고 `SSH_KEY` 를 같은 방식으로 인식한다.
+   `bootstrap.sh` 와 완전히 같은 방식이다 — 인자를 강제하지 않고 서버 주소를 첫 단계에서
+   물어본다. `QP_HOST`·`SSH_KEY` 도 동일하게 인식하고, 주소도 `[user@]host` 형식이다.
+   검증 게이트가 몇 분 걸리므로 주소 입력과 SSH 접속 확인을 **그 전에** 끝낸다 — 다 빌드한
+   뒤에 접속 실패로 버려지지 않게.
 
 5. (선택) 클라우드 방화벽 정리 — 제공자의 네트워크 설정에서 TCP 22·80·443·3000 과
    UDP 51820 을 제거하고, **IPv4 와 IPv6 를 각각** 확인한다. 클라우드

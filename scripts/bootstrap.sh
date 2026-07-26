@@ -3,9 +3,9 @@
 #
 # 사용법: ./scripts/bootstrap.sh
 #         서버 주소와 auth key 를 순서대로 물어본다. 비대화형으로 돌리려면
-#         TS_HOST / TS_AUTHKEY / SSH_KEY 환경변수를 미리 설정한다.
+#         QP_HOST / TS_AUTHKEY / SSH_KEY 환경변수를 미리 설정한다.
 #
-#   TS_HOST    서버 주소, `[user@]host` 형식. 첫 실행은 퍼블릭 IP, 하드닝 이후에는
+#   QP_HOST    서버 주소, `[user@]host` 형식. 첫 실행은 퍼블릭 IP, 하드닝 이후에는
 #              tailnet FQDN 이어야 한다 — UFW 가 퍼블릭 22 를 닫아서 그 경로로는
 #              첫 명령(ssh)부터 죽는다. user 를 생략하면 ssh 의 규칙에 맡긴다
 #              (~/.ssh/config 의 User, 없으면 로컬 사용자명).
@@ -32,7 +32,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REMOTE_DIR=/tmp/quant-provision
 
-TARGET="${TS_HOST:-}"
+TARGET="${QP_HOST:-}"
 if [ -z "${TARGET}" ]; then
   read -rp "서버 주소 [user@]host (첫 실행은 퍼블릭 IP, 하드닝 후에는 tailnet FQDN): " TARGET
 fi
@@ -178,7 +178,7 @@ cat <<MSG
 부트스트랩 완료: https://${FQDN}
 
 다음 단계:
-  1) 첫 배포:      ${SSH_KEY:+SSH_KEY=${SSH_KEY} }./scripts/deploy.sh ${TAILNET_TARGET}
+  1) 첫 배포:      ${SSH_KEY:+SSH_KEY=${SSH_KEY} }QP_HOST=${TAILNET_TARGET} ./scripts/deploy.sh
   2) 관리자 생성 (1회, 서버에서):
      ssh ${SSH_KEY:+-i ${SSH_KEY} }${TAILNET_TARGET}
      sudo systemd-run --pty --uid=quant --gid=quant \\
@@ -189,5 +189,5 @@ cat <<MSG
 
 참고: 이 스크립트를 다시 실행할 일이 있으면 서버 주소를 퍼블릭 IP 가 아니라 FQDN 으로
       입력하라 — 하드닝이 퍼블릭 22 를 닫아서 그 경로는 첫 명령부터 실패한다.
-      비대화형으로 돌리려면: ${SSH_KEY:+SSH_KEY=${SSH_KEY} }TS_HOST=${TAILNET_TARGET} ./scripts/bootstrap.sh
+      비대화형으로 돌리려면: ${SSH_KEY:+SSH_KEY=${SSH_KEY} }QP_HOST=${TAILNET_TARGET} ./scripts/bootstrap.sh
 MSG
