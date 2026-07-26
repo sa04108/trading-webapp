@@ -20,12 +20,38 @@ if [ -z "${TS_AUTHKEY:-}" ]; then
   echo
 fi
 
+echo "==> SSH 접속 확인: ubuntu@${HOST}"
+# 이 스크립트는 bare ssh/scp 를 쓴다 — 키는 ~/.ssh/config 가 매핑해야 한다. 그게 없으면
+# Lightsail 이 준 <name>.pem 처럼 기본 이름이 아닌 키는 ssh 가 시도조차 하지 않는다.
+# 이 확인이 없으면 아래 ssh/scp 가 set -e 로 조용히 죽어, 실패 원인이 그 다음 단계
+# (auth key 입력 직후처럼) 엉뚱한 곳을 가리킨다 — 실제로 그렇게 오진한 적이 있다.
+ssh -o ConnectTimeout=15 -o BatchMode=yes "ubuntu@${HOST}" true 2>/dev/null || {
+  cat >&2 <<MSG
+SSH 접속 실패: ubuntu@${HOST}
+
+키가 ~/.ssh/config 에 매핑돼 있어야 한다 (이 스크립트도, deploy.sh 도 -i 를 넘기지 않는다):
+
+  Host ${HOST} quant-platform.*.ts.net
+    User ubuntu
+    IdentityFile ~/.ssh/<your-key>.pem
+    IdentitiesOnly yes
+
+확인: ssh -v ubuntu@${HOST} true
+  Permission denied (publickey) → 위 설정이 없거나 키가 틀렸다
+  Connection timed out          → 클라우드 방화벽에서 TCP 22 가 닫혀 있다
+  Unprotected private key file  → 키 파일 권한 (Windows: icacls /inheritance:r /grant:r)
+MSG
+  exit 1
+}
+
 echo "==> 프로비저닝 파일 업로드"
-ssh "ubuntu@${HOST}" "mkdir -p ${REMOTE_DIR}"
+ssh "ubuntu@${HOST}" "mkdir -p ${REMOTE_DIR}" \
+  || { echo "원격 디렉터리 생성 실패: ${REMOTE_DIR}" >&2; exit 1; }
 scp "${REPO_ROOT}/infra/provision.sh" \
     "${REPO_ROOT}/infra/systemd/quant-platform.service" \
     "${REPO_ROOT}/infra/app.env.example" \
-    "ubuntu@${HOST}:${REMOTE_DIR}/"
+    "ubuntu@${HOST}:${REMOTE_DIR}/" \
+  || { echo "파일 업로드 실패 — ${REPO_ROOT}/infra 아래 3개 파일과 원격 디스크 여유를 확인하세요" >&2; exit 1; }
 
 # TTY 없이 파이프로 붙는 다음 단계는 sudo 가 비밀번호를 물으면 auth key 줄을
 # 비밀번호 시도로 먹어버린다. Lightsail Ubuntu 이미지는 ubuntu 에 NOPASSWD sudo 를
