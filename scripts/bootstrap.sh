@@ -33,18 +33,32 @@ printf '%s\n' "${TS_AUTHKEY}" \
   | ssh "ubuntu@${HOST}" "sudo sh ${REMOTE_DIR}/provision.sh" \
   | tee "${OUT}"
 
-FQDN="$(grep '^FQDN=' "${OUT}" | tail -1 | cut -d= -f2)"
+# pipeline 이 매치 실패로 비어있는 값을 낼 때 grep 의 실패 종료 코드가 `set -e` 로
+# 대입문 자체를 즉사시켜, 바로 아래의 사람이 읽을 에러 메시지가 실행되지 못하고
+# 조용히 exit 1 만 남는 문제가 있었다 — `|| true` 로 대입의 성공 여부를 무의미하게
+# 만들고, 값의 유무 판단은 다음 줄의 `-n` 검사에 전적으로 맡긴다.
+# `-f2-` 사용: 값에 `=` 가 들어가도(예: base64 뒤에 `=` 패딩) 잘리지 않는다.
+FQDN="$(grep '^FQDN=' "${OUT}" | tail -1 | cut -d= -f2-)" || true
 [ -n "${FQDN}" ] || { echo "출력에서 FQDN= 마커를 찾지 못했습니다" >&2; exit 1; }
 
 echo "==> tailnet 경유 SSH 검증: ${FQDN}"
-if ssh -o ConnectTimeout=15 -o BatchMode=yes "ubuntu@${FQDN}" true; then
+# StrictHostKeyChecking=accept-new: ${FQDN} 는 이 PC 가 처음 접속하는 이름이라
+# (HOST 와 다른 known_hosts 항목) BatchMode=yes 하의 기본값(ask)이면 비대화형으로
+# 즉시 실패한다. 첫 접속을 자동 신뢰해도 되는 이유는 이 이름이 tailnet 안에서만
+# 해석되고 Tailscale 자체가 노드 신원을 인증하기 때문 — 다만 "바뀐" 키(재접속 시
+# 불일치, MITM 의심)는 accept-new 에서도 여전히 거부된다. StrictHostKeyChecking=no
+# 는 그 거부까지 없애버리므로 쓰지 않는다.
+if ssh -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+       "ubuntu@${FQDN}" true; then
   echo "==> 하드닝 (§25 UFW + §26 SSH) — 퍼블릭 22 가 닫힌다"
   ssh "ubuntu@${FQDN}" "sudo sh ${REMOTE_DIR}/provision.sh --harden"
 else
   cat >&2 <<MSG
 경고: tailnet 경유 SSH 실패 — 하드닝을 건너뜁니다. 퍼블릭 SSH 는 살아 있습니다.
-  1) 이 PC 가 tailnet 에 있는지 확인: tailscale status
-  2) 해결 후 하드닝만 재실행:
+  가능한 원인:
+    1) 이 PC 가 tailnet 에 없음 — 확인: tailscale status
+    2) 호스트 키 검증 실패 — known_hosts 충돌(키가 바뀐 경우만; 최초 접속은 자동 수락됨)
+  해결 후 하드닝만 재실행:
      ssh ubuntu@${FQDN} sudo sh ${REMOTE_DIR}/provision.sh --harden
 MSG
   exit 1
