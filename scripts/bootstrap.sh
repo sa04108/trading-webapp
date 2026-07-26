@@ -41,7 +41,7 @@ REMOTE_DIR=/tmp/quant-provision
 # 안내가 실행되지 못하고 설명 없는 exit 1 만 남는다. 값의 유무 판단은 다음 줄에 맡긴다.
 TARGET="${QP_HOST:-}"
 if [ -z "${TARGET}" ]; then
-  read -rp "서버 주소 [user@]host (첫 실행은 퍼블릭 IP, 하드닝 후에는 tailnet FQDN): " TARGET || true
+  read -rp "서버 주소 입력(user@host): " TARGET || true
 fi
 [ -n "${TARGET}" ] || {
   echo "서버 주소가 필요합니다 — 비대화형이면 QP_HOST 로 지정하세요" >&2
