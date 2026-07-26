@@ -32,11 +32,21 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REMOTE_DIR=/tmp/quant-provision
 
+# ── 입력은 로그 리다이렉트보다 먼저 받는다 ────────────────────────────────────
+# tee 를 거치면 프롬프트가 버퍼링에 걸려 화면에 안 나타날 수 있다. 입력을 다 받은
+# 뒤에 리다이렉트를 걸어 그 위험을 없앤다. 여기까지는 로그에 남지 않지만, 남길 것도
+# 없다 — 사용자가 방금 타이핑한 값이고 auth key 는 애초에 기록하면 안 된다.
+# read 뒤의 `|| true`: 비대화형 실행(stdin 이 /dev/null·닫힘)에서 read 는 EOF 로
+# 비영점 종료한다. 그러면 set -e 가 여기서 스크립트를 죽여, 바로 아래의 사람이 읽을
+# 안내가 실행되지 못하고 설명 없는 exit 1 만 남는다. 값의 유무 판단은 다음 줄에 맡긴다.
 TARGET="${QP_HOST:-}"
 if [ -z "${TARGET}" ]; then
-  read -rp "서버 주소 [user@]host (첫 실행은 퍼블릭 IP, 하드닝 후에는 tailnet FQDN): " TARGET
+  read -rp "서버 주소 [user@]host (첫 실행은 퍼블릭 IP, 하드닝 후에는 tailnet FQDN): " TARGET || true
 fi
-[ -n "${TARGET}" ] || { echo "서버 주소가 필요합니다" >&2; exit 1; }
+[ -n "${TARGET}" ] || {
+  echo "서버 주소가 필요합니다 — 비대화형이면 QP_HOST 로 지정하세요" >&2
+  exit 1
+}
 
 # 뒤에서 tailnet FQDN 으로 다시 붙을 때 같은 사용자를 이어 쓰기 위해 user 부분을 떼어둔다.
 # user 를 안 적었으면 빈 문자열 — 그대로 ssh 의 기본 규칙에 맡긴다.
@@ -46,9 +56,42 @@ case "${TARGET}" in
 esac
 
 if [ -z "${TS_AUTHKEY:-}" ]; then
-  read -rsp "Tailscale auth key (재실행이면 Enter): " TS_AUTHKEY
+  # EOF 도 "빈 키" 로 받는다 — 이미 조인된 서버 재실행은 키가 필요 없고(provision.sh 가
+  # 판단한다), 비대화형 실행이 여기서 조용히 죽으면 원인을 찾을 수 없다.
+  read -rsp "Tailscale auth key (재실행이면 Enter): " TS_AUTHKEY || TS_AUTHKEY=""
   echo
 fi
+
+# ── 여기서부터 모든 출력을 로그 파일에도 남긴다 ───────────────────────────────
+# 화면에 의존하지 않는 것이 요점이다. 스크롤백 한도, 터미널 제어 시퀀스(pnpm·vitest
+# 등이 진행 표시를 지우며 앞 줄까지 함께 지운다), 창 크기에 흔들리지 않는다.
+# 파일명은 *.log 로 .gitignore 에 이미 걸려 있다. QP_LOG 로 경로를 바꿀 수 있다.
+LOG="${QP_LOG:-${REPO_ROOT}/.logs/bootstrap-$(date -u +%Y%m%d-%H%M%S).log}"
+mkdir -p "$(dirname "${LOG}")"
+exec > >(tee "${LOG}") 2>&1
+TEE_PID=$!
+
+# 실패 지점이 여러 곳이라(SSH preflight·업로드·sudo·프로비저닝·하드닝) EXIT trap
+# 하나로 묶는다 — 임시 파일 정리 trap 을 스크립트 중간에 걸면 그 앞의 실패는 안 걸린다.
+on_exit() {
+  status=$?
+  if [ -n "${OUT:-}" ]; then rm -f "${OUT}"; fi
+  if [ "${status}" -ne 0 ]; then
+    echo
+    echo "실패 (exit ${status}). 화면이 지워졌어도 전체 기록은 여기 있다:"
+    echo "  ${LOG}"
+  else
+    echo
+    echo "전체 로그: ${LOG}"
+  fi
+  # tee 가 마지막 줄까지 쓰도록 fd 를 닫고 기다린다 — 안 하면 끝이 잘릴 수 있다
+  exec 1>&- 2>&-
+  wait "${TEE_PID}" 2>/dev/null || true
+  exit "${status}"
+}
+trap on_exit EXIT
+
+echo "로그: ${LOG}"
 
 # 키 지정은 선택이다 — SSH_KEY 가 있으면 -i 로 넘기고, 없으면 ssh 의 평소 규칙
 # (~/.ssh/config, 기본 이름 키)에 맡긴다. IdentitiesOnly 를 함께 켜는 이유는
@@ -125,8 +168,7 @@ ssh "${SSH_OPTS[@]}" "${TARGET}" "sudo -n true" \
   || { echo "sudo 에 비밀번호가 필요합니다 — 이 계정에 passwordless sudo 를 설정한 뒤 재실행하세요" >&2; exit 1; }
 
 echo "==> 기본 프로비저닝 (§21·22·23·28·29)"
-OUT="$(mktemp)"
-trap 'rm -f "${OUT}"' EXIT
+OUT="$(mktemp)"   # 정리는 위의 on_exit 가 맡는다
 # 키는 stdin 으로 — argv·원격 히스토리에 남기지 않는다
 printf '%s\n' "${TS_AUTHKEY}" \
   | ssh "${SSH_OPTS[@]}" "${TARGET}" "sudo sh ${REMOTE_DIR}/provision.sh" \

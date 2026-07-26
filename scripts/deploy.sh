@@ -14,12 +14,52 @@
 # 비밀값을 command line argument 로 넘기지 않는다.
 set -euo pipefail
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
 # 주소를 먼저 받는다 — 아래 검증 게이트가 몇 분 걸리므로 그 뒤에 묻지 않는다.
+# 아래 로그 리다이렉트보다 앞에 두는 이유는 bootstrap.sh 와 같다: tee 를 거치면
+# 프롬프트가 버퍼링에 걸려 화면에 안 나타날 수 있다.
+# read 뒤의 `|| true`: 비대화형 실행에서 read 는 EOF 로 비영점 종료하고, set -e 가
+# 바로 아래 안내에 도달하기 전에 스크립트를 죽인다. 판단은 다음 줄에 맡긴다.
 TARGET="${QP_HOST:-}"
 if [ -z "${TARGET}" ]; then
-  read -rp "서버 주소 [user@]host (tailnet FQDN): " TARGET
+  read -rp "서버 주소 [user@]host (tailnet FQDN): " TARGET || true
 fi
-[ -n "${TARGET}" ] || { echo "서버 주소가 필요합니다" >&2; exit 1; }
+[ -n "${TARGET}" ] || {
+  echo "서버 주소가 필요합니다 — 비대화형이면 QP_HOST 로 지정하세요" >&2
+  exit 1
+}
+
+# ── 여기서부터 모든 출력을 로그 파일에도 남긴다 ───────────────────────────────
+# 배포는 검증 게이트(lint·typecheck·test·build)에서 출력이 많고, 그 도구들이 진행
+# 표시를 지우며 앞 줄까지 함께 지운다. 화면에 의존하지 않으려면 파일에 남겨야 한다.
+# 파일명은 *.log 로 .gitignore 에 이미 걸려 있다. QP_LOG 로 경로를 바꿀 수 있다.
+LOG="${QP_LOG:-${REPO_ROOT}/.logs/deploy-$(date -u +%Y%m%d-%H%M%S).log}"
+mkdir -p "$(dirname "${LOG}")"
+exec > >(tee "${LOG}") 2>&1
+TEE_PID=$!
+
+# 아카이브 정리와 로그 안내를 EXIT trap 하나로 묶는다 — 검증 게이트·업로드·health
+# check 어디서 죽어도 걸린다.
+on_exit() {
+  status=$?
+  if [ -n "${ARCHIVE:-}" ]; then rm -f "${ARCHIVE}"; fi
+  if [ "${status}" -ne 0 ]; then
+    echo
+    echo "실패 (exit ${status}). 화면이 지워졌어도 전체 기록은 여기 있다:"
+    echo "  ${LOG}"
+  else
+    echo
+    echo "전체 로그: ${LOG}"
+  fi
+  # tee 가 마지막 줄까지 쓰도록 fd 를 닫고 기다린다 — 안 하면 끝이 잘릴 수 있다
+  exec 1>&- 2>&-
+  wait "${TEE_PID}" 2>/dev/null || true
+  exit "${status}"
+}
+trap on_exit EXIT
+
+echo "로그: ${LOG}"
 
 # IdentitiesOnly 를 함께 켜는 이유: 하드닝이 MaxAuthTries 3 을 걸기 때문에 agent 의
 # 다른 키들이 먼저 제시되면 맞는 키가 4번째가 되어 서버가 먼저 연결을 끊을 수 있다.
@@ -43,9 +83,10 @@ ssh "${SSH_OPTS[@]}" -o ConnectTimeout=15 -o BatchMode=yes "${TARGET}" true 2>/d
 
 RELEASE="$(date -u +%Y%m%d-%H%M%S)-$(git rev-parse --short HEAD)"
 GIT_SHA="$(git rev-parse HEAD)"
+# 배포가 어디서 실패하든 (검증 게이트, 업로드, health check 롤백) 아카이브는 남기지 않는다.
+# 정리는 맨 위의 on_exit 가 맡는다 — 여기서 trap 을 다시 걸면 on_exit 를 덮어써
+# 실패 시 멈춤이 사라진다.
 ARCHIVE="quant-platform-${RELEASE}.tar.gz"
-# 배포가 어디서 실패하든 (검증 게이트, 업로드, health check 롤백) 아카이브는 남기지 않는다
-trap 'rm -f "${ARCHIVE}"' EXIT
 
 echo "==> 검증 게이트"
 pnpm install --frozen-lockfile
