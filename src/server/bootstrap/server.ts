@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
+import fastifyCompress from '@fastify/compress';
 import fastifyCookie from '@fastify/cookie';
 import fastifyMultipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
@@ -46,6 +47,10 @@ export async function buildServer(container: Container): Promise<FastifyInstance
   await app.register(fastifyMultipart, {
     limits: { fileSize: 50 * 1024 * 1024, files: 1 },
   });
+
+  // Caddy 의 encode zstd gzip 대체 (D-016). SSE 는 reply.hijack() 으로
+  // onSend 훅을 우회하므로 압축의 영향을 받지 않는다.
+  await app.register(fastifyCompress);
 
   const authDeps = {
     authService: container.authService,
