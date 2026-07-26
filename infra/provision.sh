@@ -21,6 +21,17 @@ NODE_VERSION=v24.18.0
 
 # ─────────────────────────────────────────────── --harden (§25 UFW + §26 SSH)
 if [ "${MODE}" = "--harden" ]; then
+  # §25 전제조건: tailscale 이 실제로 Running 이어야 tailscale0 로 22 를 제한해도
+  # 락아웃이 아니다. bootstrap.sh 의 tailnet SSH 실증(충분조건)과는 별개로, 이
+  # 파일 자체도 필요조건을 강제한다 — 설계문서 "tailscale status 가 Running 일
+  # 때만 적용" 요구를 주석이 아니라 게이트로 구현 (bootstrap.sh 를 대체하지 않음).
+  BACKEND_STATE="$(tailscale status --json 2>/dev/null | jq -r '.BackendState' || echo "NoState")"
+  [ "${BACKEND_STATE}" = "Running" ] || {
+    echo "tailscale 이 Running 상태가 아닙니다 (현재: ${BACKEND_STATE}) — 하드닝을 거부합니다." >&2
+    echo "먼저 기본 모드로 tailnet 에 조인한 뒤 --harden 을 다시 실행하세요." >&2
+    exit 1
+  }
+
   echo "==> §25 UFW — tailscale0 만 허용"
   # 전제: bootstrap.sh 가 tailnet 경유 SSH 를 실증한 뒤에만 이 모드를 호출한다.
   # 여기서 퍼블릭 22 가 닫힌다 — Lightsail 브라우저 SSH 콘솔도 함께 죽는다.
@@ -85,7 +96,7 @@ chmod 750 /etc/quant-platform
 
 echo "==> §22 Node.js ${NODE_VERSION}"
 if [ -x /usr/local/bin/node ] && [ "$(/usr/local/bin/node --version)" = "${NODE_VERSION}" ]; then
-  echo "이미 설치됨 — 건너뜀"
+  echo "이미 설치됨 — 다운로드·압축 해제는 건너뜀"
 else
   cd /tmp
   NODE_FILE="node-${NODE_VERSION}-linux-x64.tar.xz"
@@ -99,11 +110,14 @@ else
   rm -f "${NODE_FILE}" SHASUMS256.txt node.sha256
   # 심볼릭 링크 전환 — patch 업그레이드는 /opt/node 만 다시 걸면 끝난다
   ln -sfn "/opt/node-${NODE_VERSION}" /opt/node
-  for bin in node npm npx corepack; do
-    ln -sfn "/opt/node/bin/${bin}" "/usr/local/bin/${bin}"
-  done
-  corepack enable
 fi
+# 버전 검사 밖에서 매번 실행한다 — ln -sfn·corepack enable 은 이미 멱등하므로,
+# 이전 실행이 corepack enable 전에 죽어 /usr/local/bin/node 만 만들어진 상태로
+# 재실행돼도 (버전 검사가 참이 되어 else 를 건너뛰어도) 나머지가 복구된다
+for bin in node npm npx corepack; do
+  ln -sfn "/opt/node/bin/${bin}" "/usr/local/bin/${bin}"
+done
+corepack enable
 node --version
 
 echo "==> §23 Tailscale"
@@ -125,12 +139,18 @@ else
   # 키를 argv 에 노출하지 않는다 — root 전용 임시 파일로 전달
   umask 077
   KEY_FILE="$(mktemp)"
+  # tailscale up 이 실패하면 set -e 로 즉시 종료된다 — trap 없이는 rm -f 가 실행되지
+  # 않고 평문 키 파일이 /tmp 에 남는다. 모든 종료 경로에서 지우도록 trap 을 건다
+  trap 'rm -f "${KEY_FILE}"' EXIT
   printf '%s' "${TS_AUTHKEY}" > "${KEY_FILE}"
   # tag:server 가 노드 키 만료를 막는다 — 태그 없이 조인하면 몇 달 뒤
   # 헤드리스 서버가 조용히 tailnet 에서 떨어진다 (설계 §6-3)
   tailscale up --authkey "file:${KEY_FILE}" \
     --hostname quant-platform --advertise-tags=tag:server
   rm -f "${KEY_FILE}"
+  # 성공 경로에서는 trap 을 해제한다 — 이후 실패가 이미 지워진 경로를 다시
+  # 건드리지 않게 하고, 뒤 단계에 다른 EXIT trap 이 필요해질 때 충돌을 막는다
+  trap - EXIT
 fi
 
 # 이름을 가정하지 않는다 — 동명 노드가 있으면 quant-platform-1 처럼 접미사가 붙는다
