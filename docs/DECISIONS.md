@@ -107,3 +107,43 @@
 - **왜 지금이 마지막 기회인가:** `sqlite-core/dialect.cjs` 의 적용 판정은 해시가 아니라 journal 의 `when` 타임스탬프다 (`Number(lastDbMigration[2]) < migration.folderMillis`). 스쿼시한 마이그레이션은 기존 DB 에서 재실행돼 `table already exists` 로 죽는다. 즉 스쿼시는 **모든 기존 DB 를 버릴 수 있을 때만** 가능하며, 운영 서버 구축 이후에는 선택지가 사라진다.
 - **영향:** 로컬 개발 DB(`data/app.sqlite`)를 폐기했으므로 관리자 계정을 `pnpm cli admin:create` 로 다시 만들어야 한다. 운영 데이터는 없었다.
 - **검증:** 스쿼시 전 스키마(0000~0007 누적 적용)와 스쿼시 후 새 DB 의 `sqlite_master` 를 비교해 32개 객체 중 31개가 완전히 동일함을 확인했다. 유일한 차이는 `backtest_jobs` 의 **컬럼 순서** — 나중에 `ALTER TABLE ADD COLUMN` 으로 붙던 `dataset_version`·`dataset_hash`·`progress_label` 이 이제 선언 순서대로 들어간다. 컬럼 이름·타입·NOT NULL 집합은 동일하고, 코드에 `SELECT *` 나 위치 기반 INSERT 가 없어(drizzle 은 항상 명시적 컬럼 목록을 생성한다) 영향이 없다. 앞으로 모든 DB 가 같은 마이그레이션에서 생성되므로 순서도 일관된다.
+
+## D-016: WireGuard·Caddy → Tailscale — 스펙 §23~§27 편차
+
+- **변경 내용:** 사설망을 순수 WireGuard 에서 Tailscale 로, TLS 종단을 Caddy 에서
+  `tailscale serve` 로 교체했다. `infra/provision.sh`(서버, 멱등) +
+  `scripts/bootstrap.sh`(개발 PC) 가 §21~§29 를 단일 명령으로 수행한다. Caddy 가 주던
+  것 중 앱에 없던 HSTS 는 `SECURITY_HEADERS` 에, 압축은 `@fastify/compress` 로 옮겼다.
+- **이유:** 순수 WireGuard 는 단일 명령 프로비저닝이 원리적으로 불가능하다 — Lightsail
+  공개키를 기존 WG 서버(리포 밖 머신)에 peer 로 등록해야 터널이 서고, 그 전에는
+  핸드셰이크 확인이 불가능해 UFW 를 안전하게 켤 수 없다. 요구사항 "클라우드가 무엇이든
+  동일하게, 쉽고 빠르게" 가 이 제약과 양립하지 않는다.
+- **보안 모델:** 데이터 평면은 동일한 WireGuard 다 — 노드 간 E2E 암호화, 앱은 여전히
+  인터넷에 비노출, D-014(비밀번호 단일 단계)의 전제 유지. 바뀐 것은 control plane 뿐이다.
+- **새 의존:** Tailscale control plane. 다운 시 기존 연결은 유지되나 신규 조인·재인증이
+  실패한다. 노드 키 만료는 `tag:server` 로 면제한다 — 태그 없이 조인하면 헤드리스
+  서버가 몇 달 뒤 조용히 떨어진다.
+- **락아웃 가드:** provision.sh 를 기본/`--harden` 2 단계로 나누고, bootstrap.sh 가
+  tailnet 경유 SSH 를 실제로 시도해 성공했을 때만 하드닝을 실행한다. 스펙 §25 의
+  "검증 전 차단 금지" 가 제어 흐름으로 강제된다. `--harden` 게이트는 `BackendState`
+  뿐 아니라 `tag:server` 소유도 확인한다 — Running 이어도 태그 없이 조인했으면
+  거부한다(최종 리뷰 F1). 태그 없는 조인은 지금은 멀쩡히 동작하다가 노드 키 만료
+  시점(약 180일 뒤)에 조용히 락아웃으로 이어지는데, 그 확인을 되돌릴 수 없는 UFW
+  적용 직전으로 옮겨 무경고 실패를 막았다.
+- **고정 아웃바운드 IP:** §18/§23 요구사항은 그대로 유지된다 — 증권사 API 트래픽은
+  Lightsail Static IP 로 나가야 한다. provision.sh 기본 모드가 `checkip.amazonaws.com`
+  확인을 정보성으로 출력한다. Tailscale 은 WireGuard 에 없던 새 우회 경로가 있다 —
+  이 노드에 `tailscale set --exit-node=...` 를 걸지 않는다(걸면 아웃바운드가 조용히
+  우회된다).
+- **CT 로그 노출:** `tailscale serve --https=443` 도 `<host>.<tailnet>.ts.net` 앞으로
+  Let's Encrypt 인증서를 받아 CT 로그에 공개된다 — 설계 §2 가 기각한 다른 대안과 같은
+  성질이지만, 이름이 tailnet 안에서만 해석되고 퍼블릭에 아무것도 듣지 않으므로 무해하다.
+- **스펙 관계:** §23(WireGuard)·§24(퍼블릭 방화벽 마감, 선택으로 강등)·§25(UFW 규칙,
+  tailscale0 으로)·§27(Caddy, 제거) 편차. §18 의 호스트 요구사항과 §30 배포 절차는
+  그대로다. deploy.sh 는 동작을 바꾸지 않았다 — 최종 리뷰에서 usage 문자열·주석의
+  `<wireguard-host>` 예시만 tailnet FQDN 으로 교체했다(사용자 승인 예외).
+- **Git 설정:** 셸 스크립트를 Windows 개발 머신에서도 LF 로 체크아웃하도록 `.gitattributes` 에
+  `*.sh text eol=lf` 를 추가했다. scripts/bootstrap.sh 가 infra/provision.sh 를 scp 로
+  서버에 전달하는데, 개발 PC 가 core.autocrlf=true 이고 CRLF 로 체크아웃되면 Ubuntu 에서
+  shebang 이 `#!/bin/sh\r` 이 되어 프로비저닝이 실패한다.
+- **설계 문서:** `docs/superpowers/specs/2026-07-26-tailscale-provisioning-design.md`

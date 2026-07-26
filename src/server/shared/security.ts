@@ -9,6 +9,9 @@ const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 export const SECURITY_HEADERS: Readonly<Record<string, string>> = {
   'Content-Security-Policy':
     "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'",
+  // TLS 종단은 tailscale serve 지만 HTTP 응답 정책은 앱 책임이다 (D-016) —
+  // 엣지를 무엇으로 바꾸든 헤더가 따라다닌다.
+  'Strict-Transport-Security': 'max-age=31536000',
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'DENY',
   'Referrer-Policy': 'no-referrer',

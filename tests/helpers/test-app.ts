@@ -14,7 +14,10 @@ export interface TestApp {
   close(): Promise<void>;
 }
 
-export async function createTestApp(env: Record<string, string> = {}): Promise<TestApp> {
+export async function createTestApp(
+  env: Record<string, string> = {},
+  configure?: (app: FastifyInstance) => void,
+): Promise<TestApp> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qp-test-'));
   const config = loadConfig({
     NODE_ENV: 'test',
@@ -29,6 +32,7 @@ export async function createTestApp(env: Record<string, string> = {}): Promise<T
   });
   const container = createContainer(config);
   const app = await buildServer(container);
+  configure?.(app); // 테스트 전용 라우트 등록 등 — ready() 전에만 가능
   await app.ready();
 
   return {
