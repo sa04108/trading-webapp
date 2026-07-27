@@ -147,7 +147,7 @@ SSH CLI는 제어 평면이다. 다음은 CLI로만 한다.
 
 ## 포함
 
-- 단일 관리자 로그인 (비밀번호 단일 단계 — D-014)
+- 단일 관리자 로그인 (비밀번호 + TOTP 2단계 — D-017)
 - 모바일 대응 내부 웹 UI
 - 등록 전략 목록
 - 전략 파라미터 스키마
@@ -939,6 +939,7 @@ appkey
 appsecret
 accountNumber
 password
+token
 totp
 recoveryCode
 awsSecretAccessKey
