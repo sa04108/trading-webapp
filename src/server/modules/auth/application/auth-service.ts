@@ -22,7 +22,8 @@ export type LoginResult =
 
 export type TotpVerifyResult =
   | { readonly status: 'SUCCESS'; readonly sessionId: string }
-  | { readonly status: 'INVALID' };
+  | { readonly status: 'INVALID' }
+  | { readonly status: 'LOCKED' };
 
 export interface AuthenticatedUser {
   readonly id: string;
@@ -113,6 +114,10 @@ export class AuthService {
     sessions.create(session);
 
     if (requiresTotp) {
+      // 감사 로그를 남긴다 — 2단계에서 막히는 시도는 "비밀번호가 샜다" 의 가장 강한
+      // 신호인데, 성공도 실패도 아니라는 이유로 아무 기록 없이 지나가면 그 신호가
+      // login_attempts 에도 audit 에도 남지 않는다.
+      audit.record(username, 'auth.login.totp-required', { ip });
       return { status: 'TOTP_REQUIRED', sessionId: session.id };
     }
 
@@ -139,13 +144,23 @@ export class AuthService {
     );
     if (isLoginLocked(recentFailures, LOGIN_FAILURE_LIMIT)) {
       audit.record(user.username, 'auth.login.locked', { ip });
-      return { status: 'INVALID' };
+      return { status: 'LOCKED' };
     }
 
     const normalizedToken = token.trim();
-    let verified = totp.verify(user.totpSecret, normalizedToken);
+    let verified = false;
+    const step = totp.verify(user.totpSecret, normalizedToken, now);
 
-    if (!verified) {
+    if (step !== null) {
+      // 코드가 맞아도 이미 소비한 타임스텝이면 거부한다 (RFC 6238 §5.2). window ±1
+      // 때문에 한 코드가 90초간 유효하므로, 이 차단이 없으면 어깨너머로 본 코드
+      // 하나로 공격자가 자기 pending 세션을 정식 세션으로 바꿀 수 있다.
+      verified = users.consumeTotpStep(user.id, step, now);
+      if (!verified) audit.record(user.username, 'auth.totp.replay', { ip });
+    } else if (!/^\d{6}$/.test(normalizedToken)) {
+      // 6자리 숫자는 복구 코드가 될 수 없다 (복구 코드는 hex 10자, cli.ts).
+      // 이 가드가 없으면 오타 한 번마다 Argon2 검증이 최대 8회 돈다 — 1GB/2vCPU
+      // 호스트에서 libuv 스레드풀을 메워 로그인 전체를 정지시킨다.
       verified = await this.consumeRecoveryCode(user, normalizedToken, now);
       if (verified) audit.record(user.username, 'auth.recovery-code.used', { ip });
     }
@@ -210,12 +225,12 @@ export class AuthService {
     nowMs: number,
   ): Promise<boolean> {
     const { users, passwordHasher } = this.deps;
-    for (let i = 0; i < user.recoveryCodeHashes.length; i++) {
-      const hash = user.recoveryCodeHashes[i];
-      if (hash !== undefined && (await passwordHasher.verify(hash, token))) {
-        const remaining = user.recoveryCodeHashes.filter((_, index) => index !== i);
-        users.updateRecoveryCodeHashes(user.id, remaining, nowMs);
-        return true;
+    for (const hash of user.recoveryCodeHashes) {
+      if (await passwordHasher.verify(hash, token)) {
+        // 스냅샷 배열을 통째로 덮어쓰지 않는다 — 위 await 가 두 요청의 교차를
+        // 허용하므로, 저장소가 해시 하나만 원자적으로 지우게 한다. 이미 지워졌으면
+        // 다른 요청이 먼저 썼다는 뜻이므로 실패로 접는다 (각 코드 1회용, 스펙 §16).
+        return users.consumeRecoveryCodeHash(user.id, hash, nowMs);
       }
     }
     return false;

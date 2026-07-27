@@ -113,7 +113,7 @@ export function createContainer(config: AppConfig): Container {
   pruneTimer.unref();
 
   const auditLog = createAuditLogService(database.db, clock, logger);
-  const userRepository = createSqliteUserRepository(database.db);
+  const userRepository = createSqliteUserRepository(database.db, logger);
   const sessionRepository = createSqliteSessionRepository(database.db);
   const loginAttemptRepository = createSqliteLoginAttemptRepository(database.db);
 

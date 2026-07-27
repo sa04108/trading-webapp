@@ -146,6 +146,7 @@ describe('auth flow (스펙 §14, §16)', () => {
         passwordHash: await ctx.container.passwordHasher.hash(password),
         totpSecret: null,
         totpEnabled: true,
+        totpLastUsedStep: null,
         recoveryCodeHashes: [],
       },
       ctx.container.clock.now(),
@@ -198,14 +199,16 @@ describe('auth flow (스펙 §14, §16)', () => {
       expect(wrong.statusCode).toBe(401);
     }
 
-    // 잠긴 뒤에는 같은 pending 세션에 정답 토큰을 내도 거부된다
+    // 잠긴 뒤에는 같은 pending 세션에 정답 토큰을 내도 거부된다. 응답은 429 다 —
+    // 잠금을 401 로 접으면 운영자가 맞는 코드를 넣고도 "코드가 틀렸다" 만 보게 되고,
+    // 같은 상태에서 /auth/login 은 429 를 주므로 두 경로가 서로 다른 말을 하게 된다.
     const correctAfterLock = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/auth/totp/verify',
       payload: { token: totpToken(totpSecret ?? '') },
       cookies: { qp_session: pendingCookie },
     });
-    expect(correctAfterLock.statusCode).toBe(401);
+    expect(correctAfterLock.statusCode).toBe(429);
 
     // 새 로그인 시도도 잠금에 걸린다
     const lockedLogin = await ctx.app.inject({
@@ -252,6 +255,72 @@ describe('auth flow (스펙 §14, §16)', () => {
       cookies: { qp_session: secondPending },
     });
     expect(reuse.statusCode).toBe(401);
+  });
+
+  it('refuses to reuse a TOTP code that was already redeemed (RFC 6238 §5.2)', async () => {
+    const { username, password, totpSecret } = await createTestAdmin(ctx.container, {
+      totpEnabled: true,
+    });
+    const token = totpToken(totpSecret ?? '');
+
+    const firstLogin = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { username, password },
+    });
+    const firstVerify = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/totp/verify',
+      payload: { token },
+      cookies: { qp_session: sessionCookie(firstLogin) },
+    });
+    expect(firstVerify.statusCode).toBe(200);
+
+    // 공격자가 같은 코드를 자기 pending 세션에서 되쓰는 시나리오. window ±1 때문에
+    // 코드는 아직 시간상 유효하지만, 이미 소비된 타임스텝이므로 거부되어야 한다.
+    const secondLogin = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { username, password },
+    });
+    const replayCookie = sessionCookie(secondLogin);
+    const replay = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/totp/verify',
+      payload: { token },
+      cookies: { qp_session: replayCookie },
+    });
+    expect(replay.statusCode).toBe(401);
+
+    const me = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/v1/auth/me',
+      cookies: { qp_session: replayCookie },
+    });
+    expect(me.statusCode).toBe(401);
+
+    const replayAudit = ctx.container.database.sqlite
+      .prepare("SELECT event FROM audit_logs WHERE event = 'auth.totp.replay'")
+      .all();
+    expect(replayAudit.length).toBe(1);
+  });
+
+  it('audits a password that stops at the second factor', async () => {
+    // 비밀번호가 샜다는 가장 강한 신호다 — 성공도 실패도 아니라는 이유로
+    // 아무 기록 없이 지나가면 audit 에도 login_attempts 에도 남지 않는다.
+    const { username, password } = await createTestAdmin(ctx.container, { totpEnabled: true });
+
+    const login = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { username, password },
+    });
+    expect(login.json()).toEqual({ status: 'TOTP_REQUIRED' });
+
+    const rows = ctx.container.database.sqlite
+      .prepare("SELECT event FROM audit_logs WHERE event = 'auth.login.totp-required'")
+      .all();
+    expect(rows.length).toBe(1);
   });
 
   it('locks the account after 5 failed attempts (스펙 §16 로그인 rate limit)', async () => {

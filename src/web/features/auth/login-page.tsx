@@ -20,7 +20,9 @@ const credentialsSchema = z.object({
 });
 
 const totpSchema = z.object({
-  token: z.string().min(6, '6자리 코드 또는 복구 코드를 입력하세요'),
+  // max 는 서버(auth-routes 의 totpBodySchema)와 같은 64 로 맞춘다 — 어긋나면
+  // 서버가 400 '요청 본문이 올바르지 않습니다' 를 주는데 화면은 그걸 코드 오류처럼 보여준다
+  token: z.string().min(6, '6자리 코드 또는 복구 코드를 입력하세요').max(64, '코드가 너무 깁니다'),
 });
 
 type CredentialsForm = z.infer<typeof credentialsSchema>;
@@ -92,7 +94,20 @@ export function LoginPage() {
       setErrorMessage(null);
       await finishLogin();
     },
-    onError: () => setErrorMessage('인증 코드가 올바르지 않습니다.'),
+    // 서버가 잠금(429)·본문 오류(400)·내부 오류(500)를 구분해 보내는데 전부
+    // "코드가 틀렸다" 로 뭉개면 운영자가 잠긴 줄 모르고 같은 코드를 계속 넣는다.
+    // 위 credentials 뮤테이션과 같은 방식으로 응답을 읽는다.
+    onError: (error: unknown) => {
+      if (error instanceof ApiError && error.status === 429) {
+        setErrorMessage('실패가 너무 많습니다. 잠시 후 다시 시도하세요.');
+      } else if (error instanceof ApiError && error.status === 401) {
+        setErrorMessage('인증 코드가 올바르지 않습니다.');
+      } else if (error instanceof ApiError) {
+        setErrorMessage(error.message);
+      } else {
+        setErrorMessage('서버에 연결할 수 없습니다. 잠시 후 다시 시도하세요.');
+      }
+    },
   });
 
   return (

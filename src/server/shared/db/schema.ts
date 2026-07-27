@@ -11,6 +11,8 @@ export const users = sqliteTable('users', {
   passwordHash: text('password_hash').notNull(),
   totpSecret: text('totp_secret'),
   totpEnabled: integer('totp_enabled', { mode: 'boolean' }).notNull().default(false),
+  // 마지막으로 소비한 TOTP 타임스텝 — 같은 코드의 재사용을 막는다 (RFC 6238 §5.2)
+  totpLastUsedStep: integer('totp_last_used_step'),
   recoveryCodeHashesJson: text('recovery_code_hashes_json'),
   createdAtMs: integer('created_at_ms').notNull(),
   updatedAtMs: integer('updated_at_ms').notNull(),

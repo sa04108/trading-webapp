@@ -75,6 +75,7 @@ export async function createTestAdmin(
       passwordHash: await container.passwordHasher.hash(password),
       totpSecret,
       totpEnabled,
+      totpLastUsedStep: null,
       recoveryCodeHashes,
     },
     container.clock.now(),

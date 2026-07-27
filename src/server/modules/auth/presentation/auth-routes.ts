@@ -69,11 +69,19 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     if (!sessionId) return reply.code(401).send({ error: '진행 중인 로그인 세션이 없습니다' });
 
     const result = await authService.verifyTotp(sessionId, parsed.data.token, request.ip);
-    if (result.status !== 'SUCCESS') {
-      return reply.code(401).send({ error: '인증 코드가 올바르지 않습니다' });
+    switch (result.status) {
+      // /auth/login 과 같은 상태에는 같은 응답을 준다 — 잠금을 401 로 접으면
+      // 운영자가 맞는 코드를 넣고도 "코드가 틀렸다" 만 보게 된다
+      case 'LOCKED':
+        return reply
+          .code(429)
+          .send({ error: '로그인 실패가 누적되어 잠겼습니다. 잠시 후 다시 시도하세요.' });
+      case 'INVALID':
+        return reply.code(401).send({ error: '인증 코드가 올바르지 않습니다' });
+      case 'SUCCESS':
+        setSessionCookie(reply, deps, result.sessionId);
+        return reply.send({ status: 'OK' });
     }
-    setSessionCookie(reply, deps, result.sessionId);
-    return reply.send({ status: 'OK' });
   });
 
   app.post('/auth/logout', async (request, reply) => {

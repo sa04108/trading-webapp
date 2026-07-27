@@ -65,6 +65,7 @@ async function adminCreate(): Promise<void> {
         passwordHash,
         totpSecret: null,
         totpEnabled: false,
+        totpLastUsedStep: null,
         recoveryCodeHashes: [],
       },
       container.clock.now(),
@@ -96,6 +97,28 @@ async function totpEnroll(): Promise<void> {
     }
 
     const secret = container.totpService.generateSecret();
+
+    console.log('\n1) 인증 앱(Google Authenticator 등)에 아래 URI 또는 secret 을 등록하세요:');
+    console.log(`   otpauth URI: ${container.totpService.buildUri(secret, username)}`);
+    console.log(`   TOTP secret (base32): ${secret}`);
+
+    // 확인 코드를 받기 전에는 아무것도 저장하지 않는다. 먼저 totp_enabled 를 켜면
+    // QR 오독·시계 어긋남으로 등록이 어긋났을 때 secret 은 재노출 금지(§16)이고
+    // 웹 재등록 경로도 없어서(설계 §3.3), 만들 수 없는 코드를 영원히 요구받게 된다.
+    console.log('\n2) 등록이 됐는지 확인합니다 — 인증 앱에 표시된 6자리 코드를 입력하세요.');
+    let confirmed = false;
+    for (let attempt = 1; attempt <= 3 && !confirmed; attempt += 1) {
+      const code = await ask(`   확인 코드 (${attempt}/3): `);
+      if (container.totpService.verify(secret, code, container.clock.now()) !== null) {
+        confirmed = true;
+      } else if (attempt < 3) {
+        console.log('   코드가 맞지 않습니다. 서버와 기기의 시각이 맞는지도 확인하세요.');
+      }
+    }
+    if (!confirmed) {
+      throw new Error('확인 코드를 검증하지 못했습니다 — 아무것도 변경하지 않았습니다.');
+    }
+
     const recoveryCodes = Array.from({ length: 8 }, () => randomBytes(5).toString('hex'));
     const recoveryCodeHashes: string[] = [];
     for (const code of recoveryCodes) {
@@ -106,10 +129,7 @@ async function totpEnroll(): Promise<void> {
     container.auditLog.record(username, 'auth.totp.enrolled');
 
     console.log('\nTOTP 가 등록되었습니다.\n');
-    console.log('1) 인증 앱(Google Authenticator 등)에 아래 URI 또는 secret 을 등록하세요:');
-    console.log(`   otpauth URI: ${container.totpService.buildUri(secret, username)}`);
-    console.log(`   TOTP secret (base32): ${secret}`);
-    console.log('\n2) 복구 코드를 안전한 곳에 보관하세요 (각 1회용, 재표시 불가):');
+    console.log('3) 복구 코드를 안전한 곳에 보관하세요 (각 1회용, 재표시 불가):');
     for (const code of recoveryCodes) console.log(`   ${code}`);
     console.log('\n이 정보는 다시 표시되지 않습니다. (스펙 §16 TOTP secret 재노출 금지)');
   } finally {

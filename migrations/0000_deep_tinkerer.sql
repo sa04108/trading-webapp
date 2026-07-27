@@ -197,6 +197,7 @@ CREATE TABLE `users` (
 	`password_hash` text NOT NULL,
 	`totp_secret` text,
 	`totp_enabled` integer DEFAULT false NOT NULL,
+	`totp_last_used_step` integer,
 	`recovery_code_hashes_json` text,
 	`created_at_ms` integer NOT NULL,
 	`updated_at_ms` integer NOT NULL

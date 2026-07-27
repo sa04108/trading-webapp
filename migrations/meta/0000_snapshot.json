@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "4c2537d2-8b3b-4d0f-a40a-c094fea91099",
+  "id": "e4de5a8e-03a5-47ad-bd5e-77b53a96d1d3",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "audit_logs": {
@@ -1327,6 +1327,13 @@
           "notNull": true,
           "autoincrement": false,
           "default": false
+        },
+        "totp_last_used_step": {
+          "name": "totp_last_used_step",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         },
         "recovery_code_hashes_json": {
           "name": "recovery_code_hashes_json",
