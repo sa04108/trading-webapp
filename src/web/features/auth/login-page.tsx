@@ -19,7 +19,12 @@ const credentialsSchema = z.object({
   password: z.string().min(1, '비밀번호를 입력하세요'),
 });
 
+const totpSchema = z.object({
+  token: z.string().min(6, '6자리 코드 또는 복구 코드를 입력하세요'),
+});
+
 type CredentialsForm = z.infer<typeof credentialsSchema>;
+type TotpForm = z.infer<typeof totpSchema>;
 
 function ServerStatus() {
   const { isSuccess, isError } = useQuery({
@@ -44,20 +49,33 @@ function ServerStatus() {
 
 export function LoginPage() {
   const navigate = useNavigate();
+  const [step, setStep] = useState<'credentials' | 'totp'>('credentials');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const credentialsForm = useForm<CredentialsForm>({
     resolver: zodResolver(credentialsSchema),
     defaultValues: { username: '', password: '' },
   });
+  const totpForm = useForm<TotpForm>({
+    resolver: zodResolver(totpSchema),
+    defaultValues: { token: '' },
+  });
+
+  const finishLogin = async () => {
+    await queryClient.invalidateQueries({ queryKey: ['auth'] });
+    toast.success('로그인되었습니다');
+    void navigate('/', { replace: true });
+  };
 
   const loginMutation = useMutation({
     mutationFn: (body: CredentialsForm) => postJson<{ status: string }>('/auth/login', body),
-    onSuccess: async () => {
+    onSuccess: async (data) => {
       setErrorMessage(null);
-      await queryClient.invalidateQueries({ queryKey: ['auth'] });
-      toast.success('로그인되었습니다');
-      void navigate('/', { replace: true });
+      if (data.status === 'TOTP_REQUIRED') {
+        setStep('totp');
+      } else {
+        await finishLogin();
+      }
     },
     onError: (error: unknown) => {
       setErrorMessage(
@@ -68,12 +86,23 @@ export function LoginPage() {
     },
   });
 
+  const totpMutation = useMutation({
+    mutationFn: (body: TotpForm) => postJson<{ status: string }>('/auth/totp/verify', body),
+    onSuccess: async () => {
+      setErrorMessage(null);
+      await finishLogin();
+    },
+    onError: () => setErrorMessage('인증 코드가 올바르지 않습니다.'),
+  });
+
   return (
     <main className="flex min-h-dvh items-center justify-center bg-muted/30 p-4">
       <Card className="w-full max-w-sm">
         <CardHeader>
           <CardTitle className="text-lg">Quant Platform</CardTitle>
-          <CardDescription>관리자 로그인</CardDescription>
+          <CardDescription>
+            {step === 'credentials' ? '관리자 로그인' : '2단계 인증 코드를 입력하세요'}
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {errorMessage ? (
@@ -82,33 +111,67 @@ export function LoginPage() {
             </Alert>
           ) : null}
 
-          <form
-            className="space-y-4"
-            onSubmit={credentialsForm.handleSubmit((values) => loginMutation.mutate(values))}
-          >
-            <div className="space-y-2">
-              <Label htmlFor="username">사용자 이름</Label>
-              <Input
-                id="username"
-                autoComplete="username"
-                className="h-11"
-                {...credentialsForm.register('username')}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">비밀번호</Label>
-              <Input
-                id="password"
-                type="password"
-                autoComplete="current-password"
-                className="h-11"
-                {...credentialsForm.register('password')}
-              />
-            </div>
-            <Button type="submit" className="h-11 w-full" disabled={loginMutation.isPending}>
-              {loginMutation.isPending ? '확인 중…' : '로그인'}
-            </Button>
-          </form>
+          {step === 'credentials' ? (
+            <form
+              className="space-y-4"
+              onSubmit={credentialsForm.handleSubmit((values) => loginMutation.mutate(values))}
+            >
+              <div className="space-y-2">
+                <Label htmlFor="username">사용자 이름</Label>
+                <Input
+                  id="username"
+                  autoComplete="username"
+                  className="h-11"
+                  {...credentialsForm.register('username')}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="password">비밀번호</Label>
+                <Input
+                  id="password"
+                  type="password"
+                  autoComplete="current-password"
+                  className="h-11"
+                  {...credentialsForm.register('password')}
+                />
+              </div>
+              <Button type="submit" className="h-11 w-full" disabled={loginMutation.isPending}>
+                {loginMutation.isPending ? '확인 중…' : '로그인'}
+              </Button>
+            </form>
+          ) : (
+            <form
+              className="space-y-4"
+              onSubmit={totpForm.handleSubmit((values) => totpMutation.mutate(values))}
+            >
+              <div className="space-y-2">
+                <Label htmlFor="token">TOTP 코드</Label>
+                <Input
+                  id="token"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  placeholder="123456 또는 복구 코드"
+                  className="h-11"
+                  autoFocus
+                  {...totpForm.register('token')}
+                />
+              </div>
+              <Button type="submit" className="h-11 w-full" disabled={totpMutation.isPending}>
+                {totpMutation.isPending ? '확인 중…' : '확인'}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                className="h-11 w-full"
+                onClick={() => {
+                  setStep('credentials');
+                  totpForm.reset();
+                }}
+              >
+                처음으로
+              </Button>
+            </form>
+          )}
 
           <ServerStatus />
         </CardContent>
