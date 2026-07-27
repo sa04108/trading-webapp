@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# 서버 부트스트랩 — 새 호스트를 배포 가능 상태로 만든다 (설계 문서 §3·§4).
+# 서버 부트스트랩 — 새 호스트를 배포 가능 상태로 만든다
+# (설계: docs/superpowers/specs/2026-07-27-platform-readonly-constitution-design.md §4).
 #
 # 사용법: ./scripts/bootstrap.sh
-#         서버 주소와 auth key 를 순서대로 물어본다. 비대화형으로 돌리려면
-#         QP_HOST / TS_AUTHKEY / SSH_KEY 환경변수를 미리 설정한다.
+#         서버 주소와 도메인을 순서대로 물어본다. 비대화형으로 돌리려면
+#         QP_HOST / QP_DOMAIN / SSH_KEY 환경변수를 미리 설정한다.
 #
-#   QP_HOST    서버 주소, `[user@]host` 형식. 첫 실행은 퍼블릭 IP, 하드닝 이후에는
-#              tailnet FQDN 이어야 한다 — UFW 가 퍼블릭 22 를 닫아서 그 경로로는
-#              첫 명령(ssh)부터 죽는다. user 를 생략하면 ssh 의 규칙에 맡긴다
+#   QP_HOST    서버 주소, `[user@]host` 형식. user 를 생략하면 ssh 의 규칙에 맡긴다
 #              (~/.ssh/config 의 User, 없으면 로컬 사용자명).
-#   TS_AUTHKEY Tailscale auth key. 이미 조인된 서버 재실행이면 비워도 된다.
+#   QP_DOMAIN  서비스 도메인 (예: quant.example.com). A 레코드가 서버의 고정 공인
+#              IP 를 가리키고 있어야 한다 — Caddy 가 이 이름으로 인증서를 받는다.
 #   SSH_KEY    개인키 경로. 지정하면 -i 로 넘긴다. 없으면 ~/.ssh/config 나
 #              기본 이름 키(id_ed25519 등)에 의존한다.
 #
@@ -17,16 +17,12 @@
 # (ubuntu / admin / ec2-user), 자체 설치 호스트는 임의다. 스펙 §2.1 의 "애플리케이션과
 # 도구는 특정 클라우드를 모른다" 를 따른다.
 #
-# 인증은 공개키만 지원한다. 비밀번호 인증을 넣지 않는 이유는 이 도구가
-# --harden 단계에서 PasswordAuthentication no 를 직접 쓰기 때문이다 (스펙 §26) —
-# 어떤 호스트에서든 프로비저닝이 끝나면 비밀번호로는 다시 들어올 수 없고,
-# 재실행·배포 경로가 전부 막힌다. 한 실행에 ssh/scp 가 5~6회 호출되므로 매번
-# 프롬프트가 뜨는 문제도 있고, 아래 sudo 확인은 어차피 passwordless sudo 를 요구한다.
-#
-# 순서가 락아웃 가드다: 기본 프로비저닝(퍼블릭 SSH) → tailnet 경유 SSH 를 "실제로"
-# 검증 → 성공했을 때만 --harden(UFW 가 퍼블릭 22 를 닫는다). 스펙 §25 의
-# "검증 전 차단 금지" 를 사람의 규율이 아니라 제어 흐름으로 강제한다.
-# 전제: 이 PC 가 tailnet 에 조인돼 있어야 한다 (tailscale status 로 확인).
+# 인증은 공개키만 지원한다. 비밀번호 인증을 넣지 않는 이유는 provision.sh 가
+# PasswordAuthentication no 를 쓰기 때문이다 (스펙 §16·D-017) — 어떤 호스트에서든
+# 프로비저닝이 끝나면 비밀번호로는 다시 들어올 수 없다. 한 실행에 ssh/scp 가 5회
+# 호출되므로 매번 프롬프트가 뜨는 문제도 있고, sudo 확인은 어차피 passwordless
+# sudo 를 요구한다. 퍼블릭 22 는 계속 열려 있으므로(D-017) 락아웃 걱정은 없다 —
+# 키를 잃어도 클라우드 브라우저 SSH 콘솔로 들어갈 수 있다.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -34,8 +30,7 @@ REMOTE_DIR=/tmp/quant-provision
 
 # ── 입력은 로그 리다이렉트보다 먼저 받는다 ────────────────────────────────────
 # tee 를 거치면 프롬프트가 버퍼링에 걸려 화면에 안 나타날 수 있다. 입력을 다 받은
-# 뒤에 리다이렉트를 걸어 그 위험을 없앤다. 여기까지는 로그에 남지 않지만, 남길 것도
-# 없다 — 사용자가 방금 타이핑한 값이고 auth key 는 애초에 기록하면 안 된다.
+# 뒤에 리다이렉트를 걸어 그 위험을 없앤다.
 # read 뒤의 `|| true`: 비대화형 실행(stdin 이 /dev/null·닫힘)에서 read 는 EOF 로
 # 비영점 종료한다. 그러면 set -e 가 여기서 스크립트를 죽여, 바로 아래의 사람이 읽을
 # 안내가 실행되지 못하고 설명 없는 exit 1 만 남는다. 값의 유무 판단은 다음 줄에 맡긴다.
@@ -48,19 +43,14 @@ fi
   exit 1
 }
 
-# 뒤에서 tailnet FQDN 으로 다시 붙을 때 같은 사용자를 이어 쓰기 위해 user 부분을 떼어둔다.
-# user 를 안 적었으면 빈 문자열 — 그대로 ssh 의 기본 규칙에 맡긴다.
-USER_PREFIX=""
-case "${TARGET}" in
-  *@*) USER_PREFIX="${TARGET%@*}@" ;;
-esac
-
-if [ -z "${TS_AUTHKEY:-}" ]; then
-  # EOF 도 "빈 키" 로 받는다 — 이미 조인된 서버 재실행은 키가 필요 없고(provision.sh 가
-  # 판단한다), 비대화형 실행이 여기서 조용히 죽으면 원인을 찾을 수 없다.
-  read -rsp "Tailscale auth key (재실행이면 Enter): " TS_AUTHKEY || TS_AUTHKEY=""
-  echo
+DOMAIN="${QP_DOMAIN:-}"
+if [ -z "${DOMAIN}" ]; then
+  read -rp "서비스 도메인 입력(예: quant.example.com): " DOMAIN || true
 fi
+[ -n "${DOMAIN}" ] || {
+  echo "도메인이 필요합니다 — 비대화형이면 QP_DOMAIN 으로 지정하세요" >&2
+  exit 1
+}
 
 # ── 여기서부터 모든 출력을 로그 파일에도 남긴다 ───────────────────────────────
 # 화면에 의존하지 않는 것이 요점이다 — 터미널 종류·스크롤백 한도·창 크기와 무관하게
@@ -71,11 +61,8 @@ mkdir -p "$(dirname "${LOG}")"
 exec > >(tee "${LOG}") 2>&1
 TEE_PID=$!
 
-# 실패 지점이 여러 곳이라(SSH preflight·업로드·sudo·프로비저닝·하드닝) EXIT trap
-# 하나로 묶는다 — 임시 파일 정리 trap 을 스크립트 중간에 걸면 그 앞의 실패는 안 걸린다.
 on_exit() {
   status=$?
-  if [ -n "${OUT:-}" ]; then rm -f "${OUT}"; fi
   if [ "${status}" -ne 0 ]; then
     echo
     echo "실패 (exit ${status}). 로그: ${LOG}"
@@ -100,13 +87,13 @@ if [ -n "${SSH_KEY:-}" ]; then
 fi
 
 echo "==> SSH 접속 확인: ${TARGET}"
-# 이 확인이 없으면 아래 ssh/scp 가 set -e 로 조용히 죽어, 실패 원인이 그 다음 단계
-# (auth key 입력 직후처럼) 엉뚱한 곳을 가리킨다 — 실제로 그렇게 오진한 적이 있다.
+# 이 확인이 없으면 아래 ssh/scp 가 set -e 로 조용히 죽어, 실패 원인이 그 다음 단계를
+# 가리킨다 — 실제로 그렇게 오진한 적이 있다.
 ssh "${SSH_OPTS[@]}" -o ConnectTimeout=15 -o BatchMode=yes "${TARGET}" true 2>/dev/null || {
   {
     echo "SSH 접속 실패: ${TARGET}"
     echo
-    if [ -z "${USER_PREFIX}" ]; then
+    if [[ "${TARGET}" != *@* ]]; then
       echo "주소에 사용자명이 없다. ssh 가 ~/.ssh/config 의 User 나 로컬 사용자명을 쓴다 —"
       echo "의도한 계정이 아니면 user@host 형식으로 다시 지정하라."
       echo "(클라우드 이미지의 관례는 제각각이다: ubuntu / admin / ec2-user 등)"
@@ -133,7 +120,7 @@ ssh "${SSH_OPTS[@]}" -o ConnectTimeout=15 -o BatchMode=yes "${TARGET}" true 2>/d
       fi
       echo
       echo "매번 지정하지 않으려면 ~/.ssh/config 에 등록해도 된다:"
-      echo "  Host ${TARGET##*@} quant-platform.*.ts.net"
+      echo "  Host ${TARGET##*@}"
       echo "    User <로그인 사용자명>"
       echo "    IdentityFile ~/.ssh/<your-key>"
       echo "    IdentitiesOnly yes"
@@ -156,76 +143,51 @@ scp "${SSH_OPTS[@]}" "${REPO_ROOT}/infra/provision.sh" \
     "${TARGET}:${REMOTE_DIR}/" \
   || { echo "파일 업로드 실패 — ${REPO_ROOT}/infra 아래 3개 파일과 원격 디스크 여유를 확인하세요" >&2; exit 1; }
 
-# provision.sh 는 root 로 돌아야 하고, 다음 단계는 TTY 없이 파이프로 붙는다.
-# sudo 가 비밀번호를 물으면 그 프롬프트에 답할 방법이 없으므로 여기서 먼저 분명하게
-# 실패시킨다. passwordless sudo 는 이 도구의 전제다 (클라우드 이미지는 보통 그렇게
-# 오지만, 자체 설치 호스트라면 직접 설정해야 한다).
+# provision.sh 는 root 로 돌아야 하고, TTY 없이 붙는다. sudo 가 비밀번호를 물으면
+# 답할 방법이 없으므로 여기서 먼저 분명하게 실패시킨다. passwordless sudo 는 이
+# 도구의 전제다 (클라우드 이미지는 보통 그렇게 오지만, 자체 설치 호스트라면 직접
+# 설정해야 한다).
 ssh "${SSH_OPTS[@]}" "${TARGET}" "sudo -n true" \
   || { echo "sudo 에 비밀번호가 필요합니다 — 이 계정에 passwordless sudo 를 설정한 뒤 재실행하세요" >&2; exit 1; }
 
-echo "==> 기본 프로비저닝 (§21·22·23·28·29)"
-OUT="$(mktemp)"   # 정리는 위의 on_exit 가 맡는다
-# 키는 stdin 으로 — argv·원격 히스토리에 남기지 않는다
-printf '%s\n' "${TS_AUTHKEY}" \
-  | ssh "${SSH_OPTS[@]}" "${TARGET}" "sudo sh ${REMOTE_DIR}/provision.sh" \
-  | tee "${OUT}"
+echo "==> 프로비저닝 (패키지·Node·UFW·sshd·Caddy·app.env·systemd)"
+ssh "${SSH_OPTS[@]}" "${TARGET}" "sudo sh ${REMOTE_DIR}/provision.sh ${DOMAIN}"
 
-# pipeline 이 매치 실패로 비어있는 값을 낼 때 grep 의 실패 종료 코드가 `set -e` 로
-# 대입문 자체를 즉사시켜, 바로 아래의 사람이 읽을 에러 메시지가 실행되지 못하고
-# 조용히 exit 1 만 남는 문제가 있었다 — `|| true` 로 대입의 성공 여부를 무의미하게
-# 만들고, 값의 유무 판단은 다음 줄의 `-n` 검사에 전적으로 맡긴다.
-# `-f2-` 사용: 값에 `=` 가 들어가도(예: base64 뒤에 `=` 패딩) 잘리지 않는다.
-FQDN="$(grep '^FQDN=' "${OUT}" | tail -1 | cut -d= -f2-)" || true
-[ -n "${FQDN}" ] || { echo "출력에서 FQDN= 마커를 찾지 못했습니다" >&2; exit 1; }
+# provision.sh 가 sshd 를 재시작했다 — 새 연결로 즉시 재검증해 하드닝이 SSH 를
+# 깨뜨렸다면 지금 크게 알린다 (퍼블릭 22 는 열려 있으므로 락아웃은 아니고,
+# 최악의 경우에도 클라우드 브라우저 SSH 콘솔이 남는다).
+echo "==> 프로비저닝 후 SSH 재검증"
+ssh "${SSH_OPTS[@]}" -o ConnectTimeout=15 -o BatchMode=yes "${TARGET}" true \
+  || { echo "프로비저닝 후 SSH 재접속 실패 — 클라우드 브라우저 SSH 콘솔로 확인하세요" >&2; exit 1; }
 
-# tailnet 경유로 붙을 때도 처음 지정한 사용자를 그대로 이어 쓴다
-TAILNET_TARGET="${USER_PREFIX}${FQDN}"
-
-echo "==> tailnet 경유 SSH 검증: ${TAILNET_TARGET}"
-# StrictHostKeyChecking=accept-new: FQDN 은 이 PC 가 처음 접속하는 이름이라
-# (첫 주소와 다른 known_hosts 항목) BatchMode=yes 하의 기본값(ask)이면 비대화형으로
-# 즉시 실패한다. 첫 접속을 자동 신뢰해도 되는 이유는 이 이름이 tailnet 안에서만
-# 해석되고 Tailscale 자체가 노드 신원을 인증하기 때문 — 다만 "바뀐" 키(재접속 시
-# 불일치, MITM 의심)는 accept-new 에서도 여전히 거부된다. StrictHostKeyChecking=no
-# 는 그 거부까지 없애버리므로 쓰지 않는다.
-if ssh "${SSH_OPTS[@]}" -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-       "${TAILNET_TARGET}" true; then
-  echo "==> 하드닝 (§25 UFW + §26 SSH) — 퍼블릭 22 가 닫힌다"
-  ssh "${SSH_OPTS[@]}" "${TAILNET_TARGET}" "sudo sh ${REMOTE_DIR}/provision.sh --harden"
-
-  # harden 의 ssh 가 접근이 증명된 마지막 순간이다. UFW 규칙이 실제 사용 경로와
-  # 어긋나거나(예: IPv6) sshd 가 안 돌아오면 퍼블릭 22 도 닫히고 콘솔 경로도 죽은
-  # 뒤에야 알게 된다 — 새 연결로 즉시 재검증해 그 순간 크게 알린다.
-  echo "==> 하드닝 후 재확인 — 새 연결로 tailnet SSH 재검증"
-  ssh "${SSH_OPTS[@]}" -o ConnectTimeout=15 -o BatchMode=yes "${TAILNET_TARGET}" true \
-    || { echo "하드닝 후 tailnet SSH 가 끊겼습니다 — 즉시 확인하세요" >&2; exit 1; }
-else
-  cat >&2 <<MSG
-경고: tailnet 경유 SSH 실패 — 하드닝을 건너뜁니다. 퍼블릭 SSH 는 살아 있습니다.
-  가능한 원인:
-    1) 이 PC 가 tailnet 에 없음 — 확인: tailscale status
-    2) 호스트 키 검증 실패 — known_hosts 충돌(키가 바뀐 경우만; 최초 접속은 자동 수락됨)
-  해결 후 하드닝만 재실행:
-     ssh ${SSH_KEY:+-i ${SSH_KEY} }${TAILNET_TARGET} sudo sh ${REMOTE_DIR}/provision.sh --harden
-MSG
+# 인증서의 확정 판정은 여기다 — 서버 안(hairpin 제약 가능)이 아니라 외부 시점.
+echo "==> HTTPS 검증: https://${DOMAIN}"
+CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "https://${DOMAIN}/" || echo 000)"
+if [ "${CODE}" = "000" ]; then
+  echo "https://${DOMAIN} 에 TLS 로 접속하지 못했습니다." >&2
+  echo "  - A 레코드가 서버 고정 IP 를 가리키는지, DNS 전파가 끝났는지 확인" >&2
+  echo "  - 클라우드 방화벽에서 TCP 80·443 이 열려 있는지 확인" >&2
+  echo "  - 서버에서: journalctl -u caddy --no-pager -n 50" >&2
   exit 1
 fi
+echo "TLS 응답 확인 (HTTP ${CODE} — 앱 배포 전에는 502 가 정상)"
 
 cat <<MSG
 
-부트스트랩 완료: https://${FQDN}
+부트스트랩 완료: https://${DOMAIN}
 
 다음 단계:
-  1) 첫 배포:      ${SSH_KEY:+SSH_KEY=${SSH_KEY} }QP_HOST=${TAILNET_TARGET} ./scripts/deploy.sh
-  2) 관리자 생성 (1회, 서버에서):
-     ssh ${SSH_KEY:+-i ${SSH_KEY} }${TAILNET_TARGET}
+  1) 첫 배포:      ${SSH_KEY:+SSH_KEY=${SSH_KEY} }QP_HOST=${TARGET} ./scripts/deploy.sh
+  2) 관리자 생성 + TOTP 등록 (서버에서, 순서대로):
+     ssh ${SSH_KEY:+-i ${SSH_KEY} }${TARGET}
      sudo systemd-run --pty --uid=quant --gid=quant \\
        --property=EnvironmentFile=/etc/quant-platform/app.env \\
        --working-directory=/opt/quant-platform/current \\
        /usr/local/bin/node /opt/quant-platform/current/dist/server/cli.js admin:create
-  3) (선택) 클라우드 방화벽에서 퍼블릭 TCP 22 제거 — UFW 가 이미 막는 것의 심층방어
-
-참고: 이 스크립트를 다시 실행할 일이 있으면 서버 주소를 퍼블릭 IP 가 아니라 FQDN 으로
-      입력하라 — 하드닝이 퍼블릭 22 를 닫아서 그 경로는 첫 명령부터 실패한다.
-      비대화형으로 돌리려면: ${SSH_KEY:+SSH_KEY=${SSH_KEY} }QP_HOST=${TAILNET_TARGET} ./scripts/bootstrap.sh
+     sudo systemd-run --pty --uid=quant --gid=quant \\
+       --property=EnvironmentFile=/etc/quant-platform/app.env \\
+       --working-directory=/opt/quant-platform/current \\
+       /usr/local/bin/node /opt/quant-platform/current/dist/server/cli.js totp:enroll
+     TOTP 등록은 퍼블릭 노출 전 필수다 (D-017) — 미등록이면 서버가 부팅 경고를 남긴다.
+  3) 클라우드 방화벽은 TCP 22·80·443 만 허용한다 (IPv4·IPv6 각각 확인)
 MSG
