@@ -51,6 +51,21 @@ fi
   echo "도메인이 필요합니다 — 비대화형이면 QP_DOMAIN 으로 지정하세요" >&2
   exit 1
 }
+# 이 값은 아래에서 원격 root 셸의 명령줄에 들어가고, provision.sh 안에서는 Caddyfile
+# heredoc 으로 흘러간다. 호스트명 문법을 여기서 강제해 `;`·백틱·`$(...)`·공백이
+# 명령이나 Caddy 지시자로 해석될 여지를 없앤다 (원격 실행 전에 막는 게 요점).
+case "${DOMAIN}" in
+  *[!a-zA-Z0-9.-]* | -* | .* | *. | *..*)
+    echo "도메인 형식이 올바르지 않습니다: ${DOMAIN}" >&2
+    echo "영문/숫자/./- 만 쓸 수 있습니다 (예: quant.example.com)" >&2
+    exit 1
+    ;;
+esac
+case "${DOMAIN}" in
+  *.*) : ;;
+  *) echo "도메인에 점이 없습니다: ${DOMAIN} — FQDN 을 입력하세요 (예: quant.example.com)" >&2
+     exit 1 ;;
+esac
 
 # ── 여기서부터 모든 출력을 로그 파일에도 남긴다 ───────────────────────────────
 # 화면에 의존하지 않는 것이 요점이다 — 터미널 종류·스크롤백 한도·창 크기와 무관하게
@@ -151,7 +166,8 @@ ssh "${SSH_OPTS[@]}" "${TARGET}" "sudo -n true" \
   || { echo "sudo 에 비밀번호가 필요합니다 — 이 계정에 passwordless sudo 를 설정한 뒤 재실행하세요" >&2; exit 1; }
 
 echo "==> 프로비저닝 (패키지·Node·UFW·sshd·Caddy·app.env·systemd)"
-ssh "${SSH_OPTS[@]}" "${TARGET}" "sudo sh ${REMOTE_DIR}/provision.sh ${DOMAIN}"
+# 원격 셸이 한 번 더 파싱하므로 인용한다 — 위 검증과 이중 방어다
+ssh "${SSH_OPTS[@]}" "${TARGET}" "sudo sh ${REMOTE_DIR}/provision.sh '${DOMAIN}'"
 
 # provision.sh 가 sshd 를 재시작했다 — 새 연결로 즉시 재검증해 하드닝이 SSH 를
 # 깨뜨렸다면 지금 크게 알린다 (퍼블릭 22 는 열려 있으므로 락아웃은 아니고,
@@ -162,8 +178,11 @@ ssh "${SSH_OPTS[@]}" -o ConnectTimeout=15 -o BatchMode=yes "${TARGET}" true \
 
 # 인증서의 확정 판정은 여기다 — 서버 안(hairpin 제약 가능)이 아니라 외부 시점.
 echo "==> HTTPS 검증: https://${DOMAIN}"
-CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "https://${DOMAIN}/" || echo 000)"
-if [ "${CODE}" = "000" ]; then
+# `|| echo 000` 을 쓰지 않는다 — 실패해도 curl 이 -w 로 이미 "000" 을 찍으므로
+# 두 값이 이어붙어 "000000" 이 되고, 그러면 아래 비교가 영영 거짓이라 이 게이트가
+# 항상 통과한다. `|| true` 는 set -e 만 막고 출력은 curl 것 하나로 남긴다.
+CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "https://${DOMAIN}/" || true)"
+if [ "${CODE}" = "000" ] || [ -z "${CODE}" ]; then
   echo "https://${DOMAIN} 에 TLS 로 접속하지 못했습니다." >&2
   echo "  - A 레코드가 서버 고정 IP 를 가리키는지, DNS 전파가 끝났는지 확인" >&2
   echo "  - 클라우드 방화벽에서 TCP 80·443 이 열려 있는지 확인" >&2

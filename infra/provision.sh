@@ -29,6 +29,19 @@ NODE_VERSION=v24.18.0
   echo "도메인의 A 레코드가 이 서버의 고정 공인 IP 를 가리키고 있어야 합니다." >&2
   exit 1
 }
+# 이 값은 아래에서 Caddyfile heredoc 으로 들어간다 — 호스트명 문법을 벗어난 입력이
+# 두 번째 사이트 블록이나 임의 지시자로 해석되지 않게 여기서 막는다. bootstrap.sh 도
+# 같은 검사를 하지만 이 파일은 직접 실행이 문서화돼 있으므로 스스로도 강제한다.
+case "${DOMAIN}" in
+  *[!a-zA-Z0-9.-]* | -* | .* | *. | *..*)
+    echo "도메인 형식이 올바르지 않습니다: ${DOMAIN}" >&2
+    exit 1
+    ;;
+esac
+case "${DOMAIN}" in
+  *.*) : ;;
+  *) echo "도메인에 점이 없습니다: ${DOMAIN} — FQDN 이어야 합니다." >&2; exit 1 ;;
+esac
 
 echo "==> 패키지·타임존·유저·디렉터리"
 export DEBIAN_FRONTEND=noninteractive
@@ -130,7 +143,11 @@ ufw --force enable
 ufw status verbose
 
 echo "==> SSH 하드닝 (키 전용)"
-cat > /etc/ssh/sshd_config.d/99-quant-hardening.conf <<'EOF'
+SSHD_CONF=/etc/ssh/sshd_config.d/99-quant-hardening.conf
+# 임시 파일에 쓰고 내용이 다를 때만 교체한다 — 재실행이 sshd 를 무의미하게
+# 재시작하지 않게 한다 (이 파일 헤더가 약속하는 멱등성).
+SSHD_TMP="$(mktemp)"
+cat > "${SSHD_TMP}" <<'EOF'
 PermitRootLogin no
 PasswordAuthentication no
 KbdInteractiveAuthentication no
@@ -139,9 +156,16 @@ X11Forwarding no
 MaxAuthTries 3
 LoginGraceTime 30
 EOF
-sshd -t
-# Ubuntu 의 유닛명은 sshd 가 아니라 ssh 다
-systemctl restart ssh
+if [ -f "${SSHD_CONF}" ] && cmp -s "${SSHD_TMP}" "${SSHD_CONF}"; then
+  rm -f "${SSHD_TMP}"
+  echo "변경 없음 — sshd 재시작 건너뜀"
+else
+  install -m 644 -o root -g root "${SSHD_TMP}" "${SSHD_CONF}"
+  rm -f "${SSHD_TMP}"
+  sshd -t
+  # Ubuntu 의 유닛명은 sshd 가 아니라 ssh 다
+  systemctl restart ssh
+fi
 
 echo "==> Caddy — ${DOMAIN} → 127.0.0.1:3000"
 # 공식 apt repo 로 설치한다 — unattended-upgrades 가 보안 패치를 함께 관리한다.
@@ -149,21 +173,44 @@ if ! command -v caddy >/dev/null 2>&1; then
   # --yes: 이전 실행이 keyring 생성 후 죽었어도 재실행이 막히지 않는다 (멱등성)
   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
     | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
-    > /etc/apt/sources.list.d/caddy-stable.list
+  # 목적지로 바로 리다이렉트하지 않는다 — 셸이 curl 실행 전에 파일을 비우므로,
+  # 네트워크가 끊기거나 에러 페이지가 오면 깨진 apt 소스가 남는다. 그러면 다음
+  # 실행의 `$APT update` 가 E: Malformed entry 로 죽어 이 스크립트를 영구히
+  # 못 쓰게 만든다 (복구 경로도 command -v caddy 뒤에 있어 닿지 않는다).
+  CADDY_LIST_TMP="$(mktemp)"
+  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' -o "${CADDY_LIST_TMP}"
+  grep -q '^deb ' "${CADDY_LIST_TMP}" || {
+    rm -f "${CADDY_LIST_TMP}"
+    echo "Caddy apt 소스를 받지 못했습니다 (내용이 deb 목록이 아님) — 잠시 후 재실행하세요." >&2
+    exit 1
+  }
+  install -m 644 -o root -g root "${CADDY_LIST_TMP}" /etc/apt/sources.list.d/caddy-stable.list
+  rm -f "${CADDY_LIST_TMP}"
   $APT update
   $APT install caddy
 fi
 
 # HSTS·보안 헤더·압축은 앱이 담당한다 (D-016 에서 이관) — Caddy 는 프록시만 한다.
-cat > /etc/caddy/Caddyfile <<EOF
+CADDYFILE_TMP="$(mktemp)"
+cat > "${CADDYFILE_TMP}" <<EOF
 ${DOMAIN} {
 	reverse_proxy 127.0.0.1:3000
 }
 EOF
-caddy validate --config /etc/caddy/Caddyfile
+caddy validate --config "${CADDYFILE_TMP}" --adapter caddyfile
 systemctl enable caddy
-systemctl restart caddy
+if [ -f /etc/caddy/Caddyfile ] && cmp -s "${CADDYFILE_TMP}" /etc/caddy/Caddyfile; then
+  rm -f "${CADDYFILE_TMP}"
+  # 설정이 그대로면 진행 중인 TLS 연결을 끊을 이유가 없다. 다만 패키지 설치
+  # 직후이거나 무슨 이유로 죽어 있을 수 있으므로 실행 중인지는 보장한다.
+  systemctl is-active --quiet caddy || systemctl start caddy
+  echo "Caddyfile 변경 없음 — 재시작 건너뜀"
+else
+  install -m 644 -o root -g root "${CADDYFILE_TMP}" /etc/caddy/Caddyfile
+  rm -f "${CADDYFILE_TMP}"
+  # reload 는 무중단 설정 교체다. 아직 안 떠 있으면 reload 가 실패하므로 start 로 받는다.
+  systemctl reload caddy || systemctl restart caddy
+fi
 
 echo "==> 인증서 발급 확인 (최대 90초)"
 # 앱 배포 전이므로 502 가 정상이다 — TLS 응답이 온다는 것 자체가 발급 성공이다.
@@ -172,12 +219,15 @@ echo "==> 인증서 발급 확인 (최대 90초)"
 CODE=000
 i=0
 while [ "${i}" -lt 18 ]; do
-  CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "https://${DOMAIN}/" 2>/dev/null || echo 000)"
-  [ "${CODE}" != "000" ] && break
+  # `|| echo 000` 을 쓰지 않는다 — 실패해도 curl 이 -w 로 "000" 을 이미 찍으므로
+  # 두 값이 붙어 "000000" 이 되고, 그러면 아래 `!= "000"` 이 첫 바퀴에서 참이 되어
+  # 90초 대기가 통째로 사라지고 실패가 성공으로 보고된다. `|| true` 는 set -e 만 막는다.
+  CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "https://${DOMAIN}/" 2>/dev/null || true)"
+  [ -n "${CODE}" ] && [ "${CODE}" != "000" ] && break
   i=$((i + 1))
   sleep 5
 done
-if [ "${CODE}" = "000" ]; then
+if [ -z "${CODE}" ] || [ "${CODE}" = "000" ]; then
   echo "경고: https://${DOMAIN} 의 TLS 응답을 서버 안에서 확인하지 못했다." >&2
   echo "hairpin NAT 제약일 수 있다 — 외부에서 접속해 보고, 안 되면: journalctl -u caddy" >&2
 else
