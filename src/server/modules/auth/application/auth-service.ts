@@ -102,7 +102,7 @@ export class AuthService {
       return { status: 'INVALID_CREDENTIALS' };
     }
 
-    const requiresTotp = user.totpEnabled && user.totpSecret !== null;
+    const requiresTotp = user.totpEnabled;
     const session: SessionRecord = {
       id: newSessionId(),
       userId: user.id,

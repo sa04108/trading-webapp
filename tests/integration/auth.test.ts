@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as OTPAuth from 'otpauth';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
+import { newId } from '../../src/server/shared/ids.js';
 
 function sessionCookie(response: { cookies: Array<{ name: string; value: string }> }): string {
   const cookie = response.cookies.find((c) => c.name === 'qp_session');
@@ -133,6 +134,86 @@ describe('auth flow (스펙 §14, §16)', () => {
       cookies: { qp_session: fullCookie },
     });
     expect(me.statusCode).toBe(200);
+  });
+
+  it('fails closed when totpEnabled is set but totpSecret is null (corrupted state)', async () => {
+    const username = 'corrupted-totp';
+    const password = 'correct-horse-battery-staple';
+    ctx.container.userRepository.create(
+      {
+        id: newId('usr'),
+        username,
+        passwordHash: await ctx.container.passwordHasher.hash(password),
+        totpSecret: null,
+        totpEnabled: true,
+        recoveryCodeHashes: [],
+      },
+      ctx.container.clock.now(),
+    );
+
+    const login = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { username, password },
+    });
+    expect(login.json()).toEqual({ status: 'TOTP_REQUIRED' });
+    const pendingCookie = sessionCookie(login);
+
+    // secret 이 없으니 어떤 토큰도 정답일 수 없다 — fail-closed
+    const verify = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/totp/verify',
+      payload: { token: '000000' },
+      cookies: { qp_session: pendingCookie },
+    });
+    expect(verify.statusCode).toBe(401);
+
+    const me = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/v1/auth/me',
+      cookies: { qp_session: pendingCookie },
+    });
+    expect(me.statusCode).toBe(401);
+  });
+
+  it('counts TOTP verification failures toward the login lockout', async () => {
+    const { username, password, totpSecret } = await createTestAdmin(ctx.container, {
+      totpEnabled: true,
+    });
+
+    const login = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { username, password },
+    });
+    const pendingCookie = sessionCookie(login);
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const wrong = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/totp/verify',
+        payload: { token: '000000' },
+        cookies: { qp_session: pendingCookie },
+      });
+      expect(wrong.statusCode).toBe(401);
+    }
+
+    // 잠긴 뒤에는 같은 pending 세션에 정답 토큰을 내도 거부된다
+    const correctAfterLock = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/totp/verify',
+      payload: { token: totpToken(totpSecret ?? '') },
+      cookies: { qp_session: pendingCookie },
+    });
+    expect(correctAfterLock.statusCode).toBe(401);
+
+    // 새 로그인 시도도 잠금에 걸린다
+    const lockedLogin = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { username, password },
+    });
+    expect(lockedLogin.statusCode).toBe(429);
   });
 
   it('accepts a recovery code once', async () => {
