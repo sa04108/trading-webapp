@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 스펙 §30 — 릴리스 배포. 개발 PC 에서 빌드·검증 후 tailnet FQDN 으로 배포한다.
+# 스펙 §30 — 릴리스 배포. 개발 PC 에서 빌드·검증 후 서버로 배포한다.
 #
 # 사용법: ./scripts/deploy.sh
 #         실행 후 서버 주소를 물어본다. 비대화형으로 돌리려면 환경변수를 미리 설정한다.
@@ -23,7 +23,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # 바로 아래 안내에 도달하기 전에 스크립트를 죽인다. 판단은 다음 줄에 맡긴다.
 TARGET="${QP_HOST:-}"
 if [ -z "${TARGET}" ]; then
-  read -rp "서버 주소 [user@]host (tailnet FQDN): " TARGET || true
+  read -rp "서버 주소 [user@]host: " TARGET || true
 fi
 [ -n "${TARGET}" ] || {
   echo "서버 주소가 필요합니다 — 비대화형이면 QP_HOST 로 지정하세요" >&2
