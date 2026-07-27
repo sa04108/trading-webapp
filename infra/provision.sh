@@ -144,8 +144,8 @@ ufw status verbose
 
 echo "==> SSH 하드닝 (키 전용)"
 SSHD_CONF=/etc/ssh/sshd_config.d/99-quant-hardening.conf
-# 임시 파일에 쓰고 내용이 다를 때만 교체한다 — 재실행이 sshd 를 무의미하게
-# 재시작하지 않게 한다 (이 파일 헤더가 약속하는 멱등성).
+# 임시 파일에 쓰고 내용이 다를 때만 교체한다 (이 파일 헤더가 약속하는 멱등성).
+# "교체할지" 와 "반영할지" 는 분리한다 — 아래 검증·reload 는 매번 돈다.
 SSHD_TMP="$(mktemp)"
 cat > "${SSHD_TMP}" <<'EOF'
 PermitRootLogin no
@@ -157,14 +157,31 @@ MaxAuthTries 3
 LoginGraceTime 30
 EOF
 if [ -f "${SSHD_CONF}" ] && cmp -s "${SSHD_TMP}" "${SSHD_CONF}"; then
-  rm -f "${SSHD_TMP}"
-  echo "변경 없음 — sshd 재시작 건너뜀"
+  echo "설정 파일 변경 없음"
 else
   install -m 644 -o root -g root "${SSHD_TMP}" "${SSHD_CONF}"
-  rm -f "${SSHD_TMP}"
-  sshd -t
+fi
+rm -f "${SSHD_TMP}"
+
+# sshd -t 는 privilege separation 디렉터리를 요구한다. 이건 systemd 가 ssh.service 의
+# RuntimeDirectory 로 만들어 주는데, Ubuntu 24.04 처럼 소켓 활성화(ssh.socket)를 쓰면
+# ssh.service 가 상주하지 않아 /run/sshd 가 아예 없다 — 접속은 멀쩡한데(연결마다
+# sshd 가 새로 뜬다) 검증만 "Missing privilege separation directory" 로 죽는다.
+[ -d /run/sshd ] || mkdir -p /run/sshd
+chmod 0755 /run/sshd
+sshd -t
+
+# 반영은 파일 변경 여부와 무관하게 매번 보장한다. 이전 실행이 install 뒤 sshd -t 에서
+# 죽으면 파일만 남는데, 그때 "내용이 같으니 건너뜀" 으로 처리하면 상주 데몬이 새 설정을
+# 영영 읽지 않는다 — 재실행이 고쳐주지 못하는 상태가 된다. reload 는 기존 세션을 끊지
+# 않고 설정만 다시 읽으므로 매번 돌려도 비용이 없다.
+if systemctl is-active --quiet ssh.service; then
   # Ubuntu 의 유닛명은 sshd 가 아니라 ssh 다
-  systemctl restart ssh
+  systemctl reload ssh.service || systemctl restart ssh.service
+else
+  # 소켓 활성화 경로: 연결마다 sshd 가 새로 떠 설정을 읽으므로 다음 연결부터 적용된다.
+  # 소켓이 내려가 있으면 SSH 자체가 막히므로 그것만 보장한다.
+  systemctl is-active --quiet ssh.socket || systemctl start ssh.socket
 fi
 
 echo "==> Caddy — ${DOMAIN} → 127.0.0.1:3000"
