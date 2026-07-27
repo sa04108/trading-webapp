@@ -9,6 +9,9 @@ export const users = sqliteTable('users', {
   id: text('id').primaryKey(),
   username: text('username').notNull().unique(),
   passwordHash: text('password_hash').notNull(),
+  totpSecret: text('totp_secret'),
+  totpEnabled: integer('totp_enabled', { mode: 'boolean' }).notNull().default(false),
+  recoveryCodeHashesJson: text('recovery_code_hashes_json'),
   createdAtMs: integer('created_at_ms').notNull(),
   updatedAtMs: integer('updated_at_ms').notNull(),
 });
@@ -20,6 +23,7 @@ export const sessions = sqliteTable(
     userId: text('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
+    pendingTotp: integer('pending_totp', { mode: 'boolean' }).notNull().default(false),
     createdAtMs: integer('created_at_ms').notNull(),
     lastSeenAtMs: integer('last_seen_at_ms').notNull(),
   },
