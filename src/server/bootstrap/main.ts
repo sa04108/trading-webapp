@@ -11,6 +11,13 @@ async function main(): Promise<void> {
 
   await app.listen({ host: config.bindAddress, port: config.port });
   container.jobOrchestrator.start();
+  const withoutTotp = container.userRepository.listUsernamesWithoutTotp();
+  if (withoutTotp.length > 0) {
+    container.logger.warn(
+      { module: 'bootstrap', event: 'auth.totp.not-enrolled', usernames: withoutTotp },
+      'TOTP 미등록 계정 — 퍼블릭 노출 전에 totp:enroll 로 등록하라 (D-017)',
+    );
+  }
   container.logger.info(
     { module: 'bootstrap', event: 'server.started', address: config.bindAddress, port: config.port },
     'server started',

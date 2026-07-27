@@ -5,6 +5,7 @@
  *   pnpm cli admin:create
  */
 import readline from 'node:readline';
+import { randomBytes } from 'node:crypto';
 import { Writable } from 'node:stream';
 import { loadConfig } from './bootstrap/config.js';
 import { createContainer } from './bootstrap/container.js';
@@ -71,7 +72,46 @@ async function adminCreate(): Promise<void> {
     container.auditLog.record(username, 'auth.admin.created');
 
     console.log(`\n관리자 계정 '${username}' 이 생성되었습니다.`);
-    console.log('로그인은 사용자 이름과 비밀번호만으로 합니다. (D-014)');
+    console.log('다음: pnpm cli totp:enroll 로 TOTP 를 등록하세요 — 퍼블릭 노출 전 필수 (설계 §3.4)');
+  } finally {
+    container.close();
+  }
+}
+
+async function totpEnroll(): Promise<void> {
+  const config = loadConfig();
+  const container = createContainer(config);
+  try {
+    const username = await ask('사용자 이름: ');
+    const user = container.userRepository.findByUsername(username);
+    if (!user) throw new Error('존재하지 않는 사용자입니다.');
+    if (user.totpEnabled) {
+      const answer = await ask(
+        '이미 TOTP 가 등록되어 있습니다. 재발급하면 기존 인증 앱 항목과 복구 코드가 전부 무효화됩니다. 계속하려면 yes: ',
+      );
+      if (answer !== 'yes') {
+        console.log('중단했습니다.');
+        return;
+      }
+    }
+
+    const secret = container.totpService.generateSecret();
+    const recoveryCodes = Array.from({ length: 8 }, () => randomBytes(5).toString('hex'));
+    const recoveryCodeHashes: string[] = [];
+    for (const code of recoveryCodes) {
+      recoveryCodeHashes.push(await container.passwordHasher.hash(code));
+    }
+
+    container.userRepository.setTotp(user.id, secret, recoveryCodeHashes, container.clock.now());
+    container.auditLog.record(username, 'auth.totp.enrolled');
+
+    console.log('\nTOTP 가 등록되었습니다.\n');
+    console.log('1) 인증 앱(Google Authenticator 등)에 아래 URI 또는 secret 을 등록하세요:');
+    console.log(`   otpauth URI: ${container.totpService.buildUri(secret, username)}`);
+    console.log(`   TOTP secret (base32): ${secret}`);
+    console.log('\n2) 복구 코드를 안전한 곳에 보관하세요 (각 1회용, 재표시 불가):');
+    for (const code of recoveryCodes) console.log(`   ${code}`);
+    console.log('\n이 정보는 다시 표시되지 않습니다. (스펙 §16 TOTP secret 재노출 금지)');
   } finally {
     container.close();
   }
@@ -83,9 +123,13 @@ async function main(): Promise<void> {
     case 'admin:create':
       await adminCreate();
       break;
+    case 'totp:enroll':
+      await totpEnroll();
+      break;
     default:
       console.log('사용법: cli <command>');
       console.log('  admin:create   관리자 계정 생성');
+      console.log('  totp:enroll    TOTP 2단계 인증 등록·재발급 (CLI 전용, 스펙 §16)');
       process.exitCode = command ? 1 : 0;
   }
 }
