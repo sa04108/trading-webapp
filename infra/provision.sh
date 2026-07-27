@@ -37,7 +37,7 @@ APT="apt-get -o DPkg::Lock::Timeout=600 -y"
 $APT update
 $APT full-upgrade
 $APT install ca-certificates curl git jq openssl unzip xz-utils build-essential \
-             python3 pkg-config sqlite3 ufw unattended-upgrades
+             python3 pkg-config sqlite3 ufw unattended-upgrades gnupg
 
 timedatectl set-timezone UTC
 
@@ -146,8 +146,9 @@ systemctl restart ssh
 echo "==> Caddy — ${DOMAIN} → 127.0.0.1:3000"
 # 공식 apt repo 로 설치한다 — unattended-upgrades 가 보안 패치를 함께 관리한다.
 if ! command -v caddy >/dev/null 2>&1; then
+  # --yes: 이전 실행이 keyring 생성 후 죽었어도 재실행이 막히지 않는다 (멱등성)
   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
-    | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+    | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
     > /etc/apt/sources.list.d/caddy-stable.list
   $APT update
