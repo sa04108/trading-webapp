@@ -1,11 +1,11 @@
 # Quant Trading Platform 구현·배포 명세
 
-> **용도:** Claude Fable 5에 전달할 TypeScript 기반 퀀트 백테스트·자동매매 플랫폼 구현 지침  
-> **기준일:** 2026-07-25  
+> **용도:** TypeScript 기반 퀀트 백테스트·자동매매 플랫폼의 구현·배포 명세 (프로젝트 헌법)  
+> **기준일:** 2026-07-25 (전면 개정 2026-07-28 — D-001~D-017 반영)  
 > **우선순위:** 백테스트 → Paper Trading → 소액 실거래  
 > **실행 환경:** 고정 공인 IP를 제공하는 Linux 호스트 — 인프라 결정, 애플리케이션은 모름 (현재: AWS Lightsail 서울)  
 > **증권사 연동:** REST 전용 어댑터 — 인프라 결정, 애플리케이션은 모름 (1차: 키움 REST API, 이후 토스)  
-> **접근 방식:** 기존 WireGuard VPN 내부에서만 접근  
+> **접근 방식:** 퍼블릭 도메인 + Caddy TLS, 비밀번호 + TOTP 2단계 — 웹은 조회 평면, 제어 조작은 SSH CLI (§2.6, D-017)  
 > **프론트엔드:** React + shadcn/ui, 모바일 우선  
 > **비용 목표:** 월 10 USD 미만
 
@@ -13,7 +13,7 @@
 
 # 1. 프로젝트 목표
 
-외부에서 휴대폰으로 WireGuard VPN에 연결한 뒤 내부 웹 화면에서 다음 작업을 수행할 수 있는 개인용 플랫폼을 만든다.
+외부에서 휴대폰 브라우저로 서비스 도메인에 접속해 다음 작업을 수행할 수 있는 개인용 플랫폼을 만든다.
 
 1. 전략 선택
 2. 전략 파라미터 입력
@@ -26,7 +26,7 @@
 9. 데이터 커버리지와 누락 구간 확인
 10. 향후 동일 전략 코어를 Paper Trading과 실거래에 사용
 
-이 프로젝트는 공개 서비스가 아니다. **퍼블릭 도메인, 퍼블릭 웹 포트, 공개 회원가입은 만들지 않는다.**
+이 프로젝트는 공개 서비스가 아니다. **공개 회원가입은 만들지 않으며 사용자는 관리자 1명뿐이다.** 웹은 퍼블릭 도메인으로 노출되지만 조회 평면으로 권한이 제한되고(§2.6), 접근에는 비밀번호 + TOTP 2단계 인증이 필요하다(§16). 돈·전략·보안에 관한 조작은 웹에 존재하지 않는다 — SSH CLI 전용이다. (D-017)
 
 ---
 
@@ -38,11 +38,9 @@
 
 애플리케이션의 도메인·애플리케이션 로직에는 다음 개념이 등장하면 안 된다.
 
-- WireGuard
-- `wg0`
-- VPN IP
 - 특정 클라우드 벤더 (AWS, Lightsail 등)
 - 서버 공인 IP
+- 서비스 도메인
 - Caddy
 - UFW
 - 클라우드 방화벽
@@ -148,7 +146,7 @@ SSH CLI는 제어 평면이다. 다음은 CLI로만 한다.
 ## 포함
 
 - 단일 관리자 로그인 (비밀번호 + TOTP 2단계 — D-017)
-- 모바일 대응 내부 웹 UI
+- 모바일 대응 웹 UI (조회 평면, §2.6)
 - 등록 전략 목록
 - 전략 파라미터 스키마
 - 시간봉 백테스트
@@ -167,14 +165,12 @@ SSH CLI는 제어 평면이다. 다음은 CLI로만 한다.
 - 실행 재현 정보
 - 감사 로그
 - systemd 배포
-- WireGuard 내부 접근
-- Caddy 내부 TLS
+- 도메인 + Caddy 퍼블릭 TLS (Let's Encrypt)
 - 선택적 S3 백업
 
 ## 제외
 
 - 공개 SaaS
-- 공개 도메인
 - 다중 사용자
 - 소셜 로그인
 - RDS
@@ -284,7 +280,7 @@ fork(workerPath, [jobId], {
 - 계좌 식별자
 - 관리자 세션 secret
 - AWS access key
-- WireGuard 키
+- TOTP secret
 
 ---
 
@@ -306,13 +302,12 @@ quant-platform/
 │  │  │  ├─ container.ts
 │  │  │  ├─ server.ts
 │  │  │  └─ main.ts
+│  │  ├─ cli.ts              # admin:create, totp:enroll — 제어 평면 (§2.6)
 │  │  ├─ modules/
 │  │  │  ├─ auth/
 │  │  │  ├─ strategy/
 │  │  │  ├─ market-data/
 │  │  │  ├─ backtest/
-│  │  │  ├─ portfolio/
-│  │  │  ├─ risk/
 │  │  │  ├─ broker/
 │  │  │  ├─ audit/
 │  │  │  └─ system/
@@ -328,11 +323,9 @@ quant-platform/
 │  │  │  ├─ backtests/
 │  │  │  ├─ datasets/
 │  │  │  └─ settings/
-│  │  ├─ routes/
 │  │  ├─ lib/
 │  │  └─ main.tsx
 │  └─ shared/
-│     ├─ api-contracts/
 │     └─ schemas/
 │
 ├─ migrations/
@@ -342,22 +335,24 @@ quant-platform/
 │  ├─ architecture/
 │  └─ e2e/
 ├─ infra/
-│  ├─ caddy/
-│  ├─ systemd/
-│  ├─ wireguard/
-│  ├─ ufw/
-│  └─ backup/
+│  ├─ provision.sh           # 서버 프로비저닝 (§21~29 자동화, 멱등)
+│  ├─ app.env.example
+│  └─ systemd/
 ├─ scripts/
+│  ├─ bootstrap.sh           # 개발 PC 에서 새 서버 셋업 (provision.sh 업로드·실행)
 │  ├─ deploy.sh
 │  ├─ backup.sh
 │  └─ restore.sh
 ├─ docs/
-│  ├─ quant_trading_platform_spec.md
+│  ├─ SPEC.md                # 이 문서
+│  ├─ ONBOARDING.md
 │  ├─ PLAN.md
 │  ├─ DECISIONS.md
 │  └─ IMPLEMENTATION_STATUS.md
 └─ README.md
 ```
+
+`portfolio`·`risk` 모듈은 실거래 단계(§35)에서 추가한다 — 소비자 없는 코드를 미리 만들지 않는다 (D-009).
 
 각 서버 모듈 내부 기본 구조:
 
@@ -393,7 +388,7 @@ bootstrap composition root
 - 파일 시스템
 - `process.env`
 - 증권사 DTO (키움·토스 등)
-- Caddy·WireGuard·AWS 개념
+- Caddy·도메인·AWS 등 인프라 개념
 
 ## Application 금지 사항
 
@@ -686,14 +681,10 @@ users
 sessions
 login_attempts
 
-strategies
-strategy_versions
-
 datasets
 dataset_versions
 data_coverage
 data_import_jobs
-data_sync_jobs
 
 backtest_jobs
 backtest_runs
@@ -705,9 +696,13 @@ backtest_monthly_returns
 backtest_symbol_metrics
 
 audit_logs
-application_settings
-schema_migrations
+__drizzle_migrations
 ```
+
+전략 테이블(`strategies`·`strategy_versions`)은 만들지 않는다 — 전략은 코드
+등록식 레지스트리가 유일한 출처다 (§2.5, D-009). 소비자 없는 테이블
+(`application_settings`, `data_sync_jobs`)도 같은 이유로 없다 — 필요해지는
+시점에 그 시점의 요구대로 신설한다.
 
 SQLite 설정:
 
@@ -783,7 +778,8 @@ Prefix:
 ## 인증
 
 ```http
-POST /api/v1/auth/login
+POST /api/v1/auth/login          # 1단계 — 성공 시 TOTP_REQUIRED 또는 OK
+POST /api/v1/auth/totp/verify    # 2단계 — TOTP/복구 코드, 성공 시 세션 회전 (§16)
 POST /api/v1/auth/logout
 GET  /api/v1/auth/me
 ```
@@ -840,7 +836,7 @@ GET /api/v1/system/info
 ```json
 {
   "strategyId": "hourly-breakout",
-  "strategyVersion": "1.0.0",
+  "strategyVersion": "1.2.0",
   "parameters": {
     "lookbackBars": 20,
     "atrPeriod": 14,
@@ -860,6 +856,9 @@ GET /api/v1/system/info
     "initialCash": 10000000,
     "currency": "KRW"
   },
+  "risk": {
+    "maxPositions": 10
+  },
   "execution": {
     "fillTiming": "NEXT_BAR_OPEN",
     "commissionProfileId": "kr-equity-default",
@@ -868,6 +867,9 @@ GET /api/v1/system/info
   "randomSeed": 42
 }
 ```
+
+포지션 상한은 전략 파라미터가 아니라 요청의 `risk.maxPositions` 다 — 엔진의
+리스크 제약(§9.2-6)이지 전략 로직의 입력이 아니기 때문이다 (D-012).
 
 ---
 
@@ -1004,8 +1006,8 @@ Content
 
 ### 로그인
 
-- 사용자 이름
-- 비밀번호
+- 1단계: 사용자 이름·비밀번호
+- 2단계: TOTP 6자리 코드 또는 복구 코드 (`autocomplete="one-time-code"`)
 - 서버 연결 상태
 - 회원가입 링크 없음
 
@@ -1124,7 +1126,9 @@ Accordion
 - 고정 공인 IP (허용 IP 등록제 증권사 대응)
 - 월 10 USD 미만
 
-이 요구사항을 만족하면 어떤 클라우드·VPS로도 교체할 수 있으며, 교체 시 인프라 장(18~27)과 배포 스크립트만 수정한다.
+이 요구사항을 만족하면 어떤 클라우드·VPS로도 교체할 수 있으며, 교체 시 인프라 장(§18~31)과 배포 스크립트만 수정한다.
+
+추가 전제: 서비스 도메인 1개 — A 레코드가 서버의 고정 공인 IP 를 가리켜야 한다 (§23).
 
 현재 선택은 AWS Lightsail 서울이다. 2026-07 기준 공식 Lightsail Linux public IPv4 플랜:
 
@@ -1197,6 +1201,10 @@ Static IP 용도:
 
 # 21. 초기 Ubuntu 설정
 
+> §21~29 는 `infra/provision.sh` 가 단일 명령으로 자동화한다 (멱등 — 몇 번을
+> 실행해도 결과가 같다). 개발 PC 에서는 `scripts/bootstrap.sh` 가 이 파일을
+> 업로드·실행한다. 아래는 그 스크립트가 하는 일의 명세다.
+
 ```bash
 sudo apt update
 sudo apt full-upgrade -y
@@ -1206,15 +1214,16 @@ sudo apt install -y \
   curl \
   git \
   jq \
+  openssl \
   unzip \
   xz-utils \
   build-essential \
   python3 \
   pkg-config \
   sqlite3 \
-  wireguard \
   ufw \
-  unattended-upgrades
+  unattended-upgrades \
+  gnupg
 ```
 
 서버 시간대:
@@ -1294,83 +1303,41 @@ node --version
 
 ---
 
-# 23. WireGuard 연결
+# 23. 퍼블릭 노출·도메인
 
-Lightsail을 기존 WireGuard 서버의 client peer로 참여시킨다.
+> 이 장은 D-017 로 전면 교체됐다. 이전 모델(WireGuard 사설망 → D-016 에서
+> Tailscale)은 폐기됐고, 그 이유와 트레이드오프는 DECISIONS.md 의 D-016·D-017 에
+> 있다. 요지: 플랫폼의 권한을 조회 평면으로 줄이는 대신(§2.6) 노출을 허용한다.
 
-중요: 증권사 API 요청은 서버의 고정 공인 IP로 나가야 한다. Lightsail의 `AllowedIPs`에 `0.0.0.0/0`을 넣지 않는다.
+전제:
 
-예시:
+- 서비스 도메인의 A 레코드가 이 서버의 고정 공인 IP 를 가리킨다. provision.sh 가
+  프로비저닝 시작 시 해석을 확인하고, 아니면 중단한다.
+- TLS 는 Caddy 가 Let's Encrypt 로 자동 발급·갱신한다 (§27). 도메인은 CT 로그에
+  공개된다 — 퍼블릭 서비스 전제이므로 무해하다.
 
-```text
-VPN network: 10.20.0.0/24
-Lightsail:    10.20.0.15/32
-```
-
-키 생성:
-
-```bash
-sudo install -m 700 -d /etc/wireguard
-umask 077
-wg genkey | sudo tee /etc/wireguard/private.key >/dev/null
-sudo cat /etc/wireguard/private.key | wg pubkey | \
-  sudo tee /etc/wireguard/public.key >/dev/null
-sudo cat /etc/wireguard/public.key
-```
-
-`/etc/wireguard/wg0.conf`:
-
-```ini
-[Interface]
-Address = 10.20.0.15/32
-PrivateKey = <LIGHTSAIL_PRIVATE_KEY>
-
-[Peer]
-PublicKey = <EXISTING_WIREGUARD_SERVER_PUBLIC_KEY>
-Endpoint = <EXISTING_WIREGUARD_ENDPOINT>:51820
-AllowedIPs = 10.20.0.0/24
-PersistentKeepalive = 25
-```
-
-```bash
-sudo chmod 600 /etc/wireguard/wg0.conf
-sudo systemctl enable --now wg-quick@wg0
-sudo wg show
-```
-
-기존 WireGuard 서버에 peer 추가:
-
-```ini
-[Peer]
-PublicKey = <LIGHTSAIL_PUBLIC_KEY>
-AllowedIPs = 10.20.0.15/32
-```
-
-휴대폰 peer는 `10.20.0.15/32` 또는 VPN 대역을 라우팅한다.
+**고정 아웃바운드 IP**: 증권사 API 요청은 서버의 고정 공인 IP 로 나가야 한다
+(허용 IP 등록제 대응). provision.sh 가 아웃바운드 IP 를 조회해 정보성으로
+출력한다 — 증권사에 등록한 IP 와 일치해야 한다.
 
 검증:
 
 ```bash
-curl -4 https://checkip.amazonaws.com
+curl -4 https://checkip.amazonaws.com    # 결과가 Static IP 여야 한다
 ```
-
-결과가 Lightsail Static IP여야 한다.
 
 ---
 
-# 24. 퍼블릭 방화벽 마감
+# 24. 클라우드 방화벽
 
-WireGuard 내부 SSH가 성공한 뒤 Lightsail Networking에서 제거:
+클라우드(현재: Lightsail Networking)에서 **TCP 22·80·443 만 허용**하고 나머지는
+제거한다 (기본 생성 규칙에 다른 포트가 있으면 삭제). IPv4 와 IPv6 를 각각
+확인한다.
 
-- TCP 22
-- TCP 80
-- TCP 443
-- TCP 3000
-- UDP 51820
-
-Lightsail이 기존 WireGuard 서버로 아웃바운드 연결하므로 Lightsail에 WireGuard 포트를 열 필요가 없다.
-
-IPv4와 IPv6 방화벽을 각각 확인한다.
+- 22: SSH — 퍼블릭으로 유지한다. 클라우드 브라우저 SSH 콘솔이 퍼블릭 22 를
+  쓰므로, 이것이 키 분실 시의 out-of-band 복구 경로다 (D-017)
+- 80: ACME HTTP-01 ·HTTPS 리다이렉트
+- 443: HTTPS
 
 ---
 
@@ -1380,17 +1347,15 @@ IPv4와 IPv6 방화벽을 각각 확인한다.
 sudo ufw default deny incoming
 sudo ufw default allow outgoing
 
-sudo ufw allow in on wg0 to any port 22 proto tcp
-sudo ufw allow in on wg0 to any port 443 proto tcp
-
-sudo ufw deny 80/tcp
-sudo ufw deny 3000/tcp
+sudo ufw limit 22/tcp     # rate-limit — 브루트포스 감속 (인증 차단은 §26 이 담당)
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
 
 sudo ufw enable
 sudo ufw status verbose
 ```
 
-WireGuard SSH가 검증되기 전에 현재 퍼블릭 SSH 세션을 차단하지 않는다.
+3000 은 열지 않는다 — 앱은 `127.0.0.1` 에만 bind 하므로 규칙 자체가 필요 없다.
 
 ---
 
@@ -1413,50 +1378,31 @@ sudo sshd -t
 sudo systemctl restart ssh
 ```
 
+퍼블릭 22 가 열려 있으므로 봇의 비밀번호 추측 시도가 상시로 들어온다 — 위
+설정(`PasswordAuthentication no`)이 그 공격 부류 전체를 무효화한다. 이 하드닝은
+클라우드 브라우저 SSH 콘솔을 막지 않는다 — 브라우저 SSH 는 키 인증이다 (D-017).
+
 ---
 
-# 27. Caddy 내부 TLS
+# 27. Caddy 퍼블릭 TLS
 
-공식 Caddy Ubuntu 설치 절차를 사용한다.
+공식 Caddy apt repo 로 설치한다 — unattended-upgrades 가 보안 패치를 함께
+관리한다.
 
 `/etc/caddy/Caddyfile`:
 
 ```caddy
-https://10.20.0.15 {
-    bind 10.20.0.15
-    tls internal
-
-    encode zstd gzip
-
-    header {
-        Strict-Transport-Security "max-age=31536000"
-        X-Content-Type-Options "nosniff"
-        X-Frame-Options "DENY"
-        Referrer-Policy "no-referrer"
-        -Server
-    }
-
+<도메인> {
     reverse_proxy 127.0.0.1:3000
 }
 ```
 
-내부 DNS가 있으면 `https://quant.internal` 사용 가능.
+Caddy 는 리버스 프록시 역할만 한다. Let's Encrypt 발급·갱신은 자동이다.
+HSTS·보안 헤더는 앱(`SECURITY_HEADERS`)이, 압축은 `@fastify/compress` 가
+담당하므로 Caddy 에 중복 설정하지 않는다 (D-016 에서 이관).
 
-Caddy만 WireGuard 시작 순서를 안다.
-
-```bash
-sudo systemctl edit caddy
-```
-
-```ini
-[Unit]
-After=wg-quick@wg0.service
-Requires=wg-quick@wg0.service
-```
-
-애플리케이션 systemd unit에는 WireGuard 의존성을 넣지 않는다.
-
-`tls internal` 사용 시 Caddy Root CA의 **공개 인증서**만 휴대폰에 설치한다. CA private key를 복사하지 않는다.
+앱은 `TRUST_PROXY_LOOPBACK=true` 로 127.0.0.1 의 프록시 헤더만 신뢰한다 —
+감사 로그의 `request.ip` 가 실제 클라이언트 IP 가 된다.
 
 ---
 
@@ -1495,6 +1441,10 @@ openssl rand -base64 48
 sudo chown root:root /etc/quant-platform/app.env
 sudo chmod 600 /etc/quant-platform/app.env
 ```
+
+provision.sh 가 이 파일을 생성하며 `SESSION_SECRET` 은 서버에서 만든다.
+**파일이 이미 있으면 절대 덮지 않는다** — SESSION_SECRET 이 바뀌면 기존 세션이
+전부 무효화된다.
 
 ---
 
@@ -1590,20 +1540,28 @@ dist/
 └─ current -> releases/20260726-090000-bcdefa2
 ```
 
-배포 순서:
+배포 순서 (`scripts/deploy.sh` 가 자동화):
 
 1. 개발 PC에서 lint·typecheck·test·build
 2. tar 생성
-3. WireGuard IP로 scp
+3. 서버로 scp
 4. 새 release 디렉터리에 압축 해제
 5. production dependency 설치
-6. migration
-7. `current` symlink 원자적 교체
-8. systemd restart
-9. health check
-10. 실패 시 이전 release로 rollback
+6. **SQLite 스냅샷 생성** — 재시작(=마이그레이션 적용) 직전 (D-010)
+7. migration
+8. `current` symlink 원자적 교체
+9. systemd restart
+10. health check
+11. 실패 시 이전 release 와 **DB 스냅샷을 함께** rollback (D-010 — 코드만
+    되돌리면 이전 코드가 새 스키마를 만나 죽는 "명목상 롤백"이 된다)
 
-배포 스크립트는 비밀값을 command line argument로 노출하지 않는다.
+추가 규칙:
+
+- 배포 스크립트는 비밀값을 command line argument 로 노출하지 않는다
+- 파괴적 스키마 변경(컬럼·테이블 삭제)은 코드가 참조를 끊은 **다음** 릴리스에
+  싣는다 (expand-contract, D-010)
+- 스냅샷은 성공 배포 후에도 최근 5개를 보존하고, release 디렉터리는 회전시켜
+  디스크를 묶는다
 
 ---
 
@@ -1619,11 +1577,14 @@ dist/
 
 백업 제외:
 
-- WireGuard private key
 - 증권사 API secret
-- 세션 secret
+- 세션 secret (`app.env`)
 - 관리자 비밀번호
 - AWS secret key
+
+로컬 백업 보관은 일수가 아니라 **총 용량**으로 제한한다 (`BACKUP_MAX_TOTAL_MB`,
+기본 10240) — 호스트 디스크가 40GB 고정이므로 제약이 용량이면 정책도 용량이다
+(D-013). 30일 lifecycle 은 S3 규칙이다.
 
 S3를 사용할 경우:
 
@@ -1649,9 +1610,11 @@ const HourlyBreakoutParameters = z.object({
   stopAtrMultiplier: z.number().positive().max(20),
   takeProfitAtrMultiplier: z.number().positive().max(50).optional(),
   riskPerTradePercent: z.number().positive().max(5),
-  maxPositions: z.number().int().min(1).max(20),
 });
 ```
+
+`maxPositions` 는 전략 파라미터가 아니다 — 요청의 `risk.maxPositions` 로 받는다
+(§15, D-012). 현재 전략 버전은 1.2.0 이다.
 
 전략의 수익성을 약속하는 것이 아니라 백테스트 엔진의 정확성·재현성을 검증하는 기준 전략이다.
 
@@ -1795,9 +1758,9 @@ quant-platform-live.service
 - stale data 차단
 - clock drift 검사
 - 미체결·보유 수량 재동기화
-- kill switch
+- kill switch — 웹에서는 **끄기만** 가능, 재개는 CLI 전용 (§2.6, D-017)
 - 재부팅 후 자동 실거래 재개 금지
-- 수동 arm
+- 수동 arm (CLI)
 
 ---
 
@@ -1818,9 +1781,9 @@ quant-platform-live.service
 
 ## Phase 1 — 인증·UI shell
 
-- 관리자 CLI
+- 관리자 CLI (admin:create, totp:enroll)
 - Argon2id
-- 로그인
+- 로그인 (비밀번호 + TOTP 2단계)
 - 세션
 - 모바일 navigation
 - 데스크톱 sidebar
@@ -1875,12 +1838,11 @@ quant-platform-live.service
 
 - Lightsail
 - Static IP
-- WireGuard
-- UFW
-- Caddy
-- internal TLS
+- 도메인 + Caddy (Let's Encrypt)
+- UFW (22 rate-limit / 80 / 443)
+- sshd 하드닝 (키 전용)
 - systemd
-- deploy/rollback
+- deploy/rollback (bootstrap.sh · provision.sh · deploy.sh)
 
 ## Phase 7 — 운영
 
@@ -1933,10 +1895,10 @@ Claude가 임의로 변경하면 안 되는 결정:
 
 - Modular Monolith
 - localhost application bind
-- WireGuard awareness는 infra only
+- 네트워크(도메인·프록시·방화벽) awareness는 infra only
 - 클라우드 awareness는 infra only
 - 증권사 awareness는 infra only, 접근은 REST 전용
-- public web port 없음
+- 평면 분리 — 웹에 제어 평면 엔드포인트 금지 (§2.6)
 - SQLite + Parquet + DuckDB
 - concurrency 1
 - arbitrary strategy code 금지
@@ -1958,11 +1920,12 @@ Claude가 임의로 변경하면 안 되는 결정:
 
 ## 보안
 
-- 공인 IP의 80·443·3000 접근 실패
-- VPN IP의 443 접근 성공
-- 앱은 `127.0.0.1:3000`만 Listen
-- 도메인·애플리케이션 계층에 WireGuard 문자열 없음
-- 로그인 필요
+- 3000 은 외부에서 접근 불가 — 앱은 `127.0.0.1:3000`만 Listen
+- 443 은 도메인으로만 유효한 TLS 응답 (Let's Encrypt)
+- 22 는 키 인증만 수락 (비밀번호 인증 거부)
+- 도메인·애플리케이션 계층에 인프라 개념 문자열 없음 (§2.1)
+- 로그인 필요 — 비밀번호 + TOTP 2단계, TOTP 등록·재설정은 CLI 전용
+- 웹에 제어 평면 엔드포인트 없음 (§2.6)
 - 안전한 cookie
 - 로그에 secret 없음
 - 임의 코드 실행 없음
@@ -2012,7 +1975,6 @@ sudo ufw status verbose
 - [Lightsail Instance Bundles](https://docs.aws.amazon.com/lightsail/latest/userguide/amazon-lightsail-bundles.html)
 - [Lightsail Static IP](https://docs.aws.amazon.com/lightsail/latest/userguide/understanding-static-ip-addresses-in-amazon-lightsail.html)
 - [Lightsail Firewall](https://docs.aws.amazon.com/lightsail/latest/userguide/understanding-firewall-and-port-mappings-in-amazon-lightsail.html)
-- [WireGuard Quick Start](https://www.wireguard.com/quickstart/)
 - [Ubuntu Firewall](https://ubuntu.com/server/docs/security-firewall/)
 - [Caddy Installation](https://caddyserver.com/docs/install)
 - [Caddy TLS](https://caddyserver.com/docs/caddyfile/directives/tls)
@@ -2039,14 +2001,15 @@ Application
 Application bind
 └─ 127.0.0.1:3000
 
-Remote access
-└─ Existing WireGuard only
+Access model
+└─ 평면 분리 (D-017): 웹 = 조회 평면 (퍼블릭 도메인 + 비밀번호+TOTP),
+   제어 조작 = SSH CLI 전용
 
 Reverse proxy
-└─ Caddy on WireGuard IP:443
+└─ Caddy, 도메인:443, Let's Encrypt 자동 발급·갱신
 
 Public inbound
-└─ None
+└─ TCP 22 (SSH, 키 전용) · 80 (ACME) · 443 (HTTPS)
 
 Frontend
 └─ React + Vite + shadcn/ui, mobile-first
@@ -2079,6 +2042,6 @@ Arbitrary code
 Live trading
 └─ Disabled until separately approved
 
-WireGuard awareness
-└─ Infrastructure only
+Network awareness
+└─ Infrastructure only — 도메인·Caddy·UFW·클라우드는 infra/·scripts/ 만 안다
 ```
