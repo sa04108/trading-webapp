@@ -162,6 +162,25 @@ fi
 KEEP_SNAPSHOTS=5
 sudo sh -c "ls -1t /var/lib/quant-platform/backups/pre-deploy-*.sqlite 2>/dev/null | tail -n +\$((KEEP_SNAPSHOTS + 1)) | xargs -r rm -f" || true
 
+# 릴리스 디렉터리도 같이 회전시킨다. 각 릴리스는 서버에서 설치한 node_modules 를 통째로
+# 들고 있어(duckdb·better-sqlite3·argon2 네이티브 바이너리 포함) 수백 MB 이고, 여기를
+# 정리하지 않으면 40GB 디스크가 배포 횟수에 비례해 줄어든다 — 시장 데이터보다 이쪽이
+# 먼저 디스크를 먹는다.
+#
+# 개수는 스냅샷과 같아야 한다. 릴리스를 더 적게 남기면 짝이 맞는 코드가 없는 스냅샷이
+# 생겨 위 D-010 의 "코드와 스키마를 짝으로 되돌린다" 가 성립하지 않는다.
+KEEP_RELEASES=\${KEEP_SNAPSHOTS}
+CURRENT_TARGET="\$(readlink -f /opt/quant-platform/current || true)"
+# 이름이 <UTC타임스탬프>-<sha> 라 사전순 = 시간순 (backup.sh 의 backup-* 와 같은 규약).
+# 지금 막 전환한 current 는 최신이라 어차피 남지만, 안전을 위해 명시적으로 건너뛴다.
+sudo ls -1 /opt/quant-platform/releases 2>/dev/null | sort -r | tail -n +\$((KEEP_RELEASES + 1)) \
+  | while IFS= read -r old; do
+      dir="/opt/quant-platform/releases/\${old}"
+      if [ -n "\${old}" ] && [ "\${dir}" != "\${CURRENT_TARGET}" ]; then
+        sudo rm -rf "\${dir}"
+      fi
+    done || true
+
 echo "release ${RELEASE} live"
 if [ -f "\${DB_SNAPSHOT}" ]; then
   echo "수동 롤백 시 코드와 스키마를 짝으로 되돌린다 (D-010):"
