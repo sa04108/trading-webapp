@@ -6,6 +6,8 @@ import type {
   PasswordHasher,
   SessionRecord,
   SessionRepository,
+  TotpService,
+  UserRecord,
   UserRepository,
 } from './ports.js';
 
@@ -14,8 +16,13 @@ const LOGIN_FAILURE_LIMIT = 5;
 
 export type LoginResult =
   | { readonly status: 'SUCCESS'; readonly sessionId: string }
+  | { readonly status: 'TOTP_REQUIRED'; readonly sessionId: string }
   | { readonly status: 'INVALID_CREDENTIALS' }
   | { readonly status: 'LOCKED' };
+
+export type TotpVerifyResult =
+  | { readonly status: 'SUCCESS'; readonly sessionId: string }
+  | { readonly status: 'INVALID' };
 
 export interface AuthenticatedUser {
   readonly id: string;
@@ -31,6 +38,7 @@ export interface AuthServiceDeps {
   readonly sessions: SessionRepository;
   readonly loginAttempts: LoginAttemptRepository;
   readonly passwordHasher: PasswordHasher;
+  readonly totp: TotpService;
   readonly clock: Clock;
   readonly audit: AuditSink;
   readonly idleTimeoutMs: number;
@@ -66,9 +74,8 @@ export class AuthService {
   }
 
   /**
-   * 비밀번호 단일 단계 로그인 (D-014 로 TOTP 제거).
-   * 성공 시 항상 새 세션 ID 를 발급한다 — 서버가 발급하지 않은 쿠키 값은
-   * 어느 시점에도 인증된 세션이 되지 않으므로 세션 고정 방어가 유지된다.
+   * 비밀번호 1단계. TOTP 등록 계정은 pending 세션을 발급하고 verifyTotp 가 2단계를 맡는다 (D-017).
+   * 어느 경로든 서버가 발급하지 않은 쿠키 값은 인증된 세션이 되지 않는다.
    */
   async login(username: string, password: string, ip: string): Promise<LoginResult> {
     const { users, sessions, loginAttempts, passwordHasher, clock, audit } = this.deps;
@@ -95,16 +102,73 @@ export class AuthService {
       return { status: 'INVALID_CREDENTIALS' };
     }
 
+    const requiresTotp = user.totpEnabled && user.totpSecret !== null;
     const session: SessionRecord = {
       id: newSessionId(),
       userId: user.id,
+      pendingTotp: requiresTotp,
       createdAtMs: now,
       lastSeenAtMs: now,
     };
     sessions.create(session);
 
+    if (requiresTotp) {
+      return { status: 'TOTP_REQUIRED', sessionId: session.id };
+    }
+
     loginAttempts.record(username, ip, true, now);
     audit.record(username, 'auth.login.success', { ip });
+    return { status: 'SUCCESS', sessionId: session.id };
+  }
+
+  /** 2단계: TOTP 또는 복구 코드 검증. 성공 시 세션 ID 회전(스펙 §16). */
+  async verifyTotp(pendingSessionId: string, token: string, ip: string): Promise<TotpVerifyResult> {
+    const { users, sessions, loginAttempts, totp, clock, audit } = this.deps;
+    const now = clock.now();
+
+    const pending = sessions.findById(pendingSessionId);
+    if (!pending || !pending.pendingTotp || this.isExpired(pending, now)) {
+      return { status: 'INVALID' };
+    }
+    const user = users.findById(pending.userId);
+    if (!user || !user.totpSecret) return { status: 'INVALID' };
+
+    const recentFailures = loginAttempts.countRecentFailures(
+      user.username,
+      now - LOGIN_FAILURE_WINDOW_MS,
+    );
+    if (isLoginLocked(recentFailures, LOGIN_FAILURE_LIMIT)) {
+      audit.record(user.username, 'auth.login.locked', { ip });
+      return { status: 'INVALID' };
+    }
+
+    const normalizedToken = token.trim();
+    let verified = totp.verify(user.totpSecret, normalizedToken);
+
+    if (!verified) {
+      verified = await this.consumeRecoveryCode(user, normalizedToken, now);
+      if (verified) audit.record(user.username, 'auth.recovery-code.used', { ip });
+    }
+
+    if (!verified) {
+      loginAttempts.record(user.username, ip, false, now);
+      audit.record(user.username, 'auth.totp.failure', { ip });
+      return { status: 'INVALID' };
+    }
+
+    // 세션 회전: pending 세션 폐기 후 새 세션 발급
+    sessions.delete(pending.id);
+    const session: SessionRecord = {
+      id: newSessionId(),
+      userId: user.id,
+      pendingTotp: false,
+      createdAtMs: now,
+      lastSeenAtMs: now,
+    };
+    sessions.create(session);
+
+    loginAttempts.record(user.username, ip, true, now);
+    audit.record(user.username, 'auth.login.success', { ip, totp: true });
     return { status: 'SUCCESS', sessionId: session.id };
   }
 
@@ -117,12 +181,12 @@ export class AuthService {
     }
   }
 
-  /** 유효 세션만 사용자로 인정한다. 유효 세션은 last_seen 을 갱신한다. */
+  /** 인증된(=TOTP 완료) 세션만 사용자로 인정한다. 유효 세션은 last_seen 을 갱신한다. */
   authenticate(sessionId: string): AuthenticatedUser | null {
     const { sessions, users, clock } = this.deps;
     const now = clock.now();
     const session = sessions.findById(sessionId);
-    if (!session) return null;
+    if (!session || session.pendingTotp) return null;
     if (this.isExpired(session, now)) {
       sessions.delete(session.id);
       return null;
@@ -138,5 +202,22 @@ export class AuthService {
       idleTimeoutMs: this.deps.idleTimeoutMs,
       absoluteTimeoutMs: this.deps.absoluteTimeoutMs,
     });
+  }
+
+  private async consumeRecoveryCode(
+    user: UserRecord,
+    token: string,
+    nowMs: number,
+  ): Promise<boolean> {
+    const { users, passwordHasher } = this.deps;
+    for (let i = 0; i < user.recoveryCodeHashes.length; i++) {
+      const hash = user.recoveryCodeHashes[i];
+      if (hash !== undefined && (await passwordHasher.verify(hash, token))) {
+        const remaining = user.recoveryCodeHashes.filter((_, index) => index !== i);
+        users.updateRecoveryCodeHashes(user.id, remaining, nowMs);
+        return true;
+      }
+    }
+    return false;
   }
 }

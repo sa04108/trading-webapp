@@ -58,7 +58,14 @@ async function adminCreate(): Promise<void> {
     const passwordHash = await container.passwordHasher.hash(password);
 
     container.userRepository.create(
-      { id: newId('usr'), username, passwordHash },
+      {
+        id: newId('usr'),
+        username,
+        passwordHash,
+        totpSecret: null,
+        totpEnabled: false,
+        recoveryCodeHashes: [],
+      },
       container.clock.now(),
     );
     container.auditLog.record(username, 'auth.admin.created');

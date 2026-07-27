@@ -64,6 +64,9 @@ async function main(): Promise<void> {
       id: newId('usr'),
       username: E2E_USERNAME,
       passwordHash: await container.passwordHasher.hash(E2E_PASSWORD),
+      totpSecret: null,
+      totpEnabled: false,
+      recoveryCodeHashes: [],
     },
     container.clock.now(),
   );

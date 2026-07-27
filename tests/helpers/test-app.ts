@@ -50,23 +50,35 @@ export async function createTestApp(
 export interface TestAdminOptions {
   username?: string;
   password?: string;
+  totpEnabled?: boolean;
+  recoveryCodes?: string[];
 }
 
 export async function createTestAdmin(
   container: Container,
   options: TestAdminOptions = {},
-): Promise<{ username: string; password: string }> {
+): Promise<{ username: string; password: string; totpSecret: string | null }> {
   const username = options.username ?? 'operator';
   const password = options.password ?? 'correct-horse-battery-staple';
+  const totpEnabled = options.totpEnabled ?? false;
+  const totpSecret = totpEnabled ? container.totpService.generateSecret() : null;
+
+  const recoveryCodeHashes: string[] = [];
+  for (const code of options.recoveryCodes ?? []) {
+    recoveryCodeHashes.push(await container.passwordHasher.hash(code));
+  }
 
   container.userRepository.create(
     {
       id: newId('usr'),
       username,
       passwordHash: await container.passwordHasher.hash(password),
+      totpSecret,
+      totpEnabled,
+      recoveryCodeHashes,
     },
     container.clock.now(),
   );
 
-  return { username, password };
+  return { username, password, totpSecret };
 }
