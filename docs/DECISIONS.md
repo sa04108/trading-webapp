@@ -215,3 +215,32 @@
   결과 축적분이 보관 창을 넘어서기 시작할 때 켠다.
 - **영향:** 백업 1벌 크기가 수 MB 수준으로 줄어 D-013 의 10GB 캡이 사실상 SQLite·exports
   전용이 된다. 복원 테스트(§31 월 1회) 절차는 변화 없다.
+
+## D-020: 증권사 캔들 동기화 파이프라인 — 어댑터와 저장소 사이를 잇는다
+
+- **변경 내용:** `BrokerSyncService`(market-data/application)를 추가해 `MarketDataSource`
+  포트에서 Parquet 저장소로 캔들을 나르는 유스케이스를 구현했다. 백필(API 보관 깊이
+  바닥까지)과 증분을 자동 판별하고, 페이지마다 저장·워터마크 갱신(`broker_sync_state`,
+  마이그레이션 0001)으로 어느 지점에서 중단돼도 다음 실행이 이어받는다 (§13).
+  `POST /datasets`(BROKER 데이터셋 생성)와 `POST /datasets/sync`(501 스텁 교체, 202 +
+  jobId)가 입구이고, env 는 `TOSS_CLIENT_ID`/`TOSS_CLIENT_SECRET`/`TOSS_BASE_URL`/
+  `SYNC_MIN_FREE_DISK_MB` 다.
+- **수집 정책 (대화 확정):** 일봉은 원하는 종목을 수십 년, 1분봉은 매매·백테스트
+  유니버스로 한정 (유니버스 = 데이터셋 심볼 목록, 새 도메인 개념 없음). 시간봉은
+  수집하지 않고 1분봉 집계로 생성한다. 데이터셋 timeframe 관례는 CSV import 와 동일
+  (1m 수집 → 1h 데이터셋, 1d → 1d).
+- **추상화 검토 (사용자 요청):** 포트는 충분했고 갭 3개를 보수했다 —
+  ① 포트 계약 에러가 broker 인프라에 정의돼 있어 애플리케이션이 잡을 수 없던 것을
+  `ports.ts` 로 역전 (`MarketDataSourceNotConfiguredError`·`UnsupportedTimeframeError`,
+  기존 이름은 재수출로 보존), ② market-data→broker 금지를 dependency-cruiser 규칙으로
+  구조화, ③ 백필 완료 플래그·워터마크 저장처 신설. 증권사 선택(토스 우선)은 조립부
+  전용 지식으로 남는다 (§2.4).
+- **집계 정확성:** 페이지 단위 1h 집계는 세션 경계에 걸친 반쪽 시간봉을 만들 수 있어
+  (idempotent 저장과 결합 시 조용한 오데이터), sync 중에는 1m 만 저장하고 심볼 수집
+  종료 후 새로 커버된 구간을 현지 일 단위로 스트리밍 재집계한다.
+- **실행 모델:** fire-and-forget + 잡 레코드(기존 dataImportJobs, sourceType BROKER).
+  백테스트 JobQueue 는 일반화하지 않았다 — 원자적 claim 이 필요한 다중 워커용이고
+  sync 는 데이터셋당 1개 실행 가드(409)와 부팅 시 고아 잡 정리로 충분하다 (D-009).
+- **범위 밖:** 증분 자동 스케줄러(백업 자동화와 함께 나중에), 1m S3 아카이브(D-019,
+  보관 깊이 실측 후), 종목 마스터 API, 헬스 대시보드 디스크 지표.
+- **설계 문서:** `docs/superpowers/specs/2026-07-28-broker-sync-design.md`

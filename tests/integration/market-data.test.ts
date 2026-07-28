@@ -358,4 +358,52 @@ describe('market data (스펙 §11, §13)', () => {
     );
     expect(timestamps).toHaveLength(0);
   });
+
+  it('creates a broker dataset and syncs it — unconfigured source fails the job with CSV guidance', async () => {
+    const { username, password } = await createTestAdmin(ctx.container);
+    const login = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { username, password },
+    });
+    const cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/datasets',
+      cookies: { qp_session: cookie },
+      payload: { name: 'KR-일봉', market: 'KR', collect: '1d', symbols: ['005930'] },
+    });
+    expect(created.statusCode).toBe(201);
+    const dataset = created.json().dataset as { id: string; timeframe: string };
+    expect(dataset.timeframe).toBe('1d');
+
+    const sync = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/datasets/sync',
+      cookies: { qp_session: cookie },
+      payload: { datasetId: dataset.id },
+    });
+    expect(sync.statusCode).toBe(202);
+    const jobId = sync.json().job.id as string;
+
+    // 자격 증명 미설정 → 잡은 FAILED 로 끝나되 CSV 안내를 담는다
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const job = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/data-jobs/${jobId}`,
+      cookies: { qp_session: cookie },
+    });
+    expect(job.json().job.status).toBe('FAILED');
+    expect(job.json().job.error).toContain('CSV');
+
+    // 존재하지 않는 데이터셋은 404
+    const missing = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/datasets/sync',
+      cookies: { qp_session: cookie },
+      payload: { datasetId: 'ds_missing' },
+    });
+    expect(missing.statusCode).toBe(404);
+  });
 });

@@ -62,7 +62,7 @@ export async function buildServer(container: Container): Promise<FastifyInstance
     async (api) => {
       registerSystemRoutes(api, container, requireAuth);
       registerAuthRoutes(api, authDeps);
-      registerDatasetRoutes(api, container.datasetService, requireAuth);
+      registerDatasetRoutes(api, container.datasetService, container.brokerSyncService, requireAuth);
       registerStrategyRoutes(api, container.strategyRegistry, requireAuth);
       registerBacktestRoutes(
         api,

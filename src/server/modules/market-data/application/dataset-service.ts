@@ -81,6 +81,42 @@ export class DatasetService {
     return this.db.select().from(dataCoverage).where(eq(dataCoverage.datasetId, datasetId)).all();
   }
 
+  /**
+   * 증권사 수집용 데이터셋 생성 (설계 2026-07-28-broker-sync-design.md).
+   * collect 는 수집 timeframe — 데이터셋 timeframe 은 CSV import 와 같은 관례로
+   * 백테스트 소비 기준을 따른다: 1m 수집 → 1h 데이터셋(사전 집계), 1d 수집 → 1d.
+   */
+  createBrokerDataset(
+    name: string,
+    market: Market,
+    collect: '1m' | '1d',
+    symbols: readonly string[],
+  ): DatasetSummary {
+    if (symbols.length === 0) throw new Error('심볼이 최소 1개 필요합니다');
+    for (const symbol of symbols) {
+      if (!SYMBOL_PATTERN.test(symbol)) throw new Error(`invalid symbol: ${symbol}`);
+    }
+    // 세션 미지원 시장은 집계·coverage 가 불가능하므로 생성 시점에 거부한다
+    getSessionForMarket(market);
+    const existing = this.db.select().from(datasets).where(eq(datasets.name, name)).get();
+    if (existing) throw new Error(`같은 이름의 데이터셋이 이미 있습니다: ${name}`);
+
+    const now = this.clock.now();
+    const row: typeof datasets.$inferInsert = {
+      id: newId('ds'),
+      name,
+      market,
+      timeframe: collect === '1m' ? '1h' : '1d',
+      symbolsJson: JSON.stringify([...symbols].sort()),
+      description: null,
+      createdAtMs: now,
+      updatedAtMs: now,
+    };
+    this.db.insert(datasets).values(row).run();
+    this.audit.record('system', 'dataset.created', { datasetId: row.id, name, market, collect });
+    return this.toSummary(row as typeof datasets.$inferSelect);
+  }
+
   getImportJob(jobId: string) {
     const row = this.db.select().from(dataImportJobs).where(eq(dataImportJobs.id, jobId)).get();
     return row ?? null;
@@ -146,7 +182,8 @@ export class DatasetService {
       if (hourly !== null) await this.candleRepository.saveCandles(dataset.id, hourly);
 
       await this.refreshCoverage(dataset.id, request.market, dataset.timeframe as Timeframe);
-      this.bumpVersion(dataset.id, request, now);
+      const csvHash = createHash('sha256').update(request.csvContent).digest('hex');
+      this.bumpVersion(dataset.id, `${request.symbol}:${request.timeframe}:${csvHash}`, now);
 
       const completedAt = this.clock.now();
       this.db
@@ -244,13 +281,15 @@ export class DatasetService {
     return latest ? { version: latest.version, contentHash: latest.contentHash } : null;
   }
 
-  private bumpVersion(datasetId: string, request: ImportRequest, nowMs: number): void {
+  /**
+   * 체인 해시: 이전 버전 해시에 이번 변경의 지문(seed)을 연결해 전체 변경 이력이
+   * 해시에 반영되게 한다. 마지막 변경만 해싱하면 서로 다른 데이터셋이 같은 지문을
+   * 가질 수 있다 (재현성 §9.5). CSV import 와 broker sync 가 공유한다.
+   */
+  bumpVersion(datasetId: string, fingerprintSeed: string, nowMs: number): void {
     const latest = this.getLatestVersion(datasetId);
-    // 체인 해시: 이전 버전 해시에 이번 업로드를 연결해 전체 import 이력이 해시에 반영되게 한다.
-    // 마지막 파일만 해싱하면 서로 다른 데이터셋이 같은 지문을 가질 수 있다 (재현성 §9.5).
-    const csvHash = createHash('sha256').update(request.csvContent).digest('hex');
     const contentHash = createHash('sha256')
-      .update(`${latest?.contentHash ?? ''}:${request.symbol}:${request.timeframe}:${csvHash}`)
+      .update(`${latest?.contentHash ?? ''}:${fingerprintSeed}`)
       .digest('hex');
     this.db
       .insert(datasetVersions)

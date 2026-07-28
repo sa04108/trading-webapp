@@ -40,3 +40,22 @@ export interface FetchCandleResult {
 export interface MarketDataSource {
   fetchCandles(request: FetchCandleRequest): Promise<FetchCandleResult>;
 }
+
+// 아래 에러들은 포트 계약의 일부다 — 어댑터(infrastructure)가 던지고 애플리케이션이
+// 잡는다. broker 쪽에 정의하면 애플리케이션이 §7 방향을 어겨야만 잡을 수 있다.
+
+export class MarketDataSourceNotConfiguredError extends Error {
+  constructor() {
+    super('증권사 API 자격 증명이 설정되지 않았습니다. CSV/Parquet import 를 사용하세요.');
+    this.name = 'MarketDataSourceNotConfiguredError';
+  }
+}
+
+export class UnsupportedTimeframeError extends Error {
+  constructor(timeframe: Timeframe) {
+    super(
+      `데이터 소스가 ${timeframe} 봉을 제공하지 않습니다. 시간봉은 1분봉 집계로 생성하세요 (스펙 §13).`,
+    );
+    this.name = 'UnsupportedTimeframeError';
+  }
+}

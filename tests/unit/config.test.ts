@@ -16,6 +16,21 @@ describe('loadConfig', () => {
     expect(config.sessionSecret.length).toBeGreaterThanOrEqual(32);
   });
 
+  it('leaves the toss source unconfigured by default and requires paired credentials', () => {
+    const config = loadConfig({});
+    expect(config.tossBaseUrl).toBe('https://openapi.tossinvest.com');
+    expect(config.tossClientId).toBeNull();
+    expect(config.tossClientSecret).toBeNull();
+    expect(config.syncMinFreeDiskMb).toBe(2048);
+
+    expect(() => loadConfig({ TOSS_CLIENT_ID: 'c_only' })).toThrow(ConfigError);
+    expect(() => loadConfig({ TOSS_CLIENT_SECRET: 's_only' })).toThrow(ConfigError);
+
+    const configured = loadConfig({ TOSS_CLIENT_ID: 'c_x', TOSS_CLIENT_SECRET: 's_y' });
+    expect(configured.tossClientId).toBe('c_x');
+    expect(configured.tossClientSecret).toBe('s_y');
+  });
+
   it('requires SESSION_SECRET in production', () => {
     expect(() => loadConfig({ NODE_ENV: 'production' })).toThrow(ConfigError);
     expect(() =>

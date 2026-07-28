@@ -5,20 +5,18 @@ import type {
   FetchCandleResult,
   MarketDataSource,
 } from '../../../market-data/application/ports.js';
-import { BrokerNotConfiguredError } from '../errors.js';
+import {
+  MarketDataSourceNotConfiguredError,
+  UnsupportedTimeframeError,
+} from '../../../market-data/application/ports.js';
 import { BrokerRestClient, type TokenProvider } from '../rest-client.js';
+
+export { UnsupportedTimeframeError } from '../../../market-data/application/ports.js';
 
 export interface TossConfig {
   readonly baseUrl: string; // https://openapi.tossinvest.com — 실전 환경만 제공 (모의 없음)
   readonly clientId: string;
   readonly clientSecret: string;
-}
-
-export class UnsupportedTimeframeError extends Error {
-  constructor(timeframe: Timeframe) {
-    super(`토스증권 API 는 ${timeframe} 봉을 제공하지 않습니다. 시간봉은 1분봉 집계로 생성하세요 (스펙 §13).`);
-    this.name = 'UnsupportedTimeframeError';
-  }
 }
 
 interface TossCandle {
@@ -83,7 +81,7 @@ export function createTossMarketDataSource(
   if (!config) {
     return {
       fetchCandles(): Promise<FetchCandleResult> {
-        return Promise.reject(new BrokerNotConfiguredError());
+        return Promise.reject(new MarketDataSourceNotConfiguredError());
       },
     };
   }

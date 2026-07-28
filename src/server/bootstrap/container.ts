@@ -22,8 +22,10 @@ import {
   createSqliteSessionRepository,
   createSqliteUserRepository,
 } from '../modules/auth/infrastructure/sqlite-repositories.js';
+import { BrokerSyncService } from '../modules/market-data/application/broker-sync-service.js';
 import { DatasetService } from '../modules/market-data/application/dataset-service.js';
 import type { CandleRepository } from '../modules/market-data/application/ports.js';
+import { createTossMarketDataSource } from '../modules/broker/infrastructure/toss/toss-market-data-source.js';
 import { DuckDbService } from '../modules/market-data/infrastructure/duckdb-service.js';
 import { ParquetCandleRepository } from '../modules/market-data/infrastructure/parquet-candle-repository.js';
 import { StrategyRegistry } from '../modules/strategy/application/strategy-registry.js';
@@ -54,6 +56,7 @@ export interface Container {
   readonly duckdb: DuckDbService;
   readonly candleRepository: CandleRepository;
   readonly datasetService: DatasetService;
+  readonly brokerSyncService: BrokerSyncService;
   readonly strategyRegistry: StrategyRegistry;
   readonly jobQueue: JobQueue;
   readonly jobOrchestrator: JobOrchestrator;
@@ -142,6 +145,41 @@ export function createContainer(config: AppConfig): Container {
     auditLog,
   );
 
+  // 증권사 선택은 조립부 전용 지식 (§2.4) — 애플리케이션은 MarketDataSource 만 안다.
+  // 자격 증명 미설정이면 어댑터가 포트 에러를 던지는 비활성 소스가 된다.
+  const marketDataSource = createTossMarketDataSource(
+    config.tossClientId && config.tossClientSecret
+      ? {
+          baseUrl: config.tossBaseUrl,
+          clientId: config.tossClientId,
+          clientSecret: config.tossClientSecret,
+        }
+      : null,
+    logger,
+  );
+  const brokerSyncService = new BrokerSyncService({
+    db: database.db,
+    source: marketDataSource,
+    candleRepository,
+    datasetService,
+    clock,
+    logger,
+    audit: auditLog,
+    minFreeDiskBytes: config.syncMinFreeDiskMb * 1024 * 1024,
+    freeDiskBytes: () => {
+      const stats = fs.statfsSync(config.dataRoot);
+      return stats.bavail * stats.bsize;
+    },
+  });
+  // 프로세스 재시작으로 고아가 된 동기화 잡 정리 — 이어받기는 재실행이 담당한다 (§13)
+  const interrupted = brokerSyncService.recoverInterrupted();
+  if (interrupted > 0) {
+    logger.warn(
+      { module: 'market-data', event: 'data.sync.interrupted', count: interrupted },
+      'recovered orphaned broker sync jobs',
+    );
+  }
+
   const jobQueue = new JobQueue(database, clock);
   const jobOrchestrator = new JobOrchestrator(jobQueue, config, logger, auditLog, clock);
   const resultsService = new ResultsService(database.db);
@@ -169,6 +207,7 @@ export function createContainer(config: AppConfig): Container {
     duckdb,
     candleRepository,
     datasetService,
+    brokerSyncService,
     strategyRegistry: new StrategyRegistry(),
     jobQueue,
     jobOrchestrator,

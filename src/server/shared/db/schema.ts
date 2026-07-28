@@ -3,7 +3,7 @@
  * 테이블은 Phase 진행에 따라 추가된다. drizzle-kit generate 로 migrations/ 를 생성한다.
  * schema_migrations 역할은 drizzle 의 __drizzle_migrations 테이블이 담당한다.
  */
-import { index, integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 export const users = sqliteTable('users', {
   id: text('id').primaryKey(),
@@ -119,6 +119,29 @@ export const dataImportJobs = sqliteTable(
     completedAtMs: integer('completed_at_ms'),
   },
   (table) => [index('idx_data_import_jobs_dataset').on(table.datasetId)],
+);
+
+/**
+ * 증권사 동기화 상태 (설계 2026-07-28-broker-sync-design.md).
+ * 수집 워터마크와 "백필이 API 보관 깊이 바닥에 닿았다"는 플래그. 워터마크는 봉 저장
+ * 이후에만 갱신하므로 실제 저장소보다 앞서 주장하지 않는다. data_coverage 는 데이터셋
+ * timeframe(1h/1d) 기준이라 원본 수집 timeframe 의 워터마크로 쓰기에 부정확하다.
+ */
+export const brokerSyncState = sqliteTable(
+  'broker_sync_state',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    datasetId: text('dataset_id')
+      .notNull()
+      .references(() => datasets.id, { onDelete: 'cascade' }),
+    symbol: text('symbol').notNull(),
+    /** 수집된 가장 오래된 봉 (수집 timeframe 기준) */
+    syncedFirstTsMs: integer('synced_first_ts_ms'),
+    /** 수집된 가장 최신 봉 */
+    syncedLastTsMs: integer('synced_last_ts_ms'),
+    backfillDoneAtMs: integer('backfill_done_at_ms'),
+  },
+  (table) => [uniqueIndex('idx_broker_sync_state_dataset_symbol').on(table.datasetId, table.symbol)],
 );
 
 // ── 백테스트 (스펙 §10, §12) ──────────────────────────────────────

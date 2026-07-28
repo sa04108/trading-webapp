@@ -46,6 +46,14 @@ module.exports = {
       to: { dependencyTypes: ['core'] },
     },
     {
+      name: 'market-data-no-broker',
+      severity: 'error',
+      comment:
+        'market-data → broker 금지 (§7 포트 역전) — broker 가 market-data 의 port 를 구현한다',
+      from: { path: 'src/server/modules/market-data' },
+      to: { path: 'src/server/modules/broker' },
+    },
+    {
       name: 'strategy-no-broker-adapter',
       severity: 'error',
       comment: 'strategy → broker adapter 금지 (§7)',

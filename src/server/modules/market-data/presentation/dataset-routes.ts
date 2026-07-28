@@ -1,5 +1,11 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import type {
+  BrokerSyncService} from '../application/broker-sync-service.js';
+import {
+  SyncAlreadyRunningError,
+  SyncUnsupportedDatasetError,
+} from '../application/broker-sync-service.js';
 import type { DatasetService } from '../application/dataset-service.js';
 
 type PreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
@@ -11,11 +17,22 @@ const importFieldsSchema = z.object({
   symbol: z.string().regex(/^[A-Za-z0-9._-]{1,20}$/),
 });
 
+const createDatasetSchema = z.object({
+  name: z.string().min(1).max(64),
+  market: z.enum(['KR', 'US']),
+  /** 수집 timeframe — 데이터셋 timeframe 은 1m→1h(사전 집계), 1d→1d 관례를 따른다 */
+  collect: z.enum(['1m', '1d']),
+  symbols: z.array(z.string().regex(/^[A-Za-z0-9._-]{1,20}$/)).min(1).max(1000),
+});
+
+const syncSchema = z.object({ datasetId: z.string().min(1) });
+
 const MAX_CSV_BYTES = 50 * 1024 * 1024;
 
 export function registerDatasetRoutes(
   app: FastifyInstance,
   datasetService: DatasetService,
+  brokerSyncService: BrokerSyncService,
   requireAuth: PreHandler,
 ): void {
   app.get('/datasets', { preHandler: requireAuth }, async () => ({
@@ -111,11 +128,47 @@ export function registerDatasetRoutes(
     return reply.code(job.status === 'FAILED' ? 422 : 201).send({ job });
   });
 
-  app.post('/datasets/sync', { preHandler: requireAuth }, async (_request, reply) =>
-    reply.code(501).send({
-      error: '증권사 데이터 동기화는 API 자격 증명 설정 후 제공됩니다. CSV import 를 사용하세요.',
-    }),
-  );
+  /** 증권사 수집용 데이터셋 생성 (설계 2026-07-28-broker-sync-design.md) */
+  app.post('/datasets', { preHandler: requireAuth }, async (request, reply) => {
+    const parsed = createDatasetSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: '필드가 올바르지 않습니다 (name/market/collect/symbols)' });
+    }
+    try {
+      const dataset = datasetService.createBrokerDataset(
+        parsed.data.name,
+        parsed.data.market,
+        parsed.data.collect,
+        parsed.data.symbols,
+      );
+      return reply.code(201).send({ dataset });
+    } catch (error) {
+      return reply
+        .code(400)
+        .send({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  /** 증권사 동기화 시작 — 202 + jobId, 진행은 GET /data-jobs/:jobId */
+  app.post('/datasets/sync', { preHandler: requireAuth }, async (request, reply) => {
+    const parsed = syncSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'datasetId 가 필요합니다' });
+    if (!datasetService.getDataset(parsed.data.datasetId)) {
+      return reply.code(404).send({ error: '데이터셋을 찾을 수 없습니다' });
+    }
+    try {
+      const { job } = brokerSyncService.startSync(parsed.data.datasetId);
+      return reply.code(202).send({ job });
+    } catch (error) {
+      if (error instanceof SyncAlreadyRunningError) {
+        return reply.code(409).send({ error: error.message });
+      }
+      if (error instanceof SyncUnsupportedDatasetError) {
+        return reply.code(400).send({ error: error.message });
+      }
+      throw error;
+    }
+  });
 
   app.get('/data-jobs/:jobId', { preHandler: requireAuth }, async (request, reply) => {
     const { jobId } = request.params as { jobId: string };

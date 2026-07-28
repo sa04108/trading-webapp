@@ -30,6 +30,12 @@ const envSchema = z.object({
     .default('info'),
   TRUST_PROXY_LOOPBACK: booleanString.default(true),
   LIVE_TRADING_ENABLED: booleanString.default(false),
+  /** 토스증권 Open API (D-018). 미설정이면 어댑터는 비활성 — CSV/Parquet 이 데이터 경로 */
+  TOSS_BASE_URL: z.string().url().default('https://openapi.tossinvest.com'),
+  TOSS_CLIENT_ID: z.string().min(1).optional(),
+  TOSS_CLIENT_SECRET: z.string().min(1).optional(),
+  /** 이 여유 공간(MB) 미만이면 증권사 동기화를 거부한다 (§22 임계치 원칙) */
+  SYNC_MIN_FREE_DISK_MB: z.coerce.number().int().min(0).default(2048),
 });
 
 export interface AppConfig {
@@ -51,6 +57,10 @@ export interface AppConfig {
   readonly logLevel: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace';
   readonly trustProxyLoopback: boolean;
   readonly liveTradingEnabled: boolean;
+  readonly tossBaseUrl: string;
+  readonly tossClientId: string | null;
+  readonly tossClientSecret: string | null;
+  readonly syncMinFreeDiskMb: number;
 }
 
 export class ConfigError extends Error {
@@ -75,6 +85,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     throw new ConfigError('SESSION_SECRET is required in production');
   }
 
+  // 반쪽 자격 증명은 "설정했다고 믿었는데 비활성"인 상태를 만든다 — 즉시 실패
+  if (Boolean(raw.TOSS_CLIENT_ID) !== Boolean(raw.TOSS_CLIENT_SECRET)) {
+    throw new ConfigError('TOSS_CLIENT_ID 와 TOSS_CLIENT_SECRET 은 함께 설정해야 합니다');
+  }
+
   return {
     nodeEnv: raw.NODE_ENV,
     bindAddress: raw.APP_BIND_ADDRESS,
@@ -94,5 +109,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     logLevel: raw.LOG_LEVEL,
     trustProxyLoopback: raw.TRUST_PROXY_LOOPBACK,
     liveTradingEnabled: raw.LIVE_TRADING_ENABLED,
+    tossBaseUrl: raw.TOSS_BASE_URL,
+    tossClientId: raw.TOSS_CLIENT_ID ?? null,
+    tossClientSecret: raw.TOSS_CLIENT_SECRET ?? null,
+    syncMinFreeDiskMb: raw.SYNC_MIN_FREE_DISK_MB,
   };
 }
