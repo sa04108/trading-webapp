@@ -265,9 +265,14 @@ export function NewBacktestWizard() {
 
   const request = step >= 4 ? buildRequest() : null;
 
+  // 초안뿐 아니라 전략·데이터셋 카탈로그가 실패해도 프리필 effect 는 영영 끝나지 않는다 —
+  // 그대로 두면 스켈레톤에 갇힌다. 셋 중 하나라도 실패하면 프리필을 포기하고 폼을 보여준다.
+  const prefillError =
+    sourceJobId !== null && (draft.isError || strategies.isError || datasets.isError);
+
   // 프리필 중에는 폼을 감춘다 — 입력하던 값이 프리필에 덮이는 경합을 없앤다
   const prefilling =
-    sourceJobId !== null && prefilledFrom.current !== sourceJobId && !draft.isError;
+    sourceJobId !== null && prefilledFrom.current !== sourceJobId && !prefillError;
 
   return (
     <div className="mx-auto max-w-2xl space-y-4">
@@ -275,10 +280,14 @@ export function NewBacktestWizard() {
         {sourceJobId !== null ? '재설정 및 복제' : '새 백테스트'}
       </h2>
 
-      {draft.isError ? (
+      {prefillError ? (
         <Alert variant="destructive" role="alert">
           <AlertDescription>
-            {draft.error instanceof ApiError ? draft.error.message : '원본 설정을 불러올 수 없습니다'}
+            {draft.isError
+              ? draft.error instanceof ApiError
+                ? draft.error.message
+                : '원본 설정을 불러올 수 없습니다'
+              : '전략·데이터셋 목록을 불러올 수 없어 원본 설정을 채우지 못했습니다 — 처음부터 선택하세요.'}
           </AlertDescription>
         </Alert>
       ) : null}
