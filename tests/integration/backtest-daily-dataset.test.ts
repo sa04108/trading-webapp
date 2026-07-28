@@ -140,4 +140,35 @@ describe('일봉 데이터셋 백테스트 (D-024)', () => {
     // 데이터셋 timeframe(1d) 봉을 전부 읽었는지 — 1h 로 읽으면 0봉이 된다
     expect(job.totalBars).toBe(dailyCandles.length);
   });
+
+  it('봉이 없는 종목을 실행 경고로 남긴다', { timeout: 90_000 }, async () => {
+    // 데이터셋에 심볼을 더하되 봉은 넣지 않는다 — 제출 검증은 통과하고 실행에서 빠진다
+    ctx.container.datasetService.updateSymbols(datasetId, { add: ['000660'] });
+
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: {
+        ...buildRequest(datasetId),
+        universe: { type: 'SYMBOLS', symbols: ['005930', '000660'] },
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const jobId = (created.json().job as { id: string }).id;
+
+    ctx.container.jobOrchestrator.tick();
+    await waitFor(() => {
+      const job = ctx.container.jobQueue.getJob(jobId);
+      return job !== null && ctx.container.jobQueue.isTerminal(job.status);
+    }, 60_000);
+
+    const job = ctx.container.jobQueue.getJob(jobId)!;
+    expect(job.error).toBeNull();
+    expect(job.status).toBe('COMPLETED');
+
+    const run = ctx.container.resultsService.getRun(jobId)!;
+    const warnings = JSON.parse(run.warningsJson ?? '[]') as string[];
+    expect(warnings.some((w) => w.includes('000660'))).toBe(true);
+  });
 });

@@ -139,6 +139,16 @@ async function main(): Promise<void> {
       );
     }
 
+    // 일부 종목만 구간에 봉이 없는 경우 — 제출 검증은 통과시킨다(신규 상장 등 정상).
+    // 조용히 빠지면 결과를 오해하므로 실측 기준으로 경고를 남긴다 (D-025).
+    const symbolsWithBars = new Set(candles.map((candle) => candle.symbol));
+    const emptySymbols = request.universe.symbols.filter((s) => !symbolsWithBars.has(s));
+    if (emptySymbols.length > 0) {
+      datasetWarnings.push(
+        `선택한 기간에 ${timeframe} 봉이 없어 제외된 종목: ${emptySymbols.join(', ')}`,
+      );
+    }
+
     const startedAtMs = Date.now();
     let lastProgressSentAt = 0;
 
