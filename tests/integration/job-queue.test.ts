@@ -430,4 +430,181 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(message).toMatch(/[가-힣]/);
     expect(message).not.toMatch(/Too small|Invalid|expected/i);
   });
+
+  it('기간에 봉이 전혀 없는 제출을 제출 검증에서 거부한다 (D-025)', async () => {
+    // 데이터셋 봉은 2026-01-05 부터다 — 그보다 앞선 구간은 확실히 0봉이다
+    const noData = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: { ...buildRequest(datasetId), period: { from: '2020-01-01', to: '2020-12-31' } },
+    });
+    expect(noData.statusCode).toBe(400);
+    const message = (noData.json() as { error: string }).error;
+    // 진단이 커버리지로 이어지도록 보유 범위를 담는다
+    expect(message).toContain('005930');
+    expect(message).toContain('2026-01-05');
+  });
+
+  it('복제도 같은 제출 검증을 거친다 — 봉 없는 기간은 거부한다 (D-025)', async () => {
+    const job = ctx.container.jobQueue.enqueue({
+      ...buildRequest(datasetId),
+      period: { from: '2020-01-01', to: '2020-12-31' },
+    });
+
+    const cloned = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${job.id}/clone`,
+      cookies: { qp_session: cookie },
+    });
+    expect(cloned.statusCode).toBe(400);
+    expect((cloned.json() as { error: string }).error).toContain('005930');
+  });
+
+  it('일부 종목만 봉이 없으면 거부하지 않는다 (신규 상장 등 정상)', async () => {
+    // 심볼을 하나 더 데이터셋에 추가하되 봉은 넣지 않는다 — 커버리지 행이 없는 종목
+    ctx.container.datasetService.updateSymbols(datasetId, { add: ['000660'] });
+
+    const partial = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: {
+        ...buildRequest(datasetId),
+        universe: { type: 'SYMBOLS', symbols: ['005930', '000660'] },
+      },
+    });
+    expect(partial.statusCode).toBe(201);
+  });
+
+  it('초안은 재기준된 요청과 경고를 돌려준다 (재설정 및 복제)', async () => {
+    const legacy = {
+      ...buildRequest(datasetId),
+      strategyVersion: '1.1.0',
+      parameters: { ...buildRequest(datasetId).parameters, maxPositions: 5 },
+    } as Record<string, unknown>;
+    delete legacy.risk;
+    const job = ctx.container.jobQueue.enqueue(legacy as never);
+
+    const draft = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${job.id}/clone-draft`,
+      cookies: { qp_session: cookie },
+    });
+    expect(draft.statusCode).toBe(200);
+    const body = draft.json() as {
+      request: BacktestRequest;
+      warnings: string[];
+      blockers: string[];
+    };
+    expect(body.request.risk.maxPositions).toBe(5);
+    expect(body.request.strategyVersion).toBe('1.2.0');
+    expect(body.warnings.some((w) => w.includes('1.1.0'))).toBe(true);
+    expect(body.blockers).toEqual([]);
+  });
+
+  it('초안은 제출 불가한 원본도 열어준다 — 사유는 blockers 에 담는다', async () => {
+    // 봉이 없는 기간 → 제출은 400 이지만 초안은 열려야 고칠 수 있다
+    const job = ctx.container.jobQueue.enqueue({
+      ...buildRequest(datasetId),
+      period: { from: '2020-01-01', to: '2020-12-31' },
+    });
+
+    const draft = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${job.id}/clone-draft`,
+      cookies: { qp_session: cookie },
+    });
+    expect(draft.statusCode).toBe(200);
+    const body = draft.json() as { request: BacktestRequest; blockers: string[] };
+    // 원본 값은 그대로 돌려준다 — 사용자가 이 값을 보고 고친다
+    expect(body.request.period.from).toBe('2020-01-01');
+    expect(body.blockers.some((b) => b.includes('005930'))).toBe(true);
+  });
+
+  it('초안은 없는 작업에 404, 되살릴 수 없는 요청에 400', async () => {
+    const missing = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/v1/backtests/job_nope/clone-draft',
+      cookies: { qp_session: cookie },
+    });
+    expect(missing.statusCode).toBe(404);
+
+    const broken = { ...buildRequest(datasetId) } as Record<string, unknown>;
+    delete broken.period;
+    const brokenJob = ctx.container.jobQueue.enqueue(broken as never);
+    const brokenDraft = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${brokenJob.id}/clone-draft`,
+      cookies: { qp_session: cookie },
+    });
+    expect(brokenDraft.statusCode).toBe(400);
+    expect((brokenDraft.json() as { error: string }).error).toContain('복원할 수 없습니다');
+  });
+
+  it('대기열 상한을 넘는 제출을 429 로 거부한다 (신규·복제 공통)', async () => {
+    const small = await createTestApp({ MAX_QUEUED_BACKTESTS: '3' });
+    try {
+      const { username, password } = await createTestAdmin(small.container);
+      const login = await small.app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: { username, password },
+      });
+      const smallCookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+
+      await small.container.datasetService.importCsv({
+        datasetName: 'kr-hourly-v1',
+        market: 'KR',
+        timeframe: '1h',
+        symbol: '005930',
+        fileName: 'trend.csv',
+        csvContent: buildTrendingHourlyCsv(),
+      });
+      const smallDatasetId = small.container.datasetService.listDatasets()[0]!.id;
+      const payload = buildRequest(smallDatasetId);
+
+      // 오케스트레이터를 tick 하지 않으므로 전부 QUEUED 로 남는다
+      for (let i = 0; i < 3; i += 1) {
+        const accepted = await small.app.inject({
+          method: 'POST',
+          url: '/api/v1/backtests',
+          cookies: { qp_session: smallCookie },
+          payload,
+        });
+        expect(accepted.statusCode).toBe(201);
+      }
+
+      const rejected = await small.app.inject({
+        method: 'POST',
+        url: '/api/v1/backtests',
+        cookies: { qp_session: smallCookie },
+        payload,
+      });
+      expect(rejected.statusCode).toBe(429);
+      expect((rejected.json() as { error: string }).error).toContain('대기');
+
+      // 복제도 같은 상한을 받는다
+      const queued = small.container.jobQueue.listJobs(1, 0)[0]!;
+      const clonedOverLimit = await small.app.inject({
+        method: 'POST',
+        url: `/api/v1/backtests/${queued.id}/clone`,
+        cookies: { qp_session: smallCookie },
+      });
+      expect(clonedOverLimit.statusCode).toBe(429);
+    } finally {
+      await small.close();
+    }
+  });
+
+  it('기간이 뒤집힌 제출은 데이터 부족이 아니라 기간 오류로 거부한다', async () => {
+    const inverted = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: { ...buildRequest(datasetId), period: { from: '2026-03-31', to: '2026-01-05' } },
+    });
+    expect(inverted.statusCode).toBe(400);
+    expect((inverted.json() as { error: string }).error).toContain('기간이 올바르지 않습니다');
+  });
 });

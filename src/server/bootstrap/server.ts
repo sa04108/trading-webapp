@@ -81,6 +81,7 @@ export async function buildServer(container: Container): Promise<FastifyInstance
           datasets: container.datasetService,
           audit: container.auditLog,
           dataRoot: container.config.dataRoot,
+          maxQueuedBacktests: container.config.maxQueuedBacktests,
         },
         requireAuth,
       );

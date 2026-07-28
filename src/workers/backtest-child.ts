@@ -28,11 +28,11 @@ import {
   getCostProfile,
   getSlippageProfile,
 } from '../server/modules/backtest/domain/cost-profiles.js';
-import type { Candle, Market } from '../server/modules/market-data/domain/candle.js';
+import type { Candle, Market, Timeframe } from '../server/modules/market-data/domain/candle.js';
 import { DuckDbService } from '../server/modules/market-data/infrastructure/duckdb-service.js';
 import { ParquetCandleRepository } from '../server/modules/market-data/infrastructure/parquet-candle-repository.js';
 import { StrategyRegistry } from '../server/modules/strategy/application/strategy-registry.js';
-import { backtestRequestSchema } from '../shared/schemas/backtest-request.js';
+import { backtestRequestSchema, periodToTsRange } from '../shared/schemas/backtest-request.js';
 
 let cancelRequested = false;
 process.on('message', (message: { type?: string }) => {
@@ -115,15 +115,17 @@ async function main(): Promise<void> {
       );
     }
 
-    // 캔들 로드 (1h 사전 집계 우선, 스펙 §11)
+    // 캔들 로드 (스펙 §11). 데이터셋의 timeframe 이 백테스트가 소비하는 기준이다 —
+    // 1m 수집·import 는 1h 로 사전 집계되어 '1h', 일봉 수집은 '1d' 로 저장된다.
+    // 여기를 '1h' 로 고정하면 일봉 데이터셋은 파티션이 없어 0봉으로 실패한다 (D-024).
+    const timeframe = dataset.timeframe as Timeframe;
     const repository = new ParquetCandleRepository(dataRoot, duckdb);
-    const fromTsMs = Date.parse(`${request.period.from}T00:00:00Z`);
-    const toTsMs = Date.parse(`${request.period.to}T23:59:59.999Z`);
+    const { fromTsMs, toTsMs } = periodToTsRange(request.period);
     const candles: Candle[] = [];
     for await (const candle of repository.getCandles({
       datasetId: dataset.id,
       market: dataset.market as Market,
-      timeframe: '1h',
+      timeframe,
       symbols: request.universe.symbols,
       fromTsMs,
       toTsMs,
@@ -131,7 +133,20 @@ async function main(): Promise<void> {
       candles.push(candle);
     }
     if (candles.length === 0) {
-      throw new Error('선택한 기간·종목에 데이터가 없습니다. 데이터 커버리지를 확인하세요.');
+      // 어떤 timeframe 을 찾았는지 밝힌다 — 커버리지가 정상인데 실패하면 여기서 갈린다
+      throw new Error(
+        `선택한 기간·종목에 ${timeframe} 데이터가 없습니다. 데이터 커버리지를 확인하세요.`,
+      );
+    }
+
+    // 일부 종목만 구간에 봉이 없는 경우 — 제출 검증은 통과시킨다(신규 상장 등 정상).
+    // 조용히 빠지면 결과를 오해하므로 실측 기준으로 경고를 남긴다 (D-025).
+    const symbolsWithBars = new Set(candles.map((candle) => candle.symbol));
+    const emptySymbols = request.universe.symbols.filter((s) => !symbolsWithBars.has(s));
+    if (emptySymbols.length > 0) {
+      datasetWarnings.push(
+        `선택한 기간에 ${timeframe} 봉이 없어 제외된 종목: ${emptySymbols.join(', ')}`,
+      );
     }
 
     const startedAtMs = Date.now();
