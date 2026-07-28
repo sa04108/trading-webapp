@@ -334,6 +334,48 @@ describe('BrokerSyncService (설계 2026-07-28-broker-sync-design.md)', () => {
     expect(datasetService.getImportJob(job.id)?.status).toBe('FAILED');
   });
 
+  it('cancels a running sync at a page boundary and resumes on the next run', async () => {
+    const inner = new FakeSource(minutes('005930', 12));
+    let fetches = 0;
+    const ref: { sync: BrokerSyncService | null; jobId: string } = { sync: null, jobId: '' };
+    const source: MarketDataSource = {
+      async fetchCandles(request) {
+        await Promise.resolve(); // startSync 반환 이후에 몸체가 돌도록 양보
+        fetches += 1;
+        if (fetches === 2) ref.sync?.cancelSync(ref.jobId);
+        return inner.fetchCandles(request);
+      },
+    };
+    const { repo, datasetService, sync } = buildHarness(source);
+    ref.sync = sync;
+    const dataset = datasetService.createBrokerDataset('KR-유니버스', 'KR', '1m', ['005930']);
+
+    const started = sync.startSync(dataset.id);
+    ref.jobId = started.job.id;
+    await started.done;
+
+    const cancelled = datasetService.getImportJob(started.job.id);
+    expect(cancelled?.status).toBe('CANCELLED');
+    // 취소 시점(2페이지째 요청 중)까지 저장된 봉은 남는다 — 페이지 경계 취소
+    expect(repo.all(dataset.id, '1m')).toHaveLength(8);
+
+    // 재실행이 이어받아 끝까지 간다
+    const resumed = sync.startSync(dataset.id);
+    await resumed.done;
+    expect(datasetService.getImportJob(resumed.job.id)?.status).toBe('COMPLETED');
+    expect(repo.all(dataset.id, '1m')).toHaveLength(12);
+  });
+
+  it('reports NOT_RUNNING when cancelling an unknown or finished job', async () => {
+    const { datasetService, sync } = buildHarness(new FakeSource(minutes('005930', 4)));
+    const dataset = datasetService.createBrokerDataset('KR-유니버스', 'KR', '1m', ['005930']);
+    expect(sync.cancelSync('imp_unknown')).toBe('NOT_RUNNING');
+
+    const started = sync.startSync(dataset.id);
+    await started.done;
+    expect(sync.cancelSync(started.job.id)).toBe('NOT_RUNNING');
+  });
+
   it('recovers orphaned RUNNING jobs on boot', async () => {
     const { db, datasetService, sync, clock } = buildHarness(new FakeSource([]));
     const dataset = datasetService.createBrokerDataset('KR-유니버스', 'KR', '1m', ['005930']);

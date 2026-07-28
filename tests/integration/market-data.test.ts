@@ -405,6 +405,20 @@ describe('market data (스펙 §11, §13)', () => {
       payload: { datasetId: 'ds_missing' },
     });
     expect(missing.statusCode).toBe(404);
+
+    // 취소: 이미 종료된 잡은 409, 모르는 잡은 404
+    const cancelDone = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/data-jobs/${jobId}/cancel`,
+      cookies: { qp_session: cookie },
+    });
+    expect(cancelDone.statusCode).toBe(409);
+    const cancelMissing = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/data-jobs/imp_missing/cancel',
+      cookies: { qp_session: cookie },
+    });
+    expect(cancelMissing.statusCode).toBe(404);
   });
 
   it('updates symbols and deletes a dataset via API, blocking delete while backtests are active', async () => {

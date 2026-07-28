@@ -27,6 +27,8 @@ export interface DatasetSummary {
   description: string | null;
   latestVersion: number;
   createdAtMs: number;
+  /** 진행 중인 증권사 동기화 잡 — UI 가 새로고침 후에도 진행 상태에 붙을 수 있게 노출 */
+  runningSyncJobId: string | null;
 }
 
 export interface ImportRequest {
@@ -65,6 +67,17 @@ export class DatasetService {
       .orderBy(desc(datasetVersions.version))
       .limit(1)
       .get();
+    const runningSync = this.db
+      .select({ id: dataImportJobs.id })
+      .from(dataImportJobs)
+      .where(
+        and(
+          eq(dataImportJobs.datasetId, row.id),
+          eq(dataImportJobs.sourceType, 'BROKER'),
+          inArray(dataImportJobs.status, ['QUEUED', 'RUNNING']),
+        ),
+      )
+      .get();
     return {
       id: row.id,
       name: row.name,
@@ -74,6 +87,7 @@ export class DatasetService {
       description: row.description,
       latestVersion: latest?.version ?? 0,
       createdAtMs: row.createdAtMs,
+      runningSyncJobId: runningSync?.id ?? null,
     };
   }
 

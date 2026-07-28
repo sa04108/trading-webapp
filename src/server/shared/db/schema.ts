@@ -109,7 +109,7 @@ export const dataImportJobs = sqliteTable(
     datasetId: text('dataset_id')
       .notNull()
       .references(() => datasets.id, { onDelete: 'cascade' }),
-    status: text('status').notNull(), // QUEUED | RUNNING | COMPLETED | FAILED
+    status: text('status').notNull(), // QUEUED | RUNNING | COMPLETED | FAILED | CANCELLED
     sourceType: text('source_type').notNull(), // CSV | PARQUET | BROKER
     fileName: text('file_name'),
     symbol: text('symbol'),

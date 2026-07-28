@@ -23,6 +23,13 @@ export class SyncAlreadyRunningError extends Error {
   }
 }
 
+class SyncCancelledError extends Error {
+  constructor() {
+    super('사용자 요청으로 취소됨 — 동기화를 다시 실행하면 이어받습니다');
+    this.name = 'SyncCancelledError';
+  }
+}
+
 export class SyncUnsupportedDatasetError extends Error {
   constructor(timeframe: string) {
     super(
@@ -61,6 +68,10 @@ interface SyncedRange {
  * 어느 지점에서 중단돼도 다음 실행이 이어받는다 (스펙 §13).
  */
 export class BrokerSyncService {
+  /** 이 프로세스에서 실행 중인 잡 — 취소는 in-process 플래그로 전달된다 */
+  private readonly runningJobs = new Set<string>();
+  private readonly cancelRequested = new Set<string>();
+
   constructor(private readonly deps: BrokerSyncDeps) {}
 
   /**
@@ -99,7 +110,26 @@ export class BrokerSyncService {
       })
       .run();
 
-    return { job: { id: jobId }, done: this.run(dataset, collect, jobId) };
+    this.runningJobs.add(jobId);
+    const done = this.run(dataset, collect, jobId).finally(() => {
+      this.runningJobs.delete(jobId);
+      this.cancelRequested.delete(jobId);
+    });
+    return { job: { id: jobId }, done };
+  }
+
+  /**
+   * 실행 중인 동기화 취소 요청. 페이지 경계에서 반영되며, 저장된 페이지와 워터마크는
+   * 남으므로 재실행이 이어받는다. 이 프로세스의 잡만 취소할 수 있다.
+   */
+  cancelSync(jobId: string): 'CANCELLING' | 'NOT_RUNNING' {
+    if (!this.runningJobs.has(jobId)) return 'NOT_RUNNING';
+    this.cancelRequested.add(jobId);
+    return 'CANCELLING';
+  }
+
+  private throwIfCancelled(jobId: string): void {
+    if (this.cancelRequested.has(jobId)) throw new SyncCancelledError();
   }
 
   /** 프로세스 재시작으로 고아가 된 BROKER 잡 정리 — 부팅 경로에서 호출한다 */
@@ -135,12 +165,14 @@ export class BrokerSyncService {
       const now = this.deps.clock.now();
 
       for (const symbol of dataset.symbols) {
+        this.throwIfCancelled(jobId);
         const newRange: SyncedRange = { min: null, max: null };
 
         // 증분: 워터마크 이후 → 현재
         const before = this.getState(dataset.id, symbol);
         if (before?.syncedLastTsMs != null) {
           const incremental = await this.pullRange(dataset, collect, symbol, {
+            jobId,
             fromTsMs: before.syncedLastTsMs + 1,
             toTsMs: now,
             newRange,
@@ -152,6 +184,7 @@ export class BrokerSyncService {
         const state = this.getState(dataset.id, symbol);
         if (state?.backfillDoneAtMs == null) {
           const backfill = await this.pullRange(dataset, collect, symbol, {
+            jobId,
             fromTsMs: 0,
             toTsMs: (state?.syncedFirstTsMs ?? now + 1) - 1,
             newRange,
@@ -185,16 +218,25 @@ export class BrokerSyncService {
         rows: totalRows,
       });
     } catch (error) {
+      const cancelled = error instanceof SyncCancelledError;
       this.deps.db
         .update(dataImportJobs)
         .set({
-          status: 'FAILED',
+          status: cancelled ? 'CANCELLED' : 'FAILED',
           rowsImported: totalRows,
           error: error instanceof Error ? error.message : String(error),
           completedAtMs: this.deps.clock.now(),
         })
         .where(eq(dataImportJobs.id, jobId))
         .run();
+      if (cancelled) {
+        this.deps.audit.record('system', 'data.sync.cancelled', { datasetId: dataset.id });
+        this.deps.logger.info(
+          { module: 'market-data', event: 'data.sync.cancelled', datasetId: dataset.id },
+          'broker sync cancelled',
+        );
+        return;
+      }
       this.deps.logger.error(
         { module: 'market-data', event: 'data.sync.failed', datasetId: dataset.id, err: error },
         'broker sync failed',
@@ -210,7 +252,7 @@ export class BrokerSyncService {
     dataset: DatasetSummary,
     collect: '1m' | '1d',
     symbol: string,
-    args: { fromTsMs: number; toTsMs: number; newRange: SyncedRange },
+    args: { jobId: string; fromTsMs: number; toTsMs: number; newRange: SyncedRange },
   ): Promise<{ rows: number }> {
     let rows = 0;
     if (args.toTsMs < args.fromTsMs) return { rows };
@@ -218,6 +260,7 @@ export class BrokerSyncService {
     let pages = 0;
 
     for (;;) {
+      this.throwIfCancelled(args.jobId);
       if (pages > 0 && pages % DISK_CHECK_PAGE_INTERVAL === 0) this.checkDisk();
       const result = await this.deps.source.fetchCandles({
         market: dataset.market,

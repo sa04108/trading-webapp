@@ -41,6 +41,7 @@ interface DatasetSummary {
   timeframe: string;
   symbols: string[];
   latestVersion: number;
+  runningSyncJobId: string | null;
 }
 
 interface CoverageRow {
@@ -54,7 +55,7 @@ interface CoverageRow {
 
 interface DataJob {
   id: string;
-  status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+  status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
   rowsImported: number | null;
   error: string | null;
 }
@@ -65,9 +66,11 @@ function errorMessage(error: unknown, fallback: string): string {
 
 function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
   const queryClient = useQueryClient();
-  const [syncJobId, setSyncJobId] = useState<string | null>(null);
+  const [startedJobId, setStartedJobId] = useState<string | null>(null);
   const [newSymbol, setNewSymbol] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // 새로고침·다른 탭에서 시작된 동기화에도 붙는다 — 서버가 실행 중 잡을 알려준다
+  const syncJobId = startedJobId ?? dataset.runningSyncJobId;
 
   const { data } = useQuery({
     queryKey: ['datasets', dataset.id, 'coverage'],
@@ -90,17 +93,24 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
       toast.success(`동기화 완료: ${dataset.name} · ${job.rowsImported ?? 0}봉`);
     } else if (job.status === 'FAILED') {
       toast.error(`동기화 실패: ${job.error ?? '원인 미상'}`);
+    } else if (job.status === 'CANCELLED') {
+      toast.info(`동기화 취소됨: ${dataset.name} — 재실행 시 이어받습니다`);
     } else {
       return; // 진행 중 — 계속 폴링
     }
-    setSyncJobId(null);
+    setStartedJobId(null);
     void queryClient.invalidateQueries({ queryKey: ['datasets'] });
   }, [syncJob.data, syncJobId, dataset.name, queryClient]);
 
   const syncMutation = useMutation({
     mutationFn: () => postJson<{ job: { id: string } }>('/datasets/sync', { datasetId: dataset.id }),
-    onSuccess: ({ job }) => setSyncJobId(job.id),
+    onSuccess: ({ job }) => setStartedJobId(job.id),
     onError: (error: unknown) => toast.error(errorMessage(error, '동기화 시작 실패')),
+  });
+
+  const cancelMutation = useMutation({
+    mutationFn: () => postJson<{ status: string }>(`/data-jobs/${syncJobId}/cancel`, {}),
+    onError: (error: unknown) => toast.error(errorMessage(error, '취소 실패')),
   });
 
   const symbolsMutation = useMutation({
@@ -126,6 +136,7 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
   });
 
   const syncing = syncMutation.isPending || syncJobId !== null;
+  const cancelling = cancelMutation.isPending;
 
   return (
     <Card>
@@ -136,16 +147,29 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
           <Badge variant="secondary">{dataset.timeframe}</Badge>
           <Badge variant="outline">v{dataset.latestVersion}</Badge>
           <span className="ml-auto flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-9"
-              disabled={syncing}
-              onClick={() => syncMutation.mutate()}
-            >
-              <RefreshCw data-icon="inline-start" className={syncing ? 'animate-spin' : ''} />
-              {syncing ? '동기화 중…' : '동기화'}
-            </Button>
+            {syncJobId !== null ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9"
+                disabled={cancelling}
+                onClick={() => cancelMutation.mutate()}
+              >
+                <X data-icon="inline-start" />
+                {cancelling ? '취소 중…' : '동기화 취소'}
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9"
+                disabled={syncing}
+                onClick={() => syncMutation.mutate()}
+              >
+                <RefreshCw data-icon="inline-start" />
+                동기화
+              </Button>
+            )}
             <Button
               variant="outline"
               size="sm"

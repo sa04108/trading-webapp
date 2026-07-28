@@ -229,4 +229,22 @@ export function registerDatasetRoutes(
     if (!job) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
     return { job };
   });
+
+  /** 실행 중 동기화 취소 — 페이지 경계에서 반영, 저장분은 남아 재실행이 이어받는다 */
+  app.post('/data-jobs/:jobId/cancel', { preHandler: requireAuth }, async (request, reply) => {
+    const { jobId } = request.params as { jobId: string };
+    const job = datasetService.getImportJob(jobId);
+    if (!job) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
+    if (job.status !== 'RUNNING' && job.status !== 'QUEUED') {
+      return reply.code(409).send({ error: '이미 종료된 작업입니다' });
+    }
+    const result = brokerSyncService.cancelSync(jobId);
+    if (result === 'NOT_RUNNING') {
+      // RUNNING 으로 남았지만 이 프로세스에 없다 — 재시작 고아. 부팅 정리와 같은 처리.
+      return reply.code(409).send({
+        error: '이 프로세스에서 실행 중인 작업이 아닙니다 — 서버 재시작으로 중단된 작업이면 자동 정리됩니다',
+      });
+    }
+    return reply.code(202).send({ status: 'CANCELLING' });
+  });
 }
