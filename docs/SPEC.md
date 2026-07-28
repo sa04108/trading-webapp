@@ -1571,12 +1571,12 @@ dist/
 
 - SQLite
 - 결과 메타데이터
-- 시간봉 Parquet
 - 결과 export
 - 데이터셋·엔진 버전 정보
 
 백업 제외:
 
+- 캔들 Parquet 전체 (D-019) — 1m/1d 는 증권사 재수집, 1h 는 1분봉 집계로 재생성
 - 증권사 API secret
 - 세션 secret (`app.env`)
 - 관리자 비밀번호

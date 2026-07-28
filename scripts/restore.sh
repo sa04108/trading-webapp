@@ -15,8 +15,9 @@ echo "==> SQLite 복원"
 sudo cp "${SOURCE}/app.sqlite" "${DATA_DIR}/app.sqlite"
 sudo rm -f "${DATA_DIR}/app.sqlite-wal" "${DATA_DIR}/app.sqlite-shm"
 
+# D-019 이후 백업에는 없다 — 그 이전에 만든 백업의 복원 호환용
 if [ -f "${SOURCE}/market-data-1h.tar.gz" ]; then
-  echo "==> Parquet 복원"
+  echo "==> Parquet 복원 (D-019 이전 백업)"
   sudo tar -xzf "${SOURCE}/market-data-1h.tar.gz" -C "${DATA_DIR}"
 fi
 

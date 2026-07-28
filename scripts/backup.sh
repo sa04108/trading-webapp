@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# 스펙 §31 — SQLite + 시간봉 Parquet + export 백업. 비밀값은 백업하지 않는다.
+# 스펙 §31 — SQLite + export 백업. 비밀값은 백업하지 않는다.
+# 캔들 Parquet 은 전 timeframe 백업 제외 (D-019) — 1m/1d 는 증권사 재수집,
+# 1h 는 1분봉 집계로 재생성한다. 재생성 불가 위험은 D-019 가 기록한다.
 # 서버에서 실행. S3 사용 시 별도 제한 IAM 사용자로만 업로드한다.
 set -euo pipefail
 
@@ -13,7 +15,7 @@ TARGET="${BACKUP_DIR}/backup-${STAMP}"
 STAGING="${BACKUP_DIR}/.incomplete-${STAMP}"
 
 # 로컬 보관은 일수가 아니라 총 용량으로 제한한다 (D-013). 디스크는 40GB 고정인데
-# 백업 1벌의 크기는 시간봉 데이터와 함께 자라므로 "30일" 은 총량을 묶어주지 못한다.
+# 백업 1벌의 크기는 exports 와 함께 자라므로 "30일" 은 총량을 묶어주지 못한다.
 # 스펙 §31 의 30일 lifecycle 은 S3 쪽 규칙이고, 그쪽은 이 제약을 받지 않는다.
 BACKUP_MAX_TOTAL_MB="${BACKUP_MAX_TOTAL_MB:-10240}"
 # 상한을 넘겨도 이 개수는 남긴다 — 복원할 백업이 0벌이 되는 상태를 만들지 않는다
@@ -69,24 +71,6 @@ mkdir -p "${STAGING}"
 
 # SQLite 는 온라인 백업 API 사용 (WAL 안전)
 sqlite3 "${DATA_DIR}/app.sqlite" ".backup '${STAGING}/app.sqlite'"
-
-# 시간봉 Parquet (1분봉은 필요 시 S3 아카이브).
-# 주의: tar 생성 시 인자는 리터럴 경로다 — --wildcards 는 생성에 적용되지 않으므로
-# find 로 실제 경로를 열거해서 넘긴다 (깊이 무관: dataset=<id>/ 계층 포함).
-if [ -d "${DATA_DIR}/market-data" ]; then
-  # 존재 확인은 파이프 없이 -print -quit 사용 — pipefail 환경에서 find | grep -q 는
-  # grep 조기 종료의 SIGPIPE(141) 로 데이터가 있어도 거짓이 될 수 있다
-  first_hourly_dir="$(find "${DATA_DIR}/market-data" -type d -name 'timeframe=1h' -print -quit)"
-  if [ -n "${first_hourly_dir}" ]; then
-    (
-      cd "${DATA_DIR}"
-      find market-data -type d -name 'timeframe=1h' -print0 \
-        | tar -czf "${STAGING}/market-data-1h.tar.gz" --null -T -
-    )
-  else
-    echo "warning: no 1h market data found — skipping market-data archive" >&2
-  fi
-fi
 
 if [ -d "${DATA_DIR}/exports" ]; then
   tar -czf "${STAGING}/exports.tar.gz" -C "${DATA_DIR}" exports
