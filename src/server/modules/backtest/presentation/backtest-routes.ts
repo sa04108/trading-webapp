@@ -141,6 +141,10 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       if (!paramCheck.ok) errors.push(paramCheck.error);
     }
 
+    if (body.period.from > body.period.to) {
+      errors.push('기간이 올바르지 않습니다 (from > to)');
+    }
+
     // 데이터셋 — 심볼·버전·커버리지 검사의 전제다
     const dataset = datasets.getDataset(body.datasetId);
     let datasetVersion: { version: number; contentHash: string } | null = null;
@@ -168,10 +172,10 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (!getSlippageProfile(body.execution.slippageProfileId)) {
       errors.push('알 수 없는 슬리피지 프로파일');
     }
-    if (body.period.from > body.period.to) {
-      errors.push('기간이 올바르지 않습니다 (from > to)');
-    }
 
+    // datasetVersion === null 분기는 죽은 방어 코드가 아니라 타입 내로잉이다 —
+    // 이 분기가 없으면 아래 { ok: true, datasetVersion } 반환에서 datasetVersion 이
+    // `{version,contentHash} | null` 로 남아 typecheck 가 깨진다.
     if (errors.length > 0 || datasetVersion === null) {
       return { ok: false, errors: errors.length > 0 ? errors : ['제출을 검증할 수 없습니다'] };
     }

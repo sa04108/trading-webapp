@@ -1,3 +1,7 @@
+// 확장자 .js 는 실수가 아니다 — tests/unit/prefill.test.ts 가 이 모듈을 import 해
+// tsconfig.server.json 의 NodeNext 프로그램에 편입되는데, 거기서는 확장자 없는
+// 상대 import 가 에러다 (tests/unit/api-client.test.ts 와 같은 이유). 따라서 이
+// 모듈은 계속 DOM 을 쓰지 않고 별칭(@/) import 도 쓰지 않아야 한다.
 import type { BacktestRequestBody } from './types.js';
 
 /** 위저드 입력 상태 — 폼이므로 전부 문자열로 보관한다 */

@@ -216,7 +216,10 @@ export function NewBacktestWizard() {
       capital: { initialCash: cash, currency: 'KRW' },
       execution: { fillTiming: 'NEXT_BAR_OPEN', commissionProfileId, slippageProfileId },
       risk: { maxPositions: positions },
-      randomSeed: Number(randomSeed) || 42,
+      randomSeed: (() => {
+        const seed = Number(randomSeed);
+        return Number.isInteger(seed) && seed >= 0 ? seed : 42;
+      })(),
     };
   };
 

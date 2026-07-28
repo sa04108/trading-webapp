@@ -31,7 +31,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { api } from '@/lib/api-client';
+import { api, ApiError } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 import { useBacktestLive, useBacktestSeries, useBacktestTrades } from './api';
 import {
@@ -295,6 +295,8 @@ export function BacktestDetailPage() {
       void queryClient.invalidateQueries({ queryKey: ['backtests'] });
       void navigate(`/backtests/${data.job.id}`);
     },
+    onError: (error: unknown) =>
+      toast.error(error instanceof ApiError ? error.message : '복제에 실패했습니다'),
   });
 
   const deleteMutation = useMutation({

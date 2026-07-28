@@ -596,4 +596,15 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       await small.close();
     }
   });
+
+  it('기간이 뒤집힌 제출은 데이터 부족이 아니라 기간 오류로 거부한다', async () => {
+    const inverted = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: { ...buildRequest(datasetId), period: { from: '2026-03-31', to: '2026-01-05' } },
+    });
+    expect(inverted.statusCode).toBe(400);
+    expect((inverted.json() as { error: string }).error).toContain('기간이 올바르지 않습니다');
+  });
 });
