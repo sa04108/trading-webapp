@@ -8,6 +8,7 @@ describe('loadConfig', () => {
     expect(config.bindAddress).toBe('127.0.0.1');
     expect(config.port).toBe(3000);
     expect(config.maxConcurrentBacktests).toBe(1);
+    expect(config.maxQueuedBacktests).toBe(20);
     expect(config.duckdbThreads).toBe(1);
     expect(config.duckdbMemoryLimit).toBe('384MB');
     expect(config.sessionIdleTimeoutSeconds).toBe(43200);

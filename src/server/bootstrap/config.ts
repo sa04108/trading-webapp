@@ -15,6 +15,8 @@ const envSchema = z.object({
   EXPORT_ROOT: z.string().default('./data/exports'),
   TEMP_ROOT: z.string().default('./data/temp'),
   MAX_CONCURRENT_BACKTESTS: z.coerce.number().int().min(1).max(4).default(1),
+  /** 대기(QUEUED) 백테스트 상한 — 연타로 대기열이 무한히 쌓이는 것을 막는다 (D-025) */
+  MAX_QUEUED_BACKTESTS: z.coerce.number().int().min(1).max(200).default(20),
   DUCKDB_THREADS: z.coerce.number().int().min(1).max(8).default(1),
   DUCKDB_MEMORY_LIMIT: z
     .string()
@@ -48,6 +50,7 @@ export interface AppConfig {
   readonly exportRoot: string;
   readonly tempRoot: string;
   readonly maxConcurrentBacktests: number;
+  readonly maxQueuedBacktests: number;
   readonly duckdbThreads: number;
   readonly duckdbMemoryLimit: string;
   readonly sessionSecret: string;
@@ -100,6 +103,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     exportRoot: raw.EXPORT_ROOT,
     tempRoot: raw.TEMP_ROOT,
     maxConcurrentBacktests: raw.MAX_CONCURRENT_BACKTESTS,
+    maxQueuedBacktests: raw.MAX_QUEUED_BACKTESTS,
     duckdbThreads: raw.DUCKDB_THREADS,
     duckdbMemoryLimit: raw.DUCKDB_MEMORY_LIMIT,
     sessionSecret: raw.SESSION_SECRET ?? randomBytes(48).toString('base64'),

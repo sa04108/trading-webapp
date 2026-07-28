@@ -541,4 +541,59 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(brokenDraft.statusCode).toBe(400);
     expect((brokenDraft.json() as { error: string }).error).toContain('복원할 수 없습니다');
   });
+
+  it('대기열 상한을 넘는 제출을 429 로 거부한다 (신규·복제 공통)', async () => {
+    const small = await createTestApp({ MAX_QUEUED_BACKTESTS: '3' });
+    try {
+      const { username, password } = await createTestAdmin(small.container);
+      const login = await small.app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: { username, password },
+      });
+      const smallCookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+
+      await small.container.datasetService.importCsv({
+        datasetName: 'kr-hourly-v1',
+        market: 'KR',
+        timeframe: '1h',
+        symbol: '005930',
+        fileName: 'trend.csv',
+        csvContent: buildTrendingHourlyCsv(),
+      });
+      const smallDatasetId = small.container.datasetService.listDatasets()[0]!.id;
+      const payload = buildRequest(smallDatasetId);
+
+      // 오케스트레이터를 tick 하지 않으므로 전부 QUEUED 로 남는다
+      for (let i = 0; i < 3; i += 1) {
+        const accepted = await small.app.inject({
+          method: 'POST',
+          url: '/api/v1/backtests',
+          cookies: { qp_session: smallCookie },
+          payload,
+        });
+        expect(accepted.statusCode).toBe(201);
+      }
+
+      const rejected = await small.app.inject({
+        method: 'POST',
+        url: '/api/v1/backtests',
+        cookies: { qp_session: smallCookie },
+        payload,
+      });
+      expect(rejected.statusCode).toBe(429);
+      expect((rejected.json() as { error: string }).error).toContain('대기');
+
+      // 복제도 같은 상한을 받는다
+      const queued = small.container.jobQueue.listJobs(1, 0)[0]!;
+      const clonedOverLimit = await small.app.inject({
+        method: 'POST',
+        url: `/api/v1/backtests/${queued.id}/clone`,
+        cookies: { qp_session: smallCookie },
+      });
+      expect(clonedOverLimit.statusCode).toBe(429);
+    } finally {
+      await small.close();
+    }
+  });
 });

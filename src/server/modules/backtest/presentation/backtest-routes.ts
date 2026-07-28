@@ -32,6 +32,7 @@ export interface BacktestRouteDeps {
   readonly datasets: DatasetService;
   readonly audit: AuditLogService;
   readonly dataRoot: string;
+  readonly maxQueuedBacktests: number;
 }
 
 const MIN_FREE_DISK_BYTES = 500 * 1024 * 1024;
@@ -177,6 +178,16 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     return { ok: true, datasetVersion };
   };
 
+  /**
+   * 대기열 깊이 상한 (D-025). QUEUED 만 센다 — 실행 중은 동시 실행 상한이 이미 묶고 있다.
+   * 429 는 507(호스트 자원 부족)과 구분한다: 사용자가 할 일이 다르다(기다리거나 취소).
+   */
+  const queueDepthError = (): string | null => {
+    const queued = queue.countByStatus(['QUEUED']);
+    if (queued < deps.maxQueuedBacktests) return null;
+    return `대기 중인 백테스트가 ${queued}건으로 상한(${deps.maxQueuedBacktests})에 도달했습니다. 완료되거나 취소된 뒤 제출하세요.`;
+  };
+
   app.get('/backtests/profiles', { preHandler: requireAuth }, async () => ({
     commissionProfiles: listCostProfiles(),
     slippageProfiles: listSlippageProfiles(),
@@ -195,6 +206,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (!validated.ok) {
       return reply.code(400).send({ error: validated.errors[0] ?? '제출을 검증할 수 없습니다' });
     }
+
+    const queueError = queueDepthError();
+    if (queueError) return reply.code(429).send({ error: queueError });
 
     const resourceError = await checkResources(deps.dataRoot);
     if (resourceError) return reply.code(507).send({ error: resourceError });
@@ -265,6 +279,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (!validated.ok) {
       return reply.code(400).send({ error: validated.errors[0] ?? '제출을 검증할 수 없습니다' });
     }
+
+    const queueError = queueDepthError();
+    if (queueError) return reply.code(429).send({ error: queueError });
 
     // §34 리소스 가드도 관문의 일부다 — 복제라고 디스크·메모리 한계를 넘어설 이유는 없다
     const resourceError = await checkResources(deps.dataRoot);
