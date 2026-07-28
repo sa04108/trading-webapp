@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Copy, Download, Trash2, XCircle } from 'lucide-react';
+import { Copy, Download, SlidersHorizontal, Trash2, XCircle } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { toast } from 'sonner';
@@ -340,15 +340,43 @@ export function BacktestDetailPage() {
             </Button>
           ) : (
             <>
-              <Button
-                variant="outline"
-                className="h-11"
-                onClick={() => cloneMutation.mutate()}
-                disabled={cloneMutation.isPending}
-              >
-                <Copy data-icon="inline-start" />
-                복제 실행
-              </Button>
+              {/* 실패한 작업은 같은 조건 재실행이 대개 같은 결과다 — 재설정을 앞세운다 */}
+              {job.status === 'FAILED' ? (
+                <>
+                  <Button className="h-11" asChild>
+                    <Link to={`/backtests/new?from=${id}`}>
+                      <SlidersHorizontal data-icon="inline-start" />
+                      재설정 및 복제
+                    </Link>
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="h-11"
+                    onClick={() => cloneMutation.mutate()}
+                    disabled={cloneMutation.isPending}
+                  >
+                    <Copy data-icon="inline-start" />
+                    복제
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button
+                    className="h-11"
+                    onClick={() => cloneMutation.mutate()}
+                    disabled={cloneMutation.isPending}
+                  >
+                    <Copy data-icon="inline-start" />
+                    복제
+                  </Button>
+                  <Button variant="outline" className="h-11" asChild>
+                    <Link to={`/backtests/new?from=${id}`}>
+                      <SlidersHorizontal data-icon="inline-start" />
+                      재설정 및 복제
+                    </Link>
+                  </Button>
+                </>
+              )}
               {completed ? (
                 <Button variant="outline" className="h-11" asChild>
                   <a href={`/api/v1/backtests/${id}/export`} download>
@@ -472,9 +500,9 @@ export function BacktestDetailPage() {
         <Alert>
           <AlertTitle>중단된 작업</AlertTitle>
           <AlertDescription>
-            서버 재시작으로 중단되었습니다. 자동 재실행되지 않으니 복제 실행을 사용하세요.
+            서버 재시작으로 중단되었습니다. 자동 재실행되지 않으니 복제를 사용하세요.
             <Button variant="link" className="h-auto p-0 pl-2" onClick={() => cloneMutation.mutate()}>
-              복제 실행
+              복제
             </Button>
           </AlertDescription>
         </Alert>
