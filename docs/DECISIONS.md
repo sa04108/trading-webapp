@@ -176,3 +176,27 @@
   마감)·§25(UFW 원문)·§27(Caddy 내부 TLS)은 이 결정으로 대체된다 — 현행 규칙은
   스펙 §2.2 다이어그램과 infra/provision.sh 가 정의한다.
 - **설계 문서:** `docs/superpowers/specs/2026-07-27-platform-readonly-constitution-design.md`
+
+## D-018: 토스증권 Open API 어댑터 — 승인 완료로 2차 어댑터 추가 (D-002 예정 이행)
+
+- **변경 내용:** `createTossMarketDataSource` 를 broker infrastructure 에 추가했다
+  (`toss/toss-market-data-source.ts`). 공식 OpenAPI JSON
+  (openapi.tossinvest.com/openapi-docs/latest/openapi.json, v1.2.5) 기준으로 캔들 수집을
+  실제 매핑까지 구현했다 — 키움 어댑터(자격 증명 발급 전 비활성 스텁)와 달리 스펙이
+  공개되어 있어 검증 가능했다. 공용 `BrokerNotConfiguredError` 는 `errors.ts` 로 추출했다.
+- **인증:** OAuth2 client_credentials, `POST /oauth2/token` — 키움(JSON body)과 달리
+  form-urlencoded 다. 토큰 유효 24h, 재발급 시 이전 토큰이 즉시 무효화되므로 프로세스당
+  단일 `BrokerRestClient` 로 캐싱을 공유한다. 모의 환경은 없고 실전만 제공되며, 허용 IP
+  사전 등록제다(§18 고정 아웃바운드 IP 전제 유지).
+- **1h 미제공:** `interval` 은 `1m`/`1d` 뿐이다. `1h` 요청은 조용히 근사하지 않고
+  `UnsupportedTimeframeError` 로 명시적으로 실패시킨다 — 시간봉은 스펙 §13 대로 1분봉
+  집계로 생성한다.
+- **페이지네이션 계약:** `fetchCandles` 1회 = 1페이지(최대 200봉). `before`(inclusive)
+  커서를 `toTsMs` 의 UTC ISO 로 보내고, `hasMore` 면 호출자가 `toTsMs` 를 반환된 가장
+  오래된 봉 직전으로 좁혀 이어받는다 — port 의 이어받기 시맨틱과 일치하고, 장시간
+  단일 호출을 피한다. `nextBefore` 는 inclusive 라 마지막 봉이 중복될 수 있으나
+  `normalizeCandles` 가 멱등 처리한다.
+- **오데이터 차단:** 가격·거래량이 decimal *문자열* 로 오므로 숫자 변환 실패(NaN)는
+  봉을 버리지 않고 요청 전체를 실패시킨다.
+- **참고:** 요청서에 첨부된 developers-apps-in-toss.toss.im 은 토스증권이 아니라
+  앱인토스(미니앱 플랫폼) 문서다. 실제 포털은 developers.tossinvest.com.

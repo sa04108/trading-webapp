@@ -4,14 +4,10 @@ import type {
   FetchCandleResult,
   MarketDataSource,
 } from '../../../market-data/application/ports.js';
+import { BrokerNotConfiguredError } from '../errors.js';
 import { BrokerRestClient, type TokenProvider } from '../rest-client.js';
 
-export class BrokerNotConfiguredError extends Error {
-  constructor() {
-    super('증권사 API 자격 증명이 설정되지 않았습니다. CSV/Parquet import 를 사용하세요.');
-    this.name = 'BrokerNotConfiguredError';
-  }
-}
+export { BrokerNotConfiguredError } from '../errors.js';
 
 export interface KiwoomConfig {
   readonly baseUrl: string; // 예: https://api.kiwoom.com (모의투자: https://mockapi.kiwoom.com)
