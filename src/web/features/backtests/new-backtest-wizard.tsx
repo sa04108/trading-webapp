@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -15,9 +15,11 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
+import { Skeleton } from '@/components/ui/skeleton';
 import { api, ApiError, postJson } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 import { formatKrw } from '@/lib/format';
+import { requestToFormState } from './prefill';
 import type { BacktestRequestBody } from './types';
 
 const STEPS = ['전략', '데이터·종목', '기간', '자본·비용', '검토', '실행'] as const;
@@ -105,6 +107,18 @@ export function NewBacktestWizard() {
       ),
   });
 
+  const [searchParams] = useSearchParams();
+  const sourceJobId = searchParams.get('from');
+
+  const draft = useQuery({
+    queryKey: ['backtests', sourceJobId, 'clone-draft'],
+    queryFn: () =>
+      api<{ request: BacktestRequestBody; warnings: string[]; blockers: string[] }>(
+        `/backtests/${sourceJobId}/clone-draft`,
+      ),
+    enabled: sourceJobId !== null,
+  });
+
   const selectedStrategy = strategies.data?.strategies.find((s) => s.id === strategyId) ?? null;
   const selectedDataset = datasets.data?.datasets.find((d) => d.id === datasetId) ?? null;
   const paramSpecs = useMemo(() => extractNumberParams(schema.data?.schema), [schema.data]);
@@ -125,6 +139,37 @@ export function NewBacktestWizard() {
       ),
     );
   }, [strategyId, paramSpecs]);
+
+  // 프리필은 원본 작업당 한 번만 — 사용자가 편집을 시작한 뒤 덮어쓰지 않는다.
+  const prefilledFrom = useRef<string | null>(null);
+  const [prefillNotes, setPrefillNotes] = useState<string[]>([]);
+  useEffect(() => {
+    if (sourceJobId === null || !draft.data) return;
+    if (prefilledFrom.current === sourceJobId) return;
+    // 카탈로그가 도착해야 사라진 참조를 판정할 수 있다
+    if (!strategies.data || !datasets.data) return;
+    prefilledFrom.current = sourceJobId;
+
+    const { state, notes } = requestToFormState(draft.data.request, {
+      strategyIds: strategies.data.strategies.map((s) => s.id),
+      datasets: datasets.data.datasets,
+    });
+    setStrategyId(state.strategyId);
+    setParameters(state.parameters);
+    setDatasetId(state.datasetId);
+    setSymbols(state.symbols);
+    setFrom(state.from);
+    setTo(state.to);
+    setInitialCash(state.initialCash);
+    setMaxPositions(state.maxPositions);
+    setCommissionProfileId(state.commissionProfileId);
+    setSlippageProfileId(state.slippageProfileId);
+    setRandomSeed(state.randomSeed);
+    setPrefillNotes(notes);
+    // 기본값 시딩 effect 가 원본 파라미터를 덮어쓰지 못하게 막는다.
+    // 사용자가 전략을 직접 바꾸면 pickStrategy 가 null 로 리셋해 정상 동작한다.
+    seededFor.current = state.strategyId;
+  }, [sourceJobId, draft.data, strategies.data, datasets.data]);
 
   const pickStrategy = (id: string): void => {
     setStrategyId(id);
@@ -220,9 +265,50 @@ export function NewBacktestWizard() {
 
   const request = step >= 4 ? buildRequest() : null;
 
+  // 프리필 중에는 폼을 감춘다 — 입력하던 값이 프리필에 덮이는 경합을 없앤다
+  const prefilling =
+    sourceJobId !== null && prefilledFrom.current !== sourceJobId && !draft.isError;
+
   return (
     <div className="mx-auto max-w-2xl space-y-4">
-      <h2 className="text-lg font-semibold">새 백테스트</h2>
+      <h2 className="text-lg font-semibold">
+        {sourceJobId !== null ? '재설정 및 복제' : '새 백테스트'}
+      </h2>
+
+      {draft.isError ? (
+        <Alert variant="destructive" role="alert">
+          <AlertDescription>
+            {draft.error instanceof ApiError ? draft.error.message : '원본 설정을 불러올 수 없습니다'}
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      {(draft.data?.blockers ?? []).length > 0 ? (
+        <Alert variant="destructive">
+          <AlertDescription>
+            원본 그대로는 제출할 수 없습니다 — 아래를 고치세요.
+            <ul className="mt-1 list-disc pl-5">
+              {(draft.data?.blockers ?? []).map((blocker) => (
+                <li key={blocker}>{blocker}</li>
+              ))}
+            </ul>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      {[...(draft.data?.warnings ?? []), ...prefillNotes].length > 0 ? (
+        <Alert>
+          <AlertDescription>
+            <ul className="list-disc pl-5">
+              {[...(draft.data?.warnings ?? []), ...prefillNotes].map((note) => (
+                <li key={note}>{note}</li>
+              ))}
+            </ul>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      {prefilling ? <Skeleton className="h-64 w-full" /> : null}
 
       <ol className="flex flex-wrap gap-1 text-xs" aria-label="진행 단계">
         {STEPS.map((label, index) => (
@@ -249,7 +335,7 @@ export function NewBacktestWizard() {
         </Alert>
       ) : null}
 
-      {step === 0 ? (
+      {!prefilling && step === 0 ? (
         <div className="space-y-3">
           {(strategies.data?.strategies ?? []).map((strategy) => (
             <button
@@ -302,7 +388,7 @@ export function NewBacktestWizard() {
         </div>
       ) : null}
 
-      {step === 1 ? (
+      {!prefilling && step === 1 ? (
         <div className="space-y-3">
           {(datasets.data?.datasets ?? []).length === 0 ? (
             <Alert>
@@ -368,7 +454,7 @@ export function NewBacktestWizard() {
         </div>
       ) : null}
 
-      {step === 2 ? (
+      {!prefilling && step === 2 ? (
         <Card>
           <CardContent className="grid grid-cols-1 gap-4 py-4 sm:grid-cols-2">
             <div className="space-y-1">
@@ -395,7 +481,7 @@ export function NewBacktestWizard() {
         </Card>
       ) : null}
 
-      {step === 3 ? (
+      {!prefilling && step === 3 ? (
         <Card>
           <CardContent className="space-y-4 py-4">
             <div className="space-y-1">
@@ -470,7 +556,7 @@ export function NewBacktestWizard() {
         </Card>
       ) : null}
 
-      {step >= 4 ? (
+      {!prefilling && step >= 4 ? (
         typeof request === 'string' ? (
           <Alert variant="destructive">
             <AlertDescription>{request}</AlertDescription>
@@ -528,34 +614,36 @@ export function NewBacktestWizard() {
         ) : null
       ) : null}
 
-      <div className="flex items-center justify-between gap-2">
-        <Button
-          variant="outline"
-          className="h-11"
-          disabled={step === 0}
-          onClick={() => {
-            setStepError(null);
-            setStep((s) => Math.max(0, s - 1));
-          }}
-        >
-          이전
-        </Button>
-        {step < STEPS.length - 1 ? (
-          <Button className="h-11" onClick={goNext}>
-            다음
-          </Button>
-        ) : (
+      {prefilling ? null : (
+        <div className="flex items-center justify-between gap-2">
           <Button
+            variant="outline"
             className="h-11"
-            disabled={typeof request === 'string' || submitMutation.isPending}
+            disabled={step === 0}
             onClick={() => {
-              if (request && typeof request !== 'string') submitMutation.mutate(request);
+              setStepError(null);
+              setStep((s) => Math.max(0, s - 1));
             }}
           >
-            {submitMutation.isPending ? '제출 중…' : '백테스트 실행'}
+            이전
           </Button>
-        )}
-      </div>
+          {step < STEPS.length - 1 ? (
+            <Button className="h-11" onClick={goNext}>
+              다음
+            </Button>
+          ) : (
+            <Button
+              className="h-11"
+              disabled={typeof request === 'string' || submitMutation.isPending}
+              onClick={() => {
+                if (request && typeof request !== 'string') submitMutation.mutate(request);
+              }}
+            >
+              {submitMutation.isPending ? '제출 중…' : '백테스트 실행'}
+            </Button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
