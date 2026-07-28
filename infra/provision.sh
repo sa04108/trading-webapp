@@ -251,6 +251,20 @@ else
   echo "TLS 응답 확인 (HTTP ${CODE} — 앱 배포 전에는 502 가 정상)"
 fi
 
+echo "==> 스왑 2GB (D-023)"
+# RAM 1GB + 스왑 0 조합은 메모리 압박 시 OOM 킬러가 뜨기 전에 페이지 캐시 스래싱으로
+# sshd 까지 마비시킨다 (2026-07-28 운영 장애). 스왑은 그 마비를 "느려짐"으로 강등시킨다.
+if ! swapon --show --noheadings | grep -q .; then
+  fallocate -l 2G /swapfile
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  echo "스왑 2GB 활성화"
+else
+  echo "스왑 이미 존재 — 건너뜀"
+fi
+
 echo "==> app.env"
 if [ -f /etc/quant-platform/app.env ]; then
   # 절대 덮지 않는다 — SESSION_SECRET 이 바뀌면 기존 세션이 전부 무효화된다

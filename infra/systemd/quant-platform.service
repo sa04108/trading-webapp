@@ -34,7 +34,11 @@ ReadWritePaths=/var/lib/quant-platform
 ReadOnlyPaths=/opt/quant-platform/current
 
 LimitNOFILE=65536
-MemoryMax=768M
+# 909MB 박스에서 앱이 555MB 만 써도 시스템(sshd·journald·caddy)이 질식했다
+# (2026-07-28 장애, D-023). MemoryHigh 에서 먼저 회수 압박을 걸어 Max 도달 전에
+# 스왑·캐시로 밀어내고, 캡도 시스템 몫 ~270MB 를 남기는 선까지 내린다.
+MemoryHigh=512M
+MemoryMax=640M
 TasksMax=256
 
 StandardOutput=journal

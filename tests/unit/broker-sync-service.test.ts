@@ -64,12 +64,15 @@ class FakeSource implements MarketDataSource {
 
 class InMemoryCandleRepository implements CandleRepository {
   private store = new Map<string, Candle>();
+  /** 저장 호출 횟수 추적 — 쓰기 증폭 회귀 감시용 */
+  saveInvocations: Candle[][] = [];
 
   private key(datasetId: string, c: Candle): string {
     return `${datasetId}:${c.symbol}:${c.timeframe}:${c.tsMs}`;
   }
 
   async saveCandles(datasetId: string, candles: readonly Candle[]): Promise<void> {
+    this.saveInvocations.push([...candles]);
     for (const c of candles) this.store.set(this.key(datasetId, c), c);
   }
 
@@ -332,6 +335,20 @@ describe('BrokerSyncService (설계 2026-07-28-broker-sync-design.md)', () => {
     await done;
     // 진행 없는 응답은 중단하되 실패로 기록한다 — 조용히 완료로 위장하지 않는다
     expect(datasetService.getImportJob(job.id)?.status).toBe('FAILED');
+  });
+
+  it('batches page saves instead of rewriting the partition per page (쓰기 증폭 방지)', async () => {
+    // 90봉 · 페이지 4봉 = 23페이지. 페이지마다 저장하면 파티션 재작성 23회 —
+    // 운영 장애(메모리 고갈)의 근본 원인이었다. 배칭 후엔 1m 저장이 소수여야 한다.
+    const source = new FakeSource(minutes('005930', 90));
+    const { repo, datasetService, sync } = buildHarness(source);
+    const dataset = datasetService.createBrokerDataset('KR-유니버스', 'KR', '1m', ['005930']);
+
+    await sync.startSync(dataset.id).done;
+
+    const minuteSaves = repo.saveInvocations.filter((batch) => batch[0]?.timeframe === '1m');
+    expect(minuteSaves.length).toBeLessThanOrEqual(2);
+    expect(repo.all(dataset.id, '1m')).toHaveLength(90);
   });
 
   it('cancels a running sync at a page boundary and resumes on the next run', async () => {

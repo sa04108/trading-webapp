@@ -54,6 +54,14 @@ export interface BrokerSyncDeps {
 
 const DISK_CHECK_PAGE_INTERVAL = 50;
 
+/**
+ * 저장 배칭 상한 (2026-07-28 운영 장애, D-023). 페이지(최대 200봉)마다 저장하면
+ * Parquet 파티션 재작성이 페이지 수만큼 반복돼 — 백필이 진행될수록 재작성 대상이
+ * 커지는 쓰기 증폭 — DuckDB 메모리를 상한까지 밀어올려 1GB 박스를 질식시켰다.
+ * 1만 봉(~월 파티션 1.2개 분량)씩 모아 저장하면 재작성이 월당 ~1회로 준다.
+ */
+const SAVE_BATCH_ROWS = 10_000;
+
 interface SyncedRange {
   min: number | null;
   max: number | null;
@@ -258,40 +266,69 @@ export class BrokerSyncService {
     if (args.toTsMs < args.fromTsMs) return { rows };
     let to = args.toTsMs;
     let pages = 0;
+    let buffer: Candle[] = [];
 
-    for (;;) {
-      this.throwIfCancelled(args.jobId);
-      if (pages > 0 && pages % DISK_CHECK_PAGE_INTERVAL === 0) this.checkDisk();
-      const result = await this.deps.source.fetchCandles({
-        market: dataset.market,
-        timeframe: collect,
-        symbol,
-        fromTsMs: args.fromTsMs,
-        toTsMs: to,
-      });
-      pages += 1;
+    // 워터마크는 저장(flush) 이후에만 넓힌다 — 버퍼에만 있는 봉은 다음 실행이 재수집한다
+    const flush = async (): Promise<void> => {
+      if (buffer.length === 0) return;
+      await this.deps.candleRepository.saveCandles(dataset.id, buffer);
+      let min = Number.POSITIVE_INFINITY;
+      let max = Number.NEGATIVE_INFINITY;
+      for (const candle of buffer) {
+        if (candle.tsMs < min) min = candle.tsMs;
+        if (candle.tsMs > max) max = candle.tsMs;
+      }
+      this.widenWatermark(dataset.id, symbol, min, max);
+      args.newRange.min = args.newRange.min == null ? min : Math.min(args.newRange.min, min);
+      args.newRange.max = args.newRange.max == null ? max : Math.max(args.newRange.max, max);
+      rows += buffer.length;
+      buffer = [];
+    };
 
-      if (result.candles.length > 0) {
-        await this.deps.candleRepository.saveCandles(dataset.id, result.candles);
-        let min = Number.POSITIVE_INFINITY;
-        let max = Number.NEGATIVE_INFINITY;
-        for (const candle of result.candles) {
-          if (candle.tsMs < min) min = candle.tsMs;
-          if (candle.tsMs > max) max = candle.tsMs;
+    try {
+      for (;;) {
+        this.throwIfCancelled(args.jobId);
+        if (pages > 0 && pages % DISK_CHECK_PAGE_INTERVAL === 0) this.checkDisk();
+        const result = await this.deps.source.fetchCandles({
+          market: dataset.market,
+          timeframe: collect,
+          symbol,
+          fromTsMs: args.fromTsMs,
+          toTsMs: to,
+        });
+        pages += 1;
+
+        if (result.candles.length > 0) {
+          buffer.push(...result.candles);
+          let pageMin = Number.POSITIVE_INFINITY;
+          for (const candle of result.candles) {
+            if (candle.tsMs < pageMin) pageMin = candle.tsMs;
+          }
+          to = pageMin - 1;
+          if (buffer.length >= SAVE_BATCH_ROWS) await flush();
+        } else if (result.hasMore) {
+          // 진행 없는 응답 — 조용히 완료로 위장하지 않는다
+          throw new Error(
+            `소스가 빈 페이지에 hasMore=true 를 반환했습니다 (${symbol}, to=${to}) — 페이지네이션 이상`,
+          );
         }
-        this.widenWatermark(dataset.id, symbol, min, max);
-        args.newRange.min = args.newRange.min == null ? min : Math.min(args.newRange.min, min);
-        args.newRange.max = args.newRange.max == null ? max : Math.max(args.newRange.max, max);
-        rows += result.candles.length;
-        to = min - 1;
-      } else if (result.hasMore) {
-        // 진행 없는 응답 — 조용히 완료로 위장하지 않는다
-        throw new Error(
-          `소스가 빈 페이지에 hasMore=true 를 반환했습니다 (${symbol}, to=${to}) — 페이지네이션 이상`,
+
+        if (!result.hasMore) break;
+      }
+      // 성공 경로의 마지막 flush 실패는 그대로 전파한다 — 잡이 FAILED 로 남아야 한다
+      await flush();
+      return { rows };
+    } finally {
+      // 에러·취소로 빠져나갈 때도 이미 받은 봉은 저장을 시도한다 — 이어받기 보존.
+      // 여기서의 저장 실패는 원래 에러를 가리지 않도록 삼킨다 (봉은 재수집 가능).
+      try {
+        await flush();
+      } catch (flushError) {
+        this.deps.logger.warn(
+          { module: 'market-data', event: 'data.sync.flush-failed', symbol, err: flushError },
+          'failed to persist buffered candles on abort — they will be re-fetched',
         );
       }
-
-      if (!result.hasMore) return { rows };
     }
   }
 
