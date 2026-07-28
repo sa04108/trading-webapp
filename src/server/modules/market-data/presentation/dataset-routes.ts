@@ -27,12 +27,24 @@ const createDatasetSchema = z.object({
 
 const syncSchema = z.object({ datasetId: z.string().min(1) });
 
+const symbolSchema = z.string().regex(/^[A-Za-z0-9._-]{1,20}$/);
+const updateSymbolsSchema = z
+  .object({
+    addSymbols: z.array(symbolSchema).max(1000).optional(),
+    removeSymbols: z.array(symbolSchema).max(1000).optional(),
+  })
+  .refine((body) => (body.addSymbols?.length ?? 0) + (body.removeSymbols?.length ?? 0) > 0, {
+    message: '변경할 심볼이 없습니다',
+  });
+
 const MAX_CSV_BYTES = 50 * 1024 * 1024;
 
 export function registerDatasetRoutes(
   app: FastifyInstance,
   datasetService: DatasetService,
   brokerSyncService: BrokerSyncService,
+  /** 이 데이터셋을 참조하는 활성 백테스트 존재 여부 — 조립부가 backtest 모듈로 연결한다 */
+  hasActiveBacktests: (datasetId: string) => boolean,
   requireAuth: PreHandler,
 ): void {
   app.get('/datasets', { preHandler: requireAuth }, async () => ({
@@ -147,6 +159,47 @@ export function registerDatasetRoutes(
         .code(400)
         .send({ error: error instanceof Error ? error.message : String(error) });
     }
+  });
+
+  /** 심볼 목록 편집 — 제거는 수집 중단 밸브, 기존 봉은 보존 */
+  app.patch('/datasets/:datasetId', { preHandler: requireAuth }, async (request, reply) => {
+    const { datasetId } = request.params as { datasetId: string };
+    const parsed = updateSymbolsSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: '필드가 올바르지 않습니다 (addSymbols/removeSymbols)' });
+    }
+    if (!datasetService.getDataset(datasetId)) {
+      return reply.code(404).send({ error: '데이터셋을 찾을 수 없습니다' });
+    }
+    try {
+      const dataset = datasetService.updateSymbols(datasetId, {
+        add: parsed.data.addSymbols,
+        remove: parsed.data.removeSymbols,
+      });
+      return reply.send({ dataset });
+    } catch (error) {
+      return reply
+        .code(400)
+        .send({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  /** 데이터셋 삭제 — 메타데이터 + 물리 Parquet. 참조 중인 작업이 있으면 409 */
+  app.delete('/datasets/:datasetId', { preHandler: requireAuth }, async (request, reply) => {
+    const { datasetId } = request.params as { datasetId: string };
+    if (!datasetService.getDataset(datasetId)) {
+      return reply.code(404).send({ error: '데이터셋을 찾을 수 없습니다' });
+    }
+    if (hasActiveBacktests(datasetId)) {
+      return reply.code(409).send({ error: '이 데이터셋을 참조하는 백테스트가 있습니다 — 완료·취소 후 삭제하세요' });
+    }
+    try {
+      await datasetService.deleteDataset(datasetId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return reply.code(message.includes('실행 중') ? 409 : 500).send({ error: message });
+    }
+    return reply.code(204).send();
   });
 
   /** 증권사 동기화 시작 — 202 + jobId, 진행은 GET /data-jobs/:jobId */

@@ -406,4 +406,60 @@ describe('market data (스펙 §11, §13)', () => {
     });
     expect(missing.statusCode).toBe(404);
   });
+
+  it('updates symbols and deletes a dataset via API, blocking delete while backtests are active', async () => {
+    const { username, password } = await createTestAdmin(ctx.container);
+    const login = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { username, password },
+    });
+    const cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/datasets',
+      cookies: { qp_session: cookie },
+      payload: { name: 'KR-편집', market: 'KR', collect: '1m', symbols: ['005930'] },
+    });
+    const dataset = created.json().dataset as { id: string };
+
+    // U: 심볼 추가·제거
+    const patched = await ctx.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/datasets/${dataset.id}`,
+      cookies: { qp_session: cookie },
+      payload: { addSymbols: ['000660'] },
+    });
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json().dataset.symbols).toEqual(['000660', '005930']);
+
+    // D 가드: 활성 백테스트가 참조 중이면 409
+    const btJob = ctx.container.jobQueue.enqueue({
+      strategyId: 'noop',
+      datasetId: dataset.id,
+    } as never);
+    const blocked = await ctx.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/datasets/${dataset.id}`,
+      cookies: { qp_session: cookie },
+    });
+    expect(blocked.statusCode).toBe(409);
+
+    // 백테스트 잡 정리 후 삭제 성공
+    ctx.container.jobQueue.setStatus(btJob.id, 'CANCELLED');
+    const deleted = await ctx.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/datasets/${dataset.id}`,
+      cookies: { qp_session: cookie },
+    });
+    expect(deleted.statusCode).toBe(204);
+
+    const gone = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/datasets/${dataset.id}`,
+      cookies: { qp_session: cookie },
+    });
+    expect(gone.statusCode).toBe(404);
+  });
 });

@@ -106,6 +106,12 @@ class InMemoryCandleRepository implements CandleRepository {
       .filter((c) => c.symbol === symbol)
       .map((c) => c.tsMs);
   }
+
+  async deleteDataset(datasetId: string): Promise<void> {
+    for (const key of [...this.store.keys()]) {
+      if (key.startsWith(`${datasetId}:`)) this.store.delete(key);
+    }
+  }
 }
 
 const noopAudit: AuditLogService = { record: () => {} } as unknown as AuditLogService;
@@ -363,5 +369,68 @@ describe('DatasetService.createBrokerDataset', () => {
     expect(datasetService.createBrokerDataset('KR-일봉', 'KR', '1d', ['005930']).timeframe).toBe('1d');
     expect(() => datasetService.createBrokerDataset('x', 'KR', '1d', ['bad symbol!'])).toThrow();
     expect(() => datasetService.createBrokerDataset('y', 'KR', '1d', [])).toThrow();
+  });
+});
+
+describe('DatasetService.updateSymbols (유니버스 밸브)', () => {
+  it('adds and removes symbols, bumps the version, keeps stored candles of removed symbols', async () => {
+    const source = new FakeSource(minutes('005930', 10));
+    const { repo, datasetService, sync } = buildHarness(source);
+    const dataset = datasetService.createBrokerDataset('KR-유니버스', 'KR', '1m', ['005930']);
+    await sync.startSync(dataset.id).done;
+    const versionAfterSync = datasetService.getLatestVersion(dataset.id)?.version;
+
+    const updated = datasetService.updateSymbols(dataset.id, {
+      add: ['000660'],
+      remove: ['005930'],
+    });
+
+    expect(updated.symbols).toEqual(['000660']);
+    expect(datasetService.getLatestVersion(dataset.id)?.version).toBe((versionAfterSync ?? 0) + 1);
+    // 제거는 수집 중단 밸브 — 이미 쌓인 봉은 지우지 않는다 (재추가 시 이어받기)
+    expect(repo.all(dataset.id, '1m').length).toBeGreaterThan(0);
+  });
+
+  it('rejects updates that would leave no symbols and invalid symbols', () => {
+    const { datasetService } = buildHarness(new FakeSource([]));
+    const dataset = datasetService.createBrokerDataset('KR-유니버스', 'KR', '1m', ['005930']);
+    expect(() => datasetService.updateSymbols(dataset.id, { remove: ['005930'] })).toThrow(/최소 1개/);
+    expect(() => datasetService.updateSymbols(dataset.id, { add: ['bad symbol!'] })).toThrow();
+    expect(() => datasetService.updateSymbols('ds_missing', { add: ['000660'] })).toThrow(/찾을 수 없/);
+  });
+});
+
+describe('DatasetService.deleteDataset', () => {
+  it('deletes DB rows and physical candles', async () => {
+    const source = new FakeSource(minutes('005930', 10));
+    const { db, repo, datasetService, sync } = buildHarness(source);
+    const dataset = datasetService.createBrokerDataset('KR-유니버스', 'KR', '1m', ['005930']);
+    await sync.startSync(dataset.id).done;
+    expect(repo.all(dataset.id, '1m').length).toBeGreaterThan(0);
+
+    await datasetService.deleteDataset(dataset.id);
+
+    expect(datasetService.getDataset(dataset.id)).toBeNull();
+    expect(repo.all(dataset.id, '1m')).toHaveLength(0);
+    // cascade: sync 상태도 함께 사라진다
+    const state = db.select().from(brokerSyncState).where(eq(brokerSyncState.datasetId, dataset.id)).all();
+    expect(state).toHaveLength(0);
+  });
+
+  it('refuses to delete while a sync job is running', async () => {
+    const { db, datasetService, clock } = buildHarness(new FakeSource([]));
+    const dataset = datasetService.createBrokerDataset('KR-유니버스', 'KR', '1m', ['005930']);
+    db.insert(dataImportJobs)
+      .values({
+        id: 'imp_busy',
+        datasetId: dataset.id,
+        status: 'RUNNING',
+        sourceType: 'BROKER',
+        createdAtMs: clock.now(),
+      })
+      .run();
+
+    await expect(datasetService.deleteDataset(dataset.id)).rejects.toThrow(/실행 중/);
+    expect(datasetService.getDataset(dataset.id)).not.toBeNull();
   });
 });

@@ -167,6 +167,21 @@ export class JobQueue {
     return true;
   }
 
+  /** 이 데이터셋을 참조하는 미종료(대기 포함) 잡 수 — 데이터셋 삭제 가드용 */
+  activeCountForDataset(datasetId: string): number {
+    const row = this.db
+      .select({ value: count() })
+      .from(backtestJobs)
+      .where(
+        and(
+          eq(backtestJobs.datasetId, datasetId),
+          inArray(backtestJobs.status, ['QUEUED', ...ACTIVE_STATUSES]),
+        ),
+      )
+      .get();
+    return row?.value ?? 0;
+  }
+
   countByStatus(statuses: BacktestJobStatus[]): number {
     const row = this.db
       .select({ value: count() })

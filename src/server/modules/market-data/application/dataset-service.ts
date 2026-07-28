@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import {
   dataCoverage,
@@ -268,6 +268,75 @@ export class DatasetService {
     };
     this.db.insert(datasets).values(row).run();
     return row as typeof datasets.$inferSelect;
+  }
+
+  /**
+   * 심볼 목록 편집 — 유니버스 밸브 (설계 2026-07-28-broker-sync-design.md).
+   * 제거는 다음 sync 부터 수집을 멈출 뿐, 이미 쌓인 봉과 워터마크는 남긴다 —
+   * 지우는 건 비가역이고 남기는 건 값싸며, 재추가 시 이어받기가 공짜다.
+   */
+  updateSymbols(
+    datasetId: string,
+    change: { add?: readonly string[]; remove?: readonly string[] },
+  ): DatasetSummary {
+    const row = this.db.select().from(datasets).where(eq(datasets.id, datasetId)).get();
+    if (!row) throw new Error(`데이터셋을 찾을 수 없습니다: ${datasetId}`);
+
+    for (const symbol of [...(change.add ?? []), ...(change.remove ?? [])]) {
+      if (!SYMBOL_PATTERN.test(symbol)) throw new Error(`invalid symbol: ${symbol}`);
+    }
+
+    const symbols = new Set(JSON.parse(row.symbolsJson) as string[]);
+    for (const symbol of change.add ?? []) symbols.add(symbol);
+    for (const symbol of change.remove ?? []) symbols.delete(symbol);
+    if (symbols.size === 0) {
+      throw new Error('심볼이 최소 1개 남아야 합니다 — 전부 비우려면 데이터셋을 삭제하세요');
+    }
+
+    const sorted = [...symbols].sort();
+    const now = this.clock.now();
+    this.db
+      .update(datasets)
+      .set({ symbolsJson: JSON.stringify(sorted), updatedAtMs: now })
+      .where(eq(datasets.id, datasetId))
+      .run();
+    // 심볼 구성은 백테스트가 보는 유효 데이터가 바뀌는 변경이다 — 버전에 반영 (§9.5)
+    this.bumpVersion(datasetId, `symbols:${sorted.join(',')}`, now);
+    this.audit.record('system', 'dataset.symbols.updated', {
+      datasetId,
+      add: change.add ?? [],
+      remove: change.remove ?? [],
+    });
+    const updated = this.db.select().from(datasets).where(eq(datasets.id, datasetId)).get();
+    return this.toSummary(updated as typeof datasets.$inferSelect);
+  }
+
+  /**
+   * 데이터셋 삭제 — 메타데이터(cascade)와 물리 Parquet 을 함께 지운다.
+   * 물리 삭제를 먼저 한다: 파일 삭제가 실패하면 중단되어 데이터셋이 온전히 남고,
+   * DB 를 먼저 지우면 실패 시 디스크에 고아 파티션이 조용히 남는다.
+   */
+  async deleteDataset(datasetId: string): Promise<void> {
+    const row = this.db.select().from(datasets).where(eq(datasets.id, datasetId)).get();
+    if (!row) throw new Error(`데이터셋을 찾을 수 없습니다: ${datasetId}`);
+
+    const runningSync = this.db
+      .select({ id: dataImportJobs.id })
+      .from(dataImportJobs)
+      .where(
+        and(
+          eq(dataImportJobs.datasetId, datasetId),
+          inArray(dataImportJobs.status, ['QUEUED', 'RUNNING']),
+        ),
+      )
+      .get();
+    if (runningSync) {
+      throw new Error('데이터 작업이 실행 중입니다 — 완료 후 삭제하세요');
+    }
+
+    await this.candleRepository.deleteDataset(datasetId);
+    this.db.delete(datasets).where(eq(datasets.id, datasetId)).run();
+    this.audit.record('system', 'dataset.deleted', { datasetId, name: row.name });
   }
 
   getLatestVersion(datasetId: string): { version: number; contentHash: string } | null {

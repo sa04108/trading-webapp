@@ -103,6 +103,12 @@ export class ParquetCandleRepository implements CandleRepository {
     }
   }
 
+  async deleteDataset(datasetId: string): Promise<void> {
+    this.assertDatasetId(datasetId);
+    // 최상위 파티션이 dataset= 이라 디렉터리 하나가 데이터셋의 물리 전부다 (§11)
+    fs.rmSync(path.join(this.dataRoot, `dataset=${datasetId}`), { recursive: true, force: true });
+  }
+
   private async writePartitionLocked(dir: string, items: Candle[]): Promise<void> {
     const prev = this.partitionLocks.get(dir) ?? Promise.resolve();
     const run = prev.then(

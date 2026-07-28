@@ -21,6 +21,8 @@ export interface CandleRepository {
     symbol: string,
   ): Promise<number[]>;
   saveCandles(datasetId: string, candles: readonly Candle[]): Promise<void>;
+  /** 데이터셋의 물리 저장분 전체 삭제 (D 경로). 존재하지 않아도 에러가 아니다. */
+  deleteDataset(datasetId: string): Promise<void>;
 }
 
 export interface FetchCandleRequest {
