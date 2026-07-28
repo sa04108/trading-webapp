@@ -279,6 +279,30 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     return reply.code(201).send({ job: serializeJob(cloned), warnings: rebased.warnings });
   });
 
+  /**
+   * 재설정 및 복제용 초안 (D-025). 읽기 전용 — 대기열에 넣지 않고 데이터셋 버전도 고정하지 않는다.
+   * 검증을 **돌리되 막지 않는다**: 여기서 400 으로 끊으면 조건이 틀어진 백테스트를 고칠
+   * 화면 자체가 열리지 않는다. 실제 차단은 제출 시점 POST /backtests 가 그대로 지킨다.
+   */
+  app.get('/backtests/:id/clone-draft', { preHandler: requireAuth }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const job = queue.getJob(id);
+    if (!job) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
+
+    const rebased = rebaseStoredRequest(
+      job.requestJson,
+      strategies.get(job.strategyId)?.version ?? null,
+    );
+    if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
+
+    const validated = validateSubmission(rebased.request);
+    return {
+      request: rebased.request,
+      warnings: rebased.warnings,
+      blockers: validated.ok ? [] : validated.errors,
+    };
+  });
+
   app.delete('/backtests/:id', { preHandler: requireAuth }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const deleted = queue.deleteJob(id);

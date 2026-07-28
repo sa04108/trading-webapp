@@ -476,4 +476,69 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
     expect(partial.statusCode).toBe(201);
   });
+
+  it('초안은 재기준된 요청과 경고를 돌려준다 (재설정 및 복제)', async () => {
+    const legacy = {
+      ...buildRequest(datasetId),
+      strategyVersion: '1.1.0',
+      parameters: { ...buildRequest(datasetId).parameters, maxPositions: 5 },
+    } as Record<string, unknown>;
+    delete legacy.risk;
+    const job = ctx.container.jobQueue.enqueue(legacy as never);
+
+    const draft = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${job.id}/clone-draft`,
+      cookies: { qp_session: cookie },
+    });
+    expect(draft.statusCode).toBe(200);
+    const body = draft.json() as {
+      request: BacktestRequest;
+      warnings: string[];
+      blockers: string[];
+    };
+    expect(body.request.risk.maxPositions).toBe(5);
+    expect(body.request.strategyVersion).toBe('1.2.0');
+    expect(body.warnings.some((w) => w.includes('1.1.0'))).toBe(true);
+    expect(body.blockers).toEqual([]);
+  });
+
+  it('초안은 제출 불가한 원본도 열어준다 — 사유는 blockers 에 담는다', async () => {
+    // 봉이 없는 기간 → 제출은 400 이지만 초안은 열려야 고칠 수 있다
+    const job = ctx.container.jobQueue.enqueue({
+      ...buildRequest(datasetId),
+      period: { from: '2020-01-01', to: '2020-12-31' },
+    });
+
+    const draft = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${job.id}/clone-draft`,
+      cookies: { qp_session: cookie },
+    });
+    expect(draft.statusCode).toBe(200);
+    const body = draft.json() as { request: BacktestRequest; blockers: string[] };
+    // 원본 값은 그대로 돌려준다 — 사용자가 이 값을 보고 고친다
+    expect(body.request.period.from).toBe('2020-01-01');
+    expect(body.blockers.some((b) => b.includes('005930'))).toBe(true);
+  });
+
+  it('초안은 없는 작업에 404, 되살릴 수 없는 요청에 400', async () => {
+    const missing = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/v1/backtests/job_nope/clone-draft',
+      cookies: { qp_session: cookie },
+    });
+    expect(missing.statusCode).toBe(404);
+
+    const broken = { ...buildRequest(datasetId) } as Record<string, unknown>;
+    delete broken.period;
+    const brokenJob = ctx.container.jobQueue.enqueue(broken as never);
+    const brokenDraft = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${brokenJob.id}/clone-draft`,
+      cookies: { qp_session: cookie },
+    });
+    expect(brokenDraft.statusCode).toBe(400);
+    expect((brokenDraft.json() as { error: string }).error).toContain('복원할 수 없습니다');
+  });
 });
