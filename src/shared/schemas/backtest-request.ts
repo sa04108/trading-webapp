@@ -31,3 +31,18 @@ export const backtestRequestSchema = z.object({
 });
 
 export type BacktestRequest = z.infer<typeof backtestRequestSchema>;
+
+/**
+ * 요청 기간을 UTC epoch ms 구간으로 바꾼다.
+ * 제출 검증(backtest-routes)과 실행부(backtest-child)가 **같은 함수**를 써야 한다 —
+ * 각자 계산하면 제출 검증은 통과시키는데 실행부는 0봉을 보는 어긋남이 생긴다 (D-024 와 같은 종류).
+ */
+export function periodToTsRange(period: { from: string; to: string }): {
+  fromTsMs: number;
+  toTsMs: number;
+} {
+  return {
+    fromTsMs: Date.parse(`${period.from}T00:00:00Z`),
+    toTsMs: Date.parse(`${period.to}T23:59:59.999Z`),
+  };
+}

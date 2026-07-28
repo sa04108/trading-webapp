@@ -32,7 +32,7 @@ import type { Candle, Market, Timeframe } from '../server/modules/market-data/do
 import { DuckDbService } from '../server/modules/market-data/infrastructure/duckdb-service.js';
 import { ParquetCandleRepository } from '../server/modules/market-data/infrastructure/parquet-candle-repository.js';
 import { StrategyRegistry } from '../server/modules/strategy/application/strategy-registry.js';
-import { backtestRequestSchema } from '../shared/schemas/backtest-request.js';
+import { backtestRequestSchema, periodToTsRange } from '../shared/schemas/backtest-request.js';
 
 let cancelRequested = false;
 process.on('message', (message: { type?: string }) => {
@@ -120,8 +120,7 @@ async function main(): Promise<void> {
     // 여기를 '1h' 로 고정하면 일봉 데이터셋은 파티션이 없어 0봉으로 실패한다 (D-024).
     const timeframe = dataset.timeframe as Timeframe;
     const repository = new ParquetCandleRepository(dataRoot, duckdb);
-    const fromTsMs = Date.parse(`${request.period.from}T00:00:00Z`);
-    const toTsMs = Date.parse(`${request.period.to}T23:59:59.999Z`);
+    const { fromTsMs, toTsMs } = periodToTsRange(request.period);
     const candles: Candle[] = [];
     for await (const candle of repository.getCandles({
       datasetId: dataset.id,
