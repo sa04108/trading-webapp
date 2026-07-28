@@ -8,6 +8,8 @@ import type {
 import {
   MarketDataSourceNotConfiguredError,
   UnsupportedTimeframeError,
+  type StockInfo,
+  type StockInfoSource,
 } from '../../../market-data/application/ports.js';
 import { BrokerRestClient, type TokenProvider } from '../rest-client.js';
 
@@ -77,10 +79,13 @@ export function createTossMarketDataSource(
   config: TossConfig | null,
   logger: Logger,
   options: TossSourceOptions = {},
-): MarketDataSource {
+): MarketDataSource & StockInfoSource {
   if (!config) {
     return {
       fetchCandles(): Promise<FetchCandleResult> {
+        return Promise.reject(new MarketDataSourceNotConfiguredError());
+      },
+      getStockInfo(): Promise<StockInfo[]> {
         return Promise.reject(new MarketDataSourceNotConfiguredError());
       },
     };
@@ -164,6 +169,35 @@ export function createTossMarketDataSource(
         parseTimestamp(nextBefore, 'nextBefore') >= request.fromTsMs;
 
       return { candles, hasMore };
+    },
+
+    async getStockInfo(symbols: readonly string[]): Promise<StockInfo[]> {
+      const stocks: StockInfo[] = [];
+      // GET /api/v1/stocks 는 콤마 구분 최대 200건
+      for (let offset = 0; offset < symbols.length; offset += 200) {
+        const chunk = symbols.slice(offset, offset + 200);
+        const query = new URLSearchParams({ symbols: chunk.join(',') });
+        const page = await client.request<{ result?: readonly Record<string, unknown>[] }>(
+          'stock',
+          `/api/v1/stocks?${query}`,
+        );
+        if (!Array.isArray(page.result)) {
+          throw new Error('toss stocks 응답에 result 배열이 없습니다');
+        }
+        for (const raw of page.result) {
+          if (typeof raw.symbol !== 'string' || typeof raw.name !== 'string') {
+            throw new Error('toss stocks 응답 항목에 symbol/name 이 없습니다');
+          }
+          stocks.push({
+            symbol: raw.symbol,
+            name: raw.name,
+            englishName: typeof raw.englishName === 'string' ? raw.englishName : null,
+            market: typeof raw.market === 'string' ? raw.market : '',
+            status: typeof raw.status === 'string' ? raw.status : '',
+          });
+        }
+      }
+      return stocks;
     },
   };
 }

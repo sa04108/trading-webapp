@@ -199,4 +199,37 @@ describe('createTossMarketDataSource (스펙 §13 — 2차 어댑터)', () => {
     const fetchImpl = buildFetch([jsonResponse(200, { result: {} })]);
     await expect(buildSource(fetchImpl).fetchCandles(REQUEST)).rejects.toThrow(/candles/);
   });
+
+  it('fetches stock names in one batched call (getStockInfo)', async () => {
+    const fetchImpl = buildFetch([
+      jsonResponse(200, {
+        result: [
+          { symbol: '005930', name: '삼성전자', englishName: 'SamsungElec', market: 'KOSPI', status: 'ACTIVE' },
+          { symbol: 'AAPL', name: '애플', englishName: 'APPLE INC', market: 'NASDAQ', status: 'ACTIVE' },
+        ],
+      }),
+    ]);
+    const stocks = await buildSource(fetchImpl).getStockInfo(['005930', 'AAPL']);
+
+    const [stocksUrl] = fetchImpl.mock.calls[1] as [string];
+    const url = new URL(stocksUrl);
+    expect(url.pathname).toBe('/api/v1/stocks');
+    expect(url.searchParams.get('symbols')).toBe('005930,AAPL');
+    expect(stocks).toEqual([
+      { symbol: '005930', name: '삼성전자', englishName: 'SamsungElec', market: 'KOSPI', status: 'ACTIVE' },
+      { symbol: 'AAPL', name: '애플', englishName: 'APPLE INC', market: 'NASDAQ', status: 'ACTIVE' },
+    ]);
+  });
+
+  it('getStockInfo rejects when not configured and returns [] for empty input', async () => {
+    const unconfigured = createTossMarketDataSource(null, logger);
+    await expect(unconfigured.getStockInfo(['005930'])).rejects.toBeInstanceOf(
+      BrokerNotConfiguredError,
+    );
+
+    const fetchImpl = vi.fn();
+    const stocks = await buildSource(fetchImpl).getStockInfo([]);
+    expect(stocks).toEqual([]);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 });

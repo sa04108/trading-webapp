@@ -24,6 +24,7 @@ import {
 } from '../modules/auth/infrastructure/sqlite-repositories.js';
 import { BrokerSyncService } from '../modules/market-data/application/broker-sync-service.js';
 import { DatasetService } from '../modules/market-data/application/dataset-service.js';
+import { SymbolInfoService } from '../modules/market-data/application/symbol-info-service.js';
 import type { CandleRepository } from '../modules/market-data/application/ports.js';
 import { createTossMarketDataSource } from '../modules/broker/infrastructure/toss/toss-market-data-source.js';
 import { DuckDbService } from '../modules/market-data/infrastructure/duckdb-service.js';
@@ -57,6 +58,7 @@ export interface Container {
   readonly candleRepository: CandleRepository;
   readonly datasetService: DatasetService;
   readonly brokerSyncService: BrokerSyncService;
+  readonly symbolInfoService: SymbolInfoService;
   readonly strategyRegistry: StrategyRegistry;
   readonly jobQueue: JobQueue;
   readonly jobOrchestrator: JobOrchestrator;
@@ -171,6 +173,7 @@ export function createContainer(config: AppConfig): Container {
       return stats.bavail * stats.bsize;
     },
   });
+  const symbolInfoService = new SymbolInfoService(marketDataSource, clock, logger);
   // 프로세스 재시작으로 고아가 된 동기화 잡 정리 — 이어받기는 재실행이 담당한다 (§13)
   const interrupted = brokerSyncService.recoverInterrupted();
   if (interrupted > 0) {
@@ -208,6 +211,7 @@ export function createContainer(config: AppConfig): Container {
     candleRepository,
     datasetService,
     brokerSyncService,
+    symbolInfoService,
     strategyRegistry: new StrategyRegistry(),
     jobQueue,
     jobOrchestrator,

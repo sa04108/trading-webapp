@@ -419,6 +419,21 @@ describe('market data (스펙 §11, §13)', () => {
       cookies: { qp_session: cookie },
     });
     expect(cancelMissing.statusCode).toBe(404);
+
+    // 종목명 조회: 소스 미설정이면 에러가 아니라 빈 목록 — 코드만으로 UI 가 동작한다
+    const symbolInfo = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/v1/symbols/info?symbols=005930',
+      cookies: { qp_session: cookie },
+    });
+    expect(symbolInfo.statusCode).toBe(200);
+    expect(symbolInfo.json().stocks).toEqual([]);
+    const badSymbols = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/v1/symbols/info?symbols=',
+      cookies: { qp_session: cookie },
+    });
+    expect(badSymbols.statusCode).toBe(400);
   });
 
   it('updates symbols and deletes a dataset via API, blocking delete while backtests are active', async () => {

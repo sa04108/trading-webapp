@@ -43,6 +43,20 @@ export interface MarketDataSource {
   fetchCandles(request: FetchCandleRequest): Promise<FetchCandleResult>;
 }
 
+/** 종목 참조 정보 (코드 → 이름). 이름 검색(이름 → 코드)은 소스가 제공하지 않는다. */
+export interface StockInfo {
+  readonly symbol: string;
+  readonly name: string;
+  readonly englishName: string | null;
+  readonly market: string;
+  readonly status: string; // ACTIVE | DELISTED | ...
+}
+
+export interface StockInfoSource {
+  /** 코드 목록의 기본 정보 조회. 모르는 심볼은 결과에서 빠진다. */
+  getStockInfo(symbols: readonly string[]): Promise<StockInfo[]>;
+}
+
 // 아래 에러들은 포트 계약의 일부다 — 어댑터(infrastructure)가 던지고 애플리케이션이
 // 잡는다. broker 쪽에 정의하면 애플리케이션이 §7 방향을 어겨야만 잡을 수 있다.
 

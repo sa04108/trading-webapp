@@ -60,8 +60,50 @@ interface DataJob {
   error: string | null;
 }
 
+interface StockInfo {
+  symbol: string;
+  name: string;
+  englishName: string | null;
+  market: string;
+  status: string;
+}
+
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
+}
+
+/** 코드 → 종목명. 소스 미설정이면 빈 결과라 코드만 표시된다. */
+function useStockNames(symbols: string[]) {
+  const key = symbols.join(',');
+  const { data } = useQuery({
+    queryKey: ['symbol-info', key],
+    queryFn: () => api<{ stocks: StockInfo[] }>(`/symbols/info?symbols=${encodeURIComponent(key)}`),
+    enabled: symbols.length > 0,
+    staleTime: 60 * 60 * 1000, // 종목명은 사실상 불변
+  });
+  return new Map(data?.stocks.map((stock) => [stock.symbol, stock]) ?? []);
+}
+
+/** 입력 중인 코드의 이름 미리보기 — 500ms 디바운스 */
+function useSymbolPreview(input: string) {
+  const [debounced, setDebounced] = useState('');
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(input), 500);
+    return () => clearTimeout(timer);
+  }, [input]);
+
+  const valid = /^[A-Za-z0-9._-]{2,20}$/.test(debounced);
+  const { data, isFetching } = useQuery({
+    queryKey: ['symbol-info', 'preview', debounced],
+    queryFn: () =>
+      api<{ stocks: StockInfo[] }>(`/symbols/info?symbols=${encodeURIComponent(debounced)}`),
+    enabled: valid,
+    staleTime: 60 * 60 * 1000,
+  });
+  if (!valid || debounced !== input) return null;
+  if (isFetching) return { state: 'loading' as const };
+  const stock = data?.stocks.find((s) => s.symbol.toUpperCase() === debounced.toUpperCase());
+  return stock ? { state: 'found' as const, stock } : { state: 'unknown' as const };
 }
 
 function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
@@ -78,6 +120,8 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
       api<{ coverage: CoverageRow[]; note: string }>(`/datasets/${dataset.id}/coverage`),
   });
   const coverageBySymbol = new Map(data?.coverage.map((row) => [row.symbol, row]) ?? []);
+  const stockNames = useStockNames(dataset.symbols);
+  const preview = useSymbolPreview(newSymbol);
 
   // 동기화는 202 + jobId 로 시작되고 백그라운드로 진행된다 — 종료까지 잡을 폴링
   const syncJob = useQuery({
@@ -190,6 +234,11 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
             <div key={symbol} className="flex flex-wrap items-center justify-between gap-2">
               <span className="flex items-center gap-1 font-medium">
                 {symbol}
+                {stockNames.get(symbol) ? (
+                  <span className="font-normal text-muted-foreground">
+                    {stockNames.get(symbol)!.name}
+                  </span>
+                ) : null}
                 <button
                   type="button"
                   aria-label={`${symbol} 수집 제외`}
@@ -218,23 +267,34 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
           );
         })}
 
-        <div className="flex items-center gap-2">
-          <Input
-            className="h-9 max-w-40"
-            placeholder="심볼 추가"
-            value={newSymbol}
-            onChange={(e) => setNewSymbol(e.target.value.trim())}
-          />
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-9"
-            disabled={newSymbol.length === 0 || symbolsMutation.isPending}
-            onClick={() => symbolsMutation.mutate({ addSymbols: [newSymbol] })}
-          >
-            <Plus data-icon="inline-start" />
-            추가
-          </Button>
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <Input
+              className="h-9 max-w-44"
+              placeholder="종목 코드·티커 (005930)"
+              value={newSymbol}
+              onChange={(e) => setNewSymbol(e.target.value.trim())}
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9"
+              disabled={newSymbol.length === 0 || symbolsMutation.isPending}
+              onClick={() => symbolsMutation.mutate({ addSymbols: [newSymbol] })}
+            >
+              <Plus data-icon="inline-start" />
+              추가
+            </Button>
+          </div>
+          {preview ? (
+            <p className="text-xs text-muted-foreground">
+              {preview.state === 'loading'
+                ? '종목 확인 중…'
+                : preview.state === 'found'
+                  ? `${preview.stock.name} (${preview.stock.market})${preview.stock.status !== 'ACTIVE' ? ' — 거래 불가 상태' : ''}`
+                  : '조회되지 않는 코드입니다 — 자격 증명 미설정이거나 없는 종목일 수 있습니다'}
+            </p>
+          ) : null}
         </div>
 
         {data ? <p className="text-xs text-muted-foreground">{data.note}</p> : null}
@@ -350,7 +410,7 @@ function BrokerDatasetDrawer() {
             </div>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="brokerSymbols">종목 코드 (쉼표·공백 구분)</Label>
+            <Label htmlFor="brokerSymbols">종목 코드·티커 (쉼표·공백 구분)</Label>
             <Input
               id="brokerSymbols"
               className="h-11"

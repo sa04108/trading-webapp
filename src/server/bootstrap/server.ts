@@ -66,6 +66,7 @@ export async function buildServer(container: Container): Promise<FastifyInstance
         api,
         container.datasetService,
         container.brokerSyncService,
+        container.symbolInfoService,
         (datasetId) => container.jobQueue.activeCountForDataset(datasetId) > 0,
         requireAuth,
       );
