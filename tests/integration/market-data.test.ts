@@ -436,6 +436,90 @@ describe('market data (스펙 §11, §13)', () => {
     expect(badSymbols.statusCode).toBe(400);
   });
 
+  it('serves candles for inspection with timeframe validation and a hard row cap', async () => {
+    const { username, password } = await createTestAdmin(ctx.container);
+    const login = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { username, password },
+    });
+    const cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+
+    // 1m 390행(월요일 세션 하루) import → 1h 데이터셋 생성
+    const { payload, contentType } = multipartBody(
+      { datasetName: 'inspect-1h', market: 'KR', timeframe: '1m', symbol: '005930' },
+      'candles.csv',
+      buildCsv(390),
+    );
+    await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/datasets/import',
+      cookies: { qp_session: cookie },
+      headers: { 'content-type': contentType },
+      payload,
+    });
+    const datasets = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/v1/datasets',
+      cookies: { qp_session: cookie },
+    });
+    const dataset = datasets.json().datasets.find((d: { name: string }) => d.name === 'inspect-1h');
+
+    const from = MONDAY_0900_KST_UTC;
+    const to = MONDAY_0900_KST_UTC + DAY;
+
+    // 원본 1m 조회
+    const minute = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/datasets/${dataset.id}/candles?symbol=005930&timeframe=1m&fromTsMs=${from}&toTsMs=${to}`,
+      cookies: { qp_session: cookie },
+    });
+    expect(minute.statusCode).toBe(200);
+    expect(minute.json().candles).toHaveLength(390);
+    expect(minute.json().candles[0]).toMatchObject({ tsMs: from, open: 100, close: 105 });
+    // 1m 뷰에는 coverage 음영을 싣지 않는다 (coverage 는 데이터셋 timeframe 기준)
+    expect(minute.json().missingRanges).toEqual([]);
+
+    // 집계 1h 조회 — 데이터셋 timeframe 이므로 missingRanges 동봉
+    const hourly = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/datasets/${dataset.id}/candles?symbol=005930&timeframe=1h&fromTsMs=${from}&toTsMs=${to}`,
+      cookies: { qp_session: cookie },
+    });
+    expect(hourly.statusCode).toBe(200);
+    expect(hourly.json().candles.length).toBeGreaterThan(0);
+    expect(Array.isArray(hourly.json().missingRanges)).toBe(true);
+
+    // 1h 데이터셋에 1d 요청 → 400
+    const wrongTf = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/datasets/${dataset.id}/candles?symbol=005930&timeframe=1d&fromTsMs=${from}&toTsMs=${to}`,
+      cookies: { qp_session: cookie },
+    });
+    expect(wrongTf.statusCode).toBe(400);
+
+    // 데이터셋 소속이 아닌 심볼 → 400
+    const wrongSymbol = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/datasets/${dataset.id}/candles?symbol=000660&timeframe=1h&fromTsMs=${from}&toTsMs=${to}`,
+      cookies: { qp_session: cookie },
+    });
+    expect(wrongSymbol.statusCode).toBe(400);
+
+    // 상한 검증: 2,000봉 초과 구간은 정직하게 400 (다운샘플로 뭉개지 않는다)
+    await ctx.container.candleRepository.saveCandles(
+      dataset.id,
+      Array.from({ length: 2100 }, (_, i) => minuteCandle(i)),
+    );
+    const tooWide = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/datasets/${dataset.id}/candles?symbol=005930&timeframe=1m&fromTsMs=${from}&toTsMs=${from + 3 * DAY}`,
+      cookies: { qp_session: cookie },
+    });
+    expect(tooWide.statusCode).toBe(400);
+    expect(tooWide.json().error).toContain('기간');
+  });
+
   it('updates symbols and deletes a dataset via API, blocking delete while backtests are active', async () => {
     const { username, password } = await createTestAdmin(ctx.container);
     const login = await ctx.app.inject({

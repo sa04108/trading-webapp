@@ -78,6 +78,46 @@ export function registerDatasetRoutes(
     return dataset;
   });
 
+  /** 검증 차트용 캔들 조회 — 상한(2,000봉) 초과는 400 (다운샘플로 뭉개지 않는다) */
+  app.get('/datasets/:datasetId/candles', { preHandler: requireAuth }, async (request, reply) => {
+    const { datasetId } = request.params as { datasetId: string };
+    const query = request.query as {
+      symbol?: string;
+      timeframe?: string;
+      fromTsMs?: string;
+      toTsMs?: string;
+    };
+    const fromTsMs = Number(query.fromTsMs);
+    const toTsMs = Number(query.toTsMs);
+    if (
+      !query.symbol ||
+      !['1m', '1h', '1d'].includes(query.timeframe ?? '') ||
+      !Number.isFinite(fromTsMs) ||
+      !Number.isFinite(toTsMs) ||
+      toTsMs < fromTsMs
+    ) {
+      return reply
+        .code(400)
+        .send({ error: 'symbol/timeframe/fromTsMs/toTsMs 쿼리가 필요합니다' });
+    }
+    if (!datasetService.getDataset(datasetId)) {
+      return reply.code(404).send({ error: '데이터셋을 찾을 수 없습니다' });
+    }
+    try {
+      return await datasetService.getCandlesForInspection(
+        datasetId,
+        query.symbol,
+        query.timeframe as '1m' | '1h' | '1d',
+        fromTsMs,
+        toTsMs,
+      );
+    } catch (error) {
+      return reply
+        .code(400)
+        .send({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
   app.get('/datasets/:datasetId/coverage', { preHandler: requireAuth }, async (request, reply) => {
     const { datasetId } = request.params as { datasetId: string };
     const dataset = datasetService.getDataset(datasetId);

@@ -60,7 +60,15 @@ test('full MVP flow', async ({ page }) => {
     .poll(() => page.url(), { timeout: 10_000 })
     .not.toBe(originalUrl);
 
-  // 8. 로그아웃
+  // 8. 데이터 검증 차트 — 심볼 클릭 → 봉차트 드로어
+  await page.goto('/datasets');
+  await page.getByRole('button', { name: '005930', exact: true }).click();
+  await expect(page.getByText(/데이터 검증/)).toBeVisible();
+  await expect(page.locator('.recharts-surface').first()).toBeVisible();
+  await page.screenshot({ path: 'test-results/candle-inspect.png' });
+  await page.keyboard.press('Escape');
+
+  // 9. 로그아웃
   await page.getByRole('button', { name: '로그아웃' }).click();
   await expect(page).toHaveURL(/\/login/, { timeout: 10_000 });
 });

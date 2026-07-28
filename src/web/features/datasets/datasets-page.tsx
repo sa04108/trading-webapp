@@ -33,6 +33,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton';
 import { api, postForm, postJson } from '@/lib/api-client';
 import { formatDate } from '@/lib/format';
+import { CandleInspectDrawer } from './candle-inspect-drawer';
 
 interface DatasetSummary {
   id: string;
@@ -111,6 +112,7 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
   const [startedJobId, setStartedJobId] = useState<string | null>(null);
   const [newSymbol, setNewSymbol] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [inspectSymbol, setInspectSymbol] = useState<string | null>(null);
   // 새로고침·다른 탭에서 시작된 동기화에도 붙는다 — 서버가 실행 중 잡을 알려준다
   const syncJobId = startedJobId ?? dataset.runningSyncJobId;
 
@@ -233,7 +235,13 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
           return (
             <div key={symbol} className="flex flex-wrap items-center justify-between gap-2">
               <span className="flex items-center gap-1 font-medium">
-                {symbol}
+                <button
+                  type="button"
+                  className="underline-offset-2 hover:underline"
+                  onClick={() => setInspectSymbol(symbol)}
+                >
+                  {symbol}
+                </button>
                 {stockNames.get(symbol) ? (
                   <span className="font-normal text-muted-foreground">
                     {stockNames.get(symbol)!.name}
@@ -299,6 +307,20 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
 
         {data ? <p className="text-xs text-muted-foreground">{data.note}</p> : null}
       </CardContent>
+
+      {inspectSymbol !== null ? (
+        <CandleInspectDrawer
+          datasetId={dataset.id}
+          datasetTimeframe={dataset.timeframe}
+          symbol={inspectSymbol}
+          symbolName={stockNames.get(inspectSymbol)?.name ?? null}
+          anchorTsMs={coverageBySymbol.get(inspectSymbol)?.lastTsMs ?? null}
+          open
+          onOpenChange={(next) => {
+            if (!next) setInspectSymbol(null);
+          }}
+        />
+      ) : null}
 
       <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <DialogContent>

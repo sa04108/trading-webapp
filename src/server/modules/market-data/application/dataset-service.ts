@@ -353,6 +353,59 @@ export class DatasetService {
     this.audit.record('system', 'dataset.deleted', { datasetId, name: row.name });
   }
 
+  /**
+   * 검증 차트용 캔들 조회 (설계 2026-07-28-candle-inspection-design.md).
+   * 상한 초과는 다운샘플링하지 않고 명시적으로 거부한다 — 검증 화면은 봉을 정직하게
+   * 보여줘야 한다 (백테스트 결과 차트의 LTTB 와 다른 선택).
+   */
+  async getCandlesForInspection(
+    datasetId: string,
+    symbol: string,
+    timeframe: Timeframe,
+    fromTsMs: number,
+    toTsMs: number,
+    maxRows = 2000,
+  ): Promise<{ candles: Candle[]; missingRanges: Array<{ fromTsMs: number; toTsMs: number }> }> {
+    const dataset = this.getDataset(datasetId);
+    if (!dataset) throw new Error(`데이터셋을 찾을 수 없습니다: ${datasetId}`);
+    if (!dataset.symbols.includes(symbol)) {
+      throw new Error(`이 데이터셋에 없는 심볼입니다: ${symbol}`);
+    }
+    // 1h 데이터셋은 원본 1m 도 함께 보관한다 (CSV·sync 공통 관례)
+    const available: Timeframe[] = dataset.timeframe === '1h' ? ['1m', '1h'] : [dataset.timeframe];
+    if (!available.includes(timeframe)) {
+      throw new Error(`이 데이터셋은 ${available.join('/')} 만 제공합니다`);
+    }
+
+    const candles: Candle[] = [];
+    for await (const candle of this.candleRepository.getCandles({
+      datasetId,
+      market: dataset.market,
+      timeframe,
+      symbols: [symbol],
+      fromTsMs,
+      toTsMs,
+    })) {
+      candles.push(candle);
+      if (candles.length > maxRows) {
+        throw new Error(`구간에 봉이 ${maxRows}개를 넘습니다 — 조회 기간을 줄이세요`);
+      }
+    }
+
+    // coverage 는 데이터셋 timeframe 기준 — 다른 timeframe 뷰에 근사 음영을 그리지 않는다
+    let missingRanges: Array<{ fromTsMs: number; toTsMs: number }> = [];
+    if (timeframe === dataset.timeframe) {
+      const row = this.getCoverage(datasetId).find((coverage) => coverage.symbol === symbol);
+      if (row?.missingRangesJson) {
+        missingRanges = (
+          JSON.parse(row.missingRangesJson) as Array<{ fromTsMs: number; toTsMs: number }>
+        ).filter((range) => range.toTsMs >= fromTsMs && range.fromTsMs <= toTsMs);
+      }
+    }
+
+    return { candles, missingRanges };
+  }
+
   getLatestVersion(datasetId: string): { version: number; contentHash: string } | null {
     const latest = this.db
       .select()
