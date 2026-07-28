@@ -4,6 +4,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
   backtestRequestSchema,
+  periodToTsRange,
   type BacktestRequest,
 } from '../../../../shared/schemas/backtest-request.js';
 import { SECURITY_HEADERS } from '../../../shared/security.js';
@@ -35,6 +36,8 @@ export interface BacktestRouteDeps {
 
 const MIN_FREE_DISK_BYTES = 500 * 1024 * 1024;
 const MIN_FREE_MEMORY_BYTES = 75 * 1024 * 1024;
+
+const isoDate = (tsMs: number): string => new Date(tsMs).toISOString().slice(0, 10);
 
 /**
  * 회수 가능 메모리 (§34 리소스 가드).
@@ -89,51 +92,87 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
   const { queue, orchestrator, results, strategies, datasets, audit } = deps;
 
   /**
-   * 제출 검증 관문 — 신규 제출(POST)과 복제(clone)가 동일한 기준을 거친다.
+   * 기간 × 커버리지 검사 (D-025). 커버리지는 메타데이터라 Parquet 을 읽지 않는다.
+   * 요청한 종목 **전부** 가 구간 밖일 때만 거부한다 — 신규 상장처럼 이력이 짧은 종목
+   * 하나 때문에 유니버스 전체를 막지 않는다. 일부만 비는 경우는 실행 경고로 남는다.
+   */
+  const checkPeriodCoverage = (body: BacktestRequest, datasetId: string): string | null => {
+    const { fromTsMs, toTsMs } = periodToTsRange(body.period);
+    const bySymbol = new Map(datasets.getCoverage(datasetId).map((row) => [row.symbol, row]));
+
+    const ranges: string[] = [];
+    for (const symbol of body.universe.symbols) {
+      const row = bySymbol.get(symbol);
+      if (!row || row.barCount === 0 || row.firstTsMs === null || row.lastTsMs === null) {
+        ranges.push(`${symbol}: 수집된 데이터 없음`);
+        continue;
+      }
+      // 하나라도 겹치면 통과 — 나머지는 실행 경고가 알린다
+      if (row.lastTsMs >= fromTsMs && row.firstTsMs <= toTsMs) return null;
+      ranges.push(`${symbol}: ${isoDate(row.firstTsMs)} ~ ${isoDate(row.lastTsMs)}`);
+    }
+
+    return `선택한 기간에 데이터가 있는 종목이 없습니다. 보유 범위 — ${ranges.join(', ')}`;
+  };
+
+  /**
+   * 제출 검증 — 신규 제출(POST)·복제(clone)·초안(clone-draft)이 동일한 기준을 거친다.
    * 통과 시 제출 시점의 데이터셋 버전을 함께 반환한다 (재현성 §9.5).
+   * 사유를 모아 반환한다 — 초안(clone-draft)이 무엇을 고쳐야 하는지 한 번에 알려야 한다.
+   * 400 메시지는 `errors[0]` 이므로 검사 순서가 곧 우선순위다.
    */
   const validateSubmission = (
     body: BacktestRequest,
   ):
     | { ok: true; datasetVersion: { version: number; contentHash: string } }
-    | { ok: false; error: string } => {
-    const strategy = strategies.get(body.strategyId);
-    if (!strategy) return { ok: false, error: `알 수 없는 전략: ${body.strategyId}` };
-    if (strategy.version !== body.strategyVersion) {
-      return {
-        ok: false,
-        error: `전략 버전 불일치: 요청 ${body.strategyVersion}, 등록 ${strategy.version}`,
-      };
-    }
-    const paramCheck = strategies.validateParameters(body.strategyId, body.parameters);
-    if (!paramCheck.ok) return { ok: false, error: paramCheck.error };
+    | { ok: false; errors: string[] } => {
+    const errors: string[] = [];
 
+    // 전략 — 파라미터 검증의 전제다
+    const strategy = strategies.get(body.strategyId);
+    if (!strategy) {
+      errors.push(`알 수 없는 전략: ${body.strategyId}`);
+    } else {
+      if (strategy.version !== body.strategyVersion) {
+        errors.push(`전략 버전 불일치: 요청 ${body.strategyVersion}, 등록 ${strategy.version}`);
+      }
+      const paramCheck = strategies.validateParameters(body.strategyId, body.parameters);
+      if (!paramCheck.ok) errors.push(paramCheck.error);
+    }
+
+    // 데이터셋 — 심볼·버전·커버리지 검사의 전제다
     const dataset = datasets.getDataset(body.datasetId);
+    let datasetVersion: { version: number; contentHash: string } | null = null;
     if (!dataset) {
-      return { ok: false, error: `알 수 없는 데이터셋: ${body.datasetId}` };
+      errors.push(`알 수 없는 데이터셋: ${body.datasetId}`);
+    } else {
+      // 데이터셋에 없는 심볼은 조용히 0 거래로 "성공" 하게 된다 — 제출 시점에 거부
+      const datasetSymbols = new Set(dataset.symbols);
+      const missingSymbols = body.universe.symbols.filter((s) => !datasetSymbols.has(s));
+      if (missingSymbols.length > 0) {
+        errors.push(`데이터셋에 없는 종목입니다: ${missingSymbols.join(', ')}`);
+      }
+      // 제출 시점의 데이터셋 버전을 고정 — 대기 중 import 가 끼어들어도 메타데이터가 어긋나지 않는다
+      datasetVersion = datasets.getLatestVersion(body.datasetId);
+      if (!datasetVersion) {
+        errors.push('데이터가 없는 데이터셋입니다. 먼저 import 하세요.');
+      }
+      const coverageError = checkPeriodCoverage(body, dataset.id);
+      if (coverageError !== null) errors.push(coverageError);
     }
-    // 데이터셋에 없는 심볼은 조용히 0 거래로 "성공" 하게 된다 — 제출 시점에 거부
-    const datasetSymbols = new Set(dataset.symbols);
-    const missingSymbols = body.universe.symbols.filter((s) => !datasetSymbols.has(s));
-    if (missingSymbols.length > 0) {
-      return {
-        ok: false,
-        error: `데이터셋에 없는 종목입니다: ${missingSymbols.join(', ')}`,
-      };
-    }
-    // 제출 시점의 데이터셋 버전을 고정 — 대기 중 import 가 끼어들어도 메타데이터가 어긋나지 않는다
-    const datasetVersion = datasets.getLatestVersion(body.datasetId);
-    if (!datasetVersion) {
-      return { ok: false, error: '데이터가 없는 데이터셋입니다. 먼저 import 하세요.' };
-    }
+
     if (!getCostProfile(body.execution.commissionProfileId)) {
-      return { ok: false, error: '알 수 없는 수수료 프로파일' };
+      errors.push('알 수 없는 수수료 프로파일');
     }
     if (!getSlippageProfile(body.execution.slippageProfileId)) {
-      return { ok: false, error: '알 수 없는 슬리피지 프로파일' };
+      errors.push('알 수 없는 슬리피지 프로파일');
     }
     if (body.period.from > body.period.to) {
-      return { ok: false, error: '기간이 올바르지 않습니다 (from > to)' };
+      errors.push('기간이 올바르지 않습니다 (from > to)');
+    }
+
+    if (errors.length > 0 || datasetVersion === null) {
+      return { ok: false, errors: errors.length > 0 ? errors : ['제출을 검증할 수 없습니다'] };
     }
     return { ok: true, datasetVersion };
   };
@@ -153,7 +192,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const body = parsed.data;
 
     const validated = validateSubmission(body);
-    if (!validated.ok) return reply.code(400).send({ error: validated.error });
+    if (!validated.ok) {
+      return reply.code(400).send({ error: validated.errors[0] ?? '제출을 검증할 수 없습니다' });
+    }
 
     const resourceError = await checkResources(deps.dataRoot);
     if (resourceError) return reply.code(507).send({ error: resourceError });
@@ -221,7 +262,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const cloneRequest = rebased.request;
     // 재기준 후에도 새 제출이다 — POST 와 동일한 검증 관문을 거치고 버전을 다시 고정한다
     const validated = validateSubmission(cloneRequest);
-    if (!validated.ok) return reply.code(400).send({ error: validated.error });
+    if (!validated.ok) {
+      return reply.code(400).send({ error: validated.errors[0] ?? '제출을 검증할 수 없습니다' });
+    }
 
     // §34 리소스 가드도 관문의 일부다 — 복제라고 디스크·메모리 한계를 넘어설 이유는 없다
     const resourceError = await checkResources(deps.dataRoot);

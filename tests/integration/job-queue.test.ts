@@ -430,4 +430,50 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(message).toMatch(/[가-힣]/);
     expect(message).not.toMatch(/Too small|Invalid|expected/i);
   });
+
+  it('기간에 봉이 전혀 없는 제출을 제출 검증에서 거부한다 (D-025)', async () => {
+    // 데이터셋 봉은 2026-01-05 부터다 — 그보다 앞선 구간은 확실히 0봉이다
+    const noData = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: { ...buildRequest(datasetId), period: { from: '2020-01-01', to: '2020-12-31' } },
+    });
+    expect(noData.statusCode).toBe(400);
+    const message = (noData.json() as { error: string }).error;
+    // 진단이 커버리지로 이어지도록 보유 범위를 담는다
+    expect(message).toContain('005930');
+    expect(message).toContain('2026-01-05');
+  });
+
+  it('복제도 같은 제출 검증을 거친다 — 봉 없는 기간은 거부한다 (D-025)', async () => {
+    const job = ctx.container.jobQueue.enqueue({
+      ...buildRequest(datasetId),
+      period: { from: '2020-01-01', to: '2020-12-31' },
+    });
+
+    const cloned = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${job.id}/clone`,
+      cookies: { qp_session: cookie },
+    });
+    expect(cloned.statusCode).toBe(400);
+    expect((cloned.json() as { error: string }).error).toContain('005930');
+  });
+
+  it('일부 종목만 봉이 없으면 거부하지 않는다 (신규 상장 등 정상)', async () => {
+    // 심볼을 하나 더 데이터셋에 추가하되 봉은 넣지 않는다 — 커버리지 행이 없는 종목
+    ctx.container.datasetService.updateSymbols(datasetId, { add: ['000660'] });
+
+    const partial = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: {
+        ...buildRequest(datasetId),
+        universe: { type: 'SYMBOLS', symbols: ['005930', '000660'] },
+      },
+    });
+    expect(partial.statusCode).toBe(201);
+  });
 });
