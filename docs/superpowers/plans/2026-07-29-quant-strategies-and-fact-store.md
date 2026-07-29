@@ -4569,6 +4569,9 @@ export function createDartFactSource(
     const facts: Fact[] = [];
     const gaps: FactIngestionGap[] = [];
 
+    /** 같은 (field, periodKey) 자본변동을 종목 단위로 접는다 — 아래 루프 주석 참고 */
+    const actionByKey = new Map<string, Fact>();
+
     for (const symbol of request.symbols) {
       const corpCode = await corpCodes.resolve(symbol);
       if (corpCode === null) {
@@ -4612,9 +4615,32 @@ export function createDartFactSource(
         });
         if (rows.length === 0) continue;
         const parsed = parseIssuanceRows(symbol, rows, sharesBefore);
-        facts.push(...parsed.facts);
+        for (const fact of parsed.facts) {
+          // irdsSttus 는 자본변동 이력을 연도별로 누적 제공한다 — 같은 분할이 해마다
+          // 다른 rcept_no 로 반복되고, asOfTsMs 가 다르면 저장소 dedupe 를 통과한다.
+          // 그대로 두면 adjusted-price 가 비율을 곱해 2:1 분할이 2년치에서 factor 4 가
+          // 된다. 같은 (field, periodKey) 는 가장 이른 공시만 남긴다.
+          const key = `${fact.field} ${fact.periodKey}`;
+          const existing = actionByKey.get(key);
+          if (!existing) {
+            actionByKey.set(key, fact);
+            continue;
+          }
+          if (existing.value !== fact.value) {
+            gaps.push({
+              symbol,
+              periodKey: fact.periodKey,
+              reason: `같은 기준일의 자본변동 비율이 공시마다 다릅니다 (${existing.value} vs ${fact.value})`,
+            });
+            continue;
+          }
+          if (fact.asOfTsMs < existing.asOfTsMs) actionByKey.set(key, fact);
+        }
         gaps.push(...parsed.gaps);
       }
+
+      facts.push(...actionByKey.values());
+      actionByKey.clear();
     }
 
     return { facts, gaps };
