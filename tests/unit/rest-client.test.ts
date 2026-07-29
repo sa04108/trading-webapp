@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { BrokerRestClient, type TokenProvider } from '../../src/server/shared/rest-client.js';
+import { RestClient, type TokenProvider } from '../../src/server/shared/rest-client.js';
 import { createLogger } from '../../src/server/shared/logger.js';
 import { loadConfig } from '../../src/server/bootstrap/config.js';
 
@@ -18,7 +18,7 @@ function buildClient(fetchImpl: typeof fetch, overrides: Record<string, unknown>
   const tokenProvider: TokenProvider = {
     issueToken: vi.fn(async () => ({ accessToken: 'tok-1', expiresAtMs: 10 * 60_000 })),
   };
-  const client = new BrokerRestClient({
+  const client = new RestClient({
     baseUrl: 'https://broker.test',
     tokenProvider,
     logger,
@@ -35,7 +35,7 @@ function buildClient(fetchImpl: typeof fetch, overrides: Record<string, unknown>
   return { client, sleeps, tokenProvider, advance: (ms: number) => (now += ms) };
 }
 
-describe('BrokerRestClient (스펙 §13 공통 REST 클라이언트)', () => {
+describe('RestClient (스펙 §13 공통 REST 클라이언트)', () => {
   it('caches the token across requests', async () => {
     const fetchImpl = vi.fn(async () => jsonResponse(200, { ok: true }));
     const { client, tokenProvider } = buildClient(fetchImpl as unknown as typeof fetch);
@@ -64,7 +64,7 @@ describe('BrokerRestClient (스펙 §13 공통 REST 클라이언트)', () => {
     const fetchImpl = vi.fn(async () => jsonResponse(500, { error: 'boom' }));
     const { client } = buildClient(fetchImpl as unknown as typeof fetch);
 
-    await expect(client.request('default', '/broken')).rejects.toThrow('broker request failed: 500');
+    await expect(client.request('default', '/broken')).rejects.toThrow('REST 요청 실패: 500');
     expect(fetchImpl).toHaveBeenCalledTimes(4); // 최초 1 + 재시도 3
   });
 
@@ -97,7 +97,7 @@ describe('tokenProvider 없는 인증 (쿼리 파라미터 방식)', () => {
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     }) as unknown as typeof fetch;
 
-    const client = new BrokerRestClient({
+    const client = new RestClient({
       baseUrl: 'https://opendart.fss.or.kr',
       logger: { debug() {}, info() {}, warn() {}, error() {} } as never,
       fetchImpl,
@@ -119,7 +119,7 @@ describe('tokenProvider 없는 인증 (쿼리 파라미터 방식)', () => {
     const tokenProvider: TokenProvider = {
       issueToken: async () => ({ accessToken: 'tok', expiresAtMs: 9_999_999_999_999 }),
     };
-    const client = new BrokerRestClient({
+    const client = new RestClient({
       baseUrl: 'https://api.example.com',
       tokenProvider,
       logger: { debug() {}, info() {}, warn() {}, error() {} } as never,
@@ -139,7 +139,7 @@ describe('tokenProvider 없는 인증 (쿼리 파라미터 방식)', () => {
       return new Response('unauthorized', { status: 401 });
     }) as unknown as typeof fetch;
 
-    const client = new BrokerRestClient({
+    const client = new RestClient({
       baseUrl: 'https://opendart.fss.or.kr',
       logger: { debug() {}, info() {}, warn() {}, error() {} } as never,
       fetchImpl,

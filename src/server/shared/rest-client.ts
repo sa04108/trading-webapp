@@ -1,10 +1,12 @@
 import type { Logger } from './logger.js';
 
 /**
- * 증권사 공통 REST 클라이언트 (스펙 §13):
- * - 토큰 발급·캐싱·만료 전 재발급
+ * 공통 REST 클라이언트 (스펙 §13):
+ * - 토큰 발급·캐싱·만료 전 재발급 (tokenProvider 가 있을 때)
  * - API 그룹별 rate limiter (최소 간격)
  * - 429 는 Retry-After 우선, 이후 exponential backoff + jitter
+ *
+ * 증권사 어댑터와 DART 어댑터가 공유한다 — 그래서 modules/broker 가 아니라 shared 에 있다.
  */
 export interface TokenProvider {
   issueToken(fetchImpl: typeof fetch): Promise<{ accessToken: string; expiresAtMs: number }>;
@@ -33,7 +35,7 @@ export interface RestClientOptions {
 const DEFAULT_MIN_INTERVAL_MS = 250;
 const TOKEN_REFRESH_MARGIN_MS = 60_000;
 
-export class BrokerRestClient {
+export class RestClient {
   private token: { accessToken: string; expiresAtMs: number } | null = null;
   private lastCallAtByGroup = new Map<string, number>();
   private readonly fetchImpl: typeof fetch;
@@ -107,7 +109,7 @@ export class BrokerRestClient {
       const retryable = response.status === 429 || response.status >= 500;
       if (!retryable || attempt >= this.maxRetries) {
         const body = await response.text().catch(() => '');
-        throw new Error(`broker request failed: ${response.status} ${body.slice(0, 200)}`);
+        throw new Error(`REST 요청 실패: ${response.status} ${body.slice(0, 200)}`);
       }
 
       const retryAfterHeader = response.headers.get('retry-after');
@@ -117,8 +119,8 @@ export class BrokerRestClient {
         : Math.min(30_000, 500 * 2 ** attempt) * (0.5 + this.random() / 2);
 
       this.options.logger.warn(
-        { module: 'broker', event: 'broker.retry', status: response.status, attempt, backoffMs },
-        'retrying broker request',
+        { module: 'rest-client', event: 'rest.retry', status: response.status, attempt, backoffMs },
+        'retrying REST request',
       );
       await this.sleep(backoffMs);
       attempt += 1;
