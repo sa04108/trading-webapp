@@ -213,6 +213,23 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
   };
 
   /**
+   * 재무 전략 데이터 요구 검사 — 통과시키면 실행 후 "거래 0건" 으로 끝나 원인을 알 수
+   * 없다 (D-025 와 같은 원칙: 조용히 빠지지 않는다). `validateSubmission` 이 만드는
+   * `errors` 배열에 합류시키지 않는 이유: 그 배열은 항상 400 으로 변환되는데, 이 조건은
+   * 요청 형식·데이터셋 상태가 아니라 "전략과 데이터셋의 조합" 문제라 422 여야 한다.
+   * POST 신규 제출뿐 아니라 clone·clone-draft 도 같은 검사를 거친다 — 데이터가 제출
+   * 이후 지워진 job 을 clone 하면 이 관문에서 다시 걸린다.
+   */
+  const checkFundamentalsRequirement = (body: BacktestRequest): string | null => {
+    if (!strategies.requiresFundamentals(body.strategyId)) return null;
+    if (factRepository.hasFacts(body.datasetId, 'SYMBOL')) return null;
+    return (
+      '이 전략은 상장시점 재무 데이터가 필요합니다. 이 데이터셋에는 아직 수집되지 않았습니다. ' +
+      'SSH 에서 `pnpm cli facts:sync --dataset <데이터셋 id> --from <연도> --to <연도>` 를 실행하세요.'
+    );
+  };
+
+  /**
    * 대기열 깊이 상한 (D-025). QUEUED 만 센다 — 실행 중은 동시 실행 상한이 이미 묶고 있다.
    * 429 는 507(호스트 자원 부족)과 구분한다: 사용자가 할 일이 다르다(기다리거나 취소).
    */
@@ -241,17 +258,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       return reply.code(400).send({ error: validated.errors[0] ?? '제출을 검증할 수 없습니다' });
     }
 
-    // 재무 전략은 데이터셋에 재무가 수집돼 있어야 한다. 통과시키면 실행 후 "거래 0건"
-    // 으로 끝나 원인을 알 수 없다 (D-025 와 같은 원칙: 조용히 빠지지 않는다).
-    if (
-      strategies.requiresFundamentals(body.strategyId) &&
-      !factRepository.hasFacts(body.datasetId, 'SYMBOL')
-    ) {
-      return reply.code(422).send({
-        error:
-          '이 전략은 상장시점 재무 데이터가 필요합니다. 이 데이터셋에는 아직 수집되지 않았습니다. ' +
-          'SSH 에서 `pnpm cli facts:sync --dataset <데이터셋 id> --from <연도> --to <연도>` 를 실행하세요.',
-      });
+    const fundamentalsError = checkFundamentalsRequirement(body);
+    if (fundamentalsError) {
+      return reply.code(422).send({ error: fundamentalsError });
     }
 
     const queueError = queueDepthError();
@@ -327,6 +336,11 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       return reply.code(400).send({ error: validated.errors[0] ?? '제출을 검증할 수 없습니다' });
     }
 
+    const fundamentalsError = checkFundamentalsRequirement(cloneRequest);
+    if (fundamentalsError) {
+      return reply.code(422).send({ error: fundamentalsError });
+    }
+
     const queueError = queueDepthError();
     if (queueError) return reply.code(429).send({ error: queueError });
 
@@ -360,10 +374,13 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
 
     const validated = validateSubmission(rebased.request);
+    const blockers = validated.ok ? [] : [...validated.errors];
+    const fundamentalsError = checkFundamentalsRequirement(rebased.request);
+    if (fundamentalsError) blockers.push(fundamentalsError);
     return {
       request: rebased.request,
       warnings: rebased.warnings,
-      blockers: validated.ok ? [] : validated.errors,
+      blockers,
     };
   });
 

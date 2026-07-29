@@ -462,6 +462,41 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect((cloned.json() as { error: string }).error).toContain('005930');
   });
 
+  it('복제도 재무 요구 검증을 거친다 — 재무 없는 데이터셋의 밸류 전략은 422', async () => {
+    const job = ctx.container.jobQueue.enqueue({
+      ...buildRequest(datasetId),
+      strategyId: 'value-quality-rank',
+      strategyVersion: '1.0.0',
+      parameters: { topN: 20, rebalanceMonths: 3, staleQuarters: 2 },
+    });
+
+    const cloned = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${job.id}/clone`,
+      cookies: { qp_session: cookie },
+    });
+    expect(cloned.statusCode).toBe(422);
+    expect((cloned.json() as { error: string }).error).toContain('facts:sync');
+  });
+
+  it('초안은 재무 요구 미충족도 blockers 에 담는다', async () => {
+    const job = ctx.container.jobQueue.enqueue({
+      ...buildRequest(datasetId),
+      strategyId: 'value-quality-rank',
+      strategyVersion: '1.0.0',
+      parameters: { topN: 20, rebalanceMonths: 3, staleQuarters: 2 },
+    });
+
+    const draft = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${job.id}/clone-draft`,
+      cookies: { qp_session: cookie },
+    });
+    expect(draft.statusCode).toBe(200);
+    const body = draft.json() as { blockers: string[] };
+    expect(body.blockers.some((b) => b.includes('facts:sync'))).toBe(true);
+  });
+
   it('일부 종목만 봉이 없으면 거부하지 않는다 (신규 상장 등 정상)', async () => {
     // 심볼을 하나 더 데이터셋에 추가하되 봉은 넣지 않는다 — 커버리지 행이 없는 종목
     ctx.container.datasetService.updateSymbols(datasetId, { add: ['000660'] });
