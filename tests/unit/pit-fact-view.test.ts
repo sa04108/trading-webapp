@@ -317,6 +317,108 @@ describe('PitFactView 자본변동 이벤트', () => {
   });
 });
 
+/**
+ * R2: 같은 분할이 두 행으로 남는 경로가 실재한다 — 저장소의 병합 키는 정정공시를 새 행으로
+ * 보존하려고 asOfTsMs 를 포함하고, DART 어댑터는 한 번의 `fetchCorporateActions` 호출
+ * 안에서만 중복을 접는다. 부분 실패 복구 안내가 `--from`/`--to` 를 좁혀 재실행하라고 하므로
+ * 구간을 나눈 수집은 표준 경로다. 접지 않으면 2:1 분할이 배수 4 가 된다.
+ */
+describe('PitFactView 자본변동 중복 접기', () => {
+  /** 분할 전 봉을 보정할 때 곱해지는 배수 — corporateActions 를 그대로 재현한다 */
+  function adjustmentFactor(view: PitFactView, barTsMs: number, atTsMs: number): number {
+    return view
+      .corporateActions('005930', atTsMs)
+      .filter((action) => action.effectiveTsMs > barTsMs)
+      .reduce((factor, action) => factor * action.ratio, 1);
+  }
+
+  const beforeSplit = Date.UTC(2025, 2, 1);
+  const after = Date.UTC(2025, 11, 1);
+
+  it('같은 분할이 접수번호가 다른 두 행으로 들어와도 이벤트 하나·배수 하나다', () => {
+    const view = new PitFactView([
+      // 첫 sync 구간: FY2025 사업보고서(2026-03 접수)에서 읽은 2:1 분할
+      fact({ field: 'SPLIT_RATIO', periodKey: '2025-03-14', asOfTsMs: Date.UTC(2026, 2, 20), value: 2, unit: 'RATIO' }),
+      // 두 번째 sync 구간: 접수번호가 다른 보고서에서 같은 분할을 다시 읽었다
+      fact({ field: 'SPLIT_RATIO', periodKey: '2025-03-14', asOfTsMs: Date.UTC(2026, 5, 10), value: 2, unit: 'RATIO' }),
+    ]);
+    const actions = view.corporateActions('005930', after);
+    expect(actions).toHaveLength(1);
+    expect(actions[0]?.ratio).toBe(2);
+    // 접지 않으면 여기가 4 가 된다 — 신호가 조용히 두 배로 왜곡되는 지점
+    expect(adjustmentFactor(view, beforeSplit, after)).toBe(2);
+  });
+
+  it('세 번 중복돼도 배수는 그대로다', () => {
+    const view = new PitFactView(
+      [Date.UTC(2026, 2, 20), Date.UTC(2026, 5, 10), Date.UTC(2026, 8, 1)].map((asOfTsMs) =>
+        fact({ field: 'SPLIT_RATIO', periodKey: '2025-03-14', asOfTsMs, value: 2, unit: 'RATIO' }),
+      ),
+    );
+    expect(view.corporateActions('005930', after)).toHaveLength(1);
+    expect(adjustmentFactor(view, beforeSplit, after)).toBe(2);
+  });
+
+  it('효력발생일이 다른 두 분할은 접히지 않는다 — 배수는 곱해진다', () => {
+    const view = new PitFactView([
+      fact({ field: 'SPLIT_RATIO', periodKey: '2025-03-14', asOfTsMs: 8_000, value: 2, unit: 'RATIO' }),
+      fact({ field: 'SPLIT_RATIO', periodKey: '2025-09-01', asOfTsMs: 9_000, value: 3, unit: 'RATIO' }),
+    ]);
+    expect(view.corporateActions('005930', after)).toHaveLength(2);
+    expect(adjustmentFactor(view, beforeSplit, after)).toBe(6);
+  });
+
+  it('비율이 다른 충돌은 가장 이른 공시를 택한다 — 입력 순서와 무관하게 같은 결과', () => {
+    const early = fact({ field: 'SPLIT_RATIO', periodKey: '2025-03-14', asOfTsMs: Date.UTC(2026, 2, 20), value: 2, unit: 'RATIO' });
+    const late = fact({ field: 'SPLIT_RATIO', periodKey: '2025-03-14', asOfTsMs: Date.UTC(2026, 5, 10), value: 5, unit: 'RATIO' });
+
+    for (const facts of [[early, late], [late, early]]) {
+      const view = new PitFactView(facts);
+      const actions = view.corporateActions('005930', after);
+      expect(actions).toHaveLength(1);
+      expect(actions[0]?.ratio).toBe(2);
+    }
+  });
+
+  it('접수일까지 같은 충돌도 결정적이다 — 비율이 작은 쪽', () => {
+    const asOfTsMs = Date.UTC(2026, 2, 20);
+    const small = fact({ field: 'SPLIT_RATIO', periodKey: '2025-03-14', asOfTsMs, value: 2, unit: 'RATIO' });
+    const large = fact({ field: 'SPLIT_RATIO', periodKey: '2025-03-14', asOfTsMs, value: 5, unit: 'RATIO' });
+
+    for (const facts of [[small, large], [large, small]]) {
+      const actions = new PitFactView(facts).corporateActions('005930', after);
+      expect(actions).toHaveLength(1);
+      expect(actions[0]?.ratio).toBe(2);
+    }
+  });
+
+  it('같은 비율 중복이 먼저 와도 뒤이은 충돌의 승자가 바뀌지 않는다', () => {
+    // 중복을 접을 때 접수일을 가장 이른 값으로 유지하지 않으면 이 결과가 순서로 갈린다
+    const duplicateLate = fact({ field: 'SPLIT_RATIO', periodKey: '2025-03-14', asOfTsMs: 300, value: 2, unit: 'RATIO' });
+    const duplicateEarly = fact({ field: 'SPLIT_RATIO', periodKey: '2025-03-14', asOfTsMs: 100, value: 2, unit: 'RATIO' });
+    const conflict = fact({ field: 'SPLIT_RATIO', periodKey: '2025-03-14', asOfTsMs: 200, value: 7, unit: 'RATIO' });
+
+    for (const facts of [
+      [duplicateLate, duplicateEarly, conflict],
+      [conflict, duplicateLate, duplicateEarly],
+      [duplicateEarly, conflict, duplicateLate],
+    ]) {
+      const actions = new PitFactView(facts).corporateActions('005930', after);
+      expect(actions).toHaveLength(1);
+      expect(actions[0]?.ratio).toBe(2);
+    }
+  });
+
+  it('효력발생일이 같은 두 종목은 서로 접히지 않는다', () => {
+    const view = new PitFactView([
+      fact({ key: '005930', field: 'SPLIT_RATIO', periodKey: '2025-03-14', asOfTsMs: 8_000, value: 2, unit: 'RATIO' }),
+      fact({ key: '000660', field: 'SPLIT_RATIO', periodKey: '2025-03-14', asOfTsMs: 8_000, value: 5, unit: 'RATIO' }),
+    ]);
+    expect(view.corporateActions('005930', after).map((a) => a.ratio)).toEqual([2]);
+    expect(view.corporateActions('000660', after).map((a) => a.ratio)).toEqual([5]);
+  });
+});
+
 describe('PitFactView 흡수 순서 결정성', () => {
   it('key·field·periodKey·asOfTsMs 가 전부 같은 진짜 중복끼리는 배열 순서와 무관하게 같은 값으로 수렴한다', () => {
     // 흡수 순서가 결과에 영향을 주는 유일한 경우는 두 팩트가 같은 맵 슬롯

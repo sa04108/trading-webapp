@@ -36,9 +36,22 @@ interface FieldEntry {
   latestQuarter: number | null;
 }
 
+interface FoldedAction {
+  readonly effectiveTsMs: number;
+  readonly ratio: number;
+  /** 이 비율을 채택한 공시의 접수일 — 중복·충돌을 접을 때의 비교 기준이다 */
+  readonly asOfTsMs: number;
+}
+
 interface SymbolEntry {
   readonly fields: Map<string, FieldEntry>;
-  readonly actions: CorporateAction[];
+  /**
+   * periodKey(효력발생일) → 그 날짜의 자본변동 하나. 같은 분할이 여러 행으로 들어와도
+   * 여기서 한 칸으로 접힌다 (`absorbCorporateAction` 주석).
+   */
+  readonly actionsByPeriod: Map<string, FoldedAction>;
+  /** `actionsByPeriod` 를 효력발생일 오름차순으로 펼친 읽기용 배열 */
+  actions: CorporateAction[];
   /** 흡수한 재무 팩트 중 가장 큰 분기 서수 (계정 전체를 통틀어) — 보고 신선도 신호 */
   latestQuarter: number | null;
   /** latestQuarter 에 대응하는 periodKey */
@@ -178,6 +191,7 @@ export class PitFactView {
     if (!entry) {
       entry = {
         fields: new Map(),
+        actionsByPeriod: new Map(),
         actions: [],
         latestQuarter: null,
         latestPeriodKey: null,
@@ -191,13 +205,52 @@ export class PitFactView {
   /**
    * 자본변동 이벤트를 뷰에 넣는다 — 생성 시점에 한 번, 커서와 무관하게 (설계 §3.4).
    * 노출 시점은 `corporateActions` 의 효력발생일 게이트가 정한다.
+   *
+   * **(key, periodKey) 로 접는다.** 같은 분할이 두 행으로 남는 경로가 실재한다: 저장소의
+   * 병합 키는 재집계(정정공시)를 새 행으로 보존하려고 asOfTsMs 를 일부러 포함하고, DART
+   * 어댑터는 한 번의 `fetchCorporateActions` 호출 안에서만 중복을 접는다. 그래서 같은 2:1
+   * 분할이 접수번호가 다른 두 보고서로 서로 다른 sync 구간에서 수집되면 두 행으로 남는다.
+   * 부분 실패 복구 안내가 `--from`/`--to` 를 좁혀 재실행하라고 말하므로 구간을 나눈 수집은
+   * 예외가 아니라 표준 경로다. 접지 않으면 `splitAdjustedClose` 가 효력발생일 이후의 ratio
+   * 를 모두 곱하기 때문에 2:1 분할이 배수 4 가 되어 신호가 조용히 두 배로 왜곡된다.
+   *
+   * 접는 규칙은 어댑터가 아니라 이 뷰에 둔다 — 어느 sync 가 만든 행인지와 무관하게 한
+   * 종목의 자본변동 전체를 볼 수 있는 마지막 지점이 여기다.
+   *
+   * 비율이 같은 중복은 같은 이벤트로 본다. 비율이 **다르면** 중복이 아니라 진짜 데이터
+   * 충돌인데 여기서 어느 쪽이 옳은지 판정할 근거가 없다 — **가장 이른 공시(asOfTsMs 최소)**
+   * 를 결정적으로 택한다. 접수일까지 같으면 비율이 작은 쪽이다. 어느 쪽을 고르는지보다
+   * 입력 배열 순서에 결과를 맡기지 않는 것이 중요하다 (재현성 §9.5).
    */
   private absorbCorporateAction(fact: Fact): void {
     const effectiveTsMs = localDateToUtcMs(fact.periodKey);
     if (effectiveTsMs === null || !Number.isFinite(fact.value) || fact.value <= 0) return;
     const entry = this.entryFor(fact.key);
-    entry.actions.push({ effectiveTsMs, ratio: fact.value });
-    entry.actions.sort((a, b) => a.effectiveTsMs - b.effectiveTsMs);
+
+    const existing = entry.actionsByPeriod.get(fact.periodKey);
+    if (existing) {
+      if (existing.ratio === fact.value) {
+        // 같은 이벤트의 중복 — 비율은 그대로 두고 접수일만 가장 이른 것으로 접는다.
+        // 접수일을 접어두지 않으면 뒤이어 오는 비율 충돌의 승자가 입력 순서로 갈린다.
+        if (fact.asOfTsMs < existing.asOfTsMs) {
+          entry.actionsByPeriod.set(fact.periodKey, { ...existing, asOfTsMs: fact.asOfTsMs });
+        }
+        return;
+      }
+      const incomingWins =
+        fact.asOfTsMs < existing.asOfTsMs ||
+        (fact.asOfTsMs === existing.asOfTsMs && fact.value < existing.ratio);
+      if (!incomingWins) return;
+    }
+    entry.actionsByPeriod.set(fact.periodKey, {
+      effectiveTsMs,
+      ratio: fact.value,
+      asOfTsMs: fact.asOfTsMs,
+    });
+    // periodKey 하나당 한 칸이므로 effectiveTsMs 에 동률이 없다 — 정렬이 결정적이다
+    entry.actions = [...entry.actionsByPeriod.values()]
+      .map((action) => ({ effectiveTsMs: action.effectiveTsMs, ratio: action.ratio }))
+      .sort((a, b) => a.effectiveTsMs - b.effectiveTsMs);
   }
 
   private absorb(fact: Fact): void {
