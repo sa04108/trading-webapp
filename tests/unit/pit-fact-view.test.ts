@@ -142,6 +142,41 @@ describe('PitFactView 계정별 최신 분기 커서', () => {
   });
 });
 
+describe('PitFactView periodKeyOf (계정별 신선도)', () => {
+  it('get() 이 반환할 값이 속한 분기 키를 준다 — 계정마다 공시 주기가 달라도 각자 자신의 최신 분기를 본다', () => {
+    // CURRENT_ASSETS 는 2024Q1 딱 한 번만 공시된다. OPERATING_INCOME 은 매 분기
+    // 공시되어 전역 latestQuarter 를 2025Q2 까지 밀어올린다 — '계정별 최신 분기
+    // 커서' 테스트와 같은 픽스처를 재사용해, periodKeyOf 가 get() 과 같은 소스를
+    // 보고 있음을 확인한다.
+    const view = new PitFactView([
+      fact({ field: 'CURRENT_ASSETS', periodKey: '2024Q1', asOfTsMs: 1_000, value: 500 }),
+      fact({ field: 'OPERATING_INCOME', periodKey: '2024Q1', asOfTsMs: 1_000, value: 10 }),
+      fact({ field: 'OPERATING_INCOME', periodKey: '2024Q2', asOfTsMs: 2_000, value: 11 }),
+      fact({ field: 'OPERATING_INCOME', periodKey: '2024Q3', asOfTsMs: 3_000, value: 12 }),
+      fact({ field: 'OPERATING_INCOME', periodKey: '2024Q4', asOfTsMs: 4_000, value: 13 }),
+      fact({ field: 'OPERATING_INCOME', periodKey: '2025Q1', asOfTsMs: 5_000, value: 14 }),
+      fact({ field: 'OPERATING_INCOME', periodKey: '2025Q2', asOfTsMs: 6_000, value: 15 }),
+    ]);
+    view.advanceTo(6_000);
+    const snapshot = view.fundamentals('005930');
+    // 스냅샷 전체 신선도(전사 최댓값)는 2025Q2 이지만
+    expect(snapshot?.latestPeriodKey).toBe('2025Q2');
+    // CURRENT_ASSETS 자신의 분기는 여전히 2024Q1 — 전역 커서에 끌려가지 않는다
+    expect(snapshot?.periodKeyOf('CURRENT_ASSETS')).toBe('2024Q1');
+    expect(snapshot?.periodKeyOf('OPERATING_INCOME')).toBe('2025Q2');
+  });
+
+  it('공시가 없는 계정은 null 을 준다', () => {
+    const view = new PitFactView([
+      fact({ field: 'OPERATING_INCOME', periodKey: '2025Q1', asOfTsMs: 1_000, value: 10 }),
+    ]);
+    view.advanceTo(1_000);
+    const snapshot = view.fundamentals('005930');
+    expect(snapshot?.get('TANGIBLE_ASSETS')).toBeNull();
+    expect(snapshot?.periodKeyOf('TANGIBLE_ASSETS')).toBeNull();
+  });
+});
+
 describe('PitFactView 재집계(restatement)', () => {
   it('같은 분기에 더 늦은 공시가 오면 그것이 이긴다', () => {
     const first = Date.UTC(2025, 4, 15);

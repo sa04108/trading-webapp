@@ -65,6 +65,22 @@ const DEBT_FIELDS: readonly FundamentalField[] = [
 
 const CASH_FIELDS: readonly FundamentalField[] = ['CASH_AND_EQUIVALENTS', 'SHORT_TERM_INVESTMENTS'];
 
+/**
+ * computeValueQualityMetrics 가 실제로 읽는 계정 전체 — 계정별 신선도 판정에 쓴다.
+ * 부채·현금 계정은 공시가 없으면(periodKeyOf 가 null) 자연히 판정에서 빠진다 —
+ * "공시 안 됨" 을 "무한히 낡음" 으로 세지 않기 위해서다 (sumFields 가 같은 계정을
+ * 0 으로 취급하는 것과 대응된다).
+ */
+const CONSULTED_FIELDS: readonly FundamentalField[] = [
+  'OPERATING_INCOME',
+  'SHARES_OUTSTANDING',
+  'CURRENT_ASSETS',
+  'CURRENT_LIABILITIES',
+  'TANGIBLE_ASSETS',
+  ...DEBT_FIELDS,
+  ...CASH_FIELDS,
+];
+
 function sumFields(
   snapshot: FundamentalSnapshot,
   fields: readonly FundamentalField[],
@@ -92,11 +108,11 @@ export function computeValueQualityMetrics(
 ): ValueQualityMetrics | null {
   if (!Number.isFinite(close) || close <= 0) return null;
 
-  // 공시가 너무 낡았으면 제외 (관리종목·상장폐지 직전)
-  const latestQuarter =
-    snapshot.latestPeriodKey === null ? null : quarterOrdinal(snapshot.latestPeriodKey);
-  if (latestQuarter === null) return null;
-  if (currentQuarter - latestQuarter > staleQuarters) return null;
+  // 1차 관문 — 분기 키 형식 자체가 아니거나 공시가 아예 없으면 계정별 판정으로도
+  // 넘어가지 않는다 (신고 자체가 끊긴 관리종목·상장폐지 직전 종목).
+  if (snapshot.latestPeriodKey === null || quarterOrdinal(snapshot.latestPeriodKey) === null) {
+    return null;
+  }
 
   const ebit = snapshot.ttm('OPERATING_INCOME');
   if (ebit === null || ebit <= 0) return null; // 원 규칙: 적자 기업 제외
@@ -104,14 +120,26 @@ export function computeValueQualityMetrics(
   const shares = snapshot.get('SHARES_OUTSTANDING');
   if (shares === null || shares <= 0) return null;
 
-  const marketCap = close * shares;
-  const enterpriseValue = marketCap + sumFields(snapshot, DEBT_FIELDS) - sumFields(snapshot, CASH_FIELDS);
-  if (enterpriseValue <= 0) return null; // 현금이 시총+차입금을 넘는 경우 — 비율이 무의미해진다
-
   const currentAssets = snapshot.get('CURRENT_ASSETS');
   const currentLiabilities = snapshot.get('CURRENT_LIABILITIES');
   const tangibleAssets = snapshot.get('TANGIBLE_ASSETS');
   if (currentAssets === null || currentLiabilities === null || tangibleAssets === null) return null;
+
+  // 계정별 신선도 — 이 지표가 실제로 읽는 계정들 중 "가장 낡은 것" 을 기준으로 판정한다.
+  // latestPeriodKey(전사 최댓값)만 보면 손익계산서만 최신이어도 재무상태표 계정이
+  // 몇 년째 갱신되지 않은 회사가 통과해버리는 구멍이 있었다 — staleQuarters 라는
+  // 이름·설명이 약속하는 것과 실제 동작이 달랐다. periodKeyOf 가 null 인 계정(공시
+  // 자체가 없는 선택 계정)은 값을 낸 적이 없으므로 판정에서 자연히 빠진다.
+  const accountQuarters = CONSULTED_FIELDS.map((field) => snapshot.periodKeyOf(field))
+    .map((periodKey) => (periodKey === null ? null : quarterOrdinal(periodKey)))
+    .filter((ordinal): ordinal is number => ordinal !== null);
+  if (accountQuarters.length === 0) return null; // 위에서 필수 계정을 이미 확인했으니 도달 불가 — 방어적 가드
+  const oldestQuarter = Math.min(...accountQuarters);
+  if (currentQuarter - oldestQuarter > staleQuarters) return null;
+
+  const marketCap = close * shares;
+  const enterpriseValue = marketCap + sumFields(snapshot, DEBT_FIELDS) - sumFields(snapshot, CASH_FIELDS);
+  if (enterpriseValue <= 0) return null; // 현금이 시총+차입금을 넘는 경우 — 비율이 무의미해진다
 
   // 순운전자본이 음수면 0 으로 깎는다 (Greenblatt 관례) — 음수 투입자본은 부호를 뒤집는다
   const workingCapital = Math.max(currentAssets - currentLiabilities, 0);

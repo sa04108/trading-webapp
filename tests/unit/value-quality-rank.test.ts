@@ -15,17 +15,39 @@ import {
   valueQualityRankStrategy,
 } from '../../src/server/modules/strategy/strategies/value-quality-rank.js';
 
-/** 계정 → 값 맵으로 스냅샷을 흉내낸다. ttm 은 손익 계정만 응답한다. */
+/**
+ * 계정 → 값 맵으로 스냅샷을 흉내낸다. ttm 은 손익 계정만 응답한다.
+ *
+ * periodKeyOf 는 기본적으로 latestPeriodKey(전사 최댓값)를 그대로 돌려주지만,
+ * `fieldPeriods` 로 계정별 분기를 따로 지정할 수 있다 — 손익계산서는 최신인데
+ * 재무상태표 계정만 낡은 시나리오를 만들기 위해서다. 값이 없는 계정은(=values 에
+ * 키가 없으면) null 을 준다 — 실제 PitFactView 의 get/periodKeyOf 계약과 같다.
+ */
 function snapshot(
   values: Partial<Record<FundamentalField, number>>,
-  options: { latestPeriodKey?: string; ttmOperatingIncome?: number | null } = {},
+  options: {
+    latestPeriodKey?: string;
+    ttmOperatingIncome?: number | null;
+    fieldPeriods?: Partial<Record<FundamentalField, string>>;
+  } = {},
 ): FundamentalSnapshot {
+  const latestPeriodKey = options.latestPeriodKey ?? '2025Q1';
   return {
-    latestPeriodKey: options.latestPeriodKey ?? '2025Q1',
+    latestPeriodKey,
     latestAsOfTsMs: 0,
     get: (field) => values[field] ?? null,
     ttm: (field) =>
       field === 'OPERATING_INCOME' ? (options.ttmOperatingIncome ?? null) : null,
+    periodKeyOf: (field) => {
+      if (field === 'OPERATING_INCOME') {
+        if (options.ttmOperatingIncome === null || options.ttmOperatingIncome === undefined) {
+          return null;
+        }
+        return options.fieldPeriods?.OPERATING_INCOME ?? latestPeriodKey;
+      }
+      if (values[field] === undefined) return null;
+      return options.fieldPeriods?.[field] ?? latestPeriodKey;
+    },
   };
 }
 
@@ -162,6 +184,63 @@ describe('computeValueQualityMetrics', () => {
       latestPeriodKey: '2025FY',
     });
     expect(computeValueQualityMetrics(annual, 1_000, Q2_2025, 2)).toBeNull();
+  });
+
+  it('유형자산 계정이 아예 공시되지 않으면 null — 0 인 것과는 다르다', () => {
+    // '순운전자본이 음수면 0 으로 깎는다'·'투입자본이 0 이면 null' 테스트는 항상
+    // 세 계정에 실수(0 포함)를 채워 넣는다 — get() 이 null 을 반환하는 경로는
+    // SHARES_OUTSTANDING 을 지운 케이스 말고는 아무도 건드리지 않았다. 이 값이
+    // '?? 0' 으로 완화돼도(부채·현금 계정처럼) 그 완화를 잡아낼 테스트가 없었다.
+    const { TANGIBLE_ASSETS: _omittedTangible, ...withoutTangible } = HEALTHY;
+    expect(
+      computeValueQualityMetrics(
+        snapshot(withoutTangible, { ttmOperatingIncome: 120_000 }),
+        1_000,
+        Q2_2025,
+        2,
+      ),
+    ).toBeNull();
+
+    const { CURRENT_ASSETS: _omittedCurrentAssets, ...withoutCurrentAssets } = HEALTHY;
+    expect(
+      computeValueQualityMetrics(
+        snapshot(withoutCurrentAssets, { ttmOperatingIncome: 120_000 }),
+        1_000,
+        Q2_2025,
+        2,
+      ),
+    ).toBeNull();
+
+    const { CURRENT_LIABILITIES: _omittedCurrentLiabilities, ...withoutCurrentLiabilities } = HEALTHY;
+    expect(
+      computeValueQualityMetrics(
+        snapshot(withoutCurrentLiabilities, { ttmOperatingIncome: 120_000 }),
+        1_000,
+        Q2_2025,
+        2,
+      ),
+    ).toBeNull();
+  });
+
+  it('영업이익은 최신이어도 재무상태표 계정이 낡으면 null — 전사 최댓값이 아니라 계정별로 판정한다', () => {
+    // latestPeriodKey(전사 최댓값)는 영업이익 최신 분기와 같은 2025Q1 로 '신선'하다.
+    // 하지만 순운전자본·유형자산 계정은 2024Q3 에 머물러 있다 — 지주회사 등에서
+    // 재무상태표만 갱신이 뜸한 경우를 흉내낸다. staleQuarters 라는 이름·설명이
+    // 약속하는 것은 "계정이 낡으면 제외" 이지 "회사 전체 중 하나라도 최신이면 통과"
+    // 가 아니므로, 이 케이스는 반드시 걸러져야 한다.
+    const staleBalanceSheet = snapshot(HEALTHY, {
+      latestPeriodKey: '2025Q1',
+      ttmOperatingIncome: 120_000,
+      fieldPeriods: {
+        CURRENT_ASSETS: '2024Q3',
+        CURRENT_LIABILITIES: '2024Q3',
+        TANGIBLE_ASSETS: '2024Q3',
+      },
+    });
+    // 2024Q3 → 2025Q2 는 3분기 차, staleQuarters=2 를 넘는다
+    expect(computeValueQualityMetrics(staleBalanceSheet, 1_000, Q2_2025, 2)).toBeNull();
+    // staleQuarters 를 재무상태표 계정 기준으로도 넉넉히 주면 통과한다
+    expect(computeValueQualityMetrics(staleBalanceSheet, 1_000, Q2_2025, 8)).not.toBeNull();
   });
 
   it('없는 차입금·현금 계정은 0 으로 본다', () => {

@@ -114,6 +114,12 @@ export class PitFactView {
         const found = fieldEntry.byPeriod.get(ordinalToPeriodKey(fieldEntry.latestQuarter));
         return found ? found.value : null;
       },
+      periodKeyOf(field: FundamentalField): string | null {
+        // get() 이 반환할 값이 속한 분기 키 — 계정별 최신 분기 커서를 그대로 재사용한다.
+        const fieldEntry = entry.fields.get(field);
+        if (!fieldEntry || fieldEntry.latestQuarter === null) return null;
+        return ordinalToPeriodKey(fieldEntry.latestQuarter);
+      },
       ttm(field: FundamentalField): number | null {
         if (!FLOW_FIELDS.includes(field)) return null;
         const fieldEntry = entry.fields.get(field);

@@ -52,6 +52,14 @@ export interface FundamentalSnapshot {
   get(field: FundamentalField): number | null;
   /** 직전 4개 분기 합. 4개가 채워지지 않으면 null */
   ttm(field: FundamentalField): number | null;
+  /**
+   * `get(field)` 가 반환하는 값이 속한 분기 키. 그 계정에 공시가 하나도 없으면 null.
+   * `latestPeriodKey` 는 스냅샷 전체(모든 계정을 통틀은 최댓값) 신선도 신호인 반면,
+   * 이건 계정 하나만의 신선도다 — 계정마다 공시 주기가 달라(예: 발행주식수는
+   * 사업보고서에서만 갱신) 전사 최댓값만 보면 특정 계정이 몇 년째 갱신되지 않아도
+   * 가려지지 않는다.
+   */
+  periodKeyOf(field: FundamentalField): string | null;
   readonly latestPeriodKey: string | null;
   readonly latestAsOfTsMs: number | null;
 }
