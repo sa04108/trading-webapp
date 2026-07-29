@@ -2593,8 +2593,10 @@ DART 는 증권사가 아니다. `facts` 모듈이 `broker/infrastructure` 를 i
 - Produces: `src/server/shared/rest-client.ts` 가 `BrokerRestClient`·`TokenProvider`·`RestClientOptions` 를 export 한다. 클래스·메서드 이름은 바꾸지 않는다 — 이름 변경까지 겹치면 리뷰어가 동작 변경과 구분할 수 없다.
 - `RestClientOptions.tokenProvider` 가 **optional** 이 된다. 없으면 `Authorization` 헤더를 붙이지 않는다.
 
-**이 태스크는 커밋 2개다.** Step 1~5 가 순수 이동(동작 불변), Step 6~9 가 인증 방식 확장.
-섞으면 리뷰어가 "이동 중에 뭐가 바뀌었나" 를 diff 로 확인할 수 없다.
+**이 태스크는 커밋 3개다.** Step 1~5 순수 이동(동작 불변), Step 6~9 인증 방식 확장,
+Step 10~12 이름 변경(`BrokerRestClient` → `RestClient`). 섞으면 리뷰어가 "이동 중에 뭐가
+바뀌었나" 를 diff 로 확인할 수 없다. 이름 변경을 마지막에 두는 이유도 같다 — 앞의 두
+커밋은 이름이 그대로여서 diff 가 순수하게 이동·동작만 보여준다.
 
 - [ ] **Step 1: 파일 이동**
 
@@ -2824,6 +2826,78 @@ DART 는 crtfc_key 쿼리 파라미터로 인증한다. 더미 tokenProvider 를
 
 tokenProvider 가 없으면 401 재발급 재시도도 건너뛴다 — 쿼리 키 방식에서
 401 은 키가 틀린 것이라 재시도가 의미 없다.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KFoDKRngmr3EM4tEVudeQ4"
+```
+
+- [ ] **Step 10: 클래스 이름 변경 — `BrokerRestClient` → `RestClient`**
+
+`src/server/shared/` 에 `Broker*` 이름이 남으면 위치와 이름이 서로 거짓말을 한다.
+기계적 치환이다. `TokenProvider`·`RestClientOptions` 는 이미 일반 이름이므로 건드리지
+않는다.
+
+`src/server/shared/rest-client.ts`:
+
+```ts
+export class RestClient {
+```
+
+파일 상단 주석도 고친다 — "증권사 공통" 이 아니다:
+
+```ts
+/**
+ * 공통 REST 클라이언트 (스펙 §13):
+ * - 토큰 발급·캐싱·만료 전 재발급 (tokenProvider 가 있을 때)
+ * - API 그룹별 rate limiter (최소 간격)
+ * - 429 는 Retry-After 우선, 이후 exponential backoff + jitter
+ *
+ * 증권사 어댑터와 DART 어댑터가 공유한다 — 그래서 modules/broker 가 아니라 shared 에 있다.
+ */
+```
+
+에러 메시지의 `broker` 도 일반화한다:
+
+```ts
+        throw new Error(`REST 요청 실패: ${response.status} ${body.slice(0, 200)}`);
+```
+
+로그의 `module: 'broker'` 는 호출자를 식별하는 필드다. 공용 클라이언트가 자기를
+`broker` 라고 부르면 DART 요청이 broker 로그로 섞인다 — `module: 'rest-client'` 로 바꾼다:
+
+```ts
+      this.options.logger.warn(
+        { module: 'rest-client', event: 'rest.retry', status: response.status, attempt, backoffMs },
+        'retrying REST request',
+      );
+```
+
+- [ ] **Step 11: 참조 4곳 치환**
+
+```bash
+grep -rn "BrokerRestClient" src tests
+```
+
+나오는 곳을 모두 `RestClient` 로 바꾼다 — `kiwoom-market-data-source.ts`,
+`toss-market-data-source.ts`, `tests/unit/rest-client.test.ts`, 그리고 Step 7 에서
+추가한 테스트 블록. `grep` 결과가 비어야 완료다.
+
+로그 메시지를 문자열로 단정하는 테스트가 있으면 새 문구로 고친다.
+
+- [ ] **Step 12: 검증 + 세 번째 커밋**
+
+Run: `pnpm vitest run && pnpm typecheck && pnpm lint`
+Expected: 전부 PASS
+
+```bash
+git add -A src tests
+git commit -m "refactor(server): BrokerRestClient -> RestClient
+
+shared 에 있는 클래스가 Broker* 이면 위치와 이름이 서로 거짓말을 한다.
+증권사 어댑터와 DART 어댑터가 함께 쓰는 클라이언트다.
+
+로그 필드도 module: 'broker' -> 'rest-client' 로 바꿨다 — 공용
+클라이언트가 자기를 broker 라고 부르면 DART 요청이 broker 로그로 섞인다.
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KFoDKRngmr3EM4tEVudeQ4"
@@ -3180,7 +3254,7 @@ export class ParquetFactRepository implements FactRepository {
     // asOf 가 다르면 둘 다 남는다: 재집계는 새 행이어야 과거 시점 조회가 변하지 않는다.
     const merged = new Map<string, Fact>();
     for (const fact of [...existing, ...incoming]) {
-      merged.set(`${fact.key} ${fact.field} ${fact.periodKey} ${fact.asOfTsMs}`, fact);
+      merged.set(`${fact.key}${fact.field}${fact.periodKey}${fact.asOfTsMs}`, fact);
     }
 
     const values = [...merged.values()]
@@ -4051,8 +4125,10 @@ Claude-Session: https://claude.ai/code/session_01KFoDKRngmr3EM4tEVudeQ4"
 ## Task 10: DART HTTP 어댑터 + 수집 서비스 + CLI
 
 **Files:**
+- Create: `src/server/modules/facts/infrastructure/dart/dart-corp-code-cache.ts`
 - Create: `src/server/modules/facts/infrastructure/dart/dart-fact-source.ts`
 - Create: `src/server/modules/facts/application/fact-sync-service.ts`
+- Test: `tests/unit/dart-corp-code-cache.test.ts`
 - Modify: `src/server/bootstrap/config.ts:38`(env 스키마), `:66`(AppConfig), `:120`(반환)
 - Modify: `src/server/cli.ts:139-155`
 - Test: `tests/unit/dart-fact-source.test.ts`
@@ -4062,7 +4138,11 @@ Claude-Session: https://claude.ai/code/session_01KFoDKRngmr3EM4tEVudeQ4"
 - Consumes: Task 7 의 `BrokerRestClient`(tokenProvider 없이); Task 8 의 `FactSource`·`FactRepository`·`FactIngestionResult`·`FactSourceNotConfiguredError`; Task 9 의 파서 전부
 - Produces:
   - `interface DartConfig { baseUrl: string; apiKey: string }`
-  - `function createDartFactSource(config: DartConfig | null, logger: Logger, options?: { fetchImpl?: typeof fetch; sleep?: (ms: number) => Promise<void> }): FactSource`
+  - `interface CorpCodeResolver { resolve(symbol: string): Promise<string | null> }`
+  - `function extractSingleFileFromZip(zip: Buffer): Buffer` — CORPCODE.zip 안의 단일 엔트리를 푼다
+  - `function parseCorpCodeXml(xml: string): Map<string, string>` — `stock_code → corp_code`
+  - `function createDartCorpCodeCache(fetchXmlZip: () => Promise<Buffer>): CorpCodeResolver` — 첫 호출에서 1회만 내려받아 캐시
+  - `function createDartFactSource(config: DartConfig | null, logger: Logger, options?: { fetchImpl?: typeof fetch; sleep?: (ms: number) => Promise<void>; corpCodeResolver?: CorpCodeResolver }): FactSource`
   - `class FactSyncService { constructor(source: FactSource, repository: FactRepository, logger: Logger); sync(request: FactSyncRequest): Promise<FactSyncReport> }`
   - `interface FactSyncRequest { datasetId: string; symbols: readonly string[]; fromYear: number; toYear: number; consolidated: boolean }`
   - `interface FactSyncReport { savedFacts: number; gaps: readonly FactIngestionGap[] }`
@@ -4072,12 +4152,23 @@ Claude-Session: https://claude.ai/code/session_01KFoDKRngmr3EM4tEVudeQ4"
 
 `tests/unit/dart-fact-source.test.ts`:
 
+> 이 파일의 **모든** `createDartFactSource` 호출에는 `corpCodeResolver: STUB_RESOLVER` 를
+> 함께 넘긴다. 넘기지 않으면 기본 corp_code 캐시가 `corpCode.xml` 을 내려받으려 하고,
+> 테스트의 `fetchImpl` 은 JSON 만 주므로 zip 파싱에서 터진다. 아래 스니펫의 호출들에도
+> 이 옵션을 추가해서 작성한다.
+
 ```ts
 import { describe, expect, it } from 'vitest';
 import { FactSourceNotConfiguredError } from '../../src/server/modules/facts/application/ports.js';
+import type { CorpCodeResolver } from '../../src/server/modules/facts/infrastructure/dart/dart-corp-code-cache.js';
 import { createDartFactSource } from '../../src/server/modules/facts/infrastructure/dart/dart-fact-source.js';
 
 const LOGGER = { debug() {}, info() {}, warn() {}, error() {} } as never;
+
+/** corp_code 매핑은 별도 테스트가 다룬다 — 여기서는 종목코드에 접두사만 붙인다 */
+const STUB_RESOLVER: CorpCodeResolver = {
+  resolve: async (symbol) => `corp-${symbol}`,
+};
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), { status: 200 });
@@ -4388,10 +4479,19 @@ export function createDartFactSource(
     return envelope.list ?? [];
   }
 
-  /** 종목코드 → corp_code. 실제 매핑은 corpCode.xml 캐시가 담당한다 (Step 5 참고) */
-  function toCorpCode(symbol: string): string {
-    return symbol;
-  }
+  // 종목코드 → DART corp_code. 주입되지 않으면 corpCode.xml 을 1회 내려받아 캐시한다.
+  const corpCodes: CorpCodeResolver =
+    options.corpCodeResolver ??
+    createDartCorpCodeCache(async () => {
+      const query = new URLSearchParams({ crtfc_key: config.apiKey });
+      const response = await (options.fetchImpl ?? fetch)(
+        `${config.baseUrl}/api/corpCode.xml?${query.toString()}`,
+      );
+      if (!response.ok) {
+        throw new Error(`corpCode.xml 다운로드 실패: ${response.status}`);
+      }
+      return Buffer.from(await response.arrayBuffer());
+    });
 
   async function fetchFinancials(request: FetchFinancialsRequest): Promise<FactIngestionResult> {
     const facts: Fact[] = [];
@@ -4399,7 +4499,12 @@ export function createDartFactSource(
     const fsDiv = request.consolidated ? 'CFS' : 'OFS';
 
     for (const symbol of request.symbols) {
-      const corpCode = toCorpCode(symbol);
+      const corpCode = await corpCodes.resolve(symbol);
+      if (corpCode === null) {
+        // 조용히 건너뛰면 "수집했는데 이 종목만 0건" 이 되고 원인을 알 수 없다
+        gaps.push({ symbol, periodKey: '-', reason: 'DART corp_code 매핑에 없는 종목코드입니다' });
+        continue;
+      }
 
       for (let year = request.fromYear; year <= request.toYear; year += 1) {
         const rowsByReport = new Map<DartReportCode, readonly DartFinancialRow[]>();
@@ -4463,7 +4568,11 @@ export function createDartFactSource(
     const gaps: FactIngestionGap[] = [];
 
     for (const symbol of request.symbols) {
-      const corpCode = toCorpCode(symbol);
+      const corpCode = await corpCodes.resolve(symbol);
+      if (corpCode === null) {
+        gaps.push({ symbol, periodKey: '-', reason: 'DART corp_code 매핑에 없는 종목코드입니다' });
+        continue;
+      }
       /** 'YYYY-MM-DD' → 그 시점 직전 발행주식수. 분기 공시값 중 이벤트 이전 최신값 */
       const sharesByPeriod: Array<{ dateKey: string; shares: number }> = [];
 
@@ -4513,13 +4622,281 @@ export function createDartFactSource(
 }
 ```
 
-> **키 발급 후 확인해야 하는 두 가지** (수집 리포트가 전부 gap 이면 여기를 본다):
-> 1. `toCorpCode` 는 현재 종목코드를 그대로 넘긴다. DART 는 8자리 `corp_code` 를 쓰므로
->    실제로는 `corpCode.xml`(zip) 을 1회 내려받아 `stock_code → corp_code` 맵을 캐시해야
->    한다. 키 발급 후 `dart-corp-code-cache.ts` 를 추가하고 `toCorpCode` 를 그것으로
->    바꾼다 — 지금 구조는 그 교체 지점을 한 함수로 모아 둔 것이다.
-> 2. `irdsSttus` 의 `reprt_code` 가 연도별 누적을 주는지, 분기별로 나눠 주는지.
->    나눠 주면 네 코드를 모두 돌려야 한다.
+import 블록에 캐시를 추가한다:
+
+```ts
+import {
+  createDartCorpCodeCache,
+  type CorpCodeResolver,
+} from './dart-corp-code-cache.js';
+```
+
+> **키 발급 후 실제 응답으로 확인할 것** (수집 리포트가 전부 gap 이면 여기를 본다):
+> `irdsSttus` 의 `reprt_code` 가 연도별 누적을 주는지, 분기별로 나눠 주는지. 나눠 주면
+> 네 코드를 모두 돌려야 한다. 계정 태그·필드 이름도 같은 이유로 검증 대상이다 —
+> 틀리면 gap 으로 드러나므로 조용히 0 이 되지는 않는다.
+
+- [ ] **Step 3b: corp_code 캐시 — 실패하는 테스트 먼저**
+
+DART 는 종목코드가 아니라 8자리 `corp_code` 로 조회한다. 매핑은 `corpCode.xml` 로만
+얻을 수 있고, 그 응답은 **단일 엔트리 ZIP** 이다.
+
+새 의존성을 넣지 않는다 — 엔트리가 하나이고 XML 이 속성 없는 평면 구조라 Node 내장
+`zlib` 로 충분하다. zip 리더와 XML 추출기를 각각 순수 함수로 분리해 픽스처로 검증한다.
+
+`tests/unit/dart-corp-code-cache.test.ts`:
+
+```ts
+import { deflateRawSync } from 'node:zlib';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  createDartCorpCodeCache,
+  extractSingleFileFromZip,
+  parseCorpCodeXml,
+} from '../../src/server/modules/facts/infrastructure/dart/dart-corp-code-cache.js';
+
+/** 단일 엔트리 ZIP 을 손으로 만든다 (local file header + deflate + central directory 없음) */
+function makeZip(name: string, content: string): Buffer {
+  const nameBytes = Buffer.from(name, 'utf8');
+  const raw = Buffer.from(content, 'utf8');
+  const compressed = deflateRawSync(raw);
+
+  const header = Buffer.alloc(30);
+  header.writeUInt32LE(0x04034b50, 0); // local file header signature
+  header.writeUInt16LE(20, 4); // version needed
+  header.writeUInt16LE(0, 6); // flags
+  header.writeUInt16LE(8, 8); // method: deflate
+  header.writeUInt16LE(0, 10); // mod time
+  header.writeUInt16LE(0, 12); // mod date
+  header.writeUInt32LE(0, 14); // crc32 (검증하지 않는다)
+  header.writeUInt32LE(compressed.length, 18);
+  header.writeUInt32LE(raw.length, 22);
+  header.writeUInt16LE(nameBytes.length, 26);
+  header.writeUInt16LE(0, 28); // extra field length
+
+  return Buffer.concat([header, nameBytes, compressed]);
+}
+
+const XML = `<?xml version="1.0" encoding="UTF-8"?>
+<result>
+  <list>
+    <corp_code>00126380</corp_code>
+    <corp_name>삼성전자</corp_name>
+    <stock_code>005930</stock_code>
+    <modify_date>20250401</modify_date>
+  </list>
+  <list>
+    <corp_code>00164779</corp_code>
+    <corp_name>SK하이닉스</corp_name>
+    <stock_code>000660</stock_code>
+    <modify_date>20250401</modify_date>
+  </list>
+  <list>
+    <corp_code>00999999</corp_code>
+    <corp_name>비상장회사</corp_name>
+    <stock_code> </stock_code>
+    <modify_date>20250401</modify_date>
+  </list>
+</result>`;
+
+describe('extractSingleFileFromZip', () => {
+  it('deflate 로 압축된 단일 엔트리를 푼다', () => {
+    const unzipped = extractSingleFileFromZip(makeZip('CORPCODE.xml', XML));
+    expect(unzipped.toString('utf8')).toBe(XML);
+  });
+
+  it('무압축(stored) 엔트리도 푼다', () => {
+    const raw = Buffer.from('hello', 'utf8');
+    const nameBytes = Buffer.from('a.txt', 'utf8');
+    const header = Buffer.alloc(30);
+    header.writeUInt32LE(0x04034b50, 0);
+    header.writeUInt16LE(0, 8); // method: stored
+    header.writeUInt32LE(raw.length, 18);
+    header.writeUInt32LE(raw.length, 22);
+    header.writeUInt16LE(nameBytes.length, 26);
+    const zip = Buffer.concat([header, nameBytes, raw]);
+    expect(extractSingleFileFromZip(zip).toString('utf8')).toBe('hello');
+  });
+
+  it('ZIP 시그니처가 아니면 던진다 — DART 가 XML 에러를 그대로 줄 때가 있다', () => {
+    const notZip = Buffer.from('<result><status>020</status></result>', 'utf8');
+    expect(() => extractSingleFileFromZip(notZip)).toThrow(/ZIP/);
+  });
+});
+
+describe('parseCorpCodeXml', () => {
+  it('stock_code → corp_code 맵을 만든다', () => {
+    const map = parseCorpCodeXml(XML);
+    expect(map.get('005930')).toBe('00126380');
+    expect(map.get('000660')).toBe('00164779');
+  });
+
+  it('상장코드가 빈 회사는 넣지 않는다', () => {
+    const map = parseCorpCodeXml(XML);
+    expect(map.size).toBe(2);
+  });
+
+  it('빈 XML 은 빈 맵', () => {
+    expect(parseCorpCodeXml('<result></result>').size).toBe(0);
+  });
+});
+
+describe('createDartCorpCodeCache', () => {
+  it('여러 번 조회해도 한 번만 내려받는다', async () => {
+    const fetchZip = vi.fn(async () => makeZip('CORPCODE.xml', XML));
+    const cache = createDartCorpCodeCache(fetchZip);
+
+    expect(await cache.resolve('005930')).toBe('00126380');
+    expect(await cache.resolve('000660')).toBe('00164779');
+    expect(fetchZip).toHaveBeenCalledTimes(1);
+  });
+
+  it('동시 호출도 한 번만 내려받는다', async () => {
+    const fetchZip = vi.fn(async () => makeZip('CORPCODE.xml', XML));
+    const cache = createDartCorpCodeCache(fetchZip);
+
+    const [a, b] = await Promise.all([cache.resolve('005930'), cache.resolve('000660')]);
+    expect(a).toBe('00126380');
+    expect(b).toBe('00164779');
+    expect(fetchZip).toHaveBeenCalledTimes(1);
+  });
+
+  it('매핑에 없는 종목코드는 null', async () => {
+    const cache = createDartCorpCodeCache(async () => makeZip('CORPCODE.xml', XML));
+    expect(await cache.resolve('999999')).toBeNull();
+  });
+
+  it('다운로드가 실패하면 다음 호출에서 다시 시도한다 — 실패를 캐시하지 않는다', async () => {
+    let attempt = 0;
+    const fetchZip = vi.fn(async () => {
+      attempt += 1;
+      if (attempt === 1) throw new Error('네트워크 오류');
+      return makeZip('CORPCODE.xml', XML);
+    });
+    const cache = createDartCorpCodeCache(fetchZip);
+
+    await expect(cache.resolve('005930')).rejects.toThrow(/네트워크 오류/);
+    expect(await cache.resolve('005930')).toBe('00126380');
+    expect(fetchZip).toHaveBeenCalledTimes(2);
+  });
+});
+```
+
+Run: `pnpm vitest run tests/unit/dart-corp-code-cache.test.ts`
+Expected: FAIL — `Failed to resolve import ".../dart-corp-code-cache.js"`
+
+- [ ] **Step 3c: corp_code 캐시 구현**
+
+`src/server/modules/facts/infrastructure/dart/dart-corp-code-cache.ts`:
+
+```ts
+import { inflateRawSync } from 'node:zlib';
+
+export interface CorpCodeResolver {
+  /** 종목코드 → DART corp_code. 매핑에 없으면 null */
+  resolve(symbol: string): Promise<string | null>;
+}
+
+const LOCAL_FILE_HEADER_SIGNATURE = 0x04034b50;
+const FIXED_HEADER_BYTES = 30;
+const METHOD_STORED = 0;
+const METHOD_DEFLATE = 8;
+
+/**
+ * 단일 엔트리 ZIP 의 첫 파일을 푼다.
+ *
+ * 새 의존성을 넣지 않는 이유: DART `corpCode.xml` 응답은 엔트리가 하나인 ZIP 이고,
+ * local file header 하나만 읽으면 된다 (central directory 를 볼 필요가 없다).
+ * 범용 ZIP 리더가 필요해지면 그때 라이브러리를 넣는다.
+ *
+ * CRC32 는 검증하지 않는다 — inflate 가 깨진 데이터에서 이미 던진다.
+ */
+export function extractSingleFileFromZip(zip: Buffer): Buffer {
+  if (zip.length < FIXED_HEADER_BYTES || zip.readUInt32LE(0) !== LOCAL_FILE_HEADER_SIGNATURE) {
+    // DART 는 인증 실패 시 ZIP 대신 XML 에러 본문을 준다 — 여기서 명확히 실패시킨다
+    throw new Error(
+      'ZIP 형식이 아닙니다. DART 가 오류 응답을 보냈을 수 있습니다 (API 키를 확인하세요).',
+    );
+  }
+
+  const method = zip.readUInt16LE(8);
+  const compressedSize = zip.readUInt32LE(18);
+  const nameLength = zip.readUInt16LE(26);
+  const extraLength = zip.readUInt16LE(28);
+  const start = FIXED_HEADER_BYTES + nameLength + extraLength;
+
+  // compressedSize 가 0(스트리밍 기록)이면 남은 바이트 전부를 쓴다
+  const end = compressedSize > 0 ? start + compressedSize : zip.length;
+  const payload = zip.subarray(start, end);
+
+  if (method === METHOD_STORED) return Buffer.from(payload);
+  if (method === METHOD_DEFLATE) return inflateRawSync(payload);
+  throw new Error(`지원하지 않는 ZIP 압축 방식입니다: ${method}`);
+}
+
+const LIST_PATTERN = /<list>([\s\S]*?)<\/list>/g;
+
+function tagValue(block: string, tag: string): string | null {
+  const match = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(block);
+  return match ? (match[1] as string).trim() : null;
+}
+
+/**
+ * `stock_code → corp_code` 맵.
+ *
+ * XML 파서를 쓰지 않는 이유: CORPCODE.xml 은 속성·네임스페이스·CDATA 가 없는 평면
+ * `<result><list>...</list></result>` 구조다. 이 파일 하나를 위해 XML 의존성을
+ * 넣는 것보다 태그 추출이 낫다. 구조가 바뀌면 맵이 비고 수집 리포트가 전부 gap 이
+ * 되므로 조용히 틀리지 않는다.
+ *
+ * 상장코드가 빈 회사(비상장)는 넣지 않는다 — 빈 키가 모든 종목을 잡아버린다.
+ */
+export function parseCorpCodeXml(xml: string): Map<string, string> {
+  const map = new Map<string, string>();
+  LIST_PATTERN.lastIndex = 0;
+  for (let match = LIST_PATTERN.exec(xml); match !== null; match = LIST_PATTERN.exec(xml)) {
+    const block = match[1] as string;
+    const stockCode = tagValue(block, 'stock_code');
+    const corpCode = tagValue(block, 'corp_code');
+    if (!stockCode || !corpCode) continue;
+    map.set(stockCode, corpCode);
+  }
+  return map;
+}
+
+/**
+ * corp_code 매핑을 1회만 내려받아 캐시한다. 전 종목이 한 파일에 들어 있어 종목별
+ * 조회가 없다.
+ *
+ * 진행 중인 다운로드를 공유하므로 동시 조회가 여러 번 내려받지 않는다. 실패는
+ * 캐시하지 않는다 — 일시적 네트워크 오류로 수집 전체가 영구히 막히면 안 된다.
+ */
+export function createDartCorpCodeCache(
+  fetchXmlZip: () => Promise<Buffer>,
+): CorpCodeResolver {
+  let pending: Promise<Map<string, string>> | null = null;
+
+  const load = (): Promise<Map<string, string>> => {
+    if (pending) return pending;
+    pending = (async () => parseCorpCodeXml(extractSingleFileFromZip(await fetchXmlZip()).toString('utf8')))().catch(
+      (error: unknown) => {
+        pending = null; // 실패는 캐시하지 않는다
+        throw error;
+      },
+    );
+    return pending;
+  };
+
+  return {
+    async resolve(symbol: string): Promise<string | null> {
+      return (await load()).get(symbol) ?? null;
+    },
+  };
+}
+```
+
+Run: `pnpm vitest run tests/unit/dart-corp-code-cache.test.ts`
+Expected: PASS
 
 - [ ] **Step 4: 수집 서비스 구현**
 
@@ -4783,8 +5160,9 @@ crtfc_key 쿼리 인증으로 공용 REST 클라이언트를 tokenProvider 없�
   인증 실패를 '수집했는데 0건' 으로 오해하지 않게 한다
 - 발행주식수는 보통주만 쓴다. '합계' 행은 우선주가 섞여 시가총액을 과대계상한다
 - 누락(gap)은 CLI 가 전부 출력한다. 조용히 빠진 계정은 랭킹을 소리 없이 왜곡한다
-- corp_code 매핑은 toCorpCode 한 함수로 모아 뒀다 — 키 발급 후 corpCode.xml
-  캐시로 교체할 지점
+- corp_code 매핑은 corpCode.xml(단일 엔트리 ZIP)을 1회 내려받아 캐시한다.
+  새 의존성 없이 node:zlib 로 푼다 — 엔트리가 하나이고 XML 이 평면 구조다
+- 실패는 캐시하지 않는다. 일시적 네트워크 오류로 수집이 영구히 막히면 안 된다
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KFoDKRngmr3EM4tEVudeQ4"
