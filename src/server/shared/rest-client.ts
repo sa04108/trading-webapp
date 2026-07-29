@@ -12,7 +12,12 @@ export interface TokenProvider {
 
 export interface RestClientOptions {
   readonly baseUrl: string;
-  readonly tokenProvider: TokenProvider;
+  /**
+   * OAuth 토큰 공급자. 생략하면 Authorization 헤더를 붙이지 않는다 —
+   * DART 처럼 쿼리 파라미터로 인증하는 API 를 위한 경로다. 더미 토큰 공급자를
+   * 끼우면 거짓 헤더를 보내게 되므로 옵션으로 둔다.
+   */
+  readonly tokenProvider?: TokenProvider;
   readonly logger: Logger;
   readonly fetchImpl?: typeof fetch;
   /** API 그룹별 최소 호출 간격 (ms). 기본 그룹은 'default' */
@@ -45,10 +50,12 @@ export class BrokerRestClient {
     this.maxRetries = options.maxRetries ?? 4;
   }
 
-  private async getToken(): Promise<string> {
+  private async getToken(): Promise<string | null> {
+    const provider = this.options.tokenProvider;
+    if (!provider) return null;
     const now = this.clock();
     if (!this.token || this.token.expiresAtMs - TOKEN_REFRESH_MARGIN_MS <= now) {
-      this.token = await this.options.tokenProvider.issueToken(this.fetchImpl);
+      this.token = await provider.issueToken(this.fetchImpl);
     }
     return this.token.accessToken;
   }
@@ -78,7 +85,7 @@ export class BrokerRestClient {
       const response = await this.fetchImpl(`${this.options.baseUrl}${path}`, {
         method: init.method ?? 'GET',
         headers: {
-          authorization: `Bearer ${token}`,
+          ...(token !== null ? { authorization: `Bearer ${token}` } : {}),
           ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
           ...init.headers,
         },
@@ -89,8 +96,9 @@ export class BrokerRestClient {
         return (await response.json()) as T;
       }
 
-      if (response.status === 401 && attempt === 0) {
-        // 토큰 만료 가능성: 1회 재발급 후 재시도
+      // 토큰 인증일 때만 401 재발급을 시도한다 — 쿼리 키 방식에서 401 은 키가
+      // 틀린 것이므로 재시도가 의미 없다
+      if (response.status === 401 && attempt === 0 && this.options.tokenProvider) {
         this.token = null;
         attempt += 1;
         continue;

@@ -88,3 +88,66 @@ describe('BrokerRestClient (스펙 §13 공통 REST 클라이언트)', () => {
     expect(sleeps.some((ms) => ms > 0 && ms <= 350)).toBe(true);
   });
 });
+
+describe('tokenProvider 없는 인증 (쿼리 파라미터 방식)', () => {
+  it('tokenProvider 를 생략하면 Authorization 헤더를 붙이지 않는다', async () => {
+    const seen: Array<Record<string, string>> = [];
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      seen.push((init?.headers ?? {}) as Record<string, string>);
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const client = new BrokerRestClient({
+      baseUrl: 'https://opendart.fss.or.kr',
+      logger: { debug() {}, info() {}, warn() {}, error() {} } as never,
+      fetchImpl,
+      sleep: async () => undefined,
+      clock: () => 0,
+    });
+
+    await client.request('default', '/api/list.json?crtfc_key=x');
+    expect(seen[0]).not.toHaveProperty('authorization');
+  });
+
+  it('tokenProvider 가 있으면 기존대로 Bearer 를 붙인다', async () => {
+    const seen: Array<Record<string, string>> = [];
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      seen.push((init?.headers ?? {}) as Record<string, string>);
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const tokenProvider: TokenProvider = {
+      issueToken: async () => ({ accessToken: 'tok', expiresAtMs: 9_999_999_999_999 }),
+    };
+    const client = new BrokerRestClient({
+      baseUrl: 'https://api.example.com',
+      tokenProvider,
+      logger: { debug() {}, info() {}, warn() {}, error() {} } as never,
+      fetchImpl,
+      sleep: async () => undefined,
+      clock: () => 0,
+    });
+
+    await client.request('default', '/x');
+    expect(seen[0]?.authorization).toBe('Bearer tok');
+  });
+
+  it('tokenProvider 없이 401 이 오면 토큰 재발급을 시도하지 않고 즉시 실패한다', async () => {
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      return new Response('unauthorized', { status: 401 });
+    }) as unknown as typeof fetch;
+
+    const client = new BrokerRestClient({
+      baseUrl: 'https://opendart.fss.or.kr',
+      logger: { debug() {}, info() {}, warn() {}, error() {} } as never,
+      fetchImpl,
+      sleep: async () => undefined,
+      clock: () => 0,
+    });
+
+    await expect(client.request('default', '/x')).rejects.toThrow(/401/);
+    expect(calls).toBe(1); // 재발급 재시도가 없어야 한다
+  });
+});
