@@ -3135,7 +3135,37 @@ import { formatSymbolSummary, SYMBOL_SUMMARY_LIMIT } from './symbol-summary';
   const nameOf = (symbol: string): string | null => stockNames.get(symbol)?.name ?? null;
 ```
 
-`jobs` 변수 이름은 실제 파일의 것을 따른다. 카드 컴포넌트가 분리되어 있으면 `nameOf` 를 prop 으로 넘긴다.
+**실제 파일 구조 (확인됨):** `backtests-page.tsx:12` 의 `JobCard({ job }: { job: JobSummary })` 가 분리된 컴포넌트이고, `BacktestsPage`(`:58`)가 `useBacktests(5_000)` 의 결과를 `data.jobs.map(...)`(`:79`)으로 돈다.
+
+따라서 훅은 `BacktestsPage` 안에서 부르고 `data.jobs` 를 쓴다:
+
+```tsx
+  const previewSymbols = [
+    ...new Set(
+      (data?.jobs ?? []).flatMap((job) =>
+        job.request.universe.symbols.slice(0, SYMBOL_SUMMARY_LIMIT),
+      ),
+    ),
+  ];
+  const stockNames = useStockNames(previewSymbols);
+  const nameOf = (symbol: string): string | null => stockNames.get(symbol)?.name ?? null;
+```
+
+`data` 는 `isLoading` 동안 undefined 이므로 `?? []` 로 받는다 — 훅은 빈 배열이면 요청하지 않는다.
+
+`nameOf` 를 `JobCard` 의 prop 으로 넘긴다:
+
+```tsx
+function JobCard({ job, nameOf }: { job: JobSummary; nameOf: (symbol: string) => string | null }) {
+```
+
+```tsx
+          {data.jobs.map((job) => (
+            <JobCard key={job.id} job={job} nameOf={nameOf} />
+          ))}
+```
+
+`key` 등 기존 props 는 실제 코드의 것을 그대로 유지한다.
 
 `backtests-page.tsx:31` 을 교체:
 
