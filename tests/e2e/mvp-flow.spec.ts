@@ -20,11 +20,20 @@ test('full MVP flow', async ({ page }) => {
   await page.getByLabel('돌파 기준 봉 수', { exact: true }).fill('10');
   await page.getByLabel('변동성(ATR) 계산 기간', { exact: true }).fill('5');
   await page.getByLabel('익절 폭 (변동성 배수) (선택)', { exact: true }).fill('3');
-  // ⓘ 아이콘 — 설명 툴팁에 원본 키·범위·기본값까지 나온다
-  await page.getByRole('button', { name: '돌파 기준 봉 수 설명' }).click();
+  // ⓘ 아이콘 — 클릭으로만 열린다 (모바일에 hover 가 없다)
+  const hintButton = page.getByRole('button', { name: '돌파 기준 봉 수 설명' });
   const hint = page.getByRole('tooltip');
+  await hintButton.hover();
+  await expect(hint).toBeHidden();
+  await hintButton.click();
   await expect(hint).toContainText('최고가');
   await expect(hint).toContainText('lookbackBars · 2~200 · 기본 20');
+  // 다시 클릭하면 닫힌다
+  await hintButton.click();
+  await expect(hint).toBeHidden();
+  // Escape 로도 닫힌다
+  await hintButton.click();
+  await expect(hint).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(hint).toBeHidden();
   await page.getByRole('button', { name: '다음' }).click();
