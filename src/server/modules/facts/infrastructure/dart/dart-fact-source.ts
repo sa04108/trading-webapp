@@ -199,7 +199,10 @@ export function createDartFactSource(
             gaps.push({
               symbol,
               periodKey: `${year}Q${REPORT_CODE_TO_QUARTER[reportCode]}`,
-              reason: `응답 ${rows.length}행이 모두 필터에서 제외됐습니다 (sj_div/bsns_year 필드 확인)`,
+              // 값(행 수)은 반드시 괄호 안이나 콜론 뒤에 둔다 — CLI 의 gap 묶기는
+              // 첫 ':' 또는 '(' 앞까지를 버킷 라벨로 쓰므로, 앞부분에 값이 섞이면
+              // 같은 실패 유형이 값마다 다른 버킷으로 쪼개져 리포트가 커진다.
+              reason: `응답 행이 모두 필터에서 제외됐습니다 (sj_div/bsns_year 필드 확인, ${rows.length}행)`,
             });
           }
         }

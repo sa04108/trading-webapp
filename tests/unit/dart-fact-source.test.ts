@@ -390,6 +390,88 @@ describe('createDartFactSource — 요청 구성', () => {
   });
 });
 
+/**
+ * 지금까지 어떤 테스트도 이 경로를 실행하지 않았다 — 모든 테스트가 `corpCodeResolver` 를
+ * 주입해 기본 corpCode.xml 다운로드 클로저를 우회한다. 그 클로저는 API 키를 쿼리로
+ * 붙이고, 실패 시 `corpCode.xml 다운로드 실패: <status>` 를 던진다. 여기에 URL 을
+ * 더하는 것은 디버깅용으로 가장 먼저 떠오르는 수정이고, 그 문자열은 잡 레코드를 거쳐
+ * 웹 UI 까지 간다. 그러니 경로가 실행됨을 확인하면서 동시에 못박는다.
+ */
+describe('createDartFactSource — corpCode.xml 다운로드 (기본 resolver)', () => {
+  const SECRET = 'SECRET_KEY_XYZ789';
+
+  it('키를 쿼리로 붙여 내려받고, 실패 메시지·로그에 키가 실리지 않는다', async () => {
+    const urls: string[] = [];
+    const { logger, lines } = createCapturingLogger();
+    const fetchImpl = (async (url: string) => {
+      urls.push(String(url));
+      // 다운로드 실패 경로 — 이 클로저의 throw 문을 그대로 탄다
+      return new Response('nope', { status: 404 });
+    }) as unknown as typeof fetch;
+
+    // corpCodeResolver 를 **주입하지 않는다** — 기본 클로저가 실행되어야 한다
+    const source = createDartFactSource(
+      { baseUrl: 'https://opendart.fss.or.kr', apiKey: SECRET },
+      logger,
+      { fetchImpl, sleep: async () => undefined },
+    );
+
+    let rejection: unknown;
+    try {
+      await source.fetchFinancials({
+        symbols: ['005930'],
+        fromYear: 2025,
+        toYear: 2025,
+        consolidated: true,
+      });
+    } catch (error) {
+      rejection = error;
+    }
+
+    // 경로가 실제로 실행됐음을 먼저 확인한다 — 아니면 아래 단정이 공허해진다
+    expect(urls.some((url) => url.includes('/api/corpCode.xml'))).toBe(true);
+    expect(urls.some((url) => url.includes(`crtfc_key=${SECRET}`))).toBe(true);
+
+    expect(rejection).toBeInstanceOf(Error);
+    expect((rejection as Error).message).toContain('corpCode.xml 다운로드 실패');
+    expect((rejection as Error).message).not.toContain(SECRET);
+    expect((rejection as Error).stack ?? '').not.toContain(SECRET);
+    for (const line of lines) {
+      expect(line).not.toContain(SECRET);
+    }
+  });
+
+  it('ZIP 이 아닌 본문(인증 실패 응답)도 키를 노출하지 않고 실패한다', async () => {
+    const { logger, lines } = createCapturingLogger();
+    const fetchImpl = (async () =>
+      new Response('<result><status>020</status></result>', { status: 200 })) as unknown as typeof fetch;
+
+    const source = createDartFactSource(
+      { baseUrl: 'https://opendart.fss.or.kr', apiKey: SECRET },
+      logger,
+      { fetchImpl, sleep: async () => undefined },
+    );
+
+    let rejection: unknown;
+    try {
+      await source.fetchCorporateActions({
+        symbols: ['005930'],
+        fromYear: 2025,
+        toYear: 2025,
+        consolidated: true,
+      });
+    } catch (error) {
+      rejection = error;
+    }
+    expect(rejection).toBeInstanceOf(Error);
+    expect((rejection as Error).message).toContain('ZIP 형식이 아닙니다');
+    expect((rejection as Error).message).not.toContain(SECRET);
+    for (const line of lines) {
+      expect(line).not.toContain(SECRET);
+    }
+  });
+});
+
 describe('createDartFactSource — fetchCorporateActions 자본변동 접기', () => {
   const SHARE_BASELINE = [{ rcept_no: '20200515000001', se: '보통주', istc_totqy: '1,000,000' }];
 

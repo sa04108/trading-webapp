@@ -132,6 +132,100 @@ describe('tokenProvider 없는 인증 (쿼리 파라미터 방식)', () => {
     expect(seen[0]?.authorization).toBe('Bearer tok');
   });
 
+  /**
+   * DART 는 API 키를 `crtfc_key` 쿼리 파라미터로 보낸다 — 요청 경로 자체가 비밀값이다.
+   * 지금 새는 곳은 없지만(전 경로 확인) 막고 있는 것도 없다: 재시도 로그나 실패 메시지에
+   * 경로를 넣는 것은 디버깅용으로 가장 먼저 떠오르는 수정이다. 게다가 RestClient 는
+   * 증권사 어댑터와 공유되고, 그 실패 문자열은 잡 레코드에 그대로 저장돼 웹 UI 에 뜬다.
+   * 아래 두 테스트가 그 두 경로를 못박는다.
+   */
+  const SECRET = 'SECRET_KEY_ABC123';
+
+  function capturingLogger(): { logger: never; lines: string[] } {
+    const lines: string[] = [];
+    const capture = (...args: unknown[]) => lines.push(JSON.stringify(args));
+    return {
+      logger: { debug: capture, info: capture, warn: capture, error: capture } as never,
+      lines,
+    };
+  }
+
+  it('재시도 로그에 요청 경로(=API 키)가 실리지 않는다', async () => {
+    const { logger, lines } = capturingLogger();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(429, { error: 'rate' }, { 'retry-after': '1' }))
+      .mockResolvedValueOnce(jsonResponse(200, { ok: true }));
+
+    const client = new RestClient({
+      baseUrl: 'https://opendart.fss.or.kr',
+      logger,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      sleep: async () => undefined,
+      clock: () => 0,
+      random: () => 0.5,
+    });
+
+    await client.request('default', `/api/list.json?crtfc_key=${SECRET}&corp_code=x`);
+
+    // 재시도가 실제로 일어났음을 먼저 확인한다 — 로그가 아예 없으면 테스트가 공허해진다
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines.some((line) => line.includes('rest.retry'))).toBe(true);
+    for (const line of lines) {
+      expect(line).not.toContain(SECRET);
+    }
+  });
+
+  it('HTTP 실패 예외 메시지에 요청 경로(=API 키)가 실리지 않는다', async () => {
+    const { logger, lines } = capturingLogger();
+    // 재시도하지 않는 4xx — 메시지 조립 경로를 그대로 탄다
+    const fetchImpl = (async () => jsonResponse(400, { error: 'bad' })) as unknown as typeof fetch;
+    const client = new RestClient({
+      baseUrl: 'https://opendart.fss.or.kr',
+      logger,
+      fetchImpl,
+      sleep: async () => undefined,
+      clock: () => 0,
+    });
+
+    let rejection: unknown;
+    try {
+      await client.request('default', `/api/list.json?crtfc_key=${SECRET}`);
+    } catch (error) {
+      rejection = error;
+    }
+    expect(rejection).toBeInstanceOf(Error);
+    expect((rejection as Error).message).toContain('400');
+    expect((rejection as Error).message).not.toContain(SECRET);
+    // 잡 레코드에 저장되는 문자열이므로 stack 까지 확인한다
+    expect((rejection as Error).stack ?? '').not.toContain(SECRET);
+    for (const line of lines) {
+      expect(line).not.toContain(SECRET);
+    }
+  });
+
+  it('재시도 소진 후 5xx 예외 메시지에도 요청 경로가 실리지 않는다', async () => {
+    const { logger, lines } = capturingLogger();
+    const fetchImpl = (async () => jsonResponse(500, { error: 'boom' })) as unknown as typeof fetch;
+    const client = new RestClient({
+      baseUrl: 'https://opendart.fss.or.kr',
+      logger,
+      fetchImpl,
+      sleep: async () => undefined,
+      clock: () => 0,
+      random: () => 0.5,
+      maxRetries: 2,
+    });
+
+    await expect(
+      client.request('default', `/api/list.json?crtfc_key=${SECRET}`),
+    ).rejects.toThrow(/500/);
+    expect(lines.some((line) => line.includes('rest.retry'))).toBe(true);
+    for (const line of lines) {
+      expect(line).not.toContain(SECRET);
+    }
+  });
+
   it('tokenProvider 없이 401 이 오면 토큰 재발급을 시도하지 않고 즉시 실패한다', async () => {
     let calls = 0;
     const fetchImpl = (async () => {
