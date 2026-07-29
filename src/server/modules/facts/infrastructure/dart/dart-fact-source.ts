@@ -83,7 +83,10 @@ export function createDartFactSource(
     logger,
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
     ...(options.sleep ? { sleep: options.sleep } : {}),
-    // DART 일일 한도(2만 건)를 아끼기보다 초당 폭주를 막는 것이 목적이다
+    // 목적은 일일 한도 절약이 아니라 초당 폭주 방지다. DART 일일 한도는 4만 건이고
+    // 200종목 10년치가 약 1.8만 건이라 한도는 여유가 있다 — 실제 제약은 벽시계 시간이다
+    // (120ms 간격 = 초당 8.3건 → 1.8만 건에 최소 36분). 이 값을 줄이면 시간이 줄지만
+    // DART 의 초당 제한을 문서로 확인한 뒤에 건드릴 것.
     groupMinIntervalMs: { default: 120 },
   });
 
@@ -117,7 +120,7 @@ export function createDartFactSource(
 
   // stockTotqySttus(주식의 총수 현황)는 fetchFinancials 와 fetchCorporateActions 양쪽에서
   // (corp_code, year, reportCode) 조합마다 필요하다 — 같은 소스 인스턴스 안에서 두 번
-  // 부르면 DART 일일 호출 한도(2만 건)를 그만큼 더 빨리 소진한다. 결과를 공유한다.
+  // 부르면 호출 수가 그만큼 늘어 수집 시간이 길어진다. 결과를 공유한다.
   const shareRowsCache = new Map<string, Promise<readonly DartShareRow[]>>();
   function fetchShareRows(
     corpCode: string,
