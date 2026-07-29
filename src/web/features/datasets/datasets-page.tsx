@@ -45,6 +45,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { api, postForm, postJson } from '@/lib/api-client';
 import { formatDate } from '@/lib/format';
+import { useMarketSupport, type MarketSupport } from '@/lib/use-market-support';
 import { useStockNames, type StockInfo } from '@/lib/use-stock-names';
 import { cn } from '@/lib/utils';
 import { CandleInspectDrawer } from './candle-inspect-drawer';
@@ -593,11 +594,71 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
   );
 }
 
+/** 시장 선택 + 미지원 시장 사유. 두 dialog 가 같은 규칙을 쓰게 묶는다. */
+function MarketSelect({
+  id,
+  value,
+  onChange,
+  markets,
+}: {
+  id: string;
+  value: string;
+  onChange: (market: string) => void;
+  markets: readonly MarketSupport[];
+}) {
+  // 목록이 아직 도착하지 않은 순간(쿼리 진행 중) — SelectContent 가 비어 있으면
+  // 선택된 값과 일치하는 SelectItem 이 없어 트리거가 설명 없이 텅 비어 보인다.
+  // 목록이 올 때까지 잠가 두고 현재 값만 그대로 보여준다.
+  if (markets.length === 0) {
+    return (
+      <Select value={value} disabled>
+        <SelectTrigger id={id} className="h-11 w-full">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={value}>{value}</SelectItem>
+        </SelectContent>
+      </Select>
+    );
+  }
+
+  const unsupported = markets.filter((entry) => !entry.datasetsSupported);
+  return (
+    <>
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger id={id} className="h-11 w-full">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {markets.map((entry) => (
+            <SelectItem
+              key={entry.market}
+              value={entry.market}
+              // 고를 수 있게 두고 400 을 받게 하는 것은 명시가 아니다 —
+              // 사용자는 종목을 다 넣은 뒤에야 알게 된다
+              disabled={!entry.datasetsSupported}
+            >
+              {entry.market}
+              {entry.datasetsSupported ? '' : ' (지원 예정)'}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {unsupported.map((entry) => (
+        <p key={entry.market} className="text-xs text-muted-foreground">
+          {entry.market} 는 아직 지원하지 않습니다 — {entry.reason}
+        </p>
+      ))}
+    </>
+  );
+}
+
 function BrokerDatasetDrawer() {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
   const [market, setMarket] = useState('KR');
+  const markets = useMarketSupport();
   const [collect, setCollect] = useState('1d');
   const [symbolsInput, setSymbolsInput] = useState('');
 
@@ -649,15 +710,7 @@ function BrokerDatasetDrawer() {
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="brokerMarket">시장</Label>
-              <Select value={market} onValueChange={setMarket}>
-                <SelectTrigger id="brokerMarket" className="h-11 w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="KR">KR</SelectItem>
-                  <SelectItem value="US">US</SelectItem>
-                </SelectContent>
-              </Select>
+              <MarketSelect id="brokerMarket" value={market} onChange={setMarket} markets={markets} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="brokerCollect">수집 봉</Label>
@@ -705,6 +758,7 @@ function ImportDrawer() {
     queryFn: () => api<{ datasets: DatasetSummary[] }>('/datasets'),
   });
   const [market, setMarket] = useState('KR');
+  const markets = useMarketSupport();
   const [timeframe, setTimeframe] = useState('1m');
   const [symbol, setSymbol] = useState('');
   const [file, setFile] = useState<File | null>(null);
@@ -771,15 +825,7 @@ function ImportDrawer() {
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="market">시장</Label>
-              <Select value={market} onValueChange={setMarket}>
-                <SelectTrigger id="market" className="h-11 w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="KR">KR</SelectItem>
-                  <SelectItem value="US">US</SelectItem>
-                </SelectContent>
-              </Select>
+              <MarketSelect id="market" value={market} onChange={setMarket} markets={markets} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="timeframe">봉 주기</Label>

@@ -126,6 +126,26 @@ test('full MVP flow', async ({ page }) => {
   await expect(page).toHaveURL(/\/login/, { timeout: 10_000 });
 });
 
+/** 미지원 시장(US) 은 데이터셋 생성 dialog 에서 고를 수 없고, 이유가 항상 보인다 —
+ *  고를 수 있게 두고 종목을 다 넣은 뒤 400 을 받게 하는 것은 명시가 아니다 (Task 13/14). */
+test('unsupported market is disabled with reason shown on dataset create dialog', async ({ page }) => {
+  await page.goto('/login');
+  await page.getByLabel('사용자 이름').fill(USERNAME);
+  await page.getByLabel('비밀번호').fill(PASSWORD);
+  await page.getByRole('button', { name: '로그인' }).click();
+  await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
+
+  await page.goto('/datasets');
+  await page.getByRole('button', { name: '증권사 데이터셋' }).click();
+  await page.getByLabel('시장').click();
+  // Radix SelectItem 은 native disabled 속성이 아니라 aria-disabled/data-disabled 를 쓴다 —
+  // role="option" 은 toBeDisabled() 가 참조하는 kAriaDisabledRoles 에 포함돼 있어 그대로 쓸 수 있다.
+  await expect(page.getByRole('option', { name: /US/ })).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(page.getByText(/US 는 아직 지원하지 않습니다/)).toBeVisible();
+  await expect(page.getByText(/DART 재무 수집은 국내 종목 전용/)).toBeVisible();
+});
+
 test('mobile layout has no horizontal scroll on core screens (스펙 §38)', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'mobile', 'mobile 전용 검증');
 
