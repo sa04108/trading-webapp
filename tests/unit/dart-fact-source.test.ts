@@ -669,6 +669,75 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
     ).toBe(true);
   });
 
+  /**
+   * `sharesBefore` 는 모든 분할 비율의 분모다 — 여기가 틀리면 비율이, 따라서 보정된
+   * 과거 가격 전체가 틀린다. 기존 픽스처는 전부 주식총수 공시를 **하나만** 만들어서
+   * 두 가지 변이가 살아남았다:
+   *   1. 최신값-우선 → 최초값-우선 (이벤트 이전 공시가 여러 개일 때만 갈린다)
+   *   2. `entry.dateKey >= dateKey` → `> dateKey` (이벤트 당일 공시, 즉 분할 **후**
+   *      주식수를 분모로 써 비율이 뒤집힌다)
+   *
+   * 이벤트일(2020-06-15)을 앞뒤로 걸치는 세 공시로 둘을 동시에 죽인다:
+   *   05-15  1,000,000  (이전, 더 오래됨)
+   *   06-01  1,500,000  (이전, 최신 → 올바른 분모)
+   *   06-15  3,000,000  (이벤트 당일 = 분할 후 주식수)
+   * 분할 수량 1,500,000 → 올바른 비율 = (1,500,000+1,500,000)/1,500,000 = 2.
+   * 변이 1 은 2.5, 변이 2 는 1.5 를 낸다.
+   */
+  it('이벤트일을 앞뒤로 걸친 주식총수 공시 중 직전 최신값을 분모로 쓴다', async () => {
+    const sharesByReport: Record<string, { rcept_no: string; istc_totqy: string }> = {
+      '11013': { rcept_no: '20200515000001', istc_totqy: '1,000,000' }, // 2020-05-15
+      '11012': { rcept_no: '20200601000001', istc_totqy: '1,500,000' }, // 2020-06-01
+      '11014': { rcept_no: '20200615000001', istc_totqy: '3,000,000' }, // 2020-06-15 (이벤트 당일)
+    };
+
+    const fetchImpl = (async (url: string) => {
+      const target = String(url);
+      if (target.includes('stockTotqySttus')) {
+        for (const [reportCode, row] of Object.entries(sharesByReport)) {
+          if (target.includes(`reprt_code=${reportCode}`)) {
+            return jsonResponse({
+              status: '000',
+              message: '정상',
+              list: [{ ...row, se: '보통주' }],
+            });
+          }
+        }
+      }
+      if (target.includes('irdsSttus')) {
+        return jsonResponse({
+          status: '000',
+          message: '정상',
+          list: [
+            {
+              isu_dcrs_de: '2020-06-15',
+              isu_dcrs_stle: '주식분할',
+              isu_dcrs_qy: '1,500,000',
+              rcept_no: '20200620000001',
+            },
+          ],
+        });
+      }
+      return jsonResponse({ status: '013', message: 'no data' });
+    }) as unknown as typeof fetch;
+
+    const source = createDartFactSource(
+      { baseUrl: 'https://opendart.fss.or.kr', apiKey: 'K' },
+      LOGGER,
+      { fetchImpl, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER },
+    );
+    const result = await source.fetchCorporateActions({
+      symbols: ['005930'],
+      fromYear: 2020,
+      toYear: 2020,
+      consolidated: true,
+    });
+
+    const actions = result.facts.filter((fact) => fact.field === 'SPLIT_RATIO');
+    expect(actions).toHaveLength(1);
+    expect(actions[0]?.value).toBe(2);
+  });
+
   it('두 종목의 자본변동 접기 키가 서로 새지 않는다', async () => {
     const fetchImpl = (async (url: string) => {
       const target = String(url);

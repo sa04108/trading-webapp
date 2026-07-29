@@ -423,6 +423,113 @@ describe('밸류·퀄리티 랭킹 실행', () => {
     expect(result.fills).toEqual([]);
   });
 
+  /**
+   * 순위 **합** 이 이 전략의 공식 자체인데, 위 픽스처들은 모두 한 종목이 두 지표를
+   * 동시에 이긴다 — 점수를 이익수익률 하나로 줄여도, 자본수익률 하나로 줄여도 전부
+   * 통과한다. 두 지표의 순위가 서로 어긋나고 **합산 승자가 어느 단일 지표 승자와도
+   * 다른** 4종목 픽스처로 그 구멍을 막는다.
+   *
+   * 설계: EBIT 는 네 종목 모두 100,000, 시가총액도 1,000,000(1,000주 × 1,000)으로 같다.
+   * 차입금으로 EV 를, 유형자산으로 투입자본을 벌려 순위만 조정한다.
+   *
+   *   종목   차입금    EV        이익수익률 순위 | 유형자산  투입자본   자본수익률 순위 | 합
+   *   A            0  1,000,000            1   |  400,000   700,000            4   |  5
+   *   B      100,000  1,100,000            2   |  200,000   500,000            2   |  4  ← 승자
+   *   D      200,000  1,200,000            3   |  300,000   600,000            3   |  6
+   *   C      300,000  1,300,000            4   |  100,000   400,000            1   |  5
+   *
+   * 이익수익률만 보면 A, 자본수익률만 보면 C 가 1위다. 합산 승자는 B 하나뿐이다.
+   */
+  describe('두 지표의 순위가 어긋날 때 — 순위 합이 실제로 쓰인다', () => {
+    const OPPOSED: Array<{ symbol: string; borrowings: number; tangible: number }> = [
+      { symbol: 'AAA', borrowings: 0, tangible: 400_000 },
+      { symbol: 'BBB', borrowings: 100_000, tangible: 200_000 },
+      { symbol: 'CCC', borrowings: 300_000, tangible: 100_000 },
+      { symbol: 'DDD', borrowings: 200_000, tangible: 300_000 },
+    ];
+
+    const opposedFacts: Fact[] = OPPOSED.flatMap((entry) =>
+      quarterlyFacts(entry.symbol, disclosed, 25_000, {
+        SHARES_OUTSTANDING: 1_000,
+        CURRENT_ASSETS: 500_000,
+        CURRENT_LIABILITIES: 200_000,
+        TANGIBLE_ASSETS: entry.tangible,
+        SHORT_TERM_BORROWINGS: entry.borrowings,
+      }),
+    );
+
+    function opposedCandles(bars: number): Candle[] {
+      const out: Candle[] = [];
+      for (let index = 0; index < bars; index += 1) {
+        for (const { symbol } of OPPOSED) out.push(candleFor(symbol, index, 1_000));
+      }
+      return out;
+    }
+
+    /** 픽스처가 정말 어긋나 있는지 지표 단위로 먼저 확인한다 */
+    it('픽스처는 두 지표 1위가 서로 다르다 — 그래야 합산을 검증할 수 있다', () => {
+      const metrics = OPPOSED.map((entry) => ({
+        symbol: entry.symbol,
+        ...computeValueQualityMetrics(
+          snapshot(
+            {
+              SHARES_OUTSTANDING: 1_000,
+              CURRENT_ASSETS: 500_000,
+              CURRENT_LIABILITIES: 200_000,
+              TANGIBLE_ASSETS: entry.tangible,
+              SHORT_TERM_BORROWINGS: entry.borrowings,
+            },
+            { ttmOperatingIncome: 100_000 },
+          ),
+          1_000,
+          Q2_2025,
+          2,
+        )!,
+      }));
+
+      const byYield = [...metrics].sort((a, b) => b.earningsYield - a.earningsYield);
+      const byCapital = [...metrics].sort((a, b) => b.returnOnCapital - a.returnOnCapital);
+      expect(byYield[0]?.symbol).toBe('AAA'); // 이익수익률 1위
+      expect(byCapital[0]?.symbol).toBe('CCC'); // 자본수익률 1위 — 다른 종목이어야 한다
+      expect(byYield.map((m) => m.symbol)).toEqual(['AAA', 'BBB', 'DDD', 'CCC']);
+      expect(byCapital.map((m) => m.symbol)).toEqual(['CCC', 'BBB', 'DDD', 'AAA']);
+    });
+
+    it('합산 1위(어느 단일 지표 1위도 아닌 종목)를 편입한다', () => {
+      const result = runBacktest(valueQualityRankStrategy, {
+        candles: opposedCandles(40),
+        initialCash: 10_000_000,
+        execution: ZERO_COST,
+        parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+        randomSeed: 1,
+        maxPositions: 1,
+        facts: opposedFacts,
+      });
+      const bought = new Set(
+        result.fills.filter((fill) => fill.side === 'BUY').map((fill) => fill.symbol),
+      );
+      // 점수를 이익수익률만으로 줄이면 AAA, 자본수익률만으로 줄이면 CCC 가 나온다
+      expect(bought).toEqual(new Set(['BBB']));
+    });
+
+    it('상위 2종목도 합산 순위대로 나온다 (AAA·CCC 동점은 심볼 순으로 깬다)', () => {
+      const result = runBacktest(valueQualityRankStrategy, {
+        candles: opposedCandles(40),
+        initialCash: 10_000_000,
+        execution: ZERO_COST,
+        parameters: { topN: 2, rebalanceMonths: 3, staleQuarters: 2 },
+        randomSeed: 1,
+        maxPositions: 2,
+        facts: opposedFacts,
+      });
+      const bought = new Set(
+        result.fills.filter((fill) => fill.side === 'BUY').map((fill) => fill.symbol),
+      );
+      // 합: BBB 4 < AAA 5 = CCC 5 < DDD 6 — 2위는 동점이라 심볼 오름차순으로 AAA
+      expect(bought).toEqual(new Set(['AAA', 'BBB']));
+    });
+  });
+
   it('같은 입력을 두 번 돌리면 같은 결과가 나온다 (재현성 §9.5)', () => {
     const input = {
       candles: candles(40),
