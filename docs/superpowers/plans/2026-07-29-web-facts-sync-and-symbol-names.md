@@ -1945,6 +1945,8 @@ function setup() {
       symbolsJson: JSON.stringify(['005930', '000660']),
       description: null,
       createdAtMs: 1,
+      // datasets.updated_at_ms 는 NOT NULL 이다 — 빠뜨리면 insert 가 제약 위반으로 죽는다
+      updatedAtMs: 1,
     })
     .run();
   return database;
