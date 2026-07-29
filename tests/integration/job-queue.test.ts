@@ -136,7 +136,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       run: Record<string, unknown>;
       metrics: Record<string, unknown>;
     };
-    expect(body.run.engineVersion).toBe('1.1.0');
+    expect(body.run.engineVersion).toBe('1.2.0');
     expect(body.run.strategyId).toBe('hourly-breakout');
     expect(body.run.feeModelVersion).toBe('kr-equity-default@1.0.0');
     expect(body.run.randomSeed).toBe(42);

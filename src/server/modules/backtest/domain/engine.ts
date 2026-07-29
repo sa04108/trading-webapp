@@ -4,6 +4,8 @@ import type {
   PortfolioView,
   StrategyBarContext,
 } from '../../strategy/domain/strategy.js';
+import type { Fact } from '../../facts/domain/fact.js';
+import { PitFactView } from '../../facts/domain/pit-fact-view.js';
 import { proceedsFromSell, requiredCashForBuy, simulateFill } from './execution.js';
 import {
   computeDrawdownSeries,
@@ -36,6 +38,11 @@ export interface BacktestRunInput {
   readonly randomSeed: number;
   /** 동시 보유 종목 상한 (리스크 검증 §9.2-6) */
   readonly maxPositions: number;
+  /**
+   * 상장시점 팩트. 미지정이면 전략의 fundamentals/corporateActions 가 항상 비어 있다 —
+   * 재무를 쓰지 않는 전략(hourly-breakout 등)은 넘길 필요가 없다.
+   */
+  readonly facts?: readonly Fact[];
 }
 
 export interface EngineHooks {
@@ -63,7 +70,7 @@ export interface BacktestRunResult {
 }
 
 /** 재현성 메타데이터에 기록되는 엔진 버전 (스펙 §9.5) — 체결·지표 로직 변경 시 올린다 */
-export const ENGINE_VERSION = '1.1.0';
+export const ENGINE_VERSION = '1.2.0';
 
 const PROGRESS_INTERVAL_BARS = 500;
 
@@ -117,6 +124,8 @@ export function runBacktest(
   const trades: Trade[] = [];
   const warnings: string[] = [];
 
+  const factView = new PitFactView(input.facts ?? []);
+
   const state = strategy.initialize({ symbols, initialCash: input.initialCash, rng });
 
   const markToMarket = (): number => {
@@ -135,6 +144,9 @@ export function runBacktest(
     }
 
     const bars = barsByTs.get(tsMs) as Map<string, Candle>;
+
+    // 이 시점까지 공시된 팩트만 흡수한다 — 전략이 미래 공시를 볼 자리를 없앤다 (§9.4)
+    factView.advanceTo(tsMs);
 
     // 1~2. 대기 주문 체결 + 현금·포지션 갱신
     const stillPending: OrderIntent[] = [];
@@ -171,6 +183,8 @@ export function runBacktest(
       getHistory: (symbol) => historyBySymbol.get(symbol) ?? [],
       portfolio: portfolioView,
       rng,
+      fundamentals: (symbol) => factView.fundamentals(symbol),
+      corporateActions: (symbol) => factView.corporateActions(symbol, tsMs),
     };
     const decision = strategy.onBars(context, state, input.parameters);
 
@@ -195,7 +209,10 @@ export function runBacktest(
       `기간 종료 시점에 미청산 포지션 ${positions.size}건이 남아 있습니다 (평가금액에는 반영됨).`,
     );
   }
-  warnings.push('생존 편향·공휴일 캘린더·배당/액면분할 보정은 MVP 에서 다루지 않습니다 (§9.4).');
+  warnings.push(
+    '생존 편향·공휴일 캘린더·배당·권리락 보정은 MVP 에서 다루지 않습니다 (§9.4). ' +
+      '액면분할은 분할 이력이 수집된 데이터셋에서 신호 계산 시에만 보정됩니다 — 체결가는 실제 거래 가격입니다.',
+  );
 
   const metrics = computeMetrics(
     equityPoints,
