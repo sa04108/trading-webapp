@@ -4344,9 +4344,13 @@ describe('createDartFactSource — 요청 구성', () => {
     expect(shares).toMatchObject({ value: 1_000_000, unit: 'SHARES' });
   });
 
+  // 이 fake 는 reprt_code 로 좁혀야 한다. 좁히지 않으면 네 보고서 코드에 같은 행을
+  // 네 번 돌려주므로 팩트가 4개 나오고, 그걸 1개로 단정하면 "발행주식수를 사업보고서
+  // 에서만 수집" 하는 잘못된 구현이 초록으로 통과한다 — 실제로 한 번 그렇게 됐다.
+  // 발행주식수는 정기보고서 4종 모두에서 수집한다 (stockTotqySttus 는 reprt_code 필수).
   it('우선주 발행주식수는 합산하지 않는다', async () => {
     const fetchImpl = (async (url: string) => {
-      if (String(url).includes('stockTotqySttus')) {
+      if (String(url).includes('stockTotqySttus') && String(url).includes('reprt_code=11012')) {
         return jsonResponse({
           status: '000',
           message: '정상',
@@ -4374,6 +4378,53 @@ describe('createDartFactSource — 요청 구성', () => {
     const shares = result.facts.filter((fact) => fact.field === 'SHARES_OUTSTANDING');
     expect(shares).toHaveLength(1);
     expect(shares[0]?.value).toBe(1_000_000);
+    // periodKey 도 단정한다 — 수집 주기가 테스트에 보이지 않으면 잘못된 주기가 통과한다
+    expect(shares[0]?.periodKey).toBe('2025Q2');
+  });
+
+  it('네 보고서 코드에서 각각 발행주식수를 수집한다', async () => {
+    const byCode: Record<string, string> = {
+      '11013': '1,000,000',
+      '11012': '1,100,000',
+      '11014': '1,200,000',
+      '11011': '1,300,000',
+    };
+    const fetchImpl = (async (url: string) => {
+      const target = String(url);
+      if (target.includes('stockTotqySttus')) {
+        const code = /reprt_code=(\d+)/.exec(target)?.[1] ?? '';
+        const total = byCode[code];
+        if (!total) return jsonResponse({ status: '013', message: 'no data' });
+        return jsonResponse({
+          status: '000',
+          message: '정상',
+          list: [{ rcept_no: '20250515000001', se: '보통주', istc_totqy: total }],
+        });
+      }
+      return jsonResponse({ status: '013', message: 'no data' });
+    }) as unknown as typeof fetch;
+
+    const source = createDartFactSource(
+      { baseUrl: 'https://opendart.fss.or.kr', apiKey: 'K' },
+      LOGGER,
+      { fetchImpl, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER },
+    );
+    const result = await source.fetchFinancials({
+      symbols: ['005930'],
+      fromYear: 2025,
+      toYear: 2025,
+      consolidated: true,
+    });
+    const shares = result.facts
+      .filter((fact) => fact.field === 'SHARES_OUTSTANDING')
+      .sort((a, b) => (a.periodKey < b.periodKey ? -1 : 1));
+    expect(shares.map((fact) => fact.periodKey)).toEqual([
+      '2025Q1',
+      '2025Q2',
+      '2025Q3',
+      '2025Q4',
+    ]);
+    expect(shares.map((fact) => fact.value)).toEqual([1_000_000, 1_100_000, 1_200_000, 1_300_000]);
   });
 });
 ```
