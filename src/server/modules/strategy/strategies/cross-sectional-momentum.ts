@@ -91,7 +91,12 @@ export const crossSectionalMomentumStrategy: TradingStrategy<
   version: '1.0.0',
   name: '횡단면 모멘텀',
   description:
-    '유니버스 전 종목의 12-1개월 수익률을 랭킹해 상위 N 을 동일가중 보유하고 주기마다 교체합니다. 액면분할은 신호 계산에서 보정합니다.',
+    // "보정합니다" 로 단정하면 안 된다 — 분할 이력이 수집되지 않은 데이터셋에서는
+    // 자본변동 팩트가 없어 원 종가로 계산된다. 무엇도 그 수집을 강제하지 않으므로
+    // (requiresFundamentals 는 이 전략에 걸려 있지도 않다) 엔진 경고·
+    // IMPLEMENTATION_STATUS 와 같은 어법으로 조건을 밝힌다.
+    '유니버스 전 종목의 12-1개월 수익률을 랭킹해 상위 N 을 동일가중 보유하고 주기마다 교체합니다. ' +
+    '액면분할은 분할 이력이 수집된 데이터셋에서만 신호 계산에 보정됩니다 — 체결가는 항상 실제 거래 가격입니다.',
   parameterSchema: crossSectionalMomentumParameters,
 
   initialize(context: StrategyInitializeContext): CrossSectionalMomentumState {

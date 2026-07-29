@@ -217,6 +217,34 @@ describe('엔진 PIT 배선', () => {
     expect(biasWarning).not.toContain('신호 계산');
   });
 
+  it('재무 팩트만 있고 분할 이력이 없으면 보정했다고 말하지 않는다', () => {
+    // 데이터셋에 재무는 있는데 SPLIT_RATIO 가 0건인 상태는 흔하다 — 팩트 건수로만
+    // 판단하면 일어나지 않은 보정을 일어났다고 주장한다.
+    const { strategy } = observingStrategy();
+    const result = runBacktest(strategy, {
+      candles: [bar(0)],
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 1,
+      maxPositions: 5,
+      facts: [
+        {
+          scope: 'SYMBOL',
+          key: '005930',
+          field: 'OPERATING_INCOME',
+          periodKey: '2025Q1',
+          asOfTsMs: START - DAY,
+          value: 100,
+          unit: 'KRW',
+        },
+      ],
+    });
+    const biasWarning = result.warnings.find((warning) => warning.includes('§9.4'));
+    expect(biasWarning).toContain('액면분할도 이 실행에서는 보정되지 않았습니다');
+    expect(biasWarning).not.toContain('신호 계산');
+  });
+
   it('facts 를 넘기면 경고가 분할 보정은 전략의 신호 계산에 한정된다고 말한다', () => {
     const { strategy } = observingStrategy();
     const facts: Fact[] = [

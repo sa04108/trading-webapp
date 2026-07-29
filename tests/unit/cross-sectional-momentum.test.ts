@@ -93,6 +93,11 @@ describe('레지스트리 등록', () => {
   it('전략 목록에 노출된다', () => {
     const registry = new StrategyRegistry();
     expect(registry.list().map((s) => s.id)).toContain('cross-sectional-momentum');
+    // 사용자에게 보이는 설명은 분할 보정을 무조건 약속하면 안 된다 — 분할 이력이
+    // 수집되지 않은 데이터셋에서는 원 종가로 계산되고, 그 수집을 강제하는 것은 없다.
+    const description =
+      registry.list().find((s) => s.id === 'cross-sectional-momentum')?.description ?? '';
+    expect(description).toContain('분할 이력이 수집된 데이터셋에서만');
   });
 
   it('JSON 스키마에 한국어 라벨과 기본값이 실린다', () => {

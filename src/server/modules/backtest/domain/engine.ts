@@ -4,7 +4,7 @@ import type {
   PortfolioView,
   StrategyBarContext,
 } from '../../strategy/domain/strategy.js';
-import type { Fact } from '../../facts/domain/fact.js';
+import { CORPORATE_ACTION_FIELD, type Fact } from '../../facts/domain/fact.js';
 import { PitFactView } from '../../facts/domain/pit-fact-view.js';
 import { proceedsFromSell, requiredCashForBuy, simulateFill } from './execution.js';
 import {
@@ -230,11 +230,17 @@ export function runBacktest(
         '. 그만큼 자본이 현금으로 남았습니다. 전략의 보유 종목 수를 상한 이하로 줄이거나 상한을 올리세요.',
     );
   }
+  // 분할 보정 여부는 "팩트가 있는가" 가 아니라 "**자본변동** 팩트가 있는가" 다 —
+  // 재무만 수집된 데이터셋(SPLIT_RATIO 0건)에서 팩트 건수로 판단하면 일어나지 않은
+  // 보정을 일어났다고 말한다.
+  const hasCorporateActionFacts = (input.facts ?? []).some(
+    (fact) => fact.field === CORPORATE_ACTION_FIELD,
+  );
   warnings.push(
     '생존 편향·공휴일 캘린더·배당·권리락 보정은 MVP 에서 다루지 않습니다 (§9.4). ' +
-      ((input.facts?.length ?? 0) > 0
+      (hasCorporateActionFacts
         ? '액면분할은 분할 이력이 수집된 데이터셋에서, 보정을 사용하는 전략의 신호 계산에만 반영됩니다 — 체결가는 실제 거래 가격입니다.'
-        : '액면분할도 이 실행에서는 보정되지 않았습니다 (팩트 미제공).'),
+        : '액면분할도 이 실행에서는 보정되지 않았습니다 (분할 이력 미수집).'),
   );
 
   const metrics = computeMetrics(
