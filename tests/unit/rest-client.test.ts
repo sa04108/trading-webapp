@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { BrokerRestClient, type TokenProvider } from '../../src/server/modules/broker/infrastructure/rest-client.js';
+import { BrokerRestClient, type TokenProvider } from '../../src/server/shared/rest-client.js';
 import { createLogger } from '../../src/server/shared/logger.js';
 import { loadConfig } from '../../src/server/bootstrap/config.js';
 

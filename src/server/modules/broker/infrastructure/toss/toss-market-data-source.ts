@@ -11,7 +11,7 @@ import {
   type StockInfo,
   type StockInfoSource,
 } from '../../../market-data/application/ports.js';
-import { BrokerRestClient, type TokenProvider } from '../rest-client.js';
+import { BrokerRestClient, type TokenProvider } from '../../../../shared/rest-client.js';
 
 export { UnsupportedTimeframeError } from '../../../market-data/application/ports.js';
 

@@ -1,4 +1,4 @@
-import type { Logger } from '../../../shared/logger.js';
+import type { Logger } from './logger.js';
 
 /**
  * 증권사 공통 REST 클라이언트 (스펙 §13):

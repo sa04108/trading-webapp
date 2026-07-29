@@ -68,6 +68,14 @@ module.exports = {
       to: { path: 'src/server/modules/broker' },
     },
     {
+      name: 'facts-no-broker',
+      severity: 'error',
+      comment:
+        'facts → broker 금지 (§7) — DART 는 증권사가 아니다. 공용 HTTP 클라이언트는 src/server/shared 에 있다',
+      from: { path: 'src/server/modules/facts' },
+      to: { path: 'src/server/modules/broker' },
+    },
+    {
       name: 'web-no-server-internals',
       severity: 'error',
       comment: '웹이 서버 내부 구현을 직접 import 금지 (§7) — 공유는 src/shared 만',
