@@ -8,6 +8,7 @@ import {
   type FetchFinancialsRequest,
 } from '../../application/ports.js';
 import type { Fact } from '../../domain/fact.js';
+import { DART_MIN_INTERVAL_MS } from '../../domain/sync-plan.js';
 import {
   createDartCorpCodeCache,
   type CorpCodeResolver,
@@ -83,11 +84,9 @@ export function createDartFactSource(
     logger,
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
     ...(options.sleep ? { sleep: options.sleep } : {}),
-    // 목적은 일일 한도 절약이 아니라 초당 폭주 방지다. DART 일일 한도는 4만 건이고
-    // 200종목 10년치가 약 1.8만 건이라 한도는 여유가 있다 — 실제 제약은 벽시계 시간이다
-    // (120ms 간격 = 초당 8.3건 → 1.8만 건에 최소 36분). 이 값을 줄이면 시간이 줄지만
-    // DART 의 초당 제한을 문서로 확인한 뒤에 건드릴 것.
-    groupMinIntervalMs: { default: 120 },
+    // 목적은 일일 한도 절약이 아니라 초당 폭주 방지다. 이 값을 화면 추정치와 공유하기
+    // 위해 domain/sync-plan.ts 에서 가져온다 — 두 곳에 숫자를 두면 한쪽만 고쳐진다.
+    groupMinIntervalMs: { default: DART_MIN_INTERVAL_MS },
   });
 
   async function call<T>(
@@ -166,7 +165,7 @@ export function createDartFactSource(
         continue;
       }
 
-      for (let year = request.fromYear; year <= request.toYear; year += 1) {
+      for (const year of request.years) {
         const rowsByReport = new Map<DartReportCode, readonly DartFinancialRow[]>();
 
         for (const reportCode of REPORT_ORDER) {
@@ -215,10 +214,15 @@ export function createDartFactSource(
           facts.push(...parsed.facts);
           gaps.push(...parsed.gaps);
         }
+      }
 
-        // 발행주식수 — 정기보고서별로 조회하고 그 보고서의 분기에 붙인다. DART
-        // stockTotqySttus 는 사업보고서뿐 아니라 분기·반기보고서에도 '주식의 총수
-        // 현황' 섹션을 담고 있어 네 보고서 모두 조회 대상이다.
+      // 발행주식수 — 정기보고서별로 조회하고 그 보고서의 분기에 붙인다. DART
+      // stockTotqySttus 는 사업보고서뿐 아니라 분기·반기보고서에도 '주식의 총수
+      // 현황' 섹션을 담고 있어 네 보고서 모두 조회 대상이다.
+      //
+      // shareYears 는 years + 직전 1년이라 원소 수가 다르다 — 재무 루프 안에 두면
+      // 연도가 어긋나므로 별도 루프로 돈다.
+      for (const year of request.shareYears) {
         for (const reportCode of REPORT_ORDER) {
           const shareRows = await fetchShareRows(corpCode, year, reportCode);
           // 보통주만 쓴다 — 시가총액은 봉 종가(보통주 가격) × 보통주 수다.
@@ -282,7 +286,9 @@ export function createDartFactSource(
       /** 'YYYY-MM-DD' → 그 시점 직전 발행주식수. 분기 공시값 중 이벤트 이전 최신값 */
       const sharesByPeriod: Array<{ dateKey: string; shares: number }> = [];
 
-      for (let year = request.fromYear; year <= request.toYear; year += 1) {
+      // 앵커 때문에 shareYears 를 돈다 — 대상 연도만 읽으면 그 연도 연초 이벤트의
+      // 직전 발행주식수가 없어 비율이 조용히 gap 이 된다 (domain/sync-plan.ts 참고)
+      for (const year of request.shareYears) {
         for (const reportCode of REPORT_ORDER) {
           const shareRows = await fetchShareRows(corpCode, year, reportCode);
           const common = findCommonShareRow(shareRows);
@@ -304,7 +310,7 @@ export function createDartFactSource(
         return found;
       };
 
-      for (let year = request.fromYear; year <= request.toYear; year += 1) {
+      for (const year of request.years) {
         const rows = await call<DartIssuanceRow>('/api/irdsSttus.json', {
           corp_code: corpCode,
           bsns_year: String(year),

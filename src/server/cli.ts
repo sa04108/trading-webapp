@@ -219,7 +219,9 @@ async function factsSync(argv: readonly string[]): Promise<void> {
     // 40분 넘게 걸리는 실행이라 진행 상황을 종목마다 찍는다 — 조용한 40분은 멈춘 것과
     // 구분되지 않는다. 팩트 저장도 종목 단위이므로 이 줄이 곧 "여기까지는 남는다" 다.
     const report = await container.factSyncService.sync(
-      { datasetId, symbols, fromYear, toYear, consolidated },
+      // CLI 는 지정한 구간을 전부 다시 받는다 — 과거 연도 정정공시 재수집이
+      // 이 명령의 역할이다 (웹은 증분)
+      { datasetId, symbols, fromYear, toYear, consolidated, mode: 'FULL' },
       {
         onSymbolDone: ({ symbol, index, total, savedFacts, gapCount }) => {
           console.log(

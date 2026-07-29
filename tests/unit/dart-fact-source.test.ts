@@ -29,11 +29,79 @@ describe('createDartFactSource — 미설정', () => {
   it('설정이 없으면 FactSourceNotConfiguredError 를 던진다', async () => {
     const source = createDartFactSource(null, LOGGER);
     await expect(
-      source.fetchFinancials({ symbols: ['005930'], fromYear: 2025, toYear: 2025, consolidated: true }),
+      source.fetchFinancials({ symbols: ['005930'], years: [2025], shareYears: [2024, 2025], consolidated: true }),
     ).rejects.toBeInstanceOf(FactSourceNotConfiguredError);
     await expect(
-      source.fetchCorporateActions({ symbols: ['005930'], fromYear: 2025, toYear: 2025, consolidated: true }),
+      source.fetchCorporateActions({ symbols: ['005930'], years: [2025], shareYears: [2024, 2025], consolidated: true }),
     ).rejects.toBeInstanceOf(FactSourceNotConfiguredError);
+  });
+});
+
+describe('createDartFactSource — 연도 목록 포트', () => {
+  it('불연속 연도를 요청하면 그 연도만 호출한다', async () => {
+    const calls: string[] = [];
+    const source = createDartFactSource(
+      { baseUrl: 'https://dart.test', apiKey: 'k' },
+      LOGGER,
+      {
+        fetchImpl: async (url) => {
+          calls.push(String(url));
+          return jsonResponse({ status: '013', message: '조회된 데이터가 없습니다' });
+        },
+        sleep: async () => {},
+        corpCodeResolver: { resolve: async () => '00126380' },
+      },
+    );
+
+    await source.fetchFinancials({
+      symbols: ['005930'],
+      years: [2020, 2024],
+      shareYears: [2019, 2020, 2024],
+      consolidated: true,
+    });
+
+    const accountYears = calls
+      .filter((url) => url.includes('fnlttSinglAcntAll'))
+      .map((url) => new URL(url).searchParams.get('bsns_year'));
+    expect([...new Set(accountYears)].sort()).toEqual(['2020', '2024']);
+
+    const shareYears = calls
+      .filter((url) => url.includes('stockTotqySttus'))
+      .map((url) => new URL(url).searchParams.get('bsns_year'));
+    expect([...new Set(shareYears)].sort()).toEqual(['2019', '2020', '2024']);
+  });
+
+  it('자본변동은 years 로, 주식총수 시계열은 shareYears 로 읽는다', async () => {
+    const calls: string[] = [];
+    const source = createDartFactSource(
+      { baseUrl: 'https://dart.test', apiKey: 'k' },
+      LOGGER,
+      {
+        fetchImpl: async (url) => {
+          calls.push(String(url));
+          return jsonResponse({ status: '013', message: '조회된 데이터가 없습니다' });
+        },
+        sleep: async () => {},
+        corpCodeResolver: { resolve: async () => '00126380' },
+      },
+    );
+
+    await source.fetchCorporateActions({
+      symbols: ['005930'],
+      years: [2024],
+      shareYears: [2023, 2024],
+      consolidated: true,
+    });
+
+    const issuanceYears = calls
+      .filter((url) => url.includes('irdsSttus'))
+      .map((url) => new URL(url).searchParams.get('bsns_year'));
+    expect(issuanceYears).toEqual(['2024']);
+
+    const shareYears = calls
+      .filter((url) => url.includes('stockTotqySttus'))
+      .map((url) => new URL(url).searchParams.get('bsns_year'));
+    expect([...new Set(shareYears)].sort()).toEqual(['2023', '2024']);
   });
 });
 
@@ -54,8 +122,8 @@ describe('createDartFactSource — 요청 구성', () => {
     );
     await source.fetchFinancials({
       symbols: ['005930'],
-      fromYear: 2025,
-      toYear: 2025,
+      years: [2025],
+      shareYears: [2024, 2025],
       consolidated: true,
     });
 
@@ -78,8 +146,8 @@ describe('createDartFactSource — 요청 구성', () => {
     );
     await source.fetchFinancials({
       symbols: ['005930'],
-      fromYear: 2025,
-      toYear: 2025,
+      years: [2025],
+      shareYears: [2024, 2025],
       consolidated: false,
     });
     expect(urls.some((url) => url.includes('fs_div=OFS'))).toBe(true);
@@ -99,8 +167,8 @@ describe('createDartFactSource — 요청 구성', () => {
     );
     await source.fetchFinancials({
       symbols: ['005930'],
-      fromYear: 2025,
-      toYear: 2025,
+      years: [2025],
+      shareYears: [2024, 2025],
       consolidated: true,
     });
     for (const code of ['11013', '11012', '11014', '11011']) {
@@ -118,8 +186,8 @@ describe('createDartFactSource — 요청 구성', () => {
     );
     const result = await source.fetchFinancials({
       symbols: ['005930'],
-      fromYear: 2025,
-      toYear: 2025,
+      years: [2025],
+      shareYears: [2024, 2025],
       consolidated: true,
     });
     expect(result.facts).toEqual([]);
@@ -134,7 +202,7 @@ describe('createDartFactSource — 요청 구성', () => {
       { fetchImpl, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER },
     );
     await expect(
-      source.fetchFinancials({ symbols: ['005930'], fromYear: 2025, toYear: 2025, consolidated: true }),
+      source.fetchFinancials({ symbols: ['005930'], years: [2025], shareYears: [2024, 2025], consolidated: true }),
     ).rejects.toThrow(/020/);
   });
 
@@ -181,8 +249,8 @@ describe('createDartFactSource — 요청 구성', () => {
     );
     const result = await source.fetchFinancials({
       symbols: ['005930'],
-      fromYear: 2025,
-      toYear: 2025,
+      years: [2025],
+      shareYears: [2024, 2025],
       consolidated: true,
     });
 
@@ -219,8 +287,10 @@ describe('createDartFactSource — 요청 구성', () => {
     );
     const result = await source.fetchFinancials({
       symbols: ['005930'],
-      fromYear: 2025,
-      toYear: 2025,
+      years: [2025],
+      // 앵커 연도(2024)를 넣으면 이 픽스처가 연도를 가리지 않아 같은 응답이 두 번
+      // 팩트가 된다 — 이 테스트가 세는 대상은 '보통주 한 행' 이므로 대상 연도만 읽는다
+      shareYears: [2025],
       consolidated: true,
     });
     const shares = result.facts.filter((fact) => fact.field === 'SHARES_OUTSTANDING');
@@ -262,8 +332,10 @@ describe('createDartFactSource — 요청 구성', () => {
     );
     const result = await source.fetchFinancials({
       symbols: ['005930'],
-      fromYear: 2025,
-      toYear: 2025,
+      years: [2025],
+      // 앵커 연도를 넣으면 보고서별 픽스처가 2년치로 8개 팩트가 된다 — 이 테스트가
+      // 고정하는 것은 '보고서 네 개 → 분기 네 개' 이므로 대상 연도만 읽는다
+      shareYears: [2025],
       consolidated: true,
     });
     const shares = result.facts.filter((fact) => fact.field === 'SHARES_OUTSTANDING');
@@ -312,8 +384,8 @@ describe('createDartFactSource — 요청 구성', () => {
     );
     const result = await source.fetchFinancials({
       symbols: ['005930'],
-      fromYear: 2025,
-      toYear: 2025,
+      years: [2025],
+      shareYears: [2024, 2025],
       consolidated: true,
     });
     expect(
@@ -353,8 +425,8 @@ describe('createDartFactSource — 요청 구성', () => {
     );
     const result = await source.fetchFinancials({
       symbols: ['005930'],
-      fromYear: 2025,
-      toYear: 2025,
+      years: [2025],
+      shareYears: [2024, 2025],
       consolidated: true,
     });
     expect(
@@ -378,7 +450,7 @@ describe('createDartFactSource — 요청 구성', () => {
 
     let rejection: unknown;
     try {
-      await source.fetchFinancials({ symbols: ['005930'], fromYear: 2025, toYear: 2025, consolidated: true });
+      await source.fetchFinancials({ symbols: ['005930'], years: [2025], shareYears: [2024, 2025], consolidated: true });
     } catch (error) {
       rejection = error;
     }
@@ -420,8 +492,8 @@ describe('createDartFactSource — corpCode.xml 다운로드 (기본 resolver)',
     try {
       await source.fetchFinancials({
         symbols: ['005930'],
-        fromYear: 2025,
-        toYear: 2025,
+        years: [2025],
+        shareYears: [2024, 2025],
         consolidated: true,
       });
     } catch (error) {
@@ -456,8 +528,8 @@ describe('createDartFactSource — corpCode.xml 다운로드 (기본 resolver)',
     try {
       await source.fetchCorporateActions({
         symbols: ['005930'],
-        fromYear: 2025,
-        toYear: 2025,
+        years: [2025],
+        shareYears: [2024, 2025],
         consolidated: true,
       });
     } catch (error) {
@@ -476,7 +548,7 @@ describe('createDartFactSource — corpCode.xml 다운로드 (기본 resolver)',
  * FactSyncService 는 진행이 살아남도록 **종목 하나씩** fetchFinancials/fetchCorporateActions
  * 를 부른다. 그 배선의 전제는 "corp_code 매핑과 주식총수 응답 캐시는 소스 인스턴스
  * 클로저에 있어서 종목별 호출에서도 공유된다" 는 것이다 — 그 전제가 깨지면 종목마다
- * corpCode.xml 을 다시 내려받아 일 한도(2만)를 그만큼 더 빨리 태운다.
+ * corpCode.xml 을 다시 내려받아 일 한도(4만)를 그만큼 더 빨리 태운다.
  */
 describe('createDartFactSource — 종목별 호출에서도 캐시가 공유된다', () => {
   /** 단일 엔트리 STORED ZIP — extractSingleFileFromZip 이 읽는 최소 형태 */
@@ -519,7 +591,12 @@ describe('createDartFactSource — 종목별 호출에서도 캐시가 공유된
 
     // FactSyncService 와 같은 모양: 종목 하나씩, 두 fetch 를 각각
     for (const symbol of ['005930', '000660']) {
-      const scoped = { symbols: [symbol], fromYear: 2025, toYear: 2025, consolidated: true };
+      const scoped = {
+        symbols: [symbol],
+        years: [2025],
+        shareYears: [2024, 2025],
+        consolidated: true,
+      };
       await source.fetchFinancials(scoped);
       await source.fetchCorporateActions(scoped);
     }
@@ -543,12 +620,18 @@ describe('createDartFactSource — 종목별 호출에서도 캐시가 공유된
       { fetchImpl, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER },
     );
 
-    const scoped = { symbols: ['005930'], fromYear: 2025, toYear: 2025, consolidated: true };
+    const scoped = {
+      symbols: ['005930'],
+      years: [2025],
+      shareYears: [2024, 2025],
+      consolidated: true,
+    };
     await source.fetchFinancials(scoped);
     await source.fetchCorporateActions(scoped);
 
-    // 보고서 4종 × 1년 = 4회. 두 fetch 가 각각 부르면 8회가 된다.
-    expect(urls.filter((url) => url.includes('stockTotqySttus'))).toHaveLength(4);
+    // 보고서 4종 × 주식총수 연도 2년(대상 연도 + 앵커 1년) = 8회. 두 fetch 가 각각
+    // 부르면 16회가 된다 — 캐시 키에 연도가 들어 있어야 이 수가 맞는다.
+    expect(urls.filter((url) => url.includes('stockTotqySttus'))).toHaveLength(8);
   });
 });
 
@@ -600,8 +683,8 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
     );
     const result = await source.fetchCorporateActions({
       symbols: ['005930'],
-      fromYear: 2020,
-      toYear: 2021,
+      years: [2020, 2021],
+      shareYears: [2019, 2020, 2021],
       consolidated: true,
     });
 
@@ -656,8 +739,8 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
     );
     const result = await source.fetchCorporateActions({
       symbols: ['005930'],
-      fromYear: 2020,
-      toYear: 2021,
+      years: [2020, 2021],
+      shareYears: [2019, 2020, 2021],
       consolidated: true,
     });
 
@@ -728,8 +811,8 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
     );
     const result = await source.fetchCorporateActions({
       symbols: ['005930'],
-      fromYear: 2020,
-      toYear: 2020,
+      years: [2020],
+      shareYears: [2019, 2020],
       consolidated: true,
     });
 
@@ -782,8 +865,8 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
     );
     const result = await source.fetchCorporateActions({
       symbols: ['005930', '000660'],
-      fromYear: 2020,
-      toYear: 2020,
+      years: [2020],
+      shareYears: [2019, 2020],
       consolidated: true,
     });
 

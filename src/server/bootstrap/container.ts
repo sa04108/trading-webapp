@@ -34,6 +34,7 @@ import { JobOrchestrator } from '../modules/backtest/application/job-orchestrato
 import { JobQueue } from '../modules/backtest/application/job-queue.js';
 import { ResultsService } from '../modules/backtest/application/results-service.js';
 import type { FactRepository } from '../modules/facts/application/ports.js';
+import { SqliteFactCoverageStore } from '../modules/facts/application/fact-coverage-store.js';
 import { FactSyncService } from '../modules/facts/application/fact-sync-service.js';
 import { createDartFactSource } from '../modules/facts/infrastructure/dart/dart-fact-source.js';
 import { ParquetFactRepository } from '../modules/facts/infrastructure/parquet-fact-repository.js';
@@ -202,12 +203,14 @@ export function createContainer(config: AppConfig): Container {
   );
   // 팩트도 데이터셋 내용이다 — 캔들과 같은 버전 체인에 올린다 (§9.5).
   // DatasetService 를 통째로 넘기지 않고 좁은 포트(DatasetVersionBumper)로 받는다.
+  const factCoverageStore = new SqliteFactCoverageStore(database.db);
   const factSyncService = new FactSyncService(
     factSource,
     factRepository,
     logger,
     datasetService,
     clock,
+    factCoverageStore,
   );
 
   const systemStatus: SystemStatusProviders = {
