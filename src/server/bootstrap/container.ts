@@ -36,8 +36,7 @@ import { StrategyRegistry } from '../modules/strategy/application/strategy-regis
 import { JobOrchestrator } from '../modules/backtest/application/job-orchestrator.js';
 import { JobQueue } from '../modules/backtest/application/job-queue.js';
 import { ResultsService } from '../modules/backtest/application/results-service.js';
-import { deriveFactYearRange } from '../modules/market-data/domain/fact-year-range.js';
-import { planFactSync } from '../modules/facts/domain/sync-plan.js';
+import { createFactsPhase, createFactsSyncEstimator } from './facts-wiring.js';
 import type { FactRepository } from '../modules/facts/application/ports.js';
 import { SqliteFactCoverageStore } from '../modules/facts/application/fact-coverage-store.js';
 import { FactSyncService } from '../modules/facts/application/fact-sync-service.js';
@@ -182,99 +181,20 @@ export function createContainer(config: AppConfig): Container {
     factCoverageStore,
   );
 
-  // 재무 단계 — market-data 는 facts 를 import 하지 않는다. 조립부가 잇는다.
-  // config.dartApiKey 가 없으면 넘기지 않는다 → BrokerSyncService 가 skipReason 을 남긴다.
+  // market-data ↔ facts 를 잇는 두 클로저는 facts-wiring.ts 에 있다 — 누적 처리와
+  // plan 값 그대로 넘기기가 타입으로 잡히지 않는 종류의 버그라 테스트가 겨눌 수 있는
+  // 자리에 두었다 (tests/unit/facts-wiring.test.ts).
+  // config.dartApiKey 가 없으면 factsPhase 를 만들지 않는다 → BrokerSyncService 가
+  // skipReason 을 남긴다.
   const factsPhase = config.dartApiKey
-    ? async (args: {
-        datasetId: string;
-        fromYear: number;
-        toYear: number;
-        onProgress: (progress: {
-          symbolsDone: number;
-          symbolTotal: number;
-          savedFacts: number;
-          gapCount: number;
-        }) => void;
-        shouldStop: () => boolean;
-      }) => {
-        const dataset = datasetService.getDataset(args.datasetId);
-        const symbols = dataset?.symbols ?? [];
-        // FactPhaseProgress 는 **누적**, FactSyncProgress 는 **종목 단위**다. 필드를
-        // 1:1 로 옮기면 (둘 다 number 라 타입으로는 잡히지 않는다) 화면 카운터가
-        // 종목마다 12 → 0 → 8 → 0 으로 튄다 — 여기서 누적해서 넘긴다.
-        let savedFacts = 0;
-        let gapCount = 0;
-        const report = await factSyncService.sync(
-          {
-            datasetId: args.datasetId,
-            symbols,
-            fromYear: args.fromYear,
-            toYear: args.toYear,
-            consolidated: true,
-            // 웹은 증분이다 — 매번 전 구간을 다시 받으면 45분짜리 버튼이 된다.
-            // 과거 연도 정정공시 전체 재수집은 CLI(facts:sync --from --to)가 담당한다.
-            mode: 'INCREMENTAL',
-          },
-          {
-            shouldStop: args.shouldStop,
-            onSymbolDone: (progress) => {
-              savedFacts += progress.savedFacts;
-              gapCount += progress.gapCount;
-              args.onProgress({
-                symbolsDone: progress.index,
-                symbolTotal: progress.total,
-                savedFacts,
-                gapCount,
-              });
-            },
-          },
-        );
-        return {
-          savedFacts: report.savedFacts,
-          // 리포트는 누락을 목록으로 돌려준다 — 잡 상태에는 개수만 싣는다
-          gapCount: report.gaps.length,
-          stopReason: report.stopReason,
-          failureMessage: report.failureMessage,
-        };
-      }
+    ? createFactsPhase({ datasetService, factSyncService })
     : undefined;
-
-  /**
-   * 재무 수집 예상. 실행 경로(BrokerSyncService → factsPhase)와 **같은 두 함수** 를
-   * 부른다 — deriveFactYearRange 로 연도를, planFactSync 로 호출 수·시간을. 갈라지면
-   * 화면의 숫자만 조용히 틀려진다.
-   */
-  const factsSyncEstimator = (datasetId: string): FactsSyncEstimate => {
-    if (!config.dartApiKey) {
-      return { basis: 'UNSUPPORTED', reason: 'DART_API_KEY 가 설정되지 않았습니다.' };
-    }
-    const dataset = datasetService.getDataset(datasetId);
-    if (!dataset) return { basis: 'UNSUPPORTED', reason: '데이터셋을 찾을 수 없습니다.' };
-    if (dataset.market !== 'KR') {
-      return { basis: 'UNSUPPORTED', reason: 'DART 재무 수집은 KR 시장 데이터셋만 지원합니다.' };
-    }
-    const range = deriveFactYearRange(datasetService.getCoverage(datasetId), dataset.market);
-    if (range === null) return { basis: 'AFTER_CANDLES' };
-
-    // 호출 수·시간은 plan 이 준 값을 그대로 쓴다 — 상수로 다시 계산하면 앵커가
-    // 연속 구간마다 붙는 불연속 증분에서 과소 추정이 된다 (sync-plan.ts 참고).
-    const plan = planFactSync({
-      symbols: dataset.symbols,
-      fromYear: range.fromYear,
-      toYear: range.toYear,
-      currentYear: new Date(clock.now()).getUTCFullYear(),
-      coveredBySymbol: factCoverageStore.getCoveredYears(datasetId),
-      mode: 'INCREMENTAL',
-    });
-    return {
-      basis: 'PLANNED',
-      fromYear: range.fromYear,
-      toYear: range.toYear,
-      calls: plan.calls,
-      estimatedMs: plan.estimatedMs,
-      overDailyLimit: plan.overDailyLimit,
-    };
-  };
+  const factsSyncEstimator = createFactsSyncEstimator({
+    dartApiKey: config.dartApiKey,
+    datasetService,
+    factCoverageStore,
+    clock,
+  });
 
   // 증권사 선택은 조립부 전용 지식 (§2.4) — 애플리케이션은 MarketDataSource 만 안다.
   // 자격 증명 미설정이면 어댑터가 포트 에러를 던지는 비활성 소스가 된다.
