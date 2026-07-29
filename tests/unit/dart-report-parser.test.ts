@@ -266,6 +266,51 @@ describe('parseFinancialRows — 누적값 차분', () => {
     expect(facts.find((f) => f.periodKey === '2025Q1')?.value).toBe(100);
   });
 
+  /**
+   * asOf 는 **행 단위** 로 구해야 한다 — 정정공시 등으로 한 버킷 안에 rcept_no 가 섞이면
+   * `rows[0]` 하나를 대표로 쓰는 구현은 다른 행에 남의 접수일을 물려 PIT 컷오프를
+   * 틀리게 만든다. 코드 주석이 정확히 그 버그를 막고 있다고 말하는데, 기존 픽스처는 한
+   * 버킷의 모든 행이 같은 rcept_no 를 써서 `rows[0]` 로 되돌려도 전부 통과했다.
+   */
+  it('버킷 안에 접수번호가 섞이면 각 행이 자기 접수일을 asOf 로 쓴다 (정정공시)', () => {
+    const CORRECTED = '20250901000009'; // 원 공시(0515)보다 늦게 접수된 정정공시
+    const rows = new Map<DartReportCode, DartFinancialRow[]>([
+      [
+        '11013',
+        [
+          balanceRow('11013', 500), // rcept_no = 20250515000001
+          {
+            ...balanceRow('11013', 700),
+            account_id: 'ifrs-full_PropertyPlantAndEquipment',
+            account_nm: '유형자산',
+            rcept_no: CORRECTED,
+          },
+        ],
+      ],
+    ]);
+    const { facts } = parseFinancialRows('005930', rows);
+
+    const assets = facts.find((fact) => fact.field === 'CURRENT_ASSETS');
+    const tangible = facts.find((fact) => fact.field === 'TANGIBLE_ASSETS');
+    expect(assets?.asOfTsMs).toBe(receiptDateToAsOfTsMs('20250515000001'));
+    // rows[0] 을 대표로 쓰면 이 값이 원 공시의 asOf 로 잘못 내려앉는다
+    expect(tangible?.asOfTsMs).toBe(receiptDateToAsOfTsMs(CORRECTED));
+    expect(tangible?.asOfTsMs).not.toBe(assets?.asOfTsMs);
+  });
+
+  it('손익 계정도 정정공시 행의 접수일을 자기 asOf 로 쓴다', () => {
+    const CORRECTED = '20250901000009';
+    const rows = new Map<DartReportCode, DartFinancialRow[]>([
+      ['11013', [incomeRow('11013', 100)]],
+      // 반기 버킷의 손익 행이 정정공시로 다시 접수됐다
+      ['11012', [{ ...incomeRow('11012', 250), rcept_no: CORRECTED }]],
+    ]);
+    const { facts } = parseFinancialRows('005930', rows);
+    const q2 = facts.find((f) => f.periodKey === '2025Q2' && f.field === 'OPERATING_INCOME');
+    expect(q2?.value).toBe(150);
+    expect(q2?.asOfTsMs).toBe(receiptDateToAsOfTsMs(CORRECTED));
+  });
+
   it('행의 접수번호를 읽을 수 없으면 그 행만 gap 으로 남기고 값을 만들지 않는다', () => {
     const rows = new Map<DartReportCode, DartFinancialRow[]>([
       ['11013', [{ ...incomeRow('11013', 100), rcept_no: '짧음' }]],
@@ -633,6 +678,12 @@ describe('parseIssuanceRows — 발행형태 분류 (전수 테이블)', () => {
     { style: '주식병합', direction: 'decrease' },
     { style: '무상감자', direction: 'decrease' },
     { style: '유상증자(주주배정)', direction: 'skip' },
+    // 유상감자 — classifyCapitalChange 의 첫 두 검사 순서를 뒤집으면(유상 검사를 감자
+    // 검사 뒤로 옮기면) 이 행이 DECREASE 로 분류돼 가격을 보정하는 가짜 SPLIT_RATIO 를
+    // 낸다. 함수 주석이 "이 순서를 테스트 없이 바꾸면 안 된다" 고 못박고 있는데 정작
+    // 그 순서를 지키는 행이 없었다.
+    { style: '유상감자', direction: 'skip' },
+    { style: '유상감자(주주배정)', direction: 'skip' },
   ];
 
   for (const { style, direction } of cases) {
