@@ -87,6 +87,14 @@ export function deriveFactYearRange(
 **호출자는 둘이고 같은 함수를 쓴다**: 실행 경로의 `BrokerSyncService`(§1), 추정 경로의
 `factsSyncEstimator` 클로저(§7). 갈라지면 화면의 연도와 실제 수집 연도가 달라진다.
 
+**비KR 은 `null` 이 아니라 던진다.** `deriveFactYearRange` 가 `getSessionForMarket` 을
+부르므로 세션 미정의 시장에서는 `UnsupportedMarketSessionError` 가 올라온다. §1 의 라우트
+선검증이 그 앞을 막지만, 잡 단계 안에서는 이 호출이 `factsPhase` 를 감싼 try 밖에 있어
+예외가 `run` 의 catch 로 올라가 **봉 결과까지 실패로 덮는다** — 재무 단계가 throw 하지
+않게 만든 이유(§5)가 여기서 무너진다. 지금은 US 데이터셋을 만들 수 없어(D-006) 도달하지
+않지만, `runFactsPhase` 가 `market !== 'KR'` 을 `skipReason` 으로 먼저 걸러야 방어선이
+닫힌다 (2026-07-30 리뷰).
+
 **`null` 이면**(봉이 하나도 없으면) 재무 단계를 건너뛰고 `facts_json.skipReason` 에
 `'봉이 수집되지 않아 재무 연도 범위를 정할 수 없습니다'` 를 기록한다. 잡은 봉 단계
 결과에 따라 COMPLETED 로 끝나되 UI 가 이 사유를 경고로 띄운다 — 조용히 0건으로 끝나면
@@ -131,7 +139,7 @@ export type FactSyncMode = 'FULL' | 'INCREMENTAL';
 export interface FactSyncPlan {
   /** 종목 → 재무·자본변동을 수집할 연도 (오름차순) */
   readonly yearsBySymbol: ReadonlyMap<string, readonly number[]>;
-  /** 종목 → 주식총수를 읽을 연도 (= 위 + 직전 1년) */
+  /** 종목 → 주식총수를 읽을 연도 (= 위 + **각 연도의** 직전 1년) */
   readonly shareYearsBySymbol: ReadonlyMap<string, readonly number[]>;
   readonly calls: number;
   readonly estimatedMs: number;
@@ -154,6 +162,17 @@ export function planFactSync(args: {
 - `INCREMENTAL` — `Y_s = ([fromYear..toYear] \ covered_s) ∪ ({currentYear} ∩ [fromYear..toYear])`.
   현재 연도는 항상 다시 읽는다 — 분기 보고서가 그 안에서 갱신된다.
 - **주식총수 연도 = `Y_s ∪ { y − 1 : y ∈ Y_s }`.** 아래 근거 참고.
+- **중복 심볼은 한 번만 계획한다** — 호출 수가 부풀면 예상 시간도 부푼다.
+
+> **미해결 (2026-07-30 리뷰):** `planFactSync` 는 심볼을 `Set` 으로 접지만
+> `FactSyncService.sync` 는 `request.symbols` 를 그대로 순회한다. 데이터셋 생성 경로가
+> 중복을 제거하지 않으므로(`createBrokerDataset` 은 패턴만 검사하고 `POST /datasets` 의
+> `z.array` 에도 uniqueness refine 이 없다 — `importCsv` 쪽만 `Set` 을 쓴다) 중복이
+> 섞이면 어댑터가 `fnlttSinglAcntAll`·`irdsSttus` 를 다시 쏘고(`stockTotqySttus` 만
+> `shareRowsCache` 로 걸린다) 실제 호출이 `plan.calls` 를 넘는다. `symbolTotal` 도
+> 중복을 센다. 이 절의 전제("추정치와 실제 실행이 같은 규칙")를 깨는 유일하게 남은
+> 경로다. 어디서 접을지 — 서비스 순회, 데이터셋 생성, 또는 라우트 스키마 — 를 정해야
+> 한다.
 
 ### 주식총수를 한 해 더 읽는 이유
 
@@ -217,7 +236,13 @@ export const DART_MIN_INTERVAL_MS = 120;
 export const DART_DAILY_CALL_LIMIT = 40_000;
 ```
 
-`calls = Σ_s (|Y_s| × 9 + (|Y_s| > 0 ? 4 : 0))`, `estimatedMs = calls × 120`.
+`calls = Σ_s (|Y_s| × 9 + (|S_s| − |Y_s|) × 4)`, `estimatedMs = calls × 120`.
+
+`S_s` 는 §3 의 주식총수 연도(`Y_s ∪ { y − 1 : y ∈ Y_s }`)이고, `|S_s| − |Y_s|` 가 곧
+**연속 구간 수** — 즉 앵커 수다. `Y_s` 가 연속이면 구간이 하나라 `|Y_s| × 9 + 4` 로
+접히고, 아래 표가 모두 그 경우다. (2026-07-30 리뷰에서 정정. 초안의
+`(|Y_s| > 0 ? 4 : 0)` 는 §3 이 앵커를 구간마다로 바꾸기 전의 식이라 불연속 구간에서
+실제 호출 수보다 작게 나왔다.)
 
 **`dart-fact-source.ts` 의 `groupMinIntervalMs` 를 `DART_MIN_INTERVAL_MS` 에서 가져오게
 바꾼다.** 그러지 않으면 rate limit 을 조정했을 때 화면의 추정치만 조용히 틀려진다.
@@ -257,7 +282,11 @@ interface FactsJobState {
   gapCount: number;
   /** 중단 사유 (FactSyncReport.failureMessage) */
   failureMessage: string | null;
-  /** 재무 단계를 건너뛴 사유 (§2) */
+  /**
+   * 재무 단계를 **시작조차 하지 않은** 사유. 두 갈래다 — 봉이 없어 연도 범위를 못 정한
+   * 경우(§2)와 `factsPhase` 가 주입되지 않은 경우(DART 키 미설정). 후자는 §7 의 라우트
+   * 선검증이 400 으로 막으므로 정상 경로에서는 나오지 않는 방어선이다.
+   */
   skipReason: string | null;
 }
 ```
@@ -284,12 +313,31 @@ interface FactsJobState {
 
 ```sql
 SELECT candles_ms FROM data_import_jobs
-WHERE dataset_id = ? AND source_type = 'BROKER' AND status = 'COMPLETED'
+WHERE dataset_id = ? AND source_type = 'BROKER'
   AND candles_ms IS NOT NULL
   AND created_at_ms > (SELECT MAX(backfill_done_at_ms) FROM broker_sync_state
                        WHERE dataset_id = ?)
-ORDER BY completed_at_ms DESC LIMIT 1;
+ORDER BY created_at_ms DESC LIMIT 1;
 ```
+
+정렬 기준은 `created_at_ms` 다. 같은 데이터셋의 BROKER 잡은 겹칠 수 없으므로
+(`startSync` 가 `SyncAlreadyRunningError` 로 막는다) 시작 순서가 곧 종료 순서이고,
+`completed_at_ms` 는 nullable 이라 정렬 기준으로 쓰면 값이 없는 행에서 순서가 흔들린다.
+(초안은 `completed_at_ms` 였다 — 구현이 이 근거로 바꿨다.)
+
+**`status = 'COMPLETED'` 조건은 두지 않는다** (2026-07-30 리뷰에서 정정. 초안에는 있었다.)
+재무 단계가 멈추면 잡은 `FAILED`/`CANCELLED` 로 적히는데 그때도 봉 단계는 이미 끝나
+`candles_ms` 가 측정돼 있다(`broker-sync-service.ts` 의 `run`). 상태로 거르면 DART 오류
+하나가 멀쩡한 봉 실측치를 버리고 예상치가 `UNKNOWN` 으로 남는다 — `candles_ms` 를 잡
+전체 소요시간과 분리한 이유가 상태 필터를 통해 그대로 되돌아온다.
+
+`candles_ms IS NOT NULL` 자체가 이미 "봉 단계가 끝까지 갔다" 를 함의한다. 봉 도중에
+죽은 잡은 이 값을 남기지 않는다(`candlesMs` 는 `refreshCoverage` 직후에만 채워진다).
+
+> **코드는 이 정정을 아직 따르지 않는다.** `dataset-service.ts` 의
+> `getCandleSyncEstimate` 에 `eq(dataImportJobs.status, 'COMPLETED')` 가 남아 있고
+> `candle-sync-estimate.test.ts` 의 `'실패한 잡은 쓰지 않는다'` 가 그 동작을 고정한다.
+> 조건과 그 테스트를 함께 걷어야 한다.
 
 두 개의 문턱이 있다:
 
@@ -418,7 +466,8 @@ factsSyncEstimator: (datasetId: string) => FactsSyncEstimate
 ## 9. 테스트
 
 - `planFactSync` 단위 — FULL/INCREMENTAL, 불연속 covered years, 현재 연도 항상 포함,
-  주식총수 앵커 연도(`min(Y)−1`), 호출 수·예상 시간, 한도 초과 경계
+  주식총수 앵커 연도(**연속 구간마다** 직전 1년), 불연속이면 앵커 호출이 구간 수만큼
+  늘어나는지, 중복 심볼을 한 번만 계획하는지, 호출 수·예상 시간, 한도 초과 경계
 - `deriveFactYearRange` 단위 — KST 연말/연초 경계, `barCount === 0` 만 있는 경우,
   커버리지 없음 → `null`
 - `dart-fact-source` 단위 — `years`/`shareYears` 포트 변경 후 불연속 연도 요청,
@@ -437,7 +486,8 @@ factsSyncEstimator: (datasetId: string) => FactsSyncEstimate
 
 ## 10. 마이그레이션
 
-`pnpm db:generate` 로 두 개를 만든다:
+`pnpm db:generate` 로 두 변경을 만든다 (drizzle-kit 이 한 파일에 담는다 — 실제 산출물은
+`migrations/0003_ancient_tyrannus.sql` 하나다):
 
 1. `data_import_jobs` + `phase`, `candles_ms`, `facts_json` (전부 nullable — 기존 행은
    그대로 남고 UI 는 null 을 "재무 미요청" 으로 읽는다)
