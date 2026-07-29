@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CloudDownload, Plus, RefreshCw, Trash2, Upload, X } from 'lucide-react';
+import { Check, CloudDownload, Pencil, Plus, RefreshCw, Trash2, Upload, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
@@ -111,6 +111,8 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
   const queryClient = useQueryClient();
   const [startedJobId, setStartedJobId] = useState<string | null>(null);
   const [newSymbol, setNewSymbol] = useState('');
+  // null = 보기 모드, 문자열 = 편집 중인 입력값
+  const [nameDraft, setNameDraft] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [inspectSymbol, setInspectSymbol] = useState<string | null>(null);
   // 새로고침·다른 탭에서 시작된 동기화에도 붙는다 — 서버가 실행 중 잡을 알려준다
@@ -172,6 +174,19 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
     onError: (error: unknown) => toast.error(errorMessage(error, '심볼 변경 실패')),
   });
 
+  const renameMutation = useMutation({
+    mutationFn: (name: string) =>
+      api<{ dataset: DatasetSummary }>(`/datasets/${dataset.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name }),
+      }),
+    onSuccess: async () => {
+      setNameDraft(null);
+      await queryClient.invalidateQueries({ queryKey: ['datasets'] });
+    },
+    onError: (error: unknown) => toast.error(errorMessage(error, '이름 변경 실패')),
+  });
+
   const deleteMutation = useMutation({
     mutationFn: () => api<void>(`/datasets/${dataset.id}`, { method: 'DELETE' }),
     onSuccess: async () => {
@@ -183,12 +198,64 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
 
   const syncing = syncMutation.isPending || syncJobId !== null;
   const cancelling = cancelMutation.isPending;
+  const trimmedDraft = nameDraft?.trim() ?? '';
+  const canSaveName =
+    trimmedDraft.length > 0 && trimmedDraft !== dataset.name && !renameMutation.isPending;
+  const saveName = () => {
+    if (trimmedDraft === dataset.name) setNameDraft(null);
+    else if (canSaveName) renameMutation.mutate(trimmedDraft);
+  };
 
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex flex-wrap items-center gap-2 text-base">
-          {dataset.name}
+          {nameDraft === null ? (
+            <>
+              {dataset.name}
+              <button
+                type="button"
+                aria-label="데이터셋 이름 수정"
+                className="text-muted-foreground hover:text-foreground"
+                onClick={() => setNameDraft(dataset.name)}
+              >
+                <Pencil className="size-3.5" />
+              </button>
+            </>
+          ) : (
+            <span className="flex items-center gap-1">
+              <Input
+                className="h-9 max-w-56"
+                value={nameDraft}
+                maxLength={64}
+                autoFocus
+                disabled={renameMutation.isPending}
+                onChange={(e) => setNameDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') saveName();
+                  if (e.key === 'Escape') setNameDraft(null);
+                }}
+              />
+              <button
+                type="button"
+                aria-label="이름 저장"
+                className="text-muted-foreground hover:text-foreground disabled:opacity-50"
+                disabled={!canSaveName}
+                onClick={saveName}
+              >
+                <Check className="size-4" />
+              </button>
+              <button
+                type="button"
+                aria-label="이름 수정 취소"
+                className="text-muted-foreground hover:text-foreground"
+                disabled={renameMutation.isPending}
+                onClick={() => setNameDraft(null)}
+              >
+                <X className="size-4" />
+              </button>
+            </span>
+          )}
           <Badge variant="secondary">{dataset.market}</Badge>
           <Badge variant="secondary">{dataset.timeframe}</Badge>
           <Badge variant="outline">v{dataset.latestVersion}</Badge>
@@ -458,6 +525,11 @@ function ImportDrawer() {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [datasetName, setDatasetName] = useState('');
+  // 기존 이름 자동완성 — import 는 이름이 upsert key 라 오타·옛 이름이 새 데이터셋을 만든다
+  const { data: existing } = useQuery({
+    queryKey: ['datasets'],
+    queryFn: () => api<{ datasets: DatasetSummary[] }>('/datasets'),
+  });
   const [market, setMarket] = useState('KR');
   const [timeframe, setTimeframe] = useState('1m');
   const [symbol, setSymbol] = useState('');
@@ -511,9 +583,16 @@ function ImportDrawer() {
               id="datasetName"
               className="h-11"
               placeholder="kr-hourly-v1"
+              list="import-dataset-names"
               value={datasetName}
               onChange={(e) => setDatasetName(e.target.value)}
             />
+            <datalist id="import-dataset-names">
+              {existing?.datasets.map((d) => <option key={d.id} value={d.name} />)}
+            </datalist>
+            <p className="text-xs text-muted-foreground">
+              기존 이름을 선택하면 그 데이터셋에 추가되고, 새 이름이면 새로 만듭니다.
+            </p>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">

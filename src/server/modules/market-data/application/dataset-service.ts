@@ -326,6 +326,29 @@ export class DatasetService {
   }
 
   /**
+   * 이름 변경 — 저장된 참조는 전부 datasetId 라 안전하다. 단 CSV import 는
+   * 이름을 upsert key 로 쓰므로, 변경 후 옛 이름으로 import 하면 새 데이터셋이 생긴다.
+   * 이름은 백테스트가 소비하는 유효 데이터가 아니므로 버전은 올리지 않는다 (§9.5).
+   */
+  renameDataset(datasetId: string, name: string): DatasetSummary {
+    const row = this.db.select().from(datasets).where(eq(datasets.id, datasetId)).get();
+    if (!row) throw new Error(`데이터셋을 찾을 수 없습니다: ${datasetId}`);
+
+    if (row.name !== name) {
+      const taken = this.db.select().from(datasets).where(eq(datasets.name, name)).get();
+      if (taken) throw new Error(`같은 이름의 데이터셋이 이미 있습니다: ${name}`);
+      this.db
+        .update(datasets)
+        .set({ name, updatedAtMs: this.clock.now() })
+        .where(eq(datasets.id, datasetId))
+        .run();
+      this.audit.record('system', 'dataset.renamed', { datasetId, from: row.name, to: name });
+    }
+    const updated = this.db.select().from(datasets).where(eq(datasets.id, datasetId)).get();
+    return this.toSummary(updated as typeof datasets.$inferSelect);
+  }
+
+  /**
    * 데이터셋 삭제 — 메타데이터(cascade)와 물리 Parquet 을 함께 지운다.
    * 물리 삭제를 먼저 한다: 파일 삭제가 실패하면 중단되어 데이터셋이 온전히 남고,
    * DB 를 먼저 지우면 실패 시 디스크에 고아 파티션이 조용히 남는다.

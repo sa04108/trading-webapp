@@ -29,14 +29,18 @@ const createDatasetSchema = z.object({
 const syncSchema = z.object({ datasetId: z.string().min(1) });
 
 const symbolSchema = z.string().regex(/^[A-Za-z0-9._-]{1,20}$/);
-const updateSymbolsSchema = z
+const updateDatasetSchema = z
   .object({
+    name: z.string().trim().min(1).max(64).optional(),
     addSymbols: z.array(symbolSchema).max(1000).optional(),
     removeSymbols: z.array(symbolSchema).max(1000).optional(),
   })
-  .refine((body) => (body.addSymbols?.length ?? 0) + (body.removeSymbols?.length ?? 0) > 0, {
-    message: '변경할 심볼이 없습니다',
-  });
+  .refine(
+    (body) =>
+      body.name !== undefined ||
+      (body.addSymbols?.length ?? 0) + (body.removeSymbols?.length ?? 0) > 0,
+    { message: '변경할 내용이 없습니다' },
+  );
 
 const MAX_CSV_BYTES = 50 * 1024 * 1024;
 
@@ -221,21 +225,30 @@ export function registerDatasetRoutes(
     }
   });
 
-  /** 심볼 목록 편집 — 제거는 수집 중단 밸브, 기존 봉은 보존 */
+  /** 데이터셋 편집 — 이름 변경 + 심볼 목록 편집(제거는 수집 중단 밸브, 기존 봉은 보존) */
   app.patch('/datasets/:datasetId', { preHandler: requireAuth }, async (request, reply) => {
     const { datasetId } = request.params as { datasetId: string };
-    const parsed = updateSymbolsSchema.safeParse(request.body);
+    const parsed = updateDatasetSchema.safeParse(request.body);
     if (!parsed.success) {
-      return reply.code(400).send({ error: '필드가 올바르지 않습니다 (addSymbols/removeSymbols)' });
+      return reply
+        .code(400)
+        .send({ error: '필드가 올바르지 않습니다 (name/addSymbols/removeSymbols)' });
     }
     if (!datasetService.getDataset(datasetId)) {
       return reply.code(404).send({ error: '데이터셋을 찾을 수 없습니다' });
     }
     try {
-      const dataset = datasetService.updateSymbols(datasetId, {
-        add: parsed.data.addSymbols,
-        remove: parsed.data.removeSymbols,
-      });
+      // 이름을 먼저 검증·적용한다 — 중복 이름으로 거부될 요청이 심볼만 바꾸고 끝나지 않게
+      let dataset =
+        parsed.data.name !== undefined
+          ? datasetService.renameDataset(datasetId, parsed.data.name)
+          : undefined;
+      if ((parsed.data.addSymbols?.length ?? 0) + (parsed.data.removeSymbols?.length ?? 0) > 0) {
+        dataset = datasetService.updateSymbols(datasetId, {
+          add: parsed.data.addSymbols,
+          remove: parsed.data.removeSymbols,
+        });
+      }
       return reply.send({ dataset });
     } catch (error) {
       return reply

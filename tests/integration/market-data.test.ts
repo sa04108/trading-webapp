@@ -575,4 +575,78 @@ describe('market data (스펙 §11, §13)', () => {
     });
     expect(gone.statusCode).toBe(404);
   });
+
+  it('renames a dataset via PATCH, rejecting duplicates and keeping the version untouched', async () => {
+    const { username, password } = await createTestAdmin(ctx.container);
+    const login = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { username, password },
+    });
+    const cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/datasets',
+      cookies: { qp_session: cookie },
+      payload: { name: 'KR-이름변경', market: 'KR', collect: '1d', symbols: ['005930'] },
+    });
+    const dataset = created.json().dataset as { id: string; latestVersion: number };
+    await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/datasets',
+      cookies: { qp_session: cookie },
+      payload: { name: 'KR-점유된이름', market: 'KR', collect: '1d', symbols: ['005930'] },
+    });
+
+    // 이름만 변경 — 버전은 그대로 (이름은 §9.5 의 유효 데이터가 아니다)
+    const renamed = await ctx.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/datasets/${dataset.id}`,
+      cookies: { qp_session: cookie },
+      payload: { name: 'KR-새이름' },
+    });
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json().dataset.name).toBe('KR-새이름');
+    expect(renamed.json().dataset.latestVersion).toBe(dataset.latestVersion);
+
+    // 다른 데이터셋이 점유한 이름 → 400
+    const duplicate = await ctx.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/datasets/${dataset.id}`,
+      cookies: { qp_session: cookie },
+      payload: { name: 'KR-점유된이름' },
+    });
+    expect(duplicate.statusCode).toBe(400);
+    expect(duplicate.json().error).toContain('이미');
+
+    // 같은 이름으로의 재변경(no-op)은 성공한다
+    const noop = await ctx.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/datasets/${dataset.id}`,
+      cookies: { qp_session: cookie },
+      payload: { name: 'KR-새이름' },
+    });
+    expect(noop.statusCode).toBe(200);
+
+    // 이름 + 심볼 변경 동시 적용
+    const combined = await ctx.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/datasets/${dataset.id}`,
+      cookies: { qp_session: cookie },
+      payload: { name: 'KR-최종이름', addSymbols: ['000660'] },
+    });
+    expect(combined.statusCode).toBe(200);
+    expect(combined.json().dataset.name).toBe('KR-최종이름');
+    expect(combined.json().dataset.symbols).toEqual(['000660', '005930']);
+
+    // 빈 body 는 여전히 400
+    const empty = await ctx.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/datasets/${dataset.id}`,
+      cookies: { qp_session: cookie },
+      payload: {},
+    });
+    expect(empty.statusCode).toBe(400);
+  });
 });
