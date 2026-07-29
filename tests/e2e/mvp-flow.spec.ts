@@ -66,10 +66,16 @@ test('full MVP flow', async ({ page }) => {
   await expect(page.getByRole('row').filter({ hasText: '미청산' }).first()).toBeVisible();
   const tradeRows = page.getByRole('row').filter({ hasText: '005930' });
   await expect(tradeRows.first()).toBeVisible();
+  // 종목 표기: 이름을 알면 '이름 (005930)', 모르면 '005930' 만 — 어느 쪽이든 코드는
+  // 온전해야 한다. 테스트 환경에 종목명 소스가 설정되어 있지 않을 수 있으므로 이름이
+  // 붙는다고 단정하지 않고, 코드가 셀 안에 그대로 있는지만 확인한다.
+  const symbolCell = page.getByRole('cell', { name: /005930/ }).first();
+  await expect(symbolCell).toContainText('005930');
 
-  // 6. 거래 필터 (종목 선택)
+  // 6. 거래 필터 (종목 선택) — value 는 코드를 유지하므로 표시(이름 유무)가 바뀌어도
+  // 필터는 코드 기준으로 동작해야 한다
   await page.getByRole('combobox', { name: '종목 필터' }).click();
-  await page.getByRole('option', { name: '005930' }).click();
+  await page.getByRole('option', { name: /005930/ }).click();
   await expect(tradeRows.first()).toBeVisible();
 
   // 7. clone → 새 작업 페이지

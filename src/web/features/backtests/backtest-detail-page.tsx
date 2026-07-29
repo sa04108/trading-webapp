@@ -34,6 +34,8 @@ import {
 } from '@/components/ui/table';
 import { api, ApiError } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
+import { SymbolLabel } from '@/components/symbol-label';
+import { useStockNames } from '@/lib/use-stock-names';
 import { useBacktestLive, useBacktestSeries, useBacktestTrades } from './api';
 import { openPositionRows } from './open-position-rows';
 import { ParamHint } from './param-hint';
@@ -49,6 +51,7 @@ import {
 } from '@/lib/format';
 import { DrawdownChart, EquityChart, MonthlyReturnsChart } from './result-charts';
 import { StatusBadge } from './status-badge';
+import { formatSymbolSummary } from './symbol-summary';
 import { isTerminal, type BacktestMetrics, type JobSummary, type RunMetadata } from './types';
 
 function MetricCards({ metrics }: { metrics: BacktestMetrics }) {
@@ -91,11 +94,13 @@ function TradesSection({
   symbols,
   run,
   periodTo,
+  nameOf,
 }: {
   jobId: string;
   symbols: string[];
   run: RunMetadata | null;
   periodTo: string;
+  nameOf: (symbol: string) => string | null;
 }) {
   const PAGE = 50;
   const [symbol, setSymbol] = useState<string>('ALL');
@@ -119,14 +124,14 @@ function TradesSection({
             setPage(0);
           }}
         >
-          <SelectTrigger className="h-9 w-36" aria-label="종목 필터">
+          <SelectTrigger className="h-9 w-56" aria-label="종목 필터">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="ALL">전체 종목</SelectItem>
             {symbols.map((s) => (
               <SelectItem key={s} value={s}>
-                {s}
+                <SymbolLabel symbol={s} name={nameOf(s)} />
               </SelectItem>
             ))}
           </SelectContent>
@@ -155,7 +160,9 @@ function TradesSection({
               <TableBody>
                 {openRows.map((row) => (
                   <TableRow key={`open-${row.symbol}`} className="bg-muted/40">
-                    <TableCell className="font-medium">{row.symbol}</TableCell>
+                    <TableCell className="font-medium">
+                      <SymbolLabel symbol={row.symbol} name={nameOf(row.symbol)} />
+                    </TableCell>
                     <TableCell className="text-right tabular-nums">{row.quantity}</TableCell>
                     <TableCell className="whitespace-nowrap text-xs">
                       {formatDateTime(row.entryTsMs)}
@@ -185,7 +192,9 @@ function TradesSection({
                 ))}
                 {trades.map((trade) => (
                   <TableRow key={trade.id}>
-                    <TableCell className="font-medium">{trade.symbol}</TableCell>
+                    <TableCell className="font-medium">
+                      <SymbolLabel symbol={trade.symbol} name={nameOf(trade.symbol)} />
+                    </TableCell>
                     <TableCell className="text-right tabular-nums">{trade.quantity}</TableCell>
                     <TableCell className="whitespace-nowrap text-xs">
                       {formatDateTime(trade.entryTsMs)}
@@ -340,6 +349,11 @@ export function BacktestDetailPage() {
   const completed = job?.status === 'COMPLETED';
   const { data: series } = useBacktestSeries(id, completed === true);
 
+  // 전 종목을 한 번에 조회한다 — 거래 내역·종목별 성과·Description 이 같은 Map 을
+  // 쓴다. 데이터셋 심볼 상한이 1,000 이라 /symbols/info 상한을 넘지 않는다.
+  const stockNames = useStockNames(job?.request.universe.symbols ?? []);
+  const nameOf = (symbol: string): string | null => stockNames.get(symbol)?.name ?? null;
+
   const cancelMutation = useMutation({
     mutationFn: () => api(`/backtests/${id}/cancel`, { method: 'POST' }),
     onSuccess: () => {
@@ -463,7 +477,7 @@ export function BacktestDetailPage() {
       </div>
 
       <p className="text-sm text-muted-foreground">
-        {job.request.universe.symbols.join(', ')} · {job.request.period.from} ~{' '}
+        {formatSymbolSummary(job.request.universe.symbols, nameOf)} · {job.request.period.from} ~{' '}
         {job.request.period.to} · 생성 {formatDateTime(job.createdAtMs)}
       </p>
 
@@ -536,7 +550,9 @@ export function BacktestDetailPage() {
                       <TableBody>
                         {series.symbols.map((row) => (
                           <TableRow key={row.symbol}>
-                            <TableCell>{row.symbol}</TableCell>
+                            <TableCell>
+                              <SymbolLabel symbol={row.symbol} name={nameOf(row.symbol)} />
+                            </TableCell>
                             <TableCell className="text-right">{row.tradeCount}</TableCell>
                             <TableCell
                               className={cn('text-right tabular-nums', pnlClass(row.netPnl))}
@@ -563,6 +579,7 @@ export function BacktestDetailPage() {
             symbols={job.request.universe.symbols}
             run={run ?? null}
             periodTo={job.request.period.to}
+            nameOf={nameOf}
           />
         </>
       ) : null}

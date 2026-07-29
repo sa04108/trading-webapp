@@ -4,12 +4,20 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useStockNames } from '@/lib/use-stock-names';
 import { useBacktests } from './api';
 import { formatDateTime, formatSignedPct, pnlClass } from '@/lib/format';
 import { StatusBadge } from './status-badge';
+import { formatSymbolSummary, SYMBOL_SUMMARY_LIMIT } from './symbol-summary';
 import { isTerminal, type JobSummary } from './types';
 
-function JobCard({ job }: { job: JobSummary }) {
+function JobCard({
+  job,
+  nameOf,
+}: {
+  job: JobSummary;
+  nameOf: (symbol: string) => string | null;
+}) {
   const running = !isTerminal(job.status);
   const progress =
     job.progressBars !== null && job.totalBars !== null && job.totalBars > 0
@@ -28,8 +36,8 @@ function JobCard({ job }: { job: JobSummary }) {
             </span>
           </div>
           <div className="text-xs text-muted-foreground">
-            {job.request.universe.symbols.join(', ')} · {job.request.period.from} ~{' '}
-            {job.request.period.to}
+            {formatSymbolSummary(job.request.universe.symbols, nameOf)} · {job.request.period.from}{' '}
+            ~ {job.request.period.to}
           </div>
           {running && progress !== null ? (
             <div className="space-y-1">
@@ -58,6 +66,19 @@ function JobCard({ job }: { job: JobSummary }) {
 export function BacktestsPage() {
   const { data, isLoading } = useBacktests(5_000);
 
+  // 카드마다 훅을 부르면 카드 수만큼 요청이 난다. 전체 심볼 합집합은
+  // /symbols/info 의 1,000개 상한에 걸릴 수 있다 — 어차피 5개만 표시하므로
+  // 상한이 (5 × 페이지당 잡 수)로 묶인다.
+  const previewSymbols = [
+    ...new Set(
+      (data?.jobs ?? []).flatMap((job) =>
+        job.request.universe.symbols.slice(0, SYMBOL_SUMMARY_LIMIT),
+      ),
+    ),
+  ];
+  const stockNames = useStockNames(previewSymbols);
+  const nameOf = (symbol: string): string | null => stockNames.get(symbol)?.name ?? null;
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -77,7 +98,7 @@ export function BacktestsPage() {
       ) : data && data.jobs.length > 0 ? (
         <div className="space-y-3">
           {data.jobs.map((job) => (
-            <JobCard key={job.id} job={job} />
+            <JobCard key={job.id} job={job} nameOf={nameOf} />
           ))}
         </div>
       ) : (
