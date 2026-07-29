@@ -27,6 +27,8 @@ import {
   getCostProfile,
   getSlippageProfile,
 } from '../server/modules/backtest/domain/cost-profiles.js';
+import { ParquetFactRepository } from '../server/modules/facts/infrastructure/parquet-fact-repository.js';
+import type { Fact } from '../server/modules/facts/domain/fact.js';
 import type { Candle, Market, Timeframe } from '../server/modules/market-data/domain/candle.js';
 import { DuckDbService } from '../server/modules/market-data/infrastructure/duckdb-service.js';
 import { ParquetCandleRepository } from '../server/modules/market-data/infrastructure/parquet-candle-repository.js';
@@ -155,6 +157,27 @@ async function main(): Promise<void> {
       );
     }
 
+    // 상장시점 팩트 로드. 기간 종료 이후에 공시된 것은 어차피 쓰이지 않으므로 잘라
+    // 메모리를 아낀다. 봉 시점별 컷오프는 엔진의 PitFactView 가 담당한다.
+    const factRepository = new ParquetFactRepository(dataRoot, duckdb);
+    const facts: Fact[] = await factRepository.getFacts({
+      datasetId: dataset.id,
+      scope: 'SYMBOL',
+      keys: request.universe.symbols,
+      asOfMaxTsMs: toTsMs,
+    });
+    if (strategy.requiresFundamentals === true && facts.length === 0) {
+      // 제출 검증이 걸렀어야 하는 상태다. 실행 중 데이터가 지워진 경우의 뒤늦은 방어선.
+      throw new Error(
+        '이 전략은 상장시점 재무 데이터가 필요합니다. `pnpm cli facts:sync` 로 수집한 뒤 다시 실행하세요.',
+      );
+    }
+    if (strategy.requiresFundamentals === true) {
+      datasetWarnings.push(
+        '재무 데이터는 수집 시점 기준입니다. 누락된 계정이 있으면 해당 종목은 랭킹에서 조용히 빠집니다 — facts:sync 리포트를 확인하세요.',
+      );
+    }
+
     const startedAtMs = Date.now();
     let lastProgressSentAt = 0;
 
@@ -171,6 +194,7 @@ async function main(): Promise<void> {
       parameters,
       randomSeed: request.randomSeed,
       maxPositions: request.risk.maxPositions,
+      facts,
     }, {
       shouldCancel: () => cancelRequested,
       onProgress: ({ processedBars, totalBars, currentTsMs }) => {

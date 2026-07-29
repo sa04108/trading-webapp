@@ -161,6 +161,7 @@ export const valueQualityRankStrategy: TradingStrategy<
   name: '밸류·퀄리티 랭킹',
   description:
     '이익수익률(EBIT/EV)과 자본수익률(EBIT/투입자본) 순위를 합산해 상위 N 을 동일가중 보유합니다. 상장시점 재무제표가 수집된 데이터셋에서만 동작합니다.',
+  requiresFundamentals: true,
   parameterSchema: valueQualityRankParameters,
 
   initialize(context: StrategyInitializeContext): ValueQualityRankState {

@@ -9,6 +9,7 @@ import {
 } from '../../../../shared/schemas/backtest-request.js';
 import { SECURITY_HEADERS } from '../../../shared/security.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
+import type { FactRepository } from '../../facts/application/ports.js';
 import type { DatasetService } from '../../market-data/application/dataset-service.js';
 import { availableTimeframes } from '../../market-data/domain/candle.js';
 import type { StrategyRegistry } from '../../strategy/application/strategy-registry.js';
@@ -33,6 +34,7 @@ export interface BacktestRouteDeps {
   readonly strategies: StrategyRegistry;
   readonly datasets: DatasetService;
   readonly audit: AuditLogService;
+  readonly factRepository: FactRepository;
   readonly dataRoot: string;
   readonly maxQueuedBacktests: number;
 }
@@ -92,7 +94,7 @@ async function checkResources(dataRoot: string): Promise<string | null> {
 }
 
 export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRouteDeps, requireAuth: PreHandler): void {
-  const { queue, orchestrator, results, strategies, datasets, audit } = deps;
+  const { queue, orchestrator, results, strategies, datasets, audit, factRepository } = deps;
 
   /**
    * 기간 × 커버리지 검사 (D-025). 커버리지는 메타데이터라 Parquet 을 읽지 않는다.
@@ -237,6 +239,19 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const validated = validateSubmission(body);
     if (!validated.ok) {
       return reply.code(400).send({ error: validated.errors[0] ?? '제출을 검증할 수 없습니다' });
+    }
+
+    // 재무 전략은 데이터셋에 재무가 수집돼 있어야 한다. 통과시키면 실행 후 "거래 0건"
+    // 으로 끝나 원인을 알 수 없다 (D-025 와 같은 원칙: 조용히 빠지지 않는다).
+    if (
+      strategies.requiresFundamentals(body.strategyId) &&
+      !factRepository.hasFacts(body.datasetId, 'SYMBOL')
+    ) {
+      return reply.code(422).send({
+        error:
+          '이 전략은 상장시점 재무 데이터가 필요합니다. 이 데이터셋에는 아직 수집되지 않았습니다. ' +
+          'SSH 에서 `pnpm cli facts:sync --dataset <데이터셋 id> --from <연도> --to <연도>` 를 실행하세요.',
+      });
     }
 
     const queueError = queueDepthError();

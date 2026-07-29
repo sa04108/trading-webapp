@@ -171,4 +171,65 @@ describe('일봉 데이터셋 백테스트 (D-024)', () => {
     const warnings = JSON.parse(run.warningsJson ?? '[]') as string[];
     expect(warnings.some((w) => w.includes('000660'))).toBe(true);
   });
+
+  it('재무가 없는 데이터셋에 밸류 전략을 제출하면 422 로 거부한다', async () => {
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: {
+        strategyId: 'value-quality-rank',
+        strategyVersion: '1.0.0',
+        parameters: { topN: 20, rebalanceMonths: 3, staleQuarters: 2 },
+        datasetId,
+        timeframe: '1d',
+        universe: { type: 'SYMBOLS', symbols: ['005930'] },
+        period: { from: '2025-08-01', to: '2025-10-31' },
+        capital: { initialCash: 10_000_000, currency: 'KRW' },
+        execution: {
+          fillTiming: 'NEXT_BAR_OPEN',
+          commissionProfileId: 'kr-equity-default',
+          slippageProfileId: 'fixed-5bps',
+        },
+        risk: { maxPositions: 20 },
+        randomSeed: 42,
+      },
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json().error).toContain('facts:sync');
+  });
+
+  it('봉만 쓰는 전략은 재무 없이도 제출된다', async () => {
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: {
+        strategyId: 'cross-sectional-momentum',
+        strategyVersion: '1.0.0',
+        parameters: {
+          formationDays: 20,
+          skipDays: 0,
+          topN: 1,
+          rebalanceMonths: 1,
+          absoluteMomentumFilter: true,
+        },
+        datasetId,
+        timeframe: '1d',
+        universe: { type: 'SYMBOLS', symbols: ['005930'] },
+        period: { from: '2025-08-01', to: '2025-10-31' },
+        capital: { initialCash: 10_000_000, currency: 'KRW' },
+        execution: {
+          fillTiming: 'NEXT_BAR_OPEN',
+          commissionProfileId: 'kr-equity-default',
+          slippageProfileId: 'fixed-5bps',
+        },
+        risk: { maxPositions: 20 },
+        randomSeed: 42,
+      },
+    });
+
+    expect(response.statusCode).toBeLessThan(400);
+  });
 });

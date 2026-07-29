@@ -80,6 +80,7 @@ export async function buildServer(container: Container): Promise<FastifyInstance
           strategies: container.strategyRegistry,
           datasets: container.datasetService,
           audit: container.auditLog,
+          factRepository: container.factRepository,
           dataRoot: container.config.dataRoot,
           maxQueuedBacktests: container.config.maxQueuedBacktests,
         },

@@ -44,6 +44,12 @@ export interface TradingStrategy<TParameters, TState> {
   readonly version: string;
   readonly name: string;
   readonly description: string;
+  /**
+   * 상장시점 재무 없이는 의미 있는 신호를 낼 수 없는 전략. 제출 검증이 데이터셋의
+   * 재무 수집 여부를 확인해 거부한다 — 실행 후 "거래 0건" 으로 끝나면 원인을
+   * 알 수 없다. 봉만 쓰는 전략은 이 필드를 생략한다.
+   */
+  readonly requiresFundamentals?: boolean;
   readonly parameterSchema: z.ZodType<TParameters>;
 
   initialize(context: StrategyInitializeContext): TState;
