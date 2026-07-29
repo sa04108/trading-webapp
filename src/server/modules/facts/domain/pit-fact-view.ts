@@ -79,13 +79,34 @@ export class PitFactView {
     // asOfTsMs) 로 행을 접어(collapse) 엔진에 애초에 충돌하는 중복을 넘기지
     // 않는 것이다. 이 타이브레이커는 그 경로를 벗어나 조립된 팩트(테스트 등)를
     // 위한 인메모리 보강일 뿐 — 이것만 믿고 있으면 안 된다 (재현성 §9.5).
-    this.ordered = [...facts].sort((a, b) => {
+    const sorted = [...facts].sort((a, b) => {
       if (a.asOfTsMs !== b.asOfTsMs) return a.asOfTsMs - b.asOfTsMs;
       if (a.key !== b.key) return a.key < b.key ? -1 : 1;
       if (a.field !== b.field) return a.field < b.field ? -1 : 1;
       if (a.periodKey !== b.periodKey) return a.periodKey < b.periodKey ? -1 : 1;
       return a.value - b.value;
     });
+
+    // 자본변동(SPLIT_RATIO)은 커서를 타지 않는다 — 생성 시점에 전부 흡수하고,
+    // 노출은 `corporateActions` 의 **효력발생일** 게이트만 담당한다 (설계 §3.4).
+    //
+    // 왜 asOf 로 막지 않는가: 자본변동 수량은 사업보고서의 증자·감자 현황에서 읽으므로
+    // 접수일(asOf)이 효력발생일보다 최대 15개월 늦다. asOf 로 막으면 2025-03-14 기준
+    // 2:1 분할이 2026년 3월 사업보고서가 나올 때까지 뷰에 없고, 그 1년 동안 모멘텀은
+    // 미보정 가격에서 −50% 를 읽어 기본 절대 모멘텀 필터가 그 종목을 조용히 떨어뜨린다.
+    // 경제적으로도 asOf 게이트가 틀렸다: 2025-03-14 이후 어느 봉에서든 실제 시장
+    // 참여자는 주가가 분할된 사실을 알고 있다. 사업보고서는 우리 쪽 데이터 출처일 뿐
+    // 시장이 그 사실을 알게 된 경로가 아니다. 이미 발생한 분할로 과거 가격을 보정하는
+    // 것은 룩어헤드가 아니다 (설계 §3.4 가 명시).
+    const timed: Fact[] = [];
+    for (const fact of sorted) {
+      if (fact.scope === 'SYMBOL' && fact.field === CORPORATE_ACTION_FIELD) {
+        this.absorbCorporateAction(fact);
+        continue;
+      }
+      timed.push(fact);
+    }
+    this.ordered = timed;
   }
 
   advanceTo(tsMs: number): void {
@@ -136,17 +157,24 @@ export class PitFactView {
     };
   }
 
-  /** 효력 발생일이 `tsMs` 이하인 이벤트만. 공시는 됐지만 아직 발생 전인 분할은 제외된다. */
+  /**
+   * 효력 발생일이 `tsMs` **이하** 인 이벤트만 (설계 §3.4).
+   *
+   * 게이트는 효력발생일 하나다 — 공시 접수일(asOf)은 보지 않는다. 자본변동은 사업보고서
+   * 에서 읽으므로 asOf 가 효력발생일보다 최대 15개월 늦고, asOf 로도 막으면 이미 시장에
+   * 반영된 분할이 1년 넘게 보정되지 않는다 (생성자 주석 참고).
+   *
+   * 경계는 `<=` 다: 기준일 첫 봉부터 이미 분할된 가격이 온다.
+   */
   corporateActions(symbol: string, tsMs: number): readonly CorporateAction[] {
     const entry = this.bySymbol.get(symbol);
     if (!entry) return [];
     return entry.actions.filter((action) => action.effectiveTsMs <= tsMs);
   }
 
-  private absorb(fact: Fact): void {
-    if (fact.scope !== 'SYMBOL') return; // MACRO 는 이 뷰가 다루지 않는다
-
-    let entry = this.bySymbol.get(fact.key);
+  /** 종목 엔트리를 만들거나 가져온다 */
+  private entryFor(key: string): SymbolEntry {
+    let entry = this.bySymbol.get(key);
     if (!entry) {
       entry = {
         fields: new Map(),
@@ -155,23 +183,33 @@ export class PitFactView {
         latestPeriodKey: null,
         latestAsOfTsMs: null,
       };
-      this.bySymbol.set(fact.key, entry);
+      this.bySymbol.set(key, entry);
     }
+    return entry;
+  }
 
-    if (fact.field === CORPORATE_ACTION_FIELD) {
-      const effectiveTsMs = localDateToUtcMs(fact.periodKey);
-      if (effectiveTsMs === null || !Number.isFinite(fact.value) || fact.value <= 0) return;
-      entry.actions.push({ effectiveTsMs, ratio: fact.value });
-      entry.actions.sort((a, b) => a.effectiveTsMs - b.effectiveTsMs);
-      return;
-    }
+  /**
+   * 자본변동 이벤트를 뷰에 넣는다 — 생성 시점에 한 번, 커서와 무관하게 (설계 §3.4).
+   * 노출 시점은 `corporateActions` 의 효력발생일 게이트가 정한다.
+   */
+  private absorbCorporateAction(fact: Fact): void {
+    const effectiveTsMs = localDateToUtcMs(fact.periodKey);
+    if (effectiveTsMs === null || !Number.isFinite(fact.value) || fact.value <= 0) return;
+    const entry = this.entryFor(fact.key);
+    entry.actions.push({ effectiveTsMs, ratio: fact.value });
+    entry.actions.sort((a, b) => a.effectiveTsMs - b.effectiveTsMs);
+  }
+
+  private absorb(fact: Fact): void {
+    if (fact.scope !== 'SYMBOL') return; // MACRO 는 이 뷰가 다루지 않는다
 
     // 분기 키('YYYYQn')만 재무 스냅샷에 들어간다. 연간('YYYYFY')은 스코프 밖 —
-    // 이 플랜의 두 전략 모두 분기 데이터만 쓴다. SPLIT_RATIO 는 위에서 이미
-    // 처리했고 'YYYY-MM-DD' 키를 쓴다.
+    // 이 플랜의 두 전략 모두 분기 데이터만 쓴다. SPLIT_RATIO 는 생성 시점에 이미
+    // 흡수했고 'YYYY-MM-DD' 키를 쓴다.
     const ordinal = quarterOrdinal(fact.periodKey);
     if (ordinal === null) return;
 
+    const entry = this.entryFor(fact.key);
     let field = entry.fields.get(fact.field);
     if (!field) {
       field = { byPeriod: new Map(), latestQuarter: null };

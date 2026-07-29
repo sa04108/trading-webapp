@@ -237,6 +237,8 @@ describe('PitFactView 재집계(restatement)', () => {
 describe('PitFactView 자본변동 이벤트', () => {
   // 2025-03-10 공시, 2025-03-14 기준일 2:1 분할
   const announced = Date.UTC(2025, 2, 10);
+  /** periodKey '2025-03-14' 의 효력발생 시각 = 2025-03-14 00:00 KST */
+  const effective = Date.UTC(2025, 2, 13, 15, 0);
   const splitFacts: Fact[] = [
     fact({
       field: 'SPLIT_RATIO',
@@ -247,13 +249,35 @@ describe('PitFactView 자본변동 이벤트', () => {
     }),
   ];
 
-  it('공시 전에는 이벤트가 보이지 않는다', () => {
+  /**
+   * 이 테스트는 원래 "공시 전에는 이벤트가 보이지 않는다" 였다 — 즉 asOf 게이트를
+   * 못박고 있었다. 설계 §3.4 는 그 반대를 규정한다: `corporateActions` 는 **효력발생일
+   * ≤ 현재 봉** 인 이벤트를 노출하고, "이미 발생한 분할로 과거 가격을 보정하는 것은
+   * 룩어헤드가 아니다".
+   *
+   * asOf 게이트는 실제로 결과를 망친다: 자본변동 수량은 사업보고서의 증자·감자 현황에서
+   * 읽으므로 접수일이 기준일보다 최대 15개월 늦다. 2025-03-14 기준 2:1 분할은 2026년 3월
+   * 사업보고서에서야 뷰에 들어오고, 그 1년 동안 월간 리밸런스는 미보정 가격에서 12개월
+   * 수익률 −50% 를 읽어 기본 절대 모멘텀 필터가 그 종목을 조용히 떨어뜨린다. 경제적으로도
+   * 틀렸다 — 기준일 이후 어느 봉에서든 실제 참여자는 주가가 분할된 사실을 알고 있고,
+   * 사업보고서는 우리 쪽 데이터 출처일 뿐 시장이 알게 된 경로가 아니다.
+   */
+  it('공시 접수일 전이어도 기준일이 지난 이벤트는 보인다 (설계 §3.4)', () => {
     const view = new PitFactView(splitFacts);
+    // 커서를 공시 접수일 이전에 세워둔다 — 그래도 기준일이 지난 봉이면 노출되어야 한다
     view.advanceTo(announced - DAY);
-    expect(view.corporateActions('005930', Date.UTC(2025, 2, 20))).toEqual([]);
+    const actions = view.corporateActions('005930', Date.UTC(2025, 2, 20));
+    expect(actions).toHaveLength(1);
+    expect(actions[0]?.ratio).toBe(2);
   });
 
-  it('공시했지만 기준일 전이면 아직 적용하지 않는다', () => {
+  it('커서를 한 번도 전진시키지 않아도 기준일 게이트만으로 노출된다', () => {
+    const view = new PitFactView(splitFacts);
+    expect(view.corporateActions('005930', Date.UTC(2025, 2, 20))).toHaveLength(1);
+    expect(view.corporateActions('005930', Date.UTC(2025, 2, 1))).toEqual([]);
+  });
+
+  it('기준일 전이면 아직 적용하지 않는다', () => {
     const view = new PitFactView(splitFacts);
     view.advanceTo(Date.UTC(2025, 2, 12));
     expect(view.corporateActions('005930', Date.UTC(2025, 2, 12))).toEqual([]);
@@ -268,10 +292,28 @@ describe('PitFactView 자본변동 이벤트', () => {
     expect(actions[0]?.ratio).toBe(2);
   });
 
+  it('경계: 봉이 정확히 효력발생 시각이면 포함되고 1ms 앞이면 제외된다', () => {
+    // 기존 케이스들은 기준일 KST 09:00(효력발생 시각보다 9시간 뒤)을 봉으로 써서
+    // 게이트를 `<=` 에서 `<` 로 바꿔도 살아남았다 — 경계를 정확히 짚는다.
+    const view = new PitFactView(splitFacts);
+    view.advanceTo(effective);
+    expect(view.corporateActions('005930', effective)).toHaveLength(1);
+    expect(view.corporateActions('005930', effective - 1)).toEqual([]);
+  });
+
   it('자본변동 이벤트는 재무 스냅샷에 섞이지 않는다', () => {
     const view = new PitFactView(splitFacts);
     view.advanceTo(Date.UTC(2025, 2, 20));
     expect(view.fundamentals('005930')).toBeNull();
+  });
+
+  it('여러 분할은 효력발생일 오름차순으로 노출된다 (입력 순서와 무관)', () => {
+    const view = new PitFactView([
+      fact({ field: 'SPLIT_RATIO', periodKey: '2025-09-01', asOfTsMs: 9_000, value: 3, unit: 'RATIO' }),
+      fact({ field: 'SPLIT_RATIO', periodKey: '2025-03-14', asOfTsMs: 8_000, value: 2, unit: 'RATIO' }),
+    ]);
+    const actions = view.corporateActions('005930', Date.UTC(2025, 11, 1));
+    expect(actions.map((action) => action.ratio)).toEqual([2, 3]);
   });
 });
 
