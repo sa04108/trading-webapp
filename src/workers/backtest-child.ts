@@ -22,6 +22,7 @@ import {
 } from '../server/shared/db/schema.js';
 import { newId } from '../server/shared/ids.js';
 import { TERMINAL_STATUSES } from '../server/modules/backtest/application/job-queue.js';
+import { MAX_BACKTEST_BARS } from '../server/modules/backtest/domain/bar-estimate.js';
 import { ENGINE_VERSION, runBacktest } from '../server/modules/backtest/domain/engine.js';
 import {
   DEFAULT_EXECUTION_RULES,
@@ -115,10 +116,10 @@ async function main(): Promise<void> {
       );
     }
 
-    // 캔들 로드 (스펙 §11). 데이터셋의 timeframe 이 백테스트가 소비하는 기준이다 —
-    // 1m 수집·import 는 1h 로 사전 집계되어 '1h', 일봉 수집은 '1d' 로 저장된다.
+    // 캔들 로드 (스펙 §11). 요청의 timeframe 이 소비 기준이고, 미지정이면 데이터셋
+    // timeframe (1m 수집·import 는 1h 로 사전 집계되어 '1h', 일봉 수집은 '1d').
     // 여기를 '1h' 로 고정하면 일봉 데이터셋은 파티션이 없어 0봉으로 실패한다 (D-024).
-    const timeframe = dataset.timeframe as Timeframe;
+    const timeframe = (request.timeframe ?? dataset.timeframe) as Timeframe;
     const repository = new ParquetCandleRepository(dataRoot, duckdb);
     const { fromTsMs, toTsMs } = periodToTsRange(request.period);
     const candles: Candle[] = [];
@@ -131,6 +132,12 @@ async function main(): Promise<void> {
       toTsMs,
     })) {
       candles.push(candle);
+      // 제출 검증의 추정 상한을 실측으로 다시 지킨다 — 제출 후 import 로 봉이 는 경우의 방어선
+      if (candles.length > MAX_BACKTEST_BARS) {
+        throw new Error(
+          `봉 수가 상한(${MAX_BACKTEST_BARS.toLocaleString()})을 넘습니다. 기간이나 종목 수를 줄이거나 1h 봉을 사용하세요.`,
+        );
+      }
     }
     if (candles.length === 0) {
       // 어떤 timeframe 을 찾았는지 밝힌다 — 커버리지가 정상인데 실패하면 여기서 갈린다

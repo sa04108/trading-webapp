@@ -257,7 +257,10 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
             </span>
           )}
           <Badge variant="secondary">{dataset.market}</Badge>
-          <Badge variant="secondary">{dataset.timeframe}</Badge>
+          {/* 1h 데이터셋의 실체는 1m 수집 + 1h 집계 (§11 관례) — 1h 만 표시하면 수집 봉과 불일치 */}
+          <Badge variant="secondary">
+            {dataset.timeframe === '1h' ? '1m→1h' : dataset.timeframe}
+          </Badge>
           <Badge variant="outline">v{dataset.latestVersion}</Badge>
           <span className="ml-auto flex gap-2">
             {syncJobId !== null ? (

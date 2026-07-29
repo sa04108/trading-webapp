@@ -11,7 +11,13 @@ import type { Clock } from '../../../shared/clock.js';
 import { newId } from '../../../shared/ids.js';
 import type { Logger } from '../../../shared/logger.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
-import { SYMBOL_PATTERN, type Candle, type Market, type Timeframe } from '../domain/candle.js';
+import {
+  availableTimeframes,
+  SYMBOL_PATTERN,
+  type Candle,
+  type Market,
+  type Timeframe,
+} from '../domain/candle.js';
 import { aggregateToHourly } from '../domain/aggregate.js';
 import { computeCoverage } from '../domain/coverage.js';
 import { getSessionForMarket } from '../domain/exchange-session.js';
@@ -394,8 +400,7 @@ export class DatasetService {
     if (!dataset.symbols.includes(symbol)) {
       throw new Error(`이 데이터셋에 없는 심볼입니다: ${symbol}`);
     }
-    // 1h 데이터셋은 원본 1m 도 함께 보관한다 (CSV·sync 공통 관례)
-    const available: Timeframe[] = dataset.timeframe === '1h' ? ['1m', '1h'] : [dataset.timeframe];
+    const available = availableTimeframes(dataset.timeframe);
     if (!available.includes(timeframe)) {
       throw new Error(`이 데이터셋은 ${available.join('/')} 만 제공합니다`);
     }

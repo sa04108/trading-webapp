@@ -76,6 +76,8 @@ export function NewBacktestWizard() {
   const [strategyId, setStrategyId] = useState<string | null>(null);
   const [parameters, setParameters] = useState<Record<string, string>>({});
   const [datasetId, setDatasetId] = useState<string | null>(null);
+  // 소비 봉 주기 — '' 는 데이터셋 기본 (1h 데이터셋이면 1h)
+  const [timeframe, setTimeframe] = useState('');
   const [symbols, setSymbols] = useState<string[]>([]);
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
@@ -157,6 +159,7 @@ export function NewBacktestWizard() {
     setStrategyId(state.strategyId);
     setParameters(state.parameters);
     setDatasetId(state.datasetId);
+    setTimeframe(state.timeframe);
     setSymbols(state.symbols);
     setFrom(state.from);
     setTo(state.to);
@@ -211,6 +214,11 @@ export function NewBacktestWizard() {
       strategyVersion: selectedStrategy.version,
       parameters: parsedParams,
       datasetId: selectedDataset.id,
+      // 항상 명시해 보낸다 — 결과·복제가 "무슨 봉으로 돌렸는지" 를 들고 다니게 (§9.5)
+      timeframe: (timeframe === '' ? selectedDataset.timeframe : timeframe) as
+        | '1m'
+        | '1h'
+        | '1d',
       universe: { type: 'SYMBOLS', symbols },
       period: { from, to },
       capital: { initialCash: cash, currency: 'KRW' },
@@ -415,6 +423,7 @@ export function NewBacktestWizard() {
               type="button"
               onClick={() => {
                 setDatasetId(dataset.id);
+                setTimeframe(''); // 데이터셋 기본으로 리셋 — 이전 선택이 새 데이터셋에 새지 않게
                 setSymbols(dataset.symbols);
               }}
               className={cn(
@@ -424,10 +433,36 @@ export function NewBacktestWizard() {
             >
               <p className="font-medium">{dataset.name}</p>
               <p className="mt-1 text-sm text-muted-foreground">
-                {dataset.market} · {dataset.timeframe} · {dataset.symbols.length}종목
+                {dataset.market} · {dataset.timeframe === '1h' ? '1m→1h' : dataset.timeframe} ·{' '}
+                {dataset.symbols.length}종목
               </p>
             </button>
           ))}
+          {selectedDataset?.timeframe === '1h' ? (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">봉 주기</CardTitle>
+                <CardDescription>
+                  1분봉은 봉 수가 약 55배라 실행이 느리고, 기간·종목이 많으면 상한에 걸릴 수
+                  있습니다.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Select
+                  value={timeframe === '' ? '1h' : timeframe}
+                  onValueChange={(value) => setTimeframe(value)}
+                >
+                  <SelectTrigger className="h-11 w-full sm:w-56">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="1h">1시간봉</SelectItem>
+                    <SelectItem value="1m">1분봉</SelectItem>
+                  </SelectContent>
+                </Select>
+              </CardContent>
+            </Card>
+          ) : null}
           {selectedDataset ? (
             <Card>
               <CardHeader>
@@ -592,6 +627,17 @@ export function NewBacktestWizard() {
               <div className="flex justify-between">
                 <span className="text-muted-foreground">종목</span>
                 <span>{request.universe.symbols.join(', ')}</span>
+              </div>
+              <Separator />
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">봉 주기</span>
+                <span>
+                  {request.timeframe === '1m'
+                    ? '1분봉'
+                    : request.timeframe === '1d'
+                      ? '일봉'
+                      : '1시간봉'}
+                </span>
               </div>
               <Separator />
               <div className="flex justify-between">

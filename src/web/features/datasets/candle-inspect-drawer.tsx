@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Bar,
   CartesianGrid,
@@ -161,9 +161,13 @@ export function CandleInspectDrawer({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const timeframes = datasetTimeframe === '1h' ? ['1h', '1m'] : [datasetTimeframe];
+  // 수집 원본(1m)을 기본으로 — 1h 는 내부 집계라 두 번째로 놓는다
+  const timeframes = datasetTimeframe === '1h' ? ['1m', '1h'] : [datasetTimeframe];
   const [timeframe, setTimeframe] = useState(timeframes[0] ?? '1d');
   const [presetIndex, setPresetIndex] = useState(0);
+  // 1h CSV 직접 import 데이터셋은 1m 원본이 없다 — 기본 1m 이 빈 화면으로 시작하지 않게
+  // 한 번만 1h 로 폴백한다. 사용자가 직접 고른 뒤에는 개입하지 않는다.
+  const [userPicked, setUserPicked] = useState(false);
 
   const presets = PRESETS[timeframe] ?? PRESETS['1d']!;
   const preset = presets[Math.min(presetIndex, presets.length - 1)]!;
@@ -184,6 +188,11 @@ export function CandleInspectDrawer({
   const range: [number, number] = [fromTsMs, toTsMs];
   const barSize = candles.length <= 100 ? 6 : candles.length <= 500 ? 3 : 1;
 
+  useEffect(() => {
+    if (userPicked || timeframe !== '1m' || datasetTimeframe !== '1h') return;
+    if (data && data.candles.length === 0) setTimeframe('1h');
+  }, [data, userPicked, timeframe, datasetTimeframe]);
+
   return (
     <Drawer open={open} onOpenChange={onOpenChange}>
       <DrawerContent>
@@ -203,6 +212,7 @@ export function CandleInspectDrawer({
               <Select
                 value={timeframe}
                 onValueChange={(value) => {
+                  setUserPicked(true);
                   setTimeframe(value);
                   setPresetIndex(0);
                 }}
@@ -213,7 +223,7 @@ export function CandleInspectDrawer({
                 <SelectContent>
                   {timeframes.map((tf) => (
                     <SelectItem key={tf} value={tf}>
-                      {tf === '1m' ? '1분봉 (원본)' : tf === '1h' ? '1시간봉' : '일봉'}
+                      {tf === '1m' ? '1분봉' : tf === '1h' ? '1시간봉' : '일봉'}
                     </SelectItem>
                   ))}
                 </SelectContent>

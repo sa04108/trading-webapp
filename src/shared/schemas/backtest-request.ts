@@ -6,6 +6,12 @@ export const backtestRequestSchema = z.object({
   strategyVersion: z.string().min(1),
   parameters: z.record(z.string(), z.unknown()),
   datasetId: z.string().min(1),
+  /**
+   * 소비 봉 주기 (설계 2026-07-29-backtest-timeframe-design.md).
+   * 미지정 = 데이터셋 timeframe (기존 동작). optional 인 이유: 이 필드가 없던
+   * 시절의 저장된 요청(복제·재실행)이 현재 스키마로도 파싱돼야 한다.
+   */
+  timeframe: z.enum(['1m', '1h', '1d']).optional(),
   universe: z.object({
     type: z.literal('SYMBOLS'),
     symbols: z.array(z.string().regex(/^[A-Za-z0-9._-]{1,20}$/)).min(1).max(50),

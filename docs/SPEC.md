@@ -661,7 +661,8 @@ COMMIT;
 - 원본은 수정하지 않음
 - 보정 여부 기록
 - 중복 수집 idempotent
-- 백테스트는 사전 집계 1시간봉 우선
+- 백테스트 기본 소비는 사전 집계 1시간봉 — 요청이 `timeframe` 을 명시하면 1m 원본도
+  소비할 수 있다 (D-026). 실행부가 전체 봉을 메모리에 올리므로 봉 수 상한(200만)을 둔다
 - 너무 작은 Parquet 조각 방지
 - 1분봉은 필요 시 S3 아카이브
 
@@ -844,6 +845,7 @@ GET /api/v1/system/info
     "riskPerTradePercent": 1
   },
   "datasetId": "kr-hourly-v1",
+  "timeframe": "1h",
   "universe": {
     "type": "SYMBOLS",
     "symbols": ["005930", "000660"]

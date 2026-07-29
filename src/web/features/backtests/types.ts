@@ -13,6 +13,8 @@ export interface BacktestRequestBody {
   strategyVersion: string;
   parameters: Record<string, unknown>;
   datasetId: string;
+  /** 소비 봉 주기 — 미지정은 데이터셋 timeframe (이 필드가 없던 시절의 요청 호환) */
+  timeframe?: '1m' | '1h' | '1d';
   universe: { type: 'SYMBOLS'; symbols: string[] };
   period: { from: string; to: string };
   capital: { initialCash: number; currency: 'KRW' };

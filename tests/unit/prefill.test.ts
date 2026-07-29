@@ -39,6 +39,14 @@ describe('requestToFormState', () => {
     expect(state.randomSeed).toBe('42');
   });
 
+  it('timeframe 을 왕복시킨다 — 미지정은 빈 문자열(데이터셋 기본)', () => {
+    const explicit = requestToFormState({ ...request, timeframe: '1m' }, catalog);
+    expect(explicit.state.timeframe).toBe('1m');
+
+    const unspecified = requestToFormState(request, catalog);
+    expect(unspecified.state.timeframe).toBe('');
+  });
+
   it('데이터셋이 사라지면 데이터셋·종목을 비우고 알린다', () => {
     const { state, notes } = requestToFormState(request, {
       ...catalog,

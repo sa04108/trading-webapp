@@ -9,6 +9,8 @@ export interface WizardFormState {
   strategyId: string | null;
   parameters: Record<string, string>;
   datasetId: string | null;
+  /** 소비 봉 주기 — '' 는 데이터셋 기본 */
+  timeframe: string;
   symbols: string[];
   from: string;
   to: string;
@@ -64,6 +66,7 @@ export function requestToFormState(
           )
         : {},
       datasetId: dataset?.id ?? null,
+      timeframe: request.timeframe ?? '',
       symbols,
       from: request.period.from,
       to: request.period.to,

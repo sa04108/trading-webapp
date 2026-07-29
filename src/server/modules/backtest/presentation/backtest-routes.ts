@@ -10,7 +10,9 @@ import {
 import { SECURITY_HEADERS } from '../../../shared/security.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
 import type { DatasetService } from '../../market-data/application/dataset-service.js';
+import { availableTimeframes } from '../../market-data/domain/candle.js';
 import type { StrategyRegistry } from '../../strategy/application/strategy-registry.js';
+import { estimateBars, MAX_BACKTEST_BARS } from '../domain/bar-estimate.js';
 import {
   getCostProfile,
   getSlippageProfile,
@@ -164,6 +166,32 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       }
       const coverageError = checkPeriodCoverage(body, dataset.id);
       if (coverageError !== null) errors.push(coverageError);
+
+      // 소비 timeframe 검사 — 미지정은 데이터셋 timeframe (기존 동작)
+      const available = availableTimeframes(dataset.timeframe);
+      const consumed = body.timeframe ?? dataset.timeframe;
+      if (!available.includes(consumed)) {
+        errors.push(
+          `이 데이터셋은 timeframe ${available.join('/')} 만 제공합니다 (요청: ${consumed})`,
+        );
+      } else {
+        // 봉 수 상한 — 실행부는 전체 봉을 메모리에 올린다. 1m 소비를 열면서 생긴 밸브.
+        // coverage 는 데이터셋 timeframe 기준이므로 1m 소비는 배율 60 으로 추정한다.
+        const { fromTsMs, toTsMs } = periodToTsRange(body.period);
+        const estimated = estimateBars(
+          datasets.getCoverage(dataset.id),
+          body.universe.symbols,
+          fromTsMs,
+          toTsMs,
+          consumed === dataset.timeframe ? 1 : 60,
+        );
+        if (estimated > MAX_BACKTEST_BARS) {
+          errors.push(
+            `예상 봉 수가 상한을 넘습니다 (추정 ${estimated.toLocaleString()}봉 > ` +
+              `${MAX_BACKTEST_BARS.toLocaleString()}봉). 기간이나 종목 수를 줄이거나 1h 봉을 사용하세요.`,
+          );
+        }
+      }
     }
 
     if (!getCostProfile(body.execution.commissionProfileId)) {
