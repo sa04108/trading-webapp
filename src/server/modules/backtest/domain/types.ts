@@ -67,6 +67,18 @@ export interface Position {
   entryTsMs: number;
 }
 
+/** 기간 종료 시점의 미청산 포지션 스냅샷 — 마지막 종가로 평가 (§9.4 경고와 짝) */
+export interface OpenPositionSnapshot {
+  readonly symbol: string;
+  readonly quantity: number;
+  readonly avgEntryPrice: number;
+  readonly entryTsMs: number;
+  readonly lastPrice: number;
+  /** 매도 비용 미반영 평가손익 — 실현 손익이 아니다 */
+  readonly unrealizedPnl: number;
+  readonly returnPct: number;
+}
+
 /** 완결(청산) 거래 */
 export interface Trade {
   readonly symbol: string;

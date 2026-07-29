@@ -45,7 +45,13 @@ import {
 } from '@/lib/format';
 import { DrawdownChart, EquityChart, MonthlyReturnsChart } from './result-charts';
 import { StatusBadge } from './status-badge';
-import { isTerminal, type BacktestMetrics, type JobSummary, type RunMetadata } from './types';
+import {
+  isTerminal,
+  type BacktestMetrics,
+  type JobSummary,
+  type OpenPositionSnapshot,
+  type RunMetadata,
+} from './types';
 
 function MetricCards({ metrics }: { metrics: BacktestMetrics }) {
   const cards = [
@@ -62,11 +68,11 @@ function MetricCards({ metrics }: { metrics: BacktestMetrics }) {
     },
     { label: 'Sharpe', value: formatNumber(metrics.sharpe), className: '' },
     {
-      label: '승률',
+      label: '승률 (청산 기준)',
       value: metrics.winRate === null ? '-' : `${metrics.winRate.toFixed(1)}%`,
       className: '',
     },
-    { label: '거래 수', value: `${metrics.tradeCount}건`, className: '' },
+    { label: '청산 거래 수', value: `${metrics.tradeCount}건`, className: '' },
   ];
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
@@ -79,6 +85,67 @@ function MetricCards({ metrics }: { metrics: BacktestMetrics }) {
         </Card>
       ))}
     </div>
+  );
+}
+
+/**
+ * 미청산 포지션 — 수익률·자산 곡선에는 반영되지만 거래 내역·승률에는 없는 돈이
+ * 어디 있는지 명시한다. "손실 거래뿐인데 수익률 +200%" 혼란의 해소 지점.
+ */
+function OpenPositionsSection({ run }: { run: RunMetadata }) {
+  const positions = run.openPositionsJson
+    ? (JSON.parse(run.openPositionsJson) as OpenPositionSnapshot[])
+    : [];
+  if (positions.length === 0) return null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">미청산 포지션</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>종목</TableHead>
+              <TableHead className="text-right">수량</TableHead>
+              <TableHead className="text-right">진입가</TableHead>
+              <TableHead className="text-right">기말 종가</TableHead>
+              <TableHead className="text-right">평가손익</TableHead>
+              <TableHead className="text-right">수익률</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {positions.map((position) => (
+              <TableRow key={position.symbol}>
+                <TableCell>{position.symbol}</TableCell>
+                <TableCell className="text-right tabular-nums">{position.quantity}</TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {formatKrw(position.avgEntryPrice)}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {formatKrw(position.lastPrice)}
+                </TableCell>
+                <TableCell
+                  className={cn('text-right tabular-nums', pnlClass(position.unrealizedPnl))}
+                >
+                  {formatSignedKrw(position.unrealizedPnl)}
+                </TableCell>
+                <TableCell
+                  className={cn('text-right tabular-nums', pnlClass(position.returnPct))}
+                >
+                  {formatSignedPct(position.returnPct)}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+        <p className="text-xs text-muted-foreground">
+          기간 종료 시점에 청산되지 않은 포지션의 평가치입니다 (매도 비용 미반영). 누적
+          수익률·자산 곡선에는 포함되지만, 거래 내역·승률·profit factor 에는 포함되지 않습니다.
+        </p>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -431,6 +498,8 @@ export function BacktestDetailPage() {
       {completed && metrics ? (
         <>
           <MetricCards metrics={metrics} />
+
+          {run ? <OpenPositionsSection run={run} /> : null}
 
           {series ? (
             <div className="space-y-4">

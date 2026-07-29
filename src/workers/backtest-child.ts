@@ -209,6 +209,7 @@ async function main(): Promise<void> {
           randomSeed: request.randomSeed,
           gitCommitSha: readGitCommitSha(),
           warningsJson: JSON.stringify([...datasetWarnings, ...result.warnings]),
+          openPositionsJson: JSON.stringify(result.openPositions),
           startedAtMs,
           completedAtMs: Date.now(),
         })

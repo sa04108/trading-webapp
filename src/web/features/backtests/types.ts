@@ -80,6 +80,7 @@ export interface RunMetadata {
   randomSeed: number;
   gitCommitSha: string;
   warningsJson: string | null;
+  openPositionsJson: string | null;
   startedAtMs: number;
   completedAtMs: number | null;
 }
@@ -122,4 +123,15 @@ export const TERMINAL_STATUSES: BacktestStatus[] = [
 
 export function isTerminal(status: BacktestStatus): boolean {
   return TERMINAL_STATUSES.includes(status);
+}
+
+/** 기간 종료 시점 미청산 포지션 (매도 비용 미반영 평가치) */
+export interface OpenPositionSnapshot {
+  symbol: string;
+  quantity: number;
+  avgEntryPrice: number;
+  entryTsMs: number;
+  lastPrice: number;
+  unrealizedPnl: number;
+  returnPct: number;
 }

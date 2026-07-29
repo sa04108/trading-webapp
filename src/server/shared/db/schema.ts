@@ -195,6 +195,8 @@ export const backtestRuns = sqliteTable('backtest_runs', {
   randomSeed: integer('random_seed').notNull(),
   gitCommitSha: text('git_commit_sha').notNull(),
   warningsJson: text('warnings_json'),
+  /** 기간 종료 시점 미청산 포지션 스냅샷 (OpenPositionSnapshot[]) — 소수라 JSON 보관 */
+  openPositionsJson: text('open_positions_json'),
   startedAtMs: integer('started_at_ms').notNull(),
   completedAtMs: integer('completed_at_ms'),
 });

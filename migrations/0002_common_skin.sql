@@ -1,0 +1,1 @@
+ALTER TABLE `backtest_runs` ADD `open_positions_json` text;

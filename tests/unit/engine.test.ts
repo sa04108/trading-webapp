@@ -206,6 +206,61 @@ describe('runBacktest 이벤트 순서 (스펙 §9.1, §9.2)', () => {
     expect(result.metrics.finalEquity).toBeCloseTo(10_000 + 200 - 4.6);
   });
 
+  it('reports open positions at period end with mark-to-market PnL', () => {
+    // 봉 0 신호 → 봉 1 시가(110) 체결, 이후 청산 없음 — 마지막 종가 130 기준 평가
+    const candles = [bar(0, 100), bar(1, 110), bar(2, 130)];
+    const result = runBacktest(buyAtBarStrategy(0, 5) as never, {
+      candles,
+      initialCash: 10_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+    });
+
+    expect(result.openPositions).toHaveLength(1);
+    expect(result.openPositions[0]).toEqual({
+      symbol: 'A',
+      quantity: 5,
+      avgEntryPrice: 110,
+      entryTsMs: START + HOUR,
+      lastPrice: 130,
+      unrealizedPnl: 5 * (130 - 110),
+      returnPct: ((130 - 110) / 110) * 100,
+    });
+  });
+
+  it('reports no open positions when everything was closed', () => {
+    const candles = [bar(0, 100), bar(1, 110), bar(2, 120)];
+    const strategy: TradingStrategy<unknown, { step: number }> = {
+      id: 'test-roundtrip',
+      version: '1.0.0',
+      name: 'test',
+      description: 'test',
+      parameterSchema: z.unknown(),
+      initialize: () => ({ step: 0 }),
+      onBars(_context, state) {
+        const orders: OrderIntent[] =
+          state.step === 0
+            ? [{ symbol: 'A', side: 'BUY', quantity: 1 }]
+            : state.step === 1
+              ? [{ symbol: 'A', side: 'SELL', quantity: 1 }]
+              : [];
+        state.step += 1;
+        return { orders };
+      },
+    };
+    const result = runBacktest(strategy as never, {
+      candles,
+      initialCash: 10_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+    });
+    expect(result.openPositions).toEqual([]);
+  });
+
   it('counts pending BUY orders against maxPositions (동시 신호 상한 방어)', () => {
     // 두 심볼이 같은 봉에서 동시에 BUY 신호 → maxPositions=1 이면 1건만 체결돼야 한다
     const strategy: TradingStrategy<unknown, { fired: boolean }> = {

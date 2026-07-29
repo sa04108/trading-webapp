@@ -19,6 +19,7 @@ import type {
   ExecutionProfile,
   Fill,
   MonthlyReturn,
+  OpenPositionSnapshot,
   OrderIntent,
   Position,
   SymbolMetrics,
@@ -48,6 +49,8 @@ export interface EngineHooks {
 
 export interface BacktestRunResult {
   readonly metrics: BacktestMetrics;
+  /** 기간 종료 시점 미청산 포지션 — 평가금액에 반영되나 거래내역에는 없는 몫 */
+  readonly openPositions: readonly OpenPositionSnapshot[];
   readonly equityPoints: readonly EquityPoint[];
   readonly drawdownPoints: readonly DrawdownPoint[];
   readonly trades: readonly Trade[];
@@ -202,8 +205,27 @@ export function runBacktest(
     maxConcurrentPositions,
   );
 
+  // 미청산 포지션 스냅샷 — 수익률·자산 곡선에는 평가금액으로 반영되지만 거래내역에는
+  // 없는 돈이 어디 있는지를 명시적으로 보여준다 (매도 비용 미반영 평가치)
+  const openPositions: OpenPositionSnapshot[] = [...positions.values()]
+    .filter((position) => position.quantity > 0)
+    .map((position) => {
+      const lastPrice = lastCloseBySymbol.get(position.symbol) ?? position.avgEntryPrice;
+      return {
+        symbol: position.symbol,
+        quantity: position.quantity,
+        avgEntryPrice: position.avgEntryPrice,
+        entryTsMs: position.entryTsMs,
+        lastPrice,
+        unrealizedPnl: position.quantity * (lastPrice - position.avgEntryPrice),
+        returnPct: ((lastPrice - position.avgEntryPrice) / position.avgEntryPrice) * 100,
+      };
+    })
+    .sort((a, b) => (a.symbol < b.symbol ? -1 : 1));
+
   return {
     metrics,
+    openPositions,
     equityPoints,
     drawdownPoints: computeDrawdownSeries(equityPoints),
     trades,
