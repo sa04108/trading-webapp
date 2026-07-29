@@ -15,7 +15,7 @@
 - **US 는 데이터셋 자체를 만들 수 없다** — 거래소 세션이 정의되지 않아 `getSessionForMarket` 이 던지고, 증권사·CSV 두 생성 경로가 모두 그것을 호출한다(D-006). UI 는 고를 수 없게 막고 이유를 상시 노출한다. **서버 검증은 없애지 않는다** — UI 는 미리 알려주는 층이지 거부하는 층이 아니다.
 - **DART 일일 호출 한도는 40,000** 이다. `fact-sync-service.ts:51-55` 의 "일 한도 20,000" 주석은 오류이므로 함께 고친다.
 - **종목·연도당 DART 호출 9회** — `fnlttSinglAcntAll` 4 + `stockTotqySttus` 4 + `irdsSttus` 1.
-- **`dart-fact-source.ts` 의 한도 주석은 이미 4만으로 정정돼 있다**(커밋 `366e28a`). 남은 오류는 `fact-sync-service.ts:52` 의 "일 한도 20,000" 하나이고 Task 5 가 고친다.
+- **`dart-fact-source.ts` 의 한도 주석은 이미 4만으로 정정돼 있다**(커밋 `366e28a`). 남은 오류는 `fact-sync-service.ts:52` 의 "일 한도 20,000" 하나이고 Task 4 가 고친다.
 - **rate limiter 최소 간격 120ms** — `DART_MIN_INTERVAL_MS` 상수 한 곳에서만 정의하고 `dart-fact-source.ts` 가 그것을 쓴다. 두 곳에 숫자를 두면 화면 추정치만 조용히 틀려진다.
 - **표기 규칙은 `이름 (코드)` 하나.** 공백 하나 포함. 이름을 모르면 코드만 — 빈 괄호를 만들지 않는다.
 - **주석·UI 문구는 한국어.** 이 저장소의 관례다. 주석은 "무엇을" 이 아니라 "왜" 를 적는다.
@@ -69,9 +69,11 @@
 | `tests/unit/broker-sync-service.test.ts` | 재무 단계 케이스. |
 | `tests/e2e/mvp-flow.spec.ts` | 종목명·체크박스 확인. |
 
-**태스크 순서 근거:** 1–2 는 순수 함수와 스키마라 뒤의 모든 것이 의존한다. 3–5 는 facts 모듈 내부(포트 → 어댑터 → 서비스)를 아래에서 위로 바꾼다. 6–8 은 market-data 쪽(연도 도출 → 잡 단계 → 라우트·조립). 9–10 은 웹 재무 UI — 재무 툴팁의 "국내(KR) 종목만" 한 줄은 정적 문구라 Task 10 에 들어가고 Task 14 를 기다리지 않는다. 11–13 은 종목명 표시. 14–15 는 시장 지원 명시(서버 → 웹). 16 은 문서.
+**태스크 순서 근거:** 1–2 는 순수 함수와 스키마라 뒤의 모든 것이 의존한다. 3–4 는 facts 모듈 내부 — 3(이력 저장소)이 먼저이고 4(포트 전환 + 증분 서비스)가 그것을 쓴다. 5–7 은 market-data 쪽(연도 도출 → 잡 단계 → 라우트·조립). 8–9 는 웹 재무 UI — 재무 툴팁의 "국내(KR) 종목만" 한 줄은 정적 문구라 Task 9 에 들어가고 Task 13 를 기다리지 않는다. 10–12 는 종목명 표시. 13–14 는 시장 지원 명시(서버 → 웹). 15 는 문서.
 
-Task 14–15 를 뒤에 두는 이유: `exchange-session.ts` 를 맵 기반으로 바꾸는 것이 세션을 쓰는 모든 테스트(`aggregate`·`coverage`·`session-policy`·`broker-sync-service`)의 회귀 대상이라, 앞선 태스크들이 통과한 상태에서 해야 회귀 원인을 가릴 수 있다.
+**모든 태스크의 커밋은 `pnpm typecheck && pnpm test` 를 통과한다.** Task 4 가 포트 변경과 그 유일한 소비자(`FactSyncService`)를 한 커밋에 담는 이유가 이것이다 — 나누면 앞 커밋이 컴파일되지 않고, 리뷰어가 한쪽만 승인할 수도 없다.
+
+Task 13–14 를 뒤에 두는 이유: `exchange-session.ts` 를 맵 기반으로 바꾸는 것이 세션을 쓰는 모든 테스트(`aggregate`·`coverage`·`session-policy`·`broker-sync-service`)의 회귀 대상이라, 앞선 태스크들이 통과한 상태에서 해야 회귀 원인을 가릴 수 있다.
 
 ---
 
@@ -408,216 +410,7 @@ git commit -m "feat(db): 잡 단계·봉 소요시간·재무 진행 컬럼과 �
 
 ---
 
-### Task 3: 포트를 연도 목록으로 바꾸고 어댑터를 맞춘다
-
-**Files:**
-- Modify: `src/server/modules/facts/application/ports.ts:34-40`
-- Modify: `src/server/modules/facts/infrastructure/dart/dart-fact-source.ts`
-- Modify: `tests/unit/dart-fact-source.test.ts`
-
-**Interfaces:**
-- Consumes: `DART_MIN_INTERVAL_MS` (Task 1)
-- Produces: `FetchFinancialsRequest { symbols, years, shareYears, consolidated }`
-
-- [ ] **Step 1: 실패하는 테스트를 쓴다**
-
-`tests/unit/dart-fact-source.test.ts` 에 추가 (기존 헬퍼를 재사용한다 — 파일 상단의 fake fetch 관례를 그대로 따른다):
-
-```ts
-  it('불연속 연도를 요청하면 그 연도만 호출한다', async () => {
-    const calls: string[] = [];
-    const source = createDartFactSource(
-      { baseUrl: 'https://dart.test', apiKey: 'k' },
-      LOGGER,
-      {
-        fetchImpl: async (url) => {
-          calls.push(String(url));
-          return jsonResponse({ status: '013', message: '조회된 데이터가 없습니다' });
-        },
-        sleep: async () => {},
-        corpCodeResolver: { resolve: async () => '00126380' },
-      },
-    );
-
-    await source.fetchFinancials({
-      symbols: ['005930'],
-      years: [2020, 2024],
-      shareYears: [2019, 2020, 2024],
-      consolidated: true,
-    });
-
-    const accountYears = calls
-      .filter((url) => url.includes('fnlttSinglAcntAll'))
-      .map((url) => new URL(url).searchParams.get('bsns_year'));
-    expect([...new Set(accountYears)].sort()).toEqual(['2020', '2024']);
-
-    const shareYears = calls
-      .filter((url) => url.includes('stockTotqySttus'))
-      .map((url) => new URL(url).searchParams.get('bsns_year'));
-    expect([...new Set(shareYears)].sort()).toEqual(['2019', '2020', '2024']);
-  });
-
-  it('자본변동은 years 로, 주식총수 시계열은 shareYears 로 읽는다', async () => {
-    const calls: string[] = [];
-    const source = createDartFactSource(
-      { baseUrl: 'https://dart.test', apiKey: 'k' },
-      LOGGER,
-      {
-        fetchImpl: async (url) => {
-          calls.push(String(url));
-          return jsonResponse({ status: '013', message: '조회된 데이터가 없습니다' });
-        },
-        sleep: async () => {},
-        corpCodeResolver: { resolve: async () => '00126380' },
-      },
-    );
-
-    await source.fetchCorporateActions({
-      symbols: ['005930'],
-      years: [2024],
-      shareYears: [2023, 2024],
-      consolidated: true,
-    });
-
-    const issuanceYears = calls
-      .filter((url) => url.includes('irdsSttus'))
-      .map((url) => new URL(url).searchParams.get('bsns_year'));
-    expect(issuanceYears).toEqual(['2024']);
-
-    const shareYears = calls
-      .filter((url) => url.includes('stockTotqySttus'))
-      .map((url) => new URL(url).searchParams.get('bsns_year'));
-    expect([...new Set(shareYears)].sort()).toEqual(['2023', '2024']);
-  });
-```
-
-기존 테스트의 `fromYear`/`toYear` 호출부는 전부 `years`/`shareYears` 로 바꾼다. 예: `{ symbols: ['005930'], fromYear: 2024, toYear: 2024, consolidated: true }` → `{ symbols: ['005930'], years: [2024], shareYears: [2023, 2024], consolidated: true }`.
-
-파일 상단에 `jsonResponse` / `LOGGER` 헬퍼가 이미 없다면 아래를 추가한다:
-
-```ts
-const LOGGER = { debug() {}, info() {}, warn() {}, error() {} } as never;
-
-function jsonResponse(body: unknown): Response {
-  return new Response(JSON.stringify(body), {
-    status: 200,
-    headers: { 'content-type': 'application/json' },
-  });
-}
-```
-
-- [ ] **Step 2: 테스트가 실패하는 것을 확인한다**
-
-Run: `pnpm vitest run tests/unit/dart-fact-source.test.ts`
-Expected: FAIL — `years` 가 `FetchFinancialsRequest` 에 없다는 타입 오류, 또는 호출 연도가 기대와 다르다.
-
-- [ ] **Step 3: 포트를 바꾼다**
-
-`src/server/modules/facts/application/ports.ts` — `FetchFinancialsRequest` 를 교체:
-
-```ts
-export interface FetchFinancialsRequest {
-  readonly symbols: readonly string[];
-  /**
-   * 재무제표·자본변동을 읽을 연도 (오름차순). 범위 두 값이 아닌 이유는 수집 이력이
-   * 불연속일 수 있기 때문이다 — from/to 로 접으면 가운데 구멍을 수집했다고 거짓말한다.
-   */
-  readonly years: readonly number[];
-  /**
-   * 주식총수를 읽을 연도. `years` + 직전 1년이다 — 자본변동 비율은 이벤트 직전
-   * 발행주식수를 앵커로 쓰므로, 대상 연도만 읽으면 연초 이벤트가 gap 이 된다.
-   */
-  readonly shareYears: readonly number[];
-  /** true = 연결(CFS), false = 별도(OFS). 데이터셋 하나는 한 기준만 담는다 */
-  readonly consolidated: boolean;
-}
-```
-
-- [ ] **Step 4: 어댑터를 맞춘다**
-
-`src/server/modules/facts/infrastructure/dart/dart-fact-source.ts`:
-
-1. import 에 상수를 더한다:
-
-```ts
-import { DART_MIN_INTERVAL_MS } from '../../domain/sync-plan.js';
-```
-
-2. `groupMinIntervalMs` 를 상수로 바꾼다 (주석의 숫자 설명은 상수 정의로 옮겼으므로 참조만 남긴다):
-
-```ts
-    // 목적은 일일 한도 절약이 아니라 초당 폭주 방지다. 이 값을 화면 추정치와 공유하기
-    // 위해 domain/sync-plan.ts 에서 가져온다 — 두 곳에 숫자를 두면 한쪽만 고쳐진다.
-    groupMinIntervalMs: { default: DART_MIN_INTERVAL_MS },
-```
-
-3. `fetchFinancials` 의 연도 루프 두 개를 목록 순회로 바꾼다:
-
-```ts
-      for (const year of request.years) {
-```
-
-그리고 발행주식수 루프는 `request.shareYears` 를 돈다 — 재무 루프 **밖으로** 빼야 한다. 지금은 연도 루프 안에 중첩돼 있는데, `shareYears` 는 `years` 와 원소 수가 달라 안에 두면 연도가 어긋난다:
-
-```ts
-      for (const year of request.years) {
-        const rowsByReport = new Map<DartReportCode, readonly DartFinancialRow[]>();
-        // ... (기존 fnlttSinglAcntAll 수집·파싱 로직 그대로)
-      }
-
-      // 발행주식수 — 정기보고서별로 조회하고 그 보고서의 분기에 붙인다. DART
-      // stockTotqySttus 는 사업보고서뿐 아니라 분기·반기보고서에도 '주식의 총수
-      // 현황' 섹션을 담고 있어 네 보고서 모두 조회 대상이다.
-      //
-      // shareYears 는 years + 직전 1년이라 원소 수가 다르다 — 재무 루프 안에 두면
-      // 연도가 어긋나므로 별도 루프로 돈다.
-      for (const year of request.shareYears) {
-        for (const reportCode of REPORT_ORDER) {
-          const shareRows = await fetchShareRows(corpCode, year, reportCode);
-          // ... (기존 보통주 선별·gap 처리 로직 그대로)
-        }
-      }
-```
-
-4. `fetchCorporateActions` 의 루프 두 개를 각각 바꾼다 — 주식총수 시계열은 `shareYears`, `irdsSttus` 는 `years`:
-
-```ts
-      for (const year of request.shareYears) {
-        for (const reportCode of REPORT_ORDER) {
-          // ... (기존 sharesByPeriod 채우기 그대로)
-        }
-      }
-      sharesByPeriod.sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1));
-
-      // ... sharesBefore 정의 그대로
-
-      for (const year of request.years) {
-        const rows = await call<DartIssuanceRow>('/api/irdsSttus.json', {
-          // ... 그대로
-        });
-        // ... 그대로
-      }
-```
-
-- [ ] **Step 5: 테스트가 통과하는 것을 확인한다**
-
-Run: `pnpm vitest run tests/unit/dart-fact-source.test.ts && pnpm typecheck`
-Expected: 어댑터 테스트 PASS. `pnpm typecheck` 는 `fact-sync-service.ts` 와 `tests/unit/fact-sync-service.test.ts` 에서 실패한다 — Task 4 가 고친다.
-
-- [ ] **Step 6: 커밋**
-
-```bash
-git add src/server/modules/facts/application/ports.ts src/server/modules/facts/infrastructure/dart/dart-fact-source.ts tests/unit/dart-fact-source.test.ts
-git commit -m "refactor(facts): 수집 포트를 연도 범위에서 연도 목록으로 바꾼다
-
-수집 이력이 불연속일 수 있어 from/to 두 값으로는 표현할 수 없다. 주식총수는
-years 와 원소 수가 다르므로 별도 루프로 분리한다. rate limiter 간격은
-domain/sync-plan.ts 의 상수를 쓴다."
-```
-
----
-
-### Task 4: 수집 이력 저장소
+### Task 3: 수집 이력 저장소
 
 **Files:**
 - Create: `src/server/modules/facts/application/fact-coverage-store.ts`
@@ -820,18 +613,223 @@ git commit -m "feat(facts): 종목별 재무 수집 이력 저장소
 
 ---
 
-### Task 5: FactSyncService — mode·취소·이력 기록
+### Task 4: 연도 목록 포트 전환 + 증분 수집 서비스
+
+**이 태스크가 하나인 이유:** 포트(`FetchFinancialsRequest`)를 연도 목록으로 바꾸면 그
+포트의 유일한 소비자인 `FactSyncService` 가 즉시 컴파일되지 않는다. 둘을 나누면 앞
+태스크의 커밋이 `pnpm typecheck` 를 통과하지 못하고, 리뷰어는 한쪽만 승인할 수도 없다.
+포트 변경과 그 소비자는 같은 허용 범위다.
 
 **Files:**
+- Modify: `src/server/modules/facts/application/ports.ts:34-40`
+- Modify: `src/server/modules/facts/infrastructure/dart/dart-fact-source.ts`
 - Modify: `src/server/modules/facts/application/fact-sync-service.ts`
 - Modify: `src/server/cli.ts:184-231`
+- Modify: `src/server/bootstrap/container.ts` (생성자 인자 1개 추가 — 최소 수정)
+- Modify: `tests/unit/dart-fact-source.test.ts`
 - Modify: `tests/unit/fact-sync-service.test.ts`
 
 **Interfaces:**
-- Consumes: `planFactSync`·`FactSyncMode` (Task 1), `FactCoverageStore` (Task 4), `FetchFinancialsRequest` (Task 3)
-- Produces: `FactSyncRequest { datasetId, symbols, fromYear, toYear, consolidated, mode }`, `FactSyncHooks { onSymbolDone?, shouldStop? }`, `FactSyncReport { savedFacts, gaps, stoppedAtSymbol, stopReason, failureMessage }`
+- Consumes: `planFactSync`·`FactSyncMode`·`DART_MIN_INTERVAL_MS` (Task 1), `FactCoverageStore`·`SqliteFactCoverageStore` (Task 3)
+- Produces: `FetchFinancialsRequest { symbols, years, shareYears, consolidated }`, `FactSyncRequest { datasetId, symbols, fromYear, toYear, consolidated, mode }`, `FactSyncHooks { onSymbolDone?, shouldStop? }`, `FactSyncReport { savedFacts, gaps, stoppedAtSymbol, stopReason, failureMessage }`
+
+**진행 순서:** 어댑터 쪽(Step 1–5)을 먼저 바꾸고 서비스 쪽(Step 6–10)을 이어서 바꾼다.
+**커밋은 Step 11 에서 한 번만 한다** — 중간에 끊으면 그 커밋이 컴파일되지 않는다.
+
+#### 어댑터 — 포트를 연도 목록으로
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
+
+`tests/unit/dart-fact-source.test.ts` 에 추가 (기존 헬퍼를 재사용한다 — 파일 상단의 fake fetch 관례를 그대로 따른다):
+
+```ts
+  it('불연속 연도를 요청하면 그 연도만 호출한다', async () => {
+    const calls: string[] = [];
+    const source = createDartFactSource(
+      { baseUrl: 'https://dart.test', apiKey: 'k' },
+      LOGGER,
+      {
+        fetchImpl: async (url) => {
+          calls.push(String(url));
+          return jsonResponse({ status: '013', message: '조회된 데이터가 없습니다' });
+        },
+        sleep: async () => {},
+        corpCodeResolver: { resolve: async () => '00126380' },
+      },
+    );
+
+    await source.fetchFinancials({
+      symbols: ['005930'],
+      years: [2020, 2024],
+      shareYears: [2019, 2020, 2024],
+      consolidated: true,
+    });
+
+    const accountYears = calls
+      .filter((url) => url.includes('fnlttSinglAcntAll'))
+      .map((url) => new URL(url).searchParams.get('bsns_year'));
+    expect([...new Set(accountYears)].sort()).toEqual(['2020', '2024']);
+
+    const shareYears = calls
+      .filter((url) => url.includes('stockTotqySttus'))
+      .map((url) => new URL(url).searchParams.get('bsns_year'));
+    expect([...new Set(shareYears)].sort()).toEqual(['2019', '2020', '2024']);
+  });
+
+  it('자본변동은 years 로, 주식총수 시계열은 shareYears 로 읽는다', async () => {
+    const calls: string[] = [];
+    const source = createDartFactSource(
+      { baseUrl: 'https://dart.test', apiKey: 'k' },
+      LOGGER,
+      {
+        fetchImpl: async (url) => {
+          calls.push(String(url));
+          return jsonResponse({ status: '013', message: '조회된 데이터가 없습니다' });
+        },
+        sleep: async () => {},
+        corpCodeResolver: { resolve: async () => '00126380' },
+      },
+    );
+
+    await source.fetchCorporateActions({
+      symbols: ['005930'],
+      years: [2024],
+      shareYears: [2023, 2024],
+      consolidated: true,
+    });
+
+    const issuanceYears = calls
+      .filter((url) => url.includes('irdsSttus'))
+      .map((url) => new URL(url).searchParams.get('bsns_year'));
+    expect(issuanceYears).toEqual(['2024']);
+
+    const shareYears = calls
+      .filter((url) => url.includes('stockTotqySttus'))
+      .map((url) => new URL(url).searchParams.get('bsns_year'));
+    expect([...new Set(shareYears)].sort()).toEqual(['2023', '2024']);
+  });
+```
+
+기존 테스트의 `fromYear`/`toYear` 호출부는 전부 `years`/`shareYears` 로 바꾼다. 예: `{ symbols: ['005930'], fromYear: 2024, toYear: 2024, consolidated: true }` → `{ symbols: ['005930'], years: [2024], shareYears: [2023, 2024], consolidated: true }`.
+
+파일 상단에 `jsonResponse` / `LOGGER` 헬퍼가 이미 없다면 아래를 추가한다:
+
+```ts
+const LOGGER = { debug() {}, info() {}, warn() {}, error() {} } as never;
+
+function jsonResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  });
+}
+```
+
+- [ ] **Step 2: 테스트가 실패하는 것을 확인한다**
+
+Run: `pnpm vitest run tests/unit/dart-fact-source.test.ts`
+Expected: FAIL — `years` 가 `FetchFinancialsRequest` 에 없다는 타입 오류, 또는 호출 연도가 기대와 다르다.
+
+- [ ] **Step 3: 포트를 바꾼다**
+
+`src/server/modules/facts/application/ports.ts` — `FetchFinancialsRequest` 를 교체:
+
+```ts
+export interface FetchFinancialsRequest {
+  readonly symbols: readonly string[];
+  /**
+   * 재무제표·자본변동을 읽을 연도 (오름차순). 범위 두 값이 아닌 이유는 수집 이력이
+   * 불연속일 수 있기 때문이다 — from/to 로 접으면 가운데 구멍을 수집했다고 거짓말한다.
+   */
+  readonly years: readonly number[];
+  /**
+   * 주식총수를 읽을 연도. `years` + 직전 1년이다 — 자본변동 비율은 이벤트 직전
+   * 발행주식수를 앵커로 쓰므로, 대상 연도만 읽으면 연초 이벤트가 gap 이 된다.
+   */
+  readonly shareYears: readonly number[];
+  /** true = 연결(CFS), false = 별도(OFS). 데이터셋 하나는 한 기준만 담는다 */
+  readonly consolidated: boolean;
+}
+```
+
+- [ ] **Step 4: 어댑터를 맞춘다**
+
+`src/server/modules/facts/infrastructure/dart/dart-fact-source.ts`:
+
+1. import 에 상수를 더한다:
+
+```ts
+import { DART_MIN_INTERVAL_MS } from '../../domain/sync-plan.js';
+```
+
+2. `groupMinIntervalMs` 를 상수로 바꾼다 (주석의 숫자 설명은 상수 정의로 옮겼으므로 참조만 남긴다):
+
+```ts
+    // 목적은 일일 한도 절약이 아니라 초당 폭주 방지다. 이 값을 화면 추정치와 공유하기
+    // 위해 domain/sync-plan.ts 에서 가져온다 — 두 곳에 숫자를 두면 한쪽만 고쳐진다.
+    groupMinIntervalMs: { default: DART_MIN_INTERVAL_MS },
+```
+
+3. `fetchFinancials` 의 연도 루프 두 개를 목록 순회로 바꾼다:
+
+```ts
+      for (const year of request.years) {
+```
+
+그리고 발행주식수 루프는 `request.shareYears` 를 돈다 — 재무 루프 **밖으로** 빼야 한다. 지금은 연도 루프 안에 중첩돼 있는데, `shareYears` 는 `years` 와 원소 수가 달라 안에 두면 연도가 어긋난다:
+
+```ts
+      for (const year of request.years) {
+        const rowsByReport = new Map<DartReportCode, readonly DartFinancialRow[]>();
+        // ... (기존 fnlttSinglAcntAll 수집·파싱 로직 그대로)
+      }
+
+      // 발행주식수 — 정기보고서별로 조회하고 그 보고서의 분기에 붙인다. DART
+      // stockTotqySttus 는 사업보고서뿐 아니라 분기·반기보고서에도 '주식의 총수
+      // 현황' 섹션을 담고 있어 네 보고서 모두 조회 대상이다.
+      //
+      // shareYears 는 years + 직전 1년이라 원소 수가 다르다 — 재무 루프 안에 두면
+      // 연도가 어긋나므로 별도 루프로 돈다.
+      for (const year of request.shareYears) {
+        for (const reportCode of REPORT_ORDER) {
+          const shareRows = await fetchShareRows(corpCode, year, reportCode);
+          // ... (기존 보통주 선별·gap 처리 로직 그대로)
+        }
+      }
+```
+
+4. `fetchCorporateActions` 의 루프 두 개를 각각 바꾼다 — 주식총수 시계열은 `shareYears`, `irdsSttus` 는 `years`:
+
+```ts
+      for (const year of request.shareYears) {
+        for (const reportCode of REPORT_ORDER) {
+          // ... (기존 sharesByPeriod 채우기 그대로)
+        }
+      }
+      sharesByPeriod.sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1));
+
+      // ... sharesBefore 정의 그대로
+
+      for (const year of request.years) {
+        const rows = await call<DartIssuanceRow>('/api/irdsSttus.json', {
+          // ... 그대로
+        });
+        // ... 그대로
+      }
+```
+
+- [ ] **Step 5: 어댑터 테스트가 통과하는 것을 확인한다**
+
+Run: `pnpm vitest run tests/unit/dart-fact-source.test.ts`
+Expected: PASS
+
+**이 시점에 `pnpm typecheck` 는 아직 실패한다** — `fact-sync-service.ts` 가 옛 포트 모양으로
+요청을 만들고 있다. 정상이다. Step 6–10 이 그것을 고치고 Step 11 에서 한 번에 커밋한다.
+여기서 커밋하지 않는다.
+
+#### 서비스 — 증분 모드와 취소
+
+- [ ] **Step 6: 실패하는 테스트를 쓴다**
 
 `tests/unit/fact-sync-service.test.ts` 에 추가. 기존 `fakeSource`/`fakeVersions` 헬퍼를 그대로 쓰고, 새로 필요한 가짜 저장소를 더한다:
 
@@ -1059,12 +1057,12 @@ function inMemoryRepository(): FactRepository {
 
 기존 테스트의 `sync({...})` 호출부에는 `mode: 'FULL'` 을 더하고, `new FactSyncService(...)` 호출부에는 여섯 번째 인자로 `fakeCoverage()` 를 더한다.
 
-- [ ] **Step 2: 테스트가 실패하는 것을 확인한다**
+- [ ] **Step 7: 테스트가 실패하는 것을 확인한다**
 
 Run: `pnpm vitest run tests/unit/fact-sync-service.test.ts`
 Expected: FAIL — `FactSyncService` 생성자가 5개 인자만 받고 `mode`·`stopReason` 이 없다.
 
-- [ ] **Step 3: 서비스를 바꾼다**
+- [ ] **Step 8: 서비스를 바꾼다**
 
 `src/server/modules/facts/application/fact-sync-service.ts`:
 
@@ -1271,7 +1269,7 @@ export interface FactSyncReport {
 성립하지 않는다. 호출 수도 앵커 4회를 포함해 22,400 으로 맞춘다(Task 1 의 표와 일치).
 같은 정정이 `dart-fact-source.ts` 에는 이미 커밋 `366e28a` 로 적용돼 있다.
 
-- [ ] **Step 4: CLI 를 맞춘다**
+- [ ] **Step 9: CLI 를 맞춘다**
 
 `src/server/cli.ts` — `factsSync` 안의 `sync` 호출에 `mode` 를 더한다:
 
@@ -1283,24 +1281,65 @@ export interface FactSyncReport {
       {
 ```
 
-- [ ] **Step 5: 테스트가 통과하는 것을 확인한다**
+- [ ] **Step 10: 컨테이너를 최소한만 맞춘다**
 
-Run: `pnpm vitest run tests/unit/fact-sync-service.test.ts && pnpm typecheck`
-Expected: PASS. `pnpm typecheck` 는 `container.ts` 에서 실패한다 (`FactSyncService` 생성자 인자 부족) — Task 8 이 고친다. 그 전에 임시로 통과시키려면 Task 8 을 먼저 해도 된다.
+`FactSyncService` 생성자에 인자가 하나 늘었으므로 컨테이너가 컴파일되지 않는다. 여기서는
+**그 한 줄만** 고친다 — `factsPhase`·`factsSyncEstimator` 조립은 Task 7 의 일이다.
 
-- [ ] **Step 6: 커밋**
+`src/server/bootstrap/container.ts` — `factSyncService` 생성 부분을 바꾼다:
+
+```ts
+  const factCoverageStore = new SqliteFactCoverageStore(database.db);
+  const factSyncService = new FactSyncService(
+    factSource,
+    factRepository,
+    logger,
+    datasetService,
+    clock,
+    factCoverageStore,
+  );
+```
+
+import 를 더한다:
+
+```ts
+import { SqliteFactCoverageStore } from '../modules/facts/application/fact-coverage-store.js';
+```
+
+`factCoverageStore` 는 Task 7 의 추정기도 쓰므로 지역 상수로 남겨 둔다. `Container`
+인터페이스에 노출할 필요는 없다.
+
+- [ ] **Step 11: 전체 검증 — 여기서 처음으로 초록이 된다**
+
+Run: `pnpm typecheck && pnpm lint && pnpm test`
+Expected: 전부 PASS. 이 태스크의 커밋이 컴파일되는 첫 지점이다 — typecheck 가 실패하면
+Step 3·4·8·10 중 빠뜨린 곳이 있다.
+
+특히 다음 기존 테스트가 통과해야 한다 (포트 변경의 회귀 감시):
+- `tests/unit/dart-fact-source.test.ts`
+- `tests/unit/fact-sync-service.test.ts`
+- `tests/unit/fact-coverage-store.test.ts` (Task 3)
+- `tests/unit/sync-plan.test.ts` (Task 1)
+
+- [ ] **Step 12: 커밋 (이 태스크의 유일한 커밋)**
 
 ```bash
-git add src/server/modules/facts/application/fact-sync-service.ts src/server/cli.ts tests/unit/fact-sync-service.test.ts
-git commit -m "feat(facts): 증분 수집 모드와 종목 경계 취소
+git add src/server/modules/facts/application/ports.ts src/server/modules/facts/infrastructure/dart/dart-fact-source.ts src/server/modules/facts/application/fact-sync-service.ts src/server/cli.ts src/server/bootstrap/container.ts tests/unit/dart-fact-source.test.ts tests/unit/fact-sync-service.test.ts
+git commit -m "feat(facts): 연도 목록 포트로 전환하고 증분 수집을 넣는다
 
-이력은 저장 직후에 남긴다 — 순서가 뒤집히면 저장 실패한 연도를 수집했다고
-기록해 다음 실행이 건너뛴다. stopReason 으로 실패와 취소를 가른다."
+수집 이력이 불연속일 수 있어 from/to 두 값으로는 표현할 수 없다 — CLI 로
+2010-2012 를, 웹으로 2019-2026 을 받으면 범위로 접는 순간 2013-2018 을
+수집했다고 거짓말한다. 주식총수는 years 와 원소 수가 달라 별도 루프로 분리한다.
+
+포트와 그 유일한 소비자를 한 커밋에 담는 이유는 나누면 중간 커밋이 컴파일되지
+않기 때문이다. 이력은 저장 직후에 남긴다 — 순서가 뒤집히면 저장 실패한 연도를
+수집했다고 기록해 다음 실행이 건너뛴다. stopReason 으로 실패와 취소를 가른다.
+rate limiter 간격은 domain/sync-plan.ts 의 상수를 쓴다."
 ```
 
 ---
 
-### Task 6: 커버리지 → 재무 연도 범위
+### Task 5: 커버리지 → 재무 연도 범위
 
 **Files:**
 - Create: `src/server/modules/market-data/domain/fact-year-range.ts`
@@ -1465,14 +1504,14 @@ git commit -m "feat(market-data): 봉 커버리지에서 재무 수집 연도 �
 
 ---
 
-### Task 7: BrokerSyncService 재무 단계
+### Task 6: BrokerSyncService 재무 단계
 
 **Files:**
 - Modify: `src/server/modules/market-data/application/broker-sync-service.ts`
 - Modify: `tests/unit/broker-sync-service.test.ts`
 
 **Interfaces:**
-- Consumes: `deriveFactYearRange` (Task 6), `dataImportJobs.phase|candlesMs|factsJson` (Task 2)
+- Consumes: `deriveFactYearRange` (Task 5), `dataImportJobs.phase|candlesMs|factsJson` (Task 2)
 - Produces: `BrokerSyncDeps.factsPhase`, `interface FactPhaseProgress`, `interface FactPhaseResult`, `interface FactsJobState`, `BrokerSyncService.startSync(datasetId, options?: { includeFacts?: boolean })`
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
@@ -1870,7 +1909,7 @@ factsPhase 는 컨테이너가 주입하므로 market-data 는 facts 를 import 
 
 ---
 
-### Task 8: 라우트·조립·경계 규칙
+### Task 7: 라우트·조립·경계 규칙
 
 **Files:**
 - Modify: `src/server/modules/market-data/application/dataset-service.ts`
@@ -1881,7 +1920,7 @@ factsPhase 는 컨테이너가 주입하므로 market-data 는 facts 를 import 
 - Test: `tests/unit/candle-sync-estimate.test.ts`
 
 **Interfaces:**
-- Consumes: `planFactSync` (Task 1), `SqliteFactCoverageStore` (Task 4), `FactSyncService` (Task 5), `deriveFactYearRange` (Task 6), `FactsJobState`·`FactPhaseResult` (Task 7)
+- Consumes: `planFactSync` (Task 1), `SqliteFactCoverageStore` (Task 3), `FactSyncService` (Task 4), `deriveFactYearRange` (Task 5), `FactsJobState`·`FactPhaseResult` (Task 6)
 - Produces: `type FactsSyncEstimate`, `interface SyncEstimate`, `DatasetService.getCandleSyncEstimate(datasetId, symbols) => SyncEstimate['candles']`, `registerDatasetRoutes(..., factsSyncEstimator, requireAuth)`
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
@@ -2168,28 +2207,16 @@ import type { DatasetService, FactsSyncEstimate, SyncEstimate } from '../applica
 
 `src/server/bootstrap/container.ts`:
 
-1. import 를 더한다:
+1. import 를 더한다 (`SqliteFactCoverageStore` 는 Task 4 가 이미 추가했다):
 
 ```ts
-import { SqliteFactCoverageStore } from '../modules/facts/application/fact-coverage-store.js';
 import { planFactSync } from '../modules/facts/domain/sync-plan.js';
 import { deriveFactYearRange } from '../modules/market-data/domain/fact-year-range.js';
 import type { FactsSyncEstimate } from '../modules/market-data/application/dataset-service.js';
 ```
 
-2. `factSyncService` 생성에 이력 저장소를 넘긴다:
-
-```ts
-  const factCoverageStore = new SqliteFactCoverageStore(database.db);
-  const factSyncService = new FactSyncService(
-    factSource,
-    factRepository,
-    logger,
-    datasetService,
-    clock,
-    factCoverageStore,
-  );
-```
+2. `factCoverageStore`·`factSyncService` 는 Task 4 가 이미 만들어 뒀다. 그 지역 상수를
+그대로 쓴다 — 다시 만들지 않는다.
 
 3. `deps` 는 생성 시 고정이므로 `brokerSyncService` 가 만들어질 때 `factsPhase` 가 이미 있어야 한다. **`brokerSyncService` 를 내리지 말고 facts 블록(`factRepository`·`factSource`·`factCoverageStore`·`factSyncService`)을 `brokerSyncService` 생성 앞으로 올린다** — `brokerSyncService.recoverInterrupted()` 호출과 그 로깅이 컨테이너 앞부분에 있어서 서비스 생성을 뒤로 미루면 그 경로가 깨진다. facts 블록이 필요한 것(`duckdb`·`config.dataRoot`·`datasetService`·`clock`·`logger`·`database`)은 모두 `brokerSyncService` 보다 앞에서 만들어지므로 위로 올리는 데 제약이 없다.
 
@@ -2347,7 +2374,7 @@ market-data-no-facts 경계 규칙으로 모듈 방향을 강제한다."
 
 ---
 
-### Task 9: Checkbox 프리미티브
+### Task 8: Checkbox 프리미티브
 
 **Files:**
 - Create: `src/web/components/ui/checkbox.tsx`
@@ -2409,13 +2436,13 @@ git commit -m "feat(web): Checkbox 프리미티브 추가"
 
 ---
 
-### Task 10: 데이터셋 카드 — 재무 체크박스·툴팁·예상 시간
+### Task 9: 데이터셋 카드 — 재무 체크박스·툴팁·예상 시간
 
 **Files:**
 - Modify: `src/web/features/datasets/datasets-page.tsx`
 
 **Interfaces:**
-- Consumes: `Checkbox` (Task 9), `SyncEstimate` 응답 (Task 8), `Tooltip*` (`@/components/ui/tooltip`)
+- Consumes: `Checkbox` (Task 8), `SyncEstimate` 응답 (Task 7), `Tooltip*` (`@/components/ui/tooltip`)
 - Produces: 없음 (UI 말단)
 
 - [ ] **Step 1: 응답 타입과 포맷 헬퍼를 더한다**
@@ -2665,7 +2692,7 @@ git commit -m "feat(web): 동기화에 재무 체크박스와 예상 소요시�
 
 ---
 
-### Task 11: 종목 표기 순수 함수
+### Task 10: 종목 표기 순수 함수
 
 **Files:**
 - Create: `src/web/features/backtests/symbol-summary.ts`
@@ -2821,7 +2848,7 @@ Description 은 앞 5개만 나열한다."
 
 ---
 
-### Task 12: 공유 훅 승격 + SymbolLabel 컴포넌트
+### Task 11: 공유 훅 승격 + SymbolLabel 컴포넌트
 
 **Files:**
 - Create: `src/web/lib/use-stock-names.ts`
@@ -2829,7 +2856,7 @@ Description 은 앞 5개만 나열한다."
 - Modify: `src/web/features/datasets/datasets-page.tsx:64-86`
 
 **Interfaces:**
-- Consumes: `formatSymbolLabel` (Task 11), `api` (`@/lib/api-client`)
+- Consumes: `formatSymbolLabel` (Task 10), `api` (`@/lib/api-client`)
 - Produces: `interface StockInfo`, `useStockNames(symbols) => ReadonlyMap<string, StockInfo>`, `SymbolLabel({ symbol, name, className })`
 
 - [ ] **Step 1: 훅을 옮긴다**
@@ -2932,7 +2959,7 @@ git commit -m "refactor(web): 종목명 훅을 공유 위치로 올리고 Symbol
 
 ---
 
-### Task 13: 백테스트 화면에 종목명 적용
+### Task 12: 백테스트 화면에 종목명 적용
 
 **Files:**
 - Modify: `src/web/features/backtests/backtest-detail-page.tsx`
@@ -2940,7 +2967,7 @@ git commit -m "refactor(web): 종목명 훅을 공유 위치로 올리고 Symbol
 - Modify: `tests/e2e/mvp-flow.spec.ts`
 
 **Interfaces:**
-- Consumes: `useStockNames`·`StockInfo` (Task 12), `SymbolLabel` (Task 12), `formatSymbolSummary`·`SYMBOL_SUMMARY_LIMIT` (Task 11)
+- Consumes: `useStockNames`·`StockInfo` (Task 11), `SymbolLabel` (Task 11), `formatSymbolSummary`·`SYMBOL_SUMMARY_LIMIT` (Task 10)
 - Produces: 없음 (UI 말단)
 
 - [ ] **Step 1: 상세 페이지에 훅을 연결한다**
@@ -3122,7 +3149,7 @@ Description·거래 내역(종목 열·필터)·종목별 성과·목록 카드 
 
 ---
 
-### Task 14: 지원 시장 단일 출처 + `GET /markets`
+### Task 13: 지원 시장 단일 출처 + `GET /markets`
 
 **Files:**
 - Modify: `src/server/modules/market-data/domain/candle.ts:1`
@@ -3321,7 +3348,7 @@ factsSupported 는 시장 자격만 본다 (DART 키 여부는 배포 상태다)
 
 ---
 
-### Task 15: 시장 선택에 미지원 시장을 명시
+### Task 14: 시장 선택에 미지원 시장을 명시
 
 **Files:**
 - Create: `src/web/lib/use-market-support.ts`
@@ -3329,7 +3356,7 @@ factsSupported 는 시장 자격만 본다 (DART 키 여부는 배포 상태다)
 - Modify: `tests/e2e/mvp-flow.spec.ts`
 
 **Interfaces:**
-- Consumes: `GET /markets` (Task 14), `api` (`@/lib/api-client`)
+- Consumes: `GET /markets` (Task 13), `api` (`@/lib/api-client`)
 - Produces: `interface MarketSupport`, `useMarketSupport() => readonly MarketSupport[]`
 
 - [ ] **Step 1: 훅을 만든다**
@@ -3510,7 +3537,7 @@ git commit -m "feat(web): 미지원 시장을 고를 수 없게 하고 이유를
 
 ---
 
-### Task 16: 문서 갱신
+### Task 15: 문서 갱신
 
 **Files:**
 - Modify: `docs/IMPLEMENTATION_STATUS.md:32`
