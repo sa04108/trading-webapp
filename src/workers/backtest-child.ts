@@ -201,9 +201,14 @@ async function main(): Promise<void> {
       // (계정이 일부만 빠진 종목까지 여기서 가려내지는 못하므로 그 한계도 함께 남긴다.)
       const symbolsWithFacts = new Set(financialFacts.map((fact) => fact.key));
       const withoutFacts = request.universe.symbols.filter((s) => !symbolsWithFacts.has(s));
+      // 유니버스 상한이 200종목이라 캡이 없으면 경고 한 줄이 종목코드 200개가 된다 —
+      // 엔진의 포지션 상한 경고와 같은 10종목 캡을 쓴다 (engine.ts 의 buysDroppedByCap).
+      const shown = withoutFacts.slice(0, 10).join(', ');
       datasetWarnings.push(
         (withoutFacts.length > 0
-          ? `재무 데이터가 하나도 없어 랭킹에서 제외된 종목: ${withoutFacts.join(', ')}. `
+          ? `재무 데이터가 하나도 없어 랭킹에서 제외된 종목 ${withoutFacts.length}종목: ${shown}` +
+            (withoutFacts.length > 10 ? ` 외 ${withoutFacts.length - 10}종목` : '') +
+            '. '
           : '') +
           '재무 데이터는 수집 시점 기준입니다. 계정이 일부만 누락된 종목도 랭킹에서 조용히 빠질 수 있습니다 ' +
           '— `pnpm cli facts:sync` 를 다시 실행하면 누락 리포트를 다시 볼 수 있습니다.',

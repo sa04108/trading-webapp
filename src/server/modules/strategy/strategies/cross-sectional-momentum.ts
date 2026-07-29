@@ -33,7 +33,10 @@ export const crossSectionalMomentumParameters = z.object({
     description:
       '측정 창의 끝에서 최근 N봉을 제외합니다. 일봉 기준 21봉이 약 1개월입니다. 직전 한 달은 단기 반전이 잦아 학계 표준(12-1 모멘텀)이 이 구간을 뺍니다. 0 으로 두면 마지막 봉까지 씁니다.',
   }),
-  topN: z.number().int().min(1).max(50).default(10).meta({
+  // 상한은 요청의 `risk.maxPositions` 상한(20)과 같아야 한다 — 제출 게이트가
+  // topN <= maxPositions 를 요구하므로 여기가 더 크면 그 구간이 어떤 경로로도
+  // 제출될 수 없고, 게이트 메시지는 도달할 수 없는 값까지 올리라고 안내한다.
+  topN: z.number().int().min(1).max(20).default(10).meta({
     title: '보유 종목 수',
     description:
       '순위 상위 몇 종목을 동일가중으로 보유할지 정합니다. 종목당 비중은 자본의 1/N 입니다. 요청의 최대 동시 보유 종목 수보다 크게 잡으면 일부 종목이 편입되지 않습니다.',

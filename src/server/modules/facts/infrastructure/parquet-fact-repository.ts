@@ -134,22 +134,37 @@ export class ParquetFactRepository implements FactRepository {
       )
       .join(',\n');
 
-    // DuckDB 의 VALUES 타입 추론(DECIMAL/BIGINT)을 피하려고 명시적으로 CAST 한다
-    await this.duckdb.run(
-      `COPY (
-         SELECT
-           CAST(key AS VARCHAR) AS key,
-           CAST(field AS VARCHAR) AS field,
-           CAST(period_key AS VARCHAR) AS period_key,
-           CAST(as_of_ts_ms AS BIGINT) AS as_of_ts_ms,
-           CAST(value AS DOUBLE) AS value,
-           CAST(unit AS VARCHAR) AS unit
-         FROM (VALUES ${values}) AS t(key, field, period_key, as_of_ts_ms, value, unit)
-         ORDER BY key, field, period_key, as_of_ts_ms
-       ) TO ${sqlString(tmpPath.replaceAll('\\', '/'))} (FORMAT PARQUET, COMPRESSION ZSTD)`,
-    );
+    // DuckDB 의 VALUES 타입 추론(DECIMAL/BIGINT)을 피하려고 명시적으로 CAST 한다.
+    //
+    // 실패하면 임시 파일을 지우고 다시 던진다. rename 자체는 같은 디렉터리 원자적 교체이고
+    // 독자는 명시적 파일명(data.parquet)만 읽으므로 남은 tmp 는 손상이 아니라 찌꺼기다 —
+    // 다만 팩트 저장이 종목 단위로 쪼개진 뒤 백필 한 번에 쓰기 시도가 200회 가까이
+    // 일어나므로 그 찌꺼기가 쌓인다.
+    try {
+      await this.duckdb.run(
+        `COPY (
+           SELECT
+             CAST(key AS VARCHAR) AS key,
+             CAST(field AS VARCHAR) AS field,
+             CAST(period_key AS VARCHAR) AS period_key,
+             CAST(as_of_ts_ms AS BIGINT) AS as_of_ts_ms,
+             CAST(value AS DOUBLE) AS value,
+             CAST(unit AS VARCHAR) AS unit
+           FROM (VALUES ${values}) AS t(key, field, period_key, as_of_ts_ms, value, unit)
+           ORDER BY key, field, period_key, as_of_ts_ms
+         ) TO ${sqlString(tmpPath.replaceAll('\\', '/'))} (FORMAT PARQUET, COMPRESSION ZSTD)`,
+      );
 
-    fs.renameSync(tmpPath, target);
+      fs.renameSync(tmpPath, target);
+    } catch (error) {
+      // 청소 실패가 원인 오류를 가리면 안 된다 — force 는 없는 파일에 던지지 않는다
+      try {
+        fs.rmSync(tmpPath, { force: true });
+      } catch {
+        /* 원인 오류를 그대로 올린다 */
+      }
+      throw error;
+    }
   }
 
   async getFacts(query: FactQuery): Promise<Fact[]> {

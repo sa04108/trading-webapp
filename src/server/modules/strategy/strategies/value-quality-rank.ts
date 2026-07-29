@@ -24,7 +24,10 @@ import { planBuyPhase, planSellPhase } from './shared/two-phase-rebalance.js';
  * 두 기준을 함께 담을 자리가 없다. 데이터셋 하나는 한 기준만 담는다.
  */
 export const valueQualityRankParameters = z.object({
-  topN: z.number().int().min(1).max(50).default(20).meta({
+  // 상한은 요청의 `risk.maxPositions` 상한(20)과 같아야 한다 — 제출 게이트가
+  // topN <= maxPositions 를 요구하므로 여기가 더 크면 그 구간이 어떤 경로로도
+  // 제출될 수 없고, 게이트 메시지는 도달할 수 없는 값까지 올리라고 안내한다.
+  topN: z.number().int().min(1).max(20).default(20).meta({
     title: '보유 종목 수',
     description:
       '두 지표 순위 합이 작은 상위 몇 종목을 동일가중으로 보유할지 정합니다. 종목당 비중은 자본의 1/N 입니다.',
