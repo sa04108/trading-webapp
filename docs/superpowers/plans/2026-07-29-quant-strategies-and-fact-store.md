@@ -3254,7 +3254,9 @@ export class ParquetFactRepository implements FactRepository {
     // asOf 가 다르면 둘 다 남는다: 재집계는 새 행이어야 과거 시점 조회가 변하지 않는다.
     const merged = new Map<string, Fact>();
     for (const fact of [...existing, ...incoming]) {
-      merged.set(`${fact.key}${fact.field}${fact.periodKey}${fact.asOfTsMs}`, fact);
+      // 구분자 없이 이어붙이면 (key, field) 경계가 어긋나며 충돌한다 — key·field 는
+      // 리터럴 유니온이 아니라 string 이고 MACRO 키는 자유형식이다
+      merged.set(JSON.stringify([fact.key, fact.field, fact.periodKey, fact.asOfTsMs]), fact);
     }
 
     const values = [...merged.values()]
