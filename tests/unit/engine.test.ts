@@ -299,6 +299,25 @@ describe('runBacktest 이벤트 순서 (스펙 §9.1, §9.2)', () => {
 
     expect(result.fills).toHaveLength(1);
     expect(result.metrics.maxConcurrentPositions).toBeLessThanOrEqual(1);
+
+    // 상한에 걸려 버려진 주문은 조용히 사라지면 안 된다 — 그만큼 자본이 현금으로
+    // 남는데 자산 곡선은 정상처럼 보인다. 어느 종목이 몇 건 폐기됐는지 밝힌다.
+    const capWarning = result.warnings.find((warning) => warning.includes('동시 보유 종목 상한'));
+    expect(capWarning).toBeDefined();
+    expect(capWarning).toContain('B'); // A 가 슬롯을 먼저 잡으므로 B 가 폐기된다
+    expect(capWarning).toContain('매수 주문 1건');
+  });
+
+  it('상한에 걸린 주문이 없으면 상한 경고를 만들지 않는다', () => {
+    const result = runBacktest(buyAtBarStrategy(0) as never, {
+      candles: [bar(0, 100), bar(1, 100)],
+      initialCash: 10_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+    });
+    expect(result.warnings.some((warning) => warning.includes('동시 보유 종목 상한'))).toBe(false);
   });
 
   it('is deterministic: same input and seed produce identical results (스펙 §9.5)', () => {

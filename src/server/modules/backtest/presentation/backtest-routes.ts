@@ -230,6 +230,37 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
   };
 
   /**
+   * 보유 종목 수(topN) × 동시 보유 상한(maxPositions) 정합성 검사.
+   *
+   * 두 값이 어긋나면 결과가 조용히 틀린다: 매수 단계는 topN 건의 주문을 각각
+   * `equity / topN` 으로 내는데, 엔진의 리스크 검증은 상한을 넘는 주문을 `null` 로
+   * 떨어뜨린다. 초과분은 폐기되고 `pendingBuys` 는 이미 비워졌으므로 다음 리밸런스까지
+   * 재시도되지 않는다 — 자본의 (topN-maxPositions)/topN 이 영구히 현금으로 남는데
+   * 자산 곡선은 정상적으로 보인다. 기본값 조합(value-quality-rank topN=20, 웹 마법사
+   * maxPositions=10)이 정확히 이 상태다.
+   *
+   * 전략 id 를 특별 취급하지 않고 **검증된 파라미터에 숫자 `topN` 이 있으면** 본다 —
+   * hourly-breakout 처럼 이 파라미터가 없는 전략은 자연히 통과한다.
+   * `checkFundamentalsRequirement` 와 같은 이유로 400(요청 형식)이 아니라 422 다:
+   * 요청 자체는 유효하고 "전략 파라미터와 리스크 설정의 조합" 이 문제다.
+   */
+  const checkPositionCapacity = (body: BacktestRequest): string | null => {
+    const validated = strategies.validateParameters(body.strategyId, body.parameters);
+    // 파라미터 자체가 스키마를 통과하지 못하는 경우는 validateSubmission 이 400 으로 말한다
+    if (!validated.ok || typeof validated.value !== 'object' || validated.value === null) {
+      return null;
+    }
+    const topN = (validated.value as Record<string, unknown>)['topN'];
+    if (typeof topN !== 'number' || !Number.isFinite(topN)) return null;
+    if (topN <= body.risk.maxPositions) return null;
+    return (
+      `보유 종목 수(${topN})가 최대 동시 보유 종목 수(${body.risk.maxPositions})보다 큽니다. ` +
+      `초과분 ${topN - body.risk.maxPositions}종목은 편입되지 못하고 그만큼 자본이 현금으로 남습니다. ` +
+      '보유 종목 수를 줄이거나 최대 동시 보유 종목 수를 그 이상으로 올리세요.'
+    );
+  };
+
+  /**
    * 대기열 깊이 상한 (D-025). QUEUED 만 센다 — 실행 중은 동시 실행 상한이 이미 묶고 있다.
    * 429 는 507(호스트 자원 부족)과 구분한다: 사용자가 할 일이 다르다(기다리거나 취소).
    */
@@ -261,6 +292,11 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const fundamentalsError = checkFundamentalsRequirement(body);
     if (fundamentalsError) {
       return reply.code(422).send({ error: fundamentalsError });
+    }
+
+    const capacityError = checkPositionCapacity(body);
+    if (capacityError) {
+      return reply.code(422).send({ error: capacityError });
     }
 
     const queueError = queueDepthError();
@@ -341,6 +377,11 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       return reply.code(422).send({ error: fundamentalsError });
     }
 
+    const capacityError = checkPositionCapacity(cloneRequest);
+    if (capacityError) {
+      return reply.code(422).send({ error: capacityError });
+    }
+
     const queueError = queueDepthError();
     if (queueError) return reply.code(429).send({ error: queueError });
 
@@ -377,6 +418,8 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const blockers = validated.ok ? [] : [...validated.errors];
     const fundamentalsError = checkFundamentalsRequirement(rebased.request);
     if (fundamentalsError) blockers.push(fundamentalsError);
+    const capacityError = checkPositionCapacity(rebased.request);
+    if (capacityError) blockers.push(capacityError);
     return {
       request: rebased.request,
       warnings: rebased.warnings,

@@ -124,6 +124,12 @@ export function runBacktest(
   const fills: Fill[] = [];
   const trades: Trade[] = [];
   const warnings: string[] = [];
+  /**
+   * 동시 보유 상한에 걸려 폐기된 매수 주문 — 종목별 건수. 봉마다 경고를 쌓지 않고
+   * 마지막에 한 줄로 접는다: 월간 리밸런스 12년이면 같은 사유가 천 건 넘게 쌓여
+   * warningsJson 을 부풀리고 정작 다른 경고를 묻어버린다.
+   */
+  const buysDroppedByCap = new Map<string, number>();
 
   const factView = new PitFactView(input.facts ?? []);
 
@@ -210,6 +216,20 @@ export function runBacktest(
       `기간 종료 시점에 미청산 포지션 ${positions.size}건이 남아 있습니다 (평가금액에는 반영됨).`,
     );
   }
+  if (buysDroppedByCap.size > 0) {
+    // 이 폐기는 지금까지 모든 전략에서 보이지 않았다 — validateOrder 가 null 을
+    // 반환하면 호출부가 그대로 버렸다. 전략이 상한보다 많은 종목을 편입하려 하면
+    // 초과분만큼 자본이 현금으로 남는데 자산 곡선은 정상처럼 보인다.
+    const total = [...buysDroppedByCap.values()].reduce((sum, count) => sum + count, 0);
+    const symbols = [...buysDroppedByCap.keys()].sort();
+    const shown = symbols.slice(0, 10).join(', ');
+    warnings.push(
+      `동시 보유 종목 상한(${input.maxPositions})에 걸려 매수 주문 ${total}건이 폐기되었습니다 ` +
+        `— 대상 ${symbols.length}종목: ${shown}` +
+        (symbols.length > 10 ? ` 외 ${symbols.length - 10}종목` : '') +
+        '. 그만큼 자본이 현금으로 남았습니다. 전략의 보유 종목 수를 상한 이하로 줄이거나 상한을 올리세요.',
+    );
+  }
   warnings.push(
     '생존 편향·공휴일 캘린더·배당·권리락 보정은 MVP 에서 다루지 않습니다 (§9.4). ' +
       ((input.facts?.length ?? 0) > 0
@@ -284,6 +304,8 @@ export function runBacktest(
         !pendingNewBuySymbols.has(order.symbol) &&
         positions.size + pendingNewBuySymbols.size >= input.maxPositions
       ) {
+        // 조용히 버리지 않는다 — 폐기 사실을 기록해 실행 경고로 접어 올린다
+        buysDroppedByCap.set(order.symbol, (buysDroppedByCap.get(order.symbol) ?? 0) + 1);
         return null;
       }
     }
