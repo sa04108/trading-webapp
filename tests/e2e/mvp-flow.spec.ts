@@ -38,13 +38,15 @@ test('full MVP flow', async ({ page }) => {
   // 4. 완료 대기 (SSE 진행률 → 완료 badge)
   await expect(page.getByText('완료', { exact: true })).toBeVisible({ timeout: 90_000 });
 
-  // 5. 결과 조회: 지표 카드 + 차트 + 거래 내역 (+ 미청산 포지션이 있으면 그 섹션)
+  // 5. 결과 조회: 지표 카드 + 차트 + 거래 내역 (미청산 포지션은 거래 내역 상단 배지 행)
   await expect(page.getByText('누적 수익률', { exact: true })).toBeVisible();
-  await expect(page.getByText('미청산 포지션', { exact: true })).toBeVisible();
   await expect(page.getByText('자산 곡선', { exact: true })).toBeVisible();
   await expect(page.getByText('월별 수익률')).toBeVisible();
   await expect(page.getByText('거래 내역', { exact: true })).toBeVisible();
   await expect(page.getByText('재현 정보')).toBeVisible();
+  // 별도 "미청산 포지션" 카드는 제거되고 거래 내역 테이블에 통합됐다
+  await expect(page.getByText('미청산 포지션', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('row').filter({ hasText: '미청산' }).first()).toBeVisible();
   const tradeRows = page.getByRole('row').filter({ hasText: '005930' });
   await expect(tradeRows.first()).toBeVisible();
 

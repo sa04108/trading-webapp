@@ -56,6 +56,6 @@ describe('openPositionRows', () => {
 
   it('진입 시각이 기간 종료 이후여도 보유 시간은 0 미만이 되지 않는다', () => {
     const rows = openPositionRows(snapshotJson, '005930', '2026-03-29');
-    expect(rows[0].holdingTimeMs).toBe(0);
+    expect(rows[0]?.holdingTimeMs).toBe(0);
   });
 });

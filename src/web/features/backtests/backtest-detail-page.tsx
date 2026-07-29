@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { toast } from 'sonner';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -34,6 +35,7 @@ import {
 import { api, ApiError } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 import { useBacktestLive, useBacktestSeries, useBacktestTrades } from './api';
+import { openPositionRows } from './open-position-rows';
 import {
   formatDateTime,
   formatDuration,
@@ -45,13 +47,7 @@ import {
 } from '@/lib/format';
 import { DrawdownChart, EquityChart, MonthlyReturnsChart } from './result-charts';
 import { StatusBadge } from './status-badge';
-import {
-  isTerminal,
-  type BacktestMetrics,
-  type JobSummary,
-  type OpenPositionSnapshot,
-  type RunMetadata,
-} from './types';
+import { isTerminal, type BacktestMetrics, type JobSummary, type RunMetadata } from './types';
 
 function MetricCards({ metrics }: { metrics: BacktestMetrics }) {
   const cards = [
@@ -88,68 +84,17 @@ function MetricCards({ metrics }: { metrics: BacktestMetrics }) {
   );
 }
 
-/**
- * 미청산 포지션 — 수익률·자산 곡선에는 반영되지만 거래 내역·승률에는 없는 돈이
- * 어디 있는지 명시한다. "손실 거래뿐인데 수익률 +200%" 혼란의 해소 지점.
- */
-function OpenPositionsSection({ run }: { run: RunMetadata }) {
-  const positions = run.openPositionsJson
-    ? (JSON.parse(run.openPositionsJson) as OpenPositionSnapshot[])
-    : [];
-  if (positions.length === 0) return null;
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">미청산 포지션</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-2">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>종목</TableHead>
-              <TableHead className="text-right">수량</TableHead>
-              <TableHead className="text-right">진입가</TableHead>
-              <TableHead className="text-right">기말 종가</TableHead>
-              <TableHead className="text-right">평가손익</TableHead>
-              <TableHead className="text-right">수익률</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {positions.map((position) => (
-              <TableRow key={position.symbol}>
-                <TableCell>{position.symbol}</TableCell>
-                <TableCell className="text-right tabular-nums">{position.quantity}</TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {formatKrw(position.avgEntryPrice)}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {formatKrw(position.lastPrice)}
-                </TableCell>
-                <TableCell
-                  className={cn('text-right tabular-nums', pnlClass(position.unrealizedPnl))}
-                >
-                  {formatSignedKrw(position.unrealizedPnl)}
-                </TableCell>
-                <TableCell
-                  className={cn('text-right tabular-nums', pnlClass(position.returnPct))}
-                >
-                  {formatSignedPct(position.returnPct)}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-        <p className="text-xs text-muted-foreground">
-          기간 종료 시점에 청산되지 않은 포지션의 평가치입니다 (매도 비용 미반영). 누적
-          수익률·자산 곡선에는 포함되지만, 거래 내역·승률·profit factor 에는 포함되지 않습니다.
-        </p>
-      </CardContent>
-    </Card>
-  );
-}
-
-function TradesSection({ jobId, symbols }: { jobId: string; symbols: string[] }) {
+function TradesSection({
+  jobId,
+  symbols,
+  run,
+  periodTo,
+}: {
+  jobId: string;
+  symbols: string[];
+  run: RunMetadata | null;
+  periodTo: string;
+}) {
   const PAGE = 50;
   const [symbol, setSymbol] = useState<string>('ALL');
   const [page, setPage] = useState(0);
@@ -159,6 +104,7 @@ function TradesSection({ jobId, symbols }: { jobId: string; symbols: string[] })
     true,
   );
   const trades = data?.trades ?? [];
+  const openRows = page === 0 ? openPositionRows(run?.openPositionsJson ?? null, symbol, periodTo) : [];
 
   return (
     <Card>
@@ -187,7 +133,7 @@ function TradesSection({ jobId, symbols }: { jobId: string; symbols: string[] })
       <CardContent>
         {isLoading ? (
           <Skeleton className="h-32 w-full" />
-        ) : trades.length === 0 ? (
+        ) : trades.length === 0 && openRows.length === 0 ? (
           <p className="py-4 text-center text-sm text-muted-foreground">거래가 없습니다.</p>
         ) : (
           <div className="overflow-x-auto">
@@ -205,6 +151,36 @@ function TradesSection({ jobId, symbols }: { jobId: string; symbols: string[] })
                 </TableRow>
               </TableHeader>
               <TableBody>
+                {openRows.map((row) => (
+                  <TableRow key={`open-${row.symbol}`} className="bg-muted/40">
+                    <TableCell className="font-medium">{row.symbol}</TableCell>
+                    <TableCell className="text-right tabular-nums">{row.quantity}</TableCell>
+                    <TableCell className="whitespace-nowrap text-xs">
+                      {formatDateTime(row.entryTsMs)}
+                      <br />
+                      <span className="text-muted-foreground">{formatKrw(row.entryPrice)}</span>
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap text-xs">
+                      <Badge variant="outline">미청산</Badge>
+                      <br />
+                      <span className="text-muted-foreground">{formatKrw(row.lastPrice)}</span>
+                    </TableCell>
+                    <TableCell
+                      className={cn('text-right tabular-nums', pnlClass(row.unrealizedPnl))}
+                    >
+                      {formatSignedKrw(row.unrealizedPnl)}
+                    </TableCell>
+                    <TableCell
+                      className={cn('text-right tabular-nums', pnlClass(row.returnPct))}
+                    >
+                      {formatSignedPct(row.returnPct)}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                      {formatDuration(row.holdingTimeMs)}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">미청산</TableCell>
+                  </TableRow>
+                ))}
                 {trades.map((trade) => (
                   <TableRow key={trade.id}>
                     <TableCell className="font-medium">{trade.symbol}</TableCell>
@@ -245,6 +221,12 @@ function TradesSection({ jobId, symbols }: { jobId: string; symbols: string[] })
             </Table>
           </div>
         )}
+        {openRows.length > 0 ? (
+          <p className="mt-2 text-xs text-muted-foreground">
+            미청산 행의 손익은 기간 종료 시점 종가 기준 평가치입니다 (매도 비용 미반영). 누적
+            수익률·자산 곡선에는 포함되지만 승률·profit factor·거래 수에는 포함되지 않습니다.
+          </p>
+        ) : null}
         <div className="mt-3 flex items-center justify-between">
           <Button
             variant="outline"
@@ -499,8 +481,6 @@ export function BacktestDetailPage() {
         <>
           <MetricCards metrics={metrics} />
 
-          {run ? <OpenPositionsSection run={run} /> : null}
-
           {series ? (
             <div className="space-y-4">
               <EquityChart
@@ -561,7 +541,12 @@ export function BacktestDetailPage() {
             <Skeleton className="h-60 w-full" />
           )}
 
-          <TradesSection jobId={id} symbols={job.request.universe.symbols} />
+          <TradesSection
+            jobId={id}
+            symbols={job.request.universe.symbols}
+            run={run ?? null}
+            periodTo={job.request.period.to}
+          />
         </>
       ) : null}
 
