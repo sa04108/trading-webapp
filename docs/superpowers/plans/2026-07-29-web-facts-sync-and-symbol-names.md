@@ -2045,6 +2045,19 @@ describe('getCandleSyncEstimate', () => {
     database.close();
   });
 
+  it('candlesMs 가 0 인 잡도 측정값으로 쓴다 — 0 은 falsy 지만 측정 없음이 아니다', () => {
+    const database = setup();
+    markBackfillDone(database, '005930', 5_000);
+    markBackfillDone(database, '000660', 5_000);
+    insertJob(database, { id: 'imp-1', createdAtMs: 6_000, candlesMs: 0 });
+    const service = makeDatasetService(database);
+    expect(service.getCandleSyncEstimate('ds-1', ['005930', '000660'])).toEqual({
+      basis: 'LAST_RUN',
+      ms: 0,
+    });
+    database.close();
+  });
+
   it('실패한 잡은 쓰지 않는다', () => {
     const database = setup();
     markBackfillDone(database, '005930', 5_000);
@@ -2147,7 +2160,8 @@ export interface SyncEstimate {
       .limit(1)
       .get();
 
-    if (!job?.candlesMs) return { basis: 'UNKNOWN' };
+    // `!job?.candlesMs` 로 쓰면 0ms 측정값이 "측정 없음" 으로 접힌다 — null 만 걸러낸다
+    if (job?.candlesMs == null) return { basis: 'UNKNOWN' };
     return { basis: 'LAST_RUN', ms: job.candlesMs };
   }
 ```
