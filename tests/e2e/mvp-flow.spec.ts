@@ -5,6 +5,30 @@ const PASSWORD = 'correct-horse-battery-staple';
 
 /** 스펙 §33 E2E 흐름: 로그인 → 생성 → 제출 → 완료 → 결과 → 거래 필터 → clone → 로그아웃 */
 test('full MVP flow', async ({ page }) => {
+  // 종목명 소스를 스텁한다 — 테스트 환경엔 소스가 설정돼 있지 않아 이름이 항상
+  // null 로 오는데, 그러면 '이름 없으면 코드만' 분기와 겹쳐 표시=value 바인딩
+  // 버그(§아래 거래 필터 검증)를 절대 못 잡는다. 실제로 이름이 뜨게 만들어야
+  // "표시는 이름, value 는 코드"가 실제로 갈리는 상태에서 검증할 수 있다.
+  await page.route('**/api/v1/symbols/info**', async (route) => {
+    const url = new URL(route.request().url());
+    const requested = (url.searchParams.get('symbols') ?? '').split(',').filter(Boolean);
+    const known: Record<string, string> = { '005930': '삼성전자' };
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        stocks: requested
+          .filter((symbol) => symbol in known)
+          .map((symbol) => ({
+            symbol,
+            name: known[symbol],
+            englishName: null,
+            market: 'KOSPI',
+            status: 'ACTIVE',
+          })),
+      }),
+    });
+  });
+
   // 1. 로그인 (비밀번호 단일 단계, D-014)
   await page.goto('/');
   await expect(page).toHaveURL(/\/login/);
@@ -66,16 +90,19 @@ test('full MVP flow', async ({ page }) => {
   await expect(page.getByRole('row').filter({ hasText: '미청산' }).first()).toBeVisible();
   const tradeRows = page.getByRole('row').filter({ hasText: '005930' });
   await expect(tradeRows.first()).toBeVisible();
-  // 종목 표기: 이름을 알면 '이름 (005930)', 모르면 '005930' 만 — 어느 쪽이든 코드는
-  // 온전해야 한다. 테스트 환경에 종목명 소스가 설정되어 있지 않을 수 있으므로 이름이
-  // 붙는다고 단정하지 않고, 코드가 셀 안에 그대로 있는지만 확인한다.
-  const symbolCell = page.getByRole('cell', { name: /005930/ }).first();
+  // 종목 표기: 위 스텁으로 '005930' 은 이름이 뜬다 — '삼성전자 (005930)' 형태로
+  // 이름·코드가 둘 다 살아있어야 한다. SymbolLabel 이 이름 없이 코드만 렌더링하도록
+  // 회귀하거나 코드가 잘리면 이 두 assertion 중 하나가 깨진다.
+  const symbolCell = page.getByRole('cell', { name: /삼성전자/ }).first();
+  await expect(symbolCell).toContainText('삼성전자');
   await expect(symbolCell).toContainText('005930');
 
-  // 6. 거래 필터 (종목 선택) — value 는 코드를 유지하므로 표시(이름 유무)가 바뀌어도
-  // 필터는 코드 기준으로 동작해야 한다
+  // 6. 거래 필터 (종목 선택) — 표시는 '삼성전자 (005930)' 이지만 select 의 value 는
+  // 코드 '005930' 이어야 한다. 옵션은 표시 텍스트(이름 포함)로 찾되, 선택 후에도
+  // 거래가 그대로 보여야 value 가 코드로 남아 서버 필터가 매치됐다는 뜻이다 — 누가
+  // value 를 표시 문자열로 바꾸면 서버가 매치하지 못해 거래 목록이 사라진다.
   await page.getByRole('combobox', { name: '종목 필터' }).click();
-  await page.getByRole('option', { name: /005930/ }).click();
+  await page.getByRole('option', { name: /삼성전자/ }).click();
   await expect(tradeRows.first()).toBeVisible();
 
   // 7. clone → 새 작업 페이지
