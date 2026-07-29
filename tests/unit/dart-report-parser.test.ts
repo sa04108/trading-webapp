@@ -62,6 +62,21 @@ describe('parseAmount', () => {
   it('숫자가 아니면 null', () => {
     expect(parseAmount('해당사항없음')).toBeNull();
   });
+
+  it('괄호 짝이 안 맞거나 중간에 공백·괄호가 섞이면 null (부호·자릿수를 뒤집지 않는다)', () => {
+    expect(parseAmount('(1,234')).toBeNull();
+    expect(parseAmount('1(234)')).toBeNull();
+    expect(parseAmount('1,2,3')).toBeNull();
+    expect(parseAmount('12,34,567')).toBeNull();
+    expect(parseAmount('1 234')).toBeNull();
+  });
+
+  it('괄호+마이너스 조합·괄호 뒤 잔여문자·중복 부호·지수표기는 기존 규칙대로 처리한다', () => {
+    expect(parseAmount('(-1,234)')).toBe(-1_234);
+    expect(parseAmount('(1,234)-')).toBeNull();
+    expect(parseAmount('--1')).toBeNull();
+    expect(parseAmount('1e3')).toBeNull();
+  });
 });
 
 describe('receiptDateToAsOfTsMs', () => {
@@ -79,6 +94,14 @@ describe('receiptDateToAsOfTsMs', () => {
   it('형식이 다르면 null', () => {
     expect(receiptDateToAsOfTsMs('짧음')).toBeNull();
     expect(receiptDateToAsOfTsMs('99999999000001')).toBeNull();
+  });
+
+  it('존재하지 않는 달력 날짜(2월 30일)는 다음 달로 굴리지 않고 null', () => {
+    expect(receiptDateToAsOfTsMs('20250230000001')).toBeNull();
+  });
+
+  it('윤년의 2월 29일은 유효한 날짜다', () => {
+    expect(receiptDateToAsOfTsMs('20240229000001')).not.toBeNull();
   });
 });
 
@@ -225,6 +248,116 @@ describe('parseFinancialRows — 누적값 차분', () => {
     expect(facts).toEqual([]);
     expect(gaps).toHaveLength(1);
   });
+
+  it('손익 계정의 누적값이 파싱되지 않으면(IS 쪽도) gap 으로 남긴다', () => {
+    const rows = new Map<DartReportCode, DartFinancialRow[]>([
+      ['11013', [{ ...incomeRow('11013', 0), thstrm_add_amount: '해당사항없음' }]],
+    ]);
+    const { facts, gaps } = parseFinancialRows('005930', rows);
+    expect(facts).toEqual([]);
+    expect(gaps).toHaveLength(1);
+  });
+
+  it('thstrm_add_amount 가 빈 문자열이면(undefined 아님) thstrm_amount 를 누적으로 본다', () => {
+    const rows = new Map<DartReportCode, DartFinancialRow[]>([
+      ['11013', [{ ...incomeRow('11013', 999), thstrm_add_amount: '', thstrm_amount: '100' }]],
+    ]);
+    const { facts } = parseFinancialRows('005930', rows);
+    expect(facts.find((f) => f.periodKey === '2025Q1')?.value).toBe(100);
+  });
+
+  it('행의 접수번호를 읽을 수 없으면 그 행만 gap 으로 남기고 값을 만들지 않는다', () => {
+    const rows = new Map<DartReportCode, DartFinancialRow[]>([
+      ['11013', [{ ...incomeRow('11013', 100), rcept_no: '짧음' }]],
+    ]);
+    const { facts, gaps } = parseFinancialRows('005930', rows);
+    expect(facts).toEqual([]);
+    expect(gaps.some((g) => g.reason.includes('접수번호'))).toBe(true);
+  });
+
+  it('행의 reprt_code 가 버킷 키와 다르면 gap 으로 남기고 그 분기로 계상하지 않는다', () => {
+    const rows = new Map<DartReportCode, DartFinancialRow[]>([
+      ['11013', [{ ...incomeRow('11013', 100), reprt_code: '11012' }]],
+    ]);
+    const { facts, gaps } = parseFinancialRows('005930', rows);
+    expect(facts).toEqual([]);
+    expect(gaps.some((g) => g.reason.includes('보고서 코드가 일치하지 않습니다'))).toBe(true);
+  });
+
+  it('버킷 기준 연도와 다른 사업연도 행이 섞이면 gap 으로 남기고 그 행은 쓰지 않는다', () => {
+    const rows = new Map<DartReportCode, DartFinancialRow[]>([
+      ['11013', [incomeRow('11013', 100), { ...incomeRow('11013', 999), bsns_year: '2024' }]],
+    ]);
+    const { facts, gaps } = parseFinancialRows('005930', rows);
+    const q1 = facts.filter((f) => f.periodKey === '2025Q1' && f.field === 'OPERATING_INCOME');
+    expect(q1.map((f) => f.value)).toEqual([100]);
+    expect(gaps.some((g) => g.reason.includes('사업연도'))).toBe(true);
+  });
+
+  it('직전 분기 누적값이 다른 사업연도에서 온 것이면 차분하지 않고 gap 으로 남긴다', () => {
+    // '11013' 버킷이 잘못 채워져 2024년 자료가 들어간 상황 — 반기(2025)에서 이 값을
+    // 전기 누적으로 빼면 서로 다른 회계연도를 차분한 가짜 숫자가 나온다
+    const rows = new Map<DartReportCode, DartFinancialRow[]>([
+      ['11013', [{ ...incomeRow('11013', 100), bsns_year: '2024' }]],
+      ['11012', [incomeRow('11012', 250)]], // bsns_year 기본값 '2025'
+    ]);
+    const { facts, gaps } = parseFinancialRows('005930', rows);
+    const q2 = facts.find((f) => f.periodKey === '2025Q2' && f.field === 'OPERATING_INCOME');
+    expect(q2).toBeUndefined();
+    expect(gaps.some((g) => g.reason.includes('다른 사업연도'))).toBe(true);
+  });
+
+  it('계정은 매핑되지만 sj_div 가 기대 계정유형과 다르면 gap 으로 남긴다', () => {
+    const rows = new Map<DartReportCode, DartFinancialRow[]>([
+      ['11013', [{ ...balanceRow('11013', 500), sj_div: 'IS' }]],
+    ]);
+    const { facts, gaps } = parseFinancialRows('005930', rows);
+    expect(facts).toEqual([]);
+    expect(gaps.some((g) => g.reason.includes('계정 유형이 일치하지 않습니다'))).toBe(true);
+  });
+
+  it('소비하지 않는 재무제표(CF)는 매핑되지 않아도 gap 없이 조용히 제외한다', () => {
+    const rows = new Map<DartReportCode, DartFinancialRow[]>([
+      [
+        '11013',
+        [
+          {
+            rcept_no: RECEIPTS['11013'],
+            reprt_code: '11013',
+            bsns_year: '2025',
+            sj_div: 'CF',
+            account_id: 'unknown_cf_tag',
+            account_nm: '영업활동현금흐름',
+            thstrm_amount: '12345',
+          },
+        ],
+      ],
+    ]);
+    const { facts, gaps } = parseFinancialRows('005930', rows);
+    expect(facts).toEqual([]);
+    expect(gaps).toEqual([]);
+  });
+
+  it('같은 보고서 안에서 같은 BS 계정이 서로 다른 값으로 중복되면 gap 으로 남기고 처음 값만 쓴다', () => {
+    const rows = new Map<DartReportCode, DartFinancialRow[]>([
+      ['11013', [balanceRow('11013', 500), balanceRow('11013', 600)]],
+    ]);
+    const { facts, gaps } = parseFinancialRows('005930', rows);
+    const assetFacts = facts.filter((f) => f.field === 'CURRENT_ASSETS');
+    expect(assetFacts).toHaveLength(1);
+    expect(assetFacts[0]?.value).toBe(500);
+    expect(gaps.some((g) => g.reason.includes('서로 다릅니다'))).toBe(true);
+  });
+
+  it('같은 보고서 안에서 같은 손익 계정이 서로 다른 누적값으로 중복되면(IS·CIS) gap 으로 남기고 처음 값만 쓴다', () => {
+    const rows = new Map<DartReportCode, DartFinancialRow[]>([
+      ['11013', [incomeRow('11013', 100), { ...incomeRow('11013', 999), sj_div: 'CIS' }]],
+    ]);
+    const { facts, gaps } = parseFinancialRows('005930', rows);
+    const q1 = facts.find((f) => f.periodKey === '2025Q1' && f.field === 'OPERATING_INCOME');
+    expect(q1?.value).toBe(100);
+    expect(gaps.some((g) => g.reason.includes('서로 다릅니다'))).toBe(true);
+  });
 });
 
 describe('parseIssuanceRows — 자본변동', () => {
@@ -320,5 +453,109 @@ describe('parseIssuanceRows — 자본변동', () => {
     const { facts, gaps } = parseIssuanceRows('005930', rows, priorShares);
     expect(facts).toEqual([]);
     expect(gaps).toHaveLength(1);
+  });
+
+  it('존재하지 않는 날짜(2월 30일)는 gap 으로 남긴다', () => {
+    const rows: DartIssuanceRow[] = [
+      {
+        isu_dcrs_de: '2025-02-30',
+        isu_dcrs_stle: '주식분할',
+        isu_dcrs_qy: '100,000',
+        rcept_no: '20250520000001',
+      },
+    ];
+    const { facts, gaps } = parseIssuanceRows('005930', rows, priorShares);
+    expect(facts).toEqual([]);
+    expect(gaps).toHaveLength(1);
+  });
+
+  it('변동 수량이 0이면 gap 으로 남긴다', () => {
+    const rows: DartIssuanceRow[] = [
+      { isu_dcrs_de: '2025-06-02', isu_dcrs_stle: '주식분할', isu_dcrs_qy: '0', rcept_no: '20250520000001' },
+    ];
+    const { facts, gaps } = parseIssuanceRows('005930', rows, priorShares);
+    expect(facts).toEqual([]);
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]?.reason).toContain('변동 수량');
+  });
+
+  it('주식병합 변동 수량이 직전 발행주식수와 같으면(비율 0) gap 으로 남긴다', () => {
+    const rows: DartIssuanceRow[] = [
+      {
+        isu_dcrs_de: '2025-06-02',
+        isu_dcrs_stle: '주식병합',
+        isu_dcrs_qy: '1,000,000',
+        rcept_no: '20250520000001',
+      },
+    ];
+    const { facts, gaps } = parseIssuanceRows('005930', rows, priorShares);
+    expect(facts).toEqual([]);
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]?.reason).toContain('보정 비율');
+  });
+
+  it('이벤트의 접수번호를 읽을 수 없으면 gap 으로 남긴다', () => {
+    const rows: DartIssuanceRow[] = [
+      { isu_dcrs_de: '2025-06-02', isu_dcrs_stle: '주식분할', isu_dcrs_qy: '100,000', rcept_no: '짧음' },
+    ];
+    const { facts, gaps } = parseIssuanceRows('005930', rows, priorShares);
+    expect(facts).toEqual([]);
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]?.reason).toContain('접수번호');
+  });
+});
+
+describe('parseIssuanceRows — 발행형태 분류 (전수 테이블)', () => {
+  const priorShares = () => 1_000_000;
+
+  const cases: ReadonlyArray<{ style: string; direction: 'increase' | 'decrease' | 'skip' }> = [
+    { style: '주식분할', direction: 'increase' },
+    { style: '무상증자', direction: 'increase' },
+    { style: '주식배당', direction: 'increase' },
+    { style: '주식병합', direction: 'decrease' },
+    { style: '무상감자', direction: 'decrease' },
+    { style: '유상증자(주주배정)', direction: 'skip' },
+  ];
+
+  for (const { style, direction } of cases) {
+    it(`'${style}' 는 ${direction} 로 분류된다`, () => {
+      const rows: DartIssuanceRow[] = [
+        {
+          isu_dcrs_de: '2025-06-02',
+          isu_dcrs_stle: style,
+          isu_dcrs_qy: '100,000',
+          rcept_no: '20250520000001',
+        },
+      ];
+      const { facts, gaps } = parseIssuanceRows('005930', rows, priorShares);
+
+      if (direction === 'skip') {
+        expect(facts).toEqual([]);
+        expect(gaps).toEqual([]); // 유상감자와 마찬가지로 현금이 오간 것이라 의도된 제외
+        return;
+      }
+
+      expect(facts).toHaveLength(1);
+      if (direction === 'increase') {
+        expect(facts[0]?.value).toBeGreaterThan(1);
+      } else {
+        expect(facts[0]?.value).toBeLessThan(1);
+      }
+    });
+  }
+
+  it('알 수 없는 발행형태는 조용히 버리지 않고 gap 으로 남긴다', () => {
+    const rows: DartIssuanceRow[] = [
+      {
+        isu_dcrs_de: '2025-06-02',
+        isu_dcrs_stle: '알수없는형태',
+        isu_dcrs_qy: '100,000',
+        rcept_no: '20250520000001',
+      },
+    ];
+    const { facts, gaps } = parseIssuanceRows('005930', rows, priorShares);
+    expect(facts).toEqual([]);
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]?.reason).toContain('알수없는형태');
   });
 });

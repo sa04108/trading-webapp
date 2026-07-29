@@ -16,6 +16,9 @@ export const REPORT_CODE_TO_QUARTER: Record<DartReportCode, 1 | 2 | 3 | 4> = {
 
 const REPORT_ORDER: readonly DartReportCode[] = ['11013', '11012', '11014', '11011'];
 
+/** 이 파서가 실제로 소비하는 재무제표 구분. CF(현금흐름표)·SCE(자본변동표)는 의도된 제외다 */
+const CONSUMED_STATEMENTS: ReadonlySet<string> = new Set(['BS', 'IS', 'CIS']);
+
 export interface DartFinancialRow {
   readonly rcept_no: string;
   readonly reprt_code: string;
@@ -51,13 +54,27 @@ const MS_PER_MINUTE = 60_000;
  */
 const AS_OF_MINUTE_OF_DAY = 18 * 60;
 
+/**
+ * 전체 토큰을 한 번에 검증한다 — 부분적으로 유효해 보이는 조각을 이어붙이면
+ * '(1,234' 같은 괄호 짝이 안 맞는 입력이나 '1 234' 같은 중간 공백이 섞인 입력이
+ * 조용히 통과해 부호나 자릿수가 틀린 값을 만들 수 있다.
+ */
+const AMOUNT_PATTERN = /^-?\d{1,3}(,\d{3})*(\.\d+)?$/;
+
 export function parseAmount(raw: string): number | null {
   const trimmed = raw.trim();
-  if (trimmed === '' || trimmed === '-') return null;
-  const negative = /^\(.*\)$/.test(trimmed);
-  const digits = trimmed.replace(/[(),\s]/g, '');
-  if (!/^-?\d+(\.\d+)?$/.test(digits)) return null;
-  const value = Number(digits);
+  if (trimmed === '') return null;
+
+  const hasOpenParen = trimmed.startsWith('(');
+  const hasCloseParen = trimmed.endsWith(')');
+  if (hasOpenParen !== hasCloseParen) return null; // 괄호가 한쪽만 있으면 형식 오류
+  const negative = hasOpenParen;
+
+  const inner = negative ? trimmed.slice(1, -1) : trimmed;
+  if (inner.includes('(') || inner.includes(')')) return null; // 괄호가 양끝이 아닌 곳에 있으면 형식 오류
+  if (!AMOUNT_PATTERN.test(inner)) return null;
+
+  const value = Number(inner.replace(/,/g, ''));
   if (!Number.isFinite(value)) return null;
   return negative ? -Math.abs(value) : value;
 }
@@ -111,14 +128,29 @@ function isReportCode(value: string): value is DartReportCode {
   return value in REPORT_CODE_TO_QUARTER;
 }
 
+/** 분기 하나의 손익 누적값 — 어느 보고서(행)에서 왔는지 asOf 도 함께 들고 다닌다 */
+interface CumulativePoint {
+  readonly value: number;
+  readonly asOfTsMs: number;
+}
+
 /**
  * 정기보고서 4종을 분기 단독값 팩트로 바꾼다.
  *
  * 손익 계정은 누적이다 — 분기 단독값 = 당기 누적 − 전기 누적. 어느 컬럼이 3개월
  * 금액인지는 제출사마다 갈리므로 누적값만 믿고 차분한다. 중간 보고서가 빠지면 그
- * 뒤 분기를 만들지 않고 gap 으로 남긴다 (틀린 값보다 없는 값이 낫다).
+ * 뒤 분기를 만들지 않고 gap 으로 남긴다 (틀린 값보다 없는 값이 낫다). 전기 누적값이
+ * 다른 사업연도에서 온 것이면(버킷이 잘못 채워진 경우) 역시 차분하지 않고 gap 으로
+ * 남긴다.
  *
  * 재무상태표 계정은 시점값이라 그대로 쓴다.
+ *
+ * 행 하나하나에 대해: reprt_code·bsns_year 가 버킷과 일치하는지, sj_div 가 이
+ * 파서가 소비하는 재무제표(BS/IS/CIS)인지, 매핑된 계정의 statement 와 실제 sj_div
+ * 가 맞는지를 차례로 확인한다 — 어느 하나라도 어긋나면 그 행은 gap 이거나(구조적
+ * 불일치) 조용히 제외된다(CF·SCE 처럼 애초에 소비 대상이 아닌 경우). 같은 보고서
+ * 안에서 같은 계정이 서로 다른 값으로 두 번 잡히면(예: IS·CIS 중복) 조용히
+ * 덮어쓰지 않고 gap 을 남긴다.
  */
 export function parseFinancialRows(
   symbol: string,
@@ -127,10 +159,10 @@ export function parseFinancialRows(
   const facts: Fact[] = [];
   const gaps: FactIngestionGap[] = [];
 
-  /** field → quarter(1~4) → 누적값 */
-  const cumulative = new Map<string, Map<number, number>>();
-  /** report → asOfTsMs */
-  const asOfByReport = new Map<DartReportCode, number>();
+  /** field → quarter(1~4) → 누적값(+asOf) */
+  const cumulative = new Map<string, Map<number, CumulativePoint>>();
+  /** report → bsns_year — 분기 간 사업연도가 섞여 차분되는 것을 막는다 */
+  const yearByReport = new Map<DartReportCode, string>();
 
   for (const report of REPORT_ORDER) {
     const rows = rowsByReport.get(report);
@@ -138,23 +170,44 @@ export function parseFinancialRows(
     const quarter = REPORT_CODE_TO_QUARTER[report];
     const year = rows[0]?.bsns_year ?? '';
     const periodKey = `${year}Q${quarter}`;
+    yearByReport.set(report, year);
 
-    const asOf = receiptDateToAsOfTsMs(rows[0]?.rcept_no ?? '');
-    if (asOf === null) {
-      gaps.push({ symbol, periodKey, reason: `접수번호를 읽을 수 없습니다: ${rows[0]?.rcept_no}` });
-      continue;
-    }
-    asOfByReport.set(report, asOf);
+    /** 같은 보고서 안에서 계정이 두 번 잡히면 값이 다를 때만 gap 을 남긴다 */
+    const seenBsInReport = new Map<string, number>();
 
     for (const row of rows) {
       // row.reprt_code 가 버킷 키(report)와 다르면 호출자가 잘못 묶은 것이다 —
-      // 엉뚱한 분기로 계상하는 대신 gap 으로 남긴다
+      // 엉뚱한 분기로 계상하는 대신 gap 으로 남긴다. asOf 를 구하기 전에 확인한다.
       if (!isReportCode(row.reprt_code) || row.reprt_code !== report) {
         gaps.push({
           symbol,
           periodKey,
           reason: `보고서 코드가 일치하지 않습니다: ${row.reprt_code} (기대값 ${report})`,
         });
+        continue;
+      }
+
+      // 버킷의 기준 연도(rows[0].bsns_year)와 다른 사업연도 행이 섞이면 엉뚱한
+      // 분기로 표기되므로 gap 으로 남긴다
+      if (row.bsns_year !== year) {
+        gaps.push({
+          symbol,
+          periodKey,
+          reason: `행의 사업연도(${row.bsns_year})가 버킷 기준 연도(${year})와 다릅니다: ${row.account_nm}`,
+        });
+        continue;
+      }
+
+      // CF·SCE 등 이 파서가 소비하지 않는 재무제표는 의도된 제외다 — 매핑 여부와
+      // 무관하게 gap 을 남기지 않는다 (그렇지 않으면 보고서마다 무관한 계정 수백
+      // 개가 '매핑되지 않은 계정' gap 노이즈를 만든다)
+      if (!CONSUMED_STATEMENTS.has(row.sj_div)) continue;
+
+      // asOf 는 행 단위로 구한다 — 정정공시 등으로 버킷 안에 rcept_no 가 섞일 수
+      // 있어 rows[0] 하나만 대표로 쓰면 다른 행의 asOf 를 잘못 물려받는다
+      const asOf = receiptDateToAsOfTsMs(row.rcept_no);
+      if (asOf === null) {
+        gaps.push({ symbol, periodKey, reason: `접수번호를 읽을 수 없습니다: ${row.rcept_no}` });
         continue;
       }
 
@@ -168,12 +221,35 @@ export function parseFinancialRows(
         continue;
       }
 
+      const statementMatches =
+        rule.statement === 'BS' ? row.sj_div === 'BS' : row.sj_div === 'IS' || row.sj_div === 'CIS';
+      if (!statementMatches) {
+        gaps.push({
+          symbol,
+          periodKey,
+          reason: `계정 유형이 일치하지 않습니다: ${row.account_nm} (sj_div=${row.sj_div}, 기대값=${rule.statement})`,
+        });
+        continue;
+      }
+
       if (rule.statement === 'BS') {
         const amount = parseAmount(row.thstrm_amount);
         if (amount === null) {
           gaps.push({ symbol, periodKey, reason: `금액을 읽을 수 없습니다: ${row.account_nm}` });
           continue;
         }
+        const previouslySeen = seenBsInReport.get(rule.field);
+        if (previouslySeen !== undefined) {
+          if (previouslySeen !== amount) {
+            gaps.push({
+              symbol,
+              periodKey,
+              reason: `같은 보고서 안에서 ${rule.field} 값이 서로 다릅니다 (${previouslySeen} vs ${amount})`,
+            });
+          }
+          continue;
+        }
+        seenBsInReport.set(rule.field, amount);
         facts.push({
           scope: 'SYMBOL',
           key: symbol,
@@ -186,14 +262,27 @@ export function parseFinancialRows(
         continue;
       }
 
-      // IS — 누적값을 모아두고 아래에서 차분한다
-      const amount = parseAmount(row.thstrm_add_amount ?? row.thstrm_amount);
+      // IS/CIS — 누적값을 모아두고 아래에서 차분한다. thstrm_add_amount 가 빈
+      // 문자열인 제출사도 있어 '있으면 쓴다' 가 아니라 '내용이 있으면 쓴다' 로 판단한다
+      const cumulativeRaw = row.thstrm_add_amount?.trim() ? row.thstrm_add_amount : row.thstrm_amount;
+      const amount = parseAmount(cumulativeRaw);
       if (amount === null) {
         gaps.push({ symbol, periodKey, reason: `금액을 읽을 수 없습니다: ${row.account_nm}` });
         continue;
       }
-      const byQuarter = cumulative.get(rule.field) ?? new Map<number, number>();
-      byQuarter.set(quarter, amount);
+      const byQuarter = cumulative.get(rule.field) ?? new Map<number, CumulativePoint>();
+      const existing = byQuarter.get(quarter);
+      if (existing !== undefined) {
+        if (existing.value !== amount) {
+          gaps.push({
+            symbol,
+            periodKey,
+            reason: `같은 보고서 안에서 ${rule.field} 누적값이 서로 다릅니다 (${existing.value} vs ${amount})`,
+          });
+        }
+        continue;
+      }
+      byQuarter.set(quarter, { value: amount, asOfTsMs: asOf });
       cumulative.set(rule.field, byQuarter);
     }
   }
@@ -202,10 +291,9 @@ export function parseFinancialRows(
     for (const report of REPORT_ORDER) {
       const quarter = REPORT_CODE_TO_QUARTER[report];
       const current = byQuarter.get(quarter);
-      const asOf = asOfByReport.get(report);
-      if (current === undefined || asOf === undefined) continue;
+      if (current === undefined) continue;
 
-      const year = (rowsByReport.get(report) ?? [])[0]?.bsns_year ?? '';
+      const year = yearByReport.get(report) ?? '';
       const periodKey = `${year}Q${quarter}`;
 
       if (quarter === 1) {
@@ -214,8 +302,8 @@ export function parseFinancialRows(
           key: symbol,
           field,
           periodKey,
-          asOfTsMs: asOf,
-          value: current,
+          asOfTsMs: current.asOfTsMs,
+          value: current.value,
           unit: 'KRW',
         });
         continue;
@@ -230,13 +318,26 @@ export function parseFinancialRows(
         });
         continue;
       }
+
+      // 전기 누적값이 다른 사업연도에서 온 것이면(버킷 배정 오류) 차분하지 않는다
+      const previousReport = REPORT_ORDER[quarter - 2];
+      const previousYear = previousReport !== undefined ? yearByReport.get(previousReport) : undefined;
+      if (previousYear === undefined || previousYear !== year) {
+        gaps.push({
+          symbol,
+          periodKey,
+          reason: `직전 분기가 다른 사업연도입니다 (${previousYear ?? '알수없음'} → ${year}) — ${field} 단독값을 만들 수 없습니다`,
+        });
+        continue;
+      }
+
       facts.push({
         scope: 'SYMBOL',
         key: symbol,
         field,
         periodKey,
-        asOfTsMs: asOf,
-        value: current - previous,
+        asOfTsMs: current.asOfTsMs,
+        value: current.value - previous.value,
         unit: 'KRW',
       });
     }
@@ -245,12 +346,33 @@ export function parseFinancialRows(
   return { facts, gaps };
 }
 
+type CapitalChangeDirection = 'INCREASE' | 'DECREASE' | 'SKIP_PAID';
+
+/**
+ * 발행형태 문자열을 분류한다. 분할·무상증자·주식배당은 주주가 낸 돈 없이 주식수만
+ * 늘어나므로 증가로, 병합·감자(무상감자 포함)는 감소로 분류한다. '유상' 이 포함되면
+ * (유상증자·유상감자 모두) 현금이 오간 것이라 의도된 제외다. 병합/감자 판정을
+ * 증가 판정보다 먼저 확인해야 '무상감자' 처럼 두 조건에 다 걸리는 표기가 항상
+ * 감소로 분류된다 — 이 순서를 호출부의 삼항 연산자에 맡기면 나중에 누군가 조건
+ * 순서를 바꿨을 때 테스트 없이 부호가 뒤집힐 수 있으므로 분류를 함수 하나로 고정한다.
+ * 어느 쪽에도 속하지 않으면 null 을 반환해 호출자가 gap 으로 남기게 한다 — 조용히
+ * 버리면 앞으로 추가되거나 이름이 바뀐 발행형태가 가격 보정 없이 새어나간다.
+ */
+function classifyCapitalChange(style: string): CapitalChangeDirection | null {
+  if (style.includes('유상')) return 'SKIP_PAID';
+  if (style.includes('병합') || style.includes('감자')) return 'DECREASE';
+  if (style.includes('분할') || style.includes('무상') || style.includes('주식배당')) return 'INCREASE';
+  return null;
+}
+
 /**
  * 증자·감자 현황을 가격 보정 비율로 바꾼다.
  *
- * 비율 = (직전 발행주식수 ± 변동 수량) / 직전 발행주식수. 분할·무상증자·병합은
- * 주주가 낸 돈 없이 주식수만 바뀌므로 가격을 이 비율로 보정해야 과거·현재를 비교할
- * 수 있다. **유상증자는 제외한다** — 현금이 들어온 것이라 가격 보정 대상이 아니다.
+ * 비율 = (직전 발행주식수 ± 변동 수량) / 직전 발행주식수. 분할·무상증자·주식배당·
+ * 병합은 주주가 낸 돈 없이 주식수만 바뀌므로 가격을 이 비율로 보정해야 과거·현재를
+ * 비교할 수 있다. **유상증자·유상감자는 제외한다** — 현금이 오간 것이라(증자는
+ * 유입, 감자는 유출) 가격 보정 대상이 아니다. 분류할 수 없는 발행형태는 조용히
+ * 버리지 않고 gap 으로 남긴다.
  *
  * `sharesBefore` 는 이벤트 직전 발행주식수를 준다. 분기 공시값을 쓰므로 같은 분기에
  * 여러 이벤트가 있으면 근사가 된다 — 이 한계는 결과 화면 경고에 남는다.
@@ -265,12 +387,18 @@ export function parseIssuanceRows(
 
   for (const row of rows) {
     const style = row.isu_dcrs_stle.replace(/\s/g, '');
-    // 유상증자는 가격 보정 대상이 아니다 — 의도된 제외이므로 gap 을 남기지 않는다
-    if (style.includes('유상')) continue;
+    const direction = classifyCapitalChange(style);
 
-    const isSplitLike = style.includes('분할') || style.includes('무상');
-    const isMerge = style.includes('병합') || style.includes('감자');
-    if (!isSplitLike && !isMerge) continue;
+    if (direction === null) {
+      gaps.push({
+        symbol,
+        periodKey: row.isu_dcrs_de,
+        reason: `분류할 수 없는 발행형태: ${row.isu_dcrs_stle}`,
+      });
+      continue;
+    }
+    // 유상증자·유상감자는 현금이 오간 것이라 의도된 제외다 — gap 을 남기지 않는다
+    if (direction === 'SKIP_PAID') continue;
 
     const dateKey = normalizeDateKey(row.isu_dcrs_de);
     if (dateKey === null) {
@@ -298,7 +426,7 @@ export function parseIssuanceRows(
       continue;
     }
 
-    const ratio = isMerge ? (prior - quantity) / prior : (prior + quantity) / prior;
+    const ratio = direction === 'DECREASE' ? (prior - quantity) / prior : (prior + quantity) / prior;
     if (!Number.isFinite(ratio) || ratio <= 0) {
       gaps.push({ symbol, periodKey: dateKey, reason: `보정 비율이 유효하지 않습니다: ${ratio}` });
       continue;
