@@ -68,6 +68,7 @@ export async function buildServer(container: Container): Promise<FastifyInstance
         container.brokerSyncService,
         container.symbolInfoService,
         (datasetId) => container.jobQueue.activeCountForDataset(datasetId) > 0,
+        container.factsSyncEstimator,
         requireAuth,
       );
       registerStrategyRoutes(api, container.strategyRegistry, requireAuth);
