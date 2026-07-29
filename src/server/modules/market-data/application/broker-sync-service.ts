@@ -40,11 +40,23 @@ export class SyncUnsupportedDatasetError extends Error {
   }
 }
 
-/** 재무 단계 진행 — 45분짜리 단계가 조용하지 않게 한다 */
+/**
+ * 재무 단계 진행 — 45분짜리 단계가 조용하지 않게 한다.
+ *
+ * 네 값 모두 **지금까지의 누적**이다. 이 단계는 진행을 그대로 factsJson 에 덮어쓰고
+ * (더하지 않고) 화면은 그 값을 폴링하므로, 종목 단위 값을 넘기면 카운터가 종목마다
+ * 12 → 0 → 8 → 0 으로 튀다 마지막에만 총계로 맞는다. 주입부가 감싸는
+ * facts 모듈의 FactSyncProgress 는 savedFacts·gapCount 가 **종목 단위**라
+ * (`이 종목에서 저장된 팩트 수`) 필드를 1:1 로 옮기면 정확히 그 증상이 난다 —
+ * 둘 다 number 라서 타입으로는 잡히지 않는다. 주입부가 누적해서 넘겨야 한다.
+ */
 export interface FactPhaseProgress {
+  /** 완료된 종목 수 (누적) */
   readonly symbolsDone: number;
   readonly symbolTotal: number;
+  /** 이 단계에서 지금까지 저장된 팩트 수 (누적) */
   readonly savedFacts: number;
+  /** 이 단계에서 지금까지 발견된 누락 수 (누적) */
   readonly gapCount: number;
 }
 

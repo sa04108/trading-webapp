@@ -502,6 +502,43 @@ describe('BrokerSyncService 재무 단계', () => {
     expect(row?.phase).toBeNull();
   });
 
+  it('onProgress 마다 진행을 factsJson 에 적는다 (조용한 45분과 멈춤을 구분한다)', async () => {
+    const persisted: Array<Pick<FactsJobState, 'symbolsDone' | 'symbolTotal' | 'savedFacts' | 'gapCount'>> = [];
+    const ref = { jobId: '' };
+    const harness: Harness = buildHarness(new FakeSource(minutes('005930', 10)), {
+      factsPhase: async ({ onProgress }) => {
+        // 넘긴 인자가 아니라 **저장된** 행을 읽는다 — 폴링하는 화면이 보는 것이 그것이다.
+        // symbolTotal 을 데이터셋 종목 수(1)와 다른 2 로 주어 초기 상태가 아니라
+        // onProgress 가 쓴 값이 남는 것까지 확인한다.
+        const snapshot = () => {
+          const facts = requireFacts(jobRow(harness, ref.jobId));
+          return {
+            symbolsDone: facts.symbolsDone,
+            symbolTotal: facts.symbolTotal,
+            savedFacts: facts.savedFacts,
+            gapCount: facts.gapCount,
+          };
+        };
+        onProgress({ symbolsDone: 1, symbolTotal: 2, savedFacts: 7, gapCount: 1 });
+        persisted.push(snapshot());
+        onProgress({ symbolsDone: 2, symbolTotal: 2, savedFacts: 19, gapCount: 4 });
+        persisted.push(snapshot());
+        return { savedFacts: 19, gapCount: 4, stopReason: null, failureMessage: null };
+      },
+    });
+    const dataset = harness.datasetService.createBrokerDataset('KR-유니버스', 'KR', '1m', ['005930']);
+
+    const started = harness.sync.startSync(dataset.id, { includeFacts: true });
+    ref.jobId = started.job.id;
+    await started.done;
+
+    expect(persisted).toEqual([
+      { symbolsDone: 1, symbolTotal: 2, savedFacts: 7, gapCount: 1 },
+      { symbolsDone: 2, symbolTotal: 2, savedFacts: 19, gapCount: 4 },
+    ]);
+    expect(jobRow(harness, started.job.id)?.status).toBe('COMPLETED');
+  });
+
   it('봉이 하나도 없으면 재무를 건너뛰고 사유를 남긴다', async () => {
     let called = false;
     const harness = buildHarness(new FakeSource([]), {
