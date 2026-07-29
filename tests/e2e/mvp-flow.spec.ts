@@ -146,6 +146,30 @@ test('unsupported market is disabled with reason shown on dataset create dialog'
   await expect(page.getByText(/DART 재무 수집은 국내 종목 전용/)).toBeVisible();
 });
 
+/** `/markets` 가 영구히 실패하면 목록은 영원히 비어(로딩 중과 같은 모양) 있는다 — 그 상태를
+ *  로딩 중과 구분 못 하면 시장 선택이 이유 없이 잠긴 채로 남는다. 이 태스크의 취지(고를
+ *  수 없는 이유는 항상 보여야 한다)를 실패 경로에서도 지킨다. */
+test('market select stays disabled and explains itself when /markets fails', async ({ page }) => {
+  await page.route('**/api/v1/markets**', async (route) => {
+    await route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'internal' }),
+    });
+  });
+
+  await page.goto('/login');
+  await page.getByLabel('사용자 이름').fill(USERNAME);
+  await page.getByLabel('비밀번호').fill(PASSWORD);
+  await page.getByRole('button', { name: '로그인' }).click();
+  await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
+
+  await page.goto('/datasets');
+  await page.getByRole('button', { name: '증권사 데이터셋' }).click();
+  await expect(page.getByLabel('시장')).toBeDisabled();
+  await expect(page.getByText(/시장 목록을 불러오지 못했습니다/)).toBeVisible();
+});
+
 test('mobile layout has no horizontal scroll on core screens (스펙 §38)', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'mobile', 'mobile 전용 검증');
 
