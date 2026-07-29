@@ -117,9 +117,13 @@ export class ParquetFactRepository implements FactRepository {
 
     // (key, field, periodKey, asOf) 가 같으면 뒤에 온 것이 이긴다 — idempotent 재수집.
     // asOf 가 다르면 둘 다 남는다: 재집계는 새 행이어야 과거 시점 조회가 변하지 않는다.
+    // key·field 는 domain 상 자유 문자열이라 구분자 없이 이어붙이면 경계가 다른
+    // 두 조합이 같은 문자열로 충돌할 수 있다(예: 'AB'+'CD' === 'ABC'+'D') —
+    // JSON.stringify 로 각 구성요소를 이스케이프해 경계를 명확히 한다.
     const merged = new Map<string, Fact>();
     for (const fact of [...existing, ...incoming]) {
-      merged.set(`${fact.key}${fact.field}${fact.periodKey}${fact.asOfTsMs}`, fact);
+      const mergeKey = JSON.stringify([fact.key, fact.field, fact.periodKey, fact.asOfTsMs]);
+      merged.set(mergeKey, fact);
     }
 
     const values = [...merged.values()]

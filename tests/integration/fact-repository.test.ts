@@ -167,4 +167,32 @@ describe('ParquetFactRepository', () => {
       repository.saveFacts('ds-1', [fact({ asOfTsMs: NaN })]),
     ).rejects.toThrow(/유한하지 않습니다/);
   });
+
+  it('구분자 없이 이어붙이면 충돌하는 (key, field) 경계쌍도 둘 다 남는다', async () => {
+    // 'AB'+'CD' 와 'ABC'+'D' 는 구분자 없이 이어붙이면 같은 문자열이 된다 —
+    // key·field 는 domain 상 자유 문자열(FundamentalField 도 리터럴 유니온일 뿐
+    // 실제 타입은 string)이라 이 경계쌍은 이론이 아니라 실제로 도달 가능하다.
+    await repository.saveFacts('ds-1', [
+      fact({ key: 'AB', field: 'CD', periodKey: '2025Q1', asOfTsMs: 1_000, value: 1 }),
+      fact({ key: 'ABC', field: 'D', periodKey: '2025Q1', asOfTsMs: 1_000, value: 2 }),
+    ]);
+    const rows = await repository.getFacts({ datasetId: 'ds-1', scope: 'SYMBOL' });
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => `${row.key}/${row.field}`).sort()).toEqual(['AB/CD', 'ABC/D']);
+  });
+
+  it('같은 파티션에 동시에 저장해도 둘 다 남는다 (파티션 락)', async () => {
+    // await 로 순서를 기다리지 않고 동시에 발사한다 — 락이 없으면 두 쓰기 모두
+    // 저장 전 상태를 read 해서 나중에 rename 하는 쪽이 앞선 쓰기를 지운다.
+    await Promise.all([
+      repository.saveFacts('ds-1', [fact({ periodKey: '2025Q1', value: 1 })]),
+      repository.saveFacts('ds-1', [fact({ periodKey: '2025Q2', value: 2 })]),
+    ]);
+    const rows = await repository.getFacts({ datasetId: 'ds-1', scope: 'SYMBOL' });
+    expect(rows.map((row) => row.periodKey).sort()).toEqual(['2025Q1', '2025Q2']);
+  });
+
+  it('부적절한 datasetId 로 hasFacts 를 호출하면 false 를 반환한다', () => {
+    expect(repository.hasFacts('../escape', 'SYMBOL')).toBe(false);
+  });
 });
