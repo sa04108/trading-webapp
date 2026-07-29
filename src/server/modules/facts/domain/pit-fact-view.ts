@@ -28,14 +28,22 @@ function localDateToUtcMs(dateKey: string): number | null {
 interface FieldEntry {
   /** periodKey → { value, asOfTsMs }. 같은 분기에 더 늦은 공시가 오면 교체된다 */
   readonly byPeriod: Map<string, { value: number; asOfTsMs: number }>;
+  /**
+   * 이 계정에서 흡수한 가장 큰 분기 서수 — 계정별로 따로 추적한다. 계정마다
+   * 공시 주기가 다를 수 있어서(예: 발행주식수는 사업보고서에서만 갱신) 다른
+   * 계정이 커서를 앞서 밀어도 이 계정의 "최신"이 흔들리면 안 된다.
+   */
+  latestQuarter: number | null;
 }
 
 interface SymbolEntry {
   readonly fields: Map<string, FieldEntry>;
   readonly actions: CorporateAction[];
-  /** 흡수한 재무 팩트 중 가장 큰 분기 서수 */
+  /** 흡수한 재무 팩트 중 가장 큰 분기 서수 (계정 전체를 통틀어) — 보고 신선도 신호 */
   latestQuarter: number | null;
+  /** latestQuarter 에 대응하는 periodKey */
   latestPeriodKey: string | null;
+  /** latestPeriodKey 를 그 값으로 만든 공시의 asOfTsMs — 항상 latestPeriodKey 와 짝을 이룬다 */
   latestAsOfTsMs: number | null;
 }
 
@@ -76,29 +84,26 @@ export class PitFactView {
   fundamentals(symbol: string): FundamentalSnapshot | null {
     const entry = this.bySymbol.get(symbol);
     if (!entry || entry.latestQuarter === null) return null;
-    const latestQuarter = entry.latestQuarter;
 
     return {
       latestPeriodKey: entry.latestPeriodKey,
       latestAsOfTsMs: entry.latestAsOfTsMs,
       get(field: FundamentalField): number | null {
-        const byPeriod = entry.fields.get(field)?.byPeriod;
-        if (!byPeriod) return null;
-        // 최신 분기부터 과거로 내려가며 값이 있는 첫 분기를 쓴다 — 계정별로
-        // 공시 시점이 어긋나는 경우(주식수는 사업보고서만 등)를 흡수한다.
-        for (let ordinal = latestQuarter; ordinal > latestQuarter - 4; ordinal -= 1) {
-          const found = byPeriod.get(ordinalToPeriodKey(ordinal));
-          if (found) return found.value;
-        }
-        return null;
+        const fieldEntry = entry.fields.get(field);
+        if (!fieldEntry || fieldEntry.latestQuarter === null) return null;
+        // 이 계정 자신의 최신 분기를 쓴다 — 전역 커서가 아니다. 다른 계정이
+        // 커서를 몇 분기 앞서 밀었어도 느린 주기의 계정은 값을 잃지 않는다.
+        const found = fieldEntry.byPeriod.get(ordinalToPeriodKey(fieldEntry.latestQuarter));
+        return found ? found.value : null;
       },
       ttm(field: FundamentalField): number | null {
         if (!FLOW_FIELDS.includes(field)) return null;
-        const byPeriod = entry.fields.get(field)?.byPeriod;
-        if (!byPeriod) return null;
+        const fieldEntry = entry.fields.get(field);
+        if (!fieldEntry || fieldEntry.latestQuarter === null) return null;
+        const latestQuarter = fieldEntry.latestQuarter;
         let sum = 0;
         for (let ordinal = latestQuarter; ordinal > latestQuarter - 4; ordinal -= 1) {
-          const found = byPeriod.get(ordinalToPeriodKey(ordinal));
+          const found = fieldEntry.byPeriod.get(ordinalToPeriodKey(ordinal));
           if (!found) return null; // 구멍이 있으면 4개인 척 더하지 않는다
           sum += found.value;
         }
@@ -137,12 +142,15 @@ export class PitFactView {
       return;
     }
 
+    // 분기 키('YYYYQn')만 재무 스냅샷에 들어간다. 연간('YYYYFY')은 스코프 밖 —
+    // 이 플랜의 두 전략 모두 분기 데이터만 쓴다. SPLIT_RATIO 는 위에서 이미
+    // 처리했고 'YYYY-MM-DD' 키를 쓴다.
     const ordinal = quarterOrdinal(fact.periodKey);
-    if (ordinal === null) return; // 분기 팩트만 재무 스냅샷에 들어간다
+    if (ordinal === null) return;
 
     let field = entry.fields.get(fact.field);
     if (!field) {
-      field = { byPeriod: new Map() };
+      field = { byPeriod: new Map(), latestQuarter: null };
       entry.fields.set(fact.field, field);
     }
     const existing = field.byPeriod.get(fact.periodKey);
@@ -150,12 +158,16 @@ export class PitFactView {
     if (!existing || fact.asOfTsMs >= existing.asOfTsMs) {
       field.byPeriod.set(fact.periodKey, { value: fact.value, asOfTsMs: fact.asOfTsMs });
     }
+    if (field.latestQuarter === null || ordinal > field.latestQuarter) {
+      field.latestQuarter = ordinal;
+    }
 
+    // latestAsOfTsMs 는 latestPeriodKey 와 짝이다 — 그 값을 만든 공시의 asOf 여야
+    // 한다. 같은 분기의 재집계나 더 오래된 분기로의 뒤늦은 정정은 latestPeriodKey
+    // 를 바꾸지 않으므로 latestAsOfTsMs 도 건드리지 않는다.
     if (entry.latestQuarter === null || ordinal > entry.latestQuarter) {
       entry.latestQuarter = ordinal;
       entry.latestPeriodKey = fact.periodKey;
-    }
-    if (entry.latestAsOfTsMs === null || fact.asOfTsMs > entry.latestAsOfTsMs) {
       entry.latestAsOfTsMs = fact.asOfTsMs;
     }
   }

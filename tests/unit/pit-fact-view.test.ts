@@ -106,6 +106,40 @@ describe('PitFactView TTM', () => {
     view.advanceTo(4_000);
     expect(view.fundamentals('005930')?.get('CURRENT_ASSETS')).toBe(600);
   });
+
+  it('flow 가 아닌 계정은 4분기가 다 채워져도 TTM 이 null 이다', () => {
+    const view = new PitFactView([
+      fact({ field: 'CURRENT_ASSETS', periodKey: '2024Q3', asOfTsMs: 1_000, value: 10 }),
+      fact({ field: 'CURRENT_ASSETS', periodKey: '2024Q4', asOfTsMs: 2_000, value: 20 }),
+      fact({ field: 'CURRENT_ASSETS', periodKey: '2025Q1', asOfTsMs: 3_000, value: 30 }),
+      fact({ field: 'CURRENT_ASSETS', periodKey: '2025Q2', asOfTsMs: 4_000, value: 40 }),
+    ]);
+    view.advanceTo(4_000);
+    expect(view.fundamentals('005930')?.ttm('CURRENT_ASSETS')).toBeNull();
+  });
+});
+
+describe('PitFactView 계정별 최신 분기 커서', () => {
+  it('느린 주기의 계정은 다른 계정이 커서를 4분기 넘게 앞서 밀어도 값을 잃지 않는다', () => {
+    // CURRENT_ASSETS 는 2024Q1 딱 한 번만 공시된다. OPERATING_INCOME 은 매 분기
+    // 공시되어 전역 latestQuarter 를 2025Q2 까지(2024Q1 대비 5분기) 밀어올린다.
+    // 예전 구현은 [latestQuarter-3, latestQuarter] 창으로만 계정을 조회했기
+    // 때문에 이 시나리오에서 CURRENT_ASSETS 가 null 로 돌변했다.
+    const view = new PitFactView([
+      fact({ field: 'CURRENT_ASSETS', periodKey: '2024Q1', asOfTsMs: 1_000, value: 500 }),
+      fact({ field: 'OPERATING_INCOME', periodKey: '2024Q1', asOfTsMs: 1_000, value: 10 }),
+      fact({ field: 'OPERATING_INCOME', periodKey: '2024Q2', asOfTsMs: 2_000, value: 11 }),
+      fact({ field: 'OPERATING_INCOME', periodKey: '2024Q3', asOfTsMs: 3_000, value: 12 }),
+      fact({ field: 'OPERATING_INCOME', periodKey: '2024Q4', asOfTsMs: 4_000, value: 13 }),
+      fact({ field: 'OPERATING_INCOME', periodKey: '2025Q1', asOfTsMs: 5_000, value: 14 }),
+      fact({ field: 'OPERATING_INCOME', periodKey: '2025Q2', asOfTsMs: 6_000, value: 15 }),
+    ]);
+    view.advanceTo(6_000);
+    const snapshot = view.fundamentals('005930');
+    expect(snapshot?.latestPeriodKey).toBe('2025Q2'); // 스냅샷 전체 신선도는 전역 최신 분기
+    expect(snapshot?.get('CURRENT_ASSETS')).toBe(500); // 이 계정 자신의 최신 분기 값은 그대로
+    expect(snapshot?.get('OPERATING_INCOME')).toBe(15);
+  });
 });
 
 describe('PitFactView 재집계(restatement)', () => {
@@ -125,6 +159,26 @@ describe('PitFactView 재집계(restatement)', () => {
     ]);
     later.advanceTo(restated);
     expect(later.fundamentals('005930')?.get('OPERATING_INCOME')).toBe(90);
+  });
+
+  it('latestAsOfTsMs 는 latestPeriodKey 를 만든 공시의 asOf 다 — 더 오래된 분기로의 뒤늦은 정정에 흔들리지 않는다', () => {
+    const q1Disclosed = 1_000;
+    const q2Disclosed = 2_000;
+    const q1LateCorrection = 3_000; // Q1 에 대한 정정이지만 asOf 는 Q2 공시보다도 늦다
+    const view = new PitFactView([
+      fact({ field: 'OPERATING_INCOME', periodKey: '2025Q1', asOfTsMs: q1Disclosed, value: 100 }),
+      fact({ field: 'OPERATING_INCOME', periodKey: '2025Q2', asOfTsMs: q2Disclosed, value: 200 }),
+      fact({ field: 'OPERATING_INCOME', periodKey: '2025Q1', asOfTsMs: q1LateCorrection, value: 95 }),
+    ]);
+    view.advanceTo(q1LateCorrection);
+    const snapshot = view.fundamentals('005930');
+    // latestPeriodKey 는 여전히 2025Q2 — Q1 정정은 더 과거 분기라 전역 최신을 바꾸지 않는다
+    expect(snapshot?.latestPeriodKey).toBe('2025Q2');
+    // 그리고 latestAsOfTsMs 는 그 2025Q2 공시 시각(q2Disclosed)과 짝을 이뤄야 한다 —
+    // Q1 정정의 asOf(q1LateCorrection)가 더 크다고 해서 끌려가면 안 된다
+    expect(snapshot?.latestAsOfTsMs).toBe(q2Disclosed);
+    // OPERATING_INCOME 자신의 최신 분기는 여전히 Q2이므로 값도 그대로다
+    expect(snapshot?.get('OPERATING_INCOME')).toBe(200);
   });
 });
 
