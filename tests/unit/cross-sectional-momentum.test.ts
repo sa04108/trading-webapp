@@ -157,10 +157,54 @@ describe('2단계 리밸런스 실행', () => {
     expect((firstBuy as { tsMs: number }).tsMs).toBeGreaterThanOrEqual(START + 21 * DAY);
   });
 
-  it('절대 모멘텀 필터가 모두 걸러내면 현금으로 남는다', () => {
+  it('1위 종목이 다음 리밸런스에서 바뀌면 매도 뒤 다음 봉에서 매수해 회전한다', () => {
+    // AAA 는 index 18 까지 오르다 급락, BBB 는 계속 내리다 index 18 부터 급등한다.
+    // 창[0,20](첫 리밸런스, index 20)에서는 AAA 가 유일한 양(+)의 후보라 AAA 를 편입한다.
+    // 창[10,30](둘째 리밸런스, 2월 1일 = index 30)에서는 역전되어 BBB 만 후보가 된다.
+    // topN == maxPositions == 1 인 상태에서 실제로 회전(청산 → 신규 편입)이 일어나는지를
+    // 확인한다 — 매도·매수를 같은 봉에 함께 내는 순진한(단일 단계) 구현이라면 동시
+    // 포지션 상한에 걸려 회전 자체가 막히거나, 매도·매수가 같은 봉에서 함께 체결된 것처럼
+    // 보여 이 테스트를 구분하지 못한다.
+    function buildRotationCandles(bars: number): Candle[] {
+      const candles: Candle[] = [];
+      for (let index = 0; index < bars; index += 1) {
+        const aaaClose = index <= 18 ? 1_000 + index * 10 : 1_180 - (index - 18) * 15;
+        const bbbClose = index <= 18 ? 1_000 - index * 5 : 910 + (index - 18) * 20;
+        candles.push(candle('AAA', index, aaaClose));
+        candles.push(candle('BBB', index, bbbClose));
+      }
+      return candles;
+    }
+
+    const result = runBacktest(crossSectionalMomentumStrategy, {
+      candles: buildRotationCandles(40),
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters,
+      randomSeed: 1,
+      maxPositions: 1,
+    });
+
+    const sellAaa = result.fills.find((fill) => fill.symbol === 'AAA' && fill.side === 'SELL');
+    const buyBbb = result.fills.find((fill) => fill.symbol === 'BBB' && fill.side === 'BUY');
+    expect(sellAaa).toBeDefined();
+    expect(buyBbb).toBeDefined();
+    // 매수는 매도가 결정된 봉보다 반드시 나중 봉에서 체결된다
+    expect((buyBbb as { tsMs: number }).tsMs).toBeGreaterThan((sellAaa as { tsMs: number }).tsMs);
+    // 매도·매수가 겹치는 봉이 없어 상한(1)을 절대 넘지 않는다
+    expect(result.metrics.maxConcurrentPositions).toBeLessThanOrEqual(1);
+  });
+
+  it('절대 모멘텀 필터가 모두 걸러내면 현금으로 남는다 (리밸런스 경계 전까지는 재평가하지 않는다)', () => {
+    // AAA 는 index 18 까지 하락하다 급반등한다. 첫 리밸런스 판정 봉(index 20)의 창[0,20]은
+    // 아직 마이너스라 AAA·BBB 둘 다 걸러져 후보가 없다. 하지만 index 21 부터는 롤링 창이
+    // 곧 플러스로 바뀐다 — '후보 없음'을 워밍업으로 오인해 lastRebalanceMonthKey 를 못
+    // 박지 않는 버그가 있다면, 다음 캘린더 리밸런스(2월 1일 = index 30)를 기다리지 않고
+    // 반등 직후(index 21 부근)에 곧바로 매수했을 것이다. BBB 는 끝까지 하락해 항상 걸러진다.
     const candles: Candle[] = [];
-    for (let index = 0; index < 70; index += 1) {
-      candles.push(candle('AAA', index, 1_000 - index * 5));
+    for (let index = 0; index < 40; index += 1) {
+      const aaaClose = index <= 18 ? 1_000 - index * 5 : 910 + (index - 18) * 40;
+      candles.push(candle('AAA', index, aaaClose));
       candles.push(candle('BBB', index, 1_000 - index * 3));
     }
     const result = runBacktest(crossSectionalMomentumStrategy, {
@@ -171,8 +215,10 @@ describe('2단계 리밸런스 실행', () => {
       randomSeed: 1,
       maxPositions: 1,
     });
-    expect(result.fills).toEqual([]);
-    expect(result.metrics.finalEquity).toBe(10_000_000);
+    // 2월 1일(index 30) 이전에는 어떤 체결도 없어야 한다 — 반등에 즉시 반응하지 않는다
+    expect(result.fills.every((fill) => fill.tsMs >= START + 30 * DAY)).toBe(true);
+    // 다만 영원히 무거래인 것은 아니다 — 경계 이후 실제로 매수가 일어난다
+    expect(result.fills.length).toBeGreaterThan(0);
   });
 
   it('필터를 끄면 하락장에서도 상대적 상위를 산다', () => {
