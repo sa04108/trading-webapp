@@ -180,6 +180,23 @@ describe('PitFactView 재집계(restatement)', () => {
     // OPERATING_INCOME 자신의 최신 분기는 여전히 Q2이므로 값도 그대로다
     expect(snapshot?.get('OPERATING_INCOME')).toBe(200);
   });
+
+  it('지금 최신인 분기에 대한 재집계는 latestAsOfTsMs 를 그 재집계 시각으로 밀어올린다', () => {
+    const q1Disclosed = 1_000;
+    const q1Restated = 5_000; // 같은 분기(2025Q1)에 대한 더 늦은 공시
+    const view = new PitFactView([
+      fact({ field: 'OPERATING_INCOME', periodKey: '2025Q1', asOfTsMs: q1Disclosed, value: 100 }),
+      fact({ field: 'OPERATING_INCOME', periodKey: '2025Q1', asOfTsMs: q1Restated, value: 110 }),
+    ]);
+    view.advanceTo(q1Restated);
+    const snapshot = view.fundamentals('005930');
+    // 분기 자체는 바뀌지 않는다 — 여전히 2025Q1
+    expect(snapshot?.latestPeriodKey).toBe('2025Q1');
+    // 하지만 그 분기를 다시 알려온 시각이 더 늦으므로 latestAsOfTsMs 는 갱신된다
+    expect(snapshot?.latestAsOfTsMs).toBe(q1Restated);
+    // 값도 재집계된 값을 반영한다
+    expect(snapshot?.get('OPERATING_INCOME')).toBe(110);
+  });
 });
 
 describe('PitFactView 자본변동 이벤트', () => {

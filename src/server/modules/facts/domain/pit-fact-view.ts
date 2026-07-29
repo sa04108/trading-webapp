@@ -163,8 +163,16 @@ export class PitFactView {
     }
 
     // latestAsOfTsMs 는 latestPeriodKey 와 짝이다 — 그 값을 만든 공시의 asOf 여야
-    // 한다. 같은 분기의 재집계나 더 오래된 분기로의 뒤늦은 정정은 latestPeriodKey
-    // 를 바꾸지 않으므로 latestAsOfTsMs 도 건드리지 않는다.
+    // 한다. 더 오래된 분기로의 뒤늦은 정정은 latestPeriodKey 를 바꾸지 않으므로
+    // latestAsOfTsMs 도 건드리지 않는다. 다만 "지금 최신인 바로 그 분기"에 대한
+    // 재집계라면 latestPeriodKey 는 그대로여도 그 재집계가 더 늦게 알려진
+    // 것이므로 latestAsOfTsMs 는 갱신되어야 한다 — 아래 첫 블록이 그 경우.
+    if (
+      ordinal === entry.latestQuarter &&
+      (entry.latestAsOfTsMs === null || fact.asOfTsMs > entry.latestAsOfTsMs)
+    ) {
+      entry.latestAsOfTsMs = fact.asOfTsMs;
+    }
     if (entry.latestQuarter === null || ordinal > entry.latestQuarter) {
       entry.latestQuarter = ordinal;
       entry.latestPeriodKey = fact.periodKey;
