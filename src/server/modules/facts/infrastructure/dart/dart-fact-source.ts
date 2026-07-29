@@ -18,6 +18,7 @@ import {
   parseIssuanceRows,
   receiptDateToAsOfTsMs,
   REPORT_CODE_TO_QUARTER,
+  REPORT_ORDER,
   type DartFinancialRow,
   type DartIssuanceRow,
   type DartReportCode,
@@ -42,15 +43,6 @@ interface DartShareRow {
   /** 발행한 주식의 총수 */
   readonly istc_totqy: string;
 }
-
-const REPORT_CODES = Object.keys(REPORT_CODE_TO_QUARTER) as DartReportCode[];
-
-/**
- * 발행주식수(stockTotqySttus)는 사업보고서에서만 갱신된다
- * (domain/fact.ts `periodKeyOf` 문서 참고). 분기보고서 코드로 반복 조회해도 같은
- * 값을 되풀이해 돌려줄 뿐이라 호출을 늘릴 이유가 없다 — 사업보고서 코드 하나만 쓴다.
- */
-const ANNUAL_REPORT_CODE: DartReportCode = '11011';
 
 /** 조회 결과 없음 — 에러가 아니다 (신규 상장·미제출 분기) */
 const NO_DATA_STATUS = '013';
@@ -123,6 +115,41 @@ export function createDartFactSource(
       return Buffer.from(await response.arrayBuffer());
     });
 
+  // stockTotqySttus(주식의 총수 현황)는 fetchFinancials 와 fetchCorporateActions 양쪽에서
+  // (corp_code, year, reportCode) 조합마다 필요하다 — 같은 소스 인스턴스 안에서 두 번
+  // 부르면 DART 일일 호출 한도(2만 건)를 그만큼 더 빨리 소진한다. 결과를 공유한다.
+  const shareRowsCache = new Map<string, Promise<readonly DartShareRow[]>>();
+  function fetchShareRows(
+    corpCode: string,
+    year: number,
+    reportCode: DartReportCode,
+  ): Promise<readonly DartShareRow[]> {
+    const cacheKey = `${corpCode}:${year}:${reportCode}`;
+    const cached = shareRowsCache.get(cacheKey);
+    if (cached) return cached;
+    const promise = call<DartShareRow>('/api/stockTotqySttus.json', {
+      corp_code: corpCode,
+      bsns_year: String(year),
+      reprt_code: reportCode,
+    });
+    shareRowsCache.set(cacheKey, promise);
+    return promise;
+  }
+
+  /** 응답 행에서 '보통주' 행만 골라낸다. se 가 문자열이 아니면(필드명이 바뀐 경우)
+   *  .replace 가 TypeError 를 던지므로 typeof 로 먼저 막는다 — 그런 행은 매칭 실패로
+   *  취급해 호출부가 gap 을 남기게 한다. */
+  function findCommonShareRow(rows: readonly DartShareRow[]): DartShareRow | undefined {
+    return rows.find((row) => typeof row.se === 'string' && row.se.replace(/\s/g, '') === '보통주');
+  }
+
+  /** istc_totqy 가 문자열이 아니면 parseAmount 가 아니라 여기서 먼저 null 로 떨어뜨린다
+   *  — 그래야 "발행주식수를 읽을 수 없습니다" gap 으로 이어지지 bare TypeError 로
+   *  전체 수집이 죽지 않는다. */
+  function readShareAmount(row: DartShareRow): number | null {
+    return typeof row.istc_totqy === 'string' ? parseAmount(row.istc_totqy) : null;
+  }
+
   async function fetchFinancials(request: FetchFinancialsRequest): Promise<FactIngestionResult> {
     const facts: Fact[] = [];
     const gaps: FactIngestionGap[] = [];
@@ -139,7 +166,7 @@ export function createDartFactSource(
       for (let year = request.fromYear; year <= request.toYear; year += 1) {
         const rowsByReport = new Map<DartReportCode, readonly DartFinancialRow[]>();
 
-        for (const reportCode of REPORT_CODES) {
+        for (const reportCode of REPORT_ORDER) {
           const rows = await call<DartFinancialRow>('/api/fnlttSinglAcntAll.json', {
             corp_code: corpCode,
             bsns_year: String(year),
@@ -161,7 +188,20 @@ export function createDartFactSource(
               (row.sj_div === 'BS' || row.sj_div === 'IS' || row.sj_div === 'CIS') &&
               row.bsns_year === String(year),
           );
-          if (relevant.length > 0) rowsByReport.set(reportCode, relevant);
+          if (relevant.length > 0) {
+            rowsByReport.set(reportCode, relevant);
+          } else if (rows.length > 0) {
+            // 행은 왔는데 필터를 통과한 게 하나도 없다 — sj_div/bsns_year 필드 이름이나
+            // 값이 기대와 다르면 이렇게 된다. 조용히 넘기면 이 보고서 전체가 이유 없이
+            // 사라진 것처럼 보이므로(파서 호출 자체가 스킵되어 gap 도 안 남는다) 여기서
+            // 명시적으로 gap 을 남긴다 — 파일 헤더가 약속하는 "조용히 0 이 되지 않는다"
+            // 를 이 필터 통과 시점에도 지킨다.
+            gaps.push({
+              symbol,
+              periodKey: `${year}Q${REPORT_CODE_TO_QUARTER[reportCode]}`,
+              reason: `응답 ${rows.length}행이 모두 필터에서 제외됐습니다 (sj_div/bsns_year 필드 확인)`,
+            });
+          }
         }
 
         if (rowsByReport.size > 0) {
@@ -170,41 +210,41 @@ export function createDartFactSource(
           gaps.push(...parsed.gaps);
         }
 
-        // 발행주식수 — 사업보고서 기준으로 연 1회만 조회한다 (ANNUAL_REPORT_CODE 주석 참고)
-        const shareRows = await call<DartShareRow>('/api/stockTotqySttus.json', {
-          corp_code: corpCode,
-          bsns_year: String(year),
-          reprt_code: ANNUAL_REPORT_CODE,
-        });
-        // 보통주만 쓴다 — 시가총액은 봉 종가(보통주 가격) × 보통주 수다.
-        // '합계' 행을 쓰면 우선주가 섞여 시가총액이 과대계상된다.
-        const common = shareRows.find((row) => row.se.replace(/\s/g, '') === '보통주');
-        const periodKey = `${year}Q${REPORT_CODE_TO_QUARTER[ANNUAL_REPORT_CODE]}`;
-        if (common) {
-          const value = parseAmount(common.istc_totqy);
-          const asOf = receiptDateToAsOfTsMs(common.rcept_no);
-          if (value === null || value <= 0 || asOf === null) {
-            gaps.push({ symbol, periodKey, reason: `발행주식수를 읽을 수 없습니다: ${common.istc_totqy}` });
-          } else {
-            facts.push({
-              scope: 'SYMBOL',
-              key: symbol,
-              field: 'SHARES_OUTSTANDING',
+        // 발행주식수 — 정기보고서별로 조회하고 그 보고서의 분기에 붙인다. DART
+        // stockTotqySttus 는 사업보고서뿐 아니라 분기·반기보고서에도 '주식의 총수
+        // 현황' 섹션을 담고 있어 네 보고서 모두 조회 대상이다.
+        for (const reportCode of REPORT_ORDER) {
+          const shareRows = await fetchShareRows(corpCode, year, reportCode);
+          // 보통주만 쓴다 — 시가총액은 봉 종가(보통주 가격) × 보통주 수다.
+          // '합계' 행을 쓰면 우선주가 섞여 시가총액이 과대계상된다.
+          const common = findCommonShareRow(shareRows);
+          const periodKey = `${year}Q${REPORT_CODE_TO_QUARTER[reportCode]}`;
+          if (common) {
+            const value = readShareAmount(common);
+            const asOf = receiptDateToAsOfTsMs(common.rcept_no);
+            if (value === null || value <= 0 || asOf === null) {
+              gaps.push({ symbol, periodKey, reason: `발행주식수를 읽을 수 없습니다: ${common.istc_totqy}` });
+            } else {
+              facts.push({
+                scope: 'SYMBOL',
+                key: symbol,
+                field: 'SHARES_OUTSTANDING',
+                periodKey,
+                asOfTsMs: asOf,
+                value,
+                unit: 'SHARES',
+              });
+            }
+          } else if (shareRows.length > 0) {
+            // 응답에 행은 있는데 '보통주' 로 매칭되는 행이 없다 — se 표기가 예상과 다를 수
+            // 있으므로 조용히 넘기지 않고 gap 으로 남긴다 (그렇지 않으면 시가총액이 조용히
+            // 계산 불가 상태가 되어도 수집 리포트에는 드러나지 않는다)
+            gaps.push({
+              symbol,
               periodKey,
-              asOfTsMs: asOf,
-              value,
-              unit: 'SHARES',
+              reason: `'보통주' 행을 찾을 수 없습니다 (se 값: ${shareRows.map((row) => row.se).join(', ')})`,
             });
           }
-        } else if (shareRows.length > 0) {
-          // 응답에 행은 있는데 '보통주' 로 매칭되는 행이 없다 — se 표기가 예상과 다를 수
-          // 있으므로 조용히 넘기지 않고 gap 으로 남긴다 (그렇지 않으면 시가총액이 조용히
-          // 계산 불가 상태가 되어도 수집 리포트에는 드러나지 않는다)
-          gaps.push({
-            symbol,
-            periodKey,
-            reason: `'보통주' 행을 찾을 수 없습니다 (se 값: ${shareRows.map((row) => row.se).join(', ')})`,
-          });
         }
       }
     }
@@ -218,31 +258,34 @@ export function createDartFactSource(
     const facts: Fact[] = [];
     const gaps: FactIngestionGap[] = [];
 
-    /** 같은 (field, periodKey) 자본변동을 종목 단위로 접는다 — 아래 루프 주석 참고 */
-    const actionByKey = new Map<string, Fact>();
-
     for (const symbol of request.symbols) {
       const corpCode = await corpCodes.resolve(symbol);
       if (corpCode === null) {
         gaps.push({ symbol, periodKey: '-', reason: 'DART corp_code 매핑에 없는 종목코드입니다' });
         continue;
       }
+
+      // 같은 (field, periodKey) 자본변동을 접는다 — 아래 루프 주석 참고. 심볼 루프
+      // 안에서 매번 새로 만든다 — 바깥에 두고 매 심볼 끝에 clear() 하는 방식은, 나중에
+      // 누군가 clear() 호출 앞에 continue 를 추가하면 이전 심볼의 항목이 다음 심볼로
+      // 새어나가는데(이 맵의 키에는 symbol 이 들어있지 않다) 그 실수를 컴파일러도
+      // 테스트도 아닌 리뷰에만 의존해 잡아야 한다 — 스코프 자체를 좁혀 구조적으로
+      // 불가능하게 만든다.
+      const actionByKey = new Map<string, Fact>();
+
       /** 'YYYY-MM-DD' → 그 시점 직전 발행주식수. 분기 공시값 중 이벤트 이전 최신값 */
       const sharesByPeriod: Array<{ dateKey: string; shares: number }> = [];
 
       for (let year = request.fromYear; year <= request.toYear; year += 1) {
-        // 발행주식수는 사업보고서에서만 갱신된다 — 연 1회만 조회한다 (ANNUAL_REPORT_CODE 주석 참고)
-        const shareRows = await call<DartShareRow>('/api/stockTotqySttus.json', {
-          corp_code: corpCode,
-          bsns_year: String(year),
-          reprt_code: ANNUAL_REPORT_CODE,
-        });
-        const common = shareRows.find((row) => row.se.replace(/\s/g, '') === '보통주');
-        if (!common) continue;
-        const shares = parseAmount(common.istc_totqy);
-        const asOf = receiptDateToAsOfTsMs(common.rcept_no);
-        if (shares === null || shares <= 0 || asOf === null) continue;
-        sharesByPeriod.push({ dateKey: new Date(asOf).toISOString().slice(0, 10), shares });
+        for (const reportCode of REPORT_ORDER) {
+          const shareRows = await fetchShareRows(corpCode, year, reportCode);
+          const common = findCommonShareRow(shareRows);
+          if (!common) continue;
+          const shares = readShareAmount(common);
+          const asOf = receiptDateToAsOfTsMs(common.rcept_no);
+          if (shares === null || shares <= 0 || asOf === null) continue;
+          sharesByPeriod.push({ dateKey: new Date(asOf).toISOString().slice(0, 10), shares });
+        }
       }
       sharesByPeriod.sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1));
 
@@ -288,7 +331,6 @@ export function createDartFactSource(
       }
 
       facts.push(...actionByKey.values());
-      actionByKey.clear();
     }
 
     return { facts, gaps };

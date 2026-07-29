@@ -12,6 +12,7 @@ import { loadConfig } from './bootstrap/config.js';
 import { createContainer } from './bootstrap/container.js';
 import { newId } from './shared/ids.js';
 import { datasets } from './shared/db/schema.js';
+import type { FactIngestionGap } from './modules/facts/application/ports.js';
 
 function ask(question: string, hidden = false): Promise<string> {
   const muted = new Writable({
@@ -139,6 +140,16 @@ async function totpEnroll(): Promise<void> {
   }
 }
 
+/**
+ * gap 사유 문구에서 값이 섞이기 전 앞부분만 묶는 키로 쓴다(':' 나 '(' 앞까지) — 같은
+ * 실패 유형이 종목마다 다른 값을 물고 나와도 하나로 묶여 세어지도록 한다.
+ */
+function reasonBucket(reason: string): string {
+  const cutCandidates = [reason.indexOf(':'), reason.indexOf('(')].filter((index) => index >= 0);
+  const cut = cutCandidates.length > 0 ? Math.min(...cutCandidates) : reason.length;
+  return reason.slice(0, cut).trim();
+}
+
 /** 인자 파싱: --dataset ds-1 --from 2015 --to 2026 [--fs-div OFS] */
 function parseFactsSyncArgs(argv: readonly string[]): {
   datasetId: string;
@@ -190,7 +201,16 @@ async function factsSync(argv: readonly string[]): Promise<void> {
       throw new Error('DART 수집은 KR 시장 데이터셋만 지원합니다.');
     }
 
-    const symbols = JSON.parse(dataset.symbolsJson) as string[];
+    let symbolsParsed: unknown;
+    try {
+      symbolsParsed = JSON.parse(dataset.symbolsJson);
+    } catch {
+      throw new Error(`데이터셋의 종목 목록(symbolsJson)이 올바른 JSON 이 아닙니다: ${datasetId}`);
+    }
+    if (!Array.isArray(symbolsParsed)) {
+      throw new Error(`데이터셋의 종목 목록(symbolsJson)이 배열이 아닙니다: ${datasetId}`);
+    }
+    const symbols = symbolsParsed as string[];
     console.log(
       `${dataset.name}: ${symbols.length}종목, ${fromYear}~${toYear}년, ` +
         `${consolidated ? '연결(CFS)' : '별도(OFS)'} 기준으로 수집합니다.`,
@@ -205,17 +225,40 @@ async function factsSync(argv: readonly string[]): Promise<void> {
     });
 
     console.log(`\n저장된 팩트: ${report.savedFacts}건`);
+    if (report.savedFacts === 0 && report.gaps.length === 0) {
+      // 저장된 것도 누락도 0건이면 "성공적으로 아무것도 안 함" 처럼 읽히는 결과다 —
+      // 대개는 수집 범위·API 키·데이터셋 종목 목록이 잘못됐다는 신호이므로 경고한다
+      console.warn(
+        '경고: 저장된 팩트도 누락도 0건입니다. 수집 범위(연도·종목)나 DART 응답을 확인하세요 ' +
+          '— 수집이 조용히 아무 일도 하지 않았을 수 있습니다.',
+      );
+      return;
+    }
     if (report.gaps.length === 0) {
       console.log('누락 없음.');
       return;
     }
-    // 누락을 조용히 넘기면 랭킹이 소리 없이 왜곡된다 — 전부 보여준다
+    // 누락을 조용히 넘기면 랭킹이 소리 없이 왜곡된다 — 전부 보여준다.
+    // 단순히 앞의 50건만 보여주면 종목 수가 많은 백필에서 첫 종목의 실패만 보이고
+    // 나머지 199개 종목의 서로 다른 실패 유형은 가려진다 — 사유별로 묶어 개수부터 보여준다.
     console.log(`\n누락 ${report.gaps.length}건:`);
-    for (const gap of report.gaps.slice(0, 50)) {
-      console.log(`  ${gap.symbol} ${gap.periodKey}: ${gap.reason}`);
+    const buckets = new Map<string, FactIngestionGap[]>();
+    for (const gap of report.gaps) {
+      const bucket = reasonBucket(gap.reason);
+      const list = buckets.get(bucket) ?? [];
+      list.push(gap);
+      buckets.set(bucket, list);
     }
-    if (report.gaps.length > 50) {
-      console.log(`  ... 그 외 ${report.gaps.length - 50}건`);
+    const EXAMPLES_PER_REASON = 5;
+    const sortedBuckets = [...buckets.entries()].sort((a, b) => b[1].length - a[1].length);
+    for (const [bucket, gaps] of sortedBuckets) {
+      console.log(`  [${gaps.length}건] ${bucket}`);
+      for (const gap of gaps.slice(0, EXAMPLES_PER_REASON)) {
+        console.log(`    - ${gap.symbol} ${gap.periodKey}: ${gap.reason}`);
+      }
+      if (gaps.length > EXAMPLES_PER_REASON) {
+        console.log(`    ... 그 외 ${gaps.length - EXAMPLES_PER_REASON}건 (같은 사유)`);
+      }
     }
   } finally {
     container.close();

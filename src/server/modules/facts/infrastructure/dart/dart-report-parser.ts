@@ -14,7 +14,10 @@ export const REPORT_CODE_TO_QUARTER: Record<DartReportCode, 1 | 2 | 3 | 4> = {
   '11011': 4,
 };
 
-const REPORT_ORDER: readonly DartReportCode[] = ['11013', '11012', '11014', '11011'];
+/** 분기 순서(1Q→반기→3Q→사업보고서). `Object.keys(REPORT_CODE_TO_QUARTER)` 는 키가
+ *  숫자처럼 보여 사전식이 아니라 수치 순으로 정렬되므로(사업보고서 코드가 가장 먼저 옴)
+ *  호출부가 분기 순서를 원하면 이 상수를 써야 한다. */
+export const REPORT_ORDER: readonly DartReportCode[] = ['11013', '11012', '11014', '11011'];
 
 /** 이 파서가 실제로 소비하는 재무제표 구분. CF(현금흐름표)·SCE(자본변동표)는 의도된 제외다 */
 const CONSUMED_STATEMENTS: ReadonlySet<string> = new Set(['BS', 'IS', 'CIS']);

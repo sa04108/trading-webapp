@@ -2,8 +2,19 @@ import { describe, expect, it } from 'vitest';
 import { FactSourceNotConfiguredError } from '../../src/server/modules/facts/application/ports.js';
 import type { CorpCodeResolver } from '../../src/server/modules/facts/infrastructure/dart/dart-corp-code-cache.js';
 import { createDartFactSource } from '../../src/server/modules/facts/infrastructure/dart/dart-fact-source.js';
+import { receiptDateToAsOfTsMs } from '../../src/server/modules/facts/infrastructure/dart/dart-report-parser.js';
 
 const LOGGER = { debug() {}, info() {}, warn() {}, error() {} } as never;
+
+/** 로그 라인을 캡처하는 로거 — 비밀값이 로그로 새지 않는지 검증할 때 쓴다 */
+function createCapturingLogger(): { logger: never; lines: string[] } {
+  const lines: string[] = [];
+  const capture = (...args: unknown[]) => lines.push(JSON.stringify(args));
+  return {
+    logger: { debug: capture, info: capture, warn: capture, error: capture } as never,
+    lines,
+  };
+}
 
 /** corp_code 매핑은 별도 테스트가 다룬다 — 여기서는 종목코드에 접두사만 붙인다 */
 const STUB_RESOLVER: CorpCodeResolver = {
@@ -183,8 +194,11 @@ describe('createDartFactSource — 요청 구성', () => {
   });
 
   it('우선주 발행주식수는 합산하지 않는다', async () => {
+    // stockTotqySttus 는 reprt_code 로 스코프한다 — 딱 한 보고서(11013)만 응답을 주고
+    // 나머지 세 보고서는 데이터 없음(013)으로 응답해, 이 테스트가 실제로 검증하는
+    // 것("합계"·"우선주" 행을 섞지 않는다)과 보고서별 반복 조회가 뒤섞이지 않게 한다.
     const fetchImpl = (async (url: string) => {
-      if (String(url).includes('stockTotqySttus')) {
+      if (String(url).includes('stockTotqySttus') && String(url).includes('reprt_code=11013')) {
         return jsonResponse({
           status: '000',
           message: '정상',
@@ -212,5 +226,344 @@ describe('createDartFactSource — 요청 구성', () => {
     const shares = result.facts.filter((fact) => fact.field === 'SHARES_OUTSTANDING');
     expect(shares).toHaveLength(1);
     expect(shares[0]?.value).toBe(1_000_000);
+    expect(shares[0]?.periodKey).toBe('2025Q1');
+  });
+
+  it('보고서 네 개가 각각 다른 발행주식수를 주면 분기별로 네 개의 팩트가 된다', async () => {
+    // stockTotqySttus 는 사업보고서뿐 아니라 분기·반기보고서에도 '주식의 총수 현황'
+    // 섹션을 담고 있다 — 네 보고서 모두 조회하고 각자의 분기에 붙인다(연 1회로 줄이면
+    // 안 되는 이유는 dart-fact-source.ts 상단 주석·task-10-report.md 참고).
+    const byReport: Record<string, string> = {
+      '11013': '1,000,000',
+      '11012': '1,010,000',
+      '11014': '1,020,000',
+      '11011': '1,030,000',
+    };
+    const fetchImpl = (async (url: string) => {
+      const target = String(url);
+      if (target.includes('stockTotqySttus')) {
+        for (const [reportCode, quantity] of Object.entries(byReport)) {
+          if (target.includes(`reprt_code=${reportCode}`)) {
+            return jsonResponse({
+              status: '000',
+              message: '정상',
+              list: [{ rcept_no: '20250515000001', se: '보통주', istc_totqy: quantity }],
+            });
+          }
+        }
+      }
+      return jsonResponse({ status: '013', message: 'no data' });
+    }) as unknown as typeof fetch;
+
+    const source = createDartFactSource(
+      { baseUrl: 'https://opendart.fss.or.kr', apiKey: 'K' },
+      LOGGER,
+      { fetchImpl, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER },
+    );
+    const result = await source.fetchFinancials({
+      symbols: ['005930'],
+      fromYear: 2025,
+      toYear: 2025,
+      consolidated: true,
+    });
+    const shares = result.facts.filter((fact) => fact.field === 'SHARES_OUTSTANDING');
+    expect(shares).toHaveLength(4);
+    expect(shares.map((fact) => fact.periodKey).sort()).toEqual([
+      '2025Q1',
+      '2025Q2',
+      '2025Q3',
+      '2025Q4',
+    ]);
+    expect(shares.find((fact) => fact.periodKey === '2025Q1')?.value).toBe(1_000_000);
+    expect(shares.find((fact) => fact.periodKey === '2025Q2')?.value).toBe(1_010_000);
+    expect(shares.find((fact) => fact.periodKey === '2025Q3')?.value).toBe(1_020_000);
+    expect(shares.find((fact) => fact.periodKey === '2025Q4')?.value).toBe(1_030_000);
+  });
+
+  it('필터를 전부 걸러낸 응답은 gap 을 남긴다 — 조용히 0 이 되지 않는다', async () => {
+    // sj_div 가 파서가 소비하는 값(BS/IS/CIS)이 아닌 행만 왔다고 가정한다. 행 자체는
+    // 있으므로 013(데이터 없음)이 아니라, "필터를 통과한 게 없다"는 별도 gap 이어야 한다.
+    const fetchImpl = (async (url: string) => {
+      const target = String(url);
+      if (target.includes('fnlttSinglAcntAll') && target.includes('reprt_code=11013')) {
+        return jsonResponse({
+          status: '000',
+          message: '정상',
+          list: [
+            {
+              rcept_no: '20250515000001',
+              reprt_code: '11013',
+              bsns_year: '2025',
+              sj_div: 'CF', // 파서가 소비하지 않는 통계 — 의도적으로 전부 이 값
+              account_id: 'x',
+              account_nm: '영업활동현금흐름',
+              thstrm_amount: '1',
+            },
+          ],
+        });
+      }
+      return jsonResponse({ status: '013', message: 'no data' });
+    }) as unknown as typeof fetch;
+
+    const source = createDartFactSource(
+      { baseUrl: 'https://opendart.fss.or.kr', apiKey: 'K' },
+      LOGGER,
+      { fetchImpl, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER },
+    );
+    const result = await source.fetchFinancials({
+      symbols: ['005930'],
+      fromYear: 2025,
+      toYear: 2025,
+      consolidated: true,
+    });
+    expect(
+      result.gaps.some(
+        (gap) => gap.periodKey === '2025Q1' && gap.reason.includes('필터에서 제외'),
+      ),
+    ).toBe(true);
+  });
+
+  it('bsns_year 가 요청 연도와 다른 행뿐이면 gap 을 남긴다', async () => {
+    const fetchImpl = (async (url: string) => {
+      const target = String(url);
+      if (target.includes('fnlttSinglAcntAll') && target.includes('reprt_code=11013')) {
+        return jsonResponse({
+          status: '000',
+          message: '정상',
+          list: [
+            {
+              rcept_no: '20250515000001',
+              reprt_code: '11013',
+              bsns_year: '2024', // 요청 연도(2025)와 다르다 — 통째로 필터에서 빠진다
+              sj_div: 'BS',
+              account_id: 'ifrs-full_CurrentAssets',
+              account_nm: '유동자산',
+              thstrm_amount: '500,000',
+            },
+          ],
+        });
+      }
+      return jsonResponse({ status: '013', message: 'no data' });
+    }) as unknown as typeof fetch;
+
+    const source = createDartFactSource(
+      { baseUrl: 'https://opendart.fss.or.kr', apiKey: 'K' },
+      LOGGER,
+      { fetchImpl, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER },
+    );
+    const result = await source.fetchFinancials({
+      symbols: ['005930'],
+      fromYear: 2025,
+      toYear: 2025,
+      consolidated: true,
+    });
+    expect(
+      result.gaps.some(
+        (gap) => gap.periodKey === '2025Q1' && gap.reason.includes('필터에서 제외'),
+      ),
+    ).toBe(true);
+    expect(result.facts.some((fact) => fact.field === 'CURRENT_ASSETS')).toBe(false);
+  });
+
+  it('API 키는 실패 메시지에도 로그에도 나타나지 않는다', async () => {
+    const SECRET = 'SECRET_KEY_ABC';
+    const { logger, lines } = createCapturingLogger();
+    const fetchImpl = (async () =>
+      jsonResponse({ status: '020', message: '요청 제한을 초과하였습니다.' })) as unknown as typeof fetch;
+    const source = createDartFactSource(
+      { baseUrl: 'https://opendart.fss.or.kr', apiKey: SECRET },
+      logger,
+      { fetchImpl, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER },
+    );
+
+    let rejection: unknown;
+    try {
+      await source.fetchFinancials({ symbols: ['005930'], fromYear: 2025, toYear: 2025, consolidated: true });
+    } catch (error) {
+      rejection = error;
+    }
+    expect(rejection).toBeInstanceOf(Error);
+    expect(String((rejection as Error).message)).not.toContain(SECRET);
+    for (const line of lines) {
+      expect(line).not.toContain(SECRET);
+    }
+  });
+});
+
+describe('createDartFactSource — fetchCorporateActions 자본변동 접기', () => {
+  const SHARE_BASELINE = [{ rcept_no: '20200515000001', se: '보통주', istc_totqy: '1,000,000' }];
+
+  it('같은 분할 이벤트가 해마다 반복되면 가장 이른 공시 하나만 남는다', async () => {
+    const fetchImpl = (async (url: string) => {
+      const target = String(url);
+      if (target.includes('stockTotqySttus') && target.includes('reprt_code=11013') && target.includes('bsns_year=2020')) {
+        return jsonResponse({ status: '000', message: '정상', list: SHARE_BASELINE });
+      }
+      if (target.includes('irdsSttus') && target.includes('bsns_year=2020')) {
+        return jsonResponse({
+          status: '000',
+          message: '정상',
+          list: [
+            {
+              isu_dcrs_de: '2020-06-15',
+              isu_dcrs_stle: '주식분할',
+              isu_dcrs_qy: '1,000,000',
+              rcept_no: '20200620000001',
+            },
+          ],
+        });
+      }
+      if (target.includes('irdsSttus') && target.includes('bsns_year=2021')) {
+        return jsonResponse({
+          status: '000',
+          message: '정상',
+          // 같은 분할을 이듬해 사업보고서가 누적 이력으로 다시 보고한다 — rcept_no 만 다르다
+          list: [
+            {
+              isu_dcrs_de: '2020-06-15',
+              isu_dcrs_stle: '주식분할',
+              isu_dcrs_qy: '1,000,000',
+              rcept_no: '20210620000001',
+            },
+          ],
+        });
+      }
+      return jsonResponse({ status: '013', message: 'no data' });
+    }) as unknown as typeof fetch;
+
+    const source = createDartFactSource(
+      { baseUrl: 'https://opendart.fss.or.kr', apiKey: 'K' },
+      LOGGER,
+      { fetchImpl, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER },
+    );
+    const result = await source.fetchCorporateActions({
+      symbols: ['005930'],
+      fromYear: 2020,
+      toYear: 2021,
+      consolidated: true,
+    });
+
+    const actions = result.facts.filter((fact) => fact.field === 'SPLIT_RATIO');
+    expect(actions).toHaveLength(1);
+    expect(actions[0]?.periodKey).toBe('2020-06-15');
+    expect(actions[0]?.value).toBe(2);
+    expect(actions[0]?.asOfTsMs).toBe(receiptDateToAsOfTsMs('20200620000001'));
+  });
+
+  it('같은 기준일의 공시가 비율에 합의하지 않으면 gap 이고 중복 팩트가 남지 않는다', async () => {
+    const fetchImpl = (async (url: string) => {
+      const target = String(url);
+      if (target.includes('stockTotqySttus') && target.includes('reprt_code=11013') && target.includes('bsns_year=2020')) {
+        return jsonResponse({ status: '000', message: '정상', list: SHARE_BASELINE });
+      }
+      if (target.includes('irdsSttus') && target.includes('bsns_year=2020')) {
+        return jsonResponse({
+          status: '000',
+          message: '정상',
+          list: [
+            {
+              isu_dcrs_de: '2020-06-15',
+              isu_dcrs_stle: '주식분할',
+              isu_dcrs_qy: '1,000,000', // ratio = 2
+              rcept_no: '20200620000001',
+            },
+          ],
+        });
+      }
+      if (target.includes('irdsSttus') && target.includes('bsns_year=2021')) {
+        return jsonResponse({
+          status: '000',
+          message: '정상',
+          list: [
+            {
+              isu_dcrs_de: '2020-06-15',
+              isu_dcrs_stle: '주식분할',
+              isu_dcrs_qy: '2,000,000', // ratio = 3 — 앞선 공시와 불일치
+              rcept_no: '20210620000001',
+            },
+          ],
+        });
+      }
+      return jsonResponse({ status: '013', message: 'no data' });
+    }) as unknown as typeof fetch;
+
+    const source = createDartFactSource(
+      { baseUrl: 'https://opendart.fss.or.kr', apiKey: 'K' },
+      LOGGER,
+      { fetchImpl, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER },
+    );
+    const result = await source.fetchCorporateActions({
+      symbols: ['005930'],
+      fromYear: 2020,
+      toYear: 2021,
+      consolidated: true,
+    });
+
+    const actions = result.facts.filter((fact) => fact.field === 'SPLIT_RATIO');
+    expect(actions).toHaveLength(1);
+    expect(actions[0]?.value).toBe(2); // 먼저 들어온 값이 남는다 — 나중 값으로 덮어쓰지 않는다
+    expect(
+      result.gaps.some((gap) => gap.reason.includes('자본변동 비율이 공시마다 다릅니다')),
+    ).toBe(true);
+  });
+
+  it('두 종목의 자본변동 접기 키가 서로 새지 않는다', async () => {
+    const fetchImpl = (async (url: string) => {
+      const target = String(url);
+      if (target.includes('stockTotqySttus') && target.includes('reprt_code=11013')) {
+        return jsonResponse({ status: '000', message: '정상', list: SHARE_BASELINE });
+      }
+      if (target.includes('irdsSttus') && target.includes('corp_code=corp-005930')) {
+        return jsonResponse({
+          status: '000',
+          message: '정상',
+          list: [
+            {
+              isu_dcrs_de: '2020-06-15',
+              isu_dcrs_stle: '주식분할', // ratio = 2 (1,000,000 → 2,000,000)
+              isu_dcrs_qy: '1,000,000',
+              rcept_no: '20200620000001',
+            },
+          ],
+        });
+      }
+      if (target.includes('irdsSttus') && target.includes('corp_code=corp-000660')) {
+        return jsonResponse({
+          status: '000',
+          message: '정상',
+          list: [
+            {
+              isu_dcrs_de: '2020-06-15', // 두 번째 종목도 같은 날짜 — 접기 키가 겹친다
+              isu_dcrs_stle: '주식분할', // ratio = 3 (1,000,000 → 3,000,000)
+              isu_dcrs_qy: '2,000,000',
+              rcept_no: '20200620000002',
+            },
+          ],
+        });
+      }
+      return jsonResponse({ status: '013', message: 'no data' });
+    }) as unknown as typeof fetch;
+
+    const source = createDartFactSource(
+      { baseUrl: 'https://opendart.fss.or.kr', apiKey: 'K' },
+      LOGGER,
+      { fetchImpl, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER },
+    );
+    const result = await source.fetchCorporateActions({
+      symbols: ['005930', '000660'],
+      fromYear: 2020,
+      toYear: 2020,
+      consolidated: true,
+    });
+
+    const actions = result.facts.filter((fact) => fact.field === 'SPLIT_RATIO');
+    expect(actions).toHaveLength(2);
+    expect(actions.find((fact) => fact.key === '005930')?.value).toBe(2);
+    expect(actions.find((fact) => fact.key === '000660')?.value).toBe(3);
+    // 두 종목이 같은 날짜의 서로 다른 비율을 냈다고 해서 "공시마다 다르다" gap 이
+    // 나면 안 된다 — 그건 접기 키에 종목이 안 섞였을 때만 보장된다.
+    expect(
+      result.gaps.some((gap) => gap.reason.includes('자본변동 비율이 공시마다 다릅니다')),
+    ).toBe(false);
   });
 });
