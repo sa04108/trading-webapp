@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CANCEL_SIGTERM_DELAY_MS } from '../../src/server/modules/backtest/application/job-orchestrator.js';
+import { ENGINE_VERSION } from '../../src/server/modules/backtest/domain/engine.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
 
@@ -136,7 +137,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       run: Record<string, unknown>;
       metrics: Record<string, unknown>;
     };
-    expect(body.run.engineVersion).toBe('1.2.0');
+    expect(body.run.engineVersion).toBe(ENGINE_VERSION);
     expect(body.run.strategyId).toBe('hourly-breakout');
     expect(body.run.feeModelVersion).toBe('kr-equity-default@1.0.0');
     expect(body.run.randomSeed).toBe(42);

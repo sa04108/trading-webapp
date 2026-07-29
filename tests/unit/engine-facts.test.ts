@@ -152,4 +152,49 @@ describe('엔진 PIT 배선', () => {
     expect(biasWarning).toBeDefined();
     expect(biasWarning).toContain('배당');
   });
+
+  it('facts 를 넘기지 않으면 경고가 액면분할도 보정되지 않았다고 말한다', () => {
+    const { strategy } = observingStrategy();
+    const result = runBacktest(strategy, {
+      candles: [bar(0)],
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 1,
+      maxPositions: 5,
+      // facts 미지정 — 어떤 전략도 분할을 보정할 재료가 없다
+    });
+    const biasWarning = result.warnings.find((warning) => warning.includes('§9.4'));
+    expect(biasWarning).toBeDefined();
+    expect(biasWarning).toContain('액면분할도 이 실행에서는 보정되지 않았습니다');
+    expect(biasWarning).not.toContain('신호 계산');
+  });
+
+  it('facts 를 넘기면 경고가 분할 보정은 전략의 신호 계산에 한정된다고 말한다', () => {
+    const { strategy } = observingStrategy();
+    const facts: Fact[] = [
+      {
+        scope: 'SYMBOL',
+        key: '005930',
+        field: 'SPLIT_RATIO',
+        periodKey: '2025-05-12',
+        asOfTsMs: START - DAY,
+        value: 2,
+        unit: 'RATIO',
+      },
+    ];
+    const result = runBacktest(strategy, {
+      candles: [bar(0)],
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 1,
+      maxPositions: 5,
+      facts,
+    });
+    const biasWarning = result.warnings.find((warning) => warning.includes('§9.4'));
+    expect(biasWarning).toBeDefined();
+    expect(biasWarning).toContain('보정을 사용하는 전략의 신호 계산에만 반영됩니다');
+    expect(biasWarning).toContain('체결가는 실제 거래 가격입니다');
+  });
 });

@@ -67,7 +67,16 @@ export class PitFactView {
   private readonly bySymbol = new Map<string, SymbolEntry>();
 
   constructor(facts: readonly Fact[]) {
-    this.ordered = [...facts].sort((a, b) => a.asOfTsMs - b.asOfTsMs);
+    // asOfTsMs 만으로는 동시각 팩트끼리 순서가 입력 배열 순서(정렬 불안정 시엔 그마저도
+    // 보장 안 됨)에 좌우된다. Parquet 등에서 로드하면 행 순서가 매번 달라질 수 있으므로
+    // key·field·periodKey 를 보조 키로 더해 완전히 결정적으로 만든다 (재현성 §9.5).
+    this.ordered = [...facts].sort((a, b) => {
+      if (a.asOfTsMs !== b.asOfTsMs) return a.asOfTsMs - b.asOfTsMs;
+      if (a.key !== b.key) return a.key < b.key ? -1 : 1;
+      if (a.field !== b.field) return a.field < b.field ? -1 : 1;
+      if (a.periodKey !== b.periodKey) return a.periodKey < b.periodKey ? -1 : 1;
+      return 0;
+    });
   }
 
   advanceTo(tsMs: number): void {

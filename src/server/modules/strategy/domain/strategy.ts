@@ -26,7 +26,7 @@ export interface StrategyBarContext {
   readonly portfolio: PortfolioView;
   readonly rng: Rng;
   /**
-   * 현재 시점 이전에 공시된 재무만. 데이터가 없거나 아직 공시 전이면 null.
+   * 현재 시점까지 공시된 재무만. 데이터가 없거나 아직 공시 전이면 null.
    * 미래 공시는 구조적으로 접근 불가다 (PitFactView 커서, §9.4 look-ahead).
    */
   fundamentals(symbol: string): FundamentalSnapshot | null;

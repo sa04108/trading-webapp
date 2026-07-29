@@ -240,6 +240,35 @@ describe('PitFactView 자본변동 이벤트', () => {
   });
 });
 
+describe('PitFactView 흡수 순서 결정성', () => {
+  it('같은 asOfTsMs 를 가진 팩트들의 입력 배열 순서가 달라도 결과가 동일하다', () => {
+    // 세 팩트 모두 asOfTsMs 가 같다 — 정렬이 asOfTsMs 만 본다면 입력 순서(=배열 순서,
+    // 예컨대 Parquet 행 순서)에 따라 재집계 승자·계정별 최신값이 달라질 수 있다.
+    const asOf = 1_000;
+    const factsInOrderA: Fact[] = [
+      fact({ key: '005930', field: 'OPERATING_INCOME', periodKey: '2025Q1', asOfTsMs: asOf, value: 100 }),
+      fact({ key: '005930', field: 'CURRENT_ASSETS', periodKey: '2025Q1', asOfTsMs: asOf, value: 500 }),
+      fact({ key: '000660', field: 'OPERATING_INCOME', periodKey: '2025Q1', asOfTsMs: asOf, value: 55 }),
+    ];
+    const factsInOrderB: Fact[] = [factsInOrderA[2] as Fact, factsInOrderA[0] as Fact, factsInOrderA[1] as Fact];
+
+    const viewA = new PitFactView(factsInOrderA);
+    const viewB = new PitFactView(factsInOrderB);
+    viewA.advanceTo(asOf);
+    viewB.advanceTo(asOf);
+
+    const snapshotA = viewA.fundamentals('005930');
+    const snapshotB = viewB.fundamentals('005930');
+    expect(snapshotB?.get('OPERATING_INCOME')).toBe(snapshotA?.get('OPERATING_INCOME'));
+    expect(snapshotB?.get('CURRENT_ASSETS')).toBe(snapshotA?.get('CURRENT_ASSETS'));
+    expect(snapshotB?.ttm('OPERATING_INCOME')).toBe(snapshotA?.ttm('OPERATING_INCOME'));
+    expect(snapshotB?.latestAsOfTsMs).toBe(snapshotA?.latestAsOfTsMs);
+    expect(viewB.fundamentals('000660')?.get('OPERATING_INCOME')).toBe(
+      viewA.fundamentals('000660')?.get('OPERATING_INCOME'),
+    );
+  });
+});
+
 describe('PitFactView 종목 격리', () => {
   it('한 종목의 팩트가 다른 종목에 새지 않는다', () => {
     const view = new PitFactView([
