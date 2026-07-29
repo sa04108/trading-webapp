@@ -472,6 +472,86 @@ describe('createDartFactSource — corpCode.xml 다운로드 (기본 resolver)',
   });
 });
 
+/**
+ * FactSyncService 는 진행이 살아남도록 **종목 하나씩** fetchFinancials/fetchCorporateActions
+ * 를 부른다. 그 배선의 전제는 "corp_code 매핑과 주식총수 응답 캐시는 소스 인스턴스
+ * 클로저에 있어서 종목별 호출에서도 공유된다" 는 것이다 — 그 전제가 깨지면 종목마다
+ * corpCode.xml 을 다시 내려받아 일 한도(2만)를 그만큼 더 빨리 태운다.
+ */
+describe('createDartFactSource — 종목별 호출에서도 캐시가 공유된다', () => {
+  /** 단일 엔트리 STORED ZIP — extractSingleFileFromZip 이 읽는 최소 형태 */
+  function storedZip(name: string, content: string): Buffer {
+    const nameBytes = Buffer.from(name, 'utf8');
+    const payload = Buffer.from(content, 'utf8');
+    const header = Buffer.alloc(30);
+    header.writeUInt32LE(0x04034b50, 0);
+    header.writeUInt16LE(0, 8); // method = STORED
+    header.writeUInt32LE(payload.length, 18); // compressedSize
+    header.writeUInt32LE(payload.length, 22); // uncompressedSize
+    header.writeUInt16LE(nameBytes.length, 26);
+    header.writeUInt16LE(0, 28);
+    return Buffer.concat([header, nameBytes, payload]);
+  }
+
+  const CORP_XML =
+    '<result>' +
+    '<list><corp_code>00126380</corp_code><stock_code>005930</stock_code></list>' +
+    '<list><corp_code>00164779</corp_code><stock_code>000660</stock_code></list>' +
+    '</result>';
+
+  it('종목마다 따로 호출해도 corpCode.xml 은 한 번만 내려받는다', async () => {
+    const urls: string[] = [];
+    const fetchImpl = (async (url: string) => {
+      const target = String(url);
+      urls.push(target);
+      if (target.includes('/api/corpCode.xml')) {
+        return new Response(new Uint8Array(storedZip('CORPCODE.xml', CORP_XML)), { status: 200 });
+      }
+      return jsonResponse({ status: '013', message: 'no data' });
+    }) as unknown as typeof fetch;
+
+    // corpCodeResolver 를 주입하지 않는다 — 기본 캐시가 실제로 캐시하는지 본다
+    const source = createDartFactSource(
+      { baseUrl: 'https://opendart.fss.or.kr', apiKey: 'K' },
+      LOGGER,
+      { fetchImpl, sleep: async () => undefined },
+    );
+
+    // FactSyncService 와 같은 모양: 종목 하나씩, 두 fetch 를 각각
+    for (const symbol of ['005930', '000660']) {
+      const scoped = { symbols: [symbol], fromYear: 2025, toYear: 2025, consolidated: true };
+      await source.fetchFinancials(scoped);
+      await source.fetchCorporateActions(scoped);
+    }
+
+    expect(urls.filter((url) => url.includes('/api/corpCode.xml'))).toHaveLength(1);
+    // 매핑이 실제로 쓰였음도 확인한다 — 그렇지 않으면 위 단정이 "아무도 안 불렀다" 와 같다
+    expect(urls.some((url) => url.includes('corp_code=00126380'))).toBe(true);
+    expect(urls.some((url) => url.includes('corp_code=00164779'))).toBe(true);
+  });
+
+  it('같은 종목의 주식총수 응답은 fetchFinancials·fetchCorporateActions 가 공유한다', async () => {
+    const urls: string[] = [];
+    const fetchImpl = (async (url: string) => {
+      urls.push(String(url));
+      return jsonResponse({ status: '013', message: 'no data' });
+    }) as unknown as typeof fetch;
+
+    const source = createDartFactSource(
+      { baseUrl: 'https://opendart.fss.or.kr', apiKey: 'K' },
+      LOGGER,
+      { fetchImpl, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER },
+    );
+
+    const scoped = { symbols: ['005930'], fromYear: 2025, toYear: 2025, consolidated: true };
+    await source.fetchFinancials(scoped);
+    await source.fetchCorporateActions(scoped);
+
+    // 보고서 4종 × 1년 = 4회. 두 fetch 가 각각 부르면 8회가 된다.
+    expect(urls.filter((url) => url.includes('stockTotqySttus'))).toHaveLength(4);
+  });
+});
+
 describe('createDartFactSource — fetchCorporateActions 자본변동 접기', () => {
   const SHARE_BASELINE = [{ rcept_no: '20200515000001', se: '보통주', istc_totqy: '1,000,000' }];
 

@@ -216,16 +216,28 @@ async function factsSync(argv: readonly string[]): Promise<void> {
         `${consolidated ? '연결(CFS)' : '별도(OFS)'} 기준으로 수집합니다.`,
     );
 
-    const report = await container.factSyncService.sync({
-      datasetId,
-      symbols,
-      fromYear,
-      toYear,
-      consolidated,
-    });
+    // 40분 넘게 걸리는 실행이라 진행 상황을 종목마다 찍는다 — 조용한 40분은 멈춘 것과
+    // 구분되지 않는다. 팩트 저장도 종목 단위이므로 이 줄이 곧 "여기까지는 남는다" 다.
+    const report = await container.factSyncService.sync(
+      { datasetId, symbols, fromYear, toYear, consolidated },
+      {
+        onSymbolDone: ({ symbol, index, total, savedFacts, gapCount }) => {
+          console.log(
+            `  [${index}/${total}] ${symbol}: 팩트 ${savedFacts}건 저장` +
+              (gapCount > 0 ? `, 누락 ${gapCount}건` : ''),
+          );
+        },
+      },
+    );
 
     console.log(`\n저장된 팩트: ${report.savedFacts}건`);
-    if (report.savedFacts === 0 && report.gaps.length === 0) {
+    // 중단은 조용히 넘기지 않는다 — 한도를 이미 쓴 상태에서 "어디까지 갔는지" 를 모르면
+    // 운영자는 처음부터 다시 돌릴 수밖에 없다. 누락 리포트는 그대로 이어서 찍는다.
+    if (report.failureMessage !== null) {
+      console.error(`\n${report.failureMessage}`);
+      process.exitCode = 1;
+    }
+    if (report.savedFacts === 0 && report.gaps.length === 0 && report.failureMessage === null) {
       // 저장된 것도 누락도 0건이면 "성공적으로 아무것도 안 함" 처럼 읽히는 결과다 —
       // 대개는 수집 범위·API 키·데이터셋 종목 목록이 잘못됐다는 신호이므로 경고한다
       console.warn(
