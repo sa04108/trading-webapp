@@ -7,9 +7,11 @@
 import readline from 'node:readline';
 import { randomBytes } from 'node:crypto';
 import { Writable } from 'node:stream';
+import { eq } from 'drizzle-orm';
 import { loadConfig } from './bootstrap/config.js';
 import { createContainer } from './bootstrap/container.js';
 import { newId } from './shared/ids.js';
+import { datasets } from './shared/db/schema.js';
 
 function ask(question: string, hidden = false): Promise<string> {
   const muted = new Writable({
@@ -137,6 +139,89 @@ async function totpEnroll(): Promise<void> {
   }
 }
 
+/** 인자 파싱: --dataset ds-1 --from 2015 --to 2026 [--fs-div OFS] */
+function parseFactsSyncArgs(argv: readonly string[]): {
+  datasetId: string;
+  fromYear: number;
+  toYear: number;
+  consolidated: boolean;
+} {
+  const flags = new Map<string, string>();
+  for (let index = 0; index < argv.length; index += 2) {
+    const key = argv[index];
+    const value = argv[index + 1];
+    if (key?.startsWith('--') && value !== undefined) flags.set(key.slice(2), value);
+  }
+
+  const datasetId = flags.get('dataset');
+  if (!datasetId) throw new Error('--dataset <데이터셋 id> 가 필요합니다');
+
+  const fromYear = Number(flags.get('from'));
+  const toYear = Number(flags.get('to'));
+  if (!Number.isInteger(fromYear) || !Number.isInteger(toYear) || fromYear > toYear) {
+    throw new Error('--from <연도> --to <연도> 를 올바르게 지정하세요 (예: --from 2015 --to 2026)');
+  }
+
+  const fsDiv = (flags.get('fs-div') ?? 'CFS').toUpperCase();
+  if (fsDiv !== 'CFS' && fsDiv !== 'OFS') {
+    throw new Error('--fs-div 는 CFS(연결) 또는 OFS(별도) 입니다');
+  }
+
+  return { datasetId, fromYear, toYear, consolidated: fsDiv === 'CFS' };
+}
+
+async function factsSync(argv: readonly string[]): Promise<void> {
+  const { datasetId, fromYear, toYear, consolidated } = parseFactsSyncArgs(argv);
+  const config = loadConfig();
+  if (!config.dartApiKey) {
+    throw new Error('DART_API_KEY 가 설정되지 않았습니다. .env 에 추가한 뒤 다시 실행하세요.');
+  }
+
+  const container = createContainer(config);
+  try {
+    // 컨테이너는 `database: DatabaseHandle` 을 노출한다 — Drizzle 인스턴스는 그 안의 `.db` 다
+    const dataset = container.database.db
+      .select()
+      .from(datasets)
+      .where(eq(datasets.id, datasetId))
+      .get();
+    if (!dataset) throw new Error(`데이터셋을 찾을 수 없습니다: ${datasetId}`);
+    if (dataset.market !== 'KR') {
+      throw new Error('DART 수집은 KR 시장 데이터셋만 지원합니다.');
+    }
+
+    const symbols = JSON.parse(dataset.symbolsJson) as string[];
+    console.log(
+      `${dataset.name}: ${symbols.length}종목, ${fromYear}~${toYear}년, ` +
+        `${consolidated ? '연결(CFS)' : '별도(OFS)'} 기준으로 수집합니다.`,
+    );
+
+    const report = await container.factSyncService.sync({
+      datasetId,
+      symbols,
+      fromYear,
+      toYear,
+      consolidated,
+    });
+
+    console.log(`\n저장된 팩트: ${report.savedFacts}건`);
+    if (report.gaps.length === 0) {
+      console.log('누락 없음.');
+      return;
+    }
+    // 누락을 조용히 넘기면 랭킹이 소리 없이 왜곡된다 — 전부 보여준다
+    console.log(`\n누락 ${report.gaps.length}건:`);
+    for (const gap of report.gaps.slice(0, 50)) {
+      console.log(`  ${gap.symbol} ${gap.periodKey}: ${gap.reason}`);
+    }
+    if (report.gaps.length > 50) {
+      console.log(`  ... 그 외 ${report.gaps.length - 50}건`);
+    }
+  } finally {
+    container.close();
+  }
+}
+
 async function main(): Promise<void> {
   const command = process.argv[2];
   switch (command) {
@@ -146,10 +231,14 @@ async function main(): Promise<void> {
     case 'totp:enroll':
       await totpEnroll();
       break;
+    case 'facts:sync':
+      await factsSync(process.argv.slice(3));
+      break;
     default:
       console.log('사용법: cli <command>');
       console.log('  admin:create   관리자 계정 생성');
       console.log('  totp:enroll    TOTP 2단계 인증 등록·재발급 (CLI 전용, 스펙 §16)');
+      console.log('  facts:sync     DART 재무·자본변동 수집 (--dataset <id> --from <연도> --to <연도> [--fs-div CFS|OFS])');
       process.exitCode = command ? 1 : 0;
   }
 }

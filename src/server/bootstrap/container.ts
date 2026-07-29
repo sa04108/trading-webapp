@@ -33,6 +33,10 @@ import { StrategyRegistry } from '../modules/strategy/application/strategy-regis
 import { JobOrchestrator } from '../modules/backtest/application/job-orchestrator.js';
 import { JobQueue } from '../modules/backtest/application/job-queue.js';
 import { ResultsService } from '../modules/backtest/application/results-service.js';
+import type { FactRepository } from '../modules/facts/application/ports.js';
+import { FactSyncService } from '../modules/facts/application/fact-sync-service.js';
+import { createDartFactSource } from '../modules/facts/infrastructure/dart/dart-fact-source.js';
+import { ParquetFactRepository } from '../modules/facts/infrastructure/parquet-fact-repository.js';
 
 export interface SystemStatusProviders {
   queueLength: () => number;
@@ -63,6 +67,8 @@ export interface Container {
   readonly jobQueue: JobQueue;
   readonly jobOrchestrator: JobOrchestrator;
   readonly resultsService: ResultsService;
+  readonly factRepository: FactRepository;
+  readonly factSyncService: FactSyncService;
   close(): void;
 }
 
@@ -187,6 +193,15 @@ export function createContainer(config: AppConfig): Container {
   const jobOrchestrator = new JobOrchestrator(jobQueue, config, logger, auditLog, clock);
   const resultsService = new ResultsService(database.db);
 
+  // duckdb 는 위에서 만든 인스턴스를 재사용한다 — 새로 만들면 DuckDB 메모리 상한이
+  // 두 배로 잡힌다
+  const factRepository = new ParquetFactRepository(config.dataRoot, duckdb);
+  const factSource = createDartFactSource(
+    config.dartApiKey ? { baseUrl: config.dartBaseUrl, apiKey: config.dartApiKey } : null,
+    logger,
+  );
+  const factSyncService = new FactSyncService(factSource, factRepository, logger);
+
   const systemStatus: SystemStatusProviders = {
     queueLength: () => jobQueue.countByStatus(['QUEUED']),
     runningJobs: () => jobQueue.countByStatus(['STARTING', 'RUNNING', 'CANCELLING']),
@@ -216,6 +231,8 @@ export function createContainer(config: AppConfig): Container {
     jobQueue,
     jobOrchestrator,
     resultsService,
+    factRepository,
+    factSyncService,
     close: () => {
       clearInterval(pruneTimer);
       jobOrchestrator.stop();

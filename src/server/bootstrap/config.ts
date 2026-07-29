@@ -36,6 +36,9 @@ const envSchema = z.object({
   TOSS_BASE_URL: z.string().url().default('https://openapi.tossinvest.com'),
   TOSS_CLIENT_ID: z.string().min(1).optional(),
   TOSS_CLIENT_SECRET: z.string().min(1).optional(),
+  /** DART OpenAPI (전자공시). 미설정이면 재무 수집이 비활성 — 봉 데이터는 영향 없다 */
+  DART_BASE_URL: z.string().url().default('https://opendart.fss.or.kr'),
+  DART_API_KEY: z.string().min(1).optional(),
   /** 이 여유 공간(MB) 미만이면 증권사 동기화를 거부한다 (§22 임계치 원칙) */
   SYNC_MIN_FREE_DISK_MB: z.coerce.number().int().min(0).default(2048),
 });
@@ -63,6 +66,8 @@ export interface AppConfig {
   readonly tossBaseUrl: string;
   readonly tossClientId: string | null;
   readonly tossClientSecret: string | null;
+  readonly dartBaseUrl: string;
+  readonly dartApiKey: string | null;
   readonly syncMinFreeDiskMb: number;
 }
 
@@ -116,6 +121,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     tossBaseUrl: raw.TOSS_BASE_URL,
     tossClientId: raw.TOSS_CLIENT_ID ?? null,
     tossClientSecret: raw.TOSS_CLIENT_SECRET ?? null,
+    dartBaseUrl: raw.DART_BASE_URL,
+    dartApiKey: raw.DART_API_KEY ?? null,
     syncMinFreeDiskMb: raw.SYNC_MIN_FREE_DISK_MB,
   };
 }

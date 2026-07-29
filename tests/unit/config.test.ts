@@ -59,4 +59,20 @@ describe('loadConfig', () => {
     expect(config.liveTradingEnabled).toBe(true);
     expect(config.duckdbMemoryLimit).toBe('256MB');
   });
+
+  describe('DART 설정', () => {
+    it('DART_API_KEY 미설정이면 null 이고 로드는 성공한다', () => {
+      const config = loadConfig({});
+      expect(config.dartApiKey).toBeNull();
+      expect(config.dartBaseUrl).toBe('https://opendart.fss.or.kr');
+    });
+
+    it('DART_API_KEY 를 읽는다', () => {
+      expect(loadConfig({ DART_API_KEY: 'abc' }).dartApiKey).toBe('abc');
+    });
+
+    it('빈 DART_API_KEY 는 거부한다 — 설정했다고 믿는 비활성 상태를 만들지 않는다', () => {
+      expect(() => loadConfig({ DART_API_KEY: '' })).toThrow(/DART_API_KEY/);
+    });
+  });
 });
