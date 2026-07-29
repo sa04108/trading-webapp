@@ -3,9 +3,7 @@
  * 부모의 HTTP 이벤트 루프·메모리와 격리되어 DuckDB 로드 → 엔진 실행 → 결과 저장을 수행한다.
  * 환경변수는 §5 화이트리스트만 받는다. 종료 전 최종 상태를 DB 에 직접 기록한다.
  */
-import { createHash } from 'node:crypto';
 import { and, desc, eq, notInArray } from 'drizzle-orm';
-import { z } from 'zod';
 import { readGitCommitSha } from '../server/shared/build-info.js';
 import { openDatabase } from '../server/shared/db/database.js';
 import {
@@ -33,6 +31,7 @@ import type { Candle, Market, Timeframe } from '../server/modules/market-data/do
 import { DuckDbService } from '../server/modules/market-data/infrastructure/duckdb-service.js';
 import { ParquetCandleRepository } from '../server/modules/market-data/infrastructure/parquet-candle-repository.js';
 import { StrategyRegistry } from '../server/modules/strategy/application/strategy-registry.js';
+import { strategySourceHash } from '../server/modules/strategy/application/strategy-source-hash.js';
 import { backtestRequestSchema, periodToTsRange } from '../shared/schemas/backtest-request.js';
 
 let cancelRequested = false;
@@ -189,14 +188,8 @@ async function main(): Promise<void> {
       return;
     }
 
-    // 재현성 메타데이터 (스펙 §9.5).
-    // strategySourceHash: 빌드 산출물에서 원본 소스를 읽을 수 없어
-    // id+version+파라미터 스키마의 해시로 대체한다 (전략 로직 변경 시 version 을 올릴 것).
-    const strategySourceHash = createHash('sha256')
-      .update(strategy.id)
-      .update(strategy.version)
-      .update(JSON.stringify(z.toJSONSchema(strategy.parameterSchema as z.ZodType)))
-      .digest('hex');
+    // 재현성 메타데이터 (스펙 §9.5) — 해시 규칙은 strategySourceHash 주석 참고
+    const sourceHash = strategySourceHash(strategy);
 
     const insertResults = handle.sqlite.transaction(() => {
       db.insert(backtestRuns)
@@ -205,7 +198,7 @@ async function main(): Promise<void> {
           jobId,
           strategyId: strategy.id,
           strategyVersion: strategy.version,
-          strategySourceHash,
+          strategySourceHash: sourceHash,
           parameterJson: JSON.stringify(parameters),
           datasetId: dataset.id,
           datasetVersion: pinnedVersion,

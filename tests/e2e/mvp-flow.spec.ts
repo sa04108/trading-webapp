@@ -16,9 +16,17 @@ test('full MVP flow', async ({ page }) => {
   // 2. 백테스트 생성 (6단계 위저드) — 픽스처에서 완결 거래가 나오도록 파라미터 조정
   await page.goto('/backtests/new');
   await page.getByRole('button', { name: /시간봉 돌파/ }).click();
-  await page.getByLabel('lookbackBars').fill('10');
-  await page.getByLabel('atrPeriod').fill('5');
-  await page.getByLabel(/takeProfitAtrMultiplier/).fill('3');
+  // exact — ⓘ 아이콘의 aria-label('… 설명') 과 부분 일치로 겹치지 않게 한다
+  await page.getByLabel('돌파 기준 봉 수', { exact: true }).fill('10');
+  await page.getByLabel('변동성(ATR) 계산 기간', { exact: true }).fill('5');
+  await page.getByLabel('익절 폭 (변동성 배수) (선택)', { exact: true }).fill('3');
+  // ⓘ 아이콘 — 설명 툴팁에 원본 키·범위·기본값까지 나온다
+  await page.getByRole('button', { name: '돌파 기준 봉 수 설명' }).click();
+  const hint = page.getByRole('tooltip');
+  await expect(hint).toContainText('최고가');
+  await expect(hint).toContainText('lookbackBars · 2~200 · 기본 20');
+  await page.keyboard.press('Escape');
+  await expect(hint).toBeHidden();
   await page.getByRole('button', { name: '다음' }).click();
 
   await page.getByRole('button', { name: /kr-hourly-v1/ }).click();
