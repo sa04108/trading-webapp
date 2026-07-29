@@ -220,8 +220,8 @@ export function createDartFactSource(
       // stockTotqySttus 는 사업보고서뿐 아니라 분기·반기보고서에도 '주식의 총수
       // 현황' 섹션을 담고 있어 네 보고서 모두 조회 대상이다.
       //
-      // shareYears 는 years + 직전 1년이라 원소 수가 다르다 — 재무 루프 안에 두면
-      // 연도가 어긋나므로 별도 루프로 돈다.
+      // shareYears 는 years 의 각 연도마다 직전 1년을 더한 집합이라 원소 수가 다르다 —
+      // 재무 루프 안에 두면 연도가 어긋나므로 별도 루프로 돈다.
       for (const year of request.shareYears) {
         for (const reportCode of REPORT_ORDER) {
           const shareRows = await fetchShareRows(corpCode, year, reportCode);
@@ -287,7 +287,8 @@ export function createDartFactSource(
       const sharesByPeriod: Array<{ dateKey: string; shares: number }> = [];
 
       // 앵커 때문에 shareYears 를 돈다 — 대상 연도만 읽으면 그 연도 연초 이벤트의
-      // 직전 발행주식수가 없어 비율이 조용히 gap 이 된다 (domain/sync-plan.ts 참고)
+      // 직전 발행주식수가 없어 비율이 gap 이 되고, 불연속 구간의 앵커가 빠지면 구멍
+      // 건너편의 낡은 공시가 분모로 잡혀 gap 도 없이 틀린다 (domain/sync-plan.ts 참고)
       for (const year of request.shareYears) {
         for (const reportCode of REPORT_ORDER) {
           const shareRows = await fetchShareRows(corpCode, year, reportCode);

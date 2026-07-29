@@ -335,7 +335,7 @@ describe('FactSyncService — 종목 단위 저장과 부분 실패 (긴 백필 
     expect(report.savedFacts).toBe(3);
   });
 
-  it('종목마다 진행 콜백을 부른다 — 40분짜리 실행이 조용하지 않게 한다', async () => {
+  it('종목마다 진행 콜백을 부른다 — 45분짜리 실행이 조용하지 않게 한다', async () => {
     const progress: string[] = [];
     await new FactSyncService(
       sourceFailingAt('035720', []),
@@ -569,6 +569,51 @@ describe('FactSyncService — 증분과 취소', () => {
     expect(report.stopReason).toBe('ERROR');
     expect(report.stoppedAtSymbol).toBe('000660');
     expect(report.failureMessage).toContain('DART 응답 오류 020');
+    expect(coverage.added.map((entry) => entry.symbol)).toEqual(['005930']);
+  });
+
+  /**
+   * `saveFacts` → `addCoveredYears` 순서를 못박는다. 두 줄을 맞바꿔도 나머지 테스트는
+   * 전부 초록이다 — 소스가 던지는 테스트는 두 호출 **앞에서** 터지고, 가짜 저장소의
+   * `saveFacts` 는 던지지 않기 때문이다. 정작 막아야 하는 회귀는 "저장이 실패한 연도를
+   * 수집했다고 기록해 다음 증분 실행이 그 구간을 영구히 건너뛴다" 이므로, 저장 실패를
+   * 직접 만들어 이력이 남지 않는 것을 확인한다.
+   */
+  it('팩트 저장이 실패한 종목은 이력에 남지 않는다', async () => {
+    const coverage = fakeCoverage();
+    let saveCalls = 0;
+    const repository: FactRepository = {
+      getFacts: async () => [],
+      saveFacts: async () => {
+        saveCalls += 1;
+        // 두 번째 종목에서 디스크 쓰기가 터진다 (parquet 저장은 실패할 수 있다)
+        if (saveCalls === 2) throw new Error('parquet 쓰기 실패');
+      },
+      hasFacts: () => false,
+    };
+    const service = new FactSyncService(
+      recordingSource(),
+      repository,
+      LOGGER,
+      fakeVersions(),
+      { now: () => Date.UTC(2022, 5, 1) },
+      coverage,
+    );
+
+    const report = await service.sync({
+      datasetId: 'ds-1',
+      symbols: ['005930', '000660', '035720'],
+      fromYear: 2022,
+      toYear: 2022,
+      consolidated: true,
+      mode: 'INCREMENTAL',
+    });
+
+    expect(report.stopReason).toBe('ERROR');
+    expect(report.stoppedAtSymbol).toBe('000660');
+    expect(report.failureMessage).toContain('parquet 쓰기 실패');
+    // 저장이 성공한 종목만 이력에 남는다 — 이력 기록이 저장보다 앞서면 여기에
+    // '000660' 이 섞이고, 다음 증분 실행이 그 종목의 2022 를 건너뛴다
     expect(coverage.added.map((entry) => entry.symbol)).toEqual(['005930']);
   });
 

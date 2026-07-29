@@ -59,6 +59,42 @@ describe('planFactSync', () => {
     expect(plan.shareYearsBySymbol.get('005930')).toEqual([2021, 2022]);
   });
 
+  /**
+   * 불연속 `years` 에 앵커를 가장 이른 연도 앞에만 두면 구멍 건너편의 낡은 공시가
+   * 분모가 된다. 예: 2021–2025 를 이미 받은 데이터셋이 2019–2026 을 증분 요청하면
+   * 대상은 [2019, 2020, 2026] 인데 주식총수가 2020 까지만 읽혀, 2026-02 분할의
+   * `sharesBefore()` 가 5년 묵은 2020 사업보고서 값을 집는다. 분모가 null 이 아니므로
+   * `parseIssuanceRows` 는 gap 도 남기지 않는다 — 조용히 틀린 비율이 보정가격 전체를
+   * 오염시킨다. 그래서 구간마다 앵커가 필요하다.
+   */
+  const SPARSE = {
+    symbols: ['005930'],
+    fromYear: 2019,
+    toYear: 2026,
+    currentYear: 2026,
+    coveredBySymbol: new Map([['005930', [2021, 2022, 2023, 2024, 2025]]]),
+    mode: 'INCREMENTAL',
+  } as const;
+
+  it('불연속 연도는 연속 구간마다 직전 1년을 앵커로 읽는다', () => {
+    const plan = planFactSync(SPARSE);
+    expect(plan.yearsBySymbol.get('005930')).toEqual([2019, 2020, 2026]);
+    // 2018 은 [2019,2020] 구간의 앵커, 2025 는 [2026] 구간의 앵커다
+    expect(plan.shareYearsBySymbol.get('005930')).toEqual([2018, 2019, 2020, 2025, 2026]);
+  });
+
+  it('불연속이면 앵커 호출도 구간 수만큼 늘어난다', () => {
+    const plan = planFactSync(SPARSE);
+    // 3년 × 9 + 앵커 2구간 × 4 = 27 + 8 = 35. 이 수가 어댑터가 실제로 쏘는 호출 수와
+    // 같아야 화면 추정치가 거짓말하지 않는다.
+    expect(plan.calls).toBe(35);
+    expect(plan.estimatedMs).toBe(35 * 120);
+    // 앵커 수는 곧 shareYears 가 years 보다 몇 개 많은지다
+    const years = plan.yearsBySymbol.get('005930') ?? [];
+    const shareYears = plan.shareYearsBySymbol.get('005930') ?? [];
+    expect(shareYears.length - years.length).toBe(2);
+  });
+
   it('수집할 것이 없는 종목은 계획도 호출도 없다', () => {
     const plan = planFactSync({
       symbols: ['005930'],

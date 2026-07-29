@@ -257,8 +257,13 @@ describe('createDartFactSource — 요청 구성', () => {
     const assets = result.facts.find((fact) => fact.field === 'CURRENT_ASSETS');
     expect(assets).toMatchObject({ key: '005930', periodKey: '2025Q1', value: 500_000 });
 
-    const shares = result.facts.find((fact) => fact.field === 'SHARES_OUTSTANDING');
-    expect(shares).toMatchObject({ value: 1_000_000, unit: 'SHARES' });
+    // 이 픽스처는 bsns_year 를 가리지 않으므로 앵커 연도(2024)도 같은 주식총수를
+    // 돌려준다 — periodKey 를 함께 단정하지 않으면 요청 연도가 아닌 앵커 연도의
+    // 팩트를 검사하고도 통과한다
+    const shares = result.facts.find(
+      (fact) => fact.field === 'SHARES_OUTSTANDING' && fact.periodKey === '2025Q1',
+    );
+    expect(shares).toMatchObject({ key: '005930', periodKey: '2025Q1', value: 1_000_000, unit: 'SHARES' });
   });
 
   it('우선주 발행주식수는 합산하지 않는다', async () => {

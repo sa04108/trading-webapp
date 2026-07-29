@@ -233,8 +233,8 @@ async function factsSync(argv: readonly string[]): Promise<void> {
     );
 
     console.log(`\n저장된 팩트: ${report.savedFacts}건`);
-    // 중단은 조용히 넘기지 않는다 — 한도를 이미 쓴 상태에서 "어디까지 갔는지" 를 모르면
-    // 운영자는 처음부터 다시 돌릴 수밖에 없다. 누락 리포트는 그대로 이어서 찍는다.
+    // 중단은 조용히 넘기지 않는다 — "어디까지 갔는지" 를 모르면 운영자는 처음부터 다시
+    // 돌릴 수밖에 없다. 누락 리포트는 그대로 이어서 찍는다.
     if (report.failureMessage !== null) {
       console.error(`\n${report.failureMessage}`);
       process.exitCode = 1;

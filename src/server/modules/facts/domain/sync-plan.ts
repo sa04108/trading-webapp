@@ -10,10 +10,18 @@
 export const DART_CALLS_PER_SYMBOL_YEAR = 9;
 
 /**
- * 자본변동 앵커용 추가 호출 (종목당 1회, 4개 보고서).
+ * 앵커 연도 하나당 추가 호출 (4개 보고서).
+ *
  * `fetchCorporateActions` 는 `sharesBefore()` 로 이벤트 직전 발행주식수를 찾아 분할
  * 비율을 만든다. 대상 연도만 읽으면 그 연도 연초 이벤트의 앵커가 없어 비율이 조용히
  * gap 이 된다 — 직전 1년의 주식총수를 함께 읽어 앵커를 확보한다.
+ *
+ * 앵커는 **연속 구간마다** 하나씩 필요하다. 증분 수집의 `years` 는 불연속일 수 있고
+ * (예: 이미 2021–2025 를 받은 데이터셋이 2019–2026 을 증분 요청하면 `[2019, 2020, 2026]`),
+ * 가장 이른 연도 앞에만 앵커를 두면 2026 이벤트의 분모가 5년 묵은 2020 공시가 된다 —
+ * `parseIssuanceRows` 는 분모가 null 일 때만 gap 을 남기므로 이 오류는 **조용히 잘못된
+ * 비율**로 나가고 보정가격 전체를 틀리게 만든다. 그래서 종목당 상수가 아니라
+ * (연속 구간 수 × 이 값) 이 실제 앵커 비용이다.
  */
 export const DART_SHARE_ANCHOR_CALLS = 4;
 
@@ -31,7 +39,7 @@ export type FactSyncMode = 'FULL' | 'INCREMENTAL';
 export interface FactSyncPlan {
   /** 종목 → 재무·자본변동을 수집할 연도 (오름차순) */
   readonly yearsBySymbol: ReadonlyMap<string, readonly number[]>;
-  /** 종목 → 주식총수를 읽을 연도 (= 위 + 직전 1년) */
+  /** 종목 → 주식총수를 읽을 연도 (= 위 + **각 연도의** 직전 1년) */
   readonly shareYearsBySymbol: ReadonlyMap<string, readonly number[]>;
   readonly calls: number;
   readonly estimatedMs: number;
@@ -62,13 +70,14 @@ export function planFactSync(args: PlanFactSyncArgs): FactSyncPlan {
       args.mode === 'FULL' ? target : incrementalYears(target, args.coveredBySymbol.get(symbol) ?? [], args.currentYear);
     yearsBySymbol.set(symbol, years);
 
-    const first = years[0];
     // 수집할 것이 없으면 앵커도 읽지 않는다 — 0건 종목에 호출을 쓰지 않는다
-    const shareYears = first === undefined ? [] : [first - 1, ...years];
+    const shareYears = anchoredShareYears(years);
     shareYearsBySymbol.set(symbol, shareYears);
 
     calls += years.length * DART_CALLS_PER_SYMBOL_YEAR;
-    if (years.length > 0) calls += DART_SHARE_ANCHOR_CALLS;
+    // 앵커 수 = 연속 구간 수 = |shareYears| - |years|. 연속 구간이 하나면 (첫 실행·
+    // 단일 연도 증분) 종전과 같은 4회다 — 불연속일 때만 늘어난다.
+    calls += (shareYears.length - years.length) * DART_SHARE_ANCHOR_CALLS;
   }
 
   return {
@@ -78,6 +87,21 @@ export function planFactSync(args: PlanFactSyncArgs): FactSyncPlan {
     estimatedMs: calls * DART_MIN_INTERVAL_MS,
     overDailyLimit: calls > DART_DAILY_CALL_LIMIT,
   };
+}
+
+/**
+ * 대상 연도 + 각 연도의 직전 1년 (오름차순, 중복 제거).
+ *
+ * 연속 구간에서는 앞의 한 해만 늘어나 종전과 같지만, 불연속 구간에서는 구간마다 앵커가
+ * 생긴다 — `sharesBefore()` 가 구멍 건너편의 낡은 공시를 분모로 집지 않게 한다.
+ */
+function anchoredShareYears(years: readonly number[]): number[] {
+  const withAnchors = new Set<number>();
+  for (const year of years) {
+    withAnchors.add(year - 1);
+    withAnchors.add(year);
+  }
+  return [...withAnchors].sort((a, b) => a - b);
 }
 
 function incrementalYears(
