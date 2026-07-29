@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { deriveFactYearRange } from '../../src/server/modules/market-data/domain/fact-year-range.js';
 
-/** 2020-01-01 09:00 KST = 2019-12-31 00:00 UTC */
+/** 2020-01-01 09:00 KST = 2020-01-01 00:00 UTC */
 const KST_2020_OPEN = Date.UTC(2020, 0, 1, 0, 0);
 /** 2024-06-03 09:00 KST */
 const KST_2024 = Date.UTC(2024, 5, 3, 0, 0);
