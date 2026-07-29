@@ -1,0 +1,174 @@
+import { z } from 'zod';
+import type { CorporateAction } from '../../facts/domain/fact.js';
+import type { Candle } from '../../market-data/domain/candle.js';
+import type {
+  StrategyBarContext,
+  StrategyDecision,
+  StrategyInitializeContext,
+  TradingStrategy,
+} from '../domain/strategy.js';
+import { splitAdjustedClose } from './shared/adjusted-price.js';
+import { rankDescending, type Scored } from './shared/rank.js';
+import { isRebalanceDue, localMonthKey } from './shared/rebalance-schedule.js';
+import { planBuyPhase, planSellPhase } from './shared/two-phase-rebalance.js';
+
+/**
+ * 횡단면 모멘텀 (설계 2026-07-29-quant-strategies-and-fact-store-design.md §1).
+ *
+ * 매 리밸런스 시점에 유니버스 전 종목의 12-1개월 수익률을 랭킹해 상위 N 을 동일가중
+ * 보유하고 나머지는 청산한다. 소비 timeframe 은 1d 를 전제로 파라미터 기본값이 정해져
+ * 있다 (252 거래일 ≈ 12개월).
+ *
+ * 리밸런스는 두 봉에 나눈다 — 매도 봉, 그 다음 매수 봉. 엔진의 동시 포지션 상한이
+ * 청산 대기 포지션도 슬롯으로 세기 때문이다 (two-phase-rebalance.ts 주석).
+ */
+export const crossSectionalMomentumParameters = z.object({
+  formationDays: z.number().int().min(20).max(756).default(252).meta({
+    title: '수익률 측정 기간 (봉 수)',
+    description:
+      '모멘텀을 재는 창의 길이입니다. 일봉 기준 252봉이 약 12개월입니다. 길게 잡으면 장기 추세만 잡고, 짧게 잡으면 최근 흐름에 민감해집니다.',
+  }),
+  skipDays: z.number().int().min(0).max(63).default(21).meta({
+    title: '최근 제외 기간 (봉 수)',
+    description:
+      '측정 창의 끝에서 최근 N봉을 제외합니다. 일봉 기준 21봉이 약 1개월입니다. 직전 한 달은 단기 반전이 잦아 학계 표준(12-1 모멘텀)이 이 구간을 뺍니다. 0 으로 두면 마지막 봉까지 씁니다.',
+  }),
+  // 상한은 요청의 `risk.maxPositions` 상한(20)과 같아야 한다 — 제출 게이트가
+  // topN <= maxPositions 를 요구하므로 여기가 더 크면 그 구간이 어떤 경로로도
+  // 제출될 수 없고, 게이트 메시지는 도달할 수 없는 값까지 올리라고 안내한다.
+  topN: z.number().int().min(1).max(20).default(10).meta({
+    title: '보유 종목 수',
+    description:
+      '순위 상위 몇 종목을 동일가중으로 보유할지 정합니다. 종목당 비중은 자본의 1/N 입니다. 요청의 최대 동시 보유 종목 수보다 크게 잡으면 일부 종목이 편입되지 않습니다.',
+  }),
+  rebalanceMonths: z.number().int().min(1).max(12).default(1).meta({
+    title: '리밸런스 주기 (개월)',
+    description:
+      '몇 개월마다 순위를 다시 매길지 정합니다. 새 주기의 첫 거래일에 실행됩니다. 짧게 잡으면 회전율과 거래비용이 올라갑니다.',
+  }),
+  absoluteMomentumFilter: z.boolean().default(true).meta({
+    title: '절대 모멘텀 필터',
+    description:
+      '켜면 측정 기간 수익률이 0 이하인 종목은 순위 상위여도 편입하지 않습니다. 하락장에서 그만큼 현금으로 남습니다. 끄면 하락장에서도 상대적으로 덜 빠진 종목을 보유합니다.',
+  }),
+});
+
+export type CrossSectionalMomentumParameters = z.infer<typeof crossSectionalMomentumParameters>;
+
+export interface CrossSectionalMomentumState {
+  /** 유니버스 — 이번 봉에 거래가 없는 종목도 후보에서 빠지지 않게 초기화 시점에 고정한다 */
+  readonly symbols: readonly string[];
+  /** 마지막 리밸런스가 일어난 KST 월 ('YYYY-MM') */
+  lastRebalanceMonthKey: string | null;
+  /** 다음 봉에서 매수할 편입 종목. null 이면 매수 단계가 아니다 */
+  pendingBuys: readonly string[] | null;
+}
+
+/**
+ * 분할 보정 종가 기준 모멘텀. 이력이 창을 채우지 못하면 null.
+ *
+ * 창 종점은 `history.length - 1 - skipDays`, 시작점은 그보다 `formationDays` 앞이다.
+ * `history` 는 현재 봉을 포함하므로 종점이 마지막 봉이 되는 것은 `skipDays === 0` 일 때뿐이다.
+ */
+export function momentumScore(
+  history: readonly Candle[],
+  actions: readonly CorporateAction[],
+  formationDays: number,
+  skipDays: number,
+): number | null {
+  const endIndex = history.length - 1 - skipDays;
+  const startIndex = endIndex - formationDays;
+  if (startIndex < 0) return null;
+
+  const start = splitAdjustedClose(history, actions, startIndex);
+  const end = splitAdjustedClose(history, actions, endIndex);
+  if (start === null || end === null || start <= 0) return null;
+  return end / start - 1;
+}
+
+export const crossSectionalMomentumStrategy: TradingStrategy<
+  CrossSectionalMomentumParameters,
+  CrossSectionalMomentumState
+> = {
+  id: 'cross-sectional-momentum',
+  version: '1.0.0',
+  name: '횡단면 모멘텀',
+  description:
+    // "보정합니다" 로 단정하면 안 된다 — 분할 이력이 수집되지 않은 데이터셋에서는
+    // 자본변동 팩트가 없어 원 종가로 계산된다. 무엇도 그 수집을 강제하지 않으므로
+    // (requiresFundamentals 는 이 전략에 걸려 있지도 않다) 엔진 경고·
+    // IMPLEMENTATION_STATUS 와 같은 어법으로 조건을 밝힌다.
+    '유니버스 전 종목의 12-1개월 수익률을 랭킹해 상위 N 을 동일가중 보유하고 주기마다 교체합니다. ' +
+    '액면분할은 분할 이력이 수집된 데이터셋에서만 신호 계산에 보정됩니다 — 체결가는 항상 실제 거래 가격입니다.',
+  parameterSchema: crossSectionalMomentumParameters,
+
+  initialize(context: StrategyInitializeContext): CrossSectionalMomentumState {
+    return {
+      symbols: [...context.symbols],
+      lastRebalanceMonthKey: null,
+      pendingBuys: null,
+    };
+  },
+
+  onBars(
+    context: StrategyBarContext,
+    state: CrossSectionalMomentumState,
+    parameters: CrossSectionalMomentumParameters,
+  ): StrategyDecision {
+    // 2단계 — 이전 봉에서 넘어온 편입 종목을 매수한다. 이번 봉에 매도가 이미
+    // 체결되어 현금이 들어온 상태다 (엔진 §9.2 순서: 체결 → 평가 → 전략).
+    if (state.pendingBuys !== null) {
+      const buys = planBuyPhase(state.pendingBuys, {
+        positions: context.portfolio.positions,
+        bars: context.bars,
+        equity: context.portfolio.equity,
+        topN: parameters.topN,
+      });
+      state.pendingBuys = null;
+      return { orders: buys };
+    }
+
+    const monthKey = localMonthKey(context.tsMs);
+    if (!isRebalanceDue(state.lastRebalanceMonthKey, monthKey, parameters.rebalanceMonths)) {
+      return { orders: [] };
+    }
+
+    // 워밍업 중이면 아무것도 하지 않고 리밸런스 시점도 소진하지 않는다 — 첫 리밸런스는
+    // 창이 채워진 첫 봉에서 일어난다. 후보가 '필터에 걸려' 비는 경우와 구분해야 하는데,
+    // 그때는 목표가 빈 채로 진행해 전량 청산(현금)이 정답이다.
+    const minBars = parameters.formationDays + parameters.skipDays + 1;
+    const warmedUp = state.symbols.some(
+      (symbol) => context.getHistory(symbol).length >= minBars,
+    );
+    if (!warmedUp) return { orders: [] };
+
+    const scored: Scored[] = [];
+    for (const symbol of state.symbols) {
+      const score = momentumScore(
+        context.getHistory(symbol),
+        context.corporateActions(symbol),
+        parameters.formationDays,
+        parameters.skipDays,
+      );
+      if (score === null) continue;
+      if (parameters.absoluteMomentumFilter && score <= 0) continue;
+      scored.push({ symbol, score });
+    }
+
+    const ranks = rankDescending(scored);
+    const targets = [...ranks.entries()]
+      .filter(([, rank]) => rank <= parameters.topN)
+      .map(([symbol]) => symbol)
+      .sort();
+
+    state.lastRebalanceMonthKey = monthKey;
+
+    const sells = planSellPhase({ targets, positions: context.portfolio.positions });
+    const newEntries = targets.filter(
+      (symbol) => (context.portfolio.positions.get(symbol)?.quantity ?? 0) <= 0,
+    );
+    state.pendingBuys = newEntries.length > 0 ? newEntries : null;
+
+    return { orders: sells };
+  },
+};

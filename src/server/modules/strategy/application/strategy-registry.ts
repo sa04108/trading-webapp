@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import type { AnyTradingStrategy } from '../domain/strategy.js';
+import { crossSectionalMomentumStrategy } from '../strategies/cross-sectional-momentum.js';
 import { hourlyBreakoutStrategy } from '../strategies/hourly-breakout.js';
+import { valueQualityRankStrategy } from '../strategies/value-quality-rank.js';
 
 /**
  * 코드 등록식 전략 레지스트리 (스펙 §2.5):
@@ -8,6 +10,8 @@ import { hourlyBreakoutStrategy } from '../strategies/hourly-breakout.js';
  */
 const STRATEGIES: readonly AnyTradingStrategy[] = [
   hourlyBreakoutStrategy as AnyTradingStrategy,
+  crossSectionalMomentumStrategy as AnyTradingStrategy,
+  valueQualityRankStrategy as AnyTradingStrategy,
 ];
 
 export interface StrategySummary {
@@ -35,6 +39,11 @@ export class StrategyRegistry {
 
   get(strategyId: string): AnyTradingStrategy | null {
     return this.byId.get(strategyId) ?? null;
+  }
+
+  /** 모르는 전략은 false — 여기서 던지면 "알 수 없는 전략" 검증보다 먼저 터진다 */
+  requiresFundamentals(strategyId: string): boolean {
+    return this.get(strategyId)?.requiresFundamentals === true;
   }
 
   /** JSON Schema 형태의 파라미터 스키마 (웹 폼 렌더링용) */

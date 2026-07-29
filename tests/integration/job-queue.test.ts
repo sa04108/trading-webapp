@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CANCEL_SIGTERM_DELAY_MS } from '../../src/server/modules/backtest/application/job-orchestrator.js';
+import { ENGINE_VERSION } from '../../src/server/modules/backtest/domain/engine.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
 
@@ -136,7 +137,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       run: Record<string, unknown>;
       metrics: Record<string, unknown>;
     };
-    expect(body.run.engineVersion).toBe('1.1.0');
+    expect(body.run.engineVersion).toBe(ENGINE_VERSION);
     expect(body.run.strategyId).toBe('hourly-breakout');
     expect(body.run.feeModelVersion).toBe('kr-equity-default@1.0.0');
     expect(body.run.randomSeed).toBe(42);
@@ -459,6 +460,41 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
     expect(cloned.statusCode).toBe(400);
     expect((cloned.json() as { error: string }).error).toContain('005930');
+  });
+
+  it('복제도 재무 요구 검증을 거친다 — 재무 없는 데이터셋의 밸류 전략은 422', async () => {
+    const job = ctx.container.jobQueue.enqueue({
+      ...buildRequest(datasetId),
+      strategyId: 'value-quality-rank',
+      strategyVersion: '1.0.0',
+      parameters: { topN: 20, rebalanceMonths: 3, staleQuarters: 2 },
+    });
+
+    const cloned = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${job.id}/clone`,
+      cookies: { qp_session: cookie },
+    });
+    expect(cloned.statusCode).toBe(422);
+    expect((cloned.json() as { error: string }).error).toContain('facts:sync');
+  });
+
+  it('초안은 재무 요구 미충족도 blockers 에 담는다', async () => {
+    const job = ctx.container.jobQueue.enqueue({
+      ...buildRequest(datasetId),
+      strategyId: 'value-quality-rank',
+      strategyVersion: '1.0.0',
+      parameters: { topN: 20, rebalanceMonths: 3, staleQuarters: 2 },
+    });
+
+    const draft = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${job.id}/clone-draft`,
+      cookies: { qp_session: cookie },
+    });
+    expect(draft.statusCode).toBe(200);
+    const body = draft.json() as { blockers: string[] };
+    expect(body.blockers.some((b) => b.includes('facts:sync'))).toBe(true);
   });
 
   it('일부 종목만 봉이 없으면 거부하지 않는다 (신규 상장 등 정상)', async () => {

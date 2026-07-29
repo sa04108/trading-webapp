@@ -1,10 +1,12 @@
-import type { Logger } from '../../../shared/logger.js';
+import type { Logger } from './logger.js';
 
 /**
- * 증권사 공통 REST 클라이언트 (스펙 §13):
- * - 토큰 발급·캐싱·만료 전 재발급
+ * 공통 REST 클라이언트 (스펙 §13):
+ * - 토큰 발급·캐싱·만료 전 재발급 (tokenProvider 가 있을 때)
  * - API 그룹별 rate limiter (최소 간격)
  * - 429 는 Retry-After 우선, 이후 exponential backoff + jitter
+ *
+ * 증권사 어댑터와 DART 어댑터가 공유한다 — 그래서 modules/broker 가 아니라 shared 에 있다.
  */
 export interface TokenProvider {
   issueToken(fetchImpl: typeof fetch): Promise<{ accessToken: string; expiresAtMs: number }>;
@@ -12,7 +14,12 @@ export interface TokenProvider {
 
 export interface RestClientOptions {
   readonly baseUrl: string;
-  readonly tokenProvider: TokenProvider;
+  /**
+   * OAuth 토큰 공급자. 생략하면 Authorization 헤더를 붙이지 않는다 —
+   * DART 처럼 쿼리 파라미터로 인증하는 API 를 위한 경로다. 더미 토큰 공급자를
+   * 끼우면 거짓 헤더를 보내게 되므로 옵션으로 둔다.
+   */
+  readonly tokenProvider?: TokenProvider;
   readonly logger: Logger;
   readonly fetchImpl?: typeof fetch;
   /** API 그룹별 최소 호출 간격 (ms). 기본 그룹은 'default' */
@@ -28,7 +35,7 @@ export interface RestClientOptions {
 const DEFAULT_MIN_INTERVAL_MS = 250;
 const TOKEN_REFRESH_MARGIN_MS = 60_000;
 
-export class BrokerRestClient {
+export class RestClient {
   private token: { accessToken: string; expiresAtMs: number } | null = null;
   private lastCallAtByGroup = new Map<string, number>();
   private readonly fetchImpl: typeof fetch;
@@ -45,10 +52,12 @@ export class BrokerRestClient {
     this.maxRetries = options.maxRetries ?? 4;
   }
 
-  private async getToken(): Promise<string> {
+  private async getToken(): Promise<string | null> {
+    const provider = this.options.tokenProvider;
+    if (!provider) return null;
     const now = this.clock();
     if (!this.token || this.token.expiresAtMs - TOKEN_REFRESH_MARGIN_MS <= now) {
-      this.token = await this.options.tokenProvider.issueToken(this.fetchImpl);
+      this.token = await provider.issueToken(this.fetchImpl);
     }
     return this.token.accessToken;
   }
@@ -78,7 +87,7 @@ export class BrokerRestClient {
       const response = await this.fetchImpl(`${this.options.baseUrl}${path}`, {
         method: init.method ?? 'GET',
         headers: {
-          authorization: `Bearer ${token}`,
+          ...(token !== null ? { authorization: `Bearer ${token}` } : {}),
           ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
           ...init.headers,
         },
@@ -89,8 +98,9 @@ export class BrokerRestClient {
         return (await response.json()) as T;
       }
 
-      if (response.status === 401 && attempt === 0) {
-        // 토큰 만료 가능성: 1회 재발급 후 재시도
+      // 토큰 인증일 때만 401 재발급을 시도한다 — 쿼리 키 방식에서 401 은 키가
+      // 틀린 것이므로 재시도가 의미 없다
+      if (response.status === 401 && attempt === 0 && this.options.tokenProvider) {
         this.token = null;
         attempt += 1;
         continue;
@@ -99,7 +109,7 @@ export class BrokerRestClient {
       const retryable = response.status === 429 || response.status >= 500;
       if (!retryable || attempt >= this.maxRetries) {
         const body = await response.text().catch(() => '');
-        throw new Error(`broker request failed: ${response.status} ${body.slice(0, 200)}`);
+        throw new Error(`REST 요청 실패: ${response.status} ${body.slice(0, 200)}`);
       }
 
       const retryAfterHeader = response.headers.get('retry-after');
@@ -109,8 +119,8 @@ export class BrokerRestClient {
         : Math.min(30_000, 500 * 2 ** attempt) * (0.5 + this.random() / 2);
 
       this.options.logger.warn(
-        { module: 'broker', event: 'broker.retry', status: response.status, attempt, backoffMs },
-        'retrying broker request',
+        { module: 'rest-client', event: 'rest.retry', status: response.status, attempt, backoffMs },
+        'retrying REST request',
       );
       await this.sleep(backoffMs);
       attempt += 1;

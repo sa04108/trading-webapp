@@ -27,6 +27,8 @@ import {
   getCostProfile,
   getSlippageProfile,
 } from '../server/modules/backtest/domain/cost-profiles.js';
+import { ParquetFactRepository } from '../server/modules/facts/infrastructure/parquet-fact-repository.js';
+import { CORPORATE_ACTION_FIELD, type Fact } from '../server/modules/facts/domain/fact.js';
 import type { Candle, Market, Timeframe } from '../server/modules/market-data/domain/candle.js';
 import { DuckDbService } from '../server/modules/market-data/infrastructure/duckdb-service.js';
 import { ParquetCandleRepository } from '../server/modules/market-data/infrastructure/parquet-candle-repository.js';
@@ -155,6 +157,64 @@ async function main(): Promise<void> {
       );
     }
 
+    // 상장시점 팩트 로드 — 질의를 **둘로** 나눈다. 둘의 노출 규칙이 다르기 때문이다.
+    //
+    // 재무 팩트: 노출 시점 = 공시 접수일(asOf). 기간 종료 이후 접수분은 PitFactView 커서가
+    // 어차피 흡수하지 않으므로 SQL 에서 잘라 메모리를 아낀다.
+    //
+    // 자본변동(SPLIT_RATIO): 노출 시점 = **효력발생일**이다 (설계 §3.4, 스펙 §9.2). 그래서
+    // 접수일로 자르면 안 된다. 분할 수량은 사업보고서의 증자·감자 현황에서 읽으므로 접수일이
+    // 효력발생일보다 최대 15개월 늦다 — 2025-03-14 기준 분할은 2026년 3월 접수라서
+    // asOf 컷오프를 걸면 2025-12-31 로 끝나는 백테스트에는 행 자체가 들어오지 못한다.
+    // 그러면 모멘텀은 미보정 가격에서 12개월 수익률 −50% 를 읽고 기본 절대 모멘텀 필터가
+    // 그 종목을 1년간 조용히 떨어뜨린다. PitFactView 의 효력발생일 게이트가 존재하는
+    // 이유가 바로 그 시나리오이므로, 여기서 잘라버리면 그 게이트가 프로덕션에 닿지 않는다.
+    //
+    // 봉 시점별 컷오프는 두 경우 모두 엔진의 PitFactView 가 담당한다.
+    const factRepository = new ParquetFactRepository(dataRoot, duckdb);
+    const financialFacts: Fact[] = (
+      await factRepository.getFacts({
+        datasetId: dataset.id,
+        scope: 'SYMBOL',
+        keys: request.universe.symbols,
+        asOfMaxTsMs: toTsMs,
+      })
+    ).filter((fact) => fact.field !== CORPORATE_ACTION_FIELD);
+    const corporateActionFacts: Fact[] = await factRepository.getFacts({
+      datasetId: dataset.id,
+      scope: 'SYMBOL',
+      keys: request.universe.symbols,
+      fields: [CORPORATE_ACTION_FIELD],
+    });
+    const facts: Fact[] = [...financialFacts, ...corporateActionFacts];
+    // 아래 두 검사는 **재무** 팩트만 본다 — 분할만 기록된 종목은 재무가 없는 종목이다
+    if (strategy.requiresFundamentals === true && financialFacts.length === 0) {
+      // 제출 검증이 걸렀어야 하는 상태다. 실행 중 데이터가 지워진 경우의 뒤늦은 방어선.
+      throw new Error(
+        '이 전략은 상장시점 재무 데이터가 필요합니다. `pnpm cli facts:sync` 로 수집한 뒤 다시 실행하세요.',
+      );
+    }
+    if (strategy.requiresFundamentals === true) {
+      // "facts:sync 리포트를 확인하세요" 는 지금 어디에도 없는 것을 가리킨다 — 그 리포트는
+      // 이미 닫혔을 수 있는 세션의 stdout 으로만 존재했다. 대신 실제로 로드된 팩트 키를
+      // 요청 유니버스와 맞춰 재무가 **하나도 없는** 종목을 직접 이름으로 밝힌다.
+      // (계정이 일부만 빠진 종목까지 여기서 가려내지는 못하므로 그 한계도 함께 남긴다.)
+      const symbolsWithFacts = new Set(financialFacts.map((fact) => fact.key));
+      const withoutFacts = request.universe.symbols.filter((s) => !symbolsWithFacts.has(s));
+      // 유니버스 상한이 200종목이라 캡이 없으면 경고 한 줄이 종목코드 200개가 된다 —
+      // 엔진의 포지션 상한 경고와 같은 10종목 캡을 쓴다 (engine.ts 의 buysDroppedByCap).
+      const shown = withoutFacts.slice(0, 10).join(', ');
+      datasetWarnings.push(
+        (withoutFacts.length > 0
+          ? `재무 데이터가 하나도 없어 랭킹에서 제외된 종목 ${withoutFacts.length}종목: ${shown}` +
+            (withoutFacts.length > 10 ? ` 외 ${withoutFacts.length - 10}종목` : '') +
+            '. '
+          : '') +
+          '재무 데이터는 수집 시점 기준입니다. 계정이 일부만 누락된 종목도 랭킹에서 조용히 빠질 수 있습니다 ' +
+          '— `pnpm cli facts:sync` 를 다시 실행하면 누락 리포트를 다시 볼 수 있습니다.',
+      );
+    }
+
     const startedAtMs = Date.now();
     let lastProgressSentAt = 0;
 
@@ -171,6 +231,7 @@ async function main(): Promise<void> {
       parameters,
       randomSeed: request.randomSeed,
       maxPositions: request.risk.maxPositions,
+      facts,
     }, {
       shouldCancel: () => cancelRequested,
       onProgress: ({ processedBars, totalBars, currentTsMs }) => {

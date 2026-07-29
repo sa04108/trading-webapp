@@ -4,6 +4,8 @@ import type {
   PortfolioView,
   StrategyBarContext,
 } from '../../strategy/domain/strategy.js';
+import { CORPORATE_ACTION_FIELD, type Fact } from '../../facts/domain/fact.js';
+import { PitFactView } from '../../facts/domain/pit-fact-view.js';
 import { proceedsFromSell, requiredCashForBuy, simulateFill } from './execution.js';
 import {
   computeDrawdownSeries,
@@ -36,6 +38,11 @@ export interface BacktestRunInput {
   readonly randomSeed: number;
   /** 동시 보유 종목 상한 (리스크 검증 §9.2-6) */
   readonly maxPositions: number;
+  /**
+   * 상장시점 팩트. 미지정이면 전략의 fundamentals/corporateActions 가 항상 비어 있다 —
+   * 재무를 쓰지 않는 전략(hourly-breakout 등)은 넘길 필요가 없다.
+   */
+  readonly facts?: readonly Fact[];
 }
 
 export interface EngineHooks {
@@ -63,12 +70,13 @@ export interface BacktestRunResult {
 }
 
 /** 재현성 메타데이터에 기록되는 엔진 버전 (스펙 §9.5) — 체결·지표 로직 변경 시 올린다 */
-export const ENGINE_VERSION = '1.1.0';
+export const ENGINE_VERSION = '1.2.0';
 
 const PROGRESS_INTERVAL_BARS = 500;
 
 /**
  * 이벤트 루프 (스펙 §9.2):
+ *  0. 이 시점까지 공시된 팩트 흡수 — 전략 호출 전이어야 한다 (PIT 커서, §9.4)
  *  1. 이전 시점의 대기 주문 체결 (이번 봉 시가)
  *  2. 현금·포지션 갱신
  *  3. 평가금액 갱신
@@ -116,6 +124,14 @@ export function runBacktest(
   const fills: Fill[] = [];
   const trades: Trade[] = [];
   const warnings: string[] = [];
+  /**
+   * 동시 보유 상한에 걸려 폐기된 매수 주문 — 종목별 건수. 봉마다 경고를 쌓지 않고
+   * 마지막에 한 줄로 접는다: 월간 리밸런스 12년이면 같은 사유가 천 건 넘게 쌓여
+   * warningsJson 을 부풀리고 정작 다른 경고를 묻어버린다.
+   */
+  const buysDroppedByCap = new Map<string, number>();
+
+  const factView = new PitFactView(input.facts ?? []);
 
   const state = strategy.initialize({ symbols, initialCash: input.initialCash, rng });
 
@@ -135,6 +151,9 @@ export function runBacktest(
     }
 
     const bars = barsByTs.get(tsMs) as Map<string, Candle>;
+
+    // 이 시점까지 공시된 팩트만 흡수한다 — 전략이 미래 공시를 볼 자리를 없앤다 (§9.4)
+    factView.advanceTo(tsMs);
 
     // 1~2. 대기 주문 체결 + 현금·포지션 갱신
     const stillPending: OrderIntent[] = [];
@@ -171,6 +190,8 @@ export function runBacktest(
       getHistory: (symbol) => historyBySymbol.get(symbol) ?? [],
       portfolio: portfolioView,
       rng,
+      fundamentals: (symbol) => factView.fundamentals(symbol),
+      corporateActions: (symbol) => factView.corporateActions(symbol, tsMs),
     };
     const decision = strategy.onBars(context, state, input.parameters);
 
@@ -195,7 +216,32 @@ export function runBacktest(
       `기간 종료 시점에 미청산 포지션 ${positions.size}건이 남아 있습니다 (평가금액에는 반영됨).`,
     );
   }
-  warnings.push('생존 편향·공휴일 캘린더·배당/액면분할 보정은 MVP 에서 다루지 않습니다 (§9.4).');
+  if (buysDroppedByCap.size > 0) {
+    // 이 폐기는 지금까지 모든 전략에서 보이지 않았다 — validateOrder 가 null 을
+    // 반환하면 호출부가 그대로 버렸다. 전략이 상한보다 많은 종목을 편입하려 하면
+    // 초과분만큼 자본이 현금으로 남는데 자산 곡선은 정상처럼 보인다.
+    const total = [...buysDroppedByCap.values()].reduce((sum, count) => sum + count, 0);
+    const symbols = [...buysDroppedByCap.keys()].sort();
+    const shown = symbols.slice(0, 10).join(', ');
+    warnings.push(
+      `동시 보유 종목 상한(${input.maxPositions})에 걸려 매수 주문 ${total}건이 폐기되었습니다 ` +
+        `— 대상 ${symbols.length}종목: ${shown}` +
+        (symbols.length > 10 ? ` 외 ${symbols.length - 10}종목` : '') +
+        '. 그만큼 자본이 현금으로 남았습니다. 전략의 보유 종목 수를 상한 이하로 줄이거나 상한을 올리세요.',
+    );
+  }
+  // 분할 보정 여부는 "팩트가 있는가" 가 아니라 "**자본변동** 팩트가 있는가" 다 —
+  // 재무만 수집된 데이터셋(SPLIT_RATIO 0건)에서 팩트 건수로 판단하면 일어나지 않은
+  // 보정을 일어났다고 말한다.
+  const hasCorporateActionFacts = (input.facts ?? []).some(
+    (fact) => fact.field === CORPORATE_ACTION_FIELD,
+  );
+  warnings.push(
+    '생존 편향·공휴일 캘린더·배당·권리락 보정은 MVP 에서 다루지 않습니다 (§9.4). ' +
+      (hasCorporateActionFacts
+        ? '액면분할은 분할 이력이 수집된 데이터셋에서, 보정을 사용하는 전략의 신호 계산에만 반영됩니다 — 체결가는 실제 거래 가격입니다.'
+        : '액면분할도 이 실행에서는 보정되지 않았습니다 (분할 이력 미수집).'),
+  );
 
   const metrics = computeMetrics(
     equityPoints,
@@ -264,6 +310,8 @@ export function runBacktest(
         !pendingNewBuySymbols.has(order.symbol) &&
         positions.size + pendingNewBuySymbols.size >= input.maxPositions
       ) {
+        // 조용히 버리지 않는다 — 폐기 사실을 기록해 실행 경고로 접어 올린다
+        buysDroppedByCap.set(order.symbol, (buysDroppedByCap.get(order.symbol) ?? 0) + 1);
         return null;
       }
     }

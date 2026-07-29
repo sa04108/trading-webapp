@@ -492,6 +492,7 @@ RestBrokerOrderExecutor  # MVP 이후, 증권사별 어댑터
 
 ## 9.2 이벤트 순서
 
+0. 이 시점까지 공시된 상장시점 팩트 흡수 (PIT 커서) — 전략 호출 전이어야 한다
 1. 이전 시점의 대기 주문 체결
 2. 현금·포지션 갱신
 3. 평가금액 갱신
@@ -500,6 +501,10 @@ RestBrokerOrderExecutor  # MVP 이후, 증권사별 어댑터
 6. 리스크 검증
 7. 다음 봉 체결 대기열 등록
 8. 스냅샷·진행률 저장
+
+0단계는 재무 팩트에만 적용된다. 자본변동(액면분할 등) 이벤트는 공시 접수일이 효력
+발생일보다 최대 15개월 늦으므로 커서를 타지 않고, **효력 발생일 ≤ 현재 봉** 이라는
+조건만으로 노출된다 — 이미 발생한 분할로 과거 가격을 보정하는 것은 look-ahead 가 아니다.
 
 ## 9.3 비용 모델
 
@@ -1448,6 +1453,52 @@ provision.sh 가 이 파일을 생성하며 `SESSION_SECRET` 은 서버에서 �
 **파일이 이미 있으면 절대 덮지 않는다** — SESSION_SECRET 이 바뀌면 기존 세션이
 전부 무효화된다.
 
+전체 항목은 `infra/app.env.example` 이 기준이다 (증권사·DART 자격 증명 포함).
+
+## 28.1 값을 바꾼 뒤
+
+```bash
+sudo install -m 600 -o root -g root /etc/quant-platform/app.env{,.bak}
+sudo nano /etc/quant-platform/app.env
+sudo systemctl restart quant-platform
+sudo systemctl is-active quant-platform
+```
+
+`systemctl daemon-reload` 로는 반영되지 않는다 — 그건 유닛 파일이 바뀔 때고,
+`EnvironmentFile` 은 **서비스 기동 시점**에 읽힌다. reload 도 부족하고 restart 가
+필요하다.
+
+세 가지 함정:
+
+- systemd 의 env 파싱은 셸이 아니다. `export` 를 쓰지 말고, 값에 따옴표를 붙이지
+  말고, `$VAR` 확장을 기대하지 말 것.
+- **빈 값과 미설정은 다르다.** `DART_API_KEY=` 처럼 빈 값을 두면 zod 의 `min(1)` 이
+  거부해 `ConfigError` 로 부팅이 실패한다. 줄을 아예 넣지 않으면 정상 부팅하고 해당
+  기능만 비활성이다. 그래서 restart 뒤 `is-active` 확인이 절차의 일부다.
+- `TOSS_CLIENT_ID`/`TOSS_CLIENT_SECRET` 은 둘 다 설정하거나 둘 다 비워야 한다.
+  한쪽만 있으면 부팅이 `ConfigError` 로 실패한다 (반쪽 자격 증명은 "설정했다고
+  믿었는데 비활성" 인 상태를 만들기 때문에 의도적으로 즉시 실패시킨다).
+
+## 28.2 운영에서 CLI 실행
+
+CLI 는 별도 프로세스이고 `app.env` 를 **자동으로 읽지 않는다**. `admin:create` 나
+`totp:enroll` 은 환경변수가 필요 없어 그냥 실행되지만, 증권사·DART 자격 증명이
+필요한 명령(`facts:sync`)은 systemd 와 같은 환경으로 띄워야 한다:
+
+```bash
+sudo systemd-run --uid=quant --gid=quant --pty --same-dir --wait \
+  --property=EnvironmentFile=/etc/quant-platform/app.env \
+  /usr/local/bin/node /opt/quant-platform/current/dist/server/cli.js \
+  facts:sync --dataset <데이터셋_id> --from 2015 --to 2026
+```
+
+`app.env` 를 셸에서 export 해 넘기는 방식은 키가 `ps` 에 잠깐 노출되므로 쓰지 않는다.
+
+재무 수집은 종목·연도당 9건을 호출한다 (200종목 10년치 ≈ 18,000건). DART 일일 한도
+40,000건에는 여유가 있지만 rate limiter 가 120ms 간격이라 **최소 36분**이 걸린다 —
+`tmux`/`screen` 안에서 돌릴 것. SSH 가 끊기면 수집이 죽는다. 중단되면 그 지점까지는
+저장되고, CLI 가 어느 종목에서 멈췄는지와 몇 건을 저장했는지 출력한다.
+
 ---
 
 # 29. systemd
@@ -1601,9 +1652,15 @@ S3를 사용할 경우:
 
 ---
 
-# 32. 첫 전략
+# 32. 등록 전략
 
-엔진 검증용 시간봉 돌파 전략을 먼저 만든다.
+`StrategyRegistry` 는 코드로 등록된 전략 세 개를 담는다 (§2.5). UI 는 검증된
+파라미터만 바꾼다 — 전략 자체는 코드 리뷰·테스트를 거쳐 배포된다.
+
+## 시간봉 돌파 (hourly-breakout)
+
+엔진 검증용 기준 전략. 전략의 수익성을 약속하는 것이 아니라 백테스트 엔진의
+정확성·재현성을 검증하기 위한 것이다.
 
 ```ts
 const HourlyBreakoutParameters = z.object({
@@ -1616,9 +1673,23 @@ const HourlyBreakoutParameters = z.object({
 ```
 
 `maxPositions` 는 전략 파라미터가 아니다 — 요청의 `risk.maxPositions` 로 받는다
-(§15, D-012). 현재 전략 버전은 1.2.0 이다.
+(§15, D-012). 현재 전략 버전은 1.2.0 이다. 봉만 사용하며 재무 데이터를 요구하지
+않는다 (`requiresFundamentals` 미설정).
 
-전략의 수익성을 약속하는 것이 아니라 백테스트 엔진의 정확성·재현성을 검증하는 기준 전략이다.
+## 횡단면 모멘텀 (cross-sectional-momentum)
+
+유니버스 전 종목의 12-1개월(형성 기간에서 최근 구간을 제외) 수익률을 랭킹해
+상위 N 을 동일가중 보유한다. 액면분할 등 자본변동 이벤트가 수집된 데이터셋에서는
+신호 계산 시 가격을 보정한다 — 체결가 자체는 항상 실제 거래 가격이다. 봉만
+사용하며 재무 데이터를 요구하지 않는다.
+
+## 밸류·퀄리티 랭킹 (value-quality-rank)
+
+이익수익률(TTM EBIT / EV)과 자본수익률(TTM EBIT / 투입자본) 순위를 합산해 상위
+N 을 동일가중 보유한다. `requiresFundamentals: true` 로 선언되어 있어, 상장시점
+재무(point-in-time 팩트 저장소, `pnpm cli facts:sync` 로 DART 공시를 수집)가
+수집되지 않은 데이터셋에 제출하면 422 로 거부된다 — 실행 후 "거래 0건" 으로
+끝나 원인을 알 수 없는 상태를 막기 위해서다.
 
 ---
 

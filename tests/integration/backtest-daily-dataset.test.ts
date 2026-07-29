@@ -171,4 +171,149 @@ describe('일봉 데이터셋 백테스트 (D-024)', () => {
     const warnings = JSON.parse(run.warningsJson ?? '[]') as string[];
     expect(warnings.some((w) => w.includes('000660'))).toBe(true);
   });
+
+  it('재무가 없는 데이터셋에 밸류 전략을 제출하면 422 로 거부한다', async () => {
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: {
+        strategyId: 'value-quality-rank',
+        strategyVersion: '1.0.0',
+        parameters: { topN: 20, rebalanceMonths: 3, staleQuarters: 2 },
+        datasetId,
+        timeframe: '1d',
+        universe: { type: 'SYMBOLS', symbols: ['005930'] },
+        period: { from: '2025-08-01', to: '2025-10-31' },
+        capital: { initialCash: 10_000_000, currency: 'KRW' },
+        execution: {
+          fillTiming: 'NEXT_BAR_OPEN',
+          commissionProfileId: 'kr-equity-default',
+          slippageProfileId: 'fixed-5bps',
+        },
+        risk: { maxPositions: 20 },
+        randomSeed: 42,
+      },
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json().error).toContain('facts:sync');
+  });
+
+  /**
+   * topN > maxPositions 는 결과를 조용히 틀리게 만든다 — 초과분은 리스크 검증에서
+   * 폐기되고 다음 리밸런스까지 재시도되지 않는데, 비중은 여전히 equity/topN 이라
+   * 자본의 일부가 영구히 현금으로 남는다. 기본값 조합(topN=20, 웹 마법사 maxPositions=10)이
+   * 정확히 이 상태였다.
+   */
+  function momentumPayload(topN: number, maxPositions: number): Record<string, unknown> {
+    return {
+      strategyId: 'cross-sectional-momentum',
+      strategyVersion: '1.0.0',
+      parameters: {
+        formationDays: 20,
+        skipDays: 0,
+        topN,
+        rebalanceMonths: 1,
+        absoluteMomentumFilter: true,
+      },
+      datasetId,
+      timeframe: '1d',
+      universe: { type: 'SYMBOLS', symbols: ['005930'] },
+      period: { from: '2025-08-01', to: '2025-10-31' },
+      capital: { initialCash: 10_000_000, currency: 'KRW' },
+      execution: {
+        fillTiming: 'NEXT_BAR_OPEN',
+        commissionProfileId: 'kr-equity-default',
+        slippageProfileId: 'fixed-5bps',
+      },
+      risk: { maxPositions },
+      randomSeed: 42,
+    };
+  }
+
+  it('topN 이 최대 동시 보유 종목 수보다 크면 422 로 거부한다', async () => {
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: momentumPayload(20, 10),
+    });
+
+    expect(response.statusCode).toBe(422);
+    const error = response.json().error as string;
+    // 두 숫자를 다 밝히고 무엇을 고쳐야 하는지 말해야 한다
+    expect(error).toContain('20');
+    expect(error).toContain('10');
+    expect(error).toContain('최대 동시 보유 종목 수');
+  });
+
+  it('topN === maxPositions 는 통과한다 — 게이트가 전부를 막지 않는다', async () => {
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: momentumPayload(10, 10),
+    });
+    expect(response.statusCode).toBe(201);
+  });
+
+  it('clone-draft 는 같은 조건을 blockers 로 알린다 (막지 않고 고칠 화면은 열어준다)', async () => {
+    // 게이트가 생기기 전에 제출된 잡을 재현한다 — 큐에 직접 넣어 제출 검증을 우회한다
+    const job = ctx.container.jobQueue.enqueue(
+      momentumPayload(20, 10) as never,
+      { version: 1, contentHash: 'seed' },
+    );
+
+    const draft = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${job.id}/clone-draft`,
+      cookies: { qp_session: cookie },
+    });
+    expect(draft.statusCode).toBe(200);
+    const blockers = draft.json().blockers as string[];
+    expect(blockers.some((b) => b.includes('최대 동시 보유 종목 수'))).toBe(true);
+
+    // 그리고 실제 복제 제출은 422 로 막힌다
+    const cloned = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${job.id}/clone`,
+      cookies: { qp_session: cookie },
+    });
+    expect(cloned.statusCode).toBe(422);
+    expect(cloned.json().error).toContain('최대 동시 보유 종목 수');
+  });
+
+  it('봉만 쓰는 전략은 재무 없이도 제출된다', async () => {
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: {
+        strategyId: 'cross-sectional-momentum',
+        strategyVersion: '1.0.0',
+        parameters: {
+          formationDays: 20,
+          skipDays: 0,
+          topN: 1,
+          rebalanceMonths: 1,
+          absoluteMomentumFilter: true,
+        },
+        datasetId,
+        timeframe: '1d',
+        universe: { type: 'SYMBOLS', symbols: ['005930'] },
+        period: { from: '2025-08-01', to: '2025-10-31' },
+        capital: { initialCash: 10_000_000, currency: 'KRW' },
+        execution: {
+          fillTiming: 'NEXT_BAR_OPEN',
+          commissionProfileId: 'kr-equity-default',
+          slippageProfileId: 'fixed-5bps',
+        },
+        risk: { maxPositions: 20 },
+        randomSeed: 42,
+      },
+    });
+
+    expect(response.statusCode).toBeLessThan(400);
+  });
 });

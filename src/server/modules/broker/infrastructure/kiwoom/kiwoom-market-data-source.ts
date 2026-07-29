@@ -5,7 +5,7 @@ import type {
   MarketDataSource,
 } from '../../../market-data/application/ports.js';
 import { BrokerNotConfiguredError } from '../errors.js';
-import { BrokerRestClient, type TokenProvider } from '../rest-client.js';
+import { RestClient, type TokenProvider } from '../../../../shared/rest-client.js';
 
 export { BrokerNotConfiguredError } from '../errors.js';
 
@@ -58,7 +58,7 @@ export function createKiwoomMarketDataSource(
     },
   };
 
-  const client = new BrokerRestClient({
+  const client = new RestClient({
     baseUrl: config.baseUrl,
     tokenProvider,
     logger,

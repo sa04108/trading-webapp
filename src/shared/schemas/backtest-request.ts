@@ -14,7 +14,13 @@ export const backtestRequestSchema = z.object({
   timeframe: z.enum(['1m', '1h', '1d']).optional(),
   universe: z.object({
     type: z.literal('SYMBOLS'),
-    symbols: z.array(z.string().regex(/^[A-Za-z0-9._-]{1,20}$/)).min(1).max(50),
+    /**
+     * 상한 200 — 횡단면 랭킹 전략은 유니버스가 좁으면 '상위 N 선별' 이 의미를 잃는다
+     * (설계 2026-07-29-quant-strategies-and-fact-store-design.md). 확대이므로
+     * 저장된 과거 요청(복제·재실행)은 그대로 유효하다.
+     * 메모리 상한은 여기가 아니라 MAX_BACKTEST_BARS 가 지킨다 (bar-estimate.ts).
+     */
+    symbols: z.array(z.string().regex(/^[A-Za-z0-9._-]{1,20}$/)).min(1).max(200),
   }),
   period: z.object({
     from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),

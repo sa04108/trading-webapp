@@ -1,0 +1,61 @@
+import type { OrderIntent, Position } from '../../../backtest/domain/types.js';
+import type { Candle } from '../../../market-data/domain/candle.js';
+
+export interface SellPhaseInput {
+  /** 이번 리밸런스의 목표 보유 종목 */
+  readonly targets: readonly string[];
+  readonly positions: ReadonlyMap<string, Readonly<Position>>;
+}
+
+export interface BuyPhaseInput {
+  readonly positions: ReadonlyMap<string, Readonly<Position>>;
+  readonly bars: ReadonlyMap<string, Candle>;
+  readonly equity: number;
+  readonly topN: number;
+}
+
+/**
+ * 2단계 리밸런스 1단계 — 탈락 종목만 전량 매도한다.
+ *
+ * 같은 봉에서 매수까지 내지 않는 이유: 엔진의 동시 포지션 상한 검증은 청산 주문을
+ * 낸 포지션도 체결 전까지 슬롯을 쓰는 것으로 센다 (engine.ts validateOrder).
+ * topN 과 maxPositions 가 같으면 전량 회전이 통째로 거부된다. 매도와 매수를 두 봉으로
+ * 나누면 엔진을 고치지 않고도 회전이 되고, 실제 대금 결제와도 부합한다.
+ */
+export function planSellPhase(input: SellPhaseInput): readonly OrderIntent[] {
+  const targetSet = new Set(input.targets);
+  return [...input.positions.values()]
+    .filter((position) => position.quantity > 0 && !targetSet.has(position.symbol))
+    .sort((a, b) => (a.symbol < b.symbol ? -1 : 1))
+    .map((position) => ({
+      symbol: position.symbol,
+      side: 'SELL' as const,
+      quantity: position.quantity,
+      reason: 'REBALANCE_EXIT',
+    }));
+}
+
+/**
+ * 2단계 — 이전 봉에서 넘어온 편입 종목을 동일가중으로 매수한다.
+ * 비중은 목표 종목 수가 아니라 `topN` 으로 나눈다 — 후보가 부족하면 그만큼 현금이 남는
+ * 것이 의도된 동작이다 (절대 모멘텀 필터가 후보를 걸러낸 경우 등).
+ */
+export function planBuyPhase(
+  pendingBuys: readonly string[],
+  input: BuyPhaseInput,
+): readonly OrderIntent[] {
+  if (input.topN <= 0) return [];
+  const budgetPerSymbol = input.equity / input.topN;
+  const orders: OrderIntent[] = [];
+
+  for (const symbol of [...pendingBuys].sort()) {
+    const held = input.positions.get(symbol);
+    if (held && held.quantity > 0) continue;
+    const bar = input.bars.get(symbol);
+    if (!bar || bar.close <= 0) continue; // 이번 봉에 거래가 없으면 다음 리밸런스로 넘긴다
+    const quantity = Math.floor(budgetPerSymbol / bar.close);
+    if (quantity < 1) continue;
+    orders.push({ symbol, side: 'BUY', quantity, reason: 'REBALANCE_ENTRY' });
+  }
+  return orders;
+}
