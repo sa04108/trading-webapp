@@ -8,14 +8,42 @@
 
 **Tech Stack:** TypeScript 5.9 (strict, `noUncheckedIndexedAccess`), Node 24, Fastify, Drizzle ORM + better-sqlite3, DuckDB/Parquet, React 19 + TanStack Query, Tailwind + shadcn(radix-ui 통합 패키지), Vitest, Playwright.
 
+## 진행 상황 (2026-07-30 기준)
+
+**Task 1–15 전부 구현됨.** `55da830`(Task 1) ~ `1726769`(Task 15)까지 `feat/dart-sync` 에
+있다. 아래 체크박스는 그 사실을 반영해 채웠다 — 커밋이 28개인데 106개가 전부 미체크라
+어디까지 갔는지 계획서만으로는 알 수 없는 상태였다.
+
+이 계획서와 스펙은 2026-07-30 리뷰에서 실제 커밋된 코드에 맞춰 정정했다. Task 1 Step 3 의
+앵커 구현과 Task 6 Step 4 의 `runFactsPhase`·상태 판정은 커밋된 코드와 **달랐다** —
+계획서대로 다시 실행하면 `7ba72cc` 가 걷어낸 회귀가 되살아나는 상태였다.
+
+### 남은 후속 작업 (리뷰에서 발견, 아직 코드에 반영되지 않음)
+
+구현은 끝났지만 아래 셋은 코드가 스펙과 어긋난 채로 남아 있다. 별건으로 처리한다:
+
+1. **`getCandleSyncEstimate` 가 `status = 'COMPLETED'` 로 거른다**
+   (`dataset-service.ts`). 재무 단계에서 멈춘 잡은 `FAILED`/`CANCELLED` 인데 그때도
+   `candlesMs` 는 이미 측정돼 있어, DART 오류 하나가 멀쩡한 봉 실측치를 버리고 예상치가
+   `UNKNOWN` 으로 남는다. 스펙 §6 을 정정해 근거를 적었다 — 코드는 그 정정을 아직 따르지
+   않는다.
+2. **`runFactsPhase` 에 `market !== 'KR'` 가드가 없다**
+   (`broker-sync-service.ts`). `deriveFactYearRange` → `getSessionForMarket` 이 던지고, 그
+   호출은 `factsPhase` 를 감싼 try **밖**이라 예외가 `run` 의 catch 로 올라가 봉 결과까지
+   실패로 덮는다 — 재무 단계가 throw 하지 않게 만든 이유가 무너진다. 라우트 선검증과
+   `factsSyncEstimator` 가 정상 경로를 막으므로 지금은 도달하지 않는다. 스펙 §2 참고.
+3. **중복 심볼에서 추정과 실행이 갈라진다.** `planFactSync` 는 `Set` 으로 접지만
+   `FactSyncService.sync` 는 `request.symbols` 를 그대로 순회하고, `createDatasetSchema.symbols`
+   에 uniqueness refine 이 없다. 스펙 §3 참고.
+
 ## Global Constraints
 
 - **스펙 문서:** `docs/superpowers/specs/2026-07-29-web-facts-sync-design.md`, `docs/superpowers/specs/2026-07-29-market-support-disclosure-design.md`, `docs/superpowers/specs/2026-07-29-symbol-name-display-design.md`
 - **재무 수집은 국내(KR) 종목 전용이다** — DART 는 국내 공시 기관이다. 이 사실은 재무 체크박스 툴팁에 **상시** 표시한다(미지원일 때만이 아니다).
 - **US 는 데이터셋 자체를 만들 수 없다** — 거래소 세션이 정의되지 않아 `getSessionForMarket` 이 던지고, 증권사·CSV 두 생성 경로가 모두 그것을 호출한다(D-006). UI 는 고를 수 없게 막고 이유를 상시 노출한다. **서버 검증은 없애지 않는다** — UI 는 미리 알려주는 층이지 거부하는 층이 아니다.
-- **DART 일일 호출 한도는 40,000** 이다. `fact-sync-service.ts:51-55` 의 "일 한도 20,000" 주석은 오류이므로 함께 고친다.
-- **종목·연도당 DART 호출 9회** — `fnlttSinglAcntAll` 4 + `stockTotqySttus` 4 + `irdsSttus` 1.
-- **`dart-fact-source.ts` 의 한도 주석은 이미 4만으로 정정돼 있다**(커밋 `366e28a`). 남은 오류는 `fact-sync-service.ts:52` 의 "일 한도 20,000" 하나이고 Task 4 가 고친다.
+- **DART 일일 호출 한도는 40,000** 이다.
+- **종목·연도당 DART 호출 9회** — `fnlttSinglAcntAll` 4 + `stockTotqySttus` 4 + `irdsSttus` 1. 여기에 **연속 구간마다** 주식총수 앵커 4회가 붙는다(Task 1).
+- **한도 주석 정정은 끝났다** — `dart-fact-source.ts` 는 커밋 `366e28a`, `fact-sync-service.ts` 의 "일 한도 20,000" 은 Task 4 가 40,000 으로 고쳤다.
 - **rate limiter 최소 간격 120ms** — `DART_MIN_INTERVAL_MS` 상수 한 곳에서만 정의하고 `dart-fact-source.ts` 가 그것을 쓴다. 두 곳에 숫자를 두면 화면 추정치만 조용히 틀려진다.
 - **표기 규칙은 `이름 (코드)` 하나.** 공백 하나 포함. 이름을 모르면 코드만 — 빈 괄호를 만들지 않는다.
 - **주석·UI 문구는 한국어.** 이 저장소의 관례다. 주석은 "무엇을" 이 아니라 "왜" 를 적는다.
@@ -87,7 +115,7 @@ Task 13–14 를 뒤에 두는 이유: `exchange-session.ts` 를 맵 기반으�
 - Consumes: 없음 (순수 함수, 첫 태스크)
 - Produces: `DART_CALLS_PER_SYMBOL_YEAR`, `DART_SHARE_ANCHOR_CALLS`, `DART_MIN_INTERVAL_MS`, `DART_DAILY_CALL_LIMIT`, `type FactSyncMode = 'FULL' | 'INCREMENTAL'`, `interface FactSyncPlan`, `planFactSync(args) => FactSyncPlan`
 
-- [ ] **Step 1: 실패하는 테스트를 쓴다**
+- [x] **Step 1: 실패하는 테스트를 쓴다**
 
 `tests/unit/sync-plan.test.ts`:
 
@@ -153,6 +181,42 @@ describe('planFactSync', () => {
     expect(plan.shareYearsBySymbol.get('005930')).toEqual([2021, 2022]);
   });
 
+  /**
+   * 불연속 `years` 에 앵커를 가장 이른 연도 앞에만 두면 구멍 건너편의 낡은 공시가
+   * 분모가 된다. 예: 2021–2025 를 이미 받은 데이터셋이 2019–2026 을 증분 요청하면
+   * 대상은 [2019, 2020, 2026] 인데 주식총수가 2020 까지만 읽혀, 2026-02 분할의
+   * `sharesBefore()` 가 5년 묵은 2020 사업보고서 값을 집는다. 분모가 null 이 아니므로
+   * `parseIssuanceRows` 는 gap 도 남기지 않는다 — 조용히 틀린 비율이 보정가격 전체를
+   * 오염시킨다. 그래서 구간마다 앵커가 필요하다.
+   */
+  const SPARSE = {
+    symbols: ['005930'],
+    fromYear: 2019,
+    toYear: 2026,
+    currentYear: 2026,
+    coveredBySymbol: new Map([['005930', [2021, 2022, 2023, 2024, 2025]]]),
+    mode: 'INCREMENTAL',
+  } as const;
+
+  it('불연속 연도는 연속 구간마다 직전 1년을 앵커로 읽는다', () => {
+    const plan = planFactSync(SPARSE);
+    expect(plan.yearsBySymbol.get('005930')).toEqual([2019, 2020, 2026]);
+    // 2018 은 [2019,2020] 구간의 앵커, 2025 는 [2026] 구간의 앵커다
+    expect(plan.shareYearsBySymbol.get('005930')).toEqual([2018, 2019, 2020, 2025, 2026]);
+  });
+
+  it('불연속이면 앵커 호출도 구간 수만큼 늘어난다', () => {
+    const plan = planFactSync(SPARSE);
+    // 3년 × 9 + 앵커 2구간 × 4 = 27 + 8 = 35. 이 수가 어댑터가 실제로 쏘는 호출 수와
+    // 같아야 화면 추정치가 거짓말하지 않는다.
+    expect(plan.calls).toBe(35);
+    expect(plan.estimatedMs).toBe(35 * 120);
+    // 앵커 수는 곧 shareYears 가 years 보다 몇 개 많은지다
+    const years = plan.yearsBySymbol.get('005930') ?? [];
+    const shareYears = plan.shareYearsBySymbol.get('005930') ?? [];
+    expect(shareYears.length - years.length).toBe(2);
+  });
+
   it('수집할 것이 없는 종목은 계획도 호출도 없다', () => {
     const plan = planFactSync({
       symbols: ['005930'],
@@ -207,12 +271,12 @@ describe('planFactSync', () => {
 });
 ```
 
-- [ ] **Step 2: 테스트가 실패하는 것을 확인한다**
+- [x] **Step 2: 테스트가 실패하는 것을 확인한다**
 
 Run: `pnpm vitest run tests/unit/sync-plan.test.ts`
 Expected: FAIL — `Failed to resolve import ".../sync-plan.js"`
 
-- [ ] **Step 3: 구현한다**
+- [x] **Step 3: 구현한다**
 
 `src/server/modules/facts/domain/sync-plan.ts`:
 
@@ -229,10 +293,18 @@ Expected: FAIL — `Failed to resolve import ".../sync-plan.js"`
 export const DART_CALLS_PER_SYMBOL_YEAR = 9;
 
 /**
- * 자본변동 앵커용 추가 호출 (종목당 1회, 4개 보고서).
+ * 앵커 연도 하나당 추가 호출 (4개 보고서).
+ *
  * `fetchCorporateActions` 는 `sharesBefore()` 로 이벤트 직전 발행주식수를 찾아 분할
  * 비율을 만든다. 대상 연도만 읽으면 그 연도 연초 이벤트의 앵커가 없어 비율이 조용히
  * gap 이 된다 — 직전 1년의 주식총수를 함께 읽어 앵커를 확보한다.
+ *
+ * 앵커는 **연속 구간마다** 하나씩 필요하다. 증분 수집의 `years` 는 불연속일 수 있고
+ * (예: 이미 2021–2025 를 받은 데이터셋이 2019–2026 을 증분 요청하면 `[2019, 2020, 2026]`),
+ * 가장 이른 연도 앞에만 앵커를 두면 2026 이벤트의 분모가 5년 묵은 2020 공시가 된다 —
+ * `parseIssuanceRows` 는 분모가 null 일 때만 gap 을 남기므로 이 오류는 **조용히 잘못된
+ * 비율**로 나가고 보정가격 전체를 틀리게 만든다. 그래서 종목당 상수가 아니라
+ * (연속 구간 수 × 이 값) 이 실제 앵커 비용이다.
  */
 export const DART_SHARE_ANCHOR_CALLS = 4;
 
@@ -250,7 +322,7 @@ export type FactSyncMode = 'FULL' | 'INCREMENTAL';
 export interface FactSyncPlan {
   /** 종목 → 재무·자본변동을 수집할 연도 (오름차순) */
   readonly yearsBySymbol: ReadonlyMap<string, readonly number[]>;
-  /** 종목 → 주식총수를 읽을 연도 (= 위 + 직전 1년) */
+  /** 종목 → 주식총수를 읽을 연도 (= 위 + **각 연도의** 직전 1년) */
   readonly shareYearsBySymbol: ReadonlyMap<string, readonly number[]>;
   readonly calls: number;
   readonly estimatedMs: number;
@@ -281,13 +353,14 @@ export function planFactSync(args: PlanFactSyncArgs): FactSyncPlan {
       args.mode === 'FULL' ? target : incrementalYears(target, args.coveredBySymbol.get(symbol) ?? [], args.currentYear);
     yearsBySymbol.set(symbol, years);
 
-    const first = years[0];
     // 수집할 것이 없으면 앵커도 읽지 않는다 — 0건 종목에 호출을 쓰지 않는다
-    const shareYears = first === undefined ? [] : [first - 1, ...years];
+    const shareYears = anchoredShareYears(years);
     shareYearsBySymbol.set(symbol, shareYears);
 
     calls += years.length * DART_CALLS_PER_SYMBOL_YEAR;
-    if (years.length > 0) calls += DART_SHARE_ANCHOR_CALLS;
+    // 앵커 수 = 연속 구간 수 = |shareYears| - |years|. 연속 구간이 하나면 (첫 실행·
+    // 단일 연도 증분) 종전과 같은 4회다 — 불연속일 때만 늘어난다.
+    calls += (shareYears.length - years.length) * DART_SHARE_ANCHOR_CALLS;
   }
 
   return {
@@ -297,6 +370,21 @@ export function planFactSync(args: PlanFactSyncArgs): FactSyncPlan {
     estimatedMs: calls * DART_MIN_INTERVAL_MS,
     overDailyLimit: calls > DART_DAILY_CALL_LIMIT,
   };
+}
+
+/**
+ * 대상 연도 + 각 연도의 직전 1년 (오름차순, 중복 제거).
+ *
+ * 연속 구간에서는 앞의 한 해만 늘어나 종전과 같지만, 불연속 구간에서는 구간마다 앵커가
+ * 생긴다 — `sharesBefore()` 가 구멍 건너편의 낡은 공시를 분모로 집지 않게 한다.
+ */
+function anchoredShareYears(years: readonly number[]): number[] {
+  const withAnchors = new Set<number>();
+  for (const year of years) {
+    withAnchors.add(year - 1);
+    withAnchors.add(year);
+  }
+  return [...withAnchors].sort((a, b) => a - b);
 }
 
 function incrementalYears(
@@ -309,12 +397,12 @@ function incrementalYears(
 }
 ```
 
-- [ ] **Step 4: 테스트가 통과하는 것을 확인한다**
+- [x] **Step 4: 테스트가 통과하는 것을 확인한다**
 
 Run: `pnpm vitest run tests/unit/sync-plan.test.ts`
-Expected: PASS (8 tests)
+Expected: PASS (10 tests)
 
-- [ ] **Step 5: 커밋**
+- [x] **Step 5: 커밋**
 
 ```bash
 git add src/server/modules/facts/domain/sync-plan.ts tests/unit/sync-plan.test.ts
@@ -336,7 +424,7 @@ git commit -m "feat(facts): DART 수집 계획을 순수 함수로 뽑는다
 - Consumes: 없음
 - Produces: `dataImportJobs.phase`, `dataImportJobs.candlesMs`, `dataImportJobs.factsJson`, `datasetFactsState` 테이블 (`datasetId`, `symbol`, `coveredYearsJson`, `updatedAtMs`)
 
-- [ ] **Step 1: `dataImportJobs` 에 컬럼 3개를 더한다**
+- [x] **Step 1: `dataImportJobs` 에 컬럼 3개를 더한다**
 
 `src/server/shared/db/schema.ts` — `dataImportJobs` 정의의 `completedAtMs` 아래에 추가:
 
@@ -353,7 +441,7 @@ git commit -m "feat(facts): DART 수집 계획을 순수 함수로 뽑는다
     factsJson: text('facts_json'),
 ```
 
-- [ ] **Step 2: `datasetFactsState` 테이블을 더한다**
+- [x] **Step 2: `datasetFactsState` 테이블을 더한다**
 
 `brokerSyncState` 정의 바로 아래에 추가:
 
@@ -386,19 +474,19 @@ export const datasetFactsState = sqliteTable(
 );
 ```
 
-- [ ] **Step 3: 마이그레이션을 생성한다**
+- [x] **Step 3: 마이그레이션을 생성한다**
 
 Run: `pnpm db:generate`
 Expected: `migrations/0003_<name>.sql` 이 만들어지고 `ALTER TABLE data_import_jobs ADD ...` 3줄 + `CREATE TABLE dataset_facts_state` + unique index 를 담는다.
 
 생성된 SQL 을 읽어 확인한다: 새 컬럼 3개가 모두 nullable 이어야 한다 (기존 행이 그대로 남아야 하고, UI 는 `factsJson === null` 을 "재무 미요청" 으로 읽는다).
 
-- [ ] **Step 4: 타입체크와 기존 테스트를 돌린다**
+- [x] **Step 4: 타입체크와 기존 테스트를 돌린다**
 
 Run: `pnpm typecheck && pnpm vitest run tests/unit/broker-sync-service.test.ts`
 Expected: PASS — 컬럼 추가는 기존 코드를 깨지 않는다.
 
-- [ ] **Step 5: 커밋**
+- [x] **Step 5: 커밋**
 
 ```bash
 git add src/server/shared/db/schema.ts migrations/
@@ -420,7 +508,7 @@ git commit -m "feat(db): 잡 단계·봉 소요시간·재무 진행 컬럼과 �
 - Consumes: `datasetFactsState` (Task 2)
 - Produces: `interface FactCoverageStore { getCoveredYears(datasetId): ReadonlyMap<string, readonly number[]>; addCoveredYears(datasetId, symbol, years, nowMs): void }`, `class SqliteFactCoverageStore`
 
-- [ ] **Step 1: 실패하는 테스트를 쓴다**
+- [x] **Step 1: 실패하는 테스트를 쓴다**
 
 `tests/unit/fact-coverage-store.test.ts`:
 
@@ -499,12 +587,12 @@ describe('SqliteFactCoverageStore', () => {
 });
 ```
 
-- [ ] **Step 2: 테스트가 실패하는 것을 확인한다**
+- [x] **Step 2: 테스트가 실패하는 것을 확인한다**
 
 Run: `pnpm vitest run tests/unit/fact-coverage-store.test.ts`
 Expected: FAIL — `Failed to resolve import ".../fact-coverage-store.js"`
 
-- [ ] **Step 3: 구현한다**
+- [x] **Step 3: 구현한다**
 
 `src/server/modules/facts/application/fact-coverage-store.ts`:
 
@@ -596,12 +684,12 @@ function parseYears(json: string): readonly number[] {
 }
 ```
 
-- [ ] **Step 4: 테스트가 통과하는 것을 확인한다**
+- [x] **Step 4: 테스트가 통과하는 것을 확인한다**
 
 Run: `pnpm vitest run tests/unit/fact-coverage-store.test.ts`
 Expected: PASS (6 tests)
 
-- [ ] **Step 5: 커밋**
+- [x] **Step 5: 커밋**
 
 ```bash
 git add src/server/modules/facts/application/fact-coverage-store.ts tests/unit/fact-coverage-store.test.ts
@@ -638,7 +726,7 @@ git commit -m "feat(facts): 종목별 재무 수집 이력 저장소
 
 #### 어댑터 — 포트를 연도 목록으로
 
-- [ ] **Step 1: 실패하는 테스트를 쓴다**
+- [x] **Step 1: 실패하는 테스트를 쓴다**
 
 `tests/unit/dart-fact-source.test.ts` 에 추가 (기존 헬퍼를 재사용한다 — 파일 상단의 fake fetch 관례를 그대로 따른다):
 
@@ -725,12 +813,12 @@ function jsonResponse(body: unknown): Response {
 }
 ```
 
-- [ ] **Step 2: 테스트가 실패하는 것을 확인한다**
+- [x] **Step 2: 테스트가 실패하는 것을 확인한다**
 
 Run: `pnpm vitest run tests/unit/dart-fact-source.test.ts`
 Expected: FAIL — `years` 가 `FetchFinancialsRequest` 에 없다는 타입 오류, 또는 호출 연도가 기대와 다르다.
 
-- [ ] **Step 3: 포트를 바꾼다**
+- [x] **Step 3: 포트를 바꾼다**
 
 `src/server/modules/facts/application/ports.ts` — `FetchFinancialsRequest` 를 교체:
 
@@ -743,8 +831,13 @@ export interface FetchFinancialsRequest {
    */
   readonly years: readonly number[];
   /**
-   * 주식총수를 읽을 연도. `years` + 직전 1년이다 — 자본변동 비율은 이벤트 직전
-   * 발행주식수를 앵커로 쓰므로, 대상 연도만 읽으면 연초 이벤트가 gap 이 된다.
+   * 주식총수를 읽을 연도. `years` 의 **각 연도마다** 그 직전 1년을 더한 집합이다
+   * (오름차순, 중복 제거).
+   *
+   * 자본변동 비율은 이벤트 직전 발행주식수를 분모(앵커)로 쓴다. 대상 연도만 읽으면
+   * 연초 이벤트의 앵커가 없어 gap 이 되고, 가장 이른 연도 앞에만 앵커를 두면 더 나쁘다 —
+   * `years` 가 불연속일 때(증분 수집의 정상 상태다) 구멍 건너편의 낡은 공시가 분모로
+   * 잡혀 **gap 없이 조용히 틀린 비율**이 나온다. 그래서 구간마다 앵커가 필요하다.
    */
   readonly shareYears: readonly number[];
   /** true = 연결(CFS), false = 별도(OFS). 데이터셋 하나는 한 기준만 담는다 */
@@ -752,7 +845,7 @@ export interface FetchFinancialsRequest {
 }
 ```
 
-- [ ] **Step 4: 어댑터를 맞춘다**
+- [x] **Step 4: 어댑터를 맞춘다**
 
 `src/server/modules/facts/infrastructure/dart/dart-fact-source.ts`:
 
@@ -818,7 +911,7 @@ import { DART_MIN_INTERVAL_MS } from '../../domain/sync-plan.js';
       }
 ```
 
-- [ ] **Step 5: 어댑터 테스트가 통과하는 것을 확인한다**
+- [x] **Step 5: 어댑터 테스트가 통과하는 것을 확인한다**
 
 Run: `pnpm vitest run tests/unit/dart-fact-source.test.ts`
 Expected: PASS
@@ -829,7 +922,7 @@ Expected: PASS
 
 #### 서비스 — 증분 모드와 취소
 
-- [ ] **Step 6: 실패하는 테스트를 쓴다**
+- [x] **Step 6: 실패하는 테스트를 쓴다**
 
 `tests/unit/fact-sync-service.test.ts` 에 추가. 기존 `fakeSource`/`fakeVersions` 헬퍼를 그대로 쓰고, 새로 필요한 가짜 저장소를 더한다:
 
@@ -1057,12 +1150,12 @@ function inMemoryRepository(): FactRepository {
 
 기존 테스트의 `sync({...})` 호출부에는 `mode: 'FULL'` 을 더하고, `new FactSyncService(...)` 호출부에는 여섯 번째 인자로 `fakeCoverage()` 를 더한다.
 
-- [ ] **Step 7: 테스트가 실패하는 것을 확인한다**
+- [x] **Step 7: 테스트가 실패하는 것을 확인한다**
 
 Run: `pnpm vitest run tests/unit/fact-sync-service.test.ts`
 Expected: FAIL — `FactSyncService` 생성자가 5개 인자만 받고 `mode`·`stopReason` 이 없다.
 
-- [ ] **Step 8: 서비스를 바꾼다**
+- [x] **Step 8: 서비스를 바꾼다**
 
 `src/server/modules/facts/application/fact-sync-service.ts`:
 
@@ -1266,10 +1359,10 @@ export interface FactSyncReport {
 
 두 곳을 고치는 것이다: **"일 한도 20,000" → 40,000**, 그리고 **"한도는 이미 소진된
 상태로" 를 삭제** — 한도가 4만이면 21,600 호출은 한도를 소진하지 않으므로 그 결론 자체가
-성립하지 않는다. 호출 수도 앵커 4회를 포함해 22,400 으로 맞춘다(Task 1 의 표와 일치).
+성립하지 않는다. 호출 수도 앵커 4회를 포함해 22,400 으로 맞춘다(스펙 §4 의 규모 표와 일치).
 같은 정정이 `dart-fact-source.ts` 에는 이미 커밋 `366e28a` 로 적용돼 있다.
 
-- [ ] **Step 9: CLI 를 맞춘다**
+- [x] **Step 9: CLI 를 맞춘다**
 
 `src/server/cli.ts` — `factsSync` 안의 `sync` 호출에 `mode` 를 더한다:
 
@@ -1281,7 +1374,7 @@ export interface FactSyncReport {
       {
 ```
 
-- [ ] **Step 10: 컨테이너를 최소한만 맞춘다**
+- [x] **Step 10: 컨테이너를 최소한만 맞춘다**
 
 `FactSyncService` 생성자에 인자가 하나 늘었으므로 컨테이너가 컴파일되지 않는다. 여기서는
 **그 한 줄만** 고친다 — `factsPhase`·`factsSyncEstimator` 조립은 Task 7 의 일이다.
@@ -1309,7 +1402,7 @@ import { SqliteFactCoverageStore } from '../modules/facts/application/fact-cover
 `factCoverageStore` 는 Task 7 의 추정기도 쓰므로 지역 상수로 남겨 둔다. `Container`
 인터페이스에 노출할 필요는 없다.
 
-- [ ] **Step 11: 전체 검증 — 여기서 처음으로 초록이 된다**
+- [x] **Step 11: 전체 검증 — 여기서 처음으로 초록이 된다**
 
 Run: `pnpm typecheck && pnpm lint && pnpm test`
 Expected: 전부 PASS. 이 태스크의 커밋이 컴파일되는 첫 지점이다 — typecheck 가 실패하면
@@ -1321,7 +1414,7 @@ Step 3·4·8·10 중 빠뜨린 곳이 있다.
 - `tests/unit/fact-coverage-store.test.ts` (Task 3)
 - `tests/unit/sync-plan.test.ts` (Task 1)
 
-- [ ] **Step 12: 커밋 (이 태스크의 유일한 커밋)**
+- [x] **Step 12: 커밋 (이 태스크의 유일한 커밋)**
 
 ```bash
 git add src/server/modules/facts/application/ports.ts src/server/modules/facts/infrastructure/dart/dart-fact-source.ts src/server/modules/facts/application/fact-sync-service.ts src/server/cli.ts src/server/bootstrap/container.ts tests/unit/dart-fact-source.test.ts tests/unit/fact-sync-service.test.ts
@@ -1349,7 +1442,7 @@ rate limiter 간격은 domain/sync-plan.ts 의 상수를 쓴다."
 - Consumes: `getSessionForMarket` (`market-data/domain/exchange-session.ts`), `Market` (`market-data/domain/candle.ts`)
 - Produces: `deriveFactYearRange(coverage, market) => { fromYear: number; toYear: number } | null`
 
-- [ ] **Step 1: 실패하는 테스트를 쓴다**
+- [x] **Step 1: 실패하는 테스트를 쓴다**
 
 `tests/unit/fact-year-range.test.ts`:
 
@@ -1424,12 +1517,12 @@ describe('deriveFactYearRange', () => {
 });
 ```
 
-- [ ] **Step 2: 테스트가 실패하는 것을 확인한다**
+- [x] **Step 2: 테스트가 실패하는 것을 확인한다**
 
 Run: `pnpm vitest run tests/unit/fact-year-range.test.ts`
 Expected: FAIL — `Failed to resolve import ".../fact-year-range.js"`
 
-- [ ] **Step 3: 구현한다**
+- [x] **Step 3: 구현한다**
 
 `src/server/modules/market-data/domain/fact-year-range.ts`:
 
@@ -1487,12 +1580,12 @@ function localYear(tsMs: number, offsetMs: number): number {
 }
 ```
 
-- [ ] **Step 4: 테스트가 통과하는 것을 확인한다**
+- [x] **Step 4: 테스트가 통과하는 것을 확인한다**
 
 Run: `pnpm vitest run tests/unit/fact-year-range.test.ts`
 Expected: PASS (5 tests)
 
-- [ ] **Step 5: 커밋**
+- [x] **Step 5: 커밋**
 
 ```bash
 git add src/server/modules/market-data/domain/fact-year-range.ts tests/unit/fact-year-range.test.ts
@@ -1514,7 +1607,7 @@ git commit -m "feat(market-data): 봉 커버리지에서 재무 수집 연도 �
 - Consumes: `deriveFactYearRange` (Task 5), `dataImportJobs.phase|candlesMs|factsJson` (Task 2)
 - Produces: `BrokerSyncDeps.factsPhase`, `interface FactPhaseProgress`, `interface FactPhaseResult`, `interface FactsJobState`, `BrokerSyncService.startSync(datasetId, options?: { includeFacts?: boolean })`
 
-- [ ] **Step 1: 실패하는 테스트를 쓴다**
+- [x] **Step 1: 실패하는 테스트를 쓴다**
 
 `tests/unit/broker-sync-service.test.ts` 에 추가. 기존 `FakeSource`·`InMemoryCandleRepository`·DB 셋업 헬퍼를 그대로 쓴다:
 
@@ -1678,12 +1771,12 @@ function buildHarness(source: MarketDataSource, options: { minFreeDiskBytes?: nu
 
 `harness.sync.startSync(datasetId, { includeFacts: true })` 를 직접 부르고, 잡 행은 `harness.db.select().from(dataImportJobs).where(eq(dataImportJobs.id, job.id)).get()` 로 읽는다.
 
-- [ ] **Step 2: 테스트가 실패하는 것을 확인한다**
+- [x] **Step 2: 테스트가 실패하는 것을 확인한다**
 
 Run: `pnpm vitest run tests/unit/broker-sync-service.test.ts`
 Expected: FAIL — `startSync` 가 두 번째 인자를 받지 않고 `factsPhase` 가 deps 에 없다.
 
-- [ ] **Step 3: 타입과 deps 를 더한다**
+- [x] **Step 3: 타입과 deps 를 더한다**
 
 `src/server/modules/market-data/application/broker-sync-service.ts` 상단에 추가:
 
@@ -1694,11 +1787,24 @@ import { deriveFactYearRange } from '../domain/fact-year-range.js';
 `BrokerSyncDeps` 위에 타입을 정의한다:
 
 ```ts
-/** 재무 단계 진행 — 45분짜리 단계가 조용하지 않게 한다 */
+/**
+ * 재무 단계 진행 — 45분짜리 단계가 조용하지 않게 한다.
+ *
+ * 네 값 모두 **지금까지의 누적**이다. 이 단계는 진행을 그대로 factsJson 에 덮어쓰고
+ * (더하지 않고) 화면은 그 값을 폴링하므로, 종목 단위 값을 넘기면 카운터가 종목마다
+ * 12 → 0 → 8 → 0 으로 튀다 마지막에만 총계로 맞는다. 주입부가 감싸는
+ * facts 모듈의 FactSyncProgress 는 savedFacts·gapCount 가 **종목 단위**라
+ * (`이 종목에서 저장된 팩트 수`) 필드를 1:1 로 옮기면 정확히 그 증상이 난다 —
+ * 둘 다 number 라서 타입으로는 잡히지 않는다. 주입부가 누적해서 넘겨야 한다.
+ * (Task 7 Step 6 의 `factsPhase` 클로저가 그렇게 쓰여 있다.)
+ */
 export interface FactPhaseProgress {
+  /** 완료된 종목 수 (누적) */
   readonly symbolsDone: number;
   readonly symbolTotal: number;
+  /** 이 단계에서 지금까지 저장된 팩트 수 (누적) */
   readonly savedFacts: number;
+  /** 이 단계에서 지금까지 발견된 누락 수 (누적) */
   readonly gapCount: number;
 }
 
@@ -1740,7 +1846,7 @@ export interface FactsJobState {
   }) => Promise<FactPhaseResult>;
 ```
 
-- [ ] **Step 4: `startSync` 와 `run` 을 바꾼다**
+- [x] **Step 4: `startSync` 와 `run` 을 바꾼다**
 
 `startSync` 시그니처와 `run` 호출:
 
@@ -1795,31 +1901,54 @@ export interface FactsJobState {
         );
       }
 
-      const factsState = includeFacts ? await this.runFactsPhase(dataset, jobId) : null;
-
-      // 재무 단계가 중단됐으면 잡도 그 상태를 따른다 — 봉 결과(rowsImported)는 남는다.
-      // 건너뛴 경우(skipReason)는 중단이 아니다 — 봉은 성공했고 재무는 시작조차 안 했다.
-      const factsStopped = factsState !== null && factsState.failureMessage !== null;
+      const facts = includeFacts ? await this.runFactsPhase(dataset, jobId) : null;
+      /**
+       * 재무 단계가 **실제로 돌다가 멈춘** 경우에만 잡 상태를 따라간다. 건너뛴 경우
+       * (skipReason: DART 미설정·봉 없음)는 중단이 아니다 — 봉은 성공했고 재무는
+       * 시작조차 하지 않았으므로 COMPLETED 다. 재무를 요청하지 않은 잡(facts=null)도
+       * 당연히 그대로다. 그래서 판단 기준이 stopReason 이다 — 단계가 돌았고 멈췄을
+       * 때만 값이 채워진다. (`failureMessage !== null` 로 판정하면 취소와 실패를
+       * 가를 수 없고, `cancelRequested` 를 다시 읽으면 신호가 두 곳이 된다.)
+       */
+      const factsStop = facts?.stopReason ?? null;
       this.deps.db
         .update(dataImportJobs)
         .set({
-          status: factsStopped ? (this.cancelRequested.has(jobId) ? 'CANCELLED' : 'FAILED') : 'COMPLETED',
+          status:
+            factsStop === 'CANCELLED' ? 'CANCELLED' : factsStop === 'ERROR' ? 'FAILED' : 'COMPLETED',
+          // 재무가 멈춰도 봉 결과는 그대로 남는다 — 봉은 이미 저장까지 끝났다
           rowsImported: totalRows,
           candlesMs,
           phase: null,
-          ...(factsState ? { factsJson: JSON.stringify(factsState) } : {}),
-          ...(factsStopped ? { error: factsState?.failureMessage } : {}),
+          factsJson: facts === null ? null : JSON.stringify(facts.state),
+          error: facts?.state.failureMessage ?? null,
           completedAtMs: this.deps.clock.now(),
         })
         .where(eq(dataImportJobs.id, jobId))
         .run();
-      this.deps.audit.record('system', 'data.sync.completed', {
-        datasetId: dataset.id,
-        rows: totalRows,
-        facts: factsState?.savedFacts ?? 0,
-      });
+      if (factsStop === 'CANCELLED') {
+        this.deps.audit.record('system', 'data.sync.cancelled', { datasetId: dataset.id });
+      } else if (factsStop === 'ERROR') {
+        // 봉 실패와 같은 자리에 남긴다 — 감사 로그에는 완료로 적지 않는다
+        this.deps.logger.error(
+          {
+            module: 'market-data',
+            event: 'data.sync.facts-failed',
+            datasetId: dataset.id,
+            reason: facts?.state.failureMessage,
+          },
+          'broker sync facts phase failed',
+        );
+      } else {
+        this.deps.audit.record('system', 'data.sync.completed', {
+          datasetId: dataset.id,
+          rows: totalRows,
+          facts: facts?.state.savedFacts ?? 0,
+        });
+      }
     } catch (error) {
       const cancelled = error instanceof SyncCancelledError;
+      // 실패·취소 잡의 phase 는 지우지 않는다 — 어느 단계에서 죽었는지가 정보다
       this.deps.db
         .update(dataImportJobs)
         .set({
@@ -1849,7 +1978,7 @@ export interface FactsJobState {
   private async runFactsPhase(
     dataset: DatasetSummary,
     jobId: string,
-  ): Promise<FactsJobState> {
+  ): Promise<{ state: FactsJobState; stopReason: 'ERROR' | 'CANCELLED' | null }> {
     const state: FactsJobState = {
       fromYear: null,
       toYear: null,
@@ -1863,7 +1992,7 @@ export interface FactsJobState {
 
     if (!this.deps.factsPhase) {
       state.skipReason = 'DART_API_KEY 가 설정되지 않아 재무를 수집하지 않았습니다.';
-      return state;
+      return { state, stopReason: null };
     }
 
     const coverage = this.deps.datasetService.getCoverage(dataset.id);
@@ -1871,7 +2000,7 @@ export interface FactsJobState {
     if (range === null) {
       state.skipReason =
         '봉이 수집되지 않아 재무 연도 범위를 정할 수 없습니다 — 봉을 먼저 수집하세요.';
-      return state;
+      return { state, stopReason: null };
     }
     state.fromYear = range.fromYear;
     state.toYear = range.toYear;
@@ -1882,40 +2011,61 @@ export interface FactsJobState {
       .where(eq(dataImportJobs.id, jobId))
       .run();
 
-    const result = await this.deps.factsPhase({
-      datasetId: dataset.id,
-      fromYear: range.fromYear,
-      toYear: range.toYear,
-      onProgress: (progress) => {
-        state.symbolsDone = progress.symbolsDone;
-        state.symbolTotal = progress.symbolTotal;
-        state.savedFacts = progress.savedFacts;
-        state.gapCount = progress.gapCount;
-        // 조용한 45분은 멈춘 것과 구분되지 않는다 — 종목마다 잡을 갱신한다
-        this.deps.db
-          .update(dataImportJobs)
-          .set({ factsJson: JSON.stringify(state) })
-          .where(eq(dataImportJobs.id, jobId))
-          .run();
-      },
-      shouldStop: () => this.cancelRequested.has(jobId),
-    });
+    let result: FactPhaseResult;
+    try {
+      result = await this.deps.factsPhase({
+        datasetId: dataset.id,
+        fromYear: range.fromYear,
+        toYear: range.toYear,
+        onProgress: (progress) => {
+          state.symbolsDone = progress.symbolsDone;
+          state.symbolTotal = progress.symbolTotal;
+          state.savedFacts = progress.savedFacts;
+          state.gapCount = progress.gapCount;
+          // 조용한 45분은 멈춘 것과 구분되지 않는다 — 종목마다 잡을 갱신한다
+          this.deps.db
+            .update(dataImportJobs)
+            .set({ factsJson: JSON.stringify(state) })
+            .where(eq(dataImportJobs.id, jobId))
+            .run();
+        },
+        shouldStop: () => this.cancelRequested.has(jobId),
+      });
+    } catch (error) {
+      // 주입된 함수가 계약을 깨고 예외로 실패하는 경우까지 여기서 흡수한다 — 위로
+      // 올리면 catch 절이 봉 결과를 덮는다. 직전 onProgress 까지의 진행은 남는다.
+      state.failureMessage = error instanceof Error ? error.message : String(error);
+      return { state, stopReason: 'ERROR' };
+    }
 
     state.savedFacts = result.savedFacts;
     state.gapCount = result.gapCount;
     state.failureMessage = result.failureMessage;
-    return state;
+    // 중단 여부는 stopReason 이 정한다 (FactSyncService 와 같은 신호) — 호출부가
+    // 이것만 보고 FAILED/CANCELLED 를 가른다
+    return { state, stopReason: result.stopReason };
   }
 ```
 
 `cancelSync` 는 손대지 않는다 — `shouldStop` 이 같은 `cancelRequested` 집합을 읽으므로 봉·재무 두 단계에 그대로 전달된다.
 
-- [ ] **Step 5: 테스트가 통과하는 것을 확인한다**
+- [x] **Step 5: 테스트가 통과하는 것을 확인한다**
 
 Run: `pnpm vitest run tests/unit/broker-sync-service.test.ts`
-Expected: PASS (기존 + 새 6개)
+Expected: PASS (기존 + 새 9개)
 
-- [ ] **Step 6: 커밋**
+Step 1 에 적은 6개 외에 세 개를 더 덮는다 — 위 구현이 그 세 가지 때문에 계획 초안보다
+복잡해진 것이므로 함께 고정한다:
+
+- `onProgress` 마다 진행이 **저장된 행에** 남는지 (넘긴 인자가 아니라 `factsJson` 을 다시
+  읽는다 — 폴링하는 화면이 보는 것이 그것이다). `symbolTotal` 을 데이터셋 종목 수와 다른
+  값으로 주어 초기 상태가 아니라 `onProgress` 가 쓴 값이 남는 것까지 확인한다.
+- 한 번의 `cancelSync` 가 두 단계에 전달되는지 (`shouldStop()` 이 취소 전 `false`,
+  후 `true`).
+- `factsPhase` 가 **예외를 던져도** 봉 결과를 덮지 않고 재무 실패로 기록되는지 —
+  `runFactsPhase` 의 try/catch 가 이것 때문에 있다.
+
+- [x] **Step 6: 커밋**
 
 ```bash
 git add src/server/modules/market-data/application/broker-sync-service.ts tests/unit/broker-sync-service.test.ts
@@ -1942,7 +2092,21 @@ factsPhase 는 컨테이너가 주입하므로 market-data 는 facts 를 import 
 - Consumes: `planFactSync` (Task 1), `SqliteFactCoverageStore` (Task 3), `FactSyncService` (Task 4), `deriveFactYearRange` (Task 5), `FactsJobState`·`FactPhaseResult` (Task 6)
 - Produces: `type FactsSyncEstimate`, `interface SyncEstimate`, `DatasetService.getCandleSyncEstimate(datasetId, symbols) => SyncEstimate['candles']`, `registerDatasetRoutes(..., factsSyncEstimator, requireAuth)`
 
-- [ ] **Step 1: 실패하는 테스트를 쓴다**
+**실제 구현과 다른 점 (2026-07-30 리뷰).** 이 태스크는 커밋됐지만 아래 두 가지는 계획서
+스니펫과 다르게 갔거나 아직 안 닫혔다:
+
+- **조립은 인라인 클로저가 아니라 팩토리로 뽑혔다.** Step 6 의 스니펫은 `container.ts`
+  안에 클로저를 직접 쓰지만, 커밋된 코드는 `createFactsPhase({ datasetService, factSyncService })`
+  와 `createFactsSyncEstimator({ dartApiKey, datasetService, factCoverageStore, clock })` 를
+  부른다 — 단위 테스트가 붙는다(`63f9a9a`). 스니펫은 의도의 기록으로 남기고, 실제 모양은
+  코드를 볼 것.
+- **`runFactsPhase` 의 `market !== 'KR'` 가드는 아직 없다.** `deriveFactYearRange` 가
+  `getSessionForMarket` 을 부르므로 세션 미정의 시장에서 던지고, 그 호출은 `factsPhase` 를
+  감싼 try **밖**이라 예외가 `run` 의 catch 로 올라가 봉 결과까지 실패로 덮는다 — 재무
+  단계가 throw 하지 않게 만든 이유가 무너진다. Step 5 의 라우트 선검증과 `factsSyncEstimator`
+  가 정상 경로를 막아 지금은 도달하지 않는다. 머리의 "남은 후속 작업" 2번. 스펙 §2 참고.
+
+- [x] **Step 1: 실패하는 테스트를 쓴다**
 
 `tests/unit/candle-sync-estimate.test.ts`:
 
@@ -2070,6 +2234,11 @@ describe('getCandleSyncEstimate', () => {
 });
 ```
 
+> **후속 (2026-07-30 리뷰):** 이 `status = 'COMPLETED'` 필터와 위 마지막 테스트는 재무
+> 단계에서 멈춘 잡의 **유효한 봉 실측치까지 버린다.** 스펙 §6 은 그 조건을 걷도록 정정했고
+> 코드는 아직 따르지 않는다 — 머리의 "남은 후속 작업" 1번이다. `candles_ms IS NOT NULL`
+> 이 이미 봉 단계 완주를 함의하므로 조건을 빼는 것으로 닫힌다.
+
 `makeDatasetService(database)` 는 `broker-sync-service.test.ts:126` 과 같은 인자로 만든다:
 
 ```ts
@@ -2086,12 +2255,12 @@ function makeDatasetService(database: ReturnType<typeof setup>) {
 의 관례를 그대로 옮긴다. `getCandleSyncEstimate` 는 캔들 저장소를 건드리지 않으므로 repo 는
 최소 스텁으로 충분하다.
 
-- [ ] **Step 2: 테스트가 실패하는 것을 확인한다**
+- [x] **Step 2: 테스트가 실패하는 것을 확인한다**
 
 Run: `pnpm vitest run tests/unit/candle-sync-estimate.test.ts`
 Expected: FAIL — `getCandleSyncEstimate` 가 없다.
 
-- [ ] **Step 3: `DatasetService` 에 추정 타입과 메서드를 더한다**
+- [x] **Step 3: `DatasetService` 에 추정 타입과 메서드를 더한다**
 
 `src/server/modules/market-data/application/dataset-service.ts` 에 타입과 메서드를 추가한다:
 
@@ -2168,12 +2337,12 @@ export interface SyncEstimate {
 
 import 에 `brokerSyncState`, `dataImportJobs` 와 drizzle 연산자 `and`·`gt`·`isNotNull`·`desc` 가 들어 있는지 확인하고 없으면 더한다.
 
-- [ ] **Step 4: 테스트가 통과하는 것을 확인한다**
+- [x] **Step 4: 테스트가 통과하는 것을 확인한다**
 
 Run: `pnpm vitest run tests/unit/candle-sync-estimate.test.ts`
-Expected: PASS (5 tests)
+Expected: PASS (6 tests)
 
-- [ ] **Step 5: 라우트를 바꾼다**
+- [x] **Step 5: 라우트를 바꾼다**
 
 `src/server/modules/market-data/presentation/dataset-routes.ts`:
 
@@ -2252,7 +2421,7 @@ import type { DatasetService, FactsSyncEstimate, SyncEstimate } from '../applica
   });
 ```
 
-- [ ] **Step 6: 컨테이너를 조립한다**
+- [x] **Step 6: 컨테이너를 조립한다**
 
 `src/server/bootstrap/container.ts`:
 
@@ -2373,7 +2542,7 @@ import type { FactsSyncEstimate } from '../modules/market-data/application/datas
   readonly factsSyncEstimator: (datasetId: string) => FactsSyncEstimate;
 ```
 
-- [ ] **Step 7: 서버 조립에 전달한다**
+- [x] **Step 7: 서버 조립에 전달한다**
 
 `src/server/bootstrap/server.ts`:
 
@@ -2389,7 +2558,7 @@ import type { FactsSyncEstimate } from '../modules/market-data/application/datas
       );
 ```
 
-- [ ] **Step 8: 경계 규칙을 더한다**
+- [x] **Step 8: 경계 규칙을 더한다**
 
 `.dependency-cruiser.cjs` — `market-data-no-broker` 규칙 바로 뒤에 추가:
 
@@ -2404,12 +2573,12 @@ import type { FactsSyncEstimate } from '../modules/market-data/application/datas
     },
 ```
 
-- [ ] **Step 9: 전체 검증**
+- [x] **Step 9: 전체 검증**
 
 Run: `pnpm typecheck && pnpm lint && pnpm test`
 Expected: 전부 PASS. `tests/architecture/module-boundaries.test.ts` 가 새 규칙 위반이 없음을 확인한다 — 위반이 나오면 `market-data` 안에 facts import 가 남아 있다는 뜻이므로 해당 import 를 조립부 클로저로 옮긴다.
 
-- [ ] **Step 10: 커밋**
+- [x] **Step 10: 커밋**
 
 ```bash
 git add src/server/modules/market-data/application/dataset-service.ts src/server/modules/market-data/presentation/dataset-routes.ts src/server/bootstrap/container.ts src/server/bootstrap/server.ts .dependency-cruiser.cjs tests/unit/candle-sync-estimate.test.ts
@@ -2432,7 +2601,7 @@ market-data-no-facts 경계 규칙으로 모듈 방향을 강제한다."
 - Consumes: `radix-ui` 통합 패키지, `@/lib/utils` 의 `cn`
 - Produces: `Checkbox` (props = `React.ComponentProps<typeof CheckboxPrimitive.Root>`)
 
-- [ ] **Step 1: 컴포넌트를 만든다**
+- [x] **Step 1: 컴포넌트를 만든다**
 
 기존 프리미티브(`tooltip.tsx`)와 같은 관례를 따른다: `radix-ui` 통합 패키지에서 named import, `data-slot` 속성, `cn` 병합.
 
@@ -2471,12 +2640,12 @@ function Checkbox({
 export { Checkbox }
 ```
 
-- [ ] **Step 2: 빌드가 되는 것을 확인한다**
+- [x] **Step 2: 빌드가 되는 것을 확인한다**
 
 Run: `pnpm typecheck && pnpm build:web`
 Expected: PASS. `radix-ui` 에 `Checkbox` export 가 없다는 오류가 나면 설치된 버전을 확인한다: `node -e "console.log(Object.keys(require('radix-ui')))"` — 없으면 `pnpm add @radix-ui/react-checkbox` 후 import 를 `import * as CheckboxPrimitive from "@radix-ui/react-checkbox"` 로 바꾼다.
 
-- [ ] **Step 3: 커밋**
+- [x] **Step 3: 커밋**
 
 ```bash
 git add src/web/components/ui/checkbox.tsx package.json pnpm-lock.yaml
@@ -2494,7 +2663,7 @@ git commit -m "feat(web): Checkbox 프리미티브 추가"
 - Consumes: `Checkbox` (Task 8), `SyncEstimate` 응답 (Task 7), `Tooltip*` (`@/components/ui/tooltip`)
 - Produces: 없음 (UI 말단)
 
-- [ ] **Step 1: 응답 타입과 포맷 헬퍼를 더한다**
+- [x] **Step 1: 응답 타입과 포맷 헬퍼를 더한다**
 
 `src/web/features/datasets/datasets-page.tsx` 상단의 타입 선언 근처에 추가:
 
@@ -2543,7 +2712,7 @@ function formatYearRange(fromYear: number, toYear: number): string {
 }
 ```
 
-- [ ] **Step 2: `DataJob` 타입과 coverage 쿼리를 넓힌다**
+- [x] **Step 2: `DataJob` 타입과 coverage 쿼리를 넓힌다**
 
 `DataJob` 인터페이스(파일 상단, `rowsImported`·`error` 가 있는 것)에 필드를 더한다:
 
@@ -2565,7 +2734,7 @@ function formatYearRange(fromYear: number, toYear: number): string {
   });
 ```
 
-- [ ] **Step 3: 체크박스 상태와 mutation 을 바꾼다**
+- [x] **Step 3: 체크박스 상태와 mutation 을 바꾼다**
 
 `DatasetCard` 안의 상태 선언에 추가:
 
@@ -2589,7 +2758,7 @@ function formatYearRange(fromYear: number, toYear: number): string {
   });
 ```
 
-- [ ] **Step 4: 완료 토스트에 재무 결과를 싣는다**
+- [x] **Step 4: 완료 토스트에 재무 결과를 싣는다**
 
 `useEffect` 안의 완료 분기를 바꾼다:
 
@@ -2622,7 +2791,7 @@ function formatYearRange(fromYear: number, toYear: number): string {
   }, [syncJob.data, syncJobId, dataset.name, dataset.id, queryClient]);
 ```
 
-- [ ] **Step 5: 체크박스·툴팁을 헤더에 넣는다**
+- [x] **Step 5: 체크박스·툴팁을 헤더에 넣는다**
 
 import 를 더한다:
 
@@ -2682,7 +2851,7 @@ import { Info } from 'lucide-react';
   const factsEstimate = syncEstimate?.facts;
 ```
 
-- [ ] **Step 6: 예상 시간 줄과 진행 표시를 넣는다**
+- [x] **Step 6: 예상 시간 줄과 진행 표시를 넣는다**
 
 `<CardContent className="space-y-3 text-sm">` 의 맨 앞(종목 목록 map 앞)에 넣는다:
 
@@ -2718,7 +2887,7 @@ import { Info } from 'lucide-react';
 
 `cn` 이 import 되어 있지 않으면 `import { cn } from '@/lib/utils';` 를 더한다.
 
-- [ ] **Step 7: 확인한다**
+- [x] **Step 7: 확인한다**
 
 Run: `pnpm typecheck && pnpm lint && pnpm build:web`
 Expected: PASS
@@ -2729,7 +2898,7 @@ Expected: PASS
 관례대로 hover 로는 열리지 않아야 한다(모바일에 hover 가 없다),
 (3) DART 키가 없는 환경(`.env` 에서 `DART_API_KEY` 제거)에서 체크박스가 disabled 되고 툴팁에 이유가 뜨는지.
 
-- [ ] **Step 8: 커밋**
+- [x] **Step 8: 커밋**
 
 ```bash
 git add src/web/features/datasets/datasets-page.tsx
@@ -2752,7 +2921,7 @@ git commit -m "feat(web): 동기화에 재무 체크박스와 예상 소요시�
 - Consumes: 없음
 - Produces: `SYMBOL_SUMMARY_LIMIT`, `formatSymbolLabel(symbol, name) => string`, `formatSymbolSummary(symbols, nameOf, limit?) => string`
 
-- [ ] **Step 1: 실패하는 테스트를 쓴다**
+- [x] **Step 1: 실패하는 테스트를 쓴다**
 
 `tests/unit/symbol-summary.test.ts`:
 
@@ -2833,12 +3002,12 @@ describe('formatSymbolSummary', () => {
 });
 ```
 
-- [ ] **Step 2: 테스트가 실패하는 것을 확인한다**
+- [x] **Step 2: 테스트가 실패하는 것을 확인한다**
 
 Run: `pnpm vitest run tests/unit/symbol-summary.test.ts`
 Expected: FAIL — `Failed to resolve import ".../symbol-summary.js"`
 
-- [ ] **Step 3: 구현한다**
+- [x] **Step 3: 구현한다**
 
 `src/web/features/backtests/symbol-summary.ts`:
 
@@ -2881,12 +3050,12 @@ export function formatSymbolSummary(
 }
 ```
 
-- [ ] **Step 4: 테스트가 통과하는 것을 확인한다**
+- [x] **Step 4: 테스트가 통과하는 것을 확인한다**
 
 Run: `pnpm vitest run tests/unit/symbol-summary.test.ts`
 Expected: PASS (12 tests)
 
-- [ ] **Step 5: 커밋**
+- [x] **Step 5: 커밋**
 
 ```bash
 git add src/web/features/backtests/symbol-summary.ts tests/unit/symbol-summary.test.ts
@@ -2909,7 +3078,7 @@ Description 은 앞 5개만 나열한다."
 - Consumes: `formatSymbolLabel` (Task 10), `api` (`@/lib/api-client`)
 - Produces: `interface StockInfo`, `useStockNames(symbols) => ReadonlyMap<string, StockInfo>`, `SymbolLabel({ symbol, name, className })`
 
-- [ ] **Step 1: 훅을 옮긴다**
+- [x] **Step 1: 훅을 옮긴다**
 
 `src/web/lib/use-stock-names.ts` 를 만든다 — `datasets-page.tsx:64-86` 의 내용을 그대로 옮긴다:
 
@@ -2941,7 +3110,7 @@ export function useStockNames(symbols: readonly string[]): ReadonlyMap<string, S
 }
 ```
 
-- [ ] **Step 2: `datasets-page.tsx` 를 import 로 바꾼다**
+- [x] **Step 2: `datasets-page.tsx` 를 import 로 바꾼다**
 
 `interface StockInfo {...}` 와 `function useStockNames(...) {...}` 두 블록을 지우고 import 를 더한다:
 
@@ -2951,7 +3120,7 @@ import { useStockNames, type StockInfo } from '@/lib/use-stock-names';
 
 `useSymbolPreview` 는 그대로 둔다 — 데이터셋 입력 확인 전용이라 옮길 이유가 없다. 이 함수가 `StockInfo` 를 참조하므로 위 import 의 타입이 그것을 만족한다.
 
-- [ ] **Step 3: `SymbolLabel` 을 만든다**
+- [x] **Step 3: `SymbolLabel` 을 만든다**
 
 `src/web/components/symbol-label.tsx`:
 
@@ -2992,12 +3161,12 @@ export function SymbolLabel({
 }
 ```
 
-- [ ] **Step 4: 확인한다**
+- [x] **Step 4: 확인한다**
 
 Run: `pnpm typecheck && pnpm lint && pnpm build:web && pnpm vitest run tests/unit/symbol-summary.test.ts`
 Expected: PASS
 
-- [ ] **Step 5: 커밋**
+- [x] **Step 5: 커밋**
 
 ```bash
 git add src/web/lib/use-stock-names.ts src/web/components/symbol-label.tsx src/web/features/datasets/datasets-page.tsx
@@ -3020,7 +3189,7 @@ git commit -m "refactor(web): 종목명 훅을 공유 위치로 올리고 Symbol
 - Consumes: `useStockNames`·`StockInfo` (Task 11), `SymbolLabel` (Task 11), `formatSymbolSummary`·`SYMBOL_SUMMARY_LIMIT` (Task 10)
 - Produces: 없음 (UI 말단)
 
-- [ ] **Step 1: 상세 페이지에 훅을 연결한다**
+- [x] **Step 1: 상세 페이지에 훅을 연결한다**
 
 `src/web/features/backtests/backtest-detail-page.tsx` — import 를 더한다:
 
@@ -3039,7 +3208,7 @@ import { formatSymbolSummary } from './symbol-summary';
   const nameOf = (symbol: string): string | null => stockNames.get(symbol)?.name ?? null;
 ```
 
-- [ ] **Step 2: Description 을 바꾼다**
+- [x] **Step 2: Description 을 바꾼다**
 
 `backtest-detail-page.tsx:465-468` 을 교체:
 
@@ -3050,7 +3219,7 @@ import { formatSymbolSummary } from './symbol-summary';
       </p>
 ```
 
-- [ ] **Step 3: 종목별 성과 표를 바꾼다**
+- [x] **Step 3: 종목별 성과 표를 바꾼다**
 
 `backtest-detail-page.tsx:539` 를 교체:
 
@@ -3060,7 +3229,7 @@ import { formatSymbolSummary } from './symbol-summary';
                             </TableCell>
 ```
 
-- [ ] **Step 4: `TradesSection` 에 이름을 넘긴다**
+- [x] **Step 4: `TradesSection` 에 이름을 넘긴다**
 
 `TradesSection` props 에 `nameOf` 를 더한다:
 
@@ -3092,7 +3261,7 @@ function TradesSection({
           />
 ```
 
-- [ ] **Step 5: 거래 내역의 세 자리를 바꾼다**
+- [x] **Step 5: 거래 내역의 세 자리를 바꾼다**
 
 종목 필터 (`:122-133`) — 트리거를 넓히고 항목에 이름을 넣는다. **`value` 는 코드를 유지한다** — 표시만 바뀌고 `?symbol=` 쿼리는 그대로다:
 
@@ -3126,7 +3295,7 @@ function TradesSection({
                     </TableCell>
 ```
 
-- [ ] **Step 6: 목록 페이지를 바꾼다**
+- [x] **Step 6: 목록 페이지를 바꾼다**
 
 `src/web/features/backtests/backtests-page.tsx` — import 를 더한다:
 
@@ -3191,7 +3360,7 @@ function JobCard({ job, nameOf }: { job: JobSummary; nameOf: (symbol: string) =>
           </div>
 ```
 
-- [ ] **Step 7: e2e 에 확인을 더한다**
+- [x] **Step 7: e2e 에 확인을 더한다**
 
 `tests/e2e/mvp-flow.spec.ts` 의 결과 화면 검증 구간(거래 필터를 다루는 부분)에 추가한다. 픽스처가 어떤 종목을 쓰는지 확인하고 그 코드를 쓴다:
 
@@ -3206,7 +3375,7 @@ function JobCard({ job, nameOf }: { job: JobSummary; nameOf: (symbol: string) =>
   await expect(page.getByRole('cell', { name: /005930/ }).first()).toBeVisible();
 ```
 
-- [ ] **Step 8: 확인한다**
+- [x] **Step 8: 확인한다**
 
 Run: `pnpm typecheck && pnpm lint && pnpm test`
 Expected: PASS
@@ -3216,7 +3385,7 @@ Expected: PASS. 실패하면 픽스처의 종목 코드가 다른 것이므로 e
 
 수동 확인: 백테스트 결과 화면에서 (1) 종목명이 주로 뜨고 코드가 괄호에 있는지, (2) 긴 이름에서 이름만 `…` 로 줄고 코드가 온전한지, (3) 종목 필터가 여전히 동작하는지.
 
-- [ ] **Step 9: 커밋**
+- [x] **Step 9: 커밋**
 
 ```bash
 git add src/web/features/backtests/backtest-detail-page.tsx src/web/features/backtests/backtests-page.tsx tests/e2e/mvp-flow.spec.ts
@@ -3242,7 +3411,7 @@ Description·거래 내역(종목 열·필터)·종목별 성과·목록 카드 
 - Consumes: `Market`, `ExchangeSession`, `KR_SESSION`, `UnsupportedMarketSessionError`
 - Produces: `ALL_MARKETS: readonly Market[]`, `hasMarketSession(market) => boolean`, `interface MarketSupport { market, datasetsSupported, factsSupported, reason }`, `listMarketSupport() => readonly MarketSupport[]`, `GET /markets`
 
-- [ ] **Step 1: 실패하는 테스트를 쓴다**
+- [x] **Step 1: 실패하는 테스트를 쓴다**
 
 `tests/unit/market-support.test.ts`:
 
@@ -3299,12 +3468,12 @@ describe('listMarketSupport', () => {
 });
 ```
 
-- [ ] **Step 2: 테스트가 실패하는 것을 확인한다**
+- [x] **Step 2: 테스트가 실패하는 것을 확인한다**
 
 Run: `pnpm vitest run tests/unit/market-support.test.ts`
 Expected: FAIL — `hasMarketSession` 과 `market-support.js` 가 없다.
 
-- [ ] **Step 3: `Market` 값 목록을 타입 옆에 둔다**
+- [x] **Step 3: `Market` 값 목록을 타입 옆에 둔다**
 
 `src/server/modules/market-data/domain/candle.ts` 1행 아래에 추가:
 
@@ -3314,7 +3483,7 @@ export type Market = 'KR' | 'US';
 export const ALL_MARKETS: readonly Market[] = ['KR', 'US'];
 ```
 
-- [ ] **Step 4: 세션 조회를 맵 기반으로 바꾼다**
+- [x] **Step 4: 세션 조회를 맵 기반으로 바꾼다**
 
 `src/server/modules/market-data/domain/exchange-session.ts` — `KR_SESSION` 정의 아래,
 `getSessionForMarket` 을 교체한다:
@@ -3345,7 +3514,7 @@ export function hasMarketSession(market: Market): boolean {
 `UnsupportedMarketSessionError` 클래스 정의가 `SESSIONS` 보다 아래에 있으면 위로 옮긴다
 (클래스는 호이스팅되지 않는다).
 
-- [ ] **Step 5: 시장 지원 정보를 만든다**
+- [x] **Step 5: 시장 지원 정보를 만든다**
 
 `src/server/modules/market-data/domain/market-support.ts`:
 
@@ -3391,7 +3560,7 @@ export function listMarketSupport(): readonly MarketSupport[] {
 }
 ```
 
-- [ ] **Step 6: 라우트를 더한다**
+- [x] **Step 6: 라우트를 더한다**
 
 `src/server/modules/market-data/presentation/dataset-routes.ts` — `/symbols/info` 바로 위에
 추가한다:
@@ -3409,13 +3578,13 @@ import 를 더한다:
 import { listMarketSupport } from '../domain/market-support.js';
 ```
 
-- [ ] **Step 7: 테스트가 통과하는 것을 확인한다**
+- [x] **Step 7: 테스트가 통과하는 것을 확인한다**
 
 Run: `pnpm vitest run tests/unit/market-support.test.ts && pnpm test && pnpm typecheck`
 Expected: PASS. `aggregate.test.ts`·`session-policy.test.ts`·`coverage.test.ts` 등 세션을
 쓰는 기존 테스트가 전부 통과해야 한다 — 맵 기반 전환이 동작을 바꾸지 않았다는 확인이다.
 
-- [ ] **Step 8: 커밋**
+- [x] **Step 8: 커밋**
 
 ```bash
 git add src/server/modules/market-data/domain/candle.ts src/server/modules/market-data/domain/exchange-session.ts src/server/modules/market-data/domain/market-support.ts src/server/modules/market-data/presentation/dataset-routes.ts tests/unit/market-support.test.ts
@@ -3439,7 +3608,7 @@ factsSupported 는 시장 자격만 본다 (DART 키 여부는 배포 상태다)
 - Consumes: `GET /markets` (Task 13), `api` (`@/lib/api-client`)
 - Produces: `interface MarketSupport`, `useMarketSupport() => readonly MarketSupport[]`
 
-- [ ] **Step 1: 훅을 만든다**
+- [x] **Step 1: 훅을 만든다**
 
 `src/web/lib/use-market-support.ts`:
 
@@ -3465,7 +3634,7 @@ export function useMarketSupport(): readonly MarketSupport[] {
 }
 ```
 
-- [ ] **Step 2: 생성 dialog 의 Select 를 바꾼다**
+- [x] **Step 2: 생성 dialog 의 Select 를 바꾼다**
 
 `datasets-page.tsx` — import 를 더한다:
 
@@ -3508,7 +3677,7 @@ import { useMarketSupport, type MarketSupport } from '@/lib/use-market-support';
 (생성 dialog 와 CSV dialog 가 다르다 — 생성 쪽은 `className="h-11 w-full"` 이 없을 수
 있으니 기존 마크업을 확인하고 유지한다).
 
-- [ ] **Step 3: 미지원 이유를 상시 노출한다**
+- [x] **Step 3: 미지원 이유를 상시 노출한다**
 
 같은 dialog 의 Select 바로 아래에 넣는다. **접었다 펴는 자리에 숨기지 않는다** — 선택지가
 회색인 이유를 찾으러 다니게 하면 명시한 것이 아니다:
@@ -3521,7 +3690,7 @@ import { useMarketSupport, type MarketSupport } from '@/lib/use-market-support';
               ))}
 ```
 
-- [ ] **Step 4: CSV 가져오기 dialog 에도 같은 것을 적용한다**
+- [x] **Step 4: CSV 가져오기 dialog 에도 같은 것을 적용한다**
 
 `:603-610` 의 Select 와 그 아래에 Step 2·3 과 같은 내용을 넣는다. 해당 컴포넌트에도
 `const markets = useMarketSupport();` 와 `const unsupported = ...` 를 더한다.
@@ -3574,7 +3743,7 @@ function MarketSelect({
               <MarketSelect id="market" value={market} onChange={setMarket} markets={markets} />
 ```
 
-- [ ] **Step 5: e2e 에 확인을 더한다**
+- [x] **Step 5: e2e 에 확인을 더한다**
 
 `tests/e2e/mvp-flow.spec.ts` — 데이터셋 생성 dialog 를 다루는 구간(없으면 새 테스트
 블록)에 추가한다:
@@ -3592,7 +3761,7 @@ function MarketSelect({
 버튼·라벨 이름은 실제 마크업에 맞춘다. `getByRole('option')` 이 안 잡히면 Radix Select 가
 `listbox`/`option` role 을 쓰는지 확인하고 `getByText` 로 대체한다.
 
-- [ ] **Step 6: 확인한다**
+- [x] **Step 6: 확인한다**
 
 Run: `pnpm typecheck && pnpm lint && pnpm build:web && pnpm test`
 Expected: PASS
@@ -3604,7 +3773,7 @@ Expected: PASS
 `(지원 예정)` 이 붙는지, (2) 클릭해도 선택되지 않는지, (3) Select 아래에 이유가 항상
 보이는지.
 
-- [ ] **Step 7: 커밋**
+- [x] **Step 7: 커밋**
 
 ```bash
 git add src/web/lib/use-market-support.ts src/web/features/datasets/datasets-page.tsx tests/e2e/mvp-flow.spec.ts
@@ -3627,7 +3796,7 @@ git commit -m "feat(web): 미지원 시장을 고를 수 없게 하고 이유를
 - Consumes: 없음
 - Produces: 없음
 
-- [ ] **Step 1: 범위 제외 목록에서 해소된 항목을 고친다**
+- [x] **Step 1: 범위 제외 목록에서 해소된 항목을 고친다**
 
 `docs/IMPLEMENTATION_STATUS.md:32` 의 "`facts:sync` 웹 라우트화는 이번 범위가 아니다" 를 지우고, 대신 남은 한계를 적는다:
 
@@ -3635,7 +3804,7 @@ git commit -m "feat(web): 미지원 시장을 고를 수 없게 하고 이유를
 - 거시 지표 수집(`FactScope.MACRO`)·시점별 지수 구성·업종 분류·US 재무제표(SEC EDGAR)는 이번 범위가 아니다. 웹 동기화의 「재무」 체크박스는 **증분**(미수집 연도 + 현재 연도)만 수집한다 — 과거 연도 정정공시를 다시 받으려면 `pnpm cli facts:sync --dataset <id> --from <연도> --to <연도>` 를 쓴다. 웹 수집은 연결(CFS) 고정이며 별도(OFS)는 CLI `--fs-div OFS` 로만 가능하다. **재무 수집은 국내(KR) 종목 전용이다** — DART 는 국내 공시 기관이다.
 ```
 
-- [ ] **Step 2: D-027 을 추가한다**
+- [x] **Step 2: D-027 을 추가한다**
 
 `docs/DECISIONS.md` 맨 뒤(D-026 아래)에 추가한다. 기존 항목들의 4줄 형식(변경 내용·이유·영향)을 따른다:
 
@@ -3648,7 +3817,7 @@ git commit -m "feat(web): 미지원 시장을 고를 수 없게 하고 이유를
 - **남은 한계:** `formatKrw`/`formatSignedKrw` 가 통화를 원화로 고정한다(`format.ts:8-11`). US 데이터셋이 존재할 수 없어 지금은 드러나지 않지만, US 지원 작업은 DST 포함 세션 정의와 통화 표시 일반화를 **함께** 해결해야 한다. 한쪽만 하면 미국 종목 손익이 "원" 으로 표시된다.
 ```
 
-- [ ] **Step 3: 커밋**
+- [x] **Step 3: 커밋**
 
 ```bash
 git add docs/IMPLEMENTATION_STATUS.md docs/DECISIONS.md
@@ -3662,6 +3831,10 @@ D-027 에 통화 표시가 US 지원의 남은 한계임을 남긴다 — 세션
 ---
 
 ## 검증 체크리스트 (전체 완료 후)
+
+Task 1–15 의 스텝은 전부 완료됐지만 이 목록은 미체크로 남긴다 — 2026-07-30 리뷰는 정적
+검토였고(그 환경에 Node 런타임이 없었다) 아래 명령·수동 확인을 실제로 돌리지 못했다.
+각 태스크 안의 테스트 실행은 원래 구현 세션에서 통과한 것이다.
 
 - [ ] `pnpm typecheck` PASS
 - [ ] `pnpm lint` PASS
