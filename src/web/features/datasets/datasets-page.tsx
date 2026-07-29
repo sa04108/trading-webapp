@@ -1,10 +1,21 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, CloudDownload, Pencil, Plus, RefreshCw, Trash2, Upload, X } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import {
+  Check,
+  CloudDownload,
+  Info,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Trash2,
+  Upload,
+  X,
+} from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
   DialogContent,
@@ -31,8 +42,10 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { api, postForm, postJson } from '@/lib/api-client';
 import { formatDate } from '@/lib/format';
+import { cn } from '@/lib/utils';
 import { CandleInspectDrawer } from './candle-inspect-drawer';
 
 interface DatasetSummary {
@@ -59,6 +72,9 @@ interface DataJob {
   status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
   rowsImported: number | null;
   error: string | null;
+  phase: string | null;
+  candlesMs: number | null;
+  factsJson: string | null;
 }
 
 interface StockInfo {
@@ -67,6 +83,63 @@ interface StockInfo {
   englishName: string | null;
   market: string;
   status: string;
+}
+
+// 서버 라우트(datasets/coverage, data-jobs)와 타입을 공유할 수 없어(§tsconfig 분리) 여기서 그대로 재선언한다.
+type FactsSyncEstimate =
+  | { basis: 'UNSUPPORTED'; reason: string }
+  | { basis: 'AFTER_CANDLES' }
+  | {
+      basis: 'PLANNED';
+      fromYear: number;
+      toYear: number;
+      calls: number;
+      estimatedMs: number;
+      overDailyLimit: boolean;
+    };
+
+interface SyncEstimate {
+  candles: { basis: 'LAST_RUN'; ms: number } | { basis: 'UNKNOWN' };
+  facts: FactsSyncEstimate;
+}
+
+interface FactsJobState {
+  fromYear: number | null;
+  toYear: number | null;
+  symbolsDone: number;
+  symbolTotal: number;
+  savedFacts: number;
+  gapCount: number;
+  failureMessage: string | null;
+  skipReason: string | null;
+}
+
+/** ms → "약 5분" / "약 1시간 12분". 1분 미만은 "1분 미만" */
+function formatEstimate(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 1) return '1분 미만';
+  if (minutes < 60) return `약 ${minutes}분`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest === 0 ? `약 ${hours}시간` : `약 ${hours}시간 ${rest}분`;
+}
+
+/** 연도 범위 표기 — 한 해면 "2026년 갱신", 여러 해면 "2019~2026년" */
+function formatYearRange(fromYear: number, toYear: number): string {
+  return fromYear === toYear ? `${fromYear}년 갱신` : `${fromYear}~${toYear}년`;
+}
+
+function parseFactsJson(factsJson: string | null | undefined): FactsJobState | null {
+  return factsJson ? (JSON.parse(factsJson) as FactsJobState) : null;
+}
+
+/** 잡 진행 중 표시 — CANDLES 단계는 봉, FACTS 단계는 재무 진행률 */
+function progressLabel(job: DataJob | undefined): string {
+  if (job?.phase !== 'FACTS') return '봉 수집 중…';
+  const facts = parseFactsJson(job.factsJson);
+  return facts
+    ? `재무 수집 중 · ${facts.symbolsDone}/${facts.symbolTotal}종목 · ${facts.savedFacts}건`
+    : '재무 수집 중…';
 }
 
 function errorMessage(error: unknown, fallback: string): string {
@@ -107,6 +180,60 @@ function useSymbolPreview(input: string) {
   return stock ? { state: 'found' as const, stock } : { state: 'unknown' as const };
 }
 
+/**
+ * "재무" 체크박스 옆 ⓘ 설명 툴팁.
+ *
+ * param-hint.tsx 와 동일하게 마우스오버가 아니라 클릭(터치 탭)으로만 연다 —
+ * 모바일에는 hover 가 없고, Radix 기본 동작은 클릭하면 툴팁을 닫아버려 터치로는
+ * 열 방법이 없다. open 을 직접 들고 닫는 경로(재탭·Escape·포커스 이탈·바깥 탭)를 챙긴다.
+ */
+function FactsInfoTooltip({ factsEstimate }: { factsEstimate: FactsSyncEstimate | undefined }) {
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent): void => {
+      // 트리거 자신은 onClick 토글이 처리한다 — 여기서 닫으면 다시 열려 깜빡인다
+      if (triggerRef.current?.contains(event.target as Node)) return;
+      setOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
+  }, [open]);
+
+  return (
+    <Tooltip open={open}>
+      <TooltipTrigger asChild>
+        <button
+          ref={triggerRef}
+          type="button"
+          aria-label="재무 함께 수집 설명"
+          aria-expanded={open}
+          className="rounded-full text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={() => setOpen((prev) => !prev)}
+          onBlur={() => setOpen(false)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') setOpen(false);
+          }}
+        >
+          <Info className="size-3.5" aria-hidden />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top" align="end" className="max-w-xs flex-col items-start gap-1">
+        <span>이 데이터셋 종목의 재무제표까지 함께 받습니다.</span>
+        {/* 미지원일 때만 띄우면 KR 데이터셋에서는 "재무가 국내 전용" 이라는
+            사실이 아예 드러나지 않는다 — 항상 보인다 */}
+        <span>국내(KR) 종목만 가능합니다 — DART 는 국내 공시 기관입니다.</span>
+        <span>봉만 받는 것보다 오래 걸립니다 — 아래 예상 시간을 확인하세요.</span>
+        {factsEstimate?.basis === 'UNSUPPORTED' ? (
+          <span className="text-destructive">{factsEstimate.reason}</span>
+        ) : null}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
   const queryClient = useQueryClient();
   const [startedJobId, setStartedJobId] = useState<string | null>(null);
@@ -115,15 +242,22 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
   const [nameDraft, setNameDraft] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [inspectSymbol, setInspectSymbol] = useState<string | null>(null);
+  // 기본 해제이고 기억하지 않는다 — 저장하면 데이터셋을 갱신할 때마다 의도 없이
+  // 45분짜리 재무 수집이 걸린다
+  const [includeFacts, setIncludeFacts] = useState(false);
   // 새로고침·다른 탭에서 시작된 동기화에도 붙는다 — 서버가 실행 중 잡을 알려준다
   const syncJobId = startedJobId ?? dataset.runningSyncJobId;
 
   const { data } = useQuery({
     queryKey: ['datasets', dataset.id, 'coverage'],
     queryFn: () =>
-      api<{ coverage: CoverageRow[]; note: string }>(`/datasets/${dataset.id}/coverage`),
+      api<{ coverage: CoverageRow[]; syncEstimate: SyncEstimate; note: string }>(
+        `/datasets/${dataset.id}/coverage`,
+      ),
   });
   const coverageBySymbol = new Map(data?.coverage.map((row) => [row.symbol, row]) ?? []);
+  const syncEstimate = data?.syncEstimate;
+  const factsEstimate = syncEstimate?.facts;
   const stockNames = useStockNames(dataset.symbols);
   const preview = useSymbolPreview(newSymbol);
 
@@ -137,8 +271,16 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
   useEffect(() => {
     const job = syncJob.data?.job;
     if (!job || syncJobId === null) return;
+    const facts = parseFactsJson(job.factsJson);
     if (job.status === 'COMPLETED') {
-      toast.success(`동기화 완료: ${dataset.name} · ${job.rowsImported ?? 0}봉`);
+      const factsPart =
+        facts === null
+          ? ''
+          : ` · 재무 ${facts.savedFacts}건${facts.gapCount > 0 ? ` (누락 ${facts.gapCount}건)` : ''}`;
+      toast.success(`동기화 완료: ${dataset.name} · ${job.rowsImported ?? 0}봉${factsPart}`);
+      // 재무를 요청했는데 건너뛴 경우는 성공 토스트만으로는 드러나지 않는다 —
+      // 사용자는 재무를 받았다고 믿는다
+      if (facts?.skipReason) toast.warning(`재무 미수집: ${facts.skipReason}`);
     } else if (job.status === 'FAILED') {
       toast.error(`동기화 실패: ${job.error ?? '원인 미상'}`);
     } else if (job.status === 'CANCELLED') {
@@ -148,10 +290,15 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
     }
     setStartedJobId(null);
     void queryClient.invalidateQueries({ queryKey: ['datasets'] });
-  }, [syncJob.data, syncJobId, dataset.name, queryClient]);
+    void queryClient.invalidateQueries({ queryKey: ['datasets', dataset.id, 'coverage'] });
+  }, [syncJob.data, syncJobId, dataset.name, dataset.id, queryClient]);
 
   const syncMutation = useMutation({
-    mutationFn: () => postJson<{ job: { id: string } }>('/datasets/sync', { datasetId: dataset.id }),
+    mutationFn: () =>
+      postJson<{ job: { id: string } }>('/datasets/sync', {
+        datasetId: dataset.id,
+        includeFacts,
+      }),
     onSuccess: ({ job }) => setStartedJobId(job.id),
     onError: (error: unknown) => toast.error(errorMessage(error, '동기화 시작 실패')),
   });
@@ -262,7 +409,23 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
             {dataset.timeframe === '1h' ? '1m→1h' : dataset.timeframe}
           </Badge>
           <Badge variant="outline">v{dataset.latestVersion}</Badge>
-          <span className="ml-auto flex gap-2">
+          <span className="ml-auto flex items-center gap-2">
+            {syncJobId === null ? (
+              <span className="flex items-center gap-1.5">
+                <Checkbox
+                  id={`facts-${dataset.id}`}
+                  checked={includeFacts}
+                  // 추정을 아직 못 받았으면 잠가 둔다 — 열어 두면 UNSUPPORTED 데이터셋에서
+                  // 체크가 가능해지고, 라우트가 400 으로 막을 때까지 알 수 없다
+                  disabled={factsEstimate === undefined || factsEstimate.basis === 'UNSUPPORTED'}
+                  onCheckedChange={(checked) => setIncludeFacts(checked === true)}
+                />
+                <label htmlFor={`facts-${dataset.id}`} className="text-sm text-muted-foreground">
+                  재무
+                </label>
+                <FactsInfoTooltip factsEstimate={factsEstimate} />
+              </span>
+            ) : null}
             {syncJobId !== null ? (
               <Button
                 variant="outline"
@@ -300,6 +463,33 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
+        {syncJobId !== null ? (
+          <p className="text-xs text-muted-foreground" aria-live="polite">
+            {progressLabel(syncJob.data?.job)}
+          </p>
+        ) : syncEstimate ? (
+          <p
+            className={cn(
+              'text-xs',
+              factsEstimate?.basis === 'PLANNED' && factsEstimate.overDailyLimit
+                ? 'text-destructive'
+                : 'text-muted-foreground',
+            )}
+          >
+            {syncEstimate.candles.basis === 'LAST_RUN'
+              ? `봉 ${formatEstimate(syncEstimate.candles.ms)} (직전 실행 기준)`
+              : '첫 수집은 소요 시간을 예측할 수 없습니다'}
+            {includeFacts && factsEstimate?.basis === 'PLANNED'
+              ? ` + 재무 ${formatYearRange(factsEstimate.fromYear, factsEstimate.toYear)} · ${formatEstimate(factsEstimate.estimatedMs)}`
+              : ''}
+            {includeFacts && factsEstimate?.basis === 'AFTER_CANDLES'
+              ? ' + 재무 범위는 봉 수집 후 결정됩니다'
+              : ''}
+            {includeFacts && factsEstimate?.basis === 'PLANNED' && factsEstimate.overDailyLimit
+              ? ' · DART 일일 한도(40,000회)를 넘습니다 — 남은 구간은 다음 날 이어받으세요'
+              : ''}
+          </p>
+        ) : null}
         {dataset.symbols.map((symbol) => {
           const row = coverageBySymbol.get(symbol);
           return (
