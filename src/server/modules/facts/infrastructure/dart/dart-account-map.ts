@@ -53,6 +53,13 @@ const BY_ACCOUNT_NAME: Record<string, DartAccountRule> = {
   장기차입금: { field: 'LONG_TERM_BORROWINGS', statement: 'BS' },
 };
 
+/**
+ * 두 인자는 **문자열임이 확인된 값** 이어야 한다 — 여기서 `.trim()`·`.replace()` 를
+ * 바로 부르기 때문에, 이름이 바뀐 DART 필드를 그대로 넘기면 영어 bare TypeError 가
+ * 수집 전체를 죽인다. 호출부(dart-report-parser.ts)가 `readString` 으로 확인하고,
+ * 어긋난 필드는 그 필드 이름을 밝히는 gap 으로 남긴다. 이 함수를 새로 호출하게 될 때도
+ * 같은 관문을 통과시켜야 한다.
+ */
 export function resolveAccount(accountId: string, accountName: string): DartAccountRule | null {
   const byId = BY_ACCOUNT_ID[accountId.trim()];
   if (byId) return byId;

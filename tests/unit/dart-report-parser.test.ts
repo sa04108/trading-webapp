@@ -358,6 +358,124 @@ describe('parseFinancialRows — 누적값 차분', () => {
     expect(q1?.value).toBe(100);
     expect(gaps.some((g) => g.reason.includes('서로 다릅니다'))).toBe(true);
   });
+
+  it('버킷 연도 불일치 gap 의 묶음 라벨은 값이 섞이지 않아 안정적이다 (CLI 사유별 집계)', () => {
+    // CLI 는 첫 ':' 또는 '(' 앞까지를 버킷 라벨로 쓴다 — 앞부분에 연도·계정명이 섞이면
+    // 같은 실패 유형이 값마다 다른 버킷으로 쪼개져 200종목 백필에서 리포트가 커진다.
+    const bucketOf = (reason: string): string => {
+      const cuts = [reason.indexOf(':'), reason.indexOf('(')].filter((index) => index >= 0);
+      return reason.slice(0, cuts.length > 0 ? Math.min(...cuts) : reason.length).trim();
+    };
+    const first = parseFinancialRows(
+      '005930',
+      new Map<DartReportCode, DartFinancialRow[]>([
+        ['11013', [incomeRow('11013', 100), { ...incomeRow('11013', 999), bsns_year: '2024' }]],
+      ]),
+    ).gaps.find((gap) => gap.reason.includes('사업연도'));
+    const second = parseFinancialRows(
+      '000660',
+      new Map<DartReportCode, DartFinancialRow[]>([
+        ['11013', [incomeRow('11013', 100), { ...incomeRow('11013', 999), bsns_year: '2019' }]],
+      ]),
+    ).gaps.find((gap) => gap.reason.includes('사업연도'));
+
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    expect(bucketOf(first!.reason)).toBe(bucketOf(second!.reason));
+    // 라벨이 '행의 사업연도' 같은 조각이 아니라 문장이어야 리포트를 읽을 수 있다
+    expect(bucketOf(first!.reason)).toBe('행의 사업연도가 버킷 기준 연도와 다릅니다');
+  });
+});
+
+/**
+ * 이 파일이 다루는 DART 필드 이름은 API 키 발급 후 실제 응답으로 검증해 조정한다고
+ * 명시돼 있다 — 이름이 어긋난 첫 실행이 가장 있을 법한 결과다. 그때 `.replace`/`.trim`
+ * 이 던지는 영어 bare TypeError 가 몇 시간짜리 백필 전체를 죽이면 안 된다.
+ * 필드가 사라진 행은 예외가 아니라 그 **필드 이름을 밝히는 gap** 이어야 한다.
+ */
+describe('parseFinancialRows — 필드 이름이 바뀐 응답 (bare TypeError 금지)', () => {
+  const base: DartFinancialRow = {
+    rcept_no: '20250515000001',
+    reprt_code: '11013',
+    bsns_year: '2025',
+    sj_div: 'BS',
+    account_id: 'ifrs-full_CurrentAssets',
+    account_nm: '유동자산',
+    thstrm_amount: '500,000',
+  };
+
+  /** 필드 하나를 이름만 바꿔(값은 그대로) 지운 행 */
+  function renamed(field: keyof DartFinancialRow): DartFinancialRow {
+    const { [field]: value, ...rest } = base;
+    return { ...rest, [`${field}_v2`]: value } as unknown as DartFinancialRow;
+  }
+
+  const cases: Array<[keyof DartFinancialRow, string]> = [
+    ['rcept_no', 'rcept_no'],
+    ['account_id', 'account_id'],
+    ['account_nm', 'account_nm'],
+    ['thstrm_amount', 'thstrm_amount'],
+  ];
+
+  for (const [field, named] of cases) {
+    it(`${field} 이 사라지면 던지지 않고 그 필드 이름을 밝히는 gap 을 남긴다`, () => {
+      const rows = new Map<DartReportCode, DartFinancialRow[]>([['11013', [renamed(field)]]]);
+      let result: ReturnType<typeof parseFinancialRows> | null = null;
+      expect(() => {
+        result = parseFinancialRows('005930', rows);
+      }).not.toThrow();
+      expect(result!.facts).toEqual([]);
+      expect(result!.gaps.some((gap) => gap.reason.includes(named))).toBe(true);
+    });
+  }
+
+  it('손익 계정의 thstrm_amount 가 사라져도(누적 컬럼도 없이) 던지지 않는다', () => {
+    const incomeBase = {
+      rcept_no: '20250515000001',
+      reprt_code: '11013',
+      bsns_year: '2025',
+      sj_div: 'IS',
+      account_id: 'ifrs-full_ProfitLossFromOperatingActivities',
+      account_nm: '영업이익',
+    } as unknown as DartFinancialRow;
+    const rows = new Map<DartReportCode, DartFinancialRow[]>([['11013', [incomeBase]]]);
+    let result: ReturnType<typeof parseFinancialRows> | null = null;
+    expect(() => {
+      result = parseFinancialRows('005930', rows);
+    }).not.toThrow();
+    expect(result!.facts).toEqual([]);
+    expect(result!.gaps.some((gap) => gap.reason.includes('thstrm_amount'))).toBe(true);
+  });
+});
+
+describe('parseIssuanceRows — 필드 이름이 바뀐 응답 (bare TypeError 금지)', () => {
+  const priorShares = () => 1_000_000;
+  const base: DartIssuanceRow = {
+    isu_dcrs_de: '2025-03-14',
+    isu_dcrs_stle: '주식분할',
+    isu_dcrs_qy: '1,000,000',
+    rcept_no: '20250320000001',
+  };
+
+  const fields: Array<keyof DartIssuanceRow> = [
+    'isu_dcrs_stle',
+    'isu_dcrs_de',
+    'isu_dcrs_qy',
+    'rcept_no',
+  ];
+
+  for (const field of fields) {
+    it(`${field} 이 사라지면 던지지 않고 그 필드 이름을 밝히는 gap 을 남긴다`, () => {
+      const { [field]: value, ...rest } = base;
+      const row = { ...rest, [`${field}_v2`]: value } as unknown as DartIssuanceRow;
+      let result: ReturnType<typeof parseIssuanceRows> | null = null;
+      expect(() => {
+        result = parseIssuanceRows('005930', [row], priorShares);
+      }).not.toThrow();
+      expect(result!.facts).toEqual([]);
+      expect(result!.gaps.some((gap) => gap.reason.includes(field))).toBe(true);
+    });
+  }
 });
 
 describe('parseIssuanceRows — 자본변동', () => {

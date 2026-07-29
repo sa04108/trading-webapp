@@ -131,6 +131,22 @@ function isReportCode(value: string): value is DartReportCode {
   return value in REPORT_CODE_TO_QUARTER;
 }
 
+/**
+ * 응답 행에서 문자열 필드를 읽는다. 필드 이름이 바뀌었거나 값이 문자열이 아니면 null.
+ *
+ * 이 파일이 다루는 DART 필드 이름은 **API 키 발급 후 실제 응답으로 검증해 조정한다** 고
+ * 명시되어 있다 — 즉 이름이 어긋난 첫 실행이 가장 있을 법한 결과다. 그 상태에서
+ * `.replace`/`.trim` 을 바로 부르면 영어 bare TypeError 가 올라가 수집 전체가 죽는다.
+ * dart-fact-source.ts 가 `se`·`istc_totqy` 에 이미 세워둔 방어선("bare TypeError 로
+ * 전체 수집이 죽지 않게")을 이 파서의 필드에도 같은 모양으로 세운다 — 어긋난 필드는
+ * 예외가 아니라 그 필드 이름을 밝히는 gap 이 된다.
+ */
+function readString(row: unknown, field: string): string | null {
+  if (typeof row !== 'object' || row === null) return null;
+  const value = (row as Record<string, unknown>)[field];
+  return typeof value === 'string' ? value : null;
+}
+
 /** 분기 하나의 손익 누적값 — 어느 보고서(행)에서 왔는지 asOf 도 함께 들고 다닌다 */
 interface CumulativePoint {
   readonly value: number;
@@ -196,7 +212,7 @@ export function parseFinancialRows(
         gaps.push({
           symbol,
           periodKey,
-          reason: `행의 사업연도(${row.bsns_year})가 버킷 기준 연도(${year})와 다릅니다: ${row.account_nm}`,
+          reason: `행의 사업연도가 버킷 기준 연도와 다릅니다: ${row.bsns_year} vs ${year}, ${readString(row, 'account_nm') ?? '계정명 없음'}`,
         });
         continue;
       }
@@ -208,18 +224,36 @@ export function parseFinancialRows(
 
       // asOf 는 행 단위로 구한다 — 정정공시 등으로 버킷 안에 rcept_no 가 섞일 수
       // 있어 rows[0] 하나만 대표로 쓰면 다른 행의 asOf 를 잘못 물려받는다
-      const asOf = receiptDateToAsOfTsMs(row.rcept_no);
+      const rceptNo = readString(row, 'rcept_no');
+      if (rceptNo === null) {
+        gaps.push({ symbol, periodKey, reason: '응답 필드를 읽을 수 없습니다: rcept_no' });
+        continue;
+      }
+      const asOf = receiptDateToAsOfTsMs(rceptNo);
       if (asOf === null) {
-        gaps.push({ symbol, periodKey, reason: `접수번호를 읽을 수 없습니다: ${row.rcept_no}` });
+        gaps.push({ symbol, periodKey, reason: `접수번호를 읽을 수 없습니다: ${rceptNo}` });
         continue;
       }
 
-      const rule = resolveAccount(row.account_id, row.account_nm);
+      // account_id·account_nm 은 resolveAccount 안에서 .trim()/.replace() 를 타므로
+      // 여기서 문자열임을 확인한다 — 이름이 바뀐 필드는 gap 이지 예외가 아니다
+      const accountId = readString(row, 'account_id');
+      const accountName = readString(row, 'account_nm');
+      if (accountId === null || accountName === null) {
+        gaps.push({
+          symbol,
+          periodKey,
+          reason: `응답 필드를 읽을 수 없습니다: ${accountId === null ? 'account_id' : 'account_nm'}`,
+        });
+        continue;
+      }
+
+      const rule = resolveAccount(accountId, accountName);
       if (!rule) {
         gaps.push({
           symbol,
           periodKey,
-          reason: `매핑되지 않은 계정: ${row.account_nm} (${row.account_id})`,
+          reason: `매핑되지 않은 계정: ${accountName} (${accountId})`,
         });
         continue;
       }
@@ -230,15 +264,20 @@ export function parseFinancialRows(
         gaps.push({
           symbol,
           periodKey,
-          reason: `계정 유형이 일치하지 않습니다: ${row.account_nm} (sj_div=${row.sj_div}, 기대값=${rule.statement})`,
+          reason: `계정 유형이 일치하지 않습니다: ${accountName} (sj_div=${row.sj_div}, 기대값=${rule.statement})`,
         });
         continue;
       }
 
       if (rule.statement === 'BS') {
-        const amount = parseAmount(row.thstrm_amount);
+        const rawAmount = readString(row, 'thstrm_amount');
+        const amount = rawAmount === null ? null : parseAmount(rawAmount);
         if (amount === null) {
-          gaps.push({ symbol, periodKey, reason: `금액을 읽을 수 없습니다: ${row.account_nm}` });
+          gaps.push({
+            symbol,
+            periodKey,
+            reason: `금액을 읽을 수 없습니다: ${accountName}` + (rawAmount === null ? ' (thstrm_amount 필드 확인)' : ''),
+          });
           continue;
         }
         const previouslySeen = seenBsInReport.get(rule.field);
@@ -267,10 +306,15 @@ export function parseFinancialRows(
 
       // IS/CIS — 누적값을 모아두고 아래에서 차분한다. thstrm_add_amount 가 빈
       // 문자열인 제출사도 있어 '있으면 쓴다' 가 아니라 '내용이 있으면 쓴다' 로 판단한다
-      const cumulativeRaw = row.thstrm_add_amount?.trim() ? row.thstrm_add_amount : row.thstrm_amount;
-      const amount = parseAmount(cumulativeRaw);
+      const addAmount = readString(row, 'thstrm_add_amount');
+      const cumulativeRaw = addAmount?.trim() ? addAmount : readString(row, 'thstrm_amount');
+      const amount = cumulativeRaw === null ? null : parseAmount(cumulativeRaw);
       if (amount === null) {
-        gaps.push({ symbol, periodKey, reason: `금액을 읽을 수 없습니다: ${row.account_nm}` });
+        gaps.push({
+          symbol,
+          periodKey,
+          reason: `금액을 읽을 수 없습니다: ${accountName}` + (cumulativeRaw === null ? ' (thstrm_amount 필드 확인)' : ''),
+        });
         continue;
       }
       const byQuarter = cumulative.get(rule.field) ?? new Map<number, CumulativePoint>();
@@ -389,33 +433,64 @@ export function parseIssuanceRows(
   const gaps: FactIngestionGap[] = [];
 
   for (const row of rows) {
-    const style = row.isu_dcrs_stle.replace(/\s/g, '');
+    // 필드 이름이 어긋난 첫 실행에서 bare TypeError 로 수집 전체가 죽지 않게 한다
+    // (readString 주석 참고). 날짜부터 읽는 이유: gap 의 periodKey 에 쓰인다.
+    const rawDate = readString(row, 'isu_dcrs_de');
+    const gapPeriodKey = rawDate ?? '-';
+
+    const rawStyle = readString(row, 'isu_dcrs_stle');
+    if (rawStyle === null) {
+      gaps.push({
+        symbol,
+        periodKey: gapPeriodKey,
+        reason: '응답 필드를 읽을 수 없습니다: isu_dcrs_stle (발행형태)',
+      });
+      continue;
+    }
+    const style = rawStyle.replace(/\s/g, '');
     const direction = classifyCapitalChange(style);
 
     if (direction === null) {
       gaps.push({
         symbol,
-        periodKey: row.isu_dcrs_de,
-        reason: `분류할 수 없는 발행형태: ${row.isu_dcrs_stle}`,
+        periodKey: gapPeriodKey,
+        reason: `분류할 수 없는 발행형태: ${rawStyle}`,
       });
       continue;
     }
     // 유상증자·유상감자는 현금이 오간 것이라 의도된 제외다 — gap 을 남기지 않는다
     if (direction === 'SKIP_PAID') continue;
 
-    const dateKey = normalizeDateKey(row.isu_dcrs_de);
+    if (rawDate === null) {
+      gaps.push({
+        symbol,
+        periodKey: gapPeriodKey,
+        reason: '응답 필드를 읽을 수 없습니다: isu_dcrs_de (자본변동 일자)',
+      });
+      continue;
+    }
+    const dateKey = normalizeDateKey(rawDate);
     if (dateKey === null) {
       gaps.push({
         symbol,
-        periodKey: row.isu_dcrs_de,
-        reason: `자본변동 일자를 읽을 수 없습니다: ${row.isu_dcrs_de}`,
+        periodKey: rawDate,
+        reason: `자본변동 일자를 읽을 수 없습니다: ${rawDate}`,
       });
       continue;
     }
 
-    const quantity = parseAmount(row.isu_dcrs_qy);
+    const rawQuantity = readString(row, 'isu_dcrs_qy');
+    if (rawQuantity === null) {
+      gaps.push({
+        symbol,
+        periodKey: dateKey,
+        reason: '응답 필드를 읽을 수 없습니다: isu_dcrs_qy (변동 수량)',
+      });
+      continue;
+    }
+    const quantity = parseAmount(rawQuantity);
     if (quantity === null || quantity <= 0) {
-      gaps.push({ symbol, periodKey: dateKey, reason: `변동 수량을 읽을 수 없습니다: ${row.isu_dcrs_qy}` });
+      gaps.push({ symbol, periodKey: dateKey, reason: `변동 수량을 읽을 수 없습니다: ${rawQuantity}` });
       continue;
     }
 
@@ -435,9 +510,18 @@ export function parseIssuanceRows(
       continue;
     }
 
-    const asOf = receiptDateToAsOfTsMs(row.rcept_no);
+    const rceptNo = readString(row, 'rcept_no');
+    if (rceptNo === null) {
+      gaps.push({
+        symbol,
+        periodKey: dateKey,
+        reason: '응답 필드를 읽을 수 없습니다: rcept_no (접수번호)',
+      });
+      continue;
+    }
+    const asOf = receiptDateToAsOfTsMs(rceptNo);
     if (asOf === null) {
-      gaps.push({ symbol, periodKey: dateKey, reason: `접수번호를 읽을 수 없습니다: ${row.rcept_no}` });
+      gaps.push({ symbol, periodKey: dateKey, reason: `접수번호를 읽을 수 없습니다: ${rceptNo}` });
       continue;
     }
 
