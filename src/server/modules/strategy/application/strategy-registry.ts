@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { AnyTradingStrategy } from '../domain/strategy.js';
+import { crossSectionalMomentumStrategy } from '../strategies/cross-sectional-momentum.js';
 import { hourlyBreakoutStrategy } from '../strategies/hourly-breakout.js';
 
 /**
@@ -8,6 +9,7 @@ import { hourlyBreakoutStrategy } from '../strategies/hourly-breakout.js';
  */
 const STRATEGIES: readonly AnyTradingStrategy[] = [
   hourlyBreakoutStrategy as AnyTradingStrategy,
+  crossSectionalMomentumStrategy as AnyTradingStrategy,
 ];
 
 export interface StrategySummary {
