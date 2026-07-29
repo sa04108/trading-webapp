@@ -45,6 +45,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { api, postForm, postJson } from '@/lib/api-client';
 import { formatDate } from '@/lib/format';
+import { useStockNames, type StockInfo } from '@/lib/use-stock-names';
 import { cn } from '@/lib/utils';
 import { CandleInspectDrawer } from './candle-inspect-drawer';
 
@@ -75,14 +76,6 @@ interface DataJob {
   phase: string | null;
   candlesMs: number | null;
   factsJson: string | null;
-}
-
-interface StockInfo {
-  symbol: string;
-  name: string;
-  englishName: string | null;
-  market: string;
-  status: string;
 }
 
 // 서버 라우트(datasets/coverage, data-jobs)와 타입을 공유할 수 없어(§tsconfig 분리) 여기서 그대로 재선언한다.
@@ -144,18 +137,6 @@ function progressLabel(job: DataJob | undefined): string {
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
-}
-
-/** 코드 → 종목명. 소스 미설정이면 빈 결과라 코드만 표시된다. */
-function useStockNames(symbols: string[]) {
-  const key = symbols.join(',');
-  const { data } = useQuery({
-    queryKey: ['symbol-info', key],
-    queryFn: () => api<{ stocks: StockInfo[] }>(`/symbols/info?symbols=${encodeURIComponent(key)}`),
-    enabled: symbols.length > 0,
-    staleTime: 60 * 60 * 1000, // 종목명은 사실상 불변
-  });
-  return new Map(data?.stocks.map((stock) => [stock.symbol, stock]) ?? []);
 }
 
 /** 입력 중인 코드의 이름 미리보기 — 500ms 디바운스 */
