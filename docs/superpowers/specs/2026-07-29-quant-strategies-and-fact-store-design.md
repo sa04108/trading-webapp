@@ -149,14 +149,17 @@ export const valueQualityRankParameters = z.object({
   topN:            z.number().int().min(1).max(50).default(20),
   rebalanceMonths: z.number().int().min(1).max(12).default(3),
   staleQuarters:   z.number().int().min(1).max(8).default(2),
-  consolidated:    z.boolean().default(true),
 });
 ```
 
 `staleQuarters` — 최신 공시의 기준분기가 현재로부터 N분기 넘게 낡으면 제외한다.
 관리종목·상장폐지 직전 종목이 랭킹 상위에 오르는 것을 막는다.
 
-`consolidated` — 연결(CFS) / 별도(OFS) 선택. 지주회사에서 결과가 크게 갈린다.
+연결(CFS)/별도(OFS)는 전략 파라미터가 아니라 **수집 시점 선택**이다
+(`facts:sync --fs-div`). `Fact` 의 키는 `(scope, key, field, periodKey, asOfTsMs)`
+이므로 같은 계정의 두 기준을 함께 담으면 서로를 덮어쓴다. 필드 이름에 접미사를 붙여
+유니온을 두 배로 늘리는 대안은 모든 조회 지점을 분기시키므로 택하지 않았다.
+데이터셋 하나는 한 기준만 담는다.
 
 리밸런스는 전략 A 와 같은 2단계 방식을 쓴다. 두 전략이 공유하는 로직이므로
 순수 헬퍼로 뽑는다 (§5).

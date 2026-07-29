@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { AnyTradingStrategy } from '../domain/strategy.js';
 import { crossSectionalMomentumStrategy } from '../strategies/cross-sectional-momentum.js';
 import { hourlyBreakoutStrategy } from '../strategies/hourly-breakout.js';
+import { valueQualityRankStrategy } from '../strategies/value-quality-rank.js';
 
 /**
  * 코드 등록식 전략 레지스트리 (스펙 §2.5):
@@ -10,6 +11,7 @@ import { hourlyBreakoutStrategy } from '../strategies/hourly-breakout.js';
 const STRATEGIES: readonly AnyTradingStrategy[] = [
   hourlyBreakoutStrategy as AnyTradingStrategy,
   crossSectionalMomentumStrategy as AnyTradingStrategy,
+  valueQualityRankStrategy as AnyTradingStrategy,
 ];
 
 export interface StrategySummary {
