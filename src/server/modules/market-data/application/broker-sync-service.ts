@@ -13,6 +13,7 @@ import {
   toLocalTime,
   type ExchangeSession,
 } from '../domain/exchange-session.js';
+import { deriveFactYearRange } from '../domain/fact-year-range.js';
 import type { DatasetService, DatasetSummary } from './dataset-service.js';
 import type { CandleRepository, MarketDataSource } from './ports.js';
 
@@ -39,6 +40,34 @@ export class SyncUnsupportedDatasetError extends Error {
   }
 }
 
+/** 재무 단계 진행 — 45분짜리 단계가 조용하지 않게 한다 */
+export interface FactPhaseProgress {
+  readonly symbolsDone: number;
+  readonly symbolTotal: number;
+  readonly savedFacts: number;
+  readonly gapCount: number;
+}
+
+export interface FactPhaseResult {
+  readonly savedFacts: number;
+  readonly gapCount: number;
+  readonly stopReason: 'ERROR' | 'CANCELLED' | null;
+  readonly failureMessage: string | null;
+}
+
+/** data_import_jobs.facts_json 의 내용. null 컬럼 = 재무를 요청하지 않은 잡 */
+export interface FactsJobState {
+  fromYear: number | null;
+  toYear: number | null;
+  symbolsDone: number;
+  symbolTotal: number;
+  savedFacts: number;
+  gapCount: number;
+  failureMessage: string | null;
+  /** 재무 단계를 시작조차 하지 않은 사유 */
+  skipReason: string | null;
+}
+
 export interface BrokerSyncDeps {
   readonly db: AppDatabase;
   readonly source: MarketDataSource;
@@ -50,6 +79,18 @@ export interface BrokerSyncDeps {
   /** 이 여유 공간(bytes) 미만이면 수집을 시작·계속하지 않는다 */
   readonly minFreeDiskBytes: number;
   readonly freeDiskBytes: () => number;
+  /**
+   * 재무 수집 단계. market-data 는 facts 모듈을 import 하지 않는다 — 컨테이너가
+   * 클로저로 잇는다 (dataset-routes 의 hasActiveBacktests 와 같은 관례).
+   * 주입되지 않았으면 DART 가 설정되지 않은 배포다.
+   */
+  readonly factsPhase?: (args: {
+    datasetId: string;
+    fromYear: number;
+    toYear: number;
+    onProgress: (progress: FactPhaseProgress) => void;
+    shouldStop: () => boolean;
+  }) => Promise<FactPhaseResult>;
 }
 
 const DISK_CHECK_PAGE_INTERVAL = 50;
@@ -86,8 +127,14 @@ export class BrokerSyncService {
    * 동기화 시작. 검증(존재·timeframe·중복 실행)은 동기적으로 던지고,
    * 수집은 백그라운드로 진행한다. done 은 절대 reject 하지 않는다 —
    * 실패는 잡 레코드(FAILED)에 기록된다.
+   *
+   * includeFacts 면 봉 뒤에 재무 단계를 같은 잡으로 이어 돌린다 — 잡 id·취소·폴링이
+   * 하나여야 화면이 "동기화" 버튼 하나로 두 단계를 다룰 수 있다.
    */
-  startSync(datasetId: string): { job: { id: string }; done: Promise<void> } {
+  startSync(
+    datasetId: string,
+    options: { includeFacts?: boolean } = {},
+  ): { job: { id: string }; done: Promise<void> } {
     const dataset = this.deps.datasetService.getDataset(datasetId);
     if (!dataset) throw new Error(`데이터셋을 찾을 수 없습니다: ${datasetId}`);
 
@@ -114,12 +161,13 @@ export class BrokerSyncService {
         datasetId,
         status: 'RUNNING',
         sourceType: 'BROKER',
+        phase: 'CANDLES',
         createdAtMs: this.deps.clock.now(),
       })
       .run();
 
     this.runningJobs.add(jobId);
-    const done = this.run(dataset, collect, jobId).finally(() => {
+    const done = this.run(dataset, collect, jobId, options.includeFacts === true).finally(() => {
       this.runningJobs.delete(jobId);
       this.cancelRequested.delete(jobId);
     });
@@ -165,8 +213,17 @@ export class BrokerSyncService {
     throw new SyncUnsupportedDatasetError(datasetTimeframe);
   }
 
-  private async run(dataset: DatasetSummary, collect: '1m' | '1d', jobId: string): Promise<void> {
+  private async run(
+    dataset: DatasetSummary,
+    collect: '1m' | '1d',
+    jobId: string,
+    includeFacts: boolean,
+  ): Promise<void> {
     let totalRows = 0;
+    const candlesStartedAtMs = this.deps.clock.now();
+    // 봉 단계가 끝나기 전의 실패는 봉 소요시간을 남기지 않는다 — 다음 실행의 예상치를
+    // 반쪽 측정으로 오염시키지 않기 위해서다
+    let candlesMs: number | null = null;
     try {
       this.checkDisk();
       const session = collect === '1m' ? getSessionForMarket(dataset.market) : null;
@@ -208,6 +265,7 @@ export class BrokerSyncService {
       }
 
       await this.deps.datasetService.refreshCoverage(dataset.id, dataset.market, dataset.timeframe);
+      candlesMs = this.deps.clock.now() - candlesStartedAtMs;
       if (totalRows > 0) {
         this.deps.datasetService.bumpVersion(
           dataset.id,
@@ -216,22 +274,59 @@ export class BrokerSyncService {
         );
       }
 
+      const facts = includeFacts ? await this.runFactsPhase(dataset, jobId) : null;
+      /**
+       * 재무 단계가 **실제로 돌다가 멈춘** 경우에만 잡 상태를 따라간다. 건너뛴 경우
+       * (skipReason: DART 미설정·봉 없음)는 중단이 아니다 — 봉은 성공했고 재무는
+       * 시작조차 하지 않았으므로 COMPLETED 다. 재무를 요청하지 않은 잡(facts=null)도
+       * 당연히 그대로다. 그래서 판단 기준이 stopReason 이다 — 단계가 돌았고 멈췄을
+       * 때만 값이 채워진다.
+       */
+      const factsStop = facts?.stopReason ?? null;
       this.deps.db
         .update(dataImportJobs)
-        .set({ status: 'COMPLETED', rowsImported: totalRows, completedAtMs: this.deps.clock.now() })
+        .set({
+          status:
+            factsStop === 'CANCELLED' ? 'CANCELLED' : factsStop === 'ERROR' ? 'FAILED' : 'COMPLETED',
+          // 재무가 멈춰도 봉 결과는 그대로 남는다 — 봉은 이미 저장까지 끝났다
+          rowsImported: totalRows,
+          candlesMs,
+          phase: null,
+          factsJson: facts === null ? null : JSON.stringify(facts.state),
+          error: facts?.state.failureMessage ?? null,
+          completedAtMs: this.deps.clock.now(),
+        })
         .where(eq(dataImportJobs.id, jobId))
         .run();
-      this.deps.audit.record('system', 'data.sync.completed', {
-        datasetId: dataset.id,
-        rows: totalRows,
-      });
+      if (factsStop === 'CANCELLED') {
+        this.deps.audit.record('system', 'data.sync.cancelled', { datasetId: dataset.id });
+      } else if (factsStop === 'ERROR') {
+        // 봉 실패와 같은 자리에 남긴다 — 감사 로그에는 완료로 적지 않는다
+        this.deps.logger.error(
+          {
+            module: 'market-data',
+            event: 'data.sync.facts-failed',
+            datasetId: dataset.id,
+            reason: facts?.state.failureMessage,
+          },
+          'broker sync facts phase failed',
+        );
+      } else {
+        this.deps.audit.record('system', 'data.sync.completed', {
+          datasetId: dataset.id,
+          rows: totalRows,
+          facts: facts?.state.savedFacts ?? 0,
+        });
+      }
     } catch (error) {
       const cancelled = error instanceof SyncCancelledError;
+      // 실패·취소 잡의 phase 는 지우지 않는다 — 어느 단계에서 죽었는지가 정보다
       this.deps.db
         .update(dataImportJobs)
         .set({
           status: cancelled ? 'CANCELLED' : 'FAILED',
           rowsImported: totalRows,
+          candlesMs,
           error: error instanceof Error ? error.message : String(error),
           completedAtMs: this.deps.clock.now(),
         })
@@ -250,6 +345,84 @@ export class BrokerSyncService {
         'broker sync failed',
       );
     }
+  }
+
+  /**
+   * 재무 단계. 봉 단계가 성공한 뒤에만 불린다.
+   *
+   * 여기서 throw 하지 않는 이유: 봉 수집은 이미 끝났고 그 결과(rowsImported)를
+   * 기록해야 한다. 재무 실패를 예외로 올리면 catch 절이 봉 결과를 덮어 "봉도 실패"
+   * 처럼 보인다 — 상태를 리포트로 되돌려 호출부가 둘을 함께 기록하게 한다.
+   */
+  private async runFactsPhase(
+    dataset: DatasetSummary,
+    jobId: string,
+  ): Promise<{ state: FactsJobState; stopReason: 'ERROR' | 'CANCELLED' | null }> {
+    const state: FactsJobState = {
+      fromYear: null,
+      toYear: null,
+      symbolsDone: 0,
+      symbolTotal: dataset.symbols.length,
+      savedFacts: 0,
+      gapCount: 0,
+      failureMessage: null,
+      skipReason: null,
+    };
+
+    if (!this.deps.factsPhase) {
+      state.skipReason = 'DART_API_KEY 가 설정되지 않아 재무를 수집하지 않았습니다.';
+      return { state, stopReason: null };
+    }
+
+    const coverage = this.deps.datasetService.getCoverage(dataset.id);
+    const range = deriveFactYearRange(coverage, dataset.market);
+    if (range === null) {
+      state.skipReason =
+        '봉이 수집되지 않아 재무 연도 범위를 정할 수 없습니다 — 봉을 먼저 수집하세요.';
+      return { state, stopReason: null };
+    }
+    state.fromYear = range.fromYear;
+    state.toYear = range.toYear;
+
+    this.deps.db
+      .update(dataImportJobs)
+      .set({ phase: 'FACTS', factsJson: JSON.stringify(state) })
+      .where(eq(dataImportJobs.id, jobId))
+      .run();
+
+    let result: FactPhaseResult;
+    try {
+      result = await this.deps.factsPhase({
+        datasetId: dataset.id,
+        fromYear: range.fromYear,
+        toYear: range.toYear,
+        onProgress: (progress) => {
+          state.symbolsDone = progress.symbolsDone;
+          state.symbolTotal = progress.symbolTotal;
+          state.savedFacts = progress.savedFacts;
+          state.gapCount = progress.gapCount;
+          // 조용한 45분은 멈춘 것과 구분되지 않는다 — 종목마다 잡을 갱신한다
+          this.deps.db
+            .update(dataImportJobs)
+            .set({ factsJson: JSON.stringify(state) })
+            .where(eq(dataImportJobs.id, jobId))
+            .run();
+        },
+        shouldStop: () => this.cancelRequested.has(jobId),
+      });
+    } catch (error) {
+      // 주입된 함수가 계약을 깨고 예외로 실패하는 경우까지 여기서 흡수한다 — 위로
+      // 올리면 catch 절이 봉 결과를 덮는다. 직전 onProgress 까지의 진행은 남는다.
+      state.failureMessage = error instanceof Error ? error.message : String(error);
+      return { state, stopReason: 'ERROR' };
+    }
+
+    state.savedFacts = result.savedFacts;
+    state.gapCount = result.gapCount;
+    state.failureMessage = result.failureMessage;
+    // 중단 여부는 stopReason 이 정한다 (FactSyncService 와 같은 신호) — 호출부가
+    // 이것만 보고 FAILED/CANCELLED 를 가른다
+    return { state, stopReason: result.stopReason };
   }
 
   /**
