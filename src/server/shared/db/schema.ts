@@ -117,6 +117,15 @@ export const dataImportJobs = sqliteTable(
     error: text('error'),
     createdAtMs: integer('created_at_ms').notNull(),
     completedAtMs: integer('completed_at_ms'),
+    /** CANDLES | FACTS — 봉·재무 두 단계로 진행되는 잡의 현재 단계 (BROKER 전용) */
+    phase: text('phase'),
+    /**
+     * 봉 단계만의 소요시간. 잡 전체 소요시간에는 재무 단계가 섞여 있어 다음 실행의
+     * 봉 예상치로 쓸 수 없다 — 봉만 따로 재어 둔다.
+     */
+    candlesMs: integer('candles_ms'),
+    /** 재무 단계 진행·결과 (FactsJobState). null = 재무를 요청하지 않은 잡 */
+    factsJson: text('facts_json'),
   },
   (table) => [index('idx_data_import_jobs_dataset').on(table.datasetId)],
 );
@@ -142,6 +151,33 @@ export const brokerSyncState = sqliteTable(
     backfillDoneAtMs: integer('backfill_done_at_ms'),
   },
   (table) => [uniqueIndex('idx_broker_sync_state_dataset_symbol').on(table.datasetId, table.symbol)],
+);
+
+/**
+ * 종목별 재무 수집 완료 연도 (설계 2026-07-29-web-facts-sync-design.md §3).
+ *
+ * **범위 두 값이 아니라 연도 목록이다.** CLI 로 2010–2012 를, 웹으로 2019–2026 을
+ * 받으면 수집 이력은 불연속이 된다 — `from`/`to` 로 접으면 2013–2018 을 수집했다고
+ * 거짓말한다.
+ *
+ * 종목 단위인 이유는 저장이 종목 단위이기 때문이다 — 180/200 에서 중단된 실행도
+ * 완료된 179종목만 기록되어 다음 실행이 정확히 이어받는다.
+ */
+export const datasetFactsState = sqliteTable(
+  'dataset_facts_state',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    datasetId: text('dataset_id')
+      .notNull()
+      .references(() => datasets.id, { onDelete: 'cascade' }),
+    symbol: text('symbol').notNull(),
+    /** number[] 오름차순 JSON */
+    coveredYearsJson: text('covered_years_json').notNull(),
+    updatedAtMs: integer('updated_at_ms').notNull(),
+  },
+  (table) => [
+    uniqueIndex('idx_dataset_facts_state_dataset_symbol').on(table.datasetId, table.symbol),
+  ],
 );
 
 // ── 백테스트 (스펙 §10, §12) ──────────────────────────────────────
