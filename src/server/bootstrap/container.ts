@@ -200,7 +200,15 @@ export function createContainer(config: AppConfig): Container {
     config.dartApiKey ? { baseUrl: config.dartBaseUrl, apiKey: config.dartApiKey } : null,
     logger,
   );
-  const factSyncService = new FactSyncService(factSource, factRepository, logger);
+  // 팩트도 데이터셋 내용이다 — 캔들과 같은 버전 체인에 올린다 (§9.5).
+  // DatasetService 를 통째로 넘기지 않고 좁은 포트(DatasetVersionBumper)로 받는다.
+  const factSyncService = new FactSyncService(
+    factSource,
+    factRepository,
+    logger,
+    datasetService,
+    clock,
+  );
 
   const systemStatus: SystemStatusProviders = {
     queueLength: () => jobQueue.countByStatus(['QUEUED']),
