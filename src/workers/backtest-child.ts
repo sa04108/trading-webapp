@@ -173,8 +173,18 @@ async function main(): Promise<void> {
       );
     }
     if (strategy.requiresFundamentals === true) {
+      // "facts:sync 리포트를 확인하세요" 는 지금 어디에도 없는 것을 가리킨다 — 그 리포트는
+      // 이미 닫혔을 수 있는 세션의 stdout 으로만 존재했다. 대신 실제로 로드된 팩트 키를
+      // 요청 유니버스와 맞춰 재무가 **하나도 없는** 종목을 직접 이름으로 밝힌다.
+      // (계정이 일부만 빠진 종목까지 여기서 가려내지는 못하므로 그 한계도 함께 남긴다.)
+      const symbolsWithFacts = new Set(facts.map((fact) => fact.key));
+      const withoutFacts = request.universe.symbols.filter((s) => !symbolsWithFacts.has(s));
       datasetWarnings.push(
-        '재무 데이터는 수집 시점 기준입니다. 누락된 계정이 있으면 해당 종목은 랭킹에서 조용히 빠집니다 — facts:sync 리포트를 확인하세요.',
+        (withoutFacts.length > 0
+          ? `재무 데이터가 하나도 없어 랭킹에서 제외된 종목: ${withoutFacts.join(', ')}. `
+          : '') +
+          '재무 데이터는 수집 시점 기준입니다. 계정이 일부만 누락된 종목도 랭킹에서 조용히 빠질 수 있습니다 ' +
+          '— `pnpm cli facts:sync` 를 다시 실행하면 누락 리포트를 다시 볼 수 있습니다.',
       );
     }
 

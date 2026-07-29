@@ -172,6 +172,86 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       const openSymbols = openPositions.map((p) => p.symbol);
       expect(openSymbols).toContain('CHEAP');
       expect(openSymbols).not.toContain('RICH');
+
+      // 두 종목 모두 재무가 있으므로 "재무 없는 종목" 목록은 나오지 않아야 한다
+      const warnings = JSON.parse(run.warningsJson ?? '[]') as string[];
+      expect(warnings.some((w) => w.includes('재무 데이터가 하나도 없어'))).toBe(false);
+    },
+  );
+
+  /**
+   * 워커는 재무가 없어 조용히 빠지는 종목이 있다고 경고하면서 "facts:sync 리포트를
+   * 확인하세요" 라고 안내했다 — 그 리포트는 이미 닫혔을 수 있는 세션의 stdout 으로만
+   * 존재했다. 실제로 로드된 팩트 키를 유니버스와 맞춰 종목 이름을 직접 밝힌다.
+   */
+  it(
+    '재무가 없는 종목을 이름으로 밝힌다',
+    { timeout: 90_000 },
+    async () => {
+      // 데이터셋·봉은 있지만 팩트가 없는 종목을 하나 더한다
+      ctx.container.datasetService.updateSymbols(datasetId, { add: ['NOFACTS'] });
+      const extra: Candle[] = [];
+      for (let index = 0; index < 40; index += 1) {
+        extra.push({
+          symbol: 'NOFACTS',
+          market: 'KR',
+          timeframe: '1d',
+          tsMs: START + index * DAY,
+          open: 1_000,
+          high: 1_000,
+          low: 1_000,
+          close: 1_000,
+          volume: 1_000,
+        });
+      }
+      await ctx.container.candleRepository.saveCandles(datasetId, extra);
+      await ctx.container.datasetService.refreshCoverage(datasetId, 'KR', '1d');
+
+      const created = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/backtests',
+        cookies: { qp_session: cookie },
+        payload: {
+          strategyId: 'value-quality-rank',
+          strategyVersion: '1.0.0',
+          parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+          datasetId,
+          timeframe: '1d',
+          universe: { type: 'SYMBOLS', symbols: ['CHEAP', 'RICH', 'NOFACTS'] },
+          period: { from: '2025-01-02', to: '2025-03-01' },
+          capital: { initialCash: 10_000_000, currency: 'KRW' },
+          execution: {
+            fillTiming: 'NEXT_BAR_OPEN',
+            commissionProfileId: 'zero-cost',
+            slippageProfileId: 'zero-slippage',
+          },
+          risk: { maxPositions: 1 },
+          randomSeed: 1,
+        } satisfies BacktestRequest,
+      });
+      expect(created.statusCode).toBe(201);
+      const jobId = (created.json().job as { id: string }).id;
+
+      ctx.container.jobOrchestrator.tick();
+      await waitFor(() => {
+        const job = ctx.container.jobQueue.getJob(jobId);
+        return job !== null && ctx.container.jobQueue.isTerminal(job.status);
+      }, 60_000);
+
+      const job = ctx.container.jobQueue.getJob(jobId)!;
+      expect(job.error).toBeNull();
+      expect(job.status).toBe('COMPLETED');
+
+      const run = ctx.container.resultsService.getRun(jobId)!;
+      const warnings = JSON.parse(run.warningsJson ?? '[]') as string[];
+      const factWarning = warnings.find((w) => w.includes('재무 데이터가 하나도 없어'));
+      expect(factWarning).toBeDefined();
+      expect(factWarning).toContain('NOFACTS');
+      // 재무가 있는 종목은 이 목록에 끼지 않는다
+      expect(factWarning).not.toContain('CHEAP');
+      expect(factWarning).not.toContain('RICH');
+      // 더 이상 존재하지 않는 리포트를 가리키지 않는다
+      expect(factWarning).not.toContain('facts:sync 리포트를 확인하세요');
     },
   );
 });
