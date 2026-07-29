@@ -20,6 +20,8 @@ import { api, ApiError, postJson } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 import { formatKrw } from '@/lib/format';
 import { requestToFormState } from './prefill';
+import { ParamHint } from './param-hint';
+import { extractNumberParams, paramLabel, type NumberParamSpec } from './param-specs';
 import type { BacktestRequestBody } from './types';
 
 const STEPS = ['전략', '데이터·종목', '기간', '자본·비용', '검토', '실행'] as const;
@@ -42,32 +44,6 @@ interface DatasetSummary {
 interface ProfileSummary {
   id: string;
   version: string;
-}
-
-interface NumberParamSpec {
-  key: string;
-  minimum?: number;
-  maximum?: number;
-  /** 서버 전략 스키마가 선언한 기본값 — 클라이언트 사본을 두지 않는다 */
-  defaultValue?: number;
-  isInteger: boolean;
-  optional: boolean;
-}
-
-function extractNumberParams(schema: Record<string, unknown> | undefined): NumberParamSpec[] {
-  if (!schema) return [];
-  const properties = (schema.properties ?? {}) as Record<string, Record<string, unknown>>;
-  const required = new Set((schema.required as string[] | undefined) ?? []);
-  return Object.entries(properties)
-    .filter(([, def]) => def.type === 'number' || def.type === 'integer')
-    .map(([key, def]) => ({
-      key,
-      ...(typeof def.minimum === 'number' ? { minimum: def.minimum } : {}),
-      ...(typeof def.maximum === 'number' ? { maximum: def.maximum } : {}),
-      ...(typeof def.default === 'number' ? { defaultValue: def.default } : {}),
-      isInteger: def.type === 'integer',
-      optional: !required.has(key),
-    }));
 }
 
 export function NewBacktestWizard() {
@@ -196,16 +172,17 @@ export function NewBacktestWizard() {
     const parsedParams: Record<string, number> = {};
     for (const spec of paramSpecs) {
       const raw = paramValue(spec);
+      const label = paramLabel(spec);
       if (raw === '') {
         if (spec.optional) continue;
-        return `파라미터 ${spec.key} 를 입력하세요`;
+        return `${label} 을(를) 입력하세요`;
       }
       const value = Number(raw);
-      if (!Number.isFinite(value)) return `파라미터 ${spec.key} 가 숫자가 아닙니다`;
+      if (!Number.isFinite(value)) return `${label} 이(가) 숫자가 아닙니다`;
       if (spec.minimum !== undefined && value < spec.minimum)
-        return `${spec.key} ≥ ${spec.minimum} 이어야 합니다`;
+        return `${label} 은(는) ${spec.minimum} 이상이어야 합니다`;
       if (spec.maximum !== undefined && value > spec.maximum)
-        return `${spec.key} ≤ ${spec.maximum} 이어야 합니다`;
+        return `${label} 은(는) ${spec.maximum} 이하여야 합니다`;
       parsedParams[spec.key] = spec.isInteger ? Math.round(value) : value;
     }
 
@@ -383,10 +360,13 @@ export function NewBacktestWizard() {
               <CardContent className="grid grid-cols-2 gap-4">
                 {paramSpecs.map((spec) => (
                   <div key={spec.key} className="space-y-1">
-                    <Label htmlFor={`param-${spec.key}`} className="text-xs">
-                      {spec.key}
-                      {spec.optional ? ' (선택)' : ''}
-                    </Label>
+                    <div className="flex items-center gap-1">
+                      <Label htmlFor={`param-${spec.key}`} className="text-xs">
+                        {paramLabel(spec)}
+                        {spec.optional ? ' (선택)' : ''}
+                      </Label>
+                      <ParamHint spec={spec} />
+                    </div>
                     <Input
                       id={`param-${spec.key}`}
                       type="number"

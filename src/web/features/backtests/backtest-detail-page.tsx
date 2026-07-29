@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Copy, Download, SlidersHorizontal, Trash2, XCircle } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
@@ -36,6 +36,8 @@ import { api, ApiError } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 import { useBacktestLive, useBacktestSeries, useBacktestTrades } from './api';
 import { openPositionRows } from './open-position-rows';
+import { ParamHint } from './param-hint';
+import { extractNumberParams, paramLabel } from './param-specs';
 import {
   formatDateTime,
   formatDuration,
@@ -253,6 +255,15 @@ function TradesSection({
 
 function RunMetadataCard({ run, job }: { run: RunMetadata; job: JobSummary }) {
   const warnings = run.warningsJson ? (JSON.parse(run.warningsJson) as string[]) : [];
+  // 라벨·설명은 서버 스키마에서 읽는다 (위저드와 같은 캐시 키).
+  // 실패하거나 아직 안 왔으면 원본 키로 표시한다 — 파라미터 값 표시를 막지 않는다.
+  const schema = useQuery({
+    queryKey: ['strategies', run.strategyId, 'schema'],
+    queryFn: () => api<{ schema: Record<string, unknown> }>(`/strategies/${run.strategyId}/schema`),
+  });
+  const specByKey = new Map(
+    extractNumberParams(schema.data?.schema).map((spec) => [spec.key, spec]),
+  );
   const rows: Array<[string, string]> = [
     ['전략', `${run.strategyId} v${run.strategyVersion}`],
     ['전략 해시', run.strategySourceHash.slice(0, 16)],
@@ -272,12 +283,18 @@ function RunMetadataCard({ run, job }: { run: RunMetadata; job: JobSummary }) {
           <CardTitle className="text-base">파라미터</CardTitle>
         </CardHeader>
         <CardContent className="space-y-1 text-sm">
-          {Object.entries(job.request.parameters).map(([key, value]) => (
-            <div key={key} className="flex justify-between">
-              <span className="text-muted-foreground">{key}</span>
-              <span className="tabular-nums">{String(value)}</span>
-            </div>
-          ))}
+          {Object.entries(job.request.parameters).map(([key, value]) => {
+            const spec = specByKey.get(key);
+            return (
+              <div key={key} className="flex items-center justify-between gap-2">
+                <span className="flex items-center gap-1 text-muted-foreground">
+                  {spec ? paramLabel(spec) : key}
+                  {spec ? <ParamHint spec={spec} /> : null}
+                </span>
+                <span className="tabular-nums">{String(value)}</span>
+              </div>
+            );
+          })}
           <div className="flex justify-between">
             <span className="text-muted-foreground">초기 자본</span>
             <span>{formatKrw(job.request.capital.initialCash)}</span>

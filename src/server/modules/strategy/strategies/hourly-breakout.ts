@@ -21,12 +21,35 @@ import type {
  */
 // 기본값(스펙 §15 예시)은 스키마에 선언한다 — JSON 스키마의 `default` 로 노출되어
 // 위저드가 그대로 읽는다. 클라이언트에 별도 기본값 사본을 두지 않는다.
+// 한국어 라벨·설명도 같은 원칙으로 `.meta()` 에 둔다 — JSON 스키마의 `title`/`description`
+// 으로 나가 위저드·상세 페이지가 그대로 읽는다. 재현성 해시는 이 두 필드를 제외한다
+// (strategySourceHash — 문구만 고쳐도 "전략 변경" 으로 보이면 안 된다).
 export const hourlyBreakoutParameters = z.object({
-  lookbackBars: z.number().int().min(2).max(200).default(20),
-  atrPeriod: z.number().int().min(2).max(100).default(14),
-  stopAtrMultiplier: z.number().positive().max(20).default(2),
-  takeProfitAtrMultiplier: z.number().positive().max(50).optional(),
-  riskPerTradePercent: z.number().positive().max(5).default(1),
+  lookbackBars: z.number().int().min(2).max(200).default(20).meta({
+    title: '돌파 기준 봉 수',
+    description:
+      '직전 N개 봉의 최고가를 넘어서면 매수 진입합니다. 크게 잡으면 큰 추세만 잡아 신호가 줄고, 작게 잡으면 신호가 잦아지되 잔신호가 늘어납니다.',
+  }),
+  atrPeriod: z.number().int().min(2).max(100).default(14).meta({
+    title: '변동성(ATR) 계산 기간',
+    description:
+      '손절·익절 폭의 기준이 되는 변동성을 몇 개 봉으로 평균낼지 정합니다. 짧으면 최근 변동에 민감하고, 길면 완만해집니다. Wilder 방식으로 계산합니다.',
+  }),
+  stopAtrMultiplier: z.number().positive().max(20).default(2).meta({
+    title: '손절 폭 (변동성 배수)',
+    description:
+      '진입가에서 변동성(ATR) × 이 값만큼 내려가면 손절합니다. 주문 수량 계산에도 쓰이므로, 작게 잡으면 자주 잘리는 대신 수량이 커집니다.',
+  }),
+  takeProfitAtrMultiplier: z.number().positive().max(50).optional().meta({
+    title: '익절 폭 (변동성 배수)',
+    description:
+      '진입가에서 변동성(ATR) × 이 값만큼 오르면 익절합니다. 비워두면 익절 없이 손절만 사용합니다.',
+  }),
+  riskPerTradePercent: z.number().positive().max(5).default(1).meta({
+    title: '1회 거래 리스크 (%)',
+    description:
+      '한 번의 거래에서 감당할 자본 비율입니다. 주문 수량 = 자본 × 이 비율 ÷ 손절 폭. 1% 로 두면 손절 시 자본의 약 1% 를 잃습니다.',
+  }),
 });
 
 export type HourlyBreakoutParameters = z.infer<typeof hourlyBreakoutParameters>;
