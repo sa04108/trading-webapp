@@ -58,7 +58,9 @@ export function NewBacktestWizard() {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [initialCash, setInitialCash] = useState('10000000');
-  const [maxPositions, setMaxPositions] = useState('10');
+  // 기본값 20 — 스키마 최댓값(risk.maxPositions ≤ 20)이자, 등록된 세 전략(topN 없음/10/20)이
+  // 모두 기본값만으로 제출 게이트(topN > maxPositions 422)를 통과하는 값이다
+  const [maxPositions, setMaxPositions] = useState('20');
   const [commissionProfileId, setCommissionProfileId] = useState('kr-equity-default');
   const [slippageProfileId, setSlippageProfileId] = useState('fixed-5bps');
   const [randomSeed, setRandomSeed] = useState('42');
