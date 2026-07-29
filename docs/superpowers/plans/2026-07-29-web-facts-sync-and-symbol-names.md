@@ -1657,7 +1657,26 @@ function emptyFactResult() {
 }
 ```
 
-기존 파일에 `setupHarness`/`makeService` 같은 헬퍼가 없다면, 기존 테스트가 `new BrokerSyncService({...})` 를 직접 만드는 방식을 따라 그 인라인 셋업을 함수로 추출한다. `makeService(overrides)` 는 기존 deps 에 `...overrides` 를 얹는다.
+**위 테스트 코드의 `setupHarness()`/`harness.makeService(...)` 는 실제 헬퍼 이름이 아니다 — 아래 실제 모양에 맞춰 옮겨 쓸 것.**
+
+`tests/unit/broker-sync-service.test.ts:122-139` 에 이미 있는 헬퍼는 다음 하나다:
+
+```ts
+function buildHarness(source: MarketDataSource, options: { minFreeDiskBytes?: number; freeDiskBytes?: () => number } = {}) {
+  const handle = openDatabase(':memory:');
+  const repo = new InMemoryCandleRepository();
+  const clock = { now: () => Date.UTC(2026, 6, 8, 12, 0) }; // 2026-07-08 수요일 21:00 KST
+  const datasetService = new DatasetService(handle.db, repo, clock, logger, noopAudit);
+  const sync = new BrokerSyncService({ db: handle.db, source, candleRepository: repo, datasetService, clock, logger, audit: noopAudit, minFreeDiskBytes: ..., freeDiskBytes: ... });
+  return { db: handle.db, repo, datasetService, sync, clock };
+}
+```
+
+**`options` 에 `factsPhase?` 를 하나 더 받아 `BrokerSyncService` deps 로 넘기도록 확장한다.** 새 헬퍼를 만들지 말고 이 함수를 넓힌다 — 기존 21개 테스트가 모두 이걸 쓰고 있어서 두 개로 갈라지면 셋업이 두 곳에서 표류한다.
+
+데이터셋은 기존 테스트들이 하는 방식대로 `harness.datasetService.createBrokerDataset(...)` 로 만든다. 봉을 주지 않는 케이스는 `buildHarness(new FakeSource([]))` 로 만든다 — `setupHarness({ candles: [] })` 가 아니다.
+
+`harness.sync.startSync(datasetId, { includeFacts: true })` 를 직접 부르고, 잡 행은 `harness.db.select().from(dataImportJobs).where(eq(dataImportJobs.id, job.id)).get()` 로 읽는다.
 
 - [ ] **Step 2: 테스트가 실패하는 것을 확인한다**
 
@@ -2038,7 +2057,21 @@ describe('getCandleSyncEstimate', () => {
 });
 ```
 
-`makeDatasetService(database)` 는 기존 `broker-sync-service.test.ts` 가 `DatasetService` 를 만드는 방식을 그대로 따른다 (같은 생성자 인자).
+`makeDatasetService(database)` 는 `broker-sync-service.test.ts:126` 과 같은 인자로 만든다:
+
+```ts
+function makeDatasetService(database: ReturnType<typeof setup>) {
+  const repo = new InMemoryCandleRepository();  // 또는 이 테스트에 필요한 최소 스텁
+  const clock = { now: () => Date.UTC(2026, 6, 8, 12, 0) };
+  return new DatasetService(database.db, repo, clock, logger, noopAudit);
+}
+```
+
+`DatasetService` 생성자는 `(db, candleRepository, clock, logger, audit)` 순서다. `logger` 는
+`createLogger(loadConfig({ NODE_ENV: 'test', LOG_LEVEL: 'error' }))`, `noopAudit` 은
+`{ record: () => {} } as unknown as AuditLogService` — 둘 다 `broker-sync-service.test.ts:23,120`
+의 관례를 그대로 옮긴다. `getCandleSyncEstimate` 는 캔들 저장소를 건드리지 않으므로 repo 는
+최소 스텁으로 충분하다.
 
 - [ ] **Step 2: 테스트가 실패하는 것을 확인한다**
 
