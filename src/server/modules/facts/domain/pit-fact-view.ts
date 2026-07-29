@@ -67,15 +67,24 @@ export class PitFactView {
   private readonly bySymbol = new Map<string, SymbolEntry>();
 
   constructor(facts: readonly Fact[]) {
-    // asOfTsMs 만으로는 동시각 팩트끼리 순서가 입력 배열 순서(정렬 불안정 시엔 그마저도
-    // 보장 안 됨)에 좌우된다. Parquet 등에서 로드하면 행 순서가 매번 달라질 수 있으므로
-    // key·field·periodKey 를 보조 키로 더해 완전히 결정적으로 만든다 (재현성 §9.5).
+    // 흡수 순서가 결과를 바꾸는 건 두 팩트가 같은 슬롯(key, field, periodKey)을
+    // 다툴 때뿐이다 — asOfTsMs 까지 같다면 그 슬롯을 다투는 두 팩트는 값만 다른
+    // 완전한 중복이고, key·field·periodKey 보조 키로도 동점이라 안정 정렬이
+    // 입력 배열 순서를 그대로 보존해버린다. value 를 마지막 타이브레이커로 더해
+    // 이 경우까지 결정적으로 만든다(흡수 시 `>=` 로 겹쳐쓰므로 가장 큰 value 가
+    // 이긴다).
+    //
+    // 다만 이 정렬은 진짜 방어선이 아니라 마지막 안전망이다. 진짜 방어선은
+    // 상류(fact repository, 후속 태스크)가 저장 전에 (key, field, periodKey,
+    // asOfTsMs) 로 행을 접어(collapse) 엔진에 애초에 충돌하는 중복을 넘기지
+    // 않는 것이다. 이 타이브레이커는 그 경로를 벗어나 조립된 팩트(테스트 등)를
+    // 위한 인메모리 보강일 뿐 — 이것만 믿고 있으면 안 된다 (재현성 §9.5).
     this.ordered = [...facts].sort((a, b) => {
       if (a.asOfTsMs !== b.asOfTsMs) return a.asOfTsMs - b.asOfTsMs;
       if (a.key !== b.key) return a.key < b.key ? -1 : 1;
       if (a.field !== b.field) return a.field < b.field ? -1 : 1;
       if (a.periodKey !== b.periodKey) return a.periodKey < b.periodKey ? -1 : 1;
-      return 0;
+      return a.value - b.value;
     });
   }
 

@@ -241,10 +241,32 @@ describe('PitFactView 자본변동 이벤트', () => {
 });
 
 describe('PitFactView 흡수 순서 결정성', () => {
-  it('같은 asOfTsMs 를 가진 팩트들의 입력 배열 순서가 달라도 결과가 동일하다', () => {
-    // 세 팩트 모두 asOfTsMs 가 같다 — 정렬이 asOfTsMs 만 본다면 입력 순서(=배열 순서,
-    // 예컨대 Parquet 행 순서)에 따라 재집계 승자·계정별 최신값이 달라질 수 있다.
+  it('key·field·periodKey·asOfTsMs 가 전부 같은 진짜 중복끼리는 배열 순서와 무관하게 같은 값으로 수렴한다', () => {
+    // 흡수 순서가 결과에 영향을 주는 유일한 경우는 두 팩트가 같은 맵 슬롯
+    // (key, field, periodKey) 을 다투는 경우다. asOfTsMs 까지 같다면 그 슬롯을
+    // 다투는 두 팩트는 정말로 완전한 중복(값만 다름) 이라, asOfTsMs 만 보는
+    // 정렬은 물론이고 key/field/periodKey 만 보조 키로 쓰는 정렬도 이 경우엔
+    // 동점(0)으로 떨어져 안정 정렬이 입력 배열 순서를 그대로 보존해버린다 —
+    // 즉 배열 순서가 승자를 결정하게 된다. value 를 최종 타이브레이커로 넣어야
+    // 이 경우까지 결정적이다.
     const asOf = 1_000;
+    const low = fact({ field: 'OPERATING_INCOME', periodKey: '2025Q1', asOfTsMs: asOf, value: 100 });
+    const high = fact({ field: 'OPERATING_INCOME', periodKey: '2025Q1', asOfTsMs: asOf, value: 200 });
+
+    const viewLowFirst = new PitFactView([low, high]);
+    const viewHighFirst = new PitFactView([high, low]);
+    viewLowFirst.advanceTo(asOf);
+    viewHighFirst.advanceTo(asOf);
+
+    expect(viewHighFirst.fundamentals('005930')?.get('OPERATING_INCOME')).toBe(
+      viewLowFirst.fundamentals('005930')?.get('OPERATING_INCOME'),
+    );
+  });
+
+  it('key/field 가 다른 동시각 팩트들도 입력 배열 순서와 무관하게 결과가 동일하다', () => {
+    // 이쪽은 애초에 같은 맵 슬롯을 다투지 않으므로 asOfTsMs 만으로도 이미
+    // 결정적이지만, 회귀 방지 차원에서 key·field 보조 키 경로도 함께 확인한다.
+    const asOf = 2_000;
     const factsInOrderA: Fact[] = [
       fact({ key: '005930', field: 'OPERATING_INCOME', periodKey: '2025Q1', asOfTsMs: asOf, value: 100 }),
       fact({ key: '005930', field: 'CURRENT_ASSETS', periodKey: '2025Q1', asOfTsMs: asOf, value: 500 }),
