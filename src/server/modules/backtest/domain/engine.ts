@@ -237,7 +237,7 @@ export function runBacktest(
     (fact) => fact.field === CORPORATE_ACTION_FIELD,
   );
   warnings.push(
-    '생존 편향·공휴일 캘린더·배당·권리락 보정은 MVP 에서 다루지 않습니다 (§9.4). ' +
+    '생존 편향, 공휴일 캘린더, 배당, 권리락은 이 백테스트에서 보정하지 않습니다. ' +
       (hasCorporateActionFacts
         ? '액면분할은 분할 이력이 수집된 데이터셋에서, 보정을 사용하는 전략의 신호 계산에만 반영됩니다 — 체결가는 실제 거래 가격입니다.'
         : '액면분할도 이 실행에서는 보정되지 않았습니다 (분할 이력 미수집).'),

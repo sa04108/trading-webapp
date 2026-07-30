@@ -143,7 +143,7 @@ test('unsupported market is disabled with reason shown on dataset create dialog'
   await expect(page.getByRole('option', { name: /US/ })).toBeDisabled();
   await page.keyboard.press('Escape');
   await expect(page.getByText(/US 는 아직 지원하지 않습니다/)).toBeVisible();
-  await expect(page.getByText(/DART 재무 수집은 국내 종목 전용/)).toBeVisible();
+  await expect(page.getByText(/재무 데이터 수집은 국내 종목만 지원합니다/)).toBeVisible();
 });
 
 /** `/markets` 가 영구히 실패하면 목록은 영원히 비어(로딩 중과 같은 모양) 있는다 — 그 상태를

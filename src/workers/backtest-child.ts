@@ -191,7 +191,7 @@ async function main(): Promise<void> {
     if (strategy.requiresFundamentals === true && financialFacts.length === 0) {
       // 제출 검증이 걸렀어야 하는 상태다. 실행 중 데이터가 지워진 경우의 뒤늦은 방어선.
       throw new Error(
-        '이 전략은 상장시점 재무 데이터가 필요합니다. `pnpm cli facts:sync` 로 수집한 뒤 다시 실행하세요.',
+        '이 전략은 상장시점 재무 데이터가 필요합니다. 데이터 화면에서 이 데이터셋을 동기화할 때 "재무" 를 함께 선택해 수집한 뒤 다시 실행하세요.',
       );
     }
     if (strategy.requiresFundamentals === true) {
@@ -211,7 +211,7 @@ async function main(): Promise<void> {
             '. '
           : '') +
           '재무 데이터는 수집 시점 기준입니다. 계정이 일부만 누락된 종목도 랭킹에서 조용히 빠질 수 있습니다 ' +
-          '— `pnpm cli facts:sync` 를 다시 실행하면 누락 리포트를 다시 볼 수 있습니다.',
+          '— 데이터 화면에서 재무를 다시 수집하면 누락 건수를 확인할 수 있습니다.',
       );
     }
 

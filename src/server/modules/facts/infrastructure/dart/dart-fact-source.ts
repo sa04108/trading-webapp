@@ -112,7 +112,7 @@ export function createDartFactSource(
         `${dartConfig.baseUrl}/api/corpCode.xml?${query.toString()}`,
       );
       if (!response.ok) {
-        throw new Error(`corpCode.xml 다운로드 실패: ${response.status}`);
+        throw new Error(`DART 종목 코드 목록을 내려받지 못했습니다 (HTTP ${response.status})`);
       }
       return Buffer.from(await response.arrayBuffer());
     });

@@ -281,8 +281,8 @@ function RunMetadataCard({ run, job }: { run: RunMetadata; job: JobSummary }) {
     ['엔진 버전', run.engineVersion],
     ['수수료 모델', run.feeModelVersion],
     ['슬리피지 모델', run.slippageModelVersion],
-    ['Random seed', String(run.randomSeed)],
-    ['Git commit', run.gitCommitSha.slice(0, 12)],
+    ['난수 시드', String(run.randomSeed)],
+    ['Git 커밋', run.gitCommitSha.slice(0, 12)],
     ['실행 시각', `${formatDateTime(run.startedAtMs)} ~ ${formatDateTime(run.completedAtMs)}`],
   ];
   return (

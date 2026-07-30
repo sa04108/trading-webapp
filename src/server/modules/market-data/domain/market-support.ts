@@ -29,10 +29,10 @@ export function listMarketSupport(): readonly MarketSupport[] {
     }
     const reasons: string[] = [];
     if (!datasetsSupported) {
-      reasons.push('거래소 세션 정의가 없어(DST 미지원) 데이터셋을 만들 수 없습니다');
+      reasons.push('거래 시간 정의가 없어 데이터셋을 만들 수 없습니다 (일광 절약 시간제 미지원)');
     }
     if (!factsSupported) {
-      reasons.push('DART 재무 수집은 국내 종목 전용입니다');
+      reasons.push('재무 데이터 수집은 국내 종목만 지원합니다');
     }
     return { market, datasetsSupported, factsSupported, reason: `${reasons.join('. ')}.` };
   });

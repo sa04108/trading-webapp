@@ -229,7 +229,7 @@ describe('createFactsSyncEstimator', () => {
   it('DART 키가 없으면 UNSUPPORTED 다', () => {
     expect(makeEstimator({ dartApiKey: null })('ds-1')).toEqual({
       basis: 'UNSUPPORTED',
-      reason: 'DART_API_KEY 가 설정되지 않았습니다.',
+      reason: 'DART 인증키가 설정되지 않아 재무를 수집할 수 없습니다.',
     });
   });
 
@@ -243,7 +243,7 @@ describe('createFactsSyncEstimator', () => {
   it('KR 이 아닌 시장은 UNSUPPORTED 다 — DART 는 국내 공시만 담는다', () => {
     expect(makeEstimator({ dataset: { market: 'US', symbols: ['AAPL'] } })('ds-1')).toEqual({
       basis: 'UNSUPPORTED',
-      reason: 'DART 재무 수집은 KR 시장 데이터셋만 지원합니다.',
+      reason: '재무 데이터 수집은 국내(KR) 데이터셋만 지원합니다.',
     });
   });
 

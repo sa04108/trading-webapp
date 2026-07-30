@@ -52,7 +52,7 @@ async function adminCreate(): Promise<void> {
 
     const password = await ask('비밀번호 (14자 이상): ', true);
     if (password.length < 14) {
-      throw new Error('비밀번호는 최소 14자여야 합니다. (스펙 §16)');
+      throw new Error('비밀번호는 최소 14자여야 합니다.');
     }
     const confirm = await ask('비밀번호 확인: ', true);
     if (password !== confirm) {
@@ -76,7 +76,7 @@ async function adminCreate(): Promise<void> {
     container.auditLog.record(username, 'auth.admin.created');
 
     console.log(`\n관리자 계정 '${username}' 이 생성되었습니다.`);
-    console.log('다음: pnpm cli totp:enroll 로 TOTP 를 등록하세요 — 퍼블릭 노출 전 필수 (설계 §3.4)');
+    console.log('다음: pnpm cli totp:enroll 로 TOTP 를 등록하세요 — 외부에 공개하기 전 필수입니다.');
   } finally {
     container.close();
   }
@@ -134,7 +134,7 @@ async function totpEnroll(): Promise<void> {
     console.log('\nTOTP 가 등록되었습니다.\n');
     console.log('3) 복구 코드를 안전한 곳에 보관하세요 (각 1회용, 재표시 불가):');
     for (const code of recoveryCodes) console.log(`   ${code}`);
-    console.log('\n이 정보는 다시 표시되지 않습니다. (스펙 §16 TOTP secret 재노출 금지)');
+    console.log('\n이 정보는 다시 표시되지 않습니다.');
   } finally {
     container.close();
   }
@@ -294,7 +294,7 @@ async function main(): Promise<void> {
     default:
       console.log('사용법: cli <command>');
       console.log('  admin:create   관리자 계정 생성');
-      console.log('  totp:enroll    TOTP 2단계 인증 등록·재발급 (CLI 전용, 스펙 §16)');
+      console.log('  totp:enroll    TOTP 2단계 인증 등록·재발급 (CLI 전용)');
       console.log('  facts:sync     DART 재무·자본변동 수집 (--dataset <id> --from <연도> --to <연도> [--fs-div CFS|OFS])');
       process.exitCode = command ? 1 : 0;
   }

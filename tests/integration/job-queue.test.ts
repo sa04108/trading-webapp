@@ -476,7 +476,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       cookies: { qp_session: cookie },
     });
     expect(cloned.statusCode).toBe(422);
-    expect((cloned.json() as { error: string }).error).toContain('facts:sync');
+    expect((cloned.json() as { error: string }).error).toContain('상장시점 재무 데이터가 필요');
   });
 
   it('초안은 재무 요구 미충족도 blockers 에 담는다', async () => {
@@ -494,7 +494,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
     expect(draft.statusCode).toBe(200);
     const body = draft.json() as { blockers: string[] };
-    expect(body.blockers.some((b) => b.includes('facts:sync'))).toBe(true);
+    expect(body.blockers.some((b) => b.includes('상장시점 재무 데이터가 필요'))).toBe(true);
   });
 
   it('일부 종목만 봉이 없으면 거부하지 않는다 (신규 상장 등 정상)', async () => {

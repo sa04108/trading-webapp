@@ -44,7 +44,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { api, postForm, postJson } from '@/lib/api-client';
-import { formatDate } from '@/lib/format';
+import { datasetTimeframeLabel, formatDate } from '@/lib/format';
 import { useMarketSupport, type MarketSupport } from '@/lib/use-market-support';
 import { useStockNames, type StockInfo } from '@/lib/use-stock-names';
 import { cn } from '@/lib/utils';
@@ -387,9 +387,7 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
           )}
           <Badge variant="secondary">{dataset.market}</Badge>
           {/* 1h 데이터셋의 실체는 1m 수집 + 1h 집계 (§11 관례) — 1h 만 표시하면 수집 봉과 불일치 */}
-          <Badge variant="secondary">
-            {dataset.timeframe === '1h' ? '1m→1h' : dataset.timeframe}
-          </Badge>
+          <Badge variant="secondary">{datasetTimeframeLabel(dataset.timeframe)}</Badge>
           <Badge variant="outline">v{dataset.latestVersion}</Badge>
           <span className="ml-auto flex items-center gap-2">
             {syncJobId === null ? (

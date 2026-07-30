@@ -26,6 +26,7 @@ import {
 } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { api, ApiError } from '@/lib/api-client';
+import { timeframeLabel } from '@/lib/format';
 
 const GAIN = 'var(--gain)'; // KR 관례: 상승 빨강
 const LOSS = 'var(--loss)'; // 하락 파랑
@@ -223,7 +224,7 @@ export function CandleInspectDrawer({
                 <SelectContent>
                   {timeframes.map((tf) => (
                     <SelectItem key={tf} value={tf}>
-                      {tf === '1m' ? '1분봉' : tf === '1h' ? '1시간봉' : '일봉'}
+                      {timeframeLabel(tf)}
                     </SelectItem>
                   ))}
                 </SelectContent>

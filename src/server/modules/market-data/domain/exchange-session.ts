@@ -21,7 +21,7 @@ export const KR_SESSION: ExchangeSession = {
 
 export class UnsupportedMarketSessionError extends Error {
   constructor(market: Market) {
-    super(`${market} 시장의 세션은 아직 지원되지 않습니다 (DST 미지원, docs/DECISIONS.md D-006)`);
+    super(`${market} 시장의 거래 시간은 아직 지원하지 않습니다 (일광 절약 시간제 미지원)`);
     this.name = 'UnsupportedMarketSessionError';
   }
 }

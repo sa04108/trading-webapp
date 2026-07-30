@@ -251,7 +251,8 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       expect(factWarning).not.toContain('CHEAP');
       expect(factWarning).not.toContain('RICH');
       // 더 이상 존재하지 않는 리포트를 가리키지 않는다
-      expect(factWarning).not.toContain('facts:sync 리포트를 확인하세요');
+      // CLI 명령을 안내하지 않는다 — 재무 수집은 데이터 화면에서 한다
+      expect(factWarning).not.toContain('facts:sync');
     },
   );
 });

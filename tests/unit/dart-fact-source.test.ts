@@ -510,7 +510,7 @@ describe('createDartFactSource — corpCode.xml 다운로드 (기본 resolver)',
     expect(urls.some((url) => url.includes(`crtfc_key=${SECRET}`))).toBe(true);
 
     expect(rejection).toBeInstanceOf(Error);
-    expect((rejection as Error).message).toContain('corpCode.xml 다운로드 실패');
+    expect((rejection as Error).message).toContain('DART 종목 코드 목록을 내려받지 못했습니다');
     expect((rejection as Error).message).not.toContain(SECRET);
     expect((rejection as Error).stack ?? '').not.toContain(SECRET);
     for (const line of lines) {

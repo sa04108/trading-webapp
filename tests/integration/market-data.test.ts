@@ -157,7 +157,7 @@ describe('market data (스펙 §11, §13)', () => {
     expect(body.syncEstimate.candles).toEqual({ basis: 'UNKNOWN' });
     expect(body.syncEstimate.facts).toEqual({
       basis: 'UNSUPPORTED',
-      reason: 'DART_API_KEY 가 설정되지 않았습니다.',
+      reason: 'DART 인증키가 설정되지 않아 재무를 수집할 수 없습니다.',
     });
 
     // data job 조회
@@ -248,7 +248,7 @@ describe('market data (스펙 §11, §13)', () => {
     });
     // 빈 1h 집계로 조용히 COMPLETED 되면 안 된다 — 명시적 거부
     expect(response.statusCode).toBe(400);
-    expect((response.json() as { error: string }).error).toContain('세션');
+    expect((response.json() as { error: string }).error).toContain('거래 시간');
   });
 
   it('chains dataset version hashes so identical last uploads differ (재현성 §9.5)', async () => {
@@ -487,7 +487,7 @@ describe('market data (스펙 §11, §13)', () => {
       payload: { datasetId, includeFacts: true },
     });
     expect(rejected.statusCode).toBe(400);
-    expect(rejected.json().error).toBe('DART_API_KEY 가 설정되지 않았습니다.');
+    expect(rejected.json().error).toBe('DART 인증키가 설정되지 않아 재무를 수집할 수 없습니다.');
     // 이것이 선검증의 증거다 — startSync 가 불렸다면 잡 행이 남는다
     expect(jobCount()).toBe(0);
 

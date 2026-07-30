@@ -126,12 +126,12 @@ export function createFactsSyncEstimator(
 ): (datasetId: string) => FactsSyncEstimate {
   return (datasetId: string): FactsSyncEstimate => {
     if (!deps.dartApiKey) {
-      return { basis: 'UNSUPPORTED', reason: 'DART_API_KEY 가 설정되지 않았습니다.' };
+      return { basis: 'UNSUPPORTED', reason: 'DART 인증키가 설정되지 않아 재무를 수집할 수 없습니다.' };
     }
     const dataset = deps.datasetService.getDataset(datasetId);
     if (!dataset) return { basis: 'UNSUPPORTED', reason: '데이터셋을 찾을 수 없습니다.' };
     if (dataset.market !== 'KR') {
-      return { basis: 'UNSUPPORTED', reason: 'DART 재무 수집은 KR 시장 데이터셋만 지원합니다.' };
+      return { basis: 'UNSUPPORTED', reason: '재무 데이터 수집은 국내(KR) 데이터셋만 지원합니다.' };
     }
     const range = deriveFactYearRange(deps.datasetService.getCoverage(datasetId), dataset.market);
     if (range === null) return { basis: 'AFTER_CANDLES' };

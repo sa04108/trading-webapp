@@ -77,7 +77,7 @@ export interface DatasetVersionBumper {
 
 export class FactSourceNotConfiguredError extends Error {
   constructor() {
-    super('DART_API_KEY 가 설정되지 않았습니다. 재무 데이터 수집을 사용할 수 없습니다.');
+    super('DART 인증키가 설정되지 않아 재무 데이터를 수집할 수 없습니다.');
     this.name = 'FactSourceNotConfiguredError';
   }
 }

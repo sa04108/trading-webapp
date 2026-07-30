@@ -195,7 +195,7 @@ describe('엔진 PIT 배선', () => {
       randomSeed: 1,
       maxPositions: 5,
     });
-    const biasWarning = result.warnings.find((warning) => warning.includes('§9.4'));
+    const biasWarning = result.warnings.find((warning) => warning.includes('생존 편향'));
     expect(biasWarning).toBeDefined();
     expect(biasWarning).toContain('배당');
   });
@@ -211,7 +211,7 @@ describe('엔진 PIT 배선', () => {
       maxPositions: 5,
       // facts 미지정 — 어떤 전략도 분할을 보정할 재료가 없다
     });
-    const biasWarning = result.warnings.find((warning) => warning.includes('§9.4'));
+    const biasWarning = result.warnings.find((warning) => warning.includes('생존 편향'));
     expect(biasWarning).toBeDefined();
     expect(biasWarning).toContain('액면분할도 이 실행에서는 보정되지 않았습니다');
     expect(biasWarning).not.toContain('신호 계산');
@@ -240,7 +240,7 @@ describe('엔진 PIT 배선', () => {
         },
       ],
     });
-    const biasWarning = result.warnings.find((warning) => warning.includes('§9.4'));
+    const biasWarning = result.warnings.find((warning) => warning.includes('생존 편향'));
     expect(biasWarning).toContain('액면분할도 이 실행에서는 보정되지 않았습니다');
     expect(biasWarning).not.toContain('신호 계산');
   });
@@ -267,7 +267,7 @@ describe('엔진 PIT 배선', () => {
       maxPositions: 5,
       facts,
     });
-    const biasWarning = result.warnings.find((warning) => warning.includes('§9.4'));
+    const biasWarning = result.warnings.find((warning) => warning.includes('생존 편향'));
     expect(biasWarning).toBeDefined();
     expect(biasWarning).toContain('보정을 사용하는 전략의 신호 계산에만 반영됩니다');
     expect(biasWarning).toContain('체결가는 실제 거래 가격입니다');

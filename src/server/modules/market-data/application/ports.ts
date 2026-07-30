@@ -62,7 +62,7 @@ export interface StockInfoSource {
 
 export class MarketDataSourceNotConfiguredError extends Error {
   constructor() {
-    super('증권사 API 자격 증명이 설정되지 않았습니다. CSV/Parquet import 를 사용하세요.');
+    super('증권사 API 자격 증명이 설정되지 않았습니다. 자격 증명을 설정하거나 CSV 가져오기로 데이터를 넣으세요.');
     this.name = 'MarketDataSourceNotConfiguredError';
   }
 }
@@ -70,7 +70,7 @@ export class MarketDataSourceNotConfiguredError extends Error {
 export class UnsupportedTimeframeError extends Error {
   constructor(timeframe: Timeframe) {
     super(
-      `데이터 소스가 ${timeframe} 봉을 제공하지 않습니다. 시간봉은 1분봉 집계로 생성하세요 (스펙 §13).`,
+      `데이터 소스가 ${timeframe} 봉을 제공하지 않습니다. 시간봉은 1분봉을 모아 만듭니다.`,
     );
     this.name = 'UnsupportedTimeframeError';
   }

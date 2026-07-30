@@ -197,7 +197,7 @@ describe('일봉 데이터셋 백테스트 (D-024)', () => {
     });
 
     expect(response.statusCode).toBe(422);
-    expect(response.json().error).toContain('facts:sync');
+    expect(response.json().error).toContain('상장시점 재무 데이터가 필요');
   });
 
   /**

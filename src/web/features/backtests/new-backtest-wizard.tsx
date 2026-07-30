@@ -18,7 +18,7 @@ import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { api, ApiError, postJson } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
-import { formatKrw } from '@/lib/format';
+import { datasetTimeframeLabel, formatKrw, timeframeLabel } from '@/lib/format';
 import { useStockNames } from '@/lib/use-stock-names';
 import { requestToFormState } from './prefill';
 import { ParamHint } from './param-hint';
@@ -446,7 +446,7 @@ export function NewBacktestWizard() {
           {(datasets.data?.datasets ?? []).length === 0 ? (
             <Alert>
               <AlertDescription>
-                데이터셋이 없습니다. 데이터 메뉴에서 CSV 를 먼저 가져오세요.
+                데이터셋이 없습니다. 데이터 화면에서 증권사 데이터셋을 만들거나 CSV 를 가져오세요.
               </AlertDescription>
             </Alert>
           ) : null}
@@ -466,7 +466,7 @@ export function NewBacktestWizard() {
             >
               <p className="font-medium">{dataset.name}</p>
               <p className="mt-1 text-sm text-muted-foreground">
-                {dataset.market} · {dataset.timeframe === '1h' ? '1m→1h' : dataset.timeframe} ·{' '}
+                {dataset.market} · {datasetTimeframeLabel(dataset.timeframe)} ·{' '}
                 {dataset.symbols.length}종목
               </p>
             </button>
@@ -678,13 +678,7 @@ export function NewBacktestWizard() {
               <Separator />
               <div className="flex justify-between gap-3">
                 <span className="shrink-0 text-muted-foreground">봉 주기</span>
-                <span>
-                  {request.timeframe === '1m'
-                    ? '1분봉'
-                    : request.timeframe === '1d'
-                      ? '일봉'
-                      : '1시간봉'}
-                </span>
+                <span>{timeframeLabel(request.timeframe ?? '1h')}</span>
               </div>
               <Separator />
               <div className="flex justify-between gap-3">

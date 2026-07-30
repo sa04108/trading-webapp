@@ -39,12 +39,12 @@ describe('listMarketSupport', () => {
     });
   });
 
-  it('US 는 전부 미지원이고 이유에 세션과 재무 두 근거가 다 있다', () => {
+  it('US 는 전부 미지원이고 이유에 거래 시간과 재무 두 근거가 다 있다', () => {
     const us = listMarketSupport().find((entry) => entry.market === 'US');
     expect(us?.datasetsSupported).toBe(false);
     expect(us?.factsSupported).toBe(false);
     // 사용자가 "왜 회색인지" 를 이 문구 하나로 알 수 있어야 한다
-    expect(us?.reason).toContain('세션');
-    expect(us?.reason).toContain('DART');
+    expect(us?.reason).toContain('거래 시간');
+    expect(us?.reason).toContain('재무');
   });
 });

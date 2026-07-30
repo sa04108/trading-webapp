@@ -80,12 +80,12 @@ function serializeJob(job: BacktestJobRow) {
 
 async function checkResources(dataRoot: string): Promise<string | null> {
   if (availableMemoryBytes() < MIN_FREE_MEMORY_BYTES) {
-    return '여유 메모리가 부족해 신규 백테스트를 거부합니다 (스펙 §34)';
+    return '여유 메모리가 부족해 새 백테스트를 시작할 수 없습니다. 실행 중인 작업이 끝난 뒤 다시 시도하세요.';
   }
   try {
     const stats = await fs.promises.statfs(dataRoot);
     if (stats.bavail * stats.bsize < MIN_FREE_DISK_BYTES) {
-      return '디스크 공간이 부족해 신규 백테스트를 거부합니다 (스펙 §34)';
+      return '디스크 공간이 부족해 새 백테스트를 시작할 수 없습니다. 저장 공간을 확보한 뒤 다시 시도하세요.';
     }
   } catch {
     // statfs 실패 시 가드를 건너뛴다
@@ -224,8 +224,8 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (!strategies.requiresFundamentals(body.strategyId)) return null;
     if (factRepository.hasFacts(body.datasetId, 'SYMBOL')) return null;
     return (
-      '이 전략은 상장시점 재무 데이터가 필요합니다. 이 데이터셋에는 아직 수집되지 않았습니다. ' +
-      'SSH 에서 `pnpm cli facts:sync --dataset <데이터셋 id> --from <연도> --to <연도>` 를 실행하세요.'
+      '이 전략은 상장시점 재무 데이터가 필요하지만 이 데이터셋에는 아직 없습니다. ' +
+      '데이터 화면에서 이 데이터셋을 동기화할 때 "재무" 를 함께 선택해 수집하세요.'
     );
   };
 

@@ -135,7 +135,7 @@ export function DashboardPage() {
                 <p className="text-muted-foreground">
                   데이터셋이 없습니다.{' '}
                   <Link to="/datasets" className="underline underline-offset-4">
-                    CSV 가져오기
+                    데이터셋 만들기
                   </Link>
                 </p>
               )

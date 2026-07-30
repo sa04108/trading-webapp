@@ -382,7 +382,7 @@ export class BrokerSyncService {
     };
 
     if (!this.deps.factsPhase) {
-      state.skipReason = 'DART_API_KEY 가 설정되지 않아 재무를 수집하지 않았습니다.';
+      state.skipReason = 'DART 인증키가 설정되지 않아 재무를 수집하지 않았습니다.';
       return { state, stopReason: null };
     }
 
@@ -394,7 +394,7 @@ export class BrokerSyncService {
      * 라우트 선검증과 factsSyncEstimator 가 정상 경로를 막지만 방어선은 여기서 닫는다.
      */
     if (dataset.market !== 'KR') {
-      state.skipReason = `재무(DART)는 국내(KR) 종목만 지원합니다 — ${dataset.market} 데이터셋은 재무를 수집하지 않았습니다.`;
+      state.skipReason = `재무 데이터는 국내(KR) 종목만 지원합니다 — ${dataset.market} 데이터셋은 재무를 수집하지 않았습니다.`;
       return { state, stopReason: null };
     }
 
@@ -506,7 +506,7 @@ export class BrokerSyncService {
         } else if (result.hasMore) {
           // 진행 없는 응답 — 조용히 완료로 위장하지 않는다
           throw new Error(
-            `소스가 빈 페이지에 hasMore=true 를 반환했습니다 (${symbol}, to=${to}) — 페이지네이션 이상`,
+            `증권사 응답이 올바르지 않아 수집을 중단했습니다 — ${symbol} 종목에서 빈 응답과 "다음 페이지 있음" 이 함께 왔습니다`,
           );
         }
 
