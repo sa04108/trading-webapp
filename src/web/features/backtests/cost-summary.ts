@@ -10,7 +10,12 @@ export function costSummary(metrics: BacktestMetrics): {
   totalText: string;
   detailText: string;
 } {
-  const total = metrics.totalCommission + metrics.totalTax + metrics.totalSlippage;
+  // 항목별로 개별 반올림한 후 합산하여 총합과 항목 합계의 차이를 제거한다
+  const roundedCommission = Math.round(metrics.totalCommission);
+  const roundedTax = Math.round(metrics.totalTax);
+  const roundedSlippage = Math.round(metrics.totalSlippage);
+  const total = roundedCommission + roundedTax + roundedSlippage;
+
   const slippagePct =
     metrics.initialCash > 0 ? (metrics.totalSlippage / metrics.initialCash) * 100 : 0;
   return {

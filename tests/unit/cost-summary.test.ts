@@ -64,4 +64,28 @@ describe('costSummary', () => {
     );
     expect(result.detailText).toContain('(초기자본의 0.12%)');
   });
+
+  it('초기자본이 0이면 슬리피지 퍼센트가 0.00%이다', () => {
+    const result = costSummary(
+      metricsWith({ totalCommission: 1_000, totalTax: 500, totalSlippage: 300, initialCash: 0 }),
+    );
+    expect(result.detailText).toContain('(초기자본의 0.00%)');
+  });
+
+  it('소수점 입력값이 있을 때 총합이 항목별 합계와 일치한다', () => {
+    const result = costSummary(
+      metricsWith({
+        totalCommission: 100.4,
+        totalTax: 100.4,
+        totalSlippage: 100.4,
+        initialCash: 10_000_000,
+      }),
+    );
+    // 항목별 반올림: 100 + 100 + 100 = 300
+    expect(result.totalText).toBe('300원');
+    // 항목별 표시는 각각 반올림됨
+    expect(result.detailText).toContain('수수료 100원');
+    expect(result.detailText).toContain('세금 100원');
+    expect(result.detailText).toContain('슬리피지 100원');
+  });
 });
