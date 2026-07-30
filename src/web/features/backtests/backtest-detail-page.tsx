@@ -48,8 +48,10 @@ import {
   formatSignedKrw,
   formatSignedPct,
   pnlClass,
+  timeframeLabel,
 } from '@/lib/format';
 import { DrawdownChart, EquityChart, MonthlyReturnsChart } from './result-charts';
+import { resolveJobTimeframe } from './job-timeframe';
 import { StatusBadge } from './status-badge';
 import { formatSymbolSummary } from './symbol-summary';
 import { isTerminal, type BacktestMetrics, type JobSummary, type RunMetadata } from './types';
@@ -280,7 +282,17 @@ function TradesSection({
   );
 }
 
-function RunMetadataCard({ run, job }: { run: RunMetadata; job: JobSummary }) {
+function RunMetadataCard({
+  run,
+  job,
+  strategyName,
+  timeframe,
+}: {
+  run: RunMetadata;
+  job: JobSummary;
+  strategyName: string | undefined;
+  timeframe: string | null;
+}) {
   const warnings = run.warningsJson ? (JSON.parse(run.warningsJson) as string[]) : [];
   // 라벨·설명은 서버 스키마에서 읽는다 (위저드와 같은 캐시 키).
   // 실패하거나 아직 안 왔으면 원본 키로 표시한다 — 파라미터 값 표시를 막지 않는다.
@@ -292,9 +304,15 @@ function RunMetadataCard({ run, job }: { run: RunMetadata; job: JobSummary }) {
     extractNumberParams(schema.data?.schema).map((spec) => [spec.key, spec]),
   );
   const rows: Array<[string, string]> = [
-    ['전략', `${run.strategyId} v${run.strategyVersion}`],
+    [
+      '전략',
+      strategyName
+        ? `${strategyName} (${run.strategyId} v${run.strategyVersion})`
+        : `${run.strategyId} v${run.strategyVersion}`,
+    ],
     ['전략 해시', run.strategySourceHash.slice(0, 16)],
     ['데이터셋', `${run.datasetId} (v${run.datasetVersion})`],
+    ['봉 주기', timeframe ? timeframeLabel(timeframe) : '-'],
     ['데이터 해시', run.datasetHash.slice(0, 16)],
     ['엔진 버전', run.engineVersion],
     ['수수료 모델', run.feeModelVersion],
@@ -407,6 +425,16 @@ export function BacktestDetailPage() {
     onError: () => toast.error('실행 중인 작업은 삭제할 수 없습니다'),
   });
 
+  const strategies = useQuery({
+    queryKey: ['strategies'],
+    queryFn: () =>
+      api<{ strategies: Array<{ id: string; name: string; description: string }> }>('/strategies'),
+  });
+  const datasets = useQuery({
+    queryKey: ['datasets'],
+    queryFn: () => api<{ datasets: Array<{ id: string; timeframe: string }> }>('/datasets'),
+  });
+
   if (isLoading || !job) {
     return (
       <div className="space-y-3">
@@ -415,6 +443,9 @@ export function BacktestDetailPage() {
       </div>
     );
   }
+
+  const strategyName = strategies.data?.strategies.find((s) => s.id === job.strategyId)?.name;
+  const resolvedTimeframe = resolveJobTimeframe(job, datasets.data?.datasets);
 
   const running = !isTerminal(job.status);
   const progress =
@@ -425,7 +456,7 @@ export function BacktestDetailPage() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
-        <h2 className="text-lg font-semibold">{job.strategyId}</h2>
+        <h2 className="text-lg font-semibold">{strategyName ?? job.strategyId}</h2>
         <StatusBadge status={job.status} />
         <div className="ml-auto flex flex-wrap items-center gap-2">
           {running ? (
@@ -602,7 +633,9 @@ export function BacktestDetailPage() {
         </>
       ) : null}
 
-      {run ? <RunMetadataCard run={run} job={job} /> : null}
+      {run ? (
+        <RunMetadataCard run={run} job={job} strategyName={strategyName} timeframe={resolvedTimeframe} />
+      ) : null}
 
       {job.status === 'INTERRUPTED' ? (
         <Alert>
