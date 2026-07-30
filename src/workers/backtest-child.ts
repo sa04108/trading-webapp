@@ -30,6 +30,7 @@ import {
 import { ParquetFactRepository } from '../server/modules/facts/infrastructure/parquet-fact-repository.js';
 import { CORPORATE_ACTION_FIELD, type Fact } from '../server/modules/facts/domain/fact.js';
 import type { Candle, Market, Timeframe } from '../server/modules/market-data/domain/candle.js';
+import { legacyConsumeDefault, type DatasetSlice } from '../server/modules/market-data/domain/dataset-slice.js';
 import { DuckDbService } from '../server/modules/market-data/infrastructure/duckdb-service.js';
 import { ParquetCandleRepository } from '../server/modules/market-data/infrastructure/parquet-candle-repository.js';
 import { StrategyRegistry } from '../server/modules/strategy/application/strategy-registry.js';
@@ -120,7 +121,9 @@ async function main(): Promise<void> {
     // 캔들 로드 (스펙 §11). 요청의 timeframe 이 소비 기준이고, 미지정이면 데이터셋
     // timeframe (1m 수집·import 는 1h 로 사전 집계되어 '1h', 일봉 수집은 '1d').
     // 여기를 '1h' 로 고정하면 일봉 데이터셋은 파티션이 없어 0봉으로 실패한다 (D-024).
-    const timeframe = (request.timeframe ?? dataset.timeframe) as Timeframe;
+    const timeframe = (
+      request.timeframe ?? legacyConsumeDefault(dataset.defaultTimeframe as DatasetSlice)
+    ) as Timeframe;
     const repository = new ParquetCandleRepository(dataRoot, duckdb);
     const { fromTsMs, toTsMs } = periodToTsRange(request.period);
     const candles: Candle[] = [];

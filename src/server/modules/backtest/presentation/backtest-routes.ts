@@ -11,7 +11,12 @@ import { SECURITY_HEADERS } from '../../../shared/security.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
 import type { FactRepository } from '../../facts/application/ports.js';
 import type { DatasetService } from '../../market-data/application/dataset-service.js';
-import { availableTimeframes } from '../../market-data/domain/candle.js';
+import {
+  legacyConsumeDefault,
+  sliceForTimeframe,
+  sliceTimeframes,
+  type DatasetSlice,
+} from '../../market-data/domain/dataset-slice.js';
 import type { StrategyRegistry } from '../../strategy/application/strategy-registry.js';
 import { estimateBars, MAX_BACKTEST_BARS } from '../domain/bar-estimate.js';
 import {
@@ -101,9 +106,18 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    * 요청한 종목 **전부** 가 구간 밖일 때만 거부한다 — 신규 상장처럼 이력이 짧은 종목
    * 하나 때문에 유니버스 전체를 막지 않는다. 일부만 비는 경우는 실행 경고로 남는다.
    */
-  const checkPeriodCoverage = (body: BacktestRequest, datasetId: string): string | null => {
+  const checkPeriodCoverage = (
+    body: BacktestRequest,
+    datasetId: string,
+    slice: DatasetSlice,
+  ): string | null => {
     const { fromTsMs, toTsMs } = periodToTsRange(body.period);
-    const bySymbol = new Map(datasets.getCoverage(datasetId).map((row) => [row.symbol, row]));
+    const bySymbol = new Map(
+      datasets
+        .getCoverage(datasetId)
+        .filter((row) => row.slice === slice)
+        .map((row) => [row.symbol, row]),
+    );
 
     const ranges: string[] = [];
     for (const symbol of body.universe.symbols) {
@@ -166,26 +180,33 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       if (!datasetVersion) {
         errors.push('데이터가 없는 데이터셋입니다. 먼저 import 하세요.');
       }
-      const coverageError = checkPeriodCoverage(body, dataset.id);
-      if (coverageError !== null) errors.push(coverageError);
+      // 소비 timeframe 검사 — 미지정은 데이터셋 기본 슬라이스 (기존 동작과 같은 결과).
+      // 슬라이스 자체가 없는 데이터셋에 커버리지 검사부터 돌리면 "수집된 데이터 없음" 이
+      // "이 데이터셋은 timeframe X 만 제공합니다" 보다 먼저 떠 원인이 흐려진다 —
+      // 그래서 허용 검사를 먼저 하고, 통과한 슬라이스에 한해 기간·봉 수를 본다.
+      const consumed = body.timeframe ?? legacyConsumeDefault(dataset.defaultTimeframe);
+      const slice = sliceForTimeframe(consumed);
+      const allowedTimeframes = sliceTimeframes(slice);
+      const sliceHasData = dataset.slices.some((s) => s.slice === slice && s.hasData);
 
-      // 소비 timeframe 검사 — 미지정은 데이터셋 timeframe (기존 동작)
-      const available = availableTimeframes(dataset.timeframe);
-      const consumed = body.timeframe ?? dataset.timeframe;
-      if (!available.includes(consumed)) {
+      if (!allowedTimeframes.includes(consumed) || !sliceHasData) {
         errors.push(
-          `이 데이터셋은 timeframe ${available.join('/')} 만 제공합니다 (요청: ${consumed})`,
+          `이 데이터셋은 timeframe ${allowedTimeframes.join('/')} 만 제공합니다 (요청: ${consumed})`,
         );
       } else {
+        const coverageError = checkPeriodCoverage(body, dataset.id, slice);
+        if (coverageError !== null) errors.push(coverageError);
+
         // 봉 수 상한 — 실행부는 전체 봉을 메모리에 올린다. 1m 소비를 열면서 생긴 밸브.
-        // coverage 는 데이터셋 timeframe 기준이므로 1m 소비는 배율 60 으로 추정한다.
+        // coverage 는 슬라이스 기준 timeframe 으로 세므로 1m 소비만 배율 60 으로 추정한다.
         const { fromTsMs, toTsMs } = periodToTsRange(body.period);
+        const sliceCoverage = datasets.getCoverage(dataset.id).filter((row) => row.slice === slice);
         const estimated = estimateBars(
-          datasets.getCoverage(dataset.id),
+          sliceCoverage,
           body.universe.symbols,
           fromTsMs,
           toTsMs,
-          consumed === dataset.timeframe ? 1 : 60,
+          consumed === '1m' ? 60 : 1,
         );
         if (estimated > MAX_BACKTEST_BARS) {
           errors.push(

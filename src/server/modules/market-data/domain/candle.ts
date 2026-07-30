@@ -18,14 +18,6 @@ export interface Candle {
 
 export const SYMBOL_PATTERN = /^[A-Za-z0-9._-]{1,20}$/;
 
-/**
- * 데이터셋이 제공하는 timeframe 목록. 1h 데이터셋은 원본 1m 도 함께 보관한다
- * (CSV·sync 공통 관례, 스펙 §11) — 검증 차트와 백테스트 제출 검증이 공유하는 규칙.
- */
-export function availableTimeframes(datasetTimeframe: Timeframe): Timeframe[] {
-  return datasetTimeframe === '1h' ? ['1m', '1h'] : [datasetTimeframe];
-}
-
 export function isValidCandle(candle: Candle): boolean {
   const { open, high, low, close, volume, tsMs, symbol } = candle;
   if (!SYMBOL_PATTERN.test(symbol)) return false;
