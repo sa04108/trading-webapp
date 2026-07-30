@@ -15,7 +15,12 @@ import {
   type AtrState,
   type RsiState,
 } from './shared/indicators.js';
-import { buildCorrelationGroups } from './shared/pair-groups.js';
+import {
+  newCorrelationWarmup,
+  recordClose,
+  tryBuildGroups,
+  type CorrelationWarmup,
+} from './shared/pair-groups.js';
 import { riskQuantity } from './shared/position-sizing.js';
 import {
   confirmEntry,
@@ -85,19 +90,20 @@ interface SymbolState {
   rsi: RsiState;
   atr: AtrState;
   holding: HoldingState;
-  closes: number[];
 }
 
 export interface RsiReversionState {
   readonly bySymbol: Map<string, SymbolState>;
   readonly symbols: readonly string[];
   groupOf: Map<string, string> | null;
+  /** 상관 계산용 종가 누적 — 그룹 확정 후 null 로 비운다 */
+  warmup: CorrelationWarmup | null;
 }
 
 function getSymbolState(state: RsiReversionState, symbol: string): SymbolState {
   let symbolState = state.bySymbol.get(symbol);
   if (!symbolState) {
-    symbolState = { rsi: newRsi(), atr: newAtr(), holding: newHolding(), closes: [] };
+    symbolState = { rsi: newRsi(), atr: newAtr(), holding: newHolding() };
     state.bySymbol.set(symbol, symbolState);
   }
   return symbolState;
@@ -113,7 +119,12 @@ export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiRe
   parameterSchema: rsiReversionParameters,
 
   initialize(context: StrategyInitializeContext): RsiReversionState {
-    return { bySymbol: new Map(), symbols: [...context.symbols].sort(), groupOf: null };
+    return {
+      bySymbol: new Map(),
+      symbols: [...context.symbols].sort(),
+      groupOf: null,
+      warmup: newCorrelationWarmup(),
+    };
   },
 
   onBars(
@@ -122,37 +133,35 @@ export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiRe
     parameters: RsiReversionParameters,
   ): StrategyDecision {
     const orders: OrderIntent[] = [];
-    const barSymbols = [...context.bars.keys()].sort();
+    // 심볼 사전순 고정 — 같은 봉에서 여러 종목이 신호를 내도 순서가 재현된다
+    const sortedBars = [...context.bars.entries()].sort(([a], [b]) => (a < b ? -1 : 1));
+    const barSymbols = sortedBars.map(([symbol]) => symbol);
 
-    // 1) 지표 갱신 + 상관 워밍업 누적
-    for (const symbol of barSymbols) {
-      const bar = context.bars.get(symbol) as NonNullable<ReturnType<typeof context.bars.get>>;
+    // 1) 지표 갱신 + 상관 워밍업 누적 (봉 시각과 함께 — pair-groups.ts 참고)
+    for (const [symbol, bar] of sortedBars) {
       const symbolState = getSymbolState(state, symbol);
       updateRsi(symbolState.rsi, bar.close, parameters.rsiPeriod);
       updateAtr(symbolState.atr, bar, parameters.atrPeriod);
-      if (state.groupOf === null) symbolState.closes.push(bar.close);
+      if (state.warmup !== null) recordClose(state.warmup, symbol, bar.tsMs, bar.close);
     }
 
-    // 2) 그룹 확정 (ema-trend-switch 와 동일한 규칙 — 전 종목 워밍업 충족 시 1회)
-    if (
-      state.groupOf === null &&
-      state.symbols.every(
-        (symbol) => (state.bySymbol.get(symbol)?.closes.length ?? 0) >= parameters.correlationBars,
-      )
-    ) {
-      const closesBySymbol = new Map<string, readonly number[]>(
-        state.symbols.map((symbol) => [symbol, state.bySymbol.get(symbol)?.closes ?? []]),
+    // 2) 그룹 확정 (ema-trend-switch 와 동일한 규칙 — 전 종목 공통 봉이 쌓이면 1회).
+    //    미확정의 의미(진입 영영 없음·경고 없음)는 tryBuildGroups 주석 참고.
+    if (state.groupOf === null && state.warmup !== null) {
+      const groupOf = tryBuildGroups(
+        state.warmup,
+        state.symbols,
+        parameters.correlationBars,
+        parameters.correlationThreshold,
       );
-      state.groupOf = buildCorrelationGroups(closesBySymbol, parameters.correlationThreshold);
-      for (const symbol of state.symbols) {
-        const symbolState = state.bySymbol.get(symbol);
-        if (symbolState) symbolState.closes = [];
+      if (groupOf !== null) {
+        state.groupOf = groupOf;
+        state.warmup = null;
       }
     }
 
     // 3) 청산
-    for (const symbol of barSymbols) {
-      const bar = context.bars.get(symbol) as NonNullable<ReturnType<typeof context.bars.get>>;
+    for (const [symbol, bar] of sortedBars) {
       const symbolState = getSymbolState(state, symbol);
       const position = context.portfolio.positions.get(symbol);
 

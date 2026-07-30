@@ -124,4 +124,44 @@ describe('그룹 배타성', () => {
     // 같은 봉 동시 신호는 사전순 첫 종목(AAA)이 이긴다
     expect([...buySymbols]).toEqual(['AAA']);
   });
+
+  it('한쪽이 5봉 늦게 상장해도(들쭉날쭉 커버리지) 역상관 짝을 동시에 사지 않는다', () => {
+    // 종가를 배열 인덱스로 누적하면 BBB 의 첫 종가가 AAA 의 6번째 봉과 대응해
+    // 5봉(홀수) 밀린다 — 진동 구간의 완전 역상관이 +1 로 뒤집혀 그룹이 병합되지
+    // 않고 양쪽을 동시에 산다. 봉 시각으로 맞춰야 병합된다.
+    const aaa: number[] = [];
+    const bbb: number[] = [];
+    for (let index = 0; index < 60; index += 1) {
+      if (index < 25) {
+        const value = 1_000 + (index % 2 === 0 ? 10 : -10);
+        aaa.push(value);
+        bbb.push(1_000_000 / value); // 완전 역상관
+      } else {
+        aaa.push((aaa[index - 1] as number) + 15); // 이후 둘 다 상승 — 동시 신호
+        bbb.push((bbb[index - 1] as number) + 15);
+      }
+    }
+    const candles = [
+      ...toCandles(new Map([['AAA', aaa]]), '1d', DAY),
+      // BBB 는 6번째 봉(index 5)부터 존재한다 — 시각은 AAA 와 같은 격자
+      ...toCandles(new Map([['BBB', bbb.slice(5)]]), '1d', DAY).map((candle) => ({
+        ...candle,
+        tsMs: candle.tsMs + 5 * DAY,
+      })),
+    ].sort((a, b) => a.tsMs - b.tsMs || (a.symbol < b.symbol ? -1 : 1));
+
+    const result = runBacktest(emaTrendSwitchStrategy, {
+      candles,
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: FAST_PARAMS,
+      randomSeed: 1,
+      maxPositions: 5,
+    });
+    const buySymbols = new Set(
+      result.fills.filter((fill) => fill.side === 'BUY').map((fill) => fill.symbol),
+    );
+    // 공통 봉 20개는 index 24 에 차므로 상승(index 25~) 전에 그룹이 확정된다
+    expect([...buySymbols]).toEqual(['AAA']);
+  });
 });

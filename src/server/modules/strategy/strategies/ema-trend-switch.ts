@@ -14,7 +14,12 @@ import {
   type AtrState,
   type EmaState,
 } from './shared/indicators.js';
-import { buildCorrelationGroups } from './shared/pair-groups.js';
+import {
+  newCorrelationWarmup,
+  recordClose,
+  tryBuildGroups,
+  type CorrelationWarmup,
+} from './shared/pair-groups.js';
 import { riskQuantity } from './shared/position-sizing.js';
 import {
   confirmEntry,
@@ -96,20 +101,20 @@ interface SymbolState {
   slow: EmaState;
   atr: AtrState;
   holding: HoldingState;
-  /** 상관 계산용 종가 — 그룹 확정 후 비운다 */
-  closes: number[];
 }
 
 export interface EmaTrendSwitchState {
   readonly bySymbol: Map<string, SymbolState>;
   readonly symbols: readonly string[];
   groupOf: Map<string, string> | null;
+  /** 상관 계산용 종가 누적 — 그룹 확정 후 null 로 비운다 */
+  warmup: CorrelationWarmup | null;
 }
 
 function getSymbolState(state: EmaTrendSwitchState, symbol: string): SymbolState {
   let symbolState = state.bySymbol.get(symbol);
   if (!symbolState) {
-    symbolState = { fast: newEma(), slow: newEma(), atr: newAtr(), holding: newHolding(), closes: [] };
+    symbolState = { fast: newEma(), slow: newEma(), atr: newAtr(), holding: newHolding() };
     state.bySymbol.set(symbol, symbolState);
   }
   return symbolState;
@@ -142,7 +147,12 @@ export const emaTrendSwitchStrategy: TradingStrategy<
   parameterSchema: emaTrendSwitchParameters,
 
   initialize(context: StrategyInitializeContext): EmaTrendSwitchState {
-    return { bySymbol: new Map(), symbols: [...context.symbols].sort(), groupOf: null };
+    return {
+      bySymbol: new Map(),
+      symbols: [...context.symbols].sort(),
+      groupOf: null,
+      warmup: newCorrelationWarmup(),
+    };
   },
 
   onBars(
@@ -151,40 +161,36 @@ export const emaTrendSwitchStrategy: TradingStrategy<
     parameters: EmaTrendSwitchParameters,
   ): StrategyDecision {
     const orders: OrderIntent[] = [];
-    const barSymbols = [...context.bars.keys()].sort();
+    // 심볼 사전순 고정 — 같은 봉에서 여러 종목이 신호를 내도 순서가 재현된다
+    const sortedBars = [...context.bars.entries()].sort(([a], [b]) => (a < b ? -1 : 1));
+    const barSymbols = sortedBars.map(([symbol]) => symbol);
 
-    // 1) 지표 갱신 + 상관 워밍업 누적
-    for (const symbol of barSymbols) {
-      const bar = context.bars.get(symbol) as NonNullable<ReturnType<typeof context.bars.get>>;
+    // 1) 지표 갱신 + 상관 워밍업 누적 (봉 시각과 함께 — pair-groups.ts 참고)
+    for (const [symbol, bar] of sortedBars) {
       const symbolState = getSymbolState(state, symbol);
       updateEma(symbolState.fast, bar.close, parameters.fastEmaBars);
       updateEma(symbolState.slow, bar.close, parameters.slowEmaBars);
       updateAtr(symbolState.atr, bar, parameters.atrPeriod);
-      if (state.groupOf === null) symbolState.closes.push(bar.close);
+      if (state.warmup !== null) recordClose(state.warmup, symbol, bar.tsMs, bar.close);
     }
 
-    // 2) 그룹 확정 — 유니버스 전 종목이 correlationBars 개 종가를 모은 첫 시점 1회.
-    //    봉이 아예 없는 종목이 있으면 영영 확정되지 않는다 — 진입도 영영 없다.
-    //    조용히 거래를 시작하는 것보다 낫다 (데이터 결측이 드러난다).
-    if (
-      state.groupOf === null &&
-      state.symbols.every(
-        (symbol) => (state.bySymbol.get(symbol)?.closes.length ?? 0) >= parameters.correlationBars,
-      )
-    ) {
-      const closesBySymbol = new Map<string, readonly number[]>(
-        state.symbols.map((symbol) => [symbol, state.bySymbol.get(symbol)?.closes ?? []]),
+    // 2) 그룹 확정 — 유니버스 전 종목에 공통인 봉이 correlationBars 개 쌓인 첫 시점 1회.
+    //    확정 조건과 미확정의 의미(진입 영영 없음·경고 없음)는 tryBuildGroups 주석 참고.
+    if (state.groupOf === null && state.warmup !== null) {
+      const groupOf = tryBuildGroups(
+        state.warmup,
+        state.symbols,
+        parameters.correlationBars,
+        parameters.correlationThreshold,
       );
-      state.groupOf = buildCorrelationGroups(closesBySymbol, parameters.correlationThreshold);
-      for (const symbol of state.symbols) {
-        const symbolState = state.bySymbol.get(symbol);
-        if (symbolState) symbolState.closes = [];
+      if (groupOf !== null) {
+        state.groupOf = groupOf;
+        state.warmup = null; // 누적 상태를 버린다 — 봉 수에 비례해 커지지 않게
       }
     }
 
     // 3) 청산 — 보유 종목만
-    for (const symbol of barSymbols) {
-      const bar = context.bars.get(symbol) as NonNullable<ReturnType<typeof context.bars.get>>;
+    for (const [symbol, bar] of sortedBars) {
       const symbolState = getSymbolState(state, symbol);
       const position = context.portfolio.positions.get(symbol);
 
