@@ -8,10 +8,12 @@ import type { CostProfile, ExecutionRules, SlippageProfile } from './types.js';
 const COST_PROFILES: Record<string, CostProfile> = {
   'kr-equity-default': {
     id: 'kr-equity-default',
-    version: '1.0.0',
+    // 1.1.0: 증권거래세 0.18% → 0.15% (2025년부터 코스피·코스닥 공통).
+    // 구버전 실행은 재현성 메타데이터의 kr-equity-default@1.0.0 으로 구분된다.
+    version: '1.1.0',
     buyCommissionRate: 0.00015,
     sellCommissionRate: 0.00015,
-    sellTaxRate: 0.0018,
+    sellTaxRate: 0.0015,
   },
   'zero-cost': {
     id: 'zero-cost',
