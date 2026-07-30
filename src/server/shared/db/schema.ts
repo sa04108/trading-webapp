@@ -62,7 +62,12 @@ export const datasets = sqliteTable('datasets', {
   id: text('id').primaryKey(),
   name: text('name').notNull().unique(),
   market: text('market').notNull(),
+  /** @deprecated 슬라이스 모델 전환으로 사용 중단 — defaultTimeframe 을 쓴다 */
   timeframe: text('timeframe').notNull(),
+  /** 기본 봉 ('1d'|'1m') — 생성 드로어의 수집 봉 선택. 카드 스위치 기본값 */
+  defaultTimeframe: text('default_timeframe').notNull().default('1d'),
+  /** 종목 구성 유일키 (정렬·중복 제거, ',' join) — 애플리케이션 레벨 중복 검사용 */
+  symbolsKey: text('symbols_key').notNull().default(''),
   symbolsJson: text('symbols_json').notNull(),
   description: text('description'),
   createdAtMs: integer('created_at_ms').notNull(),
@@ -98,8 +103,12 @@ export const dataCoverage = sqliteTable(
     expectedBarCount: integer('expected_bar_count'),
     missingRangesJson: text('missing_ranges_json'),
     computedAtMs: integer('computed_at_ms').notNull(),
+    /** 봉 슬라이스 ('1d'|'1m') — 슬라이스별 커버리지 */
+    slice: text('slice').notNull().default('1d'),
   },
-  (table) => [index('idx_data_coverage_dataset_symbol').on(table.datasetId, table.symbol)],
+  (table) => [
+    index('idx_data_coverage_dataset_symbol_slice').on(table.datasetId, table.symbol, table.slice),
+  ],
 );
 
 export const dataImportJobs = sqliteTable(
@@ -149,8 +158,16 @@ export const brokerSyncState = sqliteTable(
     /** 수집된 가장 최신 봉 */
     syncedLastTsMs: integer('synced_last_ts_ms'),
     backfillDoneAtMs: integer('backfill_done_at_ms'),
+    /** 봉 슬라이스 ('1d'|'1m') — 슬라이스별 수집 워터마크 */
+    slice: text('slice').notNull().default('1d'),
   },
-  (table) => [uniqueIndex('idx_broker_sync_state_dataset_symbol').on(table.datasetId, table.symbol)],
+  (table) => [
+    uniqueIndex('idx_broker_sync_state_dataset_symbol').on(
+      table.datasetId,
+      table.symbol,
+      table.slice,
+    ),
+  ],
 );
 
 /**
