@@ -23,6 +23,7 @@ import {
   createSqliteUserRepository,
 } from '../modules/auth/infrastructure/sqlite-repositories.js';
 import { BrokerSyncService } from '../modules/market-data/application/broker-sync-service.js';
+import { runDatasetMergeMigration } from '../modules/market-data/application/dataset-merge-migration.js';
 import {
   DatasetService,
   type FactsSyncEstimate,
@@ -100,6 +101,11 @@ export function createContainer(config: AppConfig): Container {
 
   const database = openDatabase(config.databasePath);
   const clock = systemClock;
+
+  // 1회성 부트 마이그레이션: 같은 종목 구성의 레거시 일봉·분봉 데이터셋 병합.
+  // 서비스 조립보다 앞이어야 한다 — 아래의 recoverInterrupted 등 부팅 정리 경로가
+  // 병합 전 메타데이터를 보면 안 된다. e2e-server 도 createContainer 를 타므로 공유된다.
+  runDatasetMergeMigration({ db: database.db, dataRoot: config.dataRoot, clock, logger });
 
   // 무한 증가 방지: 만료 세션·오래된 로그인 시도·보존 기간 지난 감사 로그 정리.
   // 부팅 시 1회 + 6시간 주기. 정리는 정확성에 필요한 작업이 아니므로 어느 쪽도
