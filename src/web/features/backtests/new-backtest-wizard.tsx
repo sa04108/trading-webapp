@@ -154,14 +154,16 @@ export function NewBacktestWizard() {
     setRandomSeed(state.randomSeed);
     setPrefillNotes(notes);
     // 기본값 시딩 effect 가 원본 파라미터를 덮어쓰지 못하게 막는다.
-    // 사용자가 전략을 직접 바꾸면 pickStrategy 가 null 로 리셋해 정상 동작한다.
+    // 사용자가 전략을 직접 바꾸면 toggleStrategy 가 null 로 리셋해 정상 동작한다.
     seededFor.current = state.strategyId;
   }, [sourceJobId, draft.data, strategies.data, datasets.data]);
 
-  const pickStrategy = (id: string): void => {
-    setStrategyId(id);
+  // 같은 카드를 다시 누르면 선택 해제 — 접힌 목록을 다시 펼치는 유일한 경로다
+  const toggleStrategy = (id: string): void => {
+    setStrategyId((prev) => (prev === id ? null : id));
     setParameters({}); // 스키마가 도착하면 위 effect 가 기본값을 심는다
     seededFor.current = null;
+    setStepError(null);
   };
 
   const paramValue = (spec: NumberParamSpec): string => parameters[spec.key] ?? '';
@@ -342,25 +344,55 @@ export function NewBacktestWizard() {
 
       {!prefilling && step === 0 ? (
         <div className="space-y-3">
-          {(strategies.data?.strategies ?? []).map((strategy) => (
-            <button
-              key={strategy.id}
-              type="button"
-              onClick={() => pickStrategy(strategy.id)}
-              className={cn(
-                'w-full rounded-xl border p-4 text-left transition-colors',
-                strategyId === strategy.id ? 'border-primary bg-muted/50' : 'hover:bg-muted/30',
-              )}
-            >
-              <p className="font-medium">
-                {strategy.name}{' '}
-                <span className="text-xs text-muted-foreground">v{strategy.version}</span>
-              </p>
-              <p className="mt-1 text-sm text-muted-foreground">{strategy.description}</p>
-            </button>
-          ))}
+          {/* 마지막 카드의 pb-3 을 상쇄한다 — 접힘 애니메이션이 여백까지 같이 줄이도록
+              간격을 space-y 가 아니라 카드 안쪽 패딩으로 준 대가다 */}
+          <div className="-mb-3">
+            {(strategies.data?.strategies ?? []).map((strategy) => {
+              const selected = strategyId === strategy.id;
+              const collapsed = strategyId !== null && !selected;
+              return (
+                <div
+                  key={strategy.id}
+                  // grid-rows 0fr↔1fr 은 height:auto 를 트랜지션하는 표준 방법이다
+                  className={cn(
+                    'grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none',
+                    collapsed ? 'grid-rows-[0fr] opacity-0' : 'grid-rows-[1fr] opacity-100',
+                  )}
+                  // 접힌 카드는 클릭·탭 이동·스크린리더에서 모두 빠진다
+                  inert={collapsed}
+                >
+                  {/* overflow-hidden 이 grid 항목의 자동 최소 높이를 0 으로 풀어 준다.
+                      아래 간격은 그 안쪽에 둬야 접힐 때 패딩까지 같이 사라진다 */}
+                  <div className="overflow-hidden">
+                    <div className="pb-3">
+                      <button
+                        type="button"
+                        aria-pressed={selected}
+                        onClick={() => toggleStrategy(strategy.id)}
+                        className={cn(
+                          'w-full rounded-xl border p-4 text-left transition-colors',
+                          selected ? 'border-primary bg-muted/50' : 'hover:bg-muted/30',
+                        )}
+                      >
+                        <p className="font-medium">
+                          {strategy.name}{' '}
+                          <span className="text-xs text-muted-foreground">v{strategy.version}</span>
+                        </p>
+                        <p className="mt-1 text-sm text-muted-foreground">{strategy.description}</p>
+                        {selected ? (
+                          <p className="mt-2 text-xs text-muted-foreground">
+                            다시 누르면 선택을 해제합니다
+                          </p>
+                        ) : null}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
           {selectedStrategy && paramSpecs.length > 0 ? (
-            <Card>
+            <Card className="animate-in fade-in slide-in-from-bottom-2 duration-200 motion-reduce:animate-none">
               <CardHeader>
                 <CardTitle className="text-base">파라미터</CardTitle>
                 <CardDescription>검증된 범위 내에서만 조정할 수 있습니다.</CardDescription>
