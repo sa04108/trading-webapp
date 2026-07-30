@@ -134,7 +134,14 @@ function seedMergePair(): void {
     .values({ datasetId: 'ds_day', symbol: '005930', coveredYearsJson: '[2025]', updatedAtMs: 1 })
     .run();
   db.insert(backtestJobs)
-    .values({ id: 'bt_1', status: 'COMPLETED', requestJson: '{}', strategyId: 's', datasetId: 'ds_day', createdAtMs: 1 })
+    .values({
+      id: 'bt_1',
+      status: 'COMPLETED',
+      requestJson: JSON.stringify({ datasetId: 'ds_day', strategyId: 's', parameters: {} }),
+      strategyId: 's',
+      datasetId: 'ds_day',
+      createdAtMs: 1,
+    })
     .run();
   db.insert(backtestRuns)
     .values({
@@ -189,7 +196,11 @@ describe('runDatasetMergeMigration — 병합', () => {
     expect(db.select().from(brokerSyncState).all()[0]?.datasetId).toBe('ds_min');
     expect(db.select().from(dataImportJobs).all()[0]?.datasetId).toBe('ds_min');
     expect(db.select().from(datasetFactsState).all()[0]?.datasetId).toBe('ds_min');
-    expect(db.select().from(backtestJobs).all()[0]?.datasetId).toBe('ds_min');
+    const bt1 = db.select().from(backtestJobs).all()[0];
+    expect(bt1?.datasetId).toBe('ds_min');
+    // 컬럼뿐 아니라 request_json 안에 박힌 datasetId 도 생존자로 재매핑된다 —
+    // 워커·복제·복제초안이 request_json 을 파싱해 데이터셋을 찾기 때문
+    expect(JSON.parse(bt1!.requestJson)).toMatchObject({ datasetId: 'ds_min' });
     expect(db.select().from(backtestRuns).all()[0]?.datasetId).toBe('ds_min');
 
     // 버전: loser 의 버전 행도 survivor 로 옮겨지고, 새 버전 = max(2, 5) + 1 = 6
@@ -278,6 +289,32 @@ describe('runDatasetMergeMigration — 병합', () => {
     expect(warnEvents).toContain('dataset.merge.coverage-conflict');
   });
 
+  it('request_json 이 손상된 백테스트 job 은 컬럼만 재매핑하고 경고한다', () => {
+    seedMergePair();
+    db.insert(backtestJobs)
+      .values({
+        id: 'bt_broken',
+        status: 'COMPLETED',
+        requestJson: '{not valid json',
+        strategyId: 's',
+        datasetId: 'ds_day',
+        createdAtMs: 1,
+      })
+      .run();
+    const { warns, logger } = recordingLogger();
+    run(logger);
+
+    const broken = db.select().from(backtestJobs).all().find((row) => row.id === 'bt_broken');
+    // 컬럼 재매핑은 request_json 파싱과 무관하게 일어난다
+    expect(broken?.datasetId).toBe('ds_min');
+    // 손상된 JSON 은 그대로 둔다 — 억지로 고치려다 다른 필드를 깨뜨리지 않는다
+    expect(broken?.requestJson).toBe('{not valid json');
+    expect(warns.map((w) => w.obj['event'])).toContain('dataset.merge.request-json-skip');
+    expect(warns.find((w) => w.obj['event'] === 'dataset.merge.request-json-skip')?.obj['jobId']).toBe(
+      'bt_broken',
+    );
+  });
+
   it('두 번 실행해도 결과가 같다 (멱등)', () => {
     seedMergePair();
     run();
@@ -337,6 +374,36 @@ describe('runDatasetMergeMigration — 병합하지 않는 경우', () => {
     expect(existsSync(loserFile)).toBe(true);
     expect(db.select().from(datasetVersions).all()).toHaveLength(0);
     expect(warns.length).toBeGreaterThan(0);
+  });
+
+  it('symbolsJson 이 손상된 데이터셋은 건너뛰고 경고하지만 다른 데이터셋은 계속 처리한다 (부트 루프 방지)', () => {
+    db.insert(datasets)
+      .values({
+        id: 'ds_corrupt',
+        name: 'ds_corrupt',
+        market: 'KR',
+        timeframe: '1d',
+        defaultTimeframe: '1d',
+        symbolsJson: '{not valid json',
+        createdAtMs: 1,
+        updatedAtMs: 1,
+      })
+      .run();
+    insertLegacyDataset('ds_solo', '1d', 2_000, ['005930']);
+    const { warns, logger } = recordingLogger();
+
+    expect(() => run(logger)).not.toThrow();
+
+    const corrupt = db.select().from(datasets).all().find((row) => row.id === 'ds_corrupt');
+    // 다음 부팅에 다시 시도하도록 symbolsKey 는 '' 로 남긴다
+    expect(corrupt?.symbolsKey).toBe('');
+    const solo = db.select().from(datasets).all().find((row) => row.id === 'ds_solo');
+    // 손상된 행과 무관하게 다른 데이터셋은 정상 처리된다
+    expect(solo?.symbolsKey).toBe('005930');
+    expect(warns.map((w) => w.obj['event'])).toContain('dataset.merge.symbols-json-corrupt');
+    expect(warns.find((w) => w.obj['event'] === 'dataset.merge.symbols-json-corrupt')?.obj['datasetId']).toBe(
+      'ds_corrupt',
+    );
   });
 
   it('symbolsKey 가 이미 채워진 데이터셋은 건드리지 않는다 (재실행 무시)', () => {

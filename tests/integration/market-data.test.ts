@@ -702,6 +702,25 @@ describe('market data (스펙 §11, §13)', () => {
     });
     expect(tooWide.statusCode).toBe(400);
     expect(tooWide.json().error).toContain('기간');
+
+    // 캔들이 아예 없는 데이터셋 조회 — "이 데이터셋은  만 제공합니다" 같은 빈 목록
+    // 메시지가 아니라 아직 수집된 캔들이 없다는 사실을 그대로 말해야 한다
+    const empty = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/datasets',
+      cookies: { qp_session: cookie },
+      payload: { name: 'inspect-empty', market: 'KR', collect: '1d', symbols: ['000660'] },
+    });
+    const emptyDataset = empty.json().dataset as { id: string };
+    const noCandles = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/datasets/${emptyDataset.id}/candles?symbol=000660&timeframe=1d&fromTsMs=${from}&toTsMs=${to}`,
+      cookies: { qp_session: cookie },
+    });
+    expect(noCandles.statusCode).toBe(400);
+    expect(noCandles.json().error).toBe(
+      '이 데이터셋에는 아직 수집된 캔들이 없습니다 — 동기화 또는 CSV 가져오기 후 조회하세요.',
+    );
   });
 
   it('updates symbols and deletes a dataset via API, blocking delete while backtests are active', async () => {

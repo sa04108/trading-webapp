@@ -77,7 +77,21 @@ export function runDatasetMergeMigration(deps: DatasetMergeMigrationDeps): void 
   // (market, symbolsKey) 로 레거시 행을 묶는다
   const groups = new Map<string, PendingDataset[]>();
   for (const row of pending) {
-    const key = symbolsKey(JSON.parse(row.symbolsJson) as string[]);
+    let key: string;
+    try {
+      key = symbolsKey(JSON.parse(row.symbolsJson) as string[]);
+    } catch (error) {
+      logger.warn(
+        {
+          module: MERGE_MODULE,
+          event: 'dataset.merge.symbols-json-corrupt',
+          datasetId: row.id,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        '데이터셋 symbolsJson 파싱 실패 — 이 데이터셋은 건너뜁니다 (symbolsKey 는 다음 부팅에 다시 시도합니다)',
+      );
+      continue;
+    }
     const groupKey = `${row.market}|${key}`;
     const list = groups.get(groupKey) ?? [];
     list.push({ row, key, kind: defaultTimeframeFromLegacy(row.timeframe) });
@@ -171,10 +185,7 @@ export function runDatasetMergeMigration(deps: DatasetMergeMigrationDeps): void 
         .set({ datasetId: survivor.row.id })
         .where(eq(datasetVersions.datasetId, loser.row.id))
         .run();
-      tx.update(backtestJobs)
-        .set({ datasetId: survivor.row.id })
-        .where(eq(backtestJobs.datasetId, loser.row.id))
-        .run();
+      remapBacktestJobs(tx, loser.row.id, survivor.row.id, logger);
       tx.update(backtestRuns)
         .set({ datasetId: survivor.row.id })
         .where(eq(backtestRuns.datasetId, loser.row.id))
@@ -350,6 +361,50 @@ function remapSyncState(
         .where(eq(brokerSyncState.id, row.id))
         .run();
     }
+  }
+}
+
+/**
+ * backtest_jobs.dataset_id 재매핑 + request_json 안에 박혀 있는 datasetId 도 함께 고친다.
+ * 워커(backtest-child.ts)·복제·복제초안이 모두 dataset_id 컬럼이 아니라 request_json 을
+ * 파싱해 얻은 datasetId 로 데이터셋을 찾으므로, 컬럼만 옮기면 과거 job 의 재실행/복제가
+ * 사라진 loser id 를 참조하게 된다. request_json 이 손상돼 있으면 컬럼 재매핑은 그대로
+ * 두고 경고만 남긴다 — 부팅을 막을 이유는 아니다.
+ */
+function remapBacktestJobs(
+  tx: Tx,
+  loserId: string,
+  survivorId: string,
+  logger: DatasetMergeLogger,
+): void {
+  const rows = tx
+    .select({ id: backtestJobs.id, requestJson: backtestJobs.requestJson })
+    .from(backtestJobs)
+    .where(eq(backtestJobs.datasetId, loserId))
+    .all();
+  for (const row of rows) {
+    let requestJson = row.requestJson;
+    try {
+      const parsed = JSON.parse(requestJson) as Record<string, unknown>;
+      parsed['datasetId'] = survivorId;
+      requestJson = JSON.stringify(parsed);
+    } catch (error) {
+      logger.warn(
+        {
+          module: MERGE_MODULE,
+          event: 'dataset.merge.request-json-skip',
+          jobId: row.id,
+          loserId,
+          survivorId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        'backtest_jobs.request_json 파싱 실패 — dataset_id 컬럼만 재매핑하고 JSON 은 그대로 둡니다',
+      );
+    }
+    tx.update(backtestJobs)
+      .set({ datasetId: survivorId, requestJson })
+      .where(eq(backtestJobs.id, row.id))
+      .run();
   }
 }
 

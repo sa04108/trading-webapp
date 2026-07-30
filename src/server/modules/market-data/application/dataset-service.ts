@@ -584,7 +584,11 @@ export class DatasetService {
       if (timestamps.length > 0) available.push(candidate);
     }
     if (!available.includes(timeframe)) {
-      throw new Error(`이 데이터셋은 ${available.join('/')} 만 제공합니다`);
+      throw new Error(
+        available.length > 0
+          ? `이 데이터셋은 ${available.join('/')} 만 제공합니다`
+          : '이 데이터셋에는 아직 수집된 캔들이 없습니다 — 동기화 또는 CSV 가져오기 후 조회하세요.',
+      );
     }
 
     const candles: Candle[] = [];
