@@ -59,6 +59,7 @@ import { StatusBadge } from './status-badge';
 import { formatSymbolSummary } from './symbol-summary';
 import { isTerminal, type BacktestMetrics, type JobSummary, type RunMetadata } from './types';
 import { costSummary } from './cost-summary';
+import { costProfileLabel, slippageProfileLabel } from './profile-labels';
 import { groupWarnings } from './warning-groups';
 
 function MetricCards({ metrics }: { metrics: BacktestMetrics }) {
@@ -373,6 +374,28 @@ function RunMetadataCard({
   const specByKey = new Map(
     extractNumberParams(schema.data?.schema).map((spec) => [spec.key, spec]),
   );
+  // 요율은 현재 레지스트리에서 찾되 id@version 이 정확히 일치할 때만 붙인다 —
+  // 세율이 바뀐 뒤의 레지스트리 값을 구버전 실행에 붙이면 재현 정보가 거짓말한다
+  const profiles = useQuery({
+    queryKey: ['backtests', 'profiles'],
+    queryFn: () =>
+      api<{
+        commissionProfiles: Array<{
+          id: string;
+          version: string;
+          buyCommissionRate: number;
+          sellCommissionRate: number;
+          sellTaxRate: number;
+        }>;
+        slippageProfiles: Array<{ id: string; version: string; bps: number; fixed: number }>;
+      }>('/backtests/profiles'),
+  });
+  const feeProfile = profiles.data?.commissionProfiles.find(
+    (p) => `${p.id}@${p.version}` === run.feeModelVersion,
+  );
+  const slippageProfile = profiles.data?.slippageProfiles.find(
+    (p) => `${p.id}@${p.version}` === run.slippageModelVersion,
+  );
   const rows: Array<[string, string]> = [
     [
       '전략',
@@ -385,8 +408,16 @@ function RunMetadataCard({
     ['봉 주기', timeframe ? timeframeLabel(timeframe) : '-'],
     ['데이터 해시', run.datasetHash.slice(0, 16)],
     ['엔진 버전', run.engineVersion],
-    ['수수료 모델', run.feeModelVersion],
-    ['슬리피지 모델', run.slippageModelVersion],
+    [
+      '수수료 모델',
+      feeProfile ? `${run.feeModelVersion} — ${costProfileLabel(feeProfile)}` : run.feeModelVersion,
+    ],
+    [
+      '슬리피지 모델',
+      slippageProfile
+        ? `${run.slippageModelVersion} — ${slippageProfileLabel(slippageProfile)}`
+        : run.slippageModelVersion,
+    ],
     ['난수 시드', String(run.randomSeed)],
     ['Git 커밋', run.gitCommitSha.slice(0, 12)],
     ['실행 시각', `${formatDateTime(run.startedAtMs)} ~ ${formatDateTime(run.completedAtMs)}`],
