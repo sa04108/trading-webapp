@@ -580,6 +580,10 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
 
       {inspectSymbol !== null ? (
         <CandleInspectDrawer
+          // 드로어 내부 timeframe/preset 상태는 mount 시 slice 로 한 번만 초기화된다 —
+          // key 로 slice 를 묶어 탭 전환 시 완전히 새로 마운트해서 낡은 timeframe(예:
+          // 1m 탭에서 고른 '1h' 가 1d 탭 전환 후에도 남는 것)을 방지한다
+          key={slice}
           datasetId={dataset.id}
           slices={dataset.slices}
           slice={slice}
