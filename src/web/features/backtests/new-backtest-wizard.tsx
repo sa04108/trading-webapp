@@ -19,6 +19,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { api, ApiError, postJson } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 import { datasetTimeframeLabel, formatKrw, timeframeLabel } from '@/lib/format';
+import { costProfileLabel, slippageProfileLabel } from './profile-labels';
 import { useStockNames } from '@/lib/use-stock-names';
 import { requestToFormState } from './prefill';
 import { ParamHint } from './param-hint';
@@ -48,9 +49,19 @@ interface DatasetSummary {
   symbols: string[];
 }
 
-interface ProfileSummary {
+interface CommissionProfileSummary {
   id: string;
   version: string;
+  buyCommissionRate: number;
+  sellCommissionRate: number;
+  sellTaxRate: number;
+}
+
+interface SlippageProfileSummary {
+  id: string;
+  version: string;
+  bps: number;
+  fixed: number;
 }
 
 export function NewBacktestWizard() {
@@ -89,9 +100,10 @@ export function NewBacktestWizard() {
   const profiles = useQuery({
     queryKey: ['backtests', 'profiles'],
     queryFn: () =>
-      api<{ commissionProfiles: ProfileSummary[]; slippageProfiles: ProfileSummary[] }>(
-        '/backtests/profiles',
-      ),
+      api<{
+        commissionProfiles: CommissionProfileSummary[];
+        slippageProfiles: SlippageProfileSummary[];
+      }>('/backtests/profiles'),
   });
 
   const [searchParams] = useSearchParams();
@@ -585,7 +597,7 @@ export function NewBacktestWizard() {
                   <SelectContent>
                     {(profiles.data?.commissionProfiles ?? []).map((profile) => (
                       <SelectItem key={profile.id} value={profile.id}>
-                        {profile.id} (v{profile.version})
+                        {profile.id} (v{profile.version}) — {costProfileLabel(profile)}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -600,7 +612,7 @@ export function NewBacktestWizard() {
                   <SelectContent>
                     {(profiles.data?.slippageProfiles ?? []).map((profile) => (
                       <SelectItem key={profile.id} value={profile.id}>
-                        {profile.id} (v{profile.version})
+                        {profile.id} (v{profile.version}) — {slippageProfileLabel(profile)}
                       </SelectItem>
                     ))}
                   </SelectContent>

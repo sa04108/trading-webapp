@@ -7,6 +7,8 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
 import {
   Dialog,
   DialogContent,
@@ -57,6 +59,8 @@ import { StatusBadge } from './status-badge';
 import { formatSymbolSummary } from './symbol-summary';
 import { isTerminal, type BacktestMetrics, type JobSummary, type RunMetadata } from './types';
 import { costSummary } from './cost-summary';
+import { costProfileLabel, slippageProfileLabel } from './profile-labels';
+import { groupWarnings } from './warning-groups';
 
 function MetricCards({ metrics }: { metrics: BacktestMetrics }) {
   const cost = costSummary(metrics);
@@ -273,6 +277,82 @@ function TradesSection({
   );
 }
 
+function WarningsSection({ warnings }: { warnings: string[] }) {
+  const [grouped, setGrouped] = useState(true);
+  const [page, setPage] = useState(0);
+  const [pageSizeText, setPageSizeText] = useState('20');
+  const pageSize = Math.min(200, Math.max(1, Number.parseInt(pageSizeText, 10) || 20));
+
+  const rows = grouped ? groupWarnings(warnings).map((g) => g.label) : warnings;
+  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
+  const currentPage = Math.min(page, pageCount - 1);
+  const visible = rows.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+
+  return (
+    <Alert className="lg:col-span-2">
+      <AlertTitle>경고·한계</AlertTitle>
+      <AlertDescription>
+        <div className="mb-2 flex flex-wrap items-center gap-4">
+          <label className="flex items-center gap-1.5 text-xs">
+            <Checkbox
+              checked={grouped}
+              onCheckedChange={(checked) => {
+                setGrouped(checked === true);
+                setPage(0);
+              }}
+            />
+            묶어 보기
+          </label>
+          <label className="flex items-center gap-1.5 text-xs">
+            페이지당
+            <Input
+              type="number"
+              min={1}
+              max={200}
+              value={pageSizeText}
+              onChange={(e) => {
+                setPageSizeText(e.target.value);
+                setPage(0);
+              }}
+              className="h-8 w-20"
+              aria-label="페이지당 표시 수"
+            />
+            건
+          </label>
+        </div>
+        <ul className="list-disc space-y-1 pl-4">
+          {visible.map((warning) => (
+            <li key={warning}>{warning}</li>
+          ))}
+        </ul>
+        {pageCount > 1 ? (
+          <div className="mt-3 flex items-center justify-between">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={currentPage === 0}
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+            >
+              이전
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              {currentPage + 1} / {pageCount} 페이지
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={currentPage >= pageCount - 1}
+              onClick={() => setPage((p) => p + 1)}
+            >
+              다음
+            </Button>
+          </div>
+        ) : null}
+      </AlertDescription>
+    </Alert>
+  );
+}
+
 function RunMetadataCard({
   run,
   job,
@@ -294,6 +374,28 @@ function RunMetadataCard({
   const specByKey = new Map(
     extractNumberParams(schema.data?.schema).map((spec) => [spec.key, spec]),
   );
+  // 요율은 현재 레지스트리에서 찾되 id@version 이 정확히 일치할 때만 붙인다 —
+  // 세율이 바뀐 뒤의 레지스트리 값을 구버전 실행에 붙이면 재현 정보가 거짓말한다
+  const profiles = useQuery({
+    queryKey: ['backtests', 'profiles'],
+    queryFn: () =>
+      api<{
+        commissionProfiles: Array<{
+          id: string;
+          version: string;
+          buyCommissionRate: number;
+          sellCommissionRate: number;
+          sellTaxRate: number;
+        }>;
+        slippageProfiles: Array<{ id: string; version: string; bps: number; fixed: number }>;
+      }>('/backtests/profiles'),
+  });
+  const feeProfile = profiles.data?.commissionProfiles.find(
+    (p) => `${p.id}@${p.version}` === run.feeModelVersion,
+  );
+  const slippageProfile = profiles.data?.slippageProfiles.find(
+    (p) => `${p.id}@${p.version}` === run.slippageModelVersion,
+  );
   const rows: Array<[string, string]> = [
     [
       '전략',
@@ -306,8 +408,16 @@ function RunMetadataCard({
     ['봉 주기', timeframe ? timeframeLabel(timeframe) : '-'],
     ['데이터 해시', run.datasetHash.slice(0, 16)],
     ['엔진 버전', run.engineVersion],
-    ['수수료 모델', run.feeModelVersion],
-    ['슬리피지 모델', run.slippageModelVersion],
+    [
+      '수수료 모델',
+      feeProfile ? `${run.feeModelVersion} — ${costProfileLabel(feeProfile)}` : run.feeModelVersion,
+    ],
+    [
+      '슬리피지 모델',
+      slippageProfile
+        ? `${run.slippageModelVersion} — ${slippageProfileLabel(slippageProfile)}`
+        : run.slippageModelVersion,
+    ],
     ['난수 시드', String(run.randomSeed)],
     ['Git 커밋', run.gitCommitSha.slice(0, 12)],
     ['실행 시각', `${formatDateTime(run.startedAtMs)} ~ ${formatDateTime(run.completedAtMs)}`],
@@ -350,18 +460,7 @@ function RunMetadataCard({
           ))}
         </CardContent>
       </Card>
-      {warnings.length > 0 ? (
-        <Alert className="lg:col-span-2">
-          <AlertTitle>경고·한계</AlertTitle>
-          <AlertDescription>
-            <ul className="list-disc space-y-1 pl-4">
-              {warnings.map((warning) => (
-                <li key={warning}>{warning}</li>
-              ))}
-            </ul>
-          </AlertDescription>
-        </Alert>
-      ) : null}
+      {warnings.length > 0 ? <WarningsSection warnings={warnings} /> : null}
     </div>
   );
 }
