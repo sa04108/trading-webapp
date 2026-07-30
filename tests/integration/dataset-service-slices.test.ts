@@ -59,8 +59,6 @@ describe('DatasetService — 슬라이스와 종목 구성 유일성 (설계 202
         { slice: '1d', hasData: false },
         { slice: '1m', hasData: false },
       ]);
-      // 전환기 별칭: 분봉 기본 데이터셋은 기존 웹이 '1h' 로 읽는다
-      expect(ds.timeframe).toBe('1h');
     });
   });
 

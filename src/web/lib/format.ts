@@ -53,15 +53,6 @@ export function timeframeLabel(timeframe: string): string {
   return timeframe;
 }
 
-/**
- * 데이터셋의 봉 주기 표기 — 보관 실체 기준. 1h 종류 데이터셋은 1분봉을 수집해
- * 보관하는 것이므로(시간봉은 파생 집계) '1분봉' 으로 말한다. 시간봉 소비 여부는
- * 백테스트 위저드의 봉 주기 선택지가 답한다.
- */
-export function datasetTimeframeLabel(timeframe: string): string {
-  return timeframe === '1h' ? '1분봉' : timeframeLabel(timeframe);
-}
-
 /** 손익 텍스트 색상 클래스 — 부호와 함께 사용 */
 export function pnlClass(value: number | null | undefined): string {
   if (value === null || value === undefined || value === 0) return 'text-muted-foreground';

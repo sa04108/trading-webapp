@@ -32,15 +32,6 @@ class SyncCancelledError extends Error {
   }
 }
 
-export class SyncUnsupportedDatasetError extends Error {
-  constructor(timeframe: string) {
-    super(
-      `${timeframe} 데이터셋은 동기화할 수 없습니다 — 1h(1분봉 수집·집계) 또는 1d(일봉 수집) 데이터셋이어야 합니다`,
-    );
-    this.name = 'SyncUnsupportedDatasetError';
-  }
-}
-
 /**
  * 재무 단계 진행 — 45분짜리 단계가 조용하지 않게 한다.
  *

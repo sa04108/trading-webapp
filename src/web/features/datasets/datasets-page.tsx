@@ -57,7 +57,6 @@ interface DatasetSummary {
   id: string;
   name: string;
   market: string;
-  timeframe: string;
   symbols: string[];
   latestVersion: number;
   runningSyncJobId: string | null;

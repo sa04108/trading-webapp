@@ -18,7 +18,7 @@ import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { api, ApiError, postJson } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
-import { datasetTimeframeLabel, formatKrw, timeframeLabel } from '@/lib/format';
+import { formatKrw, timeframeLabel } from '@/lib/format';
 import { wizardTimeframes } from '@/features/datasets/dataset-slices';
 import { costProfileLabel, slippageProfileLabel } from './profile-labels';
 import { useStockNames } from '@/lib/use-stock-names';
@@ -46,7 +46,6 @@ interface DatasetSummary {
   id: string;
   name: string;
   market: string;
-  timeframe: string;
   symbols: string[];
   defaultTimeframe: '1d' | '1m';
   slices: Array<{ slice: '1d' | '1m'; hasData: boolean }>;
@@ -225,9 +224,10 @@ export function NewBacktestWizard() {
       parameters: parsedParams,
       datasetId: selectedDataset.id,
       // 항상 명시해 보낸다 — 결과·복제가 "무슨 봉으로 돌렸는지" 를 들고 다니게 (§9.5)
-      // 사용자가 카드를 만지지 않았으면(timeframe==='') 도출 목록의 첫 항목이 기본이다
+      // 사용자가 카드를 만지지 않았으면(timeframe==='') 도출 목록의 첫 항목이 기본이다.
+      // 도출 목록마저 비어 있는 극단적 경우엔 legacyConsumeDefault 와 같은 규칙으로 폴백한다.
       timeframe: (timeframe === ''
-        ? (timeframeOptions[0] ?? selectedDataset.timeframe)
+        ? (timeframeOptions[0] ?? (selectedDataset.defaultTimeframe === '1m' ? '1h' : '1d'))
         : timeframe) as '1m' | '1h' | '1d',
       universe: { type: 'SYMBOLS', symbols },
       period: { from, to },
@@ -477,7 +477,7 @@ export function NewBacktestWizard() {
                 // 새 데이터셋의 슬라이스로 다시 도출한 첫 항목을 기본값으로 명시한다 —
                 // 이전 선택이 새 데이터셋에 새지 않게
                 const options = wizardTimeframes(dataset.slices);
-                setTimeframe(options[0] ?? dataset.timeframe);
+                setTimeframe(options[0] ?? (dataset.defaultTimeframe === '1m' ? '1h' : '1d'));
                 setSymbols(dataset.symbols);
               }}
               className={cn(
@@ -487,7 +487,7 @@ export function NewBacktestWizard() {
             >
               <p className="font-medium">{dataset.name}</p>
               <p className="mt-1 text-sm text-muted-foreground">
-                {dataset.market} · {datasetTimeframeLabel(dataset.timeframe)} ·{' '}
+                {dataset.market} · {timeframeLabel(dataset.defaultTimeframe)} ·{' '}
                 {dataset.symbols.length}종목
               </p>
             </button>

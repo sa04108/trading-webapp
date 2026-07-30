@@ -3,7 +3,6 @@ import { eq } from 'drizzle-orm';
 import {
   BrokerSyncService,
   SyncAlreadyRunningError,
-  SyncUnsupportedDatasetError,
   type BrokerSyncDeps,
   type FactsJobState,
 } from '../../src/server/modules/market-data/application/broker-sync-service.js';
@@ -346,7 +345,7 @@ describe('BrokerSyncService (설계 2026-07-28-broker-sync-design.md)', () => {
     let result: { job: { id: string }; done: Promise<void> } | undefined;
     expect(() => {
       result = sync.startSync('ds_raw1m');
-    }).not.toThrow(SyncUnsupportedDatasetError);
+    }).not.toThrow();
     await result?.done;
 
     // done 은 실패해도 reject 하지 않는다(실패는 job 레코드에 기록된다) — 상태를 직접 확인해야
@@ -794,7 +793,7 @@ describe('DatasetService.createBrokerDataset', () => {
   it('creates a 1h dataset for 1m collection (CSV 관례와 동일 — 백테스트 소비 기준)', () => {
     const { datasetService } = buildHarness(new FakeSource([]));
     const dataset = datasetService.createBrokerDataset('KR-유니버스', 'KR', '1m', ['005930', '000660']);
-    expect(dataset.timeframe).toBe('1h');
+    expect(dataset.defaultTimeframe).toBe('1m');
     expect(dataset.symbols).toEqual(['000660', '005930']);
   });
 
@@ -815,7 +814,9 @@ describe('DatasetService.createBrokerDataset', () => {
 
   it('creates a 1d dataset for daily collection and rejects invalid symbols', () => {
     const { datasetService } = buildHarness(new FakeSource([]));
-    expect(datasetService.createBrokerDataset('KR-일봉', 'KR', '1d', ['005930']).timeframe).toBe('1d');
+    expect(
+      datasetService.createBrokerDataset('KR-일봉', 'KR', '1d', ['005930']).defaultTimeframe,
+    ).toBe('1d');
     expect(() => datasetService.createBrokerDataset('x', 'KR', '1d', ['bad symbol!'])).toThrow();
     expect(() => datasetService.createBrokerDataset('y', 'KR', '1d', [])).toThrow();
   });

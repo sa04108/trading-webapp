@@ -45,12 +45,6 @@ export interface DatasetSummary {
   id: string;
   name: string;
   market: Market;
-  /**
-   * @deprecated 전환기 별칭 — legacyConsumeDefault(defaultTimeframe) 값이다.
-   * 슬라이스 모델 전환 전의 웹·백테스트 소비부가 이 필드로 봉 종류를 읽던 관례를
-   * 유지한다. 새 코드는 defaultTimeframe·slices 를 쓴다.
-   */
-  timeframe: Timeframe;
   /** 기본 수집 봉 ('1d'|'1m') — 생성 드로어의 선택, 카드 스위치 기본값 */
   defaultTimeframe: DatasetSlice;
   /** 슬라이스별 데이터 존재 여부 — 카드가 어느 봉 종류를 갖고 있는지 표시 */
@@ -162,8 +156,6 @@ export class DatasetService {
       id: row.id,
       name: row.name,
       market: row.market as Market,
-      // 전환기 별칭: 기존 웹·백테스트 소비부가 timeframe 필드로 봉 종류를 읽는다
-      timeframe: legacyConsumeDefault(defaultTimeframe),
       defaultTimeframe,
       slices,
       symbols: JSON.parse(row.symbolsJson) as string[],

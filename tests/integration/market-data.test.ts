@@ -184,10 +184,14 @@ describe('market data (스펙 §11, §13)', () => {
       url: '/api/v1/datasets',
       cookies: { qp_session: cookie },
     });
-    const datasets = list.json().datasets as Array<{ id: string; name: string; timeframe: string }>;
+    const datasets = list.json().datasets as Array<{
+      id: string;
+      name: string;
+      defaultTimeframe: string;
+    }>;
     expect(datasets).toHaveLength(1);
     expect(datasets[0]!.name).toBe('kr-hourly-v1');
-    expect(datasets[0]!.timeframe).toBe('1h');
+    expect(datasets[0]!.defaultTimeframe).toBe('1m');
 
     // 1h 사전 집계 확인 (스펙 §11: 백테스트는 1시간봉 우선)
     const hourlyTs = await ctx.container.candleRepository.getTimestamps(
@@ -452,8 +456,8 @@ describe('market data (스펙 §11, §13)', () => {
       payload: { name: 'KR-일봉', market: 'KR', collect: '1d', symbols: ['005930'] },
     });
     expect(created.statusCode).toBe(201);
-    const dataset = created.json().dataset as { id: string; timeframe: string };
-    expect(dataset.timeframe).toBe('1d');
+    const dataset = created.json().dataset as { id: string; defaultTimeframe: string };
+    expect(dataset.defaultTimeframe).toBe('1d');
 
     const sync = await ctx.app.inject({
       method: 'POST',
