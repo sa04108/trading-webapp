@@ -1,12 +1,17 @@
+import { useQuery } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import { Link } from 'react-router';
+import { api } from '@/lib/api-client';
+import { InfoHint } from '@/components/info-hint';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useStockNames } from '@/lib/use-stock-names';
 import { useBacktests } from './api';
-import { formatDateTime, formatSignedPct, pnlClass } from '@/lib/format';
+import { formatDateTime, formatSignedPct, pnlClass, timeframeLabel } from '@/lib/format';
+import { groupJobsByStrategy } from './job-groups';
+import { resolveJobTimeframe } from './job-timeframe';
 import { StatusBadge } from './status-badge';
 import { formatSymbolSummary, SYMBOL_SUMMARY_LIMIT } from './symbol-summary';
 import { isTerminal, type JobSummary } from './types';
@@ -14,9 +19,11 @@ import { isTerminal, type JobSummary } from './types';
 function JobCard({
   job,
   nameOf,
+  timeframe,
 }: {
   job: JobSummary;
   nameOf: (symbol: string) => string | null;
+  timeframe: string | null;
 }) {
   const running = !isTerminal(job.status);
   const progress =
@@ -29,7 +36,6 @@ function JobCard({
       <Card className="transition-colors hover:bg-muted/40">
         <CardContent className="space-y-2 py-4">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="font-medium">{job.strategyId}</span>
             <StatusBadge status={job.status} />
             <span className="ml-auto text-xs text-muted-foreground">
               {formatDateTime(job.createdAtMs)}
@@ -38,6 +44,7 @@ function JobCard({
           <div className="text-xs text-muted-foreground">
             {formatSymbolSummary(job.request.universe.symbols, nameOf)} · {job.request.period.from}{' '}
             ~ {job.request.period.to}
+            {timeframe ? ` · ${timeframeLabel(timeframe)}` : ''}
           </div>
           {running && progress !== null ? (
             <div className="space-y-1">
@@ -63,8 +70,24 @@ function JobCard({
   );
 }
 
+interface StrategySummary {
+  id: string;
+  version: string;
+  name: string;
+  description: string;
+}
+
 export function BacktestsPage() {
   const { data, isLoading } = useBacktests(5_000);
+  const strategies = useQuery({
+    queryKey: ['strategies'],
+    queryFn: () => api<{ strategies: StrategySummary[] }>('/strategies'),
+  });
+  const datasets = useQuery({
+    queryKey: ['datasets'],
+    queryFn: () => api<{ datasets: Array<{ id: string; timeframe: string }> }>('/datasets'),
+  });
+  const strategyById = new Map((strategies.data?.strategies ?? []).map((s) => [s.id, s]));
 
   // 카드마다 훅을 부르면 카드 수만큼 요청이 난다. 전체 심볼 합집합은
   // /symbols/info 의 1,000개 상한에 걸릴 수 있다 — 어차피 5개만 표시하므로
@@ -96,10 +119,30 @@ export function BacktestsPage() {
           <Skeleton className="h-24 w-full" />
         </div>
       ) : data && data.jobs.length > 0 ? (
-        <div className="space-y-3">
-          {data.jobs.map((job) => (
-            <JobCard key={job.id} job={job} nameOf={nameOf} />
-          ))}
+        <div className="space-y-6">
+          {groupJobsByStrategy(data.jobs).map((group) => {
+            const strategy = strategyById.get(group.strategyId);
+            return (
+              <section key={group.strategyId} className="space-y-3">
+                <div className="flex items-center gap-1.5">
+                  <h3 className="text-sm font-semibold">{strategy?.name ?? group.strategyId}</h3>
+                  {strategy?.description ? (
+                    <InfoHint label={`${strategy.name} 전략 설명`}>
+                      <p className="leading-relaxed">{strategy.description}</p>
+                    </InfoHint>
+                  ) : null}
+                </div>
+                {group.jobs.map((job) => (
+                  <JobCard
+                    key={job.id}
+                    job={job}
+                    nameOf={nameOf}
+                    timeframe={resolveJobTimeframe(job, datasets.data?.datasets)}
+                  />
+                ))}
+              </section>
+            );
+          })}
         </div>
       ) : (
         <Card>
