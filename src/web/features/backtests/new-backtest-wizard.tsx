@@ -23,7 +23,12 @@ import { useStockNames } from '@/lib/use-stock-names';
 import { requestToFormState } from './prefill';
 import { ParamHint } from './param-hint';
 import { extractNumberParams, paramLabel, type NumberParamSpec } from './param-specs';
-import { formatSymbolLabel } from './symbol-summary';
+import { SymbolLabel } from '@/components/symbol-label';
+import {
+  clampSymbolName,
+  formatSymbolLabel,
+  SYMBOL_SUMMARY_LIMIT,
+} from './symbol-summary';
 import type { BacktestRequestBody } from './types';
 
 const STEPS = ['전략', '데이터·종목', '기간', '자본·비용', '검토', '실행'] as const;
@@ -105,8 +110,8 @@ export function NewBacktestWizard() {
   const selectedDataset = datasets.data?.datasets.find((d) => d.id === datasetId) ?? null;
   // 선택 후보 전체를 한 번에 조회한다 — 체크박스와 검토 단계가 같은 Map 을 쓴다.
   const stockNames = useStockNames(selectedDataset?.symbols ?? []);
-  const symbolLabel = (symbol: string): string =>
-    formatSymbolLabel(symbol, stockNames.get(symbol)?.name ?? null);
+  const nameOf = (symbol: string): string | null => stockNames.get(symbol)?.name ?? null;
+  const symbolLabel = (symbol: string): string => formatSymbolLabel(symbol, nameOf(symbol));
   const paramSpecs = useMemo(() => extractNumberParams(schema.data?.schema), [schema.data]);
 
   // 스키마 기본값은 입력 상태에 한 번 심는다. 렌더 시점에 빈 값을 기본값으로 되돌리면
@@ -262,6 +267,14 @@ export function NewBacktestWizard() {
   };
 
   const request = step >= 4 ? buildRequest() : null;
+
+  // 검토 줄은 종목 하나가 한 줄을 쓴다 — 개수는 5개로 접고, 이름은 글자수로 줄이고,
+  // 폭 맞춤은 SymbolLabel 이 한다(코드는 잘리지 않는다). 전체 목록은 title 로 남긴다.
+  const reviewSymbols =
+    request !== null && typeof request !== 'string' ? request.universe.symbols : [];
+  const reviewShownSymbols = reviewSymbols.slice(0, SYMBOL_SUMMARY_LIMIT);
+  const reviewRestCount = reviewSymbols.length - reviewShownSymbols.length;
+  const symbolsFullText = reviewSymbols.map(symbolLabel).join(', ');
 
   // 초안뿐 아니라 전략·데이터셋 카탈로그가 실패해도 프리필 effect 는 영영 끝나지 않는다 —
   // 그대로 두면 스켈레톤에 갇힌다. 셋 중 하나라도 실패하면 프리필을 포기하고 폼을 보여준다.
@@ -637,20 +650,34 @@ export function NewBacktestWizard() {
               <CardDescription>제출 전 설정을 확인하세요.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-2 text-sm">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">전략</span>
+              <div className="flex justify-between gap-3">
+                <span className="shrink-0 text-muted-foreground">전략</span>
                 <span>
                   {request.strategyId} v{request.strategyVersion}
                 </span>
               </div>
               <Separator />
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">종목</span>
-                <span>{request.universe.symbols.map(symbolLabel).join(', ')}</span>
+              <div className="flex justify-between gap-3">
+                {/* 라벨은 줄어들지 않고('종목' 이 '종'+'목' 으로 쪼개지지 않게), 값은
+                    min-w-0 로 줄어들 수 있어야 truncate 가 동작한다 */}
+                <span className="shrink-0 text-muted-foreground">종목</span>
+                <span className="flex min-w-0 flex-col items-end" title={symbolsFullText}>
+                  {reviewShownSymbols.map((symbol) => (
+                    <SymbolLabel
+                      key={symbol}
+                      symbol={symbol}
+                      name={clampSymbolName(nameOf(symbol))}
+                      className="max-w-full"
+                    />
+                  ))}
+                  {reviewRestCount > 0 ? (
+                    <span className="text-muted-foreground">외 {reviewRestCount}종목</span>
+                  ) : null}
+                </span>
               </div>
               <Separator />
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">봉 주기</span>
+              <div className="flex justify-between gap-3">
+                <span className="shrink-0 text-muted-foreground">봉 주기</span>
                 <span>
                   {request.timeframe === '1m'
                     ? '1분봉'
@@ -660,27 +687,27 @@ export function NewBacktestWizard() {
                 </span>
               </div>
               <Separator />
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">기간</span>
+              <div className="flex justify-between gap-3">
+                <span className="shrink-0 text-muted-foreground">기간</span>
                 <span>
                   {request.period.from} ~ {request.period.to}
                 </span>
               </div>
               <Separator />
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">초기 자본</span>
+              <div className="flex justify-between gap-3">
+                <span className="shrink-0 text-muted-foreground">초기 자본</span>
                 <span>{formatKrw(request.capital.initialCash)}</span>
               </div>
               <Separator />
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">비용</span>
+              <div className="flex justify-between gap-3">
+                <span className="shrink-0 text-muted-foreground">비용</span>
                 <span>
                   {request.execution.commissionProfileId} / {request.execution.slippageProfileId}
                 </span>
               </div>
               <Separator />
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">파라미터</span>
+              <div className="flex justify-between gap-3">
+                <span className="shrink-0 text-muted-foreground">파라미터</span>
                 <span className="text-right font-mono text-xs">
                   {Object.entries(request.parameters)
                     .map(([k, v]) => `${k}=${String(v)}`)

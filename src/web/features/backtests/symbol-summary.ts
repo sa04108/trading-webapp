@@ -12,6 +12,22 @@
 /** Description 에 나열할 종목 수. 200종목을 다 나열하면 화면 여러 줄을 잡아먹는다 */
 export const SYMBOL_SUMMARY_LIMIT = 5;
 
+/**
+ * 요약에 넣을 이름 길이 상한. 긴 이름이 옆 라벨 자리를 밀어내지 않게 이름 쪽에서
+ * 먼저 줄인다 — 최종 폭 맞춤은 호출부의 `truncate` 가 하고, 줄이지 않은 전체
+ * 문자열은 `title` 로 남긴다.
+ */
+export const SYMBOL_NAME_MAX_CHARS = 20;
+
+/** 상한을 넘는 이름만 '…' 로 줄인다. null·빈 이름은 그대로 흘려 코드만 남게 한다 */
+export function clampSymbolName(
+  name: string | null,
+  maxChars = SYMBOL_NAME_MAX_CHARS,
+): string | null {
+  if (!name || name.length <= maxChars) return name;
+  return `${name.slice(0, maxChars - 1)}…`;
+}
+
 /** '삼성전자 (005930)' / 이름을 모르면 '005930' — 빈 괄호를 만들지 않는다 */
 export function formatSymbolLabel(symbol: string, name: string | null): string {
   return name ? `${name} (${symbol})` : symbol;

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  clampSymbolName,
   formatSymbolLabel,
   formatSymbolSummary,
+  SYMBOL_NAME_MAX_CHARS,
 } from '../../src/web/features/backtests/symbol-summary.js';
 
 const NAMES: Record<string, string> = {
@@ -25,6 +27,39 @@ describe('formatSymbolLabel', () => {
 
   it('빈 문자열 이름도 코드만으로 다룬다', () => {
     expect(formatSymbolLabel('005930', '')).toBe('005930');
+  });
+});
+
+describe('clampSymbolName', () => {
+  it('상한 이하 이름은 건드리지 않는다', () => {
+    expect(clampSymbolName('삼성전자')).toBe('삼성전자');
+  });
+
+  it('정확히 상한인 이름도 건드리지 않는다', () => {
+    const exact = '가'.repeat(SYMBOL_NAME_MAX_CHARS);
+    expect(clampSymbolName(exact)).toBe(exact);
+  });
+
+  it('상한을 넘으면 줄이고 …을 붙여 상한 길이를 지킨다', () => {
+    const long = '가'.repeat(SYMBOL_NAME_MAX_CHARS + 5);
+    const result = clampSymbolName(long);
+    expect(result).toBe(`${'가'.repeat(SYMBOL_NAME_MAX_CHARS - 1)}…`);
+    expect(result).toHaveLength(SYMBOL_NAME_MAX_CHARS);
+  });
+
+  it('null·빈 이름은 그대로 흘려 코드만 남게 한다', () => {
+    expect(clampSymbolName(null)).toBeNull();
+    expect(clampSymbolName('')).toBe('');
+  });
+
+  it('상한을 조정할 수 있다', () => {
+    expect(clampSymbolName('에이치엘비생명과학', 4)).toBe('에이치…');
+  });
+
+  it('요약과 합치면 이름만 줄고 코드는 온전하다', () => {
+    expect(
+      formatSymbolSummary(['005930', '267260'], (symbol) => clampSymbolName(nameOf(symbol), 4)),
+    ).toBe('삼성전자 (005930), HD현… (267260)');
   });
 });
 
