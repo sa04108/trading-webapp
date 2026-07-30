@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   collectTimeframeForSlice,
   coverageTimeframeForSlice,
-  defaultTimeframeFromLegacy,
   legacyConsumeDefault,
   sliceForTimeframe,
   sliceTimeframes,
@@ -47,10 +46,3 @@ describe('symbolsKey', () => {
   });
 });
 
-describe('defaultTimeframeFromLegacy', () => {
-  it('기존 1h 종류는 분봉 기본, 1d/1m 은 그대로다', () => {
-    expect(defaultTimeframeFromLegacy('1h')).toBe('1m');
-    expect(defaultTimeframeFromLegacy('1d')).toBe('1d');
-    expect(defaultTimeframeFromLegacy('1m')).toBe('1m');
-  });
-});

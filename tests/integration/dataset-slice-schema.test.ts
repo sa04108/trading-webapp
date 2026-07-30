@@ -39,7 +39,7 @@ describe('슬라이스 스키마', () => {
   it('datasets 에 defaultTimeframe·symbolsKey, coverage·sync_state 에 slice 가 있다', () => {
     db.insert(datasets)
       .values({
-        id: 'ds_t', name: 't', market: 'KR', timeframe: '1h',
+        id: 'ds_t', name: 't', market: 'KR',
         defaultTimeframe: '1m', symbolsKey: '005930',
         symbolsJson: '["005930"]', createdAtMs: 1, updatedAtMs: 1,
       })
@@ -71,7 +71,9 @@ describe('0004 백필 마이그레이션 (레거시 행)', () => {
     const files = readdirSync(MIGRATIONS_DIR)
       .filter((file) => file.endsWith('.sql'))
       .sort();
-    const pre0004 = files.filter((file) => !file.startsWith('0004'));
+    // '0004 가 아닌 전부' 가 아니라 '0004 미만' — 이후 마이그레이션(0005 의
+    // timeframe 컬럼 드롭 등)이 레거시 스키마 재현에 섞여 들면 안 된다
+    const pre0004 = files.filter((file) => file.slice(0, 4) < '0004');
     for (const file of pre0004) {
       applyMigrationFile(sqlite, join(MIGRATIONS_DIR, file));
     }

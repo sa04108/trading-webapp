@@ -23,7 +23,6 @@ import { computeCoverage } from '../domain/coverage.js';
 import {
   ALL_SLICES,
   coverageTimeframeForSlice,
-  legacyConsumeDefault,
   sliceForTimeframe,
   sliceTimeframes,
   symbolsKey,
@@ -266,7 +265,6 @@ export class DatasetService {
       id: newId('ds'),
       name,
       market,
-      timeframe: legacyConsumeDefault(collect),
       defaultTimeframe: collect,
       symbolsKey: key,
       symbolsJson: JSON.stringify(sortedSymbols),
@@ -427,14 +425,13 @@ export class DatasetService {
     }
 
     // 데이터셋의 defaultTimeframe 은 백테스트가 소비하는 기준 — 1m import 도 1h 로
-    // 사전 집계되므로 defaultTimeframe 은 1m(레거시 컬럼엔 1h 를 기록해 호환한다)
+    // 사전 집계되지만 슬라이스 키는 1m 이다
     const defaultTimeframe: DatasetSlice = request.timeframe === '1d' ? '1d' : '1m';
     const sortedSymbols = [request.symbol];
     const row: typeof datasets.$inferInsert = {
       id: newId('ds'),
       name: request.datasetName,
       market: request.market,
-      timeframe: legacyConsumeDefault(defaultTimeframe),
       defaultTimeframe,
       symbolsKey: symbolsKey(sortedSymbols),
       symbolsJson: JSON.stringify(sortedSymbols),

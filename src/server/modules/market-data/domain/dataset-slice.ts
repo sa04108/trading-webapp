@@ -45,7 +45,3 @@ export function symbolsKey(symbols: readonly string[]): string {
   return [...new Set(symbols)].sort().join(',');
 }
 
-/** 기존 datasets.timeframe 값을 defaultTimeframe 으로 매핑 (마이그레이션·전환기) */
-export function defaultTimeframeFromLegacy(timeframe: string): DatasetSlice {
-  return timeframe === '1d' ? '1d' : '1m';
-}

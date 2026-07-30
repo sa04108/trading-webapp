@@ -11,7 +11,6 @@ function setup() {
       id: 'ds-1',
       name: 'test',
       market: 'KR',
-      timeframe: '1d',
       symbolsJson: JSON.stringify(['005930']),
       description: null,
       createdAtMs: 1,

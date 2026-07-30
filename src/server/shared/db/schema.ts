@@ -62,8 +62,6 @@ export const datasets = sqliteTable('datasets', {
   id: text('id').primaryKey(),
   name: text('name').notNull().unique(),
   market: text('market').notNull(),
-  /** @deprecated 슬라이스 모델 전환으로 사용 중단 — defaultTimeframe 을 쓴다 */
-  timeframe: text('timeframe').notNull(),
   /** 기본 봉 ('1d'|'1m') — 생성 드로어의 수집 봉 선택. 카드 스위치 기본값 */
   defaultTimeframe: text('default_timeframe').notNull().default('1d'),
   /** 종목 구성 유일키 (정렬·중복 제거, ',' join) — 애플리케이션 레벨 중복 검사용 */

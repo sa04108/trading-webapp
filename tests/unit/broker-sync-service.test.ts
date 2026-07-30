@@ -334,7 +334,6 @@ describe('BrokerSyncService (설계 2026-07-28-broker-sync-design.md)', () => {
         id: 'ds_raw1m',
         name: 'raw',
         market: 'KR',
-        timeframe: '1m',
         // defaultTimeframe 미지정 → 컬럼 기본값 '1d' 가 채워진다
         symbolsJson: '["005930"]',
         createdAtMs: clock.now(),
@@ -685,7 +684,6 @@ describe('BrokerSyncService 재무 단계', () => {
         id: 'ds-us',
         name: 'US-유니버스',
         market: 'US',
-        timeframe: '1d',
         symbolsJson: JSON.stringify(['AAPL']),
         description: null,
         createdAtMs: 1,

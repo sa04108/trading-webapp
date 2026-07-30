@@ -15,7 +15,7 @@ import {
   datasets,
 } from '../../../shared/db/schema.js';
 import { newId } from '../../../shared/ids.js';
-import { defaultTimeframeFromLegacy, symbolsKey, type DatasetSlice } from '../domain/dataset-slice.js';
+import { symbolsKey, type DatasetSlice } from '../domain/dataset-slice.js';
 
 /** pino Logger 가 구조적으로 만족하는 최소 폭 — 테스트가 기록용 가짜를 끼울 수 있다 */
 export interface DatasetMergeLogger {
@@ -36,7 +36,12 @@ type DatasetRow = typeof datasets.$inferSelect;
 interface PendingDataset {
   row: DatasetRow;
   key: string;
-  /** 구 timeframe 컬럼이 말하는 종류 — '1d' = 일봉 데이터셋, '1m' = 분봉(구 1h/1m) */
+  /**
+   * 레거시 종류 — '1d' = 일봉 데이터셋, '1m' = 분봉(구 1h/1m).
+   * 0004 백필이 구 timeframe 컬럼을 같은 매핑으로 defaultTimeframe 에 복사했으므로
+   * (마이그레이션이 부트 병합보다 항상 먼저 돈다) 그 값을 그대로 읽는다 —
+   * 구 timeframe 컬럼은 제거됐다.
+   */
   kind: DatasetSlice;
 }
 
@@ -94,7 +99,7 @@ export function runDatasetMergeMigration(deps: DatasetMergeMigrationDeps): void 
     }
     const groupKey = `${row.market}|${key}`;
     const list = groups.get(groupKey) ?? [];
-    list.push({ row, key, kind: defaultTimeframeFromLegacy(row.timeframe) });
+    list.push({ row, key, kind: row.defaultTimeframe as DatasetSlice });
     groups.set(groupKey, list);
   }
 
