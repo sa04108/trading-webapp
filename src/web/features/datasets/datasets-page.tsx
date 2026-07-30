@@ -581,7 +581,8 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
       {inspectSymbol !== null ? (
         <CandleInspectDrawer
           datasetId={dataset.id}
-          datasetTimeframe={dataset.timeframe}
+          slices={dataset.slices}
+          slice={slice}
           symbol={inspectSymbol}
           symbolName={stockNames.get(inspectSymbol)?.name ?? null}
           anchorTsMs={coverageBySymbol.get(inspectSymbol)?.lastTsMs ?? null}
