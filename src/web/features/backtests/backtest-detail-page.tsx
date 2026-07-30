@@ -224,7 +224,13 @@ function TradesSection({
                         ? '손절'
                         : trade.exitReason === 'TAKE_PROFIT'
                           ? '익절'
-                          : (trade.exitReason ?? '-')}
+                          : trade.exitReason === 'TREND_END'
+                            ? '추세 반전'
+                            : trade.exitReason === 'TIME'
+                              ? '보유 기간 만료'
+                              : trade.exitReason === 'RSI_EXIT'
+                                ? 'RSI 회복'
+                                : (trade.exitReason ?? '-')}
                     </TableCell>
                   </TableRow>
                 ))}
