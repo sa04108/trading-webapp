@@ -53,8 +53,10 @@ import { DrawdownChart, EquityChart, MonthlyReturnsChart } from './result-charts
 import { StatusBadge } from './status-badge';
 import { formatSymbolSummary } from './symbol-summary';
 import { isTerminal, type BacktestMetrics, type JobSummary, type RunMetadata } from './types';
+import { costSummary } from './cost-summary';
 
 function MetricCards({ metrics }: { metrics: BacktestMetrics }) {
+  const cost = costSummary(metrics);
   const cards = [
     {
       label: '누적 수익률',
@@ -74,14 +76,24 @@ function MetricCards({ metrics }: { metrics: BacktestMetrics }) {
       className: '',
     },
     { label: '청산 거래 수', value: `${metrics.tradeCount}건`, className: '' },
+    {
+      label: '총 비용',
+      value: cost.totalText,
+      className: '',
+      detail: cost.detailText,
+      cardClassName: 'col-span-full',
+    },
   ];
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
       {cards.map((card) => (
-        <Card key={card.label}>
+        <Card key={card.label} className={'cardClassName' in card ? card.cardClassName : undefined}>
           <CardContent className="px-4 py-3">
             <p className="text-xs text-muted-foreground">{card.label}</p>
             <p className={cn('text-lg font-semibold tabular-nums', card.className)}>{card.value}</p>
+            {'detail' in card && card.detail ? (
+              <p className="mt-1 text-xs text-muted-foreground tabular-nums">{card.detail}</p>
+            ) : null}
           </CardContent>
         </Card>
       ))}
