@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -212,6 +212,70 @@ describe('runDatasetMergeMigration — 병합', () => {
 
     expect(existsSync(join(dataRoot, 'dataset=ds_min', 'facts', 'scope=SYMBOL', 'data.parquet'))).toBe(true);
     expect(existsSync(join(dataRoot, 'dataset=ds_day'))).toBe(false);
+  });
+
+  it('버전 번호가 겹쳐도(둘 다 v1) 병합 버전은 max+1 이다', () => {
+    insertLegacyDataset('ds_min', '1h', 1_000);
+    insertLegacyDataset('ds_day', '1d', 2_000);
+    insertVersion('ds_min', 1, 'a1');
+    insertVersion('ds_day', 1, 'b1');
+    seedCandleDir('ds_min', '1h');
+    seedCandleDir('ds_day', '1d');
+    run();
+
+    const versions = db.select().from(datasetVersions).all();
+    expect(versions.every((v) => v.datasetId === 'ds_min')).toBe(true);
+    const latest = versions.reduce((a, b) => (a.version > b.version ? a : b));
+    expect(latest.version).toBe(2);
+    expect(latest.contentHash).toBe(createHash('sha256').update('a1:merge:ds_day').digest('hex'));
+  });
+
+  it('파일만 옮겨지고 DB 는 안 된 상태(직전 실행 중단)에서 재실행하면 병합을 마저 한다', () => {
+    seedMergePair();
+    // 직전 실행이 파일 이동 후 DB 트랜잭션 전에 죽은 상황 재현:
+    // loser 의 1d 파티션을 survivor 아래로 직접 옮기고 loser 디렉터리를 지운다
+    const from = join(dataRoot, 'dataset=ds_day', 'market=KR', 'timeframe=1d');
+    const to = join(dataRoot, 'dataset=ds_min', 'market=KR', 'timeframe=1d');
+    renameSync(from, to);
+    rmSync(join(dataRoot, 'dataset=ds_day'), { recursive: true, force: true });
+    run();
+
+    // loser 디렉터리가 없어도 에러 없이 DB 병합이 완료된다
+    const rows = db.select().from(datasets).all();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.id).toBe('ds_min');
+    expect(rows[0]?.symbolsKey).toBe('000660,005930');
+    expect(db.select().from(backtestJobs).all()[0]?.datasetId).toBe('ds_min');
+    const versions = db.select().from(datasetVersions).all();
+    expect(versions.reduce((a, b) => (a.version > b.version ? a : b)).version).toBe(6);
+    expect(existsSync(join(to, 'symbol=005930', 'year=2026', 'data.parquet'))).toBe(true);
+  });
+
+  it('sync_state·facts_state 가 겹치면 양쪽 행을 비우고 경고한다 (coverage 는 생존자 유지)', () => {
+    seedMergePair();
+    // 비정상 상태 재현: survivor 가 loser 와 같은 (symbol, slice) 행을 이미 가진다
+    db.insert(dataCoverage)
+      .values({ datasetId: 'ds_min', symbol: '005930', slice: '1d', barCount: 99, computedAtMs: 2 })
+      .run();
+    db.insert(brokerSyncState).values({ datasetId: 'ds_min', symbol: '005930', slice: '1d' }).run();
+    db.insert(datasetFactsState)
+      .values({ datasetId: 'ds_min', symbol: '005930', coveredYearsJson: '[2024]', updatedAtMs: 2 })
+      .run();
+    const { warns, logger } = recordingLogger();
+    run(logger);
+
+    // sync_state·facts_state: 낡은 워터마크·수집 연도가 남으면 다음 수집이 구간을
+    // 건너뛰거나 재수집을 막는다 — 양쪽 다 비워 다음 실행이 다시 쌓게 한다
+    expect(db.select().from(brokerSyncState).all()).toHaveLength(0);
+    expect(db.select().from(datasetFactsState).all()).toHaveLength(0);
+    // coverage: 생존자 행 유지 (refreshCoverage 가 자가 복구) — loser 행만 버린다
+    const coverage = db.select().from(dataCoverage).all();
+    expect(coverage.every((r) => r.datasetId === 'ds_min')).toBe(true);
+    expect(coverage.find((r) => r.slice === '1d')?.barCount).toBe(99);
+    const warnEvents = warns.map((w) => w.obj['event']);
+    expect(warnEvents).toContain('dataset.merge.sync-state-conflict');
+    expect(warnEvents).toContain('dataset.merge.facts-state-conflict');
+    expect(warnEvents).toContain('dataset.merge.coverage-conflict');
   });
 
   it('두 번 실행해도 결과가 같다 (멱등)', () => {
