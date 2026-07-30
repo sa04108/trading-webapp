@@ -115,6 +115,27 @@ test('full MVP flow', async ({ page }) => {
 
   // 8. 데이터 검증 차트 — 심볼 클릭 → 봉차트 드로어
   await page.goto('/datasets');
+
+  // 8-1. 카드 스위치(일봉/분봉) + 자물쇠 — 픽스처는 1m CSV 로 임포트돼 분봉 슬라이스만
+  // 데이터가 있다. defaultTimeframe 이 '1m' 이라 카드는 분봉 탭으로 열려야 한다.
+  const monthTab = page.getByRole('tab', { name: '분봉' });
+  const dayTab = page.getByRole('tab', { name: '일봉' });
+  await expect(monthTab).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('button', { name: '005930', exact: true })).toBeVisible();
+
+  // 일봉 탭으로 전환 — 데이터 없는 슬라이스는 자물쇠 빈 상태를 보여야 한다
+  await dayTab.click();
+  await expect(dayTab).toHaveAttribute('aria-selected', 'true');
+  await expect(
+    page.getByText('일봉 데이터가 없습니다 — 동기화가 필요합니다.'),
+  ).toBeVisible();
+  await expect(page.getByRole('button', { name: '005930', exact: true })).toHaveCount(0);
+
+  // 분봉 탭으로 복귀 — 커버리지 행이 다시 보여야 한다
+  await monthTab.click();
+  await expect(monthTab).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('button', { name: '005930', exact: true })).toBeVisible();
+
   await page.getByRole('button', { name: '005930', exact: true }).click();
   await expect(page.getByText(/데이터 검증/)).toBeVisible();
   await expect(page.locator('.recharts-surface').first()).toBeVisible();
