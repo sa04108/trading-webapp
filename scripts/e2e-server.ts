@@ -71,10 +71,14 @@ async function main(): Promise<void> {
     container.clock.now(),
   );
 
+  // timeframe '1m' — 슬라이스 모델에서 available timeframe 은 실제 저장된 봉으로
+  // 결정된다 (dataset.timeframe 고정 목록이 아니다). '1h' 로 직수입하면 1m 원본이
+  // 전혀 없어 데이터 검증 드로어의 1m→1h 폴백이 빈 성공 응답 대신 400 을 받아
+  // 깨진다. CSV 행은 이미 시간 경계에 맞춰져 있어 1m→1h 집계가 1:1 로 떨어진다.
   await container.datasetService.importCsv({
     datasetName: 'kr-hourly-v1',
     market: 'KR',
-    timeframe: '1h',
+    timeframe: '1m',
     symbol: '005930',
     fileName: 'e2e.csv',
     csvContent: buildTrendingHourlyCsv(),
