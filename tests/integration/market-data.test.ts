@@ -1,11 +1,74 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
+import type {
+  BrokerSyncService,
+} from '../../src/server/modules/market-data/application/broker-sync-service.js';
+import type {
+  FetchCandleRequest,
+  FetchCandleResult,
+  MarketDataSource,
+} from '../../src/server/modules/market-data/application/ports.js';
 import { dataImportJobs } from '../../src/server/shared/db/schema.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
 
 const MONDAY_0900_KST_UTC = Date.UTC(2026, 6, 6, 0, 0);
 const DAY = 86_400_000;
+
+/**
+ * 라우트 계약 테스트용 페이크 소스 — 요청된 timeframe 을 그대로 기록해 돌려주는
+ * 최소 구현(설계 2026-07-30-dataset-symbol-group-design.md, Task 5). 실제 네트워크
+ * 없이 "요청받은 slice 로 수집했는가" 를 라우트 경계까지 통째로 검증한다.
+ */
+class FakeSliceSource implements MarketDataSource {
+  calls: FetchCandleRequest[] = [];
+  constructor(private readonly candles: Candle[]) {}
+
+  async fetchCandles(request: FetchCandleRequest): Promise<FetchCandleResult> {
+    this.calls.push(request);
+    const inRange = this.candles.filter(
+      (c) =>
+        c.symbol === request.symbol &&
+        c.timeframe === request.timeframe &&
+        c.tsMs >= request.fromTsMs &&
+        c.tsMs <= request.toTsMs,
+    );
+    return { candles: inRange, hasMore: false };
+  }
+}
+
+/** brokerSyncService 의 소스를 페이크로 바꿔치기 — DI 컨테이너는 실제 소스로 고정돼 있어 이 방법뿐이다 */
+function injectFakeSource(brokerSyncService: BrokerSyncService, source: MarketDataSource): void {
+  (brokerSyncService as unknown as { deps: { source: MarketDataSource } }).deps.source = source;
+}
+
+/** 잡이 QUEUED/RUNNING 이 아닐 때까지 폴링 — done 프라미스는 HTTP 경계 밖이라 접근할 수 없다 */
+async function waitForJobSettled(
+  app: TestApp['app'],
+  jobId: string,
+  cookie: string,
+): Promise<{ status: string; error: string | null }> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/v1/data-jobs/${jobId}`,
+      cookies: { qp_session: cookie },
+    });
+    const job = res.json().job as { status: string; error: string | null };
+    if (job.status !== 'QUEUED' && job.status !== 'RUNNING') return job;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`job ${jobId} 이 시간 내에 끝나지 않았습니다`);
+}
+
+/** 1일 간격 OHLCV CSV — 일봉 import 라우트 테스트용 */
+function buildDailyCsv(rows: number, startTsMs = Date.UTC(2026, 0, 5)): string {
+  const lines = ['timestamp,open,high,low,close,volume'];
+  for (let i = 0; i < rows; i += 1) {
+    lines.push(`${startTsMs + i * DAY},100,110,90,105,1000`);
+  }
+  return lines.join('\n');
+}
 
 function minuteCandle(offsetMinutes: number): Candle {
   return {
@@ -771,5 +834,164 @@ describe('market data (스펙 §11, §13)', () => {
       payload: {},
     });
     expect(empty.statusCode).toBe(400);
+  });
+
+  /**
+   * 라우트 계약 — 슬라이스 (설계 2026-07-30-dataset-symbol-group-server, Task 5).
+   */
+  describe('라우트 계약 — 슬라이스', () => {
+    it('POST /datasets 는 같은 종목 구성을 409 로 거부한다', async () => {
+      const { username, password } = await createTestAdmin(ctx.container);
+      const login = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: { username, password },
+      });
+      const cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+
+      const first = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/datasets',
+        cookies: { qp_session: cookie },
+        payload: { name: '중복-원본', market: 'KR', collect: '1d', symbols: ['005930', '000660'] },
+      });
+      expect(first.statusCode).toBe(201);
+
+      // 순서만 다른 같은 구성 — 종목 구성 유일성 위반 (DuplicateSymbolGroupError → 409)
+      const duplicate = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/datasets',
+        cookies: { qp_session: cookie },
+        payload: { name: '중복-신규', market: 'KR', collect: '1m', symbols: ['000660', '005930'] },
+      });
+      expect(duplicate.statusCode).toBe(409);
+      expect(duplicate.json().error).toContain('중복-원본');
+    });
+
+    it('PATCH /datasets/:id 로 종목을 편집해 다른 데이터셋과 구성이 같아지면 409', async () => {
+      const { username, password } = await createTestAdmin(ctx.container);
+      const login = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: { username, password },
+      });
+      const cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+
+      await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/datasets',
+        cookies: { qp_session: cookie },
+        payload: { name: '편집-충돌대상', market: 'KR', collect: '1d', symbols: ['005930'] },
+      });
+      const created = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/datasets',
+        cookies: { qp_session: cookie },
+        payload: { name: '편집-대상', market: 'KR', collect: '1d', symbols: ['005930', '035420'] },
+      });
+      const dataset = created.json().dataset as { id: string };
+
+      // '035420' 을 제거하면 '편집-충돌대상' 과 구성이 같아진다
+      const patched = await ctx.app.inject({
+        method: 'PATCH',
+        url: `/api/v1/datasets/${dataset.id}`,
+        cookies: { qp_session: cookie },
+        payload: { removeSymbols: ['035420'] },
+      });
+      expect(patched.statusCode).toBe(409);
+      expect(patched.json().error).toContain('편집-충돌대상');
+    });
+
+    it('POST /datasets/sync 에 slice:"1m" 을 주면 그 timeframe 으로 수집한다 (defaultTimeframe 은 1d)', async () => {
+      const { username, password } = await createTestAdmin(ctx.container);
+      const login = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: { username, password },
+      });
+      const cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+
+      const fake = new FakeSliceSource([minuteCandle(0), minuteCandle(1), minuteCandle(2)]);
+      injectFakeSource(ctx.container.brokerSyncService, fake);
+
+      const created = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/datasets',
+        cookies: { qp_session: cookie },
+        payload: { name: '슬라이스-동기화', market: 'KR', collect: '1d', symbols: ['005930'] },
+      });
+      expect(created.statusCode).toBe(201);
+      const dataset = created.json().dataset as { id: string; defaultTimeframe: string };
+      expect(dataset.defaultTimeframe).toBe('1d');
+
+      const sync = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/datasets/sync',
+        cookies: { qp_session: cookie },
+        payload: { datasetId: dataset.id, slice: '1m' },
+      });
+      expect(sync.statusCode).toBe(202);
+      const jobId = sync.json().job.id as string;
+
+      const finished = await waitForJobSettled(ctx.app, jobId, cookie);
+      expect(finished.status).toBe('COMPLETED');
+
+      // 데이터셋 기본은 1d 지만, slice:'1m' 을 줬으므로 페이크 소스는 '1m' 요청만 받아야 한다
+      expect(fake.calls.length).toBeGreaterThan(0);
+      for (const call of fake.calls) {
+        expect(call.timeframe).toBe('1m');
+      }
+      const minuteStored = await ctx.container.candleRepository.getTimestamps(
+        dataset.id,
+        'KR',
+        '1m',
+        '005930',
+      );
+      expect(minuteStored.length).toBeGreaterThan(0);
+    });
+
+    it('POST /datasets/import 는 timeframe "1h" 를 400 으로 거부하고 "1d" 는 성공한다', async () => {
+      const { username, password } = await createTestAdmin(ctx.container);
+      const login = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: { username, password },
+      });
+      const cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+
+      const rejected = multipartBody(
+        { datasetName: 'csv-1h-거부', market: 'KR', timeframe: '1h', symbol: '005930' },
+        'legacy.csv',
+        buildCsv(10),
+      );
+      const rejectedResponse = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/datasets/import',
+        headers: { 'content-type': rejected.contentType },
+        cookies: { qp_session: cookie },
+        payload: rejected.payload,
+      });
+      expect(rejectedResponse.statusCode).toBe(400);
+      expect(ctx.container.datasetService.listDatasets()).toHaveLength(0);
+
+      const accepted = multipartBody(
+        { datasetName: 'csv-1d-허용', market: 'KR', timeframe: '1d', symbol: '005930' },
+        'daily.csv',
+        buildDailyCsv(10),
+      );
+      const acceptedResponse = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/datasets/import',
+        headers: { 'content-type': accepted.contentType },
+        cookies: { qp_session: cookie },
+        payload: accepted.payload,
+      });
+      expect(acceptedResponse.statusCode).toBe(201);
+      expect(acceptedResponse.json().job.status).toBe('COMPLETED');
+      const dataset = ctx.container.datasetService
+        .listDatasets()
+        .find((d) => d.name === 'csv-1d-허용');
+      expect(dataset?.defaultTimeframe).toBe('1d');
+    });
   });
 });

@@ -2,14 +2,12 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type {
   BrokerSyncService} from '../application/broker-sync-service.js';
+import { SyncAlreadyRunningError } from '../application/broker-sync-service.js';
 import {
-  SyncAlreadyRunningError,
-  SyncUnsupportedDatasetError,
-} from '../application/broker-sync-service.js';
-import type {
-  DatasetService,
-  FactsSyncEstimate,
-  SyncEstimate,
+  DuplicateSymbolGroupError,
+  type DatasetService,
+  type FactsSyncEstimate,
+  type SyncEstimate,
 } from '../application/dataset-service.js';
 import type { SymbolInfoService } from '../application/symbol-info-service.js';
 import { listMarketSupport } from '../domain/market-support.js';
@@ -33,6 +31,8 @@ const createDatasetSchema = z.object({
 
 const syncSchema = z.object({
   datasetId: z.string().min(1),
+  /** 수집할 슬라이스. 생략하면 데이터셋의 defaultTimeframe 을 따른다 */
+  slice: z.enum(['1m', '1d']).optional(),
   /** 재무(DART)까지 함께 수집할지. 기본은 봉만 */
   includeFacts: z.boolean().optional(),
 });
@@ -240,6 +240,9 @@ export function registerDatasetRoutes(
       );
       return reply.code(201).send({ dataset });
     } catch (error) {
+      if (error instanceof DuplicateSymbolGroupError) {
+        return reply.code(409).send({ error: error.message });
+      }
       return reply
         .code(400)
         .send({ error: error instanceof Error ? error.message : String(error) });
@@ -272,6 +275,9 @@ export function registerDatasetRoutes(
       }
       return reply.send({ dataset });
     } catch (error) {
+      if (error instanceof DuplicateSymbolGroupError) {
+        return reply.code(409).send({ error: error.message });
+      }
       return reply
         .code(400)
         .send({ error: error instanceof Error ? error.message : String(error) });
@@ -313,15 +319,13 @@ export function registerDatasetRoutes(
     }
     try {
       const { job } = brokerSyncService.startSync(parsed.data.datasetId, {
+        slice: parsed.data.slice,
         includeFacts: parsed.data.includeFacts === true,
       });
       return reply.code(202).send({ job });
     } catch (error) {
       if (error instanceof SyncAlreadyRunningError) {
         return reply.code(409).send({ error: error.message });
-      }
-      if (error instanceof SyncUnsupportedDatasetError) {
-        return reply.code(400).send({ error: error.message });
       }
       throw error;
     }
