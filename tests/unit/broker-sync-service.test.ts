@@ -724,6 +724,72 @@ describe('BrokerSyncService 재무 단계', () => {
   });
 });
 
+describe('슬라이스별 동기화', () => {
+  it('slice 를 주면 그 봉을 수집한다 — 일봉 기본 데이터셋에서 분봉 동기화', async () => {
+    const source = new FakeSource(minutes('005930', 10));
+    const { db, datasetService, sync } = buildHarness(source);
+    const dataset = datasetService.createBrokerDataset('KR-일봉', 'KR', '1d', ['005930']);
+    expect(dataset.defaultTimeframe).toBe('1d');
+
+    const { done } = sync.startSync(dataset.id, { slice: '1m' });
+    await done;
+
+    expect(source.calls.length).toBeGreaterThan(0);
+    for (const call of source.calls) {
+      expect(call.timeframe).toBe('1m');
+    }
+
+    const rows = db
+      .select()
+      .from(brokerSyncState)
+      .where(eq(brokerSyncState.datasetId, dataset.id))
+      .all();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.slice).toBe('1m');
+    expect(rows.some((r) => r.slice === '1d')).toBe(false);
+  });
+
+  it('slice 생략 시 defaultTimeframe 을 따른다', async () => {
+    const source = new FakeSource([dailyCandle('005930', MON_0900_KST)]);
+    const { datasetService, sync } = buildHarness(source);
+    const dataset = datasetService.createBrokerDataset('KR-일봉', 'KR', '1d', ['005930']);
+    expect(dataset.defaultTimeframe).toBe('1d');
+
+    const { done } = sync.startSync(dataset.id, {});
+    await done;
+
+    expect(source.calls.length).toBeGreaterThan(0);
+    for (const call of source.calls) {
+      expect(call.timeframe).toBe('1d');
+    }
+  });
+
+  it('같은 (dataset, symbol) 의 1d·1m 워터마크가 서로를 침범하지 않는다', async () => {
+    const source = new FakeSource([
+      dailyCandle('005930', MON_0900_KST),
+      ...minutes('005930', 10),
+    ]);
+    const { db, datasetService, sync } = buildHarness(source);
+    const dataset = datasetService.createBrokerDataset('KR-일봉', 'KR', '1d', ['005930']);
+
+    await sync.startSync(dataset.id, { slice: '1d' }).done;
+    await sync.startSync(dataset.id, { slice: '1m' }).done;
+
+    const rows = db
+      .select()
+      .from(brokerSyncState)
+      .where(eq(brokerSyncState.datasetId, dataset.id))
+      .all();
+    expect(rows).toHaveLength(2);
+    const dailyRow = rows.find((r) => r.slice === '1d');
+    const minuteRow = rows.find((r) => r.slice === '1m');
+    expect(dailyRow?.syncedLastTsMs).toBe(MON_0900_KST);
+    expect(minuteRow?.syncedLastTsMs).toBe(MON_0900_KST + 9 * MINUTE);
+    expect(dailyRow?.backfillDoneAtMs).not.toBeNull();
+    expect(minuteRow?.backfillDoneAtMs).not.toBeNull();
+  });
+});
+
 describe('DatasetService.createBrokerDataset', () => {
   it('creates a 1h dataset for 1m collection (CSV 관례와 동일 — 백테스트 소비 기준)', () => {
     const { datasetService } = buildHarness(new FakeSource([]));

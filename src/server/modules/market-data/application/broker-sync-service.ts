@@ -5,8 +5,9 @@ import type { Clock } from '../../../shared/clock.js';
 import { newId } from '../../../shared/ids.js';
 import type { Logger } from '../../../shared/logger.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
-import type { Candle, Timeframe } from '../domain/candle.js';
+import type { Candle } from '../domain/candle.js';
 import { aggregateToHourly } from '../domain/aggregate.js';
+import { collectTimeframeForSlice, type DatasetSlice } from '../domain/dataset-slice.js';
 import {
   fromLocalTime,
   getSessionForMarket,
@@ -121,12 +122,14 @@ interface SyncedRange {
 }
 
 /**
- * 증권사 캔들 동기화 (설계 2026-07-28-broker-sync-design.md).
+ * 증권사 캔들 동기화 (설계 2026-07-28-broker-sync-design.md, 2026-07-30-dataset-symbol-group-design.md).
  *
- * 데이터셋 timeframe 이 수집 방식을 결정한다 (CSV import 와 같은 관례):
- * 1h → 1분봉을 수집하고 세션 경계로 시간봉을 재집계, 1d → 일봉을 그대로 수집.
- * 페이지마다 즉시 저장하고 워터마크(broker_sync_state)를 저장 후에만 갱신하므로,
- * 어느 지점에서 중단돼도 다음 실행이 이어받는다 (스펙 §13).
+ * 슬라이스가 수집 방식을 결정한다 (`startSync` 의 `slice`, 기본값은 `dataset.defaultTimeframe`):
+ * 1m → 1분봉을 수집하고 세션 경계로 시간봉을 재집계, 1d → 일봉을 그대로 수집.
+ * 워터마크(broker_sync_state)·커버리지는 (datasetId, symbol, slice) 로 독립적으로
+ * 관리되므로, 한 데이터셋에서 두 슬라이스를 각각 동기화해도 서로의 진행을 침범하지 않는다.
+ * 페이지마다 즉시 저장하고 워터마크는 저장 후에만 갱신하므로, 어느 지점에서 중단돼도
+ * 다음 실행이 이어받는다 (스펙 §13).
  */
 export class BrokerSyncService {
   /** 이 프로세스에서 실행 중인 잡 — 취소는 in-process 플래그로 전달된다 */
@@ -145,13 +148,17 @@ export class BrokerSyncService {
    */
   startSync(
     datasetId: string,
-    options: { includeFacts?: boolean } = {},
+    options: { slice?: DatasetSlice; includeFacts?: boolean } = {},
   ): { job: { id: string }; done: Promise<void> } {
     const dataset = this.deps.datasetService.getDataset(datasetId);
     if (!dataset) throw new Error(`데이터셋을 찾을 수 없습니다: ${datasetId}`);
 
-    const collect = this.collectTimeframe(dataset.timeframe);
+    const slice = options.slice ?? dataset.defaultTimeframe;
 
+    // 동시 실행 가드는 데이터셋 단위다 (슬라이스별 아님) — 1d 동기화 중엔 같은
+    // 데이터셋의 1m 동기화도 거절한다. 슬라이스별로 허용하면 두 슬라이스가 같은
+    // dataset_import_jobs 잡·취소 흐름을 공유하지 못해 화면 쪽 복잡도가 커진다 —
+    // 단순함을 우선한 의도적 선택이다 (Task 4).
     const running = this.deps.db
       .select({ id: dataImportJobs.id })
       .from(dataImportJobs)
@@ -179,7 +186,7 @@ export class BrokerSyncService {
       .run();
 
     this.runningJobs.add(jobId);
-    const done = this.run(dataset, collect, jobId, options.includeFacts === true).finally(() => {
+    const done = this.run(dataset, slice, jobId, options.includeFacts === true).finally(() => {
       this.runningJobs.delete(jobId);
       this.cancelRequested.delete(jobId);
     });
@@ -219,18 +226,13 @@ export class BrokerSyncService {
     return result.changes;
   }
 
-  private collectTimeframe(datasetTimeframe: Timeframe): '1m' | '1d' {
-    if (datasetTimeframe === '1h') return '1m';
-    if (datasetTimeframe === '1d') return '1d';
-    throw new SyncUnsupportedDatasetError(datasetTimeframe);
-  }
-
   private async run(
     dataset: DatasetSummary,
-    collect: '1m' | '1d',
+    slice: DatasetSlice,
     jobId: string,
     includeFacts: boolean,
   ): Promise<void> {
+    const collect = collectTimeframeForSlice(slice);
     let totalRows = 0;
     const candlesStartedAtMs = this.deps.clock.now();
     // 봉 단계가 끝나기 전의 실패는 봉 소요시간을 남기지 않는다 — 다음 실행의 예상치를
@@ -238,7 +240,7 @@ export class BrokerSyncService {
     let candlesMs: number | null = null;
     try {
       this.checkDisk();
-      const session = collect === '1m' ? getSessionForMarket(dataset.market) : null;
+      const session = slice === '1m' ? getSessionForMarket(dataset.market) : null;
       const now = this.deps.clock.now();
 
       for (const symbol of dataset.symbols) {
@@ -246,9 +248,9 @@ export class BrokerSyncService {
         const newRange: SyncedRange = { min: null, max: null };
 
         // 증분: 워터마크 이후 → 현재
-        const before = this.getState(dataset.id, symbol);
+        const before = this.getState(dataset.id, symbol, slice);
         if (before?.syncedLastTsMs != null) {
-          const incremental = await this.pullRange(dataset, collect, symbol, {
+          const incremental = await this.pullRange(dataset, collect, symbol, slice, {
             jobId,
             fromTsMs: before.syncedLastTsMs + 1,
             toTsMs: now,
@@ -258,9 +260,9 @@ export class BrokerSyncService {
         }
 
         // 백필: API 보관 깊이 바닥까지. 증분이 워터마크를 만들었을 수 있으므로 재조회.
-        const state = this.getState(dataset.id, symbol);
+        const state = this.getState(dataset.id, symbol, slice);
         if (state?.backfillDoneAtMs == null) {
-          const backfill = await this.pullRange(dataset, collect, symbol, {
+          const backfill = await this.pullRange(dataset, collect, symbol, slice, {
             jobId,
             fromTsMs: 0,
             toTsMs: (state?.syncedFirstTsMs ?? now + 1) - 1,
@@ -268,21 +270,17 @@ export class BrokerSyncService {
           });
           totalRows += backfill.rows;
           // fromTsMs=0 구간을 에러 없이 소진 = API 바닥 도달
-          this.markBackfillDone(dataset.id, symbol);
+          this.markBackfillDone(dataset.id, symbol, slice);
         }
 
-        if (session && newRange.min != null && newRange.max != null) {
+        // 시간봉 재집계는 분봉 슬라이스에서만 의미가 있다 — session 은 이미 slice==='1m'
+        // 일 때만 채워지지만, 의도를 코드로 남기기 위해 slice 로도 명시적으로 가둔다
+        if (slice === '1m' && session && newRange.min != null && newRange.max != null) {
           await this.reaggregateHourly(dataset, symbol, session, newRange.min, newRange.max);
         }
       }
 
-      // Task 4 가 슬라이스별 동기화를 온전히 다룬다 — 여기서는 타입만 맞춘다:
-      // refreshCoverage 는 이제 timeframe 이 아니라 슬라이스를 받는다.
-      await this.deps.datasetService.refreshCoverage(
-        dataset.id,
-        dataset.market,
-        dataset.defaultTimeframe,
-      );
+      await this.deps.datasetService.refreshCoverage(dataset.id, dataset.market, slice);
       candlesMs = this.deps.clock.now() - candlesStartedAtMs;
       if (totalRows > 0) {
         this.deps.datasetService.bumpVersion(
@@ -463,6 +461,7 @@ export class BrokerSyncService {
     dataset: DatasetSummary,
     collect: '1m' | '1d',
     symbol: string,
+    slice: DatasetSlice,
     args: { jobId: string; fromTsMs: number; toTsMs: number; newRange: SyncedRange },
   ): Promise<{ rows: number }> {
     let rows = 0;
@@ -481,7 +480,7 @@ export class BrokerSyncService {
         if (candle.tsMs < min) min = candle.tsMs;
         if (candle.tsMs > max) max = candle.tsMs;
       }
-      this.widenWatermark(dataset.id, symbol, min, max);
+      this.widenWatermark(dataset.id, symbol, slice, min, max);
       args.newRange.min = args.newRange.min == null ? min : Math.min(args.newRange.min, min);
       args.newRange.max = args.newRange.max == null ? max : Math.max(args.newRange.max, max);
       rows += buffer.length;
@@ -535,21 +534,33 @@ export class BrokerSyncService {
     }
   }
 
-  private getState(datasetId: string, symbol: string) {
+  private getState(datasetId: string, symbol: string, slice: DatasetSlice) {
     return this.deps.db
       .select()
       .from(brokerSyncState)
-      .where(and(eq(brokerSyncState.datasetId, datasetId), eq(brokerSyncState.symbol, symbol)))
+      .where(
+        and(
+          eq(brokerSyncState.datasetId, datasetId),
+          eq(brokerSyncState.symbol, symbol),
+          eq(brokerSyncState.slice, slice),
+        ),
+      )
       .get();
   }
 
   /** 저장이 끝난 뒤에만 호출 — 워터마크가 저장소보다 앞서 주장하지 않는다 */
-  private widenWatermark(datasetId: string, symbol: string, minTsMs: number, maxTsMs: number): void {
-    const existing = this.getState(datasetId, symbol);
+  private widenWatermark(
+    datasetId: string,
+    symbol: string,
+    slice: DatasetSlice,
+    minTsMs: number,
+    maxTsMs: number,
+  ): void {
+    const existing = this.getState(datasetId, symbol, slice);
     if (!existing) {
       this.deps.db
         .insert(brokerSyncState)
-        .values({ datasetId, symbol, syncedFirstTsMs: minTsMs, syncedLastTsMs: maxTsMs })
+        .values({ datasetId, symbol, slice, syncedFirstTsMs: minTsMs, syncedLastTsMs: maxTsMs })
         .run();
       return;
     }
@@ -563,12 +574,12 @@ export class BrokerSyncService {
       .run();
   }
 
-  private markBackfillDone(datasetId: string, symbol: string): void {
-    const existing = this.getState(datasetId, symbol);
+  private markBackfillDone(datasetId: string, symbol: string, slice: DatasetSlice): void {
+    const existing = this.getState(datasetId, symbol, slice);
     if (!existing) {
       this.deps.db
         .insert(brokerSyncState)
-        .values({ datasetId, symbol, backfillDoneAtMs: this.deps.clock.now() })
+        .values({ datasetId, symbol, slice, backfillDoneAtMs: this.deps.clock.now() })
         .run();
       return;
     }
