@@ -733,8 +733,8 @@ function BrokerDatasetDrawer() {
         <DrawerHeader>
           <DrawerTitle>증권사 데이터셋 만들기</DrawerTitle>
           <DrawerDescription>
-            증권사 API 에서 캔들을 수집할 데이터셋입니다. 일봉은 보관 깊이까지, 1분봉은
-            시간봉으로 자동 집계됩니다. 생성 후 “동기화”로 수집을 시작하세요.
+            기본은 일봉입니다. 분봉을 고르면 1분봉을 수집해 시간봉으로 자동 집계합니다. 생성 후
+            카드의 일봉/분봉 스위치로 어느 쪽이든 동기화할 수 있습니다.
           </DrawerDescription>
         </DrawerHeader>
         <div className="space-y-4 p-4 pb-8">
@@ -767,7 +767,7 @@ function BrokerDatasetDrawer() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="1d">일봉</SelectItem>
-                  <SelectItem value="1m">1분봉 (시간봉 자동 집계)</SelectItem>
+                  <SelectItem value="1m">분봉</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -888,7 +888,7 @@ function ImportDrawer() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="1m">1분봉</SelectItem>
-                  <SelectItem value="1h">1시간봉</SelectItem>
+                  <SelectItem value="1d">일봉</SelectItem>
                 </SelectContent>
               </Select>
             </div>
