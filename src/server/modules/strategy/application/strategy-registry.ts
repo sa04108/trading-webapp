@@ -1,7 +1,9 @@
 import { z } from 'zod';
 import type { AnyTradingStrategy } from '../domain/strategy.js';
 import { crossSectionalMomentumStrategy } from '../strategies/cross-sectional-momentum.js';
+import { emaTrendSwitchStrategy } from '../strategies/ema-trend-switch.js';
 import { hourlyBreakoutStrategy } from '../strategies/hourly-breakout.js';
+import { rsiReversionStrategy } from '../strategies/rsi-reversion.js';
 import { valueQualityRankStrategy } from '../strategies/value-quality-rank.js';
 
 /**
@@ -12,6 +14,8 @@ const STRATEGIES: readonly AnyTradingStrategy[] = [
   hourlyBreakoutStrategy as AnyTradingStrategy,
   crossSectionalMomentumStrategy as AnyTradingStrategy,
   valueQualityRankStrategy as AnyTradingStrategy,
+  emaTrendSwitchStrategy as AnyTradingStrategy,
+  rsiReversionStrategy as AnyTradingStrategy,
 ];
 
 export interface StrategySummary {
