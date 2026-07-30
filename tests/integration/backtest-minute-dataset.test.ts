@@ -162,7 +162,9 @@ describe('백테스트 1분봉 소비', () => {
       payload: buildRequest(datasetId, '1d'),
     });
     expect(wrongTf.statusCode).toBe(400);
-    expect(JSON.stringify(wrongTf.json())).toContain('timeframe');
+    // 1h 데이터셋의 슬라이스는 1m 뿐이다 — 1d 슬라이스 자체가 없다는 원인을 정확히 말해야 한다
+    expect(JSON.stringify(wrongTf.json())).toContain('아직');
+    expect(JSON.stringify(wrongTf.json())).toContain('1d');
 
     // 1d 데이터셋에 1m 요청. 종목 구성은 beforeEach 의 kr-minute-v1(['005930'])과
     // 겹치면 안 된다 — 종목 구성 유일성 검사(DuplicateSymbolGroupError)에 걸린다.
@@ -197,7 +199,10 @@ describe('백테스트 1분봉 소비', () => {
       payload: buildRequest(daily.id, '1m'),
     });
     expect(minuteOnDaily.statusCode).toBe(400);
-    expect(JSON.stringify(minuteOnDaily.json())).toContain('timeframe');
+    // 1d 전용 데이터셋에 1m 요청 — "이 데이터셋은 1m/1h 만 제공합니다" 처럼 스스로
+    // 모순되는 메시지가 아니라 "아직 데이터가 없다" 는 정확한 원인을 말해야 한다
+    expect(JSON.stringify(minuteOnDaily.json())).toContain('아직');
+    expect(JSON.stringify(minuteOnDaily.json())).toContain('1m');
   });
 
   it('예상 봉 수가 상한을 넘으면 제출을 거부한다', async () => {

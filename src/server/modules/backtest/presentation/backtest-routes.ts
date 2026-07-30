@@ -189,9 +189,20 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       const allowedTimeframes = sliceTimeframes(slice);
       const sliceHasData = dataset.slices.some((s) => s.slice === slice && s.hasData);
 
-      if (!allowedTimeframes.includes(consumed) || !sliceHasData) {
+      if (!allowedTimeframes.includes(consumed)) {
+        // 방어적 분기 — zod 스키마가 이미 consumed 를 '1m'|'1h'|'1d' 로 제한하고
+        // sliceForTimeframe/sliceTimeframes 는 그 timeframe 이 속한 슬라이스를
+        // 되돌리므로 이 분기는 현재 값 범위에서 도달하지 않는다.
         errors.push(
           `이 데이터셋은 timeframe ${allowedTimeframes.join('/')} 만 제공합니다 (요청: ${consumed})`,
+        );
+      } else if (!sliceHasData) {
+        // 실제로 도달 가능한 경우 — timeframe 자체는 이 데이터셋 형태에 존재할 수
+        // 있지만(예: 1d 전용 데이터셋에 1m 요청) 그 슬라이스로 아직 수집된 데이터가
+        // 없다. "이 데이터셋은 1m/1h 만 제공합니다 (요청: 1m)" 처럼 스스로 모순되는
+        // 메시지를 내지 않도록 원인을 구분해 말한다.
+        errors.push(
+          `이 데이터셋에는 아직 ${consumed} 데이터가 없습니다 — 해당 봉을 동기화(또는 CSV 가져오기)한 뒤 다시 시도하세요.`,
         );
       } else {
         const coverageError = checkPeriodCoverage(body, dataset.id, slice);
