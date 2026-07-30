@@ -19,9 +19,11 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { api, ApiError, postJson } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 import { formatKrw } from '@/lib/format';
+import { useStockNames } from '@/lib/use-stock-names';
 import { requestToFormState } from './prefill';
 import { ParamHint } from './param-hint';
 import { extractNumberParams, paramLabel, type NumberParamSpec } from './param-specs';
+import { formatSymbolLabel } from './symbol-summary';
 import type { BacktestRequestBody } from './types';
 
 const STEPS = ['전략', '데이터·종목', '기간', '자본·비용', '검토', '실행'] as const;
@@ -101,6 +103,10 @@ export function NewBacktestWizard() {
 
   const selectedStrategy = strategies.data?.strategies.find((s) => s.id === strategyId) ?? null;
   const selectedDataset = datasets.data?.datasets.find((d) => d.id === datasetId) ?? null;
+  // 선택 후보 전체를 한 번에 조회한다 — 체크박스와 검토 단계가 같은 Map 을 쓴다.
+  const stockNames = useStockNames(selectedDataset?.symbols ?? []);
+  const symbolLabel = (symbol: string): string =>
+    formatSymbolLabel(symbol, stockNames.get(symbol)?.name ?? null);
   const paramSpecs = useMemo(() => extractNumberParams(schema.data?.schema), [schema.data]);
 
   // 스키마 기본값은 입력 상태에 한 번 심는다. 렌더 시점에 빈 값을 기본값으로 되돌리면
@@ -473,7 +479,7 @@ export function NewBacktestWizard() {
                           )
                         }
                       />
-                      {symbol}
+                      {symbolLabel(symbol)}
                     </label>
                   );
                 })}
@@ -608,7 +614,7 @@ export function NewBacktestWizard() {
               <Separator />
               <div className="flex justify-between">
                 <span className="text-muted-foreground">종목</span>
-                <span>{request.universe.symbols.join(', ')}</span>
+                <span>{request.universe.symbols.map(symbolLabel).join(', ')}</span>
               </div>
               <Separator />
               <div className="flex justify-between">
