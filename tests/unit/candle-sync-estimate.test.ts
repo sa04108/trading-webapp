@@ -137,11 +137,46 @@ describe('getCandleSyncEstimate', () => {
     database.close();
   });
 
-  it('실패한 잡은 쓰지 않는다', () => {
+  // 재무 단계에서 멈춘 잡은 FAILED/CANCELLED 로 적히지만 봉 단계는 이미 끝나 candlesMs 가
+  // 측정돼 있다 — 상태로 거르면 DART 오류 하나가 멀쩡한 봉 실측치를 버린다 (스펙 §6)
+  it('재무 단계에서 실패한 잡의 봉 실측치도 쓴다', () => {
     const database = setup();
     markBackfillDone(database, '005930', 5_000);
     markBackfillDone(database, '000660', 5_000);
     insertJob(database, { id: 'imp-1', createdAtMs: 6_000, candlesMs: 60_000, status: 'FAILED' });
+    const service = makeDatasetService(database);
+    expect(service.getCandleSyncEstimate('ds-1', ['005930', '000660'])).toEqual({
+      basis: 'LAST_RUN',
+      ms: 60_000,
+    });
+    database.close();
+  });
+
+  it('취소된 잡의 봉 실측치도 쓴다', () => {
+    const database = setup();
+    markBackfillDone(database, '005930', 5_000);
+    markBackfillDone(database, '000660', 5_000);
+    insertJob(database, {
+      id: 'imp-1',
+      createdAtMs: 6_000,
+      candlesMs: 45_000,
+      status: 'CANCELLED',
+    });
+    const service = makeDatasetService(database);
+    expect(service.getCandleSyncEstimate('ds-1', ['005930', '000660'])).toEqual({
+      basis: 'LAST_RUN',
+      ms: 45_000,
+    });
+    database.close();
+  });
+
+  // 봉 도중에 죽은 잡은 candlesMs 를 남기지 않는다(refreshCoverage 직후에만 채워진다) —
+  // 상태 필터를 걷어도 반쪽 측정이 새지 않는 근거다
+  it('봉 단계에서 죽어 candlesMs 가 없는 실패 잡은 여전히 건너뛴다', () => {
+    const database = setup();
+    markBackfillDone(database, '005930', 5_000);
+    markBackfillDone(database, '000660', 5_000);
+    insertJob(database, { id: 'imp-1', createdAtMs: 6_000, candlesMs: null, status: 'FAILED' });
     const service = makeDatasetService(database);
     expect(service.getCandleSyncEstimate('ds-1', ['005930', '000660'])).toEqual({
       basis: 'UNKNOWN',

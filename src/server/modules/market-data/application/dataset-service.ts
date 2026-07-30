@@ -152,7 +152,9 @@ export class DatasetService {
         and(
           eq(dataImportJobs.datasetId, datasetId),
           eq(dataImportJobs.sourceType, 'BROKER'),
-          eq(dataImportJobs.status, 'COMPLETED'),
+          // status 는 보지 않는다 — 재무 단계에서 멈춘 잡은 FAILED/CANCELLED 지만 그때도
+          // 봉 단계는 끝나 candlesMs 가 측정돼 있다. 상태로 거르면 DART 오류 하나가 멀쩡한
+          // 봉 실측치를 버린다. candlesMs IS NOT NULL 자체가 봉 단계 완주를 함의한다(스펙 §6)
           isNotNull(dataImportJobs.candlesMs),
           gt(dataImportJobs.createdAtMs, latestBackfillMs),
         ),
@@ -195,7 +197,9 @@ export class DatasetService {
       name,
       market,
       timeframe: collect === '1m' ? '1h' : '1d',
-      symbolsJson: JSON.stringify([...symbols].sort()),
+      // 중복은 접는다 (updateSymbols·importCsv 와 같은 관례) — 남겨두면 같은 종목을 두 번
+      // 긁고 재무 쪽 symbolTotal·예상 호출 수까지 부푼다
+      symbolsJson: JSON.stringify([...new Set(symbols)].sort()),
       description: null,
       createdAtMs: now,
       updatedAtMs: now,

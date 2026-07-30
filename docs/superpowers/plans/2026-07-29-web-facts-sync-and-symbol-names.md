@@ -18,23 +18,28 @@
 앵커 구현과 Task 6 Step 4 의 `runFactsPhase`·상태 판정은 커밋된 코드와 **달랐다** —
 계획서대로 다시 실행하면 `7ba72cc` 가 걷어낸 회귀가 되살아나는 상태였다.
 
-### 남은 후속 작업 (리뷰에서 발견, 아직 코드에 반영되지 않음)
+### 후속 작업 3건 — 처리 완료 (2026-07-30)
 
-구현은 끝났지만 아래 셋은 코드가 스펙과 어긋난 채로 남아 있다. 별건으로 처리한다:
+리뷰에서 남긴 셋을 코드에 반영했다. 각각 실패하는 테스트를 먼저 세우고 고쳤다:
 
-1. **`getCandleSyncEstimate` 가 `status = 'COMPLETED'` 로 거른다**
+1. **`getCandleSyncEstimate` 의 `status = 'COMPLETED'` 조건을 걷었다**
    (`dataset-service.ts`). 재무 단계에서 멈춘 잡은 `FAILED`/`CANCELLED` 인데 그때도
-   `candlesMs` 는 이미 측정돼 있어, DART 오류 하나가 멀쩡한 봉 실측치를 버리고 예상치가
-   `UNKNOWN` 으로 남는다. 스펙 §6 을 정정해 근거를 적었다 — 코드는 그 정정을 아직 따르지
-   않는다.
-2. **`runFactsPhase` 에 `market !== 'KR'` 가드가 없다**
-   (`broker-sync-service.ts`). `deriveFactYearRange` → `getSessionForMarket` 이 던지고, 그
-   호출은 `factsPhase` 를 감싼 try **밖**이라 예외가 `run` 의 catch 로 올라가 봉 결과까지
-   실패로 덮는다 — 재무 단계가 throw 하지 않게 만든 이유가 무너진다. 라우트 선검증과
-   `factsSyncEstimator` 가 정상 경로를 막으므로 지금은 도달하지 않는다. 스펙 §2 참고.
-3. **중복 심볼에서 추정과 실행이 갈라진다.** `planFactSync` 는 `Set` 으로 접지만
-   `FactSyncService.sync` 는 `request.symbols` 를 그대로 순회하고, `createDatasetSchema.symbols`
-   에 uniqueness refine 이 없다. 스펙 §3 참고.
+   `candlesMs` 는 이미 측정돼 있어, 상태로 거르면 DART 오류 하나가 멀쩡한 봉 실측치를
+   버렸다. `candlesMs IS NOT NULL` 이 봉 단계 완주를 함의한다(스펙 §6).
+   `candle-sync-estimate.test.ts` 의 `'실패한 잡은 쓰지 않는다'` 는 뒤집어
+   FAILED·CANCELLED 실측치를 쓰는 테스트 둘로 바꾸고, 봉 도중에 죽어 `candlesMs` 가 없는
+   잡은 여전히 건너뛴다는 회귀 테스트를 더했다.
+2. **`runFactsPhase` 에 `market !== 'KR'` 가드를 넣었다** (`broker-sync-service.ts`).
+   `skipReason` 으로 먼저 걸러 `deriveFactYearRange` → `getSessionForMarket` 예외가
+   `factsPhase` 를 감싼 try **밖**에서 `run` 의 catch 로 올라가 봉 결과까지 덮는 경로를
+   닫았다(스펙 §2). 테스트는 US 데이터셋 행을 직접 넣어 그 경로를 만든다 — 생성 경로가
+   US 를 막으므로(D-006) `createBrokerDataset` 으로는 만들 수 없다.
+3. **중복 심볼을 두 곳에서 접었다.** `FactSyncService.sync` 가 `[...new Set(...)]` 을
+   순회하고(`total`·`symbolTotal`·중단 메시지의 분모도 고유 종목 수),
+   `createBrokerDataset` 이 `symbolsJson` 을 저장할 때 접는다 — `updateSymbols`·`importCsv`
+   가 이미 쓰는 관례다(스펙 §3). `createDatasetSchema` 에 uniqueness refine 은 **넣지
+   않았다**: 중복은 무해한 입력이고 접은 결과가 모호하지 않으므로 400 으로 거부할 이유가
+   없다.
 
 ## Global Constraints
 
@@ -2100,11 +2105,12 @@ factsPhase 는 컨테이너가 주입하므로 market-data 는 facts 를 import 
   와 `createFactsSyncEstimator({ dartApiKey, datasetService, factCoverageStore, clock })` 를
   부른다 — 단위 테스트가 붙는다(`63f9a9a`). 스니펫은 의도의 기록으로 남기고, 실제 모양은
   코드를 볼 것.
-- **`runFactsPhase` 의 `market !== 'KR'` 가드는 아직 없다.** `deriveFactYearRange` 가
+- **`runFactsPhase` 의 `market !== 'KR'` 가드는 후속으로 들어갔다.** `deriveFactYearRange` 가
   `getSessionForMarket` 을 부르므로 세션 미정의 시장에서 던지고, 그 호출은 `factsPhase` 를
-  감싼 try **밖**이라 예외가 `run` 의 catch 로 올라가 봉 결과까지 실패로 덮는다 — 재무
-  단계가 throw 하지 않게 만든 이유가 무너진다. Step 5 의 라우트 선검증과 `factsSyncEstimator`
-  가 정상 경로를 막아 지금은 도달하지 않는다. 머리의 "남은 후속 작업" 2번. 스펙 §2 참고.
+  감싼 try **밖**이라 예외가 `run` 의 catch 로 올라가 봉 결과까지 실패로 덮었다 — 재무
+  단계가 throw 하지 않게 만든 이유가 무너진다. 이제 `getCoverage` 앞에서 `skipReason` 으로
+  걸러 방어선을 닫는다. Step 5 의 라우트 선검증과 `factsSyncEstimator` 도 그대로 남는다
+  (층이 셋이어야 세션이 추가되는 날 국내 공시가 외국 종목에 붙지 않는다). 스펙 §2 참고.
 
 - [x] **Step 1: 실패하는 테스트를 쓴다**
 
@@ -2234,10 +2240,12 @@ describe('getCandleSyncEstimate', () => {
 });
 ```
 
-> **후속 (2026-07-30 리뷰):** 이 `status = 'COMPLETED'` 필터와 위 마지막 테스트는 재무
-> 단계에서 멈춘 잡의 **유효한 봉 실측치까지 버린다.** 스펙 §6 은 그 조건을 걷도록 정정했고
-> 코드는 아직 따르지 않는다 — 머리의 "남은 후속 작업" 1번이다. `candles_ms IS NOT NULL`
-> 이 이미 봉 단계 완주를 함의하므로 조건을 빼는 것으로 닫힌다.
+> **후속 처리 완료 (2026-07-30):** 위 마지막 테스트는 **뒤집혔다.** `status = 'COMPLETED'`
+> 필터가 재무 단계에서 멈춘 잡의 유효한 봉 실측치까지 버렸다 — 스펙 §6 대로 조건을 걷고,
+> 테스트는 `'재무 단계에서 실패한 잡의 봉 실측치도 쓴다'`·`'취소된 잡의 봉 실측치도 쓴다'`
+> 둘로 바꿨다. `candles_ms IS NOT NULL` 이 봉 단계 완주를 함의하므로
+> (`'봉 단계에서 죽어 candlesMs 가 없는 실패 잡은 여전히 건너뛴다'` 가 그걸 고정한다)
+> 반쪽 측정은 새지 않는다.
 
 `makeDatasetService(database)` 는 `broker-sync-service.test.ts:126` 과 같은 인자로 만든다:
 

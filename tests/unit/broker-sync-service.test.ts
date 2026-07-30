@@ -17,7 +17,7 @@ import {
 } from '../../src/server/modules/market-data/application/ports.js';
 import type { Candle, Market, Timeframe } from '../../src/server/modules/market-data/domain/candle.js';
 import { openDatabase } from '../../src/server/shared/db/database.js';
-import { brokerSyncState, dataImportJobs } from '../../src/server/shared/db/schema.js';
+import { brokerSyncState, dataImportJobs, datasets } from '../../src/server/shared/db/schema.js';
 import { createLogger } from '../../src/server/shared/logger.js';
 import { loadConfig } from '../../src/server/bootstrap/config.js';
 import type { AuditLogService } from '../../src/server/modules/audit/audit-service.js';
@@ -635,6 +635,48 @@ describe('BrokerSyncService 재무 단계', () => {
     expect(row?.status).toBe('COMPLETED');
   });
 
+  /**
+   * DART 는 국내 공시 기관이다 — 비KR 데이터셋은 재무 단계에 들어가기 전에 걸러야 한다.
+   * `deriveFactYearRange` 가 `getSessionForMarket` 을 부르므로 가드가 없으면 예외가
+   * `factsPhase` 를 감싼 try **밖**에서 올라가 봉 결과까지 실패로 덮는다 (스펙 §2).
+   */
+  it('비KR 데이터셋은 재무를 건너뛰고 봉 결과를 남긴다', async () => {
+    let called = false;
+    const harness = buildHarness(new FakeSource([dailyCandle('AAPL', MON_0900_KST)]), {
+      factsPhase: async () => {
+        called = true;
+        return emptyFactResult();
+      },
+    });
+    // US 는 생성 경로가 막으므로(D-006) 행을 직접 넣는다. 세션이 정의되는 날 봉 단계가
+    // 통과하면서 이 경로가 살아나고, 그때 재무로 흘러가면 국내 공시를 외국 종목에 붙인다.
+    harness.db
+      .insert(datasets)
+      .values({
+        id: 'ds-us',
+        name: 'US-유니버스',
+        market: 'US',
+        timeframe: '1d',
+        symbolsJson: JSON.stringify(['AAPL']),
+        description: null,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+      })
+      .run();
+    // 봉 단계의 refreshCoverage 도 세션을 부른다 — 여기서 보려는 것은 재무 가드뿐이므로 무력화
+    harness.datasetService.refreshCoverage = async () => {};
+
+    const { job, done } = harness.sync.startSync('ds-us', { includeFacts: true });
+    await done;
+
+    expect(called).toBe(false);
+    const row = jobRow(harness, job.id);
+    expect(requireFacts(row).skipReason).toContain('국내');
+    // 건너뛴 것은 실패가 아니다 — 봉 단계는 성공했다
+    expect(row?.status).toBe('COMPLETED');
+    expect(row?.rowsImported).toBe(1);
+  });
+
   it('factsPhase 가 예외를 던져도 봉 결과를 덮지 않고 재무 실패로 기록한다', async () => {
     const harness = buildHarness(new FakeSource(minutes('005930', 10)), {
       factsPhase: () => Promise.reject(new Error('DART 서버 연결 실패')),
@@ -657,6 +699,21 @@ describe('DatasetService.createBrokerDataset', () => {
     const { datasetService } = buildHarness(new FakeSource([]));
     const dataset = datasetService.createBrokerDataset('KR-유니버스', 'KR', '1m', ['005930', '000660']);
     expect(dataset.timeframe).toBe('1h');
+    expect(dataset.symbols).toEqual(['000660', '005930']);
+  });
+
+  /**
+   * 중복은 여기서 접는다 — updateSymbols·importCsv 가 이미 Set 으로 접는 관례이고,
+   * 중복이 남으면 재무 쪽 symbolTotal 이 부풀고 봉 쪽도 같은 종목을 두 번 긁는다
+   * (스펙 §3). 400 으로 거부하지 않는 이유: 무해한 입력이고 결과가 모호하지 않다.
+   */
+  it('중복 심볼은 한 번만 저장한다', () => {
+    const { datasetService } = buildHarness(new FakeSource([]));
+    const dataset = datasetService.createBrokerDataset('KR-중복', 'KR', '1d', [
+      '005930',
+      '005930',
+      '000660',
+    ]);
     expect(dataset.symbols).toEqual(['000660', '005930']);
   });
 

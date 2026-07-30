@@ -351,6 +351,45 @@ describe('FactSyncService — 종목 단위 저장과 부분 실패 (긴 백필 
     // 실패한 종목은 완료로 보고하지 않는다
     expect(progress).toEqual(['1/3 005930 1', '2/3 000660 1']);
   });
+
+  /**
+   * `planFactSync` 는 심볼을 Set 으로 접는다. 순회가 접지 않으면 실제 호출이 계획의
+   * `calls` 를 넘고(`fnlttSinglAcntAll`·`irdsSttus` 는 캐시가 없다) 화면의 예상 시간과
+   * 실행이 갈라진다 — 이 절의 전제가 깨진다 (스펙 §3).
+   */
+  it('중복 심볼은 한 번만 수집한다', async () => {
+    const source = recordingSource();
+    const progress: string[] = [];
+    const report = await new FactSyncService(
+      source,
+      fakeRepository(),
+      LOGGER,
+      fakeVersions(),
+      CLOCK,
+      fakeCoverage(),
+    ).sync(
+      {
+        datasetId: 'ds-1',
+        symbols: ['005930', '005930', '000660'],
+        fromYear: 2025,
+        toYear: 2025,
+        consolidated: true,
+        mode: 'FULL',
+      },
+      { onSymbolDone: (event) => progress.push(`${event.index}/${event.total} ${event.symbol}`) },
+    );
+
+    // 종목마다 fetchFinancials + fetchCorporateActions 두 번 — 고유 2종목이면 4회다
+    expect(source.requests.map((request) => request.symbols.join(','))).toEqual([
+      '005930',
+      '005930',
+      '000660',
+      '000660',
+    ]);
+    // total 도 고유 종목 수다 — 중복을 세면 진행률이 100% 에 못 미치고 끝난다
+    expect(progress).toEqual(['1/2 005930', '2/2 000660']);
+    expect(report.stopReason).toBeNull();
+  });
 });
 
 /**

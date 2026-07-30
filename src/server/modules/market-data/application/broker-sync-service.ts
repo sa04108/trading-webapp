@@ -386,6 +386,18 @@ export class BrokerSyncService {
       return { state, stopReason: null };
     }
 
+    /**
+     * DART 는 국내 공시 기관이므로 비KR 은 애초에 수집 대상이 아니다. 여기서 먼저
+     * 걸러야 하는 이유: 아래 `deriveFactYearRange` 가 `getSessionForMarket` 을 부르고
+     * 그 호출은 `factsPhase` 를 감싼 try **밖**이라, 예외가 `run` 의 catch 로 올라가
+     * 봉 결과까지 실패로 덮는다 — 이 단계가 throw 하지 않게 만든 이유가 무너진다.
+     * 라우트 선검증과 factsSyncEstimator 가 정상 경로를 막지만 방어선은 여기서 닫는다.
+     */
+    if (dataset.market !== 'KR') {
+      state.skipReason = `재무(DART)는 국내(KR) 종목만 지원합니다 — ${dataset.market} 데이터셋은 재무를 수집하지 않았습니다.`;
+      return { state, stopReason: null };
+    }
+
     const coverage = this.deps.datasetService.getCoverage(dataset.id);
     const range = deriveFactYearRange(coverage, dataset.market);
     if (range === null) {

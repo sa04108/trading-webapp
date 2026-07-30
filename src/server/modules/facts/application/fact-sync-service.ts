@@ -87,6 +87,14 @@ export class FactSyncService {
     // 헛돌리면 "버전이 움직였다" 는 신호가 의미를 잃는다.
     const fingerprintBefore = await this.storedFactsFingerprint(request.datasetId);
 
+    /**
+     * 중복 심볼은 접는다. `planFactSync` 가 Set 으로 접으므로 순회가 접지 않으면 실제
+     * 호출이 계획의 `calls` 를 넘고(`fnlttSinglAcntAll`·`irdsSttus` 에는 캐시가 없어
+     * 그대로 다시 쏜다) 화면의 예상 시간과 실행이 갈라진다. total 도 고유 종목 수여야
+     * 진행률이 100% 에 닿는다 (설계 §3).
+     */
+    const symbols = [...new Set(request.symbols)];
+
     const gaps: FactIngestionGap[] = [];
     let savedFacts = 0;
     let doneSymbols = 0;
@@ -97,7 +105,7 @@ export class FactSyncService {
     // 계획은 추정 경로와 같은 함수로 만든다 — 화면의 "약 30분" 과 실제 호출이 갈리지
     // 않게 한다 (domain/sync-plan.ts 헤더 참고)
     const plan = planFactSync({
-      symbols: request.symbols,
+      symbols,
       fromYear: request.fromYear,
       toYear: request.toYear,
       currentYear: new Date(this.clock.now()).getUTCFullYear(),
@@ -105,7 +113,7 @@ export class FactSyncService {
       mode: request.mode,
     });
 
-    for (const [index, symbol] of request.symbols.entries()) {
+    for (const [index, symbol] of symbols.entries()) {
       // 취소는 종목을 시작하기 전에 확인한다 — 시작한 종목을 중간에 버리면
       // 저장분과 이력이 어긋난다
       if (hooks.shouldStop?.()) {
@@ -122,7 +130,7 @@ export class FactSyncService {
         hooks.onSymbolDone?.({
           symbol,
           index: index + 1,
-          total: request.symbols.length,
+          total: symbols.length,
           savedFacts: 0,
           gapCount: 0,
         });
@@ -156,7 +164,7 @@ export class FactSyncService {
         hooks.onSymbolDone?.({
           symbol,
           index: index + 1,
-          total: request.symbols.length,
+          total: symbols.length,
           savedFacts: facts.length,
           gapCount: symbolGaps.length,
         });
@@ -173,7 +181,7 @@ export class FactSyncService {
             datasetId: request.datasetId,
             symbol,
             symbolIndex: index + 1,
-            symbolTotal: request.symbols.length,
+            symbolTotal: symbols.length,
             savedFacts,
             err: error,
           },
@@ -210,10 +218,10 @@ export class FactSyncService {
           ? null
           : stopReason === 'CANCELLED'
             ? `수집이 사용자 요청으로 취소됐습니다 ` +
-              `(${doneSymbols}/${request.symbols.length}종목 완료). ` +
+              `(${doneSymbols}/${symbols.length}종목 완료). ` +
               `수집된 팩트 ${savedFacts}건은 저장됐습니다 — 다시 실행하면 남은 종목만 이어받습니다.`
             : `수집이 ${stoppedAtSymbol} 에서 중단됐습니다 ` +
-              `(${doneSymbols}/${request.symbols.length}종목 완료). ` +
+              `(${doneSymbols}/${symbols.length}종목 완료). ` +
               `사유: ${failureReason ?? '알 수 없음'}. ` +
               `여기까지 수집된 팩트 ${savedFacts}건은 이미 저장됐습니다 — 다시 실행하면 ` +
               `남은 구간만 이어받습니다.`,

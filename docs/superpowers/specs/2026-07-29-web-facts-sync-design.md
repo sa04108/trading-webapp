@@ -92,8 +92,10 @@ export function deriveFactYearRange(
 선검증이 그 앞을 막지만, 잡 단계 안에서는 이 호출이 `factsPhase` 를 감싼 try 밖에 있어
 예외가 `run` 의 catch 로 올라가 **봉 결과까지 실패로 덮는다** — 재무 단계가 throw 하지
 않게 만든 이유(§5)가 여기서 무너진다. 지금은 US 데이터셋을 만들 수 없어(D-006) 도달하지
-않지만, `runFactsPhase` 가 `market !== 'KR'` 을 `skipReason` 으로 먼저 걸러야 방어선이
-닫힌다 (2026-07-30 리뷰).
+않지만, `runFactsPhase` 가 `market !== 'KR'` 을 `skipReason` 으로 먼저 거른다 — 그 가드로
+방어선을 닫았다 (2026-07-30 리뷰, 같은 날 반영). DART 는 국내 공시 기관이므로 이 가드는
+예외 방어만이 아니다: 세션이 정의되는 날 봉 단계가 통과하면서 국내 공시를 외국 종목에
+붙이는 경로가 살아난다.
 
 **`null` 이면**(봉이 하나도 없으면) 재무 단계를 건너뛰고 `facts_json.skipReason` 에
 `'봉이 수집되지 않아 재무 연도 범위를 정할 수 없습니다'` 를 기록한다. 잡은 봉 단계
@@ -164,15 +166,19 @@ export function planFactSync(args: {
 - **주식총수 연도 = `Y_s ∪ { y − 1 : y ∈ Y_s }`.** 아래 근거 참고.
 - **중복 심볼은 한 번만 계획한다** — 호출 수가 부풀면 예상 시간도 부푼다.
 
-> **미해결 (2026-07-30 리뷰):** `planFactSync` 는 심볼을 `Set` 으로 접지만
-> `FactSyncService.sync` 는 `request.symbols` 를 그대로 순회한다. 데이터셋 생성 경로가
-> 중복을 제거하지 않으므로(`createBrokerDataset` 은 패턴만 검사하고 `POST /datasets` 의
-> `z.array` 에도 uniqueness refine 이 없다 — `importCsv` 쪽만 `Set` 을 쓴다) 중복이
-> 섞이면 어댑터가 `fnlttSinglAcntAll`·`irdsSttus` 를 다시 쏘고(`stockTotqySttus` 만
-> `shareRowsCache` 로 걸린다) 실제 호출이 `plan.calls` 를 넘는다. `symbolTotal` 도
-> 중복을 센다. 이 절의 전제("추정치와 실제 실행이 같은 규칙")를 깨는 유일하게 남은
-> 경로다. 어디서 접을지 — 서비스 순회, 데이터셋 생성, 또는 라우트 스키마 — 를 정해야
-> 한다.
+> **해결 (2026-07-30 리뷰 → 같은 날 반영):** 중복이 섞이면 어댑터가
+> `fnlttSinglAcntAll`·`irdsSttus` 를 다시 쏘고(`stockTotqySttus` 만 `shareRowsCache` 로
+> 걸린다) 실제 호출이 `plan.calls` 를 넘어 이 절의 전제("추정치와 실제 실행이 같은 규칙")가
+> 깨졌다. **두 곳에서 접는다:**
+>
+> - `FactSyncService.sync` 가 `[...new Set(request.symbols)]` 을 순회한다. 진행 콜백의
+>   `total`, 중단 로그의 `symbolTotal`, 중단 메시지의 분모도 고유 종목 수다 — 중복을 세면
+>   진행률이 100% 에 닿지 않고 끝난다. CLI 가 인자로 중복을 넘겨도 여기서 닫힌다.
+> - `createBrokerDataset` 이 `symbols_json` 을 저장할 때 접는다 —
+>   `updateSymbols`·`importCsv` 가 이미 쓰는 관례다.
+>
+> `POST /datasets` 의 `z.array` 에 uniqueness refine 은 **두지 않는다.** 중복은 무해한
+> 입력이고 접은 결과가 모호하지 않다 — 400 은 알려줄 것 없는 거부다.
 
 ### 주식총수를 한 해 더 읽는 이유
 
@@ -334,10 +340,11 @@ ORDER BY created_at_ms DESC LIMIT 1;
 `candles_ms IS NOT NULL` 자체가 이미 "봉 단계가 끝까지 갔다" 를 함의한다. 봉 도중에
 죽은 잡은 이 값을 남기지 않는다(`candlesMs` 는 `refreshCoverage` 직후에만 채워진다).
 
-> **코드는 이 정정을 아직 따르지 않는다.** `dataset-service.ts` 의
-> `getCandleSyncEstimate` 에 `eq(dataImportJobs.status, 'COMPLETED')` 가 남아 있고
-> `candle-sync-estimate.test.ts` 의 `'실패한 잡은 쓰지 않는다'` 가 그 동작을 고정한다.
-> 조건과 그 테스트를 함께 걷어야 한다.
+> **코드가 이 정정을 따른다 (2026-07-30).** `getCandleSyncEstimate` 에서
+> `eq(dataImportJobs.status, 'COMPLETED')` 를 걷고, 그 동작을 고정하던
+> `candle-sync-estimate.test.ts` 의 `'실패한 잡은 쓰지 않는다'` 는 FAILED·CANCELLED
+> 실측치를 쓰는 테스트 둘로 바꿨다. 봉 도중에 죽어 `candles_ms` 가 없는 잡을 여전히
+> 건너뛴다는 테스트가 아래 함의를 지킨다.
 
 두 개의 문턱이 있다:
 
