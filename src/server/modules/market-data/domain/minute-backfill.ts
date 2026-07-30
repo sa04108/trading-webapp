@@ -9,8 +9,9 @@ export const MINUTE_BACKFILL_MAX_MONTHS = 24;
  * MINUTE_BACKFILL_MAX_MONTHS 로 고정이고, 이 값은 "한 번의 백테스트가 감당할 수
  * 있는" 권장 기간을 종목 수에 반비례해 안내하는 데만 쓴다.
  *
- * 값의 근거: KR 정규장 390봉/일 × 약 245거래일 ≈ 95,500봉/종목·년 이므로
- * 20 종목-년 ≈ 191만봉 ≈ MAX_BACKTEST_BARS(200만봉).
+ * 값의 근거: KR 정규장 390봉/일 × 약 252거래일(월평균 21거래일 × 12개월,
+ * estimateMinuteBackfillBars 의 AVERAGE_TRADING_DAYS_PER_MONTH 과 같은 가정)
+ * ≈ 98,280봉/종목·년 이므로 20 종목-년 ≈ 196만봉 ≈ MAX_BACKTEST_BARS(200만봉).
  */
 export const MINUTE_BACKFILL_SYMBOL_YEARS = 20;
 
@@ -33,10 +34,25 @@ export function recommendedMinuteMonths(symbolCount: number): number {
  * 분봉 백필이 내려갈 하한 타임스탬프. 달력 월 단위로 MINUTE_BACKFILL_MAX_MONTHS 개월
  * 전 — 30일 근사가 아니라 UTC 월 산술이라 말일 근처에서도 날짜가 밀리지 않는다.
  * 종목 수를 받지 않는다 — 수집 상한은 종목 수와 무관하게 항상 고정이다.
+ *
+ * 일자를 그대로 둔 채 setUTCMonth 만 부르면 넘어간 달이 원래 일자를 갖지 않을 때
+ * (예: 2/29 인 채로 24개월을 당겼는데 도착한 해가 평년) Date 가 다음 달로 넘겨버린다
+ * (2/29 → 3/1) — 그만큼 상한이 조용히 하루 좁아진다. 그래서 먼저 일자를 1일로
+ * 고정해 두고(겹침 없는 상태로) 월만 옮긴 뒤, 도착한 달의 실제 마지막 날로 원래
+ * 일자를 클램프한다.
  */
 export function minuteBackfillFloorTsMs(nowMs: number): number {
+  const originalDate = new Date(nowMs).getUTCDate();
+
   const floor = new Date(nowMs);
+  floor.setUTCDate(1); // 월만 옮기는 동안 일자 오버플로를 막는 안전한 값
   floor.setUTCMonth(floor.getUTCMonth() - MINUTE_BACKFILL_MAX_MONTHS);
+
+  const daysInTargetMonth = new Date(
+    Date.UTC(floor.getUTCFullYear(), floor.getUTCMonth() + 1, 0),
+  ).getUTCDate();
+  floor.setUTCDate(Math.min(originalDate, daysInTargetMonth));
+
   return floor.getTime();
 }
 

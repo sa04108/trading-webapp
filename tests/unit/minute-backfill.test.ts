@@ -61,6 +61,13 @@ describe('minuteBackfillFloorTsMs (분봉 백필 하한 — 달력 월 단위)',
     const floor = minuteBackfillFloorTsMs(nowMs);
     expect(floor).toBe(Date.UTC(2024, 0, 31, 0, 0, 0));
   });
+
+  it('윤년 2/29 는 24개월 전 평년으로 넘어가면 3/1 로 밀리지 않고 2/28 로 클램프된다', () => {
+    const nowMs = Date.UTC(2028, 1, 29, 0, 0, 0); // 2028-02-29 (윤년)
+    const floor = minuteBackfillFloorTsMs(nowMs);
+    // 24개월 전인 2026년은 평년이라 2월이 28일까지다
+    expect(floor).toBe(Date.UTC(2026, 1, 28, 0, 0, 0));
+  });
 });
 
 describe('estimateMinuteBackfillBars (예상 봉 수 추정)', () => {

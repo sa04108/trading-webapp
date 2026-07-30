@@ -127,6 +127,104 @@ Requirement는 TDD 유닛 테스트 대신 `pnpm typecheck`/`pnpm lint`/`pnpm te
   슬라이스를 구분하지 않는다. Dialog의 "소요 시간" 문구는 기존 관례를 그대로
   재사용했으므로 이 사전부터 있던 특성을 그대로 물려받는다. 이번 요구사항
   범위(분봉 백필 상한) 밖이라 손대지 않았다.
-- market-data → backtest 모듈 간 새 의존성(`MAX_BACKTEST_BARS` import)이
-  생겼다. 아키텍처 테스트는 통과하지만, 두 모듈이 향후 계층 규칙을 더 엄격히
-  가져갈 경우 이 참조를 포트로 역전할지 검토가 필요할 수 있다.
+- (아래 리뷰 수정에서 해소됨) market-data → backtest 모듈 간 새 의존성
+  (`MAX_BACKTEST_BARS` import)이 있었으나, 상수를 `src/server/shared/`로
+  옮겨 양쪽 모두 shared 를 참조하도록 고쳤다 — 자세한 내용은 아래 "리뷰 수정"
+  절 참고.
+
+## 리뷰 수정 (2건 Important, 2건 Minor)
+
+리뷰어가 지적한 4건을 모두 수정했다. 커밋:
+`fix(market-data): 분봉 경고 대화상자와 상한 경계를 다듬는다`
+
+### 1. (Important) 확인 다이얼로그가 아무것도 보여주지 않은 채 확인 가능했던 문제
+
+`datasets-page.tsx` 의 분봉 확인 Dialog는 `minutePlan`(coverage 쿼리 응답)만
+보고 있었는데, coverage 쿼리에 `enabled` 게이트가 없어 쿼리가 아직 응답하지
+않은 순간에는 `data`가 `undefined` → `minutePlan`이 `null` → 본문이 통째로
+숨겨지면서도 "동기화 시작" 버튼은 그대로 활성 상태였다. 즉 사용자가 아무 것도
+보지 못한 채 확인을 눌러 버릴 수 있었다 — 이 다이얼로그를 만든 이유 자체가
+무너지는 경로였다.
+
+고침: `useQuery`에서 `isLoading`을 함께 꺼내(`coverageLoading`) 세 가지
+상태를 구분한다.
+- 로딩 중(`coverageLoading === true`): "예상 규모를 계산하는 중입니다…"를
+  보여주고 "동기화 시작" 버튼을 `disabled`로 잠근다.
+- 로딩이 끝났고 `minutePlan`이 있음: 기존 계획 정보(수집 기간·예상 봉 수·권장
+  기간·상한 초과 경고·소요 시간)를 보여준다.
+- 로딩이 끝났는데도 `minutePlan`이 `null`(시장에 거래 세션 정의가 없어 계산
+  자체가 불가능한, 로딩과는 다른 정상 상태): "이 시장은 예상 규모를 계산할 수
+  없습니다."라고 알리고 — 계산 불가 자체가 막을 이유는 아니므로 — 진행은
+  막지 않는다(버튼은 활성).
+
+파일: `src/web/features/datasets/datasets-page.tsx`. 이 저장소에 `.tsx`
+컴포넌트 단위 테스트 인프라가 없어(기존 상태) `pnpm typecheck`/`pnpm lint`/
+`pnpm test:e2e`로 검증했다 — 전과 동일하게 7 passed, 1 skipped.
+
+### 2. (Important) market-data → backtest 의존 방향 역전
+
+`dataset-service.ts`가 `MAX_BACKTEST_BARS`를
+`backtest/domain/bar-estimate.js`에서 직접 import해, 이 저장소 전반의 방향
+(backtest 가 market-data 에 의존)과 반대로 흘렀다. dependency-cruiser 에 이
+쌍을 막는 규칙이 없었던 것은 예상 못 한 사각지대였을 뿐, 의도된 허용이
+아니었다.
+
+고침:
+- `src/server/shared/backtest-limits.ts` 신설 — `MAX_BACKTEST_BARS = 2_000_000`
+  정의와 "왜 shared 에 있는지"(두 모듈 중 어느 쪽 domain 에도 두면 반대쪽이
+  그 모듈에 의존하게 된다)를 문서화.
+- `backtest/domain/bar-estimate.ts`는 이제 이 값을 정의하지 않고
+  `export { MAX_BACKTEST_BARS } from '../../../shared/backtest-limits.js';`로
+  재노출 — `backtest-routes.ts`·`backtest-child.ts`·기존
+  `tests/unit/bar-estimate.test.ts` 등 기존 import 경로는 그대로 둔다.
+- `dataset-service.ts`는 `../../../shared/backtest-limits.js`에서 직접
+  import 하도록 변경 — 더는 backtest 모듈을 참조하지 않는다.
+
+검증: `pnpm exec vitest run tests/architecture` 통과(market-data → backtest
+의존이 완전히 사라졌으므로 이 규칙이 새로 필요하지도 않다),
+`tests/unit/bar-estimate.test.ts` 그대로 통과(재노출 확인).
+
+### 3. (Minor) `minuteBackfillFloorTsMs` 의 윤년 오버플로
+
+`setUTCMonth`만으로 24개월을 당기면, 오늘이 2/29(윤년)이고 24개월 전 해가
+평년이면 Date 객체가 "2월 29일"을 존재하지 않는 날로 보고 자동으로
+3월 1일로 넘겨버렸다 — 상한이 조용히 하루 좁아지는 문제였다.
+
+고침: 일자를 먼저 1일로 고정한 채 월만 옮기고(오버플로 없음), 도착한 달의
+실제 마지막 날짜를 구해 원래 일자를 그 값으로 클램프하도록 재작성.
+
+테스트 추가: `tests/unit/minute-backfill.test.ts`에
+`Date.UTC(2028, 1, 29)`(2028-02-29, 윤년) → `Date.UTC(2026, 1, 28)`(2026년은
+평년이라 2/28)로 클램프되는지 확인하는 케이스. 구현 전 실패
+(`1772323200000`(3/1) ≠ `1772236800000`(2/28))를 확인한 뒤 고쳤고, 기존
+회귀 테스트(2026-07-30, 2026-01-31 케이스)도 그대로 통과함을 재확인했다.
+
+### 4. (Minor) 거래일 상수 주석 불일치 + 변수명 캐멀케이스
+
+- `minute-backfill.ts`의 `MINUTE_BACKFILL_SYMBOL_YEARS` 주석이 "약
+  245거래일/년"이라고 적어 뒀는데, 실제 계산에 쓰는
+  `AVERAGE_TRADING_DAYS_PER_MONTH = 21`을 연 환산하면 252일이라 서로 어긋났다.
+  주석을 "약 252거래일(월평균 21거래일 × 12개월, estimateMinuteBackfillBars
+  의 가정과 동일)"로 고치고, 그에 맞춰 "95,500봉/종목·년 → 191만봉"이던 예시
+  숫자도 "98,280봉/종목·년 → 196만봉"으로 재계산해 일치시켰다.
+- `tests/integration/market-data.test.ts:250`의 지역 변수
+  `kRSessionMinutesPerDay` → `krSessionMinutesPerDay`로 표준 캐멀케이스로
+  변경.
+
+## 리뷰 수정 후 최종 검증
+
+- `pnpm exec vitest run tests/unit/minute-backfill.test.ts tests/architecture` — 15 passed
+- `pnpm test` (전체) — 667 passed (리뷰 전 666 + 윤년 테스트 1건 추가)
+- `pnpm typecheck` — clean
+- `pnpm lint` — clean
+- `pnpm test:e2e` — 7 passed, 1 skipped (변동 없음)
+
+## 리뷰 수정 변경 파일
+
+- `src/server/shared/backtest-limits.ts` (신규)
+- `src/server/modules/backtest/domain/bar-estimate.ts`
+- `src/server/modules/market-data/application/dataset-service.ts`
+- `src/server/modules/market-data/domain/minute-backfill.ts`
+- `src/web/features/datasets/datasets-page.tsx`
+- `tests/unit/minute-backfill.test.ts`
+- `tests/integration/market-data.test.ts` (변수명만)

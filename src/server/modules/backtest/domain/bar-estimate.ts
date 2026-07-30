@@ -1,9 +1,11 @@
 /**
- * 백테스트가 메모리에 올릴 봉 수 상한 (설계 2026-07-29-backtest-timeframe-design.md).
- * 실행부는 기간 내 전체 봉을 배열로 올린다 — 1m 소비를 열면서 OOM 을 막는 밸브다.
- * 2M 봉 ≈ 수백 MB JS 힙. 초과는 다운샘플 없이 명시적으로 거부한다.
+ * 봉 수 상한의 실제 정의는 src/server/shared/backtest-limits.ts 에 있다 —
+ * market-data 모듈(분봉 백필 사전 계획)도 같은 상한을 참조해야 해서, backtest 의
+ * domain 에 두면 market-data → backtest 의존이 생겨 §7 의존 방향이 깨진다.
+ * 여기서는 기존 import 경로(`bar-estimate.js` 에서 MAX_BACKTEST_BARS 를 가져오던
+ * 코드)를 깨지 않기 위해 그대로 re-export 한다.
  */
-export const MAX_BACKTEST_BARS = 2_000_000;
+export { MAX_BACKTEST_BARS } from '../../../shared/backtest-limits.js';
 
 export interface CoverageSpan {
   readonly symbol: string;

@@ -247,11 +247,11 @@ describe('market data (스펙 §11, §13)', () => {
     // 권장 기간은 상한(24개월)에 그대로 걸린다.
     expect(body.minutePlan).not.toBeNull();
     const minutePlan = body.minutePlan!;
-    const kRSessionMinutesPerDay = KR_SESSION.closeMinutes - KR_SESSION.openMinutes;
+    const krSessionMinutesPerDay = KR_SESSION.closeMinutes - KR_SESSION.openMinutes;
     expect(minutePlan.capMonths).toBe(MINUTE_BACKFILL_MAX_MONTHS);
     expect(minutePlan.recommendedMonths).toBe(recommendedMinuteMonths(1));
     expect(minutePlan.expectedBars).toBe(
-      estimateMinuteBackfillBars(1, kRSessionMinutesPerDay, MINUTE_BACKFILL_MAX_MONTHS),
+      estimateMinuteBackfillBars(1, krSessionMinutesPerDay, MINUTE_BACKFILL_MAX_MONTHS),
     );
     expect(minutePlan.exceedsBacktestLimit).toBe(false);
     // 실제 시각(clock.now())은 요청 처리 중 흐르므로 요청 전후로 감싸 판정한다

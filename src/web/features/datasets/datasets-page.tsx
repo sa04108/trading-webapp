@@ -247,7 +247,7 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
   // 새로고침·다른 탭에서 시작된 동기화에도 붙는다 — 서버가 실행 중 잡을 알려준다
   const syncJobId = startedJobId ?? dataset.runningSyncJobId;
 
-  const { data } = useQuery({
+  const { data, isLoading: coverageLoading } = useQuery({
     queryKey: ['datasets', dataset.id, 'coverage'],
     queryFn: () =>
       api<{
@@ -656,7 +656,13 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
               분봉은 종목·기간에 비례해 데이터가 크게 늘어나므로 수집 기간을 제한합니다.
             </DialogDescription>
           </DialogHeader>
-          {minutePlan ? (
+          {coverageLoading ? (
+            // coverage 가 아직 도착하지 않은 상태 — minutePlan 이 null 인 이유가
+            // "아직 안 옴" 인지 "이 시장은 계산 불가" 인지 구분해야 한다. 여기서
+            // 확인 버튼까지 잠가야 아무것도 못 본 채로 동기화를 시작하는 경로가
+            // 없다(이 다이얼로그가 있는 이유 자체를 무너뜨리는 구멍이었다).
+            <p className="text-sm text-muted-foreground">예상 규모를 계산하는 중입니다…</p>
+          ) : minutePlan ? (
             <div className="space-y-1 text-sm">
               <p>수집 기간: 최근 {minutePlan.capMonths}개월</p>
               <p>예상 봉 수: 약 {minutePlan.expectedBars.toLocaleString()}봉</p>
@@ -676,7 +682,14 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
                   : '첫 수집은 소요 시간을 예측할 수 없습니다'}
               </p>
             </div>
-          ) : null}
+          ) : (
+            // coverage 는 도착했는데도 minutePlan 이 null — 이 시장에 거래 세션
+            // 정의가 없어 계산 자체가 불가능한, 로딩과는 다른 정상 상태다. 계산할
+            // 수 없다는 사실만 알리고 진행은 막지 않는다.
+            <p className="text-sm text-muted-foreground">
+              이 시장은 예상 규모를 계산할 수 없습니다.
+            </p>
+          )}
           <DialogFooter>
             <Button
               variant="outline"
@@ -687,6 +700,7 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
             </Button>
             <Button
               className="h-11"
+              disabled={coverageLoading}
               onClick={() => {
                 setConfirmMinuteSync(false);
                 syncMutation.mutate();

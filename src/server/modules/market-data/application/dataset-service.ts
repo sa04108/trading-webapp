@@ -12,7 +12,7 @@ import type { Clock } from '../../../shared/clock.js';
 import { newId } from '../../../shared/ids.js';
 import type { Logger } from '../../../shared/logger.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
-import { MAX_BACKTEST_BARS } from '../../backtest/domain/bar-estimate.js';
+import { MAX_BACKTEST_BARS } from '../../../shared/backtest-limits.js';
 import {
   SYMBOL_PATTERN,
   type Candle,
