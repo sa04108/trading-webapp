@@ -15,6 +15,7 @@ import {
   type MarketDataSource,
 } from '../../src/server/modules/market-data/application/ports.js';
 import type { Candle, Market, Timeframe } from '../../src/server/modules/market-data/domain/candle.js';
+import { minuteBackfillFloorTsMs } from '../../src/server/modules/market-data/domain/minute-backfill.js';
 import { openDatabase } from '../../src/server/shared/db/database.js';
 import { brokerSyncState, dataImportJobs, datasets } from '../../src/server/shared/db/schema.js';
 import { createLogger } from '../../src/server/shared/logger.js';
@@ -784,6 +785,35 @@ describe('슬라이스별 동기화', () => {
     expect(minuteRow?.syncedLastTsMs).toBe(MON_0900_KST + 9 * MINUTE);
     expect(dailyRow?.backfillDoneAtMs).not.toBeNull();
     expect(minuteRow?.backfillDoneAtMs).not.toBeNull();
+  });
+});
+
+describe('분봉 백필 상한 (2년) — 스펙 §분봉 백필 상한', () => {
+  it('분봉 백필은 API 바닥(0)이 아니라 24개월 전 하한을 요청한다', async () => {
+    const source = new FakeSource(minutes('005930', 10));
+    const { datasetService, sync, clock } = buildHarness(source);
+    const dataset = datasetService.createBrokerDataset('KR-유니버스', 'KR', '1m', ['005930']);
+
+    await sync.startSync(dataset.id).done;
+
+    const expectedFloor = minuteBackfillFloorTsMs(clock.now());
+    expect(source.calls.length).toBeGreaterThan(0);
+    for (const call of source.calls) {
+      expect(call.fromTsMs).toBe(expectedFloor);
+    }
+  });
+
+  it('일봉 백필은 변경 없이 여전히 fromTsMs=0(API 바닥)을 요청한다', async () => {
+    const source = new FakeSource([dailyCandle('005930', MON_0900_KST)]);
+    const { datasetService, sync } = buildHarness(source);
+    const dataset = datasetService.createBrokerDataset('KR-일봉', 'KR', '1d', ['005930']);
+
+    await sync.startSync(dataset.id).done;
+
+    expect(source.calls.length).toBeGreaterThan(0);
+    for (const call of source.calls) {
+      expect(call.fromTsMs).toBe(0);
+    }
   });
 });
 

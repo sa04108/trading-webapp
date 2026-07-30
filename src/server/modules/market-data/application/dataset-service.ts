@@ -12,6 +12,7 @@ import type { Clock } from '../../../shared/clock.js';
 import { newId } from '../../../shared/ids.js';
 import type { Logger } from '../../../shared/logger.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
+import { MAX_BACKTEST_BARS } from '../../backtest/domain/bar-estimate.js';
 import {
   SYMBOL_PATTERN,
   type Candle,
@@ -28,7 +29,13 @@ import {
   symbolsKey,
   type DatasetSlice,
 } from '../domain/dataset-slice.js';
-import { getSessionForMarket } from '../domain/exchange-session.js';
+import { getSessionForMarket, hasMarketSession } from '../domain/exchange-session.js';
+import {
+  estimateMinuteBackfillBars,
+  MINUTE_BACKFILL_MAX_MONTHS,
+  minuteBackfillFloorTsMs,
+  recommendedMinuteMonths,
+} from '../domain/minute-backfill.js';
 import { parseCandleCsv } from './csv-parser.js';
 import type { CandleRepository } from './ports.js';
 
@@ -72,6 +79,23 @@ export type FactsSyncEstimate =
 export interface SyncEstimate {
   readonly candles: { basis: 'LAST_RUN'; ms: number } | { basis: 'UNKNOWN' };
   readonly facts: FactsSyncEstimate;
+}
+
+/**
+ * 첫 분봉 동기화 전에 보여줄 사전 계획 (분봉 백필 상한 스펙). 세션이 정의되지 않은
+ * 시장(hasMarketSession=false)은 sessionMinutesPerDay 를 정할 수 없으므로 null.
+ */
+export interface MinutePlan {
+  /** 실제 수집 상한(개월) — 종목 수와 무관하게 항상 고정 */
+  readonly capMonths: number;
+  /** 종목 수 기준 권장 기간(개월) — 한 번의 백테스트가 감당할 수 있는 범위 안내용 */
+  readonly recommendedMonths: number;
+  /** capMonths 를 적용했을 때 실제로 요청될 fromTsMs */
+  readonly fromTsMs: number;
+  /** capMonths 전체를 채웠을 때의 예상 봉 수 (coverage 없이 순수 산술 추정) */
+  readonly expectedBars: number;
+  /** expectedBars 가 백테스트 봉 수 상한(MAX_BACKTEST_BARS)을 넘는지 */
+  readonly exceedsBacktestLimit: boolean;
 }
 
 export interface ImportRequest {
@@ -231,6 +255,30 @@ export class DatasetService {
     // `!job?.candlesMs` 로 쓰면 0ms 측정값이 "측정 없음" 으로 접힌다 — null 만 걸러낸다
     if (job?.candlesMs == null) return { basis: 'UNKNOWN' };
     return { basis: 'LAST_RUN', ms: job.candlesMs };
+  }
+
+  /**
+   * 첫 분봉 동기화 전에 사용자에게 보여줄 사전 계획. sessionMinutesPerDay 는
+   * 거래소 세션(§exchange-session.ts)에서 유도한다 — 시장마다 세션 시간이 다르므로
+   * 여기서 상수(예: 390)를 하드코딩하지 않는다. 세션이 정의되지 않은 시장은
+   * hasMarketSession 이 그 사실의 단일 출처이므로 그대로 null 을 돌려준다.
+   */
+  getMinutePlan(market: Market, symbolCount: number): MinutePlan | null {
+    if (!hasMarketSession(market)) return null;
+    const session = getSessionForMarket(market);
+    const sessionMinutesPerDay = session.closeMinutes - session.openMinutes;
+    const expectedBars = estimateMinuteBackfillBars(
+      symbolCount,
+      sessionMinutesPerDay,
+      MINUTE_BACKFILL_MAX_MONTHS,
+    );
+    return {
+      capMonths: MINUTE_BACKFILL_MAX_MONTHS,
+      recommendedMonths: recommendedMinuteMonths(symbolCount),
+      fromTsMs: minuteBackfillFloorTsMs(this.clock.now()),
+      expectedBars,
+      exceedsBacktestLimit: expectedBars > MAX_BACKTEST_BARS,
+    };
   }
 
   /**

@@ -9,6 +9,13 @@ import type {
   FetchCandleResult,
   MarketDataSource,
 } from '../../src/server/modules/market-data/application/ports.js';
+import { KR_SESSION } from '../../src/server/modules/market-data/domain/exchange-session.js';
+import {
+  MINUTE_BACKFILL_MAX_MONTHS,
+  estimateMinuteBackfillBars,
+  minuteBackfillFloorTsMs,
+  recommendedMinuteMonths,
+} from '../../src/server/modules/market-data/domain/minute-backfill.js';
 import { dataImportJobs } from '../../src/server/shared/db/schema.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
 
@@ -203,17 +210,26 @@ describe('market data (스펙 §11, §13)', () => {
     expect(hourlyTs).toHaveLength(7);
 
     // coverage
+    const beforeCoverageMs = Date.now();
     const coverage = await ctx.app.inject({
       method: 'GET',
       url: `/api/v1/datasets/${datasets[0]!.id}/coverage`,
       cookies: { qp_session: cookie },
     });
+    const afterCoverageMs = Date.now();
     const body = coverage.json() as {
       coverage: Array<{ symbol: string; barCount: number; expectedBarCount: number }>;
       syncEstimate: {
         candles: { basis: string; ms?: number };
         facts: { basis: string; reason?: string };
       };
+      minutePlan: {
+        capMonths: number;
+        recommendedMonths: number;
+        fromTsMs: number;
+        expectedBars: number;
+        exceedsBacktestLimit: boolean;
+      } | null;
     };
     expect(body.coverage[0]!.symbol).toBe('005930');
     expect(body.coverage[0]!.barCount).toBe(7);
@@ -226,6 +242,21 @@ describe('market data (스펙 §11, §13)', () => {
       basis: 'UNSUPPORTED',
       reason: 'DART 인증키가 설정되지 않아 재무를 수집할 수 없습니다.',
     });
+
+    // 분봉 사전 계획 — KR 은 세션이 정의돼 있으므로 null 이 아니다. 종목 1개이므로
+    // 권장 기간은 상한(24개월)에 그대로 걸린다.
+    expect(body.minutePlan).not.toBeNull();
+    const minutePlan = body.minutePlan!;
+    const kRSessionMinutesPerDay = KR_SESSION.closeMinutes - KR_SESSION.openMinutes;
+    expect(minutePlan.capMonths).toBe(MINUTE_BACKFILL_MAX_MONTHS);
+    expect(minutePlan.recommendedMonths).toBe(recommendedMinuteMonths(1));
+    expect(minutePlan.expectedBars).toBe(
+      estimateMinuteBackfillBars(1, kRSessionMinutesPerDay, MINUTE_BACKFILL_MAX_MONTHS),
+    );
+    expect(minutePlan.exceedsBacktestLimit).toBe(false);
+    // 실제 시각(clock.now())은 요청 처리 중 흐르므로 요청 전후로 감싸 판정한다
+    expect(minutePlan.fromTsMs).toBeGreaterThanOrEqual(minuteBackfillFloorTsMs(beforeCoverageMs));
+    expect(minutePlan.fromTsMs).toBeLessThanOrEqual(minuteBackfillFloorTsMs(afterCoverageMs));
 
     // data job 조회
     const jobLookup = await ctx.app.inject({

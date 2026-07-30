@@ -155,6 +155,11 @@ export const brokerSyncState = sqliteTable(
     syncedFirstTsMs: integer('synced_first_ts_ms'),
     /** 수집된 가장 최신 봉 */
     syncedLastTsMs: integer('synced_last_ts_ms'),
+    /**
+     * 백필 완료 시각. 일봉은 API 보관 깊이 바닥까지 소진했다는 뜻이지만, 분봉은
+     * 2년 상한이 있어 API 바닥에는 닿지 않는다 — 분봉에서는 "현재 상한 기준으로
+     * 더 당길 백필 작업이 없다"는 뜻이다 (broker-sync-service.ts markBackfillDone 참고).
+     */
     backfillDoneAtMs: integer('backfill_done_at_ms'),
     /** 봉 슬라이스 ('1d'|'1m') — 슬라이스별 수집 워터마크 */
     slice: text('slice').notNull().default('1d'),

@@ -15,6 +15,7 @@ import {
   type ExchangeSession,
 } from '../domain/exchange-session.js';
 import { deriveFactYearRange } from '../domain/fact-year-range.js';
+import { minuteBackfillFloorTsMs } from '../domain/minute-backfill.js';
 import type { DatasetService, DatasetSummary } from './dataset-service.js';
 import type { CandleRepository, MarketDataSource } from './ports.js';
 
@@ -250,17 +251,21 @@ export class BrokerSyncService {
           totalRows += incremental.rows;
         }
 
-        // 백필: API 보관 깊이 바닥까지. 증분이 워터마크를 만들었을 수 있으므로 재조회.
+        // 백필: 일봉은 API 보관 깊이 바닥(0)까지, 분봉은 2년 상한까지 — 분봉은
+        // 종목·기간에 비례해 폭발하므로 수집 자체를 묶는다(minute-backfill.ts).
+        // 증분이 워터마크를 만들었을 수 있으므로 재조회.
         const state = this.getState(dataset.id, symbol, slice);
         if (state?.backfillDoneAtMs == null) {
+          const backfillFromTsMs = slice === '1m' ? minuteBackfillFloorTsMs(now) : 0;
           const backfill = await this.pullRange(dataset, collect, symbol, slice, {
             jobId,
-            fromTsMs: 0,
+            fromTsMs: backfillFromTsMs,
             toTsMs: (state?.syncedFirstTsMs ?? now + 1) - 1,
             newRange,
           });
           totalRows += backfill.rows;
-          // fromTsMs=0 구간을 에러 없이 소진 = API 바닥 도달
+          // 일봉은 fromTsMs=0 구간을 에러 없이 소진 = API 바닥 도달. 분봉은 상한
+          // 구간을 소진했을 뿐 API 바닥에는 닿지 않았을 수 있다 — 아래 플래그 의미 참고.
           this.markBackfillDone(dataset.id, symbol, slice);
         }
 
@@ -565,6 +570,15 @@ export class BrokerSyncService {
       .run();
   }
 
+  /**
+   * 백필 완료 표시. 일봉은 API 보관 깊이 바닥까지 소진했다는 뜻 그대로다. 분봉은
+   * 2년 상한이 있어 진짜 API 바닥에는 닿지 않는다 — 그리고 그 상한 하한은
+   * "지금부터 24개월 전"이라 시간이 지나면 앞으로 밀린다. 따라서 분봉에서 이
+   * 플래그의 의미는 "API 바닥"이 아니라 **"현재 상한 기준으로 더 당길 백필 작업이
+   * 없다"**다. 상한이 미래로 밀려도 다시 당겨 채울 필요는 없다 — 창이 항상 앞으로만
+   * 밀리므로(과거로 되돌아가지 않으므로) 이미 커버한 구간을 다시 훑는 넓히기/gap-fill
+   * 분기는 두지 않는다.
+   */
   private markBackfillDone(datasetId: string, symbol: string, slice: DatasetSlice): void {
     const existing = this.getState(datasetId, symbol, slice);
     if (!existing) {

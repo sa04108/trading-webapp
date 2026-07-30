@@ -158,6 +158,7 @@ export function registerDatasetRoutes(
         slice: row.slice,
       })),
       syncEstimate,
+      minutePlan: datasetService.getMinutePlan(dataset.market, dataset.symbols.length),
       note: '공휴일 캘린더 미반영: 공휴일이 누락 구간으로 보고될 수 있습니다.',
     };
   });

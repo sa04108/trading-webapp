@@ -102,6 +102,15 @@ interface SyncEstimate {
   facts: FactsSyncEstimate;
 }
 
+/** 첫 분봉 동기화 전 사전 계획 — 세션이 없는 시장은 null (서버 dataset-service.ts 와 동일 계약) */
+interface MinutePlan {
+  capMonths: number;
+  recommendedMonths: number;
+  fromTsMs: number;
+  expectedBars: number;
+  exceedsBacktestLimit: boolean;
+}
+
 interface FactsJobState {
   fromYear: number | null;
   toYear: number | null;
@@ -229,6 +238,8 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
   // null = 보기 모드, 문자열 = 편집 중인 입력값
   const [nameDraft, setNameDraft] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // 분봉 첫 동기화 전 사전 안내 — 취소하면 그대로 닫히고 동기화는 시작되지 않는다
+  const [confirmMinuteSync, setConfirmMinuteSync] = useState(false);
   const [inspectSymbol, setInspectSymbol] = useState<string | null>(null);
   // 기본 해제이고 기억하지 않는다 — 저장하면 데이터셋을 갱신할 때마다 의도 없이
   // 45분짜리 재무 수집이 걸린다
@@ -239,9 +250,12 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
   const { data } = useQuery({
     queryKey: ['datasets', dataset.id, 'coverage'],
     queryFn: () =>
-      api<{ coverage: CoverageRow[]; syncEstimate: SyncEstimate; note: string }>(
-        `/datasets/${dataset.id}/coverage`,
-      ),
+      api<{
+        coverage: CoverageRow[];
+        syncEstimate: SyncEstimate;
+        minutePlan: MinutePlan | null;
+        note: string;
+      }>(`/datasets/${dataset.id}/coverage`),
   });
   const coverageBySymbol = new Map(
     data?.coverage.filter((row) => row.slice === slice).map((row) => [row.symbol, row]) ?? [],
@@ -249,6 +263,9 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
   const hasSliceData = sliceHasData(dataset.slices, slice);
   const syncEstimate = data?.syncEstimate;
   const factsEstimate = syncEstimate?.facts;
+  const minutePlan = data?.minutePlan ?? null;
+  // 첫 분봉 수집만 사전 안내를 띄운다 — 증분 수집·일봉은 곧바로 시작한다
+  const needsMinuteSyncConfirm = slice === '1m' && !hasSliceData;
   const stockNames = useStockNames(dataset.symbols);
   const preview = useSymbolPreview(newSymbol);
 
@@ -443,7 +460,9 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
                 size="sm"
                 className="h-9"
                 disabled={syncing}
-                onClick={() => syncMutation.mutate()}
+                onClick={() =>
+                  needsMinuteSyncConfirm ? setConfirmMinuteSync(true) : syncMutation.mutate()
+                }
               >
                 <RefreshCw data-icon="inline-start" />
                 동기화
@@ -624,6 +643,56 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
               }}
             >
               삭제
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={confirmMinuteSync} onOpenChange={setConfirmMinuteSync}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>분봉 동기화 시작</DialogTitle>
+            <DialogDescription>
+              분봉은 종목·기간에 비례해 데이터가 크게 늘어나므로 수집 기간을 제한합니다.
+            </DialogDescription>
+          </DialogHeader>
+          {minutePlan ? (
+            <div className="space-y-1 text-sm">
+              <p>수집 기간: 최근 {minutePlan.capMonths}개월</p>
+              <p>예상 봉 수: 약 {minutePlan.expectedBars.toLocaleString()}봉</p>
+              <p>
+                권장 기간: {minutePlan.recommendedMonths}개월 — 종목 수 기준으로 한 번의
+                백테스트가 감당하는 범위입니다.
+              </p>
+              {minutePlan.exceedsBacktestLimit ? (
+                <p className="text-destructive">
+                  예상 봉 수가 백테스트 상한(200만 봉)을 넘어 한 번의 실행으로는 약{' '}
+                  {minutePlan.recommendedMonths}개월치까지만 사용할 수 있습니다.
+                </p>
+              ) : null}
+              <p className="text-muted-foreground">
+                {syncEstimate?.candles.basis === 'LAST_RUN'
+                  ? `소요 시간 ${formatEstimate(syncEstimate.candles.ms)} (직전 실행 기준)`
+                  : '첫 수집은 소요 시간을 예측할 수 없습니다'}
+              </p>
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              className="h-11"
+              onClick={() => setConfirmMinuteSync(false)}
+            >
+              취소
+            </Button>
+            <Button
+              className="h-11"
+              onClick={() => {
+                setConfirmMinuteSync(false);
+                syncMutation.mutate();
+              }}
+            >
+              동기화 시작
             </Button>
           </DialogFooter>
         </DialogContent>
