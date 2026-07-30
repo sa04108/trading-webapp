@@ -35,7 +35,7 @@
   - `AtrState { atr: number | null; prevClose: number | null; barsSeen: number }`, `newAtr(): AtrState`, `updateAtr(state, bar: { high: number; low: number; close: number }, period: number): void`
   - `RsiState { avgGain: number | null; avgLoss: number | null; prevClose: number | null; changesSeen: number; sumGain: number; sumLoss: number }`, `newRsi(): RsiState`, `updateRsi(state, close: number, period: number): void`, `rsiValue(state): number | null`
 
-- [ ] **Step 1: 실패하는 테스트 작성**
+- [x] **Step 1: 실패하는 테스트 작성**
 
 `tests/unit/indicators.test.ts`:
 
@@ -110,12 +110,12 @@ describe('updateRsi (Wilder)', () => {
 });
 ```
 
-- [ ] **Step 2: 실패 확인**
+- [x] **Step 2: 실패 확인**
 
 Run: `npx vitest run tests/unit/indicators.test.ts`
 Expected: FAIL — 모듈 없음.
 
-- [ ] **Step 3: 구현**
+- [x] **Step 3: 구현**
 
 `src/server/modules/strategy/strategies/shared/indicators.ts`:
 
@@ -222,12 +222,12 @@ export function rsiValue(state: RsiState): number | null {
 }
 ```
 
-- [ ] **Step 4: 통과 확인**
+- [x] **Step 4: 통과 확인**
 
 Run: `npx vitest run tests/unit/indicators.test.ts && npx tsc --noEmit -p tsconfig.json`
 Expected: PASS.
 
-- [ ] **Step 5: 커밋**
+- [x] **Step 5: 커밋**
 
 ```bash
 git add src/server/modules/strategy/strategies/shared/indicators.ts tests/unit/indicators.test.ts
@@ -248,7 +248,7 @@ git commit -m "feat(strategy): 증분 갱신형 EMA·RSI·ATR 지표 부품을 �
   - `pearsonCorrelation(a: readonly number[], b: readonly number[]): number | null` — 길이 불일치 시 짧은 쪽, 표본 < 2 또는 분산 0 이면 null
   - `buildCorrelationGroups(closesBySymbol: ReadonlyMap<string, readonly number[]>, threshold: number): Map<string, string>` — 심볼 → 그룹 id (그룹 내 사전순 최소 심볼). 로그수익률 상관 ≤ −threshold 인 쌍을 전이적으로 병합.
 
-- [ ] **Step 1: 실패하는 테스트 작성**
+- [x] **Step 1: 실패하는 테스트 작성**
 
 `tests/unit/pair-groups.test.ts`:
 
@@ -333,12 +333,12 @@ describe('buildCorrelationGroups', () => {
 });
 ```
 
-- [ ] **Step 2: 실패 확인**
+- [x] **Step 2: 실패 확인**
 
 Run: `npx vitest run tests/unit/pair-groups.test.ts`
 Expected: FAIL — 모듈 없음.
 
-- [ ] **Step 3: 구현**
+- [x] **Step 3: 구현**
 
 `src/server/modules/strategy/strategies/shared/pair-groups.ts`:
 
@@ -433,12 +433,12 @@ export function buildCorrelationGroups(
 }
 ```
 
-- [ ] **Step 4: 통과 확인**
+- [x] **Step 4: 통과 확인**
 
 Run: `npx vitest run tests/unit/pair-groups.test.ts && npx tsc --noEmit -p tsconfig.json`
 Expected: PASS.
 
-- [ ] **Step 5: 커밋**
+- [x] **Step 5: 커밋**
 
 ```bash
 git add src/server/modules/strategy/strategies/shared/pair-groups.ts tests/unit/pair-groups.test.ts
@@ -464,7 +464,7 @@ git commit -m "feat(strategy): 역상관 종목을 묶는 상관 그룹 부품�
   - `updateTrail(holding: HoldingState, close: number, trailAtrMultiplier: number): void`
   - `holdLimitReached(holding: HoldingState, maxHoldBars: number | undefined): boolean`
 
-- [ ] **Step 1: 실패하는 테스트 작성**
+- [x] **Step 1: 실패하는 테스트 작성**
 
 `tests/unit/position-management.test.ts`:
 
@@ -525,12 +525,12 @@ describe('trailing-stop', () => {
 });
 ```
 
-- [ ] **Step 2: 실패 확인**
+- [x] **Step 2: 실패 확인**
 
 Run: `npx vitest run tests/unit/position-management.test.ts`
 Expected: FAIL — 모듈 없음.
 
-- [ ] **Step 3: 구현**
+- [x] **Step 3: 구현**
 
 `src/server/modules/strategy/strategies/shared/position-sizing.ts`:
 
@@ -618,12 +618,12 @@ export function holdLimitReached(
 }
 ```
 
-- [ ] **Step 4: 통과 확인**
+- [x] **Step 4: 통과 확인**
 
 Run: `npx vitest run tests/unit/position-management.test.ts && npx tsc --noEmit -p tsconfig.json`
 Expected: PASS.
 
-- [ ] **Step 5: 커밋**
+- [x] **Step 5: 커밋**
 
 ```bash
 git add src/server/modules/strategy/strategies/shared/position-sizing.ts src/server/modules/strategy/strategies/shared/trailing-stop.ts tests/unit/position-management.test.ts
@@ -643,7 +643,7 @@ git commit -m "feat(strategy): 리스크 수량·스톱 관리 부품을 추가�
 - Consumes: Task 1 `newEma`/`updateEma`/`newAtr`/`updateAtr`, Task 2 `buildCorrelationGroups`, Task 3 전체
 - Produces: `emaTrendSwitchParameters` (zod 스키마), `emaTrendSwitchStrategy: TradingStrategy<EmaTrendSwitchParameters, EmaTrendSwitchState>` — id `'ema-trend-switch'`, version `'1.0.0'`
 
-- [ ] **Step 1: 실패하는 테스트 작성**
+- [x] **Step 1: 실패하는 테스트 작성**
 
 `tests/unit/ema-trend-switch.test.ts`:
 
@@ -796,12 +796,12 @@ describe('실행 동작', () => {
 });
 ```
 
-- [ ] **Step 2: 실패 확인**
+- [x] **Step 2: 실패 확인**
 
 Run: `npx vitest run tests/unit/ema-trend-switch.test.ts`
 Expected: FAIL — 모듈 없음.
 
-- [ ] **Step 3: 전략 구현**
+- [x] **Step 3: 전략 구현**
 
 `src/server/modules/strategy/strategies/ema-trend-switch.ts`:
 
@@ -1081,7 +1081,7 @@ export const emaTrendSwitchStrategy: TradingStrategy<
 };
 ```
 
-- [ ] **Step 4: 레지스트리 등록**
+- [x] **Step 4: 레지스트리 등록**
 
 `src/server/modules/strategy/application/strategy-registry.ts` 수정 — import 추가:
 
@@ -1100,17 +1100,17 @@ const STRATEGIES: readonly AnyTradingStrategy[] = [
 ];
 ```
 
-- [ ] **Step 5: 통과 확인**
+- [x] **Step 5: 통과 확인**
 
 Run: `npx vitest run tests/unit/ema-trend-switch.test.ts && npx tsc --noEmit -p tsconfig.json`
 Expected: PASS. JSON 스키마 테스트가 실패하면 zod `.refine()` 이 `z.toJSONSchema` 를 깨는 것 — 그 경우 `.refine` 을 제거하고 `superRefine` 대신 **파라미터 검증을 스키마 밖으로 빼지 말고**, `z.toJSONSchema(schema, { unrepresentable: 'any' })` 옵션이 필요한지 `strategy-registry.ts` 의 `getParameterJsonSchema` 를 확인하라 (기존 전략 스키마 출력이 바뀌면 안 된다 — strategySourceHash 는 JSON 스키마 직렬화에 의존한다).
 
-- [ ] **Step 6: 전체 단위 테스트로 회귀 확인**
+- [x] **Step 6: 전체 단위 테스트로 회귀 확인**
 
 Run: `npx vitest run`
 Expected: 전부 PASS — 특히 `strategy-source-hash.test.ts` (기존 해시 불변).
 
-- [ ] **Step 7: 커밋**
+- [x] **Step 7: 커밋**
 
 ```bash
 git add src/server/modules/strategy/strategies/ema-trend-switch.ts src/server/modules/strategy/application/strategy-registry.ts tests/unit/ema-trend-switch.test.ts
@@ -1130,7 +1130,7 @@ git commit -m "feat(strategy): EMA 추세 스위치 전략을 추가한다"
 - Consumes: Task 1 `newRsi`/`updateRsi`/`rsiValue`/`newAtr`/`updateAtr`, Task 2 `buildCorrelationGroups`, Task 3 전체 (`updateTrail` 제외 — 고정 스톱)
 - Produces: `rsiReversionParameters`, `rsiReversionStrategy` — id `'rsi-reversion'`, version `'1.0.0'`
 
-- [ ] **Step 1: 실패하는 테스트 작성**
+- [x] **Step 1: 실패하는 테스트 작성**
 
 `tests/unit/rsi-reversion.test.ts`:
 
@@ -1264,12 +1264,12 @@ describe('실행 동작', () => {
 });
 ```
 
-- [ ] **Step 2: 실패 확인**
+- [x] **Step 2: 실패 확인**
 
 Run: `npx vitest run tests/unit/rsi-reversion.test.ts`
 Expected: FAIL — 모듈 없음.
 
-- [ ] **Step 3: 전략 구현**
+- [x] **Step 3: 전략 구현**
 
 `src/server/modules/strategy/strategies/rsi-reversion.ts`:
 
@@ -1512,7 +1512,7 @@ export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiRe
 };
 ```
 
-- [ ] **Step 4: 레지스트리 등록**
+- [x] **Step 4: 레지스트리 등록**
 
 `strategy-registry.ts` 에 import 와 배열 항목 추가 (Task 4 와 같은 방식):
 
@@ -1522,12 +1522,12 @@ import { rsiReversionStrategy } from '../strategies/rsi-reversion.js';
   rsiReversionStrategy as AnyTradingStrategy,
 ```
 
-- [ ] **Step 5: 통과 확인**
+- [x] **Step 5: 통과 확인**
 
 Run: `npx vitest run tests/unit/rsi-reversion.test.ts && npx tsc --noEmit -p tsconfig.json`
 Expected: PASS.
 
-- [ ] **Step 6: 커밋**
+- [x] **Step 6: 커밋**
 
 ```bash
 git add src/server/modules/strategy/strategies/rsi-reversion.ts src/server/modules/strategy/application/strategy-registry.ts tests/unit/rsi-reversion.test.ts
@@ -1544,7 +1544,7 @@ git commit -m "feat(strategy): RSI 되돌림 전략을 추가한다"
 **Interfaces:**
 - Consumes: Task 4 `emaTrendSwitchStrategy`, Task 5 `rsiReversionStrategy`, 엔진 `runBacktest`
 
-- [ ] **Step 1: 테스트 작성**
+- [x] **Step 1: 테스트 작성**
 
 `tests/unit/swing-strategies.test.ts`:
 
@@ -1678,12 +1678,12 @@ describe('그룹 배타성', () => {
 });
 ```
 
-- [ ] **Step 2: 통과 확인**
+- [x] **Step 2: 통과 확인**
 
 Run: `npx vitest run tests/unit/swing-strategies.test.ts`
 Expected: PASS. 실패하면 전략 쪽 결함이다 — 테스트를 조정하기 전에 정렬·claimed 로직을 먼저 의심하라.
 
-- [ ] **Step 3: 커밋**
+- [x] **Step 3: 커밋**
 
 ```bash
 git add tests/unit/swing-strategies.test.ts
@@ -1696,21 +1696,21 @@ git commit -m "test(strategy): 방향 무지·봉 주기 무관·그룹 배타�
 
 **Files:** 없음 (검증만)
 
-- [ ] **Step 1: 전체 단위·통합 테스트**
+- [x] **Step 1: 전체 단위·통합 테스트**
 
 Run: `npx vitest run`
 Expected: 전부 PASS. 특히 `strategy-source-hash.test.ts`(기존 전략 해시 불변), `backtest-request.test.ts`, `job-queue.test.ts`.
 
-- [ ] **Step 2: 타입·린트·빌드**
+- [x] **Step 2: 타입·린트·빌드**
 
 Run: `npx tsc --noEmit -p tsconfig.json && npx eslint src tests && pnpm build`
 Expected: 에러 없음.
 
-- [ ] **Step 3: e2e**
+- [x] **Step 3: e2e**
 
 Run: `pnpm test:e2e`
 Expected: 기존 7 passed 유지 — 위저드는 레지스트리에서 전략 목록을 읽으므로 새 전략이 목록에 늘어나도 기존 흐름(`시간봉 돌파` 지정 클릭)은 깨지지 않는다.
 
-- [ ] **Step 4: 위저드에서 눈 확인 (선택이지만 권장)**
+- [x] **Step 4: 위저드에서 눈 확인 (선택이지만 권장)**
 
 `pnpm dev` 후 `/backtests/new` 에서 새 전략 2개가 한국어 라벨·기본값과 함께 렌더링되는지 확인. `fastEmaBars`/`slowEmaBars` 교차 규칙은 폼에 안 보이는 게 정상 — 제출 시 422 메시지로 전달된다.
