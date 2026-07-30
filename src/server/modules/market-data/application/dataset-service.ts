@@ -13,7 +13,6 @@ import { newId } from '../../../shared/ids.js';
 import type { Logger } from '../../../shared/logger.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
 import {
-  availableTimeframes,
   SYMBOL_PATTERN,
   type Candle,
   type Market,
@@ -21,15 +20,41 @@ import {
 } from '../domain/candle.js';
 import { aggregateToHourly } from '../domain/aggregate.js';
 import { computeCoverage } from '../domain/coverage.js';
+import {
+  ALL_SLICES,
+  coverageTimeframeForSlice,
+  legacyConsumeDefault,
+  sliceForTimeframe,
+  sliceTimeframes,
+  symbolsKey,
+  type DatasetSlice,
+} from '../domain/dataset-slice.js';
 import { getSessionForMarket } from '../domain/exchange-session.js';
 import { parseCandleCsv } from './csv-parser.js';
 import type { CandleRepository } from './ports.js';
+
+/** 같은 종목 구성(정렬·중복 제거 후 동일)의 데이터셋이 이미 있을 때 던진다 */
+export class DuplicateSymbolGroupError extends Error {
+  constructor(existingName: string) {
+    super(`같은 종목 구성의 데이터셋이 이미 있습니다: ${existingName}`);
+    this.name = 'DuplicateSymbolGroupError';
+  }
+}
 
 export interface DatasetSummary {
   id: string;
   name: string;
   market: Market;
+  /**
+   * @deprecated 전환기 별칭 — legacyConsumeDefault(defaultTimeframe) 값이다.
+   * 슬라이스 모델 전환 전의 웹·백테스트 소비부가 이 필드로 봉 종류를 읽던 관례를
+   * 유지한다. 새 코드는 defaultTimeframe·slices 를 쓴다.
+   */
   timeframe: Timeframe;
+  /** 기본 수집 봉 ('1d'|'1m') — 생성 드로어의 선택, 카드 스위치 기본값 */
+  defaultTimeframe: DatasetSlice;
+  /** 슬라이스별 데이터 존재 여부 — 카드가 어느 봉 종류를 갖고 있는지 표시 */
+  slices: Array<{ slice: DatasetSlice; hasData: boolean }>;
   symbols: string[];
   description: string | null;
   latestVersion: number;
@@ -59,7 +84,7 @@ export interface SyncEstimate {
 export interface ImportRequest {
   readonly datasetName: string;
   readonly market: Market;
-  readonly timeframe: '1m' | '1h';
+  readonly timeframe: '1m' | '1d';
   readonly symbol: string;
   readonly fileName: string;
   readonly csvContent: string;
@@ -76,7 +101,26 @@ export class DatasetService {
 
   listDatasets(): DatasetSummary[] {
     const rows = this.db.select().from(datasets).all();
-    return rows.map((row) => this.toSummary(row));
+    if (rows.length === 0) return [];
+    // N+1 방지: coverage 를 데이터셋별로 한 번에 읽어 Map 으로 넘긴다 —
+    // 데이터셋마다 개별 조회하면 목록 화면이 데이터셋 수만큼 쿼리를 낸다
+    const coverageRows = this.db
+      .select()
+      .from(dataCoverage)
+      .where(
+        inArray(
+          dataCoverage.datasetId,
+          rows.map((row) => row.id),
+        ),
+      )
+      .all();
+    const coverageByDataset = new Map<string, (typeof coverageRows)[number][]>();
+    for (const coverage of coverageRows) {
+      const list = coverageByDataset.get(coverage.datasetId) ?? [];
+      list.push(coverage);
+      coverageByDataset.set(coverage.datasetId, list);
+    }
+    return rows.map((row) => this.toSummary(row, coverageByDataset.get(row.id) ?? []));
   }
 
   getDataset(datasetId: string): DatasetSummary | null {
@@ -84,7 +128,10 @@ export class DatasetService {
     return row ? this.toSummary(row) : null;
   }
 
-  private toSummary(row: typeof datasets.$inferSelect): DatasetSummary {
+  private toSummary(
+    row: typeof datasets.$inferSelect,
+    coverageRows?: (typeof dataCoverage.$inferSelect)[],
+  ): DatasetSummary {
     const latest = this.db
       .select()
       .from(datasetVersions)
@@ -103,17 +150,41 @@ export class DatasetService {
         ),
       )
       .get();
+    const coverage =
+      coverageRows ??
+      this.db.select().from(dataCoverage).where(eq(dataCoverage.datasetId, row.id)).all();
+    const defaultTimeframe = row.defaultTimeframe as DatasetSlice;
+    const slices = ALL_SLICES.map((slice) => ({
+      slice,
+      hasData: coverage.some((c) => c.slice === slice && c.barCount > 0),
+    }));
     return {
       id: row.id,
       name: row.name,
       market: row.market as Market,
-      timeframe: row.timeframe as Timeframe,
+      // 전환기 별칭: 기존 웹·백테스트 소비부가 timeframe 필드로 봉 종류를 읽는다
+      timeframe: legacyConsumeDefault(defaultTimeframe),
+      defaultTimeframe,
+      slices,
       symbols: JSON.parse(row.symbolsJson) as string[],
       description: row.description,
       latestVersion: latest?.version ?? 0,
       createdAtMs: row.createdAtMs,
       runningSyncJobId: runningSync?.id ?? null,
     };
+  }
+
+  /** 종목 구성 유일키로 기존 데이터셋을 찾는다. excludeId 는 자기 자신 제외(편집 시) 용 */
+  private findBySymbolsKey(
+    key: string,
+    excludeId?: string,
+  ): typeof datasets.$inferSelect | undefined {
+    return this.db
+      .select()
+      .from(datasets)
+      .where(eq(datasets.symbolsKey, key))
+      .all()
+      .find((row) => row.id !== excludeId);
   }
 
   getCoverage(datasetId: string) {
@@ -191,15 +262,22 @@ export class DatasetService {
     const existing = this.db.select().from(datasets).where(eq(datasets.name, name)).get();
     if (existing) throw new Error(`같은 이름의 데이터셋이 이미 있습니다: ${name}`);
 
+    // 중복은 접는다 (updateSymbols·importCsv 와 같은 관례) — 남겨두면 같은 종목을 두 번
+    // 긁고 재무 쪽 symbolTotal·예상 호출 수까지 부푼다
+    const sortedSymbols = [...new Set(symbols)].sort();
+    const key = symbolsKey(sortedSymbols);
+    const duplicate = this.findBySymbolsKey(key);
+    if (duplicate) throw new DuplicateSymbolGroupError(duplicate.name);
+
     const now = this.clock.now();
     const row: typeof datasets.$inferInsert = {
       id: newId('ds'),
       name,
       market,
-      timeframe: collect === '1m' ? '1h' : '1d',
-      // 중복은 접는다 (updateSymbols·importCsv 와 같은 관례) — 남겨두면 같은 종목을 두 번
-      // 긁고 재무 쪽 symbolTotal·예상 호출 수까지 부푼다
-      symbolsJson: JSON.stringify([...new Set(symbols)].sort()),
+      timeframe: legacyConsumeDefault(collect),
+      defaultTimeframe: collect,
+      symbolsKey: key,
+      symbolsJson: JSON.stringify(sortedSymbols),
       description: null,
       createdAtMs: now,
       updatedAtMs: now,
@@ -273,7 +351,11 @@ export class DatasetService {
       await this.candleRepository.saveCandles(dataset.id, parsed.candles);
       if (hourly !== null) await this.candleRepository.saveCandles(dataset.id, hourly);
 
-      await this.refreshCoverage(dataset.id, request.market, dataset.timeframe as Timeframe);
+      await this.refreshCoverage(
+        dataset.id,
+        request.market,
+        sliceForTimeframe(request.timeframe),
+      );
       const csvHash = createHash('sha256').update(request.csvContent).digest('hex');
       this.bumpVersion(dataset.id, `${request.symbol}:${request.timeframe}:${csvHash}`, now);
 
@@ -338,22 +420,32 @@ export class DatasetService {
       const symbols = new Set(JSON.parse(existing.symbolsJson) as string[]);
       if (!symbols.has(request.symbol)) {
         symbols.add(request.symbol);
+        const sorted = [...symbols].sort();
+        const key = symbolsKey(sorted);
+        const duplicate = this.findBySymbolsKey(key, existing.id);
+        if (duplicate) throw new DuplicateSymbolGroupError(duplicate.name);
         this.db
           .update(datasets)
-          .set({ symbolsJson: JSON.stringify([...symbols].sort()), updatedAtMs: nowMs })
+          .set({ symbolsJson: JSON.stringify(sorted), symbolsKey: key, updatedAtMs: nowMs })
           .where(eq(datasets.id, existing.id))
           .run();
+        return { ...existing, symbolsJson: JSON.stringify(sorted), symbolsKey: key };
       }
-      return { ...existing, symbolsJson: JSON.stringify([...new Set([...JSON.parse(existing.symbolsJson) as string[], request.symbol])].sort()) };
+      return existing;
     }
 
-    // 데이터셋의 timeframe 은 백테스트가 소비하는 기준 — 1m import 도 1h 로 사전 집계되므로 1h 로 둔다
+    // 데이터셋의 defaultTimeframe 은 백테스트가 소비하는 기준 — 1m import 도 1h 로
+    // 사전 집계되므로 defaultTimeframe 은 1m(레거시 컬럼엔 1h 를 기록해 호환한다)
+    const defaultTimeframe: DatasetSlice = request.timeframe === '1d' ? '1d' : '1m';
+    const sortedSymbols = [request.symbol];
     const row: typeof datasets.$inferInsert = {
       id: newId('ds'),
       name: request.datasetName,
       market: request.market,
-      timeframe: '1h',
-      symbolsJson: JSON.stringify([request.symbol]),
+      timeframe: legacyConsumeDefault(defaultTimeframe),
+      defaultTimeframe,
+      symbolsKey: symbolsKey(sortedSymbols),
+      symbolsJson: JSON.stringify(sortedSymbols),
       description: null,
       createdAtMs: nowMs,
       updatedAtMs: nowMs,
@@ -386,10 +478,14 @@ export class DatasetService {
     }
 
     const sorted = [...symbols].sort();
+    const key = symbolsKey(sorted);
+    const duplicate = this.findBySymbolsKey(key, datasetId);
+    if (duplicate) throw new DuplicateSymbolGroupError(duplicate.name);
+
     const now = this.clock.now();
     this.db
       .update(datasets)
-      .set({ symbolsJson: JSON.stringify(sorted), updatedAtMs: now })
+      .set({ symbolsJson: JSON.stringify(sorted), symbolsKey: key, updatedAtMs: now })
       .where(eq(datasets.id, datasetId))
       .run();
     // 심볼 구성은 백테스트가 보는 유효 데이터가 바뀌는 변경이다 — 버전에 반영 (§9.5)
@@ -472,7 +568,21 @@ export class DatasetService {
     if (!dataset.symbols.includes(symbol)) {
       throw new Error(`이 데이터셋에 없는 심볼입니다: ${symbol}`);
     }
-    const available = availableTimeframes(dataset.timeframe);
+
+    // 허용 timeframe = 슬라이스가 보관하는 timeframe 합집합 중 실제 캔들이 있는 것.
+    // 데이터셋은 종목 그룹이라 두 슬라이스(1d·1m)의 데이터가 동시에 존재할 수 있다 —
+    // 예전처럼 dataset.timeframe 하나로 두 가지만 고정할 수 없다.
+    const candidateTimeframes = [...new Set(ALL_SLICES.flatMap((slice) => sliceTimeframes(slice)))];
+    const available: Timeframe[] = [];
+    for (const candidate of candidateTimeframes) {
+      const timestamps = await this.candleRepository.getTimestamps(
+        datasetId,
+        dataset.market,
+        candidate,
+        symbol,
+      );
+      if (timestamps.length > 0) available.push(candidate);
+    }
     if (!available.includes(timeframe)) {
       throw new Error(`이 데이터셋은 ${available.join('/')} 만 제공합니다`);
     }
@@ -492,10 +602,14 @@ export class DatasetService {
       }
     }
 
-    // coverage 는 데이터셋 timeframe 기준 — 다른 timeframe 뷰에 근사 음영을 그리지 않는다
+    // 커버리지 음영은 그 슬라이스의 coverage 계산 기준 timeframe 일 때만 그린다
+    // (1d 슬라이스 → 1d, 1m 슬라이스 → 1h) — 다른 timeframe 뷰에 근사 음영을 그리지 않는다
     let missingRanges: Array<{ fromTsMs: number; toTsMs: number }> = [];
-    if (timeframe === dataset.timeframe) {
-      const row = this.getCoverage(datasetId).find((coverage) => coverage.symbol === symbol);
+    const slice = sliceForTimeframe(timeframe);
+    if (coverageTimeframeForSlice(slice) === timeframe) {
+      const row = this.getCoverage(datasetId).find(
+        (coverage) => coverage.symbol === symbol && coverage.slice === slice,
+      );
       if (row?.missingRangesJson) {
         missingRanges = (
           JSON.parse(row.missingRangesJson) as Array<{ fromTsMs: number; toTsMs: number }>
@@ -540,11 +654,13 @@ export class DatasetService {
       .run();
   }
 
-  async refreshCoverage(datasetId: string, market: Market, timeframe: Timeframe): Promise<void> {
+  /** slice 별 coverage 갱신 — coverageTimeframeForSlice(slice) 기준 timestamps 로 계산하고 그 슬라이스 행만 delete+insert 한다 */
+  async refreshCoverage(datasetId: string, market: Market, slice: DatasetSlice): Promise<void> {
     const session = getSessionForMarket(market);
     const dataset = this.db.select().from(datasets).where(eq(datasets.id, datasetId)).get();
     if (!dataset) return;
     const symbols = JSON.parse(dataset.symbolsJson) as string[];
+    const timeframe = coverageTimeframeForSlice(slice);
 
     // 계산(비동기)을 끝낸 뒤 삭제+삽입은 단일 트랜잭션으로 —
     // 동시 조회가 비어 있거나 반쯤 채워진 coverage 를 보지 않는다
@@ -560,6 +676,7 @@ export class DatasetService {
       rows.push({
         datasetId,
         symbol,
+        slice,
         firstTsMs: coverage.firstTsMs,
         lastTsMs: coverage.lastTsMs,
         barCount: coverage.barCount,
@@ -570,7 +687,9 @@ export class DatasetService {
     }
 
     this.db.transaction((tx) => {
-      tx.delete(dataCoverage).where(eq(dataCoverage.datasetId, datasetId)).run();
+      tx.delete(dataCoverage)
+        .where(and(eq(dataCoverage.datasetId, datasetId), eq(dataCoverage.slice, slice)))
+        .run();
       for (const row of rows) tx.insert(dataCoverage).values(row).run();
     });
   }

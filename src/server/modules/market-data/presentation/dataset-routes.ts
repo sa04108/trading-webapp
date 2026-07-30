@@ -19,7 +19,7 @@ type PreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void
 const importFieldsSchema = z.object({
   datasetName: z.string().min(1).max(64),
   market: z.enum(['KR', 'US']),
-  timeframe: z.enum(['1m', '1h']),
+  timeframe: z.enum(['1m', '1d']),
   symbol: z.string().regex(/^[A-Za-z0-9._-]{1,20}$/),
 });
 

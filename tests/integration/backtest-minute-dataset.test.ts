@@ -111,7 +111,7 @@ describe('백테스트 1분봉 소비', () => {
     hourlyCandles = aggregateToHourly(minuteCandles, KR_SESSION);
     await ctx.container.candleRepository.saveCandles(datasetId, minuteCandles);
     await ctx.container.candleRepository.saveCandles(datasetId, hourlyCandles);
-    await ctx.container.datasetService.refreshCoverage(datasetId, 'KR', '1h');
+    await ctx.container.datasetService.refreshCoverage(datasetId, 'KR', '1m');
     ctx.container.datasetService.bumpVersion(datasetId, 'broker:1m:seed', Date.now());
   });
 
@@ -164,12 +164,14 @@ describe('백테스트 1분봉 소비', () => {
     expect(wrongTf.statusCode).toBe(400);
     expect(JSON.stringify(wrongTf.json())).toContain('timeframe');
 
-    // 1d 데이터셋에 1m 요청
+    // 1d 데이터셋에 1m 요청. 종목 구성은 beforeEach 의 kr-minute-v1(['005930'])과
+    // 겹치면 안 된다 — 종목 구성 유일성 검사(DuplicateSymbolGroupError)에 걸린다.
+    // 백테스트 유니버스는 여전히 005930 만 요청하므로 부가 종목은 결과에 영향 없다.
     const daily = ctx.container.datasetService.createBrokerDataset(
       'kr-daily-guard',
       'KR',
       '1d',
-      ['005930'],
+      ['005930', '000660'],
     );
     await ctx.container.candleRepository.saveCandles(
       daily.id,

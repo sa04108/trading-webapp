@@ -313,10 +313,20 @@ describe('BrokerSyncService (설계 2026-07-28-broker-sync-design.md)', () => {
     await first.done;
   });
 
-  it('rejects datasets whose timeframe has no collectable source timeframe', async () => {
+  /**
+   * 슬라이스 모델 전환 전에는 datasets.timeframe 원본 값이 '1h'|'1d' 가 아니면
+   * (예: 레거시 오염 데이터의 '1m') collectTimeframe 이 SyncUnsupportedDatasetError 로
+   * 막았다. 전환 후에는 defaultTimeframe('1d'|'1m') 이 유일한 근거이고
+   * legacyConsumeDefault 가 그 두 값을 전부 '1h'|'1d' 로 총사상하므로, 이 경로로는
+   * 더 이상 도달 불가능한 방어다 — defaultTimeframe 컬럼을 지정하지 않은(레거시) 행도
+   * DB 기본값 '1d' 로 채워져 정상적으로 수집된다. 방어 코드 자체는 유지하되(Task 4 가
+   * 슬라이스별 동기화를 재정비할 때 재평가), 이 테스트는 현재 실제 동작(우아한 성공)으로
+   * 갱신한다.
+   */
+  it('legacy 행(defaultTimeframe 미지정)도 DB 기본값 1d 로 정상 동기화된다', async () => {
     const { db, sync, clock } = buildHarness(new FakeSource([]));
     db.insert(
-      // 직접 삽입 — createBrokerDataset 은 1m/1d 만 허용하므로 우회해서 방어를 검증한다
+      // 직접 삽입 — createBrokerDataset 은 1m/1d 만 허용하므로 우회해서 레거시 행을 재현한다
       (await import('../../src/server/shared/db/schema.js')).datasets,
     )
       .values({
@@ -324,13 +334,18 @@ describe('BrokerSyncService (설계 2026-07-28-broker-sync-design.md)', () => {
         name: 'raw',
         market: 'KR',
         timeframe: '1m',
+        // defaultTimeframe 미지정 → 컬럼 기본값 '1d' 가 채워진다
         symbolsJson: '["005930"]',
         createdAtMs: clock.now(),
         updatedAtMs: clock.now(),
       })
       .run();
 
-    expect(() => sync.startSync('ds_raw1m')).toThrow(SyncUnsupportedDatasetError);
+    let result: { job: { id: string }; done: Promise<void> } | undefined;
+    expect(() => {
+      result = sync.startSync('ds_raw1m');
+    }).not.toThrow(SyncUnsupportedDatasetError);
+    await result?.done;
   });
 
   it('fails the job before fetching when free disk is below the threshold', async () => {

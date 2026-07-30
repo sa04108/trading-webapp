@@ -713,11 +713,13 @@ describe('market data (스펙 §11, §13)', () => {
       payload: { name: 'KR-이름변경', market: 'KR', collect: '1d', symbols: ['005930'] },
     });
     const dataset = created.json().dataset as { id: string; latestVersion: number };
+    // 종목 구성은 위 데이터셋과 달라야 한다 — 같으면 이름이 아니라 종목 구성
+    // 유일성 검사(DuplicateSymbolGroupError)에 걸려 이 데이터셋 자체가 생기지 않는다.
     await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/datasets',
       cookies: { qp_session: cookie },
-      payload: { name: 'KR-점유된이름', market: 'KR', collect: '1d', symbols: ['005930'] },
+      payload: { name: 'KR-점유된이름', market: 'KR', collect: '1d', symbols: ['000660'] },
     });
 
     // 이름만 변경 — 버전은 그대로 (이름은 §9.5 의 유효 데이터가 아니다)

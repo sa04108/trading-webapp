@@ -93,7 +93,11 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     await ctx.container.datasetService.importCsv({
       datasetName: 'kr-hourly-v1',
       market: 'KR',
-      timeframe: '1h',
+      // CSV import 는 1m|1d 만 받는다 — 이 CSV 는 세션 시간별 bucket 경계에 정확히
+      // 맞춰 한 시간에 한 행씩 찍혀 있어, 1m 로 표시해 넣어도 1h 집계 결과가
+      // 행 값과 그대로 같다 (aggregateToHourly 는 bucket 당 봉이 1개면 open/high/low/close 를
+      // 그대로 옮긴다).
+      timeframe: '1m',
       symbol: '005930',
       fileName: 'trend.csv',
       csvContent: buildTrendingHourlyCsv(),
@@ -594,7 +598,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       await small.container.datasetService.importCsv({
         datasetName: 'kr-hourly-v1',
         market: 'KR',
-        timeframe: '1h',
+        // 위 셋업과 같은 이유로 1m 표시 — CSV 는 시간 bucket 경계에 정확히 맞는 행이라
+        // 1h 집계 결과가 행 값과 같다.
+        timeframe: '1m',
         symbol: '005930',
         fileName: 'trend.csv',
         csvContent: buildTrendingHourlyCsv(),

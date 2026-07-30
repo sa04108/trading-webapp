@@ -276,7 +276,13 @@ export class BrokerSyncService {
         }
       }
 
-      await this.deps.datasetService.refreshCoverage(dataset.id, dataset.market, dataset.timeframe);
+      // Task 4 가 슬라이스별 동기화를 온전히 다룬다 — 여기서는 타입만 맞춘다:
+      // refreshCoverage 는 이제 timeframe 이 아니라 슬라이스를 받는다.
+      await this.deps.datasetService.refreshCoverage(
+        dataset.id,
+        dataset.market,
+        dataset.defaultTimeframe,
+      );
       candlesMs = this.deps.clock.now() - candlesStartedAtMs;
       if (totalRows > 0) {
         this.deps.datasetService.bumpVersion(
