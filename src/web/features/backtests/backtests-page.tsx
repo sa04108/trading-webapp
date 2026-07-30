@@ -85,7 +85,7 @@ export function BacktestsPage() {
   });
   const datasets = useQuery({
     queryKey: ['datasets'],
-    queryFn: () => api<{ datasets: Array<{ id: string; timeframe: string }> }>('/datasets'),
+    queryFn: () => api<{ datasets: Array<{ id: string; defaultTimeframe: string }> }>('/datasets'),
   });
   const strategyById = new Map((strategies.data?.strategies ?? []).map((s) => [s.id, s]));
 

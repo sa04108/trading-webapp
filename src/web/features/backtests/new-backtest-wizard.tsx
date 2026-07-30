@@ -19,6 +19,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { api, ApiError, postJson } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 import { datasetTimeframeLabel, formatKrw, timeframeLabel } from '@/lib/format';
+import { wizardTimeframes } from '@/features/datasets/dataset-slices';
 import { costProfileLabel, slippageProfileLabel } from './profile-labels';
 import { useStockNames } from '@/lib/use-stock-names';
 import { requestToFormState } from './prefill';
@@ -72,7 +73,8 @@ export function NewBacktestWizard() {
   const [strategyId, setStrategyId] = useState<string | null>(null);
   const [parameters, setParameters] = useState<Record<string, string>>({});
   const [datasetId, setDatasetId] = useState<string | null>(null);
-  // 소비 봉 주기 — '' 는 데이터셋 기본 (1h 데이터셋이면 1h)
+  // 소비 봉 주기 — '' 는 아직 정해지지 않음(프리필 초기값이거나 데이터셋 미선택). 사용자가
+  // 목록에서 데이터셋을 고르면 그 자리에서 wizardTimeframes 첫 항목으로 명시값을 채운다.
   const [timeframe, setTimeframe] = useState('');
   const [symbols, setSymbols] = useState<string[]>([]);
   const [from, setFrom] = useState('');
@@ -122,6 +124,8 @@ export function NewBacktestWizard() {
 
   const selectedStrategy = strategies.data?.strategies.find((s) => s.id === strategyId) ?? null;
   const selectedDataset = datasets.data?.datasets.find((d) => d.id === datasetId) ?? null;
+  // 카드 노출·기본값 계산에 반복해서 쓰인다 — 보유 슬라이스(hasData) 기준으로 도출
+  const timeframeOptions = selectedDataset ? wizardTimeframes(selectedDataset.slices) : [];
   // 선택 후보 전체를 한 번에 조회한다 — 체크박스와 검토 단계가 같은 Map 을 쓴다.
   const stockNames = useStockNames(selectedDataset?.symbols ?? []);
   const nameOf = (symbol: string): string | null => stockNames.get(symbol)?.name ?? null;
@@ -221,10 +225,10 @@ export function NewBacktestWizard() {
       parameters: parsedParams,
       datasetId: selectedDataset.id,
       // 항상 명시해 보낸다 — 결과·복제가 "무슨 봉으로 돌렸는지" 를 들고 다니게 (§9.5)
-      timeframe: (timeframe === '' ? selectedDataset.timeframe : timeframe) as
-        | '1m'
-        | '1h'
-        | '1d',
+      // 사용자가 카드를 만지지 않았으면(timeframe==='') 도출 목록의 첫 항목이 기본이다
+      timeframe: (timeframe === ''
+        ? (timeframeOptions[0] ?? selectedDataset.timeframe)
+        : timeframe) as '1m' | '1h' | '1d',
       universe: { type: 'SYMBOLS', symbols },
       period: { from, to },
       capital: { initialCash: cash, currency: 'KRW' },
@@ -470,7 +474,10 @@ export function NewBacktestWizard() {
               type="button"
               onClick={() => {
                 setDatasetId(dataset.id);
-                setTimeframe(''); // 데이터셋 기본으로 리셋 — 이전 선택이 새 데이터셋에 새지 않게
+                // 새 데이터셋의 슬라이스로 다시 도출한 첫 항목을 기본값으로 명시한다 —
+                // 이전 선택이 새 데이터셋에 새지 않게
+                const options = wizardTimeframes(dataset.slices);
+                setTimeframe(options[0] ?? dataset.timeframe);
                 setSymbols(dataset.symbols);
               }}
               className={cn(
@@ -485,26 +492,31 @@ export function NewBacktestWizard() {
               </p>
             </button>
           ))}
-          {selectedDataset?.timeframe === '1h' ? (
+          {timeframeOptions.length >= 2 ? (
             <Card>
               <CardHeader>
                 <CardTitle className="text-base">봉 주기</CardTitle>
-                <CardDescription>
-                  1분봉은 봉 수가 약 55배라 실행이 느리고, 기간·종목이 많으면 상한에 걸릴 수
-                  있습니다.
-                </CardDescription>
+                {timeframeOptions.includes('1m') ? (
+                  <CardDescription>
+                    1분봉은 봉 수가 약 55배라 실행이 느리고, 기간·종목이 많으면 상한에 걸릴 수
+                    있습니다.
+                  </CardDescription>
+                ) : null}
               </CardHeader>
               <CardContent>
                 <Select
-                  value={timeframe === '' ? '1h' : timeframe}
+                  value={timeframe === '' ? (timeframeOptions[0] ?? '') : timeframe}
                   onValueChange={(value) => setTimeframe(value)}
                 >
                   <SelectTrigger className="h-11 w-full sm:w-56">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="1h">1시간봉</SelectItem>
-                    <SelectItem value="1m">1분봉</SelectItem>
+                    {timeframeOptions.map((option) => (
+                      <SelectItem key={option} value={option}>
+                        {timeframeLabel(option)}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </CardContent>

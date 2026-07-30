@@ -545,7 +545,7 @@ export function BacktestDetailPage() {
   });
   const datasets = useQuery({
     queryKey: ['datasets'],
-    queryFn: () => api<{ datasets: Array<{ id: string; timeframe: string }> }>('/datasets'),
+    queryFn: () => api<{ datasets: Array<{ id: string; defaultTimeframe: string }> }>('/datasets'),
   });
 
   if (isLoading || !job) {
