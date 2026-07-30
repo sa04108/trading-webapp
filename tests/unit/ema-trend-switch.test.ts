@@ -119,6 +119,36 @@ describe('실행 동작', () => {
     expect(result.fills).toHaveLength(0);
   });
 
+  it('진입가 위로 떨어져도 고점 대비 폭을 넘으면 STOP 이다 (트레일링 스톱)', () => {
+    // 고정 스톱은 진입가 − 2×ATR 로 **진입가 아래**다. 진입가보다 높은 종가에서
+    // STOP 이 나오려면 손절선이 고점을 따라 올라와 있어야만 한다 — updateTrail 없이는
+    // 이 경로에서 TREND_END 로 청산된다.
+    const candles: Candle[] = [];
+    for (let index = 0; index < 46; index += 1) {
+      const close =
+        index < 25
+          ? 1_000 + (index % 2 === 0 ? 10 : -10) // 워밍업 진동 (진입 신호 없음)
+          : index <= 40
+            ? 1_000 + (index - 24) * 40 // 급상승 — 고점 1_640
+            : 1_300; // 급락하되 진입 체결가(1_080)보다 훨씬 높다
+      candles.push(candle('LEV', index, close));
+    }
+    const result = runBacktest(emaTrendSwitchStrategy, {
+      candles,
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: FAST_PARAMS,
+      randomSeed: 1,
+      maxPositions: 5,
+    });
+    const buy = result.fills.find((fill) => fill.side === 'BUY');
+    const sell = result.fills.find((fill) => fill.side === 'SELL');
+    expect(buy?.price).toBe(1_080); // 신호봉(index 25) 다음 봉 시가
+    expect(sell?.reason).toBe('STOP');
+    // 체결가가 진입가보다 높다 = 고정 스톱으로는 설명되지 않는 손절이다
+    expect(sell?.price as number).toBeGreaterThan(buy?.price as number);
+  });
+
   it('추세가 꺾이면 청산한다 (TREND_END 또는 STOP)', () => {
     // 워밍업 25 + 상승 20 + 급락 15
     const candles: Candle[] = [];
