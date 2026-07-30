@@ -156,6 +156,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       cookies: { qp_session: cookie },
     });
     expect((trades.json().trades as unknown[]).length).toBeGreaterThan(0);
+    // 페이지네이션 UI 가 {현재}/{전체} 페이지를 계산하려면 필터 기준 총 건수가 필요하다
+    expect(trades.json().total).toBe(body.metrics.tradeCount);
 
     // 차트 시리즈 (다운샘플)
     const series = await ctx.app.inject({

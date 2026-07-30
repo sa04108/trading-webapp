@@ -125,13 +125,14 @@ function TradesSection({
   const [symbol, setSymbol] = useState<string>('ALL');
   const [page, setPage] = useState(0);
   const [pageSizeText, setPageSizeText] = useState('10');
-  const pageSize = parsePageSize(pageSizeText, 10, 10);
+  const pageSize = parsePageSize(pageSizeText, 10);
   const { data, isLoading } = useBacktestTrades(
     jobId,
     { limit: pageSize, offset: page * pageSize, ...(symbol !== 'ALL' ? { symbol } : {}) },
     true,
   );
   const trades = data?.trades ?? [];
+  const pageCount = Math.max(1, Math.ceil((data?.total ?? 0) / pageSize));
   const openRows = page === 0 ? openPositionRows(run?.openPositionsJson ?? null, symbol, periodTo) : [];
 
   return (
@@ -159,6 +160,24 @@ function TradesSection({
         </Select>
       </CardHeader>
       <CardContent>
+        <div className="mb-2 flex justify-end">
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            페이지당
+            <Input
+              type="number"
+              min={1}
+              max={200}
+              value={pageSizeText}
+              onChange={(e) => {
+                setPageSizeText(e.target.value);
+                setPage(0);
+              }}
+              className="h-8 w-20"
+              aria-label="거래 내역 페이지당 표시 수"
+            />
+            건
+          </label>
+        </div>
         {isLoading ? (
           <Skeleton className="h-32 w-full" />
         ) : trades.length === 0 && openRows.length === 0 ? (
@@ -264,29 +283,13 @@ function TradesSection({
           >
             이전
           </Button>
-          <div className="flex items-center gap-3">
-            <span className="text-xs text-muted-foreground">{page + 1} 페이지</span>
-            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              페이지당
-              <Input
-                type="number"
-                min={1}
-                max={10}
-                value={pageSizeText}
-                onChange={(e) => {
-                  setPageSizeText(e.target.value);
-                  setPage(0);
-                }}
-                className="h-8 w-20"
-                aria-label="거래 내역 페이지당 표시 수"
-              />
-              건
-            </label>
-          </div>
+          <span className="text-xs text-muted-foreground">
+            {page + 1} / {pageCount} 페이지
+          </span>
           <Button
             variant="outline"
             size="sm"
-            disabled={trades.length < pageSize}
+            disabled={page >= pageCount - 1}
             onClick={() => setPage((p) => p + 1)}
           >
             다음

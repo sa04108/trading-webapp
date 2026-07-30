@@ -1,4 +1,4 @@
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import {
   backtestDrawdownPoints,
@@ -75,7 +75,7 @@ export class ResultsService {
   getTrades(jobId: string, options: { limit: number; offset: number; symbol?: string }) {
     const conditions = [eq(backtestTrades.jobId, jobId)];
     if (options.symbol) conditions.push(eq(backtestTrades.symbol, options.symbol));
-    return this.db
+    const trades = this.db
       .select()
       .from(backtestTrades)
       .where(and(...conditions))
@@ -83,6 +83,14 @@ export class ResultsService {
       .limit(options.limit)
       .offset(options.offset)
       .all();
+    // 페이지네이션 UI 가 전체 페이지 수를 계산할 수 있게 필터 기준 총 건수를 함께 준다
+    const total =
+      this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(backtestTrades)
+        .where(and(...conditions))
+        .get()?.count ?? 0;
+    return { trades, total };
   }
 
   /** 전체 결과 export (다운샘플 없음) */

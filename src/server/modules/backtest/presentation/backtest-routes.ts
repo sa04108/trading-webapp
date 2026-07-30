@@ -453,13 +453,11 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
         .send({ error: '쿼리 파라미터가 올바르지 않습니다 (limit/offset/symbol)' });
     }
     const query = parsedQuery.data;
-    return {
-      trades: results.getTrades(id, {
-        limit: query.limit,
-        offset: query.offset,
-        ...(query.symbol !== undefined ? { symbol: query.symbol } : {}),
-      }),
-    };
+    return results.getTrades(id, {
+      limit: query.limit,
+      offset: query.offset,
+      ...(query.symbol !== undefined ? { symbol: query.symbol } : {}),
+    });
   });
 
   app.get('/backtests/:id/series', { preHandler: requireAuth }, async (request, reply) => {

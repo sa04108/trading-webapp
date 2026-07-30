@@ -107,7 +107,7 @@ export function useBacktestTrades(
   if (options.symbol) params.set('symbol', options.symbol);
   return useQuery({
     queryKey: ['backtests', jobId, 'trades', options],
-    queryFn: () => api<{ trades: TradeRow[] }>(`/backtests/${jobId}/trades?${params}`),
+    queryFn: () => api<{ trades: TradeRow[]; total: number }>(`/backtests/${jobId}/trades?${params}`),
     enabled,
     staleTime: Infinity,
   });
