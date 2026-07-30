@@ -324,7 +324,9 @@ describe('BrokerSyncService (설계 2026-07-28-broker-sync-design.md)', () => {
    * 갱신한다.
    */
   it('legacy 행(defaultTimeframe 미지정)도 DB 기본값 1d 로 정상 동기화된다', async () => {
-    const { db, sync, clock } = buildHarness(new FakeSource([]));
+    const { db, datasetService, sync, clock } = buildHarness(
+      new FakeSource([dailyCandle('005930', MON_0900_KST)]),
+    );
     db.insert(
       // 직접 삽입 — createBrokerDataset 은 1m/1d 만 허용하므로 우회해서 레거시 행을 재현한다
       (await import('../../src/server/shared/db/schema.js')).datasets,
@@ -346,6 +348,19 @@ describe('BrokerSyncService (설계 2026-07-28-broker-sync-design.md)', () => {
       result = sync.startSync('ds_raw1m');
     }).not.toThrow(SyncUnsupportedDatasetError);
     await result?.done;
+
+    // done 은 실패해도 reject 하지 않는다(실패는 job 레코드에 기록된다) — 상태를 직접 확인해야
+    // "예외를 안 던졌다"는 것과 "실제로 완료됐다"를 혼동하지 않는다
+    const finished = datasetService.getImportJob(result!.job.id);
+    expect(finished?.status).toBe('COMPLETED');
+
+    const state = db
+      .select()
+      .from(brokerSyncState)
+      .where(eq(brokerSyncState.datasetId, 'ds_raw1m'))
+      .get();
+    expect(state?.slice).toBe('1d');
+    expect(state?.backfillDoneAtMs).not.toBeNull();
   });
 
   it('fails the job before fetching when free disk is below the threshold', async () => {
