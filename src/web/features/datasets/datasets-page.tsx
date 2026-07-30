@@ -3,6 +3,7 @@ import {
   Check,
   CloudDownload,
   Info,
+  Lock,
   Pencil,
   Plus,
   RefreshCw,
@@ -42,13 +43,15 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { api, postForm, postJson } from '@/lib/api-client';
-import { datasetTimeframeLabel, formatDate } from '@/lib/format';
+import { formatDate } from '@/lib/format';
 import { useMarketSupport, type MarketSupport } from '@/lib/use-market-support';
 import { useStockNames, type StockInfo } from '@/lib/use-stock-names';
 import { cn } from '@/lib/utils';
 import { CandleInspectDrawer } from './candle-inspect-drawer';
+import { sliceHasData, sliceLabel, type DatasetSlice } from './dataset-slices';
 
 interface DatasetSummary {
   id: string;
@@ -64,6 +67,7 @@ interface DatasetSummary {
 
 interface CoverageRow {
   symbol: string;
+  slice: DatasetSlice;
   firstTsMs: number | null;
   lastTsMs: number | null;
   barCount: number;
@@ -220,6 +224,7 @@ function FactsInfoTooltip({ factsEstimate }: { factsEstimate: FactsSyncEstimate 
 
 function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
   const queryClient = useQueryClient();
+  const [slice, setSlice] = useState<DatasetSlice>(dataset.defaultTimeframe);
   const [startedJobId, setStartedJobId] = useState<string | null>(null);
   const [newSymbol, setNewSymbol] = useState('');
   // null = 보기 모드, 문자열 = 편집 중인 입력값
@@ -239,7 +244,10 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
         `/datasets/${dataset.id}/coverage`,
       ),
   });
-  const coverageBySymbol = new Map(data?.coverage.map((row) => [row.symbol, row]) ?? []);
+  const coverageBySymbol = new Map(
+    data?.coverage.filter((row) => row.slice === slice).map((row) => [row.symbol, row]) ?? [],
+  );
+  const hasSliceData = sliceHasData(dataset.slices, slice);
   const syncEstimate = data?.syncEstimate;
   const factsEstimate = syncEstimate?.facts;
   const stockNames = useStockNames(dataset.symbols);
@@ -277,10 +285,13 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
     void queryClient.invalidateQueries({ queryKey: ['datasets', dataset.id, 'coverage'] });
   }, [syncJob.data, syncJobId, dataset.name, dataset.id, queryClient]);
 
+  // 동기화 가드는 데이터셋 단위다(서버) — 스위치로 슬라이스를 바꿔도 실행 중인
+  // syncJobId 는 그대로이므로 "동기화 취소" 버튼이 계속 보이는 것이 올바른 동작이다.
   const syncMutation = useMutation({
     mutationFn: () =>
       postJson<{ job: { id: string } }>('/datasets/sync', {
         datasetId: dataset.id,
+        slice,
         includeFacts,
       }),
     onSuccess: ({ job }) => setStartedJobId(job.id),
@@ -388,9 +399,17 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
             </span>
           )}
           <Badge variant="secondary">{dataset.market}</Badge>
-          {/* 1h 데이터셋의 실체는 1m 수집 + 1h 집계 (§11 관례) — 1h 만 표시하면 수집 봉과 불일치 */}
-          <Badge variant="secondary">{datasetTimeframeLabel(dataset.timeframe)}</Badge>
           <Badge variant="outline">v{dataset.latestVersion}</Badge>
+          <Tabs value={slice} onValueChange={(v) => setSlice(v as DatasetSlice)}>
+            <TabsList className="h-8">
+              <TabsTrigger value="1d" className="text-xs">
+                일봉
+              </TabsTrigger>
+              <TabsTrigger value="1m" className="text-xs">
+                분봉
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
           <span className="ml-auto flex items-center gap-2">
             {syncJobId === null ? (
               <span className="flex items-center gap-1.5">
@@ -445,77 +464,86 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
-        {syncJobId !== null ? (
-          <p className="text-xs text-muted-foreground" aria-live="polite">
-            {progressLabel(syncJob.data?.job)}
-          </p>
-        ) : syncEstimate ? (
-          <p
-            className={cn(
-              'text-xs',
-              factsEstimate?.basis === 'PLANNED' && factsEstimate.overDailyLimit
-                ? 'text-destructive'
-                : 'text-muted-foreground',
-            )}
-          >
-            {syncEstimate.candles.basis === 'LAST_RUN'
-              ? `봉 ${formatEstimate(syncEstimate.candles.ms)} (직전 실행 기준)`
-              : '첫 수집은 소요 시간을 예측할 수 없습니다'}
-            {includeFacts && factsEstimate?.basis === 'PLANNED'
-              ? ` + 재무 ${formatYearRange(factsEstimate.fromYear, factsEstimate.toYear)} · ${formatEstimate(factsEstimate.estimatedMs)}`
-              : ''}
-            {includeFacts && factsEstimate?.basis === 'AFTER_CANDLES'
-              ? ' + 재무 범위는 봉 수집 후 결정됩니다'
-              : ''}
-            {includeFacts && factsEstimate?.basis === 'PLANNED' && factsEstimate.overDailyLimit
-              ? ' · DART 일일 한도(40,000회)를 넘습니다 — 남은 구간은 다음 날 이어받으세요'
-              : ''}
-          </p>
-        ) : null}
-        {dataset.symbols.map((symbol) => {
-          const row = coverageBySymbol.get(symbol);
-          return (
-            <div key={symbol} className="flex flex-wrap items-center justify-between gap-2">
-              <span className="flex items-center gap-1 font-medium">
-                <button
-                  type="button"
-                  className="underline-offset-2 hover:underline"
-                  onClick={() => setInspectSymbol(symbol)}
-                >
-                  {symbol}
-                </button>
-                {stockNames.get(symbol) ? (
-                  <span className="font-normal text-muted-foreground">
-                    {stockNames.get(symbol)!.name}
-                  </span>
-                ) : null}
-                <button
-                  type="button"
-                  aria-label={`${symbol} 수집 제외`}
-                  className="text-muted-foreground hover:text-destructive disabled:opacity-50"
-                  disabled={symbolsMutation.isPending || dataset.symbols.length <= 1}
-                  onClick={() => symbolsMutation.mutate({ removeSymbols: [symbol] })}
-                >
-                  <X className="size-3.5" />
-                </button>
-              </span>
-              <span className="text-muted-foreground">
-                {row && row.barCount > 0 ? (
-                  <>
-                    {formatDate(row.firstTsMs)} ~ {formatDate(row.lastTsMs)} · {row.barCount}봉
-                    {row.expectedBarCount !== null && row.expectedBarCount > row.barCount ? (
-                      <Badge variant="destructive" className="ml-2">
-                        누락 {row.expectedBarCount - row.barCount}
-                      </Badge>
-                    ) : null}
-                  </>
-                ) : (
-                  '데이터 없음 — 동기화 또는 CSV 가져오기'
+        {!hasSliceData ? (
+          <div className="flex flex-col items-center gap-2 py-6 text-muted-foreground">
+            <Lock className="size-10" aria-hidden />
+            <p className="text-sm">{sliceLabel(slice)} 데이터가 없습니다 — 동기화가 필요합니다.</p>
+          </div>
+        ) : (
+          <>
+            {syncJobId !== null ? (
+              <p className="text-xs text-muted-foreground" aria-live="polite">
+                {progressLabel(syncJob.data?.job)}
+              </p>
+            ) : syncEstimate ? (
+              <p
+                className={cn(
+                  'text-xs',
+                  factsEstimate?.basis === 'PLANNED' && factsEstimate.overDailyLimit
+                    ? 'text-destructive'
+                    : 'text-muted-foreground',
                 )}
-              </span>
-            </div>
-          );
-        })}
+              >
+                {syncEstimate.candles.basis === 'LAST_RUN'
+                  ? `봉 ${formatEstimate(syncEstimate.candles.ms)} (직전 실행 기준)`
+                  : '첫 수집은 소요 시간을 예측할 수 없습니다'}
+                {includeFacts && factsEstimate?.basis === 'PLANNED'
+                  ? ` + 재무 ${formatYearRange(factsEstimate.fromYear, factsEstimate.toYear)} · ${formatEstimate(factsEstimate.estimatedMs)}`
+                  : ''}
+                {includeFacts && factsEstimate?.basis === 'AFTER_CANDLES'
+                  ? ' + 재무 범위는 봉 수집 후 결정됩니다'
+                  : ''}
+                {includeFacts && factsEstimate?.basis === 'PLANNED' && factsEstimate.overDailyLimit
+                  ? ' · DART 일일 한도(40,000회)를 넘습니다 — 남은 구간은 다음 날 이어받으세요'
+                  : ''}
+              </p>
+            ) : null}
+            {dataset.symbols.map((symbol) => {
+              const row = coverageBySymbol.get(symbol);
+              return (
+                <div key={symbol} className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="flex items-center gap-1 font-medium">
+                    <button
+                      type="button"
+                      className="underline-offset-2 hover:underline"
+                      onClick={() => setInspectSymbol(symbol)}
+                    >
+                      {symbol}
+                    </button>
+                    {stockNames.get(symbol) ? (
+                      <span className="font-normal text-muted-foreground">
+                        {stockNames.get(symbol)!.name}
+                      </span>
+                    ) : null}
+                    <button
+                      type="button"
+                      aria-label={`${symbol} 수집 제외`}
+                      className="text-muted-foreground hover:text-destructive disabled:opacity-50"
+                      disabled={symbolsMutation.isPending || dataset.symbols.length <= 1}
+                      onClick={() => symbolsMutation.mutate({ removeSymbols: [symbol] })}
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  </span>
+                  <span className="text-muted-foreground">
+                    {row && row.barCount > 0 ? (
+                      <>
+                        {formatDate(row.firstTsMs)} ~ {formatDate(row.lastTsMs)} · {row.barCount}봉
+                        {row.expectedBarCount !== null && row.expectedBarCount > row.barCount ? (
+                          <Badge variant="destructive" className="ml-2">
+                            누락 {row.expectedBarCount - row.barCount}
+                          </Badge>
+                        ) : null}
+                      </>
+                    ) : (
+                      '데이터 없음 — 동기화 또는 CSV 가져오기'
+                    )}
+                  </span>
+                </div>
+              );
+            })}
+          </>
+        )}
 
         <div className="space-y-1">
           <div className="flex items-center gap-2">
