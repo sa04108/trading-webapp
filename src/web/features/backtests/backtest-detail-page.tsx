@@ -7,6 +7,8 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
 import {
   Dialog,
   DialogContent,
@@ -57,6 +59,7 @@ import { StatusBadge } from './status-badge';
 import { formatSymbolSummary } from './symbol-summary';
 import { isTerminal, type BacktestMetrics, type JobSummary, type RunMetadata } from './types';
 import { costSummary } from './cost-summary';
+import { groupWarnings } from './warning-groups';
 
 function MetricCards({ metrics }: { metrics: BacktestMetrics }) {
   const cost = costSummary(metrics);
@@ -273,6 +276,82 @@ function TradesSection({
   );
 }
 
+function WarningsSection({ warnings }: { warnings: string[] }) {
+  const [grouped, setGrouped] = useState(true);
+  const [page, setPage] = useState(0);
+  const [pageSizeText, setPageSizeText] = useState('20');
+  const pageSize = Math.min(200, Math.max(1, Number.parseInt(pageSizeText, 10) || 20));
+
+  const rows = grouped ? groupWarnings(warnings).map((g) => g.label) : warnings;
+  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
+  const currentPage = Math.min(page, pageCount - 1);
+  const visible = rows.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+
+  return (
+    <Alert className="lg:col-span-2">
+      <AlertTitle>경고·한계</AlertTitle>
+      <AlertDescription>
+        <div className="mb-2 flex flex-wrap items-center gap-4">
+          <label className="flex items-center gap-1.5 text-xs">
+            <Checkbox
+              checked={grouped}
+              onCheckedChange={(checked) => {
+                setGrouped(checked === true);
+                setPage(0);
+              }}
+            />
+            묶어 보기
+          </label>
+          <label className="flex items-center gap-1.5 text-xs">
+            페이지당
+            <Input
+              type="number"
+              min={1}
+              max={200}
+              value={pageSizeText}
+              onChange={(e) => {
+                setPageSizeText(e.target.value);
+                setPage(0);
+              }}
+              className="h-8 w-20"
+              aria-label="페이지당 표시 수"
+            />
+            건
+          </label>
+        </div>
+        <ul className="list-disc space-y-1 pl-4">
+          {visible.map((warning) => (
+            <li key={warning}>{warning}</li>
+          ))}
+        </ul>
+        {pageCount > 1 ? (
+          <div className="mt-3 flex items-center justify-between">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={currentPage === 0}
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+            >
+              이전
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              {currentPage + 1} / {pageCount} 페이지
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={currentPage >= pageCount - 1}
+              onClick={() => setPage((p) => p + 1)}
+            >
+              다음
+            </Button>
+          </div>
+        ) : null}
+      </AlertDescription>
+    </Alert>
+  );
+}
+
 function RunMetadataCard({
   run,
   job,
@@ -350,18 +429,7 @@ function RunMetadataCard({
           ))}
         </CardContent>
       </Card>
-      {warnings.length > 0 ? (
-        <Alert className="lg:col-span-2">
-          <AlertTitle>경고·한계</AlertTitle>
-          <AlertDescription>
-            <ul className="list-disc space-y-1 pl-4">
-              {warnings.map((warning) => (
-                <li key={warning}>{warning}</li>
-              ))}
-            </ul>
-          </AlertDescription>
-        </Alert>
-      ) : null}
+      {warnings.length > 0 ? <WarningsSection warnings={warnings} /> : null}
     </div>
   );
 }
