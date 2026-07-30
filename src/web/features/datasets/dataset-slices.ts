@@ -13,6 +13,14 @@ export function sliceHasData(slices: readonly SliceState[], slice: DatasetSlice)
   return slices.some((s) => s.slice === slice && s.hasData);
 }
 
+/**
+ * request.timeframe 이 없는 옛 잡의 소비 봉 폴백 — 서버 legacyConsumeDefault 와 같은 규칙.
+ * '1m' → '1h', '1d' → '1d'.
+ */
+export function legacyConsumeTimeframe(defaultTimeframe: DatasetSlice): '1h' | '1d' {
+  return defaultTimeframe === '1m' ? '1h' : '1d';
+}
+
 /** 백테스트 위저드 봉 주기 선택지 — 데이터 있는 슬라이스에서만. 소비 기본(1d, 1h)이 앞 */
 export function wizardTimeframes(slices: readonly SliceState[]): Array<'1m' | '1h' | '1d'> {
   const result: Array<'1m' | '1h' | '1d'> = [];

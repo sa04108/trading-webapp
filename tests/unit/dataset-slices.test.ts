@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  legacyConsumeTimeframe,
   sliceHasData,
   sliceLabel,
   wizardTimeframes,
@@ -17,6 +18,13 @@ describe('sliceLabel / sliceHasData', () => {
     expect(sliceHasData(both, '1m')).toBe(true);
     expect(sliceHasData([{ slice: '1d', hasData: false }], '1d')).toBe(false);
     expect(sliceHasData([], '1m')).toBe(false);
+  });
+});
+
+describe('legacyConsumeTimeframe', () => {
+  it('서버 legacyConsumeDefault 와 같은 규칙으로 폴백한다 — 1m → 1h, 1d → 1d', () => {
+    expect(legacyConsumeTimeframe('1m')).toBe('1h');
+    expect(legacyConsumeTimeframe('1d')).toBe('1d');
   });
 });
 

@@ -19,7 +19,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { api, ApiError, postJson } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 import { formatKrw, timeframeLabel } from '@/lib/format';
-import { wizardTimeframes } from '@/features/datasets/dataset-slices';
+import { legacyConsumeTimeframe, wizardTimeframes } from '@/features/datasets/dataset-slices';
 import { costProfileLabel, slippageProfileLabel } from './profile-labels';
 import { useStockNames } from '@/lib/use-stock-names';
 import { requestToFormState } from './prefill';
@@ -190,7 +190,9 @@ export function NewBacktestWizard() {
 
   const paramValue = (spec: NumberParamSpec): string => parameters[spec.key] ?? '';
 
-  const buildRequest = (): BacktestRequestBody | string => {
+  // 위저드는 항상 timeframe 을 명시해 만든다(§9.5) — BacktestRequestBody 의 timeframe 이
+  // optional 인 건 옛 잡과의 호환 때문이지, 이 화면이 만드는 요청과는 무관하다.
+  const buildRequest = (): (BacktestRequestBody & { timeframe: '1m' | '1h' | '1d' }) | string => {
     if (!selectedStrategy) return '전략을 선택하세요';
     if (!selectedDataset || symbols.length === 0) return '데이터셋과 종목을 선택하세요';
     if (!from || !to || from > to) return '기간이 올바르지 않습니다';
@@ -227,7 +229,7 @@ export function NewBacktestWizard() {
       // 사용자가 카드를 만지지 않았으면(timeframe==='') 도출 목록의 첫 항목이 기본이다.
       // 도출 목록마저 비어 있는 극단적 경우엔 legacyConsumeDefault 와 같은 규칙으로 폴백한다.
       timeframe: (timeframe === ''
-        ? (timeframeOptions[0] ?? (selectedDataset.defaultTimeframe === '1m' ? '1h' : '1d'))
+        ? (timeframeOptions[0] ?? legacyConsumeTimeframe(selectedDataset.defaultTimeframe))
         : timeframe) as '1m' | '1h' | '1d',
       universe: { type: 'SYMBOLS', symbols },
       period: { from, to },
@@ -477,7 +479,7 @@ export function NewBacktestWizard() {
                 // 새 데이터셋의 슬라이스로 다시 도출한 첫 항목을 기본값으로 명시한다 —
                 // 이전 선택이 새 데이터셋에 새지 않게
                 const options = wizardTimeframes(dataset.slices);
-                setTimeframe(options[0] ?? (dataset.defaultTimeframe === '1m' ? '1h' : '1d'));
+                setTimeframe(options[0] ?? legacyConsumeTimeframe(dataset.defaultTimeframe));
                 setSymbols(dataset.symbols);
               }}
               className={cn(
@@ -704,7 +706,7 @@ export function NewBacktestWizard() {
               <Separator />
               <div className="flex justify-between gap-3">
                 <span className="shrink-0 text-muted-foreground">봉 주기</span>
-                <span>{timeframeLabel(request.timeframe ?? '1h')}</span>
+                <span>{timeframeLabel(request.timeframe)}</span>
               </div>
               <Separator />
               <div className="flex justify-between gap-3">

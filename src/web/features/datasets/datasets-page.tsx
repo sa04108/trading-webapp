@@ -466,7 +466,13 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
         {!hasSliceData ? (
           <div className="flex flex-col items-center gap-2 py-6 text-muted-foreground">
             <Lock className="size-10" aria-hidden />
-            <p className="text-sm">{sliceLabel(slice)} 데이터가 없습니다 — 동기화가 필요합니다.</p>
+            {syncJobId !== null ? (
+              <p className="text-sm" aria-live="polite">
+                {progressLabel(syncJob.data?.job)}
+              </p>
+            ) : (
+              <p className="text-sm">{sliceLabel(slice)} 데이터가 없습니다 — 동기화가 필요합니다.</p>
+            )}
           </div>
         ) : (
           <>
