@@ -155,6 +155,7 @@ export function registerDatasetRoutes(
         expectedBarCount: row.expectedBarCount,
         missingRanges: row.missingRangesJson ? JSON.parse(row.missingRangesJson) : [],
         computedAtMs: row.computedAtMs,
+        slice: row.slice,
       })),
       syncEstimate,
       note: '공휴일 캘린더 미반영: 공휴일이 누락 구간으로 보고될 수 있습니다.',

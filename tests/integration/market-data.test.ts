@@ -859,6 +859,49 @@ describe('market data (스펙 §11, §13)', () => {
    * 라우트 계약 — 슬라이스 (설계 2026-07-30-dataset-symbol-group-server, Task 5).
    */
   describe('라우트 계약 — 슬라이스', () => {
+    it('GET /datasets/:datasetId/coverage 응답에 각 행의 slice 필드가 포함된다', async () => {
+      const { username, password } = await createTestAdmin(ctx.container);
+      const login = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: { username, password },
+      });
+      const cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+
+      // 1d CSV import — slice: '1d'
+      const { payload, contentType } = multipartBody(
+        { datasetName: 'slice-test-1d', market: 'KR', timeframe: '1d', symbol: '005930' },
+        'daily.csv',
+        buildDailyCsv(10),
+      );
+      const imported = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/datasets/import',
+        headers: { 'content-type': contentType },
+        cookies: { qp_session: cookie },
+        payload,
+      });
+      expect(imported.statusCode).toBe(201);
+      const dataset = ctx.container.datasetService
+        .listDatasets()
+        .find((d) => d.name === 'slice-test-1d');
+      expect(dataset).toBeDefined();
+
+      // coverage 응답 확인
+      const coverage = await ctx.app.inject({
+        method: 'GET',
+        url: `/api/v1/datasets/${dataset!.id}/coverage`,
+        cookies: { qp_session: cookie },
+      });
+      expect(coverage.statusCode).toBe(200);
+      const body = coverage.json() as {
+        coverage: Array<{ symbol: string; slice: string }>;
+      };
+      expect(body.coverage).toHaveLength(1);
+      expect(body.coverage[0]!.symbol).toBe('005930');
+      expect(body.coverage[0]!.slice).toBe('1d');
+    });
+
     it('POST /datasets 는 같은 종목 구성을 409 로 거부한다', async () => {
       const { username, password } = await createTestAdmin(ctx.container);
       const login = await ctx.app.inject({
