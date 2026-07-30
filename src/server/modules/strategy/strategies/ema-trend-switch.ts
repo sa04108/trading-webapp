@@ -210,9 +210,13 @@ export const emaTrendSwitchStrategy: TradingStrategy<
 
       const spread = spreadPercent(symbolState, parameters.slowEmaBars);
       const stop = symbolState.holding.stopLevel;
+      // 진입가 위에서 걸린 트레일링 스톱은 손절이 아니라 이익 확정이다 —
+      // TRAIL_STOP 으로 구분해야 거래 내역이 수익 청산을 손절로 표기하지 않는다
       const reason =
         stop !== null && bar.close < stop
-          ? 'STOP'
+          ? bar.close > position.avgEntryPrice
+            ? 'TRAIL_STOP'
+            : 'STOP'
           : spread !== null && spread <= 0
             ? 'TREND_END'
             : holdLimitReached(symbolState.holding, parameters.maxHoldBars)

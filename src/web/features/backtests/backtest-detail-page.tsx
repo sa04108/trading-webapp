@@ -37,6 +37,7 @@ import { cn } from '@/lib/utils';
 import { SymbolLabel } from '@/components/symbol-label';
 import { useStockNames } from '@/lib/use-stock-names';
 import { useBacktestLive, useBacktestSeries, useBacktestTrades } from './api';
+import { exitReasonLabel } from './exit-reason';
 import { openPositionRows } from './open-position-rows';
 import { ParamHint } from './param-hint';
 import { extractNumberParams, paramLabel } from './param-specs';
@@ -234,17 +235,7 @@ function TradesSection({
                       {formatDuration(trade.holdingTimeMs)}
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
-                      {trade.exitReason === 'STOP'
-                        ? '손절'
-                        : trade.exitReason === 'TAKE_PROFIT'
-                          ? '익절'
-                          : trade.exitReason === 'TREND_END'
-                            ? '추세 반전'
-                            : trade.exitReason === 'TIME'
-                              ? '보유 기간 만료'
-                              : trade.exitReason === 'RSI_EXIT'
-                                ? 'RSI 회복'
-                                : (trade.exitReason ?? '-')}
+                      {exitReasonLabel(trade.exitReason)}
                     </TableCell>
                   </TableRow>
                 ))}
