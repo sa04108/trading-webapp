@@ -58,6 +58,8 @@ interface DatasetSummary {
   symbols: string[];
   latestVersion: number;
   runningSyncJobId: string | null;
+  defaultTimeframe: '1d' | '1m';
+  slices: Array<{ slice: '1d' | '1m'; hasData: boolean }>;
 }
 
 interface CoverageRow {

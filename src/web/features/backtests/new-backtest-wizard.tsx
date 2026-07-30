@@ -47,6 +47,8 @@ interface DatasetSummary {
   market: string;
   timeframe: string;
   symbols: string[];
+  defaultTimeframe: '1d' | '1m';
+  slices: Array<{ slice: '1d' | '1m'; hasData: boolean }>;
 }
 
 interface CommissionProfileSummary {
