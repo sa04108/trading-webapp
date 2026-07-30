@@ -233,7 +233,6 @@ export const emaTrendSwitchStrategy: TradingStrategy<
       }
 
       for (const symbol of barSymbols) {
-        const bar = context.bars.get(symbol) as NonNullable<ReturnType<typeof context.bars.get>>;
         const symbolState = getSymbolState(state, symbol);
         const position = context.portfolio.positions.get(symbol);
         if (position && position.quantity > 0) continue;
