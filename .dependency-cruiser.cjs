@@ -54,6 +54,14 @@ module.exports = {
       to: { path: 'src/server/modules/broker' },
     },
     {
+      name: 'market-data-no-facts',
+      severity: 'error',
+      comment:
+        'market-data → facts 금지 (§7) — 조립부가 factsPhase·factsSyncEstimator 클로저로 잇는다',
+      from: { path: 'src/server/modules/market-data' },
+      to: { path: 'src/server/modules/facts' },
+    },
+    {
       name: 'strategy-no-broker-adapter',
       severity: 'error',
       comment: 'strategy → broker adapter 금지 (§7)',

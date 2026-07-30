@@ -26,10 +26,25 @@ export class UnsupportedMarketSessionError extends Error {
   }
 }
 
+/**
+ * 시장 → 세션. **"이 시장을 지원하는가" 의 단일 출처다.**
+ *
+ * 이전에는 지원 여부가 `getSessionForMarket` 이 던진다는 사실 안에 암묵적으로만
+ * 있었다 — 화면이 그걸 물어볼 방법이 없어서 UI 에 시장 목록을 따로 박아야 했고,
+ * 세션이 추가되는 날 화면만 낡은 채로 남는다.
+ */
+const SESSIONS: Partial<Record<Market, ExchangeSession>> = { KR: KR_SESSION };
+
 /** 시장별 세션 해석. 세션이 정의되지 않은 시장은 명시적으로 거부한다. */
 export function getSessionForMarket(market: Market): ExchangeSession {
-  if (market === 'KR') return KR_SESSION;
-  throw new UnsupportedMarketSessionError(market);
+  const session = SESSIONS[market];
+  if (!session) throw new UnsupportedMarketSessionError(market);
+  return session;
+}
+
+/** 세션이 정의된 시장인지 — 데이터셋 생성·집계·coverage 가능 여부와 같은 질문이다 */
+export function hasMarketSession(market: Market): boolean {
+  return SESSIONS[market] !== undefined;
 }
 
 const MS_PER_MINUTE = 60_000;

@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import type { Clock } from '../../../shared/clock.js';
 import type { Logger } from '../../../shared/logger.js';
 import type { Fact } from '../domain/fact.js';
+import { planFactSync, type FactSyncMode } from '../domain/sync-plan.js';
+import type { FactCoverageStore } from './fact-coverage-store.js';
 import type {
   DatasetVersionBumper,
   FactIngestionGap,
@@ -15,9 +17,14 @@ export interface FactSyncRequest {
   readonly fromYear: number;
   readonly toYear: number;
   readonly consolidated: boolean;
+  /**
+   * FULL = 이력을 무시하고 지정 구간 전체 (CLI). INCREMENTAL = 미수집 연도 +
+   * 현재 연도 (웹). 웹이 매번 전 구간을 다시 받으면 45분짜리 버튼이 된다.
+   */
+  readonly mode: FactSyncMode;
 }
 
-/** 종목 하나가 끝날 때마다 호출된다 — 40분짜리 실행이 조용하지 않게 한다 */
+/** 종목 하나가 끝날 때마다 호출된다 — 45분짜리 실행이 조용하지 않게 한다 */
 export interface FactSyncProgress {
   readonly symbol: string;
   /** 1부터 시작하는 진행 번호 */
@@ -31,6 +38,11 @@ export interface FactSyncProgress {
 
 export interface FactSyncHooks {
   onSymbolDone?(progress: FactSyncProgress): void;
+  /**
+   * 종목 경계에서 확인하는 취소 신호. 봉 수집이 페이지 경계에서 확인하는 것과 같은
+   * 입자다 — 저장이 종목 단위이므로 여기서 멈추면 저장분과 이력이 정합하게 남는다.
+   */
+  shouldStop?(): boolean;
 }
 
 export interface FactSyncReport {
@@ -38,6 +50,11 @@ export interface FactSyncReport {
   readonly gaps: readonly FactIngestionGap[];
   /** 중단된 종목코드. 완주하면 null */
   readonly stoppedAtSymbol: string | null;
+  /**
+   * 중단 원인. 호출부가 잡 상태를 FAILED/CANCELLED 로 갈라야 하므로
+   * stoppedAtSymbol 만으로는 부족하다.
+   */
+  readonly stopReason: 'ERROR' | 'CANCELLED' | null;
   /** 중단 사유 + 이어받는 방법을 담은 한국어 안내. 완주하면 null */
   readonly failureMessage: string | null;
 }
@@ -49,10 +66,10 @@ export interface FactSyncReport {
  * 왜곡한다 (설계 §4.1-2).
  *
  * **종목 단위로 수집하고 종목 단위로 저장한다.** 전 종목을 모아 마지막에 한 번 저장하면
- * 200종목 × 12년 백필(종목·연도당 9회 ≈ 21,600 호출, 일 한도 20,000, rate limiter 로
- * 최소 40분)에서 180번째 종목의 오류 하나가 앞선 179종목의 결과를 통째로 버린다 —
- * 한도는 이미 소진된 상태로. 저장을 종목마다 끊으면 다시 실행할 때 `--from`/`--to` 를
- * 좁혀 남은 구간만 이어받을 수 있다.
+ * 200종목 × 12년 백필(종목·연도당 9회 ≈ 22,400 호출, 일 한도 40,000, rate limiter 로
+ * 최소 45분)에서 180번째 종목의 오류 하나가 앞선 179종목의 결과를 통째로 버린다.
+ * 저장을 종목마다 끊으면 수집 이력(dataset_facts_state)이 남아 다음 실행이 남은 종목만
+ * 이어받는다.
  */
 export class FactSyncService {
   constructor(
@@ -61,6 +78,7 @@ export class FactSyncService {
     private readonly logger: Logger,
     private readonly versions: DatasetVersionBumper,
     private readonly clock: Clock,
+    private readonly coverage: FactCoverageStore,
   ) {}
 
   async sync(request: FactSyncRequest, hooks: FactSyncHooks = {}): Promise<FactSyncReport> {
@@ -69,15 +87,63 @@ export class FactSyncService {
     // 헛돌리면 "버전이 움직였다" 는 신호가 의미를 잃는다.
     const fingerprintBefore = await this.storedFactsFingerprint(request.datasetId);
 
+    /**
+     * 중복 심볼은 접는다. `planFactSync` 가 Set 으로 접으므로 순회가 접지 않으면 실제
+     * 호출이 계획의 `calls` 를 넘고(`fnlttSinglAcntAll`·`irdsSttus` 에는 캐시가 없어
+     * 그대로 다시 쏜다) 화면의 예상 시간과 실행이 갈라진다. total 도 고유 종목 수여야
+     * 진행률이 100% 에 닿는다 (설계 §3).
+     */
+    const symbols = [...new Set(request.symbols)];
+
     const gaps: FactIngestionGap[] = [];
     let savedFacts = 0;
     let doneSymbols = 0;
     let stoppedAtSymbol: string | null = null;
+    let stopReason: 'ERROR' | 'CANCELLED' | null = null;
     let failureReason: string | null = null;
 
-    for (const [index, symbol] of request.symbols.entries()) {
+    // 계획은 추정 경로와 같은 함수로 만든다 — 화면의 "약 30분" 과 실제 호출이 갈리지
+    // 않게 한다 (domain/sync-plan.ts 헤더 참고)
+    const plan = planFactSync({
+      symbols,
+      fromYear: request.fromYear,
+      toYear: request.toYear,
+      currentYear: new Date(this.clock.now()).getUTCFullYear(),
+      coveredBySymbol: this.coverage.getCoveredYears(request.datasetId),
+      mode: request.mode,
+    });
+
+    for (const [index, symbol] of symbols.entries()) {
+      // 취소는 종목을 시작하기 전에 확인한다 — 시작한 종목을 중간에 버리면
+      // 저장분과 이력이 어긋난다
+      if (hooks.shouldStop?.()) {
+        stoppedAtSymbol = symbol;
+        stopReason = 'CANCELLED';
+        break;
+      }
+
+      const years = plan.yearsBySymbol.get(symbol) ?? [];
+      const shareYears = plan.shareYearsBySymbol.get(symbol) ?? [];
+      if (years.length === 0) {
+        // 받을 것이 없다 — 호출도 이력 갱신도 하지 않는다
+        doneSymbols += 1;
+        hooks.onSymbolDone?.({
+          symbol,
+          index: index + 1,
+          total: symbols.length,
+          savedFacts: 0,
+          gapCount: 0,
+        });
+        continue;
+      }
+
       try {
-        const scoped = { ...request, symbols: [symbol] };
+        const scoped = {
+          symbols: [symbol],
+          years,
+          shareYears,
+          consolidated: request.consolidated,
+        };
         // 종목별 호출이지만 corp_code 매핑과 주식총수(stockTotqySttus) 응답 캐시는 소스
         // 인스턴스 클로저 안에 살아 있다 — 종목마다 다시 내려받지 않는다
         // (dart-fact-source.ts 의 corpCodes·shareRowsCache 참고).
@@ -88,6 +154,9 @@ export class FactSyncService {
 
         // 종목마다 저장한다 — 뒤에서 터져도 여기까지는 남는다
         await this.repository.saveFacts(request.datasetId, facts);
+        // 저장 직후에 이력을 남긴다. 순서가 뒤집히면 저장 실패한 연도를
+        // 수집했다고 기록해 다음 실행이 그 구간을 건너뛴다.
+        this.coverage.addCoveredYears(request.datasetId, symbol, years, this.clock.now());
 
         savedFacts += facts.length;
         doneSymbols += 1;
@@ -95,7 +164,7 @@ export class FactSyncService {
         hooks.onSymbolDone?.({
           symbol,
           index: index + 1,
-          total: request.symbols.length,
+          total: symbols.length,
           savedFacts: facts.length,
           gapCount: symbolGaps.length,
         });
@@ -103,6 +172,7 @@ export class FactSyncService {
         // 그대로 던지면 지금까지 저장한 것을 알려줄 자리가 없다 — 리포트로 되돌려
         // CLI 가 어디까지 갔는지, 어떻게 이어받는지 말하게 한다.
         stoppedAtSymbol = symbol;
+        stopReason = 'ERROR';
         failureReason = error instanceof Error ? error.message : String(error);
         this.logger.error(
           {
@@ -111,7 +181,7 @@ export class FactSyncService {
             datasetId: request.datasetId,
             symbol,
             symbolIndex: index + 1,
-            symbolTotal: request.symbols.length,
+            symbolTotal: symbols.length,
             savedFacts,
             err: error,
           },
@@ -132,6 +202,8 @@ export class FactSyncService {
         savedFacts,
         gapCount: gaps.length,
         stoppedAtSymbol,
+        // 중단됐다는 사실만으로는 운영자가 실패와 취소를 구분할 수 없다
+        stopReason,
       },
       'fact sync finished',
     );
@@ -140,14 +212,19 @@ export class FactSyncService {
       savedFacts,
       gaps,
       stoppedAtSymbol,
+      stopReason,
       failureMessage:
         stoppedAtSymbol === null
           ? null
-          : `수집이 ${stoppedAtSymbol} 에서 중단됐습니다 ` +
-            `(${doneSymbols}/${request.symbols.length}종목 완료). ` +
-            `사유: ${failureReason ?? '알 수 없음'}. ` +
-            `여기까지 수집된 팩트 ${savedFacts}건은 이미 저장됐습니다 — 다시 실행할 때 ` +
-            `--from/--to 를 좁히면 남은 구간만 이어받을 수 있습니다.`,
+          : stopReason === 'CANCELLED'
+            ? `수집이 사용자 요청으로 취소됐습니다 ` +
+              `(${doneSymbols}/${symbols.length}종목 완료). ` +
+              `수집된 팩트 ${savedFacts}건은 저장됐습니다 — 다시 실행하면 남은 종목만 이어받습니다.`
+            : `수집이 ${stoppedAtSymbol} 에서 중단됐습니다 ` +
+              `(${doneSymbols}/${symbols.length}종목 완료). ` +
+              `사유: ${failureReason ?? '알 수 없음'}. ` +
+              `여기까지 수집된 팩트 ${savedFacts}건은 이미 저장됐습니다 — 다시 실행하면 ` +
+              `남은 구간만 이어받습니다.`,
     };
   }
 

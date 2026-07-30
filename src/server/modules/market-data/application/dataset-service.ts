@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNotNull } from 'drizzle-orm';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import {
+  brokerSyncState,
   dataCoverage,
   dataImportJobs,
   datasetVersions,
@@ -35,6 +36,24 @@ export interface DatasetSummary {
   createdAtMs: number;
   /** 진행 중인 증권사 동기화 잡 — UI 가 새로고침 후에도 진행 상태에 붙을 수 있게 노출 */
   runningSyncJobId: string | null;
+}
+
+/** 재무 수집 예상 — facts 모듈이 계산해 이 모듈이 응답에 실어 보낸다 */
+export type FactsSyncEstimate =
+  | { basis: 'UNSUPPORTED'; reason: string }
+  | { basis: 'AFTER_CANDLES' }
+  | {
+      basis: 'PLANNED';
+      fromYear: number;
+      toYear: number;
+      calls: number;
+      estimatedMs: number;
+      overDailyLimit: boolean;
+    };
+
+export interface SyncEstimate {
+  readonly candles: { basis: 'LAST_RUN'; ms: number } | { basis: 'UNKNOWN' };
+  readonly facts: FactsSyncEstimate;
 }
 
 export interface ImportRequest {
@@ -102,6 +121,57 @@ export class DatasetService {
   }
 
   /**
+   * 봉 수집 예상 소요시간. 계산으로는 안 나온다 — 페이지당 봉 수와 API 보관 깊이를
+   * 미리 알 수 없다. 직전 실행의 실측치를 참고치로 쓴다.
+   *
+   * 두 개의 문턱이 있다. (1) 전 종목이 백필 완료 상태여야 한다 — 첫 백필과 증분은
+   * 소요시간이 자릿수로 다르다. (2) 그 잡이 백필 완료 **이후** 에 시작됐어야 한다 —
+   * 백필을 포함한 실행의 시간을 증분 예상치로 쓰면 과대 추정이 된다.
+   */
+  getCandleSyncEstimate(datasetId: string, symbols: readonly string[]): SyncEstimate['candles'] {
+    if (symbols.length === 0) return { basis: 'UNKNOWN' };
+
+    const states = this.db
+      .select()
+      .from(brokerSyncState)
+      .where(eq(brokerSyncState.datasetId, datasetId))
+      .all();
+    const doneAt = new Map(states.map((state) => [state.symbol, state.backfillDoneAtMs]));
+
+    let latestBackfillMs = 0;
+    for (const symbol of symbols) {
+      const at = doneAt.get(symbol);
+      if (at == null) return { basis: 'UNKNOWN' };
+      if (at > latestBackfillMs) latestBackfillMs = at;
+    }
+
+    const job = this.db
+      .select({ candlesMs: dataImportJobs.candlesMs })
+      .from(dataImportJobs)
+      .where(
+        and(
+          eq(dataImportJobs.datasetId, datasetId),
+          eq(dataImportJobs.sourceType, 'BROKER'),
+          // status 는 보지 않는다 — 재무 단계에서 멈춘 잡은 FAILED/CANCELLED 지만 그때도
+          // 봉 단계는 끝나 candlesMs 가 측정돼 있다. 상태로 거르면 DART 오류 하나가 멀쩡한
+          // 봉 실측치를 버린다. candlesMs IS NOT NULL 자체가 봉 단계 완주를 함의한다(스펙 §6)
+          isNotNull(dataImportJobs.candlesMs),
+          gt(dataImportJobs.createdAtMs, latestBackfillMs),
+        ),
+      )
+      // 정렬 기준은 created_at_ms 다 — 같은 데이터셋의 BROKER 잡은 겹칠 수 없으므로
+      // (startSync 가 SyncAlreadyRunningError 로 막는다) 시작 순서 = 종료 순서다.
+      // completed_at_ms 는 nullable 이라 정렬 기준으로 쓰면 값이 없는 행에 순서가 흔들린다.
+      .orderBy(desc(dataImportJobs.createdAtMs))
+      .limit(1)
+      .get();
+
+    // `!job?.candlesMs` 로 쓰면 0ms 측정값이 "측정 없음" 으로 접힌다 — null 만 걸러낸다
+    if (job?.candlesMs == null) return { basis: 'UNKNOWN' };
+    return { basis: 'LAST_RUN', ms: job.candlesMs };
+  }
+
+  /**
    * 증권사 수집용 데이터셋 생성 (설계 2026-07-28-broker-sync-design.md).
    * collect 는 수집 timeframe — 데이터셋 timeframe 은 CSV import 와 같은 관례로
    * 백테스트 소비 기준을 따른다: 1m 수집 → 1h 데이터셋(사전 집계), 1d 수집 → 1d.
@@ -127,7 +197,9 @@ export class DatasetService {
       name,
       market,
       timeframe: collect === '1m' ? '1h' : '1d',
-      symbolsJson: JSON.stringify([...symbols].sort()),
+      // 중복은 접는다 (updateSymbols·importCsv 와 같은 관례) — 남겨두면 같은 종목을 두 번
+      // 긁고 재무 쪽 symbolTotal·예상 호출 수까지 부푼다
+      symbolsJson: JSON.stringify([...new Set(symbols)].sort()),
       description: null,
       createdAtMs: now,
       updatedAtMs: now,

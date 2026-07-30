@@ -6,8 +6,13 @@ import {
   SyncAlreadyRunningError,
   SyncUnsupportedDatasetError,
 } from '../application/broker-sync-service.js';
-import type { DatasetService } from '../application/dataset-service.js';
+import type {
+  DatasetService,
+  FactsSyncEstimate,
+  SyncEstimate,
+} from '../application/dataset-service.js';
 import type { SymbolInfoService } from '../application/symbol-info-service.js';
+import { listMarketSupport } from '../domain/market-support.js';
 
 type PreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -26,7 +31,11 @@ const createDatasetSchema = z.object({
   symbols: z.array(z.string().regex(/^[A-Za-z0-9._-]{1,20}$/)).min(1).max(1000),
 });
 
-const syncSchema = z.object({ datasetId: z.string().min(1) });
+const syncSchema = z.object({
+  datasetId: z.string().min(1),
+  /** 재무(DART)까지 함께 수집할지. 기본은 봉만 */
+  includeFacts: z.boolean().optional(),
+});
 
 const symbolSchema = z.string().regex(/^[A-Za-z0-9._-]{1,20}$/);
 const updateDatasetSchema = z
@@ -51,8 +60,15 @@ export function registerDatasetRoutes(
   symbolInfoService: SymbolInfoService,
   /** 이 데이터셋을 참조하는 활성 백테스트 존재 여부 — 조립부가 backtest 모듈로 연결한다 */
   hasActiveBacktests: (datasetId: string) => boolean,
+  /** 재무 수집 예상 — 조립부가 facts 모듈로 연결한다 (market-data 는 facts 를 모른다) */
+  factsSyncEstimator: (datasetId: string) => FactsSyncEstimate,
   requireAuth: PreHandler,
 ): void {
+  /** 지원 시장 목록. 배포마다 고정이므로 클라이언트가 길게 캐시한다. */
+  app.get('/markets', { preHandler: requireAuth }, async () => ({
+    markets: listMarketSupport(),
+  }));
+
   /** 종목 코드 → 이름. 소스 미설정이면 빈 목록 — UI 는 코드만으로도 동작한다. */
   app.get('/symbols/info', { preHandler: requireAuth }, async (request, reply) => {
     const raw = (request.query as { symbols?: string }).symbols ?? '';
@@ -126,6 +142,10 @@ export function registerDatasetRoutes(
     const { datasetId } = request.params as { datasetId: string };
     const dataset = datasetService.getDataset(datasetId);
     if (!dataset) return reply.code(404).send({ error: '데이터셋을 찾을 수 없습니다' });
+    const syncEstimate: SyncEstimate = {
+      candles: datasetService.getCandleSyncEstimate(datasetId, dataset.symbols),
+      facts: factsSyncEstimator(datasetId),
+    };
     return {
       coverage: datasetService.getCoverage(datasetId).map((row) => ({
         symbol: row.symbol,
@@ -136,6 +156,7 @@ export function registerDatasetRoutes(
         missingRanges: row.missingRangesJson ? JSON.parse(row.missingRangesJson) : [],
         computedAtMs: row.computedAtMs,
       })),
+      syncEstimate,
       note: '공휴일 캘린더 미반영: 공휴일이 누락 구간으로 보고될 수 있습니다.',
     };
   });
@@ -282,8 +303,18 @@ export function registerDatasetRoutes(
     if (!datasetService.getDataset(parsed.data.datasetId)) {
       return reply.code(404).send({ error: '데이터셋을 찾을 수 없습니다' });
     }
+    // 재무 단계는 봉 뒤에 온다 — 여기서 막지 않으면 45분 봉 수집을 끝낸 뒤에야
+    // "DART 키가 없습니다" 로 실패한다
+    if (parsed.data.includeFacts === true) {
+      const estimate = factsSyncEstimator(parsed.data.datasetId);
+      if (estimate.basis === 'UNSUPPORTED') {
+        return reply.code(400).send({ error: estimate.reason });
+      }
+    }
     try {
-      const { job } = brokerSyncService.startSync(parsed.data.datasetId);
+      const { job } = brokerSyncService.startSync(parsed.data.datasetId, {
+        includeFacts: parsed.data.includeFacts === true,
+      });
       return reply.code(202).send({ job });
     } catch (error) {
       if (error instanceof SyncAlreadyRunningError) {

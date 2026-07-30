@@ -4,6 +4,8 @@ import {
   BrokerSyncService,
   SyncAlreadyRunningError,
   SyncUnsupportedDatasetError,
+  type BrokerSyncDeps,
+  type FactsJobState,
 } from '../../src/server/modules/market-data/application/broker-sync-service.js';
 import { DatasetService } from '../../src/server/modules/market-data/application/dataset-service.js';
 import {
@@ -15,7 +17,7 @@ import {
 } from '../../src/server/modules/market-data/application/ports.js';
 import type { Candle, Market, Timeframe } from '../../src/server/modules/market-data/domain/candle.js';
 import { openDatabase } from '../../src/server/shared/db/database.js';
-import { brokerSyncState, dataImportJobs } from '../../src/server/shared/db/schema.js';
+import { brokerSyncState, dataImportJobs, datasets } from '../../src/server/shared/db/schema.js';
 import { createLogger } from '../../src/server/shared/logger.js';
 import { loadConfig } from '../../src/server/bootstrap/config.js';
 import type { AuditLogService } from '../../src/server/modules/audit/audit-service.js';
@@ -119,7 +121,14 @@ class InMemoryCandleRepository implements CandleRepository {
 
 const noopAudit: AuditLogService = { record: () => {} } as unknown as AuditLogService;
 
-function buildHarness(source: MarketDataSource, options: { minFreeDiskBytes?: number; freeDiskBytes?: () => number } = {}) {
+function buildHarness(
+  source: MarketDataSource,
+  options: {
+    minFreeDiskBytes?: number;
+    freeDiskBytes?: () => number;
+    factsPhase?: BrokerSyncDeps['factsPhase'];
+  } = {},
+) {
   const handle = openDatabase(':memory:');
   const repo = new InMemoryCandleRepository();
   const clock = { now: () => Date.UTC(2026, 6, 8, 12, 0) }; // 2026-07-08 수요일 21:00 KST
@@ -134,8 +143,26 @@ function buildHarness(source: MarketDataSource, options: { minFreeDiskBytes?: nu
     audit: noopAudit,
     minFreeDiskBytes: options.minFreeDiskBytes ?? 0,
     freeDiskBytes: options.freeDiskBytes ?? (() => Number.MAX_SAFE_INTEGER),
+    factsPhase: options.factsPhase,
   });
   return { db: handle.db, repo, datasetService, sync, clock };
+}
+
+type Harness = ReturnType<typeof buildHarness>;
+
+function jobRow(harness: Harness, jobId: string) {
+  return harness.db.select().from(dataImportJobs).where(eq(dataImportJobs.id, jobId)).get();
+}
+
+/** factsJson 파싱. 비어 있으면 즉시 실패시킨다 — 뒤 단정이 undefined 로 조용히 묻히지 않게 */
+function requireFacts(row: { factsJson: string | null } | undefined): FactsJobState {
+  const json = row?.factsJson;
+  if (json == null) throw new Error('factsJson 이 비어 있습니다');
+  return JSON.parse(json) as FactsJobState;
+}
+
+function emptyFactResult() {
+  return { savedFacts: 0, gapCount: 0, stopReason: null, failureMessage: null };
 }
 
 /** 월요일 09:00 부터 count 개의 1분봉 */
@@ -415,11 +442,278 @@ describe('BrokerSyncService (설계 2026-07-28-broker-sync-design.md)', () => {
   });
 });
 
+describe('BrokerSyncService 재무 단계', () => {
+  it('includeFacts 없이는 factsPhase 를 부르지 않고 factsJson 이 null 이다', async () => {
+    let called = false;
+    const harness = buildHarness(new FakeSource(minutes('005930', 10)), {
+      factsPhase: async () => {
+        called = true;
+        return emptyFactResult();
+      },
+    });
+    const dataset = harness.datasetService.createBrokerDataset('KR-유니버스', 'KR', '1m', ['005930']);
+
+    const { job, done } = harness.sync.startSync(dataset.id);
+    await done;
+
+    expect(called).toBe(false);
+    const row = jobRow(harness, job.id);
+    expect(row?.factsJson).toBeNull();
+    expect(row?.candlesMs).not.toBeNull();
+    expect(row?.phase).toBeNull();
+    expect(row?.status).toBe('COMPLETED');
+  });
+
+  it('includeFacts 면 봉 뒤에 재무를 돌리고 결과를 factsJson 에 남긴다', async () => {
+    const seen: Array<{ fromYear: number; toYear: number; candlesSaved: number; phase: string | null }> = [];
+    const ref = { jobId: '' };
+    const harness: Harness = buildHarness(new FakeSource(minutes('005930', 10)), {
+      factsPhase: async ({ datasetId, fromYear, toYear, onProgress }) => {
+        // 봉이 이미 저장된 뒤에, 잡 단계가 FACTS 로 바뀐 상태에서 불려야 한다 —
+        // 폴링 중인 UI 가 "재무 중" 을 볼 수 있는지가 이 단계의 계약이다
+        const inflight = jobRow(harness, ref.jobId);
+        seen.push({
+          fromYear,
+          toYear,
+          candlesSaved: harness.repo.all(datasetId, '1m').length,
+          phase: inflight?.phase ?? null,
+        });
+        onProgress({ symbolsDone: 1, symbolTotal: 1, savedFacts: 12, gapCount: 3 });
+        return { savedFacts: 12, gapCount: 3, stopReason: null, failureMessage: null };
+      },
+    });
+    const dataset = harness.datasetService.createBrokerDataset('KR-유니버스', 'KR', '1m', ['005930']);
+
+    const { job, done } = harness.sync.startSync(dataset.id, { includeFacts: true });
+    ref.jobId = job.id;
+    await done;
+
+    // 봉은 2026-07-06 (KST) 뿐 — 연도 범위도 그 해로 좁혀진다
+    expect(seen).toEqual([{ fromYear: 2026, toYear: 2026, candlesSaved: 10, phase: 'FACTS' }]);
+    const row = jobRow(harness, job.id);
+    const facts = requireFacts(row);
+    expect(facts.savedFacts).toBe(12);
+    expect(facts.gapCount).toBe(3);
+    expect(facts.symbolsDone).toBe(1);
+    expect(facts.fromYear).toBe(2026);
+    expect(facts.skipReason).toBeNull();
+    expect(row?.status).toBe('COMPLETED');
+    expect(row?.rowsImported).toBe(10);
+    expect(row?.phase).toBeNull();
+  });
+
+  it('onProgress 마다 진행을 factsJson 에 적는다 (조용한 45분과 멈춤을 구분한다)', async () => {
+    const persisted: Array<Pick<FactsJobState, 'symbolsDone' | 'symbolTotal' | 'savedFacts' | 'gapCount'>> = [];
+    const ref = { jobId: '' };
+    const harness: Harness = buildHarness(new FakeSource(minutes('005930', 10)), {
+      factsPhase: async ({ onProgress }) => {
+        // 넘긴 인자가 아니라 **저장된** 행을 읽는다 — 폴링하는 화면이 보는 것이 그것이다.
+        // symbolTotal 을 데이터셋 종목 수(1)와 다른 2 로 주어 초기 상태가 아니라
+        // onProgress 가 쓴 값이 남는 것까지 확인한다.
+        const snapshot = () => {
+          const facts = requireFacts(jobRow(harness, ref.jobId));
+          return {
+            symbolsDone: facts.symbolsDone,
+            symbolTotal: facts.symbolTotal,
+            savedFacts: facts.savedFacts,
+            gapCount: facts.gapCount,
+          };
+        };
+        onProgress({ symbolsDone: 1, symbolTotal: 2, savedFacts: 7, gapCount: 1 });
+        persisted.push(snapshot());
+        onProgress({ symbolsDone: 2, symbolTotal: 2, savedFacts: 19, gapCount: 4 });
+        persisted.push(snapshot());
+        return { savedFacts: 19, gapCount: 4, stopReason: null, failureMessage: null };
+      },
+    });
+    const dataset = harness.datasetService.createBrokerDataset('KR-유니버스', 'KR', '1m', ['005930']);
+
+    const started = harness.sync.startSync(dataset.id, { includeFacts: true });
+    ref.jobId = started.job.id;
+    await started.done;
+
+    expect(persisted).toEqual([
+      { symbolsDone: 1, symbolTotal: 2, savedFacts: 7, gapCount: 1 },
+      { symbolsDone: 2, symbolTotal: 2, savedFacts: 19, gapCount: 4 },
+    ]);
+    expect(jobRow(harness, started.job.id)?.status).toBe('COMPLETED');
+  });
+
+  it('봉이 하나도 없으면 재무를 건너뛰고 사유를 남긴다', async () => {
+    let called = false;
+    const harness = buildHarness(new FakeSource([]), {
+      factsPhase: async () => {
+        called = true;
+        return emptyFactResult();
+      },
+    });
+    const dataset = harness.datasetService.createBrokerDataset('KR-유니버스', 'KR', '1m', ['005930']);
+
+    const { job, done } = harness.sync.startSync(dataset.id, { includeFacts: true });
+    await done;
+
+    expect(called).toBe(false);
+    const row = jobRow(harness, job.id);
+    expect(requireFacts(row).skipReason).toContain('봉이 수집되지 않아');
+    // 건너뛴 것은 실패가 아니다 — 봉 단계는 성공했다
+    expect(row?.status).toBe('COMPLETED');
+  });
+
+  it('재무 단계가 실패해도 봉 결과(rowsImported)는 남는다', async () => {
+    const harness = buildHarness(new FakeSource(minutes('005930', 10)), {
+      factsPhase: async () => ({
+        savedFacts: 5,
+        gapCount: 0,
+        stopReason: 'ERROR' as const,
+        failureMessage: 'DART 응답 오류 020: 사용 한도 초과',
+      }),
+    });
+    const dataset = harness.datasetService.createBrokerDataset('KR-유니버스', 'KR', '1m', ['005930']);
+
+    const { job, done } = harness.sync.startSync(dataset.id, { includeFacts: true });
+    await done;
+
+    const row = jobRow(harness, job.id);
+    expect(row?.status).toBe('FAILED');
+    expect(row?.rowsImported).toBe(10);
+    expect(row?.error).toContain('한도 초과');
+    const facts = requireFacts(row);
+    expect(facts.savedFacts).toBe(5);
+    expect(facts.failureMessage).toContain('한도 초과');
+  });
+
+  it('재무 단계 취소는 CANCELLED 로 기록된다', async () => {
+    const harness = buildHarness(new FakeSource(minutes('005930', 10)), {
+      factsPhase: async () => ({
+        savedFacts: 2,
+        gapCount: 0,
+        stopReason: 'CANCELLED' as const,
+        failureMessage: '수집이 사용자 요청으로 취소됐습니다',
+      }),
+    });
+    const dataset = harness.datasetService.createBrokerDataset('KR-유니버스', 'KR', '1m', ['005930']);
+
+    const { job, done } = harness.sync.startSync(dataset.id, { includeFacts: true });
+    await done;
+
+    const row = jobRow(harness, job.id);
+    expect(row?.status).toBe('CANCELLED');
+    expect(row?.rowsImported).toBe(10);
+    expect(requireFacts(row).savedFacts).toBe(2);
+  });
+
+  it('한 번의 취소가 두 단계에 모두 전달된다 (shouldStop 이 같은 집합을 읽는다)', async () => {
+    const observed: boolean[] = [];
+    const ref = { jobId: '' };
+    const harness: Harness = buildHarness(new FakeSource(minutes('005930', 10)), {
+      factsPhase: async ({ shouldStop }) => {
+        observed.push(shouldStop());
+        harness.sync.cancelSync(ref.jobId);
+        observed.push(shouldStop());
+        return { savedFacts: 0, gapCount: 0, stopReason: 'CANCELLED' as const, failureMessage: '취소됨' };
+      },
+    });
+    const dataset = harness.datasetService.createBrokerDataset('KR-유니버스', 'KR', '1m', ['005930']);
+
+    const started = harness.sync.startSync(dataset.id, { includeFacts: true });
+    ref.jobId = started.job.id;
+    await started.done;
+
+    expect(observed).toEqual([false, true]);
+    expect(jobRow(harness, started.job.id)?.status).toBe('CANCELLED');
+  });
+
+  it('factsPhase 가 주입되지 않았으면 includeFacts 를 건너뛴다', async () => {
+    const harness = buildHarness(new FakeSource(minutes('005930', 10)));
+    const dataset = harness.datasetService.createBrokerDataset('KR-유니버스', 'KR', '1m', ['005930']);
+
+    const { job, done } = harness.sync.startSync(dataset.id, { includeFacts: true });
+    await done;
+
+    const row = jobRow(harness, job.id);
+    expect(requireFacts(row).skipReason).toContain('DART');
+    expect(row?.status).toBe('COMPLETED');
+  });
+
+  /**
+   * DART 는 국내 공시 기관이다 — 비KR 데이터셋은 재무 단계에 들어가기 전에 걸러야 한다.
+   * `deriveFactYearRange` 가 `getSessionForMarket` 을 부르므로 가드가 없으면 예외가
+   * `factsPhase` 를 감싼 try **밖**에서 올라가 봉 결과까지 실패로 덮는다 (스펙 §2).
+   */
+  it('비KR 데이터셋은 재무를 건너뛰고 봉 결과를 남긴다', async () => {
+    let called = false;
+    const harness = buildHarness(new FakeSource([dailyCandle('AAPL', MON_0900_KST)]), {
+      factsPhase: async () => {
+        called = true;
+        return emptyFactResult();
+      },
+    });
+    // US 는 생성 경로가 막으므로(D-006) 행을 직접 넣는다. 세션이 정의되는 날 봉 단계가
+    // 통과하면서 이 경로가 살아나고, 그때 재무로 흘러가면 국내 공시를 외국 종목에 붙인다.
+    harness.db
+      .insert(datasets)
+      .values({
+        id: 'ds-us',
+        name: 'US-유니버스',
+        market: 'US',
+        timeframe: '1d',
+        symbolsJson: JSON.stringify(['AAPL']),
+        description: null,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+      })
+      .run();
+    // 봉 단계의 refreshCoverage 도 세션을 부른다 — 여기서 보려는 것은 재무 가드뿐이므로 무력화
+    harness.datasetService.refreshCoverage = async () => {};
+
+    const { job, done } = harness.sync.startSync('ds-us', { includeFacts: true });
+    await done;
+
+    expect(called).toBe(false);
+    const row = jobRow(harness, job.id);
+    expect(requireFacts(row).skipReason).toContain('국내');
+    // 건너뛴 것은 실패가 아니다 — 봉 단계는 성공했다
+    expect(row?.status).toBe('COMPLETED');
+    expect(row?.rowsImported).toBe(1);
+  });
+
+  it('factsPhase 가 예외를 던져도 봉 결과를 덮지 않고 재무 실패로 기록한다', async () => {
+    const harness = buildHarness(new FakeSource(minutes('005930', 10)), {
+      factsPhase: () => Promise.reject(new Error('DART 서버 연결 실패')),
+    });
+    const dataset = harness.datasetService.createBrokerDataset('KR-유니버스', 'KR', '1m', ['005930']);
+
+    const { job, done } = harness.sync.startSync(dataset.id, { includeFacts: true });
+    await done;
+
+    const row = jobRow(harness, job.id);
+    expect(row?.status).toBe('FAILED');
+    expect(row?.rowsImported).toBe(10);
+    expect(row?.candlesMs).not.toBeNull();
+    expect(requireFacts(row).failureMessage).toContain('DART 서버 연결 실패');
+  });
+});
+
 describe('DatasetService.createBrokerDataset', () => {
   it('creates a 1h dataset for 1m collection (CSV 관례와 동일 — 백테스트 소비 기준)', () => {
     const { datasetService } = buildHarness(new FakeSource([]));
     const dataset = datasetService.createBrokerDataset('KR-유니버스', 'KR', '1m', ['005930', '000660']);
     expect(dataset.timeframe).toBe('1h');
+    expect(dataset.symbols).toEqual(['000660', '005930']);
+  });
+
+  /**
+   * 중복은 여기서 접는다 — updateSymbols·importCsv 가 이미 Set 으로 접는 관례이고,
+   * 중복이 남으면 재무 쪽 symbolTotal 이 부풀고 봉 쪽도 같은 종목을 두 번 긁는다
+   * (스펙 §3). 400 으로 거부하지 않는 이유: 무해한 입력이고 결과가 모호하지 않다.
+   */
+  it('중복 심볼은 한 번만 저장한다', () => {
+    const { datasetService } = buildHarness(new FakeSource([]));
+    const dataset = datasetService.createBrokerDataset('KR-중복', 'KR', '1d', [
+      '005930',
+      '005930',
+      '000660',
+    ]);
     expect(dataset.symbols).toEqual(['000660', '005930']);
   });
 

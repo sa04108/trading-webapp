@@ -5,6 +5,30 @@ const PASSWORD = 'correct-horse-battery-staple';
 
 /** 스펙 §33 E2E 흐름: 로그인 → 생성 → 제출 → 완료 → 결과 → 거래 필터 → clone → 로그아웃 */
 test('full MVP flow', async ({ page }) => {
+  // 종목명 소스를 스텁한다 — 테스트 환경엔 소스가 설정돼 있지 않아 이름이 항상
+  // null 로 오는데, 그러면 '이름 없으면 코드만' 분기와 겹쳐 표시=value 바인딩
+  // 버그(§아래 거래 필터 검증)를 절대 못 잡는다. 실제로 이름이 뜨게 만들어야
+  // "표시는 이름, value 는 코드"가 실제로 갈리는 상태에서 검증할 수 있다.
+  await page.route('**/api/v1/symbols/info**', async (route) => {
+    const url = new URL(route.request().url());
+    const requested = (url.searchParams.get('symbols') ?? '').split(',').filter(Boolean);
+    const known: Record<string, string> = { '005930': '삼성전자' };
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        stocks: requested
+          .filter((symbol) => symbol in known)
+          .map((symbol) => ({
+            symbol,
+            name: known[symbol],
+            englishName: null,
+            market: 'KOSPI',
+            status: 'ACTIVE',
+          })),
+      }),
+    });
+  });
+
   // 1. 로그인 (비밀번호 단일 단계, D-014)
   await page.goto('/');
   await expect(page).toHaveURL(/\/login/);
@@ -66,10 +90,19 @@ test('full MVP flow', async ({ page }) => {
   await expect(page.getByRole('row').filter({ hasText: '미청산' }).first()).toBeVisible();
   const tradeRows = page.getByRole('row').filter({ hasText: '005930' });
   await expect(tradeRows.first()).toBeVisible();
+  // 종목 표기: 위 스텁으로 '005930' 은 이름이 뜬다 — '삼성전자 (005930)' 형태로
+  // 이름·코드가 둘 다 살아있어야 한다. SymbolLabel 이 이름 없이 코드만 렌더링하도록
+  // 회귀하거나 코드가 잘리면 이 두 assertion 중 하나가 깨진다.
+  const symbolCell = page.getByRole('cell', { name: /삼성전자/ }).first();
+  await expect(symbolCell).toContainText('삼성전자');
+  await expect(symbolCell).toContainText('005930');
 
-  // 6. 거래 필터 (종목 선택)
+  // 6. 거래 필터 (종목 선택) — 표시는 '삼성전자 (005930)' 이지만 select 의 value 는
+  // 코드 '005930' 이어야 한다. 옵션은 표시 텍스트(이름 포함)로 찾되, 선택 후에도
+  // 거래가 그대로 보여야 value 가 코드로 남아 서버 필터가 매치됐다는 뜻이다 — 누가
+  // value 를 표시 문자열로 바꾸면 서버가 매치하지 못해 거래 목록이 사라진다.
   await page.getByRole('combobox', { name: '종목 필터' }).click();
-  await page.getByRole('option', { name: '005930' }).click();
+  await page.getByRole('option', { name: /삼성전자/ }).click();
   await expect(tradeRows.first()).toBeVisible();
 
   // 7. clone → 새 작업 페이지
@@ -91,6 +124,50 @@ test('full MVP flow', async ({ page }) => {
   // 9. 로그아웃
   await page.getByRole('button', { name: '로그아웃' }).click();
   await expect(page).toHaveURL(/\/login/, { timeout: 10_000 });
+});
+
+/** 미지원 시장(US) 은 데이터셋 생성 dialog 에서 고를 수 없고, 이유가 항상 보인다 —
+ *  고를 수 있게 두고 종목을 다 넣은 뒤 400 을 받게 하는 것은 명시가 아니다 (Task 13/14). */
+test('unsupported market is disabled with reason shown on dataset create dialog', async ({ page }) => {
+  await page.goto('/login');
+  await page.getByLabel('사용자 이름').fill(USERNAME);
+  await page.getByLabel('비밀번호').fill(PASSWORD);
+  await page.getByRole('button', { name: '로그인' }).click();
+  await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
+
+  await page.goto('/datasets');
+  await page.getByRole('button', { name: '증권사 데이터셋' }).click();
+  await page.getByLabel('시장').click();
+  // Radix SelectItem 은 native disabled 속성이 아니라 aria-disabled/data-disabled 를 쓴다 —
+  // role="option" 은 toBeDisabled() 가 참조하는 kAriaDisabledRoles 에 포함돼 있어 그대로 쓸 수 있다.
+  await expect(page.getByRole('option', { name: /US/ })).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(page.getByText(/US 는 아직 지원하지 않습니다/)).toBeVisible();
+  await expect(page.getByText(/DART 재무 수집은 국내 종목 전용/)).toBeVisible();
+});
+
+/** `/markets` 가 영구히 실패하면 목록은 영원히 비어(로딩 중과 같은 모양) 있는다 — 그 상태를
+ *  로딩 중과 구분 못 하면 시장 선택이 이유 없이 잠긴 채로 남는다. 이 태스크의 취지(고를
+ *  수 없는 이유는 항상 보여야 한다)를 실패 경로에서도 지킨다. */
+test('market select stays disabled and explains itself when /markets fails', async ({ page }) => {
+  await page.route('**/api/v1/markets**', async (route) => {
+    await route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'internal' }),
+    });
+  });
+
+  await page.goto('/login');
+  await page.getByLabel('사용자 이름').fill(USERNAME);
+  await page.getByLabel('비밀번호').fill(PASSWORD);
+  await page.getByRole('button', { name: '로그인' }).click();
+  await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
+
+  await page.goto('/datasets');
+  await page.getByRole('button', { name: '증권사 데이터셋' }).click();
+  await expect(page.getByLabel('시장')).toBeDisabled();
+  await expect(page.getByText(/시장 목록을 불러오지 못했습니다/)).toBeVisible();
 });
 
 test('mobile layout has no horizontal scroll on core screens (스펙 §38)', async ({ page }, testInfo) => {

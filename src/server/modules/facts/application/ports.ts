@@ -33,8 +33,21 @@ export interface FactIngestionResult {
 
 export interface FetchFinancialsRequest {
   readonly symbols: readonly string[];
-  readonly fromYear: number;
-  readonly toYear: number;
+  /**
+   * 재무제표·자본변동을 읽을 연도 (오름차순). 범위 두 값이 아닌 이유는 수집 이력이
+   * 불연속일 수 있기 때문이다 — from/to 로 접으면 가운데 구멍을 수집했다고 거짓말한다.
+   */
+  readonly years: readonly number[];
+  /**
+   * 주식총수를 읽을 연도. `years` 의 **각 연도마다** 그 직전 1년을 더한 집합이다
+   * (오름차순, 중복 제거).
+   *
+   * 자본변동 비율은 이벤트 직전 발행주식수를 분모(앵커)로 쓴다. 대상 연도만 읽으면
+   * 연초 이벤트의 앵커가 없어 gap 이 되고, 가장 이른 연도 앞에만 앵커를 두면 더 나쁘다 —
+   * `years` 가 불연속일 때(증분 수집의 정상 상태다) 구멍 건너편의 낡은 공시가 분모로
+   * 잡혀 **gap 없이 조용히 틀린 비율**이 나온다. 그래서 구간마다 앵커가 필요하다.
+   */
+  readonly shareYears: readonly number[];
   /** true = 연결(CFS), false = 별도(OFS). 데이터셋 하나는 한 기준만 담는다 */
   readonly consolidated: boolean;
 }

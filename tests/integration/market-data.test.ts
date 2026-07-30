@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { eq } from 'drizzle-orm';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
+import { dataImportJobs } from '../../src/server/shared/db/schema.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
 
 const MONDAY_0900_KST_UTC = Date.UTC(2026, 6, 6, 0, 0);
@@ -141,10 +143,22 @@ describe('market data (스펙 §11, §13)', () => {
     });
     const body = coverage.json() as {
       coverage: Array<{ symbol: string; barCount: number; expectedBarCount: number }>;
+      syncEstimate: {
+        candles: { basis: string; ms?: number };
+        facts: { basis: string; reason?: string };
+      };
     };
     expect(body.coverage[0]!.symbol).toBe('005930');
     expect(body.coverage[0]!.barCount).toBe(7);
     expect(body.coverage[0]!.expectedBarCount).toBe(7);
+
+    // 예상 소요시간이 coverage 응답에 함께 온다 (화면이 두 번 묻지 않게).
+    // 백필 이력이 없으니 봉은 UNKNOWN, DART 키 미설정이니 재무는 UNSUPPORTED 다.
+    expect(body.syncEstimate.candles).toEqual({ basis: 'UNKNOWN' });
+    expect(body.syncEstimate.facts).toEqual({
+      basis: 'UNSUPPORTED',
+      reason: 'DART_API_KEY 가 설정되지 않았습니다.',
+    });
 
     // data job 조회
     const jobLookup = await ctx.app.inject({
@@ -434,6 +448,113 @@ describe('market data (스펙 §11, §13)', () => {
       cookies: { qp_session: cookie },
     });
     expect(badSymbols.statusCode).toBe(400);
+  });
+
+  /**
+   * includeFacts 선검증. 재무 단계는 봉 뒤에 오므로 라우트에서 막지 않으면 45분짜리 봉
+   * 수집을 끝낸 뒤에야 "DART 키가 없습니다" 로 실패한다 — 잡이 만들어지지 **않았다는
+   * 것**까지 확인해야 선검증 테스트다 (상태 코드만 보면 startSync 뒤에서 막아도 통과한다).
+   */
+  it('rejects includeFacts before starting a job when facts are unsupported', async () => {
+    const { username, password } = await createTestAdmin(ctx.container);
+    const login = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { username, password },
+    });
+    const cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/datasets',
+      cookies: { qp_session: cookie },
+      payload: { name: 'KR-재무', market: 'KR', collect: '1d', symbols: ['005930'] },
+    });
+    const datasetId = (created.json().dataset as { id: string }).id;
+    const jobCount = () =>
+      ctx.container.database.db
+        .select()
+        .from(dataImportJobs)
+        .where(eq(dataImportJobs.datasetId, datasetId))
+        .all().length;
+    expect(jobCount()).toBe(0);
+
+    // DART 키 미설정 → 400 + 사유. 봉 수집은 시작조차 하지 않는다.
+    const rejected = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/datasets/sync',
+      cookies: { qp_session: cookie },
+      payload: { datasetId, includeFacts: true },
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json().error).toBe('DART_API_KEY 가 설정되지 않았습니다.');
+    // 이것이 선검증의 증거다 — startSync 가 불렸다면 잡 행이 남는다
+    expect(jobCount()).toBe(0);
+
+    // includeFacts 없이는 종전대로 시작된다 — 선검증이 봉 수집을 막지 않는다
+    const accepted = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/datasets/sync',
+      cookies: { qp_session: cookie },
+      payload: { datasetId },
+    });
+    expect(accepted.statusCode).toBe(202);
+    expect(jobCount()).toBe(1);
+    // 증권사 소스 미설정이라 잡은 곧 FAILED 로 끝난다 — 다음 테스트로 새지 않게 기다린다
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  });
+
+  /**
+   * DART 키가 있으면 선검증이 통과해야 한다 — 봉이 아직 없는 상태는 UNSUPPORTED 가
+   * 아니라 AFTER_CANDLES 이므로 막을 이유가 아니다. (시장이 KR 이 아닌 경우는 이
+   * 경로로 시험할 수 없다: getSessionForMarket 이 KR 외 데이터셋 생성을 먼저 거부한다.
+   * 그 분기는 tests/unit/facts-wiring.test.ts 가 직접 겨눈다.)
+   */
+  it('allows includeFacts when DART is configured and facts are merely pending candles', async () => {
+    const dartCtx = await createTestApp({ DART_API_KEY: 'test-key' });
+    try {
+      const { username, password } = await createTestAdmin(dartCtx.container);
+      const login = await dartCtx.app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: { username, password },
+      });
+      const cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+
+      const created = await dartCtx.app.inject({
+        method: 'POST',
+        url: '/api/v1/datasets',
+        cookies: { qp_session: cookie },
+        payload: { name: 'KR-재무-가능', market: 'KR', collect: '1d', symbols: ['005930'] },
+      });
+      const datasetId = (created.json().dataset as { id: string }).id;
+
+      const coverage = await dartCtx.app.inject({
+        method: 'GET',
+        url: `/api/v1/datasets/${datasetId}/coverage`,
+        cookies: { qp_session: cookie },
+      });
+      expect(coverage.json().syncEstimate.facts).toEqual({ basis: 'AFTER_CANDLES' });
+
+      const sync = await dartCtx.app.inject({
+        method: 'POST',
+        url: '/api/v1/datasets/sync',
+        cookies: { qp_session: cookie },
+        payload: { datasetId, includeFacts: true },
+      });
+      expect(sync.statusCode).toBe(202);
+      expect(
+        dartCtx.container.database.db
+          .select()
+          .from(dataImportJobs)
+          .where(eq(dataImportJobs.datasetId, datasetId))
+          .all(),
+      ).toHaveLength(1);
+      // 봉 수집이 소스 미설정으로 먼저 실패하므로 재무 단계(DART 호출)는 시작되지 않는다
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    } finally {
+      await dartCtx.close();
+    }
   });
 
   it('serves candles for inspection with timeframe validation and a hard row cap', async () => {
