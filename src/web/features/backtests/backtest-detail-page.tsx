@@ -41,6 +41,7 @@ import { useStockNames } from '@/lib/use-stock-names';
 import { useBacktestLive, useBacktestSeries, useBacktestTrades } from './api';
 import { exitReasonLabel } from './exit-reason';
 import { openPositionRows } from './open-position-rows';
+import { parsePageSize } from './page-size';
 import { ParamHint } from './param-hint';
 import { extractNumberParams, paramLabel } from './param-specs';
 import {
@@ -121,12 +122,13 @@ function TradesSection({
   periodTo: string;
   nameOf: (symbol: string) => string | null;
 }) {
-  const PAGE = 50;
   const [symbol, setSymbol] = useState<string>('ALL');
   const [page, setPage] = useState(0);
+  const [pageSizeText, setPageSizeText] = useState('10');
+  const pageSize = parsePageSize(pageSizeText, 10, 10);
   const { data, isLoading } = useBacktestTrades(
     jobId,
-    { limit: PAGE, offset: page * PAGE, ...(symbol !== 'ALL' ? { symbol } : {}) },
+    { limit: pageSize, offset: page * pageSize, ...(symbol !== 'ALL' ? { symbol } : {}) },
     true,
   );
   const trades = data?.trades ?? [];
@@ -262,11 +264,29 @@ function TradesSection({
           >
             이전
           </Button>
-          <span className="text-xs text-muted-foreground">{page + 1} 페이지</span>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-muted-foreground">{page + 1} 페이지</span>
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              페이지당
+              <Input
+                type="number"
+                min={1}
+                max={10}
+                value={pageSizeText}
+                onChange={(e) => {
+                  setPageSizeText(e.target.value);
+                  setPage(0);
+                }}
+                className="h-8 w-20"
+                aria-label="거래 내역 페이지당 표시 수"
+              />
+              건
+            </label>
+          </div>
           <Button
             variant="outline"
             size="sm"
-            disabled={trades.length < PAGE}
+            disabled={trades.length < pageSize}
             onClick={() => setPage((p) => p + 1)}
           >
             다음
@@ -281,7 +301,7 @@ function WarningsSection({ warnings }: { warnings: string[] }) {
   const [grouped, setGrouped] = useState(true);
   const [page, setPage] = useState(0);
   const [pageSizeText, setPageSizeText] = useState('20');
-  const pageSize = Math.min(200, Math.max(1, Number.parseInt(pageSizeText, 10) || 20));
+  const pageSize = parsePageSize(pageSizeText, 20);
 
   const rows = grouped ? groupWarnings(warnings).map((g) => g.label) : warnings;
   const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
