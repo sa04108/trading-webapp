@@ -9,10 +9,10 @@ ALTER TABLE `datasets` ADD `symbols_key` text DEFAULT '' NOT NULL;
 --> statement-breakpoint
 UPDATE `datasets` SET `default_timeframe` = CASE `timeframe` WHEN '1d' THEN '1d' ELSE '1m' END;
 --> statement-breakpoint
-UPDATE `data_coverage` SET `slice` = (
+UPDATE `data_coverage` SET `slice` = COALESCE((
   SELECT CASE d.`timeframe` WHEN '1d' THEN '1d' ELSE '1m' END FROM `datasets` d WHERE d.`id` = `data_coverage`.`dataset_id`
-);
+), '1d');
 --> statement-breakpoint
-UPDATE `broker_sync_state` SET `slice` = (
+UPDATE `broker_sync_state` SET `slice` = COALESCE((
   SELECT CASE d.`timeframe` WHEN '1d' THEN '1d' ELSE '1m' END FROM `datasets` d WHERE d.`id` = `broker_sync_state`.`dataset_id`
-);
+), '1d');
