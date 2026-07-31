@@ -9,9 +9,9 @@ import type {
   TradingStrategy,
 } from '../../src/server/modules/strategy/domain/strategy.js';
 import {
-  hourlyBreakoutStrategy,
-  type HourlyBreakoutParameters,
-} from '../../src/server/modules/strategy/strategies/hourly-breakout.js';
+  rangeBreakoutStrategy,
+  type RangeBreakoutParameters,
+} from '../../src/server/modules/strategy/strategies/range-breakout.js';
 
 const HOUR = 3_600_000;
 const START = Date.UTC(2026, 6, 6, 0, 0);
@@ -324,15 +324,17 @@ describe('runBacktest 이벤트 순서 (스펙 §9.1, §9.2)', () => {
     const candles = Array.from({ length: 300 }, (_, i) =>
       bar(i, 100 + 10 * Math.sin(i / 7) + (i % 13)),
     );
-    const parameters: HourlyBreakoutParameters = {
+    const parameters: RangeBreakoutParameters = {
       lookbackBars: 10,
       atrPeriod: 5,
       stopAtrMultiplier: 2,
+      trailAtrMultiplier: 2,
       riskPerTradePercent: 2,
+      maxPositionWeightPercent: 20,
     };
 
     const run = () =>
-      runBacktest(hourlyBreakoutStrategy as never, {
+      runBacktest(rangeBreakoutStrategy as never, {
         candles,
         initialCash: 1_000_000,
         execution: ZERO_COST,
@@ -354,7 +356,7 @@ describe('runBacktest 이벤트 순서 (스펙 §9.1, §9.2)', () => {
   });
 });
 
-describe('hourly-breakout 갭 진입 손·익절 기준 (Codex 리뷰)', () => {
+describe('range-breakout 갭 진입 손·익절 기준 (Codex 리뷰)', () => {
   it('anchors stop/take-profit to the actual fill price, not the signal close', () => {
     // 평탄 20봉(ATR≈2) → 신호봉 close 105 → 다음 봉 시가 130 으로 갭 진입 → 115 로 하락.
     // 신호봉 기준이면 TP(105+3×ATR≈113.4)에 걸려 손실이 TAKE_PROFIT 으로 라벨되고,
@@ -367,15 +369,17 @@ describe('hourly-breakout 갭 진입 손·익절 기준 (Codex 리뷰)', () => {
     const drop = bar(22, 115, { open: 115, high: 116, low: 114, close: 115 });
     const exitBar = bar(23, 115, { open: 115, high: 116, low: 114, close: 115 });
 
-    const parameters: HourlyBreakoutParameters = {
+    const parameters: RangeBreakoutParameters = {
       lookbackBars: 10,
       atrPeriod: 5,
       stopAtrMultiplier: 2,
+      trailAtrMultiplier: 2,
       takeProfitAtrMultiplier: 3,
       riskPerTradePercent: 2,
+      maxPositionWeightPercent: 100,
     };
 
-    const result = runBacktest(hourlyBreakoutStrategy as never, {
+    const result = runBacktest(rangeBreakoutStrategy as never, {
       candles: [...flat, signal, gapUp, drop, exitBar],
       initialCash: 1_000_000,
       execution: ZERO_COST,
@@ -392,7 +396,7 @@ describe('hourly-breakout 갭 진입 손·익절 기준 (Codex 리뷰)', () => {
   });
 });
 
-describe('hourly-breakout look-ahead fixture (스펙 §33)', () => {
+describe('range-breakout look-ahead fixture (스펙 §33)', () => {
   it('does not enter before a future spike', () => {
     // 40개 평탄한 봉 뒤 41번째 봉에서 급등
     const flat = Array.from({ length: 40 }, (_, i) => bar(i, 100));
@@ -406,14 +410,16 @@ describe('hourly-breakout look-ahead fixture (스펙 §33)', () => {
     });
     const after = [bar(41, 152), bar(42, 155)];
 
-    const parameters: HourlyBreakoutParameters = {
+    const parameters: RangeBreakoutParameters = {
       lookbackBars: 10,
       atrPeriod: 5,
       stopAtrMultiplier: 2,
+      trailAtrMultiplier: 2,
       riskPerTradePercent: 2,
+      maxPositionWeightPercent: 100,
     };
 
-    const result = runBacktest(hourlyBreakoutStrategy as never, {
+    const result = runBacktest(rangeBreakoutStrategy as never, {
       candles: [...flat, spike, ...after],
       initialCash: 1_000_000,
       execution: ZERO_COST,

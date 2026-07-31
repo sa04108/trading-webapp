@@ -841,13 +841,15 @@ GET /api/v1/system/info
 
 ```json
 {
-  "strategyId": "hourly-breakout",
-  "strategyVersion": "1.2.0",
+  "strategyId": "range-breakout",
+  "strategyVersion": "2.0.0",
   "parameters": {
     "lookbackBars": 20,
     "atrPeriod": 14,
     "stopAtrMultiplier": 2,
-    "riskPerTradePercent": 1
+    "trailAtrMultiplier": 2,
+    "riskPerTradePercent": 1,
+    "maxPositionWeightPercent": 20
   },
   "datasetId": "kr-hourly-v1",
   "timeframe": "1h",
@@ -1654,27 +1656,40 @@ S3를 사용할 경우:
 
 # 32. 등록 전략
 
-`StrategyRegistry` 는 코드로 등록된 전략 세 개를 담는다 (§2.5). UI 는 검증된
+`StrategyRegistry` 는 코드로 등록된 전략 다섯 개를 담는다 (§2.5). UI 는 검증된
 파라미터만 바꾼다 — 전략 자체는 코드 리뷰·테스트를 거쳐 배포된다.
 
-## 시간봉 돌파 (hourly-breakout)
+## 전고점 돌파 (range-breakout)
 
-엔진 검증용 기준 전략. 전략의 수익성을 약속하는 것이 아니라 백테스트 엔진의
-정확성·재현성을 검증하기 위한 것이다.
+직전 N개 봉이 만든 고가 상단을 종가가 넘어서면 사고, 추적 손절·익절·보유 상한으로
+판다. 모든 창이 봉 수라 분봉·시간봉·일봉에서 같은 로직이며, 파라미터의 의미가
+데이터셋에서 고른 소비 봉 주기에 따라 달라진다.
 
 ```ts
-const HourlyBreakoutParameters = z.object({
+const RangeBreakoutParameters = z.object({
   lookbackBars: z.number().int().min(2).max(200),
   atrPeriod: z.number().int().min(2).max(100),
   stopAtrMultiplier: z.number().positive().max(20),
+  trailAtrMultiplier: z.number().positive().max(20),
   takeProfitAtrMultiplier: z.number().positive().max(50).optional(),
+  maxHoldBars: z.number().int().min(1).max(10_000).optional(),
   riskPerTradePercent: z.number().positive().max(5),
+  maxPositionWeightPercent: z.number().min(1).max(100),
 });
 ```
 
 `maxPositions` 는 전략 파라미터가 아니다 — 요청의 `risk.maxPositions` 로 받는다
-(§15, D-012). 현재 전략 버전은 1.2.0 이다. 봉만 사용하며 재무 데이터를 요구하지
+(§15, D-012). 현재 전략 버전은 2.0.0 이다. 봉만 사용하며 재무 데이터를 요구하지
 않는다 (`requiresFundamentals` 미설정).
+
+전신은 `hourly-breakout`("시간봉 돌파", v1.2.0) 이다 — 이름이 시간봉에 묶여 있었으나
+로직은 처음부터 봉 수 기반이었고, 손절·익절만 있어 추세 이익을 되돌려주었으며,
+돌파 기준선을 봉마다 전체 이력에서 다시 구해 1분봉 구간을 완주할 수 없었다 (D-028).
+과거 `hourly-breakout` 실행은 화면에서 원본 id 로 표시된다.
+
+손절·익절은 **종가**로만 판정하고 다음 봉 시가에 체결한다 — 장중에 손절선을 뚫었다가
+종가가 회복한 봉은 청산되지 않으므로 실제 스톱 주문보다 낙관적이다
+(`docs/reviews/BACKTEST_BIAS_REVIEW.md` B-008). 등록 전략 전체에 공통이다.
 
 ## 횡단면 모멘텀 (cross-sectional-momentum)
 
@@ -1690,6 +1705,18 @@ N 을 동일가중 보유한다. `requiresFundamentals: true` 로 선언되어 �
 재무(point-in-time 팩트 저장소, `pnpm cli facts:sync` 로 DART 공시를 수집)가
 수집되지 않은 데이터셋에 제출하면 422 로 거부된다 — 실행 후 "거래 0건" 으로
 끝나 원인을 알 수 없는 상태를 막기 위해서다.
+
+## EMA 추세 스위치 (ema-trend-switch)
+
+단기·장기 EMA 간격이 임계%를 넘은 종목을 사고, 추적 손절·추세 반전·보유 상한으로
+판다. 워밍업 후 1회 계산해 고정하는 상관 그룹이 역상관 종목(예: 레버리지·인버스 쌍)의
+동시 보유를 막으므로, 방향 전환이 종목 교체로 표현된다. 봉만 사용한다.
+
+## RSI 되돌림 (rsi-reversion)
+
+RSI 과매도에 사서 RSI 회복에 판다. 스톱은 고정(추적 아님) — 되돌림 전략은 진입 후
+흔들림을 견뎌야 한다. 상관 그룹·수량 산정·보유 상한은 `ema-trend-switch` 와 같은
+부품을 쓴다. 봉만 사용한다.
 
 ---
 

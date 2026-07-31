@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   newAtr,
   newEma,
+  newRollingMax,
   newRsi,
+  pushRollingMax,
+  rollingMaxValue,
   rsiValue,
   updateAtr,
   updateEma,
@@ -23,7 +26,7 @@ describe('updateEma', () => {
 });
 
 describe('updateAtr (Wilder)', () => {
-  it('첫 봉은 high−low, 이후 (prev×(n−1)+TR)/n — hourly-breakout 과 같은 정의', () => {
+  it('첫 봉은 high−low, 이후 (prev×(n−1)+TR)/n', () => {
     const state = newAtr();
     updateAtr(state, { high: 12, low: 8, close: 10 }, 2);
     expect(state.atr).toBe(4); // 12−8
@@ -31,6 +34,28 @@ describe('updateAtr (Wilder)', () => {
     updateAtr(state, { high: 14, low: 9, close: 13 }, 2);
     expect(state.atr).toBeCloseTo(4.5);
     expect(state.barsSeen).toBe(2);
+  });
+});
+
+describe('rollingMaxValue', () => {
+  it('창이 window 개로 차기 전에는 null', () => {
+    const state = newRollingMax();
+    pushRollingMax(state, 10, 3);
+    pushRollingMax(state, 12, 3);
+    expect(rollingMaxValue(state, 3)).toBeNull();
+    pushRollingMax(state, 11, 3);
+    expect(rollingMaxValue(state, 3)).toBe(12);
+  });
+
+  it('창을 넘으면 가장 오래된 값을 버린다 — 최댓값이 창을 벗어나면 내려간다', () => {
+    const state = newRollingMax();
+    for (const value of [10, 20, 11]) pushRollingMax(state, value, 3);
+    expect(rollingMaxValue(state, 3)).toBe(20);
+    pushRollingMax(state, 12, 3); // 10 이 빠진다 — 20 은 아직 창 안
+    expect(rollingMaxValue(state, 3)).toBe(20);
+    pushRollingMax(state, 13, 3); // 20 이 빠진다
+    expect(rollingMaxValue(state, 3)).toBe(13);
+    expect(state.values).toHaveLength(3);
   });
 });
 

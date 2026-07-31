@@ -44,8 +44,8 @@ function buildTrendingHourlyCsv(): string {
 
 function buildRequest(datasetId: string): BacktestRequest {
   return {
-    strategyId: 'hourly-breakout',
-    strategyVersion: '1.2.0',
+    strategyId: 'range-breakout',
+    strategyVersion: '2.0.0',
     parameters: {
       lookbackBars: 10,
       atrPeriod: 5,
@@ -142,7 +142,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       metrics: Record<string, unknown>;
     };
     expect(body.run.engineVersion).toBe(ENGINE_VERSION);
-    expect(body.run.strategyId).toBe('hourly-breakout');
+    expect(body.run.strategyId).toBe('range-breakout');
     expect(body.run.feeModelVersion).toBe('kr-equity-default@1.1.0');
     expect(body.run.randomSeed).toBe(42);
     expect(body.run.datasetHash).not.toBe('unknown');

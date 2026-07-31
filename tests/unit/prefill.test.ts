@@ -3,8 +3,8 @@ import { requestToFormState } from '../../src/web/features/backtests/prefill.js'
 import type { BacktestRequestBody } from '../../src/web/features/backtests/types.js';
 
 const request: BacktestRequestBody = {
-  strategyId: 'hourly-breakout',
-  strategyVersion: '1.2.0',
+  strategyId: 'range-breakout',
+  strategyVersion: '2.0.0',
   parameters: { lookbackBars: 10, atrPeriod: 5 },
   datasetId: 'ds_1',
   universe: { type: 'SYMBOLS', symbols: ['005930', '000660'] },
@@ -20,7 +20,7 @@ const request: BacktestRequestBody = {
 };
 
 const catalog = {
-  strategyIds: ['hourly-breakout'],
+  strategyIds: ['range-breakout'],
   datasets: [{ id: 'ds_1', symbols: ['005930', '000660'] }],
 };
 
@@ -28,7 +28,7 @@ describe('requestToFormState', () => {
   it('모든 값을 문자열 폼 상태로 옮긴다', () => {
     const { state, notes } = requestToFormState(request, catalog);
     expect(notes).toEqual([]);
-    expect(state.strategyId).toBe('hourly-breakout');
+    expect(state.strategyId).toBe('range-breakout');
     expect(state.parameters).toEqual({ lookbackBars: '10', atrPeriod: '5' });
     expect(state.datasetId).toBe('ds_1');
     expect(state.symbols).toEqual(['005930', '000660']);
@@ -70,6 +70,6 @@ describe('requestToFormState', () => {
     const { state, notes } = requestToFormState(request, { ...catalog, strategyIds: [] });
     expect(state.strategyId).toBeNull();
     expect(state.parameters).toEqual({});
-    expect(notes.some((n: string) => n.includes('hourly-breakout'))).toBe(true);
+    expect(notes.some((n: string) => n.includes('range-breakout'))).toBe(true);
   });
 });

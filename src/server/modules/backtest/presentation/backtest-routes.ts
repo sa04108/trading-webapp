@@ -272,7 +272,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    * maxPositions=10)이 정확히 이 상태다.
    *
    * 전략 id 를 특별 취급하지 않고 **검증된 파라미터에 숫자 `topN` 이 있으면** 본다 —
-   * hourly-breakout 처럼 이 파라미터가 없는 전략은 자연히 통과한다.
+   * range-breakout 처럼 이 파라미터가 없는 전략은 자연히 통과한다.
    * `checkFundamentalsRequirement` 와 같은 이유로 400(요청 형식)이 아니라 422 다:
    * 요청 자체는 유효하고 "전략 파라미터와 리스크 설정의 조합" 이 문제다.
    */

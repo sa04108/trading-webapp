@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { AnyTradingStrategy } from '../domain/strategy.js';
 import { crossSectionalMomentumStrategy } from '../strategies/cross-sectional-momentum.js';
 import { emaTrendSwitchStrategy } from '../strategies/ema-trend-switch.js';
-import { hourlyBreakoutStrategy } from '../strategies/hourly-breakout.js';
+import { rangeBreakoutStrategy } from '../strategies/range-breakout.js';
 import { rsiReversionStrategy } from '../strategies/rsi-reversion.js';
 import { valueQualityRankStrategy } from '../strategies/value-quality-rank.js';
 
@@ -11,7 +11,7 @@ import { valueQualityRankStrategy } from '../strategies/value-quality-rank.js';
  * 전략은 코드로 등록하고 검토·테스트·배포한다. UI 는 검증된 파라미터만 변경한다.
  */
 const STRATEGIES: readonly AnyTradingStrategy[] = [
-  hourlyBreakoutStrategy as AnyTradingStrategy,
+  rangeBreakoutStrategy as AnyTradingStrategy,
   crossSectionalMomentumStrategy as AnyTradingStrategy,
   valueQualityRankStrategy as AnyTradingStrategy,
   emaTrendSwitchStrategy as AnyTradingStrategy,

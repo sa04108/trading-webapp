@@ -69,8 +69,9 @@ export const emaTrendSwitchParameters = z
       title: '추적 손절 폭 (변동성 배수)',
       description: '보유 중 고점에서 변동성 × 이 값만큼 내려오면 팝니다. 고점을 따라 손절선이 올라갑니다.',
     }),
+    // 라벨에 "(선택)" 을 쓰지 않는다 — 위저드가 optional 파라미터에 붙여준다
     maxHoldBars: z.number().int().min(1).max(10_000).optional().meta({
-      title: '최대 보유 봉 수 (선택)',
+      title: '최대 보유 봉 수',
       description:
         '이 봉 수를 넘기면 신호와 무관하게 팝니다. 분봉이면 390이 약 하루, 일봉이면 20이 약 1달입니다. 비우면 제한이 없습니다.',
     }),
@@ -247,7 +248,7 @@ export const emaTrendSwitchStrategy: TradingStrategy<
         const position = context.portfolio.positions.get(symbol);
         if (position && position.quantity > 0) continue;
 
-        // 미체결 진입 주문이 있었으면 이번 봉은 재평가만 (hourly-breakout 관례)
+        // 미체결 진입 주문이 있었으면 이번 봉은 재평가만 — 중복 진입 금지
         if (symbolState.holding.pendingEntry) {
           symbolState.holding.pendingEntry = false;
           continue;

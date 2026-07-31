@@ -42,7 +42,7 @@ describe('StrategyRegistry.requiresFundamentals', () => {
 
   it('봉만 쓰는 전략은 요구하지 않는다', () => {
     const registry = new StrategyRegistry();
-    expect(registry.requiresFundamentals('hourly-breakout')).toBe(false);
+    expect(registry.requiresFundamentals('range-breakout')).toBe(false);
     expect(registry.requiresFundamentals('cross-sectional-momentum')).toBe(false);
   });
 

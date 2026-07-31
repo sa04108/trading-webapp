@@ -40,7 +40,7 @@ export interface BacktestRunInput {
   readonly maxPositions: number;
   /**
    * 상장시점 팩트. 미지정이면 전략의 fundamentals/corporateActions 가 항상 비어 있다 —
-   * 재무를 쓰지 않는 전략(hourly-breakout 등)은 넘길 필요가 없다.
+   * 재무를 쓰지 않는 전략(range-breakout 등)은 넘길 필요가 없다.
    */
   readonly facts?: readonly Fact[];
 }

@@ -39,7 +39,7 @@ test('full MVP flow', async ({ page }) => {
 
   // 2. 백테스트 생성 (6단계 위저드) — 픽스처에서 완결 거래가 나오도록 파라미터 조정
   await page.goto('/backtests/new');
-  await page.getByRole('button', { name: /시간봉 돌파/ }).click();
+  await page.getByRole('button', { name: /전고점 돌파/ }).click();
   // exact — ⓘ 아이콘의 aria-label('… 설명') 과 부분 일치로 겹치지 않게 한다
   await page.getByLabel('돌파 기준 봉 수', { exact: true }).fill('10');
   await page.getByLabel('변동성(ATR) 계산 기간', { exact: true }).fill('5');

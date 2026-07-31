@@ -5,9 +5,9 @@ import {
   paramLabel,
   paramMetaLine,
 } from '../../src/web/features/backtests/param-specs.js';
-import { hourlyBreakoutParameters } from '../../src/server/modules/strategy/strategies/hourly-breakout.js';
+import { rangeBreakoutParameters } from '../../src/server/modules/strategy/strategies/range-breakout.js';
 
-const jsonSchema = z.toJSONSchema(hourlyBreakoutParameters) as Record<string, unknown>;
+const jsonSchema = z.toJSONSchema(rangeBreakoutParameters) as Record<string, unknown>;
 
 describe('extractNumberParams', () => {
   it('서버 스키마의 title·description 을 라벨·설명으로 옮긴다', () => {
@@ -21,14 +21,17 @@ describe('extractNumberParams', () => {
     expect(lookback?.isInteger).toBe(true);
   });
 
-  it('시간봉 돌파 전략 파라미터 전부 한국어 라벨·설명을 갖는다', () => {
+  it('전고점 돌파 전략 파라미터 전부 한국어 라벨·설명을 갖는다', () => {
     const specs = extractNumberParams(jsonSchema);
     expect(specs.map((s) => s.key)).toEqual([
       'lookbackBars',
       'atrPeriod',
       'stopAtrMultiplier',
+      'trailAtrMultiplier',
       'takeProfitAtrMultiplier',
+      'maxHoldBars',
       'riskPerTradePercent',
+      'maxPositionWeightPercent',
     ]);
     for (const spec of specs) {
       expect(spec.label, spec.key).toBeTruthy();

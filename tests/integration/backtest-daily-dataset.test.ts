@@ -48,8 +48,8 @@ function buildDailyCandles(): Candle[] {
 
 function buildRequest(datasetId: string): BacktestRequest {
   return {
-    strategyId: 'hourly-breakout',
-    strategyVersion: '1.2.0',
+    strategyId: 'range-breakout',
+    strategyVersion: '2.0.0',
     parameters: {
       lookbackBars: 10,
       atrPeriod: 5,

@@ -59,8 +59,9 @@ export const rsiReversionParameters = z
       description:
         '진입가에서 변동성 × 이 값만큼 내려가면 손절합니다. 고정 손절선이며 고점을 따라 움직이지 않습니다.',
     }),
+    // 라벨에 "(선택)" 을 쓰지 않는다 — 위저드가 optional 파라미터에 붙여준다
     maxHoldBars: z.number().int().min(1).max(10_000).optional().meta({
-      title: '최대 보유 봉 수 (선택)',
+      title: '최대 보유 봉 수',
       description:
         '이 봉 수를 넘기면 신호와 무관하게 팝니다. 분봉이면 390이 약 하루, 일봉이면 20이 약 1달입니다. 비우면 제한이 없습니다.',
     }),
