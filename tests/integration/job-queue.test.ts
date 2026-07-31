@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { CANCEL_SIGTERM_DELAY_MS } from '../../src/server/modules/backtest/application/job-orchestrator.js';
 import { ENGINE_VERSION } from '../../src/server/modules/backtest/domain/engine.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { currentStrategyVersion } from '../helpers/strategy-versions.js';
@@ -239,7 +238,6 @@ describe('backtest job queue (스펙 §10, §14)', () => {
 
       // 자식 프로세스 기동 직후(STARTING) 취소 — IPC 로 전달되어 CANCELLED 로 끝나야 한다
       ctx.container.jobOrchestrator.tick();
-      const requestedAt = Date.now();
       const cancelled = await ctx.app.inject({
         method: 'POST',
         url: `/api/v1/backtests/${jobId}/cancel`,
@@ -252,14 +250,31 @@ describe('backtest job queue (스펙 §10, §14)', () => {
         const job = ctx.container.jobQueue.getJob(jobId);
         return job !== null && ctx.container.jobQueue.isTerminal(job.status);
       }, 45_000);
-      const elapsedMs = Date.now() - requestedAt;
 
       const final = ctx.container.jobQueue.getJob(jobId)!;
       expect(final.status).toBe('CANCELLED');
       expect(final.error).toBeNull();
-      // SIGTERM·SIGKILL 폴백도 결국 CANCELLED 로 끝나므로 상태만으로는 두 경로가 구분되지 않는다.
-      // 신호가 나가기 전에 끝났다는 것이 IPC 경로로 취소됐다는 유일한 증거다.
-      expect(elapsedMs).toBeLessThan(CANCEL_SIGTERM_DELAY_MS);
+
+      // SIGTERM·SIGKILL 폴백도 결국 CANCELLED 로 끝나므로 상태만으로는 세 경로가
+      // 구분되지 않는다. 어느 단계가 프로세스를 끝냈는지는 감사 기록이 답한다 —
+      // 예전에는 "SIGTERM 폴백 시각(5초) 전에 끝났으니 IPC 였을 것" 이라고 벽시계로
+      // 추론했는데, 그 5초에 자식 부팅 시간이 통째로 들어가 부하가 걸린 머신에서
+      // 배포 게이트를 막았다 (제품은 멀쩡했다).
+      //
+      // 기록이 나타날 때까지 기다린다: 자식은 최종 상태를 DB 에 먼저 쓰고 그 다음에
+      // 종료하므로, CANCELLED 를 봤다고 부모의 exit 핸들러(=이 기록을 쓰는 곳)가
+      // 이미 돌았다는 보장은 없다.
+      const finishedDetail = (): { cancelPath?: string } | undefined =>
+        (
+          ctx.container.database.sqlite
+            .prepare("SELECT detail_json FROM audit_logs WHERE event = 'backtest.finished'")
+            .all() as Array<{ detail_json: string }>
+        )
+          .map((row) => JSON.parse(row.detail_json) as { jobId: string; cancelPath?: string })
+          .find((d) => d.jobId === jobId);
+
+      await waitFor(() => finishedDetail() !== undefined, 15_000);
+      expect(finishedDetail()?.cancelPath).toBe('IPC');
     },
   );
 

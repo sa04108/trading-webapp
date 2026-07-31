@@ -21,9 +21,25 @@ export interface JobEvent {
 }
 
 const POLL_INTERVAL_MS = 1_000;
-/** IPC 취소가 이 시간 안에 처리되지 않으면 신호로 강제한다 — 테스트가 두 경로를 구분하는 기준이기도 하다 */
-export const CANCEL_SIGTERM_DELAY_MS = 5_000;
+/** IPC 취소가 이 시간 안에 처리되지 않으면 신호로 강제한다 */
+const CANCEL_SIGTERM_DELAY_MS = 5_000;
 const CANCEL_SIGKILL_DELAY_MS = 10_000;
+
+/**
+ * 취소가 §10 시퀀스의 어느 단계에서 끝났는지.
+ *
+ * 세 경로 모두 최종 상태가 CANCELLED 라서 상태만으로는 구분되지 않는다 — IPC 경로가
+ * 조용히 고장 나도(자식이 메시지를 안 듣게 되는 변경 등) 취소는 여전히 "성공" 으로
+ * 보이고, 실제로는 매번 5초를 기다린 뒤 프로세스를 죽이고 있게 된다. 그래서 끝난
+ * 단계를 backtest.finished 감사 기록에 남긴다: 운영에서는 "요즘 취소가 자꾸 신호까지
+ * 간다" 를 볼 수 있고, 테스트는 시계를 재는 대신 이 값을 확인할 수 있다.
+ */
+export type CancelPath = 'IPC' | 'SIGTERM' | 'SIGKILL';
+
+interface CancelEscalation {
+  path: CancelPath;
+  timers: NodeJS.Timeout[];
+}
 
 function isPidAlive(pid: number): boolean {
   try {
@@ -42,6 +58,7 @@ function isPidAlive(pid: number): boolean {
 export class JobOrchestrator {
   readonly events = new EventEmitter();
   private readonly children = new Map<string, ChildProcess>();
+  private readonly cancelEscalations = new Map<string, CancelEscalation>();
   private timer: NodeJS.Timeout | null = null;
   private stopped = false;
   private readonly workerId = `worker-${process.pid}`;
@@ -102,10 +119,27 @@ export class JobOrchestrator {
       this.queue.setStatus(jobId, 'CANCELLING', {}, ['RUNNING', 'STARTING']);
       this.events.emit('job', { jobId, kind: 'status' } satisfies JobEvent);
       child.send({ type: 'cancel' });
-      const sigterm = setTimeout(() => child.kill('SIGTERM'), CANCEL_SIGTERM_DELAY_MS);
+
+      // 단계를 올릴 때마다 기록한다. 자식이 이미 끝났으면(children 에서 빠졌으면)
+      // 올리지 않는다 — 죽은 자식에게 신호를 쏘지 않고, IPC 로 끝난 취소를 신호로
+      // 끝난 것처럼 기록하지도 않는다.
+      const escalation: CancelEscalation = { path: 'IPC', timers: [] };
+      const escalate = (to: Exclude<CancelPath, 'IPC'>, signal: 'SIGTERM' | 'SIGKILL'): void => {
+        if (!this.children.has(jobId)) return;
+        escalation.path = to;
+        this.logger.warn(
+          { module: 'backtest', event: 'backtest.cancel.escalated', jobId, to },
+          'cancel escalated to signal',
+        );
+        child.kill(signal);
+      };
+      const sigterm = setTimeout(() => escalate('SIGTERM', 'SIGTERM'), CANCEL_SIGTERM_DELAY_MS);
       sigterm.unref();
-      const sigkill = setTimeout(() => child.kill('SIGKILL'), CANCEL_SIGKILL_DELAY_MS);
+      const sigkill = setTimeout(() => escalate('SIGKILL', 'SIGKILL'), CANCEL_SIGKILL_DELAY_MS);
       sigkill.unref();
+      escalation.timers = [sigterm, sigkill];
+      this.cancelEscalations.set(jobId, escalation);
+
       this.audit.record('admin', 'backtest.cancel-requested', { jobId });
       return 'CANCELLING';
     }
@@ -185,6 +219,13 @@ export class JobOrchestrator {
 
     child.on('exit', (code, signal) => {
       this.children.delete(job.id);
+      // 남은 폴백 타이머를 끈다 — 종료한 자식에게 신호를 쏘지 않고, 늦게 발사된
+      // 타이머가 이미 끝난 취소의 단계를 덧칠하지도 않게 한다.
+      const escalation = this.cancelEscalations.get(job.id);
+      if (escalation) {
+        for (const timer of escalation.timers) clearTimeout(timer);
+        this.cancelEscalations.delete(job.id);
+      }
       if (this.stopped) return; // 셧다운 중 — DB 가 이미 닫혔을 수 있다
 
       try {
@@ -210,6 +251,8 @@ export class JobOrchestrator {
           jobId: job.id,
           status: this.queue.getJob(job.id)?.status,
           durationMs: this.clock.now() - (current.startedAtMs ?? current.createdAtMs),
+          // 취소로 끝난 작업만 갖는 값 — 어느 단계가 실제로 프로세스를 끝냈는지
+          ...(escalation ? { cancelPath: escalation.path } : {}),
         });
         this.events.emit('job', { jobId: job.id, kind: 'status' } satisfies JobEvent);
       } catch (error) {
