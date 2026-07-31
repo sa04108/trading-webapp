@@ -32,8 +32,15 @@ import {
   SYMBOL_SUMMARY_LIMIT,
 } from './symbol-summary';
 import type { BacktestRequestBody } from './types';
-
-const STEPS = ['전략', '데이터·종목', '기간', '자본·비용', '검토', '실행'] as const;
+import {
+  navigableStepLimit,
+  REVIEW_STEP,
+  RUN_STEP,
+  stepBlocker,
+  stepJumpBlockReason,
+  WIZARD_STEPS,
+  type StepGateState,
+} from './wizard-steps';
 
 interface StrategySummary {
   id: string;
@@ -255,38 +262,28 @@ export function NewBacktestWizard() {
     },
   });
 
-  const canProceed = (): string | null => {
-    switch (step) {
-      case 0:
-        return strategyId ? null : '전략을 선택하세요';
-      case 1:
-        if (!datasetId) return '데이터셋을 선택하세요';
-        if (symbols.length === 0) return '종목을 1개 이상 선택하세요';
-        return null;
-      case 2:
-        if (!from || !to) return '시작일과 종료일을 입력하세요';
-        if (from > to) return '시작일이 종료일보다 늦습니다';
-        return null;
-      case 3: {
-        const cash = Number(initialCash);
-        return Number.isFinite(cash) && cash > 0 ? null : '초기 자본이 올바르지 않습니다';
-      }
-      default:
-        return null;
-    }
-  };
+  // 단계 게이트가 보는 값만 모아 넘긴다 — 규칙은 wizard-steps.ts 한 곳에 있다
+  const gate: StepGateState = { strategyId, datasetId, symbols, from, to, initialCash };
+  const navLimit = navigableStepLimit(step, gate);
 
   const goNext = (): void => {
-    const error = canProceed();
+    const error = stepBlocker(step, gate);
     if (error) {
       setStepError(error);
       return;
     }
     setStepError(null);
-    setStep((s) => Math.min(s + 1, STEPS.length - 1));
+    setStep((s) => Math.min(s + 1, RUN_STEP));
   };
 
-  const request = step >= 4 ? buildRequest() : null;
+  // 상단 버튼으로 바로 이동. 잠긴 단계는 여기 오지 않는다(호출부가 이유를 띄운다)
+  const goToStep = (target: number): void => {
+    if (target === step || target < 0 || target > navLimit) return;
+    setStepError(null);
+    setStep(target);
+  };
+
+  const request = step >= REVIEW_STEP ? buildRequest() : null;
 
   // 검토 줄은 종목 하나가 한 줄을 쓴다 — 개수는 5개로 접고, 이름은 글자수로 줄이고,
   // 폭 맞춤은 SymbolLabel 이 한다(코드는 잘리지 않는다). 전체 목록은 title 로 남긴다.
@@ -350,24 +347,43 @@ export function NewBacktestWizard() {
 
       {prefilling ? <Skeleton className="h-64 w-full" /> : null}
 
-      <ol className="flex flex-wrap gap-1 text-xs" aria-label="진행 단계">
-        {STEPS.map((label, index) => (
-          <li
-            key={label}
-            aria-current={index === step ? 'step' : undefined}
-            className={cn(
-              'rounded-full px-2.5 py-1',
-              index === step
-                ? 'bg-primary text-primary-foreground'
-                : index < step
-                  ? 'bg-muted text-foreground'
-                  : 'bg-muted/50 text-muted-foreground',
-            )}
-          >
-            {index + 1}. {label}
-          </li>
-        ))}
-      </ol>
+      {prefilling ? null : (
+        // 3열 × 2행 — 44px 터치 영역을 지키면서 여섯 단계가 좁은 화면에 들어간다
+        <nav aria-label="진행 단계">
+          <ol className="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
+            {WIZARD_STEPS.map((label, index) => {
+              const lockReason = stepJumpBlockReason(index, step, gate);
+              const current = index === step;
+              return (
+                <li key={label}>
+                  <button
+                    type="button"
+                    aria-current={current ? 'step' : undefined}
+                    // disabled 대신 aria-disabled — 포커스와 클릭을 살려 두고 왜 못
+                    // 가는지 오류 영역에 문장으로 알린다 (스펙 §17 접근성)
+                    aria-disabled={lockReason !== null}
+                    title={lockReason ?? undefined}
+                    onClick={() => {
+                      if (lockReason !== null) setStepError(lockReason);
+                      else goToStep(index);
+                    }}
+                    className={cn(
+                      'flex min-h-11 w-full items-center justify-center rounded-lg px-1.5 text-center text-xs transition-colors',
+                      current
+                        ? 'bg-primary font-medium text-primary-foreground'
+                        : lockReason !== null
+                          ? 'cursor-not-allowed bg-muted/40 text-muted-foreground'
+                          : 'bg-muted text-foreground hover:bg-muted/70',
+                    )}
+                  >
+                    {index + 1}. {label}
+                  </button>
+                </li>
+              );
+            })}
+          </ol>
+        </nav>
+      )}
 
       {stepError ? (
         <Alert variant="destructive" role="alert">
@@ -664,7 +680,7 @@ export function NewBacktestWizard() {
         </Card>
       ) : null}
 
-      {!prefilling && step >= 4 ? (
+      {!prefilling && step >= REVIEW_STEP ? (
         typeof request === 'string' ? (
           <Alert variant="destructive">
             <AlertDescription>{request}</AlertDescription>
@@ -673,7 +689,7 @@ export function NewBacktestWizard() {
           <Card>
             <CardHeader>
               <CardTitle className="text-base">
-                {step === 4 ? '검토' : '실행 준비 완료'}
+                {step === REVIEW_STEP ? '검토' : '실행 준비 완료'}
               </CardTitle>
               <CardDescription>제출 전 설정을 확인하세요.</CardDescription>
             </CardHeader>
@@ -747,14 +763,11 @@ export function NewBacktestWizard() {
             variant="outline"
             className="h-11"
             disabled={step === 0}
-            onClick={() => {
-              setStepError(null);
-              setStep((s) => Math.max(0, s - 1));
-            }}
+            onClick={() => goToStep(step - 1)}
           >
             이전
           </Button>
-          {step < STEPS.length - 1 ? (
+          {step < RUN_STEP ? (
             <Button className="h-11" onClick={goNext}>
               다음
             </Button>
