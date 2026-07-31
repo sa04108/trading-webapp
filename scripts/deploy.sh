@@ -2,12 +2,22 @@
 # 스펙 §30 — 릴리스 배포. 개발 PC 에서 빌드·검증 후 서버로 배포한다.
 #
 # 사용법: ./scripts/deploy.sh
-#         실행 후 서버 주소를 물어본다. 비대화형으로 돌리려면 환경변수를 미리 설정한다.
+#         실행 후 서버 주소를 물어본다. 비대화형으로 돌리려면 환경변수를 미리 설정한다 —
+#         ssh config 는 필요하지 않다:
 #
-#   QP_HOST  서버 주소, `[user@]host` 형식. 미설정이면 첫 단계에서 물어본다.
-#            (bootstrap.sh 와 같은 변수·같은 형식이다)
-#   SSH_KEY  개인키 경로 (선택). 지정하면 -i 로 넘긴다. 없으면 ~/.ssh/config 나
-#            기본 이름 키(id_ed25519 등)에 의존한다 — bootstrap.sh 와 같은 규칙이다.
+#         SSH_KEY=~/.ssh/your-key QP_SSH_USER=ubuntu QP_HOST=203.0.113.10 \
+#           ./scripts/deploy.sh
+#
+#   QP_HOST          서버 주소, `[user@]host` 형식. 미설정이면 첫 단계에서 물어본다
+#   QP_SSH_USER      로그인 사용자명. QP_HOST 에 `user@` 가 없을 때만 쓴다
+#   QP_SSH_PORT      SSH 포트 (미지정이면 22)
+#   SSH_KEY          개인키 경로. `~/` 로 시작하면 아래에서 $HOME 으로 펼친다
+#   QP_SSH_JUMP      점프 호스트, `[user@]host[:port]` (ssh 의 ProxyJump)
+#   QP_SSH_HOST_KEY  호스트키 확인: accept-new(기본) | yes | no
+#   QP_SSH_OPTS      그 밖의 ssh 옵션을 그대로 (예: "-o ServerAliveInterval=30")
+#
+# 접속 파라미터의 이름과 의미는 bootstrap.sh 와 같다 — 부트스트랩이 성공한 조합을
+# 그대로 배포에 쓸 수 있어야 한다 (부트스트랩 마지막 출력이 그 명령을 찍어 준다).
 #
 # 로그인 사용자명을 가정하지 않는다 — 클라우드 이미지마다 다르고(ubuntu / admin /
 # ec2-user) 자체 설치 호스트는 임의다 (스펙 §2.1).
@@ -29,6 +39,19 @@ fi
   echo "서버 주소가 필요합니다 — 비대화형이면 QP_HOST 로 지정하세요" >&2
   exit 1
 }
+# 사용자명은 주소에 붙여도 되고 QP_SSH_USER 로 따로 줘도 된다 (bootstrap.sh 와 같은 규칙).
+if [ -n "${QP_SSH_USER:-}" ]; then
+  case "${TARGET}" in
+    *@*) echo "QP_SSH_USER 는 무시합니다 — 주소에 이미 사용자명이 있습니다: ${TARGET}" >&2 ;;
+    *) TARGET="${QP_SSH_USER}@${TARGET}" ;;
+  esac
+fi
+case "${TARGET}" in
+  -* | *[[:space:]]*)
+    echo "서버 주소 형식이 올바르지 않습니다: ${TARGET}" >&2
+    exit 1
+    ;;
+esac
 
 # ── 여기서부터 모든 출력을 로그 파일에도 남긴다 ───────────────────────────────
 # 배포는 검증 게이트(lint·typecheck·test·build)에서 출력이 많다. 화면에 의존하지 않는
@@ -57,25 +80,67 @@ trap on_exit EXIT
 
 echo "로그: ${LOG}"
 
-# IdentitiesOnly 를 함께 켜는 이유: 하드닝이 MaxAuthTries 3 을 걸기 때문에 agent 의
-# 다른 키들이 먼저 제시되면 맞는 키가 4번째가 되어 서버가 먼저 연결을 끊을 수 있다.
+# ── 접속 옵션을 환경변수에서 만든다 (bootstrap.sh 와 같은 규칙) ───────────────
+# 포트와 점프 호스트를 -p / -J 가 아니라 -o 로 넘기는 이유: 같은 배열을 ssh 와 scp 에
+# 함께 쓰기 때문이다 — scp 의 포트 플래그는 -P 라서 -p 를 받지 못한다.
 SSH_OPTS=()
-if [ -n "${SSH_KEY:-}" ]; then
-  [ -f "${SSH_KEY}" ] || { echo "SSH_KEY 파일이 없습니다: ${SSH_KEY}" >&2; exit 1; }
-  SSH_OPTS=(-i "${SSH_KEY}" -o IdentitiesOnly=yes)
+SSH_FLAGS=""  # 실패 안내에서 손으로 재현할 때 쓰는 ssh 플래그
+
+# QP_SSH_OPTS 를 맨 앞에 둔다 — ssh 는 같은 옵션이 여러 번 오면 "먼저 나온 값"을 쓰므로,
+# 앞에 둬야 사용자가 아래 기본값을 덮을 수 있다.
+if [ -n "${QP_SSH_OPTS:-}" ]; then
+  read -ra SSH_OPTS <<< "${QP_SSH_OPTS}"
 fi
+
+if [ -n "${SSH_KEY:-}" ]; then
+  # 따옴표 안의 `~` 는 셸이 펼치지 않는다
+  case "${SSH_KEY}" in
+    '~/'*) SSH_KEY="${HOME}/${SSH_KEY#'~/'}" ;;
+  esac
+  [ -f "${SSH_KEY}" ] || { echo "SSH_KEY 파일이 없습니다: ${SSH_KEY}" >&2; exit 1; }
+  # IdentitiesOnly 를 함께 켜는 이유: 하드닝이 MaxAuthTries 3 을 걸기 때문에 agent 의
+  # 다른 키들이 먼저 제시되면 맞는 키가 4번째가 되어 서버가 먼저 연결을 끊을 수 있다.
+  SSH_OPTS+=(-i "${SSH_KEY}" -o IdentitiesOnly=yes)
+  SSH_FLAGS="${SSH_FLAGS}-i ${SSH_KEY} "
+fi
+
+if [ -n "${QP_SSH_PORT:-}" ]; then
+  case "${QP_SSH_PORT}" in
+    '' | *[!0-9]*) echo "QP_SSH_PORT 는 숫자여야 합니다: ${QP_SSH_PORT}" >&2; exit 1 ;;
+  esac
+  SSH_OPTS+=(-o "Port=${QP_SSH_PORT}")
+  SSH_FLAGS="${SSH_FLAGS}-p ${QP_SSH_PORT} "
+fi
+
+if [ -n "${QP_SSH_JUMP:-}" ]; then
+  SSH_OPTS+=(-o "ProxyJump=${QP_SSH_JUMP}")
+  SSH_FLAGS="${SSH_FLAGS}-J ${QP_SSH_JUMP} "
+fi
+
+# accept-new 기본값의 이유는 bootstrap.sh 에 적어 뒀다 — 접속 확인이 BatchMode 라
+# ssh 기본값(ask)은 처음 보는 호스트에서 물어볼 TTY 가 없어 그냥 실패한다.
+case "${QP_SSH_HOST_KEY:=accept-new}" in
+  accept-new | yes | no) SSH_OPTS+=(-o "StrictHostKeyChecking=${QP_SSH_HOST_KEY}") ;;
+  *) echo "QP_SSH_HOST_KEY 는 accept-new | yes | no 중 하나입니다: ${QP_SSH_HOST_KEY}" >&2; exit 1 ;;
+esac
 
 # 업로드 전에 접속을 확인한다 — 검증 게이트(수 분)를 다 돌린 뒤 SSH 로 실패하면
 # 그 시간이 통째로 버려진다. bootstrap.sh 와 같은 이유의 preflight 다.
 echo "==> SSH 접속 확인: ${TARGET}"
-ssh "${SSH_OPTS[@]}" -o ConnectTimeout=15 -o BatchMode=yes "${TARGET}" true 2>/dev/null || {
+# stderr 를 버리지 않는다 — 원인별 처방이 전혀 다르므로 ssh 가 한 말을 그대로 보여준다.
+if ! SSH_ERR="$(ssh "${SSH_OPTS[@]}" -o ConnectTimeout=15 -o BatchMode=yes "${TARGET}" true 2>&1)"; then
   {
     echo "SSH 접속 실패: ${TARGET}"
-    echo "  키를 지정하려면: SSH_KEY=~/.ssh/<your-key> ./scripts/deploy.sh"
-    echo "  원인 가르기:     ssh -v ${SSH_KEY:+-i ${SSH_KEY} }${TARGET} true"
+    echo
+    printf '%s\n' "${SSH_ERR}" | sed 's/^/  /'
+    echo
+    echo "ssh config 없이 환경변수로 지정할 수 있는 것들:"
+    echo "  QP_SSH_USER=ubuntu  QP_SSH_PORT=2222  SSH_KEY=~/.ssh/your-key"
+    echo "  QP_SSH_JUMP=user@bastion  QP_SSH_HOST_KEY=yes  QP_SSH_OPTS='-o ...'"
+    echo "원인 가르기: ssh -v ${SSH_FLAGS}${TARGET} true"
   } >&2
   exit 1
-}
+fi
 
 RELEASE="$(date -u +%Y%m%d-%H%M%S)-$(git rev-parse --short HEAD)"
 GIT_SHA="$(git rev-parse HEAD)"

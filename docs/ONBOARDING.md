@@ -217,6 +217,9 @@ CSV 형식: `timestamp,open,high,low,close,volume` (ISO 8601 UTC 또는 epoch ms
 
 - `infra/provision.sh` 는 **멱등한 단일 실행**이다: 패키지·Node·UFW(22 rate-limit,
   80, 443)·sshd 하드닝(키 전용)·Caddy(도메인 → 127.0.0.1:3000)·app.env·systemd.
+- 두 스크립트의 SSH 접속 파라미터는 전부 환경변수다 (`QP_HOST`·`QP_SSH_USER`·
+  `QP_SSH_PORT`·`SSH_KEY`·`QP_SSH_JUMP`·`QP_SSH_HOST_KEY`·`QP_SSH_OPTS`) —
+  `~/.ssh/config` 를 만들지 않아도 한 줄로 실행된다. 이름·의미는 두 스크립트가 같다.
 - deploy.sh 는 재시작 직전 SQLite 스냅샷을 뜨고, health check 실패 시 코드와 DB 를
   함께 롤백한다 (D-010).
 - 주의: `provision.sh` 는 **POSIX sh** 다 — bash 문법(배열, `[[ ]]`, pipefail) 금지.
