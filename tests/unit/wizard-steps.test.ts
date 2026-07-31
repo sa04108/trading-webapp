@@ -12,7 +12,7 @@ import {
 
 /** 전 단계를 통과하는 상태 — 각 테스트는 여기서 한 가지만 무너뜨린다 */
 const complete: StepGateState = {
-  strategyId: 'hourly-breakout',
+  strategyId: 'range-breakout',
   datasetId: 'ds_1',
   symbols: ['005930'],
   from: '2026-01-05',

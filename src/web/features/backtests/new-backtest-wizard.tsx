@@ -229,7 +229,6 @@ export function NewBacktestWizard() {
 
     return {
       strategyId: selectedStrategy.id,
-      strategyVersion: selectedStrategy.version,
       parameters: parsedParams,
       datasetId: selectedDataset.id,
       // 항상 명시해 보낸다 — 결과·복제가 "무슨 봉으로 돌렸는지" 를 들고 다니게 (§9.5)
@@ -696,8 +695,11 @@ export function NewBacktestWizard() {
             <CardContent className="space-y-2 text-sm">
               <div className="flex justify-between gap-3">
                 <span className="shrink-0 text-muted-foreground">전략</span>
+                {/* 버전은 요청이 아니라 레지스트리에서 읽는다 (D-029) — 실행되는 것도
+                    제출 시점에 등록돼 있는 전략이다 */}
                 <span>
-                  {request.strategyId} v{request.strategyVersion}
+                  {request.strategyId}
+                  {selectedStrategy ? ` v${selectedStrategy.version}` : ''}
                 </span>
               </div>
               <Separator />

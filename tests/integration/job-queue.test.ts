@@ -2,10 +2,15 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CANCEL_SIGTERM_DELAY_MS } from '../../src/server/modules/backtest/application/job-orchestrator.js';
 import { ENGINE_VERSION } from '../../src/server/modules/backtest/domain/engine.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
+import { currentStrategyVersion } from '../helpers/strategy-versions.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
 
 const HOUR = 3_600_000;
 const DAY = 86_400_000;
+
+const STRATEGY_ID = 'range-breakout';
+/** 재기준 테스트가 흉내 내는 "과거 스키마" 요청의 버전 — 현재 버전과 다르기만 하면 된다 */
+const LEGACY_VERSION = '1.1.0';
 
 /**
  * 평일 30일 × 7봉 1시간봉 CSV (KST 09:00 = UTC 00:00).
@@ -44,8 +49,7 @@ function buildTrendingHourlyCsv(): string {
 
 function buildRequest(datasetId: string): BacktestRequest {
   return {
-    strategyId: 'range-breakout',
-    strategyVersion: '2.0.0',
+    strategyId: STRATEGY_ID,
     parameters: {
       lookbackBars: 10,
       atrPeriod: 5,
@@ -340,11 +344,30 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(allowed.statusCode).toBe(204);
   });
 
+  it('전략 버전을 실은 옛 화면의 제출도 받는다 (D-029)', async () => {
+    // 배포로 전략 버전이 올라간 뒤, 그 전에 열어 둔 위저드가 보내는 형태.
+    // 예전에는 "전략 버전 불일치" 400 이었다 — 사용자가 할 수 있는 일은 새로고침뿐이었다.
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: { ...buildRequest(datasetId), strategyVersion: LEGACY_VERSION },
+    });
+    expect(created.statusCode).toBe(201);
+
+    // 보낸 값이 저장까지 새어 들어가면 안 된다 — 요청은 버전을 나르지 않는다
+    const jobId = (created.json().job as { id: string }).id;
+    const stored = JSON.parse(ctx.container.jobQueue.getJob(jobId)!.requestJson) as {
+      strategyVersion?: string;
+    };
+    expect(stored.strategyVersion).toBeUndefined();
+  });
+
   it('rebases a stored request that predates the current schema, and warns', async () => {
     // 구 스키마 형태: risk 없음, maxPositions 가 parameters 안에 있고, 전략 버전도 낮다
     const legacy = {
       ...buildRequest(datasetId),
-      strategyVersion: '1.1.0',
+      strategyVersion: LEGACY_VERSION,
       parameters: { ...buildRequest(datasetId).parameters, maxPositions: 5 },
     } as Record<string, unknown>;
     delete legacy.risk;
@@ -359,14 +382,21 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(cloned.statusCode).toBe(201);
     const body = cloned.json() as { job: { id: string }; warnings: string[] };
     expect(body.warnings.some((w) => w.includes('maxPositions=5'))).toBe(true);
-    expect(body.warnings.some((w) => w.includes('1.1.0') && w.includes('1.2.0'))).toBe(true);
+    expect(
+      body.warnings.some(
+        (w) => w.includes(LEGACY_VERSION) && w.includes(currentStrategyVersion(STRATEGY_ID)),
+      ),
+    ).toBe(true);
 
-    // 재기준 결과가 실제로 현재 스키마를 만족해야 한다
+    // 재기준 결과가 실제로 현재 스키마를 만족해야 한다 — 전략 버전 필드는 사라진다 (D-029)
     const stored = JSON.parse(
       ctx.container.jobQueue.getJob(body.job.id)!.requestJson,
-    ) as BacktestRequest & { parameters: Record<string, unknown> };
+    ) as BacktestRequest & {
+      parameters: Record<string, unknown>;
+      strategyVersion?: string;
+    };
     expect(stored.risk.maxPositions).toBe(5);
-    expect(stored.strategyVersion).toBe('1.2.0');
+    expect(stored.strategyVersion).toBeUndefined();
     expect(stored.parameters.maxPositions).toBeUndefined();
   });
 
@@ -472,7 +502,6 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const job = ctx.container.jobQueue.enqueue({
       ...buildRequest(datasetId),
       strategyId: 'value-quality-rank',
-      strategyVersion: '1.0.0',
       parameters: { topN: 20, rebalanceMonths: 3, staleQuarters: 2 },
     });
 
@@ -489,7 +518,6 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const job = ctx.container.jobQueue.enqueue({
       ...buildRequest(datasetId),
       strategyId: 'value-quality-rank',
-      strategyVersion: '1.0.0',
       parameters: { topN: 20, rebalanceMonths: 3, staleQuarters: 2 },
     });
 
@@ -522,7 +550,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
   it('초안은 재기준된 요청과 경고를 돌려준다 (재설정 및 복제)', async () => {
     const legacy = {
       ...buildRequest(datasetId),
-      strategyVersion: '1.1.0',
+      strategyVersion: LEGACY_VERSION,
       parameters: { ...buildRequest(datasetId).parameters, maxPositions: 5 },
     } as Record<string, unknown>;
     delete legacy.risk;
@@ -535,13 +563,18 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
     expect(draft.statusCode).toBe(200);
     const body = draft.json() as {
-      request: BacktestRequest;
+      request: BacktestRequest & { strategyVersion?: string };
       warnings: string[];
       blockers: string[];
     };
     expect(body.request.risk.maxPositions).toBe(5);
-    expect(body.request.strategyVersion).toBe('1.2.0');
-    expect(body.warnings.some((w) => w.includes('1.1.0'))).toBe(true);
+    // 초안은 버전을 나르지 않는다 (D-029). 다만 그때와 지금이 다르다는 사실은 경고로 남는다.
+    expect(body.request.strategyVersion).toBeUndefined();
+    expect(
+      body.warnings.some(
+        (w) => w.includes(LEGACY_VERSION) && w.includes(currentStrategyVersion(STRATEGY_ID)),
+      ),
+    ).toBe(true);
     expect(body.blockers).toEqual([]);
   });
 

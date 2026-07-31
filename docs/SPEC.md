@@ -842,7 +842,6 @@ GET /api/v1/system/info
 ```json
 {
   "strategyId": "range-breakout",
-  "strategyVersion": "2.0.0",
   "parameters": {
     "lookbackBars": 20,
     "atrPeriod": 14,

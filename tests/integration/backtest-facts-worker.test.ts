@@ -124,7 +124,6 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
     async () => {
       const payload: BacktestRequest = {
         strategyId: 'value-quality-rank',
-        strategyVersion: '1.0.0',
         parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
         datasetId,
         timeframe: '1d',
@@ -213,7 +212,6 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
         cookies: { qp_session: cookie },
         payload: {
           strategyId: 'value-quality-rank',
-          strategyVersion: '1.0.0',
           parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
           datasetId,
           timeframe: '1d',
@@ -355,7 +353,6 @@ describe('워커의 자본변동 팩트 배선 — 접수일이 기간 종료 �
     async () => {
       const payload: BacktestRequest = {
         strategyId: 'cross-sectional-momentum',
-        strategyVersion: '1.0.0',
         parameters: {
           formationDays: 20,
           skipDays: 0,

@@ -23,7 +23,6 @@ describe('유니버스 상한 (랭킹 전략용 확대)', () => {
   function requestWithSymbols(count: number): Record<string, unknown> {
     return {
       strategyId: 'cross-sectional-momentum',
-      strategyVersion: '1.0.0',
       parameters: {},
       datasetId: 'ds-1',
       universe: {

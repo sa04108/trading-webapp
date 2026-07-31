@@ -10,7 +10,7 @@ export type BacktestStatus =
 
 export interface BacktestRequestBody {
   strategyId: string;
-  strategyVersion: string;
+  /** 전략 버전은 보내지 않는다 (D-029) — 서버가 실행 시점의 등록 버전을 기록한다 */
   parameters: Record<string, unknown>;
   datasetId: string;
   /** 소비 봉 주기 — 미지정은 데이터셋 timeframe (이 필드가 없던 시절의 요청 호환) */
