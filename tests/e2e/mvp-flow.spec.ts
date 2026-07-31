@@ -69,8 +69,40 @@ test('full MVP flow', async ({ page }) => {
   await page.getByLabel('종료일').fill('2026-03-31');
   await page.getByRole('button', { name: '다음' }).click();
 
-  await page.getByRole('button', { name: '다음' }).click(); // 자본·비용 기본값
-  await page.getByRole('button', { name: '다음' }).click(); // 검토
+  await page.getByRole('button', { name: '다음' }).click(); // 자본·비용 기본값 → 검토
+  await expect(page.getByRole('button', { name: '5. 검토' })).toHaveAttribute(
+    'aria-current',
+    'step',
+  );
+
+  // 2-1. 상단 단계 버튼 — 뒤로는 자유롭게, 앞으로는 검토까지만
+  await page.getByRole('button', { name: '2. 데이터·종목' }).click();
+  await expect(page.getByRole('button', { name: '2. 데이터·종목' })).toHaveAttribute(
+    'aria-current',
+    'step',
+  );
+  // 실행은 잠겨 있다 — 눌러도 이동하지 않고 이유만 알려 준다
+  const runStep = page.getByRole('button', { name: '6. 실행' });
+  // toBeDisabled() 가 아니라 속성을 직접 본다 — native disabled 로 바뀌면 그것도
+  // 통과해 버리는데, 이 화면이 지켜야 하는 건 'aria-disabled 로만 잠근다' 쪽이다
+  await expect(runStep).toHaveAttribute('aria-disabled', 'true');
+  // force — Playwright 의 actionability 는 aria-disabled 도 '비활성' 으로 보고 클릭을
+  // 거부한다. 하지만 브라우저는 막지 않으므로 실제 사용자는 누를 수 있다: 이 화면이
+  // disabled 대신 aria-disabled 를 쓰는 이유(눌리되 이유를 알려 준다)가 바로 그것이라
+  // 검증도 실제 클릭으로 해야 한다.
+  await runStep.click({ force: true });
+  await expect(page.getByText("'검토' 단계에서 '다음' 을 눌러 진행하세요")).toBeVisible();
+  await expect(page.getByRole('button', { name: '2. 데이터·종목' })).toHaveAttribute(
+    'aria-current',
+    'step',
+  );
+  // 검토로는 한 번에 앞으로 갈 수 있다
+  await page.getByRole('button', { name: '5. 검토' }).click();
+  await expect(page.getByRole('button', { name: '5. 검토' })).toHaveAttribute(
+    'aria-current',
+    'step',
+  );
+  await page.getByRole('button', { name: '다음' }).click(); // 실행
 
   // 3. 작업 제출
   await page.getByRole('button', { name: '백테스트 실행' }).click();
@@ -200,7 +232,9 @@ test('mobile layout has no horizontal scroll on core screens (스펙 §38)', asy
   await page.getByRole('button', { name: '로그인' }).click();
   await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
 
-  for (const path of ['/', '/backtests', '/datasets', '/settings']) {
+  // /backtests/new 이 목록에 있는 이유: 단계 버튼 6개를 3열 × 2행으로 깔면서 44px
+  // 터치 영역을 지킨다 — 390px 에서 가장 먼저 넘칠 화면이 여기다
+  for (const path of ['/', '/backtests', '/backtests/new', '/datasets', '/settings']) {
     await page.goto(path);
     await page.waitForLoadState('networkidle');
     const overflow = await page.evaluate(
