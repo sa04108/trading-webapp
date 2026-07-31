@@ -1490,18 +1490,39 @@ sudo systemctl is-active quant-platform
 
 ## 28.2 운영에서 CLI 실행
 
-CLI 는 별도 프로세스이고 `app.env` 를 **자동으로 읽지 않는다**. `admin:create` 나
-`totp:enroll` 은 환경변수가 필요 없어 그냥 실행되지만, 증권사·DART 자격 증명이
-필요한 명령(`facts:sync`)은 systemd 와 같은 환경으로 띄워야 한다:
+CLI 는 별도 프로세스이고 `app.env` 를 **자동으로 읽지 않는다**. `admin:create`·
+`totp:enroll`·`facts:sync` **모두** systemd 와 같은 환경으로 띄워야 한다 — 자격 증명이
+필요한 명령만이 아니다:
 
 ```bash
-sudo systemd-run --uid=quant --gid=quant --pty --same-dir --wait \
+sudo systemd-run --uid=quant --gid=quant --pty --wait \
+  --working-directory=/opt/quant-platform/current \
   --property=EnvironmentFile=/etc/quant-platform/app.env \
   /usr/local/bin/node /opt/quant-platform/current/dist/server/cli.js \
   facts:sync --dataset <데이터셋_id> --from 2015 --to 2026
 ```
 
+네 부분이 각각 다른 사고를 막는다:
+
+- `EnvironmentFile` — CLI 는 `loadConfig()` 로 `process.env` 를 그대로 읽고,
+  `DATABASE_PATH` 의 기본값은 **상대경로** `./data/app.sqlite` 다. 이걸 빼면
+  `admin:create` 가 `/var/lib/quant-platform/app.sqlite` 가 아닌 엉뚱한 파일에
+  계정을 만들고, 로그인 화면에는 "존재하지 않는 사용자" 만 남는다. `NODE_ENV` 도
+  `production` 이 아니게 되어 프로덕션 가드가 풀린다. `DART_API_KEY` 유무와
+  무관하게 필요하다.
+- `--uid=quant --gid=quant` — SQLite 는 `-wal`·`-shm` 을 새로 만든다. root 로 돌리면
+  quant 소유 디렉터리에 root 소유 파일이 남아 서비스가 `SQLITE_READONLY` 로 죽는다.
+- `--pty` — CLI 는 대화형(비밀번호 프롬프트)이고, 무엇보다 `totp:enroll` 은 base32
+  secret 과 복구 코드를 stdout 에 찍는다. systemd-run 의 기본값(detach +
+  stdout→journal)으로 돌리면 그 값이 **journald 에 영구 기록**되어 §16 의 secret
+  재노출 금지가 무의미해진다. `--pty` 는 출력을 실행자의 터미널로만 보낸다.
+  대가는 SSH 가 끊기면 죽는 것이다 (아래 `tmux` 항목).
+- `--working-directory` — 유닛의 `WorkingDirectory` 와 같게 맞춘다. `--same-dir` 은
+  실행 위치에 의존하므로 쓰지 않는다.
+
 `app.env` 를 셸에서 export 해 넘기는 방식은 키가 `ps` 에 잠깐 노출되므로 쓰지 않는다.
+`app.env` 는 `chmod 600 root:root` 라서 quant 는 읽을 수도 없다 — 파일 경로만 넘기고
+실제로 여는 것은 PID 1 이라는 점이 systemd-run 을 쓰는 이유다.
 
 재무 수집은 종목·연도당 9건을 호출한다 (200종목 10년치 ≈ 18,000건). DART 일일 한도
 40,000건에는 여유가 있지만 rate limiter 가 120ms 간격이라 **최소 36분**이 걸린다 —
@@ -1512,7 +1533,9 @@ sudo systemd-run --uid=quant --gid=quant --pty --same-dir --wait \
 
 # 29. systemd
 
-`/etc/systemd/system/quant-platform.service`:
+`/etc/systemd/system/quant-platform.service` — 실물은 `infra/systemd/quant-platform.service`
+가 기준이다 (provision.sh 가 그 파일을 설치한다). 아래는 사본이므로 값을 바꿀 때는
+리포의 유닛 파일을 먼저 고칠 것:
 
 ```ini
 [Unit]
@@ -1526,7 +1549,7 @@ User=quant
 Group=quant
 WorkingDirectory=/opt/quant-platform/current
 EnvironmentFile=/etc/quant-platform/app.env
-ExecStart=/usr/local/bin/node /opt/quant-platform/current/dist/server/main.js
+ExecStart=/usr/local/bin/node /opt/quant-platform/current/dist/server/bootstrap/main.js
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
@@ -1550,7 +1573,11 @@ ReadWritePaths=/var/lib/quant-platform
 ReadOnlyPaths=/opt/quant-platform/current
 
 LimitNOFILE=65536
-MemoryMax=768M
+# 909MB 박스에서 앱이 555MB 만 써도 시스템(sshd·journald·caddy)이 질식했다
+# (2026-07-28 장애, D-023). MemoryHigh 에서 먼저 회수 압박을 걸어 Max 도달 전에
+# 스왑·캐시로 밀어내고, 캡도 시스템 몫 ~270MB 를 남기는 선까지 내린다.
+MemoryHigh=512M
+MemoryMax=640M
 TasksMax=256
 
 StandardOutput=journal
