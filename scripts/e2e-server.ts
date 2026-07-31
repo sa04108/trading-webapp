@@ -75,14 +75,20 @@ async function main(): Promise<void> {
   // 결정된다 (dataset.timeframe 고정 목록이 아니다). '1h' 로 직수입하면 1m 원본이
   // 전혀 없어 데이터 검증 드로어의 1m→1h 폴백이 빈 성공 응답 대신 400 을 받아
   // 깨진다. CSV 행은 이미 시간 경계에 맞춰져 있어 1m→1h 집계가 1:1 로 떨어진다.
-  await container.datasetService.importCsv({
-    datasetName: 'kr-hourly-v1',
+  // 봉은 **종목**으로 들어간다 — CSV 는 종목을 등록하지만 데이터셋은 만들지 않는다
+  // (설계 2026-07-31-symbol-as-first-class). 위저드가 고를 참조 묶음은 따로 만든다.
+  await container.symbolService.importCsv({
     market: 'KR',
     timeframe: '1m',
     symbol: '005930',
     fileName: 'e2e.csv',
     csvContent: buildTrendingHourlyCsv(),
   });
+  // 표시명은 라우트(`POST /symbols/import`)가 SymbolInfoService 로 채운다. 이 시드는
+  // 서비스를 직접 부르므로 그 단계를 건너뛴다 — 실제 경로와 같은 상태를 만들려면
+  // 여기서 이름을 넣어야 한다. (테스트의 `/symbols/info` 스텁은 브라우저 요청만 가로챈다.)
+  container.symbolService.setName('005930', '삼성전자');
+  container.datasetService.createDataset('kr-hourly-v1', ['005930']);
 
   const app = await buildServer(container);
   await app.listen({ host: config.bindAddress, port: config.port });

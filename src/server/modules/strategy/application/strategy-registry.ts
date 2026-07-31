@@ -23,6 +23,23 @@ export interface StrategySummary {
   readonly version: string;
   readonly name: string;
   readonly description: string;
+  /**
+   * 도메인에서는 봉만 쓰는 전략이 생략하는 선택 필드지만(`requiresFundamentals?`)
+   * 목록 응답에서는 항상 boolean 이다. 필드를 빼고 내리면 화면이 "재무를 안 쓴다" 와
+   * "서버가 알려주지 않았다" 를 구분할 수 없고, 후자를 전자로 읽으면 재무 전략에
+   * 「봉 데이터만」이 붙는다 — 사용자가 피하려던 상황을 화면이 보증해 버린다.
+   */
+  readonly requiresFundamentals: boolean;
+}
+
+function toSummary(strategy: AnyTradingStrategy): StrategySummary {
+  return {
+    id: strategy.id,
+    version: strategy.version,
+    name: strategy.name,
+    description: strategy.description,
+    requiresFundamentals: strategy.requiresFundamentals === true,
+  };
 }
 
 export class StrategyRegistry {
@@ -33,16 +50,21 @@ export class StrategyRegistry {
   }
 
   list(): StrategySummary[] {
-    return [...this.byId.values()].map(({ id, version, name, description }) => ({
-      id,
-      version,
-      name,
-      description,
-    }));
+    return [...this.byId.values()].map(toSummary);
   }
 
   get(strategyId: string): AnyTradingStrategy | null {
     return this.byId.get(strategyId) ?? null;
+  }
+
+  /**
+   * 단건 조회용 요약 — 목록과 같은 `toSummary` 를 거친다. 라우트가 응답 객체를 직접
+   * 조립하면 필드를 더할 때 한쪽만 고쳐질 수 있는데, 이 필드는 한쪽만 낡으면
+   * 화면이 데이터 요구를 잘못 말한다.
+   */
+  describe(strategyId: string): StrategySummary | null {
+    const strategy = this.get(strategyId);
+    return strategy === null ? null : toSummary(strategy);
   }
 
   /** 모르는 전략은 false — 여기서 던지면 "알 수 없는 전략" 검증보다 먼저 터진다 */

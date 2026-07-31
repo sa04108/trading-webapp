@@ -3,16 +3,18 @@ import type { Clock } from '../../../shared/clock.js';
 import type { Logger } from '../../../shared/logger.js';
 import type { Fact } from '../domain/fact.js';
 import { planFactSync, type FactSyncMode } from '../domain/sync-plan.js';
+
+/** 재무 버전 체인의 슬라이스 자리 — market-data 의 FACTS_SLICE 와 같은 값이어야 한다 */
+const FACTS_SLICE = 'FACTS';
 import type { FactCoverageStore } from './fact-coverage-store.js';
 import type {
-  DatasetVersionBumper,
   FactIngestionGap,
   FactRepository,
   FactSource,
+  SymbolVersionBumper,
 } from './ports.js';
 
 export interface FactSyncRequest {
-  readonly datasetId: string;
   readonly symbols: readonly string[];
   readonly fromYear: number;
   readonly toYear: number;
@@ -68,7 +70,7 @@ export interface FactSyncReport {
  * **종목 단위로 수집하고 종목 단위로 저장한다.** 전 종목을 모아 마지막에 한 번 저장하면
  * 200종목 × 12년 백필(종목·연도당 9회 ≈ 22,400 호출, 일 한도 40,000, rate limiter 로
  * 최소 45분)에서 180번째 종목의 오류 하나가 앞선 179종목의 결과를 통째로 버린다.
- * 저장을 종목마다 끊으면 수집 이력(dataset_facts_state)이 남아 다음 실행이 남은 종목만
+ * 저장을 종목마다 끊으면 수집 이력(symbol_facts_state)이 남아 다음 실행이 남은 종목만
  * 이어받는다.
  */
 export class FactSyncService {
@@ -76,17 +78,12 @@ export class FactSyncService {
     private readonly source: FactSource,
     private readonly repository: FactRepository,
     private readonly logger: Logger,
-    private readonly versions: DatasetVersionBumper,
+    private readonly versions: SymbolVersionBumper,
     private readonly clock: Clock,
     private readonly coverage: FactCoverageStore,
   ) {}
 
   async sync(request: FactSyncRequest, hooks: FactSyncHooks = {}): Promise<FactSyncReport> {
-    // 저장 전 팩트 저장소의 내용 지문. 저장 후 지문과 비교해 실제로 내용이 바뀐
-    // 경우에만 버전을 올린다 — 아무것도 바뀌지 않은 idempotent 재수집이 버전을
-    // 헛돌리면 "버전이 움직였다" 는 신호가 의미를 잃는다.
-    const fingerprintBefore = await this.storedFactsFingerprint(request.datasetId);
-
     /**
      * 중복 심볼은 접는다. `planFactSync` 가 Set 으로 접으므로 순회가 접지 않으면 실제
      * 호출이 계획의 `calls` 를 넘고(`fnlttSinglAcntAll`·`irdsSttus` 에는 캐시가 없어
@@ -109,7 +106,7 @@ export class FactSyncService {
       fromYear: request.fromYear,
       toYear: request.toYear,
       currentYear: new Date(this.clock.now()).getUTCFullYear(),
-      coveredBySymbol: this.coverage.getCoveredYears(request.datasetId),
+      coveredBySymbol: this.coverage.getCoveredYears(symbols),
       mode: request.mode,
     });
 
@@ -153,10 +150,14 @@ export class FactSyncService {
         const symbolGaps = [...financials.gaps, ...actions.gaps];
 
         // 종목마다 저장한다 — 뒤에서 터져도 여기까지는 남는다
-        await this.repository.saveFacts(request.datasetId, facts);
+        const fingerprintBefore = await this.storedFactsFingerprint(symbol);
+        await this.repository.saveFacts(facts);
         // 저장 직후에 이력을 남긴다. 순서가 뒤집히면 저장 실패한 연도를
         // 수집했다고 기록해 다음 실행이 그 구간을 건너뛴다.
-        this.coverage.addCoveredYears(request.datasetId, symbol, years, this.clock.now());
+        this.coverage.addCoveredYears(symbol, years, this.clock.now());
+        // 버전도 종목마다 닫는다 — 180/200 에서 멈춘 실행의 앞선 179종목은 버전이
+        // 올라가 있어야 그 종목을 쓰는 백테스트가 변경을 인식한다 (§9.5)
+        await this.bumpVersionIfChanged(symbol, fingerprintBefore);
 
         savedFacts += facts.length;
         doneSymbols += 1;
@@ -178,7 +179,6 @@ export class FactSyncService {
           {
             module: 'facts',
             event: 'facts.sync.aborted',
-            datasetId: request.datasetId,
             symbol,
             symbolIndex: index + 1,
             symbolTotal: symbols.length,
@@ -191,14 +191,10 @@ export class FactSyncService {
       }
     }
 
-    // 중단된 실행에서도 부른다 — 팩트가 저장됐다면 데이터셋 내용은 이미 바뀌었다
-    await this.bumpVersionIfChanged(request.datasetId, fingerprintBefore);
-
     this.logger.info(
       {
         module: 'facts',
         event: 'facts.synced',
-        datasetId: request.datasetId,
         savedFacts,
         gapCount: gaps.length,
         stoppedAtSymbol,
@@ -229,36 +225,34 @@ export class FactSyncService {
   }
 
   /**
-   * 저장된 팩트 내용이 실제로 달라졌으면 데이터셋 버전을 올린다 (§9.5).
+   * 저장된 팩트 내용이 실제로 달라졌으면 그 **종목의** 재무 버전을 올린다 (§9.5).
    *
    * 지문(seed)은 "지금 저장소에 들어 있는" 팩트에서 뽑는다 — 이번에 API 가 몇 건을
    * 돌려줬는지가 아니라 저장 결과가 기준이어야 같은 내용을 다시 수집했을 때 버전이
-   * 헛돌지 않는다. 버전 체인 자체는 `DatasetService.bumpVersion` 을 그대로 쓴다.
-   *
-   * 중단된 실행에서도 호출된다 — 저장된 것이 있으면 데이터셋 내용은 이미 달라졌다.
+   * 헛돌지 않는다.
    */
-  private async bumpVersionIfChanged(datasetId: string, fingerprintBefore: string): Promise<void> {
-    const fingerprintAfter = await this.storedFactsFingerprint(datasetId);
+  private async bumpVersionIfChanged(code: string, fingerprintBefore: string): Promise<void> {
+    const fingerprintAfter = await this.storedFactsFingerprint(code);
     if (fingerprintAfter === fingerprintBefore) {
       this.logger.info(
-        { module: 'facts', event: 'facts.version.unchanged', datasetId },
-        'fact content unchanged — dataset version not bumped',
+        { module: 'facts', event: 'facts.version.unchanged', symbol: code },
+        'fact content unchanged — symbol version not bumped',
       );
       return;
     }
-    this.versions.bumpVersion(datasetId, `facts:${fingerprintAfter}`, this.clock.now());
+    this.versions.bumpVersion(code, FACTS_SLICE, `facts:${fingerprintAfter}`, this.clock.now());
     this.logger.info(
-      { module: 'facts', event: 'facts.version.bumped', datasetId },
-      'dataset version bumped for fact change',
+      { module: 'facts', event: 'facts.version.bumped', symbol: code },
+      'symbol fact version bumped',
     );
   }
 
   /**
-   * 저장소에 있는 SYMBOL 스코프 팩트 전체의 내용 지문. 정렬 후 해싱하므로 행 순서·
-   * 수집 순서에 흔들리지 않는다. (MACRO 스코프는 이 수집 경로가 만들지 않는다.)
+   * 종목 하나의 SYMBOL 스코프 팩트 내용 지문. 정렬 후 해싱하므로 행 순서·수집 순서에
+   * 흔들리지 않는다. (MACRO 스코프는 이 수집 경로가 만들지 않는다.)
    */
-  private async storedFactsFingerprint(datasetId: string): Promise<string> {
-    const facts = await this.repository.getFacts({ datasetId, scope: 'SYMBOL' });
+  private async storedFactsFingerprint(code: string): Promise<string> {
+    const facts = await this.repository.getFacts({ scope: 'SYMBOL', keys: [code] });
     return factsFingerprint(facts);
   }
 }

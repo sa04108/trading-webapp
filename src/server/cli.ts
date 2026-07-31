@@ -7,11 +7,9 @@
 import readline from 'node:readline';
 import { randomBytes } from 'node:crypto';
 import { Writable } from 'node:stream';
-import { eq } from 'drizzle-orm';
 import { loadConfig } from './bootstrap/config.js';
 import { createContainer } from './bootstrap/container.js';
 import { newId } from './shared/ids.js';
-import { datasets } from './shared/db/schema.js';
 import type { FactIngestionGap } from './modules/facts/application/ports.js';
 
 function ask(question: string, hidden = false): Promise<string> {
@@ -191,26 +189,20 @@ async function factsSync(argv: readonly string[]): Promise<void> {
   const container = createContainer(config);
   try {
     // 컨테이너는 `database: DatabaseHandle` 을 노출한다 — Drizzle 인스턴스는 그 안의 `.db` 다
-    const dataset = container.database.db
-      .select()
-      .from(datasets)
-      .where(eq(datasets.id, datasetId))
-      .get();
+    // 데이터셋은 이제 종목 참조 묶음이다 — 수집 대상 종목을 여기서 펼친다.
+    // market 은 종목의 속성이라 참조 종목들에서 확인한다.
+    const dataset = container.datasetService.getDataset(datasetId);
     if (!dataset) throw new Error(`데이터셋을 찾을 수 없습니다: ${datasetId}`);
-    if (dataset.market !== 'KR') {
-      throw new Error('DART 수집은 KR 시장 데이터셋만 지원합니다.');
+    const symbols = [...dataset.symbols];
+    if (symbols.length === 0) throw new Error(`데이터셋에 종목이 없습니다: ${datasetId}`);
+    const foreign = container.symbolService
+      .listSymbols()
+      .filter((symbol) => symbols.includes(symbol.code) && symbol.market !== 'KR');
+    if (foreign.length > 0) {
+      throw new Error(
+        `DART 수집은 KR 종목만 지원합니다 — ${foreign.map((s) => s.code).join(', ')}`,
+      );
     }
-
-    let symbolsParsed: unknown;
-    try {
-      symbolsParsed = JSON.parse(dataset.symbolsJson);
-    } catch {
-      throw new Error(`데이터셋의 종목 목록(symbolsJson)이 올바른 JSON 이 아닙니다: ${datasetId}`);
-    }
-    if (!Array.isArray(symbolsParsed)) {
-      throw new Error(`데이터셋의 종목 목록(symbolsJson)이 배열이 아닙니다: ${datasetId}`);
-    }
-    const symbols = symbolsParsed as string[];
     console.log(
       `${dataset.name}: ${symbols.length}종목, ${fromYear}~${toYear}년, ` +
         `${consolidated ? '연결(CFS)' : '별도(OFS)'} 기준으로 수집합니다.`,
@@ -221,7 +213,7 @@ async function factsSync(argv: readonly string[]): Promise<void> {
     const report = await container.factSyncService.sync(
       // CLI 는 지정한 구간을 전부 다시 받는다 — 과거 연도 정정공시 재수집이
       // 이 명령의 역할이다 (웹은 증분)
-      { datasetId, symbols, fromYear, toYear, consolidated, mode: 'FULL' },
+      { symbols, fromYear, toYear, consolidated, mode: 'FULL' },
       {
         onSymbolDone: ({ symbol, index, total, savedFacts, gapCount }) => {
           console.log(

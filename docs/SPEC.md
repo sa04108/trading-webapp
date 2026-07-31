@@ -544,8 +544,8 @@ strategyVersion
 strategySourceHash
 parameterJson
 datasetId
-datasetVersion
-datasetHash
+universeHash
+universeJson
 engineVersion
 feeModelVersion
 slippageModelVersion
@@ -556,6 +556,11 @@ completedAt
 ```
 
 같은 입력·버전·seed는 같은 결과를 만들어야 한다.
+
+봉·재무가 종목에 종속되고 데이터셋이 그것을 공유하므로(D-034), 실행 입력은 데이터셋
+버전 하나로 고정되지 않는다 — 소비한 `(종목, 슬라이스, 버전, 해시)` 목록을
+`universeJson` 에, 그 집계 해시를 `universeHash` 에 남긴다. 워커는 실행 시점의 현재
+버전과 비교해 변한 종목을 이름으로 경고한다.
 
 ## 9.6 필수 지표
 
@@ -644,14 +649,13 @@ COMMIT;
 ```text
 /var/lib/quant-platform/
 ├─ app.sqlite
-├─ market-data/
-│  └─ dataset=<datasetId>/          # 데이터셋 단위 물리 격리 — 다른 데이터셋의
-│     ├─ market=KR/                 # 같은 심볼 import 와 섞이지 않는다
-│     │  ├─ timeframe=1m/
-│     │  │  └─ symbol=005930/year=2026/month=07/data.parquet
-│     │  └─ timeframe=1h/
-│     │     └─ symbol=005930/year=2026/data.parquet
-│     └─ market=US/
+├─ market-data/                     # 종목이 저장 단위 — 데이터셋은 참조만 갖는다 (D-034)
+│  ├─ market=KR/
+│  │  ├─ timeframe=1m/symbol=005930/year=2026/month=07/data.parquet
+│  │  ├─ timeframe=1h/symbol=005930/year=2026/data.parquet
+│  │  └─ timeframe=1d/symbol=005930/year=2026/data.parquet
+│  ├─ market=US/
+│  └─ facts/scope=SYMBOL/symbol=005930/data.parquet
 ├─ imports/
 ├─ exports/
 ├─ temp/
@@ -686,10 +690,15 @@ users
 sessions
 login_attempts
 
+symbols
+symbol_slices
+symbol_coverage
+symbol_facts_state
+symbol_versions
+
 datasets
-dataset_versions
-data_coverage
-data_import_jobs
+dataset_symbols
+data_sync_jobs
 
 backtest_jobs
 backtest_runs
@@ -1047,6 +1056,18 @@ Content
 
 잠긴 단계 버튼은 `disabled` 로 죽이지 않고 `aria-disabled` 로 표시한다. 눌렀을 때
 이동하지 않는 대신 무엇을 먼저 마쳐야 하는지 오류 영역에 문장으로 띄운다 (§17).
+
+전략 카드는 그 전략이 재무를 보는지 배지로 밝힌다 — 「재무 필요」 또는 「봉 데이터만」
+둘 중 하나가 **모든 카드에** 붙고, 고른 카드는 무엇이 신호에 개입하는지 한 줄로 풀어
+쓴다. 검토 단계에도 같은 배지를 둔다: 제출 직전이 재무 개입을 알아차릴 마지막 지점이다.
+배지 없음을 「봉 전용」으로 읽게 두지 않는 이유와 필드가 없는 응답에서 배지를 침묵시키는
+이유는 D-032 에 있다.
+
+데이터셋 카드(2단계)는 짝이 되는 표기를 쓴다 — 「재무 있음」·「재무 없음」 배지와
+「마지막 수집 N일 전」이다. 1단계에서 「재무 필요」를 본 사용자가 2단계에서 「재무 없음」을
+보면 제출 전에 조합이 어긋난 것을 알아차린다 (D-033). 재무는 **있고 없음만** 표시한다:
+종목별·연도별 충족도는 카드가 답할 질문이 아니다. 묵음 판정 문턱은 두지 않는다 — 경과
+시간만 보여 주고 동기화 여부는 사용자가 정한다.
 
 ### 작업 상세
 

@@ -427,9 +427,9 @@ function RunMetadataCard({
         : `${run.strategyId} v${run.strategyVersion}`,
     ],
     ['전략 해시', run.strategySourceHash.slice(0, 16)],
-    ['데이터셋', `${run.datasetId} (v${run.datasetVersion})`],
+    ['데이터셋', run.datasetId],
     ['봉 주기', timeframe ? timeframeLabel(timeframe) : '-'],
-    ['데이터 해시', run.datasetHash.slice(0, 16)],
+    ['유니버스 해시', run.universeHash.slice(0, 16)],
     ['엔진 버전', run.engineVersion],
     [
       '수수료 모델',
@@ -543,10 +543,6 @@ export function BacktestDetailPage() {
     queryFn: () =>
       api<{ strategies: Array<{ id: string; name: string; description: string }> }>('/strategies'),
   });
-  const datasets = useQuery({
-    queryKey: ['datasets'],
-    queryFn: () => api<{ datasets: Array<{ id: string; defaultTimeframe: string }> }>('/datasets'),
-  });
 
   if (isLoading || !job) {
     return (
@@ -558,7 +554,7 @@ export function BacktestDetailPage() {
   }
 
   const strategyName = strategies.data?.strategies.find((s) => s.id === job.strategyId)?.name;
-  const resolvedTimeframe = resolveJobTimeframe(job, datasets.data?.datasets);
+  const resolvedTimeframe = resolveJobTimeframe(job);
 
   const running = !isTerminal(job.status);
   const progress =

@@ -65,10 +65,12 @@ export async function buildServer(container: Container): Promise<FastifyInstance
       registerDatasetRoutes(
         api,
         container.datasetService,
+        container.symbolService,
         container.brokerSyncService,
         container.symbolInfoService,
-        (datasetId) => container.jobQueue.activeCountForDataset(datasetId) > 0,
+        (datasetId: string) => container.jobQueue.activeCountForDataset(datasetId) > 0,
         container.factsSyncEstimator,
+        (code: string) => container.factRepository.hasFacts('SYMBOL', code),
         requireAuth,
       );
       registerStrategyRoutes(api, container.strategyRegistry, requireAuth);
@@ -80,6 +82,7 @@ export async function buildServer(container: Container): Promise<FastifyInstance
           results: container.resultsService,
           strategies: container.strategyRegistry,
           datasets: container.datasetService,
+          symbolService: container.symbolService,
           audit: container.auditLog,
           factRepository: container.factRepository,
           dataRoot: container.config.dataRoot,

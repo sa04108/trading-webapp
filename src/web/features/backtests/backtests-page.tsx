@@ -83,10 +83,6 @@ export function BacktestsPage() {
     queryKey: ['strategies'],
     queryFn: () => api<{ strategies: StrategySummary[] }>('/strategies'),
   });
-  const datasets = useQuery({
-    queryKey: ['datasets'],
-    queryFn: () => api<{ datasets: Array<{ id: string; defaultTimeframe: string }> }>('/datasets'),
-  });
   const strategyById = new Map((strategies.data?.strategies ?? []).map((s) => [s.id, s]));
 
   // 카드마다 훅을 부르면 카드 수만큼 요청이 난다. 전체 심볼 합집합은
@@ -137,7 +133,7 @@ export function BacktestsPage() {
                     key={job.id}
                     job={job}
                     nameOf={nameOf}
-                    timeframe={resolveJobTimeframe(job, datasets.data?.datasets)}
+                    timeframe={resolveJobTimeframe(job)}
                   />
                 ))}
               </section>

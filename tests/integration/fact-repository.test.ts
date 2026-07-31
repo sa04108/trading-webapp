@@ -36,28 +36,27 @@ afterEach(() => {
 
 describe('ParquetFactRepository', () => {
   it('저장한 팩트를 그대로 읽는다', async () => {
-    await repository.saveFacts('ds-1', [fact()]);
-    const rows = await repository.getFacts({ datasetId: 'ds-1', scope: 'SYMBOL' });
+    await repository.saveFacts([fact()]);
+    const rows = await repository.getFacts({ scope: 'SYMBOL' });
     expect(rows).toEqual([fact()]);
   });
 
   it('빈 배열 저장은 아무 일도 하지 않는다', async () => {
-    await repository.saveFacts('ds-1', []);
-    expect(repository.hasFacts('ds-1', 'SYMBOL')).toBe(false);
+    await repository.saveFacts([]);
+    expect(repository.hasFacts('SYMBOL', '005930')).toBe(false);
   });
 
   it('수집되지 않은 데이터셋 조회는 빈 배열', async () => {
-    expect(await repository.getFacts({ datasetId: 'nope', scope: 'SYMBOL' })).toEqual([]);
-    expect(repository.hasFacts('nope', 'SYMBOL')).toBe(false);
+    expect(await repository.getFacts({ scope: 'SYMBOL' })).toEqual([]);
+    expect(repository.hasFacts('SYMBOL', 'nope!')).toBe(false);
   });
 
   it('asOfMaxTsMs 로 미래 공시를 잘라낸다', async () => {
-    await repository.saveFacts('ds-1', [
+    await repository.saveFacts([
       fact({ periodKey: '2025Q1', asOfTsMs: 1_000, value: 10 }),
       fact({ periodKey: '2025Q2', asOfTsMs: 2_000, value: 20 }),
     ]);
     const rows = await repository.getFacts({
-      datasetId: 'ds-1',
       scope: 'SYMBOL',
       asOfMaxTsMs: 1_500,
     });
@@ -65,13 +64,12 @@ describe('ParquetFactRepository', () => {
   });
 
   it('keys·fields 로 걸러낸다', async () => {
-    await repository.saveFacts('ds-1', [
+    await repository.saveFacts([
       fact({ key: '005930', field: 'OPERATING_INCOME' }),
       fact({ key: '000660', field: 'OPERATING_INCOME' }),
       fact({ key: '005930', field: 'CURRENT_ASSETS' }),
     ]);
     const rows = await repository.getFacts({
-      datasetId: 'ds-1',
       scope: 'SYMBOL',
       keys: ['005930'],
       fields: ['OPERATING_INCOME'],
@@ -82,66 +80,79 @@ describe('ParquetFactRepository', () => {
   });
 
   it('같은 (key, field, periodKey, asOf) 재수집은 덮어쓴다 — idempotent', async () => {
-    await repository.saveFacts('ds-1', [fact({ value: 100 })]);
-    await repository.saveFacts('ds-1', [fact({ value: 200 })]);
-    const rows = await repository.getFacts({ datasetId: 'ds-1', scope: 'SYMBOL' });
+    await repository.saveFacts([fact({ value: 100 })]);
+    await repository.saveFacts([fact({ value: 200 })]);
+    const rows = await repository.getFacts({ scope: 'SYMBOL' });
     expect(rows).toHaveLength(1);
     expect(rows[0]?.value).toBe(200);
   });
 
   it('같은 분기의 다른 asOf(재집계)는 둘 다 남는다', async () => {
-    await repository.saveFacts('ds-1', [
+    await repository.saveFacts([
       fact({ asOfTsMs: 1_000, value: 100 }),
       fact({ asOfTsMs: 2_000, value: 90 }),
     ]);
-    const rows = await repository.getFacts({ datasetId: 'ds-1', scope: 'SYMBOL' });
+    const rows = await repository.getFacts({ scope: 'SYMBOL' });
     expect(rows).toHaveLength(2);
   });
 
   it('두 번에 걸쳐 저장해도 앞서 저장한 것이 남는다 (병합 저장)', async () => {
-    await repository.saveFacts('ds-1', [fact({ periodKey: '2025Q1' })]);
-    await repository.saveFacts('ds-1', [fact({ periodKey: '2025Q2' })]);
-    const rows = await repository.getFacts({ datasetId: 'ds-1', scope: 'SYMBOL' });
+    await repository.saveFacts([fact({ periodKey: '2025Q1' })]);
+    await repository.saveFacts([fact({ periodKey: '2025Q2' })]);
+    const rows = await repository.getFacts({ scope: 'SYMBOL' });
     expect(rows.map((row) => row.periodKey).sort()).toEqual(['2025Q1', '2025Q2']);
   });
 
-  it('데이터셋끼리 격리된다', async () => {
-    await repository.saveFacts('ds-1', [fact({ value: 1 })]);
-    await repository.saveFacts('ds-2', [fact({ value: 2 })]);
-    const first = await repository.getFacts({ datasetId: 'ds-1', scope: 'SYMBOL' });
-    expect(first.map((row) => row.value)).toEqual([1]);
+  /**
+   * 종목끼리 격리된다 — 데이터셋 격리는 없어졌다 (설계 2026-07-31-symbol-as-first-class).
+   * 데이터가 데이터셋 간에 공유되는 것이 이 변경의 목적이므로, 남은 격리 축은 종목이다.
+   */
+  it('종목끼리 격리된다 — 한 종목의 재작성이 다른 종목을 건드리지 않는다', async () => {
+    await repository.saveFacts([fact({ key: '005930', value: 1 })]);
+    await repository.saveFacts([fact({ key: '000660', value: 2 })]);
+
+    expect((await repository.getFacts({ scope: 'SYMBOL', keys: ['005930'] })).map((r) => r.value)).toEqual([1]);
+    expect((await repository.getFacts({ scope: 'SYMBOL', keys: ['000660'] })).map((r) => r.value)).toEqual([2]);
+    // keys 없이 읽으면 두 파티션이 합쳐진다
+    expect((await repository.getFacts({ scope: 'SYMBOL' })).map((r) => r.value).sort()).toEqual([1, 2]);
+  });
+
+  it('같은 (key, field, periodKey, asOf) 재수집은 뒤에 온 값이 이긴다 (idempotent)', async () => {
+    await repository.saveFacts([fact({ key: '005930', value: 1 })]);
+    await repository.saveFacts([fact({ key: '005930', value: 2 })]);
+    expect((await repository.getFacts({ scope: 'SYMBOL' })).map((r) => r.value)).toEqual([2]);
   });
 
   it('SYMBOL 과 MACRO 는 다른 파티션이다', async () => {
-    await repository.saveFacts('ds-1', [
+    await repository.saveFacts([
       fact(),
       { scope: 'MACRO', key: 'KR_BASE_RATE', field: 'RATE', periodKey: '2025-03-01', asOfTsMs: 1_000, value: 3.5, unit: 'PERCENT' },
     ]);
-    expect(await repository.getFacts({ datasetId: 'ds-1', scope: 'MACRO' })).toHaveLength(1);
-    expect(await repository.getFacts({ datasetId: 'ds-1', scope: 'SYMBOL' })).toHaveLength(1);
-    expect(repository.hasFacts('ds-1', 'MACRO')).toBe(true);
+    expect(await repository.getFacts({ scope: 'MACRO' })).toHaveLength(1);
+    expect(await repository.getFacts({ scope: 'SYMBOL' })).toHaveLength(1);
+    expect(repository.hasFacts('MACRO', 'KOSPI')).toBe(true);
   });
 
-  it('데이터셋 삭제 경로에 놓인다 — dataset= 디렉터리 아래에 저장한다', async () => {
-    await repository.saveFacts('ds-1', [fact()]);
-    expect(fs.existsSync(path.join(dataRoot, 'dataset=ds-1'))).toBe(true);
-    // ParquetCandleRepository.deleteDataset 이 dataset=<id> 를 재귀 삭제하므로
-    // 팩트 정리 코드를 따로 만들지 않는다
-    fs.rmSync(path.join(dataRoot, 'dataset=ds-1'), { recursive: true, force: true });
-    expect(await repository.getFacts({ datasetId: 'ds-1', scope: 'SYMBOL' })).toEqual([]);
+  it('종목 파티션 아래에 저장한다 — 종목 단위 재작성과 삭제가 가능한 이유다', async () => {
+    await repository.saveFacts([fact({ key: '005930' })]);
+    const partition = path.join(dataRoot, 'facts', 'scope=SYMBOL', 'symbol=005930');
+    expect(fs.existsSync(path.join(partition, 'data.parquet'))).toBe(true);
+
+    fs.rmSync(partition, { recursive: true, force: true });
+    expect(await repository.getFacts({ scope: 'SYMBOL' })).toEqual([]);
   });
 
-  it('부적절한 datasetId 는 거부한다 (경로 조작 방지)', async () => {
-    await expect(repository.saveFacts('../escape', [fact()])).rejects.toThrow(/datasetId/);
+  it('부적절한 종목 키는 거부한다 (경로 조작 방지)', async () => {
+    await expect(repository.saveFacts([fact({ key: '../escape' })])).rejects.toThrow(/symbol key/);
   });
 
   it('결과는 (key, field, periodKey, asOf) 순으로 결정적이다', async () => {
-    await repository.saveFacts('ds-1', [
+    await repository.saveFacts([
       fact({ key: '000660', periodKey: '2025Q2' }),
       fact({ key: '005930', periodKey: '2025Q1' }),
       fact({ key: '000660', periodKey: '2025Q1' }),
     ]);
-    const rows = await repository.getFacts({ datasetId: 'ds-1', scope: 'SYMBOL' });
+    const rows = await repository.getFacts({ scope: 'SYMBOL' });
     expect(rows.map((row) => `${row.key}:${row.periodKey}`)).toEqual([
       '000660:2025Q1',
       '000660:2025Q2',
@@ -154,17 +165,17 @@ describe('ParquetFactRepository', () => {
   // Array.prototype.sort 는 NaN 을 동률로 취급해 배열 순서로 조용히 결과가 갈린다
   // (재현성 붕괴). 뷰에서 방어하지 않고 저장 경계에서 막는다.
   it('value 가 유한하지 않으면 저장을 거부한다', async () => {
-    await expect(repository.saveFacts('ds-1', [fact({ value: NaN })])).rejects.toThrow(
+    await expect(repository.saveFacts([fact({ value: NaN })])).rejects.toThrow(
       /유한하지 않습니다/,
     );
-    await expect(repository.saveFacts('ds-1', [fact({ value: Infinity })])).rejects.toThrow(
+    await expect(repository.saveFacts([fact({ value: Infinity })])).rejects.toThrow(
       /유한하지 않습니다/,
     );
   });
 
   it('asOfTsMs 가 유한하지 않으면 저장을 거부한다', async () => {
     await expect(
-      repository.saveFacts('ds-1', [fact({ asOfTsMs: NaN })]),
+      repository.saveFacts([fact({ asOfTsMs: NaN })]),
     ).rejects.toThrow(/유한하지 않습니다/);
   });
 
@@ -172,11 +183,11 @@ describe('ParquetFactRepository', () => {
     // 'AB'+'CD' 와 'ABC'+'D' 는 구분자 없이 이어붙이면 같은 문자열이 된다 —
     // key·field 는 domain 상 자유 문자열(FundamentalField 도 리터럴 유니온일 뿐
     // 실제 타입은 string)이라 이 경계쌍은 이론이 아니라 실제로 도달 가능하다.
-    await repository.saveFacts('ds-1', [
+    await repository.saveFacts([
       fact({ key: 'AB', field: 'CD', periodKey: '2025Q1', asOfTsMs: 1_000, value: 1 }),
       fact({ key: 'ABC', field: 'D', periodKey: '2025Q1', asOfTsMs: 1_000, value: 2 }),
     ]);
-    const rows = await repository.getFacts({ datasetId: 'ds-1', scope: 'SYMBOL' });
+    const rows = await repository.getFacts({ scope: 'SYMBOL' });
     expect(rows).toHaveLength(2);
     expect(rows.map((row) => `${row.key}/${row.field}`).sort()).toEqual(['AB/CD', 'ABC/D']);
   });
@@ -185,14 +196,14 @@ describe('ParquetFactRepository', () => {
     // await 로 순서를 기다리지 않고 동시에 발사한다 — 락이 없으면 두 쓰기 모두
     // 저장 전 상태를 read 해서 나중에 rename 하는 쪽이 앞선 쓰기를 지운다.
     await Promise.all([
-      repository.saveFacts('ds-1', [fact({ periodKey: '2025Q1', value: 1 })]),
-      repository.saveFacts('ds-1', [fact({ periodKey: '2025Q2', value: 2 })]),
+      repository.saveFacts([fact({ periodKey: '2025Q1', value: 1 })]),
+      repository.saveFacts([fact({ periodKey: '2025Q2', value: 2 })]),
     ]);
-    const rows = await repository.getFacts({ datasetId: 'ds-1', scope: 'SYMBOL' });
+    const rows = await repository.getFacts({ scope: 'SYMBOL' });
     expect(rows.map((row) => row.periodKey).sort()).toEqual(['2025Q1', '2025Q2']);
   });
 
   it('부적절한 datasetId 로 hasFacts 를 호출하면 false 를 반환한다', () => {
-    expect(repository.hasFacts('../escape', 'SYMBOL')).toBe(false);
+    expect(repository.hasFacts('SYMBOL', '../escape')).toBe(false);
   });
 });

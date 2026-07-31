@@ -145,30 +145,38 @@ test('full MVP flow', async ({ page }) => {
     .poll(() => page.url(), { timeout: 10_000 })
     .not.toBe(originalUrl);
 
-  // 8. 데이터 검증 차트 — 심볼 클릭 → 봉차트 드로어
+  // 8. 데이터 화면 — 데이터셋/종목 두 구획 (설계 2026-07-31-symbol-as-first-class)
   await page.goto('/datasets');
 
-  // 8-1. 카드 스위치(일봉/분봉) + 자물쇠 — 픽스처는 1m CSV 로 임포트돼 분봉 슬라이스만
-  // 데이터가 있다. defaultTimeframe 이 '1m' 이라 카드는 분봉 탭으로 열려야 한다.
-  const monthTab = page.getByRole('tab', { name: '분봉' });
-  const dayTab = page.getByRole('tab', { name: '일봉' });
-  await expect(monthTab).toHaveAttribute('aria-selected', 'true');
-  await expect(page.getByRole('button', { name: '005930', exact: true })).toBeVisible();
+  // 8-1. 데이터셋 구획은 참조 묶음을 보여준다 — 봉·재무는 종목 소관이다
+  await expect(page.getByText('kr-hourly-v1')).toBeVisible();
+  await expect(page.getByRole('tab', { name: '데이터셋' })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
 
-  // 일봉 탭으로 전환 — 데이터 없는 슬라이스는 자물쇠 빈 상태를 보여야 한다
-  await dayTab.click();
-  await expect(dayTab).toHaveAttribute('aria-selected', 'true');
-  await expect(
-    page.getByText('일봉 데이터가 없습니다 — 동기화가 필요합니다.'),
-  ).toBeVisible();
-  await expect(page.getByRole('button', { name: '005930', exact: true })).toHaveCount(0);
+  // 8-2. 종목 구획 — 슬라이스별 봉 배지와 슬라이스별 마지막 수집을 표시한다.
+  // 픽스처는 1m CSV 라 분봉만 데이터가 있다 — 「봉 있음」 하나로 접으면 숨는 사실이다.
+  await page.getByRole('tab', { name: '종목' }).click();
+  await expect(page.getByText('삼성전자')).toBeVisible();
+  await expect(page.getByText(/분봉 방금|분봉 \d+분 전/)).toBeVisible();
+  await expect(page.getByText('데이터셋 1곳')).toBeVisible();
 
-  // 분봉 탭으로 복귀 — 커버리지 행이 다시 보여야 한다
-  await monthTab.click();
-  await expect(monthTab).toHaveAttribute('aria-selected', 'true');
-  await expect(page.getByRole('button', { name: '005930', exact: true })).toBeVisible();
+  // 8-3. 편집 모드 → 체크박스 + 하단 고정 동작 바. 하나도 안 고르면 동작은 잠긴다.
+  await page.getByRole('button', { name: '편집' }).click();
+  const syncButton = page.getByRole('button', { name: '동기화' });
+  await expect(syncButton).toBeDisabled();
+  await page.getByRole('checkbox', { name: /삼성전자 선택/ }).check();
+  await expect(page.getByText('1개 선택')).toBeVisible();
+  await expect(syncButton).toBeEnabled();
+  await expect(page.getByRole('button', { name: '제거' })).toBeEnabled();
+  // 재무는 DART 키 미설정이라 잠기고 이유가 보여야 한다 (D-027 의 원칙)
+  await expect(page.getByText(/DART 인증키가 설정되지 않아/)).toBeVisible();
+  await page.screenshot({ path: 'test-results/symbols-edit.png' });
+  await page.getByRole('button', { name: '완료' }).click();
 
-  await page.getByRole('button', { name: '005930', exact: true }).click();
+  // 8-4. 데이터 검증 차트 — 편집 모드가 아닐 때 종목 이름을 눌러 드로어를 연다
+  await page.getByRole('button', { name: /삼성전자/ }).click();
   await expect(page.getByText(/데이터 검증/)).toBeVisible();
   await expect(page.locator('.recharts-surface').first()).toBeVisible();
   await page.screenshot({ path: 'test-results/candle-inspect.png' });
@@ -179,24 +187,23 @@ test('full MVP flow', async ({ page }) => {
   await expect(page).toHaveURL(/\/login/, { timeout: 10_000 });
 });
 
-/** 미지원 시장(US) 은 데이터셋 생성 dialog 에서 고를 수 없고, 이유가 항상 보인다 —
- *  고를 수 있게 두고 종목을 다 넣은 뒤 400 을 받게 하는 것은 명시가 아니다 (Task 13/14). */
-test('unsupported market is disabled with reason shown on dataset create dialog', async ({ page }) => {
+/** 미지원 시장(US) 은 종목 추가 dialog 에서 고를 수 없고, 이유가 항상 보인다 —
+ *  고를 수 있게 두고 코드를 넣은 뒤 400 을 받게 하는 것은 명시가 아니다 (D-027). */
+test('unsupported market is disabled with reason shown on symbol add dialog', async ({ page }) => {
   await page.goto('/login');
   await page.getByLabel('사용자 이름').fill(USERNAME);
   await page.getByLabel('비밀번호').fill(PASSWORD);
   await page.getByRole('button', { name: '로그인' }).click();
   await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
 
-  await page.goto('/datasets');
-  await page.getByRole('button', { name: '증권사 데이터셋' }).click();
+  await page.goto('/datasets?tab=symbols');
+  await page.getByRole('button', { name: '추가' }).click();
   await page.getByLabel('시장').click();
   // Radix SelectItem 은 native disabled 속성이 아니라 aria-disabled/data-disabled 를 쓴다 —
   // role="option" 은 toBeDisabled() 가 참조하는 kAriaDisabledRoles 에 포함돼 있어 그대로 쓸 수 있다.
   await expect(page.getByRole('option', { name: /US/ })).toBeDisabled();
   await page.keyboard.press('Escape');
   await expect(page.getByText(/US 는 아직 지원하지 않습니다/)).toBeVisible();
-  await expect(page.getByText(/재무 데이터 수집은 국내 종목만 지원합니다/)).toBeVisible();
 });
 
 /** `/markets` 가 영구히 실패하면 목록은 영원히 비어(로딩 중과 같은 모양) 있는다 — 그 상태를
@@ -217,9 +224,8 @@ test('market select stays disabled and explains itself when /markets fails', asy
   await page.getByRole('button', { name: '로그인' }).click();
   await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
 
-  await page.goto('/datasets');
-  await page.getByRole('button', { name: '증권사 데이터셋' }).click();
-  await expect(page.getByLabel('시장')).toBeDisabled();
+  await page.goto('/datasets?tab=symbols');
+  await page.getByRole('button', { name: '추가' }).click();
   await expect(page.getByText(/시장 목록을 불러오지 못했습니다/)).toBeVisible();
 });
 
@@ -234,7 +240,16 @@ test('mobile layout has no horizontal scroll on core screens (스펙 §38)', asy
 
   // /backtests/new 이 목록에 있는 이유: 단계 버튼 6개를 3열 × 2행으로 깔면서 44px
   // 터치 영역을 지킨다 — 390px 에서 가장 먼저 넘칠 화면이 여기다
-  for (const path of ['/', '/backtests', '/backtests/new', '/datasets', '/settings']) {
+  // '/datasets?tab=symbols' 를 넣는 이유: 종목 행이 이름·코드·배지 3개·수집 시각을
+  // 한 줄에 담고 하단 고정 바에 버튼 4개가 붙는다 — 390px 에서 가장 먼저 넘칠 화면이다
+  for (const path of [
+    '/',
+    '/backtests',
+    '/backtests/new',
+    '/datasets',
+    '/datasets?tab=symbols',
+    '/settings',
+  ]) {
     await page.goto(path);
     await page.waitForLoadState('networkidle');
     const overflow = await page.evaluate(

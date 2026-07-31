@@ -1,6 +1,6 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import type { AppDatabase } from '../../../shared/db/database.js';
-import { brokerSyncState, dataImportJobs } from '../../../shared/db/schema.js';
+import { dataSyncJobs, symbolSlices, symbols as symbolsTable } from '../../../shared/db/schema.js';
 import type { Clock } from '../../../shared/clock.js';
 import { newId } from '../../../shared/ids.js';
 import type { Logger } from '../../../shared/logger.js';
@@ -16,12 +16,15 @@ import {
 } from '../domain/exchange-session.js';
 import { deriveFactYearRange } from '../domain/fact-year-range.js';
 import { minuteBackfillFloorTsMs } from '../domain/minute-backfill.js';
-import type { DatasetService, DatasetSummary } from './dataset-service.js';
+import type { Market } from '../domain/candle.js';
+import type { SymbolService } from './symbol-service.js';
 import type { CandleRepository, MarketDataSource } from './ports.js';
 
 export class SyncAlreadyRunningError extends Error {
-  constructor(datasetId: string) {
-    super(`이 데이터셋의 동기화가 이미 실행 중입니다: ${datasetId}`);
+  constructor() {
+    // 동시 실행은 전역으로 하나다 — 대상이 종목 집합이 된 뒤 데이터셋 단위 가드는
+    // 의미가 없다(같은 종목을 두 잡이 동시에 긁으면 워터마크가 서로를 덮는다)
+    super('데이터 수집이 이미 실행 중입니다 — 완료 후 다시 시도하세요');
     this.name = 'SyncAlreadyRunningError';
   }
 }
@@ -60,7 +63,7 @@ export interface FactPhaseResult {
   readonly failureMessage: string | null;
 }
 
-/** data_import_jobs.facts_json 의 내용. null 컬럼 = 재무를 요청하지 않은 잡 */
+/** data_sync_jobs.facts_json 의 내용. null 컬럼 = 재무를 요청하지 않은 잡 */
 export interface FactsJobState {
   fromYear: number | null;
   toYear: number | null;
@@ -77,7 +80,7 @@ export interface BrokerSyncDeps {
   readonly db: AppDatabase;
   readonly source: MarketDataSource;
   readonly candleRepository: CandleRepository;
-  readonly datasetService: DatasetService;
+  readonly symbolService: SymbolService;
   readonly clock: Clock;
   readonly logger: Logger;
   readonly audit: AuditLogService;
@@ -90,7 +93,7 @@ export interface BrokerSyncDeps {
    * 주입되지 않았으면 DART 가 설정되지 않은 배포다.
    */
   readonly factsPhase?: (args: {
-    datasetId: string;
+    codes: readonly string[];
     fromYear: number;
     toYear: number;
     onProgress: (progress: FactPhaseProgress) => void;
@@ -116,10 +119,11 @@ interface SyncedRange {
 /**
  * 증권사 캔들 동기화 (설계 2026-07-28-broker-sync-design.md, 2026-07-30-dataset-symbol-group-design.md).
  *
- * 슬라이스가 수집 방식을 결정한다 (`startSync` 의 `slice`, 기본값은 `dataset.defaultTimeframe`):
+ * 대상은 **종목 집합**이다 (설계 2026-07-31-symbol-as-first-class) — 사용자가 종목 화면에서
+ * 여러 개를 체크해 한 번에 동기화한다. 슬라이스가 수집 방식을 결정한다:
  * 1m → 1분봉을 수집하고 세션 경계로 시간봉을 재집계, 1d → 일봉을 그대로 수집.
- * 워터마크(broker_sync_state)·커버리지는 (datasetId, symbol, slice) 로 독립적으로
- * 관리되므로, 한 데이터셋에서 두 슬라이스를 각각 동기화해도 서로의 진행을 침범하지 않는다.
+ * 워터마크(symbol_slices)·커버리지는 (code, slice) 로 관리된다 — 데이터셋 축이 없으므로
+ * 같은 종목을 열 개 데이터셋이 참조해도 수집은 한 번이다.
  * 페이지마다 즉시 저장하고 워터마크는 저장 후에만 갱신하므로, 어느 지점에서 중단돼도
  * 다음 실행이 이어받는다 (스펙 §13).
  */
@@ -139,46 +143,47 @@ export class BrokerSyncService {
    * 하나여야 화면이 "동기화" 버튼 하나로 두 단계를 다룰 수 있다.
    */
   startSync(
-    datasetId: string,
+    codes: readonly string[],
     options: { slice?: DatasetSlice; includeFacts?: boolean } = {},
   ): { job: { id: string }; done: Promise<void> } {
-    const dataset = this.deps.datasetService.getDataset(datasetId);
-    if (!dataset) throw new Error(`데이터셋을 찾을 수 없습니다: ${datasetId}`);
+    if (codes.length === 0) throw new Error('동기화할 종목이 없습니다');
+    const registered = this.deps.db
+      .select({ code: symbolsTable.code, market: symbolsTable.market })
+      .from(symbolsTable)
+      .where(inArray(symbolsTable.code, [...codes]))
+      .all();
+    const known = new Map(registered.map((row) => [row.code, row.market as Market]));
+    const missing = codes.filter((code) => !known.has(code));
+    if (missing.length > 0) throw new Error(`등록되지 않은 종목입니다: ${missing.join(', ')}`);
 
-    const slice = options.slice ?? dataset.defaultTimeframe;
-
-    // 동시 실행 가드는 데이터셋 단위다 (슬라이스별 아님) — 1d 동기화 중엔 같은
-    // 데이터셋의 1m 동기화도 거절한다. 슬라이스별로 허용하면 두 슬라이스가 같은
-    // dataset_import_jobs 잡·취소 흐름을 공유하지 못해 화면 쪽 복잡도가 커진다 —
-    // 단순함을 우선한 의도적 선택이다 (Task 4).
+    const slice = options.slice ?? '1d';
     const running = this.deps.db
-      .select({ id: dataImportJobs.id })
-      .from(dataImportJobs)
-      .where(
-        and(
-          eq(dataImportJobs.datasetId, datasetId),
-          eq(dataImportJobs.sourceType, 'BROKER'),
-          inArray(dataImportJobs.status, ['QUEUED', 'RUNNING']),
-        ),
-      )
+      .select({ id: dataSyncJobs.id })
+      .from(dataSyncJobs)
+      .where(inArray(dataSyncJobs.status, ['QUEUED', 'RUNNING']))
       .get();
-    if (running) throw new SyncAlreadyRunningError(datasetId);
+    if (running) throw new SyncAlreadyRunningError();
+
+    const targets = [...new Set(codes)]
+      .sort()
+      .map((code) => ({ code, market: known.get(code)! }));
 
     const jobId = newId('imp');
     this.deps.db
-      .insert(dataImportJobs)
+      .insert(dataSyncJobs)
       .values({
         id: jobId,
-        datasetId,
         status: 'RUNNING',
         sourceType: 'BROKER',
+        symbolsJson: JSON.stringify(targets.map((target) => target.code)),
+        slice,
         phase: 'CANDLES',
         createdAtMs: this.deps.clock.now(),
       })
       .run();
 
     this.runningJobs.add(jobId);
-    const done = this.run(dataset, slice, jobId, options.includeFacts === true).finally(() => {
+    const done = this.run(targets, slice, jobId, options.includeFacts === true).finally(() => {
       this.runningJobs.delete(jobId);
       this.cancelRequested.delete(jobId);
     });
@@ -202,7 +207,7 @@ export class BrokerSyncService {
   /** 프로세스 재시작으로 고아가 된 BROKER 잡 정리 — 부팅 경로에서 호출한다 */
   recoverInterrupted(): number {
     const result = this.deps.db
-      .update(dataImportJobs)
+      .update(dataSyncJobs)
       .set({
         status: 'FAILED',
         error: '서버 재시작으로 중단됨 — 동기화를 다시 실행하면 이어받습니다',
@@ -210,8 +215,8 @@ export class BrokerSyncService {
       })
       .where(
         and(
-          eq(dataImportJobs.sourceType, 'BROKER'),
-          inArray(dataImportJobs.status, ['QUEUED', 'RUNNING']),
+          eq(dataSyncJobs.sourceType, 'BROKER'),
+          inArray(dataSyncJobs.status, ['QUEUED', 'RUNNING']),
         ),
       )
       .run();
@@ -219,7 +224,7 @@ export class BrokerSyncService {
   }
 
   private async run(
-    dataset: DatasetSummary,
+    targets: ReadonlyArray<{ code: string; market: Market }>,
     slice: DatasetSlice,
     jobId: string,
     includeFacts: boolean,
@@ -232,17 +237,17 @@ export class BrokerSyncService {
     let candlesMs: number | null = null;
     try {
       this.checkDisk();
-      const session = slice === '1m' ? getSessionForMarket(dataset.market) : null;
       const now = this.deps.clock.now();
 
-      for (const symbol of dataset.symbols) {
+      for (const { code: symbol, market } of targets) {
         this.throwIfCancelled(jobId);
+        const session = slice === '1m' ? getSessionForMarket(market) : null;
         const newRange: SyncedRange = { min: null, max: null };
 
         // 증분: 워터마크 이후 → 현재
-        const before = this.getState(dataset.id, symbol, slice);
+        const before = this.getState(symbol, slice);
         if (before?.syncedLastTsMs != null) {
-          const incremental = await this.pullRange(dataset, collect, symbol, slice, {
+          const incremental = await this.pullRange(market, collect, symbol, slice, {
             jobId,
             fromTsMs: before.syncedLastTsMs + 1,
             toTsMs: now,
@@ -254,10 +259,10 @@ export class BrokerSyncService {
         // 백필: 일봉은 API 보관 깊이 바닥(0)까지, 분봉은 2년 상한까지 — 분봉은
         // 종목·기간에 비례해 폭발하므로 수집 자체를 묶는다(minute-backfill.ts).
         // 증분이 워터마크를 만들었을 수 있으므로 재조회.
-        const state = this.getState(dataset.id, symbol, slice);
+        const state = this.getState(symbol, slice);
         if (state?.backfillDoneAtMs == null) {
           const backfillFromTsMs = slice === '1m' ? minuteBackfillFloorTsMs(now) : 0;
-          const backfill = await this.pullRange(dataset, collect, symbol, slice, {
+          const backfill = await this.pullRange(market, collect, symbol, slice, {
             jobId,
             fromTsMs: backfillFromTsMs,
             toTsMs: (state?.syncedFirstTsMs ?? now + 1) - 1,
@@ -266,27 +271,32 @@ export class BrokerSyncService {
           totalRows += backfill.rows;
           // 일봉은 fromTsMs=0 구간을 에러 없이 소진 = API 바닥 도달. 분봉은 상한
           // 구간을 소진했을 뿐 API 바닥에는 닿지 않았을 수 있다 — 아래 플래그 의미 참고.
-          this.markBackfillDone(dataset.id, symbol, slice);
+          this.markBackfillDone(symbol, slice);
         }
 
         // 시간봉 재집계는 분봉 슬라이스에서만 의미가 있다 — session 은 이미 slice==='1m'
         // 일 때만 채워지지만, 의도를 코드로 남기기 위해 slice 로도 명시적으로 가둔다
         if (slice === '1m' && session && newRange.min != null && newRange.max != null) {
-          await this.reaggregateHourly(dataset, symbol, session, newRange.min, newRange.max);
+          await this.reaggregateHourly(market, symbol, session, newRange.min, newRange.max);
         }
+
+        // 커버리지·버전·수집시각은 종목마다 닫는다 — 200종목 중 180에서 멈춘 실행도
+        // 완료된 180종목은 화면에 정확히 반영돼야 한다
+        await this.deps.symbolService.refreshCoverage(symbol, market, slice);
+        if (newRange.min != null) {
+          this.deps.symbolService.bumpVersion(
+            symbol,
+            slice,
+            `broker:${collect}:${newRange.min}-${newRange.max}`,
+            this.deps.clock.now(),
+          );
+        }
+        this.deps.symbolService.markSynced(symbol, slice, this.deps.clock.now());
       }
 
-      await this.deps.datasetService.refreshCoverage(dataset.id, dataset.market, slice);
       candlesMs = this.deps.clock.now() - candlesStartedAtMs;
-      if (totalRows > 0) {
-        this.deps.datasetService.bumpVersion(
-          dataset.id,
-          `broker:${collect}:rows=${totalRows}:${this.deps.clock.now()}`,
-          this.deps.clock.now(),
-        );
-      }
 
-      const facts = includeFacts ? await this.runFactsPhase(dataset, jobId) : null;
+      const facts = includeFacts ? await this.runFactsPhase(targets, jobId) : null;
       /**
        * 재무 단계가 **실제로 돌다가 멈춘** 경우에만 잡 상태를 따라간다. 건너뛴 경우
        * (skipReason: DART 미설정·봉 없음)는 중단이 아니다 — 봉은 성공했고 재무는
@@ -296,7 +306,7 @@ export class BrokerSyncService {
        */
       const factsStop = facts?.stopReason ?? null;
       this.deps.db
-        .update(dataImportJobs)
+        .update(dataSyncJobs)
         .set({
           status:
             factsStop === 'CANCELLED' ? 'CANCELLED' : factsStop === 'ERROR' ? 'FAILED' : 'COMPLETED',
@@ -308,24 +318,24 @@ export class BrokerSyncService {
           error: facts?.state.failureMessage ?? null,
           completedAtMs: this.deps.clock.now(),
         })
-        .where(eq(dataImportJobs.id, jobId))
+        .where(eq(dataSyncJobs.id, jobId))
         .run();
       if (factsStop === 'CANCELLED') {
-        this.deps.audit.record('system', 'data.sync.cancelled', { datasetId: dataset.id });
+        this.deps.audit.record('system', 'data.sync.cancelled', { symbols: targets.length });
       } else if (factsStop === 'ERROR') {
         // 봉 실패와 같은 자리에 남긴다 — 감사 로그에는 완료로 적지 않는다
         this.deps.logger.error(
           {
             module: 'market-data',
             event: 'data.sync.facts-failed',
-            datasetId: dataset.id,
+            symbols: targets.length,
             reason: facts?.state.failureMessage,
           },
           'broker sync facts phase failed',
         );
       } else {
         this.deps.audit.record('system', 'data.sync.completed', {
-          datasetId: dataset.id,
+          symbols: targets.length,
           rows: totalRows,
           facts: facts?.state.savedFacts ?? 0,
         });
@@ -334,7 +344,7 @@ export class BrokerSyncService {
       const cancelled = error instanceof SyncCancelledError;
       // 실패·취소 잡의 phase 는 지우지 않는다 — 어느 단계에서 죽었는지가 정보다
       this.deps.db
-        .update(dataImportJobs)
+        .update(dataSyncJobs)
         .set({
           status: cancelled ? 'CANCELLED' : 'FAILED',
           rowsImported: totalRows,
@@ -342,18 +352,18 @@ export class BrokerSyncService {
           error: error instanceof Error ? error.message : String(error),
           completedAtMs: this.deps.clock.now(),
         })
-        .where(eq(dataImportJobs.id, jobId))
+        .where(eq(dataSyncJobs.id, jobId))
         .run();
       if (cancelled) {
-        this.deps.audit.record('system', 'data.sync.cancelled', { datasetId: dataset.id });
+        this.deps.audit.record('system', 'data.sync.cancelled', { symbols: targets.length });
         this.deps.logger.info(
-          { module: 'market-data', event: 'data.sync.cancelled', datasetId: dataset.id },
+          { module: 'market-data', event: 'data.sync.cancelled', symbols: targets.length },
           'broker sync cancelled',
         );
         return;
       }
       this.deps.logger.error(
-        { module: 'market-data', event: 'data.sync.failed', datasetId: dataset.id, err: error },
+        { module: 'market-data', event: 'data.sync.failed', symbols: targets.length, err: error },
         'broker sync failed',
       );
     }
@@ -367,14 +377,14 @@ export class BrokerSyncService {
    * 처럼 보인다 — 상태를 리포트로 되돌려 호출부가 둘을 함께 기록하게 한다.
    */
   private async runFactsPhase(
-    dataset: DatasetSummary,
+    targets: ReadonlyArray<{ code: string; market: Market }>,
     jobId: string,
   ): Promise<{ state: FactsJobState; stopReason: 'ERROR' | 'CANCELLED' | null }> {
     const state: FactsJobState = {
       fromYear: null,
       toYear: null,
       symbolsDone: 0,
-      symbolTotal: dataset.symbols.length,
+      symbolTotal: targets.length,
       savedFacts: 0,
       gapCount: 0,
       failureMessage: null,
@@ -393,13 +403,21 @@ export class BrokerSyncService {
      * 봉 결과까지 실패로 덮는다 — 이 단계가 throw 하지 않게 만든 이유가 무너진다.
      * 라우트 선검증과 factsSyncEstimator 가 정상 경로를 막지만 방어선은 여기서 닫는다.
      */
-    if (dataset.market !== 'KR') {
-      state.skipReason = `재무 데이터는 국내(KR) 종목만 지원합니다 — ${dataset.market} 데이터셋은 재무를 수집하지 않았습니다.`;
+    const foreign = targets.filter((target) => target.market !== 'KR');
+    if (foreign.length > 0) {
+      state.skipReason =
+        `재무 데이터는 국내(KR) 종목만 지원합니다 — ` +
+        `${foreign.map((target) => target.code).join(', ')} 는 재무를 수집하지 않았습니다.`;
       return { state, stopReason: null };
     }
 
-    const coverage = this.deps.datasetService.getCoverage(dataset.id);
-    const range = deriveFactYearRange(coverage, dataset.market);
+    const codes = targets.map((target) => target.code);
+    // coverage 행의 종목 필드 이름이 code 로 바뀌었다 — deriveFactYearRange 는
+    // { symbol, firstTsMs, lastTsMs, slice } 모양을 받으므로 여기서 맞춰 준다
+    const coverage = this.deps.symbolService
+      .getCoverage(codes)
+      .map((row) => ({ ...row, symbol: row.code }));
+    const range = deriveFactYearRange(coverage, 'KR');
     if (range === null) {
       state.skipReason =
         '봉이 수집되지 않아 재무 연도 범위를 정할 수 없습니다 — 봉을 먼저 수집하세요.';
@@ -409,15 +427,15 @@ export class BrokerSyncService {
     state.toYear = range.toYear;
 
     this.deps.db
-      .update(dataImportJobs)
+      .update(dataSyncJobs)
       .set({ phase: 'FACTS', factsJson: JSON.stringify(state) })
-      .where(eq(dataImportJobs.id, jobId))
+      .where(eq(dataSyncJobs.id, jobId))
       .run();
 
     let result: FactPhaseResult;
     try {
       result = await this.deps.factsPhase({
-        datasetId: dataset.id,
+        codes,
         fromYear: range.fromYear,
         toYear: range.toYear,
         onProgress: (progress) => {
@@ -427,9 +445,9 @@ export class BrokerSyncService {
           state.gapCount = progress.gapCount;
           // 조용한 45분은 멈춘 것과 구분되지 않는다 — 종목마다 잡을 갱신한다
           this.deps.db
-            .update(dataImportJobs)
+            .update(dataSyncJobs)
             .set({ factsJson: JSON.stringify(state) })
-            .where(eq(dataImportJobs.id, jobId))
+            .where(eq(dataSyncJobs.id, jobId))
             .run();
         },
         shouldStop: () => this.cancelRequested.has(jobId),
@@ -454,7 +472,7 @@ export class BrokerSyncService {
    * 잡을 실패시킨다 — 저장된 페이지와 워터마크는 남으므로 다음 실행이 이어받는다.
    */
   private async pullRange(
-    dataset: DatasetSummary,
+    market: Market,
     collect: '1m' | '1d',
     symbol: string,
     slice: DatasetSlice,
@@ -469,14 +487,14 @@ export class BrokerSyncService {
     // 워터마크는 저장(flush) 이후에만 넓힌다 — 버퍼에만 있는 봉은 다음 실행이 재수집한다
     const flush = async (): Promise<void> => {
       if (buffer.length === 0) return;
-      await this.deps.candleRepository.saveCandles(dataset.id, buffer);
+      await this.deps.candleRepository.saveCandles(buffer);
       let min = Number.POSITIVE_INFINITY;
       let max = Number.NEGATIVE_INFINITY;
       for (const candle of buffer) {
         if (candle.tsMs < min) min = candle.tsMs;
         if (candle.tsMs > max) max = candle.tsMs;
       }
-      this.widenWatermark(dataset.id, symbol, slice, min, max);
+      this.widenWatermark(symbol, slice, min, max);
       args.newRange.min = args.newRange.min == null ? min : Math.min(args.newRange.min, min);
       args.newRange.max = args.newRange.max == null ? max : Math.max(args.newRange.max, max);
       rows += buffer.length;
@@ -488,7 +506,7 @@ export class BrokerSyncService {
         this.throwIfCancelled(args.jobId);
         if (pages > 0 && pages % DISK_CHECK_PAGE_INTERVAL === 0) this.checkDisk();
         const result = await this.deps.source.fetchCandles({
-          market: dataset.market,
+          market,
           timeframe: collect,
           symbol,
           fromTsMs: args.fromTsMs,
@@ -530,43 +548,36 @@ export class BrokerSyncService {
     }
   }
 
-  private getState(datasetId: string, symbol: string, slice: DatasetSlice) {
+  private getState(symbol: string, slice: DatasetSlice) {
     return this.deps.db
       .select()
-      .from(brokerSyncState)
-      .where(
-        and(
-          eq(brokerSyncState.datasetId, datasetId),
-          eq(brokerSyncState.symbol, symbol),
-          eq(brokerSyncState.slice, slice),
-        ),
-      )
+      .from(symbolSlices)
+      .where(and(eq(symbolSlices.code, symbol), eq(symbolSlices.slice, slice)))
       .get();
   }
 
   /** 저장이 끝난 뒤에만 호출 — 워터마크가 저장소보다 앞서 주장하지 않는다 */
   private widenWatermark(
-    datasetId: string,
     symbol: string,
     slice: DatasetSlice,
     minTsMs: number,
     maxTsMs: number,
   ): void {
-    const existing = this.getState(datasetId, symbol, slice);
+    const existing = this.getState(symbol, slice);
     if (!existing) {
       this.deps.db
-        .insert(brokerSyncState)
-        .values({ datasetId, symbol, slice, syncedFirstTsMs: minTsMs, syncedLastTsMs: maxTsMs })
+        .insert(symbolSlices)
+        .values({ code: symbol, slice, syncedFirstTsMs: minTsMs, syncedLastTsMs: maxTsMs })
         .run();
       return;
     }
     this.deps.db
-      .update(brokerSyncState)
+      .update(symbolSlices)
       .set({
         syncedFirstTsMs: Math.min(existing.syncedFirstTsMs ?? minTsMs, minTsMs),
         syncedLastTsMs: Math.max(existing.syncedLastTsMs ?? maxTsMs, maxTsMs),
       })
-      .where(eq(brokerSyncState.id, existing.id))
+      .where(eq(symbolSlices.id, existing.id))
       .run();
   }
 
@@ -579,19 +590,19 @@ export class BrokerSyncService {
    * 밀리므로(과거로 되돌아가지 않으므로) 이미 커버한 구간을 다시 훑는 넓히기/gap-fill
    * 분기는 두지 않는다.
    */
-  private markBackfillDone(datasetId: string, symbol: string, slice: DatasetSlice): void {
-    const existing = this.getState(datasetId, symbol, slice);
+  private markBackfillDone(symbol: string, slice: DatasetSlice): void {
+    const existing = this.getState(symbol, slice);
     if (!existing) {
       this.deps.db
-        .insert(brokerSyncState)
-        .values({ datasetId, symbol, slice, backfillDoneAtMs: this.deps.clock.now() })
+        .insert(symbolSlices)
+        .values({ code: symbol, slice, backfillDoneAtMs: this.deps.clock.now() })
         .run();
       return;
     }
     this.deps.db
-      .update(brokerSyncState)
+      .update(symbolSlices)
       .set({ backfillDoneAtMs: this.deps.clock.now() })
-      .where(eq(brokerSyncState.id, existing.id))
+      .where(eq(symbolSlices.id, existing.id))
       .run();
   }
 
@@ -601,7 +612,7 @@ export class BrokerSyncService {
    * 현지 일 단위로 나눠 스트리밍 — 수년치 백필도 하루치(수백 봉)만 메모리에 든다.
    */
   private async reaggregateHourly(
-    dataset: DatasetSummary,
+    market: Market,
     symbol: string,
     session: ExchangeSession,
     fromTsMs: number,
@@ -614,13 +625,12 @@ export class BrokerSyncService {
     const flush = async (): Promise<void> => {
       if (buffer.length === 0) return;
       const hourly = aggregateToHourly(buffer, session);
-      if (hourly.length > 0) await this.deps.candleRepository.saveCandles(dataset.id, hourly);
+      if (hourly.length > 0) await this.deps.candleRepository.saveCandles(hourly);
       buffer = [];
     };
 
     for await (const candle of this.deps.candleRepository.getCandles({
-      datasetId: dataset.id,
-      market: dataset.market,
+      market,
       timeframe: '1m',
       symbols: [symbol],
       fromTsMs: dayStartTsMs,

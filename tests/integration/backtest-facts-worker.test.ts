@@ -3,6 +3,7 @@ import type { Candle } from '../../src/server/modules/market-data/domain/candle.
 import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
+import { registerSymbols, seedDataset } from '../helpers/seed.js';
 
 const DAY = 86_400_000;
 const START = Date.UTC(2025, 0, 2);
@@ -95,20 +96,17 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
     });
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
 
-    const dataset = ctx.container.datasetService.createBrokerDataset(
-      'kr-daily-facts-v1',
-      'KR',
-      '1d',
-      ['CHEAP', 'RICH'],
-    );
+    const dataset = seedDataset(ctx.container, 'kr-daily-facts-v1', 'KR', ['CHEAP', 'RICH']);
     datasetId = dataset.id;
-    await ctx.container.candleRepository.saveCandles(datasetId, candles(40));
-    await ctx.container.datasetService.refreshCoverage(datasetId, 'KR', '1d');
-    ctx.container.datasetService.bumpVersion(datasetId, 'broker:1d:seed', Date.now());
+    await ctx.container.candleRepository.saveCandles(candles(40));
+    for (const code of dataset.symbols) {
+      await ctx.container.symbolService.refreshCoverage(code, 'KR', '1d');
+      ctx.container.symbolService.bumpVersion(code, '1d', 'seed', Date.now());
+    }
 
     // 컨테이너가 조립한 factRepository 로 저장한다 — 워커가 같은 dataRoot 를 통해
     // 이 팩트를 다시 읽어야 하므로, 테스트 전용 repository 를 새로 만들지 않는다.
-    await ctx.container.factRepository.saveFacts(datasetId, [
+    await ctx.container.factRepository.saveFacts([
       ...factsFor('CHEAP', 50_000),
       ...factsFor('RICH', 5_000),
     ]);
@@ -188,6 +186,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
     { timeout: 90_000 },
     async () => {
       // 데이터셋·봉은 있지만 팩트가 없는 종목을 하나 더한다
+      registerSymbols(ctx.container, 'KR', ['NOFACTS']);
       ctx.container.datasetService.updateSymbols(datasetId, { add: ['NOFACTS'] });
       const extra: Candle[] = [];
       for (let index = 0; index < 40; index += 1) {
@@ -203,8 +202,11 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
           volume: 1_000,
         });
       }
-      await ctx.container.candleRepository.saveCandles(datasetId, extra);
-      await ctx.container.datasetService.refreshCoverage(datasetId, 'KR', '1d');
+      await ctx.container.candleRepository.saveCandles(extra);
+      for (const code of ['CHEAP', 'RICH', 'NOFACTS']) {
+        await ctx.container.symbolService.refreshCoverage(code, 'KR', '1d');
+        ctx.container.symbolService.bumpVersion(code, '1d', 'seed', Date.now());
+      }
 
       const created = await ctx.app.inject({
         method: 'POST',
@@ -318,19 +320,16 @@ describe('워커의 자본변동 팩트 배선 — 접수일이 기간 종료 �
     });
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
 
-    const dataset = ctx.container.datasetService.createBrokerDataset(
-      'kr-daily-split-v1',
-      'KR',
-      '1d',
-      ['SPLIT', 'FLAT'],
-    );
+    const dataset = seedDataset(ctx.container, 'kr-daily-split-v1', 'KR', ['SPLIT', 'FLAT']);
     datasetId = dataset.id;
     // 2025-01-02 ~ 2025-04-30 = 119봉
-    await ctx.container.candleRepository.saveCandles(datasetId, splitScenarioCandles(119));
-    await ctx.container.datasetService.refreshCoverage(datasetId, 'KR', '1d');
-    ctx.container.datasetService.bumpVersion(datasetId, 'broker:1d:seed', Date.now());
+    await ctx.container.candleRepository.saveCandles(splitScenarioCandles(119));
+    for (const code of dataset.symbols) {
+      await ctx.container.symbolService.refreshCoverage(code, 'KR', '1d');
+      ctx.container.symbolService.bumpVersion(code, '1d', 'seed', Date.now());
+    }
 
-    await ctx.container.factRepository.saveFacts(datasetId, [
+    await ctx.container.factRepository.saveFacts([
       {
         scope: 'SYMBOL',
         key: 'SPLIT',

@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { DatasetService } from '../../src/server/modules/market-data/application/dataset-service.js';
+import { SymbolService } from '../../src/server/modules/market-data/application/symbol-service.js';
 import type { CandleRepository } from '../../src/server/modules/market-data/application/ports.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import { loadConfig } from '../../src/server/bootstrap/config.js';
 import { openDatabase } from '../../src/server/shared/db/database.js';
-import { brokerSyncState, dataImportJobs, datasets } from '../../src/server/shared/db/schema.js';
+import {
+  symbolSlices,
+  dataSyncJobs,
+  symbols as symbolsTable,
+} from '../../src/server/shared/db/schema.js';
 import { createLogger } from '../../src/server/shared/logger.js';
 import type { AuditLogService } from '../../src/server/modules/audit/audit-service.js';
 
@@ -19,30 +23,24 @@ const stubRepository: CandleRepository = {
   },
   getTimestamps: async () => [],
   saveCandles: async () => {},
-  deleteDataset: async () => {},
+  deleteSymbol: async () => {},
 };
 
 function setup() {
   const database = openDatabase(':memory:');
   database.db
-    .insert(datasets)
-    .values({
-      id: 'ds-1',
-      name: 'test',
-      market: 'KR',
-      symbolsJson: JSON.stringify(['005930', '000660']),
-      description: null,
-      createdAtMs: 1,
-      // datasets.updated_at_ms 는 NOT NULL 이다 — 빠뜨리면 insert 가 제약 위반으로 죽는다
-      updatedAtMs: 1,
-    })
+    .insert(symbolsTable)
+    .values([
+      { code: '005930', market: 'KR', name: null, createdAtMs: 1 },
+      { code: '000660', market: 'KR', name: null, createdAtMs: 1 },
+    ])
     .run();
   return database;
 }
 
-function makeDatasetService(database: ReturnType<typeof setup>) {
+function makeSymbolService(database: ReturnType<typeof setup>) {
   const clock = { now: () => Date.UTC(2026, 6, 8, 12, 0) };
-  return new DatasetService(database.db, stubRepository, clock, logger, noopAudit);
+  return new SymbolService(database.db, stubRepository, clock, logger, noopAudit);
 }
 
 function insertJob(
@@ -50,10 +48,10 @@ function insertJob(
   args: { id: string; createdAtMs: number; candlesMs: number | null; status?: string },
 ) {
   database.db
-    .insert(dataImportJobs)
+    .insert(dataSyncJobs)
     .values({
       id: args.id,
-      datasetId: 'ds-1',
+      symbolsJson: JSON.stringify(['005930', '000660']),
       status: args.status ?? 'COMPLETED',
       sourceType: 'BROKER',
       createdAtMs: args.createdAtMs,
@@ -65,8 +63,8 @@ function insertJob(
 
 function markBackfillDone(database: ReturnType<typeof setup>, symbol: string, atMs: number) {
   database.db
-    .insert(brokerSyncState)
-    .values({ datasetId: 'ds-1', symbol, backfillDoneAtMs: atMs })
+    .insert(symbolSlices)
+    .values({ code: symbol, slice: '1d', backfillDoneAtMs: atMs })
     .run();
 }
 
@@ -75,8 +73,8 @@ describe('getCandleSyncEstimate', () => {
     const database = setup();
     markBackfillDone(database, '005930', 1_000);
     insertJob(database, { id: 'imp-1', createdAtMs: 2_000, candlesMs: 60_000 });
-    const service = makeDatasetService(database);
-    expect(service.getCandleSyncEstimate('ds-1', ['005930', '000660'])).toEqual({
+    const service = makeSymbolService(database);
+    expect(service.getCandleSyncEstimate(['005930', '000660'], '1d')).toEqual({
       basis: 'UNKNOWN',
     });
     database.close();
@@ -88,8 +86,8 @@ describe('getCandleSyncEstimate', () => {
     markBackfillDone(database, '000660', 5_000);
     // 백필을 포함한 실행 — 증분 예상치로 쓰면 과대 추정이 된다
     insertJob(database, { id: 'imp-1', createdAtMs: 1_000, candlesMs: 3_600_000 });
-    const service = makeDatasetService(database);
-    expect(service.getCandleSyncEstimate('ds-1', ['005930', '000660'])).toEqual({
+    const service = makeSymbolService(database);
+    expect(service.getCandleSyncEstimate(['005930', '000660'], '1d')).toEqual({
       basis: 'UNKNOWN',
     });
     database.close();
@@ -101,8 +99,8 @@ describe('getCandleSyncEstimate', () => {
     markBackfillDone(database, '000660', 5_000);
     insertJob(database, { id: 'imp-1', createdAtMs: 6_000, candlesMs: 60_000 });
     insertJob(database, { id: 'imp-2', createdAtMs: 7_000, candlesMs: 30_000 });
-    const service = makeDatasetService(database);
-    expect(service.getCandleSyncEstimate('ds-1', ['005930', '000660'])).toEqual({
+    const service = makeSymbolService(database);
+    expect(service.getCandleSyncEstimate(['005930', '000660'], '1d')).toEqual({
       basis: 'LAST_RUN',
       ms: 30_000,
     });
@@ -115,8 +113,8 @@ describe('getCandleSyncEstimate', () => {
     markBackfillDone(database, '000660', 5_000);
     insertJob(database, { id: 'imp-1', createdAtMs: 6_000, candlesMs: 60_000 });
     insertJob(database, { id: 'imp-2', createdAtMs: 7_000, candlesMs: null });
-    const service = makeDatasetService(database);
-    expect(service.getCandleSyncEstimate('ds-1', ['005930', '000660'])).toEqual({
+    const service = makeSymbolService(database);
+    expect(service.getCandleSyncEstimate(['005930', '000660'], '1d')).toEqual({
       basis: 'LAST_RUN',
       ms: 60_000,
     });
@@ -128,8 +126,8 @@ describe('getCandleSyncEstimate', () => {
     markBackfillDone(database, '005930', 5_000);
     markBackfillDone(database, '000660', 5_000);
     insertJob(database, { id: 'imp-1', createdAtMs: 6_000, candlesMs: 0 });
-    const service = makeDatasetService(database);
-    expect(service.getCandleSyncEstimate('ds-1', ['005930', '000660'])).toEqual({
+    const service = makeSymbolService(database);
+    expect(service.getCandleSyncEstimate(['005930', '000660'], '1d')).toEqual({
       basis: 'LAST_RUN',
       ms: 0,
     });
@@ -143,8 +141,8 @@ describe('getCandleSyncEstimate', () => {
     markBackfillDone(database, '005930', 5_000);
     markBackfillDone(database, '000660', 5_000);
     insertJob(database, { id: 'imp-1', createdAtMs: 6_000, candlesMs: 60_000, status: 'FAILED' });
-    const service = makeDatasetService(database);
-    expect(service.getCandleSyncEstimate('ds-1', ['005930', '000660'])).toEqual({
+    const service = makeSymbolService(database);
+    expect(service.getCandleSyncEstimate(['005930', '000660'], '1d')).toEqual({
       basis: 'LAST_RUN',
       ms: 60_000,
     });
@@ -161,8 +159,8 @@ describe('getCandleSyncEstimate', () => {
       candlesMs: 45_000,
       status: 'CANCELLED',
     });
-    const service = makeDatasetService(database);
-    expect(service.getCandleSyncEstimate('ds-1', ['005930', '000660'])).toEqual({
+    const service = makeSymbolService(database);
+    expect(service.getCandleSyncEstimate(['005930', '000660'], '1d')).toEqual({
       basis: 'LAST_RUN',
       ms: 45_000,
     });
@@ -176,8 +174,8 @@ describe('getCandleSyncEstimate', () => {
     markBackfillDone(database, '005930', 5_000);
     markBackfillDone(database, '000660', 5_000);
     insertJob(database, { id: 'imp-1', createdAtMs: 6_000, candlesMs: null, status: 'FAILED' });
-    const service = makeDatasetService(database);
-    expect(service.getCandleSyncEstimate('ds-1', ['005930', '000660'])).toEqual({
+    const service = makeSymbolService(database);
+    expect(service.getCandleSyncEstimate(['005930', '000660'], '1d')).toEqual({
       basis: 'UNKNOWN',
     });
     database.close();

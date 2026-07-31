@@ -93,8 +93,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
 
-    await ctx.container.datasetService.importCsv({
-      datasetName: 'kr-hourly-v1',
+    await ctx.container.symbolService.importCsv({
       market: 'KR',
       // CSV import 는 1m|1d 만 받는다 — 이 CSV 는 세션 시간별 bucket 경계에 정확히
       // 맞춰 한 시간에 한 행씩 찍혀 있어, 1m 로 표시해 넣어도 1h 집계 결과가
@@ -105,7 +104,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       fileName: 'trend.csv',
       csvContent: buildTrendingHourlyCsv(),
     });
-    datasetId = ctx.container.datasetService.listDatasets()[0]!.id;
+    // CSV 는 종목에 봉을 넣을 뿐 데이터셋을 만들지 않는다 — 참조 묶음은 따로 만든다
+    datasetId = ctx.container.datasetService.createDataset('kr-hourly-v1', ['005930']).id;
   });
 
   afterEach(async () => {
@@ -148,11 +148,19 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(body.run.strategyId).toBe('range-breakout');
     expect(body.run.feeModelVersion).toBe('kr-equity-default@1.1.0');
     expect(body.run.randomSeed).toBe(42);
-    expect(body.run.datasetHash).not.toBe('unknown');
-    // 제출 시점에 고정된 데이터셋 버전이 그대로 기록돼야 한다 (재현성 §9.5)
-    const pinned = ctx.container.datasetService.getLatestVersion(datasetId)!;
-    expect(body.run.datasetVersion).toBe(pinned.version);
-    expect(body.run.datasetHash).toBe(pinned.contentHash);
+    expect(body.run.universeHash).not.toBe('unknown');
+    // 제출 시점에 고정된 종목 버전 스냅샷이 그대로 기록돼야 한다 (재현성 §9.5)
+    // 이 픽스처는 1분봉 CSV 라 소비 슬라이스가 '1m' 이다 (1h 는 그 슬라이스의 집계 봉)
+    const pinned = ctx.container.symbolService.getLatestVersion('005930', '1m')!;
+    const universe = JSON.parse(body.run.universeJson as string) as Array<{
+      code: string;
+      slice: string;
+      version: number;
+      contentHash: string;
+    }>;
+    const daily = universe.find((e) => e.code === '005930' && e.slice === '1m')!;
+    expect(daily.version).toBe(pinned.version);
+    expect(daily.contentHash).toBe(pinned.contentHash);
     expect(typeof body.metrics.totalReturnPct).toBe('number');
     expect(body.metrics.tradeCount as number).toBeGreaterThan(0);
 
@@ -547,7 +555,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
   });
 
   it('일부 종목만 봉이 없으면 거부하지 않는다 (신규 상장 등 정상)', async () => {
-    // 심볼을 하나 더 데이터셋에 추가하되 봉은 넣지 않는다 — 커버리지 행이 없는 종목
+    // 종목을 하나 더 등록해 데이터셋에 참조하되 봉은 넣지 않는다 — 커버리지 행이 없는 종목
+    ctx.container.symbolService.addSymbol('000660', 'KR');
     ctx.container.datasetService.updateSymbols(datasetId, { add: ['000660'] });
 
     const partial = await ctx.app.inject({
@@ -643,8 +652,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       });
       const smallCookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
 
-      await small.container.datasetService.importCsv({
-        datasetName: 'kr-hourly-v1',
+      await small.container.symbolService.importCsv({
         market: 'KR',
         // 위 셋업과 같은 이유로 1m 표시 — CSV 는 시간 bucket 경계에 정확히 맞는 행이라
         // 1h 집계 결과가 행 값과 같다.
@@ -653,7 +661,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
         fileName: 'trend.csv',
         csvContent: buildTrendingHourlyCsv(),
       });
-      const smallDatasetId = small.container.datasetService.listDatasets()[0]!.id;
+      const smallDatasetId = small.container.datasetService.createDataset('small', ['005930']).id;
       const payload = buildRequest(smallDatasetId);
 
       // 오케스트레이터를 tick 하지 않으므로 전부 QUEUED 로 남는다

@@ -10,9 +10,12 @@ import {
 import { SECURITY_HEADERS } from '../../../shared/security.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
 import type { FactRepository } from '../../facts/application/ports.js';
-import type { DatasetService } from '../../market-data/application/dataset-service.js';
+import type {
+  DatasetService,
+  UniverseSnapshot,
+} from '../../market-data/application/dataset-service.js';
+import type { SymbolService } from '../../market-data/application/symbol-service.js';
 import {
-  legacyConsumeDefault,
   sliceForTimeframe,
   sliceTimeframes,
   type DatasetSlice,
@@ -38,6 +41,7 @@ export interface BacktestRouteDeps {
   readonly results: ResultsService;
   readonly strategies: StrategyRegistry;
   readonly datasets: DatasetService;
+  readonly symbolService: SymbolService;
   readonly audit: AuditLogService;
   readonly factRepository: FactRepository;
   readonly dataRoot: string;
@@ -99,7 +103,8 @@ async function checkResources(dataRoot: string): Promise<string | null> {
 }
 
 export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRouteDeps, requireAuth: PreHandler): void {
-  const { queue, orchestrator, results, strategies, datasets, audit, factRepository } = deps;
+  const { queue, orchestrator, results, strategies, datasets, symbolService, audit, factRepository } =
+    deps;
 
   /**
    * 기간 × 커버리지 검사 (D-025). 커버리지는 메타데이터라 Parquet 을 읽지 않는다.
@@ -108,15 +113,14 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    */
   const checkPeriodCoverage = (
     body: BacktestRequest,
-    datasetId: string,
     slice: DatasetSlice,
   ): string | null => {
     const { fromTsMs, toTsMs } = periodToTsRange(body.period);
     const bySymbol = new Map(
-      datasets
-        .getCoverage(datasetId)
+      symbolService
+        .getCoverage(body.universe.symbols)
         .filter((row) => row.slice === slice)
-        .map((row) => [row.symbol, row]),
+        .map((row) => [row.code, row]),
     );
 
     const ranges: string[] = [];
@@ -143,7 +147,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
   const validateSubmission = (
     body: BacktestRequest,
   ):
-    | { ok: true; datasetVersion: { version: number; contentHash: string } }
+    | { ok: true; universe: UniverseSnapshot; timeframe: '1m' | '1h' | '1d' }
     | { ok: false; errors: string[] } => {
     const errors: string[] = [];
 
@@ -165,7 +169,8 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
 
     // 데이터셋 — 심볼·버전·커버리지 검사의 전제다
     const dataset = datasets.getDataset(body.datasetId);
-    let datasetVersion: { version: number; contentHash: string } | null = null;
+    let universe: UniverseSnapshot | null = null;
+    let resolvedTimeframe: '1m' | '1h' | '1d' | null = null;
     if (!dataset) {
       errors.push(`알 수 없는 데이터셋: ${body.datasetId}`);
     } else {
@@ -175,19 +180,42 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       if (missingSymbols.length > 0) {
         errors.push(`데이터셋에 없는 종목입니다: ${missingSymbols.join(', ')}`);
       }
-      // 제출 시점의 데이터셋 버전을 고정 — 대기 중 import 가 끼어들어도 메타데이터가 어긋나지 않는다
-      datasetVersion = datasets.getLatestVersion(body.datasetId);
-      if (!datasetVersion) {
-        errors.push('데이터가 없는 데이터셋입니다. 먼저 import 하세요.');
+      /**
+       * 소비 timeframe 검사. 데이터셋에 `defaultTimeframe` 이 없어졌으므로(설계
+       * 2026-07-31-symbol-as-first-class) 미지정 요청의 기준을 **데이터에서** 찾는다:
+       * 유니버스가 가진 슬라이스가 하나면 그것으로 정하고, 둘 다 있거나 둘 다 없으면
+       * 거부한다 — 임의로 하나를 골라 주면 사용자가 의도하지 않은 봉으로 돌아간다.
+       * 위저드는 항상 명시값을 보내므로 이 경로는 옛 저장 요청·API 직접 호출용이다.
+       */
+      const available = (['1d', '1m'] as const).filter((candidate) =>
+        symbolService
+          .getCoverage(body.universe.symbols)
+          .some((row) => row.slice === candidate && row.barCount > 0),
+      );
+      let consumed = body.timeframe;
+      if (consumed === undefined) {
+        if (available.length === 1) {
+          consumed = available[0] === '1m' ? '1h' : '1d';
+        } else {
+          errors.push(
+            available.length === 0
+              ? '선택한 종목에 수집된 봉이 없습니다 — 종목 화면에서 먼저 동기화하세요.'
+              : '소비할 봉 주기를 지정하세요 (1d/1h/1m) — 이 종목들은 일봉과 분봉을 모두 갖고 있습니다.',
+          );
+        }
       }
-      // 소비 timeframe 검사 — 미지정은 데이터셋 기본 슬라이스 (기존 동작과 같은 결과).
-      // 슬라이스 자체가 없는 데이터셋에 커버리지 검사부터 돌리면 "수집된 데이터 없음" 이
-      // "이 데이터셋은 timeframe X 만 제공합니다" 보다 먼저 떠 원인이 흐려진다 —
-      // 그래서 허용 검사를 먼저 하고, 통과한 슬라이스에 한해 기간·봉 수를 본다.
-      const consumed = body.timeframe ?? legacyConsumeDefault(dataset.defaultTimeframe);
+      if (consumed === undefined) {
+        return { ok: false, errors };
+      }
+      resolvedTimeframe = consumed;
       const slice = sliceForTimeframe(consumed);
       const allowedTimeframes = sliceTimeframes(slice);
-      const sliceHasData = dataset.slices.some((s) => s.slice === slice && s.hasData);
+      // 제출 시점의 종목 버전 스냅샷을 고정 — 대기 중 동기화가 끼어들어도 어긋나지 않는다 (§9.5)
+      universe = datasets.universeSnapshot(body.datasetId, slice);
+      const sliceCoverageRows = symbolService
+        .getCoverage(body.universe.symbols)
+        .filter((row) => row.slice === slice);
+      const sliceHasData = sliceCoverageRows.some((row) => row.barCount > 0);
 
       if (!allowedTimeframes.includes(consumed)) {
         // 방어적 분기 — zod 스키마가 이미 consumed 를 '1m'|'1h'|'1d' 로 제한하고
@@ -202,18 +230,19 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
         // 없다. "이 데이터셋은 1m/1h 만 제공합니다 (요청: 1m)" 처럼 스스로 모순되는
         // 메시지를 내지 않도록 원인을 구분해 말한다.
         errors.push(
-          `이 데이터셋에는 아직 ${consumed} 데이터가 없습니다 — 해당 봉을 동기화(또는 CSV 가져오기)한 뒤 다시 시도하세요.`,
+          `선택한 종목에 아직 ${consumed} 데이터가 없습니다: ` +
+            `${body.universe.symbols.join(', ')} — 종목 화면에서 해당 봉을 동기화(또는 CSV ` +
+            '가져오기)한 뒤 다시 시도하세요.',
         );
       } else {
-        const coverageError = checkPeriodCoverage(body, dataset.id, slice);
+        const coverageError = checkPeriodCoverage(body, slice);
         if (coverageError !== null) errors.push(coverageError);
 
         // 봉 수 상한 — 실행부는 전체 봉을 메모리에 올린다. 1m 소비를 열면서 생긴 밸브.
         // coverage 는 슬라이스 기준 timeframe 으로 세므로 1m 소비만 배율 60 으로 추정한다.
         const { fromTsMs, toTsMs } = periodToTsRange(body.period);
-        const sliceCoverage = datasets.getCoverage(dataset.id).filter((row) => row.slice === slice);
         const estimated = estimateBars(
-          sliceCoverage,
+          sliceCoverageRows.map((row) => ({ ...row, symbol: row.code })),
           body.universe.symbols,
           fromTsMs,
           toTsMs,
@@ -235,13 +264,13 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       errors.push('알 수 없는 슬리피지 프로파일');
     }
 
-    // datasetVersion === null 분기는 죽은 방어 코드가 아니라 타입 내로잉이다 —
-    // 이 분기가 없으면 아래 { ok: true, datasetVersion } 반환에서 datasetVersion 이
-    // `{version,contentHash} | null` 로 남아 typecheck 가 깨진다.
-    if (errors.length > 0 || datasetVersion === null) {
+    // universe === null 분기는 죽은 방어 코드가 아니라 타입 내로잉이다 —
+    // 이 분기가 없으면 아래 { ok: true, universe } 반환에서 universe 가
+    // `UniverseSnapshot | null` 로 남아 typecheck 가 깨진다.
+    if (errors.length > 0 || universe === null || resolvedTimeframe === null) {
       return { ok: false, errors: errors.length > 0 ? errors : ['제출을 검증할 수 없습니다'] };
     }
-    return { ok: true, datasetVersion };
+    return { ok: true, universe, timeframe: resolvedTimeframe };
   };
 
   /**
@@ -254,10 +283,17 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    */
   const checkFundamentalsRequirement = (body: BacktestRequest): string | null => {
     if (!strategies.requiresFundamentals(body.strategyId)) return null;
-    if (factRepository.hasFacts(body.datasetId, 'SYMBOL')) return null;
+    /**
+     * **전 종목이 비었을 때만** 막는다. 일부 종목만 재무가 없는 경우는 거부 사유가
+     * 아니다 — 신규 상장처럼 이력이 짧은 종목 하나 때문에 유니버스 전체를 막지 않는
+     * `checkPeriodCoverage` 와 같은 원칙이고(D-025), 빠진 종목은 워커가 실행 경고에
+     * **이름으로** 남긴다. 여기서 전부 422 로 바꾸면 그 경고 경로가 죽는다.
+     */
+    if (body.universe.symbols.some((code) => factRepository.hasFacts('SYMBOL', code))) return null;
     return (
-      '이 전략은 상장시점 재무 데이터가 필요하지만 이 데이터셋에는 아직 없습니다. ' +
-      '데이터 화면에서 이 데이터셋을 동기화할 때 "재무" 를 함께 선택해 수집하세요.'
+      '이 전략은 상장시점 재무 데이터가 필요하지만 선택한 종목에는 아직 없습니다: ' +
+      `${body.universe.symbols.join(', ')} — 종목 화면에서 해당 종목을 선택해 "재무" 를 함께 ` +
+      '동기화하세요.'
     );
   };
 
@@ -337,7 +373,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const resourceError = await checkResources(deps.dataRoot);
     if (resourceError) return reply.code(507).send({ error: resourceError });
 
-    const job = queue.enqueue(body, validated.datasetVersion);
+    // 해소한 소비 봉을 요청에 박아 저장한다 — 워커가 다시 추론하면 두 곳의 규칙이
+    // 갈라질 수 있고, 실행 기록도 "무엇을 소비했나" 에 답하지 못한다
+    const job = queue.enqueue({ ...body, timeframe: validated.timeframe }, validated.universe);
     audit.record(request.authUser?.username ?? 'admin', 'backtest.created', {
       jobId: job.id,
       strategyId: body.strategyId,
@@ -421,7 +459,10 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const resourceError = await checkResources(deps.dataRoot);
     if (resourceError) return reply.code(507).send({ error: resourceError });
 
-    const cloned = queue.enqueue(cloneRequest, validated.datasetVersion);
+    const cloned = queue.enqueue(
+      { ...cloneRequest, timeframe: validated.timeframe },
+      validated.universe,
+    );
     audit.record(request.authUser?.username ?? 'admin', 'backtest.cloned', {
       sourceJobId: id,
       jobId: cloned.id,

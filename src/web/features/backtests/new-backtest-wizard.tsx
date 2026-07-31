@@ -18,13 +18,17 @@ import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { api, ApiError, postJson } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
-import { formatKrw, timeframeLabel } from '@/lib/format';
-import { legacyConsumeTimeframe, wizardTimeframes } from '@/features/datasets/dataset-slices';
+import { formatKrw, formatRelativeTime, timeframeLabel } from '@/lib/format';
+import { wizardTimeframes } from '@/features/datasets/dataset-slices';
+import { SymbolFactsBadge } from '@/features/datasets/symbol-facts-badge';
+import type { SymbolSummary } from '@/features/datasets/symbol-types';
 import { costProfileLabel, slippageProfileLabel } from './profile-labels';
 import { useStockNames } from '@/lib/use-stock-names';
 import { requestToFormState } from './prefill';
 import { ParamHint } from './param-hint';
 import { extractNumberParams, paramLabel, type NumberParamSpec } from './param-specs';
+import { StrategyDataBadge } from './strategy-data-badge';
+import { STRATEGY_DATA_DETAILS, strategyDataRequirement } from './strategy-data-requirement';
 import { SymbolLabel } from '@/components/symbol-label';
 import {
   clampSymbolName,
@@ -47,15 +51,19 @@ interface StrategySummary {
   version: string;
   name: string;
   description: string;
+  /**
+   * 서버는 항상 boolean 을 내리지만(`StrategySummary`) 응답을 런타임 검증하지 않으므로
+   * 낡은 서버·프록시 응답에서는 없을 수 있다. 없는 것을 false 로 좁히지 않고 그대로
+   * 흘려보내 배지가 침묵하게 한다 (`strategyDataRequirement`).
+   */
+  requiresFundamentals?: boolean;
 }
 
 interface DatasetSummary {
   id: string;
   name: string;
-  market: string;
+  description: string | null;
   symbols: string[];
-  defaultTimeframe: '1d' | '1m';
-  slices: Array<{ slice: '1d' | '1m'; hasData: boolean }>;
 }
 
 interface CommissionProfileSummary {
@@ -107,6 +115,12 @@ export function NewBacktestWizard() {
     queryKey: ['datasets'],
     queryFn: () => api<{ datasets: DatasetSummary[] }>('/datasets'),
   });
+  // 봉 보유·재무 보유·수집 시각은 이제 종목에 있다 — 데이터셋 카드는 참조 종목을
+  // 모아서 그린다 (설계 2026-07-31-symbol-as-first-class)
+  const symbolsQuery = useQuery({
+    queryKey: ['symbols'],
+    queryFn: () => api<{ symbols: SymbolSummary[] }>('/symbols'),
+  });
   const profiles = useQuery({
     queryKey: ['backtests', 'profiles'],
     queryFn: () =>
@@ -130,8 +144,39 @@ export function NewBacktestWizard() {
 
   const selectedStrategy = strategies.data?.strategies.find((s) => s.id === strategyId) ?? null;
   const selectedDataset = datasets.data?.datasets.find((d) => d.id === datasetId) ?? null;
+  // 데이터셋 카드의 "마지막 수집 N일 전" 기준 시각 — 렌더 시점으로 충분하다
+  const nowMs = Date.now();
+  const symbolByCode = new Map((symbolsQuery.data?.symbols ?? []).map((s) => [s.code, s]));
+  /**
+   * 데이터셋의 봉 슬라이스 보유 = 참조 종목 **전부** 가 그 슬라이스를 가진 경우.
+   * 하나라도 비면 그 봉으로 돌릴 수 없다 — any 로 열면 일부 종목이 조용히 0봉으로 빠진다.
+   */
+  const slicesOf = (codes: readonly string[]) =>
+    (['1d', '1m'] as const).map((slice) => ({
+      slice,
+      hasData:
+        codes.length > 0 &&
+        codes.every((code) =>
+          symbolByCode.get(code)?.slices.some((s) => s.slice === slice && s.hasData) === true,
+        ),
+    }));
+  /** 재무는 전 종목이 갖고 있어야 「재무 있음」이다 — 랭킹은 빠진 종목을 조용히 버린다 */
+  const factsOf = (codes: readonly string[]): boolean | undefined => {
+    if (codes.length === 0 || symbolsQuery.data === undefined) return undefined;
+    return codes.every((code) => symbolByCode.get(code)?.hasFacts === true);
+  };
+  /** 카드의 마지막 수집은 참조 종목 중 가장 오래된 값 — 묵음은 가장 약한 고리가 정한다 */
+  const lastSyncOf = (codes: readonly string[]): number | null => {
+    const times = codes.flatMap((code) =>
+      (symbolByCode.get(code)?.slices ?? [])
+        .filter((s) => s.hasData)
+        .map((s) => s.lastSyncedAtMs),
+    );
+    if (times.length === 0 || times.some((time) => time === null)) return null;
+    return Math.min(...(times as number[]));
+  };
   // 카드 노출·기본값 계산에 반복해서 쓰인다 — 보유 슬라이스(hasData) 기준으로 도출
-  const timeframeOptions = selectedDataset ? wizardTimeframes(selectedDataset.slices) : [];
+  const timeframeOptions = selectedDataset ? wizardTimeframes(slicesOf(selectedDataset.symbols)) : [];
   // 선택 후보 전체를 한 번에 조회한다 — 체크박스와 검토 단계가 같은 Map 을 쓴다.
   const stockNames = useStockNames(selectedDataset?.symbols ?? []);
   const nameOf = (symbol: string): string | null => stockNames.get(symbol)?.name ?? null;
@@ -235,7 +280,7 @@ export function NewBacktestWizard() {
       // 사용자가 카드를 만지지 않았으면(timeframe==='') 도출 목록의 첫 항목이 기본이다.
       // 도출 목록마저 비어 있는 극단적 경우엔 legacyConsumeDefault 와 같은 규칙으로 폴백한다.
       timeframe: (timeframe === ''
-        ? (timeframeOptions[0] ?? legacyConsumeTimeframe(selectedDataset.defaultTimeframe))
+        ? (timeframeOptions[0] ?? '1d')
         : timeframe) as '1m' | '1h' | '1d',
       universe: { type: 'SYMBOLS', symbols },
       period: { from, to },
@@ -398,6 +443,11 @@ export function NewBacktestWizard() {
             {(strategies.data?.strategies ?? []).map((strategy) => {
               const selected = strategyId === strategy.id;
               const collapsed = strategyId !== null && !selected;
+              // 배지는 모든 카드에, 풀어 쓴 한 줄은 고른 카드에만 — 목록을 훑는 동안은
+              // 배지만으로 충분하고, 고른 뒤에는 무엇이 개입하는지 문장으로 확인시킨다
+              const requirement = strategyDataRequirement(strategy.requiresFundamentals);
+              const dataDetail =
+                selected && requirement !== null ? STRATEGY_DATA_DETAILS[requirement] : null;
               return (
                 <div
                   key={strategy.id}
@@ -422,13 +472,25 @@ export function NewBacktestWizard() {
                           selected ? 'border-primary bg-muted/50' : 'hover:bg-muted/30',
                         )}
                       >
-                        <p className="font-medium">
-                          {strategy.name}{' '}
-                          <span className="text-xs text-muted-foreground">v{strategy.version}</span>
-                        </p>
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="font-medium">
+                            {strategy.name}{' '}
+                            <span className="text-xs text-muted-foreground">
+                              v{strategy.version}
+                            </span>
+                          </p>
+                          <StrategyDataBadge
+                            requiresFundamentals={strategy.requiresFundamentals}
+                          />
+                        </div>
                         <p className="mt-1 text-sm text-muted-foreground">{strategy.description}</p>
+                        {dataDetail ? (
+                          <p className="mt-2 text-xs text-muted-foreground">{dataDetail}</p>
+                        ) : null}
+                        {/* 데이터 요구 문장과 붙으면 한 덩어리로 읽힌다 — 조작 안내는
+                            설명이 아니므로 간격으로 떼어 놓는다 */}
                         {selected ? (
-                          <p className="mt-2 text-xs text-muted-foreground">
+                          <p className="mt-3 text-xs text-muted-foreground">
                             다시 누르면 선택을 해제합니다
                           </p>
                         ) : null}
@@ -493,8 +555,8 @@ export function NewBacktestWizard() {
                 setDatasetId(dataset.id);
                 // 새 데이터셋의 슬라이스로 다시 도출한 첫 항목을 기본값으로 명시한다 —
                 // 이전 선택이 새 데이터셋에 새지 않게
-                const options = wizardTimeframes(dataset.slices);
-                setTimeframe(options[0] ?? legacyConsumeTimeframe(dataset.defaultTimeframe));
+                const options = wizardTimeframes(slicesOf(dataset.symbols));
+                setTimeframe(options[0] ?? '1d');
                 setSymbols(dataset.symbols);
               }}
               className={cn(
@@ -502,10 +564,21 @@ export function NewBacktestWizard() {
                 datasetId === dataset.id ? 'border-primary bg-muted/50' : 'hover:bg-muted/30',
               )}
             >
-              <p className="font-medium">{dataset.name}</p>
+              <div className="flex items-start justify-between gap-2">
+                <p className="font-medium">{dataset.name}</p>
+                {/* 전략 카드와 같은 표기 — 1단계에서 「재무 필요」를 본 사용자가 여기서
+                    「재무 없음」을 보면 제출 전에 조합이 어긋난 것을 알아차린다 */}
+                <SymbolFactsBadge hasFacts={factsOf(dataset.symbols)} />
+              </div>
               <p className="mt-1 text-sm text-muted-foreground">
-                {dataset.market} · {timeframeLabel(dataset.defaultTimeframe)} ·{' '}
-                {dataset.symbols.length}종목
+                {dataset.symbols.length}종목 ·{' '}
+                {slicesOf(dataset.symbols)
+                  .filter((s) => s.hasData)
+                  .map((s) => timeframeLabel(s.slice))
+                  .join('·') || '전 종목 공통 봉 없음'}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                마지막 수집 {formatRelativeTime(lastSyncOf(dataset.symbols), nowMs)}
               </p>
             </button>
           ))}
@@ -696,10 +769,16 @@ export function NewBacktestWizard() {
               <div className="flex justify-between gap-3">
                 <span className="shrink-0 text-muted-foreground">전략</span>
                 {/* 버전은 요청이 아니라 레지스트리에서 읽는다 (D-029) — 실행되는 것도
-                    제출 시점에 등록돼 있는 전략이다 */}
-                <span>
-                  {request.strategyId}
-                  {selectedStrategy ? ` v${selectedStrategy.version}` : ''}
+                    제출 시점에 등록돼 있는 전략이다. 데이터 요구 배지를 여기 한 번 더
+                    두는 이유: 제출 직전이 재무 개입을 알아차릴 마지막 지점이다 */}
+                <span className="flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1">
+                  <span>
+                    {request.strategyId}
+                    {selectedStrategy ? ` v${selectedStrategy.version}` : ''}
+                  </span>
+                  <StrategyDataBadge
+                    requiresFundamentals={selectedStrategy?.requiresFundamentals}
+                  />
                 </span>
               </div>
               <Separator />

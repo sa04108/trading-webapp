@@ -31,8 +31,8 @@ CREATE TABLE `backtest_jobs` (
 	`request_json` text NOT NULL,
 	`strategy_id` text NOT NULL,
 	`dataset_id` text NOT NULL,
-	`dataset_version` integer,
-	`dataset_hash` text,
+	`universe_json` text,
+	`universe_hash` text,
 	`progress_bars` integer,
 	`total_bars` integer,
 	`progress_label` text,
@@ -76,14 +76,15 @@ CREATE TABLE `backtest_runs` (
 	`strategy_source_hash` text NOT NULL,
 	`parameter_json` text NOT NULL,
 	`dataset_id` text NOT NULL,
-	`dataset_version` integer NOT NULL,
-	`dataset_hash` text NOT NULL,
+	`universe_hash` text NOT NULL,
+	`universe_json` text NOT NULL,
 	`engine_version` text NOT NULL,
 	`fee_model_version` text NOT NULL,
 	`slippage_model_version` text NOT NULL,
 	`random_seed` integer NOT NULL,
 	`git_commit_sha` text NOT NULL,
 	`warnings_json` text,
+	`open_positions_json` text,
 	`started_at_ms` integer NOT NULL,
 	`completed_at_ms` integer,
 	FOREIGN KEY (`job_id`) REFERENCES `backtest_jobs`(`id`) ON UPDATE no action ON DELETE cascade
@@ -120,52 +121,36 @@ CREATE TABLE `backtest_trades` (
 );
 --> statement-breakpoint
 CREATE INDEX `idx_backtest_trades_job` ON `backtest_trades` (`job_id`,`exit_ts_ms`);--> statement-breakpoint
-CREATE TABLE `data_coverage` (
-	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
-	`dataset_id` text NOT NULL,
-	`symbol` text NOT NULL,
-	`first_ts_ms` integer,
-	`last_ts_ms` integer,
-	`bar_count` integer DEFAULT 0 NOT NULL,
-	`expected_bar_count` integer,
-	`missing_ranges_json` text,
-	`computed_at_ms` integer NOT NULL,
-	FOREIGN KEY (`dataset_id`) REFERENCES `datasets`(`id`) ON UPDATE no action ON DELETE cascade
-);
---> statement-breakpoint
-CREATE INDEX `idx_data_coverage_dataset_symbol` ON `data_coverage` (`dataset_id`,`symbol`);--> statement-breakpoint
-CREATE TABLE `data_import_jobs` (
+CREATE TABLE `data_sync_jobs` (
 	`id` text PRIMARY KEY NOT NULL,
-	`dataset_id` text NOT NULL,
 	`status` text NOT NULL,
 	`source_type` text NOT NULL,
+	`symbols_json` text NOT NULL,
+	`slice` text DEFAULT '1d' NOT NULL,
 	`file_name` text,
-	`symbol` text,
 	`rows_imported` integer,
 	`error` text,
 	`created_at_ms` integer NOT NULL,
 	`completed_at_ms` integer,
-	FOREIGN KEY (`dataset_id`) REFERENCES `datasets`(`id`) ON UPDATE no action ON DELETE cascade
+	`phase` text,
+	`candles_ms` integer,
+	`facts_json` text
 );
 --> statement-breakpoint
-CREATE INDEX `idx_data_import_jobs_dataset` ON `data_import_jobs` (`dataset_id`);--> statement-breakpoint
-CREATE TABLE `dataset_versions` (
-	`id` text PRIMARY KEY NOT NULL,
+CREATE INDEX `idx_data_sync_jobs_status` ON `data_sync_jobs` (`status`);--> statement-breakpoint
+CREATE TABLE `dataset_symbols` (
+	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`dataset_id` text NOT NULL,
-	`version` integer NOT NULL,
-	`content_hash` text NOT NULL,
-	`note` text,
-	`created_at_ms` integer NOT NULL,
-	FOREIGN KEY (`dataset_id`) REFERENCES `datasets`(`id`) ON UPDATE no action ON DELETE cascade
+	`code` text NOT NULL,
+	FOREIGN KEY (`dataset_id`) REFERENCES `datasets`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`code`) REFERENCES `symbols`(`code`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE INDEX `idx_dataset_versions_dataset` ON `dataset_versions` (`dataset_id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `idx_dataset_symbols_dataset_code` ON `dataset_symbols` (`dataset_id`,`code`);--> statement-breakpoint
+CREATE INDEX `idx_dataset_symbols_code` ON `dataset_symbols` (`code`);--> statement-breakpoint
 CREATE TABLE `datasets` (
 	`id` text PRIMARY KEY NOT NULL,
 	`name` text NOT NULL,
-	`market` text NOT NULL,
-	`timeframe` text NOT NULL,
-	`symbols_json` text NOT NULL,
 	`description` text,
 	`created_at_ms` integer NOT NULL,
 	`updated_at_ms` integer NOT NULL
@@ -191,6 +176,58 @@ CREATE TABLE `sessions` (
 );
 --> statement-breakpoint
 CREATE INDEX `idx_sessions_user` ON `sessions` (`user_id`);--> statement-breakpoint
+CREATE TABLE `symbol_coverage` (
+	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+	`code` text NOT NULL,
+	`slice` text NOT NULL,
+	`first_ts_ms` integer,
+	`last_ts_ms` integer,
+	`bar_count` integer DEFAULT 0 NOT NULL,
+	`expected_bar_count` integer,
+	`missing_ranges_json` text,
+	`computed_at_ms` integer NOT NULL,
+	FOREIGN KEY (`code`) REFERENCES `symbols`(`code`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `idx_symbol_coverage_code_slice` ON `symbol_coverage` (`code`,`slice`);--> statement-breakpoint
+CREATE TABLE `symbol_facts_state` (
+	`code` text PRIMARY KEY NOT NULL,
+	`covered_years_json` text NOT NULL,
+	`updated_at_ms` integer NOT NULL,
+	FOREIGN KEY (`code`) REFERENCES `symbols`(`code`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE TABLE `symbol_slices` (
+	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+	`code` text NOT NULL,
+	`slice` text NOT NULL,
+	`synced_first_ts_ms` integer,
+	`synced_last_ts_ms` integer,
+	`backfill_done_at_ms` integer,
+	`last_synced_at_ms` integer,
+	FOREIGN KEY (`code`) REFERENCES `symbols`(`code`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `idx_symbol_slices_code_slice` ON `symbol_slices` (`code`,`slice`);--> statement-breakpoint
+CREATE TABLE `symbol_versions` (
+	`id` text PRIMARY KEY NOT NULL,
+	`code` text NOT NULL,
+	`slice` text NOT NULL,
+	`version` integer NOT NULL,
+	`content_hash` text NOT NULL,
+	`created_at_ms` integer NOT NULL,
+	FOREIGN KEY (`code`) REFERENCES `symbols`(`code`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE INDEX `idx_symbol_versions_code_slice` ON `symbol_versions` (`code`,`slice`);--> statement-breakpoint
+CREATE TABLE `symbols` (
+	`code` text PRIMARY KEY NOT NULL,
+	`market` text NOT NULL,
+	`name` text,
+	`created_at_ms` integer NOT NULL
+);
+--> statement-breakpoint
+CREATE INDEX `idx_symbols_market` ON `symbols` (`market`);--> statement-breakpoint
 CREATE TABLE `users` (
 	`id` text PRIMARY KEY NOT NULL,
 	`username` text NOT NULL,

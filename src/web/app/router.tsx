@@ -4,7 +4,7 @@ import { BacktestDetailPage } from '../features/backtests/backtest-detail-page';
 import { BacktestsPage } from '../features/backtests/backtests-page';
 import { NewBacktestWizard } from '../features/backtests/new-backtest-wizard';
 import { DashboardPage } from '../features/dashboard/dashboard-page';
-import { DatasetsPage } from '../features/datasets/datasets-page';
+import { DataPage } from '../features/datasets/data-page';
 import { SettingsPage } from '../features/settings/settings-page';
 import { RequireAuth } from './require-auth';
 import { AppShell } from './shell';
@@ -22,7 +22,7 @@ export const router = createBrowserRouter([
           { path: 'backtests', element: <BacktestsPage /> },
           { path: 'backtests/new', element: <NewBacktestWizard /> },
           { path: 'backtests/:id', element: <BacktestDetailPage /> },
-          { path: 'datasets', element: <DatasetsPage /> },
+          { path: 'datasets', element: <DataPage /> },
           { path: 'settings', element: <SettingsPage /> },
         ],
       },

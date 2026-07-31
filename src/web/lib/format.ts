@@ -36,6 +36,29 @@ export function formatDate(tsMs: number | null | undefined): string {
   return new Date(tsMs).toISOString().slice(0, 10);
 }
 
+/**
+ * "얼마나 지났나" 를 사람 말로. 절대 시각만 보여 주면 사용자가 오늘 날짜와 머릿속에서
+ * 빼야 하는데, 데이터가 묵었는지는 그 뺄셈의 결과로만 판단할 수 있다.
+ *
+ * 문턱을 두고 경고하지는 않는다 — 며칠이면 묵은 것인지는 봉 주기(분봉/일봉)와 시장
+ * 휴장에 따라 다르고, 여기서 정하면 화면이 근거 없는 정책을 말하게 된다. 경과 시간만
+ * 있는 대로 보여 주고 판단은 사용자에게 맡긴다.
+ */
+export function formatRelativeTime(
+  tsMs: number | null | undefined,
+  nowMs: number,
+): string {
+  if (!tsMs) return '없음';
+  const elapsed = nowMs - tsMs;
+  // 미래 시각(시계 어긋남·서버 시각 차이)은 '방금' 으로 접는다 — '-3일 전' 은 의미가 없다
+  if (elapsed < 60_000) return '방금';
+  const minutes = Math.floor(elapsed / 60_000);
+  if (minutes < 60) return `${minutes}분 전`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}시간 전`;
+  return `${Math.floor(hours / 24)}일 전`;
+}
+
 export function formatDuration(ms: number | null | undefined): string {
   if (ms === null || ms === undefined) return '-';
   const hours = Math.floor(ms / 3_600_000);

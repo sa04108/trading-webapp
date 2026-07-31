@@ -74,8 +74,9 @@ export interface RunMetadata {
   strategySourceHash: string;
   parameterJson: string;
   datasetId: string;
-  datasetVersion: number;
-  datasetHash: string;
+  /** 소비한 (종목,슬라이스,버전,해시) 스냅샷 — 구 datasetVersion/datasetHash (§9.5) */
+  universeHash: string;
+  universeJson: string;
   engineVersion: string;
   feeModelVersion: string;
   slippageModelVersion: string;

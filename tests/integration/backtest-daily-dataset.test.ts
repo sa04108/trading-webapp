@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
+import { registerSymbols, seedDataset } from '../helpers/seed.js';
 
 const DAY = 86_400_000;
 
@@ -95,17 +96,14 @@ describe('일봉 데이터셋 백테스트 (D-024)', () => {
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
 
     // 증권사 일봉 동기화가 만드는 상태를 그대로 재현한다 (timeframe=1d 데이터셋 + 1d 파티션)
-    const dataset = ctx.container.datasetService.createBrokerDataset(
-      'kr-daily-v1',
-      'KR',
-      '1d',
-      ['005930'],
-    );
+    const dataset = seedDataset(ctx.container, 'kr-daily-v1', 'KR', ['005930']);
     datasetId = dataset.id;
     dailyCandles = buildDailyCandles();
-    await ctx.container.candleRepository.saveCandles(datasetId, dailyCandles);
-    await ctx.container.datasetService.refreshCoverage(datasetId, 'KR', '1d');
-    ctx.container.datasetService.bumpVersion(datasetId, 'broker:1d:seed', Date.now());
+    await ctx.container.candleRepository.saveCandles(dailyCandles);
+    for (const code of dataset.symbols) {
+      await ctx.container.symbolService.refreshCoverage(code, 'KR', '1d');
+      ctx.container.symbolService.bumpVersion(code, '1d', 'broker:seed', Date.now());
+    }
   });
 
   afterEach(async () => {
@@ -114,7 +112,7 @@ describe('일봉 데이터셋 백테스트 (D-024)', () => {
 
   it('커버리지가 보고한 일봉으로 백테스트가 완주한다', { timeout: 90_000 }, async () => {
     // 사용자가 보는 화면: 커버리지는 봉이 있다고 말한다
-    const coverage = ctx.container.datasetService.getCoverage(datasetId);
+    const coverage = ctx.container.symbolService.getCoverage(['005930']);
     expect(coverage[0]!.barCount).toBe(dailyCandles.length);
 
     const created = await ctx.app.inject({
@@ -142,6 +140,8 @@ describe('일봉 데이터셋 백테스트 (D-024)', () => {
 
   it('봉이 없는 종목을 실행 경고로 남긴다', { timeout: 90_000 }, async () => {
     // 데이터셋에 심볼을 더하되 봉은 넣지 않는다 — 제출 검증은 통과하고 실행에서 빠진다
+    registerSymbols(ctx.container, 'KR', ['000660']);
+    registerSymbols(ctx.container, 'KR', ['000660']);
     ctx.container.datasetService.updateSymbols(datasetId, { add: ['000660'] });
 
     const created = await ctx.app.inject({
@@ -259,7 +259,7 @@ describe('일봉 데이터셋 백테스트 (D-024)', () => {
     // 게이트가 생기기 전에 제출된 잡을 재현한다 — 큐에 직접 넣어 제출 검증을 우회한다
     const job = ctx.container.jobQueue.enqueue(
       momentumPayload(20, 10) as never,
-      { version: 1, contentHash: 'seed' },
+      { entries: [], hash: 'seed' },
     );
 
     const draft = await ctx.app.inject({
