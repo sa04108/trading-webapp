@@ -160,7 +160,7 @@ pnpm build
 printf '{"gitSha":"%s","builtAt":"%s"}\n' "${GIT_SHA}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > dist/build-info.json
 
 echo "==> 아티팩트 생성: ${ARCHIVE}"
-tar -czf "${ARCHIVE}" dist migrations package.json pnpm-lock.yaml
+tar -czf "${ARCHIVE}" dist migrations package.json pnpm-lock.yaml pnpm-workspace.yaml
 
 echo "==> 업로드 및 릴리스 전환"
 scp "${SSH_OPTS[@]}" "${ARCHIVE}" "${TARGET}:/tmp/"
