@@ -49,7 +49,6 @@ function buildDailyCandles(): Candle[] {
 function buildRequest(datasetId: string): BacktestRequest {
   return {
     strategyId: 'range-breakout',
-    strategyVersion: '2.0.0',
     parameters: {
       lookbackBars: 10,
       atrPeriod: 5,
@@ -179,7 +178,6 @@ describe('일봉 데이터셋 백테스트 (D-024)', () => {
       cookies: { qp_session: cookie },
       payload: {
         strategyId: 'value-quality-rank',
-        strategyVersion: '1.0.0',
         parameters: { topN: 20, rebalanceMonths: 3, staleQuarters: 2 },
         datasetId,
         timeframe: '1d',
@@ -209,7 +207,6 @@ describe('일봉 데이터셋 백테스트 (D-024)', () => {
   function momentumPayload(topN: number, maxPositions: number): Record<string, unknown> {
     return {
       strategyId: 'cross-sectional-momentum',
-      strategyVersion: '1.0.0',
       parameters: {
         formationDays: 20,
         skipDays: 0,
@@ -291,7 +288,6 @@ describe('일봉 데이터셋 백테스트 (D-024)', () => {
       cookies: { qp_session: cookie },
       payload: {
         strategyId: 'cross-sectional-momentum',
-        strategyVersion: '1.0.0',
         parameters: {
           formationDays: 20,
           skipDays: 0,

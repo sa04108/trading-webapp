@@ -14,7 +14,7 @@ export type StoredRequestRebase =
 const LEGACY_MAX_POSITIONS = 10;
 
 /**
- * 저장된 요청을 현재 스키마·전략 버전 기준으로 재기준(rebase)한다.
+ * 저장된 요청을 현재 스키마 기준으로 재기준(rebase)한다.
  *
  * 복제는 스펙 §10 이 지정한 중단 작업의 복구 경로다 — 요청 스키마나 전략 버전이 올라갔다는
  * 이유로 과거 작업의 복구가 막히면 안 된다. 기계적으로 되살릴 수 있는 편차는 되살리고,
@@ -50,12 +50,16 @@ export function rebaseStoredRequest(
     warnings.push(`포지션 상한을 risk.maxPositions=${carried} 로 이관했습니다 (구 스키마 요청)`);
   }
 
-  // 전략 버전이 올라갔으면 현재 버전으로 재기준한다 — 로직이 바뀌었을 수 있다
-  if (currentStrategyVersion !== null && draft.strategyVersion !== currentStrategyVersion) {
-    warnings.push(
-      `전략 버전 ${String(draft.strategyVersion)} → ${currentStrategyVersion} 으로 재기준했습니다. 결과가 원본과 다를 수 있습니다.`,
-    );
-    draft.strategyVersion = currentStrategyVersion;
+  // D-029 이전 요청은 전략 버전을 품고 있다. 요청은 더 이상 버전을 나르지 않으므로
+  // 필드는 버리되, 그때와 지금의 전략이 다르다는 사실은 경고로 남긴다 — 복제는 재현이
+  // 아니라 재실행이고, 결과가 원본과 달라질 수 있다는 것이 사용자가 알아야 할 전부다.
+  if (draft.strategyVersion !== undefined) {
+    if (currentStrategyVersion !== null && draft.strategyVersion !== currentStrategyVersion) {
+      warnings.push(
+        `전략 버전 ${String(draft.strategyVersion)} → ${currentStrategyVersion} 으로 재기준했습니다. 결과가 원본과 다를 수 있습니다.`,
+      );
+    }
+    delete draft.strategyVersion;
   }
 
   const parsed = backtestRequestSchema.safeParse(draft);

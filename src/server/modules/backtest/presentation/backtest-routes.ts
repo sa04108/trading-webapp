@@ -152,9 +152,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (!strategy) {
       errors.push(`알 수 없는 전략: ${body.strategyId}`);
     } else {
-      if (strategy.version !== body.strategyVersion) {
-        errors.push(`전략 버전 불일치: 요청 ${body.strategyVersion}, 등록 ${strategy.version}`);
-      }
+      // 전략 버전은 검사하지 않는다 (D-029) — 요청이 버전을 들고 다니지 않는다.
+      // 실행되는 것은 언제나 지금 등록된 전략이고, 파라미터가 그 전략과 안 맞으면
+      // 바로 아래 검증이 잡는다.
       const paramCheck = strategies.validateParameters(body.strategyId, body.parameters);
       if (!paramCheck.ok) errors.push(paramCheck.error);
     }

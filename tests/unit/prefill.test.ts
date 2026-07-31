@@ -4,7 +4,6 @@ import type { BacktestRequestBody } from '../../src/web/features/backtests/types
 
 const request: BacktestRequestBody = {
   strategyId: 'range-breakout',
-  strategyVersion: '2.0.0',
   parameters: { lookbackBars: 10, atrPeriod: 5 },
   datasetId: 'ds_1',
   universe: { type: 'SYMBOLS', symbols: ['005930', '000660'] },
