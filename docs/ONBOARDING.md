@@ -212,7 +212,7 @@ CSV 형식: `timestamp,open,high,low,close,volume` (ISO 8601 UTC 또는 epoch ms
 ```
 ./scripts/bootstrap.sh   # 새 서버 1회: 주소·도메인 입력 → provision.sh 업로드·실행
 ./scripts/deploy.sh      # 릴리스: 게이트 → 빌드 → 전환 → health check → 실패 시 자동 롤백
-./scripts/backup.sh      # 백업 (용량 상한 회전, D-013) / restore.sh
+./scripts/backup.sh      # SQLite·exports 백업 (용량 상한 회전, D-013·D-019)
 ```
 
 - `infra/provision.sh` 는 **멱등한 단일 실행**이다: 패키지·Node·UFW(22 rate-limit,
@@ -222,6 +222,8 @@ CSV 형식: `timestamp,open,high,low,close,volume` (ISO 8601 UTC 또는 epoch ms
   `~/.ssh/config` 를 만들지 않아도 한 줄로 실행된다. 이름·의미는 두 스크립트가 같다.
 - deploy.sh 는 재시작 직전 SQLite 스냅샷을 뜨고, health check 실패 시 코드와 DB 를
   함께 롤백한다 (D-010).
+- 독립 복원 스크립트는 제공하지 않는다. 백업 복구 절차와 격리 복구 검증은 Phase 7
+  disaster runbook 에서 함께 설계한다 (D-031).
 - 주의: `provision.sh` 는 **POSIX sh** 다 — bash 문법(배열, `[[ ]]`, pipefail) 금지.
   `bootstrap.sh`/`deploy.sh` 는 bash. 셸 스크립트는 전부 LF (`.gitattributes` 강제).
 

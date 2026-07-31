@@ -449,6 +449,9 @@ git commit -m "feat(infra): provision.sh — §21·22·23·25·26·28·29 멱등
 
 **구현 중 발견된 결함.** 계획 작성 시점에는 몰랐던 것으로, Task 4 가 여기에 의존한다.
 
+> 현재 상태: 아래 `scripts/restore.sh` 언급과 명령은 계획 작성 당시의 기록이다.
+> 해당 파일은 이후 D-031 에서 제거됐으며 현재 작업 절차로 실행하지 않는다.
+
 이 리포에는 `.gitattributes` 가 없고 개발 PC 의 `core.autocrlf=true` 다. 그 결과 blob 은
 전부 LF 인데 **워킹트리 사본에 CR 이 들어간다** — 측정값: `scripts/deploy.sh` 102 bytes,
 `scripts/backup.sh` 107, `scripts/restore.sh` 29. `infra/provision.sh` 가 지금 깨끗한 것은

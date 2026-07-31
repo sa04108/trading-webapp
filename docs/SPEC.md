@@ -341,8 +341,7 @@ quant-platform/
 ├─ scripts/
 │  ├─ bootstrap.sh           # 개발 PC 에서 새 서버 셋업 (provision.sh 업로드·실행)
 │  ├─ deploy.sh
-│  ├─ backup.sh
-│  └─ restore.sh
+│  └─ backup.sh
 ├─ docs/
 │  ├─ SPEC.md                # 이 문서
 │  ├─ ONBOARDING.md
@@ -1682,9 +1681,13 @@ S3를 사용할 경우:
 - 기본 암호화
 - 특정 bucket prefix만 허용하는 최소 IAM
 - 30일 lifecycle
-- 월 1회 복원 테스트
+- 월 1회 격리 복구 테스트 (Phase 7 disaster runbook)
 
 애플리케이션 프로세스에 AWS 키를 제공하지 않는다. 백업 스크립트 또는 별도 제한 사용자만 접근한다.
+
+독립 복원 스크립트는 두지 않는다. 현재 `backup.sh` 는 백업 생성만 담당하며, SQLite 와
+exports 의 복구 절차·무결성 검사·실패 시 원복은 Phase 7 disaster runbook 에서 함께
+설계하고 격리 환경에서 검증한다 (D-031).
 
 ---
 
@@ -1981,10 +1984,9 @@ quant-platform-live.service
 ## Phase 7 — 운영
 
 - S3 backup
-- restore test
 - disk/memory guard
 - alert
-- disaster runbook
+- disaster runbook (백업 복구·격리 복구 테스트 포함)
 
 ## Phase 8 — Paper Trading
 
@@ -2097,7 +2099,7 @@ sudo ufw status verbose
 - systemd 자동 시작
 - 장애 재시작
 - 로그 확인
-- backup/restore 검증
+- 백업 생성·재해복구 절차 검증
 - 리소스 부족 시 신규 작업 차단
 - 이전 release rollback
 
