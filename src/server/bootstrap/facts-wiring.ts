@@ -38,9 +38,6 @@ export interface FactSyncPort {
 }
 
 export interface FactsPhaseDeps {
-  readonly datasetService: {
-    getDataset(datasetId: string): { readonly symbols: readonly string[] } | null;
-  };
   readonly factSyncService: FactSyncPort;
 }
 
@@ -51,7 +48,7 @@ export interface FactsPhaseDeps {
  */
 export function createFactsPhase(deps: FactsPhaseDeps) {
   return async (args: {
-    datasetId: string;
+    codes: readonly string[];
     fromYear: number;
     toYear: number;
     onProgress: (progress: {
@@ -62,8 +59,6 @@ export function createFactsPhase(deps: FactsPhaseDeps) {
     }) => void;
     shouldStop: () => boolean;
   }) => {
-    const dataset = deps.datasetService.getDataset(args.datasetId);
-    const symbols = dataset?.symbols ?? [];
     // FactPhaseProgress 는 **누적**, FactSyncProgress 는 **종목 단위**다. 필드를
     // 1:1 로 옮기면 (둘 다 number 라 타입으로는 잡히지 않는다) 화면 카운터가
     // 종목마다 12 → 0 → 8 → 0 으로 튄다 — 여기서 누적해서 넘긴다.
@@ -71,8 +66,7 @@ export function createFactsPhase(deps: FactsPhaseDeps) {
     let gapCount = 0;
     const report = await deps.factSyncService.sync(
       {
-        datasetId: args.datasetId,
-        symbols,
+        symbols: args.codes,
         fromYear: args.fromYear,
         toYear: args.toYear,
         consolidated: true,
@@ -107,11 +101,11 @@ export function createFactsPhase(deps: FactsPhaseDeps) {
 export interface FactsSyncEstimatorDeps {
   /** null 이면 이 배포에 DART 가 설정되지 않았다 */
   readonly dartApiKey: string | null;
-  readonly datasetService: {
-    getDataset(
-      datasetId: string,
-    ): { readonly market: Market; readonly symbols: readonly string[] } | null;
-    getCoverage(datasetId: string): readonly FactYearRangeCoverageRow[];
+  readonly symbolService: {
+    listSymbols(): ReadonlyArray<{ readonly code: string; readonly market: Market }>;
+    getCoverage(
+      codes?: readonly string[],
+    ): ReadonlyArray<Omit<FactYearRangeCoverageRow, 'symbol'> & { readonly code: string }>;
   };
   readonly factCoverageStore: Pick<FactCoverageStore, 'getCoveredYears'>;
   readonly clock: Clock;
@@ -123,27 +117,39 @@ export interface FactsSyncEstimatorDeps {
  */
 export function createFactsSyncEstimator(
   deps: FactsSyncEstimatorDeps,
-): (datasetId: string) => FactsSyncEstimate {
-  return (datasetId: string): FactsSyncEstimate => {
+): (codes: readonly string[]) => FactsSyncEstimate {
+  return (codes: readonly string[]): FactsSyncEstimate => {
     if (!deps.dartApiKey) {
       return { basis: 'UNSUPPORTED', reason: 'DART 인증키가 설정되지 않아 재무를 수집할 수 없습니다.' };
     }
-    const dataset = deps.datasetService.getDataset(datasetId);
-    if (!dataset) return { basis: 'UNSUPPORTED', reason: '데이터셋을 찾을 수 없습니다.' };
-    if (dataset.market !== 'KR') {
-      return { basis: 'UNSUPPORTED', reason: '재무 데이터 수집은 국내(KR) 데이터셋만 지원합니다.' };
+    if (codes.length === 0) return { basis: 'UNSUPPORTED', reason: '선택된 종목이 없습니다.' };
+    const known = deps.symbolService.listSymbols().filter((symbol) => codes.includes(symbol.code));
+    if (known.length === 0) {
+      return { basis: 'UNSUPPORTED', reason: '등록되지 않은 종목입니다.' };
     }
-    const range = deriveFactYearRange(deps.datasetService.getCoverage(datasetId), dataset.market);
+    const foreign = known.filter((symbol) => symbol.market !== 'KR');
+    if (foreign.length > 0) {
+      return {
+        basis: 'UNSUPPORTED',
+        reason: `재무 데이터 수집은 국내(KR) 종목만 지원합니다 — ${foreign
+          .map((symbol) => symbol.code)
+          .join(', ')} 는 대상이 아닙니다.`,
+      };
+    }
+    const coverage = deps.symbolService
+      .getCoverage(codes)
+      .map((row) => ({ ...row, symbol: row.code }));
+    const range = deriveFactYearRange(coverage, 'KR');
     if (range === null) return { basis: 'AFTER_CANDLES' };
 
     // 호출 수·시간은 plan 이 준 값을 그대로 쓴다 — 상수로 다시 계산하면 앵커가
     // 연속 구간마다 붙는 불연속 증분에서 과소 추정이 된다 (sync-plan.ts 참고).
     const plan = planFactSync({
-      symbols: dataset.symbols,
+      symbols: codes,
       fromYear: range.fromYear,
       toYear: range.toYear,
       currentYear: new Date(deps.clock.now()).getUTCFullYear(),
-      coveredBySymbol: deps.factCoverageStore.getCoveredYears(datasetId),
+      coveredBySymbol: deps.factCoverageStore.getCoveredYears(codes),
       mode: 'INCREMENTAL',
     });
     return {

@@ -68,10 +68,6 @@ class FakeFactSyncService implements FactSyncPort {
   }
 }
 
-function datasetStub(symbols: readonly string[]) {
-  return { getDataset: () => ({ symbols }) };
-}
-
 interface Progress {
   symbolsDone: number;
   symbolTotal: number;
@@ -85,10 +81,10 @@ async function runPhase(
   symbols: readonly string[] = ['005930', '000660', '035420'],
 ) {
   const factSyncService = new FakeFactSyncService(perSymbol, result);
-  const phase = createFactsPhase({ datasetService: datasetStub(symbols), factSyncService });
+  const phase = createFactsPhase({ factSyncService });
   const progress: Progress[] = [];
   const phaseResult = await phase({
-    datasetId: 'ds-1',
+    codes: symbols,
     fromYear: 2019,
     toYear: 2026,
     onProgress: (p) => progress.push({ ...p }),
@@ -177,20 +173,16 @@ describe('createFactsPhase', () => {
 
     expect(request.mode).toBe('INCREMENTAL');
     expect(request.consolidated).toBe(true);
-    expect(request.datasetId).toBe('ds-1');
     expect(request.fromYear).toBe(2019);
     expect(request.toYear).toBe(2026);
   });
 
   it('취소 신호를 hooks.shouldStop 으로 잇는다', async () => {
     const factSyncService = new FakeFactSyncService([], report());
-    const phase = createFactsPhase({
-      datasetService: datasetStub(['005930']),
-      factSyncService,
-    });
+    const phase = createFactsPhase({ factSyncService });
     let stop = false;
     await phase({
-      datasetId: 'ds-1',
+      codes: ['005930'],
       fromYear: 2026,
       toYear: 2026,
       onProgress: () => {},
@@ -203,21 +195,25 @@ describe('createFactsPhase', () => {
   });
 });
 
-function coverageRow(firstTsMs: number, lastTsMs: number, barCount = 100): FactYearRangeCoverageRow {
-  return { firstTsMs, lastTsMs, barCount };
+function coverageRow(
+  firstTsMs: number,
+  lastTsMs: number,
+  barCount = 100,
+): Omit<FactYearRangeCoverageRow, 'symbol'> & { code: string } {
+  // 커버리지 행의 종목 필드는 code 다 — 추정 경로가 symbol 로 되매핑해 넘긴다
+  return { code: '005930', firstTsMs, lastTsMs, barCount };
 }
 
 function makeEstimator(options: {
   dartApiKey?: string | null;
-  dataset?: { market: Market; symbols: readonly string[] } | null;
-  coverage?: readonly FactYearRangeCoverageRow[];
+  symbols?: ReadonlyArray<{ code: string; market: Market }>;
+  coverage?: ReadonlyArray<Omit<FactYearRangeCoverageRow, 'symbol'> & { code: string }>;
   covered?: ReadonlyMap<string, readonly number[]>;
 }) {
   return createFactsSyncEstimator({
     dartApiKey: options.dartApiKey === undefined ? 'key' : options.dartApiKey,
-    datasetService: {
-      getDataset: () =>
-        options.dataset === undefined ? { market: 'KR', symbols: ['005930'] } : options.dataset,
+    symbolService: {
+      listSymbols: () => options.symbols ?? [{ code: '005930', market: 'KR' as const }],
       getCoverage: () => options.coverage ?? [],
     },
     factCoverageStore: { getCoveredYears: () => options.covered ?? new Map() },
@@ -227,30 +223,30 @@ function makeEstimator(options: {
 
 describe('createFactsSyncEstimator', () => {
   it('DART 키가 없으면 UNSUPPORTED 다', () => {
-    expect(makeEstimator({ dartApiKey: null })('ds-1')).toEqual({
+    expect(makeEstimator({ dartApiKey: null })(['005930'])).toEqual({
       basis: 'UNSUPPORTED',
       reason: 'DART 인증키가 설정되지 않아 재무를 수집할 수 없습니다.',
     });
   });
 
-  it('데이터셋이 없으면 UNSUPPORTED 다', () => {
-    expect(makeEstimator({ dataset: null })('ds-1')).toEqual({
+  it('등록되지 않은 종목은 UNSUPPORTED 다', () => {
+    expect(makeEstimator({ symbols: [] })(['005930'])).toEqual({
       basis: 'UNSUPPORTED',
-      reason: '데이터셋을 찾을 수 없습니다.',
+      reason: '등록되지 않은 종목입니다.',
     });
   });
 
   it('KR 이 아닌 시장은 UNSUPPORTED 다 — DART 는 국내 공시만 담는다', () => {
-    expect(makeEstimator({ dataset: { market: 'US', symbols: ['AAPL'] } })('ds-1')).toEqual({
+    expect(makeEstimator({ symbols: [{ code: '005930', market: 'US' }] })(['005930'])).toEqual({
       basis: 'UNSUPPORTED',
-      reason: '재무 데이터 수집은 국내(KR) 데이터셋만 지원합니다.',
+      reason: '재무 데이터 수집은 국내(KR) 종목만 지원합니다 — 005930 는 대상이 아닙니다.',
     });
   });
 
   it('봉이 없어 연도 범위가 안 나오면 AFTER_CANDLES 다', () => {
     // 커버리지가 비었거나 barCount 0 이면 deriveFactYearRange 가 null 을 준다
-    expect(makeEstimator({ coverage: [] })('ds-1')).toEqual({ basis: 'AFTER_CANDLES' });
-    expect(makeEstimator({ coverage: [coverageRow(1, 2, 0)] })('ds-1')).toEqual({
+    expect(makeEstimator({ coverage: [] })(['005930'])).toEqual({ basis: 'AFTER_CANDLES' });
+    expect(makeEstimator({ coverage: [coverageRow(1, 2, 0)] })(['005930'])).toEqual({
       basis: 'AFTER_CANDLES',
     });
   });
@@ -263,10 +259,10 @@ describe('createFactsSyncEstimator', () => {
     const symbols = ['005930'];
     const covered = new Map([['005930', [2021, 2022, 2023, 2024, 2025]]]);
     const estimate = makeEstimator({
-      dataset: { market: 'KR', symbols },
+      symbols: [{ code: '005930', market: 'KR' }],
       coverage: [coverageRow(Date.UTC(2019, 5, 1), Date.UTC(2026, 5, 1))],
       covered,
-    })('ds-1');
+    })(['005930']);
 
     expect(estimate).toEqual({
       basis: 'PLANNED',
@@ -293,10 +289,11 @@ describe('createFactsSyncEstimator', () => {
   it('일 한도를 넘기면 overDailyLimit 을 그대로 전달한다', () => {
     // 200종목 × 12년 백필 ≈ 22,400 호출은 한도 아래다 — 한도를 넘기려면 더 넓어야 한다
     const symbols = Array.from({ length: 500 }, (_, i) => `S${String(i).padStart(5, '0')}`);
+    // 추정도 같은 500종목을 받아야 한도 초과가 재현된다 — 종목 수가 곧 호출 수다
     const estimate = makeEstimator({
-      dataset: { market: 'KR', symbols },
+      symbols: symbols.map((code) => ({ code, market: 'KR' as const })),
       coverage: [coverageRow(Date.UTC(2015, 5, 1), Date.UTC(2026, 5, 1))],
-    })('ds-1');
+    })(symbols);
 
     const plan = planFactSync({
       symbols,
@@ -314,7 +311,7 @@ describe('createFactsSyncEstimator', () => {
     // 2020-01-01 09:00 KST = 2019-12-31 24:00 UTC. UTC 로 자르면 2019 가 된다.
     const estimate = makeEstimator({
       coverage: [coverageRow(Date.UTC(2020, 0, 1, 0, 0), Date.UTC(2026, 5, 1))],
-    })('ds-1');
+    })(['005930']);
 
     expect(estimate).toMatchObject({ basis: 'PLANNED', fromYear: 2020 });
   });

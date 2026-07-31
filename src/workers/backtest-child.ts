@@ -3,7 +3,7 @@
  * 부모의 HTTP 이벤트 루프·메모리와 격리되어 DuckDB 로드 → 엔진 실행 → 결과 저장을 수행한다.
  * 환경변수는 §5 화이트리스트만 받는다. 종료 전 최종 상태를 DB 에 직접 기록한다.
  */
-import { and, desc, eq, notInArray } from 'drizzle-orm';
+import { and, eq, inArray, notInArray } from 'drizzle-orm';
 import { readGitCommitSha } from '../server/shared/build-info.js';
 import { openDatabase } from '../server/shared/db/database.js';
 import {
@@ -15,7 +15,8 @@ import {
   backtestRuns,
   backtestSymbolMetrics,
   backtestTrades,
-  datasetVersions,
+  symbolVersions,
+  symbols as symbolsTable,
   datasets,
 } from '../server/shared/db/schema.js';
 import { newId } from '../server/shared/ids.js';
@@ -30,7 +31,6 @@ import {
 import { ParquetFactRepository } from '../server/modules/facts/infrastructure/parquet-fact-repository.js';
 import { CORPORATE_ACTION_FIELD, type Fact } from '../server/modules/facts/domain/fact.js';
 import type { Candle, Market, Timeframe } from '../server/modules/market-data/domain/candle.js';
-import { legacyConsumeDefault, type DatasetSlice } from '../server/modules/market-data/domain/dataset-slice.js';
 import { DuckDbService } from '../server/modules/market-data/infrastructure/duckdb-service.js';
 import { ParquetCandleRepository } from '../server/modules/market-data/infrastructure/parquet-candle-repository.js';
 import { StrategyRegistry } from '../server/modules/strategy/application/strategy-registry.js';
@@ -97,39 +97,78 @@ async function main(): Promise<void> {
 
     const dataset = db.select().from(datasets).where(eq(datasets.id, request.datasetId)).get();
     if (!dataset) throw new Error(`dataset not found: ${request.datasetId}`);
-
-    // 제출 시점에 고정된 버전을 사용한다 (스펙 §9.5). 실행 시점의 latest 가 다르면
-    // 대기 중 import 가 데이터를 바꿨다는 뜻 — Parquet 은 파티션 재작성 방식이라
-    // 물리적 스냅샷 격리가 없으므로 경고로 명시한다.
-    const latestVersion = db
-      .select()
-      .from(datasetVersions)
-      .where(eq(datasetVersions.datasetId, dataset.id))
-      .orderBy(desc(datasetVersions.version))
-      .limit(1)
-      .get();
-    const pinnedVersion = job.datasetVersion ?? latestVersion?.version ?? 0;
-    const pinnedHash = job.datasetHash ?? latestVersion?.contentHash ?? 'unknown';
-    const datasetWarnings: string[] = [];
-    if (job.datasetVersion !== null && latestVersion && latestVersion.version !== job.datasetVersion) {
-      datasetWarnings.push(
-        `제출 시점 데이터셋 버전(v${job.datasetVersion})과 실행 시점 최신 버전(v${latestVersion.version})이 다릅니다. ` +
-          '대기 중 데이터가 변경되어 결과가 제출 당시 데이터와 다를 수 있습니다.',
+    // market 은 이제 종목의 속성이다 — 요청 유니버스의 종목들에서 읽는다. 여러 시장이
+    // 섞이면 세션·집계 기준이 하나로 정해지지 않아 실행 자체가 성립하지 않는다.
+    const universeMarkets = [
+      ...new Set(
+        db
+          .select({ market: symbolsTable.market })
+          .from(symbolsTable)
+          .where(inArray(symbolsTable.code, [...request.universe.symbols]))
+          .all()
+          .map((row) => row.market),
+      ),
+    ];
+    if (universeMarkets.length !== 1) {
+      throw new Error(
+        universeMarkets.length === 0
+          ? '유니버스 종목이 등록돼 있지 않습니다'
+          : `유니버스가 여러 시장에 걸쳐 있습니다: ${universeMarkets.join(', ')}`,
       );
     }
+    const datasetMarket = universeMarkets[0] as Market;
+
+    // 제출 시점에 고정된 종목 버전 스냅샷을 사용한다 (스펙 §9.5). 실행 시점의 latest 가
+    // 다르면 대기 중 동기화가 데이터를 바꿨다는 뜻 — Parquet 은 파티션 재작성 방식이라
+    // 물리적 스냅샷 격리가 없으므로 경고로 명시한다. 종목 데이터가 데이터셋 간에
+    // 공유되므로 "다른 사람이 이 종목을 동기화했다" 도 같은 경로로 잡힌다.
+    const pinnedEntries: Array<{ code: string; slice: string; version: number; contentHash: string }> =
+      job.universeJson === null
+        ? []
+        : (JSON.parse(job.universeJson) as Array<{
+            code: string;
+            slice: string;
+            version: number;
+            contentHash: string;
+          }>);
+    const currentVersions = new Map(
+      db
+        .select()
+        .from(symbolVersions)
+        .all()
+        .reduce((acc, row) => {
+          const key = `${row.code}:${row.slice}`;
+          const prev = acc.get(key);
+          if (prev === undefined || row.version > prev.version) acc.set(key, row);
+          return acc;
+        }, new Map<string, typeof symbolVersions.$inferSelect>()),
+    );
+    const datasetWarnings: string[] = [];
+    const drifted = pinnedEntries.filter((entry) => {
+      const current = currentVersions.get(`${entry.code}:${entry.slice}`);
+      return (current?.version ?? 0) !== entry.version;
+    });
+    if (drifted.length > 0) {
+      datasetWarnings.push(
+        `제출 이후 데이터가 변경된 종목이 있습니다: ${drifted
+          .map((entry) => `${entry.code}(${entry.slice})`)
+          .join(', ')} — 결과가 제출 당시 데이터와 다를 수 있습니다.`,
+      );
+    }
+    const pinnedUniverseJson = job.universeJson ?? '[]';
+    const pinnedUniverseHash = job.universeHash ?? 'unknown';
 
     // 캔들 로드 (스펙 §11). 요청의 timeframe 이 소비 기준이고, 미지정이면 데이터셋
     // timeframe (1m 수집·import 는 1h 로 사전 집계되어 '1h', 일봉 수집은 '1d').
     // 여기를 '1h' 로 고정하면 일봉 데이터셋은 파티션이 없어 0봉으로 실패한다 (D-024).
-    const timeframe = (
-      request.timeframe ?? legacyConsumeDefault(dataset.defaultTimeframe as DatasetSlice)
-    ) as Timeframe;
+    // 데이터셋에 defaultTimeframe 이 없어졌다 — 요청이 소비 기준의 유일한 출처다.
+    // 미지정이면 일봉으로 본다 (구 legacyConsumeDefault 의 '1d' 분기와 같은 값).
+    const timeframe = (request.timeframe ?? '1d') as Timeframe;
     const repository = new ParquetCandleRepository(dataRoot, duckdb);
     const { fromTsMs, toTsMs } = periodToTsRange(request.period);
     const candles: Candle[] = [];
     for await (const candle of repository.getCandles({
-      datasetId: dataset.id,
-      market: dataset.market as Market,
+      market: datasetMarket,
       timeframe,
       symbols: request.universe.symbols,
       fromTsMs,
@@ -177,14 +216,12 @@ async function main(): Promise<void> {
     const factRepository = new ParquetFactRepository(dataRoot, duckdb);
     const financialFacts: Fact[] = (
       await factRepository.getFacts({
-        datasetId: dataset.id,
         scope: 'SYMBOL',
         keys: request.universe.symbols,
         asOfMaxTsMs: toTsMs,
       })
     ).filter((fact) => fact.field !== CORPORATE_ACTION_FIELD);
     const corporateActionFacts: Fact[] = await factRepository.getFacts({
-      datasetId: dataset.id,
       scope: 'SYMBOL',
       keys: request.universe.symbols,
       fields: [CORPORATE_ACTION_FIELD],
@@ -265,8 +302,8 @@ async function main(): Promise<void> {
           strategySourceHash: sourceHash,
           parameterJson: JSON.stringify(parameters),
           datasetId: dataset.id,
-          datasetVersion: pinnedVersion,
-          datasetHash: pinnedHash,
+          universeJson: pinnedUniverseJson,
+          universeHash: pinnedUniverseHash,
           engineVersion: ENGINE_VERSION,
           feeModelVersion: `${costProfile.id}@${costProfile.version}`,
           slippageModelVersion: `${slippageProfile.id}@${slippageProfile.version}`,

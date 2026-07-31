@@ -5,7 +5,7 @@ import {
   type FactSyncRequest,
 } from '../../src/server/modules/facts/application/fact-sync-service.js';
 import type {
-  DatasetVersionBumper,
+  SymbolVersionBumper,
   FactIngestionResult,
   FactRepository,
   FactSource,
@@ -27,7 +27,7 @@ function fakeCoverage(
   return {
     added,
     getCoveredYears: () => new Map([...store].map(([symbol, years]) => [symbol, [...years]])),
-    addCoveredYears: (_datasetId, symbol, years) => {
+    addCoveredYears: (symbol, years) => {
       if (years.length === 0) return;
       added.push({ symbol, years: [...years] });
       store.set(
@@ -55,14 +55,14 @@ function recordingSource(): FactSource & { requests: FetchFinancialsRequest[] } 
 }
 
 /** bumpVersion 호출을 기록하는 가짜 포트 */
-function fakeVersions(): DatasetVersionBumper & {
-  bumps: Array<{ datasetId: string; seed: string; nowMs: number }>;
+function fakeVersions(): SymbolVersionBumper & {
+  bumps: Array<{ code: string; slice: string; seed: string; nowMs: number }>;
 } {
-  const bumps: Array<{ datasetId: string; seed: string; nowMs: number }> = [];
+  const bumps: Array<{ code: string; slice: string; seed: string; nowMs: number }> = [];
   return {
     bumps,
-    bumpVersion: (datasetId, seed, nowMs) => {
-      bumps.push({ datasetId, seed, nowMs });
+    bumpVersion: (code, slice, seed, nowMs) => {
+      bumps.push({ code, slice, seed, nowMs });
     },
   };
 }
@@ -102,20 +102,27 @@ function fakeSource(
  * 상태를 들고 있는 가짜를 쓴다.
  */
 function fakeRepository(): FactRepository & {
-  saved: Array<{ datasetId: string; facts: readonly Fact[] }>;
+  saved: Array<{ facts: readonly Fact[] }>;
 } {
-  const saved: Array<{ datasetId: string; facts: readonly Fact[] }> = [];
+  const saved: Array<{ facts: readonly Fact[] }> = [];
   const store = new Map<string, Map<string, Fact>>();
   return {
     saved,
     getFacts: async (query) => {
-      const scoped = store.get(`${query.datasetId}:${query.scope}`);
-      return scoped ? [...scoped.values()] : [];
+      // 종목 파티션 — keys 를 주면 그 종목만, 없으면 스코프 전체
+      const out: Fact[] = [];
+      for (const [key, partition] of store) {
+        const [scope, code] = key.split(':');
+        if (scope !== query.scope) continue;
+        if (query.keys !== undefined && !query.keys.includes(code!)) continue;
+        out.push(...partition.values());
+      }
+      return out;
     },
-    saveFacts: async (datasetId, facts) => {
-      saved.push({ datasetId, facts });
+    saveFacts: async (facts) => {
+      saved.push({ facts });
       for (const fact of facts) {
-        const partitionKey = `${datasetId}:${fact.scope}`;
+        const partitionKey = `${fact.scope}:${fact.key}`;
         const partition = store.get(partitionKey) ?? new Map<string, Fact>();
         partition.set(
           JSON.stringify([fact.key, fact.field, fact.periodKey, fact.asOfTsMs]),
@@ -149,7 +156,6 @@ describe('FactSyncService', () => {
     );
 
     const report = await service.sync({
-      datasetId: 'ds-1',
       symbols: ['005930'],
       fromYear: 2025,
       toYear: 2025,
@@ -175,7 +181,6 @@ describe('FactSyncService', () => {
     );
 
     const report = await service.sync({
-      datasetId: 'ds-1',
       symbols: ['005930'],
       fromYear: 2025,
       toYear: 2025,
@@ -185,7 +190,6 @@ describe('FactSyncService', () => {
 
     expect(report.savedFacts).toBe(2);
     expect(repository.saved).toHaveLength(1);
-    expect(repository.saved[0]?.datasetId).toBe('ds-1');
     expect(repository.saved[0]?.facts.map((f) => f.field).sort()).toEqual(
       ['CURRENT_ASSETS', 'SPLIT_RATIO'].sort(),
     );
@@ -204,7 +208,6 @@ describe('FactSyncService', () => {
     );
 
     const report = await service.sync({
-      datasetId: 'ds-1',
       symbols: ['005930'],
       fromYear: 2025,
       toYear: 2025,
@@ -226,7 +229,6 @@ describe('FactSyncService', () => {
  */
 describe('FactSyncService — 종목 단위 저장과 부분 실패 (긴 백필 생존)', () => {
   const request: FactSyncRequest = {
-    datasetId: 'ds-1',
     symbols: ['005930', '000660', '035720'],
     fromYear: 2025,
     toYear: 2025,
@@ -299,7 +301,7 @@ describe('FactSyncService — 종목 단위 저장과 부분 실패 (긴 백필 
     const report = await service.sync(request);
 
     // 첫 종목은 저장됐다
-    const stored = await repository.getFacts({ datasetId: 'ds-1', scope: 'SYMBOL' });
+    const stored = await repository.getFacts({ scope: 'SYMBOL' });
     expect(stored.map((fact) => fact.key)).toEqual(['005930']);
     expect(report.savedFacts).toBe(1);
 
@@ -369,7 +371,6 @@ describe('FactSyncService — 종목 단위 저장과 부분 실패 (긴 백필 
       fakeCoverage(),
     ).sync(
       {
-        datasetId: 'ds-1',
         symbols: ['005930', '005930', '000660'],
         fromYear: 2025,
         toYear: 2025,
@@ -400,7 +401,6 @@ describe('FactSyncService — 종목 단위 저장과 부분 실패 (긴 백필 
  */
 describe('FactSyncService — 데이터셋 버전 승격 (재현성 §9.5)', () => {
   const request: FactSyncRequest = {
-    datasetId: 'ds-1',
     symbols: ['005930'],
     fromYear: 2025,
     toYear: 2025,
@@ -410,7 +410,7 @@ describe('FactSyncService — 데이터셋 버전 승격 (재현성 §9.5)', () 
 
   function serviceWith(
     repository: FactRepository,
-    versions: DatasetVersionBumper,
+    versions: SymbolVersionBumper,
     facts: readonly Fact[],
   ): FactSyncService {
     return new FactSyncService(
@@ -423,13 +423,15 @@ describe('FactSyncService — 데이터셋 버전 승격 (재현성 §9.5)', () 
     );
   }
 
-  it('팩트가 추가되면 데이터셋 버전을 올린다', async () => {
+  it('팩트가 추가되면 그 종목의 재무 버전을 올린다', async () => {
     const repository = fakeRepository();
     const versions = fakeVersions();
     await serviceWith(repository, versions, [fact('CURRENT_ASSETS', 1)]).sync(request);
 
     expect(versions.bumps).toHaveLength(1);
-    expect(versions.bumps[0]?.datasetId).toBe('ds-1');
+    expect(versions.bumps[0]?.code).toBe('005930');
+    // 재무는 봉 슬라이스 축이 없다 — FACTS 자리에 기록된다
+    expect(versions.bumps[0]?.slice).toBe('FACTS');
     expect(versions.bumps[0]?.seed).toMatch(/^facts:[0-9a-f]{64}$/);
     expect(versions.bumps[0]?.nowMs).toBe(CLOCK.now());
   });
@@ -482,7 +484,6 @@ describe('FactSyncService — 증분과 취소', () => {
     );
 
     await service.sync({
-      datasetId: 'ds-1',
       symbols: ['005930'],
       fromYear: 2020,
       toYear: 2022,
@@ -506,7 +507,6 @@ describe('FactSyncService — 증분과 취소', () => {
     );
 
     await service.sync({
-      datasetId: 'ds-1',
       symbols: ['005930'],
       fromYear: 2020,
       toYear: 2022,
@@ -529,7 +529,6 @@ describe('FactSyncService — 증분과 취소', () => {
     );
 
     await service.sync({
-      datasetId: 'ds-1',
       symbols: ['005930', '000660'],
       fromYear: 2021,
       toYear: 2022,
@@ -557,7 +556,6 @@ describe('FactSyncService — 증분과 취소', () => {
 
     const report = await service.sync(
       {
-        datasetId: 'ds-1',
         symbols: ['005930', '000660', '035720'],
         fromYear: 2022,
         toYear: 2022,
@@ -597,7 +595,6 @@ describe('FactSyncService — 증분과 취소', () => {
     );
 
     const report = await service.sync({
-      datasetId: 'ds-1',
       symbols: ['005930', '000660'],
       fromYear: 2022,
       toYear: 2022,
@@ -640,7 +637,6 @@ describe('FactSyncService — 증분과 취소', () => {
     );
 
     const report = await service.sync({
-      datasetId: 'ds-1',
       symbols: ['005930', '000660', '035720'],
       fromYear: 2022,
       toYear: 2022,
@@ -668,7 +664,6 @@ describe('FactSyncService — 증분과 취소', () => {
     );
 
     await service.sync({
-      datasetId: 'ds-1',
       symbols: ['005930'],
       fromYear: 2021,
       toYear: 2022,

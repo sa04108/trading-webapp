@@ -1,8 +1,6 @@
 import type { Fact, FactScope } from '../domain/fact.js';
 
 export interface FactQuery {
-  /** 데이터셋 단위 물리 격리 — 캔들과 같은 관례 (§11) */
-  readonly datasetId: string;
   readonly scope: FactScope;
   readonly keys?: readonly string[];
   readonly fields?: readonly string[];
@@ -12,9 +10,12 @@ export interface FactQuery {
 
 export interface FactRepository {
   getFacts(query: FactQuery): Promise<Fact[]>;
-  saveFacts(datasetId: string, facts: readonly Fact[]): Promise<void>;
-  /** 제출 검증용 — 재무가 수집되지 않은 데이터셋에 재무 전략을 걸지 않게 막는다 */
-  hasFacts(datasetId: string, scope: FactScope): boolean;
+  saveFacts(facts: readonly Fact[]): Promise<void>;
+  /**
+   * 종목 하나의 재무 보유 여부. 제출 검증(422)과 종목 화면 배지가 같은 함수를 본다 —
+   * 화면과 게이트가 어긋날 수 없다 (D-033).
+   */
+  hasFacts(scope: FactScope, key: string): boolean;
 }
 
 /** 수집이 채우지 못한 칸. 조용히 빠뜨리면 랭킹이 소리 없이 왜곡된다. */
@@ -60,19 +61,16 @@ export interface FactSource {
 }
 
 /**
- * 데이터셋 버전 체인을 한 칸 올리는 좁은 포트 (§9.5 재현성).
+ * 종목·슬라이스 버전 체인을 한 칸 올리는 좁은 포트 (§9.5 재현성).
  *
- * 팩트도 백테스트 입력이다 — 캔들과 똑같이 데이터셋 내용을 바꾼다. 그런데 잡의
- * `datasetVersion`/`datasetHash` 는 제출 시점의 데이터셋 최신 버전에서 고정되고,
- * 그 버전은 지금까지 캔들 변경(CSV import·증권사 동기화)만 올려왔다. 팩트를 백필하거나
- * DART 정정공시를 다시 받아도 버전이 그대로면 §9.5 열세 필드가 전부 일치하는데 자산
- * 곡선만 달라지고, 복제·재실행이 경고할 근거조차 없다.
+ * 팩트도 백테스트 입력이다 — 캔들과 똑같이 실행 결과를 바꾼다. 버전을 올리지 않으면
+ * §9.5 필드가 전부 일치하는데 자산 곡선만 달라지고, 복제·재실행이 경고할 근거조차 없다.
  *
- * `market-data` 의 `DatasetService.bumpVersion` 이 이 모양을 그대로 구현한다 —
- * 두 번째 버전 체계를 새로 만들지 않고 기존 체인 해시를 재사용하기 위한 포트다.
+ * 재무는 슬라이스 축이 없으므로 `FACTS` 를 슬라이스 자리에 쓴다 — 봉 버전과 한 테이블에
+ * 두면서도 서로의 체인을 밀지 않는다.
  */
-export interface DatasetVersionBumper {
-  bumpVersion(datasetId: string, fingerprintSeed: string, nowMs: number): void;
+export interface SymbolVersionBumper {
+  bumpVersion(code: string, slice: string, fingerprintSeed: string, nowMs: number): void;
 }
 
 export class FactSourceNotConfiguredError extends Error {

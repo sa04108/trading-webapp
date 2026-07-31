@@ -3,9 +3,10 @@ import { eq } from 'drizzle-orm';
 import { aggregateToHourly } from '../../src/server/modules/market-data/domain/aggregate.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import { KR_SESSION } from '../../src/server/modules/market-data/domain/exchange-session.js';
-import { dataCoverage } from '../../src/server/shared/db/schema.js';
+import { symbolCoverage } from '../../src/server/shared/db/schema.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
+import { seedDataset } from '../helpers/seed.js';
 
 const DAY = 86_400_000;
 const MINUTE = 60_000;
@@ -99,19 +100,16 @@ describe('백테스트 1분봉 소비', () => {
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
 
     // 1m 수집이 만드는 상태를 재현: timeframe=1h 데이터셋 + 1m 원본 + 1h 집계 파티션
-    const dataset = ctx.container.datasetService.createBrokerDataset(
-      'kr-minute-v1',
-      'KR',
-      '1m',
-      ['005930'],
-    );
+    const dataset = seedDataset(ctx.container, 'kr-minute-v1', 'KR', ['005930']);
     datasetId = dataset.id;
     minuteCandles = buildMinuteCandles(15);
     hourlyCandles = aggregateToHourly(minuteCandles, KR_SESSION);
-    await ctx.container.candleRepository.saveCandles(datasetId, minuteCandles);
-    await ctx.container.candleRepository.saveCandles(datasetId, hourlyCandles);
-    await ctx.container.datasetService.refreshCoverage(datasetId, 'KR', '1m');
-    ctx.container.datasetService.bumpVersion(datasetId, 'broker:1m:seed', Date.now());
+    await ctx.container.candleRepository.saveCandles(minuteCandles);
+    await ctx.container.candleRepository.saveCandles(hourlyCandles);
+    for (const code of dataset.symbols) {
+      await ctx.container.symbolService.refreshCoverage(code, 'KR', '1m');
+      ctx.container.symbolService.bumpVersion(code, '1m', 'broker:seed', Date.now());
+    }
   });
 
   afterEach(async () => {
@@ -165,19 +163,15 @@ describe('백테스트 1분봉 소비', () => {
     expect(JSON.stringify(wrongTf.json())).toContain('아직');
     expect(JSON.stringify(wrongTf.json())).toContain('1d');
 
-    // 1d 데이터셋에 1m 요청. 종목 구성은 beforeEach 의 kr-minute-v1(['005930'])과
-    // 겹치면 안 된다 — 종목 구성 유일성 검사(DuplicateSymbolGroupError)에 걸린다.
-    // 백테스트 유니버스는 여전히 005930 만 요청하므로 부가 종목은 결과에 영향 없다.
-    const daily = ctx.container.datasetService.createBrokerDataset(
-      'kr-daily-guard',
-      'KR',
-      '1d',
-      ['005930', '000660'],
-    );
+    /**
+     * 봉 보유는 이제 **종목**의 속성이다 (D-034) — "이 데이터셋은 1m 을 제공하지 않는다"
+     * 라는 개념 자체가 없다. 그래서 일봉만 가진 **별도 종목**으로 검증한다: 그 종목을
+     * 유니버스로 1m 을 요청하면 "아직 1m 데이터가 없다" 가 나와야 한다.
+     */
+    const daily = seedDataset(ctx.container, 'kr-daily-guard', 'KR', ['000660']);
     await ctx.container.candleRepository.saveCandles(
-      daily.id,
       [0, 1, 2, 3, 4].map((i) => ({
-        symbol: '005930',
+        symbol: '000660',
         market: 'KR' as const,
         timeframe: '1d' as const,
         tsMs: Date.UTC(2026, 5, 1 + i),
@@ -188,18 +182,23 @@ describe('백테스트 1분봉 소비', () => {
         volume: 1_000_000,
       })),
     );
-    await ctx.container.datasetService.refreshCoverage(daily.id, 'KR', '1d');
-    ctx.container.datasetService.bumpVersion(daily.id, 'broker:1d:seed', Date.now());
+    for (const code of daily.symbols) {
+      await ctx.container.symbolService.refreshCoverage(code, 'KR', '1d');
+      ctx.container.symbolService.bumpVersion(code, '1d', 'broker:seed', Date.now());
+    }
 
     const minuteOnDaily = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
-      payload: buildRequest(daily.id, '1m'),
+      payload: {
+        ...buildRequest(daily.id, '1m'),
+        universe: { type: 'SYMBOLS', symbols: ['000660'] },
+      },
     });
     expect(minuteOnDaily.statusCode).toBe(400);
-    // 1d 전용 데이터셋에 1m 요청 — "이 데이터셋은 1m/1h 만 제공합니다" 처럼 스스로
-    // 모순되는 메시지가 아니라 "아직 데이터가 없다" 는 정확한 원인을 말해야 한다
+    // 일봉만 가진 종목에 1m 요청 — 스스로 모순되는 메시지가 아니라 "아직 데이터가 없다" 는
+    // 정확한 원인을 말해야 한다
     expect(JSON.stringify(minuteOnDaily.json())).toContain('아직');
     expect(JSON.stringify(minuteOnDaily.json())).toContain('1m');
   });
@@ -211,9 +210,9 @@ describe('백테스트 1분봉 소비', () => {
       toTsMs: Date.parse('2026-06-27T23:59:59.999Z'),
     };
     ctx.container.database.db
-      .update(dataCoverage)
+      .update(symbolCoverage)
       .set({ barCount: 40_000, firstTsMs: fromTsMs, lastTsMs: toTsMs })
-      .where(eq(dataCoverage.datasetId, datasetId))
+      .where(eq(symbolCoverage.code, '005930'))
       .run();
 
     // 40,000 × 60 = 2,400,000 > 2,000,000 → 거부

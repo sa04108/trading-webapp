@@ -4,8 +4,6 @@ import { SYMBOL_PATTERN, normalizeCandles, type Candle, type Market, type Timefr
 import type { CandleQuery, CandleRepository } from '../application/ports.js';
 import { DuckDbService, sqlString } from './duckdb-service.js';
 
-const DATASET_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
-
 /**
  * 임시 파일 이름의 유일성은 프로세스 단위로 보장한다 — 파티션 락은 인스턴스별이므로
  * 한 프로세스에 리포지터리가 둘 있으면 인스턴스 카운터로는 같은 tmp 경로가 나온다.
@@ -14,10 +12,13 @@ let tmpCounter = 0;
 
 /**
  * Parquet 기반 CandleRepository (스펙 §11 레이아웃):
- *   dataset=<id>/market=KR/timeframe=1h/symbol=005930/year=2026/data.parquet
- *   dataset=<id>/market=KR/timeframe=1m/symbol=005930/year=2026/month=07/data.parquet
- * 데이터셋이 경로 최상위 파티션이다 — 다른 데이터셋이 같은 심볼을 import 해도
- * 물리적으로 격리되어 버전·해시·coverage 가 섞이지 않는다.
+ *   market=KR/timeframe=1h/symbol=005930/year=2026/data.parquet
+ *   market=KR/timeframe=1m/symbol=005930/year=2026/month=07/data.parquet
+ *
+ * **최상위 `dataset=` 파티션이 없다** (설계 2026-07-31-symbol-as-first-class). 봉은
+ * 종목에 종속되고 데이터셋은 참조만 갖는다 — 같은 종목을 열 개 데이터셋이 참조해도
+ * 물리 사본은 하나다. 격리를 잃는 대신 재현성은 종목별 버전 스냅샷이 맡는다(§9.5).
+ *
  * 컬럼: ts_ms BIGINT, open/high/low/close/volume DOUBLE. UTC epoch ms 저장.
  * 저장은 파티션 단위 재작성(기존 병합→임시 파일→교체)으로 idempotent 하다.
  */
@@ -31,7 +32,6 @@ export class ParquetCandleRepository implements CandleRepository {
   ) {}
 
   private partitionDir(
-    datasetId: string,
     market: Market,
     timeframe: Timeframe,
     symbol: string,
@@ -42,7 +42,6 @@ export class ParquetCandleRepository implements CandleRepository {
     const month = String(date.getUTCMonth() + 1).padStart(2, '0');
     const base = path.join(
       this.dataRoot,
-      `dataset=${datasetId}`,
       `market=${market}`,
       `timeframe=${timeframe}`,
       `symbol=${symbol}`,
@@ -52,7 +51,6 @@ export class ParquetCandleRepository implements CandleRepository {
   }
 
   private symbolGlob(
-    datasetId: string,
     market: Market,
     timeframe: Timeframe,
     symbol: string,
@@ -60,7 +58,6 @@ export class ParquetCandleRepository implements CandleRepository {
     return path
       .join(
         this.dataRoot,
-        `dataset=${datasetId}`,
         `market=${market}`,
         `timeframe=${timeframe}`,
         `symbol=${symbol}`,
@@ -74,20 +71,14 @@ export class ParquetCandleRepository implements CandleRepository {
     if (!SYMBOL_PATTERN.test(symbol)) throw new Error(`invalid symbol: ${symbol}`);
   }
 
-  private assertDatasetId(datasetId: string): void {
-    if (!DATASET_ID_PATTERN.test(datasetId)) throw new Error(`invalid datasetId: ${datasetId}`);
-  }
-
-  async saveCandles(datasetId: string, candles: readonly Candle[]): Promise<void> {
+  async saveCandles(candles: readonly Candle[]): Promise<void> {
     if (candles.length === 0) return;
-    this.assertDatasetId(datasetId);
 
     // 파티션별 그룹화
     const groups = new Map<string, { dir: string; items: Candle[] }>();
     for (const candle of candles) {
       this.assertSymbol(candle.symbol);
       const dir = this.partitionDir(
-        datasetId,
         candle.market,
         candle.timeframe,
         candle.symbol,
@@ -103,10 +94,18 @@ export class ParquetCandleRepository implements CandleRepository {
     }
   }
 
-  async deleteDataset(datasetId: string): Promise<void> {
-    this.assertDatasetId(datasetId);
-    // 최상위 파티션이 dataset= 이라 디렉터리 하나가 데이터셋의 물리 전부다 (§11)
-    fs.rmSync(path.join(this.dataRoot, `dataset=${datasetId}`), { recursive: true, force: true });
+  /**
+   * 종목의 모든 봉을 지운다. 데이터셋 삭제는 이제 참조만 끊으므로 봉을 건드리지 않는다 —
+   * 다른 데이터셋이 같은 종목을 참조하고 있을 수 있다.
+   */
+  async deleteSymbol(market: Market, symbol: string): Promise<void> {
+    this.assertSymbol(symbol);
+    for (const timeframe of ['1m', '1h', '1d'] as const) {
+      fs.rmSync(
+        path.join(this.dataRoot, `market=${market}`, `timeframe=${timeframe}`, `symbol=${symbol}`),
+        { recursive: true, force: true },
+      );
+    }
   }
 
   private async writePartitionLocked(dir: string, items: Candle[]): Promise<void> {
@@ -195,11 +194,10 @@ export class ParquetCandleRepository implements CandleRepository {
   }
 
   async *getCandles(query: CandleQuery): AsyncIterable<Candle> {
-    this.assertDatasetId(query.datasetId);
     for (const symbol of query.symbols) {
       this.assertSymbol(symbol);
-      const glob = this.symbolGlob(query.datasetId, query.market, query.timeframe, symbol);
-      if (!this.hasAnyFile(query.datasetId, query.market, query.timeframe, symbol)) continue;
+      const glob = this.symbolGlob(query.market, query.timeframe, symbol);
+      if (!this.hasAnyFile(query.market, query.timeframe, symbol)) continue;
 
       const conditions: string[] = [];
       if (query.fromTsMs !== undefined) conditions.push(`ts_ms >= ${query.fromTsMs}`);
@@ -239,31 +237,19 @@ export class ParquetCandleRepository implements CandleRepository {
     }
   }
 
-  async getTimestamps(
-    datasetId: string,
-    market: Market,
-    timeframe: Timeframe,
-    symbol: string,
-  ): Promise<number[]> {
-    this.assertDatasetId(datasetId);
+  async getTimestamps(market: Market, timeframe: Timeframe, symbol: string): Promise<number[]> {
     this.assertSymbol(symbol);
-    if (!this.hasAnyFile(datasetId, market, timeframe, symbol)) return [];
-    const glob = this.symbolGlob(datasetId, market, timeframe, symbol);
+    if (!this.hasAnyFile(market, timeframe, symbol)) return [];
+    const glob = this.symbolGlob(market, timeframe, symbol);
     const rows = await this.duckdb.query<{ ts_ms: bigint | number }>(
       `SELECT ts_ms FROM read_parquet(${sqlString(glob)}) ORDER BY ts_ms`,
     );
     return rows.map((row) => Number(row.ts_ms));
   }
 
-  private hasAnyFile(
-    datasetId: string,
-    market: Market,
-    timeframe: Timeframe,
-    symbol: string,
-  ): boolean {
+  private hasAnyFile(market: Market, timeframe: Timeframe, symbol: string): boolean {
     const dir = path.join(
       this.dataRoot,
-      `dataset=${datasetId}`,
       `market=${market}`,
       `timeframe=${timeframe}`,
       `symbol=${symbol}`,

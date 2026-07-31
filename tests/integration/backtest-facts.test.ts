@@ -108,13 +108,12 @@ describe('저장소 → 엔진 왕복', () => {
   }
 
   it('저장한 팩트로 랭킹이 돌아간다', async () => {
-    await repository.saveFacts('ds-1', [
+    await repository.saveFacts([
       ...factsFor('CHEAP', 50_000),
       ...factsFor('RICH', 5_000),
     ]);
 
     const facts = await repository.getFacts({
-      datasetId: 'ds-1',
       scope: 'SYMBOL',
       keys: ['CHEAP', 'RICH'],
       asOfMaxTsMs: START + 40 * DAY,
@@ -136,9 +135,8 @@ describe('저장소 → 엔진 왕복', () => {
   });
 
   it('asOfMaxTsMs 가 기간 종료 시각이면 그 이후 공시는 로드되지 않는다', async () => {
-    await repository.saveFacts('ds-1', factsFor('CHEAP', 50_000));
+    await repository.saveFacts(factsFor('CHEAP', 50_000));
     const facts = await repository.getFacts({
-      datasetId: 'ds-1',
       scope: 'SYMBOL',
       asOfMaxTsMs: START + 2 * DAY, // 공시(5봉)보다 이르다
     });

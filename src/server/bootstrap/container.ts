@@ -23,12 +23,12 @@ import {
   createSqliteUserRepository,
 } from '../modules/auth/infrastructure/sqlite-repositories.js';
 import { BrokerSyncService } from '../modules/market-data/application/broker-sync-service.js';
-import { runDatasetMergeMigration } from '../modules/market-data/application/dataset-merge-migration.js';
 import {
   DatasetService,
   type FactsSyncEstimate,
 } from '../modules/market-data/application/dataset-service.js';
 import { SymbolInfoService } from '../modules/market-data/application/symbol-info-service.js';
+import { SymbolService } from '../modules/market-data/application/symbol-service.js';
 import type { CandleRepository } from '../modules/market-data/application/ports.js';
 import { createTossMarketDataSource } from '../modules/broker/infrastructure/toss/toss-market-data-source.js';
 import { DuckDbService } from '../modules/market-data/infrastructure/duckdb-service.js';
@@ -67,6 +67,7 @@ export interface Container {
   readonly duckdb: DuckDbService;
   readonly candleRepository: CandleRepository;
   readonly datasetService: DatasetService;
+  readonly symbolService: SymbolService;
   readonly brokerSyncService: BrokerSyncService;
   readonly symbolInfoService: SymbolInfoService;
   readonly strategyRegistry: StrategyRegistry;
@@ -75,7 +76,7 @@ export interface Container {
   readonly resultsService: ResultsService;
   readonly factRepository: FactRepository;
   readonly factSyncService: FactSyncService;
-  readonly factsSyncEstimator: (datasetId: string) => FactsSyncEstimate;
+  readonly factsSyncEstimator: (codes: readonly string[]) => FactsSyncEstimate;
   close(): void;
 }
 
@@ -101,11 +102,6 @@ export function createContainer(config: AppConfig): Container {
 
   const database = openDatabase(config.databasePath);
   const clock = systemClock;
-
-  // 1회성 부트 마이그레이션: 같은 종목 구성의 레거시 일봉·분봉 데이터셋 병합.
-  // 서비스 조립보다 앞이어야 한다 — 아래의 recoverInterrupted 등 부팅 정리 경로가
-  // 병합 전 메타데이터를 보면 안 된다. e2e-server 도 createContainer 를 타므로 공유된다.
-  runDatasetMergeMigration({ db: database.db, dataRoot: config.dataRoot, clock, logger });
 
   // 무한 증가 방지: 만료 세션·오래된 로그인 시도·보존 기간 지난 감사 로그 정리.
   // 부팅 시 1회 + 6시간 주기. 정리는 정확성에 필요한 작업이 아니므로 어느 쪽도
@@ -157,13 +153,17 @@ export function createContainer(config: AppConfig): Container {
     memoryLimit: config.duckdbMemoryLimit,
   });
   const candleRepository = new ParquetCandleRepository(config.dataRoot, duckdb);
-  const datasetService = new DatasetService(
+  // 종목이 데이터 소관, 데이터셋은 그 참조 묶음 (설계 2026-07-31-symbol-as-first-class).
+  // DatasetService 가 SymbolService 에 의존하는 방향이다 — 버전 스냅샷을 만들 때 종목별
+  // 버전을 읽어야 하고, 그 반대 방향(종목이 데이터셋을 아는 것)은 필요하지 않다.
+  const symbolService = new SymbolService(
     database.db,
     candleRepository,
     clock,
     logger,
     auditLog,
   );
+  const datasetService = new DatasetService(database.db, symbolService, clock, auditLog);
 
   // 재무(facts) 블록은 brokerSyncService 보다 **앞에** 온다. BrokerSyncDeps 는 생성 시
   // 고정이므로 factsPhase 가 그때 이미 있어야 한다 — 반대로 brokerSyncService 를 뒤로
@@ -175,14 +175,14 @@ export function createContainer(config: AppConfig): Container {
     config.dartApiKey ? { baseUrl: config.dartBaseUrl, apiKey: config.dartApiKey } : null,
     logger,
   );
-  // 팩트도 데이터셋 내용이다 — 캔들과 같은 버전 체인에 올린다 (§9.5).
-  // DatasetService 를 통째로 넘기지 않고 좁은 포트(DatasetVersionBumper)로 받는다.
+  // 팩트도 백테스트 입력이다 — 캔들과 같은 버전 체인에 올린다 (§9.5).
+  // SymbolService 를 통째로 넘기지 않고 좁은 포트(SymbolVersionBumper)로 받는다.
   const factCoverageStore = new SqliteFactCoverageStore(database.db);
   const factSyncService = new FactSyncService(
     factSource,
     factRepository,
     logger,
-    datasetService,
+    symbolService,
     clock,
     factCoverageStore,
   );
@@ -192,12 +192,10 @@ export function createContainer(config: AppConfig): Container {
   // 자리에 두었다 (tests/unit/facts-wiring.test.ts).
   // config.dartApiKey 가 없으면 factsPhase 를 만들지 않는다 → BrokerSyncService 가
   // skipReason 을 남긴다.
-  const factsPhase = config.dartApiKey
-    ? createFactsPhase({ datasetService, factSyncService })
-    : undefined;
+  const factsPhase = config.dartApiKey ? createFactsPhase({ factSyncService }) : undefined;
   const factsSyncEstimator = createFactsSyncEstimator({
     dartApiKey: config.dartApiKey,
-    datasetService,
+    symbolService,
     factCoverageStore,
     clock,
   });
@@ -218,7 +216,7 @@ export function createContainer(config: AppConfig): Container {
     db: database.db,
     source: marketDataSource,
     candleRepository,
-    datasetService,
+    symbolService,
     clock,
     logger,
     audit: auditLog,
@@ -268,6 +266,7 @@ export function createContainer(config: AppConfig): Container {
     duckdb,
     candleRepository,
     datasetService,
+    symbolService,
     brokerSyncService,
     symbolInfoService,
     strategyRegistry: new StrategyRegistry(),

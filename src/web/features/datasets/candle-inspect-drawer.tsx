@@ -145,7 +145,6 @@ function CandleTooltip({
 }
 
 export function CandleInspectDrawer({
-  datasetId,
   slices,
   slice,
   symbol,
@@ -154,8 +153,7 @@ export function CandleInspectDrawer({
   open,
   onOpenChange,
 }: {
-  datasetId: string;
-  /** 카드의 슬라이스 상태 — 조회 가능한 timeframe 을 결정 */
+  /** 종목의 슬라이스 상태 — 조회 가능한 timeframe 을 결정 */
   slices: SliceState[];
   /** 카드에서 현재 선택된 슬라이스 */
   slice: DatasetSlice;
@@ -181,10 +179,11 @@ export function CandleInspectDrawer({
   const coverageTimeframe = slice === '1m' ? '1h' : '1d';
 
   const { data, error, isLoading } = useQuery({
-    queryKey: ['inspect-candles', datasetId, symbol, timeframe, fromTsMs, toTsMs],
+    queryKey: ['inspect-candles', symbol, timeframe, fromTsMs, toTsMs],
     queryFn: () =>
       api<CandlesResponse>(
-        `/datasets/${datasetId}/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&fromTsMs=${fromTsMs}&toTsMs=${toTsMs}`,
+        // 봉은 종목에 종속된다 (설계 2026-07-31-symbol-as-first-class) — 데이터셋 축이 없다
+        `/symbols/${encodeURIComponent(symbol)}/candles?timeframe=${timeframe}&fromTsMs=${fromTsMs}&toTsMs=${toTsMs}`,
       ),
     enabled: open && timeframes.length > 0,
     staleTime: 60_000,
