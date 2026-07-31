@@ -4,14 +4,23 @@
 #
 # 사용법: ./scripts/bootstrap.sh
 #         서버 주소와 도메인을 순서대로 물어본다. 비대화형으로 돌리려면
-#         QP_HOST / QP_DOMAIN / SSH_KEY 환경변수를 미리 설정한다.
+#         환경변수를 미리 설정한다 — ssh config 는 필요하지 않다:
 #
-#   QP_HOST    서버 주소, `[user@]host` 형식. user 를 생략하면 ssh 의 규칙에 맡긴다
-#              (~/.ssh/config 의 User, 없으면 로컬 사용자명).
-#   QP_DOMAIN  서비스 도메인 (예: quant.example.com). A 레코드가 서버의 고정 공인
-#              IP 를 가리키고 있어야 한다 — Caddy 가 이 이름으로 인증서를 받는다.
-#   SSH_KEY    개인키 경로. 지정하면 -i 로 넘긴다. 없으면 ~/.ssh/config 나
-#              기본 이름 키(id_ed25519 등)에 의존한다.
+#         SSH_KEY=~/.ssh/your-key QP_SSH_USER=ubuntu QP_HOST=203.0.113.10 \
+#           QP_DOMAIN=quant.example.com ./scripts/bootstrap.sh
+#
+#   QP_DOMAIN        서비스 도메인 (예: quant.example.com). A 레코드가 서버의 고정 공인
+#                    IP 를 가리키고 있어야 한다 — Caddy 가 이 이름으로 인증서를 받는다.
+#   QP_HOST          서버 주소, `[user@]host` 형식
+#   QP_SSH_USER      로그인 사용자명. QP_HOST 에 `user@` 가 없을 때만 쓴다
+#   QP_SSH_PORT      SSH 포트 (미지정이면 22)
+#   SSH_KEY          개인키 경로. `~/` 로 시작하면 아래에서 $HOME 으로 펼친다
+#   QP_SSH_JUMP      점프 호스트, `[user@]host[:port]` (ssh 의 ProxyJump)
+#   QP_SSH_HOST_KEY  호스트키 확인: accept-new(기본) | yes | no
+#   QP_SSH_OPTS      그 밖의 ssh 옵션을 그대로 (예: "-o ServerAliveInterval=30")
+#
+# ssh config 에 Host 항목을 만들어도 되지만, 만들지 않아도 되는 것이 요점이다 —
+# 한 번 쓰고 버리는 인스턴스마다 로컬 설정 파일을 고치게 만들지 않는다.
 #
 # 이 스크립트는 로그인 사용자명을 가정하지 않는다 — 클라우드 이미지마다 다르고
 # (ubuntu / admin / ec2-user), 자체 설치 호스트는 임의다. 스펙 §2.1 의 "애플리케이션과
@@ -42,6 +51,21 @@ fi
   echo "서버 주소가 필요합니다 — 비대화형이면 QP_HOST 로 지정하세요" >&2
   exit 1
 }
+# 사용자명은 주소에 붙여도 되고 따로 줘도 된다 — 주소가 IP 뿐인 CI·스크립트에서
+# QP_HOST 를 조립하지 않아도 되게 한다. 둘 다 있으면 주소에 붙은 쪽이 이긴다.
+if [ -n "${QP_SSH_USER:-}" ]; then
+  case "${TARGET}" in
+    *@*) echo "QP_SSH_USER 는 무시합니다 — 주소에 이미 사용자명이 있습니다: ${TARGET}" >&2 ;;
+    *) TARGET="${QP_SSH_USER}@${TARGET}" ;;
+  esac
+fi
+# ssh 는 `--` 를 받지 않으므로 `-` 로 시작하는 주소는 옵션으로 먹힌다 — 여기서 끊는다.
+case "${TARGET}" in
+  -* | *[[:space:]]*)
+    echo "서버 주소 형식이 올바르지 않습니다: ${TARGET}" >&2
+    exit 1
+    ;;
+esac
 
 DOMAIN="${QP_DOMAIN:-}"
 if [ -z "${DOMAIN}" ]; then
@@ -91,63 +115,123 @@ trap on_exit EXIT
 
 echo "로그: ${LOG}"
 
-# 키 지정은 선택이다 — SSH_KEY 가 있으면 -i 로 넘기고, 없으면 ssh 의 평소 규칙
-# (~/.ssh/config, 기본 이름 키)에 맡긴다. IdentitiesOnly 를 함께 켜는 이유는
-# 하드닝이 MaxAuthTries 3 을 걸기 때문이다 — agent 에 등록된 키까지 순서대로
-# 제시되면 맞는 키가 4번째가 되어 서버가 먼저 연결을 끊을 수 있다.
+# ── 접속 옵션을 환경변수에서 만든다 ──────────────────────────────────────────
+# 포트와 점프 호스트를 -p / -J 가 아니라 -o 로 넘기는 이유: 같은 배열을 ssh 와 scp 에
+# 함께 쓰기 때문이다. scp 의 포트 플래그는 -P 라서 -p 를 받지 못하지만 `-o Port=` 는
+# 둘 다 받는다 — 배열 하나로 두 명령을 덮는 쪽이 어긋날 여지가 적다.
+# ENV_HINT·SSH_FLAGS 는 실패 안내와 마지막 "다음 단계" 에서 이 실행에 쓴 조합을 그대로
+# 물려주기 위한 문자열이다 (사람이 다시 조립하다 틀릴 이유를 없앤다).
 SSH_OPTS=()
+ENV_HINT=""
+SSH_FLAGS=""
+
+# QP_SSH_OPTS 를 맨 앞에 둔다 — ssh 는 같은 옵션이 여러 번 오면 "먼저 나온 값"을 쓰므로,
+# 앞에 둬야 사용자가 아래 기본값(예: StrictHostKeyChecking)을 덮을 수 있다.
+if [ -n "${QP_SSH_OPTS:-}" ]; then
+  read -ra SSH_OPTS <<< "${QP_SSH_OPTS}"
+  ENV_HINT="${ENV_HINT}QP_SSH_OPTS='${QP_SSH_OPTS}' "
+fi
+
 if [ -n "${SSH_KEY:-}" ]; then
+  # 따옴표 안의 `~` 는 셸이 펼치지 않는다 (SSH_KEY="~/.ssh/x" 는 흔한 실수다)
+  case "${SSH_KEY}" in
+    '~/'*) SSH_KEY="${HOME}/${SSH_KEY#'~/'}" ;;
+  esac
   [ -f "${SSH_KEY}" ] || { echo "SSH_KEY 파일이 없습니다: ${SSH_KEY}" >&2; exit 1; }
-  SSH_OPTS=(-i "${SSH_KEY}" -o IdentitiesOnly=yes)
+  # IdentitiesOnly 를 함께 켜는 이유는 하드닝이 MaxAuthTries 3 을 걸기 때문이다 —
+  # agent 에 등록된 키까지 순서대로 제시되면 맞는 키가 4번째가 되어 서버가 먼저 끊는다.
+  SSH_OPTS+=(-i "${SSH_KEY}" -o IdentitiesOnly=yes)
+  ENV_HINT="${ENV_HINT}SSH_KEY=${SSH_KEY} "
+  SSH_FLAGS="${SSH_FLAGS}-i ${SSH_KEY} "
+fi
+
+if [ -n "${QP_SSH_PORT:-}" ]; then
+  case "${QP_SSH_PORT}" in
+    '' | *[!0-9]*) echo "QP_SSH_PORT 는 숫자여야 합니다: ${QP_SSH_PORT}" >&2; exit 1 ;;
+  esac
+  SSH_OPTS+=(-o "Port=${QP_SSH_PORT}")
+  ENV_HINT="${ENV_HINT}QP_SSH_PORT=${QP_SSH_PORT} "
+  SSH_FLAGS="${SSH_FLAGS}-p ${QP_SSH_PORT} "
+fi
+
+if [ -n "${QP_SSH_JUMP:-}" ]; then
+  SSH_OPTS+=(-o "ProxyJump=${QP_SSH_JUMP}")
+  ENV_HINT="${ENV_HINT}QP_SSH_JUMP=${QP_SSH_JUMP} "
+  SSH_FLAGS="${SSH_FLAGS}-J ${QP_SSH_JUMP} "
+fi
+
+# 호스트키 기본값을 accept-new 로 두는 이유: 접속 확인이 BatchMode 로 도는데, 처음 보는
+# 호스트에서 ssh 의 기본값(ask)은 물어볼 TTY 가 없어 그냥 실패한다 — 그러면 "환경변수만
+# 주면 한 번에" 가 성립하지 않고, 사람이 먼저 수동 ssh 로 지문을 수락하거나 ssh config 를
+# 만들어야 한다. accept-new 는 그 수락(TOFU)을 그대로 하는 것이고, **바뀐** 호스트키는
+# 여전히 거부한다 — 첫 접속 이후의 중간자는 잡힌다. 지문을 미리 아는 환경이라면 yes 로 조인다.
+case "${QP_SSH_HOST_KEY:=accept-new}" in
+  accept-new | yes | no) SSH_OPTS+=(-o "StrictHostKeyChecking=${QP_SSH_HOST_KEY}") ;;
+  *) echo "QP_SSH_HOST_KEY 는 accept-new | yes | no 중 하나입니다: ${QP_SSH_HOST_KEY}" >&2; exit 1 ;;
+esac
+if [ "${QP_SSH_HOST_KEY}" != "accept-new" ]; then
+  ENV_HINT="${ENV_HINT}QP_SSH_HOST_KEY=${QP_SSH_HOST_KEY} "
 fi
 
 echo "==> SSH 접속 확인: ${TARGET}"
 # 이 확인이 없으면 아래 ssh/scp 가 set -e 로 조용히 죽어, 실패 원인이 그 다음 단계를
 # 가리킨다 — 실제로 그렇게 오진한 적이 있다.
-ssh "${SSH_OPTS[@]}" -o ConnectTimeout=15 -o BatchMode=yes "${TARGET}" true 2>/dev/null || {
+# stderr 를 버리지 않고 그대로 보여준다 — "Permission denied" 와 "Host key verification
+# failed" 는 처방이 전혀 다른데, 감추면 사용자가 그 구분을 할 수 없다.
+if ! SSH_ERR="$(ssh "${SSH_OPTS[@]}" -o ConnectTimeout=15 -o BatchMode=yes "${TARGET}" true 2>&1)"; then
   {
     echo "SSH 접속 실패: ${TARGET}"
     echo
-    if [[ "${TARGET}" != *@* ]]; then
-      echo "주소에 사용자명이 없다. ssh 가 ~/.ssh/config 의 User 나 로컬 사용자명을 쓴다 —"
-      echo "의도한 계정이 아니면 user@host 형식으로 다시 지정하라."
-      echo "(클라우드 이미지의 관례는 제각각이다: ubuntu / admin / ec2-user 등)"
-      echo
-    fi
-    if [ -n "${SSH_KEY:-}" ]; then
-      echo "지정한 키로 붙지 못했다: ${SSH_KEY}"
-    else
-      # 키를 안 넘겼을 때가 가장 흔한 실패다 — ~/.ssh 에서 후보를 찾아
-      # 그대로 복사해 쓸 수 있는 명령을 만들어 준다.
-      echo "키를 지정하지 않았다. ssh 는 ~/.ssh/config 나 기본 이름 키만 시도한다 —"
-      echo "다른 이름의 키(예: 클라우드 콘솔에서 내려받은 <name>.pem)는 시도조차 하지 않는다."
-      CANDIDATES="$(ls -1 ~/.ssh/*.pem ~/.ssh/id_* 2>/dev/null | grep -v '\.pub$' || true)"
-      if [ -n "${CANDIDATES}" ]; then
-        echo
-        echo "찾은 키 후보 — 하나를 골라 다시 실행하면 된다:"
-        while IFS= read -r k; do
-          [ -n "${k}" ] && echo "  SSH_KEY=${k} ./scripts/bootstrap.sh"
-        done <<< "${CANDIDATES}"
-      else
-        echo
-        echo "~/.ssh 에서 키 후보를 찾지 못했다. 호스트에 등록한 공개키의 짝을 확인하거나,"
-        echo "새로 만들어 등록하라: ssh-keygen -t ed25519 -f ~/.ssh/quant-platform"
-      fi
-      echo
-      echo "매번 지정하지 않으려면 ~/.ssh/config 에 등록해도 된다:"
-      echo "  Host ${TARGET##*@}"
-      echo "    User <로그인 사용자명>"
-      echo "    IdentityFile ~/.ssh/<your-key>"
-      echo "    IdentitiesOnly yes"
-    fi
+    printf '%s\n' "${SSH_ERR}" | sed 's/^/  /'
     echo
-    echo "원인 가르기: ssh -v ${SSH_KEY:+-i ${SSH_KEY} }${TARGET} true"
-    echo "  Permission denied (publickey) → 키가 없거나 틀렸다 (또는 사용자명이 다르다)"
-    echo "  Connection timed out          → 방화벽에서 TCP 22 가 닫혀 있다"
-    echo "  Unprotected private key file  → 키 파일 권한 (Windows: icacls /inheritance:r /grant:r)"
+    # 키·사용자명 안내는 인증에서 막혔을 때만 낸다 — TCP 로 닿지도 않은 실패에
+    # "키 후보" 를 늘어놓으면 엉뚱한 곳을 뒤지게 만든다.
+    case "${SSH_ERR}" in
+      *'denied'* | *'authentication'*)
+        if [[ "${TARGET}" != *@* ]]; then
+          echo "주소에 사용자명이 없다. ssh 가 로컬 사용자명으로 붙는다 — 의도한 계정이 아니면"
+          echo "user@host 형식으로 주거나 QP_SSH_USER 로 지정하라."
+          echo "(클라우드 이미지의 관례는 제각각이다: ubuntu / admin / ec2-user 등)"
+          echo
+        fi
+        if [ -n "${SSH_KEY:-}" ]; then
+          echo "지정한 키로 붙지 못했다: ${SSH_KEY}"
+          echo "키에 passphrase 가 있으면 접속 확인(BatchMode)이 물어보지 못한다 —"
+          echo "ssh-add ${SSH_KEY} 로 agent 에 올린 뒤 재실행하라."
+        else
+          # 키를 안 넘겼을 때가 가장 흔한 실패다 — ~/.ssh 에서 후보를 찾아
+          # 그대로 복사해 쓸 수 있는 명령을 만들어 준다.
+          echo "키를 지정하지 않았다. ssh 는 기본 이름 키(id_ed25519 등)만 시도한다 —"
+          echo "다른 이름의 키(예: 클라우드 콘솔에서 내려받은 <name>.pem)는 시도조차 하지 않는다."
+          CANDIDATES="$(ls -1 ~/.ssh/*.pem ~/.ssh/id_* 2>/dev/null | grep -v '\.pub$' || true)"
+          if [ -n "${CANDIDATES}" ]; then
+            echo
+            echo "찾은 키 후보 — 하나를 골라 다시 실행하면 된다:"
+            while IFS= read -r k; do
+              [ -n "${k}" ] && echo "  SSH_KEY=${k} QP_HOST=${TARGET} ./scripts/bootstrap.sh"
+            done <<< "${CANDIDATES}"
+          else
+            echo
+            echo "~/.ssh 에서 키 후보를 찾지 못했다. 호스트에 등록한 공개키의 짝을 확인하거나,"
+            echo "새로 만들어 등록하라: ssh-keygen -t ed25519 -f ~/.ssh/quant-platform"
+          fi
+        fi
+        echo
+        ;;
+    esac
+    echo "ssh config 없이 환경변수로 지정할 수 있는 것들:"
+    echo "  QP_SSH_USER=ubuntu  QP_SSH_PORT=2222  SSH_KEY=~/.ssh/your-key"
+    echo "  QP_SSH_JUMP=user@bastion  QP_SSH_HOST_KEY=yes  QP_SSH_OPTS='-o ...'"
+    echo
+    echo "원인 가르기: ssh -v ${SSH_FLAGS}${TARGET} true"
+    echo "  Permission denied (publickey)  → 키가 없거나 틀렸다 (또는 사용자명이 다르다)"
+    echo "  Host key verification failed   → 지문 확인 (QP_SSH_HOST_KEY, ssh-keyscan)"
+    echo "  Connection timed out           → 방화벽에서 TCP ${QP_SSH_PORT:-22} 가 닫혀 있다"
+    echo "  Connection refused             → sshd 가 그 포트에서 듣지 않는다 (QP_SSH_PORT)"
+    echo "  Unprotected private key file   → 키 파일 권한 (Windows: icacls /inheritance:r /grant:r)"
   } >&2
   exit 1
-}
+fi
 
 echo "==> 프로비저닝 파일 업로드"
 ssh "${SSH_OPTS[@]}" "${TARGET}" "mkdir -p ${REMOTE_DIR}" \
@@ -196,9 +280,9 @@ cat <<MSG
 부트스트랩 완료: https://${DOMAIN}
 
 다음 단계:
-  1) 첫 배포:      ${SSH_KEY:+SSH_KEY=${SSH_KEY} }QP_HOST=${TARGET} ./scripts/deploy.sh
+  1) 첫 배포:      ${ENV_HINT}QP_HOST=${TARGET} ./scripts/deploy.sh
   2) 관리자 생성 + TOTP 등록 (서버에서, 순서대로):
-     ssh ${SSH_KEY:+-i ${SSH_KEY} }${TARGET}
+     ssh ${SSH_FLAGS}${TARGET}
      sudo systemd-run --pty --uid=quant --gid=quant \\
        --property=EnvironmentFile=/etc/quant-platform/app.env \\
        --working-directory=/opt/quant-platform/current \\

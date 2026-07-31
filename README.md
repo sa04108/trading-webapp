@@ -67,16 +67,46 @@ Tailscale 에서 퍼블릭 + Caddy 로 옮긴 이유와 트레이드오프는
 ./scripts/bootstrap.sh
 ```
 
-서버 주소(`[user@]host`)와 도메인을 순서대로 물어본다. 비대화형은
-`QP_HOST`·`QP_DOMAIN`·`SSH_KEY` 로 지정한다.
+서버 주소(`[user@]host`)와 도메인을 순서대로 물어본다. 비대화형은 환경변수로 지정한다 —
+**`~/.ssh/config` 를 만들지 않아도 한 줄로 끝난다:**
+
+```bash
+SSH_KEY=~/.ssh/your-key QP_SSH_USER=ubuntu QP_HOST=203.0.113.10 \
+  QP_DOMAIN=quant.example.com ./scripts/bootstrap.sh
+```
+
+`bootstrap.sh`·`deploy.sh` 가 인식하는 접속 관련 환경변수 (이름·의미가 서로 같다):
+
+| 변수 | 뜻 |
+| --- | --- |
+| `QP_HOST` | 서버 주소, `[user@]host` |
+| `QP_SSH_USER` | 로그인 사용자명 — `QP_HOST` 에 `user@` 가 없을 때만 쓴다 |
+| `QP_SSH_PORT` | SSH 포트 (미지정이면 22) |
+| `SSH_KEY` | 개인키 경로. `~/` 로 시작하면 스크립트가 펼친다 |
+| `QP_SSH_JUMP` | 점프 호스트, `[user@]host[:port]` (ProxyJump) |
+| `QP_SSH_HOST_KEY` | 호스트키 확인: `accept-new`(기본) \| `yes` \| `no` |
+| `QP_SSH_OPTS` | 그 밖의 ssh 옵션 그대로 (예: `-o ServerAliveInterval=30`). 맨 앞에 붙으므로 위 기본값을 덮는다 |
+
+포트·점프는 `-p`/`-J` 가 아니라 `-o Port=`·`-o ProxyJump=` 로 넘어간다 — 같은 옵션
+배열을 `scp` 에도 쓰기 때문이다 (`scp` 의 포트 플래그는 `-P` 다).
+
+호스트키 기본값이 `accept-new` 인 이유는 접속 확인이 `BatchMode` 로 돌기 때문이다 —
+처음 보는 호스트에서 ssh 의 기본값(`ask`)은 물어볼 TTY 가 없어 그냥 실패하고, 그러면
+"환경변수만 주면 한 번에" 가 성립하지 않는다. `accept-new` 는 사람이 프롬프트에서 하는
+수락(TOFU)과 같고, **바뀐** 호스트키는 여전히 거부한다. 지문을 미리 아는 환경이라면
+`QP_SSH_HOST_KEY=yes` 로 조이고 `ssh-keyscan` 으로 `known_hosts` 에 넣는다.
 
 **서버 주소는 `[user@]host` 형식이다.** 로그인 사용자명은 호스트마다 다르므로
 (클라우드 이미지 관례가 `ubuntu`·`admin`·`ec2-user` 등으로 갈리고 자체 설치는 임의)
-스크립트가 가정하지 않는다. 생략하면 `~/.ssh/config` 의 `User` 나 로컬 사용자명이 쓰인다.
+스크립트가 가정하지 않는다. 둘 다 생략하면 로컬 사용자명이 쓰인다.
 
 **인증은 공개키만 지원한다.** 프로비저닝이 sshd 에 `PasswordAuthentication no` 를
-쓰므로 비밀번호로는 들어올 수 없다. 키는 `SSH_KEY=~/.ssh/your-key` 로 넘기거나
-`~/.ssh/config` 에 등록한다. 키를 잃어도 클라우드 브라우저 SSH 콘솔로 들어갈 수 있다.
+쓰므로 비밀번호로는 들어올 수 없다. 키는 `SSH_KEY=~/.ssh/your-key` 로 넘긴다 (키에
+passphrase 가 있으면 `ssh-add` 로 agent 에 먼저 올린다 — 접속 확인이 `BatchMode` 라
+물어보지 못한다). 키를 잃어도 클라우드 브라우저 SSH 콘솔로 들어갈 수 있다.
+
+`~/.ssh/config` 에 `Host` 항목을 만들어 써도 된다 — 만들지 **않아도** 된다는 것이
+요점이다. 한 번 쓰고 버리는 인스턴스마다 로컬 설정 파일을 고치지 않아도 된다.
 
 **`sudo` 는 비밀번호 없이 되어야 한다** — `provision.sh` 가 root 로 돌아야 하고
 프롬프트에 답할 TTY 가 없다.
@@ -107,9 +137,10 @@ Tailscale 에서 퍼블릭 + Caddy 로 옮긴 이유와 트레이드오프는
 ./scripts/deploy.sh   # 검증 게이트 → 릴리스 전환 → health check → 실패 시 자동 롤백
 ```
 
-`bootstrap.sh` 와 같은 방식이다 — 서버 주소를 첫 단계에서 물어보고
-`QP_HOST`·`SSH_KEY` 도 동일하게 인식한다. 검증 게이트가 몇 분 걸리므로 주소 입력과
-SSH 접속 확인을 그 전에 끝낸다.
+`bootstrap.sh` 와 같은 방식이다 — 서버 주소를 첫 단계에서 물어보고, 위 접속 환경변수를
+전부 동일하게 인식한다. 검증 게이트가 몇 분 걸리므로 주소 입력과 SSH 접속 확인을 그
+전에 끝낸다. 부트스트랩이 성공하면 마지막 출력에 이번 실행에 쓴 접속 환경변수가 붙은
+`deploy.sh` 명령을 그대로 찍어 준다 — 복사해서 쓰면 된다.
 
 배포 후 서버에서 관리자 생성과 TOTP 등록을 순서대로 한다 (정확한 명령은 bootstrap
 출력에 나온다):
