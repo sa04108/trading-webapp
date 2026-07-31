@@ -20,13 +20,6 @@
     "db:generate": "drizzle-kit generate",
     "cli": "tsx src/server/cli.ts"
   },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "better-sqlite3",
-      "argon2",
-      "esbuild"
-    ]
-  },
   "dependencies": {
     "@duckdb/node-api": "1.5.5-r.1",
     "@fastify/compress": "^9.1.0",
