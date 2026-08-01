@@ -1,5 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Copy, Download, SlidersHorizontal, Trash2, XCircle } from 'lucide-react';
+import {
+  ArrowDown,
+  ArrowUp,
+  ChevronsUpDown,
+  Copy,
+  Download,
+  SlidersHorizontal,
+  Trash2,
+  XCircle,
+} from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { toast } from 'sonner';
@@ -58,7 +67,18 @@ import {
 import { DrawdownChart, EquityChart, MonthlyReturnsChart } from './result-charts';
 import { resolveJobTimeframe } from './job-timeframe';
 import { StatusBadge } from './status-badge';
-import { formatSymbolSummary } from './symbol-summary';
+import {
+  ariaSortValue,
+  DEFAULT_TRADE_SORT,
+  nextTradeSort,
+  sortOpenRows,
+  TRADE_SORT_LABELS,
+  tradeSortHint,
+  tradeSortSummary,
+  type TradeSort,
+  type TradeSortKey,
+} from './trade-sort';
+import { formatUniverseSummary } from './universe-summary';
 import { isTerminal, type BacktestMetrics, type JobSummary, type RunMetadata } from './types';
 import { costSummary } from './cost-summary';
 import { costProfileLabel, slippageProfileLabel } from './profile-labels';
@@ -110,6 +130,55 @@ function MetricCards({ metrics }: { metrics: BacktestMetrics }) {
   );
 }
 
+/**
+ * 정렬 가능한 열 머리글.
+ *
+ * 이름은 버튼의 보이는 글자 그대로 두고(aria-label 로 덮지 않는다) 지금 순서는
+ * `<th aria-sort>` 가 알린다 — 스크린리더가 열 이름과 정렬 상태를 따로 읽는다.
+ * 누르면 어떻게 되는지는 `title` 에 적는다.
+ */
+function SortableHead({
+  sortKey,
+  sort,
+  onSort,
+  align,
+}: {
+  sortKey: TradeSortKey;
+  sort: TradeSort;
+  onSort: (key: TradeSortKey) => void;
+  align?: 'right';
+}) {
+  const active = sort.key === sortKey;
+  return (
+    <TableHead
+      aria-sort={ariaSortValue(sort, sortKey)}
+      className={align === 'right' ? 'text-right' : undefined}
+    >
+      <Button
+        variant="ghost"
+        size="xs"
+        // -mx-2 로 버튼 자기 여백을 상쇄해 글자가 아래 셀과 같은 줄에 선다
+        className="-mx-2 font-medium"
+        title={tradeSortHint(sort, sortKey)}
+        onClick={() => onSort(sortKey)}
+      >
+        {TRADE_SORT_LABELS[sortKey]}
+        {active ? (
+          sort.direction === 'ASC' ? (
+            <ArrowUp />
+          ) : (
+            <ArrowDown />
+          )
+        ) : (
+          // 고르지 않은 축도 누를 수 있다는 것이 보여야 한다 — 아이콘 없이 두면
+          // 활성 열만 정렬되는 줄로 읽힌다
+          <ChevronsUpDown className="opacity-40" />
+        )}
+      </Button>
+    </TableHead>
+  );
+}
+
 function TradesSection({
   jobId,
   symbols,
@@ -126,15 +195,31 @@ function TradesSection({
   const [symbol, setSymbol] = useState<string>('ALL');
   const [page, setPage] = useState(0);
   const [pageSizeText, setPageSizeText] = useState('10');
+  const [sort, setSort] = useState<TradeSort>(DEFAULT_TRADE_SORT);
   const pageSize = parsePageSize(pageSizeText, 10);
   const { data, isLoading } = useBacktestTrades(
     jobId,
-    { limit: pageSize, offset: page * pageSize, ...(symbol !== 'ALL' ? { symbol } : {}) },
+    {
+      limit: pageSize,
+      offset: page * pageSize,
+      sort: sort.key,
+      dir: sort.direction,
+      ...(symbol !== 'ALL' ? { symbol } : {}),
+    },
     true,
   );
   const trades = data?.trades ?? [];
   const pageCount = Math.max(1, Math.ceil((data?.total ?? 0) / pageSize));
-  const openRows = page === 0 ? openPositionRows(run?.openPositionsJson ?? null, symbol, periodTo) : [];
+  // 정렬을 바꾸면 1페이지로 돌아간다 — 「순손익 높은 순」을 골랐는데 3페이지에 남아
+  // 있으면 상위 거래를 건너뛴 채 21번째부터 보게 된다 (종목 필터와 같은 처리)
+  const changeSort = (key: TradeSortKey) => {
+    setSort((current) => nextTradeSort(current, key));
+    setPage(0);
+  };
+  const openRows =
+    page === 0
+      ? sortOpenRows(openPositionRows(run?.openPositionsJson ?? null, symbol, periodTo), sort)
+      : [];
 
   return (
     <Card>
@@ -181,13 +266,21 @@ function TradesSection({
             <Table>
               <TableHeader>
                 <TableRow>
+                  {/* 종목·사유는 정렬 축이 아니다 — 종목은 위 필터가 맡고, 사유는
+                      코드 문자열 순서가 사람에게 뜻이 없다. 누를 수 있게 두면 골랐는데
+                      순서가 그대로인 상태가 된다 (D-027·D-038 과 같은 방향) */}
                   <TableHead>종목</TableHead>
-                  <TableHead className="text-right">수량</TableHead>
-                  <TableHead>진입</TableHead>
-                  <TableHead>청산</TableHead>
-                  <TableHead className="text-right">순손익</TableHead>
-                  <TableHead className="text-right">수익률</TableHead>
-                  <TableHead>보유</TableHead>
+                  <SortableHead sortKey="QUANTITY" sort={sort} onSort={changeSort} align="right" />
+                  <SortableHead sortKey="ENTRY_TS" sort={sort} onSort={changeSort} />
+                  <SortableHead sortKey="EXIT_TS" sort={sort} onSort={changeSort} />
+                  <SortableHead sortKey="NET_PNL" sort={sort} onSort={changeSort} align="right" />
+                  <SortableHead
+                    sortKey="RETURN_PCT"
+                    sort={sort}
+                    onSort={changeSort}
+                    align="right"
+                  />
+                  <SortableHead sortKey="HOLDING_TIME" sort={sort} onSort={changeSort} />
                   <TableHead>사유</TableHead>
                 </TableRow>
               </TableHeader>
@@ -262,8 +355,16 @@ function TradesSection({
             </Table>
           </div>
         )}
-        {openRows.length > 0 ? (
+        {trades.length > 0 || openRows.length > 0 ? (
           <p className="mt-2 text-xs text-muted-foreground">
+            {tradeSortSummary(sort)}으로 정렬했습니다.
+            {openRows.length > 0
+              ? ' 미청산 행은 첫 페이지 맨 위에 고정되고 같은 축으로 함께 정렬됩니다 — 청산 거래와 한 줄로 섞이지는 않습니다.'
+              : ''}
+          </p>
+        ) : null}
+        {openRows.length > 0 ? (
+          <p className="mt-1 text-xs text-muted-foreground">
             미청산 행의 손익은 기간 종료 시점 종가 기준 평가치입니다 (매도 비용 미반영). 누적
             수익률·자산 곡선에는 포함되지만 승률·profit factor·거래 수에는 포함되지 않습니다.
           </p>
@@ -434,7 +535,12 @@ function RunMetadataCard({
           {rows.map(([label, value]) => (
             <div key={label} className="flex justify-between gap-4">
               <span className="shrink-0 text-muted-foreground">{label}</span>
-              <span className="truncate text-right font-mono text-xs leading-5">{value}</span>
+              {/* 잘라내지 않고 접는다 — 재현 정보는 값의 끝까지가 근거다. 해시가 「a1b2…」
+                  로 잘리면 다른 실행과 같은지 눈으로 비교할 수 없고, 비용 모델 요율은
+                  잘리는 자리가 하필 숫자다. wrap-anywhere 를 쓰는 이유: 해시·id·
+                  `id@version` 은 공백이 없어 break-words 로는 한 줄을 넘겨도 쪼개지지
+                  않는다 (min-content 가 문자열 전체다). */}
+              <span className="text-right font-mono text-xs leading-5 wrap-anywhere">{value}</span>
             </div>
           ))}
         </CardContent>
@@ -454,8 +560,8 @@ export function BacktestDetailPage() {
   const completed = job?.status === 'COMPLETED';
   const { data: series } = useBacktestSeries(id, completed === true);
 
-  // 전 종목을 한 번에 조회한다 — 거래 내역·종목별 성과·Description 이 같은 Map 을
-  // 쓴다. 데이터셋 심볼 상한이 1,000 이라 /symbols/info 상한을 넘지 않는다.
+  // 전 종목을 한 번에 조회한다 — 거래 내역과 종목별 성과가 같은 Map 을 쓴다.
+  // 데이터셋 심볼 상한이 1,000 이라 /symbols/info 상한을 넘지 않는다.
   const stockNames = useStockNames(job?.request.universe.symbols ?? []);
   const nameOf = (symbol: string): string | null => stockNames.get(symbol)?.name ?? null;
 
@@ -498,6 +604,12 @@ export function BacktestDetailPage() {
     queryKey: ['strategies'],
     queryFn: () =>
       api<{ strategies: Array<{ id: string; name: string; description: string }> }>('/strategies'),
+  });
+  // 설명 줄이 데이터셋을 이름으로 부르기 위한 조회. 실행이 기록한 것은 id 뿐이라(재현
+  // 정보 카드가 그 id 를 그대로 보여 준다) 이름은 현재 카탈로그에서 찾는다.
+  const datasetNames = useQuery({
+    queryKey: ['datasets'],
+    queryFn: () => api<{ datasets: Array<{ id: string; name: string }> }>('/datasets'),
   });
 
   if (isLoading || !job) {
@@ -591,8 +703,13 @@ export function BacktestDetailPage() {
       </div>
 
       <p className="text-sm text-muted-foreground">
-        {formatSymbolSummary(job.request.universe.symbols, nameOf)} · {job.request.period.from} ~{' '}
-        {job.request.period.to} · 생성 {formatDateTime(job.createdAtMs)}
+        {formatUniverseSummary(
+          datasetNames.data?.datasets.find((d) => d.id === job.datasetId)?.name ?? null,
+          job.datasetId,
+          job.request.universe.symbols.length,
+        )}{' '}
+        · {job.request.period.from} ~ {job.request.period.to} · 생성{' '}
+        {formatDateTime(job.createdAtMs)}
       </p>
 
       {running ? (

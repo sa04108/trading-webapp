@@ -1,4 +1,10 @@
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, sql } from 'drizzle-orm';
+import {
+  DEFAULT_TRADE_SORT_DIRECTION,
+  DEFAULT_TRADE_SORT_KEY,
+  type SortDirection,
+  type TradeSortKey,
+} from '../../../../shared/schemas/trade-sort.js';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import {
   backtestDrawdownPoints,
@@ -12,6 +18,23 @@ import {
 import { downsampleLttb } from './downsample.js';
 
 const CHART_MAX_POINTS = 1_000;
+
+/**
+ * 정렬 축 → 컬럼. `satisfies` 로 축을 하나 더하면 여기도 채우게 만든다 — 빠뜨리면
+ * 그 축은 조회 시점에 undefined 컬럼으로 터진다.
+ *
+ * `exit_ts_ms` 외의 축은 인덱스가 없어 SQLite 가 정렬한다. 정렬 대상은 한 작업의
+ * 거래로 한정되므로(job_id 필터) 전체 테이블을 훑지 않는다 — 축마다 인덱스를 다는
+ * 것은 쓰기 비용만 늘린다.
+ */
+const TRADE_SORT_COLUMNS = {
+  EXIT_TS: backtestTrades.exitTsMs,
+  ENTRY_TS: backtestTrades.entryTsMs,
+  QUANTITY: backtestTrades.quantity,
+  NET_PNL: backtestTrades.netPnl,
+  RETURN_PCT: backtestTrades.returnPct,
+  HOLDING_TIME: backtestTrades.holdingTimeMs,
+} satisfies Record<TradeSortKey, unknown>;
 
 export class ResultsService {
   constructor(private readonly db: AppDatabase) {}
@@ -72,14 +95,28 @@ export class ResultsService {
     };
   }
 
-  getTrades(jobId: string, options: { limit: number; offset: number; symbol?: string }) {
+  getTrades(
+    jobId: string,
+    options: {
+      limit: number;
+      offset: number;
+      symbol?: string;
+      sort?: TradeSortKey;
+      direction?: SortDirection;
+    },
+  ) {
     const conditions = [eq(backtestTrades.jobId, jobId)];
     if (options.symbol) conditions.push(eq(backtestTrades.symbol, options.symbol));
+    const column = TRADE_SORT_COLUMNS[options.sort ?? DEFAULT_TRADE_SORT_KEY];
+    const primary =
+      (options.direction ?? DEFAULT_TRADE_SORT_DIRECTION) === 'DESC' ? desc(column) : asc(column);
     const trades = this.db
       .select()
       .from(backtestTrades)
       .where(and(...conditions))
-      .orderBy(asc(backtestTrades.exitTsMs))
+      // id 로 한 번 더 정렬한다 — 수량·보유기간·청산시각은 동률이 흔하고, 동률의 순서가
+      // 정해지지 않으면 LIMIT/OFFSET 페이지 경계에서 같은 거래가 두 번 나오거나 빠진다.
+      .orderBy(primary, asc(backtestTrades.id))
       .limit(options.limit)
       .offset(options.offset)
       .all();

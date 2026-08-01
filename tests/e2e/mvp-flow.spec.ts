@@ -117,6 +117,18 @@ test('full MVP flow', async ({ page }) => {
   await expect(page.getByText('월별 수익률')).toBeVisible();
   await expect(page.getByText('거래 내역', { exact: true })).toBeVisible();
   await expect(page.getByText('재현 정보')).toBeVisible();
+  // 재현 정보의 긴 값은 잘리지 않고 접힌다 — 해시가 「a1b2…」로 잘리면 다른 실행과 같은지
+  // 비교할 수 없다. 390px 에서 가로 스크롤이 생기지 않는 것은 아래 mobile 전용 테스트가 본다.
+  const feeModelValue = page
+    .locator('[data-slot="card"]')
+    .filter({ hasText: '재현 정보' })
+    .getByText(/kr-equity-default@/);
+  await expect(feeModelValue).toHaveCSS('overflow-wrap', 'anywhere');
+  await expect(feeModelValue).not.toHaveCSS('text-overflow', 'ellipsis');
+  // 5-1. 설명 줄은 종목을 나열하지 않고 데이터셋 이름과 종목 수를 적는다 — 백테스트는
+  // 종목이 아니라 데이터셋을 고른다. 이름은 데이터셋 카탈로그 조회로 붙으므로 여기에
+  // id(ds_…) 가 뜨면 그 조회가 끊긴 것이다.
+  await expect(page.getByText('kr-hourly-v1 · 1종목')).toBeVisible();
   // 별도 "미청산 포지션" 카드는 제거되고 거래 내역 테이블에 통합됐다
   await expect(page.getByText('미청산 포지션', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('row').filter({ hasText: '미청산' }).first()).toBeVisible();
@@ -154,6 +166,28 @@ test('full MVP flow', async ({ page }) => {
   // value 를 표시 문자열로 바꾸면 서버가 매치하지 못해 거래 목록이 사라진다.
   await page.getByRole('combobox', { name: '종목 필터' }).click();
   await page.getByRole('option', { name: /삼성전자/ }).click();
+  await expect(tradeRows.first()).toBeVisible();
+
+  // 6-1. 거래 내역 정렬 — 정렬은 서버가 한다. 머리글을 눌러 거래가 **그대로 보이는지**가
+  // 핵심이다: 화면과 라우트가 정렬 축 문자열을 따로 들면 조회가 400 이 되고 목록이
+  // 사라지는데, 그 어긋남은 타입·단위 테스트가 볼 수 없는 층이다.
+  const pnlHeader = page.getByRole('columnheader').filter({ hasText: '순손익' });
+  await expect(pnlHeader).toHaveAttribute('aria-sort', 'none');
+  await page.getByRole('button', { name: '순손익' }).click();
+  // 크기 축은 큰 값부터 — 처음 누를 때 내림차순이다
+  await expect(pnlHeader).toHaveAttribute('aria-sort', 'descending');
+  await expect(tradeRows.first()).toBeVisible();
+  await expect(page.getByText('순손익 높은 순으로 정렬했습니다.')).toBeVisible();
+  // 같은 축을 다시 누르면 방향만 뒤집는다
+  await page.getByRole('button', { name: '순손익' }).click();
+  await expect(pnlHeader).toHaveAttribute('aria-sort', 'ascending');
+  await expect(tradeRows.first()).toBeVisible();
+  // 다른 축으로 옮기면 이전 축의 방향을 물려받지 않고, 이전 축의 표시가 풀린다
+  await page.getByRole('button', { name: '진입' }).click();
+  await expect(pnlHeader).toHaveAttribute('aria-sort', 'none');
+  await expect(
+    page.getByRole('columnheader').filter({ hasText: '진입' }),
+  ).toHaveAttribute('aria-sort', 'ascending');
   await expect(tradeRows.first()).toBeVisible();
 
   // 7. clone → 새 작업 페이지
