@@ -138,3 +138,116 @@ describe('stepJumpBlockReason', () => {
     );
   });
 });
+
+/**
+ * 재무 필요 전략 + 재무 없는 종목 게이트 (D-034 후속).
+ * **서버 422 와 같은 조건이어야 한다** — 전 종목이 비었을 때만 막고, 일부만 없으면
+ * 통과시켜 워커 경고에 맡긴다 (D-025).
+ */
+describe('stepBlocker — 재무 조합 게이트 (단계 1)', () => {
+  const base = {
+    ...complete,
+    symbols: ['005930', '000660'],
+    requiresFundamentals: true,
+  };
+
+  it('전 종목에 재무가 없으면 막는다', () => {
+    const reason = stepBlocker(1, { ...base, symbolsWithFacts: [] });
+    expect(reason).toMatch(/재무 데이터가 필요하지만/);
+  });
+
+  it('한 종목이라도 재무가 있으면 통과한다 — 서버 422 와 같은 조건이다', () => {
+    // 일부만 없는 경우는 거부 사유가 아니다: 신규 상장처럼 이력이 짧은 종목 하나 때문에
+    // 유니버스 전체를 막지 않는다. 빠진 종목은 워커가 실행 경고에 이름으로 남긴다.
+    expect(stepBlocker(1, { ...base, symbolsWithFacts: ['005930'] })).toBeNull();
+  });
+
+  it('선택과 무관한 종목의 재무는 통과 근거가 아니다', () => {
+    expect(stepBlocker(1, { ...base, symbolsWithFacts: ['035420'] })).not.toBeNull();
+  });
+
+  it('봉만 쓰는 전략은 재무가 없어도 통과한다', () => {
+    expect(
+      stepBlocker(1, { ...base, requiresFundamentals: false, symbolsWithFacts: [] }),
+    ).toBeNull();
+  });
+
+  it('전략의 재무 요구를 모르면 막지 않는다 — 근거 없이 문을 잠그지 않는다', () => {
+    // 서버가 필드를 안 내렸거나 응답이 아직 없는 상태. false 로 좁히면 게이트가 조용히
+    // 열리고, true 로 좁히면 열 수 없는 문이 된다 — 둘 다 아니라 통과 + 서버 422 방어선.
+    expect(
+      stepBlocker(1, { ...base, requiresFundamentals: undefined, symbolsWithFacts: [] }),
+    ).toBeNull();
+  });
+
+  it('종목 목록이 아직 없으면 막지 않는다 — undefined 와 빈 배열을 구분한다', () => {
+    expect(stepBlocker(1, { ...base, symbolsWithFacts: undefined })).toBeNull();
+  });
+
+  it('데이터셋·종목 미선택이 재무 검사보다 먼저다 — 원인을 뒤집어 말하지 않는다', () => {
+    expect(stepBlocker(1, { ...base, datasetId: null, symbolsWithFacts: [] })).toBe(
+      '데이터셋을 선택하세요',
+    );
+    expect(stepBlocker(1, { ...base, symbols: [], symbolsWithFacts: [] })).toBe(
+      '종목을 1개 이상 선택하세요',
+    );
+  });
+
+  it('게이트가 막으면 앞으로 갈 수 있는 상한도 그 단계에 걸린다', () => {
+    const blocked = { ...base, symbolsWithFacts: [] };
+    expect(firstIncompleteStep(blocked)).toBe(1);
+    expect(navigableStepLimit(1, blocked)).toBe(1);
+  });
+});
+
+/**
+ * `hasFacts` 가 빠진 응답에서 게이트가 잠기지 않는지는 위저드가 `symbolsWithFacts` 를
+ * 만드는 규칙이 지킨다 — 선택 종목 전부를 알 때만 배열을 만들고, 하나라도 모르면
+ * undefined 다. 그 규칙을 여기서 계약으로 고정한다.
+ */
+describe('symbolsWithFacts 계약 — 모르는 종목이 섞이면 undefined', () => {
+  /** new-backtest-wizard.tsx 의 파생 규칙과 같은 모양 */
+  function derive(
+    selected: readonly string[],
+    listed: ReadonlyArray<{ code: string; hasFacts?: boolean }> | undefined,
+  ): readonly string[] | undefined {
+    if (listed === undefined) return undefined;
+    const known = new Map(listed.map((s) => [s.code, s.hasFacts]));
+    if (selected.some((code) => known.get(code) === undefined)) return undefined;
+    return selected.filter((code) => known.get(code) === true);
+  }
+
+  const selected = ['005930', '000660'];
+
+  it('전부 알면 재무 가진 코드만 남는다', () => {
+    expect(
+      derive(selected, [
+        { code: '005930', hasFacts: true },
+        { code: '000660', hasFacts: false },
+      ]),
+    ).toEqual(['005930']);
+  });
+
+  it('hasFacts 가 빠진 응답은 undefined — 빈 배열로 접으면 게이트가 잠긴다', () => {
+    expect(derive(selected, [{ code: '005930' }, { code: '000660' }])).toBeUndefined();
+  });
+
+  it('목록에 없는 종목이 선택돼 있으면 undefined', () => {
+    expect(derive(selected, [{ code: '005930', hasFacts: true }])).toBeUndefined();
+  });
+
+  it('응답 자체가 없으면 undefined', () => {
+    expect(derive(selected, undefined)).toBeUndefined();
+  });
+
+  it('undefined 를 게이트에 넘기면 막지 않는다 (두 규칙이 맞물린다)', () => {
+    const state = { ...complete, symbols: selected, requiresFundamentals: true };
+    expect(stepBlocker(1, { ...state, symbolsWithFacts: derive(selected, undefined) })).toBeNull();
+    expect(
+      stepBlocker(1, {
+        ...state,
+        symbolsWithFacts: derive(selected, [{ code: '005930' }, { code: '000660' }]),
+      }),
+    ).toBeNull();
+  });
+});

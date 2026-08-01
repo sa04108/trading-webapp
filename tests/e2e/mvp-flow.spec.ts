@@ -145,6 +145,30 @@ test('full MVP flow', async ({ page }) => {
     .poll(() => page.url(), { timeout: 10_000 })
     .not.toBe(originalUrl);
 
+  // 7-1. 재무 조합 게이트 — 픽스처의 005930 은 재무가 없다. 「재무 필요」 전략을 고르면
+  // 종목을 고르는 그 자리에서 막혀야 한다 (제출 후 422 를 받는 왕복을 없앤다).
+  await page.goto('/backtests/new');
+  await page.getByRole('button', { name: /밸류·퀄리티 랭킹/ }).click();
+  await page.getByRole('button', { name: '2. 데이터·종목' }).click();
+  await page.getByRole('button', { name: /kr-hourly-v1/ }).click();
+  await expect(page.getByText(/재무 데이터가 필요하지만 선택한 종목에는 없습니다/)).toBeVisible();
+  // 앞 단계로 가는 버튼이 잠기고 이유를 들고 있다. `disabled` 로 죽이지 않고
+  // `aria-disabled` + title 로 두는 것이 §17 규칙이다 — 왜 못 가는지 모른 채 회색
+  // 버튼만 보는 상태를 만들지 않는다. (그래서 클릭이 아니라 상태를 검증한다.)
+  const periodStep = page.getByRole('button', { name: '3. 기간' });
+  await expect(periodStep).toHaveAttribute('aria-disabled', 'true');
+  await expect(periodStep).toHaveAttribute('title', /재무 데이터가 필요하지만/);
+  await page.screenshot({ path: 'test-results/fundamentals-gate.png' });
+
+  // 봉만 쓰는 전략으로 바꾸면 같은 종목이 통과한다 — 게이트가 전략에만 반응한다
+  await page.getByRole('button', { name: '1. 전략' }).click();
+  await page.getByRole('button', { name: /밸류·퀄리티 랭킹/ }).click(); // 선택 해제
+  await page.getByRole('button', { name: /전고점 돌파/ }).click();
+  await page.getByRole('button', { name: '2. 데이터·종목' }).click();
+  await expect(
+    page.getByText(/재무 데이터가 필요하지만 선택한 종목에는 없습니다/),
+  ).toHaveCount(0);
+
   // 8. 데이터 화면 — 데이터셋/종목 두 구획 (설계 2026-07-31-symbol-as-first-class)
   await page.goto('/datasets');
 

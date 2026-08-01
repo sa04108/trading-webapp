@@ -35,7 +35,19 @@ export const RUN_STEP = WIZARD_STEPS.length - 1;
 export type StepGateState = Pick<
   WizardFormState,
   'strategyId' | 'datasetId' | 'symbols' | 'from' | 'to' | 'initialCash'
->;
+> & {
+  /**
+   * 고른 전략이 재무를 요구하는지. **모를 때는 undefined 여야 한다** — false 로 좁히면
+   * 서버가 알려주지 않은 상황을 "재무 안 씀" 으로 단정해 게이트가 조용히 열린다
+   * (D-032 의 배지와 같은 이유).
+   */
+  requiresFundamentals?: boolean;
+  /**
+   * 선택 종목 중 재무를 **가진** 코드. 종목 목록을 아직 못 받았으면 undefined 다 —
+   * 빈 배열과 구분해야 한다: 빈 배열은 "전부 없다", undefined 는 "모른다" 다.
+   */
+  symbolsWithFacts?: readonly string[];
+};
 
 /** 이 단계를 아직 떠날 수 없는 이유. null 이면 통과 */
 export function stepBlocker(index: number, state: StepGateState): string | null {
@@ -45,7 +57,7 @@ export function stepBlocker(index: number, state: StepGateState): string | null 
     case 1:
       if (!state.datasetId) return '데이터셋을 선택하세요';
       if (state.symbols.length === 0) return '종목을 1개 이상 선택하세요';
-      return null;
+      return fundamentalsBlocker(state);
     case 2:
       if (!state.from || !state.to) return '시작일과 종료일을 입력하세요';
       if (state.from > state.to) return '시작일이 종료일보다 늦습니다';
@@ -57,6 +69,28 @@ export function stepBlocker(index: number, state: StepGateState): string | null 
     default:
       return null;
   }
+}
+
+/**
+ * 재무 필요 전략 + 재무 없는 종목 조합을 제출 전에 막는다.
+ *
+ * **서버의 422 와 같은 조건이다** (`checkFundamentalsRequirement`): 선택 종목이 **전부**
+ * 비었을 때만 막는다. 일부만 없는 경우는 거부 사유가 아니고 워커가 실행 경고에 이름으로
+ * 남긴다 (D-025). 여기서 더 조이면 화면과 서버가 서로 다른 정책을 갖게 되고, 화면이
+ * 막은 제출은 서버가 허용했을 것이라는 사실을 사용자가 알 방법이 없다.
+ *
+ * 모르는 상태에서는 통과시킨다 — `requiresFundamentals`·`symbolsWithFacts` 가 undefined
+ * 면 아직 응답이 없거나 낡은 서버다. 근거 없이 막으면 사용자가 열 수 없는 문이 된다.
+ * 그 경우의 방어선은 서버 422 가 그대로 맡는다.
+ */
+function fundamentalsBlocker(state: StepGateState): string | null {
+  if (state.requiresFundamentals !== true) return null;
+  if (state.symbolsWithFacts === undefined) return null;
+  if (state.symbols.some((code) => state.symbolsWithFacts!.includes(code))) return null;
+  return (
+    '이 전략은 재무 데이터가 필요하지만 선택한 종목에는 없습니다 — ' +
+    '종목 화면에서 「재무」를 함께 동기화하거나 봉만 쓰는 전략을 고르세요'
+  );
 }
 
 /** 통과하지 못한 첫 단계. 전부 통과면 -1 */

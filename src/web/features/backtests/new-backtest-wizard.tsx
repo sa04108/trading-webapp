@@ -307,7 +307,30 @@ export function NewBacktestWizard() {
   });
 
   // 단계 게이트가 보는 값만 모아 넘긴다 — 규칙은 wizard-steps.ts 한 곳에 있다
-  const gate: StepGateState = { strategyId, datasetId, symbols, from, to, initialCash };
+  /**
+   * 선택 종목 중 재무를 가진 코드. **선택 종목 전부의 재무 보유를 알 때만** 배열을 만든다.
+   *
+   * 응답이 아직 없거나, 목록에 없는 종목이 선택돼 있거나, `hasFacts` 가 빠진 응답이면
+   * undefined 다 — 그런 상태에서 배열을 만들면 "모른다" 가 "전부 없다" 로 바뀌어
+   * (`filter(hasFacts === true)` 가 빈 배열을 낸다) 게이트가 근거 없이 문을 잠근다.
+   * D-032 배지가 필드 부재에 침묵하는 것과 같은 이유다.
+   */
+  const symbolsWithFacts = ((): readonly string[] | undefined => {
+    if (symbolsQuery.data === undefined) return undefined;
+    const known = new Map(symbolsQuery.data.symbols.map((s) => [s.code, s.hasFacts]));
+    if (symbols.some((code) => known.get(code) === undefined)) return undefined;
+    return symbols.filter((code) => known.get(code) === true);
+  })();
+  const gate: StepGateState = {
+    strategyId,
+    datasetId,
+    symbols,
+    from,
+    to,
+    initialCash,
+    requiresFundamentals: selectedStrategy?.requiresFundamentals,
+    symbolsWithFacts,
+  };
   const navLimit = navigableStepLimit(step, gate);
 
   const goNext = (): void => {
@@ -582,6 +605,13 @@ export function NewBacktestWizard() {
               </p>
             </button>
           ))}
+          {/* 게이트 문장은 「다음」을 눌러야 오류 영역에 뜬다 — 조합이 어긋난 것은
+              종목을 고르는 그 자리에서 보여야 왕복이 없다 (D-027 과 같은 방향) */}
+          {datasetId !== null && symbols.length > 0 && stepBlocker(1, gate) !== null ? (
+            <Alert variant="destructive" role="alert">
+              <AlertDescription>{stepBlocker(1, gate)}</AlertDescription>
+            </Alert>
+          ) : null}
           {timeframeOptions.length >= 2 ? (
             <Card>
               <CardHeader>
