@@ -173,6 +173,49 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect((trades.json().trades as unknown[]).length).toBeGreaterThan(0);
     // 페이지네이션 UI 가 {현재}/{전체} 페이지를 계산하려면 필터 기준 총 건수가 필요하다
     expect(trades.json().total).toBe(body.metrics.tradeCount);
+    // 정렬 파라미터가 없으면 청산 시각 오름차순이다 — 예전 순서가 그대로여야 한다
+    const defaultOrder = trades.json().trades as Array<{ exitTsMs: number }>;
+    expect(defaultOrder.map((t) => t.exitTsMs)).toEqual(
+      [...defaultOrder.map((t) => t.exitTsMs)].sort((a, b) => a - b),
+    );
+
+    // 거래 내역 정렬 — 정렬은 서버가 한다 (화면에서 하면 한 페이지만 뒤집힌다)
+    const fetchTrades = async (query: string) => {
+      const response = await ctx.app.inject({
+        method: 'GET',
+        url: `/api/v1/backtests/${jobId}/trades?${query}`,
+        cookies: { qp_session: cookie },
+      });
+      return response;
+    };
+
+    const byPnlDesc = await fetchTrades('sort=NET_PNL&dir=DESC&limit=500');
+    const pnls = (byPnlDesc.json().trades as Array<{ netPnl: number }>).map((t) => t.netPnl);
+    expect(pnls.length).toBeGreaterThan(1);
+    expect(pnls).toEqual([...pnls].sort((a, b) => b - a));
+
+    const byPnlAsc = await fetchTrades('sort=NET_PNL&dir=ASC&limit=500');
+    expect((byPnlAsc.json().trades as Array<{ netPnl: number }>).map((t) => t.netPnl)).toEqual(
+      [...pnls].reverse(),
+    );
+
+    // 보유기간은 동률이 흔하다 — 동률 순서가 정해지지 않으면 페이지 경계에서 같은
+    // 거래가 두 번 나오거나 빠진다. 페이지를 이어 붙인 것이 한 번에 받은 것과 같아야 한다
+    const whole = await fetchTrades('sort=HOLDING_TIME&dir=DESC&limit=500');
+    const wholeIds = (whole.json().trades as Array<{ id: number }>).map((t) => t.id);
+    const paged: number[] = [];
+    for (let offset = 0; offset < wholeIds.length; offset += 2) {
+      const page = await fetchTrades(`sort=HOLDING_TIME&dir=DESC&limit=2&offset=${offset}`);
+      paged.push(...(page.json().trades as Array<{ id: number }>).map((t) => t.id));
+    }
+    expect(paged).toEqual(wholeIds);
+    expect(new Set(paged).size).toBe(paged.length);
+
+    // 모르는 축은 400 이다 — 조용히 기본 정렬로 떨어지면 화면 표기와 실제가 어긋난다
+    const badSort = await fetchTrades('sort=NOPE');
+    expect(badSort.statusCode).toBe(400);
+    const badDir = await fetchTrades('sort=NET_PNL&dir=UP');
+    expect(badDir.statusCode).toBe(400);
 
     // 차트 시리즈 (다운샘플)
     const series = await ctx.app.inject({

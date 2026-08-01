@@ -9,7 +9,12 @@
  * 다루므로 컴포넌트 테스트 환경 없이 단위 테스트할 수 있다.
  */
 
-/** Description 에 나열할 종목 수. 200종목을 다 나열하면 화면 여러 줄을 잡아먹는다 */
+/**
+ * 위저드 검토 단계에 나열할 종목 수. 200종목을 다 나열하면 화면 여러 줄을 잡아먹는다.
+ *
+ * 실행된 백테스트의 설명 줄은 종목을 나열하지 않는다 — 데이터셋 이름과 종목 수를
+ * 적는다 (`universe-summary.ts`).
+ */
 export const SYMBOL_SUMMARY_LIMIT = 5;
 
 /**
@@ -31,22 +36,4 @@ export function clampSymbolName(
 /** '삼성전자 (005930)' / 이름을 모르면 '005930' — 빈 괄호를 만들지 않는다 */
 export function formatSymbolLabel(symbol: string, name: string | null): string {
   return name ? `${name} (${symbol})` : symbol;
-}
-
-/**
- * 앞 `limit` 개를 나열하고 나머지는 개수로 접는다. 전체 목록은 거래 내역의 종목
- * 필터와 종목별 성과 표에 있으므로 여기서 잃어도 접근성이 사라지지 않는다.
- */
-export function formatSymbolSummary(
-  symbols: readonly string[],
-  nameOf: (symbol: string) => string | null,
-  limit = SYMBOL_SUMMARY_LIMIT,
-): string {
-  if (symbols.length === 0) return '';
-  const shown = symbols
-    .slice(0, limit)
-    .map((symbol) => formatSymbolLabel(symbol, nameOf(symbol)))
-    .join(', ');
-  const rest = symbols.length - limit;
-  return rest > 0 ? `${shown} 외 ${rest}종목` : shown;
 }

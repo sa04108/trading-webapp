@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api-client';
+import type { SortDirection, TradeSortKey } from '../../../shared/schemas/trade-sort.js';
 import {
   isTerminal,
   type BacktestMetrics,
@@ -97,12 +98,21 @@ export function useBacktestSeries(jobId: string, enabled: boolean) {
 
 export function useBacktestTrades(
   jobId: string,
-  options: { limit: number; offset: number; symbol?: string },
+  options: {
+    limit: number;
+    offset: number;
+    symbol?: string;
+    sort: TradeSortKey;
+    dir: SortDirection;
+  },
   enabled: boolean,
 ) {
+  // 정렬은 서버가 한다 — 페이징이 서버라 화면에서 정렬하면 보이는 한 페이지만 뒤집힌다
   const params = new URLSearchParams({
     limit: String(options.limit),
     offset: String(options.offset),
+    sort: options.sort,
+    dir: options.dir,
   });
   if (options.symbol) params.set('symbol', options.symbol);
   return useQuery({

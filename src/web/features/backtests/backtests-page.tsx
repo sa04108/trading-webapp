@@ -7,22 +7,21 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Skeleton } from '@/components/ui/skeleton';
-import { useStockNames } from '@/lib/use-stock-names';
 import { useBacktests } from './api';
 import { formatDateTime, formatSignedPct, pnlClass, timeframeLabel } from '@/lib/format';
 import { groupJobsByStrategy } from './job-groups';
 import { resolveJobTimeframe } from './job-timeframe';
 import { StatusBadge } from './status-badge';
-import { formatSymbolSummary, SYMBOL_SUMMARY_LIMIT } from './symbol-summary';
+import { formatUniverseSummary } from './universe-summary';
 import { isTerminal, type JobSummary } from './types';
 
 function JobCard({
   job,
-  nameOf,
+  datasetName,
   timeframe,
 }: {
   job: JobSummary;
-  nameOf: (symbol: string) => string | null;
+  datasetName: string | null;
   timeframe: string | null;
 }) {
   const running = !isTerminal(job.status);
@@ -42,8 +41,12 @@ function JobCard({
             </span>
           </div>
           <div className="text-xs text-muted-foreground">
-            {formatSymbolSummary(job.request.universe.symbols, nameOf)} · {job.request.period.from}{' '}
-            ~ {job.request.period.to}
+            {formatUniverseSummary(
+              datasetName,
+              job.datasetId,
+              job.request.universe.symbols.length,
+            )}{' '}
+            · {job.request.period.from} ~ {job.request.period.to}
             {timeframe ? ` · ${timeframeLabel(timeframe)}` : ''}
           </div>
           {running && progress !== null ? (
@@ -85,18 +88,15 @@ export function BacktestsPage() {
   });
   const strategyById = new Map((strategies.data?.strategies ?? []).map((s) => [s.id, s]));
 
-  // 카드마다 훅을 부르면 카드 수만큼 요청이 난다. 전체 심볼 합집합은
-  // /symbols/info 의 1,000개 상한에 걸릴 수 있다 — 어차피 5개만 표시하므로
-  // 상한이 (5 × 페이지당 잡 수)로 묶인다.
-  const previewSymbols = [
-    ...new Set(
-      (data?.jobs ?? []).flatMap((job) =>
-        job.request.universe.symbols.slice(0, SYMBOL_SUMMARY_LIMIT),
-      ),
-    ),
-  ];
-  const stockNames = useStockNames(previewSymbols);
-  const nameOf = (symbol: string): string | null => stockNames.get(symbol)?.name ?? null;
+  // 설명 줄이 데이터셋 이름과 종목 수만 적으므로 종목명 조회가 필요 없다 — 카드마다
+  // 종목 이름을 나열하던 시절에는 잡 수 × 5종목을 매 5초 갱신마다 다시 물었다.
+  const datasets = useQuery({
+    queryKey: ['datasets'],
+    queryFn: () => api<{ datasets: Array<{ id: string; name: string }> }>('/datasets'),
+  });
+  const datasetNameById = new Map(
+    (datasets.data?.datasets ?? []).map((dataset) => [dataset.id, dataset.name]),
+  );
 
   return (
     <div className="space-y-4">
@@ -132,7 +132,7 @@ export function BacktestsPage() {
                   <JobCard
                     key={job.id}
                     job={job}
-                    nameOf={nameOf}
+                    datasetName={datasetNameById.get(job.datasetId) ?? null}
                     timeframe={resolveJobTimeframe(job)}
                   />
                 ))}

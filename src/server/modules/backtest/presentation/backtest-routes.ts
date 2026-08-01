@@ -7,6 +7,12 @@ import {
   periodToTsRange,
   type BacktestRequest,
 } from '../../../../shared/schemas/backtest-request.js';
+import {
+  DEFAULT_TRADE_SORT_DIRECTION,
+  DEFAULT_TRADE_SORT_KEY,
+  SORT_DIRECTIONS,
+  TRADE_SORT_KEYS,
+} from '../../../../shared/schemas/trade-sort.js';
 import { SECURITY_HEADERS } from '../../../shared/security.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
 import type { FactRepository } from '../../facts/application/ports.js';
@@ -518,17 +524,23 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
         limit: z.coerce.number().int().min(1).max(500).default(100),
         offset: z.coerce.number().int().min(0).default(0),
         symbol: z.string().optional(),
+        // 모르는 축은 400 이다 — 조용히 기본 정렬로 떨어뜨리면 화면은 「순손익순」을
+        // 표시한 채 청산순 목록을 보여 주고, 그 어긋남은 아무 데도 적히지 않는다.
+        sort: z.enum(TRADE_SORT_KEYS).default(DEFAULT_TRADE_SORT_KEY),
+        dir: z.enum(SORT_DIRECTIONS).default(DEFAULT_TRADE_SORT_DIRECTION),
       })
       .safeParse(request.query ?? {});
     if (!parsedQuery.success) {
       return reply
         .code(400)
-        .send({ error: '쿼리 파라미터가 올바르지 않습니다 (limit/offset/symbol)' });
+        .send({ error: '쿼리 파라미터가 올바르지 않습니다 (limit/offset/symbol/sort/dir)' });
     }
     const query = parsedQuery.data;
     return results.getTrades(id, {
       limit: query.limit,
       offset: query.offset,
+      sort: query.sort,
+      direction: query.dir,
       ...(query.symbol !== undefined ? { symbol: query.symbol } : {}),
     });
   });
