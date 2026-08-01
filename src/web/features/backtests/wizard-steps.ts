@@ -15,6 +15,7 @@
  * 컴포넌트 테스트 환경 없이 단위 테스트할 수 있다. 확장자 .js 와 별칭(@/) 회피는
  * prefill.ts 와 같은 이유다 — tests/unit 이 이 모듈을 NodeNext 프로그램에 편입한다.
  */
+import { MAX_UNIVERSE_SYMBOLS } from '../../../shared/schemas/universe-limit.js';
 import type { WizardFormState } from './prefill.js';
 
 export const WIZARD_STEPS = ['전략', '데이터·종목', '기간', '자본·비용', '검토', '실행'] as const;
@@ -31,6 +32,9 @@ export const RUN_STEP = WIZARD_STEPS.length - 1;
  * 단계 게이트가 보는 값만. 파라미터·프로파일·시드는 여기서 보지 않는다 — 검토
  * 단계의 buildRequest 가 요청을 만들면서 한 번에 검사하고, 그 오류는 검토 화면에
  * 그대로 뜬다. 게이트가 같은 검사를 중복하면 규칙이 둘이 된다.
+ *
+ * 종목 수 상한은 예외로 여기서 본다 — 데이터셋을 고르는 그 자리에서 막아야 하고,
+ * 검토까지 네 단계를 지나 "요청을 못 만든다" 를 듣게 하면 왕복이 그대로 남는다.
  */
 export type StepGateState = Pick<
   WizardFormState,
@@ -57,6 +61,13 @@ export function stepBlocker(index: number, state: StepGateState): string | null 
     case 1:
       if (!state.datasetId) return '데이터셋을 선택하세요';
       if (state.symbols.length === 0) return '종목을 1개 이상 선택하세요';
+      if (state.symbols.length > MAX_UNIVERSE_SYMBOLS) {
+        return (
+          `이 데이터셋은 ${state.symbols.length}종목이라 백테스트 상한` +
+          `(${MAX_UNIVERSE_SYMBOLS}종목)을 넘습니다 — 데이터 화면에서 종목을 줄이거나 ` +
+          '더 작은 데이터셋을 쓰세요'
+        );
+      }
       return fundamentalsBlocker(state);
     case 2:
       if (!state.from || !state.to) return '시작일과 종료일을 입력하세요';

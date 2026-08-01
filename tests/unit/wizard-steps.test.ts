@@ -9,6 +9,8 @@ import {
   WIZARD_STEPS,
   type StepGateState,
 } from '../../src/web/features/backtests/wizard-steps.js';
+import { MAX_UNIVERSE_SYMBOLS } from '../../src/shared/schemas/universe-limit.js';
+import { backtestRequestSchema } from '../../src/shared/schemas/backtest-request.js';
 
 /** 전 단계를 통과하는 상태 — 각 테스트는 여기서 한 가지만 무너뜨린다 */
 const complete: StepGateState = {
@@ -136,6 +138,75 @@ describe('stepJumpBlockReason', () => {
     expect(stepJumpBlockReason(RUN_STEP, stepped, complete)).toBe(
       "'검토' 단계에서 '다음' 을 눌러 진행하세요",
     );
+  });
+});
+
+/**
+ * 종목 수 상한 게이트 (D-038).
+ *
+ * 위저드는 종목을 골라내지 않는다 — 데이터셋이 유니버스를 정한다. 그러면 상한을 넘는
+ * 데이터셋은 **돌릴 수 없다**: 알아서 잘라 넣으면 같은 데이터셋으로 돌린 두 결과가 서로
+ * 다른 유니버스를 갖게 되고, 무엇이 달랐는지는 저장된 요청을 펼쳐 봐야만 안다.
+ */
+describe('stepBlocker — 종목 수 상한 게이트 (단계 1)', () => {
+  const symbols = (count: number): string[] =>
+    Array.from({ length: count }, (_, index) => String(index).padStart(6, '0'));
+
+  it('상한과 같으면 통과한다', () => {
+    expect(stepBlocker(1, { ...complete, symbols: symbols(MAX_UNIVERSE_SYMBOLS) })).toBeNull();
+  });
+
+  it('하나만 넘어도 막고, 몇 종목인지와 무엇을 하라는지를 함께 말한다', () => {
+    const reason = stepBlocker(1, { ...complete, symbols: symbols(MAX_UNIVERSE_SYMBOLS + 1) });
+    expect(reason).toContain(String(MAX_UNIVERSE_SYMBOLS + 1));
+    expect(reason).toMatch(/데이터 화면에서 종목을 줄이거나/);
+  });
+
+  /**
+   * 게이트가 통과시킨 유니버스를 서버가 400 으로 막으면 그 어긋남은 제출해 봐야 드러난다.
+   * 화면 상한과 요청 스키마 상한이 같은 상수인지 스키마로 직접 확인한다.
+   */
+  it('게이트 경계가 요청 스키마 경계와 같다', () => {
+    const request = {
+      strategyId: 'rsi-reversion',
+      parameters: {},
+      datasetId: 'ds_1',
+      period: { from: '2024-01-01', to: '2024-12-31' },
+      capital: { initialCash: 10_000_000, currency: 'KRW' as const },
+      execution: {
+        fillTiming: 'NEXT_BAR_OPEN' as const,
+        commissionProfileId: 'kr-equity-default',
+        slippageProfileId: 'fixed-5bps',
+      },
+      risk: { maxPositions: 20 },
+    };
+    const parse = (count: number): boolean =>
+      backtestRequestSchema.safeParse({
+        ...request,
+        universe: { type: 'SYMBOLS', symbols: symbols(count) },
+      }).success;
+
+    expect(parse(MAX_UNIVERSE_SYMBOLS)).toBe(true);
+    expect(parse(MAX_UNIVERSE_SYMBOLS + 1)).toBe(false);
+  });
+
+  it('막으면 앞으로 갈 수 있는 상한도 그 단계에 걸린다 — 검토까지 갈 수 없다', () => {
+    const blocked = { ...complete, symbols: symbols(MAX_UNIVERSE_SYMBOLS + 1) };
+    expect(firstIncompleteStep(blocked)).toBe(1);
+    expect(navigableStepLimit(0, blocked)).toBe(1);
+    expect(stepJumpBlockReason(REVIEW_STEP, 0, blocked)).toMatch(
+      /'데이터·종목' 단계를 먼저 마치세요/,
+    );
+  });
+
+  it('데이터셋 미선택이 상한보다 먼저다 — 원인을 뒤집어 말하지 않는다', () => {
+    expect(
+      stepBlocker(1, {
+        ...complete,
+        datasetId: null,
+        symbols: symbols(MAX_UNIVERSE_SYMBOLS + 1),
+      }),
+    ).toBe('데이터셋을 선택하세요');
   });
 });
 

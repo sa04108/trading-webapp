@@ -22,17 +22,10 @@ import { cn } from '@/lib/utils';
 import { formatKrw, formatRelativeTime, timeframeLabel } from '@/lib/format';
 import { wizardTimeframes } from '@/features/datasets/dataset-slices';
 import { SymbolFactsBadge } from '@/features/datasets/symbol-facts-badge';
-import { SymbolSortNote, SymbolSortSelect } from '@/features/datasets/symbol-list';
-import {
-  countWithMetric,
-  SYMBOL_SORT_LABELS,
-  type SymbolSortKey,
-} from '@/features/datasets/symbol-sort';
 import type { SymbolSummary } from '@/features/datasets/symbol-types';
-import { MAX_UNIVERSE_SYMBOLS, selectUniverse } from './dataset-universe';
+import { MAX_UNIVERSE_SYMBOLS } from '../../../shared/schemas/universe-limit.js';
 import { costProfileLabel, slippageProfileLabel } from './profile-labels';
 import { useStockNames } from '@/lib/use-stock-names';
-import { useSymbolMetrics } from '@/lib/use-symbol-metrics';
 import { requestToFormState } from './prefill';
 import { ParamHint } from './param-hint';
 import { extractNumberParams, paramLabel, type NumberParamSpec } from './param-specs';
@@ -100,15 +93,17 @@ export function NewBacktestWizard() {
   // 목록에서 데이터셋을 고르면 그 자리에서 wizardTimeframes 첫 항목으로 명시값을 채운다.
   const [timeframe, setTimeframe] = useState('');
   /**
-   * 유니버스는 **데이터셋이 정한다** — 위저드에서 종목을 하나씩 고르는 UI 는 없앴다
-   * (D-038). 이 상태는 복제 프리필이 원본 요청의 종목 목록을 그대로 되살릴 때만 쓴다:
-   * 예전 화면에서 부분 선택으로 만든 잡을 복제하면서 유니버스를 조용히 바꾸면
-   * 「재실행」이 재실행이 아니게 된다. 데이터셋을 새로 고르거나 정렬을 바꾸면 null 로
-   * 되돌리고 데이터셋에서 다시 도출한다.
+   * 유니버스는 **데이터셋이 정한다** — 위저드에는 종목을 고르는 UI 가 없다 (D-038).
+   *
+   * 백테스트를 만들면서 종목을 골라내면 같은 데이터셋으로 돌린 두 결과가 서로 다른
+   * 유니버스를 갖게 되고, 무엇이 달랐는지는 저장된 요청을 펼쳐 봐야만 안다. 유니버스를
+   * 바꾸고 싶으면 데이터셋을 바꾼다 — 그러면 그 사실이 데이터 화면에 남는다.
+   *
+   * 이 상태는 복제 프리필이 원본 요청의 종목 목록을 되살릴 때만 쓴다: 예전 화면에서
+   * 부분 선택으로 만든 잡을 복제하면서 유니버스를 조용히 넓히면 「재실행」이 재실행이
+   * 아니게 된다. 데이터셋을 새로 고르면 null 로 되돌린다.
    */
   const [prefilledSymbols, setPrefilledSymbols] = useState<string[] | null>(null);
-  /** 상한을 넘는 데이터셋에서 상위 N종목을 고를 기준 — 종목 화면의 정렬과 같은 축이다 */
-  const [universeSortKey, setUniverseSortKey] = useState<SymbolSortKey>('MARKET_CAP');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [initialCash, setInitialCash] = useState('10000000');
@@ -164,8 +159,8 @@ export function NewBacktestWizard() {
   const selectedDataset = datasets.data?.datasets.find((d) => d.id === datasetId) ?? null;
   // 데이터셋 카드의 "마지막 수집 N일 전" 기준 시각 — 렌더 시점으로 충분하다
   const nowMs = Date.now();
-  // useMemo 인 이유: 유니버스 도출이 이 Map 을 의존성으로 읽는다. 매 렌더 새 Map 이면
-  // 1,000종목 데이터셋을 매 렌더 다시 정렬하게 된다.
+  // 데이터셋 카드마다 슬라이스·재무·수집 시각을 이 Map 으로 찾는다 — 1,000종목이면
+  // 매 렌더 Map 을 새로 쌓는 비용이 카드 수만큼 겹친다
   const symbolByCode = useMemo(
     () => new Map((symbolsQuery.data?.symbols ?? []).map((s) => [s.code, s])),
     [symbolsQuery.data],
@@ -201,24 +196,8 @@ export function NewBacktestWizard() {
   // 카드 노출·기본값 계산에 반복해서 쓰인다 — 보유 슬라이스(hasData) 기준으로 도출
   const timeframeOptions = selectedDataset ? wizardTimeframes(slicesOf(selectedDataset.symbols)) : [];
 
-  /**
-   * 유니버스 도출. 데이터셋이 상한(200종목)을 넘으면 정렬 상위 200종목만 담는다 —
-   * 규칙은 `dataset-universe.ts` 에 있고 종목 화면과 같은 정렬 함수를 쓴다.
-   *
-   * 상태가 아니라 파생값이다. 데이터셋을 고를 때 한 번 계산해 담아 두면 지표가 뒤늦게
-   * 도착했을 때 가나다순으로 자른 200종목이 그대로 제출된다 — 화면은 「시가총액순」이라고
-   * 적고 있는데 실제 유니버스는 다른, 눈에 보이지 않는 어긋남이다.
-   */
-  const { metrics, rankingLimit, unavailable: metricsUnavailable } = useSymbolMetrics();
-  const universe = useMemo(() => {
-    const codes = selectedDataset?.symbols ?? [];
-    const members = codes.map((code) => ({
-      code,
-      name: symbolByCode.get(code)?.name ?? null,
-    }));
-    return selectUniverse(members, universeSortKey, metrics);
-  }, [selectedDataset, symbolByCode, universeSortKey, metrics]);
-  const symbols = prefilledSymbols ?? universe.symbols;
+  /** 유니버스 = 데이터셋 참조 종목 전체. 복제 프리필만 예외다 */
+  const symbols = prefilledSymbols ?? selectedDataset?.symbols ?? [];
   // 선택 후보 전체를 한 번에 조회한다 — 체크박스와 검토 단계가 같은 Map 을 쓴다.
   const stockNames = useStockNames(selectedDataset?.symbols ?? []);
   const nameOf = (symbol: string): string | null => stockNames.get(symbol)?.name ?? null;
@@ -291,6 +270,11 @@ export function NewBacktestWizard() {
   const buildRequest = (): (BacktestRequestBody & { timeframe: '1m' | '1h' | '1d' }) | string => {
     if (!selectedStrategy) return '전략을 선택하세요';
     if (!selectedDataset || symbols.length === 0) return '데이터셋과 종목을 선택하세요';
+    // 게이트가 이미 막지만(단계 1) 프리필은 게이트를 거치지 않고 상태를 채운다 —
+    // 스키마가 거부할 요청을 만들어 놓고 제출 400 으로 알게 하지 않는다
+    if (symbols.length > MAX_UNIVERSE_SYMBOLS) {
+      return `종목이 ${symbols.length}개로 상한(${MAX_UNIVERSE_SYMBOLS}종목)을 넘습니다`;
+    }
     if (!from || !to || from > to) return '기간이 올바르지 않습니다';
     const cash = Number(initialCash);
     if (!Number.isFinite(cash) || cash <= 0) return '초기 자본이 올바르지 않습니다';
@@ -650,7 +634,19 @@ export function NewBacktestWizard() {
                     <SymbolFactsBadge hasFacts={factsOf(dataset.symbols)} />
                   </div>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    {dataset.symbols.length}종목 ·{' '}
+                    {/* 상한 초과는 고르기 **전에** 보여야 한다 — 눌러 보고서야 알게
+                        하면 목록이 그 사실을 숨긴 셈이다 */}
+                    <span
+                      className={cn(
+                        dataset.symbols.length > MAX_UNIVERSE_SYMBOLS && 'text-destructive',
+                      )}
+                    >
+                      {dataset.symbols.length}종목
+                      {dataset.symbols.length > MAX_UNIVERSE_SYMBOLS
+                        ? ` (상한 ${MAX_UNIVERSE_SYMBOLS}종목 초과)`
+                        : ''}
+                    </span>{' '}
+                    ·{' '}
                     {slicesOf(dataset.symbols)
                       .filter((s) => s.hasData)
                       .map((s) => timeframeLabel(s.slice))
@@ -709,50 +705,11 @@ export function NewBacktestWizard() {
               </CardContent>
             </Card>
           ) : null}
-          {/* 상한을 넘는 데이터셋만 이 카드를 띄운다. 1,000종목 데이터셋을 골라 놓고
-              200종목만 돌아간 것을 결과 화면에서 알게 되는 상황을 없앤다 — 무엇을 기준으로
-              자를지도 여기서 정한다. 상한 이하면 데이터셋 전체가 그대로 유니버스라
-              고를 것이 없다. */}
-          {selectedDataset && universe.truncated ? (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">종목 상한</CardTitle>
-                <CardDescription>
-                  이 데이터셋은 {universe.total}종목이라 백테스트 상한({MAX_UNIVERSE_SYMBOLS}
-                  종목)을 넘습니다 — 아래 기준의 상위 {MAX_UNIVERSE_SYMBOLS}종목만 담고 나머지{' '}
-                  {universe.droppedCount}종목은 빠집니다.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-2">
-                <SymbolSortSelect
-                  value={universeSortKey}
-                  unavailable={metricsUnavailable}
-                  label="유니버스 선정 기준"
-                  onChange={(next) => {
-                    setUniverseSortKey(next);
-                    // 기준을 직접 골랐으면 프리필 유니버스보다 그 선택이 우선한다
-                    setPrefilledSymbols(null);
-                  }}
-                />
-                <SymbolSortNote
-                  sortKey={universeSortKey}
-                  total={universe.total}
-                  withMetric={countWithMetric(
-                    selectedDataset.symbols,
-                    universeSortKey,
-                    metrics,
-                  )}
-                  rankingLimit={rankingLimit}
-                  unavailable={metricsUnavailable}
-                />
-              </CardContent>
-            </Card>
-          ) : null}
           {selectedDataset && prefilledSymbols !== null ? (
             <Alert>
               <AlertDescription>
                 원본 백테스트의 종목 {prefilledSymbols.length}개를 그대로 씁니다 — 데이터셋을
-                다시 고르면 데이터셋 전체에서 새로 도출합니다.
+                다시 고르면 그 데이터셋의 종목 전체를 씁니다.
               </AlertDescription>
             </Alert>
           ) : null}
@@ -906,14 +863,6 @@ export function NewBacktestWizard() {
                   ))}
                   {reviewRestCount > 0 ? (
                     <span className="text-muted-foreground">외 {reviewRestCount}종목</span>
-                  ) : null}
-                  {/* 잘렸다는 사실은 제출 직전에 한 번 더 말한다 — 2단계에서 읽고
-                      네 단계를 지나온 사용자가 그것을 기억한다고 볼 수 없다 */}
-                  {universe.truncated && prefilledSymbols === null ? (
-                    <span className="text-muted-foreground">
-                      {selectedDataset?.name} {universe.total}종목 중{' '}
-                      {SYMBOL_SORT_LABELS[universeSortKey]} 상위 {universe.symbols.length}종목
-                    </span>
                   ) : null}
                 </span>
               </div>
