@@ -117,6 +117,14 @@ test('full MVP flow', async ({ page }) => {
   await expect(page.getByText('월별 수익률')).toBeVisible();
   await expect(page.getByText('거래 내역', { exact: true })).toBeVisible();
   await expect(page.getByText('재현 정보')).toBeVisible();
+  // 재현 정보의 긴 값은 잘리지 않고 접힌다 — 해시가 「a1b2…」로 잘리면 다른 실행과 같은지
+  // 비교할 수 없다. 390px 에서 가로 스크롤이 생기지 않는 것은 아래 mobile 전용 테스트가 본다.
+  const feeModelValue = page
+    .locator('[data-slot="card"]')
+    .filter({ hasText: '재현 정보' })
+    .getByText(/kr-equity-default@/);
+  await expect(feeModelValue).toHaveCSS('overflow-wrap', 'anywhere');
+  await expect(feeModelValue).not.toHaveCSS('text-overflow', 'ellipsis');
   // 5-1. 설명 줄은 종목을 나열하지 않고 데이터셋 이름과 종목 수를 적는다 — 백테스트는
   // 종목이 아니라 데이터셋을 고른다. 이름은 데이터셋 카탈로그 조회로 붙으므로 여기에
   // id(ds_…) 가 뜨면 그 조회가 끊긴 것이다.
