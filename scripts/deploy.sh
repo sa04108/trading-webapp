@@ -24,6 +24,90 @@
 # 비밀값을 command line argument 로 넘기지 않는다.
 set -euo pipefail
 
+wait_for_ready() {
+  local max_attempts="${1:-10}"
+  local delay_seconds="${2:-2}"
+  local attempt
+  for ((attempt = 1; attempt <= max_attempts; attempt += 1)); do
+    if curl -fsS http://127.0.0.1:3000/api/v1/health/ready >/dev/null 2>&1; then
+      return 0
+    fi
+    if ((attempt < max_attempts)); then sleep "${delay_seconds}"; fi
+  done
+  return 1
+}
+
+print_service_diagnostics() {
+  local phase="$1"
+  local since="$2"
+  echo "==> service diagnostics: ${phase} (since ${since})" >&2
+  echo '-- current release --' >&2
+  readlink -f /opt/quant-platform/current >&2 || true
+  if [ -f /opt/quant-platform/current/dist/build-info.json ]; then
+    sudo cat /opt/quant-platform/current/dist/build-info.json >&2 || true
+  fi
+  echo '-- systemd properties --' >&2
+  sudo systemctl show quant-platform --no-pager \
+    --property=ActiveState,SubState,Result,ExecMainCode,ExecMainStatus,NRestarts >&2 || true
+  echo '-- systemd status --' >&2
+  sudo systemctl status quant-platform --no-pager -l >&2 || true
+  echo '-- service journal --' >&2
+  sudo journalctl -u quant-platform --since "${since}" --no-pager -o short-iso >&2 || true
+}
+
+rollback_release() {
+  local previous_release="$1"
+  local db_snapshot="$2"
+  local db_path="$3"
+  local rollback_ok=1
+  local rollback_started_at
+
+  sudo systemctl stop quant-platform || rollback_ok=0
+  if [ "${rollback_ok}" -eq 1 ] && [ -f "${db_snapshot}" ]; then
+    if sudo cp "${db_snapshot}" "${db_path}" &&
+      sudo rm -f "${db_path}-wal" "${db_path}-shm"; then
+      echo 'DB를 배포 전 스냅샷으로 복원했습니다' >&2
+    else
+      rollback_ok=0
+    fi
+  fi
+  if [ "${rollback_ok}" -eq 1 ]; then
+    sudo ln -sfn "${previous_release}" /opt/quant-platform/current || rollback_ok=0
+  fi
+
+  rollback_started_at="$(date --iso-8601=seconds)"
+  if [ "${rollback_ok}" -eq 1 ] &&
+    sudo systemctl restart quant-platform &&
+    wait_for_ready; then
+    echo "rolled back to ${previous_release}" >&2
+    return 0
+  fi
+
+  echo "rollback failed for ${previous_release}" >&2
+  print_service_diagnostics 'rollback failed' "${rollback_started_at}"
+  return 1
+}
+
+handle_deploy_failure() {
+  local deploy_started_at="$1"
+  local previous_release="$2"
+  local db_snapshot="$3"
+  local db_path="$4"
+
+  echo '기동 또는 readiness 실패 — 새 릴리스 진단을 수집한 뒤 롤백합니다' >&2
+  print_service_diagnostics 'new release failed' "${deploy_started_at}"
+  if [ -n "${previous_release}" ] && [ -d "${previous_release}" ]; then
+    rollback_release "${previous_release}" "${db_snapshot}" "${db_path}" || true
+  else
+    echo '롤백할 이전 release가 없습니다 — 서비스 상태를 직접 확인하세요' >&2
+  fi
+  return 1
+}
+
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  return 0
+fi
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # 주소를 먼저 받는다 — 아래 검증 게이트가 몇 분 걸리므로 그 뒤에 묻지 않는다.
@@ -164,8 +248,15 @@ tar -czf "${ARCHIVE}" dist migrations package.json pnpm-lock.yaml pnpm-workspace
 
 echo "==> 업로드 및 릴리스 전환"
 scp "${SSH_OPTS[@]}" "${ARCHIVE}" "${TARGET}:/tmp/"
+REMOTE_SERVICE_HELPERS="$(
+  declare -f wait_for_ready
+  declare -f print_service_diagnostics
+  declare -f rollback_release
+  declare -f handle_deploy_failure
+)"
 ssh "${SSH_OPTS[@]}" "${TARGET}" bash -s <<EOF
 set -euo pipefail
+${REMOTE_SERVICE_HELPERS}
 sudo mkdir -p "/opt/quant-platform/releases/${RELEASE}"
 sudo tar -xzf "/tmp/${ARCHIVE}" -C "/opt/quant-platform/releases/${RELEASE}"
 # 업로드본은 풀고 나면 쓸모없다 — 40GB 디스크에 배포마다 쌓이지 않게 즉시 지운다
@@ -191,35 +282,19 @@ sudo ln -sfn "/opt/quant-platform/releases/${RELEASE}" /opt/quant-platform/curre
 # set -e 로 셸이 먼저 죽어버려, 심볼릭 링크와 마이그레이션된 DB 는 새 릴리스에
 # 남은 채 롤백이 아예 돌지 않는다 (D-010 이 막으려던 바로 그 상태).
 DEPLOY_FAILED=0
+DEPLOY_ATTEMPT_STARTED_AT="\$(date --iso-8601=seconds)"
 sudo systemctl restart quant-platform || DEPLOY_FAILED=1
 
-# 준비될 때까지 재시도한다 — 단발 curl 은 부팅이 조금만 느려도 정상 릴리스를 롤백시키고,
-# 롤백은 이제 DB 스냅샷 복원까지 동반하므로 헛된 롤백에 쓰기 유실이 따라온다.
 if [ "\${DEPLOY_FAILED}" -eq 0 ]; then
-  READY=0
-  for _ in \$(seq 1 10); do
-    if curl -fsS http://127.0.0.1:3000/api/v1/health/ready; then READY=1; break; fi
-    sleep 2
-  done
-  [ "\${READY}" -eq 1 ] || DEPLOY_FAILED=1
+  wait_for_ready || DEPLOY_FAILED=1
 fi
 
 if [ "\${DEPLOY_FAILED}" -ne 0 ]; then
-  echo "기동 또는 health check 실패 — 이전 release 로 롤백합니다 (스펙 §30)" >&2
-  if [ -n "\${PREVIOUS_RELEASE}" ] && [ -d "\${PREVIOUS_RELEASE}" ]; then
-    sudo systemctl stop quant-platform
-    if [ -f "\${DB_SNAPSHOT}" ]; then
-      sudo cp "\${DB_SNAPSHOT}" "\${DB_PATH}"
-      sudo rm -f "\${DB_PATH}-wal" "\${DB_PATH}-shm"
-      echo "DB 를 배포 전 스냅샷으로 복원했습니다" >&2
-    fi
-    sudo ln -sfn "\${PREVIOUS_RELEASE}" /opt/quant-platform/current
-    sudo systemctl restart quant-platform
-    echo "rolled back to \${PREVIOUS_RELEASE}" >&2
-  else
-    echo "롤백할 이전 release 가 없습니다 — 서비스 상태를 직접 확인하세요" >&2
-  fi
-  exit 1
+  handle_deploy_failure \
+    "\${DEPLOY_ATTEMPT_STARTED_AT}" \
+    "\${PREVIOUS_RELEASE}" \
+    "\${DB_SNAPSHOT}" \
+    "\${DB_PATH}" || exit 1
 fi
 # 성공한 배포의 스냅샷도 즉시 지우지 않는다 (D-010): health check 통과 뒤에 발견된 문제는
 # 수동 롤백으로 되돌리는데, 짝이 맞는 스냅샷이 없으면 이전 코드가 새 스키마를 만나 죽는다.
