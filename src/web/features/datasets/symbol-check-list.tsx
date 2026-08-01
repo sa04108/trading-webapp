@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { parsePageSize } from '@/lib/page-size';
+import { pageWindow } from '@/lib/pagination';
 import { useSymbolMetrics } from '@/lib/use-symbol-metrics';
 import {
   PageNav,
@@ -11,7 +12,6 @@ import {
   SymbolSortNote,
   SymbolSortSelect,
 } from './symbol-list';
-import { pageWindow } from './symbol-paging';
 import { filterSymbols } from './symbol-search';
 import { countWithMetric, sortSymbols, type SymbolSortKey } from './symbol-sort';
 import type { SymbolSummary } from './symbol-types';

@@ -28,6 +28,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { api, postForm, postJson } from '@/lib/api-client';
 import { parsePageSize } from '@/lib/page-size';
+import { pageWindow } from '@/lib/pagination';
 import { useMarketSupport } from '@/lib/use-market-support';
 import { useSymbolMetrics } from '@/lib/use-symbol-metrics';
 import { CandleInspectDrawer } from './candle-inspect-drawer';
@@ -41,7 +42,6 @@ import {
   SymbolSortNote,
   SymbolSortSelect,
 } from './symbol-list';
-import { pageWindow } from './symbol-paging';
 import { filterSymbols } from './symbol-search';
 import { countWithMetric, sortSymbols, type SymbolSortKey } from './symbol-sort';
 import type {
