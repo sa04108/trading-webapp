@@ -36,14 +36,9 @@ import { ParquetCandleRepository } from '../server/modules/market-data/infrastru
 import { StrategyRegistry } from '../server/modules/strategy/application/strategy-registry.js';
 import { strategySourceHash } from '../server/modules/strategy/application/strategy-source-hash.js';
 import { backtestRequestSchema, periodToTsRange } from '../shared/schemas/backtest-request.js';
+import { installCancellationHandlers } from './cancellation.js';
 
-let cancelRequested = false;
-process.on('message', (message: { type?: string }) => {
-  if (message?.type === 'cancel') cancelRequested = true;
-});
-process.on('SIGTERM', () => {
-  cancelRequested = true;
-});
+const cancellation = installCancellationHandlers();
 
 function send(message: unknown): void {
   process.send?.(message);
@@ -273,7 +268,7 @@ async function main(): Promise<void> {
       maxPositions: request.risk.maxPositions,
       facts,
     }, {
-      shouldCancel: () => cancelRequested,
+      shouldCancel: () => cancellation.isRequested(),
       onProgress: ({ processedBars, totalBars, currentTsMs }) => {
         const now = Date.now();
         if (now - lastProgressSentAt < 200 && processedBars < totalBars) return;
@@ -402,8 +397,8 @@ async function main(): Promise<void> {
     finish('COMPLETED');
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    finish(cancelRequested ? 'CANCELLED' : 'FAILED', cancelRequested ? undefined : reason);
-    process.exitCode = cancelRequested ? 0 : 1;
+    finish(cancellation.isRequested() ? 'CANCELLED' : 'FAILED', cancellation.isRequested() ? undefined : reason);
+    process.exitCode = cancellation.isRequested() ? 0 : 1;
   } finally {
     duckdb.close();
     handle.close();
