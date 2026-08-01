@@ -122,6 +122,25 @@ test('full MVP flow', async ({ page }) => {
   await expect(page.getByRole('row').filter({ hasText: '미청산' }).first()).toBeVisible();
   const tradeRows = page.getByRole('row').filter({ hasText: '005930' });
   await expect(tradeRows.first()).toBeVisible();
+
+  const tradesPagination = page.getByRole('navigation', {
+    name: '거래 내역 페이지 이동',
+  });
+  await expect(tradesPagination.getByRole('button', { name: '현재 1페이지' })).toBeVisible();
+  await tradesPagination.getByRole('button', { name: '마지막 페이지' }).click();
+  await expect(tradesPagination.getByRole('button', { name: '현재 2페이지' })).toBeVisible();
+  await tradesPagination.getByRole('button', { name: '첫 페이지' }).click();
+  await expect(tradesPagination.getByRole('button', { name: '현재 1페이지' })).toBeVisible();
+
+  await expect(page.getByRole('navigation', { name: '경고 목록 페이지 이동' })).toHaveCount(0);
+  await page.getByLabel('경고 목록 페이지당 표시 수').fill('1');
+  const warningsPagination = page.getByRole('navigation', {
+    name: '경고 목록 페이지 이동',
+  });
+  await expect(warningsPagination.getByRole('button', { name: '현재 1페이지' })).toBeVisible();
+  await warningsPagination.getByRole('button', { name: '2페이지로 이동' }).click();
+  await expect(warningsPagination.getByRole('button', { name: '현재 2페이지' })).toBeVisible();
+
   // 종목 표기: 위 스텁으로 '005930' 은 이름이 뜬다 — '삼성전자 (005930)' 형태로
   // 이름·코드가 둘 다 살아있어야 한다. SymbolLabel 이 이름 없이 코드만 렌더링하도록
   // 회귀하거나 코드가 잘리면 이 두 assertion 중 하나가 깨진다.

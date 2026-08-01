@@ -8,7 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Input } from '@/components/ui/input';
+import { PageSizeInput, Pagination } from '@/components/pagination';
 import {
   Dialog,
   DialogContent,
@@ -42,6 +42,7 @@ import { useBacktestLive, useBacktestSeries, useBacktestTrades } from './api';
 import { exitReasonLabel } from './exit-reason';
 import { openPositionRows } from './open-position-rows';
 import { parsePageSize } from '@/lib/page-size';
+import { pageWindow } from '@/lib/pagination';
 import { ParamHint } from './param-hint';
 import { extractNumberParams, paramLabel } from './param-specs';
 import {
@@ -161,22 +162,15 @@ function TradesSection({
       </CardHeader>
       <CardContent>
         <div className="mb-2 flex justify-end">
-          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            페이지당
-            <Input
-              type="number"
-              min={1}
-              max={200}
-              value={pageSizeText}
-              onChange={(e) => {
-                setPageSizeText(e.target.value);
-                setPage(0);
-              }}
-              className="h-8 w-20"
-              aria-label="거래 내역 페이지당 표시 수"
-            />
-            건
-          </label>
+          <PageSizeInput
+            value={pageSizeText}
+            label="거래 내역 페이지당 표시 수"
+            unit="건"
+            onChange={(nextValue) => {
+              setPageSizeText(nextValue);
+              setPage(0);
+            }}
+          />
         </div>
         {isLoading ? (
           <Skeleton className="h-32 w-full" />
@@ -274,27 +268,13 @@ function TradesSection({
             수익률·자산 곡선에는 포함되지만 승률·profit factor·거래 수에는 포함되지 않습니다.
           </p>
         ) : null}
-        <div className="mt-3 flex items-center justify-between">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={page === 0}
-            onClick={() => setPage((p) => Math.max(0, p - 1))}
-          >
-            이전
-          </Button>
-          <span className="text-xs text-muted-foreground">
-            {page + 1} / {pageCount} 페이지
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={page >= pageCount - 1}
-            onClick={() => setPage((p) => p + 1)}
-          >
-            다음
-          </Button>
-        </div>
+        <Pagination
+          className="mt-3"
+          ariaLabel="거래 내역 페이지 이동"
+          currentPage={page}
+          pageCount={pageCount}
+          onPageChange={setPage}
+        />
       </CardContent>
     </Card>
   );
@@ -306,10 +286,9 @@ function WarningsSection({ warnings }: { warnings: string[] }) {
   const [pageSizeText, setPageSizeText] = useState('20');
   const pageSize = parsePageSize(pageSizeText, 20);
 
-  const rows = grouped ? groupWarnings(warnings).map((g) => g.label) : warnings;
-  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
-  const currentPage = Math.min(page, pageCount - 1);
-  const visible = rows.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+  const rows = grouped ? groupWarnings(warnings).map((group) => group.label) : warnings;
+  const { pageCount, currentPage, from, to } = pageWindow(rows.length, pageSize, page);
+  const visible = rows.slice(from, to);
 
   return (
     <Alert className="lg:col-span-2">
@@ -326,51 +305,28 @@ function WarningsSection({ warnings }: { warnings: string[] }) {
             />
             묶어 보기
           </label>
-          <label className="flex items-center gap-1.5 text-xs">
-            페이지당
-            <Input
-              type="number"
-              min={1}
-              max={200}
-              value={pageSizeText}
-              onChange={(e) => {
-                setPageSizeText(e.target.value);
-                setPage(0);
-              }}
-              className="h-8 w-20"
-              aria-label="페이지당 표시 수"
-            />
-            건
-          </label>
+          <PageSizeInput
+            value={pageSizeText}
+            label="경고 목록 페이지당 표시 수"
+            unit="건"
+            onChange={(nextValue) => {
+              setPageSizeText(nextValue);
+              setPage(0);
+            }}
+          />
         </div>
         <ul className="list-disc space-y-1 pl-4">
           {visible.map((warning) => (
             <li key={warning}>{warning}</li>
           ))}
         </ul>
-        {pageCount > 1 ? (
-          <div className="mt-3 flex items-center justify-between">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={currentPage === 0}
-              onClick={() => setPage((p) => Math.max(0, p - 1))}
-            >
-              이전
-            </Button>
-            <span className="text-xs text-muted-foreground">
-              {currentPage + 1} / {pageCount} 페이지
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={currentPage >= pageCount - 1}
-              onClick={() => setPage((p) => p + 1)}
-            >
-              다음
-            </Button>
-          </div>
-        ) : null}
+        <Pagination
+          className="mt-3"
+          ariaLabel="경고 목록 페이지 이동"
+          currentPage={currentPage}
+          pageCount={pageCount}
+          onPageChange={setPage}
+        />
       </AlertDescription>
     </Alert>
   );
