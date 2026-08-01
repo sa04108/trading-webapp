@@ -41,7 +41,7 @@ import { useStockNames } from '@/lib/use-stock-names';
 import { useBacktestLive, useBacktestSeries, useBacktestTrades } from './api';
 import { exitReasonLabel } from './exit-reason';
 import { openPositionRows } from './open-position-rows';
-import { parsePageSize } from './page-size';
+import { parsePageSize } from '@/lib/page-size';
 import { ParamHint } from './param-hint';
 import { extractNumberParams, paramLabel } from './param-specs';
 import {

@@ -20,13 +20,19 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { api, patchJson, postJson } from '@/lib/api-client';
 import { formatRelativeTime } from '@/lib/format';
 import { sliceLabel } from './dataset-slices';
-import { SymbolPicker } from './symbol-picker';
+import { SymbolCheckList } from './symbol-check-list';
 import { sortSymbols } from './symbol-sort';
 import type { DatasetSummary, SymbolSummary } from './symbol-types';
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
+
+/**
+ * 카드에 나열할 종목 배지 수. 200종목 데이터셋이 카드 하나로 화면 여러 장을 잡아먹으면
+ * 카드 목록이 목록 구실을 못 한다 — 나머지는 개수로 접고, 전체는 「종목 편집」에 있다.
+ */
+const CARD_SYMBOL_LIMIT = 20;
 
 export function DatasetsPanel() {
   const [createOpen, setCreateOpen] = useState(false);
@@ -99,6 +105,10 @@ function DatasetCard({
 
   const members = dataset.symbols.map((code) => byCode.get(code)).filter((s): s is SymbolSummary => s !== undefined);
   const missing = dataset.symbols.filter((code) => !byCode.has(code));
+  // 자르기 전에 정렬한다 — 페이지마다 다른 20개가 보이면 목록이 아니라 표본이 된다
+  const sortedMembers = sortSymbols(members);
+  const shownMembers = sortedMembers.slice(0, CARD_SYMBOL_LIMIT);
+  const hiddenMemberCount = sortedMembers.length - shownMembers.length;
 
   /**
    * 카드의 마지막 수집은 참조 종목 중 **가장 오래된** 값이다 — 묵음은 가장 약한 고리가
@@ -168,6 +178,7 @@ function DatasetCard({
               <Input
                 value={nameDraft}
                 className="h-8 w-48"
+                aria-label="데이터셋 이름"
                 onChange={(event) => setNameDraft(event.target.value)}
               />
               <button
@@ -229,7 +240,7 @@ function DatasetCard({
           {members.length > 1 ? ' (가장 오래된 종목 기준)' : ''}
         </p>
         <div className="flex flex-wrap gap-1">
-          {sortSymbols(members).map((symbol) => (
+          {shownMembers.map((symbol) => (
             <Badge key={symbol.code} variant="secondary">
               {symbol.name ?? symbol.code}
               <span className="ml-1 text-[10px] opacity-70">
@@ -240,6 +251,11 @@ function DatasetCard({
               </span>
             </Badge>
           ))}
+          {hiddenMemberCount > 0 ? (
+            <Badge variant="outline" className="text-muted-foreground">
+              외 {hiddenMemberCount}개
+            </Badge>
+          ) : null}
           {missing.map((code) => (
             <Badge key={code} variant="destructive">
               {code} (없는 종목)
@@ -309,18 +325,9 @@ function CreateDatasetDialog({
     onError: (error) => toast.error(errorMessage(error, '데이터셋을 만들 수 없습니다')),
   });
 
-  const toggle = (code: string): void => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(code)) next.delete(code);
-      else next.add(code);
-      return next;
-    });
-  };
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>데이터셋 만들기</DialogTitle>
           <DialogDescription>
@@ -337,15 +344,12 @@ function CreateDatasetDialog({
               placeholder="kr-core"
             />
           </div>
-          <div className="space-y-1">
-            <Label>종목 ({selected.size}개 선택)</Label>
-            <SymbolPicker
-              symbols={symbols}
-              selected={selected}
-              onToggle={toggle}
-              idPrefix="ds-new"
-            />
-          </div>
+          <SymbolCheckList
+            symbols={symbols}
+            selected={selected}
+            onChange={setSelected}
+            idPrefix="ds-new"
+          />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
@@ -364,8 +368,14 @@ function CreateDatasetDialog({
 }
 
 /**
- * 참조 종목 편집. 추가와 제거를 **한 번의 PATCH** 로 보낸다 — 두 번으로 나누면 중간
- * 상태(종목 0개)가 서버 검증에 걸려 앞의 절반만 적용되고 끝난다.
+ * 데이터셋 편집 화면 — **어떤 종목을 포함할지만** 정한다.
+ *
+ * 구성은 종목 탭과 같다(같은 행·검색·페이징)에 왼쪽 체크박스와 전체/페이지내 전체 선택이
+ * 더해진다. 수집 관련 컨트롤(동기화·수집 봉·재무)은 두지 않는다 — 그것은 종목 소관이고,
+ * 데이터셋에서도 수집을 시작할 수 있으면 "무엇을 언제 수집했나" 의 답이 두 화면에 흩어진다.
+ *
+ * 추가와 제거는 **한 번의 PATCH** 로 보낸다 — 두 번으로 나누면 중간 상태(종목 0개)가
+ * 서버 검증에 걸려 앞의 절반만 적용되고 끝난다.
  *
  * 목록은 등록된 종목 전체이고 현재 참조가 미리 체크돼 있다. 데이터셋에만 있는 종목을
  * 따로 그리지 않는 이유: `dataset_symbols` 가 `symbols` 를 FK cascade 로 참조하므로
@@ -410,30 +420,21 @@ function EditSymbolsDialog({
     onError: (error) => toast.error(errorMessage(error, '참조를 바꿀 수 없습니다')),
   });
 
-  const toggle = (code: string): void => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(code)) next.delete(code);
-      else next.add(code);
-      return next;
-    });
-  };
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{dataset.name} 의 종목</DialogTitle>
           <DialogDescription>
-            참조만 바뀝니다 — 체크를 풀어도 그 종목의 봉과 재무는 지워지지 않습니다.
+            포함할 종목만 정합니다. 참조만 바뀌므로 체크를 풀어도 그 종목의 봉과 재무는
+            지워지지 않습니다 — 수집은 종목 탭에서 합니다.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-2">
-          <Label>{selected.size}개 선택</Label>
-          <SymbolPicker
+          <SymbolCheckList
             symbols={allSymbols}
             selected={selected}
-            onToggle={toggle}
+            onChange={setSelected}
             idPrefix={`ds-edit-${dataset.id}`}
           />
           {changed ? (

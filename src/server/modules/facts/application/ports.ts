@@ -12,10 +12,18 @@ export interface FactRepository {
   getFacts(query: FactQuery): Promise<Fact[]>;
   saveFacts(facts: readonly Fact[]): Promise<void>;
   /**
-   * 종목 하나의 재무 보유 여부. 제출 검증(422)과 종목 화면 배지가 같은 함수를 본다 —
+   * 종목 하나의 재무 보유 여부. 제출 검증(422)과 종목 화면 배지가 같은 판정을 본다 —
    * 화면과 게이트가 어긋날 수 없다 (D-033).
    */
   hasFacts(scope: FactScope, key: string): boolean;
+  /**
+   * 재무를 가진 종목 코드 전체.
+   *
+   * 목록 화면용이다. 종목마다 `hasFacts` 를 부르면 1,000종목 목록 한 번이 파일 시스템
+   * stat 1,000회가 되고, 그 목록은 5초마다 다시 읽힌다. 여기서는 디렉터리를 한 번 훑어
+   * 비용을 **수집된 종목 수**에 묶는다 — 등록만 하고 수집하지 않은 종목은 0원이다.
+   */
+  symbolsWithFacts(): ReadonlySet<string>;
 }
 
 /** 수집이 채우지 못한 칸. 조용히 빠뜨리면 랭킹이 소리 없이 왜곡된다. */

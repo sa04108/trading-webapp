@@ -132,6 +132,13 @@ function fakeRepository(): FactRepository & {
       }
     },
     hasFacts: (datasetId, scope) => (store.get(`${datasetId}:${scope}`)?.size ?? 0) > 0,
+    // 같은 store 에서 답한다 — hasFacts 와 갈라지면 가짜가 실물과 다른 규칙을 갖는다
+    symbolsWithFacts: () =>
+      new Set(
+        [...store.entries()]
+          .filter(([key, partition]) => key.startsWith('SYMBOL:') && partition.size > 0)
+          .map(([key]) => key.slice('SYMBOL:'.length)),
+      ),
   };
 }
 
@@ -626,6 +633,7 @@ describe('FactSyncService — 증분과 취소', () => {
         if (saveCalls === 2) throw new Error('parquet 쓰기 실패');
       },
       hasFacts: () => false,
+      symbolsWithFacts: () => new Set(),
     };
     const service = new FactSyncService(
       recordingSource(),

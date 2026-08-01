@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parsePageSize } from '../../src/web/features/backtests/page-size.js';
+import { parsePageSize } from '../../src/web/lib/page-size.js';
 
 describe('parsePageSize', () => {
   it('숫자 문자열을 그대로 쓴다', () => {

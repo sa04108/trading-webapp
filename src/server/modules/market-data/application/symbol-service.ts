@@ -114,7 +114,52 @@ export class SymbolService {
     const refCount = new Map<string, number>();
     for (const row of refRows) refCount.set(row.code, (refCount.get(row.code) ?? 0) + 1);
 
-    return rows.map((row) => ({
+    return rows.map((row) => this.toSummary(row, coverageBy, sliceBy, refCount));
+  }
+
+  /**
+   * 종목 하나만 조회한다 — 목록 전체를 만들어 찾지 않는다.
+   *
+   * 이전에는 `listSymbols().find(...)` 였다. 등록이 반환값으로 이것을 부르므로 1,000종목
+   * 일괄 등록이 목록을 1,000번 재구성하는 O(n²) 가 됐다 (테이블 4개 × 매번 전체 스캔).
+   */
+  getSymbol(code: string): SymbolSummary | null {
+    const row = this.db.select().from(symbolsTable).where(eq(symbolsTable.code, code)).get();
+    if (!row) return null;
+
+    const coverageBy = new Map<string, (typeof symbolCoverage.$inferSelect)>();
+    for (const entry of this.db
+      .select()
+      .from(symbolCoverage)
+      .where(eq(symbolCoverage.code, code))
+      .all()) {
+      coverageBy.set(`${entry.code}:${entry.slice}`, entry);
+    }
+    const sliceBy = new Map<string, (typeof symbolSlices.$inferSelect)>();
+    for (const entry of this.db
+      .select()
+      .from(symbolSlices)
+      .where(eq(symbolSlices.code, code))
+      .all()) {
+      sliceBy.set(`${entry.code}:${entry.slice}`, entry);
+    }
+    const refs = this.db
+      .select({ code: datasetSymbols.code })
+      .from(datasetSymbols)
+      .where(eq(datasetSymbols.code, code))
+      .all();
+
+    return this.toSummary(row, coverageBy, sliceBy, new Map([[code, refs.length]]));
+  }
+
+  /** 행 + 조회 맵 → 화면이 읽는 요약. 목록과 단건이 같은 모양을 내도록 한 곳에 둔다 */
+  private toSummary(
+    row: typeof symbolsTable.$inferSelect,
+    coverageBy: ReadonlyMap<string, typeof symbolCoverage.$inferSelect>,
+    sliceBy: ReadonlyMap<string, typeof symbolSlices.$inferSelect>,
+    refCount: ReadonlyMap<string, number>,
+  ): SymbolSummary {
+    return {
       code: row.code,
       market: row.market as Market,
       name: row.name,
@@ -131,11 +176,7 @@ export class SymbolService {
         };
       }),
       datasetCount: refCount.get(row.code) ?? 0,
-    }));
-  }
-
-  getSymbol(code: string): SymbolSummary | null {
-    return this.listSymbols().find((symbol) => symbol.code === code) ?? null;
+    };
   }
 
   exists(code: string): boolean {

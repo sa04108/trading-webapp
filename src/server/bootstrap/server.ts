@@ -70,7 +70,7 @@ export async function buildServer(container: Container): Promise<FastifyInstance
         container.symbolInfoService,
         (datasetId: string) => container.jobQueue.activeCountForDataset(datasetId) > 0,
         container.factsSyncEstimator,
-        (code: string) => container.factRepository.hasFacts('SYMBOL', code),
+        () => container.factRepository.symbolsWithFacts(),
         requireAuth,
       );
       registerStrategyRoutes(api, container.strategyRegistry, requireAuth);

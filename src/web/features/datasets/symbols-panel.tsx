@@ -1,9 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChartCandlestick, FileText, FileX, Plus, RefreshCw, Trash2, Upload, X } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Plus, RefreshCw, Trash2, Upload, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -25,13 +24,17 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { api, postForm, postJson } from '@/lib/api-client';
-import { formatRelativeTime } from '@/lib/format';
+import { parsePageSize } from '@/lib/page-size';
 import { useMarketSupport } from '@/lib/use-market-support';
-import { cn } from '@/lib/utils';
 import { CandleInspectDrawer } from './candle-inspect-drawer';
-import { sliceLabel, type DatasetSlice } from './dataset-slices';
+import { type DatasetSlice } from './dataset-slices';
+import { parseSymbolCodes, splitRegistered } from './symbol-codes';
+import { PageNav, PageSizeInput, SymbolRowBody, SymbolSearchInput } from './symbol-list';
+import { pageWindow } from './symbol-paging';
+import { filterSymbols } from './symbol-search';
 import { sortSymbols } from './symbol-sort';
 import type {
   DataJob,
@@ -40,8 +43,6 @@ import type {
   SymbolSummary,
   SyncEstimateResponse,
 } from './symbol-types';
-
-const SLICES: DatasetSlice[] = ['1d', '1m'];
 
 function parseFacts(json: string | null | undefined): FactsJobState | null {
   if (!json) return null;
@@ -68,95 +69,6 @@ function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
 
-/**
- * 봉 보유는 **슬라이스별로** 표시한다. 「봉 있음」 하나로 접으면 *분봉이 없다* 가 숨고,
- * 일봉만 있는 종목으로 분봉 백테스트를 제출하면 그때서야 알게 된다 — D-032·D-033 에서
- * 계속 막아 온 실패 방식이다.
- */
-function SliceBadges({ symbol }: { symbol: SymbolSummary }) {
-  return (
-    <>
-      {SLICES.map((slice) => {
-        const state = symbol.slices.find((entry) => entry.slice === slice);
-        const has = state?.hasData === true;
-        return (
-          <Badge key={slice} variant={has ? 'default' : 'outline'} className={cn(!has && 'opacity-60')}>
-            <ChartCandlestick data-icon="inline-start" aria-hidden />
-            {sliceLabel(slice)}
-          </Badge>
-        );
-      })}
-    </>
-  );
-}
-
-/** 재무 보유 — 있고 없음만 본다 (D-033 범위 유지) */
-function FactsBadge({ hasFacts }: { hasFacts?: boolean }) {
-  if (hasFacts === undefined) return null;
-  return hasFacts ? (
-    <Badge variant="default">
-      <FileText data-icon="inline-start" aria-hidden />
-      재무
-    </Badge>
-  ) : (
-    <Badge variant="outline" className="opacity-60">
-      <FileX data-icon="inline-start" aria-hidden />
-      재무
-    </Badge>
-  );
-}
-
-/**
- * 행 본문 — 편집 모드와 조회 모드가 같은 배치를 쓰되 이름만 갈린다.
- * `name` 이 null 이면 순수 텍스트(편집 모드: 클릭은 체크박스 몫), 노드면 그것을 그린다.
- */
-function SymbolRowBody({
-  symbol,
-  nowMs,
-  name,
-}: {
-  symbol: SymbolSummary;
-  nowMs: number;
-  name: ReactNode | null;
-}) {
-  return (
-    <>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="font-medium">
-          {name ?? (
-            <>
-              {symbol.name ?? symbol.code}
-              {symbol.name ? (
-                <span className="ml-1 text-xs font-normal text-muted-foreground">
-                  {symbol.code}
-                </span>
-              ) : null}
-            </>
-          )}
-        </p>
-        <span className="flex shrink-0 items-center gap-1">
-          <SliceBadges symbol={symbol} />
-          <FactsBadge hasFacts={symbol.hasFacts} />
-        </span>
-      </div>
-      <p className="mt-1 text-xs text-muted-foreground">
-        <SyncTimes symbol={symbol} nowMs={nowMs} />
-        {' · '}
-        {symbol.datasetCount > 0 ? `데이터셋 ${symbol.datasetCount}곳` : '데이터셋에서 미사용'}
-      </p>
-    </>
-  );
-}
-
-/** 슬라이스마다 마지막 수집 시각이 다르다 — 하나로 접으면 거짓말이 된다 */
-function SyncTimes({ symbol, nowMs }: { symbol: SymbolSummary; nowMs: number }) {
-  const parts = symbol.slices
-    .filter((state) => state.hasData || state.lastSyncedAtMs !== null)
-    .map((state) => `${sliceLabel(state.slice)} ${formatRelativeTime(state.lastSyncedAtMs, nowMs)}`);
-  if (parts.length === 0) return <span>수집 이력 없음</span>;
-  return <span>{parts.join(' · ')}</span>;
-}
-
 export function SymbolsPanel() {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
@@ -169,6 +81,10 @@ export function SymbolsPanel() {
   // 봉차트 검증 드로어 대상 — 편집 모드가 아닐 때 행 이름을 눌러 연다
   const [inspect, setInspect] = useState<SymbolSummary | null>(null);
   const [startedJobId, setStartedJobId] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const [page, setPage] = useState(0);
+  const [pageSizeText, setPageSizeText] = useState('20');
+  const pageSize = parsePageSize(pageSizeText, 20);
   const nowMs = Date.now();
 
   const symbols = useQuery({
@@ -201,10 +117,21 @@ export function SymbolsPanel() {
     else toast.error(job.error ?? '수집이 실패했습니다');
   }, [syncJob.data, queryClient]);
 
-  const rows = useMemo(() => sortSymbols(symbols.data?.symbols ?? []), [symbols.data]);
+  const all = useMemo(() => sortSymbols(symbols.data?.symbols ?? []), [symbols.data]);
+  const registeredCodes = useMemo(() => new Set(all.map((row) => row.code)), [all]);
+  const filtered = useMemo(() => filterSymbols(all, query), [all, query]);
+
+  const { pageCount, currentPage, from, to } = pageWindow(filtered.length, pageSize, page);
+  const visible = filtered.slice(from, to);
+
+  /**
+   * 선택은 **전체 목록** 기준으로 뽑는다. 보이는 페이지에서만 뽑으면 2페이지에서 고른
+   * 종목이 1페이지로 넘어간 순간 동기화·제거 대상에서 조용히 빠진다 — 사용자는 「12개
+   * 선택」을 보면서 3개만 수집되는 것을 뒤늦게 알게 된다.
+   */
   const selectedCodes = useMemo(
-    () => rows.filter((row) => selected.has(row.code)).map((row) => row.code),
-    [rows, selected],
+    () => all.filter((row) => selected.has(row.code)).map((row) => row.code),
+    [all, selected],
   );
 
   // 재무는 국내(KR) 전용이고 DART 키가 필요하다 (D-027) — 선택이 바뀔 때마다 다시 묻는다
@@ -269,9 +196,21 @@ export function SymbolsPanel() {
       return next;
     });
   };
-  const allSelected = rows.length > 0 && rows.every((row) => selected.has(row.code));
+  /**
+   * 전체 선택은 **검색 결과 전체**를 대상으로 한다 — 보이는 페이지만 담으면 페이지를
+   * 넘겨 가며 20번 눌러야 하고, 그건 이 버튼이 없애려던 일이다. 검색 밖의 선택은
+   * 건드리지 않는다: 검색어를 바꿔 가며 고른 것을 새 검색이 지워 버리면 안 된다.
+   */
+  const allSelected = filtered.length > 0 && filtered.every((row) => selected.has(row.code));
   const toggleAll = (): void => {
-    setSelected(allSelected ? new Set() : new Set(rows.map((row) => row.code)));
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const row of filtered) {
+        if (allSelected) next.delete(row.code);
+        else next.add(row.code);
+      }
+      return next;
+    });
   };
   const leaveEditing = (): void => {
     setEditing(false);
@@ -285,7 +224,10 @@ export function SymbolsPanel() {
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-2">
         <p className="text-sm text-muted-foreground">
-          {rows.length}종목 · 봉과 재무는 종목에 저장되고 데이터셋은 참조만 갖습니다
+          {query.trim().length > 0
+            ? `${filtered.length}/${all.length}종목`
+            : `${all.length}종목`}{' '}
+          · 봉과 재무는 종목에 저장되고 데이터셋은 참조만 갖습니다
         </p>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" className="h-11" onClick={() => setImportOpen(true)}>
@@ -305,6 +247,26 @@ export function SymbolsPanel() {
             {editing ? '완료' : '편집'}
           </Button>
         </div>
+      </div>
+
+      {/* 검색과 페이지당 표시 수 — 종목 200개에서 목록을 훑어 찾는 일을 없앤다.
+          데이터셋의 종목 편집이 같은 컴포넌트를 쓴다 (symbol-list.tsx). */}
+      <div className="flex flex-wrap items-center gap-2">
+        <SymbolSearchInput
+          value={query}
+          onChange={(next) => {
+            setQuery(next);
+            setPage(0);
+          }}
+        />
+        <PageSizeInput
+          value={pageSizeText}
+          label="종목 페이지당 표시 수"
+          onChange={(next) => {
+            setPageSizeText(next);
+            setPage(0);
+          }}
+        />
       </div>
 
       {syncing ? (
@@ -329,16 +291,23 @@ export function SymbolsPanel() {
           <Skeleton className="h-16 w-full" />
           <Skeleton className="h-16 w-full" />
         </div>
-      ) : rows.length === 0 ? (
+      ) : all.length === 0 ? (
         <Alert>
           <AlertDescription>
             등록된 종목이 없습니다. 「추가」로 종목을 등록하거나 CSV 를 가져오세요.
           </AlertDescription>
         </Alert>
+      ) : filtered.length === 0 ? (
+        <Alert>
+          <AlertDescription>
+            「{query.trim()}」 와 맞는 종목이 없습니다 — 이름 일부나 코드 앞자리로도 찾을 수
+            있습니다.
+          </AlertDescription>
+        </Alert>
       ) : (
         <Card>
           <CardContent className="divide-y p-0">
-            {rows.map((symbol) => (
+            {visible.map((symbol) => (
               <div key={symbol.code} className="flex items-start gap-3 p-4">
                 {editing ? (
                   <Checkbox
@@ -384,14 +353,31 @@ export function SymbolsPanel() {
         </Card>
       )}
 
+      <PageNav
+        currentPage={currentPage}
+        pageCount={pageCount}
+        total={filtered.length}
+        onChange={setPage}
+      />
+
       {/* 하단 고정 동작 바 — 종목 200개에서 아래쪽을 체크한 뒤 버튼을 찾아 다시
-          올라가야 하는 일을 없앤다. 전체 선택도 여기 있어야 한다. */}
+          올라가야 하는 일을 없앤다. 전체 선택도 여기 있어야 한다.
+
+          모바일에서는 하단 탭바(fixed, z-20) 높이만큼 띄운다. `bottom-0` 이면 뷰포트
+          맨 아래에 붙어 탭바가 그 위를 덮고, 동기화·제거를 눌러도 클릭이 탭바로 간다 —
+          버튼이 보이는데 안 눌리는 상태였다. */}
       {editing ? (
-        <div className="sticky bottom-0 z-10 -mx-4 border-t bg-background/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+        <div className="sticky bottom-[calc(3.5rem+env(safe-area-inset-bottom))] z-10 -mx-4 border-t bg-background/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 md:bottom-0">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium">{selectedCodes.length}개 선택</span>
+            {/* 검색 중이면 대상이 검색 결과임을 라벨에 적는다 — 「전체 선택」이 200종목을
+                담을 것처럼 보이는데 12종목만 담기면 그것도 거짓말이다 */}
             <Button variant="ghost" size="sm" onClick={toggleAll}>
-              {allSelected ? '전체 해제' : '전체 선택'}
+              {allSelected
+                ? '전체 해제'
+                : query.trim().length > 0
+                  ? `검색 결과 ${filtered.length}종목 선택`
+                  : '전체 선택'}
             </Button>
             <span className="ml-auto flex flex-wrap items-center gap-2">
               <Select value={slice} onValueChange={(value) => setSlice(value as DatasetSlice)}>
@@ -471,7 +457,7 @@ export function SymbolsPanel() {
         />
       ) : null}
 
-      <AddSymbolDialog open={addOpen} onOpenChange={setAddOpen} />
+      <AddSymbolDialog open={addOpen} onOpenChange={setAddOpen} registered={registeredCodes} />
       <ImportCsvDialog open={importOpen} onOpenChange={setImportOpen} />
       <RemoveDialog
         open={confirmRemove}
@@ -485,23 +471,49 @@ export function SymbolsPanel() {
   );
 }
 
+/**
+ * 종목 추가 — 코드 하나든 쉼표로 구분한 200개든 같은 입력에 넣는다.
+ *
+ * CSV 가져오기와 갈라 두는 이유: 저기는 tohlcv 봉 파일을 넣는 자리고, 여기는 "어떤
+ * 종목을 등록할지" 의 목록이다. 봉이 없어도 종목은 등록돼야 하고(그 뒤 동기화가 채운다),
+ * 목록을 넣으려고 봉 파일을 만들게 할 수는 없다.
+ *
+ * 이미 등록된 코드는 **보내기 전에** 갈라낸다 — 목록은 이미 받아 둔 것이라 서버에
+ * 물어볼 필요가 없고, 20개 중 3개가 중복이라는 사실을 누르기 전에 아는 편이 낫다.
+ */
 function AddSymbolDialog({
   open,
   onOpenChange,
+  registered,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  registered: ReadonlySet<string>;
 }) {
   const queryClient = useQueryClient();
-  const [code, setCode] = useState('');
+  const [text, setText] = useState('');
   const [market, setMarket] = useState('KR');
   const { markets, isError: marketsError } = useMarketSupport();
 
+  const parsed = parseSymbolCodes(text);
+  const { fresh, already } = splitRegistered(parsed.codes, registered);
+
   const mutation = useMutation({
-    mutationFn: () => postJson<unknown>('/symbols', { code: code.trim(), market }),
-    onSuccess: () => {
-      toast.success(`${code.trim()} 을 추가했습니다`);
-      setCode('');
+    mutationFn: () =>
+      postJson<{ added: SymbolSummary[]; skipped: Array<{ code: string; reason: string }> }>(
+        '/symbols',
+        { codes: fresh, market },
+      ),
+    onSuccess: ({ added, skipped }) => {
+      // 부분 성공을 성공으로 뭉개지 않는다 — 무엇이 빠졌는지 그 자리에서 말한다
+      if (skipped.length > 0) {
+        toast.warning(
+          `${added.length}종목을 추가했습니다 — ${skipped.map((entry) => entry.code).join(', ')} 는 빠졌습니다`,
+        );
+      } else {
+        toast.success(`${added.length}종목을 추가했습니다`);
+      }
+      setText('');
       onOpenChange(false);
       void queryClient.invalidateQueries({ queryKey: ['symbols'] });
     },
@@ -520,18 +532,21 @@ function AddSymbolDialog({
         <DialogHeader>
           <DialogTitle>종목 추가</DialogTitle>
           <DialogDescription>
-            코드와 시장을 등록합니다. 이름은 종목 정보 소스에서 자동으로 채웁니다.
+            코드를 쉼표(또는 줄바꿈)로 구분해 여러 개를 한 번에 등록합니다. 이름은 종목 정보
+            소스에서 자동으로 채웁니다.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <div className="space-y-1">
-            <Label htmlFor="new-code">종목 코드</Label>
-            <Input
-              id="new-code"
-              value={code}
-              placeholder="005930"
-              onChange={(event) => setCode(event.target.value)}
+            <Label htmlFor="new-codes">종목 코드</Label>
+            <Textarea
+              id="new-codes"
+              value={text}
+              rows={4}
+              placeholder="005930, 000660, 035720"
+              onChange={(event) => setText(event.target.value)}
             />
+            <AddSymbolPreview parsed={parsed} fresh={fresh} already={already} />
           </div>
           <div className="space-y-1">
             <Label htmlFor="new-market">시장</Label>
@@ -568,15 +583,47 @@ function AddSymbolDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             취소
           </Button>
-          <Button
-            disabled={code.trim().length === 0 || mutation.isPending}
-            onClick={() => mutation.mutate()}
-          >
-            추가
+          <Button disabled={fresh.length === 0 || mutation.isPending} onClick={() => mutation.mutate()}>
+            {fresh.length > 1 ? `${fresh.length}종목 추가` : '추가'}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * 붙여넣은 목록을 눌러 보기 전에 요약한다. 200개를 넣고 「추가」를 누른 뒤 토스트로만
+ * 결과를 듣는 것과, 누르기 전에 몇 개가 새 종목인지 아는 것은 다른 경험이다.
+ */
+function AddSymbolPreview({
+  parsed,
+  fresh,
+  already,
+}: {
+  parsed: ReturnType<typeof parseSymbolCodes>;
+  fresh: readonly string[];
+  already: readonly string[];
+}) {
+  if (parsed.codes.length === 0 && parsed.invalid.length === 0) return null;
+  return (
+    <div className="space-y-0.5 text-xs">
+      <p className="text-muted-foreground">
+        {fresh.length}종목 추가
+        {already.length > 0 ? ` · 이미 등록 ${already.length}종목` : ''}
+        {parsed.duplicates > 0 ? ` · 중복 입력 ${parsed.duplicates}건` : ''}
+      </p>
+      {already.length > 0 ? (
+        <p className="text-muted-foreground">이미 등록: {already.join(', ')}</p>
+      ) : null}
+      {/* 형식 위반은 조용히 버리지 않는다 — 붙여넣은 20개 중 19개만 들어가면 사용자는
+          어느 하나가 왜 빠졌는지 알 수 없다 */}
+      {parsed.invalid.length > 0 ? (
+        <p className="text-destructive">
+          형식이 올바르지 않아 제외: {parsed.invalid.join(', ')} (영숫자·. _ - 1~20자)
+        </p>
+      ) : null}
+    </div>
   );
 }
 

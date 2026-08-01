@@ -51,6 +51,54 @@ describe('ParquetFactRepository', () => {
     expect(repository.hasFacts('SYMBOL', 'nope!')).toBe(false);
   });
 
+  /**
+   * 목록 화면은 종목마다 묻지 않고 집합을 한 번 받는다 — 1,000종목에서 stat 1,000회를
+   * 5초마다 반복하지 않기 위해서다. `hasFacts` 와 **같은 판정**을 내야 한다: 갈라지면
+   * 배지(집합)와 제출 게이트(단건)가 서로 다른 답을 준다 (D-033).
+   */
+  describe('symbolsWithFacts', () => {
+    it('수집 전에는 빈 집합이다 — 디렉터리가 아예 없어도 던지지 않는다', () => {
+      expect(repository.symbolsWithFacts()).toEqual(new Set());
+    });
+
+    it('저장한 종목만 담고 hasFacts 와 답이 같다', async () => {
+      await repository.saveFacts([fact({ key: '005930' }), fact({ key: '000660' })]);
+      const codes = repository.symbolsWithFacts();
+      expect(codes).toEqual(new Set(['005930', '000660']));
+      for (const code of ['005930', '000660', '035720']) {
+        expect(codes.has(code)).toBe(repository.hasFacts('SYMBOL', code));
+      }
+    });
+
+    it('MACRO 팩트는 종목 집합에 섞이지 않는다 — key 가 종목이 아니라 지표 계열명이다', async () => {
+      await repository.saveFacts([fact({ scope: 'MACRO', key: 'KOSPI' })]);
+      expect(repository.symbolsWithFacts()).toEqual(new Set());
+    });
+
+    it('파티션 디렉터리만 있고 파일이 없으면 세지 않는다 — 쓰기가 중간에 죽은 상태다', async () => {
+      await repository.saveFacts([fact({ key: '005930' })]);
+      fs.mkdirSync(path.join(dataRoot, 'facts', 'scope=SYMBOL', 'symbol=000660'), {
+        recursive: true,
+      });
+      expect(repository.symbolsWithFacts()).toEqual(new Set(['005930']));
+    });
+
+    /**
+     * 종목 코드 패턴(`[A-Za-z0-9._-]{1,20}`)을 어기는 디렉터리는 세지 않는다. 여기서
+     * 고른 두 이름은 실제로 패턴을 벗어난다 — `@` 는 허용 문자가 아니고, 21자는 상한을
+     * 넘는다. (`..escape` 같은 이름은 패턴상 **유효하다**: 점은 BRK.B 같은 티커에 쓰인다.)
+     */
+    it('종목 코드 패턴을 어기는 디렉터리 이름은 무시한다', async () => {
+      await repository.saveFacts([fact({ key: '005930' })]);
+      for (const name of ['symbol=b@d', `symbol=${'A'.repeat(21)}`, 'symbol=']) {
+        const dir = path.join(dataRoot, 'facts', 'scope=SYMBOL', name);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'data.parquet'), 'not really parquet');
+      }
+      expect(repository.symbolsWithFacts()).toEqual(new Set(['005930']));
+    });
+  });
+
   it('asOfMaxTsMs 로 미래 공시를 잘라낸다', async () => {
     await repository.saveFacts([
       fact({ periodKey: '2025Q1', asOfTsMs: 1_000, value: 10 }),

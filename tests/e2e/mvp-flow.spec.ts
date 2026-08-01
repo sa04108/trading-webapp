@@ -199,18 +199,27 @@ test('full MVP flow', async ({ page }) => {
   await page.screenshot({ path: 'test-results/symbols-edit.png' });
   await page.getByRole('button', { name: '완료' }).click();
 
-  // 8-4. 참조 종목 편집 — 추가·제거를 한 번의 PATCH 로 보낸다. 참조만 바뀌고 봉은 남는다.
+  // 8-4. 데이터셋 편집 화면 — 포함할 종목만 정한다. 구성은 종목 탭과 같고(같은 행·검색·
+  // 페이징) 왼쪽 체크박스와 전체/페이지내 전체 선택이 더해진다. 수집 컨트롤은 없다.
   await page.getByRole('tab', { name: '데이터셋' }).click();
   await page.getByRole('button', { name: '종목 편집' }).click();
-  await expect(page.getByText('1개 선택')).toBeVisible();
+  const editDialog = page.getByRole('dialog');
+  await expect(editDialog.getByText('1개 선택')).toBeVisible();
+  // 수집은 종목 탭 소관이다 — 이 화면에 동기화·수집 봉·재무가 새어 들어오면 "무엇을 언제
+  // 수집했나" 의 답이 두 화면으로 흩어진다
+  await expect(editDialog.getByRole('button', { name: '동기화' })).toHaveCount(0);
+  await expect(editDialog.getByLabel('수집 봉')).toHaveCount(0);
+  await expect(editDialog.getByText('재무 수집')).toHaveCount(0);
+  // 종목 탭과 같은 행이다 — 슬라이스별 봉 배지가 여기에도 있어야 한다
+  await expect(editDialog.getByText('분봉').first()).toBeVisible();
   // 체크를 풀면 0종목이 되므로 저장이 잠긴다 — 서버 400 을 미리 막는 자리다
-  await page.getByRole('checkbox').first().uncheck();
-  await expect(page.getByText(/최소 1개 남아야/)).toBeVisible();
-  await expect(page.getByRole('button', { name: '저장' })).toBeDisabled();
-  await page.getByRole('checkbox').first().check();
-  await expect(page.getByRole('button', { name: '저장' })).toBeDisabled(); // 변경 없음
+  await editDialog.getByRole('checkbox').first().uncheck();
+  await expect(editDialog.getByText(/최소 1개 남아야/)).toBeVisible();
+  await expect(editDialog.getByRole('button', { name: '저장' })).toBeDisabled();
+  await editDialog.getByRole('checkbox').first().check();
+  await expect(editDialog.getByRole('button', { name: '저장' })).toBeDisabled(); // 변경 없음
   await page.screenshot({ path: 'test-results/dataset-symbols-edit.png' });
-  await page.getByRole('button', { name: '취소' }).click();
+  await editDialog.getByRole('button', { name: '취소' }).click();
 
   // 8-5. 데이터 검증 차트 — 편집 모드가 아닐 때 종목 이름을 눌러 드로어를 연다
   await page.getByRole('tab', { name: '종목' }).click();
@@ -219,6 +228,86 @@ test('full MVP flow', async ({ page }) => {
   await expect(page.locator('.recharts-surface').first()).toBeVisible();
   await page.screenshot({ path: 'test-results/candle-inspect.png' });
   await page.keyboard.press('Escape');
+
+  // 8-6. 일괄 추가 — 쉼표로 구분한 코드를 한 번에 등록한다. CSV 가져오기와 다른 것:
+  // 저기는 tohlcv 봉 파일이고 여기는 심볼 목록이다.
+  //
+  // 아래 8-6~8-9 는 넣은 것을 다시 지워 상태를 되돌린다. 서버 하나를 mobile·desktop
+  // 두 프로젝트가 공유하므로(playwright.config workers:1) 남기면 두 번째 실행이 이미
+  // 등록된 종목을 만나 실패한다.
+  await page.getByRole('button', { name: '추가' }).click();
+  const addDialog = page.getByRole('dialog');
+  await addDialog.getByLabel('종목 코드').fill('900001, 900002, 900001');
+  // 중복 입력은 걷어내고 개수로 알린다 — 두 번 붙였다고 실패시킬 이유가 없다
+  await expect(addDialog.getByText(/2종목 추가 · 중복 입력 1건/)).toBeVisible();
+  await page.screenshot({ path: 'test-results/symbols-bulk-add.png' });
+  await addDialog.getByRole('button', { name: '2종목 추가' }).click();
+  await expect(page.getByText('900001')).toBeVisible();
+  await expect(page.getByText('900002')).toBeVisible();
+
+  // 8-7. 데이터셋 편집 화면의 페이징과 두 범위의 전체 선택. 종목이 3개뿐이라 페이지당을
+  // 1로 낮춰 3페이지를 만든다 — 「페이지내 전체 선택」은 페이지가 둘 이상일 때만 뜬다
+  // (한 페이지면 「전체 선택」과 같은 동작이라 버튼을 둘 둘 이유가 없다).
+  // 저장하지 않고 취소해 참조를 그대로 둔다.
+  await page.getByRole('tab', { name: '데이터셋' }).click();
+  await page.getByRole('button', { name: '종목 편집' }).click();
+  const pagedDialog = page.getByRole('dialog');
+  await pagedDialog.getByLabel('종목 선택 페이지당 표시 수').fill('1');
+  await expect(pagedDialog.getByText('1 / 3 페이지 · 3종목')).toBeVisible();
+  await expect(pagedDialog.getByRole('checkbox')).toHaveCount(1);
+  // 1페이지는 이미 참조 중인 삼성전자다 — 그 페이지가 전부 선택된 상태이므로 버튼은
+  // 「페이지내 해제」로 뜬다. 라벨이 지금 상태를 말해야 하고, 「전체 선택」과 달리
+  // 이 버튼의 범위는 보이는 페이지뿐이다.
+  await expect(pagedDialog.getByRole('button', { name: '페이지내 해제' })).toBeVisible();
+  await pagedDialog.getByRole('button', { name: '다음' }).click();
+  await expect(pagedDialog.getByText('2 / 3 페이지 · 3종목')).toBeVisible();
+  // 2페이지는 아직 안 골랐다 — 페이지내 전체 선택이 이 페이지만 담는다
+  await pagedDialog.getByRole('button', { name: '페이지내 전체 선택' }).click();
+  await expect(pagedDialog.getByText('2개 선택')).toBeVisible();
+  // 전체 선택은 페이지와 무관하게 3종목 전부를 담는다
+  await pagedDialog.getByRole('button', { name: '전체 선택' }).click();
+  await expect(pagedDialog.getByText('3개 선택')).toBeVisible();
+  await page.screenshot({ path: 'test-results/dataset-edit-paged.png' });
+  await pagedDialog.getByRole('button', { name: '취소' }).click();
+
+  // 8-8. 검색 — 이름과 코드 두 축을 한 입력으로 맞힌다. 탭을 오가면 패널이 unmount 돼
+  // 검색이 초기화되므로, 검색을 쓰는 8-9 바로 앞에서 건다.
+  await page.getByRole('tab', { name: '종목' }).click();
+  const symbolSearch = page.getByLabel('종목 검색');
+  await symbolSearch.fill('삼성전');
+  await expect(page.getByText('삼성전자')).toBeVisible();
+  await expect(page.getByText('900001')).toHaveCount(0);
+  await symbolSearch.fill('9000');
+  await expect(page.getByText('900001')).toBeVisible();
+  await expect(page.getByText('삼성전자')).toHaveCount(0);
+  await expect(page.getByText('2/3종목')).toBeVisible();
+  await page.screenshot({ path: 'test-results/symbols-search.png' });
+
+  // 8-9. 검색 결과 전체 선택 → 제거. 전체 선택 대상은 **검색 결과** 이고, 그 사실이
+  // 라벨에 적혀 있어야 한다 — 「전체 선택」이 3종목을 담을 것처럼 보이면 거짓말이다.
+  await page.getByRole('button', { name: '편집' }).click();
+  await page.getByRole('button', { name: '검색 결과 2종목 선택' }).click();
+  await expect(page.getByText('2개 선택')).toBeVisible();
+  await page.getByRole('button', { name: '제거' }).click();
+  const removeDialog = page.getByRole('dialog');
+  await expect(removeDialog.getByText(/참조하는 데이터셋이 없습니다/)).toBeVisible();
+  await removeDialog.getByRole('button', { name: '제거' }).click();
+  await expect(page.getByText('900001')).toHaveCount(0);
+  await page.getByRole('button', { name: '완료' }).click();
+
+  // 8-10. 데이터셋 이름 변경 — PATCH 로 가야 한다. 메서드가 안 맞아 온 404 는 화면에서
+  // "요청한 리소스를 찾을 수 없습니다" 로 읽혀 원인이 드러나지 않았다 (D-035).
+  // 원래 이름으로 되돌려 두 번째 프로젝트 실행이 같은 상태에서 시작하게 한다.
+  await page.getByRole('tab', { name: '데이터셋' }).click();
+  await page.getByRole('button', { name: '이름 수정' }).click();
+  await page.getByRole('textbox', { name: '데이터셋 이름' }).fill('kr-hourly-renamed');
+  await page.getByRole('button', { name: '이름 저장' }).click();
+  await expect(page.getByText('kr-hourly-renamed')).toBeVisible();
+  await expect(page.getByText(/찾을 수 없습니다/)).toHaveCount(0);
+  await page.getByRole('button', { name: '이름 수정' }).click();
+  await page.getByRole('textbox', { name: '데이터셋 이름' }).fill('kr-hourly-v1');
+  await page.getByRole('button', { name: '이름 저장' }).click();
+  await expect(page.getByText('kr-hourly-v1')).toBeVisible();
 
   // 9. 로그아웃
   await page.getByRole('button', { name: '로그아웃' }).click();

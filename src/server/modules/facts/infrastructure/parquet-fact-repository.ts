@@ -74,6 +74,27 @@ export class ParquetFactRepository implements FactRepository {
     return fs.existsSync(this.filePath(scope, scope === 'SYMBOL' ? key : null));
   }
 
+  /**
+   * 재무를 가진 종목 전체 — 디렉터리 한 번으로 읽는다.
+   *
+   * `hasFacts` 를 종목마다 부르면 1,000종목 목록이 stat 1,000회가 되고 5초마다 반복된다.
+   * 여기서는 `scope=SYMBOL` 아래를 한 번 훑으므로 비용이 **수집된** 종목 수에 묶인다.
+   * 파티션 디렉터리만 보고 판정하지 않는 이유: 쓰기가 중간에 죽으면 디렉터리는 남고
+   * `data.parquet` 은 없을 수 있다 — 그 상태를 「재무 있음」으로 세면 배지가 거짓말한다.
+   */
+  symbolsWithFacts(): ReadonlySet<string> {
+    const base = path.join(this.dataRoot, 'facts', 'scope=SYMBOL');
+    if (!fs.existsSync(base)) return new Set();
+    const codes = new Set<string>();
+    for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !entry.name.startsWith('symbol=')) continue;
+      const code = entry.name.slice('symbol='.length);
+      if (!SYMBOL_PATTERN.test(code)) continue;
+      if (fs.existsSync(path.join(base, entry.name, 'data.parquet'))) codes.add(code);
+    }
+    return codes;
+  }
+
   async saveFacts(facts: readonly Fact[]): Promise<void> {
     if (facts.length === 0) return;
 
