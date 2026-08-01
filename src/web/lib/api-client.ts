@@ -37,6 +37,14 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 export const postJson = <T>(path: string, body: unknown): Promise<T> =>
   api<T>(path, { method: 'POST', body: JSON.stringify(body) });
 
+/**
+ * 부분 수정용. `postJson` 으로 PATCH 라우트를 부르면 메서드가 맞지 않아 404 가 오는데,
+ * 그 404 는 "리소스가 없다" 로 읽혀 원인이 드러나지 않는다 — 헬퍼를 따로 둬서 호출부가
+ * 메서드를 고민하지 않게 한다.
+ */
+export const patchJson = <T>(path: string, body: unknown): Promise<T> =>
+  api<T>(path, { method: 'PATCH', body: JSON.stringify(body) });
+
 /** multipart 업로드 — Content-Type 은 브라우저가 boundary 와 함께 설정한다 */
 export async function postForm<T>(path: string, form: FormData): Promise<T> {
   const response = await fetch(`/api/v1${path}`, {

@@ -175,7 +175,21 @@ test('full MVP flow', async ({ page }) => {
   await page.screenshot({ path: 'test-results/symbols-edit.png' });
   await page.getByRole('button', { name: '완료' }).click();
 
-  // 8-4. 데이터 검증 차트 — 편집 모드가 아닐 때 종목 이름을 눌러 드로어를 연다
+  // 8-4. 참조 종목 편집 — 추가·제거를 한 번의 PATCH 로 보낸다. 참조만 바뀌고 봉은 남는다.
+  await page.getByRole('tab', { name: '데이터셋' }).click();
+  await page.getByRole('button', { name: '종목 편집' }).click();
+  await expect(page.getByText('1개 선택')).toBeVisible();
+  // 체크를 풀면 0종목이 되므로 저장이 잠긴다 — 서버 400 을 미리 막는 자리다
+  await page.getByRole('checkbox').first().uncheck();
+  await expect(page.getByText(/최소 1개 남아야/)).toBeVisible();
+  await expect(page.getByRole('button', { name: '저장' })).toBeDisabled();
+  await page.getByRole('checkbox').first().check();
+  await expect(page.getByRole('button', { name: '저장' })).toBeDisabled(); // 변경 없음
+  await page.screenshot({ path: 'test-results/dataset-symbols-edit.png' });
+  await page.getByRole('button', { name: '취소' }).click();
+
+  // 8-5. 데이터 검증 차트 — 편집 모드가 아닐 때 종목 이름을 눌러 드로어를 연다
+  await page.getByRole('tab', { name: '종목' }).click();
   await page.getByRole('button', { name: /삼성전자/ }).click();
   await expect(page.getByText(/데이터 검증/)).toBeVisible();
   await expect(page.locator('.recharts-surface').first()).toBeVisible();

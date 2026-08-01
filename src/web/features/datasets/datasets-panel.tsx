@@ -1,12 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { Check, Pencil, Plus, RefreshCw, SlidersHorizontal, Trash2, X } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
   DialogContent,
@@ -18,9 +17,10 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
-import { api, postJson } from '@/lib/api-client';
+import { api, patchJson, postJson } from '@/lib/api-client';
 import { formatRelativeTime } from '@/lib/format';
 import { sliceLabel } from './dataset-slices';
+import { SymbolPicker } from './symbol-picker';
 import { sortSymbols } from './symbol-sort';
 import type { DatasetSummary, SymbolSummary } from './symbol-types';
 
@@ -40,9 +40,10 @@ export function DatasetsPanel() {
       api<{ symbols: SymbolSummary[]; runningSyncJobId: string | null }>('/symbols'),
   });
 
+  const allSymbols = symbols.data?.symbols ?? [];
   const byCode = useMemo(
-    () => new Map((symbols.data?.symbols ?? []).map((symbol) => [symbol.code, symbol])),
-    [symbols.data],
+    () => new Map(allSymbols.map((symbol) => [symbol.code, symbol])),
+    [allSymbols],
   );
 
   return (
@@ -67,15 +68,16 @@ export function DatasetsPanel() {
         </Alert>
       ) : (
         (datasets.data?.datasets ?? []).map((dataset) => (
-          <DatasetCard key={dataset.id} dataset={dataset} byCode={byCode} />
+          <DatasetCard
+            key={dataset.id}
+            dataset={dataset}
+            byCode={byCode}
+            allSymbols={allSymbols}
+          />
         ))
       )}
 
-      <CreateDatasetDialog
-        open={createOpen}
-        onOpenChange={setCreateOpen}
-        symbols={symbols.data?.symbols ?? []}
-      />
+      <CreateDatasetDialog open={createOpen} onOpenChange={setCreateOpen} symbols={allSymbols} />
     </div>
   );
 }
@@ -83,13 +85,16 @@ export function DatasetsPanel() {
 function DatasetCard({
   dataset,
   byCode,
+  allSymbols,
 }: {
   dataset: DatasetSummary;
   byCode: Map<string, SymbolSummary>;
+  allSymbols: readonly SymbolSummary[];
 }) {
   const queryClient = useQueryClient();
   const [nameDraft, setNameDraft] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [editSymbols, setEditSymbols] = useState(false);
   const nowMs = Date.now();
 
   const members = dataset.symbols.map((code) => byCode.get(code)).filter((s): s is SymbolSummary => s !== undefined);
@@ -109,7 +114,7 @@ function DatasetCard({
   }, [members]);
 
   const renameMutation = useMutation({
-    mutationFn: (name: string) => postJson<unknown>(`/datasets/${dataset.id}`, { name }),
+    mutationFn: (name: string) => patchJson<unknown>(`/datasets/${dataset.id}`, { name }),
     onSuccess: () => {
       setNameDraft(null);
       void queryClient.invalidateQueries({ queryKey: ['datasets'] });
@@ -199,6 +204,15 @@ function DatasetCard({
             <Button
               variant="outline"
               size="sm"
+              className="h-9"
+              onClick={() => setEditSymbols(true)}
+            >
+              <SlidersHorizontal data-icon="inline-start" />
+              종목 편집
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
               className="h-9 text-destructive"
               disabled={deleteMutation.isPending}
               onClick={() => setConfirmDelete(true)}
@@ -233,6 +247,13 @@ function DatasetCard({
           ))}
         </div>
       </CardContent>
+
+      <EditSymbolsDialog
+        open={editSymbols}
+        onOpenChange={setEditSymbols}
+        dataset={dataset}
+        allSymbols={allSymbols}
+      />
 
       <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <DialogContent>
@@ -318,27 +339,12 @@ function CreateDatasetDialog({
           </div>
           <div className="space-y-1">
             <Label>종목 ({selected.size}개 선택)</Label>
-            {symbols.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                등록된 종목이 없습니다 — 종목 탭에서 먼저 추가하세요.
-              </p>
-            ) : (
-              <div className="max-h-64 space-y-1 overflow-y-auto rounded-md border p-2">
-                {sortSymbols(symbols).map((symbol) => (
-                  <div key={symbol.code} className="flex items-center gap-2">
-                    <Checkbox
-                      id={`ds-sym-${symbol.code}`}
-                      checked={selected.has(symbol.code)}
-                      onCheckedChange={() => toggle(symbol.code)}
-                    />
-                    <label htmlFor={`ds-sym-${symbol.code}`} className="text-sm">
-                      {symbol.name ?? symbol.code}{' '}
-                      <span className="text-xs text-muted-foreground">{symbol.code}</span>
-                    </label>
-                  </div>
-                ))}
-              </div>
-            )}
+            <SymbolPicker
+              symbols={symbols}
+              selected={selected}
+              onToggle={toggle}
+              idPrefix="ds-new"
+            />
           </div>
         </div>
         <DialogFooter>
@@ -350,6 +356,108 @@ function CreateDatasetDialog({
             onClick={() => mutation.mutate()}
           >
             만들기
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * 참조 종목 편집. 추가와 제거를 **한 번의 PATCH** 로 보낸다 — 두 번으로 나누면 중간
+ * 상태(종목 0개)가 서버 검증에 걸려 앞의 절반만 적용되고 끝난다.
+ *
+ * 목록은 등록된 종목 전체이고 현재 참조가 미리 체크돼 있다. 데이터셋에만 있는 종목을
+ * 따로 그리지 않는 이유: `dataset_symbols` 가 `symbols` 를 FK cascade 로 참조하므로
+ * 등록되지 않은 코드가 참조에 남을 수 없다.
+ */
+function EditSymbolsDialog({
+  open,
+  onOpenChange,
+  dataset,
+  allSymbols,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  dataset: DatasetSummary;
+  allSymbols: readonly SymbolSummary[];
+}) {
+  const queryClient = useQueryClient();
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(dataset.symbols));
+
+  // 열 때마다 현재 참조로 되돌린다 — 닫고 다시 열면 편집 전 상태에서 시작해야 한다
+  useEffect(() => {
+    if (open) setSelected(new Set(dataset.symbols));
+  }, [open, dataset.symbols]);
+
+  const added = [...selected].filter((code) => !dataset.symbols.includes(code)).sort();
+  const removed = dataset.symbols.filter((code) => !selected.has(code)).sort();
+  const changed = added.length + removed.length > 0;
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      patchJson<unknown>(`/datasets/${dataset.id}`, {
+        ...(added.length > 0 ? { addSymbols: added } : {}),
+        ...(removed.length > 0 ? { removeSymbols: removed } : {}),
+      }),
+    onSuccess: () => {
+      toast.success(`${dataset.name} 의 참조를 ${selected.size}종목으로 바꿨습니다`);
+      onOpenChange(false);
+      void queryClient.invalidateQueries({ queryKey: ['datasets'] });
+      // 종목 화면의 「데이터셋 N곳」 이 같이 움직여야 한다
+      void queryClient.invalidateQueries({ queryKey: ['symbols'] });
+    },
+    onError: (error) => toast.error(errorMessage(error, '참조를 바꿀 수 없습니다')),
+  });
+
+  const toggle = (code: string): void => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(code)) next.delete(code);
+      else next.add(code);
+      return next;
+    });
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{dataset.name} 의 종목</DialogTitle>
+          <DialogDescription>
+            참조만 바뀝니다 — 체크를 풀어도 그 종목의 봉과 재무는 지워지지 않습니다.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2">
+          <Label>{selected.size}개 선택</Label>
+          <SymbolPicker
+            symbols={allSymbols}
+            selected={selected}
+            onToggle={toggle}
+            idPrefix={`ds-edit-${dataset.id}`}
+          />
+          {changed ? (
+            <p className="text-xs text-muted-foreground">
+              {added.length > 0 ? `추가 ${added.join(', ')}` : ''}
+              {added.length > 0 && removed.length > 0 ? ' · ' : ''}
+              {removed.length > 0 ? `제거 ${removed.join(', ')}` : ''}
+            </p>
+          ) : null}
+          {selected.size === 0 ? (
+            <p className="text-xs text-destructive">
+              종목이 최소 1개 남아야 합니다 — 전부 비우려면 데이터셋을 삭제하세요.
+            </p>
+          ) : null}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            취소
+          </Button>
+          <Button
+            disabled={!changed || selected.size === 0 || mutation.isPending}
+            onClick={() => mutation.mutate()}
+          >
+            저장
           </Button>
         </DialogFooter>
       </DialogContent>
