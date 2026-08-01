@@ -63,7 +63,7 @@ rollback_release() {
   local rollback_started_at
 
   sudo systemctl stop quant-platform || rollback_ok=0
-  if [ "${rollback_ok}" -eq 1 ] && [ -f "${db_snapshot}" ]; then
+  if [ "${rollback_ok}" -eq 1 ] && sudo test -f "${db_snapshot}"; then
     if sudo cp "${db_snapshot}" "${db_path}" &&
       sudo rm -f "${db_path}-wal" "${db_path}-shm"; then
       echo 'DB를 배포 전 스냅샷으로 복원했습니다' >&2
@@ -271,7 +271,7 @@ PREVIOUS_RELEASE="\$(readlink -f /opt/quant-platform/current 2>/dev/null || true
 # 롤백 시 코드와 스키마가 짝으로 되돌아가도록 스냅샷을 함께 복원한다.
 DB_PATH="/var/lib/quant-platform/app.sqlite"
 DB_SNAPSHOT="/var/lib/quant-platform/backups/pre-deploy-${RELEASE}.sqlite"
-if [ -f "\${DB_PATH}" ]; then
+if sudo test -f "\${DB_PATH}"; then
   sudo mkdir -p /var/lib/quant-platform/backups
   sudo sqlite3 "\${DB_PATH}" ".backup '\${DB_SNAPSHOT}'"
 fi
@@ -322,7 +322,7 @@ sudo ls -1 /opt/quant-platform/releases 2>/dev/null | sort -r | tail -n +\$((KEE
     done || true
 
 echo "release ${RELEASE} live"
-if [ -f "\${DB_SNAPSHOT}" ]; then
+if sudo test -f "\${DB_SNAPSHOT}"; then
   echo "수동 롤백 시 코드와 스키마를 짝으로 되돌린다 (D-010):"
   echo "  sudo systemctl stop quant-platform"
   echo "  sudo ln -sfn <이전 release 경로> /opt/quant-platform/current"

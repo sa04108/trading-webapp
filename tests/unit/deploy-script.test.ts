@@ -20,6 +20,9 @@ describe('deploy script failure workflow', () => {
         if [ "$1" = 'journalctl' ]; then
           echo 'audit_logs already exists' >&2
         fi
+        if [ "$1" = 'test' ] && [ "$2" = '-f' ]; then
+          return 0
+        fi
         return 0
       }
 
@@ -46,6 +49,8 @@ describe('deploy script failure workflow', () => {
     expect(output.indexOf('audit_logs already exists')).toBeLessThan(
       output.indexOf('sudo:systemctl stop quant-platform'),
     );
+    expect(output).toMatch(/sudo:cp .*missing-snapshot\.sqlite .*app\.sqlite/);
+    expect(output).toMatch(/sudo:rm -f .*app\.sqlite-wal .*app\.sqlite-shm/);
     expect(output).toContain('rolled back to');
     expect(output).toContain('status=1 attempts=2');
     expect(output).not.toContain('curl unavailable');
