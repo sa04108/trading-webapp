@@ -16,6 +16,36 @@ export function formatSignedKrw(value: number | null | undefined): string {
   return `${sign}${Math.round(value).toLocaleString('ko-KR')}원`;
 }
 
+const COMPACT_UNITS: ReadonlyArray<{ scale: number; suffix: string }> = [
+  { scale: 1e12, suffix: '조' },
+  { scale: 1e8, suffix: '억' },
+  { scale: 1e4, suffix: '만' },
+];
+
+/**
+ * 큰 수를 조·억·만으로 접는다. 시가총액 426,410,000,000,000 은 자릿수를 세야 읽히고
+ * 목록의 한 줄에도 들어가지 않는다 — 「426조」면 눈으로 비교된다.
+ *
+ * 100 이상이면 소수점을 버린다: 「3,250억」과 「3,250.4억」은 같은 판단을 낳는데
+ * 뒤쪽만 한 칸을 더 쓴다. 100 미만에서는 한 자리를 남긴다 — 「4조」와 「4.3조」는
+ * 정렬 순서를 설명하는 데 실제로 다른 값이다.
+ */
+export function formatCompactNumber(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '-';
+  const sign = value < 0 ? '-' : '';
+  const size = Math.abs(value);
+  for (const { scale, suffix } of COMPACT_UNITS) {
+    if (size < scale) continue;
+    const scaled = size / scale;
+    const text =
+      scaled >= 100
+        ? Math.round(scaled).toLocaleString('ko-KR')
+        : (Math.round(scaled * 10) / 10).toLocaleString('ko-KR');
+    return `${sign}${text}${suffix}`;
+  }
+  return `${sign}${Math.round(size).toLocaleString('ko-KR')}`;
+}
+
 export function formatNumber(value: number | null | undefined, digits = 2): string {
   if (value === null || value === undefined || Number.isNaN(value)) return '-';
   return value.toFixed(digits);

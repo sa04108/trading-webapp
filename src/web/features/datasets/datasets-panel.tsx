@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Pencil, Plus, RefreshCw, SlidersHorizontal, Trash2, X } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -36,6 +37,21 @@ const CARD_SYMBOL_LIMIT = 20;
 
 export function DatasetsPanel() {
   const [createOpen, setCreateOpen] = useState(false);
+  /**
+   * 「종목 편집」을 열어 둔 채 도착하는 딥링크. 백테스트 위저드의 데이터셋 카드가 여기로
+   * 보낸다 (D-038) — 위저드에서 종목을 고칠 수 없게 한 대신, 고칠 수 있는 자리로 한
+   * 번에 데려다 놓는다. 탭만 열어 주고 다이얼로그를 다시 찾게 하면 왕복이 그대로 남는다.
+   */
+  const [params, setParams] = useSearchParams();
+  const editRequestId = params.get('edit');
+  /** 한 번 소비하면 쿼리에서 지운다 — 닫은 다이얼로그가 새로고침으로 되살아나지 않게 */
+  const consumeEditRequest = (): void => {
+    if (editRequestId === null) return;
+    const next = new URLSearchParams(params);
+    next.delete('edit');
+    setParams(next, { replace: true });
+  };
+
   const datasets = useQuery({
     queryKey: ['datasets'],
     queryFn: () => api<{ datasets: DatasetSummary[] }>('/datasets'),
@@ -79,6 +95,8 @@ export function DatasetsPanel() {
             dataset={dataset}
             byCode={byCode}
             allSymbols={allSymbols}
+            openSymbolsOnMount={editRequestId === dataset.id}
+            onSymbolsOpened={consumeEditRequest}
           />
         ))
       )}
@@ -92,16 +110,31 @@ function DatasetCard({
   dataset,
   byCode,
   allSymbols,
+  openSymbolsOnMount,
+  onSymbolsOpened,
 }: {
   dataset: DatasetSummary;
   byCode: Map<string, SymbolSummary>;
   allSymbols: readonly SymbolSummary[];
+  /** 딥링크(`?edit=<id>`)로 도착했는지 — 「종목 편집」을 열어 둔 채 시작한다 */
+  openSymbolsOnMount: boolean;
+  onSymbolsOpened: () => void;
 }) {
   const queryClient = useQueryClient();
   const [nameDraft, setNameDraft] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editSymbols, setEditSymbols] = useState(false);
   const nowMs = Date.now();
+
+  // 한 번만 연다. `onSymbolsOpened` 는 매 렌더 새 클로저라 ref 로 못을 박지 않으면
+  // 쿼리를 지우는 동안 effect 가 다시 돌아 닫은 다이얼로그를 되연다.
+  const openedRef = useRef(false);
+  useEffect(() => {
+    if (!openSymbolsOnMount || openedRef.current) return;
+    openedRef.current = true;
+    setEditSymbols(true);
+    onSymbolsOpened();
+  }, [openSymbolsOnMount, onSymbolsOpened]);
 
   const members = dataset.symbols.map((code) => byCode.get(code)).filter((s): s is SymbolSummary => s !== undefined);
   const missing = dataset.symbols.filter((code) => !byCode.has(code));

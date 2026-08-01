@@ -6,6 +6,7 @@ import { SyncAlreadyRunningError } from '../application/broker-sync-service.js';
 import type { DatasetService, FactsSyncEstimate } from '../application/dataset-service.js';
 import type { SymbolService, SymbolSummary } from '../application/symbol-service.js';
 import type { SymbolInfoService } from '../application/symbol-info-service.js';
+import type { SymbolMetricsService } from '../application/symbol-metrics-service.js';
 import { listMarketSupport } from '../domain/market-support.js';
 
 type PreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
@@ -65,6 +66,7 @@ export function registerDatasetRoutes(
   symbolService: SymbolService,
   brokerSyncService: BrokerSyncService,
   symbolInfoService: SymbolInfoService,
+  symbolMetricsService: SymbolMetricsService,
   /** 이 데이터셋을 참조하는 활성 백테스트 존재 여부 — 조립부가 backtest 모듈로 연결한다 */
   hasActiveBacktests: (datasetId: string) => boolean,
   /** 재무 수집 예상 — 조립부가 facts 모듈로 연결한다 (market-data 는 facts 를 모른다) */
@@ -131,6 +133,23 @@ export function registerDatasetRoutes(
         .code(400)
         .send({ error: error instanceof Error ? error.message : String(error) });
     }
+  });
+
+  /**
+   * 종목 정렬 지표 — 시가총액·거래대금·거래량. **등록된 종목 전체**를 답한다.
+   *
+   * 코드를 받지 않는 이유: 정렬은 페이지가 아니라 목록 전체를 대상으로 하고, 화면이
+   * 페이지마다 다시 물으면 스크롤 중에 순서가 바뀐다. 한 번 받아 캐시하는 편이 맞다.
+   *
+   * 조회 실패는 200 + null 이다. 지표가 없다고 종목 화면이 막히면 안 된다 — 자격 증명
+   * 미설정 환경에서도 가나다순 정렬로 목록은 그대로 쓸 수 있어야 한다.
+   */
+  app.get('/symbols/metrics', { preHandler: requireAuth }, async () => {
+    const symbols = symbolService.listSymbols().map((summary) => ({
+      code: summary.code,
+      market: summary.market,
+    }));
+    return symbolMetricsService.getMetrics(symbols);
   });
 
   // ── 종목 ────────────────────────────────────────────────────────────

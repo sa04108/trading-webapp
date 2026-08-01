@@ -29,13 +29,21 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { api, postForm, postJson } from '@/lib/api-client';
 import { parsePageSize } from '@/lib/page-size';
 import { useMarketSupport } from '@/lib/use-market-support';
+import { useSymbolMetrics } from '@/lib/use-symbol-metrics';
 import { CandleInspectDrawer } from './candle-inspect-drawer';
 import { type DatasetSlice } from './dataset-slices';
 import { parseSymbolCodes, splitRegistered } from './symbol-codes';
-import { PageNav, PageSizeInput, SymbolRowBody, SymbolSearchInput } from './symbol-list';
+import {
+  PageNav,
+  PageSizeInput,
+  SymbolRowBody,
+  SymbolSearchInput,
+  SymbolSortNote,
+  SymbolSortSelect,
+} from './symbol-list';
 import { pageWindow } from './symbol-paging';
 import { filterSymbols } from './symbol-search';
-import { sortSymbols } from './symbol-sort';
+import { countWithMetric, sortSymbols, type SymbolSortKey } from './symbol-sort';
 import type {
   DataJob,
   FactsJobState,
@@ -84,8 +92,12 @@ export function SymbolsPanel() {
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(0);
   const [pageSizeText, setPageSizeText] = useState('20');
+  // 기본은 가나다순 — 지표가 도착하기 전에 규모순으로 시작하면 목록이 한 번 흔들린다
+  const [sortKey, setSortKey] = useState<SymbolSortKey>('NAME');
   const pageSize = parsePageSize(pageSizeText, 20);
   const nowMs = Date.now();
+
+  const { metrics, rankingLimit, unavailable: metricsUnavailable } = useSymbolMetrics();
 
   const symbols = useQuery({
     queryKey: ['symbols'],
@@ -117,7 +129,10 @@ export function SymbolsPanel() {
     else toast.error(job.error ?? '수집이 실패했습니다');
   }, [syncJob.data, queryClient]);
 
-  const all = useMemo(() => sortSymbols(symbols.data?.symbols ?? []), [symbols.data]);
+  const all = useMemo(
+    () => sortSymbols(symbols.data?.symbols ?? [], sortKey, metrics),
+    [symbols.data, sortKey, metrics],
+  );
   const registeredCodes = useMemo(() => new Set(all.map((row) => row.code)), [all]);
   const filtered = useMemo(() => filterSymbols(all, query), [all, query]);
 
@@ -249,13 +264,21 @@ export function SymbolsPanel() {
         </div>
       </div>
 
-      {/* 검색과 페이지당 표시 수 — 종목 200개에서 목록을 훑어 찾는 일을 없앤다.
+      {/* 검색·정렬·페이지당 표시 수 — 종목 1,000개에서 목록을 훑어 찾는 일을 없앤다.
           데이터셋의 종목 편집이 같은 컴포넌트를 쓴다 (symbol-list.tsx). */}
       <div className="flex flex-wrap items-center gap-2">
         <SymbolSearchInput
           value={query}
           onChange={(next) => {
             setQuery(next);
+            setPage(0);
+          }}
+        />
+        <SymbolSortSelect
+          value={sortKey}
+          unavailable={metricsUnavailable}
+          onChange={(next) => {
+            setSortKey(next);
             setPage(0);
           }}
         />
@@ -268,6 +291,17 @@ export function SymbolsPanel() {
           }}
         />
       </div>
+      <SymbolSortNote
+        sortKey={sortKey}
+        total={all.length}
+        withMetric={countWithMetric(
+          all.map((row) => row.code),
+          sortKey,
+          metrics,
+        )}
+        rankingLimit={rankingLimit}
+        unavailable={metricsUnavailable}
+      />
 
       {syncing ? (
         <Alert>
@@ -323,13 +357,21 @@ export function SymbolsPanel() {
                     없게 된다 (e2e 가 잡았다). 구조를 모드별로 갈라 둔다. */}
                 {editing ? (
                   <label htmlFor={`sel-${symbol.code}`} className="min-w-0 flex-1">
-                    <SymbolRowBody symbol={symbol} nowMs={nowMs} name={null} />
+                    <SymbolRowBody
+                      symbol={symbol}
+                      nowMs={nowMs}
+                      name={null}
+                      metrics={metrics.get(symbol.code)}
+                      sortKey={sortKey}
+                    />
                   </label>
                 ) : (
                   <div className="min-w-0 flex-1">
                     <SymbolRowBody
                       symbol={symbol}
                       nowMs={nowMs}
+                      metrics={metrics.get(symbol.code)}
+                      sortKey={sortKey}
                       name={
                         <button
                           type="button"

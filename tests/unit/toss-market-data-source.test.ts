@@ -200,12 +200,26 @@ describe('createTossMarketDataSource (스펙 §13 — 2차 어댑터)', () => {
     await expect(buildSource(fetchImpl).fetchCandles(REQUEST)).rejects.toThrow(/candles/);
   });
 
-  it('fetches stock names in one batched call (getStockInfo)', async () => {
+  it('fetches stock names and shares outstanding in one batched call (getStockInfo)', async () => {
     const fetchImpl = buildFetch([
       jsonResponse(200, {
         result: [
-          { symbol: '005930', name: '삼성전자', englishName: 'SamsungElec', market: 'KOSPI', status: 'ACTIVE' },
-          { symbol: 'AAPL', name: '애플', englishName: 'APPLE INC', market: 'NASDAQ', status: 'ACTIVE' },
+          {
+            symbol: '005930',
+            name: '삼성전자',
+            englishName: 'SamsungElec',
+            market: 'KOSPI',
+            status: 'ACTIVE',
+            sharesOutstanding: '5919637922',
+          },
+          {
+            symbol: 'AAPL',
+            name: '애플',
+            englishName: 'APPLE INC',
+            market: 'NASDAQ',
+            status: 'ACTIVE',
+            sharesOutstanding: '14702703000',
+          },
         ],
       }),
     ]);
@@ -216,9 +230,38 @@ describe('createTossMarketDataSource (스펙 §13 — 2차 어댑터)', () => {
     expect(url.pathname).toBe('/api/v1/stocks');
     expect(url.searchParams.get('symbols')).toBe('005930,AAPL');
     expect(stocks).toEqual([
-      { symbol: '005930', name: '삼성전자', englishName: 'SamsungElec', market: 'KOSPI', status: 'ACTIVE' },
-      { symbol: 'AAPL', name: '애플', englishName: 'APPLE INC', market: 'NASDAQ', status: 'ACTIVE' },
+      {
+        symbol: '005930',
+        name: '삼성전자',
+        englishName: 'SamsungElec',
+        market: 'KOSPI',
+        status: 'ACTIVE',
+        sharesOutstanding: 5_919_637_922,
+      },
+      {
+        symbol: 'AAPL',
+        name: '애플',
+        englishName: 'APPLE INC',
+        market: 'NASDAQ',
+        status: 'ACTIVE',
+        sharesOutstanding: 14_702_703_000,
+      },
     ]);
+  });
+
+  // 발행주식수가 없다고 종목명까지 버릴 이유는 없다 — 시가총액만 못 만든다
+  it('keeps the row when sharesOutstanding is missing or unparsable', async () => {
+    const fetchImpl = buildFetch([
+      jsonResponse(200, {
+        result: [
+          { symbol: '005930', name: '삼성전자', market: 'KOSPI', status: 'ACTIVE' },
+          { symbol: '000660', name: 'SK하이닉스', status: 'ACTIVE', sharesOutstanding: '없음' },
+        ],
+      }),
+    ]);
+    const stocks = await buildSource(fetchImpl).getStockInfo(['005930', '000660']);
+    expect(stocks.map((stock) => stock.sharesOutstanding)).toEqual([null, null]);
+    expect(stocks.map((stock) => stock.name)).toEqual(['삼성전자', 'SK하이닉스']);
   });
 
   it('getStockInfo rejects when not configured and returns [] for empty input', async () => {
@@ -231,5 +274,89 @@ describe('createTossMarketDataSource (스펙 §13 — 2차 어댑터)', () => {
     const stocks = await buildSource(fetchImpl).getStockInfo([]);
     expect(stocks).toEqual([]);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('fetches current prices in batches of 200 (getQuotes)', async () => {
+    const symbols = Array.from({ length: 201 }, (_, index) =>
+      String(index).padStart(6, '0'),
+    );
+    const fetchImpl = buildFetch([
+      jsonResponse(200, {
+        result: symbols.slice(0, 200).map((symbol) => ({ symbol, lastPrice: '1000' })),
+      }),
+      jsonResponse(200, { result: [{ symbol: symbols[200], lastPrice: '2000' }] }),
+    ]);
+    const quotes = await buildSource(fetchImpl).getQuotes(symbols);
+
+    const [firstUrl] = fetchImpl.mock.calls[1] as [string];
+    expect(new URL(firstUrl).pathname).toBe('/api/v1/prices');
+    expect(new URL(firstUrl).searchParams.get('symbols')?.split(',')).toHaveLength(200);
+    expect(quotes).toHaveLength(201);
+    expect(quotes.at(-1)).toEqual({ symbol: symbols[200], lastPrice: 2000 });
+  });
+
+  // 시세를 못 읽은 종목을 0 으로 채우면 시가총액 0원이 되어 정렬 맨 끝에 조용히 박힌다
+  it('drops quotes without a parsable lastPrice instead of zero-filling', async () => {
+    const fetchImpl = buildFetch([
+      jsonResponse(200, {
+        result: [
+          { symbol: '005930', lastPrice: '72000' },
+          { symbol: '000660', lastPrice: null },
+          { symbol: '035720' },
+        ],
+      }),
+    ]);
+    const quotes = await buildSource(fetchImpl).getQuotes(['005930', '000660', '035720']);
+    expect(quotes).toEqual([{ symbol: '005930', lastPrice: 72000 }]);
+  });
+
+  it('maps ranking metrics onto the API type parameter (getRanking)', async () => {
+    const fetchImpl = buildFetch([
+      jsonResponse(200, {
+        result: {
+          rankedAt: '2026-06-10T14:30:00+09:00',
+          rankings: [
+            {
+              rank: 1,
+              symbol: '005930',
+              price: { lastPrice: '56500' },
+              tradingVolume: '18432100',
+              tradingAmount: '1041436650000',
+            },
+          ],
+        },
+      }),
+    ]);
+    const entries = await buildSource(fetchImpl).getRanking('KR', 'TRADING_VALUE');
+
+    const [rankingUrl] = fetchImpl.mock.calls[1] as [string];
+    const url = new URL(rankingUrl);
+    expect(url.pathname).toBe('/api/v1/rankings');
+    expect(url.searchParams.get('type')).toBe('MARKET_TRADING_AMOUNT');
+    expect(url.searchParams.get('marketCountry')).toBe('KR');
+    expect(url.searchParams.get('duration')).toBe('1d');
+    expect(entries).toEqual([
+      { symbol: '005930', tradingValue: 1_041_436_650_000, tradingVolume: 18_432_100 },
+    ]);
+  });
+
+  it('getRanking asks for the volume ranking when the metric is TRADING_VOLUME', async () => {
+    const fetchImpl = buildFetch([
+      jsonResponse(200, { result: { rankedAt: null, rankings: [] } }),
+    ]);
+    const entries = await buildSource(fetchImpl).getRanking('US', 'TRADING_VOLUME');
+
+    const [rankingUrl] = fetchImpl.mock.calls[1] as [string];
+    expect(new URL(rankingUrl).searchParams.get('type')).toBe('MARKET_TRADING_VOLUME');
+    expect(new URL(rankingUrl).searchParams.get('marketCountry')).toBe('US');
+    // 집계가 없는 조합은 에러가 아니라 빈 배열이다 (API 계약)
+    expect(entries).toEqual([]);
+  });
+
+  it('rejects malformed ranking envelopes (result.rankings 누락)', async () => {
+    const fetchImpl = buildFetch([jsonResponse(200, { result: {} })]);
+    await expect(buildSource(fetchImpl).getRanking('KR', 'TRADING_VALUE')).rejects.toThrow(
+      /rankings/,
+    );
   });
 });

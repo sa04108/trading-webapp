@@ -28,6 +28,7 @@ import {
   type FactsSyncEstimate,
 } from '../modules/market-data/application/dataset-service.js';
 import { SymbolInfoService } from '../modules/market-data/application/symbol-info-service.js';
+import { SymbolMetricsService } from '../modules/market-data/application/symbol-metrics-service.js';
 import { SymbolService } from '../modules/market-data/application/symbol-service.js';
 import type { CandleRepository } from '../modules/market-data/application/ports.js';
 import { createTossMarketDataSource } from '../modules/broker/infrastructure/toss/toss-market-data-source.js';
@@ -70,6 +71,7 @@ export interface Container {
   readonly symbolService: SymbolService;
   readonly brokerSyncService: BrokerSyncService;
   readonly symbolInfoService: SymbolInfoService;
+  readonly symbolMetricsService: SymbolMetricsService;
   readonly strategyRegistry: StrategyRegistry;
   readonly jobQueue: JobQueue;
   readonly jobOrchestrator: JobOrchestrator;
@@ -230,6 +232,15 @@ export function createContainer(config: AppConfig): Container {
     ...(factsPhase ? { factsPhase } : {}),
   });
   const symbolInfoService = new SymbolInfoService(marketDataSource, clock, logger);
+  // 발행주식수는 이름과 같은 응답에 있다 — SymbolInfoService 를 넘겨 24시간 캐시를
+  // 나눠 쓴다. 소스를 직접 주면 /stocks 를 두 벌 부르게 된다.
+  const symbolMetricsService = new SymbolMetricsService(
+    symbolInfoService,
+    marketDataSource,
+    marketDataSource,
+    clock,
+    logger,
+  );
   // 프로세스 재시작으로 고아가 된 동기화 잡 정리 — 이어받기는 재실행이 담당한다 (§13)
   const interrupted = brokerSyncService.recoverInterrupted();
   if (interrupted > 0) {
@@ -269,6 +280,7 @@ export function createContainer(config: AppConfig): Container {
     symbolService,
     brokerSyncService,
     symbolInfoService,
+    symbolMetricsService,
     strategyRegistry: new StrategyRegistry(),
     jobQueue,
     jobOrchestrator,

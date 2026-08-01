@@ -68,6 +68,7 @@ export async function buildServer(container: Container): Promise<FastifyInstance
         container.symbolService,
         container.brokerSyncService,
         container.symbolInfoService,
+        container.symbolMetricsService,
         (datasetId: string) => container.jobQueue.activeCountForDataset(datasetId) > 0,
         container.factsSyncEstimator,
         () => container.factRepository.symbolsWithFacts(),

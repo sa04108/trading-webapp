@@ -16,6 +16,7 @@ const SAMSUNG: StockInfo = {
   englishName: 'SamsungElec',
   market: 'KOSPI',
   status: 'ACTIVE',
+  sharesOutstanding: 5_919_637_922,
 };
 
 function buildService(source: StockInfoSource, nowRef = { now: 0 }) {

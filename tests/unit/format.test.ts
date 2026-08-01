@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { formatRelativeTime, timeframeLabel } from '../../src/web/lib/format.js';
+import {
+  formatCompactNumber,
+  formatRelativeTime,
+  timeframeLabel,
+} from '../../src/web/lib/format.js';
 
 describe('timeframeLabel', () => {
   it('봉 주기 코드를 한국어로 표기한다', () => {
@@ -47,5 +51,28 @@ describe('formatRelativeTime', () => {
 
   it('0 은 없음 — 수집 시각이 0 인 잡은 존재하지 않는다', () => {
     expect(formatRelativeTime(0, now)).toBe('없음');
+  });
+});
+
+describe('formatCompactNumber', () => {
+  it('조·억·만으로 접는다 — 시가총액은 자릿수를 세어 읽을 수 없다', () => {
+    expect(formatCompactNumber(426_410_000_000_000)).toBe('426조');
+    expect(formatCompactNumber(4_264_100_000_000)).toBe('4.3조');
+    expect(formatCompactNumber(325_000_000_000)).toBe('3,250억');
+    expect(formatCompactNumber(3_250_000_000)).toBe('32.5억');
+    expect(formatCompactNumber(18_432_100)).toBe('1,843만');
+  });
+
+  it('만 미만은 그대로 쓴다', () => {
+    expect(formatCompactNumber(9_999)).toBe('9,999');
+    expect(formatCompactNumber(0)).toBe('0');
+  });
+
+  // 값 없음을 0 으로 그리면 「거래 없는 종목」과 구분되지 않는다
+  it('없는 값과 유한하지 않은 값은 - 로 적는다', () => {
+    expect(formatCompactNumber(null)).toBe('-');
+    expect(formatCompactNumber(undefined)).toBe('-');
+    expect(formatCompactNumber(Number.NaN)).toBe('-');
+    expect(formatCompactNumber(Infinity)).toBe('-');
   });
 });

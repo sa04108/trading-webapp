@@ -314,6 +314,73 @@ test('full MVP flow', async ({ page }) => {
   await expect(page).toHaveURL(/\/login/, { timeout: 10_000 });
 });
 
+/**
+ * 위저드는 데이터셋 **자체만** 보여 준다 (D-038). 종목을 고치는 자리는 데이터 화면
+ * 하나이고, 「편집」이 거기로 데려간다 — 참조를 바꾸는 화면이 둘이면 무엇이 최신인지
+ * 알 수 없다. 라우팅·딥링크는 타입도 단위 테스트도 볼 수 없는 층이라 e2e 로 겨눈다.
+ */
+test('wizard hands symbol editing over to the dataset edit tab', async ({ page }) => {
+  await page.goto('/login');
+  await page.getByLabel('사용자 이름').fill(USERNAME);
+  await page.getByLabel('비밀번호').fill(PASSWORD);
+  await page.getByRole('button', { name: '로그인' }).click();
+  await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
+
+  await page.goto('/backtests/new');
+  await page.getByRole('button', { name: /전고점 돌파/ }).click();
+  await page.getByRole('button', { name: '다음' }).click();
+  await page.getByRole('button', { name: /kr-hourly-v1/ }).click();
+
+  // 종목을 하나씩 켜고 끄는 카드는 없어졌다
+  await expect(page.getByText('종목 선택')).toHaveCount(0);
+  await expect(page.getByRole('checkbox')).toHaveCount(0);
+
+  // 「편집」은 데이터셋 편집 탭으로 보내고, 그 데이터셋의 「종목 편집」을 열어 둔다 —
+  // 탭만 열어 주고 다이얼로그를 다시 찾게 하면 왕복이 그대로 남는다
+  await page.getByRole('button', { name: '편집' }).click();
+  await expect(page).toHaveURL(/\/datasets\?tab=datasets/);
+  const editDialog = page.getByRole('dialog');
+  await expect(editDialog.getByText(/포함할 종목만 정합니다/)).toBeVisible();
+  await editDialog.getByRole('button', { name: '취소' }).click();
+
+  // 딥링크는 한 번 쓰고 지운다 — 새로고침이 닫은 다이얼로그를 되열면 안 된다
+  await expect(page).not.toHaveURL(/edit=/);
+  await page.reload();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+});
+
+/**
+ * 정렬은 종목 탭과 데이터셋 편집이 **같은 컨트롤**을 쓴다 (D-038). e2e 환경엔 증권사
+ * 자격 증명이 없어 지표가 비는데, 그때 규모 정렬을 눌러도 순서가 그대로면 사용자는
+ * 정렬이 고장 났다고 읽는다 — 잠그고 이유를 적는 쪽을 검증한다.
+ */
+test('symbol sort is shared by both screens and explains itself without quotes', async ({
+  page,
+}) => {
+  await page.goto('/login');
+  await page.getByLabel('사용자 이름').fill(USERNAME);
+  await page.getByLabel('비밀번호').fill(PASSWORD);
+  await page.getByRole('button', { name: '로그인' }).click();
+  await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
+
+  await page.goto('/datasets?tab=symbols');
+  const sort = page.getByRole('combobox', { name: '종목 정렬' });
+  await expect(sort).toHaveText('가나다순');
+  await expect(page.getByText(/증권사 시세를 받지 못해 규모 정렬을 쓸 수 없습니다/)).toBeVisible();
+  await sort.click();
+  await expect(page.getByRole('option', { name: '시가총액순' })).toBeDisabled();
+  await expect(page.getByRole('option', { name: '거래대금순' })).toBeDisabled();
+  await expect(page.getByRole('option', { name: '가나다순' })).toBeEnabled();
+  await page.keyboard.press('Escape');
+
+  // 데이터셋의 「종목 편집」에도 같은 컨트롤이 있다 — 두 화면이 갈라지면 한쪽만 정렬된다
+  await page.getByRole('tab', { name: '데이터셋' }).click();
+  await page.getByRole('button', { name: '종목 편집' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('combobox', { name: '포함할 종목 정렬' })).toBeVisible();
+  await dialog.getByRole('button', { name: '취소' }).click();
+});
+
 /** 미지원 시장(US) 은 종목 추가 dialog 에서 고를 수 없고, 이유가 항상 보인다 —
  *  고를 수 있게 두고 코드를 넣은 뒤 400 을 받게 하는 것은 명시가 아니다 (D-027). */
 test('unsupported market is disabled with reason shown on symbol add dialog', async ({ page }) => {

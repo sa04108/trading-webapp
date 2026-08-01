@@ -2,15 +2,18 @@ import { useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { parsePageSize } from '@/lib/page-size';
+import { useSymbolMetrics } from '@/lib/use-symbol-metrics';
 import {
   PageNav,
   PageSizeInput,
   SymbolRowBody,
   SymbolSearchInput,
+  SymbolSortNote,
+  SymbolSortSelect,
 } from './symbol-list';
 import { pageWindow } from './symbol-paging';
 import { filterSymbols } from './symbol-search';
-import { sortSymbols } from './symbol-sort';
+import { countWithMetric, sortSymbols, type SymbolSortKey } from './symbol-sort';
 import type { SymbolSummary } from './symbol-types';
 
 /**
@@ -47,10 +50,13 @@ export function SymbolCheckList({
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(0);
   const [pageSizeText, setPageSizeText] = useState(String(defaultPageSize));
+  const [sortKey, setSortKey] = useState<SymbolSortKey>('NAME');
   const pageSize = parsePageSize(pageSizeText, defaultPageSize);
   const nowMs = Date.now();
 
-  const all = useMemo(() => sortSymbols(symbols), [symbols]);
+  const { metrics, rankingLimit, unavailable: metricsUnavailable } = useSymbolMetrics();
+
+  const all = useMemo(() => sortSymbols(symbols, sortKey, metrics), [symbols, sortKey, metrics]);
   const filtered = useMemo(() => filterSymbols(all, query), [all, query]);
   const { pageCount, currentPage, from, to } = pageWindow(filtered.length, pageSize, page);
   const visible = filtered.slice(from, to);
@@ -96,6 +102,15 @@ export function SymbolCheckList({
             setPage(0);
           }}
         />
+        <SymbolSortSelect
+          value={sortKey}
+          unavailable={metricsUnavailable}
+          label="포함할 종목 정렬"
+          onChange={(next) => {
+            setSortKey(next);
+            setPage(0);
+          }}
+        />
         <PageSizeInput
           value={pageSizeText}
           label="종목 선택 페이지당 표시 수"
@@ -105,6 +120,17 @@ export function SymbolCheckList({
           }}
         />
       </div>
+      <SymbolSortNote
+        sortKey={sortKey}
+        total={all.length}
+        withMetric={countWithMetric(
+          all.map((symbol) => symbol.code),
+          sortKey,
+          metrics,
+        )}
+        rankingLimit={rankingLimit}
+        unavailable={metricsUnavailable}
+      />
 
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm font-medium">{selected.size}개 선택</span>
@@ -160,7 +186,13 @@ export function SymbolCheckList({
                   aria-label={`${symbol.name ?? symbol.code} 선택`}
                 />
                 <label htmlFor={id} className="min-w-0 flex-1">
-                  <SymbolRowBody symbol={symbol} nowMs={nowMs} name={null} />
+                  <SymbolRowBody
+                    symbol={symbol}
+                    nowMs={nowMs}
+                    name={null}
+                    metrics={metrics.get(symbol.code)}
+                    sortKey={sortKey}
+                  />
                 </label>
               </div>
             );

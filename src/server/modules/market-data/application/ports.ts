@@ -51,11 +51,48 @@ export interface StockInfo {
   readonly englishName: string | null;
   readonly market: string;
   readonly status: string; // ACTIVE | DELISTED | ...
+  /**
+   * 발행주식수. 시가총액을 만드는 절반이다 (나머지 절반은 `StockQuote.lastPrice`).
+   * 소스가 주지 않으면 null — 0 으로 채우면 시가총액 0원인 종목이 되어 정렬 맨 끝에
+   * 조용히 박힌다. "모른다" 와 "작다" 는 구분돼야 한다.
+   */
+  readonly sharesOutstanding: number | null;
 }
 
 export interface StockInfoSource {
   /** 코드 목록의 기본 정보 조회. 모르는 심볼은 결과에서 빠진다. */
   getStockInfo(symbols: readonly string[]): Promise<StockInfo[]>;
+}
+
+/** 현재가 스냅샷 — 시가총액 계산의 나머지 절반 */
+export interface StockQuote {
+  readonly symbol: string;
+  readonly lastPrice: number;
+}
+
+export interface StockQuoteSource {
+  /** 코드 목록의 현재가 조회. 시세를 못 받은 심볼은 결과에서 빠진다. */
+  getQuotes(symbols: readonly string[]): Promise<StockQuote[]>;
+}
+
+/** 랭킹 기준 — 소스가 제공하는 집계 축이다 */
+export type MarketRankingMetric = 'TRADING_VALUE' | 'TRADING_VOLUME';
+
+export interface MarketRankingEntry {
+  readonly symbol: string;
+  /** 거래대금 (기간 누적) */
+  readonly tradingValue: number;
+  /** 거래량 (기간 누적) */
+  readonly tradingVolume: number;
+}
+
+export interface MarketRankingSource {
+  /**
+   * 시장 상위 랭킹. **시장 전체의 상위 일부만** 답한다 — 등록 종목을 받아 그것만
+   * 집계해 주는 API 가 아니다. 랭킹 밖 종목의 거래대금·거래량은 알 수 없고,
+   * 호출부는 그 사실을 "모름" 으로 다뤄야 한다.
+   */
+  getRanking(market: Market, metric: MarketRankingMetric): Promise<MarketRankingEntry[]>;
 }
 
 // 아래 에러들은 포트 계약의 일부다 — 어댑터(infrastructure)가 던지고 애플리케이션이

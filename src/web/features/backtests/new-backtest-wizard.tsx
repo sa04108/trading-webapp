@@ -1,4 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
+import { SlidersHorizontal } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { toast } from 'sonner';
@@ -21,9 +22,17 @@ import { cn } from '@/lib/utils';
 import { formatKrw, formatRelativeTime, timeframeLabel } from '@/lib/format';
 import { wizardTimeframes } from '@/features/datasets/dataset-slices';
 import { SymbolFactsBadge } from '@/features/datasets/symbol-facts-badge';
+import { SymbolSortNote, SymbolSortSelect } from '@/features/datasets/symbol-list';
+import {
+  countWithMetric,
+  SYMBOL_SORT_LABELS,
+  type SymbolSortKey,
+} from '@/features/datasets/symbol-sort';
 import type { SymbolSummary } from '@/features/datasets/symbol-types';
+import { MAX_UNIVERSE_SYMBOLS, selectUniverse } from './dataset-universe';
 import { costProfileLabel, slippageProfileLabel } from './profile-labels';
 import { useStockNames } from '@/lib/use-stock-names';
+import { useSymbolMetrics } from '@/lib/use-symbol-metrics';
 import { requestToFormState } from './prefill';
 import { ParamHint } from './param-hint';
 import { extractNumberParams, paramLabel, type NumberParamSpec } from './param-specs';
@@ -90,7 +99,16 @@ export function NewBacktestWizard() {
   // 소비 봉 주기 — '' 는 아직 정해지지 않음(프리필 초기값이거나 데이터셋 미선택). 사용자가
   // 목록에서 데이터셋을 고르면 그 자리에서 wizardTimeframes 첫 항목으로 명시값을 채운다.
   const [timeframe, setTimeframe] = useState('');
-  const [symbols, setSymbols] = useState<string[]>([]);
+  /**
+   * 유니버스는 **데이터셋이 정한다** — 위저드에서 종목을 하나씩 고르는 UI 는 없앴다
+   * (D-038). 이 상태는 복제 프리필이 원본 요청의 종목 목록을 그대로 되살릴 때만 쓴다:
+   * 예전 화면에서 부분 선택으로 만든 잡을 복제하면서 유니버스를 조용히 바꾸면
+   * 「재실행」이 재실행이 아니게 된다. 데이터셋을 새로 고르거나 정렬을 바꾸면 null 로
+   * 되돌리고 데이터셋에서 다시 도출한다.
+   */
+  const [prefilledSymbols, setPrefilledSymbols] = useState<string[] | null>(null);
+  /** 상한을 넘는 데이터셋에서 상위 N종목을 고를 기준 — 종목 화면의 정렬과 같은 축이다 */
+  const [universeSortKey, setUniverseSortKey] = useState<SymbolSortKey>('MARKET_CAP');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [initialCash, setInitialCash] = useState('10000000');
@@ -146,7 +164,12 @@ export function NewBacktestWizard() {
   const selectedDataset = datasets.data?.datasets.find((d) => d.id === datasetId) ?? null;
   // 데이터셋 카드의 "마지막 수집 N일 전" 기준 시각 — 렌더 시점으로 충분하다
   const nowMs = Date.now();
-  const symbolByCode = new Map((symbolsQuery.data?.symbols ?? []).map((s) => [s.code, s]));
+  // useMemo 인 이유: 유니버스 도출이 이 Map 을 의존성으로 읽는다. 매 렌더 새 Map 이면
+  // 1,000종목 데이터셋을 매 렌더 다시 정렬하게 된다.
+  const symbolByCode = useMemo(
+    () => new Map((symbolsQuery.data?.symbols ?? []).map((s) => [s.code, s])),
+    [symbolsQuery.data],
+  );
   /**
    * 데이터셋의 봉 슬라이스 보유 = 참조 종목 **전부** 가 그 슬라이스를 가진 경우.
    * 하나라도 비면 그 봉으로 돌릴 수 없다 — any 로 열면 일부 종목이 조용히 0봉으로 빠진다.
@@ -177,6 +200,25 @@ export function NewBacktestWizard() {
   };
   // 카드 노출·기본값 계산에 반복해서 쓰인다 — 보유 슬라이스(hasData) 기준으로 도출
   const timeframeOptions = selectedDataset ? wizardTimeframes(slicesOf(selectedDataset.symbols)) : [];
+
+  /**
+   * 유니버스 도출. 데이터셋이 상한(200종목)을 넘으면 정렬 상위 200종목만 담는다 —
+   * 규칙은 `dataset-universe.ts` 에 있고 종목 화면과 같은 정렬 함수를 쓴다.
+   *
+   * 상태가 아니라 파생값이다. 데이터셋을 고를 때 한 번 계산해 담아 두면 지표가 뒤늦게
+   * 도착했을 때 가나다순으로 자른 200종목이 그대로 제출된다 — 화면은 「시가총액순」이라고
+   * 적고 있는데 실제 유니버스는 다른, 눈에 보이지 않는 어긋남이다.
+   */
+  const { metrics, rankingLimit, unavailable: metricsUnavailable } = useSymbolMetrics();
+  const universe = useMemo(() => {
+    const codes = selectedDataset?.symbols ?? [];
+    const members = codes.map((code) => ({
+      code,
+      name: symbolByCode.get(code)?.name ?? null,
+    }));
+    return selectUniverse(members, universeSortKey, metrics);
+  }, [selectedDataset, symbolByCode, universeSortKey, metrics]);
+  const symbols = prefilledSymbols ?? universe.symbols;
   // 선택 후보 전체를 한 번에 조회한다 — 체크박스와 검토 단계가 같은 Map 을 쓴다.
   const stockNames = useStockNames(selectedDataset?.symbols ?? []);
   const nameOf = (symbol: string): string | null => stockNames.get(symbol)?.name ?? null;
@@ -218,7 +260,9 @@ export function NewBacktestWizard() {
     setParameters(state.parameters);
     setDatasetId(state.datasetId);
     setTimeframe(state.timeframe);
-    setSymbols(state.symbols);
+    // 원본 요청의 유니버스를 그대로 되살린다 — 부분 선택으로 만든 예전 잡의 복제가
+    // 데이터셋 전체로 넓어지면 「재실행」이 재실행이 아니게 된다
+    setPrefilledSymbols(state.symbols);
     setFrom(state.from);
     setTo(state.to);
     setInitialCash(state.initialCash);
@@ -570,40 +614,63 @@ export function NewBacktestWizard() {
               </AlertDescription>
             </Alert>
           ) : null}
+          {/* 데이터셋 카드는 **데이터셋 자체만** 보여 준다 — 어떤 종목이 들어 있는지를
+              여기서 고치지 않는다 (D-038). 「편집」은 데이터 화면의 그 데이터셋 편집으로
+              보낸다: 참조를 바꾸는 화면이 둘이면 무엇이 최신인지 알 수 없다.
+
+              카드를 `<button>` 하나로 두면 「편집」을 그 안에 넣을 수 없다(중첩 버튼).
+              바깥은 `<div>` 로 두고 선택 버튼과 편집 버튼을 형제로 놓는다. */}
           {(datasets.data?.datasets ?? []).map((dataset) => (
-            <button
+            <div
               key={dataset.id}
-              type="button"
-              onClick={() => {
-                setDatasetId(dataset.id);
-                // 새 데이터셋의 슬라이스로 다시 도출한 첫 항목을 기본값으로 명시한다 —
-                // 이전 선택이 새 데이터셋에 새지 않게
-                const options = wizardTimeframes(slicesOf(dataset.symbols));
-                setTimeframe(options[0] ?? '1d');
-                setSymbols(dataset.symbols);
-              }}
               className={cn(
-                'w-full rounded-xl border p-4 text-left transition-colors',
+                'rounded-xl border transition-colors',
                 datasetId === dataset.id ? 'border-primary bg-muted/50' : 'hover:bg-muted/30',
               )}
             >
-              <div className="flex items-start justify-between gap-2">
-                <p className="font-medium">{dataset.name}</p>
-                {/* 전략 카드와 같은 표기 — 1단계에서 「재무 필요」를 본 사용자가 여기서
-                    「재무 없음」을 보면 제출 전에 조합이 어긋난 것을 알아차린다 */}
-                <SymbolFactsBadge hasFacts={factsOf(dataset.symbols)} />
+              <div className="flex items-start gap-2 p-4">
+                <button
+                  type="button"
+                  aria-pressed={datasetId === dataset.id}
+                  className="min-w-0 flex-1 text-left"
+                  onClick={() => {
+                    setDatasetId(dataset.id);
+                    // 새 데이터셋의 슬라이스로 다시 도출한 첫 항목을 기본값으로 명시한다 —
+                    // 이전 선택이 새 데이터셋에 새지 않게
+                    const options = wizardTimeframes(slicesOf(dataset.symbols));
+                    setTimeframe(options[0] ?? '1d');
+                    // 데이터셋을 바꿨으면 프리필 유니버스는 근거를 잃는다
+                    setPrefilledSymbols(null);
+                  }}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="font-medium">{dataset.name}</p>
+                    {/* 전략 카드와 같은 표기 — 1단계에서 「재무 필요」를 본 사용자가 여기서
+                        「재무 없음」을 보면 제출 전에 조합이 어긋난 것을 알아차린다 */}
+                    <SymbolFactsBadge hasFacts={factsOf(dataset.symbols)} />
+                  </div>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {dataset.symbols.length}종목 ·{' '}
+                    {slicesOf(dataset.symbols)
+                      .filter((s) => s.hasData)
+                      .map((s) => timeframeLabel(s.slice))
+                      .join('·') || '전 종목 공통 봉 없음'}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    마지막 수집 {formatRelativeTime(lastSyncOf(dataset.symbols), nowMs)}
+                  </p>
+                </button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9 shrink-0"
+                  onClick={() => void navigate(`/datasets?tab=datasets&edit=${dataset.id}`)}
+                >
+                  <SlidersHorizontal data-icon="inline-start" />
+                  편집
+                </Button>
               </div>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {dataset.symbols.length}종목 ·{' '}
-                {slicesOf(dataset.symbols)
-                  .filter((s) => s.hasData)
-                  .map((s) => timeframeLabel(s.slice))
-                  .join('·') || '전 종목 공통 봉 없음'}
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                마지막 수집 {formatRelativeTime(lastSyncOf(dataset.symbols), nowMs)}
-              </p>
-            </button>
+            </div>
           ))}
           {/* 게이트 문장은 「다음」을 눌러야 오류 영역에 뜬다 — 조합이 어긋난 것은
               종목을 고르는 그 자리에서 보여야 왕복이 없다 (D-027 과 같은 방향) */}
@@ -642,40 +709,52 @@ export function NewBacktestWizard() {
               </CardContent>
             </Card>
           ) : null}
-          {selectedDataset ? (
+          {/* 상한을 넘는 데이터셋만 이 카드를 띄운다. 1,000종목 데이터셋을 골라 놓고
+              200종목만 돌아간 것을 결과 화면에서 알게 되는 상황을 없앤다 — 무엇을 기준으로
+              자를지도 여기서 정한다. 상한 이하면 데이터셋 전체가 그대로 유니버스라
+              고를 것이 없다. */}
+          {selectedDataset && universe.truncated ? (
             <Card>
               <CardHeader>
-                <CardTitle className="text-base">종목 선택</CardTitle>
+                <CardTitle className="text-base">종목 상한</CardTitle>
+                <CardDescription>
+                  이 데이터셋은 {universe.total}종목이라 백테스트 상한({MAX_UNIVERSE_SYMBOLS}
+                  종목)을 넘습니다 — 아래 기준의 상위 {MAX_UNIVERSE_SYMBOLS}종목만 담고 나머지{' '}
+                  {universe.droppedCount}종목은 빠집니다.
+                </CardDescription>
               </CardHeader>
-              <CardContent className="flex flex-wrap gap-2">
-                {selectedDataset.symbols.map((symbol) => {
-                  const checked = symbols.includes(symbol);
-                  return (
-                    <label
-                      key={symbol}
-                      className={cn(
-                        'flex min-h-11 cursor-pointer items-center gap-2 rounded-lg border px-3 text-sm',
-                        checked ? 'border-primary bg-muted/50' : '',
-                      )}
-                    >
-                      <input
-                        type="checkbox"
-                        className="size-4"
-                        checked={checked}
-                        onChange={(e) =>
-                          setSymbols((prev) =>
-                            e.target.checked
-                              ? [...prev, symbol]
-                              : prev.filter((s) => s !== symbol),
-                          )
-                        }
-                      />
-                      {symbolLabel(symbol)}
-                    </label>
-                  );
-                })}
+              <CardContent className="space-y-2">
+                <SymbolSortSelect
+                  value={universeSortKey}
+                  unavailable={metricsUnavailable}
+                  label="유니버스 선정 기준"
+                  onChange={(next) => {
+                    setUniverseSortKey(next);
+                    // 기준을 직접 골랐으면 프리필 유니버스보다 그 선택이 우선한다
+                    setPrefilledSymbols(null);
+                  }}
+                />
+                <SymbolSortNote
+                  sortKey={universeSortKey}
+                  total={universe.total}
+                  withMetric={countWithMetric(
+                    selectedDataset.symbols,
+                    universeSortKey,
+                    metrics,
+                  )}
+                  rankingLimit={rankingLimit}
+                  unavailable={metricsUnavailable}
+                />
               </CardContent>
             </Card>
+          ) : null}
+          {selectedDataset && prefilledSymbols !== null ? (
+            <Alert>
+              <AlertDescription>
+                원본 백테스트의 종목 {prefilledSymbols.length}개를 그대로 씁니다 — 데이터셋을
+                다시 고르면 데이터셋 전체에서 새로 도출합니다.
+              </AlertDescription>
+            </Alert>
           ) : null}
         </div>
       ) : null}
@@ -827,6 +906,14 @@ export function NewBacktestWizard() {
                   ))}
                   {reviewRestCount > 0 ? (
                     <span className="text-muted-foreground">외 {reviewRestCount}종목</span>
+                  ) : null}
+                  {/* 잘렸다는 사실은 제출 직전에 한 번 더 말한다 — 2단계에서 읽고
+                      네 단계를 지나온 사용자가 그것을 기억한다고 볼 수 없다 */}
+                  {universe.truncated && prefilledSymbols === null ? (
+                    <span className="text-muted-foreground">
+                      {selectedDataset?.name} {universe.total}종목 중{' '}
+                      {SYMBOL_SORT_LABELS[universeSortKey]} 상위 {universe.symbols.length}종목
+                    </span>
                   ) : null}
                 </span>
               </div>
