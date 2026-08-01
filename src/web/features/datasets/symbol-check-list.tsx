@@ -1,12 +1,11 @@
 import { useMemo, useState } from 'react';
+import { PageSizeInput, Pagination } from '@/components/pagination';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { parsePageSize } from '@/lib/page-size';
 import { pageWindow } from '@/lib/pagination';
 import { useSymbolMetrics } from '@/lib/use-symbol-metrics';
 import {
-  PageNav,
-  PageSizeInput,
   SymbolRowBody,
   SymbolSearchInput,
   SymbolSortNote,
@@ -114,6 +113,7 @@ export function SymbolCheckList({
         <PageSizeInput
           value={pageSizeText}
           label="종목 선택 페이지당 표시 수"
+          unit="종목"
           onChange={(next) => {
             setPageSizeText(next);
             setPage(0);
@@ -200,11 +200,12 @@ export function SymbolCheckList({
         </div>
       )}
 
-      <PageNav
+      <Pagination
+        ariaLabel="종목 선택 페이지 이동"
         currentPage={currentPage}
         pageCount={pageCount}
-        total={filtered.length}
-        onChange={setPage}
+        total={{ count: filtered.length, unit: '종목' }}
+        onPageChange={setPage}
       />
     </div>
   );

@@ -1,7 +1,6 @@
 import { ChartCandlestick, FileText, FileX, Search, X } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
   Select,
@@ -272,71 +271,6 @@ export function SymbolSearchInput({
           <X className="size-4" />
         </button>
       ) : null}
-    </div>
-  );
-}
-
-/** 페이지당 표시 수 입력 (파싱은 `@/lib/page-size` 의 `parsePageSize`) */
-export function PageSizeInput({
-  value,
-  onChange,
-  label,
-}: {
-  value: string;
-  onChange: (next: string) => void;
-  label: string;
-}) {
-  return (
-    <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-      페이지당
-      <Input
-        type="number"
-        min={1}
-        max={200}
-        value={value}
-        className="h-9 w-20"
-        aria-label={label}
-        onChange={(event) => onChange(event.target.value)}
-      />
-      종목
-    </label>
-  );
-}
-
-/** 페이지 이동 — 1페이지뿐이면 아무것도 그리지 않는다 */
-export function PageNav({
-  currentPage,
-  pageCount,
-  total,
-  onChange,
-}: {
-  currentPage: number;
-  pageCount: number;
-  total: number;
-  onChange: (next: number) => void;
-}) {
-  if (pageCount <= 1) return null;
-  return (
-    <div className="flex items-center justify-between">
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={currentPage === 0}
-        onClick={() => onChange(Math.max(0, currentPage - 1))}
-      >
-        이전
-      </Button>
-      <span className="text-xs text-muted-foreground">
-        {currentPage + 1} / {pageCount} 페이지 · {total}종목
-      </span>
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={currentPage >= pageCount - 1}
-        onClick={() => onChange(currentPage + 1)}
-      >
-        다음
-      </Button>
     </div>
   );
 }

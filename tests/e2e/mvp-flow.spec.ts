@@ -253,19 +253,33 @@ test('full MVP flow', async ({ page }) => {
   await page.getByRole('button', { name: '종목 편집' }).click();
   const pagedDialog = page.getByRole('dialog');
   await pagedDialog.getByLabel('종목 선택 페이지당 표시 수').fill('1');
-  await expect(pagedDialog.getByText('1 / 3 페이지 · 3종목')).toBeVisible();
+  await expect(pagedDialog.getByText('총 3종목')).toBeVisible();
   await expect(pagedDialog.getByRole('checkbox')).toHaveCount(1);
-  // 1페이지는 이미 참조 중인 삼성전자다 — 그 페이지가 전부 선택된 상태이므로 버튼은
-  // 「페이지내 해제」로 뜬다. 라벨이 지금 상태를 말해야 하고, 「전체 선택」과 달리
-  // 이 버튼의 범위는 보이는 페이지뿐이다.
+
+  const pagination = pagedDialog.getByRole('navigation', { name: '종목 선택 페이지 이동' });
+  const currentPage = pagination.getByRole('button', { name: '현재 1페이지' });
+  await expect(currentPage).toHaveAttribute('aria-current', 'page');
+  await expect(currentPage).toHaveClass(/font-bold/);
+  await expect(pagination.getByRole('button', { name: '첫 페이지' })).toBeDisabled();
+  await expect(pagination.getByRole('button', { name: '이전 페이지' })).toBeDisabled();
+
+  const paginationOverflow = await pagination.evaluate(
+    (element) => element.scrollWidth - element.clientWidth,
+  );
+  expect(paginationOverflow, '종목 선택 페이지 이동 가로 스크롤').toBeLessThanOrEqual(0);
+
   await expect(pagedDialog.getByRole('button', { name: '페이지내 해제' })).toBeVisible();
-  await pagedDialog.getByRole('button', { name: '다음' }).click();
-  await expect(pagedDialog.getByText('2 / 3 페이지 · 3종목')).toBeVisible();
-  // 2페이지는 아직 안 골랐다 — 페이지내 전체 선택이 이 페이지만 담는다
+  await pagination.getByRole('button', { name: '2페이지로 이동' }).click();
+  await expect(pagination.getByRole('button', { name: '현재 2페이지' })).toBeVisible();
   await pagedDialog.getByRole('button', { name: '페이지내 전체 선택' }).click();
   await expect(pagedDialog.getByText('2개 선택')).toBeVisible();
-  // 전체 선택은 페이지와 무관하게 3종목 전부를 담는다
-  await pagedDialog.getByRole('button', { name: '전체 선택' }).click();
+
+  await pagination.getByRole('button', { name: '마지막 페이지' }).click();
+  await expect(pagination.getByRole('button', { name: '현재 3페이지' })).toBeVisible();
+  await expect(pagination.getByRole('button', { name: '다음 페이지' })).toBeDisabled();
+  await expect(pagination.getByRole('button', { name: '마지막 페이지' })).toBeDisabled();
+
+  await pagedDialog.getByRole('button', { name: '전체 선택', exact: true }).click();
   await expect(pagedDialog.getByText('3개 선택')).toBeVisible();
   await page.screenshot({ path: 'test-results/dataset-edit-paged.png' });
   await pagedDialog.getByRole('button', { name: '취소' }).click();

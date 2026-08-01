@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, RefreshCw, Trash2, Upload, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
+import { PageSizeInput, Pagination } from '@/components/pagination';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -35,8 +36,6 @@ import { CandleInspectDrawer } from './candle-inspect-drawer';
 import { type DatasetSlice } from './dataset-slices';
 import { parseSymbolCodes, splitRegistered } from './symbol-codes';
 import {
-  PageNav,
-  PageSizeInput,
   SymbolRowBody,
   SymbolSearchInput,
   SymbolSortNote,
@@ -285,6 +284,7 @@ export function SymbolsPanel() {
         <PageSizeInput
           value={pageSizeText}
           label="종목 페이지당 표시 수"
+          unit="종목"
           onChange={(next) => {
             setPageSizeText(next);
             setPage(0);
@@ -395,11 +395,12 @@ export function SymbolsPanel() {
         </Card>
       )}
 
-      <PageNav
+      <Pagination
+        ariaLabel="종목 목록 페이지 이동"
         currentPage={currentPage}
         pageCount={pageCount}
-        total={filtered.length}
-        onChange={setPage}
+        total={{ count: filtered.length, unit: '종목' }}
+        onPageChange={setPage}
       />
 
       {/* 하단 고정 동작 바 — 종목 200개에서 아래쪽을 체크한 뒤 버튼을 찾아 다시
