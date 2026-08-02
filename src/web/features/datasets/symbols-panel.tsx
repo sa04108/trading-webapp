@@ -26,14 +26,12 @@ import {
 } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Textarea } from '@/components/ui/textarea';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { api, postForm, postJson } from '@/lib/api-client';
 import { parsePageSize } from '@/lib/page-size';
 import { pageWindow } from '@/lib/pagination';
 import { useMarketSupport } from '@/lib/use-market-support';
 import { useSymbolMetrics } from '@/lib/use-symbol-metrics';
 import { CandleInspectDrawer } from './candle-inspect-drawer';
-import { type DatasetSlice } from './dataset-slices';
 import { parseSymbolCodes, splitRegistered } from './symbol-codes';
 import {
   SymbolRowBody,
@@ -43,12 +41,12 @@ import {
 } from './symbol-list';
 import { filterSymbols } from './symbol-search';
 import { countWithMetric, sortSymbols, type SymbolSortKey } from './symbol-sort';
+import { SyncDialog } from './sync-dialog';
 import type {
   DataJob,
   FactsJobState,
   RemovalImpact,
   SymbolSummary,
-  SyncEstimateResponse,
 } from './symbol-types';
 
 function parseFacts(json: string | null | undefined): FactsJobState | null {
@@ -80,8 +78,7 @@ export function SymbolsPanel() {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [includeFacts, setIncludeFacts] = useState(false);
-  const [slice, setSlice] = useState<DatasetSlice>('1d');
+  const [syncOpen, setSyncOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
@@ -148,41 +145,11 @@ export function SymbolsPanel() {
     [all, selected],
   );
 
-  // 재무는 국내(KR) 전용이고 DART 키가 필요하다 (D-027) — 선택이 바뀔 때마다 다시 묻는다
-  const estimate = useQuery({
-    queryKey: ['symbols', 'sync-estimate', selectedCodes.join(','), slice],
-    queryFn: () =>
-      api<SyncEstimateResponse>(
-        `/symbols/sync-estimate?codes=${selectedCodes.join(',')}&slice=${slice}`,
-      ),
-    enabled: selectedCodes.length > 0,
-  });
-  const factsBlockedReason =
-    estimate.data?.facts.basis === 'UNSUPPORTED' ? estimate.data.facts.reason : null;
-  useEffect(() => {
-    if (factsBlockedReason !== null && includeFacts) setIncludeFacts(false);
-  }, [factsBlockedReason, includeFacts]);
-
   const impact = useQuery({
     queryKey: ['symbols', 'removal-impact', selectedCodes.join(',')],
     queryFn: () =>
       postJson<{ impacts: RemovalImpact[] }>('/symbols/removal-impact', { codes: selectedCodes }),
     enabled: confirmRemove && selectedCodes.length > 0,
-  });
-
-  const syncMutation = useMutation({
-    mutationFn: () =>
-      postJson<{ job: { id: string } }>('/symbols/sync', {
-        codes: selectedCodes,
-        slice,
-        includeFacts,
-      }),
-    onSuccess: ({ job }) => {
-      setStartedJobId(job.id);
-      settledRef.current = null;
-      toast.success(`${selectedCodes.length}종목 수집을 시작했습니다`);
-    },
-    onError: (error) => toast.error(errorMessage(error, '수집을 시작할 수 없습니다')),
   });
 
   const removeMutation = useMutation({
@@ -423,45 +390,11 @@ export function SymbolsPanel() {
                   : '전체 선택'}
             </Button>
             <span className="ml-auto flex flex-wrap items-center gap-2">
-              <Select value={slice} onValueChange={(value) => setSlice(value as DatasetSlice)}>
-                <SelectTrigger className="h-9 w-24" aria-label="수집 봉">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="1d">일봉</SelectItem>
-                  <SelectItem value="1m">분봉</SelectItem>
-                </SelectContent>
-              </Select>
-              <span className="flex items-center gap-1.5">
-                <Checkbox
-                  id="include-facts"
-                  checked={includeFacts}
-                  disabled={!actionsEnabled || factsBlockedReason !== null}
-                  onCheckedChange={(checked) => setIncludeFacts(checked === true)}
-                />
-                <label htmlFor="include-facts" className="text-sm text-muted-foreground">
-                  재무
-                </label>
-                {factsBlockedReason !== null ? (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span
-                        tabIndex={0}
-                        aria-label="재무 수집 불가 이유"
-                        className="cursor-help text-muted-foreground"
-                      >
-                        ⓘ
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent>{factsBlockedReason}</TooltipContent>
-                  </Tooltip>
-                ) : null}
-              </span>
               <Button
                 size="sm"
                 className="h-9"
-                disabled={!actionsEnabled || syncMutation.isPending}
-                onClick={() => syncMutation.mutate()}
+                disabled={!actionsEnabled}
+                onClick={() => setSyncOpen(true)}
               >
                 <RefreshCw data-icon="inline-start" />
                 동기화
@@ -478,11 +411,18 @@ export function SymbolsPanel() {
               </Button>
             </span>
           </div>
-          {factsBlockedReason !== null ? (
-            <p className="mt-2 text-xs text-muted-foreground">{factsBlockedReason}</p>
-          ) : null}
         </div>
       ) : null}
+
+      <SyncDialog
+        open={syncOpen}
+        onOpenChange={setSyncOpen}
+        symbols={all.filter((symbol) => selected.has(symbol.code))}
+        onStarted={(jobId) => {
+          setStartedJobId(jobId);
+          settledRef.current = null;
+        }}
+      />
 
       {inspect ? (
         <CandleInspectDrawer

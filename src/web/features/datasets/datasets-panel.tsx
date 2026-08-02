@@ -24,6 +24,7 @@ import { sliceLabel } from './dataset-slices';
 import { SymbolCheckList } from './symbol-check-list';
 import { sortSymbols } from './symbol-sort';
 import type { DatasetSummary, SymbolSummary } from './symbol-types';
+import { SyncDialog } from './sync-dialog';
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
@@ -124,6 +125,7 @@ function DatasetCard({
   const [nameDraft, setNameDraft] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editSymbols, setEditSymbols] = useState(false);
+  const [syncOpen, setSyncOpen] = useState(false);
   const nowMs = Date.now();
 
   // 한 번만 연다. `onSymbolsOpened` 는 매 렌더 새 클로저라 ref 로 못을 박지 않으면
@@ -175,21 +177,6 @@ function DatasetCard({
     onError: (error) => toast.error(errorMessage(error, '삭제할 수 없습니다')),
   });
 
-  // 「이 데이터셋 종목 동기화」 — 참조 종목을 그대로 종목 단위 경로에 넘긴다.
-  // 실행 경로를 하나로 유지하면서 "이 데이터셋에 필요한 것 전부" 라는 편의를 남긴다.
-  const syncMutation = useMutation({
-    mutationFn: () =>
-      postJson<{ job: { id: string } }>('/symbols/sync', {
-        codes: dataset.symbols,
-        slice: '1d',
-      }),
-    onSuccess: () => {
-      toast.success(`${dataset.symbols.length}종목 수집을 시작했습니다 — 종목 탭에서 진행을 봅니다`);
-      void queryClient.invalidateQueries({ queryKey: ['symbols'] });
-    },
-    onError: (error) => toast.error(errorMessage(error, '수집을 시작할 수 없습니다')),
-  });
-
   return (
     <Card>
       <CardHeader>
@@ -239,11 +226,11 @@ function DatasetCard({
               variant="outline"
               size="sm"
               className="h-9"
-              disabled={syncMutation.isPending || dataset.symbols.length === 0}
-              onClick={() => syncMutation.mutate()}
+              disabled={dataset.symbols.length === 0 || members.length !== dataset.symbols.length}
+              onClick={() => setSyncOpen(true)}
             >
               <RefreshCw data-icon="inline-start" />
-              종목 동기화
+              데이터 동기화
             </Button>
             <Button
               variant="outline"
@@ -296,6 +283,15 @@ function DatasetCard({
           ))}
         </div>
       </CardContent>
+      <SyncDialog
+        open={syncOpen}
+        onOpenChange={setSyncOpen}
+        symbols={members}
+        title={`${dataset.name} 데이터 동기화`}
+        onStarted={() => {
+          void queryClient.invalidateQueries({ queryKey: ['symbols'] });
+        }}
+      />
 
       <EditSymbolsDialog
         open={editSymbols}

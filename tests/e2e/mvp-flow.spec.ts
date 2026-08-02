@@ -231,6 +231,17 @@ test('full MVP flow', async ({ page }) => {
     'aria-selected',
     'true',
   );
+  // 데이터셋의 일괄 동기화도 종목 화면과 같은 설정 다이얼로그를 쓴다. 버튼만 보고
+  // 일봉만 조용히 수집하던 경로로 돌아가면 재무 옵션·대상 수 assertion 이 함께 깨진다.
+  await page.getByRole('button', { name: '데이터 동기화' }).click();
+  const datasetSyncDialog = page.getByRole('dialog');
+  await expect(datasetSyncDialog.getByRole('heading', { name: 'kr-hourly-v1 데이터 동기화' })).toBeVisible();
+  await expect(datasetSyncDialog.getByText('대상 1종목')).toBeVisible();
+  await expect(datasetSyncDialog.getByLabel('가격 데이터')).toHaveText('일봉');
+  await expect(datasetSyncDialog.getByText('현재 0/1종목 보유')).toBeVisible();
+  await expect(datasetSyncDialog.getByText(/DART 인증키가 설정되지 않아/)).toBeVisible();
+  await expect(datasetSyncDialog.getByLabel('재무 데이터 함께 동기화')).toBeDisabled();
+  await datasetSyncDialog.getByRole('button', { name: '취소' }).click();
 
   // 8-2. 종목 구획 — 슬라이스별 봉 배지와 슬라이스별 마지막 수집을 표시한다.
   // 픽스처는 1m CSV 라 분봉만 데이터가 있다 — 「봉 있음」 하나로 접으면 숨는 사실이다.
@@ -247,9 +258,16 @@ test('full MVP flow', async ({ page }) => {
   await expect(page.getByText('1개 선택')).toBeVisible();
   await expect(syncButton).toBeEnabled();
   await expect(page.getByRole('button', { name: '제거' })).toBeEnabled();
-  // 재무는 DART 키 미설정이라 잠기고 이유가 보여야 한다 (D-027 의 원칙)
-  await expect(page.getByText(/DART 인증키가 설정되지 않아/)).toBeVisible();
+  // 종목 화면도 같은 다이얼로그를 연다. 재무는 DART 키 미설정이라 잠기고 이유가
+  // 보인다 (D-027 의 원칙).
+  await syncButton.click();
+  const symbolSyncDialog = page.getByRole('dialog');
+  await expect(symbolSyncDialog.getByRole('heading', { name: '데이터 동기화' })).toBeVisible();
+  await expect(symbolSyncDialog.getByText('대상 1종목')).toBeVisible();
+  await expect(symbolSyncDialog.getByText(/DART 인증키가 설정되지 않아/)).toBeVisible();
+  await expect(symbolSyncDialog.getByLabel('재무 데이터 함께 동기화')).toBeDisabled();
   await page.screenshot({ path: 'test-results/symbols-edit.png' });
+  await symbolSyncDialog.getByRole('button', { name: '취소' }).click();
   await page.getByRole('button', { name: '완료' }).click();
 
   // 8-4. 데이터셋 편집 화면 — 포함할 종목만 정한다. 구성은 종목 탭과 같고(같은 행·검색·
