@@ -91,6 +91,49 @@ function createConfiguredSource(options: {
   );
 }
 
+async function captureFetchRejection(thrown: unknown): Promise<{
+  readonly rejection: unknown;
+  readonly loggerLines: string[];
+}> {
+  const captured = createCapturingLogger();
+  const { fetchImpl } = createFetch(() => {
+    throw thrown;
+  });
+  const source = createConfiguredSource({ fetchImpl, logger: captured.logger });
+
+  try {
+    await source.fetchDailyTrades('KOSPI', '2026-08-01');
+  } catch (error) {
+    return { rejection: error, loggerLines: captured.lines };
+  }
+  throw new Error('오류가 전파되지 않았습니다.');
+}
+
+function expectGenericSafeError(rejection: unknown, loggerLines: readonly string[]): Error {
+  expect(rejection).toBeInstanceOf(Error);
+  const error = rejection as Error;
+  expect(error.message).toBe('KRX Open API 요청에 실패했습니다.');
+  expect([error.name, error.message, error.stack].join('\n')).not.toContain(API_KEY);
+  expect(JSON.stringify(error)).not.toContain(API_KEY);
+  expect(loggerLines.join('\n')).not.toContain(API_KEY);
+  return error;
+}
+
+function expectDetachedSafeError(
+  rejection: unknown,
+  original: Error,
+  loggerLines: readonly string[],
+): Error {
+  expect(rejection).toBeInstanceOf(Error);
+  const error = rejection as Error;
+  expect(error === original).toBe(false);
+  expect(error.message).toBe('safe message');
+  expect([error.name, error.message, error.stack].join('\n')).not.toContain(API_KEY);
+  expect(JSON.stringify(error)).not.toContain(API_KEY);
+  expect(loggerLines.join('\n')).not.toContain(API_KEY);
+  return error;
+}
+
 describe('KRX 과거 유니버스 어댑터', () => {
   it('설정이 없으면 두 조회가 미설정 오류를 던지고 HTTP를 호출하지 않는다', async () => {
     const { fetchImpl, calls } = createFetch(() => krxJsonResponse(krxEnvelope([])));
@@ -290,8 +333,61 @@ describe('KRX 과거 유니버스 어댑터', () => {
     expect(captured.lines.join('\n')).not.toContain(API_KEY);
   });
 
+  it('Error 이름에만 API 키가 있어도 새 안전 오류로 바꾼다', async () => {
+    const thrown = new Error('safe message');
+    thrown.name = `Network${API_KEY}Error`;
+
+    const { rejection, loggerLines } = await captureFetchRejection(thrown);
+
+    expectDetachedSafeError(rejection, thrown, loggerLines);
+  });
+
+  it('Error stack에만 API 키가 있어도 새 안전 오류로 바꾼다', async () => {
+    const thrown = new Error('safe message');
+    thrown.stack = `Error: safe message\nsecret frame ${API_KEY}`;
+
+    const { rejection, loggerLines } = await captureFetchRejection(thrown);
+
+    expectDetachedSafeError(rejection, thrown, loggerLines);
+  });
+
+  it('Error cause에 API 키가 있으면 cause를 남기지 않는다', async () => {
+    const thrown = new Error('safe message', {
+      cause: new Error(`nested ${API_KEY}`),
+    });
+
+    const { rejection, loggerLines } = await captureFetchRejection(thrown);
+
+    const safe = expectDetachedSafeError(rejection, thrown, loggerLines);
+    expect(Object.hasOwn(safe, 'cause')).toBe(false);
+  });
+
+  it('Error의 순환 중첩 own data에 API 키가 있으면 custom 필드를 복사하지 않는다', async () => {
+    const details: unknown[] = [];
+    details.push(details, { credentials: ['safe', API_KEY] });
+    const thrown = Object.assign(new Error('safe message'), { details });
+
+    const { rejection, loggerLines } = await captureFetchRejection(thrown);
+
+    const safe = expectDetachedSafeError(rejection, thrown, loggerLines);
+    expect(Object.hasOwn(safe, 'details')).toBe(false);
+  });
+
+  it.each([
+    ['객체', { nested: { credential: API_KEY } }],
+    ['배열', ['safe', API_KEY]],
+    ['문자열', 'safe primitive failure'],
+  ])('비-Error %s를 던지면 내용과 무관하게 일반 안전 오류로 바꾼다', async (_name, thrown) => {
+    const { rejection, loggerLines } = await captureFetchRejection(thrown);
+
+    expectGenericSafeError(rejection, loggerLines);
+  });
+
   it('API 키가 없는 Error는 같은 인스턴스를 그대로 전파한다', async () => {
     const expected = new Error('network failure');
+    const safeCycle: Record<string, unknown> = {};
+    safeCycle.self = safeCycle;
+    Object.assign(expected, { details: ['safe', safeCycle] });
     const { fetchImpl } = createFetch(() => {
       throw expected;
     });
