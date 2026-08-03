@@ -32,7 +32,6 @@ export function useNotificationStream(): boolean {
     if (sourceRef.current || sseFailed) return;
     const source = new EventSource('/api/v1/notifications/events');
     sourceRef.current = source;
-    let retryTimer: ReturnType<typeof setTimeout> | null = null;
     source.onmessage = () => {
       // 내용은 쓰지 않는다 — 목록·카운트 쿼리를 무효화하면 화면이 알아서 당겨 온다
       void queryClient.invalidateQueries({ queryKey: ['notifications'] });
@@ -41,16 +40,20 @@ export function useNotificationStream(): boolean {
       source.close();
       sourceRef.current = null;
       setSseFailed(true); // polling fallback 활성화
-      // backtest SSE(§14)는 짧은 페이지라 영구 latch 로 충분하지만, 이 벨은 세션 내내
-      // 마운트된 채라 한 번 latch 되면 재연결 기회가 영영 없다 — 30초 뒤 재무장한다
-      retryTimer = setTimeout(() => setSseFailed(false), 30_000);
     };
     return () => {
       source.close();
       sourceRef.current = null;
-      if (retryTimer) clearTimeout(retryTimer);
     };
   }, [sseFailed, queryClient]);
+
+  // SSE 실패가 세션 내내 굳지 않게 30초 후 재시도한다 — 벨은 상주 컴포넌트라
+  // 언마운트 리셋 기회가 없다. 재시도 전까지는 unread-count 폴링이 덮는다.
+  useEffect(() => {
+    if (!sseFailed) return;
+    const timer = setTimeout(() => setSseFailed(false), 30_000);
+    return () => clearTimeout(timer);
+  }, [sseFailed]);
 
   return sseFailed;
 }
