@@ -115,6 +115,7 @@ export function createContainer(config: AppConfig): Container {
     idleTimeoutMs: config.sessionIdleTimeoutSeconds * 1000,
     absoluteTimeoutMs: config.sessionAbsoluteTimeoutSeconds * 1000,
     auditLogRetentionMs: config.auditLogRetentionDays * 86_400_000,
+    notificationRetentionMs: config.notificationRetentionDays * 86_400_000,
   };
   if (pruneOptions.auditLogRetentionMs > 0) {
     logger.info(
