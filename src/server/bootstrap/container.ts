@@ -7,6 +7,7 @@ import { pruneExpiredRows } from '../shared/db/maintenance.js';
 import { systemClock, type Clock } from '../shared/clock.js';
 import { configureZodLocale } from '../shared/zod-locale.js';
 import { createAuditLogService, type AuditLogService } from '../modules/audit/audit-service.js';
+import { NotificationService } from '../modules/notification/application/notification-service.js';
 import { AuthService } from '../modules/auth/application/auth-service.js';
 import type {
   LoginAttemptRepository,
@@ -59,6 +60,7 @@ export interface Container {
   readonly gitCommitSha: string;
   readonly systemStatus: SystemStatusProviders;
   readonly auditLog: AuditLogService;
+  readonly notificationService: NotificationService;
   readonly userRepository: UserRepository;
   readonly sessionRepository: SessionRepository;
   readonly loginAttemptRepository: LoginAttemptRepository;
@@ -135,6 +137,7 @@ export function createContainer(config: AppConfig): Container {
   pruneTimer.unref();
 
   const auditLog = createAuditLogService(database.db, clock, logger);
+  const notificationService = new NotificationService(database.db, clock);
   const userRepository = createSqliteUserRepository(database.db, logger);
   const sessionRepository = createSqliteSessionRepository(database.db);
   const loginAttemptRepository = createSqliteLoginAttemptRepository(database.db);
@@ -269,6 +272,7 @@ export function createContainer(config: AppConfig): Container {
     gitCommitSha: readGitCommitSha(),
     systemStatus,
     auditLog,
+    notificationService,
     userRepository,
     sessionRepository,
     loginAttemptRepository,
