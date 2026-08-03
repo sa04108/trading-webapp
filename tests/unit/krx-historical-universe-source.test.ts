@@ -246,13 +246,58 @@ describe('KRX 과거 유니버스 어댑터', () => {
     expect(captured.lines.join('\n')).not.toContain(API_KEY);
   });
 
-  it('429가 아닌 REST 오류는 quota 오류로 잘못 분류하지 않는다', async () => {
-    const { fetchImpl } = createFetch(() => krxJsonResponse({ message: 'bad request' }, 400));
+  it('429가 아닌 REST 오류는 quota로 분류하지 않고 반사된 API 키를 가린다', async () => {
+    const captured = createCapturingLogger();
+    const { fetchImpl } = createFetch(() =>
+      krxJsonResponse({ message: `reflected ${API_KEY} and ${API_KEY}` }, 400),
+    );
+    const source = createConfiguredSource({ fetchImpl, logger: captured.logger });
+
+    let rejection: unknown;
+    try {
+      await source.fetchDailyTrades('KOSPI', '2026-08-01');
+    } catch (error) {
+      rejection = error;
+    }
+
+    expect(rejection).toBeInstanceOf(Error);
+    expect(rejection).not.toBeInstanceOf(KrxQuotaError);
+    const error = rejection as Error;
+    expect(JSON.stringify({ name: error.name, message: error.message, stack: error.stack })).not.toContain(
+      API_KEY,
+    );
+    expect(error.message.match(/\[REDACTED\]/g)).toHaveLength(2);
+    expect(captured.lines.join('\n')).not.toContain(API_KEY);
+  });
+
+  it('fetch가 API 키를 담은 문자열을 던지면 일반 안전 오류로 바꾼다', async () => {
+    const captured = createCapturingLogger();
+    const { fetchImpl } = createFetch(() => {
+      throw `network failure ${API_KEY}`;
+    });
+    const source = createConfiguredSource({ fetchImpl, logger: captured.logger });
+
+    let rejection: unknown;
+    try {
+      await source.fetchDailyTrades('KOSPI', '2026-08-01');
+    } catch (error) {
+      rejection = error;
+    }
+
+    expect(rejection).toBeInstanceOf(Error);
+    expect((rejection as Error).message).toBe('KRX Open API 요청에 실패했습니다.');
+    expect(JSON.stringify(rejection)).not.toContain(API_KEY);
+    expect(captured.lines.join('\n')).not.toContain(API_KEY);
+  });
+
+  it('API 키가 없는 Error는 같은 인스턴스를 그대로 전파한다', async () => {
+    const expected = new Error('network failure');
+    const { fetchImpl } = createFetch(() => {
+      throw expected;
+    });
     const source = createConfiguredSource({ fetchImpl });
 
-    await expect(source.fetchDailyTrades('KOSPI', '2026-08-01')).rejects.not.toBeInstanceOf(
-      KrxQuotaError,
-    );
+    await expect(source.fetchDailyTrades('KOSPI', '2026-08-01')).rejects.toBe(expected);
   });
 
   it('설정된 논리 호출을 KST 날짜별로 세고 성공 로그에 안전한 메타데이터만 남긴다', async () => {

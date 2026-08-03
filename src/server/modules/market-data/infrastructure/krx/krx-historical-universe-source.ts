@@ -109,6 +109,25 @@ export function createKrxHistoricalUniverseSource(
       if (error instanceof Error && error.message.startsWith('REST 요청 실패: 429')) {
         throw new KrxQuotaError();
       }
+      // RestClient가 실패 응답 본문을 오류에 담으므로 서버가 반사한 인증키를 여기서 가린다.
+      if (
+        error instanceof Error &&
+        configured.apiKey !== '' &&
+        error.message.includes(configured.apiKey)
+      ) {
+        const sanitized = new Error(error.message.replaceAll(configured.apiKey, '[REDACTED]'));
+        sanitized.name = error.name.includes(configured.apiKey) ? 'Error' : error.name;
+        throw sanitized;
+      }
+      if (
+        typeof error === 'string' &&
+        configured.apiKey !== '' &&
+        error.includes(configured.apiKey)
+      ) {
+        // 원문 문자열을 cause로 보존하면 인증키가 다시 노출되므로 의도적으로 연결하지 않는다.
+        // eslint-disable-next-line preserve-caught-error
+        throw new Error('KRX Open API 요청에 실패했습니다.');
+      }
       throw error;
     }
 
