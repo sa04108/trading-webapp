@@ -18,6 +18,7 @@ import {
 import { registerDatasetRoutes } from '../modules/market-data/presentation/dataset-routes.js';
 import { registerStrategyRoutes } from '../modules/strategy/presentation/strategy-routes.js';
 import { registerBacktestRoutes } from '../modules/backtest/presentation/backtest-routes.js';
+import { registerNotificationRoutes } from '../modules/notification/presentation/notification-routes.js';
 
 function resolvePublicDir(): string | null {
   // 빌드 후: dist/server/bootstrap → dist/public.
@@ -91,6 +92,7 @@ export async function buildServer(container: Container): Promise<FastifyInstance
         },
         requireAuth,
       );
+      registerNotificationRoutes(api, container.notificationService, requireAuth);
     },
     { prefix: '/api/v1' },
   );
