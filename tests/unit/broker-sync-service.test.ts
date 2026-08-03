@@ -129,6 +129,7 @@ function buildHarness(
   const clock = { now: () => Date.UTC(2026, 6, 8, 12, 0) }; // 2026-07-08 수요일 21:00 KST
   const symbolService = new SymbolService(handle.db, repo, clock, logger, noopAudit);
   const datasetService = new DatasetService(handle.db, symbolService, clock, noopAudit);
+  const notified: Array<{ severity: string; title: string; body: string; link: string }> = [];
   const sync = new BrokerSyncService({
     db: handle.db,
     source,
@@ -140,6 +141,7 @@ function buildHarness(
     minFreeDiskBytes: options.minFreeDiskBytes ?? 0,
     freeDiskBytes: options.freeDiskBytes ?? (() => Number.MAX_SAFE_INTEGER),
     factsPhase: options.factsPhase,
+    notify: (input) => notified.push(input),
   });
   /** 구 createBrokerDataset 자리 — 종목을 등록하고 코드 배열을 돌려준다 */
   const seed = (codes: readonly string[], market: Market = 'KR'): string[] => {
@@ -147,7 +149,7 @@ function buildHarness(
     // 구 createBrokerDataset 처럼 중복을 접고 정렬해 돌려준다
     return [...new Set(codes)].sort();
   };
-  return { db: handle.db, repo, symbolService, datasetService, sync, clock, seed };
+  return { db: handle.db, repo, symbolService, datasetService, sync, clock, seed, notified };
 }
 
 type Harness = ReturnType<typeof buildHarness>;
@@ -421,6 +423,24 @@ describe('BrokerSyncService (설계 2026-07-28-broker-sync-design.md)', () => {
     const job = symbolService.getSyncJob('imp_orphan');
     expect(job?.status).toBe('FAILED');
     expect(job?.error).toContain('중단');
+  });
+
+  it('notifies on sync completion and on failure', async () => {
+    const ok = buildHarness(new FakeSource(minutes('005930', 10)));
+    const { done } = ok.sync.startSync(ok.seed(['005930']), { slice: '1m' });
+    await done;
+    expect(ok.notified).toHaveLength(1);
+    expect(ok.notified[0]).toMatchObject({ severity: 'info', link: '/datasets' });
+
+    const failingSource: MarketDataSource = {
+      fetchCandles: () => Promise.reject(new Error('API down')),
+    };
+    const bad = buildHarness(failingSource);
+    const run = bad.sync.startSync(bad.seed(['005930']), { slice: '1m' });
+    await run.done;
+    expect(bad.notified).toHaveLength(1);
+    expect(bad.notified[0]?.severity).toBe('error');
+    expect(bad.notified[0]?.body).toContain('API down');
   });
 });
 

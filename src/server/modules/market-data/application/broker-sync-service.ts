@@ -99,6 +99,16 @@ export interface BrokerSyncDeps {
     onProgress: (progress: FactPhaseProgress) => void;
     shouldStop: () => boolean;
   }) => Promise<FactPhaseResult>;
+  /**
+   * 잡 종료 알림. market-data 는 notification 모듈을 import 하지 않는다 — container 가
+   * 클로저로 잇는다 (factsPhase 와 같은 관례). 미주입이면 알림 없이 동작한다 (테스트 등).
+   */
+  readonly notify?: (input: {
+    severity: 'info' | 'error';
+    title: string;
+    body: string;
+    link: string;
+  }) => void;
 }
 
 const DISK_CHECK_PAGE_INTERVAL = 50;
@@ -305,11 +315,12 @@ export class BrokerSyncService {
        * 때만 값이 채워진다.
        */
       const factsStop = facts?.stopReason ?? null;
+      const finalStatus =
+        factsStop === 'CANCELLED' ? 'CANCELLED' : factsStop === 'ERROR' ? 'FAILED' : 'COMPLETED';
       this.deps.db
         .update(dataSyncJobs)
         .set({
-          status:
-            factsStop === 'CANCELLED' ? 'CANCELLED' : factsStop === 'ERROR' ? 'FAILED' : 'COMPLETED',
+          status: finalStatus,
           // 재무가 멈춰도 봉 결과는 그대로 남는다 — 봉은 이미 저장까지 끝났다
           rowsImported: totalRows,
           candlesMs,
@@ -320,6 +331,19 @@ export class BrokerSyncService {
         })
         .where(eq(dataSyncJobs.id, jobId))
         .run();
+      this.deps.notify?.({
+        severity: finalStatus === 'FAILED' ? 'error' : 'info',
+        title:
+          finalStatus === 'COMPLETED'
+            ? '데이터 동기화가 완료되었습니다'
+            : finalStatus === 'FAILED'
+              ? '데이터 동기화가 실패했습니다'
+              : '데이터 동기화가 취소되었습니다',
+        body:
+          `${targets.length}종목 · ${totalRows.toLocaleString('ko-KR')}행` +
+          (facts?.state.failureMessage ? ` — ${facts.state.failureMessage}` : ''),
+        link: '/datasets',
+      });
       if (factsStop === 'CANCELLED') {
         this.deps.audit.record('system', 'data.sync.cancelled', { symbols: targets.length });
       } else if (factsStop === 'ERROR') {
@@ -354,6 +378,14 @@ export class BrokerSyncService {
         })
         .where(eq(dataSyncJobs.id, jobId))
         .run();
+      this.deps.notify?.({
+        severity: cancelled ? 'info' : 'error',
+        title: cancelled ? '데이터 동기화가 취소되었습니다' : '데이터 동기화가 실패했습니다',
+        body:
+          `${targets.length}종목 — ` +
+          (error instanceof Error ? error.message : String(error)),
+        link: '/datasets',
+      });
       if (cancelled) {
         this.deps.audit.record('system', 'data.sync.cancelled', { symbols: targets.length });
         this.deps.logger.info(
