@@ -19,6 +19,7 @@ import { registerDatasetRoutes } from '../modules/market-data/presentation/datas
 import { registerStrategyRoutes } from '../modules/strategy/presentation/strategy-routes.js';
 import { registerBacktestRoutes } from '../modules/backtest/presentation/backtest-routes.js';
 import { registerNotificationRoutes } from '../modules/notification/presentation/notification-routes.js';
+import { registerUniverseRoutes } from '../modules/market-data/presentation/universe-routes.js';
 
 function resolvePublicDir(): string | null {
   // 빌드 후: dist/server/bootstrap → dist/public.
@@ -93,6 +94,16 @@ export async function buildServer(container: Container): Promise<FastifyInstance
         requireAuth,
       );
       registerNotificationRoutes(api, container.notificationService, requireAuth);
+      registerUniverseRoutes(
+        api,
+        container.historicalUniverseService,
+        container.universeSnapshotService,
+        requireAuth,
+        {
+          approvalExpiry: container.config.krxApprovalExpiry,
+          todayCallCount: container.krxTodayCallCount,
+        },
+      );
     },
     { prefix: '/api/v1' },
   );

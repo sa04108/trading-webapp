@@ -47,6 +47,9 @@ import { SqliteFactCoverageStore } from '../modules/facts/application/fact-cover
 import { FactSyncService } from '../modules/facts/application/fact-sync-service.js';
 import { createDartFactSource } from '../modules/facts/infrastructure/dart/dart-fact-source.js';
 import { ParquetFactRepository } from '../modules/facts/infrastructure/parquet-fact-repository.js';
+import { HistoricalUniverseService } from '../modules/market-data/application/historical-universe-service.js';
+import { UniverseSnapshotService } from '../modules/market-data/application/universe-snapshot-service.js';
+import { createKrxHistoricalUniverseSource } from '../modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
 
 export interface SystemStatusProviders {
   queueLength: () => number;
@@ -83,6 +86,10 @@ export interface Container {
   readonly factRepository: FactRepository;
   readonly factSyncService: FactSyncService;
   readonly factsSyncEstimator: (codes: readonly string[]) => FactsSyncEstimate;
+  readonly historicalUniverseService: HistoricalUniverseService;
+  readonly universeSnapshotService: UniverseSnapshotService;
+  /** KRX 오늘자 논리 호출 수 — status 라우트가 쓴다. 어댑터가 실제 카운터를 쥐고 있다. */
+  readonly krxTodayCallCount: () => number;
   close(): void;
 }
 
@@ -268,6 +275,32 @@ export function createContainer(config: AppConfig): Container {
     );
   }
 
+  // KRX 과거 시점 고정 유니버스 (설계 2026-08-03-krx-historical-universe). API 키
+  // 미설정이면 어댑터가 포트 에러를 던지는 비활성 소스가 된다 — 다른 데이터 경로와
+  // 같은 패턴(§2.4 조립부 전용 지식)이다.
+  const krxSource = createKrxHistoricalUniverseSource(
+    config.krxApiKey
+      ? { baseUrl: config.krxBaseUrl, apiKey: config.krxApiKey, approvalExpiry: config.krxApprovalExpiry }
+      : null,
+    clock,
+    logger,
+  );
+  const historicalUniverseService = new HistoricalUniverseService({
+    source: krxSource,
+    configured: config.krxApiKey !== null,
+    approvalExpiry: config.krxApprovalExpiry,
+    clock,
+    logger,
+  });
+  const universeSnapshotService = new UniverseSnapshotService({
+    db: database.db,
+    universe: historicalUniverseService,
+    clock,
+    audit: auditLog,
+    logger,
+    approvalExpiry: config.krxApprovalExpiry,
+  });
+
   const jobQueue = new JobQueue(database, clock);
   const jobOrchestrator = new JobOrchestrator(jobQueue, config, logger, auditLog, clock);
   jobOrchestrator.events.on(
@@ -311,6 +344,9 @@ export function createContainer(config: AppConfig): Container {
     factRepository,
     factSyncService,
     factsSyncEstimator,
+    historicalUniverseService,
+    universeSnapshotService,
+    krxTodayCallCount: () => krxSource.todayCallCount(),
     close: () => {
       clearInterval(pruneTimer);
       jobOrchestrator.stop();
