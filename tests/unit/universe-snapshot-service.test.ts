@@ -1,0 +1,522 @@
+import { createHash } from 'node:crypto';
+import { afterEach, describe, expect, it } from 'vitest';
+import type { AuditLogService } from '../../src/server/modules/audit/audit-service.js';
+import {
+  PreviewExpiredError,
+  type HistoricalUniversePreview,
+  type HistoricalUniverseService,
+} from '../../src/server/modules/market-data/application/historical-universe-service.js';
+import {
+  SnapshotSelectionError,
+  SymbolIdentityConflictError,
+  UniverseSnapshotService,
+} from '../../src/server/modules/market-data/application/universe-snapshot-service.js';
+import {
+  selectionPayloadOf,
+  type EligibleCandidate,
+} from '../../src/server/modules/market-data/domain/historical-universe.js';
+import { openDatabase, type DatabaseHandle } from '../../src/server/shared/db/database.js';
+import {
+  symbols,
+  universeSnapshots,
+  universeSnapshotSymbols,
+} from '../../src/server/shared/db/schema.js';
+import type { Clock } from '../../src/server/shared/clock.js';
+import type { Logger } from '../../src/server/shared/logger.js';
+
+const LOGGER = { debug() {}, info() {}, warn() {}, error() {} } as unknown as Logger;
+const EXPIRED_GUIDANCE = '미리보기가 만료되었거나 내용이 바뀌었습니다 — 다시 조회하세요.';
+
+function candidate(
+  shortCode: string,
+  marketCapKrw: bigint | null,
+  rank: number | null,
+  market: 'KOSPI' | 'KOSDAQ' = 'KOSPI',
+): EligibleCandidate {
+  return {
+    standardCode: `KR7${shortCode}003`,
+    shortCode,
+    name: `종목-${shortCode}`,
+    market,
+    marketCapKrw,
+    rank,
+  };
+}
+
+const A = candidate('000001', 300n, 1);
+const B = candidate('000002', 200n, 2, 'KOSDAQ');
+const C = candidate('000003', 100n, 3);
+const UNKNOWN = candidate('000004', null, null, 'KOSDAQ');
+
+function previewOf(
+  candidates: readonly EligibleCandidate[] = [A, B, C],
+): HistoricalUniversePreview {
+  const canonicalPayload = [
+    '2025-01-02|krx-common-stock-v1|v1',
+    ...candidates.map((item) => [
+      item.standardCode,
+      item.shortCode,
+      item.market,
+      item.marketCapKrw?.toString() ?? 'unknown',
+    ].join('|')),
+  ].join('\n');
+  return {
+    previewId: 'uvp_test',
+    requestedDate: '2025-01-04',
+    effectiveTradingDate: '2025-01-02',
+    usableFromDate: '2025-01-03',
+    usableFromRule: 'NEXT_SESSION_CONSERVATIVE_V1',
+    canonicalHash: createHash('sha256').update(canonicalPayload).digest('hex'),
+    set: {
+      effectiveTradingDate: '2025-01-02',
+      candidates,
+      rawCounts: { KOSPI: 4, KOSDAQ: 3 },
+      eligibleCount: candidates.length,
+      unknownMarketCapCount: candidates.filter((item) => item.marketCapKrw === null).length,
+      excludedByType: { NON_STOCK_SECURITY: 2, PREFERRED_STOCK: 1 },
+      filterPolicyVersion: 'krx-common-stock-v1',
+      contractVersion: 'v1',
+      canonicalPayload,
+    },
+    fetchedAtMs: 10,
+  };
+}
+
+class MutableClock implements Clock {
+  constructor(private value = 1_000) {}
+  now(): number { return this.value; }
+  set(value: number): void { this.value = value; }
+}
+
+class FakeUniverse {
+  standardCodeMapCalls = 0;
+  standardCodeMap: ReadonlyMap<string, string> = new Map();
+  onStandardCodeMap: (() => void) | null = null;
+
+  constructor(readonly storedPreview: HistoricalUniversePreview | null) {}
+
+  getPreview(previewId: string): HistoricalUniversePreview | null {
+    return this.storedPreview?.previewId === previewId ? this.storedPreview : null;
+  }
+
+  async currentStandardCodeMap(): Promise<ReadonlyMap<string, string>> {
+    this.standardCodeMapCalls += 1;
+    this.onStandardCodeMap?.();
+    return this.standardCodeMap;
+  }
+}
+
+interface AuditEvent {
+  readonly actor: string;
+  readonly event: string;
+  readonly detail: Record<string, unknown> | undefined;
+}
+
+class FakeAudit implements AuditLogService {
+  readonly events: AuditEvent[] = [];
+  onRecord: (() => void) | null = null;
+
+  record(actor: string, event: string, detail?: Record<string, unknown>): void {
+    this.onRecord?.();
+    this.events.push({ actor, event, detail });
+  }
+}
+
+interface Harness {
+  readonly database: DatabaseHandle;
+  readonly preview: HistoricalUniversePreview | null;
+  readonly universe: FakeUniverse;
+  readonly audit: FakeAudit;
+  readonly clock: MutableClock;
+  readonly service: UniverseSnapshotService;
+}
+
+const handles: DatabaseHandle[] = [];
+
+function setup(storedPreview: HistoricalUniversePreview | null = previewOf()): Harness {
+  const database = openDatabase(':memory:');
+  handles.push(database);
+  const universe = new FakeUniverse(storedPreview);
+  const audit = new FakeAudit();
+  const clock = new MutableClock();
+  const service = new UniverseSnapshotService({
+    db: database.db,
+    universe: universe as unknown as HistoricalUniverseService,
+    clock,
+    audit,
+    logger: LOGGER,
+    approvalExpiry: '2027-12-31',
+  });
+  return { database, preview: storedPreview, universe, audit, clock, service };
+}
+
+function manual(
+  service: UniverseSnapshotService,
+  selectedStandardCodes: readonly string[],
+) {
+  return service.createFromPreview({
+    previewId: 'uvp_test',
+    selectedStandardCodes,
+    selectionMethod: 'MANUAL_FROM_KRX_SNAPSHOT',
+    selectionN: null,
+  });
+}
+
+afterEach(() => {
+  for (const handle of handles.splice(0)) handle.close();
+});
+
+describe('UniverseSnapshotService', () => {
+  it('만료·부재 previewId는 정확한 재조회 안내를 담은 PreviewExpiredError다', async () => {
+    const { service, database, audit } = setup(null);
+
+    const result = manual(service, [A.standardCode]);
+
+    await expect(result).rejects.toEqual(expect.objectContaining({
+      name: 'PreviewExpiredError',
+      message: EXPIRED_GUIDANCE,
+    }));
+    await expect(result).rejects.toBeInstanceOf(PreviewExpiredError);
+    expect(database.db.select().from(universeSnapshots).all()).toEqual([]);
+    expect(audit.events).toEqual([]);
+  });
+
+  it('후보에 없는 표준코드와 중복 선택을 SnapshotSelectionError로 거부한다', async () => {
+    const { service, database } = setup();
+
+    await expect(manual(service, ['KR7-NOT-A-CANDIDATE']))
+      .rejects.toBeInstanceOf(SnapshotSelectionError);
+    await expect(manual(service, [A.standardCode, A.standardCode]))
+      .rejects.toBeInstanceOf(SnapshotSelectionError);
+    expect(database.db.select().from(universeSnapshots).all()).toEqual([]);
+  });
+
+  it('TOP_MARKET_CAP_N은 unknown 후보가 하나라도 있으면 거부한다', async () => {
+    const { service } = setup(previewOf([A, B, UNKNOWN]));
+
+    await expect(service.createFromPreview({
+      previewId: 'uvp_test',
+      selectedStandardCodes: [A.standardCode, B.standardCode],
+      selectionMethod: 'TOP_MARKET_CAP_N',
+      selectionN: 2,
+    })).rejects.toBeInstanceOf(SnapshotSelectionError);
+  });
+
+  it('TOP_MARKET_CAP_N은 선택 집합이 정확히 상위 N과 같아야 한다', async () => {
+    const { service, database } = setup();
+
+    await expect(service.createFromPreview({
+      previewId: 'uvp_test',
+      selectedStandardCodes: [A.standardCode, C.standardCode],
+      selectionMethod: 'TOP_MARKET_CAP_N',
+      selectionN: 2,
+    })).rejects.toBeInstanceOf(SnapshotSelectionError);
+
+    const saved = await service.createFromPreview({
+      previewId: 'uvp_test',
+      selectedStandardCodes: [B.standardCode, A.standardCode],
+      selectionMethod: 'TOP_MARKET_CAP_N',
+      selectionN: 2,
+    });
+
+    expect(saved).toMatchObject({ selectionMethod: 'TOP_MARKET_CAP_N', selectionN: 2, selectedCount: 2 });
+    expect(database.db.select().from(universeSnapshotSymbols).all()).toHaveLength(2);
+  });
+
+  it.each([
+    { method: 'TOP_MARKET_CAP_N' as const, n: null },
+    { method: 'TOP_MARKET_CAP_N' as const, n: 1.5 },
+    { method: 'MANUAL_FROM_KRX_SNAPSHOT' as const, n: 1 },
+  ])('selectionMethod=$method와 selectionN=$n의 의미 불일치를 거부한다', async ({ method, n }) => {
+    const { service } = setup();
+
+    await expect(service.createFromPreview({
+      previewId: 'uvp_test',
+      selectedStandardCodes: [A.standardCode],
+      selectionMethod: method,
+      selectionN: n,
+    })).rejects.toBeInstanceOf(SnapshotSelectionError);
+  });
+
+  it('선택 크기 1과 1000은 허용하고 0과 1001은 거부한다', async () => {
+    const many = Array.from({ length: 1_001 }, (_, index) => (
+      candidate(String(index + 1).padStart(6, '0'), BigInt(1_001 - index), index + 1)
+    ));
+    const { service } = setup(previewOf(many));
+
+    await expect(manual(service, [])).rejects.toBeInstanceOf(SnapshotSelectionError);
+    await expect(manual(service, many.map((item) => item.standardCode)))
+      .rejects.toBeInstanceOf(SnapshotSelectionError);
+    await expect(manual(service, [many[0]!.standardCode])).resolves.toMatchObject({ selectedCount: 1 });
+    await expect(manual(service, many.slice(0, 1_000).map((item) => item.standardCode)))
+      .resolves.toMatchObject({ selectedCount: 1_000 });
+  });
+
+  it('선택 종목만 신규 symbols에 code=shortCode, standardCode, market=KR, 당시 이름으로 등록한다', async () => {
+    const { service, database } = setup();
+
+    await manual(service, [B.standardCode]);
+
+    expect(database.db.select().from(symbols).all()).toEqual([{
+      code: B.shortCode,
+      market: 'KR',
+      name: B.name,
+      standardCode: B.standardCode,
+      createdAtMs: 1_000,
+    }]);
+  });
+
+  it('기존 symbols 행의 standardCode가 같으면 수정하거나 중복 삽입하지 않고 재사용한다', async () => {
+    const { service, database, universe } = setup();
+    database.db.insert(symbols).values({
+      code: A.shortCode,
+      market: 'KR',
+      name: '기존 이름',
+      standardCode: A.standardCode,
+      createdAtMs: 7,
+    }).run();
+
+    await manual(service, [A.standardCode]);
+
+    expect(database.db.select().from(symbols).all()).toEqual([{
+      code: A.shortCode,
+      market: 'KR',
+      name: '기존 이름',
+      standardCode: A.standardCode,
+      createdAtMs: 7,
+    }]);
+    expect(universe.standardCodeMapCalls).toBe(0);
+  });
+
+  it('같은 단축코드의 기존 행이 다른 standardCode면 SymbolIdentityConflictError다', async () => {
+    const { service, database, universe } = setup();
+    database.db.insert(symbols).values({
+      code: A.shortCode,
+      market: 'KR',
+      name: '다른 종목',
+      standardCode: 'KR7-DIFFERENT',
+      createdAtMs: 7,
+    }).run();
+
+    await expect(manual(service, [A.standardCode]))
+      .rejects.toBeInstanceOf(SymbolIdentityConflictError);
+    expect(universe.standardCodeMapCalls).toBe(0);
+    expect(database.db.select().from(universeSnapshots).all()).toEqual([]);
+  });
+
+  it('선택 표준코드를 다른 단축코드 행이 이미 소유하면 트랜잭션 전에 identity 충돌로 거부한다', async () => {
+    const { service, database } = setup();
+    database.db.insert(symbols).values({
+      code: '999999',
+      market: 'KR',
+      name: '표준코드 소유자',
+      standardCode: A.standardCode,
+      createdAtMs: 7,
+    }).run();
+
+    await expect(manual(service, [A.standardCode]))
+      .rejects.toBeInstanceOf(SymbolIdentityConflictError);
+    expect(database.db.select().from(universeSnapshots).all()).toEqual([]);
+  });
+
+  it('기존 미매핑 행들은 현재 KRX 맵을 트랜잭션 밖에서 한 번만 조회해 검증한 뒤 백필한다', async () => {
+    const { service, database, universe } = setup();
+    database.db.insert(symbols).values([
+      { code: A.shortCode, market: 'KR', name: '기존 A', createdAtMs: 7 },
+      { code: C.shortCode, market: 'KR', name: '기존 C', createdAtMs: 8 },
+    ]).run();
+    universe.standardCodeMap = new Map([
+      [A.shortCode, A.standardCode],
+      [C.shortCode, C.standardCode],
+    ]);
+    universe.onStandardCodeMap = () => {
+      expect(database.sqlite.inTransaction).toBe(false);
+    };
+
+    await manual(service, [C.standardCode, A.standardCode]);
+
+    expect(universe.standardCodeMapCalls).toBe(1);
+    expect(database.db.select().from(symbols).all()).toEqual([
+      { code: A.shortCode, market: 'KR', name: '기존 A', standardCode: A.standardCode, createdAtMs: 7 },
+      { code: C.shortCode, market: 'KR', name: '기존 C', standardCode: C.standardCode, createdAtMs: 8 },
+    ]);
+  });
+
+  it.each([
+    ['현재 맵에 없음', new Map<string, string>()],
+    ['현재 맵과 불일치', new Map([[A.shortCode, 'KR7-CURRENTLY-DIFFERENT']])],
+  ])('기존 미매핑 행을 %s 상태에서는 병합하지 않는다', async (_label, currentMap) => {
+    const { service, database, universe } = setup();
+    database.db.insert(symbols).values({
+      code: A.shortCode,
+      market: 'KR',
+      name: '미매핑',
+      createdAtMs: 7,
+    }).run();
+    universe.standardCodeMap = currentMap;
+
+    await expect(manual(service, [A.standardCode]))
+      .rejects.toBeInstanceOf(SymbolIdentityConflictError);
+
+    expect(universe.standardCodeMapCalls).toBe(1);
+    expect(database.db.select().from(symbols).all()[0]?.standardCode).toBeNull();
+    expect(database.db.select().from(universeSnapshots).all()).toEqual([]);
+  });
+
+  it('symbols 등록·백필·스냅샷·값 행 쓰기는 하나의 트랜잭션이라 중간 실패를 전부 롤백한다', async () => {
+    const { service, database, audit } = setup();
+    database.sqlite.exec(`
+      CREATE TRIGGER force_snapshot_symbol_failure
+      BEFORE INSERT ON universe_snapshot_symbols
+      BEGIN
+        SELECT RAISE(ABORT, 'forced snapshot-symbol failure');
+      END
+    `);
+
+    await expect(manual(service, [A.standardCode])).rejects.toThrow('forced snapshot-symbol failure');
+
+    expect(database.db.select().from(symbols).all()).toEqual([]);
+    expect(database.db.select().from(universeSnapshots).all()).toEqual([]);
+    expect(database.db.select().from(universeSnapshotSymbols).all()).toEqual([]);
+    expect(audit.events).toEqual([]);
+  });
+
+  it('모든 provenance 필드와 당시 종목 값을 원문 손실 없이 저장하고 DTO 경계에서 문자열로 돌려준다', async () => {
+    const { service, database } = setup(previewOf([A, B, UNKNOWN]));
+
+    const detail = await manual(service, [UNKNOWN.standardCode, A.standardCode]);
+
+    expect(detail).toMatchObject({
+      sourceKind: 'KRX_HISTORICAL',
+      requestedDate: '2025-01-04',
+      effectiveTradingDate: '2025-01-02',
+      usableFromDate: '2025-01-03',
+      selectionMethod: 'MANUAL_FROM_KRX_SNAPSHOT',
+      selectionN: null,
+      selectedCount: 2,
+      unknownMarketCapCount: 1,
+      createdAtMs: 1_000,
+      krxApprovalExpiryDate: '2027-12-31',
+      symbols: [
+        {
+          standardCode: A.standardCode,
+          shortCode: A.shortCode,
+          name: A.name,
+          market: A.market,
+          marketCapKrw: '300',
+          rank: 1,
+        },
+        {
+          standardCode: UNKNOWN.standardCode,
+          shortCode: UNKNOWN.shortCode,
+          name: UNKNOWN.name,
+          market: UNKNOWN.market,
+          marketCapKrw: null,
+          rank: null,
+        },
+      ],
+    });
+    expect(database.db.select().from(universeSnapshots).all()[0]).toMatchObject({
+      sourceKind: 'KRX_HISTORICAL',
+      requestedDate: '2025-01-04',
+      effectiveTradingDate: '2025-01-02',
+      usableFromDate: '2025-01-03',
+      usableFromRule: 'NEXT_SESSION_CONSERVATIVE_V1',
+      marketsJson: '["KOSPI","KOSDAQ"]',
+      filterPolicyVersion: 'krx-common-stock-v1',
+      contractVersion: 'v1',
+      sortKey: 'MKTCAP',
+      sortDirection: 'DESC',
+      selectionMethod: 'MANUAL_FROM_KRX_SNAPSHOT',
+      selectionN: null,
+      selectedCount: 2,
+      eligibleCount: 3,
+      unknownMarketCapCount: 1,
+      excludedByTypeJson: '{"NON_STOCK_SECURITY":2,"PREFERRED_STOCK":1}',
+      rawCountsJson: '{"KOSPI":4,"KOSDAQ":3}',
+      candidateCanonicalHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+      krxApprovalExpiryDate: '2027-12-31',
+      createdAtMs: 1_000,
+    });
+    expect(database.db.select().from(universeSnapshotSymbols).all()).toEqual([
+      {
+        id: 1,
+        snapshotId: detail.id,
+        standardCode: A.standardCode,
+        shortCode: A.shortCode,
+        nameAtSelection: A.name,
+        marketAtSelection: A.market,
+        marketCapKrw: '300',
+        rank: 1,
+        instrumentType: 'COMMON_STOCK',
+      },
+      {
+        id: 2,
+        snapshotId: detail.id,
+        standardCode: UNKNOWN.standardCode,
+        shortCode: UNKNOWN.shortCode,
+        nameAtSelection: UNKNOWN.name,
+        marketAtSelection: UNKNOWN.market,
+        marketCapKrw: null,
+        rank: null,
+        instrumentType: 'COMMON_STOCK',
+      },
+    ]);
+  });
+
+  it('selectionHash는 selectionPayloadOf의 SHA-256이고 선택 입력 순서와 무관하다', async () => {
+    const { service, database, preview } = setup();
+    const expected = createHash('sha256')
+      .update(selectionPayloadOf(preview!.set.canonicalPayload, [C.standardCode, A.standardCode]))
+      .digest('hex');
+
+    await manual(service, [C.standardCode, A.standardCode]);
+    await manual(service, [A.standardCode, C.standardCode]);
+
+    const rows = database.db.select().from(universeSnapshots).all();
+    expect(rows.map((row) => row.selectionHash)).toEqual([expected, expected]);
+  });
+
+  it('감사 기록은 커밋이 끝난 뒤 정확히 한 번 남고 필수 detail을 담는다', async () => {
+    const { service, database, audit } = setup();
+    audit.onRecord = () => {
+      expect(database.sqlite.inTransaction).toBe(false);
+      expect(database.db.select().from(universeSnapshots).all()).toHaveLength(1);
+      expect(database.db.select().from(universeSnapshotSymbols).all()).toHaveLength(2);
+    };
+
+    const detail = await manual(service, [A.standardCode, B.standardCode]);
+
+    expect(audit.events).toEqual([{
+      actor: 'system',
+      event: 'universe.snapshot.created',
+      detail: {
+        snapshotId: detail.id,
+        effectiveTradingDate: '2025-01-02',
+        selectedCount: 2,
+        selectionMethod: 'MANUAL_FROM_KRX_SNAPSHOT',
+      },
+    }]);
+  });
+
+  it('getSnapshot과 listSnapshots은 DB 값에서 불변 DTO를 재구성하고 최신순·id 역순으로 정렬한다', async () => {
+    const { service, clock, preview } = setup(previewOf([{ ...A }, { ...B }, { ...C }]));
+    const originalName = A.name;
+    const first = await manual(service, [A.standardCode]);
+    clock.set(2_000);
+    const second = await manual(service, [B.standardCode]);
+    const third = await manual(service, [C.standardCode]);
+
+    (first.symbols[0] as { name: string }).name = '호출자가 바꾼 이름';
+    (preview!.set.candidates[0] as { name: string }).name = '캐시가 바뀐 이름';
+
+    expect(service.getSnapshot(first.id)?.symbols[0]?.name).toBe(originalName);
+    expect(service.getSnapshot('usn_missing')).toBeNull();
+    const sameTimeNewest = [second.id, third.id].sort().reverse();
+    expect(service.listSnapshots().map((item) => item.id)).toEqual([...sameTimeNewest, first.id]);
+
+    const listed = service.listSnapshots();
+    (listed[0] as { selectedCount: number }).selectedCount = 999;
+    expect(service.listSnapshots()[0]?.selectedCount).toBe(1);
+  });
+});
