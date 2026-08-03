@@ -217,7 +217,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       const slice = sliceForTimeframe(consumed);
       const allowedTimeframes = sliceTimeframes(slice);
       // 제출 시점의 종목 버전 스냅샷을 고정 — 대기 중 동기화가 끼어들어도 어긋나지 않는다 (§9.5)
-      universe = datasets.universeSnapshot(body.datasetId, slice);
+      universe = datasets.universeSnapshotFor(body.universe.symbols, slice);
       const sliceCoverageRows = symbolService
         .getCoverage(body.universe.symbols)
         .filter((row) => row.slice === slice);
