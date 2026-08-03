@@ -77,4 +77,20 @@ describe('selectionMethodOf', () => {
   it('선택이 비어 있으면 상위 N 이 아니다', () => {
     expect(selectionMethodOf(new Set(), candidates, 2)).toBe('MANUAL_FROM_KRX_SNAPSHOT');
   });
+
+  // 적격 후보가 n(=TOP_N, 예: 200) 보다 적을 때의 회귀 테스트다. topNCodes(candidates, n)
+  // 는 candidates.length 만큼만 돌려주는데(위 topNCodes 테스트가 이미 보장), 이 선택은
+  // 그래도 TOP_MARKET_CAP_N 이다 — 「상위 N」이라는 방식 자체는 후보 부족과 무관하게
+  // 성립한다. 다만 확정 요청의 selectionN 은 n 이 아니라 이 실제 크기(top.length)를
+  // 보내야 한다 — n 을 그대로 보내면 서버 검증(selectionN 과 실제 상위 크기 불일치)에
+  // 걸려 정당한 확정이 거부된다(krx-snapshot-step.tsx confirm() 참고).
+  it('후보 수가 n 보다 적어도 상위 전체 선택은 TOP_MARKET_CAP_N 이고, 보낼 selectionN 은 n 이 아니라 실제 개수다', () => {
+    const n = 200;
+    const top = new Set(topNCodes(candidates, n));
+
+    expect(top.size).toBe(3); // rank 있는 후보는 c1·c2·c3 셋뿐 — n=200 을 채우지 못한다
+    expect(selectionMethodOf(top, candidates, n)).toBe('TOP_MARKET_CAP_N');
+    // confirm() 이 selectionN 으로 보내야 할 값은 top.size(=3) 다 — n(=200) 을 그대로
+    // 보내면 서버가 기대하는 「상위 200」과 어긋난다.
+  });
 });

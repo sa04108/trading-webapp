@@ -228,6 +228,27 @@ describe('universe routes', () => {
     expect(app.container.database.db.select().from(universeSnapshots).all()).toEqual([]);
   });
 
+  it('KOSDAQ 일별 응답이 비어 있으면(전체 후보군 구성 불가) 500이 아니라 502 다', async () => {
+    const { app, fake, cookie } = await setupUniverse();
+    const basDd = isoToBasDd('2025-01-08');
+    // KOSPI 일별은 있어 거래일 자체는 해소되지만, KOSDAQ 일별은 비어 있다 —
+    // ksq_bydd_trd 를 설정하지 않으면 fake 서버가 기본값(빈 OutBlock_1)을 돌려준다.
+    fake.setResponse('stk_bydd_trd', basDd, {
+      body: krxEnvelope([dailyFixture({ ISU_CD: '005930', MKTCAP: '350,000,000,000,000' })]),
+    });
+
+    const res = await app.app.inject({
+      method: 'POST',
+      url: '/api/v1/universe/historical/preview',
+      cookies: { qp_session: cookie },
+      payload: { date: '2025-01-08' },
+    });
+
+    expect(res.statusCode).toBe(502);
+    expect(app.container.database.db.select().from(symbols).all()).toEqual([]);
+    expect(app.container.database.db.select().from(universeSnapshots).all()).toEqual([]);
+  });
+
   it('저장한 스냅샷을 목록·상세로 조회한다', async () => {
     const { app, fake, cookie } = await setupUniverse();
     seedTradingDay(fake, '2025-01-06');

@@ -1,6 +1,6 @@
 import os from 'node:os';
 import fs from 'node:fs';
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyBaseLogger, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
   backtestRequestSchema,
@@ -121,6 +121,25 @@ function serializeJob(job: BacktestJobRow) {
     startedAtMs: job.startedAtMs,
     completedAtMs: job.completedAtMs,
   };
+}
+
+/**
+ * provenancePinJson 은 저장 시점에 이미 검증된 값이라 정상 상태에서는 항상 파싱된다.
+ * 그래도 행이 손상돼 있으면(예: 수동 DB 편집) 상세 조회 전체를 500 으로 죽이는 대신
+ * pin 만 null 로 내리고 나머지 응답(job·run·metrics)은 그대로 성공시킨다.
+ */
+function parseProvenancePin(
+  provenancePinJson: string | null,
+  jobId: string,
+  logger: FastifyBaseLogger,
+): ProvenancePin | null {
+  if (!provenancePinJson) return null;
+  try {
+    return JSON.parse(provenancePinJson) as ProvenancePin;
+  } catch (error) {
+    logger.warn({ event: 'backtest.provenance_pin.parse_failed', jobId, err: error }, 'provenancePinJson 파싱에 실패해 pin 없이 응답한다');
+    return null;
+  }
 }
 
 async function checkResources(dataRoot: string): Promise<string | null> {
@@ -641,9 +660,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       metrics: results.getMetrics(id),
       // job 이 제출 시점부터 갖고 있다 — run 완료를 기다릴 필요가 없다 (Task 12).
       // 완료 후에는 backtestRuns.provenancePinJson 에 같은 값이 복사돼 있다.
-      provenancePin: job.provenancePinJson
-        ? (JSON.parse(job.provenancePinJson) as ProvenancePin)
-        : null,
+      provenancePin: parseProvenancePin(job.provenancePinJson, id, request.log),
     };
   });
 

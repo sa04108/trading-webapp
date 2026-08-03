@@ -102,6 +102,11 @@ export class UniverseSnapshotService {
     readonly selectionMethod: SelectionMethod;
     readonly selectionN: number | null;
   }): Promise<UniverseSnapshotDetail> {
+    // getPreview 는 순수 캐시 조회라 승인 만료를 보지 않는다 — 승인이 만료된 뒤에도
+    // 만료 전에 만든 previewId 가 아직 TTL 안에 있으면 그대로 스냅샷을 만들 수 있다.
+    // 저장 진입 시점에 다시 검사해 만료 뒤에는 캐시된 previewId 로도 막는다.
+    this.deps.universe.assertAvailable();
+
     const preview = this.deps.universe.getPreview(args.previewId);
     if (preview === null) throw new PreviewExpiredError(PREVIEW_EXPIRED_GUIDANCE);
 

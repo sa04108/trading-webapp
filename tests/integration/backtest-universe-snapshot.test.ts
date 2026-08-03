@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
-import { universeSnapshots } from '../../src/server/shared/db/schema.js';
+import { backtestJobs, universeSnapshots } from '../../src/server/shared/db/schema.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
 import { seedDataset } from '../helpers/seed.js';
 import {
@@ -582,6 +582,45 @@ describe('백테스트 유니버스 스냅샷 계약 (Task 12)', () => {
     });
     expect(detailAfterRun.json().run.datasetId).toBe(dataset.id);
   }, 90_000);
+
+  it('provenancePinJson 행이 손상돼 있어도 상세 조회는 500 이 아니라 pin=null 로 성공한다', async () => {
+    const ctx = await setupCtx();
+    const snapshot = await createSnapshot(ctx, '2025-01-06', 1);
+    const from = '2025-01-08';
+    const to = '2025-06-30';
+    await seedCandles(ctx, snapshot.shortCodes[0]!, from, to);
+
+    const created = await ctx.app.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: ctx.cookie },
+      payload: rangeBreakoutRequest({
+        universeSnapshotId: snapshot.id,
+        universe: { type: 'SYMBOLS', symbols: snapshot.shortCodes },
+        period: { from, to },
+      }),
+    });
+    expect(created.statusCode).toBe(201);
+    const jobId = (created.json().job as { id: string }).id;
+
+    // 손상 행을 직접 재현한다 — 수동 DB 편집·마이그레이션 실수 등으로 이 컬럼만
+    // JSON 이 아닌 값을 갖게 될 수 있다.
+    ctx.app.container.database.db
+      .update(backtestJobs)
+      .set({ provenancePinJson: '{이것은 유효한 JSON 이 아니다' })
+      .where(eq(backtestJobs.id, jobId))
+      .run();
+
+    const detail = await ctx.app.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${jobId}`,
+      cookies: { qp_session: ctx.cookie },
+    });
+
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().provenancePin).toBeNull();
+    expect(detail.json().job.id).toBe(jobId);
+  });
 
   it('clone: 스냅샷이 삭제(부재)면 명확한 오류로 차단한다', async () => {
     const ctx = await setupCtx();

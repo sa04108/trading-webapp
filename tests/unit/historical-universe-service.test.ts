@@ -4,6 +4,7 @@ import {
 } from '../../src/server/modules/market-data/application/historical-universe-service.js';
 import {
   KrxApprovalExpiredError,
+  KrxContractError,
   KrxNotConfiguredError,
   type KrxHistoricalUniverseSource,
 } from '../../src/server/modules/market-data/application/ports.js';
@@ -166,13 +167,14 @@ describe('HistoricalUniverseService', () => {
       .toEqual([{ kind: 'daily', market: 'KOSPI', date: '2010-01-04' }]);
   });
 
-  it('KOSPI 성공·KOSDAQ 빈 응답이면 부분 후보군을 만들지 않는다', async () => {
+  it('KOSPI 성공·KOSDAQ 빈 응답이면 부분 후보군을 만들지 않고 KrxContractError(502 매핑)를 던진다', async () => {
     const source = new FakeSource();
     source.seed('2025-01-02');
     source.daily.set('KOSDAQ:2025-01-02', []);
     const { service: subject } = service({ source });
 
     await expect(subject.preview('2025-01-02')).rejects.toThrow(/KOSDAQ/);
+    await expect(subject.preview('2025-01-02')).rejects.toBeInstanceOf(KrxContractError);
     expect(source.calls.some(({ kind }) => kind === 'base')).toBe(false);
   });
 
@@ -321,7 +323,7 @@ describe('HistoricalUniverseService', () => {
     expect(source.calls.filter(({ kind }) => kind === 'base')).toHaveLength(2);
   });
 
-  it('currentStandardCodeMap은 하나의 표준코드가 여러 단축코드에 배정되면 거부한다', async () => {
+  it('currentStandardCodeMap은 하나의 표준코드가 여러 단축코드에 배정되면 KrxContractError(502 매핑)로 거부한다', async () => {
     const source = new FakeSource();
     const duplicateStandardCode = 'KR-DUPLICATE';
     source.base.set('KOSPI:2026-08-02', [
@@ -332,5 +334,19 @@ describe('HistoricalUniverseService', () => {
     const { service: subject } = service({ source });
 
     await expect(subject.currentStandardCodeMap()).rejects.toThrow(/표준코드.*단축코드/);
+    await expect(subject.currentStandardCodeMap()).rejects.toBeInstanceOf(KrxContractError);
+  });
+
+  it('currentStandardCodeMap은 하나의 단축코드가 서로 다른 표준코드로 나오면 KrxContractError(502 매핑)로 거부한다', async () => {
+    const source = new FakeSource();
+    source.base.set('KOSPI:2026-08-02', [
+      { ...baseRow('005930', 'KOSPI'), standardCode: 'KR-FIRST' },
+      { ...baseRow('005930', 'KOSPI'), standardCode: 'KR-SECOND' },
+    ]);
+    source.base.set('KOSDAQ:2026-08-02', [baseRow('035720', 'KOSDAQ')]);
+    const { service: subject } = service({ source });
+
+    await expect(subject.currentStandardCodeMap()).rejects.toThrow(/단축코드.*표준코드/);
+    await expect(subject.currentStandardCodeMap()).rejects.toBeInstanceOf(KrxContractError);
   });
 });

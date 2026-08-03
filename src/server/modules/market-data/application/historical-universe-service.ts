@@ -20,6 +20,7 @@ import {
 } from '../domain/krx-universe-types.js';
 import {
   KrxApprovalExpiredError,
+  KrxContractError,
   type KrxHistoricalUniverseSource,
   KrxNotConfiguredError,
 } from './ports.js';
@@ -163,7 +164,13 @@ export class HistoricalUniverseService {
     return pending;
   }
 
-  private assertAvailable(): void {
+  /**
+   * 미설정·승인 만료를 확인한다 — public 인 이유는 `UniverseSnapshotService.createFromPreview`
+   * 가 캐시된 `getPreview` 결과를 쓰기 전에도 같은 검사를 태워야 하기 때문이다.
+   * `getPreview` 자체는 만료를 보지 않는 순수 캐시 조회라, 승인이 만료된 뒤에도
+   * 만료 전에 만든 previewId 로는 여전히 값을 돌려준다.
+   */
+  assertAvailable(): void {
     if (!this.deps.configured) throw new KrxNotConfiguredError();
     if (this.isApprovalExpired()) {
       throw new KrxApprovalExpiredError(
@@ -267,7 +274,11 @@ export class HistoricalUniverseService {
   ): Promise<EffectiveUniverseSnapshot> {
     const kosdaqDaily = await this.deps.source.fetchDailyTrades('KOSDAQ', effectiveTradingDate);
     if (kosdaqDaily.length === 0) {
-      throw new Error(`KRX ${effectiveTradingDate} KOSDAQ 일별 응답이 비어 있어 전체 후보군을 만들 수 없습니다.`);
+      // 한 시장 실패는 계약 위반과 같은 부류다 — 일반 Error 는 라우트 매핑에 없어 500 이
+      // 되고, 계획한 「한 시장 실패 → 502」와 어긋난다.
+      throw new KrxContractError(
+        `KRX ${effectiveTradingDate} KOSDAQ 일별 응답이 비어 있어 전체 후보군을 만들 수 없습니다.`,
+      );
     }
 
     const [kospiBase, kosdaqBase] = await Promise.all([
@@ -344,11 +355,13 @@ export class HistoricalUniverseService {
     for (const row of rows) {
       const existing = result.get(row.shortCode);
       if (existing !== undefined && existing !== row.standardCode) {
-        throw new Error(`KRX 단축코드 ${row.shortCode}의 표준코드가 서로 다릅니다.`);
+        // 표준코드 충돌은 KRX 응답이 계약(단축코드↔표준코드 1:1)을 어겼다는 뜻이다 —
+        // 일반 Error 는 500 으로 새 나가므로 KrxContractError 로 502 매핑에 태운다.
+        throw new KrxContractError(`KRX 단축코드 ${row.shortCode}의 표준코드가 서로 다릅니다.`);
       }
       const existingShortCode = shortCodeByStandardCode.get(row.standardCode);
       if (existingShortCode !== undefined && existingShortCode !== row.shortCode) {
-        throw new Error(
+        throw new KrxContractError(
           `KRX 표준코드 ${row.standardCode}가 여러 단축코드(${existingShortCode}, ${row.shortCode})에 배정되었습니다.`,
         );
       }

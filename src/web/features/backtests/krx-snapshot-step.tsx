@@ -126,11 +126,14 @@ export function KrxSnapshotStep({
   const confirm = (): void => {
     if (preview === null || selected.size === 0) return;
     const method = selectionMethodOf(selected, candidates, TOP_N);
+    // 적격 후보가 TOP_N 보다 적으면 실제 상위 선택 크기는 TOP_N 이 아니라 selected.size 다 —
+    // 서버는 selectionN 을 그대로 상위 N 크기로 검증하므로 상수 TOP_N 을 보내면
+    // 후보 부족 상황에서 정당한 확정이 거부된다.
     createMutation.mutate({
       previewId: preview.previewId,
       standardCodes: Array.from(selected),
       selectionMethod: method,
-      ...(method === 'TOP_MARKET_CAP_N' ? { selectionN: TOP_N } : {}),
+      ...(method === 'TOP_MARKET_CAP_N' ? { selectionN: selected.size } : {}),
     });
   };
 

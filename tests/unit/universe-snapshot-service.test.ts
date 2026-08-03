@@ -6,6 +6,7 @@ import {
   type HistoricalUniversePreview,
   type HistoricalUniverseService,
 } from '../../src/server/modules/market-data/application/historical-universe-service.js';
+import { KrxApprovalExpiredError } from '../../src/server/modules/market-data/application/ports.js';
 import {
   SnapshotSelectionError,
   SymbolIdentityConflictError,
@@ -92,8 +93,14 @@ class FakeUniverse {
   standardCodeMapCalls = 0;
   standardCodeMap: ReadonlyMap<string, string> = new Map();
   onStandardCodeMap: (() => void) | null = null;
+  /** 기본은 항상 사용 가능 — 승인 만료 시나리오는 테스트가 이 필드에 throw 하는 함수를 넣는다. */
+  assertAvailableImpl: () => void = () => {};
 
   constructor(readonly storedPreview: HistoricalUniversePreview | null) {}
+
+  assertAvailable(): void {
+    this.assertAvailableImpl();
+  }
 
   getPreview(previewId: string): HistoricalUniversePreview | null {
     return this.storedPreview?.previewId === previewId ? this.storedPreview : null;
@@ -186,6 +193,20 @@ describe('UniverseSnapshotService', () => {
     expect(audit.events).toEqual([]);
   });
 
+  it('승인 만료 뒤에는 만료 전에 캐시된 previewId로도 스냅샷을 저장할 수 없다', async () => {
+    const { service, database, audit, universe } = setup();
+    // getPreview 는 순수 캐시 조회라 만료를 모른다 — createFromPreview 진입 시
+    // assertAvailable() 을 직접 태워야 승인 만료 뒤 저장을 막을 수 있다.
+    universe.assertAvailableImpl = () => {
+      throw new KrxApprovalExpiredError('KRX Open API 사용 승인 만료일(2025-12-31)이 지났습니다. API별 승인 상태를 확인하세요.');
+    };
+
+    await expect(manual(service, [A.standardCode])).rejects.toBeInstanceOf(KrxApprovalExpiredError);
+
+    expect(database.db.select().from(universeSnapshots).all()).toEqual([]);
+    expect(audit.events).toEqual([]);
+  });
+
   it('후보에 없는 표준코드와 중복 선택을 SnapshotSelectionError로 거부한다', async () => {
     const { service, database } = setup();
 
@@ -226,6 +247,31 @@ describe('UniverseSnapshotService', () => {
 
     expect(saved).toMatchObject({ selectionMethod: 'TOP_MARKET_CAP_N', selectionN: 2, selectedCount: 2 });
     expect(database.db.select().from(universeSnapshotSymbols).all()).toHaveLength(2);
+  });
+
+  it('적격 후보 수가 화면 상수(예: 200)보다 적으면 selectionN 은 실제 후보 수를 보내야 통과한다', async () => {
+    // krx-snapshot-step.tsx 의 confirm() 회귀 재현: 적격 후보가 TOP_N(200) 보다 적을 때
+    // 클라이언트가 여전히 상수 200 을 selectionN 으로 보내면(과거 버그) 서버가 기대하는
+    // 「상위 N」의 N 과 어긋나 정당한 확정이 거부된다. 실제 개수(여기서는 전체 3개)를
+    // 보내면 통과해야 한다.
+    const { service, database } = setup(); // previewOf() 는 A·B·C 3개뿐이다
+
+    await expect(service.createFromPreview({
+      previewId: 'uvp_test',
+      selectedStandardCodes: [A.standardCode, B.standardCode, C.standardCode],
+      selectionMethod: 'TOP_MARKET_CAP_N',
+      selectionN: 200, // 화면 상수를 그대로 보낸 경우 — 실제 후보(3)와 달라 거부돼야 한다
+    })).rejects.toBeInstanceOf(SnapshotSelectionError);
+
+    const saved = await service.createFromPreview({
+      previewId: 'uvp_test',
+      selectedStandardCodes: [A.standardCode, B.standardCode, C.standardCode],
+      selectionMethod: 'TOP_MARKET_CAP_N',
+      selectionN: 3, // 고친 뒤: 실제 상위 선택 크기를 보낸 경우 — 통과해야 한다
+    });
+
+    expect(saved).toMatchObject({ selectionMethod: 'TOP_MARKET_CAP_N', selectionN: 3, selectedCount: 3 });
+    expect(database.db.select().from(universeSnapshots).all()).toHaveLength(1);
   });
 
   it.each([
