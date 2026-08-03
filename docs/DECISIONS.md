@@ -758,3 +758,47 @@
 - **하지 않은 것:** 정렬 상태를 URL 에 남기기(새로고침하면 기본으로 돌아간다), export
   의 정렬(재현을 위해 청산순 고정), 축마다 인덱스 추가(정렬 대상이 한 작업의 거래로
   한정돼 쓰기 비용만 늘린다).
+
+## D-040: 과거 시점 고정 유니버스 — 소유자를 데이터셋이 아니라 실행으로 바꾼다 (REVIEW §7 데이터셋 결합안 대체)
+
+- **변경 내용:** [HISTORICAL_UNIVERSE_SNAPSHOT_REVIEW.md](./reviews/HISTORICAL_UNIVERSE_SNAPSHOT_REVIEW.md)
+  §7 원안은 선정 출처(provenance)와 선정 스냅샷을 **데이터셋**에 붙이는 구조였다.
+  사용자 결정(2026-08-03)으로 이를 바꿔, `universe_snapshots`·`universe_snapshot_symbols`
+  를 데이터셋과 무관한 독립 엔티티로 두고 `backtest_jobs.universeSnapshotId`가 실행
+  시점에 직접 참조한다. 데이터셋은 여전히 D-034 그대로 "참조 집합"일 뿐이며, 과거
+  유니버스 기능이 그 원칙에 예외를 만들지 않는다.
+- **소유자를 바꾼 이유:** 원안대로 데이터셋에 provenance 를 붙이면 같은 스냅샷을 여러
+  백테스트가 재사용하는 동안 그 데이터셋이 수동 편집될 수 있어, §7.3 의 "수동 수정
+  이력" 상태 기계(원본 유지·플래그·감사 기록·복원 후에도 이력 유지)가 통째로
+  필요해진다. 스냅샷을 실행에 직접 물리면 스냅샷 자체가 **저장 후 불변**이라 그
+  상태 기계가 필요 없다 — REVIEW §14 완료 판정 표의 "(v2) 수동 편집 이력 표시" 행이
+  "해당 없음, 수정 = 새 스냅샷"으로 끝나는 이유가 이것이다. 구성을 바꾸고 싶으면
+  미리보기를 다시 조회해 새 스냅샷을 만든다 — 있는 스냅샷을 고치지 않는다.
+- **불변 스냅샷과 값 스냅샷을 나눴다:** `universe_snapshots`(요청일·적용일·usable
+  from·필터 정책 버전·계약 버전·정렬 기준·선정 방식과 해시)는 수정 컬럼이 없다.
+  `universe_snapshot_symbols`(당시 표준·단축코드, 이름, 시장, 시가총액, 순위)는
+  `symbols`에 FK 를 걸지 않는다 — `backtest_trades.symbol`이 종목 삭제 후에도 문자열로
+  남는 것과 같은 이유로, 종목을 지운 뒤에도 실행 근거를 값으로 설명해야 한다
+  (REVIEW §7.2).
+- **서버 소유 pin 으로 실행을 자립시켰다:** `backtest_jobs.universeSnapshotId`와
+  `provenancePinJson`은 클라이언트가 보내는 필드가 아니라 잡 생성 트랜잭션에서 서버가
+  채운다. `datasetId`처럼 FK 를 걸지 않는 것도 같은 이유다 — 데이터셋·스냅샷이 나중에
+  지워지거나 편집돼도 실행 기록이 그 시점에 무엇을 소비했는지 값으로 답해야 한다
+  (REVIEW §9.2, §14 "종목/스냅샷 삭제 후에도 값으로 남는 실행 근거").
+- **부분 유니버스 pin 버그를 이 작업 중에 제거했다:** 기존
+  `DatasetService.universeSnapshot(datasetId, slice)`는 요청이 부분집합
+  (`body.universe.symbols`)이어도 **데이터셋 전체 종목**을 버전 스냅샷에 담았다 —
+  레거시 복제나 직접 API 요청에서는 실제 소비 종목과 pin 된 버전 해시가 어긋날 수
+  있는 상태였다(REVIEW 2장 마지막 문단). `universeSnapshotFor(codes, slice)`로 나눠
+  `backtest-routes.ts`가 실제 요청 종목만 넘기게 고쳤다(커밋 455c45f) — 과거 유니버스
+  pin 을 만들면서 같은 부류의 버그를 새로 심지 않으려면 기존 버그부터 없애야 했다.
+- **필터 정책에 버전을 부여했다:** `KRX_FILTER_POLICY_VERSION`(`krx-common-stock-v1`)을
+  `universe_snapshots.filterPolicyVersion`에 저장한다. KRX 분류값이나 정책이 나중에
+  바뀌어도 과거에 만든 스냅샷이 어떤 규칙으로 골랐는지 그 스냅샷 자체가 설명한다.
+  분류가 정책에 없는 값을 만나면 조용히 제외하지 않고 `UnknownKrxClassificationError`
+  로 스냅샷 생성 전체를 막는다(REVIEW §4.1) — 이 예외를 잡아 미지값을 나열하는 것이
+  `scripts/krx-smoke.ts`(Task 16)의 역할이다.
+- **남은 외부 게이트:** 코드·마이그레이션·화면은 이번 작업(Task 1~16)으로 끝났지만
+  KRX 인증키 발급·API별 이용 승인, `scripts/krx-smoke.ts`의 실응답 실행·분류 검증은
+  아직 사람이 확인해야 한다(REVIEW §12-2·4). 통과 전에는 과거 유니버스 모드를 실서비스
+  사용자에게 노출하지 않는다.

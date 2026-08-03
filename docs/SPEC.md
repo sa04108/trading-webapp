@@ -700,6 +700,9 @@ datasets
 dataset_symbols
 data_sync_jobs
 
+universe_snapshots
+universe_snapshot_symbols
+
 backtest_jobs
 backtest_runs
 backtest_metrics
@@ -717,6 +720,14 @@ __drizzle_migrations
 등록식 레지스트리가 유일한 출처다 (§2.5, D-009). 소비자 없는 테이블
 (`application_settings`, `data_sync_jobs`)도 같은 이유로 없다 — 필요해지는
 시점에 그 시점의 요구대로 신설한다.
+
+`universe_snapshots`·`universe_snapshot_symbols`는 과거 시점 고정 유니버스의
+소유자다(D-040). 데이터셋에 붙지 않고 저장 후 불변이며, `universe_snapshot_symbols`는
+종목 삭제 후에도 값으로 남도록 `symbols`에 FK 를 걸지 않는다. `symbols.standard_code`
+는 KRX 표준코드(ISIN)를 보존해 단축코드 재사용과 종목 변경을 구분한다.
+`backtest_jobs.universe_snapshot_id`가 실행 시점에 스냅샷을 직접 참조하며, 이 또한
+FK 가 아니다 — 데이터셋·스냅샷이 지워져도 실행 기록은 서버 소유 pin 값으로 자립해야
+한다(REVIEW §9.2).
 
 SQLite 설정:
 
