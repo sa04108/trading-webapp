@@ -136,9 +136,14 @@ export function SyncDialog({
             ) : null}
           </div>
 
+          {/* 한도 초과는 경고만 한다 — 실행을 막지 않는다. 한도에 실제로 걸리면 DART 가
+              호출을 거부하고 그 시점에 수집이 실패한다 (설계 문서의 원칙과 같다). */}
           {facts?.basis === 'PLANNED' && facts.overDailyLimit && effectiveIncludeFacts ? (
             <Alert variant="destructive">
-              <AlertDescription>DART 일일 호출 한도를 넘는 작업입니다. 대상이나 범위를 나눠 실행하세요.</AlertDescription>
+              <AlertDescription>
+                DART 일일 호출 한도를 넘는 작업입니다. 시작은 할 수 있지만 한도에 걸리면 이후
+                수집이 실패합니다 — 남은 구간은 다음 날 이어받으세요.
+              </AlertDescription>
             </Alert>
           ) : null}
         </div>
@@ -146,11 +151,7 @@ export function SyncDialog({
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>취소</Button>
           <Button
-            disabled={
-              codes.length === 0 ||
-              sync.isPending ||
-              (facts?.basis === 'PLANNED' && facts.overDailyLimit && effectiveIncludeFacts)
-            }
+            disabled={codes.length === 0 || sync.isPending}
             onClick={() => sync.mutate()}
           >
             <RefreshCw data-icon="inline-start" />
