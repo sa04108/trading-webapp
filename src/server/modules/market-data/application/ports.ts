@@ -44,6 +44,41 @@ export interface MarketDataSource {
   fetchCandles(request: FetchCandleRequest): Promise<FetchCandleResult>;
 }
 
+export type KrxMarket = 'KOSPI' | 'KOSDAQ';
+
+export interface KrxIssueBaseInfoRow {
+  /** 기본 ISU_CD — 표준 종목코드다. */
+  readonly standardCode: string;
+  /** ISU_SRT_CD — KRX 단축 종목코드다. */
+  readonly shortCode: string;
+  /** ISU_NM 원문이다. */
+  readonly name: string;
+  /** LIST_DD 를 ISO 날짜로 바꾼 값이다. 형식이 다르면 null 이다. */
+  readonly listedDate: string | null;
+  /** MKT_TP_NM 원문이다. */
+  readonly marketRaw: string;
+  /** SECUGRP_NM 원문이다. */
+  readonly securityGroupRaw: string;
+  /** SECT_TP_NM 원문이다. */
+  readonly sectionRaw: string | null;
+  /** KIND_STKCERT_TP_NM 원문이다. */
+  readonly stockKindRaw: string | null;
+}
+
+export interface KrxDailyTradeRow {
+  /** 일별 API 의 ISU_CD 는 단축 종목코드다. */
+  readonly shortCode: string;
+  readonly name: string;
+  /** 콤마를 없앤 10진 정수 문자열이다. 알 수 없으면 null 이다. */
+  readonly marketCapRaw: string | null;
+}
+
+export interface KrxHistoricalUniverseSource {
+  fetchIssueBaseInfo(market: KrxMarket, isoDate: string): Promise<readonly KrxIssueBaseInfoRow[]>;
+  fetchDailyTrades(market: KrxMarket, isoDate: string): Promise<readonly KrxDailyTradeRow[]>;
+  todayCallCount(): number;
+}
+
 /** 종목 참조 정보 (코드 → 이름). 이름 검색(이름 → 코드)은 소스가 제공하지 않는다. */
 export interface StockInfo {
   readonly symbol: string;
@@ -111,5 +146,33 @@ export class UnsupportedTimeframeError extends Error {
       `데이터 소스가 ${timeframe} 봉을 제공하지 않습니다. 시간봉은 1분봉을 모아 만듭니다.`,
     );
     this.name = 'UnsupportedTimeframeError';
+  }
+}
+
+export class KrxNotConfiguredError extends Error {
+  constructor() {
+    super('KRX Open API 키와 API별 승인이 필요합니다. 키를 설정하고 필요한 API 사용 승인을 받으세요.');
+    this.name = 'KrxNotConfiguredError';
+  }
+}
+
+export class KrxApprovalExpiredError extends Error {
+  constructor(message = 'KRX Open API 사용 승인이 만료되었습니다. API별 승인 상태를 확인하세요.') {
+    super(message);
+    this.name = 'KrxApprovalExpiredError';
+  }
+}
+
+export class KrxContractError extends Error {
+  constructor(message = 'KRX 응답이 예상한 계약과 다릅니다.') {
+    super(message);
+    this.name = 'KrxContractError';
+  }
+}
+
+export class KrxQuotaError extends Error {
+  constructor(message = 'KRX Open API 호출 한도를 초과했습니다. 잠시 후 다시 시도하세요.') {
+    super(message);
+    this.name = 'KrxQuotaError';
   }
 }
