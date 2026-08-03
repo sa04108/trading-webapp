@@ -569,10 +569,19 @@ function RunMetadataCard({
  */
 function UniverseProvenanceNotice({ pin }: { pin: ProvenancePin | null }) {
   const notice = provenanceNotice(pin);
-  if (notice.sentence === null && notice.warning === null) return null;
+  if (notice.badges.length === 0 && notice.sentence === null && notice.warning === null) {
+    return null;
+  }
   return (
     <Alert>
-      <AlertDescription className="space-y-1">
+      <AlertDescription className="space-y-2">
+        {notice.badges.length > 0 ? (
+          <div className="flex flex-wrap gap-1">
+            {notice.badges.map((badge) => (
+              <Badge key={badge}>{badge}</Badge>
+            ))}
+          </div>
+        ) : null}
         {notice.sentence ? <p>{notice.sentence}</p> : null}
         {notice.warning ? <p>{notice.warning}</p> : null}
         {pin?.sourceKind === 'KRX_HISTORICAL' ? (

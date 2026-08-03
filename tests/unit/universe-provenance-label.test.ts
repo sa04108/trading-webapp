@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  krxFixedUniverseBadge,
   provenanceNotice,
   selectionMethodLabel,
   universeSourceLabel,
@@ -59,6 +60,11 @@ describe('provenanceNotice', () => {
     expect(notice.badges).toEqual(['KRX 2024-12-30 기준·고정 유니버스']);
   });
 
+  it('배지 문구는 krxFixedUniverseBadge 와 같은 값이다 — 위저드 검토 단계가 같은 함수로 만든다', () => {
+    const notice = provenanceNotice(krxPin);
+    expect(notice.badges).toEqual([krxFixedUniverseBadge(krxPin.effectiveTradingDate)]);
+  });
+
   it('pin 이 없으면 배지·문장·경고를 모두 비운다', () => {
     expect(provenanceNotice(null)).toEqual({ badges: [], sentence: null, warning: null });
   });
@@ -69,6 +75,16 @@ describe('provenanceNotice', () => {
         if (text !== null) expect(text).not.toContain('생존자 편향 제거');
       }
     }
+  });
+});
+
+describe('krxFixedUniverseBadge', () => {
+  it('적용일을 채워 「KRX {날짜} 기준·고정 유니버스」를 만든다', () => {
+    expect(krxFixedUniverseBadge('2024-12-30')).toBe('KRX 2024-12-30 기준·고정 유니버스');
+  });
+
+  it('적용일이 없으면 「알 수 없는 날짜」로 채운다', () => {
+    expect(krxFixedUniverseBadge(null)).toBe('KRX 알 수 없는 날짜 기준·고정 유니버스');
   });
 });
 

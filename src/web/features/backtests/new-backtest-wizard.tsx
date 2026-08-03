@@ -29,6 +29,7 @@ import { MAX_UNIVERSE_SYMBOLS } from '../../../shared/schemas/universe-limit.js'
 import type { UniverseSnapshotDetailDto } from '../../../shared/schemas/historical-universe.js';
 import { KrxSnapshotStep } from './krx-snapshot-step';
 import { costProfileLabel, slippageProfileLabel } from './profile-labels';
+import { krxFixedUniverseBadge } from './universe-provenance';
 import { useStockNames } from '@/lib/use-stock-names';
 import { requestToFormState } from './prefill';
 import { ParamHint } from './param-hint';
@@ -950,9 +951,13 @@ export function NewBacktestWizard() {
                   <div className="flex justify-between gap-3">
                     <span className="shrink-0 text-muted-foreground">유니버스 출처</span>
                     <span className="flex flex-col items-end gap-1">
-                      <Badge>고정 유니버스</Badge>
+                      {/* 결과 화면(provenanceNotice)과 같은 배지 문구를 쓴다 — 화면마다
+                          입력이 다르지만(여기는 snapshot dto, 결과는 pin) 문구는 한 곳
+                          (krxFixedUniverseBadge)에서만 정한다. */}
+                      <Badge>
+                        {krxFixedUniverseBadge(selectedSnapshot.effectiveTradingDate)}
+                      </Badge>
                       <span className="text-right text-xs text-muted-foreground">
-                        KRX {selectedSnapshot.effectiveTradingDate} 스냅샷 ·{' '}
                         {selectedSnapshot.selectedCount}종목
                       </span>
                     </span>
