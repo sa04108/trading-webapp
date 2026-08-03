@@ -36,6 +36,7 @@ import { ParquetCandleRepository } from '../server/modules/market-data/infrastru
 import { StrategyRegistry } from '../server/modules/strategy/application/strategy-registry.js';
 import { strategySourceHash } from '../server/modules/strategy/application/strategy-source-hash.js';
 import { backtestRequestSchema, periodToTsRange } from '../shared/schemas/backtest-request.js';
+import type { ProvenancePin } from '../shared/schemas/provenance-pin.js';
 import { installCancellationHandlers } from './cancellation.js';
 
 const cancellation = installCancellationHandlers();
@@ -90,8 +91,15 @@ async function main(): Promise<void> {
     const slippageProfile = getSlippageProfile(request.execution.slippageProfileId);
     if (!costProfile || !slippageProfile) throw new Error('unknown cost/slippage profile');
 
-    const dataset = db.select().from(datasets).where(eq(datasets.id, request.datasetId)).get();
-    if (!dataset) throw new Error(`dataset not found: ${request.datasetId}`);
+    // datasetId 경로만 실존 데이터셋을 요구한다 — universeSnapshotId 경로(Task 12)는
+    // 데이터셋이 없다. 그 경우 backtestRuns.datasetId 에는 job.datasetId(제출 시점에
+    // queue.enqueue 가 저장한 '' sentinel)를 그대로 쓴다.
+    let resolvedDatasetId = job.datasetId;
+    if (request.datasetId !== undefined) {
+      const dataset = db.select().from(datasets).where(eq(datasets.id, request.datasetId)).get();
+      if (!dataset) throw new Error(`dataset not found: ${request.datasetId}`);
+      resolvedDatasetId = dataset.id;
+    }
     // market 은 이제 종목의 속성이다 — 요청 유니버스의 종목들에서 읽는다. 여러 시장이
     // 섞이면 세션·집계 기준이 하나로 정해지지 않아 실행 자체가 성립하지 않는다.
     const universeMarkets = [
@@ -139,6 +147,12 @@ async function main(): Promise<void> {
         }, new Map<string, typeof symbolVersions.$inferSelect>()),
     );
     const datasetWarnings: string[] = [];
+    // 서버가 제출 시점에 조립한 pin(Task 12) — 데이터셋 경로의 시점 불명 경고는
+    // 여기서 실행 경고로 옮긴다. run 에는 원문 그대로 복사한다(아래 provenancePinJson).
+    const pin: ProvenancePin | null = job.provenancePinJson
+      ? (JSON.parse(job.provenancePinJson) as ProvenancePin)
+      : null;
+    if (pin?.timepointWarning) datasetWarnings.push(pin.timepointWarning);
     const drifted = pinnedEntries.filter((entry) => {
       const current = currentVersions.get(`${entry.code}:${entry.slice}`);
       return (current?.version ?? 0) !== entry.version;
@@ -296,7 +310,7 @@ async function main(): Promise<void> {
           strategyVersion: strategy.version,
           strategySourceHash: sourceHash,
           parameterJson: JSON.stringify(parameters),
-          datasetId: dataset.id,
+          datasetId: resolvedDatasetId,
           universeJson: pinnedUniverseJson,
           universeHash: pinnedUniverseHash,
           engineVersion: ENGINE_VERSION,
@@ -304,6 +318,9 @@ async function main(): Promise<void> {
           slippageModelVersion: `${slippageProfile.id}@${slippageProfile.version}`,
           randomSeed: request.randomSeed,
           gitCommitSha: readGitCommitSha(),
+          // run 은 pin 원문을 그대로 복사한다 — job 이 사라져도(보존 정책 등) 실행
+          // 기록 자체가 provenance 를 답할 수 있어야 한다.
+          provenancePinJson: job.provenancePinJson,
           warningsJson: JSON.stringify([...datasetWarnings, ...result.warnings]),
           openPositionsJson: JSON.stringify(result.openPositions),
           startedAtMs,

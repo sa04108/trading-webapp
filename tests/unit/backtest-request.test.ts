@@ -59,3 +59,53 @@ describe('유니버스 상한 (랭킹 전략용 확대)', () => {
     expect(backtestRequestSchema.safeParse(requestWithSymbols(0)).success).toBe(false);
   });
 });
+
+describe('datasetId xor universeSnapshotId (Task 12)', () => {
+  function baseRequest(): Record<string, unknown> {
+    return {
+      strategyId: 'range-breakout',
+      parameters: {},
+      universe: { type: 'SYMBOLS', symbols: ['005930'] },
+      period: { from: '2020-01-01', to: '2025-12-31' },
+      capital: { initialCash: 10_000_000, currency: 'KRW' },
+      execution: {
+        fillTiming: 'NEXT_BAR_OPEN',
+        commissionProfileId: 'kr-default',
+        slippageProfileId: 'kr-default',
+      },
+      risk: { maxPositions: 20 },
+    };
+  }
+
+  it('레거시 요청(datasetId만)은 그대로 파싱된다', () => {
+    const result = backtestRequestSchema.safeParse({ ...baseRequest(), datasetId: 'ds-1' });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.datasetId).toBe('ds-1');
+      expect(result.data.universeSnapshotId).toBeUndefined();
+    }
+  });
+
+  it('universeSnapshotId 단독 요청도 통과한다', () => {
+    const result = backtestRequestSchema.safeParse({ ...baseRequest(), universeSnapshotId: 'usn_1' });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.universeSnapshotId).toBe('usn_1');
+      expect(result.data.datasetId).toBeUndefined();
+    }
+  });
+
+  it('둘 다 지정하면 거부한다', () => {
+    const result = backtestRequestSchema.safeParse({
+      ...baseRequest(),
+      datasetId: 'ds-1',
+      universeSnapshotId: 'usn_1',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('둘 다 없으면 거부한다', () => {
+    const result = backtestRequestSchema.safeParse(baseRequest());
+    expect(result.success).toBe(false);
+  });
+});

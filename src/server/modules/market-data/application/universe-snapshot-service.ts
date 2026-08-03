@@ -52,6 +52,10 @@ export interface UniverseSnapshotSummary {
   readonly selectedCount: number;
   readonly unknownMarketCapCount: number;
   readonly createdAtMs: number;
+  /** 백테스트 provenance pin 조립용 (Task 12) — 필터 정책 버전 */
+  readonly filterPolicyVersion: string;
+  /** 백테스트 provenance pin 조립용 (Task 12) — 선택 종목 집합의 재현 해시 */
+  readonly selectionHash: string;
 }
 
 export interface UniverseSnapshotDetail extends UniverseSnapshotSummary {
@@ -384,6 +388,8 @@ export class UniverseSnapshotService {
       selectedCount: row.selectedCount,
       unknownMarketCapCount: row.unknownMarketCapCount,
       createdAtMs: row.createdAtMs,
+      filterPolicyVersion: row.filterPolicyVersion,
+      selectionHash: row.selectionHash,
     };
   }
 }

@@ -86,10 +86,13 @@ export async function buildServer(container: Container): Promise<FastifyInstance
           strategies: container.strategyRegistry,
           datasets: container.datasetService,
           symbolService: container.symbolService,
+          universeSnapshotService: container.universeSnapshotService,
           audit: container.auditLog,
           factRepository: container.factRepository,
           dataRoot: container.config.dataRoot,
           maxQueuedBacktests: container.config.maxQueuedBacktests,
+          clock: container.clock,
+          krxApprovalExpiry: container.config.krxApprovalExpiry,
         },
         requireAuth,
       );
