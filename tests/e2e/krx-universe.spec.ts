@@ -66,7 +66,8 @@ function buildSingleDayMinuteCsv(dayStartUtcMs: number): string {
  * e2e-server.ts 시드에 넣지 않는 이유: e2e 서버 하나를 여러 스펙이 공유하는데
  * (playwright.config workers:1), `/datasets?tab=symbols` 등록 종목 수를 정확히
  * 세는 다른 스펙(mvp-flow.spec.ts §8)이 있어 전역 카탈로그를 건드리면 그 스펙이
- * 깨진다. 이 스펙이 만든 것은 이 스펙이 끝에서 스스로 지운다(6번 정리).
+ * 깨진다. 이 스펙이 만든 것은 이 스펙이 스스로 지운다(아래 `removeSymbolIfPresent`,
+ * `afterEach` 참고).
  *
  * 캔들은 백테스트 기간과 절대 겹치지 않는 하루(2020-01-02)만 넣는다 — 그래야
  * "가격 데이터가 없는 스냅샷 종목" 차단(REVIEW §9.1)이 재현된다: 종목은 로컬
@@ -88,11 +89,24 @@ async function importDelistedSymbol(page: Page): Promise<void> {
   await expect(csvDialog).toHaveCount(0);
 }
 
-/** 종목 탭에서 편집 모드로 들어가 코드 하나를 제거한다 — 이름을 못 채운 CSV 등록 종목은 아리아 라벨이 코드다. */
-async function removeSymbol(page: Page, code: string): Promise<void> {
+/**
+ * 종목 탭에서 편집 모드로 들어가 코드 하나를 제거한다 — 존재할 때만.
+ *
+ * 크래시 안전한 정리(afterEach)가 부르므로 두 상태를 모두 받아야 한다: (1) 이
+ * 스펙의 시나리오가 끝까지 가서 900010 을 실제로 만든 경우, (2) `importDelistedSymbol`
+ * 이전에 다른 assertion 이 먼저 실패해 900010 이 아예 존재하지 않는 경우. 체크박스
+ * 존재 여부로 두 경우를 가른다 — 없는 종목을 제거하려고 기다리다 타임아웃으로
+ * 걸리면 정리 자체가 실패해 오염이 남는 원래 문제를 그대로 재현한다.
+ */
+async function removeSymbolIfPresent(page: Page, code: string): Promise<void> {
   await page.goto('/datasets?tab=symbols');
   await page.getByRole('button', { name: '편집' }).click();
-  await page.getByRole('checkbox', { name: `${code} 선택` }).check();
+  const checkbox = page.getByRole('checkbox', { name: `${code} 선택` });
+  if ((await checkbox.count()) === 0) {
+    await page.getByRole('button', { name: '완료' }).click();
+    return;
+  }
+  await checkbox.check();
   await page.getByRole('button', { name: '제거' }).click();
   const removeDialog = page.getByRole('dialog');
   await expect(removeDialog.getByText(/참조하는 데이터셋이 없습니다/)).toBeVisible();
@@ -101,11 +115,24 @@ async function removeSymbol(page: Page, code: string): Promise<void> {
   await page.getByRole('button', { name: '완료' }).click();
 }
 
-test('KRX 과거 유니버스 위저드 흐름 (Task 15)', async ({ page }) => {
-  // 조회 3회 + 스냅샷 확정 2회 + 실제 백테스트 완료 대기(최대 90초) + CSV 등록/제거
+/**
+ * 900010 을 만드는 테스트는 시나리오 5 하나뿐이지만, 그 테스트의 assertion 이
+ * 중간에 실패해도(예: 리뷰가 실측한 강제 실패 주입) 정리가 실행돼야 한다 —
+ * try/finally 를 시나리오 안에 두면 시나리오 자체가 아니라 이 파일의 다른
+ * 테스트가 실패했을 때는 지켜주지 못한다. 파일 전역 afterEach 로 모든 테스트
+ * 뒤에 걸어 두면 어느 테스트가 어떻게 실패하든 같은 보장이 선다. 900010 을
+ * 만들지 않는 시나리오 1~4 테스트에서는 `removeSymbolIfPresent` 가 즉시
+ * 아무 일도 하지 않고 끝난다.
+ */
+test.afterEach(async ({ page }) => {
+  await removeSymbolIfPresent(page, DELISTED_SYMBOL_CODE);
+});
+
+test('위저드 조회·선택·확정·게이트·성공 제출 (Task 15 시나리오 1~4)', async ({ page }) => {
+  // 조회 + 스냅샷 확정 + 시작일 게이트 차단 + 실제 백테스트 완료 대기(최대 90초)
   // 까지 한 흐름에 담아 위저드 상태(selectedSnapshot)를 시나리오 사이에 그대로
   // 이어 쓴다 — 기본 120초로는 여유가 부족하다.
-  test.setTimeout(180_000);
+  test.setTimeout(150_000);
 
   await login(page);
 
@@ -196,10 +223,20 @@ test('KRX 과거 유니버스 위저드 흐름 (Task 15)', async ({ page }) => {
   ).toBeVisible();
   await expect(page.getByText(`KRX ${EFFECTIVE_DATE} 스냅샷 · 1종목`)).toBeVisible();
   await expect(page.getByText('수동 선택')).toBeVisible(); // 선정 방식 — topN 에서 수동 해제했으므로 MANUAL
+});
 
-  // ── 5) 가격 없는 종목(900010) 포함 스냅샷 → 제출 차단에 코드 나열 ──
+/**
+ * 가격 없는 종목 시나리오를 별도 테스트로 분리했다(리뷰 Important) — 위저드
+ * 상태를 이어 쓸 필요가 없는 독립 흐름이고(새 preview·새 스냅샷), 분리해 두면
+ * 이 테스트 하나가 실패해도 위 시나리오 1~4 는 별도로 보고된다. 900010 을
+ * 만드는 유일한 테스트라 정리 대상도 이 테스트로 한정된다(afterEach 는 그래도
+ * 파일 전체에 걸려 있다 — 크래시 안전을 테스트 경계에 의존하지 않기 위해서다).
+ */
+test('가격 없는 종목 포함 스냅샷은 제출을 차단한다 (Task 15 시나리오 5)', async ({ page }) => {
+  await login(page);
   await importDelistedSymbol(page);
 
+  // ── 5) 가격 없는 종목(900010) 포함 스냅샷 → 제출 차단에 코드 나열 ──
   await page.goto('/backtests/new');
   await selectRangeBreakoutStrategy(page);
   await queryKrxPreview(page, REQUESTED_DATE);
@@ -228,10 +265,7 @@ test('KRX 과거 유니버스 위저드 흐름 (Task 15)', async ({ page }) => {
   await expect(page.getByText('생존 편향을 막기 위해')).toBeVisible();
 
   // ── 6) 정리 ──
-  // 스냅샷 자체는 불변 저장이라(REVIEW §9.2) 지울 API 가 없어 그대로 둔다. 이
-  // 스펙이 CSV 가져오기 UI 로 직접 만든 900010 은 이 스펙이 끝에서 되돌린다 —
-  // 서버 하나를 mobile·desktop 두 프로젝트가 공유하므로(playwright.config
-  // workers:1) 남기면 두 번째 실행에서 이미 등록된 종목을 다시 만나 CSV 가져오기가
-  // 실패한다.
-  await removeSymbol(page, DELISTED_SYMBOL_CODE);
+  // 스냅샷 자체는 불변 저장이라(REVIEW §9.2) 지울 API 가 없어 그대로 둔다. 900010
+  // 은 파일 전역 afterEach(removeSymbolIfPresent)가 되돌린다 — 이 assertion들이
+  // 실패해도 afterEach 는 여전히 실행되므로 여기서 별도로 부르지 않는다.
 });
