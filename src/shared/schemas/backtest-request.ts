@@ -13,44 +13,57 @@ export { MAX_UNIVERSE_SYMBOLS };
  * 아래 parameters 검증이 잡는다.
  *
  * 이 필드가 있던 시절의 저장된 요청은 그대로 파싱된다 — z.object 는 모르는 키를 버린다.
+ *
+ * `datasetId` xor `universeSnapshotId` (Task 12). 유니버스가 "지금 등록된 종목 집합"
+ * (datasetId)인지 "과거 어느 시점에 고정된 KRX 유니버스" (universeSnapshotId)인지는
+ * 섞일 수 없다 — 둘 다 있으면 어느 쪽을 신뢰할지 서버가 임의로 골라야 하고, 둘 다
+ * 없으면 실행할 유니버스가 없다. `datasetId` 만 있던 시절의 저장된 요청은 그대로
+ * 통과한다.
  */
-export const backtestRequestSchema = z.object({
-  strategyId: z.string().min(1),
-  parameters: z.record(z.string(), z.unknown()),
-  datasetId: z.string().min(1),
-  /**
-   * 소비 봉 주기 (설계 2026-07-29-backtest-timeframe-design.md).
-   * 미지정 = 데이터셋 timeframe (기존 동작). optional 인 이유: 이 필드가 없던
-   * 시절의 저장된 요청(복제·재실행)이 현재 스키마로도 파싱돼야 한다.
-   */
-  timeframe: z.enum(['1m', '1h', '1d']).optional(),
-  universe: z.object({
-    type: z.literal('SYMBOLS'),
-    /** 상한의 근거는 `MAX_UNIVERSE_SYMBOLS` 주석에 있다 */
-    symbols: z
-      .array(z.string().regex(/^[A-Za-z0-9._-]{1,20}$/))
-      .min(1)
-      .max(MAX_UNIVERSE_SYMBOLS),
-  }),
-  period: z.object({
-    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  }),
-  capital: z.object({
-    initialCash: z.number().positive(),
-    currency: z.literal('KRW'),
-  }),
-  execution: z.object({
-    fillTiming: z.literal('NEXT_BAR_OPEN'),
-    commissionProfileId: z.string().min(1),
-    slippageProfileId: z.string().min(1),
-  }),
-  /** 엔진 리스크 상한 (§9.2-6) — 전략 파라미터가 아니라 요청의 명시 필드다 */
-  risk: z.object({
-    maxPositions: z.number().int().min(1).max(20),
-  }),
-  randomSeed: z.number().int().nonnegative().default(42),
-});
+export const backtestRequestSchema = z
+  .object({
+    strategyId: z.string().min(1),
+    parameters: z.record(z.string(), z.unknown()),
+    datasetId: z.string().min(1).optional(),
+    /** 과거 시점 고정 유니버스 참조 (설계 2026-08-03-krx-historical-universe, Task 12) */
+    universeSnapshotId: z.string().min(1).optional(),
+    /**
+     * 소비 봉 주기 (설계 2026-07-29-backtest-timeframe-design.md).
+     * 미지정 = 데이터셋 timeframe (기존 동작). optional 인 이유: 이 필드가 없던
+     * 시절의 저장된 요청(복제·재실행)이 현재 스키마로도 파싱돼야 한다.
+     */
+    timeframe: z.enum(['1m', '1h', '1d']).optional(),
+    universe: z.object({
+      type: z.literal('SYMBOLS'),
+      /** 상한의 근거는 `MAX_UNIVERSE_SYMBOLS` 주석에 있다 */
+      symbols: z
+        .array(z.string().regex(/^[A-Za-z0-9._-]{1,20}$/))
+        .min(1)
+        .max(MAX_UNIVERSE_SYMBOLS),
+    }),
+    period: z.object({
+      from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    }),
+    capital: z.object({
+      initialCash: z.number().positive(),
+      currency: z.literal('KRW'),
+    }),
+    execution: z.object({
+      fillTiming: z.literal('NEXT_BAR_OPEN'),
+      commissionProfileId: z.string().min(1),
+      slippageProfileId: z.string().min(1),
+    }),
+    /** 엔진 리스크 상한 (§9.2-6) — 전략 파라미터가 아니라 요청의 명시 필드다 */
+    risk: z.object({
+      maxPositions: z.number().int().min(1).max(20),
+    }),
+    randomSeed: z.number().int().nonnegative().default(42),
+  })
+  .refine((value) => (value.datasetId !== undefined) !== (value.universeSnapshotId !== undefined), {
+    message: 'datasetId와 universeSnapshotId 중 정확히 하나를 지정해야 합니다.',
+    path: ['datasetId'],
+  });
 
 export type BacktestRequest = z.infer<typeof backtestRequestSchema>;
 

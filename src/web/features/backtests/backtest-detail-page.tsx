@@ -83,6 +83,12 @@ import { isTerminal, type BacktestMetrics, type JobSummary, type RunMetadata } f
 import { costSummary } from './cost-summary';
 import { costProfileLabel, slippageProfileLabel } from './profile-labels';
 import { groupWarnings } from './warning-groups';
+import {
+  provenanceNotice,
+  selectionMethodLabel,
+  universeSourceLabel,
+} from './universe-provenance';
+import type { ProvenancePin } from '../../../shared/schemas/provenance-pin.js';
 
 function MetricCards({ metrics }: { metrics: BacktestMetrics }) {
   const cost = costSummary(metrics);
@@ -438,11 +444,13 @@ function RunMetadataCard({
   job,
   strategyName,
   timeframe,
+  provenancePin,
 }: {
   run: RunMetadata;
   job: JobSummary;
   strategyName: string | undefined;
   timeframe: string | null;
+  provenancePin: ProvenancePin | null;
 }) {
   const warnings = run.warningsJson ? (JSON.parse(run.warningsJson) as string[]) : [];
   // 라벨·설명은 서버 스키마에서 읽는다 (위저드와 같은 캐시 키).
@@ -484,7 +492,11 @@ function RunMetadataCard({
         : `${run.strategyId} v${run.strategyVersion}`,
     ],
     ['전략 해시', run.strategySourceHash.slice(0, 16)],
-    ['데이터셋', run.datasetId],
+    // 「데이터셋」 원시 id 행 대신 유니버스 출처를 적는다 (Task 14) — datasetId 는 KRX
+    // 스냅샷 경로에서 null 이라 그대로 보여주면 "데이터셋이 없다" 는 오해를 만든다.
+    ['유니버스 출처', universeSourceLabel(provenancePin)],
+    ['적용 거래일', provenancePin?.effectiveTradingDate ?? '-'],
+    ['선정 방식', selectionMethodLabel(provenancePin?.selectionMethod ?? null)],
     ['봉 주기', timeframe ? timeframeLabel(timeframe) : '-'],
     ['유니버스 해시', run.universeHash.slice(0, 16)],
     ['엔진 버전', run.engineVersion],
@@ -550,13 +562,43 @@ function RunMetadataCard({
   );
 }
 
+/**
+ * 재현 정보 카드 위 안내문 (Task 14, REVIEW §9.3) — 이 실행이 어느 시점의 유니버스로
+ * 돌았는지, 그 유니버스가 과거 시점 적합성을 보증하는지를 카드보다 먼저 문장으로 알린다.
+ * pin 이 없거나(구버전 잡) 문구가 없으면 아무것도 그리지 않는다.
+ */
+function UniverseProvenanceNotice({ pin }: { pin: ProvenancePin | null }) {
+  const notice = provenanceNotice(pin);
+  if (notice.badges.length === 0 && notice.sentence === null && notice.warning === null) {
+    return null;
+  }
+  return (
+    <Alert>
+      <AlertDescription className="space-y-2">
+        {notice.badges.length > 0 ? (
+          <div className="flex flex-wrap gap-1">
+            {notice.badges.map((badge) => (
+              <Badge key={badge}>{badge}</Badge>
+            ))}
+          </div>
+        ) : null}
+        {notice.sentence ? <p>{notice.sentence}</p> : null}
+        {notice.warning ? <p>{notice.warning}</p> : null}
+        {pin?.sourceKind === 'KRX_HISTORICAL' ? (
+          <p className="text-xs text-muted-foreground">출처: 한국거래소 통계정보</p>
+        ) : null}
+      </AlertDescription>
+    </Alert>
+  );
+}
+
 export function BacktestDetailPage() {
   const { id = '' } = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [deleteOpen, setDeleteOpen] = useState(false);
 
-  const { job, run, metrics, isLoading } = useBacktestLive(id);
+  const { job, run, metrics, provenancePin, isLoading } = useBacktestLive(id);
   const completed = job?.status === 'COMPLETED';
   const { data: series } = useBacktestSeries(id, completed === true);
 
@@ -703,11 +745,17 @@ export function BacktestDetailPage() {
       </div>
 
       <p className="text-sm text-muted-foreground">
-        {formatUniverseSummary(
-          datasetNames.data?.datasets.find((d) => d.id === job.datasetId)?.name ?? null,
-          job.datasetId,
-          job.request.universe.symbols.length,
-        )}{' '}
+        {
+          // KRX 스냅샷 경로는 datasetId 가 null 이다 — 데이터셋 이름을 찾는 대신
+          // 유니버스 출처 라벨로 대체한다 (Task 13 리뷰 이관 항목).
+          job.datasetId === null
+            ? `${universeSourceLabel(provenancePin)} · ${job.request.universe.symbols.length}종목`
+            : formatUniverseSummary(
+                datasetNames.data?.datasets.find((d) => d.id === job.datasetId)?.name ?? null,
+                job.datasetId,
+                job.request.universe.symbols.length,
+              )
+        }{' '}
         · {job.request.period.from} ~ {job.request.period.to} · 생성{' '}
         {formatDateTime(job.createdAtMs)}
       </p>
@@ -816,7 +864,16 @@ export function BacktestDetailPage() {
       ) : null}
 
       {run ? (
-        <RunMetadataCard run={run} job={job} strategyName={strategyName} timeframe={resolvedTimeframe} />
+        <>
+          <UniverseProvenanceNotice pin={provenancePin} />
+          <RunMetadataCard
+            run={run}
+            job={job}
+            strategyName={strategyName}
+            timeframe={resolvedTimeframe}
+            provenancePin={provenancePin}
+          />
+        </>
       ) : null}
 
       {job.status === 'INTERRUPTED' ? (

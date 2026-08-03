@@ -4,6 +4,7 @@ import { backtestJobs } from '../../../shared/db/schema.js';
 import type { Clock } from '../../../shared/clock.js';
 import { newId } from '../../../shared/ids.js';
 import type { BacktestRequest } from '../../../../shared/schemas/backtest-request.js';
+import type { ProvenancePin } from '../../../../shared/schemas/provenance-pin.js';
 
 export type BacktestJobStatus =
   | 'QUEUED'
@@ -40,13 +41,21 @@ export class JobQueue {
     request: BacktestRequest,
     /** 제출 시점 종목 버전 스냅샷 — 실행 시점의 latest 로 대체되지 않도록 고정한다 (§9.5) */
     pinnedUniverse?: { entries: readonly unknown[]; hash: string },
+    /** 서버 소유 provenance pin (Task 12, REVIEW §9.2) — validateSubmission 이 조립한 값이다 */
+    provenancePin?: ProvenancePin | null,
+    universeSnapshotId?: string | null,
   ): BacktestJobRow {
     const row: typeof backtestJobs.$inferInsert = {
       id: newId('bt'),
       status: 'QUEUED',
       requestJson: JSON.stringify(request),
       strategyId: request.strategyId,
-      datasetId: request.datasetId,
+      // datasetId 는 컬럼상 NOT NULL 이다 — 스냅샷 경로(request.datasetId 없음)는
+      // '' 를 "데이터셋 없음" sentinel 로 쓴다. 실제 데이터셋 id 는 newId() 로 생성돼
+      // 항상 비어 있지 않으므로 이 sentinel 과 절대 충돌하지 않는다.
+      datasetId: request.datasetId ?? '',
+      universeSnapshotId: universeSnapshotId ?? null,
+      provenancePinJson: provenancePin ? JSON.stringify(provenancePin) : null,
       universeJson: pinnedUniverse ? JSON.stringify(pinnedUniverse.entries) : null,
       universeHash: pinnedUniverse?.hash ?? null,
       createdAtMs: this.clock.now(),

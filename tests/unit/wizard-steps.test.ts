@@ -20,6 +20,7 @@ const complete: StepGateState = {
   from: '2026-01-05',
   to: '2026-03-31',
   initialCash: '10000000',
+  universeMode: 'DATASET',
 };
 
 const empty: StepGateState = {
@@ -29,6 +30,7 @@ const empty: StepGateState = {
   from: '',
   to: '',
   initialCash: '10000000',
+  universeMode: 'DATASET',
 };
 
 describe('단계 상수', () => {
@@ -207,6 +209,62 @@ describe('stepBlocker — 종목 수 상한 게이트 (단계 1)', () => {
         symbols: symbols(MAX_UNIVERSE_SYMBOLS + 1),
       }),
     ).toBe('데이터셋을 선택하세요');
+  });
+});
+
+/**
+ * KRX 과거 시점 스냅샷 모드 게이트 (Task 13).
+ *
+ * 이 모드는 데이터셋을 고르지 않는다 — `krx-snapshot-step.tsx` 가 스냅샷을 확정하면
+ * 그 종목 목록이 그대로 `symbols` 가 된다. 그래서 datasetId 없이도 통과해야 하고,
+ * 대신 스냅샷을 아직 확정하지 않은 상태(빈 symbols)를 막아야 한다. 200종목 상한은
+ * 모드와 무관하게 그대로 적용된다 — 서버가 받아들이는 유니버스 크기는 유니버스의
+ * 출처가 아니라 크기만으로 정해진다.
+ */
+describe('stepBlocker — KRX 스냅샷 모드 게이트 (단계 1)', () => {
+  const symbols = (count: number): string[] =>
+    Array.from({ length: count }, (_, index) => String(index).padStart(6, '0'));
+
+  const snapshotComplete: StepGateState = {
+    ...complete,
+    universeMode: 'KRX_SNAPSHOT',
+    datasetId: null,
+    symbols: ['005930'],
+  };
+
+  it('스냅샷 모드에서는 datasetId 없이 스냅샷 종목만으로 통과한다', () => {
+    expect(stepBlocker(1, snapshotComplete)).toBeNull();
+  });
+
+  it('스냅샷을 아직 확정하지 않았으면(종목 없음) 막는다', () => {
+    expect(stepBlocker(1, { ...snapshotComplete, symbols: [] })).toBe(
+      '과거 KRX 시점 스냅샷을 확정하세요',
+    );
+  });
+
+  it('데이터셋 모드는 여전히 datasetId 를 요구한다 — 두 모드가 서로의 검사를 건너뛰지 않는다', () => {
+    expect(stepBlocker(1, { ...complete, datasetId: null })).toBe('데이터셋을 선택하세요');
+  });
+
+  it('스냅샷 모드도 200종목 상한을 넘으면 막는다 — 상한은 모드와 무관하다', () => {
+    const reason = stepBlocker(1, {
+      ...snapshotComplete,
+      symbols: symbols(MAX_UNIVERSE_SYMBOLS + 1),
+    });
+    expect(reason).toContain(String(MAX_UNIVERSE_SYMBOLS + 1));
+  });
+
+  it('상한과 같은 개수는 스냅샷 모드에서도 통과한다', () => {
+    expect(
+      stepBlocker(1, { ...snapshotComplete, symbols: symbols(MAX_UNIVERSE_SYMBOLS) }),
+    ).toBeNull();
+  });
+
+  it('스냅샷 미확정이 상한 초과보다 먼저다 — 원인을 뒤집어 말하지 않는다', () => {
+    // symbols 가 비어 있으면(스냅샷 미확정) 상한 검사에 닿지 않는다
+    expect(stepBlocker(1, { ...snapshotComplete, symbols: [] })).toBe(
+      '과거 KRX 시점 스냅샷을 확정하세요',
+    );
   });
 });
 

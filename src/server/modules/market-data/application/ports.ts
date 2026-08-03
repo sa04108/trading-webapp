@@ -1,4 +1,15 @@
 import type { Candle, Market, Timeframe } from '../domain/candle.js';
+import type {
+  KrxDailyTradeRow,
+  KrxIssueBaseInfoRow,
+  KrxMarket,
+} from '../domain/krx-universe-types.js';
+
+export type {
+  KrxDailyTradeRow,
+  KrxIssueBaseInfoRow,
+  KrxMarket,
+} from '../domain/krx-universe-types.js';
 
 /** 스펙 §8 시장 데이터 Port */
 export interface CandleQuery {
@@ -42,6 +53,12 @@ export interface FetchCandleResult {
 
 export interface MarketDataSource {
   fetchCandles(request: FetchCandleRequest): Promise<FetchCandleResult>;
+}
+
+export interface KrxHistoricalUniverseSource {
+  fetchIssueBaseInfo(market: KrxMarket, isoDate: string): Promise<readonly KrxIssueBaseInfoRow[]>;
+  fetchDailyTrades(market: KrxMarket, isoDate: string): Promise<readonly KrxDailyTradeRow[]>;
+  todayCallCount(): number;
 }
 
 /** 종목 참조 정보 (코드 → 이름). 이름 검색(이름 → 코드)은 소스가 제공하지 않는다. */
@@ -111,5 +128,33 @@ export class UnsupportedTimeframeError extends Error {
       `데이터 소스가 ${timeframe} 봉을 제공하지 않습니다. 시간봉은 1분봉을 모아 만듭니다.`,
     );
     this.name = 'UnsupportedTimeframeError';
+  }
+}
+
+export class KrxNotConfiguredError extends Error {
+  constructor() {
+    super('KRX Open API 키와 API별 승인이 필요합니다. 키를 설정하고 필요한 API 사용 승인을 받으세요.');
+    this.name = 'KrxNotConfiguredError';
+  }
+}
+
+export class KrxApprovalExpiredError extends Error {
+  constructor(message = 'KRX Open API 사용 승인이 만료되었습니다. API별 승인 상태를 확인하세요.') {
+    super(message);
+    this.name = 'KrxApprovalExpiredError';
+  }
+}
+
+export class KrxContractError extends Error {
+  constructor(message = 'KRX 응답이 예상한 계약과 다릅니다.') {
+    super(message);
+    this.name = 'KrxContractError';
+  }
+}
+
+export class KrxQuotaError extends Error {
+  constructor(message = 'KRX Open API 호출 한도를 초과했습니다. 잠시 후 다시 시도하세요.') {
+    super(message);
+    this.name = 'KrxQuotaError';
   }
 }

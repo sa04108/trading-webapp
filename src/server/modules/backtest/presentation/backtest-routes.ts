@@ -1,6 +1,6 @@
 import os from 'node:os';
 import fs from 'node:fs';
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyBaseLogger, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
   backtestRequestSchema,
@@ -8,12 +8,17 @@ import {
   type BacktestRequest,
 } from '../../../../shared/schemas/backtest-request.js';
 import {
+  DATASET_TIMEPOINT_WARNING,
+  type ProvenancePin,
+} from '../../../../shared/schemas/provenance-pin.js';
+import {
   DEFAULT_TRADE_SORT_DIRECTION,
   DEFAULT_TRADE_SORT_KEY,
   SORT_DIRECTIONS,
   TRADE_SORT_KEYS,
 } from '../../../../shared/schemas/trade-sort.js';
 import { SECURITY_HEADERS } from '../../../shared/security.js';
+import type { Clock } from '../../../shared/clock.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
 import type { FactRepository } from '../../facts/application/ports.js';
 import type {
@@ -21,11 +26,13 @@ import type {
   UniverseSnapshot,
 } from '../../market-data/application/dataset-service.js';
 import type { SymbolService } from '../../market-data/application/symbol-service.js';
+import type { UniverseSnapshotService } from '../../market-data/application/universe-snapshot-service.js';
 import {
   sliceForTimeframe,
   sliceTimeframes,
   type DatasetSlice,
 } from '../../market-data/domain/dataset-slice.js';
+import { kstDateOf } from '../../market-data/domain/kst-date.js';
 import type { StrategyRegistry } from '../../strategy/application/strategy-registry.js';
 import { estimateBars, MAX_BACKTEST_BARS } from '../domain/bar-estimate.js';
 import {
@@ -48,10 +55,14 @@ export interface BacktestRouteDeps {
   readonly strategies: StrategyRegistry;
   readonly datasets: DatasetService;
   readonly symbolService: SymbolService;
+  readonly universeSnapshotService: UniverseSnapshotService;
   readonly audit: AuditLogService;
   readonly factRepository: FactRepository;
   readonly dataRoot: string;
   readonly maxQueuedBacktests: number;
+  readonly clock: Clock;
+  /** KRX 이용 승인 만료일 — 스냅샷 기반 신규 제출 게이트 (REVIEW §10) */
+  readonly krxApprovalExpiry: string | null;
 }
 
 const MIN_FREE_DISK_BYTES = 500 * 1024 * 1024;
@@ -76,12 +87,31 @@ function availableMemoryBytes(): number {
   return os.freemem();
 }
 
+/**
+ * `backtest_jobs.dataset_id`/`backtest_runs.dataset_id` 는 NOT NULL 컬럼이라 스냅샷
+ * 경로(Task 12)는 `queue.enqueue` 가 `''` 를 "데이터셋 없음" sentinel 로 저장한다
+ * (job-queue.ts 참고). 그 sentinel 이 API 응답까지 새면 클라이언트가 빈 문자열을
+ * 데이터셋 id 로 오해한다 — 직렬화 경계에서 null 로 되돌린다.
+ */
+function serializedDatasetId(datasetId: string): string | null {
+  return datasetId === '' ? null : datasetId;
+}
+
+/** run 응답도 같은 sentinel 을 갖고 있다 (backtest-child.ts 가 job.datasetId 를 그대로 복사) */
+function serializeRun<T extends { datasetId: string }>(
+  run: T | null,
+): (Omit<T, 'datasetId'> & { datasetId: string | null }) | null {
+  if (!run) return null;
+  return { ...run, datasetId: serializedDatasetId(run.datasetId) };
+}
+
 function serializeJob(job: BacktestJobRow) {
   return {
     id: job.id,
     status: job.status,
     strategyId: job.strategyId,
-    datasetId: job.datasetId,
+    datasetId: serializedDatasetId(job.datasetId),
+    universeSnapshotId: job.universeSnapshotId,
     request: JSON.parse(job.requestJson) as unknown,
     progressBars: job.progressBars,
     totalBars: job.totalBars,
@@ -91,6 +121,25 @@ function serializeJob(job: BacktestJobRow) {
     startedAtMs: job.startedAtMs,
     completedAtMs: job.completedAtMs,
   };
+}
+
+/**
+ * provenancePinJson 은 저장 시점에 이미 검증된 값이라 정상 상태에서는 항상 파싱된다.
+ * 그래도 행이 손상돼 있으면(예: 수동 DB 편집) 상세 조회 전체를 500 으로 죽이는 대신
+ * pin 만 null 로 내리고 나머지 응답(job·run·metrics)은 그대로 성공시킨다.
+ */
+function parseProvenancePin(
+  provenancePinJson: string | null,
+  jobId: string,
+  logger: FastifyBaseLogger,
+): ProvenancePin | null {
+  if (!provenancePinJson) return null;
+  try {
+    return JSON.parse(provenancePinJson) as ProvenancePin;
+  } catch (error) {
+    logger.warn({ event: 'backtest.provenance_pin.parse_failed', jobId, err: error }, 'provenancePinJson 파싱에 실패해 pin 없이 응답한다');
+    return null;
+  }
 }
 
 async function checkResources(dataRoot: string): Promise<string | null> {
@@ -109,13 +158,27 @@ async function checkResources(dataRoot: string): Promise<string | null> {
 }
 
 export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRouteDeps, requireAuth: PreHandler): void {
-  const { queue, orchestrator, results, strategies, datasets, symbolService, audit, factRepository } =
-    deps;
+  const {
+    queue,
+    orchestrator,
+    results,
+    strategies,
+    datasets,
+    symbolService,
+    universeSnapshotService,
+    audit,
+    factRepository,
+  } = deps;
 
   /**
    * 기간 × 커버리지 검사 (D-025). 커버리지는 메타데이터라 Parquet 을 읽지 않는다.
    * 요청한 종목 **전부** 가 구간 밖일 때만 거부한다 — 신규 상장처럼 이력이 짧은 종목
    * 하나 때문에 유니버스 전체를 막지 않는다. 일부만 비는 경우는 실행 경고로 남는다.
+   *
+   * **데이터셋 경로 전용** — 스냅샷 경로(과거 시점 유니버스)는 정반대 규칙을 쓴다
+   * (`checkSnapshotPeriodCoverage`): 일부만 조용히 제외하면 생존 편향이 재발한다
+   * (REVIEW §9.1). 데이터셋은 "지금 등록된 종목" 이라 신규 상장이 섞여 있는 게
+   * 정상이므로 이 관용이 유지된다.
    */
   const checkPeriodCoverage = (
     body: BacktestRequest,
@@ -145,16 +208,154 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
   };
 
   /**
-   * 제출 검증 — 신규 제출(POST)·복제(clone)·초안(clone-draft)이 동일한 기준을 거친다.
-   * 통과 시 제출 시점의 데이터셋 버전을 함께 반환한다 (재현성 §9.5).
-   * 사유를 모아 반환한다 — 초안(clone-draft)이 무엇을 고쳐야 하는지 한 번에 알려야 한다.
-   * 400 메시지는 `errors[0]` 이므로 검사 순서가 곧 우선순위다.
+   * 스냅샷 경로 전용 기간 커버리지 검사 — `checkPeriodCoverage` 와 정반대다.
+   * 데이터셋은 "지금 등록된 종목" 이라 신규 상장이 섞여도 정상이지만, 과거 시점에
+   * 고정한 유니버스는 그 시점에 "존재했던" 종목들이다 — 그중 하나라도 기간 내 가격이
+   * 없으면 일부만 조용히 빼지 않고 전체를 막는다. 조용히 빼면 그 결측이 우연히도
+   * "부실 종목이라 데이터가 없다" 는 방향으로 쏠릴 수 있고, 그게 곧 생존 편향이다
+   * (REVIEW §9.1).
    */
-  const validateSubmission = (
+  const checkSnapshotPeriodCoverage = (
+    codes: readonly string[],
+    slice: DatasetSlice,
+    period: { from: string; to: string },
+  ): string | null => {
+    const { fromTsMs, toTsMs } = periodToTsRange(period);
+    const bySymbol = new Map(
+      symbolService
+        .getCoverage(codes)
+        .filter((row) => row.slice === slice)
+        .map((row) => [row.code, row]),
+    );
+
+    const missing: string[] = [];
+    for (const code of codes) {
+      const row = bySymbol.get(code);
+      const hasOverlap =
+        row !== undefined &&
+        row.barCount > 0 &&
+        row.firstTsMs !== null &&
+        row.lastTsMs !== null &&
+        row.lastTsMs >= fromTsMs &&
+        row.firstTsMs <= toTsMs;
+      if (!hasOverlap) missing.push(code);
+    }
+    if (missing.length === 0) return null;
+    return (
+      `선택한 기간에 가격 데이터가 없는 스냅샷 종목이 있습니다: ${missing.join(', ')} — ` +
+      '생존 편향을 막기 위해 일부만 제외하지 않고 전체 유니버스를 차단합니다. ' +
+      '데이터를 동기화하거나 다른 스냅샷·기간을 선택하세요.'
+    );
+  };
+
+  /**
+   * 소비 timeframe 해소 + 슬라이스 봉 존재 확인 + 봉 수 상한 검사. 데이터셋·스냅샷
+   * 경로가 공유한다 — 유니버스가 어디서 왔든 "이 종목 집합으로 이 기간에 얼마나
+   * 소비하나" 는 같은 질문이다. 두 경로가 갈리는 지점은 기간 커버리지 판정 방식뿐이라
+   * `coverageCheck` 로 주입한다 (D-025 관용 vs REVIEW §9.1 엄격 차단).
+   */
+  const resolveConsumedUniverse = (
     body: BacktestRequest,
-  ):
-    | { ok: true; universe: UniverseSnapshot; timeframe: '1m' | '1h' | '1d' }
-    | { ok: false; errors: string[] } => {
+    codes: readonly string[],
+    errors: string[],
+    coverageCheck: (codes: readonly string[], slice: DatasetSlice) => string | null,
+  ): { universe: UniverseSnapshot; timeframe: '1m' | '1h' | '1d' } | null => {
+    /**
+     * 소비 timeframe 검사. 데이터셋에 `defaultTimeframe` 이 없어졌으므로(설계
+     * 2026-07-31-symbol-as-first-class) 미지정 요청의 기준을 **데이터에서** 찾는다:
+     * 유니버스가 가진 슬라이스가 하나면 그것으로 정하고, 둘 다 있거나 둘 다 없으면
+     * 거부한다 — 임의로 하나를 골라 주면 사용자가 의도하지 않은 봉으로 돌아간다.
+     * 위저드는 항상 명시값을 보내므로 이 경로는 옛 저장 요청·API 직접 호출용이다.
+     */
+    const available = (['1d', '1m'] as const).filter((candidate) =>
+      symbolService.getCoverage(codes).some((row) => row.slice === candidate && row.barCount > 0),
+    );
+    let consumed = body.timeframe;
+    if (consumed === undefined) {
+      if (available.length === 1) {
+        consumed = available[0] === '1m' ? '1h' : '1d';
+      } else {
+        errors.push(
+          available.length === 0
+            ? '선택한 종목에 수집된 봉이 없습니다 — 종목 화면에서 먼저 동기화하세요.'
+            : '소비할 봉 주기를 지정하세요 (1d/1h/1m) — 이 종목들은 일봉과 분봉을 모두 갖고 있습니다.',
+        );
+      }
+    }
+    if (consumed === undefined) return null;
+
+    const slice = sliceForTimeframe(consumed);
+    const allowedTimeframes = sliceTimeframes(slice);
+    const sliceCoverageRows = symbolService.getCoverage(codes).filter((row) => row.slice === slice);
+    const sliceHasData = sliceCoverageRows.some((row) => row.barCount > 0);
+
+    if (!allowedTimeframes.includes(consumed)) {
+      // 방어적 분기 — zod 스키마가 이미 consumed 를 '1m'|'1h'|'1d' 로 제한하고
+      // sliceForTimeframe/sliceTimeframes 는 그 timeframe 이 속한 슬라이스를
+      // 되돌리므로 이 분기는 현재 값 범위에서 도달하지 않는다.
+      errors.push(`이 유니버스는 timeframe ${allowedTimeframes.join('/')} 만 제공합니다 (요청: ${consumed})`);
+      return null;
+    }
+    if (!sliceHasData) {
+      // 실제로 도달 가능한 경우 — timeframe 자체는 존재할 수 있지만(예: 1d 전용
+      // 유니버스에 1m 요청) 그 슬라이스로 아직 수집된 데이터가 없다. "timeframe X 만
+      // 제공합니다" 처럼 스스로 모순되는 메시지를 내지 않도록 원인을 구분해 말한다.
+      errors.push(
+        `선택한 종목에 아직 ${consumed} 데이터가 없습니다: ` +
+          `${codes.join(', ')} — 종목 화면에서 해당 봉을 동기화(또는 CSV 가져오기)한 뒤 다시 시도하세요.`,
+      );
+      return null;
+    }
+
+    const coverageError = coverageCheck(codes, slice);
+    if (coverageError !== null) {
+      errors.push(coverageError);
+      return null;
+    }
+
+    // 제출 시점의 종목 버전 스냅샷을 고정 — 대기 중 동기화가 끼어들어도 어긋나지 않는다 (§9.5)
+    const universe = datasets.universeSnapshotFor(codes, slice);
+
+    // 봉 수 상한 — 실행부는 전체 봉을 메모리에 올린다. 1m 소비를 열면서 생긴 밸브.
+    // coverage 는 슬라이스 기준 timeframe 으로 세므로 1m 소비만 배율 60 으로 추정한다.
+    const { fromTsMs, toTsMs } = periodToTsRange(body.period);
+    const estimated = estimateBars(
+      sliceCoverageRows.map((row) => ({ ...row, symbol: row.code })),
+      codes,
+      fromTsMs,
+      toTsMs,
+      consumed === '1m' ? 60 : 1,
+    );
+    if (estimated > MAX_BACKTEST_BARS) {
+      errors.push(
+        `예상 봉 수가 상한을 넘습니다 (추정 ${estimated.toLocaleString()}봉 > ` +
+          `${MAX_BACKTEST_BARS.toLocaleString()}봉). 기간이나 종목 수를 줄이거나 1h 봉을 사용하세요.`,
+      );
+      return null;
+    }
+
+    return { universe, timeframe: consumed };
+  };
+
+  type ValidationResult =
+    | {
+        readonly ok: true;
+        readonly universe: UniverseSnapshot;
+        readonly timeframe: '1m' | '1h' | '1d';
+        readonly provenancePin: ProvenancePin;
+        readonly universeSnapshotId: string | null;
+      }
+    | { readonly ok: false; readonly status: 400 | 404; readonly errors: string[] };
+
+  /**
+   * 제출 검증 — 신규 제출(POST)·복제(clone)·초안(clone-draft)이 동일한 기준을 거친다.
+   * 통과 시 제출 시점의 유니버스 버전과 서버 소유 provenance pin(Task 12)을 함께
+   * 반환한다 (재현성 §9.5, REVIEW §9.2). 사유를 모아 반환한다 — 초안(clone-draft)이
+   * 무엇을 고쳐야 하는지 한 번에 알려야 한다. 400 메시지는 `errors[0]` 이므로 검사
+   * 순서가 곧 우선순위다. 스냅샷을 찾지 못하면 404 — 존재 자체가 없는 리소스이므로
+   * "요청이 잘못됐다" 는 400 과는 다른 신호다.
+   */
+  const validateSubmission = (body: BacktestRequest): ValidationResult => {
     const errors: string[] = [];
 
     // 전략 — 파라미터 검증의 전제다
@@ -173,94 +374,122 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       errors.push('기간이 올바르지 않습니다 (from > to)');
     }
 
-    // 데이터셋 — 심볼·버전·커버리지 검사의 전제다
-    const dataset = datasets.getDataset(body.datasetId);
     let universe: UniverseSnapshot | null = null;
     let resolvedTimeframe: '1m' | '1h' | '1d' | null = null;
-    if (!dataset) {
-      errors.push(`알 수 없는 데이터셋: ${body.datasetId}`);
-    } else {
-      // 데이터셋에 없는 심볼은 조용히 0 거래로 "성공" 하게 된다 — 제출 시점에 거부
-      const datasetSymbols = new Set(dataset.symbols);
-      const missingSymbols = body.universe.symbols.filter((s) => !datasetSymbols.has(s));
-      if (missingSymbols.length > 0) {
-        errors.push(`데이터셋에 없는 종목입니다: ${missingSymbols.join(', ')}`);
+    let provenancePin: ProvenancePin | null = null;
+    let universeSnapshotId: string | null = null;
+
+    if (body.universeSnapshotId !== undefined) {
+      // 과거 시점 고정 유니버스 경로 (Task 12) — datasetId 는 이 분기에서 항상 undefined 다 (xor)
+      const snapshot = universeSnapshotService.getSnapshot(body.universeSnapshotId);
+      if (!snapshot) {
+        return {
+          ok: false,
+          status: 404,
+          errors: [`유니버스 스냅샷을 찾을 수 없습니다: ${body.universeSnapshotId}`],
+        };
       }
-      /**
-       * 소비 timeframe 검사. 데이터셋에 `defaultTimeframe` 이 없어졌으므로(설계
-       * 2026-07-31-symbol-as-first-class) 미지정 요청의 기준을 **데이터에서** 찾는다:
-       * 유니버스가 가진 슬라이스가 하나면 그것으로 정하고, 둘 다 있거나 둘 다 없으면
-       * 거부한다 — 임의로 하나를 골라 주면 사용자가 의도하지 않은 봉으로 돌아간다.
-       * 위저드는 항상 명시값을 보내므로 이 경로는 옛 저장 요청·API 직접 호출용이다.
-       */
-      const available = (['1d', '1m'] as const).filter((candidate) =>
-        symbolService
-          .getCoverage(body.universe.symbols)
-          .some((row) => row.slice === candidate && row.barCount > 0),
-      );
-      let consumed = body.timeframe;
-      if (consumed === undefined) {
-        if (available.length === 1) {
-          consumed = available[0] === '1m' ? '1h' : '1d';
-        } else {
-          errors.push(
-            available.length === 0
-              ? '선택한 종목에 수집된 봉이 없습니다 — 종목 화면에서 먼저 동기화하세요.'
-              : '소비할 봉 주기를 지정하세요 (1d/1h/1m) — 이 종목들은 일봉과 분봉을 모두 갖고 있습니다.',
-          );
+
+      const snapshotCodes = [...snapshot.symbols.map((s) => s.shortCode)].sort();
+      const requestedCodes = [...body.universe.symbols].sort();
+      const symbolsMatch =
+        snapshotCodes.length === requestedCodes.length &&
+        snapshotCodes.every((code, index) => code === requestedCodes[index]);
+      if (!symbolsMatch) {
+        errors.push(
+          '요청한 universe.symbols가 유니버스 스냅샷 구성과 다릅니다. 스냅샷 상세를 다시 조회해 종목을 맞추세요.',
+        );
+      }
+
+      // 승인 만료 게이트 (REVIEW §10) — config 의 현재 만료일 기준. 스냅샷 자체가
+      // 언제 만들어졌는지와 무관하게, 만료 이후의 **신규 실행**을 막는다.
+      const expired =
+        deps.krxApprovalExpiry !== null && kstDateOf(deps.clock.now()) > deps.krxApprovalExpiry;
+      if (expired) {
+        errors.push(
+          `KRX Open API 사용 승인 만료일(${deps.krxApprovalExpiry})이 지나 유니버스 스냅샷 기반 ` +
+            '신규 백테스트를 실행할 수 없습니다.',
+        );
+      }
+
+      // 시점 게이트 (REVIEW §9) — effectiveTradingDate(적용일) 이전 시작은 미래
+      // 정보 유출이다. 그날 세션이 시작될 때는 그날 종가·시가총액 순위를 알 수
+      // 없으므로 같은 날도 막는다. usableFromDate(= effectiveTradingDate + 1일)가
+      // 아니다 — usableFromDate 를 기준으로 삼으면 스펙보다 하루 더 엄격해져
+      // period.from == usableFromDate(사용 가능 첫날)인 정당한 제출까지 막힌다.
+      if (snapshot.effectiveTradingDate >= body.period.from) {
+        errors.push(
+          `적용일 ${snapshot.effectiveTradingDate}는 시작일 ${body.period.from}보다 이전이어야 합니다. ` +
+            '더 이른 스냅샷을 선택하거나 시작일을 늦추세요',
+        );
+      }
+
+      if (symbolsMatch) {
+        const resolved = resolveConsumedUniverse(body, snapshotCodes, errors, (codes, slice) =>
+          checkSnapshotPeriodCoverage(codes, slice, body.period),
+        );
+        if (resolved) {
+          universe = resolved.universe;
+          resolvedTimeframe = resolved.timeframe;
         }
       }
-      if (consumed === undefined) {
-        return { ok: false, errors };
-      }
-      resolvedTimeframe = consumed;
-      const slice = sliceForTimeframe(consumed);
-      const allowedTimeframes = sliceTimeframes(slice);
-      // 제출 시점의 종목 버전 스냅샷을 고정 — 대기 중 동기화가 끼어들어도 어긋나지 않는다 (§9.5)
-      universe = datasets.universeSnapshot(body.datasetId, slice);
-      const sliceCoverageRows = symbolService
-        .getCoverage(body.universe.symbols)
-        .filter((row) => row.slice === slice);
-      const sliceHasData = sliceCoverageRows.some((row) => row.barCount > 0);
 
-      if (!allowedTimeframes.includes(consumed)) {
-        // 방어적 분기 — zod 스키마가 이미 consumed 를 '1m'|'1h'|'1d' 로 제한하고
-        // sliceForTimeframe/sliceTimeframes 는 그 timeframe 이 속한 슬라이스를
-        // 되돌리므로 이 분기는 현재 값 범위에서 도달하지 않는다.
-        errors.push(
-          `이 데이터셋은 timeframe ${allowedTimeframes.join('/')} 만 제공합니다 (요청: ${consumed})`,
-        );
-      } else if (!sliceHasData) {
-        // 실제로 도달 가능한 경우 — timeframe 자체는 이 데이터셋 형태에 존재할 수
-        // 있지만(예: 1d 전용 데이터셋에 1m 요청) 그 슬라이스로 아직 수집된 데이터가
-        // 없다. "이 데이터셋은 1m/1h 만 제공합니다 (요청: 1m)" 처럼 스스로 모순되는
-        // 메시지를 내지 않도록 원인을 구분해 말한다.
-        errors.push(
-          `선택한 종목에 아직 ${consumed} 데이터가 없습니다: ` +
-            `${body.universe.symbols.join(', ')} — 종목 화면에서 해당 봉을 동기화(또는 CSV ` +
-            '가져오기)한 뒤 다시 시도하세요.',
-        );
+      universeSnapshotId = snapshot.id;
+      provenancePin = {
+        sourceKind: 'KRX_HISTORICAL',
+        universeSnapshotId: snapshot.id,
+        requestedDate: snapshot.requestedDate,
+        effectiveTradingDate: snapshot.effectiveTradingDate,
+        usableFromDate: snapshot.usableFromDate,
+        filterPolicyVersion: snapshot.filterPolicyVersion,
+        selectionMethod: snapshot.selectionMethod,
+        selectionHash: snapshot.selectionHash,
+        krxApprovalExpiryDate: deps.krxApprovalExpiry,
+        approvalValidAtSubmit: !expired,
+        timepointWarning: null,
+        symbols: snapshot.symbols,
+      };
+    } else if (body.datasetId !== undefined) {
+      // 데이터셋 — 심볼·버전·커버리지 검사의 전제다
+      const dataset = datasets.getDataset(body.datasetId);
+      if (!dataset) {
+        errors.push(`알 수 없는 데이터셋: ${body.datasetId}`);
       } else {
-        const coverageError = checkPeriodCoverage(body, slice);
-        if (coverageError !== null) errors.push(coverageError);
-
-        // 봉 수 상한 — 실행부는 전체 봉을 메모리에 올린다. 1m 소비를 열면서 생긴 밸브.
-        // coverage 는 슬라이스 기준 timeframe 으로 세므로 1m 소비만 배율 60 으로 추정한다.
-        const { fromTsMs, toTsMs } = periodToTsRange(body.period);
-        const estimated = estimateBars(
-          sliceCoverageRows.map((row) => ({ ...row, symbol: row.code })),
-          body.universe.symbols,
-          fromTsMs,
-          toTsMs,
-          consumed === '1m' ? 60 : 1,
+        // 데이터셋에 없는 심볼은 조용히 0 거래로 "성공" 하게 된다 — 제출 시점에 거부
+        const datasetSymbols = new Set(dataset.symbols);
+        const missingSymbols = body.universe.symbols.filter((s) => !datasetSymbols.has(s));
+        if (missingSymbols.length > 0) {
+          errors.push(`데이터셋에 없는 종목입니다: ${missingSymbols.join(', ')}`);
+        }
+        // codes 는 항상 body.universe.symbols 그 자체다 (dataset 경로는 코드를
+        // 스냅샷처럼 다른 집합으로 바꿔 넘기지 않는다) — checkPeriodCoverage 는 기존
+        // 시그니처(body 전체)를 그대로 쓴다.
+        const resolved = resolveConsumedUniverse(body, body.universe.symbols, errors, (_codes, slice) =>
+          checkPeriodCoverage(body, slice),
         );
-        if (estimated > MAX_BACKTEST_BARS) {
-          errors.push(
-            `예상 봉 수가 상한을 넘습니다 (추정 ${estimated.toLocaleString()}봉 > ` +
-              `${MAX_BACKTEST_BARS.toLocaleString()}봉). 기간이나 종목 수를 줄이거나 1h 봉을 사용하세요.`,
-          );
+        if (resolved) {
+          universe = resolved.universe;
+          resolvedTimeframe = resolved.timeframe;
         }
       }
+      // 데이터셋 경로는 과거 시점 적합성을 보증할 수 없다 — 그 사실 자체를 pin 에 남긴다
+      provenancePin = {
+        sourceKind: 'DATASET',
+        universeSnapshotId: null,
+        requestedDate: null,
+        effectiveTradingDate: null,
+        usableFromDate: null,
+        filterPolicyVersion: null,
+        selectionMethod: null,
+        selectionHash: null,
+        krxApprovalExpiryDate: null,
+        approvalValidAtSubmit: null,
+        timepointWarning: DATASET_TIMEPOINT_WARNING,
+        symbols: null,
+      };
+    } else {
+      // zod 의 xor refine 이 이미 보장하므로 도달하지 않는다 — 방어적 분기
+      errors.push('datasetId 또는 universeSnapshotId 를 지정해야 합니다.');
     }
 
     if (!getCostProfile(body.execution.commissionProfileId)) {
@@ -273,10 +502,14 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     // universe === null 분기는 죽은 방어 코드가 아니라 타입 내로잉이다 —
     // 이 분기가 없으면 아래 { ok: true, universe } 반환에서 universe 가
     // `UniverseSnapshot | null` 로 남아 typecheck 가 깨진다.
-    if (errors.length > 0 || universe === null || resolvedTimeframe === null) {
-      return { ok: false, errors: errors.length > 0 ? errors : ['제출을 검증할 수 없습니다'] };
+    if (errors.length > 0 || universe === null || resolvedTimeframe === null || provenancePin === null) {
+      return {
+        ok: false,
+        status: 400,
+        errors: errors.length > 0 ? errors : ['제출을 검증할 수 없습니다'],
+      };
     }
-    return { ok: true, universe, timeframe: resolvedTimeframe };
+    return { ok: true, universe, timeframe: resolvedTimeframe, provenancePin, universeSnapshotId };
   };
 
   /**
@@ -360,7 +593,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
 
     const validated = validateSubmission(body);
     if (!validated.ok) {
-      return reply.code(400).send({ error: validated.errors[0] ?? '제출을 검증할 수 없습니다' });
+      return reply.code(validated.status).send({ error: validated.errors[0] ?? '제출을 검증할 수 없습니다' });
     }
 
     const fundamentalsError = checkFundamentalsRequirement(body);
@@ -380,12 +613,19 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (resourceError) return reply.code(507).send({ error: resourceError });
 
     // 해소한 소비 봉을 요청에 박아 저장한다 — 워커가 다시 추론하면 두 곳의 규칙이
-    // 갈라질 수 있고, 실행 기록도 "무엇을 소비했나" 에 답하지 못한다
-    const job = queue.enqueue({ ...body, timeframe: validated.timeframe }, validated.universe);
+    // 갈라질 수 있고, 실행 기록도 "무엇을 소비했나" 에 답하지 못한다.
+    // provenancePin 은 여기서 조립한 것 그대로 저장한다 — 클라이언트가 준 값이 아니다.
+    const job = queue.enqueue(
+      { ...body, timeframe: validated.timeframe },
+      validated.universe,
+      validated.provenancePin,
+      validated.universeSnapshotId,
+    );
     audit.record(request.authUser?.username ?? 'admin', 'backtest.created', {
       jobId: job.id,
       strategyId: body.strategyId,
-      datasetId: body.datasetId,
+      datasetId: body.datasetId ?? null,
+      universeSnapshotId: validated.universeSnapshotId,
     });
     return reply.code(201).send({ job: serializeJob(job) });
   });
@@ -416,8 +656,11 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (!job) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
     return {
       job: serializeJob(job),
-      run: results.getRun(id),
+      run: serializeRun(results.getRun(id)),
       metrics: results.getMetrics(id),
+      // job 이 제출 시점부터 갖고 있다 — run 완료를 기다릴 필요가 없다 (Task 12).
+      // 완료 후에는 backtestRuns.provenancePinJson 에 같은 값이 복사돼 있다.
+      provenancePin: parseProvenancePin(job.provenancePinJson, id, request.log),
     };
   });
 
@@ -442,10 +685,12 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     );
     if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
     const cloneRequest = rebased.request;
-    // 재기준 후에도 새 제출이다 — POST 와 동일한 검증 관문을 거치고 버전을 다시 고정한다
+    // 재기준 후에도 새 제출이다 — POST 와 동일한 검증 관문을 거치고 버전을 다시 고정한다.
+    // universeSnapshotId 가 있으면 여기서도 스냅샷 존재를 다시 확인한다 — 원본 제출
+    // 이후 스냅샷이 사라졌다면(보존 정책 등) 404 로 명확히 막는다.
     const validated = validateSubmission(cloneRequest);
     if (!validated.ok) {
-      return reply.code(400).send({ error: validated.errors[0] ?? '제출을 검증할 수 없습니다' });
+      return reply.code(validated.status).send({ error: validated.errors[0] ?? '제출을 검증할 수 없습니다' });
     }
 
     const fundamentalsError = checkFundamentalsRequirement(cloneRequest);
@@ -468,6 +713,8 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const cloned = queue.enqueue(
       { ...cloneRequest, timeframe: validated.timeframe },
       validated.universe,
+      validated.provenancePin,
+      validated.universeSnapshotId,
     );
     audit.record(request.authUser?.username ?? 'admin', 'backtest.cloned', {
       sourceJobId: id,
@@ -556,7 +803,8 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const job = queue.getJob(id);
     if (!job) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
     reply.header('content-disposition', `attachment; filename="backtest-${id}.json"`);
-    return { job: serializeJob(job), ...results.getFullExport(id) };
+    const fullExport = results.getFullExport(id);
+    return { job: serializeJob(job), ...fullExport, run: serializeRun(fullExport.run) };
   });
 
   /** SSE 진행률 (스펙 §14). 연결이 끊기면 클라이언트는 polling 으로 fallback 한다. */

@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api-client';
 import type { SortDirection, TradeSortKey } from '../../../shared/schemas/trade-sort.js';
+import type { ProvenancePin } from '../../../shared/schemas/provenance-pin.js';
 import {
   isTerminal,
   type BacktestMetrics,
@@ -23,6 +24,8 @@ export interface BacktestDetail {
   job: JobSummary;
   run: RunMetadata | null;
   metrics: BacktestMetrics | null;
+  /** 제출 시점부터 서버가 소유하는 유니버스 출처 pin (Task 12) — job 이 생성될 때부터 있다 */
+  provenancePin: ProvenancePin | null;
 }
 
 /**
@@ -84,7 +87,13 @@ export function useBacktestLive(jobId: string) {
       ? { ...detail.data.job, ...ssePayload }
       : detail.data?.job;
 
-  return { ...detail, job, run: detail.data?.run ?? null, metrics: detail.data?.metrics ?? null };
+  return {
+    ...detail,
+    job,
+    run: detail.data?.run ?? null,
+    metrics: detail.data?.metrics ?? null,
+    provenancePin: detail.data?.provenancePin ?? null,
+  };
 }
 
 export function useBacktestSeries(jobId: string, enabled: boolean) {

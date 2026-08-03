@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -17,6 +18,7 @@ import {
 } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { api, ApiError, postJson } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 import { formatKrw, formatRelativeTime, timeframeLabel } from '@/lib/format';
@@ -24,7 +26,10 @@ import { wizardTimeframes } from '@/features/datasets/dataset-slices';
 import { SymbolFactsBadge } from '@/features/datasets/symbol-facts-badge';
 import type { SymbolSummary } from '@/features/datasets/symbol-types';
 import { MAX_UNIVERSE_SYMBOLS } from '../../../shared/schemas/universe-limit.js';
+import type { UniverseSnapshotDetailDto } from '../../../shared/schemas/historical-universe.js';
+import { KrxSnapshotStep } from './krx-snapshot-step';
 import { costProfileLabel, slippageProfileLabel } from './profile-labels';
+import { krxFixedUniverseBadge } from './universe-provenance';
 import { useStockNames } from '@/lib/use-stock-names';
 import { requestToFormState } from './prefill';
 import { ParamHint } from './param-hint';
@@ -104,6 +109,12 @@ export function NewBacktestWizard() {
    * 아니게 된다. 데이터셋을 새로 고르면 null 로 되돌린다.
    */
   const [prefilledSymbols, setPrefilledSymbols] = useState<string[] | null>(null);
+  /**
+   * 유니버스 출처 (Task 13) — `KRX_SNAPSHOT` 이면 데이터셋이 아니라 확정된 과거 시점
+   * 스냅샷이 종목을 정한다. 데이터셋과 스냅샷은 서로 배타적이라 하나만 참조로 쓴다.
+   */
+  const [universeMode, setUniverseMode] = useState<'DATASET' | 'KRX_SNAPSHOT'>('DATASET');
+  const [selectedSnapshot, setSelectedSnapshot] = useState<UniverseSnapshotDetailDto | null>(null);
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [initialCash, setInitialCash] = useState('10000000');
@@ -193,14 +204,36 @@ export function NewBacktestWizard() {
     if (times.length === 0 || times.some((time) => time === null)) return null;
     return Math.min(...(times as number[]));
   };
+  // KRX 스냅샷의 종목은 shortCode 로 들고 있다 — /symbols 카탈로그의 code 와 같은
+  // 값이라 기존 커버리지 로직(slicesOf)을 그대로 재사용할 수 있다 (Task 13)
+  const krxSymbols = selectedSnapshot?.symbols.map((s) => s.shortCode) ?? [];
   // 카드 노출·기본값 계산에 반복해서 쓰인다 — 보유 슬라이스(hasData) 기준으로 도출
-  const timeframeOptions = selectedDataset ? wizardTimeframes(slicesOf(selectedDataset.symbols)) : [];
+  const timeframeOptions =
+    universeMode === 'KRX_SNAPSHOT'
+      ? wizardTimeframes(slicesOf(krxSymbols))
+      : selectedDataset
+        ? wizardTimeframes(slicesOf(selectedDataset.symbols))
+        : [];
 
-  /** 유니버스 = 데이터셋 참조 종목 전체. 복제 프리필만 예외다 */
-  const symbols = prefilledSymbols ?? selectedDataset?.symbols ?? [];
+  /**
+   * 유니버스 = 모드에 따라 데이터셋 참조 종목 전체이거나 확정된 KRX 스냅샷 종목이다.
+   * 데이터셋 모드의 복제 프리필만 예외다 (D-038 그대로 — KRX 모드는 스냅샷 자체가
+   * 이미 고정된 선택이므로 프리필이 끼어들 자리가 없다).
+   */
+  const symbols =
+    universeMode === 'KRX_SNAPSHOT' ? krxSymbols : prefilledSymbols ?? selectedDataset?.symbols ?? [];
+  // KRX 스냅샷 종목명은 그 시점 이름이다 — 지금 등록된 이름(useStockNames)이 아니라
+  // 스냅샷이 들고 있는 값을 그대로 보여준다. 회사명이 바뀌었어도 그 시점 기록은 남아야 한다.
+  const krxNameByCode = useMemo(
+    () => new Map((selectedSnapshot?.symbols ?? []).map((s) => [s.shortCode, s.name])),
+    [selectedSnapshot],
+  );
   // 선택 후보 전체를 한 번에 조회한다 — 체크박스와 검토 단계가 같은 Map 을 쓴다.
   const stockNames = useStockNames(selectedDataset?.symbols ?? []);
-  const nameOf = (symbol: string): string | null => stockNames.get(symbol)?.name ?? null;
+  const nameOf = (symbol: string): string | null =>
+    universeMode === 'KRX_SNAPSHOT'
+      ? krxNameByCode.get(symbol) ?? null
+      : stockNames.get(symbol)?.name ?? null;
   const symbolLabel = (symbol: string): string => formatSymbolLabel(symbol, nameOf(symbol));
   const paramSpecs = useMemo(() => extractNumberParams(schema.data?.schema), [schema.data]);
 
@@ -269,9 +302,17 @@ export function NewBacktestWizard() {
   // optional 인 건 옛 잡과의 호환 때문이지, 이 화면이 만드는 요청과는 무관하다.
   const buildRequest = (): (BacktestRequestBody & { timeframe: '1m' | '1h' | '1d' }) | string => {
     if (!selectedStrategy) return '전략을 선택하세요';
-    if (!selectedDataset || symbols.length === 0) return '데이터셋과 종목을 선택하세요';
+    // datasetId xor universeSnapshotId (Task 12) — 모드별로 참조를 하나만 만든다.
     // 게이트가 이미 막지만(단계 1) 프리필은 게이트를 거치지 않고 상태를 채운다 —
     // 스키마가 거부할 요청을 만들어 놓고 제출 400 으로 알게 하지 않는다
+    let universeRef: { datasetId: string } | { universeSnapshotId: string };
+    if (universeMode === 'KRX_SNAPSHOT') {
+      if (!selectedSnapshot) return '과거 KRX 시점 스냅샷을 확정하세요';
+      universeRef = { universeSnapshotId: selectedSnapshot.id };
+    } else {
+      if (!selectedDataset || symbols.length === 0) return '데이터셋과 종목을 선택하세요';
+      universeRef = { datasetId: selectedDataset.id };
+    }
     if (symbols.length > MAX_UNIVERSE_SYMBOLS) {
       return `종목이 ${symbols.length}개로 상한(${MAX_UNIVERSE_SYMBOLS}종목)을 넘습니다`;
     }
@@ -303,7 +344,7 @@ export function NewBacktestWizard() {
     return {
       strategyId: selectedStrategy.id,
       parameters: parsedParams,
-      datasetId: selectedDataset.id,
+      ...universeRef,
       // 항상 명시해 보낸다 — 결과·복제가 "무슨 봉으로 돌렸는지" 를 들고 다니게 (§9.5)
       // 사용자가 카드를 만지지 않았으면(timeframe==='') 도출 목록의 첫 항목이 기본이다.
       // 도출 목록마저 비어 있는 극단적 경우엔 legacyConsumeDefault 와 같은 규칙으로 폴백한다.
@@ -358,6 +399,7 @@ export function NewBacktestWizard() {
     initialCash,
     requiresFundamentals: selectedStrategy?.requiresFundamentals,
     symbolsWithFacts,
+    universeMode,
   };
   const navLimit = navigableStepLimit(step, gate);
 
@@ -591,86 +633,129 @@ export function NewBacktestWizard() {
 
       {!prefilling && step === 1 ? (
         <div className="space-y-3">
-          {(datasets.data?.datasets ?? []).length === 0 ? (
-            <Alert>
-              <AlertDescription>
-                데이터셋이 없습니다. 데이터 화면에서 증권사 데이터셋을 만들거나 CSV 를 가져오세요.
-              </AlertDescription>
-            </Alert>
-          ) : null}
-          {/* 데이터셋 카드는 **데이터셋 자체만** 보여 준다 — 어떤 종목이 들어 있는지를
-              여기서 고치지 않는다 (D-038). 「편집」은 데이터 화면의 그 데이터셋 편집으로
-              보낸다: 참조를 바꾸는 화면이 둘이면 무엇이 최신인지 알 수 없다.
+          <Tabs
+            value={universeMode}
+            onValueChange={(value) => {
+              setUniverseMode(value as 'DATASET' | 'KRX_SNAPSHOT');
+              // 모드가 바뀌면 이전 모드의 timeframe 선택은 근거를 잃는다 — 새 유니버스의
+              // 커버리지로 다시 도출한 기본값을 쓴다
+              setTimeframe('');
+            }}
+          >
+            <TabsList>
+              <TabsTrigger value="DATASET">데이터셋</TabsTrigger>
+              <TabsTrigger value="KRX_SNAPSHOT">과거 KRX 시점</TabsTrigger>
+            </TabsList>
 
-              카드를 `<button>` 하나로 두면 「편집」을 그 안에 넣을 수 없다(중첩 버튼).
-              바깥은 `<div>` 로 두고 선택 버튼과 편집 버튼을 형제로 놓는다. */}
-          {(datasets.data?.datasets ?? []).map((dataset) => (
-            <div
-              key={dataset.id}
-              className={cn(
-                'rounded-xl border transition-colors',
-                datasetId === dataset.id ? 'border-primary bg-muted/50' : 'hover:bg-muted/30',
-              )}
-            >
-              <div className="flex items-start gap-2 p-4">
-                <button
-                  type="button"
-                  aria-pressed={datasetId === dataset.id}
-                  className="min-w-0 flex-1 text-left"
-                  onClick={() => {
-                    setDatasetId(dataset.id);
-                    // 새 데이터셋의 슬라이스로 다시 도출한 첫 항목을 기본값으로 명시한다 —
-                    // 이전 선택이 새 데이터셋에 새지 않게
-                    const options = wizardTimeframes(slicesOf(dataset.symbols));
-                    setTimeframe(options[0] ?? '1d');
-                    // 데이터셋을 바꿨으면 프리필 유니버스는 근거를 잃는다
-                    setPrefilledSymbols(null);
-                  }}
+            <TabsContent value="DATASET" className="space-y-3">
+              {(datasets.data?.datasets ?? []).length === 0 ? (
+                <Alert>
+                  <AlertDescription>
+                    데이터셋이 없습니다. 데이터 화면에서 증권사 데이터셋을 만들거나 CSV 를
+                    가져오세요.
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+              {/* 데이터셋 카드는 **데이터셋 자체만** 보여 준다 — 어떤 종목이 들어 있는지를
+                  여기서 고치지 않는다 (D-038). 「편집」은 데이터 화면의 그 데이터셋 편집으로
+                  보낸다: 참조를 바꾸는 화면이 둘이면 무엇이 최신인지 알 수 없다.
+
+                  카드를 `<button>` 하나로 두면 「편집」을 그 안에 넣을 수 없다(중첩 버튼).
+                  바깥은 `<div>` 로 두고 선택 버튼과 편집 버튼을 형제로 놓는다. */}
+              {(datasets.data?.datasets ?? []).map((dataset) => (
+                <div
+                  key={dataset.id}
+                  className={cn(
+                    'rounded-xl border transition-colors',
+                    datasetId === dataset.id ? 'border-primary bg-muted/50' : 'hover:bg-muted/30',
+                  )}
                 >
-                  <div className="flex items-start justify-between gap-2">
-                    <p className="font-medium">{dataset.name}</p>
-                    {/* 전략 카드와 같은 표기 — 1단계에서 「재무 필요」를 본 사용자가 여기서
-                        「재무 없음」을 보면 제출 전에 조합이 어긋난 것을 알아차린다 */}
-                    <SymbolFactsBadge hasFacts={factsOf(dataset.symbols)} />
-                  </div>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {/* 상한 초과는 고르기 **전에** 보여야 한다 — 눌러 보고서야 알게
-                        하면 목록이 그 사실을 숨긴 셈이다 */}
-                    <span
-                      className={cn(
-                        dataset.symbols.length > MAX_UNIVERSE_SYMBOLS && 'text-destructive',
-                      )}
+                  <div className="flex items-start gap-2 p-4">
+                    <button
+                      type="button"
+                      aria-pressed={datasetId === dataset.id}
+                      className="min-w-0 flex-1 text-left"
+                      onClick={() => {
+                        setDatasetId(dataset.id);
+                        // 새 데이터셋의 슬라이스로 다시 도출한 첫 항목을 기본값으로 명시한다 —
+                        // 이전 선택이 새 데이터셋에 새지 않게
+                        const options = wizardTimeframes(slicesOf(dataset.symbols));
+                        setTimeframe(options[0] ?? '1d');
+                        // 데이터셋을 바꿨으면 프리필 유니버스는 근거를 잃는다
+                        setPrefilledSymbols(null);
+                      }}
                     >
-                      {dataset.symbols.length}종목
-                      {dataset.symbols.length > MAX_UNIVERSE_SYMBOLS
-                        ? ` (상한 ${MAX_UNIVERSE_SYMBOLS}종목 초과)`
-                        : ''}
-                    </span>{' '}
-                    ·{' '}
-                    {slicesOf(dataset.symbols)
-                      .filter((s) => s.hasData)
-                      .map((s) => timeframeLabel(s.slice))
-                      .join('·') || '전 종목 공통 봉 없음'}
-                  </p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    마지막 수집 {formatRelativeTime(lastSyncOf(dataset.symbols), nowMs)}
-                  </p>
-                </button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-9 shrink-0"
-                  onClick={() => void navigate(`/datasets?tab=datasets&edit=${dataset.id}`)}
-                >
-                  <SlidersHorizontal data-icon="inline-start" />
-                  편집
-                </Button>
-              </div>
-            </div>
-          ))}
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="font-medium">{dataset.name}</p>
+                        {/* 전략 카드와 같은 표기 — 1단계에서 「재무 필요」를 본 사용자가 여기서
+                            「재무 없음」을 보면 제출 전에 조합이 어긋난 것을 알아차린다 */}
+                        <SymbolFactsBadge hasFacts={factsOf(dataset.symbols)} />
+                      </div>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        {/* 상한 초과는 고르기 **전에** 보여야 한다 — 눌러 보고서야 알게
+                            하면 목록이 그 사실을 숨긴 셈이다 */}
+                        <span
+                          className={cn(
+                            dataset.symbols.length > MAX_UNIVERSE_SYMBOLS && 'text-destructive',
+                          )}
+                        >
+                          {dataset.symbols.length}종목
+                          {dataset.symbols.length > MAX_UNIVERSE_SYMBOLS
+                            ? ` (상한 ${MAX_UNIVERSE_SYMBOLS}종목 초과)`
+                            : ''}
+                        </span>{' '}
+                        ·{' '}
+                        {slicesOf(dataset.symbols)
+                          .filter((s) => s.hasData)
+                          .map((s) => timeframeLabel(s.slice))
+                          .join('·') || '전 종목 공통 봉 없음'}
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        마지막 수집 {formatRelativeTime(lastSyncOf(dataset.symbols), nowMs)}
+                      </p>
+                    </button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-9 shrink-0"
+                      onClick={() => void navigate(`/datasets?tab=datasets&edit=${dataset.id}`)}
+                    >
+                      <SlidersHorizontal data-icon="inline-start" />
+                      편집
+                    </Button>
+                  </div>
+                </div>
+              ))}
+              {selectedDataset && prefilledSymbols !== null ? (
+                <Alert>
+                  <AlertDescription>
+                    원본 백테스트의 종목 {prefilledSymbols.length}개를 그대로 씁니다 — 데이터셋을
+                    다시 고르면 그 데이터셋의 종목 전체를 씁니다.
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+            </TabsContent>
+
+            <TabsContent value="KRX_SNAPSHOT">
+              <KrxSnapshotStep
+                selectedSnapshot={selectedSnapshot}
+                onSnapshotReady={(snapshot) => {
+                  setSelectedSnapshot(snapshot);
+                  const options = wizardTimeframes(
+                    slicesOf(snapshot.symbols.map((s) => s.shortCode)),
+                  );
+                  setTimeframe(options[0] ?? '1d');
+                }}
+              />
+            </TabsContent>
+          </Tabs>
+
           {/* 게이트 문장은 「다음」을 눌러야 오류 영역에 뜬다 — 조합이 어긋난 것은
-              종목을 고르는 그 자리에서 보여야 왕복이 없다 (D-027 과 같은 방향) */}
-          {datasetId !== null && symbols.length > 0 && stepBlocker(1, gate) !== null ? (
+              종목을 고르는 그 자리에서 보여야 왕복이 없다 (D-027 과 같은 방향).
+              모드마다 "무엇을 골랐는지"의 기준이 다르므로 그 기준으로만 판단한다. */}
+          {(universeMode === 'KRX_SNAPSHOT' ? selectedSnapshot !== null : datasetId !== null) &&
+          symbols.length > 0 &&
+          stepBlocker(1, gate) !== null ? (
             <Alert variant="destructive" role="alert">
               <AlertDescription>{stepBlocker(1, gate)}</AlertDescription>
             </Alert>
@@ -704,14 +789,6 @@ export function NewBacktestWizard() {
                 </Select>
               </CardContent>
             </Card>
-          ) : null}
-          {selectedDataset && prefilledSymbols !== null ? (
-            <Alert>
-              <AlertDescription>
-                원본 백테스트의 종목 {prefilledSymbols.length}개를 그대로 씁니다 — 데이터셋을
-                다시 고르면 그 데이터셋의 종목 전체를 씁니다.
-              </AlertDescription>
-            </Alert>
           ) : null}
         </div>
       ) : null}
@@ -866,6 +943,32 @@ export function NewBacktestWizard() {
                   ) : null}
                 </span>
               </div>
+              {/* KRX 스냅샷 모드일 때만 출처를 한 줄 더 적는다 — 데이터셋 모드는 유니버스
+                  선택 자체가 데이터셋 카드에 이미 다 나와 있어 여기서 되풀이하지 않는다. */}
+              {universeMode === 'KRX_SNAPSHOT' && selectedSnapshot ? (
+                <>
+                  <Separator />
+                  <div className="flex justify-between gap-3">
+                    <span className="shrink-0 text-muted-foreground">유니버스 출처</span>
+                    <span className="flex flex-col items-end gap-1">
+                      {/* 결과 화면(provenanceNotice)과 같은 배지 문구를 쓴다 — 화면마다
+                          입력이 다르지만(여기는 snapshot dto, 결과는 pin) 문구는 한 곳
+                          (krxFixedUniverseBadge)에서만 정한다. */}
+                      <Badge>
+                        {krxFixedUniverseBadge(selectedSnapshot.effectiveTradingDate)}
+                      </Badge>
+                      <span className="text-right text-xs text-muted-foreground">
+                        {selectedSnapshot.selectedCount}종목
+                      </span>
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    이 스냅샷은 {selectedSnapshot.usableFromDate}부터 시작일로 쓸 수
+                    있습니다 — 그 이전 시작일은 그 시점에 알 수 없던 정보를 미리 쓰는
+                    셈이라 제출이 막힙니다.
+                  </p>
+                </>
+              ) : null}
               <Separator />
               <div className="flex justify-between gap-3">
                 <span className="shrink-0 text-muted-foreground">봉 주기</span>

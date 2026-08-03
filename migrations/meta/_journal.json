@@ -15,6 +15,13 @@
       "when": 1785726728572,
       "tag": "0001_misty_scream",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1785733475130,
+      "tag": "0002_demonic_virginia_dare",
+      "breakpoints": true
     }
   ]
 }

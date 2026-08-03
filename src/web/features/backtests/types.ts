@@ -12,7 +12,13 @@ export interface BacktestRequestBody {
   strategyId: string;
   /** 전략 버전은 보내지 않는다 (D-029) — 서버가 실행 시점의 등록 버전을 기록한다 */
   parameters: Record<string, unknown>;
-  datasetId: string;
+  /** `universeSnapshotId` 와 배타적이다 (xor) — 둘 중 정확히 하나만 지정한다 (Task 12/13) */
+  datasetId?: string;
+  /**
+   * 과거 시점 고정 유니버스 스냅샷 참조 — `datasetId` 와 배타적이다.
+   * 위저드가 KRX 모드로 제출할 때 이 필드를 채우고 `datasetId` 는 생략한다 (Task 13).
+   */
+  universeSnapshotId?: string;
   /** 소비 봉 주기 — 미지정은 데이터셋 timeframe (이 필드가 없던 시절의 요청 호환) */
   timeframe?: '1m' | '1h' | '1d';
   universe: { type: 'SYMBOLS'; symbols: string[] };
@@ -31,7 +37,14 @@ export interface JobSummary {
   id: string;
   status: BacktestStatus;
   strategyId: string;
-  datasetId: string;
+  /**
+   * KRX 과거 시점 스냅샷 경로(Task 12)로 만든 잡은 null 이다 — `universeSnapshotId` 가
+   * 유니버스를 정하고 데이터셋은 아예 참조하지 않는다. null 을 "데이터셋 없음 오류"로
+   * 읽지 않는다 — provenancePin.sourceKind 로 어느 경로인지 구분한다.
+   */
+  datasetId: string | null;
+  /** KRX 스냅샷 경로일 때만 채운다 — datasetId 와 배타적이다 (Task 12) */
+  universeSnapshotId: string | null;
   request: BacktestRequestBody;
   progressBars: number | null;
   totalBars: number | null;
@@ -73,7 +86,8 @@ export interface RunMetadata {
   strategyVersion: string;
   strategySourceHash: string;
   parameterJson: string;
-  datasetId: string;
+  /** KRX 스냅샷 경로(Task 12)의 run 은 null 이다 — RunMetadataCard 는 provenancePin 을 대신 본다 */
+  datasetId: string | null;
   /** 소비한 (종목,슬라이스,버전,해시) 스냅샷 — 구 datasetVersion/datasetHash (§9.5) */
   universeHash: string;
   universeJson: string;

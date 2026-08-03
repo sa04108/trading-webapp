@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ENGINE_VERSION } from '../../src/server/modules/backtest/domain/engine.js';
+import { symbols } from '../../src/server/shared/db/schema.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { currentStrategyVersion } from '../helpers/strategy-versions.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
@@ -258,6 +259,30 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
     expect(cloned.statusCode).toBe(201);
     expect(cloned.json().job.status).toBe('QUEUED');
+  });
+
+  it('요청한 부분 유니버스 종목만 제출 시점 버전으로 pin 한다', async () => {
+    ctx.container.database.db.insert(symbols).values({
+      code: '000660',
+      market: 'KR',
+      name: 'SK하이닉스',
+      createdAtMs: 1,
+    }).run();
+    const pairDataset = ctx.container.datasetService
+      .createDataset('kr-pair-v1', ['005930', '000660']);
+
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: buildRequest(pairDataset.id),
+    });
+
+    expect(created.statusCode).toBe(201);
+    const jobId = (created.json().job as { id: string }).id;
+    const job = ctx.container.jobQueue.getJob(jobId)!;
+    const pinned = JSON.parse(job.universeJson!) as Array<{ code: string }>;
+    expect([...new Set(pinned.map(({ code }) => code))]).toEqual(['005930']);
   });
 
   it('claims jobs atomically in FIFO order', () => {

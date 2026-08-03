@@ -230,9 +230,13 @@ export class DatasetService {
    * 일부이고, 빠뜨리면 나중에 수집된 실행과 스냅샷이 같아 보인다.
    */
   universeSnapshot(datasetId: string, slice: DatasetSlice): UniverseSnapshot {
-    const codes = [...this.symbolsOf(datasetId)].sort();
+    return this.universeSnapshotFor(this.symbolsOf(datasetId), slice);
+  }
+
+  universeSnapshotFor(codes: readonly string[], slice: DatasetSlice): UniverseSnapshot {
+    const uniqueCodes = [...new Set(codes)].sort();
     const entries: UniverseEntry[] = [];
-    for (const code of codes) {
+    for (const code of uniqueCodes) {
       for (const axis of [slice, FACTS_SLICE]) {
         const latest = this.symbolService.getLatestVersion(code, axis);
         entries.push({
