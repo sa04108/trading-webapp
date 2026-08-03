@@ -89,6 +89,10 @@ export class HistoricalUniverseService {
   private readonly previewByRequest = new Map<string, TimedValue<HistoricalUniversePreview>>();
   private readonly previewByEffective = new Map<string, TimedValue<EffectiveUniverseSnapshot>>();
   private readonly pendingPreviews = new Map<string, Promise<HistoricalUniversePreview>>();
+  private readonly pendingEffectiveSnapshots = new Map<
+    string,
+    Promise<TimedValue<EffectiveUniverseSnapshot>>
+  >();
   private standardCodeMapCache: StandardCodeMapCache | null = null;
   private pendingStandardCodeMap: Promise<ReadonlyMap<string, string>> | null = null;
 
@@ -117,6 +121,7 @@ export class HistoricalUniverseService {
   }
 
   async preview(requestedDate: string): Promise<HistoricalUniversePreview> {
+    this.purgeExpiredCaches();
     this.assertAvailable();
     this.assertPublishedDate(requestedDate);
 
@@ -133,6 +138,7 @@ export class HistoricalUniverseService {
   }
 
   getPreview(previewId: string): HistoricalUniversePreview | null {
+    this.purgeExpiredCaches();
     const cached = this.previewById.get(previewId);
     if (!cached) return null;
     if (this.isExpired(cached)) {
@@ -143,6 +149,7 @@ export class HistoricalUniverseService {
   }
 
   async currentStandardCodeMap(): Promise<ReadonlyMap<string, string>> {
+    this.purgeExpiredCaches();
     this.assertAvailable();
     const cached = this.standardCodeMapCache;
     if (cached && !this.isExpired(cached)) return cached.value;
@@ -199,19 +206,11 @@ export class HistoricalUniverseService {
     if (requestedCached && !this.isExpired(requestedCached)) return requestedCached.value;
     if (requestedCached) this.deletePreview(requestedCached.value);
 
-    let effectiveCached = this.previewByEffective.get(effectiveKey);
-    if (effectiveCached && this.isExpired(effectiveCached)) {
-      this.previewByEffective.delete(effectiveKey);
-      effectiveCached = undefined;
-    }
-    if (!effectiveCached) {
-      const snapshot = await this.buildEffectiveSnapshot(effective.date, effective.kospiDaily);
-      effectiveCached = {
-        value: snapshot,
-        expiresAtMs: snapshot.fetchedAtMs + this.ttlMs,
-      };
-      this.previewByEffective.set(effectiveKey, effectiveCached);
-    }
+    const effectiveCached = await this.effectiveSnapshot(
+      effectiveKey,
+      effective.date,
+      effective.kospiDaily,
+    );
 
     const { set, canonicalHash, fetchedAtMs } = effectiveCached.value;
     const preview: HistoricalUniversePreview = {
@@ -234,6 +233,32 @@ export class HistoricalUniverseService {
       eligibleCount: set.eligibleCount,
     }, 'KRX historical universe preview created');
     return preview;
+  }
+
+  private effectiveSnapshot(
+    cacheKey: string,
+    effectiveTradingDate: string,
+    kospiDaily: readonly KrxDailyTradeRow[],
+  ): Promise<TimedValue<EffectiveUniverseSnapshot>> {
+    const cached = this.previewByEffective.get(cacheKey);
+    if (cached && !this.isExpired(cached)) return Promise.resolve(cached);
+    if (cached) this.previewByEffective.delete(cacheKey);
+
+    const pending = this.pendingEffectiveSnapshots.get(cacheKey);
+    if (pending) return pending;
+    const created = this.buildEffectiveSnapshot(effectiveTradingDate, kospiDaily)
+      .then((snapshot) => {
+        const entry = { value: snapshot, expiresAtMs: snapshot.fetchedAtMs + this.ttlMs };
+        this.previewByEffective.set(cacheKey, entry);
+        return entry;
+      })
+      .finally(() => {
+        if (this.pendingEffectiveSnapshots.get(cacheKey) === created) {
+          this.pendingEffectiveSnapshots.delete(cacheKey);
+        }
+      });
+    this.pendingEffectiveSnapshots.set(cacheKey, created);
+    return created;
   }
 
   private async buildEffectiveSnapshot(
@@ -269,6 +294,7 @@ export class HistoricalUniverseService {
   }> {
     for (let offset = 0; offset < MAX_TRADING_DAY_SEARCH; offset += 1) {
       const date = addCalendarDays(requestedDate, -offset);
+      if (date < KRX_DATA_EPOCH) break;
       const kospiDaily = await this.fetchKospiDaily(date);
       if (kospiDaily.length > 0) return { date, kospiDaily };
     }
@@ -314,12 +340,20 @@ export class HistoricalUniverseService {
 
   private standardCodeMapOf(rows: readonly KrxIssueBaseInfoRow[]): ReadonlyMap<string, string> {
     const result = new Map<string, string>();
+    const shortCodeByStandardCode = new Map<string, string>();
     for (const row of rows) {
       const existing = result.get(row.shortCode);
       if (existing !== undefined && existing !== row.standardCode) {
         throw new Error(`KRX 단축코드 ${row.shortCode}의 표준코드가 서로 다릅니다.`);
       }
+      const existingShortCode = shortCodeByStandardCode.get(row.standardCode);
+      if (existingShortCode !== undefined && existingShortCode !== row.shortCode) {
+        throw new Error(
+          `KRX 표준코드 ${row.standardCode}가 여러 단축코드(${existingShortCode}, ${row.shortCode})에 배정되었습니다.`,
+        );
+      }
       result.set(row.shortCode, row.standardCode);
+      shortCodeByStandardCode.set(row.standardCode, row.shortCode);
     }
     return result;
   }
@@ -334,6 +368,25 @@ export class HistoricalUniverseService {
 
   private isExpired(entry: { readonly expiresAtMs: number }): boolean {
     return this.deps.clock.now() >= entry.expiresAtMs;
+  }
+
+  private purgeExpiredCaches(): void {
+    const nowMs = this.deps.clock.now();
+    for (const [key, entry] of this.dailyCache) {
+      if (nowMs >= entry.expiresAtMs) this.dailyCache.delete(key);
+    }
+    for (const [key, entry] of this.previewByEffective) {
+      if (nowMs >= entry.expiresAtMs) this.previewByEffective.delete(key);
+    }
+    for (const [key, entry] of this.previewByRequest) {
+      if (nowMs >= entry.expiresAtMs) this.previewByRequest.delete(key);
+    }
+    for (const [key, entry] of this.previewById) {
+      if (nowMs >= entry.expiresAtMs) this.previewById.delete(key);
+    }
+    if (this.standardCodeMapCache && nowMs >= this.standardCodeMapCache.expiresAtMs) {
+      this.standardCodeMapCache = null;
+    }
   }
 
   private deletePreview(preview: HistoricalUniversePreview): void {

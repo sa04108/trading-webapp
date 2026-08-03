@@ -156,6 +156,16 @@ describe('HistoricalUniverseService', () => {
     expect(source.calls.filter(({ kind, market }) => kind === 'daily' && market === 'KOSPI')).toHaveLength(31);
   });
 
+  it('epoch 당일 탐색은 공식 범위 밖인 2009년 날짜를 호출하지 않는다', async () => {
+    const { service: subject, source } = service();
+
+    await expect(subject.preview('2010-01-04')).rejects.toMatchObject({
+      code: 'NO_TRADING_DAY_IN_RANGE',
+    });
+    expect(source.calls.filter(({ kind, market }) => kind === 'daily' && market === 'KOSPI'))
+      .toEqual([{ kind: 'daily', market: 'KOSPI', date: '2010-01-04' }]);
+  });
+
   it('KOSPI 성공·KOSDAQ 빈 응답이면 부분 후보군을 만들지 않는다', async () => {
     const source = new FakeSource();
     source.seed('2025-01-02');
@@ -229,6 +239,24 @@ describe('HistoricalUniverseService', () => {
     expect(subject.getPreview(yearEnd.previewId)).toBe(yearEnd);
   });
 
+  it('서로 다른 요청일의 동시 호출도 같은 적용일의 KOSDAQ·기본정보 요청을 공유한다', async () => {
+    const source = new FakeSource();
+    source.seed('2024-12-30');
+    let release!: () => void;
+    source.dailyGate = new Promise<void>((resolve) => { release = resolve; });
+    const { service: subject } = service({ source });
+
+    const newYearPromise = subject.preview('2025-01-01');
+    const yearEndPromise = subject.preview('2024-12-31');
+    release();
+    const [newYear, yearEnd] = await Promise.all([newYearPromise, yearEndPromise]);
+
+    expect(newYear.requestedDate).toBe('2025-01-01');
+    expect(yearEnd.requestedDate).toBe('2024-12-31');
+    expect(source.calls.filter(({ kind, market }) => kind === 'daily' && market === 'KOSDAQ')).toHaveLength(1);
+    expect(source.calls.filter(({ kind }) => kind === 'base')).toHaveLength(2);
+  });
+
   it('getPreview는 TTL 만료 후 null이다', async () => {
     const source = new FakeSource();
     source.seed('2025-01-02');
@@ -239,6 +267,31 @@ describe('HistoricalUniverseService', () => {
     expect(subject.getPreview(preview.previewId)).toBe(preview);
     clock.advance(101);
     expect(subject.getPreview(preview.previewId)).toBeNull();
+  });
+
+  it('공개 메서드 진입 시 재접근하지 않은 만료 캐시도 모두 정리한다', async () => {
+    const source = new FakeSource();
+    source.seed('2025-01-02');
+    source.seed('2025-01-03');
+    const clock = mutableClock();
+    const { service: subject } = service({ source, clock, previewTtlMs: 100 });
+    await subject.preview('2025-01-02');
+    await subject.preview('2025-01-03');
+    const caches = subject as unknown as {
+      dailyCache: Map<unknown, unknown>;
+      previewById: Map<unknown, unknown>;
+      previewByRequest: Map<unknown, unknown>;
+      previewByEffective: Map<unknown, unknown>;
+    };
+    expect(caches.previewById.size).toBe(2);
+
+    clock.advance(101);
+    expect(subject.getPreview('uvp_missing')).toBeNull();
+
+    expect(caches.dailyCache.size).toBe(0);
+    expect(caches.previewById.size).toBe(0);
+    expect(caches.previewByRequest.size).toBe(0);
+    expect(caches.previewByEffective.size).toBe(0);
   });
 
   it('usableFromDate는 적용일 + 1 달력일이고 canonicalHash는 SHA-256이다', async () => {
@@ -266,5 +319,18 @@ describe('HistoricalUniverseService', () => {
     expect([...first.entries()]).toEqual([['005930', 'KR005930'], ['035720', 'KR035720']]);
     expect(second).toBe(first);
     expect(source.calls.filter(({ kind }) => kind === 'base')).toHaveLength(2);
+  });
+
+  it('currentStandardCodeMap은 하나의 표준코드가 여러 단축코드에 배정되면 거부한다', async () => {
+    const source = new FakeSource();
+    const duplicateStandardCode = 'KR-DUPLICATE';
+    source.base.set('KOSPI:2026-08-02', [
+      { ...baseRow('005930', 'KOSPI'), standardCode: duplicateStandardCode },
+      { ...baseRow('005931', 'KOSPI'), standardCode: duplicateStandardCode },
+    ]);
+    source.base.set('KOSDAQ:2026-08-02', [baseRow('035720', 'KOSDAQ')]);
+    const { service: subject } = service({ source });
+
+    await expect(subject.currentStandardCodeMap()).rejects.toThrow(/표준코드.*단축코드/);
   });
 });
