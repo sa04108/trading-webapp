@@ -373,6 +373,28 @@ describe('KRX 과거 유니버스 어댑터', () => {
     expect(Object.hasOwn(safe, 'details')).toBe(false);
   });
 
+  it('getPrototypeOf trap이 API 키를 던지는 Proxy Error는 일반 안전 오류로 바꾼다', async () => {
+    const thrown = new Proxy(new Error('safe proxy message'), {
+      getPrototypeOf: () => {
+        throw new Error(`proxy trap ${API_KEY}`);
+      },
+    });
+
+    const { rejection, loggerLines } = await captureFetchRejection(thrown);
+
+    expectGenericSafeError(rejection, loggerLines);
+  });
+
+  it('API 키를 담은 Symbol own 필드가 있는 Error는 필드를 복사하지 않는다', async () => {
+    const thrown = new Error('safe message');
+    Object.defineProperty(thrown, Symbol(API_KEY), { value: 'safe', enumerable: true });
+
+    const { rejection, loggerLines } = await captureFetchRejection(thrown);
+
+    const safe = expectDetachedSafeError(rejection, thrown, loggerLines);
+    expect(Object.getOwnPropertySymbols(safe)).toEqual([]);
+  });
+
   it.each([
     ['객체', { nested: { credential: API_KEY } }],
     ['배열', ['safe', API_KEY]],
@@ -383,17 +405,26 @@ describe('KRX 과거 유니버스 어댑터', () => {
     expectGenericSafeError(rejection, loggerLines);
   });
 
-  it('API 키가 없는 Error는 같은 인스턴스를 그대로 전파한다', async () => {
+  it('API 키가 없는 Error도 안전한 메시지만 남긴 새 Error로 분리한다', async () => {
     const expected = new Error('network failure');
     const safeCycle: Record<string, unknown> = {};
     safeCycle.self = safeCycle;
-    Object.assign(expected, { details: ['safe', safeCycle] });
-    const { fetchImpl } = createFetch(() => {
-      throw expected;
+    Object.assign(expected, {
+      cause: new Error('safe cause'),
+      details: ['safe', safeCycle],
     });
-    const source = createConfiguredSource({ fetchImpl });
 
-    await expect(source.fetchDailyTrades('KOSPI', '2026-08-01')).rejects.toBe(expected);
+    const { rejection, loggerLines } = await captureFetchRejection(expected);
+
+    expect(rejection).toBeInstanceOf(Error);
+    const safe = rejection as Error;
+    expect(safe === expected).toBe(false);
+    expect(safe.name).toBe('Error');
+    expect(safe.message).toBe('network failure');
+    expect(safe.stack).not.toBe(expected.stack);
+    expect(Object.hasOwn(safe, 'cause')).toBe(false);
+    expect(Object.hasOwn(safe, 'details')).toBe(false);
+    expect(loggerLines.join('\n')).not.toContain(API_KEY);
   });
 
   it('설정된 논리 호출을 KST 날짜별로 세고 성공 로그에 안전한 메타데이터만 남긴다', async () => {
