@@ -12,7 +12,7 @@ describe('kst-date', () => {
 
   it('달력일 가감은 월 경계를 넘는다', () => {
     expect(addCalendarDays('2025-01-01', -1)).toBe('2024-12-31');
-    expect(addCalendarDays('2024-12-30', 1)).toBe('2024-12-31');
+    expect(addCalendarDays('2024-12-31', 1)).toBe('2025-01-01');
   });
 
   it('basDd 변환은 왕복한다', () => {
