@@ -78,6 +78,11 @@ export class JobOrchestrator {
         { module: 'backtest', event: 'jobs.recovered', jobIds: recovered },
         'marked orphaned jobs INTERRUPTED',
       );
+      // 알림 wiring 이 이 이벤트를 구독한다 — 여기서 emit 하지 않으면 재시작으로
+      // INTERRUPTED 된 잡은 사용자에게 알려지지 않는다 (container 는 start() 전에 구독한다)
+      for (const jobId of recovered) {
+        this.events.emit('job', { jobId, kind: 'status' } satisfies JobEvent);
+      }
     }
     this.timer = setInterval(() => this.tick(), POLL_INTERVAL_MS);
     this.timer.unref();

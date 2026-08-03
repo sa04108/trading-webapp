@@ -62,6 +62,20 @@ module.exports = {
       to: { path: 'src/server/modules/facts' },
     },
     {
+      name: 'market-data-no-notification',
+      severity: 'error',
+      comment: 'market-data → notification 금지 — container 가 notify 클로저로 잇는다',
+      from: { path: 'src/server/modules/market-data' },
+      to: { path: 'src/server/modules/notification' },
+    },
+    {
+      name: 'backtest-no-notification',
+      severity: 'error',
+      comment: 'backtest → notification 금지 — container 가 listener 로 잇는다',
+      from: { path: 'src/server/modules/backtest' },
+      to: { path: 'src/server/modules/notification' },
+    },
+    {
       name: 'strategy-no-broker-adapter',
       severity: 'error',
       comment: 'strategy → broker adapter 금지 (§7)',

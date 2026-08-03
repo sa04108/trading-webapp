@@ -5,6 +5,7 @@ import { BacktestsPage } from '../features/backtests/backtests-page';
 import { NewBacktestWizard } from '../features/backtests/new-backtest-wizard';
 import { DashboardPage } from '../features/dashboard/dashboard-page';
 import { DataPage } from '../features/datasets/data-page';
+import { NotificationsPage } from '../features/notifications/notifications-page';
 import { SettingsPage } from '../features/settings/settings-page';
 import { RequireAuth } from './require-auth';
 import { AppShell } from './shell';
@@ -23,6 +24,7 @@ export const router = createBrowserRouter([
           { path: 'backtests/new', element: <NewBacktestWizard /> },
           { path: 'backtests/:id', element: <BacktestDetailPage /> },
           { path: 'datasets', element: <DataPage /> },
+          { path: 'notifications', element: <NotificationsPage /> },
           { path: 'settings', element: <SettingsPage /> },
         ],
       },

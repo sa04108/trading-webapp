@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { pruneExpiredRows } from '../../src/server/shared/db/maintenance.js';
-import { auditLogs, loginAttempts, sessions, users } from '../../src/server/shared/db/schema.js';
+import { auditLogs, loginAttempts, notifications, sessions, users } from '../../src/server/shared/db/schema.js';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
 
 const HOUR = 3_600_000;
@@ -24,6 +24,7 @@ describe('DB maintenance (무한 증가 방지)', () => {
       idleTimeoutMs: 12 * HOUR,
       absoluteTimeoutMs: 7 * DAY,
       auditLogRetentionMs: 90 * DAY,
+      notificationRetentionMs: 7 * DAY,
     };
 
     db.insert(users)
@@ -73,13 +74,60 @@ describe('DB maintenance (무한 증가 방지)', () => {
         { actor: 'a', event: 'recent', detailJson: null, createdAtMs: now - DAY },
       ])
       .run();
+    db.insert(notifications)
+      .values({
+        id: 'ntf_ancient',
+        type: 'backtest',
+        severity: 'info',
+        title: 'ancient',
+        read: true,
+        createdAtMs: now - 3650 * DAY,
+      })
+      .run();
 
     pruneExpiredRows(db, now, {
       idleTimeoutMs: 12 * HOUR,
       absoluteTimeoutMs: 7 * DAY,
       auditLogRetentionMs: 0,
+      notificationRetentionMs: 0,
     });
 
     expect(db.select().from(auditLogs).all().map((a) => a.event)).toEqual(['ancient', 'recent']);
+    expect(db.select().from(notifications).all()).toHaveLength(1);
+  });
+
+  it('prunes notifications older than retention', () => {
+    const db = ctx.container.database.db;
+    const now = Date.now();
+
+    db.insert(notifications)
+      .values([
+        {
+          id: 'ntf_old',
+          type: 'backtest',
+          severity: 'info',
+          title: 'old',
+          read: true,
+          createdAtMs: now - 8 * DAY,
+        },
+        {
+          id: 'ntf_new',
+          type: 'data-sync',
+          severity: 'error',
+          title: 'new',
+          read: false,
+          createdAtMs: now - DAY,
+        },
+      ])
+      .run();
+
+    pruneExpiredRows(db, now, {
+      idleTimeoutMs: 12 * HOUR,
+      absoluteTimeoutMs: 7 * DAY,
+      auditLogRetentionMs: 0,
+      notificationRetentionMs: 7 * DAY,
+    });
+
+    expect(db.select().from(notifications).all().map((n) => n.id)).toEqual(['ntf_new']);
   });
 });

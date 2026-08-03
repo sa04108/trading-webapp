@@ -7,6 +7,9 @@ import { pruneExpiredRows } from '../shared/db/maintenance.js';
 import { systemClock, type Clock } from '../shared/clock.js';
 import { configureZodLocale } from '../shared/zod-locale.js';
 import { createAuditLogService, type AuditLogService } from '../modules/audit/audit-service.js';
+import { NotificationService } from '../modules/notification/application/notification-service.js';
+import type { NotificationInput } from '../modules/notification/application/notification-service.js';
+import { createBacktestNotificationListener } from './notification-wiring.js';
 import { AuthService } from '../modules/auth/application/auth-service.js';
 import type {
   LoginAttemptRepository,
@@ -59,6 +62,7 @@ export interface Container {
   readonly gitCommitSha: string;
   readonly systemStatus: SystemStatusProviders;
   readonly auditLog: AuditLogService;
+  readonly notificationService: NotificationService;
   readonly userRepository: UserRepository;
   readonly sessionRepository: SessionRepository;
   readonly loginAttemptRepository: LoginAttemptRepository;
@@ -115,6 +119,7 @@ export function createContainer(config: AppConfig): Container {
     idleTimeoutMs: config.sessionIdleTimeoutSeconds * 1000,
     absoluteTimeoutMs: config.sessionAbsoluteTimeoutSeconds * 1000,
     auditLogRetentionMs: config.auditLogRetentionDays * 86_400_000,
+    notificationRetentionMs: config.notificationRetentionDays * 86_400_000,
   };
   if (pruneOptions.auditLogRetentionMs > 0) {
     logger.info(
@@ -134,6 +139,18 @@ export function createContainer(config: AppConfig): Container {
   pruneTimer.unref();
 
   const auditLog = createAuditLogService(database.db, clock, logger);
+  const notificationService = new NotificationService(database.db, clock);
+  // 알림 생성 실패는 본 작업(백테스트·동기화)을 막지 않는다 — warn 만 남기고 삼킨다
+  const safeNotify = (input: NotificationInput): void => {
+    try {
+      notificationService.create(input);
+    } catch (error) {
+      logger.warn(
+        { module: 'notification', event: 'notify.failed', err: error },
+        'notification create failed',
+      );
+    }
+  };
   const userRepository = createSqliteUserRepository(database.db, logger);
   const sessionRepository = createSqliteSessionRepository(database.db);
   const loginAttemptRepository = createSqliteLoginAttemptRepository(database.db);
@@ -230,6 +247,7 @@ export function createContainer(config: AppConfig): Container {
     // DART 미설정이면 키 자체를 뺀다 — `factsPhase: undefined` 로 넘기면 "주입했지만
     // 값이 없다" 와 "주입하지 않았다" 가 호출부에서 구분되지 않는다
     ...(factsPhase ? { factsPhase } : {}),
+    notify: (input) => safeNotify({ type: 'data-sync', ...input }),
   });
   const symbolInfoService = new SymbolInfoService(marketDataSource, clock, logger);
   // 발행주식수는 이름과 같은 응답에 있다 — SymbolInfoService 를 넘겨 24시간 캐시를
@@ -252,6 +270,10 @@ export function createContainer(config: AppConfig): Container {
 
   const jobQueue = new JobQueue(database, clock);
   const jobOrchestrator = new JobOrchestrator(jobQueue, config, logger, auditLog, clock);
+  jobOrchestrator.events.on(
+    'job',
+    createBacktestNotificationListener({ queue: jobQueue, notify: safeNotify, logger }),
+  );
   const resultsService = new ResultsService(database.db);
 
   const systemStatus: SystemStatusProviders = {
@@ -268,6 +290,7 @@ export function createContainer(config: AppConfig): Container {
     gitCommitSha: readGitCommitSha(),
     systemStatus,
     auditLog,
+    notificationService,
     userRepository,
     sessionRepository,
     loginAttemptRepository,

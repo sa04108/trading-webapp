@@ -1,10 +1,11 @@
 import { useMutation } from '@tanstack/react-query';
-import { Database, FlaskConical, LayoutDashboard, LogOut, Moon, Settings, Sun } from 'lucide-react';
+import { Bell, Database, FlaskConical, LayoutDashboard, LogOut, Moon, Settings, Sun } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import { NavLink, Outlet, useNavigate } from 'react-router';
 import { Button } from '@/components/ui/button';
 import { api } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
+import { useNotificationStream, useUnreadCount } from '../features/notifications/api';
 import { queryClient } from './query-client';
 
 const NAV_ITEMS = [
@@ -13,6 +14,31 @@ const NAV_ITEMS = [
   { to: '/datasets', label: '데이터', icon: Database, end: false },
   { to: '/settings', label: '설정', icon: Settings, end: false },
 ] as const;
+
+function NotificationBell() {
+  const navigate = useNavigate();
+  // SSE 구독은 여기(shell 상주 컴포넌트) 한 곳이다 — 어느 페이지에 있든 배지가 갱신된다
+  const sseFailed = useNotificationStream();
+  const { data } = useUnreadCount(sseFailed);
+  const count = data?.count ?? 0;
+
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="relative size-11"
+      aria-label={count > 0 ? `알림 ${count}건` : '알림'}
+      onClick={() => void navigate('/notifications')}
+    >
+      <Bell className="size-5" />
+      {count > 0 && (
+        <span className="absolute right-1.5 top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-medium leading-none text-white">
+          {count > 99 ? '99+' : count}
+        </span>
+      )}
+    </Button>
+  );
+}
 
 function ThemeToggle() {
   const { resolvedTheme, setTheme } = useTheme();
@@ -119,6 +145,7 @@ export function AppShell() {
         <header className="sticky top-0 z-10 flex h-14 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur">
           <span className="text-sm font-semibold md:hidden">Quant Platform</span>
           <div className="ml-auto flex items-center">
+            <NotificationBell />
             <ThemeToggle />
             <LogoutButton />
           </div>

@@ -129,6 +129,7 @@ function buildHarness(
   const clock = { now: () => Date.UTC(2026, 6, 8, 12, 0) }; // 2026-07-08 수요일 21:00 KST
   const symbolService = new SymbolService(handle.db, repo, clock, logger, noopAudit);
   const datasetService = new DatasetService(handle.db, symbolService, clock, noopAudit);
+  const notified: Array<{ severity: string; title: string; body: string; link: string }> = [];
   const sync = new BrokerSyncService({
     db: handle.db,
     source,
@@ -140,6 +141,7 @@ function buildHarness(
     minFreeDiskBytes: options.minFreeDiskBytes ?? 0,
     freeDiskBytes: options.freeDiskBytes ?? (() => Number.MAX_SAFE_INTEGER),
     factsPhase: options.factsPhase,
+    notify: (input) => notified.push(input),
   });
   /** 구 createBrokerDataset 자리 — 종목을 등록하고 코드 배열을 돌려준다 */
   const seed = (codes: readonly string[], market: Market = 'KR'): string[] => {
@@ -147,7 +149,7 @@ function buildHarness(
     // 구 createBrokerDataset 처럼 중복을 접고 정렬해 돌려준다
     return [...new Set(codes)].sort();
   };
-  return { db: handle.db, repo, symbolService, datasetService, sync, clock, seed };
+  return { db: handle.db, repo, symbolService, datasetService, sync, clock, seed, notified };
 }
 
 type Harness = ReturnType<typeof buildHarness>;
@@ -372,7 +374,7 @@ describe('BrokerSyncService (설계 2026-07-28-broker-sync-design.md)', () => {
         return inner.fetchCandles(request);
       },
     };
-    const { repo, seed, symbolService, sync } = buildHarness(source);
+    const { repo, seed, symbolService, sync, notified } = buildHarness(source);
     ref.sync = sync;
     const dataset = seed(['005930'], 'KR');
 
@@ -384,6 +386,11 @@ describe('BrokerSyncService (설계 2026-07-28-broker-sync-design.md)', () => {
     expect(cancelled?.status).toBe('CANCELLED');
     // 취소 시점(2페이지째 요청 중)까지 저장된 봉은 남는다 — 페이지 경계 취소
     expect(repo.all('1m')).toHaveLength(8);
+    expect(notified).toHaveLength(1);
+    expect(notified[0]).toMatchObject({
+      severity: 'info',
+      title: '데이터 동기화가 취소되었습니다',
+    });
 
     // 재실행이 이어받아 끝까지 간다
     const resumed = sync.startSync(dataset, { slice: '1m' });
@@ -402,8 +409,8 @@ describe('BrokerSyncService (설계 2026-07-28-broker-sync-design.md)', () => {
     expect(sync.cancelSync(started.job.id)).toBe('NOT_RUNNING');
   });
 
-  it('recovers orphaned RUNNING jobs on boot', async () => {
-    const { db, seed, symbolService, sync, clock } = buildHarness(new FakeSource([]));
+  it('recovers orphaned RUNNING jobs on boot and notifies once', async () => {
+    const { db, seed, symbolService, sync, clock, notified } = buildHarness(new FakeSource([]));
     const dataset = seed(['005930'], 'KR');
     db.insert(dataSyncJobs)
       .values({
@@ -421,6 +428,39 @@ describe('BrokerSyncService (설계 2026-07-28-broker-sync-design.md)', () => {
     const job = symbolService.getSyncJob('imp_orphan');
     expect(job?.status).toBe('FAILED');
     expect(job?.error).toContain('중단');
+    expect(notified).toHaveLength(1);
+    expect(notified[0]).toMatchObject({
+      severity: 'error',
+      title: '데이터 동기화가 중단되었습니다',
+    });
+    expect(notified[0]?.body).toContain('1건');
+  });
+
+  it('does not notify when there is nothing to recover', () => {
+    const { sync, notified } = buildHarness(new FakeSource([]));
+
+    const recovered = sync.recoverInterrupted();
+
+    expect(recovered).toBe(0);
+    expect(notified).toHaveLength(0);
+  });
+
+  it('notifies on sync completion and on failure', async () => {
+    const ok = buildHarness(new FakeSource(minutes('005930', 10)));
+    const { done } = ok.sync.startSync(ok.seed(['005930']), { slice: '1m' });
+    await done;
+    expect(ok.notified).toHaveLength(1);
+    expect(ok.notified[0]).toMatchObject({ severity: 'info', link: '/datasets' });
+
+    const failingSource: MarketDataSource = {
+      fetchCandles: () => Promise.reject(new Error('API down')),
+    };
+    const bad = buildHarness(failingSource);
+    const run = bad.sync.startSync(bad.seed(['005930']), { slice: '1m' });
+    await run.done;
+    expect(bad.notified).toHaveLength(1);
+    expect(bad.notified[0]?.severity).toBe('error');
+    expect(bad.notified[0]?.body).toContain('API down');
   });
 });
 
