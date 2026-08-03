@@ -12,6 +12,28 @@ import { cn } from '@/lib/utils';
 import { useNotifications } from './api';
 import type { NotificationItem } from './types';
 
+/** 아이콘·제목·본문·상대 시각 — 편집 모드 라벨과 비편집 모드 버튼이 내용을 공유한다 */
+function NotificationRowBody({ item }: { item: NotificationItem }) {
+  return (
+    <>
+      {item.severity === 'error' ? (
+        <CircleAlert className="mt-0.5 size-4 shrink-0 text-loss" />
+      ) : (
+        <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+      )}
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-medium">{item.title}</span>
+        {item.body && (
+          <span className="block truncate text-sm text-muted-foreground">{item.body}</span>
+        )}
+      </span>
+      <span className="shrink-0 text-xs text-muted-foreground">
+        {formatRelativeTime(item.createdAtMs, Date.now())}
+      </span>
+    </>
+  );
+}
+
 export function NotificationsPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -53,14 +75,6 @@ export function NotificationsPage() {
       else next.add(id);
       return next;
     });
-
-  const openItem = (item: NotificationItem) => {
-    if (editing) {
-      toggleOne(item.id);
-      return;
-    }
-    if (item.link) void navigate(item.link);
-  };
 
   return (
     <Card>
@@ -104,45 +118,53 @@ export function NotificationsPage() {
           <p className="px-6 py-8 text-sm text-muted-foreground">알림이 없습니다.</p>
         ) : (
           <ul className="divide-y">
-            {notifications.map((item) => (
-              <li key={item.id}>
-                <button
-                  type="button"
-                  className={cn(
-                    'flex w-full items-start gap-3 px-6 py-3 text-left transition-colors hover:bg-muted/50',
-                    !item.read && 'bg-accent/40',
-                    !editing && !item.link && 'cursor-default',
-                  )}
-                  onClick={() => openItem(item)}
-                >
-                  {editing && (
-                    <Checkbox
-                      checked={selected.has(item.id)}
-                      onCheckedChange={() => toggleOne(item.id)}
-                      onClick={(event) => event.stopPropagation()}
-                      aria-label={`${item.title} 선택`}
-                      className="mt-0.5"
-                    />
-                  )}
-                  {item.severity === 'error' ? (
-                    <CircleAlert className="mt-0.5 size-4 shrink-0 text-loss" />
-                  ) : (
-                    <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-                  )}
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-sm font-medium">{item.title}</span>
-                    {item.body && (
-                      <span className="block truncate text-sm text-muted-foreground">
-                        {item.body}
-                      </span>
+            {notifications.map((item) => {
+              // 행 컨테이너는 button 이 아니라 div 다 — 편집 모드에서 그 안에 Checkbox(button
+              // role) 를 넣으면 button 안에 button 이 중첩돼 HTML 상 무효하고 스크린리더·키보드
+              // 포커스가 꼬인다. 편집 모드는 label+htmlFor 로, 비편집 모드는 그 자리에만
+              // button 을 둬서 인터랙티브 요소가 겹치지 않게 한다.
+              const checkboxId = `notification-${item.id}`;
+              return (
+                <li key={item.id}>
+                  <div
+                    className={cn(
+                      'flex items-start gap-3 px-6 py-3 transition-colors hover:bg-muted/50',
+                      !item.read && 'bg-accent/40',
                     )}
-                  </span>
-                  <span className="shrink-0 text-xs text-muted-foreground">
-                    {formatRelativeTime(item.createdAtMs, Date.now())}
-                  </span>
-                </button>
-              </li>
-            ))}
+                  >
+                    {editing ? (
+                      <>
+                        <Checkbox
+                          id={checkboxId}
+                          checked={selected.has(item.id)}
+                          onCheckedChange={() => toggleOne(item.id)}
+                          aria-label={`${item.title} 선택`}
+                          className="mt-0.5"
+                        />
+                        <label
+                          htmlFor={checkboxId}
+                          className="flex min-w-0 flex-1 items-start gap-3"
+                        >
+                          <NotificationRowBody item={item} />
+                        </label>
+                      </>
+                    ) : item.link ? (
+                      <button
+                        type="button"
+                        className="flex min-w-0 flex-1 items-start gap-3 text-left"
+                        onClick={() => navigate(item.link!)}
+                      >
+                        <NotificationRowBody item={item} />
+                      </button>
+                    ) : (
+                      <div className="flex min-w-0 flex-1 items-start gap-3">
+                        <NotificationRowBody item={item} />
+                      </div>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         )}
       </CardContent>
