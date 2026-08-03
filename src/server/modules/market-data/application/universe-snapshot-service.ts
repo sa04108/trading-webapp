@@ -71,6 +71,17 @@ interface SelectedIdentityState {
   readonly unmapped: readonly EligibleCandidate[];
 }
 
+function isSymbolIdentityUniqueConstraint(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 10 && current instanceof Error; depth += 1) {
+    if (/UNIQUE constraint failed: symbols\.(?:code|standard_code)/i.test(current.message)) {
+      return true;
+    }
+    current = current.cause;
+  }
+  return false;
+}
+
 export class UniverseSnapshotService {
   constructor(private readonly deps: {
     readonly db: AppDatabase;
@@ -91,11 +102,12 @@ export class UniverseSnapshotService {
     if (preview === null) throw new PreviewExpiredError(PREVIEW_EXPIRED_GUIDANCE);
 
     const selected = this.validateSelection(preview, args);
-    const identity = this.inspectExistingSymbols(selected);
-    if (identity.unmapped.length > 0) {
-      const currentMap = await this.deps.universe.currentStandardCodeMap();
-      for (const candidate of identity.unmapped) {
-        if (currentMap.get(candidate.shortCode) !== candidate.standardCode) {
+    const initialIdentity = this.inspectExistingSymbols(selected, this.deps.db);
+    let currentStandardCodeMap: ReadonlyMap<string, string> | null = null;
+    if (initialIdentity.unmapped.length > 0) {
+      currentStandardCodeMap = await this.deps.universe.currentStandardCodeMap();
+      for (const candidate of initialIdentity.unmapped) {
+        if (currentStandardCodeMap.get(candidate.shortCode) !== candidate.standardCode) {
           throw new SymbolIdentityConflictError(
             `기존 종목 ${candidate.shortCode}의 표준코드를 현재 KRX 정보로 검증할 수 없습니다.`,
           );
@@ -109,76 +121,100 @@ export class UniverseSnapshotService {
       .digest('hex');
     let snapshotId = '';
 
-    this.deps.db.transaction((tx) => {
-      for (const candidate of selected) {
-        const existing = identity.existingByShortCode.get(candidate.shortCode);
-        if (existing === undefined) {
-          tx.insert(symbols).values({
-            code: candidate.shortCode,
-            standardCode: candidate.standardCode,
-            market: 'KR',
-            name: candidate.name,
-            createdAtMs,
-          }).run();
-        } else if (existing.standardCode === null) {
-          tx.update(symbols)
-            .set({ standardCode: candidate.standardCode })
-            .where(and(eq(symbols.code, candidate.shortCode), isNull(symbols.standardCode)))
-            .run();
+    try {
+      this.deps.db.transaction((tx) => {
+        const identity = this.inspectExistingSymbols(selected, tx);
+        for (const candidate of selected) {
+          const existing = identity.existingByShortCode.get(candidate.shortCode);
+          if (existing === undefined) {
+            tx.insert(symbols).values({
+              code: candidate.shortCode,
+              standardCode: candidate.standardCode,
+              market: 'KR',
+              name: candidate.name,
+              createdAtMs,
+            }).run();
+          } else if (existing.standardCode === null) {
+            if (currentStandardCodeMap?.get(candidate.shortCode) !== candidate.standardCode) {
+              throw new SymbolIdentityConflictError(
+                `기존 종목 ${candidate.shortCode}의 표준코드를 현재 KRX 정보로 검증할 수 없습니다.`,
+              );
+            }
+            const result = tx.update(symbols)
+              .set({ standardCode: candidate.standardCode })
+              .where(and(eq(symbols.code, candidate.shortCode), isNull(symbols.standardCode)))
+              .run();
+            if (result.changes !== 1) {
+              throw new SymbolIdentityConflictError(
+                `기존 종목 ${candidate.shortCode}의 표준코드가 저장 중 변경되었습니다.`,
+              );
+            }
+          }
         }
+
+        snapshotId = newId('usn');
+        tx.insert(universeSnapshots).values({
+          id: snapshotId,
+          sourceKind: SOURCE_KIND,
+          requestedDate: preview.requestedDate,
+          effectiveTradingDate: preview.effectiveTradingDate,
+          usableFromDate: preview.usableFromDate,
+          usableFromRule: preview.usableFromRule,
+          marketsJson: JSON.stringify(['KOSPI', 'KOSDAQ']),
+          filterPolicyVersion: preview.set.filterPolicyVersion,
+          contractVersion: preview.set.contractVersion,
+          sortKey: 'MKTCAP',
+          sortDirection: 'DESC',
+          selectionMethod: args.selectionMethod,
+          selectionN: args.selectionN,
+          selectedCount: selected.length,
+          eligibleCount: preview.set.eligibleCount,
+          unknownMarketCapCount: preview.set.unknownMarketCapCount,
+          excludedByTypeJson: JSON.stringify(preview.set.excludedByType),
+          rawCountsJson: JSON.stringify(preview.set.rawCounts),
+          selectionHash,
+          candidateCanonicalHash: preview.canonicalHash,
+          krxApprovalExpiryDate: this.deps.approvalExpiry,
+          createdAtMs,
+        }).run();
+
+        tx.insert(universeSnapshotSymbols).values(selected.map((candidate) => ({
+          snapshotId,
+          standardCode: candidate.standardCode,
+          shortCode: candidate.shortCode,
+          nameAtSelection: candidate.name,
+          marketAtSelection: candidate.market,
+          marketCapKrw: candidate.marketCapKrw?.toString() ?? null,
+          rank: candidate.rank,
+          instrumentType: 'COMMON_STOCK',
+        }))).run();
+      });
+    } catch (error) {
+      if (error instanceof SymbolIdentityConflictError) throw error;
+      if (isSymbolIdentityUniqueConstraint(error)) {
+        throw new SymbolIdentityConflictError('종목 단축코드 또는 표준코드가 기존 식별자와 충돌합니다.');
       }
+      throw error;
+    }
 
-      snapshotId = newId('usn');
-      tx.insert(universeSnapshots).values({
-        id: snapshotId,
-        sourceKind: SOURCE_KIND,
-        requestedDate: preview.requestedDate,
-        effectiveTradingDate: preview.effectiveTradingDate,
-        usableFromDate: preview.usableFromDate,
-        usableFromRule: preview.usableFromRule,
-        marketsJson: JSON.stringify(['KOSPI', 'KOSDAQ']),
-        filterPolicyVersion: preview.set.filterPolicyVersion,
-        contractVersion: preview.set.contractVersion,
-        sortKey: 'MKTCAP',
-        sortDirection: 'DESC',
-        selectionMethod: args.selectionMethod,
-        selectionN: args.selectionN,
-        selectedCount: selected.length,
-        eligibleCount: preview.set.eligibleCount,
-        unknownMarketCapCount: preview.set.unknownMarketCapCount,
-        excludedByTypeJson: JSON.stringify(preview.set.excludedByType),
-        rawCountsJson: JSON.stringify(preview.set.rawCounts),
-        selectionHash,
-        candidateCanonicalHash: preview.canonicalHash,
-        krxApprovalExpiryDate: this.deps.approvalExpiry,
-        createdAtMs,
-      }).run();
-
-      tx.insert(universeSnapshotSymbols).values(selected.map((candidate) => ({
+    try {
+      this.deps.audit.record('system', 'universe.snapshot.created', {
         snapshotId,
-        standardCode: candidate.standardCode,
-        shortCode: candidate.shortCode,
-        nameAtSelection: candidate.name,
-        marketAtSelection: candidate.market,
-        marketCapKrw: candidate.marketCapKrw?.toString() ?? null,
-        rank: candidate.rank,
-        instrumentType: 'COMMON_STOCK',
-      }))).run();
-    });
-
-    this.deps.audit.record('system', 'universe.snapshot.created', {
-      snapshotId,
-      effectiveTradingDate: preview.effectiveTradingDate,
-      selectedCount: selected.length,
-      selectionMethod: args.selectionMethod,
-    });
-    this.deps.logger.info({
-      event: 'universe.snapshot.created',
-      snapshotId,
-      effectiveTradingDate: preview.effectiveTradingDate,
-      selectedCount: selected.length,
-      selectionMethod: args.selectionMethod,
-    }, 'KRX historical universe snapshot created');
+        effectiveTradingDate: preview.effectiveTradingDate,
+        selectedCount: selected.length,
+        selectionMethod: args.selectionMethod,
+      });
+    } catch (error) {
+      try {
+        this.deps.logger.error({
+          event: 'universe.snapshot.audit.failed',
+          snapshotId,
+          err: error,
+        }, 'committed universe snapshot audit failed');
+      } catch {
+        // 커밋된 성공을 후속 관찰 실패 때문에 재시도 가능한 실패로 바꾸지 않는다.
+      }
+    }
 
     return this.getSnapshot(snapshotId)!;
   }
@@ -290,10 +326,13 @@ export class UniverseSnapshotService {
     return selected;
   }
 
-  private inspectExistingSymbols(selected: readonly EligibleCandidate[]): SelectedIdentityState {
+  private inspectExistingSymbols(
+    selected: readonly EligibleCandidate[],
+    database: Pick<AppDatabase, 'select'>,
+  ): SelectedIdentityState {
     const shortCodes = selected.map((candidate) => candidate.shortCode);
     const standardCodes = selected.map((candidate) => candidate.standardCode);
-    const existingRows = this.deps.db
+    const existingRows = database
       .select()
       .from(symbols)
       .where(or(inArray(symbols.code, shortCodes), inArray(symbols.standardCode, standardCodes)))
@@ -309,7 +348,11 @@ export class UniverseSnapshotService {
     for (const candidate of selected) {
       const sameCode = existingByShortCode.get(candidate.shortCode);
       if (sameCode !== undefined) {
-        if (sameCode.standardCode === null) {
+        if (sameCode.market !== 'KR') {
+          throw new SymbolIdentityConflictError(
+            `단축코드 ${candidate.shortCode}가 다른 시장(${sameCode.market}) 종목으로 등록되어 있습니다.`,
+          );
+        } else if (sameCode.standardCode === null) {
           unmapped.push(candidate);
         } else if (sameCode.standardCode !== candidate.standardCode) {
           throw new SymbolIdentityConflictError(

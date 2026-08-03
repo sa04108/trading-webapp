@@ -115,10 +115,12 @@ interface AuditEvent {
 class FakeAudit implements AuditLogService {
   readonly events: AuditEvent[] = [];
   onRecord: (() => void) | null = null;
+  errorAfterRecord: Error | null = null;
 
   record(actor: string, event: string, detail?: Record<string, unknown>): void {
     this.onRecord?.();
     this.events.push({ actor, event, detail });
+    if (this.errorAfterRecord) throw this.errorAfterRecord;
   }
 }
 
@@ -133,7 +135,10 @@ interface Harness {
 
 const handles: DatabaseHandle[] = [];
 
-function setup(storedPreview: HistoricalUniversePreview | null = previewOf()): Harness {
+function setup(
+  storedPreview: HistoricalUniversePreview | null = previewOf(),
+  options: { readonly logger?: Logger } = {},
+): Harness {
   const database = openDatabase(':memory:');
   handles.push(database);
   const universe = new FakeUniverse(storedPreview);
@@ -144,7 +149,7 @@ function setup(storedPreview: HistoricalUniversePreview | null = previewOf()): H
     universe: universe as unknown as HistoricalUniverseService,
     clock,
     audit,
-    logger: LOGGER,
+    logger: options.logger ?? LOGGER,
     approvalExpiry: '2027-12-31',
   });
   return { database, preview: storedPreview, universe, audit, clock, service };
@@ -288,6 +293,29 @@ describe('UniverseSnapshotService', () => {
     expect(universe.standardCodeMapCalls).toBe(0);
   });
 
+  it.each([
+    ['매핑됨', A.standardCode],
+    ['미매핑', null],
+  ])('같은 단축코드의 기존 %s 행이라도 market이 KR이 아니면 identity 충돌이다', async (_label, standardCode) => {
+    const { service, database, universe, audit } = setup();
+    database.db.insert(symbols).values({
+      code: A.shortCode,
+      market: 'US',
+      name: '다른 시장 종목',
+      standardCode,
+      createdAtMs: 7,
+    }).run();
+    universe.standardCodeMap = new Map([[A.shortCode, A.standardCode]]);
+
+    await expect(manual(service, [A.standardCode]))
+      .rejects.toBeInstanceOf(SymbolIdentityConflictError);
+
+    expect(universe.standardCodeMapCalls).toBe(0);
+    expect(database.db.select().from(symbols).all()[0]).toMatchObject({ market: 'US', standardCode });
+    expect(database.db.select().from(universeSnapshots).all()).toEqual([]);
+    expect(audit.events).toEqual([]);
+  });
+
   it('같은 단축코드의 기존 행이 다른 standardCode면 SymbolIdentityConflictError다', async () => {
     const { service, database, universe } = setup();
     database.db.insert(symbols).values({
@@ -342,6 +370,57 @@ describe('UniverseSnapshotService', () => {
     ]);
   });
 
+  it('현재 KRX 조회를 기다리는 동안 기존 행의 identity가 바뀌면 트랜잭션에서 다시 읽고 거부한다', async () => {
+    const { service, database, universe, audit } = setup();
+    database.db.insert(symbols).values({
+      code: A.shortCode,
+      market: 'KR',
+      name: '미매핑',
+      createdAtMs: 7,
+    }).run();
+    universe.standardCodeMap = new Map([[A.shortCode, A.standardCode]]);
+    universe.onStandardCodeMap = () => {
+      expect(database.sqlite.inTransaction).toBe(false);
+      database.db.update(symbols)
+        .set({ standardCode: 'KR7-CONCURRENT-CONFLICT' })
+        .run();
+    };
+
+    await expect(manual(service, [A.standardCode]))
+      .rejects.toBeInstanceOf(SymbolIdentityConflictError);
+
+    expect(universe.standardCodeMapCalls).toBe(1);
+    expect(database.db.select().from(symbols).all()[0]?.standardCode)
+      .toBe('KR7-CONCURRENT-CONFLICT');
+    expect(database.db.select().from(universeSnapshots).all()).toEqual([]);
+    expect(audit.events).toEqual([]);
+  });
+
+  it('검증된 null 표준코드 백필이 정확히 한 행을 바꾸지 못하면 스냅샷을 만들지 않는다', async () => {
+    const { service, database, universe, audit } = setup();
+    database.db.insert(symbols).values({
+      code: A.shortCode,
+      market: 'KR',
+      name: '미매핑',
+      createdAtMs: 7,
+    }).run();
+    universe.standardCodeMap = new Map([[A.shortCode, A.standardCode]]);
+    database.sqlite.exec(`
+      CREATE TRIGGER ignore_standard_code_backfill
+      BEFORE UPDATE OF standard_code ON symbols
+      BEGIN
+        SELECT RAISE(IGNORE);
+      END
+    `);
+
+    await expect(manual(service, [A.standardCode]))
+      .rejects.toBeInstanceOf(SymbolIdentityConflictError);
+
+    expect(database.db.select().from(symbols).all()[0]?.standardCode).toBeNull();
+    expect(database.db.select().from(universeSnapshots).all()).toEqual([]);
+    expect(audit.events).toEqual([]);
+  });
+
   it.each([
     ['현재 맵에 없음', new Map<string, string>()],
     ['현재 맵과 불일치', new Map([[A.shortCode, 'KR7-CURRENTLY-DIFFERENT']])],
@@ -374,6 +453,25 @@ describe('UniverseSnapshotService', () => {
     `);
 
     await expect(manual(service, [A.standardCode])).rejects.toThrow('forced snapshot-symbol failure');
+
+    expect(database.db.select().from(symbols).all()).toEqual([]);
+    expect(database.db.select().from(universeSnapshots).all()).toEqual([]);
+    expect(database.db.select().from(universeSnapshotSymbols).all()).toEqual([]);
+    expect(audit.events).toEqual([]);
+  });
+
+  it.each(['code', 'standard_code'])('symbols.%s unique 충돌은 identity 오류로 번역하고 전체를 롤백한다', async (column) => {
+    const { service, database, audit } = setup();
+    database.sqlite.exec(`
+      CREATE TRIGGER force_symbol_identity_unique
+      BEFORE INSERT ON symbols
+      BEGIN
+        SELECT RAISE(ABORT, 'UNIQUE constraint failed: symbols.${column}');
+      END
+    `);
+
+    await expect(manual(service, [A.standardCode]))
+      .rejects.toBeInstanceOf(SymbolIdentityConflictError);
 
     expect(database.db.select().from(symbols).all()).toEqual([]);
     expect(database.db.select().from(universeSnapshots).all()).toEqual([]);
@@ -497,6 +595,55 @@ describe('UniverseSnapshotService', () => {
         selectionMethod: 'MANUAL_FROM_KRX_SNAPSHOT',
       },
     }]);
+  });
+
+  it('커밋 뒤 audit.record가 기록 후 throw해도 저장 결과를 반환하고 재시도 오류를 만들지 않는다', async () => {
+    const { service, database, audit } = setup();
+    audit.errorAfterRecord = new Error('audit storage unavailable after recording');
+
+    const detail = await manual(service, [A.standardCode]);
+
+    expect(detail.symbols).toHaveLength(1);
+    expect(database.db.select().from(universeSnapshots).all()).toHaveLength(1);
+    expect(audit.events).toHaveLength(1);
+  });
+
+  it('audit 실패를 기록하는 logger.error도 throw하면 삼키고 이미 커밋한 결과를 반환한다', async () => {
+    let errorCalls = 0;
+    const throwingLogger = {
+      debug() {},
+      info() { throw new Error('duplicate success logger must not run'); },
+      warn() {},
+      error() {
+        errorCalls += 1;
+        throw new Error('logger unavailable');
+      },
+    } as unknown as Logger;
+    const { service, database, audit } = setup(previewOf(), { logger: throwingLogger });
+    audit.errorAfterRecord = new Error('audit unavailable');
+
+    const detail = await manual(service, [A.standardCode]);
+
+    expect(detail.symbols).toHaveLength(1);
+    expect(database.db.select().from(universeSnapshots).all()).toHaveLength(1);
+    expect(audit.events).toHaveLength(1);
+    expect(errorCalls).toBe(1);
+  });
+
+  it('정상 audit 뒤 별도 성공 logger를 호출하지 않는다', async () => {
+    const throwingSuccessLogger = {
+      debug() {},
+      info() { throw new Error('duplicate success logger must not run'); },
+      warn() {},
+      error() {},
+    } as unknown as Logger;
+    const { service, database, audit } = setup(previewOf(), { logger: throwingSuccessLogger });
+
+    const detail = await manual(service, [A.standardCode]);
+
+    expect(detail.symbols).toHaveLength(1);
+    expect(database.db.select().from(universeSnapshots).all()).toHaveLength(1);
+    expect(audit.events).toHaveLength(1);
   });
 
   it('getSnapshot과 listSnapshots은 DB 값에서 불변 DTO를 재구성하고 최신순·id 역순으로 정렬한다', async () => {
