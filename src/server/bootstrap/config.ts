@@ -42,7 +42,7 @@ const envSchema = z.object({
   DART_BASE_URL: z.string().url().default('https://opendart.fss.or.kr'),
   DART_API_KEY: z.string().min(1).optional(),
   /** KRX Open API (정보데이터시스템). 미설정이면 과거 유니버스 모드가 비활성 — 다른 데이터 경로는 영향 없다 */
-  KRX_BASE_URL: z.string().url().default('https://data-dx.krx.co.kr'),
+  KRX_BASE_URL: z.string().url().default('https://openapi.krx.co.kr'),
   KRX_API_KEY: z.string().min(1).optional(),
   /** KRX 이용 승인 만료일. 지나면 과거 유니버스 조회·신규 실행을 막는다 (REVIEW §10) */
   KRX_APPROVAL_EXPIRY: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),

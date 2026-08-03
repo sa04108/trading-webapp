@@ -80,7 +80,7 @@ describe('loadConfig', () => {
     it('미설정이면 krxApiKey 는 null 이고 기본 base URL 을 쓴다', () => {
       const config = loadConfig({});
       expect(config.krxApiKey).toBeNull();
-      expect(config.krxBaseUrl).toBe('https://data-dx.krx.co.kr');
+      expect(config.krxBaseUrl).toBe('https://openapi.krx.co.kr');
       expect(config.krxApprovalExpiry).toBeNull();
     });
 
