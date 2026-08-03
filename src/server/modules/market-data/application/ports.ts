@@ -1,4 +1,15 @@
 import type { Candle, Market, Timeframe } from '../domain/candle.js';
+import type {
+  KrxDailyTradeRow,
+  KrxIssueBaseInfoRow,
+  KrxMarket,
+} from '../domain/krx-universe-types.js';
+
+export type {
+  KrxDailyTradeRow,
+  KrxIssueBaseInfoRow,
+  KrxMarket,
+} from '../domain/krx-universe-types.js';
 
 /** 스펙 §8 시장 데이터 Port */
 export interface CandleQuery {
@@ -42,35 +53,6 @@ export interface FetchCandleResult {
 
 export interface MarketDataSource {
   fetchCandles(request: FetchCandleRequest): Promise<FetchCandleResult>;
-}
-
-export type KrxMarket = 'KOSPI' | 'KOSDAQ';
-
-export interface KrxIssueBaseInfoRow {
-  /** 기본 ISU_CD — 표준 종목코드다. */
-  readonly standardCode: string;
-  /** ISU_SRT_CD — KRX 단축 종목코드다. */
-  readonly shortCode: string;
-  /** ISU_NM 원문이다. */
-  readonly name: string;
-  /** LIST_DD 를 ISO 날짜로 바꾼 값이다. 형식이 다르면 null 이다. */
-  readonly listedDate: string | null;
-  /** MKT_TP_NM 원문이다. */
-  readonly marketRaw: string;
-  /** SECUGRP_NM 원문이다. */
-  readonly securityGroupRaw: string;
-  /** SECT_TP_NM 원문이다. */
-  readonly sectionRaw: string | null;
-  /** KIND_STKCERT_TP_NM 원문이다. */
-  readonly stockKindRaw: string | null;
-}
-
-export interface KrxDailyTradeRow {
-  /** 일별 API 의 ISU_CD 는 단축 종목코드다. */
-  readonly shortCode: string;
-  readonly name: string;
-  /** 콤마를 없앤 10진 정수 문자열이다. 알 수 없으면 null 이다. */
-  readonly marketCapRaw: string | null;
 }
 
 export interface KrxHistoricalUniverseSource {
