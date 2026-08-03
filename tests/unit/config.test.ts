@@ -75,4 +75,21 @@ describe('loadConfig', () => {
       expect(() => loadConfig({ DART_API_KEY: '' })).toThrow(/DART_API_KEY/);
     });
   });
+
+  describe('KRX 설정', () => {
+    it('미설정이면 krxApiKey 는 null 이고 기본 base URL 을 쓴다', () => {
+      const config = loadConfig({});
+      expect(config.krxApiKey).toBeNull();
+      expect(config.krxBaseUrl).toBe('https://data-dx.krx.co.kr');
+      expect(config.krxApprovalExpiry).toBeNull();
+    });
+
+    it('만료일 형식이 틀리면 ConfigError 다', () => {
+      expect(() => loadConfig({ KRX_API_KEY: 'k', KRX_APPROVAL_EXPIRY: '2027/08/03' })).toThrow(ConfigError);
+    });
+
+    it('만료일만 있고 키가 없으면 ConfigError 다 — 반쪽 설정은 즉시 실패', () => {
+      expect(() => loadConfig({ KRX_APPROVAL_EXPIRY: '2027-08-03' })).toThrow(ConfigError);
+    });
+  });
 });
