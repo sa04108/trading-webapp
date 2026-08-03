@@ -87,12 +87,30 @@ function availableMemoryBytes(): number {
   return os.freemem();
 }
 
+/**
+ * `backtest_jobs.dataset_id`/`backtest_runs.dataset_id` 는 NOT NULL 컬럼이라 스냅샷
+ * 경로(Task 12)는 `queue.enqueue` 가 `''` 를 "데이터셋 없음" sentinel 로 저장한다
+ * (job-queue.ts 참고). 그 sentinel 이 API 응답까지 새면 클라이언트가 빈 문자열을
+ * 데이터셋 id 로 오해한다 — 직렬화 경계에서 null 로 되돌린다.
+ */
+function serializedDatasetId(datasetId: string): string | null {
+  return datasetId === '' ? null : datasetId;
+}
+
+/** run 응답도 같은 sentinel 을 갖고 있다 (backtest-child.ts 가 job.datasetId 를 그대로 복사) */
+function serializeRun<T extends { datasetId: string }>(
+  run: T | null,
+): (Omit<T, 'datasetId'> & { datasetId: string | null }) | null {
+  if (!run) return null;
+  return { ...run, datasetId: serializedDatasetId(run.datasetId) };
+}
+
 function serializeJob(job: BacktestJobRow) {
   return {
     id: job.id,
     status: job.status,
     strategyId: job.strategyId,
-    datasetId: job.datasetId,
+    datasetId: serializedDatasetId(job.datasetId),
     universeSnapshotId: job.universeSnapshotId,
     request: JSON.parse(job.requestJson) as unknown,
     progressBars: job.progressBars,
@@ -375,11 +393,14 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
         );
       }
 
-      // 시점 게이트 — usableFromDate(적용일) 이전 시작은 미래 정보 유출이다. 그날
-      // 세션이 시작될 때는 그날 종가·시가총액 순위를 알 수 없으므로 같은 날도 막는다.
-      if (snapshot.usableFromDate >= body.period.from) {
+      // 시점 게이트 (REVIEW §9) — effectiveTradingDate(적용일) 이전 시작은 미래
+      // 정보 유출이다. 그날 세션이 시작될 때는 그날 종가·시가총액 순위를 알 수
+      // 없으므로 같은 날도 막는다. usableFromDate(= effectiveTradingDate + 1일)가
+      // 아니다 — usableFromDate 를 기준으로 삼으면 스펙보다 하루 더 엄격해져
+      // period.from == usableFromDate(사용 가능 첫날)인 정당한 제출까지 막힌다.
+      if (snapshot.effectiveTradingDate >= body.period.from) {
         errors.push(
-          `적용일 ${snapshot.usableFromDate}는 시작일 ${body.period.from}보다 이전이어야 합니다. ` +
+          `적용일 ${snapshot.effectiveTradingDate}는 시작일 ${body.period.from}보다 이전이어야 합니다. ` +
             '더 이른 스냅샷을 선택하거나 시작일을 늦추세요',
         );
       }
@@ -616,7 +637,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (!job) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
     return {
       job: serializeJob(job),
-      run: results.getRun(id),
+      run: serializeRun(results.getRun(id)),
       metrics: results.getMetrics(id),
       // job 이 제출 시점부터 갖고 있다 — run 완료를 기다릴 필요가 없다 (Task 12).
       // 완료 후에는 backtestRuns.provenancePinJson 에 같은 값이 복사돼 있다.
@@ -765,7 +786,8 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const job = queue.getJob(id);
     if (!job) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
     reply.header('content-disposition', `attachment; filename="backtest-${id}.json"`);
-    return { job: serializeJob(job), ...results.getFullExport(id) };
+    const fullExport = results.getFullExport(id);
+    return { job: serializeJob(job), ...fullExport, run: serializeRun(fullExport.run) };
   });
 
   /** SSE 진행률 (스펙 §14). 연결이 끊기면 클라이언트는 polling 으로 fallback 한다. */

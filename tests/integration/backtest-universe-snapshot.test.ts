@@ -215,11 +215,13 @@ describe('백테스트 유니버스 스냅샷 계약 (Task 12)', () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it('적용일 >= 시작일은 두 날짜와 해결책을 담아 400 이다', async () => {
+  it('적용일(effectiveTradingDate) >= 시작일은 두 날짜와 해결책을 담아 400 이다', async () => {
     const ctx = await setupCtx();
     const snapshot = await createSnapshot(ctx, '2025-01-06', 1);
-    // usableFromDate 는 effectiveTradingDate + 1일 — 이보다 앞선 시작일은 차단된다
-    const before = new Date(Date.parse(`${snapshot.usableFromDate}T00:00:00Z`) - DAY)
+    // effectiveTradingDate 보다 앞선 시작일은 차단된다 (REVIEW §9) — usableFromDate
+    // (= effectiveTradingDate + 1일) 가 기준이 아니다: 그 기준이면 스펙보다 하루 더
+    // 엄격해져 사용 가능 첫날(period.from == usableFromDate) 제출까지 막힌다.
+    const before = new Date(Date.parse(`${snapshot.effectiveTradingDate}T00:00:00Z`) - DAY)
       .toISOString()
       .slice(0, 10);
 
@@ -236,11 +238,11 @@ describe('백테스트 유니버스 스냅샷 계약 (Task 12)', () => {
 
     expect(res.statusCode).toBe(400);
     const error = res.json().error as string;
-    expect(error).toContain(`적용일 ${snapshot.usableFromDate}는 시작일 ${before}보다 이전이어야 합니다`);
+    expect(error).toContain(`적용일 ${snapshot.effectiveTradingDate}는 시작일 ${before}보다 이전이어야 합니다`);
     expect(error).toContain('더 이른 스냅샷을 선택하거나 시작일을 늦추세요');
   });
 
-  it('적용일 == 시작일도 차단한다 — 종가 정보는 그날 세션 시작에 알 수 없다', async () => {
+  it('적용일(effectiveTradingDate) == 시작일도 차단한다 — 종가 정보는 그날 세션 시작에 알 수 없다', async () => {
     const ctx = await setupCtx();
     const snapshot = await createSnapshot(ctx, '2025-01-06', 1);
 
@@ -251,14 +253,38 @@ describe('백테스트 유니버스 스냅샷 계약 (Task 12)', () => {
       payload: rangeBreakoutRequest({
         universeSnapshotId: snapshot.id,
         universe: { type: 'SYMBOLS', symbols: snapshot.shortCodes },
-        period: { from: snapshot.usableFromDate, to: '2025-06-01' },
+        period: { from: snapshot.effectiveTradingDate, to: '2025-06-01' },
       }),
     });
 
     expect(res.statusCode).toBe(400);
     expect(res.json().error as string).toContain(
-      `적용일 ${snapshot.usableFromDate}는 시작일 ${snapshot.usableFromDate}보다 이전이어야 합니다`,
+      `적용일 ${snapshot.effectiveTradingDate}는 시작일 ${snapshot.effectiveTradingDate}보다 이전이어야 합니다`,
     );
+  });
+
+  it('period.from == usableFromDate(사용 가능 첫날)는 통과한다 — effectiveTradingDate 보다 하루 뒤라 게이트 대상이 아니다', async () => {
+    const ctx = await setupCtx();
+    const snapshot = await createSnapshot(ctx, '2025-01-06', 1);
+    // usableFromDate 자체는 게이트 기준이 아니다 — effectiveTradingDate < usableFromDate
+    // 이므로 이 날짜로 시작하는 제출은 통과해야 한다 (회귀: 이전엔 usableFromDate 를
+    // 기준으로 비교해 이 경계를 잘못 차단했다).
+    const from = snapshot.usableFromDate;
+    const to = '2025-06-30';
+    await seedCandles(ctx, snapshot.shortCodes[0]!, from, to);
+
+    const res = await ctx.app.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: ctx.cookie },
+      payload: rangeBreakoutRequest({
+        universeSnapshotId: snapshot.id,
+        universe: { type: 'SYMBOLS', symbols: snapshot.shortCodes },
+        period: { from, to },
+      }),
+    });
+
+    expect(res.statusCode).toBe(201);
   });
 
   it('적용일 < 시작일이고 데이터가 있으면 통과한다', async () => {
@@ -423,6 +449,8 @@ describe('백테스트 유니버스 스냅샷 계약 (Task 12)', () => {
     expect(jobPin.sourceKind).toBe('KRX_HISTORICAL');
     expect(jobPin.universeSnapshotId).toBe(snapshot.id);
     expect(jobPin.symbols).toHaveLength(1);
+    // DB 컬럼은 NOT NULL 이라 '' sentinel 을 쓴다 — API 응답까지 새면 안 된다(아래 확인)
+    expect(job.datasetId).toBe('');
 
     const detailBeforeRun = await ctx.app.app.inject({
       method: 'GET',
@@ -430,10 +458,22 @@ describe('백테스트 유니버스 스냅샷 계약 (Task 12)', () => {
       cookies: { qp_session: ctx.cookie },
     });
     expect(detailBeforeRun.statusCode).toBe(200);
+    expect(detailBeforeRun.json().job.datasetId).toBeNull();
     expect(detailBeforeRun.json().provenancePin).toMatchObject({
       sourceKind: 'KRX_HISTORICAL',
       universeSnapshotId: snapshot.id,
     });
+
+    const listBeforeRun = await ctx.app.app.inject({
+      method: 'GET',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: ctx.cookie },
+    });
+    expect(listBeforeRun.statusCode).toBe(200);
+    const listedJob = (listBeforeRun.json().jobs as Array<{ id: string; datasetId: string | null }>).find(
+      (j) => j.id === jobId,
+    );
+    expect(listedJob?.datasetId).toBeNull();
 
     ctx.app.container.jobOrchestrator.tick();
     await waitFor(() => {
@@ -445,6 +485,8 @@ describe('백테스트 유니버스 스냅샷 계약 (Task 12)', () => {
     expect(finished.status).toBe('COMPLETED');
     const run = ctx.app.container.resultsService.getRun(jobId)!;
     expect(run.provenancePinJson).toBe(job.provenancePinJson);
+    // run 도 job.datasetId('') 를 그대로 복사한다 — 같은 sentinel, 같은 정규화가 필요하다
+    expect(run.datasetId).toBe('');
 
     const detailAfterRun = await ctx.app.app.inject({
       method: 'GET',
@@ -452,6 +494,8 @@ describe('백테스트 유니버스 스냅샷 계약 (Task 12)', () => {
       cookies: { qp_session: ctx.cookie },
     });
     expect(detailAfterRun.json().provenancePin).toMatchObject({ sourceKind: 'KRX_HISTORICAL' });
+    expect(detailAfterRun.json().job.datasetId).toBeNull();
+    expect(detailAfterRun.json().run.datasetId).toBeNull();
   }, 90_000);
 
   it('pin 의 종목 버전 스냅샷이 스냅샷 구성 종목만 커버한다', async () => {
@@ -502,9 +546,19 @@ describe('백테스트 유니버스 스냅샷 계약 (Task 12)', () => {
 
     const job = ctx.app.container.jobQueue.getJob(jobId)!;
     expect(job.universeSnapshotId).toBeNull();
+    expect(job.datasetId).toBe(dataset.id);
     const jobPin = JSON.parse(job.provenancePinJson!);
     expect(jobPin.sourceKind).toBe('DATASET');
     expect(jobPin.timepointWarning).toContain('과거 시점 적합성을 확인할 수 없습니다');
+
+    // 회귀 확인: datasetId 정규화('' → null)는 스냅샷 경로의 sentinel 에만 적용된다 —
+    // 데이터셋 경로의 실제 id 는 그대로 노출돼야 한다.
+    const detail = await ctx.app.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${jobId}`,
+      cookies: { qp_session: ctx.cookie },
+    });
+    expect(detail.json().job.datasetId).toBe(dataset.id);
 
     ctx.app.container.jobOrchestrator.tick();
     await waitFor(() => {
@@ -515,10 +569,18 @@ describe('백테스트 유니버스 스냅샷 계약 (Task 12)', () => {
     const finished = ctx.app.container.jobQueue.getJob(jobId)!;
     expect(finished.status).toBe('COMPLETED');
     const run = ctx.app.container.resultsService.getRun(jobId)!;
+    expect(run.datasetId).toBe(dataset.id);
     const runPin = JSON.parse(run.provenancePinJson!);
     expect(runPin.sourceKind).toBe('DATASET');
     const warnings = JSON.parse(run.warningsJson ?? '[]') as string[];
     expect(warnings.some((w) => w.includes('과거 시점 적합성을 확인할 수 없습니다'))).toBe(true);
+
+    const detailAfterRun = await ctx.app.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${jobId}`,
+      cookies: { qp_session: ctx.cookie },
+    });
+    expect(detailAfterRun.json().run.datasetId).toBe(dataset.id);
   }, 90_000);
 
   it('clone: 스냅샷이 삭제(부재)면 명확한 오류로 차단한다', async () => {
