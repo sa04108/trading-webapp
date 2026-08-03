@@ -40,6 +40,7 @@ import {
   SymbolSortSelect,
 } from './symbol-list';
 import { filterSymbols } from './symbol-search';
+import { SymbolSelectScopeButtons } from './symbol-select-scope';
 import { countWithMetric, sortSymbols, type SymbolSortKey } from './symbol-sort';
 import { SyncDialog } from './sync-dialog';
 import type {
@@ -174,22 +175,6 @@ export function SymbolsPanel() {
       const next = new Set(prev);
       if (next.has(code)) next.delete(code);
       else next.add(code);
-      return next;
-    });
-  };
-  /**
-   * 전체 선택은 **검색 결과 전체**를 대상으로 한다 — 보이는 페이지만 담으면 페이지를
-   * 넘겨 가며 20번 눌러야 하고, 그건 이 버튼이 없애려던 일이다. 검색 밖의 선택은
-   * 건드리지 않는다: 검색어를 바꿔 가며 고른 것을 새 검색이 지워 버리면 안 된다.
-   */
-  const allSelected = filtered.length > 0 && filtered.every((row) => selected.has(row.code));
-  const toggleAll = (): void => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      for (const row of filtered) {
-        if (allSelected) next.delete(row.code);
-        else next.add(row.code);
-      }
       return next;
     });
   };
@@ -380,15 +365,14 @@ export function SymbolsPanel() {
         <div className="sticky bottom-[calc(3.5rem+env(safe-area-inset-bottom))] z-10 -mx-4 border-t bg-background/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 md:bottom-0">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium">{selectedCodes.length}개 선택</span>
-            {/* 검색 중이면 대상이 검색 결과임을 라벨에 적는다 — 「전체 선택」이 200종목을
-                담을 것처럼 보이는데 12종목만 담기면 그것도 거짓말이다 */}
-            <Button variant="ghost" size="sm" onClick={toggleAll}>
-              {allSelected
-                ? '전체 해제'
-                : query.trim().length > 0
-                  ? `검색 결과 ${filtered.length}종목 선택`
-                  : '전체 선택'}
-            </Button>
+            <SymbolSelectScopeButtons
+              filtered={filtered}
+              visible={visible}
+              pageCount={pageCount}
+              selected={selected}
+              query={query}
+              onChange={setSelected}
+            />
             <span className="ml-auto flex flex-wrap items-center gap-2">
               <Button
                 size="sm"

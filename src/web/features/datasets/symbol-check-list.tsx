@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
 import { PageSizeInput, Pagination } from '@/components/pagination';
-import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { parsePageSize } from '@/lib/page-size';
 import { pageWindow } from '@/lib/pagination';
@@ -12,6 +11,7 @@ import {
   SymbolSortSelect,
 } from './symbol-list';
 import { filterSymbols } from './symbol-search';
+import { SymbolSelectScopeButtons } from './symbol-select-scope';
 import { countWithMetric, sortSymbols, type SymbolSortKey } from './symbol-sort';
 import type { SymbolSummary } from './symbol-types';
 
@@ -59,25 +59,6 @@ export function SymbolCheckList({
   const filtered = useMemo(() => filterSymbols(all, query), [all, query]);
   const { pageCount, currentPage, from, to } = pageWindow(filtered.length, pageSize, page);
   const visible = filtered.slice(from, to);
-
-  /**
-   * 두 범위를 따로 둔다. 「전체 선택」은 검색 결과 전체(1,000종목일 수 있다), 「페이지내
-   * 전체 선택」은 지금 보이는 것만이다. 하나로 합치면 검색 없이 누른 사용자가 의도보다
-   * 훨씬 많이 담게 되거나, 반대로 페이지를 넘겨 가며 100번 눌러야 한다.
-   *
-   * 범위 밖의 선택은 건드리지 않는다 — 검색어를 바꿔 가며 고른 것을 새 검색이 지우면 안 된다.
-   */
-  const allFilteredSelected = filtered.length > 0 && filtered.every((s) => selected.has(s.code));
-  const allPageSelected = visible.length > 0 && visible.every((s) => selected.has(s.code));
-
-  const setMany = (codes: readonly SymbolSummary[], select: boolean): void => {
-    const next = new Set(selected);
-    for (const symbol of codes) {
-      if (select) next.add(symbol.code);
-      else next.delete(symbol.code);
-    }
-    onChange(next);
-  };
 
   const toggle = (code: string): void => {
     const next = new Set(selected);
@@ -138,31 +119,14 @@ export function SymbolCheckList({
           {query.trim().length > 0 ? `검색 결과 ${filtered.length}/${all.length}종목` : `${all.length}종목`}
         </span>
         <span className="ml-auto flex flex-wrap items-center gap-2">
-          {/* 대상이 비면 잠근다 — 「검색 결과 0종목 선택」 은 눌러도 아무 일이 없는 버튼이다 */}
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-9"
-            disabled={filtered.length === 0}
-            onClick={() => setMany(filtered, !allFilteredSelected)}
-          >
-            {allFilteredSelected
-              ? '전체 해제'
-              : query.trim().length > 0
-                ? `검색 결과 ${filtered.length}종목 선택`
-                : '전체 선택'}
-          </Button>
-          {/* 페이지가 하나면 「전체 선택」과 같은 동작이라 버튼을 둘 둘 이유가 없다 */}
-          {pageCount > 1 ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-9"
-              onClick={() => setMany(visible, !allPageSelected)}
-            >
-              {allPageSelected ? '페이지내 해제' : '페이지내 전체 선택'}
-            </Button>
-          ) : null}
+          <SymbolSelectScopeButtons
+            filtered={filtered}
+            visible={visible}
+            pageCount={pageCount}
+            selected={selected}
+            query={query}
+            onChange={onChange}
+          />
         </span>
       </div>
 
