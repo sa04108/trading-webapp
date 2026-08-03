@@ -37,7 +37,14 @@ export interface JobSummary {
   id: string;
   status: BacktestStatus;
   strategyId: string;
-  datasetId: string;
+  /**
+   * KRX 과거 시점 스냅샷 경로(Task 12)로 만든 잡은 null 이다 — `universeSnapshotId` 가
+   * 유니버스를 정하고 데이터셋은 아예 참조하지 않는다. null 을 "데이터셋 없음 오류"로
+   * 읽지 않는다 — provenancePin.sourceKind 로 어느 경로인지 구분한다.
+   */
+  datasetId: string | null;
+  /** KRX 스냅샷 경로일 때만 채운다 — datasetId 와 배타적이다 (Task 12) */
+  universeSnapshotId: string | null;
   request: BacktestRequestBody;
   progressBars: number | null;
   totalBars: number | null;
@@ -79,7 +86,8 @@ export interface RunMetadata {
   strategyVersion: string;
   strategySourceHash: string;
   parameterJson: string;
-  datasetId: string;
+  /** KRX 스냅샷 경로(Task 12)의 run 은 null 이다 — RunMetadataCard 는 provenancePin 을 대신 본다 */
+  datasetId: string | null;
   /** 소비한 (종목,슬라이스,버전,해시) 스냅샷 — 구 datasetVersion/datasetHash (§9.5) */
   universeHash: string;
   universeJson: string;

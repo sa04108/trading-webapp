@@ -41,11 +41,18 @@ function JobCard({
             </span>
           </div>
           <div className="text-xs text-muted-foreground">
-            {formatUniverseSummary(
-              datasetName,
-              job.datasetId,
-              job.request.universe.symbols.length,
-            )}{' '}
+            {
+              // KRX 스냅샷 경로는 datasetId 가 null 이다 (Task 13 리뷰 이관 항목) —
+              // 데이터셋 이름을 찾는 대신 유니버스 출처 라벨로 대체한다. 목록 카드는
+              // provenancePin 을 받지 않으므로 적용일까지는 못 적고 출처만 밝힌다.
+              job.datasetId === null
+                ? `KRX 스냅샷 · ${job.request.universe.symbols.length}종목`
+                : formatUniverseSummary(
+                    datasetName,
+                    job.datasetId,
+                    job.request.universe.symbols.length,
+                  )
+            }{' '}
             · {job.request.period.from} ~ {job.request.period.to}
             {timeframe ? ` · ${timeframeLabel(timeframe)}` : ''}
           </div>
@@ -132,7 +139,9 @@ export function BacktestsPage() {
                   <JobCard
                     key={job.id}
                     job={job}
-                    datasetName={datasetNameById.get(job.datasetId) ?? null}
+                    datasetName={
+                      job.datasetId !== null ? datasetNameById.get(job.datasetId) ?? null : null
+                    }
                     timeframe={resolveJobTimeframe(job)}
                   />
                 ))}

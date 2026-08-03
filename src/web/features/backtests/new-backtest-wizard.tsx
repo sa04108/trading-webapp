@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -941,6 +942,28 @@ export function NewBacktestWizard() {
                   ) : null}
                 </span>
               </div>
+              {/* KRX 스냅샷 모드일 때만 출처를 한 줄 더 적는다 — 데이터셋 모드는 유니버스
+                  선택 자체가 데이터셋 카드에 이미 다 나와 있어 여기서 되풀이하지 않는다. */}
+              {universeMode === 'KRX_SNAPSHOT' && selectedSnapshot ? (
+                <>
+                  <Separator />
+                  <div className="flex justify-between gap-3">
+                    <span className="shrink-0 text-muted-foreground">유니버스 출처</span>
+                    <span className="flex flex-col items-end gap-1">
+                      <Badge>고정 유니버스</Badge>
+                      <span className="text-right text-xs text-muted-foreground">
+                        KRX {selectedSnapshot.effectiveTradingDate} 스냅샷 ·{' '}
+                        {selectedSnapshot.selectedCount}종목
+                      </span>
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    이 스냅샷은 {selectedSnapshot.usableFromDate}부터 시작일로 쓸 수
+                    있습니다 — 그 이전 시작일은 그 시점에 알 수 없던 정보를 미리 쓰는
+                    셈이라 제출이 막힙니다.
+                  </p>
+                </>
+              ) : null}
               <Separator />
               <div className="flex justify-between gap-3">
                 <span className="shrink-0 text-muted-foreground">봉 주기</span>
