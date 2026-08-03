@@ -51,6 +51,12 @@ export type StepGateState = Pick<
    * 빈 배열과 구분해야 한다: 빈 배열은 "전부 없다", undefined 는 "모른다" 다.
    */
   symbolsWithFacts?: readonly string[];
+  /**
+   * 유니버스 출처 (Task 13) — `KRX_SNAPSHOT` 이면 데이터셋을 고르지 않으므로 datasetId
+   * 검사를 건너뛰고, 대신 스냅샷 확정 여부(symbols 유무)를 본다. 200종목 상한은
+   * 출처와 무관하게 그대로 적용한다.
+   */
+  universeMode: 'DATASET' | 'KRX_SNAPSHOT';
 };
 
 /** 이 단계를 아직 떠날 수 없는 이유. null 이면 통과 */
@@ -58,17 +64,24 @@ export function stepBlocker(index: number, state: StepGateState): string | null 
   switch (index) {
     case 0:
       return state.strategyId ? null : '전략을 선택하세요';
-    case 1:
-      if (!state.datasetId) return '데이터셋을 선택하세요';
+    case 1: {
+      if (state.universeMode === 'KRX_SNAPSHOT') {
+        if (state.symbols.length === 0) return '과거 KRX 시점 스냅샷을 확정하세요';
+      } else if (!state.datasetId) {
+        return '데이터셋을 선택하세요';
+      }
       if (state.symbols.length === 0) return '종목을 1개 이상 선택하세요';
       if (state.symbols.length > MAX_UNIVERSE_SYMBOLS) {
-        return (
-          `이 데이터셋은 ${state.symbols.length}종목이라 백테스트 상한` +
-          `(${MAX_UNIVERSE_SYMBOLS}종목)을 넘습니다 — 데이터 화면에서 종목을 줄이거나 ` +
-          '더 작은 데이터셋을 쓰세요'
-        );
+        return state.universeMode === 'KRX_SNAPSHOT'
+          ? `이 스냅샷은 ${state.symbols.length}종목이라 백테스트 상한` +
+              `(${MAX_UNIVERSE_SYMBOLS}종목)을 넘습니다 — 과거 KRX 시점 화면에서 종목을 ` +
+              '줄이거나 더 작은 스냅샷을 쓰세요'
+          : `이 데이터셋은 ${state.symbols.length}종목이라 백테스트 상한` +
+              `(${MAX_UNIVERSE_SYMBOLS}종목)을 넘습니다 — 데이터 화면에서 종목을 줄이거나 ` +
+              '더 작은 데이터셋을 쓰세요';
       }
       return fundamentalsBlocker(state);
+    }
     case 2:
       if (!state.from || !state.to) return '시작일과 종료일을 입력하세요';
       if (state.from > state.to) return '시작일이 종료일보다 늦습니다';
