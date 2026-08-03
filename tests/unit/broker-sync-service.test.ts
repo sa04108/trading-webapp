@@ -374,7 +374,7 @@ describe('BrokerSyncService (설계 2026-07-28-broker-sync-design.md)', () => {
         return inner.fetchCandles(request);
       },
     };
-    const { repo, seed, symbolService, sync } = buildHarness(source);
+    const { repo, seed, symbolService, sync, notified } = buildHarness(source);
     ref.sync = sync;
     const dataset = seed(['005930'], 'KR');
 
@@ -386,6 +386,11 @@ describe('BrokerSyncService (설계 2026-07-28-broker-sync-design.md)', () => {
     expect(cancelled?.status).toBe('CANCELLED');
     // 취소 시점(2페이지째 요청 중)까지 저장된 봉은 남는다 — 페이지 경계 취소
     expect(repo.all('1m')).toHaveLength(8);
+    expect(notified).toHaveLength(1);
+    expect(notified[0]).toMatchObject({
+      severity: 'info',
+      title: '데이터 동기화가 취소되었습니다',
+    });
 
     // 재실행이 이어받아 끝까지 간다
     const resumed = sync.startSync(dataset, { slice: '1m' });
@@ -404,8 +409,8 @@ describe('BrokerSyncService (설계 2026-07-28-broker-sync-design.md)', () => {
     expect(sync.cancelSync(started.job.id)).toBe('NOT_RUNNING');
   });
 
-  it('recovers orphaned RUNNING jobs on boot', async () => {
-    const { db, seed, symbolService, sync, clock } = buildHarness(new FakeSource([]));
+  it('recovers orphaned RUNNING jobs on boot and notifies once', async () => {
+    const { db, seed, symbolService, sync, clock, notified } = buildHarness(new FakeSource([]));
     const dataset = seed(['005930'], 'KR');
     db.insert(dataSyncJobs)
       .values({
@@ -423,6 +428,21 @@ describe('BrokerSyncService (설계 2026-07-28-broker-sync-design.md)', () => {
     const job = symbolService.getSyncJob('imp_orphan');
     expect(job?.status).toBe('FAILED');
     expect(job?.error).toContain('중단');
+    expect(notified).toHaveLength(1);
+    expect(notified[0]).toMatchObject({
+      severity: 'error',
+      title: '데이터 동기화가 중단되었습니다',
+    });
+    expect(notified[0]?.body).toContain('1건');
+  });
+
+  it('does not notify when there is nothing to recover', () => {
+    const { sync, notified } = buildHarness(new FakeSource([]));
+
+    const recovered = sync.recoverInterrupted();
+
+    expect(recovered).toBe(0);
+    expect(notified).toHaveLength(0);
   });
 
   it('notifies on sync completion and on failure', async () => {

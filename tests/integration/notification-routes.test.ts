@@ -25,6 +25,7 @@ describe('notification routes', () => {
     for (const [method, url] of [
       ['GET', '/api/v1/notifications'],
       ['GET', '/api/v1/notifications/unread-count'],
+      ['GET', '/api/v1/notifications/events'],
       ['POST', '/api/v1/notifications/read-all'],
       ['DELETE', '/api/v1/notifications'],
     ] as const) {

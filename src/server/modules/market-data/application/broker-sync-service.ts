@@ -230,6 +230,15 @@ export class BrokerSyncService {
         ),
       )
       .run();
+    // 재시작으로 조용히 FAILED 처리된 잡은 화면 어디서도 원인을 알 수 없다 — 요약 알림 1건으로 알린다
+    if (result.changes > 0) {
+      this.deps.notify?.({
+        severity: 'error',
+        title: '데이터 동기화가 중단되었습니다',
+        body: `${result.changes}건 — 서버 재시작으로 실패 처리되었습니다`,
+        link: '/datasets',
+      });
+    }
     return result.changes;
   }
 
@@ -331,19 +340,28 @@ export class BrokerSyncService {
         })
         .where(eq(dataSyncJobs.id, jobId))
         .run();
-      this.deps.notify?.({
-        severity: finalStatus === 'FAILED' ? 'error' : 'info',
-        title:
-          finalStatus === 'COMPLETED'
-            ? '데이터 동기화가 완료되었습니다'
-            : finalStatus === 'FAILED'
-              ? '데이터 동기화가 실패했습니다'
-              : '데이터 동기화가 취소되었습니다',
-        body:
-          `${targets.length}종목 · ${totalRows.toLocaleString('ko-KR')}행` +
-          (facts?.state.failureMessage ? ` — ${facts.state.failureMessage}` : ''),
-        link: '/datasets',
-      });
+      // notify 는 잡 상태를 이미 기록한 뒤의 부가 동작이다 — 여기서 던지면 바깥 catch 가
+      // 방금 쓴 상태(COMPLETED 등)를 FAILED 로 덮어써 버리므로 지역적으로 흡수한다
+      try {
+        this.deps.notify?.({
+          severity: finalStatus === 'FAILED' ? 'error' : 'info',
+          title:
+            finalStatus === 'COMPLETED'
+              ? '데이터 동기화가 완료되었습니다'
+              : finalStatus === 'FAILED'
+                ? '데이터 동기화가 실패했습니다'
+                : '데이터 동기화가 취소되었습니다',
+          body:
+            `${targets.length}종목 · ${totalRows.toLocaleString('ko-KR')}행` +
+            (facts?.state.failureMessage ? ` — ${facts.state.failureMessage}` : ''),
+          link: '/datasets',
+        });
+      } catch (notifyError) {
+        this.deps.logger.warn(
+          { module: 'market-data', event: 'data.sync.notify-failed', jobId, err: notifyError },
+          'broker sync completion notify failed',
+        );
+      }
       if (factsStop === 'CANCELLED') {
         this.deps.audit.record('system', 'data.sync.cancelled', { symbols: targets.length });
       } else if (factsStop === 'ERROR') {
