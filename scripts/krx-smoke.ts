@@ -70,7 +70,7 @@ v1(krx-contract.ts)·필터 정책(krx-filter-policy.ts)과 맞는지 확인한�
   --help                이 도움말 출력
 
 필수 환경변수: KRX_API_KEY (없으면 즉시 안내하고 exit 1)
-선택 환경변수: KRX_BASE_URL(기본 https://data-dx.krx.co.kr), KRX_APPROVAL_EXPIRY
+선택 환경변수: KRX_BASE_URL(기본 https://data-dbg.krx.co.kr), KRX_APPROVAL_EXPIRY
 
 실패 항목이 하나라도 있으면 exit 1로 끝난다 — 통과 전에는 실서비스 사용을 열지 않는다.`;
 
@@ -447,7 +447,7 @@ async function main(): Promise<void> {
     console.error('KRX_API_KEY 가 설정되지 않았습니다.');
     console.error('KRX Open API 인증키를 발급받고 KOSPI·KOSDAQ 종목기본정보·일별매매정보 네 API 이용 승인을 받은 뒤,');
     console.error('KRX_API_KEY 환경변수로 설정하고 다시 실행하세요 (infra/app.env.example 참고).');
-    console.error('선택: KRX_BASE_URL(기본 https://data-dx.krx.co.kr), KRX_APPROVAL_EXPIRY(YYYY-MM-DD)도 함께 설정할 수 있습니다.');
+    console.error('선택: KRX_BASE_URL(기본 https://data-dbg.krx.co.kr), KRX_APPROVAL_EXPIRY(YYYY-MM-DD)도 함께 설정할 수 있습니다.');
     process.exitCode = 1;
     return;
   }
@@ -478,7 +478,7 @@ async function main(): Promise<void> {
 
   const source = createKrxHistoricalUniverseSource(
     {
-      baseUrl: process.env.KRX_BASE_URL ?? 'https://data-dx.krx.co.kr',
+      baseUrl: process.env.KRX_BASE_URL ?? 'https://data-dbg.krx.co.kr',
       apiKey,
       approvalExpiry: process.env.KRX_APPROVAL_EXPIRY ?? null,
     },
