@@ -96,9 +96,14 @@ export const symbols = sqliteTable(
     market: text('market').notNull(),
     /** 표시명 — 외부 조회가 실패하거나 소스가 없으면 null */
     name: text('name'),
+    /** KRX 표준코드(ISIN). 스냅샷 등록 시에만 채워진다 — 단축코드 재사용을 구분하는 유일한 열쇠 */
+    standardCode: text('standard_code'),
     createdAtMs: integer('created_at_ms').notNull(),
   },
-  (table) => [index('idx_symbols_market').on(table.market)],
+  (table) => [
+    index('idx_symbols_market').on(table.market),
+    uniqueIndex('idx_symbols_standard_code').on(table.standardCode),
+  ],
 );
 
 /**
@@ -252,6 +257,64 @@ export const dataSyncJobs = sqliteTable(
   (table) => [index('idx_data_sync_jobs_status').on(table.status)],
 );
 
+/**
+ * 백테스트가 참조하는 과거 시점 유니버스 스냅샷 (REVIEW 기반, 소유 모델은 실행 종속 — D-040).
+ * 저장 후 불변이다. 구성을 바꾸려면 새 스냅샷을 만든다 — 그래서 수정 이력 컬럼이 없다.
+ */
+export const universeSnapshots = sqliteTable(
+  'universe_snapshots',
+  {
+    id: text('id').primaryKey(),
+    sourceKind: text('source_kind').notNull(),
+    requestedDate: text('requested_date').notNull(),
+    effectiveTradingDate: text('effective_trading_date').notNull(),
+    usableFromDate: text('usable_from_date').notNull(),
+    usableFromRule: text('usable_from_rule').notNull(),
+    marketsJson: text('markets_json').notNull(),
+    filterPolicyVersion: text('filter_policy_version').notNull(),
+    contractVersion: text('contract_version').notNull(),
+    sortKey: text('sort_key').notNull(),
+    sortDirection: text('sort_direction').notNull(),
+    selectionMethod: text('selection_method').notNull(),
+    selectionN: integer('selection_n'),
+    selectedCount: integer('selected_count').notNull(),
+    eligibleCount: integer('eligible_count').notNull(),
+    unknownMarketCapCount: integer('unknown_market_cap_count').notNull(),
+    excludedByTypeJson: text('excluded_by_type_json').notNull(),
+    rawCountsJson: text('raw_counts_json').notNull(),
+    selectionHash: text('selection_hash').notNull(),
+    candidateCanonicalHash: text('candidate_canonical_hash').notNull(),
+    krxApprovalExpiryDate: text('krx_approval_expiry_date'),
+    createdAtMs: integer('created_at_ms').notNull(),
+  },
+  (table) => [index('idx_universe_snapshots_created').on(table.createdAtMs)],
+);
+
+/**
+ * 스냅샷 선정 종목의 값 스냅샷 (REVIEW §7.2). symbols 에 FK 를 걸지 않는다 —
+ * 종목 삭제 뒤에도 실행 근거를 값으로 설명해야 한다 (backtest_trades.symbol 선례).
+ */
+export const universeSnapshotSymbols = sqliteTable(
+  'universe_snapshot_symbols',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    snapshotId: text('snapshot_id')
+      .notNull()
+      .references(() => universeSnapshots.id, { onDelete: 'cascade' }),
+    standardCode: text('standard_code').notNull(),
+    shortCode: text('short_code').notNull(),
+    nameAtSelection: text('name_at_selection').notNull(),
+    marketAtSelection: text('market_at_selection').notNull(),
+    marketCapKrw: text('market_cap_krw'),
+    rank: integer('rank'),
+    instrumentType: text('instrument_type').notNull(),
+  },
+  (table) => [
+    uniqueIndex('idx_universe_snapshot_symbols_snap_code').on(table.snapshotId, table.standardCode),
+    index('idx_universe_snapshot_symbols_snap').on(table.snapshotId),
+  ],
+);
+
 // ── 백테스트 (스펙 §10, §12) ──────────────────────────────────────
 
 export const backtestJobs = sqliteTable(
@@ -263,6 +326,10 @@ export const backtestJobs = sqliteTable(
     requestJson: text('request_json').notNull(),
     strategyId: text('strategy_id').notNull(),
     datasetId: text('dataset_id').notNull(),
+    /** 유니버스 스냅샷 참조. datasetId 처럼 FK 를 걸지 않는다 — 실행 기록은 pin 값으로 자립한다 */
+    universeSnapshotId: text('universe_snapshot_id'),
+    /** 서버 소유 provenance pin (REVIEW §9.2). 클라이언트 입력이 아니다 */
+    provenancePinJson: text('provenance_pin_json'),
     /**
      * 제출 시점에 고정된 종목 버전 스냅샷 — 실행 시점의 latest 로 대체 금지 (재현성 §9.5).
      * [{code, slice, version, contentHash}] JSON 과 그 집계 해시.
@@ -312,6 +379,7 @@ export const backtestRuns = sqliteTable('backtest_runs', {
   slippageModelVersion: text('slippage_model_version').notNull(),
   randomSeed: integer('random_seed').notNull(),
   gitCommitSha: text('git_commit_sha').notNull(),
+  provenancePinJson: text('provenance_pin_json'),
   warningsJson: text('warnings_json'),
   /** 기간 종료 시점 미청산 포지션 스냅샷 (OpenPositionSnapshot[]) — 소수라 JSON 보관 */
   openPositionsJson: text('open_positions_json'),
