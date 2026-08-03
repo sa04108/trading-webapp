@@ -25,10 +25,6 @@ describe('getSessionForMarket 회귀 (맵 기반으로 바꾼 뒤)', () => {
 });
 
 describe('listMarketSupport', () => {
-  it('선언된 모든 시장을 담는다', () => {
-    expect(listMarketSupport().map((entry) => entry.market)).toEqual(['KR', 'US']);
-  });
-
   it('KR 은 전부 지원이고 이유가 없다', () => {
     const kr = listMarketSupport().find((entry) => entry.market === 'KR');
     expect(kr).toEqual({

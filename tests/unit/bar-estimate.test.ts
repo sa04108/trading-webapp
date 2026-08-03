@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  estimateBars,
-  MAX_BACKTEST_BARS,
-} from '../../src/server/modules/backtest/domain/bar-estimate.js';
+import { estimateBars } from '../../src/server/modules/backtest/domain/bar-estimate.js';
 
 const DAY = 86_400_000;
 
@@ -48,7 +45,4 @@ describe('estimateBars (백테스트 봉 수 상한 추정 — coverage 메타�
     expect(estimateBars(coverage, ['005930'], 20 * DAY, 30 * DAY, 1)).toBe(0);
   });
 
-  it('상한 상수는 200만 봉이다', () => {
-    expect(MAX_BACKTEST_BARS).toBe(2_000_000);
-  });
 });

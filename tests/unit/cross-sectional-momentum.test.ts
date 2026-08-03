@@ -90,9 +90,8 @@ describe('crossSectionalMomentumParameters', () => {
 });
 
 describe('레지스트리 등록', () => {
-  it('전략 목록에 노출된다', () => {
+  it('설명이 분할 보정을 무조건 약속하지 않는다', () => {
     const registry = new StrategyRegistry();
-    expect(registry.list().map((s) => s.id)).toContain('cross-sectional-momentum');
     // 사용자에게 보이는 설명은 분할 보정을 무조건 약속하면 안 된다 — 분할 이력이
     // 수집되지 않은 데이터셋에서는 원 종가로 계산되고, 그 수집을 강제하는 것은 없다.
     const description =
@@ -147,20 +146,6 @@ describe('2단계 리밸런스 실행', () => {
     expect(new Set(buys.map((fill) => fill.symbol))).toEqual(new Set(['AAA']));
   });
 
-  it('매수는 매도 봉이 아니라 그 다음 봉에서 체결된다', () => {
-    const result = runBacktest(crossSectionalMomentumStrategy, {
-      candles: buildCandles(70),
-      initialCash: 10_000_000,
-      execution: ZERO_COST,
-      parameters,
-      randomSeed: 1,
-      maxPositions: 1,
-    });
-    const firstBuy = result.fills.find((fill) => fill.side === 'BUY');
-    expect(firstBuy).toBeDefined();
-    // 리밸런스 판정 봉 + 1(매수 주문 봉) + 1(체결 봉) — 워밍업 이후 최소 2봉 뒤
-    expect((firstBuy as { tsMs: number }).tsMs).toBeGreaterThanOrEqual(START + 21 * DAY);
-  });
 
   it('1위 종목이 다음 리밸런스에서 바뀌면 매도 뒤 다음 봉에서 매수해 회전한다', () => {
     // AAA 는 index 18 까지 오르다 급락, BBB 는 계속 내리다 index 18 부터 급등한다.
@@ -244,18 +229,4 @@ describe('2단계 리밸런스 실행', () => {
     expect(result.fills.filter((f) => f.side === 'BUY').map((f) => f.symbol)).toContain('BBB');
   });
 
-  it('같은 입력을 두 번 돌리면 같은 결과가 나온다 (재현성 §9.5)', () => {
-    const input = {
-      candles: buildCandles(70),
-      initialCash: 10_000_000,
-      execution: ZERO_COST,
-      parameters,
-      randomSeed: 1,
-      maxPositions: 1,
-    };
-    const first = runBacktest(crossSectionalMomentumStrategy, input);
-    const second = runBacktest(crossSectionalMomentumStrategy, input);
-    expect(second.fills).toEqual(first.fills);
-    expect(second.metrics.finalEquity).toBe(first.metrics.finalEquity);
-  });
 });

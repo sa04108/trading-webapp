@@ -8,7 +8,6 @@ import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
 import { ParquetFactRepository } from '../../src/server/modules/facts/infrastructure/parquet-fact-repository.js';
 import { DuckDbService } from '../../src/server/modules/market-data/infrastructure/duckdb-service.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
-import { StrategyRegistry } from '../../src/server/modules/strategy/application/strategy-registry.js';
 import { valueQualityRankStrategy } from '../../src/server/modules/strategy/strategies/value-quality-rank.js';
 
 const DAY = 86_400_000;
@@ -33,22 +32,6 @@ beforeEach(() => {
 afterEach(() => {
   duckdb.close();
   fs.rmSync(dataRoot, { recursive: true, force: true });
-});
-
-describe('StrategyRegistry.requiresFundamentals', () => {
-  it('밸류 전략은 재무를 요구한다', () => {
-    expect(new StrategyRegistry().requiresFundamentals('value-quality-rank')).toBe(true);
-  });
-
-  it('봉만 쓰는 전략은 요구하지 않는다', () => {
-    const registry = new StrategyRegistry();
-    expect(registry.requiresFundamentals('range-breakout')).toBe(false);
-    expect(registry.requiresFundamentals('cross-sectional-momentum')).toBe(false);
-  });
-
-  it('모르는 전략은 false — 여기서 예외를 던지면 제출 검증 순서가 뒤바뀐다', () => {
-    expect(new StrategyRegistry().requiresFundamentals('nope')).toBe(false);
-  });
 });
 
 describe('저장소 → 엔진 왕복', () => {
@@ -134,12 +117,4 @@ describe('저장소 → 엔진 왕복', () => {
     expect(buys.map((fill) => fill.symbol)).toEqual(['CHEAP']);
   });
 
-  it('asOfMaxTsMs 가 기간 종료 시각이면 그 이후 공시는 로드되지 않는다', async () => {
-    await repository.saveFacts(factsFor('CHEAP', 50_000));
-    const facts = await repository.getFacts({
-      scope: 'SYMBOL',
-      asOfMaxTsMs: START + 2 * DAY, // 공시(5봉)보다 이르다
-    });
-    expect(facts).toEqual([]);
-  });
 });

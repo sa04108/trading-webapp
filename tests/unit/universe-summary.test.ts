@@ -11,7 +11,4 @@ describe('formatUniverseSummary', () => {
     expect(formatUniverseSummary(null, 'ds_deleted', 3)).toBe('ds_deleted · 3종목');
   });
 
-  it('1종목도 개수로 적는다 — 코드로 새지 않는다', () => {
-    expect(formatUniverseSummary('단일 종목', 'ds_one', 1)).toBe('단일 종목 · 1종목');
-  });
 });

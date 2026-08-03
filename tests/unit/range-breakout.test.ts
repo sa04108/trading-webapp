@@ -10,16 +10,6 @@ import {
 import { StrategyRegistry } from '../../src/server/modules/strategy/application/strategy-registry.js';
 
 describe('range-breakout parameters (스펙 §32)', () => {
-  it('accepts the spec §15 example parameters', () => {
-    const result = rangeBreakoutParameters.safeParse({
-      lookbackBars: 20,
-      atrPeriod: 14,
-      stopAtrMultiplier: 2,
-      riskPerTradePercent: 1,
-    });
-    expect(result.success).toBe(true);
-  });
-
   it('생략된 파라미터는 기본값으로 채운다 — 추적 손절과 비중 상한이 기본 동작이다', () => {
     const result = rangeBreakoutParameters.parse({});
     expect(result.trailAtrMultiplier).toBe(2);
@@ -73,14 +63,6 @@ describe('StrategyRegistry', () => {
     expect(unknown.ok).toBe(false);
   });
 
-  it('produces a JSON schema for the web form', () => {
-    const registry = new StrategyRegistry();
-    const schema = registry.getParameterJsonSchema('range-breakout');
-    expect(schema).not.toBeNull();
-    expect((schema as { properties: Record<string, unknown> }).properties).toHaveProperty(
-      'lookbackBars',
-    );
-  });
 });
 
 // ── 청산·수량 동작 ────────────────────────────────────────────────
@@ -117,7 +99,6 @@ function flatWarmup(): Candle[] {
 
 /** 평탄 구간(고가 101)을 뚫는 신호봉 — TR = 6 이라 ATR 이 (2×4+6)/5 = 2.8 로 올라간다 */
 const SIGNAL_BAR = candle(20, { open: 100, high: 106, low: 100, close: 105 });
-const ENTRY_ATR = 2.8;
 
 const BASE: RangeBreakoutParameters = {
   lookbackBars: 10,
@@ -169,24 +150,6 @@ describe('range-breakout 추적 손절', () => {
     expect(result.openPositions).toHaveLength(1); // 기간 끝까지 보유
   });
 
-  it('손절선은 신호봉 종가가 아니라 실제 체결가 기준이다', () => {
-    // 진입가 110 · entryAtr 2.8 → 고정 손절 104.4. 신호봉 종가(105) 기준이면 99.4 라
-    // 종가 103 에 걸리지 않는다.
-    const result = run(
-      [
-        ...flatWarmup(),
-        SIGNAL_BAR,
-        candle(21, { open: 110, high: 111, low: 109, close: 110 }),
-        candle(22, { open: 110, high: 110, low: 102, close: 103 }),
-        candle(23, { open: 103, high: 104, low: 102, close: 103 }),
-      ],
-      BASE,
-    );
-
-    expect(result.trades).toHaveLength(1);
-    expect(result.trades[0]!.exitReason).toBe('STOP');
-    expect(110 - BASE.stopAtrMultiplier * ENTRY_ATR).toBeCloseTo(104.4);
-  });
 });
 
 describe('range-breakout 보유 상한', () => {

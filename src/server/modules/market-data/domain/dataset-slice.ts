@@ -32,16 +32,3 @@ export function sliceForTimeframe(timeframe: Timeframe): DatasetSlice {
   return timeframe === '1d' ? '1d' : '1m';
 }
 
-/**
- * timeframe 없는 저장된 백테스트 요청의 소비 봉. 이 필드가 없던 시절 엔진은
- * 데이터셋 timeframe(분봉 데이터셋 = '1h')을 썼다 — 같은 결과를 유지한다.
- */
-export function legacyConsumeDefault(defaultTimeframe: DatasetSlice): Timeframe {
-  return defaultTimeframe === '1m' ? '1h' : '1d';
-}
-
-/** 종목 구성 유일키 — 정렬·중복 제거. 구성이 같으면 순서와 무관하게 같은 키다 */
-export function symbolsKey(symbols: readonly string[]): string {
-  return [...new Set(symbols)].sort().join(',');
-}
-

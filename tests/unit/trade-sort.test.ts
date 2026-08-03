@@ -10,20 +10,13 @@ import {
   tradeSortSummary,
   type TradeSort,
 } from '../../src/web/features/backtests/trade-sort.js';
-import {
-  DEFAULT_TRADE_SORT_DIRECTION,
-  DEFAULT_TRADE_SORT_KEY,
-  TRADE_SORT_KEYS,
-} from '../../src/shared/schemas/trade-sort.js';
+import { TRADE_SORT_KEYS } from '../../src/shared/schemas/trade-sort.js';
 
 describe('DEFAULT_TRADE_SORT', () => {
   // 화면 기본값과 서버 기본값이 갈라지면 「청산 빠른 순」을 표시한 채 다른 순서를
-  // 보여 준다 — 둘이 같은 상수에서 나오는지 직접 확인한다
+  // 보여 준다 — 리터럴로 고정해 어느 쪽이 바뀌어도 잡는다
   it('서버 기본 정렬과 같다', () => {
-    expect(DEFAULT_TRADE_SORT).toEqual({
-      key: DEFAULT_TRADE_SORT_KEY,
-      direction: DEFAULT_TRADE_SORT_DIRECTION,
-    });
+    expect(DEFAULT_TRADE_SORT).toEqual({ key: 'EXIT_TS', direction: 'ASC' });
   });
 
   it('모든 축에 라벨이 있다', () => {

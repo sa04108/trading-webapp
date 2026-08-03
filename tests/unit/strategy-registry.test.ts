@@ -19,10 +19,27 @@ describe('StrategySummary 의 재무 요구 표시', () => {
     }
   });
 
-  it('등록된 모든 전략이 boolean 을 갖는다 — 새 전략이 표시 없이 들어오는 것을 막는다', () => {
-    for (const summary of registry.list()) {
-      expect(typeof summary.requiresFundamentals, summary.id).toBe('boolean');
+});
+
+describe('전략 등록 목록', () => {
+  // 개별 전략 테스트 파일마다 toContain 을 반복하지 않고 여기 한 곳에서 고정한다
+  it('출시된 전략이 전부 등록돼 있다', () => {
+    const ids = registry.list().map((s) => s.id);
+    for (const id of [
+      'range-breakout',
+      'cross-sectional-momentum',
+      'value-quality-rank',
+      'ema-trend-switch',
+      'rsi-reversion',
+    ]) {
+      expect(ids, id).toContain(id);
     }
+  });
+});
+
+describe('requiresFundamentals()', () => {
+  it('모르는 전략은 false — 여기서 예외를 던지면 제출 검증 순서가 뒤바뀐다', () => {
+    expect(registry.requiresFundamentals('nope')).toBe(false);
   });
 });
 

@@ -820,11 +820,6 @@ describe('분봉 백필 상한 (2년) — 스펙 §분봉 백필 상한', () => 
 });
 
 describe('종목 등록 (구 createBrokerDataset)', () => {
-  it('중복 코드를 접고 정렬해 돌려준다', () => {
-    const { seed } = buildHarness(new FakeSource([]));
-    expect(seed(['005930', '000660', '005930'], 'KR').sort()).toEqual(['000660', '005930']);
-  });
-
   it('잘못된 코드는 거부한다', () => {
     const { seed } = buildHarness(new FakeSource([]));
     expect(() => seed(['bad symbol!'], 'KR')).toThrow();

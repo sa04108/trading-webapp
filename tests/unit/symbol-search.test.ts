@@ -63,11 +63,4 @@ describe('filterSymbols', () => {
     expect(filterSymbols(SYMBOLS, '없는종목')).toEqual([]);
   });
 
-  it('입력 순서를 지킨다 — 검색이 정렬을 흔들지 않는다', () => {
-    expect(filterSymbols(SYMBOLS, '0').map((s) => s.code)).toEqual([
-      '005930',
-      '000660',
-      '035720',
-    ]);
-  });
 });

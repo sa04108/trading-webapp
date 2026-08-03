@@ -339,9 +339,9 @@ describe('market data (스펙 §11, §13)', () => {
       cookies: { qp_session: cookie },
       payload,
     });
-    // 파싱은 메타데이터 변경 전에 일어난다 — 명시적 400, 빈 데이터셋이 생기지 않는다
+    // 파싱은 메타데이터 변경 전에 일어난다 — 명시적 400, 종목이 등록되지 않는다
     expect(response.statusCode).toBe(400);
-    expect(ctx.container.datasetService.listDatasets()).toHaveLength(0);
+    expect(ctx.container.symbolService.listSymbols()).toHaveLength(0);
   });
 
 
@@ -786,77 +786,14 @@ describe('market data (스펙 §11, §13)', () => {
     });
     expect(noop.statusCode).toBe(200);
 
-    // 이름 + 참조 변경 동시 적용
-    const combined = await ctx.app.inject({
-      method: 'PATCH',
-      url: `/api/v1/datasets/${dataset.id}`,
-      cookies: { qp_session: cookie },
-      payload: { name: 'KR-최종이름', addSymbols: ['000660'] },
-    });
-    expect(combined.statusCode).toBe(200);
-    expect(combined.json().dataset.name).toBe('KR-최종이름');
-    expect(combined.json().dataset.symbols).toEqual(['000660', '005930']);
-
-    // 빈 body 는 여전히 400
-    const empty = await ctx.app.inject({
-      method: 'PATCH',
-      url: `/api/v1/datasets/${dataset.id}`,
-      cookies: { qp_session: cookie },
-      payload: {},
-    });
-    expect(empty.statusCode).toBe(400);
+    // 이름+참조 동시 변경과 빈 body 400 은 symbol-service-slices.test.ts 가 덮는다
   });
 
   /**
    * 라우트 계약 — 슬라이스 (설계 2026-07-30-dataset-symbol-group-server, Task 5).
    */
+  // GET /symbols 슬라이스 커버리지(barCount 포함)는 symbol-card.test.ts 가 덮는다
   describe('라우트 계약 — 슬라이스', () => {
-    it('GET /symbols 응답의 슬라이스별 커버리지에 봉 수가 실린다', async () => {
-      const { username, password } = await createTestAdmin(ctx.container);
-      const login = await ctx.app.inject({
-        method: 'POST',
-        url: '/api/v1/auth/login',
-        payload: { username, password },
-      });
-      const cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
-
-      // 1d CSV import — slice: '1d'
-      const { payload, contentType } = multipartBody(
-        { market: 'KR', timeframe: '1d', symbol: '005930' },
-        'daily.csv',
-        buildDailyCsv(10),
-      );
-      const imported = await ctx.app.inject({
-        method: 'POST',
-        url: '/api/v1/symbols/import',
-        headers: { 'content-type': contentType },
-        cookies: { qp_session: cookie },
-        payload,
-      });
-      expect(imported.statusCode).toBe(201);
-
-      // 커버리지는 종목 목록에 슬라이스별로 실려 온다 (별도 조회 없음)
-      const listed = await ctx.app.inject({
-        method: 'GET',
-        url: '/api/v1/symbols',
-        cookies: { qp_session: cookie },
-      });
-      expect(listed.statusCode).toBe(200);
-      const body = listed.json() as {
-        symbols: Array<{
-          code: string;
-          slices: Array<{ slice: string; hasData: boolean; barCount: number }>;
-        }>;
-      };
-      expect(body.symbols).toHaveLength(1);
-      expect(body.symbols[0]!.code).toBe('005930');
-      const daily = body.symbols[0]!.slices.find((entry) => entry.slice === '1d')!;
-      expect(daily.hasData).toBe(true);
-      expect(daily.barCount).toBe(10);
-      // 분봉은 비어 있다 — 「봉 있음」 하나로 접으면 숨는 사실이다
-      expect(body.symbols[0]!.slices.find((entry) => entry.slice === '1m')!.hasData).toBe(false);
-    });
-
 
 
     it('POST /symbols/sync 에 slice:"1m" 을 주면 그 timeframe 으로 수집한다', async () => {
@@ -948,10 +885,8 @@ describe('market data (스펙 §11, §13)', () => {
       });
       expect(acceptedResponse.statusCode).toBe(201);
       expect(acceptedResponse.json().job.status).toBe('COMPLETED');
-      // 일봉 CSV 는 종목을 등록하고 1d 슬라이스만 채운다
-      const symbol = ctx.container.symbolService.getSymbol('005930')!;
-      expect(symbol.slices.find((slice) => slice.slice === '1d')?.hasData).toBe(true);
-      expect(symbol.slices.find((slice) => slice.slice === '1m')?.hasData).toBe(false);
+      // 일봉 CSV 는 종목을 등록한다 — 슬라이스 상태는 symbol-service-slices.test.ts 가 덮는다
+      expect(ctx.container.symbolService.exists('005930')).toBe(true);
     });
   });
 });

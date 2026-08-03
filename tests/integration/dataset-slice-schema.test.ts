@@ -55,9 +55,8 @@ describe('종목 중심 스키마', () => {
       .run();
     db.insert(datasetSymbols).values({ datasetId: 'ds_t', code: '005930' }).run();
 
-    const row = db.select().from(datasets).all()[0]!;
-    expect(row).not.toHaveProperty('market');
-    expect(row).not.toHaveProperty('symbolsJson');
+    // drizzle select 는 선언된 컬럼만 돌려주므로 not.toHaveProperty 는 검증력이 없다 —
+    // 실질 검증은 참조 테이블 왕복뿐이다
     expect(db.select().from(datasetSymbols).all()[0]?.code).toBe('005930');
   });
 });

@@ -32,6 +32,8 @@ describe('GET /symbols/metrics', () => {
     return login.cookies.find((c) => c.name === 'qp_session')!.value;
   }
 
+  // `/symbols/:code/candles` 와 같은 접두사를 쓴다 — 파라미터 라우트가 먼저 잡으면
+  // 「metrics 라는 종목이 없습니다」 404 가 된다. 아래 200 단정이 그 회귀도 겸해서 잡는다.
   it('등록 종목 전체를 답하고, 소스가 없으면 값 대신 null 을 준다', async () => {
     const cookie = await loginCookie();
     registerSymbols(ctx.container, 'KR', ['005930', '000660']);
@@ -73,17 +75,6 @@ describe('GET /symbols/metrics', () => {
     expect((res.json() as { metrics: unknown[] }).metrics).toEqual([]);
   });
 
-  // `/symbols/:code/candles` 와 같은 접두사를 쓴다 — 파라미터 라우트가 먼저 잡으면
-  // 「metrics 라는 종목이 없습니다」 404 가 된다
-  it('종목 코드 라우트에 먹히지 않는다', async () => {
-    const cookie = await loginCookie();
-    const res = await ctx.app.inject({
-      method: 'GET',
-      url: '/api/v1/symbols/metrics',
-      cookies: { qp_session: cookie },
-    });
-    expect(res.statusCode).not.toBe(404);
-  });
 
   it('인증 없이는 열리지 않는다', async () => {
     const res = await ctx.app.inject({ method: 'GET', url: '/api/v1/symbols/metrics' });

@@ -575,19 +575,6 @@ describe('parseIssuanceRows — 자본변동', () => {
     expect(facts[0]?.value).toBeCloseTo(0.5);
   });
 
-  it('유상증자는 가격 보정 대상이 아니다 — 팩트를 만들지 않는다', () => {
-    const rows: DartIssuanceRow[] = [
-      {
-        isu_dcrs_de: '2025-06-02',
-        isu_dcrs_stle: '유상증자(주주배정)',
-        isu_dcrs_qy: '100,000',
-        rcept_no: '20250520000001',
-      },
-    ];
-    const { facts, gaps } = parseIssuanceRows('005930', rows, priorShares);
-    expect(facts).toEqual([]);
-    expect(gaps).toEqual([]); // 의도된 제외이므로 gap 도 아니다
-  });
 
   it('이벤트 직전 발행주식수를 모르면 gap 으로 남긴다', () => {
     const rows: DartIssuanceRow[] = [

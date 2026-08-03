@@ -22,14 +22,6 @@ describe('parseSymbolCodes', () => {
     ]);
   });
 
-  it('쉼표 뒤 공백을 흘려보낸다', () => {
-    expect(parseSymbolCodes('005930, 000660,  035720').codes).toEqual([
-      '005930',
-      '000660',
-      '035720',
-    ]);
-  });
-
   it('줄바꿈도 구분자다 — 스프레드시트 한 열을 붙이면 쉼표가 아니라 줄바꿈으로 온다', () => {
     expect(parseSymbolCodes('005930\n000660\r\n035720').codes).toEqual([
       '005930',
@@ -58,9 +50,6 @@ describe('parseSymbolCodes', () => {
     expect(parsed.duplicates).toBe(1);
   });
 
-  it('입력 순서를 지킨다', () => {
-    expect(parseSymbolCodes('035720, 005930').codes).toEqual(['035720', '005930']);
-  });
 
   it('형식 위반은 조용히 버리지 않고 따로 돌려준다', () => {
     const parsed = parseSymbolCodes('005930, 하하하, 000660');

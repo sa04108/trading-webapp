@@ -288,10 +288,6 @@ describe('valueQualityRankParameters', () => {
 });
 
 describe('레지스트리 등록', () => {
-  it('전략 목록에 노출된다', () => {
-    expect(new StrategyRegistry().list().map((s) => s.id)).toContain('value-quality-rank');
-  });
-
   it('JSON 스키마에 한국어 라벨과 기본값이 실린다', () => {
     const schema = new StrategyRegistry().getParameterJsonSchema('value-quality-rank');
     const properties = (schema as { properties: Record<string, Record<string, unknown>> }).properties;

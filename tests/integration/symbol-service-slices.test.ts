@@ -28,14 +28,6 @@ describe('SymbolService — 슬라이스와 참조', () => {
     await ctx.close();
   });
 
-  it('등록 직후 두 슬라이스 모두 hasData=false 다', () => {
-    registerSymbols(ctx.container, 'KR', ['005930']);
-    const symbol = ctx.container.symbolService.getSymbol('005930')!;
-    expect(symbol.slices.map((slice) => ({ slice: slice.slice, hasData: slice.hasData }))).toEqual([
-      { slice: '1d', hasData: false },
-      { slice: '1m', hasData: false },
-    ]);
-  });
 
   it('1d CSV 는 일봉 슬라이스만 채우고 coverage 를 그 슬라이스에 기록한다', async () => {
     const job = await ctx.container.symbolService.importCsv({

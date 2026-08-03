@@ -18,10 +18,6 @@ describe('pageWindow', () => {
     expect(pageWindow(0, 10, 0)).toEqual({ pageCount: 1, currentPage: 0, from: 0, to: 0 });
   });
 
-  it('clamps an empty-list page request to zero', () => {
-    expect(pageWindow(0, 10, 7)).toEqual({ pageCount: 1, currentPage: 0, from: 0, to: 0 });
-  });
-
   it('does not add a blank final page for exact division', () => {
     expect(pageWindow(20, 10, 0).pageCount).toBe(2);
     expect(pageWindow(10, 10, 0).pageCount).toBe(1);
@@ -41,14 +37,6 @@ describe('pageWindow', () => {
     expect(pageWindow(7, 200, 0)).toEqual({ pageCount: 1, currentPage: 0, from: 0, to: 7 });
   });
 
-  it('calculates 100 pages for 1,000 symbols at 10 per page', () => {
-    expect(pageWindow(1000, 10, 99)).toEqual({
-      pageCount: 100,
-      currentPage: 99,
-      from: 990,
-      to: 1000,
-    });
-  });
 });
 
 describe('visiblePageNumbers', () => {

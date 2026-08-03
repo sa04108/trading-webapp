@@ -2,10 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   collectTimeframeForSlice,
   coverageTimeframeForSlice,
-  legacyConsumeDefault,
   sliceForTimeframe,
   sliceTimeframes,
-  symbolsKey,
 } from '../../src/server/modules/market-data/domain/dataset-slice.js';
 
 describe('sliceTimeframes', () => {
@@ -29,20 +27,6 @@ describe('sliceForTimeframe', () => {
     expect(sliceForTimeframe('1m')).toBe('1m');
     expect(sliceForTimeframe('1h')).toBe('1m');
     expect(sliceForTimeframe('1d')).toBe('1d');
-  });
-});
-
-describe('legacyConsumeDefault', () => {
-  it('timeframe 없는 저장된 요청의 소비 봉 — 분봉 데이터셋은 1h(기존 동작), 일봉은 1d', () => {
-    expect(legacyConsumeDefault('1m')).toBe('1h');
-    expect(legacyConsumeDefault('1d')).toBe('1d');
-  });
-});
-
-describe('symbolsKey', () => {
-  it('순서·중복과 무관하게 같은 구성은 같은 키다', () => {
-    expect(symbolsKey(['000660', '005930', '005930'])).toBe('000660,005930');
-    expect(symbolsKey(['005930', '000660'])).toBe('000660,005930');
   });
 });
 

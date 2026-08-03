@@ -1,37 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
-  MINUTE_BACKFILL_MAX_MONTHS,
-  MINUTE_BACKFILL_SYMBOL_YEARS,
   estimateMinuteBackfillBars,
   minuteBackfillFloorTsMs,
   recommendedMinuteMonths,
 } from '../../src/server/modules/market-data/domain/minute-backfill.js';
-
-describe('MINUTE_BACKFILL_MAX_MONTHS / MINUTE_BACKFILL_SYMBOL_YEARS (상수)', () => {
-  it('하드 상한은 24개월(2년)이다', () => {
-    expect(MINUTE_BACKFILL_MAX_MONTHS).toBe(24);
-  });
-
-  it('권장치 계산용 예산은 종목당 20년이다', () => {
-    expect(MINUTE_BACKFILL_SYMBOL_YEARS).toBe(20);
-  });
-});
 
 describe('recommendedMinuteMonths (종목 수 기준 권장 기간)', () => {
   it('종목 1개면 예산이 240개월이지만 하드 상한 24개월로 잘린다', () => {
     expect(recommendedMinuteMonths(1)).toBe(24);
   });
 
-  it('종목 10개도 여전히 상한(24개월)에 걸린다', () => {
-    expect(recommendedMinuteMonths(10)).toBe(24);
-  });
-
   it('종목 20개면 예산과 상한이 맞아떨어져 12개월', () => {
     expect(recommendedMinuteMonths(20)).toBe(12);
-  });
-
-  it('종목 40개면 6개월', () => {
-    expect(recommendedMinuteMonths(40)).toBe(6);
   });
 
   it('종목 1000개면 최소 1개월까지만 내려간다', () => {

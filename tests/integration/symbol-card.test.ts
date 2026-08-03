@@ -63,7 +63,12 @@ describe('GET /symbols 가 종목 화면에 필요한 것을 한 번에 준다',
       name: string | null;
       hasFacts: boolean;
       datasetCount: number;
-      slices: Array<{ slice: string; hasData: boolean; lastSyncedAtMs: number | null }>;
+      slices: Array<{
+        slice: string;
+        hasData: boolean;
+        barCount: number;
+        lastSyncedAtMs: number | null;
+      }>;
     }>;
   }
 
@@ -93,6 +98,7 @@ describe('GET /symbols 가 종목 화면에 필요한 것을 한 번에 준다',
     const daily = symbol!.slices.find((s) => s.slice === '1d')!;
     const minute = symbol!.slices.find((s) => s.slice === '1m')!;
     expect(daily.hasData).toBe(true);
+    expect(daily.barCount).toBe(10); // 커버리지 봉 수도 목록 응답에 실린다 (별도 조회 없음)
     expect(daily.lastSyncedAtMs).not.toBeNull();
     // 「봉 있음」 하나로 접으면 이 사실이 숨는다 — 슬라이스별로 답해야 한다
     expect(minute.hasData).toBe(false);

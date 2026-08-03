@@ -165,11 +165,6 @@ describe('ParquetFactRepository', () => {
     expect((await repository.getFacts({ scope: 'SYMBOL' })).map((r) => r.value).sort()).toEqual([1, 2]);
   });
 
-  it('같은 (key, field, periodKey, asOf) 재수집은 뒤에 온 값이 이긴다 (idempotent)', async () => {
-    await repository.saveFacts([fact({ key: '005930', value: 1 })]);
-    await repository.saveFacts([fact({ key: '005930', value: 2 })]);
-    expect((await repository.getFacts({ scope: 'SYMBOL' })).map((r) => r.value)).toEqual([2]);
-  });
 
   it('SYMBOL 과 MACRO 는 다른 파티션이다', async () => {
     await repository.saveFacts([

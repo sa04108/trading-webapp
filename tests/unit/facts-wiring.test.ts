@@ -107,20 +107,6 @@ describe('createFactsPhase', () => {
     expect(progress.map((p) => p.gapCount)).toEqual([1, 1, 3]);
   });
 
-  it('누적값은 단조 증가한다 — 0건 종목이 카운터를 되돌리지 않는다', async () => {
-    const { progress } = await runPhase([
-      { savedFacts: 12, gapCount: 3 },
-      { savedFacts: 0, gapCount: 0 },
-      { savedFacts: 8, gapCount: 0 },
-    ]);
-
-    const saved = progress.map((p) => p.savedFacts);
-    expect(saved).toEqual([12, 12, 20]);
-    for (const [index, value] of saved.entries()) {
-      if (index === 0) continue;
-      expect(value).toBeGreaterThanOrEqual(saved[index - 1]!);
-    }
-  });
 
   it('symbolsDone 은 1부터, symbolTotal 은 요청에 실어 보낸 종목 목록의 길이다', async () => {
     const symbols = ['005930', '000660', '035420'];

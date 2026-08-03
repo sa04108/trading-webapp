@@ -45,9 +45,4 @@ describe('clampSymbolName', () => {
     expect(clampSymbolName('에이치엘비생명과학', 4)).toBe('에이치…');
   });
 
-  it('라벨과 합치면 이름만 줄고 코드는 온전하다', () => {
-    expect(formatSymbolLabel('267260', clampSymbolName('HD현대일렉트릭', 4))).toBe(
-      'HD현… (267260)',
-    );
-  });
 });

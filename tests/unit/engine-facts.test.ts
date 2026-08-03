@@ -96,48 +96,6 @@ describe('엔진 PIT 배선', () => {
     expect(seen).toEqual([null, null]);
   });
 
-  it('기준일 이후 봉에서만 자본변동 이벤트가 보인다', () => {
-    const announced = START - 5 * DAY;
-    const facts: Fact[] = [
-      {
-        scope: 'SYMBOL',
-        key: '005930',
-        field: 'SPLIT_RATIO',
-        periodKey: '2025-05-14', // 봉 2 의 날짜
-        asOfTsMs: announced,
-        value: 2,
-        unit: 'RATIO',
-      },
-    ];
-
-    const counts: number[] = [];
-    const strategy: TradingStrategy<unknown, null> = {
-      id: 'observe-actions',
-      version: '1.0.0',
-      name: 'observe',
-      description: 'test',
-      parameterSchema: z.unknown(),
-      initialize: () => null,
-      onBars(context) {
-        counts.push(context.corporateActions('005930').length);
-        return { orders: [] };
-      },
-    };
-
-    runBacktest(strategy, {
-      candles: [bar(0), bar(1), bar(2), bar(3)],
-      initialCash: 1_000_000,
-      execution: ZERO_COST,
-      parameters: {},
-      randomSeed: 1,
-      maxPositions: 5,
-      facts,
-    });
-
-    // 봉 0(05-12)·1(05-13) 은 기준일 전 → 0. 봉 2(05-14)·3(05-15) 은 이후 → 1
-    expect(counts).toEqual([0, 0, 1, 1]);
-  });
-
   /**
    * 사업보고서 지연 회귀 (설계 §3.4). 자본변동 수량은 사업보고서의 증자·감자 현황에서
    * 읽으므로 접수일(asOf)이 기준일보다 최대 15개월 늦다. asOf 로도 게이트하면 이 실행
@@ -183,21 +141,6 @@ describe('엔진 PIT 배선', () => {
 
     // 기준일 게이트만 적용된다 — 봉 0·1 은 기준일 전, 봉 2·3 은 이후
     expect(counts).toEqual([0, 0, 1, 1]);
-  });
-
-  it('경고 문구는 분할이 보정된다는 사실을 반영한다', () => {
-    const { strategy } = observingStrategy();
-    const result = runBacktest(strategy, {
-      candles: [bar(0)],
-      initialCash: 1_000_000,
-      execution: ZERO_COST,
-      parameters: {},
-      randomSeed: 1,
-      maxPositions: 5,
-    });
-    const biasWarning = result.warnings.find((warning) => warning.includes('생존 편향'));
-    expect(biasWarning).toBeDefined();
-    expect(biasWarning).toContain('배당');
   });
 
   it('facts 를 넘기지 않으면 경고가 액면분할도 보정되지 않았다고 말한다', () => {

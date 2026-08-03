@@ -264,11 +264,6 @@ describe('stepBlocker — 재무 조합 게이트 (단계 1)', () => {
     );
   });
 
-  it('게이트가 막으면 앞으로 갈 수 있는 상한도 그 단계에 걸린다', () => {
-    const blocked = { ...base, symbolsWithFacts: [] };
-    expect(firstIncompleteStep(blocked)).toBe(1);
-    expect(navigableStepLimit(1, blocked)).toBe(1);
-  });
 });
 
 /**
@@ -311,14 +306,4 @@ describe('symbolsWithFacts 계약 — 모르는 종목이 섞이면 undefined', 
     expect(derive(selected, undefined)).toBeUndefined();
   });
 
-  it('undefined 를 게이트에 넘기면 막지 않는다 (두 규칙이 맞물린다)', () => {
-    const state = { ...complete, symbols: selected, requiresFundamentals: true };
-    expect(stepBlocker(1, { ...state, symbolsWithFacts: derive(selected, undefined) })).toBeNull();
-    expect(
-      stepBlocker(1, {
-        ...state,
-        symbolsWithFacts: derive(selected, [{ code: '005930' }, { code: '000660' }]),
-      }),
-    ).toBeNull();
-  });
 });

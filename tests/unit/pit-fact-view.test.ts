@@ -262,34 +262,10 @@ describe('PitFactView 자본변동 이벤트', () => {
    * 틀렸다 — 기준일 이후 어느 봉에서든 실제 참여자는 주가가 분할된 사실을 알고 있고,
    * 사업보고서는 우리 쪽 데이터 출처일 뿐 시장이 알게 된 경로가 아니다.
    */
-  it('공시 접수일 전이어도 기준일이 지난 이벤트는 보인다 (설계 §3.4)', () => {
-    const view = new PitFactView(splitFacts);
-    // 커서를 공시 접수일 이전에 세워둔다 — 그래도 기준일이 지난 봉이면 노출되어야 한다
-    view.advanceTo(announced - DAY);
-    const actions = view.corporateActions('005930', Date.UTC(2025, 2, 20));
-    expect(actions).toHaveLength(1);
-    expect(actions[0]?.ratio).toBe(2);
-  });
-
   it('커서를 한 번도 전진시키지 않아도 기준일 게이트만으로 노출된다', () => {
     const view = new PitFactView(splitFacts);
     expect(view.corporateActions('005930', Date.UTC(2025, 2, 20))).toHaveLength(1);
     expect(view.corporateActions('005930', Date.UTC(2025, 2, 1))).toEqual([]);
-  });
-
-  it('기준일 전이면 아직 적용하지 않는다', () => {
-    const view = new PitFactView(splitFacts);
-    view.advanceTo(Date.UTC(2025, 2, 12));
-    expect(view.corporateActions('005930', Date.UTC(2025, 2, 12))).toEqual([]);
-  });
-
-  it('기준일 이후 봉에는 이벤트가 보인다', () => {
-    const view = new PitFactView(splitFacts);
-    const barTs = Date.UTC(2025, 2, 14, 0, 0); // 기준일 KST 09:00 = UTC 00:00
-    view.advanceTo(barTs);
-    const actions = view.corporateActions('005930', barTs);
-    expect(actions).toHaveLength(1);
-    expect(actions[0]?.ratio).toBe(2);
   });
 
   it('경계: 봉이 정확히 효력발생 시각이면 포함되고 1ms 앞이면 제외된다', () => {

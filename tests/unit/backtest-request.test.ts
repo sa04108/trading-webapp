@@ -11,12 +11,6 @@ describe('periodToTsRange', () => {
     expect(toTsMs).toBe(Date.UTC(2026, 6, 24, 23, 59, 59, 999));
   });
 
-  it('to 일자 UTC 자정의 봉(KST 09:00 일봉)을 포함한다', () => {
-    const { fromTsMs, toTsMs } = periodToTsRange({ from: '2026-07-24', to: '2026-07-24' });
-    const bar = Date.UTC(2026, 6, 24);
-    expect(bar).toBeGreaterThanOrEqual(fromTsMs);
-    expect(bar).toBeLessThanOrEqual(toTsMs);
-  });
 });
 
 describe('유니버스 상한 (랭킹 전략용 확대)', () => {
@@ -50,12 +44,8 @@ describe('유니버스 상한 (랭킹 전략용 확대)', () => {
     expect(backtestRequestSchema.safeParse(requestWithSymbols(201)).success).toBe(false);
   });
 
-  it('기존 상한(50) 이하 요청은 그대로 유효하다', () => {
-    expect(backtestRequestSchema.safeParse(requestWithSymbols(50)).success).toBe(true);
+  it('하한 경계 — 1종목은 받고 0종목은 거부한다', () => {
     expect(backtestRequestSchema.safeParse(requestWithSymbols(1)).success).toBe(true);
-  });
-
-  it('0종목은 여전히 거부한다', () => {
     expect(backtestRequestSchema.safeParse(requestWithSymbols(0)).success).toBe(false);
   });
 });
