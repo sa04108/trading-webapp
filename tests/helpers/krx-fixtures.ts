@@ -1,5 +1,13 @@
 type KrxRawRow = Record<string, unknown>;
 
+export function krxEnvelope(rows: readonly KrxRawRow[]): { OutBlock_1: readonly KrxRawRow[] } {
+  return { OutBlock_1: rows };
+}
+
+export function krxJsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status });
+}
+
 export function baseInfoFixture(overrides: KrxRawRow = {}): KrxRawRow {
   return {
     ISU_CD: 'KR7005930003',
