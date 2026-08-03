@@ -16,6 +16,9 @@ const REDACT_PATHS = [
   'totp',
   'recoveryCode',
   'awsSecretAccessKey',
+  'AUTH_KEY',
+  'auth_key',
+  'apiKey',
   'req.headers.authorization',
   'req.headers.cookie',
   'res.headers["set-cookie"]',
@@ -29,6 +32,9 @@ const REDACT_PATHS = [
   '*.totp',
   '*.recoveryCode',
   '*.awsSecretAccessKey',
+  '*.AUTH_KEY',
+  '*.auth_key',
+  '*.apiKey',
 ];
 
 /** Fastify 내장 로거와 애플리케이션 로거가 공유하는 pino 옵션 */

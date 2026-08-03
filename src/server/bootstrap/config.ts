@@ -39,6 +39,11 @@ const envSchema = z.object({
   /** DART OpenAPI (전자공시). 미설정이면 재무 수집이 비활성 — 봉 데이터는 영향 없다 */
   DART_BASE_URL: z.string().url().default('https://opendart.fss.or.kr'),
   DART_API_KEY: z.string().min(1).optional(),
+  /** KRX Open API (정보데이터시스템). 미설정이면 과거 유니버스 모드가 비활성 — 다른 데이터 경로는 영향 없다 */
+  KRX_BASE_URL: z.string().url().default('https://data-dx.krx.co.kr'),
+  KRX_API_KEY: z.string().min(1).optional(),
+  /** KRX 이용 승인 만료일. 지나면 과거 유니버스 조회·신규 실행을 막는다 (REVIEW §10) */
+  KRX_APPROVAL_EXPIRY: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   /** 이 여유 공간(MB) 미만이면 증권사 동기화를 거부한다 (§22 임계치 원칙) */
   SYNC_MIN_FREE_DISK_MB: z.coerce.number().int().min(0).default(2048),
 });
@@ -68,6 +73,9 @@ export interface AppConfig {
   readonly tossClientSecret: string | null;
   readonly dartBaseUrl: string;
   readonly dartApiKey: string | null;
+  readonly krxBaseUrl: string;
+  readonly krxApiKey: string | null;
+  readonly krxApprovalExpiry: string | null;
   readonly syncMinFreeDiskMb: number;
 }
 
@@ -98,6 +106,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     throw new ConfigError('TOSS_CLIENT_ID 와 TOSS_CLIENT_SECRET 은 함께 설정해야 합니다');
   }
 
+  if (raw.KRX_APPROVAL_EXPIRY && !raw.KRX_API_KEY) {
+    // 만료일만 있는 설정은 키를 설정했다고 착각한 상태다 — 즉시 실패
+    throw new ConfigError('KRX_APPROVAL_EXPIRY 는 KRX_API_KEY 와 함께 설정해야 합니다');
+  }
+
   return {
     nodeEnv: raw.NODE_ENV,
     bindAddress: raw.APP_BIND_ADDRESS,
@@ -123,6 +136,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     tossClientSecret: raw.TOSS_CLIENT_SECRET ?? null,
     dartBaseUrl: raw.DART_BASE_URL,
     dartApiKey: raw.DART_API_KEY ?? null,
+    krxBaseUrl: raw.KRX_BASE_URL,
+    krxApiKey: raw.KRX_API_KEY ?? null,
+    krxApprovalExpiry: raw.KRX_APPROVAL_EXPIRY ?? null,
     syncMinFreeDiskMb: raw.SYNC_MIN_FREE_DISK_MB,
   };
 }
