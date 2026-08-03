@@ -50,6 +50,14 @@ describe('createBacktestNotificationListener', () => {
     expect(created[0]?.body).toContain('메모리 부족');
   });
 
+  it('marks INTERRUPTED as error severity — 재시작으로 고아가 된 잡도 사용자에게 알려야 한다', () => {
+    const { created, listener } = harness(fakeJob({ status: 'INTERRUPTED' }));
+    listener({ jobId: 'bt_1', kind: 'status' });
+
+    expect(created[0]?.severity).toBe('error');
+    expect(created[0]?.title).toBe('백테스트가 중단되었습니다');
+  });
+
   it('ignores progress events, non-terminal statuses, and missing jobs', () => {
     const running = harness(fakeJob({ status: 'RUNNING' }));
     running.listener({ jobId: 'bt_1', kind: 'status' });
