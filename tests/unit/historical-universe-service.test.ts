@@ -211,6 +211,24 @@ describe('HistoricalUniverseService', () => {
     expect(source.calls.filter(({ kind, market }) => kind === 'daily' && market === 'KOSPI')).toHaveLength(2);
   });
 
+  it('서로 다른 요청일이 같은 적용일로 해소돼도 요청일별 미리보기를 정확히 보존한다', async () => {
+    const source = new FakeSource();
+    source.seed('2024-12-30');
+    const { service: subject } = service({ source });
+
+    const newYear = await subject.preview('2025-01-01');
+    const yearEnd = await subject.preview('2024-12-31');
+
+    expect(newYear).toMatchObject({ requestedDate: '2025-01-01', effectiveTradingDate: '2024-12-30' });
+    expect(yearEnd).toMatchObject({ requestedDate: '2024-12-31', effectiveTradingDate: '2024-12-30' });
+    expect(yearEnd.previewId).not.toBe(newYear.previewId);
+    expect(yearEnd.set).toBe(newYear.set);
+    expect(source.calls.filter(({ kind, market }) => kind === 'daily' && market === 'KOSDAQ')).toHaveLength(1);
+    expect(source.calls.filter(({ kind }) => kind === 'base')).toHaveLength(2);
+    expect(subject.getPreview(newYear.previewId)).toBe(newYear);
+    expect(subject.getPreview(yearEnd.previewId)).toBe(yearEnd);
+  });
+
   it('getPreview는 TTL 만료 후 null이다', async () => {
     const source = new FakeSource();
     source.seed('2025-01-02');

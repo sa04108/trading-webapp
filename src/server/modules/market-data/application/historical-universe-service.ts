@@ -76,11 +76,18 @@ interface StandardCodeMapCache {
   readonly expiresAtMs: number;
 }
 
+interface EffectiveUniverseSnapshot {
+  readonly set: UniverseCandidateSet;
+  readonly canonicalHash: string;
+  readonly fetchedAtMs: number;
+}
+
 export class HistoricalUniverseService {
   private readonly ttlMs: number;
   private readonly dailyCache = new Map<string, TimedValue<readonly KrxDailyTradeRow[]>>();
   private readonly previewById = new Map<string, TimedValue<HistoricalUniversePreview>>();
-  private readonly previewByEffective = new Map<string, TimedValue<HistoricalUniversePreview>>();
+  private readonly previewByRequest = new Map<string, TimedValue<HistoricalUniversePreview>>();
+  private readonly previewByEffective = new Map<string, TimedValue<EffectiveUniverseSnapshot>>();
   private readonly pendingPreviews = new Map<string, Promise<HistoricalUniversePreview>>();
   private standardCodeMapCache: StandardCodeMapCache | null = null;
   private pendingStandardCodeMap: Promise<ReadonlyMap<string, string>> | null = null;
@@ -186,41 +193,40 @@ export class HistoricalUniverseService {
 
   private async buildPreview(requestedDate: string): Promise<HistoricalUniversePreview> {
     const effective = await this.findEffectiveTradingDate(requestedDate);
-    const cacheKey = this.effectiveCacheKey(effective.date);
-    const cached = this.previewByEffective.get(cacheKey);
-    if (cached && !this.isExpired(cached)) return cached.value;
-    if (cached) this.deletePreview(cached.value);
+    const effectiveKey = this.effectiveCacheKey(effective.date);
+    const requestKey = this.requestCacheKey(requestedDate, effective.date);
+    const requestedCached = this.previewByRequest.get(requestKey);
+    if (requestedCached && !this.isExpired(requestedCached)) return requestedCached.value;
+    if (requestedCached) this.deletePreview(requestedCached.value);
 
-    const kosdaqDaily = await this.deps.source.fetchDailyTrades('KOSDAQ', effective.date);
-    if (kosdaqDaily.length === 0) {
-      throw new Error(`KRX ${effective.date} KOSDAQ 일별 응답이 비어 있어 전체 후보군을 만들 수 없습니다.`);
+    let effectiveCached = this.previewByEffective.get(effectiveKey);
+    if (effectiveCached && this.isExpired(effectiveCached)) {
+      this.previewByEffective.delete(effectiveKey);
+      effectiveCached = undefined;
+    }
+    if (!effectiveCached) {
+      const snapshot = await this.buildEffectiveSnapshot(effective.date, effective.kospiDaily);
+      effectiveCached = {
+        value: snapshot,
+        expiresAtMs: snapshot.fetchedAtMs + this.ttlMs,
+      };
+      this.previewByEffective.set(effectiveKey, effectiveCached);
     }
 
-    const [kospiBase, kosdaqBase] = await Promise.all([
-      this.deps.source.fetchIssueBaseInfo('KOSPI', effective.date),
-      this.deps.source.fetchIssueBaseInfo('KOSDAQ', effective.date),
-    ]);
-    const set = combineMarketSnapshots({
-      effectiveTradingDate: effective.date,
-      inputs: [
-        { market: 'KOSPI', baseRows: kospiBase, dailyRows: effective.kospiDaily },
-        { market: 'KOSDAQ', baseRows: kosdaqBase, dailyRows: kosdaqDaily },
-      ],
-    });
-    const fetchedAtMs = this.deps.clock.now();
+    const { set, canonicalHash, fetchedAtMs } = effectiveCached.value;
     const preview: HistoricalUniversePreview = {
       previewId: newId('uvp'),
       requestedDate,
       effectiveTradingDate: effective.date,
       usableFromDate: addCalendarDays(effective.date, 1),
       usableFromRule: USABLE_FROM_RULE,
-      canonicalHash: createHash('sha256').update(set.canonicalPayload).digest('hex'),
+      canonicalHash,
       set,
       fetchedAtMs,
     };
-    const entry = { value: preview, expiresAtMs: fetchedAtMs + this.ttlMs };
+    const entry = { value: preview, expiresAtMs: effectiveCached.expiresAtMs };
     this.previewById.set(preview.previewId, entry);
-    this.previewByEffective.set(cacheKey, entry);
+    this.previewByRequest.set(requestKey, entry);
     this.deps.logger.info({
       event: 'krx.universe.preview.created',
       requestedDate,
@@ -228,6 +234,33 @@ export class HistoricalUniverseService {
       eligibleCount: set.eligibleCount,
     }, 'KRX historical universe preview created');
     return preview;
+  }
+
+  private async buildEffectiveSnapshot(
+    effectiveTradingDate: string,
+    kospiDaily: readonly KrxDailyTradeRow[],
+  ): Promise<EffectiveUniverseSnapshot> {
+    const kosdaqDaily = await this.deps.source.fetchDailyTrades('KOSDAQ', effectiveTradingDate);
+    if (kosdaqDaily.length === 0) {
+      throw new Error(`KRX ${effectiveTradingDate} KOSDAQ 일별 응답이 비어 있어 전체 후보군을 만들 수 없습니다.`);
+    }
+
+    const [kospiBase, kosdaqBase] = await Promise.all([
+      this.deps.source.fetchIssueBaseInfo('KOSPI', effectiveTradingDate),
+      this.deps.source.fetchIssueBaseInfo('KOSDAQ', effectiveTradingDate),
+    ]);
+    const set = combineMarketSnapshots({
+      effectiveTradingDate,
+      inputs: [
+        { market: 'KOSPI', baseRows: kospiBase, dailyRows: kospiDaily },
+        { market: 'KOSDAQ', baseRows: kosdaqBase, dailyRows: kosdaqDaily },
+      ],
+    });
+    return {
+      set,
+      canonicalHash: createHash('sha256').update(set.canonicalPayload).digest('hex'),
+      fetchedAtMs: this.deps.clock.now(),
+    };
   }
 
   private async findEffectiveTradingDate(requestedDate: string): Promise<{
@@ -295,15 +328,19 @@ export class HistoricalUniverseService {
     return `${effectiveTradingDate}|${KRX_FILTER_POLICY_VERSION}|${KRX_CONTRACT_VERSION}`;
   }
 
+  private requestCacheKey(requestedDate: string, effectiveTradingDate: string): string {
+    return `${requestedDate}|${this.effectiveCacheKey(effectiveTradingDate)}`;
+  }
+
   private isExpired(entry: { readonly expiresAtMs: number }): boolean {
     return this.deps.clock.now() >= entry.expiresAtMs;
   }
 
   private deletePreview(preview: HistoricalUniversePreview): void {
     this.previewById.delete(preview.previewId);
-    const key = this.effectiveCacheKey(preview.effectiveTradingDate);
-    if (this.previewByEffective.get(key)?.value.previewId === preview.previewId) {
-      this.previewByEffective.delete(key);
+    const key = this.requestCacheKey(preview.requestedDate, preview.effectiveTradingDate);
+    if (this.previewByRequest.get(key)?.value.previewId === preview.previewId) {
+      this.previewByRequest.delete(key);
     }
   }
 }
