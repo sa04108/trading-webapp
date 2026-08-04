@@ -103,10 +103,14 @@ function detailDto(detail: UniverseSnapshotDetail): UniverseSnapshotDetailDto {
 
 /**
  * 알려진 도메인·포트 오류를 HTTP 상태·안전한 메시지로 옮긴다. KRX 계약·분류 오류는
- * KRX 원문 필드명·값을 담을 수 있어 502 에는 고정 문구만 내보낸다 — 상세는 서버 로그가
- * 이미 남겼다 (어댑터·domain 각각의 로깅).
+ * KRX 원문 필드명·값을 담을 수 있어 502 에는 고정 문구만 내보낸다 — 상세는 여기서
+ * 서버 로그로 남긴다. 어댑터는 성공만 로깅하고 domain 은 로거가 없어, 여기가
+ * 이 오류들이 기록되는 유일한 지점이다.
  */
-function mapKnownError(error: unknown): { readonly statusCode: number; readonly message: string } | null {
+function mapKnownError(
+  request: FastifyRequest,
+  error: unknown,
+): { readonly statusCode: number; readonly message: string } | null {
   if (error instanceof HistoricalUniverseDateError || error instanceof SnapshotSelectionError) {
     return { statusCode: 400, message: error.message };
   }
@@ -126,6 +130,11 @@ function mapKnownError(error: unknown): { readonly statusCode: number; readonly 
     || error instanceof UniverseJoinError
     || error instanceof UnknownKrxClassificationError
   ) {
+    // 메시지에는 KRX 필드명·단축코드만 있고 인증키는 없다 (어댑터가 이미 제거) — 로깅 안전
+    request.log.warn(
+      { module: 'market-data', event: 'krx.universe.contract-failed', errName: error.name, errMessage: error.message },
+      'KRX universe contract/join/classification failed',
+    );
     return { statusCode: 502, message: KRX_CONTRACT_FAILURE_MESSAGE };
   }
   return null;
@@ -162,7 +171,7 @@ export function registerUniverseRoutes(
       const preview = await historicalUniverseService.preview(parsed.data.date);
       return previewDto(preview);
     } catch (error) {
-      const mapped = mapKnownError(error);
+      const mapped = mapKnownError(request, error);
       if (mapped) return reply.code(mapped.statusCode).send({ error: mapped.message });
       throw error;
     }
@@ -184,7 +193,7 @@ export function registerUniverseRoutes(
       });
       return reply.code(201).send({ snapshot: detailDto(snapshot) });
     } catch (error) {
-      const mapped = mapKnownError(error);
+      const mapped = mapKnownError(request, error);
       if (mapped) return reply.code(mapped.statusCode).send({ error: mapped.message });
       throw error;
     }
