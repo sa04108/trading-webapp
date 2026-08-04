@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PageSizeInput, Pagination } from '@/components/pagination';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { api, ApiError, postJson } from '@/lib/api-client';
 import { formatCompactNumber } from '@/lib/format';
 import { parsePageSize } from '@/lib/page-size';
@@ -22,24 +23,25 @@ import type {
   HistoricalUniversePreviewDto,
   UniverseSnapshotDetailDto,
 } from '../../../shared/schemas/historical-universe.js';
-import { selectionMethodOf, topNCodes } from './krx-selection';
-
-/** 「시가총액 상위 N종목 선택」의 N — 백테스트 유니버스 상한과 같은 값이다 */
-const TOP_N = MAX_UNIVERSE_SYMBOLS;
+import { UNIVERSE_SORT_LABELS, type UniverseSortKey } from '../../../shared/schemas/universe-sort.js';
+import { selectionMethodOf, togglePageSelection } from './krx-selection';
 
 /**
  * 위저드 2단계의 「과거 KRX 시점」 탭.
  *
- * 흐름은 조회 → 요약 → 후보 목록(검색·페이징·상위 N·수동 체크) → 확정 순서다.
+ * 흐름은 조회 → 요약 → 후보 목록(검색·페이징·페이지/전체 선택·수동 체크) → 확정 순서다.
  * 확정하면 서버가 스냅샷을 영구히 만들고, 그 결과를 `onSnapshotReady` 로 위로
  * 올려 위저드 상태(`selectedSnapshot`)에 반영한다. 이 컴포넌트 자신은 확정된
  * 스냅샷을 상태로 갖지 않는다 — 위저드가 유일한 소유자다.
  *
+ * 정렬 기준(`sortBy`)은 화면이 고르고 서버가 그 기준으로 rank 를 매긴다. 시가총액
+ * 정렬일 때만 선택 결과를 「상위 N」이라는 이름으로 저장할 수 있다 — 다른 정렬은
+ * 데이터가 없는 종목이 섞여 있어 그 이름이 사실과 어긋난다(`confirm` 참고).
+ *
  * `SymbolCheckList` 를 재사용하지 않는 이유: 그 목록은 **등록된 현재 종목**과
- * `useSymbolMetrics()`(거래대금·거래량) 을 전제로 한다. 과거 후보는 시가총액 하나로
- * 정렬이 고정되고 서버가 이미 매긴 rank 를 쓰므로 화면이 다시 정렬할 이유가 없다.
- * 검색·페이징 같은 순수 표현 부품(`filterSymbols`·`Pagination`·`PageSizeInput`)만
- * 공유한다.
+ * `useSymbolMetrics()`(거래대금·거래량) 을 전제로 한다. 과거 후보는 서버가 이미
+ * 매긴 rank 를 쓰므로 화면이 다시 정렬할 이유가 없다. 검색·페이징 같은 순수
+ * 표현 부품(`filterSymbols`·`Pagination`·`PageSizeInput`)만 공유한다.
  */
 export function KrxSnapshotStep({
   selectedSnapshot,
@@ -53,15 +55,17 @@ export function KrxSnapshotStep({
   const queryClient = useQueryClient();
 
   const [date, setDate] = useState('');
+  const [sortBy, setSortBy] = useState<UniverseSortKey>('MKTCAP');
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(0);
   const [pageSizeText, setPageSizeText] = useState('20');
 
   const previewMutation = useMutation({
-    mutationFn: (requestedDate: string) =>
+    mutationFn: ({ date: requestedDate, sortBy: requestedSortBy }: { date: string; sortBy: UniverseSortKey }) =>
       postJson<HistoricalUniversePreviewDto>('/universe/historical/preview', {
         date: requestedDate,
+        sortBy: requestedSortBy,
       }),
     onSuccess: () => {
       // 새 조회는 이전 선택의 근거(이전 previewId)를 무효화한다 — 선택도 함께 비운다
@@ -110,25 +114,14 @@ export function KrxSnapshotStep({
     setSelected(next);
   };
 
-  const topDisabledReason =
-    preview === null
-      ? '먼저 조회하세요'
-      : preview.unknownMarketCapCount > 0
-        ? `시가총액을 확인할 수 없는 종목이 ${preview.unknownMarketCapCount}개 있어 ` +
-          `상위 ${TOP_N}종목을 자동으로 고를 수 없습니다 — 수동으로 선택하세요`
-        : null;
-
-  const selectTopN = (): void => {
-    if (preview === null || topDisabledReason !== null) return;
-    setSelected(new Set(topNCodes(candidates, TOP_N)));
-  };
-
   const confirm = (): void => {
     if (preview === null || selected.size === 0) return;
-    const method = selectionMethodOf(selected, candidates, TOP_N);
-    // 적격 후보가 TOP_N 보다 적으면 실제 상위 선택 크기는 TOP_N 이 아니라 selected.size 다 —
-    // 서버는 selectionN 을 그대로 상위 N 크기로 검증하므로 상수 TOP_N 을 보내면
-    // 후보 부족 상황에서 정당한 확정이 거부된다.
+    // 자동 상위 N 판정은 시가총액 정렬에서만 유효하다 — 다른 정렬의 「상위 N」 은
+    // 데이터를 보유한 종목 안에서만 참이라 그 이름으로 저장하면 사실과 어긋난다.
+    const method =
+      preview.sortBy === 'MKTCAP'
+        ? selectionMethodOf(selected, candidates, MAX_UNIVERSE_SYMBOLS)
+        : 'MANUAL_FROM_KRX_SNAPSHOT';
     createMutation.mutate({
       previewId: preview.previewId,
       standardCodes: Array.from(selected),
@@ -153,7 +146,7 @@ export function KrxSnapshotStep({
       <Card>
         <CardHeader>
           <CardTitle className="text-base">과거 기준일 조회</CardTitle>
-          <CardDescription>KOSPI·KOSDAQ 보통주를 그 시점 시가총액순으로 조회합니다.</CardDescription>
+          <CardDescription>KOSPI·KOSDAQ 보통주를 그 시점 기준으로 조회합니다. 정렬 기준을 고르세요.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex flex-wrap items-end gap-2">
@@ -168,10 +161,31 @@ export function KrxSnapshotStep({
                 onChange={(e) => setDate(e.target.value)}
               />
             </div>
+            <div className="space-y-1">
+              <Label htmlFor="krx-sort">정렬 기준</Label>
+              <Select value={sortBy} onValueChange={(value) => setSortBy(value as UniverseSortKey)}>
+                <SelectTrigger id="krx-sort" className="h-11 w-44">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="MKTCAP">시가총액 상위</SelectItem>
+                  <SelectItem value="OPERATING_INCOME">영업이익 상위</SelectItem>
+                  <SelectItem value="PER" disabled>
+                    PER 상위 (데이터 준비 중)
+                  </SelectItem>
+                  <SelectItem value="PBR" disabled>
+                    PBR 상위 (데이터 준비 중)
+                  </SelectItem>
+                  <SelectItem value="EV_EBITDA" disabled>
+                    EV/EBITDA 상위 (데이터 준비 중)
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
             <Button
               className="h-11"
               disabled={!date || unavailable || previewMutation.isPending}
-              onClick={() => previewMutation.mutate(date)}
+              onClick={() => previewMutation.mutate({ date, sortBy })}
             >
               {previewMutation.isPending ? '조회 중…' : '조회'}
             </Button>
@@ -209,6 +223,9 @@ export function KrxSnapshotStep({
                 .map(([type, count]) => `${type} ${count}`)
                 .join(', ') || '없음'}
             </p>
+            {preview.sortBy === 'OPERATING_INCOME' ? (
+              <p>영업이익 데이터 없는 종목 {preview.unknownSortValueCount}개 — 목록 끝에 있습니다</p>
+            ) : null}
           </CardContent>
         </Card>
       ) : null}
@@ -244,17 +261,32 @@ export function KrxSnapshotStep({
                 ? `검색 결과 ${filtered.length}/${candidates.length}종목`
                 : `${candidates.length}종목`}
             </span>
-            <span className="ml-auto">
+            <span className="ml-auto flex items-center gap-2">
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
-                // 검색 결과가 아니라 전체 적격 후보 기준 상위 N 이다 — 지금 보이는 페이지와 무관하다
-                aria-disabled={topDisabledReason !== null}
-                title={topDisabledReason ?? undefined}
-                onClick={selectTopN}
+                onClick={() => setSelected(togglePageSelection(selected, visible.map((c) => c.standardCode)))}
               >
-                시가총액 상위 {TOP_N}종목 선택
+                페이지 선택
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                // 검색 필터가 적용된 후보 전체다 — 지금 보이는 페이지와 무관하다
+                onClick={() => setSelected(new Set([...selected, ...filtered.map((c) => c.standardCode)]))}
+              >
+                전체 선택
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={selected.size === 0}
+                onClick={() => setSelected(new Set())}
+              >
+                전체 해제
               </Button>
             </span>
           </div>
@@ -274,10 +306,13 @@ export function KrxSnapshotStep({
             <div className="max-h-[45vh] divide-y overflow-y-auto rounded-md border">
               {visible.map((candidate) => {
                 const id = `krx-candidate-${candidate.standardCode}`;
-                const marketCap =
-                  candidate.marketCapKrw === null
-                    ? '확인 불가'
-                    : `${formatCompactNumber(Number(candidate.marketCapKrw))}원`;
+                const sortLabel = UNIVERSE_SORT_LABELS[preview.sortBy];
+                const sortValueText =
+                  candidate.sortValue === null
+                    ? preview.sortBy === 'MKTCAP'
+                      ? '확인 불가'
+                      : '데이터 없음'
+                    : `${formatCompactNumber(Number(candidate.sortValue))}원`;
                 return (
                   <div key={candidate.standardCode} className="flex items-start gap-3 p-3">
                     <Checkbox
@@ -293,7 +328,7 @@ export function KrxSnapshotStep({
                         <span className="text-xs text-muted-foreground">{candidate.shortCode}</span>
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        {candidate.market} · 시가총액 {marketCap}
+                        {candidate.market} · {sortLabel} {sortValueText}
                         {candidate.rank !== null ? ` · ${candidate.rank}위` : ''}
                       </p>
                     </label>
@@ -358,9 +393,9 @@ export function KrxSnapshotStep({
                     적용 {snapshot.effectiveTradingDate} · {snapshot.selectedCount}종목
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    요청 {snapshot.requestedDate} ·{' '}
+                    요청 {snapshot.requestedDate} · {UNIVERSE_SORT_LABELS[snapshot.sortKey]}순 ·{' '}
                     {snapshot.selectionMethod === 'TOP_MARKET_CAP_N'
-                      ? `시가총액 상위 ${snapshot.selectionN ?? TOP_N}`
+                      ? `시가총액 상위 ${snapshot.selectionN ?? MAX_UNIVERSE_SYMBOLS}`
                       : '수동 선택'}
                   </p>
                 </div>
