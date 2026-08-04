@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  addCalendarDays, basDdToIso, isoToBasDd, KRX_DATA_EPOCH, kstDateOf, kstHourOf,
+  addCalendarDays, basDdToIso, isoToBasDd, KRX_DATA_EPOCH, kstDateOf, kstEndOfDayMs, kstHourOf,
 } from '../../src/server/modules/market-data/domain/kst-date.js';
 
 describe('kst-date', () => {
@@ -22,5 +22,19 @@ describe('kst-date', () => {
 
   it('KRX 공식 제공 시작일은 2010-01-04 다', () => {
     expect(KRX_DATA_EPOCH).toBe('2010-01-04');
+  });
+});
+
+describe('kstEndOfDayMs', () => {
+  it('그 날짜 KST 의 마지막 ms 다 — 1ms 뒤는 다음 날짜다', () => {
+    const end = kstEndOfDayMs('2020-06-15');
+    expect(kstDateOf(end)).toBe('2020-06-15');
+    expect(kstDateOf(end + 1)).toBe('2020-06-16');
+  });
+
+  it('DART 접수일 18:00 KST 공시가 그 날짜 컷오프에 포함된다', () => {
+    // 2020-06-15 18:00 KST = 2020-06-15 09:00 UTC
+    const filing = Date.parse('2020-06-15T09:00:00Z');
+    expect(filing).toBeLessThanOrEqual(kstEndOfDayMs('2020-06-15'));
   });
 });

@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applySortKey,
   combineMarketSnapshots,
   selectionPayloadOf,
   UniverseJoinError,
+  type EligibleCandidate,
+  type UniverseCandidateSet,
 } from '../../src/server/modules/market-data/domain/historical-universe.js';
 import { UnknownKrxClassificationError } from '../../src/server/modules/market-data/domain/krx-filter-policy.js';
 import type {
@@ -256,6 +259,71 @@ describe('combineMarketSnapshots', () => {
       expect(error).toMatchObject({ name: 'UniverseJoinError' });
       expect((error as Error).message).toMatch(/KOSDAQ.*999999/);
     }
+  });
+});
+
+describe('applySortKey', () => {
+  // combineMarketSnapshots 를 거치지 않고 손으로 만든다 — applySortKey 의 계약은
+  // UniverseCandidateSet 모양이지 KRX 원시 행이 아니다.
+  function candidate(
+    shortCode: string, standardCode: string, name: string,
+    market: 'KOSPI' | 'KOSDAQ', marketCapKrw: bigint | null, rank: number | null,
+  ): EligibleCandidate {
+    return { standardCode, shortCode, name, market, marketCapKrw, rank };
+  }
+  function baseSet(): UniverseCandidateSet {
+    // 시가총액순: 005930(300) > 035720(200) > 000001(100)
+    const candidates = [
+      candidate('005930', 'KR7005930003', '삼성전자', 'KOSPI', 300n, 1),
+      candidate('035720', 'KR7035720002', '카카오', 'KOSDAQ', 200n, 2),
+      candidate('000001', 'KR7000001009', '테스트', 'KOSPI', 100n, 3),
+    ];
+    return {
+      effectiveTradingDate: '2025-01-06',
+      candidates,
+      rawCounts: { KOSPI: 2, KOSDAQ: 1 },
+      eligibleCount: 3,
+      unknownMarketCapCount: 0,
+      excludedByType: {},
+      filterPolicyVersion: 'test-policy',
+      contractVersion: 'test-contract',
+      canonicalPayload: 'test-payload',
+    };
+  }
+
+  it('MKTCAP 은 후보·payload 를 그대로 두고 메타만 얹는다 — 기존 해시 호환', () => {
+    const set = baseSet();
+    const sorted = applySortKey(set, 'MKTCAP');
+    expect(sorted.candidates).toEqual(set.candidates);
+    expect(sorted.canonicalPayload).toBe(set.canonicalPayload);
+    expect(sorted.unknownSortValueCount).toBe(set.unknownMarketCapCount);
+    expect(sorted.sortValues.get('KR7005930003')).toBe('300');
+  });
+
+  it('OPERATING_INCOME 은 값 내림차순으로 rank 를 다시 매기고 값 없는 후보를 rank null 로 뒤에 둔다', () => {
+    const set = baseSet();
+    const oi = new Map([['035720', 500], ['000001', 900]]); // 005930 은 값 없음
+    const sorted = applySortKey(set, 'OPERATING_INCOME', oi);
+    expect(sorted.candidates.map((c) => c.shortCode)).toEqual(['000001', '035720', '005930']);
+    expect(sorted.candidates.map((c) => c.rank)).toEqual([1, 2, null]);
+    expect(sorted.unknownSortValueCount).toBe(1);
+    expect(sorted.sortValues.get('KR7000001009')).toBe('900');
+    expect(sorted.sortValues.has('KR7005930003')).toBe(false);
+  });
+
+  it('OPERATING_INCOME payload 는 정렬 구획이 붙어 MKTCAP 과 해시가 갈린다', () => {
+    const set = baseSet();
+    const sorted = applySortKey(set, 'OPERATING_INCOME', new Map([['035720', 500]]));
+    expect(sorted.canonicalPayload).not.toBe(set.canonicalPayload);
+    expect(sorted.canonicalPayload).toContain('--sort--');
+    expect(sorted.canonicalPayload).toContain('OPERATING_INCOME');
+  });
+
+  it('영업이익 동률은 정체성(shortCode) 순으로 결정적이다', () => {
+    const set = baseSet();
+    const oi = new Map([['005930', 500], ['035720', 500]]);
+    const sorted = applySortKey(set, 'OPERATING_INCOME', oi);
+    expect(sorted.candidates.map((c) => c.shortCode)).toEqual(['005930', '035720', '000001']);
   });
 });
 

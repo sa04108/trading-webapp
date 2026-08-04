@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { selectionMethodOf, topNCodes } from '../../src/web/features/backtests/krx-selection.js';
+import { selectionMethodOf, togglePageSelection, topNCodes } from '../../src/web/features/backtests/krx-selection.js';
 import type { HistoricalCandidateDto } from '../../src/shared/schemas/historical-universe.js';
 
 function candidate(
@@ -13,6 +13,7 @@ function candidate(
     name: standardCode,
     market: 'KOSPI',
     marketCapKrw,
+    sortValue: null,
     rank,
   };
 }
@@ -92,5 +93,22 @@ describe('selectionMethodOf', () => {
     expect(selectionMethodOf(top, candidates, n)).toBe('TOP_MARKET_CAP_N');
     // confirm() 이 selectionN 으로 보내야 할 값은 top.size(=3) 다 — n(=200) 을 그대로
     // 보내면 서버가 기대하는 「상위 200」과 어긋난다.
+  });
+});
+
+describe('togglePageSelection', () => {
+  it('페이지에 미선택이 하나라도 있으면 페이지 전체를 추가한다', () => {
+    const next = togglePageSelection(new Set(['a']), ['a', 'b', 'c']);
+    expect([...next].sort()).toEqual(['a', 'b', 'c']);
+  });
+
+  it('페이지 전체가 이미 선택돼 있으면 페이지 몫만 해제한다 — 다른 페이지 선택은 남는다', () => {
+    const next = togglePageSelection(new Set(['a', 'b', 'z']), ['a', 'b']);
+    expect([...next]).toEqual(['z']);
+  });
+
+  it('빈 페이지는 그대로 돌려준다', () => {
+    const original = new Set(['a']);
+    expect(togglePageSelection(original, [])).toBe(original);
   });
 });

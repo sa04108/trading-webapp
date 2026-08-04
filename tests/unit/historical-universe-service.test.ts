@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   HistoricalUniverseService,
+  SortValueUnavailableError,
 } from '../../src/server/modules/market-data/application/historical-universe-service.js';
 import {
   KrxApprovalExpiredError,
   KrxContractError,
   KrxNotConfiguredError,
+  type FundamentalSortValueSource,
   type KrxHistoricalUniverseSource,
 } from '../../src/server/modules/market-data/application/ports.js';
 import type {
@@ -13,6 +15,7 @@ import type {
   KrxIssueBaseInfoRow,
   KrxMarket,
 } from '../../src/server/modules/market-data/domain/krx-universe-types.js';
+import { kstEndOfDayMs } from '../../src/server/modules/market-data/domain/kst-date.js';
 import type { Clock } from '../../src/server/shared/clock.js';
 import type { Logger } from '../../src/server/shared/logger.js';
 
@@ -70,12 +73,29 @@ class FakeSource implements KrxHistoricalUniverseSource {
   todayCallCount(): number { return this.calls.length; }
 }
 
+class FakeSortValueSource implements FundamentalSortValueSource {
+  readonly calls: Array<{ shortCodes: readonly string[]; asOfMaxTsMs: number }> = [];
+  shouldFail = false;
+
+  constructor(private readonly values: ReadonlyMap<string, number> = new Map()) {}
+
+  async ttmOperatingIncomeAsOf(
+    shortCodes: readonly string[],
+    asOfMaxTsMs: number,
+  ): Promise<ReadonlyMap<string, number>> {
+    this.calls.push({ shortCodes, asOfMaxTsMs });
+    if (this.shouldFail) throw new Error('fact repository unavailable');
+    return this.values;
+  }
+}
+
 function service(options: {
   source?: FakeSource;
   clock?: Clock;
   configured?: boolean;
   approvalExpiry?: string | null;
   previewTtlMs?: number;
+  sortValueSource?: FundamentalSortValueSource | null;
 } = {}) {
   const source = options.source ?? new FakeSource();
   const clock = options.clock ?? mutableClock();
@@ -86,6 +106,7 @@ function service(options: {
       source,
       configured: options.configured ?? true,
       approvalExpiry: options.approvalExpiry ?? '2027-01-01',
+      sortValueSource: options.sortValueSource ?? null,
       clock,
       logger: LOGGER,
       previewTtlMs: options.previewTtlMs,
@@ -101,20 +122,20 @@ describe('HistoricalUniverseService', () => {
       available: false,
       reason: expect.stringMatching(/키.*승인/),
     });
-    await expect(subject.preview('2025-01-02')).rejects.toBeInstanceOf(KrxNotConfiguredError);
+    await expect(subject.preview('2025-01-02', 'MKTCAP')).rejects.toBeInstanceOf(KrxNotConfiguredError);
   });
 
   it('승인 만료면 available=false이고 이유에 만료일을 표시한다', async () => {
     const { service: subject } = service({ approvalExpiry: '2026-08-02' });
 
     expect(subject.availability()).toEqual({ available: false, reason: expect.stringContaining('2026-08-02') });
-    await expect(subject.preview('2025-01-02')).rejects.toBeInstanceOf(KrxApprovalExpiredError);
+    await expect(subject.preview('2025-01-02', 'MKTCAP')).rejects.toBeInstanceOf(KrxApprovalExpiredError);
   });
 
   it('2010-01-04 이전 요청은 BEFORE_EPOCH로 차단한다', async () => {
     const { service: subject } = service();
 
-    await expect(subject.preview('2010-01-03')).rejects.toMatchObject({
+    await expect(subject.preview('2010-01-03', 'MKTCAP')).rejects.toMatchObject({
       code: 'BEFORE_EPOCH',
     });
   });
@@ -122,7 +143,7 @@ describe('HistoricalUniverseService', () => {
   it('KST 어제보다 뒤는 FUTURE_OR_UNPUBLISHED로 차단한다', async () => {
     const { service: subject } = service();
 
-    await expect(subject.preview('2026-08-03')).rejects.toMatchObject({
+    await expect(subject.preview('2026-08-03', 'MKTCAP')).rejects.toMatchObject({
       code: 'FUTURE_OR_UNPUBLISHED',
     });
   });
@@ -130,7 +151,7 @@ describe('HistoricalUniverseService', () => {
   it('KST 08시 전에는 어제 데이터도 공개 대기로 차단한다', async () => {
     const { service: subject } = service({ clock: mutableClock('2026-08-02T22:00:00.000Z') });
 
-    await expect(subject.preview('2026-08-02')).rejects.toMatchObject({
+    await expect(subject.preview('2026-08-02', 'MKTCAP')).rejects.toMatchObject({
       code: 'FUTURE_OR_UNPUBLISHED',
     });
   });
@@ -140,7 +161,7 @@ describe('HistoricalUniverseService', () => {
     source.seed('2024-12-30');
     const { service: subject } = service({ source });
 
-    const result = await subject.preview('2025-01-01');
+    const result = await subject.preview('2025-01-01', 'MKTCAP');
 
     expect(result.requestedDate).toBe('2025-01-01');
     expect(result.effectiveTradingDate).toBe('2024-12-30');
@@ -151,7 +172,7 @@ describe('HistoricalUniverseService', () => {
   it('31일 안에 거래일이 없으면 NO_TRADING_DAY_IN_RANGE다', async () => {
     const { service: subject, source } = service();
 
-    await expect(subject.preview('2025-01-31')).rejects.toMatchObject({
+    await expect(subject.preview('2025-01-31', 'MKTCAP')).rejects.toMatchObject({
       code: 'NO_TRADING_DAY_IN_RANGE',
     });
     expect(source.calls.filter(({ kind, market }) => kind === 'daily' && market === 'KOSPI')).toHaveLength(31);
@@ -160,7 +181,7 @@ describe('HistoricalUniverseService', () => {
   it('epoch 당일 탐색은 공식 범위 밖인 2009년 날짜를 호출하지 않는다', async () => {
     const { service: subject, source } = service();
 
-    await expect(subject.preview('2010-01-04')).rejects.toMatchObject({
+    await expect(subject.preview('2010-01-04', 'MKTCAP')).rejects.toMatchObject({
       code: 'NO_TRADING_DAY_IN_RANGE',
     });
     expect(source.calls.filter(({ kind, market }) => kind === 'daily' && market === 'KOSPI'))
@@ -173,8 +194,8 @@ describe('HistoricalUniverseService', () => {
     source.daily.set('KOSDAQ:2025-01-02', []);
     const { service: subject } = service({ source });
 
-    await expect(subject.preview('2025-01-02')).rejects.toThrow(/KOSDAQ/);
-    await expect(subject.preview('2025-01-02')).rejects.toBeInstanceOf(KrxContractError);
+    await expect(subject.preview('2025-01-02', 'MKTCAP')).rejects.toThrow(/KOSDAQ/);
+    await expect(subject.preview('2025-01-02', 'MKTCAP')).rejects.toBeInstanceOf(KrxContractError);
     expect(source.calls.some(({ kind }) => kind === 'base')).toBe(false);
   });
 
@@ -184,9 +205,9 @@ describe('HistoricalUniverseService', () => {
     source.failDailyKey = 'KOSDAQ:2025-01-02';
     const { service: subject } = service({ source });
 
-    await expect(subject.preview('2025-01-02')).rejects.toThrow('temporary source failure');
+    await expect(subject.preview('2025-01-02', 'MKTCAP')).rejects.toThrow('temporary source failure');
     source.failDailyKey = null;
-    await expect(subject.preview('2025-01-02')).resolves.toMatchObject({ effectiveTradingDate: '2025-01-02' });
+    await expect(subject.preview('2025-01-02', 'MKTCAP')).resolves.toMatchObject({ effectiveTradingDate: '2025-01-02' });
     expect(source.calls.filter(({ kind, market }) => kind === 'daily' && market === 'KOSDAQ')).toHaveLength(2);
   });
 
@@ -197,8 +218,8 @@ describe('HistoricalUniverseService', () => {
     source.dailyGate = new Promise<void>((resolve) => { release = resolve; });
     const { service: subject } = service({ source });
 
-    const first = subject.preview('2025-01-02');
-    const second = subject.preview('2025-01-02');
+    const first = subject.preview('2025-01-02', 'MKTCAP');
+    const second = subject.preview('2025-01-02', 'MKTCAP');
     release();
     const [a, b] = await Promise.all([first, second]);
 
@@ -212,13 +233,13 @@ describe('HistoricalUniverseService', () => {
     const clock = mutableClock();
     const { service: subject } = service({ source, clock, previewTtlMs: 100 });
 
-    const first = await subject.preview('2025-01-02');
-    const cached = await subject.preview('2025-01-02');
+    const first = await subject.preview('2025-01-02', 'MKTCAP');
+    const cached = await subject.preview('2025-01-02', 'MKTCAP');
     expect(cached.previewId).toBe(first.previewId);
     expect(source.calls.filter(({ kind, market }) => kind === 'daily' && market === 'KOSPI')).toHaveLength(1);
 
     clock.advance(101);
-    const refreshed = await subject.preview('2025-01-02');
+    const refreshed = await subject.preview('2025-01-02', 'MKTCAP');
     expect(refreshed.previewId).not.toBe(first.previewId);
     expect(source.calls.filter(({ kind, market }) => kind === 'daily' && market === 'KOSPI')).toHaveLength(2);
   });
@@ -228,13 +249,16 @@ describe('HistoricalUniverseService', () => {
     source.seed('2024-12-30');
     const { service: subject } = service({ source });
 
-    const newYear = await subject.preview('2025-01-01');
-    const yearEnd = await subject.preview('2024-12-31');
+    const newYear = await subject.preview('2025-01-01', 'MKTCAP');
+    const yearEnd = await subject.preview('2024-12-31', 'MKTCAP');
 
     expect(newYear).toMatchObject({ requestedDate: '2025-01-01', effectiveTradingDate: '2024-12-30' });
     expect(yearEnd).toMatchObject({ requestedDate: '2024-12-31', effectiveTradingDate: '2024-12-30' });
     expect(yearEnd.previewId).not.toBe(newYear.previewId);
-    expect(yearEnd.set).toBe(newYear.set);
+    // preview() 마다 applySortKey 가 새 SortedUniverseCandidateSet 래퍼를 만들어 preview.set
+    // 자체는 더 이상 같은 참조가 아니다 — 대신 그 안의 candidates 배열이 같은 참조인지로
+    // 「같은 적용일 스냅샷을 재계산 없이 공유했다」를 확인한다.
+    expect(yearEnd.set.candidates).toBe(newYear.set.candidates);
     expect(source.calls.filter(({ kind, market }) => kind === 'daily' && market === 'KOSDAQ')).toHaveLength(1);
     expect(source.calls.filter(({ kind }) => kind === 'base')).toHaveLength(2);
     expect(subject.getPreview(newYear.previewId)).toBe(newYear);
@@ -248,8 +272,8 @@ describe('HistoricalUniverseService', () => {
     source.dailyGate = new Promise<void>((resolve) => { release = resolve; });
     const { service: subject } = service({ source });
 
-    const newYearPromise = subject.preview('2025-01-01');
-    const yearEndPromise = subject.preview('2024-12-31');
+    const newYearPromise = subject.preview('2025-01-01', 'MKTCAP');
+    const yearEndPromise = subject.preview('2024-12-31', 'MKTCAP');
     release();
     const [newYear, yearEnd] = await Promise.all([newYearPromise, yearEndPromise]);
 
@@ -264,7 +288,7 @@ describe('HistoricalUniverseService', () => {
     source.seed('2025-01-02');
     const clock = mutableClock();
     const { service: subject } = service({ source, clock, previewTtlMs: 100 });
-    const preview = await subject.preview('2025-01-02');
+    const preview = await subject.preview('2025-01-02', 'MKTCAP');
 
     expect(subject.getPreview(preview.previewId)).toBe(preview);
     clock.advance(101);
@@ -277,8 +301,8 @@ describe('HistoricalUniverseService', () => {
     source.seed('2025-01-03');
     const clock = mutableClock();
     const { service: subject } = service({ source, clock, previewTtlMs: 100 });
-    await subject.preview('2025-01-02');
-    await subject.preview('2025-01-03');
+    await subject.preview('2025-01-02', 'MKTCAP');
+    await subject.preview('2025-01-03', 'MKTCAP');
     const caches = subject as unknown as {
       dailyCache: Map<unknown, unknown>;
       previewById: Map<unknown, unknown>;
@@ -301,7 +325,7 @@ describe('HistoricalUniverseService', () => {
     source.seed('2025-01-02');
     const { service: subject } = service({ source });
 
-    const result = await subject.preview('2025-01-02');
+    const result = await subject.preview('2025-01-02', 'MKTCAP');
 
     expect(result.usableFromDate).toBe('2025-01-03');
     expect(result.usableFromRule).toBe('NEXT_SESSION_CONSERVATIVE_V1');
@@ -348,5 +372,84 @@ describe('HistoricalUniverseService', () => {
 
     await expect(subject.currentStandardCodeMap()).rejects.toThrow(/단축코드.*표준코드/);
     await expect(subject.currentStandardCodeMap()).rejects.toBeInstanceOf(KrxContractError);
+  });
+});
+
+describe('preview sortBy', () => {
+  it('MKTCAP 은 기존과 같은 후보 순서·해시를 낸다', async () => {
+    const source = new FakeSource();
+    source.seed('2025-01-06');
+    const { service: subject } = service({ source });
+
+    const preview = await subject.preview('2025-01-06', 'MKTCAP');
+
+    expect(preview.set.sortKey).toBe('MKTCAP');
+    expect(preview.set.candidates[0]!.rank).toBe(1);
+  });
+
+  it('OPERATING_INCOME 은 sortValueSource 값으로 rank 를 매기고 값 없는 종목이 뒤로 간다', async () => {
+    const source = new FakeSource();
+    source.seed('2025-01-06');
+    const sortValueSource = new FakeSortValueSource(new Map([['035720', 900]]));
+    const { service: subject } = service({ source, sortValueSource });
+
+    const preview = await subject.preview('2025-01-06', 'OPERATING_INCOME');
+
+    expect(preview.set.sortKey).toBe('OPERATING_INCOME');
+    expect(preview.set.candidates[0]!.shortCode).toBe('035720');
+    expect(preview.set.candidates.at(-1)!.rank).toBeNull();
+    expect(preview.set.unknownSortValueCount).toBeGreaterThan(0);
+  });
+
+  it('정렬 기준이 다르면 previewId·canonicalHash 가 다르다 — 캐시가 섞이지 않는다', async () => {
+    const source = new FakeSource();
+    source.seed('2025-01-06');
+    const sortValueSource = new FakeSortValueSource(new Map([['035720', 900]]));
+    const { service: subject } = service({ source, sortValueSource });
+
+    const byCap = await subject.preview('2025-01-06', 'MKTCAP');
+    const byOi = await subject.preview('2025-01-06', 'OPERATING_INCOME');
+
+    expect(byOi.previewId).not.toBe(byCap.previewId);
+    expect(byOi.canonicalHash).not.toBe(byCap.canonicalHash);
+
+    // 같은 (날짜, 정렬) 재요청은 캐시를 탄다
+    const again = await subject.preview('2025-01-06', 'MKTCAP');
+    expect(again.previewId).toBe(byCap.previewId);
+  });
+
+  it('sortValueSource 가 없거나 실패하면 SortValueUnavailableError 다 — MKTCAP 폴백 금지', async () => {
+    const sourceWithoutSort = new FakeSource();
+    sourceWithoutSort.seed('2025-01-06');
+    const { service: serviceWithoutSource } = service({
+      source: sourceWithoutSort,
+      sortValueSource: null,
+    });
+
+    await expect(serviceWithoutSource.preview('2025-01-06', 'OPERATING_INCOME'))
+      .rejects.toBeInstanceOf(SortValueUnavailableError);
+
+    const sourceWithFailing = new FakeSource();
+    sourceWithFailing.seed('2025-01-06');
+    const failingSortValueSource = new FakeSortValueSource();
+    failingSortValueSource.shouldFail = true;
+    const { service: serviceWithFailingSource } = service({
+      source: sourceWithFailing,
+      sortValueSource: failingSortValueSource,
+    });
+
+    await expect(serviceWithFailingSource.preview('2025-01-06', 'OPERATING_INCOME'))
+      .rejects.toBeInstanceOf(SortValueUnavailableError);
+  });
+
+  it('컷오프는 적용거래일 KST 하루 끝이다', async () => {
+    const source = new FakeSource();
+    source.seed('2025-01-06');
+    const sortValueSource = new FakeSortValueSource(new Map([['035720', 900]]));
+    const { service: subject } = service({ source, sortValueSource });
+
+    await subject.preview('2025-01-06', 'OPERATING_INCOME');
+
+    expect(sortValueSource.calls[0]?.asOfMaxTsMs).toBe(kstEndOfDayMs('2025-01-06'));
   });
 });

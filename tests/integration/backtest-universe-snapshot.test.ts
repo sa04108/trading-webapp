@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
-import { backtestJobs, universeSnapshots } from '../../src/server/shared/db/schema.js';
+import { backtestJobs, datasets, universeSnapshots } from '../../src/server/shared/db/schema.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
 import { seedDataset } from '../helpers/seed.js';
 import {
@@ -642,7 +642,11 @@ describe('백테스트 유니버스 스냅샷 계약 (Task 12)', () => {
     expect(created.statusCode).toBe(201);
     const jobId = (created.json().job as { id: string }).id;
 
-    // 스냅샷 삭제 — 불변 저장이지만 보존 정책 등으로 사라질 수 있는 상태를 재현한다
+    // 스냅샷 삭제 — 불변 저장이지만 보존 정책 등으로 사라질 수 있는 상태를 재현한다.
+    // Task 8 이후 확정이 같은 트랜잭션에서 데이터셋도 만들어 FK 로 스냅샷을 참조하므로,
+    // 그 데이터셋부터 지워야 스냅샷 삭제가 제약을 어기지 않는다.
+    ctx.app.container.database.db.delete(datasets)
+      .where(eq(datasets.universeSnapshotId, snapshot.id)).run();
     ctx.app.container.database.db.delete(universeSnapshots).where(eq(universeSnapshots.id, snapshot.id)).run();
 
     const cloned = await ctx.app.app.inject({

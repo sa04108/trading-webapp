@@ -20,6 +20,7 @@ import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { api, patchJson, postJson } from '@/lib/api-client';
 import { formatRelativeTime } from '@/lib/format';
+import { UNIVERSE_SORT_LABELS, type UniverseSortKey } from '../../../shared/schemas/universe-sort.js';
 import { sliceLabel } from './dataset-slices';
 import { SymbolCheckList } from './symbol-check-list';
 import { sortSymbols } from './symbol-sort';
@@ -140,8 +141,11 @@ function DatasetCard({
 
   const members = dataset.symbols.map((code) => byCode.get(code)).filter((s): s is SymbolSummary => s !== undefined);
   const missing = dataset.symbols.filter((code) => !byCode.has(code));
+  const unlisted = new Set(dataset.unlistedSymbols ?? []);
+  const listedMembers = members.filter((symbol) => !unlisted.has(symbol.code));
+  const unlistedMembers = members.filter((symbol) => unlisted.has(symbol.code));
   // 자르기 전에 정렬한다 — 페이지마다 다른 20개가 보이면 목록이 아니라 표본이 된다
-  const sortedMembers = sortSymbols(members);
+  const sortedMembers = sortSymbols(listedMembers);
   const shownMembers = sortedMembers.slice(0, CARD_SYMBOL_LIMIT);
   const hiddenMemberCount = sortedMembers.length - shownMembers.length;
 
@@ -221,6 +225,16 @@ function DatasetCard({
             </span>
           )}
           <Badge variant="outline">{dataset.symbols.length}종목</Badge>
+          {dataset.universeSnapshot ? (
+            <>
+              <Badge variant="outline">KRX {dataset.universeSnapshot.effectiveTradingDate} 기준</Badge>
+              <Badge variant="outline">
+                {UNIVERSE_SORT_LABELS[dataset.universeSnapshot.sortKey as UniverseSortKey] ??
+                  dataset.universeSnapshot.sortKey}
+                순 정렬
+              </Badge>
+            </>
+          ) : null}
           <span className="ml-auto flex items-center gap-2">
             <Button
               variant="outline"
@@ -282,6 +296,24 @@ function DatasetCard({
             </Badge>
           ))}
         </div>
+        {unlistedMembers.length > 0 ? (
+          <details className="text-xs text-muted-foreground">
+            <summary className="cursor-pointer">
+              현재 상장 목록에 없는 종목 {unlistedMembers.length}개
+            </summary>
+            <div className="mt-1 flex flex-wrap gap-1">
+              {sortSymbols(unlistedMembers).map((symbol) => (
+                <Badge key={symbol.code} variant="outline" className="text-muted-foreground">
+                  {symbol.name ?? symbol.code}
+                  <span className="ml-1 text-[10px] opacity-70">{symbol.code}</span>
+                </Badge>
+              ))}
+            </div>
+            <p className="mt-1">
+              상장폐지 등의 사유로 지금은 조회되지 않습니다 — 종목 편집에서 다루지 않습니다.
+            </p>
+          </details>
+        ) : null}
       </CardContent>
       <SyncDialog
         open={syncOpen}
@@ -297,7 +329,7 @@ function DatasetCard({
         open={editSymbols}
         onOpenChange={setEditSymbols}
         dataset={dataset}
-        allSymbols={allSymbols}
+        allSymbols={allSymbols.filter((symbol) => !unlisted.has(symbol.code))}
       />
 
       <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
@@ -409,6 +441,9 @@ function CreateDatasetDialog({
  * 목록은 등록된 종목 전체이고 현재 참조가 미리 체크돼 있다. 데이터셋에만 있는 종목을
  * 따로 그리지 않는 이유: `dataset_symbols` 가 `symbols` 를 FK cascade 로 참조하므로
  * 등록되지 않은 코드가 참조에 남을 수 없다.
+ *
+ * 미상장 종목은 카드가 목록에서 걸러 넘긴다 — 화면에 없으므로 해제할 수 없고,
+ * `selected` 초기값에는 남아 있어 저장해도 참조가 지워지지 않는다.
  */
 function EditSymbolsDialog({
   open,

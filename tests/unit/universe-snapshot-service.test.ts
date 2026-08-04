@@ -13,17 +13,22 @@ import {
   UniverseSnapshotService,
 } from '../../src/server/modules/market-data/application/universe-snapshot-service.js';
 import {
+  applySortKey,
   selectionPayloadOf,
   type EligibleCandidate,
+  type UniverseCandidateSet,
 } from '../../src/server/modules/market-data/domain/historical-universe.js';
 import { openDatabase, type DatabaseHandle } from '../../src/server/shared/db/database.js';
 import {
+  datasets,
+  datasetSymbols,
   symbols,
   universeSnapshots,
   universeSnapshotSymbols,
 } from '../../src/server/shared/db/schema.js';
 import type { Clock } from '../../src/server/shared/clock.js';
 import type { Logger } from '../../src/server/shared/logger.js';
+import type { UniverseSortKey } from '../../src/shared/schemas/universe-sort.js';
 
 const LOGGER = { debug() {}, info() {}, warn() {}, error() {} } as unknown as Logger;
 const EXPIRED_GUIDANCE = '미리보기가 만료되었거나 내용이 바뀌었습니다 — 다시 조회하세요.';
@@ -51,6 +56,9 @@ const UNKNOWN = candidate('000004', null, null, 'KOSDAQ');
 
 function previewOf(
   candidates: readonly EligibleCandidate[] = [A, B, C],
+  sortKey: UniverseSortKey = 'MKTCAP',
+  /** OPERATING_INCOME 정렬 fixture 용 — shortCode → TTM 영업이익 */
+  operatingIncomeByShortCode?: ReadonlyMap<string, number>,
 ): HistoricalUniversePreview {
   const canonicalPayload = [
     '2025-01-02|krx-common-stock-v1|v1',
@@ -61,24 +69,29 @@ function previewOf(
       item.marketCapKrw?.toString() ?? 'unknown',
     ].join('|')),
   ].join('\n');
+  const baseSet: UniverseCandidateSet = {
+    effectiveTradingDate: '2025-01-02',
+    candidates,
+    rawCounts: { KOSPI: 4, KOSDAQ: 3 },
+    eligibleCount: candidates.length,
+    unknownMarketCapCount: candidates.filter((item) => item.marketCapKrw === null).length,
+    excludedByType: { NON_STOCK_SECURITY: 2, PREFERRED_STOCK: 1 },
+    filterPolicyVersion: 'krx-common-stock-v1',
+    contractVersion: 'v1',
+    canonicalPayload,
+  };
+  // 실제 서비스와 같은 방식으로 정렬 기준을 입힌다 — MKTCAP 은 canonicalPayload 를
+  // 그대로 두고, 다른 정렬은 정렬 구획을 덧붙인 뒤 그 payload 로 해시를 낸다
+  // (historical-universe-service.ts buildPreview 와 동일한 계약).
+  const set = applySortKey(baseSet, sortKey, operatingIncomeByShortCode);
   return {
     previewId: 'uvp_test',
     requestedDate: '2025-01-04',
     effectiveTradingDate: '2025-01-02',
     usableFromDate: '2025-01-03',
     usableFromRule: 'NEXT_SESSION_CONSERVATIVE_V1',
-    canonicalHash: createHash('sha256').update(canonicalPayload).digest('hex'),
-    set: {
-      effectiveTradingDate: '2025-01-02',
-      candidates,
-      rawCounts: { KOSPI: 4, KOSDAQ: 3 },
-      eligibleCount: candidates.length,
-      unknownMarketCapCount: candidates.filter((item) => item.marketCapKrw === null).length,
-      excludedByType: { NON_STOCK_SECURITY: 2, PREFERRED_STOCK: 1 },
-      filterPolicyVersion: 'krx-common-stock-v1',
-      contractVersion: 'v1',
-      canonicalPayload,
-    },
+    canonicalHash: createHash('sha256').update(set.canonicalPayload).digest('hex'),
+    set,
     fetchedAtMs: 10,
   };
 }
@@ -627,15 +640,18 @@ describe('UniverseSnapshotService', () => {
       expect(database.sqlite.inTransaction).toBe(false);
       expect(database.db.select().from(universeSnapshots).all()).toHaveLength(1);
       expect(database.db.select().from(universeSnapshotSymbols).all()).toHaveLength(2);
+      expect(database.db.select().from(datasets).all()).toHaveLength(1);
     };
 
     const detail = await manual(service, [A.standardCode, B.standardCode]);
+    const dataset = database.db.select().from(datasets).all()[0]!;
 
     expect(audit.events).toEqual([{
       actor: 'system',
       event: 'universe.snapshot.created',
       detail: {
         snapshotId: detail.id,
+        datasetId: dataset.id,
         effectiveTradingDate: '2025-01-02',
         selectedCount: 2,
         selectionMethod: 'MANUAL_FROM_KRX_SNAPSHOT',
@@ -711,5 +727,54 @@ describe('UniverseSnapshotService', () => {
     const listed = service.listSnapshots();
     (listed[0] as { selectedCount: number }).selectedCount = 999;
     expect(service.listSnapshots()[0]?.selectedCount).toBe(1);
+  });
+
+  it('스냅샷 sortKey 는 preview 의 정렬 기준을 그대로 저장한다', async () => {
+    const operatingIncome = new Map([[A.shortCode, 100], [B.shortCode, 50], [C.shortCode, 10]]);
+    const { service, database } = setup(previewOf([A, B, C], 'OPERATING_INCOME', operatingIncome));
+
+    const detail = await manual(service, [A.standardCode]);
+
+    expect(database.db.select().from(universeSnapshots).all()[0]?.sortKey).toBe('OPERATING_INCOME');
+    expect(detail.sortKey).toBe('OPERATING_INCOME');
+  });
+
+  it('MKTCAP 이 아닌 preview 에 TOP_MARKET_CAP_N 을 보내면 SnapshotSelectionError 다', async () => {
+    const operatingIncome = new Map([[A.shortCode, 100], [B.shortCode, 50], [C.shortCode, 10]]);
+    const { service, database } = setup(previewOf([A, B, C], 'OPERATING_INCOME', operatingIncome));
+
+    await expect(service.createFromPreview({
+      previewId: 'uvp_test',
+      selectedStandardCodes: [A.standardCode],
+      selectionMethod: 'TOP_MARKET_CAP_N',
+      selectionN: 1,
+    })).rejects.toBeInstanceOf(SnapshotSelectionError);
+    expect(database.db.select().from(universeSnapshots).all()).toEqual([]);
+  });
+
+  it('확정하면 스냅샷과 같은 트랜잭션으로 데이터셋이 생긴다 — 이름·연결·종목', async () => {
+    const { service, database } = setup();
+
+    await manual(service, [A.standardCode, B.standardCode]);
+
+    const snapshot = database.db.select().from(universeSnapshots).all()[0]!;
+    const dataset = database.db.select().from(datasets).all()[0]!;
+    expect(dataset.name).toBe('KRX 2025-01-02 시가총액순 2종목');
+    expect(dataset.universeSnapshotId).toBe(snapshot.id);
+    const refs = database.db.select().from(datasetSymbols).all();
+    expect(refs.map((r) => r.code).sort()).toEqual([A.shortCode, B.shortCode].sort());
+  });
+
+  it('같은 이름이 이미 있으면 접미를 붙인다', async () => {
+    const { service, database } = setup();
+
+    await manual(service, [A.standardCode, B.standardCode]);
+    await manual(service, [A.standardCode, B.standardCode]);
+
+    const names = database.db.select().from(datasets).all().map((d) => d.name).sort();
+    expect(names).toEqual([
+      'KRX 2025-01-02 시가총액순 2종목',
+      'KRX 2025-01-02 시가총액순 2종목 (2)',
+    ]);
   });
 });

@@ -8,9 +8,11 @@ import type {
 } from '../../../../shared/schemas/historical-universe.js';
 import { UniverseJoinError, type EligibleCandidate } from '../domain/historical-universe.js';
 import { UnknownKrxClassificationError } from '../domain/krx-filter-policy.js';
+import { UNIVERSE_SORT_KEYS } from '../../../../shared/schemas/universe-sort.js';
 import {
   HistoricalUniverseDateError,
   PreviewExpiredError,
+  SortValueUnavailableError,
   type HistoricalUniversePreview,
   type HistoricalUniverseService,
 } from '../application/historical-universe-service.js';
@@ -35,6 +37,7 @@ const KRX_CONTRACT_FAILURE_MESSAGE = 'KRX 응답이 예상 계약과 다릅니�
 
 const previewRequestSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  sortBy: z.enum(UNIVERSE_SORT_KEYS).default('MKTCAP'),
 });
 
 const createSnapshotSchema = z.object({
@@ -44,13 +47,17 @@ const createSnapshotSchema = z.object({
   selectionN: z.number().int().min(1).optional(),
 });
 
-function candidateDto(candidate: EligibleCandidate): HistoricalCandidateDto {
+function candidateDto(
+  candidate: EligibleCandidate,
+  sortValues: ReadonlyMap<string, string>,
+): HistoricalCandidateDto {
   return {
     standardCode: candidate.standardCode,
     shortCode: candidate.shortCode,
     name: candidate.name,
     market: candidate.market,
     marketCapKrw: candidate.marketCapKrw === null ? null : candidate.marketCapKrw.toString(),
+    sortValue: sortValues.get(candidate.standardCode) ?? null,
     rank: candidate.rank,
   };
 }
@@ -62,10 +69,12 @@ function previewDto(preview: HistoricalUniversePreview): HistoricalUniversePrevi
     effectiveTradingDate: preview.effectiveTradingDate,
     usableFromDate: preview.usableFromDate,
     usableFromRule: preview.usableFromRule,
-    candidates: preview.set.candidates.map(candidateDto),
+    candidates: preview.set.candidates.map((candidate) => candidateDto(candidate, preview.set.sortValues)),
     rawCounts: preview.set.rawCounts,
     eligibleCount: preview.set.eligibleCount,
     unknownMarketCapCount: preview.set.unknownMarketCapCount,
+    sortBy: preview.set.sortKey,
+    unknownSortValueCount: preview.set.unknownSortValueCount,
     excludedByType: preview.set.excludedByType,
     attribution: '한국거래소 통계정보',
   };
@@ -83,6 +92,7 @@ function summaryDto(summary: UniverseSnapshotSummary): UniverseSnapshotSummaryDt
     selectedCount: summary.selectedCount,
     unknownMarketCapCount: summary.unknownMarketCapCount,
     createdAtMs: summary.createdAtMs,
+    sortKey: summary.sortKey,
   };
 }
 
@@ -125,6 +135,9 @@ function mapKnownError(
   if (error instanceof KrxQuotaError) {
     return { statusCode: 429, message: error.message };
   }
+  if (error instanceof SortValueUnavailableError) {
+    return { statusCode: 502, message: error.message };
+  }
   if (
     error instanceof KrxContractError
     || error instanceof UniverseJoinError
@@ -165,10 +178,10 @@ export function registerUniverseRoutes(
   app.post('/universe/historical/preview', { preHandler: requireAuth }, async (request, reply) => {
     const parsed = previewRequestSchema.safeParse(request.body);
     if (!parsed.success) {
-      return reply.code(400).send({ error: 'date 필드가 YYYY-MM-DD 형식이어야 합니다' });
+      return reply.code(400).send({ error: 'date(YYYY-MM-DD)·sortBy 필드가 올바르지 않습니다' });
     }
     try {
-      const preview = await historicalUniverseService.preview(parsed.data.date);
+      const preview = await historicalUniverseService.preview(parsed.data.date, parsed.data.sortBy);
       return previewDto(preview);
     } catch (error) {
       const mapped = mapKnownError(request, error);

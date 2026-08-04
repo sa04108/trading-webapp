@@ -31,6 +31,14 @@ export interface DatasetSummary {
   description: string | null;
   symbols: string[];
   createdAtMs: number;
+  /** KRX 스냅샷 확정이 만든 데이터셋이면 그 출처 */
+  universeSnapshot: {
+    snapshotId: string;
+    effectiveTradingDate: string;
+    sortKey: string;
+  } | null;
+  /** 현재 상장 목록에 없는 참조 종목 — null 은 판정 불가(KRX 실패)거나 스냅샷 비연결 */
+  unlistedSymbols: string[] | null;
 }
 
 export interface DataJob {

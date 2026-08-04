@@ -23,3 +23,8 @@ export function isoToBasDd(isoDate: string): string {
 export function basDdToIso(basDd: string): string {
   return `${basDd.slice(0, 4)}-${basDd.slice(4, 6)}-${basDd.slice(6, 8)}`;
 }
+
+/** 그 KST 달력일의 마지막 ms — 공시 as-of 컷오프(≤ 기준일)에 쓴다 */
+export function kstEndOfDayMs(isoDate: string): number {
+  return Date.parse(`${isoDate}T00:00:00Z`) - KST_OFFSET_MS + DAY_MS - 1;
+}

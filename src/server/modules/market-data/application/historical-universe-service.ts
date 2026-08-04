@@ -2,8 +2,11 @@ import { createHash } from 'node:crypto';
 import type { Logger } from '../../../shared/logger.js';
 import type { Clock } from '../../../shared/clock.js';
 import { newId } from '../../../shared/ids.js';
+import type { UniverseSortKey } from '../../../../shared/schemas/universe-sort.js';
 import {
+  applySortKey,
   combineMarketSnapshots,
+  type SortedUniverseCandidateSet,
   type UniverseCandidateSet,
 } from '../domain/historical-universe.js';
 import { KRX_FILTER_POLICY_VERSION } from '../domain/krx-filter-policy.js';
@@ -11,6 +14,7 @@ import {
   addCalendarDays,
   KRX_DATA_EPOCH,
   kstDateOf,
+  kstEndOfDayMs,
   kstHourOf,
 } from '../domain/kst-date.js';
 import {
@@ -21,6 +25,7 @@ import {
 import {
   KrxApprovalExpiredError,
   KrxContractError,
+  type FundamentalSortValueSource,
   type KrxHistoricalUniverseSource,
   KrxNotConfiguredError,
 } from './ports.js';
@@ -36,7 +41,7 @@ export interface HistoricalUniversePreview {
   readonly usableFromDate: string;
   readonly usableFromRule: typeof USABLE_FROM_RULE;
   readonly canonicalHash: string;
-  readonly set: UniverseCandidateSet;
+  readonly set: SortedUniverseCandidateSet;
   readonly fetchedAtMs: number;
 }
 
@@ -59,6 +64,13 @@ export class PreviewExpiredError extends Error {
   constructor(message = '미리보기가 만료되었습니다. KRX 데이터를 다시 조회하세요.') {
     super(message);
     this.name = 'PreviewExpiredError';
+  }
+}
+
+export class SortValueUnavailableError extends Error {
+  constructor(message = '영업이익 데이터를 읽을 수 없어 이 정렬 기준으로 조회할 수 없습니다.') {
+    super(message);
+    this.name = 'SortValueUnavailableError';
   }
 }
 
@@ -101,6 +113,7 @@ export class HistoricalUniverseService {
     readonly source: KrxHistoricalUniverseSource;
     readonly configured: boolean;
     readonly approvalExpiry: string | null;
+    readonly sortValueSource: FundamentalSortValueSource | null;
     readonly clock: Clock;
     readonly logger: Logger;
     readonly previewTtlMs?: number;
@@ -121,20 +134,21 @@ export class HistoricalUniverseService {
     return { available: true, reason: null };
   }
 
-  async preview(requestedDate: string): Promise<HistoricalUniversePreview> {
+  async preview(requestedDate: string, sortBy: UniverseSortKey): Promise<HistoricalUniversePreview> {
     this.purgeExpiredCaches();
     this.assertAvailable();
     this.assertPublishedDate(requestedDate);
 
-    const pending = this.pendingPreviews.get(requestedDate);
+    const pendingKey = `${requestedDate}|${sortBy}`;
+    const pending = this.pendingPreviews.get(pendingKey);
     if (pending) return pending;
 
-    const created = this.buildPreview(requestedDate).finally(() => {
-      if (this.pendingPreviews.get(requestedDate) === created) {
-        this.pendingPreviews.delete(requestedDate);
+    const created = this.buildPreview(requestedDate, sortBy).finally(() => {
+      if (this.pendingPreviews.get(pendingKey) === created) {
+        this.pendingPreviews.delete(pendingKey);
       }
     });
-    this.pendingPreviews.set(requestedDate, created);
+    this.pendingPreviews.set(pendingKey, created);
     return created;
   }
 
@@ -162,6 +176,11 @@ export class HistoricalUniverseService {
     });
     this.pendingStandardCodeMap = pending;
     return pending;
+  }
+
+  /** 현재 상장 단축코드 집합 — 데이터셋의 「현시점 조회 불가」 판정에 쓴다 (TTL 은 표준코드 맵과 공유) */
+  async currentShortCodes(): Promise<ReadonlySet<string>> {
+    return new Set((await this.currentStandardCodeMap()).keys());
   }
 
   /**
@@ -205,10 +224,13 @@ export class HistoricalUniverseService {
     }
   }
 
-  private async buildPreview(requestedDate: string): Promise<HistoricalUniversePreview> {
+  private async buildPreview(
+    requestedDate: string,
+    sortBy: UniverseSortKey,
+  ): Promise<HistoricalUniversePreview> {
     const effective = await this.findEffectiveTradingDate(requestedDate);
     const effectiveKey = this.effectiveCacheKey(effective.date);
-    const requestKey = this.requestCacheKey(requestedDate, effective.date);
+    const requestKey = this.requestCacheKey(requestedDate, sortBy, effective.date);
     const requestedCached = this.previewByRequest.get(requestKey);
     if (requestedCached && !this.isExpired(requestedCached)) return requestedCached.value;
     if (requestedCached) this.deletePreview(requestedCached.value);
@@ -220,14 +242,18 @@ export class HistoricalUniverseService {
     );
 
     const { set, canonicalHash, fetchedAtMs } = effectiveCached.value;
+    const sortedSet = await this.applySort(set, sortBy, effective.date);
+    const sortedHash = sortBy === 'MKTCAP'
+      ? canonicalHash
+      : createHash('sha256').update(sortedSet.canonicalPayload).digest('hex');
     const preview: HistoricalUniversePreview = {
       previewId: newId('uvp'),
       requestedDate,
       effectiveTradingDate: effective.date,
       usableFromDate: addCalendarDays(effective.date, 1),
       usableFromRule: USABLE_FROM_RULE,
-      canonicalHash,
-      set,
+      canonicalHash: sortedHash,
+      set: sortedSet,
       fetchedAtMs,
     };
     const entry = { value: preview, expiresAtMs: effectiveCached.expiresAtMs };
@@ -237,9 +263,35 @@ export class HistoricalUniverseService {
       event: 'krx.universe.preview.created',
       requestedDate,
       effectiveTradingDate: effective.date,
+      sortBy,
       eligibleCount: set.eligibleCount,
     }, 'KRX historical universe preview created');
     return preview;
+  }
+
+  /** 정렬 값 조회 실패를 MKTCAP 결과로 조용히 대체하지 않는다 — 요청과 다른 정렬
+   *  기준의 스냅샷이 생길 수 있어서다. 실패는 실패로 알린다 (설계 §오류 처리). */
+  private async applySort(
+    set: UniverseCandidateSet,
+    sortBy: UniverseSortKey,
+    effectiveTradingDate: string,
+  ): Promise<SortedUniverseCandidateSet> {
+    if (sortBy === 'MKTCAP') return applySortKey(set, 'MKTCAP');
+    if (this.deps.sortValueSource === null) throw new SortValueUnavailableError();
+    let values: ReadonlyMap<string, number>;
+    try {
+      values = await this.deps.sortValueSource.ttmOperatingIncomeAsOf(
+        set.candidates.map((candidate) => candidate.shortCode),
+        kstEndOfDayMs(effectiveTradingDate),
+      );
+    } catch (error) {
+      this.deps.logger.error(
+        { event: 'krx.universe.sort-values.failed', sortBy, err: error },
+        'universe sort value lookup failed',
+      );
+      throw new SortValueUnavailableError();
+    }
+    return applySortKey(set, sortBy, values);
   }
 
   private effectiveSnapshot(
@@ -375,8 +427,12 @@ export class HistoricalUniverseService {
     return `${effectiveTradingDate}|${KRX_FILTER_POLICY_VERSION}|${KRX_CONTRACT_VERSION}`;
   }
 
-  private requestCacheKey(requestedDate: string, effectiveTradingDate: string): string {
-    return `${requestedDate}|${this.effectiveCacheKey(effectiveTradingDate)}`;
+  private requestCacheKey(
+    requestedDate: string,
+    sortBy: UniverseSortKey,
+    effectiveTradingDate: string,
+  ): string {
+    return `${requestedDate}|${sortBy}|${this.effectiveCacheKey(effectiveTradingDate)}`;
   }
 
   private isExpired(entry: { readonly expiresAtMs: number }): boolean {
@@ -404,7 +460,11 @@ export class HistoricalUniverseService {
 
   private deletePreview(preview: HistoricalUniversePreview): void {
     this.previewById.delete(preview.previewId);
-    const key = this.requestCacheKey(preview.requestedDate, preview.effectiveTradingDate);
+    const key = this.requestCacheKey(
+      preview.requestedDate,
+      preview.set.sortKey,
+      preview.effectiveTradingDate,
+    );
     if (this.previewByRequest.get(key)?.value.previewId === preview.previewId) {
       this.previewByRequest.delete(key);
     }
