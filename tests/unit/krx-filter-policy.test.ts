@@ -13,16 +13,16 @@ const base = {
   shortCode: '005930',
 };
 
-describe('KRX 보통주 필터 정책 v1', () => {
-  it('정책 버전은 krx-common-stock-v1 이다', () => {
-    expect(KRX_FILTER_POLICY_VERSION).toBe('krx-common-stock-v1');
+describe('KRX 보통주 필터 정책 v2', () => {
+  it('정책 버전은 krx-common-stock-v2 이다', () => {
+    expect(KRX_FILTER_POLICY_VERSION).toBe('krx-common-stock-v2');
   });
 
   it('주권·보통주는 포함한다', () => {
     expect(classifyKrxIssue(base)).toEqual({ kind: 'INCLUDE', instrumentType: 'COMMON_STOCK' });
   });
 
-  it.each(['구형우선주', '신형우선주', '우선주'])('주식종류 %s 는 우선주로 제외한다', (kind) => {
+  it.each(['구형우선주', '신형우선주', '우선주', '종류주권'])('주식종류 %s 는 우선주로 제외한다', (kind) => {
     expect(classifyKrxIssue({ ...base, stockKindRaw: kind })).toEqual({
       kind: 'EXCLUDE',
       reason: 'PREFERRED_STOCK',

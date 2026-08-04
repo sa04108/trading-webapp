@@ -226,12 +226,12 @@ describe('combineMarketSnapshots', () => {
 
     expect(result).toMatchObject({
       effectiveTradingDate,
-      filterPolicyVersion: 'krx-common-stock-v1',
+      filterPolicyVersion: 'krx-common-stock-v2',
       contractVersion: 'v1',
     });
     expect(result.candidates[0]?.name).toBe('기본정보 이름');
     expect(result.canonicalPayload).toBe([
-      '2025-01-02|krx-common-stock-v1|v1',
+      '2025-01-02|krx-common-stock-v2|v1',
       'KR-A|000001|KOSPI|123456789012345',
       'KR-B|000002|KOSPI|unknown',
     ].join('\n'));

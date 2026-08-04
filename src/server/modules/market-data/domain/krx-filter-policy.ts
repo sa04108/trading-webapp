@@ -1,5 +1,5 @@
 /** 이 정책 버전은 fixture 로 검증했고 실응답 입증은 scripts/krx-smoke.ts 가 담당한다. 값 추가 시 버전을 올린다. */
-export const KRX_FILTER_POLICY_VERSION = 'krx-common-stock-v1';
+export const KRX_FILTER_POLICY_VERSION = 'krx-common-stock-v2';
 
 export type KrxExclusionReason =
   | 'PREFERRED_STOCK'
@@ -74,6 +74,9 @@ export function classifyKrxIssue(row: {
     case '구형우선주':
     case '신형우선주':
     case '우선주':
+    // 상법상 종류주식(전환우선주 등, 단축코드 K·L 계열) — 보통주가 아니므로 우선주와 같이 제외한다.
+    // 2026-07-01 실응답(37550K)에서 확인 (v2).
+    case '종류주권':
       return { kind: 'EXCLUDE', reason: 'PREFERRED_STOCK' };
     default:
       throw new UnknownKrxClassificationError(
