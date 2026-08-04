@@ -40,3 +40,21 @@ export function selectionMethodOf(
   if (top.length !== selected.size) return 'MANUAL_FROM_KRX_SNAPSHOT';
   return top.every((code) => selected.has(code)) ? 'TOP_MARKET_CAP_N' : 'MANUAL_FROM_KRX_SNAPSHOT';
 }
+
+/**
+ * 「페이지 선택」 토글. 페이지 전체가 이미 선택된 상태에서 다시 누르면 해제다 —
+ * 추가만 하는 버튼이면 잘못 누른 페이지를 되돌릴 방법이 체크박스 개별 해제뿐이다.
+ */
+export function togglePageSelection(
+  selected: ReadonlySet<string>,
+  pageCodes: readonly string[],
+): ReadonlySet<string> {
+  if (pageCodes.length === 0) return selected;
+  const next = new Set(selected);
+  const allSelected = pageCodes.every((code) => next.has(code));
+  for (const code of pageCodes) {
+    if (allSelected) next.delete(code);
+    else next.add(code);
+  }
+  return next;
+}
