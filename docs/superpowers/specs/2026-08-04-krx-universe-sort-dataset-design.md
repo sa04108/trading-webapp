@@ -63,10 +63,13 @@
   - 「전체 선택」: 검색 필터가 적용된 후보 전체를 선택한다.
   - 「전체 해제」: 선택을 비운다.
 - 200종목 초과 경고는 유지한다. 스냅샷 확정은 허용하고 백테스트 제출은 서버가 차단한다(기존 동작).
-- `selectionMethodOf`: 선택 집합이 현재 정렬 기준 상위 N과 정확히 일치하면 `TOP_MARKET_CAP_N`
-  (sortKey가 MKTCAP일 때) 또는 새 값 `TOP_SORT_N`(영업이익 등)으로 판정한다. 아니면 `MANUAL`.
-  서버 `validateSelection`의 상위 N 일치 검증도 활성 정렬 기준의 rank를 쓴다.
-- provenance 라벨은 sortKey를 읽어 "시가총액 상위 N종목" / "영업이익 상위 N종목" / "직접 선택 N종목"으로 표기한다.
+- `selectionMethodOf`: sortKey가 `MKTCAP`일 때만 상위 N 일치 판정(`TOP_MARKET_CAP_N`)을 한다.
+  다른 정렬 기준에서는 항상 `MANUAL_FROM_KRX_SNAPSHOT`이다 — 영업이익은 미수집 종목이 많아
+  "상위 N"이라는 주장 자체가 데이터 보유 종목 안에서만 참이고, 상위 N 버튼도 없어졌으므로
+  새 방식 값(`TOP_SORT_N`)을 만들지 않는다. 서버도 `TOP_MARKET_CAP_N` 요청이
+  MKTCAP 정렬이 아닌 preview를 가리키면 400으로 거부한다.
+- 상위 N 방식은 MKTCAP 정렬에서만 성립하므로 provenance 라벨("시가총액 상위 N종목" / "수동 선택")은
+  기존 그대로다. 위저드의 「기존 스냅샷 다시 쓰기」 목록에는 sortKey 라벨("영업이익순" 등)을 함께 표기한다.
 
 ### 3. 스냅샷 → 데이터셋 자동 기록
 
@@ -77,16 +80,18 @@
 - `createFromPreview()` 트랜잭션 안에서 데이터셋과 dataset_symbols를 함께 생성한다.
   스냅샷 생성과 데이터셋 기록은 원자적이다.
 - 기준 시점·정렬 기준은 데이터셋에 중복 저장하지 않고 스냅샷 join으로 읽는다.
-- 데이터셋 이름은 자동 생성한다: `KRX {적용거래일} {정렬 라벨} {N}종목`
-  (예: `KRX 2020-06-15 영업이익 상위 150종목`). 이름이 겹치면 ` (2)`, ` (3)` 접미를 붙인다.
+- 데이터셋 이름은 자동 생성한다: `KRX {적용거래일} {정렬 라벨}순 {N}종목`
+  (예: `KRX 2020-06-15 영업이익순 150종목`). "상위"라고 쓰지 않는다 — 수동 선택 스냅샷은
+  상위 N이 아니다. 이름이 겹치면 ` (2)`, ` (3)` 접미를 붙인다.
 - 데이터셋 카드에 배지 2개를 단다: 기준 시점(적용거래일), 정렬 기준.
   스냅샷 연결이 없는 일반 데이터셋은 기존 표시 그대로다.
 
 ### 4. 현시점 조회 불가(상장폐지 등) 종목
 
-- 신규 `listing-status-service` (market-data 모듈):
-  KRX 기본정보 엔드포인트(`stk_isu_base_info`, KOSDAQ `ksq_isu_base_info`)로
-  현재 상장 shortCode 집합을 만들고 하루 1회(당일 자정 기준) 캐시한다.
+- 신규 서비스를 만들지 않는다 — `HistoricalUniverseService.currentStandardCodeMap()`이
+  이미 KRX 기본정보(`stk_isu_base_info` + `ksq_isu_base_info`)로 현재 상장 목록을 만들어
+  TTL 6시간으로 캐시한다. 여기에 `currentShortCodes()`(키 집합 반환)를 추가해 재사용한다.
+  호출량 상한 의도(하루 몇 회 이내)는 6시간 캐시로도 지켜진다.
 - 스냅샷 연결 데이터셋을 조회할 때 종목별 `listed: boolean`을 부여한다.
 - 데이터셋 카드 하단에 "현재 상장 목록에 없는 종목 N개"를 접이식으로 표시한다.
   폐지 사유는 알 수 없으므로 "상장폐지"로 단정하지 않는다.
@@ -106,8 +111,7 @@
 
 - unit:
   - 영업이익 rank 산출 — point-in-time(as_of 경계), TTM 합산, 분기 부족 null, null-last 정렬.
-  - `selectionMethodOf` — 정렬 기준별 상위 N 일치·불일치.
-  - provenance 라벨 — sortKey별 문구.
+  - `togglePageSelection` — 페이지 선택 토글.
   - 데이터셋 이름 생성 — 충돌 접미.
 - integration:
   - preview `sortBy` 동작·검증·캐시 키 분리.
