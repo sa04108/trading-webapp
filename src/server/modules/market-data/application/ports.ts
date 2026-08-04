@@ -112,6 +112,15 @@ export interface MarketRankingSource {
   getRanking(market: Market, metric: MarketRankingMetric): Promise<MarketRankingEntry[]>;
 }
 
+/** 정렬용 재무 값 — 조립부가 facts 모듈로 연결한다 (market-data 는 facts 를 모른다) */
+export interface FundamentalSortValueSource {
+  /** shortCode → asOfMaxTsMs 이전에 공시된 것 기준 TTM 영업이익(원). 산출 불가 종목은 키가 없다 */
+  ttmOperatingIncomeAsOf(
+    shortCodes: readonly string[],
+    asOfMaxTsMs: number,
+  ): Promise<ReadonlyMap<string, number>>;
+}
+
 // 아래 에러들은 포트 계약의 일부다 — 어댑터(infrastructure)가 던지고 애플리케이션이
 // 잡는다. broker 쪽에 정의하면 애플리케이션이 §7 방향을 어겨야만 잡을 수 있다.
 
