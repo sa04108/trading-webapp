@@ -203,6 +203,11 @@ export const datasets = sqliteTable('datasets', {
   id: text('id').primaryKey(),
   name: text('name').notNull().unique(),
   description: text('description'),
+  /**
+   * KRX 스냅샷 확정이 만든 데이터셋이면 그 스냅샷 — 기준 시점·정렬 기준을 여기 중복
+   * 저장하지 않고 join 으로 읽는다. 손으로 만든 데이터셋은 null.
+   */
+  universeSnapshotId: text('universe_snapshot_id').references(() => universeSnapshots.id),
   createdAtMs: integer('created_at_ms').notNull(),
   updatedAtMs: integer('updated_at_ms').notNull(),
 });
