@@ -107,12 +107,56 @@ async function removeSymbolIfPresent(page: Page, code: string): Promise<void> {
     return;
   }
   await checkbox.check();
+  const impactResponse = page.waitForResponse((resp) => resp.url().includes('/symbols/removal-impact'));
   await page.getByRole('button', { name: '제거' }).click();
+  await impactResponse;
   const removeDialog = page.getByRole('dialog');
   await expect(removeDialog.getByText(/참조하는 데이터셋이 없습니다/)).toBeVisible();
   await removeDialog.getByRole('button', { name: '제거' }).click();
   await expect(page.getByText(code)).toHaveCount(0);
   await page.getByRole('button', { name: '완료' }).click();
+}
+
+/** 이 스펙의 시나리오가 스냅샷 확정으로 남기는 데이터셋 이름은 모두 이 문자열을 담는다. */
+const AUTO_DATASET_NAME_PATTERN = new RegExp(`KRX ${EFFECTIVE_DATE} 시가총액순`);
+
+/**
+ * 스냅샷 확정이 남긴 데이터셋 카드를 모두 UI 로 지운다(카드의 「삭제」 → 확인
+ * 다이얼로그). 데이터셋(참조 묶음)은 지울 수 있다 — 지울 수 없는 건 감사용
+ * 스냅샷 레코드뿐이다(dataset-service.ts `deleteDataset` 주석 참고, REVIEW §9.2).
+ *
+ * `pnpm test:e2e`(플레이라이트 전체 실행)는 이 파일과 mvp-flow.spec.ts 가 서버
+ * 하나를 공유한다(playwright.config workers:1). mvp-flow.spec.ts 의
+ * 「편집」·「종목 편집」·「데이터 동기화」 selector 는 페이지 전체에서 유일 매치를
+ * 기대하는데, 그 버튼들은 데이터셋 카드마다 하나씩 있어 카드가 둘 이상이면
+ * strict-mode 위반으로 깨진다 — 시나리오 1~4·5·스냅샷 기록 테스트가 만드는 카드를
+ * 이 파일이 스스로 다 지워야 한다(mvp-flow.spec.ts 는 건드리지 않는다).
+ *
+ * 카드를 지울 때마다 목록이 다시 그려지므로 매번 남은 첫 번째 카드를 다시
+ * 찾는다(`removeSymbolIfPresent` 와 같은 크래시 안전 패턴 — 만들지 않은 테스트에서는
+ * 카드가 0개라 즉시 끝난다). `removeSymbolIfPresent` 보다 먼저 불러야 한다 —
+ * 900010 을 참조하는 데이터셋이 아직 있으면 제거 확인 다이얼로그의 영향 범위
+ * 조회(`/symbols/removal-impact`)가 응답을 받기 전 기본값(빈 배열)으로 "참조하는
+ * 데이터셋이 없습니다" 를 잠깐 보여준 뒤 실제 응답으로 뒤집는 경합이 있다(앱의
+ * 경합, 이 스펙이 고칠 대상은 아니다) — 데이터셋을 먼저 지워 두면 그 응답도 같은
+ * "없습니다" 로 정착해 경합이 사라진다.
+ */
+async function removeAutoDatasetsIfPresent(page: Page): Promise<void> {
+  // `.count()` 는 지금 DOM 을 그대로 읽을 뿐 자동 대기하지 않는다 — 목록 GET 응답을
+  // 기다리지 않고 곧바로 세면, 이동 직후 아직 로딩 중인 빈 목록을 "카드 없음"으로
+  // 잘못 읽어 정리를 통째로 건너뛴다. 이동 전에 리스너를 걸어 두고 이동 뒤 기다린다.
+  const listResponse = page.waitForResponse(
+    (resp) => resp.url().includes('/api/v1/datasets') && resp.request().method() === 'GET',
+  );
+  await page.goto('/datasets?tab=datasets');
+  await listResponse;
+  const cards = page.locator('[data-slot="card"]').filter({ hasText: AUTO_DATASET_NAME_PATTERN });
+  while ((await cards.count()) > 0) {
+    await cards.first().getByRole('button', { name: '삭제' }).click();
+    const confirmDialog = page.getByRole('dialog');
+    await confirmDialog.getByRole('button', { name: '삭제' }).click();
+    await expect(confirmDialog).toHaveCount(0);
+  }
 }
 
 /**
@@ -122,9 +166,11 @@ async function removeSymbolIfPresent(page: Page, code: string): Promise<void> {
  * 테스트가 실패했을 때는 지켜주지 못한다. 파일 전역 afterEach 로 모든 테스트
  * 뒤에 걸어 두면 어느 테스트가 어떻게 실패하든 같은 보장이 선다. 900010 을
  * 만들지 않는 시나리오 1~4 테스트에서는 `removeSymbolIfPresent` 가 즉시
- * 아무 일도 하지 않고 끝난다.
+ * 아무 일도 하지 않고 끝난다. 데이터셋 정리를 먼저 두는 순서는
+ * `removeAutoDatasetsIfPresent` 주석 참고.
  */
 test.afterEach(async ({ page }) => {
+  await removeAutoDatasetsIfPresent(page);
   await removeSymbolIfPresent(page, DELISTED_SYMBOL_CODE);
 });
 
@@ -230,6 +276,9 @@ test('위저드 조회·선택·확정·게이트·성공 제출 (Task 15 시나
   ).toBeVisible();
   await expect(page.getByText(`KRX ${EFFECTIVE_DATE} 스냅샷 · 1종목`)).toBeVisible();
   await expect(page.getByText('수동 선택')).toBeVisible(); // 선정 방식 — topN 에서 수동 해제했으므로 MANUAL
+
+  // ── 5) 정리 ── 확정이 남긴 데이터셋은 파일 전역 afterEach(removeAutoDatasetsIfPresent)가
+  // 지운다 — 이유는 그 함수 주석 참고.
 });
 
 /**
@@ -272,9 +321,11 @@ test('가격 없는 종목 포함 스냅샷은 제출을 차단한다 (Task 15 �
   await expect(page.getByText('생존 편향을 막기 위해')).toBeVisible();
 
   // ── 6) 정리 ──
-  // 스냅샷 자체는 불변 저장이라(REVIEW §9.2) 지울 API 가 없어 그대로 둔다. 900010
-  // 은 파일 전역 afterEach(removeSymbolIfPresent)가 되돌린다 — 이 assertion들이
-  // 실패해도 afterEach 는 여전히 실행되므로 여기서 별도로 부르지 않는다.
+  // 확정이 남긴 데이터셋(005930+900010)과 900010 자체는 파일 전역 afterEach
+  // (removeAutoDatasetsIfPresent → removeSymbolIfPresent 순서)가 되돌린다 — 이유는
+  // 그 함수들의 주석 참고. 스냅샷 레코드 자체는 불변 저장이라(REVIEW §9.2) 지울
+  // API 가 없어 그대로 둔다. 위 assertion들이 실패해도 afterEach 는 여전히
+  // 실행되므로 여기서 별도로 부르지 않는다.
 });
 
 /**
@@ -286,15 +337,8 @@ test('가격 없는 종목 포함 스냅샷은 제출을 차단한다 (Task 15 �
  * 시나리오 1~4 의 확정도 005930 하나로 좁혀 같은 이름(`KRX {적용일} 시가총액순 1종목`)의
  * 데이터셋을 남긴다 — 이름이 겹치면 서버가 이 테스트의 것에 ' (2)' 접미를 붙이므로
  * 정확 일치 대신 정규식 + `.last()` 로 이 테스트가 만든 카드를 집는다(새 데이터셋은
- * 목록 끝에 쌓인다).
- *
- * `pnpm test:e2e`(플레이라이트 전체 실행)는 이 파일과 mvp-flow.spec.ts 가 서버 하나를
- * 공유한다(playwright.config workers:1). mvp-flow.spec.ts 는 데이터셋 개수를 세지는
- * 않지만 「편집」·「종목 편집」·「데이터 동기화」 버튼을 페이지 전체에서 유일 매치로
- * 기대하므로, 데이터셋 카드가 둘 이상이면 그 selector 들이 strict-mode 위반으로
- * 깨질 수 있다(시나리오 1~4·5 가 남기는 카드만으로도 이미 재현되므로 이 테스트
- * 하나만 지운다고 완전히 해소되지는 않는다 — 기존 시나리오의 정리 정책은 그대로
- * 두고, 이 테스트가 늘리는 카드 하나만큼은 스스로 지운다).
+ * 목록 끝에 쌓인다). 이 카드도 파일 전역 afterEach(removeAutoDatasetsIfPresent)가
+ * 지운다 — 이유는 그 함수 주석 참고.
  */
 test('스냅샷 확정은 데이터셋으로도 기록된다', async ({ page }) => {
   await login(page);
@@ -313,10 +357,4 @@ test('스냅샷 확정은 데이터셋으로도 기록된다', async ({ page }) 
   await expect(autoCard).toBeVisible();
   await expect(autoCard.getByText(`KRX ${EFFECTIVE_DATE} 기준`)).toBeVisible();
   await expect(autoCard.getByText('시가총액순 정렬')).toBeVisible();
-
-  // 정리 — 참조만 끊는 삭제라 종목(005930)의 봉 데이터는 그대로 남는다.
-  await autoCard.getByRole('button', { name: '삭제' }).click();
-  const confirmDialog = page.getByRole('dialog');
-  await confirmDialog.getByRole('button', { name: '삭제' }).click();
-  await expect(confirmDialog).toHaveCount(0);
 });
