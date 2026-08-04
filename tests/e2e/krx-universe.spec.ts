@@ -151,9 +151,16 @@ test('위저드 조회·선택·확정·게이트·성공 제출 (Task 15 시나
   ).toBeVisible();
   // 우선주(005935)·스팩(900099) 각 1건 제외
   await expect(page.getByText('유형별 제외 PREFERRED_STOCK 1, SPAC 1')).toBeVisible();
+  // 정렬 기준 Select 는 시가총액 상위가 기본값이다
+  await expect(page.getByLabel('정렬 기준')).toContainText('시가총액 상위');
 
-  // ── 2) 상위 N 선택 → 검색 후 선택 유지 → 005930 만 남기고 수동 해제 → 확정 ──
-  await page.getByRole('button', { name: '시가총액 상위 200종목 선택' }).click();
+  // ── 2) 페이지 선택 → 전체 해제 확인 → 전체 선택 → 검색 후 선택 유지 → 005930 만 남기고 수동 해제 → 확정 ──
+  // 후보 3개가 한 페이지에 다 있어 「페이지 선택」이 「전체 선택」과 같은 결과를 낸다
+  await page.getByRole('button', { name: '페이지 선택' }).click();
+  await expect(page.getByText('3개 선택')).toBeVisible();
+  await page.getByRole('button', { name: '전체 해제' }).click();
+  await expect(page.getByText('0개 선택')).toBeVisible();
+  await page.getByRole('button', { name: '전체 선택' }).click();
   await expect(page.getByText('3개 선택')).toBeVisible();
 
   const candidateSearch = page.getByLabel('후보 종목 검색');
@@ -268,4 +275,48 @@ test('가격 없는 종목 포함 스냅샷은 제출을 차단한다 (Task 15 �
   // 스냅샷 자체는 불변 저장이라(REVIEW §9.2) 지울 API 가 없어 그대로 둔다. 900010
   // 은 파일 전역 afterEach(removeSymbolIfPresent)가 되돌린다 — 이 assertion들이
   // 실패해도 afterEach 는 여전히 실행되므로 여기서 별도로 부르지 않는다.
+});
+
+/**
+ * 스냅샷 확정이 데이터셋 자동 생성까지 이어지는지는 위 시나리오들에 이어 붙여
+ * 확인할 수 없다 — 확인하려면 `/datasets` 로 이동해야 하는데, 그 이동이 위저드
+ * 상태(selectedSnapshot)를 지워 시나리오 1~4 뒷부분(시작일 게이트·제출)을 깨뜨린다.
+ * 그래서 새 조회·새 확정을 쓰는 별도 테스트로 뗀다.
+ *
+ * 시나리오 1~4 의 확정도 005930 하나로 좁혀 같은 이름(`KRX {적용일} 시가총액순 1종목`)의
+ * 데이터셋을 남긴다 — 이름이 겹치면 서버가 이 테스트의 것에 ' (2)' 접미를 붙이므로
+ * 정확 일치 대신 정규식 + `.last()` 로 이 테스트가 만든 카드를 집는다(새 데이터셋은
+ * 목록 끝에 쌓인다).
+ *
+ * `pnpm test:e2e`(플레이라이트 전체 실행)는 이 파일과 mvp-flow.spec.ts 가 서버 하나를
+ * 공유한다(playwright.config workers:1). mvp-flow.spec.ts 는 데이터셋 개수를 세지는
+ * 않지만 「편집」·「종목 편집」·「데이터 동기화」 버튼을 페이지 전체에서 유일 매치로
+ * 기대하므로, 데이터셋 카드가 둘 이상이면 그 selector 들이 strict-mode 위반으로
+ * 깨질 수 있다(시나리오 1~4·5 가 남기는 카드만으로도 이미 재현되므로 이 테스트
+ * 하나만 지운다고 완전히 해소되지는 않는다 — 기존 시나리오의 정리 정책은 그대로
+ * 두고, 이 테스트가 늘리는 카드 하나만큼은 스스로 지운다).
+ */
+test('스냅샷 확정은 데이터셋으로도 기록된다', async ({ page }) => {
+  await login(page);
+  await page.goto('/backtests/new');
+  await selectRangeBreakoutStrategy(page);
+  await queryKrxPreview(page, REQUESTED_DATE);
+  await page.getByRole('checkbox', { name: '삼성전자 선택' }).check();
+  await page.getByRole('button', { name: '스냅샷 확정' }).click();
+  await expect(page.getByText(`적용 ${EFFECTIVE_DATE} · 1종목`).first()).toBeVisible();
+
+  await page.goto('/datasets?tab=datasets');
+  const autoCard = page
+    .locator('[data-slot="card"]')
+    .filter({ hasText: new RegExp(`KRX ${EFFECTIVE_DATE} 시가총액순 1종목`) })
+    .last();
+  await expect(autoCard).toBeVisible();
+  await expect(autoCard.getByText(`KRX ${EFFECTIVE_DATE} 기준`)).toBeVisible();
+  await expect(autoCard.getByText('시가총액순 정렬')).toBeVisible();
+
+  // 정리 — 참조만 끊는 삭제라 종목(005930)의 봉 데이터는 그대로 남는다.
+  await autoCard.getByRole('button', { name: '삭제' }).click();
+  const confirmDialog = page.getByRole('dialog');
+  await confirmDialog.getByRole('button', { name: '삭제' }).click();
+  await expect(confirmDialog).toHaveCount(0);
 });
