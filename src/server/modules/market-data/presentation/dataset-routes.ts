@@ -79,6 +79,10 @@ export function registerDatasetRoutes(
    * 1,000종목에서 stat 1,000회가 되고 그 목록은 5초마다 다시 읽힌다.
    */
   symbolsWithFacts: () => ReadonlySet<string>,
+  /** 현재 상장 단축코드 집합 — 조립부가 market-data 유니버스 서비스로 연결한다.
+   *  실패(미설정·승인만료·KRX 오류)는 여기서 삼키지 않고 그대로 던진다 — 라우트가
+   *  null 로 강등해 응답은 계속 낸다. */
+  currentShortCodes: () => Promise<ReadonlySet<string>>,
   requireAuth: PreHandler,
 ): void {
   /**
@@ -394,9 +398,32 @@ export function registerDatasetRoutes(
 
   // ── 데이터셋 (종목 참조 묶음) ───────────────────────────────────────
 
-  app.get('/datasets', { preHandler: requireAuth }, async () => ({
-    datasets: datasetService.listDatasets(),
-  }));
+  app.get('/datasets', { preHandler: requireAuth }, async (request) => {
+    const summaries = datasetService.listDatasets();
+    // 스냅샷 연결 데이터셋이 있을 때만 현재 목록을 조회한다 — 손으로 만든 데이터셋만
+    // 있으면 KRX 호출이 없어야 한다.
+    let listed: ReadonlySet<string> | null = null;
+    if (summaries.some((dataset) => dataset.universeSnapshot !== null)) {
+      try {
+        listed = await currentShortCodes();
+      } catch (error) {
+        // 판정 불가는 데이터셋 목록 실패가 아니다 — 전 종목 정상 취급 + 로그 (설계 §4)
+        request.log.warn(
+          { module: 'market-data', event: 'dataset.listing-check.failed', err: error },
+          'current listing lookup failed; skipping unlisted diff',
+        );
+      }
+    }
+    return {
+      datasets: summaries.map((dataset) => ({
+        ...dataset,
+        unlistedSymbols:
+          dataset.universeSnapshot !== null && listed !== null
+            ? dataset.symbols.filter((code) => !listed.has(code))
+            : null,
+      })),
+    };
+  });
 
   app.get('/datasets/:datasetId', { preHandler: requireAuth }, async (request, reply) => {
     const { datasetId } = request.params as { datasetId: string };

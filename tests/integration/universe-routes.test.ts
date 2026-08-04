@@ -4,6 +4,7 @@ import {
   universeSnapshots,
   universeSnapshotSymbols,
 } from '../../src/server/shared/db/schema.js';
+import { addCalendarDays, kstDateOf, kstHourOf } from '../../src/server/modules/market-data/domain/kst-date.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
 import {
   baseInfoFixture,
@@ -14,6 +15,40 @@ import {
 } from '../helpers/krx-fixtures.js';
 
 const isoToBasDd = (iso: string): string => iso.replaceAll('-', '');
+
+/**
+ * `HistoricalUniverseService.publishedThrough()` 를 그대로 복제한다 — 테스트가
+ * 시스템 clock(고정되지 않음)을 그대로 쓰므로 `currentStandardCodeMap` 이 맨 처음
+ * 조회하는 날짜를 실행 시점에 계산해야 한다.
+ */
+function currentListingBaseDate(): string {
+  const nowMs = Date.now();
+  const yesterday = addCalendarDays(kstDateOf(nowMs), -1);
+  return kstHourOf(nowMs) < 8 ? addCalendarDays(yesterday, -1) : yesterday;
+}
+
+/**
+ * 현시점(스냅샷 기준일과 무관한 「오늘」) 기본정보 — `currentShortCodes` 가 판정에
+ * 쓰는 상장 목록이다. KOSPI 는 005930 만, KOSDAQ 은 035720 과 무관한 다른 코드
+ * 한 건을 심는다 — 두 시장 다 비어 있지 않아야 탐색이 이 날짜에서 멈춘다
+ * (하나라도 비면 최대 31일 전까지 계속 뒤로 넘어간다).
+ */
+function seedCurrentListing(fake: KrxFakeServer): void {
+  const basDd = isoToBasDd(currentListingBaseDate());
+  fake.setResponse('stk_isu_base_info', basDd, {
+    body: krxEnvelope([baseInfoFixture({ ISU_CD: 'KR7005930003', ISU_SRT_CD: '005930' })]),
+  });
+  fake.setResponse('ksq_isu_base_info', basDd, {
+    body: krxEnvelope([
+      baseInfoFixture({
+        ISU_CD: 'KR7999999007',
+        ISU_SRT_CD: '999999',
+        ISU_NM: '더미종목',
+        MKT_TP_NM: 'KOSDAQ',
+      }),
+    ]),
+  });
+}
 
 /** 정상 거래일 하나를 KOSPI·KOSDAQ 양쪽에 채운다 — 기본정보 1건 + 일별 1건씩. */
 function seedTradingDay(fake: KrxFakeServer, iso: string): void {
@@ -338,6 +373,61 @@ describe('universe routes', () => {
       cookies: { qp_session: cookie }, payload: { date: '2025-01-06', sortBy: 'PER' },
     });
     expect(res.statusCode).toBe(400);
+  });
+
+  it('스냅샷이 만든 데이터셋은 목록에 기준 시점·정렬 기준·미상장 종목이 실린다', async () => {
+    const { app, fake, cookie } = await setupUniverse();
+    seedTradingDay(fake, '2025-01-06');
+    // 현재(publishedThrough 시점) 기본정보에는 005930 만 있다 → 035720 은 미상장 판정
+    seedCurrentListing(fake);
+
+    const preview = await app.app.inject({
+      method: 'POST', url: '/api/v1/universe/historical/preview',
+      cookies: { qp_session: cookie }, payload: { date: '2025-01-06' },
+    });
+    const { previewId, candidates } = preview.json();
+    await app.app.inject({
+      method: 'POST', url: '/api/v1/universe/snapshots',
+      cookies: { qp_session: cookie },
+      payload: {
+        previewId,
+        standardCodes: candidates.map((c: { standardCode: string }) => c.standardCode),
+        selectionMethod: 'MANUAL_FROM_KRX_SNAPSHOT',
+      },
+    });
+
+    const res = await app.app.inject({
+      method: 'GET', url: '/api/v1/datasets', cookies: { qp_session: cookie },
+    });
+    const dataset = res.json().datasets[0];
+    expect(dataset.universeSnapshot).toMatchObject({ effectiveTradingDate: '2025-01-06', sortKey: 'MKTCAP' });
+    expect(dataset.unlistedSymbols).toEqual(['035720']);
+  });
+
+  it('현재 목록 조회가 실패하면 unlistedSymbols 는 null 이고 응답은 200 이다', async () => {
+    const { app, fake, cookie } = await setupUniverse();
+    seedTradingDay(fake, '2025-01-06');
+    // 위와 같은 흐름이되 현재 날짜 기본정보를 심지 않아 currentShortCodes 가 실패한다
+    // (31일 탐색 실패 → HistoricalUniverseDateError). 응답은 그래도 200.
+
+    const preview = await app.app.inject({
+      method: 'POST', url: '/api/v1/universe/historical/preview',
+      cookies: { qp_session: cookie }, payload: { date: '2025-01-06' },
+    });
+    const { previewId, candidates } = preview.json();
+    await app.app.inject({
+      method: 'POST', url: '/api/v1/universe/snapshots',
+      cookies: { qp_session: cookie },
+      payload: {
+        previewId,
+        standardCodes: candidates.map((c: { standardCode: string }) => c.standardCode),
+        selectionMethod: 'MANUAL_FROM_KRX_SNAPSHOT',
+      },
+    });
+
+    const res = await app.app.inject({ method: 'GET', url: '/api/v1/datasets', cookies: { qp_session: cookie } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().datasets[0].unlistedSymbols).toBeNull();
   });
 
   it('미인증 요청은 전부 401 이다', async () => {

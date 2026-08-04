@@ -1,7 +1,12 @@
 import { createHash } from 'node:crypto';
 import { eq, inArray } from 'drizzle-orm';
 import type { AppDatabase } from '../../../shared/db/database.js';
-import { datasetSymbols, datasets, symbols as symbolsTable } from '../../../shared/db/schema.js';
+import {
+  datasetSymbols,
+  datasets,
+  symbols as symbolsTable,
+  universeSnapshots,
+} from '../../../shared/db/schema.js';
 import type { Clock } from '../../../shared/clock.js';
 import { newId } from '../../../shared/ids.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
@@ -36,6 +41,13 @@ export interface DatasetSummary {
   readonly description: string | null;
   readonly symbols: readonly string[];
   readonly createdAtMs: number;
+  /** KRX 스냅샷 확정이 만든 데이터셋이면 그 출처 — 기준 시점·정렬 기준 표시용.
+   *  손으로 만든 데이터셋은 null. */
+  readonly universeSnapshot: {
+    readonly snapshotId: string;
+    readonly effectiveTradingDate: string;
+    readonly sortKey: string;
+  } | null;
 }
 
 /** 실행이 소비한 (종목, 슬라이스, 버전, 해시) — §9.5 재현성 스냅샷의 한 칸 */
@@ -70,16 +82,49 @@ export class DatasetService {
       list.push(ref.code);
       byDataset.set(ref.datasetId, list);
     }
-    return rows.map((row) => this.toSummary(row, byDataset.get(row.id) ?? []));
+    // 스냅샷 연결 데이터셋만 모아 한 번에 조회한다 — 행마다 조회하면 목록이 커질수록
+    // N+1 이 된다.
+    const snapshotIds = rows
+      .map((row) => row.universeSnapshotId)
+      .filter((id): id is string => id !== null);
+    const snapshotById = new Map(
+      snapshotIds.length === 0
+        ? []
+        : this.db
+            .select()
+            .from(universeSnapshots)
+            .where(inArray(universeSnapshots.id, snapshotIds))
+            .all()
+            .map((row) => [row.id, row]),
+    );
+    return rows.map((row) =>
+      this.toSummary(
+        row,
+        byDataset.get(row.id) ?? [],
+        row.universeSnapshotId !== null ? snapshotById.get(row.universeSnapshotId) ?? null : null,
+      ),
+    );
   }
 
   getDataset(datasetId: string): DatasetSummary | null {
     const row = this.db.select().from(datasets).where(eq(datasets.id, datasetId)).get();
     if (!row) return null;
-    return this.toSummary(row, this.symbolsOf(datasetId));
+    const snapshotRow =
+      row.universeSnapshotId !== null
+        ? this.db
+            .select()
+            .from(universeSnapshots)
+            .where(eq(universeSnapshots.id, row.universeSnapshotId))
+            .get() ?? null
+        : null;
+    return this.toSummary(row, this.symbolsOf(datasetId), snapshotRow);
   }
 
-  private toSummary(row: typeof datasets.$inferSelect, codes: string[]): DatasetSummary {
+  private toSummary(
+    row: typeof datasets.$inferSelect,
+    codes: string[],
+    snapshotRow: typeof universeSnapshots.$inferSelect | null,
+  ): DatasetSummary {
     return {
       id: row.id,
       name: row.name,
@@ -87,6 +132,13 @@ export class DatasetService {
       // 정렬은 저장 순서가 아니라 조회 시점에 — 참조 테이블에 순서 개념이 없다
       symbols: [...codes].sort(),
       createdAtMs: row.createdAtMs,
+      universeSnapshot: snapshotRow
+        ? {
+            snapshotId: snapshotRow.id,
+            effectiveTradingDate: snapshotRow.effectiveTradingDate,
+            sortKey: snapshotRow.sortKey,
+          }
+        : null,
     };
   }
 
