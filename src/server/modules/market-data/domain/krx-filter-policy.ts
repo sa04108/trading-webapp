@@ -36,12 +36,10 @@ export function classifyKrxIssue(row: {
     case '부동산투자회사':
       return { kind: 'EXCLUDE', reason: 'REIT' };
     case '주식예탁증권':
-    // '주식예탁증권'의 과거 표기 — 2010~2015 실응답(950010 등)에서 확인 (v2)
-    case '주식예탁증서':
+    case '주식예탁증서': // '주식예탁증권'의 과거 표기 — 2010~2015 실응답(950010 등)에서 확인 (v2)
       return { kind: 'EXCLUDE', reason: 'DR' };
     case '수익증권':
-    // 뮤추얼펀드 — 2010~2015 실응답(094950 등)에서 확인 (v2)
-    case '투자회사':
+    case '투자회사': // 뮤추얼펀드 — 2010~2015 실응답(094950 등)에서 확인 (v2)
     case '선박투자회사':
     case '사회간접자본투융자회사':
       return { kind: 'EXCLUDE', reason: 'FUND_OR_TRUST' };
@@ -78,9 +76,7 @@ export function classifyKrxIssue(row: {
     case '구형우선주':
     case '신형우선주':
     case '우선주':
-    // 상법상 종류주식(전환우선주 등, 단축코드 K·L 계열) — 보통주가 아니므로 우선주와 같이 제외한다.
-    // 2026-07-01 실응답(37550K)에서 확인 (v2).
-    case '종류주권':
+    case '종류주권': // 상법상 종류주식(전환우선주 등, K·L 계열)도 보통주가 아니다 — 2026-07-01 실응답(37550K)에서 확인 (v2)
       return { kind: 'EXCLUDE', reason: 'PREFERRED_STOCK' };
     default:
       throw new UnknownKrxClassificationError(
