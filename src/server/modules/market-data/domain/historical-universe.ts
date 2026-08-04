@@ -5,6 +5,7 @@ import {
   type KrxMarket,
 } from './krx-universe-types.js';
 import { classifyKrxIssue, KRX_FILTER_POLICY_VERSION } from './krx-filter-policy.js';
+import type { UniverseSortKey } from '../../../../shared/schemas/universe-sort.js';
 
 export interface EligibleCandidate {
   readonly standardCode: string;
@@ -191,6 +192,68 @@ export function combineMarketSnapshots(args: {
     filterPolicyVersion: KRX_FILTER_POLICY_VERSION,
     contractVersion: KRX_CONTRACT_VERSION,
     canonicalPayload: canonicalPayloadOf(args.effectiveTradingDate, rankedCandidates),
+  };
+}
+
+export interface SortedUniverseCandidateSet extends UniverseCandidateSet {
+  readonly sortKey: UniverseSortKey;
+  readonly unknownSortValueCount: number;
+  /** standardCode → 정렬 값 문자열 (값 있는 후보만) */
+  readonly sortValues: ReadonlyMap<string, string>;
+}
+
+/**
+ * 후보 집합에 정렬 기준을 적용한다.
+ *
+ * MKTCAP 은 combineMarketSnapshots 가 이미 매긴 rank·payload 를 그대로 쓴다 — 기존
+ * 스냅샷의 candidateCanonicalHash·selectionHash 와 바이트 단위로 호환돼야 한다.
+ * 다른 정렬은 rank 를 다시 매기고 payload 에 정렬 구획을 덧붙인다 — 같은 후보
+ * 집합이라도 정렬 기준·값이 다르면 재현 해시가 달라야 한다.
+ */
+export function applySortKey(
+  set: UniverseCandidateSet,
+  sortKey: UniverseSortKey,
+  /** OPERATING_INCOME 일 때 필수 — shortCode → TTM 영업이익(원) */
+  operatingIncomeByShortCode?: ReadonlyMap<string, number>,
+): SortedUniverseCandidateSet {
+  if (sortKey === 'MKTCAP') {
+    const sortValues = new Map<string, string>();
+    for (const candidate of set.candidates) {
+      if (candidate.marketCapKrw !== null) {
+        sortValues.set(candidate.standardCode, candidate.marketCapKrw.toString());
+      }
+    }
+    return { ...set, sortKey, unknownSortValueCount: set.unknownMarketCapCount, sortValues };
+  }
+
+  const values = operatingIncomeByShortCode ?? new Map<string, number>();
+  const known = set.candidates
+    .filter((candidate) => values.has(candidate.shortCode))
+    .sort((left, right) => {
+      const diff = (values.get(right.shortCode) as number) - (values.get(left.shortCode) as number);
+      return diff !== 0 ? Math.sign(diff) : compareCandidateIdentity(left, right);
+    })
+    .map((candidate, index) => ({ ...candidate, rank: index + 1 }));
+  const unknown = set.candidates
+    .filter((candidate) => !values.has(candidate.shortCode))
+    .sort(compareCandidateIdentity)
+    .map((candidate) => ({ ...candidate, rank: null }));
+  const candidates = [...known, ...unknown];
+
+  const sortValues = new Map<string, string>();
+  for (const candidate of known) {
+    sortValues.set(candidate.standardCode, String(values.get(candidate.shortCode)));
+  }
+  const sortLines = known.map(
+    (candidate) => `${candidate.standardCode}|${sortValues.get(candidate.standardCode)}`,
+  );
+  return {
+    ...set,
+    candidates,
+    sortKey,
+    unknownSortValueCount: unknown.length,
+    sortValues,
+    canonicalPayload: [set.canonicalPayload, '--sort--', sortKey, ...sortLines].join('\n'),
   };
 }
 

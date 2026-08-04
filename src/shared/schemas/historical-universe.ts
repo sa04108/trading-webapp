@@ -1,3 +1,5 @@
+import type { UniverseSortKey } from './universe-sort.js';
+
 /**
  * KRX 과거 시점 고정 유니버스 — 웹과 서버가 공유하는 DTO.
  *
@@ -15,6 +17,8 @@ export interface HistoricalCandidateDto {
   readonly name: string;
   readonly market: 'KOSPI' | 'KOSDAQ';
   readonly marketCapKrw: string | null;
+  /** 활성 정렬 기준의 값 — MKTCAP 이면 marketCapKrw 와 같고, 영업이익이면 원 단위 문자열. 값이 없으면 null */
+  readonly sortValue: string | null;
   readonly rank: number | null;
 }
 
@@ -28,6 +32,9 @@ export interface HistoricalUniversePreviewDto {
   readonly rawCounts: Readonly<Record<string, number>>;
   readonly eligibleCount: number;
   readonly unknownMarketCapCount: number;
+  readonly sortBy: UniverseSortKey;
+  /** 활성 정렬 기준 값이 없어 rank 를 받지 못한 후보 수 */
+  readonly unknownSortValueCount: number;
   readonly excludedByType: Readonly<Record<string, number>>;
   /** 데이터 출처 표시 — 화면이 그대로 보여준다. */
   readonly attribution: '한국거래소 통계정보';
@@ -46,6 +53,7 @@ export interface UniverseSnapshotSummaryDto {
   readonly requestedDate: string;
   readonly effectiveTradingDate: string;
   readonly usableFromDate: string;
+  readonly sortKey: UniverseSortKey;
   readonly selectionMethod: 'TOP_MARKET_CAP_N' | 'MANUAL_FROM_KRX_SNAPSHOT';
   readonly selectionN: number | null;
   readonly selectedCount: number;
