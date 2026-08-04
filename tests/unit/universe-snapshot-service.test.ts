@@ -61,6 +61,10 @@ function previewOf(
       item.marketCapKrw?.toString() ?? 'unknown',
     ].join('|')),
   ].join('\n');
+  const sortValues = new Map<string, string>();
+  for (const item of candidates) {
+    if (item.marketCapKrw !== null) sortValues.set(item.standardCode, item.marketCapKrw.toString());
+  }
   return {
     previewId: 'uvp_test',
     requestedDate: '2025-01-04',
@@ -78,6 +82,9 @@ function previewOf(
       filterPolicyVersion: 'krx-common-stock-v1',
       contractVersion: 'v1',
       canonicalPayload,
+      sortKey: 'MKTCAP',
+      unknownSortValueCount: candidates.filter((item) => item.marketCapKrw === null).length,
+      sortValues,
     },
     fetchedAtMs: 10,
   };

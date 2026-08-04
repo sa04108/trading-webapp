@@ -47,6 +47,7 @@ import { SqliteFactCoverageStore } from '../modules/facts/application/fact-cover
 import { FactSyncService } from '../modules/facts/application/fact-sync-service.js';
 import { createDartFactSource } from '../modules/facts/infrastructure/dart/dart-fact-source.js';
 import { ParquetFactRepository } from '../modules/facts/infrastructure/parquet-fact-repository.js';
+import { OperatingIncomeSortSource } from '../modules/facts/application/operating-income-sort-source.js';
 import { HistoricalUniverseService } from '../modules/market-data/application/historical-universe-service.js';
 import { UniverseSnapshotService } from '../modules/market-data/application/universe-snapshot-service.js';
 import { createKrxHistoricalUniverseSource } from '../modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
@@ -289,6 +290,7 @@ export function createContainer(config: AppConfig): Container {
     source: krxSource,
     configured: config.krxApiKey !== null,
     approvalExpiry: config.krxApprovalExpiry,
+    sortValueSource: new OperatingIncomeSortSource(factRepository),
     clock,
     logger,
   });

@@ -168,7 +168,8 @@ export function registerUniverseRoutes(
       return reply.code(400).send({ error: 'date 필드가 YYYY-MM-DD 형식이어야 합니다' });
     }
     try {
-      const preview = await historicalUniverseService.preview(parsed.data.date);
+      // TODO(task-6): zod sortBy 를 요청 스키마에 추가하면 하드코딩된 'MKTCAP' 을 대체한다.
+      const preview = await historicalUniverseService.preview(parsed.data.date, 'MKTCAP');
       return previewDto(preview);
     } catch (error) {
       const mapped = mapKnownError(request, error);
