@@ -295,6 +295,51 @@ describe('universe routes', () => {
     expect(missing.statusCode).toBe(404);
   });
 
+  it('sortBy 를 생략하면 MKTCAP 이고 응답에 정렬 메타가 실린다', async () => {
+    const { app, fake, cookie } = await setupUniverse();
+    seedTradingDay(fake, '2025-01-06');
+    const res = await app.app.inject({
+      method: 'POST', url: '/api/v1/universe/historical/preview',
+      cookies: { qp_session: cookie }, payload: { date: '2025-01-06' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ sortBy: 'MKTCAP', unknownSortValueCount: 0 });
+    expect(res.json().candidates[0].sortValue).toBe(res.json().candidates[0].marketCapKrw);
+  });
+
+  it('sortBy=OPERATING_INCOME 은 TTM 영업이익 순으로 rank 를 낸다', async () => {
+    const { app, fake, cookie } = await setupUniverse();
+    seedTradingDay(fake, '2025-01-06'); // 005930(시총 350조), 035720(시총 20조)
+    const asOf = Date.parse('2024-06-01T00:00:00Z');
+    const oi = (key: string, periodKey: string, value: number) =>
+      ({ scope: 'SYMBOL' as const, key, field: 'OPERATING_INCOME', periodKey, asOfTsMs: asOf, value, unit: 'KRW' });
+    // 카카오만 4분기 채운다 — 삼성전자는 값 없음 → 뒤로 밀린다
+    await app.container.factRepository.saveFacts([
+      oi('035720', '2023Q2', 100), oi('035720', '2023Q3', 100),
+      oi('035720', '2023Q4', 100), oi('035720', '2024Q1', 100),
+    ]);
+    const res = await app.app.inject({
+      method: 'POST', url: '/api/v1/universe/historical/preview',
+      cookies: { qp_session: cookie }, payload: { date: '2025-01-06', sortBy: 'OPERATING_INCOME' },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.sortBy).toBe('OPERATING_INCOME');
+    expect(body.candidates[0]).toMatchObject({ shortCode: '035720', rank: 1, sortValue: '400' });
+    expect(body.candidates[1]).toMatchObject({ shortCode: '005930', rank: null, sortValue: null });
+    expect(body.unknownSortValueCount).toBe(1);
+  });
+
+  it('허용되지 않는 sortBy 는 400 이다', async () => {
+    const { app, fake, cookie } = await setupUniverse();
+    seedTradingDay(fake, '2025-01-06');
+    const res = await app.app.inject({
+      method: 'POST', url: '/api/v1/universe/historical/preview',
+      cookies: { qp_session: cookie }, payload: { date: '2025-01-06', sortBy: 'PER' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
   it('미인증 요청은 전부 401 이다', async () => {
     const { app } = await setupUniverse();
 
