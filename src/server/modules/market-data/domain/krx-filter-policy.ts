@@ -36,8 +36,12 @@ export function classifyKrxIssue(row: {
     case '부동산투자회사':
       return { kind: 'EXCLUDE', reason: 'REIT' };
     case '주식예탁증권':
+    // '주식예탁증권'의 과거 표기 — 2010~2015 실응답(950010 등)에서 확인 (v2)
+    case '주식예탁증서':
       return { kind: 'EXCLUDE', reason: 'DR' };
     case '수익증권':
+    // 뮤추얼펀드 — 2010~2015 실응답(094950 등)에서 확인 (v2)
+    case '투자회사':
     case '선박투자회사':
     case '사회간접자본투융자회사':
       return { kind: 'EXCLUDE', reason: 'FUND_OR_TRUST' };

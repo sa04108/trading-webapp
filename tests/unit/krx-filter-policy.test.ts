@@ -32,7 +32,9 @@ describe('KRX 보통주 필터 정책 v2', () => {
   it.each([
     ['부동산투자회사', 'REIT'],
     ['주식예탁증권', 'DR'],
+    ['주식예탁증서', 'DR'],
     ['수익증권', 'FUND_OR_TRUST'],
+    ['투자회사', 'FUND_OR_TRUST'],
     ['선박투자회사', 'FUND_OR_TRUST'],
     ['사회간접자본투융자회사', 'FUND_OR_TRUST'],
     ['신주인수권증권', 'NON_STOCK_SECURITY'],
