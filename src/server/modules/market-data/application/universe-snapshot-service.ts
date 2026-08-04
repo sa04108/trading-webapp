@@ -4,12 +4,15 @@ import type { AuditLogService } from '../../audit/audit-service.js';
 import type { Clock } from '../../../shared/clock.js';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import {
+  datasets,
+  datasetSymbols,
   symbols,
   universeSnapshots,
   universeSnapshotSymbols,
 } from '../../../shared/db/schema.js';
 import { newId } from '../../../shared/ids.js';
 import type { Logger } from '../../../shared/logger.js';
+import { UNIVERSE_SORT_LABELS, type UniverseSortKey } from '../../../../shared/schemas/universe-sort.js';
 import {
   selectionPayloadOf,
   type EligibleCandidate,
@@ -52,6 +55,8 @@ export interface UniverseSnapshotSummary {
   readonly selectedCount: number;
   readonly unknownMarketCapCount: number;
   readonly createdAtMs: number;
+  /** 스냅샷이 사용한 정렬 기준 — TOP_MARKET_CAP_N 재확정 가능 여부 판단에도 쓴다 */
+  readonly sortKey: UniverseSortKey;
   /** 백테스트 provenance pin 조립용 (Task 12) — 필터 정책 버전 */
   readonly filterPolicyVersion: string;
   /** 백테스트 provenance pin 조립용 (Task 12) — 선택 종목 집합의 재현 해시 */
@@ -129,6 +134,7 @@ export class UniverseSnapshotService {
       .update(selectionPayloadOf(preview.set.canonicalPayload, args.selectedStandardCodes))
       .digest('hex');
     let snapshotId = '';
+    let datasetId = '';
 
     try {
       this.deps.db.transaction((tx) => {
@@ -172,7 +178,7 @@ export class UniverseSnapshotService {
           marketsJson: JSON.stringify(['KOSPI', 'KOSDAQ']),
           filterPolicyVersion: preview.set.filterPolicyVersion,
           contractVersion: preview.set.contractVersion,
-          sortKey: 'MKTCAP',
+          sortKey: preview.set.sortKey,
           sortDirection: 'DESC',
           selectionMethod: args.selectionMethod,
           selectionN: args.selectionN,
@@ -197,6 +203,34 @@ export class UniverseSnapshotService {
           rank: candidate.rank,
           instrumentType: 'COMMON_STOCK',
         }))).run();
+
+        // 스냅샷은 위저드 밖에서 보이지 않는다 — 같은 구성을 데이터 화면에서도 쓰도록
+        // 데이터셋으로 함께 기록한다. 같은 트랜잭션이어야 「스냅샷은 있는데 데이터셋이
+        // 없다」는 어중간한 상태가 없다 (설계 §3).
+        const baseName =
+          `KRX ${preview.effectiveTradingDate} ` +
+          `${UNIVERSE_SORT_LABELS[preview.set.sortKey]}순 ${selected.length}종목`;
+        let datasetName = baseName;
+        for (
+          let suffix = 2;
+          tx.select().from(datasets).where(eq(datasets.name, datasetName)).get() !== undefined;
+          suffix += 1
+        ) {
+          datasetName = `${baseName} (${suffix})`;
+        }
+        datasetId = newId('ds');
+        tx.insert(datasets).values({
+          id: datasetId,
+          name: datasetName,
+          description: null,
+          universeSnapshotId: snapshotId,
+          createdAtMs,
+          updatedAtMs: createdAtMs,
+        }).run();
+        const shortCodes = [...new Set(selected.map((candidate) => candidate.shortCode))].sort();
+        for (const code of shortCodes) {
+          tx.insert(datasetSymbols).values({ datasetId, code }).run();
+        }
       });
     } catch (error) {
       if (error instanceof SymbolIdentityConflictError) throw error;
@@ -209,6 +243,7 @@ export class UniverseSnapshotService {
     try {
       this.deps.audit.record('system', 'universe.snapshot.created', {
         snapshotId,
+        datasetId,
         effectiveTradingDate: preview.effectiveTradingDate,
         selectedCount: selected.length,
         selectionMethod: args.selectionMethod,
@@ -302,6 +337,11 @@ export class UniverseSnapshotService {
         throw new SnapshotSelectionError('수동 선택의 selectionN은 null이어야 합니다.');
       }
     } else {
+      if (preview.set.sortKey !== 'MKTCAP') {
+        throw new SnapshotSelectionError(
+          '시가총액 상위 N 선택은 시가총액 정렬 미리보기에서만 쓸 수 있습니다.',
+        );
+      }
       if (!Number.isInteger(args.selectionN) || args.selectionN === null || args.selectionN < 1) {
         throw new SnapshotSelectionError('상위 N 선택에는 1 이상의 정수 selectionN이 필요합니다.');
       }
@@ -393,6 +433,7 @@ export class UniverseSnapshotService {
       selectedCount: row.selectedCount,
       unknownMarketCapCount: row.unknownMarketCapCount,
       createdAtMs: row.createdAtMs,
+      sortKey: row.sortKey as UniverseSortKey,
       filterPolicyVersion: row.filterPolicyVersion,
       selectionHash: row.selectionHash,
     };

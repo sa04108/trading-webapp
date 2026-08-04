@@ -92,6 +92,7 @@ function summaryDto(summary: UniverseSnapshotSummary): UniverseSnapshotSummaryDt
     selectedCount: summary.selectedCount,
     unknownMarketCapCount: summary.unknownMarketCapCount,
     createdAtMs: summary.createdAtMs,
+    sortKey: summary.sortKey,
   };
 }
 
