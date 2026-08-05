@@ -6,6 +6,7 @@ import {
   symbolMasterCheckpoints,
   symbolMasterCoverage,
   symbolMasterEvents,
+  symbolMasterMarketCaps,
 } from '../../../shared/db/schema.js';
 import { newId } from '../../../shared/ids.js';
 import type { Logger } from '../../../shared/logger.js';
@@ -275,6 +276,85 @@ export class SymbolMasterService {
     // (date, cp.checkpointDate] 구간을 역방향으로 적용한다
     const events = this.eventsBetween(date, cp.checkpointDate);
     return applyEventsBackward(base, events);
+  }
+
+  /**
+   * date 의 시총 맵 (standardCode → marketCapKrw 문자열). 캐시 테이블에 해당 date
+   * 행이 있으면 KRX 를 부르지 않고 그대로 반환한다. 미스면 getUniverseAsOf 로
+   * shortCode→standardCode 매핑부터 얻는다 — 커버 밖 날짜는 여기서 바로
+   * SymbolMasterNotCoveredError 로 끝나 KOSPI·KOSDAQ 조회를 헛되이 하지 않는다.
+   */
+  async getMarketCapsAt(date: string): Promise<ReadonlyMap<string, string>> {
+    const cached = this.readCachedMarketCaps(date);
+    if (cached !== undefined) return cached;
+
+    const universe = this.getUniverseAsOf(date);
+    const standardCodeByShortCode = new Map<string, string>();
+    for (const entry of universe.values()) {
+      standardCodeByShortCode.set(entry.shortCode, entry.standardCode);
+    }
+
+    const kospiTrades = await this.deps.source.fetchDailyTrades('KOSPI', date);
+    const kosdaqTrades = await this.deps.source.fetchDailyTrades('KOSDAQ', date);
+
+    const marketCaps = new Map<string, string>();
+    for (const row of [...kospiTrades, ...kosdaqTrades]) {
+      // 시총을 모르는 행은 순위에 쓸 수 없으니 캐시에도 담지 않는다.
+      if (row.marketCapRaw === null) continue;
+
+      const standardCode = standardCodeByShortCode.get(row.shortCode);
+      if (standardCode === undefined) {
+        // 마스터가 모르는 단축코드다 — 분류 정책 밖 종목 등으로 생길 수 있어 건너뛰고 경고만 남긴다.
+        this.deps.logger.warn(
+          {
+            module: 'market-data',
+            event: 'symbol-master.market-cap-unknown-short-code',
+            date,
+            shortCode: row.shortCode,
+          },
+          '시총 조회 중 마스터에 없는 단축코드를 건너뛴다',
+        );
+        continue;
+      }
+      marketCaps.set(standardCode, row.marketCapRaw);
+    }
+
+    this.deps.db.transaction((tx) => this.writeMarketCaps(tx, date, marketCaps));
+    return marketCaps;
+  }
+
+  /**
+   * date 캐시 행이 하나라도 있으면 히트로 본다. 휴장일 등으로 결과가 0건인 날은
+   * 매번 KRX 를 재조회하게 되지만, 그런 날짜는 애초에 커버 밖으로 걸러지는 경우가
+   * 대부분이라 수용한다.
+   */
+  private readCachedMarketCaps(date: string): ReadonlyMap<string, string> | undefined {
+    const rows = this.deps.db
+      .select({
+        standardCode: symbolMasterMarketCaps.standardCode,
+        marketCapKrw: symbolMasterMarketCaps.marketCapKrw,
+      })
+      .from(symbolMasterMarketCaps)
+      .where(eq(symbolMasterMarketCaps.date, date))
+      .all();
+    if (rows.length === 0) return undefined;
+    return new Map(rows.map((row) => [row.standardCode, row.marketCapKrw]));
+  }
+
+  /** SQLite 바인딩 변수 한도(999)를 피하려 500개 단위로 나눠 넣는다 — writeCheckpoint 와 같은 이유다 */
+  private writeMarketCaps(
+    tx: AppDatabase,
+    date: string,
+    marketCaps: ReadonlyMap<string, string>,
+  ): void {
+    const rows = [...marketCaps.entries()].map(([standardCode, marketCapKrw]) => ({
+      date,
+      standardCode,
+      marketCapKrw,
+    }));
+    for (let i = 0; i < rows.length; i += 500) {
+      tx.insert(symbolMasterMarketCaps).values(rows.slice(i, i + 500)).run();
+    }
   }
 
   /** 수집 완료 구간 목록 — startDate 오름차순 */
