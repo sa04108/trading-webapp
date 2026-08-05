@@ -89,7 +89,6 @@ export async function buildServer(container: Container): Promise<FastifyInstance
           dataRoot: container.config.dataRoot,
           maxQueuedBacktests: container.config.maxQueuedBacktests,
           clock: container.clock,
-          krxApprovalExpiry: container.config.krxApprovalExpiry,
         },
         requireAuth,
       );

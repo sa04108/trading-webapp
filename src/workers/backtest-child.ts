@@ -152,12 +152,11 @@ async function main(): Promise<void> {
         }, new Map<string, typeof symbolVersions.$inferSelect>()),
     );
     const datasetWarnings: string[] = [];
-    // 서버가 제출 시점에 조립한 pin(Task 12) — 데이터셋 경로의 시점 불명 경고는
-    // 여기서 실행 경고로 옮긴다. run 에는 원문 그대로 복사한다(아래 provenancePinJson).
+    // 서버가 제출 시점에 조립한 pin(Task 12) — scheduleHash 를 재현성 기록에 쓴다.
+    // run 에는 원문 그대로 복사한다(아래 provenancePinJson).
     const pin: ProvenancePin | null = job.provenancePinJson
       ? (JSON.parse(job.provenancePinJson) as ProvenancePin)
       : null;
-    if (pin?.timepointWarning) datasetWarnings.push(pin.timepointWarning);
     const drifted = pinnedEntries.filter((entry) => {
       const current = currentVersions.get(`${entry.code}:${entry.slice}`);
       return (current?.version ?? 0) !== entry.version;

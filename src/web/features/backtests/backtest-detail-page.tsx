@@ -83,11 +83,7 @@ import { isTerminal, type BacktestMetrics, type JobSummary, type RunMetadata } f
 import { costSummary } from './cost-summary';
 import { costProfileLabel, slippageProfileLabel } from './profile-labels';
 import { groupWarnings } from './warning-groups';
-import {
-  provenanceNotice,
-  selectionMethodLabel,
-  universeSourceLabel,
-} from './universe-provenance';
+import { selectionMethodLabel, universeSourceLabel } from './universe-provenance';
 import type { ProvenancePin } from '../../../shared/schemas/provenance-pin.js';
 
 function MetricCards({ metrics }: { metrics: BacktestMetrics }) {
@@ -495,7 +491,6 @@ function RunMetadataCard({
     // 잡은 더 이상 datasetId 를 갖지 않는다(스펙 2026-08-05) — 유니버스 출처는
     // provenancePin 에서만 읽는다 (Task 14).
     ['유니버스 출처', universeSourceLabel(provenancePin)],
-    ['적용 거래일', provenancePin?.effectiveTradingDate ?? '-'],
     ['선정 방식', selectionMethodLabel(provenancePin?.selectionMethod ?? null)],
     ['봉 주기', timeframe ? timeframeLabel(timeframe) : '-'],
     ['유니버스 해시', run.universeHash.slice(0, 16)],
@@ -559,33 +554,6 @@ function RunMetadataCard({
       </Card>
       {warnings.length > 0 ? <WarningsSection warnings={warnings} /> : null}
     </div>
-  );
-}
-
-/**
- * 재현 정보 카드 위 안내문 (Task 14, REVIEW §9.3) — 이 실행이 어느 시점의 유니버스로
- * 돌았는지, 그 유니버스가 과거 시점 적합성을 보증하는지를 카드보다 먼저 문장으로 알린다.
- * pin 이 없거나(구버전 잡) 문구가 없으면 아무것도 그리지 않는다.
- */
-function UniverseProvenanceNotice({ pin }: { pin: ProvenancePin | null }) {
-  const notice = provenanceNotice(pin);
-  if (notice.badges.length === 0 && notice.sentence === null && notice.warning === null) {
-    return null;
-  }
-  return (
-    <Alert>
-      <AlertDescription className="space-y-2">
-        {notice.badges.length > 0 ? (
-          <div className="flex flex-wrap gap-1">
-            {notice.badges.map((badge) => (
-              <Badge key={badge}>{badge}</Badge>
-            ))}
-          </div>
-        ) : null}
-        {notice.sentence ? <p>{notice.sentence}</p> : null}
-        {notice.warning ? <p>{notice.warning}</p> : null}
-      </AlertDescription>
-    </Alert>
   );
 }
 
@@ -855,7 +823,6 @@ export function BacktestDetailPage() {
 
       {run ? (
         <>
-          <UniverseProvenanceNotice pin={provenancePin} />
           <RunMetadataCard
             run={run}
             job={job}

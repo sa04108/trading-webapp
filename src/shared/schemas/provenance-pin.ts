@@ -8,33 +8,20 @@
  * 일정이기 때문이다. 데이터셋(`DATASET`)·손으로 고정한 KRX 스냅샷(`KRX_HISTORICAL`)
  * 경로는 데이터셋·스냅샷 개념 전체와 함께 제거됐다(T6) — 마이그레이션이 기존
  * 백테스트 데이터를 지우므로 옛 kind 가 다시 나올 일은 없다.
+ *
+ * 옛 KRX 스냅샷·데이터셋 경로 전용 필드(`universeSnapshotId`·`requestedDate`·
+ * `effectiveTradingDate`·`usableFromDate`·`selectionHash`·`krxApprovalExpiryDate`·
+ * `approvalValidAtSubmit`·`timepointWarning`·`symbols`)는 `SYMBOL_MASTER` 경로에서
+ * 항상 null 이던 죽은 필드라 T6 최종 리뷰에서 함께 제거했다 — 값을 채우던 경로 자체가
+ * 없어졌으므로 부활할 일이 없다.
  */
 export interface ProvenancePin {
   readonly sourceKind: 'SYMBOL_MASTER';
-  readonly universeSnapshotId: string | null;
-  readonly requestedDate: string | null;
-  readonly effectiveTradingDate: string | null;
-  readonly usableFromDate: string | null;
   readonly filterPolicyVersion: string | null;
   readonly selectionMethod: string | null;
-  readonly selectionHash: string | null;
-  readonly krxApprovalExpiryDate: string | null;
-  readonly approvalValidAtSubmit: boolean | null;
-  /** 시점 적합성 경고 등 — null 이면 없음. `SYMBOL_MASTER` 경로는 항상 null 이다 */
-  readonly timepointWarning: string | null;
-  /** 구 KRX 스냅샷 경로 전용 필드 — `SYMBOL_MASTER` 경로는 항상 null 이다 */
-  readonly symbols: ReadonlyArray<{
-    readonly standardCode: string;
-    readonly shortCode: string;
-    readonly name: string;
-    readonly market: string;
-    readonly marketCapKrw: string | null;
-    readonly rank: number | null;
-  }> | null;
   /**
-   * 멤버십 일정의 집계 해시 (`UniverseRuleResolver.resolve` 의 `scheduleHash`) —
-   * `SYMBOL_MASTER` 경로 전용. 리밸런스 날짜별 종목 구성이 제출 시점과 같았는지
-   * 재현성 검사에 쓴다.
+   * 멤버십 일정의 집계 해시 (`UniverseRuleResolver.resolve` 의 `scheduleHash`).
+   * 리밸런스 날짜별 종목 구성이 제출 시점과 같았는지 재현성 검사에 쓴다.
    */
   readonly scheduleHash: string | null;
 }

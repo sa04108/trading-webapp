@@ -60,8 +60,6 @@ export interface BacktestRouteDeps {
   readonly dataRoot: string;
   readonly maxQueuedBacktests: number;
   readonly clock: Clock;
-  /** KRX 이용 승인 만료일 — 스냅샷 기반 신규 제출 게이트 (REVIEW §10) */
-  readonly krxApprovalExpiry: string | null;
 }
 
 const MIN_FREE_DISK_BYTES = 500 * 1024 * 1024;
@@ -403,17 +401,8 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     // ④ provenancePin — 유니버스 규칙 경로(스펙 2026-08-05)는 늘 이 모양이다.
     const provenancePin: ProvenancePin = {
       sourceKind: 'SYMBOL_MASTER',
-      universeSnapshotId: null,
-      requestedDate: null,
-      effectiveTradingDate: null,
-      usableFromDate: null,
       filterPolicyVersion: KRX_FILTER_POLICY_VERSION,
       selectionMethod: 'TOP_MARKET_CAP_N',
-      selectionHash: null,
-      krxApprovalExpiryDate: null,
-      approvalValidAtSubmit: null,
-      timepointWarning: null,
-      symbols: null,
       scheduleHash: resolved.scheduleHash,
     };
 

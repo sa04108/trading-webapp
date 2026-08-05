@@ -7,29 +7,23 @@ import type { ProvenancePin } from '../../../shared/schemas/provenance-pin.js';
 /**
  * 백테스트 결과 화면에 쓰는 유니버스 출처 문구 (Task 14, REVIEW §9.3).
  *
- * `provenanceNotice` 는 **제출된 잡의 `ProvenancePin`** 을 입력으로 삼는다. pin 은
- * 제출 시점에 서버가 조립해 저장하는 값이라(Task 12) 아직 제출하지 않은 위저드 검토
- * 단계에는 존재하지 않는다 — 그래서 이 함수는 결과 화면 전용이고, 위저드 검토 단계는
- * 이 함수를 호출하지 않는다.
+ * 아래 함수는 **제출된 잡의 `ProvenancePin`** 을 입력으로 삼는다. pin 은 제출
+ * 시점에 서버가 조립해 저장하는 값이라(Task 12) 아직 제출하지 않은 위저드 검토
+ * 단계에는 존재하지 않는다 — 그래서 이 함수들은 결과 화면 전용이고, 위저드 검토
+ * 단계는 호출하지 않는다.
  *
  * 손으로 고정한 KRX 스냅샷·데이터셋 경로(옛 `sourceKind: 'KRX_HISTORICAL' | 'DATASET'`)는
  * 데이터셋·스냅샷 개념 전체와 함께 제거됐다(T6, 스펙 2026-08-05) — 지금 서버가 만드는
- * pin 은 늘 `SYMBOL_MASTER` 다. 그래서 이 함수는 더 이상 출처별로 분기하지 않는다.
+ * pin 은 늘 `SYMBOL_MASTER` 다. 그래서 이 함수들은 출처별로 분기하지 않는다.
  *
  * "생존자 편향 제거"라는 문구는 어디에도 쓰지 않는다 — 이 기능이 해결하지 않는 항목
  * (신규 상장·상장폐지 반영, 거래정지 구분, 상장폐지 처리, 과거 지수 구성원 복원)이
  * 남아 있어 "제거 완료"라고 말하면 사실과 어긋난다 (REVIEW §9.3).
+ *
+ * 시점 적합성 경고(`timepointWarning`)를 실을 `provenanceNotice` 는 T6 최종 리뷰에서
+ * 제거했다 — `SYMBOL_MASTER` 경로는 그 필드를 채운 적이 없어 늘 빈 배지·문장·경고만
+ * 반환하는 죽은 함수였다.
  */
-export interface ProvenanceNotice {
-  readonly badges: readonly string[];
-  readonly sentence: string | null;
-  readonly warning: string | null;
-}
-
-export function provenanceNotice(pin: ProvenancePin | null): ProvenanceNotice {
-  if (pin === null) return { badges: [], sentence: null, warning: null };
-  return { badges: [], sentence: null, warning: pin.timepointWarning };
-}
 
 /** RunMetadataCard 「유니버스 출처」행 값. */
 export function universeSourceLabel(pin: ProvenancePin | null): string {
