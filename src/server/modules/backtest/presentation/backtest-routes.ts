@@ -25,6 +25,7 @@ import type {
 } from '../../market-data/application/dataset-service.js';
 import type { SymbolService } from '../../market-data/application/symbol-service.js';
 import type { UniverseSnapshotService } from '../../market-data/application/universe-snapshot-service.js';
+import { KrxNotConfiguredError, KrxQuotaError } from '../../market-data/application/ports.js';
 import { KRX_FILTER_POLICY_VERSION } from '../../market-data/domain/krx-filter-policy.js';
 import {
   sliceForTimeframe,
@@ -140,6 +141,25 @@ async function checkResources(dataRoot: string): Promise<string | null> {
     // statfs 실패 시 가드를 건너뛴다
   }
   return null;
+}
+
+/**
+ * `UniverseRuleResolver.resolve` (제출 검증·미리보기 공용)는 시총 캐시 미스일 때 KRX 를
+ * 부른다 — `symbol-master-routes.ts` 의 `/symbol-master/sync`·`/backfill` 과 같은
+ * 호출부다. 같은 관례로 매핑한다: 쿼터 초과는 429(사용자가 기다리면 되는 문제), 미설정은
+ * 503(운영이 키를 넣어야 하는 문제). 나머지 오류(분류 불가 등)는 처리하지 않고 그대로
+ * 위로 던져 기본 오류 처리기(500)가 받게 한다.
+ */
+function sendIfKrxError(reply: FastifyReply, error: unknown): boolean {
+  if (error instanceof KrxQuotaError) {
+    reply.code(429).send({ error: error.message });
+    return true;
+  }
+  if (error instanceof KrxNotConfiguredError) {
+    reply.code(503).send({ error: error.message });
+    return true;
+  }
+  return false;
 }
 
 export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRouteDeps, requireAuth: PreHandler): void {
@@ -527,14 +547,19 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     }
 
     const rebalanceDates = computeRebalanceDates(period, rebalanceMonths);
-    const resolved = await universeRuleResolver.resolve(universeRule, rebalanceDates);
-    return {
-      schedule: resolved.schedule,
-      unionSymbols: resolved.unionSymbols,
-      scheduleHash: resolved.scheduleHash,
-      uncoveredDates: resolved.uncoveredDates,
-      missingCandleSymbols: missingCandleSymbolsOf(resolved.unionSymbols),
-    };
+    try {
+      const resolved = await universeRuleResolver.resolve(universeRule, rebalanceDates);
+      return {
+        schedule: resolved.schedule,
+        unionSymbols: resolved.unionSymbols,
+        scheduleHash: resolved.scheduleHash,
+        uncoveredDates: resolved.uncoveredDates,
+        missingCandleSymbols: missingCandleSymbolsOf(resolved.unionSymbols),
+      };
+    } catch (error) {
+      if (sendIfKrxError(reply, error)) return reply;
+      throw error;
+    }
   });
 
   app.post('/backtests', { preHandler: requireAuth }, async (request, reply) => {
@@ -546,7 +571,13 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     }
     const body = parsed.data;
 
-    const validated = await validateSubmission(body);
+    let validated: Awaited<ReturnType<typeof validateSubmission>>;
+    try {
+      validated = await validateSubmission(body);
+    } catch (error) {
+      if (sendIfKrxError(reply, error)) return reply;
+      throw error;
+    }
     if (!validated.ok) {
       return reply.code(validated.status).send({
         error: validated.errors[0] ?? '제출을 검증할 수 없습니다',
@@ -644,7 +675,13 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
     const cloneRequest = rebased.request;
     // 재기준 후에도 새 제출이다 — POST 와 동일한 검증 관문을 거치고 버전을 다시 고정한다.
-    const validated = await validateSubmission(cloneRequest);
+    let validated: Awaited<ReturnType<typeof validateSubmission>>;
+    try {
+      validated = await validateSubmission(cloneRequest);
+    } catch (error) {
+      if (sendIfKrxError(reply, error)) return reply;
+      throw error;
+    }
     if (!validated.ok) {
       return reply.code(validated.status).send({
         error: validated.errors[0] ?? '제출을 검증할 수 없습니다',
@@ -699,11 +736,19 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     );
     if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
 
-    const validated = await validateSubmission(rebased.request);
+    let validated: Awaited<ReturnType<typeof validateSubmission>>;
+    let resolvedUniverse: ResolvedUniverse;
+    try {
+      validated = await validateSubmission(rebased.request);
+      // 검증이 실패해도 재무·상한 검사에는 unionSymbols 이 필요하다 — blockers 목록이
+      // 완전하려면 이 값을 다시 구해야 한다. resolve 는 uncovered 여도 예외를 던지지
+      // 않으므로 안전하게 재사용한다.
+      resolvedUniverse = validated.ok ? validated.resolved : await resolveScheduleForRequest(rebased.request);
+    } catch (error) {
+      if (sendIfKrxError(reply, error)) return reply;
+      throw error;
+    }
     const blockers = validated.ok ? [] : [...validated.errors];
-    // 검증이 실패해도(강 unionSymbols 이 필요한) 재무·상한 검사는 계속 돌려야 blockers
-    // 목록이 완전하다 — resolve 는 uncovered 여도 예외를 던지지 않으므로 안전하게 재사용한다.
-    const resolvedUniverse = validated.ok ? validated.resolved : await resolveScheduleForRequest(rebased.request);
     const fundamentalsError = checkFundamentalsRequirement(rebased.request, resolvedUniverse.unionSymbols);
     if (fundamentalsError) blockers.push(fundamentalsError);
     const capacityError = checkPositionCapacity(rebased.request);

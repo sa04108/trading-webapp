@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { symbolMasterCoverage } from '../../src/server/shared/db/schema.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
 import { registerSymbols } from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
+import { startKrxFakeServer, type KrxFakeServer } from '../helpers/krx-fixtures.js';
 
 /**
  * `POST /backtests/universe-preview` (Task 2, 스펙 2026-08-05) — 위저드가 제출 전에
@@ -162,5 +164,82 @@ describe('POST /backtests/universe-preview', () => {
       },
     });
     expect(res.statusCode).toBe(400);
+  });
+});
+
+/**
+ * KRX 오류 매핑 (리뷰 finding) — `UniverseRuleResolver.resolve` 는 시총 캐시 미스일 때
+ * `getMarketCapsAt` 을 통해 실제 KRX 를 부른다. `symbol-master-routes.ts` 의
+ * `/symbol-master/sync` 와 같은 관례로 KrxQuotaError→429 를 매핑해야 한다 — 매핑이
+ * 없으면 쿼터 초과가 일반 500 으로 노출된다. 제출 경로(`validateSubmission`)는 같은
+ * `sendIfKrxError` 헬퍼를 타므로 별도 테스트를 생략한다.
+ */
+describe('POST /backtests/universe-preview — KRX 오류 매핑', () => {
+  let ctx: TestApp;
+  let fake: KrxFakeServer;
+  let cookie: string;
+
+  beforeEach(async () => {
+    fake = await startKrxFakeServer();
+    ctx = await createTestApp({ KRX_BASE_URL: fake.baseUrl, KRX_API_KEY: 'test-krx-key' });
+    const { username, password } = await createTestAdmin(ctx.container);
+    const login = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { username, password },
+    });
+    cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+  });
+
+  afterEach(async () => {
+    await ctx.close();
+    await fake.close();
+  });
+
+  it('KRX 가 429 를 돌려주면 미리보기도 429 로 응답한다 (일반 500 이 아니다)', async () => {
+    const date = '2026-01-05';
+    const basDd = date.replaceAll('-', '');
+
+    // 리밸런스 날짜는 커버되지만(체크포인트+coverage) 시총 캐시는 비워 둔다 —
+    // getMarketCapsAt 이 캐시 미스로 실제 KRX(fake 서버)를 부르게 하기 위해서다.
+    ctx.container.symbolMasterService.saveCheckpoint(
+      date,
+      new Map([
+        [
+          'KR7005930003',
+          {
+            standardCode: 'KR7005930003',
+            shortCode: '005930',
+            name: '삼성전자',
+            market: 'KOSPI' as const,
+            sharesOutstanding: '1000000',
+            instrumentType: 'COMMON_STOCK' as const,
+            listedDate: null,
+          },
+        ],
+      ]),
+      true,
+    );
+    ctx.container.database.db
+      .insert(symbolMasterCoverage)
+      .values({ startDate: date, endDate: date, syncedAtMs: ctx.container.clock.now() })
+      .run();
+
+    fake.setResponse('stk_bydd_trd', basDd, { status: 429, body: { error: 'quota exceeded' } });
+    fake.setResponse('ksq_bydd_trd', basDd, { status: 429, body: { error: 'quota exceeded' } });
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: { markets: ['KOSPI'], topN: 10, sortKey: 'MKTCAP' },
+        period: { from: date, to: date },
+        rebalanceMonths: 1,
+      },
+    });
+
+    expect(res.statusCode).toBe(429);
+    expect((res.json() as { error: string }).error).toContain('한도');
   });
 });
