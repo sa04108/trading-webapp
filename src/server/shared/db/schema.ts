@@ -482,3 +482,84 @@ export const backtestSymbolMetrics = sqliteTable(
   },
   (table) => [index('idx_backtest_symbol_job').on(table.jobId)],
 );
+
+// ── 종목 마스터 (설계 2026-08-05-symbol-master) ──────────────────────
+
+/**
+ * 분기 경계 첫 거래일의 전체 스냅샷. 재구성 시작점이자 검증 앵커다.
+ * mismatchJson 이 null 이 아니면 이벤트 재구성과 KRX 실측이 어긋났던 기록이다.
+ */
+export const symbolMasterCheckpoints = sqliteTable('symbol_master_checkpoints', {
+  id: text('id').primaryKey(),
+  checkpointDate: text('checkpoint_date').notNull().unique(),
+  source: text('source').notNull(), // KRX
+  verifiedAtMs: integer('verified_at_ms'),
+  mismatchJson: text('mismatch_json'),
+  createdAtMs: integer('created_at_ms').notNull(),
+});
+
+/** symbols 에 FK 를 걸지 않는다 — 마스터는 미등록·폐지 종목도 담는다 */
+export const symbolMasterCheckpointSymbols = sqliteTable(
+  'symbol_master_checkpoint_symbols',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    checkpointId: text('checkpoint_id')
+      .notNull()
+      .references(() => symbolMasterCheckpoints.id, { onDelete: 'cascade' }),
+    standardCode: text('standard_code').notNull(),
+    shortCode: text('short_code').notNull(),
+    name: text('name').notNull(),
+    market: text('market').notNull(), // KOSPI | KOSDAQ
+    /** 10진 정수 문자열 — bigint 를 그대로 보존한다 */
+    sharesOutstanding: text('shares_outstanding').notNull(),
+    /** COMMON_STOCK 또는 KrxExclusionReason — 필터 정책은 읽기 시점에 적용한다 */
+    instrumentType: text('instrument_type').notNull(),
+    listedDate: text('listed_date'),
+  },
+  (table) => [
+    uniqueIndex('idx_smcs_checkpoint_code').on(table.checkpointId, table.standardCode),
+  ],
+);
+
+/**
+ * 변경 이벤트(delta). old/newValue 는 절대값 JSON 이라 중복 적용해도 결과가 같다.
+ * observedSpanStart: diff 기준일 — 갭을 건너뛴 수집이면 이벤트 날짜가 근사값이다.
+ */
+export const symbolMasterEvents = sqliteTable(
+  'symbol_master_events',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    effectiveDate: text('effective_date').notNull(),
+    standardCode: text('standard_code').notNull(),
+    // LISTED | DELISTED | MARKET_MOVED | SHARES_CHANGED | NAME_CHANGED | TYPE_CHANGED
+    eventType: text('event_type').notNull(),
+    oldValue: text('old_value'),
+    newValue: text('new_value'),
+    observedSpanStart: text('observed_span_start').notNull(),
+    createdAtMs: integer('created_at_ms').notNull(),
+  },
+  (table) => [
+    index('idx_sme_effective').on(table.effectiveDate),
+    index('idx_sme_code_effective').on(table.standardCode, table.effectiveDate),
+  ],
+);
+
+/** 수집 완료 구간. 휴장일도 구간에 포함한다 — 이벤트만 없다 */
+export const symbolMasterCoverage = sqliteTable('symbol_master_coverage', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  startDate: text('start_date').notNull(),
+  endDate: text('end_date').notNull(),
+  syncedAtMs: integer('synced_at_ms').notNull(),
+});
+
+/** 시총 랭킹 레이지 캐시 — 백테스트가 요청한 날짜만 쌓인다 (스펙 §데이터 모델) */
+export const symbolMasterMarketCaps = sqliteTable(
+  'symbol_master_market_caps',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    date: text('date').notNull(),
+    standardCode: text('standard_code').notNull(),
+    marketCapKrw: text('market_cap_krw').notNull(),
+  },
+  (table) => [uniqueIndex('idx_smmc_date_code').on(table.date, table.standardCode)],
+);
