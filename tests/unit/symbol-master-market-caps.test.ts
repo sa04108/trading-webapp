@@ -111,4 +111,32 @@ describe('SymbolMasterService.getMarketCapsAt', () => {
 
     await teardown(ctx);
   });
+
+  it('체크포인트는 있지만 coverage 갭인 날짜도 SymbolMasterNotCoveredError — 캐시에 이미 값이 있어도 반환하지 않는다', async () => {
+    const ctx = await setup();
+    // 01-02 최초 수집(체크포인트 생성) 후 01-03~04 를 건너뛰고 01-05 를 수집한다 —
+    // symbol-master-ingest.test.ts 의 갭 메우기 시나리오와 같은 모양이다. 체크포인트는
+    // 이미 존재하므로 getUniverseAsOf('2023-01-03') 는 (틀리게) 재구성에 성공하지만,
+    // isCovered('2023-01-03') 는 false 다 — coverage 구간이 [01-02,01-02], [01-05,01-05]
+    // 뿐이라 01-03 은 갭이다.
+    await ingestSingleSymbolUniverse(ctx, '2023-01-02', '20230102');
+    await ingestSingleSymbolUniverse(ctx, '2023-01-05', '20230105');
+    expect(ctx.svc.isCovered('2023-01-03')).toBe(false);
+
+    // 캐시 검사보다 커버 게이트가 먼저라는 것을 증명하기 위해, 갭 날짜에 캐시 행이 이미
+    // 있는 상태(예: 이 가드가 없던 과거에 잘못 쌓인 값)를 직접 만들어 둔다.
+    ctx.t.container.database.db.insert(symbolMasterMarketCaps).values({
+      date: '2023-01-03',
+      standardCode: 'KR7005930003',
+      marketCapKrw: '999999999999999',
+    }).run();
+
+    const before = ctx.fake.requests.length;
+    await expect(ctx.svc.getMarketCapsAt('2023-01-03')).rejects.toThrow(SymbolMasterNotCoveredError);
+    // 캐시 행이 있어도 그걸 반환하지 않았으니, 그 캐시를 읽으러 가는 것 외에 KRX 조회도
+    // 당연히 일어나지 않는다.
+    expect(ctx.fake.requests.length).toBe(before);
+
+    await teardown(ctx);
+  });
 });

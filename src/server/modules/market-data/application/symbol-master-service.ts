@@ -281,10 +281,18 @@ export class SymbolMasterService {
   /**
    * date 의 시총 맵 (standardCode → marketCapKrw 문자열). 캐시 테이블에 해당 date
    * 행이 있으면 KRX 를 부르지 않고 그대로 반환한다. 미스면 getUniverseAsOf 로
-   * shortCode→standardCode 매핑부터 얻는다 — 커버 밖 날짜는 여기서 바로
-   * SymbolMasterNotCoveredError 로 끝나 KOSPI·KOSDAQ 조회를 헛되이 하지 않는다.
+   * shortCode→standardCode 매핑부터 얻는다.
+   *
+   * 커버 판정은 isCovered 로 캐시 조회보다 먼저 확인한다 — getUniverseAsOf 는
+   * "체크포인트가 하나라도 있는지"만 보고 nearestCheckpoint 로 아무 날짜나 재구성해
+   * 버리기 때문에, 체크포인트는 있지만 coverage 갭인 날짜도 통과시킨다. 그런 날짜를
+   * isCovered 없이 캐시 히트 검사보다 뒤에 걸렀다면, 과거에 어쩌다 이미 캐시가 쌓인
+   * 갭 날짜는 그 검증 안 된 캐시를 그대로 반환해 버렸을 것이다 — 그래서 이 게이트를
+   * 캐시 조회보다도 앞에 둔다.
    */
   async getMarketCapsAt(date: string): Promise<ReadonlyMap<string, string>> {
+    if (!this.isCovered(date)) throw new SymbolMasterNotCoveredError(date);
+
     const cached = this.readCachedMarketCaps(date);
     if (cached !== undefined) return cached;
 
