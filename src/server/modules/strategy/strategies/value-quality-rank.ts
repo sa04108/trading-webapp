@@ -182,6 +182,7 @@ export const valueQualityRankStrategy: TradingStrategy<
         bars: context.bars,
         equity: context.portfolio.equity,
         topN: parameters.topN,
+        tradableSymbols: context.tradableSymbols,
       });
       state.pendingBuys = null;
       return { orders: buys };
@@ -197,6 +198,10 @@ export const valueQualityRankStrategy: TradingStrategy<
     const returnOnCapital: Scored[] = [];
 
     for (const symbol of state.symbols) {
+      // 유니버스에서 밀려난 종목은 랭킹 후보에서도 뺀다 — cross-sectional-momentum.ts
+      // 와 같은 이유(여기서 안 빼면 그 슬롯이 topN 을 차지한 채 매수 단계에서만
+      // 걸러지고, 그만큼 예산이 그냥 현금으로 논다)
+      if (context.tradableSymbols !== null && !context.tradableSymbols.has(symbol)) continue;
       const snapshot = context.fundamentals(symbol);
       const close = context.bars.get(symbol)?.close;
       if (!snapshot || close === undefined) continue;

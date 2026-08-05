@@ -230,3 +230,81 @@ describe('2단계 리밸런스 실행', () => {
   });
 
 });
+
+describe('멤버십 일정 반영 랭킹 (리뷰 fix — 2026-08-05)', () => {
+  /**
+   * A·B·C 세 종목. A 는 첫 리밸런스(index20) 창[0,20]에서는 원 모멘텀으로도 최하위지만,
+   * 둘째 리밸런스(index30) 창[10,30]에서는 급등해 원 모멘텀만으로는 1위가 된다.
+   * 그런데 A 는 2구간(index30 이후)부터 일정에서 빠진다.
+   *
+   * 랭킹 후보를 tradableSymbols 로 거르지 않으면: A 가 원 모멘텀만으로 topN 에 들어
+   * targets=[A, B] 가 되고, 이미 보유 중이던 C 가 팔리는데 A 매수는 엔진이 거부해
+   * 그 몫의 예산이 그대로 현금으로 논다 — topN=2 인데 실제 보유는 B 하나로 준다.
+   * 걸러내면 후보는 {B, C} 뿐이라 이미 topN(=2) 을 정확히 채우고 있어 아무 것도
+   * 바뀌지 않는다 — 이 테스트가 검증하는 동작.
+   */
+  function priceAt(anchors: ReadonlyArray<readonly [number, number]>, index: number): number {
+    for (let i = 0; i < anchors.length - 1; i += 1) {
+      const [i0, v0] = anchors[i] as [number, number];
+      const [i1, v1] = anchors[i + 1] as [number, number];
+      if (index <= i1) {
+        if (index <= i0) return v0;
+        return v0 + ((v1 - v0) * (index - i0)) / (i1 - i0);
+      }
+    }
+    return (anchors[anchors.length - 1] as [number, number])[1];
+  }
+
+  const A_ANCHORS = [[0, 100], [10, 105], [20, 110], [30, 300]] as const;
+  const B_ANCHORS = [[0, 100], [10, 115], [20, 140], [30, 160]] as const;
+  const C_ANCHORS = [[0, 100], [10, 108], [20, 125], [30, 145]] as const;
+
+  function buildMembershipCandles(bars: number): Candle[] {
+    const candles: Candle[] = [];
+    for (let index = 0; index < bars; index += 1) {
+      candles.push(candle('A', index, priceAt(A_ANCHORS, index)));
+      candles.push(candle('B', index, priceAt(B_ANCHORS, index)));
+      candles.push(candle('C', index, priceAt(C_ANCHORS, index)));
+    }
+    return candles;
+  }
+
+  const parameters = {
+    formationDays: 20,
+    skipDays: 0,
+    topN: 2,
+    rebalanceMonths: 1,
+    absoluteMomentumFilter: true,
+  };
+
+  it('2구간에서 유니버스 탈락 종목은 랭킹 후보에서도 빠져 차순위가 슬롯을 지킨다', () => {
+    const result = runBacktest(crossSectionalMomentumStrategy, {
+      candles: buildMembershipCandles(33),
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters,
+      randomSeed: 1,
+      maxPositions: 2,
+      universeSchedule: [
+        { fromTsMs: START, symbols: ['A', 'B', 'C'] },
+        { fromTsMs: START + 30 * DAY, symbols: ['B', 'C'] },
+      ],
+    });
+
+    // 1구간 리밸런스(index20) — A 는 원 모멘텀으로도 최하위라 필터 유무와 무관하게
+    // B·C 만 편입된다.
+    const buys = result.fills.filter((f) => f.side === 'BUY');
+    expect(new Set(buys.map((f) => f.symbol))).toEqual(new Set(['B', 'C']));
+
+    // 2구간 전환(index30) 이후 — A 는 원 모멘텀만 보면 1위이지만 일정에서 빠져
+    // 랭킹 후보에도 들지 못한다: A 매수 시도도, 그로 인한 C 매도도 일어나지 않는다.
+    expect(result.fills.some((f) => f.symbol === 'A')).toBe(false);
+    expect(result.fills.filter((f) => f.symbol === 'C' && f.side === 'SELL')).toHaveLength(0);
+    expect(result.warnings.some((w) => w.includes('A') && w.includes('멤버십 일정'))).toBe(false);
+
+    // topN(=2) 슬롯이 그대로 유지된다 — 필터링하지 않으면 C 가 팔리고 A 매수가
+    // 거부돼 보유 종목이 1개로 줄어든다(그만큼 예산이 현금으로 논다).
+    expect(result.openPositions).toHaveLength(2);
+    expect(new Set(result.openPositions.map((p) => p.symbol))).toEqual(new Set(['B', 'C']));
+  });
+});

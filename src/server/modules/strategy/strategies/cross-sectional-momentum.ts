@@ -128,6 +128,7 @@ export const crossSectionalMomentumStrategy: TradingStrategy<
         bars: context.bars,
         equity: context.portfolio.equity,
         topN: parameters.topN,
+        tradableSymbols: context.tradableSymbols,
       });
       state.pendingBuys = null;
       return { orders: buys };
@@ -149,6 +150,10 @@ export const crossSectionalMomentumStrategy: TradingStrategy<
 
     const scored: Scored[] = [];
     for (const symbol of state.symbols) {
+      // 유니버스에서 밀려난 종목은 랭킹 후보에서도 뺀다 — 여기서 안 빼면 그 슬롯이
+      // topN 을 차지한 채 매수 단계에서만 걸러지고, budgetPerSymbol 은 topN 고정이라
+      // 그만큼 예산이 그냥 현금으로 논다(차순위 후보가 슬롯을 못 받는다).
+      if (context.tradableSymbols !== null && !context.tradableSymbols.has(symbol)) continue;
       const score = momentumScore(
         context.getHistory(symbol),
         context.corporateActions(symbol),
