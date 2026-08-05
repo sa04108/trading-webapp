@@ -36,6 +36,7 @@ function baseRow(shortCode: string, market: KrxMarket): KrxIssueBaseInfoRow {
     securityGroupRaw: '주권',
     sectionRaw: null,
     stockKindRaw: '보통주',
+    listedShares: '1000000',
   };
 }
 

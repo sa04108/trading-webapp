@@ -19,6 +19,8 @@ export interface KrxIssueBaseInfoRow {
   readonly sectionRaw: string | null;
   /** KIND_STKCERT_TP_NM 원문이다. */
   readonly stockKindRaw: string | null;
+  /** LIST_SHRS — 상장주식수. 콤마 없는 10진 정수 문자열, 알 수 없으면 null 이다. */
+  readonly listedShares: string | null;
 }
 
 export interface KrxDailyTradeRow {

@@ -95,6 +95,16 @@ describe('parseBaseInfoRows', () => {
     expect(absent).toMatchObject({ sectionRaw: null, stockKindRaw: null });
     expect(explicitNull).toMatchObject({ sectionRaw: null, stockKindRaw: null });
   });
+
+  it('LIST_SHRS 를 listedShares 정수 문자열로 파싱한다', () => {
+    const rows = parseBaseInfoRows([{ ...baseInfoFixture(), LIST_SHRS: '5,969,782,550' }]);
+    expect(rows[0]!.listedShares).toBe('5969782550');
+  });
+
+  it('LIST_SHRS 가 없거나 - 이면 null 이다', () => {
+    const rows = parseBaseInfoRows([{ ...baseInfoFixture(), LIST_SHRS: '-' }]);
+    expect(rows[0]!.listedShares).toBeNull();
+  });
 });
 
 describe('parseDailyRows', () => {

@@ -20,6 +20,7 @@ export function baseInfoFixture(overrides: KrxRawRow = {}): KrxRawRow {
     SECUGRP_NM: '주권',
     SECT_TP_NM: '대형주',
     KIND_STKCERT_TP_NM: '보통주',
+    LIST_SHRS: '1,000,000',
     ...overrides,
   };
 }

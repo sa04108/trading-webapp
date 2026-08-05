@@ -27,6 +27,7 @@ function baseRow(
     securityGroupRaw: '주권',
     sectionRaw: null,
     stockKindRaw: '보통주',
+    listedShares: '1000000',
     ...overrides,
   };
 }
