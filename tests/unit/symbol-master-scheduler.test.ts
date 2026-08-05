@@ -239,4 +239,113 @@ describe('SymbolMasterScheduler', () => {
     expect(firstArg).toHaveProperty('error', 'API 오류');
     expect(secondArg).toMatch(/종목 마스터 일일 동기화/);
   });
+
+  it('coverage 가 빈 배열(최초 수집 전)이면 ingestDate를 호출하지 않는다', async () => {
+    const clock = new MutableClock(kstTimeMs('2024-01-10', 19));
+    const ingestDate = vi.fn();
+    const coverageRanges = vi.fn().mockReturnValue([]);
+    const service = {
+      ingestDate,
+      coverageRanges,
+    } as unknown as SymbolMasterService;
+
+    const status = vi.fn().mockReturnValue({
+      state: 'IDLE',
+      cursorDate: null,
+      targetStartDate: null,
+      error: null,
+    });
+    const backfill = { status } as unknown as SymbolMasterBackfill;
+    const logger = { warn: vi.fn(), error: vi.fn() } as unknown as Logger;
+
+    const scheduler = new SymbolMasterScheduler({
+      service,
+      backfill,
+      clock,
+      logger,
+    });
+
+    await scheduler.tick();
+
+    // coverage 가 비어 있으면 ingestDate 미호출
+    expect(ingestDate).not.toHaveBeenCalled();
+  });
+
+  it('백필이 RUNNING 중이면 스케줄러의 갭 채움 루프를 건너뛴다', async () => {
+    const clock = new MutableClock(kstTimeMs('2024-01-10', 19));
+    const ingestDate = vi.fn();
+    const coverageRanges = vi.fn().mockReturnValue([
+      { startDate: '2024-01-08', endDate: '2024-01-08' },
+    ]);
+    const service = {
+      ingestDate,
+      coverageRanges,
+    } as unknown as SymbolMasterService;
+
+    const start = vi.fn();
+    const status = vi.fn().mockReturnValue({
+      state: 'RUNNING',
+      cursorDate: '2024-01-09',
+      targetStartDate: '2024-01-08',
+      error: null,
+    });
+    const backfill = { start, status } as unknown as SymbolMasterBackfill;
+    const logger = { warn: vi.fn(), error: vi.fn() } as unknown as Logger;
+
+    const scheduler = new SymbolMasterScheduler({
+      service,
+      backfill,
+      clock,
+      logger,
+    });
+
+    await scheduler.tick();
+
+    // 백필이 RUNNING 중이므로 스케줄러는 ingestDate 미호출
+    expect(ingestDate).not.toHaveBeenCalled();
+    // 백필 start() 도 호출되지 않음 (RUNNING 중이므로 BUDGET_EXHAUSTED 가 아님)
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it('여러 번 tick 호출 시 중복 처리를 방지한다', async () => {
+    const clock = new MutableClock(kstTimeMs('2024-01-10', 19));
+    const ingestDate = vi.fn().mockImplementation(async () => {
+      // 느린 ingestDate 시뮬레이션
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return { kind: 'TRADING_DAY' };
+    });
+    const coverageRanges = vi.fn().mockReturnValue([
+      { startDate: '2024-01-08', endDate: '2024-01-08' },
+    ]);
+    const service = {
+      ingestDate,
+      coverageRanges,
+    } as unknown as SymbolMasterService;
+
+    const status = vi.fn().mockReturnValue({
+      state: 'IDLE',
+      cursorDate: null,
+      targetStartDate: null,
+      error: null,
+    });
+    const backfill = { status } as unknown as SymbolMasterBackfill;
+    const logger = { warn: vi.fn(), error: vi.fn() } as unknown as Logger;
+
+    const scheduler = new SymbolMasterScheduler({
+      service,
+      backfill,
+      clock,
+      logger,
+    });
+
+    // tick 을 동시에 여러 번 호출
+    await Promise.all([
+      scheduler.tick(),
+      scheduler.tick(),
+      scheduler.tick(),
+    ]);
+
+    // 첫 번째 tick 만 실행되고 나머지는 차단됨
+    expect(ingestDate).toHaveBeenCalledTimes(1);
+  });
 });
