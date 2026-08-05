@@ -365,16 +365,38 @@ export class SymbolMasterService {
     }
   }
 
-  /** 수집 완료 구간 목록 — startDate 오름차순 */
-  coverageRanges(): { startDate: string; endDate: string }[] {
+  /**
+   * 수집 완료 구간 목록 — startDate 오름차순. syncedAtMs 는 coverage API 가
+   * lastSyncedAtMs(구간들의 최댓값)를 계산하는 데 쓴다.
+   */
+  coverageRanges(): { startDate: string; endDate: string; syncedAtMs: number }[] {
     return this.deps.db
       .select({
         startDate: symbolMasterCoverage.startDate,
         endDate: symbolMasterCoverage.endDate,
+        syncedAtMs: symbolMasterCoverage.syncedAtMs,
       })
       .from(symbolMasterCoverage)
       .orderBy(asc(symbolMasterCoverage.startDate))
       .all();
+  }
+
+  /** 체크포인트 전체 목록 — coverage API 응답용. checkpointDate 오름차순 */
+  listCheckpoints(): { checkpointDate: string; verified: boolean; mismatch: boolean }[] {
+    return this.deps.db
+      .select({
+        checkpointDate: symbolMasterCheckpoints.checkpointDate,
+        verifiedAtMs: symbolMasterCheckpoints.verifiedAtMs,
+        mismatchJson: symbolMasterCheckpoints.mismatchJson,
+      })
+      .from(symbolMasterCheckpoints)
+      .orderBy(asc(symbolMasterCheckpoints.checkpointDate))
+      .all()
+      .map((row) => ({
+        checkpointDate: row.checkpointDate,
+        verified: row.verifiedAtMs !== null,
+        mismatch: row.mismatchJson !== null,
+      }));
   }
 
   /** 주어진 날짜를 포함하는 수집 완료 구간이 있는지 */

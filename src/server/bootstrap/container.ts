@@ -51,6 +51,9 @@ import { OperatingIncomeSortSource } from '../modules/facts/application/operatin
 import { HistoricalUniverseService } from '../modules/market-data/application/historical-universe-service.js';
 import { UniverseSnapshotService } from '../modules/market-data/application/universe-snapshot-service.js';
 import { createKrxHistoricalUniverseSource } from '../modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
+import { SymbolMasterService } from '../modules/market-data/application/symbol-master-service.js';
+import { SymbolMasterBackfill } from '../modules/market-data/application/symbol-master-backfill.js';
+import { SymbolMasterScheduler } from '../modules/market-data/application/symbol-master-scheduler.js';
 
 export interface SystemStatusProviders {
   queueLength: () => number;
@@ -91,6 +94,9 @@ export interface Container {
   readonly universeSnapshotService: UniverseSnapshotService;
   /** KRX 오늘자 논리 호출 수 — status 라우트가 쓴다. 어댑터가 실제 카운터를 쥐고 있다. */
   readonly krxTodayCallCount: () => number;
+  readonly symbolMasterService: SymbolMasterService;
+  readonly symbolMasterBackfill: SymbolMasterBackfill;
+  readonly symbolMasterScheduler: SymbolMasterScheduler;
   close(): void;
 }
 
@@ -303,6 +309,28 @@ export function createContainer(config: AppConfig): Container {
     approvalExpiry: config.krxApprovalExpiry,
   });
 
+  // 종목 마스터 (설계 2026-08-05-symbol-master-core). historicalUniverseService 와 같은
+  // krxSource 를 재사용한다 — 새로 만들면 KRX 호출 카운터·rate limit 그룹이 둘로 갈린다.
+  const symbolMasterService = new SymbolMasterService({
+    db: database.db,
+    source: krxSource,
+    clock,
+    logger,
+  });
+  const symbolMasterBackfill = new SymbolMasterBackfill({
+    service: symbolMasterService,
+    source: krxSource,
+    clock,
+    logger,
+    dailyCallBudget: config.krxDailyCallBudget,
+  });
+  const symbolMasterScheduler = new SymbolMasterScheduler({
+    service: symbolMasterService,
+    backfill: symbolMasterBackfill,
+    clock,
+    logger,
+  });
+
   const jobQueue = new JobQueue(database, clock);
   const jobOrchestrator = new JobOrchestrator(jobQueue, config, logger, auditLog, clock);
   jobOrchestrator.events.on(
@@ -349,6 +377,9 @@ export function createContainer(config: AppConfig): Container {
     historicalUniverseService,
     universeSnapshotService,
     krxTodayCallCount: () => krxSource.todayCallCount(),
+    symbolMasterService,
+    symbolMasterBackfill,
+    symbolMasterScheduler,
     close: () => {
       clearInterval(pruneTimer);
       jobOrchestrator.stop();
