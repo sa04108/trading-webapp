@@ -67,3 +67,49 @@ export function diffUniverse(
   }
   return events;
 }
+
+const FIELD_BY_EVENT = {
+  MARKET_MOVED: 'market',
+  SHARES_CHANGED: 'sharesOutstanding',
+  NAME_CHANGED: 'name',
+  TYPE_CHANGED: 'instrumentType',
+} as const;
+
+export function applyEventsForward(
+  state: UniverseState, events: readonly SymbolMasterEventDraft[],
+): UniverseState {
+  const next = new Map(state);
+  for (const ev of events) {
+    if (ev.eventType === 'LISTED') {
+      next.set(ev.standardCode, JSON.parse(ev.newValue!) as SymbolMasterEntry);
+    } else if (ev.eventType === 'DELISTED') {
+      next.delete(ev.standardCode);
+    } else {
+      const current = next.get(ev.standardCode);
+      if (!current) continue; // 갭 수집이 만든 중복 이벤트 — 절대값이라 건너뛰어도 안전하다
+      const field = FIELD_BY_EVENT[ev.eventType];
+      next.set(ev.standardCode, { ...current, [field]: JSON.parse(ev.newValue!) });
+    }
+  }
+  return next;
+}
+
+export function applyEventsBackward(
+  state: UniverseState, events: readonly SymbolMasterEventDraft[],
+): UniverseState {
+  const next = new Map(state);
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const ev = events[i]!;
+    if (ev.eventType === 'LISTED') {
+      next.delete(ev.standardCode);
+    } else if (ev.eventType === 'DELISTED') {
+      next.set(ev.standardCode, JSON.parse(ev.oldValue!) as SymbolMasterEntry);
+    } else {
+      const current = next.get(ev.standardCode);
+      if (!current) continue;
+      const field = FIELD_BY_EVENT[ev.eventType];
+      next.set(ev.standardCode, { ...current, [field]: JSON.parse(ev.oldValue!) });
+    }
+  }
+  return next;
+}
