@@ -139,4 +139,37 @@ describe('SymbolMasterService.getMarketCapsAt', () => {
 
     await teardown(ctx);
   });
+
+  it('캐시 미스에 같은 date 로 동시 호출 2회 — KRX 는 1회분만 조회하고 같은 Promise 를 반환하며 UNIQUE 위반 없이 둘 다 성공한다', async () => {
+    // inflightIngests 와 같은 이유의 dedup 가드(Finding 3, T6 최종 리뷰)가 없으면
+    // 두 호출이 각각 KRX 를 부르고 각각 writeMarketCaps 로 같은 (date, standardCode)
+    // 행을 넣으려다 idx_smmc_date_code UNIQUE 위반으로 하나가 죽는다.
+    const ctx = await setup();
+    await ingestSingleSymbolUniverse(ctx, '2023-01-02', '20230102');
+    ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
+    const before = ctx.fake.requests.length;
+
+    const p1 = ctx.svc.getMarketCapsAt('2023-01-02');
+    const p2 = ctx.svc.getMarketCapsAt('2023-01-02');
+    // 가드가 캐시 미스 시점에 바로 같은 Promise 를 반환한다 — 두 번째 호출이 새로
+    // 실행되지 않고 진행 중인 첫 호출에 합류했다는 뜻이다.
+    expect(p2).toBe(p1);
+
+    const [marketCaps1, marketCaps2] = await Promise.all([p1, p2]);
+    expect(marketCaps2).toBe(marketCaps1);
+    expect(marketCaps1.get('KR7005930003')).toBe('350000000000000');
+
+    const daily = ctx.fake.requests.slice(before);
+    expect(daily).toHaveLength(2);
+    expect(daily.map((r) => r.path).sort()).toEqual(['ksq_bydd_trd', 'stk_bydd_trd']);
+
+    const rows = ctx.t.container.database.db
+      .select()
+      .from(symbolMasterMarketCaps)
+      .where(eq(symbolMasterMarketCaps.date, '2023-01-02'))
+      .all();
+    expect(rows).toHaveLength(1);
+
+    await teardown(ctx);
+  });
 });

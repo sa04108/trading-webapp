@@ -72,6 +72,14 @@ export class SymbolMasterService {
    */
   private readonly inflightIngests = new Map<string, Promise<IngestResult>>();
 
+  /**
+   * 같은 date 로 겹쳐 들어온 `getMarketCapsAt` 호출을 하나로 묶는다 — inflightIngests 와
+   * 같은 이유다. 캐시 미스 상태에서 동시에 두 호출이 들어오면 둘 다 KRX 를 부르고 둘 다
+   * `writeMarketCaps` 로 같은 (date, standardCode) 행을 넣으려 해 idx_smmc_date_code
+   * UNIQUE 위반으로 하나가 죽는다. 다른 date 는 서로 막지 않고 각자 진행된다.
+   */
+  private readonly inflightMarketCaps = new Map<string, Promise<ReadonlyMap<string, string>>>();
+
   constructor(private readonly deps: SymbolMasterServiceDeps) {}
 
   /**
@@ -312,8 +320,22 @@ export class SymbolMasterService {
    * isCovered 없이 캐시 히트 검사보다 뒤에 걸렀다면, 과거에 어쩌다 이미 캐시가 쌓인
    * 갭 날짜는 그 검증 안 된 캐시를 그대로 반환해 버렸을 것이다 — 그래서 이 게이트를
    * 캐시 조회보다도 앞에 둔다.
+   *
+   * 같은 date 의 동시 호출은 inflightMarketCaps 가드가 하나로 묶는다 — 실제 로직은
+   * getMarketCapsAtUnguarded 에 있고, 이 메서드는 가드 역할만 한다.
    */
-  async getMarketCapsAt(date: string): Promise<ReadonlyMap<string, string>> {
+  getMarketCapsAt(date: string): Promise<ReadonlyMap<string, string>> {
+    const inflight = this.inflightMarketCaps.get(date);
+    if (inflight !== undefined) return inflight;
+
+    const promise = this.getMarketCapsAtUnguarded(date).finally(() => {
+      this.inflightMarketCaps.delete(date);
+    });
+    this.inflightMarketCaps.set(date, promise);
+    return promise;
+  }
+
+  private async getMarketCapsAtUnguarded(date: string): Promise<ReadonlyMap<string, string>> {
     if (!this.isCovered(date)) throw new SymbolMasterNotCoveredError(date);
 
     const cached = this.readCachedMarketCaps(date);
