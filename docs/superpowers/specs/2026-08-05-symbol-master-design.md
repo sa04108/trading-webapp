@@ -46,7 +46,15 @@ symbolMasterEvents             — 변경 이벤트 (delta)
 
 symbolMasterCoverage           — 수집 완료 날짜 구간
   startDate, endDate, syncedAt
+
+symbolMasterMarketCaps         — 시총 랭킹 레이지 캐시
+  date, standardCode, marketCapKrw
+  백테스트가 리밸런스 날짜 랭킹을 요청할 때만 KRX에서 받아 저장한다.
+  재실행 시 오프라인 재현을 보장한다. 요청된 날짜만 저장하므로 희소하다.
 ```
+
+종목 마스터는 전 종목을 저장한다. `instrumentType`에는 `classifyKrxIssue` 결과
+(`COMMON_STOCK` 또는 제외 사유)를 그대로 넣고, 필터 정책은 읽기 시점에 적용한다.
 
 `observedSpan`은 diff 기준 구간(직전 수집일~당일)이다.
 갭을 건너뛴 온디맨드 수집이면 구간이 넓어지고,
@@ -142,10 +150,13 @@ KRX 조회 결과가 빈 날짜는 휴장으로 처리한다. coverage에 포함
   시장, 종목유형, 리밸런스 시점 상위 N(정렬 기준: 시총 등)을 입력한다.
 - 기간 입력 시 coverage를 검사한다.
   미수집 구간이 있으면 경고와 [동기화] 버튼을 보여준다.
-- 엔진이 리밸런스 날짜마다 `getUniverseAsOf(date)`에 규칙을 적용해 유니버스를 재구성한다.
-  시점별 시가총액 = 가격 × 그 시점 상장주식수.
-- 재현성: `backtestRuns`에 규칙, `KRX_FILTER_POLICY_VERSION`, 실행 시 coverage 상태를 저장한다.
-  종목 리스트 복사본은 저장하지 않는다.
+- 제출 시점에 서버가 리밸런스 날짜별 멤버십 일정을 확정한다.
+  날짜마다 `getUniverseAsOf(date)`로 구성원을 얻고,
+  시총 상위 N 랭킹은 KRX 일별매매 MKTCAP으로 계산한다(레이지 캐시 경유).
+  로컬 캔들이 없는 선정 종목은 경고로 노출한다.
+- 엔진은 확정된 멤버십 일정을 받아 리밸런스 시점마다 거래 대상을 제한한다.
+- 재현성: `backtestRuns`에 규칙, `KRX_FILTER_POLICY_VERSION`, 멤버십 일정 해시를 저장한다.
+  종목 리스트 복사본은 저장하지 않는다 — 일정은 마스터+캐시에서 재도출 가능하다.
 
 ## 마이그레이션
 
