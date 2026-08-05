@@ -97,6 +97,13 @@ async function main(): Promise<void> {
     // 대기 중 종목 마스터가 갱신됐을 때 제출 시점과 다른 유니버스로 돌게 된다.
     const schedule = JSON.parse(job.universeScheduleJson) as UniverseScheduleEntry[];
     const unionSymbols = [...new Set(schedule.flatMap((entry) => entry.symbols))].sort();
+    // 엔진에 넘길 멤버십 일정 — rebalanceDate 를 periodToTsRange 와 같은 자정 규칙으로
+    // ms 로 바꾼다. 두 곳이 각자 계산하면 제출·미리보기는 맞는데 실행부만 하루 어긋나는
+    // D-024 류의 불일치가 생긴다.
+    const universeSchedule = schedule.map((entry) => ({
+      fromTsMs: Date.parse(`${entry.rebalanceDate}T00:00:00Z`),
+      symbols: entry.symbols,
+    }));
 
     // market 은 이제 종목의 속성이다 — 유니버스 종목들에서 읽는다. 여러 시장이
     // 섞이면 세션·집계 기준이 하나로 정해지지 않아 실행 자체가 성립하지 않는다.
@@ -279,6 +286,7 @@ async function main(): Promise<void> {
       randomSeed: request.randomSeed,
       maxPositions: request.risk.maxPositions,
       facts,
+      universeSchedule,
     }, {
       shouldCancel: () => cancellation.isRequested(),
       onProgress: ({ processedBars, totalBars, currentTsMs }) => {

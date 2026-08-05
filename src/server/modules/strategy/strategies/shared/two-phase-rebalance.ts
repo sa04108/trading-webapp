@@ -12,6 +12,12 @@ export interface BuyPhaseInput {
   readonly bars: ReadonlyMap<string, Candle>;
   readonly equity: number;
   readonly topN: number;
+  /**
+   * 멤버십 일정(스펙 2026-08-05, §9.5)의 활성 유니버스. 지정하지 않거나 null 이면
+   * 제한 없이 모든 후보를 매수한다 — 전략이 일정을 전달하지 않으면 엔진의 리스크
+   * 검증 안전망만 적용된다.
+   */
+  readonly tradableSymbols?: ReadonlySet<string> | null;
 }
 
 /**
@@ -49,6 +55,9 @@ export function planBuyPhase(
   const orders: OrderIntent[] = [];
 
   for (const symbol of [...pendingBuys].sort()) {
+    // 유니버스에서 빠진 종목은 여기서 걸러낸다 — 청산은 이 함수가 아니라
+    // planSellPhase 의 몫이라 그대로 둔다(타깃 미포함 자동 청산, 이 함수 주석 상단 참고)
+    if (input.tradableSymbols && !input.tradableSymbols.has(symbol)) continue;
     const held = input.positions.get(symbol);
     if (held && held.quantity > 0) continue;
     const bar = input.bars.get(symbol);

@@ -32,6 +32,12 @@ export interface StrategyBarContext {
   fundamentals(symbol: string): FundamentalSnapshot | null;
   /** 효력 발생일이 현재 시점 이하인 자본변동 이벤트만 (분할 보정용) */
   corporateActions(symbol: string): readonly CorporateAction[];
+  /**
+   * 멤버십 일정(스펙 2026-08-05, §9.5)의 현재 시점 활성 유니버스 — 전략이 매수 후보를
+   * 스스로 걸러낼 수 있게 노출한다. null 이면 일정이 지정되지 않아 제한이 없다는 뜻이다
+   * (엔진의 리스크 검증도 이때는 항상 통과시킨다).
+   */
+  readonly tradableSymbols: ReadonlySet<string> | null;
 }
 
 export interface StrategyDecision {

@@ -43,6 +43,15 @@ export interface BacktestRunInput {
    * 재무를 쓰지 않는 전략(range-breakout 등)은 넘길 필요가 없다.
    */
   readonly facts?: readonly Fact[];
+  /**
+   * 멤버십 일정(스펙 2026-08-05, §9.5) — `fromTsMs` 오름차순일 필요는 없다(엔진이 정렬한다).
+   * 각 시점에는 `fromTsMs <= 현재 ts` 인 항목 중 가장 늦은 것이 활성 유니버스다.
+   * 첫 entry 의 `fromTsMs` 보다 이른 시점도 첫 entry 를 그대로 적용한다 — period.from 이
+   * 곧 첫 리밸런스 날짜라 실질적으로 그 이전 봉이 없고, 굳이 "제한 없음"으로 예외를 두면
+   * 그 짧은 구간에서만 안전망이 꺼지는 방어 구멍이 된다.
+   * 미지정이거나 빈 배열이면 tradableSymbols 는 항상 null(제한 없음) — 기존 전략 동작 불변.
+   */
+  readonly universeSchedule?: readonly { fromTsMs: number; symbols: readonly string[] }[];
 }
 
 export interface EngineHooks {
@@ -70,7 +79,7 @@ export interface BacktestRunResult {
 }
 
 /** 재현성 메타데이터에 기록되는 엔진 버전 (스펙 §9.5) — 체결·지표 로직 변경 시 올린다 */
-export const ENGINE_VERSION = '1.2.0';
+export const ENGINE_VERSION = '1.3.0';
 
 const PROGRESS_INTERVAL_BARS = 500;
 
@@ -131,6 +140,17 @@ export function runBacktest(
    */
   const buysDroppedByCap = new Map<string, number>();
 
+  // 멤버십 일정 — fromTsMs 오름차순으로 정렬해두고 타임라인을 정방향으로 훑으며
+  // 활성 구간 index 만 전진시킨다(타임라인도 오름차순이라 되돌아갈 일이 없다).
+  const sortedSchedule = [...(input.universeSchedule ?? [])].sort((a, b) => a.fromTsMs - b.fromTsMs);
+  const scheduleSets = sortedSchedule.map((entry) => new Set(entry.symbols));
+  let scheduleIndex = 0;
+  // 이번 봉에서 매수 가능한 종목 — 일정 미지정/빈 배열이면 계속 null(제한 없음)
+  let tradableSymbols: ReadonlySet<string> | null = null;
+  // 유니버스 밖 BUY 거부 warning 을 심볼당 한 번만 남기기 위한 추적 집합 — 리밸런스
+  // 주기가 짧으면 같은 사유가 봉마다 반복돼 warningsJson 을 부풀린다(buysDroppedByCap 과 같은 이유)
+  const universeRejectedSymbols = new Set<string>();
+
   const factView = new PitFactView(input.facts ?? []);
 
   const state = strategy.initialize({ symbols, initialCash: input.initialCash, rng });
@@ -151,6 +171,18 @@ export function runBacktest(
     }
 
     const bars = barsByTs.get(tsMs) as Map<string, Candle>;
+
+    // 활성 멤버십 구간 갱신 — fromTsMs <= tsMs 인 항목 중 가장 늦은 것이 활성이다.
+    // 첫 entry 이전 시점은 예외 없이 첫 entry(index 0)를 그대로 쓴다(위 jsdoc 참고).
+    if (sortedSchedule.length > 0) {
+      while (
+        scheduleIndex + 1 < sortedSchedule.length &&
+        (sortedSchedule[scheduleIndex + 1] as { fromTsMs: number }).fromTsMs <= tsMs
+      ) {
+        scheduleIndex += 1;
+      }
+      tradableSymbols = scheduleSets[scheduleIndex] as ReadonlySet<string>;
+    }
 
     // 이 시점까지 공시된 팩트만 흡수한다 — 전략이 미래 공시를 볼 자리를 없앤다 (§9.4)
     factView.advanceTo(tsMs);
@@ -192,6 +224,7 @@ export function runBacktest(
       rng,
       fundamentals: (symbol) => factView.fundamentals(symbol),
       corporateActions: (symbol) => factView.corporateActions(symbol, tsMs),
+      tradableSymbols,
     };
     const decision = strategy.onBars(context, state, input.parameters);
 
@@ -295,6 +328,19 @@ export function runBacktest(
       const position = positions.get(order.symbol);
       if (!position || position.quantity <= 0) return null;
       return { ...order, quantity: Math.min(quantity, position.quantity) };
+    }
+
+    // BUY: 활성 멤버십 일정 밖 심볼은 거부한다 — 전략이 유니버스를 스스로 걸러내지
+    // 않는 버그를 잡는 안전망이다(§9.5). 보유분 청산(SELL)은 위에서 이미 갈라져
+    // 이 검증을 타지 않는다 — 유니버스에서 빠진 종목도 항상 청산할 수 있어야 한다.
+    if (tradableSymbols !== null && !tradableSymbols.has(order.symbol)) {
+      if (!universeRejectedSymbols.has(order.symbol)) {
+        universeRejectedSymbols.add(order.symbol);
+        warnings.push(
+          `${order.symbol} 매수 거부: 활성 멤버십 일정에 포함되지 않은 종목입니다 (전략 버그 안전망).`,
+        );
+      }
+      return null;
     }
 
     // BUY: 신규 심볼이면 동시 포지션 상한 확인.
