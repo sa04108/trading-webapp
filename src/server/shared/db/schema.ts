@@ -198,37 +198,6 @@ export const symbolVersions = sqliteTable(
   (table) => [index('idx_symbol_versions_code_slice').on(table.code, table.slice)],
 );
 
-/** 데이터셋은 이름과 설명, 그리고 종목 참조뿐이다 — market·timeframe·종목목록을 갖지 않는다 */
-export const datasets = sqliteTable('datasets', {
-  id: text('id').primaryKey(),
-  name: text('name').notNull().unique(),
-  description: text('description'),
-  /**
-   * KRX 스냅샷 확정이 만든 데이터셋이면 그 스냅샷 — 기준 시점·정렬 기준을 여기 중복
-   * 저장하지 않고 join 으로 읽는다. 손으로 만든 데이터셋은 null.
-   */
-  universeSnapshotId: text('universe_snapshot_id').references(() => universeSnapshots.id),
-  createdAtMs: integer('created_at_ms').notNull(),
-  updatedAtMs: integer('updated_at_ms').notNull(),
-});
-
-export const datasetSymbols = sqliteTable(
-  'dataset_symbols',
-  {
-    id: integer('id').primaryKey({ autoIncrement: true }),
-    datasetId: text('dataset_id')
-      .notNull()
-      .references(() => datasets.id, { onDelete: 'cascade' }),
-    code: text('code')
-      .notNull()
-      .references(() => symbols.code, { onDelete: 'cascade' }),
-  },
-  (table) => [
-    uniqueIndex('idx_dataset_symbols_dataset_code').on(table.datasetId, table.code),
-    // 종목 화면의 「데이터셋 2곳」 역방향 조회
-    index('idx_dataset_symbols_code').on(table.code),
-  ],
-);
 
 /**
  * 수집 잡 (구 data_import_jobs). 대상이 데이터셋이 아니라 **종목 집합**이다 —
@@ -262,63 +231,6 @@ export const dataSyncJobs = sqliteTable(
   (table) => [index('idx_data_sync_jobs_status').on(table.status)],
 );
 
-/**
- * 백테스트가 참조하는 과거 시점 유니버스 스냅샷 (REVIEW 기반, 소유 모델은 실행 종속 — D-040).
- * 저장 후 불변이다. 구성을 바꾸려면 새 스냅샷을 만든다 — 그래서 수정 이력 컬럼이 없다.
- */
-export const universeSnapshots = sqliteTable(
-  'universe_snapshots',
-  {
-    id: text('id').primaryKey(),
-    sourceKind: text('source_kind').notNull(),
-    requestedDate: text('requested_date').notNull(),
-    effectiveTradingDate: text('effective_trading_date').notNull(),
-    usableFromDate: text('usable_from_date').notNull(),
-    usableFromRule: text('usable_from_rule').notNull(),
-    marketsJson: text('markets_json').notNull(),
-    filterPolicyVersion: text('filter_policy_version').notNull(),
-    contractVersion: text('contract_version').notNull(),
-    sortKey: text('sort_key').notNull(),
-    sortDirection: text('sort_direction').notNull(),
-    selectionMethod: text('selection_method').notNull(),
-    selectionN: integer('selection_n'),
-    selectedCount: integer('selected_count').notNull(),
-    eligibleCount: integer('eligible_count').notNull(),
-    unknownMarketCapCount: integer('unknown_market_cap_count').notNull(),
-    excludedByTypeJson: text('excluded_by_type_json').notNull(),
-    rawCountsJson: text('raw_counts_json').notNull(),
-    selectionHash: text('selection_hash').notNull(),
-    candidateCanonicalHash: text('candidate_canonical_hash').notNull(),
-    krxApprovalExpiryDate: text('krx_approval_expiry_date'),
-    createdAtMs: integer('created_at_ms').notNull(),
-  },
-  (table) => [index('idx_universe_snapshots_created').on(table.createdAtMs)],
-);
-
-/**
- * 스냅샷 선정 종목의 값 스냅샷 (REVIEW §7.2). symbols 에 FK 를 걸지 않는다 —
- * 종목 삭제 뒤에도 실행 근거를 값으로 설명해야 한다 (backtest_trades.symbol 선례).
- */
-export const universeSnapshotSymbols = sqliteTable(
-  'universe_snapshot_symbols',
-  {
-    id: integer('id').primaryKey({ autoIncrement: true }),
-    snapshotId: text('snapshot_id')
-      .notNull()
-      .references(() => universeSnapshots.id, { onDelete: 'cascade' }),
-    standardCode: text('standard_code').notNull(),
-    shortCode: text('short_code').notNull(),
-    nameAtSelection: text('name_at_selection').notNull(),
-    marketAtSelection: text('market_at_selection').notNull(),
-    marketCapKrw: text('market_cap_krw'),
-    rank: integer('rank'),
-    instrumentType: text('instrument_type').notNull(),
-  },
-  (table) => [
-    uniqueIndex('idx_universe_snapshot_symbols_snap_code').on(table.snapshotId, table.standardCode),
-    index('idx_universe_snapshot_symbols_snap').on(table.snapshotId),
-  ],
-);
 
 // ── 백테스트 (스펙 §10, §12) ──────────────────────────────────────
 

@@ -192,17 +192,7 @@ export function registerSymbolRoutes(
     return reply.code(201).send({ added, skipped });
   });
 
-  /**
-   * 제거 영향 조회 — 확인 대화상자가 "어느 데이터셋이 영향받는지" 를 먼저 보여준다.
-   * 제거 자체와 분리한 이유: 사용자가 결과를 보고 취소할 수 있어야 한다.
-   */
-  app.post('/symbols/removal-impact', { preHandler: requireAuth }, async (request, reply) => {
-    const parsed = removeSymbolsSchema.safeParse(request.body);
-    if (!parsed.success) return reply.code(400).send({ error: 'codes 가 필요합니다' });
-    return { impacts: symbolService.removalImpact(parsed.data.codes) };
-  });
-
-  /** 종목 제거 — 봉·재무·참조를 함께 끊는다. 데이터셋을 비게 만드는 조합은 409 */
+  /** 종목 제거 — 봉·커버리지·워터마크·버전을 함께 삭제한다 */
   app.post('/symbols/remove', { preHandler: requireAuth }, async (request, reply) => {
     const parsed = removeSymbolsSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'codes 가 필요합니다' });
@@ -211,7 +201,7 @@ export function registerSymbolRoutes(
       return reply.code(204).send();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return reply.code(message.includes('비게') || message.includes('실행 중') ? 409 : 400).send({
+      return reply.code(message.includes('실행 중') ? 409 : 400).send({
         error: message,
       });
     }

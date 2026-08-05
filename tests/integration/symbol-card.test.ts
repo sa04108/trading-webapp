@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
-import { datasetSymbols } from '../../src/server/shared/db/schema.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
-import { registerSymbols, seedDataset } from '../helpers/seed.js';
+import { registerSymbols } from '../helpers/seed.js';
 
 const DAY = 86_400_000;
 
@@ -63,7 +62,6 @@ describe('GET /symbols 가 종목 화면에 필요한 것을 한 번에 준다',
       market: string;
       name: string | null;
       hasFacts: boolean;
-      datasetCount: number;
       slices: Array<{
         slice: string;
         hasData: boolean;
@@ -124,48 +122,5 @@ describe('GET /symbols 가 종목 화면에 필요한 것을 한 번에 준다',
     const symbols = await listSymbols(cookie);
     expect(symbols.find((s) => s.code === '005930')?.hasFacts).toBe(true);
     expect(symbols.find((s) => s.code === '000660')?.hasFacts).toBe(false);
-  });
-
-  it('참조 데이터셋 수를 센다 — 제거를 안전하게 만드는 값이다', async () => {
-    const cookie = await loginCookie();
-    seedDataset(ctx.container, 'a', 'KR', ['005930']);
-    seedDataset(ctx.container, 'b', 'KR', ['005930', '000660']);
-
-    const symbols = await listSymbols(cookie);
-    expect(symbols.find((s) => s.code === '005930')?.datasetCount).toBe(2);
-    expect(symbols.find((s) => s.code === '000660')?.datasetCount).toBe(1);
-  });
-});
-
-describe('종목 제거 영향 판정', () => {
-  let ctx: TestApp;
-  beforeEach(async () => {
-    ctx = await createTestApp();
-  });
-  afterEach(async () => {
-    await ctx.close();
-  });
-
-  it('데이터셋을 비게 만드는 제거는 거부한다', async () => {
-    seedDataset(ctx.container, 'solo', 'KR', ['005930']);
-    await expect(ctx.container.symbolService.removeSymbols(['005930'])).rejects.toThrow(/비게/);
-  });
-
-  it('선택 집합 전체를 함께 본다 — 2종목을 둘 다 고르면 "각각 1개 남는다" 로 통과시키지 않는다', () => {
-    seedDataset(ctx.container, 'pair', 'KR', ['005930', '000660']);
-    const impacts = ctx.container.symbolService.removalImpact(['005930', '000660']);
-    expect(impacts.every((impact) => impact.wouldEmpty.length === 1)).toBe(true);
-  });
-
-  it('남는 종목이 있으면 제거하고 참조만 끊는다', async () => {
-    seedDataset(ctx.container, 'pair', 'KR', ['005930', '000660']);
-    await ctx.container.symbolService.removeSymbols(['000660']);
-    expect(ctx.container.symbolService.getSymbol('000660')).toBeNull();
-    const remaining = ctx.container.database.db
-      .select({ code: datasetSymbols.code })
-      .from(datasetSymbols)
-      .all()
-      .map((row) => row.code);
-    expect(remaining).toEqual(['005930']);
   });
 });

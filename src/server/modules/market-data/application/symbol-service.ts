@@ -3,8 +3,6 @@ import { and, desc, eq, gt, inArray, isNotNull } from 'drizzle-orm';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import {
   dataSyncJobs,
-  datasetSymbols,
-  datasets,
   symbolCoverage,
   symbolSlices,
   symbolVersions,
@@ -80,17 +78,6 @@ export interface SymbolSummary {
     /** 이 슬라이스가 마지막으로 수집된 시각 — 슬라이스마다 다르다 */
     readonly lastSyncedAtMs: number | null;
   }>;
-  /** 이 종목을 참조하는 데이터셋 수 — 제거를 안전하게 만드는 값 */
-  readonly datasetCount: number;
-}
-
-/** 제거 확인 대화상자가 쓰는 영향 범위 */
-export interface RemovalImpact {
-  readonly code: string;
-  /** 이 종목을 참조하는 데이터셋 */
-  readonly datasets: ReadonlyArray<{ id: string; name: string; remaining: number }>;
-  /** 참조를 끊으면 종목이 0개가 되는 데이터셋 — 제거를 막는 근거 */
-  readonly wouldEmpty: ReadonlyArray<{ id: string; name: string }>;
 }
 
 export interface CsvImportRequest {
@@ -133,16 +120,13 @@ export class SymbolService {
     // N+1 방지 — 종목 200개에서 행마다 조회하면 목록 한 번에 600 쿼리가 난다
     const coverageRows = this.db.select().from(symbolCoverage).all();
     const sliceRows = this.db.select().from(symbolSlices).all();
-    const refRows = this.db.select({ code: datasetSymbols.code }).from(datasetSymbols).all();
 
     const coverageBy = new Map<string, (typeof coverageRows)[number]>();
     for (const row of coverageRows) coverageBy.set(`${row.code}:${row.slice}`, row);
     const sliceBy = new Map<string, (typeof sliceRows)[number]>();
     for (const row of sliceRows) sliceBy.set(`${row.code}:${row.slice}`, row);
-    const refCount = new Map<string, number>();
-    for (const row of refRows) refCount.set(row.code, (refCount.get(row.code) ?? 0) + 1);
 
-    return rows.map((row) => this.toSummary(row, coverageBy, sliceBy, refCount));
+    return rows.map((row) => this.toSummary(row, coverageBy, sliceBy));
   }
 
   /**
@@ -171,13 +155,8 @@ export class SymbolService {
       .all()) {
       sliceBy.set(`${entry.code}:${entry.slice}`, entry);
     }
-    const refs = this.db
-      .select({ code: datasetSymbols.code })
-      .from(datasetSymbols)
-      .where(eq(datasetSymbols.code, code))
-      .all();
 
-    return this.toSummary(row, coverageBy, sliceBy, new Map([[code, refs.length]]));
+    return this.toSummary(row, coverageBy, sliceBy);
   }
 
   /** 행 + 조회 맵 → 화면이 읽는 요약. 목록과 단건이 같은 모양을 내도록 한 곳에 둔다 */
@@ -185,7 +164,6 @@ export class SymbolService {
     row: typeof symbolsTable.$inferSelect,
     coverageBy: ReadonlyMap<string, typeof symbolCoverage.$inferSelect>,
     sliceBy: ReadonlyMap<string, typeof symbolSlices.$inferSelect>,
-    refCount: ReadonlyMap<string, number>,
   ): SymbolSummary {
     return {
       code: row.code,
@@ -203,7 +181,6 @@ export class SymbolService {
           lastSyncedAtMs: state?.lastSyncedAtMs ?? null,
         };
       }),
-      datasetCount: refCount.get(row.code) ?? 0,
     };
   }
 
@@ -235,45 +212,7 @@ export class SymbolService {
   }
 
   /**
-   * 제거 영향 범위. 데이터셋을 빈 껍데기로 만드는 제거는 막아야 하고, 그 판정은
-   * **선택 집합 전체**를 함께 봐야 한다 — 종목을 하나씩 보면 2종목 데이터셋에서 둘 다
-   * 선택한 경우를 "각각 1개는 남는다" 로 잘못 통과시킨다.
-   */
-  removalImpact(codes: readonly string[]): RemovalImpact[] {
-    const selected = new Set(codes);
-    const refs = this.db
-      .select({ datasetId: datasetSymbols.datasetId, code: datasetSymbols.code })
-      .from(datasetSymbols)
-      .all();
-    const names = new Map(
-      this.db.select({ id: datasets.id, name: datasets.name }).from(datasets).all().map((row) => [row.id, row.name]),
-    );
-
-    const byDataset = new Map<string, string[]>();
-    for (const ref of refs) {
-      const list = byDataset.get(ref.datasetId) ?? [];
-      list.push(ref.code);
-      byDataset.set(ref.datasetId, list);
-    }
-
-    return codes.map((code) => {
-      const affected: Array<{ id: string; name: string; remaining: number }> = [];
-      const wouldEmpty: Array<{ id: string; name: string }> = [];
-      for (const [datasetId, members] of byDataset) {
-        if (!members.includes(code)) continue;
-        const remaining = members.filter((member) => !selected.has(member)).length;
-        const name = names.get(datasetId) ?? datasetId;
-        affected.push({ id: datasetId, name, remaining });
-        if (remaining === 0) wouldEmpty.push({ id: datasetId, name });
-      }
-      return { code, datasets: affected, wouldEmpty };
-    });
-  }
-
-  /**
-   * 종목 제거 — 봉·커버리지·워터마크·버전과 데이터셋 참조를 함께 끊는다.
-   * 데이터셋을 비게 만드는 조합은 거부한다: 종목 0개 데이터셋은 제출 시점에만 걸려
-   * 원인을 알 수 없는 상태가 된다.
+   * 종목 제거 — 봉·커버리지·워터마크·버전을 함께 삭제한다.
    */
   async removeSymbols(codes: readonly string[]): Promise<void> {
     if (codes.length === 0) return;
@@ -283,15 +222,6 @@ export class SymbolService {
       .where(inArray(dataSyncJobs.status, ['QUEUED', 'RUNNING']))
       .get();
     if (running) throw new Error('데이터 작업이 실행 중입니다 — 완료 후 제거하세요');
-
-    const impacts = this.removalImpact(codes);
-    const empties = impacts.flatMap((impact) => impact.wouldEmpty.map((entry) => entry.name));
-    if (empties.length > 0) {
-      throw new Error(
-        `이 종목들을 제거하면 데이터셋이 비게 됩니다: ${[...new Set(empties)].join(', ')} — ` +
-          '데이터셋을 먼저 삭제하거나 다른 종목을 추가하세요',
-      );
-    }
 
     for (const code of codes) {
       const row = this.db.select().from(symbolsTable).where(eq(symbolsTable.code, code)).get();
