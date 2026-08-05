@@ -21,6 +21,7 @@ const krxPin: ProvenancePin = {
   approvalValidAtSubmit: true,
   timepointWarning: null,
   symbols: [],
+  scheduleHash: null,
 };
 
 const datasetPin: ProvenancePin = {
@@ -36,6 +37,7 @@ const datasetPin: ProvenancePin = {
   approvalValidAtSubmit: null,
   timepointWarning: DATASET_TIMEPOINT_WARNING,
   symbols: null,
+  scheduleHash: null,
 };
 
 describe('provenanceNotice', () => {

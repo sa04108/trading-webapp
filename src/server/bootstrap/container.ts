@@ -54,6 +54,7 @@ import { createKrxHistoricalUniverseSource } from '../modules/market-data/infras
 import { SymbolMasterService } from '../modules/market-data/application/symbol-master-service.js';
 import { SymbolMasterBackfill } from '../modules/market-data/application/symbol-master-backfill.js';
 import { SymbolMasterScheduler } from '../modules/market-data/application/symbol-master-scheduler.js';
+import { UniverseRuleResolver } from '../modules/backtest/application/universe-rule-resolver.js';
 
 export interface SystemStatusProviders {
   queueLength: () => number;
@@ -97,6 +98,7 @@ export interface Container {
   readonly symbolMasterService: SymbolMasterService;
   readonly symbolMasterBackfill: SymbolMasterBackfill;
   readonly symbolMasterScheduler: SymbolMasterScheduler;
+  readonly universeRuleResolver: UniverseRuleResolver;
   close(): void;
 }
 
@@ -330,6 +332,9 @@ export function createContainer(config: AppConfig): Container {
     clock,
     logger,
   });
+  // 유니버스 규칙(시총 상위 N) → 리밸런스 날짜별 멤버십 일정 (스펙 2026-08-05) —
+  // 백테스트 제출·미리보기가 공유한다.
+  const universeRuleResolver = new UniverseRuleResolver({ symbolMaster: symbolMasterService, logger });
 
   const jobQueue = new JobQueue(database, clock);
   const jobOrchestrator = new JobOrchestrator(jobQueue, config, logger, auditLog, clock);
@@ -380,6 +385,7 @@ export function createContainer(config: AppConfig): Container {
     symbolMasterService,
     symbolMasterBackfill,
     symbolMasterScheduler,
+    universeRuleResolver,
     close: () => {
       clearInterval(pruneTimer);
       jobOrchestrator.stop();

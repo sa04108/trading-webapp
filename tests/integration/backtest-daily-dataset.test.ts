@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
-import { registerSymbols, seedDataset } from '../helpers/seed.js';
+import { registerSymbols } from '../helpers/seed.js';
+import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 
 const DAY = 86_400_000;
 
@@ -10,11 +11,12 @@ const DAY = 86_400_000;
  * 일봉 데이터셋 백테스트 회귀 (D-024).
  * 자식 프로세스가 데이터셋 timeframe 을 무시하고 1h 로 캔들을 읽던 버그 —
  * 일봉 수집 데이터셋(timeframe=1d)은 1h 파티션이 없어 0봉으로 실패했다.
- */
-
-/**
- * 평일 일봉 (KST 09:00 = UTC 00:00 을 봉 시작으로 둔다 — 1h 관례와 동일).
- * 상승 → 급락을 반복해 돌파 진입과 손절 청산이 모두 발생하게 한다.
+ *
+ * 유니버스는 이제 데이터셋이 아니라 유니버스 규칙(스펙 2026-08-05)이 정한다 —
+ * 이 파일의 픽스처는 종목 마스터를 직접 채워(`seedSymbolMasterUniverse`) 실제 KRX
+ * 호출 없이 `UniverseRuleResolver` 를 태운다. 두 종목(005930 이 항상 1위, 000660 은
+ * 2위)을 마스터에 함께 두고, universeRule.topN 으로 몇 종목이 유니버스에 들어올지
+ * 테스트별로 조절한다.
  */
 function buildDailyCandles(): Candle[] {
   const candles: Candle[] = [];
@@ -47,7 +49,14 @@ function buildDailyCandles(): Candle[] {
   return candles;
 }
 
-function buildRequest(datasetId: string): BacktestRequest {
+/** 이 파일의 테스트가 리밸런스 날짜로 쓰는 값 전부 — 종목 마스터 시총 캐시를 이 날짜들로 채운다 */
+const MASTER_DATES = ['2025-07-27', '2025-08-01', '2025-09-01', '2025-10-01'];
+
+function universeRule(topN: number): BacktestRequest['universeRule'] {
+  return { markets: ['KOSPI'], topN, sortKey: 'MKTCAP' };
+}
+
+function buildRequest(topN = 1): BacktestRequest {
   return {
     strategyId: 'range-breakout',
     parameters: {
@@ -57,8 +66,7 @@ function buildRequest(datasetId: string): BacktestRequest {
       takeProfitAtrMultiplier: 3,
       riskPerTradePercent: 2,
     },
-    datasetId,
-    universe: { type: 'SYMBOLS', symbols: ['005930'] },
+    universeRule: universeRule(topN),
     period: { from: '2025-07-27', to: '2026-07-24' },
     capital: { initialCash: 10_000_000, currency: 'KRW' },
     execution: {
@@ -82,7 +90,6 @@ async function waitFor(condition: () => boolean, timeoutMs: number): Promise<voi
 describe('일봉 데이터셋 백테스트 (D-024)', () => {
   let ctx: TestApp;
   let cookie: string;
-  let datasetId: string;
   let dailyCandles: Candle[];
 
   beforeEach(async () => {
@@ -95,15 +102,16 @@ describe('일봉 데이터셋 백테스트 (D-024)', () => {
     });
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
 
-    // 증권사 일봉 동기화가 만드는 상태를 그대로 재현한다 (timeframe=1d 데이터셋 + 1d 파티션)
-    const dataset = seedDataset(ctx.container, 'kr-daily-v1', 'KR', ['005930']);
-    datasetId = dataset.id;
+    // 증권사 일봉 동기화가 만드는 상태를 그대로 재현한다 (로컬 종목 등록 + 1d 파티션)
+    registerSymbols(ctx.container, 'KR', ['005930', '000660']);
+    seedSymbolMasterUniverse(ctx.container, MASTER_DATES, [
+      { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
+      { standardCode: 'KR7000660001', shortCode: '000660', name: 'SK하이닉스', market: 'KOSPI', marketCapKrw: '1000000000000' },
+    ]);
     dailyCandles = buildDailyCandles();
     await ctx.container.candleRepository.saveCandles(dailyCandles);
-    for (const code of dataset.symbols) {
-      await ctx.container.symbolService.refreshCoverage(code, 'KR', '1d');
-      ctx.container.symbolService.bumpVersion(code, '1d', 'broker:seed', Date.now());
-    }
+    await ctx.container.symbolService.refreshCoverage('005930', 'KR', '1d');
+    ctx.container.symbolService.bumpVersion('005930', '1d', 'broker:seed', Date.now());
   });
 
   afterEach(async () => {
@@ -119,7 +127,7 @@ describe('일봉 데이터셋 백테스트 (D-024)', () => {
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
-      payload: buildRequest(datasetId),
+      payload: buildRequest(),
     });
     expect(created.statusCode).toBe(201);
     const jobId = (created.json().job as { id: string }).id;
@@ -139,19 +147,13 @@ describe('일봉 데이터셋 백테스트 (D-024)', () => {
   });
 
   it('봉이 없는 종목을 실행 경고로 남긴다', { timeout: 90_000 }, async () => {
-    // 데이터셋에 심볼을 더하되 봉은 넣지 않는다 — 제출 검증은 통과하고 실행에서 빠진다
-    registerSymbols(ctx.container, 'KR', ['000660']);
-    registerSymbols(ctx.container, 'KR', ['000660']);
-    ctx.container.datasetService.updateSymbols(datasetId, { add: ['000660'] });
-
+    // topN=2 로 올리면 시총 2위(000660, 봉 없음)도 유니버스에 들어온다 —
+    // 제출 검증은 통과하고(005930 이 겹치므로 D-025 관용) 실행에서 그 종목만 빠진다
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
-      payload: {
-        ...buildRequest(datasetId),
-        universe: { type: 'SYMBOLS', symbols: ['005930', '000660'] },
-      },
+      payload: buildRequest(2),
     });
     expect(created.statusCode).toBe(201);
     const jobId = (created.json().job as { id: string }).id;
@@ -179,9 +181,8 @@ describe('일봉 데이터셋 백테스트 (D-024)', () => {
       payload: {
         strategyId: 'value-quality-rank',
         parameters: { topN: 20, rebalanceMonths: 3, staleQuarters: 2 },
-        datasetId,
+        universeRule: universeRule(1),
         timeframe: '1d',
-        universe: { type: 'SYMBOLS', symbols: ['005930'] },
         period: { from: '2025-08-01', to: '2025-10-31' },
         capital: { initialCash: 10_000_000, currency: 'KRW' },
         execution: {
@@ -214,9 +215,8 @@ describe('일봉 데이터셋 백테스트 (D-024)', () => {
         rebalanceMonths: 1,
         absoluteMomentumFilter: true,
       },
-      datasetId,
+      universeRule: universeRule(1),
       timeframe: '1d',
-      universe: { type: 'SYMBOLS', symbols: ['005930'] },
       period: { from: '2025-08-01', to: '2025-10-31' },
       capital: { initialCash: 10_000_000, currency: 'KRW' },
       execution: {
@@ -257,10 +257,7 @@ describe('일봉 데이터셋 백테스트 (D-024)', () => {
 
   it('clone-draft 는 같은 조건을 blockers 로 알린다 (막지 않고 고칠 화면은 열어준다)', async () => {
     // 게이트가 생기기 전에 제출된 잡을 재현한다 — 큐에 직접 넣어 제출 검증을 우회한다
-    const job = ctx.container.jobQueue.enqueue(
-      momentumPayload(20, 10) as never,
-      { entries: [], hash: 'seed' },
-    );
+    const job = ctx.container.jobQueue.enqueue(momentumPayload(20, 10) as never, [], { entries: [], hash: 'seed' });
 
     const draft = await ctx.app.inject({
       method: 'GET',
@@ -295,9 +292,8 @@ describe('일봉 데이터셋 백테스트 (D-024)', () => {
           rebalanceMonths: 1,
           absoluteMomentumFilter: true,
         },
-        datasetId,
+        universeRule: universeRule(1),
         timeframe: '1d',
-        universe: { type: 'SYMBOLS', symbols: ['005930'] },
         period: { from: '2025-08-01', to: '2025-10-31' },
         capital: { initialCash: 10_000_000, currency: 'KRW' },
         execution: {

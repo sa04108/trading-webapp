@@ -17,8 +17,8 @@ import {
   backtestTrades,
   symbolVersions,
   symbols as symbolsTable,
-  datasets,
 } from '../server/shared/db/schema.js';
+import type { UniverseScheduleEntry } from '../server/modules/backtest/application/universe-rule-resolver.js';
 import { newId } from '../server/shared/ids.js';
 import { TERMINAL_STATUSES } from '../server/modules/backtest/application/job-queue.js';
 import { MAX_BACKTEST_BARS } from '../server/modules/backtest/domain/bar-estimate.js';
@@ -91,23 +91,21 @@ async function main(): Promise<void> {
     const slippageProfile = getSlippageProfile(request.execution.slippageProfileId);
     if (!costProfile || !slippageProfile) throw new Error('unknown cost/slippage profile');
 
-    // datasetId 경로만 실존 데이터셋을 요구한다 — universeSnapshotId 경로(Task 12)는
-    // 데이터셋이 없다. 그 경우 backtestRuns.datasetId 에는 job.datasetId(제출 시점에
-    // queue.enqueue 가 저장한 '' sentinel)를 그대로 쓴다.
-    let resolvedDatasetId = job.datasetId;
-    if (request.datasetId !== undefined) {
-      const dataset = db.select().from(datasets).where(eq(datasets.id, request.datasetId)).get();
-      if (!dataset) throw new Error(`dataset not found: ${request.datasetId}`);
-      resolvedDatasetId = dataset.id;
-    }
-    // market 은 이제 종목의 속성이다 — 요청 유니버스의 종목들에서 읽는다. 여러 시장이
+    // 워커·엔진의 유일한 유니버스 소스는 제출 시점에 pin 한 멤버십 일정이다 (스펙
+    // 2026-08-05) — `request.universeRule` 은 규칙일 뿐, 실제로 어떤 종목이었는지는
+    // 여기 job.universeScheduleJson 에 이미 확정돼 있다. 워커가 규칙을 다시 해석하면
+    // 대기 중 종목 마스터가 갱신됐을 때 제출 시점과 다른 유니버스로 돌게 된다.
+    const schedule = JSON.parse(job.universeScheduleJson) as UniverseScheduleEntry[];
+    const unionSymbols = [...new Set(schedule.flatMap((entry) => entry.symbols))].sort();
+
+    // market 은 이제 종목의 속성이다 — 유니버스 종목들에서 읽는다. 여러 시장이
     // 섞이면 세션·집계 기준이 하나로 정해지지 않아 실행 자체가 성립하지 않는다.
     const universeMarkets = [
       ...new Set(
         db
           .select({ market: symbolsTable.market })
           .from(symbolsTable)
-          .where(inArray(symbolsTable.code, [...request.universe.symbols]))
+          .where(inArray(symbolsTable.code, unionSymbols))
           .all()
           .map((row) => row.market),
       ),
@@ -179,7 +177,7 @@ async function main(): Promise<void> {
     for await (const candle of repository.getCandles({
       market: datasetMarket,
       timeframe,
-      symbols: request.universe.symbols,
+      symbols: unionSymbols,
       fromTsMs,
       toTsMs,
     })) {
@@ -201,7 +199,7 @@ async function main(): Promise<void> {
     // 일부 종목만 구간에 봉이 없는 경우 — 제출 검증은 통과시킨다(신규 상장 등 정상).
     // 조용히 빠지면 결과를 오해하므로 실측 기준으로 경고를 남긴다 (D-025).
     const symbolsWithBars = new Set(candles.map((candle) => candle.symbol));
-    const emptySymbols = request.universe.symbols.filter((s) => !symbolsWithBars.has(s));
+    const emptySymbols = unionSymbols.filter((s) => !symbolsWithBars.has(s));
     if (emptySymbols.length > 0) {
       datasetWarnings.push(
         `선택한 기간에 ${timeframe} 봉이 없어 제외된 종목: ${emptySymbols.join(', ')}`,
@@ -226,13 +224,13 @@ async function main(): Promise<void> {
     const financialFacts: Fact[] = (
       await factRepository.getFacts({
         scope: 'SYMBOL',
-        keys: request.universe.symbols,
+        keys: unionSymbols,
         asOfMaxTsMs: toTsMs,
       })
     ).filter((fact) => fact.field !== CORPORATE_ACTION_FIELD);
     const corporateActionFacts: Fact[] = await factRepository.getFacts({
       scope: 'SYMBOL',
-      keys: request.universe.symbols,
+      keys: unionSymbols,
       fields: [CORPORATE_ACTION_FIELD],
     });
     const facts: Fact[] = [...financialFacts, ...corporateActionFacts];
@@ -249,7 +247,7 @@ async function main(): Promise<void> {
       // 요청 유니버스와 맞춰 재무가 **하나도 없는** 종목을 직접 이름으로 밝힌다.
       // (계정이 일부만 빠진 종목까지 여기서 가려내지는 못하므로 그 한계도 함께 남긴다.)
       const symbolsWithFacts = new Set(financialFacts.map((fact) => fact.key));
-      const withoutFacts = request.universe.symbols.filter((s) => !symbolsWithFacts.has(s));
+      const withoutFacts = unionSymbols.filter((s) => !symbolsWithFacts.has(s));
       // 유니버스 상한이 200종목이라 캡이 없으면 경고 한 줄이 종목코드 200개가 된다 —
       // 엔진의 포지션 상한 경고와 같은 10종목 캡을 쓴다 (engine.ts 의 buysDroppedByCap).
       const shown = withoutFacts.slice(0, 10).join(', ');
@@ -310,7 +308,10 @@ async function main(): Promise<void> {
           strategyVersion: strategy.version,
           strategySourceHash: sourceHash,
           parameterJson: JSON.stringify(parameters),
-          datasetId: resolvedDatasetId,
+          universeRuleJson: job.universeRuleJson,
+          // pin 이 scheduleHash 를 들고 있다 — validateSubmission 이 조립한 그대로다.
+          // pin 이 없을 리 없지만(항상 SYMBOL_MASTER 로 채워 저장한다), 손상된 행 방어로 폴백한다.
+          scheduleHash: pin?.scheduleHash ?? 'unknown',
           universeJson: pinnedUniverseJson,
           universeHash: pinnedUniverseHash,
           engineVersion: ENGINE_VERSION,

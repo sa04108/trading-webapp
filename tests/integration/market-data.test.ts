@@ -665,7 +665,7 @@ describe('market data (스펙 §11, §13)', () => {
     );
   });
 
-  it('updates symbols and deletes a dataset via API, blocking delete while backtests are active', async () => {
+  it('updates symbols and deletes a dataset via API', async () => {
     const { username, password } = await createTestAdmin(ctx.container);
     const login = await ctx.app.inject({
       method: 'POST',
@@ -697,20 +697,10 @@ describe('market data (스펙 §11, §13)', () => {
     expect(patched.statusCode).toBe(200);
     expect(patched.json().dataset.symbols).toEqual(['000660', '005930']);
 
-    // D 가드: 활성 백테스트가 참조 중이면 409
-    const btJob = ctx.container.jobQueue.enqueue({
-      strategyId: 'noop',
-      datasetId: dataset.id,
-    } as never);
-    const blocked = await ctx.app.inject({
-      method: 'DELETE',
-      url: `/api/v1/datasets/${dataset.id}`,
-      cookies: { qp_session: cookie },
-    });
-    expect(blocked.statusCode).toBe(409);
-
-    // 백테스트 잡 정리 후 삭제 성공
-    ctx.container.jobQueue.setStatus(btJob.id, 'CANCELLED');
+    // D 가드(활성 백테스트가 참조 중이면 409)는 더 이상 검증하지 않는다 — 백테스트
+    // 잡은 유니버스 규칙으로 종목을 고르지 데이터셋을 참조하지 않으므로(스펙
+    // 2026-08-05) `activeCountForDataset` 은 항상 0 이다(job-queue.ts 참고). 가드
+    // 자체의 제거는 데이터셋 코드 전체를 걷어내는 T6 몫이다.
     const deleted = await ctx.app.inject({
       method: 'DELETE',
       url: `/api/v1/datasets/${dataset.id}`,

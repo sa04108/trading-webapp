@@ -330,9 +330,18 @@ export const backtestJobs = sqliteTable(
     status: text('status').notNull(),
     requestJson: text('request_json').notNull(),
     strategyId: text('strategy_id').notNull(),
-    datasetId: text('dataset_id').notNull(),
-    /** 유니버스 스냅샷 참조. datasetId 처럼 FK 를 걸지 않는다 — 실행 기록은 pin 값으로 자립한다 */
-    universeSnapshotId: text('universe_snapshot_id'),
+    /**
+     * 제출한 유니버스 규칙 원문 (스펙 2026-08-05) — `requestJson` 안에도 있지만, 잡·런을
+     * 목록 조회할 때 전체 요청을 파싱하지 않고 유니버스만 보려는 화면·감사 질의를 위해
+     * 별도 컬럼으로 둔다.
+     */
+    universeRuleJson: text('universe_rule_json').notNull(),
+    /**
+     * `UniverseRuleResolver.resolve` 가 만든 멤버십 일정(`UniverseScheduleEntry[]`) —
+     * 워커·엔진의 유일한 유니버스 소스다. 제출 시점에 고정해 대기 중 종목 마스터가
+     * 갱신돼도 실행이 흔들리지 않는다 (§9.5 와 같은 재현성 원칙).
+     */
+    universeScheduleJson: text('universe_schedule_json').notNull(),
     /** 서버 소유 provenance pin (REVIEW §9.2). 클라이언트 입력이 아니다 */
     provenancePinJson: text('provenance_pin_json'),
     /**
@@ -369,8 +378,10 @@ export const backtestRuns = sqliteTable('backtest_runs', {
   strategyVersion: text('strategy_version').notNull(),
   strategySourceHash: text('strategy_source_hash').notNull(),
   parameterJson: text('parameter_json').notNull(),
-  /** 어느 데이터셋을 골랐나 — 실행이 무엇을 소비했는지는 universeJson 이 답한다 */
-  datasetId: text('dataset_id').notNull(),
+  /** 제출한 유니버스 규칙 원문 — backtestJobs.universeRuleJson 과 같은 이유로 복사해 둔다 */
+  universeRuleJson: text('universe_rule_json').notNull(),
+  /** 멤버십 일정의 집계 해시 (`UniverseRuleResolver.resolve` 의 scheduleHash) */
+  scheduleHash: text('schedule_hash').notNull(),
   /**
    * 소비한 (종목, 슬라이스, 버전, 해시) 목록의 집계 해시 — 구 datasetHash 를 대신한다.
    * 종목 데이터가 데이터셋 간에 공유되므로 데이터셋 버전 하나로는 입력을 고정할 수 없다

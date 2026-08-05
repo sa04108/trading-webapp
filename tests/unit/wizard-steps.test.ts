@@ -167,12 +167,14 @@ describe('stepBlocker — 종목 수 상한 게이트 (단계 1)', () => {
   /**
    * 게이트가 통과시킨 유니버스를 서버가 400 으로 막으면 그 어긋남은 제출해 봐야 드러난다.
    * 화면 상한과 요청 스키마 상한이 같은 상수인지 스키마로 직접 확인한다.
+   *
+   * 종목 수 자체는 더 이상 요청에 담기지 않는다(스펙 2026-08-05) — 유니버스는
+   * `universeRule.topN` 이 정하므로, 경계 확인도 그 필드로 옮긴다.
    */
   it('게이트 경계가 요청 스키마 경계와 같다', () => {
     const request = {
       strategyId: 'rsi-reversion',
       parameters: {},
-      datasetId: 'ds_1',
       period: { from: '2024-01-01', to: '2024-12-31' },
       capital: { initialCash: 10_000_000, currency: 'KRW' as const },
       execution: {
@@ -182,10 +184,10 @@ describe('stepBlocker — 종목 수 상한 게이트 (단계 1)', () => {
       },
       risk: { maxPositions: 20 },
     };
-    const parse = (count: number): boolean =>
+    const parse = (topN: number): boolean =>
       backtestRequestSchema.safeParse({
         ...request,
-        universe: { type: 'SYMBOLS', symbols: symbols(count) },
+        universeRule: { markets: ['KOSPI'], topN, sortKey: 'MKTCAP' },
       }).success;
 
     expect(parse(MAX_UNIVERSE_SYMBOLS)).toBe(true);
