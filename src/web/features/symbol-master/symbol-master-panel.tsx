@@ -233,7 +233,11 @@ export function SymbolMasterPanel() {
         </Button>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+      {/* grid-cols-1 을 기본으로 명시한다 — 지정하지 않으면 lg 미만에서 암시적 grid
+          트랙이 콘텐츠(표의 넓은 열)에 맞춰 늘어나 390px 화면에 가로 스크롤을
+          만든다(스펙 §38). minmax(0,1fr) 이 있어야 1fr 트랙이 콘텐츠 폭 대신
+          컨테이너 폭에 맞춰 줄어들고, 넘치는 표 자체는 안쪽 overflow-x-auto 가 맡는다. */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
         <UniverseTable
           date={committedDate}
           universe={universe}

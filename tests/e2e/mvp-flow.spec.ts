@@ -1,7 +1,66 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 
 const USERNAME = 'e2e-operator';
 const PASSWORD = 'correct-horse-battery-staple';
+
+/**
+ * 위저드가 실제로 실행하는 기간 — 005930 의 캔들이 이 구간에 있다
+ * (scripts/e2e-server.ts buildTrendingHourlyCsv). 종목 마스터 e2e(다른 스펙,
+ * tests/e2e/symbol-master.spec.ts)가 쓰는 SEED_DATE(2024-12-30)와 겹치지 않는다 —
+ * 두 스펙이 같은 서버를 공유해도(playwright.config workers:1) coverage 판정에서
+ * 서로 간섭하지 않는다.
+ */
+const PERIOD = { from: '2026-01-05', to: '2026-03-31' };
+/** KOSPI 상위 1종목만 — 900010(상장폐지예정1호)은 시가총액이 더 낮아 순위 밖으로 빠진다 */
+const TOP_N = 1;
+
+/**
+ * 위저드 유니버스 단계 — [미리보기] 를 누르고, 리밸런스 날짜가 아직 커버되지 않았다는
+ * 경고가 뜨면 날짜마다 있는 [동기화] 를 모두 눌러 해소한다.
+ *
+ * 이미 같은 기간을 동기화해 둔 뒤(예: 이 파일의 재무 게이트 시나리오가 앞선 시나리오와
+ * 같은 PERIOD 를 쓴다) 다시 부르면 경고 자체가 뜨지 않아 반복문이 0회 돌고 끝난다 —
+ * 그래서 두 시나리오가 이 함수를 그대로 공유해도 안전하다.
+ */
+async function previewAndSyncUniverse(page: Page): Promise<void> {
+  const initialPreview = page.waitForResponse(
+    (resp) =>
+      resp.url().includes('/backtests/universe-preview') && resp.request().method() === 'POST',
+  );
+  await page.getByRole('button', { name: '미리보기' }).click();
+  // 클릭 직후 count() 는 자동 대기하지 않는다 — 응답이 아직 안 온 시점의 DOM(동기화
+  // 버튼 0개)을 그대로 읽으면 아래 while 이 실제로는 우다 목록이 곧 뜨는데도 0회로
+  // 끝나 버린다. 첫 미리보기 응답을 기다린 뒤에야 목록을 센다.
+  await initialPreview;
+
+  let syncButtons = page.getByRole('button', { name: '동기화' });
+  while ((await syncButtons.count()) > 0) {
+    // 동기화가 끝나면 컴포넌트가 같은 params 로 미리보기를 자동으로 다시 던진다
+    // (universe-rule-step.tsx `onSuccess`) — 그 응답을 기다려야 남은 우다 목록이
+    // 갱신된 상태에서 다음 반복의 count() 를 읽는다.
+    const previewRefreshed = page.waitForResponse(
+      (resp) =>
+        resp.url().includes('/backtests/universe-preview') && resp.request().method() === 'POST',
+    );
+    await syncButtons.first().click();
+    await previewRefreshed;
+    syncButtons = page.getByRole('button', { name: '동기화' });
+  }
+}
+
+/**
+ * `locator.fill()` 대신 클릭 + 실제 키 입력을 쓴다 — 종목 목록 화면은 `/symbols` 를
+ * 5초마다 폴링하는데(symbols-panel.tsx `refetchInterval`), 그 폴링이 `fill()` 의
+ * 원자적 값 설정과 겹치는 순간에 실행되면(데스크톱 프로젝트에서 재현됨, 모바일은
+ * 타이밍이 달라 재현되지 않았다) 입력값이 그대로 사라져 검색이 전혀 걸리지 않는
+ * 채로 남는다. 실제 키 입력은 한 글자씩 이벤트를 발생시켜 이 경합에 영향받지 않는다.
+ */
+async function typeInto(locator: Locator, text: string): Promise<void> {
+  await locator.click();
+  await locator.press('Control+A');
+  await locator.press('Backspace');
+  await locator.pressSequentially(text);
+}
 
 /** 스펙 §33 E2E 흐름: 로그인 → 생성 → 제출 → 완료 → 결과 → 거래 필터 → clone → 로그아웃 */
 test('full MVP flow', async ({ page }) => {
@@ -37,7 +96,8 @@ test('full MVP flow', async ({ page }) => {
   await page.getByRole('button', { name: '로그인' }).click();
   await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
 
-  // 2. 백테스트 생성 (6단계 위저드) — 픽스처에서 완결 거래가 나오도록 파라미터 조정
+  // 2. 백테스트 생성 (6단계 위저드: 전략 → 기간 → 유니버스 → 자본·비용 → 검토 → 실행,
+  // 스펙 2026-08-05 — 데이터셋·스냅샷 선택이 유니버스 규칙으로 바뀌었다)
   await page.goto('/backtests/new');
   await page.getByRole('button', { name: /전고점 돌파/ }).click();
   // exact — ⓘ 아이콘의 aria-label('… 설명') 과 부분 일치로 겹치지 않게 한다
@@ -60,24 +120,44 @@ test('full MVP flow', async ({ page }) => {
   await expect(hint).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(hint).toBeHidden();
-  await page.getByRole('button', { name: '다음' }).click();
+  await page.getByRole('button', { name: '다음' }).click(); // 전략 → 기간
 
-  await page.getByRole('button', { name: /kr-hourly-v1/ }).click();
-  await page.getByRole('button', { name: '다음' }).click();
+  // 2-1. 기간 — 유니버스 미리보기가 리밸런스 날짜 계산에 이 값을 쓰므로 유니버스보다 앞이다
+  await page.getByLabel('시작일').fill(PERIOD.from);
+  await page.getByLabel('종료일').fill(PERIOD.to);
+  await page.getByRole('button', { name: '다음' }).click(); // 기간 → 유니버스
 
-  await page.getByLabel('시작일').fill('2026-01-05');
-  await page.getByLabel('종료일').fill('2026-03-31');
-  await page.getByRole('button', { name: '다음' }).click();
+  // 2-2. 유니버스 규칙 — 위저드는 이제 종목을 하나씩 고르지 않는다. 체크박스가
+  // 하나도 없다는 사실 자체가 그 회귀를 잡는다.
+  await expect(page.getByRole('button', { name: '3. 유니버스' })).toHaveAttribute(
+    'aria-current',
+    'step',
+  );
+  await expect(page.getByRole('checkbox')).toHaveCount(0);
+  await expect(page.getByLabel('시장')).toContainText('KOSPI');
+  await page.getByLabel('상위 N (시가총액)').fill(String(TOP_N));
+  await previewAndSyncUniverse(page);
+  await expect(page.getByText('종목 1개 · 리밸런스 3회')).toBeVisible();
+  // 005930 은 분봉만 있어 1시간봉/분봉 중에서 고른다 — 기본값(1시간봉)을 그대로 쓴다
+  await expect(page.getByText('1시간봉')).toBeVisible();
 
+  await page.getByRole('button', { name: '다음' }).click(); // 유니버스 → 자본·비용
+  await expect(page.getByRole('button', { name: '4. 자본·비용' })).toHaveAttribute(
+    'aria-current',
+    'step',
+  );
   await page.getByRole('button', { name: '다음' }).click(); // 자본·비용 기본값 → 검토
   await expect(page.getByRole('button', { name: '5. 검토' })).toHaveAttribute(
     'aria-current',
     'step',
   );
+  // 검토 줄은 데이터셋이 아니라 유니버스 규칙을 적는다(universe-summary.ts) — 실제
+  // 리밸런스 결과 종목 수는 여기 적지 않는다(다시 미리보기해야 아는 값이라서다)
+  await expect(page.getByText('KOSPI 시가총액 상위 1').first()).toBeVisible();
 
-  // 2-1. 상단 단계 버튼 — 뒤로는 자유롭게, 앞으로는 검토까지만
-  await page.getByRole('button', { name: '2. 데이터·종목' }).click();
-  await expect(page.getByRole('button', { name: '2. 데이터·종목' })).toHaveAttribute(
+  // 2-3. 상단 단계 버튼 — 뒤로는 자유롭게, 앞으로는 검토까지만
+  await page.getByRole('button', { name: '3. 유니버스' }).click();
+  await expect(page.getByRole('button', { name: '3. 유니버스' })).toHaveAttribute(
     'aria-current',
     'step',
   );
@@ -92,7 +172,7 @@ test('full MVP flow', async ({ page }) => {
   // 검증도 실제 클릭으로 해야 한다.
   await runStep.click({ force: true });
   await expect(page.getByText("'검토' 단계에서 '다음' 을 눌러 진행하세요")).toBeVisible();
-  await expect(page.getByRole('button', { name: '2. 데이터·종목' })).toHaveAttribute(
+  await expect(page.getByRole('button', { name: '3. 유니버스' })).toHaveAttribute(
     'aria-current',
     'step',
   );
@@ -125,10 +205,9 @@ test('full MVP flow', async ({ page }) => {
     .getByText(/kr-equity-default@/);
   await expect(feeModelValue).toHaveCSS('overflow-wrap', 'anywhere');
   await expect(feeModelValue).not.toHaveCSS('text-overflow', 'ellipsis');
-  // 5-1. 설명 줄은 종목을 나열하지 않고 데이터셋 이름과 종목 수를 적는다 — 백테스트는
-  // 종목이 아니라 데이터셋을 고른다. 이름은 데이터셋 카탈로그 조회로 붙으므로 여기에
-  // id(ds_…) 가 뜨면 그 조회가 끊긴 것이다.
-  await expect(page.getByText('kr-hourly-v1 · 1종목')).toBeVisible();
+  // 5-1. 설명 줄은 종목을 나열하지 않고 유니버스 규칙을 적는다(스펙 2026-08-05) —
+  // 데이터셋·스냅샷 개념 자체가 제거됐다. 여기에 id(ds_…) 가 뜨면 옛 경로로 되돌아간 것이다.
+  await expect(page.getByText('KOSPI 시가총액 상위 1')).toBeVisible();
   // 별도 "미청산 포지션" 카드는 제거되고 거래 내역 테이블에 통합됐다
   await expect(page.getByText('미청산 포지션', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('row').filter({ hasText: '미청산' }).first()).toBeVisible();
@@ -198,59 +277,53 @@ test('full MVP flow', async ({ page }) => {
     .poll(() => page.url(), { timeout: 10_000 })
     .not.toBe(originalUrl);
 
-  // 7-1. 재무 조합 게이트 — 픽스처의 005930 은 재무가 없다. 「재무 필요」 전략을 고르면
-  // 종목을 고르는 그 자리에서 막혀야 한다 (제출 후 422 를 받는 왕복을 없앤다).
+  // 7-1. 재무 조합 게이트 — 위저드는 종목을 직접 고르지 않으므로, 이 조합 판정은
+  // '유니버스' 단계에서 미리보기가 유니버스 종목을 확정한 뒤에만 이뤄진다
+  // (wizard-steps.ts `fundamentalsBlocker`). 픽스처의 005930 은 재무가 없다.
   await page.goto('/backtests/new');
   await page.getByRole('button', { name: /밸류·퀄리티 랭킹/ }).click();
-  await page.getByRole('button', { name: '2. 데이터·종목' }).click();
-  await page.getByRole('button', { name: /kr-hourly-v1/ }).click();
-  await expect(page.getByText(/재무 데이터가 필요하지만 선택한 종목에는 없습니다/)).toBeVisible();
+  await page.getByRole('button', { name: '다음' }).click(); // 전략 → 기간
+  await page.getByLabel('시작일').fill(PERIOD.from);
+  await page.getByLabel('종료일').fill(PERIOD.to);
+  await page.getByRole('button', { name: '다음' }).click(); // 기간 → 유니버스
+  await page.getByLabel('상위 N (시가총액)').fill(String(TOP_N));
+  // 이 전략은 리밸런스 주기 기본값이 3개월이라 이 기간엔 리밸런스 날짜가 하나뿐이고
+  // (PERIOD.from), 위 시나리오가 이미 그 날짜를 동기화해 둬서 곧바로 통과한다.
+  await previewAndSyncUniverse(page);
+  await expect(
+    page.getByText(/재무 데이터가 필요하지만 이 유니버스에는 재무 있는 종목이 없습니다/),
+  ).toBeVisible();
   // 앞 단계로 가는 버튼이 잠기고 이유를 들고 있다. `disabled` 로 죽이지 않고
   // `aria-disabled` + title 로 두는 것이 §17 규칙이다 — 왜 못 가는지 모른 채 회색
   // 버튼만 보는 상태를 만들지 않는다. (그래서 클릭이 아니라 상태를 검증한다.)
-  const periodStep = page.getByRole('button', { name: '3. 기간' });
-  await expect(periodStep).toHaveAttribute('aria-disabled', 'true');
-  await expect(periodStep).toHaveAttribute('title', /재무 데이터가 필요하지만/);
+  const capitalStep = page.getByRole('button', { name: '4. 자본·비용' });
+  await expect(capitalStep).toHaveAttribute('aria-disabled', 'true');
+  await expect(capitalStep).toHaveAttribute('title', /재무 데이터가 필요하지만/);
   await page.screenshot({ path: 'test-results/fundamentals-gate.png' });
 
-  // 봉만 쓰는 전략으로 바꾸면 같은 종목이 통과한다 — 게이트가 전략에만 반응한다
+  // 봉만 쓰는 전략으로 바꾸면 같은 유니버스가 통과한다 — 게이트가 전략에만 반응한다
   await page.getByRole('button', { name: '1. 전략' }).click();
   await page.getByRole('button', { name: /밸류·퀄리티 랭킹/ }).click(); // 선택 해제
   await page.getByRole('button', { name: /전고점 돌파/ }).click();
-  await page.getByRole('button', { name: '2. 데이터·종목' }).click();
+  await page.getByRole('button', { name: '3. 유니버스' }).click();
+  // 전략을 바꾸면 리밸런스 주기(전략 파라미터 기반)도 바뀌어 이전 미리보기가
+  // 무효화된다 — 다시 미리보기해야 한다(이미 동기화해 둔 날짜라 곧바로 통과한다).
+  await previewAndSyncUniverse(page);
   await expect(
-    page.getByText(/재무 데이터가 필요하지만 선택한 종목에는 없습니다/),
+    page.getByText(/재무 데이터가 필요하지만 이 유니버스에는 재무 있는 종목이 없습니다/),
   ).toHaveCount(0);
 
-  // 8. 데이터 화면 — 데이터셋/종목 두 구획 (설계 2026-07-31-symbol-as-first-class)
-  await page.goto('/datasets');
-
-  // 8-1. 데이터셋 구획은 참조 묶음을 보여준다 — 봉·재무는 종목 소관이다
-  await expect(page.getByText('kr-hourly-v1')).toBeVisible();
-  await expect(page.getByRole('tab', { name: '데이터셋' })).toHaveAttribute(
+  // 8. 데이터 화면 — 가격 데이터 탭 (종목 마스터 탭은 tests/e2e/symbol-master.spec.ts 가 다룬다)
+  await page.goto('/datasets?tab=prices');
+  await expect(page.getByRole('tab', { name: '가격 데이터' })).toHaveAttribute(
     'aria-selected',
     'true',
   );
-  // 데이터셋의 일괄 동기화도 종목 화면과 같은 설정 다이얼로그를 쓴다. 버튼만 보고
-  // 일봉만 조용히 수집하던 경로로 돌아가면 재무 옵션·대상 수 assertion 이 함께 깨진다.
-  await page.getByRole('button', { name: '데이터 동기화' }).click();
-  const datasetSyncDialog = page.getByRole('dialog');
-  await expect(datasetSyncDialog.getByRole('heading', { name: 'kr-hourly-v1 데이터 동기화' })).toBeVisible();
-  await expect(datasetSyncDialog.getByText('대상 1종목')).toBeVisible();
-  await expect(datasetSyncDialog.getByLabel('가격 데이터')).toHaveText('일봉');
-  await expect(datasetSyncDialog.getByText('현재 0/1종목 보유')).toBeVisible();
-  await expect(datasetSyncDialog.getByText(/DART 인증키가 설정되지 않아/)).toBeVisible();
-  await expect(datasetSyncDialog.getByLabel('재무 데이터 함께 동기화')).toBeDisabled();
-  await datasetSyncDialog.getByRole('button', { name: '취소' }).click();
-
-  // 8-2. 종목 구획 — 슬라이스별 봉 배지와 슬라이스별 마지막 수집을 표시한다.
   // 픽스처는 1m CSV 라 분봉만 데이터가 있다 — 「봉 있음」 하나로 접으면 숨는 사실이다.
-  await page.getByRole('tab', { name: '종목' }).click();
   await expect(page.getByText('삼성전자')).toBeVisible();
   await expect(page.getByText(/분봉 방금|분봉 \d+분 전/)).toBeVisible();
-  await expect(page.getByText('데이터셋 1곳')).toBeVisible();
 
-  // 8-3. 편집 모드 → 체크박스 + 하단 고정 동작 바. 하나도 안 고르면 동작은 잠긴다.
+  // 8-1. 편집 모드 → 체크박스 + 하단 고정 동작 바. 하나도 안 고르면 동작은 잠긴다.
   await page.getByRole('button', { name: '편집' }).click();
   const syncButton = page.getByRole('button', { name: '동기화' });
   await expect(syncButton).toBeDisabled();
@@ -258,52 +331,28 @@ test('full MVP flow', async ({ page }) => {
   await expect(page.getByText('1개 선택')).toBeVisible();
   await expect(syncButton).toBeEnabled();
   await expect(page.getByRole('button', { name: '제거' })).toBeEnabled();
-  // 종목 화면도 같은 다이얼로그를 연다. 재무는 DART 키 미설정이라 잠기고 이유가
-  // 보인다 (D-027 의 원칙).
   await syncButton.click();
   const symbolSyncDialog = page.getByRole('dialog');
   await expect(symbolSyncDialog.getByRole('heading', { name: '데이터 동기화' })).toBeVisible();
   await expect(symbolSyncDialog.getByText('대상 1종목')).toBeVisible();
+  // 재무는 DART 키 미설정이라 잠기고 이유가 보인다 (D-027 의 원칙)
   await expect(symbolSyncDialog.getByText(/DART 인증키가 설정되지 않아/)).toBeVisible();
   await expect(symbolSyncDialog.getByLabel('재무 데이터 함께 동기화')).toBeDisabled();
   await page.screenshot({ path: 'test-results/symbols-edit.png' });
   await symbolSyncDialog.getByRole('button', { name: '취소' }).click();
   await page.getByRole('button', { name: '완료' }).click();
 
-  // 8-4. 데이터셋 편집 화면 — 포함할 종목만 정한다. 구성은 종목 탭과 같고(같은 행·검색·
-  // 페이징) 왼쪽 체크박스와 전체/페이지내 전체 선택이 더해진다. 수집 컨트롤은 없다.
-  await page.getByRole('tab', { name: '데이터셋' }).click();
-  await page.getByRole('button', { name: '종목 편집' }).click();
-  const editDialog = page.getByRole('dialog');
-  await expect(editDialog.getByText('1개 선택')).toBeVisible();
-  // 수집은 종목 탭 소관이다 — 이 화면에 동기화·수집 봉·재무가 새어 들어오면 "무엇을 언제
-  // 수집했나" 의 답이 두 화면으로 흩어진다
-  await expect(editDialog.getByRole('button', { name: '동기화' })).toHaveCount(0);
-  await expect(editDialog.getByLabel('수집 봉')).toHaveCount(0);
-  await expect(editDialog.getByText('재무 수집')).toHaveCount(0);
-  // 종목 탭과 같은 행이다 — 슬라이스별 봉 배지가 여기에도 있어야 한다
-  await expect(editDialog.getByText('분봉').first()).toBeVisible();
-  // 체크를 풀면 0종목이 되므로 저장이 잠긴다 — 서버 400 을 미리 막는 자리다
-  await editDialog.getByRole('checkbox').first().uncheck();
-  await expect(editDialog.getByText(/최소 1개 남아야/)).toBeVisible();
-  await expect(editDialog.getByRole('button', { name: '저장' })).toBeDisabled();
-  await editDialog.getByRole('checkbox').first().check();
-  await expect(editDialog.getByRole('button', { name: '저장' })).toBeDisabled(); // 변경 없음
-  await page.screenshot({ path: 'test-results/dataset-symbols-edit.png' });
-  await editDialog.getByRole('button', { name: '취소' }).click();
-
-  // 8-5. 데이터 검증 차트 — 편집 모드가 아닐 때 종목 이름을 눌러 드로어를 연다
-  await page.getByRole('tab', { name: '종목' }).click();
+  // 8-2. 데이터 검증 차트 — 편집 모드가 아닐 때 종목 이름을 눌러 드로어를 연다
   await page.getByRole('button', { name: /삼성전자/ }).click();
   await expect(page.getByText(/데이터 검증/)).toBeVisible();
   await expect(page.locator('.recharts-surface').first()).toBeVisible();
   await page.screenshot({ path: 'test-results/candle-inspect.png' });
   await page.keyboard.press('Escape');
 
-  // 8-6. 일괄 추가 — 쉼표로 구분한 코드를 한 번에 등록한다. CSV 가져오기와 다른 것:
+  // 8-3. 일괄 추가 — 쉼표로 구분한 코드를 한 번에 등록한다. CSV 가져오기와 다른 것:
   // 저기는 tohlcv 봉 파일이고 여기는 심볼 목록이다.
   //
-  // 아래 8-6~8-9 는 넣은 것을 다시 지워 상태를 되돌린다. 서버 하나를 mobile·desktop
+  // 아래 8-3~8-4 는 넣은 것을 다시 지워 상태를 되돌린다. 서버 하나를 mobile·desktop
   // 두 프로젝트가 공유하므로(playwright.config workers:1) 남기면 두 번째 실행이 이미
   // 등록된 종목을 만나 실패한다.
   await page.getByRole('button', { name: '추가' }).click();
@@ -316,83 +365,30 @@ test('full MVP flow', async ({ page }) => {
   await expect(page.getByText('900001')).toBeVisible();
   await expect(page.getByText('900002')).toBeVisible();
 
-  // 8-7. 데이터셋 편집 화면의 페이징과 두 범위의 전체 선택. 종목이 3개뿐이라 페이지당을
-  // 1로 낮춰 3페이지를 만든다 — 「페이지내 전체 선택」은 페이지가 둘 이상일 때만 뜬다
-  // (한 페이지면 「전체 선택」과 같은 동작이라 버튼을 둘 둘 이유가 없다).
-  // 저장하지 않고 취소해 참조를 그대로 둔다.
-  await page.getByRole('tab', { name: '데이터셋' }).click();
-  await page.getByRole('button', { name: '종목 편집' }).click();
-  const pagedDialog = page.getByRole('dialog');
-  await pagedDialog.getByLabel('종목 선택 페이지당 표시 수').fill('1');
-  await expect(pagedDialog.getByText('총 3종목')).toBeVisible();
-  await expect(pagedDialog.getByRole('checkbox')).toHaveCount(1);
-
-  const pagination = pagedDialog.getByRole('navigation', { name: '종목 선택 페이지 이동' });
-  const currentPage = pagination.getByRole('button', { name: '현재 1페이지' });
-  await expect(currentPage).toHaveAttribute('aria-current', 'page');
-  await expect(currentPage).toHaveClass(/font-bold/);
-  await expect(pagination.getByRole('button', { name: '첫 페이지' })).toBeDisabled();
-  await expect(pagination.getByRole('button', { name: '이전 페이지' })).toBeDisabled();
-
-  const paginationOverflow = await pagination.evaluate(
-    (element) => element.scrollWidth - element.clientWidth,
-  );
-  expect(paginationOverflow, '종목 선택 페이지 이동 가로 스크롤').toBeLessThanOrEqual(0);
-
-  await expect(pagedDialog.getByRole('button', { name: '페이지내 해제' })).toBeVisible();
-  await pagination.getByRole('button', { name: '2페이지로 이동' }).click();
-  await expect(pagination.getByRole('button', { name: '현재 2페이지' })).toBeVisible();
-  await pagedDialog.getByRole('button', { name: '페이지내 전체 선택' }).click();
-  await expect(pagedDialog.getByText('2개 선택')).toBeVisible();
-
-  await pagination.getByRole('button', { name: '마지막 페이지' }).click();
-  await expect(pagination.getByRole('button', { name: '현재 3페이지' })).toBeVisible();
-  await expect(pagination.getByRole('button', { name: '다음 페이지' })).toBeDisabled();
-  await expect(pagination.getByRole('button', { name: '마지막 페이지' })).toBeDisabled();
-
-  await pagedDialog.getByRole('button', { name: '전체 선택', exact: true }).click();
-  await expect(pagedDialog.getByText('3개 선택')).toBeVisible();
-  await page.screenshot({ path: 'test-results/dataset-edit-paged.png' });
-  await pagedDialog.getByRole('button', { name: '취소' }).click();
-
-  // 8-8. 검색 — 이름과 코드 두 축을 한 입력으로 맞힌다. 탭을 오가면 패널이 unmount 돼
-  // 검색이 초기화되므로, 검색을 쓰는 8-9 바로 앞에서 건다.
-  await page.getByRole('tab', { name: '종목' }).click();
+  // 검색 — 이름과 코드 두 축을 한 입력으로 맞힌다
   const symbolSearch = page.getByLabel('종목 검색');
-  await symbolSearch.fill('삼성전');
+  await typeInto(symbolSearch, '삼성전');
   await expect(page.getByText('삼성전자')).toBeVisible();
   await expect(page.getByText('900001')).toHaveCount(0);
-  await symbolSearch.fill('9000');
+  await typeInto(symbolSearch, '9000');
   await expect(page.getByText('900001')).toBeVisible();
   await expect(page.getByText('삼성전자')).toHaveCount(0);
   await expect(page.getByText('2/3종목')).toBeVisible();
   await page.screenshot({ path: 'test-results/symbols-search.png' });
 
-  // 8-9. 검색 결과 전체 선택 → 제거. 전체 선택 대상은 **검색 결과** 이고, 그 사실이
+  // 8-4. 검색 결과 전체 선택 → 제거. 전체 선택 대상은 **검색 결과** 이고, 그 사실이
   // 라벨에 적혀 있어야 한다 — 「전체 선택」이 3종목을 담을 것처럼 보이면 거짓말이다.
   await page.getByRole('button', { name: '편집' }).click();
   await page.getByRole('button', { name: '검색 결과 2종목 선택' }).click();
   await expect(page.getByText('2개 선택')).toBeVisible();
   await page.getByRole('button', { name: '제거' }).click();
   const removeDialog = page.getByRole('dialog');
-  await expect(removeDialog.getByText(/참조하는 데이터셋이 없습니다/)).toBeVisible();
+  // removal-impact 조회가 사라졌다(스펙 2026-08-05, 데이터셋 개념과 함께 제거) —
+  // 비동기 조회 없이 확인 문구가 곧바로 뜬다.
+  await expect(removeDialog.getByText('봉과 재무 데이터가 함께 지워집니다')).toBeVisible();
   await removeDialog.getByRole('button', { name: '제거' }).click();
   await expect(page.getByText('900001')).toHaveCount(0);
   await page.getByRole('button', { name: '완료' }).click();
-
-  // 8-10. 데이터셋 이름 변경 — PATCH 로 가야 한다. 메서드가 안 맞아 온 404 는 화면에서
-  // "요청한 리소스를 찾을 수 없습니다" 로 읽혀 원인이 드러나지 않았다 (D-035).
-  // 원래 이름으로 되돌려 두 번째 프로젝트 실행이 같은 상태에서 시작하게 한다.
-  await page.getByRole('tab', { name: '데이터셋' }).click();
-  await page.getByRole('button', { name: '이름 수정' }).click();
-  await page.getByRole('textbox', { name: '데이터셋 이름' }).fill('kr-hourly-renamed');
-  await page.getByRole('button', { name: '이름 저장' }).click();
-  await expect(page.getByText('kr-hourly-renamed')).toBeVisible();
-  await expect(page.getByText(/찾을 수 없습니다/)).toHaveCount(0);
-  await page.getByRole('button', { name: '이름 수정' }).click();
-  await page.getByRole('textbox', { name: '데이터셋 이름' }).fill('kr-hourly-v1');
-  await page.getByRole('button', { name: '이름 저장' }).click();
-  await expect(page.getByText('kr-hourly-v1')).toBeVisible();
 
   // 9. 로그아웃
   await page.getByRole('button', { name: '로그아웃' }).click();
@@ -400,46 +396,12 @@ test('full MVP flow', async ({ page }) => {
 });
 
 /**
- * 위저드는 데이터셋 **자체만** 보여 준다 (D-038). 종목을 고치는 자리는 데이터 화면
- * 하나이고, 「편집」이 거기로 데려간다 — 참조를 바꾸는 화면이 둘이면 무엇이 최신인지
- * 알 수 없다. 라우팅·딥링크는 타입도 단위 테스트도 볼 수 없는 층이라 e2e 로 겨눈다.
+ * 정렬은 종목 탭(가격 데이터) 하나만 남았다(D-038 이 전제하던 데이터셋의 「종목
+ * 편집」공유 대상 자체가 제거됐다). e2e 환경엔 증권사 자격 증명이 없어 지표가
+ * 비는데, 그때 규모 정렬을 눌러도 순서가 그대로면 사용자는 정렬이 고장 났다고
+ * 읽는다 — 잠그고 이유를 적는 쪽을 검증한다.
  */
-test('wizard hands symbol editing over to the dataset edit tab', async ({ page }) => {
-  await page.goto('/login');
-  await page.getByLabel('사용자 이름').fill(USERNAME);
-  await page.getByLabel('비밀번호').fill(PASSWORD);
-  await page.getByRole('button', { name: '로그인' }).click();
-  await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
-
-  await page.goto('/backtests/new');
-  await page.getByRole('button', { name: /전고점 돌파/ }).click();
-  await page.getByRole('button', { name: '다음' }).click();
-  await page.getByRole('button', { name: /kr-hourly-v1/ }).click();
-
-  // 종목을 하나씩 켜고 끄는 카드는 없어졌다
-  await expect(page.getByText('종목 선택')).toHaveCount(0);
-  await expect(page.getByRole('checkbox')).toHaveCount(0);
-
-  // 「편집」은 데이터셋 편집 탭으로 보내고, 그 데이터셋의 「종목 편집」을 열어 둔다 —
-  // 탭만 열어 주고 다이얼로그를 다시 찾게 하면 왕복이 그대로 남는다
-  await page.getByRole('button', { name: '편집' }).click();
-  await expect(page).toHaveURL(/\/datasets\?tab=datasets/);
-  const editDialog = page.getByRole('dialog');
-  await expect(editDialog.getByText(/포함할 종목만 정합니다/)).toBeVisible();
-  await editDialog.getByRole('button', { name: '취소' }).click();
-
-  // 딥링크는 한 번 쓰고 지운다 — 새로고침이 닫은 다이얼로그를 되열면 안 된다
-  await expect(page).not.toHaveURL(/edit=/);
-  await page.reload();
-  await expect(page.getByRole('dialog')).toHaveCount(0);
-});
-
-/**
- * 정렬은 종목 탭과 데이터셋 편집이 **같은 컨트롤**을 쓴다 (D-038). e2e 환경엔 증권사
- * 자격 증명이 없어 지표가 비는데, 그때 규모 정렬을 눌러도 순서가 그대로면 사용자는
- * 정렬이 고장 났다고 읽는다 — 잠그고 이유를 적는 쪽을 검증한다.
- */
-test('symbol sort is shared by both screens and explains itself without quotes', async ({
+test('symbol sort explains itself without quotes when broker metrics are unavailable', async ({
   page,
 }) => {
   await page.goto('/login');
@@ -448,7 +410,7 @@ test('symbol sort is shared by both screens and explains itself without quotes',
   await page.getByRole('button', { name: '로그인' }).click();
   await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
 
-  await page.goto('/datasets?tab=symbols');
+  await page.goto('/datasets?tab=prices');
   const sort = page.getByRole('combobox', { name: '종목 정렬' });
   await expect(sort).toHaveText('가나다순');
   await expect(page.getByText(/증권사 시세를 받지 못해 규모 정렬을 쓸 수 없습니다/)).toBeVisible();
@@ -457,13 +419,6 @@ test('symbol sort is shared by both screens and explains itself without quotes',
   await expect(page.getByRole('option', { name: '거래대금순' })).toBeDisabled();
   await expect(page.getByRole('option', { name: '가나다순' })).toBeEnabled();
   await page.keyboard.press('Escape');
-
-  // 데이터셋의 「종목 편집」에도 같은 컨트롤이 있다 — 두 화면이 갈라지면 한쪽만 정렬된다
-  await page.getByRole('tab', { name: '데이터셋' }).click();
-  await page.getByRole('button', { name: '종목 편집' }).click();
-  const dialog = page.getByRole('dialog');
-  await expect(dialog.getByRole('combobox', { name: '포함할 종목 정렬' })).toBeVisible();
-  await dialog.getByRole('button', { name: '취소' }).click();
 });
 
 /** 미지원 시장(US) 은 종목 추가 dialog 에서 고를 수 없고, 이유가 항상 보인다 —
@@ -475,7 +430,7 @@ test('unsupported market is disabled with reason shown on symbol add dialog', as
   await page.getByRole('button', { name: '로그인' }).click();
   await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
 
-  await page.goto('/datasets?tab=symbols');
+  await page.goto('/datasets?tab=prices');
   await page.getByRole('button', { name: '추가' }).click();
   await page.getByLabel('시장').click();
   // Radix SelectItem 은 native disabled 속성이 아니라 aria-disabled/data-disabled 를 쓴다 —
@@ -503,7 +458,7 @@ test('market select stays disabled and explains itself when /markets fails', asy
   await page.getByRole('button', { name: '로그인' }).click();
   await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
 
-  await page.goto('/datasets?tab=symbols');
+  await page.goto('/datasets?tab=prices');
   await page.getByRole('button', { name: '추가' }).click();
   await expect(page.getByText(/시장 목록을 불러오지 못했습니다/)).toBeVisible();
 });
@@ -519,16 +474,10 @@ test('mobile layout has no horizontal scroll on core screens (스펙 §38)', asy
 
   // /backtests/new 이 목록에 있는 이유: 단계 버튼 6개를 3열 × 2행으로 깔면서 44px
   // 터치 영역을 지킨다 — 390px 에서 가장 먼저 넘칠 화면이 여기다
-  // '/datasets?tab=symbols' 를 넣는 이유: 종목 행이 이름·코드·배지 3개·수집 시각을
-  // 한 줄에 담고 하단 고정 바에 버튼 4개가 붙는다 — 390px 에서 가장 먼저 넘칠 화면이다
-  for (const path of [
-    '/',
-    '/backtests',
-    '/backtests/new',
-    '/datasets',
-    '/datasets?tab=symbols',
-    '/settings',
-  ]) {
+  // '/datasets' 를 넣는 이유: 종목 마스터의 타임라인 슬라이더가 390px 에서 가장
+  // 먼저 넘칠 화면이다. '/datasets?tab=prices' 는 종목 행이 이름·코드·배지 3개·
+  // 수집 시각을 한 줄에 담고 하단 고정 바에 버튼 4개가 붙는다.
+  for (const path of ['/', '/backtests', '/backtests/new', '/datasets', '/datasets?tab=prices', '/settings']) {
     await page.goto(path);
     await page.waitForLoadState('networkidle');
     const overflow = await page.evaluate(
