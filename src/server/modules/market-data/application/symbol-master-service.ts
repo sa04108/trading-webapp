@@ -16,6 +16,8 @@ import {
   applyEventsBackward,
   applyEventsForward,
   diffUniverse,
+  findUniverseMismatch,
+  quarterOf,
   type SymbolMasterEntry,
   type SymbolMasterEventDraft,
   type SymbolMasterInstrumentType,
@@ -128,7 +130,53 @@ export class SymbolMasterService {
       this.mergeCoverage(tx, date);
     });
 
-    return { kind: 'TRADING_DAY', eventCount: todaysEvents.length, checkpointSaved: false };
+    // 분기 체크포인트 검증은 방금 확정한 이벤트를 getUniverseAsOf 로 다시 읽어야 하므로
+    // 위 트랜잭션과 묶지 않는다 — 검증 저장이 실패해도 이벤트·coverage 는 이미 커밋된 채로 남는다.
+    const checkpointSaved = this.verifyQuarterlyCheckpoint(date, prevDate, fetched);
+
+    return { kind: 'TRADING_DAY', eventCount: todaysEvents.length, checkpointSaved };
+  }
+
+  /**
+   * 분기가 바뀌었거나(quarterOf(date) !== quarterOf(prevDate)) 이 분기에 체크포인트가
+   * 아직 없으면, 방금 확정한 이벤트로 재구성한 유니버스를 이번 ingest 의 KRX 실측과
+   * 비교해 체크포인트를 남긴다. 최초 수집(prevDate 없음)은 ingestDate 상단에서 이미
+   * writeCheckpoint 로 처리하므로 이 경로를 타지 않는다.
+   */
+  private verifyQuarterlyCheckpoint(
+    date: string,
+    prevDate: string,
+    fetched: UniverseState,
+  ): boolean {
+    const currentQuarter = quarterOf(date);
+    if (currentQuarter === quarterOf(prevDate) && this.hasCheckpointInQuarter(currentQuarter)) {
+      return false;
+    }
+
+    const reconstructed = this.getUniverseAsOf(date);
+    const mismatch = findUniverseMismatch(reconstructed, fetched);
+    if (mismatch === undefined) {
+      this.saveCheckpoint(date, fetched, true);
+      return true;
+    }
+
+    // mismatch 를 실측으로 덮어써 이후 재구성이 이 체크포인트에서 다시 시작하게 한다 —
+    // 이벤트 저장 오염이 있었더라도 여기서부터는 정상 상태로 복구된다.
+    this.deps.logger.warn(
+      { module: 'market-data', event: 'symbol-master.checkpoint-mismatch', date, mismatch },
+      '분기 체크포인트 재구성이 KRX 실측과 어긋나 실측으로 교정한다',
+    );
+    this.saveCheckpoint(date, fetched, false, mismatch);
+    return true;
+  }
+
+  /** checkpoints 테이블 전체를 훑어 해당 분기에 속하는 체크포인트가 있는지 본다 — 분기당 하나뿐이라 비용이 작다 */
+  private hasCheckpointInQuarter(quarter: string): boolean {
+    const rows = this.deps.db
+      .select({ checkpointDate: symbolMasterCheckpoints.checkpointDate })
+      .from(symbolMasterCheckpoints)
+      .all();
+    return rows.some((row) => quarterOf(row.checkpointDate) === quarter);
   }
 
   /** 유니버스 전체 스냅샷을 새 체크포인트로 저장한다. 반환값은 체크포인트 id */
@@ -148,7 +196,9 @@ export class SymbolMasterService {
    * ingestDate 의 최초 수집 경로가 coverage 갱신과 원자적으로 묶어 쓴다.
    * 같은 checkpointDate 가 이미 있으면 새로 만들지 않고 기존 id 를 재사용한다 —
    * UNIQUE 제약 위반 방어이자, 이 원자성 수정 이전에 체크포인트만 남고 coverage 가
-   * 비었던 과거 데이터를 다시 수집할 때 복구 경로가 된다.
+   * 비었던 과거 데이터를 다시 수집할 때 복구 경로가 된다. 다만 id 만 재사용할 뿐
+   * verified/mismatch/symbols 는 이번 호출 값으로 덮어쓴다 — 그러지 않으면 분기
+   * 체크포인트 검증이 실제로 기록한 검증 결과가 과거 값에 가려 사라진다.
    */
   private writeCheckpoint(
     tx: AppDatabase,
@@ -162,18 +212,32 @@ export class SymbolMasterService {
       .from(symbolMasterCheckpoints)
       .where(eq(symbolMasterCheckpoints.checkpointDate, date))
       .get();
-    if (existing) return existing.id;
 
-    const id = newId('smc');
     const now = this.deps.clock.now();
-    tx.insert(symbolMasterCheckpoints).values({
-      id,
-      checkpointDate: date,
-      source: 'KRX',
-      verifiedAtMs: verified ? now : null,
-      mismatchJson: mismatch ? JSON.stringify(mismatch) : null,
-      createdAtMs: now,
-    }).run();
+    const verifiedAtMs = verified ? now : null;
+    const mismatchJson = mismatch ? JSON.stringify(mismatch) : null;
+
+    let id: string;
+    if (existing) {
+      id = existing.id;
+      tx.update(symbolMasterCheckpoints)
+        .set({ verifiedAtMs, mismatchJson })
+        .where(eq(symbolMasterCheckpoints.id, id))
+        .run();
+      tx.delete(symbolMasterCheckpointSymbols)
+        .where(eq(symbolMasterCheckpointSymbols.checkpointId, id))
+        .run();
+    } else {
+      id = newId('smc');
+      tx.insert(symbolMasterCheckpoints).values({
+        id,
+        checkpointDate: date,
+        source: 'KRX',
+        verifiedAtMs,
+        mismatchJson,
+        createdAtMs: now,
+      }).run();
+    }
 
     const rows = [...universeState.values()].map((entry) => ({ checkpointId: id, ...entry }));
     // SQLite 바인딩 변수 한도(999)를 피하려 500개 단위로 나눠 넣는다
