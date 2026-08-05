@@ -195,7 +195,7 @@ describe('market data (스펙 §11, §13)', () => {
     expect(job.status).toBe('COMPLETED');
     expect(job.rowsImported).toBe(390);
 
-    // CSV 는 종목을 등록한다 — 데이터셋은 만들지 않는다 (참조 묶음은 사용자가 만든다)
+    // CSV 는 종목을 등록한다 — 데이터셋 개념은 더 이상 없다
     const symbolList = await ctx.app.inject({
       method: 'GET',
       url: '/api/v1/symbols',
@@ -204,12 +204,6 @@ describe('market data (스펙 §11, §13)', () => {
     const symbols = symbolList.json().symbols as Array<{ code: string; market: string }>;
     expect(symbols).toHaveLength(1);
     expect(symbols[0]!.code).toBe('005930');
-    const datasetList = await ctx.app.inject({
-      method: 'GET',
-      url: '/api/v1/datasets',
-      cookies: { qp_session: cookie },
-    });
-    expect(datasetList.json().datasets).toHaveLength(0);
 
     // 1h 사전 집계 확인 (스펙 §11: 백테스트는 1시간봉 우선)
     const hourlyTs = await ctx.container.candleRepository.getTimestamps('KR',
@@ -380,7 +374,7 @@ describe('market data (스펙 §11, §13)', () => {
     expect(timestamps).toHaveLength(0);
   });
 
-  it('creates a broker dataset and syncs it — unconfigured source fails the job with CSV guidance', async () => {
+  it('syncs registered symbols — unconfigured source fails the job with CSV guidance', async () => {
     const { username, password } = await createTestAdmin(ctx.container);
     const login = await ctx.app.inject({
       method: 'POST',
@@ -389,25 +383,14 @@ describe('market data (스펙 §11, §13)', () => {
     });
     const cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
 
-    // 데이터셋은 이미 등록된 종목만 참조한다 — 먼저 등록한다
-
+    // 동기화 대상은 종목이다 — 먼저 등록한다
     registerSymbols(ctx.container, 'KR', ['005930']);
-
-    const created = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/datasets',
-      cookies: { qp_session: cookie },
-      payload: { name: 'KR-일봉', symbols: ['005930'] },
-    });
-    expect(created.statusCode).toBe(201);
-    const dataset = created.json().dataset as { id: string; symbols: string[] };
-    expect(dataset.symbols).toEqual(['005930']);
 
     const sync = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/symbols/sync',
       cookies: { qp_session: cookie },
-      payload: { codes: dataset.symbols },
+      payload: { codes: ['005930'] },
     });
     expect(sync.statusCode).toBe(202);
     const jobId = sync.json().job.id as string;
@@ -422,14 +405,13 @@ describe('market data (스펙 §11, §13)', () => {
     expect(job.json().job.status).toBe('FAILED');
     expect(job.json().job.error).toContain('CSV');
 
-    // 존재하지 않는 데이터셋은 404
+    // 등록되지 않은 종목은 400 이다
     const missing = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/symbols/sync',
       cookies: { qp_session: cookie },
       payload: { codes: ['999999'] },
     });
-    // 등록되지 않은 종목은 400 이다 — 데이터셋 404 자리를 종목 검증이 대신한다
     expect(missing.statusCode).toBe(400);
 
     // 취소: 이미 종료된 잡은 409, 모르는 잡은 404
@@ -476,18 +458,9 @@ describe('market data (스펙 §11, §13)', () => {
     });
     const cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
 
-    // 데이터셋은 이미 등록된 종목만 참조한다 — 먼저 등록한다
-
+    // 동기화 대상은 종목이다 — 먼저 등록한다
     registerSymbols(ctx.container, 'KR', ['005930']);
 
-    const created = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/datasets',
-      cookies: { qp_session: cookie },
-      payload: { name: 'KR-재무', symbols: ['005930'] },
-    });
-    // 데이터셋은 참조 묶음일 뿐 — 동기화 대상은 종목이다
-    expect((created.json().dataset as { symbols: string[] }).symbols).toEqual(['005930']);
     const jobCount = () =>
       ctx.container.database.db
         .select()
@@ -524,7 +497,7 @@ describe('market data (스펙 §11, §13)', () => {
   /**
    * DART 키가 있으면 선검증이 통과해야 한다 — 봉이 아직 없는 상태는 UNSUPPORTED 가
    * 아니라 AFTER_CANDLES 이므로 막을 이유가 아니다. (시장이 KR 이 아닌 경우는 이
-   * 경로로 시험할 수 없다: getSessionForMarket 이 KR 외 데이터셋 생성을 먼저 거부한다.
+   * 경로로 시험할 수 없다: getSessionForMarket 이 KR 외 종목 등록을 먼저 거부한다.
    * 그 분기는 tests/unit/facts-wiring.test.ts 가 직접 겨눈다.)
    */
   it('allows includeFacts when DART is configured and facts are merely pending candles', async () => {
@@ -539,13 +512,6 @@ describe('market data (스펙 §11, §13)', () => {
       const cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
 
       registerSymbols(dartCtx.container, 'KR', ['005930']);
-      const created = await dartCtx.app.inject({
-        method: 'POST',
-        url: '/api/v1/datasets',
-        cookies: { qp_session: cookie },
-        payload: { name: 'KR-재무-가능', symbols: ['005930'] },
-      });
-      expect(created.statusCode).toBe(201);
 
       // 봉이 아직 없는 상태는 UNSUPPORTED 가 아니라 AFTER_CANDLES 다 — 막을 이유가 아니다
       const estimate = await dartCtx.app.inject({
@@ -665,120 +631,6 @@ describe('market data (스펙 §11, §13)', () => {
     );
   });
 
-  it('updates symbols and deletes a dataset via API', async () => {
-    const { username, password } = await createTestAdmin(ctx.container);
-    const login = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/auth/login',
-      payload: { username, password },
-    });
-    const cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
-
-    // 데이터셋은 이미 등록된 종목만 참조한다 — 먼저 등록한다
-
-    registerSymbols(ctx.container, 'KR', ['005930']);
-
-    const created = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/datasets',
-      cookies: { qp_session: cookie },
-      payload: { name: 'KR-편집', symbols: ['005930'] },
-    });
-    const dataset = created.json().dataset as { id: string };
-
-    // U: 참조 추가 — 추가할 종목도 먼저 등록돼 있어야 한다
-    registerSymbols(ctx.container, 'KR', ['000660']);
-    const patched = await ctx.app.inject({
-      method: 'PATCH',
-      url: `/api/v1/datasets/${dataset.id}`,
-      cookies: { qp_session: cookie },
-      payload: { addSymbols: ['000660'] },
-    });
-    expect(patched.statusCode).toBe(200);
-    expect(patched.json().dataset.symbols).toEqual(['000660', '005930']);
-
-    // D 가드(활성 백테스트가 참조 중이면 409)는 더 이상 검증하지 않는다 — 백테스트
-    // 잡은 유니버스 규칙으로 종목을 고르지 데이터셋을 참조하지 않으므로(스펙
-    // 2026-08-05) `activeCountForDataset` 은 항상 0 이다(job-queue.ts 참고). 가드
-    // 자체의 제거는 데이터셋 코드 전체를 걷어내는 T6 몫이다.
-    const deleted = await ctx.app.inject({
-      method: 'DELETE',
-      url: `/api/v1/datasets/${dataset.id}`,
-      cookies: { qp_session: cookie },
-    });
-    expect(deleted.statusCode).toBe(204);
-
-    const gone = await ctx.app.inject({
-      method: 'GET',
-      url: `/api/v1/datasets/${dataset.id}`,
-      cookies: { qp_session: cookie },
-    });
-    expect(gone.statusCode).toBe(404);
-  });
-
-  it('renames a dataset via PATCH, rejecting duplicates and keeping the version untouched', async () => {
-    const { username, password } = await createTestAdmin(ctx.container);
-    const login = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/auth/login',
-      payload: { username, password },
-    });
-    const cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
-
-    // 데이터셋은 이미 등록된 종목만 참조한다 — 먼저 등록한다
-
-    registerSymbols(ctx.container, 'KR', ['005930']);
-
-    const created = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/datasets',
-      cookies: { qp_session: cookie },
-      payload: { name: 'KR-이름변경', symbols: ['005930'] },
-    });
-    const dataset = created.json().dataset as { id: string };
-    // 이름 점유용 두 번째 데이터셋. 종목 구성이 같아도 상관없다 — 구성 유일성 규칙은
-    // 폐기됐다(D-034). 여기서 보려는 것은 이름 충돌뿐이다.
-    registerSymbols(ctx.container, 'KR', ['000660']);
-    await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/datasets',
-      cookies: { qp_session: cookie },
-      payload: { name: 'KR-점유된이름', symbols: ['000660'] },
-    });
-
-    // 이름만 변경 — 데이터셋은 버전을 갖지 않는다 (버전은 종목·슬라이스 단위다, D-034)
-    const renamed = await ctx.app.inject({
-      method: 'PATCH',
-      url: `/api/v1/datasets/${dataset.id}`,
-      cookies: { qp_session: cookie },
-      payload: { name: 'KR-새이름' },
-    });
-    expect(renamed.statusCode).toBe(200);
-    expect(renamed.json().dataset.name).toBe('KR-새이름');
-    expect(renamed.json().dataset).not.toHaveProperty('latestVersion');
-
-    // 다른 데이터셋이 점유한 이름 → 400
-    const duplicate = await ctx.app.inject({
-      method: 'PATCH',
-      url: `/api/v1/datasets/${dataset.id}`,
-      cookies: { qp_session: cookie },
-      payload: { name: 'KR-점유된이름' },
-    });
-    expect(duplicate.statusCode).toBe(400);
-    expect(duplicate.json().error).toContain('이미');
-
-    // 같은 이름으로의 재변경(no-op)은 성공한다
-    const noop = await ctx.app.inject({
-      method: 'PATCH',
-      url: `/api/v1/datasets/${dataset.id}`,
-      cookies: { qp_session: cookie },
-      payload: { name: 'KR-새이름' },
-    });
-    expect(noop.statusCode).toBe(200);
-
-    // 이름+참조 동시 변경과 빈 body 400 은 symbol-service-slices.test.ts 가 덮는다
-  });
-
   /**
    * 라우트 계약 — 슬라이스 (설계 2026-07-30-dataset-symbol-group-server, Task 5).
    */
@@ -798,25 +650,14 @@ describe('market data (스펙 §11, §13)', () => {
       const fake = new FakeSliceSource([minuteCandle(0), minuteCandle(1), minuteCandle(2)]);
       injectFakeSource(ctx.container.brokerSyncService, fake);
 
-      // 데이터셋은 이미 등록된 종목만 참조한다 — 먼저 등록한다
-
+      // 동기화 대상은 종목이다 — 먼저 등록한다
       registerSymbols(ctx.container, 'KR', ['005930']);
-
-      const created = await ctx.app.inject({
-        method: 'POST',
-        url: '/api/v1/datasets',
-        cookies: { qp_session: cookie },
-        payload: { name: '슬라이스-동기화', symbols: ['005930'] },
-      });
-      expect(created.statusCode).toBe(201);
-      const dataset = created.json().dataset as { id: string; symbols: string[] };
-      expect(dataset.symbols).toEqual(['005930']);
 
       const sync = await ctx.app.inject({
         method: 'POST',
         url: '/api/v1/symbols/sync',
         cookies: { qp_session: cookie },
-        payload: { codes: dataset.symbols, slice: '1m' },
+        payload: { codes: ['005930'], slice: '1m' },
       });
       expect(sync.statusCode).toBe(202);
       const jobId = sync.json().job.id as string;
@@ -824,7 +665,7 @@ describe('market data (스펙 §11, §13)', () => {
       const finished = await waitForJobSettled(ctx.app, jobId, cookie);
       expect(finished.status).toBe('COMPLETED');
 
-      // 데이터셋 기본은 1d 지만, slice:'1m' 을 줬으므로 페이크 소스는 '1m' 요청만 받아야 한다
+      // 기본 슬라이스는 1d 지만, slice:'1m' 을 줬으므로 페이크 소스는 '1m' 요청만 받아야 한다
       expect(fake.calls.length).toBeGreaterThan(0);
       for (const call of fake.calls) {
         expect(call.timeframe).toBe('1m');

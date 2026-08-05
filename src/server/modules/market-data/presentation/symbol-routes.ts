@@ -3,8 +3,7 @@ import { z } from 'zod';
 import { SYMBOL_CODE_PATTERN } from '../../../../shared/schemas/symbol-code.js';
 import type { BrokerSyncService } from '../application/broker-sync-service.js';
 import { SyncAlreadyRunningError } from '../application/broker-sync-service.js';
-import type { DatasetService, FactsSyncEstimate } from '../application/dataset-service.js';
-import type { SymbolService, SymbolSummary } from '../application/symbol-service.js';
+import type { FactsSyncEstimate, SymbolService, SymbolSummary } from '../application/symbol-service.js';
 import type { SymbolInfoService } from '../application/symbol-info-service.js';
 import type { SymbolMetricsService } from '../application/symbol-metrics-service.js';
 import { listMarketSupport } from '../domain/market-support.js';
@@ -32,43 +31,22 @@ const removeSymbolsSchema = z.object({
   codes: z.array(symbolSchema).min(1).max(1000),
 });
 
-const createDatasetSchema = z.object({
-  name: z.string().min(1).max(64),
-  symbols: z.array(symbolSchema).min(1).max(1000),
-});
-
 const syncSchema = z.object({
-  /** 동기화할 종목 — 데이터셋이 아니라 종목 집합이 대상이다 */
+  /** 동기화할 종목 — 종목 집합이 대상이다 */
   codes: z.array(symbolSchema).min(1).max(1000),
   slice: z.enum(['1m', '1d']).optional(),
   /** 재무(DART)까지 함께 수집할지. 기본은 봉만 */
   includeFacts: z.boolean().optional(),
 });
 
-const updateDatasetSchema = z
-  .object({
-    name: z.string().trim().min(1).max(64).optional(),
-    addSymbols: z.array(symbolSchema).max(1000).optional(),
-    removeSymbols: z.array(symbolSchema).max(1000).optional(),
-  })
-  .refine(
-    (body) =>
-      body.name !== undefined ||
-      (body.addSymbols?.length ?? 0) + (body.removeSymbols?.length ?? 0) > 0,
-    { message: '변경할 내용이 없습니다' },
-  );
-
 const MAX_CSV_BYTES = 50 * 1024 * 1024;
 
-export function registerDatasetRoutes(
+export function registerSymbolRoutes(
   app: FastifyInstance,
-  datasetService: DatasetService,
   symbolService: SymbolService,
   brokerSyncService: BrokerSyncService,
   symbolInfoService: SymbolInfoService,
   symbolMetricsService: SymbolMetricsService,
-  /** 이 데이터셋을 참조하는 활성 백테스트 존재 여부 — 조립부가 backtest 모듈로 연결한다 */
-  hasActiveBacktests: (datasetId: string) => boolean,
   /** 재무 수집 예상 — 조립부가 facts 모듈로 연결한다 (market-data 는 facts 를 모른다) */
   factsSyncEstimator: (codes: readonly string[]) => FactsSyncEstimate,
   /**
@@ -79,10 +57,6 @@ export function registerDatasetRoutes(
    * 1,000종목에서 stat 1,000회가 되고 그 목록은 5초마다 다시 읽힌다.
    */
   symbolsWithFacts: () => ReadonlySet<string>,
-  /** 현재 상장 단축코드 집합 — 조립부가 market-data 유니버스 서비스로 연결한다.
-   *  실패(미설정·승인만료·KRX 오류)는 여기서 삼키지 않고 그대로 던진다 — 라우트가
-   *  null 로 강등해 응답은 계속 낸다. */
-  currentShortCodes: () => Promise<ReadonlySet<string>>,
   requireAuth: PreHandler,
 ): void {
   /**
@@ -394,104 +368,6 @@ export function registerDatasetRoutes(
         .code(400)
         .send({ error: error instanceof Error ? error.message : String(error) });
     }
-  });
-
-  // ── 데이터셋 (종목 참조 묶음) ───────────────────────────────────────
-
-  app.get('/datasets', { preHandler: requireAuth }, async (request) => {
-    const summaries = datasetService.listDatasets();
-    // 스냅샷 연결 데이터셋이 있을 때만 현재 목록을 조회한다 — 손으로 만든 데이터셋만
-    // 있으면 KRX 호출이 없어야 한다.
-    let listed: ReadonlySet<string> | null = null;
-    if (summaries.some((dataset) => dataset.universeSnapshot !== null)) {
-      try {
-        listed = await currentShortCodes();
-      } catch (error) {
-        // 판정 불가는 데이터셋 목록 실패가 아니다 — 전 종목 정상 취급 + 로그 (설계 §4)
-        request.log.warn(
-          { module: 'market-data', event: 'dataset.listing-check.failed', err: error },
-          'current listing lookup failed; skipping unlisted diff',
-        );
-      }
-    }
-    return {
-      datasets: summaries.map((dataset) => ({
-        ...dataset,
-        unlistedSymbols:
-          dataset.universeSnapshot !== null && listed !== null
-            ? dataset.symbols.filter((code) => !listed.has(code))
-            : null,
-      })),
-    };
-  });
-
-  app.get('/datasets/:datasetId', { preHandler: requireAuth }, async (request, reply) => {
-    const { datasetId } = request.params as { datasetId: string };
-    const dataset = datasetService.getDataset(datasetId);
-    if (!dataset) return reply.code(404).send({ error: '데이터셋을 찾을 수 없습니다' });
-    return dataset;
-  });
-
-  app.post('/datasets', { preHandler: requireAuth }, async (request, reply) => {
-    const parsed = createDatasetSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: '필드가 올바르지 않습니다 (name/symbols)' });
-    }
-    try {
-      const dataset = datasetService.createDataset(parsed.data.name, parsed.data.symbols);
-      return reply.code(201).send({ dataset });
-    } catch (error) {
-      return reply
-        .code(400)
-        .send({ error: error instanceof Error ? error.message : String(error) });
-    }
-  });
-
-  /** 데이터셋 편집 — 이름 변경 + 종목 참조 편집 */
-  app.patch('/datasets/:datasetId', { preHandler: requireAuth }, async (request, reply) => {
-    const { datasetId } = request.params as { datasetId: string };
-    const parsed = updateDatasetSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply
-        .code(400)
-        .send({ error: '필드가 올바르지 않습니다 (name/addSymbols/removeSymbols)' });
-    }
-    if (!datasetService.getDataset(datasetId)) {
-      return reply.code(404).send({ error: '데이터셋을 찾을 수 없습니다' });
-    }
-    try {
-      // 이름을 먼저 검증·적용한다 — 중복 이름으로 거부될 요청이 종목만 바꾸고 끝나지 않게
-      let dataset =
-        parsed.data.name !== undefined
-          ? datasetService.renameDataset(datasetId, parsed.data.name)
-          : undefined;
-      if ((parsed.data.addSymbols?.length ?? 0) + (parsed.data.removeSymbols?.length ?? 0) > 0) {
-        dataset = datasetService.updateSymbols(datasetId, {
-          add: parsed.data.addSymbols,
-          remove: parsed.data.removeSymbols,
-        });
-      }
-      return reply.send({ dataset });
-    } catch (error) {
-      return reply
-        .code(400)
-        .send({ error: error instanceof Error ? error.message : String(error) });
-    }
-  });
-
-  /** 데이터셋 삭제 — **참조만** 끊는다. 봉·재무는 종목 소관이라 남는다 */
-  app.delete('/datasets/:datasetId', { preHandler: requireAuth }, async (request, reply) => {
-    const { datasetId } = request.params as { datasetId: string };
-    if (!datasetService.getDataset(datasetId)) {
-      return reply.code(404).send({ error: '데이터셋을 찾을 수 없습니다' });
-    }
-    if (hasActiveBacktests(datasetId)) {
-      return reply
-        .code(409)
-        .send({ error: '이 데이터셋을 참조하는 백테스트가 있습니다 — 완료·취소 후 삭제하세요' });
-    }
-    datasetService.deleteDataset(datasetId);
-    return reply.code(204).send();
   });
 
   // ── 수집 잡 ─────────────────────────────────────────────────────────

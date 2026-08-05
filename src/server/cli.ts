@@ -148,9 +148,9 @@ function reasonBucket(reason: string): string {
   return reason.slice(0, cut).trim();
 }
 
-/** 인자 파싱: --dataset ds-1 --from 2015 --to 2026 [--fs-div OFS] */
+/** 인자 파싱: --symbols 005930,000660 --from 2015 --to 2026 [--fs-div OFS] */
 function parseFactsSyncArgs(argv: readonly string[]): {
-  datasetId: string;
+  symbols: readonly string[];
   fromYear: number;
   toYear: number;
   consolidated: boolean;
@@ -162,8 +162,13 @@ function parseFactsSyncArgs(argv: readonly string[]): {
     if (key?.startsWith('--') && value !== undefined) flags.set(key.slice(2), value);
   }
 
-  const datasetId = flags.get('dataset');
-  if (!datasetId) throw new Error('--dataset <데이터셋 id> 가 필요합니다');
+  const symbolsRaw = flags.get('symbols');
+  if (!symbolsRaw) throw new Error('--symbols <종목코드,종목코드,...> 가 필요합니다');
+  const symbols = symbolsRaw
+    .split(',')
+    .map((code) => code.trim())
+    .filter((code) => code.length > 0);
+  if (symbols.length === 0) throw new Error('--symbols 가 비어 있습니다');
 
   const fromYear = Number(flags.get('from'));
   const toYear = Number(flags.get('to'));
@@ -176,11 +181,11 @@ function parseFactsSyncArgs(argv: readonly string[]): {
     throw new Error('--fs-div 는 CFS(연결) 또는 OFS(별도) 입니다');
   }
 
-  return { datasetId, fromYear, toYear, consolidated: fsDiv === 'CFS' };
+  return { symbols, fromYear, toYear, consolidated: fsDiv === 'CFS' };
 }
 
 async function factsSync(argv: readonly string[]): Promise<void> {
-  const { datasetId, fromYear, toYear, consolidated } = parseFactsSyncArgs(argv);
+  const { symbols, fromYear, toYear, consolidated } = parseFactsSyncArgs(argv);
   const config = loadConfig();
   if (!config.dartApiKey) {
     throw new Error('DART_API_KEY 가 설정되지 않았습니다. .env 에 추가한 뒤 다시 실행하세요.');
@@ -189,12 +194,15 @@ async function factsSync(argv: readonly string[]): Promise<void> {
   const container = createContainer(config);
   try {
     // 컨테이너는 `database: DatabaseHandle` 을 노출한다 — Drizzle 인스턴스는 그 안의 `.db` 다
-    // 데이터셋은 이제 종목 참조 묶음이다 — 수집 대상 종목을 여기서 펼친다.
-    // market 은 종목의 속성이라 참조 종목들에서 확인한다.
-    const dataset = container.datasetService.getDataset(datasetId);
-    if (!dataset) throw new Error(`데이터셋을 찾을 수 없습니다: ${datasetId}`);
-    const symbols = [...dataset.symbols];
-    if (symbols.length === 0) throw new Error(`데이터셋에 종목이 없습니다: ${datasetId}`);
+    // 종목이 데이터 소관이다(설계 2026-07-31-symbol-as-first-class) — 데이터셋 개념이
+    // 사라지면서(스펙 2026-08-05, Task 6) 이 명령도 종목 코드를 직접 받는다.
+    const registered = new Set(
+      container.symbolService.listSymbols().map((symbol) => symbol.code),
+    );
+    const missing = symbols.filter((code) => !registered.has(code));
+    if (missing.length > 0) {
+      throw new Error(`등록되지 않은 종목입니다: ${missing.join(', ')}`);
+    }
     const foreign = container.symbolService
       .listSymbols()
       .filter((symbol) => symbols.includes(symbol.code) && symbol.market !== 'KR');
@@ -204,7 +212,7 @@ async function factsSync(argv: readonly string[]): Promise<void> {
       );
     }
     console.log(
-      `${dataset.name}: ${symbols.length}종목, ${fromYear}~${toYear}년, ` +
+      `${symbols.length}종목, ${fromYear}~${toYear}년, ` +
         `${consolidated ? '연결(CFS)' : '별도(OFS)'} 기준으로 수집합니다.`,
     );
 
@@ -233,7 +241,7 @@ async function factsSync(argv: readonly string[]): Promise<void> {
     }
     if (report.savedFacts === 0 && report.gaps.length === 0 && report.failureMessage === null) {
       // 저장된 것도 누락도 0건이면 "성공적으로 아무것도 안 함" 처럼 읽히는 결과다 —
-      // 대개는 수집 범위·API 키·데이터셋 종목 목록이 잘못됐다는 신호이므로 경고한다
+      // 대개는 수집 범위·API 키·종목 목록이 잘못됐다는 신호이므로 경고한다
       console.warn(
         '경고: 저장된 팩트도 누락도 0건입니다. 수집 범위(연도·종목)나 DART 응답을 확인하세요 ' +
           '— 수집이 조용히 아무 일도 하지 않았을 수 있습니다.',
@@ -287,7 +295,7 @@ async function main(): Promise<void> {
       console.log('사용법: cli <command>');
       console.log('  admin:create   관리자 계정 생성');
       console.log('  totp:enroll    TOTP 2단계 인증 등록·재발급 (CLI 전용)');
-      console.log('  facts:sync     DART 재무·자본변동 수집 (--dataset <id> --from <연도> --to <연도> [--fs-div CFS|OFS])');
+      console.log('  facts:sync     DART 재무·자본변동 수집 (--symbols <코드,코드,...> --from <연도> --to <연도> [--fs-div CFS|OFS])');
       process.exitCode = command ? 1 : 0;
   }
 }

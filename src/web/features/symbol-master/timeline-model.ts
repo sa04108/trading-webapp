@@ -1,6 +1,6 @@
 // 이 모듈은 DOM 을 쓰지 않고 별칭(@/) import 도 쓰지 않는다 — tests/unit 이 이 파일을
 // 직접 import 해 tsconfig.server.json 의 NodeNext 프로그램에 편입되기 때문이다
-// (src/web/features/backtests/krx-selection.ts 와 같은 이유).
+// (src/web/features/backtests/prefill.ts 와 같은 이유).
 
 /** 커버리지 타임라인의 한 구간 — 전체 [0,100] 을 이어 붙이면 빈틈이 없다 */
 export interface TimelineSegment {

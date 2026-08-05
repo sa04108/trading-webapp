@@ -34,9 +34,9 @@ export function DashboardPage() {
     queryFn: () => api<SystemInfo>('/system/info'),
     refetchInterval: 30_000,
   });
-  const { data: datasets } = useQuery({
-    queryKey: ['datasets'],
-    queryFn: () => api<{ datasets: Array<{ id: string; name: string }> }>('/datasets'),
+  const { data: symbolsResp } = useQuery({
+    queryKey: ['symbols', 'dashboard-count'],
+    queryFn: () => api<{ symbols: Array<{ code: string }> }>('/symbols'),
   });
 
   const jobs = backtests?.jobs ?? [];
@@ -123,19 +123,19 @@ export function DashboardPage() {
             <CardTitle className="text-base">데이터</CardTitle>
           </CardHeader>
           <CardContent className="text-sm">
-            {datasets ? (
-              datasets.datasets.length > 0 ? (
+            {symbolsResp ? (
+              symbolsResp.symbols.length > 0 ? (
                 <p>
-                  데이터셋 {datasets.datasets.length}개 —{' '}
-                  <Link to="/datasets" className="underline underline-offset-4">
-                    커버리지 확인
+                  등록 종목 {symbolsResp.symbols.length}개 —{' '}
+                  <Link to="/datasets?tab=prices" className="underline underline-offset-4">
+                    가격 데이터 확인
                   </Link>
                 </p>
               ) : (
                 <p className="text-muted-foreground">
-                  데이터셋이 없습니다.{' '}
-                  <Link to="/datasets" className="underline underline-offset-4">
-                    데이터셋 만들기
+                  등록된 종목이 없습니다.{' '}
+                  <Link to="/datasets?tab=prices" className="underline underline-offset-4">
+                    종목 등록하기
                   </Link>
                 </p>
               )

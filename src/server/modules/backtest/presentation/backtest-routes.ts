@@ -19,12 +19,7 @@ import { SECURITY_HEADERS } from '../../../shared/security.js';
 import type { Clock } from '../../../shared/clock.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
 import type { FactRepository } from '../../facts/application/ports.js';
-import type {
-  DatasetService,
-  UniverseSnapshot,
-} from '../../market-data/application/dataset-service.js';
-import type { SymbolService } from '../../market-data/application/symbol-service.js';
-import type { UniverseSnapshotService } from '../../market-data/application/universe-snapshot-service.js';
+import type { ConsumedVersionSnapshot, SymbolService } from '../../market-data/application/symbol-service.js';
 import { KrxNotConfiguredError, KrxQuotaError } from '../../market-data/application/ports.js';
 import { KRX_FILTER_POLICY_VERSION } from '../../market-data/domain/krx-filter-policy.js';
 import {
@@ -57,9 +52,7 @@ export interface BacktestRouteDeps {
   readonly orchestrator: JobOrchestrator;
   readonly results: ResultsService;
   readonly strategies: StrategyRegistry;
-  readonly datasets: DatasetService;
   readonly symbolService: SymbolService;
-  readonly universeSnapshotService: UniverseSnapshotService;
   /** 유니버스 규칙 → 리밸런스 날짜별 멤버십 일정 (스펙 2026-08-05) */
   readonly universeRuleResolver: UniverseRuleResolver;
   readonly audit: AuditLogService;
@@ -168,7 +161,6 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     orchestrator,
     results,
     strategies,
-    datasets,
     symbolService,
     universeRuleResolver,
     audit,
@@ -224,7 +216,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     codes: readonly string[],
     errors: string[],
     coverageCheck: (codes: readonly string[], slice: DatasetSlice) => string | null,
-  ): { universe: UniverseSnapshot; timeframe: '1m' | '1h' | '1d' } | null => {
+  ): { universe: ConsumedVersionSnapshot; timeframe: '1m' | '1h' | '1d' } | null => {
     /**
      * 소비 timeframe 검사. 데이터셋에 `defaultTimeframe` 이 없어졌으므로(설계
      * 2026-07-31-symbol-as-first-class) 미지정 요청의 기준을 **데이터에서** 찾는다:
@@ -279,7 +271,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     }
 
     // 제출 시점의 종목 버전 스냅샷을 고정 — 대기 중 동기화가 끼어들어도 어긋나지 않는다 (§9.5)
-    const universe = datasets.universeSnapshotFor(codes, slice);
+    const universe = symbolService.versionSnapshotFor(codes, slice);
 
     // 봉 수 상한 — 실행부는 전체 봉을 메모리에 올린다. 1m 소비를 열면서 생긴 밸브.
     // coverage 는 슬라이스 기준 timeframe 으로 세므로 1m 소비만 배율 60 으로 추정한다.
@@ -326,7 +318,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
   type ValidationResult =
     | {
         readonly ok: true;
-        readonly universe: UniverseSnapshot;
+        readonly universe: ConsumedVersionSnapshot;
         readonly timeframe: '1m' | '1h' | '1d';
         readonly provenancePin: ProvenancePin;
         readonly resolved: ResolvedUniverse;

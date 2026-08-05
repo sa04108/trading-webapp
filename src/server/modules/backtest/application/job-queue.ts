@@ -179,17 +179,6 @@ export class JobQueue {
     return true;
   }
 
-  /**
-   * 이 데이터셋을 참조하는 미종료(대기 포함) 잡 수 — 데이터셋 삭제 가드용.
-   *
-   * 백테스트 잡은 더 이상 datasetId 를 참조하지 않는다(스펙 2026-08-05, 유니버스 규칙으로
-   * 교체) — 어떤 데이터셋을 대입해도 항상 0 이다. 데이터셋 삭제 가드 자체는 T6(데이터셋
-   * 코드 제거)가 정리할 때까지 시그니처만 남긴다.
-   */
-  activeCountForDataset(_datasetId: string): number {
-    return 0;
-  }
-
   countByStatus(statuses: BacktestJobStatus[]): number {
     const row = this.db
       .select({ value: count() })

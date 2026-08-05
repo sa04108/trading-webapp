@@ -584,9 +584,6 @@ function UniverseProvenanceNotice({ pin }: { pin: ProvenancePin | null }) {
         ) : null}
         {notice.sentence ? <p>{notice.sentence}</p> : null}
         {notice.warning ? <p>{notice.warning}</p> : null}
-        {pin?.sourceKind === 'KRX_HISTORICAL' ? (
-          <p className="text-xs text-muted-foreground">출처: 한국거래소 통계정보</p>
-        ) : null}
       </AlertDescription>
     </Alert>
   );

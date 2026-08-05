@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
+import { datasetSymbols } from '../../src/server/shared/db/schema.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
 import { registerSymbols, seedDataset } from '../helpers/seed.js';
 
@@ -127,9 +128,8 @@ describe('GET /symbols 가 종목 화면에 필요한 것을 한 번에 준다',
 
   it('참조 데이터셋 수를 센다 — 제거를 안전하게 만드는 값이다', async () => {
     const cookie = await loginCookie();
-    registerSymbols(ctx.container, 'KR', ['005930', '000660']);
-    ctx.container.datasetService.createDataset('a', ['005930']);
-    ctx.container.datasetService.createDataset('b', ['005930', '000660']);
+    seedDataset(ctx.container, 'a', 'KR', ['005930']);
+    seedDataset(ctx.container, 'b', 'KR', ['005930', '000660']);
 
     const symbols = await listSymbols(cookie);
     expect(symbols.find((s) => s.code === '005930')?.datasetCount).toBe(2);
@@ -161,6 +161,11 @@ describe('종목 제거 영향 판정', () => {
     seedDataset(ctx.container, 'pair', 'KR', ['005930', '000660']);
     await ctx.container.symbolService.removeSymbols(['000660']);
     expect(ctx.container.symbolService.getSymbol('000660')).toBeNull();
-    expect(ctx.container.datasetService.listDatasets()[0]?.symbols).toEqual(['005930']);
+    const remaining = ctx.container.database.db
+      .select({ code: datasetSymbols.code })
+      .from(datasetSymbols)
+      .all()
+      .map((row) => row.code);
+    expect(remaining).toEqual(['005930']);
   });
 });

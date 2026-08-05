@@ -38,6 +38,34 @@ import type { CandleRepository } from './ports.js';
 /** 재무 버전 체인의 슬라이스 자리 — 재무는 봉 슬라이스 축이 없다 */
 export const FACTS_SLICE = 'FACTS';
 
+/** 재무 수집 예상 — facts 모듈이 계산해 이 모듈이 응답에 실어 보낸다 */
+export type FactsSyncEstimate =
+  | { basis: 'UNSUPPORTED'; reason: string }
+  | { basis: 'AFTER_CANDLES' }
+  | {
+      basis: 'PLANNED';
+      fromYear: number;
+      toYear: number;
+      calls: number;
+      estimatedMs: number;
+      overDailyLimit: boolean;
+    };
+
+/** 실행이 소비한 (종목, 슬라이스, 버전, 해시) 한 칸 — §9.5 재현성 스냅샷의 구성 요소 */
+export interface ConsumedVersionEntry {
+  readonly code: string;
+  readonly slice: string;
+  readonly version: number;
+  readonly contentHash: string;
+}
+
+/** 백테스트가 제출 시점에 고정하는 종목 버전 pin (§9.5) — 구 `UniverseSnapshot` 자리 */
+export interface ConsumedVersionSnapshot {
+  readonly entries: readonly ConsumedVersionEntry[];
+  /** 정렬된 항목을 이어 붙인 집계 해시 */
+  readonly hash: string;
+}
+
 /** 종목 화면의 한 행 */
 export interface SymbolSummary {
   readonly code: string;
@@ -542,6 +570,34 @@ export class SymbolService {
       .limit(1)
       .get();
     return latest ? { version: latest.version, contentHash: latest.contentHash } : null;
+  }
+
+  /**
+   * 제출 시점 종목 버전 스냅샷 (§9.5) — 백테스트가 제출 시점에 고정해, 대기 중 동기화가
+   * 끼어들어도 실행이 소비한 버전이 어긋나지 않게 한다.
+   *
+   * 봉 슬라이스와 재무를 함께 담는다 — 둘 다 백테스트 입력이고, 재무만 백필해도 결과가
+   * 달라진다. 버전이 없는 조합은 version 0 으로 남긴다: "아직 수집 안 됨" 도 입력 상태의
+   * 일부이고, 빠뜨리면 나중에 수집된 실행과 스냅샷이 같아 보인다.
+   */
+  versionSnapshotFor(codes: readonly string[], slice: DatasetSlice): ConsumedVersionSnapshot {
+    const uniqueCodes = [...new Set(codes)].sort();
+    const entries: ConsumedVersionEntry[] = [];
+    for (const code of uniqueCodes) {
+      for (const axis of [slice, FACTS_SLICE]) {
+        const latest = this.getLatestVersion(code, axis);
+        entries.push({
+          code,
+          slice: axis,
+          version: latest?.version ?? 0,
+          contentHash: latest?.contentHash ?? '',
+        });
+      }
+    }
+    const hash = createHash('sha256')
+      .update(entries.map((e) => `${e.code}:${e.slice}:${e.version}:${e.contentHash}`).join('|'))
+      .digest('hex');
+    return { entries, hash };
   }
 
   /**

@@ -15,11 +15,10 @@ import {
   createRequireAuth,
   registerAuthRoutes,
 } from '../modules/auth/presentation/auth-routes.js';
-import { registerDatasetRoutes } from '../modules/market-data/presentation/dataset-routes.js';
+import { registerSymbolRoutes } from '../modules/market-data/presentation/symbol-routes.js';
 import { registerStrategyRoutes } from '../modules/strategy/presentation/strategy-routes.js';
 import { registerBacktestRoutes } from '../modules/backtest/presentation/backtest-routes.js';
 import { registerNotificationRoutes } from '../modules/notification/presentation/notification-routes.js';
-import { registerUniverseRoutes } from '../modules/market-data/presentation/universe-routes.js';
 import { registerSymbolMasterRoutes } from '../modules/market-data/presentation/symbol-master-routes.js';
 
 function resolvePublicDir(): string | null {
@@ -65,17 +64,14 @@ export async function buildServer(container: Container): Promise<FastifyInstance
     async (api) => {
       registerSystemRoutes(api, container, requireAuth);
       registerAuthRoutes(api, authDeps);
-      registerDatasetRoutes(
+      registerSymbolRoutes(
         api,
-        container.datasetService,
         container.symbolService,
         container.brokerSyncService,
         container.symbolInfoService,
         container.symbolMetricsService,
-        (datasetId: string) => container.jobQueue.activeCountForDataset(datasetId) > 0,
         container.factsSyncEstimator,
         () => container.factRepository.symbolsWithFacts(),
-        () => container.historicalUniverseService.currentShortCodes(),
         requireAuth,
       );
       registerStrategyRoutes(api, container.strategyRegistry, requireAuth);
@@ -86,9 +82,7 @@ export async function buildServer(container: Container): Promise<FastifyInstance
           orchestrator: container.jobOrchestrator,
           results: container.resultsService,
           strategies: container.strategyRegistry,
-          datasets: container.datasetService,
           symbolService: container.symbolService,
-          universeSnapshotService: container.universeSnapshotService,
           universeRuleResolver: container.universeRuleResolver,
           audit: container.auditLog,
           factRepository: container.factRepository,
@@ -100,16 +94,6 @@ export async function buildServer(container: Container): Promise<FastifyInstance
         requireAuth,
       );
       registerNotificationRoutes(api, container.notificationService, requireAuth);
-      registerUniverseRoutes(
-        api,
-        container.historicalUniverseService,
-        container.universeSnapshotService,
-        requireAuth,
-        {
-          approvalExpiry: container.config.krxApprovalExpiry,
-          todayCallCount: container.krxTodayCallCount,
-        },
-      );
       registerSymbolMasterRoutes(
         api,
         { service: container.symbolMasterService, backfill: container.symbolMasterBackfill },
