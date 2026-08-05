@@ -15,10 +15,9 @@
  * 컴포넌트 테스트 환경 없이 단위 테스트할 수 있다. 확장자 .js 와 별칭(@/) 회피는
  * prefill.ts 와 같은 이유다 — tests/unit 이 이 모듈을 NodeNext 프로그램에 편입한다.
  */
-import { MAX_UNIVERSE_SYMBOLS } from '../../../shared/schemas/universe-limit.js';
 import type { WizardFormState } from './prefill.js';
 
-export const WIZARD_STEPS = ['전략', '데이터·종목', '기간', '자본·비용', '검토', '실행'] as const;
+export const WIZARD_STEPS = ['전략', '유니버스', '기간', '자본·비용', '검토', '실행'] as const;
 
 const REVIEW_LABEL = '검토';
 
@@ -32,14 +31,18 @@ export const RUN_STEP = WIZARD_STEPS.length - 1;
  * 단계 게이트가 보는 값만. 파라미터·프로파일·시드는 여기서 보지 않는다 — 검토
  * 단계의 buildRequest 가 요청을 만들면서 한 번에 검사하고, 그 오류는 검토 화면에
  * 그대로 뜬다. 게이트가 같은 검사를 중복하면 규칙이 둘이 된다.
- *
- * 종목 수 상한은 예외로 여기서 본다 — 데이터셋을 고르는 그 자리에서 막아야 하고,
- * 검토까지 네 단계를 지나 "요청을 못 만든다" 를 듣게 하면 왕복이 그대로 남는다.
  */
-export type StepGateState = Pick<
-  WizardFormState,
-  'strategyId' | 'datasetId' | 'symbols' | 'from' | 'to' | 'initialCash'
-> & {
+export type StepGateState = Pick<WizardFormState, 'strategyId' | 'from' | 'to' | 'initialCash'> & {
+  /**
+   * 유니버스 규칙 미리보기가 마지막으로 성공했고, 그 결과에 uncoveredDates·
+   * missingCandleSymbols 가 하나도 없는지 (스펙 2026-08-05). 종목 수 상한(200)은 이제
+   * `universeRuleSchema` 의 `topN` 자체가 막으므로 이 게이트가 따로 세지 않는다 —
+   * `UniverseRuleStep` 의 입력이 애초에 그 범위를 벗어나지 못한다.
+   *
+   * 규칙·기간이 미리보기 이후 바뀌면 `UniverseRuleStep` 이 이 값을 다시 false 로
+   * 되돌린다 — 낡은 성공을 유효하다고 우기지 않는다.
+   */
+  universePreviewOk: boolean;
   /**
    * 고른 전략이 재무를 요구하는지. **모를 때는 undefined 여야 한다** — false 로 좁히면
    * 서버가 알려주지 않은 상황을 "재무 안 씀" 으로 단정해 게이트가 조용히 열린다
@@ -47,16 +50,16 @@ export type StepGateState = Pick<
    */
   requiresFundamentals?: boolean;
   /**
-   * 선택 종목 중 재무를 **가진** 코드. 종목 목록을 아직 못 받았으면 undefined 다 —
+   * 유니버스 종목 중 재무를 **가진** 코드. 종목 목록을 아직 못 받았으면 undefined 다 —
    * 빈 배열과 구분해야 한다: 빈 배열은 "전부 없다", undefined 는 "모른다" 다.
    */
   symbolsWithFacts?: readonly string[];
   /**
-   * 유니버스 출처 (Task 13) — `KRX_SNAPSHOT` 이면 데이터셋을 고르지 않으므로 datasetId
-   * 검사를 건너뛰고, 대신 스냅샷 확정 여부(symbols 유무)를 본다. 200종목 상한은
-   * 출처와 무관하게 그대로 적용한다.
+   * 마지막으로 유효했던 미리보기의 unionSymbols. 유니버스는 더 이상 화면이 고르는
+   * 종목 목록이 아니라 서버가 규칙으로 재구성한 결과라서(스펙 2026-08-05), 재무 게이트가
+   * 볼 "선택 종목" 도 이 목록이다.
    */
-  universeMode: 'DATASET' | 'KRX_SNAPSHOT';
+  unionSymbols: readonly string[];
 };
 
 /** 이 단계를 아직 떠날 수 없는 이유. null 이면 통과 */
@@ -64,24 +67,11 @@ export function stepBlocker(index: number, state: StepGateState): string | null 
   switch (index) {
     case 0:
       return state.strategyId ? null : '전략을 선택하세요';
-    case 1: {
-      if (state.universeMode === 'KRX_SNAPSHOT') {
-        if (state.symbols.length === 0) return '과거 KRX 시점 스냅샷을 확정하세요';
-      } else if (!state.datasetId) {
-        return '데이터셋을 선택하세요';
-      }
-      if (state.symbols.length === 0) return '종목을 1개 이상 선택하세요';
-      if (state.symbols.length > MAX_UNIVERSE_SYMBOLS) {
-        return state.universeMode === 'KRX_SNAPSHOT'
-          ? `이 스냅샷은 ${state.symbols.length}종목이라 백테스트 상한` +
-              `(${MAX_UNIVERSE_SYMBOLS}종목)을 넘습니다 — 과거 KRX 시점 화면에서 종목을 ` +
-              '줄이거나 더 작은 스냅샷을 쓰세요'
-          : `이 데이터셋은 ${state.symbols.length}종목이라 백테스트 상한` +
-              `(${MAX_UNIVERSE_SYMBOLS}종목)을 넘습니다 — 데이터 화면에서 종목을 줄이거나 ` +
-              '더 작은 데이터셋을 쓰세요';
+    case 1:
+      if (!state.universePreviewOk) {
+        return '유니버스 규칙을 미리보기하고 경고를 모두 해결하세요';
       }
       return fundamentalsBlocker(state);
-    }
     case 2:
       if (!state.from || !state.to) return '시작일과 종료일을 입력하세요';
       if (state.from > state.to) return '시작일이 종료일보다 늦습니다';
@@ -96,11 +86,11 @@ export function stepBlocker(index: number, state: StepGateState): string | null 
 }
 
 /**
- * 재무 필요 전략 + 재무 없는 종목 조합을 제출 전에 막는다.
+ * 재무 필요 전략 + 재무 없는 유니버스 조합을 제출 전에 막는다.
  *
- * **서버의 422 와 같은 조건이다** (`checkFundamentalsRequirement`): 선택 종목이 **전부**
- * 비었을 때만 막는다. 일부만 없는 경우는 거부 사유가 아니고 워커가 실행 경고에 이름으로
- * 남긴다 (D-025). 여기서 더 조이면 화면과 서버가 서로 다른 정책을 갖게 되고, 화면이
+ * **서버의 422 와 같은 조건이다** (`checkFundamentalsRequirement`): unionSymbols 가
+ * **전부** 비었을 때만 막는다. 일부만 없는 경우는 거부 사유가 아니고 워커가 실행 경고에
+ * 이름으로 남긴다 (D-025). 여기서 더 조이면 화면과 서버가 서로 다른 정책을 갖게 되고, 화면이
  * 막은 제출은 서버가 허용했을 것이라는 사실을 사용자가 알 방법이 없다.
  *
  * 모르는 상태에서는 통과시킨다 — `requiresFundamentals`·`symbolsWithFacts` 가 undefined
@@ -110,10 +100,10 @@ export function stepBlocker(index: number, state: StepGateState): string | null 
 function fundamentalsBlocker(state: StepGateState): string | null {
   if (state.requiresFundamentals !== true) return null;
   if (state.symbolsWithFacts === undefined) return null;
-  if (state.symbols.some((code) => state.symbolsWithFacts!.includes(code))) return null;
+  if (state.unionSymbols.some((code) => state.symbolsWithFacts!.includes(code))) return null;
   return (
-    '이 전략은 재무 데이터가 필요하지만 선택한 종목에는 없습니다 — ' +
-    '종목 화면에서 「재무」를 함께 동기화하거나 봉만 쓰는 전략을 고르세요'
+    '이 전략은 재무 데이터가 필요하지만 이 유니버스에는 재무 있는 종목이 없습니다 — ' +
+    '종목 화면에서 해당 종목의 재무를 함께 동기화하거나 봉만 쓰는 전략을 고르세요'
   );
 }
 

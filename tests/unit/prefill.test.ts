@@ -5,8 +5,7 @@ import type { BacktestRequestBody } from '../../src/web/features/backtests/types
 const request: BacktestRequestBody = {
   strategyId: 'range-breakout',
   parameters: { lookbackBars: 10, atrPeriod: 5 },
-  datasetId: 'ds_1',
-  universe: { type: 'SYMBOLS', symbols: ['005930', '000660'] },
+  universeRule: { markets: ['KOSPI'], topN: 200, sortKey: 'MKTCAP' },
   period: { from: '2025-07-27', to: '2026-07-24' },
   capital: { initialCash: 10_000_000, currency: 'KRW' },
   execution: {
@@ -20,17 +19,15 @@ const request: BacktestRequestBody = {
 
 const catalog = {
   strategyIds: ['range-breakout'],
-  datasets: [{ id: 'ds_1', symbols: ['005930', '000660'] }],
 };
 
 describe('requestToFormState', () => {
-  it('모든 값을 문자열 폼 상태로 옮긴다', () => {
+  it('모든 값을 폼 상태로 옮긴다', () => {
     const { state, notes } = requestToFormState(request, catalog);
     expect(notes).toEqual([]);
     expect(state.strategyId).toBe('range-breakout');
     expect(state.parameters).toEqual({ lookbackBars: '10', atrPeriod: '5' });
-    expect(state.datasetId).toBe('ds_1');
-    expect(state.symbols).toEqual(['005930', '000660']);
+    expect(state.universeRule).toEqual({ markets: ['KOSPI'], topN: 200, sortKey: 'MKTCAP' });
     expect(state.from).toBe('2025-07-27');
     expect(state.to).toBe('2026-07-24');
     expect(state.initialCash).toBe('10000000');
@@ -38,7 +35,7 @@ describe('requestToFormState', () => {
     expect(state.randomSeed).toBe('42');
   });
 
-  it('timeframe 을 왕복시킨다 — 미지정은 빈 문자열(데이터셋 기본)', () => {
+  it('timeframe 을 왕복시킨다 — 미지정은 빈 문자열(유니버스 기본)', () => {
     const explicit = requestToFormState({ ...request, timeframe: '1m' }, catalog);
     expect(explicit.state.timeframe).toBe('1m');
 
@@ -46,29 +43,12 @@ describe('requestToFormState', () => {
     expect(unspecified.state.timeframe).toBe('');
   });
 
-  it('데이터셋이 사라지면 데이터셋·종목을 비우고 알린다', () => {
-    const { state, notes } = requestToFormState(request, {
-      ...catalog,
-      datasets: [],
-    });
-    expect(state.datasetId).toBeNull();
-    expect(state.symbols).toEqual([]);
-    expect(notes.some((n: string) => n.includes('데이터셋'))).toBe(true);
-  });
-
-  it('사라진 종목만 제외하고 알린다', () => {
-    const { state, notes } = requestToFormState(request, {
-      ...catalog,
-      datasets: [{ id: 'ds_1', symbols: ['005930'] }],
-    });
-    expect(state.symbols).toEqual(['005930']);
-    expect(notes.some((n: string) => n.includes('000660'))).toBe(true);
-  });
-
   it('전략이 사라지면 전략과 파라미터를 비우고 알린다', () => {
-    const { state, notes } = requestToFormState(request, { ...catalog, strategyIds: [] });
+    const { state, notes } = requestToFormState(request, { strategyIds: [] });
     expect(state.strategyId).toBeNull();
     expect(state.parameters).toEqual({});
     expect(notes.some((n: string) => n.includes('range-breakout'))).toBe(true);
+    // 전략이 사라져도 유니버스 규칙은 그대로 옮긴다 — 규칙은 전략과 무관한 값이다
+    expect(state.universeRule).toEqual(request.universeRule);
   });
 });

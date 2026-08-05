@@ -12,16 +12,14 @@ import { formatDateTime, formatSignedPct, pnlClass, timeframeLabel } from '@/lib
 import { groupJobsByStrategy } from './job-groups';
 import { resolveJobTimeframe } from './job-timeframe';
 import { StatusBadge } from './status-badge';
-import { formatUniverseSummary } from './universe-summary';
+import { formatUniverseRuleSummary } from './universe-summary';
 import { isTerminal, type JobSummary } from './types';
 
 function JobCard({
   job,
-  datasetName,
   timeframe,
 }: {
   job: JobSummary;
-  datasetName: string | null;
   timeframe: string | null;
 }) {
   const running = !isTerminal(job.status);
@@ -41,19 +39,8 @@ function JobCard({
             </span>
           </div>
           <div className="text-xs text-muted-foreground">
-            {
-              // KRX 스냅샷 경로는 datasetId 가 null 이다 (Task 13 리뷰 이관 항목) —
-              // 데이터셋 이름을 찾는 대신 유니버스 출처 라벨로 대체한다. 목록 카드는
-              // provenancePin 을 받지 않으므로 적용일까지는 못 적고 출처만 밝힌다.
-              job.datasetId === null
-                ? `KRX 스냅샷 · ${job.request.universe.symbols.length}종목`
-                : formatUniverseSummary(
-                    datasetName,
-                    job.datasetId,
-                    job.request.universe.symbols.length,
-                  )
-            }{' '}
-            · {job.request.period.from} ~ {job.request.period.to}
+            {formatUniverseRuleSummary(job.request.universeRule)} · {job.request.period.from} ~{' '}
+            {job.request.period.to}
             {timeframe ? ` · ${timeframeLabel(timeframe)}` : ''}
           </div>
           {running && progress !== null ? (
@@ -95,16 +82,6 @@ export function BacktestsPage() {
   });
   const strategyById = new Map((strategies.data?.strategies ?? []).map((s) => [s.id, s]));
 
-  // 설명 줄이 데이터셋 이름과 종목 수만 적으므로 종목명 조회가 필요 없다 — 카드마다
-  // 종목 이름을 나열하던 시절에는 잡 수 × 5종목을 매 5초 갱신마다 다시 물었다.
-  const datasets = useQuery({
-    queryKey: ['datasets'],
-    queryFn: () => api<{ datasets: Array<{ id: string; name: string }> }>('/datasets'),
-  });
-  const datasetNameById = new Map(
-    (datasets.data?.datasets ?? []).map((dataset) => [dataset.id, dataset.name]),
-  );
-
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -136,14 +113,7 @@ export function BacktestsPage() {
                   ) : null}
                 </div>
                 {group.jobs.map((job) => (
-                  <JobCard
-                    key={job.id}
-                    job={job}
-                    datasetName={
-                      job.datasetId !== null ? datasetNameById.get(job.datasetId) ?? null : null
-                    }
-                    timeframe={resolveJobTimeframe(job)}
-                  />
+                  <JobCard key={job.id} job={job} timeframe={resolveJobTimeframe(job)} />
                 ))}
               </section>
             );

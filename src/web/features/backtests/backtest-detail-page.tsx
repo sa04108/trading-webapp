@@ -9,7 +9,7 @@ import {
   Trash2,
   XCircle,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { toast } from 'sonner';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -78,7 +78,7 @@ import {
   type TradeSort,
   type TradeSortKey,
 } from './trade-sort';
-import { formatUniverseSummary } from './universe-summary';
+import { formatUniverseRuleSummary } from './universe-summary';
 import { isTerminal, type BacktestMetrics, type JobSummary, type RunMetadata } from './types';
 import { costSummary } from './cost-summary';
 import { costProfileLabel, slippageProfileLabel } from './profile-labels';
@@ -492,8 +492,8 @@ function RunMetadataCard({
         : `${run.strategyId} v${run.strategyVersion}`,
     ],
     ['전략 해시', run.strategySourceHash.slice(0, 16)],
-    // 「데이터셋」 원시 id 행 대신 유니버스 출처를 적는다 (Task 14) — datasetId 는 KRX
-    // 스냅샷 경로에서 null 이라 그대로 보여주면 "데이터셋이 없다" 는 오해를 만든다.
+    // 잡은 더 이상 datasetId 를 갖지 않는다(스펙 2026-08-05) — 유니버스 출처는
+    // provenancePin 에서만 읽는다 (Task 14).
     ['유니버스 출처', universeSourceLabel(provenancePin)],
     ['적용 거래일', provenancePin?.effectiveTradingDate ?? '-'],
     ['선정 방식', selectionMethodLabel(provenancePin?.selectionMethod ?? null)],
@@ -602,9 +602,19 @@ export function BacktestDetailPage() {
   const completed = job?.status === 'COMPLETED';
   const { data: series } = useBacktestSeries(id, completed === true);
 
+  /**
+   * 실행된 종목 목록 — `job.request` 에는 더 이상 종목 목록이 없다(스펙 2026-08-05,
+   * `universeRule` 만 있다). 실제 구성은 서버가 제출 시점에 재구성해 잡에 pin 하지만
+   * 이 화면은 그 pin 원문을 내려받지 않으므로, 대신 이미 조회하는 `series.symbols`
+   * (실거래가 있었던 종목)로 표시용 목록을 삼는다 — 거래가 0건인 종목은 빠진다.
+   * 개념을 온전히 다시 세우는 작업은 T6 로 미룬다.
+   */
+  const resolvedSymbols = useMemo(
+    () => series?.symbols.map((s) => s.symbol) ?? [],
+    [series],
+  );
   // 전 종목을 한 번에 조회한다 — 거래 내역과 종목별 성과가 같은 Map 을 쓴다.
-  // 데이터셋 심볼 상한이 1,000 이라 /symbols/info 상한을 넘지 않는다.
-  const stockNames = useStockNames(job?.request.universe.symbols ?? []);
+  const stockNames = useStockNames(resolvedSymbols);
   const nameOf = (symbol: string): string | null => stockNames.get(symbol)?.name ?? null;
 
   const cancelMutation = useMutation({
@@ -646,12 +656,6 @@ export function BacktestDetailPage() {
     queryKey: ['strategies'],
     queryFn: () =>
       api<{ strategies: Array<{ id: string; name: string; description: string }> }>('/strategies'),
-  });
-  // 설명 줄이 데이터셋을 이름으로 부르기 위한 조회. 실행이 기록한 것은 id 뿐이라(재현
-  // 정보 카드가 그 id 를 그대로 보여 준다) 이름은 현재 카탈로그에서 찾는다.
-  const datasetNames = useQuery({
-    queryKey: ['datasets'],
-    queryFn: () => api<{ datasets: Array<{ id: string; name: string }> }>('/datasets'),
   });
 
   if (isLoading || !job) {
@@ -745,19 +749,8 @@ export function BacktestDetailPage() {
       </div>
 
       <p className="text-sm text-muted-foreground">
-        {
-          // KRX 스냅샷 경로는 datasetId 가 null 이다 — 데이터셋 이름을 찾는 대신
-          // 유니버스 출처 라벨로 대체한다 (Task 13 리뷰 이관 항목).
-          job.datasetId === null
-            ? `${universeSourceLabel(provenancePin)} · ${job.request.universe.symbols.length}종목`
-            : formatUniverseSummary(
-                datasetNames.data?.datasets.find((d) => d.id === job.datasetId)?.name ?? null,
-                job.datasetId,
-                job.request.universe.symbols.length,
-              )
-        }{' '}
-        · {job.request.period.from} ~ {job.request.period.to} · 생성{' '}
-        {formatDateTime(job.createdAtMs)}
+        {formatUniverseRuleSummary(job.request.universeRule)} · {job.request.period.from} ~{' '}
+        {job.request.period.to} · 생성 {formatDateTime(job.createdAtMs)}
       </p>
 
       {running ? (
@@ -855,7 +848,7 @@ export function BacktestDetailPage() {
 
           <TradesSection
             jobId={id}
-            symbols={job.request.universe.symbols}
+            symbols={resolvedSymbols}
             run={run ?? null}
             periodTo={job.request.period.to}
             nameOf={nameOf}

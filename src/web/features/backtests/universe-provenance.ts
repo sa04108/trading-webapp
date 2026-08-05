@@ -10,9 +10,15 @@ import type { ProvenancePin } from '../../../shared/schemas/provenance-pin.js';
  * `provenanceNotice` 는 **제출된 잡의 `ProvenancePin`** 을 입력으로 삼는다. pin 은
  * 제출 시점에 서버가 조립해 저장하는 값이라(Task 12) 아직 제출하지 않은 위저드 검토
  * 단계에는 존재하지 않는다 — 그래서 이 함수는 결과 화면 전용이고, 위저드 검토 단계는
- * 이 함수를 호출하지 않는다. 대신 위저드는 `selectedSnapshot`(UniverseSnapshotDetailDto)
- * 을 직접 읽어 배지를 만들되, 같은 문구가 나오도록 `krxFixedUniverseBadge` 를 공유한다 —
- * 입력 모양(pin vs snapshot dto)은 화면마다 다르지만 배지 문자열은 한 곳에서만 정한다.
+ * 이 함수를 호출하지 않는다.
+ *
+ * 위저드가 KRX 스냅샷을 직접 골라 `krxFixedUniverseBadge` 를 검토 화면에서 함께 부르던
+ * 시절이 있었다 — 위저드가 유니버스 규칙 방식으로 바뀌면서(스펙 2026-08-05) 그 경로는
+ * 사라졌다. `krxFixedUniverseBadge`·`KRX_HISTORICAL` 분기는 지금도 여기 남아 있는데,
+ * 서버가 그 sourceKind 를 더 이상 만들지 않기 때문이다(T6 가 관련 시스템을 통째로
+ * 제거하면서 함께 정리한다) — `ProvenancePin.sourceKind` 타입에서 옛 리터럴을 지금
+ * 빼면 이 파일이 참조하는 다른 테스트(`universe-provenance-label.test.ts`)가 그 리터럴로
+ * pin 을 만들고 있어 함께 깨진다.
  *
  * "생존자 편향 제거"라는 문구는 어디에도 쓰지 않는다 — 이 기능이 해결하지 않는 항목
  * (신규 상장·상장폐지 반영, 거래정지 구분, 상장폐지 처리, 과거 지수 구성원 복원)이
