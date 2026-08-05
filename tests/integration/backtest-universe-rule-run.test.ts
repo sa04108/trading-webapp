@@ -8,7 +8,7 @@ import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 const DAY = 86_400_000;
 
 /**
- * 일봉 데이터셋 백테스트 회귀 (D-024).
+ * 유니버스 규칙 백테스트 실행 회귀 (D-024).
  * 자식 프로세스가 데이터셋 timeframe 을 무시하고 1h 로 캔들을 읽던 버그 —
  * 일봉 수집 데이터셋(timeframe=1d)은 1h 파티션이 없어 0봉으로 실패했다.
  *
@@ -87,7 +87,7 @@ async function waitFor(condition: () => boolean, timeoutMs: number): Promise<voi
   }
 }
 
-describe('일봉 데이터셋 백테스트 (D-024)', () => {
+describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
   let ctx: TestApp;
   let cookie: string;
   let dailyCandles: Candle[];
