@@ -541,3 +541,87 @@ describe('밸류·퀄리티 랭킹 실행', () => {
     );
   });
 });
+
+describe('멤버십 일정 반영 랭킹 (리뷰 fix — 2026-08-05)', () => {
+  /**
+   * A·B·C 세 종목, topN=2. 재무(EBIT·유형자산 등)는 시간이 지나도 바뀌지 않으므로
+   * 자본수익률 순위는 항상 C > B > A 로 고정해둔다(유형자산을 벌려 투입자본을 다르게
+   * 만든다). 이익수익률은 종가에 반사적이라 A 의 종가만 리밸런스 사이에 바꿔
+   * 순위를 뒤집는다 — 1구간(reb1, day5)에는 A 종가를 비싸게(5,000) 둬서 이익수익률이
+   * 바닥이라 순위 합에서 밀려나고, 2구간(reb2, Feb1=index30)에는 A 종가를 폭락(10)
+   * 시켜 이익수익률이 치솟게 한다. 그런데 A 는 2구간부터 일정에서 빠진다.
+   *
+   * 필터링하지 않으면(구 코드): reb2 에서 A 가 원 지표만으로 순위 합 동점 1위가 돼
+   * targets=[A, B] 가 된다 — 보유 중이던 C 가 팔리고 A 매수는 엔진이 거부해 그 몫의
+   * 예산이 그대로 현금으로 논다(topN=2 인데 실보유는 B 하나로 줄어든다).
+   * 필터링하면 후보가 {B, C} 뿐이라 이미 topN(=2) 을 정확히 채우고 있어 아무 것도
+   * 바뀌지 않는다 — 이 테스트가 검증하는 동작(cross-sectional-momentum.test.ts 의
+   * 같은 이름 describe 와 같은 취지, 후보 생성 로직이 달라 별도로 검증한다).
+   */
+  const disclosedForMembership = START + 5 * DAY;
+
+  function membershipBalance(tangibleAssets: number): Partial<Record<FundamentalField, number>> {
+    return {
+      SHARES_OUTSTANDING: 1_000,
+      CURRENT_ASSETS: 500_000,
+      CURRENT_LIABILITIES: 200_000,
+      TANGIBLE_ASSETS: tangibleAssets,
+    };
+  }
+
+  // 투입자본: A(300,000+700,000=1,000,000) > B(300,000+400,000=700,000) > C(300,000+100,000=400,000)
+  // EBIT(TTM) 100,000 은 셋 다 같다 → ROC: C(0.25) > B(0.1429) > A(0.10), 시간과 무관하게 고정.
+  const membershipFacts: Fact[] = [
+    ...quarterlyFacts('A', disclosedForMembership, 25_000, membershipBalance(700_000)),
+    ...quarterlyFacts('B', disclosedForMembership, 25_000, membershipBalance(400_000)),
+    ...quarterlyFacts('C', disclosedForMembership, 25_000, membershipBalance(100_000)),
+  ];
+
+  // A 종가만 구간 전환에 맞춰 바뀐다 — index 30(2구간 시작) 부터 폭락시켜 이익수익률을
+  // 뒤집는다. B·C 는 끝까지 그대로다.
+  function membershipCandles(bars: number): Candle[] {
+    const out: Candle[] = [];
+    for (let index = 0; index < bars; index += 1) {
+      out.push(candleFor('A', index, index < 30 ? 5_000 : 10));
+      out.push(candleFor('B', index, 100));
+      out.push(candleFor('C', index, 200));
+    }
+    return out;
+  }
+
+  it('2구간에서 유니버스 탈락 종목은 랭킹 후보에서도 빠져 차순위가 슬롯을 지킨다', () => {
+    const result = runBacktest(valueQualityRankStrategy, {
+      candles: membershipCandles(35),
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: { topN: 2, rebalanceMonths: 1, staleQuarters: 2 },
+      randomSeed: 1,
+      maxPositions: 2,
+      facts: membershipFacts,
+      universeSchedule: [
+        { fromTsMs: START, symbols: ['A', 'B', 'C'] },
+        { fromTsMs: START + 30 * DAY, symbols: ['B', 'C'] },
+      ],
+    });
+
+    // 1구간 리밸런스(day5) — A 는 원 지표로도 순위 합 최하위라 필터 유무와 무관하게
+    // B·C 만 편입된다.
+    const buys = result.fills.filter((fill) => fill.side === 'BUY');
+    expect(new Set(buys.map((fill) => fill.symbol))).toEqual(new Set(['B', 'C']));
+
+    // 2구간 전환(index30) 이후 — A 는 원 지표만 보면 순위 합 동점 1위이지만 일정에서
+    // 빠져 랭킹 후보에도 들지 못한다: A 매수 시도도, 그로 인한 C 매도도 일어나지 않는다.
+    expect(result.fills.some((fill) => fill.symbol === 'A')).toBe(false);
+    expect(result.fills.filter((fill) => fill.symbol === 'C' && fill.side === 'SELL')).toHaveLength(0);
+    expect(
+      result.warnings.some((warning) => warning.includes('A') && warning.includes('멤버십 일정')),
+    ).toBe(false);
+
+    // topN(=2) 슬롯이 그대로 유지된다 — 필터링하지 않으면 C 가 팔리고 A 매수가
+    // 거부돼 보유 종목이 1개로 줄어든다(그만큼 예산이 현금으로 논다).
+    expect(result.openPositions).toHaveLength(2);
+    expect(new Set(result.openPositions.map((position) => position.symbol))).toEqual(
+      new Set(['B', 'C']),
+    );
+  });
+});
