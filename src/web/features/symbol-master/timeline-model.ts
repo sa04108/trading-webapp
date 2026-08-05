@@ -12,7 +12,7 @@ export interface TimelineSegment {
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 /** 'YYYY-MM-DD' 를 UTC 자정 기준 밀리초로 바꾼다 — 로컬 타임존에 흔들리지 않게 한다 */
-function dateToUtcMs(date: string): number {
+export function dateToUtcMs(date: string): number {
   const parts = date.split('-');
   const year = Number(parts[0]);
   const month = Number(parts[1]);

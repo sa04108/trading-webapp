@@ -3,7 +3,7 @@ import { Slider } from '@/components/ui/slider';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import type { SymbolMasterCoverageDto } from '../../../shared/schemas/symbol-master.js';
-import { buildTimelineSegments, dateToPct, pctToDate } from './timeline-model';
+import { buildTimelineSegments, dateToPct, dateToUtcMs, pctToDate } from './timeline-model';
 
 /**
  * 커버리지 슬라이더 — 날짜를 정확히(일 단위로) 고르되, 드래그 중에는 아무것도
@@ -109,14 +109,4 @@ export function CoverageTimeline({
       </div>
     </div>
   );
-}
-
-/** 'YYYY-MM-DD' 를 UTC 자정 밀리초로 — timeline-model 의 내부 헬퍼를 새로 export 하는
- * 대신 step 계산에만 쓰는 값이라 여기서 가볍게 다시 만든다 */
-function dateToUtcMs(date: string): number {
-  const parts = date.split('-');
-  const year = Number(parts[0]);
-  const month = Number(parts[1]);
-  const day = Number(parts[2]);
-  return Date.UTC(year, month - 1, day);
 }

@@ -93,7 +93,7 @@ export function EventsSidebar({
           </div>
         ) : events.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            {from} ~ {to} 사이 변경이 없습니다.
+            {from} ~ {to} 변경 없음
           </p>
         ) : (
           <ul className="divide-y">

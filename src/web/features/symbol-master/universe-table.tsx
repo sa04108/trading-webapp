@@ -175,7 +175,7 @@ export function UniverseTable({
 
       {filtered.length === 0 ? (
         <Alert>
-          <AlertDescription>맞는 종목이 없습니다.</AlertDescription>
+          <AlertDescription>맞는 종목 없음</AlertDescription>
         </Alert>
       ) : (
         <div className="rounded-md border">

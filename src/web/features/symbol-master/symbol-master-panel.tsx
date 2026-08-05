@@ -1,5 +1,5 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -99,32 +99,46 @@ export function SymbolMasterPanel() {
     return map;
   }, [universe]);
 
-  // 자동 동기화 — 확정 날짜가 미커버이고 스위치가 켜져 있으면 한 번만 시도한다.
-  // 날짜별로 한 번만 트리거하는 이유: 동기화가 실패해도(예산 소진 등) 매 렌더마다
-  // 다시 부르면 실패 토스트가 반복되고 서버 예산을 헛되이 소모한다 — 사용자가
-  // 「지금 동기화」로 직접 재시도하게 둔다.
-  const autoSyncAttempted = useRef<string | null>(null);
+  // 자동 동기화 — 확정 날짜가 미커버이고 스위치가 켜져 있으면 날짜당 한 번만 시도한다.
+  // 상태를 날짜와 함께 묶어 두는 이유: ref 로 "시도했는지"만 기록하면 실패한 뒤에도
+  // 영원히 "시도했음"으로 남아 화면이 진행 중인 척 멈춰 버린다(리뷰에서 지적된
+  // 고착 버그). 성공/실패를 구분해야 실패 시 빈 상태(수동 버튼 2개)로 돌아갈 수 있다.
+  const [autoSyncState, setAutoSyncState] = useState<{
+    date: string;
+    status: 'pending' | 'error';
+  } | null>(null);
+
   useEffect(() => {
     if (universe === null || universe.covered) return;
     if (!autoSync) return;
-    if (autoSyncAttempted.current === committedDate) return;
+    if (autoSyncState !== null && autoSyncState.date === committedDate) return;
     if (syncMutation.isPending) return;
-    autoSyncAttempted.current = committedDate;
+    setAutoSyncState({ date: committedDate, status: 'pending' });
     syncMutation.mutate(
       { date: committedDate },
-      { onError: (error) => toast.error(errorMessage(error, '자동 동기화에 실패했습니다')) },
+      {
+        // 성공 시 status 를 여기서 지우지 않는다 — invalidateQueries 가 universe
+        // 재조회를 이제 막 걸었을 뿐이라 이 클로저의 universe 는 아직 갱신 전이다.
+        // 지금 null 로 되돌리면 재조회가 끝나기 전에 위 guard 를 다시 통과해
+        // 같은 날짜를 한 번 더 동기화하게 된다. covered:true 가 실제로 도착하면
+        // 첫 줄 guard 가 알아서 멈춘다.
+        onError: (error) => {
+          setAutoSyncState({ date: committedDate, status: 'error' });
+          toast.error(errorMessage(error, '자동 동기화 실패'));
+        },
+      },
     );
-  }, [universe, autoSync, committedDate, syncMutation]);
+  }, [universe, autoSync, committedDate, syncMutation, autoSyncState]);
 
   const autoSyncing =
-    autoSync && universe !== null && !universe.covered && autoSyncAttempted.current === committedDate;
+    autoSyncState !== null && autoSyncState.date === committedDate && autoSyncState.status === 'pending';
 
   const syncThisDate = (): void => {
     syncMutation.mutate(
       { date: committedDate },
       {
-        onSuccess: () => toast.success(`${committedDate} 동기화를 완료했습니다`),
-        onError: (error) => toast.error(errorMessage(error, '동기화에 실패했습니다')),
+        onSuccess: () => toast.success(`${committedDate} 동기화 완료`),
+        onError: (error) => toast.error(errorMessage(error, '동기화 실패')),
       },
     );
   };
