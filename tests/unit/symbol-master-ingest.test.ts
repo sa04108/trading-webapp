@@ -143,4 +143,73 @@ describe('SymbolMasterService.ingestDate', () => {
     expect(ctx.svc.isCovered('2023-01-03')).toBe(true);
     await teardown(ctx);
   });
+
+  it('갭 메우기: 사이에 무변화(이벤트 0개) 커버 거래일이 있어도 다음 커버 구간을 정확히 찾는다', async () => {
+    const ctx = await setup();
+
+    // 01-02: 기준 상태 (상장주식수 1,000,000)
+    ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
+    ctx.fake.setResponse('stk_isu_base_info', '20230102', { body: krxEnvelope([baseInfoFixture()]) });
+    await ctx.svc.ingestDate('2023-01-02');
+
+    // 01-04: 01-03 을 건너뛰고 수집 — 값이 01-02 와 같아 이벤트가 0개다. coverage 에는
+    // 남지만 symbol_master_events 에는 행이 생기지 않는 "무변화 커버 거래일"이 된다.
+    ctx.fake.setResponse('stk_bydd_trd', '20230104', { body: krxEnvelope([dailyFixture()]) });
+    ctx.fake.setResponse('stk_isu_base_info', '20230104', { body: krxEnvelope([baseInfoFixture()]) });
+    const day4 = await ctx.svc.ingestDate('2023-01-04');
+    expect(day4).toEqual({ kind: 'TRADING_DAY', eventCount: 0, checkpointSaved: false });
+
+    // 01-06: 01-05 를 건너뛰고 수집 — 상장주식수가 1,500,000 으로 바뀐다. 직전 커버일이
+    // 01-04(무변화 거래일)이므로 span 이 01-04 를 기준으로 기록된다.
+    ctx.fake.setResponse('stk_bydd_trd', '20230106', { body: krxEnvelope([dailyFixture()]) });
+    ctx.fake.setResponse('stk_isu_base_info', '20230106', {
+      body: krxEnvelope([baseInfoFixture({ LIST_SHRS: '1,500,000' })]),
+    });
+    const day6 = await ctx.svc.ingestDate('2023-01-06');
+    expect(day6).toEqual({ kind: 'TRADING_DAY', eventCount: 1, checkpointSaved: false });
+    expect(ctx.svc.listEvents('2023-01-06', '2023-01-06')[0]).toMatchObject({
+      observedSpanStart: '2023-01-04',
+    });
+
+    // 01-03 온디맨드 수집: 값이 01-02 와 같아 그 자체로는 이벤트가 없다. "이벤트가 있는
+    // 날"로 D2 를 찾으면 무변화 거래일 01-04 를 건너뛰고 01-06 을 잘못 재계산하게 된다 —
+    // coverage 구간 기준으로 찾으면 01-04 를 정확히 짚어야 한다.
+    ctx.fake.setResponse('stk_bydd_trd', '20230103', { body: krxEnvelope([dailyFixture()]) });
+    ctx.fake.setResponse('stk_isu_base_info', '20230103', { body: krxEnvelope([baseInfoFixture()]) });
+    const day3 = await ctx.svc.ingestDate('2023-01-03');
+
+    expect(day3).toEqual({ kind: 'TRADING_DAY', eventCount: 0, checkpointSaved: false });
+    // D2 는 01-04 다 — 값이 01-03 과 같아 재계산 결과도 이벤트 0개고, 기존에도 없었으니 그대로다.
+    expect(ctx.svc.listEvents('2023-01-04', '2023-01-04')).toHaveLength(0);
+    // 01-06 이벤트는 01-04 가 여전히 진짜 직전 커버일이라 손대지 않아야 한다 — span 이 01-03 으로
+    // 퇴보하면 이 버그가 다시 생긴 것이다.
+    const day6Events = ctx.svc.listEvents('2023-01-06', '2023-01-06');
+    expect(day6Events).toHaveLength(1);
+    expect(day6Events[0]).toMatchObject({
+      eventType: 'SHARES_CHANGED',
+      observedSpanStart: '2023-01-04',
+    });
+    // 01-03~04 는 이제 커버됐고 01-05 는 여전히 갭이다
+    expect(ctx.svc.isCovered('2023-01-03')).toBe(true);
+    expect(ctx.svc.isCovered('2023-01-04')).toBe(true);
+    expect(ctx.svc.isCovered('2023-01-05')).toBe(false);
+    await teardown(ctx);
+  });
+
+  it('체크포인트만 남고 coverage 가 비어 있어도 재수집이 UNIQUE 위반 없이 복구한다', async () => {
+    const ctx = await setup();
+    ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
+    ctx.fake.setResponse('stk_isu_base_info', '20230102', { body: krxEnvelope([baseInfoFixture()]) });
+
+    // 체크포인트 저장과 coverage 갱신이 두 트랜잭션으로 나뉘어 있던 시절에 그 사이에서
+    // 죽으면 남았을 상태를 흉내낸다 — checkpointDate 는 있는데 coverage 는 비어 있다.
+    ctx.svc.saveCheckpoint('2023-01-02', new Map(), true);
+    expect(ctx.svc.isCovered('2023-01-02')).toBe(false);
+
+    const result = await ctx.svc.ingestDate('2023-01-02');
+
+    expect(result).toEqual({ kind: 'TRADING_DAY', eventCount: 0, checkpointSaved: true });
+    expect(ctx.svc.isCovered('2023-01-02')).toBe(true);
+    await teardown(ctx);
+  });
 });

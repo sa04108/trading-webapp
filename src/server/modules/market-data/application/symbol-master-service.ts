@@ -91,8 +91,13 @@ export class SymbolMasterService {
     const prevDate = this.previousCoveredDate(date);
     if (prevDate === undefined) {
       // 직전 커버일이 없다 — 비교할 과거 이력이 없으니 오늘 스냅샷을 그대로 체크포인트로 굳힌다.
-      this.saveCheckpoint(date, fetched, true);
-      this.deps.db.transaction((tx) => this.mergeCoverage(tx, date));
+      // 체크포인트 저장과 coverage 갱신을 같은 트랜잭션에 묶는다 — checkpointDate 에 unique
+      // 제약이 있어, 두 트랜잭션으로 나뉘어 있으면 그 사이에서 죽었을 때 체크포인트만 남고
+      // coverage 가 비어 같은 날짜 재수집이 영구히 UNIQUE 위반으로 실패한다.
+      this.deps.db.transaction((tx) => {
+        this.writeCheckpoint(tx, date, fetched, true);
+        this.mergeCoverage(tx, date);
+      });
       return { kind: 'TRADING_DAY', eventCount: 0, checkpointSaved: true };
     }
 
@@ -101,11 +106,13 @@ export class SymbolMasterService {
       observedSpanStart: prevDate,
     });
 
-    // 갭 메우기: date 뒤에 이미 커버된 거래일(D2)이 있으면 그 날의 이벤트는 더 먼 과거를
-    // 기준으로 계산돼 있다. 지금 채운 date 를 기준으로 다시 diff 해야 중복 이벤트가 남지
-    // 않는다. D2 의 실제 상태는 이벤트를 지우기 전에 먼저 읽어 둬야 한다 — 지운 뒤에
-    // 재구성하면 그 이벤트가 만들던 변화가 사라진 상태로 읽히기 때문이다.
-    const gapDate = this.firstEventEffectiveDateAfter(date);
+    // 갭 메우기: date 뒤에 이미 커버된 구간이 있으면 그 구간 첫날(D2)의 이벤트는 더 먼
+    // 과거를 기준으로 계산돼 있다. 지금 채운 date 를 기준으로 다시 diff 해야 중복 이벤트가
+    // 남지 않는다. D2 는 "이벤트가 있는 날"이 아니라 coverage 구간의 시작일로 찾는다 —
+    // 그래야 D2 가 우연히 무변화(이벤트 0개) 거래일이어도 건너뛰지 않는다. D2 의 실제 상태는
+    // 이벤트를 지우기 전에 먼저 읽어 둬야 한다 — 지운 뒤에 재구성하면 그 이벤트가 만들던
+    // 변화가 사라진 상태로 읽히기 때문이다.
+    const gapDate = this.nextCoverageStart(date);
     const gapState = gapDate === undefined ? undefined : this.getUniverseAsOf(gapDate);
     const gapEvents =
       gapDate === undefined || gapState === undefined
@@ -131,24 +138,48 @@ export class SymbolMasterService {
     verified: boolean,
     mismatch?: object,
   ): string {
+    return this.deps.db.transaction((tx) =>
+      this.writeCheckpoint(tx, date, universeState, verified, mismatch),
+    );
+  }
+
+  /**
+   * 체크포인트 insert 를 외부 트랜잭션 안에서도 실행할 수 있게 뽑아낸 헬퍼 —
+   * ingestDate 의 최초 수집 경로가 coverage 갱신과 원자적으로 묶어 쓴다.
+   * 같은 checkpointDate 가 이미 있으면 새로 만들지 않고 기존 id 를 재사용한다 —
+   * UNIQUE 제약 위반 방어이자, 이 원자성 수정 이전에 체크포인트만 남고 coverage 가
+   * 비었던 과거 데이터를 다시 수집할 때 복구 경로가 된다.
+   */
+  private writeCheckpoint(
+    tx: AppDatabase,
+    date: string,
+    universeState: UniverseState,
+    verified: boolean,
+    mismatch?: object,
+  ): string {
+    const existing = tx
+      .select({ id: symbolMasterCheckpoints.id })
+      .from(symbolMasterCheckpoints)
+      .where(eq(symbolMasterCheckpoints.checkpointDate, date))
+      .get();
+    if (existing) return existing.id;
+
     const id = newId('smc');
     const now = this.deps.clock.now();
-    this.deps.db.transaction((tx) => {
-      tx.insert(symbolMasterCheckpoints).values({
-        id,
-        checkpointDate: date,
-        source: 'KRX',
-        verifiedAtMs: verified ? now : null,
-        mismatchJson: mismatch ? JSON.stringify(mismatch) : null,
-        createdAtMs: now,
-      }).run();
+    tx.insert(symbolMasterCheckpoints).values({
+      id,
+      checkpointDate: date,
+      source: 'KRX',
+      verifiedAtMs: verified ? now : null,
+      mismatchJson: mismatch ? JSON.stringify(mismatch) : null,
+      createdAtMs: now,
+    }).run();
 
-      const rows = [...universeState.values()].map((entry) => ({ checkpointId: id, ...entry }));
-      // SQLite 바인딩 변수 한도(999)를 피하려 500개 단위로 나눠 넣는다
-      for (let i = 0; i < rows.length; i += 500) {
-        tx.insert(symbolMasterCheckpointSymbols).values(rows.slice(i, i + 500)).run();
-      }
-    });
+    const rows = [...universeState.values()].map((entry) => ({ checkpointId: id, ...entry }));
+    // SQLite 바인딩 변수 한도(999)를 피하려 500개 단위로 나눠 넣는다
+    for (let i = 0; i < rows.length; i += 500) {
+      tx.insert(symbolMasterCheckpointSymbols).values(rows.slice(i, i + 500)).run();
+    }
     return id;
   }
 
@@ -304,16 +335,21 @@ export class SymbolMasterService {
     return row?.endDate;
   }
 
-  /** date 뒤에서 이벤트가 존재하는 가장 이른 날짜 — 갭 메우기가 다시 계산해야 할 D2 다 */
-  private firstEventEffectiveDateAfter(date: string): string | undefined {
+  /**
+   * date 뒤에서 가장 가까운 coverage 구간의 시작일 — 갭 메우기가 다시 계산해야 할 D2 다.
+   * "이벤트가 있는 날"로 찾으면 D2 가 우연히 무변화(이벤트 0개) 거래일일 때 건너뛰게 되고
+   * 그 뒤 날짜의 observedSpanStart 가 오히려 갱신되지 않는다 — coverage 구간 자체를
+   * 기준으로 삼아야 그런 날도 정확히 짚는다.
+   */
+  private nextCoverageStart(date: string): string | undefined {
     const row = this.deps.db
-      .select({ effectiveDate: symbolMasterEvents.effectiveDate })
-      .from(symbolMasterEvents)
-      .where(gt(symbolMasterEvents.effectiveDate, date))
-      .orderBy(asc(symbolMasterEvents.effectiveDate))
+      .select({ startDate: symbolMasterCoverage.startDate })
+      .from(symbolMasterCoverage)
+      .where(gt(symbolMasterCoverage.startDate, date))
+      .orderBy(asc(symbolMasterCoverage.startDate))
       .limit(1)
       .get();
-    return row?.effectiveDate;
+    return row?.startDate;
   }
 
   /** draft 이벤트를 createdAtMs 를 붙여 트랜잭션 안에 삽입한다. 빈 배열은 쓰기를 건너뛴다 */
