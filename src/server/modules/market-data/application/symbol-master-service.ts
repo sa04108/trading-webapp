@@ -63,13 +63,36 @@ function toEventDraft(row: SymbolMasterEventRow): SymbolMasterEventDraft {
 }
 
 export class SymbolMasterService {
+  /**
+   * 같은 date 로 겹쳐 들어온 호출을 하나로 묶는다 — POST /symbol-master/sync 이중 클릭,
+   * 백필 루프, 스케줄러 갭 루프가 모두 같은 date 로 ingestDate 를 부를 수 있는데,
+   * isCovered 게이트만으로는 KRX await 도중 들어온 두 번째 호출을 막지 못한다. 그 상태로
+   * 진 쪽이 재개되면 previousCoveredDate 가 undefined 로 바뀌어 최초 수집 분기를 잘못 타
+   * mid-quarter 가짜 체크포인트·coverage 중복·이벤트 중복 삽입으로 이어진다.
+   */
+  private readonly inflightIngests = new Map<string, Promise<IngestResult>>();
+
   constructor(private readonly deps: SymbolMasterServiceDeps) {}
 
   /**
    * 하루치 KRX 유니버스를 수집해 이벤트·coverage 를 갱신한다. 이미 커버된 날짜는
    * KRX 를 부르지 않고 바로 돌아간다 — 재수집이 호출 한도를 갉아먹지 않게 하기 위해서다.
+   *
+   * 같은 date 의 두 번째 동시 호출자는 새로 실행하지 않고 진행 중인 Promise 를 그대로
+   * 반환받는다 — 다른 date 는 서로 막지 않고 각자 진행된다.
    */
-  async ingestDate(date: string): Promise<IngestResult> {
+  ingestDate(date: string): Promise<IngestResult> {
+    const inflight = this.inflightIngests.get(date);
+    if (inflight !== undefined) return inflight;
+
+    const promise = this.ingestDateUnguarded(date).finally(() => {
+      this.inflightIngests.delete(date);
+    });
+    this.inflightIngests.set(date, promise);
+    return promise;
+  }
+
+  private async ingestDateUnguarded(date: string): Promise<IngestResult> {
     if (this.isCovered(date)) {
       return { kind: 'ALREADY_COVERED' };
     }

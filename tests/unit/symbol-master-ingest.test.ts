@@ -213,3 +213,63 @@ describe('SymbolMasterService.ingestDate', () => {
     await teardown(ctx);
   });
 });
+
+describe('SymbolMasterService.ingestDate 동시 호출 가드', () => {
+  it('같은 날짜 동시 호출은 KRX 를 한 번만 부르고 체크포인트·coverage 를 하나만 남긴다', async () => {
+    const ctx = await setup();
+    const date = '2023-01-02';
+    // KOSPI 일별매매 응답을 지연시켜 첫 호출이 KRX await 중일 때 두 번째 호출이 들어오게 한다.
+    ctx.fake.setResponse('stk_bydd_trd', '20230102', {
+      body: krxEnvelope([dailyFixture()]),
+      delayMs: 30,
+    });
+    ctx.fake.setResponse('stk_isu_base_info', '20230102', { body: krxEnvelope([baseInfoFixture()]) });
+
+    const [first, second] = await Promise.all([ctx.svc.ingestDate(date), ctx.svc.ingestDate(date)]);
+
+    // 가드가 없으면 두 호출 모두 isCovered 게이트를 통과해 따로 수집한다 — 여기서는
+    // 두 번째 호출자가 새로 수집하지 않고 첫 호출의 Promise 를 그대로 받아야 한다.
+    expect(second).toBe(first);
+    expect(first).toEqual({ kind: 'TRADING_DAY', eventCount: 0, checkpointSaved: true });
+
+    // 이중 수집이었다면 일별매매 2회 + 기본정보 2회를 두 번, 총 8회가 나갔을 것이다.
+    expect(ctx.fake.requests.length).toBe(4);
+    expect(ctx.svc.listCheckpoints()).toHaveLength(1);
+    const coverage = ctx.svc.coverageRanges();
+    expect(coverage).toHaveLength(1);
+    expect(coverage[0]).toMatchObject({ startDate: date, endDate: date });
+    expect(ctx.svc.listEvents(date, date)).toHaveLength(0);
+    await teardown(ctx);
+  });
+
+  it('다른 날짜의 동시 호출은 서로 기다리지 않고 각자 진행된다', async () => {
+    const ctx = await setup();
+    ctx.fake.setResponse('stk_bydd_trd', '20230102', {
+      body: krxEnvelope([dailyFixture()]),
+      delayMs: 80,
+    });
+    ctx.fake.setResponse('stk_isu_base_info', '20230102', { body: krxEnvelope([baseInfoFixture()]) });
+    ctx.fake.setResponse('stk_bydd_trd', '20230301', {
+      body: krxEnvelope([dailyFixture()]),
+      delayMs: 80,
+    });
+    ctx.fake.setResponse('stk_isu_base_info', '20230301', { body: krxEnvelope([baseInfoFixture()]) });
+
+    const startedAtMs = Date.now();
+    const [first, second] = await Promise.all([
+      ctx.svc.ingestDate('2023-01-02'),
+      ctx.svc.ingestDate('2023-03-01'),
+    ]);
+    const elapsedMs = Date.now() - startedAtMs;
+
+    expect(first.kind).toBe('TRADING_DAY');
+    expect(second.kind).toBe('TRADING_DAY');
+    // 이중 수집 가드는 date 별로 걸려야 한다 — 다른 날짜끼리 직렬화하면 지연이
+    // 두 번(약 160ms) 겹쳐 쌓인다. 병렬이면 한 번의 지연(약 80ms) 안팎으로 끝난다.
+    expect(elapsedMs).toBeLessThan(140);
+    expect(ctx.fake.requests.length).toBe(8);
+    expect(ctx.svc.isCovered('2023-01-02')).toBe(true);
+    expect(ctx.svc.isCovered('2023-03-01')).toBe(true);
+    await teardown(ctx);
+  });
+});

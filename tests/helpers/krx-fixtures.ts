@@ -53,6 +53,8 @@ export interface KrxFakeRequest {
 export interface KrxFakeResponse {
   readonly status?: number;
   readonly body: unknown;
+  /** 응답 전 대기 시간(ms) — 동시성 테스트가 KRX await 구간을 붙잡아 두는 데 쓴다 */
+  readonly delayMs?: number;
 }
 
 export interface KrxFakeServer {
@@ -79,6 +81,9 @@ export async function startKrxFakeServer(): Promise<KrxFakeServer> {
       const authKey = request.headers['auth_key'] as string | undefined;
       requests.push({ path, basDd, authKey });
       const canned = responses.get(`${path}:${basDd}`) ?? { body: krxEnvelope([]) };
+      if (canned.delayMs !== undefined) {
+        await new Promise((resolve) => setTimeout(resolve, canned.delayMs));
+      }
       return reply.code(canned.status ?? 200).send(canned.body);
     });
   }
