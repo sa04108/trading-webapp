@@ -158,8 +158,6 @@ export function SymbolRowBody({
           </>
         ) : null}
         <SyncTimes symbol={symbol} nowMs={nowMs} />
-        {' · '}
-        {symbol.datasetCount > 0 ? `데이터셋 ${symbol.datasetCount}곳` : '데이터셋에서 미사용'}
       </p>
     </>
   );
