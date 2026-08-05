@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  addDays,
   buildTimelineSegments,
   dateToPct,
+  findNearestCoveredDate,
   pctToDate,
 } from '../../src/web/features/symbol-master/timeline-model.js';
 
@@ -96,5 +98,49 @@ describe('dateToPct / pctToDate 왕복', () => {
     const point = '2024-03-15';
     expect(dateToPct(point, point, point)).toBe(0);
     expect(pctToDate(point, point, 50)).toBe(point);
+  });
+});
+
+describe('addDays', () => {
+  it('양수 일수만큼 앞으로 간다', () => {
+    expect(addDays('2024-01-01', 10)).toBe('2024-01-11');
+  });
+
+  it('음수 일수만큼 뒤로 간다', () => {
+    expect(addDays('2024-01-11', -10)).toBe('2024-01-01');
+  });
+
+  it('월 경계를 넘어도 정확하다', () => {
+    expect(addDays('2024-01-31', 1)).toBe('2024-02-01');
+  });
+});
+
+describe('findNearestCoveredDate', () => {
+  const ranges = [
+    { startDate: '2024-01-04', endDate: '2024-01-08' },
+    { startDate: '2024-01-20', endDate: '2024-01-25' },
+  ];
+
+  it('coverage 가 비어 있으면 null 이다', () => {
+    expect(findNearestCoveredDate([], '2024-01-01')).toBeNull();
+  });
+
+  it('구간 안 날짜는 그 자신이다', () => {
+    expect(findNearestCoveredDate(ranges, '2024-01-06')).toBe('2024-01-06');
+  });
+
+  it('구간보다 이전이면 그 구간의 시작일이다', () => {
+    expect(findNearestCoveredDate(ranges, '2024-01-01')).toBe('2024-01-04');
+  });
+
+  it('구간보다 이후면 그 구간의 종료일이다', () => {
+    expect(findNearestCoveredDate(ranges, '2024-01-10')).toBe('2024-01-08');
+  });
+
+  it('두 구간에서 거리가 같으면 과거(더 이른 날짜)를 택한다', () => {
+    // 2024-01-14 는 첫 구간 끝(01-08)과 4일, 둘째 구간 시작(01-20)과 6일 —
+    // 동률을 만들려면 가운데(01-14)가 아니라 정확히 중간인 날짜를 골라야 한다.
+    // 01-08 과 01-20 사이 정가운데는 01-14 인데 08 까지 6일, 20 까지 6일로 동률이다.
+    expect(findNearestCoveredDate(ranges, '2024-01-14')).toBe('2024-01-08');
   });
 });
