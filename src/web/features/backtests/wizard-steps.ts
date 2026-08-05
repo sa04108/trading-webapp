@@ -17,7 +17,13 @@
  */
 import type { WizardFormState } from './prefill.js';
 
-export const WIZARD_STEPS = ['전략', '유니버스', '기간', '자본·비용', '검토', '실행'] as const;
+/**
+ * '기간' 이 '유니버스' 보다 앞이다(리뷰 fix — 원래 유니버스가 먼저였다).
+ * `POST /backtests/universe-preview` 는 리밸런스 날짜 계산에 기간이 필요한데, 기간이
+ * 뒤에 있으면 유니버스 단계에 들어갈 때 기간이 아직 없어 미리보기를 만들 수 없는
+ * 교착이 생긴다. 기간을 먼저 확정해야 유니버스 단계가 그 값을 그대로 쓸 수 있다.
+ */
+export const WIZARD_STEPS = ['전략', '기간', '유니버스', '자본·비용', '검토', '실행'] as const;
 
 const REVIEW_LABEL = '검토';
 
@@ -34,13 +40,16 @@ export const RUN_STEP = WIZARD_STEPS.length - 1;
  */
 export type StepGateState = Pick<WizardFormState, 'strategyId' | 'from' | 'to' | 'initialCash'> & {
   /**
-   * 유니버스 규칙 미리보기가 마지막으로 성공했고, 그 결과에 uncoveredDates·
+   * 유니버스 규칙 미리보기가 **지금 값 기준으로** 성공했고, 그 결과에 uncoveredDates·
    * missingCandleSymbols 가 하나도 없는지 (스펙 2026-08-05). 종목 수 상한(200)은 이제
    * `universeRuleSchema` 의 `topN` 자체가 막으므로 이 게이트가 따로 세지 않는다 —
    * `UniverseRuleStep` 의 입력이 애초에 그 범위를 벗어나지 못한다.
    *
-   * 규칙·기간이 미리보기 이후 바뀌면 `UniverseRuleStep` 이 이 값을 다시 false 로
-   * 되돌린다 — 낡은 성공을 유효하다고 우기지 않는다.
+   * new-backtest-wizard.tsx 가 매 렌더 다시 계산하는 값이다(state 로 저장해 두고
+   * 수동으로 무효화하지 않는다) — `UniverseRuleStep` 이 화면에 없어도(다른 단계에
+   * 있어도) 규칙·기간이 바뀌면 다음 렌더에 바로 false 가 된다. 컴포넌트 마운트
+   * 생명주기에 매달아 두면, 유니버스 단계를 벗어난 뒤 '기간' 을 바꿔도 이 값이 낡은
+   * true 로 남는 버그가 생긴다(리뷰에서 지적).
    */
   universePreviewOk: boolean;
   /**
@@ -68,14 +77,14 @@ export function stepBlocker(index: number, state: StepGateState): string | null 
     case 0:
       return state.strategyId ? null : '전략을 선택하세요';
     case 1:
+      if (!state.from || !state.to) return '시작일과 종료일을 입력하세요';
+      if (state.from > state.to) return '시작일이 종료일보다 늦습니다';
+      return null;
+    case 2:
       if (!state.universePreviewOk) {
         return '유니버스 규칙을 미리보기하고 경고를 모두 해결하세요';
       }
       return fundamentalsBlocker(state);
-    case 2:
-      if (!state.from || !state.to) return '시작일과 종료일을 입력하세요';
-      if (state.from > state.to) return '시작일이 종료일보다 늦습니다';
-      return null;
     case 3: {
       const cash = Number(state.initialCash);
       return Number.isFinite(cash) && cash > 0 ? null : '초기 자본이 올바르지 않습니다';

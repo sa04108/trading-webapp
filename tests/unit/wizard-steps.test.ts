@@ -45,20 +45,20 @@ describe('stepBlocker', () => {
     expect(stepBlocker(0, complete)).toBeNull();
   });
 
-  it('유니버스 규칙 미리보기가 성공해야 통과한다', () => {
-    expect(stepBlocker(1, { ...complete, universePreviewOk: false })).toBe(
-      '유니버스 규칙을 미리보기하고 경고를 모두 해결하세요',
-    );
-    expect(stepBlocker(1, complete)).toBeNull();
-  });
-
   it('기간은 두 날짜가 있어야 하고 순서도 맞아야 한다', () => {
-    expect(stepBlocker(2, { ...complete, to: '' })).toBe('시작일과 종료일을 입력하세요');
-    expect(stepBlocker(2, { ...complete, from: '2026-04-01' })).toBe(
+    expect(stepBlocker(1, { ...complete, to: '' })).toBe('시작일과 종료일을 입력하세요');
+    expect(stepBlocker(1, { ...complete, from: '2026-04-01' })).toBe(
       '시작일이 종료일보다 늦습니다',
     );
     // 같은 날 하루짜리 기간은 허용한다
-    expect(stepBlocker(2, { ...complete, from: '2026-03-31' })).toBeNull();
+    expect(stepBlocker(1, { ...complete, from: '2026-03-31' })).toBeNull();
+  });
+
+  it('유니버스 규칙 미리보기가 성공해야 통과한다', () => {
+    expect(stepBlocker(2, { ...complete, universePreviewOk: false })).toBe(
+      '유니버스 규칙을 미리보기하고 경고를 모두 해결하세요',
+    );
+    expect(stepBlocker(2, complete)).toBeNull();
   });
 
   it('초기 자본은 양수여야 한다', () => {
@@ -93,7 +93,7 @@ describe('navigableStepLimit', () => {
   });
 
   it('첫 미완료 단계가 앞으로의 상한이다', () => {
-    // 전략만 고른 상태 — 유니버스까지는 갈 수 있고 그 뒤는 못 간다
+    // 전략만 고른 상태 — 기간까지는 갈 수 있고 그 뒤는 못 간다
     expect(navigableStepLimit(0, { ...empty, strategyId: 'x' })).toBe(1);
     expect(navigableStepLimit(0, empty)).toBe(0);
   });
@@ -123,7 +123,7 @@ describe('stepJumpBlockReason', () => {
 
   it('앞 단계가 비면 어느 단계를 먼저 마쳐야 하는지 알린다', () => {
     expect(stepJumpBlockReason(REVIEW_STEP, 0, { ...empty, strategyId: 'x' })).toBe(
-      "'유니버스' 단계를 먼저 마치세요 — 유니버스 규칙을 미리보기하고 경고를 모두 해결하세요",
+      "'기간' 단계를 먼저 마치세요 — 시작일과 종료일을 입력하세요",
     );
   });
 
@@ -134,7 +134,7 @@ describe('stepJumpBlockReason', () => {
   });
 
   it('실행 단계에서 뒤로 물러난 뒤 다시 앞을 보면 검토까지만 열린다', () => {
-    const stepped = 2; // 실행까지 갔다가 기간 단계로 돌아온 상황
+    const stepped = 2; // 실행까지 갔다가 유니버스 단계로 돌아온 상황
     expect(stepJumpBlockReason(REVIEW_STEP, stepped, complete)).toBeNull();
     expect(stepJumpBlockReason(RUN_STEP, stepped, complete)).toBe(
       "'검토' 단계에서 '다음' 을 눌러 진행하세요",
@@ -180,7 +180,7 @@ describe('유니버스 규칙 topN 상한 — 요청 스키마 경계', () => {
  * **서버 422 와 같은 조건이어야 한다** — 전 종목이 비었을 때만 막고, 일부만 없으면
  * 통과시켜 워커 경고에 맡긴다 (D-025).
  */
-describe('stepBlocker — 재무 조합 게이트 (단계 1)', () => {
+describe('stepBlocker — 재무 조합 게이트 (단계 2)', () => {
   const base = {
     ...complete,
     unionSymbols: ['005930', '000660'],
@@ -188,23 +188,23 @@ describe('stepBlocker — 재무 조합 게이트 (단계 1)', () => {
   };
 
   it('전 종목에 재무가 없으면 막는다', () => {
-    const reason = stepBlocker(1, { ...base, symbolsWithFacts: [] });
+    const reason = stepBlocker(2, { ...base, symbolsWithFacts: [] });
     expect(reason).toMatch(/재무 데이터가 필요하지만/);
   });
 
   it('한 종목이라도 재무가 있으면 통과한다 — 서버 422 와 같은 조건이다', () => {
     // 일부만 없는 경우는 거부 사유가 아니다: 신규 상장처럼 이력이 짧은 종목 하나 때문에
     // 유니버스 전체를 막지 않는다. 빠진 종목은 워커가 실행 경고에 이름으로 남긴다.
-    expect(stepBlocker(1, { ...base, symbolsWithFacts: ['005930'] })).toBeNull();
+    expect(stepBlocker(2, { ...base, symbolsWithFacts: ['005930'] })).toBeNull();
   });
 
   it('선택과 무관한 종목의 재무는 통과 근거가 아니다', () => {
-    expect(stepBlocker(1, { ...base, symbolsWithFacts: ['035420'] })).not.toBeNull();
+    expect(stepBlocker(2, { ...base, symbolsWithFacts: ['035420'] })).not.toBeNull();
   });
 
   it('봉만 쓰는 전략은 재무가 없어도 통과한다', () => {
     expect(
-      stepBlocker(1, { ...base, requiresFundamentals: false, symbolsWithFacts: [] }),
+      stepBlocker(2, { ...base, requiresFundamentals: false, symbolsWithFacts: [] }),
     ).toBeNull();
   });
 
@@ -212,17 +212,17 @@ describe('stepBlocker — 재무 조합 게이트 (단계 1)', () => {
     // 서버가 필드를 안 내렸거나 응답이 아직 없는 상태. false 로 좁히면 게이트가 조용히
     // 열리고, true 로 좁히면 열 수 없는 문이 된다 — 둘 다 아니라 통과 + 서버 422 방어선.
     expect(
-      stepBlocker(1, { ...base, requiresFundamentals: undefined, symbolsWithFacts: [] }),
+      stepBlocker(2, { ...base, requiresFundamentals: undefined, symbolsWithFacts: [] }),
     ).toBeNull();
   });
 
   it('종목 목록이 아직 없으면 막지 않는다 — undefined 와 빈 배열을 구분한다', () => {
-    expect(stepBlocker(1, { ...base, symbolsWithFacts: undefined })).toBeNull();
+    expect(stepBlocker(2, { ...base, symbolsWithFacts: undefined })).toBeNull();
   });
 
   it('미리보기가 안 됐으면 재무 검사보다 먼저 막는다 — 원인을 뒤집어 말하지 않는다', () => {
     expect(
-      stepBlocker(1, { ...base, universePreviewOk: false, symbolsWithFacts: [] }),
+      stepBlocker(2, { ...base, universePreviewOk: false, symbolsWithFacts: [] }),
     ).toBe('유니버스 규칙을 미리보기하고 경고를 모두 해결하세요');
   });
 });

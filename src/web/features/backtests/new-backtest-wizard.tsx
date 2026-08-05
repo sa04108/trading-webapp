@@ -34,7 +34,12 @@ import {
   formatSymbolLabel,
   SYMBOL_SUMMARY_LIMIT,
 } from './symbol-summary';
-import { UniverseRuleStep } from './universe-rule-step';
+import {
+  sameUniverseParams,
+  UniverseRuleStep,
+  type PreviewParams,
+  type UniversePreviewResponseDto,
+} from './universe-rule-step';
 import type { UniverseRule } from '../../../shared/schemas/universe-rule.js';
 import type { BacktestRequestBody } from './types';
 import {
@@ -92,10 +97,18 @@ export function NewBacktestWizard() {
    * 날짜별로 재구성한다 (`UniverseRuleResolver`).
    */
   const [universeRule, setUniverseRule] = useState<UniverseRule>(DEFAULT_UNIVERSE_RULE);
-  /** `UniverseRuleStep` 이 마지막으로 성공시킨 미리보기가 지금 값과 일치하는지 */
-  const [universePreviewOk, setUniversePreviewOk] = useState(false);
-  /** 그 미리보기가 확정한 종목 목록 — 위저드 나머지 단계(봉 주기·재무 게이트·검토)가 본다 */
-  const [unionSymbols, setUnionSymbols] = useState<readonly string[]>([]);
+  /**
+   * `UniverseRuleStep` 이 마지막으로 성공시킨 미리보기 원재료(그때 쓴 params·결과) —
+   * **판정 결과가 아니라 원재료만** 저장한다(리뷰 fix). `universePreviewOk`·
+   * `unionSymbols` 는 아래에서 이 값과 지금 값(universeRule·from·to·rebalanceMonths)을
+   * 매 렌더 비교해 도출한다 — state 로 따로 들고 있다가 규칙·기간이 바뀔 때마다 수동으로
+   * false 로 되돌리는 방식은, `UniverseRuleStep` 이 화면에 없는 동안(다른 단계에 있는
+   * 동안) 그 되돌림 자체가 일어날 기회가 없어 낡은 성공이 유효한 척 남는 버그가 있었다.
+   */
+  const [lastPreview, setLastPreview] = useState<{
+    params: PreviewParams;
+    result: UniversePreviewResponseDto;
+  } | null>(null);
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [initialCash, setInitialCash] = useState('10000000');
@@ -161,11 +174,6 @@ export function NewBacktestWizard() {
           symbolByCode.get(code)?.slices.some((s) => s.slice === slice && s.hasData) === true,
         ),
     }));
-  const timeframeOptions = wizardTimeframes(slicesOf(unionSymbols));
-
-  const stockNames = useStockNames(unionSymbols);
-  const nameOf = (symbol: string): string | null => stockNames.get(symbol)?.name ?? null;
-  const symbolLabel = (symbol: string): string => formatSymbolLabel(symbol, nameOf(symbol));
   const paramSpecs = useMemo(() => extractNumberParams(schema.data?.schema), [schema.data]);
 
   /**
@@ -181,6 +189,34 @@ export function NewBacktestWizard() {
     const value = raw !== undefined && raw !== '' ? Number(raw) : spec.defaultValue;
     return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : 1;
   })();
+
+  /**
+   * 유니버스 미리보기 유효성 — `lastPreview` 와 지금 값을 매 렌더 비교해서 도출한다
+   * (리뷰 fix). `UniverseRuleStep` 이 화면에 없어도(다른 단계에 있어도) 이 계산은
+   * 항상 이 렌더의 최신 `universeRule`/`from`/`to`/`rebalanceMonths` 를 본다 — 컴포넌트
+   * 마운트 여부와 무관하다.
+   */
+  const currentUniverseParams: PreviewParams = {
+    universeRule,
+    period: { from, to },
+    rebalanceMonths,
+  };
+  // 지금 값과 일치하는 미리보기 결과 — 일치하지 않으면(규칙·기간이 바뀌었으면) null.
+  const currentPreviewResult =
+    lastPreview !== null && sameUniverseParams(lastPreview.params, currentUniverseParams)
+      ? lastPreview.result
+      : null;
+  const universePreviewOk =
+    currentPreviewResult !== null &&
+    currentPreviewResult.uncoveredDates.length === 0 &&
+    currentPreviewResult.missingCandleSymbols.length === 0;
+  /** 그 미리보기가 확정한 종목 목록 — 위저드 나머지 단계(봉 주기·재무 게이트·검토)가 본다 */
+  const unionSymbols = currentPreviewResult !== null && universePreviewOk ? currentPreviewResult.unionSymbols : [];
+  const timeframeOptions = wizardTimeframes(slicesOf(unionSymbols));
+
+  const stockNames = useStockNames(unionSymbols);
+  const nameOf = (symbol: string): string | null => stockNames.get(symbol)?.name ?? null;
+  const symbolLabel = (symbol: string): string => formatSymbolLabel(symbol, nameOf(symbol));
 
   // 스키마 기본값은 입력 상태에 한 번 심는다. 렌더 시점에 빈 값을 기본값으로 되돌리면
   // 필드를 비울 수 없어 (전체 선택 후 삭제 → 즉시 기본값 복귀) 지우고 다시 쓰기가 막힌다.
@@ -198,6 +234,17 @@ export function NewBacktestWizard() {
       ),
     );
   }, [strategyId, paramSpecs]);
+
+  // unionSymbols 가 새로 확정될 때마다 봉 주기 기본값을 다시 도출한다 — 이전 유니버스에서
+  // 골랐던 선택이 새 유니버스로 새지 않게 한다. 문자열 키로 비교하는 이유는 unionSymbols
+  // 가 매 렌더 새 배열 참조(파생 값)라 배열 자체를 의존성에 넣으면 매 렌더 돈다.
+  const unionSymbolsKey = unionSymbols.join(',');
+  useEffect(() => {
+    const options = wizardTimeframes(slicesOf(unionSymbols));
+    setTimeframe(options[0] ?? '1d');
+    // slicesOf·unionSymbols 는 위 키가 바뀔 때만 실제로 달라진다고 보고 키만 의존성으로
+    // 둔다 — 이 프로젝트는 react-hooks lint 플러그인을 쓰지 않아 경고도 없다.
+  }, [unionSymbolsKey]);
 
   // 프리필은 원본 작업당 한 번만 — 사용자가 편집을 시작한 뒤 덮어쓰지 않는다.
   const prefilledFrom = useRef<string | null>(null);
@@ -217,9 +264,9 @@ export function NewBacktestWizard() {
     setTimeframe(state.timeframe);
     setUniverseRule(state.universeRule);
     // 원본의 유니버스 규칙만 옮긴다 — 실제 종목 구성은 이 화면에서 다시 미리보기해야
-    // 얻는다(제출 시점에 서버가 새로 재구성하므로 옛 목록은 의미가 없다).
-    setUniversePreviewOk(false);
-    setUnionSymbols([]);
+    // 얻는다(제출 시점에 서버가 새로 재구성하므로 옛 목록은 의미가 없다). lastPreview 를
+    // 비워 두면 universePreviewOk 는 그 사실만으로 자연히 false 다(derive 위 참고).
+    setLastPreview(null);
     setFrom(state.from);
     setTo(state.to);
     setInitialCash(state.initialCash);
@@ -243,12 +290,13 @@ export function NewBacktestWizard() {
 
   const paramValue = (spec: NumberParamSpec): string => parameters[spec.key] ?? '';
 
-  // 유니버스 미리보기가 unionSymbols 를 새로 확정할 때마다 봉 주기 기본값을 다시 도출한다 —
-  // 이전 유니버스에서 골랐던 선택이 새 유니버스로 새지 않게 한다.
-  const handleUnionSymbolsChange = (symbols: readonly string[]): void => {
-    setUnionSymbols(symbols);
-    const options = wizardTimeframes(slicesOf(symbols));
-    setTimeframe(options[0] ?? '1d');
+  // UniverseRuleStep 이 성공한 미리보기마다 그때 쓴 params·결과를 그대로 올려보낸다 —
+  // 유효성 판정은 여기(부모)가 매 렌더 다시 한다(위 currentUniverseParams 주석 참고).
+  const handlePreviewResolved = (
+    params: PreviewParams,
+    result: UniversePreviewResponseDto,
+  ): void => {
+    setLastPreview({ params, result });
   };
 
   // 위저드는 항상 timeframe 을 명시해 만든다(§9.5) — BacktestRequestBody 의 timeframe 이
@@ -568,27 +616,51 @@ export function NewBacktestWizard() {
         </div>
       ) : null}
 
+      {/* '기간' 이 '유니버스' 보다 앞이다(리뷰 fix) — 유니버스 미리보기가 기간을
+          필요로 하므로, 기간을 먼저 확정해야 다음 단계가 그 값을 바로 쓸 수 있다. */}
       {!prefilling && step === 1 ? (
+        <Card>
+          <CardContent className="grid grid-cols-1 gap-4 py-4 sm:grid-cols-2">
+            <div className="space-y-1">
+              <Label htmlFor="from">시작일</Label>
+              <Input
+                id="from"
+                type="date"
+                className="h-11"
+                value={from}
+                onChange={(e) => setFrom(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="to">종료일</Label>
+              <Input
+                id="to"
+                type="date"
+                className="h-11"
+                value={to}
+                onChange={(e) => setTo(e.target.value)}
+              />
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {!prefilling && step === 2 ? (
         <div className="space-y-3">
           <UniverseRuleStep
             value={universeRule}
             onChange={setUniverseRule}
             period={{ from, to }}
-            onPeriodChange={(next) => {
-              setFrom(next.from);
-              setTo(next.to);
-            }}
             rebalanceMonths={rebalanceMonths}
-            onValidityChange={setUniversePreviewOk}
-            onUnionSymbolsChange={handleUnionSymbolsChange}
+            onPreviewResolved={handlePreviewResolved}
           />
 
           {/* 게이트 문장은 「다음」을 눌러야 오류 영역에 뜬다 — 재무 조합처럼 미리보기가
               성공한 뒤에만 드러나는 어긋남은 여기서 바로 보여야 왕복이 없다 (D-027 과 같은
               방향). 미리보기 자체가 안 된 상태의 메시지는 UniverseRuleStep 이 이미 보여준다. */}
-          {universePreviewOk && stepBlocker(1, gate) !== null ? (
+          {universePreviewOk && stepBlocker(2, gate) !== null ? (
             <Alert variant="destructive" role="alert">
-              <AlertDescription>{stepBlocker(1, gate)}</AlertDescription>
+              <AlertDescription>{stepBlocker(2, gate)}</AlertDescription>
             </Alert>
           ) : null}
 
@@ -623,33 +695,6 @@ export function NewBacktestWizard() {
             </Card>
           ) : null}
         </div>
-      ) : null}
-
-      {!prefilling && step === 2 ? (
-        <Card>
-          <CardContent className="grid grid-cols-1 gap-4 py-4 sm:grid-cols-2">
-            <div className="space-y-1">
-              <Label htmlFor="from">시작일</Label>
-              <Input
-                id="from"
-                type="date"
-                className="h-11"
-                value={from}
-                onChange={(e) => setFrom(e.target.value)}
-              />
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="to">종료일</Label>
-              <Input
-                id="to"
-                type="date"
-                className="h-11"
-                value={to}
-                onChange={(e) => setTo(e.target.value)}
-              />
-            </div>
-          </CardContent>
-        </Card>
       ) : null}
 
       {!prefilling && step === 3 ? (

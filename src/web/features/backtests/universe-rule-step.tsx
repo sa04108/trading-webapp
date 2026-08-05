@@ -25,7 +25,7 @@ interface UniverseScheduleEntryDto {
 }
 
 /** `POST /backtests/universe-preview` 응답 (스펙 2026-08-05, backtest-routes.ts 와 같은 모양) */
-interface UniversePreviewResponseDto {
+export interface UniversePreviewResponseDto {
   readonly schedule: readonly UniverseScheduleEntryDto[];
   readonly unionSymbols: readonly string[];
   readonly scheduleHash: string;
@@ -33,13 +33,17 @@ interface UniversePreviewResponseDto {
   readonly missingCandleSymbols: readonly string[];
 }
 
-interface PreviewParams {
+export interface PreviewParams {
   readonly universeRule: UniverseRule;
   readonly period: { readonly from: string; readonly to: string };
   readonly rebalanceMonths: number;
 }
 
-function sameParams(a: PreviewParams, b: PreviewParams): boolean {
+/**
+ * 파라미터 동등성 — 부모(new-backtest-wizard.tsx)와 이 컴포넌트가 같은 정의를 써야
+ * "이 미리보기가 지금 값과 여전히 일치하는가" 판정이 두 곳에서 어긋나지 않는다.
+ */
+export function sameUniverseParams(a: PreviewParams, b: PreviewParams): boolean {
   return (
     a.universeRule.markets[0] === b.universeRule.markets[0] &&
     a.universeRule.topN === b.universeRule.topN &&
@@ -53,42 +57,48 @@ function sameParams(a: PreviewParams, b: PreviewParams): boolean {
 export interface UniverseRuleStepProps {
   value: UniverseRule;
   onChange: (rule: UniverseRule) => void;
+  /** 위저드 '기간' 단계가 정한 값 — 이 화면에서는 읽기 전용이다(리뷰 fix, 아래 참고) */
   period: { from: string; to: string };
-  onPeriodChange: (period: { from: string; to: string }) => void;
   /** 전략 파라미터의 rebalanceMonths(없으면 1) — 위저드가 같은 소스로 도출해 넘긴다 */
   rebalanceMonths: number;
-  onValidityChange: (valid: boolean) => void;
-  onUnionSymbolsChange: (symbols: readonly string[]) => void;
+  /**
+   * 미리보기가 성공할 때마다(재동기화 뒤 재시도 포함) 그때 실제로 쓴 params 와 결과를
+   * 그대로 올려 보낸다. **유효성 판정 자체는 하지 않는다** — 부모가 지금 값과 비교해
+   * 판정한다(아래 컴포넌트 주석 참고). 이 컴포넌트는 그 판정에 필요한 원재료만 전달한다.
+   */
+  onPreviewResolved: (params: PreviewParams, result: UniversePreviewResponseDto) => void;
 }
 
 /**
- * 위저드 1단계(유니버스) — 데이터셋·KRX 스냅샷 선택을 유니버스 규칙 정의로 교체한다
+ * 위저드 유니버스 단계 — 데이터셋·KRX 스냅샷 선택을 유니버스 규칙 정의로 교체한다
  * (스펙 2026-08-05).
  *
- * 기간(시작일·종료일)을 이 화면에서 함께 받는 이유: `POST /backtests/universe-preview`
- * 는 리밸런스 날짜를 계산하려고 기간이 필요한데, 위저드의 '기간' 단계는 이 단계보다
- * 뒤에 있다(WIZARD_STEPS 순서 — 브리프 외 결정). 기간을 이 단계에서만 받게 하면 뒷단계
- * 진입 자체가 막혀 버리므로, 위저드가 들고 있는 같은 from/to 상태를 여기서도 편집한다.
- * '기간' 단계는 그 값을 다시 보여주고 조정할 수 있는 자리로 남는다 — 편집이 겹치더라도
- * 최종 방어선은 언제나 서버 제출 검증(422)이다.
+ * **기간은 이 화면에서 편집하지 않는다.** 위저드 '기간' 단계가 이 단계보다 앞에 있어
+ * (WIZARD_STEPS 순서 — 리뷰 fix, 이전에는 뒤에 있었다) 이 화면에 들어올 때는 이미
+ * from/to 가 정해져 있다. 여기서 다시 편집할 수 있게 하면 입력처가 두 곳이 되고,
+ * 어느 한쪽에서 바꾼 값이 다른 쪽 화면에 열려 있는 이 컴포넌트를 갱신하지 못하는
+ * 경합(리뷰에서 지적된 마운트 생명주기 버그)이 생긴다.
  *
- * 미리보기 성공 여부는 `useMutation` 이 마지막으로 받은 `variables` 와 지금 값을 비교해
- * 판정한다 — 규칙이나 기간이 그 뒤 바뀌면 그 비교가 어긋나 `stale` 이 되고, 부모는
- * '다음' 단계로 갈 수 없다(규칙 변경 시 미리보기 무효화).
+ * **미리보기 유효성도 이 컴포넌트가 판정하지 않는다.** 전에는 `useMutation` 의
+ * `variables` 와 지금 값을 비교해 `valid`/`stale` 을 계산하고 그 결과만 부모에
+ * 올려보냈는데, 이 컴포넌트가 언마운트되면(다른 단계로 이동하면) 그 계산 자체가
+ * 멈춘다 — 그 상태에서 '기간' 단계로 돌아가 날짜를 바꾸면 부모가 들고 있는 마지막
+ * 값(성공)이 그대로 남아, 이미 무효해진 미리보기를 유효하다고 계속 보여주는 버그가
+ * 있었다. 지금은 성공한 원재료(params·result)만 올려보내고, 부모가 매 렌더 지금
+ * 값과 비교해 유효성을 다시 계산한다 — 이 컴포넌트가 화면에 있든 없든 항상 맞다.
  */
 export function UniverseRuleStep({
   value,
   onChange,
   period,
-  onPeriodChange,
   rebalanceMonths,
-  onValidityChange,
-  onUnionSymbolsChange,
+  onPreviewResolved,
 }: UniverseRuleStepProps) {
   const syncMutation = useSymbolMasterSync();
   const previewMutation = useMutation({
     mutationFn: (params: PreviewParams) =>
       postJson<UniversePreviewResponseDto>('/backtests/universe-preview', params),
+    onSuccess: (data, params) => onPreviewResolved(params, data),
   });
 
   // topN 은 유효한 정수일 때만 부모에 커밋한다 — 입력 중 빈 문자열·범위 밖 값은
@@ -100,24 +110,14 @@ export function UniverseRuleStep({
 
   const currentParams: PreviewParams = { universeRule: value, period, rebalanceMonths };
   const preview = previewMutation.data ?? null;
+  // 이 컴포넌트가 화면에 떠 있는 동안 "다시 미리보기하세요" 안내를 보여줄 뿐이다 —
+  // 실제 다음 단계 게이트는 부모가 판정한다(위 컴포넌트 주석 참고).
   const stale =
     preview !== null &&
-    (previewMutation.variables === undefined || !sameParams(previewMutation.variables, currentParams));
-  const valid =
-    preview !== null &&
-    !stale &&
-    preview.uncoveredDates.length === 0 &&
-    preview.missingCandleSymbols.length === 0;
+    (previewMutation.variables === undefined ||
+      !sameUniverseParams(previewMutation.variables, currentParams));
 
-  useEffect(() => {
-    onValidityChange(valid);
-    onUnionSymbolsChange(valid ? (preview?.unionSymbols ?? []) : []);
-    // onValidityChange·onUnionSymbolsChange 는 매 렌더 새 함수일 수 있어 일부러 의존성
-    // 배열에 넣지 않는다 — 이 프로젝트는 react-hooks lint 플러그인을 쓰지 않는다.
-  }, [valid, preview]);
-
-  const periodValid = period.from !== '' && period.to !== '' && period.from <= period.to;
-  const canPreview = periodValid && !previewMutation.isPending;
+  const canPreview = period.from !== '' && period.to !== '' && period.from <= period.to;
 
   const runPreview = (params: PreviewParams): void => {
     previewMutation.mutate(params);
@@ -129,7 +129,7 @@ export function UniverseRuleStep({
         <CardHeader>
           <CardTitle className="text-base">유니버스 규칙</CardTitle>
           <CardDescription>
-            리밸런스 날짜마다 시가총액 상위 N종목으로 유니버스를 다시 구성합니다.
+            리밸런스 날짜마다 시가총액 상위 N종목으로 유니버스를 다시 구성
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -171,40 +171,21 @@ export function UniverseRuleStep({
                 }}
               />
             </div>
-            <div className="space-y-1">
-              <Label htmlFor="universe-from">시작일</Label>
-              <Input
-                id="universe-from"
-                type="date"
-                className="h-11"
-                value={period.from}
-                onChange={(e) => onPeriodChange({ ...period, from: e.target.value })}
-              />
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="universe-to">종료일</Label>
-              <Input
-                id="universe-to"
-                type="date"
-                className="h-11"
-                value={period.to}
-                onChange={(e) => onPeriodChange({ ...period, to: e.target.value })}
-              />
-            </div>
             <Button
               className="h-11"
-              disabled={!canPreview}
+              disabled={!canPreview || previewMutation.isPending}
               onClick={() => runPreview(currentParams)}
             >
               {previewMutation.isPending ? '조회 중…' : '미리보기'}
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            리밸런스 주기 {rebalanceMonths}개월마다 — 전략 파라미터 기본값입니다.
+            기간 {period.from || '?'} ~ {period.to || '?'} · 리밸런스 주기 {rebalanceMonths}
+            개월마다 — 전략 파라미터 기본값
           </p>
-          {period.from !== '' && period.to !== '' && period.from > period.to ? (
+          {!canPreview ? (
             <Alert variant="destructive" role="alert">
-              <AlertDescription>시작일이 종료일보다 늦습니다</AlertDescription>
+              <AlertDescription>먼저 '기간' 단계에서 기간을 입력하세요</AlertDescription>
             </Alert>
           ) : null}
           {previewMutation.isError ? (
@@ -289,6 +270,18 @@ export function UniverseRuleStep({
                 </li>
               ))}
             </ul>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      {/* 429/503(쿼터·미설정) 같은 동기화 실패가 조용히 묻히지 않게 previewMutation 과
+          같은 방식으로 보여준다 (리뷰 fix) */}
+      {syncMutation.isError ? (
+        <Alert variant="destructive" role="alert">
+          <AlertDescription>
+            {syncMutation.error instanceof ApiError
+              ? syncMutation.error.message
+              : '동기화에 실패했습니다'}
           </AlertDescription>
         </Alert>
       ) : null}
