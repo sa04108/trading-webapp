@@ -168,7 +168,14 @@ describe('symbol-master routes', () => {
       mismatch: false,
     });
     expect(typeof body.lastSyncedAtMs).toBe('number');
-    expect(body.backfill).toMatchObject({ state: 'IDLE', cursorDate: null, error: null });
+    expect(body.backfill).toMatchObject({
+      state: 'IDLE',
+      cursorDate: null,
+      // /symbol-master/sync 는 backfill 을 전혀 건드리지 않는다 — 대상 구간이 없다.
+      targetStartDate: null,
+      targetEndDate: null,
+      error: null,
+    });
   });
 
   it('backfill 은 toDate 를 받으면 그 날짜까지만 채우고 끝난다 (Task 4)', async () => {
@@ -201,9 +208,60 @@ describe('symbol-master routes', () => {
 
     const body = await readCoverage();
     expect(body.ranges).toEqual([{ startDate: '2025-01-06', endDate: '2025-01-07' }]);
-    expect(body.backfill).toMatchObject({ state: 'IDLE', cursorDate: null, error: null });
+    expect(body.backfill).toMatchObject({
+      state: 'IDLE',
+      cursorDate: null,
+      // 완주해도 마지막 start() 의 대상 구간은 남는다 — 다음 poll 이 "무슨 요청이
+      // 끝났는지" 를 알 수 있어야 한다.
+      targetStartDate: '2025-01-06',
+      targetEndDate: '2025-01-07',
+      error: null,
+    });
     // toDate 뒤는 아예 조회하지 않았다
     expect(fake.requests.some((r) => r.basDd === '20250108')).toBe(false);
+  });
+
+  it('coverage 는 진행 중인 백필의 대상 구간을 완료 전에도 보여준다 (리뷰 finding)', async () => {
+    // 위저드가 "지금 도는 백필이 내 요청 범위인지" 를 판단하려면 완료를 기다리지
+    // 않고도 targetStartDate/targetEndDate 를 볼 수 있어야 한다 — RUNNING 편승
+    // 상황을 설명하려면 이 값이 폴링 도중 내내 노출돼야 하기 때문이다.
+    const { app, fake, cookie } = await setup();
+    for (let i = 6; i <= 10; i += 1) {
+      seedTradingDay(fake, `2025-01-${String(i).padStart(2, '0')}`);
+    }
+
+    const backfill = await app.app.inject({
+      method: 'POST',
+      url: '/api/v1/symbol-master/backfill',
+      cookies: { qp_session: cookie },
+      payload: { fromDate: '2025-01-06', toDate: '2025-01-10' },
+    });
+    expect(backfill.statusCode).toBe(202);
+
+    // 완료를 기다리지 않고 바로 읽는다 — targetStartDate/targetEndDate 는 start()
+    // 호출 시점에 이미 확정되므로 RUNNING 이든 이미 끝났든 항상 요청한 값과 같다.
+    const res = await app.app.inject({
+      method: 'GET',
+      url: '/api/v1/symbol-master/coverage',
+      cookies: { qp_session: cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.backfill.targetStartDate).toBe('2025-01-06');
+    expect(body.backfill.targetEndDate).toBe('2025-01-10');
+
+    // 뒷정리 — 백필이 백그라운드에서 계속 돌다 teardown 과 겹치지 않게 끝까지 기다린다.
+    await vi.waitFor(
+      async () => {
+        const coverage = await app.app.inject({
+          method: 'GET',
+          url: '/api/v1/symbol-master/coverage',
+          cookies: { qp_session: cookie },
+        });
+        expect(coverage.json().backfill.state).toBe('IDLE');
+      },
+      { timeout: 10_000 },
+    );
   });
 
   it('커버 이력이 없으면 lastSyncedAtMs 는 null 이다', async () => {

@@ -97,6 +97,8 @@ export function registerSymbolMasterRoutes(
       backfill: {
         state: backfillStatus.state,
         cursorDate: backfillStatus.cursorDate,
+        targetStartDate: backfillStatus.targetStartDate,
+        targetEndDate: backfillStatus.targetEndDate,
         error: backfillStatus.error,
       },
     };

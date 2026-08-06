@@ -537,6 +537,16 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    * 않아 그 출처로는 등록할 수 없다 — 그래서 가격 데이터 탭에서 상장폐지 종목이
    * 조회되지 않던 문제가 이 등록으로 풀린다.
    *
+   * **이 등록은 화면 편의가 아니라 제출 자체의 전제조건이다.** `validateSubmission`
+   * 의 `resolveConsumedUniverse`/`checkPeriodCoverage` 는 `symbolService.getCoverage`
+   * (= `symbols` 에 등록된 종목의 커버리지)로 timeframe 가용성·기간 겹침을 판정한다
+   * — 등록되지 않은 코드는 커버리지 자체가 없어 "수집된 봉이 없습니다" 로 400 을
+   * 받는다. 즉 이 미리보기(읽기 의미로 보이는 GET 성격의 호출)를 건너뛰고 API 를
+   * 직접 두드려 `POST /backtests` 를 호출하면, 종목 마스터·KRX 일봉이 이미 있어도
+   * 등록이 안 됐다는 이유만으로 제출이 막힌다. 회귀는 아니다(Task 4 이전에도 등록은
+   * 필요했다) — 다만 그 등록을 지금은 이 미리보기 호출 하나가 전담하므로, 위저드
+   * 흐름을 벗어난 자동화·API 클라이언트를 만들 때는 이 사실을 알아야 한다.
+   *
    * KRX 응답 마켓(KOSPI/KOSDAQ)은 항상 'KR' 로 등록한다 — `symbols.market` 은
    * 세션 축(KR/US) 이고, krxDailyBars 는 애초에 국내 종목만 갖는다
    * (composite-candle-repository.ts usesKrx 주석 참고).

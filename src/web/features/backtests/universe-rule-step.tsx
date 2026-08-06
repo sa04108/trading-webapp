@@ -112,7 +112,7 @@ export function UniverseRuleStep({
   // 있고, 남은 일은 봉 동기화뿐이다.
   const [candlePhase, setCandlePhase] = useState<'SYNCING' | null>(null);
   const [candleSyncError, setCandleSyncError] = useState<string | null>(null);
-  // 등록·동기화가 성공적으로 끝났는데도 재미리보기에 missingCandleSymbols 가 남을 수
+  // 동기화가 성공적으로 끝났는데도 재미리보기에 missingCandleSymbols 가 남을 수
   // 있다(상장폐지 종목은 증권사가 이름·봉을 안 준다) — 그때는 오류가 아니라 이 사실을
   // 한 줄로 설명한다. 규칙을 다시 미리보기하면 지난 시도 결과이므로 지운다.
   const [candleSyncAttempted, setCandleSyncAttempted] = useState(false);
@@ -145,11 +145,31 @@ export function UniverseRuleStep({
   };
 
   /**
+   * 지금 도는(또는 방금 끝난) 백필의 대상 구간이 이 화면이 요청한 period.from~to 를
+   * 전부 덮는지 본다. `targetStartDate` 가 null 이면 그 백필 자체가 없던 것이므로
+   * false 다. `targetEndDate` 가 null 이면 toDate 없이(오늘까지) 시작한 백필이라는
+   * 뜻이라 위쪽은 항상 덮인 것으로 본다.
+   */
+  const backfillCoversRequestedPeriod = (
+    targetStartDate: string | null,
+    targetEndDate: string | null,
+  ): boolean =>
+    targetStartDate !== null &&
+    targetStartDate <= period.from &&
+    (targetEndDate === null || targetEndDate >= period.to);
+
+  /**
    * `POST /symbol-master/backfill` 로 기간 전체(period.from~to) 백필을 시작시키고,
    * `GET /symbol-master/coverage` 의 backfill 상태가 RUNNING 이 아닐 때까지 폴링한다.
    *
    * 백필은 서버 쪽 단일 백그라운드 러너다 — 이미 다른 백필이 RUNNING 이면 이 호출은
    * 새로 시작하지 않고 그 진행 상황에 편승한다(symbol-master-backfill.ts start() 참고).
+   * coverage 가 대상 구간(targetStartDate/targetEndDate)을 함께 주므로, 편승 중인
+   * 진행이 이 화면이 요청한 기간을 덮지 못하면(다른 화면·스케줄러가 다른 범위를
+   * 돌리는 중이면) 그 사실을 바로 알린다 — 그러지 않으면 사용자는 이유를 모른 채
+   * "버튼이 다시 나타남"만 보게 된다(리뷰 finding). 편승 자체를 큐잉으로 막지는
+   * 않는다 — 그 백필이 끝나면 버튼을 다시 눌러 이어가면 된다.
+   *
    * BUDGET_EXHAUSTED 로 멈추면 오류로 안내한다 — 버튼을 다시 누르면(보통 다음날 예산이
    * 리셋된 뒤) 이어서 시도할 수 있다.
    */
@@ -166,6 +186,12 @@ export function UniverseRuleStep({
 
       let status = (await api<SymbolMasterCoverageDto>('/symbol-master/coverage')).backfill;
       while (status.state === 'RUNNING') {
+        if (!backfillCoversRequestedPeriod(status.targetStartDate, status.targetEndDate)) {
+          setBackfillError(
+            '다른 구간 수집이 진행 중입니다 — 끝나면 다시 눌러 주세요.',
+          );
+          return; // finally 에서 backfillRunning 을 내린다 — 이 진행은 우리 요청이 아니므로 재미리보기도 하지 않는다.
+        }
         setBackfillCursor(status.cursorDate);
         await new Promise((resolve) => setTimeout(resolve, 1_000));
         status = (await api<SymbolMasterCoverageDto>('/symbol-master/coverage')).backfill;
