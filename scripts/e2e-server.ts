@@ -67,10 +67,35 @@ const KOSPI_BASE_ROWS = [
   },
 ];
 
-/** 005930·900010 만 시가총액을 갖는다 — 우선주는 분류 단계에서 이미 제외돼 일별 시세가 필요 없다. */
+/**
+ * 005930·900010 만 시가총액을 갖는다 — 우선주는 분류 단계에서 이미 제외돼 일별 시세가
+ * 필요 없다. OHLCV(TDD_OPNPRC 등·ACC_TRDVOL)를 채워야 SymbolMasterService.ingestDate
+ * 가 krx_daily_bars 에 봉을 적재한다(스펙 2026-08-06 Task 5) — 이 값이 없으면(이전
+ * 버전처럼 MKTCAP 만 있으면) 가격·거래량이 모두 null 인 행으로 취급돼 저장 자체가
+ * 건너뛰어진다(symbol-master-service.ts writeDailyBars). 값 자체는 임의다 — 이
+ * 스위트가 보는 건 "봉이 존재하는가" 뿐이고 정확한 가격 수준은 검증하지 않는다.
+ */
 const KOSPI_DAILY_ROWS = [
-  { ISU_CD: '005930', ISU_NM: '삼성전자', MKTCAP: '350,000,000,000,000' },
-  { ISU_CD: '900010', ISU_NM: '상장폐지예정1호', MKTCAP: '10,000,000,000,000' },
+  {
+    ISU_CD: '005930',
+    ISU_NM: '삼성전자',
+    MKTCAP: '350,000,000,000,000',
+    TDD_OPNPRC: '71,500',
+    TDD_HGPRC: '72,000',
+    TDD_LWPRC: '71,000',
+    TDD_CLSPRC: '71,800',
+    ACC_TRDVOL: '12,345,678',
+  },
+  {
+    ISU_CD: '900010',
+    ISU_NM: '상장폐지예정1호',
+    MKTCAP: '10,000,000,000,000',
+    TDD_OPNPRC: '9,500',
+    TDD_HGPRC: '9,800',
+    TDD_LWPRC: '9,300',
+    TDD_CLSPRC: '9,600',
+    ACC_TRDVOL: '543,210',
+  },
 ];
 
 /** 보통주 1(카카오) + 스팩 1(SECT_TP_NM 로 제외). */
@@ -97,7 +122,18 @@ const KOSDAQ_BASE_ROWS = [
   },
 ];
 
-const KOSDAQ_DAILY_ROWS = [{ ISU_CD: '035720', ISU_NM: '카카오', MKTCAP: '20,000,000,000,000' }];
+const KOSDAQ_DAILY_ROWS = [
+  {
+    ISU_CD: '035720',
+    ISU_NM: '카카오',
+    MKTCAP: '20,000,000,000,000',
+    TDD_OPNPRC: '45,000',
+    TDD_HGPRC: '46,000',
+    TDD_LWPRC: '44,500',
+    TDD_CLSPRC: '45,700',
+    ACC_TRDVOL: '2,345,678',
+  },
+];
 
 /**
  * 리밸런스 적용 거래일 표기 e2e(Task 4, 2026-08-06 스펙, `tests/e2e/mvp-flow.spec.ts`

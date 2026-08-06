@@ -15,6 +15,19 @@ const PERIOD = { from: '2026-01-05', to: '2026-03-31' };
 const TOP_N = 1;
 
 /**
+ * "기간 전체 동기화" 완주 대기 상한 — 백필은 날짜마다 KRX 를 최소 4회(KOSPI·KOSDAQ ×
+ * 기본정보·일별매매) 부르고 그 사이 250ms 간격을 지킨다(krx-historical-universe-source.ts
+ * `groupMinIntervalMs`). 실측(로컬, fake KRX 서버 기준): PERIOD(86일) 백필은 약 90초
+ * 걸린다 — 예전 30초 상한은 Task 4 가 "날짜별 순차 POST" 를 "기간 전체 백그라운드
+ * 백필"로 바꾸며(스펙 2026-08-06) 더는 맞지 않게 됐다(Task 4 는 `pnpm test:e2e` 를
+ * 돌리지 않아 이 어긋남이 그때는 드러나지 않았다). 상한을 짧게 두면 이 대기만
+ * 실패하는 게 아니라, 프런트가 포기해도 서버의 `SymbolMasterBackfill` 은 백그라운드에서
+ * 계속 돌아 다음 테스트가 다른 기간을 요청할 때 "다른 구간 수집이 진행 중입니다" 로
+ * 밀려나는 연쇄 실패로 번진다(리뷰에서 재현·확인).
+ */
+const BACKFILL_WAIT_TIMEOUT_MS = 150_000;
+
+/**
  * 위저드 유니버스 단계 — [미리보기] 를 누르고, 리밸런스 날짜가 아직 커버되지 않았다는
  * 경고가 뜨면 [기간 전체 동기화] 로 기간 전체(period.from~to)를 채운다(Task 4, 스펙
  * 2026-08-06). 서버가 백그라운드 백필을 돌리는 동안 컴포넌트가 `GET
@@ -43,13 +56,19 @@ async function previewAndSyncUniverse(page: Page): Promise<void> {
   const previewRefreshed = page.waitForResponse(
     (resp) =>
       resp.url().includes('/backtests/universe-preview') && resp.request().method() === 'POST',
-    { timeout: 30_000 },
+    { timeout: BACKFILL_WAIT_TIMEOUT_MS },
   );
   await fullSync.click();
   await previewRefreshed;
-  // 백필이 끝나야 컴포넌트가 미리보기를 다시 던지므로, 이 시점엔 이미 기간 전체가
-  // 커버돼 버튼 자체가 더 이상 렌더되지 않는다.
-  await expect(page.getByRole('button', { name: '기간 전체 동기화' })).toHaveCount(0);
+  // 백필이 끝나면 컴포넌트가 미리보기를 다시 던지는데, 리밸런스 날짜가 휴장일이면
+  // (재구성 앵커가 백필 구간 밖이라) 그 재미리보기에도 uncoveredDates 가 남을 수
+  // 있다 — 그러면 syncFullPeriod 가 남은 날짜만 개별 소급(ensureTradingDay)한 뒤
+  // 한 번 더 미리보기를 던진다(universe-rule-step.tsx). `previewRefreshed` 는 그
+  // 여러 번 중 **첫 응답**에서 끝나므로, 버튼이 실제로 사라지기까지는 그 추가
+  // 왕복만큼 더 걸릴 수 있다 — 기본 5초 재시도로는 빠듯해 넉넉히 잡는다.
+  await expect(page.getByRole('button', { name: '기간 전체 동기화' })).toHaveCount(0, {
+    timeout: 30_000,
+  });
 }
 
 /**
@@ -142,8 +161,15 @@ test('full MVP flow', async ({ page }) => {
   await page.getByLabel('상위 N (시가총액)').fill(String(TOP_N));
   await previewAndSyncUniverse(page);
   await expect(page.getByText('종목 1개 · 리밸런스 3회')).toBeVisible();
-  // 005930 은 분봉만 있어 1시간봉/분봉 중에서 고른다 — 기본값(1시간봉)을 그대로 쓴다
-  await expect(page.getByText('1시간봉')).toBeVisible();
+  // 005930 은 이제 KRX 일봉(스펙 2026-08-06 Task 5, 가짜 KRX 응답에 OHLCV 를 채운
+  // 이후)과 CSV 로 넣은 분봉을 모두 가져 위저드가 일봉/1시간봉/1분봉 세 선택지를
+  // 모두 보여준다 — 기본값은 도출 목록의 첫 항목(일봉)이다. 하지만 이 테스트의
+  // 나머지 단언(거래 내역·정렬 등)은 CSV 의 추세(1분봉→1시간봉 집계)로 실제 체결이
+  // 나야 성립하므로, 기본값을 그대로 두지 않고 1시간봉을 명시적으로 고른다.
+  const timeframeCard = page.locator('[data-slot="card"]').filter({ hasText: '봉 주기' });
+  await timeframeCard.getByRole('combobox').click();
+  await page.getByRole('option', { name: '1시간봉' }).click();
+  await expect(timeframeCard.getByRole('combobox')).toHaveText('1시간봉');
 
   await page.getByRole('button', { name: '다음' }).click(); // 유니버스 → 자본·비용
   await expect(page.getByRole('button', { name: '4. 자본·비용' })).toHaveAttribute(
@@ -470,11 +496,18 @@ test('rebalance schedule shows the applied trading day when a rebalance date fal
   const previewRefreshed = page.waitForResponse(
     (resp) =>
       resp.url().includes('/backtests/universe-preview') && resp.request().method() === 'POST',
-    { timeout: 30_000 },
+    { timeout: BACKFILL_WAIT_TIMEOUT_MS },
   );
   await page.getByRole('button', { name: '기간 전체 동기화' }).click();
   await previewRefreshed;
-  await expect(page.getByRole('button', { name: '기간 전체 동기화' })).toHaveCount(0);
+  // 이 시나리오가 바로 그 "리밸런스 날짜가 휴장일" 경우다 — period.from(1월 1일)
+  // 자체가 휴장이라 재구성 앵커(전년 12월 31일)가 백필 구간 밖에 있다. syncFullPeriod
+  // 가 남은 uncoveredDates 만 ensureTradingDay 로 개별 소급한 뒤 다시 미리보기하므로
+  // (previewAndSyncUniverse 주석 참고), 버튼이 사라지기까지 첫 응답 이후로도 시간이
+  // 더 걸릴 수 있어 넉넉히 잡는다.
+  await expect(page.getByRole('button', { name: '기간 전체 동기화' })).toHaveCount(0, {
+    timeout: 30_000,
+  });
 
   // 휴장 리밸런스 날짜(1월 1일)는 소급된 직전 거래일이 덧붙어 보이고, 정상 거래일
   // (2월 1일)은 요청 날짜와 같아 아무것도 덧붙지 않는다 — 표기 규약(잡음 없음)이다.
@@ -482,6 +515,68 @@ test('rebalance schedule shows the applied trading day when a rebalance date fal
     page.getByRole('cell', { name: `${period.from} (적용 ${previousTradingDate})`, exact: true }),
   ).toBeVisible();
   await expect(page.getByRole('cell', { name: period.to, exact: true })).toBeVisible();
+});
+
+/**
+ * 생존편향 제거(스펙 2026-08-06) 회귀 — 증권사가 봉을 주지 않는 상장폐지 종목도
+ * KRX 일봉만으로 유니버스에 들어와 백테스트가 실행까지 간다. 900010(가짜 KRX
+ * 서버의 '상장폐지예정1호', scripts/e2e-server.ts)은 시가총액이 005930 보다 작아
+ * topN 을 2로 올려야 유니버스에 들어온다 — mvp-flow 의 다른 시나리오(TOP_N=1)는
+ * 이 종목을 건드리지 않는다.
+ *
+ * 이 기간은 다른 시나리오의 PERIOD·holidayPeriodFor·SEED_DATE 와 겹치지 않는
+ * 새 구간이다 — previewAndSyncUniverse 가 "기간 전체 동기화" 버튼을 실제로
+ * 눌러야 하는 경로(이미 커버된 기간을 재사용하는 우회가 아니다)를 그대로 탄다.
+ *
+ * 검증 대상은 실행 완주 여부다: 900010 은 증권사 이름·봉을 전혀 갖지 않으므로
+ * (등록은 유니버스 미리보기의 자동 등록이 전담한다), 미리보기가 이 종목을
+ * missingCandleSymbols 로 잘못 표시하거나 제출이 "봉이 없습니다"로 막히면 이
+ * 기능 전체의 목적(생존편향 제거)이 무너진 것이다.
+ */
+test('backtest run completes using only KRX daily bars for a delisted stock', async ({ page }) => {
+  const period = { from: '2026-04-01', to: '2026-04-20' };
+
+  await page.goto('/login');
+  await page.getByLabel('사용자 이름').fill(USERNAME);
+  await page.getByLabel('비밀번호').fill(PASSWORD);
+  await page.getByRole('button', { name: '로그인' }).click();
+  await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
+
+  await page.goto('/backtests/new');
+  await page.getByRole('button', { name: /전고점 돌파/ }).click();
+  await page.getByLabel('돌파 기준 봉 수', { exact: true }).fill('10');
+  await page.getByLabel('변동성(ATR) 계산 기간', { exact: true }).fill('5');
+  await page.getByRole('button', { name: '다음' }).click(); // 전략 → 기간
+
+  await page.getByLabel('시작일').fill(period.from);
+  await page.getByLabel('종료일').fill(period.to);
+  await page.getByRole('button', { name: '다음' }).click(); // 기간 → 유니버스
+
+  await page.getByLabel('상위 N (시가총액)').fill('2');
+  await previewAndSyncUniverse(page);
+
+  // 두 종목 모두 유니버스에 들어왔고, 봉이 없다는 경고가 없다 — 상장폐지 종목도
+  // KRX 일봉만으로 "봉 있음" 판정을 받았다는 뜻이다(missingCandleSymbols 회귀 fix).
+  await expect(page.getByText('종목 2개 · 리밸런스 1회')).toBeVisible();
+  await expect(
+    page.getByText(/다음 종목은 아직 봉 데이터가 없어 백테스트를 실행할 수 없습니다/),
+  ).toHaveCount(0);
+
+  await page.getByRole('button', { name: '다음' }).click(); // 유니버스 → 자본·비용
+  await page.getByRole('button', { name: '다음' }).click(); // 자본·비용 기본값 → 검토
+  await page.getByRole('button', { name: '다음' }).click(); // 검토 → 실행
+
+  await page.getByRole('button', { name: '백테스트 실행' }).click();
+  await expect(page).toHaveURL(/\/backtests\/bt_/);
+  await expect(page.getByText('완료', { exact: true })).toBeVisible({ timeout: 90_000 });
+
+  // 이 테스트가 미리보기로 자동 등록한 900010 을 되돌린다 — 남기면 mvp-flow 의
+  // '가격 데이터' 탭 종목 수 단언('2/3종목' 등, full MVP flow 8-3~8-4)이 이 종목
+  // 만큼 어긋난다. 두 프로젝트(mobile·desktop)가 같은 서버를 공유하므로
+  // (playwright.config workers:1), 여기서 지워도 이 파일의 다른 시나리오가 이미
+  // 심어 둔 krx_daily_bars 는 그대로 남아 재등록 시 다시 쓰인다(symbols 삭제는
+  // KRX 일봉을 지우지 않는다 — composite-candle-repository.ts deleteSymbol 주석).
+  await page.request.post('/api/v1/symbols/remove', { data: { codes: ['900010'] } });
 });
 
 /**

@@ -568,6 +568,32 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     }
   };
 
+  /**
+   * unionSymbols 의 1일봉 커버리지 캐시(`symbolCoverage`)를 KRX 일봉 기준으로
+   * 다시 계산한다(스펙 2026-08-06 Task 5 리뷰에서 발견).
+   *
+   * `registerUniverseSymbols` 의 `addSymbol` 은 캐시를 건드리지 않는다 — 캐시는
+   * 오직 증권사 동기화(`BrokerSyncService.run`)나 CSV 가져오기가 끝난 뒤에만
+   * `refreshCoverage` 로 채워진다. 그런데 상장폐지 종목은 그 둘 중 어느 것도
+   * 겪지 않는다: 증권사는 상장폐지 종목의 과거 봉을 안 주고(이 기능 전체의
+   * 출발점), CSV 가져오기는 수동이다. 그 결과 `SymbolMasterBackfill` 이
+   * `krx_daily_bars` 를 이미 채웠어도 캐시는 영원히 "봉 없음" 으로 남아
+   * `missingCandleSymbolsOf` 와 가격 데이터 탭 모두 실제 데이터와 어긋난다 —
+   * Task 4 가 "자동 등록하면 가격 데이터 탭에서 상장폐지 종목도 보인다" 고 적은
+   * 전제가 이 갱신 없이는 성립하지 않는다.
+   *
+   * `CompositeCandleRepository` 는 KR·1d 조합에서 KRX 테이블을 먼저 본다(있으면
+   * 그것만, 없으면 위임)이므로 이 갱신은 브로커 호출 없이 로컬 DB 읽기만으로
+   * 끝나고, 이미 증권사로 채워진 다른 슬라이스(예: 1m)는 건드리지 않는다.
+   * unionSymbols 규모는 `MAX_UNIVERSE_SYMBOLS` 로 상한이 있어(위저드 상위 N)
+   * 매 미리보기마다 순회해도 로컬 SQLite 읽기·쓰기 수준이라 무리가 없다.
+   */
+  const refreshKrxDailyCoverage = async (codes: readonly string[]): Promise<void> => {
+    for (const code of codes) {
+      await symbolService.refreshCoverage(code, 'KR', '1d');
+    }
+  };
+
   app.post('/backtests/universe-preview', { preHandler: requireAuth }, async (request, reply) => {
     const parsed = universePreviewRequestSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -584,6 +610,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     try {
       const resolved = await universeRuleResolver.resolve(universeRule, rebalanceDates);
       registerUniverseSymbols(resolved);
+      await refreshKrxDailyCoverage(resolved.unionSymbols);
       return {
         schedule: resolved.schedule,
         unionSymbols: resolved.unionSymbols,

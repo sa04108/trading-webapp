@@ -119,7 +119,15 @@ export function UniverseRuleStep({
   const previewMutation = useMutation({
     mutationFn: (params: PreviewParams) =>
       postJson<UniversePreviewResponseDto>('/backtests/universe-preview', params),
-    onSuccess: (data, params) => onPreviewResolved(params, data),
+    onSuccess: (data, params) => {
+      onPreviewResolved(params, data);
+      // 이 응답 자체가 unionSymbols 를 등록하고 그 1일봉 커버리지를 갱신한다
+      // (backtest-routes.ts registerUniverseSymbols·refreshKrxDailyCoverage,
+      // 스펙 2026-08-06 리뷰 발견) — `['symbols']` 를 무효화하지 않으면 위저드
+      // 봉 주기 카드(`new-backtest-wizard.tsx` wizardTimeframes)가 마운트 시점의
+      // 낡은 스냅샷만 보고 방금 커버된 슬라이스를 "없음"으로 잘못 판정한다.
+      void queryClient.invalidateQueries({ queryKey: ['symbols'] });
+    },
   });
 
   // topN 은 유효한 정수일 때만 부모에 커밋한다 — 입력 중 빈 문자열·범위 밖 값은
@@ -172,11 +180,20 @@ export function UniverseRuleStep({
    *
    * BUDGET_EXHAUSTED 로 멈추면 오류로 안내한다 — 버튼을 다시 누르면(보통 다음날 예산이
    * 리셋된 뒤) 이어서 시도할 수 있다.
+   *
+   * 백필이 온전히 끝났어도(IDLE) 리밸런스 날짜가 하나 이상 여전히 uncoveredDates 로
+   * 남을 수 있다 — `period.from` 자체가 휴장일이면 그 직전 거래일(재구성 앵커)이
+   * 백필 요청 구간(`period.from`~`period.to`) 밖이라 이번 백필이 닿지 않기 때문이다
+   * (symbol-master-service.ts `effectiveTradingDateWithinCoverage` 는 "같은 커버
+   * 구간 안"에서만 앵커를 찾는다). 그 소급은 원래 `ensureTradingDay`(`POST
+   * /symbol-master/sync`)의 책임이므로, 남은 날짜만 그 경로로 개별 보정한 뒤 다시
+   * 미리보기한다 — 리밸런스 날짜 수만큼만 추가로 들어 대량 백필과 비용이 겹치지 않는다.
    */
   const syncFullPeriod = async (): Promise<void> => {
     setBackfillError(null);
     setBackfillRunning(true);
     setBackfillCursor(null);
+    let backfillCompleted = false;
 
     try {
       await postJson<unknown>('/symbol-master/backfill', {
@@ -203,6 +220,8 @@ export function UniverseRuleStep({
         );
       } else if (status.state === 'FAILED') {
         setBackfillError(status.error ?? '기간 동기화에 실패했습니다');
+      } else {
+        backfillCompleted = true;
       }
     } catch (error) {
       setBackfillError(error instanceof ApiError ? error.message : '기간 동기화에 실패했습니다');
@@ -211,8 +230,37 @@ export function UniverseRuleStep({
     }
 
     await queryClient.invalidateQueries({ queryKey: ['symbol-master'] });
-    // 부분 진행이었어도 다시 물어야 남은 미커버 날짜가 정확히 추려진다.
-    if (previewMutation.variables) runPreview(previewMutation.variables);
+    if (!previewMutation.variables) return;
+
+    // 부분 진행(BUDGET_EXHAUSTED·FAILED)이었어도 다시 물어야 남은 미커버 날짜가
+    // 정확히 추려진다 — 다만 그 경우 아래 소급 보정은 시도하지 않는다: 방금 KRX
+    // 예산이 바닥났거나 실패한 상태에서 날짜마다 추가 소급 호출을 걸면 같은 이유로
+    // 다시 실패할 뿐이고, 이미 뜬 backfillError 로 원인은 충분히 안내된다.
+    if (!backfillCompleted) {
+      runPreview(previewMutation.variables);
+      return;
+    }
+
+    let refreshed: UniversePreviewResponseDto;
+    try {
+      refreshed = await previewMutation.mutateAsync(previewMutation.variables);
+    } catch {
+      return; // previewMutation.isError 알림이 이미 안내한다
+    }
+    if (refreshed.uncoveredDates.length === 0) return;
+
+    try {
+      for (const date of refreshed.uncoveredDates) {
+        await postJson('/symbol-master/sync', { date });
+      }
+    } catch (error) {
+      setBackfillError(
+        error instanceof ApiError ? error.message : '남은 리밸런스 날짜를 소급하지 못했습니다',
+      );
+      return;
+    }
+    await queryClient.invalidateQueries({ queryKey: ['symbol-master'] });
+    runPreview(previewMutation.variables);
   };
 
   /**
