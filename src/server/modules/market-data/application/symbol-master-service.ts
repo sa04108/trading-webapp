@@ -148,6 +148,9 @@ export class SymbolMasterService {
     // 그래야 D2 가 우연히 무변화(이벤트 0개) 거래일이어도 건너뛰지 않는다. D2 의 실제 상태는
     // 이벤트를 지우기 전에 먼저 읽어 둬야 한다 — 지운 뒤에 재구성하면 그 이벤트가 만들던
     // 변화가 사라진 상태로 읽히기 때문이다.
+    // gapDate 는 재계산 대상일 뿐이다 — 이미 커버된 구간의 시작일이므로 그 자체로
+    // "date 에 거래가 있었다"는 근거가 되지 않는다(고립된 휴장일 하루짜리 구간일 수도
+    // 있다). 그래서 recordTradingDay 는 지금 ingest 중인 date 에만 걸고 gapDate 에는 걸지 않는다.
     const gapDate = this.nextCoverageStart(date);
     const gapState = gapDate === undefined ? undefined : this.getUniverseAsOf(gapDate);
     const gapEvents =
