@@ -227,6 +227,12 @@ export const dataSyncJobs = sqliteTable(
     candlesMs: integer('candles_ms'),
     /** 재무 단계 진행·결과 (FactsJobState). null = 재무를 요청하지 않은 잡 */
     factsJson: text('facts_json'),
+    /**
+     * 종목별 격리 실패 목록 (BrokerSyncFailedSymbol[] JSON). 증권사가 상장폐지
+     * 종목을 모르는 탓에 나는 404 등은 그 종목만 건너뛰고 나머지는 계속 수집한다.
+     * null = 실패한 종목이 없거나 봉 단계 자체를 아직 실행하지 않은 잡.
+     */
+    failedSymbolsJson: text('failed_symbols_json'),
   },
   (table) => [index('idx_data_sync_jobs_status').on(table.status)],
 );

@@ -43,10 +43,11 @@ import { filterSymbols } from './symbol-search';
 import { SymbolSelectScopeButtons } from './symbol-select-scope';
 import { countWithMetric, sortSymbols, type SymbolSortKey } from './symbol-sort';
 import { SyncDialog } from './sync-dialog';
-import type {
-  DataJob,
-  FactsJobState,
-  SymbolSummary,
+import {
+  parseFailedSymbols,
+  type DataJob,
+  type FactsJobState,
+  type SymbolSummary,
 } from './symbol-types';
 
 function parseFacts(json: string | null | undefined): FactsJobState | null {
@@ -56,6 +57,36 @@ function parseFacts(json: string | null | undefined): FactsJobState | null {
   } catch {
     return null;
   }
+}
+
+/** job.symbolsJson (코드 배열 JSON) 의 개수. 형식이 어긋나면 0 으로 눙쳐 화면이 죽지 않게 한다 */
+function parseSymbolCount(json: string): number {
+  try {
+    const parsed = JSON.parse(json) as unknown;
+    return Array.isArray(parsed) ? parsed.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * 잡 완료 메시지 — 종목 단위 격리 실패가 있으면 성공/실패 종목 수와 사유를 함께
+ * 보여준다. 증권사가 상장폐지 종목을 몰라 던지는 404 등이 섞였을 수 있다는 안내를
+ * 덧붙인다 (broker-sync-service.ts 종목 루프 catch 주석 참고).
+ */
+function completionMessage(job: DataJob): { tone: 'success' | 'warning'; text: string } {
+  const failed = parseFailedSymbols(job.failedSymbolsJson);
+  if (failed.length === 0) {
+    return { tone: 'success', text: `수집 완료 — ${job.rowsImported ?? 0}봉` };
+  }
+  const total = parseSymbolCount(job.symbolsJson);
+  const succeeded = Math.max(total - failed.length, 0);
+  return {
+    tone: 'warning',
+    text:
+      `${succeeded}종목 수집, ${failed.length}종목 실패 — 상장폐지 종목일 수 있습니다 ` +
+      `(${failed.map((entry) => entry.code).join(', ')})`,
+  };
 }
 
 function progressLabel(job: DataJob | undefined): string {
@@ -120,9 +151,15 @@ export function SymbolsPanel() {
     setStartedJobId(null);
     void queryClient.invalidateQueries({ queryKey: ['symbols'] });
     void queryClient.invalidateQueries({ queryKey: ['datasets'] });
-    if (job.status === 'COMPLETED') toast.success(`수집 완료 — ${job.rowsImported ?? 0}봉`);
-    else if (job.status === 'CANCELLED') toast.info('수집이 취소되었습니다');
-    else toast.error(job.error ?? '수집이 실패했습니다');
+    if (job.status === 'COMPLETED') {
+      const { tone, text } = completionMessage(job);
+      if (tone === 'warning') toast.warning(text);
+      else toast.success(text);
+    } else if (job.status === 'CANCELLED') {
+      toast.info('수집이 취소되었습니다');
+    } else {
+      toast.error(job.error ?? '수집이 실패했습니다');
+    }
   }, [syncJob.data, queryClient]);
 
   const all = useMemo(
