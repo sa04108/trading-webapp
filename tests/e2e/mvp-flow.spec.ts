@@ -396,6 +396,91 @@ test('full MVP flow', async ({ page }) => {
 });
 
 /**
+ * 리밸런스 적용 거래일 표기(Task 4, 2026-08-06 스펙) — 위저드 유니버스 단계가
+ * 휴장 리밸런스 날짜를 어떻게 보여 주는지 확인한다. 가짜 KRX 서버는 정확히
+ * 2025-01-01·2018-01-01 두 날짜만 휴장으로 낸다(scripts/e2e-server.ts
+ * `HOLIDAY_BAS_DATES`) — "1월 1일이면 무조건 휴장" 같은 패턴이 아니라 이 스위트가
+ * 쓰는 날짜만 정확히 지정한 고정 집합이다. 패턴으로 두면 다른 스펙
+ * (symbol-master.spec.ts)이 쓰는 "오늘 기준 상대 날짜"가 매년 1월 2일·1월 11일에
+ * 이 스위트를 돌릴 때 우연히 1월 1일과 겹쳐, 그 스펙의 "가짜 KRX 는 어느 날짜를
+ * 물어도 같은 시세를 낸다"는 전제를 깨뜨린다(리뷰에서 지적된 회귀) — 고정 집합은
+ * 상대 날짜와 영원히 안 겹친다. mobile·desktop 두 프로젝트가 같은 서버 상태를
+ * 공유해도(playwright.config workers:1) 서로 다른 연도를 쓰면 커버리지가 부딪히지
+ * 않는다.
+ *
+ * 두 연도 모두 "오늘"보다 한참 과거를 쓴다 — SymbolMasterPanel 은 기본 화면(날짜
+ * 쿼리 없음)에서 coverage 의 가장 늦은 날짜를 보여주되 "오늘"을 넘지 않게 자른다
+ * (symbol-master-panel.tsx `rangeEnd`/committedDate 클램프). 미래 연도를 동기화해
+ * 두면 그 클램프에 걸려 기본 화면이 "오늘"로 밀리는데, 오늘은 어느 스펙도 동기화해
+ * 두지 않아 다른 스펙(symbol-master.spec.ts)의 "기본 화면은 커버된 날짜를 보여준다"
+ * 전제를 깨뜨린다 — 실제로 그렇게 재현됐던 회귀다.
+ */
+function holidayPeriodFor(projectName: string): { from: string; to: string } {
+  // scripts/e2e-server.ts `HOLIDAY_BAS_DATES` 와 정확히 일치해야 한다 — 여기서
+  // 연도를 바꾸면 그쪽 고정 집합도 같이 바꿔야 휴장이 재현된다.
+  const year = projectName === 'mobile' ? 2025 : 2018;
+  return { from: `${year}-01-01`, to: `${year}-02-01` };
+}
+
+test('rebalance schedule shows the applied trading day when a rebalance date falls on a market holiday', async ({
+  page,
+}, testInfo) => {
+  const period = holidayPeriodFor(testInfo.project.name);
+  // 1월 1일 리밸런스가 소급되면 닿는 직전 거래일 — 12월 31일은 '0101'로 끝나지 않아
+  // 가짜 KRX 서버가 정상 거래일로 응답한다.
+  const previousTradingDate = `${Number(period.from.slice(0, 4)) - 1}-12-31`;
+
+  await page.goto('/login');
+  await page.getByLabel('사용자 이름').fill(USERNAME);
+  await page.getByLabel('비밀번호').fill(PASSWORD);
+  await page.getByRole('button', { name: '로그인' }).click();
+  await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
+
+  await page.goto('/backtests/new');
+  await page.getByRole('button', { name: /전고점 돌파/ }).click(); // 리밸런스 주기 기본값 1개월
+  await page.getByLabel('돌파 기준 봉 수', { exact: true }).fill('10');
+  await page.getByLabel('변동성(ATR) 계산 기간', { exact: true }).fill('5');
+  await page.getByRole('button', { name: '다음' }).click(); // 전략 → 기간
+
+  await page.getByLabel('시작일').fill(period.from);
+  await page.getByLabel('종료일').fill(period.to);
+  await page.getByRole('button', { name: '다음' }).click(); // 기간 → 유니버스
+
+  await page.getByLabel('상위 N (시가총액)').fill(String(TOP_N));
+
+  const firstPreview = page.waitForResponse(
+    (resp) =>
+      resp.url().includes('/backtests/universe-preview') && resp.request().method() === 'POST',
+  );
+  await page.getByRole('button', { name: '미리보기' }).click();
+  await firstPreview;
+
+  // 두 리밸런스 날짜(1월 1일 휴장, 2월 1일 정상 거래일) 모두 아직 커버되지 않아
+  // 동기화 버튼이 둘 다 뜬다.
+  await expect(page.getByRole('button', { name: '동기화' })).toHaveCount(2);
+  await expect(page.getByText(period.from, { exact: true })).toBeVisible();
+  await expect(page.getByText(period.to, { exact: true })).toBeVisible();
+
+  let syncButtons = page.getByRole('button', { name: '동기화' });
+  while ((await syncButtons.count()) > 0) {
+    const previewRefreshed = page.waitForResponse(
+      (resp) =>
+        resp.url().includes('/backtests/universe-preview') && resp.request().method() === 'POST',
+    );
+    await syncButtons.first().click();
+    await previewRefreshed;
+    syncButtons = page.getByRole('button', { name: '동기화' });
+  }
+
+  // 휴장 리밸런스 날짜(1월 1일)는 소급된 직전 거래일이 덧붙어 보이고, 정상 거래일
+  // (2월 1일)은 요청 날짜와 같아 아무것도 덧붙지 않는다 — 표기 규약(잡음 없음)이다.
+  await expect(
+    page.getByRole('cell', { name: `${period.from} (적용 ${previousTradingDate})`, exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole('cell', { name: period.to, exact: true })).toBeVisible();
+});
+
+/**
  * 정렬은 종목 탭(가격 데이터) 하나만 남았다(D-038 이 전제하던 데이터셋의 「종목
  * 편집」공유 대상 자체가 제거됐다). e2e 환경엔 증권사 자격 증명이 없어 지표가
  * 비는데, 그때 규모 정렬을 눌러도 순서가 그대로면 사용자는 정렬이 고장 났다고

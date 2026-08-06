@@ -1,5 +1,9 @@
 import type { Container } from '../../src/server/bootstrap/container.js';
-import { symbolMasterCoverage, symbolMasterMarketCaps } from '../../src/server/shared/db/schema.js';
+import {
+  symbolMasterCoverage,
+  symbolMasterMarketCaps,
+  symbolMasterTradingDays,
+} from '../../src/server/shared/db/schema.js';
 
 /** `UniverseRuleResolver` 테스트 픽스처 — 실제 KRX 마스터가 갖는 필드의 최소 부분집합 */
 export interface SymbolMasterFixtureEntry {
@@ -47,6 +51,16 @@ export function seedSymbolMasterUniverse(
     .insert(symbolMasterCoverage)
     .values({ startDate: '2000-01-01', endDate: '2099-12-31', syncedAtMs: container.clock.now() })
     .run();
+
+  // resolver 는 이제 effectiveTradingDate(date) 도 함께 확인한다 — 각 리밸런스 날짜를
+  // 거래일로 기록해 둬야 이 픽스처를 쓰는 기존 테스트들이 커버 밖으로 튕기지 않는다.
+  if (rebalanceDates.length > 0) {
+    container.database.db
+      .insert(symbolMasterTradingDays)
+      .values(rebalanceDates.map((date) => ({ date })))
+      .onConflictDoNothing()
+      .run();
+  }
 
   const marketCapRows = rebalanceDates.flatMap((date) =>
     entries.map((entry) => ({ date, standardCode: entry.standardCode, marketCapKrw: entry.marketCapKrw })),

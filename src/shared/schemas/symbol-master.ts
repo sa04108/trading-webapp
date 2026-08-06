@@ -44,6 +44,14 @@ export const symbolMasterCoverageDtoSchema = z.object({
 });
 export type SymbolMasterCoverageDto = z.infer<typeof symbolMasterCoverageDtoSchema>;
 
+export const symbolMasterSyncDtoSchema = z.object({
+  requestedDate: z.string(),
+  // 상한까지 거슬러도 재구성 앵커를 못 찾으면 null 이다 — 오류가 아니라 정상 응답이다.
+  effectiveTradingDate: z.string().nullable(),
+  ingestedDates: z.array(z.string()),
+});
+export type SymbolMasterSyncDto = z.infer<typeof symbolMasterSyncDtoSchema>;
+
 export const symbolMasterEventDtoSchema = z.object({
   id: z.number(),
   effectiveDate: z.string(),

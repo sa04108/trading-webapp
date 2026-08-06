@@ -7,6 +7,7 @@ import {
   symbolMasterCoverage,
   symbolMasterEvents,
   symbolMasterMarketCaps,
+  symbolMasterTradingDays,
 } from '../../../shared/db/schema.js';
 import { newId } from '../../../shared/ids.js';
 import type { Logger } from '../../../shared/logger.js';
@@ -49,6 +50,22 @@ export type IngestResult =
   | { readonly kind: 'TRADING_DAY'; readonly eventCount: number; readonly checkpointSaved: boolean }
   | { readonly kind: 'HOLIDAY' }
   | { readonly kind: 'ALREADY_COVERED' };
+
+/** ensureTradingDay 의 소급 수집 결과 — 재구성 앵커 확보 여부와 실제 수집한 날짜들을 담는다 */
+export interface EnsureTradingDayResult {
+  readonly requestedDate: string;
+  /** 해소된 적용 거래일. 상한까지 거슬러도 못 찾으면 null */
+  readonly effectiveTradingDate: string | null;
+  /** 이번 호출이 실제로 수집한 날짜들 (이미 커버된 날짜는 빠진다) */
+  readonly ingestedDates: readonly string[];
+}
+
+/**
+ * ensureTradingDay 가 소급하며 거슬러 올라갈 기본 상한 일수 — 요청 날짜 자체의
+ * 최초 ingest 1회는 별도이므로, 한 번의 호출이 건드릴 수 있는 날짜 수는
+ * 최대 이 값 + 1(요청 날짜)이다.
+ */
+const DEFAULT_MAX_LOOKBACK_DAYS = 10;
 
 /** DB row 를 도메인 이벤트 draft 로 좁힌다 — drizzle 은 text 컬럼을 string 으로만 추론한다 */
 function toEventDraft(row: SymbolMasterEventRow): SymbolMasterEventDraft {
@@ -100,6 +117,82 @@ export class SymbolMasterService {
     return promise;
   }
 
+  /**
+   * date 가 휴장이면 직전 거래일까지 하루씩 거슬러 ingestDate 를 반복해 재구성 앵커를
+   * 보장한다. date 자체의 ingestDate 는 각 호출이 내부에서 알아서 직렬화하므로 여기서
+   * 별도 가드를 두지 않는다 — 소급 루프도 각 날짜의 ingestDate 호출 단위로 이미 안전하다.
+   *
+   * 루프 종료 판정에는 공개 effectiveTradingDate() 대신
+   * effectiveTradingDateWithinCoverage() 를 쓴다 — 그 이유는 아래 그 메서드의 주석
+   * 참고. 두 메서드의 용도 차이가 여기서 갈리므로, 소급 루프를 고칠 때는 반드시
+   * 커버 구간 안으로 한정하는 버전을 계속 써야 한다.
+   *
+   * KrxQuotaError 등은 ingestDate 가 던지는 그대로 전파한다 — 소급 도중 쿼터가 바닥나도
+   * 이미 커버한 날짜는 coverage 에 남아 다음 시도가 이어갈 수 있다.
+   */
+  async ensureTradingDay(
+    date: string,
+    maxLookbackDays = DEFAULT_MAX_LOOKBACK_DAYS,
+  ): Promise<EnsureTradingDayResult> {
+    const ingestedDates: string[] = [];
+    const ingestAndRecord = async (target: string): Promise<void> => {
+      const result = await this.ingestDate(target);
+      if (result.kind !== 'ALREADY_COVERED') ingestedDates.push(target);
+    };
+
+    await ingestAndRecord(date);
+    let resolved = this.effectiveTradingDateWithinCoverage(date);
+
+    let cursor = date;
+    for (let i = 0; resolved === undefined && i < maxLookbackDays; i += 1) {
+      cursor = addCalendarDays(cursor, -1);
+      await ingestAndRecord(cursor);
+      resolved = this.effectiveTradingDateWithinCoverage(date);
+    }
+
+    return { requestedDate: date, effectiveTradingDate: resolved ?? null, ingestedDates };
+  }
+
+  /**
+   * date 를 포함하는 커버 구간 **안**에서만 가장 가까운 거래일을 찾는다. 공개
+   * effectiveTradingDate() 는 date 이하 **전역**에서 찾으므로, date 가 (예:
+   * ensureTradingDay 의 첫 ingestAndRecord(date) 가 남긴 휴장일 하루짜리 구간으로)
+   * 이미 커버된 상태에서 date 와 전혀 안 이어진 먼 과거의 거래일을 우연히 찾아내
+   * "직전 거래일을 안다"고 착각할 수 있다 — ensureTradingDay 의 소급 루프가 그 상태를
+   * "이미 찾았다"고 오판해 실제로는 한 번도 확인하지 않은 날짜를 건너뛰고, 몇 년 전
+   * 무관한 거래일을 재구성 앵커로 굳혀 버린다. UniverseRuleResolver.resolve 도 이
+   * 버전을 써야 한다 — isCovered(date) 게이트만으로는 못 막는다: date 가 고립된
+   * 구간이라도 "어떤 구간엔 있다"는 사실 자체는 참이 되기 때문이다. (두 경로 모두
+   * 리밸런스 적용 거래일 표기 e2e(Task 4, 2026-08-06 스펙)에서 재현된 버그다.)
+   *
+   * 커버 구간은 mergeCoverage 가 하루씩 인접할 때만 이어 붙이는 연속 구간이므로,
+   * 그 안에서 가장 최근 거래일은 실제로 date 까지 하루도 빠짐없이 확인됐다는 뜻이다.
+   */
+  effectiveTradingDateWithinCoverage(date: string): string | undefined {
+    const covering = this.deps.db
+      .select({ startDate: symbolMasterCoverage.startDate })
+      .from(symbolMasterCoverage)
+      .where(
+        and(lte(symbolMasterCoverage.startDate, date), gte(symbolMasterCoverage.endDate, date)),
+      )
+      .get();
+    if (covering === undefined) return undefined;
+
+    const row = this.deps.db
+      .select({ date: symbolMasterTradingDays.date })
+      .from(symbolMasterTradingDays)
+      .where(
+        and(
+          gte(symbolMasterTradingDays.date, covering.startDate),
+          lte(symbolMasterTradingDays.date, date),
+        ),
+      )
+      .orderBy(desc(symbolMasterTradingDays.date))
+      .limit(1)
+      .get();
+    return row?.date;
+  }
+
   private async ingestDateUnguarded(date: string): Promise<IngestResult> {
     if (this.isCovered(date)) {
       return { kind: 'ALREADY_COVERED' };
@@ -131,6 +224,7 @@ export class SymbolMasterService {
       this.deps.db.transaction((tx) => {
         this.writeCheckpoint(tx, date, fetched, true);
         this.mergeCoverage(tx, date);
+        this.recordTradingDay(tx, date);
       });
       return { kind: 'TRADING_DAY', eventCount: 0, checkpointSaved: true };
     }
@@ -146,6 +240,9 @@ export class SymbolMasterService {
     // 그래야 D2 가 우연히 무변화(이벤트 0개) 거래일이어도 건너뛰지 않는다. D2 의 실제 상태는
     // 이벤트를 지우기 전에 먼저 읽어 둬야 한다 — 지운 뒤에 재구성하면 그 이벤트가 만들던
     // 변화가 사라진 상태로 읽히기 때문이다.
+    // gapDate 는 재계산 대상일 뿐이다 — 이미 커버된 구간의 시작일이므로 그 자체로
+    // "date 에 거래가 있었다"는 근거가 되지 않는다(고립된 휴장일 하루짜리 구간일 수도
+    // 있다). 그래서 recordTradingDay 는 지금 ingest 중인 date 에만 걸고 gapDate 에는 걸지 않는다.
     const gapDate = this.nextCoverageStart(date);
     const gapState = gapDate === undefined ? undefined : this.getUniverseAsOf(gapDate);
     const gapEvents =
@@ -160,6 +257,7 @@ export class SymbolMasterService {
         this.insertEventDrafts(tx, gapEvents);
       }
       this.mergeCoverage(tx, date);
+      this.recordTradingDay(tx, date);
     });
 
     // 분기 체크포인트 검증은 방금 확정한 이벤트를 getUniverseAsOf 로 다시 읽어야 하므로
@@ -442,6 +540,40 @@ export class SymbolMasterService {
         verified: row.verifiedAtMs !== null,
         mismatch: row.mismatchJson !== null,
       }));
+  }
+
+  /**
+   * date 이하에서 가장 가까운 거래일. 없으면 undefined — 재구성 앵커가 없다는 뜻이다.
+   * 휴장일은 symbolMasterTradingDays 에 기록되지 않으므로 자연히 건너뛴다.
+   *
+   * 커버 여부와 무관하게 전역에서 찾는 raw 버전이다 — date 가 아예 커버 밖이어도,
+   * date 와 전혀 안 이어진 먼 과거 거래일이어도 값을 낼 수 있다. 그래서 "재구성해도
+   * 되는 날짜"를 판정하는 실제 프로덕션 경로(ensureTradingDay 의 소급 루프,
+   * UniverseRuleResolver.resolve)는 이 메서드를 직접 쓰지 않는다 — 대신 커버 구간
+   * 안으로 한정하는 effectiveTradingDateWithinCoverage() 를 쓴다(그 메서드 주석에
+   * 두 버전을 가르는 버그 사례가 있다). 이 raw 버전은 그 자체의 계약을 검증하는
+   * 단위 테스트(tests/unit/symbol-master-trading-days.test.ts,
+   * tests/unit/universe-rule-resolver.test.ts 의 raw-값 단언)를 위해 남겨 뒀다 —
+   * 새 프로덕션 호출부를 추가할 때는 정말 "전역"이 맞는지 먼저 의심하라.
+   */
+  effectiveTradingDate(date: string): string | undefined {
+    const row = this.deps.db
+      .select({ date: symbolMasterTradingDays.date })
+      .from(symbolMasterTradingDays)
+      .where(lte(symbolMasterTradingDays.date, date))
+      .orderBy(desc(symbolMasterTradingDays.date))
+      .limit(1)
+      .get();
+    return row?.date;
+  }
+
+  /**
+   * date 를 거래일로 기록한다. 재수집으로 같은 날짜가 다시 들어와도 UNIQUE 위반이
+   * 나지 않게 onConflictDoNothing 을 쓴다. 호출자가 이벤트·coverage 갱신과 같은
+   * 트랜잭션 안에서 불러야 한다 — 따로 두면 중간에 죽었을 때 거래일 기록만 빠진다.
+   */
+  private recordTradingDay(tx: AppDatabase, date: string): void {
+    tx.insert(symbolMasterTradingDays).values({ date }).onConflictDoNothing().run();
   }
 
   /** 주어진 날짜를 포함하는 수집 완료 구간이 있는지 */

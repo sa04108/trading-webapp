@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { symbolMasterCoverage } from '../../src/server/shared/db/schema.js';
+import { symbolMasterCoverage, symbolMasterTradingDays } from '../../src/server/shared/db/schema.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
 import { registerSymbols } from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
@@ -63,13 +63,15 @@ describe('POST /backtests/universe-preview', () => {
 
     expect(res.statusCode).toBe(200);
     const body = res.json() as {
-      schedule: Array<{ rebalanceDate: string; symbols: string[] }>;
+      schedule: Array<{ rebalanceDate: string; effectiveTradingDate: string; symbols: string[] }>;
       unionSymbols: string[];
       scheduleHash: string;
       uncoveredDates: string[];
       missingCandleSymbols: string[];
     };
-    expect(body.schedule).toEqual([{ rebalanceDate: '2026-01-05', symbols: ['005930'] }]);
+    expect(body.schedule).toEqual([
+      { rebalanceDate: '2026-01-05', effectiveTradingDate: '2026-01-05', symbols: ['005930'] },
+    ]);
     expect(body.unionSymbols).toEqual(['005930']);
     expect(typeof body.scheduleHash).toBe('string');
     expect(body.scheduleHash.length).toBeGreaterThan(0);
@@ -224,6 +226,9 @@ describe('POST /backtests/universe-preview — KRX 오류 매핑', () => {
       .insert(symbolMasterCoverage)
       .values({ startDate: date, endDate: date, syncedAtMs: ctx.container.clock.now() })
       .run();
+    // resolver 는 이제 effectiveTradingDate(date) 도 게이트로 보므로, 이 날짜를 거래일로도
+    // 기록해 둬야 게이트를 통과해 getMarketCapsAt 까지 도달한다.
+    ctx.container.database.db.insert(symbolMasterTradingDays).values({ date }).run();
 
     fake.setResponse('stk_bydd_trd', basDd, { status: 429, body: { error: 'quota exceeded' } });
     fake.setResponse('ksq_bydd_trd', basDd, { status: 429, body: { error: 'quota exceeded' } });
@@ -241,5 +246,69 @@ describe('POST /backtests/universe-preview — KRX 오류 매핑', () => {
 
     expect(res.statusCode).toBe(429);
     expect((res.json() as { error: string }).error).toContain('한도');
+  });
+});
+
+/**
+ * SymbolMasterNotCoveredError → 409 매핑 (리뷰 finding) — 원래는 휴장일만 수집된
+ * 날짜에서 재현됐다. coverage 는 생기지만 체크포인트는 생기지 않는데
+ * (`ingestDateUnguarded` 의 HOLIDAY 분기는 `mergeCoverage` 만 부르고 `writeCheckpoint`
+ * 는 부르지 않는다), 그 상태에서 `isCovered(date)` 는 true 를 주지만 `getUniverseAsOf`
+ * 는 `nearestCheckpoint` 를 하나도 찾지 못해 `SymbolMasterNotCoveredError` 를 던졌다 —
+ * 이게 실제 운영에서 500 으로 터진 시나리오다.
+ *
+ * 리밸런스 적용 거래일 해소(Task 3, 스펙 2026-08-06)를 넣은 뒤로는 resolver 가
+ * `isCovered(date)` 와 `effectiveTradingDate(date)` 를 둘 다 게이트로 본다. 휴장만
+ * 수집된 날짜는 거래일로 기록되지 않으므로 `effectiveTradingDate` 가 undefined 다 —
+ * `getUniverseAsOf` 를 부르기도 전에 uncoveredDates 로 걸러져 200 으로 응답한다.
+ * 그래서 아래 테스트는 이제 409 대신 그 우아한 경로(uncoveredDates)를 검증한다.
+ * `sendIfNotCovered` 매핑 자체는 이 resolver 경로가 아닌 다른 진입점을 위한 방어로
+ * 그대로 남겨 둔다 — 제거 대상이 아니다.
+ */
+describe('POST /backtests/universe-preview — SymbolMasterNotCoveredError 매핑', () => {
+  let ctx: TestApp;
+  let fake: KrxFakeServer;
+  let cookie: string;
+
+  beforeEach(async () => {
+    fake = await startKrxFakeServer();
+    ctx = await createTestApp({ KRX_BASE_URL: fake.baseUrl, KRX_API_KEY: 'test-krx-key' });
+    const { username, password } = await createTestAdmin(ctx.container);
+    const login = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { username, password },
+    });
+    cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+  });
+
+  afterEach(async () => {
+    await ctx.close();
+    await fake.close();
+  });
+
+  it('휴장일만 수집돼 체크포인트가 없으면 미리보기는 uncoveredDates 로 걸러진다 (더 이상 500 도 409 도 아니다)', async () => {
+    const date = '2026-01-05';
+    // KOSPI·KOSDAQ 양쪽 다 fake 서버 기본값(빈 응답)이라 ingestDate 는 이 날짜를
+    // 휴장으로 처리한다 — coverage 는 생기지만 체크포인트도, 거래일 기록도 생기지 않는다.
+    await ctx.container.symbolMasterService.ingestDate(date);
+    expect(ctx.container.symbolMasterService.isCovered(date)).toBe(true);
+    expect(ctx.container.symbolMasterService.effectiveTradingDate(date)).toBeUndefined();
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: { markets: ['KOSPI'], topN: 10, sortKey: 'MKTCAP' },
+        period: { from: date, to: date },
+        rebalanceMonths: 1,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { uncoveredDates: string[]; schedule: unknown[] };
+    expect(body.uncoveredDates).toEqual([date]);
+    expect(body.schedule).toEqual([]);
   });
 });
