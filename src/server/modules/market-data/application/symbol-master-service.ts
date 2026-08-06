@@ -122,15 +122,10 @@ export class SymbolMasterService {
    * 보장한다. date 자체의 ingestDate 는 각 호출이 내부에서 알아서 직렬화하므로 여기서
    * 별도 가드를 두지 않는다 — 소급 루프도 각 날짜의 ingestDate 호출 단위로 이미 안전하다.
    *
-   * 루프 종료 판정에는 공개 effectiveTradingDate() 대신 contiguousTradingDate() 를
-   * 쓴다 — 공개 버전은 date 이하 전역에서 가장 가까운 거래일을 찾을 뿐이라, date 가
-   * (예: 이 메서드 자신이 첫 ingestAndRecord(date) 에서 남긴 휴장일 하루짜리 구간으로)
-   * 이미 커버된 상태에서 date 와 전혀 안 이어진 먼 과거의 거래일을 우연히 찾아내
-   * "이미 찾았다"고 착각할 수 있다. 그러면 이 루프가 실제로는 하루도 확인하지 않은
-   * 채 몇 년 전 무관한 거래일을 재구성 앵커로 굳혀 버린다 — 리밸런스 적용 거래일
-   * 표기 e2e(Task 4, 2026-08-06 스펙)에서 재현된 버그다. contiguousTradingDate 는
-   * date 를 포함하는 커버 구간 **안**에서만 찾으므로, 이 함수가 하루씩 늘려 온
-   * 연속 구간 밖의 값에는 절대 속지 않는다.
+   * 루프 종료 판정에는 공개 effectiveTradingDate() 대신
+   * effectiveTradingDateWithinCoverage() 를 쓴다 — 그 이유는 아래 그 메서드의 주석
+   * 참고. 두 메서드의 용도 차이가 여기서 갈리므로, 소급 루프를 고칠 때는 반드시
+   * 커버 구간 안으로 한정하는 버전을 계속 써야 한다.
    *
    * KrxQuotaError 등은 ingestDate 가 던지는 그대로 전파한다 — 소급 도중 쿼터가 바닥나도
    * 이미 커버한 날짜는 coverage 에 남아 다음 시도가 이어갈 수 있다.
@@ -146,26 +141,34 @@ export class SymbolMasterService {
     };
 
     await ingestAndRecord(date);
-    let resolved = this.contiguousTradingDate(date);
+    let resolved = this.effectiveTradingDateWithinCoverage(date);
 
     let cursor = date;
     for (let i = 0; resolved === undefined && i < maxLookbackDays; i += 1) {
       cursor = addCalendarDays(cursor, -1);
       await ingestAndRecord(cursor);
-      resolved = this.contiguousTradingDate(date);
+      resolved = this.effectiveTradingDateWithinCoverage(date);
     }
 
     return { requestedDate: date, effectiveTradingDate: resolved ?? null, ingestedDates };
   }
 
   /**
-   * ensureTradingDay 전용 — date 를 포함하는 커버 구간 **안**에서만 가장 가까운
-   * 거래일을 찾는다. 공개 effectiveTradingDate() 와 달리 구간 밖 거래일은 절대
-   * 반환하지 않는다 — 그 이유는 ensureTradingDay 위 주석 참고. 커버 구간은
-   * mergeCoverage 가 하루씩 인접할 때만 이어 붙이는 연속 구간이므로, 그 안에서
-   * 가장 최근 거래일은 실제로 date 까지 하루도 빠짐없이 확인됐다는 뜻이다.
+   * date 를 포함하는 커버 구간 **안**에서만 가장 가까운 거래일을 찾는다. 공개
+   * effectiveTradingDate() 는 date 이하 **전역**에서 찾으므로, date 가 (예:
+   * ensureTradingDay 의 첫 ingestAndRecord(date) 가 남긴 휴장일 하루짜리 구간으로)
+   * 이미 커버된 상태에서 date 와 전혀 안 이어진 먼 과거의 거래일을 우연히 찾아내
+   * "직전 거래일을 안다"고 착각할 수 있다 — ensureTradingDay 의 소급 루프가 그 상태를
+   * "이미 찾았다"고 오판해 실제로는 한 번도 확인하지 않은 날짜를 건너뛰고, 몇 년 전
+   * 무관한 거래일을 재구성 앵커로 굳혀 버린다. UniverseRuleResolver.resolve 도 이
+   * 버전을 써야 한다 — isCovered(date) 게이트만으로는 못 막는다: date 가 고립된
+   * 구간이라도 "어떤 구간엔 있다"는 사실 자체는 참이 되기 때문이다. (두 경로 모두
+   * 리밸런스 적용 거래일 표기 e2e(Task 4, 2026-08-06 스펙)에서 재현된 버그다.)
+   *
+   * 커버 구간은 mergeCoverage 가 하루씩 인접할 때만 이어 붙이는 연속 구간이므로,
+   * 그 안에서 가장 최근 거래일은 실제로 date 까지 하루도 빠짐없이 확인됐다는 뜻이다.
    */
-  private contiguousTradingDate(date: string): string | undefined {
+  effectiveTradingDateWithinCoverage(date: string): string | undefined {
     const covering = this.deps.db
       .select({ startDate: symbolMasterCoverage.startDate })
       .from(symbolMasterCoverage)
@@ -543,13 +546,15 @@ export class SymbolMasterService {
    * date 이하에서 가장 가까운 거래일. 없으면 undefined — 재구성 앵커가 없다는 뜻이다.
    * 휴장일은 symbolMasterTradingDays 에 기록되지 않으므로 자연히 건너뛴다.
    *
-   * 커버 여부와 무관하게 전역에서 찾는다 — date 가 아예 커버 밖이어도 값을 낼 수 있다.
-   * 이 raw 값 하나만으로 "재구성해도 되는 날짜"를 판정하면 안 된다: 호출자는 반드시
-   * isCovered(date) 와 함께 봐야 한다(UniverseRuleResolver.resolve 가 그렇게 짝지어
-   * 쓴다 — coverage 를 한참 벗어난 날짜까지 옛 유니버스로 조용히 해소되지 않게 하려는
-   * 목적이다, tests/unit/universe-rule-resolver.test.ts 참고). ensureTradingDay 의
-   * 소급 루프는 이 raw 버전 대신 아래 contiguousTradingDate 를 쓴다 — 그 이유는
-   * 그 메서드 주석 참고.
+   * 커버 여부와 무관하게 전역에서 찾는 raw 버전이다 — date 가 아예 커버 밖이어도,
+   * date 와 전혀 안 이어진 먼 과거 거래일이어도 값을 낼 수 있다. 그래서 "재구성해도
+   * 되는 날짜"를 판정하는 실제 프로덕션 경로(ensureTradingDay 의 소급 루프,
+   * UniverseRuleResolver.resolve)는 이 메서드를 직접 쓰지 않는다 — 대신 커버 구간
+   * 안으로 한정하는 effectiveTradingDateWithinCoverage() 를 쓴다(그 메서드 주석에
+   * 두 버전을 가르는 버그 사례가 있다). 이 raw 버전은 그 자체의 계약을 검증하는
+   * 단위 테스트(tests/unit/symbol-master-trading-days.test.ts,
+   * tests/unit/universe-rule-resolver.test.ts 의 raw-값 단언)를 위해 남겨 뒀다 —
+   * 새 프로덕션 호출부를 추가할 때는 정말 "전역"이 맞는지 먼저 의심하라.
    */
   effectiveTradingDate(date: string): string | undefined {
     const row = this.deps.db

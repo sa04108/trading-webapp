@@ -35,10 +35,12 @@ export class UniverseRuleResolver {
   /**
    * 리밸런스 날짜별로 유니버스 규칙을 적용해 멤버십 일정을 만든다.
    *
-   * 날짜별로 isCovered 와 effectiveTradingDate 를 둘 다 확인한다. effectiveTradingDate
-   * 만 보면 coverage 가 한참 전에 끊긴 먼 미래 날짜도 (date 이하 최근 거래일이 우연히
-   * 존재한다는 이유로) 옛 유니버스로 조용히 해소돼 버린다 — 그래서 coverage 도 함께
-   * 봐야 진짜로 이 날짜를 안다고 할 수 있다.
+   * 날짜별로 isCovered 와 effectiveTradingDateWithinCoverage 를 둘 다 확인한다.
+   * effectiveTradingDateWithinCoverage 는 date 를 포함하는 커버 구간 **안**에서만
+   * 찾으므로 그 자체로 이미 "coverage 를 벗어나지 않는다"는 보장을 담고 있지만,
+   * isCovered(date) 를 별도로도 확인해 "이 날짜 자체를 안다"는 조건을 명시적으로
+   * 남겨 둔다 — 전역으로 찾는 raw 버전(effectiveTradingDate, 여기서는 안 쓴다)을
+   * 실수로 다시 끌어와도 이 명시적 게이트가 방어선이 되게 하려는 목적이다.
    *
    * 유니버스·시총은 rebalanceDate 가 아니라 effectiveTradingDate 로 읽는다. 휴장일은
    * MKTCAP 행 자체가 없어, rebalanceDate 그대로 넘기면 상위 N 이 빈 목록이 된다.
@@ -56,7 +58,7 @@ export class UniverseRuleResolver {
     const unionSymbols = new Set<string>();
 
     for (const date of rebalanceDates) {
-      const effectiveTradingDate = this.deps.symbolMaster.effectiveTradingDate(date);
+      const effectiveTradingDate = this.deps.symbolMaster.effectiveTradingDateWithinCoverage(date);
       if (!this.deps.symbolMaster.isCovered(date) || effectiveTradingDate === undefined) {
         uncoveredDates.push(date);
         continue;

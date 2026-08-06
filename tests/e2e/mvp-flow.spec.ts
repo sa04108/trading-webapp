@@ -397,10 +397,16 @@ test('full MVP flow', async ({ page }) => {
 
 /**
  * 리밸런스 적용 거래일 표기(Task 4, 2026-08-06 스펙) — 위저드 유니버스 단계가
- * 휴장 리밸런스 날짜를 어떻게 보여 주는지 확인한다. 가짜 KRX 서버는 1월 1일만
- * 휴장으로 낸다(scripts/e2e-server.ts `isHolidayBasDd`) — mobile·desktop 두 프로젝트가
- * 같은 서버 상태를 공유해도(playwright.config workers:1) 서로 다른 연도를 쓰면
- * 커버리지가 부딪히지 않는다.
+ * 휴장 리밸런스 날짜를 어떻게 보여 주는지 확인한다. 가짜 KRX 서버는 정확히
+ * 2025-01-01·2018-01-01 두 날짜만 휴장으로 낸다(scripts/e2e-server.ts
+ * `HOLIDAY_BAS_DATES`) — "1월 1일이면 무조건 휴장" 같은 패턴이 아니라 이 스위트가
+ * 쓰는 날짜만 정확히 지정한 고정 집합이다. 패턴으로 두면 다른 스펙
+ * (symbol-master.spec.ts)이 쓰는 "오늘 기준 상대 날짜"가 매년 1월 2일·1월 11일에
+ * 이 스위트를 돌릴 때 우연히 1월 1일과 겹쳐, 그 스펙의 "가짜 KRX 는 어느 날짜를
+ * 물어도 같은 시세를 낸다"는 전제를 깨뜨린다(리뷰에서 지적된 회귀) — 고정 집합은
+ * 상대 날짜와 영원히 안 겹친다. mobile·desktop 두 프로젝트가 같은 서버 상태를
+ * 공유해도(playwright.config workers:1) 서로 다른 연도를 쓰면 커버리지가 부딪히지
+ * 않는다.
  *
  * 두 연도 모두 "오늘"보다 한참 과거를 쓴다 — SymbolMasterPanel 은 기본 화면(날짜
  * 쿼리 없음)에서 coverage 의 가장 늦은 날짜를 보여주되 "오늘"을 넘지 않게 자른다
@@ -410,6 +416,8 @@ test('full MVP flow', async ({ page }) => {
  * 전제를 깨뜨린다 — 실제로 그렇게 재현됐던 회귀다.
  */
 function holidayPeriodFor(projectName: string): { from: string; to: string } {
+  // scripts/e2e-server.ts `HOLIDAY_BAS_DATES` 와 정확히 일치해야 한다 — 여기서
+  // 연도를 바꾸면 그쪽 고정 집합도 같이 바꿔야 휴장이 재현된다.
   const year = projectName === 'mobile' ? 2025 : 2018;
   return { from: `${year}-01-01`, to: `${year}-02-01` };
 }

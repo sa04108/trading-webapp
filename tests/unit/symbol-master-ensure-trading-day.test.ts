@@ -100,4 +100,26 @@ describe('SymbolMasterService.ensureTradingDay', () => {
     expect(result.ingestedDates).toEqual(['2023-01-10', '2023-01-09', '2023-01-08', '2023-01-07']);
     await teardown(ctx);
   });
+
+  it('서로 안 이어진 옛 coverage 섬의 거래일에 속지 않는다', async () => {
+    const ctx = await setup();
+    // 2020-01-02 를 거래일로 수집해 둔다 — 아래 소급 대상(2023-01-10 근처)과 몇 년
+    // 떨어진, 전혀 안 이어진 고립 coverage 섬이다.
+    setTradingDay(ctx.fake, '20200102');
+    await ctx.svc.ingestDate('2020-01-02');
+
+    // 2023-01-10 은 휴장(기본값)이고, 상한을 2일로 좁혀 실제 직전 거래일까지는
+    // 닿지 못하게 한다. 리뷰에서 지적된 버그: date 이하 **전역**에서 찾는
+    // effectiveTradingDate() 로 루프 종료를 판정하면, 첫 ingestAndRecord(date) 가
+    // 남긴 고립 coverage 안에서도 2020-01-02 가 "date 이하 최근 거래일"로 걸려
+    // "이미 찾았다"고 오판한다 — 그러면 루프가 전혀 안 돌고 ingestedDates 가
+    // ['2023-01-10'] 하나로 끝나며, 효과적으로는 몇 년 전 무관한 날짜를 재구성
+    // 앵커로 잘못 굳힌다. 지금은 effectiveTradingDateWithinCoverage() 로 커버
+    // 구간 안에서만 찾아 이 오판을 막는다.
+    const result = await ctx.svc.ensureTradingDay('2023-01-10', 2);
+
+    expect(result.effectiveTradingDate).toBeNull();
+    expect(result.ingestedDates).toEqual(['2023-01-10', '2023-01-09', '2023-01-08']);
+    await teardown(ctx);
+  });
 });

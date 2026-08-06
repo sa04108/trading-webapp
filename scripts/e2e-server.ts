@@ -100,28 +100,36 @@ const KOSDAQ_BASE_ROWS = [
 const KOSDAQ_DAILY_ROWS = [{ ISU_CD: '035720', ISU_NM: '카카오', MKTCAP: '20,000,000,000,000' }];
 
 /**
- * basDd(YYYYMMDD) 가 1월 1일이면 휴장으로 취급한다 — KRX 는 연도를 가리지 않고
- * 매년 1월 1일에 항상 쉰다(scripts/krx-smoke.ts 의 KNOWN_HOLIDAY_DATE 와 같은
- * 전제). 연도로만 갈라 두면 리밸런스 적용 거래일 표기 e2e(Task 4, 2026-08-06
- * 스펙)에서 mobile·desktop 두 프로젝트가 같은 서버 상태를 공유해도(playwright.config
- * workers:1) 서로 다른 연도의 1월 1일을 쓰는 한 커버리지가 부딪히지 않는다.
+ * 리밸런스 적용 거래일 표기 e2e(Task 4, 2026-08-06 스펙, `tests/e2e/mvp-flow.spec.ts`
+ * `holidayPeriodFor`)가 정확히 이 두 날짜만 휴장 리밸런스로 쓴다 — mobile·desktop
+ * 프로젝트가 같은 서버 상태를 공유해도(playwright.config workers:1) 부딪히지
+ * 않도록 연도를 갈랐다.
+ *
+ * "1월 1일이면 무조건 휴장" 같은 패턴 매칭 대신 이 정확한 날짜 집합만 겨냥한다 —
+ * 패턴으로 두면 `tests/e2e/symbol-master.spec.ts` 가 쓰는 "오늘 기준 상대 날짜"
+ * (`daysBeforeIso(todayIso(), 1|10)`)가 매년 1월 2일·1월 11일에 이 스위트를 돌릴 때
+ * 우연히 1월 1일과 겹쳐, 그 스펙의 "가짜 KRX 는 어느 날짜를 물어도 같은 시세를
+ * 낸다"는 전제를 깨뜨린다(리뷰에서 지적된 회귀). 고정 날짜 집합은 상대 날짜를 쓰는
+ * 스펙과 영원히 부딪히지 않는다.
  */
+const HOLIDAY_BAS_DATES = new Set(['20250101', '20180101']);
+
 function isHolidayBasDd(basDd: string | undefined): boolean {
-  return basDd !== undefined && basDd.endsWith('0101');
+  return basDd !== undefined && HOLIDAY_BAS_DATES.has(basDd);
 }
 
 /**
  * e2e 전용 가짜 KRX Open API 서버.
  *
  * 기본정보(base_info)는 요청한 날짜와 무관하게 항상 같은 값을 돌려준다. 일별시세
- * (daily_trd) 도 원칙은 같지만 1월 1일만 예외로 빈 배열을 낸다 — 두 시장 모두
- * 거래가 없는 날로 잡혀야 SymbolMasterService.ingestDate 가 휴장으로 분류하고
- * ensureTradingDay 의 소급 수집을 재현할 수 있기 때문이다. 종목 마스터는 요청한
- * 날짜를 그대로 조회할 뿐 예전 KRX 과거 유니버스 경로가 하던 '휴장일이면 과거로
- * 소급' 탐색을 하지 않는다(그 경로는 스펙 2026-08-05 Task 6 에서 데이터셋·스냅샷과
- * 함께 제거됐다) — 그래서 소급은 이제 ensureTradingDay 쪽 책임이고, 이 스텁은
- * "그 날이 휴장이었다"는 사실 하나만 재현하면 된다. 1월 1일을 겨냥하지 않는 스펙은
- * 어떤 날짜를 동기화하든 여전히 같은 종목·시가총액을 얻는다.
+ * (daily_trd) 도 원칙은 같지만 HOLIDAY_BAS_DATES 에 속한 날짜만 예외로 빈 배열을
+ * 낸다 — 두 시장 모두 거래가 없는 날로 잡혀야 SymbolMasterService.ingestDate 가
+ * 휴장으로 분류하고 ensureTradingDay 의 소급 수집을 재현할 수 있기 때문이다.
+ * 종목 마스터는 요청한 날짜를 그대로 조회할 뿐 예전 KRX 과거 유니버스 경로가 하던
+ * '휴장일이면 과거로 소급' 탐색을 하지 않는다(그 경로는 스펙 2026-08-05 Task 6 에서
+ * 데이터셋·스냅샷과 함께 제거됐다) — 그래서 소급은 이제 ensureTradingDay 쪽 책임이고,
+ * 이 스텁은 "그 날이 휴장이었다"는 사실 하나만 재현하면 된다. HOLIDAY_BAS_DATES 를
+ * 겨냥하지 않는 스펙은 어떤 날짜를 동기화하든 여전히 같은 종목·시가총액을 얻는다.
  */
 async function startFakeKrxServer(): Promise<void> {
   const app = Fastify({ logger: false });

@@ -203,6 +203,31 @@ describe('UniverseRuleResolver.resolve', () => {
 
     await teardown(ctx);
   });
+
+  it('date 자체가 고립된 coverage 섬이어도, 안 이어진 옛 거래일로 조용히 해소되지 않는다', async () => {
+    const ctx = await setup();
+    await ingestFixtureUniverse(ctx); // 2023-01-02 거래일 수집(coverage: [2023-01-02, 2023-01-02])
+
+    // 2023-06-01 을 직접 휴장으로 ingest — ensureTradingDay 의 소급 없이, 그 날짜
+    // 하나만 담은 고립 coverage 섬을 남긴다(2023-01-02 섬과 안 이어진다). isCovered
+    // 는 이 섬만 보고도 참이 된다 — 리뷰에서 지적된 지점: isCovered(date) 는
+    // "date 가 어떤 구간엔 있나"만 볼 뿐, 그 구간이 실제 직전 거래일까지 이어지는지는
+    // 보지 않는다.
+    await ctx.svc.ingestDate('2023-06-01');
+    expect(ctx.svc.isCovered('2023-06-01')).toBe(true);
+    // 버그가 있었다면(resolver 가 전역 effectiveTradingDate 를 썼다면): 2023-01-02
+    // 가 "2023-06-01 이하 최근 거래일"로 잡혀 isCovered 게이트를 통과해 버렸을
+    // 것이다 — 두 날짜가 안 이어져 있다는 사실은 이 값만으로는 알 수 없다.
+    expect(ctx.svc.effectiveTradingDate('2023-06-01')).toBe('2023-01-02');
+
+    const rule: UniverseRule = { markets: ['KOSPI'], topN: 3, sortKey: 'MKTCAP' };
+    const result = await ctx.resolver.resolve(rule, ['2023-06-01']);
+
+    expect(result.uncoveredDates).toEqual(['2023-06-01']);
+    expect(result.schedule).toEqual([]);
+
+    await teardown(ctx);
+  });
 });
 
 describe('computeRebalanceDates', () => {
