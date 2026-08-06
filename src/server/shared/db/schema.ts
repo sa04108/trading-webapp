@@ -486,3 +486,12 @@ export const symbolMasterMarketCaps = sqliteTable(
   },
   (table) => [uniqueIndex('idx_smmc_date_code').on(table.date, table.standardCode)],
 );
+
+/**
+ * 실제로 거래가 있었던 날짜만 담는다. 휴장일과 무변화 거래일은 이벤트 건수로
+ * 구별되지 않으므로, "거래일이었다"는 사실 자체를 별도로 남겨야 재구성 앵커를
+ * 정확히 짚을 수 있다.
+ */
+export const symbolMasterTradingDays = sqliteTable('symbol_master_trading_days', {
+  date: text('date').primaryKey(),
+});

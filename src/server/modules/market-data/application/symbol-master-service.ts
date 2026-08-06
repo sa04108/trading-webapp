@@ -7,6 +7,7 @@ import {
   symbolMasterCoverage,
   symbolMasterEvents,
   symbolMasterMarketCaps,
+  symbolMasterTradingDays,
 } from '../../../shared/db/schema.js';
 import { newId } from '../../../shared/ids.js';
 import type { Logger } from '../../../shared/logger.js';
@@ -131,6 +132,7 @@ export class SymbolMasterService {
       this.deps.db.transaction((tx) => {
         this.writeCheckpoint(tx, date, fetched, true);
         this.mergeCoverage(tx, date);
+        this.recordTradingDay(tx, date);
       });
       return { kind: 'TRADING_DAY', eventCount: 0, checkpointSaved: true };
     }
@@ -160,6 +162,7 @@ export class SymbolMasterService {
         this.insertEventDrafts(tx, gapEvents);
       }
       this.mergeCoverage(tx, date);
+      this.recordTradingDay(tx, date);
     });
 
     // 분기 체크포인트 검증은 방금 확정한 이벤트를 getUniverseAsOf 로 다시 읽어야 하므로
@@ -442,6 +445,30 @@ export class SymbolMasterService {
         verified: row.verifiedAtMs !== null,
         mismatch: row.mismatchJson !== null,
       }));
+  }
+
+  /**
+   * date 이하에서 가장 가까운 거래일. 없으면 undefined — 재구성 앵커가 없다는 뜻이다.
+   * 휴장일은 symbolMasterTradingDays 에 기록되지 않으므로 자연히 건너뛴다.
+   */
+  effectiveTradingDate(date: string): string | undefined {
+    const row = this.deps.db
+      .select({ date: symbolMasterTradingDays.date })
+      .from(symbolMasterTradingDays)
+      .where(lte(symbolMasterTradingDays.date, date))
+      .orderBy(desc(symbolMasterTradingDays.date))
+      .limit(1)
+      .get();
+    return row?.date;
+  }
+
+  /**
+   * date 를 거래일로 기록한다. 재수집으로 같은 날짜가 다시 들어와도 UNIQUE 위반이
+   * 나지 않게 onConflictDoNothing 을 쓴다. 호출자가 이벤트·coverage 갱신과 같은
+   * 트랜잭션 안에서 불러야 한다 — 따로 두면 중간에 죽었을 때 거래일 기록만 빠진다.
+   */
+  private recordTradingDay(tx: AppDatabase, date: string): void {
+    tx.insert(symbolMasterTradingDays).values({ date }).onConflictDoNothing().run();
   }
 
   /** 주어진 날짜를 포함하는 수집 완료 구간이 있는지 */
