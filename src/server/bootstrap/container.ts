@@ -33,6 +33,7 @@ import type { CandleRepository } from '../modules/market-data/application/ports.
 import { createTossMarketDataSource } from '../modules/broker/infrastructure/toss/toss-market-data-source.js';
 import { DuckDbService } from '../modules/market-data/infrastructure/duckdb-service.js';
 import { ParquetCandleRepository } from '../modules/market-data/infrastructure/parquet-candle-repository.js';
+import { CompositeCandleRepository } from '../modules/market-data/infrastructure/composite-candle-repository.js';
 import { StrategyRegistry } from '../modules/strategy/application/strategy-registry.js';
 import { JobOrchestrator } from '../modules/backtest/application/job-orchestrator.js';
 import { JobQueue } from '../modules/backtest/application/job-queue.js';
@@ -175,7 +176,13 @@ export function createContainer(config: AppConfig): Container {
     threads: config.duckdbThreads,
     memoryLimit: config.duckdbMemoryLimit,
   });
-  const candleRepository = new ParquetCandleRepository(config.dataRoot, duckdb);
+  // 1일봉은 KRX 테이블을 우선 읽고, 그 밖의 슬라이스는 parquet 를 그대로 읽는다
+  // (설계 2026-08-06-krx-daily-bars Task 3). 감싼 뒤에도 saveCandles 는 항상 parquet 로
+  // 위임하므로, 봉 수집(BrokerSyncService)에 이 composite 를 그대로 넘겨도 쓰기 경로는
+  // 바뀌지 않는다 — 아래에서 candleRepository 하나만 만들어 symbolService·brokerSyncService
+  // 양쪽에 넘기는 이유다.
+  const parquetCandleRepository = new ParquetCandleRepository(config.dataRoot, duckdb);
+  const candleRepository = new CompositeCandleRepository(database.db, parquetCandleRepository);
   // 종목이 데이터 소관이다 (설계 2026-07-31-symbol-as-first-class). 백테스트 버전 pin
   // (§9.5)은 SymbolService.versionSnapshotFor 가 직접 낸다 — 구 DatasetService 는
   // 데이터셋·스냅샷 개념과 함께 제거됐다(스펙 2026-08-05, Task 6).
