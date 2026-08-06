@@ -251,6 +251,10 @@ describe('symbol-master routes', () => {
     expect(body.backfill.targetEndDate).toBe('2025-01-10');
 
     // 뒷정리 — 백필이 백그라운드에서 계속 돌다 teardown 과 겹치지 않게 끝까지 기다린다.
+    //
+    // 여유를 넉넉히 둔다: 5일 × 4호출에 RestClient 의 250ms 간격이 걸려 정상에도 5초쯤
+    // 걸리고, 기계가 바쁘면 더 밀린다. 그리고 IDLE 이 아닌 채로 끝나면 state 만 보여서는
+    // 원인을 알 수 없으므로 backfill 객체 전체를 실패 메시지에 싣는다(FAILED 면 error 가 들어 있다).
     await vi.waitFor(
       async () => {
         const coverage = await app.app.inject({
@@ -258,9 +262,13 @@ describe('symbol-master routes', () => {
           url: '/api/v1/symbol-master/coverage',
           cookies: { qp_session: cookie },
         });
-        expect(coverage.json().backfill.state).toBe('IDLE');
+        const backfillState = coverage.json().backfill;
+        expect(
+          backfillState,
+          `백필이 IDLE 로 끝나지 않았다: ${JSON.stringify(backfillState)}`,
+        ).toMatchObject({ state: 'IDLE' });
       },
-      { timeout: 10_000 },
+      { timeout: 30_000 },
     );
   });
 
