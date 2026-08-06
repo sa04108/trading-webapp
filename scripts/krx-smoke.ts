@@ -514,8 +514,15 @@ async function main(): Promise<void> {
   await checkYearlyClassification(results, source, args.years);
   await checkCalendarEdges(results, source, systemClock.now());
 
-  const totalCalls = source.todayCallCount();
-  record(results, '6', '총 호출 수', 'INFO', `오늘 누적 ${totalCalls}회 (일일 한도 10,000회, REVIEW §10)`);
+  // 한도가 엔드포인트마다 따로 걸려 있어 총합이 아니라 최댓값이 한도에 얼마나 붙었는지를 본다.
+  const maxEndpointCalls = source.todayMaxEndpointCallCount();
+  record(
+    results,
+    '6',
+    '엔드포인트별 최다 호출 수',
+    'INFO',
+    `오늘 최다 ${maxEndpointCalls}회 (엔드포인트당 일일 한도 10,000회, REVIEW §10)`,
+  );
 
   const failed = results.filter((result) => result.status === 'FAIL');
   console.log('');

@@ -48,6 +48,12 @@ const envSchema = z.object({
   KRX_APPROVAL_EXPIRY: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   /** 이 여유 공간(MB) 미만이면 증권사 동기화를 거부한다 (§22 임계치 원칙) */
   SYNC_MIN_FREE_DISK_MB: z.coerce.number().int().min(0).default(2048),
+  /**
+   * 종목 마스터 백필이 하루에 쓸 수 있는 엔드포인트당 KRX 호출 수 상한.
+   * KRX 한도가 엔드포인트당 10,000 이라 나머지는 사용자 조회(백테스트 제출·온디맨드
+   * 동기화)가 쓸 여유로 남긴다.
+   */
+  KRX_DAILY_CALL_BUDGET: z.coerce.number().int().min(1).default(9000),
 });
 
 export interface AppConfig {
@@ -80,6 +86,7 @@ export interface AppConfig {
   readonly krxApiKey: string | null;
   readonly krxApprovalExpiry: string | null;
   readonly syncMinFreeDiskMb: number;
+  readonly krxDailyCallBudget: number;
 }
 
 export class ConfigError extends Error {
@@ -144,5 +151,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     krxApiKey: raw.KRX_API_KEY ?? null,
     krxApprovalExpiry: raw.KRX_APPROVAL_EXPIRY ?? null,
     syncMinFreeDiskMb: raw.SYNC_MIN_FREE_DISK_MB,
+    krxDailyCallBudget: raw.KRX_DAILY_CALL_BUDGET,
   };
 }

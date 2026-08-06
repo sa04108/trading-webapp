@@ -58,7 +58,11 @@ export interface MarketDataSource {
 export interface KrxHistoricalUniverseSource {
   fetchIssueBaseInfo(market: KrxMarket, isoDate: string): Promise<readonly KrxIssueBaseInfoRow[]>;
   fetchDailyTrades(market: KrxMarket, isoDate: string): Promise<readonly KrxDailyTradeRow[]>;
-  todayCallCount(): number;
+  /**
+   * 오늘(KST) 가장 많이 부른 엔드포인트의 호출 수. KRX 한도가 엔드포인트마다 따로 걸려 있어
+   * 총합으로 재면 남은 여력을 실제보다 적게 본다.
+   */
+  todayMaxEndpointCallCount(): number;
 }
 
 /** 종목 참조 정보 (코드 → 이름). 이름 검색(이름 → 코드)은 소스가 제공하지 않는다. */
@@ -110,15 +114,6 @@ export interface MarketRankingSource {
    * 호출부는 그 사실을 "모름" 으로 다뤄야 한다.
    */
   getRanking(market: Market, metric: MarketRankingMetric): Promise<MarketRankingEntry[]>;
-}
-
-/** 정렬용 재무 값 — 조립부가 facts 모듈로 연결한다 (market-data 는 facts 를 모른다) */
-export interface FundamentalSortValueSource {
-  /** shortCode → asOfMaxTsMs 이전에 공시된 것 기준 TTM 영업이익(원). 산출 불가 종목은 키가 없다 */
-  ttmOperatingIncomeAsOf(
-    shortCodes: readonly string[],
-    asOfMaxTsMs: number,
-  ): Promise<ReadonlyMap<string, number>>;
 }
 
 // 아래 에러들은 포트 계약의 일부다 — 어댑터(infrastructure)가 던지고 애플리케이션이

@@ -25,7 +25,7 @@ import type {
   FactSyncRequest,
 } from '../modules/facts/application/fact-sync-service.js';
 import { planFactSync } from '../modules/facts/domain/sync-plan.js';
-import type { FactsSyncEstimate } from '../modules/market-data/application/dataset-service.js';
+import type { FactsSyncEstimate } from '../modules/market-data/application/symbol-service.js';
 import type { Market } from '../modules/market-data/domain/candle.js';
 import {
   deriveFactYearRange,

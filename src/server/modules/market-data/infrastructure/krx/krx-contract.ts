@@ -20,6 +20,7 @@ const baseInfoRowSchema = z.object({
   SECUGRP_NM: z.string(),
   SECT_TP_NM: z.string().nullable().optional(),
   KIND_STKCERT_TP_NM: z.string().nullable().optional(),
+  LIST_SHRS: z.string().nullable().optional(),
 }).loose();
 
 const dailyRowSchema = z.object({
@@ -76,6 +77,10 @@ export function parseBaseInfoRows(rows: readonly Record<string, unknown>[]): Krx
       securityGroupRaw: row.SECUGRP_NM,
       sectionRaw: row.SECT_TP_NM ?? null,
       stockKindRaw: row.KIND_STKCERT_TP_NM ?? null,
+      listedShares: (() => {
+        const shares = parseNullableInt64(row.LIST_SHRS, 'LIST_SHRS');
+        return shares === null ? null : shares.toString();
+      })(),
     };
   });
 }

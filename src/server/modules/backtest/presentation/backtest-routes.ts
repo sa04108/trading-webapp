@@ -7,10 +7,8 @@ import {
   periodToTsRange,
   type BacktestRequest,
 } from '../../../../shared/schemas/backtest-request.js';
-import {
-  DATASET_TIMEPOINT_WARNING,
-  type ProvenancePin,
-} from '../../../../shared/schemas/provenance-pin.js';
+import { universeRuleSchema } from '../../../../shared/schemas/universe-rule.js';
+import type { ProvenancePin } from '../../../../shared/schemas/provenance-pin.js';
 import {
   DEFAULT_TRADE_SORT_DIRECTION,
   DEFAULT_TRADE_SORT_KEY,
@@ -21,18 +19,14 @@ import { SECURITY_HEADERS } from '../../../shared/security.js';
 import type { Clock } from '../../../shared/clock.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
 import type { FactRepository } from '../../facts/application/ports.js';
-import type {
-  DatasetService,
-  UniverseSnapshot,
-} from '../../market-data/application/dataset-service.js';
-import type { SymbolService } from '../../market-data/application/symbol-service.js';
-import type { UniverseSnapshotService } from '../../market-data/application/universe-snapshot-service.js';
+import type { ConsumedVersionSnapshot, SymbolService } from '../../market-data/application/symbol-service.js';
+import { KrxNotConfiguredError, KrxQuotaError } from '../../market-data/application/ports.js';
+import { KRX_FILTER_POLICY_VERSION } from '../../market-data/domain/krx-filter-policy.js';
 import {
   sliceForTimeframe,
   sliceTimeframes,
   type DatasetSlice,
 } from '../../market-data/domain/dataset-slice.js';
-import { kstDateOf } from '../../market-data/domain/kst-date.js';
 import type { StrategyRegistry } from '../../strategy/application/strategy-registry.js';
 import { estimateBars, MAX_BACKTEST_BARS } from '../domain/bar-estimate.js';
 import {
@@ -45,6 +39,11 @@ import type { JobOrchestrator, JobEvent } from '../application/job-orchestrator.
 import type { BacktestJobRow, JobQueue } from '../application/job-queue.js';
 import type { ResultsService } from '../application/results-service.js';
 import { rebaseStoredRequest } from '../application/stored-request.js';
+import {
+  computeRebalanceDates,
+  type ResolvedUniverse,
+  type UniverseRuleResolver,
+} from '../application/universe-rule-resolver.js';
 
 type PreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -53,16 +52,14 @@ export interface BacktestRouteDeps {
   readonly orchestrator: JobOrchestrator;
   readonly results: ResultsService;
   readonly strategies: StrategyRegistry;
-  readonly datasets: DatasetService;
   readonly symbolService: SymbolService;
-  readonly universeSnapshotService: UniverseSnapshotService;
+  /** 유니버스 규칙 → 리밸런스 날짜별 멤버십 일정 (스펙 2026-08-05) */
+  readonly universeRuleResolver: UniverseRuleResolver;
   readonly audit: AuditLogService;
   readonly factRepository: FactRepository;
   readonly dataRoot: string;
   readonly maxQueuedBacktests: number;
   readonly clock: Clock;
-  /** KRX 이용 승인 만료일 — 스냅샷 기반 신규 제출 게이트 (REVIEW §10) */
-  readonly krxApprovalExpiry: string | null;
 }
 
 const MIN_FREE_DISK_BYTES = 500 * 1024 * 1024;
@@ -87,31 +84,11 @@ function availableMemoryBytes(): number {
   return os.freemem();
 }
 
-/**
- * `backtest_jobs.dataset_id`/`backtest_runs.dataset_id` 는 NOT NULL 컬럼이라 스냅샷
- * 경로(Task 12)는 `queue.enqueue` 가 `''` 를 "데이터셋 없음" sentinel 로 저장한다
- * (job-queue.ts 참고). 그 sentinel 이 API 응답까지 새면 클라이언트가 빈 문자열을
- * 데이터셋 id 로 오해한다 — 직렬화 경계에서 null 로 되돌린다.
- */
-function serializedDatasetId(datasetId: string): string | null {
-  return datasetId === '' ? null : datasetId;
-}
-
-/** run 응답도 같은 sentinel 을 갖고 있다 (backtest-child.ts 가 job.datasetId 를 그대로 복사) */
-function serializeRun<T extends { datasetId: string }>(
-  run: T | null,
-): (Omit<T, 'datasetId'> & { datasetId: string | null }) | null {
-  if (!run) return null;
-  return { ...run, datasetId: serializedDatasetId(run.datasetId) };
-}
-
 function serializeJob(job: BacktestJobRow) {
   return {
     id: job.id,
     status: job.status,
     strategyId: job.strategyId,
-    datasetId: serializedDatasetId(job.datasetId),
-    universeSnapshotId: job.universeSnapshotId,
     request: JSON.parse(job.requestJson) as unknown,
     progressBars: job.progressBars,
     totalBars: job.totalBars,
@@ -157,15 +134,33 @@ async function checkResources(dataRoot: string): Promise<string | null> {
   return null;
 }
 
+/**
+ * `UniverseRuleResolver.resolve` (제출 검증·미리보기 공용)는 시총 캐시 미스일 때 KRX 를
+ * 부른다 — `symbol-master-routes.ts` 의 `/symbol-master/sync`·`/backfill` 과 같은
+ * 호출부다. 같은 관례로 매핑한다: 쿼터 초과는 429(사용자가 기다리면 되는 문제), 미설정은
+ * 503(운영이 키를 넣어야 하는 문제). 나머지 오류(분류 불가 등)는 처리하지 않고 그대로
+ * 위로 던져 기본 오류 처리기(500)가 받게 한다.
+ */
+function sendIfKrxError(reply: FastifyReply, error: unknown): boolean {
+  if (error instanceof KrxQuotaError) {
+    reply.code(429).send({ error: error.message });
+    return true;
+  }
+  if (error instanceof KrxNotConfiguredError) {
+    reply.code(503).send({ error: error.message });
+    return true;
+  }
+  return false;
+}
+
 export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRouteDeps, requireAuth: PreHandler): void {
   const {
     queue,
     orchestrator,
     results,
     strategies,
-    datasets,
     symbolService,
-    universeSnapshotService,
+    universeRuleResolver,
     audit,
     factRepository,
   } = deps;
@@ -175,25 +170,26 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    * 요청한 종목 **전부** 가 구간 밖일 때만 거부한다 — 신규 상장처럼 이력이 짧은 종목
    * 하나 때문에 유니버스 전체를 막지 않는다. 일부만 비는 경우는 실행 경고로 남는다.
    *
-   * **데이터셋 경로 전용** — 스냅샷 경로(과거 시점 유니버스)는 정반대 규칙을 쓴다
-   * (`checkSnapshotPeriodCoverage`): 일부만 조용히 제외하면 생존 편향이 재발한다
-   * (REVIEW §9.1). 데이터셋은 "지금 등록된 종목" 이라 신규 상장이 섞여 있는 게
-   * 정상이므로 이 관용이 유지된다.
+   * 옛 데이터셋 경로가 쓰던 관용 그대로다(스펙 2026-08-05) — 유니버스 규칙으로
+   * 재구성한 멤버십도 "지금 이 종목들로 이 기간에 얼마나 소비하나" 는 같은 질문이고,
+   * 신규 상장 등으로 일부 종목만 이력이 짧은 상황이 흔하다. `codes` 는 이제
+   * `body.universe.symbols` 가 아니라 리밸런스 일정의 합집합(unionSymbols)이다.
    */
   const checkPeriodCoverage = (
-    body: BacktestRequest,
+    codes: readonly string[],
     slice: DatasetSlice,
+    period: { from: string; to: string },
   ): string | null => {
-    const { fromTsMs, toTsMs } = periodToTsRange(body.period);
+    const { fromTsMs, toTsMs } = periodToTsRange(period);
     const bySymbol = new Map(
       symbolService
-        .getCoverage(body.universe.symbols)
+        .getCoverage(codes)
         .filter((row) => row.slice === slice)
         .map((row) => [row.code, row]),
     );
 
     const ranges: string[] = [];
-    for (const symbol of body.universe.symbols) {
+    for (const symbol of codes) {
       const row = bySymbol.get(symbol);
       if (!row || row.barCount === 0 || row.firstTsMs === null || row.lastTsMs === null) {
         ranges.push(`${symbol}: 수집된 데이터 없음`);
@@ -208,47 +204,6 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
   };
 
   /**
-   * 스냅샷 경로 전용 기간 커버리지 검사 — `checkPeriodCoverage` 와 정반대다.
-   * 데이터셋은 "지금 등록된 종목" 이라 신규 상장이 섞여도 정상이지만, 과거 시점에
-   * 고정한 유니버스는 그 시점에 "존재했던" 종목들이다 — 그중 하나라도 기간 내 가격이
-   * 없으면 일부만 조용히 빼지 않고 전체를 막는다. 조용히 빼면 그 결측이 우연히도
-   * "부실 종목이라 데이터가 없다" 는 방향으로 쏠릴 수 있고, 그게 곧 생존 편향이다
-   * (REVIEW §9.1).
-   */
-  const checkSnapshotPeriodCoverage = (
-    codes: readonly string[],
-    slice: DatasetSlice,
-    period: { from: string; to: string },
-  ): string | null => {
-    const { fromTsMs, toTsMs } = periodToTsRange(period);
-    const bySymbol = new Map(
-      symbolService
-        .getCoverage(codes)
-        .filter((row) => row.slice === slice)
-        .map((row) => [row.code, row]),
-    );
-
-    const missing: string[] = [];
-    for (const code of codes) {
-      const row = bySymbol.get(code);
-      const hasOverlap =
-        row !== undefined &&
-        row.barCount > 0 &&
-        row.firstTsMs !== null &&
-        row.lastTsMs !== null &&
-        row.lastTsMs >= fromTsMs &&
-        row.firstTsMs <= toTsMs;
-      if (!hasOverlap) missing.push(code);
-    }
-    if (missing.length === 0) return null;
-    return (
-      `선택한 기간에 가격 데이터가 없는 스냅샷 종목이 있습니다: ${missing.join(', ')} — ` +
-      '생존 편향을 막기 위해 일부만 제외하지 않고 전체 유니버스를 차단합니다. ' +
-      '데이터를 동기화하거나 다른 스냅샷·기간을 선택하세요.'
-    );
-  };
-
-  /**
    * 소비 timeframe 해소 + 슬라이스 봉 존재 확인 + 봉 수 상한 검사. 데이터셋·스냅샷
    * 경로가 공유한다 — 유니버스가 어디서 왔든 "이 종목 집합으로 이 기간에 얼마나
    * 소비하나" 는 같은 질문이다. 두 경로가 갈리는 지점은 기간 커버리지 판정 방식뿐이라
@@ -259,7 +214,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     codes: readonly string[],
     errors: string[],
     coverageCheck: (codes: readonly string[], slice: DatasetSlice) => string | null,
-  ): { universe: UniverseSnapshot; timeframe: '1m' | '1h' | '1d' } | null => {
+  ): { universe: ConsumedVersionSnapshot; timeframe: '1m' | '1h' | '1d' } | null => {
     /**
      * 소비 timeframe 검사. 데이터셋에 `defaultTimeframe` 이 없어졌으므로(설계
      * 2026-07-31-symbol-as-first-class) 미지정 요청의 기준을 **데이터에서** 찾는다:
@@ -314,7 +269,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     }
 
     // 제출 시점의 종목 버전 스냅샷을 고정 — 대기 중 동기화가 끼어들어도 어긋나지 않는다 (§9.5)
-    const universe = datasets.universeSnapshotFor(codes, slice);
+    const universe = symbolService.versionSnapshotFor(codes, slice);
 
     // 봉 수 상한 — 실행부는 전체 봉을 메모리에 올린다. 1m 소비를 열면서 생긴 밸브.
     // coverage 는 슬라이스 기준 timeframe 으로 세므로 1m 소비만 배율 60 으로 추정한다.
@@ -337,25 +292,50 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     return { universe, timeframe: consumed };
   };
 
+  /**
+   * 전략 파라미터에서 `rebalanceMonths` 를 읽어 리밸런스 날짜를 만든다 — 그 파라미터가
+   * 없는 전략(예: range-breakout)은 리밸런스가 하나(`period.from`)뿐이라고 본다
+   * (브리프 외 결정, 스펙 2026-08-05). 파라미터가 스키마를 통과하지 못해도(전략 미지정
+   * 등) 여기서는 실패시키지 않는다 — 그 오류는 `validateSubmission` 의 다른 검사가
+   * 이미 잡으므로, 유니버스 해소 자체는 관대한 기본값(1회 리밸런스)으로 계속 진행해
+   * clone-draft 같은 읽기 전용 경로도 unionSymbols 를 얻을 수 있게 한다.
+   */
+  const resolveScheduleForRequest = (body: BacktestRequest): Promise<ResolvedUniverse> => {
+    const paramCheck = strategies.validateParameters(body.strategyId, body.parameters);
+    const rebalanceMonthsRaw =
+      paramCheck.ok && typeof paramCheck.value === 'object' && paramCheck.value !== null
+        ? (paramCheck.value as Record<string, unknown>)['rebalanceMonths']
+        : undefined;
+    const rebalanceDates =
+      typeof rebalanceMonthsRaw === 'number' && Number.isFinite(rebalanceMonthsRaw)
+        ? computeRebalanceDates(body.period, rebalanceMonthsRaw)
+        : [body.period.from];
+    return universeRuleResolver.resolve(body.universeRule, rebalanceDates);
+  };
+
   type ValidationResult =
     | {
         readonly ok: true;
-        readonly universe: UniverseSnapshot;
+        readonly universe: ConsumedVersionSnapshot;
         readonly timeframe: '1m' | '1h' | '1d';
         readonly provenancePin: ProvenancePin;
-        readonly universeSnapshotId: string | null;
+        readonly resolved: ResolvedUniverse;
       }
-    | { readonly ok: false; readonly status: 400 | 404; readonly errors: string[] };
+    | { readonly ok: false; readonly status: 400; readonly errors: string[] }
+    | { readonly ok: false; readonly status: 422; readonly errors: string[]; readonly uncoveredDates: readonly string[] };
 
   /**
    * 제출 검증 — 신규 제출(POST)·복제(clone)·초안(clone-draft)이 동일한 기준을 거친다.
    * 통과 시 제출 시점의 유니버스 버전과 서버 소유 provenance pin(Task 12)을 함께
-   * 반환한다 (재현성 §9.5, REVIEW §9.2). 사유를 모아 반환한다 — 초안(clone-draft)이
-   * 무엇을 고쳐야 하는지 한 번에 알려야 한다. 400 메시지는 `errors[0]` 이므로 검사
-   * 순서가 곧 우선순위다. 스냅샷을 찾지 못하면 404 — 존재 자체가 없는 리소스이므로
-   * "요청이 잘못됐다" 는 400 과는 다른 신호다.
+   * 반환한다 (재현성 §9.5, REVIEW §9.2). 400 메시지는 `errors[0]` 이므로 검사 순서가
+   * 곧 우선순위다.
+   *
+   * 전략·기간·프로파일처럼 요청 자체의 형식 오류는 유니버스 해소(종목 마스터 조회·
+   * 시총 join)보다 먼저 걸러 반환한다 — 어차피 거부할 요청 때문에 KRX 호출 예산을
+   * 쓰지 않기 위해서다. uncovered 리밸런스 날짜(422)는 그다음, 캔들 존재 검증(400)은
+   * 그다음이다(브리프의 ①②③④ 순서).
    */
-  const validateSubmission = (body: BacktestRequest): ValidationResult => {
+  const validateSubmission = async (body: BacktestRequest): Promise<ValidationResult> => {
     const errors: string[] = [];
 
     // 전략 — 파라미터 검증의 전제다
@@ -374,124 +354,6 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       errors.push('기간이 올바르지 않습니다 (from > to)');
     }
 
-    let universe: UniverseSnapshot | null = null;
-    let resolvedTimeframe: '1m' | '1h' | '1d' | null = null;
-    let provenancePin: ProvenancePin | null = null;
-    let universeSnapshotId: string | null = null;
-
-    if (body.universeSnapshotId !== undefined) {
-      // 과거 시점 고정 유니버스 경로 (Task 12) — datasetId 는 이 분기에서 항상 undefined 다 (xor)
-      const snapshot = universeSnapshotService.getSnapshot(body.universeSnapshotId);
-      if (!snapshot) {
-        return {
-          ok: false,
-          status: 404,
-          errors: [`유니버스 스냅샷을 찾을 수 없습니다: ${body.universeSnapshotId}`],
-        };
-      }
-
-      const snapshotCodes = [...snapshot.symbols.map((s) => s.shortCode)].sort();
-      const requestedCodes = [...body.universe.symbols].sort();
-      const symbolsMatch =
-        snapshotCodes.length === requestedCodes.length &&
-        snapshotCodes.every((code, index) => code === requestedCodes[index]);
-      if (!symbolsMatch) {
-        errors.push(
-          '요청한 universe.symbols가 유니버스 스냅샷 구성과 다릅니다. 스냅샷 상세를 다시 조회해 종목을 맞추세요.',
-        );
-      }
-
-      // 승인 만료 게이트 (REVIEW §10) — config 의 현재 만료일 기준. 스냅샷 자체가
-      // 언제 만들어졌는지와 무관하게, 만료 이후의 **신규 실행**을 막는다.
-      const expired =
-        deps.krxApprovalExpiry !== null && kstDateOf(deps.clock.now()) > deps.krxApprovalExpiry;
-      if (expired) {
-        errors.push(
-          `KRX Open API 사용 승인 만료일(${deps.krxApprovalExpiry})이 지나 유니버스 스냅샷 기반 ` +
-            '신규 백테스트를 실행할 수 없습니다.',
-        );
-      }
-
-      // 시점 게이트 (REVIEW §9) — effectiveTradingDate(적용일) 이전 시작은 미래
-      // 정보 유출이다. 그날 세션이 시작될 때는 그날 종가·시가총액 순위를 알 수
-      // 없으므로 같은 날도 막는다. usableFromDate(= effectiveTradingDate + 1일)가
-      // 아니다 — usableFromDate 를 기준으로 삼으면 스펙보다 하루 더 엄격해져
-      // period.from == usableFromDate(사용 가능 첫날)인 정당한 제출까지 막힌다.
-      if (snapshot.effectiveTradingDate >= body.period.from) {
-        errors.push(
-          `적용일 ${snapshot.effectiveTradingDate}는 시작일 ${body.period.from}보다 이전이어야 합니다. ` +
-            '더 이른 스냅샷을 선택하거나 시작일을 늦추세요',
-        );
-      }
-
-      if (symbolsMatch) {
-        const resolved = resolveConsumedUniverse(body, snapshotCodes, errors, (codes, slice) =>
-          checkSnapshotPeriodCoverage(codes, slice, body.period),
-        );
-        if (resolved) {
-          universe = resolved.universe;
-          resolvedTimeframe = resolved.timeframe;
-        }
-      }
-
-      universeSnapshotId = snapshot.id;
-      provenancePin = {
-        sourceKind: 'KRX_HISTORICAL',
-        universeSnapshotId: snapshot.id,
-        requestedDate: snapshot.requestedDate,
-        effectiveTradingDate: snapshot.effectiveTradingDate,
-        usableFromDate: snapshot.usableFromDate,
-        filterPolicyVersion: snapshot.filterPolicyVersion,
-        selectionMethod: snapshot.selectionMethod,
-        selectionHash: snapshot.selectionHash,
-        krxApprovalExpiryDate: deps.krxApprovalExpiry,
-        approvalValidAtSubmit: !expired,
-        timepointWarning: null,
-        symbols: snapshot.symbols,
-      };
-    } else if (body.datasetId !== undefined) {
-      // 데이터셋 — 심볼·버전·커버리지 검사의 전제다
-      const dataset = datasets.getDataset(body.datasetId);
-      if (!dataset) {
-        errors.push(`알 수 없는 데이터셋: ${body.datasetId}`);
-      } else {
-        // 데이터셋에 없는 심볼은 조용히 0 거래로 "성공" 하게 된다 — 제출 시점에 거부
-        const datasetSymbols = new Set(dataset.symbols);
-        const missingSymbols = body.universe.symbols.filter((s) => !datasetSymbols.has(s));
-        if (missingSymbols.length > 0) {
-          errors.push(`데이터셋에 없는 종목입니다: ${missingSymbols.join(', ')}`);
-        }
-        // codes 는 항상 body.universe.symbols 그 자체다 (dataset 경로는 코드를
-        // 스냅샷처럼 다른 집합으로 바꿔 넘기지 않는다) — checkPeriodCoverage 는 기존
-        // 시그니처(body 전체)를 그대로 쓴다.
-        const resolved = resolveConsumedUniverse(body, body.universe.symbols, errors, (_codes, slice) =>
-          checkPeriodCoverage(body, slice),
-        );
-        if (resolved) {
-          universe = resolved.universe;
-          resolvedTimeframe = resolved.timeframe;
-        }
-      }
-      // 데이터셋 경로는 과거 시점 적합성을 보증할 수 없다 — 그 사실 자체를 pin 에 남긴다
-      provenancePin = {
-        sourceKind: 'DATASET',
-        universeSnapshotId: null,
-        requestedDate: null,
-        effectiveTradingDate: null,
-        usableFromDate: null,
-        filterPolicyVersion: null,
-        selectionMethod: null,
-        selectionHash: null,
-        krxApprovalExpiryDate: null,
-        approvalValidAtSubmit: null,
-        timepointWarning: DATASET_TIMEPOINT_WARNING,
-        symbols: null,
-      };
-    } else {
-      // zod 의 xor refine 이 이미 보장하므로 도달하지 않는다 — 방어적 분기
-      errors.push('datasetId 또는 universeSnapshotId 를 지정해야 합니다.');
-    }
-
     if (!getCostProfile(body.execution.commissionProfileId)) {
       errors.push('알 수 없는 수수료 프로파일');
     }
@@ -499,28 +361,72 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       errors.push('알 수 없는 슬리피지 프로파일');
     }
 
-    // universe === null 분기는 죽은 방어 코드가 아니라 타입 내로잉이다 —
-    // 이 분기가 없으면 아래 { ok: true, universe } 반환에서 universe 가
-    // `UniverseSnapshot | null` 로 남아 typecheck 가 깨진다.
-    if (errors.length > 0 || universe === null || resolvedTimeframe === null || provenancePin === null) {
+    if (errors.length > 0) {
+      return { ok: false, status: 400, errors };
+    }
+
+    // ① 유니버스 규칙 → 리밸런스 날짜별 멤버십 일정. 커버 밖 날짜가 있으면 캔들
+    // 검증으로 넘어가지 않고 바로 422 로 알린다 — 종목 구성 자체를 모르는 날짜의
+    // 캔들을 따질 수 없다.
+    const resolved = await resolveScheduleForRequest(body);
+    if (resolved.uncoveredDates.length > 0) {
+      return {
+        ok: false,
+        status: 422,
+        errors: [
+          `종목 마스터가 다음 리밸런스 날짜를 커버하지 않습니다: ${resolved.uncoveredDates.join(', ')} — ` +
+            '데이터 탭에서 해당 날짜를 동기화한 뒤 다시 시도하세요.',
+        ],
+        uncoveredDates: resolved.uncoveredDates,
+      };
+    }
+
+    // ② unionSymbols 캔들 존재 검증 — 옛 데이터셋 분기의 관용(D-025)을 그대로 재사용한다.
+    const universeErrors: string[] = [];
+    const resolvedConsumption = resolveConsumedUniverse(
+      body,
+      resolved.unionSymbols,
+      universeErrors,
+      (codes, slice) => checkPeriodCoverage(codes, slice, body.period),
+    );
+    if (universeErrors.length > 0 || resolvedConsumption === null) {
       return {
         ok: false,
         status: 400,
-        errors: errors.length > 0 ? errors : ['제출을 검증할 수 없습니다'],
+        errors: universeErrors.length > 0 ? universeErrors : ['제출을 검증할 수 없습니다'],
       };
     }
-    return { ok: true, universe, timeframe: resolvedTimeframe, provenancePin, universeSnapshotId };
+
+    // ③ 종목 버전 pin 은 기존 universeJson 메커니즘을 그대로 쓴다 — unionSymbols 기준.
+    // ④ provenancePin — 유니버스 규칙 경로(스펙 2026-08-05)는 늘 이 모양이다.
+    const provenancePin: ProvenancePin = {
+      sourceKind: 'SYMBOL_MASTER',
+      filterPolicyVersion: KRX_FILTER_POLICY_VERSION,
+      selectionMethod: 'TOP_MARKET_CAP_N',
+      scheduleHash: resolved.scheduleHash,
+    };
+
+    return {
+      ok: true,
+      universe: resolvedConsumption.universe,
+      timeframe: resolvedConsumption.timeframe,
+      provenancePin,
+      resolved,
+    };
   };
 
   /**
    * 재무 전략 데이터 요구 검사 — 통과시키면 실행 후 "거래 0건" 으로 끝나 원인을 알 수
    * 없다 (D-025 와 같은 원칙: 조용히 빠지지 않는다). `validateSubmission` 이 만드는
    * `errors` 배열에 합류시키지 않는 이유: 그 배열은 항상 400 으로 변환되는데, 이 조건은
-   * 요청 형식·데이터셋 상태가 아니라 "전략과 데이터셋의 조합" 문제라 422 여야 한다.
+   * 요청 형식·데이터셋 상태가 아니라 "전략과 유니버스의 조합" 문제라 422 여야 한다.
    * POST 신규 제출뿐 아니라 clone·clone-draft 도 같은 검사를 거친다 — 데이터가 제출
    * 이후 지워진 job 을 clone 하면 이 관문에서 다시 걸린다.
    */
-  const checkFundamentalsRequirement = (body: BacktestRequest): string | null => {
+  const checkFundamentalsRequirement = (
+    body: BacktestRequest,
+    unionSymbols: readonly string[],
+  ): string | null => {
     if (!strategies.requiresFundamentals(body.strategyId)) return null;
     /**
      * **전 종목이 비었을 때만** 막는다. 일부 종목만 재무가 없는 경우는 거부 사유가
@@ -528,10 +434,10 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
      * `checkPeriodCoverage` 와 같은 원칙이고(D-025), 빠진 종목은 워커가 실행 경고에
      * **이름으로** 남긴다. 여기서 전부 422 로 바꾸면 그 경고 경로가 죽는다.
      */
-    if (body.universe.symbols.some((code) => factRepository.hasFacts('SYMBOL', code))) return null;
+    if (unionSymbols.some((code) => factRepository.hasFacts('SYMBOL', code))) return null;
     return (
       '이 전략은 상장시점 재무 데이터가 필요하지만 선택한 종목에는 아직 없습니다: ' +
-      `${body.universe.symbols.join(', ')} — 종목 화면에서 해당 종목을 선택해 "재무" 를 함께 ` +
+      `${unionSymbols.join(', ')} — 종목 화면에서 해당 종목을 선택해 "재무" 를 함께 ` +
       '동기화하세요.'
     );
   };
@@ -582,6 +488,61 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     slippageProfiles: listSlippageProfiles(),
   }));
 
+  const universePreviewRequestSchema = z.object({
+    universeRule: universeRuleSchema,
+    period: z.object({
+      from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    }),
+    rebalanceMonths: z.number().int().positive().default(1),
+  });
+
+  /**
+   * unionSymbols 중 이 화면이 아직 실행할 수 없는 종목 — 종목 마스터에는 있지만
+   * (1) 로컬 `symbols` 테이블에 등록돼 있지 않거나 (2) 등록은 됐지만 어느 슬라이스로도
+   * 봉을 하나도 수집하지 않은 경우다. `missingCandleSymbols` 의 정확한 정의는 브리프에
+   * timeframe 을 명시하지만(이 미리보기 요청 바디에는 timeframe 이 없다), 위저드가
+   * 미리보기 단계에서 아직 timeframe 을 고르지 않은 시점에도 쓸 수 있어야 하므로
+   * "어느 슬라이스에도 봉이 없다" 로 일반화한다(브리프 외 결정).
+   */
+  const missingCandleSymbolsOf = (codes: readonly string[]): string[] => {
+    const hasBars = new Set(
+      symbolService
+        .getCoverage(codes)
+        .filter((row) => row.barCount > 0)
+        .map((row) => row.code),
+    );
+    return codes.filter((code) => !symbolService.exists(code) || !hasBars.has(code));
+  };
+
+  app.post('/backtests/universe-preview', { preHandler: requireAuth }, async (request, reply) => {
+    const parsed = universePreviewRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
+      });
+    }
+    const { universeRule, period, rebalanceMonths } = parsed.data;
+    if (period.from > period.to) {
+      return reply.code(400).send({ error: '기간이 올바르지 않습니다 (from > to)' });
+    }
+
+    const rebalanceDates = computeRebalanceDates(period, rebalanceMonths);
+    try {
+      const resolved = await universeRuleResolver.resolve(universeRule, rebalanceDates);
+      return {
+        schedule: resolved.schedule,
+        unionSymbols: resolved.unionSymbols,
+        scheduleHash: resolved.scheduleHash,
+        uncoveredDates: resolved.uncoveredDates,
+        missingCandleSymbols: missingCandleSymbolsOf(resolved.unionSymbols),
+      };
+    } catch (error) {
+      if (sendIfKrxError(reply, error)) return reply;
+      throw error;
+    }
+  });
+
   app.post('/backtests', { preHandler: requireAuth }, async (request, reply) => {
     const parsed = backtestRequestSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -591,12 +552,21 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     }
     const body = parsed.data;
 
-    const validated = validateSubmission(body);
+    let validated: Awaited<ReturnType<typeof validateSubmission>>;
+    try {
+      validated = await validateSubmission(body);
+    } catch (error) {
+      if (sendIfKrxError(reply, error)) return reply;
+      throw error;
+    }
     if (!validated.ok) {
-      return reply.code(validated.status).send({ error: validated.errors[0] ?? '제출을 검증할 수 없습니다' });
+      return reply.code(validated.status).send({
+        error: validated.errors[0] ?? '제출을 검증할 수 없습니다',
+        ...('uncoveredDates' in validated ? { uncoveredDates: validated.uncoveredDates } : {}),
+      });
     }
 
-    const fundamentalsError = checkFundamentalsRequirement(body);
+    const fundamentalsError = checkFundamentalsRequirement(body, validated.resolved.unionSymbols);
     if (fundamentalsError) {
       return reply.code(422).send({ error: fundamentalsError });
     }
@@ -617,15 +587,15 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     // provenancePin 은 여기서 조립한 것 그대로 저장한다 — 클라이언트가 준 값이 아니다.
     const job = queue.enqueue(
       { ...body, timeframe: validated.timeframe },
+      validated.resolved.schedule,
       validated.universe,
       validated.provenancePin,
-      validated.universeSnapshotId,
     );
     audit.record(request.authUser?.username ?? 'admin', 'backtest.created', {
       jobId: job.id,
       strategyId: body.strategyId,
-      datasetId: body.datasetId ?? null,
-      universeSnapshotId: validated.universeSnapshotId,
+      universeRule: body.universeRule,
+      scheduleHash: validated.provenancePin.scheduleHash,
     });
     return reply.code(201).send({ job: serializeJob(job) });
   });
@@ -656,7 +626,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (!job) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
     return {
       job: serializeJob(job),
-      run: serializeRun(results.getRun(id)),
+      run: results.getRun(id),
       metrics: results.getMetrics(id),
       // job 이 제출 시점부터 갖고 있다 — run 완료를 기다릴 필요가 없다 (Task 12).
       // 완료 후에는 backtestRuns.provenancePinJson 에 같은 값이 복사돼 있다.
@@ -686,14 +656,21 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
     const cloneRequest = rebased.request;
     // 재기준 후에도 새 제출이다 — POST 와 동일한 검증 관문을 거치고 버전을 다시 고정한다.
-    // universeSnapshotId 가 있으면 여기서도 스냅샷 존재를 다시 확인한다 — 원본 제출
-    // 이후 스냅샷이 사라졌다면(보존 정책 등) 404 로 명확히 막는다.
-    const validated = validateSubmission(cloneRequest);
+    let validated: Awaited<ReturnType<typeof validateSubmission>>;
+    try {
+      validated = await validateSubmission(cloneRequest);
+    } catch (error) {
+      if (sendIfKrxError(reply, error)) return reply;
+      throw error;
+    }
     if (!validated.ok) {
-      return reply.code(validated.status).send({ error: validated.errors[0] ?? '제출을 검증할 수 없습니다' });
+      return reply.code(validated.status).send({
+        error: validated.errors[0] ?? '제출을 검증할 수 없습니다',
+        ...('uncoveredDates' in validated ? { uncoveredDates: validated.uncoveredDates } : {}),
+      });
     }
 
-    const fundamentalsError = checkFundamentalsRequirement(cloneRequest);
+    const fundamentalsError = checkFundamentalsRequirement(cloneRequest, validated.resolved.unionSymbols);
     if (fundamentalsError) {
       return reply.code(422).send({ error: fundamentalsError });
     }
@@ -712,9 +689,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
 
     const cloned = queue.enqueue(
       { ...cloneRequest, timeframe: validated.timeframe },
+      validated.resolved.schedule,
       validated.universe,
       validated.provenancePin,
-      validated.universeSnapshotId,
     );
     audit.record(request.authUser?.username ?? 'admin', 'backtest.cloned', {
       sourceJobId: id,
@@ -725,7 +702,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
   });
 
   /**
-   * 재설정 및 복제용 초안 (D-025). 읽기 전용 — 대기열에 넣지 않고 데이터셋 버전도 고정하지 않는다.
+   * 재설정 및 복제용 초안 (D-025). 읽기 전용 — 대기열에 넣지 않고 유니버스 버전도 고정하지 않는다.
    * 검증을 **돌리되 막지 않는다**: 여기서 400 으로 끊으면 조건이 틀어진 백테스트를 고칠
    * 화면 자체가 열리지 않는다. 실제 차단은 제출 시점 POST /backtests 가 그대로 지킨다.
    */
@@ -740,9 +717,20 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     );
     if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
 
-    const validated = validateSubmission(rebased.request);
+    let validated: Awaited<ReturnType<typeof validateSubmission>>;
+    let resolvedUniverse: ResolvedUniverse;
+    try {
+      validated = await validateSubmission(rebased.request);
+      // 검증이 실패해도 재무·상한 검사에는 unionSymbols 이 필요하다 — blockers 목록이
+      // 완전하려면 이 값을 다시 구해야 한다. resolve 는 uncovered 여도 예외를 던지지
+      // 않으므로 안전하게 재사용한다.
+      resolvedUniverse = validated.ok ? validated.resolved : await resolveScheduleForRequest(rebased.request);
+    } catch (error) {
+      if (sendIfKrxError(reply, error)) return reply;
+      throw error;
+    }
     const blockers = validated.ok ? [] : [...validated.errors];
-    const fundamentalsError = checkFundamentalsRequirement(rebased.request);
+    const fundamentalsError = checkFundamentalsRequirement(rebased.request, resolvedUniverse.unionSymbols);
     if (fundamentalsError) blockers.push(fundamentalsError);
     const capacityError = checkPositionCapacity(rebased.request);
     if (capacityError) blockers.push(capacityError);
@@ -804,7 +792,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (!job) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
     reply.header('content-disposition', `attachment; filename="backtest-${id}.json"`);
     const fullExport = results.getFullExport(id);
-    return { job: serializeJob(job), ...fullExport, run: serializeRun(fullExport.run) };
+    return { job: serializeJob(job), ...fullExport };
   });
 
   /** SSE 진행률 (스펙 §14). 연결이 끊기면 클라이언트는 polling 으로 fallback 한다. */

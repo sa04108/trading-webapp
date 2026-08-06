@@ -62,7 +62,7 @@ describe('POST /symbols — 단건·일괄 공용 등록', () => {
   it('응답 항목은 목록 계약과 같은 모양이다 — 화면이 두 형태를 다루지 않게', async () => {
     const res = await add(['005930']);
     const [symbol] = res.json().added as Array<Record<string, unknown>>;
-    expect(symbol).toMatchObject({ code: '005930', market: 'KR', hasFacts: false, datasetCount: 0 });
+    expect(symbol).toMatchObject({ code: '005930', market: 'KR', hasFacts: false });
     expect(symbol!.slices).toHaveLength(2);
   });
 

@@ -6,7 +6,6 @@ import {
   type BrokerSyncDeps,
   type FactsJobState,
 } from '../../src/server/modules/market-data/application/broker-sync-service.js';
-import { DatasetService } from '../../src/server/modules/market-data/application/dataset-service.js';
 import { SymbolService } from '../../src/server/modules/market-data/application/symbol-service.js';
 import { symbols as symbolsTable } from '../../src/server/shared/db/schema.js';
 import {
@@ -128,7 +127,6 @@ function buildHarness(
   const repo = new InMemoryCandleRepository();
   const clock = { now: () => Date.UTC(2026, 6, 8, 12, 0) }; // 2026-07-08 수요일 21:00 KST
   const symbolService = new SymbolService(handle.db, repo, clock, logger, noopAudit);
-  const datasetService = new DatasetService(handle.db, symbolService, clock, noopAudit);
   const notified: Array<{ severity: string; title: string; body: string; link: string }> = [];
   const sync = new BrokerSyncService({
     db: handle.db,
@@ -149,7 +147,7 @@ function buildHarness(
     // 구 createBrokerDataset 처럼 중복을 접고 정렬해 돌려준다
     return [...new Set(codes)].sort();
   };
-  return { db: handle.db, repo, symbolService, datasetService, sync, clock, seed, notified };
+  return { db: handle.db, repo, symbolService, sync, clock, seed, notified };
 }
 
 type Harness = ReturnType<typeof buildHarness>;
@@ -832,60 +830,3 @@ describe('종목 등록 (구 createBrokerDataset)', () => {
   });
 });
 
-describe('DatasetService.updateSymbols (참조 밸브)', () => {
-  it('참조만 바꾸고 봉은 건드리지 않는다 — 데이터는 종목 소관이다', async () => {
-    const source = new FakeSource(minutes('005930', 10));
-    const { repo, seed, symbolService, datasetService, sync } = buildHarness(source);
-    const codes = seed(['005930'], 'KR');
-    await sync.startSync(codes, { slice: '1m' }).done;
-    seed(['000660'], 'KR');
-    const dataset = datasetService.createDataset('ds', codes);
-
-    const updated = datasetService.updateSymbols(dataset.id, {
-      add: ['000660'],
-      remove: ['005930'],
-    });
-
-    expect(updated.symbols).toEqual(['000660']);
-    // 참조에서 빠져도 봉은 남는다 — 다른 데이터셋이 같은 종목을 참조할 수 있고,
-    // 재추가 시 이어받기가 공짜다
-    expect(repo.all('1m').length).toBeGreaterThan(0);
-    expect(symbolService.getSymbol('005930')).not.toBeNull();
-  });
-
-  it('종목이 0개가 되는 편집과 등록되지 않은 종목 참조를 거부한다', () => {
-    const { seed, datasetService } = buildHarness(new FakeSource([]));
-    const codes = seed(['005930'], 'KR');
-    const dataset = datasetService.createDataset('ds', codes);
-    expect(() => datasetService.updateSymbols(dataset.id, { remove: ['005930'] })).toThrow(
-      /최소 1개/,
-    );
-    expect(() => datasetService.updateSymbols(dataset.id, { add: ['000660'] })).toThrow(
-      /등록되지 않은/,
-    );
-    expect(() => datasetService.updateSymbols('ds_missing', { add: ['005930'] })).toThrow(
-      /찾을 수 없/,
-    );
-  });
-});
-
-describe('DatasetService.deleteDataset — 참조만 끊는다', () => {
-  it('데이터셋을 지워도 종목의 봉과 수집 상태는 남는다', async () => {
-    const source = new FakeSource(minutes('005930', 10));
-    const { db, repo, seed, symbolService, datasetService, sync } = buildHarness(source);
-    const codes = seed(['005930'], 'KR');
-    await sync.startSync(codes, { slice: '1m' }).done;
-    const dataset = datasetService.createDataset('ds', codes);
-    expect(repo.all('1m').length).toBeGreaterThan(0);
-
-    datasetService.deleteDataset(dataset.id);
-
-    expect(datasetService.getDataset(dataset.id)).toBeNull();
-    // 종전에는 여기서 Parquet 파티션이 재귀 삭제됐다. 이제 봉은 종목에 매달려 있어
-    // 데이터셋 삭제가 건드리지 않는다 — 다른 데이터셋이 같은 종목을 참조할 수 있다.
-    expect(repo.all('1m').length).toBeGreaterThan(0);
-    expect(symbolService.getSymbol('005930')).not.toBeNull();
-    const state = db.select().from(symbolSlices).where(eq(symbolSlices.code, '005930')).all();
-    expect(state.length).toBeGreaterThan(0);
-  });
-});

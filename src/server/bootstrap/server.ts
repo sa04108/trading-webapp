@@ -15,11 +15,11 @@ import {
   createRequireAuth,
   registerAuthRoutes,
 } from '../modules/auth/presentation/auth-routes.js';
-import { registerDatasetRoutes } from '../modules/market-data/presentation/dataset-routes.js';
+import { registerSymbolRoutes } from '../modules/market-data/presentation/symbol-routes.js';
 import { registerStrategyRoutes } from '../modules/strategy/presentation/strategy-routes.js';
 import { registerBacktestRoutes } from '../modules/backtest/presentation/backtest-routes.js';
 import { registerNotificationRoutes } from '../modules/notification/presentation/notification-routes.js';
-import { registerUniverseRoutes } from '../modules/market-data/presentation/universe-routes.js';
+import { registerSymbolMasterRoutes } from '../modules/market-data/presentation/symbol-master-routes.js';
 
 function resolvePublicDir(): string | null {
   // 빌드 후: dist/server/bootstrap → dist/public.
@@ -64,17 +64,14 @@ export async function buildServer(container: Container): Promise<FastifyInstance
     async (api) => {
       registerSystemRoutes(api, container, requireAuth);
       registerAuthRoutes(api, authDeps);
-      registerDatasetRoutes(
+      registerSymbolRoutes(
         api,
-        container.datasetService,
         container.symbolService,
         container.brokerSyncService,
         container.symbolInfoService,
         container.symbolMetricsService,
-        (datasetId: string) => container.jobQueue.activeCountForDataset(datasetId) > 0,
         container.factsSyncEstimator,
         () => container.factRepository.symbolsWithFacts(),
-        () => container.historicalUniverseService.currentShortCodes(),
         requireAuth,
       );
       registerStrategyRoutes(api, container.strategyRegistry, requireAuth);
@@ -85,32 +82,39 @@ export async function buildServer(container: Container): Promise<FastifyInstance
           orchestrator: container.jobOrchestrator,
           results: container.resultsService,
           strategies: container.strategyRegistry,
-          datasets: container.datasetService,
           symbolService: container.symbolService,
-          universeSnapshotService: container.universeSnapshotService,
+          universeRuleResolver: container.universeRuleResolver,
           audit: container.auditLog,
           factRepository: container.factRepository,
           dataRoot: container.config.dataRoot,
           maxQueuedBacktests: container.config.maxQueuedBacktests,
           clock: container.clock,
-          krxApprovalExpiry: container.config.krxApprovalExpiry,
         },
         requireAuth,
       );
       registerNotificationRoutes(api, container.notificationService, requireAuth);
-      registerUniverseRoutes(
+      registerSymbolMasterRoutes(
         api,
-        container.historicalUniverseService,
-        container.universeSnapshotService,
+        { service: container.symbolMasterService, backfill: container.symbolMasterBackfill },
         requireAuth,
-        {
-          approvalExpiry: container.config.krxApprovalExpiry,
-          todayCallCount: container.krxTodayCallCount,
-        },
       );
     },
     { prefix: '/api/v1' },
   );
+
+  // 종목 마스터 일일 동기화 스케줄러 — JobOrchestrator 와 달리 이 타이머는 여기 server.ts
+  // 에서 직접 잡는다(스케줄러 자체는 내부 타이머를 두지 않는다). unref() 로 테스트·CLI
+  // 종료를 막지 않게 하고, onClose 훅으로 정리한다 — JobOrchestrator 의 pruneTimer 와
+  // 같은 테스트 안전 패턴이다.
+  const symbolMasterSchedulerTimer = setInterval(
+    () => void container.symbolMasterScheduler.tick(),
+    3_600_000,
+  );
+  symbolMasterSchedulerTimer.unref();
+  app.addHook('onClose', (_instance, done) => {
+    clearInterval(symbolMasterSchedulerTimer);
+    done();
+  });
 
   app.setErrorHandler((error: FastifyError, request, reply) => {
     request.log.error({ err: error }, 'request failed');

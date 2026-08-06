@@ -1,17 +1,22 @@
 // 확장자 .js 는 실수가 아니다 — tests/unit/prefill.test.ts 가 이 모듈을 import 해
-// tsconfig.server.json 의 NodeNext 프로그램에 편입되는데, 거기서는 확장자 없는
-// 상대 import 가 에러다 (tests/unit/api-client.test.ts 와 같은 이유). 따라서 이
+// tsconfig.server.json 의 NodeNext 프로그램에 편입되는데, 거기서는 확장자 없는 상대
+// import 가 에러다 (tests/unit/api-client.test.ts 와 같은 이유). 따라서 이
 // 모듈은 계속 DOM 을 쓰지 않고 별칭(@/) import 도 쓰지 않아야 한다.
+import type { UniverseRule } from '../../../shared/schemas/universe-rule.js';
 import type { BacktestRequestBody } from './types.js';
 
-/** 위저드 입력 상태 — 폼이므로 전부 문자열로 보관한다 */
+/** 위저드 입력 상태 — 폼이므로 전부 문자열로 보관한다 (universeRule 은 예외다, 아래 참고) */
 export interface WizardFormState {
   strategyId: string | null;
   parameters: Record<string, string>;
-  datasetId: string | null;
-  /** 소비 봉 주기 — '' 는 데이터셋 기본 */
+  /** 소비 봉 주기 — '' 는 유니버스 기본 */
   timeframe: string;
-  symbols: string[];
+  /**
+   * 유니버스 규칙 (스펙 2026-08-05) — 문자열로 흩어 두지 않는다. 시장·상위 N 은 이미
+   * `UniverseRuleStep` 이 유효한 값만 커밋하는 controlled 값이라, 여기서 다시 문자열로
+   * 풀었다 파싱하면 그 유효성 보장이 두 곳에서 따로 반복된다.
+   */
+  universeRule: UniverseRule;
   from: string;
   to: string;
   initialCash: string;
@@ -24,13 +29,18 @@ export interface WizardFormState {
 /** 지금 고를 수 있는 것들 — 사라진 참조를 판정하는 기준 */
 export interface PrefillCatalog {
   strategyIds: readonly string[];
-  datasets: readonly { id: string; symbols: string[] }[];
 }
 
 /**
  * 저장된 요청을 위저드 폼 상태로 옮긴다 (D-025).
- * 원본이 가리키는 전략·데이터셋·종목이 그 사이 사라질 수 있다 — 조용히 통과시키면
- * 사용자가 모르고 제출한다. 없는 참조는 비우고 무엇이 빠졌는지 notes 로 알린다.
+ *
+ * 원본이 가리키는 전략이 그 사이 사라질 수 있다 — 조용히 통과시키면 사용자가 모르고
+ * 제출한다. 없는 전략은 비우고 무엇이 빠졌는지 notes 로 알린다.
+ *
+ * 유니버스는 더 이상 참조가 아니라 규칙(`universeRule`)이라 "사라짐" 이 없다 — 시장·
+ * 상위 N 은 그 자체로 완결된 값이고, 실제 종목 구성은 위저드가 유니버스 단계에서 다시
+ * 미리보기해야 얻는다(제출 시점에 서버가 새로 재구성하므로, 프리필이 옛 종목 목록을
+ * 들고 있어도 의미가 없다).
  */
 export function requestToFormState(
   request: BacktestRequestBody,
@@ -43,19 +53,6 @@ export function requestToFormState(
     notes.push(`전략 ${request.strategyId} 이 더 이상 등록돼 있지 않습니다 — 다시 고르세요.`);
   }
 
-  const dataset = catalog.datasets.find((d) => d.id === request.datasetId) ?? null;
-  let symbols: string[] = [];
-  if (!dataset) {
-    notes.push('원본 데이터셋이 더 이상 없습니다 — 다시 고르세요.');
-  } else {
-    const available = new Set(dataset.symbols);
-    symbols = request.universe.symbols.filter((s: string) => available.has(s));
-    const dropped = request.universe.symbols.filter((s: string) => !available.has(s));
-    if (dropped.length > 0) {
-      notes.push(`데이터셋에서 사라진 종목을 제외했습니다: ${dropped.join(', ')}`);
-    }
-  }
-
   return {
     state: {
       strategyId: strategyExists ? request.strategyId : null,
@@ -65,9 +62,8 @@ export function requestToFormState(
             Object.entries(request.parameters).map(([key, value]) => [key, String(value)]),
           )
         : {},
-      datasetId: dataset?.id ?? null,
       timeframe: request.timeframe ?? '',
-      symbols,
+      universeRule: request.universeRule,
       from: request.period.from,
       to: request.period.to,
       initialCash: String(request.capital.initialCash),

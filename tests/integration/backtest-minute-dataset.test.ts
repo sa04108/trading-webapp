@@ -6,7 +6,8 @@ import { KR_SESSION } from '../../src/server/modules/market-data/domain/exchange
 import { symbolCoverage } from '../../src/server/shared/db/schema.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
-import { seedDataset } from '../helpers/seed.js';
+import { registerSymbols } from '../helpers/seed.js';
+import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 
 const DAY = 86_400_000;
 const MINUTE = 60_000;
@@ -14,7 +15,23 @@ const MINUTE = 60_000;
 /**
  * 백테스트 1분봉 소비 (설계 2026-07-29-backtest-timeframe-design.md).
  * 요청의 timeframe 필드가 소비 봉을 결정한다 — 미지정은 기존 동작(데이터셋 timeframe).
+ *
+ * 유니버스는 이제 데이터셋이 아니라 유니버스 규칙이 정한다(스펙 2026-08-05). 005930 을
+ * KOSPI, 000660 을 KOSDAQ 으로 마스터에 등록해 둔다 — markets 필터 하나로 두 종목을
+ * 서로 배타적으로 골라낼 수 있어(옛 "데이터셋을 바꿔 낀다" 자리), 시총 순위를 신경 쓸
+ * 필요가 없다.
  */
+
+/** 이 파일이 쓰는 유일한 기간의 시작일 — range-breakout 은 rebalanceMonths 가 없어 리밸런스가 하나뿐이다 */
+const MASTER_DATE = '2026-05-31';
+
+function kospiRule(): BacktestRequest['universeRule'] {
+  return { markets: ['KOSPI'], topN: 1, sortKey: 'MKTCAP' };
+}
+
+function kosdaqRule(): BacktestRequest['universeRule'] {
+  return { markets: ['KOSDAQ'], topN: 1, sortKey: 'MKTCAP' };
+}
 
 /** 평일 1분봉 (KST 09:00~15:30 = UTC 00:00~06:30, 하루 390봉) — 돌파·급락 반복 */
 function buildMinuteCandles(weekdays: number): Candle[] {
@@ -49,7 +66,7 @@ function buildMinuteCandles(weekdays: number): Candle[] {
   return candles;
 }
 
-function buildRequest(datasetId: string, timeframe?: '1m' | '1h' | '1d'): BacktestRequest {
+function buildRequest(timeframe?: '1m' | '1h' | '1d'): BacktestRequest {
   return {
     strategyId: 'range-breakout',
     parameters: {
@@ -59,9 +76,8 @@ function buildRequest(datasetId: string, timeframe?: '1m' | '1h' | '1d'): Backte
       takeProfitAtrMultiplier: 3,
       riskPerTradePercent: 2,
     },
-    datasetId,
+    universeRule: kospiRule(),
     ...(timeframe !== undefined ? { timeframe } : {}),
-    universe: { type: 'SYMBOLS', symbols: ['005930'] },
     period: { from: '2026-05-31', to: '2026-06-27' },
     capital: { initialCash: 10_000_000, currency: 'KRW' },
     execution: {
@@ -85,7 +101,6 @@ async function waitFor(condition: () => boolean, timeoutMs: number): Promise<voi
 describe('백테스트 1분봉 소비', () => {
   let ctx: TestApp;
   let cookie: string;
-  let datasetId: string;
   let minuteCandles: Candle[];
   let hourlyCandles: Candle[];
 
@@ -99,17 +114,18 @@ describe('백테스트 1분봉 소비', () => {
     });
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
 
-    // 1m 수집이 만드는 상태를 재현: timeframe=1h 데이터셋 + 1m 원본 + 1h 집계 파티션
-    const dataset = seedDataset(ctx.container, 'kr-minute-v1', 'KR', ['005930']);
-    datasetId = dataset.id;
+    // 1m 수집이 만드는 상태를 재현: 로컬 종목 등록 + 1m 원본 + 1h 집계 파티션
+    registerSymbols(ctx.container, 'KR', ['005930', '000660']);
+    seedSymbolMasterUniverse(ctx.container, [MASTER_DATE], [
+      { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
+      { standardCode: 'KR7000660001', shortCode: '000660', name: 'SK하이닉스', market: 'KOSDAQ', marketCapKrw: '400000000000000' },
+    ]);
     minuteCandles = buildMinuteCandles(15);
     hourlyCandles = aggregateToHourly(minuteCandles, KR_SESSION);
     await ctx.container.candleRepository.saveCandles(minuteCandles);
     await ctx.container.candleRepository.saveCandles(hourlyCandles);
-    for (const code of dataset.symbols) {
-      await ctx.container.symbolService.refreshCoverage(code, 'KR', '1m');
-      ctx.container.symbolService.bumpVersion(code, '1m', 'broker:seed', Date.now());
-    }
+    await ctx.container.symbolService.refreshCoverage('005930', 'KR', '1m');
+    ctx.container.symbolService.bumpVersion('005930', '1m', 'broker:seed', Date.now());
   });
 
   afterEach(async () => {
@@ -134,7 +150,7 @@ describe('백테스트 1분봉 소비', () => {
   }
 
   it('timeframe=1m 요청은 1분봉 전체를 소비한다', { timeout: 90_000 }, async () => {
-    const jobId = await runToTerminal(buildRequest(datasetId, '1m'));
+    const jobId = await runToTerminal(buildRequest('1m'));
     const job = ctx.container.jobQueue.getJob(jobId)!;
     expect(job.error).toBeNull();
     expect(job.status).toBe('COMPLETED');
@@ -143,7 +159,7 @@ describe('백테스트 1분봉 소비', () => {
   });
 
   it('timeframe 미지정은 기존 동작 그대로 데이터셋 timeframe(1h)을 소비한다', { timeout: 90_000 }, async () => {
-    const jobId = await runToTerminal(buildRequest(datasetId));
+    const jobId = await runToTerminal(buildRequest());
     const job = ctx.container.jobQueue.getJob(jobId)!;
     expect(job.error).toBeNull();
     expect(job.status).toBe('COMPLETED');
@@ -156,7 +172,7 @@ describe('백테스트 1분봉 소비', () => {
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
-      payload: buildRequest(datasetId, '1d'),
+      payload: buildRequest('1d'),
     });
     expect(wrongTf.statusCode).toBe(400);
     // 1h 데이터셋의 슬라이스는 1m 뿐이다 — 1d 슬라이스 자체가 없다는 원인을 정확히 말해야 한다
@@ -166,9 +182,9 @@ describe('백테스트 1분봉 소비', () => {
     /**
      * 봉 보유는 이제 **종목**의 속성이다 (D-034) — "이 데이터셋은 1m 을 제공하지 않는다"
      * 라는 개념 자체가 없다. 그래서 일봉만 가진 **별도 종목**으로 검증한다: 그 종목을
-     * 유니버스로 1m 을 요청하면 "아직 1m 데이터가 없다" 가 나와야 한다.
+     * 유니버스로 1m 을 요청하면 "아직 1m 데이터가 없다" 가 나와야 한다. markets:['KOSDAQ']
+     * 로 000660 만 골라 데이터셋을 바꿔 끼우던 옛 자리를 대신한다.
      */
-    const daily = seedDataset(ctx.container, 'kr-daily-guard', 'KR', ['000660']);
     await ctx.container.candleRepository.saveCandles(
       [0, 1, 2, 3, 4].map((i) => ({
         symbol: '000660',
@@ -182,18 +198,16 @@ describe('백테스트 1분봉 소비', () => {
         volume: 1_000_000,
       })),
     );
-    for (const code of daily.symbols) {
-      await ctx.container.symbolService.refreshCoverage(code, 'KR', '1d');
-      ctx.container.symbolService.bumpVersion(code, '1d', 'broker:seed', Date.now());
-    }
+    await ctx.container.symbolService.refreshCoverage('000660', 'KR', '1d');
+    ctx.container.symbolService.bumpVersion('000660', '1d', 'broker:seed', Date.now());
 
     const minuteOnDaily = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
       payload: {
-        ...buildRequest(daily.id, '1m'),
-        universe: { type: 'SYMBOLS', symbols: ['000660'] },
+        ...buildRequest('1m'),
+        universeRule: kosdaqRule(),
       },
     });
     expect(minuteOnDaily.statusCode).toBe(400);
@@ -220,7 +234,7 @@ describe('백테스트 1분봉 소비', () => {
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
-      payload: buildRequest(datasetId, '1m'),
+      payload: buildRequest('1m'),
     });
     expect(rejected.statusCode).toBe(400);
     expect(JSON.stringify(rejected.json())).toContain('봉');
@@ -230,7 +244,7 @@ describe('백테스트 1분봉 소비', () => {
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
-      payload: buildRequest(datasetId, '1h'),
+      payload: buildRequest('1h'),
     });
     expect(accepted.statusCode).toBe(201);
   });

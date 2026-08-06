@@ -16,6 +16,6 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["src/server", "src/workers", "src/shared", "tests"],
+  "include": ["src/server", "src/workers", "src/shared", "scripts", "tests"],
   "exclude": ["tests/e2e"]
 }

@@ -26,13 +26,9 @@ import {
   createSqliteUserRepository,
 } from '../modules/auth/infrastructure/sqlite-repositories.js';
 import { BrokerSyncService } from '../modules/market-data/application/broker-sync-service.js';
-import {
-  DatasetService,
-  type FactsSyncEstimate,
-} from '../modules/market-data/application/dataset-service.js';
 import { SymbolInfoService } from '../modules/market-data/application/symbol-info-service.js';
 import { SymbolMetricsService } from '../modules/market-data/application/symbol-metrics-service.js';
-import { SymbolService } from '../modules/market-data/application/symbol-service.js';
+import { SymbolService, type FactsSyncEstimate } from '../modules/market-data/application/symbol-service.js';
 import type { CandleRepository } from '../modules/market-data/application/ports.js';
 import { createTossMarketDataSource } from '../modules/broker/infrastructure/toss/toss-market-data-source.js';
 import { DuckDbService } from '../modules/market-data/infrastructure/duckdb-service.js';
@@ -47,10 +43,11 @@ import { SqliteFactCoverageStore } from '../modules/facts/application/fact-cover
 import { FactSyncService } from '../modules/facts/application/fact-sync-service.js';
 import { createDartFactSource } from '../modules/facts/infrastructure/dart/dart-fact-source.js';
 import { ParquetFactRepository } from '../modules/facts/infrastructure/parquet-fact-repository.js';
-import { OperatingIncomeSortSource } from '../modules/facts/application/operating-income-sort-source.js';
-import { HistoricalUniverseService } from '../modules/market-data/application/historical-universe-service.js';
-import { UniverseSnapshotService } from '../modules/market-data/application/universe-snapshot-service.js';
 import { createKrxHistoricalUniverseSource } from '../modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
+import { SymbolMasterService } from '../modules/market-data/application/symbol-master-service.js';
+import { SymbolMasterBackfill } from '../modules/market-data/application/symbol-master-backfill.js';
+import { SymbolMasterScheduler } from '../modules/market-data/application/symbol-master-scheduler.js';
+import { UniverseRuleResolver } from '../modules/backtest/application/universe-rule-resolver.js';
 
 export interface SystemStatusProviders {
   queueLength: () => number;
@@ -75,7 +72,6 @@ export interface Container {
   readonly authService: AuthService;
   readonly duckdb: DuckDbService;
   readonly candleRepository: CandleRepository;
-  readonly datasetService: DatasetService;
   readonly symbolService: SymbolService;
   readonly brokerSyncService: BrokerSyncService;
   readonly symbolInfoService: SymbolInfoService;
@@ -87,10 +83,10 @@ export interface Container {
   readonly factRepository: FactRepository;
   readonly factSyncService: FactSyncService;
   readonly factsSyncEstimator: (codes: readonly string[]) => FactsSyncEstimate;
-  readonly historicalUniverseService: HistoricalUniverseService;
-  readonly universeSnapshotService: UniverseSnapshotService;
-  /** KRX 오늘자 논리 호출 수 — status 라우트가 쓴다. 어댑터가 실제 카운터를 쥐고 있다. */
-  readonly krxTodayCallCount: () => number;
+  readonly symbolMasterService: SymbolMasterService;
+  readonly symbolMasterBackfill: SymbolMasterBackfill;
+  readonly symbolMasterScheduler: SymbolMasterScheduler;
+  readonly universeRuleResolver: UniverseRuleResolver;
   close(): void;
 }
 
@@ -180,9 +176,9 @@ export function createContainer(config: AppConfig): Container {
     memoryLimit: config.duckdbMemoryLimit,
   });
   const candleRepository = new ParquetCandleRepository(config.dataRoot, duckdb);
-  // 종목이 데이터 소관, 데이터셋은 그 참조 묶음 (설계 2026-07-31-symbol-as-first-class).
-  // DatasetService 가 SymbolService 에 의존하는 방향이다 — 버전 스냅샷을 만들 때 종목별
-  // 버전을 읽어야 하고, 그 반대 방향(종목이 데이터셋을 아는 것)은 필요하지 않다.
+  // 종목이 데이터 소관이다 (설계 2026-07-31-symbol-as-first-class). 백테스트 버전 pin
+  // (§9.5)은 SymbolService.versionSnapshotFor 가 직접 낸다 — 구 DatasetService 는
+  // 데이터셋·스냅샷 개념과 함께 제거됐다(스펙 2026-08-05, Task 6).
   const symbolService = new SymbolService(
     database.db,
     candleRepository,
@@ -190,7 +186,6 @@ export function createContainer(config: AppConfig): Container {
     logger,
     auditLog,
   );
-  const datasetService = new DatasetService(database.db, symbolService, clock, auditLog);
 
   // 재무(facts) 블록은 brokerSyncService 보다 **앞에** 온다. BrokerSyncDeps 는 생성 시
   // 고정이므로 factsPhase 가 그때 이미 있어야 한다 — 반대로 brokerSyncService 를 뒤로
@@ -276,9 +271,11 @@ export function createContainer(config: AppConfig): Container {
     );
   }
 
-  // KRX 과거 시점 고정 유니버스 (설계 2026-08-03-krx-historical-universe). API 키
-  // 미설정이면 어댑터가 포트 에러를 던지는 비활성 소스가 된다 — 다른 데이터 경로와
-  // 같은 패턴(§2.4 조립부 전용 지식)이다.
+  // KRX 과거 시점 조회 (설계 2026-08-03-krx-historical-universe). API 키 미설정이면
+  // 어댑터가 포트 에러를 던지는 비활성 소스가 된다 — 다른 데이터 경로와 같은 패턴
+  // (§2.4 조립부 전용 지식). 과거 손으로 스냅샷을 확정하던 화면(데이터셋·유니버스
+  // 스냅샷, 스펙 2026-08-05 Task 6 가 제거)은 사라졌고, 지금은 종목 마스터가 이
+  // 소스를 직접 쓴다.
   const krxSource = createKrxHistoricalUniverseSource(
     config.krxApiKey
       ? { baseUrl: config.krxBaseUrl, apiKey: config.krxApiKey, approvalExpiry: config.krxApprovalExpiry }
@@ -286,22 +283,30 @@ export function createContainer(config: AppConfig): Container {
     clock,
     logger,
   );
-  const historicalUniverseService = new HistoricalUniverseService({
-    source: krxSource,
-    configured: config.krxApiKey !== null,
-    approvalExpiry: config.krxApprovalExpiry,
-    sortValueSource: new OperatingIncomeSortSource(factRepository),
-    clock,
-    logger,
-  });
-  const universeSnapshotService = new UniverseSnapshotService({
+
+  // 종목 마스터 (설계 2026-08-05-symbol-master-core).
+  const symbolMasterService = new SymbolMasterService({
     db: database.db,
-    universe: historicalUniverseService,
+    source: krxSource,
     clock,
-    audit: auditLog,
     logger,
-    approvalExpiry: config.krxApprovalExpiry,
   });
+  const symbolMasterBackfill = new SymbolMasterBackfill({
+    service: symbolMasterService,
+    source: krxSource,
+    clock,
+    logger,
+    dailyCallBudget: config.krxDailyCallBudget,
+  });
+  const symbolMasterScheduler = new SymbolMasterScheduler({
+    service: symbolMasterService,
+    backfill: symbolMasterBackfill,
+    clock,
+    logger,
+  });
+  // 유니버스 규칙(시총 상위 N) → 리밸런스 날짜별 멤버십 일정 (스펙 2026-08-05) —
+  // 백테스트 제출·미리보기가 공유한다.
+  const universeRuleResolver = new UniverseRuleResolver({ symbolMaster: symbolMasterService, logger });
 
   const jobQueue = new JobQueue(database, clock);
   const jobOrchestrator = new JobOrchestrator(jobQueue, config, logger, auditLog, clock);
@@ -334,7 +339,6 @@ export function createContainer(config: AppConfig): Container {
     authService,
     duckdb,
     candleRepository,
-    datasetService,
     symbolService,
     brokerSyncService,
     symbolInfoService,
@@ -346,9 +350,10 @@ export function createContainer(config: AppConfig): Container {
     factRepository,
     factSyncService,
     factsSyncEstimator,
-    historicalUniverseService,
-    universeSnapshotService,
-    krxTodayCallCount: () => krxSource.todayCallCount(),
+    symbolMasterService,
+    symbolMasterBackfill,
+    symbolMasterScheduler,
+    universeRuleResolver,
     close: () => {
       clearInterval(pruneTimer);
       jobOrchestrator.stop();

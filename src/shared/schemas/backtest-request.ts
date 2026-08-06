@@ -1,7 +1,5 @@
 import { z } from 'zod';
-import { MAX_UNIVERSE_SYMBOLS } from './universe-limit.js';
-
-export { MAX_UNIVERSE_SYMBOLS };
+import { universeRuleSchema } from './universe-rule.js';
 
 /**
  * 백테스트 요청 (스펙 §15) — 웹과 서버가 공유하는 계약.
@@ -14,56 +12,43 @@ export { MAX_UNIVERSE_SYMBOLS };
  *
  * 이 필드가 있던 시절의 저장된 요청은 그대로 파싱된다 — z.object 는 모르는 키를 버린다.
  *
- * `datasetId` xor `universeSnapshotId` (Task 12). 유니버스가 "지금 등록된 종목 집합"
- * (datasetId)인지 "과거 어느 시점에 고정된 KRX 유니버스" (universeSnapshotId)인지는
- * 섞일 수 없다 — 둘 다 있으면 어느 쪽을 신뢰할지 서버가 임의로 골라야 하고, 둘 다
- * 없으면 실행할 유니버스가 없다. `datasetId` 만 있던 시절의 저장된 요청은 그대로
- * 통과한다.
+ * `universeRule` (스펙 2026-08-05) — `datasetId`/`universeSnapshotId`/`universe` 를
+ * 대신한다. 유니버스를 "지금 등록된 종목 집합"이나 "과거 어느 시점에 손으로 고정한
+ * 스냅샷"으로 들고 다니는 대신, 시총 상위 N 같은 **규칙**만 담는다 — 실제 종목 구성은
+ * 제출 시점에 서버가 종목 마스터로 리밸런스 날짜별로 재구성해 잡에 pin 한다
+ * (`UniverseRuleResolver`). 옛 필드로 저장된 요청은 이 스키마로 파싱되지 않는다 —
+ * 기존 백테스트 잡·런 데이터는 이 변경과 함께 마이그레이션이 정리한다(보존 대상 아님).
  */
-export const backtestRequestSchema = z
-  .object({
-    strategyId: z.string().min(1),
-    parameters: z.record(z.string(), z.unknown()),
-    datasetId: z.string().min(1).optional(),
-    /** 과거 시점 고정 유니버스 참조 (설계 2026-08-03-krx-historical-universe, Task 12) */
-    universeSnapshotId: z.string().min(1).optional(),
-    /**
-     * 소비 봉 주기 (설계 2026-07-29-backtest-timeframe-design.md).
-     * 미지정 = 데이터셋 timeframe (기존 동작). optional 인 이유: 이 필드가 없던
-     * 시절의 저장된 요청(복제·재실행)이 현재 스키마로도 파싱돼야 한다.
-     */
-    timeframe: z.enum(['1m', '1h', '1d']).optional(),
-    universe: z.object({
-      type: z.literal('SYMBOLS'),
-      /** 상한의 근거는 `MAX_UNIVERSE_SYMBOLS` 주석에 있다 */
-      symbols: z
-        .array(z.string().regex(/^[A-Za-z0-9._-]{1,20}$/))
-        .min(1)
-        .max(MAX_UNIVERSE_SYMBOLS),
-    }),
-    period: z.object({
-      from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-      to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    }),
-    capital: z.object({
-      initialCash: z.number().positive(),
-      currency: z.literal('KRW'),
-    }),
-    execution: z.object({
-      fillTiming: z.literal('NEXT_BAR_OPEN'),
-      commissionProfileId: z.string().min(1),
-      slippageProfileId: z.string().min(1),
-    }),
-    /** 엔진 리스크 상한 (§9.2-6) — 전략 파라미터가 아니라 요청의 명시 필드다 */
-    risk: z.object({
-      maxPositions: z.number().int().min(1).max(20),
-    }),
-    randomSeed: z.number().int().nonnegative().default(42),
-  })
-  .refine((value) => (value.datasetId !== undefined) !== (value.universeSnapshotId !== undefined), {
-    message: 'datasetId와 universeSnapshotId 중 정확히 하나를 지정해야 합니다.',
-    path: ['datasetId'],
-  });
+export const backtestRequestSchema = z.object({
+  strategyId: z.string().min(1),
+  parameters: z.record(z.string(), z.unknown()),
+  universeRule: universeRuleSchema,
+  /**
+   * 소비 봉 주기 (설계 2026-07-29-backtest-timeframe-design.md).
+   * 미지정이면 워커가 유니버스가 가진 슬라이스에서 유일하게 정해지는 값을 쓴다.
+   * optional 인 이유: 이 필드가 없던 시절의 저장된 요청(복제·재실행)이 현재
+   * 스키마로도 파싱돼야 한다.
+   */
+  timeframe: z.enum(['1m', '1h', '1d']).optional(),
+  period: z.object({
+    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  }),
+  capital: z.object({
+    initialCash: z.number().positive(),
+    currency: z.literal('KRW'),
+  }),
+  execution: z.object({
+    fillTiming: z.literal('NEXT_BAR_OPEN'),
+    commissionProfileId: z.string().min(1),
+    slippageProfileId: z.string().min(1),
+  }),
+  /** 엔진 리스크 상한 (§9.2-6) — 전략 파라미터가 아니라 요청의 명시 필드다 */
+  risk: z.object({
+    maxPositions: z.number().int().min(1).max(20),
+  }),
+  randomSeed: z.number().int().nonnegative().default(42),
+});
 
 export type BacktestRequest = z.infer<typeof backtestRequestSchema>;
 

@@ -46,7 +46,6 @@ import { SyncDialog } from './sync-dialog';
 import type {
   DataJob,
   FactsJobState,
-  RemovalImpact,
   SymbolSummary,
 } from './symbol-types';
 
@@ -145,13 +144,6 @@ export function SymbolsPanel() {
     () => all.filter((row) => selected.has(row.code)).map((row) => row.code),
     [all, selected],
   );
-
-  const impact = useQuery({
-    queryKey: ['symbols', 'removal-impact', selectedCodes.join(',')],
-    queryFn: () =>
-      postJson<{ impacts: RemovalImpact[] }>('/symbols/removal-impact', { codes: selectedCodes }),
-    enabled: confirmRemove && selectedCodes.length > 0,
-  });
 
   const removeMutation = useMutation({
     mutationFn: () => postJson<void>('/symbols/remove', { codes: selectedCodes }),
@@ -430,7 +422,6 @@ export function SymbolsPanel() {
         open={confirmRemove}
         onOpenChange={setConfirmRemove}
         codes={selectedCodes}
-        impacts={impact.data?.impacts ?? []}
         pending={removeMutation.isPending}
         onConfirm={() => removeMutation.mutate()}
       />
@@ -701,69 +692,32 @@ function ImportCsvDialog({
 }
 
 /**
- * 제거 확인 — 영향받는 데이터셋을 먼저 보여준다. 비게 되는 데이터셋이 있으면 서버가
- * 409 로 막으므로 여기서도 실행 버튼을 잠그고 이유를 말한다.
+ * 제거 확인 — 봉·재무가 함께 지워져 과거 백테스트를 재현할 수 없게 되므로 되돌릴 수
+ * 없다는 사실을 먼저 알린다.
  */
 function RemoveDialog({
   open,
   onOpenChange,
   codes,
-  impacts,
   pending,
   onConfirm,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   codes: string[];
-  impacts: RemovalImpact[];
   pending: boolean;
   onConfirm: () => void;
 }) {
-  const wouldEmpty = [
-    ...new Map(
-      impacts.flatMap((impact) => impact.wouldEmpty.map((entry) => [entry.id, entry])),
-    ).values(),
-  ];
-  const affected = [
-    ...new Map(
-      impacts.flatMap((impact) => impact.datasets.map((entry) => [entry.id, entry])),
-    ).values(),
-  ];
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{codes.length}종목을 제거할까요?</DialogTitle>
           <DialogDescription>
-            봉과 재무 데이터가 함께 지워지고 데이터셋 참조도 끊어집니다. 이 종목을 쓴 과거
-            백테스트 결과는 재현할 수 없게 됩니다.
+            봉과 재무 데이터가 함께 지워집니다. 이 종목을 쓴 과거 백테스트 결과는 재현할 수 없게
+            됩니다.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-2 text-sm">
-          {affected.length === 0 ? (
-            <p className="text-muted-foreground">참조하는 데이터셋이 없습니다.</p>
-          ) : (
-            <ul className="space-y-1">
-              {affected.map((entry) => (
-                <li key={entry.id} className="flex items-center justify-between gap-2">
-                  <span>{entry.name}</span>
-                  <span className="text-muted-foreground">
-                    {entry.remaining === 0 ? '비게 됨' : `${entry.remaining}종목 남음`}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-          {wouldEmpty.length > 0 ? (
-            <Alert variant="destructive">
-              <AlertDescription>
-                {wouldEmpty.map((entry) => entry.name).join(', ')} 가 빈 데이터셋이 됩니다 —
-                데이터셋을 먼저 삭제하거나 선택에서 일부 종목을 빼세요.
-              </AlertDescription>
-            </Alert>
-          ) : null}
-        </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             취소
@@ -771,7 +725,7 @@ function RemoveDialog({
           <Button
             variant="outline"
             className="text-destructive"
-            disabled={pending || wouldEmpty.length > 0}
+            disabled={pending}
             onClick={onConfirm}
           >
             제거

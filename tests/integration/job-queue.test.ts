@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ENGINE_VERSION } from '../../src/server/modules/backtest/domain/engine.js';
-import { symbols } from '../../src/server/shared/db/schema.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { currentStrategyVersion } from '../helpers/strategy-versions.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
+import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 
 const HOUR = 3_600_000;
 const DAY = 86_400_000;
@@ -11,6 +11,25 @@ const DAY = 86_400_000;
 const STRATEGY_ID = 'range-breakout';
 /** 재기준 테스트가 흉내 내는 "과거 스키마" 요청의 버전 — 현재 버전과 다르기만 하면 된다 */
 const LEGACY_VERSION = '1.1.0';
+
+/** range-breakout 은 rebalanceMonths 가 없다 — 리밸런스는 늘 period.from 하나뿐이다 */
+const MAIN_DATE = '2026-01-05';
+/** "봉이 전혀 없는 기간" 시나리오 전용 — 종목 마스터는 커버하되(coverage 는 넓은 고정 구간)
+ *  가격 데이터가 없는 시점을 재현한다. 커버 밖(uncovered) 날짜와 구분하려고 별도로 캐시한다. */
+const NO_CANDLE_DATE = '2020-01-01';
+
+/** 유니버스 규칙 — topN=1 이면 005930(시총 1위)만, topN=2 면 000660 도 함께 들어온다 */
+function universeRule(topN = 1): BacktestRequest['universeRule'] {
+  return { markets: ['KOSPI'], topN, sortKey: 'MKTCAP' };
+}
+
+/** 이 파일이 공유하는 종목 마스터 픽스처 — 005930 시총 1위, 000660 2위 */
+function seedMaster(container: TestApp['container'], dates: readonly string[]): void {
+  seedSymbolMasterUniverse(container, dates, [
+    { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
+    { standardCode: 'KR7000660001', shortCode: '000660', name: 'SK하이닉스', market: 'KOSPI', marketCapKrw: '1000000000000' },
+  ]);
+}
 
 /**
  * 평일 30일 × 7봉 1시간봉 CSV (KST 09:00 = UTC 00:00).
@@ -47,7 +66,7 @@ function buildTrendingHourlyCsv(): string {
   return lines.join('\n');
 }
 
-function buildRequest(datasetId: string): BacktestRequest {
+function buildRequest(): BacktestRequest {
   return {
     strategyId: STRATEGY_ID,
     parameters: {
@@ -57,8 +76,7 @@ function buildRequest(datasetId: string): BacktestRequest {
       takeProfitAtrMultiplier: 3,
       riskPerTradePercent: 2,
     },
-    datasetId,
-    universe: { type: 'SYMBOLS', symbols: ['005930'] },
+    universeRule: universeRule(1),
     period: { from: '2026-01-05', to: '2026-03-31' },
     capital: { initialCash: 10_000_000, currency: 'KRW' },
     execution: {
@@ -82,7 +100,6 @@ async function waitFor(condition: () => boolean, timeoutMs: number): Promise<voi
 describe('backtest job queue (스펙 §10, §14)', () => {
   let ctx: TestApp;
   let cookie: string;
-  let datasetId: string;
 
   beforeEach(async () => {
     ctx = await createTestApp();
@@ -105,8 +122,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       fileName: 'trend.csv',
       csvContent: buildTrendingHourlyCsv(),
     });
-    // CSV 는 종목에 봉을 넣을 뿐 데이터셋을 만들지 않는다 — 참조 묶음은 따로 만든다
-    datasetId = ctx.container.datasetService.createDataset('kr-hourly-v1', ['005930']).id;
+    // 종목 마스터 — 유니버스 규칙(스펙 2026-08-05)이 여기서 종목을 골라낸다
+    seedMaster(ctx.container, [MAIN_DATE, NO_CANDLE_DATE]);
   });
 
   afterEach(async () => {
@@ -118,7 +135,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
-      payload: buildRequest(datasetId),
+      payload: buildRequest(),
     });
     expect(created.statusCode).toBe(201);
     const jobId = (created.json().job as { id: string; status: string }).id;
@@ -153,13 +170,13 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     // 제출 시점에 고정된 종목 버전 스냅샷이 그대로 기록돼야 한다 (재현성 §9.5)
     // 이 픽스처는 1분봉 CSV 라 소비 슬라이스가 '1m' 이다 (1h 는 그 슬라이스의 집계 봉)
     const pinned = ctx.container.symbolService.getLatestVersion('005930', '1m')!;
-    const universe = JSON.parse(body.run.universeJson as string) as Array<{
+    const universeJson = JSON.parse(body.run.universeJson as string) as Array<{
       code: string;
       slice: string;
       version: number;
       contentHash: string;
     }>;
-    const daily = universe.find((e) => e.code === '005930' && e.slice === '1m')!;
+    const daily = universeJson.find((e) => e.code === '005930' && e.slice === '1m')!;
     expect(daily.version).toBe(pinned.version);
     expect(daily.contentHash).toBe(pinned.contentHash);
     expect(typeof body.metrics.totalReturnPct).toBe('number');
@@ -262,20 +279,15 @@ describe('backtest job queue (스펙 §10, §14)', () => {
   });
 
   it('요청한 부분 유니버스 종목만 제출 시점 버전으로 pin 한다', async () => {
-    ctx.container.database.db.insert(symbols).values({
-      code: '000660',
-      market: 'KR',
-      name: 'SK하이닉스',
-      createdAtMs: 1,
-    }).run();
-    const pairDataset = ctx.container.datasetService
-      .createDataset('kr-pair-v1', ['005930', '000660']);
+    // 000660 이 시총 2위라 topN=1(기본값) 이면 유니버스에서 자연히 빠진다 —
+    // 옛 "데이터셋은 2종목인데 요청은 1종목만 지정" 과 같은 결과를 유니버스 규칙으로 재현한다.
+    ctx.container.symbolService.addSymbol('000660', 'KR', 'SK하이닉스');
 
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
-      payload: buildRequest(pairDataset.id),
+      payload: buildRequest(),
     });
 
     expect(created.statusCode).toBe(201);
@@ -287,8 +299,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
 
   it('claims jobs atomically in FIFO order', () => {
     const queue = ctx.container.jobQueue;
-    const first = queue.enqueue(buildRequest(datasetId));
-    const second = queue.enqueue(buildRequest(datasetId));
+    const first = queue.enqueue(buildRequest());
+    const second = queue.enqueue(buildRequest());
 
     const claimA = queue.claimNext('w1');
     const claimB = queue.claimNext('w2');
@@ -308,7 +320,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
         method: 'POST',
         url: '/api/v1/backtests',
         cookies: { qp_session: cookie },
-        payload: buildRequest(datasetId),
+        payload: buildRequest(),
       });
       const jobId = (created.json().job as { id: string }).id;
 
@@ -360,7 +372,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
-      payload: buildRequest(datasetId),
+      payload: buildRequest(),
     });
     const jobId = (created.json().job as { id: string }).id;
 
@@ -375,7 +387,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
 
   it('never regresses a terminal status via late progress or status writes (C1)', () => {
     const queue = ctx.container.jobQueue;
-    const job = queue.enqueue(buildRequest(datasetId));
+    const job = queue.enqueue(buildRequest());
     queue.claimNext('w1'); // QUEUED → STARTING
     queue.markRunning(job.id); // STARTING → RUNNING
     expect(queue.getJob(job.id)!.status).toBe('RUNNING');
@@ -393,7 +405,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
 
   it('does not let progress writes disturb CANCELLING (C1)', () => {
     const queue = ctx.container.jobQueue;
-    const job = queue.enqueue(buildRequest(datasetId));
+    const job = queue.enqueue(buildRequest());
     queue.claimNext('w1');
     queue.markRunning(job.id);
     queue.setStatus(job.id, 'CANCELLING', {}, ['RUNNING', 'STARTING']);
@@ -407,7 +419,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
 
   it('recovers orphaned active jobs as INTERRUPTED on restart (스펙 §10)', () => {
     const queue = ctx.container.jobQueue;
-    const job = queue.enqueue(buildRequest(datasetId));
+    const job = queue.enqueue(buildRequest());
     queue.setStatus(job.id, 'RUNNING', { pid: 999_999_999 });
 
     const recovered = queue.recoverInterrupted(() => false);
@@ -418,7 +430,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
 
   it('refuses to delete non-terminal jobs', async () => {
     const queue = ctx.container.jobQueue;
-    const job = queue.enqueue(buildRequest(datasetId));
+    const job = queue.enqueue(buildRequest());
 
     const denied = await ctx.app.inject({
       method: 'DELETE',
@@ -443,7 +455,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
-      payload: { ...buildRequest(datasetId), strategyVersion: LEGACY_VERSION },
+      payload: { ...buildRequest(), strategyVersion: LEGACY_VERSION },
     });
     expect(created.statusCode).toBe(201);
 
@@ -458,9 +470,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
   it('rebases a stored request that predates the current schema, and warns', async () => {
     // 구 스키마 형태: risk 없음, maxPositions 가 parameters 안에 있고, 전략 버전도 낮다
     const legacy = {
-      ...buildRequest(datasetId),
+      ...buildRequest(),
       strategyVersion: LEGACY_VERSION,
-      parameters: { ...buildRequest(datasetId).parameters, maxPositions: 5 },
+      parameters: { ...buildRequest().parameters, maxPositions: 5 },
     } as Record<string, unknown>;
     delete legacy.risk;
     const job = ctx.container.jobQueue.enqueue(legacy as never);
@@ -493,7 +505,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
   });
 
   it('refuses to clone a stored request that cannot be rebased (400, not 500)', async () => {
-    const broken = { ...buildRequest(datasetId) } as Record<string, unknown>;
+    const broken = { ...buildRequest() } as Record<string, unknown>;
     delete broken.period; // 기계적으로 되살릴 수 없는 편차
     const job = ctx.container.jobQueue.enqueue(broken as never);
 
@@ -511,36 +523,29 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
-      payload: { ...buildRequest(datasetId), strategyId: 'nope' },
+      payload: { ...buildRequest(), strategyId: 'nope' },
     });
     expect(badStrategy.statusCode).toBe(400);
 
-    const badDataset = await ctx.app.inject({
+    // 옛 "존재하지 않는 데이터셋" 자리 — 유니버스 규칙 모델에서는 "종목 마스터가 커버하지
+    // 않는 리밸런스 날짜" 가 같은 종류의 참조 오류다 (422 + uncoveredDates 목록).
+    const badUniverseDate = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
-      payload: buildRequest('ds_nope'),
+      payload: { ...buildRequest(), period: { from: '1999-01-01', to: '1999-06-30' } },
     });
-    expect(badDataset.statusCode).toBe(400);
-
-    const badSymbol = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
-      payload: {
-        ...buildRequest(datasetId),
-        universe: { type: 'SYMBOLS', symbols: ['005930', '005935'] }, // 005935 는 데이터셋에 없음
-      },
-    });
-    expect(badSymbol.statusCode).toBe(400);
-    expect((badSymbol.json() as { error: string }).error).toContain('005935');
+    expect(badUniverseDate.statusCode).toBe(422);
+    expect((badUniverseDate.json() as { uncoveredDates: string[] }).uncoveredDates).toContain(
+      '1999-01-01',
+    );
 
     const badParams = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
       payload: {
-        ...buildRequest(datasetId),
+        ...buildRequest(),
         parameters: { lookbackBars: 9_999 },
       },
     });
@@ -552,7 +557,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
-      payload: { ...buildRequest(datasetId), capital: { initialCash: -1, currency: 'KRW' } },
+      payload: { ...buildRequest(), capital: { initialCash: -1, currency: 'KRW' } },
     });
     expect(badBody.statusCode).toBe(400);
     const message = (badBody.json() as { error: string }).error;
@@ -561,12 +566,13 @@ describe('backtest job queue (스펙 §10, §14)', () => {
   });
 
   it('기간에 봉이 전혀 없는 제출을 제출 검증에서 거부한다 (D-025)', async () => {
-    // 데이터셋 봉은 2026-01-05 부터다 — 그보다 앞선 구간은 확실히 0봉이다
+    // 종목 마스터는 이 날짜를 커버하지만(coverage 는 넓은 고정 구간) 가격 데이터는
+    // 2026-01-05 부터다 — 그보다 훨씬 앞선 구간은 확실히 0봉이다
     const noData = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
-      payload: { ...buildRequest(datasetId), period: { from: '2020-01-01', to: '2020-12-31' } },
+      payload: { ...buildRequest(), period: { from: NO_CANDLE_DATE, to: '2020-12-31' } },
     });
     expect(noData.statusCode).toBe(400);
     const message = (noData.json() as { error: string }).error;
@@ -577,8 +583,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
 
   it('복제도 같은 제출 검증을 거친다 — 봉 없는 기간은 거부한다 (D-025)', async () => {
     const job = ctx.container.jobQueue.enqueue({
-      ...buildRequest(datasetId),
-      period: { from: '2020-01-01', to: '2020-12-31' },
+      ...buildRequest(),
+      period: { from: NO_CANDLE_DATE, to: '2020-12-31' },
     });
 
     const cloned = await ctx.app.inject({
@@ -592,7 +598,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
 
   it('복제도 재무 요구 검증을 거친다 — 재무 없는 데이터셋의 밸류 전략은 422', async () => {
     const job = ctx.container.jobQueue.enqueue({
-      ...buildRequest(datasetId),
+      ...buildRequest(),
       strategyId: 'value-quality-rank',
       parameters: { topN: 20, rebalanceMonths: 3, staleQuarters: 2 },
     });
@@ -608,7 +614,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
 
   it('초안은 재무 요구 미충족도 blockers 에 담는다', async () => {
     const job = ctx.container.jobQueue.enqueue({
-      ...buildRequest(datasetId),
+      ...buildRequest(),
       strategyId: 'value-quality-rank',
       parameters: { topN: 20, rebalanceMonths: 3, staleQuarters: 2 },
     });
@@ -624,27 +630,24 @@ describe('backtest job queue (스펙 §10, §14)', () => {
   });
 
   it('일부 종목만 봉이 없으면 거부하지 않는다 (신규 상장 등 정상)', async () => {
-    // 종목을 하나 더 등록해 데이터셋에 참조하되 봉은 넣지 않는다 — 커버리지 행이 없는 종목
+    // 종목을 하나 더 등록하고 topN 을 2로 올려 유니버스에 넣되 봉은 넣지 않는다 —
+    // 커버리지 행이 없는 종목이 섞여도 제출은 통과해야 한다 (D-025)
     ctx.container.symbolService.addSymbol('000660', 'KR');
-    ctx.container.datasetService.updateSymbols(datasetId, { add: ['000660'] });
 
     const partial = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
-      payload: {
-        ...buildRequest(datasetId),
-        universe: { type: 'SYMBOLS', symbols: ['005930', '000660'] },
-      },
+      payload: { ...buildRequest(), universeRule: universeRule(2) },
     });
     expect(partial.statusCode).toBe(201);
   });
 
   it('초안은 재기준된 요청과 경고를 돌려준다 (재설정 및 복제)', async () => {
     const legacy = {
-      ...buildRequest(datasetId),
+      ...buildRequest(),
       strategyVersion: LEGACY_VERSION,
-      parameters: { ...buildRequest(datasetId).parameters, maxPositions: 5 },
+      parameters: { ...buildRequest().parameters, maxPositions: 5 },
     } as Record<string, unknown>;
     delete legacy.risk;
     const job = ctx.container.jobQueue.enqueue(legacy as never);
@@ -674,8 +677,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
   it('초안은 제출 불가한 원본도 열어준다 — 사유는 blockers 에 담는다', async () => {
     // 봉이 없는 기간 → 제출은 400 이지만 초안은 열려야 고칠 수 있다
     const job = ctx.container.jobQueue.enqueue({
-      ...buildRequest(datasetId),
-      period: { from: '2020-01-01', to: '2020-12-31' },
+      ...buildRequest(),
+      period: { from: NO_CANDLE_DATE, to: '2020-12-31' },
     });
 
     const draft = await ctx.app.inject({
@@ -686,7 +689,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(draft.statusCode).toBe(200);
     const body = draft.json() as { request: BacktestRequest; blockers: string[] };
     // 원본 값은 그대로 돌려준다 — 사용자가 이 값을 보고 고친다
-    expect(body.request.period.from).toBe('2020-01-01');
+    expect(body.request.period.from).toBe(NO_CANDLE_DATE);
     expect(body.blockers.some((b) => b.includes('005930'))).toBe(true);
   });
 
@@ -698,7 +701,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
     expect(missing.statusCode).toBe(404);
 
-    const broken = { ...buildRequest(datasetId) } as Record<string, unknown>;
+    const broken = { ...buildRequest() } as Record<string, unknown>;
     delete broken.period;
     const brokenJob = ctx.container.jobQueue.enqueue(broken as never);
     const brokenDraft = await ctx.app.inject({
@@ -730,8 +733,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
         fileName: 'trend.csv',
         csvContent: buildTrendingHourlyCsv(),
       });
-      const smallDatasetId = small.container.datasetService.createDataset('small', ['005930']).id;
-      const payload = buildRequest(smallDatasetId);
+      seedMaster(small.container, [MAIN_DATE]);
+      const payload = buildRequest();
 
       // 오케스트레이터를 tick 하지 않으므로 전부 QUEUED 로 남는다
       for (let i = 0; i < 3; i += 1) {
@@ -771,7 +774,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
-      payload: { ...buildRequest(datasetId), period: { from: '2026-03-31', to: '2026-01-05' } },
+      payload: { ...buildRequest(), period: { from: '2026-03-31', to: '2026-01-05' } },
     });
     expect(inverted.statusCode).toBe(400);
     expect((inverted.json() as { error: string }).error).toContain('기간이 올바르지 않습니다');

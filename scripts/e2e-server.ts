@@ -17,11 +17,9 @@ export const E2E_PASSWORD = 'correct-horse-battery-staple';
 const HOUR = 3_600_000;
 const DAY = 86_400_000;
 
-// KRX 과거 유니버스 e2e(Task 15) — 가짜 KRX Open API 서버가 쓰는 고정값.
+// 종목 마스터·유니버스 규칙 e2e(스펙 2026-08-05) — 가짜 KRX Open API 서버가 쓰는 고정값.
 const KRX_FAKE_PORT = 3101;
 const KRX_API_KEY = 'e2e-krx-key';
-/** 유일하게 값이 있는 거래일. 2025-01-01 조회가 이 날로 소급되는 것으로 '적용일' 을 검증한다. */
-const KRX_TRADING_BASDD = '20241230';
 
 function krxEnvelope(rows: readonly Record<string, unknown>[]): {
   OutBlock_1: readonly Record<string, unknown>[];
@@ -30,9 +28,11 @@ function krxEnvelope(rows: readonly Record<string, unknown>[]): {
 }
 
 /**
- * 보통주 1(005930, 1위) + 우선주 1(제외) + 상장폐지 가정 종목 1(900010, 가격 없음).
- * 900010 은 KRX 기본정보에는 남아 있지만(과거엔 상장) 최근 캔들이 전혀 없어 "가격
- * 데이터가 없는 스냅샷 종목" 차단 시나리오의 재료가 된다.
+ * 보통주 1(005930, 시가총액 1위) + 우선주 1(분류 단계에서 제외) + 상장폐지 가정
+ * 종목 1(900010, 가격 없음). 900010 은 KRX 기본정보에는 남아 있지만(과거엔 상장)
+ * 최근 캔들이 전혀 없어 시가총액은 005930 보다 작게 잡아 둔다 — 위저드가 상위 N=1
+ * 로 유니버스를 고르면 자연히 순위 밖으로 빠져, "봉이 없는 종목이 유니버스에
+ * 섞이는" 경로(missingCandleSymbols)는 topN 을 늘리는 시나리오에서만 재현된다.
  */
 const KOSPI_BASE_ROWS = [
   {
@@ -102,30 +102,20 @@ const KOSDAQ_DAILY_ROWS = [{ ISU_CD: '035720', ISU_NM: '카카오', MKTCAP: '20,
 /**
  * e2e 전용 가짜 KRX Open API 서버.
  *
- * 기본정보(base_info)는 요청 날짜와 무관하게 항상 같은 값을 돌려준다 — 실 KRX 는
- * 상장 목록이 자주 바뀌지 않고, `UniverseSnapshotService.createFromPreview` 가
- * 기존에 등록된 종목(예: 005930)의 표준코드를 "오늘" 기준으로 재검증할 때도 같은
- * 응답을 재사용해야 한다. 검증 시점이 테스트 실행일이라 미리 날짜를 맞춰 둘 수
- * 없어서다. `tests/e2e/krx-universe.spec.ts` 가 CSV 가져오기 UI 로 직접 등록하는
- * 900010(상장폐지예정1호) 도 이 재검증을 그대로 통과해야 하므로 KOSPI_BASE_ROWS 에
- * 함께 둔다.
- *
- * 일별시세(daily_trd)는 거래일(2024-12-30)에만 값을 주고 그 외(2025-01-01 등 휴장일
- * 포함)는 빈 응답으로 남긴다 — '적용일 소급 탐색' 과 '휴장일 조회' 시나리오를 이
- * 비대칭으로 만든다.
+ * 기본정보(base_info)·일별시세(daily_trd) 모두 요청한 날짜와 무관하게 항상 같은
+ * 값을 돌려준다. 종목 마스터(`SymbolMasterService.ingestDate`)는 요청한 날짜를
+ * 그대로 조회할 뿐 예전 KRX 과거 유니버스 경로가 하던 '휴장일이면 과거로 소급'
+ * 탐색을 하지 않는다(그 경로는 스펙 2026-08-05 Task 6 에서 데이터셋·스냅샷과 함께
+ * 제거됐다) — 그래서 이 스텁도 날짜별 분기를 흉내 낼 이유가 없다. 각 스펙이 어떤
+ * 날짜를 동기화하든 같은 종목·시가총액을 얻는 편이, 실제로는 하루뿐인 '거래일'을
+ * 여러 스펙이 우연히 공유해야 하는 것보다 훨씬 예측 가능하다.
  */
 async function startFakeKrxServer(): Promise<void> {
   const app = Fastify({ logger: false });
   app.get('/svc/apis/sto/stk_isu_base_info', async () => krxEnvelope(KOSPI_BASE_ROWS));
   app.get('/svc/apis/sto/ksq_isu_base_info', async () => krxEnvelope(KOSDAQ_BASE_ROWS));
-  app.get('/svc/apis/sto/stk_bydd_trd', async (request) => {
-    const { basDd } = request.query as { basDd?: string };
-    return krxEnvelope(basDd === KRX_TRADING_BASDD ? KOSPI_DAILY_ROWS : []);
-  });
-  app.get('/svc/apis/sto/ksq_bydd_trd', async (request) => {
-    const { basDd } = request.query as { basDd?: string };
-    return krxEnvelope(basDd === KRX_TRADING_BASDD ? KOSDAQ_DAILY_ROWS : []);
-  });
+  app.get('/svc/apis/sto/stk_bydd_trd', async () => krxEnvelope(KOSPI_DAILY_ROWS));
+  app.get('/svc/apis/sto/ksq_bydd_trd', async () => krxEnvelope(KOSDAQ_DAILY_ROWS));
   await app.listen({ host: '127.0.0.1', port: KRX_FAKE_PORT });
 }
 
@@ -184,6 +174,7 @@ async function main(): Promise<void> {
       passwordHash: await container.passwordHasher.hash(E2E_PASSWORD),
       totpSecret: null,
       totpEnabled: false,
+      totpLastUsedStep: null,
       recoveryCodeHashes: [],
     },
     container.clock.now(),
@@ -193,8 +184,8 @@ async function main(): Promise<void> {
   // 결정된다 (dataset.timeframe 고정 목록이 아니다). '1h' 로 직수입하면 1m 원본이
   // 전혀 없어 데이터 검증 드로어의 1m→1h 폴백이 빈 성공 응답 대신 400 을 받아
   // 깨진다. CSV 행은 이미 시간 경계에 맞춰져 있어 1m→1h 집계가 1:1 로 떨어진다.
-  // 봉은 **종목**으로 들어간다 — CSV 는 종목을 등록하지만 데이터셋은 만들지 않는다
-  // (설계 2026-07-31-symbol-as-first-class). 위저드가 고를 참조 묶음은 따로 만든다.
+  // 봉은 **종목**으로 들어간다 — 위저드는 이제 데이터셋이 아니라 유니버스 규칙만
+  // 받으므로(스펙 2026-08-05) 여기서 참조 묶음을 따로 만들 필요가 없다.
   await container.symbolService.importCsv({
     market: 'KR',
     timeframe: '1m',
@@ -206,7 +197,6 @@ async function main(): Promise<void> {
   // 서비스를 직접 부르므로 그 단계를 건너뛴다 — 실제 경로와 같은 상태를 만들려면
   // 여기서 이름을 넣어야 한다. (테스트의 `/symbols/info` 스텁은 브라우저 요청만 가로챈다.)
   container.symbolService.setName('005930', '삼성전자');
-  container.datasetService.createDataset('kr-hourly-v1', ['005930']);
 
   const app = await buildServer(container);
   await app.listen({ host: config.bindAddress, port: config.port });

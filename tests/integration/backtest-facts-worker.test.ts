@@ -3,7 +3,8 @@ import type { Candle } from '../../src/server/modules/market-data/domain/candle.
 import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
-import { registerSymbols, seedDataset } from '../helpers/seed.js';
+import { registerSymbols } from '../helpers/seed.js';
+import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 
 const DAY = 86_400_000;
 const START = Date.UTC(2025, 0, 2);
@@ -16,6 +17,10 @@ const START = Date.UTC(2025, 0, 2);
  * HTTP 제출 → 큐 → 자식 프로세스 경로로 같은 시나리오를 검증해 그 배선 자체를 덮는다.
  * `facts,` 인자를 실수로 지우면 이 테스트가 실패해야 한다 (수동으로 지우고 실패 확인함,
  * task-11-report.md 참고).
+ *
+ * 유니버스는 이제 데이터셋이 아니라 유니버스 규칙이 정한다(스펙 2026-08-05) —
+ * `universeRule.topN` 은 전략 파라미터의 `topN`(보유 종목 수)과 별개다: 여기서는
+ * "이 종목들이 후보군에 들어온다" 는 뜻이고, 전략이 그 후보군 안에서 다시 랭킹한다.
  */
 
 const disclosed = START + 5 * DAY;
@@ -81,10 +86,16 @@ async function waitFor(condition: () => boolean, timeoutMs: number): Promise<voi
   }
 }
 
+/** value-quality-rank 는 rebalanceMonths=3 — 이 3개월짜리 period 는 리밸런스가 하나뿐이다 */
+const FACTS_MASTER_DATE = '2025-01-02';
+
+function factsUniverseRule(topN: number): BacktestRequest['universeRule'] {
+  return { markets: ['KOSPI'], topN, sortKey: 'MKTCAP' };
+}
+
 describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로세스', () => {
   let ctx: TestApp;
   let cookie: string;
-  let datasetId: string;
 
   beforeEach(async () => {
     ctx = await createTestApp();
@@ -96,10 +107,16 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
     });
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
 
-    const dataset = seedDataset(ctx.container, 'kr-daily-facts-v1', 'KR', ['CHEAP', 'RICH']);
-    datasetId = dataset.id;
+    registerSymbols(ctx.container, 'KR', ['CHEAP', 'RICH']);
+    // 시총 내림차순: CHEAP > RICH > NOFACTS — topN=2 면 앞의 둘, topN=3 이면 셋 다 들어온다.
+    // NOFACTS 는 두 번째 테스트에서만 로컬 등록·봉을 더하지만, 마스터에는 미리 둔다.
+    seedSymbolMasterUniverse(ctx.container, [FACTS_MASTER_DATE], [
+      { standardCode: 'KR7000001000', shortCode: 'CHEAP', name: 'CHEAP', market: 'KOSPI', marketCapKrw: '300000000000' },
+      { standardCode: 'KR7000002000', shortCode: 'RICH', name: 'RICH', market: 'KOSPI', marketCapKrw: '200000000000' },
+      { standardCode: 'KR7000003000', shortCode: 'NOFACTS', name: 'NOFACTS', market: 'KOSPI', marketCapKrw: '100000000000' },
+    ]);
     await ctx.container.candleRepository.saveCandles(candles(40));
-    for (const code of dataset.symbols) {
+    for (const code of ['CHEAP', 'RICH']) {
       await ctx.container.symbolService.refreshCoverage(code, 'KR', '1d');
       ctx.container.symbolService.bumpVersion(code, '1d', 'seed', Date.now());
     }
@@ -123,9 +140,8 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       const payload: BacktestRequest = {
         strategyId: 'value-quality-rank',
         parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
-        datasetId,
+        universeRule: factsUniverseRule(2),
         timeframe: '1d',
-        universe: { type: 'SYMBOLS', symbols: ['CHEAP', 'RICH'] },
         period: { from: '2025-01-02', to: '2025-03-01' },
         capital: { initialCash: 10_000_000, currency: 'KRW' },
         execution: {
@@ -185,9 +201,9 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
     '재무가 없는 종목을 이름으로 밝힌다',
     { timeout: 90_000 },
     async () => {
-      // 데이터셋·봉은 있지만 팩트가 없는 종목을 하나 더한다
+      // 데이터셋·봉은 있지만 팩트가 없는 종목을 하나 더한다 — topN 을 3으로 올려
+      // 마스터에 미리 둔 NOFACTS 도 유니버스에 들어오게 한다
       registerSymbols(ctx.container, 'KR', ['NOFACTS']);
-      ctx.container.datasetService.updateSymbols(datasetId, { add: ['NOFACTS'] });
       const extra: Candle[] = [];
       for (let index = 0; index < 40; index += 1) {
         extra.push({
@@ -215,9 +231,8 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
         payload: {
           strategyId: 'value-quality-rank',
           parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
-          datasetId,
+          universeRule: factsUniverseRule(3),
           timeframe: '1d',
-          universe: { type: 'SYMBOLS', symbols: ['CHEAP', 'RICH', 'NOFACTS'] },
           period: { from: '2025-01-02', to: '2025-03-01' },
           capital: { initialCash: 10_000_000, currency: 'KRW' },
           execution: {
@@ -272,6 +287,12 @@ const SPLIT_EFFECTIVE_INDEX = 71; // 2025-03-14 (= START + 71일)
 /** 분할 접수일 — 기간 종료(2025-04-30)보다 11개월 늦다. 컷오프를 걸면 행이 사라진다 */
 const SPLIT_RECEIPT_TS = Date.UTC(2026, 2, 31, 9, 0);
 
+/**
+ * cross-sectional-momentum 은 rebalanceMonths=1 — 2025-01-02~2025-04-30(4개월) 구간에서
+ * 매달 첫 리밸런스 4회가 나온다. 종목 마스터 시총 캐시를 이 네 날짜 모두 채워야 한다.
+ */
+const SPLIT_MASTER_DATES = ['2025-01-02', '2025-02-02', '2025-03-02', '2025-04-02'];
+
 function splitScenarioCandles(bars: number): Candle[] {
   const out: Candle[] = [];
   for (let index = 0; index < bars; index += 1) {
@@ -308,7 +329,6 @@ function splitScenarioCandles(bars: number): Candle[] {
 describe('워커의 자본변동 팩트 배선 — 접수일이 기간 종료 이후인 분할', () => {
   let ctx: TestApp;
   let cookie: string;
-  let datasetId: string;
 
   beforeEach(async () => {
     ctx = await createTestApp();
@@ -320,11 +340,14 @@ describe('워커의 자본변동 팩트 배선 — 접수일이 기간 종료 �
     });
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
 
-    const dataset = seedDataset(ctx.container, 'kr-daily-split-v1', 'KR', ['SPLIT', 'FLAT']);
-    datasetId = dataset.id;
+    registerSymbols(ctx.container, 'KR', ['SPLIT', 'FLAT']);
+    seedSymbolMasterUniverse(ctx.container, SPLIT_MASTER_DATES, [
+      { standardCode: 'KR7000004000', shortCode: 'SPLIT', name: 'SPLIT', market: 'KOSPI', marketCapKrw: '300000000000' },
+      { standardCode: 'KR7000005000', shortCode: 'FLAT', name: 'FLAT', market: 'KOSPI', marketCapKrw: '200000000000' },
+    ]);
     // 2025-01-02 ~ 2025-04-30 = 119봉
     await ctx.container.candleRepository.saveCandles(splitScenarioCandles(119));
-    for (const code of dataset.symbols) {
+    for (const code of ['SPLIT', 'FLAT']) {
       await ctx.container.symbolService.refreshCoverage(code, 'KR', '1d');
       ctx.container.symbolService.bumpVersion(code, '1d', 'seed', Date.now());
     }
@@ -359,9 +382,8 @@ describe('워커의 자본변동 팩트 배선 — 접수일이 기간 종료 �
           rebalanceMonths: 1,
           absoluteMomentumFilter: true,
         },
-        datasetId,
+        universeRule: { markets: ['KOSPI'], topN: 2, sortKey: 'MKTCAP' },
         timeframe: '1d',
-        universe: { type: 'SYMBOLS', symbols: ['SPLIT', 'FLAT'] },
         period: { from: '2025-01-02', to: '2025-04-30' },
         capital: { initialCash: 10_000_000, currency: 'KRW' },
         execution: {
