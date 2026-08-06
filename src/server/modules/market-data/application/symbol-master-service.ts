@@ -60,7 +60,11 @@ export interface EnsureTradingDayResult {
   readonly ingestedDates: readonly string[];
 }
 
-/** ensureTradingDay 가 소급하며 거슬러 올라갈 기본 상한 일수 */
+/**
+ * ensureTradingDay 가 소급하며 거슬러 올라갈 기본 상한 일수 — 요청 날짜 자체의
+ * 최초 ingest 1회는 별도이므로, 한 번의 호출이 건드릴 수 있는 날짜 수는
+ * 최대 이 값 + 1(요청 날짜)이다.
+ */
 const DEFAULT_MAX_LOOKBACK_DAYS = 10;
 
 /** DB row 를 도메인 이벤트 draft 로 좁힌다 — drizzle 은 text 컬럼을 string 으로만 추론한다 */

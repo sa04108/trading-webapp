@@ -243,3 +243,56 @@ describe('POST /backtests/universe-preview — KRX 오류 매핑', () => {
     expect((res.json() as { error: string }).error).toContain('한도');
   });
 });
+
+/**
+ * SymbolMasterNotCoveredError → 409 매핑 (리뷰 finding) — 휴장일만 수집된 날짜는
+ * coverage 는 생기지만 체크포인트는 생기지 않는다(`ingestDateUnguarded` 의 HOLIDAY
+ * 분기는 `mergeCoverage` 만 부르고 `writeCheckpoint` 는 부르지 않는다). 그 상태에서
+ * `isCovered(date)` 는 true 를 주지만 `getUniverseAsOf` 는 `nearestCheckpoint` 를
+ * 하나도 찾지 못해 `SymbolMasterNotCoveredError` 를 던진다 — 이게 실제 운영에서 500
+ * 으로 터진 시나리오다. `sendIfNotCovered` 매핑이 없으면 이 오류가 기본 오류
+ * 처리기로 넘어가 500 이 된다.
+ */
+describe('POST /backtests/universe-preview — SymbolMasterNotCoveredError 매핑', () => {
+  let ctx: TestApp;
+  let fake: KrxFakeServer;
+  let cookie: string;
+
+  beforeEach(async () => {
+    fake = await startKrxFakeServer();
+    ctx = await createTestApp({ KRX_BASE_URL: fake.baseUrl, KRX_API_KEY: 'test-krx-key' });
+    const { username, password } = await createTestAdmin(ctx.container);
+    const login = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { username, password },
+    });
+    cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+  });
+
+  afterEach(async () => {
+    await ctx.close();
+    await fake.close();
+  });
+
+  it('휴장일만 수집돼 체크포인트가 없으면 미리보기는 409 다 (매핑이 없으면 500 이 된다)', async () => {
+    const date = '2026-01-05';
+    // KOSPI·KOSDAQ 양쪽 다 fake 서버 기본값(빈 응답)이라 ingestDate 는 이 날짜를
+    // 휴장으로 처리한다 — coverage 는 생기지만 체크포인트는 생기지 않는다.
+    await ctx.container.symbolMasterService.ingestDate(date);
+    expect(ctx.container.symbolMasterService.isCovered(date)).toBe(true);
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: { markets: ['KOSPI'], topN: 10, sortKey: 'MKTCAP' },
+        period: { from: date, to: date },
+        rebalanceMonths: 1,
+      },
+    });
+
+    expect(res.statusCode).toBe(409);
+  });
+});
