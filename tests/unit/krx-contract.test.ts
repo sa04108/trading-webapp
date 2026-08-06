@@ -115,7 +115,46 @@ describe('parseDailyRows', () => {
       shortCode: '005930',
       name: '삼성전자',
       marketCapRaw: '350000000000000',
+      open: 71_500,
+      high: 72_000,
+      low: 71_000,
+      close: 71_800,
+      volume: 12_345_678,
     });
+  });
+
+  it('OHLCV 4개 가격과 거래량을 콤마 없는 숫자로 파싱한다', () => {
+    const [row] = parseDailyRows([
+      dailyFixture({
+        TDD_OPNPRC: '71,500',
+        TDD_HGPRC: '72,000',
+        TDD_LWPRC: '71,000',
+        TDD_CLSPRC: '71,800',
+        ACC_TRDVOL: '12,345,678',
+      }),
+    ]);
+
+    expect(row).toMatchObject({
+      open: 71_500,
+      high: 72_000,
+      low: 71_000,
+      close: 71_800,
+      volume: 12_345_678,
+    });
+  });
+
+  it('OHLCV 가 - 이면 null 이다 (휴장 직후·거래 정지 등)', () => {
+    const [row] = parseDailyRows([
+      dailyFixture({
+        TDD_OPNPRC: '-',
+        TDD_HGPRC: '-',
+        TDD_LWPRC: '-',
+        TDD_CLSPRC: '-',
+        ACC_TRDVOL: '-',
+      }),
+    ]);
+
+    expect(row).toMatchObject({ open: null, high: null, low: null, close: null, volume: null });
   });
 
   it('일별 시가총액의 null 과 - 는 null 로 둔다', () => {

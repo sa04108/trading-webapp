@@ -27,6 +27,11 @@ const dailyRowSchema = z.object({
   ISU_CD: z.string(),
   ISU_NM: z.string(),
   MKTCAP: z.string().nullable().optional(),
+  TDD_OPNPRC: z.string().nullable().optional(),
+  TDD_HGPRC: z.string().nullable().optional(),
+  TDD_LWPRC: z.string().nullable().optional(),
+  TDD_CLSPRC: z.string().nullable().optional(),
+  ACC_TRDVOL: z.string().nullable().optional(),
 }).loose();
 
 /** KRX 가 새 필드를 더해도 필수 응답 필드는 계약대로 검증한다. */
@@ -85,6 +90,12 @@ export function parseBaseInfoRows(rows: readonly Record<string, unknown>[]): Krx
   });
 }
 
+/** 가격·거래량은 원 단위 정수라 2^53 을 넘지 않으므로 Number 로 좁혀도 안전하다. */
+function parseNullableIntNumber(raw: string | null | undefined, field: string): number | null {
+  const value = parseNullableInt64(raw, field);
+  return value === null ? null : Number(value);
+}
+
 /** 시가총액은 Number 로 좁히지 않아 큰 값도 포트 경계에서 정확히 보존한다. */
 export function parseDailyRows(rows: readonly Record<string, unknown>[]): KrxDailyTradeRow[] {
   return rows.map((rawRow) => {
@@ -97,6 +108,11 @@ export function parseDailyRows(rows: readonly Record<string, unknown>[]): KrxDai
       shortCode: row.ISU_CD,
       name: row.ISU_NM,
       marketCapRaw: marketCap === null ? null : marketCap.toString(),
+      open: parseNullableIntNumber(row.TDD_OPNPRC, 'TDD_OPNPRC'),
+      high: parseNullableIntNumber(row.TDD_HGPRC, 'TDD_HGPRC'),
+      low: parseNullableIntNumber(row.TDD_LWPRC, 'TDD_LWPRC'),
+      close: parseNullableIntNumber(row.TDD_CLSPRC, 'TDD_CLSPRC'),
+      volume: parseNullableIntNumber(row.ACC_TRDVOL, 'ACC_TRDVOL'),
     };
   });
 }

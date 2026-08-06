@@ -241,6 +241,11 @@ describe('KRX 과거 유니버스 어댑터', () => {
       shortCode: '005930',
       name: '삼성전자',
       marketCapRaw: '350000000000001',
+      open: 71_500,
+      high: 72_000,
+      low: 71_000,
+      close: 71_800,
+      volume: 12_345_678,
     });
   });
 

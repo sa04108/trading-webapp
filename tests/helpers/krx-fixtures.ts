@@ -30,6 +30,11 @@ export function dailyFixture(overrides: KrxRawRow = {}): KrxRawRow {
     ISU_CD: '005930',
     ISU_NM: '삼성전자',
     MKTCAP: '350,000,000,000,000',
+    TDD_OPNPRC: '71,500',
+    TDD_HGPRC: '72,000',
+    TDD_LWPRC: '71,000',
+    TDD_CLSPRC: '71,800',
+    ACC_TRDVOL: '12,345,678',
     ...overrides,
   };
 }
