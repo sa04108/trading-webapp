@@ -133,7 +133,7 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
     await teardown(ctx);
   });
 
-  it('재수집 시 중복 없이 최신 값으로 갱신된다', async () => {
+  it('재수집 시 중복 없이 행마다 자기 값으로 갱신된다 — 배치 전체가 한 값으로 접히지 않는다', async () => {
     const ctx = await setup();
     const date = '2023-01-02';
 
@@ -141,28 +141,59 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
     // 흉내낸다 — checkpointDate 는 있는데 coverage 는 비어 재수집이 다시 최초 수집 분기를 탄다.
     ctx.svc.saveCheckpoint(date, new Map(), true);
     expect(ctx.svc.isCovered(date)).toBe(false);
-    // 그 죽은 시도가 이미 남겨 둔 stale 일봉 행 — 재수집이 이 값을 덮어써야 한다.
+    // 그 죽은 시도가 이미 남겨 둔 stale 일봉 행 두 개(서로 다른 종목·값) — 재수집이 각각
+    // 자기 값으로 덮어써야 한다. 충돌 행이 하나뿐이면 onConflictDoUpdate 의 set 이
+    // excluded.* 로 행마다 풀리는지, 아니면 배치 전체가 리터럴 한 값으로 접히는지 구분할
+    // 수 없어 여기서는 반드시 서로 다른 값의 행 2개 이상을 둔다.
     ctx.t.container.database.db
       .insert(krxDailyBars)
-      .values({ shortCode: '005930', date, market: 'KOSPI', open: 1, high: 1, low: 1, close: 1, volume: 1 })
+      .values([
+        { shortCode: '005930', date, market: 'KOSPI', open: 1, high: 1, low: 1, close: 1, volume: 1 },
+        { shortCode: '000660', date, market: 'KOSDAQ', open: 2, high: 2, low: 2, close: 2, volume: 2 },
+      ])
       .run();
 
     ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
     ctx.fake.setResponse('stk_isu_base_info', '20230102', { body: krxEnvelope([baseInfoFixture()]) });
+    ctx.fake.setResponse('ksq_bydd_trd', '20230102', {
+      body: krxEnvelope([
+        dailyFixture({
+          ISU_CD: '000660',
+          ISU_NM: 'SK하이닉스',
+          TDD_OPNPRC: '100,000',
+          TDD_HGPRC: '101,000',
+          TDD_LWPRC: '99,000',
+          TDD_CLSPRC: '100,500',
+          ACC_TRDVOL: '500,000',
+        }),
+      ]),
+    });
 
     await ctx.svc.ingestDate(date);
 
     const rows = allBars(ctx);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({
-      shortCode: '005930',
-      date,
-      open: 71_500,
-      high: 72_000,
-      low: 71_000,
-      close: 71_800,
-      volume: 12_345_678,
-    });
+    expect(rows).toEqual([
+      {
+        shortCode: '000660',
+        date,
+        market: 'KOSDAQ',
+        open: 100_000,
+        high: 101_000,
+        low: 99_000,
+        close: 100_500,
+        volume: 500_000,
+      },
+      {
+        shortCode: '005930',
+        date,
+        market: 'KOSPI',
+        open: 71_500,
+        high: 72_000,
+        low: 71_000,
+        close: 71_800,
+        volume: 12_345_678,
+      },
+    ]);
     await teardown(ctx);
   });
 
