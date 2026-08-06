@@ -6,6 +6,8 @@ import type { UniverseRule } from '../../../../shared/schemas/universe-rule.js';
 
 export interface UniverseScheduleEntry {
   readonly rebalanceDate: string; // ISO
+  /** 유니버스·시총을 실제로 읽은 거래일. 휴장이면 rebalanceDate 보다 앞선다 */
+  readonly effectiveTradingDate: string;
   readonly symbols: readonly string[]; // shortCode, 시총 내림차순 상위 N
 }
 
@@ -33,7 +35,15 @@ export class UniverseRuleResolver {
   /**
    * 리밸런스 날짜별로 유니버스 규칙을 적용해 멤버십 일정을 만든다.
    *
-   * 마스터가 커버하지 않는 날짜는 getMarketCapsAt 을 부르지 않고 바로 uncoveredDates 에
+   * 날짜별로 isCovered 와 effectiveTradingDate 를 둘 다 확인한다. effectiveTradingDate
+   * 만 보면 coverage 가 한참 전에 끊긴 먼 미래 날짜도 (date 이하 최근 거래일이 우연히
+   * 존재한다는 이유로) 옛 유니버스로 조용히 해소돼 버린다 — 그래서 coverage 도 함께
+   * 봐야 진짜로 이 날짜를 안다고 할 수 있다.
+   *
+   * 유니버스·시총은 rebalanceDate 가 아니라 effectiveTradingDate 로 읽는다. 휴장일은
+   * MKTCAP 행 자체가 없어, rebalanceDate 그대로 넘기면 상위 N 이 빈 목록이 된다.
+   *
+   * 둘 중 하나라도 없는 날짜는 getMarketCapsAt 을 부르지 않고 바로 uncoveredDates 에
    * 담는다 — 커버 밖 날짜는 어차피 제출 검증이 거부하므로, 여기서 KRX 호출 예산을
    * 미리 쓰지 않는다.
    */
@@ -46,12 +56,13 @@ export class UniverseRuleResolver {
     const unionSymbols = new Set<string>();
 
     for (const date of rebalanceDates) {
-      if (!this.deps.symbolMaster.isCovered(date)) {
+      const effectiveTradingDate = this.deps.symbolMaster.effectiveTradingDate(date);
+      if (!this.deps.symbolMaster.isCovered(date) || effectiveTradingDate === undefined) {
         uncoveredDates.push(date);
         continue;
       }
 
-      const universe = this.deps.symbolMaster.getUniverseAsOf(date);
+      const universe = this.deps.symbolMaster.getUniverseAsOf(effectiveTradingDate);
       const candidates: SymbolMasterEntry[] = [];
       for (const entry of universe.values()) {
         if (entry.instrumentType === 'COMMON_STOCK' && rule.markets.includes(entry.market)) {
@@ -59,7 +70,7 @@ export class UniverseRuleResolver {
         }
       }
 
-      const marketCaps = await this.deps.symbolMaster.getMarketCapsAt(date);
+      const marketCaps = await this.deps.symbolMaster.getMarketCapsAt(effectiveTradingDate);
       const ranked: { entry: SymbolMasterEntry; marketCap: bigint }[] = [];
       for (const entry of candidates) {
         const marketCapKrw = marketCaps.get(entry.standardCode);
@@ -70,7 +81,7 @@ export class UniverseRuleResolver {
 
       const symbols = ranked.slice(0, rule.topN).map(({ entry }) => entry.shortCode);
       for (const shortCode of symbols) unionSymbols.add(shortCode);
-      schedule.push({ rebalanceDate: date, symbols });
+      schedule.push({ rebalanceDate: date, effectiveTradingDate, symbols });
     }
 
     const scheduleHash = createHash('sha256').update(JSON.stringify(schedule)).digest('hex');

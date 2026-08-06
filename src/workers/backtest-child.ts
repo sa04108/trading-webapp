@@ -99,7 +99,9 @@ async function main(): Promise<void> {
     const unionSymbols = [...new Set(schedule.flatMap((entry) => entry.symbols))].sort();
     // 엔진에 넘길 멤버십 일정 — rebalanceDate 를 periodToTsRange 와 같은 자정 규칙으로
     // ms 로 바꾼다. 두 곳이 각자 계산하면 제출·미리보기는 맞는데 실행부만 하루 어긋나는
-    // D-024 류의 불일치가 생긴다.
+    // D-024 류의 불일치가 생긴다. entry.effectiveTradingDate 는 resolver 가 유니버스·
+    // 시총을 실제로 읽은 거래일일 뿐이다 — 리밸런스가 일어나는 시점은 언제나
+    // rebalanceDate(요청 날짜)이므로 fromTsMs 는 그대로 rebalanceDate 로 계산한다.
     const universeSchedule = schedule.map((entry) => ({
       fromTsMs: Date.parse(`${entry.rebalanceDate}T00:00:00Z`),
       symbols: entry.symbols,

@@ -112,7 +112,11 @@ describe('UniverseRuleResolver.resolve', () => {
 
     // A(500) > B(300) > C(200) 순 — D 는 시장, F 는 instrumentType, E 는 시총 없음으로 제외된다.
     expect(result.schedule).toEqual([
-      { rebalanceDate: '2023-01-02', symbols: ['000010', '000020', '000030'] },
+      {
+        rebalanceDate: '2023-01-02',
+        effectiveTradingDate: '2023-01-02',
+        symbols: ['000010', '000020', '000030'],
+      },
     ]);
     expect(result.unionSymbols).toEqual(['000010', '000020', '000030']);
     expect(result.uncoveredDates).toEqual([]);
@@ -134,11 +138,68 @@ describe('UniverseRuleResolver.resolve', () => {
 
     expect(result.uncoveredDates).toEqual(['2023-02-01']);
     expect(result.schedule).toEqual([
-      { rebalanceDate: '2023-01-02', symbols: ['000010', '000020', '000030'] },
+      {
+        rebalanceDate: '2023-01-02',
+        effectiveTradingDate: '2023-01-02',
+        symbols: ['000010', '000020', '000030'],
+      },
     ]);
     // 커버된 날짜의 getMarketCapsAt 캐시 미스(KOSPI·KOSDAQ 2회)만 발생한다 —
     // 커버 밖 날짜는 isCovered 에서 걸러져 KRX 호출 예산을 쓰지 않는다.
     expect(duringResolve).toHaveLength(2);
+
+    await teardown(ctx);
+  });
+
+  it('휴장 리밸런스 날짜는 직전 거래일 유니버스로 해소한다', async () => {
+    const ctx = await setup();
+    await ingestFixtureUniverse(ctx); // 2023-01-02 거래일 수집
+    await ctx.svc.ingestDate('2023-01-03'); // fake 서버 기본값(빈 응답) → 휴장으로 수집된다
+
+    const rule: UniverseRule = { markets: ['KOSPI'], topN: 3, sortKey: 'MKTCAP' };
+    const result = await ctx.resolver.resolve(rule, ['2023-01-03']);
+
+    expect(result.uncoveredDates).toEqual([]);
+    expect(result.schedule).toEqual([
+      {
+        rebalanceDate: '2023-01-03',
+        effectiveTradingDate: '2023-01-02',
+        symbols: ['000010', '000020', '000030'],
+      },
+    ]);
+
+    await teardown(ctx);
+  });
+
+  it('적용 거래일이 없으면 uncovered 로 분류한다', async () => {
+    const ctx = await setup();
+    // 휴장만 수집된 상태 — coverage 는 생기지만 거래일 기록은 하나도 없다
+    await ctx.svc.ingestDate('2023-01-03');
+
+    const rule: UniverseRule = { markets: ['KOSPI'], topN: 3, sortKey: 'MKTCAP' };
+    const result = await ctx.resolver.resolve(rule, ['2023-01-03']);
+
+    expect(result.uncoveredDates).toEqual(['2023-01-03']);
+    expect(result.schedule).toEqual([]);
+
+    await teardown(ctx);
+  });
+
+  it('coverage 밖 날짜는 적용 거래일이 있어도 uncovered 다', async () => {
+    const ctx = await setup();
+    await ingestFixtureUniverse(ctx); // 2023-01-02 만 커버
+
+    // effectiveTradingDate 는 date 이하 최근 거래일을 찾을 뿐이라, coverage 를 한참
+    // 벗어난 먼 미래 날짜에도 2023-01-02 를 돌려준다 — 이 경우까지 옛 유니버스로
+    // 조용히 해소되지 않아야 한다.
+    expect(ctx.svc.effectiveTradingDate('2026-01-01')).toBe('2023-01-02');
+    expect(ctx.svc.isCovered('2026-01-01')).toBe(false);
+
+    const rule: UniverseRule = { markets: ['KOSPI'], topN: 3, sortKey: 'MKTCAP' };
+    const result = await ctx.resolver.resolve(rule, ['2026-01-01']);
+
+    expect(result.uncoveredDates).toEqual(['2026-01-01']);
+    expect(result.schedule).toEqual([]);
 
     await teardown(ctx);
   });
