@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
+import { krxDailyBars } from '../../src/server/shared/db/schema.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
 import { registerSymbols } from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
@@ -18,7 +19,7 @@ const DAY = 86_400_000;
  * 2위)을 마스터에 함께 두고, universeRule.topN 으로 몇 종목이 유니버스에 들어올지
  * 테스트별로 조절한다.
  */
-function buildDailyCandles(): Candle[] {
+function buildDailyCandles(symbol = '005930'): Candle[] {
   const candles: Candle[] = [];
   const end = Date.UTC(2026, 6, 24); // 2026-07-24 (금)
   let cursor = Date.UTC(2025, 6, 28); // 2025-07-28 (월)
@@ -32,7 +33,7 @@ function buildDailyCandles(): Candle[] {
       const open = base;
       const close = base + 300;
       candles.push({
-        symbol: '005930',
+        symbol,
         market: 'KR',
         timeframe: '1d',
         tsMs: cursor,
@@ -47,6 +48,11 @@ function buildDailyCandles(): Candle[] {
     cursor += DAY;
   }
   return candles;
+}
+
+/** UTC epoch ms(자정) → krxDailyBars.date 텍스트('YYYY-MM-DD') */
+function toIsoDate(tsMs: number): string {
+  return new Date(tsMs).toISOString().slice(0, 10);
 }
 
 /** 이 파일의 테스트가 리밸런스 날짜로 쓰는 값 전부 — 종목 마스터 시총 캐시를 이 날짜들로 채운다 */
@@ -307,5 +313,104 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     });
 
     expect(response.statusCode).toBeLessThan(400);
+  });
+});
+
+/**
+ * 생존편향 제거 회귀(설계 2026-08-06-krx-daily-bars) — 자식 프로세스가 실제로
+ * CompositeCandleRepository 를 쓰는지의 유일한 증거다.
+ *
+ * 이 종목은 parquet 에 **전혀 저장하지 않는다** — krx_daily_bars 테이블에만 일봉을
+ * 넣는다(증권사가 상장폐지 종목의 봉을 안 주는 상황을 그대로 흉내낸다). 부모 프로세스의
+ * `container.candleRepository`(composite)로 미리보기·커버리지를 봤을 때 봉이 있는
+ * 것처럼 보여도, 워커(`backtest-child.ts`)가 여전히 `ParquetCandleRepository` 를
+ * 직접 만들면 실행 시점에는 0봉이라 "선택한 기간·종목에 데이터가 없습니다" 로 실패한다.
+ * `ctx.container.jobOrchestrator.tick()` 이 실제로 자식 프로세스를 fork 하므로, 이
+ * 테스트만이 워커 경로까지 검증한다 — 부모 프로세스 안에서 도는 다른 단위 테스트는
+ * 이 불일치를 볼 수 없다.
+ */
+describe('KRX 전용 일봉으로 백테스트 실행 (워커의 생존편향 제거)', () => {
+  const KRX_ONLY_CODE = '900001'; // 가상의 상장폐지 종목 — parquet 에는 없고 krx_daily_bars 에만 있다
+
+  let ctx: TestApp;
+  let cookie: string;
+  let krxOnlyCandles: Candle[];
+
+  beforeEach(async () => {
+    ctx = await createTestApp();
+    const { username, password } = await createTestAdmin(ctx.container);
+    const login = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { username, password },
+    });
+    cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+
+    registerSymbols(ctx.container, 'KR', [KRX_ONLY_CODE]);
+    seedSymbolMasterUniverse(ctx.container, MASTER_DATES, [
+      {
+        standardCode: 'KR7900001008',
+        shortCode: KRX_ONLY_CODE,
+        name: '상장폐지테스트',
+        market: 'KOSPI',
+        marketCapKrw: '500000000000000',
+      },
+    ]);
+
+    // parquet 저장(saveCandles)은 호출하지 않는다 — krx_daily_bars 테이블에만 직접 넣는다
+    krxOnlyCandles = buildDailyCandles(KRX_ONLY_CODE);
+    ctx.container.database.db
+      .insert(krxDailyBars)
+      .values(
+        krxOnlyCandles.map((candle) => ({
+          shortCode: KRX_ONLY_CODE,
+          date: toIsoDate(candle.tsMs),
+          market: 'KOSPI',
+          open: candle.open,
+          high: candle.high,
+          low: candle.low,
+          close: candle.close,
+          volume: candle.volume,
+        })),
+      )
+      .run();
+    // 제출 검증이 보는 커버리지·버전은 candleRepository(composite)를 거쳐 계산된다 —
+    // KRX 테이블만 있어도 이 두 호출로 "수집된 봉이 있다"는 상태가 된다.
+    await ctx.container.symbolService.refreshCoverage(KRX_ONLY_CODE, 'KR', '1d');
+    ctx.container.symbolService.bumpVersion(KRX_ONLY_CODE, '1d', 'broker:seed', Date.now());
+  });
+
+  afterEach(async () => {
+    await ctx.close();
+  });
+
+  it('parquet 에 없고 KRX 일봉만 있는 종목도 워커에서 체결까지 완주한다', { timeout: 90_000 }, async () => {
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: buildRequest(1),
+    });
+    expect(created.statusCode).toBe(201);
+    const jobId = (created.json().job as { id: string }).id;
+
+    ctx.container.jobOrchestrator.tick();
+    await waitFor(() => {
+      const job = ctx.container.jobQueue.getJob(jobId);
+      return job !== null && ctx.container.jobQueue.isTerminal(job.status);
+    }, 60_000);
+
+    const job = ctx.container.jobQueue.getJob(jobId)!;
+    // 회귀 지점: 워커가 여전히 parquet 만 보면 여기서 '데이터가 없습니다' 로 실패한다
+    expect(job.error).toBeNull();
+    expect(job.status).toBe('COMPLETED');
+    expect(job.totalBars).toBe(krxOnlyCandles.length);
+
+    // "생존편향 제거가 실제로 동작한다"의 증거 — 실제 체결(거래)까지 나와야 한다
+    const { total: tradeCount } = ctx.container.resultsService.getTrades(jobId, {
+      limit: 1,
+      offset: 0,
+    });
+    expect(tradeCount).toBeGreaterThan(0);
   });
 });
