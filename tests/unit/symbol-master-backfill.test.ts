@@ -96,11 +96,49 @@ describe('SymbolMasterBackfill', () => {
       state: 'IDLE',
       cursorDate: null,
       targetStartDate: '2023-01-02',
+      targetEndDate: null,
       error: null,
     });
     expect(ctx.svc.isCovered('2023-01-02')).toBe(true);
     expect(ctx.svc.isCovered('2023-01-03')).toBe(true);
     expect(ctx.svc.isCovered('2023-01-04')).toBe(true);
+    await teardown(ctx);
+  });
+
+  it('toDate 를 받으면 그 날짜까지만 채우고, 오늘이 더 뒤여도 거기서 멈춘다', async () => {
+    const ctx = await setup();
+    setTradingDay(ctx.fake, '20230102');
+    setTradingDay(ctx.fake, '20230103');
+    setTradingDay(ctx.fake, '20230104');
+    // 2023-01-05 는 일부러 세팅하지 않는다 — toDate 밖이라 호출조차 없어야 한다.
+
+    // "오늘" 을 toDate 보다 한참 뒤로 둔다 — toDate 가 없으면 계속 진행했을 상황이다.
+    const backfillClock = new MutableClock(kstNoonMs('2023-06-01'));
+    const runner = new SymbolMasterBackfill({
+      service: ctx.svc,
+      source: ctx.source,
+      clock: backfillClock,
+      logger: ctx.t.container.logger,
+      dailyCallBudget: 100,
+    });
+
+    runner.start('2023-01-02', '2023-01-04');
+    await vi.waitFor(() => expect(runner.status().state).toBe('IDLE'));
+
+    expect(runner.status()).toEqual({
+      state: 'IDLE',
+      cursorDate: null,
+      targetStartDate: '2023-01-02',
+      targetEndDate: '2023-01-04',
+      error: null,
+    });
+    expect(ctx.svc.isCovered('2023-01-02')).toBe(true);
+    expect(ctx.svc.isCovered('2023-01-03')).toBe(true);
+    expect(ctx.svc.isCovered('2023-01-04')).toBe(true);
+    // toDate 뒤는 아예 건드리지 않는다 — coverage 도, KRX 호출도 없다.
+    expect(ctx.svc.isCovered('2023-01-05')).toBe(false);
+    expect(ctx.fake.requests.some((r) => r.basDd === '20230105')).toBe(false);
+
     await teardown(ctx);
   });
 

@@ -1,7 +1,8 @@
-import { and, asc, desc, eq, gt, gte, lt, lte } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, lt, lte, sql } from 'drizzle-orm';
 import type { Clock } from '../../../shared/clock.js';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import {
+  krxDailyBars,
   symbolMasterCheckpointSymbols,
   symbolMasterCheckpoints,
   symbolMasterCoverage,
@@ -13,7 +14,11 @@ import { newId } from '../../../shared/ids.js';
 import type { Logger } from '../../../shared/logger.js';
 import { classifyKrxIssue } from '../domain/krx-filter-policy.js';
 import { addCalendarDays } from '../domain/kst-date.js';
-import type { KrxIssueBaseInfoRow, KrxMarket } from '../domain/krx-universe-types.js';
+import type {
+  KrxDailyTradeRow,
+  KrxIssueBaseInfoRow,
+  KrxMarket,
+} from '../domain/krx-universe-types.js';
 import {
   applyEventsBackward,
   applyEventsForward,
@@ -225,6 +230,7 @@ export class SymbolMasterService {
         this.writeCheckpoint(tx, date, fetched, true);
         this.mergeCoverage(tx, date);
         this.recordTradingDay(tx, date);
+        this.writeDailyBars(tx, date, kospiTrades, kosdaqTrades);
       });
       return { kind: 'TRADING_DAY', eventCount: 0, checkpointSaved: true };
     }
@@ -258,6 +264,7 @@ export class SymbolMasterService {
       }
       this.mergeCoverage(tx, date);
       this.recordTradingDay(tx, date);
+      this.writeDailyBars(tx, date, kospiTrades, kosdaqTrades);
     });
 
     // 분기 체크포인트 검증은 방금 확정한 이벤트를 getUniverseAsOf 로 다시 읽어야 하므로
@@ -574,6 +581,83 @@ export class SymbolMasterService {
    */
   private recordTradingDay(tx: AppDatabase, date: string): void {
     tx.insert(symbolMasterTradingDays).values({ date }).onConflictDoNothing().run();
+  }
+
+  /**
+   * 이미 받아 둔 kospiTrades·kosdaqTrades 로 그날의 일봉을 krxDailyBars 에 저장한다 —
+   * ingestDateUnguarded 가 KRX 를 다시 부르지 않고 넘겨주는 값을 그대로 쓴다. 호출자가
+   * 이벤트·coverage·거래일 기록과 같은 트랜잭션 안에서 불러야 한다 — 따로 두면 중간에
+   * 죽었을 때 커버는 됐는데 봉만 빠진 상태가 남는다.
+   *
+   * 가격 4개나 거래량 중 하나라도 null 인 행(거래정지 등)은 저장할 컬럼이 NOT NULL 이라
+   * 애초에 넣을 수 없으니 건너뛰고 건수만 남긴다.
+   *
+   * onConflictDoUpdate 의 set 에 excluded.* 를 써서 배치 안 각 행이 자기 자신의 값으로
+   * 갱신되게 한다 — set 에 리터럴을 쓰면 배치 전체가 같은 값 하나로 덮이므로 재수집이
+   * 서로 다른 종목을 뒤섞어 버린다.
+   */
+  private writeDailyBars(
+    tx: AppDatabase,
+    date: string,
+    kospiTrades: readonly KrxDailyTradeRow[],
+    kosdaqTrades: readonly KrxDailyTradeRow[],
+  ): void {
+    const byMarket: readonly [KrxMarket, readonly KrxDailyTradeRow[]][] = [
+      ['KOSPI', kospiTrades],
+      ['KOSDAQ', kosdaqTrades],
+    ];
+
+    let skipped = 0;
+    const rows: (typeof krxDailyBars.$inferInsert)[] = [];
+    for (const [market, trades] of byMarket) {
+      for (const trade of trades) {
+        if (
+          trade.open === null
+          || trade.high === null
+          || trade.low === null
+          || trade.close === null
+          || trade.volume === null
+        ) {
+          skipped += 1;
+          continue;
+        }
+        rows.push({
+          shortCode: trade.shortCode,
+          date,
+          market,
+          open: trade.open,
+          high: trade.high,
+          low: trade.low,
+          close: trade.close,
+          volume: trade.volume,
+        });
+      }
+    }
+
+    if (skipped > 0) {
+      this.deps.logger.debug(
+        { module: 'market-data', event: 'symbol-master.daily-bars-skipped', date, skipped },
+        '가격·거래량 중 null 값이 있는 일봉 행을 건너뛴다',
+      );
+    }
+
+    // SQLite 바인딩 변수 한도(999)를 피하려 500개 단위로 나눠 넣는다 — writeCheckpoint 와 같은 이유다
+    for (let i = 0; i < rows.length; i += 500) {
+      tx.insert(krxDailyBars)
+        .values(rows.slice(i, i + 500))
+        .onConflictDoUpdate({
+          target: [krxDailyBars.shortCode, krxDailyBars.date],
+          set: {
+            market: sql`excluded.market`,
+            open: sql`excluded.open`,
+            high: sql`excluded.high`,
+            low: sql`excluded.low`,
+            close: sql`excluded.close`,
+            volume: sql`excluded.volume`,
+          },
+        })
+        .run();
+    }
   }
 
   /** 주어진 날짜를 포함하는 수집 완료 구간이 있는지 */

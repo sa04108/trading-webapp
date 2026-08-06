@@ -191,8 +191,18 @@ export class SymbolService {
   /**
    * 종목 등록. 이름은 호출부(라우트)가 `SymbolInfoService` 로 먼저 해석해 넘긴다 —
    * 애플리케이션 서비스가 외부 조회를 직접 하면 소스 미설정 환경에서 등록이 막힌다.
+   *
+   * standardCode(KRX 표준코드/ISIN)는 종목 마스터에서 등록할 때만 채워진다(Task 4,
+   * 스펙 2026-08-06) — 단축코드 재사용을 구분하는 유일한 열쇠라고 스키마 주석에
+   * 적혀 있다. 이후에는 이 값을 덮어쓸 방법을 일부러 두지 않았다: 이미 정착된
+   * standardCode 를 새 조회로 갈아치우면 그 판별 근거 자체가 사라진다.
    */
-  addSymbol(code: string, market: Market, name: string | null = null): SymbolSummary {
+  addSymbol(
+    code: string,
+    market: Market,
+    name: string | null = null,
+    standardCode: string | null = null,
+  ): SymbolSummary {
     if (!SYMBOL_PATTERN.test(code)) throw new Error(`invalid symbol: ${code}`);
     // 세션 미지원 시장은 집계·coverage 가 불가능하므로 등록 시점에 거부한다 (D-006·D-027)
     getSessionForMarket(market);
@@ -200,7 +210,7 @@ export class SymbolService {
 
     this.db
       .insert(symbolsTable)
-      .values({ code, market, name, createdAtMs: this.clock.now() })
+      .values({ code, market, name, standardCode, createdAtMs: this.clock.now() })
       .run();
     this.audit.record('system', 'symbol.added', { code, market });
     return this.getSymbol(code)!;

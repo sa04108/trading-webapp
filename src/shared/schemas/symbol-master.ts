@@ -39,6 +39,14 @@ export const symbolMasterCoverageDtoSchema = z.object({
   backfill: z.object({
     state: z.enum(['IDLE', 'RUNNING', 'BUDGET_EXHAUSTED', 'FAILED']),
     cursorDate: z.string().nullable(),
+    /**
+     * 지금 도는(또는 마지막) 백필의 대상 구간. 위저드가 자기 요청 범위와 비교해
+     * "이 진행이 내 요청인지"를 판정하는 유일한 근거다(리뷰 finding, Task 4 후속) —
+     * 이게 없으면 다른 백필에 편승 중일 때 사용자에게 설명할 방법이 없다.
+     */
+    targetStartDate: z.string().nullable(),
+    /** toDate 없이 시작한 백필(오늘까지)은 null 이다 */
+    targetEndDate: z.string().nullable(),
     error: z.string().nullable(),
   }),
 });

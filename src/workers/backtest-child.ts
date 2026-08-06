@@ -33,6 +33,7 @@ import { CORPORATE_ACTION_FIELD, type Fact } from '../server/modules/facts/domai
 import type { Candle, Market, Timeframe } from '../server/modules/market-data/domain/candle.js';
 import { DuckDbService } from '../server/modules/market-data/infrastructure/duckdb-service.js';
 import { ParquetCandleRepository } from '../server/modules/market-data/infrastructure/parquet-candle-repository.js';
+import { CompositeCandleRepository } from '../server/modules/market-data/infrastructure/composite-candle-repository.js';
 import { StrategyRegistry } from '../server/modules/strategy/application/strategy-registry.js';
 import { strategySourceHash } from '../server/modules/strategy/application/strategy-source-hash.js';
 import { backtestRequestSchema, periodToTsRange } from '../shared/schemas/backtest-request.js';
@@ -179,7 +180,13 @@ async function main(): Promise<void> {
     // 데이터셋에 defaultTimeframe 이 없어졌다 — 요청이 소비 기준의 유일한 출처다.
     // 미지정이면 일봉으로 본다 (구 legacyConsumeDefault 의 '1d' 분기와 같은 값).
     const timeframe = (request.timeframe ?? '1d') as Timeframe;
-    const repository = new ParquetCandleRepository(dataRoot, duckdb);
+    // 1일봉은 KRX 테이블 우선(설계 2026-08-06-krx-daily-bars) — container.ts 조립부와
+    // 같은 모양으로 감싼다. 여기서 새로 감싸지 않고 parquet 저장소만 쓰면, 미리보기·
+    // 커버리지(부모 프로세스, composite 경유)는 봉이 있다고 답하는데 실행(이 워커)은
+    // 0봉으로 실패하는 어긋남이 생긴다 — 상장폐지 종목처럼 KRX 에만 봉이 있는 경우가
+    // 정확히 이 상황이다. db 는 위에서 이미 연 handle 을 재사용한다 — 워커가 잡 조회로
+    // 이미 DB 를 열어 둔 상태라 새로 열 이유가 없다.
+    const repository = new CompositeCandleRepository(db, new ParquetCandleRepository(dataRoot, duckdb));
     const { fromTsMs, toTsMs } = periodToTsRange(request.period);
     const candles: Candle[] = [];
     for await (const candle of repository.getCandles({

@@ -1,5 +1,11 @@
+import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { symbolMasterCoverage, symbolMasterTradingDays } from '../../src/server/shared/db/schema.js';
+import {
+  krxDailyBars,
+  symbolMasterCoverage,
+  symbolMasterTradingDays,
+  symbols as symbolsTable,
+} from '../../src/server/shared/db/schema.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
 import { registerSymbols } from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
@@ -104,7 +110,9 @@ describe('POST /backtests/universe-preview', () => {
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
       { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
     ]);
-    // 로컬 종목 등록도, 봉도 없다 — 위저드가 「가격 데이터 탭에서 동기화하세요」 를 안내할 근거
+    // 로컬 종목은 미리 등록해 두지 않는다 — 이 미리보기 응답 자체가 unionSymbols 를
+    // 자동 등록하므로(Task 4, 아래 describe 참고), 여기서는 등록 여부와 무관하게
+    // 봉이 없다는 사실만 검증한다.
 
     const res = await ctx.app.inject({
       method: 'POST',
@@ -166,6 +174,155 @@ describe('POST /backtests/universe-preview', () => {
       },
     });
     expect(res.statusCode).toBe(400);
+  });
+});
+
+/**
+ * 유니버스 종목 자동 등록(브리프 §5, 스펙 2026-08-06 Task 4) — 미리보기가 만든
+ * unionSymbols 를 `symbols` 에 등록한다. 이름·시장·표준코드는 종목 마스터에서
+ * 가져온다: 증권사 조회는 상장폐지 종목의 이름을 주지 않아 그 출처로는 등록할 수
+ * 없기 때문이다. 등록은 미리보기 응답 시점에 붙인다 — 판단 근거는
+ * backtest-routes.ts registerUniverseSymbols 주석 참고.
+ */
+describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록', () => {
+  let ctx: TestApp;
+  let cookie: string;
+
+  beforeEach(async () => {
+    ctx = await createTestApp();
+    const { username, password } = await createTestAdmin(ctx.container);
+    const login = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { username, password },
+    });
+    cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+  });
+
+  afterEach(async () => {
+    await ctx.close();
+  });
+
+  const readStandardCode = (code: string): string | null =>
+    ctx.container.database.db
+      .select({ standardCode: symbolsTable.standardCode })
+      .from(symbolsTable)
+      .where(eq(symbolsTable.code, code))
+      .get()?.standardCode ?? null;
+
+  it('unionSymbols 를 종목 마스터의 이름·시장·표준코드로 자동 등록한다', async () => {
+    seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
+      { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
+      { standardCode: 'KR7035720002', shortCode: '035720', name: '카카오', market: 'KOSDAQ', marketCapKrw: '20000000000000' },
+    ]);
+    expect(ctx.container.symbolService.exists('005930')).toBe(false);
+    expect(ctx.container.symbolService.exists('035720')).toBe(false);
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: { markets: ['KOSPI'], topN: 10, sortKey: 'MKTCAP' },
+        period: { from: '2026-01-05', to: '2026-01-05' },
+        rebalanceMonths: 1,
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    // KOSDAQ(카카오)은 markets:['KOSPI'] 규칙에 안 걸려 unionSymbols 밖이다 — 등록되지 않는다.
+    expect(ctx.container.symbolService.exists('035720')).toBe(false);
+
+    const registered = ctx.container.symbolService.getSymbol('005930');
+    expect(registered).toMatchObject({ code: '005930', market: 'KR', name: '삼성전자' });
+    expect(readStandardCode('005930')).toBe('KR7005930003');
+  });
+
+  it('이미 등록된 종목은 다시 미리보기해도 실패하지 않고 표준코드를 덮어쓰지 않는다', async () => {
+    seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
+      { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
+    ]);
+    // 사용자가 이미 손으로(또는 이전 실행에서) 등록해 뒀다 — 이름·표준코드 없이.
+    ctx.container.symbolService.addSymbol('005930', 'KR');
+    expect(readStandardCode('005930')).toBeNull();
+
+    for (let i = 0; i < 2; i += 1) {
+      const res = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/backtests/universe-preview',
+        cookies: { qp_session: cookie },
+        payload: {
+          universeRule: { markets: ['KOSPI'], topN: 10, sortKey: 'MKTCAP' },
+          period: { from: '2026-01-05', to: '2026-01-05' },
+          rebalanceMonths: 1,
+        },
+      });
+      expect(res.statusCode).toBe(200);
+    }
+
+    // 재등록 시도가 있었어도 기존 값(표준코드 없음)을 덮어쓰지 않는다 —
+    // 단축코드 재사용 판별의 유일한 열쇠라 새 조회로 갈아치우면 안 된다.
+    expect(readStandardCode('005930')).toBeNull();
+    expect(ctx.container.symbolService.getSymbol('005930')?.name).toBeNull();
+  });
+
+  /**
+   * 회귀(스펙 2026-08-06 Task 5 리뷰 발견) — `addSymbol` 은 `symbolCoverage` 캐시를
+   * 채우지 않는다. 그 캐시는 오직 증권사 동기화·CSV 가져오기가 끝난 뒤에만
+   * `refreshCoverage` 로 채워지는데, 상장폐지 종목은 둘 중 어느 것도 겪지 않는다
+   * (증권사는 상장폐지 종목의 봉을 안 주고, CSV 가져오기는 수동이다). `backfill`
+   * 이 이미 `krx_daily_bars` 를 채워 뒀어도 이 갱신이 없으면 `missingCandleSymbols`
+   * 와 가격 데이터 탭 모두 "봉 없음" 으로 남아, Task 4 가 적은 "자동 등록하면
+   * 가격 데이터 탭에서 상장폐지 종목도 보인다" 는 전제가 깨진다 — 이 테스트는
+   * `refreshCoverage` 를 직접 부르지 않고 `krx_daily_bars` 만 미리 심어 둔 채
+   * 미리보기 한 번으로 그 전제가 실제로 성립하는지 확인한다.
+   */
+  it('krx_daily_bars 만 있고 캐시를 갱신한 적 없는 종목도 missingCandleSymbols 에서 빠진다', async () => {
+    seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
+      {
+        standardCode: 'KR7900010009',
+        shortCode: '900010',
+        name: '상장폐지예정1호',
+        market: 'KOSPI',
+        marketCapKrw: '500000000000000',
+      },
+    ]);
+    // 백필이 이미 이 종목의 KRX 일봉을 채워 뒀다고 가정한다 — refreshCoverage 는
+    // 일부러 부르지 않는다. 이 값 자체를 미리보기가 대신 갱신해야 한다.
+    ctx.container.database.db
+      .insert(krxDailyBars)
+      .values({
+        shortCode: '900010',
+        date: '2026-01-05',
+        market: 'KOSPI',
+        open: 1_000,
+        high: 1_100,
+        low: 900,
+        close: 1_050,
+        volume: 12_345,
+      })
+      .run();
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: { markets: ['KOSPI'], topN: 10, sortKey: 'MKTCAP' },
+        period: { from: '2026-01-05', to: '2026-01-05' },
+        rebalanceMonths: 1,
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { unionSymbols: string[]; missingCandleSymbols: string[] };
+    expect(body.unionSymbols).toEqual(['900010']);
+    expect(body.missingCandleSymbols).toEqual([]);
+
+    // 가격 데이터 탭이 읽는 요약도 같은 캐시를 쓴다 — 실제로 "봉 있음" 으로 보인다.
+    const summary = ctx.container.symbolService.getSymbol('900010');
+    const dailySlice = summary?.slices.find((slice) => slice.slice === '1d');
+    expect(dailySlice?.hasData).toBe(true);
+    expect(dailySlice?.barCount).toBe(1);
   });
 });
 

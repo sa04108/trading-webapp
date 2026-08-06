@@ -3,7 +3,7 @@
  * 테이블은 Phase 진행에 따라 추가된다. drizzle-kit generate 로 migrations/ 를 생성한다.
  * schema_migrations 역할은 drizzle 의 __drizzle_migrations 테이블이 담당한다.
  */
-import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 export const users = sqliteTable('users', {
   id: text('id').primaryKey(),
@@ -495,3 +495,30 @@ export const symbolMasterMarketCaps = sqliteTable(
 export const symbolMasterTradingDays = sqliteTable('symbol_master_trading_days', {
   date: text('date').primaryKey(),
 });
+
+/**
+ * 일별매매 OHLCV (설계 2026-08-06-krx-daily-bars).
+ *
+ * 기본 키가 (shortCode, date) 다 — 같은 날짜를 다시 수집해도 덮어쓰기만 하면 되고,
+ * 읽기는 종목 하나의 기간 조회라 이 순서가 맞다. 거래대금(ACC_TRDVAL)은 쓰는 곳이
+ * 없어 저장하지 않는다(YAGNI).
+ */
+export const krxDailyBars = sqliteTable(
+  'krx_daily_bars',
+  {
+    /** 단축 종목코드 — 일별매매 응답의 ISU_CD 다(이름과 달리 단축코드다) */
+    shortCode: text('short_code').notNull(),
+    date: text('date').notNull(),
+    market: text('market').notNull(),
+    open: integer('open').notNull(),
+    high: integer('high').notNull(),
+    low: integer('low').notNull(),
+    close: integer('close').notNull(),
+    volume: integer('volume').notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.shortCode, table.date] }),
+    // 날짜 단위 삭제·점검용 인덱스
+    index('idx_krx_daily_bars_date').on(table.date),
+  ],
+);

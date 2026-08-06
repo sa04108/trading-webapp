@@ -14,6 +14,14 @@ export interface UniverseScheduleEntry {
 export interface ResolvedUniverse {
   readonly schedule: readonly UniverseScheduleEntry[];
   readonly unionSymbols: readonly string[];
+  /**
+   * unionSymbols 각 shortCode 의 종목 마스터 원본 항목(Task 4, 스펙 2026-08-06) —
+   * 자동 등록이 이름·시장·표준코드를 여기서 가져온다. 증권사(symbolInfoService)는
+   * 상장폐지 종목의 이름을 주지 않으므로 마스터가 유일한 출처다. 같은 shortCode 가
+   * 여러 리밸런스 날짜에 걸쳐 나와도 처음 만난 항목만 남긴다 — 등록 목적으로는
+   * 어느 시점 스냅샷이든 상관없다.
+   */
+  readonly unionEntries: ReadonlyMap<string, SymbolMasterEntry>;
   readonly scheduleHash: string; // sha256(schedule 의 JSON 직렬화) — schedule 자체가 결정적이라 안정적이다
   readonly uncoveredDates: readonly string[]; // 마스터가 커버하지 않는 리밸런스 날짜
 }
@@ -56,6 +64,7 @@ export class UniverseRuleResolver {
     const schedule: UniverseScheduleEntry[] = [];
     const uncoveredDates: string[] = [];
     const unionSymbols = new Set<string>();
+    const unionEntries = new Map<string, SymbolMasterEntry>();
 
     for (const date of rebalanceDates) {
       const effectiveTradingDate = this.deps.symbolMaster.effectiveTradingDateWithinCoverage(date);
@@ -81,8 +90,12 @@ export class UniverseRuleResolver {
       }
       ranked.sort((a, b) => compareMarketCapDesc(a.marketCap, b.marketCap));
 
-      const symbols = ranked.slice(0, rule.topN).map(({ entry }) => entry.shortCode);
-      for (const shortCode of symbols) unionSymbols.add(shortCode);
+      const top = ranked.slice(0, rule.topN);
+      const symbols = top.map(({ entry }) => entry.shortCode);
+      for (const { entry } of top) {
+        unionSymbols.add(entry.shortCode);
+        if (!unionEntries.has(entry.shortCode)) unionEntries.set(entry.shortCode, entry);
+      }
       schedule.push({ rebalanceDate: date, effectiveTradingDate, symbols });
     }
 
@@ -91,6 +104,7 @@ export class UniverseRuleResolver {
     return {
       schedule,
       unionSymbols: [...unionSymbols].sort(),
+      unionEntries,
       scheduleHash,
       uncoveredDates,
     };

@@ -530,6 +530,86 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     return codes.filter((code) => !symbolService.exists(code) || !hasBars.has(code));
   };
 
+  /**
+   * 유니버스 미리보기가 만든 unionSymbols 를 `symbols` 에 자동 등록한다(브리프 §5,
+   * 스펙 2026-08-06 Task 4) — 이름·시장·표준코드는 종목 마스터(`resolved.unionEntries`)
+   * 에서 가져온다. 증권사 조회(symbolInfoService)는 상장폐지 종목의 이름을 주지
+   * 않아 그 출처로는 등록할 수 없다 — 그래서 가격 데이터 탭에서 상장폐지 종목이
+   * 조회되지 않던 문제가 이 등록으로 풀린다.
+   *
+   * **이 등록은 화면 편의가 아니라 제출 자체의 전제조건이다.** `validateSubmission`
+   * 의 `resolveConsumedUniverse`/`checkPeriodCoverage` 는 `symbolService.getCoverage`
+   * (= `symbols` 에 등록된 종목의 커버리지)로 timeframe 가용성·기간 겹침을 판정한다
+   * — 등록되지 않은 코드는 커버리지 자체가 없어 "수집된 봉이 없습니다" 로 400 을
+   * 받는다. 즉 이 미리보기(읽기 의미로 보이는 GET 성격의 호출)를 건너뛰고 API 를
+   * 직접 두드려 `POST /backtests` 를 호출하면, 종목 마스터·KRX 일봉이 이미 있어도
+   * 등록이 안 됐다는 이유만으로 제출이 막힌다. 회귀는 아니다(Task 4 이전에도 등록은
+   * 필요했다) — 다만 그 등록을 지금은 이 미리보기 호출 하나가 전담하므로, 위저드
+   * 흐름을 벗어난 자동화·API 클라이언트를 만들 때는 이 사실을 알아야 한다.
+   *
+   * KRX 응답 마켓(KOSPI/KOSDAQ)은 항상 'KR' 로 등록한다 — `symbols.market` 은
+   * 세션 축(KR/US) 이고, krxDailyBars 는 애초에 국내 종목만 갖는다
+   * (composite-candle-repository.ts usesKrx 주석 참고).
+   *
+   * 이미 등록된 코드는 건너뛴다 — 재등록을 실패로 다루지 않기 위해서고, 동시에
+   * standardCode 를 덮어쓰지 않기 위해서다(addSymbol 주석 참고).
+   *
+   * 위저드가 제출 전에 거치는 미리보기와, 상세 화면의 원클릭 복제(`POST
+   * /backtests/:id/clone`) 둘 다 이 등록을 거친다 — 아래 `ensureUniverseRegistered`
+   * 로 묶어 호출한다(리뷰 finding, 2026-08-06). 복제는 미리보기 화면을 거치지 않고
+   * 바로 제출하므로, 미리보기에서 한 번도 등록되지 않은 종목(예: 리밸런스 시점
+   * 시총이 바뀌어 새로 topN 에 든 종목)을 그대로 두면 실행은 되지만(§ 아래
+   * `checkPeriodCoverage` 참고) 가격 데이터 탭에는 보이지 않는 불일치가 남는다.
+   * `clone-draft`(GET)에는 넣지 않는다 — "대기열에 넣지 않고 아무것도 확정하지
+   * 않는다"는 읽기 전용 계약이라 등록도 하지 않는다.
+   */
+  const registerUniverseSymbols = (resolved: ResolvedUniverse): void => {
+    for (const code of resolved.unionSymbols) {
+      if (symbolService.exists(code)) continue;
+      const entry = resolved.unionEntries.get(code);
+      if (!entry) continue; // 이론상 항상 있다 — unionSymbols 는 unionEntries 와 같은 루프에서 채워진다
+      symbolService.addSymbol(code, 'KR', entry.name, entry.standardCode);
+    }
+  };
+
+  /**
+   * unionSymbols 의 1일봉 커버리지 캐시(`symbolCoverage`)를 KRX 일봉 기준으로
+   * 다시 계산한다(스펙 2026-08-06 Task 5 리뷰에서 발견).
+   *
+   * `registerUniverseSymbols` 의 `addSymbol` 은 캐시를 건드리지 않는다 — 캐시는
+   * 오직 증권사 동기화(`BrokerSyncService.run`)나 CSV 가져오기가 끝난 뒤에만
+   * `refreshCoverage` 로 채워진다. 그런데 상장폐지 종목은 그 둘 중 어느 것도
+   * 겪지 않는다: 증권사는 상장폐지 종목의 과거 봉을 안 주고(이 기능 전체의
+   * 출발점), CSV 가져오기는 수동이다. 그 결과 `SymbolMasterBackfill` 이
+   * `krx_daily_bars` 를 이미 채웠어도 캐시는 영원히 "봉 없음" 으로 남아
+   * `missingCandleSymbolsOf` 와 가격 데이터 탭 모두 실제 데이터와 어긋난다 —
+   * Task 4 가 "자동 등록하면 가격 데이터 탭에서 상장폐지 종목도 보인다" 고 적은
+   * 전제가 이 갱신 없이는 성립하지 않는다.
+   *
+   * `CompositeCandleRepository` 는 KR·1d 조합에서 KRX 테이블을 먼저 본다(있으면
+   * 그것만, 없으면 위임)이므로 이 갱신은 브로커 호출 없이 로컬 DB 읽기만으로
+   * 끝나고, 이미 증권사로 채워진 다른 슬라이스(예: 1m)는 건드리지 않는다.
+   * unionSymbols 규모는 `MAX_UNIVERSE_SYMBOLS` 로 상한이 있어(위저드 상위 N)
+   * 매 미리보기마다 순회해도 로컬 SQLite 읽기·쓰기 수준이라 무리가 없다.
+   */
+  const refreshKrxDailyCoverage = async (codes: readonly string[]): Promise<void> => {
+    for (const code of codes) {
+      await symbolService.refreshCoverage(code, 'KR', '1d');
+    }
+  };
+
+  /**
+   * `registerUniverseSymbols` + `refreshKrxDailyCoverage` 를 한 호출로 묶는다 — 두
+   * 제출 경로(미리보기, 원클릭 복제)가 같은 전제를 공유해야 하는데 복붙하면 한쪽만
+   * 고치고 잊기 쉽다(리뷰 finding, 2026-08-06). `POST /backtests`(신규 제출)에는
+   * 붙이지 않는다 — 위저드는 제출 전에 항상 미리보기를 거치므로 그때 이미 등록이
+   * 끝나 있다.
+   */
+  const ensureUniverseRegistered = async (resolved: ResolvedUniverse): Promise<void> => {
+    registerUniverseSymbols(resolved);
+    await refreshKrxDailyCoverage(resolved.unionSymbols);
+  };
+
   app.post('/backtests/universe-preview', { preHandler: requireAuth }, async (request, reply) => {
     const parsed = universePreviewRequestSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -545,6 +625,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const rebalanceDates = computeRebalanceDates(period, rebalanceMonths);
     try {
       const resolved = await universeRuleResolver.resolve(universeRule, rebalanceDates);
+      await ensureUniverseRegistered(resolved);
       return {
         schedule: resolved.schedule,
         unionSymbols: resolved.unionSymbols,
@@ -675,6 +756,13 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     // 재기준 후에도 새 제출이다 — POST 와 동일한 검증 관문을 거치고 버전을 다시 고정한다.
     let validated: Awaited<ReturnType<typeof validateSubmission>>;
     try {
+      // clone 은 위저드의 미리보기 화면을 거치지 않고 상세 화면에서 바로 제출한다 —
+      // `validateSubmission` 의 커버리지 검사(`resolveConsumedUniverse`)보다 먼저
+      // 여기서 unionSymbols 를 직접 등록·갱신해야 한다(ensureUniverseRegistered
+      // 주석 참고). 그렇지 않으면 미리보기를 한 번도 거치지 않은 종목(예: 리밸런스
+      // 시점 시총이 바뀌어 새로 topN 에 든 종목)이 실행은 되고도(§ checkPeriodCoverage
+      // 는 일부 종목만 데이터가 있어도 통과시킨다) 가격 데이터 탭에는 보이지 않는다.
+      await ensureUniverseRegistered(await resolveScheduleForRequest(cloneRequest));
       validated = await validateSubmission(cloneRequest);
     } catch (error) {
       if (sendIfKrxError(reply, error)) return reply;
