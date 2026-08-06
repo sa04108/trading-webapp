@@ -51,7 +51,7 @@ function notConfiguredSource(): KrxHistoricalUniverseSource {
     fetchDailyTrades: async () => {
       throw new KrxNotConfiguredError();
     },
-    todayCallCount: () => 0,
+    todayMaxEndpointCallCount: () => 0,
   };
 }
 
@@ -72,22 +72,32 @@ export function createKrxHistoricalUniverseSource(
     clock: () => clock.now(),
     groupMinIntervalMs: { default: 250 },
   });
+  // KRX 한도는 엔드포인트마다 따로 걸리므로 경로별로 나눠 센다 — 키는 `${KST 날짜}|${경로}`다.
   const callCounts = new Map<string, number>();
 
   function currentDate(): string {
     return kstDateOf(clock.now());
   }
 
+  function countKey(today: string, path: string): string {
+    return `${today}|${path}`;
+  }
+
   function removeStaleCounts(today: string): void {
-    for (const date of callCounts.keys()) {
-      if (date !== today) callCounts.delete(date);
+    const prefix = `${today}|`;
+    for (const key of callCounts.keys()) {
+      if (!key.startsWith(prefix)) callCounts.delete(key);
     }
   }
 
-  function todayCallCount(): number {
+  function todayMaxEndpointCallCount(): number {
     const today = currentDate();
     removeStaleCounts(today);
-    return callCounts.get(today) ?? 0;
+    let max = 0;
+    for (const count of callCounts.values()) {
+      if (count > max) max = count;
+    }
+    return max;
   }
 
   function ensureApprovalIsValid(today: string): void {
@@ -105,8 +115,9 @@ export function createKrxHistoricalUniverseSource(
     const today = currentDate();
     ensureApprovalIsValid(today);
     removeStaleCounts(today);
-    const callsToday = (callCounts.get(today) ?? 0) + 1;
-    callCounts.set(today, callsToday);
+    const key = countKey(today, path);
+    const callsToday = (callCounts.get(key) ?? 0) + 1;
+    callCounts.set(key, callsToday);
 
     const basDd = isoToBasDd(isoDate);
     let payload: unknown;
@@ -157,6 +168,6 @@ export function createKrxHistoricalUniverseSource(
       isoDate: string,
     ): Promise<readonly KrxDailyTradeRow[]> =>
       fetchRows(market, isoDate, PATHS[market].daily, parseDailyRows),
-    todayCallCount,
+    todayMaxEndpointCallCount,
   };
 }

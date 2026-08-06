@@ -148,7 +148,7 @@ describe('KRX 과거 유니버스 어댑터', () => {
       KrxNotConfiguredError,
     );
     expect(calls).toHaveLength(0);
-    expect(source.todayCallCount()).toBe(0);
+    expect(source.todayMaxEndpointCallCount()).toBe(0);
   });
 
   it('승인이 지난 뒤에는 HTTP·카운터·성공 로그를 남기지 않는다', async () => {
@@ -165,7 +165,7 @@ describe('KRX 과거 유니버스 어댑터', () => {
       KrxApprovalExpiredError,
     );
     expect(calls).toHaveLength(0);
-    expect(source.todayCallCount()).toBe(0);
+    expect(source.todayMaxEndpointCallCount()).toBe(0);
     expect(captured.calls.filter(({ args }) => args[0] && (args[0] as { event?: string }).event === 'krx.fetch')).toHaveLength(0);
   });
 
@@ -285,7 +285,7 @@ describe('KRX 과거 유니버스 어댑터', () => {
     expect(rejection).toBeInstanceOf(KrxQuotaError);
     expect((rejection as Error).message).not.toContain(API_KEY);
     expect(calls).toHaveLength(5);
-    expect(source.todayCallCount()).toBe(1);
+    expect(source.todayMaxEndpointCallCount()).toBe(1);
     expect(captured.lines.join('\n')).not.toContain(API_KEY);
   });
 
@@ -437,7 +437,7 @@ describe('KRX 과거 유니버스 어댑터', () => {
     await source.fetchDailyTrades('KOSDAQ', '2026-08-01');
     await source.fetchDailyTrades('KOSDAQ', '2026-08-02');
 
-    expect(source.todayCallCount()).toBe(2);
+    expect(source.todayMaxEndpointCallCount()).toBe(2);
     const successLogs = captured.calls.filter(
       ({ level, args }) => level === 'info' && (args[0] as { event?: string }).event === 'krx.fetch',
     );
@@ -455,18 +455,34 @@ describe('KRX 과거 유니버스 어댑터', () => {
     ]);
   });
 
+  it('엔드포인트마다 따로 세어 서로 다른 경로의 호출을 합산하지 않는다', async () => {
+    const { fetchImpl } = createFetch(() => krxJsonResponse(krxEnvelope([])));
+    const source = createConfiguredSource({ fetchImpl });
+
+    // 네 엔드포인트를 한 번씩 — 총합은 4 지만 한도는 엔드포인트별이라 최댓값은 1 이다.
+    await source.fetchIssueBaseInfo('KOSPI', '2026-08-01');
+    await source.fetchIssueBaseInfo('KOSDAQ', '2026-08-01');
+    await source.fetchDailyTrades('KOSPI', '2026-08-01');
+    await source.fetchDailyTrades('KOSDAQ', '2026-08-01');
+    expect(source.todayMaxEndpointCallCount()).toBe(1);
+
+    // 같은 엔드포인트를 다시 부르면 그 경로만 올라간다.
+    await source.fetchDailyTrades('KOSDAQ', '2026-08-02');
+    expect(source.todayMaxEndpointCallCount()).toBe(2);
+  });
+
   it('KST 날짜가 바뀌면 현재 카운터를 새 날짜로 초기화하고 오래된 키를 치운다', async () => {
     const clock = mutableClock('2026-08-03T14:59:59.000Z');
     const { fetchImpl } = createFetch(() => krxJsonResponse(krxEnvelope([])));
     const source = createConfiguredSource({ clock, fetchImpl });
 
     await source.fetchIssueBaseInfo('KOSPI', '2026-08-01');
-    expect(source.todayCallCount()).toBe(1);
+    expect(source.todayMaxEndpointCallCount()).toBe(1);
 
     clock.set('2026-08-03T15:00:00.000Z');
-    expect(source.todayCallCount()).toBe(0);
+    expect(source.todayMaxEndpointCallCount()).toBe(0);
     await source.fetchDailyTrades('KOSPI', '2026-08-01');
-    expect(source.todayCallCount()).toBe(1);
+    expect(source.todayMaxEndpointCallCount()).toBe(1);
   });
 
   it('계약 파싱 실패도 논리 호출을 소비하지만 성공 로그는 남기지 않는다', async () => {
@@ -477,7 +493,7 @@ describe('KRX 과거 유니버스 어댑터', () => {
     await expect(source.fetchIssueBaseInfo('KOSPI', '2026-08-01')).rejects.toBeInstanceOf(
       KrxContractError,
     );
-    expect(source.todayCallCount()).toBe(1);
+    expect(source.todayMaxEndpointCallCount()).toBe(1);
     expect(
       captured.calls.some(({ args }) => (args[0] as { event?: string }).event === 'krx.fetch'),
     ).toBe(false);

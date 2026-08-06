@@ -58,7 +58,11 @@ export interface MarketDataSource {
 export interface KrxHistoricalUniverseSource {
   fetchIssueBaseInfo(market: KrxMarket, isoDate: string): Promise<readonly KrxIssueBaseInfoRow[]>;
   fetchDailyTrades(market: KrxMarket, isoDate: string): Promise<readonly KrxDailyTradeRow[]>;
-  todayCallCount(): number;
+  /**
+   * 오늘(KST) 가장 많이 부른 엔드포인트의 호출 수. KRX 한도가 엔드포인트마다 따로 걸려 있어
+   * 총합으로 재면 남은 여력을 실제보다 적게 본다.
+   */
+  todayMaxEndpointCallCount(): number;
 }
 
 /** 종목 참조 정보 (코드 → 이름). 이름 검색(이름 → 코드)은 소스가 제공하지 않는다. */

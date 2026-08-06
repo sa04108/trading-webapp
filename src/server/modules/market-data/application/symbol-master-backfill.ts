@@ -23,14 +23,15 @@ export interface SymbolMasterBackfillDeps {
   readonly dailyCallBudget?: number;
 }
 
-const DEFAULT_DAILY_CALL_BUDGET = 8000;
+/** 엔드포인트당 기준. KRX 한도 10,000 에서 사용자 조회 몫을 남긴 값이다. */
+const DEFAULT_DAILY_CALL_BUDGET = 9000;
 
 /**
- * ingestDate 한 번이 거래일에 쓰는 최악 호출 수 (KOSPI/KOSDAQ 각각 일별시세 + 기본정보).
- * 휴장일은 이보다 적게(2회) 쓰지만, 실제로 거래일인지는 호출해 봐야 알 수 있어
- * 예산 검사는 항상 이 값으로 여유 있게 어림한다.
+ * ingestDate 한 번이 엔드포인트 하나에 쓰는 최악 호출 수. 날짜마다 KOSPI/KOSDAQ 의
+ * 일별시세·기본정보를 한 번씩만 부르므로, 어느 엔드포인트로 봐도 1을 넘지 않는다.
+ * KRX 한도가 엔드포인트별이라 예산도 엔드포인트 기준으로 잰다.
  */
-const CALLS_PER_DATE = 4;
+const CALLS_PER_ENDPOINT_PER_DATE = 1;
 
 /**
  * KRX 일별 호출 예산 안에서 종목 마스터를 과거로 백필하는 러너.
@@ -104,9 +105,12 @@ export class SymbolMasterBackfill {
           return;
         }
 
-        // 휴장 조회도 2호출을 쓰므로, 거래일 여부를 알기 전에 최악치(4)로 미리 어림해
-        // 예산을 넘기지 않는다.
-        if (this.deps.source.todayCallCount() + CALLS_PER_DATE > this.dailyCallBudget) {
+        // 가장 많이 쓴 엔드포인트를 기준으로 본다 — 한도가 엔드포인트마다 따로 걸리므로
+        // 그중 하나라도 예산을 넘기면 멈춰야 한다.
+        if (
+          this.deps.source.todayMaxEndpointCallCount() + CALLS_PER_ENDPOINT_PER_DATE >
+          this.dailyCallBudget
+        ) {
           this.cursorDate = cursor;
           this.state = 'BUDGET_EXHAUSTED';
           return;

@@ -110,13 +110,14 @@ describe('SymbolMasterBackfill', () => {
     setTradingDay(ctx.fake, '20230103');
 
     // 이틀 범위로 고정 — 예산 소진은 호출 카운터 때문이지 날짜 범위 때문이 아니다.
+    // 예산은 엔드포인트당 기준이라 1 이면 날짜 하나만 수집하고 멈춘다.
     const backfillClock = new MutableClock(kstNoonMs('2023-01-03'));
     const runner = new SymbolMasterBackfill({
       service: ctx.svc,
       source: ctx.source,
       clock: backfillClock,
       logger: ctx.t.container.logger,
-      dailyCallBudget: 4,
+      dailyCallBudget: 1,
     });
 
     runner.start('2023-01-02');
