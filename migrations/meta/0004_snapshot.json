@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "2140e395-4e8f-4ed4-ab59-5235425310f2",
+  "id": "de17ad4b-fca2-45cd-8ffd-104661f20612",
   "prevId": "9c0d495c-ed68-4d27-93e8-47f78268cf51",
   "tables": {
     "audit_logs": {
@@ -210,18 +210,18 @@
           "notNull": true,
           "autoincrement": false
         },
-        "dataset_id": {
-          "name": "dataset_id",
+        "universe_rule_json": {
+          "name": "universe_rule_json",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
-        "universe_snapshot_id": {
-          "name": "universe_snapshot_id",
+        "universe_schedule_json": {
+          "name": "universe_schedule_json",
           "type": "text",
           "primaryKey": false,
-          "notNull": false,
+          "notNull": true,
           "autoincrement": false
         },
         "provenance_pin_json": {
@@ -523,8 +523,15 @@
           "notNull": true,
           "autoincrement": false
         },
-        "dataset_id": {
-          "name": "dataset_id",
+        "universe_rule_json": {
+          "name": "universe_rule_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "schedule_hash": {
+          "name": "schedule_hash",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -954,154 +961,6 @@
         }
       },
       "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
-    "dataset_symbols": {
-      "name": "dataset_symbols",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "integer",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": true
-        },
-        "dataset_id": {
-          "name": "dataset_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "code": {
-          "name": "code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "idx_dataset_symbols_dataset_code": {
-          "name": "idx_dataset_symbols_dataset_code",
-          "columns": [
-            "dataset_id",
-            "code"
-          ],
-          "isUnique": true
-        },
-        "idx_dataset_symbols_code": {
-          "name": "idx_dataset_symbols_code",
-          "columns": [
-            "code"
-          ],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "dataset_symbols_dataset_id_datasets_id_fk": {
-          "name": "dataset_symbols_dataset_id_datasets_id_fk",
-          "tableFrom": "dataset_symbols",
-          "tableTo": "datasets",
-          "columnsFrom": [
-            "dataset_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "dataset_symbols_code_symbols_code_fk": {
-          "name": "dataset_symbols_code_symbols_code_fk",
-          "tableFrom": "dataset_symbols",
-          "tableTo": "symbols",
-          "columnsFrom": [
-            "code"
-          ],
-          "columnsTo": [
-            "code"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
-    "datasets": {
-      "name": "datasets",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "name": {
-          "name": "name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "description": {
-          "name": "description",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "universe_snapshot_id": {
-          "name": "universe_snapshot_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "created_at_ms": {
-          "name": "created_at_ms",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "updated_at_ms": {
-          "name": "updated_at_ms",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "datasets_name_unique": {
-          "name": "datasets_name_unique",
-          "columns": [
-            "name"
-          ],
-          "isUnique": true
-        }
-      },
-      "foreignKeys": {
-        "datasets_universe_snapshot_id_universe_snapshots_id_fk": {
-          "name": "datasets_universe_snapshot_id_universe_snapshots_id_fk",
-          "tableFrom": "datasets",
-          "tableTo": "universe_snapshots",
-          "columnsFrom": [
-            "universe_snapshot_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {}
@@ -1978,281 +1837,6 @@
             "standard_code"
           ],
           "isUnique": true
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
-    "universe_snapshot_symbols": {
-      "name": "universe_snapshot_symbols",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "integer",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": true
-        },
-        "snapshot_id": {
-          "name": "snapshot_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "standard_code": {
-          "name": "standard_code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "short_code": {
-          "name": "short_code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "name_at_selection": {
-          "name": "name_at_selection",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "market_at_selection": {
-          "name": "market_at_selection",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "market_cap_krw": {
-          "name": "market_cap_krw",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "rank": {
-          "name": "rank",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "instrument_type": {
-          "name": "instrument_type",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "idx_universe_snapshot_symbols_snap_code": {
-          "name": "idx_universe_snapshot_symbols_snap_code",
-          "columns": [
-            "snapshot_id",
-            "standard_code"
-          ],
-          "isUnique": true
-        },
-        "idx_universe_snapshot_symbols_snap": {
-          "name": "idx_universe_snapshot_symbols_snap",
-          "columns": [
-            "snapshot_id"
-          ],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "universe_snapshot_symbols_snapshot_id_universe_snapshots_id_fk": {
-          "name": "universe_snapshot_symbols_snapshot_id_universe_snapshots_id_fk",
-          "tableFrom": "universe_snapshot_symbols",
-          "tableTo": "universe_snapshots",
-          "columnsFrom": [
-            "snapshot_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
-    "universe_snapshots": {
-      "name": "universe_snapshots",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "source_kind": {
-          "name": "source_kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "requested_date": {
-          "name": "requested_date",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "effective_trading_date": {
-          "name": "effective_trading_date",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "usable_from_date": {
-          "name": "usable_from_date",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "usable_from_rule": {
-          "name": "usable_from_rule",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "markets_json": {
-          "name": "markets_json",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "filter_policy_version": {
-          "name": "filter_policy_version",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "contract_version": {
-          "name": "contract_version",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "sort_key": {
-          "name": "sort_key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "sort_direction": {
-          "name": "sort_direction",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "selection_method": {
-          "name": "selection_method",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "selection_n": {
-          "name": "selection_n",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "selected_count": {
-          "name": "selected_count",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "eligible_count": {
-          "name": "eligible_count",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "unknown_market_cap_count": {
-          "name": "unknown_market_cap_count",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "excluded_by_type_json": {
-          "name": "excluded_by_type_json",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "raw_counts_json": {
-          "name": "raw_counts_json",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "selection_hash": {
-          "name": "selection_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "candidate_canonical_hash": {
-          "name": "candidate_canonical_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "krx_approval_expiry_date": {
-          "name": "krx_approval_expiry_date",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "created_at_ms": {
-          "name": "created_at_ms",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "idx_universe_snapshots_created": {
-          "name": "idx_universe_snapshots_created",
-          "columns": [
-            "created_at_ms"
-          ],
-          "isUnique": false
         }
       },
       "foreignKeys": {},
