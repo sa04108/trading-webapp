@@ -122,6 +122,16 @@ export class SymbolMasterService {
    * 보장한다. date 자체의 ingestDate 는 각 호출이 내부에서 알아서 직렬화하므로 여기서
    * 별도 가드를 두지 않는다 — 소급 루프도 각 날짜의 ingestDate 호출 단위로 이미 안전하다.
    *
+   * 루프 종료 판정에는 공개 effectiveTradingDate() 대신 contiguousTradingDate() 를
+   * 쓴다 — 공개 버전은 date 이하 전역에서 가장 가까운 거래일을 찾을 뿐이라, date 가
+   * (예: 이 메서드 자신이 첫 ingestAndRecord(date) 에서 남긴 휴장일 하루짜리 구간으로)
+   * 이미 커버된 상태에서 date 와 전혀 안 이어진 먼 과거의 거래일을 우연히 찾아내
+   * "이미 찾았다"고 착각할 수 있다. 그러면 이 루프가 실제로는 하루도 확인하지 않은
+   * 채 몇 년 전 무관한 거래일을 재구성 앵커로 굳혀 버린다 — 리밸런스 적용 거래일
+   * 표기 e2e(Task 4, 2026-08-06 스펙)에서 재현된 버그다. contiguousTradingDate 는
+   * date 를 포함하는 커버 구간 **안**에서만 찾으므로, 이 함수가 하루씩 늘려 온
+   * 연속 구간 밖의 값에는 절대 속지 않는다.
+   *
    * KrxQuotaError 등은 ingestDate 가 던지는 그대로 전파한다 — 소급 도중 쿼터가 바닥나도
    * 이미 커버한 날짜는 coverage 에 남아 다음 시도가 이어갈 수 있다.
    */
@@ -136,16 +146,48 @@ export class SymbolMasterService {
     };
 
     await ingestAndRecord(date);
-    let resolved = this.effectiveTradingDate(date);
+    let resolved = this.contiguousTradingDate(date);
 
     let cursor = date;
     for (let i = 0; resolved === undefined && i < maxLookbackDays; i += 1) {
       cursor = addCalendarDays(cursor, -1);
       await ingestAndRecord(cursor);
-      resolved = this.effectiveTradingDate(date);
+      resolved = this.contiguousTradingDate(date);
     }
 
     return { requestedDate: date, effectiveTradingDate: resolved ?? null, ingestedDates };
+  }
+
+  /**
+   * ensureTradingDay 전용 — date 를 포함하는 커버 구간 **안**에서만 가장 가까운
+   * 거래일을 찾는다. 공개 effectiveTradingDate() 와 달리 구간 밖 거래일은 절대
+   * 반환하지 않는다 — 그 이유는 ensureTradingDay 위 주석 참고. 커버 구간은
+   * mergeCoverage 가 하루씩 인접할 때만 이어 붙이는 연속 구간이므로, 그 안에서
+   * 가장 최근 거래일은 실제로 date 까지 하루도 빠짐없이 확인됐다는 뜻이다.
+   */
+  private contiguousTradingDate(date: string): string | undefined {
+    const covering = this.deps.db
+      .select({ startDate: symbolMasterCoverage.startDate })
+      .from(symbolMasterCoverage)
+      .where(
+        and(lte(symbolMasterCoverage.startDate, date), gte(symbolMasterCoverage.endDate, date)),
+      )
+      .get();
+    if (covering === undefined) return undefined;
+
+    const row = this.deps.db
+      .select({ date: symbolMasterTradingDays.date })
+      .from(symbolMasterTradingDays)
+      .where(
+        and(
+          gte(symbolMasterTradingDays.date, covering.startDate),
+          lte(symbolMasterTradingDays.date, date),
+        ),
+      )
+      .orderBy(desc(symbolMasterTradingDays.date))
+      .limit(1)
+      .get();
+    return row?.date;
   }
 
   private async ingestDateUnguarded(date: string): Promise<IngestResult> {
@@ -500,6 +542,14 @@ export class SymbolMasterService {
   /**
    * date 이하에서 가장 가까운 거래일. 없으면 undefined — 재구성 앵커가 없다는 뜻이다.
    * 휴장일은 symbolMasterTradingDays 에 기록되지 않으므로 자연히 건너뛴다.
+   *
+   * 커버 여부와 무관하게 전역에서 찾는다 — date 가 아예 커버 밖이어도 값을 낼 수 있다.
+   * 이 raw 값 하나만으로 "재구성해도 되는 날짜"를 판정하면 안 된다: 호출자는 반드시
+   * isCovered(date) 와 함께 봐야 한다(UniverseRuleResolver.resolve 가 그렇게 짝지어
+   * 쓴다 — coverage 를 한참 벗어난 날짜까지 옛 유니버스로 조용히 해소되지 않게 하려는
+   * 목적이다, tests/unit/universe-rule-resolver.test.ts 참고). ensureTradingDay 의
+   * 소급 루프는 이 raw 버전 대신 아래 contiguousTradingDate 를 쓴다 — 그 이유는
+   * 그 메서드 주석 참고.
    */
   effectiveTradingDate(date: string): string | undefined {
     const row = this.deps.db
