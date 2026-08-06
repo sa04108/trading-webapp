@@ -81,7 +81,11 @@ describe('symbol-master routes', () => {
       payload: { date: '2025-01-06' },
     });
     expect(sync.statusCode).toBe(200);
-    expect(sync.json()).toMatchObject({ kind: 'TRADING_DAY' });
+    expect(sync.json()).toMatchObject({
+      requestedDate: '2025-01-06',
+      effectiveTradingDate: '2025-01-06',
+      ingestedDates: ['2025-01-06'],
+    });
 
     const universe = await app.app.inject({
       method: 'GET',
@@ -96,6 +100,35 @@ describe('symbol-master routes', () => {
       ['KR7005930003', 'KR7035720002'].sort(),
     );
     expect(body.symbols[0]).toMatchObject({ market: expect.stringMatching(/^(KOSPI|KOSDAQ)$/) });
+  });
+
+  it('휴장일 sync 요청은 직전 거래일까지 소급한 결과를 돌려준다', async () => {
+    const { app, fake, cookie } = await setup();
+    seedTradingDay(fake, '2025-01-06');
+    // 01-07·01-08 은 별도 세팅 없이 기본값(빈 응답 = 휴장)으로 둔다
+
+    const sync = await app.app.inject({
+      method: 'POST',
+      url: '/api/v1/symbol-master/sync',
+      cookies: { qp_session: cookie },
+      payload: { date: '2025-01-08' },
+    });
+
+    expect(sync.statusCode).toBe(200);
+    expect(sync.json()).toEqual({
+      requestedDate: '2025-01-08',
+      effectiveTradingDate: '2025-01-06',
+      ingestedDates: ['2025-01-08', '2025-01-07', '2025-01-06'],
+    });
+
+    // 소급 수집이 재구성 앵커를 남겨 이후 조회가 SymbolMasterNotCoveredError 없이 성립한다
+    const universe = await app.app.inject({
+      method: 'GET',
+      url: '/api/v1/symbol-master/universe?date=2025-01-08',
+      cookies: { qp_session: cookie },
+    });
+    expect(universe.statusCode).toBe(200);
+    expect(universe.json().covered).toBe(true);
   });
 
   it('커버되지 않은 날짜는 오류 없이 covered:false 와 빈 배열을 준다', async () => {
@@ -171,7 +204,10 @@ describe('symbol-master routes', () => {
       cookies: { qp_session: cookie },
       payload: { date: '2025-01-07' },
     });
-    expect(sync2.json()).toMatchObject({ eventCount: 1 });
+    expect(sync2.json()).toMatchObject({
+      effectiveTradingDate: '2025-01-07',
+      ingestedDates: ['2025-01-07'],
+    });
 
     const res = await app.app.inject({
       method: 'GET',

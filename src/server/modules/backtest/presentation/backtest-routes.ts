@@ -21,6 +21,7 @@ import type { AuditLogService } from '../../audit/audit-service.js';
 import type { FactRepository } from '../../facts/application/ports.js';
 import type { ConsumedVersionSnapshot, SymbolService } from '../../market-data/application/symbol-service.js';
 import { KrxNotConfiguredError, KrxQuotaError } from '../../market-data/application/ports.js';
+import { SymbolMasterNotCoveredError } from '../../market-data/application/symbol-master-service.js';
 import { KRX_FILTER_POLICY_VERSION } from '../../market-data/domain/krx-filter-policy.js';
 import {
   sliceForTimeframe,
@@ -148,6 +149,20 @@ function sendIfKrxError(reply: FastifyReply, error: unknown): boolean {
   }
   if (error instanceof KrxNotConfiguredError) {
     reply.code(503).send({ error: error.message });
+    return true;
+  }
+  return false;
+}
+
+/**
+ * SymbolMasterNotCoveredError 는 종목 마스터가 그 날짜를 재구성할 체크포인트를 아직
+ * 갖지 못했다는 뜻이다 — 클라이언트가 먼저 동기화해야 하는 409 상황이지 서버 결함(500)이
+ * 아니다. sendIfKrxError 와 나란히 둔다: 두 오류 모두 "지금은 KRX/마스터 상태가 준비되지
+ * 않았다"는 같은 층위의 신호라 호출부에서 순서를 가리지 않고 둘 다 확인하면 된다.
+ */
+function sendIfNotCovered(reply: FastifyReply, error: unknown): boolean {
+  if (error instanceof SymbolMasterNotCoveredError) {
+    reply.code(409).send({ error: error.message });
     return true;
   }
   return false;
@@ -539,6 +554,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       };
     } catch (error) {
       if (sendIfKrxError(reply, error)) return reply;
+      if (sendIfNotCovered(reply, error)) return reply;
       throw error;
     }
   });
@@ -557,6 +573,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       validated = await validateSubmission(body);
     } catch (error) {
       if (sendIfKrxError(reply, error)) return reply;
+      if (sendIfNotCovered(reply, error)) return reply;
       throw error;
     }
     if (!validated.ok) {
@@ -661,6 +678,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       validated = await validateSubmission(cloneRequest);
     } catch (error) {
       if (sendIfKrxError(reply, error)) return reply;
+      if (sendIfNotCovered(reply, error)) return reply;
       throw error;
     }
     if (!validated.ok) {
@@ -727,6 +745,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       resolvedUniverse = validated.ok ? validated.resolved : await resolveScheduleForRequest(rebased.request);
     } catch (error) {
       if (sendIfKrxError(reply, error)) return reply;
+      if (sendIfNotCovered(reply, error)) return reply;
       throw error;
     }
     const blockers = validated.ok ? [] : [...validated.errors];

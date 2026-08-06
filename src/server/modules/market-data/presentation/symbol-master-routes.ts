@@ -4,12 +4,17 @@ import type {
   SymbolMasterCoverageDto,
   SymbolMasterEntryDto,
   SymbolMasterEventDto,
+  SymbolMasterSyncDto,
   SymbolMasterUniverseDto,
 } from '../../../../shared/schemas/symbol-master.js';
 import type { SymbolMasterEntry } from '../domain/symbol-master.js';
 import { KrxNotConfiguredError, KrxQuotaError } from '../application/ports.js';
 import type { SymbolMasterBackfill } from '../application/symbol-master-backfill.js';
-import type { SymbolMasterEventRow, SymbolMasterService } from '../application/symbol-master-service.js';
+import {
+  SymbolMasterNotCoveredError,
+  type SymbolMasterEventRow,
+  type SymbolMasterService,
+} from '../application/symbol-master-service.js';
 
 type PreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -119,13 +124,24 @@ export function registerSymbolMasterRoutes(
       return reply.code(400).send({ error: 'date(YYYY-MM-DD) 필드가 필요합니다' });
     }
     try {
-      return await deps.service.ingestDate(parsed.data.date);
+      // 휴장일 요청도 직전 거래일까지 소급 수집해 재구성 앵커를 보장한다 — ingestDate 만
+      // 부르면 휴장일 응답이 앵커 없는 상태로 남아 이후 조회가 SymbolMasterNotCoveredError 로 샌다.
+      const ensured = await deps.service.ensureTradingDay(parsed.data.date);
+      const dto: SymbolMasterSyncDto = {
+        requestedDate: ensured.requestedDate,
+        effectiveTradingDate: ensured.effectiveTradingDate,
+        ingestedDates: [...ensured.ingestedDates],
+      };
+      return dto;
     } catch (error) {
       if (error instanceof KrxQuotaError) {
         return reply.code(429).send({ error: error.message });
       }
       if (error instanceof KrxNotConfiguredError) {
         return reply.code(503).send({ error: error.message });
+      }
+      if (error instanceof SymbolMasterNotCoveredError) {
+        return reply.code(409).send({ error: error.message });
       }
       // UnknownKrxClassificationError 등 나머지는 기본 오류 처리기(500)로 넘긴다.
       throw error;

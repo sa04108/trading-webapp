@@ -51,6 +51,18 @@ export type IngestResult =
   | { readonly kind: 'HOLIDAY' }
   | { readonly kind: 'ALREADY_COVERED' };
 
+/** ensureTradingDay 의 소급 수집 결과 — 재구성 앵커 확보 여부와 실제 수집한 날짜들을 담는다 */
+export interface EnsureTradingDayResult {
+  readonly requestedDate: string;
+  /** 해소된 적용 거래일. 상한까지 거슬러도 못 찾으면 null */
+  readonly effectiveTradingDate: string | null;
+  /** 이번 호출이 실제로 수집한 날짜들 (이미 커버된 날짜는 빠진다) */
+  readonly ingestedDates: readonly string[];
+}
+
+/** ensureTradingDay 가 소급하며 거슬러 올라갈 기본 상한 일수 */
+const DEFAULT_MAX_LOOKBACK_DAYS = 10;
+
 /** DB row 를 도메인 이벤트 draft 로 좁힌다 — drizzle 은 text 컬럼을 string 으로만 추론한다 */
 function toEventDraft(row: SymbolMasterEventRow): SymbolMasterEventDraft {
   return {
@@ -99,6 +111,37 @@ export class SymbolMasterService {
     });
     this.inflightIngests.set(date, promise);
     return promise;
+  }
+
+  /**
+   * date 가 휴장이면 직전 거래일까지 하루씩 거슬러 ingestDate 를 반복해 재구성 앵커를
+   * 보장한다. date 자체의 ingestDate 는 각 호출이 내부에서 알아서 직렬화하므로 여기서
+   * 별도 가드를 두지 않는다 — 소급 루프도 각 날짜의 ingestDate 호출 단위로 이미 안전하다.
+   *
+   * KrxQuotaError 등은 ingestDate 가 던지는 그대로 전파한다 — 소급 도중 쿼터가 바닥나도
+   * 이미 커버한 날짜는 coverage 에 남아 다음 시도가 이어갈 수 있다.
+   */
+  async ensureTradingDay(
+    date: string,
+    maxLookbackDays = DEFAULT_MAX_LOOKBACK_DAYS,
+  ): Promise<EnsureTradingDayResult> {
+    const ingestedDates: string[] = [];
+    const ingestAndRecord = async (target: string): Promise<void> => {
+      const result = await this.ingestDate(target);
+      if (result.kind !== 'ALREADY_COVERED') ingestedDates.push(target);
+    };
+
+    await ingestAndRecord(date);
+    let resolved = this.effectiveTradingDate(date);
+
+    let cursor = date;
+    for (let i = 0; resolved === undefined && i < maxLookbackDays; i += 1) {
+      cursor = addCalendarDays(cursor, -1);
+      await ingestAndRecord(cursor);
+      resolved = this.effectiveTradingDate(date);
+    }
+
+    return { requestedDate: date, effectiveTradingDate: resolved ?? null, ingestedDates };
   }
 
   private async ingestDateUnguarded(date: string): Promise<IngestResult> {
