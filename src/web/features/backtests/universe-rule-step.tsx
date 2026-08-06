@@ -14,7 +14,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { ApiError, postJson } from '@/lib/api-client';
+import { api, ApiError, postJson } from '@/lib/api-client';
+import type { DataJob } from '@/features/datasets/symbol-types';
 import { MAX_UNIVERSE_SYMBOLS } from '../../../shared/schemas/universe-limit.js';
 import type { UniverseRule } from '../../../shared/schemas/universe-rule.js';
 
@@ -100,6 +101,13 @@ export function UniverseRuleStep({
   // 버튼을 24번 누르게 할 수 없고, 한 번에 다 태우되 어디까지 갔는지 보여야 한다.
   const [syncProgress, setSyncProgress] = useState<{ done: number; total: number } | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
+  // 봉 없는 종목 등록·동기화 — 아래 registerAndSyncMissingCandles 참고.
+  const [candlePhase, setCandlePhase] = useState<'REGISTERING' | 'SYNCING' | null>(null);
+  const [candleSyncError, setCandleSyncError] = useState<string | null>(null);
+  // 등록·동기화가 성공적으로 끝났는데도 재미리보기에 missingCandleSymbols 가 남을 수
+  // 있다(상장폐지 종목은 증권사가 이름·봉을 안 준다) — 그때는 오류가 아니라 이 사실을
+  // 한 줄로 설명한다. 규칙을 다시 미리보기하면 지난 시도 결과이므로 지운다.
+  const [candleSyncAttempted, setCandleSyncAttempted] = useState(false);
   const previewMutation = useMutation({
     mutationFn: (params: PreviewParams) =>
       postJson<UniversePreviewResponseDto>('/backtests/universe-preview', params),
@@ -162,6 +170,59 @@ export function UniverseRuleStep({
     if (done > 0 && previewMutation.variables) runPreview(previewMutation.variables);
   };
 
+  /**
+   * 봉 없는 종목을 그 자리에서 등록하고 동기화한다 — 앞선 미커버 날짜 동기화(위
+   * syncAllUncovered)와 같은 원칙이다. 탭을 옮겨 종목을 등록하고 다시 동기화를 거는
+   * 왕복을 없앤다.
+   *
+   * POST /symbols 가 409(added=0)를 내도 실패로 다루지 않는다 — 이 라우트는 넘긴 코드가
+   * 전부 이미 등록돼 있을 때만 409 를 낸다(symbol-routes.ts). 그 경우가 바로 "봉만
+   * 없는" 상태이므로 등록을 건너뛰고 그대로 동기화로 넘어간다.
+   *
+   * 잡 폴링·완료 판정은 symbols-panel.tsx 와 같다: status 가 RUNNING/QUEUED 인 동안
+   * 1초 간격으로 다시 읽고, 그 밖의 상태는 끝난 것으로 본다.
+   */
+  const registerAndSyncMissingCandles = async (codes: readonly string[]): Promise<void> => {
+    setCandleSyncError(null);
+    setCandleSyncAttempted(false);
+    setCandlePhase('REGISTERING');
+
+    let job: DataJob | null = null;
+    try {
+      try {
+        await postJson<unknown>('/symbols', { codes, market: value.markets[0] });
+      } catch (error) {
+        if (!(error instanceof ApiError) || error.status !== 409) throw error;
+      }
+
+      setCandlePhase('SYNCING');
+      const started = await postJson<{ job: DataJob }>('/symbols/sync', { codes, slice: '1d' });
+      let current: DataJob = started.job;
+      while (current.status === 'RUNNING' || current.status === 'QUEUED') {
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        const response = await api<{ job: DataJob }>(`/data-jobs/${current.id}`);
+        current = response.job;
+      }
+      job = current;
+
+      if (current.status === 'COMPLETED') setCandleSyncAttempted(true);
+      else if (current.status === 'CANCELLED') setCandleSyncError('봉 수집이 취소되었습니다');
+      else setCandleSyncError(current.error ?? '봉 수집이 실패했습니다');
+    } catch (error) {
+      const reason = error instanceof ApiError ? error.message : '등록·동기화에 실패했습니다';
+      setCandleSyncError(reason);
+    } finally {
+      setCandlePhase(null);
+    }
+
+    // 등록·동기화 시도가 있었으면(잡을 실제로 받았으면) 결과와 무관하게 다시 미리보기해
+    // 남은 목록을 정확히 추린다 — syncAllUncovered 와 같은 방식.
+    if (job !== null) {
+      await queryClient.invalidateQueries({ queryKey: ['symbol-master'] });
+      if (previewMutation.variables) runPreview(previewMutation.variables);
+    }
+  };
+
   return (
     <div className="space-y-3">
       <Card>
@@ -213,7 +274,12 @@ export function UniverseRuleStep({
             <Button
               className="h-11"
               disabled={!canPreview || previewMutation.isPending}
-              onClick={() => runPreview(currentParams)}
+              onClick={() => {
+                // 직접 다시 미리보기하면 지난 등록·동기화 시도의 설명은 더 이상 이
+                // 결과에 대한 것이 아니다 — 지운다.
+                setCandleSyncAttempted(false);
+                runPreview(currentParams);
+              }}
             >
               {previewMutation.isPending ? '조회 중…' : '미리보기'}
             </Button>
@@ -298,7 +364,7 @@ export function UniverseRuleStep({
               type="button"
               variant="outline"
               size="sm"
-              disabled={syncProgress !== null}
+              disabled={syncProgress !== null || candlePhase !== null}
               onClick={() => void syncAllUncovered(preview.uncoveredDates)}
             >
               {syncProgress === null
@@ -319,18 +385,42 @@ export function UniverseRuleStep({
 
       {preview && preview.missingCandleSymbols.length > 0 ? (
         <Alert variant="destructive" role="alert">
-          <AlertDescription className="space-y-1">
-            <p>
-              다음 종목은 아직 봉 데이터가 없어 백테스트를 실행할 수 없습니다 —{' '}
-              <Link to="/datasets?tab=prices" className="underline">
-                가격 데이터 탭
-              </Link>
-              에서 동기화하세요.
-            </p>
+          <AlertDescription className="space-y-2">
+            <p>다음 종목은 아직 봉 데이터가 없어 백테스트를 실행할 수 없습니다.</p>
             <p className="text-xs text-muted-foreground wrap-anywhere">
               {preview.missingCandleSymbols.join(', ')}
             </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={candlePhase !== null || syncProgress !== null}
+              onClick={() => void registerAndSyncMissingCandles(preview.missingCandleSymbols)}
+            >
+              {candlePhase === 'REGISTERING'
+                ? '등록 중…'
+                : candlePhase === 'SYNCING'
+                  ? '봉 수집 중…'
+                  : `${preview.missingCandleSymbols.length}개 종목 등록·동기화`}
+            </Button>
+            {candleSyncAttempted ? (
+              <p className="text-xs text-muted-foreground">
+                일부 종목은 증권사에서 과거 봉을 받지 못했습니다 — 상장폐지 종목일 수 있습니다.
+              </p>
+            ) : null}
+            <p className="text-xs text-muted-foreground">
+              <Link to="/datasets?tab=prices" className="underline">
+                가격 데이터 탭
+              </Link>
+              에서 직접 등록·동기화할 수도 있습니다.
+            </p>
           </AlertDescription>
+        </Alert>
+      ) : null}
+
+      {candleSyncError !== null ? (
+        <Alert variant="destructive" role="alert">
+          <AlertDescription>{candleSyncError}</AlertDescription>
         </Alert>
       ) : null}
     </div>
