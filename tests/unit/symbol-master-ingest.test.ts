@@ -255,18 +255,23 @@ describe('SymbolMasterService.ingestDate 동시 호출 가드', () => {
     });
     ctx.fake.setResponse('stk_isu_base_info', '20230301', { body: krxEnvelope([baseInfoFixture()]) });
 
-    const startedAtMs = Date.now();
     const [first, second] = await Promise.all([
       ctx.svc.ingestDate('2023-01-02'),
       ctx.svc.ingestDate('2023-03-01'),
     ]);
-    const elapsedMs = Date.now() - startedAtMs;
 
     expect(first.kind).toBe('TRADING_DAY');
     expect(second.kind).toBe('TRADING_DAY');
-    // 이중 수집 가드는 date 별로 걸려야 한다 — 다른 날짜끼리 직렬화하면 지연이
-    // 두 번(약 160ms) 겹쳐 쌓인다. 병렬이면 한 번의 지연(약 80ms) 안팎으로 끝난다.
-    expect(elapsedMs).toBeLessThan(140);
+
+    // 이중 수집 가드는 date 별로 걸려야 한다. 경과 시간으로 재면 기계가 느린 날
+    // 병렬인데도 임계값을 넘어 흔들리므로, 요청이 실제로 겹쳤는지를 본다 — 직렬이면
+    // 한 날짜의 요청 4개가 모두 끝난 뒤에야 다른 날짜의 첫 요청이 도착한다.
+    const basDds = ctx.fake.requests.map((request) => request.basDd);
+    const lastOfJanuary = basDds.lastIndexOf('20230102');
+    const firstOfMarch = basDds.indexOf('20230301');
+    expect(firstOfMarch).toBeGreaterThanOrEqual(0);
+    expect(firstOfMarch).toBeLessThan(lastOfJanuary);
+
     expect(ctx.fake.requests.length).toBe(8);
     expect(ctx.svc.isCovered('2023-01-02')).toBe(true);
     expect(ctx.svc.isCovered('2023-03-01')).toBe(true);
