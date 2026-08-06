@@ -286,11 +286,17 @@ export class BrokerSyncService {
 
       for (const { code: symbol, market } of targets) {
         this.throwIfCancelled(jobId);
-        try {
-          const session = slice === '1m' ? getSessionForMarket(market) : null;
-          const newRange: SyncedRange = { min: null, max: null };
+        const session = slice === '1m' ? getSessionForMarket(market) : null;
+        const newRange: SyncedRange = { min: null, max: null };
+        // 이 종목의 원격 조회가 실제로 가져온 행 수 — totalRows 에는 종목 처리가
+        // (원격 조회 + 로컬 기록) 전부 끝난 뒤에만 합산한다. 즉시 더하면 증분은
+        // 성공하고 백필에서 실패하는 종목이 totalRows 에도 잡히고 failedSymbols
+        // 에도 잡혀 "성공 = 전체 − 실패" 계산과 실제 행수가 어긋난다(리뷰 지적).
+        let symbolRows = 0;
+        let backfillPulled = false;
 
-          // 증분: 워터마크 이후 → 현재
+        try {
+          // 증분: 워터마크 이후 → 현재 (원격 조회 — 증권사 REST 호출)
           const before = this.getState(symbol, slice);
           if (before?.syncedLastTsMs != null) {
             const incremental = await this.pullRange(market, collect, symbol, slice, {
@@ -299,12 +305,12 @@ export class BrokerSyncService {
               toTsMs: now,
               newRange,
             });
-            totalRows += incremental.rows;
+            symbolRows += incremental.rows;
           }
 
           // 백필: 일봉은 API 보관 깊이 바닥(0)까지, 분봉은 2년 상한까지 — 분봉은
           // 종목·기간에 비례해 폭발하므로 수집 자체를 묶는다(minute-backfill.ts).
-          // 증분이 워터마크를 만들었을 수 있으므로 재조회.
+          // 증분이 워터마크를 만들었을 수 있으므로 재조회. (원격 조회)
           const state = this.getState(symbol, slice);
           if (state?.backfillDoneAtMs == null) {
             const backfillFromTsMs = slice === '1m' ? minuteBackfillFloorTsMs(now) : 0;
@@ -314,44 +320,32 @@ export class BrokerSyncService {
               toTsMs: (state?.syncedFirstTsMs ?? now + 1) - 1,
               newRange,
             });
-            totalRows += backfill.rows;
-            // 일봉은 fromTsMs=0 구간을 에러 없이 소진 = API 바닥 도달. 분봉은 상한
-            // 구간을 소진했을 뿐 API 바닥에는 닿지 않았을 수 있다 — 아래 플래그 의미 참고.
-            this.markBackfillDone(symbol, slice);
+            symbolRows += backfill.rows;
+            backfillPulled = true;
           }
-
-          // 시간봉 재집계는 분봉 슬라이스에서만 의미가 있다 — session 은 이미 slice==='1m'
-          // 일 때만 채워지지만, 의도를 코드로 남기기 위해 slice 로도 명시적으로 가둔다
-          if (slice === '1m' && session && newRange.min != null && newRange.max != null) {
-            await this.reaggregateHourly(market, symbol, session, newRange.min, newRange.max);
-          }
-
-          // 커버리지·버전·수집시각은 종목마다 닫는다 — 200종목 중 180에서 멈춘 실행도
-          // 완료된 180종목은 화면에 정확히 반영돼야 한다
-          await this.deps.symbolService.refreshCoverage(symbol, market, slice);
-          if (newRange.min != null) {
-            this.deps.symbolService.bumpVersion(
-              symbol,
-              slice,
-              `broker:${collect}:${newRange.min}-${newRange.max}`,
-              this.deps.clock.now(),
-            );
-          }
-          this.deps.symbolService.markSynced(symbol, slice, this.deps.clock.now());
         } catch (error) {
           /**
-           * 취소·디스크 부족은 잡 전체를 멈춰야 하는 신호이지 이 종목만의 문제가
-           * 아니다 — 여기서 삼키면 취소가 무시되고(다음 종목에서 계속 돎), 위험한
-           * 디스크 상태에서도 나머지 종목을 계속 써 내려가게 된다. 그래서 이 둘만
-           * 그대로 다시 던져 바깥 catch(§run 최상단)로 넘긴다.
+           * 이 catch 는 **원격 조회(pullRange, 증권사 REST 호출)만** 감싼다 — 그
+           * 뒤 로컬 기록 단계(markBackfillDone·재집계·커버리지·버전·markSynced)는
+           * 이 catch 밖에 있어 예외가 나면 격리되지 않고 그대로 바깥 catch(§run
+           * 최상단)로 올라가 잡 전체를 실패시킨다. 로컬 기록 실패는 DB 오류나
+           * 코딩 버그일 가능성이 높아, 종목 문제로 삼켜 화면에 "상장폐지 종목일
+           * 수 있습니다"라고 안내하면 진짜 결함을 가리게 된다(리뷰 지적) — 그래서
+           * try 범위를 원격 조회로만 좁혔다.
            *
-           * 그 외(REST 4xx 등)는 이 종목만의 문제로 본다. 이 저장소는 이제 1일봉을
-           * KRX 에서 받고(krx_daily_bars + CompositeCandleRepository) — 증권사
-           * 동기화는 분봉·시간봉과, KRX 가 아직 안 채운 종목을 위한 보조 경로다.
-           * 증권사는 상장폐지 여부를 알려주지 않으므로 404(stock-not-found) 는
-           * "이 종목은 더 이상 없다"는 정상 응답일 수 있다 — 그 한 종목 때문에
-           * 멀쩡한 나머지 종목의 수집까지 실패시키면 안 된다. 그래서 여기서 잡고
-           * 다음 종목으로 넘어간다.
+           * 취소·디스크 부족은 이 범위 안에서 나더라도 잡 전체를 멈춰야 하는
+           * 신호이지 이 종목만의 문제가 아니다 — 여기서 삼키면 취소가
+           * 무시되고(다음 종목에서 계속 돎), 위험한 디스크 상태에서도 나머지
+           * 종목을 계속 써 내려가게 된다. 그래서 이 둘만 그대로 다시 던져
+           * 바깥 catch 로 넘긴다.
+           *
+           * 그 외(REST 4xx 등)만 이 종목만의 문제로 본다. 이 저장소는 이제
+           * 1일봉을 KRX 에서 받고(krx_daily_bars + CompositeCandleRepository) —
+           * 증권사 동기화는 분봉·시간봉과, KRX 가 아직 안 채운 종목을 위한 보조
+           * 경로다. 증권사는 상장폐지 여부를 알려주지 않으므로 404
+           * (stock-not-found) 는 "이 종목은 더 이상 없다"는 정상 응답일 수 있다
+           * — 그 한 종목 때문에 멀쩡한 나머지 종목의 수집까지 실패시키면 안
+           * 된다. 그래서 여기서 잡고 다음 종목으로 넘어간다.
            */
           if (error instanceof SyncCancelledError || error instanceof DiskSpaceError) throw error;
           const reason = error instanceof Error ? error.message : String(error);
@@ -367,7 +361,38 @@ export class BrokerSyncService {
             },
             'broker sync: isolating failed symbol and continuing with the rest',
           );
+          continue;
         }
+
+        // 로컬 기록 단계 — 원격 조회는 이미 끝났다. 여기서부터 나는 오류는
+        // 격리하지 않는다(위 catch 주석 참고) — 그대로 던져 잡 전체를 실패시킨다.
+        if (backfillPulled) {
+          // 일봉은 fromTsMs=0 구간을 에러 없이 소진 = API 바닥 도달. 분봉은 상한
+          // 구간을 소진했을 뿐 API 바닥에는 닿지 않았을 수 있다 — 아래 플래그 의미 참고.
+          this.markBackfillDone(symbol, slice);
+        }
+
+        // 시간봉 재집계는 분봉 슬라이스에서만 의미가 있다 — session 은 이미 slice==='1m'
+        // 일 때만 채워지지만, 의도를 코드로 남기기 위해 slice 로도 명시적으로 가둔다
+        if (slice === '1m' && session && newRange.min != null && newRange.max != null) {
+          await this.reaggregateHourly(market, symbol, session, newRange.min, newRange.max);
+        }
+
+        // 커버리지·버전·수집시각은 종목마다 닫는다 — 200종목 중 180에서 멈춘 실행도
+        // 완료된 180종목은 화면에 정확히 반영돼야 한다
+        await this.deps.symbolService.refreshCoverage(symbol, market, slice);
+        if (newRange.min != null) {
+          this.deps.symbolService.bumpVersion(
+            symbol,
+            slice,
+            `broker:${collect}:${newRange.min}-${newRange.max}`,
+            this.deps.clock.now(),
+          );
+        }
+        this.deps.symbolService.markSynced(symbol, slice, this.deps.clock.now());
+
+        // 이 종목은 원격 조회·로컬 기록이 모두 끝났다 — 이제서야 총계에 합산한다
+        totalRows += symbolRows;
       }
 
       candlesMs = this.deps.clock.now() - candlesStartedAtMs;
@@ -399,6 +424,13 @@ export class BrokerSyncService {
           ? `${failedSymbols.length}종목 수집 실패 — ` +
             failedSymbols.map((f) => `${f.code}: ${f.reason}`).join('; ')
           : null;
+      // error 컬럼만 보는 소비자(예: recoverInterrupted 로그, 외부 모니터링)도 종목
+      // 격리 정보를 놓치지 않게 재무 실패 사유와 이어 붙인다 — notify 본문(위)과
+      // 같은 방식이다. ?? 로 하나만 고르면 둘 다 있을 때 종목 실패 요약이 사라진다.
+      const combinedError =
+        [facts?.state.failureMessage, symbolFailureSummary]
+          .filter((part): part is string => part != null)
+          .join(' — ') || null;
       this.deps.db
         .update(dataSyncJobs)
         .set({
@@ -409,7 +441,7 @@ export class BrokerSyncService {
           phase: null,
           factsJson: facts === null ? null : JSON.stringify(facts.state),
           failedSymbolsJson,
-          error: facts?.state.failureMessage ?? symbolFailureSummary ?? null,
+          error: combinedError,
           completedAtMs: this.deps.clock.now(),
         })
         .where(eq(dataSyncJobs.id, jobId))

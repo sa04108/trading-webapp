@@ -591,6 +591,28 @@ describe('종목 단위 격리 (broker-sync 부분 실패, 운영 장애 재현)
     expect(source.calls.every((call) => call.symbol === '000660')).toBe(true);
     expect(repo.all('1m')).toHaveLength(50);
   });
+
+  it('원격 조회는 성공했는데 로컬 기록 단계(refreshCoverage)가 실패하면 격리하지 않고 잡 전체를 실패시킨다', async () => {
+    // 종목 격리는 pullRange(증권사 REST 호출) 구간에서 난 오류로만 좁힌다 — 그
+    // 뒤 로컬 기록(refreshCoverage 등)의 실패는 진짜 결함일 가능성이 높으므로
+    // "상장폐지 종목일 수 있습니다"로 안내하지 않고 잡 전체를 실패시켜야 한다.
+    const source = new FakeSource(minutes('005930', 10));
+    const { seed, symbolService, sync } = buildHarness(source);
+    const dataset = seed(['005930'], 'KR');
+
+    symbolService.refreshCoverage = async () => {
+      throw new Error('coverage DB 쓰기 실패 (버그 재현)');
+    };
+
+    const { job, done } = sync.startSync(dataset, { slice: '1m' });
+    await done;
+
+    const finished = symbolService.getSyncJob(job.id);
+    expect(finished?.status).toBe('FAILED');
+    expect(finished?.error).toContain('coverage DB 쓰기 실패');
+    // 종목 단위 격리 목록에는 남지 않는다 — 원격 조회 자체는 성공했다
+    expect(finished?.failedSymbolsJson).toBeNull();
+  });
 });
 
 describe('BrokerSyncService 재무 단계', () => {
