@@ -414,3 +414,127 @@ describe('KRX 전용 일봉으로 백테스트 실행 (워커의 생존편향 �
     expect(tradeCount).toBeGreaterThan(0);
   });
 });
+
+/**
+ * clone 의 유니버스 등록 누락 (리뷰 finding, 브랜치 fix/inplace-candle-sync) —
+ * `POST /backtests/universe-preview` 는 `registerUniverseSymbols` +
+ * `refreshKrxDailyCoverage` 를 부르지만, 상세 화면의 원클릭 복제
+ * (`POST /backtests/:id/clone`)는 `validateSubmission` 만 거쳐 이 두 호출을
+ * 건너뛰었다. 위저드 화면은 제출 전 항상 미리보기를 거치므로 이 등록이 이미
+ * 끝나 있지만, 복제는 미리보기 화면 자체를 거치지 않는다 — 그래서 미리보기에서
+ * 한 번도 보지 못한 종목(예: 리밸런스 시점 시총이 바뀌어 새로 topN 에 든 종목)을
+ * 그대로 두면 실행은 되지만(`checkPeriodCoverage` 는 유니버스 중 일부만 데이터가
+ * 있어도 통과시킨다 — D-025) 가격 데이터 탭에는 그 종목이 보이지 않는 불일치가
+ * 남는다.
+ *
+ * 이 테스트는 미리보기를 한 번도 거치지 않고(=검증을 우회해 큐에 직접 넣어) 만든
+ * 잡을 복제해, 이미 등록된 종목(005930) 옆에 미등록 종목(900010, KRX 일봉만 있고
+ * 로컬 등록·커버리지 캐시는 없음)이 같이 있어도 `checkPeriodCoverage` 가 관대하게
+ * 통과시켜 clone 자체는 성공한다는 점을 이용한다 — 그 성공 이후에도 900010 이
+ * 등록되지 않은 채로 남는지를 확인한다. 수정 전에는 이 단언이 실패한다(clone 은
+ * 201 로 성공하지만 900010 은 등록되지 않는다).
+ */
+describe('POST /backtests/:id/clone — 유니버스 자동 등록 (미리보기와 같은 전제)', () => {
+  const date = '2026-01-05';
+
+  let ctx: TestApp;
+  let cookie: string;
+
+  beforeEach(async () => {
+    ctx = await createTestApp();
+    const { username, password } = await createTestAdmin(ctx.container);
+    const login = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { username, password },
+    });
+    cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+
+    // 시총 순위: 900010(상장폐지 예정, 미등록) > 005930(이미 등록·커버리지 있음) —
+    // topN=2 유니버스 규칙이 둘 다 고른다.
+    seedSymbolMasterUniverse(ctx.container, [date], [
+      {
+        standardCode: 'KR7900010009',
+        shortCode: '900010',
+        name: '상장폐지예정1호',
+        market: 'KOSPI',
+        marketCapKrw: '2000000000000000',
+      },
+      {
+        standardCode: 'KR7005930003',
+        shortCode: '005930',
+        name: '삼성전자',
+        market: 'KOSPI',
+        marketCapKrw: '500000000000000',
+      },
+    ]);
+
+    // 005930 은 예전에 미리보기를 거쳐 이미 등록·커버리지가 있다고 가정한다.
+    registerSymbols(ctx.container, 'KR', ['005930']);
+    await ctx.container.candleRepository.saveCandles([
+      {
+        symbol: '005930',
+        market: 'KR',
+        timeframe: '1d',
+        tsMs: Date.UTC(2026, 0, 5),
+        open: 1_000,
+        high: 1_100,
+        low: 900,
+        close: 1_050,
+        volume: 12_345,
+      },
+    ]);
+    await ctx.container.symbolService.refreshCoverage('005930', 'KR', '1d');
+
+    // 900010 은 백필이 KRX 일봉을 이미 채워 뒀다고 가정한다(krx_daily_bars 직접
+    // 삽입) — 다만 이 종목은 미리보기를 한 번도 거치지 않아 로컬 `symbols` 등록도,
+    // 커버리지 캐시도 없다.
+    ctx.container.database.db
+      .insert(krxDailyBars)
+      .values({
+        shortCode: '900010',
+        date,
+        market: 'KOSPI',
+        open: 1_000,
+        high: 1_100,
+        low: 900,
+        close: 1_050,
+        volume: 12_345,
+      })
+      .run();
+  });
+
+  afterEach(async () => {
+    await ctx.close();
+  });
+
+  it('미리보기를 거치지 않고 큐에 바로 들어간 잡을 복제하면 unionSymbols 를 등록하고 KRX 일봉 커버리지를 갱신한다', async () => {
+    expect(ctx.container.symbolService.exists('900010')).toBe(false);
+
+    // 위저드의 미리보기를 거치지 않고 제출된 잡을 재현한다 — clone-draft 테스트와
+    // 같은 패턴으로 검증을 우회해 큐에 직접 넣는다.
+    const request: BacktestRequest = {
+      ...buildRequest(2),
+      timeframe: '1d',
+      period: { from: date, to: date },
+    };
+    const job = ctx.container.jobQueue.enqueue(request, [], { entries: [], hash: 'seed' });
+
+    const cloned = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${job.id}/clone`,
+      cookies: { qp_session: cookie },
+    });
+
+    // 005930 이 겹치므로(D-025 관용) clone 자체는 900010 의 등록 여부와 무관하게 성공한다
+    expect(cloned.statusCode).toBe(201);
+
+    // 그런데도 900010 은 등록·커버리지 갱신 대상이어야 한다 — 미리보기가 했을 일을
+    // clone 도 그대로 해야 가격 데이터 탭에서 빠지지 않는다.
+    expect(ctx.container.symbolService.exists('900010')).toBe(true);
+    const summary = ctx.container.symbolService.getSymbol('900010');
+    const dailySlice = summary?.slices.find((slice) => slice.slice === '1d');
+    expect(dailySlice?.hasData).toBe(true);
+    expect(dailySlice?.barCount).toBe(1);
+  });
+});
