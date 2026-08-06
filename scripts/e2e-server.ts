@@ -174,6 +174,7 @@ async function main(): Promise<void> {
       passwordHash: await container.passwordHasher.hash(E2E_PASSWORD),
       totpSecret: null,
       totpEnabled: false,
+      totpLastUsedStep: null,
       recoveryCodeHashes: [],
     },
     container.clock.now(),
