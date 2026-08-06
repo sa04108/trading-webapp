@@ -530,6 +530,34 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     return codes.filter((code) => !symbolService.exists(code) || !hasBars.has(code));
   };
 
+  /**
+   * 유니버스 미리보기가 만든 unionSymbols 를 `symbols` 에 자동 등록한다(브리프 §5,
+   * 스펙 2026-08-06 Task 4) — 이름·시장·표준코드는 종목 마스터(`resolved.unionEntries`)
+   * 에서 가져온다. 증권사 조회(symbolInfoService)는 상장폐지 종목의 이름을 주지
+   * 않아 그 출처로는 등록할 수 없다 — 그래서 가격 데이터 탭에서 상장폐지 종목이
+   * 조회되지 않던 문제가 이 등록으로 풀린다.
+   *
+   * KRX 응답 마켓(KOSPI/KOSDAQ)은 항상 'KR' 로 등록한다 — `symbols.market` 은
+   * 세션 축(KR/US) 이고, krxDailyBars 는 애초에 국내 종목만 갖는다
+   * (composite-candle-repository.ts usesKrx 주석 참고).
+   *
+   * 이미 등록된 코드는 건너뛴다 — 재등록을 실패로 다루지 않기 위해서고, 동시에
+   * standardCode 를 덮어쓰지 않기 위해서다(addSymbol 주석 참고).
+   *
+   * 여기(미리보기)에만 붙인다. `resolveScheduleForRequest`(validateSubmission·
+   * clone-draft 가 공유)에는 넣지 않는다 — clone-draft 는 "대기열에 넣지 않고
+   * 아무것도 확정하지 않는다"는 읽기 전용 계약이 있고, 위저드는 제출 전에 항상
+   * 이 미리보기를 거치므로 한 곳으로 충분하다.
+   */
+  const registerUniverseSymbols = (resolved: ResolvedUniverse): void => {
+    for (const code of resolved.unionSymbols) {
+      if (symbolService.exists(code)) continue;
+      const entry = resolved.unionEntries.get(code);
+      if (!entry) continue; // 이론상 항상 있다 — unionSymbols 는 unionEntries 와 같은 루프에서 채워진다
+      symbolService.addSymbol(code, 'KR', entry.name, entry.standardCode);
+    }
+  };
+
   app.post('/backtests/universe-preview', { preHandler: requireAuth }, async (request, reply) => {
     const parsed = universePreviewRequestSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -545,6 +573,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const rebalanceDates = computeRebalanceDates(period, rebalanceMonths);
     try {
       const resolved = await universeRuleResolver.resolve(universeRule, rebalanceDates);
+      registerUniverseSymbols(resolved);
       return {
         schedule: resolved.schedule,
         unionSymbols: resolved.unionSymbols,

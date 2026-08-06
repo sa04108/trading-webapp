@@ -121,6 +121,16 @@ describe('UniverseRuleResolver.resolve', () => {
     expect(result.unionSymbols).toEqual(['000010', '000020', '000030']);
     expect(result.uncoveredDates).toEqual([]);
 
+    // 자동 등록(Task 4)이 이름·시장·표준코드를 여기서 가져온다 — union 에 든
+    // 종목만큼만 담기고(D·F·E 는 없다), 원본 항목이 그대로 보존된다.
+    expect([...result.unionEntries.keys()].sort()).toEqual(['000010', '000020', '000030']);
+    expect(result.unionEntries.get('000010')).toMatchObject({
+      standardCode: 'KR7000010001',
+      shortCode: '000010',
+      name: 'A전자',
+      market: 'KOSPI',
+    });
+
     const expectedHash = createHash('sha256').update(JSON.stringify(result.schedule)).digest('hex');
     expect(result.scheduleHash).toBe(expectedHash);
 

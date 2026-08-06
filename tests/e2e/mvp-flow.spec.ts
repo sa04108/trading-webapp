@@ -16,10 +16,14 @@ const TOP_N = 1;
 
 /**
  * 위저드 유니버스 단계 — [미리보기] 를 누르고, 리밸런스 날짜가 아직 커버되지 않았다는
- * 경고가 뜨면 [N개 날짜 모두 동기화] 로 한꺼번에 해소한다.
+ * 경고가 뜨면 [기간 전체 동기화] 로 기간 전체(period.from~to)를 채운다(Task 4, 스펙
+ * 2026-08-06). 서버가 백그라운드 백필을 돌리는 동안 컴포넌트가 `GET
+ * /symbol-master/coverage` 를 폴링하고, 백필이 끝나면 같은 params 로 미리보기를
+ * 자동으로 다시 던진다(universe-rule-step.tsx `syncFullPeriod`) — 그 응답을 기다리면
+ * 버튼이 사라진(=기간 전체가 커버된) 상태로 정리된다.
  *
  * 이미 같은 기간을 동기화해 둔 뒤(예: 이 파일의 재무 게이트 시나리오가 앞선 시나리오와
- * 같은 PERIOD 를 쓴다) 다시 부르면 경고 자체가 뜨지 않아 반복문이 0회 돌고 끝난다 —
+ * 같은 PERIOD 를 쓴다) 다시 부르면 경고 자체가 뜨지 않아 버튼을 누르지 않고 끝난다 —
  * 그래서 두 시나리오가 이 함수를 그대로 공유해도 안전하다.
  */
 async function previewAndSyncUniverse(page: Page): Promise<void> {
@@ -28,26 +32,24 @@ async function previewAndSyncUniverse(page: Page): Promise<void> {
       resp.url().includes('/backtests/universe-preview') && resp.request().method() === 'POST',
   );
   await page.getByRole('button', { name: '미리보기' }).click();
-  // 클릭 직후 count() 는 자동 대기하지 않는다 — 응답이 아직 안 온 시점의 DOM(동기화
-  // 버튼 0개)을 그대로 읽으면 아래 while 이 실제로는 우다 목록이 곧 뜨는데도 0회로
-  // 끝나 버린다. 첫 미리보기 응답을 기다린 뒤에야 목록을 센다.
+  // 클릭 직후 count() 는 자동 대기하지 않는다 — 응답이 아직 안 온 시점의 DOM(버튼 0개)
+  // 을 그대로 읽으면 실제로는 곧 뜨는데도 없는 것으로 판정해 버린다. 첫 미리보기
+  // 응답을 기다린 뒤에야 버튼 유무를 확인한다.
   await initialPreview;
 
-  // 미커버 날짜는 버튼 하나로 한꺼번에 동기화한다 — 날짜별 버튼은 2년치면 24번을
-  // 누르게 해서 없앴다. 한 번 눌러도 남는 경우(소급 상한 초과 등)를 대비해 반복한다.
-  let bulkSync = page.getByRole('button', { name: /개 날짜 모두 동기화$/ });
-  while ((await bulkSync.count()) > 0) {
-    // 모든 날짜를 순차 동기화한 뒤 컴포넌트가 같은 params 로 미리보기를 자동으로 다시
-    // 던진다(universe-rule-step.tsx `syncAllUncovered`) — 그 응답을 기다려야 갱신된
-    // 목록에서 다음 반복의 count() 를 읽는다.
-    const previewRefreshed = page.waitForResponse(
-      (resp) =>
-        resp.url().includes('/backtests/universe-preview') && resp.request().method() === 'POST',
-    );
-    await bulkSync.click();
-    await previewRefreshed;
-    bulkSync = page.getByRole('button', { name: /개 날짜 모두 동기화$/ });
-  }
+  const fullSync = page.getByRole('button', { name: '기간 전체 동기화' });
+  if ((await fullSync.count()) === 0) return;
+
+  const previewRefreshed = page.waitForResponse(
+    (resp) =>
+      resp.url().includes('/backtests/universe-preview') && resp.request().method() === 'POST',
+    { timeout: 30_000 },
+  );
+  await fullSync.click();
+  await previewRefreshed;
+  // 백필이 끝나야 컴포넌트가 미리보기를 다시 던지므로, 이 시점엔 이미 기간 전체가
+  // 커버돼 버튼 자체가 더 이상 렌더되지 않는다.
+  await expect(page.getByRole('button', { name: '기간 전체 동기화' })).toHaveCount(0);
 }
 
 /**
@@ -458,23 +460,21 @@ test('rebalance schedule shows the applied trading day when a rebalance date fal
   await firstPreview;
 
   // 두 리밸런스 날짜(1월 1일 휴장, 2월 1일 정상 거래일) 모두 아직 커버되지 않아
-  // 버튼 하나가 둘을 한꺼번에 맡는다.
-  await expect(page.getByRole('button', { name: '2개 날짜 모두 동기화' })).toBeVisible();
+  // "기간 전체 동기화" 버튼 하나가 기간 전체(휴장일 포함)를 채운다.
+  await expect(page.getByRole('button', { name: '기간 전체 동기화' })).toBeVisible();
   // 미커버 날짜 목록은 한 줄로 모아 보여준다 — 어느 날짜가 빠졌는지는 여전히 읽힌다.
   await expect(
     page.getByText(`${period.from}, ${period.to}`, { exact: true }),
   ).toBeVisible();
 
-  let bulkSync = page.getByRole('button', { name: /개 날짜 모두 동기화$/ });
-  while ((await bulkSync.count()) > 0) {
-    const previewRefreshed = page.waitForResponse(
-      (resp) =>
-        resp.url().includes('/backtests/universe-preview') && resp.request().method() === 'POST',
-    );
-    await bulkSync.click();
-    await previewRefreshed;
-    bulkSync = page.getByRole('button', { name: /개 날짜 모두 동기화$/ });
-  }
+  const previewRefreshed = page.waitForResponse(
+    (resp) =>
+      resp.url().includes('/backtests/universe-preview') && resp.request().method() === 'POST',
+    { timeout: 30_000 },
+  );
+  await page.getByRole('button', { name: '기간 전체 동기화' }).click();
+  await previewRefreshed;
+  await expect(page.getByRole('button', { name: '기간 전체 동기화' })).toHaveCount(0);
 
   // 휴장 리밸런스 날짜(1월 1일)는 소급된 직전 거래일이 덧붙어 보이고, 정상 거래일
   // (2월 1일)은 요청 날짜와 같아 아무것도 덧붙지 않는다 — 표기 규약(잡음 없음)이다.

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
 import {
   baseInfoFixture,
@@ -169,6 +169,41 @@ describe('symbol-master routes', () => {
     });
     expect(typeof body.lastSyncedAtMs).toBe('number');
     expect(body.backfill).toMatchObject({ state: 'IDLE', cursorDate: null, error: null });
+  });
+
+  it('backfill 은 toDate 를 받으면 그 날짜까지만 채우고 끝난다 (Task 4)', async () => {
+    const { app, fake, cookie } = await setup();
+    seedTradingDay(fake, '2025-01-06');
+    seedTradingDay(fake, '2025-01-07');
+    // 2025-01-08 은 세팅하지 않는다 — toDate(01-07) 밖이라 건드리지 않아야 한다.
+
+    const backfill = await app.app.inject({
+      method: 'POST',
+      url: '/api/v1/symbol-master/backfill',
+      cookies: { qp_session: cookie },
+      payload: { fromDate: '2025-01-06', toDate: '2025-01-07' },
+    });
+    expect(backfill.statusCode).toBe(202);
+
+    const readCoverage = async () => {
+      const res = await app.app.inject({
+        method: 'GET',
+        url: '/api/v1/symbol-master/coverage',
+        cookies: { qp_session: cookie },
+      });
+      return res.json();
+    };
+
+    await vi.waitFor(
+      async () => expect((await readCoverage()).backfill.state).toBe('IDLE'),
+      { timeout: 10_000 },
+    );
+
+    const body = await readCoverage();
+    expect(body.ranges).toEqual([{ startDate: '2025-01-06', endDate: '2025-01-07' }]);
+    expect(body.backfill).toMatchObject({ state: 'IDLE', cursorDate: null, error: null });
+    // toDate 뒤는 아예 조회하지 않았다
+    expect(fake.requests.some((r) => r.basDd === '20250108')).toBe(false);
   });
 
   it('커버 이력이 없으면 lastSyncedAtMs 는 null 이다', async () => {

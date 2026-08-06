@@ -18,6 +18,7 @@ import { api, ApiError, postJson } from '@/lib/api-client';
 import type { DataJob } from '@/features/datasets/symbol-types';
 import { MAX_UNIVERSE_SYMBOLS } from '../../../shared/schemas/universe-limit.js';
 import type { UniverseRule } from '../../../shared/schemas/universe-rule.js';
+import type { SymbolMasterCoverageDto } from '../../../shared/schemas/symbol-master.js';
 
 interface UniverseScheduleEntryDto {
   readonly rebalanceDate: string;
@@ -97,12 +98,19 @@ export function UniverseRuleStep({
   onPreviewResolved,
 }: UniverseRuleStepProps) {
   const queryClient = useQueryClient();
-  // 동기화는 mutation 이 아니라 직접 만든 순차 루프다 — 미커버 날짜가 2년치면 24개라
-  // 버튼을 24번 누르게 할 수 없고, 한 번에 다 태우되 어디까지 갔는지 보여야 한다.
-  const [syncProgress, setSyncProgress] = useState<{ done: number; total: number } | null>(null);
-  const [syncError, setSyncError] = useState<string | null>(null);
-  // 봉 없는 종목 등록·동기화 — 아래 registerAndSyncMissingCandles 참고.
-  const [candlePhase, setCandlePhase] = useState<'REGISTERING' | 'SYNCING' | null>(null);
+  // 백테스트는 기간 안 모든 거래일의 봉을 쓴다 — 리밸런스 날짜만 동기화해서는
+  // 부족하다(Task 4, 스펙 2026-08-06). 그래서 이 화면은 날짜별 순차 동기화 대신
+  // 백그라운드 백필(SymbolMasterBackfill)을 기간 전체(period.from~to)로 시작시키고
+  // coverage 의 backfill 상태를 폴링해 진행을 보여준다 — 2년이면 캘린더 730일이라
+  // 포그라운드 루프로 돌리면 몇 분 걸린다.
+  const [backfillRunning, setBackfillRunning] = useState(false);
+  const [backfillCursor, setBackfillCursor] = useState<string | null>(null);
+  const [backfillError, setBackfillError] = useState<string | null>(null);
+  // 봉 없는 종목 동기화 — 아래 syncMissingCandles 참고. 등록은 더 이상 여기서 하지
+  // 않는다: 미리보기 응답 자체가 unionSymbols 를 종목 마스터 정보로 자동 등록한다
+  // (backtest-routes.ts registerUniverseSymbols) — 이 목록의 종목은 이미 등록돼
+  // 있고, 남은 일은 봉 동기화뿐이다.
+  const [candlePhase, setCandlePhase] = useState<'SYNCING' | null>(null);
   const [candleSyncError, setCandleSyncError] = useState<string | null>(null);
   // 등록·동기화가 성공적으로 끝났는데도 재미리보기에 missingCandleSymbols 가 남을 수
   // 있다(상장폐지 종목은 증권사가 이름·봉을 안 준다) — 그때는 오류가 아니라 이 사실을
@@ -137,65 +145,66 @@ export function UniverseRuleStep({
   };
 
   /**
-   * 미커버 날짜를 오래된 순서로 하나씩 동기화하고 마지막에 한 번만 다시 미리보기한다.
+   * `POST /symbol-master/backfill` 로 기간 전체(period.from~to) 백필을 시작시키고,
+   * `GET /symbol-master/coverage` 의 backfill 상태가 RUNNING 이 아닐 때까지 폴링한다.
    *
-   * 서버가 날짜마다 KRX 를 부르므로 병렬로 던지면 호출 한도를 몰아 쓰고 서로의 소급
-   * 수집과 엉킨다 — 순차로 돈다. 중간에 실패해도 그때까지 수집한 날짜는 이미 커버로
-   * 남으므로, 오류를 보여주고 남은 만큼 다시 누르면 이어진다.
+   * 백필은 서버 쪽 단일 백그라운드 러너다 — 이미 다른 백필이 RUNNING 이면 이 호출은
+   * 새로 시작하지 않고 그 진행 상황에 편승한다(symbol-master-backfill.ts start() 참고).
+   * BUDGET_EXHAUSTED 로 멈추면 오류로 안내한다 — 버튼을 다시 누르면(보통 다음날 예산이
+   * 리셋된 뒤) 이어서 시도할 수 있다.
    */
-  const syncAllUncovered = async (dates: readonly string[]): Promise<void> => {
-    setSyncError(null);
-    setSyncProgress({ done: 0, total: dates.length });
-    let failure: string | null = null;
-    let done = 0;
+  const syncFullPeriod = async (): Promise<void> => {
+    setBackfillError(null);
+    setBackfillRunning(true);
+    setBackfillCursor(null);
 
-    for (const date of dates) {
-      try {
-        await postJson<unknown>('/symbol-master/sync', { date });
-        done += 1;
-        setSyncProgress({ done, total: dates.length });
-      } catch (error) {
-        const reason = error instanceof ApiError ? error.message : '동기화 실패';
-        failure = `${date} 동기화 실패 — ${reason} (${done}/${dates.length} 완료)`;
-        break;
+    try {
+      await postJson<unknown>('/symbol-master/backfill', {
+        fromDate: period.from,
+        toDate: period.to,
+      });
+
+      let status = (await api<SymbolMasterCoverageDto>('/symbol-master/coverage')).backfill;
+      while (status.state === 'RUNNING') {
+        setBackfillCursor(status.cursorDate);
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        status = (await api<SymbolMasterCoverageDto>('/symbol-master/coverage')).backfill;
       }
+
+      if (status.state === 'BUDGET_EXHAUSTED') {
+        setBackfillError(
+          `오늘 수집 한도에 도달했습니다 (진행: ${status.cursorDate ?? '?'}) — 잠시 후 다시 시도하세요`,
+        );
+      } else if (status.state === 'FAILED') {
+        setBackfillError(status.error ?? '기간 동기화에 실패했습니다');
+      }
+    } catch (error) {
+      setBackfillError(error instanceof ApiError ? error.message : '기간 동기화에 실패했습니다');
+    } finally {
+      setBackfillRunning(false);
     }
 
-    setSyncProgress(null);
-    setSyncError(failure);
     await queryClient.invalidateQueries({ queryKey: ['symbol-master'] });
-    // 동기화가 끝나면 같은 질문(그때 previewMutation 이 실제로 받은 params)을 자동으로
-    // 다시 던진다 — 사용자가 미리보기를 다시 누르지 않아도 된다. 일부만 성공했어도
-    // 다시 물어야 남은 미커버 날짜가 정확히 추려진다.
-    if (done > 0 && previewMutation.variables) runPreview(previewMutation.variables);
+    // 부분 진행이었어도 다시 물어야 남은 미커버 날짜가 정확히 추려진다.
+    if (previewMutation.variables) runPreview(previewMutation.variables);
   };
 
   /**
-   * 봉 없는 종목을 그 자리에서 등록하고 동기화한다 — 앞선 미커버 날짜 동기화(위
-   * syncAllUncovered)와 같은 원칙이다. 탭을 옮겨 종목을 등록하고 다시 동기화를 거는
-   * 왕복을 없앤다.
-   *
-   * POST /symbols 가 409(added=0)를 내도 실패로 다루지 않는다 — 이 라우트는 넘긴 코드가
-   * 전부 이미 등록돼 있을 때만 409 를 낸다(symbol-routes.ts). 그 경우가 바로 "봉만
-   * 없는" 상태이므로 등록을 건너뛰고 그대로 동기화로 넘어간다.
+   * 봉 없는 종목을 그 자리에서 동기화한다 — 이 목록(missingCandleSymbols)의 종목은
+   * 미리보기 응답 시점에 이미 자동 등록돼 있다(backtest-routes.ts
+   * registerUniverseSymbols) — 그래서 이 화면은 더 이상 POST /symbols 로 직접
+   * 등록하지 않는다. 탭을 옮겨 종목을 등록하고 다시 동기화를 거는 왕복을 없앤다.
    *
    * 잡 폴링·완료 판정은 symbols-panel.tsx 와 같다: status 가 RUNNING/QUEUED 인 동안
    * 1초 간격으로 다시 읽고, 그 밖의 상태는 끝난 것으로 본다.
    */
-  const registerAndSyncMissingCandles = async (codes: readonly string[]): Promise<void> => {
+  const syncMissingCandles = async (codes: readonly string[]): Promise<void> => {
     setCandleSyncError(null);
     setCandleSyncAttempted(false);
-    setCandlePhase('REGISTERING');
+    setCandlePhase('SYNCING');
 
     let job: DataJob | null = null;
     try {
-      try {
-        await postJson<unknown>('/symbols', { codes, market: value.markets[0] });
-      } catch (error) {
-        if (!(error instanceof ApiError) || error.status !== 409) throw error;
-      }
-
-      setCandlePhase('SYNCING');
       const started = await postJson<{ job: DataJob }>('/symbols/sync', { codes, slice: '1d' });
       let current: DataJob = started.job;
       while (current.status === 'RUNNING' || current.status === 'QUEUED') {
@@ -209,14 +218,14 @@ export function UniverseRuleStep({
       else if (current.status === 'CANCELLED') setCandleSyncError('봉 수집이 취소되었습니다');
       else setCandleSyncError(current.error ?? '봉 수집이 실패했습니다');
     } catch (error) {
-      const reason = error instanceof ApiError ? error.message : '등록·동기화에 실패했습니다';
+      const reason = error instanceof ApiError ? error.message : '봉 수집에 실패했습니다';
       setCandleSyncError(reason);
     } finally {
       setCandlePhase(null);
     }
 
-    // 등록·동기화 시도가 있었으면(잡을 실제로 받았으면) 결과와 무관하게 다시 미리보기해
-    // 남은 목록을 정확히 추린다 — syncAllUncovered 와 같은 방식.
+    // 동기화 시도가 있었으면(잡을 실제로 받았으면) 결과와 무관하게 다시 미리보기해
+    // 남은 목록을 정확히 추린다 — syncFullPeriod 와 같은 방식.
     if (job !== null) {
       await queryClient.invalidateQueries({ queryKey: ['symbol-master'] });
       if (previewMutation.variables) runPreview(previewMutation.variables);
@@ -275,8 +284,8 @@ export function UniverseRuleStep({
               className="h-11"
               disabled={!canPreview || previewMutation.isPending}
               onClick={() => {
-                // 직접 다시 미리보기하면 지난 등록·동기화 시도의 설명은 더 이상 이
-                // 결과에 대한 것이 아니다 — 지운다.
+                // 직접 다시 미리보기하면 지난 동기화 시도의 설명은 더 이상 이 결과에
+                // 대한 것이 아니다 — 지운다.
                 setCandleSyncAttempted(false);
                 runPreview(currentParams);
               }}
@@ -355,7 +364,7 @@ export function UniverseRuleStep({
           <AlertDescription className="space-y-2">
             <p>
               종목 마스터가 리밸런스 날짜 {preview.uncoveredDates.length}개를 아직 커버하지
-              않습니다 — 동기화해야 미리보기를 완성할 수 있습니다.
+              않습니다 — 기간 전체를 동기화해야 미리보기를 완성할 수 있습니다.
             </p>
             <p className="text-xs tabular-nums opacity-80">
               {preview.uncoveredDates.join(', ')}
@@ -364,22 +373,24 @@ export function UniverseRuleStep({
               type="button"
               variant="outline"
               size="sm"
-              disabled={syncProgress !== null || candlePhase !== null}
-              onClick={() => void syncAllUncovered(preview.uncoveredDates)}
+              disabled={backfillRunning || candlePhase !== null}
+              onClick={() => void syncFullPeriod()}
             >
-              {syncProgress === null
-                ? `${preview.uncoveredDates.length}개 날짜 모두 동기화`
-                : `동기화 중 ${syncProgress.done}/${syncProgress.total}`}
+              {backfillRunning
+                ? backfillCursor
+                  ? `동기화 중… ${backfillCursor}`
+                  : '동기화 중…'
+                : '기간 전체 동기화'}
             </Button>
           </AlertDescription>
         </Alert>
       ) : null}
 
-      {/* 429/503(쿼터·미설정) 같은 동기화 실패가 조용히 묻히지 않게 previewMutation 과
+      {/* 429/503(쿼터·미설정)·예산 소진 같은 백필 실패가 조용히 묻히지 않게 previewMutation 과
           같은 방식으로 보여준다 (리뷰 fix) */}
-      {syncError !== null ? (
+      {backfillError !== null ? (
         <Alert variant="destructive" role="alert">
-          <AlertDescription>{syncError}</AlertDescription>
+          <AlertDescription>{backfillError}</AlertDescription>
         </Alert>
       ) : null}
 
@@ -394,14 +405,12 @@ export function UniverseRuleStep({
               type="button"
               variant="outline"
               size="sm"
-              disabled={candlePhase !== null || syncProgress !== null}
-              onClick={() => void registerAndSyncMissingCandles(preview.missingCandleSymbols)}
+              disabled={candlePhase !== null || backfillRunning}
+              onClick={() => void syncMissingCandles(preview.missingCandleSymbols)}
             >
-              {candlePhase === 'REGISTERING'
-                ? '등록 중…'
-                : candlePhase === 'SYNCING'
-                  ? '봉 수집 중…'
-                  : `${preview.missingCandleSymbols.length}개 종목 등록·동기화`}
+              {candlePhase === 'SYNCING'
+                ? '봉 수집 중…'
+                : `${preview.missingCandleSymbols.length}개 종목 봉 수집`}
             </Button>
             {candleSyncAttempted ? (
               <p className="text-xs text-muted-foreground">
@@ -412,7 +421,7 @@ export function UniverseRuleStep({
               <Link to="/datasets?tab=prices" className="underline">
                 가격 데이터 탭
               </Link>
-              에서 직접 등록·동기화할 수도 있습니다.
+              에서 직접 동기화할 수도 있습니다.
             </p>
           </AlertDescription>
         </Alert>

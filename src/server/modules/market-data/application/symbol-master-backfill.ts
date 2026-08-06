@@ -12,6 +12,8 @@ export interface BackfillStatus {
   readonly cursorDate: string | null;
   /** 마지막 start() 의 fromDate — 스케줄러가 매일 같은 값으로 재개를 시도할 때 쓴다 */
   readonly targetStartDate: string | null;
+  /** 마지막 start() 의 toDate — 지정하지 않은 호출(오늘까지)은 null 이다 */
+  readonly targetEndDate: string | null;
   readonly error: string | null;
 }
 
@@ -46,6 +48,7 @@ export class SymbolMasterBackfill {
   private state: BackfillState = 'IDLE';
   private cursorDate: string | null = null;
   private targetStartDate: string | null = null;
+  private targetEndDate: string | null = null;
   private error: string | null = null;
   private stopRequested = false;
 
@@ -59,6 +62,7 @@ export class SymbolMasterBackfill {
       state: this.state,
       cursorDate: this.cursorDate,
       targetStartDate: this.targetStartDate,
+      targetEndDate: this.targetEndDate,
       error: this.error,
     };
   }
@@ -67,17 +71,22 @@ export class SymbolMasterBackfill {
    * 이미 RUNNING 이면 무시한다 — 스케줄러가 겹쳐 부르더라도 루프가 둘로 늘어나지
    * 않게 하기 위해서다. 루프는 fire-and-forget 로 시작하고 start() 자체는 즉시
    * 반환한다: 백필은 분 단위로 걸릴 수 있는 작업이라 호출부를 막아 세우지 않는다.
+   *
+   * toDate 를 생략하면 예전처럼 "오늘(KST)까지" 다. 위저드가 백테스트 기간 전체를
+   * 수집할 때는 toDate 를 넘겨 그 기간만 채운다 — 안 그러면 730일치 요청 하나가
+   * 오늘까지 계속 이어져 필요 이상으로 KRX 호출 예산을 쓴다.
    */
-  start(fromDate: string): void {
+  start(fromDate: string, toDate?: string): void {
     if (this.state === 'RUNNING') return;
 
     this.targetStartDate = fromDate;
+    this.targetEndDate = toDate ?? null;
     this.stopRequested = false;
     this.state = 'RUNNING';
     this.cursorDate = fromDate;
     this.error = null;
 
-    void this.runLoop(fromDate);
+    void this.runLoop(fromDate, toDate);
   }
 
   /** 진행 중 루프를 다음 날짜 경계에서 멈춘다 — 그 자리(cursorDate)에서 재개할 수 있다 */
@@ -90,15 +99,15 @@ export class SymbolMasterBackfill {
    * start() 가 이 promise 를 기다리지 않으므로 여기서 놓친 예외는 프로세스
    * 전체로 번진다.
    */
-  private async runLoop(fromDate: string): Promise<void> {
+  private async runLoop(fromDate: string, toDate?: string): Promise<void> {
     try {
       // 오늘(KST) 은 루프 시작 시점에 한 번만 정한다. 실제 운영에서 8000 호출
       // 예산으로 하루치 백필이 자정을 넘기는 일은 상정하지 않는다 — 넘기면
       // 다음날 스케줄러가 같은 fromDate 로 다시 불러 이어간다.
-      const today = kstDateOf(this.deps.clock.now());
+      const upperBound = toDate ?? kstDateOf(this.deps.clock.now());
       let cursor = fromDate;
 
-      while (cursor <= today) {
+      while (cursor <= upperBound) {
         if (this.stopRequested) {
           this.cursorDate = cursor;
           this.state = 'IDLE';

@@ -26,7 +26,7 @@ const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const universeQuerySchema = z.object({ date: dateSchema });
 const eventsQuerySchema = z.object({ from: dateSchema, to: dateSchema });
 const syncBodySchema = z.object({ date: dateSchema });
-const backfillBodySchema = z.object({ fromDate: dateSchema });
+const backfillBodySchema = z.object({ fromDate: dateSchema, toDate: dateSchema.optional() });
 
 function entryDto(entry: SymbolMasterEntry): SymbolMasterEntryDto {
   return {
@@ -154,8 +154,9 @@ export function registerSymbolMasterRoutes(
       return reply.code(400).send({ error: 'fromDate(YYYY-MM-DD) 필드가 필요합니다' });
     }
     // start() 는 즉시 반환한다(fire-and-forget) — 백필은 분 단위로 걸릴 수 있어 응답을
-    // 막아 세우지 않는다.
-    deps.backfill.start(parsed.data.fromDate);
+    // 막아 세우지 않는다. toDate 를 생략하면 기존과 같이 오늘까지 채운다 — 위저드가
+    // 백테스트 기간 전체(fromDate~toDate)만 수집하려 할 때 이 인자로 범위를 좁힌다.
+    deps.backfill.start(parsed.data.fromDate, parsed.data.toDate);
     return reply.code(202).send(deps.backfill.status());
   });
 }
