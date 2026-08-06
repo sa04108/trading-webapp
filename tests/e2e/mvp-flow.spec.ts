@@ -16,7 +16,7 @@ const TOP_N = 1;
 
 /**
  * 위저드 유니버스 단계 — [미리보기] 를 누르고, 리밸런스 날짜가 아직 커버되지 않았다는
- * 경고가 뜨면 날짜마다 있는 [동기화] 를 모두 눌러 해소한다.
+ * 경고가 뜨면 [N개 날짜 모두 동기화] 로 한꺼번에 해소한다.
  *
  * 이미 같은 기간을 동기화해 둔 뒤(예: 이 파일의 재무 게이트 시나리오가 앞선 시나리오와
  * 같은 PERIOD 를 쓴다) 다시 부르면 경고 자체가 뜨지 않아 반복문이 0회 돌고 끝난다 —
@@ -33,18 +33,20 @@ async function previewAndSyncUniverse(page: Page): Promise<void> {
   // 끝나 버린다. 첫 미리보기 응답을 기다린 뒤에야 목록을 센다.
   await initialPreview;
 
-  let syncButtons = page.getByRole('button', { name: '동기화' });
-  while ((await syncButtons.count()) > 0) {
-    // 동기화가 끝나면 컴포넌트가 같은 params 로 미리보기를 자동으로 다시 던진다
-    // (universe-rule-step.tsx `onSuccess`) — 그 응답을 기다려야 남은 우다 목록이
-    // 갱신된 상태에서 다음 반복의 count() 를 읽는다.
+  // 미커버 날짜는 버튼 하나로 한꺼번에 동기화한다 — 날짜별 버튼은 2년치면 24번을
+  // 누르게 해서 없앴다. 한 번 눌러도 남는 경우(소급 상한 초과 등)를 대비해 반복한다.
+  let bulkSync = page.getByRole('button', { name: /개 날짜 모두 동기화$/ });
+  while ((await bulkSync.count()) > 0) {
+    // 모든 날짜를 순차 동기화한 뒤 컴포넌트가 같은 params 로 미리보기를 자동으로 다시
+    // 던진다(universe-rule-step.tsx `syncAllUncovered`) — 그 응답을 기다려야 갱신된
+    // 목록에서 다음 반복의 count() 를 읽는다.
     const previewRefreshed = page.waitForResponse(
       (resp) =>
         resp.url().includes('/backtests/universe-preview') && resp.request().method() === 'POST',
     );
-    await syncButtons.first().click();
+    await bulkSync.click();
     await previewRefreshed;
-    syncButtons = page.getByRole('button', { name: '동기화' });
+    bulkSync = page.getByRole('button', { name: /개 날짜 모두 동기화$/ });
   }
 }
 
@@ -456,20 +458,22 @@ test('rebalance schedule shows the applied trading day when a rebalance date fal
   await firstPreview;
 
   // 두 리밸런스 날짜(1월 1일 휴장, 2월 1일 정상 거래일) 모두 아직 커버되지 않아
-  // 동기화 버튼이 둘 다 뜬다.
-  await expect(page.getByRole('button', { name: '동기화' })).toHaveCount(2);
-  await expect(page.getByText(period.from, { exact: true })).toBeVisible();
-  await expect(page.getByText(period.to, { exact: true })).toBeVisible();
+  // 버튼 하나가 둘을 한꺼번에 맡는다.
+  await expect(page.getByRole('button', { name: '2개 날짜 모두 동기화' })).toBeVisible();
+  // 미커버 날짜 목록은 한 줄로 모아 보여준다 — 어느 날짜가 빠졌는지는 여전히 읽힌다.
+  await expect(
+    page.getByText(`${period.from}, ${period.to}`, { exact: true }),
+  ).toBeVisible();
 
-  let syncButtons = page.getByRole('button', { name: '동기화' });
-  while ((await syncButtons.count()) > 0) {
+  let bulkSync = page.getByRole('button', { name: /개 날짜 모두 동기화$/ });
+  while ((await bulkSync.count()) > 0) {
     const previewRefreshed = page.waitForResponse(
       (resp) =>
         resp.url().includes('/backtests/universe-preview') && resp.request().method() === 'POST',
     );
-    await syncButtons.first().click();
+    await bulkSync.click();
     await previewRefreshed;
-    syncButtons = page.getByRole('button', { name: '동기화' });
+    bulkSync = page.getByRole('button', { name: /개 날짜 모두 동기화$/ });
   }
 
   // 휴장 리밸런스 날짜(1월 1일)는 소급된 직전 거래일이 덧붙어 보이고, 정상 거래일

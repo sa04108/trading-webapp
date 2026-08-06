@@ -1,4 +1,4 @@
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -15,7 +15,6 @@ import {
 } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { ApiError, postJson } from '@/lib/api-client';
-import { useSymbolMasterSync } from '@/features/symbol-master/use-symbol-master';
 import { MAX_UNIVERSE_SYMBOLS } from '../../../shared/schemas/universe-limit.js';
 import type { UniverseRule } from '../../../shared/schemas/universe-rule.js';
 
@@ -96,7 +95,11 @@ export function UniverseRuleStep({
   rebalanceMonths,
   onPreviewResolved,
 }: UniverseRuleStepProps) {
-  const syncMutation = useSymbolMasterSync();
+  const queryClient = useQueryClient();
+  // 동기화는 mutation 이 아니라 직접 만든 순차 루프다 — 미커버 날짜가 2년치면 24개라
+  // 버튼을 24번 누르게 할 수 없고, 한 번에 다 태우되 어디까지 갔는지 보여야 한다.
+  const [syncProgress, setSyncProgress] = useState<{ done: number; total: number } | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const previewMutation = useMutation({
     mutationFn: (params: PreviewParams) =>
       postJson<UniversePreviewResponseDto>('/backtests/universe-preview', params),
@@ -123,6 +126,40 @@ export function UniverseRuleStep({
 
   const runPreview = (params: PreviewParams): void => {
     previewMutation.mutate(params);
+  };
+
+  /**
+   * 미커버 날짜를 오래된 순서로 하나씩 동기화하고 마지막에 한 번만 다시 미리보기한다.
+   *
+   * 서버가 날짜마다 KRX 를 부르므로 병렬로 던지면 호출 한도를 몰아 쓰고 서로의 소급
+   * 수집과 엉킨다 — 순차로 돈다. 중간에 실패해도 그때까지 수집한 날짜는 이미 커버로
+   * 남으므로, 오류를 보여주고 남은 만큼 다시 누르면 이어진다.
+   */
+  const syncAllUncovered = async (dates: readonly string[]): Promise<void> => {
+    setSyncError(null);
+    setSyncProgress({ done: 0, total: dates.length });
+    let failure: string | null = null;
+    let done = 0;
+
+    for (const date of dates) {
+      try {
+        await postJson<unknown>('/symbol-master/sync', { date });
+        done += 1;
+        setSyncProgress({ done, total: dates.length });
+      } catch (error) {
+        const reason = error instanceof ApiError ? error.message : '동기화 실패';
+        failure = `${date} 동기화 실패 — ${reason} (${done}/${dates.length} 완료)`;
+        break;
+      }
+    }
+
+    setSyncProgress(null);
+    setSyncError(failure);
+    await queryClient.invalidateQueries({ queryKey: ['symbol-master'] });
+    // 동기화가 끝나면 같은 질문(그때 previewMutation 이 실제로 받은 params)을 자동으로
+    // 다시 던진다 — 사용자가 미리보기를 다시 누르지 않아도 된다. 일부만 성공했어도
+    // 다시 물어야 남은 미커버 날짜가 정확히 추려진다.
+    if (done > 0 && previewMutation.variables) runPreview(previewMutation.variables);
   };
 
   return (
@@ -251,50 +288,32 @@ export function UniverseRuleStep({
         <Alert variant="destructive" role="alert">
           <AlertDescription className="space-y-2">
             <p>
-              종목 마스터가 다음 리밸런스 날짜를 아직 커버하지 않습니다 — 동기화해야
-              미리보기를 완성할 수 있습니다.
+              종목 마스터가 리밸런스 날짜 {preview.uncoveredDates.length}개를 아직 커버하지
+              않습니다 — 동기화해야 미리보기를 완성할 수 있습니다.
             </p>
-            <ul className="space-y-1">
-              {preview.uncoveredDates.map((date) => (
-                <li key={date} className="flex items-center gap-2">
-                  <span className="tabular-nums">{date}</span>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={syncMutation.isPending}
-                    onClick={() =>
-                      syncMutation.mutate(
-                        { date },
-                        {
-                          // 동기화가 끝나면 같은 질문(그때 previewMutation 이 실제로 받은
-                          // params)을 자동으로 다시 던진다 — 사용자가 미리보기를 다시
-                          // 누르지 않아도 된다(브리프 규약).
-                          onSuccess: () => {
-                            if (previewMutation.variables) runPreview(previewMutation.variables);
-                          },
-                        },
-                      )
-                    }
-                  >
-                    동기화
-                  </Button>
-                </li>
-              ))}
-            </ul>
+            <p className="text-xs tabular-nums opacity-80">
+              {preview.uncoveredDates.join(', ')}
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={syncProgress !== null}
+              onClick={() => void syncAllUncovered(preview.uncoveredDates)}
+            >
+              {syncProgress === null
+                ? `${preview.uncoveredDates.length}개 날짜 모두 동기화`
+                : `동기화 중 ${syncProgress.done}/${syncProgress.total}`}
+            </Button>
           </AlertDescription>
         </Alert>
       ) : null}
 
       {/* 429/503(쿼터·미설정) 같은 동기화 실패가 조용히 묻히지 않게 previewMutation 과
           같은 방식으로 보여준다 (리뷰 fix) */}
-      {syncMutation.isError ? (
+      {syncError !== null ? (
         <Alert variant="destructive" role="alert">
-          <AlertDescription>
-            {syncMutation.error instanceof ApiError
-              ? syncMutation.error.message
-              : '동기화에 실패했습니다'}
-          </AlertDescription>
+          <AlertDescription>{syncError}</AlertDescription>
         </Alert>
       ) : null}
 
