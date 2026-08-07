@@ -127,14 +127,14 @@ export function DashboardPage() {
               symbolsResp.symbols.length > 0 ? (
                 <p>
                   등록 종목 {symbolsResp.symbols.length}개 —{' '}
-                  <Link to="/datasets?tab=prices" className="underline underline-offset-4">
+                  <Link to="/datasets/prices" className="underline underline-offset-4">
                     가격 데이터 확인
                   </Link>
                 </p>
               ) : (
                 <p className="text-muted-foreground">
                   등록된 종목이 없습니다.{' '}
-                  <Link to="/datasets?tab=prices" className="underline underline-offset-4">
+                  <Link to="/datasets/prices" className="underline underline-offset-4">
                     종목 등록하기
                   </Link>
                 </p>

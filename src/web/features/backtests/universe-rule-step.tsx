@@ -557,7 +557,7 @@ export function UniverseRuleStep({
               </p>
             ) : null}
             <p className="text-xs text-muted-foreground">
-              <Link to="/datasets?tab=prices" className="underline">
+              <Link to="/datasets/prices" className="underline">
                 가격 데이터 탭
               </Link>
               에서 직접 동기화할 수도 있습니다.
