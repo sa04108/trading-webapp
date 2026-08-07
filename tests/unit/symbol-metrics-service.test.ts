@@ -39,7 +39,10 @@ function build(options: {
 } = {}): Harness {
   const nowRef = { now: 0 };
   const clock = { now: () => nowRef.now };
-  const getStockInfo = vi.fn(async () => options.stocks ?? []);
+  const getStockInfo = vi.fn(async () => ({
+    stocks: options.stocks ?? [],
+    failedSymbols: [],
+  }));
   const getQuotes = vi.fn(async () => options.quotes ?? []);
   const getRanking = vi.fn(
     async (_market: Market, metric: MarketRankingMetric) => options.rankings?.[metric] ?? [],
@@ -139,7 +142,7 @@ describe('SymbolMetricsService (종목 정렬 지표)', () => {
     // 랭킹만 죽은 상황
     const failing = new SymbolMetricsService(
       new SymbolInfoService(
-        { getStockInfo: async () => [stock('005930', 5_000_000_000)] },
+        { getStockInfo: async () => ({ stocks: [stock('005930', 5_000_000_000)], failedSymbols: [] }) },
         { now: () => 0 },
         logger,
       ),
@@ -181,7 +184,11 @@ describe('SymbolMetricsService (종목 정렬 지표)', () => {
       return [{ symbol: '005930', tradingValue: 1_000, tradingVolume: 10 }];
     });
     const service = new SymbolMetricsService(
-      new SymbolInfoService({ getStockInfo: async () => [] }, { now: () => 0 }, logger),
+      new SymbolInfoService(
+        { getStockInfo: async () => ({ stocks: [], failedSymbols: [] }) },
+        { now: () => 0 },
+        logger,
+      ),
       { getQuotes: async () => [] },
       { getRanking },
       { now: () => 0 },

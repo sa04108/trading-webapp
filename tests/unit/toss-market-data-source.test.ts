@@ -223,12 +223,16 @@ describe('createTossMarketDataSource (스펙 §13 — 2차 어댑터)', () => {
         ],
       }),
     ]);
-    const stocks = await buildSource(fetchImpl).getStockInfo(['005930', 'AAPL']);
+    const { stocks, failedSymbols } = await buildSource(fetchImpl).getStockInfo([
+      '005930',
+      'AAPL',
+    ]);
 
     const [stocksUrl] = fetchImpl.mock.calls[1] as [string];
     const url = new URL(stocksUrl);
     expect(url.pathname).toBe('/api/v1/stocks');
     expect(url.searchParams.get('symbols')).toBe('005930,AAPL');
+    expect(failedSymbols).toEqual([]);
     expect(stocks).toEqual([
       {
         symbol: '005930',
@@ -259,7 +263,7 @@ describe('createTossMarketDataSource (스펙 §13 — 2차 어댑터)', () => {
         ],
       }),
     ]);
-    const stocks = await buildSource(fetchImpl).getStockInfo(['005930', '000660']);
+    const { stocks } = await buildSource(fetchImpl).getStockInfo(['005930', '000660']);
     expect(stocks.map((stock) => stock.sharesOutstanding)).toEqual([null, null]);
     expect(stocks.map((stock) => stock.name)).toEqual(['삼성전자', 'SK하이닉스']);
   });
@@ -276,7 +280,7 @@ describe('createTossMarketDataSource (스펙 §13 — 2차 어댑터)', () => {
     ]);
     const warn = vi.spyOn(logger, 'warn');
 
-    const stocks = await buildSource(fetchImpl).getStockInfo(symbols);
+    const { stocks, failedSymbols } = await buildSource(fetchImpl).getStockInfo(symbols);
 
     expect(stocks).toEqual([
       {
@@ -288,6 +292,9 @@ describe('createTossMarketDataSource (스펙 §13 — 2차 어댑터)', () => {
         sharesOutstanding: null,
       },
     ]);
+    // 실패한 청크(첫 200건)는 failedSymbols 로 보고된다 — 호출부가 이 코드들을
+    // "모른다" 로 부정 캐시하지 않고 다음 조회에서 재시도하게 하기 위해서다.
+    expect(failedSymbols).toEqual(symbols.slice(0, 200));
     expect(warn).toHaveBeenCalledWith(
       expect.objectContaining({ event: 'toss.get-stock-info.chunk-failed' }),
       expect.any(String),
@@ -302,8 +309,8 @@ describe('createTossMarketDataSource (스펙 §13 — 2차 어댑터)', () => {
     );
 
     const fetchImpl = vi.fn();
-    const stocks = await buildSource(fetchImpl).getStockInfo([]);
-    expect(stocks).toEqual([]);
+    const result = await buildSource(fetchImpl).getStockInfo([]);
+    expect(result).toEqual({ stocks: [], failedSymbols: [] });
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 

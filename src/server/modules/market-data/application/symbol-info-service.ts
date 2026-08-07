@@ -55,9 +55,14 @@ export class SymbolInfoService {
 
     if (misses.length > 0) {
       try {
-        const fetched = await this.source.getStockInfo(misses);
-        const bySymbol = new Map(fetched.map((info) => [info.symbol, info]));
+        const { stocks, failedSymbols } = await this.source.getStockInfo(misses);
+        const bySymbol = new Map(stocks.map((info) => [info.symbol, info]));
+        const failed = new Set(failedSymbols);
         for (const symbol of misses) {
+          // 조회 자체가 실패한 코드는 캐시하지 않는다 — "증권사가 모른다" 가 아니라
+          // "이번엔 못 물어봤다" 이므로, 다음 조회에서 다시 시도돼야 한다. 성공한
+          // 청크의 응답에 없었던 코드만 null 로 부정 캐시한다(원래 캐시 의미 유지).
+          if (failed.has(symbol)) continue;
           this.cache.set(symbol, { info: bySymbol.get(symbol) ?? null, cachedAtMs: now });
         }
       } catch (error) {

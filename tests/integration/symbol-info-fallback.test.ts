@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
 import { registerSymbols } from '../helpers/seed.js';
 import type { SymbolInfoService } from '../../src/server/modules/market-data/application/symbol-info-service.js';
-import type { StockInfo, StockInfoSource } from '../../src/server/modules/market-data/application/ports.js';
+import type {
+  StockInfo,
+  StockInfoBatchResult,
+  StockInfoSource,
+} from '../../src/server/modules/market-data/application/ports.js';
 
 /**
  * `/symbols/info` 의 로컬 폴백 (원인 1·2·3 통합 확인).
@@ -33,11 +37,16 @@ function buildChunkedFakeSource(config: {
   known: Record<string, { name: string; market: string }>;
 }): StockInfoSource {
   return {
-    async getStockInfo(symbols) {
+    async getStockInfo(symbols): Promise<StockInfoBatchResult> {
       const stocks: StockInfo[] = [];
+      const failedSymbols: string[] = [];
       for (let offset = 0; offset < symbols.length; offset += config.chunkSize) {
         const chunk = symbols.slice(offset, offset + config.chunkSize);
-        if (chunk.some((code) => config.poisoned.has(code))) continue; // 청크 전체 실패
+        if (chunk.some((code) => config.poisoned.has(code))) {
+          // 청크 전체 실패 — 조회 자체를 못 한 것이지 "모른다" 가 아니다
+          failedSymbols.push(...chunk);
+          continue;
+        }
         for (const code of chunk) {
           const found = config.known[code];
           if (found) {
@@ -52,7 +61,7 @@ function buildChunkedFakeSource(config: {
           }
         }
       }
-      return stocks;
+      return { stocks, failedSymbols };
     },
   };
 }

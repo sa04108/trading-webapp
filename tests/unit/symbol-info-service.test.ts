@@ -6,6 +6,7 @@ import {
 import {
   MarketDataSourceNotConfiguredError,
   type StockInfo,
+  type StockInfoBatchResult,
   type StockInfoSource,
 } from '../../src/server/modules/market-data/application/ports.js';
 import { createLogger } from '../../src/server/shared/logger.js';
@@ -21,6 +22,11 @@ const SAMSUNG: StockInfo = {
   status: 'ACTIVE',
   sharesOutstanding: 5_919_637_922,
 };
+
+/** 성공한 배치 응답 — 실패한 청크가 없다 */
+function ok(stocks: StockInfo[]): StockInfoBatchResult {
+  return { stocks, failedSymbols: [] };
+}
 
 function buildService(source: StockInfoSource, nowRef = { now: 0 }) {
   return new SymbolInfoService(source, { now: () => nowRef.now }, logger);
@@ -38,7 +44,7 @@ function fakeLocalNames(
 
 describe('SymbolInfoService (종목명 캐시)', () => {
   it('caches lookups so repeated queries hit the source once', async () => {
-    const getStockInfo = vi.fn(async () => [SAMSUNG]);
+    const getStockInfo = vi.fn(async () => ok([SAMSUNG]));
     const service = buildService({ getStockInfo });
 
     expect(await service.lookup(['005930'])).toEqual([SAMSUNG]);
@@ -47,7 +53,8 @@ describe('SymbolInfoService (종목명 캐시)', () => {
   });
 
   it('negative-caches unknown symbols instead of re-querying', async () => {
-    const getStockInfo = vi.fn(async () => []);
+    // 성공한 응답인데 그 안에 이 심볼이 없다 — "증권사가 모른다" 로 부정 캐시한다
+    const getStockInfo = vi.fn(async () => ok([]));
     const service = buildService({ getStockInfo });
 
     expect(await service.lookup(['999999'])).toEqual([]);
@@ -68,7 +75,7 @@ describe('SymbolInfoService (종목명 캐시)', () => {
   });
 
   it('rejects invalid symbols before touching the source', async () => {
-    const getStockInfo = vi.fn(async () => []);
+    const getStockInfo = vi.fn(async () => ok([]));
     const service = buildService({ getStockInfo });
     await expect(service.lookup(['bad symbol!'])).rejects.toThrow(/invalid/);
     expect(getStockInfo).not.toHaveBeenCalled();
@@ -79,7 +86,7 @@ describe('SymbolInfoService (종목명 캐시)', () => {
   it('예외가 나도 이미 캐시된 이름은 그대로 반환한다 (부분 성공)', async () => {
     const getStockInfo = vi
       .fn()
-      .mockResolvedValueOnce([SAMSUNG])
+      .mockResolvedValueOnce(ok([SAMSUNG]))
       .mockRejectedValueOnce(new Error('boom'));
     const service = buildService({ getStockInfo });
 
@@ -90,9 +97,41 @@ describe('SymbolInfoService (종목명 캐시)', () => {
     expect(getStockInfo).toHaveBeenLastCalledWith(['000660']);
   });
 
+  // 후속 수정: "모른다"(성공한 응답에 없음)와 "못 물어봤다"(청크 실패)를 구분한다.
+  // 후자는 부정 캐시하지 않아야 다음 조회에서 재시도돼 일시 장애가 24시간 굳지 않는다.
+  it('실패한 청크의 종목은 부정 캐시하지 않고 재조회하며, 성공한 응답에 없던 종목만 null 로 유지한다', async () => {
+    const SK_HYNIX: StockInfo = {
+      symbol: '000660',
+      name: 'SK하이닉스',
+      englishName: null,
+      market: 'KOSPI',
+      status: 'ACTIVE',
+      sharesOutstanding: null,
+    };
+    const getStockInfo = vi
+      .fn()
+      // 첫 조회: 000660 은 청크 자체가 실패(레이트리밋 등), 999999 는 성공한 응답에
+      // 없는(모르는) 코드
+      .mockResolvedValueOnce({ stocks: [], failedSymbols: ['000660'] })
+      // 두 번째 조회: 000660 만 다시 물어보고, 이번엔 성공한다
+      .mockResolvedValueOnce(ok([SK_HYNIX]));
+    const service = buildService({ getStockInfo });
+
+    expect(await service.lookup(['000660', '999999'])).toEqual([]);
+    expect(getStockInfo).toHaveBeenCalledTimes(1);
+    expect(getStockInfo).toHaveBeenLastCalledWith(['000660', '999999']);
+
+    const second = await service.lookup(['000660', '999999']);
+    // 000660 은 실패한 청크였으므로 캐시되지 않아 재조회됐고 이번엔 이름이 나온다.
+    // 999999 는 첫 조회의 성공한 응답에 없었으므로 부정 캐시된 채 재조회 없이 그대로다.
+    expect(second).toEqual([SK_HYNIX]);
+    expect(getStockInfo).toHaveBeenCalledTimes(2);
+    expect(getStockInfo).toHaveBeenLastCalledWith(['000660']);
+  });
+
   describe('로컬 종목 마스터 폴백 (원인 1)', () => {
     it('증권사가 모르는 코드를 로컬 이름으로 채운다', async () => {
-      const getStockInfo = vi.fn(async () => []);
+      const getStockInfo = vi.fn(async () => ok([]));
       const localNames = fakeLocalNames({ '999999': { name: '로컬종목', market: 'KOSDAQ' } });
       const service = new SymbolInfoService(
         { getStockInfo },
@@ -114,7 +153,7 @@ describe('SymbolInfoService (종목명 캐시)', () => {
     });
 
     it('증권사가 아는 이름이 로컬 폴백보다 우선한다', async () => {
-      const getStockInfo = vi.fn(async () => [SAMSUNG]);
+      const getStockInfo = vi.fn(async () => ok([SAMSUNG]));
       const localNames = fakeLocalNames({ '005930': { name: '다른이름', market: 'KOSDAQ' } });
       const service = new SymbolInfoService(
         { getStockInfo },

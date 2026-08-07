@@ -12,6 +12,7 @@ import {
   type MarketRankingMetric,
   type MarketRankingSource,
   type StockInfo,
+  type StockInfoBatchResult,
   type StockInfoSource,
   type StockQuote,
   type StockQuoteSource,
@@ -122,7 +123,7 @@ export function createTossMarketDataSource(
       fetchCandles(): Promise<FetchCandleResult> {
         return Promise.reject(new MarketDataSourceNotConfiguredError());
       },
-      getStockInfo(): Promise<StockInfo[]> {
+      getStockInfo(): Promise<StockInfoBatchResult> {
         return Promise.reject(new MarketDataSourceNotConfiguredError());
       },
       getQuotes(): Promise<StockQuote[]> {
@@ -216,8 +217,9 @@ export function createTossMarketDataSource(
       return { candles, hasMore };
     },
 
-    async getStockInfo(symbols: readonly string[]): Promise<StockInfo[]> {
+    async getStockInfo(symbols: readonly string[]): Promise<StockInfoBatchResult> {
       const stocks: StockInfo[] = [];
+      const failedSymbols: string[] = [];
       // GET /api/v1/stocks 는 콤마 구분 최대 200건
       for (let offset = 0; offset < symbols.length; offset += LOOKUP_CHUNK) {
         const chunk = symbols.slice(offset, offset + LOOKUP_CHUNK);
@@ -230,11 +232,15 @@ export function createTossMarketDataSource(
           if (!Array.isArray(page.result)) {
             throw new Error('toss stocks 응답에 result 배열이 없습니다');
           }
+          // 청크 전체가 검증을 통과한 뒤에만 stocks 에 합친다 — 페이지 뒷부분에서
+          // throw 하면, 이미 파싱한 앞부분만 살아남아 이 청크가 "일부 성공"이 되는
+          // 것을 막는다. 청크는 성공 아니면 실패, 둘 중 하나다.
+          const chunkStocks: StockInfo[] = [];
           for (const raw of page.result) {
             if (typeof raw.symbol !== 'string' || typeof raw.name !== 'string') {
               throw new Error('toss stocks 응답 항목에 symbol/name 이 없습니다');
             }
-            stocks.push({
+            chunkStocks.push({
               symbol: raw.symbol,
               name: raw.name,
               englishName: typeof raw.englishName === 'string' ? raw.englishName : null,
@@ -243,12 +249,15 @@ export function createTossMarketDataSource(
               sharesOutstanding: optionalDecimal(raw.sharesOutstanding),
             });
           }
+          stocks.push(...chunkStocks);
         } catch (error) {
           // 청크(최대 200건) 하나의 실패가 다른 청크의 정상 종목까지 지우면 안 된다 —
           // 상장폐지 코드 하나가 섞여 이 청크 전체가 404 나도, 같은 요청에 포함된
           // 나머지 청크는 그대로 살려야 한다. 청크 안에서 종목별로 쪼개 재시도하지는
-          // 않는다(호출량 폭발) — 이 청크에서 못 받은 이름은 로컬 종목 마스터 폴백
-          // (SymbolInfoService)이 메운다.
+          // 않는다(호출량 폭발) — 대신 이 청크에 속한 코드를 failedSymbols 로 표시해
+          // 호출부(SymbolInfoService)가 "모른다" 로 부정 캐시하지 않고 다음 조회에서
+          // 다시 묻게 한다. 그 사이 이름은 로컬 종목 마스터 폴백이 메운다.
+          failedSymbols.push(...chunk);
           logger.warn(
             {
               module: 'market-data',
@@ -260,7 +269,7 @@ export function createTossMarketDataSource(
           );
         }
       }
-      return stocks;
+      return { stocks, failedSymbols };
     },
 
     async getQuotes(symbols: readonly string[]): Promise<StockQuote[]> {
