@@ -1,13 +1,16 @@
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 // 자격 증명은 한 곳에서만 — 시드 운영자가 바뀔 때 일부 스펙만 고쳐지는 일을 막는다
 import { PASSWORD, USERNAME } from './login';
 
 /**
- * 위저드가 실제로 실행하는 기간 — 005930 의 캔들이 이 구간에 있다
- * (scripts/e2e-server.ts buildTrendingHourlyCsv). 종목 마스터 e2e(다른 스펙,
- * tests/e2e/symbol-master.spec.ts)가 쓰는 SEED_DATE(2024-12-30)와 겹치지 않는다 —
- * 두 스펙이 같은 서버를 공유해도(playwright.config workers:1) coverage 판정에서
- * 서로 간섭하지 않는다.
+ * 위저드가 실제로 실행하는 기간 — 가짜 KRX 서버가 005930 에 내는 추세
+ * (scripts/e2e-server.ts `samsungCloseFor`)는 꾸준히 오르며 6일 주기로
+ * 오르내림도 겪는다. 이 정도 길이의 기간이면 그 등락을 여러 번 지나 실제
+ * 매수·매도가 반복된다.
+ *
+ * 종목 마스터 e2e(다른 스펙, tests/e2e/symbol-master.spec.ts)가 쓰는
+ * SEED_DATE(2024-12-30)와 겹치지 않는다 — 두 스펙이 같은 서버를
+ * 공유해도(playwright.config workers:1) coverage 판정에서 서로 간섭하지 않는다.
  */
 const PERIOD = { from: '2026-01-05', to: '2026-03-31' };
 /** KOSPI 상위 1종목만 — 900010(상장폐지예정1호)은 시가총액이 더 낮아 순위 밖으로 빠진다 */
@@ -68,20 +71,6 @@ async function previewAndSyncUniverse(page: Page): Promise<void> {
   await expect(page.getByRole('button', { name: '기간 전체 동기화' })).toHaveCount(0, {
     timeout: 30_000,
   });
-}
-
-/**
- * `locator.fill()` 대신 클릭 + 실제 키 입력을 쓴다 — 종목 목록 화면은 `/symbols` 를
- * 5초마다 폴링하는데(symbols-panel.tsx `refetchInterval`), 그 폴링이 `fill()` 의
- * 원자적 값 설정과 겹치는 순간에 실행되면(데스크톱 프로젝트에서 재현됨, 모바일은
- * 타이밍이 달라 재현되지 않았다) 입력값이 그대로 사라져 검색이 전혀 걸리지 않는
- * 채로 남는다. 실제 키 입력은 한 글자씩 이벤트를 발생시켜 이 경합에 영향받지 않는다.
- */
-async function typeInto(locator: Locator, text: string): Promise<void> {
-  await locator.click();
-  await locator.press('Control+A');
-  await locator.press('Backspace');
-  await locator.pressSequentially(text);
 }
 
 /** 스펙 §33 E2E 흐름: 로그인 → 생성 → 제출 → 완료 → 결과 → 거래 필터 → clone → 로그아웃 */
@@ -160,15 +149,9 @@ test('full MVP flow', async ({ page }) => {
   await page.getByLabel('상위 N (시가총액)').fill(String(TOP_N));
   await previewAndSyncUniverse(page);
   await expect(page.getByText('종목 1개 · 리밸런스 3회')).toBeVisible();
-  // 005930 은 이제 KRX 일봉(스펙 2026-08-06 Task 5, 가짜 KRX 응답에 OHLCV 를 채운
-  // 이후)과 CSV 로 넣은 분봉을 모두 가져 위저드가 일봉/1시간봉/1분봉 세 선택지를
-  // 모두 보여준다 — 기본값은 도출 목록의 첫 항목(일봉)이다. 하지만 이 테스트의
-  // 나머지 단언(거래 내역·정렬 등)은 CSV 의 추세(1분봉→1시간봉 집계)로 실제 체결이
-  // 나야 성립하므로, 기본값을 그대로 두지 않고 1시간봉을 명시적으로 고른다.
-  const timeframeCard = page.locator('[data-slot="card"]').filter({ hasText: '봉 주기' });
-  await timeframeCard.getByRole('combobox').click();
-  await page.getByRole('option', { name: '1시간봉' }).click();
-  await expect(timeframeCard.getByRole('combobox')).toHaveText('1시간봉');
+  // 봉 주기를 고르는 UI 는 없다 — `Timeframe` 이 `'1d'` 하나뿐이라(D-041) 고를
+  // 것이 없다. 나머지 단언(거래 내역·정렬 등)은 가짜 KRX 서버가 005930 에 내는
+  // 추세 있는 일별 시세(scripts/e2e-server.ts `samsungCloseFor`)로 성립한다.
 
   await page.getByRole('button', { name: '다음' }).click(); // 유니버스 → 자본·비용
   await expect(page.getByRole('button', { name: '4. 자본·비용' })).toHaveAttribute(
@@ -342,84 +325,11 @@ test('full MVP flow', async ({ page }) => {
     page.getByText(/재무 데이터가 필요하지만 이 유니버스에는 재무 있는 종목이 없습니다/),
   ).toHaveCount(0);
 
-  // 8. 데이터 화면 — 가격 데이터 탭 (종목 마스터 탭은 tests/e2e/symbol-master.spec.ts 가 다룬다)
-  await page.goto('/datasets/prices');
-  await expect(page.getByRole('link', { name: '가격 데이터' })).toHaveAttribute(
-    'aria-current',
-    'page',
-  );
-  // 픽스처는 1m CSV 라 분봉만 데이터가 있다 — 「봉 있음」 하나로 접으면 숨는 사실이다.
-  await expect(page.getByText('삼성전자')).toBeVisible();
-  await expect(page.getByText(/분봉 방금|분봉 \d+분 전/)).toBeVisible();
-
-  // 8-1. 편집 모드 → 체크박스 + 하단 고정 동작 바. 하나도 안 고르면 동작은 잠긴다.
-  await page.getByRole('button', { name: '편집' }).click();
-  const syncButton = page.getByRole('button', { name: '동기화' });
-  await expect(syncButton).toBeDisabled();
-  await page.getByRole('checkbox', { name: /삼성전자 선택/ }).check();
-  await expect(page.getByText('1개 선택')).toBeVisible();
-  await expect(syncButton).toBeEnabled();
-  await expect(page.getByRole('button', { name: '제거' })).toBeEnabled();
-  await syncButton.click();
-  const symbolSyncDialog = page.getByRole('dialog');
-  await expect(symbolSyncDialog.getByRole('heading', { name: '데이터 동기화' })).toBeVisible();
-  await expect(symbolSyncDialog.getByText('대상 1종목')).toBeVisible();
-  // 재무는 DART 키 미설정이라 잠기고 이유가 보인다 (D-027 의 원칙)
-  await expect(symbolSyncDialog.getByText(/DART 인증키가 설정되지 않아/)).toBeVisible();
-  await expect(symbolSyncDialog.getByLabel('재무 데이터 함께 동기화')).toBeDisabled();
-  await page.screenshot({ path: 'test-results/symbols-edit.png' });
-  await symbolSyncDialog.getByRole('button', { name: '취소' }).click();
-  await page.getByRole('button', { name: '완료' }).click();
-
-  // 8-2. 데이터 검증 차트 — 편집 모드가 아닐 때 종목 이름을 눌러 드로어를 연다
-  await page.getByRole('button', { name: /삼성전자/ }).click();
-  await expect(page.getByText(/데이터 검증/)).toBeVisible();
-  await expect(page.locator('.recharts-surface').first()).toBeVisible();
-  await page.screenshot({ path: 'test-results/candle-inspect.png' });
-  await page.keyboard.press('Escape');
-
-  // 8-3. 일괄 추가 — 쉼표로 구분한 코드를 한 번에 등록한다. CSV 가져오기와 다른 것:
-  // 저기는 tohlcv 봉 파일이고 여기는 심볼 목록이다.
-  //
-  // 아래 8-3~8-4 는 넣은 것을 다시 지워 상태를 되돌린다. 서버 하나를 mobile·desktop
-  // 두 프로젝트가 공유하므로(playwright.config workers:1) 남기면 두 번째 실행이 이미
-  // 등록된 종목을 만나 실패한다.
-  await page.getByRole('button', { name: '추가' }).click();
-  const addDialog = page.getByRole('dialog');
-  await addDialog.getByLabel('종목 코드').fill('900001, 900002, 900001');
-  // 중복 입력은 걷어내고 개수로 알린다 — 두 번 붙였다고 실패시킬 이유가 없다
-  await expect(addDialog.getByText(/2종목 추가 · 중복 입력 1건/)).toBeVisible();
-  await page.screenshot({ path: 'test-results/symbols-bulk-add.png' });
-  await addDialog.getByRole('button', { name: '2종목 추가' }).click();
-  await expect(page.getByText('900001')).toBeVisible();
-  await expect(page.getByText('900002')).toBeVisible();
-
-  // 검색 — 이름과 코드 두 축을 한 입력으로 맞힌다
-  const symbolSearch = page.getByLabel('종목 검색');
-  await typeInto(symbolSearch, '삼성전');
-  await expect(page.getByText('삼성전자')).toBeVisible();
-  await expect(page.getByText('900001')).toHaveCount(0);
-  await typeInto(symbolSearch, '9000');
-  await expect(page.getByText('900001')).toBeVisible();
-  await expect(page.getByText('삼성전자')).toHaveCount(0);
-  await expect(page.getByText('2/3종목')).toBeVisible();
-  await page.screenshot({ path: 'test-results/symbols-search.png' });
-
-  // 8-4. 검색 결과 전체 선택 → 제거. 전체 선택 대상은 **검색 결과** 이고, 그 사실이
-  // 라벨에 적혀 있어야 한다 — 「전체 선택」이 3종목을 담을 것처럼 보이면 거짓말이다.
-  await page.getByRole('button', { name: '편집' }).click();
-  await page.getByRole('button', { name: '검색 결과 2종목 선택' }).click();
-  await expect(page.getByText('2개 선택')).toBeVisible();
-  await page.getByRole('button', { name: '제거' }).click();
-  const removeDialog = page.getByRole('dialog');
-  // removal-impact 조회가 사라졌다(스펙 2026-08-05, 데이터셋 개념과 함께 제거) —
-  // 비동기 조회 없이 확인 문구가 곧바로 뜬다.
-  await expect(removeDialog.getByText('봉과 재무 데이터가 함께 지워집니다')).toBeVisible();
-  await removeDialog.getByRole('button', { name: '제거' }).click();
-  await expect(page.getByText('900001')).toHaveCount(0);
-  await page.getByRole('button', { name: '완료' }).click();
-
-  // 9. 로그아웃
+  // 8. 로그아웃 (가격 데이터 화면·CSV 가져오기·증권사 동기화는
+  // 2026-08-07-price-data-removal 계획으로 제거됐다 — D-041. 종목 목록·검색·
+  // 일괄 추가·데이터 검증 차트가 그 화면에 딸려 있었고, 그 화면과 함께 사라졌다.
+  // 종목 마스터 화면(`/datasets/master`)의 검증은 tests/e2e/symbol-master.spec.ts
+  // 가 맡는다.
   await page.getByRole('button', { name: '로그아웃' }).click();
   await expect(page).toHaveURL(/\/login/, { timeout: 10_000 });
 });
@@ -432,8 +342,8 @@ test('full MVP flow', async ({ page }) => {
  * 쓰는 날짜만 정확히 지정한 고정 집합이다. 패턴으로 두면 다른 스펙
  * (symbol-master.spec.ts)이 쓰는 "오늘 기준 상대 날짜"가 매년 1월 2일·1월 11일에
  * 이 스위트를 돌릴 때 우연히 1월 1일과 겹쳐, 그 스펙의 "가짜 KRX 는 어느 날짜를
- * 물어도 같은 시세를 낸다"는 전제를 깨뜨린다(리뷰에서 지적된 회귀) — 고정 집합은
- * 상대 날짜와 영원히 안 겹친다. mobile·desktop 두 프로젝트가 같은 서버 상태를
+ * 물어도 같은 유니버스 구성을 낸다"는 전제를 깨뜨린다(리뷰에서 지적된 회귀) — 고정
+ * 집합은 상대 날짜와 영원히 안 겹친다. mobile·desktop 두 프로젝트가 같은 서버 상태를
  * 공유해도(playwright.config workers:1) 서로 다른 연도를 쓰면 커버리지가 부딪히지
  * 않는다.
  *
@@ -569,81 +479,13 @@ test('backtest run completes using only KRX daily bars for a delisted stock', as
   await expect(page).toHaveURL(/\/backtests\/bt_/);
   await expect(page.getByText('완료', { exact: true })).toBeVisible({ timeout: 90_000 });
 
-  // 이 테스트가 미리보기로 자동 등록한 900010 을 되돌린다 — 남기면 mvp-flow 의
-  // '가격 데이터' 탭 종목 수 단언('2/3종목' 등, full MVP flow 8-3~8-4)이 이 종목
-  // 만큼 어긋난다. 두 프로젝트(mobile·desktop)가 같은 서버를 공유하므로
-  // (playwright.config workers:1), 여기서 지워도 이 파일의 다른 시나리오가 이미
-  // 심어 둔 krx_daily_bars 는 그대로 남아 재등록 시 다시 쓰인다(symbols 삭제는
-  // KRX 일봉을 지우지 않는다 — composite-candle-repository.ts deleteSymbol 주석).
+  // 이 테스트가 미리보기로 자동 등록한 900010 을 되돌린다 — 상장폐지 종목이
+  // 다른 시나리오의 등록 종목 목록에 계속 남아 있을 이유가 없다. 두 프로젝트
+  // (mobile·desktop)가 같은 서버를 공유하므로(playwright.config workers:1),
+  // 여기서 지워도 이 시나리오가 이미 채운 krx_daily_bars 는 그대로 남아
+  // 재등록 시 다시 쓰인다(symbols 삭제는 KRX 일봉을 지우지 않는다 —
+  // symbol-service.ts removeSymbols 주석 참고).
   await page.request.post('/api/v1/symbols/remove', { data: { codes: ['900010'] } });
-});
-
-/**
- * 정렬은 종목 탭(가격 데이터) 하나만 남았다(D-038 이 전제하던 데이터셋의 「종목
- * 편집」공유 대상 자체가 제거됐다). e2e 환경엔 증권사 자격 증명이 없어 지표가
- * 비는데, 그때 규모 정렬을 눌러도 순서가 그대로면 사용자는 정렬이 고장 났다고
- * 읽는다 — 잠그고 이유를 적는 쪽을 검증한다.
- */
-test('symbol sort explains itself without quotes when broker metrics are unavailable', async ({
-  page,
-}) => {
-  await page.goto('/login');
-  await page.getByLabel('사용자 이름').fill(USERNAME);
-  await page.getByLabel('비밀번호').fill(PASSWORD);
-  await page.getByRole('button', { name: '로그인' }).click();
-  await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
-
-  await page.goto('/datasets/prices');
-  const sort = page.getByRole('combobox', { name: '종목 정렬' });
-  await expect(sort).toHaveText('가나다순');
-  await expect(page.getByText(/증권사 시세를 받지 못해 규모 정렬을 쓸 수 없습니다/)).toBeVisible();
-  await sort.click();
-  await expect(page.getByRole('option', { name: '시가총액순' })).toBeDisabled();
-  await expect(page.getByRole('option', { name: '거래대금순' })).toBeDisabled();
-  await expect(page.getByRole('option', { name: '가나다순' })).toBeEnabled();
-  await page.keyboard.press('Escape');
-});
-
-/** 미지원 시장(US) 은 종목 추가 dialog 에서 고를 수 없고, 이유가 항상 보인다 —
- *  고를 수 있게 두고 코드를 넣은 뒤 400 을 받게 하는 것은 명시가 아니다 (D-027). */
-test('unsupported market is disabled with reason shown on symbol add dialog', async ({ page }) => {
-  await page.goto('/login');
-  await page.getByLabel('사용자 이름').fill(USERNAME);
-  await page.getByLabel('비밀번호').fill(PASSWORD);
-  await page.getByRole('button', { name: '로그인' }).click();
-  await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
-
-  await page.goto('/datasets/prices');
-  await page.getByRole('button', { name: '추가' }).click();
-  await page.getByLabel('시장').click();
-  // Radix SelectItem 은 native disabled 속성이 아니라 aria-disabled/data-disabled 를 쓴다 —
-  // role="option" 은 toBeDisabled() 가 참조하는 kAriaDisabledRoles 에 포함돼 있어 그대로 쓸 수 있다.
-  await expect(page.getByRole('option', { name: /US/ })).toBeDisabled();
-  await page.keyboard.press('Escape');
-  await expect(page.getByText(/US 는 아직 지원하지 않습니다/)).toBeVisible();
-});
-
-/** `/markets` 가 영구히 실패하면 목록은 영원히 비어(로딩 중과 같은 모양) 있는다 — 그 상태를
- *  로딩 중과 구분 못 하면 시장 선택이 이유 없이 잠긴 채로 남는다. 이 태스크의 취지(고를
- *  수 없는 이유는 항상 보여야 한다)를 실패 경로에서도 지킨다. */
-test('market select stays disabled and explains itself when /markets fails', async ({ page }) => {
-  await page.route('**/api/v1/markets**', async (route) => {
-    await route.fulfill({
-      status: 500,
-      contentType: 'application/json',
-      body: JSON.stringify({ error: 'internal' }),
-    });
-  });
-
-  await page.goto('/login');
-  await page.getByLabel('사용자 이름').fill(USERNAME);
-  await page.getByLabel('비밀번호').fill(PASSWORD);
-  await page.getByRole('button', { name: '로그인' }).click();
-  await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
-
-  await page.goto('/datasets/prices');
-  await page.getByRole('button', { name: '추가' }).click();
-  await expect(page.getByText(/시장 목록을 불러오지 못했습니다/)).toBeVisible();
 });
 
 test('mobile layout has no horizontal scroll on core screens (스펙 §38)', async ({ page }, testInfo) => {
@@ -656,18 +498,11 @@ test('mobile layout has no horizontal scroll on core screens (스펙 §38)', asy
   await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
 
   // /backtests/new/strategy 가 목록에 있는 이유: 단계 버튼 6개를 3열 × 2행으로 깔면서
-  // 44px 터치 영역을 지킨다 — 390px 에서 가장 먼저 넘칠 화면이 여기다
-  // '/datasets/master' 를 넣는 이유: 종목 마스터의 타임라인 슬라이더가 390px 에서 가장
-  // 먼저 넘칠 화면이다. '/datasets/prices' 는 종목 행이 이름·코드·배지 3개·
-  // 수집 시각을 한 줄에 담고 하단 고정 바에 버튼 4개가 붙는다.
-  for (const path of [
-    '/',
-    '/backtests',
-    '/backtests/new/strategy',
-    '/datasets/master',
-    '/datasets/prices',
-    '/settings',
-  ]) {
+  // 44px 터치 영역을 지킨다 — 390px 에서 가장 먼저 넘칠 화면이 여기다.
+  // '/datasets/master' 를 넣는 이유: 종목 마스터의 타임라인 슬라이더가 390px 에서
+  // 가장 먼저 넘칠 화면이다(가격 데이터 화면은 2026-08-07-price-data-removal
+  // 계획으로 제거돼 더는 목록에 없다).
+  for (const path of ['/', '/backtests', '/backtests/new/strategy', '/datasets/master', '/settings']) {
     await page.goto(path);
     await page.waitForLoadState('networkidle');
     const overflow = await page.evaluate(

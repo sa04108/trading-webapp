@@ -148,7 +148,6 @@ export class SymbolService {
    *
    * KRX 일봉은 지우지 않는다. 시장 전체가 공유하는 자산이라 종목을 목록에서 빼는
    * 일과 함께 지우면, 그 종목을 참조하던 다른 백테스트·데이터셋의 봉까지 사라진다.
-   * 구 `CompositeCandleRepository.deleteSymbol` 주석의 근거를 그대로 따른다.
    */
   async removeSymbols(codes: readonly string[]): Promise<void> {
     if (codes.length === 0) return;
