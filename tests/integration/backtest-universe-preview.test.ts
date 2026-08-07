@@ -8,7 +8,7 @@ import {
   symbols as symbolsTable,
 } from '../../src/server/shared/db/schema.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
-import { registerSymbols } from '../helpers/seed.js';
+import { registerSymbols, seedDailyBars } from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 import { startKrxFakeServer, type KrxFakeServer } from '../helpers/krx-fixtures.js';
 
@@ -42,7 +42,7 @@ describe('POST /backtests/universe-preview', () => {
       { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
     ]);
     registerSymbols(ctx.container, 'KR', ['005930']);
-    await ctx.container.candleRepository.saveCandles([
+    seedDailyBars(ctx.container.database.db, [
       {
         symbol: '005930',
         market: 'KR',
@@ -55,7 +55,6 @@ describe('POST /backtests/universe-preview', () => {
         volume: 1_000,
       },
     ]);
-    await ctx.container.symbolService.refreshCoverage('005930', 'KR', '1d');
 
     const res = await ctx.app.inject({
       method: 'POST',
@@ -392,11 +391,9 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
     expect(body.unionSymbols).toEqual(['900010']);
     expect(body.missingCandleSymbols).toEqual([]);
 
-    // 가격 데이터 탭이 읽는 요약도 같은 캐시를 쓴다 — 실제로 "봉 있음" 으로 보인다.
-    const summary = ctx.container.symbolService.getSymbol('900010');
-    const dailySlice = summary?.slices.find((slice) => slice.slice === '1d');
-    expect(dailySlice?.hasData).toBe(true);
-    expect(dailySlice?.barCount).toBe(1);
+    // 가격 데이터 탭이 읽는 커버리지도 같은 `krx_daily_bars` 집계다 — 실제로 "봉 있음" 으로 보인다.
+    const coverage = ctx.container.candleCoverageService.getCoverage(['900010'])[0]!;
+    expect(coverage.barCount).toBe(1);
   });
 });
 

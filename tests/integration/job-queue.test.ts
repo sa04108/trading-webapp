@@ -1,11 +1,15 @@
+import { and, desc, eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ENGINE_VERSION } from '../../src/server/modules/backtest/domain/engine.js';
+import { FACTS_SLICE } from '../../src/server/modules/market-data/application/symbol-service.js';
+import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
+import { symbolVersions } from '../../src/server/shared/db/schema.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { currentStrategyVersion } from '../helpers/strategy-versions.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
+import { registerSymbols, seedDailyBars } from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 
-const HOUR = 3_600_000;
 const DAY = 86_400_000;
 
 const STRATEGY_ID = 'range-breakout';
@@ -32,12 +36,11 @@ function seedMaster(container: TestApp['container'], dates: readonly string[]): 
 }
 
 /**
- * 평일 30일 × 7봉 1시간봉 CSV (KST 09:00 = UTC 00:00).
- * 상승(돌파 진입) → 급락(손절 청산) → 재상승(재진입) 국면으로
- * 완결 거래가 반드시 생기도록 구성한다.
+ * 평일 일봉. 상승(돌파 진입) → 급락(손절 청산) → 재상승(재진입) 국면으로
+ * 완결 거래가 반드시 둘 이상 생기도록 구성한다.
  */
-function buildTrendingHourlyCsv(): string {
-  const lines = ['timestamp,open,high,low,close,volume'];
+function buildTrendingDailyCandles(symbol = '005930', days = 43): Candle[] {
+  const candles: Candle[] = [];
   let tradingDays = 0;
   let dayCursor = Date.UTC(2026, 0, 5); // 2026-01-05 (월)
 
@@ -47,23 +50,28 @@ function buildTrendingHourlyCsv(): string {
     return 122 + (day - 22) * 5; // 재상승
   };
 
-  while (tradingDays < 30) {
+  while (tradingDays < days) {
     const dayOfWeek = new Date(dayCursor).getUTCDay();
     if (dayOfWeek !== 0 && dayOfWeek !== 6) {
       const base = baseForDay(tradingDays);
-      for (let barIndex = 0; barIndex < 7; barIndex += 1) {
-        const ts = dayCursor + barIndex * HOUR;
-        const open = base + barIndex * 0.3;
-        const close = open + 0.5;
-        const high = close + 0.1;
-        const low = open - 0.6;
-        lines.push(`${ts},${open},${high},${low},${close},1000`);
-      }
+      const open = base;
+      const close = base + 2;
+      candles.push({
+        symbol,
+        market: 'KR',
+        timeframe: '1d',
+        tsMs: dayCursor,
+        open,
+        high: close + 1,
+        low: open - 1,
+        close,
+        volume: 1_000,
+      });
       tradingDays += 1;
     }
     dayCursor += DAY;
   }
-  return lines.join('\n');
+  return candles;
 }
 
 function buildRequest(): BacktestRequest {
@@ -77,7 +85,7 @@ function buildRequest(): BacktestRequest {
       riskPerTradePercent: 2,
     },
     universeRule: universeRule(1),
-    period: { from: '2026-01-05', to: '2026-03-31' },
+    period: { from: '2026-01-05', to: '2026-06-30' },
     capital: { initialCash: 10_000_000, currency: 'KRW' },
     execution: {
       fillTiming: 'NEXT_BAR_OPEN',
@@ -100,6 +108,7 @@ async function waitFor(condition: () => boolean, timeoutMs: number): Promise<voi
 describe('backtest job queue (스펙 §10, §14)', () => {
   let ctx: TestApp;
   let cookie: string;
+  let dailyCandles: Candle[];
 
   beforeEach(async () => {
     ctx = await createTestApp();
@@ -111,17 +120,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
 
-    await ctx.container.symbolService.importCsv({
-      market: 'KR',
-      // CSV import 는 1m|1d 만 받는다 — 이 CSV 는 세션 시간별 bucket 경계에 정확히
-      // 맞춰 한 시간에 한 행씩 찍혀 있어, 1m 로 표시해 넣어도 1h 집계 결과가
-      // 행 값과 그대로 같다 (aggregateToHourly 는 bucket 당 봉이 1개면 open/high/low/close 를
-      // 그대로 옮긴다).
-      timeframe: '1m',
-      symbol: '005930',
-      fileName: 'trend.csv',
-      csvContent: buildTrendingHourlyCsv(),
-    });
+    registerSymbols(ctx.container, 'KR', ['005930']);
+    dailyCandles = buildTrendingDailyCandles();
+    seedDailyBars(ctx.container.database.db, dailyCandles);
     // 종목 마스터 — 유니버스 규칙(스펙 2026-08-05)이 여기서 종목을 골라낸다
     seedMaster(ctx.container, [MAIN_DATE, NO_CANDLE_DATE]);
   });
@@ -131,6 +132,10 @@ describe('backtest job queue (스펙 §10, §14)', () => {
   });
 
   it('runs a backtest end-to-end in a child process', { timeout: 90_000 }, async () => {
+    // 제출 시점 pin 이 실제 재무 버전 상태를 반영하는지 검증하려면 버전이 하나는
+    // 있어야 한다 — facts 동기화가 실제로 한 번 있었다고 가정한다.
+    ctx.container.symbolService.bumpVersion('005930', FACTS_SLICE, 'fact-sync:seed', Date.now());
+
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
@@ -167,18 +172,25 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(body.run.feeModelVersion).toBe('kr-equity-default@1.1.0');
     expect(body.run.randomSeed).toBe(42);
     expect(body.run.universeHash).not.toBe('unknown');
-    // 제출 시점에 고정된 종목 버전 스냅샷이 그대로 기록돼야 한다 (재현성 §9.5)
-    // 이 픽스처는 1분봉 CSV 라 소비 슬라이스가 '1m' 이다 (1h 는 그 슬라이스의 집계 봉)
-    const pinned = ctx.container.symbolService.getLatestVersion('005930', '1m')!;
+    // 제출 시점에 고정된 종목 버전 스냅샷이 그대로 기록돼야 한다 (재현성 §9.5).
+    // 버전 축은 이제 재무(FACTS_SLICE) 하나뿐이다 — getLatestVersion 이 private 이라
+    // symbol_versions 테이블을 직접 조회해 대조한다.
+    const pinned = ctx.container.database.db
+      .select()
+      .from(symbolVersions)
+      .where(and(eq(symbolVersions.code, '005930'), eq(symbolVersions.slice, FACTS_SLICE)))
+      .orderBy(desc(symbolVersions.version))
+      .limit(1)
+      .get()!;
     const universeJson = JSON.parse(body.run.universeJson as string) as Array<{
       code: string;
       slice: string;
       version: number;
       contentHash: string;
     }>;
-    const daily = universeJson.find((e) => e.code === '005930' && e.slice === '1m')!;
-    expect(daily.version).toBe(pinned.version);
-    expect(daily.contentHash).toBe(pinned.contentHash);
+    const pinnedEntry = universeJson.find((e) => e.code === '005930' && e.slice === FACTS_SLICE)!;
+    expect(pinnedEntry.version).toBe(pinned.version);
+    expect(pinnedEntry.contentHash).toBe(pinned.contentHash);
     expect(typeof body.metrics.totalReturnPct).toBe('number');
     expect(body.metrics.tradeCount as number).toBeGreaterThan(0);
 
@@ -248,7 +260,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     };
     expect(seriesBody.equity.length).toBeGreaterThan(0);
     expect(seriesBody.equity.length).toBeLessThanOrEqual(1_000);
-    expect(seriesBody.totalEquityPoints).toBe(210); // 30일 × 7봉
+    expect(seriesBody.totalEquityPoints).toBe(dailyCandles.length);
 
     // SSE: 종료 상태 작업은 스냅샷 1건 후 종료
     const events = await ctx.app.inject({
@@ -266,7 +278,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       cookies: { qp_session: cookie },
     });
     expect(exported.headers['content-disposition']).toContain('attachment');
-    expect((exported.json() as { equityPoints: unknown[] }).equityPoints).toHaveLength(210);
+    expect((exported.json() as { equityPoints: unknown[] }).equityPoints).toHaveLength(
+      dailyCandles.length,
+    );
 
     // clone → 새 QUEUED 작업
     const cloned = await ctx.app.inject({
@@ -724,15 +738,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       });
       const smallCookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
 
-      await small.container.symbolService.importCsv({
-        market: 'KR',
-        // 위 셋업과 같은 이유로 1m 표시 — CSV 는 시간 bucket 경계에 정확히 맞는 행이라
-        // 1h 집계 결과가 행 값과 같다.
-        timeframe: '1m',
-        symbol: '005930',
-        fileName: 'trend.csv',
-        csvContent: buildTrendingHourlyCsv(),
-      });
+      registerSymbols(small.container, 'KR', ['005930']);
+      seedDailyBars(small.container.database.db, buildTrendingDailyCandles());
       seedMaster(small.container, [MAIN_DATE]);
       const payload = buildRequest();
 
