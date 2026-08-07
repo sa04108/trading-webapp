@@ -84,6 +84,21 @@ export const ENGINE_VERSION = '1.3.0';
 const PROGRESS_INTERVAL_BARS = 500;
 
 /**
+ * 취소 확인 간격(봉 수). `runBacktestCancellable` 만 쓴다.
+ * 동기 `runBacktest` 는 이 상수와 무관하게 끝까지 한 호흡에 돈다.
+ *
+ * 자식 프로세스 실행은 전부 동기(better-sqlite3)다. 그래서 IPC 취소
+ * 메시지가 처리될 매크로태스크 경계가 원래 없었다(리뷰 finding, 2026-08-08).
+ * 200봉마다 `setImmediate` 로 한 번 양보해 그 경계를 만든다.
+ *
+ * 200 을 고른 근거: 로컬 측정으로 10만 봉(500회 양보)을 돌려도 동기 실행과
+ * 차이가 잡음 수준(수십 ms)이었다 — 대형 백테스트에서 오버헤드가 없다.
+ * 봉 수가 200 미만인 실행(흔한 소규모 백테스트)은 양보가 한 번도 걸리지
+ * 않는다 — 그런 실행은 어차피 몇 ms 안에 끝나 취소할 틈이 원래 없다.
+ */
+const CANCEL_YIELD_INTERVAL_BARS = 200;
+
+/**
  * 이벤트 루프 (스펙 §9.2):
  *  0. 이 시점까지 공시된 팩트 흡수 — 전략 호출 전이어야 한다 (PIT 커서, §9.4)
  *  1. 이전 시점의 대기 주문 체결 (이번 봉 시가)
@@ -97,12 +112,17 @@ const PROGRESS_INTERVAL_BARS = 500;
  *
  * 전략은 현재 시점까지의 봉만 볼 수 있고(look-ahead 금지, §9.1),
  * 주문은 다음 거래 가능 봉의 시가에서 체결된다.
+ *
+ * 제너레이터인 이유: `runBacktest`(동기) 와 `runBacktestCancellable`(비동기)이
+ * 같은 루프를 공유해야 한다. 로직을 두 벌로 복제하면 한쪽만 고치고 잊기 쉽다.
+ * 대신 이 제너레이터 하나를 두 얇은 드라이버가 각자의 방식으로 소진한다
+ * (파일 끝 참고).
  */
-export function runBacktest(
+function* runBacktestSteps(
   strategy: AnyTradingStrategy,
   input: BacktestRunInput,
   hooks: EngineHooks = {},
-): BacktestRunResult {
+): Generator<void, BacktestRunResult, void> {
   const sorted = [...input.candles].sort((a, b) =>
     a.tsMs === b.tsMs ? (a.symbol < b.symbol ? -1 : 1) : a.tsMs - b.tsMs,
   );
@@ -238,6 +258,12 @@ export function runBacktest(
     processedBars += bars.size;
     if (hooks.onProgress && (processedBars % PROGRESS_INTERVAL_BARS < bars.size || tsMs === timeline[timeline.length - 1])) {
       hooks.onProgress({ processedBars, totalBars, currentTsMs: tsMs });
+    }
+
+    // 취소 확인 창. `runBacktest`(동기 드라이버)는 이 yield 를 그냥 흘려보낸다.
+    // `runBacktestCancellable` 만 여기서 실제로 이벤트 루프에 양보한다.
+    if (processedBars % CANCEL_YIELD_INTERVAL_BARS < bars.size) {
+      yield;
     }
   }
 
@@ -437,4 +463,38 @@ export function runBacktest(
 
     return fill;
   }
+}
+
+/**
+ * 동기 실행 — 기존 호출부 전부(직접 엔진 테스트, 단위 테스트)가 이 시그니처를 쓴다.
+ * 제너레이터를 끝까지 한 호흡에 비운다 — 성능·동작 모두 이전 `runBacktest` 와 같다.
+ */
+export function runBacktest(
+  strategy: AnyTradingStrategy,
+  input: BacktestRunInput,
+  hooks: EngineHooks = {},
+): BacktestRunResult {
+  const steps = runBacktestSteps(strategy, input, hooks);
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  return step.value;
+}
+
+/**
+ * 비동기 실행 — `backtest-child.ts` 전용.
+ * 제너레이터가 내는 yield 마다 실제로 `setImmediate` 를 기다려 양보한다.
+ * 그 틈에 부모가 보낸 IPC 취소 메시지가 처리될 수 있다.
+ */
+export async function runBacktestCancellable(
+  strategy: AnyTradingStrategy,
+  input: BacktestRunInput,
+  hooks: EngineHooks = {},
+): Promise<BacktestRunResult> {
+  const steps = runBacktestSteps(strategy, input, hooks);
+  let step = steps.next();
+  while (!step.done) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    step = steps.next();
+  }
+  return step.value;
 }

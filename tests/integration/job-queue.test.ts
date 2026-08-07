@@ -330,11 +330,15 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     'cancels an active job through the child process (스펙 §10 취소 시퀀스)',
     { timeout: 60_000 },
     async () => {
+      // 기본 픽스처(43봉)는 CANCEL_YIELD_INTERVAL_BARS(200봉)에 못 미쳐 양보가
+      // 한 번도 안 걸린다. 양보 창을 여러 번 확보하도록 훨씬 긴 봉을 따로 심는다.
+      seedDailyBars(ctx.container.database.db, buildTrendingDailyCandles('005930', 5_000));
+
       const created = await ctx.app.inject({
         method: 'POST',
         url: '/api/v1/backtests',
         cookies: { qp_session: cookie },
-        payload: buildRequest(),
+        payload: { ...buildRequest(), period: { from: '2026-01-05', to: '2046-01-05' } },
       });
       const jobId = (created.json().job as { id: string }).id;
 

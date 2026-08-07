@@ -22,7 +22,7 @@ import type { UniverseScheduleEntry } from '../server/modules/backtest/applicati
 import { newId } from '../server/shared/ids.js';
 import { TERMINAL_STATUSES } from '../server/modules/backtest/application/job-queue.js';
 import { MAX_BACKTEST_BARS } from '../server/modules/backtest/domain/bar-estimate.js';
-import { ENGINE_VERSION, runBacktest } from '../server/modules/backtest/domain/engine.js';
+import { ENGINE_VERSION, runBacktestCancellable } from '../server/modules/backtest/domain/engine.js';
 import {
   DEFAULT_EXECUTION_RULES,
   getCostProfile,
@@ -277,7 +277,9 @@ async function main(): Promise<void> {
 
     const parameters = validated.value as Record<string, unknown>;
 
-    const result = runBacktest(strategy, {
+    // 우아한 취소를 위해 주기적으로 이벤트 루프에 양보하는 버전을 쓴다 —
+    // 근거는 engine.ts 의 CANCEL_YIELD_INTERVAL_BARS 주석 참고.
+    const result = await runBacktestCancellable(strategy, {
       candles,
       initialCash: request.capital.initialCash,
       execution: {
