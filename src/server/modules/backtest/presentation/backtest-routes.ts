@@ -23,6 +23,10 @@ import type { ConsumedVersionSnapshot, SymbolService } from '../../market-data/a
 import { KrxNotConfiguredError, KrxQuotaError } from '../../market-data/application/ports.js';
 import { SymbolMasterNotCoveredError } from '../../market-data/application/symbol-master-service.js';
 import { KRX_FILTER_POLICY_VERSION } from '../../market-data/domain/krx-filter-policy.js';
+// `domain/dataset-slice.ts` 는 Task 4(2026-08-07-price-data-removal)가 지웠다.
+// 아래 `sliceForTimeframe`/`sliceTimeframes` 호출(약 252~253행)은 그래서 지금
+// `ReferenceError` 를 내는 채로 남아 있다 — 슬라이스 축 자체를 걷어내는 재작성은
+// Task 6 의 몫이라 여기서는 고치지 않는다.
 import type { StrategyRegistry } from '../../strategy/application/strategy-registry.js';
 import { estimateBars, MAX_BACKTEST_BARS } from '../domain/bar-estimate.js';
 import {
