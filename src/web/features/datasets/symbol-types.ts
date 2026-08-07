@@ -1,18 +1,8 @@
-import type { DatasetSlice } from './dataset-slices';
-
 /** GET /symbols 의 한 행 — 화면이 그리는 데 필요한 것이 전부 여기 있다 */
 export interface SymbolSummary {
   code: string;
   market: string;
   name: string | null;
-  slices: Array<{
-    slice: DatasetSlice;
-    hasData: boolean;
-    barCount: number;
-    firstTsMs: number | null;
-    lastTsMs: number | null;
-    lastSyncedAtMs: number | null;
-  }>;
   /** 재무 팩트 보유 — 응답을 런타임 검증하지 않으므로 없을 수 있다 (D-033) */
   hasFacts?: boolean;
 }
@@ -38,7 +28,8 @@ export interface DataJob {
   status: string;
   sourceType: string;
   symbolsJson: string;
-  slice: DatasetSlice;
+  /** KRX 일봉이 유일한 슬라이스라 값은 항상 '1d' 다 */
+  slice: '1d';
   rowsImported: number | null;
   error: string | null;
   phase: string | null;

@@ -8,8 +8,6 @@ import { resolveJobTimeframe } from '../../src/web/features/backtests/job-timefr
  */
 describe('resolveJobTimeframe', () => {
   it('요청의 timeframe 을 그대로 쓴다', () => {
-    expect(resolveJobTimeframe({ request: { timeframe: '1m' } })).toBe('1m');
-    expect(resolveJobTimeframe({ request: { timeframe: '1h' } })).toBe('1h');
     expect(resolveJobTimeframe({ request: { timeframe: '1d' } })).toBe('1d');
   });
 
