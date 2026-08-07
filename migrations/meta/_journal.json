@@ -50,6 +50,13 @@
       "when": 1786011287090,
       "tag": "0006_krx_daily_bars",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1786024585968,
+      "tag": "0007_exotic_vertigo",
+      "breakpoints": true
     }
   ]
 }

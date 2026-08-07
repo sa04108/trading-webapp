@@ -37,6 +37,19 @@ class SyncCancelledError extends Error {
 }
 
 /**
+ * checkDisk 전용 에러 클래스. 종목 루프는 이 클래스와 SyncCancelledError 만
+ * "잡 전체를 멈춰야 하는 오류"로 취급한다 — 나머지(REST 4xx 등)는 종목 단위로
+ * 격리한다. 일반 Error 로 두면 종목 오류와 구분할 방법이 이름뿐이라 취약해서
+ * 클래스를 따로 둔다.
+ */
+class DiskSpaceError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DiskSpaceError';
+  }
+}
+
+/**
  * 재무 단계 진행 — 45분짜리 단계가 조용하지 않게 한다.
  *
  * 네 값 모두 **지금까지의 누적**이다. 이 단계는 진행을 그대로 factsJson 에 덮어쓰고
@@ -61,6 +74,17 @@ export interface FactPhaseResult {
   readonly gapCount: number;
   readonly stopReason: 'ERROR' | 'CANCELLED' | null;
   readonly failureMessage: string | null;
+}
+
+/**
+ * data_sync_jobs.failed_symbols_json 의 원소. 종목 단위로 격리된 실패 하나를 담는다 —
+ * 증권사가 상장폐지 종목을 몰라 던지는 404 등이 여기 쌓이고, 그 종목만 건너뛴 채
+ * 나머지는 계속 수집된다(§run 종목 루프의 try/catch 주석 참고).
+ */
+export interface BrokerSyncFailedSymbol {
+  readonly code: string;
+  readonly market: Market;
+  readonly reason: string;
 }
 
 /** data_sync_jobs.facts_json 의 내용. null 컬럼 = 재무를 요청하지 않은 잡 */
@@ -254,6 +278,8 @@ export class BrokerSyncService {
     // 봉 단계가 끝나기 전의 실패는 봉 소요시간을 남기지 않는다 — 다음 실행의 예상치를
     // 반쪽 측정으로 오염시키지 않기 위해서다
     let candlesMs: number | null = null;
+    // 종목 단위로 격리된 실패 목록 — 잡은 끝까지 돌되 화면이 무엇이 빠졌는지 알 수 있게 남긴다
+    const failedSymbols: BrokerSyncFailedSymbol[] = [];
     try {
       this.checkDisk();
       const now = this.deps.clock.now();
@@ -262,32 +288,85 @@ export class BrokerSyncService {
         this.throwIfCancelled(jobId);
         const session = slice === '1m' ? getSessionForMarket(market) : null;
         const newRange: SyncedRange = { min: null, max: null };
+        // 이 종목의 원격 조회가 실제로 가져온 행 수 — totalRows 에는 종목 처리가
+        // (원격 조회 + 로컬 기록) 전부 끝난 뒤에만 합산한다. 즉시 더하면 증분은
+        // 성공하고 백필에서 실패하는 종목이 totalRows 에도 잡히고 failedSymbols
+        // 에도 잡혀 "성공 = 전체 − 실패" 계산과 실제 행수가 어긋난다(리뷰 지적).
+        let symbolRows = 0;
+        let backfillPulled = false;
 
-        // 증분: 워터마크 이후 → 현재
-        const before = this.getState(symbol, slice);
-        if (before?.syncedLastTsMs != null) {
-          const incremental = await this.pullRange(market, collect, symbol, slice, {
-            jobId,
-            fromTsMs: before.syncedLastTsMs + 1,
-            toTsMs: now,
-            newRange,
-          });
-          totalRows += incremental.rows;
+        try {
+          // 증분: 워터마크 이후 → 현재 (원격 조회 — 증권사 REST 호출)
+          const before = this.getState(symbol, slice);
+          if (before?.syncedLastTsMs != null) {
+            const incremental = await this.pullRange(market, collect, symbol, slice, {
+              jobId,
+              fromTsMs: before.syncedLastTsMs + 1,
+              toTsMs: now,
+              newRange,
+            });
+            symbolRows += incremental.rows;
+          }
+
+          // 백필: 일봉은 API 보관 깊이 바닥(0)까지, 분봉은 2년 상한까지 — 분봉은
+          // 종목·기간에 비례해 폭발하므로 수집 자체를 묶는다(minute-backfill.ts).
+          // 증분이 워터마크를 만들었을 수 있으므로 재조회. (원격 조회)
+          const state = this.getState(symbol, slice);
+          if (state?.backfillDoneAtMs == null) {
+            const backfillFromTsMs = slice === '1m' ? minuteBackfillFloorTsMs(now) : 0;
+            const backfill = await this.pullRange(market, collect, symbol, slice, {
+              jobId,
+              fromTsMs: backfillFromTsMs,
+              toTsMs: (state?.syncedFirstTsMs ?? now + 1) - 1,
+              newRange,
+            });
+            symbolRows += backfill.rows;
+            backfillPulled = true;
+          }
+        } catch (error) {
+          /**
+           * 이 catch 는 **원격 조회(pullRange, 증권사 REST 호출)만** 감싼다 — 그
+           * 뒤 로컬 기록 단계(markBackfillDone·재집계·커버리지·버전·markSynced)는
+           * 이 catch 밖에 있어 예외가 나면 격리되지 않고 그대로 바깥 catch(§run
+           * 최상단)로 올라가 잡 전체를 실패시킨다. 로컬 기록 실패는 DB 오류나
+           * 코딩 버그일 가능성이 높아, 종목 문제로 삼켜 화면에 "상장폐지 종목일
+           * 수 있습니다"라고 안내하면 진짜 결함을 가리게 된다(리뷰 지적) — 그래서
+           * try 범위를 원격 조회로만 좁혔다.
+           *
+           * 취소·디스크 부족은 이 범위 안에서 나더라도 잡 전체를 멈춰야 하는
+           * 신호이지 이 종목만의 문제가 아니다 — 여기서 삼키면 취소가
+           * 무시되고(다음 종목에서 계속 돎), 위험한 디스크 상태에서도 나머지
+           * 종목을 계속 써 내려가게 된다. 그래서 이 둘만 그대로 다시 던져
+           * 바깥 catch 로 넘긴다.
+           *
+           * 그 외(REST 4xx 등)만 이 종목만의 문제로 본다. 이 저장소는 이제
+           * 1일봉을 KRX 에서 받고(krx_daily_bars + CompositeCandleRepository) —
+           * 증권사 동기화는 분봉·시간봉과, KRX 가 아직 안 채운 종목을 위한 보조
+           * 경로다. 증권사는 상장폐지 여부를 알려주지 않으므로 404
+           * (stock-not-found) 는 "이 종목은 더 이상 없다"는 정상 응답일 수 있다
+           * — 그 한 종목 때문에 멀쩡한 나머지 종목의 수집까지 실패시키면 안
+           * 된다. 그래서 여기서 잡고 다음 종목으로 넘어간다.
+           */
+          if (error instanceof SyncCancelledError || error instanceof DiskSpaceError) throw error;
+          const reason = error instanceof Error ? error.message : String(error);
+          failedSymbols.push({ code: symbol, market, reason });
+          this.deps.logger.warn(
+            {
+              module: 'market-data',
+              event: 'data.sync.symbol-failed',
+              jobId,
+              symbol,
+              market,
+              err: error,
+            },
+            'broker sync: isolating failed symbol and continuing with the rest',
+          );
+          continue;
         }
 
-        // 백필: 일봉은 API 보관 깊이 바닥(0)까지, 분봉은 2년 상한까지 — 분봉은
-        // 종목·기간에 비례해 폭발하므로 수집 자체를 묶는다(minute-backfill.ts).
-        // 증분이 워터마크를 만들었을 수 있으므로 재조회.
-        const state = this.getState(symbol, slice);
-        if (state?.backfillDoneAtMs == null) {
-          const backfillFromTsMs = slice === '1m' ? minuteBackfillFloorTsMs(now) : 0;
-          const backfill = await this.pullRange(market, collect, symbol, slice, {
-            jobId,
-            fromTsMs: backfillFromTsMs,
-            toTsMs: (state?.syncedFirstTsMs ?? now + 1) - 1,
-            newRange,
-          });
-          totalRows += backfill.rows;
+        // 로컬 기록 단계 — 원격 조회는 이미 끝났다. 여기서부터 나는 오류는
+        // 격리하지 않는다(위 catch 주석 참고) — 그대로 던져 잡 전체를 실패시킨다.
+        if (backfillPulled) {
           // 일봉은 fromTsMs=0 구간을 에러 없이 소진 = API 바닥 도달. 분봉은 상한
           // 구간을 소진했을 뿐 API 바닥에는 닿지 않았을 수 있다 — 아래 플래그 의미 참고.
           this.markBackfillDone(symbol, slice);
@@ -311,6 +390,9 @@ export class BrokerSyncService {
           );
         }
         this.deps.symbolService.markSynced(symbol, slice, this.deps.clock.now());
+
+        // 이 종목은 원격 조회·로컬 기록이 모두 끝났다 — 이제서야 총계에 합산한다
+        totalRows += symbolRows;
       }
 
       candlesMs = this.deps.clock.now() - candlesStartedAtMs;
@@ -324,8 +406,31 @@ export class BrokerSyncService {
        * 때만 값이 채워진다.
        */
       const factsStop = facts?.stopReason ?? null;
-      const finalStatus =
-        factsStop === 'CANCELLED' ? 'CANCELLED' : factsStop === 'ERROR' ? 'FAILED' : 'COMPLETED';
+      // 대상 전부가 종목 단위로 격리 실패했으면 아무 것도 못 받은 것이다 — 완료로
+      // 보이면 안 되므로 재무 단계 결과보다 우선해 FAILED 로 끝낸다
+      const allSymbolsFailed = failedSymbols.length > 0 && failedSymbols.length === targets.length;
+      const finalStatus = allSymbolsFailed
+        ? 'FAILED'
+        : factsStop === 'CANCELLED'
+          ? 'CANCELLED'
+          : factsStop === 'ERROR'
+            ? 'FAILED'
+            : 'COMPLETED';
+      // 화면(symbols-panel.tsx·universe-rule-step.tsx)이 "N종목 수집, M종목 실패 —
+      // 이유" 를 만들 원본 데이터. 상장폐지 종목이 섞였을 수 있다는 안내는 화면 쪽 책임이다.
+      const failedSymbolsJson = failedSymbols.length > 0 ? JSON.stringify(failedSymbols) : null;
+      const symbolFailureSummary =
+        failedSymbols.length > 0
+          ? `${failedSymbols.length}종목 수집 실패 — ` +
+            failedSymbols.map((f) => `${f.code}: ${f.reason}`).join('; ')
+          : null;
+      // error 컬럼만 보는 소비자(예: recoverInterrupted 로그, 외부 모니터링)도 종목
+      // 격리 정보를 놓치지 않게 재무 실패 사유와 이어 붙인다 — notify 본문(위)과
+      // 같은 방식이다. ?? 로 하나만 고르면 둘 다 있을 때 종목 실패 요약이 사라진다.
+      const combinedError =
+        [facts?.state.failureMessage, symbolFailureSummary]
+          .filter((part): part is string => part != null)
+          .join(' — ') || null;
       this.deps.db
         .update(dataSyncJobs)
         .set({
@@ -335,7 +440,8 @@ export class BrokerSyncService {
           candlesMs,
           phase: null,
           factsJson: facts === null ? null : JSON.stringify(facts.state),
-          error: facts?.state.failureMessage ?? null,
+          failedSymbolsJson,
+          error: combinedError,
           completedAtMs: this.deps.clock.now(),
         })
         .where(eq(dataSyncJobs.id, jobId))
@@ -353,7 +459,8 @@ export class BrokerSyncService {
                 : '데이터 동기화가 취소되었습니다',
           body:
             `${targets.length}종목 · ${totalRows.toLocaleString('ko-KR')}행` +
-            (facts?.state.failureMessage ? ` — ${facts.state.failureMessage}` : ''),
+            (facts?.state.failureMessage ? ` — ${facts.state.failureMessage}` : '') +
+            (symbolFailureSummary ? ` — ${symbolFailureSummary}` : ''),
           link: '/datasets',
         });
       } catch (notifyError) {
@@ -375,11 +482,23 @@ export class BrokerSyncService {
           },
           'broker sync facts phase failed',
         );
+      } else if (allSymbolsFailed) {
+        // 재무 단계와 무관하게 봉 자체를 하나도 못 받았다 — 완료로 적지 않는다
+        this.deps.logger.error(
+          {
+            module: 'market-data',
+            event: 'data.sync.all-symbols-failed',
+            symbols: targets.length,
+            failedSymbols,
+          },
+          'broker sync failed — every symbol was isolated as failed',
+        );
       } else {
         this.deps.audit.record('system', 'data.sync.completed', {
           symbols: targets.length,
           rows: totalRows,
           facts: facts?.state.savedFacts ?? 0,
+          failedSymbols: failedSymbols.length,
         });
       }
     } catch (error) {
@@ -699,7 +818,9 @@ export class BrokerSyncService {
   private checkDisk(): void {
     const free = this.deps.freeDiskBytes();
     if (free < this.deps.minFreeDiskBytes) {
-      throw new Error(
+      // DiskSpaceError 로 던진다 — 종목 루프가 이 클래스만 보고 잡 전체를 멈춘다
+      // (일반 Error 였다면 종목 단위 REST 오류와 구분할 수 없어 격리 대상으로 잘못 잡힌다)
+      throw new DiskSpaceError(
         `디스크 여유 공간 부족 (${Math.round(free / 1024 / 1024)}MB < ${Math.round(this.deps.minFreeDiskBytes / 1024 / 1024)}MB) — 수집을 중단합니다`,
       );
     }

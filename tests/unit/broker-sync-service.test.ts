@@ -65,6 +65,32 @@ class FakeSource implements MarketDataSource {
   }
 }
 
+/**
+ * 종목별로 성공/실패를 가르는 fake 소스 — 상장폐지 종목이 섞인 증권사 응답을 흉내낸다.
+ * failingSymbols 에 든 종목은 항상 REST 404 를 던지고, 나머지는 FakeSource 와 같다.
+ */
+class PartialFailureSource implements MarketDataSource {
+  calls: FetchCandleRequest[] = [];
+  private readonly inner: FakeSource;
+  constructor(
+    candles: Candle[],
+    private readonly failingSymbols: ReadonlySet<string>,
+    pageSize = 4,
+  ) {
+    this.inner = new FakeSource(candles, pageSize);
+  }
+
+  async fetchCandles(request: FetchCandleRequest): Promise<FetchCandleResult> {
+    this.calls.push(request);
+    if (this.failingSymbols.has(request.symbol)) {
+      throw new Error(
+        'REST 요청 실패: 404 {"code":"stock-not-found","message":"종목을 찾을 수 없습니다."}',
+      );
+    }
+    return this.inner.fetchCandles(request);
+  }
+}
+
 class InMemoryCandleRepository implements CandleRepository {
   private store = new Map<string, Candle>();
   /** 저장 호출 횟수 추적 — 쓰기 증폭 회귀 감시용 */
@@ -459,6 +485,133 @@ describe('BrokerSyncService (설계 2026-07-28-broker-sync-design.md)', () => {
     expect(bad.notified).toHaveLength(1);
     expect(bad.notified[0]?.severity).toBe('error');
     expect(bad.notified[0]?.body).toContain('API down');
+  });
+});
+
+describe('종목 단위 격리 (broker-sync 부분 실패, 운영 장애 재현)', () => {
+  it('종목 하나가 404 를 던져도 나머지는 계속 수집되고 잡은 완료된다', async () => {
+    const source = new PartialFailureSource(
+      [dailyCandle('005930', MON_0900_KST), dailyCandle('000660', MON_0900_KST)],
+      new Set(['999999']),
+    );
+    const { repo, seed, symbolService, sync } = buildHarness(source);
+    const dataset = seed(['005930', '000660', '999999'], 'KR');
+
+    const { job, done } = sync.startSync(dataset, { slice: '1d' });
+    await done;
+
+    const finished = symbolService.getSyncJob(job.id);
+    expect(finished?.status).toBe('COMPLETED');
+    expect(finished?.rowsImported).toBe(2);
+    expect(repo.all('1d').map((c) => c.symbol).sort()).toEqual(['000660', '005930']);
+
+    const failed = JSON.parse(finished?.failedSymbolsJson ?? '[]') as Array<{
+      code: string;
+      market: string;
+      reason: string;
+    }>;
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchObject({ code: '999999', market: 'KR' });
+    expect(failed[0]?.reason).toContain('404');
+    expect(finished?.error).toContain('999999');
+  });
+
+  it('대상 종목이 모두 실패하면 잡은 FAILED 로 끝난다 (아무것도 못 받았는데 완료로 보이면 안 된다)', async () => {
+    const source = new PartialFailureSource([], new Set(['005930', '000660', '999999']));
+    const { repo, seed, symbolService, sync } = buildHarness(source);
+    const dataset = seed(['005930', '000660', '999999'], 'KR');
+
+    const { job, done } = sync.startSync(dataset, { slice: '1d' });
+    await done;
+
+    const finished = symbolService.getSyncJob(job.id);
+    expect(finished?.status).toBe('FAILED');
+    expect(finished?.rowsImported).toBe(0);
+    expect(repo.all('1d')).toHaveLength(0);
+    const failed = JSON.parse(finished?.failedSymbolsJson ?? '[]') as unknown[];
+    expect(failed).toHaveLength(3);
+  });
+
+  it('취소는 종목 격리보다 우선한다 — 처리 중 취소되면 다음 종목은 시도조차 되지 않는다', async () => {
+    const inner = new FakeSource(minutes('005930', 12));
+    let fetchesFor005930 = 0;
+    const attempted = new Set<string>();
+    const ref: { sync: BrokerSyncService | null; jobId: string } = { sync: null, jobId: '' };
+    const source: MarketDataSource = {
+      async fetchCandles(request) {
+        await Promise.resolve(); // startSync 반환 이후에 몸체가 돌도록 양보
+        attempted.add(request.symbol);
+        if (request.symbol === '005930') {
+          fetchesFor005930 += 1;
+          if (fetchesFor005930 === 2) ref.sync?.cancelSync(ref.jobId);
+        }
+        return inner.fetchCandles(request);
+      },
+    };
+    const { repo, seed, symbolService, sync } = buildHarness(source);
+    ref.sync = sync;
+    const dataset = seed(['000660', '005930', '999999'], 'KR');
+
+    const started = sync.startSync(dataset, { slice: '1m' });
+    ref.jobId = started.job.id;
+    await started.done;
+
+    const job = symbolService.getSyncJob(started.job.id);
+    expect(job?.status).toBe('CANCELLED');
+    // 취소는 종목 단위 격리가 아니다 — 실패 목록에 남지 않는다
+    expect(job?.failedSymbolsJson).toBeNull();
+    expect(attempted.has('999999')).toBe(false);
+    // 취소 시점(005930 2페이지째)까지 저장된 봉은 남는다 — 페이지 경계 취소
+    expect(repo.all('1m').filter((c) => c.symbol === '005930')).toHaveLength(8);
+  });
+
+  it('디스크 부족은 종목 격리 대상이 아니다 — 처리 중 터지면 남은 종목과 무관하게 잡 전체를 멈춘다', async () => {
+    const source = new FakeSource(minutes('000660', 60), 1);
+    let freeDiskCalls = 0;
+    const freeDiskBytes = () => {
+      freeDiskCalls += 1;
+      // 첫 호출(루프 진입 전 사전 점검)은 통과시키고, 이후(종목 처리 중 주기 점검)엔 바닥나게 한다
+      return freeDiskCalls === 1 ? 10 * 1024 ** 3 : 0;
+    };
+    const { repo, seed, symbolService, sync } = buildHarness(source, {
+      minFreeDiskBytes: 1024 ** 3,
+      freeDiskBytes,
+    });
+    const dataset = seed(['000660', '005930'], 'KR');
+
+    const { job, done } = sync.startSync(dataset, { slice: '1m' });
+    await done;
+
+    const finished = symbolService.getSyncJob(job.id);
+    expect(finished?.status).toBe('FAILED');
+    expect(finished?.error).toContain('디스크');
+    // 종목 단위 격리 목록에는 남지 않는다 — 잡 전체를 멈춘 사유이지 이 종목만의 문제가 아니다
+    expect(finished?.failedSymbolsJson).toBeNull();
+    // 두 번째 종목(005930)은 시도되지 않았다
+    expect(source.calls.every((call) => call.symbol === '000660')).toBe(true);
+    expect(repo.all('1m')).toHaveLength(50);
+  });
+
+  it('원격 조회는 성공했는데 로컬 기록 단계(refreshCoverage)가 실패하면 격리하지 않고 잡 전체를 실패시킨다', async () => {
+    // 종목 격리는 pullRange(증권사 REST 호출) 구간에서 난 오류로만 좁힌다 — 그
+    // 뒤 로컬 기록(refreshCoverage 등)의 실패는 진짜 결함일 가능성이 높으므로
+    // "상장폐지 종목일 수 있습니다"로 안내하지 않고 잡 전체를 실패시켜야 한다.
+    const source = new FakeSource(minutes('005930', 10));
+    const { seed, symbolService, sync } = buildHarness(source);
+    const dataset = seed(['005930'], 'KR');
+
+    symbolService.refreshCoverage = async () => {
+      throw new Error('coverage DB 쓰기 실패 (버그 재현)');
+    };
+
+    const { job, done } = sync.startSync(dataset, { slice: '1m' });
+    await done;
+
+    const finished = symbolService.getSyncJob(job.id);
+    expect(finished?.status).toBe('FAILED');
+    expect(finished?.error).toContain('coverage DB 쓰기 실패');
+    // 종목 단위 격리 목록에는 남지 않는다 — 원격 조회 자체는 성공했다
+    expect(finished?.failedSymbolsJson).toBeNull();
   });
 });
 

@@ -15,7 +15,11 @@ import {
 } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { api, ApiError, postJson } from '@/lib/api-client';
-import type { DataJob } from '@/features/datasets/symbol-types';
+import {
+  parseFailedSymbols,
+  type BrokerSyncFailedSymbol,
+  type DataJob,
+} from '@/features/datasets/symbol-types';
 import { MAX_UNIVERSE_SYMBOLS } from '../../../shared/schemas/universe-limit.js';
 import type { UniverseRule } from '../../../shared/schemas/universe-rule.js';
 import type { SymbolMasterCoverageDto } from '../../../shared/schemas/symbol-master.js';
@@ -113,9 +117,12 @@ export function UniverseRuleStep({
   const [candlePhase, setCandlePhase] = useState<'SYNCING' | null>(null);
   const [candleSyncError, setCandleSyncError] = useState<string | null>(null);
   // 동기화가 성공적으로 끝났는데도 재미리보기에 missingCandleSymbols 가 남을 수
-  // 있다(상장폐지 종목은 증권사가 이름·봉을 안 준다) — 그때는 오류가 아니라 이 사실을
-  // 한 줄로 설명한다. 규칙을 다시 미리보기하면 지난 시도 결과이므로 지운다.
-  const [candleSyncAttempted, setCandleSyncAttempted] = useState(false);
+  // 있다(상장폐지 종목은 증권사가 이름·봉을 안 준다) — 그때는 오류가 아니라 몇 종목이
+  // 빠졌고 왜인지 그대로 보여준다. 규칙을 다시 미리보기하면 지난 시도 결과이므로 지운다.
+  const [candleSyncResult, setCandleSyncResult] = useState<{
+    succeeded: number;
+    failed: BrokerSyncFailedSymbol[];
+  } | null>(null);
   const previewMutation = useMutation({
     mutationFn: (params: PreviewParams) =>
       postJson<UniversePreviewResponseDto>('/backtests/universe-preview', params),
@@ -274,7 +281,7 @@ export function UniverseRuleStep({
    */
   const syncMissingCandles = async (codes: readonly string[]): Promise<void> => {
     setCandleSyncError(null);
-    setCandleSyncAttempted(false);
+    setCandleSyncResult(null);
     setCandlePhase('SYNCING');
 
     let job: DataJob | null = null;
@@ -288,9 +295,17 @@ export function UniverseRuleStep({
       }
       job = current;
 
-      if (current.status === 'COMPLETED') setCandleSyncAttempted(true);
-      else if (current.status === 'CANCELLED') setCandleSyncError('봉 수집이 취소되었습니다');
-      else setCandleSyncError(current.error ?? '봉 수집이 실패했습니다');
+      if (current.status === 'COMPLETED') {
+        // 종목 단위로 격리된 실패(상장폐지 종목 등)만 여기 남는다 — 잡 자체는 끝까지
+        // 돌았다(broker-sync-service.ts 종목 루프 참고). 성공 수는 요청한 코드
+        // 개수에서 실패 수를 뺀 값이다.
+        const failed = parseFailedSymbols(current.failedSymbolsJson);
+        setCandleSyncResult({ succeeded: Math.max(codes.length - failed.length, 0), failed });
+      } else if (current.status === 'CANCELLED') {
+        setCandleSyncError('봉 수집이 취소되었습니다');
+      } else {
+        setCandleSyncError(current.error ?? '봉 수집이 실패했습니다');
+      }
     } catch (error) {
       const reason = error instanceof ApiError ? error.message : '봉 수집에 실패했습니다';
       setCandleSyncError(reason);
@@ -360,7 +375,7 @@ export function UniverseRuleStep({
               onClick={() => {
                 // 직접 다시 미리보기하면 지난 동기화 시도의 설명은 더 이상 이 결과에
                 // 대한 것이 아니다 — 지운다.
-                setCandleSyncAttempted(false);
+                setCandleSyncResult(null);
                 runPreview(currentParams);
               }}
             >
@@ -486,9 +501,10 @@ export function UniverseRuleStep({
                 ? '봉 수집 중…'
                 : `${preview.missingCandleSymbols.length}개 종목 봉 수집`}
             </Button>
-            {candleSyncAttempted ? (
+            {candleSyncResult && candleSyncResult.failed.length > 0 ? (
               <p className="text-xs text-muted-foreground">
-                일부 종목은 증권사에서 과거 봉을 받지 못했습니다 — 상장폐지 종목일 수 있습니다.
+                {candleSyncResult.succeeded}종목 수집, {candleSyncResult.failed.length}종목 실패 — 상장폐지
+                종목일 수 있습니다 ({candleSyncResult.failed.map((entry) => entry.code).join(', ')})
               </p>
             ) : null}
             <p className="text-xs text-muted-foreground">

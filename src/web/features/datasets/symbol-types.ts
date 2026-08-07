@@ -43,8 +43,28 @@ export interface DataJob {
   error: string | null;
   phase: string | null;
   factsJson: string | null;
+  /** 종목 단위로 격리된 실패 목록 (BrokerSyncFailedSymbol[] JSON). null = 실패한 종목 없음 */
+  failedSymbolsJson: string | null;
   createdAtMs: number;
   completedAtMs: number | null;
+}
+
+/** data_sync_jobs.failed_symbols_json 의 원소 — 격리된 종목 하나 */
+export interface BrokerSyncFailedSymbol {
+  code: string;
+  market: string;
+  reason: string;
+}
+
+/** failedSymbolsJson 파싱. 형식이 어긋나도 화면이 죽지 않게 빈 배열로 눙친다 */
+export function parseFailedSymbols(json: string | null | undefined): BrokerSyncFailedSymbol[] {
+  if (!json) return [];
+  try {
+    const parsed = JSON.parse(json) as unknown;
+    return Array.isArray(parsed) ? (parsed as BrokerSyncFailedSymbol[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 export interface FactsJobState {
