@@ -169,19 +169,18 @@ export function UniverseRuleStep({
    * 선택지가 증권사 동기화뿐이 된다 — 상장폐지 종목은 증권사가 모르므로 반드시
    * 404 로 실패한다(운영 버그). 조건을 넓혀 이 버튼이 항상 먼저 뜨게 한다.
    */
+  // 기간을 이미 다 채웠으면 이 버튼을 내리다 — 다시 눌러도 수집할 날짜가 없어
+  // 아무 일도 일어나지 않는다. 그 상태로 남은 종목은 KRX 에도 데이터가 없다는 뜻이라
+  // 아래 별도 안내가 맡는다.
   const fullSyncNeeded =
-    preview !== null &&
-    (preview.uncoveredDates.length > 0 || !preview.periodCovered || preview.missingCandleSymbols.length > 0);
+    preview !== null && (preview.uncoveredDates.length > 0 || !preview.periodCovered);
 
-  /** 위 fullSyncNeeded 가 뜬 이유를 우선순위대로 설명한다 — 리밸런스 날짜 > 기간 전체 > 종목 단위 */
+  /** 위 fullSyncNeeded 가 뜬 이유를 우선순위대로 설명한다 — 리밸런스 날짜 > 기간 전체 */
   const fullSyncReason = (result: UniversePreviewResponseDto): string => {
     if (result.uncoveredDates.length > 0) {
       return `종목 마스터가 리밸런스 날짜 ${result.uncoveredDates.length}개를 아직 커버하지 않습니다.`;
     }
-    if (!result.periodCovered) {
-      return '기간 중 일부 날짜의 KRX 데이터가 아직 없습니다.';
-    }
-    return '일부 종목의 봉 데이터가 아직 없습니다.';
+    return '기간 중 일부 날짜의 KRX 데이터가 아직 없습니다.';
   };
 
   // 증권사 동기화는 기간이 완전히 커버된 뒤에도 여전히 봉이 없는 종목에만 보조로
@@ -527,10 +526,18 @@ export function UniverseRuleStep({
             <p className="text-xs text-muted-foreground wrap-anywhere">
               {preview.missingCandleSymbols.join(', ')}
             </p>
-            {/* 기간은 이미 다 커버됐는데도 남은 종목이다 — 누르기 전에 실패 가능성을
-                미리 알린다(운영 버그: 실패한 뒤에야 상장폐지를 알 수 있었다) */}
+            {/* 기간을 이미 다 채운 상태에서만 이 블록이 뜬다. 즉 KRX 에도 이 종목의
+                일봉이 없다는 뜻이라, 증권사 재시도로 풀릴 가능성이 낮다는 걸 누르기
+                전에 알려야 한다 — 운영에서는 실패한 뒤에야 상장폐지를 알 수 있었고,
+                게이트가 이 목록을 0 으로 요구해 빠져나갈 길도 안 보였다. */}
             <p className="text-xs text-muted-foreground">
-              증권사 조회는 상장폐지 종목의 데이터를 주지 않아 실패할 수 있다
+              기간은 이미 다 수집했다 — KRX 에도 이 종목의 일봉이 없다. 그 기간에 거래가
+              없었거나(거래정지·정리매매 종료) KRX 가 제공하지 않는 종목이다.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              증권사 조회는 상장폐지 종목을 주지 않아 대개 실패한다. 실패하면 상위 N 이나
+              기간을 조정해 이 종목을 유니버스에서 빼거나, 가격 데이터 탭에서 CSV 로 직접
+              넣어야 한다.
             </p>
             <Button
               type="button"
