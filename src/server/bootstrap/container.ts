@@ -259,7 +259,9 @@ export function createContainer(config: AppConfig): Container {
     ...(factsPhase ? { factsPhase } : {}),
     notify: (input) => safeNotify({ type: 'data-sync', ...input }),
   });
-  const symbolInfoService = new SymbolInfoService(marketDataSource, clock, logger);
+  // 로컬 폴백(symbolService)을 함께 넘긴다 — 증권사가 모르거나 조회에 실패한 코드도
+  // 종목 마스터가 채워 둔 이름이 있으면 그걸로 보여준다 (자격 증명 미설정 환경도 포함).
+  const symbolInfoService = new SymbolInfoService(marketDataSource, clock, logger, symbolService);
   // 발행주식수는 이름과 같은 응답에 있다 — SymbolInfoService 를 넘겨 24시간 캐시를
   // 나눠 쓴다. 소스를 직접 주면 /stocks 를 두 벌 부르게 된다.
   const symbolMetricsService = new SymbolMetricsService(

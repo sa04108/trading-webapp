@@ -221,26 +221,43 @@ export function createTossMarketDataSource(
       // GET /api/v1/stocks 는 콤마 구분 최대 200건
       for (let offset = 0; offset < symbols.length; offset += LOOKUP_CHUNK) {
         const chunk = symbols.slice(offset, offset + LOOKUP_CHUNK);
-        const query = new URLSearchParams({ symbols: chunk.join(',') });
-        const page = await client.request<{ result?: readonly Record<string, unknown>[] }>(
-          'stock',
-          `/api/v1/stocks?${query}`,
-        );
-        if (!Array.isArray(page.result)) {
-          throw new Error('toss stocks 응답에 result 배열이 없습니다');
-        }
-        for (const raw of page.result) {
-          if (typeof raw.symbol !== 'string' || typeof raw.name !== 'string') {
-            throw new Error('toss stocks 응답 항목에 symbol/name 이 없습니다');
+        try {
+          const query = new URLSearchParams({ symbols: chunk.join(',') });
+          const page = await client.request<{ result?: readonly Record<string, unknown>[] }>(
+            'stock',
+            `/api/v1/stocks?${query}`,
+          );
+          if (!Array.isArray(page.result)) {
+            throw new Error('toss stocks 응답에 result 배열이 없습니다');
           }
-          stocks.push({
-            symbol: raw.symbol,
-            name: raw.name,
-            englishName: typeof raw.englishName === 'string' ? raw.englishName : null,
-            market: typeof raw.market === 'string' ? raw.market : '',
-            status: typeof raw.status === 'string' ? raw.status : '',
-            sharesOutstanding: optionalDecimal(raw.sharesOutstanding),
-          });
+          for (const raw of page.result) {
+            if (typeof raw.symbol !== 'string' || typeof raw.name !== 'string') {
+              throw new Error('toss stocks 응답 항목에 symbol/name 이 없습니다');
+            }
+            stocks.push({
+              symbol: raw.symbol,
+              name: raw.name,
+              englishName: typeof raw.englishName === 'string' ? raw.englishName : null,
+              market: typeof raw.market === 'string' ? raw.market : '',
+              status: typeof raw.status === 'string' ? raw.status : '',
+              sharesOutstanding: optionalDecimal(raw.sharesOutstanding),
+            });
+          }
+        } catch (error) {
+          // 청크(최대 200건) 하나의 실패가 다른 청크의 정상 종목까지 지우면 안 된다 —
+          // 상장폐지 코드 하나가 섞여 이 청크 전체가 404 나도, 같은 요청에 포함된
+          // 나머지 청크는 그대로 살려야 한다. 청크 안에서 종목별로 쪼개 재시도하지는
+          // 않는다(호출량 폭발) — 이 청크에서 못 받은 이름은 로컬 종목 마스터 폴백
+          // (SymbolInfoService)이 메운다.
+          logger.warn(
+            {
+              module: 'market-data',
+              event: 'toss.get-stock-info.chunk-failed',
+              symbols: chunk,
+              err: error,
+            },
+            'toss stock info chunk lookup failed — skipping this chunk',
+          );
         }
       }
       return stocks;

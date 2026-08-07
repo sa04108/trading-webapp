@@ -264,6 +264,37 @@ describe('createTossMarketDataSource (스펙 §13 — 2차 어댑터)', () => {
     expect(stocks.map((stock) => stock.name)).toEqual(['삼성전자', 'SK하이닉스']);
   });
 
+  // 원인 2: 청크(최대 200건) 하나가 상장폐지 코드 등으로 실패해도, 같은 요청의 다른
+  // 청크는 그대로 살아야 한다. 이름을 못 받은 청크는 SymbolInfoService 의 로컬 폴백이 메운다.
+  it('isolates a failed chunk instead of discarding the whole batch (청크 격리)', async () => {
+    const symbols = Array.from({ length: 201 }, (_, index) => String(index).padStart(6, '0'));
+    const fetchImpl = buildFetch([
+      jsonResponse(404, { error: '상장폐지 코드가 섞여 있음' }), // 첫 청크(200건) 실패
+      jsonResponse(200, {
+        result: [{ symbol: symbols[200], name: '마지막종목', market: 'KOSPI', status: 'ACTIVE' }],
+      }), // 두 번째 청크(1건)는 정상
+    ]);
+    const warn = vi.spyOn(logger, 'warn');
+
+    const stocks = await buildSource(fetchImpl).getStockInfo(symbols);
+
+    expect(stocks).toEqual([
+      {
+        symbol: symbols[200],
+        name: '마지막종목',
+        englishName: null,
+        market: 'KOSPI',
+        status: 'ACTIVE',
+        sharesOutstanding: null,
+      },
+    ]);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'toss.get-stock-info.chunk-failed' }),
+      expect.any(String),
+    );
+    warn.mockRestore();
+  });
+
   it('getStockInfo rejects when not configured and returns [] for empty input', async () => {
     const unconfigured = createTossMarketDataSource(null, logger);
     await expect(unconfigured.getStockInfo(['005930'])).rejects.toBeInstanceOf(
