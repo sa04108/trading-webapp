@@ -15,13 +15,35 @@ export interface SymbolSummary {
   readonly name: string | null;
 }
 
+/** 재무 버전 체인의 슬라이스 자리 — `FactSyncService` 의 같은 이름 상수와 값이 같아야 한다 */
+const FACTS_SLICE = 'FACTS';
+
+/** 실행이 소비한 (종목, 축, 버전, 해시) 한 칸 — §9.5 재현성 스냅샷의 구성 요소 */
+export interface ConsumedVersionEntry {
+  readonly code: string;
+  readonly slice: string;
+  readonly version: number;
+  readonly contentHash: string;
+}
+
+/** 백테스트가 제출 시점에 고정하는 종목 버전 pin (§9.5) */
+export interface ConsumedVersionSnapshot {
+  readonly entries: readonly ConsumedVersionEntry[];
+  /** 정렬된 항목을 이어 붙인 집계 해시 */
+  readonly hash: string;
+}
+
 /**
  * 종목 등록·이름·재무 버전 체인만 남은 서비스 (설계 2026-07-31-symbol-as-first-class
- * 의 후신). 봉 수집·CSV 가져오기·슬라이스 커버리지·버전 pin(옛 versionSnapshotFor)은
- * 이 커밋(Task 5, 2026-08-07-price-data-removal)이 걷어냈다.
+ * 의 후신). 봉 수집·CSV 가져오기·슬라이스 커버리지는 Task 5(2026-08-07-price-data-removal)
+ * 가 걷어냈다.
  *
- * bumpVersion 은 남는다 — `FactSyncService` 가 재무 버전 체인(FACTS_SLICE)을 올릴 때
- * 이 서비스를 좁은 포트(SymbolVersionBumper)로 받아 쓴다 (§9.5).
+ * versionSnapshotFor 는 남지만 재무(FACTS_SLICE) 축만 본다 — 봉 버전 체인이
+ * 사라지면서(Task 5) 남은 유일한 축이 재무이기 때문이다(Task 6). krx_daily_bars
+ * 는 시장 전체가 공유하는 원천이라 종목별 버전을 따로 매기지 않는다.
+ *
+ * bumpVersion 은 남는다 — `FactSyncService` 가 재무 버전 체인을 올릴 때 이 서비스를
+ * 좁은 포트(SymbolVersionBumper)로 받아 쓴다 (§9.5).
  * getLatestVersion 은 그 내부 구현이라 private 로 낮췄다.
  * DART 재무 수집 자체는 이 태스크가 건드리지 않는다.
  */
@@ -150,6 +172,32 @@ export class SymbolService {
       .limit(1)
       .get();
     return latest ? { version: latest.version, contentHash: latest.contentHash } : null;
+  }
+
+  /**
+   * 제출 시점 종목 버전 스냅샷 (§9.5) — 백테스트가 제출 시점에 고정해, 대기 중 재무
+   * 동기화가 끼어들어도 실행이 소비한 버전이 어긋나지 않게 한다.
+   *
+   * 재무(FACTS_SLICE) 축 하나만 담는다. 봉은 예전에 CSV 가져오기·증권사 동기화가
+   * 버전을 올렸지만 그 경로가 Task 5 에서 사라졌고, krx_daily_bars 는 종목별 버전을
+   * 매기지 않는 공유 원천이라 고정할 대상이 없다. 버전이 없는 종목도 version 0 으로
+   * 남긴다 — "아직 수집 안 됨" 도 입력 상태의 일부다.
+   */
+  versionSnapshotFor(codes: readonly string[]): ConsumedVersionSnapshot {
+    const uniqueCodes = [...new Set(codes)].sort();
+    const entries: ConsumedVersionEntry[] = uniqueCodes.map((code) => {
+      const latest = this.getLatestVersion(code, FACTS_SLICE);
+      return {
+        code,
+        slice: FACTS_SLICE,
+        version: latest?.version ?? 0,
+        contentHash: latest?.contentHash ?? '',
+      };
+    });
+    const hash = createHash('sha256')
+      .update(entries.map((e) => `${e.code}:${e.slice}:${e.version}:${e.contentHash}`).join('|'))
+      .digest('hex');
+    return { entries, hash };
   }
 
   /**

@@ -27,6 +27,7 @@ import {
 } from '../modules/auth/infrastructure/sqlite-repositories.js';
 import { SymbolInfoService } from '../modules/market-data/application/symbol-info-service.js';
 import { SymbolService } from '../modules/market-data/application/symbol-service.js';
+import { CandleCoverageService } from '../modules/market-data/application/candle-coverage-service.js';
 import type { CandleRepository } from '../modules/market-data/application/ports.js';
 import { createTossMarketDataSource } from '../modules/broker/infrastructure/toss/toss-market-data-source.js';
 import { DuckDbService } from '../modules/market-data/infrastructure/duckdb-service.js';
@@ -69,6 +70,7 @@ export interface Container {
   readonly authService: AuthService;
   readonly duckdb: DuckDbService;
   readonly candleRepository: CandleRepository;
+  readonly candleCoverageService: CandleCoverageService;
   readonly symbolService: SymbolService;
   readonly symbolInfoService: SymbolInfoService;
   readonly strategyRegistry: StrategyRegistry;
@@ -172,10 +174,11 @@ export function createContainer(config: AppConfig): Container {
   // 봉은 KRX 일봉 하나뿐이다 — 쓰기는 SymbolMasterService.ingestDate 가 종목 마스터
   // 이벤트와 같은 트랜잭션에서 직접 한다.
   const candleRepository = new KrxDailyCandleRepository(database.db);
+  // 백테스트 제출 검증용 커버리지 — 캐시 없이 krx_daily_bars 를 직접 집계한다(Task 6).
+  const candleCoverageService = new CandleCoverageService(database.db);
   // 종목 등록·이름·재무 버전 체인만 SymbolService 가 맡는다.
-  // 봉 수집·CSV 가져오기·버전 pin(옛 versionSnapshotFor)은 이 커밋(Task 5,
-  // 2026-08-07-price-data-removal)이 걷어냈다.
-  // 그래서 이제 봉 저장소를 주입받지 않는다.
+  // 봉 수집·CSV 가져오기·슬라이스 커버리지는 이 커밋(Task 5,
+  // 2026-08-07-price-data-removal)이 걷어냈다. 그래서 이제 봉 저장소를 주입받지 않는다.
   const symbolService = new SymbolService(database.db, clock, auditLog);
 
   // duckdb 는 위에서 만든 인스턴스를 재사용한다 — 새로 만들면 DuckDB 메모리 상한이
@@ -281,6 +284,7 @@ export function createContainer(config: AppConfig): Container {
     authService,
     duckdb,
     candleRepository,
+    candleCoverageService,
     symbolService,
     symbolInfoService,
     strategyRegistry: new StrategyRegistry(),

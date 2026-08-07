@@ -23,10 +23,7 @@ import type { ConsumedVersionSnapshot, SymbolService } from '../../market-data/a
 import { KrxNotConfiguredError, KrxQuotaError } from '../../market-data/application/ports.js';
 import { SymbolMasterNotCoveredError } from '../../market-data/application/symbol-master-service.js';
 import { KRX_FILTER_POLICY_VERSION } from '../../market-data/domain/krx-filter-policy.js';
-// `domain/dataset-slice.ts` 는 Task 4(2026-08-07-price-data-removal)가 지웠다.
-// 아래 `sliceForTimeframe`/`sliceTimeframes` 호출(약 252~253행)은 그래서 지금
-// `ReferenceError` 를 내는 채로 남아 있다 — 슬라이스 축 자체를 걷어내는 재작성은
-// Task 6 의 몫이라 여기서는 고치지 않는다.
+import type { CandleCoverageService } from '../../market-data/application/candle-coverage-service.js';
 import type { StrategyRegistry } from '../../strategy/application/strategy-registry.js';
 import { estimateBars, MAX_BACKTEST_BARS } from '../domain/bar-estimate.js';
 import {
@@ -53,6 +50,8 @@ export interface BacktestRouteDeps {
   readonly results: ResultsService;
   readonly strategies: StrategyRegistry;
   readonly symbolService: SymbolService;
+  /** 종목별 일봉 보유 구간 — `krx_daily_bars` 를 직접 집계한다(Task 6) */
+  readonly candleCoverage: CandleCoverageService;
   /** 유니버스 규칙 → 리밸런스 날짜별 멤버십 일정 (스펙 2026-08-05) */
   readonly universeRuleResolver: UniverseRuleResolver;
   readonly audit: AuditLogService;
@@ -174,6 +173,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     results,
     strategies,
     symbolService,
+    candleCoverage,
     universeRuleResolver,
     audit,
     factRepository,
@@ -191,15 +191,11 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    */
   const checkPeriodCoverage = (
     codes: readonly string[],
-    slice: DatasetSlice,
     period: { from: string; to: string },
   ): string | null => {
     const { fromTsMs, toTsMs } = periodToTsRange(period);
     const bySymbol = new Map(
-      symbolService
-        .getCoverage(codes)
-        .filter((row) => row.slice === slice)
-        .map((row) => [row.code, row]),
+      candleCoverage.getCoverage(codes).map((row) => [row.code, row]),
     );
 
     const ranges: string[] = [];
@@ -218,87 +214,50 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
   };
 
   /**
-   * 소비 timeframe 해소 + 슬라이스 봉 존재 확인 + 봉 수 상한 검사. 데이터셋·스냅샷
-   * 경로가 공유한다 — 유니버스가 어디서 왔든 "이 종목 집합으로 이 기간에 얼마나
-   * 소비하나" 는 같은 질문이다. 두 경로가 갈리는 지점은 기간 커버리지 판정 방식뿐이라
-   * `coverageCheck` 로 주입한다 (D-025 관용 vs REVIEW §9.1 엄격 차단).
+   * 커버리지 확인 + 봉 수 상한 검사. 데이터셋·스냅샷 경로가 공유한다 — 유니버스가
+   * 어디서 왔든 "이 종목 집합으로 이 기간에 얼마나 소비하나" 는 같은 질문이다.
+   * 두 경로가 갈리는 지점은 기간 커버리지 판정 방식뿐이라 `coverageCheck` 로
+   * 주입한다 (D-025 관용 vs REVIEW §9.1 엄격 차단).
+   *
+   * 소비 timeframe 을 고르는 절차는 없다 — `Timeframe` 이 '1d' 하나뿐이라(Task 4)
+   * 예전처럼 슬라이스별 가용성을 견줘 고를 것이 없다.
    */
   const resolveConsumedUniverse = (
     body: BacktestRequest,
     codes: readonly string[],
     errors: string[],
-    coverageCheck: (codes: readonly string[], slice: DatasetSlice) => string | null,
-  ): { universe: ConsumedVersionSnapshot; timeframe: '1m' | '1h' | '1d' } | null => {
-    /**
-     * 소비 timeframe 검사. 데이터셋에 `defaultTimeframe` 이 없어졌으므로(설계
-     * 2026-07-31-symbol-as-first-class) 미지정 요청의 기준을 **데이터에서** 찾는다:
-     * 유니버스가 가진 슬라이스가 하나면 그것으로 정하고, 둘 다 있거나 둘 다 없으면
-     * 거부한다 — 임의로 하나를 골라 주면 사용자가 의도하지 않은 봉으로 돌아간다.
-     * 위저드는 항상 명시값을 보내므로 이 경로는 옛 저장 요청·API 직접 호출용이다.
-     */
-    const available = (['1d', '1m'] as const).filter((candidate) =>
-      symbolService.getCoverage(codes).some((row) => row.slice === candidate && row.barCount > 0),
-    );
-    let consumed = body.timeframe;
-    if (consumed === undefined) {
-      if (available.length === 1) {
-        consumed = available[0] === '1m' ? '1h' : '1d';
-      } else {
-        errors.push(
-          available.length === 0
-            ? '선택한 종목에 수집된 봉이 없습니다 — 종목 화면에서 먼저 동기화하세요.'
-            : '소비할 봉 주기를 지정하세요 (1d/1h/1m) — 이 종목들은 일봉과 분봉을 모두 갖고 있습니다.',
-        );
-      }
-    }
-    if (consumed === undefined) return null;
-
-    const slice = sliceForTimeframe(consumed);
-    const allowedTimeframes = sliceTimeframes(slice);
-    const sliceCoverageRows = symbolService.getCoverage(codes).filter((row) => row.slice === slice);
-    const sliceHasData = sliceCoverageRows.some((row) => row.barCount > 0);
-
-    if (!allowedTimeframes.includes(consumed)) {
-      // 방어적 분기 — zod 스키마가 이미 consumed 를 '1m'|'1h'|'1d' 로 제한하고
-      // sliceForTimeframe/sliceTimeframes 는 그 timeframe 이 속한 슬라이스를
-      // 되돌리므로 이 분기는 현재 값 범위에서 도달하지 않는다.
-      errors.push(`이 유니버스는 timeframe ${allowedTimeframes.join('/')} 만 제공합니다 (요청: ${consumed})`);
-      return null;
-    }
-    if (!sliceHasData) {
-      // 실제로 도달 가능한 경우 — timeframe 자체는 존재할 수 있지만(예: 1d 전용
-      // 유니버스에 1m 요청) 그 슬라이스로 아직 수집된 데이터가 없다. "timeframe X 만
-      // 제공합니다" 처럼 스스로 모순되는 메시지를 내지 않도록 원인을 구분해 말한다.
-      errors.push(
-        `선택한 종목에 아직 ${consumed} 데이터가 없습니다: ` +
-          `${codes.join(', ')} — 종목 화면에서 해당 봉을 동기화(또는 CSV 가져오기)한 뒤 다시 시도하세요.`,
-      );
+    coverageCheck: (codes: readonly string[]) => string | null,
+  ): { universe: ConsumedVersionSnapshot; timeframe: '1d' } | null => {
+    const consumed = '1d' as const;
+    const hasData = candleCoverage
+      .getCoverage(codes)
+      .some((row) => row.barCount > 0);
+    if (!hasData) {
+      errors.push('선택한 종목에 수집된 일봉이 없습니다 — 종목 마스터 수집을 먼저 실행하세요.');
       return null;
     }
 
-    const coverageError = coverageCheck(codes, slice);
+    const coverageError = coverageCheck(codes);
     if (coverageError !== null) {
       errors.push(coverageError);
       return null;
     }
 
-    // 제출 시점의 종목 버전 스냅샷을 고정 — 대기 중 동기화가 끼어들어도 어긋나지 않는다 (§9.5)
-    const universe = symbolService.versionSnapshotFor(codes, slice);
+    // 제출 시점의 종목 버전 스냅샷을 고정 — 대기 중 재무 동기화가 끼어들어도 어긋나지 않는다 (§9.5)
+    const universe = symbolService.versionSnapshotFor(codes);
 
-    // 봉 수 상한 — 실행부는 전체 봉을 메모리에 올린다. 1m 소비를 열면서 생긴 밸브.
-    // coverage 는 슬라이스 기준 timeframe 으로 세므로 1m 소비만 배율 60 으로 추정한다.
+    // 봉 수 상한 — 실행부는 전체 봉을 메모리에 올린다.
     const { fromTsMs, toTsMs } = periodToTsRange(body.period);
     const estimated = estimateBars(
-      sliceCoverageRows.map((row) => ({ ...row, symbol: row.code })),
+      candleCoverage.getCoverage(codes).map((row) => ({ ...row, symbol: row.code })),
       codes,
       fromTsMs,
       toTsMs,
-      consumed === '1m' ? 60 : 1,
     );
     if (estimated > MAX_BACKTEST_BARS) {
       errors.push(
         `예상 봉 수가 상한을 넘습니다 (추정 ${estimated.toLocaleString()}봉 > ` +
-          `${MAX_BACKTEST_BARS.toLocaleString()}봉). 기간이나 종목 수를 줄이거나 1h 봉을 사용하세요.`,
+          `${MAX_BACKTEST_BARS.toLocaleString()}봉). 기간이나 종목 수를 줄이세요.`,
       );
       return null;
     }
@@ -331,7 +290,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     | {
         readonly ok: true;
         readonly universe: ConsumedVersionSnapshot;
-        readonly timeframe: '1m' | '1h' | '1d';
+        readonly timeframe: '1d';
         readonly provenancePin: ProvenancePin;
         readonly resolved: ResolvedUniverse;
       }
@@ -401,7 +360,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       body,
       resolved.unionSymbols,
       universeErrors,
-      (codes, slice) => checkPeriodCoverage(codes, slice, body.period),
+      (codes) => checkPeriodCoverage(codes, body.period),
     );
     if (universeErrors.length > 0 || resolvedConsumption === null) {
       return {
@@ -512,16 +471,14 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
   });
 
   /**
-   * unionSymbols 중 이 화면이 아직 실행할 수 없는 종목 — 종목 마스터에는 있지만
-   * (1) 로컬 `symbols` 테이블에 등록돼 있지 않거나 (2) 등록은 됐지만 어느 슬라이스로도
-   * 봉을 하나도 수집하지 않은 경우다. `missingCandleSymbols` 의 정확한 정의는 브리프에
-   * timeframe 을 명시하지만(이 미리보기 요청 바디에는 timeframe 이 없다), 위저드가
-   * 미리보기 단계에서 아직 timeframe 을 고르지 않은 시점에도 쓸 수 있어야 하므로
-   * "어느 슬라이스에도 봉이 없다" 로 일반화한다(브리프 외 결정).
+   * unionSymbols 중 이 화면이 아직 실행할 수 없는 종목이다. 종목 마스터에는
+   * 있지만 로컬 `symbols` 테이블에 등록되지 않았거나, 등록은 됐어도 일봉을
+   * 하나도 수집하지 않은 경우를 가리킨다. 봉 주기가 '1d' 하나뿐이라(Task 4)
+   * 예전처럼 슬라이스를 가려 볼 필요가 없다.
    */
   const missingCandleSymbolsOf = (codes: readonly string[]): string[] => {
     const hasBars = new Set(
-      symbolService
+      candleCoverage
         .getCoverage(codes)
         .filter((row) => row.barCount > 0)
         .map((row) => row.code),
@@ -536,19 +493,16 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    * 않아 그 출처로는 등록할 수 없다 — 그래서 가격 데이터 탭에서 상장폐지 종목이
    * 조회되지 않던 문제가 이 등록으로 풀린다.
    *
-   * **이 등록은 화면 편의가 아니라 제출 자체의 전제조건이다.** `validateSubmission`
-   * 의 `resolveConsumedUniverse`/`checkPeriodCoverage` 는 `symbolService.getCoverage`
-   * (= `symbols` 에 등록된 종목의 커버리지)로 timeframe 가용성·기간 겹침을 판정한다
-   * — 등록되지 않은 코드는 커버리지 자체가 없어 "수집된 봉이 없습니다" 로 400 을
-   * 받는다. 즉 이 미리보기(읽기 의미로 보이는 GET 성격의 호출)를 건너뛰고 API 를
-   * 직접 두드려 `POST /backtests` 를 호출하면, 종목 마스터·KRX 일봉이 이미 있어도
-   * 등록이 안 됐다는 이유만으로 제출이 막힌다. 회귀는 아니다(Task 4 이전에도 등록은
-   * 필요했다) — 다만 그 등록을 지금은 이 미리보기 호출 하나가 전담하므로, 위저드
-   * 흐름을 벗어난 자동화·API 클라이언트를 만들 때는 이 사실을 알아야 한다.
+   * 이 등록이 필요한 이유는 이제 제출 검증이 아니라 표시다(Task 6 이전에는 반대였다).
+   * `resolveConsumedUniverse`/`checkPeriodCoverage` 는 `candleCoverage.getCoverage`
+   * (= `krx_daily_bars` 직접 집계)만 보므로 등록 여부와 무관하게 통과한다.
+   *
+   * 대신 등록되지 않은 코드는 `missingCandleSymbolsOf` 가 "누락" 으로 계속 보고한다.
+   * 종목 화면·가격 데이터 탭에도 나타나지 않는다. 위저드 흐름을 벗어나 API 를 직접
+   * 호출하는 자동화 클라이언트는 이 사실을 알아야 한다.
    *
    * KRX 응답 마켓(KOSPI/KOSDAQ)은 항상 'KR' 로 등록한다 — `symbols.market` 은
-   * 세션 축(KR/US) 이고, krxDailyBars 는 애초에 국내 종목만 갖는다
-   * (composite-candle-repository.ts usesKrx 주석 참고).
+   * 세션 축(KR/US) 이고, `krxDailyBars` 는 애초에 국내 종목만 갖는다.
    *
    * 이미 등록된 코드는 건너뛴다 — 재등록을 실패로 다루지 않기 위해서고, 동시에
    * standardCode 를 덮어쓰지 않기 위해서다(addSymbol 주석 참고).
@@ -572,41 +526,17 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
   };
 
   /**
-   * unionSymbols 의 1일봉 커버리지 캐시(`symbolCoverage`)를 KRX 일봉 기준으로
-   * 다시 계산한다(스펙 2026-08-06 Task 5 리뷰에서 발견).
+   * `registerUniverseSymbols` 호출을 한 곳에 묶는다. 두 제출 경로가 같은 등록
+   * 전제를 공유하는데 복붙하면 한쪽만 고치고 잊기 쉽다(리뷰 finding, 2026-08-06).
    *
-   * `registerUniverseSymbols` 의 `addSymbol` 은 캐시를 건드리지 않는다 — 캐시는
-   * 오직 증권사 동기화(`BrokerSyncService.run`)나 CSV 가져오기가 끝난 뒤에만
-   * `refreshCoverage` 로 채워진다. 그런데 상장폐지 종목은 그 둘 중 어느 것도
-   * 겪지 않는다: 증권사는 상장폐지 종목의 과거 봉을 안 주고(이 기능 전체의
-   * 출발점), CSV 가져오기는 수동이다. 그 결과 `SymbolMasterBackfill` 이
-   * `krx_daily_bars` 를 이미 채웠어도 캐시는 영원히 "봉 없음" 으로 남아
-   * `missingCandleSymbolsOf` 와 가격 데이터 탭 모두 실제 데이터와 어긋난다 —
-   * Task 4 가 "자동 등록하면 가격 데이터 탭에서 상장폐지 종목도 보인다" 고 적은
-   * 전제가 이 갱신 없이는 성립하지 않는다.
+   * 커버리지 캐시 갱신은 더 없다. `CandleCoverageService` 는 캐시 없이
+   * `krx_daily_bars` 를 직접 집계해 갱신할 사본이 없다(Task 6).
    *
-   * `CompositeCandleRepository` 는 KR·1d 조합에서 KRX 테이블을 먼저 본다(있으면
-   * 그것만, 없으면 위임)이므로 이 갱신은 브로커 호출 없이 로컬 DB 읽기만으로
-   * 끝나고, 이미 증권사로 채워진 다른 슬라이스(예: 1m)는 건드리지 않는다.
-   * unionSymbols 규모는 `MAX_UNIVERSE_SYMBOLS` 로 상한이 있어(위저드 상위 N)
-   * 매 미리보기마다 순회해도 로컬 SQLite 읽기·쓰기 수준이라 무리가 없다.
+   * `POST /backtests`(신규 제출)에는 붙이지 않는다 — 위저드는 제출 전에 항상
+   * 미리보기를 거치므로 그때 이미 등록이 끝나 있다.
    */
-  const refreshKrxDailyCoverage = async (codes: readonly string[]): Promise<void> => {
-    for (const code of codes) {
-      await symbolService.refreshCoverage(code, 'KR', '1d');
-    }
-  };
-
-  /**
-   * `registerUniverseSymbols` + `refreshKrxDailyCoverage` 를 한 호출로 묶는다 — 두
-   * 제출 경로(미리보기, 원클릭 복제)가 같은 전제를 공유해야 하는데 복붙하면 한쪽만
-   * 고치고 잊기 쉽다(리뷰 finding, 2026-08-06). `POST /backtests`(신규 제출)에는
-   * 붙이지 않는다 — 위저드는 제출 전에 항상 미리보기를 거치므로 그때 이미 등록이
-   * 끝나 있다.
-   */
-  const ensureUniverseRegistered = async (resolved: ResolvedUniverse): Promise<void> => {
+  const ensureUniverseRegistered = (resolved: ResolvedUniverse): void => {
     registerUniverseSymbols(resolved);
-    await refreshKrxDailyCoverage(resolved.unionSymbols);
   };
 
   app.post('/backtests/universe-preview', { preHandler: requireAuth }, async (request, reply) => {
@@ -624,7 +554,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const rebalanceDates = computeRebalanceDates(period, rebalanceMonths);
     try {
       const resolved = await universeRuleResolver.resolve(universeRule, rebalanceDates);
-      await ensureUniverseRegistered(resolved);
+      ensureUniverseRegistered(resolved);
       return {
         schedule: resolved.schedule,
         unionSymbols: resolved.unionSymbols,
@@ -758,13 +688,11 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     // 재기준 후에도 새 제출이다 — POST 와 동일한 검증 관문을 거치고 버전을 다시 고정한다.
     let validated: Awaited<ReturnType<typeof validateSubmission>>;
     try {
-      // clone 은 위저드의 미리보기 화면을 거치지 않고 상세 화면에서 바로 제출한다 —
-      // `validateSubmission` 의 커버리지 검사(`resolveConsumedUniverse`)보다 먼저
-      // 여기서 unionSymbols 를 직접 등록·갱신해야 한다(ensureUniverseRegistered
-      // 주석 참고). 그렇지 않으면 미리보기를 한 번도 거치지 않은 종목(예: 리밸런스
-      // 시점 시총이 바뀌어 새로 topN 에 든 종목)이 실행은 되고도(§ checkPeriodCoverage
-      // 는 일부 종목만 데이터가 있어도 통과시킨다) 가격 데이터 탭에는 보이지 않는다.
-      await ensureUniverseRegistered(await resolveScheduleForRequest(cloneRequest));
+      // clone 은 위저드의 미리보기 화면을 거치지 않고 상세 화면에서 바로 제출한다.
+      // 여기서 unionSymbols 를 직접 등록해야 한다(ensureUniverseRegistered 주석 참고).
+      // 등록이 없어도 제출 자체는 통과한다 — 커버리지 검사는 이제 등록 여부와
+      // 무관하다(Task 6). 다만 그 종목은 가격 데이터 탭에 나타나지 않는다.
+      ensureUniverseRegistered(await resolveScheduleForRequest(cloneRequest));
       validated = await validateSubmission(cloneRequest);
     } catch (error) {
       if (sendIfKrxError(reply, error)) return reply;
