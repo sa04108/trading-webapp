@@ -80,9 +80,21 @@ export interface StockInfo {
   readonly sharesOutstanding: number | null;
 }
 
+/**
+ * `getStockInfo` 배치 조회 결과. "모른다"(stocks 에 없음)와 "못 물어봤다"(failedSymbols)
+ * 를 구분한다 — 청크 하나가 네트워크·레이트리밋으로 실패한 코드는 소스가 실제로
+ * 모르는 게 아니므로, 호출부(SymbolInfoService)가 이 둘을 다르게 다뤄야 한다
+ * (전자만 부정 캐시 대상이다).
+ */
+export interface StockInfoBatchResult {
+  readonly stocks: readonly StockInfo[];
+  /** 조회 자체가 실패해 결과를 알 수 없게 된 코드 — 다음 조회에서 재시도돼야 한다 */
+  readonly failedSymbols: readonly string[];
+}
+
 export interface StockInfoSource {
-  /** 코드 목록의 기본 정보 조회. 모르는 심볼은 결과에서 빠진다. */
-  getStockInfo(symbols: readonly string[]): Promise<StockInfo[]>;
+  /** 코드 목록의 기본 정보 조회. 성공한 조회에서 모르는 심볼은 stocks 에서 빠진다. */
+  getStockInfo(symbols: readonly string[]): Promise<StockInfoBatchResult>;
 }
 
 /** 현재가 스냅샷 — 시가총액 계산의 나머지 절반 */

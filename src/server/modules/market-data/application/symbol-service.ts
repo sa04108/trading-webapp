@@ -222,6 +222,28 @@ export class SymbolService {
   }
 
   /**
+   * 로컬 종목 마스터의 이름·시장 — `SymbolInfoService` 가 증권사 응답에 없는 코드를
+   * 메우는 폴백으로 쓴다 (유니버스 미리보기 자동 등록이 채워 둔 이름).
+   *
+   * 이름이 없는 행은 결과에서 뺀다 — 폴백은 "이름을 안다" 는 확신이 있을 때만 채워야
+   * 한다. code/name/market 만 읽는다 — 목록 화면(listSymbols)처럼 coverage·slice 까지
+   * 매번 긁으면, 조회 실패마다 불릴 수 있는 이 경로에서 낭비가 크다.
+   */
+  getLocalNames(codes: readonly string[]): Map<string, { name: string; market: Market }> {
+    const result = new Map<string, { name: string; market: Market }>();
+    if (codes.length === 0) return result;
+    const rows = this.db
+      .select({ code: symbolsTable.code, name: symbolsTable.name, market: symbolsTable.market })
+      .from(symbolsTable)
+      .where(inArray(symbolsTable.code, [...codes]))
+      .all();
+    for (const row of rows) {
+      if (row.name) result.set(row.code, { name: row.name, market: row.market as Market });
+    }
+    return result;
+  }
+
+  /**
    * 종목 제거 — 봉·커버리지·워터마크·버전을 함께 삭제한다.
    */
   async removeSymbols(codes: readonly string[]): Promise<void> {
