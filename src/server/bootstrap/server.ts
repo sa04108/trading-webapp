@@ -68,7 +68,6 @@ export async function buildServer(container: Container): Promise<FastifyInstance
         api,
         container.symbolService,
         container.symbolInfoService,
-        container.factsSyncEstimator,
         () => container.factRepository.symbolsWithFacts(),
         requireAuth,
       );

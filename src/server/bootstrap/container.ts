@@ -26,7 +26,7 @@ import {
   createSqliteUserRepository,
 } from '../modules/auth/infrastructure/sqlite-repositories.js';
 import { SymbolInfoService } from '../modules/market-data/application/symbol-info-service.js';
-import { SymbolService, type FactsSyncEstimate } from '../modules/market-data/application/symbol-service.js';
+import { SymbolService } from '../modules/market-data/application/symbol-service.js';
 import type { CandleRepository } from '../modules/market-data/application/ports.js';
 import { createTossMarketDataSource } from '../modules/broker/infrastructure/toss/toss-market-data-source.js';
 import { DuckDbService } from '../modules/market-data/infrastructure/duckdb-service.js';
@@ -35,7 +35,6 @@ import { StrategyRegistry } from '../modules/strategy/application/strategy-regis
 import { JobOrchestrator } from '../modules/backtest/application/job-orchestrator.js';
 import { JobQueue } from '../modules/backtest/application/job-queue.js';
 import { ResultsService } from '../modules/backtest/application/results-service.js';
-import { createFactsSyncEstimator } from './facts-wiring.js';
 import type { FactRepository } from '../modules/facts/application/ports.js';
 import { SqliteFactCoverageStore } from '../modules/facts/application/fact-coverage-store.js';
 import { FactSyncService } from '../modules/facts/application/fact-sync-service.js';
@@ -78,7 +77,6 @@ export interface Container {
   readonly resultsService: ResultsService;
   readonly factRepository: FactRepository;
   readonly factSyncService: FactSyncService;
-  readonly factsSyncEstimator: (codes: readonly string[]) => FactsSyncEstimate;
   readonly symbolMasterService: SymbolMasterService;
   readonly symbolMasterBackfill: SymbolMasterBackfill;
   readonly symbolMasterScheduler: SymbolMasterScheduler;
@@ -174,16 +172,10 @@ export function createContainer(config: AppConfig): Container {
   // 봉은 KRX 일봉 하나뿐이다 — 쓰기는 SymbolMasterService.ingestDate 가 종목 마스터
   // 이벤트와 같은 트랜잭션에서 직접 한다.
   const candleRepository = new KrxDailyCandleRepository(database.db);
-  // 종목이 데이터 소관이다 (설계 2026-07-31-symbol-as-first-class). 백테스트 버전 pin
-  // (§9.5)은 SymbolService.versionSnapshotFor 가 직접 낸다 — 구 DatasetService 는
-  // 데이터셋·스냅샷 개념과 함께 제거됐다(스펙 2026-08-05, Task 6).
-  const symbolService = new SymbolService(
-    database.db,
-    candleRepository,
-    clock,
-    logger,
-    auditLog,
-  );
+  // 종목 등록·이름·재무 버전 체인만 SymbolService 가 맡는다. 봉 수집·CSV 가져오기·
+  // 버전 pin(옛 versionSnapshotFor)은 이 커밋(Task 5, 2026-08-07-price-data-removal)
+  // 이 걷어냈다 — 이제 봉 저장소를 주입받지 않는다.
+  const symbolService = new SymbolService(database.db, clock, auditLog);
 
   // duckdb 는 위에서 만든 인스턴스를 재사용한다 — 새로 만들면 DuckDB 메모리 상한이
   // 두 배로 잡힌다
@@ -203,15 +195,6 @@ export function createContainer(config: AppConfig): Container {
     clock,
     factCoverageStore,
   );
-
-  // 재무 수집 실행 경로(factsPhase)는 브로커 동기화 잡과 함께 사라졌다(이 커밋) —
-  // 남은 건 추정 경로(factsSyncEstimator)뿐이다. 실제 수집은 CLI(facts:sync)가 맡는다.
-  const factsSyncEstimator = createFactsSyncEstimator({
-    dartApiKey: config.dartApiKey,
-    symbolService,
-    factCoverageStore,
-    clock,
-  });
 
   // 증권사 선택은 조립부 전용 지식 (§2.4) — 애플리케이션은 StockInfoSource 만 안다.
   // 자격 증명 미설정이면 어댑터가 포트 에러를 던지는 비활성 소스가 된다.
@@ -305,7 +288,6 @@ export function createContainer(config: AppConfig): Container {
     resultsService,
     factRepository,
     factSyncService,
-    factsSyncEstimator,
     symbolMasterService,
     symbolMasterBackfill,
     symbolMasterScheduler,

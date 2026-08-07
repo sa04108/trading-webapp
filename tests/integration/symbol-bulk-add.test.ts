@@ -63,7 +63,6 @@ describe('POST /symbols — 단건·일괄 공용 등록', () => {
     const res = await add(['005930']);
     const [symbol] = res.json().added as Array<Record<string, unknown>>;
     expect(symbol).toMatchObject({ code: '005930', market: 'KR', hasFacts: false });
-    expect(symbol!.slices).toHaveLength(2);
   });
 
   /**
