@@ -1145,7 +1145,23 @@ Expected: PASS
   실제 스키마 정리와 parquet·DuckDB 제거는 후속 계획에서 한다.
 ```
 
-- [ ] **Step 4: 사라진 것을 가리키는 주석을 쓸어낸다**
+- [ ] **Step 4: 웹에 남은 죽은 경로를 닫는다**
+
+Task 8 리뷰가 찾은 것이다. 전부 `src/web` 이고 사용자가 실제로 밟는 경로라 병합 전에 닫아야 한다.
+
+**사라진 서버 라우트를 부르는 코드** — `universe-rule-step.tsx:323, 327` 이 `POST /symbols/sync` 와 `GET /data-jobs/:id` 를 부른다. Task 3·5 가 지운 라우트다. 이 화면의 동기화 버튼은 눌러도 404 를 받는다. 봉 수집이 사라졌으므로 **그 UI 를 걷어내라** — 유니버스 규칙 단계에서 종목을 동기화한다는 개념 자체가 없어졌다.
+
+**없는 화면을 가리키는 링크·문구 4곳** — `/datasets/prices` 는 Task 8 이 지웠다:
+- `universe-rule-step.tsx:560` (링크)
+- `universe-rule-step.tsx:539` (본문 "가격 데이터 탭에서 CSV 로 직접 넣어야 한다")
+- `dashboard-page.tsx:130, 137` (링크 2개)
+
+링크는 지우거나 `/datasets/master` 로 돌리고, 문구는 새 현실에 맞게 고쳐라. CSV 가져오기는 없어졌으니 "CSV 로 직접 넣어라"는 안내는 거짓이다. 봉이 없는 종목을 어떻게 해야 하는지 — 종목 마스터 수집이 답이라면 그렇게 안내해라.
+
+Run: `grep -rn "symbols/metrics\|symbols/import\|symbols/sync\|data-jobs\|sync-estimate\|datasets/prices" src/web`
+Expected: 결과 없음
+
+- [ ] **Step 5: 사라진 것을 가리키는 주석을 쓸어낸다**
 
 컴파일러가 잡지 못하는 잔재다. 리뷰가 지목한 곳부터 확인한다:
 
@@ -1160,7 +1176,7 @@ Run: `grep -rn "BrokerSyncService\|MarketDataSource\|CompositeCandleRepository\|
 
 주석·문자열만 남았을 것이다. 사라진 것을 설명하는 주석은 지우고, 여전히 유효한 설명이면 새 구조에 맞게 고친다. 사용자에게 보이는 문자열(에러 메시지·UI 문구)에 "분봉"·"CSV 가져오기" 가 남아 있으면 특히 고쳐야 한다 — 없는 기능을 안내하게 된다.
 
-- [ ] **Step 5: 전체 검증**
+- [ ] **Step 6: 전체 검증**
 
 Run: `pnpm lint && pnpm typecheck && pnpm test && pnpm build`
 Expected: 전부 통과
@@ -1168,7 +1184,7 @@ Expected: 전부 통과
 Run: `grep -rn "parquet-candle\|composite-candle\|BrokerSync\|MarketDataSource\|DatasetSlice\|aggregateToHourly" src tests --include=*.ts --include=*.tsx`
 Expected: 결과 없음
 
-- [ ] **Step 6: 커밋**
+- [ ] **Step 7: 커밋**
 
 ```bash
 git add -A
