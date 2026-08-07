@@ -14,8 +14,6 @@ import type { Logger } from '../../../shared/logger.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
 import { MAX_BACKTEST_BARS } from '../../../shared/backtest-limits.js';
 import { SYMBOL_PATTERN, type Candle, type Market, type Timeframe } from '../domain/candle.js';
-import { aggregateToHourly } from '../domain/aggregate.js';
-import { computeCoverage } from '../domain/coverage.js';
 import {
   ALL_SLICES,
   coverageTimeframeForSlice,
@@ -24,13 +22,6 @@ import {
   type DatasetSlice,
 } from '../domain/dataset-slice.js';
 import { getSessionForMarket, hasMarketSession } from '../domain/exchange-session.js';
-import {
-  estimateMinuteBackfillBars,
-  MINUTE_BACKFILL_MAX_MONTHS,
-  minuteBackfillFloorTsMs,
-  recommendedMinuteMonths,
-} from '../domain/minute-backfill.js';
-import { parseCandleCsv } from './csv-parser.js';
 import type { CandleRepository } from './ports.js';
 
 /** 재무 버전 체인의 슬라이스 자리 — 재무는 봉 슬라이스 축이 없다 */

@@ -2,7 +2,7 @@ import type { Clock } from '../../../shared/clock.js';
 import type { Logger } from '../../../shared/logger.js';
 import { SYMBOL_PATTERN } from '../domain/candle.js';
 import {
-  MarketDataSourceNotConfiguredError,
+  StockInfoSourceNotConfiguredError,
   type StockInfo,
   type StockInfoSource,
 } from './ports.js';
@@ -66,7 +66,7 @@ export class SymbolInfoService {
           this.cache.set(symbol, { info: bySymbol.get(symbol) ?? null, cachedAtMs: now });
         }
       } catch (error) {
-        if (!(error instanceof MarketDataSourceNotConfiguredError)) {
+        if (!(error instanceof StockInfoSourceNotConfiguredError)) {
           this.logger.warn(
             { module: 'market-data', event: 'symbol-info.lookup.failed', err: error },
             'stock info lookup failed — returning cached names only',

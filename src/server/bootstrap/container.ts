@@ -25,9 +25,7 @@ import {
   createSqliteSessionRepository,
   createSqliteUserRepository,
 } from '../modules/auth/infrastructure/sqlite-repositories.js';
-import { BrokerSyncService } from '../modules/market-data/application/broker-sync-service.js';
 import { SymbolInfoService } from '../modules/market-data/application/symbol-info-service.js';
-import { SymbolMetricsService } from '../modules/market-data/application/symbol-metrics-service.js';
 import { SymbolService, type FactsSyncEstimate } from '../modules/market-data/application/symbol-service.js';
 import type { CandleRepository } from '../modules/market-data/application/ports.js';
 import { createTossMarketDataSource } from '../modules/broker/infrastructure/toss/toss-market-data-source.js';
@@ -37,7 +35,7 @@ import { StrategyRegistry } from '../modules/strategy/application/strategy-regis
 import { JobOrchestrator } from '../modules/backtest/application/job-orchestrator.js';
 import { JobQueue } from '../modules/backtest/application/job-queue.js';
 import { ResultsService } from '../modules/backtest/application/results-service.js';
-import { createFactsPhase, createFactsSyncEstimator } from './facts-wiring.js';
+import { createFactsSyncEstimator } from './facts-wiring.js';
 import type { FactRepository } from '../modules/facts/application/ports.js';
 import { SqliteFactCoverageStore } from '../modules/facts/application/fact-coverage-store.js';
 import { FactSyncService } from '../modules/facts/application/fact-sync-service.js';
@@ -73,9 +71,7 @@ export interface Container {
   readonly duckdb: DuckDbService;
   readonly candleRepository: CandleRepository;
   readonly symbolService: SymbolService;
-  readonly brokerSyncService: BrokerSyncService;
   readonly symbolInfoService: SymbolInfoService;
-  readonly symbolMetricsService: SymbolMetricsService;
   readonly strategyRegistry: StrategyRegistry;
   readonly jobQueue: JobQueue;
   readonly jobOrchestrator: JobOrchestrator;
@@ -189,9 +185,6 @@ export function createContainer(config: AppConfig): Container {
     auditLog,
   );
 
-  // 재무(facts) 블록은 brokerSyncService 보다 **앞에** 온다. BrokerSyncDeps 는 생성 시
-  // 고정이므로 factsPhase 가 그때 이미 있어야 한다 — 반대로 brokerSyncService 를 뒤로
-  // 미루면 바로 아래의 recoverInterrupted() 부팅 정리 경로가 깨진다.
   // duckdb 는 위에서 만든 인스턴스를 재사용한다 — 새로 만들면 DuckDB 메모리 상한이
   // 두 배로 잡힌다
   const factRepository = new ParquetFactRepository(config.dataRoot, duckdb);
@@ -211,12 +204,8 @@ export function createContainer(config: AppConfig): Container {
     factCoverageStore,
   );
 
-  // market-data ↔ facts 를 잇는 두 클로저는 facts-wiring.ts 에 있다 — 누적 처리와
-  // plan 값 그대로 넘기기가 타입으로 잡히지 않는 종류의 버그라 테스트가 겨눌 수 있는
-  // 자리에 두었다 (tests/unit/facts-wiring.test.ts).
-  // config.dartApiKey 가 없으면 factsPhase 를 만들지 않는다 → BrokerSyncService 가
-  // skipReason 을 남긴다.
-  const factsPhase = config.dartApiKey ? createFactsPhase({ factSyncService }) : undefined;
+  // 재무 수집 실행 경로(factsPhase)는 브로커 동기화 잡과 함께 사라졌다(이 커밋) —
+  // 남은 건 추정 경로(factsSyncEstimator)뿐이다. 실제 수집은 CLI(facts:sync)가 맡는다.
   const factsSyncEstimator = createFactsSyncEstimator({
     dartApiKey: config.dartApiKey,
     symbolService,
@@ -224,9 +213,9 @@ export function createContainer(config: AppConfig): Container {
     clock,
   });
 
-  // 증권사 선택은 조립부 전용 지식 (§2.4) — 애플리케이션은 MarketDataSource 만 안다.
+  // 증권사 선택은 조립부 전용 지식 (§2.4) — 애플리케이션은 StockInfoSource 만 안다.
   // 자격 증명 미설정이면 어댑터가 포트 에러를 던지는 비활성 소스가 된다.
-  const marketDataSource = createTossMarketDataSource(
+  const stockInfoSource = createTossMarketDataSource(
     config.tossClientId && config.tossClientSecret
       ? {
           baseUrl: config.tossBaseUrl,
@@ -236,44 +225,9 @@ export function createContainer(config: AppConfig): Container {
       : null,
     logger,
   );
-  const brokerSyncService = new BrokerSyncService({
-    db: database.db,
-    source: marketDataSource,
-    candleRepository,
-    symbolService,
-    clock,
-    logger,
-    audit: auditLog,
-    minFreeDiskBytes: config.syncMinFreeDiskMb * 1024 * 1024,
-    freeDiskBytes: () => {
-      const stats = fs.statfsSync(config.dataRoot);
-      return stats.bavail * stats.bsize;
-    },
-    // DART 미설정이면 키 자체를 뺀다 — `factsPhase: undefined` 로 넘기면 "주입했지만
-    // 값이 없다" 와 "주입하지 않았다" 가 호출부에서 구분되지 않는다
-    ...(factsPhase ? { factsPhase } : {}),
-    notify: (input) => safeNotify({ type: 'data-sync', ...input }),
-  });
   // 로컬 폴백(symbolService)을 함께 넘긴다 — 증권사가 모르거나 조회에 실패한 코드도
   // 종목 마스터가 채워 둔 이름이 있으면 그걸로 보여준다 (자격 증명 미설정 환경도 포함).
-  const symbolInfoService = new SymbolInfoService(marketDataSource, clock, logger, symbolService);
-  // 발행주식수는 이름과 같은 응답에 있다 — SymbolInfoService 를 넘겨 24시간 캐시를
-  // 나눠 쓴다. 소스를 직접 주면 /stocks 를 두 벌 부르게 된다.
-  const symbolMetricsService = new SymbolMetricsService(
-    symbolInfoService,
-    marketDataSource,
-    marketDataSource,
-    clock,
-    logger,
-  );
-  // 프로세스 재시작으로 고아가 된 동기화 잡 정리 — 이어받기는 재실행이 담당한다 (§13)
-  const interrupted = brokerSyncService.recoverInterrupted();
-  if (interrupted > 0) {
-    logger.warn(
-      { module: 'market-data', event: 'data.sync.interrupted', count: interrupted },
-      'recovered orphaned broker sync jobs',
-    );
-  }
+  const symbolInfoService = new SymbolInfoService(stockInfoSource, clock, logger, symbolService);
 
   // KRX 과거 시점 조회 (설계 2026-08-03-krx-historical-universe). API 키 미설정이면
   // 어댑터가 포트 에러를 던지는 비활성 소스가 된다 — 다른 데이터 경로와 같은 패턴
@@ -344,9 +298,7 @@ export function createContainer(config: AppConfig): Container {
     duckdb,
     candleRepository,
     symbolService,
-    brokerSyncService,
     symbolInfoService,
-    symbolMetricsService,
     strategyRegistry: new StrategyRegistry(),
     jobQueue,
     jobOrchestrator,
