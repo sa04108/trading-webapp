@@ -631,6 +631,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
         unionSymbols: resolved.unionSymbols,
         scheduleHash: resolved.scheduleHash,
         uncoveredDates: resolved.uncoveredDates,
+        // 리밸런스 날짜만 보는 uncoveredDates 와 달리 period 전체의 빈틈을 본다 —
+        // 위저드가 "기간 전체 동기화" 버튼을 띄울지 이 값으로 판정한다(운영 버그 fix).
+        periodCovered: universeRuleResolver.isPeriodCovered(period),
         missingCandleSymbols: missingCandleSymbolsOf(resolved.unionSymbols),
       };
     } catch (error) {

@@ -37,6 +37,12 @@ export interface UniversePreviewResponseDto {
   readonly unionSymbols: readonly string[];
   readonly scheduleHash: string;
   readonly uncoveredDates: readonly string[];
+  /**
+   * period.from~to 전체가 종목 마스터 coverage 로 빈틈없이 덮였는지 — uncoveredDates
+   * 는 리밸런스 날짜만 보므로, 리밸런스 날짜 사이 평일이 비어 있는 부분 커버리지는
+   * 이 값으로만 드러난다(운영 버그 fix — 아래 fullSyncNeeded 참고).
+   */
+  readonly periodCovered: boolean;
   readonly missingCandleSymbols: readonly string[];
 }
 
@@ -154,6 +160,35 @@ export function UniverseRuleStep({
       !sameUniverseParams(previewMutation.variables, currentParams));
 
   const canPreview = period.from !== '' && period.to !== '' && period.from <= period.to;
+
+  /**
+   * "기간 전체 동기화" 버튼의 주 해결책 조건 — uncoveredDates(리밸런스 날짜만) 뿐
+   * 아니라 periodCovered(기간 전체)·missingCandleSymbols(봉 없는 종목)도 본다.
+   * 리밸런스 날짜는 다 커버됐는데 그 사이 평일의 KRX 일봉이 비어 있으면
+   * uncoveredDates 는 빈 배열이라 이 버튼이 사라지고, 봉 없는 종목에 남는 유일한
+   * 선택지가 증권사 동기화뿐이 된다 — 상장폐지 종목은 증권사가 모르므로 반드시
+   * 404 로 실패한다(운영 버그). 조건을 넓혀 이 버튼이 항상 먼저 뜨게 한다.
+   */
+  const fullSyncNeeded =
+    preview !== null &&
+    (preview.uncoveredDates.length > 0 || !preview.periodCovered || preview.missingCandleSymbols.length > 0);
+
+  /** 위 fullSyncNeeded 가 뜬 이유를 우선순위대로 설명한다 — 리밸런스 날짜 > 기간 전체 > 종목 단위 */
+  const fullSyncReason = (result: UniversePreviewResponseDto): string => {
+    if (result.uncoveredDates.length > 0) {
+      return `종목 마스터가 리밸런스 날짜 ${result.uncoveredDates.length}개를 아직 커버하지 않습니다.`;
+    }
+    if (!result.periodCovered) {
+      return '기간 중 일부 날짜의 KRX 데이터가 아직 없습니다.';
+    }
+    return '일부 종목의 봉 데이터가 아직 없습니다.';
+  };
+
+  // 증권사 동기화는 기간이 완전히 커버된 뒤에도 여전히 봉이 없는 종목에만 보조로
+  // 남긴다 — 기간이 미커버인 동안 이 버튼을 보이면 사용자가 이 실패할 수밖에 없는
+  // 경로부터 밟게 된다(운영에서 실제로 재현된 순서).
+  const brokerSyncAvailable =
+    preview !== null && preview.periodCovered && preview.missingCandleSymbols.length > 0;
 
   const runPreview = (params: PreviewParams): void => {
     previewMutation.mutate(params);
@@ -448,16 +483,18 @@ export function UniverseRuleStep({
         </Card>
       ) : null}
 
-      {preview && preview.uncoveredDates.length > 0 ? (
+      {preview && fullSyncNeeded ? (
         <Alert variant="destructive" role="alert">
           <AlertDescription className="space-y-2">
             <p>
-              종목 마스터가 리밸런스 날짜 {preview.uncoveredDates.length}개를 아직 커버하지
-              않습니다 — 기간 전체를 동기화해야 미리보기를 완성할 수 있습니다.
+              {fullSyncReason(preview)} 기간 전체를 동기화해야 미리보기를 완성할 수 있습니다 —
+              봉이 없는 종목이 있을 때 먼저 시도할 방법입니다.
             </p>
-            <p className="text-xs tabular-nums opacity-80">
-              {preview.uncoveredDates.join(', ')}
-            </p>
+            {preview.uncoveredDates.length > 0 ? (
+              <p className="text-xs tabular-nums opacity-80">
+                {preview.uncoveredDates.join(', ')}
+              </p>
+            ) : null}
             <Button
               type="button"
               variant="outline"
@@ -483,12 +520,17 @@ export function UniverseRuleStep({
         </Alert>
       ) : null}
 
-      {preview && preview.missingCandleSymbols.length > 0 ? (
+      {preview && brokerSyncAvailable ? (
         <Alert variant="destructive" role="alert">
           <AlertDescription className="space-y-2">
             <p>다음 종목은 아직 봉 데이터가 없어 백테스트를 실행할 수 없습니다.</p>
             <p className="text-xs text-muted-foreground wrap-anywhere">
               {preview.missingCandleSymbols.join(', ')}
+            </p>
+            {/* 기간은 이미 다 커버됐는데도 남은 종목이다 — 누르기 전에 실패 가능성을
+                미리 알린다(운영 버그: 실패한 뒤에야 상장폐지를 알 수 있었다) */}
+            <p className="text-xs text-muted-foreground">
+              증권사 조회는 상장폐지 종목의 데이터를 주지 않아 실패할 수 있다
             </p>
             <Button
               type="button"

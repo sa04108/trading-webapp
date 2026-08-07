@@ -670,6 +670,32 @@ export class SymbolMasterService {
     return row !== undefined;
   }
 
+  /**
+   * [from, to] 구간 전체가 빈틈없이 수집 완료 구간으로 덮였는지 본다. `isCovered`
+   * 는 날짜 하나만 보므로, 리밸런스 날짜만 개별 동기화되고(예: `POST
+   * /symbol-master/sync` 로 날짜 하나씩) 그 사이 평일이 비어 있는 부분 커버리지를
+   * 잡아내지 못한다 — 이 틈은 `UniverseRuleResolver.resolve` 의 `uncoveredDates`
+   * (리밸런스 날짜만 게이트)도 못 본다. 그래서 위저드가 "기간 전체 동기화" 버튼을
+   * 띄울지는 이 메서드로 따로 판정한다(운영에서 확인된 버그: 리밸런스 날짜는 다
+   * 커버됐는데 그 사이 날짜의 KRX 일봉이 비어 있어, 남은 유일한 해결책처럼 보이는
+   * 증권사 동기화가 상장폐지 종목에서 반드시 404 로 실패했다).
+   *
+   * `coverageRanges()`(startDate 오름차순)를 그대로 재사용해 커서를 하루씩
+   * 전진시킨다 — `mergeCoverage` 가 하루씩 인접할 때만 이어 붙이므로, 부분
+   * 백필·개별 동기화가 남긴 여러 구간은 서로 떨어져 있을 수 있다. 구간과 구간
+   * 사이에 커서가 못 닿는 틈이 있으면 그 자리에서 false 로 끊는다.
+   */
+  isRangeCovered(from: string, to: string): boolean {
+    const ranges = this.coverageRanges().filter((range) => range.endDate >= from && range.startDate <= to);
+    let cursor = from;
+    for (const range of ranges) {
+      if (range.startDate > cursor) return false; // 이 구간 앞에 빈 날짜가 있다
+      if (range.endDate >= cursor) cursor = addCalendarDays(range.endDate, 1);
+      if (cursor > to) return true;
+    }
+    return cursor > to;
+  }
+
   /** [from, to] 구간의 이벤트 원본 row (id 포함) — effectiveDate, id 오름차순 */
   listEvents(from: string, to: string): SymbolMasterEventRow[] {
     return this.deps.db

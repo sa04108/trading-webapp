@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   krxDailyBars,
   symbolMasterCoverage,
+  symbolMasterMarketCaps,
   symbolMasterTradingDays,
   symbols as symbolsTable,
 } from '../../src/server/shared/db/schema.js';
@@ -73,6 +74,7 @@ describe('POST /backtests/universe-preview', () => {
       unionSymbols: string[];
       scheduleHash: string;
       uncoveredDates: string[];
+      periodCovered: boolean;
       missingCandleSymbols: string[];
     };
     expect(body.schedule).toEqual([
@@ -82,6 +84,8 @@ describe('POST /backtests/universe-preview', () => {
     expect(typeof body.scheduleHash).toBe('string');
     expect(body.scheduleHash.length).toBeGreaterThan(0);
     expect(body.uncoveredDates).toEqual([]);
+    // seedSymbolMasterUniverse 는 넓은 고정 구간([2000-01-01, 2099-12-31])으로 커버한다
+    expect(body.periodCovered).toBe(true);
     // 봉이 있는 종목이라 missingCandleSymbols 는 비어 있어야 한다
     expect(body.missingCandleSymbols).toEqual([]);
   });
@@ -100,10 +104,80 @@ describe('POST /backtests/universe-preview', () => {
     });
 
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { uncoveredDates: string[]; schedule: unknown[]; unionSymbols: string[] };
+    const body = res.json() as {
+      uncoveredDates: string[];
+      periodCovered: boolean;
+      schedule: unknown[];
+      unionSymbols: string[];
+    };
     expect(body.uncoveredDates).toEqual(['2026-01-05']);
+    expect(body.periodCovered).toBe(false);
     expect(body.schedule).toEqual([]);
     expect(body.unionSymbols).toEqual([]);
+  });
+
+  /**
+   * 운영에서 확인된 버그의 정확한 재현 조건 — 리밸런스 날짜(매달 5일) 3개는 모두
+   * 개별로 커버해 두되, 그 사이 평일은 전혀 커버하지 않는다. `uncoveredDates` 는
+   * 리밸런스 날짜만 보므로 빈 배열이 되어 예전 조건(`uncoveredDates.length > 0`)
+   * 이면 "기간 전체 동기화" 버튼이 사라졌다 — 그 상태에서 봉 없는 종목에 남는
+   * 유일한 해결책은 증권사 동기화뿐이었고, 상장폐지 종목은 증권사가 모르므로
+   * 반드시 404 로 실패했다. `periodCovered` 가 이 틈을 정확히 false 로 보고해야
+   * 위저드가 올바른 버튼을 계속 띄울 수 있다.
+   */
+  it('리밸런스 날짜는 전부 커버돼도 그 사이 기간이 비어 있으면 periodCovered 를 false 로 보고한다', async () => {
+    const rebalanceDates = ['2026-01-05', '2026-02-05', '2026-03-05'];
+    const entry = {
+      standardCode: 'KR7005930003',
+      shortCode: '005930',
+      name: '삼성전자',
+      market: 'KOSPI' as const,
+      sharesOutstanding: '1000000',
+      instrumentType: 'COMMON_STOCK' as const,
+      listedDate: null,
+    };
+    ctx.container.symbolMasterService.saveCheckpoint(
+      rebalanceDates[0]!,
+      new Map([[entry.standardCode, entry]]),
+      true,
+    );
+    for (const date of rebalanceDates) {
+      // 리밸런스 날짜 하나씩만 하루짜리 coverage 로 개별 동기화된 상태를 그대로
+      // 재현한다 — 기간 전체 백필이 아니라 날짜 단위 소급(POST /symbol-master/sync)
+      // 이 반복된 결과다.
+      ctx.container.database.db
+        .insert(symbolMasterCoverage)
+        .values({ startDate: date, endDate: date, syncedAtMs: ctx.container.clock.now() })
+        .run();
+      ctx.container.database.db.insert(symbolMasterTradingDays).values({ date }).run();
+      ctx.container.database.db
+        .insert(symbolMasterMarketCaps)
+        .values({ date, standardCode: entry.standardCode, marketCapKrw: '500000000000000' })
+        .run();
+    }
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: { markets: ['KOSPI'], topN: 10, sortKey: 'MKTCAP' },
+        period: { from: '2026-01-05', to: '2026-03-05' },
+        rebalanceMonths: 1,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      uncoveredDates: string[];
+      periodCovered: boolean;
+      schedule: unknown[];
+    };
+    // 리밸런스 날짜 3개(1/5, 2/5, 3/5) 는 모두 커버됐다 — 예전 조건이라면 여기서 버튼이 사라졌다.
+    expect(body.uncoveredDates).toEqual([]);
+    expect(body.schedule).toHaveLength(3);
+    // 그 사이(1/6~2/4, 2/6~3/4) 평일은 여전히 비어 있다 — periodCovered 가 이를 잡아야 한다.
+    expect(body.periodCovered).toBe(false);
   });
 
   it('종목 마스터에는 있지만 캔들이 없는 종목을 missingCandleSymbols 로 밝힌다', async () => {

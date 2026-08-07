@@ -41,6 +41,16 @@ export class UniverseRuleResolver {
   constructor(private readonly deps: UniverseRuleResolverDeps) {}
 
   /**
+   * period.from~to 전체가 종목 마스터 coverage 로 빈틈없이 덮였는지 본다. `resolve`
+   * 의 `uncoveredDates` 는 리밸런스 날짜만 보므로, 리밸런스 날짜 사이 평일이 비어
+   * 있는 부분 커버리지는 이 메서드로 따로 잡아야 한다(symbol-master-service.ts
+   * `isRangeCovered` 주석 — 운영에서 확인된 버그의 정확한 원인).
+   */
+  isPeriodCovered(period: { readonly from: string; readonly to: string }): boolean {
+    return this.deps.symbolMaster.isRangeCovered(period.from, period.to);
+  }
+
+  /**
    * 리밸런스 날짜별로 유니버스 규칙을 적용해 멤버십 일정을 만든다.
    *
    * 날짜별로 isCovered 와 effectiveTradingDateWithinCoverage 를 둘 다 확인한다.
