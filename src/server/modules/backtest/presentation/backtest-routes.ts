@@ -23,7 +23,10 @@ import type { ConsumedVersionSnapshot, SymbolService } from '../../market-data/a
 import { KrxNotConfiguredError, KrxQuotaError } from '../../market-data/application/ports.js';
 import { SymbolMasterNotCoveredError } from '../../market-data/application/symbol-master-service.js';
 import { KRX_FILTER_POLICY_VERSION } from '../../market-data/domain/krx-filter-policy.js';
-import type { CandleCoverageService } from '../../market-data/application/candle-coverage-service.js';
+import type {
+  CandleCoverageRow,
+  CandleCoverageService,
+} from '../../market-data/application/candle-coverage-service.js';
 import type { StrategyRegistry } from '../../strategy/application/strategy-registry.js';
 import { estimateBars, MAX_BACKTEST_BARS } from '../domain/bar-estimate.js';
 import {
@@ -180,6 +183,22 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
   } = deps;
 
   /**
+   * 등록되지 않은 종목은 봉이 있어도 없는 것으로 취급한다(리뷰 finding, 2026-08-08).
+   * `krx_daily_bars` 는 `symbols` 등록과 무관하게 채워지므로 `candleCoverage` 를
+   * 그대로 쓰면 미등록 종목도 제출을 통과한다.
+   *
+   * 예전 `symbol_coverage` 캐시는 등록된 종목만 채워졌으므로 이 게이트는 캐시의
+   * 부작용으로 공짜로 따라왔다. 캐시를 걷어낸 지금은 의도를 코드로 직접 말해야 한다.
+   *
+   * 이 게이트가 없으면 미등록 유니버스가 제출 시점(400) 이 아니라 큐 소비 후
+   * 워커(`backtest-child.ts`)에서 늦게 죽는다.
+   */
+  const registeredCoverage = (codes: readonly string[]): CandleCoverageRow[] =>
+    candleCoverage.getCoverage(codes).map((row) =>
+      symbolService.exists(row.code) ? row : { code: row.code, firstTsMs: null, lastTsMs: null, barCount: 0 },
+    );
+
+  /**
    * 기간 × 커버리지 검사 (D-025). 커버리지는 메타데이터라 Parquet 을 읽지 않는다.
    * 요청한 종목 **전부** 가 구간 밖일 때만 거부한다 — 신규 상장처럼 이력이 짧은 종목
    * 하나 때문에 유니버스 전체를 막지 않는다. 일부만 비는 경우는 실행 경고로 남는다.
@@ -194,9 +213,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     period: { from: string; to: string },
   ): string | null => {
     const { fromTsMs, toTsMs } = periodToTsRange(period);
-    const bySymbol = new Map(
-      candleCoverage.getCoverage(codes).map((row) => [row.code, row]),
-    );
+    const bySymbol = new Map(registeredCoverage(codes).map((row) => [row.code, row]));
 
     const ranges: string[] = [];
     for (const symbol of codes) {
@@ -229,9 +246,20 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     coverageCheck: (codes: readonly string[]) => string | null,
   ): { universe: ConsumedVersionSnapshot; timeframe: '1d' } | null => {
     const consumed = '1d' as const;
-    const hasData = candleCoverage
-      .getCoverage(codes)
-      .some((row) => row.barCount > 0);
+
+    // 유니버스 전체가 미등록이면 여기서 먼저 끊는다(리뷰 finding, 2026-08-08).
+    // registeredCoverage 만 쓰면 이 경우도 "일봉이 없습니다" 로 뭉뚱그려진다.
+    // krx_daily_bars 는 등록과 무관해 실제로는 봉이 있을 수 있으므로, 원인을
+    // 등록 누락으로 정확히 짚어 준다.
+    if (codes.length > 0 && codes.every((code) => !symbolService.exists(code))) {
+      errors.push(
+        `선택한 종목이 등록돼 있지 않습니다: ${codes.join(', ')} — 유니버스 미리보기를 ` +
+          '실행해 종목을 등록한 뒤 다시 제출하세요.',
+      );
+      return null;
+    }
+
+    const hasData = registeredCoverage(codes).some((row) => row.barCount > 0);
     if (!hasData) {
       errors.push('선택한 종목에 수집된 일봉이 없습니다 — 종목 마스터 수집을 먼저 실행하세요.');
       return null;
@@ -249,7 +277,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     // 봉 수 상한 — 실행부는 전체 봉을 메모리에 올린다.
     const { fromTsMs, toTsMs } = periodToTsRange(body.period);
     const estimated = estimateBars(
-      candleCoverage.getCoverage(codes).map((row) => ({ ...row, symbol: row.code })),
+      registeredCoverage(codes).map((row) => ({ ...row, symbol: row.code })),
       codes,
       fromTsMs,
       toTsMs,

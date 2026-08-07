@@ -538,3 +538,79 @@ describe('POST /backtests/:id/clone — 유니버스 자동 등록 (미리보기
     expect(dailySlice?.barCount).toBe(1);
   });
 });
+
+/**
+ * 리뷰 finding(2026-08-08): `checkPeriodCoverage`/`resolveConsumedUniverse` 가
+ * `candleCoverage`(원시 `krx_daily_bars`)만 보고 `symbolService.exists` 를 보지
+ * 않으면, 유니버스 전체가 미등록이어도 봉만 있으면 제출이 통과해 버린다. 그러면
+ * 큐 슬롯을 먹은 뒤 `backtest-child.ts` 가 "유니버스 종목이 등록돼 있지 않습니다"
+ * 로 늦게 죽는다 — 제출 시점에 빨리 거부하는 옛 동작(캐시가 등록 종목만 채워졌던
+ * 시절의 부작용)을 명시적인 검사로 되살렸는지 이 테스트가 지킨다.
+ *
+ * `registerSymbols` 를 의도적으로 부르지 않는다 — `krx_daily_bars` 는 백필이 이미
+ * 채워 뒀다고 가정하지만 `symbols` 등록은 한 번도 거치지 않은 상태를 재현한다.
+ */
+describe('POST /backtests — 미등록 유니버스는 제출 시점에 거부된다 (리뷰 finding, 2026-08-08)', () => {
+  const date = '2026-01-05';
+  const UNREGISTERED_CODE = '900099';
+
+  let ctx: TestApp;
+  let cookie: string;
+
+  beforeEach(async () => {
+    ctx = await createTestApp();
+    const { username, password } = await createTestAdmin(ctx.container);
+    const login = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { username, password },
+    });
+    cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+
+    seedSymbolMasterUniverse(ctx.container, [date], [
+      {
+        standardCode: 'KR7900099005',
+        shortCode: UNREGISTERED_CODE,
+        name: '미등록테스트',
+        market: 'KOSPI',
+        marketCapKrw: '500000000000000',
+      },
+    ]);
+
+    // krx_daily_bars 에는 봉이 있다 — 등록 게이트가 아니라면 이 봉만으로 제출이
+    // 통과해 버린다는 것을 보여주려는 픽스처다.
+    ctx.container.database.db
+      .insert(krxDailyBars)
+      .values({
+        shortCode: UNREGISTERED_CODE,
+        date,
+        market: 'KOSPI',
+        open: 1_000,
+        high: 1_100,
+        low: 900,
+        close: 1_050,
+        volume: 12_345,
+      })
+      .run();
+  });
+
+  afterEach(async () => {
+    await ctx.close();
+  });
+
+  it('종목이 봉을 갖고 있어도 하나도 등록돼 있지 않으면 400 이다', async () => {
+    expect(ctx.container.symbolService.exists(UNREGISTERED_CODE)).toBe(false);
+
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: { ...buildRequest(1), period: { from: date, to: date } },
+    });
+
+    expect(created.statusCode).toBe(400);
+    expect((created.json() as { error: string }).error).toContain('등록');
+    // 큐에 남지 않아야 한다 — 늦게 죽는 게 아니라 애초에 들어가지 않아야 한다.
+    expect(ctx.container.jobQueue.countByStatus(['QUEUED'])).toBe(0);
+  });
+});

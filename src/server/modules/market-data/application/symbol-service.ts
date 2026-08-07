@@ -15,8 +15,15 @@ export interface SymbolSummary {
   readonly name: string | null;
 }
 
-/** 재무 버전 체인의 슬라이스 자리 — `FactSyncService` 의 같은 이름 상수와 값이 같아야 한다 */
-const FACTS_SLICE = 'FACTS';
+/**
+ * 재무 버전 체인의 슬라이스 자리. `facts` 모듈(`fact-sync-service.ts`)이 이 값을
+ * import 해서 쓴다.
+ *
+ * market-data 는 facts 를 몰라도 되지만(§7), facts 는 market-data 를 이미 안다
+ * (예: `exchange-session.js`) — 그래서 원천을 여기 하나로 두고, 손으로 맞추던
+ * 중복 상수를 없앴다(리뷰 finding, 2026-08-08).
+ */
+export const FACTS_SLICE = 'FACTS';
 
 /** 실행이 소비한 (종목, 축, 버전, 해시) 한 칸 — §9.5 재현성 스냅샷의 구성 요소 */
 export interface ConsumedVersionEntry {
@@ -179,9 +186,18 @@ export class SymbolService {
    * 동기화가 끼어들어도 실행이 소비한 버전이 어긋나지 않게 한다.
    *
    * 재무(FACTS_SLICE) 축 하나만 담는다. 봉은 예전에 CSV 가져오기·증권사 동기화가
-   * 버전을 올렸지만 그 경로가 Task 5 에서 사라졌고, krx_daily_bars 는 종목별 버전을
+   * 버전을 올렸지만, 그 경로는 Task 5 에서 사라졌다. krx_daily_bars 는 종목별 버전을
    * 매기지 않는 공유 원천이라 고정할 대상이 없다. 버전이 없는 종목도 version 0 으로
    * 남긴다 — "아직 수집 안 됨" 도 입력 상태의 일부다.
+   *
+   * **미해결 gap(리뷰 finding, 2026-08-08).** 이 pin 은 재무 축만 덮고 봉 축은
+   * 덮지 않는다. `SymbolMasterService.writeDailyBars` 는 `onConflictDoUpdate` 로
+   * 이미 적재된 날짜의 OHLCV 를 덮어쓴다 — 재수집·정정은 설계된 정상 동작이다.
+   * 그런데 그 갱신은 종목 버전을 올리지 않으므로, 제출 이후 봉이 바뀌어도
+   * `backtest-child.ts` 의 드리프트 경고가 이를 감지하지 못한다. 대기 중인
+   * 백테스트의 입력이 조용히 바뀔 수 있다는 뜻이다. Task 6 이 만든 구멍은 아니다
+   * — KRX 일봉은 슬라이스 축이 있던 시절에도 버전 계보를 가진 적이 없었다.
+   * 별도 설계 과제로 남는다.
    */
   versionSnapshotFor(codes: readonly string[]): ConsumedVersionSnapshot {
     const uniqueCodes = [...new Set(codes)].sort();

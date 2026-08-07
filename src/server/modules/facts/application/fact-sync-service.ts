@@ -3,9 +3,10 @@ import type { Clock } from '../../../shared/clock.js';
 import type { Logger } from '../../../shared/logger.js';
 import type { Fact } from '../domain/fact.js';
 import { planFactSync, type FactSyncMode } from '../domain/sync-plan.js';
-
-/** 재무 버전 체인의 슬라이스 자리 — market-data 의 FACTS_SLICE 와 같은 값이어야 한다 */
-const FACTS_SLICE = 'FACTS';
+// 원천은 market-data(symbol-service.ts) 쪽이다 — market-data 는 facts 를 몰라도
+// 되지만(§7) facts 는 이미 market-data 를 안다(예: exchange-session.js 사용).
+// 손으로 맞추던 중복 상수를 없앴다(리뷰 finding, 2026-08-08).
+import { FACTS_SLICE } from '../../market-data/application/symbol-service.js';
 import type { FactCoverageStore } from './fact-coverage-store.js';
 import type {
   FactIngestionGap,
