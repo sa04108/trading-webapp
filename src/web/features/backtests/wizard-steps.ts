@@ -25,6 +25,33 @@ import type { WizardFormState } from './prefill.js';
  */
 export const WIZARD_STEPS = ['전략', '기간', '유니버스', '자본·비용', '검토', '실행'] as const;
 
+/**
+ * URL 에 쓰는 단계 이름. 화면 라벨(`WIZARD_STEPS`)에서 만들지 않는다 — 라벨은 문구라
+ * 언제든 바뀌고, 바뀌면 공유된 옛 링크가 죽는다. 순서는 `WIZARD_STEPS` 와 같고, 두
+ * 배열의 길이가 같은지는 단위 테스트가 지킨다.
+ */
+export const WIZARD_STEP_SLUGS = [
+  'strategy',
+  'period',
+  'universe',
+  'capital',
+  'review',
+  'run',
+] as const;
+
+export type WizardStepSlug = (typeof WIZARD_STEP_SLUGS)[number];
+
+/** 범위 밖 인덱스는 첫 단계로 접는다 — 호출부가 따로 실패를 다루지 않게 한다 */
+export function stepSlug(index: number): WizardStepSlug {
+  return WIZARD_STEP_SLUGS[index] ?? WIZARD_STEP_SLUGS[0];
+}
+
+/** 모르는 slug 는 null. 호출부(위저드)가 첫 단계로 되돌린다 */
+export function stepIndexOf(slug: string | undefined): number | null {
+  const index = (WIZARD_STEP_SLUGS as readonly string[]).indexOf(slug ?? '');
+  return index === -1 ? null : index;
+}
+
 const REVIEW_LABEL = '검토';
 
 /** 앞으로 한 번에 갈 수 있는 마지막 단계 */
@@ -121,6 +148,12 @@ export function firstIncompleteStep(state: StepGateState): number {
   return WIZARD_STEPS.findIndex((_, index) => stepBlocker(index, state) !== null);
 }
 
+/** 앞으로 갈 수 있는 상한. 현재 단계를 근거로 삼지 않는 순수한 값이다 */
+function forwardStepLimit(state: StepGateState): number {
+  const blocked = firstIncompleteStep(state);
+  return Math.min(blocked === -1 ? REVIEW_STEP : blocked, REVIEW_STEP);
+}
+
 /**
  * 지금 버튼으로 갈 수 있는 마지막 단계.
  *
@@ -128,9 +161,24 @@ export function firstIncompleteStep(state: StepGateState): number {
  * 상한이다. 현재 단계는 언제나 포함된다 — 뒤로 갈 길은 막지 않는다.
  */
 export function navigableStepLimit(currentStep: number, state: StepGateState): number {
-  const blocked = firstIncompleteStep(state);
-  const forward = Math.min(blocked === -1 ? REVIEW_STEP : blocked, REVIEW_STEP);
-  return Math.max(currentStep, forward);
+  return Math.max(currentStep, forwardStepLimit(state));
+}
+
+/**
+ * URL 이 가리켜도 되는 최대 단계.
+ *
+ * `navigableStepLimit` 을 쓸 수 없는 이유: 그쪽은 현재 단계를 항상 통과시킨다(이미
+ * 지나온 곳은 다시 검사하지 않는다는 규칙 1). 딥링크·새로고침으로 도착한 단계는
+ * 지나온 곳이 아니라서 그 근거가 없다 — 앞으로의 상한만 본다.
+ *
+ * `reviewPassed` 가 필요한 건 실행 단계 때문이다. 앞으로의 상한은 검토까지라서(규칙 2)
+ * 이것만으로 클램프하면 검토에서 '다음' 을 눌러 정당하게 도착한 실행 단계도 매번
+ * 검토로 튕긴다. 위저드가 그 통과 사실만 기억해 넘긴다. 새로고침하면 false 로
+ * 돌아가므로 실행 단계 URL 을 직접 여는 길은 여전히 막힌다.
+ */
+export function reachableStepFromUrl(state: StepGateState, reviewPassed: boolean): number {
+  const forward = forwardStepLimit(state);
+  return reviewPassed && forward === REVIEW_STEP ? RUN_STEP : forward;
 }
 
 /**

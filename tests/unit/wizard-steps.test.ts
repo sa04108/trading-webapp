@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest';
 import {
   firstIncompleteStep,
   navigableStepLimit,
+  reachableStepFromUrl,
   REVIEW_STEP,
   RUN_STEP,
   stepBlocker,
+  stepIndexOf,
   stepJumpBlockReason,
+  stepSlug,
+  WIZARD_STEP_SLUGS,
   WIZARD_STEPS,
   type StepGateState,
 } from '../../src/web/features/backtests/wizard-steps.js';
@@ -265,5 +269,47 @@ describe('symbolsWithFacts 계약 — 모르는 종목이 섞이면 undefined', 
 
   it('응답 자체가 없으면 undefined', () => {
     expect(derive(selected, undefined)).toBeUndefined();
+  });
+});
+
+describe('단계 slug', () => {
+  it('라벨과 개수가 같다 — 어긋나면 URL 이 다른 단계를 가리킨다', () => {
+    expect(WIZARD_STEP_SLUGS).toHaveLength(WIZARD_STEPS.length);
+  });
+
+  it('인덱스 → slug → 인덱스 왕복이 제자리로 돌아온다', () => {
+    WIZARD_STEPS.forEach((_, index) => {
+      expect(stepIndexOf(stepSlug(index))).toBe(index);
+    });
+  });
+
+  it('범위 밖 인덱스는 첫 단계 slug 다', () => {
+    expect(stepSlug(-1)).toBe('strategy');
+    expect(stepSlug(WIZARD_STEPS.length)).toBe('strategy');
+  });
+
+  it('모르는 slug 와 undefined 는 null 이다 — 호출부가 첫 단계로 되돌린다', () => {
+    expect(stepIndexOf('헛것')).toBeNull();
+    expect(stepIndexOf('')).toBeNull();
+    expect(stepIndexOf(undefined)).toBeNull();
+  });
+});
+
+describe('reachableStepFromUrl', () => {
+  it('빈 폼으로는 첫 단계까지만 — 딥링크는 현재 단계를 근거로 삼지 못한다', () => {
+    expect(reachableStepFromUrl(empty, false)).toBe(0);
+  });
+
+  it('전 단계를 통과해도 검토를 지나지 않았으면 검토가 상한이다', () => {
+    expect(reachableStepFromUrl(complete, false)).toBe(REVIEW_STEP);
+  });
+
+  it('검토를 눈으로 지난 뒤에만 실행 단계에 닿는다', () => {
+    expect(reachableStepFromUrl(complete, true)).toBe(RUN_STEP);
+  });
+
+  it('검토를 지났더라도 앞 단계가 무너지면 그 단계로 내려간다', () => {
+    const brokenPeriod: StepGateState = { ...complete, from: '', to: '' };
+    expect(reachableStepFromUrl(brokenPeriod, true)).toBe(1);
   });
 });
