@@ -2,6 +2,7 @@ import { createBrowserRouter } from 'react-router';
 import { LoginPage } from '../features/auth/login-page';
 import { BacktestDetailPage } from '../features/backtests/backtest-detail-page';
 import { BacktestsPage } from '../features/backtests/backtests-page';
+import { NewBacktestEntry } from '../features/backtests/new-backtest-entry';
 import { NewBacktestWizard } from '../features/backtests/new-backtest-wizard';
 import { DashboardPage } from '../features/dashboard/dashboard-page';
 import { DataPage } from '../features/datasets/data-page';
@@ -21,7 +22,8 @@ export const router = createBrowserRouter([
         children: [
           { index: true, element: <DashboardPage /> },
           { path: 'backtests', element: <BacktestsPage /> },
-          { path: 'backtests/new', element: <NewBacktestWizard /> },
+          { path: 'backtests/new', element: <NewBacktestEntry /> },
+          { path: 'backtests/new/:step', element: <NewBacktestWizard /> },
           { path: 'backtests/:id', element: <BacktestDetailPage /> },
           { path: 'datasets', element: <DataPage /> },
           { path: 'notifications', element: <NotificationsPage /> },

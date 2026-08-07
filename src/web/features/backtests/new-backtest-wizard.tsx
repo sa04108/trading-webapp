@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -44,10 +44,13 @@ import type { UniverseRule } from '../../../shared/schemas/universe-rule.js';
 import type { BacktestRequestBody } from './types';
 import {
   navigableStepLimit,
+  reachableStepFromUrl,
   REVIEW_STEP,
   RUN_STEP,
   stepBlocker,
+  stepIndexOf,
   stepJumpBlockReason,
+  stepSlug,
   WIZARD_STEPS,
   type StepGateState,
 } from './wizard-steps';
@@ -84,7 +87,16 @@ const DEFAULT_UNIVERSE_RULE: UniverseRule = { markets: ['KOSPI'], topN: 200, sor
 
 export function NewBacktestWizard() {
   const navigate = useNavigate();
-  const [step, setStep] = useState(0);
+  const params = useParams();
+  const location = useLocation();
+  /**
+   * 단계의 출처는 URL 이다. state 로도 들고 있으면 뒤로가기가 URL 만 바꾸고 state 는
+   * 낡은 값으로 남는 경합이 생긴다. 모르는 slug 는 첫 단계로 접고, 아래 클램프 effect 가
+   * URL 도 함께 바로잡는다.
+   */
+  const step = stepIndexOf(params.step) ?? 0;
+  /** 검토 화면을 눈으로 지났는지 — 제출 화면에 URL 로 바로 들어오는 길을 막는다 */
+  const [reviewPassed, setReviewPassed] = useState(false);
   const [strategyId, setStrategyId] = useState<string | null>(null);
   const [parameters, setParameters] = useState<Record<string, string>>({});
   // 소비 봉 주기 — '' 는 아직 정해지지 않음(프리필 초기값이거나 유니버스 미리보기 전).
@@ -390,21 +402,32 @@ export function NewBacktestWizard() {
   };
   const navLimit = navigableStepLimit(step, gate);
 
+  /**
+   * 단계 이동은 모두 push 다 — 이동 하나가 이력 한 칸을 차지해야 뒤로가기가 직전
+   * 이동을 되돌린다. `location.search` 를 이어붙여 `?from=` 복제 맥락을 유지한다.
+   */
+  const goToSlug = (target: number, options?: { replace?: boolean }): void => {
+    void navigate(
+      { pathname: `/backtests/new/${stepSlug(target)}`, search: location.search },
+      options,
+    );
+  };
+
   const goNext = (): void => {
     const error = stepBlocker(step, gate);
     if (error) {
       setStepError(error);
       return;
     }
-    setStepError(null);
-    setStep((s) => Math.min(s + 1, RUN_STEP));
+    // 검토를 지났다는 사실을 여기서만 세운다 — 실행 단계 URL 의 유일한 열쇠다
+    if (step === REVIEW_STEP) setReviewPassed(true);
+    goToSlug(Math.min(step + 1, RUN_STEP));
   };
 
   // 상단 버튼으로 바로 이동. 잠긴 단계는 여기 오지 않는다(호출부가 이유를 띄운다)
   const goToStep = (target: number): void => {
     if (target === step || target < 0 || target > navLimit) return;
-    setStepError(null);
-    setStep(target);
+    goToSlug(target);
   };
 
   const request = step >= REVIEW_STEP ? buildRequest() : null;
@@ -423,6 +446,27 @@ export function NewBacktestWizard() {
   // 프리필 중에는 폼을 감춘다 — 입력하던 값이 프리필에 덮이는 경합을 없앤다
   const prefilling =
     sourceJobId !== null && prefilledFrom.current !== sourceJobId && !prefillError;
+
+  /**
+   * URL 이 갈 수 없는 단계를 가리키면 갈 수 있는 마지막 단계로 되돌린다. `replace` 라서
+   * 튕겨 나온 단계가 이력에 남지 않는다 — 남으면 뒤로가기가 그 단계로 돌아가 다시 튕긴다.
+   *
+   * `prefilling` 중에는 보류한다: 복제 초안이 도착하기 전의 빈 게이트를 근거로 삼으면
+   * 곧 채워질 폼을 이유 없이 버린다.
+   */
+  const reachable = reachableStepFromUrl(gate, reviewPassed);
+  useEffect(() => {
+    if (prefilling) return;
+    if (stepIndexOf(params.step) === null || step > reachable) {
+      goToSlug(reachable, { replace: true });
+    }
+  }, [params.step, step, reachable, prefilling]);
+
+  // 단계가 바뀌면 앞 단계의 오류 문장을 지운다. 단계의 출처가 URL 이므로 이동 함수가
+  // 아니라 단계 변화에 매단다 — 뒤로가기로 온 이동도 같이 걸린다.
+  useEffect(() => {
+    setStepError(null);
+  }, [step]);
 
   return (
     <div className="mx-auto max-w-2xl space-y-4">
