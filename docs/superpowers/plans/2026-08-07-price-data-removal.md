@@ -842,6 +842,8 @@ Expected: PASS (3 tests)
 
 `refreshKrxDailyCoverage`(589행 근처)를 삭제한다 — 캐시가 없으니 갱신할 대상이 없다.
 
+552행과 589행 근처 주석이 `CompositeCandleRepository` 를 이름으로 가리킨다. Task 2 가 그 클래스를 지웠으니 없는 클래스를 가리키는 설명이 남아 있다 — 주석을 새 구조에 맞게 고치거나, 그 주석이 설명하던 코드가 함께 사라졌으면 주석도 지운다.
+
 - [ ] **Step 6: container 에 서비스를 조립한다**
 
 `src/server/bootstrap/container.ts` 에 추가한다:
@@ -878,8 +880,39 @@ git commit -m "refactor(backtests): 커버리지를 KRX 일봉에서 직접 구�
 - Delete: `tests/integration/backtest-minute-dataset.test.ts`
 - Modify: `tests/unit/strategy-data-requirement.test.ts`
 - Modify: `tests/integration/backtest-universe-rule-run.test.ts`, `tests/integration/market-data.test.ts`
+- Modify: `tests/integration/backtest-facts-worker.test.ts:118, 221, 349`
 
 웹 전용 테스트(`job-timeframe.test.ts`, `dataset-slices.test.ts`)는 Task 8 에서 다룬다.
+
+`backtest-facts-worker.test.ts` 는 세 곳에서 `ctx.container.candleRepository.saveCandles(...)` 로 봉을 심는데, Task 2 가 포트에서 그 메서드를 없앴다. 저장소에 쓰기 경로가 없으므로 **`krx_daily_bars` 에 직접 넣는 방식으로 바꾼다** — 봉 쓰기의 유일한 주인이 `SymbolMasterService.ingestDate` 라는 사실을 테스트도 따른다.
+
+헬퍼를 하나 만들어 세 곳이 함께 쓴다:
+
+```ts
+import { krxDailyBars } from '../../src/server/shared/db/schema.js';
+
+/** tsMs(UTC 자정) 기준 봉을 krx_daily_bars 행으로 바꿔 넣는다 — 저장소에 쓰기 경로가 없다 */
+function seedDailyBars(db: AppDatabase, candles: readonly Candle[]): void {
+  const rows = candles.map((candle) => ({
+    shortCode: candle.symbol,
+    date: new Date(candle.tsMs).toISOString().slice(0, 10),
+    market: 'KOSPI',
+    open: candle.open,
+    high: candle.high,
+    low: candle.low,
+    close: candle.close,
+    volume: candle.volume,
+  }));
+  for (let i = 0; i < rows.length; i += 500) {
+    db.insert(krxDailyBars)
+      .values(rows.slice(i, i + 500))
+      .onConflictDoNothing()
+      .run();
+  }
+}
+```
+
+기존 봉 생성 헬퍼(`candles(40)`, `splitScenarioCandles(119)`)가 만드는 `tsMs` 가 UTC 자정이 아니면 날짜가 밀린다. 헬퍼를 먼저 읽고, 자정이 아니면 그 헬퍼가 자정을 내도록 고쳐라 — 일봉의 tsMs 규약이 UTC 자정이기 때문이다.
 
 - [ ] **Step 1: 1m 전용 통합 테스트를 지운다**
 
