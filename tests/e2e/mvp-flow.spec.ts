@@ -344,10 +344,10 @@ test('full MVP flow', async ({ page }) => {
   ).toHaveCount(0);
 
   // 8. 데이터 화면 — 가격 데이터 탭 (종목 마스터 탭은 tests/e2e/symbol-master.spec.ts 가 다룬다)
-  await page.goto('/datasets?tab=prices');
-  await expect(page.getByRole('tab', { name: '가격 데이터' })).toHaveAttribute(
-    'aria-selected',
-    'true',
+  await page.goto('/datasets/prices');
+  await expect(page.getByRole('link', { name: '가격 데이터' })).toHaveAttribute(
+    'aria-current',
+    'page',
   );
   // 픽스처는 1m CSV 라 분봉만 데이터가 있다 — 「봉 있음」 하나로 접으면 숨는 사실이다.
   await expect(page.getByText('삼성전자')).toBeVisible();
@@ -594,7 +594,7 @@ test('symbol sort explains itself without quotes when broker metrics are unavail
   await page.getByRole('button', { name: '로그인' }).click();
   await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
 
-  await page.goto('/datasets?tab=prices');
+  await page.goto('/datasets/prices');
   const sort = page.getByRole('combobox', { name: '종목 정렬' });
   await expect(sort).toHaveText('가나다순');
   await expect(page.getByText(/증권사 시세를 받지 못해 규모 정렬을 쓸 수 없습니다/)).toBeVisible();
@@ -614,7 +614,7 @@ test('unsupported market is disabled with reason shown on symbol add dialog', as
   await page.getByRole('button', { name: '로그인' }).click();
   await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
 
-  await page.goto('/datasets?tab=prices');
+  await page.goto('/datasets/prices');
   await page.getByRole('button', { name: '추가' }).click();
   await page.getByLabel('시장').click();
   // Radix SelectItem 은 native disabled 속성이 아니라 aria-disabled/data-disabled 를 쓴다 —
@@ -642,7 +642,7 @@ test('market select stays disabled and explains itself when /markets fails', asy
   await page.getByRole('button', { name: '로그인' }).click();
   await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
 
-  await page.goto('/datasets?tab=prices');
+  await page.goto('/datasets/prices');
   await page.getByRole('button', { name: '추가' }).click();
   await expect(page.getByText(/시장 목록을 불러오지 못했습니다/)).toBeVisible();
 });
@@ -656,12 +656,19 @@ test('mobile layout has no horizontal scroll on core screens (스펙 §38)', asy
   await page.getByRole('button', { name: '로그인' }).click();
   await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
 
-  // /backtests/new 이 목록에 있는 이유: 단계 버튼 6개를 3열 × 2행으로 깔면서 44px
-  // 터치 영역을 지킨다 — 390px 에서 가장 먼저 넘칠 화면이 여기다
-  // '/datasets' 를 넣는 이유: 종목 마스터의 타임라인 슬라이더가 390px 에서 가장
-  // 먼저 넘칠 화면이다. '/datasets?tab=prices' 는 종목 행이 이름·코드·배지 3개·
+  // /backtests/new/strategy 가 목록에 있는 이유: 단계 버튼 6개를 3열 × 2행으로 깔면서
+  // 44px 터치 영역을 지킨다 — 390px 에서 가장 먼저 넘칠 화면이 여기다
+  // '/datasets/master' 를 넣는 이유: 종목 마스터의 타임라인 슬라이더가 390px 에서 가장
+  // 먼저 넘칠 화면이다. '/datasets/prices' 는 종목 행이 이름·코드·배지 3개·
   // 수집 시각을 한 줄에 담고 하단 고정 바에 버튼 4개가 붙는다.
-  for (const path of ['/', '/backtests', '/backtests/new', '/datasets', '/datasets?tab=prices', '/settings']) {
+  for (const path of [
+    '/',
+    '/backtests',
+    '/backtests/new/strategy',
+    '/datasets/master',
+    '/datasets/prices',
+    '/settings',
+  ]) {
     await page.goto(path);
     await page.waitForLoadState('networkidle');
     const overflow = await page.evaluate(

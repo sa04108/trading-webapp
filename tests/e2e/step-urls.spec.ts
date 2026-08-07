@@ -69,3 +69,39 @@ test('복제 진입의 ?from= 은 단계를 옮겨도 남는다', async ({ page 
   await page.goto('/backtests/new?from=bt_nonexistent');
   await expect(page).toHaveURL(/\/backtests\/new\/strategy\?from=bt_nonexistent$/);
 });
+
+test('데이터 구획은 각자 URL 을 갖고 뒤로가기가 직전 구획으로 돌아간다', async ({ page }) => {
+  await login(page);
+
+  await page.goto('/datasets');
+  await expect(page).toHaveURL(/\/datasets\/master$/);
+  await expect(page.getByRole('link', { name: '종목 마스터' })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
+
+  await page.getByRole('link', { name: '가격 데이터' }).click();
+  await expect(page).toHaveURL(/\/datasets\/prices$/);
+  await expect(page.getByRole('link', { name: '가격 데이터' })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
+
+  await page.goBack();
+  await expect(page).toHaveURL(/\/datasets\/master$/);
+});
+
+test('옛 ?tab= 링크는 구획 경로로 이어지고 다른 쿼리는 남는다', async ({ page }) => {
+  await login(page);
+
+  // 데이터 탭이 데이터셋·종목이던 시절의 값
+  await page.goto('/datasets?tab=symbols');
+  await expect(page).toHaveURL(/\/datasets\/prices$/);
+
+  await page.goto('/datasets?tab=prices');
+  await expect(page).toHaveURL(/\/datasets\/prices$/);
+
+  // ?date= 는 종목 마스터가 쓰는 값이다 — 리다이렉트가 삼키면 날짜 링크가 끊긴다
+  await page.goto('/datasets?tab=master&date=2024-12-30');
+  await expect(page).toHaveURL(/\/datasets\/master\?date=2024-12-30$/);
+});

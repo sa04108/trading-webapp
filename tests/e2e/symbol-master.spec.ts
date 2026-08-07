@@ -70,13 +70,13 @@ test('종목 마스터 기본 탭 — 미커버 날짜를 동기화하면 표와
 
   // ── 기본 탭 확인 — 쿼리 없이 들어가면 종목 마스터가 뜨고, 이미 커버된 날짜를 기본으로 보여준다 ──
   await page.goto('/datasets');
-  await expect(page.getByRole('tab', { name: '종목 마스터' })).toHaveAttribute(
-    'aria-selected',
-    'true',
+  await expect(page.getByRole('link', { name: '종목 마스터' })).toHaveAttribute(
+    'aria-current',
+    'page',
   );
-  await expect(page.getByRole('tab', { name: '가격 데이터' })).toHaveAttribute(
-    'aria-selected',
-    'false',
+  await expect(page.getByRole('link', { name: '가격 데이터' })).not.toHaveAttribute(
+    'aria-current',
+    'page',
   );
   await expect(page.getByText(/기준 5종목/)).toBeVisible();
   // exact — '삼성전자우' 도 '삼성전자' 를 부분 문자열로 포함해 strict-mode 위반이 난다
@@ -161,36 +161,34 @@ test('종목 마스터 기본 탭 — 미커버 날짜를 동기화하면 표와
   await page.getByRole('option', { name: '전체 보기' }).click();
 });
 
-test('가격 데이터 탭 — 구 링크(?tab=symbols)도 새 링크와 같은 화면으로 이어진다', async ({
-  page,
-}) => {
+test('가격 데이터 구획 — 구 링크(?tab=symbols)도 새 경로로 이어진다', async ({ page }) => {
   await login(page);
 
-  // 구 링크 — 데이터 탭이 데이터셋·종목이던 시절의 URL. 새 화면으로도 그대로 열려야
-  // 북마크·공유 링크가 끊기지 않는다 (data-page.tsx 의 tab 판정 참고).
+  // 구 링크 — 데이터 탭이 데이터셋·종목이던 시절의 URL. 새 경로로 이어져야 북마크·공유
+  // 링크가 끊기지 않는다 (data-page.tsx 의 DatasetsIndexRedirect 참고).
   await page.goto('/datasets?tab=symbols');
-  await expect(page.getByRole('tab', { name: '가격 데이터' })).toHaveAttribute(
-    'aria-selected',
-    'true',
+  await expect(page).toHaveURL(/\/datasets\/prices$/);
+  await expect(page.getByRole('link', { name: '가격 데이터' })).toHaveAttribute(
+    'aria-current',
+    'page',
   );
-  await expect(page.getByRole('tab', { name: '종목 마스터' })).toHaveAttribute(
-    'aria-selected',
-    'false',
-  );
-  await expect(page.getByText('삼성전자')).toBeVisible();
-
-  // 새 링크
-  await page.goto('/datasets?tab=prices');
-  await expect(page.getByRole('tab', { name: '가격 데이터' })).toHaveAttribute(
-    'aria-selected',
-    'true',
+  await expect(page.getByRole('link', { name: '종목 마스터' })).not.toHaveAttribute(
+    'aria-current',
+    'page',
   );
   await expect(page.getByText('삼성전자')).toBeVisible();
 
-  // 명시적으로 master 를 줘도 정상 동작한다
-  await page.goto('/datasets?tab=master');
-  await expect(page.getByRole('tab', { name: '종목 마스터' })).toHaveAttribute(
-    'aria-selected',
-    'true',
+  // 새 경로로 직접
+  await page.goto('/datasets/prices');
+  await expect(page.getByRole('link', { name: '가격 데이터' })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
+  await expect(page.getByText('삼성전자')).toBeVisible();
+
+  await page.goto('/datasets/master');
+  await expect(page.getByRole('link', { name: '종목 마스터' })).toHaveAttribute(
+    'aria-current',
+    'page',
   );
 });
