@@ -665,7 +665,9 @@ git commit -m "refactor(market-data): 봉 주기를 일봉 하나로 좁힌다"
 DART 재무 수집 자체는 사라지지 않는다 — `src/server/cli.ts:187` 의 `facts:sync` 명령이 `container.factSyncService.sync` 를 직접 부른다. 웹에서 촉발하던 경로만 없어진다.
 
 **Interfaces:**
-- Produces: `SymbolService` 에서 아래가 사라진다 — `getCandleSyncEstimate`, `getMinutePlan`, `importCsv`, `rejectImport`, `getCandlesForInspection`, `getSyncJob`, `runningSyncJobId`, `markSynced`, `refreshCoverage`, `bumpVersion`, `getLatestVersion`, `versionSnapshotFor`, `getCoverage`
+- Produces: `SymbolService` 에서 아래가 사라진다 — `getCandleSyncEstimate`, `getMinutePlan`, `importCsv`, `rejectImport`, `getCandlesForInspection`, `getSyncJob`, `runningSyncJobId`, `markSynced`, `refreshCoverage`, `versionSnapshotFor`, `getCoverage`
+
+**정정 (2026-08-07, Task 5 구현 중 발견):** `bumpVersion` 과 `getLatestVersion` 은 **남긴다.** 처음에는 삭제 목록에 넣었지만 `FactSyncService` 가 `bumpVersion` 을 구조적 타입(`SymbolVersionBumper` 포트)으로 받아 DART 재무 버전 계보를 올린다. 지우면 이 계획이 지키기로 한 재무 수집이 깨진다.
 - `SymbolSummary.slices` 필드가 사라진다
 
 - [ ] **Step 1: 라우트를 지운다**
@@ -1096,7 +1098,10 @@ git commit -m "feat(web): 가격 데이터 화면을 걷어낸다"
 
 **Files:**
 - Modify: `tests/e2e/mvp-flow.spec.ts`, `tests/e2e/step-urls.spec.ts`
+- Modify: `scripts/e2e-server.ts:252`
 - Modify: `docs/DECISIONS.md`
+
+`scripts/e2e-server.ts:252` 가 `symbolService.importCsv` 로 e2e 픽스처 봉을 심는다. Task 5 가 그 메서드를 지웠다. `krx_daily_bars` 에 직접 넣도록 바꿔라 — Task 7 이 `backtest-facts-worker.test.ts` 에 쓴 것과 같은 방식이다. e2e 가 봉을 필요로 하지 않게 됐다면 그 단계를 통째로 지워도 된다.
 
 - [ ] **Step 1: e2e 에서 가격 데이터 흐름을 걷어낸다**
 
