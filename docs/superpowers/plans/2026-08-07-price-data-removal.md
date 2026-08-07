@@ -666,7 +666,7 @@ git commit -m "refactor(market-data): 봉 수집·가져오기 라우트와 서�
 `tests/unit/candle-coverage-service.test.ts`:
 
 ```ts
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, afterEach, beforeEach } from 'vitest';
 import { createTestApp } from '../helpers/test-app.js';
 import { krxDailyBars } from '../../src/server/shared/db/schema.js';
 import { CandleCoverageService } from '../../src/server/modules/market-data/application/candle-coverage-service.js';
@@ -674,11 +674,17 @@ import { CandleCoverageService } from '../../src/server/modules/market-data/appl
 const midnight = (date: string): number => Date.parse(`${date}T00:00:00Z`);
 
 describe('CandleCoverageService', () => {
+  let app: Awaited<ReturnType<typeof createTestApp>>;
   let service: CandleCoverageService;
 
+  // createTestApp 은 임시 디렉터리와 sqlite 핸들을 잡는다 — 닫지 않으면 테스트마다 샌다
+  afterEach(async () => {
+    await app.close();
+  });
+
   beforeEach(async () => {
-    const t = await createTestApp();
-    const db = t.container.database.db;
+    app = await createTestApp();
+    const db = app.container.database.db;
     db.insert(krxDailyBars)
       .values([
         { shortCode: '005930', date: '2026-08-05', market: 'KOSPI', open: 100, high: 110, low: 90, close: 105, volume: 1000 },
