@@ -1138,7 +1138,22 @@ Expected: PASS
   실제 스키마 정리와 parquet·DuckDB 제거는 후속 계획에서 한다.
 ```
 
-- [ ] **Step 4: 전체 검증**
+- [ ] **Step 4: 사라진 것을 가리키는 주석을 쓸어낸다**
+
+컴파일러가 잡지 못하는 잔재다. 리뷰가 지목한 곳부터 확인한다:
+
+- `src/server/shared/db/schema.ts:129`
+- `src/server/modules/facts/infrastructure/dart/dart-fact-source.ts:60`
+- `src/server/modules/facts/infrastructure/dart/dart-account-map.ts:12`
+- `src/server/bootstrap/facts-wiring.ts:46, 115` (Task 5 가 파일째 지웠으면 해당 없음)
+
+그리고 전체를 훑는다:
+
+Run: `grep -rn "BrokerSyncService\|MarketDataSource\|CompositeCandleRepository\|ParquetCandleRepository\|aggregateToHourly\|DatasetSlice\|슬라이스\|1분봉\|시간봉\|분봉\|CSV 가져오기" src --include=*.ts --include=*.tsx`
+
+주석·문자열만 남았을 것이다. 사라진 것을 설명하는 주석은 지우고, 여전히 유효한 설명이면 새 구조에 맞게 고친다. 사용자에게 보이는 문자열(에러 메시지·UI 문구)에 "분봉"·"CSV 가져오기" 가 남아 있으면 특히 고쳐야 한다 — 없는 기능을 안내하게 된다.
+
+- [ ] **Step 5: 전체 검증**
 
 Run: `pnpm lint && pnpm typecheck && pnpm test && pnpm build`
 Expected: 전부 통과
@@ -1146,7 +1161,7 @@ Expected: 전부 통과
 Run: `grep -rn "parquet-candle\|composite-candle\|BrokerSync\|MarketDataSource\|DatasetSlice\|aggregateToHourly" src tests --include=*.ts --include=*.tsx`
 Expected: 결과 없음
 
-- [ ] **Step 5: 커밋**
+- [ ] **Step 6: 커밋**
 
 ```bash
 git add -A
