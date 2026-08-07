@@ -100,14 +100,17 @@ function krxInt(n: number): string {
  * 과거로 무한히 되돌리면 가격이 0 이하로 떨어질 수 있기 때문이다. 그 스펙들은
  * 가격 수준을 검증하지 않으므로 항상 앵커 시점 모양을 반복해도 상관없다.
  *
- * 전고점 돌파 전략(lookbackBars=10, atrPeriod=5, mvp-flow.spec.ts 가 익절 폭도
- * 3배로 지정)이 여러 번 매수·매도를 반복하려면 진입할 때마다 몇 거래일 안에
- * 익절·손절 중 하나에 닿아야 한다. 꾸준한 드리프트가 익절까지 걸리는 날수를
- * 짧게 만들고, 잔물결의 하강 구간이 이따금 손절도 만든다. 예전에는 CSV 로
- * 심은 1분봉 추세가 이 역할을 했지만, CSV 가져오기가 제거되며(Task 5) 그
- * 경로가 사라졌다. 이제 백테스트가 소비하는 유일한 봉(KRX 일봉)이 이 추세를
- * 대신 낸다. 900010·카카오는 이 추세와 무관하며 여전히 날짜와 무관한 고정
- * 시세를 낸다.
+ * 이 전략은 전고점 돌파(lookbackBars=10, atrPeriod=5)다.
+ * mvp-flow.spec.ts 는 익절 폭도 3배로 지정한다.
+ * 여러 번 매수·매도를 반복하려면 진입할 때마다 몇 거래일 안에 익절·손절
+ * 중 하나에 닿아야 한다. 꾸준한 드리프트가 익절까지 걸리는 날수를 짧게
+ * 만든다. 잔물결의 하강 구간이 이따금 손절도 만든다.
+ *
+ * 예전에는 CSV 로 심은 1분봉 추세가 이 역할을 했다.
+ * CSV 가져오기가 제거되며(Task 5) 그 경로가 사라졌다.
+ * 이제 백테스트가 소비하는 유일한 봉(KRX 일봉)이 이 추세를 대신 낸다.
+ * 900010·카카오는 이 추세와 무관하다. 두 종목은 여전히 날짜와 무관한
+ * 고정 시세를 낸다.
  */
 const TREND_ANCHOR_MS = Date.UTC(2026, 0, 5);
 const TREND_DAILY_DRIFT = 1_600;
@@ -277,14 +280,13 @@ async function main(): Promise<void> {
     container.clock.now(),
   );
 
-  // e2e 픽스처 봉은 더 이상 여기서 직접 심지 않는다. Task 5 가
-  // `symbolService.importCsv` 를 지웠다(스펙 2026-08-07-price-data-removal).
-  // 대신 가짜 KRX 서버가 005930 에 추세 있는 일별 시세를 낸다
-  // (`samsungCloseFor` 참고). 위저드의 '미리보기'·'기간 전체 동기화'가 그
-  // 시세를 실제 수집 경로로 `krx_daily_bars` 에 적재한다. 종목 등록도 그
-  // 미리보기 응답이 자동으로 한다(backtest-routes.ts
-  // registerUniverseSymbols). 위저드를 통과하는 e2e 흐름은 별도 등록이
-  // 필요 없다.
+  // e2e 픽스처 봉은 더 이상 여기서 직접 심지 않는다.
+  // Task 5 가 `symbolService.importCsv` 를 지웠다(스펙 2026-08-07-price-data-removal).
+  // 대신 가짜 KRX 서버가 005930 에 추세 있는 일별 시세를 낸다(`samsungCloseFor` 참고).
+  // 위저드의 '미리보기'·'기간 전체 동기화'가 그 시세를 `krx_daily_bars` 에 적재한다.
+  // 종목 등록도 그 미리보기 응답이 자동으로 한다.
+  // 그 등록 로직은 backtest-routes.ts 의 registerUniverseSymbols 다.
+  // 위저드를 통과하는 e2e 흐름은 별도 등록이 필요 없다.
   const app = await buildServer(container);
   await app.listen({ host: config.bindAddress, port: config.port });
   container.jobOrchestrator.start();

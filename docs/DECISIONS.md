@@ -835,25 +835,26 @@
 - **증상:** 자식 프로세스 실행 중 취소 요청을 보내면 계산이 끝날 때까지
   반영되지 않았다. 이 취소 계약은 `tests/integration/job-queue.test.ts`가
   검증해야 했다. 하지만 그 파일의 `beforeEach`가 이미 삭제된
-  `symbolService.importCsv`를 불러 24개 테스트 전부가 런타임 TypeError 로
-  실행조차 되지 않고 있었다. Task 7 이 그 `beforeEach`를 고치자 이 취소
-  레이스가 처음으로 드러났다.
+  `symbolService.importCsv`를 불렀다. 그래서 24개 테스트 전부가 런타임
+  TypeError 로 실행조차 되지 않고 있었다. Task 7 이 그 `beforeEach`를
+  고치자 이 취소 레이스가 처음으로 드러났다.
 - **근본 원인:** 자식 프로세스의 백테스트 실행은 better-sqlite3 기반이라
   전부 동기다. 동기 코드는 이벤트 루프에 양보하지 않는다. 그래서 IPC 로 온
   취소 메시지를 처리할 매크로태스크 경계가 계산 도중에 아예 없었다.
   `shouldCancel()` 폴링 자체는 정상이었다. 폴링할 틈 자체가 없었을 뿐이다.
 - **왜 이제야 드러났나:** 위 `beforeEach` 결함 때문에 이 취소 계약을 검증하는
-  테스트가 한 번도 실행된 적이 없었다. 커밋 이력
-  (`9bfba70 test: stabilize active job cancellation contract`)을 보면 과거에도
-  이 레이스를 잡으려 한 시도가 있었다. 다만 "자식이 계산을 끝내기 전에 취소가
-  반드시 도착한다"는 가정 자체가 이미 깨져 있었다.
+  테스트가 한 번도 실행된 적이 없었다. 커밋 이력이 있다
+  (`9bfba70 test: stabilize active job cancellation contract`). 그 커밋을
+  보면 과거에도 이 레이스를 잡으려 한 시도가 있었다. 다만 "자식이 계산을
+  끝내기 전에 취소가 반드시 도착한다"는 가정 자체가 이미 깨져 있었다.
 - **수정:** 엔진 루프 본체(`runBacktestSteps`, `engine.ts`)를 제너레이터로
   뽑았다. 기존 통계·주문·체결 로직은 손대지 않고 그대로 옮겼다. 반복마다
-  `yield` 하나만 더했다. 두 얇은 드라이버가 이 제너레이터를 소진한다. 기존
-  `runBacktest`(동기)는 그 `yield`를 그냥 흘려보낸다. 신규
-  `runBacktestCancellable`(비동기, 자식 프로세스 전용)은 200봉마다
-  `await new Promise((resolve) => setImmediate(resolve))`로 실제 양보한다.
-  이 양보가 IPC 취소 메시지를 처리할 매크로태스크 경계를 만든다.
+  `yield` 하나만 더했다. 두 얇은 드라이버가 이 제너레이터를 소진한다.
+  기존 `runBacktest`(동기)는 그 `yield`를 그냥 흘려보낸다. 신규
+  `runBacktestCancellable`(비동기, 자식 프로세스 전용)이 대신 양보한다.
+  200봉마다 `await new Promise((resolve) => setImmediate(resolve))`를
+  한 번 기다린다. 이 양보가 IPC 취소 메시지를 처리할 매크로태스크
+  경계를 만든다.
 - **양보 간격 200 을 고른 근거:** 로컬 측정(`range-breakout` 전략, 10만 봉,
   500회 양보) 기준으로 동기 실행과 차이가 잡음 수준(수십 ms)이었다. 대형
   백테스트에는 실질 오버헤드가 없다는 뜻이다. 200봉 미만인 실행(흔한 소규모

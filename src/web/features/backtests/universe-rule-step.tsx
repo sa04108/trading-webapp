@@ -164,10 +164,12 @@ export function UniverseRuleStep({
     return '기간 중 일부 날짜의 KRX 데이터가 아직 없습니다.';
   };
 
-  // 증권사 동기화는 기간이 완전히 커버된 뒤에도 여전히 봉이 없는 종목에만 보조로
-  // 남긴다 — 기간이 미커버인 동안 이 버튼을 보이면 사용자가 이 실패할 수밖에 없는
-  // 경로부터 밟게 된다(운영에서 실제로 재현된 순서).
-  const brokerSyncAvailable =
+  // 기간을 이미 다 커버했는데도(periodCovered) 여전히 봉이 없는 종목이
+  // 남아 있는지 본다. 그렇다면 KRX 에도 그 종목의 일봉이 없다는 뜻이다
+  // (증권사 동기화는 D-041 로 제거됐다) — 안내 알림만 보여준다.
+  // 기간이 아직 미커버인 동안은 이 알림을 띄우지 않는다.
+  // "기간 전체 동기화"부터 먼저 시도해야 하기 때문이다.
+  const missingCandlesAfterFullSync =
     preview !== null && preview.periodCovered && preview.missingCandleSymbols.length > 0;
 
   const runPreview = (params: PreviewParams): void => {
@@ -444,7 +446,7 @@ export function UniverseRuleStep({
         </Alert>
       ) : null}
 
-      {preview && brokerSyncAvailable ? (
+      {preview && missingCandlesAfterFullSync ? (
         <Alert variant="destructive" role="alert">
           <AlertDescription className="space-y-2">
             <p>다음 종목은 아직 봉 데이터가 없어 백테스트를 실행할 수 없습니다.</p>
