@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { createTestApp } from '../helpers/test-app.js';
 import { krxDailyBars } from '../../src/server/shared/db/schema.js';
 import type { AppDatabase } from '../../src/server/shared/db/database.js';
@@ -28,11 +28,12 @@ describe('날짜 경계 변환', () => {
 });
 
 describe('KrxDailyCandleRepository', () => {
+  let t: Awaited<ReturnType<typeof createTestApp>>;
   let db: AppDatabase;
   let repository: KrxDailyCandleRepository;
 
   beforeEach(async () => {
-    const t = await createTestApp();
+    t = await createTestApp();
     db = t.container.database.db;
     db.insert(krxDailyBars)
       .values([
@@ -43,6 +44,11 @@ describe('KrxDailyCandleRepository', () => {
       ])
       .run();
     repository = new KrxDailyCandleRepository(db);
+  });
+
+  // 임시 디렉터리와 sqlite 핸들이 테스트마다 누적되지 않도록 앱을 닫는다.
+  afterEach(async () => {
+    await t.close();
   });
 
   const collect = async (query: Parameters<KrxDailyCandleRepository['getCandles']>[0]) => {
