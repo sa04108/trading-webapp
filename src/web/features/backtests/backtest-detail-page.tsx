@@ -563,7 +563,7 @@ export function BacktestDetailPage() {
   const queryClient = useQueryClient();
   const [deleteOpen, setDeleteOpen] = useState(false);
 
-  const { job, run, metrics, provenancePin, isLoading } = useBacktestLive(id);
+  const { job, run, metrics, provenancePin, isLoading, isError, error } = useBacktestLive(id);
   const completed = job?.status === 'COMPLETED';
   const { data: series } = useBacktestSeries(id, completed === true);
 
@@ -622,6 +622,27 @@ export function BacktestDetailPage() {
     queryFn: () =>
       api<{ strategies: Array<{ id: string; name: string; description: string }> }>('/strategies'),
   });
+
+  // 조회가 실패하면 결과가 없다고 말한다 — 알림에서 넘어오면 그 사이 삭제된 잡일 수
+  // 있는데, 스켈레톤만 두면 영영 로딩 중으로 보인다
+  if (isError) {
+    const notFound = error instanceof ApiError && error.status === 404;
+    return (
+      <div className="space-y-4">
+        <Alert variant="destructive">
+          <AlertTitle>결과를 불러올 수 없습니다</AlertTitle>
+          <AlertDescription>
+            {notFound
+              ? '이미 삭제되었거나 존재하지 않는 백테스트입니다.'
+              : (error?.message ?? '알 수 없는 오류입니다.')}
+          </AlertDescription>
+        </Alert>
+        <Button variant="ghost" asChild>
+          <Link to="/backtests">← 목록으로</Link>
+        </Button>
+      </div>
+    );
+  }
 
   if (isLoading || !job) {
     return (
