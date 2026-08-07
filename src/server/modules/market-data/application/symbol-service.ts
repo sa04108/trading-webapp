@@ -20,9 +20,10 @@ export interface SymbolSummary {
  * 의 후신). 봉 수집·CSV 가져오기·슬라이스 커버리지·버전 pin(옛 versionSnapshotFor)은
  * 이 커밋(Task 5, 2026-08-07-price-data-removal)이 걷어냈다.
  *
- * bumpVersion·getLatestVersion 은 남는다 — `FactSyncService` 가 재무 수집 뒤 재무
- * 버전 체인(FACTS_SLICE)을 올릴 때 이 서비스를 좁은 포트(SymbolVersionBumper)로
- * 받아 쓴다 (§9.5). DART 재무 수집 자체는 이 태스크가 건드리지 않는다.
+ * bumpVersion 은 남는다 — `FactSyncService` 가 재무 버전 체인(FACTS_SLICE)을 올릴 때
+ * 이 서비스를 좁은 포트(SymbolVersionBumper)로 받아 쓴다 (§9.5).
+ * getLatestVersion 은 그 내부 구현이라 private 로 낮췄다.
+ * DART 재무 수집 자체는 이 태스크가 건드리지 않는다.
  */
 export class SymbolService {
   constructor(
@@ -117,8 +118,8 @@ export class SymbolService {
    * 종목 제거 — 목록에서만 뺀다.
    *
    * KRX 일봉은 지우지 않는다. 시장 전체가 공유하는 자산이라 종목을 목록에서 빼는
-   * 일과 함께 지우면, 그 종목을 참조하던 다른 백테스트·데이터셋의 봉까지 사라진다
-   * (구 `CompositeCandleRepository.deleteSymbol` 주석의 근거를 그대로 따른다).
+   * 일과 함께 지우면, 그 종목을 참조하던 다른 백테스트·데이터셋의 봉까지 사라진다.
+   * 구 `CompositeCandleRepository.deleteSymbol` 주석의 근거를 그대로 따른다.
    */
   async removeSymbols(codes: readonly string[]): Promise<void> {
     if (codes.length === 0) return;
@@ -137,7 +138,10 @@ export class SymbolService {
     }
   }
 
-  getLatestVersion(code: string, slice: string): { version: number; contentHash: string } | null {
+  private getLatestVersion(
+    code: string,
+    slice: string,
+  ): { version: number; contentHash: string } | null {
     const latest = this.db
       .select()
       .from(symbolVersions)
