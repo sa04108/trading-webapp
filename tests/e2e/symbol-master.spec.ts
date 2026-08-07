@@ -1,7 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
-
-const USERNAME = 'e2e-operator';
-const PASSWORD = 'correct-horse-battery-staple';
+import { expect, test } from '@playwright/test';
+import { login } from './login';
 
 /**
  * 종목 마스터 화면(설계 2026-08-05-symbol-master-design) — 데이터 탭이 데이터셋·종목
@@ -18,15 +16,6 @@ const PASSWORD = 'correct-horse-battery-staple';
  * "지우기" 가 아니라 "다른 스펙과 절대 겹치지 않는 날짜만 쓰기" 다 — 아래 SEED_DATE
  * 주석 참고.
  */
-
-async function login(page: Page): Promise<void> {
-  await page.goto('/');
-  await expect(page).toHaveURL(/\/login/);
-  await page.getByLabel('사용자 이름').fill(USERNAME);
-  await page.getByLabel('비밀번호').fill(PASSWORD);
-  await page.getByRole('button', { name: '로그인' }).click();
-  await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
-}
 
 /** SymbolMasterPanel 의 `todayIso()` 와 같은 계산 — 로컬 달력 기준 오늘 */
 function todayIso(): string {

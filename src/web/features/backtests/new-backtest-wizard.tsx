@@ -89,12 +89,14 @@ export function NewBacktestWizard() {
   const navigate = useNavigate();
   const params = useParams();
   const location = useLocation();
+  /** URL 이 가리키는 단계. null 은 모르는 slug 다 */
+  const urlStep = stepIndexOf(params.step);
   /**
-   * 단계의 출처는 URL 이다. state 로도 들고 있으면 뒤로가기가 URL 만 바꾸고 state 는
-   * 낡은 값으로 남는 경합이 생긴다. 모르는 slug 는 첫 단계로 접고, 아래 클램프 effect 가
-   * URL 도 함께 바로잡는다.
+   * 이 세션에서 위저드가 스스로 이동해 도달한 가장 앞 단계. 게이트가 뒤늦게 무너져도
+   * (유니버스 미리보기가 무효화한 `['symbols']` 재조회가 재무 게이트를 뒤집는 식으로)
+   * 서 있던 자리에서 밀려나지 않게 하는 근거다 — 판정 규칙은 `reachableStepFromUrl` 에 있다.
    */
-  const step = stepIndexOf(params.step) ?? 0;
+  const [traversed, setTraversed] = useState(0);
   /** 검토 화면을 눈으로 지났는지 — 제출 화면에 URL 로 바로 들어오는 길을 막는다 */
   const [reviewPassed, setReviewPassed] = useState(false);
   const [strategyId, setStrategyId] = useState<string | null>(null);
@@ -400,6 +402,16 @@ export function NewBacktestWizard() {
     symbolsWithFacts,
     unionSymbols,
   };
+  const reachable = reachableStepFromUrl(gate, { traversed, reviewPassed });
+  /**
+   * 단계의 출처는 URL 이다. state 로도 들고 있으면 뒤로가기가 URL 만 바꾸고 state 는
+   * 낡은 값으로 남는 경합이 생긴다.
+   *
+   * 갈 수 없는 곳을 가리키는 URL 은 **렌더 단계에서 바로 좁힌다**. 아래 effect 로만
+   * 고치면 그 사이 한 프레임이 그려져, 검토 화면의 `buildRequest` 오류가 빨간 배너로
+   * 번쩍인 뒤 사라진다. effect 는 URL 표기를 뒤따라 맞추는 일만 맡는다.
+   */
+  const step = urlStep === null ? 0 : Math.min(urlStep, reachable);
   const navLimit = navigableStepLimit(step, gate);
 
   /**
@@ -413,6 +425,16 @@ export function NewBacktestWizard() {
     );
   };
 
+  /**
+   * 이 단계를 스스로 지나왔다고 기록한다. 클램프가 나중에 이 단계를 되돌리지 않는 근거가
+   * 되므로 위저드가 실제로 이동시키는 자리에서만 부른다 — 뒤로가기로 온 이동은 이미
+   * 지나온 자리라서 기록할 것이 없다.
+   */
+  const recordTraversal = (target: number): number => {
+    setTraversed((prev) => Math.max(prev, target));
+    return target;
+  };
+
   const goNext = (): void => {
     const error = stepBlocker(step, gate);
     if (error) {
@@ -421,13 +443,13 @@ export function NewBacktestWizard() {
     }
     // 검토를 지났다는 사실을 여기서만 세운다 — 실행 단계 URL 의 유일한 열쇠다
     if (step === REVIEW_STEP) setReviewPassed(true);
-    goToSlug(Math.min(step + 1, RUN_STEP));
+    goToSlug(recordTraversal(Math.min(step + 1, RUN_STEP)));
   };
 
   // 상단 버튼으로 바로 이동. 잠긴 단계는 여기 오지 않는다(호출부가 이유를 띄운다)
   const goToStep = (target: number): void => {
     if (target === step || target < 0 || target > navLimit) return;
-    goToSlug(target);
+    goToSlug(recordTraversal(target));
   };
 
   const request = step >= REVIEW_STEP ? buildRequest() : null;
@@ -448,24 +470,31 @@ export function NewBacktestWizard() {
     sourceJobId !== null && prefilledFrom.current !== sourceJobId && !prefillError;
 
   /**
-   * URL 이 갈 수 없는 단계를 가리키면 갈 수 있는 마지막 단계로 되돌린다. `replace` 라서
-   * 튕겨 나온 단계가 이력에 남지 않는다 — 남으면 뒤로가기가 그 단계로 돌아가 다시 튕긴다.
+   * URL 표기를 지금 그리고 있는 단계에 맞춘다. 좁히는 판단은 위 `step` 이 이미 했고,
+   * 여기서는 주소창만 뒤따라 고친다. `replace` 라서 갈 수 없던 단계가 이력에 남지 않는다.
+   *
+   * 모르는 slug 는 갈 수 있는 곳이 아니라 **첫 단계**로 접는다 — 복제 초안이 게이트를
+   * 열어 두었더라도 확인해야 할 전략·기간 화면을 건너뛰게 하지 않는다(설계의 옛 URL 호환 표).
    *
    * `prefilling` 중에는 보류한다: 복제 초안이 도착하기 전의 빈 게이트를 근거로 삼으면
    * 곧 채워질 폼을 이유 없이 버린다.
    */
-  const reachable = reachableStepFromUrl(gate, reviewPassed);
   useEffect(() => {
     if (prefilling) return;
-    if (stepIndexOf(params.step) === null || step > reachable) {
-      goToSlug(reachable, { replace: true });
+    if (urlStep === null) {
+      goToSlug(0, { replace: true });
+      return;
     }
-  }, [params.step, step, reachable, prefilling]);
+    if (urlStep !== step) goToSlug(step, { replace: true });
+  }, [urlStep, step, prefilling]);
 
   // 단계가 바뀌면 앞 단계의 오류 문장을 지운다. 단계의 출처가 URL 이므로 이동 함수가
   // 아니라 단계 변화에 매단다 — 뒤로가기로 온 이동도 같이 걸린다.
   useEffect(() => {
     setStepError(null);
+    // 검토보다 앞으로 돌아가면 '검토를 지났다' 를 취소한다 — 설정을 고친 뒤 앞으로가기로
+    // 제출 화면에 되돌아오는 길을 막는다. 다시 들어가려면 검토에서 '다음' 을 눌러야 한다.
+    if (step < REVIEW_STEP) setReviewPassed(false);
   }, [step]);
 
   return (

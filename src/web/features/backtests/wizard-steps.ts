@@ -165,20 +165,37 @@ export function navigableStepLimit(currentStep: number, state: StepGateState): n
 }
 
 /**
+ * 게이트 밖에서 URL 도달 판정에 필요한 사실. 둘 다 이 페이지 세션에 매인 값이라
+ * 새로고침하면 0·false 로 돌아간다 — 그래서 딥링크는 게이트로만 판정된다.
+ */
+export interface UrlStepAccess {
+  /** 위저드가 스스로 이동해 실제로 도달한 가장 앞 단계 */
+  traversed: number;
+  /** 검토 단계에서 '다음' 을 눌렀는지 */
+  reviewPassed: boolean;
+}
+
+/**
  * URL 이 가리켜도 되는 최대 단계.
  *
- * `navigableStepLimit` 을 쓸 수 없는 이유: 그쪽은 현재 단계를 항상 통과시킨다(이미
- * 지나온 곳은 다시 검사하지 않는다는 규칙 1). 딥링크·새로고침으로 도착한 단계는
- * 지나온 곳이 아니라서 그 근거가 없다 — 앞으로의 상한만 본다.
+ * `navigableStepLimit` 을 쓸 수 없는 이유: 그쪽은 **지금 서 있는** 단계를 무조건
+ * 통과시키는데, URL 은 딥링크·새로고침으로 아무 단계나 가리킬 수 있어 현재 단계 자체가
+ * 근거가 못 된다. 대신 "이 세션에서 실제로 지나온 단계" 를 근거로 삼는다.
  *
- * `reviewPassed` 가 필요한 건 실행 단계 때문이다. 앞으로의 상한은 검토까지라서(규칙 2)
- * 이것만으로 클램프하면 검토에서 '다음' 을 눌러 정당하게 도착한 실행 단계도 매번
- * 검토로 튕긴다. 위저드가 그 통과 사실만 기억해 넘긴다. 새로고침하면 false 로
- * 돌아가므로 실행 단계 URL 을 직접 여는 길은 여전히 막힌다.
+ * `traversed` 를 보는 이유(규칙 1 — 지나온 곳은 다시 검사하지 않는다): 게이트는 뒤늦게
+ * 무너질 수 있다. 유니버스 미리보기가 성공하면 그 자리에서 `['symbols']` 를 무효화하고,
+ * 그 재조회가 도착하는 순간 재무 게이트가 통과에서 차단으로 뒤집힌다. 앞으로의 상한만
+ * 보면 그 순간 검토·실행 화면에 서 있던 사용자가 유니버스로 밀려난다.
+ *
+ * `reviewPassed` 를 보는 이유(규칙 2 — 제출 화면은 검토를 거쳐서만): 앞으로의 상한은
+ * 검토까지라서 이것만으로는 검토에서 '다음' 을 눌러 정당하게 도착한 실행 단계도 튕긴다.
+ * `traversed` 로 열지 않고 별도 플래그로 두는 건, 실행까지 갔다가 뒤로 돌아가 설정을
+ * 고친 뒤 앞으로가기로 제출 화면에 되돌아오는 길을 막아야 하기 때문이다 — 위저드가
+ * 검토보다 앞선 단계로 돌아갈 때 이 플래그를 끈다.
  */
-export function reachableStepFromUrl(state: StepGateState, reviewPassed: boolean): number {
-  const forward = forwardStepLimit(state);
-  return reviewPassed && forward === REVIEW_STEP ? RUN_STEP : forward;
+export function reachableStepFromUrl(state: StepGateState, access: UrlStepAccess): number {
+  if (access.reviewPassed) return RUN_STEP;
+  return Math.max(Math.min(access.traversed, REVIEW_STEP), forwardStepLimit(state));
 }
 
 /**

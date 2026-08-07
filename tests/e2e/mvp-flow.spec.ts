@@ -1,7 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
-
-const USERNAME = 'e2e-operator';
-const PASSWORD = 'correct-horse-battery-staple';
+// 자격 증명은 한 곳에서만 — 시드 운영자가 바뀔 때 일부 스펙만 고쳐지는 일을 막는다
+import { PASSWORD, USERNAME } from './login';
 
 /**
  * 위저드가 실제로 실행하는 기간 — 005930 의 캔들이 이 구간에 있다

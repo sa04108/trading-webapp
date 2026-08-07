@@ -296,20 +296,48 @@ describe('단계 slug', () => {
 });
 
 describe('reachableStepFromUrl', () => {
+  /** 새로 열린 화면 — 지나온 단계도 없고 검토도 지나지 않았다 */
+  const fresh = { traversed: 0, reviewPassed: false };
+
   it('빈 폼으로는 첫 단계까지만 — 딥링크는 현재 단계를 근거로 삼지 못한다', () => {
-    expect(reachableStepFromUrl(empty, false)).toBe(0);
+    expect(reachableStepFromUrl(empty, fresh)).toBe(0);
   });
 
   it('전 단계를 통과해도 검토를 지나지 않았으면 검토가 상한이다', () => {
-    expect(reachableStepFromUrl(complete, false)).toBe(REVIEW_STEP);
+    expect(reachableStepFromUrl(complete, fresh)).toBe(REVIEW_STEP);
   });
 
   it('검토를 눈으로 지난 뒤에만 실행 단계에 닿는다', () => {
-    expect(reachableStepFromUrl(complete, true)).toBe(RUN_STEP);
+    expect(reachableStepFromUrl(complete, { traversed: RUN_STEP, reviewPassed: true })).toBe(
+      RUN_STEP,
+    );
   });
 
-  it('검토를 지났더라도 앞 단계가 무너지면 그 단계로 내려간다', () => {
+  it('실제로 지나온 단계는 게이트가 뒤늦게 무너져도 유지된다 — 서 있던 자리에서 밀어내지 않는다', () => {
+    // 미리보기가 무효화한 ['symbols'] 재조회가 도착해 재무 게이트가 뒤집힌 상황
+    const brokenUniverse: StepGateState = {
+      ...complete,
+      requiresFundamentals: true,
+      symbolsWithFacts: [],
+    };
+    expect(reachableStepFromUrl(brokenUniverse, fresh)).toBe(2);
+    expect(reachableStepFromUrl(brokenUniverse, { traversed: REVIEW_STEP, reviewPassed: false })).toBe(
+      REVIEW_STEP,
+    );
+  });
+
+  it('지나온 단계만으로는 실행 단계가 열리지 않는다 — 검토를 다시 지나야 한다', () => {
+    // 실행까지 갔다가 자본 단계로 돌아가면 위저드가 reviewPassed 를 끈다. 그 뒤
+    // 앞으로가기로 제출 화면에 되돌아오는 길이 traversed 로 열려선 안 된다.
+    expect(reachableStepFromUrl(complete, { traversed: RUN_STEP, reviewPassed: false })).toBe(
+      REVIEW_STEP,
+    );
+  });
+
+  it('검토를 지났으면 게이트가 무너져도 실행 단계에 머문다 — 제출 화면이 클릭 도중 사라지지 않는다', () => {
     const brokenPeriod: StepGateState = { ...complete, from: '', to: '' };
-    expect(reachableStepFromUrl(brokenPeriod, true)).toBe(1);
+    expect(reachableStepFromUrl(brokenPeriod, { traversed: RUN_STEP, reviewPassed: true })).toBe(
+      RUN_STEP,
+    );
   });
 });

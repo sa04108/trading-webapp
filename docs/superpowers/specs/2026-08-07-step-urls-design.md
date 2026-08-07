@@ -87,23 +87,45 @@ const step = stepIndexOf(useParams().step) ?? 0;
 
 기존 게이트(`stepBlocker`·`navigableStepLimit`)를 그대로 쓸 수 없다. `navigableStepLimit` 은
 `Math.max(currentStep, forward)` 로 **현재 단계를 항상 통과시킨다** — 뒤로 갈 길을 막지 않으려는
-설계다. 그런데 딥링크로 도착한 단계는 "이미 지나온 곳" 이 아니어서 근거가 되지 못한다.
+설계다. 그런데 URL 은 딥링크·새로고침으로 아무 단계나 가리킬 수 있어 현재 단계 자체가 근거가
+되지 못한다.
 
 규칙 파일에 하나 더한다.
 
 ```ts
-/** URL 이 가리켜도 되는 최대 단계 — 딥링크는 현재 단계를 근거로 삼을 수 없다 */
-export function reachableStepFromUrl(state: StepGateState, reviewPassed: boolean): number;
+export interface UrlStepAccess {
+  /** 위저드가 스스로 이동해 실제로 도달한 가장 앞 단계 */
+  traversed: number;
+  /** 검토 단계에서 '다음' 을 눌렀는지 */
+  reviewPassed: boolean;
+}
+
+/** URL 이 가리켜도 되는 최대 단계 */
+export function reachableStepFromUrl(state: StepGateState, access: UrlStepAccess): number;
 ```
 
-`step` 이 이 값보다 크면 `navigate(stepSlug(reachable), { replace: true })` 로 되돌린다. replace
-라서 튕겨 나온 단계가 이력에 남지 않는다. 안내 배너는 띄우지 않는다.
+`traversed` 가 필요한 이유: 게이트는 **뒤늦게** 무너질 수 있다. 유니버스 미리보기가 성공하면
+그 자리에서 `['symbols']` 를 무효화하고, 그 재조회가 도착하는 순간 재무 게이트가 통과에서
+차단으로 뒤집힌다. 앞으로의 상한만 보면 그 순간 검토·실행 화면에 서 있던 사용자가 유니버스로
+밀려난다 — 제출 버튼이 클릭 도중 사라진다. "이 세션에서 실제로 지나온 단계" 를 근거로 두면
+규칙 1(지나온 곳은 다시 검사하지 않는다)이 URL 세계에서도 지켜진다.
 
-`reviewPassed` 가 필요한 이유는 `실행` 단계다. 기존 규칙은 "제출 버튼이 있는 화면에는 검토를
-눈으로 거쳐서만 들어온다" 이고 그래서 forward 상한이 `REVIEW_STEP` 이다. 이것만으로 클램프하면
-검토에서 '다음' 을 눌러 정당하게 도착한 `/run` 도 매번 검토로 튕긴다. `goNext()` 가
-`REVIEW_STEP` 에서 호출될 때 세우는 `useState` 플래그로 그 사실만 기억한다. 새로고침하면 false
-로 돌아가므로 `/run` 직접 열기는 여전히 막힌다.
+`reviewPassed` 가 필요한 이유는 `실행` 단계다. 앞으로의 상한은 `REVIEW_STEP` 이라 이것만으로
+클램프하면 검토에서 '다음' 을 눌러 정당하게 도착한 `/run` 도 매번 검토로 튕긴다. `traversed`
+로 열지 않고 별도 플래그로 두는 건, 실행까지 갔다가 뒤로 돌아가 설정을 고친 뒤 앞으로가기로
+제출 화면에 되돌아오는 길을 막아야 하기 때문이다 — 위저드는 단계가 검토보다 앞으로 돌아가면
+이 플래그를 끈다. 다시 들어가려면 검토를 한 번 더 지나야 한다.
+
+두 값 모두 페이지 세션에 매인 `useState` 다. 새로고침하면 0·false 로 돌아가므로 딥링크는
+게이트로만 판정된다.
+
+렌더하는 단계는 `Math.min(urlStep, reachable)` 로 **그 프레임부터** 좁힌다(모르는 slug 는 0).
+effect 로만 고치면 그 사이 한 프레임이 그려져, 검토 화면의 `buildRequest` 오류가 빨간 배너로
+번쩍인 뒤 사라진다. effect 는 URL 표기를 뒤따라 `replace` 로 맞추는 일만 맡는다 — replace 라서
+갈 수 없던 단계가 이력에 남지 않는다. 안내 배너는 띄우지 않는다.
+
+모르는 slug 는 갈 수 있는 곳이 아니라 **첫 단계**로 접는다. 복제 초안이 게이트를 열어 두었어도
+확인해야 할 전략·기간 화면을 건너뛰게 하지 않는다.
 
 상단 단계 버튼은 지금처럼 `navigableStepLimit(step, gate)` 와 `stepJumpBlockReason(index, step, gate)`
 를 쓴다. 현재 단계 버튼이 잠긴 것으로 보여선 안 되기 때문이다. 클램프만 `reachableStepFromUrl`
@@ -184,6 +206,11 @@ navigate({ pathname: `/backtests/new/${stepSlug(target)}`, search: location.sear
 둘 다 폼 값을 `sessionStorage` 에 보존해야 없앨 수 있고, 그건 상태 동기화·만료 정직 정책을
 새로 설계해야 하는 별건이다. 이번 범위에서 뺀다. 유니버스 구성은 어차피 제출 시점에 서버가
 규칙으로 재구성하므로 완전 복원은 원래 불가능하다.
+
+이 한계에 딸린 자잘한 결과가 하나 있다. 새로고침하면 `traversed` 도 0 으로 돌아가므로,
+새로고침 이전에 쌓인 단계 이력으로 뒤로가기하면 그 단계들이 차례로 전략 단계로 되돌려진다 —
+몇 번은 화면이 바뀌지 않는 것처럼 보인다. 폼이 이미 비었으니 갈 수 있는 단계가 실제로 첫
+단계뿐이라서 생기는 일이고, 폼 값을 보존하면 함께 사라진다.
 
 ## 검증
 

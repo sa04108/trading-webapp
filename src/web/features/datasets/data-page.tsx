@@ -1,4 +1,4 @@
-import { Link, Navigate, Outlet, useLocation, useSearchParams } from 'react-router';
+import { Link, Navigate, Outlet, useLocation, useMatch, useSearchParams } from 'react-router';
 import { cn } from '@/lib/utils';
 
 /**
@@ -13,7 +13,13 @@ const SECTIONS = [
 ] as const;
 
 export function DataPage() {
-  const { pathname } = useLocation();
+  const { search } = useLocation();
+  /**
+   * 활성 구획은 라우터 매칭으로 판정한다. `pathname` 문자열 비교로는 같은 경로의 다른
+   * 표기(끝 슬래시, 향후 basename)를 놓쳐 두 구획이 모두 비활성으로 그려지고, 그러면
+   * 지금 어느 구획인지 알려 주는 표시가 화면에서 사라진다.
+   */
+  const activeSlug = useMatch('/datasets/:section')?.params.section;
 
   return (
     <div className="space-y-4">
@@ -30,11 +36,15 @@ export function DataPage() {
       <nav aria-label="데이터 구획">
         <ul className="inline-flex h-8 w-fit items-center justify-center rounded-lg bg-muted p-[3px]">
           {SECTIONS.map((section) => {
-            const active = pathname === `/datasets/${section.slug}`;
+            const active = activeSlug === section.slug;
             return (
               <li key={section.slug} className="h-full">
                 <Link
-                  to={`/datasets/${section.slug}`}
+                  // 쿼리를 그대로 넘긴다 — 종목 마스터에서 보던 `?date=` 가 구획을 왕복하는
+                  // 사이에 사라지면 읽던 시점이 조용히 최신 날짜로 바뀐다
+                  to={{ pathname: `/datasets/${section.slug}`, search }}
+                  // 이미 보고 있는 구획을 다시 눌러도 이력에 같은 자리를 한 칸 더 쌓지 않는다
+                  replace={active}
                   aria-current={active ? 'page' : undefined}
                   className={cn(
                     'relative inline-flex h-full items-center justify-center rounded-md border border-transparent px-2.5 text-sm font-medium whitespace-nowrap transition-colors',
