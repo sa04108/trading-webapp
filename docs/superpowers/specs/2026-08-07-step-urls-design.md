@@ -144,8 +144,11 @@ navigate({ pathname: `/backtests/new/${stepSlug(target)}`, search: location.sear
 
 `Tabs` 를 걷어내는 이유: 자식 라우트는 활성 패널 하나만 마운트하므로 `TabsContent` 가 없는
 `TabsTrigger` 의 `aria-controls` 가 허공을 가리킨다. 위저드 단계 nav 가 이미 `nav` + `aria-current`
-패턴이라 화면 안에서 일관되기도 하다. 모양은 `tabs.tsx` 의 `TabsList`·`TabsTrigger` 클래스
-문자열을 그대로 가져와 유지한다.
+패턴이라 화면 안에서 일관되기도 하다.
+
+모양은 `tabs.tsx` 의 default variant 를 자체 클래스로 다시 만들어 맞춘다. 그 파일의 클래스
+문자열을 그대로 옮겨 오지는 않는다 — `group-data-[variant=…]/tabs-list` 선택자들이
+`Tabs.Root`·`TabsList` 가 붙이는 data 속성에 매달려 있어 `nav` 안에서는 절반이 죽는다.
 
 `SymbolMasterPanel` 의 `?date=` 처리는 손대지 않는다 — 경로만 바뀌고 쿼리는 그대로 읽는다.
 
