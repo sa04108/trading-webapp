@@ -23,13 +23,8 @@ export const backtestRequestSchema = z.object({
   strategyId: z.string().min(1),
   parameters: z.record(z.string(), z.unknown()),
   universeRule: universeRuleSchema,
-  /**
-   * 소비 봉 주기 (설계 2026-07-29-backtest-timeframe-design.md).
-   * 미지정이면 워커가 유니버스가 가진 슬라이스에서 유일하게 정해지는 값을 쓴다.
-   * optional 인 이유: 이 필드가 없던 시절의 저장된 요청(복제·재실행)이 현재
-   * 스키마로도 파싱돼야 한다.
-   */
-  timeframe: z.enum(['1m', '1h', '1d']).optional(),
+  /** 소비 봉 주기. KRX 일봉이 유일한 출처라 일봉뿐이다 (설계 2026-08-07-price-data-removal). */
+  timeframe: z.literal('1d').optional(),
   period: z.object({
     from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),

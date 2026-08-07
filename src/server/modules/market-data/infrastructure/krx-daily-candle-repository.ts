@@ -48,10 +48,10 @@ export class KrxDailyCandleRepository implements CandleRepository {
   /**
    * `krx_daily_bars` 는 국내 종목만 담는다. `Market` 은 세션 축(KR/US)이고 테이블의
    * market 컬럼은 KOSPI/KOSDAQ 이라 값 체계가 달라 직접 비교할 수 없다 — KR 인지만
-   * 본다.
+   * 본다. `Timeframe` 은 '1d' 하나뿐이라 더 볼 것이 없다.
    */
-  private supports(market: Market, timeframe: Timeframe): boolean {
-    return market === 'KR' && timeframe === '1d';
+  private supports(market: Market): boolean {
+    return market === 'KR';
   }
 
   private rows(symbol: string, fromTsMs?: number, toTsMs?: number) {
@@ -68,7 +68,7 @@ export class KrxDailyCandleRepository implements CandleRepository {
   }
 
   async *getCandles(query: CandleQuery): AsyncIterable<Candle> {
-    if (!this.supports(query.market, query.timeframe)) return;
+    if (!this.supports(query.market)) return;
 
     for (const symbol of query.symbols) {
       for (const row of this.rows(symbol, query.fromTsMs, query.toTsMs)) {
@@ -87,8 +87,8 @@ export class KrxDailyCandleRepository implements CandleRepository {
     }
   }
 
-  async getTimestamps(market: Market, timeframe: Timeframe, symbol: string): Promise<number[]> {
-    if (!this.supports(market, timeframe)) return [];
+  async getTimestamps(market: Market, _timeframe: Timeframe, symbol: string): Promise<number[]> {
+    if (!this.supports(market)) return [];
     return this.rows(symbol).map((row) => dateToTsMs(row.date));
   }
 }

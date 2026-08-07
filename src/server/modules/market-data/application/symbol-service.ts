@@ -14,15 +14,20 @@ import type { Logger } from '../../../shared/logger.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
 import { MAX_BACKTEST_BARS } from '../../../shared/backtest-limits.js';
 import { SYMBOL_PATTERN, type Candle, type Market, type Timeframe } from '../domain/candle.js';
-import {
-  ALL_SLICES,
-  coverageTimeframeForSlice,
-  sliceForTimeframe,
-  sliceTimeframes,
-  type DatasetSlice,
-} from '../domain/dataset-slice.js';
 import { getSessionForMarket, hasMarketSession } from '../domain/exchange-session.js';
 import type { CandleRepository } from './ports.js';
+
+/**
+ * `domain/dataset-slice.ts` 를 이 태스크(2026-08-07-price-data-removal Task 4)에서
+ * 지웠다 — 그 파일의 `sliceForTimeframe`류 함수는 `Timeframe` 이 '1m'/'1h' 를 갖던
+ * 시절의 분기라, `Timeframe` 을 '1d' 하나로 좁힌 지금 그대로 되살리면 죽은 분기를
+ * 다시 숨기게 된다(Task 4 가 없애려는 바로 그것). 반면 봉 저장을 일봉/분봉 두
+ * 갈래로 나누는 `DatasetSlice` 축 자체는 `Timeframe` 과 별개 개념이라 이 파일이
+ * 여전히 참조한다 — 이 파일 전체를 슬라이스 축 없이 다시 쓰는 일은 Task 5 의
+ * 몫이라, 여기서는 그 값만 그대로 옮겨 두어 기존 동작을 깨지 않는다.
+ */
+type DatasetSlice = '1d' | '1m';
+const ALL_SLICES: readonly DatasetSlice[] = ['1d', '1m'];
 
 /** 재무 버전 체인의 슬라이스 자리 — 재무는 봉 슬라이스 축이 없다 */
 export const FACTS_SLICE = 'FACTS';

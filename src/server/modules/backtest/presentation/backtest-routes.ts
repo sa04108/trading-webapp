@@ -23,11 +23,6 @@ import type { ConsumedVersionSnapshot, SymbolService } from '../../market-data/a
 import { KrxNotConfiguredError, KrxQuotaError } from '../../market-data/application/ports.js';
 import { SymbolMasterNotCoveredError } from '../../market-data/application/symbol-master-service.js';
 import { KRX_FILTER_POLICY_VERSION } from '../../market-data/domain/krx-filter-policy.js';
-import {
-  sliceForTimeframe,
-  sliceTimeframes,
-  type DatasetSlice,
-} from '../../market-data/domain/dataset-slice.js';
 import type { StrategyRegistry } from '../../strategy/application/strategy-registry.js';
 import { estimateBars, MAX_BACKTEST_BARS } from '../domain/bar-estimate.js';
 import {
