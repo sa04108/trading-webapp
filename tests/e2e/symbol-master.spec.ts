@@ -138,6 +138,27 @@ test('종목 마스터 기본 탭 — 미커버 날짜를 동기화하면 표와
   await page.getByLabel('종목 검색').fill('상장폐지');
   await expect(page.getByText('상장폐지예정1호')).toBeVisible();
   await expect(page.getByText('카카오')).toHaveCount(0);
+  await page.getByLabel('종목 검색').fill('');
+
+  // 페이징 — 씨드 유니버스가 5종목이라 기본 20건에서는 페이지가 하나뿐이다.
+  // 페이지당 2종목으로 줄여야 이동 컨트롤이 나타난다(Pagination 은 1페이지면 렌더하지 않는다).
+  await page.getByLabel('종목 목록 페이지당 표시 수').fill('2');
+  const universeRows = page.locator('tbody tr');
+  await expect(universeRows).toHaveCount(2);
+  await expect(page.getByText('총 5종목')).toBeVisible();
+  await page.getByRole('navigation', { name: '종목 목록 페이지 이동' })
+    .getByRole('button', { name: '마지막 페이지' })
+    .click();
+  await expect(universeRows).toHaveCount(1); // 5종목 = 2 + 2 + 1
+
+  // 최근 이벤트 — 이름과 종류 드롭다운. 씨드 구간에 이벤트가 있는지는 실행 순서에
+  // 달려 있어 목록 내용 대신 구획과 컨트롤이 있다는 것만 본다.
+  // CardTitle 은 div 라 heading role 이 없다 — 문구로 찾는다
+  await expect(page.getByText('최근 이벤트', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('이벤트 종류 필터')).toBeVisible();
+  await page.getByLabel('이벤트 종류 필터').click();
+  await expect(page.getByRole('option', { name: '주식수 변경' })).toBeVisible();
+  await page.getByRole('option', { name: '전체 보기' }).click();
 });
 
 test('가격 데이터 탭 — 구 링크(?tab=symbols)도 새 링크와 같은 화면으로 이어진다', async ({

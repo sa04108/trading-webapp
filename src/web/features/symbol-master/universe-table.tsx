@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { PageSizeInput, Pagination } from '@/components/pagination';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -20,6 +21,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatCompactNumber, formatDateTime } from '@/lib/format';
+import { parsePageSize } from '@/lib/page-size';
+import { pageWindow } from '@/lib/pagination';
 import type {
   SymbolMasterCoverageDto,
   SymbolMasterEntryDto,
@@ -79,6 +82,15 @@ export function UniverseTable({
   const [query, setQuery] = useState('');
   const [market, setMarket] = useState<MarketFilter>('ALL');
   const [type, setType] = useState<TypeFilter>('ALL');
+  const [page, setPage] = useState(0);
+  const [pageSizeText, setPageSizeText] = useState('20');
+  const pageSize = parsePageSize(pageSizeText, 20);
+
+  // 날짜를 옮기면 다른 유니버스다 — 47페이지에 머무른 채 새 날짜를 보여주면
+  // 화면 대부분이 빈 채로 뜬다(pageWindow 가 클램프해도 첫 화면은 아니다).
+  useEffect(() => {
+    setPage(0);
+  }, [date]);
 
   const filtered = useMemo(() => {
     if (universe === null) return [];
@@ -132,6 +144,8 @@ export function UniverseTable({
   }
 
   const checkpoint = latestCheckpoint(coverage?.checkpoints ?? []);
+  const { pageCount, currentPage, from, to } = pageWindow(filtered.length, pageSize, page);
+  const visible = filtered.slice(from, to);
 
   return (
     <div className="space-y-2">
@@ -149,9 +163,18 @@ export function UniverseTable({
           placeholder="이름 또는 코드로 검색"
           className="h-9 min-w-56 flex-1"
           aria-label="종목 검색"
-          onChange={(event) => setQuery(event.target.value)}
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setPage(0);
+          }}
         />
-        <Select value={market} onValueChange={(value) => setMarket(value as MarketFilter)}>
+        <Select
+          value={market}
+          onValueChange={(value) => {
+            setMarket(value as MarketFilter);
+            setPage(0);
+          }}
+        >
           <SelectTrigger className="h-9 w-32" aria-label="시장 필터">
             <SelectValue />
           </SelectTrigger>
@@ -161,7 +184,13 @@ export function UniverseTable({
             <SelectItem value="KOSDAQ">KOSDAQ</SelectItem>
           </SelectContent>
         </Select>
-        <Select value={type} onValueChange={(value) => setType(value as TypeFilter)}>
+        <Select
+          value={type}
+          onValueChange={(value) => {
+            setType(value as TypeFilter);
+            setPage(0);
+          }}
+        >
           <SelectTrigger className="h-9 w-32" aria-label="유형 필터">
             <SelectValue />
           </SelectTrigger>
@@ -171,6 +200,15 @@ export function UniverseTable({
             <SelectItem value="OTHER">그 외</SelectItem>
           </SelectContent>
         </Select>
+        <PageSizeInput
+          value={pageSizeText}
+          label="종목 목록 페이지당 표시 수"
+          unit="종목"
+          onChange={(nextValue) => {
+            setPageSizeText(nextValue);
+            setPage(0);
+          }}
+        />
       </div>
 
       {filtered.length === 0 ? (
@@ -178,38 +216,47 @@ export function UniverseTable({
           <AlertDescription>맞는 종목 없음</AlertDescription>
         </Alert>
       ) : (
-        <div className="rounded-md border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>코드</TableHead>
-                <TableHead>이름</TableHead>
-                <TableHead>시장</TableHead>
-                <TableHead className="text-right">상장주식수</TableHead>
-                <TableHead>상장일</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filtered.map((entry) => (
-                <TableRow key={entry.standardCode}>
-                  <TableCell className="font-mono text-xs">{entry.shortCode}</TableCell>
-                  <TableCell>
-                    <span className="font-medium">{entry.name}</span>
-                    {entry.instrumentType !== 'COMMON_STOCK' ? (
-                      <Badge variant="outline" className="ml-1.5">
-                        {entry.instrumentType}
-                      </Badge>
-                    ) : null}
-                  </TableCell>
-                  <TableCell>{entry.market}</TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {formatCompactNumber(Number(entry.sharesOutstanding))}주
-                  </TableCell>
-                  <TableCell>{entry.listedDate ?? '-'}</TableCell>
+        <div className="space-y-2">
+          <div className="rounded-md border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>코드</TableHead>
+                  <TableHead>이름</TableHead>
+                  <TableHead>시장</TableHead>
+                  <TableHead className="text-right">상장주식수</TableHead>
+                  <TableHead>상장일</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {visible.map((entry) => (
+                  <TableRow key={entry.standardCode}>
+                    <TableCell className="font-mono text-xs">{entry.shortCode}</TableCell>
+                    <TableCell>
+                      <span className="font-medium">{entry.name}</span>
+                      {entry.instrumentType !== 'COMMON_STOCK' ? (
+                        <Badge variant="outline" className="ml-1.5">
+                          {entry.instrumentType}
+                        </Badge>
+                      ) : null}
+                    </TableCell>
+                    <TableCell>{entry.market}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatCompactNumber(Number(entry.sharesOutstanding))}주
+                    </TableCell>
+                    <TableCell>{entry.listedDate ?? '-'}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+          <Pagination
+            ariaLabel="종목 목록 페이지 이동"
+            currentPage={currentPage}
+            pageCount={pageCount}
+            total={{ count: filtered.length, unit: '종목' }}
+            onPageChange={setPage}
+          />
         </div>
       )}
     </div>

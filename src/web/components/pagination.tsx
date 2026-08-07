@@ -11,6 +11,12 @@ export interface PaginationProps {
   readonly onPageChange: (nextPage: number) => void;
   readonly ariaLabel: string;
   readonly total?: { readonly count: number; readonly unit: string };
+  /**
+   * 페이지 번호 버튼 개수 상한 — 좁은 구획(사이드바)에서 쓴다. 화면 폭으로 정한
+   * 자동값과 작은 쪽을 택한다. 자동값은 `window.innerWidth` 를 보는 탓에 넓은
+   * 화면의 320px 사이드바에서도 9개를 내밀어 카드 밖으로 삐져나온다.
+   */
+  readonly maxPageNumbers?: number;
   readonly className?: string;
 }
 
@@ -33,9 +39,11 @@ export function Pagination({
   onPageChange,
   ariaLabel,
   total,
+  maxPageNumbers,
   className,
 }: PaginationProps) {
-  const maxVisible = usePageNumberLimit();
+  const widthLimit = usePageNumberLimit();
+  const maxVisible = Math.max(1, Math.min(widthLimit, maxPageNumbers ?? widthLimit));
   const safePageCount = Math.max(1, Math.trunc(pageCount));
   const safeCurrentPage = Math.min(Math.max(0, Math.trunc(currentPage)), safePageCount - 1);
 
