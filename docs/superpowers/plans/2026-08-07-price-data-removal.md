@@ -40,7 +40,10 @@
 | `src/server/modules/market-data/domain/minute-backfill.ts` | 1m 백필 계획 폐기 |
 | `src/server/modules/market-data/domain/coverage.ts` | 시간봉 기대 봉 수 계산 폐기 |
 | `src/server/modules/market-data/domain/dataset-slice.ts` | 슬라이스 축 소멸 |
-| `src/server/modules/broker/**` (3개 파일) | `MarketDataSource` 소비자 소멸 |
+| `src/server/modules/market-data/application/symbol-metrics-service.ts` | 시총·거래대금 정렬은 가격 데이터 화면 전용이었다 |
+| `src/server/modules/broker/infrastructure/kiwoom/kiwoom-market-data-source.ts` | `MarketDataSource` 소비자 소멸 |
+
+`src/server/modules/broker/infrastructure/toss/toss-market-data-source.ts` 는 **지우지 않는다** — 종목 이름 조회(`StockInfoSource`)를 백테스트 위저드가 계속 쓴다. Task 3 이 그 하나만 남기고 줄인다.
 
 ### 삭제 (웹)
 
@@ -48,17 +51,20 @@
 |---|---|
 | `src/web/features/datasets/symbols-panel.tsx` | 가격 데이터 화면 본체 |
 | `src/web/features/datasets/symbol-list.tsx` | 위 화면 전용 |
-| `src/web/features/datasets/symbol-check-list.tsx` | 위 화면 전용 |
+| `src/web/features/datasets/symbol-check-list.tsx` | 위 화면 전용 (이미 어디서도 import 하지 않는다) |
 | `src/web/features/datasets/symbol-select-scope.tsx` | 위 화면 전용 |
 | `src/web/features/datasets/sync-dialog.tsx` | 동기화 UI |
 | `src/web/features/datasets/candle-inspect-drawer.tsx` | 봉 점검 UI |
 | `src/web/features/datasets/symbol-facts-badge.tsx` | 위 화면 전용 |
+| `src/web/features/datasets/symbol-sort.ts` | `GET /symbols/metrics` 와 함께 사라진다 (Task 3) |
+| `src/web/lib/use-symbol-metrics.ts` | 위와 같음 |
+| `tests/unit/symbol-sort.test.ts` | 대상 코드 소멸 |
 
 ### 유지 (웹, 다른 기능이 참조한다 — 삭제하면 위저드가 깨진다)
 
 - `src/web/features/datasets/symbol-types.ts` — `new-backtest-wizard.tsx`, `universe-rule-step.tsx` 가 쓴다
-- `src/web/features/datasets/symbol-sort.ts` — `src/web/lib/use-symbol-metrics.ts` 가 쓴다
 - `src/web/features/datasets/symbol-search.ts`, `symbol-codes.ts` — 위저드 유니버스 선택이 쓴다
+- `src/web/lib/use-stock-names.ts` — `new-backtest-wizard.tsx:231`, `backtest-detail-page.tsx:582` 가 쓴다. `GET /symbols/info` 가 살아남는 이유다
 - `src/web/features/datasets/dataset-slices.ts` — `wizardTimeframes` 를 위저드가 쓴다. **파일은 남기되 내용을 1d 전용으로 줄인다** (Task 8)
 
 ### 수정
@@ -445,82 +451,134 @@ git commit -m "refactor(market-data): 봉 저장소를 KRX 일봉 단독으로 �
 
 ---
 
-### Task 3: 증권사 어댑터와 BrokerSyncService 제거
+### Task 3: 증권사 어댑터를 종목 이름 조회 하나로 줄인다
 
-`MarketDataSource` 의 소비자가 사라진다. 매매 시스템은 나중에 자기 형태의 포트를 새로 갖는다 — 지금 형태를 남겨 두면 쓰이지 않는 채 낡는다.
+**계획 정정 (2026-08-07, Task 3 첫 시도에서 발견):** 원래 이 태스크는 `src/server/modules/broker` 를 통째로 지우려 했다. 그런데 `createTossMarketDataSource` 는 포트 **네 개**를 한 객체로 구현한다:
+
+```ts
+): MarketDataSource & StockInfoSource & StockQuoteSource & MarketRankingSource {
+```
+
+- `MarketDataSource` (`fetchCandles`) — 소비자는 `BrokerSyncService` 뿐이다. **제거한다.**
+- `StockInfoSource` (`getStockInfo`) — `SymbolInfoService` → `GET /symbols/info` → 웹의 `useStockNames` 가 쓴다. 그 소비자는 `new-backtest-wizard.tsx:231` 과 `backtest-detail-page.tsx:582` 로 **둘 다 살아남는다. 유지한다.**
+- `StockQuoteSource` (`getQuotes`) + `MarketRankingSource` (`getRanking`) — `SymbolMetricsService` → `GET /symbols/metrics` → 웹의 `useSymbolMetrics` 가 쓴다. 그 소비자는 `symbols-panel.tsx`(Task 8 삭제)와 `symbol-check-list.tsx`(어디서도 import 하지 않는 죽은 파일)뿐이다. **가격 데이터 화면과 운명을 같이한다 — 제거한다** (사용자 결정 2026-08-07).
+
+즉 어댑터는 지우는 게 아니라 **`StockInfoSource` 하나만 남기고 줄인다.**
 
 **Files:**
-- Delete: `src/server/modules/broker/infrastructure/toss/toss-market-data-source.ts`
 - Delete: `src/server/modules/broker/infrastructure/kiwoom/kiwoom-market-data-source.ts`
 - Delete: `src/server/modules/market-data/application/broker-sync-service.ts`
 - Delete: `src/server/modules/market-data/application/csv-parser.ts`
+- Delete: `src/server/modules/market-data/application/symbol-metrics-service.ts`
 - Delete: `src/server/modules/market-data/domain/aggregate.ts`
 - Delete: `src/server/modules/market-data/domain/minute-backfill.ts`
 - Delete: `src/server/modules/market-data/domain/coverage.ts`
-- Delete: `tests/unit/broker-sync-service.test.ts`, `tests/unit/toss-market-data-source.test.ts`, `tests/unit/csv-parser.test.ts`, `tests/unit/aggregate.test.ts`, `tests/unit/minute-backfill.test.ts`, `tests/unit/coverage.test.ts`, `tests/unit/candle-sync-estimate.test.ts`
+- Delete: `tests/unit/broker-sync-service.test.ts`, `tests/unit/csv-parser.test.ts`, `tests/unit/aggregate.test.ts`, `tests/unit/minute-backfill.test.ts`, `tests/unit/coverage.test.ts`, `tests/unit/candle-sync-estimate.test.ts`, `tests/unit/symbol-metrics-service.test.ts`, `tests/integration/symbol-metrics.test.ts`
+- Modify: `src/server/modules/broker/infrastructure/toss/toss-market-data-source.ts` — `StockInfoSource` 만 구현하도록 줄인다
+- Modify: `src/server/modules/broker/infrastructure/errors.ts` — toss 가 계속 쓰면 유지
 - Modify: `src/server/modules/market-data/application/ports.ts`
 - Modify: `src/server/bootstrap/container.ts`
+- Modify: `src/server/bootstrap/server.ts:70-72`
+- Modify: `src/server/modules/market-data/presentation/symbol-routes.ts` — `GET /symbols/metrics` 제거
+- Modify: `tests/unit/toss-market-data-source.test.ts` — 봉·현재가·랭킹 케이스를 지우고 `getStockInfo` 케이스만 남긴다
 
 **Interfaces:**
-- Produces: `ports.ts` 에서 `MarketDataSource`, `FetchCandleRequest`, `FetchCandleResult`, `MarketDataSourceNotConfiguredError`, `UnsupportedTimeframeError` 가 사라진다. `StockInfoSource`·`StockQuoteSource`·`MarketRankingSource`·`KrxHistoricalUniverseSource` 는 남는다.
+- Produces: `ports.ts` 에서 `MarketDataSource`, `FetchCandleRequest`, `FetchCandleResult`, `MarketDataSourceNotConfiguredError`, `UnsupportedTimeframeError`, `StockQuote`, `StockQuoteSource`, `MarketRankingMetric`, `MarketRankingEntry`, `MarketRankingSource` 가 사라진다. `StockInfo`, `StockInfoBatchResult`, `StockInfoSource`, `KrxHistoricalUniverseSource`, KRX 에러 4종은 남는다.
+- Produces: `createTossMarketDataSource(config, logger, options): StockInfoSource` — 이름은 그대로 두고 반환 타입만 줄인다. 이름 변경은 이 태스크 범위 밖이다.
+- Produces: `AppContainer` 에서 `brokerSyncService` 와 `symbolMetricsService` 가 사라진다. `symbolInfoService` 는 남는다.
 
-- [ ] **Step 1: `broker/infrastructure/errors.ts` 의 사용처를 확인한다**
-
-Run: `grep -rn "broker/infrastructure/errors" src --include=*.ts`
-
-`toss-market-data-source.ts` 외에도 쓰는 곳이 있으면 파일을 남기고, 없으면 `src/server/modules/broker` 디렉터리 전체를 지운다.
-
-- [ ] **Step 2: 모듈과 테스트를 지운다**
+- [ ] **Step 1: 죽는 모듈과 테스트를 지운다**
 
 ```bash
-git rm -r src/server/modules/broker
-git rm src/server/modules/market-data/application/broker-sync-service.ts \
+git rm src/server/modules/broker/infrastructure/kiwoom/kiwoom-market-data-source.ts \
+       src/server/modules/market-data/application/broker-sync-service.ts \
        src/server/modules/market-data/application/csv-parser.ts \
+       src/server/modules/market-data/application/symbol-metrics-service.ts \
        src/server/modules/market-data/domain/aggregate.ts \
        src/server/modules/market-data/domain/minute-backfill.ts \
        src/server/modules/market-data/domain/coverage.ts
-git rm tests/unit/broker-sync-service.test.ts tests/unit/toss-market-data-source.test.ts \
-       tests/unit/csv-parser.test.ts tests/unit/aggregate.test.ts \
-       tests/unit/minute-backfill.test.ts tests/unit/coverage.test.ts \
-       tests/unit/candle-sync-estimate.test.ts
+git rm tests/unit/broker-sync-service.test.ts tests/unit/csv-parser.test.ts \
+       tests/unit/aggregate.test.ts tests/unit/minute-backfill.test.ts \
+       tests/unit/coverage.test.ts tests/unit/candle-sync-estimate.test.ts \
+       tests/unit/symbol-metrics-service.test.ts tests/integration/symbol-metrics.test.ts
 ```
 
-Step 1 에서 `errors.ts` 를 남기기로 했다면 `git rm -r src/server/modules/broker` 대신 두 어댑터 파일만 지운다.
+- [ ] **Step 2: 포트에서 죽은 계약을 지운다**
 
-- [ ] **Step 3: 포트에서 죽은 계약을 지운다**
-
-`src/server/modules/market-data/application/ports.ts` 에서 아래 블록을 통째로 지운다:
+`src/server/modules/market-data/application/ports.ts` 에서 아래를 통째로 지운다:
 
 ```ts
 export interface FetchCandleRequest { ... }
 export interface FetchCandleResult { ... }
 export interface MarketDataSource { ... }
+export interface StockQuote { ... }
+export interface StockQuoteSource { ... }
+export type MarketRankingMetric = ...
+export interface MarketRankingEntry { ... }
+export interface MarketRankingSource { ... }
 export class MarketDataSourceNotConfiguredError extends Error { ... }
 export class UnsupportedTimeframeError extends Error { ... }
 ```
 
-- [ ] **Step 4: container 에서 증권사 조립을 지운다**
+`MarketDataSourceNotConfiguredError` 는 toss 어댑터가 자격 증명 없을 때 던지던 것이다. 그 자리를 빈 채로 두면 안 된다 — Step 3 에서 대체 에러를 정한다.
 
-`src/server/bootstrap/container.ts` 에서:
-- `import { BrokerSyncService } ...`, `import { createTossMarketDataSource } ...` 제거
-- `AppContainer` 인터페이스의 `readonly brokerSyncService: BrokerSyncService;` 제거
-- 232~250행의 `marketDataSource`·`brokerSyncService` 생성 블록 제거
-- 반환 객체의 `brokerSyncService` 항목 제거
+- [ ] **Step 3: toss 어댑터를 StockInfoSource 로 줄인다**
 
-- [ ] **Step 5: 남은 참조를 찾아 지운다**
+`src/server/modules/broker/infrastructure/toss/toss-market-data-source.ts` 에서:
 
-Run: `grep -rn "brokerSyncService\|BrokerSyncService\|MarketDataSource\|aggregateToHourly\|csv-parser\|minute-backfill" src tests --include=*.ts --include=*.tsx`
+- 반환 타입을 `StockInfoSource` 로 바꾼다
+- `fetchCandles`, `getQuotes`, `getRanking` 구현과 그것들만 쓰는 헬퍼·타입·상수를 지운다
+- `config` 가 null 일 때의 분기는 남긴다 — 자격 증명이 없으면 이름 조회도 못 한다. 던지는 에러는 `ports.ts` 에 새로 둔다:
 
-나온 참조를 전부 지운다. `symbol-service.ts`·`symbol-routes.ts` 의 참조는 Task 5 에서 그 코드 자체가 사라지므로, 여기서는 컴파일이 되도록 최소한만 손댄다.
+```ts
+export class StockInfoSourceNotConfiguredError extends Error {
+  constructor() {
+    super('증권사 API 자격 증명이 설정되지 않았습니다. 종목 이름 조회에 필요합니다.');
+    this.name = 'StockInfoSourceNotConfiguredError';
+  }
+}
+```
+
+`MarketDataSourceNotConfiguredError` 를 잡던 곳(`SymbolInfoService` 등)이 있으면 새 이름으로 바꾼다. `grep -rn "MarketDataSourceNotConfiguredError" src tests --include=*.ts` 로 전부 찾아라.
+
+- [ ] **Step 4: container·server 조립을 고친다**
+
+`src/server/bootstrap/container.ts`:
+- `import { BrokerSyncService } ...`, `import { SymbolMetricsService } ...` 제거
+- `AppContainer` 에서 `brokerSyncService`, `symbolMetricsService` 제거
+- `brokerSyncService`·`symbolMetricsService` 생성 블록 제거
+- `createTossMarketDataSource` 호출은 남긴다. 다만 담는 변수 이름이 `marketDataSource` 면 `stockInfoSource` 로 바꾼다 — 더 이상 봉을 주지 않으니 이름이 거짓이 된다
+- 반환 객체에서 두 항목 제거
+
+`src/server/bootstrap/server.ts:70-72`: `container.brokerSyncService`·`container.symbolMetricsService` 를 넘기던 인자를 제거하고, 라우트 등록 시그니처를 맞춘다.
+
+- [ ] **Step 5: `GET /symbols/metrics` 라우트를 지운다**
+
+`src/server/modules/market-data/presentation/symbol-routes.ts` 에서 125행 근처의 `GET /symbols/metrics` 핸들러와 `symbolMetricsService` 파라미터(48~49행)를 제거한다. `GET /symbols/info` 와 `symbolInfoService` 는 남긴다.
+
+- [ ] **Step 6: toss 어댑터 테스트를 줄인다**
+
+`tests/unit/toss-market-data-source.test.ts` 에서 봉 조회·현재가·랭킹을 검증하던 케이스를 지우고 `getStockInfo` 케이스만 남긴다. 파일이 통째로 비면 지운다.
+
+Run: `pnpm vitest run tests/unit/toss-market-data-source.test.ts tests/unit/symbol-info-service.test.ts`
+Expected: PASS
+
+- [ ] **Step 7: 남은 참조를 확인한다**
+
+Run: `grep -rn "brokerSyncService\|BrokerSyncService\|MarketDataSource\|SymbolMetricsService\|symbolMetricsService\|aggregateToHourly\|csv-parser\|minute-backfill" src tests --include=*.ts --include=*.tsx`
+
+`symbol-service.ts`·`symbol-routes.ts` 안의 봉 수집 관련 참조는 Task 5 에서 그 코드 자체가 사라진다. 여기서는 **삭제한 모듈을 import 하던 줄만** 지워 "모듈을 찾을 수 없음" 오류를 없애고, 그 파일의 로직은 건드리지 마라.
+
+웹의 `use-symbol-metrics.ts`·`symbol-sort.ts`·`symbol-check-list.tsx` 는 Task 8 이 지운다 — 여기서 건드리지 마라.
 
 Run: `pnpm typecheck`
-Expected: `symbol-service.ts`, `symbol-routes.ts`, `backtest-routes.ts` 에만 오류가 남는다
+Expected: `symbol-service.ts`, `symbol-routes.ts`, `backtest-routes.ts`, 그리고 통합 테스트 픽스처에만 오류가 남는다. "모듈을 찾을 수 없음" 오류는 없어야 한다.
 
-- [ ] **Step 6: 커밋**
+- [ ] **Step 8: 커밋**
 
 ```bash
 git add -A
-git commit -m "refactor(market-data): 증권사 봉 수집 경로를 걷어낸다"
+git commit -m "refactor(market-data): 증권사 어댑터를 종목 이름 조회 하나로 줄인다"
 ```
 
 ---
@@ -945,7 +1003,8 @@ git commit -m "test: 분봉 전제 테스트를 걷어낸다"
 `/datasets/prices` 를 없앤다. `data-page.tsx` 는 종목 마스터만 담는 구획으로 줄어든다.
 
 **Files:**
-- Delete: `src/web/features/datasets/symbols-panel.tsx`, `symbol-list.tsx`, `symbol-check-list.tsx`, `symbol-select-scope.tsx`, `sync-dialog.tsx`, `candle-inspect-drawer.tsx`, `symbol-facts-badge.tsx`
+- Delete: `src/web/features/datasets/symbols-panel.tsx`, `symbol-list.tsx`, `symbol-check-list.tsx`, `symbol-select-scope.tsx`, `sync-dialog.tsx`, `candle-inspect-drawer.tsx`, `symbol-facts-badge.tsx`, `symbol-sort.ts`
+- Delete: `src/web/lib/use-symbol-metrics.ts`, `tests/unit/symbol-sort.test.ts`
 - Modify: `src/web/app/router.tsx:31-40`
 - Modify: `src/web/features/datasets/data-page.tsx`
 - Modify: `src/web/features/datasets/dataset-slices.ts`
@@ -971,8 +1030,13 @@ git rm src/web/features/datasets/symbols-panel.tsx \
        src/web/features/datasets/symbol-select-scope.tsx \
        src/web/features/datasets/sync-dialog.tsx \
        src/web/features/datasets/candle-inspect-drawer.tsx \
-       src/web/features/datasets/symbol-facts-badge.tsx
+       src/web/features/datasets/symbol-facts-badge.tsx \
+       src/web/features/datasets/symbol-sort.ts \
+       src/web/lib/use-symbol-metrics.ts \
+       tests/unit/symbol-sort.test.ts
 ```
+
+`symbol-sort.ts` 와 `use-symbol-metrics.ts` 는 Task 3 이 지운 `GET /symbols/metrics` 의 웹 쪽 짝이다. `symbol-types.ts` 와 `symbol-search.ts`·`symbol-codes.ts` 는 위저드가 쓰므로 **남긴다** — 헷갈리지 마라.
 
 - [ ] **Step 3: 라우트를 고친다**
 
