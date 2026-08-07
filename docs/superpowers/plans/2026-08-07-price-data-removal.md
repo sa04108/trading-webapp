@@ -657,7 +657,12 @@ git commit -m "refactor(market-data): 봉 주기를 일봉 하나로 좁힌다"
 **Files:**
 - Modify: `src/server/modules/market-data/application/symbol-service.ts`
 - Modify: `src/server/modules/market-data/presentation/symbol-routes.ts:211-390`
+- Modify 또는 Delete: `src/server/bootstrap/facts-wiring.ts`, `tests/unit/facts-wiring.test.ts`
 - Delete: `tests/integration/symbol-service-slices.test.ts`, `tests/unit/symbol-service-version-pin.test.ts`, `tests/unit/symbol-summary.test.ts`(슬라이스만 검증하면 삭제, 아니면 수정)
+
+`facts-wiring.ts` 는 두 클로저를 내보낸다. `createFactsPhase` 는 Task 3 이 `BrokerSyncService` 를 지우면서 이미 죽었다 — 유일한 소비자가 그 잡의 `factsPhase` 였다. `createFactsSyncEstimator` 는 `GET /symbols/sync-estimate` 를 위한 것이라 이 태스크가 그 라우트를 지우면 함께 죽는다. **둘 다 죽으면 파일과 테스트를 지우고, 남는 소비자가 있으면 죽은 쪽만 지운다** — `grep -rn "createFactsPhase\|createFactsSyncEstimator" src tests --include=*.ts` 로 확인해라.
+
+DART 재무 수집 자체는 사라지지 않는다 — `src/server/cli.ts:187` 의 `facts:sync` 명령이 `container.factSyncService.sync` 를 직접 부른다. 웹에서 촉발하던 경로만 없어진다.
 
 **Interfaces:**
 - Produces: `SymbolService` 에서 아래가 사라진다 — `getCandleSyncEstimate`, `getMinutePlan`, `importCsv`, `rejectImport`, `getCandlesForInspection`, `getSyncJob`, `runningSyncJobId`, `markSynced`, `refreshCoverage`, `bumpVersion`, `getLatestVersion`, `versionSnapshotFor`, `getCoverage`
@@ -936,9 +941,12 @@ git commit -m "refactor(backtests): 커버리지를 KRX 일봉에서 직접 구�
 
 **Files:**
 - Delete: `tests/integration/backtest-minute-dataset.test.ts`
+- Delete: `tests/integration/market-data.test.ts`
 - Modify: `tests/unit/strategy-data-requirement.test.ts`
-- Modify: `tests/integration/backtest-universe-rule-run.test.ts`, `tests/integration/market-data.test.ts`
+- Modify: `tests/integration/backtest-universe-rule-run.test.ts`
 - Modify: `tests/integration/backtest-facts-worker.test.ts:118, 221, 349`
+
+`market-data.test.ts`(723줄)는 **수정이 아니라 삭제**다. 파일 전체가 `BrokerSyncService`·`MarketDataSource`·CSV 가져오기·슬라이스 라우트 계약을 검증하는데 그 대상이 전부 사라졌다. 남길 케이스가 없다.
 
 웹 전용 테스트(`job-timeframe.test.ts`, `dataset-slices.test.ts`)는 Task 8 에서 다룬다.
 
@@ -1116,8 +1124,16 @@ Expected: PASS
   "일봉은 편향 없고 분봉은 편향 있는" 상태가 조용히 남는다.
 - **가격 조회 기능을 뺀 이유:** 사람이 가격을 확인하는 일은 증권사 화면이 더 잘한다.
   이 애플리케이션에서 가격은 백테스트 전략의 입력이지 열람 대상이 아니다.
-- **증권사 포트도 함께 제거:** `MarketDataSource` 의 소비자가 사라졌다. 매매 시스템은
-  나중에 자기 형태의 포트를 새로 갖는다 — 지금 형태를 남기면 쓰이지 않는 채 낡는다.
+- **증권사 어댑터는 종목 이름 조회만 남겼다:** `MarketDataSource`(봉 조회)의 소비자가
+  사라졌다. 매매 시스템은 나중에 자기 형태의 포트를 새로 갖는다 — 지금 형태를 남기면
+  쓰이지 않는 채 낡는다. 다만 같은 어댑터가 구현하던 `StockInfoSource` 는 백테스트
+  위저드·상세 화면의 종목 이름 표시가 계속 쓰므로 남겼다.
+- **시총·거래대금 정렬도 함께 제거:** `GET /symbols/metrics` 는 증권사 현재가로 계산해
+  가격 데이터 화면에서만 썼다. 화면이 사라지면 소비자가 없다. 백테스트 유니버스의 시총
+  순위는 KRX 이력(`symbol_master_market_caps`)을 쓰므로 영향이 없다.
+- **DART 재무 수집은 CLI 전용이 됐다:** 웹에서 촉발하던 경로는 증권사 동기화 잡의
+  `factsPhase` 였고 그 잡이 사라졌다. `pnpm cli facts:sync` 가 같은 유스케이스를 그대로
+  부른다 — 기능이 없어진 것이 아니라 진입점이 하나로 줄었다.
 - **영향:** `symbol_slices`·`symbol_coverage`·`data_sync_jobs` 가 쓰이지 않게 됐다.
   실제 스키마 정리와 parquet·DuckDB 제거는 후속 계획에서 한다.
 ```
