@@ -29,12 +29,6 @@ export interface CandleRepository {
   getCandles(query: CandleQuery): AsyncIterable<Candle>;
   /** 저장된 봉의 시작 시각 목록 (coverage 계산용) */
   getTimestamps(market: Market, timeframe: Timeframe, symbol: string): Promise<number[]>;
-  saveCandles(candles: readonly Candle[]): Promise<void>;
-  /**
-   * 종목의 물리 저장분 전체 삭제. 데이터셋 삭제는 참조만 끊으므로 봉을 지우지 않는다 —
-   * 다른 데이터셋이 같은 종목을 참조할 수 있다. 존재하지 않아도 에러가 아니다.
-   */
-  deleteSymbol(market: Market, symbol: string): Promise<void>;
 }
 
 export interface FetchCandleRequest {

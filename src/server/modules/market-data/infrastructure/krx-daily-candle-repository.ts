@@ -2,7 +2,7 @@ import { and, asc, eq, gte, lte } from 'drizzle-orm';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import { krxDailyBars } from '../../../shared/db/schema.js';
 import type { Candle, Market, Timeframe } from '../domain/candle.js';
-import type { CandleQuery } from '../application/ports.js';
+import type { CandleQuery, CandleRepository } from '../application/ports.js';
 
 const MS_PER_DAY = 86_400_000;
 
@@ -41,12 +41,8 @@ export function floorToDate(tsMs: number): string {
  * 쓰기는 `SymbolMasterService.ingestDate` 가 종목 마스터 이벤트·coverage 와 같은
  * 트랜잭션 안에서 직접 한다. 저장소가 쓰기를 갖지 않는 이유가 그것이다 — 봉만 따로
  * 쓰는 경로가 생기면 그 원자성이 깨진다.
- *
- * `CandleRepository` 를 아직 구현하지 않는다 — 포트가 여전히 `saveCandles`/
- * `deleteSymbol` 을 요구해서다. 포트를 읽기 전용으로 줄이는 일은 Task 2 담당이고,
- * 그때 이 클래스도 `implements CandleRepository` 를 다시 붙인다.
  */
-export class KrxDailyCandleRepository {
+export class KrxDailyCandleRepository implements CandleRepository {
   constructor(private readonly db: AppDatabase) {}
 
   /**
