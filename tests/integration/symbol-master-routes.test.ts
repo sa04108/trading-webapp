@@ -143,7 +143,7 @@ describe('symbol-master routes', () => {
     expect(res.json()).toEqual({ date: '2025-01-06', covered: false, symbols: [] });
   });
 
-  it('coverage 는 구간·체크포인트·백필 상태를 담는다', async () => {
+  it('coverage 는 구간·백필 상태를 담는다', async () => {
     const { app, fake, cookie } = await setup();
     seedTradingDay(fake, '2025-01-06');
     await app.app.inject({
@@ -161,12 +161,7 @@ describe('symbol-master routes', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.ranges).toEqual([{ startDate: '2025-01-06', endDate: '2025-01-06' }]);
-    expect(body.checkpoints).toHaveLength(1);
-    expect(body.checkpoints[0]).toMatchObject({
-      checkpointDate: '2025-01-06',
-      verified: true,
-      mismatch: false,
-    });
+    expect(body).not.toHaveProperty('checkpoints');
     expect(typeof body.lastSyncedAtMs).toBe('number');
     expect(body.backfill).toMatchObject({
       state: 'IDLE',
@@ -283,7 +278,6 @@ describe('symbol-master routes', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.ranges).toEqual([]);
-    expect(body.checkpoints).toEqual([]);
     expect(body.lastSyncedAtMs).toBeNull();
   });
 
@@ -319,6 +313,7 @@ describe('symbol-master routes', () => {
     const { events } = res.json();
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
+      id: expect.any(String),
       effectiveDate: '2025-01-07',
       standardCode: 'KR7005930003',
       eventType: 'SHARES_CHANGED',

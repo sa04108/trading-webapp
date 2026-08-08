@@ -100,8 +100,7 @@ describe('SymbolMasterService.getMarketCapsAt', () => {
   });
 
   it('커버 밖 date 는 SymbolMasterNotCoveredError 를 던진다', async () => {
-    // 체크포인트가 하나도 없는 초기 상태다 — getUniverseAsOf 가 커버 여부를 가르는
-    // 유일한 근거라 어떤 날짜를 물어도 SymbolMasterNotCoveredError 로 걸러진다.
+    // coverage와 거래일 anchor가 없는 초기 상태라 어떤 날짜도 조회할 수 없다.
     const ctx = await setup();
 
     const before = ctx.fake.requests.length;
@@ -112,13 +111,10 @@ describe('SymbolMasterService.getMarketCapsAt', () => {
     await teardown(ctx);
   });
 
-  it('체크포인트는 있지만 coverage 갭인 날짜도 SymbolMasterNotCoveredError — 캐시에 이미 값이 있어도 반환하지 않는다', async () => {
+  it('SCD 버전이 관통해도 coverage 갭인 날짜는 캐시를 반환하지 않는다', async () => {
     const ctx = await setup();
-    // 01-02 최초 수집(체크포인트 생성) 후 01-03~04 를 건너뛰고 01-05 를 수집한다 —
-    // symbol-master-ingest.test.ts 의 갭 메우기 시나리오와 같은 모양이다. 체크포인트는
-    // 이미 존재하므로 getUniverseAsOf('2023-01-03') 는 (틀리게) 재구성에 성공하지만,
-    // isCovered('2023-01-03') 는 false 다 — coverage 구간이 [01-02,01-02], [01-05,01-05]
-    // 뿐이라 01-03 은 갭이다.
+    // 01-02 최초 수집 후 01-03~04 를 건너뛰고 01-05 를 수집한다. 열린 SCD 버전은
+    // 01-03을 관통하지만 coverage는 [01-02,01-02], [01-05,01-05]뿐이라 갭이다.
     await ingestSingleSymbolUniverse(ctx, '2023-01-02', '20230102');
     await ingestSingleSymbolUniverse(ctx, '2023-01-05', '20230105');
     expect(ctx.svc.isCovered('2023-01-03')).toBe(false);

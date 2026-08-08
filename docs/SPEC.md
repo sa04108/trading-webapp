@@ -757,9 +757,11 @@ symbol_facts_state
 symbol_versions
 krx_daily_bars
 
-symbol_master_checkpoints
-symbol_master_checkpoint_symbols
-symbol_master_events
+symbol_master_versions
+symbol_master_storage_state
+symbol_master_checkpoints             # legacy 이행용, ACTIVE 전환 후 비어 있음
+symbol_master_checkpoint_symbols      # legacy 이행용, ACTIVE 전환 후 비어 있음
+symbol_master_events                  # legacy 이행용, ACTIVE 전환 후 비어 있음
 symbol_master_coverage
 symbol_master_market_caps
 symbol_master_trading_days
@@ -802,10 +804,12 @@ DART 가 답하지 못해 gap 이 난 연도이고 위저드 경고가 읽는다
 합쳐 두면 자본변동만 받은 종목을 재무 전략이 "데이터 있음"으로 오판한다.
 
 봉의 유일한 출처는 `krx_daily_bars` 다. `SymbolMasterService.ingestDate`가 종목
-마스터 이벤트·coverage 갱신과 같은 트랜잭션에서 쓴다.
+마스터 SCD 버전·coverage 갱신과 같은 트랜잭션에서 쓴다.
 
-나머지 `symbol_master_*` 테이블(체크포인트·이벤트·coverage·시총·거래일)도 같은
-수집이 채운다. 설계 문서는
+종목 마스터는 날짜별 full universe를 입력으로 받되 `symbol_master_versions`에
+종목 상태가 바뀐 관측일만 SCD Type 2 반개구간으로 저장한다. coverage·시총·거래일도
+같은 수집 경로가 채운다. 기존 체크포인트·이벤트 테이블은 0012 이행 후 빈 legacy
+구조로만 남고 신규 쓰기·조회에는 쓰이지 않는다. 설계 문서는
 `docs/superpowers/specs/2026-08-05-symbol-master-design.md` 다.
 
 `universe_snapshots`·`universe_snapshot_symbols`는 스키마에 없다.

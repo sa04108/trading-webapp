@@ -96,9 +96,9 @@ describe('SymbolMasterScheduler', () => {
     const clock = new MutableClock(kstTimeMs('2024-01-15', 19));
     const ingestDate = vi
       .fn()
-      .mockResolvedValueOnce({ kind: 'TRADING_DAY', eventCount: 2, checkpointSaved: true })
-      .mockResolvedValueOnce({ kind: 'TRADING_DAY', eventCount: 1, checkpointSaved: false })
-      .mockResolvedValueOnce({ kind: 'TRADING_DAY', eventCount: 0, checkpointSaved: false });
+      .mockResolvedValueOnce({ kind: 'TRADING_DAY' })
+      .mockResolvedValueOnce({ kind: 'TRADING_DAY' })
+      .mockResolvedValueOnce({ kind: 'TRADING_DAY' });
 
     const coverageRanges = vi.fn().mockReturnValue([
       { startDate: '2024-01-10', endDate: '2024-01-10' },

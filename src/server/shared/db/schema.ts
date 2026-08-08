@@ -3,7 +3,17 @@
  * 테이블은 Phase 진행에 따라 추가된다. drizzle-kit generate 로 migrations/ 를 생성한다.
  * schema_migrations 역할은 drizzle 의 __drizzle_migrations 테이블이 담당한다.
  */
-import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { sql } from 'drizzle-orm';
+import {
+  check,
+  index,
+  integer,
+  primaryKey,
+  real,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from 'drizzle-orm/sqlite-core';
 
 export const users = sqliteTable('users', {
   id: text('id').primaryKey(),
@@ -470,9 +480,57 @@ export const backtestSymbolMetrics = sqliteTable(
 // ── 종목 마스터 (설계 2026-08-05-symbol-master) ──────────────────────
 
 /**
- * 분기 경계 첫 거래일의 전체 스냅샷. 재구성 시작점이자 검증 앵커다.
- * mismatchJson 이 null 이 아니면 이벤트 재구성과 KRX 실측이 어긋났던 기록이다.
+ * 종목 상태 SCD Type 2 버전. 유효 구간은 [validFromDate, validToDate) 다.
+ * 종목 상태가 바뀐 날에만 새 행을 남기며 validToDate=null 은 알려진 미래
+ * 구간까지 계속 유효함을 뜻한다.
  */
+export const symbolMasterVersions = sqliteTable(
+  'symbol_master_versions',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    standardCode: text('standard_code').notNull(),
+    validFromDate: text('valid_from_date').notNull(),
+    validToDate: text('valid_to_date'),
+    shortCode: text('short_code').notNull(),
+    name: text('name').notNull(),
+    market: text('market').notNull(),
+    /** 10진 정수 문자열 — bigint 정밀도를 그대로 보존한다 */
+    sharesOutstanding: text('shares_outstanding').notNull(),
+    instrumentType: text('instrument_type').notNull(),
+    listedDate: text('listed_date'),
+    recordedAtMs: integer('recorded_at_ms').notNull(),
+  },
+  (table) => [
+    uniqueIndex('idx_smv_code_from').on(table.standardCode, table.validFromDate),
+    uniqueIndex('idx_smv_open_code')
+      .on(table.standardCode)
+      .where(sql`${table.validToDate} IS NULL`),
+    index('idx_smv_asof').on(table.validFromDate, table.validToDate),
+    index('idx_smv_valid_to').on(table.validToDate),
+    check(
+      'chk_smv_valid_range',
+      sql`${table.validToDate} IS NULL OR ${table.validToDate} > ${table.validFromDate}`,
+    ),
+  ],
+);
+
+/** legacy 체크포인트+이벤트 이력을 SCD 버전으로 원자적 변환했는지 표시한다. */
+export const symbolMasterStorageState = sqliteTable(
+  'symbol_master_storage_state',
+  {
+    singleton: integer('singleton').primaryKey(),
+    phase: text('phase').notNull(), // PENDING | ACTIVE
+    migratedAtMs: integer('migrated_at_ms'),
+  },
+  (table) => [
+    check('chk_sms_singleton', sql`${table.singleton} = 1`),
+    check('chk_sms_phase', sql`${table.phase} IN ('PENDING', 'ACTIVE')`),
+  ],
+);
+
+// 아래 세 테이블은 SCD 이행 전 데이터 보존용 legacy 구조다.
+// 신규 수집과 조회에서는 사용하지 않고, 후속 contract 마이그레이션 전까지만 남겨 둔다.
+/** 분기 체크포인트 메타데이터 — legacy 이행 전용. */
 export const symbolMasterCheckpoints = sqliteTable('symbol_master_checkpoints', {
   id: text('id').primaryKey(),
   checkpointDate: text('checkpoint_date').notNull().unique(),

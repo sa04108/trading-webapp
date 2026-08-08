@@ -4,6 +4,11 @@ import {
   SymbolMasterService,
   type SymbolMasterServiceDeps,
 } from '../../src/server/modules/market-data/application/symbol-master-service.js';
+import {
+  symbolMasterCoverage,
+  symbolMasterTradingDays,
+  symbolMasterVersions,
+} from '../../src/server/shared/db/schema.js';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
 import {
   baseInfoFixture,
@@ -46,14 +51,14 @@ async function teardown(ctx: Ctx): Promise<void> {
 }
 
 describe('SymbolMasterService.ingestDate', () => {
-  it('최초 수집은 체크포인트를 만들고 이벤트가 없다', async () => {
+  it('최초 수집은 baseline 버전을 만들고 이벤트가 없다', async () => {
     const ctx = await setup();
     ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
     ctx.fake.setResponse('stk_isu_base_info', '20230102', { body: krxEnvelope([baseInfoFixture()]) });
 
     const result = await ctx.svc.ingestDate('2023-01-02');
 
-    expect(result).toEqual({ kind: 'TRADING_DAY', eventCount: 0, checkpointSaved: true });
+    expect(result).toEqual({ kind: 'TRADING_DAY' });
     expect(ctx.svc.getUniverseAsOf('2023-01-02').size).toBe(1);
     expect(ctx.svc.isCovered('2023-01-02')).toBe(true);
     await teardown(ctx);
@@ -72,10 +77,13 @@ describe('SymbolMasterService.ingestDate', () => {
 
     const result = await ctx.svc.ingestDate('2023-01-03');
 
-    expect(result).toEqual({ kind: 'TRADING_DAY', eventCount: 1, checkpointSaved: false });
+    expect(result).toEqual({ kind: 'TRADING_DAY' });
     expect(ctx.svc.getUniverseAsOf('2023-01-03').get('KR7005930003')!.sharesOutstanding).toBe(
       '2000000',
     );
+    expect(ctx.svc.listEvents('2023-01-03', '2023-01-03')).toMatchObject([
+      { eventType: 'SHARES_CHANGED' },
+    ]);
     await teardown(ctx);
   });
 
@@ -120,7 +128,7 @@ describe('SymbolMasterService.ingestDate', () => {
     });
     const day5 = await ctx.svc.ingestDate('2023-01-05');
 
-    expect(day5).toEqual({ kind: 'TRADING_DAY', eventCount: 1, checkpointSaved: false });
+    expect(day5).toEqual({ kind: 'TRADING_DAY' });
     expect(ctx.svc.listEvents('2023-01-05', '2023-01-05')[0]).toMatchObject({
       observedSpanStart: '2023-01-02',
     });
@@ -130,8 +138,8 @@ describe('SymbolMasterService.ingestDate', () => {
     ctx.fake.setResponse('stk_isu_base_info', '20230103', { body: krxEnvelope([baseInfoFixture()]) });
     const day3 = await ctx.svc.ingestDate('2023-01-03');
 
-    expect(day3).toEqual({ kind: 'TRADING_DAY', eventCount: 0, checkpointSaved: false });
-    // 01-05 이벤트는 지워지고 01-03 을 기준으로 다시 계산된다 — 중복 이벤트가 남지 않는다
+    expect(day3).toEqual({ kind: 'TRADING_DAY' });
+    // 파생 이벤트의 관측 기준은 새로 확인한 01-03 으로 당겨지고 중복은 생기지 않는다.
     const recomputed = ctx.svc.listEvents('2023-01-05', '2023-01-05');
     expect(recomputed).toHaveLength(1);
     expect(recomputed[0]).toMatchObject({
@@ -153,11 +161,11 @@ describe('SymbolMasterService.ingestDate', () => {
     await ctx.svc.ingestDate('2023-01-02');
 
     // 01-04: 01-03 을 건너뛰고 수집 — 값이 01-02 와 같아 이벤트가 0개다. coverage 에는
-    // 남지만 symbol_master_events 에는 행이 생기지 않는 "무변화 커버 거래일"이 된다.
+    // 남지만 상태 버전은 늘지 않는 "무변화 커버 거래일"이 된다.
     ctx.fake.setResponse('stk_bydd_trd', '20230104', { body: krxEnvelope([dailyFixture()]) });
     ctx.fake.setResponse('stk_isu_base_info', '20230104', { body: krxEnvelope([baseInfoFixture()]) });
     const day4 = await ctx.svc.ingestDate('2023-01-04');
-    expect(day4).toEqual({ kind: 'TRADING_DAY', eventCount: 0, checkpointSaved: false });
+    expect(day4).toEqual({ kind: 'TRADING_DAY' });
 
     // 01-06: 01-05 를 건너뛰고 수집 — 상장주식수가 1,500,000 으로 바뀐다. 직전 커버일이
     // 01-04(무변화 거래일)이므로 span 이 01-04 를 기준으로 기록된다.
@@ -166,7 +174,7 @@ describe('SymbolMasterService.ingestDate', () => {
       body: krxEnvelope([baseInfoFixture({ LIST_SHRS: '1,500,000' })]),
     });
     const day6 = await ctx.svc.ingestDate('2023-01-06');
-    expect(day6).toEqual({ kind: 'TRADING_DAY', eventCount: 1, checkpointSaved: false });
+    expect(day6).toEqual({ kind: 'TRADING_DAY' });
     expect(ctx.svc.listEvents('2023-01-06', '2023-01-06')[0]).toMatchObject({
       observedSpanStart: '2023-01-04',
     });
@@ -178,7 +186,7 @@ describe('SymbolMasterService.ingestDate', () => {
     ctx.fake.setResponse('stk_isu_base_info', '20230103', { body: krxEnvelope([baseInfoFixture()]) });
     const day3 = await ctx.svc.ingestDate('2023-01-03');
 
-    expect(day3).toEqual({ kind: 'TRADING_DAY', eventCount: 0, checkpointSaved: false });
+    expect(day3).toEqual({ kind: 'TRADING_DAY' });
     // D2 는 01-04 다 — 값이 01-03 과 같아 재계산 결과도 이벤트 0개고, 기존에도 없었으니 그대로다.
     expect(ctx.svc.listEvents('2023-01-04', '2023-01-04')).toHaveLength(0);
     // 01-06 이벤트는 01-04 가 여전히 진짜 직전 커버일이라 손대지 않아야 한다 — span 이 01-03 으로
@@ -196,26 +204,120 @@ describe('SymbolMasterService.ingestDate', () => {
     await teardown(ctx);
   });
 
-  it('체크포인트만 남고 coverage 가 비어 있어도 재수집이 UNIQUE 위반 없이 복구한다', async () => {
+  it('baseline 버전만 남고 coverage 가 비어 있어도 재수집이 안전하게 복구한다', async () => {
     const ctx = await setup();
     ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
     ctx.fake.setResponse('stk_isu_base_info', '20230102', { body: krxEnvelope([baseInfoFixture()]) });
 
-    // 체크포인트 저장과 coverage 갱신이 두 트랜잭션으로 나뉘어 있던 시절에 그 사이에서
-    // 죽으면 남았을 상태를 흉내낸다 — checkpointDate 는 있는데 coverage 는 비어 있다.
-    ctx.svc.saveCheckpoint('2023-01-02', new Map(), true);
+    ctx.t.container.database.db.insert(symbolMasterVersions).values({
+      standardCode: 'KR7005930003',
+      validFromDate: '2023-01-02',
+      validToDate: null,
+      shortCode: '005930',
+      name: '삼성전자',
+      market: 'KOSPI',
+      sharesOutstanding: '1000000',
+      instrumentType: 'COMMON_STOCK',
+      listedDate: '1975-06-11',
+      recordedAtMs: ctx.t.container.clock.now(),
+    }).run();
     expect(ctx.svc.isCovered('2023-01-02')).toBe(false);
 
     const result = await ctx.svc.ingestDate('2023-01-02');
 
-    expect(result).toEqual({ kind: 'TRADING_DAY', eventCount: 0, checkpointSaved: true });
+    expect(result).toEqual({ kind: 'TRADING_DAY' });
     expect(ctx.svc.isCovered('2023-01-02')).toBe(true);
+    await teardown(ctx);
+  });
+
+  it('고립된 휴장일은 먼 과거의 열린 버전을 유니버스로 노출하지 않는다', async () => {
+    const ctx = await setup();
+    ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
+    ctx.fake.setResponse('stk_isu_base_info', '20230102', { body: krxEnvelope([baseInfoFixture()]) });
+    await ctx.svc.ingestDate('2023-01-02');
+
+    expect(await ctx.svc.ingestDate('2023-01-10')).toEqual({ kind: 'HOLIDAY' });
+    expect(ctx.svc.isCovered('2023-01-10')).toBe(true);
+    expect(ctx.svc.canResolveUniverseAsOf('2023-01-10')).toBe(false);
+    expect(() => ctx.svc.getUniverseAsOf('2023-01-10')).toThrow('커버하지 않는다');
+    await teardown(ctx);
+  });
+
+  it('거래가 있는데 기본정보가 비면 기존 종목을 상폐 처리하지 않고 실패한다', async () => {
+    const ctx = await setup();
+    ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
+
+    await expect(ctx.svc.ingestDate('2023-01-02')).rejects.toThrow(
+      'KRX KOSPI 기본정보가 비어 있다',
+    );
+    expect(ctx.svc.isCovered('2023-01-02')).toBe(false);
+    expect(ctx.t.container.database.db.select().from(symbolMasterVersions).all()).toHaveLength(0);
+    await teardown(ctx);
+  });
+
+  it('같은 상태의 과거 날짜를 하루씩 prepend 해도 버전 행은 늘지 않는다', async () => {
+    const ctx = await setup();
+    for (const compactDate of ['20230104', '20230103', '20230102']) {
+      ctx.fake.setResponse('stk_bydd_trd', compactDate, { body: krxEnvelope([dailyFixture()]) });
+      ctx.fake.setResponse('stk_isu_base_info', compactDate, {
+        body: krxEnvelope([baseInfoFixture()]),
+      });
+    }
+
+    await ctx.svc.ingestDate('2023-01-04');
+    await ctx.svc.ingestDate('2023-01-03');
+    await ctx.svc.ingestDate('2023-01-02');
+
+    const versions = ctx.t.container.database.db.select().from(symbolMasterVersions).all();
+    expect(versions).toHaveLength(1);
+    expect(versions[0]).toMatchObject({
+      standardCode: 'KR7005930003',
+      validFromDate: '2023-01-02',
+      validToDate: null,
+    });
+    await teardown(ctx);
+  });
+
+  it('trading_days에서 빠진 미래 버전 경계도 과거 overlay가 덮지 않는다', async () => {
+    const ctx = await setup();
+    const db = ctx.t.container.database.db;
+    const common = {
+      standardCode: 'KR7005930003',
+      shortCode: '005930',
+      name: '삼성전자',
+      market: 'KOSPI',
+      instrumentType: 'COMMON_STOCK',
+      listedDate: '1975-06-11',
+      recordedAtMs: ctx.t.container.clock.now(),
+    } as const;
+    db.insert(symbolMasterVersions).values([
+      { ...common, validFromDate: '2023-01-01', validToDate: '2023-01-05', sharesOutstanding: '1000000' },
+      { ...common, validFromDate: '2023-01-05', validToDate: null, sharesOutstanding: '2000000' },
+    ]).run();
+    db.insert(symbolMasterTradingDays).values([{ date: '2023-01-01' }, { date: '2023-01-10' }]).run();
+    db.insert(symbolMasterCoverage).values([
+      { startDate: '2023-01-01', endDate: '2023-01-01', syncedAtMs: ctx.t.container.clock.now() },
+      { startDate: '2023-01-05', endDate: '2023-01-05', syncedAtMs: ctx.t.container.clock.now() },
+    ]).run();
+    ctx.fake.setResponse('stk_bydd_trd', '20230103', { body: krxEnvelope([dailyFixture()]) });
+    ctx.fake.setResponse('stk_isu_base_info', '20230103', {
+      body: krxEnvelope([baseInfoFixture({ LIST_SHRS: '1,500,000' })]),
+    });
+
+    await ctx.svc.ingestDate('2023-01-03');
+
+    expect(db.select().from(symbolMasterVersions).all()
+      .sort((a, b) => a.validFromDate.localeCompare(b.validFromDate))).toMatchObject([
+      { validFromDate: '2023-01-01', validToDate: '2023-01-03', sharesOutstanding: '1000000' },
+      { validFromDate: '2023-01-03', validToDate: '2023-01-05', sharesOutstanding: '1500000' },
+      { validFromDate: '2023-01-05', validToDate: null, sharesOutstanding: '2000000' },
+    ]);
     await teardown(ctx);
   });
 });
 
 describe('SymbolMasterService.ingestDate 동시 호출 가드', () => {
-  it('같은 날짜 동시 호출은 KRX 를 한 번만 부르고 체크포인트·coverage 를 하나만 남긴다', async () => {
+  it('같은 날짜 동시 호출은 KRX 를 한 번만 부르고 baseline·coverage 를 하나만 남긴다', async () => {
     const ctx = await setup();
     const date = '2023-01-02';
     // KOSPI 일별매매 응답을 지연시켜 첫 호출이 KRX await 중일 때 두 번째 호출이 들어오게 한다.
@@ -230,11 +332,11 @@ describe('SymbolMasterService.ingestDate 동시 호출 가드', () => {
     // 가드가 없으면 두 호출 모두 isCovered 게이트를 통과해 따로 수집한다 — 여기서는
     // 두 번째 호출자가 새로 수집하지 않고 첫 호출의 Promise 를 그대로 받아야 한다.
     expect(second).toBe(first);
-    expect(first).toEqual({ kind: 'TRADING_DAY', eventCount: 0, checkpointSaved: true });
+    expect(first).toEqual({ kind: 'TRADING_DAY' });
 
     // 이중 수집이었다면 일별매매 2회 + 기본정보 2회를 두 번, 총 8회가 나갔을 것이다.
     expect(ctx.fake.requests.length).toBe(4);
-    expect(ctx.svc.listCheckpoints()).toHaveLength(1);
+    expect(ctx.t.container.database.db.select().from(symbolMasterVersions).all()).toHaveLength(1);
     const coverage = ctx.svc.coverageRanges();
     expect(coverage).toHaveLength(1);
     expect(coverage[0]).toMatchObject({ startDate: date, endDate: date });

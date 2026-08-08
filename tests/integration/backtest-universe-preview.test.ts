@@ -5,6 +5,7 @@ import {
   symbolMasterCoverage,
   symbolMasterMarketCaps,
   symbolMasterTradingDays,
+  symbolMasterVersions,
   symbols as symbolsTable,
 } from '../../src/server/shared/db/schema.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
@@ -135,11 +136,12 @@ describe('POST /backtests/universe-preview', () => {
       instrumentType: 'COMMON_STOCK' as const,
       listedDate: null,
     };
-    ctx.container.symbolMasterService.saveCheckpoint(
-      rebalanceDates[0]!,
-      new Map([[entry.standardCode, entry]]),
-      true,
-    );
+    ctx.container.database.db.insert(symbolMasterVersions).values({
+      ...entry,
+      validFromDate: rebalanceDates[0]!,
+      validToDate: null,
+      recordedAtMs: ctx.container.clock.now(),
+    }).run();
     for (const date of rebalanceDates) {
       // 리밸런스 날짜 하나씩만 하루짜리 coverage 로 개별 동기화된 상태를 그대로
       // 재현한다 — 기간 전체 백필이 아니라 날짜 단위 소급(POST /symbol-master/sync)
@@ -430,26 +432,20 @@ describe('POST /backtests/universe-preview — KRX 오류 매핑', () => {
     const date = '2026-01-05';
     const basDd = date.replaceAll('-', '');
 
-    // 리밸런스 날짜는 커버되지만(체크포인트+coverage) 시총 캐시는 비워 둔다 —
+    // 리밸런스 날짜는 커버되지만(SCD 버전+coverage) 시총 캐시는 비워 둔다 —
     // getMarketCapsAt 이 캐시 미스로 실제 KRX(fake 서버)를 부르게 하기 위해서다.
-    ctx.container.symbolMasterService.saveCheckpoint(
-      date,
-      new Map([
-        [
-          'KR7005930003',
-          {
-            standardCode: 'KR7005930003',
-            shortCode: '005930',
-            name: '삼성전자',
-            market: 'KOSPI' as const,
-            sharesOutstanding: '1000000',
-            instrumentType: 'COMMON_STOCK' as const,
-            listedDate: null,
-          },
-        ],
-      ]),
-      true,
-    );
+    ctx.container.database.db.insert(symbolMasterVersions).values({
+      standardCode: 'KR7005930003',
+      validFromDate: date,
+      validToDate: null,
+      shortCode: '005930',
+      name: '삼성전자',
+      market: 'KOSPI',
+      sharesOutstanding: '1000000',
+      instrumentType: 'COMMON_STOCK',
+      listedDate: null,
+      recordedAtMs: ctx.container.clock.now(),
+    }).run();
     ctx.container.database.db
       .insert(symbolMasterCoverage)
       .values({ startDate: date, endDate: date, syncedAtMs: ctx.container.clock.now() })
@@ -478,12 +474,9 @@ describe('POST /backtests/universe-preview — KRX 오류 매핑', () => {
 });
 
 /**
- * SymbolMasterNotCoveredError → 409 매핑 (리뷰 finding) — 원래는 휴장일만 수집된
- * 날짜에서 재현됐다. coverage 는 생기지만 체크포인트는 생기지 않는데
- * (`ingestDateUnguarded` 의 HOLIDAY 분기는 `mergeCoverage` 만 부르고 `writeCheckpoint`
- * 는 부르지 않는다), 그 상태에서 `isCovered(date)` 는 true 를 주지만 `getUniverseAsOf`
- * 는 `nearestCheckpoint` 를 하나도 찾지 못해 `SymbolMasterNotCoveredError` 를 던졌다 —
- * 이게 실제 운영에서 500 으로 터진 시나리오다.
+ * SymbolMasterNotCoveredError → 409 매핑 (리뷰 finding) — 원래는 휴장일만 고립되어
+ * 수집된 날짜에서 재현됐다. coverage 는 생기지만 같은 연속 구간 안에 거래일 anchor가
+ * 없어 유니버스를 확정할 수 없는 상태다.
  *
  * 리밸런스 적용 거래일 해소(Task 3, 스펙 2026-08-06)를 넣은 뒤로는 resolver 가
  * `isCovered(date)` 와 `effectiveTradingDate(date)` 를 둘 다 게이트로 본다. 휴장만
@@ -515,10 +508,10 @@ describe('POST /backtests/universe-preview — SymbolMasterNotCoveredError 매�
     await fake.close();
   });
 
-  it('휴장일만 수집돼 체크포인트가 없으면 미리보기는 uncoveredDates 로 걸러진다 (더 이상 500 도 409 도 아니다)', async () => {
+  it('휴장일만 수집돼 거래일 anchor가 없으면 미리보기는 uncoveredDates 로 걸러진다', async () => {
     const date = '2026-01-05';
     // KOSPI·KOSDAQ 양쪽 다 fake 서버 기본값(빈 응답)이라 ingestDate 는 이 날짜를
-    // 휴장으로 처리한다 — coverage 는 생기지만 체크포인트도, 거래일 기록도 생기지 않는다.
+    // 휴장으로 처리한다 — coverage 는 생기지만 거래일 기록은 생기지 않는다.
     await ctx.container.symbolMasterService.ingestDate(date);
     expect(ctx.container.symbolMasterService.isCovered(date)).toBe(true);
     expect(ctx.container.symbolMasterService.effectiveTradingDate(date)).toBeUndefined();

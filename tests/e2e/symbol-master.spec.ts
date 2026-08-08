@@ -10,10 +10,9 @@ import { login } from './login';
  * 제거됐다. 데이터 화면에 남은 구획이 종목 마스터 하나뿐이라 탭 nav 자체가
  * 없다 — 이 파일의 남은 시나리오는 URL 로만 화면을 확인한다.
  *
- * 이 스펙이 만든 커버리지·체크포인트를 되돌리는 afterEach 가 없다 — 옛
+ * 이 스펙이 만든 종목 버전·커버리지를 되돌리는 afterEach 가 없다 — 옛
  * krx-universe.spec.ts 의 자동 생성 데이터셋 정리와 달리, 여기서는 지울 게 없다.
- * (1) 체크포인트·coverage 는 감사 기록이라 지울 API 자체가 없다(스냅샷 레코드가
- * 불변이던 것과 같은 이유, dataset-service.ts 옛 주석 참고). (2) 그 데이터는 이
+ * (1) SCD 버전·coverage 를 지울 API 자체가 없다. (2) 그 데이터는 이
  * 화면에서 "카드 목록" 처럼 쌓여 다른 스펙의 strict-mode 셀렉터를 깨뜨리지 않는다 —
  * 옛 파일의 정리가 필요했던 이유(mvp-flow.spec.ts 가 데이터셋 카드 개수를 정확히
  * 세는 셀렉터를 쓴다) 자체가 이 화면엔 없다. 그래서 스펙이 스스로를 정리하는 방법은
@@ -76,6 +75,7 @@ test('종목 마스터 기본 탭 — 미커버 날짜를 동기화하면 표와
   await expect(page.getByText('카카오', { exact: true })).toBeVisible();
   await expect(page.getByText('PREFERRED_STOCK')).toBeVisible(); // 삼성전자우
   await expect(page.getByText('SPAC')).toBeVisible(); // 한국기업인수목적1호스팩
+  await expect(page.getByText(/체크포인트|미검증/)).toHaveCount(0);
 
   // CoverageTimeline 은 aria-label 을 Radix Slider 의 Root(래퍼)에 붙인다 — role="slider" 는
   // 그 안쪽 Thumb 에 있고 이름이 없어(getByRole('slider', {name: ...}) 는 못 찾는다),

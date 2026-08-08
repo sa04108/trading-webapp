@@ -174,7 +174,7 @@ function sendIfKrxError(reply: FastifyReply, error: unknown): boolean {
 }
 
 /**
- * SymbolMasterNotCoveredError 는 종목 마스터가 그 날짜를 재구성할 체크포인트를 아직
+ * SymbolMasterNotCoveredError 는 종목 마스터가 그 날짜의 coverage·거래일 anchor를
  * 갖지 못했다는 뜻이다 — 클라이언트가 먼저 동기화해야 하는 409 상황이지 서버 결함(500)이
  * 아니다. sendIfKrxError 와 나란히 둔다: 두 오류 모두 "지금은 KRX/마스터 상태가 준비되지
  * 않았다"는 같은 층위의 신호라 호출부에서 순서를 가리지 않고 둘 다 확인하면 된다.
