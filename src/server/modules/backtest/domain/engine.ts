@@ -198,6 +198,11 @@ function* runBacktestSteps(
   // 유니버스 밖 BUY 거부 warning 을 심볼당 한 번만 남기기 위한 추적 집합 — 리밸런스
   // 주기가 짧으면 같은 사유가 봉마다 반복돼 warningsJson 을 부풀린다(buysDroppedByCap 과 같은 이유)
   const universeRejectedSymbols = new Set<string>();
+  // 거래정지·무거래로 거부한 BUY 는 사유가 다르므로 집합도 따로 둔다 — 하나로 묶으면
+  // 정지 한 번이 그 종목의 경고 자리를 다 써버려 나중에 난 진짜 유니버스 위반이 사라진다.
+  const nonTradingRejectedSymbols = new Set<string>();
+  // 이번 봉에서 거래정지·무거래인 종목 — validateOrder 가 거부 사유를 가르는 데 쓴다
+  let nonTradingNow: ReadonlySet<string> | undefined;
 
   const factView = new PitFactView(input.facts ?? []);
   /**
@@ -247,7 +252,7 @@ function* runBacktestSteps(
 
     // 거래불가 종목을 매수 후보에서 뺀다. 멤버십 일정이 없어도(=제한 없음) 이날
     // 거래불가인 종목이 있으면 전체 심볼에서 그만큼 뺀 집합을 만든다.
-    const nonTradingNow = input.nonTradingSymbolsByTsMs?.get(tsMs);
+    nonTradingNow = input.nonTradingSymbolsByTsMs?.get(tsMs);
     if (nonTradingNow !== undefined && nonTradingNow.size > 0) {
       const base = tradableSymbols ?? new Set(symbols);
       const filtered = new Set<string>();
@@ -564,6 +569,20 @@ function* runBacktestSteps(
       const position = positions.get(order.symbol);
       if (!position || position.quantity <= 0) return null;
       return { ...order, quantity: Math.min(quantity, position.quantity) };
+    }
+
+    // BUY: 그날 거래정지·무거래인 종목은 여기서 먼저 가른다. 거래불가 필터가 이미
+    // tradableSymbols 에서 그 종목을 빼 놓기 때문에, 순서를 바꾸면 아래 멤버십 안전망
+    // 문구가 나가 멀쩡한 전략을 버그라고 말하게 된다. 보유분 청산(SELL)은 위에서 이미
+    // 갈라져 이 검증을 타지 않는다 — 정지 종목이라도 청산은 막지 않는다.
+    if (nonTradingNow?.has(order.symbol) === true) {
+      if (!nonTradingRejectedSymbols.has(order.symbol)) {
+        nonTradingRejectedSymbols.add(order.symbol);
+        warnings.push(
+          `${order.symbol} 매수 거부: 그날 거래정지·무거래로 매수할 수 없는 종목입니다.`,
+        );
+      }
+      return null;
     }
 
     // BUY: 활성 멤버십 일정 밖 심볼은 거부한다 — 전략이 유니버스를 스스로 걸러내지

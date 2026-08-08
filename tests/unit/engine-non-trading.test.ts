@@ -60,7 +60,35 @@ describe('엔진 거래불가일', () => {
     });
 
     expect(result.fills).toHaveLength(0);
-    expect(result.warnings.some((warning) => warning.includes('A 매수 거부'))).toBe(true);
+    const text = result.warnings.join('\n');
+    // 사유를 정지로 밝힌다. 멤버십 일정 안전망 문구로 새면 사용자는 멀쩡한 전략을
+    // 버그로 읽는다 — 접두사만 보는 단언으로는 그 회귀를 잡지 못한다.
+    expect(text).toContain('A 매수 거부: 그날 거래정지·무거래로 매수할 수 없는 종목입니다.');
+    expect(text).not.toContain('전략 버그 안전망');
+  });
+
+  it('거래정지 거부와 유니버스 위반 거부는 서로의 경고를 가리지 않는다', () => {
+    // 같은 종목이 0번 봉에서는 정지로, 2번 봉에서는 유니버스 밖이라 거부된다.
+    // 한 집합으로 중복을 지우면 뒤에 난 진짜 유니버스 위반이 조용히 사라진다.
+    const candles = [bar('A', 0), bar('A', 1), bar('A', 2), bar('B', 0), bar('B', 1), bar('B', 2)];
+    const result = runBacktest(buyEveryBarStrategy('A'), {
+      candles,
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 1,
+      maxPositions: 5,
+      nonTradingSymbolsByTsMs: new Map([[START, new Set(['A'])]]),
+      // 0~1번 봉은 A 가 유니버스 안, 2번 봉부터는 B 만 남는다
+      universeSchedule: [
+        { fromTsMs: START, symbols: ['A', 'B'] },
+        { fromTsMs: START + 2 * DAY, symbols: ['B'] },
+      ],
+    });
+
+    const text = result.warnings.join('\n');
+    expect(text).toContain('A 매수 거부: 그날 거래정지·무거래로 매수할 수 없는 종목입니다.');
+    expect(text).toContain('A 매수 거부: 활성 멤버십 일정에 포함되지 않은 종목입니다 (전략 버그 안전망).');
   });
 
   it('거래불가 종목이 없으면 그대로 매수한다', () => {
