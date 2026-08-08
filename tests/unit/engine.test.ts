@@ -593,10 +593,10 @@ describe('분할을 걸친 보유 포지션 조정', () => {
   });
 
   it('분할 후 진입한 포지션은 그 분할의 영향을 받지 않는다', () => {
-    // 봉 5 를 더 붙인다. buyAtBarStrategy(3) 은 봉 3 발행 → 봉 4 체결이라,
-    // 봉 4 가 마지막이면 조정 루프가 이 포지션을 한 번도 보지 못해 진입
-    // seed(executeOrder 의 BUY 분기) 를 지워도 테스트가 통과해버린다.
-    // 봉 5 를 더해야 조정 루프가 이 포지션을 실제로 훑어 seed 유무를 가른다.
+    // 봉 5 를 더 붙인다. buyAtBarStrategy(3) 은 봉 3 발행 → 봉 4 체결이다.
+    // 봉 4 가 마지막 봉이면 조정 루프가 이 포지션을 한 번도 훑지 않는다.
+    // 그러면 push 시점 커서 초기화(리스크 검증 구간)를 지워도 통과해버린다.
+    // 봉 5 를 더해야 조정 루프가 이 포지션을 실제로 훑어 판별력이 생긴다.
     const candles = [
       dailyBar(0, 100_000),
       dailyBar(1, 100_000),
@@ -623,9 +623,10 @@ describe('분할을 걸친 보유 포지션 조정', () => {
   });
 
   it('거래정지로 효력발생일에 봉이 없어도 거래 재개 봉에서 조정된다', () => {
-    // 봉 2(효력발생일)에서 A 의 봉만 뺀다. A 하나만 쓰면 그 시각 자체가
-    // 타임라인에서 사라져, 전역 커서를 쓰던 옛 코드도 그 시각을 지난 적이
-    // 없으니 재개 봉에서 우연히 통과해버린다 — 이 픽스처가 그 구멍을 막는다.
+    // 봉 2(효력발생일)에서 A 의 봉만 뺀다.
+    // A 하나만 쓰면 그 시각 자체가 타임라인에서 사라진다.
+    // 전역 커서를 쓰던 옛 코드도 그 시각을 지난 적이 없어 재개 봉에서
+    // 우연히 통과해버린다 — 이 픽스처가 그 구멍을 막는다.
     // B 를 봉 2 에 심어 타임라인에 그 시각을 남긴다.
     // 전역 커서라면 봉 2 를 지나며 전진해 A 의 이벤트를 놓친다.
     const candles = [
@@ -825,6 +826,58 @@ describe('분할을 걸친 보유 포지션 조정', () => {
     expect(buyFills[1]!.quantity).toBe(10); // 재진입 이전에 끝난 분할 — 조정 대상이 아니다
     expect(result.openPositions).toHaveLength(1);
     expect(result.openPositions[0]!.quantity).toBe(10);
+    expect(result.openPositions[0]!.avgEntryPrice).toBe(20_000);
+  });
+
+  it('정지 중인 종목에 발행한 주문도 재개 봉에서 조정이 살아 있다', () => {
+    // A 는 봉 1 에만 있고 봉 2~3 에는 없다(정지). 봉 4 에 재개한다.
+    // B 는 봉 2~3 에도 있어 그 시각이 타임라인에서 사라지지 않게 한다.
+    // 분할 효력은 봉 1 과 봉 2 사이에 떨어진다 — 정지 구간 초입이다.
+    const candles = [
+      dailyBar(1, 100_000),
+      { ...dailyBar(2, 100_000), symbol: 'B' },
+      { ...dailyBar(3, 100_000), symbol: 'B' },
+      dailyBar(4, 20_000),
+    ];
+
+    // O1 은 봉 1(A 있음)에 발행해 커서를 봉1 시각에 심는다.
+    // O2 는 봉 2(A 없음, 정지 중)에 발행한다.
+    // 이 push 가 커서를 덮어쓰면 O1 의 조정 권리가 사라진다.
+    const strategy: TradingStrategy<unknown, { step: number }> = {
+      id: 'buy-during-halt',
+      version: '1.0.0',
+      name: 't',
+      description: 't',
+      parameterSchema: z.unknown(),
+      initialize: () => ({ step: 0 }),
+      onBars(_context, state) {
+        const orders: OrderIntent[] =
+          state.step === 0 || state.step === 1
+            ? [{ symbol: 'A', side: 'BUY', quantity: 10 }]
+            : [];
+        state.step += 1;
+        return { orders };
+      },
+    };
+
+    const result = runBacktest(strategy as never, {
+      candles,
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+      facts: [splitFact('A', SPLIT_PERIOD_KEY, 5)],
+    });
+
+    // 두 주문 다 봉 4(재개=분할 봉)에서 체결되고, 둘 다 조정된 수량이어야
+    // 정지 구간에 발행된 주문의 조정 권리가 살아 있다고 말할 수 있다.
+    const buyFills = result.fills.filter((fill) => fill.side === 'BUY');
+    expect(buyFills).toHaveLength(2);
+    expect(buyFills[0]!.quantity).toBe(50); // 발행 시점의 10 이 아니라 조정된 50
+    expect(buyFills[1]!.quantity).toBe(50);
+    expect(result.openPositions).toHaveLength(1);
+    expect(result.openPositions[0]!.quantity).toBe(100);
     expect(result.openPositions[0]!.avgEntryPrice).toBe(20_000);
   });
 });

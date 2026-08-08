@@ -178,9 +178,8 @@ function* runBacktestSteps(
   // 액면분할은 주권교체 기간에 매매거래가 정지되는 것이 표준 경로다.
   // 커서가 전역 하나면 그 종목은 재개 봉에서도 영영 조정되지 않는다.
   //
-  // 심볼이 이 맵에 없으면 -1 로 본다. 보유가 없는 종목에 새 주문을 낼 때마다
-  // 이 맵을 지금 봉으로 seed 한다(주문 검증 구간 참고). 그래야 주문 발행
-  // 이전의 자본변동이 그 주문이나 뒤이은 포지션에 잘못 적용되지 않는다.
+  // 심볼이 이 맵에 없으면 -1 로 본다. 주문을 낼 때 이 맵을 심을지는
+  // 그 자리(리스크 검증 구간) 주석에 적는다.
   const lastAppliedTsMsBySymbol = new Map<string, number>();
 
   const state = strategy.initialize({ symbols, initialCash: input.initialCash, rng });
@@ -225,9 +224,10 @@ function* runBacktestSteps(
     // 커서는 봉이 있는 날에만 전진한다 — 그래야 거래정지로 빠진 구간의
     // 이벤트를 재개 봉에서 따라잡을 수 있다.
     //
-    // 포지션이 있는 종목뿐 아니라 대기 주문만 있는 종목도 훑는다. 정지 직전
-    // 봉에서 발행된 신규 진입 BUY 는 재개 봉(=분할 봉일 수 있다)에서 체결될
-    // 때 포지션이 아직 없다 — 포지션만 훑으면 이 주문은 조정에서 빠진다.
+    // 포지션이 있는 종목뿐 아니라 대기 주문만 있는 종목도 훑는다.
+    // 정지 직전 봉에서 발행된 신규 진입 BUY 는 재개 봉에서 체결된다.
+    // 그 재개 봉이 분할 봉일 수 있다.
+    // 이때 포지션이 아직 없어, 포지션만 훑으면 이 주문을 조정에서 놓친다.
     const corpActionSymbols = new Set<string>([
       ...positions.keys(),
       ...pendingOrders.map((order) => order.symbol),
@@ -317,13 +317,16 @@ function* runBacktestSteps(
       const validated = validateOrder(order);
       if (!validated) continue;
       pendingOrders.push(validated);
-      // 지금 보유가 없는 종목은 매번 지금 이 봉으로 커서를 seed 한다.
-      // 최초 진입이면 기본값 -1 때문에 문제가 된다.
-      // 청산 후 재진입이면 이전 포지션이 남긴 낡은 커서 때문에 문제가 된다.
-      // 두 경우 모두 발행 시점보다 앞선 분할이 새 주문에 다시 걸릴 수 있다.
-      // has() 로 조건을 좁히면 청산과 재진입 사이의 공백에서 일어난 분할을
-      // 놓친다.
-      if (!positions.has(validated.symbol)) {
+      // 이 종목에 오늘 봉이 있으면 지금 이 봉으로 커서를 심는다.
+      // 위 조정 루프가 이미 같은 값을 넣었을 수 있어 무해하다.
+      //
+      // 봉이 없어도 커서가 아직 없으면 역시 심는다.
+      // 안 그러면 기본값 -1 때문에 아주 오래된 분할까지 새 주문에 걸린다.
+      //
+      // 봉이 없고 커서가 이미 있으면 손대지 않는다.
+      // 정지 중 발행된 다른 주문이 앞서 잡아둔 값을 덮어쓰면 그 주문이
+      // 따라잡아야 할 구간을 잃는다.
+      if (bars.has(validated.symbol) || !lastAppliedTsMsBySymbol.has(validated.symbol)) {
         lastAppliedTsMsBySymbol.set(validated.symbol, tsMs);
       }
     }
