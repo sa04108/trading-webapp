@@ -168,6 +168,10 @@ export const symbolFactsState = sqliteTable('symbol_facts_state', {
     .references(() => symbols.code, { onDelete: 'cascade' }),
   /** number[] 오름차순 JSON */
   coveredYearsJson: text('covered_years_json').notNull(),
+  /** 자본변동을 수집한 연도 (number[] 오름차순 JSON). 제출 게이트가 읽는다 */
+  actionCoveredYearsJson: text('action_covered_years_json'),
+  /** 자본변동 수집에서 gap 이 난 연도 (number[] 오름차순 JSON). 경고가 읽는다 */
+  actionGapYearsJson: text('action_gap_years_json'),
   updatedAtMs: integer('updated_at_ms').notNull(),
 });
 

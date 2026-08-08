@@ -64,8 +64,12 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
 /**
  * 깨진 JSON 을 빈 목록으로 읽는다 — 여기서 던지면 수집 전체가 시작조차 못 한다.
  * 빈 목록이면 그 종목을 전 구간 다시 받으므로(멱등) 결과는 옳고 비용만 든다.
+ *
+ * `null` 도 여기로 들어온다 — nullable 컬럼(예: 자본변동 커버리지)이 아직 값을
+ * 받지 못한 행을 가리킨다. `SqliteCorporateActionCoverageStore` 가 재사용한다.
  */
-function parseYears(json: string): readonly number[] {
+export function parseYears(json: string | null): readonly number[] {
+  if (json === null) return [];
   try {
     const parsed: unknown = JSON.parse(json);
     if (!Array.isArray(parsed)) return [];
