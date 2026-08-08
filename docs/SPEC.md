@@ -547,7 +547,8 @@ strategyId
 strategyVersion
 strategySourceHash
 parameterJson
-datasetId
+universeRuleJson
+scheduleHash
 universeHash
 universeJson
 engineVersion
@@ -558,6 +559,14 @@ gitCommitSha
 startedAt
 completedAt
 ```
+
+`datasetId` 는 없다. 유니버스는 데이터셋이 아니라 규칙(`universeRuleJson`)으로
+받는다. 제출 시점에 `UniverseRuleResolver` 가 리밸런스 날짜별 멤버십을 구성해
+`scheduleHash` 에 남긴다.
+
+이 설계는 데이터셋을 종목의 참조 집합으로 좁힌 D-034 위에, 유니버스 규칙을 얹은
+후속 작업이다. DECISIONS.md 에 번호는 없다 — 근거는
+`docs/superpowers/plans/2026-08-05-symbol-master-backtest.md` 다.
 
 같은 입력·버전·seed는 같은 결과를 만들어야 한다.
 
@@ -702,6 +711,7 @@ SET memory_limit = '384MB';
 users
 sessions
 login_attempts
+notifications
 
 symbols
 symbol_slices
@@ -710,12 +720,14 @@ symbol_facts_state
 symbol_versions
 krx_daily_bars
 
-datasets
-dataset_symbols
-data_sync_jobs
+symbol_master_checkpoints
+symbol_master_checkpoint_symbols
+symbol_master_events
+symbol_master_coverage
+symbol_master_market_caps
+symbol_master_trading_days
 
-universe_snapshots
-universe_snapshot_symbols
+data_sync_jobs
 
 backtest_jobs
 backtest_runs
@@ -741,13 +753,25 @@ __drizzle_migrations
 봉의 유일한 출처는 `krx_daily_bars` 다. `SymbolMasterService.ingestDate`가 종목
 마스터 이벤트·coverage 갱신과 같은 트랜잭션에서 쓴다.
 
-`universe_snapshots`·`universe_snapshot_symbols`는 과거 시점 고정 유니버스의
-소유자다(D-040). 데이터셋에 붙지 않고 저장 후 불변이며, `universe_snapshot_symbols`는
-종목 삭제 후에도 값으로 남도록 `symbols`에 FK 를 걸지 않는다. `symbols.standard_code`
-는 KRX 표준코드(ISIN)를 보존해 단축코드 재사용과 종목 변경을 구분한다.
-`backtest_jobs.universe_snapshot_id`가 실행 시점에 스냅샷을 직접 참조하며, 이 또한
-FK 가 아니다 — 데이터셋·스냅샷이 지워져도 실행 기록은 서버 소유 pin 값으로 자립해야
-한다(REVIEW §9.2).
+나머지 `symbol_master_*` 테이블(체크포인트·이벤트·coverage·시총·거래일)도 같은
+수집이 채운다. 설계 문서는
+`docs/superpowers/specs/2026-08-05-symbol-master-design.md` 다.
+
+`universe_snapshots`·`universe_snapshot_symbols`는 스키마에 없다.
+
+D-040 이 설계한 저장 방식은 유니버스 규칙(`universeRule`, §9.5·§15)으로
+대체됐다. 스냅샷을 저장하는 대신 제출 시점에 `UniverseRuleResolver` 가
+종목 마스터에서 매번 다시 구성한다.
+
+이 대체는 DECISIONS.md 에 번호가 없다. 근거는
+`docs/superpowers/plans/2026-08-05-symbol-master-backtest.md` Task 7 이다.
+
+`symbols.standard_code`는 KRX 표준코드(ISIN)를 보존해 단축코드 재사용과 종목
+변경을 구분한다.
+
+`notifications`는 백테스트·데이터 동기화 알림을 전역으로 담는다 — 사용자가
+한 명이라 사용자별로 나누지 않는다. 설계 문서는
+`docs/superpowers/specs/2026-08-03-notification-center-design.md` 다.
 
 SQLite 설정:
 
@@ -823,27 +847,43 @@ GET /api/v1/strategies/:strategyId/schema
 ## 데이터
 
 ```http
-GET  /api/v1/datasets
-GET  /api/v1/datasets/:datasetId
-GET  /api/v1/datasets/:datasetId/coverage
+GET  /api/v1/markets
+GET  /api/v1/symbols
+GET  /api/v1/symbols/info
+POST /api/v1/symbols
+POST /api/v1/symbols/remove
+
+GET  /api/v1/symbol-master/universe
+GET  /api/v1/symbol-master/coverage
+GET  /api/v1/symbol-master/events
+POST /api/v1/symbol-master/sync
+POST /api/v1/symbol-master/backfill
 ```
 
-`import`·`sync`·`data-jobs` 엔드포인트는 D-041 로 사라졌다 — CSV 가져오기·증권사 봉
-동기화 자체가 없어졌다. 봉 수집은 이제 KRX 동기화(`symbol-master/sync`·
+라우트가 `datasets` 가 아니라 `symbols`·`symbol-master` 인 이유는 종목을 1급
+객체로 바꾼 D-034 다. 설계 문서는
+`docs/superpowers/specs/2026-07-31-symbol-as-first-class-design.md` 다.
+
+`import`·`sync`·`data-jobs` 엔드포인트는 그 뒤 D-041 로 사라졌다 — CSV 가져오기·
+증권사 봉 동기화 자체가 없어졌다. 봉 수집은 이제 KRX 동기화(`symbol-master/sync`·
 `symbol-master/backfill`)뿐이다.
 
 ## 백테스트
 
 ```http
+GET    /api/v1/backtests/profiles
+POST   /api/v1/backtests/universe-preview
 POST   /api/v1/backtests
 GET    /api/v1/backtests
 GET    /api/v1/backtests/:id
 POST   /api/v1/backtests/:id/cancel
 POST   /api/v1/backtests/:id/clone
+GET    /api/v1/backtests/:id/clone-draft
 DELETE /api/v1/backtests/:id
-GET    /api/v1/backtests/:id/events
 GET    /api/v1/backtests/:id/trades
+GET    /api/v1/backtests/:id/series
 GET    /api/v1/backtests/:id/export
+GET    /api/v1/backtests/:id/events
 ```
 
 진행률은 SSE를 기본으로 한다. 연결이 끊기면 polling으로 fallback한다.
@@ -873,12 +913,12 @@ GET /api/v1/system/info
     "riskPerTradePercent": 1,
     "maxPositionWeightPercent": 20
   },
-  "datasetId": "kr-daily-v1",
-  "timeframe": "1d",
-  "universe": {
-    "type": "SYMBOLS",
-    "symbols": ["005930", "000660"]
+  "universeRule": {
+    "markets": ["KOSPI"],
+    "topN": 10,
+    "sortKey": "MKTCAP"
   },
+  "timeframe": "1d",
   "period": {
     "from": "2023-01-01",
     "to": "2026-06-30"
@@ -901,6 +941,11 @@ GET /api/v1/system/info
 
 포지션 상한은 전략 파라미터가 아니라 요청의 `risk.maxPositions` 다 — 엔진의
 리스크 제약(§9.2-6)이지 전략 로직의 입력이 아니기 때문이다 (D-012).
+
+`universeRule` 은 개별 종목을 직접 고르지 않는다. 시장(`markets`)·정렬 기준
+(`sortKey`, 현재 `MKTCAP` 하나) 상위 `topN` 을 규칙으로 받는다.
+
+`datasetId`·`universe` 필드를 대신하는 이유는 §9.5 를 본다.
 
 `timeframe` 은 이제 `'1d'` 고정 선택값이다 — KRX 일봉이 유일한 출처라 다른 값을
 받지 않는다 (D-041).
