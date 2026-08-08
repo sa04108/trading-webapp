@@ -186,14 +186,21 @@ export class SymbolService {
    * 매기지 않는 공유 원천이라 고정할 대상이 없다. 버전이 없는 종목도 version 0 으로
    * 남긴다 — "아직 수집 안 됨" 도 입력 상태의 일부다.
    *
-   * **미해결 gap(리뷰 finding, 2026-08-08).** 이 pin 은 재무 축만 덮고 봉 축은
-   * 덮지 않는다. `SymbolMasterService.writeDailyBars` 는 `onConflictDoUpdate` 로
-   * 이미 적재된 날짜의 OHLCV 를 덮어쓴다 — 재수집·정정은 설계된 정상 동작이다.
-   * 그런데 그 갱신은 종목 버전을 올리지 않으므로, 제출 이후 봉이 바뀌어도
-   * `backtest-child.ts` 의 드리프트 경고가 이를 감지하지 못한다. 대기 중인
-   * 백테스트의 입력이 조용히 바뀔 수 있다는 뜻이다. Task 6 이 만든 구멍은 아니다
-   * — KRX 일봉은 슬라이스 축이 있던 시절에도 버전 계보를 가진 적이 없었다.
-   * 별도 설계 과제로 남는다.
+   * **이 pin 은 재무 축만 덮고 봉 축은 덮지 않는다.**
+   * 예전에는 이 자리에 다른 이유로 미해결 gap 을 적어 뒀다.
+   * `SymbolMasterService.writeDailyBars` 가 `onConflictDoUpdate` 로 이미
+   * 적재된 날짜를 덮어썼기 때문이다.
+   * 그래서 제출 이후 봉이 바뀌어도 드리프트 경고가 못 잡았다.
+   * 그 전제가 D-043 으로 사라졌다.
+   * Task 3(자본변동 포지션 연속성, 2026-08-08)이 `writeDailyBars` 를
+   * `onConflictDoNothing` 으로 바꿨다.
+   * 이미 적재된 날짜는 다시 써도 값이 바뀌지 않는다.
+   * 그래서 위 시나리오(재수집이 조용히 봉을 바꾼다)는 더 이상 일어나지 않는다.
+   *
+   * 봉 축에 버전 계보 자체가 없다는 사실은 그대로 남는다.
+   * KRX 일봉은 슬라이스 축이 있던 시절에도 종목별 버전을 가진 적이 없었다.
+   * 다만 봉이 구조적으로 불변이라, 그 계보 부재가 지금은 실질적인 위험으로
+   * 이어지지 않는다.
    */
   versionSnapshotFor(codes: readonly string[]): ConsumedVersionSnapshot {
     const uniqueCodes = [...new Set(codes)].sort();

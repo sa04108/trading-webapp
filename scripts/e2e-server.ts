@@ -204,7 +204,7 @@ const KOSDAQ_DAILY_ROWS = [
  * 반복되기 때문이다.
  * `mvp-flow.spec.ts` 의 상장폐지 시나리오는 900010 을 등록했다가 시나리오
  * 끝에서 지운다.
- * `symbols` 삭제는 외래키 cascade 로 `symbol_facts_state` 행도 함께 지운다.
+ * `symbols` 삭제는 외래키 `cascade` 로 `symbol_facts_state` 행도 함께 지운다.
  * 부팅 시점에만 심으면 그 삭제로 커버리지도 같이 사라진다.
  * 그러면 다음 프로젝트(desktop)가 같은 종목을 다시 등록해 제출할 때
  * 게이트가 다시 막는다 — 실제로 이 순서로 재현된 실패다.
