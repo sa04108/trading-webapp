@@ -3,12 +3,15 @@ import type { Logger } from '../../../shared/logger.js';
 import type { SymbolMasterEntry } from '../../market-data/domain/symbol-master.js';
 import type { SymbolMasterService } from '../../market-data/application/symbol-master-service.js';
 import type { UniverseRule } from '../../../../shared/schemas/universe-rule.js';
+import { addCalendarDays } from '../../market-data/domain/kst-date.js';
 
 export interface UniverseScheduleEntry {
   readonly rebalanceDate: string; // ISO
   /** 유니버스·시총을 실제로 읽은 거래일. 휴장이면 rebalanceDate 보다 앞선다 */
   readonly effectiveTradingDate: string;
   readonly symbols: readonly string[]; // shortCode, 시총 내림차순 상위 N
+  /** 그날 거래불가라 후보에서 뺀 종목 수 — 조용히 빠지면 추적할 방법이 없다 */
+  readonly excludedNonTradingCount: number;
 }
 
 export interface ResolvedUniverse {
@@ -24,6 +27,8 @@ export interface ResolvedUniverse {
   readonly unionEntries: ReadonlyMap<string, SymbolMasterEntry>;
   readonly scheduleHash: string; // sha256(schedule 의 JSON 직렬화) — schedule 자체가 결정적이라 안정적이다
   readonly uncoveredDates: readonly string[]; // 마스터가 커버하지 않는 리밸런스 날짜
+  /** 전 리밸런스 날짜에서 거래불가로 제외한 종목 수 합계 */
+  readonly excludedNonTradingTotal: number;
 }
 
 export interface UniverseRuleResolverDeps {
@@ -76,6 +81,25 @@ export class UniverseRuleResolver {
     const unionSymbols = new Set<string>();
     const unionEntries = new Map<string, SymbolMasterEntry>();
 
+    // 리밸런스 기준일들이 걸치는 최소·최대 날짜 한 번만 읽어 날짜별 집합으로 접는다 —
+    // 날짜마다 질의하면 리밸런스가 잦은 실행에서 같은 질의를 수십 번 반복하게 된다.
+    const nonTradingByDate = new Map<string, Set<string>>();
+    if (rebalanceDates.length > 0) {
+      const sortedDates = [...rebalanceDates].sort();
+      const first = sortedDates[0] as string;
+      const last = sortedDates[sortedDates.length - 1] as string;
+      // effectiveTradingDate 는 rebalanceDate 보다 앞설 수 있어(휴장 보정) 조회 하한에
+      // 여유를 둔다 — 31 은 이 저장소가 이미 쓰는 이전 거래일 탐색 상한과 같은 값이다.
+      for (const row of this.deps.symbolMaster.nonTradingDaysBetween(
+        addCalendarDays(first, -31),
+        last,
+      )) {
+        const set = nonTradingByDate.get(row.date) ?? new Set<string>();
+        set.add(row.shortCode);
+        nonTradingByDate.set(row.date, set);
+      }
+    }
+
     for (const date of rebalanceDates) {
       const effectiveTradingDate = this.deps.symbolMaster.effectiveTradingDateWithinCoverage(date);
       if (!this.deps.symbolMaster.isCovered(date) || effectiveTradingDate === undefined) {
@@ -91,9 +115,17 @@ export class UniverseRuleResolver {
         }
       }
 
+      const nonTrading = nonTradingByDate.get(effectiveTradingDate) ?? new Set<string>();
+      let excludedNonTradingCount = 0;
       const marketCaps = await this.deps.symbolMaster.getMarketCapsAt(effectiveTradingDate);
       const ranked: { entry: SymbolMasterEntry; marketCap: bigint }[] = [];
       for (const entry of candidates) {
+        // 그날 거래할 수 없으면 시총이 아무리 커도 살 수 없다 — 후보에 두면 그 자리가 헛돈다.
+        // 기준일 종가 시점에 이미 확정된 사실이라 look-ahead 가 아니다.
+        if (nonTrading.has(entry.shortCode)) {
+          excludedNonTradingCount += 1;
+          continue;
+        }
         const marketCapKrw = marketCaps.get(entry.standardCode);
         if (marketCapKrw === undefined) continue; // 시총 없는 종목은 순위에 넣지 않는다
         ranked.push({ entry, marketCap: BigInt(marketCapKrw) });
@@ -106,10 +138,14 @@ export class UniverseRuleResolver {
         unionSymbols.add(entry.shortCode);
         if (!unionEntries.has(entry.shortCode)) unionEntries.set(entry.shortCode, entry);
       }
-      schedule.push({ rebalanceDate: date, effectiveTradingDate, symbols });
+      schedule.push({ rebalanceDate: date, effectiveTradingDate, symbols, excludedNonTradingCount });
     }
 
     const scheduleHash = createHash('sha256').update(JSON.stringify(schedule)).digest('hex');
+    const excludedNonTradingTotal = schedule.reduce(
+      (sum, entry) => sum + entry.excludedNonTradingCount,
+      0,
+    );
 
     return {
       schedule,
@@ -117,6 +153,7 @@ export class UniverseRuleResolver {
       unionEntries,
       scheduleHash,
       uncoveredDates,
+      excludedNonTradingTotal,
     };
   }
 }
