@@ -19,6 +19,7 @@ import { SECURITY_HEADERS } from '../../../shared/security.js';
 import type { Clock } from '../../../shared/clock.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
 import type { FactRepository } from '../../facts/application/ports.js';
+import type { CorporateActionCoverageStore } from '../../facts/application/corporate-action-coverage.js';
 import type { ConsumedVersionSnapshot, SymbolService } from '../../market-data/application/symbol-service.js';
 import { KrxNotConfiguredError, KrxQuotaError } from '../../market-data/application/ports.js';
 import { SymbolMasterNotCoveredError } from '../../market-data/application/symbol-master-service.js';
@@ -59,6 +60,8 @@ export interface BacktestRouteDeps {
   readonly universeRuleResolver: UniverseRuleResolver;
   readonly audit: AuditLogService;
   readonly factRepository: FactRepository;
+  /** 자본변동 수집 커버리지 — 제출 게이트가 대조한다(Task 6) */
+  readonly corporateActionCoverage: CorporateActionCoverageStore;
   readonly dataRoot: string;
   readonly maxQueuedBacktests: number;
   readonly clock: Clock;
@@ -68,6 +71,21 @@ const MIN_FREE_DISK_BYTES = 500 * 1024 * 1024;
 const MIN_FREE_MEMORY_BYTES = 75 * 1024 * 1024;
 
 const isoDate = (tsMs: number): string => new Date(tsMs).toISOString().slice(0, 10);
+
+/**
+ * 자본변동 수량은 사업보고서의 증자·감자 현황에서 읽는다.
+ * 그래서 접수일이 효력발생일보다 최대 15개월 늦다
+ * (pit-fact-view.ts 의 PitFactView 생성자 주석 참고).
+ * 기간 끝이 이 안에 들면 분할이 이미 일어났어도 아직 DART 에
+ * 접수되지 않았을 수 있다. 커버리지가 온전해도 뜨는 경고다(Task 6).
+ */
+const RECENT_PERIOD_LOOKBACK_MONTHS = 15;
+
+function isRecentPeriodEnd(toTsMs: number, nowMs: number): boolean {
+  const cutoff = new Date(nowMs);
+  cutoff.setUTCMonth(cutoff.getUTCMonth() - RECENT_PERIOD_LOOKBACK_MONTHS);
+  return toTsMs > cutoff.getTime();
+}
 
 /**
  * 회수 가능 메모리 (§34 리소스 가드).
@@ -180,6 +198,8 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     universeRuleResolver,
     audit,
     factRepository,
+    corporateActionCoverage,
+    clock,
   } = deps;
 
   /**
@@ -314,6 +334,96 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     return universeRuleResolver.resolve(body.universeRule, rebalanceDates);
   };
 
+  /**
+   * 종목 코드를 "코드(이름)" 형태로 늘어놓는다.
+   * 목록이 길면 10종목만 보이고 나머지는 개수로 요약한다.
+   * 유니버스 상한이 200종목이라 캡이 없으면 경고가 너무 길어진다.
+   * 엔진의 buysDroppedByCap 과 같은 관례다(backtest-child.ts 참고).
+   */
+  const namedSymbolList = (codes: readonly string[]): string => {
+    const localNames = symbolService.getLocalNames(codes);
+    const labels = codes.map((code) => {
+      const local = localNames.get(code);
+      return local ? `${code}(${local.name})` : code;
+    });
+    const shown = labels.slice(0, 10).join(', ');
+    return labels.length > 10 ? `${shown} 외 ${labels.length - 10}종목` : shown;
+  };
+
+  /**
+   * 자본변동 수집 게이트(Task 6)다.
+   * 팩트 0건은 세 상태를 가릴 수 있다: 수집했고 분할이 없었다,
+   * 수집했는데 DART 가 응답하지 못했다, 아예 수집하지 않았다.
+   * 커버리지가 셋째를 앞의 둘과 가르고, gap 이 첫째와 둘째를 가른다
+   * (corporate-action-coverage.ts 헤더 참고).
+   *
+   * gap 이 난 종목은 막지 않는다.
+   * DART 가 못 답하는 종목은 대체로 상장폐지 종목이다.
+   * 여기서 막으면 생존편향을 없애려고 들여온 종목이 영원히 막힌다.
+   *
+   * 필요 연도는 백테스트 기간이 걸치는 연도 전부다.
+   * 그중 한 연도라도 커버리지에 없으면 그 종목은 아예 수집하지 않은 것으로 본다.
+   */
+  const checkCorporateActionCoverage = (
+    codes: readonly string[],
+    period: { from: string; to: string },
+  ): {
+    error: string | null;
+    warning: string | null;
+    /** 미수집 종목 전체 목록 — 위저드 게이트 화면(Task 8)이 그대로 받아 쓴다.
+     *  `error` 문구의 `namedSymbolList` 는 10종목에서 접으므로 화면에는 못 쓴다. */
+    uncollectedSymbols: readonly string[];
+    fromYear: number;
+    toYear: number;
+  } => {
+    const { fromTsMs, toTsMs } = periodToTsRange(period);
+    const fromYear = new Date(fromTsMs).getUTCFullYear();
+    const toYear = new Date(toTsMs).getUTCFullYear();
+    const neededYears: number[] = [];
+    for (let year = fromYear; year <= toYear; year += 1) neededYears.push(year);
+
+    const coveredBySymbol = corporateActionCoverage.getCoveredYears(codes);
+    const gapsBySymbol = corporateActionCoverage.getGapYears(codes);
+
+    const uncollected: string[] = [];
+    const gapped: string[] = [];
+    for (const code of codes) {
+      const coveredYears = coveredBySymbol.get(code) ?? [];
+      if (neededYears.some((year) => !coveredYears.includes(year))) {
+        uncollected.push(code);
+        continue;
+      }
+      // 필요 연도로 좁히지 않는다 — gap 연도는 요청 연도의 부분집합이 아니다
+      // (fact-sync-service.ts 의 uniqueYearsFromGaps 주석 참고). 좁히면
+      // 실제 위험이 있는 gap 을 조용히 숨길 수 있다. 노이즈보다 그쪽이 더 위험하다.
+      if ((gapsBySymbol.get(code) ?? []).length > 0) gapped.push(code);
+    }
+
+    if (uncollected.length > 0) {
+      return {
+        error:
+          `다음 종목은 자본변동(액면분할 등) 이력을 수집한 적이 없습니다: ${namedSymbolList(uncollected)}. ` +
+          '분할이 있었다면 결과가 틀어집니다. 종목 화면에서 자본변동을 동기화한 뒤 다시 제출하세요.',
+        warning: null,
+        uncollectedSymbols: uncollected,
+        fromYear,
+        toYear,
+      };
+    }
+    if (gapped.length === 0) {
+      return { error: null, warning: null, uncollectedSymbols: [], fromYear, toYear };
+    }
+    return {
+      error: null,
+      warning:
+        `다음 종목은 DART 가 자본변동 이력 일부에 응답하지 못했습니다: ${namedSymbolList(gapped)}. ` +
+        '분할이 있었다면 결과가 틀어질 수 있습니다.',
+      uncollectedSymbols: [],
+      fromYear,
+      toYear,
+    };
+  };
+
   type ValidationResult =
     | {
         readonly ok: true;
@@ -321,8 +431,22 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
         readonly timeframe: '1d';
         readonly provenancePin: ProvenancePin;
         readonly resolved: ResolvedUniverse;
+        readonly warnings: readonly string[];
       }
-    | { readonly ok: false; readonly status: 400; readonly errors: string[] }
+    | {
+        readonly ok: false;
+        readonly status: 400;
+        readonly errors: string[];
+        /**
+         * 자본변동 미수집 게이트(Task 6)에 걸렸을 때만 있다. 위저드 게이트 화면
+         * (Task 8)이 종목·연도를 다시 계산하지 않고 이 값을 그대로 받아 쓴다.
+         */
+        readonly corporateActionGate?: {
+          readonly symbols: readonly string[];
+          readonly fromYear: number;
+          readonly toYear: number;
+        };
+      }
     | { readonly ok: false; readonly status: 422; readonly errors: string[]; readonly uncoveredDates: readonly string[] };
 
   /**
@@ -331,10 +455,11 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    * 반환한다 (재현성 §9.5, REVIEW §9.2). 400 메시지는 `errors[0]` 이므로 검사 순서가
    * 곧 우선순위다.
    *
-   * 전략·기간·프로파일처럼 요청 자체의 형식 오류는 유니버스 해소(종목 마스터 조회·
-   * 시총 join)보다 먼저 걸러 반환한다 — 어차피 거부할 요청 때문에 KRX 호출 예산을
-   * 쓰지 않기 위해서다. uncovered 리밸런스 날짜(422)는 그다음, 캔들 존재 검증(400)은
-   * 그다음이다(브리프의 ①②③④ 순서).
+   * 전략·기간·프로파일처럼 요청 자체의 형식 오류는 유니버스 해소보다 먼저 걸러
+   * 반환한다. 어차피 거부할 요청 때문에 KRX 호출 예산(종목 마스터 조회·시총
+   * join)을 쓰지 않기 위해서다.
+   * 순서는 uncovered 리밸런스 날짜(422) → 캔들 존재 검증(400) → 자본변동
+   * 수집 검증(400) 이다(①②③, Task 6 이 ③을 더했다).
    */
   const validateSubmission = async (body: BacktestRequest): Promise<ValidationResult> => {
     const errors: string[] = [];
@@ -398,8 +523,32 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       };
     }
 
-    // ③ 종목 버전 pin 은 기존 universeJson 메커니즘을 그대로 쓴다 — unionSymbols 기준.
-    // ④ provenancePin — 유니버스 규칙 경로(스펙 2026-08-05)는 늘 이 모양이다.
+    // ③ 자본변동 수집 게이트(Task 6) — 캔들은 있어도 분할 이력을 모르면 조용히
+    // 틀린 결과를 낸다. unionSymbols·기간 기준으로 ②와 같은 층위에서 검사한다.
+    const actionGate = checkCorporateActionCoverage(resolved.unionSymbols, body.period);
+    if (actionGate.error !== null) {
+      return {
+        ok: false,
+        status: 400,
+        errors: [actionGate.error],
+        corporateActionGate: {
+          symbols: actionGate.uncollectedSymbols,
+          fromYear: actionGate.fromYear,
+          toYear: actionGate.toYear,
+        },
+      };
+    }
+    const warnings: string[] = [];
+    if (actionGate.warning !== null) warnings.push(actionGate.warning);
+    if (isRecentPeriodEnd(periodToTsRange(body.period).toTsMs, clock.now())) {
+      warnings.push(
+        '선택한 기간이 최근이라 아직 DART 에 공시되지 않은 자본변동이 있을 수 있습니다. ' +
+          '분할이 최근에 있었다면 결과에 반영되지 않았을 수 있습니다.',
+      );
+    }
+
+    // ④ 종목 버전 pin 은 기존 universeJson 메커니즘을 그대로 쓴다 — unionSymbols 기준.
+    // ⑤ provenancePin — 유니버스 규칙 경로(스펙 2026-08-05)는 늘 이 모양이다.
     const provenancePin: ProvenancePin = {
       sourceKind: 'SYMBOL_MASTER',
       filterPolicyVersion: KRX_FILTER_POLICY_VERSION,
@@ -413,6 +562,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       timeframe: resolvedConsumption.timeframe,
       provenancePin,
       resolved,
+      warnings,
     };
   };
 
@@ -623,6 +773,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       return reply.code(validated.status).send({
         error: validated.errors[0] ?? '제출을 검증할 수 없습니다',
         ...('uncoveredDates' in validated ? { uncoveredDates: validated.uncoveredDates } : {}),
+        ...('corporateActionGate' in validated && validated.corporateActionGate
+          ? { corporateActionGate: validated.corporateActionGate }
+          : {}),
       });
     }
 
@@ -657,7 +810,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       universeRule: body.universeRule,
       scheduleHash: validated.provenancePin.scheduleHash,
     });
-    return reply.code(201).send({ job: serializeJob(job) });
+    return reply.code(201).send({ job: serializeJob(job), warnings: validated.warnings });
   });
 
   app.get('/backtests', { preHandler: requireAuth }, async (request, reply) => {
@@ -765,7 +918,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       jobId: cloned.id,
       ...(rebased.warnings.length > 0 ? { rebaseWarnings: rebased.warnings } : {}),
     });
-    return reply.code(201).send({ job: serializeJob(cloned), warnings: rebased.warnings });
+    return reply
+      .code(201)
+      .send({ job: serializeJob(cloned), warnings: [...rebased.warnings, ...validated.warnings] });
   });
 
   /**
@@ -802,9 +957,12 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (fundamentalsError) blockers.push(fundamentalsError);
     const capacityError = checkPositionCapacity(rebased.request);
     if (capacityError) blockers.push(capacityError);
+    // 검증이 실패하면 그 사유는 blockers 로 이미 나간다 — warnings 는 통과했을 때만 있다.
+    // POST /backtests/:id/clone 핸들러와 같은 합류 방식이다 — 두 경로가 갈리면
+    // 위저드에서 자본변동 경고가 조용히 사라진다(리뷰 finding, 2026-08-08).
     return {
       request: rebased.request,
-      warnings: rebased.warnings,
+      warnings: [...rebased.warnings, ...(validated.ok ? validated.warnings : [])],
       blockers,
     };
   });

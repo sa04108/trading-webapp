@@ -110,7 +110,8 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
     await ctx.svc.ingestDate('2023-01-02');
 
     ctx.fake.setResponse('stk_bydd_trd', '20230103', {
-      body: krxEnvelope([dailyFixture({ TDD_CLSPRC: '72,500' })]),
+      // high(72,000)를 넘지 않는 값으로 바꾼다 — high < close 는 isValidCandle 이 거른다.
+      body: krxEnvelope([dailyFixture({ TDD_CLSPRC: '71,900' })]),
     });
     ctx.fake.setResponse('stk_isu_base_info', '20230103', { body: krxEnvelope([baseInfoFixture()]) });
 
@@ -122,7 +123,7 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
       .from(krxDailyBars)
       .all()
       .find((r) => r.date === '2023-01-03');
-    expect(row).toMatchObject({ shortCode: '005930', date: '2023-01-03', close: 72_500 });
+    expect(row).toMatchObject({ shortCode: '005930', date: '2023-01-03', close: 71_900 });
     // 첫날 행도 그대로 남아 있어야 한다 — 둘째 날 저장이 첫날 행을 건드리면 안 된다.
     const day1Row = ctx.t.container.database.db
       .select()
@@ -133,7 +134,7 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
     await teardown(ctx);
   });
 
-  it('재수집 시 중복 없이 행마다 자기 값으로 갱신된다 — 배치 전체가 한 값으로 접히지 않는다', async () => {
+  it('이미 있는 날짜의 봉을 덮어쓰지 않는다', async () => {
     const ctx = await setup();
     const date = '2023-01-02';
 
@@ -141,10 +142,8 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
     // 흉내낸다 — checkpointDate 는 있는데 coverage 는 비어 재수집이 다시 최초 수집 분기를 탄다.
     ctx.svc.saveCheckpoint(date, new Map(), true);
     expect(ctx.svc.isCovered(date)).toBe(false);
-    // 그 죽은 시도가 이미 남겨 둔 stale 일봉 행 두 개(서로 다른 종목·값) — 재수집이 각각
-    // 자기 값으로 덮어써야 한다. 충돌 행이 하나뿐이면 onConflictDoUpdate 의 set 이
-    // excluded.* 로 행마다 풀리는지, 아니면 배치 전체가 리터럴 한 값으로 접히는지 구분할
-    // 수 없어 여기서는 반드시 서로 다른 값의 행 2개 이상을 둔다.
+    // 그 죽은 시도가 남겨 둔 낡은 일봉 행 두 개다(서로 다른 종목·값).
+    // 자본변동은 계산 시점에 반영하므로 재수집이 들어와도 이 값은 그대로 남아야 한다.
     ctx.t.container.database.db
       .insert(krxDailyBars)
       .values([
@@ -173,34 +172,16 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
 
     const rows = allBars(ctx);
     expect(rows).toEqual([
-      {
-        shortCode: '000660',
-        date,
-        market: 'KOSDAQ',
-        open: 100_000,
-        high: 101_000,
-        low: 99_000,
-        close: 100_500,
-        volume: 500_000,
-      },
-      {
-        shortCode: '005930',
-        date,
-        market: 'KOSPI',
-        open: 71_500,
-        high: 72_000,
-        low: 71_000,
-        close: 71_800,
-        volume: 12_345_678,
-      },
+      { shortCode: '000660', date, market: 'KOSDAQ', open: 2, high: 2, low: 2, close: 2, volume: 2 },
+      { shortCode: '005930', date, market: 'KOSPI', open: 1, high: 1, low: 1, close: 1, volume: 1 },
     ]);
     await teardown(ctx);
   });
 
-  it('가격 4개나 거래량 중 하나라도 null 인 행은 건너뛰고 건수를 debug 로 남긴다', async () => {
+  it('가격 4개나 거래량 중 하나라도 null 인 행은 건너뛰고 건수를 warn 으로 남긴다', async () => {
     const ctx = await setup();
     const date = '2023-01-02';
-    const debugSpy = vi.spyOn(ctx.t.container.logger, 'debug');
+    const warnSpy = vi.spyOn(ctx.t.container.logger, 'warn');
     ctx.fake.setResponse('stk_bydd_trd', '20230102', {
       body: krxEnvelope([
         dailyFixture(),
@@ -214,8 +195,62 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
     const rows = allBars(ctx);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ shortCode: '005930' });
-    expect(debugSpy).toHaveBeenCalledWith(
+    expect(warnSpy).toHaveBeenCalledWith(
       expect.objectContaining({ skipped: 1 }),
+      expect.any(String),
+    );
+    await teardown(ctx);
+  });
+
+  it('high < low 인 행을 저장하지 않는다', async () => {
+    const ctx = await setup();
+    const date = '2023-01-02';
+    ctx.fake.setResponse('stk_bydd_trd', '20230102', {
+      body: krxEnvelope([
+        dailyFixture(),
+        dailyFixture({
+          ISU_CD: '005935',
+          ISU_NM: '고저역전종목',
+          TDD_OPNPRC: '100,000',
+          TDD_HGPRC: '99,000',
+          TDD_LWPRC: '101,000',
+          TDD_CLSPRC: '100,000',
+        }),
+      ]),
+    });
+    ctx.fake.setResponse('stk_isu_base_info', '20230102', { body: krxEnvelope([baseInfoFixture()]) });
+
+    await ctx.svc.ingestDate(date);
+
+    const rows = allBars(ctx);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ shortCode: '005930' });
+    await teardown(ctx);
+  });
+
+  it('어긋난 행 건수를 로그에 남긴다', async () => {
+    const ctx = await setup();
+    const date = '2023-01-02';
+    const warnSpy = vi.spyOn(ctx.t.container.logger, 'warn');
+    ctx.fake.setResponse('stk_bydd_trd', '20230102', {
+      body: krxEnvelope([
+        dailyFixture(),
+        dailyFixture({
+          ISU_CD: '005935',
+          ISU_NM: '고저역전종목',
+          TDD_OPNPRC: '100,000',
+          TDD_HGPRC: '99,000',
+          TDD_LWPRC: '101,000',
+          TDD_CLSPRC: '100,000',
+        }),
+      ]),
+    });
+    ctx.fake.setResponse('stk_isu_base_info', '20230102', { body: krxEnvelope([baseInfoFixture()]) });
+
+    await ctx.svc.ingestDate(date);
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ invalidCount: 1 }),
       expect.any(String),
     );
     await teardown(ctx);

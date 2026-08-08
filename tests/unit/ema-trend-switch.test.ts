@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { runBacktest } from '../../src/server/modules/backtest/domain/engine.js';
 import type { ExecutionProfile } from '../../src/server/modules/backtest/domain/types.js';
+import { CORPORATE_ACTION_FIELD, type Fact } from '../../src/server/modules/facts/domain/fact.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import { StrategyRegistry } from '../../src/server/modules/strategy/application/strategy-registry.js';
 import {
@@ -198,5 +199,104 @@ describe('실행 동작', () => {
     const sells = result.fills.filter((fill) => fill.side === 'SELL');
     expect(sells.length).toBeGreaterThan(0);
     expect(['STOP', 'TRAIL_STOP', 'TREND_END']).toContain(sells[0]?.reason);
+  });
+});
+
+// --- 자본변동(액면분할)을 걸친 EMA 누적 ---------------------------------------
+//
+// 두 EMA 는 가격 그 자체다.
+// 조정하지 않으면 분할 봉에서 짧은 쪽이 긴 쪽보다 훨씬 빨리 내려간다.
+// 그 간격이 음수가 되어 없던 하락 추세가 보이고 `TREND_END` 로 허위 청산한다.
+
+const SPLIT_START = Date.UTC(2026, 6, 6, 0, 0);
+
+function splitCandle(index: number, close: number): Candle {
+  return {
+    symbol: 'LEV',
+    market: 'KR',
+    timeframe: '1d',
+    tsMs: SPLIT_START + index * DAY,
+    open: close,
+    high: close * 1.01,
+    low: close * 0.99,
+    close,
+    volume: 1_000,
+  };
+}
+
+/**
+ * 효력발생일을 봉 인덱스에서 만든다.
+ * `periodKey` 는 거래소 현지 날짜라 뷰가 UTC 로 옮기며 9시간 당긴다.
+ * 그래서 봉 `index` 의 날짜를 그대로 쓰면 효력 시각이 직전 봉과 그 봉 사이에 떨어진다.
+ * 달의 길이를 손으로 세지 않으려고 날짜 문자열을 계산해서 만든다.
+ */
+function splitFactAtBar(index: number, ratio: number): Fact {
+  return {
+    scope: 'SYMBOL',
+    key: 'LEV',
+    field: CORPORATE_ACTION_FIELD,
+    periodKey: new Date(SPLIT_START + index * DAY).toISOString().slice(0, 10),
+    asOfTsMs: SPLIT_START,
+    value: ratio,
+    unit: 'ratio',
+  };
+}
+
+/**
+ * 봉 0~19: 워밍업 진동 — 상관 그룹 확정에 필요한 20봉을 채운다.
+ * 봉 20~29: 상승 추세 — 간격이 벌어져 진입한다.
+ * 봉 30 이후: 5대 1 분할이 걸려 원본 종가만 1/5 이 된다. 실제 흐름은 그대로 상승이다.
+ */
+function riseThroughSplit(): Candle[] {
+  const candles: Candle[] = [];
+  for (let index = 0; index < 36; index += 1) {
+    const truePrice =
+      index < 20 ? 100_000 + (index % 2 === 0 ? 500 : -500) : 100_000 + (index - 19) * 3_000;
+    candles.push(splitCandle(index, index < 30 ? truePrice : truePrice / 5));
+  }
+  return candles;
+}
+
+describe('ema-trend-switch 분할 후 EMA 누적 조정', () => {
+  it('분할 봉에서 추세가 꺾인 것으로 읽지 않는다 (허위 청산 방지)', () => {
+    const result = runBacktest(emaTrendSwitchStrategy, {
+      candles: riseThroughSplit(),
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: FAST_PARAMS,
+      randomSeed: 1,
+      maxPositions: 5,
+      facts: [splitFactAtBar(30, 5)],
+    });
+
+    // 진입은 있어야 한다 — 진입조차 없으면 아래 단언이 공허해진다
+    expect(result.fills.filter((fill) => fill.side === 'BUY').length).toBeGreaterThan(0);
+    // 실제 흐름은 끝까지 상승이므로 청산 사유가 없다
+    expect(result.fills.filter((fill) => fill.side === 'SELL')).toHaveLength(0);
+    expect(result.openPositions).toHaveLength(1);
+  });
+
+  it('분할 뒤 실제로 추세가 꺾이면 정상적으로 청산한다', () => {
+    // 훅이 청산 경로를 무력화한 것이 아니라 단위만 맞춘 것임을 확인한다
+    const candles = riseThroughSplit();
+    let close = (100_000 + 16 * 3_000) / 5;
+    for (let index = 36; index < 50; index += 1) {
+      close -= 1_200;
+      candles.push(splitCandle(index, close));
+    }
+    const result = runBacktest(emaTrendSwitchStrategy, {
+      candles,
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: FAST_PARAMS,
+      randomSeed: 1,
+      maxPositions: 5,
+      facts: [splitFactAtBar(30, 5)],
+    });
+
+    const sells = result.fills.filter((fill) => fill.side === 'SELL');
+    expect(sells.length).toBeGreaterThan(0);
+    // 분할 봉(30)이 아니라 실제 하락 구간에서 청산해야 한다
+    expect(sells[0]!.tsMs).toBeGreaterThan(SPLIT_START + 36 * DAY);
   });
 });

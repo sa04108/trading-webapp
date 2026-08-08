@@ -2,16 +2,18 @@ import { createHash } from 'node:crypto';
 import type { Clock } from '../../../shared/clock.js';
 import type { Logger } from '../../../shared/logger.js';
 import type { Fact } from '../domain/fact.js';
-import { planFactSync, type FactSyncMode } from '../domain/sync-plan.js';
+import { planFactSync, type FactSyncMode, type FactSyncPlan } from '../domain/sync-plan.js';
 // 원천은 market-data(symbol-service.ts) 쪽이다 — market-data 는 facts 를 몰라도
 // 되지만(§7) facts 는 이미 market-data 를 안다(예: exchange-session.js 사용).
 // 손으로 맞추던 중복 상수를 없앴다(리뷰 finding, 2026-08-08).
 import { FACTS_SLICE } from '../../market-data/application/symbol-service.js';
+import type { CorporateActionCoverageStore } from './corporate-action-coverage.js';
 import type { FactCoverageStore } from './fact-coverage-store.js';
 import type {
   FactIngestionGap,
   FactRepository,
   FactSource,
+  FetchFinancialsRequest,
   SymbolVersionBumper,
 } from './ports.js';
 
@@ -63,6 +65,52 @@ export interface FactSyncReport {
 }
 
 /**
+ * `sync`·`syncCorporateActions` 가 갈라지는 지점 둘만 담는다 — 무엇을 수집하는가와
+ * 어느 커버리지를 갱신하는가. 나머지(종목 순회·저장·취소·리포트 조립)는
+ * `FactSyncService.runSync` 하나가 공유한다.
+ */
+interface SyncStrategy {
+  /** 증분 계획이 기준으로 삼을 커버리지. 경로마다 다른 저장소를 본다. */
+  getCoveredYears(symbols: readonly string[]): ReadonlyMap<string, readonly number[]>;
+  /**
+   * 종목 하나를 수집한다. `actionGaps` 는 저장·리포트용 `gaps` 와 별도로 돌려준다 —
+   * 자본변동 커버리지의 gap 연도는 자본변동 자신의 gap 에서만 뽑아야 하기 때문이다.
+   */
+  fetch(scoped: FetchFinancialsRequest): Promise<{
+    facts: readonly Fact[];
+    gaps: readonly FactIngestionGap[];
+    actionGaps: readonly FactIngestionGap[];
+  }>;
+  /** 저장 성공 직후에만 부른다 — 저장 전에 부르면 실패한 연도를 수집했다고 기록한다. */
+  recordCoverage(
+    symbol: string,
+    years: readonly number[],
+    actionGapYears: readonly number[],
+    nowMs: number,
+  ): void;
+}
+
+/**
+ * gap 목록에서 연도만 뽑는다. periodKey 형식이 경로마다 다르다 — 재무는 'YYYYQ1',
+ * 자본변동은 'YYYY-MM-DD', corp_code 매핑 실패는 '-' 다. 형식을 다 알 필요 없이
+ * 맨 앞 네 자리 숫자를 연도로 본다 — 세 형식 모두 연도가 맨 앞에 온다.
+ * '-' 처럼 숫자가 없으면 연도를 알 수 없으므로 그 gap 은 건너뛴다. 건너뛴 gap 도
+ * `report.gaps` 에는 그대로 남으므로 사용자에게 감춰지지 않는다.
+ *
+ * 이 결과가 이번에 요청한 연도의 부분집합이라고 가정하면 안 된다.
+ * `irdsSttus` 는 자본변동 이력을 보고서 연도 기준으로 누적 반환하므로(dart-fact-source.ts
+ * 참고), gap 의 periodKey(이벤트 날짜)가 이번 요청 연도 밖을 가리킬 수 있다.
+ */
+function uniqueYearsFromGaps(gaps: readonly FactIngestionGap[]): number[] {
+  const years = new Set<number>();
+  for (const gap of gaps) {
+    const match = /^(\d{4})/.exec(gap.periodKey);
+    if (match) years.add(Number(match[1]));
+  }
+  return [...years].sort((a, b) => a - b);
+}
+
+/**
  * 재무·자본변동 수집 오케스트레이션.
  *
  * 누락(gap)은 삼키지 않고 리포트로 되돌린다 — 조용히 빠진 계정은 랭킹을 소리 없이
@@ -82,9 +130,95 @@ export class FactSyncService {
     private readonly versions: SymbolVersionBumper,
     private readonly clock: Clock,
     private readonly coverage: FactCoverageStore,
+    private readonly actionCoverage: CorporateActionCoverageStore,
   ) {}
 
+  /**
+   * 재무 + 자본변동을 함께 받는다. 자본변동도 같이 받으므로 자본변동 커버리지에도
+   * 그 사실을 남긴다. 남기지 않으면 `syncCorporateActions` 가 이미 받은 연도를
+   * 재무 없이 다시 청구한다.
+   */
   async sync(request: FactSyncRequest, hooks: FactSyncHooks = {}): Promise<FactSyncReport> {
+    return this.runSync(request, hooks, {
+      getCoveredYears: (symbols) => this.coverage.getCoveredYears(symbols),
+      fetch: async (scoped) => {
+        // 종목별 호출이지만 corp_code 매핑과 주식총수(stockTotqySttus) 응답 캐시는 소스
+        // 인스턴스 클로저 안에 살아 있다 — 종목마다 다시 내려받지 않는다
+        // (dart-fact-source.ts 의 corpCodes·shareRowsCache 참고).
+        const financials = await this.source.fetchFinancials(scoped);
+        const actions = await this.source.fetchCorporateActions(scoped);
+        return {
+          facts: [...financials.facts, ...actions.facts],
+          gaps: [...financials.gaps, ...actions.gaps],
+          actionGaps: actions.gaps,
+        };
+      },
+      recordCoverage: (symbol, years, actionGapYears, nowMs) => {
+        this.coverage.addCoveredYears(symbol, years, nowMs);
+        this.actionCoverage.addCoveredYears(symbol, years, nowMs);
+        this.actionCoverage.addGapYears(symbol, actionGapYears, nowMs);
+      },
+    });
+  }
+
+  /**
+   * `syncCorporateActions` 가 실제로 쓸 연도 계획을 미리 본다 (Task 8 게이트 화면).
+   * 커버리지 조회(`actionCoverage`)·기준 연도(`clock`)·모드(`INCREMENTAL`)를 실행
+   * 경로와 완전히 같게 둔다 — 화면의 예상 호출·시간이 실제 수집과 갈리면 안 된다
+   * (`domain/sync-plan.ts` 헤더 참고).
+   */
+  planCorporateActionSync(
+    symbols: readonly string[],
+    fromYear: number,
+    toYear: number,
+  ): FactSyncPlan {
+    const unique = [...new Set(symbols)];
+    return planFactSync({
+      symbols: unique,
+      fromYear,
+      toYear,
+      currentYear: new Date(this.clock.now()).getUTCFullYear(),
+      coveredBySymbol: this.actionCoverage.getCoveredYears(unique),
+      mode: 'INCREMENTAL',
+    });
+  }
+
+  /**
+   * 자본변동만 받는다 — 재무(`fnlttSinglAcntAll`·`irdsSttus`)는 부르지 않는다.
+   * 재무는 캐시가 없어 종목마다 그대로 다시 쏘지만, 자본변동이 쓰는 발행주식수
+   * (`stockTotqySttus`)는 `shareRowsCache` 로 캐시된다. 분할 보정만 필요한 전략에
+   * 재무 수집 비용을 물리지 않으려고 이 경로를 둔다.
+   *
+   * 증분 판단은 자본변동 자신의 커버리지를 본다. 재무 커버리지를 보면 재무만 먼저
+   * 받은 연도를 자본변동도 받았다고 잘못 판단한다.
+   */
+  async syncCorporateActions(
+    request: FactSyncRequest,
+    hooks: FactSyncHooks = {},
+  ): Promise<FactSyncReport> {
+    return this.runSync(request, hooks, {
+      getCoveredYears: (symbols) => this.actionCoverage.getCoveredYears(symbols),
+      fetch: async (scoped) => {
+        const actions = await this.source.fetchCorporateActions(scoped);
+        return { facts: actions.facts, gaps: actions.gaps, actionGaps: actions.gaps };
+      },
+      recordCoverage: (symbol, years, actionGapYears, nowMs) => {
+        this.actionCoverage.addCoveredYears(symbol, years, nowMs);
+        this.actionCoverage.addGapYears(symbol, actionGapYears, nowMs);
+      },
+    });
+  }
+
+  /**
+   * `sync` 와 `syncCorporateActions` 의 공통 몸통이다. 종목 순회·저장·취소·리포트
+   * 조립은 두 경로가 같으므로 여기 하나만 둔다. 복제하면 한쪽만 고쳐질 때 두 경로가
+   * 소리 없이 갈라진다.
+   */
+  private async runSync(
+    request: FactSyncRequest,
+    hooks: FactSyncHooks,
+    strategy: SyncStrategy,
+  ): Promise<FactSyncReport> {
     /**
      * 중복 심볼은 접는다. `planFactSync` 가 Set 으로 접으므로 순회가 접지 않으면 실제
      * 호출이 계획의 `calls` 를 넘고(`fnlttSinglAcntAll`·`irdsSttus` 에는 캐시가 없어
@@ -107,7 +241,7 @@ export class FactSyncService {
       fromYear: request.fromYear,
       toYear: request.toYear,
       currentYear: new Date(this.clock.now()).getUTCFullYear(),
-      coveredBySymbol: this.coverage.getCoveredYears(symbols),
+      coveredBySymbol: strategy.getCoveredYears(symbols),
       mode: request.mode,
     });
 
@@ -142,20 +276,14 @@ export class FactSyncService {
           shareYears,
           consolidated: request.consolidated,
         };
-        // 종목별 호출이지만 corp_code 매핑과 주식총수(stockTotqySttus) 응답 캐시는 소스
-        // 인스턴스 클로저 안에 살아 있다 — 종목마다 다시 내려받지 않는다
-        // (dart-fact-source.ts 의 corpCodes·shareRowsCache 참고).
-        const financials = await this.source.fetchFinancials(scoped);
-        const actions = await this.source.fetchCorporateActions(scoped);
-        const facts = [...financials.facts, ...actions.facts];
-        const symbolGaps = [...financials.gaps, ...actions.gaps];
+        const { facts, gaps: symbolGaps, actionGaps } = await strategy.fetch(scoped);
 
         // 종목마다 저장한다 — 뒤에서 터져도 여기까지는 남는다
         const fingerprintBefore = await this.storedFactsFingerprint(symbol);
         await this.repository.saveFacts(facts);
         // 저장 직후에 이력을 남긴다. 순서가 뒤집히면 저장 실패한 연도를
         // 수집했다고 기록해 다음 실행이 그 구간을 건너뛴다.
-        this.coverage.addCoveredYears(symbol, years, this.clock.now());
+        strategy.recordCoverage(symbol, years, uniqueYearsFromGaps(actionGaps), this.clock.now());
         // 버전도 종목마다 닫는다 — 180/200 에서 멈춘 실행의 앞선 179종목은 버전이
         // 올라가 있어야 그 종목을 쓰는 백테스트가 변경을 인식한다 (§9.5)
         await this.bumpVersionIfChanged(symbol, fingerprintBefore);

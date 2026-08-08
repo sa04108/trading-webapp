@@ -161,6 +161,11 @@ export const symbolCoverage = sqliteTable(
  * 거짓말한다.
  *
  * 이제 데이터셋 축이 없다 — 같은 종목을 두 데이터셋에서 각각 받던 중복이 사라진다.
+ *
+ * **행 존재를 "재무를 수집했다" 신호로 쓰면 안 된다.** 자본변동 전용 수집 경로가
+ * 재무보다 먼저 행을 만들 수 있다(`SqliteCorporateActionCoverageStore.addYears`).
+ * 그 행의 `coveredYearsJson` 은 빈 배열이다. 재무 수집 여부는 반드시
+ * `coveredYearsJson` 의 배열 내용으로 판정해야 한다.
  */
 export const symbolFactsState = sqliteTable('symbol_facts_state', {
   code: text('code')
@@ -168,6 +173,10 @@ export const symbolFactsState = sqliteTable('symbol_facts_state', {
     .references(() => symbols.code, { onDelete: 'cascade' }),
   /** number[] 오름차순 JSON */
   coveredYearsJson: text('covered_years_json').notNull(),
+  /** 자본변동을 수집한 연도 (number[] 오름차순 JSON). 제출 게이트가 읽는다 */
+  actionCoveredYearsJson: text('action_covered_years_json'),
+  /** 자본변동 수집에서 gap 이 난 연도 (number[] 오름차순 JSON). 경고가 읽는다 */
+  actionGapYearsJson: text('action_gap_years_json'),
   updatedAtMs: integer('updated_at_ms').notNull(),
 });
 
@@ -240,6 +249,43 @@ export const dataSyncJobs = sqliteTable(
   (table) => [index('idx_data_sync_jobs_status').on(table.status)],
 );
 
+
+/**
+ * 자본변동 일괄 수집 잡 (Task 7, 설계 2026-08-08-corporate-action-continuity).
+ *
+ * `dataSyncJobs`(구 data_import_jobs)를 재사용하지 않는다.
+ * 그 테이블은 CSV·증권사 봉·재무 단계를 다 담느라 컬럼이 12개고 대부분 죽어 있다.
+ * 자본변동 하나만 담는 좁은 테이블을 새로 둔다.
+ *
+ * 컬럼 관례는 `backtestJobs` 를 따른다: 상태는 문자열, 시각은 `createdAtMs`·
+ * `completedAtMs` 다. 200종목 수집은 수 분이 걸려 SSE 로 진행률을 흘려야 하므로
+ * `doneSymbols`·`totalSymbols` 를 둔다.
+ */
+export const corporateActionSyncJobs = sqliteTable(
+  'corporate_action_sync_jobs',
+  {
+    id: text('id').primaryKey(),
+    // QUEUED | RUNNING | COMPLETED | FAILED | CANCELLED
+    status: text('status').notNull(),
+    /** 수집 대상 종목 코드 (string[] JSON) */
+    symbolsJson: text('symbols_json').notNull(),
+    fromYear: integer('from_year').notNull(),
+    toYear: integer('to_year').notNull(),
+    /** 완료 종목 수 — SSE 진행률의 분자 */
+    doneSymbols: integer('done_symbols').notNull().default(0),
+    /** 전체 종목 수(중복 제거 후) — SSE 진행률의 분모 */
+    totalSymbols: integer('total_symbols').notNull(),
+    /** 저장된 팩트 수 — 완료 후에만 채워진다 */
+    savedFacts: integer('saved_facts'),
+    /** gap 건수 — 완료 후에만 채워진다 */
+    gapCount: integer('gap_count'),
+    /** 실패·취소 사유. FactSyncService.runSync 의 failureMessage 를 그대로 담는다 */
+    error: text('error'),
+    createdAtMs: integer('created_at_ms').notNull(),
+    completedAtMs: integer('completed_at_ms'),
+  },
+  (table) => [index('idx_corporate_action_sync_jobs_status').on(table.status)],
+);
 
 // ── 백테스트 (스펙 §10, §12) ──────────────────────────────────────
 

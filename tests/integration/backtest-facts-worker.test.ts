@@ -3,7 +3,7 @@ import type { Candle } from '../../src/server/modules/market-data/domain/candle.
 import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
-import { registerSymbols, seedDailyBars } from '../helpers/seed.js';
+import { registerSymbols, seedCorporateActionCoverage, seedDailyBars, yearRange } from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 
 const DAY = 86_400_000;
@@ -116,6 +116,8 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       { standardCode: 'KR7000003000', shortCode: 'NOFACTS', name: 'NOFACTS', market: 'KOSPI', marketCapKrw: '100000000000' },
     ]);
     seedDailyBars(ctx.container.database.db, candles(40));
+    // 자본변동 게이트(Task 6) — 이 파일의 제출 기간(2025-01-02~2025-03-01)이 걸치는 연도
+    seedCorporateActionCoverage(ctx.container, ['CHEAP', 'RICH'], yearRange(2025, 2025));
 
     // 컨테이너가 조립한 factRepository 로 저장한다 — 워커가 같은 dataRoot 를 통해
     // 이 팩트를 다시 읽어야 하므로, 테스트 전용 repository 를 새로 만들지 않는다.
@@ -200,6 +202,8 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       // 데이터셋·봉은 있지만 팩트가 없는 종목을 하나 더한다 — topN 을 3으로 올려
       // 마스터에 미리 둔 NOFACTS 도 유니버스에 들어오게 한다
       registerSymbols(ctx.container, 'KR', ['NOFACTS']);
+      // NOFACTS 도 unionSymbols 에 들어오므로 자본변동 게이트도 통과해 둬야 한다
+      seedCorporateActionCoverage(ctx.container, ['NOFACTS'], yearRange(2025, 2025));
       const extra: Candle[] = [];
       for (let index = 0; index < 40; index += 1) {
         extra.push({
@@ -339,6 +343,8 @@ describe('워커의 자본변동 팩트 배선 — 접수일이 기간 종료 �
     ]);
     // 2025-01-02 ~ 2025-04-30 = 119봉
     seedDailyBars(ctx.container.database.db, splitScenarioCandles(119));
+    // 자본변동 게이트(Task 6) — 이 파일의 제출 기간(2025-01-02~2025-04-30)이 걸치는 연도
+    seedCorporateActionCoverage(ctx.container, ['SPLIT', 'FLAT'], yearRange(2025, 2025));
 
     await ctx.container.factRepository.saveFacts([
       {

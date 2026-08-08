@@ -61,3 +61,20 @@ export function holdLimitReached(
 ): boolean {
   return maxHoldBars !== undefined && holding.barsHeld >= maxHoldBars;
 }
+
+/**
+ * 분할 등 자본변동 비율만큼 보유 상태의 가격 필드를 나눈다.
+ * 대상은 `entryAtr`·`stopLevel`·`highestClose` 세 필드다.
+ * 셋 다 가격 단위다 — `entryAtr` 은 가격의 차이라 같은 단위로 움직인다.
+ * 엔진이 포지션 수량·평균단가를 조정하는 시점에 같은 `ratio` 로 함께 부른다.
+ * 정확한 호출 시점은 `TradingStrategy.onCorporateAction` 을 참고한다.
+ *
+ * `barsHeld` 는 봉 개수라 건드리지 않는다.
+ * `null` 필드도 그대로 둔다.
+ * 진입 확인 전(`confirmEntry` 이전)에 분할이 나면 아직 고칠 값이 없다.
+ */
+export function scaleHoldingPrices(holding: HoldingState, ratio: number): void {
+  if (holding.entryAtr !== null) holding.entryAtr /= ratio;
+  if (holding.stopLevel !== null) holding.stopLevel /= ratio;
+  if (holding.highestClose !== null) holding.highestClose /= ratio;
+}

@@ -57,6 +57,27 @@
       "when": 1786024585968,
       "tag": "0007_exotic_vertigo",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1786166136297,
+      "tag": "0008_nebulous_ironclad",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1786172289896,
+      "tag": "0009_slow_ken_ellis",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1786183637246,
+      "tag": "0010_action_coverage_backfill",
+      "breakpoints": true
     }
   ]
 }

@@ -6,6 +6,7 @@ import type {
 } from '../../strategy/domain/strategy.js';
 import { CORPORATE_ACTION_FIELD, type Fact } from '../../facts/domain/fact.js';
 import { PitFactView } from '../../facts/domain/pit-fact-view.js';
+import { adjustForRatio } from './corporate-action-adjust.js';
 import { proceedsFromSell, requiredCashForBuy, simulateFill } from './execution.js';
 import {
   computeDrawdownSeries,
@@ -79,7 +80,7 @@ export interface BacktestRunResult {
 }
 
 /** 재현성 메타데이터에 기록되는 엔진 버전 (스펙 §9.5) — 체결·지표 로직 변경 시 올린다 */
-export const ENGINE_VERSION = '1.3.0';
+export const ENGINE_VERSION = '1.4.0';
 
 const PROGRESS_INTERVAL_BARS = 500;
 
@@ -101,14 +102,15 @@ const CANCEL_YIELD_INTERVAL_BARS = 200;
 /**
  * 이벤트 루프 (스펙 §9.2):
  *  0. 이 시점까지 공시된 팩트 흡수 — 전략 호출 전이어야 한다 (PIT 커서, §9.4)
- *  1. 이전 시점의 대기 주문 체결 (이번 봉 시가)
- *  2. 현금·포지션 갱신
- *  3. 평가금액 갱신
- *  4. 현재까지 확정된 봉을 전략에 전달
- *  5. 신규 주문 의도 생성
- *  6. 리스크 검증
- *  7. 다음 봉 체결 대기열 등록
- *  8. 스냅샷·진행률
+ *  1. 보유 포지션·대기 주문에 자본변동 반영 — 체결보다 먼저다
+ *  2. 이전 시점의 대기 주문 체결 (이번 봉 시가)
+ *  3. 현금·포지션 갱신
+ *  4. 평가금액 갱신
+ *  5. 현재까지 확정된 봉을 전략에 전달
+ *  6. 신규 주문 의도 생성
+ *  7. 리스크 검증
+ *  8. 다음 봉 체결 대기열 등록
+ *  9. 스냅샷·진행률
  *
  * 전략은 현재 시점까지의 봉만 볼 수 있고(look-ahead 금지, §9.1),
  * 주문은 다음 거래 가능 봉의 시가에서 체결된다.
@@ -172,6 +174,16 @@ function* runBacktestSteps(
   const universeRejectedSymbols = new Set<string>();
 
   const factView = new PitFactView(input.facts ?? []);
+  /**
+   * 종목별 수량 단위 기준 시각이다.
+   * 엔진이 들고 있는 그 종목의 수량(포지션·대기 주문)이 어느 시점 주가 단위로
+   * 적혀 있는지를 가리킨다.
+   *
+   * 전진 규칙은 두 자리에만 있고, 각 자리 주석에 근거를 적는다.
+   * 하나는 봉 루프의 자본변동 조정 구간이고, 다른 하나는 주문 발행 구간이다.
+   * 맵에 없는 심볼은 -1 로 본다.
+   */
+  const quantityBasisTsMsBySymbol = new Map<string, number>();
 
   const state = strategy.initialize({ symbols, initialCash: input.initialCash, rng });
 
@@ -207,7 +219,77 @@ function* runBacktestSteps(
     // 이 시점까지 공시된 팩트만 흡수한다 — 전략이 미래 공시를 볼 자리를 없앤다 (§9.4)
     factView.advanceTo(tsMs);
 
-    // 1~2. 대기 주문 체결 + 현금·포지션 갱신
+    // 자본변동을 포지션·대기 주문에 반영한다 — 체결보다 먼저다.
+    // 분할일 매도 신호는 조정된 수량으로 팔아야 한다.
+    //
+    // (기준 시각, tsMs] 에 효력이 발생한 이벤트만 적용한다.
+    //
+    // 이 시점에 봉이 있는 종목은 예외 없이 기준 시각을 그 봉으로 전진시킨다.
+    // 봉 가격이 곧 그 시점의 수량 단위라, 봉을 처리하면 기준이 그 봉으로 옮겨간다.
+    // 조정할 수량이 없는 종목도 똑같이 전진시킨다.
+    // 안 그러면 청산으로 비어 있던 동안의 분할이 나중 주문에 다시 걸린다.
+    // 그 분할은 이미 그 종목의 시장 가격에 흡수돼 있다.
+    //
+    // 봉이 없는 종목은 전진시키지 않는다.
+    // 액면분할은 주권교체 기간에 매매거래가 정지되는 것이 표준 경로다.
+    // 기준 시각을 그대로 둬야 재개 봉에서 밀린 이벤트를 따라잡는다.
+    //
+    // 수량·평균단가 조정 대상은 포지션이 있는 종목과 대기 주문이 있는 종목이다.
+    // 정지 직전에 발행한 신규 진입 BUY 는 포지션이 아직 없어 대기 주문에만 걸린다.
+    //
+    // 전략 상태 조정은 그 둘로 좁히지 않는다.
+    // 전략은 보유하지 않는 종목의 지표도 봉마다 계속 누적한다.
+    // 그 상태를 놔두면 분할을 넘긴 종목에서 허위 **진입** 신호가 난다
+    // (`rsi-reversion` 의 허위 과매도, `range-breakout` 의 기준선 고착).
+    // 그래서 봉이 있는 종목이면 보유 여부와 무관하게 훅을 부른다.
+    const pendingSymbols = new Set(pendingOrders.map((order) => order.symbol));
+    for (const [symbol, bar] of bars) {
+      const basisTsMs = quantityBasisTsMsBySymbol.get(symbol) ?? -1;
+      quantityBasisTsMsBySymbol.set(symbol, tsMs);
+      const due = factView
+        .corporateActions(symbol, tsMs)
+        .filter((action) => action.effectiveTsMs > basisTsMs);
+      if (due.length === 0) continue;
+      // 정지 구간을 건너뛰면 여러 날짜의 이벤트가 한꺼번에 걸릴 수 있다.
+      // 곱셈 자체는 순서에 무관하지만 내림은 그렇지 않다.
+      // 역분할이 정지 구간에 겹쳐 쌓일 때만 닿는 구석이라 지금은 그대로 둔다.
+      const ratio = due.reduce((acc, action) => acc * action.ratio, 1);
+      if (ratio === 1) continue;
+      // 전략이 봉 사이에 들고 다니는 가격 상태(지표 누적·스톱 레벨)를 같은 자리에서 고친다.
+      // 대기 주문 체결보다 먼저 불러야 이번 봉의 스톱 판정이 조정된 값으로 난다.
+      // `context.corporateActions()` 는 시점까지 전체 이력을 주지만
+      // 이 훅은 방금 확정된 합성 `ratio` 하나만 정확히 준다.
+      // 전략마다 커서를 새로 두면 이미 푼 문제를 다시 만든다.
+      //
+      // 그 종목의 첫 봉에서는 기준 시각이 -1 이라 상장 이후 전체 이력이 한꺼번에 걸린다.
+      // 그때는 아직 누적된 상태가 없어 어느 필드를 나눠도 값이 바뀌지 않는다.
+      strategy.onCorporateAction?.(symbol, ratio, state);
+
+      if (!positions.has(symbol) && !pendingSymbols.has(symbol)) continue;
+      // 이 종목을 겨냥한 대기 주문을 같은 비율로 스케일한다.
+      // 발행 시점에 캡처된 수량을 그대로 체결하면 분할 이후 수량이 어긋난다.
+      // BUY 도 같은 값 보존 규칙을 적용해야 의도한 투입 금액이 유지된다.
+      pendingOrders = pendingOrders
+        .map((order) =>
+          order.symbol === symbol
+            ? { ...order, quantity: adjustForRatio(order.quantity, 0, ratio, 0).quantity }
+            : order,
+        )
+        .filter((order) => order.quantity > 0);
+
+      const position = positions.get(symbol);
+      if (!position) continue; // 대기 주문만 있었다 — 주문은 이미 위에서 스케일했다
+      const adjusted = adjustForRatio(position.quantity, position.avgEntryPrice, ratio, bar.open);
+      cash += adjusted.cashFromFraction;
+      if (adjusted.closed) {
+        positions.delete(symbol);
+        continue;
+      }
+      position.quantity = adjusted.quantity;
+      position.avgEntryPrice = adjusted.avgEntryPrice;
+    }
+
+    // 2~3. 대기 주문 체결 + 현금·포지션 갱신
     const stillPending: OrderIntent[] = [];
     for (const order of pendingOrders) {
       const bar = bars.get(order.symbol);
@@ -226,11 +308,11 @@ function* runBacktestSteps(
       lastCloseBySymbol.set(symbol, bar.close);
     }
 
-    // 3. 평가금액 갱신
+    // 4. 평가금액 갱신
     equityPoints.push({ tsMs, equity: markToMarket() });
     maxConcurrentPositions = Math.max(maxConcurrentPositions, positions.size);
 
-    // 4~5. 전략 호출
+    // 5~6. 전략 호출
     const portfolioView: PortfolioView = {
       cash,
       equity: equityPoints[equityPoints.length - 1]?.equity ?? cash,
@@ -248,13 +330,24 @@ function* runBacktestSteps(
     };
     const decision = strategy.onBars(context, state, input.parameters);
 
-    // 6~7. 리스크 검증 후 다음 봉 대기열 등록
+    // 7~8. 리스크 검증 후 다음 봉 대기열 등록
     for (const order of decision.orders) {
       const validated = validateOrder(order);
-      if (validated) pendingOrders.push(validated);
+      if (!validated) continue;
+      pendingOrders.push(validated);
+      // 이 종목의 봉을 한 번도 본 적이 없을 때만 기준 시각을 지금으로 놓는다.
+      // 참조할 이전 단위가 없으니 발행 시각을 기준으로 삼는다.
+      // 기본값 -1 을 그대로 두면 상장 이전의 분할까지 이 주문에 걸린다.
+      //
+      // 봉을 본 적이 있으면 손대지 않는다.
+      // 오늘 봉이 있으면 위 조정 루프가 이미 이 봉 시각을 넣어 뒀다.
+      // 정지 중이면 마지막 봉 시각이 남아야 정지 구간의 분할이 이 주문에 적용된다.
+      if (!quantityBasisTsMsBySymbol.has(validated.symbol)) {
+        quantityBasisTsMsBySymbol.set(validated.symbol, tsMs);
+      }
     }
 
-    // 8. 진행률
+    // 9. 진행률
     processedBars += bars.size;
     if (hooks.onProgress && (processedBars % PROGRESS_INTERVAL_BARS < bars.size || tsMs === timeline[timeline.length - 1])) {
       hooks.onProgress({ processedBars, totalBars, currentTsMs: tsMs });
@@ -298,7 +391,10 @@ function* runBacktestSteps(
   warnings.push(
     '생존 편향, 공휴일 캘린더, 배당, 권리락은 이 백테스트에서 보정하지 않습니다. ' +
       (hasCorporateActionFacts
-        ? '액면분할은 분할 이력이 수집된 데이터셋에서, 보정을 사용하는 전략의 신호 계산에만 반영됩니다 — 체결가는 실제 거래 가격입니다.'
+        ? '액면분할은 분할 이력이 수집된 데이터셋에서 보유 포지션의 수량과 평균단가, ' +
+          '대기 주문 수량, 전략이 들고 있는 가격 상태에 반영됩니다. ' +
+          '보정을 쓰는 전략의 신호 계산에도 반영됩니다. ' +
+          '이미 체결된 거래의 체결가는 조정하지 않습니다.'
         : '액면분할도 이 실행에서는 보정되지 않았습니다 (분할 이력 미수집).'),
   );
 

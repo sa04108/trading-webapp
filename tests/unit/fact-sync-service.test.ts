@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { CorporateActionCoverageStore } from '../../src/server/modules/facts/application/corporate-action-coverage.js';
 import type { FactCoverageStore } from '../../src/server/modules/facts/application/fact-coverage-store.js';
 import {
   FactSyncService,
@@ -36,6 +37,44 @@ function fakeCoverage(
       );
     },
   };
+}
+
+/** 자본변동 커버리지 기록을 메모리에 쌓는 가짜 저장소. `codes` 필터는 이 테스트들이
+ *  쓰지 않으므로 구현하지 않는다 — 항상 전체를 돌려준다. */
+function fakeActionCoverage(): CorporateActionCoverageStore {
+  const covered = new Map<string, number[]>();
+  const gaps = new Map<string, number[]>();
+  const merge = (store: Map<string, number[]>, symbol: string, years: readonly number[]): void => {
+    if (years.length === 0) return;
+    store.set(
+      symbol,
+      [...new Set([...(store.get(symbol) ?? []), ...years])].sort((a, b) => a - b),
+    );
+  };
+  return {
+    getCoveredYears: () => new Map([...covered].map(([symbol, years]) => [symbol, [...years]])),
+    getGapYears: () => new Map([...gaps].map(([symbol, years]) => [symbol, [...years]])),
+    addCoveredYears: (symbol, years) => merge(covered, symbol, years),
+    addGapYears: (symbol, years) => merge(gaps, symbol, years),
+  };
+}
+
+/** fetchFinancials 와 fetchCorporateActions 호출 횟수를 각각 세는 가짜 소스 —
+ *  자본변동 전용 경로가 재무를 부르지 않는지는 두 횟수를 따로 봐야 확인할 수 있다. */
+function fakeSourceWithCounts(): FactSource & { financialsCalls: number; actionsCalls: number } {
+  const result = {
+    financialsCalls: 0,
+    actionsCalls: 0,
+    fetchFinancials: async (): Promise<FactIngestionResult> => {
+      result.financialsCalls += 1;
+      return { facts: [], gaps: [] };
+    },
+    fetchCorporateActions: async (): Promise<FactIngestionResult> => {
+      result.actionsCalls += 1;
+      return { facts: [], gaps: [] };
+    },
+  };
+  return result;
 }
 
 /** 요청을 기록하는 가짜 소스 — 어떤 연도를 요청했는지 확인한다 */
@@ -160,6 +199,7 @@ describe('FactSyncService', () => {
       fakeVersions(),
       CLOCK,
       fakeCoverage(),
+      fakeActionCoverage(),
     );
 
     const report = await service.sync({
@@ -185,6 +225,7 @@ describe('FactSyncService', () => {
       fakeVersions(),
       CLOCK,
       fakeCoverage(),
+      fakeActionCoverage(),
     );
 
     const report = await service.sync({
@@ -212,6 +253,7 @@ describe('FactSyncService', () => {
       fakeVersions(),
       CLOCK,
       fakeCoverage(),
+      fakeActionCoverage(),
     );
 
     const report = await service.sync({
@@ -226,6 +268,72 @@ describe('FactSyncService', () => {
     expect(report.gaps).toHaveLength(0);
     expect(repository.saved).toHaveLength(1);
     expect(repository.saved[0]?.facts).toHaveLength(0);
+  });
+
+  /**
+   * `sync` 는 자본변동도 같이 받는다 — 그 사실을 자본변동 커버리지에도 남겨야
+   * `syncCorporateActions` 가 이미 받은 연도를 재무 없이 다시 청구하지 않는다.
+   */
+  it('재무와 자본변동 커버리지를 모두 갱신한다', async () => {
+    const financials: FactIngestionResult = { facts: [fact('CURRENT_ASSETS', 1)], gaps: [] };
+    const actions: FactIngestionResult = { facts: [fact('SPLIT_RATIO', 2)], gaps: [] };
+    const financialCoverage = fakeCoverage();
+    const actionCoverage = fakeActionCoverage();
+    const service = new FactSyncService(
+      fakeSource(financials, actions),
+      fakeRepository(),
+      LOGGER,
+      fakeVersions(),
+      CLOCK,
+      financialCoverage,
+      actionCoverage,
+    );
+
+    await service.sync({
+      symbols: ['005930'],
+      fromYear: 2025,
+      toYear: 2025,
+      consolidated: true,
+      mode: 'FULL',
+    });
+
+    expect(financialCoverage.getCoveredYears().get('005930')).toEqual([2025]);
+    expect(actionCoverage.getCoveredYears().get('005930')).toEqual([2025]);
+  });
+
+  /**
+   * 자본변동 커버리지의 gap 연도는 자본변동 자신의 gap 에서만 뽑는다.
+   * 재무 gap 을 섞으면 엉뚱한 연도가 자본변동 커버리지에 남는다.
+   */
+  it('재무 gap 은 자본변동 커버리지에 섞이지 않는다', async () => {
+    const financials: FactIngestionResult = {
+      facts: [],
+      gaps: [{ symbol: '005930', periodKey: '2020Q1', reason: '재무 gap' }],
+    };
+    const actions: FactIngestionResult = {
+      facts: [],
+      gaps: [{ symbol: '005930', periodKey: '2025-03-14', reason: '자본변동 gap' }],
+    };
+    const actionCoverage = fakeActionCoverage();
+    const service = new FactSyncService(
+      fakeSource(financials, actions),
+      fakeRepository(),
+      LOGGER,
+      fakeVersions(),
+      CLOCK,
+      fakeCoverage(),
+      actionCoverage,
+    );
+
+    await service.sync({
+      symbols: ['005930'],
+      fromYear: 2025,
+      toYear: 2025,
+      consolidated: true,
+      mode: 'FULL',
+    });
+
+    expect(actionCoverage.getGapYears().get('005930')).toEqual([2025]);
   });
 });
 
@@ -281,6 +389,7 @@ describe('FactSyncService — 종목 단위 저장과 부분 실패 (긴 백필 
       fakeVersions(),
       CLOCK,
       fakeCoverage(),
+      fakeActionCoverage(),
     );
     await service.sync(request);
     expect(repository.saved).toHaveLength(3);
@@ -302,6 +411,7 @@ describe('FactSyncService — 종목 단위 저장과 부분 실패 (긴 백필 
       versions,
       CLOCK,
       fakeCoverage(),
+      fakeActionCoverage(),
     );
 
     // 던지지 않는다 — 리포트로 되돌려야 CLI 가 어디까지 갔는지 말할 수 있다
@@ -338,6 +448,7 @@ describe('FactSyncService — 종목 단위 저장과 부분 실패 (긴 백필 
       fakeVersions(),
       CLOCK,
       fakeCoverage(),
+      fakeActionCoverage(),
     ).sync(request);
     expect(report.stoppedAtSymbol).toBeNull();
     expect(report.failureMessage).toBeNull();
@@ -353,6 +464,7 @@ describe('FactSyncService — 종목 단위 저장과 부분 실패 (긴 백필 
       fakeVersions(),
       CLOCK,
       fakeCoverage(),
+      fakeActionCoverage(),
     ).sync(request, {
       onSymbolDone: (event) =>
         progress.push(`${event.index}/${event.total} ${event.symbol} ${event.savedFacts}`),
@@ -376,6 +488,7 @@ describe('FactSyncService — 종목 단위 저장과 부분 실패 (긴 백필 
       fakeVersions(),
       CLOCK,
       fakeCoverage(),
+      fakeActionCoverage(),
     ).sync(
       {
         symbols: ['005930', '005930', '000660'],
@@ -427,6 +540,7 @@ describe('FactSyncService — 데이터셋 버전 승격 (재현성 §9.5)', () 
       versions,
       CLOCK,
       fakeCoverage(),
+      fakeActionCoverage(),
     );
   }
 
@@ -488,6 +602,7 @@ describe('FactSyncService — 증분과 취소', () => {
       fakeVersions(),
       { now: () => Date.UTC(2022, 5, 1) },
       coverage,
+      fakeActionCoverage(),
     );
 
     await service.sync({
@@ -511,6 +626,7 @@ describe('FactSyncService — 증분과 취소', () => {
       fakeVersions(),
       { now: () => Date.UTC(2022, 5, 1) },
       fakeCoverage(new Map([['005930', [2020, 2021, 2022]]])),
+      fakeActionCoverage(),
     );
 
     await service.sync({
@@ -533,6 +649,7 @@ describe('FactSyncService — 증분과 취소', () => {
       fakeVersions(),
       { now: () => Date.UTC(2022, 5, 1) },
       coverage,
+      fakeActionCoverage(),
     );
 
     await service.sync({
@@ -559,6 +676,7 @@ describe('FactSyncService — 증분과 취소', () => {
       fakeVersions(),
       { now: () => Date.UTC(2022, 5, 1) },
       coverage,
+      fakeActionCoverage(),
     );
 
     const report = await service.sync(
@@ -599,6 +717,7 @@ describe('FactSyncService — 증분과 취소', () => {
       fakeVersions(),
       { now: () => Date.UTC(2022, 5, 1) },
       coverage,
+      fakeActionCoverage(),
     );
 
     const report = await service.sync({
@@ -642,6 +761,7 @@ describe('FactSyncService — 증분과 취소', () => {
       fakeVersions(),
       { now: () => Date.UTC(2022, 5, 1) },
       coverage,
+      fakeActionCoverage(),
     );
 
     const report = await service.sync({
@@ -669,6 +789,7 @@ describe('FactSyncService — 증분과 취소', () => {
       fakeVersions(),
       { now: () => Date.UTC(2030, 0, 1) },
       fakeCoverage(new Map([['005930', [2021, 2022]]])),
+      fakeActionCoverage(),
     );
 
     await service.sync({
@@ -680,5 +801,199 @@ describe('FactSyncService — 증분과 취소', () => {
     });
 
     expect(source.requests).toEqual([]);
+  });
+});
+
+/**
+ * 재무는 캐시가 없어 종목마다 그대로 다시 쏜다(dart-fact-source.ts 참고) — 분할 보정만
+ * 필요한 전략에 그 비용을 물리지 않으려고 `syncCorporateActions` 를 낸다. 자본변동은
+ * `shareRowsCache` 로 캐시되므로 이 경로는 비싸지 않다.
+ */
+describe('FactSyncService — 자본변동 전용 수집', () => {
+  const request: FactSyncRequest = {
+    symbols: ['005930'],
+    fromYear: 2025,
+    toYear: 2025,
+    consolidated: true,
+    mode: 'FULL',
+  };
+
+  /**
+   * 증분 판단은 자본변동 자신의 커버리지를 봐야 한다. 재무 커버리지를 봤다면
+   * 이 테스트에서 2020 이 이미 재무로 커버됐다는 이유로 다시 요청하지 않았을 것이다.
+   * 재무 커버리지는 2020 만 알고, 자본변동 커버리지는 아무것도 모르는 상태다.
+   */
+  it('재무가 아니라 자본변동 자신의 커버리지로 증분을 판단한다', async () => {
+    const source = recordingSource();
+    // 재무 커버리지는 2020 을 이미 받았다고 알고 있다. 대상 연도가 `currentYear` 가
+    // 아니어야 "현재 연도는 항상 다시 받는다" 규칙에 가려지지 않는다.
+    // 그래서 `clock` 을 2022 로 둔다.
+    const financialCoverage = fakeCoverage(new Map([['005930', [2020]]]));
+    const service = new FactSyncService(
+      source,
+      fakeRepository(),
+      LOGGER,
+      fakeVersions(),
+      { now: () => Date.UTC(2022, 5, 1) },
+      financialCoverage,
+      fakeActionCoverage(),
+    );
+
+    await service.syncCorporateActions({
+      symbols: ['005930'],
+      fromYear: 2020,
+      toYear: 2020,
+      consolidated: true,
+      mode: 'INCREMENTAL',
+    });
+
+    // 자본변동 커버리지는 비어 있으므로 2020 을 다시 요청해야 한다. 재무 커버리지를
+    // 잘못 봤다면 이미 커버됐다는 이유로 요청 자체가 나가지 않는다.
+    expect(source.requests[0]?.years).toEqual([2020]);
+  });
+
+  it('재무를 부르지 않는다', async () => {
+    const source = fakeSourceWithCounts();
+    const service = new FactSyncService(
+      source,
+      fakeRepository(),
+      LOGGER,
+      fakeVersions(),
+      CLOCK,
+      fakeCoverage(),
+      fakeActionCoverage(),
+    );
+
+    await service.syncCorporateActions(request);
+
+    expect(source.financialsCalls).toBe(0);
+    expect(source.actionsCalls).toBe(1);
+  });
+
+  it('자본변동 커버리지만 갱신한다', async () => {
+    const financialCoverage = fakeCoverage();
+    const actionCoverage = fakeActionCoverage();
+    const service = new FactSyncService(
+      fakeSourceWithCounts(),
+      fakeRepository(),
+      LOGGER,
+      fakeVersions(),
+      CLOCK,
+      financialCoverage,
+      actionCoverage,
+    );
+
+    await service.syncCorporateActions(request);
+
+    expect(actionCoverage.getCoveredYears().get('005930')).toEqual([2025]);
+    // 재무 쪽은 부르지 않았으니 그 커버리지에는 흔적이 남지 않아야 한다 — 안 그러면
+    // 재무 전용 전략이 이 연도를 이미 받았다고 오판한다
+    expect(financialCoverage.getCoveredYears().get('005930')).toBeUndefined();
+  });
+
+  it('gap 이 난 연도를 기록한다', async () => {
+    const source: FactSource = {
+      fetchFinancials: () => Promise.resolve({ facts: [], gaps: [] }),
+      fetchCorporateActions: () =>
+        Promise.resolve({
+          facts: [],
+          gaps: [{ symbol: '005930', periodKey: '2025-03-14', reason: '자본변동 gap' }],
+        }),
+    };
+    const actionCoverage = fakeActionCoverage();
+    const service = new FactSyncService(
+      source,
+      fakeRepository(),
+      LOGGER,
+      fakeVersions(),
+      CLOCK,
+      fakeCoverage(),
+      actionCoverage,
+    );
+
+    await service.syncCorporateActions(request);
+
+    expect(actionCoverage.getGapYears().get('005930')).toEqual([2025]);
+  });
+
+  it('gap 이 나도 커버리지는 기록한다', async () => {
+    const source: FactSource = {
+      fetchFinancials: () => Promise.resolve({ facts: [], gaps: [] }),
+      fetchCorporateActions: () =>
+        Promise.resolve({
+          facts: [],
+          gaps: [{ symbol: '005930', periodKey: '2025-03-14', reason: '자본변동 gap' }],
+        }),
+    };
+    const actionCoverage = fakeActionCoverage();
+    const service = new FactSyncService(
+      source,
+      fakeRepository(),
+      LOGGER,
+      fakeVersions(),
+      CLOCK,
+      fakeCoverage(),
+      actionCoverage,
+    );
+
+    await service.syncCorporateActions(request);
+
+    // "물어봤다" 는 사실은 gap 유무와 무관하게 남는다 — 그래야 상장폐지 종목이
+    // 영원히 재시도 대상에서 막히지 않는다
+    expect(actionCoverage.getCoveredYears().get('005930')).toEqual([2025]);
+  });
+
+  it('종목마다 저장해 중단 지점까지 남는다', async () => {
+    const repository = fakeRepository();
+    const calls: string[] = [];
+    const source: FactSource = {
+      fetchFinancials: () => Promise.resolve({ facts: [], gaps: [] }),
+      fetchCorporateActions: (req) => {
+        const symbol = req.symbols[0] as string;
+        calls.push(symbol);
+        if (symbol === '000660') {
+          return Promise.reject(new Error('DART 응답 오류 020: 요청 제한을 초과하였습니다.'));
+        }
+        return Promise.resolve({
+          facts: [
+            {
+              scope: 'SYMBOL',
+              key: symbol,
+              field: 'SPLIT_RATIO',
+              periodKey: '2025-03-14',
+              asOfTsMs: 1,
+              value: 2,
+              unit: 'RATIO',
+            },
+          ],
+          gaps: [],
+        });
+      },
+    };
+    const actionCoverage = fakeActionCoverage();
+    const service = new FactSyncService(
+      source,
+      repository,
+      LOGGER,
+      fakeVersions(),
+      CLOCK,
+      fakeCoverage(),
+      actionCoverage,
+    );
+
+    const report = await service.syncCorporateActions({
+      symbols: ['005930', '000660', '035720'],
+      fromYear: 2025,
+      toYear: 2025,
+      consolidated: true,
+      mode: 'FULL',
+    });
+
+    // 첫 종목만 저장됐고 중단 지점이 보고된다 — 그다음 종목은 아예 부르지 않는다
+    expect(repository.saved).toHaveLength(1);
+    expect(report.stoppedAtSymbol).toBe('000660');
+    expect(calls).toEqual(['005930', '000660']);
+    expect(actionCoverage.getCoveredYears().get('005930')).toEqual([2025]);
+    expect(actionCoverage.getCoveredYears().get('000660')).toBeUndefined();
   });
 });

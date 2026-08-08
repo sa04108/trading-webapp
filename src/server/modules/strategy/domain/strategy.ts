@@ -61,6 +61,18 @@ export interface TradingStrategy<TParameters, TState> {
   initialize(context: StrategyInitializeContext): TState;
 
   onBars(context: StrategyBarContext, state: TState, parameters: TParameters): StrategyDecision;
+
+  /**
+   * 보유 종목에 자본변동이 걸린 시점에 엔진이 부르는 선택 훅이다.
+   * 엔진은 포지션 수량 조정과 같은 자리에서, 대기 주문 체결보다 먼저 부른다.
+   *
+   * `context.corporateActions(symbol)` 는 시점까지 누적된 전체 이력을 준다.
+   * 이 훅은 방금 이 봉에 반영해야 할 합성 비율(`ratio`) 하나만 정확히 준다.
+   * 전략은 봉 사이에 들고 다니는 가격 상태(스톱 레벨 등)를 여기서 고친다.
+   *
+   * 구현하지 않는 전략에는 영향이 없다.
+   */
+  onCorporateAction?(symbol: string, ratio: number, state: TState): void;
 }
 
 /** 레지스트리 저장용 — 파라미터·상태 타입을 지운 형태 */

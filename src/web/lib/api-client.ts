@@ -2,6 +2,13 @@ export class ApiError extends Error {
   constructor(
     public readonly status: number,
     message: string,
+    /**
+     * 서버가 오류 메시지 옆에 실어 보낸 구조화된 값이다.
+     * 예: `corporateActionGate`, `uncoveredDates`.
+     * 기존 호출부는 `message` 만 보고 이 필드를 몰라도 된다.
+     * 그래서 선택 필드로 둔다 — 필요한 곳만 꺼내 쓴다.
+     */
+    public readonly details?: unknown,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -20,13 +27,15 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     let message = response.statusText;
+    let details: unknown;
     try {
       const body = (await response.json()) as { error?: string };
+      details = body;
       if (body.error) message = body.error;
     } catch {
       // JSON 이 아닌 오류 응답은 statusText 사용
     }
-    throw new ApiError(response.status, message);
+    throw new ApiError(response.status, message, details);
   }
 
   // 204 No Content (예: DELETE) — 본문이 없으므로 JSON 파싱하지 않는다

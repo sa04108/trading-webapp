@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { runBacktest } from '../../src/server/modules/backtest/domain/engine.js';
 import type { ExecutionProfile } from '../../src/server/modules/backtest/domain/types.js';
+import { CORPORATE_ACTION_FIELD, type Fact } from '../../src/server/modules/facts/domain/fact.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import {
   rangeBreakoutParameters,
@@ -207,5 +208,154 @@ describe('range-breakout 워밍업', () => {
     // 창을 채우려면 30봉이 필요한데 21봉만 준다 — 돌파해도 기준선이 없다
     const result = run([...flatWarmup(), SIGNAL_BAR], { ...BASE, lookbackBars: 30 });
     expect(result.fills).toHaveLength(0);
+  });
+});
+
+// ── 분할이 걸린 보유 종목의 스톱 조정 ──────────────────────────────
+//
+// 엔진은 포지션 수량·평균단가를 분할에 맞춰 조정한다.
+// 하지만 전략이 봉 사이에 들고 다니는 `HoldingState` 의 가격 필드
+// (`entryAtr`·`stopLevel`·`highestClose`)는 그대로 두면 분할 전 단위로 남는다.
+// 자본변동 훅이 이 필드도 같은 비율로 나눠야 한다.
+// 그래야 5:1 분할로 원본 종가가 1/5 로 떨어져도 허위로 스톱에 걸리지 않는다.
+
+const SPLIT_DAY = 86_400_000;
+const SPLIT_START = Date.UTC(2026, 6, 6, 0, 0);
+
+function splitCandle(index: number, ohlc: Pick<Candle, 'open' | 'high' | 'low' | 'close'>): Candle {
+  return {
+    symbol: 'A',
+    market: 'KR',
+    timeframe: '1d',
+    tsMs: SPLIT_START + index * SPLIT_DAY,
+    volume: 100,
+    ...ohlc,
+  };
+}
+
+/** `periodKey` 의 효력 시각은 봉 인덱스 (`day`−7)과 (`day`−6) 사이에 떨어진다. KST 자정을 UTC 로 바꾸며 하루 밀린다. */
+function splitFact(symbol: string, day: number, ratio: number): Fact {
+  return {
+    scope: 'SYMBOL',
+    key: symbol,
+    field: CORPORATE_ACTION_FIELD,
+    periodKey: `2026-07-${String(day).padStart(2, '0')}`,
+    asOfTsMs: SPLIT_START,
+    value: ratio,
+    unit: 'ratio',
+  };
+}
+
+/**
+ * 진입가 100_000 · 손절 폭 2×ATR(5_000) = 스톱 90_000 을 만드는 픽스처.
+ * 봉 0~5: 평탄 워밍업(TR 5_000 고정 → ATR 5_000).
+ * 봉 6: 전고점(102_500) 돌파 신호.
+ * 봉 7: 체결(시가 100_000) — `confirmEntry` 로 스톱 90_000 확정.
+ * 봉 8: 5:1 분할 효력 — 종가 20_000 (조정 없으면 `stopLevel` 90_000 에 걸려 즉시 청산).
+ */
+function splitStopFixture(): Candle[] {
+  return [
+    ...Array.from({ length: 6 }, (_, i) =>
+      splitCandle(i, { open: 100_000, high: 102_500, low: 97_500, close: 100_000 }),
+    ),
+    splitCandle(6, { open: 100_000, high: 105_000, low: 100_000, close: 104_000 }), // 돌파 신호
+    splitCandle(7, { open: 100_000, high: 100_500, low: 99_500, close: 100_000 }), // 체결
+    splitCandle(8, { open: 20_000, high: 20_100, low: 19_900, close: 20_000 }), // 분할 효력 봉
+  ];
+}
+
+const SPLIT_PARAMS: RangeBreakoutParameters = {
+  lookbackBars: 5,
+  atrPeriod: 5,
+  stopAtrMultiplier: 2,
+  trailAtrMultiplier: 2,
+  riskPerTradePercent: 1,
+  maxPositionWeightPercent: 100,
+};
+
+function runWithFacts(candles: readonly Candle[], facts: readonly Fact[]) {
+  return runBacktest(rangeBreakoutStrategy as never, {
+    candles,
+    initialCash: 1_000_000,
+    execution: ZERO_COST,
+    parameters: SPLIT_PARAMS,
+    randomSeed: 42,
+    maxPositions: 5,
+    facts,
+  });
+}
+
+describe('range-breakout 분할 후 스톱 조정', () => {
+  it('분할 후에도 스톱이 발동하지 않는다 (허위 청산 방지)', () => {
+    const result = runWithFacts([...splitStopFixture(), splitCandle(9, { open: 20_000, high: 20_100, low: 19_900, close: 20_000 })], [
+      splitFact('A', 14, 5),
+    ]);
+
+    // 분할 조정이 없으면 봉 8(종가 20_000)에서 `stopLevel`(90_000) 에 걸린다.
+    // 그러면 엔진이 봉 9에 SELL 을 체결한다 — 이 테스트가 잡으려는 회귀다.
+    expect(result.trades).toHaveLength(0);
+    expect(result.openPositions).toHaveLength(1);
+    expect(result.openPositions[0]!.symbol).toBe('A');
+    expect(result.openPositions[0]!.quantity).toBe(5); // 1주 × 5 — 분할로 조정된 수량
+    expect(result.openPositions[0]!.avgEntryPrice).toBe(20_000);
+  });
+
+  it('분할로 조정된 스톱(18_000) 아래로 실제로 내려가면 정상적으로 청산한다', () => {
+    // 조정 후 스톱은 90_000 ÷ 5 = 18_000 이다. 종가가 그 아래로 떨어지면
+    // 훅이 스톱을 무력화한 게 아니라 재보정만 했다는 것을 확인한다.
+    const candles = [
+      ...splitStopFixture(),
+      splitCandle(9, { open: 20_000, high: 20_050, low: 16_900, close: 17_000 }), // 18_000 이탈
+      splitCandle(10, { open: 17_000, high: 17_100, low: 16_900, close: 17_000 }), // 청산 체결
+    ];
+    const result = runWithFacts(candles, [splitFact('A', 14, 5)]);
+
+    expect(result.trades).toHaveLength(1);
+    expect(result.trades[0]!.exitReason).toBe('STOP');
+    expect(result.trades[0]!.exitPrice).toBe(17_000);
+  });
+});
+
+// --- 자본변동(액면분할)을 걸친 돌파 기준선 -----------------------------------
+//
+// 돌파 기준선은 직전 `lookbackBars` 개 봉의 고가로 만든다.
+// 창에 담긴 값은 전부 가격이라 분할 비율만큼 내려야 한다.
+// 내리지 않으면 기준선이 분할 전 고가에 남아 분할된 종가가 영영 못 넘는다.
+// 창이 새 가격으로 다 갈릴 때까지 돌파 진입이 통째로 막힌다.
+
+/**
+ * 봉 0~5: 평탄 워밍업. 종가 100_000 은 전고점 102_500 을 못 넘어 진입이 없다.
+ * 봉 6: 5:1 분할 효력. 조정하면 기준선은 20_500 이 된다.
+ * 봉 7: 종가 21_000 — 조정된 기준선은 넘고 조정 전 기준선(102_500)은 못 넘는다.
+ * 봉 8: 진입 체결.
+ */
+function splitChannelFixture(): Candle[] {
+  return [
+    ...Array.from({ length: 6 }, (_, i) =>
+      splitCandle(i, { open: 100_000, high: 102_500, low: 97_500, close: 100_000 }),
+    ),
+    splitCandle(6, { open: 20_000, high: 20_500, low: 19_500, close: 20_000 }),
+    splitCandle(7, { open: 20_100, high: 21_200, low: 20_000, close: 21_000 }),
+    splitCandle(8, { open: 21_000, high: 21_100, low: 20_900, close: 21_000 }),
+  ];
+}
+
+describe('range-breakout 분할 후 돌파 기준선 조정', () => {
+  it('분할 뒤 첫 돌파를 놓치지 않는다 (진입 봉쇄 방지)', () => {
+    const result = runWithFacts(splitChannelFixture(), [splitFact('A', 12, 5)]);
+
+    // 조정하지 않으면 기준선이 102_500 에 남아 종가 21_000 이 못 넘는다 — 매수가 없다.
+    const buys = result.fills.filter((fill) => fill.side === 'BUY');
+    expect(buys).toHaveLength(1);
+    expect(buys[0]!.tsMs).toBe(SPLIT_START + 8 * SPLIT_DAY);
+  });
+
+  it('조정된 기준선을 못 넘으면 진입하지 않는다 (훅이 기준선을 없앤 것이 아니다)', () => {
+    const candles = splitChannelFixture();
+    // 봉 7 종가를 조정된 기준선(20_500) 아래로 낮춘다
+    candles[7] = splitCandle(7, { open: 20_100, high: 20_400, low: 20_000, close: 20_300 });
+    const result = runWithFacts(candles, [splitFact('A', 12, 5)]);
+
+    expect(result.fills.filter((fill) => fill.side === 'BUY')).toHaveLength(0);
   });
 });

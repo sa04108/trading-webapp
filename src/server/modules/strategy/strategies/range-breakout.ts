@@ -10,6 +10,8 @@ import {
   newRollingMax,
   pushRollingMax,
   rollingMaxValue,
+  scaleAtr,
+  scaleRollingMax,
   updateAtr,
   type AtrState,
   type RollingMaxState,
@@ -19,6 +21,7 @@ import {
   confirmEntry,
   holdLimitReached,
   newHolding,
+  scaleHoldingPrices,
   updateTrail,
   type HoldingState,
 } from './shared/trailing-stop.js';
@@ -243,5 +246,20 @@ export const rangeBreakoutStrategy: TradingStrategy<RangeBreakoutParameters, Ran
     }
 
     return { orders };
+  },
+
+  // 분할 등 자본변동이 걸린 종목의 가격 상태를 같은 비율로 내린다.
+  // `ratio` 와 호출 시점은 엔진이 정한다(`engine.ts` 조정 루프 참고).
+  //
+  // 돌파 기준선(`priorHighs`)이 이 전략의 핵심이다.
+  // 내리지 않으면 기준선이 분할 전 고가에 남아 분할된 종가가 영영 못 넘는다.
+  // 창이 새 가격으로 다 갈릴 때까지 진입이 막힌다.
+  // 각 필드를 왜 나누는지는 지표별 `scale*` 함수 주석에 적었다.
+  onCorporateAction(symbol, ratio, state) {
+    const symbolState = state.bySymbol.get(symbol);
+    if (symbolState === undefined) return;
+    scaleRollingMax(symbolState.priorHighs, ratio);
+    scaleAtr(symbolState.atr, ratio);
+    scaleHoldingPrices(symbolState.holding, ratio);
   },
 };

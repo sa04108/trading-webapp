@@ -10,6 +10,8 @@ import {
   newAtr,
   newRsi,
   rsiValue,
+  scaleAtr,
+  scaleRsi,
   updateAtr,
   updateRsi,
   type AtrState,
@@ -18,6 +20,7 @@ import {
 import {
   newCorrelationWarmup,
   recordClose,
+  scaleWarmupCloses,
   tryBuildGroups,
   type CorrelationWarmup,
 } from './shared/pair-groups.js';
@@ -26,6 +29,7 @@ import {
   confirmEntry,
   holdLimitReached,
   newHolding,
+  scaleHoldingPrices,
   type HoldingState,
 } from './shared/trailing-stop.js';
 
@@ -242,5 +246,23 @@ export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiRe
     }
 
     return { orders };
+  },
+
+  // 분할 등 자본변동이 걸린 종목의 가격 상태를 같은 비율로 내린다.
+  // `ratio` 와 호출 시점은 엔진이 정한다(`engine.ts` 조정 루프 참고).
+  //
+  // RSI 를 빼면 이 전략이 가장 크게 다친다.
+  // `prevClose` 가 분할 전 가격으로 남으면 분할 봉이 −80% 짜리 하락 한 번으로 들어간다.
+  // 그 한 번이 RSI 를 과매도로 끌어내려 허위 진입을 만든다.
+  // 각 필드를 왜 나누는지는 지표별 `scale*` 함수 주석에 적었다.
+  onCorporateAction(symbol, ratio, state) {
+    const symbolState = state.bySymbol.get(symbol);
+    if (symbolState !== undefined) {
+      scaleRsi(symbolState.rsi, ratio);
+      scaleAtr(symbolState.atr, ratio);
+      scaleHoldingPrices(symbolState.holding, ratio);
+    }
+    // 그룹 확정 전이면 상관 워밍업에도 분할 전 종가가 쌓여 있다
+    if (state.warmup !== null) scaleWarmupCloses(state.warmup, symbol, ratio);
   },
 };

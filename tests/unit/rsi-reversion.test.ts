@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { runBacktest } from '../../src/server/modules/backtest/domain/engine.js';
 import type { ExecutionProfile } from '../../src/server/modules/backtest/domain/types.js';
+import { CORPORATE_ACTION_FIELD, type Fact } from '../../src/server/modules/facts/domain/fact.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import { StrategyRegistry } from '../../src/server/modules/strategy/application/strategy-registry.js';
 import {
@@ -123,5 +124,96 @@ describe('실행 동작', () => {
     // 매수 체결 봉과 매도 체결 봉의 간격 = 3봉.
     const buyTs = result.fills.find((fill) => fill.side === 'BUY')?.tsMs as number;
     expect((sells[0]?.tsMs as number) - buyTs).toBe(3 * DAY);
+  });
+});
+
+// --- 자본변동(액면분할)을 걸친 RSI 누적 ---------------------------------------
+//
+// RSI 값 자체는 비율이라 분할에 영향받지 않는다.
+// 그러나 그 값을 만드는 `prevClose` 는 가격이다.
+// 조정하지 않으면 5대 1 분할 봉이 −80% 짜리 하락 한 번으로 들어간다.
+// 그 한 번이 RSI 를 과매도 문턱 아래로 끌어내려 없던 진입을 만든다.
+
+const SPLIT_START = Date.UTC(2026, 6, 6, 0, 0);
+
+function splitCandle(index: number, close: number): Candle {
+  return {
+    symbol: 'AAA',
+    market: 'KR',
+    timeframe: '1d',
+    tsMs: SPLIT_START + index * DAY,
+    open: close,
+    high: close * 1.01,
+    low: close * 0.99,
+    close,
+    volume: 1_000,
+  };
+}
+
+/** 효력 시각은 봉 인덱스 (`day`−7)과 (`day`−6) 사이에 떨어진다 — KST 자정을 UTC 로 바꾸며 하루 밀린다 */
+function splitFact(day: number, ratio: number): Fact {
+  return {
+    scope: 'SYMBOL',
+    key: 'AAA',
+    field: CORPORATE_ACTION_FIELD,
+    periodKey: `2026-07-${String(day).padStart(2, '0')}`,
+    asOfTsMs: SPLIT_START,
+    value: ratio,
+    unit: 'ratio',
+  };
+}
+
+/**
+ * 봉 0~24: 꾸준한 상승 — RSI 는 100 근처라 진입선(30) 과 멀다.
+ * 봉 25 이후: 5대 1 분할이 걸려 원본 종가만 1/5 이 된다. 실제 흐름은 그대로 상승이다.
+ */
+function steadyRiseWithSplit(): Candle[] {
+  const candles: Candle[] = [];
+  for (let index = 0; index < 30; index += 1) {
+    const truePrice = 100_000 + index * 1_000;
+    candles.push(splitCandle(index, index < 25 ? truePrice : truePrice / 5));
+  }
+  return candles;
+}
+
+describe('rsi-reversion 분할 후 RSI 누적 조정', () => {
+  it('분할 봉을 과매도로 읽지 않는다 (허위 진입 방지)', () => {
+    const result = runBacktest(rsiReversionStrategy, {
+      candles: steadyRiseWithSplit(),
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: FAST_PARAMS,
+      randomSeed: 1,
+      maxPositions: 5,
+      facts: [splitFact(31, 5)],
+    });
+
+    // 전 구간이 상승이라 과매도는 한 번도 없다.
+    // 조정하지 않으면 봉 25 의 −80% 가 RSI 를 2 근처로 떨어뜨려 매수가 나간다.
+    expect(result.fills.filter((fill) => fill.side === 'BUY')).toHaveLength(0);
+  });
+
+  it('실제로 과매도가 오면 정상적으로 진입한다 (훅이 진입을 막은 것이 아니다)', () => {
+    // 분할 뒤에 진짜 급락을 붙인다 — 조정이 RSI 를 무디게 만들지 않았음을 확인한다
+    const candles = steadyRiseWithSplit();
+    let close = (100_000 + 29 * 1_000) / 5;
+    for (let index = 30; index < 40; index += 1) {
+      close -= 800;
+      candles.push(splitCandle(index, close));
+    }
+    const result = runBacktest(rsiReversionStrategy, {
+      candles,
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: FAST_PARAMS,
+      randomSeed: 1,
+      maxPositions: 5,
+      facts: [splitFact(31, 5)],
+    });
+
+    const buys = result.fills.filter((fill) => fill.side === 'BUY');
+    expect(buys.length).toBeGreaterThan(0);
+    // 분할 봉(25)이 아니라 실제 하락 구간에서 진입해야 한다
+    expect(buys[0]!.tsMs).toBeGreaterThan(SPLIT_START + 30 * DAY);
   });
 });

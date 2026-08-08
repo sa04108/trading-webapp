@@ -119,6 +119,26 @@ export function recordClose(
 }
 
 /**
+ * 한 종목의 누적 종가를 자본변동 비율만큼 모두 내린다.
+ *
+ * 여기 쌓인 값은 전부 가격이고, `buildCorrelationGroups` 는 이 값의 로그수익률을 본다.
+ * 내리지 않으면 분할 봉 하나가 −80% 짜리 수익률로 창에 남는다.
+ * 그 한 점이 상관계수를 통째로 끌고 가 역상관 짝이 갈리거나 없던 짝이 묶인다.
+ * 그러면 같은 묶음에서 한 종목만 보유한다는 규칙 자체가 엉뚱한 짝에 걸린다.
+ *
+ * 다른 종목의 종가는 건드리지 않는다 — 분할은 그 종목 하나의 사건이다.
+ */
+export function scaleWarmupCloses(
+  warmup: CorrelationWarmup,
+  symbol: string,
+  ratio: number,
+): void {
+  const closes = warmup.closesBySymbol.get(symbol);
+  if (!closes) return;
+  for (const [tsMs, close] of closes) closes.set(tsMs, close / ratio);
+}
+
+/**
  * 유니버스 **전 종목에 공통으로 존재하는** 봉 시각이 correlationBars 개 이상
  * 쌓였으면 그 시각들(가장 최근 correlationBars 개, 오름차순)만으로 상관 그룹을
  * 만든다. 아직이면 null — 호출자가 다음 봉에 다시 시도한다.
