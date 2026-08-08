@@ -152,10 +152,14 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     // 결과가 없는 잡은 null 이다 — 0 으로 떨어지면 "수익 0%" 로 읽힌다
     expect(ctx.container.resultsService.getTotalReturnPct('bt_없는잡')).toBeNull();
 
-    // 배선 전체가 이어졌는지 — 리스너가 레지스트리 이름과 수익률을 함께 담는다
-    const notification = ctx.container.notificationService
-      .list()
-      .find((row) => row.link === `/backtests/${jobId}`);
+    // 배선 전체가 이어졌는지 — 리스너가 레지스트리 이름과 수익률을 함께 담는다.
+    // 상태를 기다린 것만으로는 부족하다: 자식이 종료 전에 COMPLETED 를 DB 에 쓰고
+    // 알림은 그 뒤 부모의 exit 핸들러에서 뜬다(job-orchestrator).
+    const findNotification = () =>
+      ctx.container.notificationService.list().find((row) => row.link === `/backtests/${jobId}`);
+    await waitFor(() => findNotification() !== undefined, 10_000);
+
+    const notification = findNotification();
     expect(notification?.title).toBe('백테스트가 완료되었습니다');
     expect(notification?.body).toContain('전고점 돌파');
     expect(notification?.body).toContain('수익률');
