@@ -1,7 +1,7 @@
 export interface AdjustResult {
   readonly quantity: number;
   readonly avgEntryPrice: number;
-  /** 단주 잔여를 환산한 현금. 분할(ratio > 1)에서는 항상 0 이다 */
+  /** 단주 잔여를 환산한 현금. ratio가 정수가 아니면 분할에서도 생긴다 */
   readonly cashFromFraction: number;
   /** 조정 후 수량이 0 이 되어 포지션을 닫아야 하는가 */
   readonly closed: boolean;
@@ -24,9 +24,31 @@ export function adjustForRatio(
   ratio: number,
   fractionPrice: number,
 ): AdjustResult {
+  if (ratio < 0) {
+    throw new Error(`Invalid ratio: ${ratio}. Ratio must be non-negative.`);
+  }
+
+  if (ratio === 0) {
+    return {
+      quantity: 0,
+      avgEntryPrice: 0,
+      cashFromFraction: 0,
+      closed: true,
+    };
+  }
+
   const raw = quantity * ratio;
-  const whole = Math.floor(raw);
+  // 부동소수점 오차 때문에 정수여야 할 값이 1e-9 정도의 오차를 가지고 나타난다.
+  // ratio가 정수가 아닌 유리수(예: 3/11, 0.7)일 때 누적 오차가 생긴다.
+  // 값이 가장 가까운 정수에서 1e-9 이내면 그 정수가 수학적 참값이다.
+  // epsilon = 1e-9 는 보수적인 선택이다:
+  // - 실제 오차는 typically 1e-15 ~ 1e-10
+  // - 1e-9는 machine epsilon(~2.2e-16) 보다 훨씬 크지만 0.5보다는 훨씬 작아
+  //   실제 단주를 놓치지 않는다
+  const epsilon = 1e-9;
+  const whole = Math.abs(raw - Math.round(raw)) < epsilon ? Math.round(raw) : Math.floor(raw);
   const fraction = raw - whole;
+
   return {
     quantity: whole,
     avgEntryPrice: avgEntryPrice / ratio,
