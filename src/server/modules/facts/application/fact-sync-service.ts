@@ -65,7 +65,7 @@ export interface FactSyncReport {
 }
 
 /**
- * `sync`·`syncCorporateActions` 가 갈라지는 지점 둘만 담는다 — 무엇을 fetch 하는가와
+ * `sync`·`syncCorporateActions` 가 갈라지는 지점 둘만 담는다 — 무엇을 수집하는가와
  * 어느 커버리지를 갱신하는가. 나머지(종목 순회·저장·취소·리포트 조립)는
  * `FactSyncService.runSync` 하나가 공유한다.
  */
@@ -96,6 +96,10 @@ interface SyncStrategy {
  * 맨 앞 네 자리 숫자를 연도로 본다 — 세 형식 모두 연도가 맨 앞에 온다.
  * '-' 처럼 숫자가 없으면 연도를 알 수 없으므로 그 gap 은 건너뛴다. 건너뛴 gap 도
  * `report.gaps` 에는 그대로 남으므로 사용자에게 감춰지지 않는다.
+ *
+ * 이 결과가 이번에 요청한 연도의 부분집합이라고 가정하면 안 된다.
+ * `irdsSttus` 는 자본변동 이력을 보고서 연도 기준으로 누적 반환하므로(dart-fact-source.ts
+ * 참고), gap 의 periodKey(이벤트 날짜)가 이번 요청 연도 밖을 가리킬 수 있다.
  */
 function uniqueYearsFromGaps(gaps: readonly FactIngestionGap[]): number[] {
   const years = new Set<number>();
