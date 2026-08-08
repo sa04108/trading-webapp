@@ -971,16 +971,15 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
       expect(trades.some((t) => t.symbol === '000660' && t.entryTsMs === blockedEntryTsMs)).toBe(
         false,
       );
-      // 그날만 미뤄졌을 뿐 완전히 매수를 못 하게 된 것은 아니다.
+      // 그날만 진입을 미룰 뿐 매수 자체를 영영 막지는 않는다.
       expect(trades.some((t) => t.symbol === '000660')).toBe(true);
 
-      // 커버리지를 심었으므로 "정보가 없습니다" 경고는 없고, 구간을 명시하는 경고만 남는다.
+      // 실행 기간이 전부 덮였으므로 커버리지 이야기는 한 줄도 나오지 않는다 —
+      // "정보가 없습니다" 도, 구간을 다시 읊는 "…구간만 반영됐습니다" 도 거짓이다.
       const run = ctx.container.resultsService.getRun(jobId)!;
       const warnings = JSON.parse(run.warningsJson ?? '[]') as string[];
       expect(warnings.some((w) => w.includes('거래불가일 정보가 없습니다'))).toBe(false);
-      expect(
-        warnings.some((w) => w.includes('거래불가일 정보는 2025-07-27 ~ 2026-07-24 구간만 반영됐습니다')),
-      ).toBe(true);
+      expect(warnings.some((w) => w.includes('거래불가일 정보는'))).toBe(false);
     },
   );
 

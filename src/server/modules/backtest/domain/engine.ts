@@ -69,6 +69,11 @@ export interface BacktestRunInput {
   /**
    * 거래불가일이 실제로 채워진 구간. `null` 이면 이 실행 구간에 거래불가 정보가 없다.
    * 행이 없는 것과 아직 모르는 것을 구분하지 않으면 경고가 "반영한다" 고 거짓말한다.
+   *
+   * 엔진이 실제로 보는 것은 `null` 인지 아닌지뿐이다. 워커는 실행 기간 **전체**가
+   * 덮였을 때만 구간을 채워 넘기므로(backtest-child.ts), 그 구간을 경고에 적으면
+   * 전부 반영된 실행을 반쪽처럼 말하게 된다. 구간 값 자체는 부분 커버 구간을
+   * 계산할 수 있게 되면 그때 쓴다.
    */
   readonly nonTradingCoveredPeriod?: { readonly from: string; readonly to: string } | null;
 }
@@ -510,19 +515,21 @@ function* runBacktestSteps(
     warnings.push(
       `상장폐지로 강제 청산한 종목 ${symbols.length}건: ${shown}`
         + (symbols.length > 10 ? ` 외 ${symbols.length - 10}종목` : '')
-        + `. 손익 합계 ${Math.round(netPnl).toLocaleString()}원. `
+        // 로캘을 못박는다. 지정하지 않으면 기계마다 1,234,567 과 1.234.567 로 갈려
+        // 같은 실행의 warningsJson 이 달라진다 (재현성 §9.5).
+        + `. 손익 합계 ${Math.round(netPnl).toLocaleString('ko-KR')}원. `
         + '체결가는 그 종목의 마지막 거래 가능 봉 종가이며, 정리매매가 있었다면 그 가격이 반영됩니다.',
     );
   }
 
+  // 덮인 경우에는 아무 말도 하지 않는다. 워커는 실행 기간 전체가 덮였을 때만 구간을
+  // 넘기므로(backtest-child.ts), 그 구간을 다시 적으면 "만 반영됐다" 가 되어 전부
+  // 반영된 실행을 반쪽처럼 읽게 만든다. 위 "보정하는 것" 줄이 이미 거래불가일 반영을
+  // 밝히고 있어 덧붙일 사실도 없다.
   if (input.nonTradingCoveredPeriod === null) {
     warnings.push(
       '이 실행 구간에는 거래불가일 정보가 없습니다 — 거래정지 종목이 유니버스와 매수 후보에 그대로 들어갔을 수 있습니다. '
         + '`cli krx:backfill-non-trading` 으로 채운 뒤 다시 실행하세요.',
-    );
-  } else if (input.nonTradingCoveredPeriod !== undefined) {
-    warnings.push(
-      `거래불가일 정보는 ${input.nonTradingCoveredPeriod.from} ~ ${input.nonTradingCoveredPeriod.to} 구간만 반영됐습니다.`,
     );
   }
 

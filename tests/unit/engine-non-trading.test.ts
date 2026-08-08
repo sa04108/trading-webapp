@@ -320,4 +320,56 @@ describe('실행 경고', () => {
     });
     expect(result.warnings.join('\n')).toContain('거래불가일 정보가 없습니다');
   });
+
+  it('실행 구간이 전부 덮였으면 커버리지 이야기를 꺼내지 않는다', () => {
+    // 워커는 실행 기간 전체가 덮였을 때만 구간을 넘긴다. 그 구간을 다시 적으면
+    // "만" 이 붙어 일부만 반영된 것처럼 읽힌다 — 사실은 전부 반영됐다.
+    const result = runBacktest(buyOnceStrategy('A'), {
+      candles: [bar('A', 0), bar('A', 1)],
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 1,
+      maxPositions: 5,
+      nonTradingCoveredPeriod: { from: '2025-05-12', to: '2025-05-13' },
+    });
+    const text = result.warnings.join('\n');
+    expect(text).not.toContain('거래불가일 정보가 없습니다');
+    expect(text).not.toContain('거래불가일 정보는');
+  });
+
+  it('청산 손익을 ko-KR 자릿수 구분으로 적는다', () => {
+    // 로캘을 지정하지 않으면 같은 실행이 기계마다 1,234,567 과 1.234.567 로 갈려
+    // warningsJson 이 달라진다 — 재현성(ENGINE_VERSION·scheduleHash) 약속이 깨진다.
+    const candles = [
+      bar('A', 0, 1_000), bar('A', 1, 1_000),
+      { ...bar('A', 2, 3_000), open: 3_000, high: 3_010 },
+      bar('B', 0), bar('B', 3),
+    ];
+    const result = runBacktest(
+      {
+        ...buyOnceStrategy('A'),
+        onBars: (_context, state) => {
+          if ((state as { done: boolean }).done) return { orders: [] };
+          (state as { done: boolean }).done = true;
+          return { orders: [{ symbol: 'A', side: 'BUY' as const, quantity: 1_000 }] };
+        },
+      },
+      {
+        candles,
+        initialCash: 10_000_000,
+        execution: ZERO_COST,
+        parameters: {},
+        randomSeed: 1,
+        maxPositions: 5,
+        delistedTsMsBySymbol: new Map([['A', START + 3 * DAY]]),
+      },
+    );
+
+    const netPnl = result.delistingLiquidations[0]?.netPnl ?? 0;
+    expect(Math.abs(netPnl)).toBeGreaterThan(1_000_000);
+    expect(result.warnings.join('\n')).toContain(
+      `손익 합계 ${Math.round(netPnl).toLocaleString('ko-KR')}원`,
+    );
+  });
 });
