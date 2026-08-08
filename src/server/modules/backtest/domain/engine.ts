@@ -59,6 +59,13 @@ export interface BacktestRunInput {
    * 보유분 청산(SELL)은 막지 않는다. 유니버스에서 빠진 종목도 항상 팔 수 있어야 한다.
    */
   readonly nonTradingSymbolsByTsMs?: ReadonlyMap<number, ReadonlySet<string>>;
+  /**
+   * 상장폐지 효력 시각 (심볼 → tsMs). 기간 안에 폐지된 종목만 담는다.
+   *
+   * 이 맵은 엔진만 본다. `StrategyBarContext` 에 노출하지 않는다 —
+   * 전략이 "이 종목이 곧 폐지된다" 를 미리 알 경로를 만들지 않기 위해서다.
+   */
+  readonly delistedTsMsBySymbol?: ReadonlyMap<string, number>;
 }
 
 export interface EngineHooks {
@@ -83,6 +90,8 @@ export interface BacktestRunResult {
   readonly warnings: readonly string[];
   readonly cancelled: boolean;
   readonly processedBars: number;
+  /** 상장폐지로 강제 청산한 내역 — 전략이 낸 매도와 구분해 결과 화면에 밝힌다 */
+  readonly delistingLiquidations: readonly { symbol: string; tsMs: number; netPnl: number }[];
 }
 
 /** 재현성 메타데이터에 기록되는 엔진 버전 (스펙 §9.5) — 체결·지표 로직 변경 시 올린다 */
@@ -146,6 +155,11 @@ function* runBacktestSteps(
   const symbols = [...new Set(sorted.map((c) => c.symbol))].sort();
   const totalBars = sorted.length;
 
+  // 폐지 청산은 "그 종목의 마지막 봉" 에서 일어난다. 봉은 전부 미리 들어와 있으므로
+  // 루프 중에 찾을 필요 없이 여기서 한 번에 접는다.
+  const lastBarTsMsBySymbol = new Map<string, number>();
+  for (const candle of sorted) lastBarTsMsBySymbol.set(candle.symbol, candle.tsMs);
+
   const rng = createRng(input.randomSeed);
   const historyBySymbol = new Map<string, Candle[]>(symbols.map((s) => [s, []]));
   const lastCloseBySymbol = new Map<string, number>();
@@ -161,6 +175,7 @@ function* runBacktestSteps(
   const fills: Fill[] = [];
   const trades: Trade[] = [];
   const warnings: string[] = [];
+  const delistingLiquidations: { symbol: string; tsMs: number; netPnl: number }[] = [];
   /**
    * 동시 보유 상한에 걸려 폐기된 매수 주문 — 종목별 건수. 봉마다 경고를 쌓지 않고
    * 마지막에 한 줄로 접는다: 월간 리밸런스 12년이면 같은 사유가 천 건 넘게 쌓여
@@ -329,6 +344,44 @@ function* runBacktestSteps(
       lastCloseBySymbol.set(symbol, bar.close);
     }
 
+    // 상장폐지 청산 — 그 종목의 마지막 봉에서 종가로 전량 나간다.
+    //
+    // 평가금액 갱신보다 먼저다. 이 시점 자산곡선이 청산 대금을 이미 반영해야
+    // 폐지 손실이 곡선에 남는다.
+    //
+    // 체결가는 이 봉의 종가다. `krx_non_trading_days.lastClose` 는 쓰지 않는다 —
+    // 정지 중 가격은 팔 수 있는 가격이 아니다. 정지 상태로 폐지된 종목은
+    // 정지 직전 실거래가로 나간다.
+    //
+    // 정리매매 종가를 따로 추정하지 않는다. KRX 일봉에 정리매매 기간 봉이 들어 있어
+    // 마지막 봉이 곧 정리매매 최종가다. 시장이 매긴 회수가치를 그대로 쓴다.
+    if (input.delistedTsMsBySymbol !== undefined) {
+      for (const [symbol, bar] of bars) {
+        if (!input.delistedTsMsBySymbol.has(symbol)) continue;
+        if (lastBarTsMsBySymbol.get(symbol) !== tsMs) continue;
+
+        // 체결될 봉이 다시 오지 않는다 — 남겨두면 기간 종료 폐기 경고만 늘린다
+        pendingOrders = pendingOrders.filter((order) => order.symbol !== symbol);
+
+        const position = positions.get(symbol);
+        if (position === undefined || position.quantity <= 0) continue;
+
+        const before = trades.length;
+        const fill = executeOrder(
+          { symbol, side: 'SELL', quantity: position.quantity, reason: 'DELISTED' },
+          bar,
+          tsMs,
+          bar.close,
+        );
+        if (fill) fills.push(fill);
+        const trade = trades[before];
+        if (trade !== undefined) {
+          delistingLiquidations.push({ symbol, tsMs, netPnl: trade.netPnl });
+        }
+        strategy.onForcedExit?.(symbol, state);
+      }
+    }
+
     // 4. 평가금액 갱신
     equityPoints.push({ tsMs, equity: markToMarket() });
     maxConcurrentPositions = Math.max(maxConcurrentPositions, positions.size);
@@ -433,12 +486,14 @@ function* runBacktestSteps(
     .filter((position) => position.quantity > 0)
     .map((position) => {
       const lastPrice = lastCloseBySymbol.get(position.symbol) ?? position.avgEntryPrice;
+      const lastPriceTsMs = lastBarTsMsBySymbol.get(position.symbol) ?? position.entryTsMs;
       return {
         symbol: position.symbol,
         quantity: position.quantity,
         avgEntryPrice: position.avgEntryPrice,
         entryTsMs: position.entryTsMs,
         lastPrice,
+        lastPriceTsMs,
         unrealizedPnl: position.quantity * (lastPrice - position.avgEntryPrice),
         returnPct: ((lastPrice - position.avgEntryPrice) / position.avgEntryPrice) * 100,
       };
@@ -457,6 +512,7 @@ function* runBacktestSteps(
     warnings,
     cancelled,
     processedBars,
+    delistingLiquidations,
   };
 
   // ── 내부 helpers ─────────────────────────────────────────────
@@ -507,11 +563,17 @@ function* runBacktestSteps(
     return { ...order, quantity };
   }
 
-  function executeOrder(order: OrderIntent, bar: Candle, tsMs: number): Fill | null {
+  function executeOrder(
+    order: OrderIntent,
+    bar: Candle,
+    tsMs: number,
+    basePrice: number = bar.open,
+  ): Fill | null {
     if (order.side === 'BUY') {
-      let fill = simulateFill(order, bar.open, tsMs, input.execution);
+      let fill = simulateFill(order, basePrice, tsMs, input.execution);
       if (requiredCashForBuy(fill) > cash) {
         // 현금 부족: 감당 가능한 수량으로 축소, 최소 수량 미만이면 거부
+        // fill.price 는 이미 체결가라 basePrice 와 다르다 — 그대로 쓴다
         const affordable = Math.floor(
           cash / (fill.price * (1 + input.execution.cost.buyCommissionRate)),
         );
@@ -519,7 +581,7 @@ function* runBacktestSteps(
           warnings.push(`${order.symbol} 매수 거부: 현금 부족 (${new Date(tsMs).toISOString()})`);
           return null;
         }
-        fill = simulateFill({ ...order, quantity: affordable }, bar.open, tsMs, input.execution);
+        fill = simulateFill({ ...order, quantity: affordable }, basePrice, tsMs, input.execution);
       }
 
       cash -= requiredCashForBuy(fill);
@@ -546,7 +608,7 @@ function* runBacktestSteps(
     const position = positions.get(order.symbol);
     if (!position || position.quantity <= 0) return null;
     const sellQty = Math.min(order.quantity, position.quantity);
-    const fill = simulateFill({ ...order, quantity: sellQty }, bar.open, tsMs, input.execution);
+    const fill = simulateFill({ ...order, quantity: sellQty }, basePrice, tsMs, input.execution);
 
     cash += proceedsFromSell(fill);
 

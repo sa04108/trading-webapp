@@ -96,3 +96,66 @@ describe('엔진 거래불가일', () => {
     expect(result.fills[0]?.tsMs).toBe(START + 2 * DAY);
   });
 });
+
+describe('상장폐지 청산', () => {
+  it('마지막 거래 가능 봉 종가로 청산하고 사유를 남긴다', () => {
+    // A 는 2번 봉이 마지막이고 그 뒤 폐지된다. B 는 끝까지 산다.
+    const candles = [
+      bar('A', 0, 1_000), bar('A', 1, 900), bar('A', 2, 500),
+      bar('B', 0), bar('B', 1), bar('B', 2), bar('B', 3),
+    ];
+    const result = runBacktest(buyOnceStrategy('A'), {
+      candles,
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 1,
+      maxPositions: 5,
+      delistedTsMsBySymbol: new Map([['A', START + 3 * DAY]]),
+    });
+
+    const trade = result.trades.find((candidate) => candidate.symbol === 'A');
+    expect(trade).toBeDefined();
+    expect(trade?.exitReason).toBe('DELISTED');
+    // 2번 봉 종가 500 으로 나간다 — 시가가 아니다
+    expect(trade?.exitPrice).toBe(500);
+    expect(trade?.exitTsMs).toBe(START + 2 * DAY);
+    expect(result.delistingLiquidations).toHaveLength(1);
+    // 청산했으니 미청산으로 남지 않는다
+    expect(result.openPositions.some((position) => position.symbol === 'A')).toBe(false);
+  });
+
+  it('폐지 정보가 없으면 미청산으로 남는다', () => {
+    const candles = [bar('A', 0, 1_000), bar('A', 1, 900), bar('A', 2, 500), bar('B', 3)];
+    const result = runBacktest(buyOnceStrategy('A'), {
+      candles,
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 1,
+      maxPositions: 5,
+    });
+    expect(result.trades).toHaveLength(0);
+    const open = result.openPositions.find((position) => position.symbol === 'A');
+    expect(open?.lastPriceTsMs).toBe(START + 2 * DAY);
+  });
+
+  it('청산 시점에 onForcedExit 를 부른다', () => {
+    const seen: string[] = [];
+    const strategy = buyOnceStrategy('A');
+    const withHook: TradingStrategy<unknown, { done: boolean }> = {
+      ...strategy,
+      onForcedExit: (symbol) => { seen.push(symbol); },
+    };
+    runBacktest(withHook, {
+      candles: [bar('A', 0), bar('A', 1), bar('B', 2)],
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 1,
+      maxPositions: 5,
+      delistedTsMsBySymbol: new Map([['A', START + 2 * DAY]]),
+    });
+    expect(seen).toEqual(['A']);
+  });
+});

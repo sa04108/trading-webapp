@@ -73,6 +73,18 @@ export interface TradingStrategy<TParameters, TState> {
    * 구현하지 않는 전략에는 영향이 없다.
    */
   onCorporateAction?(symbol: string, ratio: number, state: TState): void;
+
+  /**
+   * 엔진이 보유 포지션을 강제로 청산한 직후 부르는 선택 훅이다.
+   * 지금은 상장폐지 청산 하나뿐이다.
+   *
+   * 전략이 낸 매도가 아니므로 전략은 자기가 아직 보유 중이라고 믿는다.
+   * 봉 사이에 들고 다니는 스톱 레벨·보유 플래그를 여기서 지우지 않으면
+   * 없는 포지션에 매도 주문을 계속 낸다.
+   *
+   * 구현하지 않는 전략에는 영향이 없다.
+   */
+  onForcedExit?(symbol: string, state: TState): void;
 }
 
 /** 레지스트리 저장용 — 파라미터·상태 타입을 지운 형태 */
