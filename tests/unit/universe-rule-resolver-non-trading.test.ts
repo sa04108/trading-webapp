@@ -36,7 +36,35 @@ describe('UniverseRuleResolver 거래불가 제외', () => {
 
     expect(resolved.schedule[0]?.symbols).toEqual(['048260']);
     expect(resolved.schedule[0]?.excludedNonTradingCount).toBe(1);
-    expect(resolved.excludedNonTradingTotal).toBe(1);
+  });
+
+  it('조회 하한을 첫 리밸런스 날짜보다 31일 앞으로 잡는다', async () => {
+    // 리밸런스 날짜가 휴장이면 effectiveTradingDate 가 그보다 앞선 거래일이 된다.
+    // 하한을 리밸런스 날짜 그대로 두면 그 거래일의 거래불가 행을 못 읽어 제외가
+    // 조용히 꺼진다 — 결과만 보고는 구별되지 않는 회귀다.
+    const nonTradingCalls: { from: string; to: string }[] = [];
+    const master = {
+      isCovered: () => true,
+      effectiveTradingDateWithinCoverage: (date: string) => date,
+      getUniverseAsOf: () => new Map(),
+      getMarketCapsAt: async () => new Map(),
+      nonTradingDaysBetween: (from: string, to: string) => {
+        nonTradingCalls.push({ from, to });
+        return [];
+      },
+    };
+    const resolver = new UniverseRuleResolver({
+      symbolMaster: master as never,
+      logger: { warn: () => {}, info: () => {}, error: () => {}, debug: () => {} } as never,
+    });
+
+    await resolver.resolve(
+      { markets: ['KOSDAQ'], topN: 1, sortKey: 'MKTCAP' },
+      ['2022-02-15', '2022-03-15'],
+    );
+
+    // 2022-02-15 의 31일 전은 2022-01-15 다. 상한은 마지막 리밸런스 날짜 그대로다.
+    expect(nonTradingCalls).toEqual([{ from: '2022-01-15', to: '2022-03-15' }]);
   });
 });
 

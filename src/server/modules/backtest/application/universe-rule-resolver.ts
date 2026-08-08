@@ -27,8 +27,6 @@ export interface ResolvedUniverse {
   readonly unionEntries: ReadonlyMap<string, SymbolMasterEntry>;
   readonly scheduleHash: string; // sha256(schedule 의 JSON 직렬화) — schedule 자체가 결정적이라 안정적이다
   readonly uncoveredDates: readonly string[]; // 마스터가 커버하지 않는 리밸런스 날짜
-  /** 전 리밸런스 날짜에서 거래불가로 제외한 종목 수 합계 */
-  readonly excludedNonTradingTotal: number;
 }
 
 export interface UniverseRuleResolverDeps {
@@ -37,9 +35,9 @@ export interface UniverseRuleResolverDeps {
 }
 
 /**
- * 일정 전체의 거래불가 제외 건수 합계 (중복 포함). `resolve()` 자체와 워커
- * (job.universeScheduleJson 만 갖고 있다, `resolved` 전체는 못 받는다) 가 같은
- * 합산 로직을 쓰게 해 실행 경고와 `excludedNonTradingTotal` 이 갈라지지 않게 한다.
+ * 일정 전체의 거래불가 제외 건수 합계 (중복 포함). 워커는 `resolve()` 결과가 아니라
+ * job.universeScheduleJson 에 저장된 일정만 받으므로, 합산을 여기 한 곳에 두고
+ * 양쪽이 같은 함수를 부르게 한다.
  */
 export function sumExcludedNonTrading(schedule: readonly UniverseScheduleEntry[]): number {
   return schedule.reduce((sum, entry) => sum + entry.excludedNonTradingCount, 0);
@@ -153,7 +151,6 @@ export class UniverseRuleResolver {
     }
 
     const scheduleHash = createHash('sha256').update(JSON.stringify(schedule)).digest('hex');
-    const excludedNonTradingTotal = sumExcludedNonTrading(schedule);
 
     return {
       schedule,
@@ -161,7 +158,6 @@ export class UniverseRuleResolver {
       unionEntries,
       scheduleHash,
       uncoveredDates,
-      excludedNonTradingTotal,
     };
   }
 }
