@@ -29,6 +29,7 @@ import { requestToFormState } from './prefill';
 import { ParamHint } from './param-hint';
 import { extractNumberParams, paramLabel, type NumberParamSpec } from './param-specs';
 import { StrategyDataBadge } from './strategy-data-badge';
+import { useStrategies } from './api';
 import { STRATEGY_DATA_DETAILS, strategyDataRequirement } from './strategy-data-requirement';
 import { SymbolLabel } from '@/components/symbol-label';
 import {
@@ -56,19 +57,6 @@ import {
   WIZARD_STEPS,
   type StepGateState,
 } from './wizard-steps';
-
-interface StrategySummary {
-  id: string;
-  version: string;
-  name: string;
-  description: string;
-  /**
-   * 서버는 항상 boolean 을 내리지만(`StrategySummary`) 응답을 런타임 검증하지 않으므로
-   * 낡은 서버·프록시 응답에서는 없을 수 있다. 없는 것을 false 로 좁히지 않고 그대로
-   * 흘려보내 배지가 침묵하게 한다 (`strategyDataRequirement`).
-   */
-  requiresFundamentals?: boolean;
-}
 
 interface CommissionProfileSummary {
   id: string;
@@ -138,10 +126,7 @@ export function NewBacktestWizard() {
    */
   const [collectionAttempted, setCollectionAttempted] = useState(false);
 
-  const strategies = useQuery({
-    queryKey: ['strategies'],
-    queryFn: () => api<{ strategies: StrategySummary[] }>('/strategies'),
-  });
+  const strategies = useStrategies();
   const schema = useQuery({
     queryKey: ['strategies', strategyId, 'schema'],
     queryFn: () => api<{ schema: Record<string, unknown> }>(`/strategies/${strategyId}/schema`),

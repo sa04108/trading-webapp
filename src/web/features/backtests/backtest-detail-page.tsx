@@ -47,7 +47,7 @@ import { api, ApiError } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 import { SymbolLabel } from '@/components/symbol-label';
 import { useStockNames } from '@/lib/use-stock-names';
-import { useBacktestLive, useBacktestSeries, useBacktestTrades } from './api';
+import { useBacktestLive, useBacktestSeries, useBacktestTrades, useStrategies } from './api';
 import { exitReasonLabel } from './exit-reason';
 import { openPositionRows } from './open-position-rows';
 import { parsePageSize } from '@/lib/page-size';
@@ -617,11 +617,7 @@ export function BacktestDetailPage() {
     onError: () => toast.error('실행 중인 작업은 삭제할 수 없습니다'),
   });
 
-  const strategies = useQuery({
-    queryKey: ['strategies'],
-    queryFn: () =>
-      api<{ strategies: Array<{ id: string; name: string; description: string }> }>('/strategies'),
-  });
+  const strategies = useStrategies();
 
   // 조회가 실패하면 결과가 없다고 말한다 — 알림에서 넘어오면 그 사이 삭제된 잡일 수
   // 있는데, 스켈레톤만 두면 영영 로딩 중으로 보인다
