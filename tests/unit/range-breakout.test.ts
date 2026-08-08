@@ -250,8 +250,8 @@ function splitFact(symbol: string, day: number, ratio: number): Fact {
  * 진입가 100_000 · 손절 폭 2×ATR(5_000) = 스톱 90_000 을 만드는 픽스처.
  * 봉 0~5: 평탄 워밍업(TR 5_000 고정 → ATR 5_000).
  * 봉 6: 전고점(102_500) 돌파 신호.
- * 봉 7: 체결(시가 100_000) — confirmEntry 로 스톱 90_000 확정.
- * 봉 8: 5:1 분할 효력 — 종가 20_000 (조정 없으면 stopLevel 90_000 에 걸려 즉시 청산).
+ * 봉 7: 체결(시가 100_000) — `confirmEntry` 로 스톱 90_000 확정.
+ * 봉 8: 5:1 분할 효력 — 종가 20_000 (조정 없으면 `stopLevel` 90_000 에 걸려 즉시 청산).
  */
 function splitStopFixture(): Candle[] {
   return [

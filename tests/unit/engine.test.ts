@@ -989,7 +989,7 @@ describe('분할을 걸친 보유 포지션 조정', () => {
     expect(result.openPositions[0]!.avgEntryPrice).toBe(20_000);
   });
 
-  it('분할 효력 봉에서 전략의 자본변동 훅을 부른다', () => {
+  it('포지션도 대기 주문도 없으면 훅을 부르지 않는다', () => {
     // 훅 호출을 기록하는 가짜 전략. 실제 스톱 조정 로직은 전략 층 테스트가 맡고,
     // 여기서는 엔진이 훅을 정확한 시점·인자로 부르는지만 본다.
     const calls: Array<{ symbol: string; ratio: number }> = [];
