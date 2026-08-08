@@ -174,13 +174,16 @@ function* runBacktestSteps(
   const universeRejectedSymbols = new Set<string>();
 
   const factView = new PitFactView(input.facts ?? []);
-  // 종목별 마지막 적용 시각 — 거래정지로 효력발생일에 봉이 없어도 놓치지 않는다.
-  // 액면분할은 주권교체 기간에 매매거래가 정지되는 것이 표준 경로다.
-  // 커서가 전역 하나면 그 종목은 재개 봉에서도 영영 조정되지 않는다.
-  //
-  // 심볼이 이 맵에 없으면 -1 로 본다. 주문을 낼 때 이 맵을 심을지는
-  // 그 자리(리스크 검증 구간) 주석에 적는다.
-  const lastAppliedTsMsBySymbol = new Map<string, number>();
+  /**
+   * 종목별 수량 단위 기준 시각이다.
+   * 엔진이 들고 있는 그 종목의 수량(포지션·대기 주문)이 어느 시점 주가 단위로
+   * 적혀 있는지를 가리킨다.
+   *
+   * 전진 규칙은 두 자리에만 있고, 각 자리 주석에 근거를 적는다.
+   * 하나는 봉 루프의 자본변동 조정 구간이고, 다른 하나는 주문 발행 구간이다.
+   * 맵에 없는 심볼은 -1 로 본다.
+   */
+  const quantityBasisTsMsBySymbol = new Map<string, number>();
 
   const state = strategy.initialize({ symbols, initialCash: input.initialCash, rng });
 
@@ -216,32 +219,31 @@ function* runBacktestSteps(
     // 이 시점까지 공시된 팩트만 흡수한다 — 전략이 미래 공시를 볼 자리를 없앤다 (§9.4)
     factView.advanceTo(tsMs);
 
-    // 자본변동을 포지션·대기 주문에 반영한다 — 체결보다 먼저다. 분할일 매도
-    // 신호는 조정된 수량으로 팔아야 한다.
+    // 자본변동을 포지션·대기 주문에 반영한다 — 체결보다 먼저다.
+    // 분할일 매도 신호는 조정된 수량으로 팔아야 한다.
     //
-    // 구간 판정은 종목별 커서로 한다.
-    // (lastApplied, tsMs] 에 효력이 발생한 이벤트만 적용한다.
-    // 커서는 봉이 있는 날에만 전진한다 — 그래야 거래정지로 빠진 구간의
-    // 이벤트를 재개 봉에서 따라잡을 수 있다.
+    // (기준 시각, tsMs] 에 효력이 발생한 이벤트만 적용한다.
     //
-    // 포지션이 있는 종목뿐 아니라 대기 주문만 있는 종목도 훑는다.
-    // 정지 직전 봉에서 발행된 신규 진입 BUY 는 재개 봉에서 체결된다.
-    // 그 재개 봉이 분할 봉일 수 있다.
-    // 이때 포지션이 아직 없어, 포지션만 훑으면 이 주문을 조정에서 놓친다.
-    const corpActionSymbols = new Set<string>([
-      ...positions.keys(),
-      ...pendingOrders.map((order) => order.symbol),
-    ]);
-    for (const symbol of corpActionSymbols) {
-      const bar = bars.get(symbol);
-      if (!bar) continue; // 거래정지 등으로 봉이 없으면 거래 재개 봉에서 적용한다
-      const lastApplied = lastAppliedTsMsBySymbol.get(symbol) ?? -1;
+    // 이 시점에 봉이 있는 종목은 예외 없이 기준 시각을 그 봉으로 전진시킨다.
+    // 봉 가격이 곧 그 시점의 수량 단위라, 봉을 처리하면 기준이 그 봉으로 옮겨간다.
+    // 조정할 수량이 없는 종목도 똑같이 전진시킨다.
+    // 안 그러면 청산으로 비어 있던 동안의 분할이 나중 주문에 다시 걸린다.
+    // 그 분할은 이미 그 종목의 시장 가격에 흡수돼 있다.
+    //
+    // 봉이 없는 종목은 전진시키지 않는다.
+    // 액면분할은 주권교체 기간에 매매거래가 정지되는 것이 표준 경로다.
+    // 기준 시각을 그대로 둬야 재개 봉에서 밀린 이벤트를 따라잡는다.
+    //
+    // 조정 대상은 포지션이 있는 종목과 대기 주문이 있는 종목이다.
+    // 정지 직전에 발행한 신규 진입 BUY 는 포지션이 아직 없어 대기 주문에만 걸린다.
+    const pendingSymbols = new Set(pendingOrders.map((order) => order.symbol));
+    for (const [symbol, bar] of bars) {
+      const basisTsMs = quantityBasisTsMsBySymbol.get(symbol) ?? -1;
+      quantityBasisTsMsBySymbol.set(symbol, tsMs);
+      if (!positions.has(symbol) && !pendingSymbols.has(symbol)) continue;
       const due = factView
         .corporateActions(symbol, tsMs)
-        .filter((action) => action.effectiveTsMs > lastApplied);
-      // 이 봉을 확인했다는 사실을 커서에 남긴다.
-      // 조정 대상이 없어도 갱신해야 다음 봉이 같은 구간을 다시 검사하지 않는다.
-      lastAppliedTsMsBySymbol.set(symbol, tsMs);
+        .filter((action) => action.effectiveTsMs > basisTsMs);
       if (due.length === 0) continue;
       // 정지 구간을 건너뛰면 여러 날짜의 이벤트가 한꺼번에 걸릴 수 있다.
       // 곱셈 자체는 순서에 무관하지만 내림은 그렇지 않다.
@@ -317,17 +319,15 @@ function* runBacktestSteps(
       const validated = validateOrder(order);
       if (!validated) continue;
       pendingOrders.push(validated);
-      // 이 종목에 오늘 봉이 있으면 지금 이 봉으로 커서를 심는다.
-      // 위 조정 루프가 이미 같은 값을 넣었을 수 있어 무해하다.
+      // 이 종목의 봉을 한 번도 본 적이 없을 때만 기준 시각을 지금으로 놓는다.
+      // 참조할 이전 단위가 없으니 발행 시각을 기준으로 삼는다.
+      // 기본값 -1 을 그대로 두면 상장 이전의 분할까지 이 주문에 걸린다.
       //
-      // 봉이 없어도 커서가 아직 없으면 역시 심는다.
-      // 안 그러면 기본값 -1 때문에 아주 오래된 분할까지 새 주문에 걸린다.
-      //
-      // 봉이 없고 커서가 이미 있으면 손대지 않는다.
-      // 정지 중 발행된 다른 주문이 앞서 잡아둔 값을 덮어쓰면 그 주문이
-      // 따라잡아야 할 구간을 잃는다.
-      if (bars.has(validated.symbol) || !lastAppliedTsMsBySymbol.has(validated.symbol)) {
-        lastAppliedTsMsBySymbol.set(validated.symbol, tsMs);
+      // 봉을 본 적이 있으면 손대지 않는다.
+      // 오늘 봉이 있으면 위 조정 루프가 이미 이 봉 시각을 넣어 뒀다.
+      // 정지 중이면 마지막 봉 시각이 남아야 정지 구간의 분할이 이 주문에 적용된다.
+      if (!quantityBasisTsMsBySymbol.has(validated.symbol)) {
+        quantityBasisTsMsBySymbol.set(validated.symbol, tsMs);
       }
     }
 

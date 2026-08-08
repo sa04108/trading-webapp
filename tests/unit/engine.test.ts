@@ -829,6 +829,114 @@ describe('분할을 걸친 보유 포지션 조정', () => {
     expect(result.openPositions[0]!.avgEntryPrice).toBe(20_000);
   });
 
+  it('봉을 한 번도 본 적 없는 종목의 첫 주문에는 그 이전 분할이 걸리지 않는다', () => {
+    // 기준 시각을 발행 시점에 놓는 세 번째 자리(주문 발행 구간)를 고정한다.
+    // C 는 봉 3 에 처음 등장하고, 그 이전 봉에는 아예 없다.
+    // 전략은 봉 2 에서 C 매수를 발행한다 — 이때 C 의 기준 시각이 아직 없다.
+    //
+    // C 의 분할은 봉 0 과 봉 1 사이에 효력이 떨어진다 — 발행보다 한참 전이다.
+    // 기준 시각을 놓지 않으면 기본값 -1 때문에 이 옛 분할이 첫 주문에 걸린다.
+    const PAST_SPLIT_PERIOD_KEY = '2026-07-07';
+
+    const strategy: TradingStrategy<unknown, { step: number }> = {
+      id: 'first-order-unseen-symbol',
+      version: '1.0.0',
+      name: 't',
+      description: 't',
+      parameterSchema: z.unknown(),
+      initialize: () => ({ step: 0 }),
+      onBars(_context, state) {
+        const orders: OrderIntent[] =
+          state.step === 2 ? [{ symbol: 'C', side: 'BUY', quantity: 10 }] : [];
+        state.step += 1;
+        return { orders };
+      },
+    };
+
+    const candles = [
+      dailyBar(0, 100_000),
+      dailyBar(1, 100_000),
+      dailyBar(2, 100_000),
+      dailyBar(3, 100_000),
+      { ...dailyBar(3, 20_000), symbol: 'C' },
+    ];
+    const result = runBacktest(strategy as never, {
+      candles,
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+      facts: [splitFact('C', PAST_SPLIT_PERIOD_KEY, 5)],
+    });
+
+    expect(result.fills).toHaveLength(1);
+    expect(result.fills[0]!.symbol).toBe('C');
+    expect(result.fills[0]!.quantity).toBe(10); // 발행 이전에 끝난 분할 — 조정 대상이 아니다
+  });
+
+  it('청산 뒤에도 계속 거래된 종목의 분할은 정지 중 발행한 재진입 주문에 걸리지 않는다', () => {
+    // 위 '청산 후 재진입' 테스트의 정지 버전이다.
+    // 재진입 주문을 A 가 정지된 봉에서 발행해, 발행 시점 기준 시각 갱신을 막는다.
+    // 그러면 기준 시각은 A 가 마지막으로 봉을 가진 시각이어야 맞다.
+    //
+    // A 는 봉 0~3 과 봉 5 에 있고 봉 4 에는 없다(정지). B 는 봉 4 에만 둔다.
+    // 분할 효력은 봉 2 와 봉 3 사이에 떨어진다.
+    // 청산은 봉 2 에서 끝나고, 봉 3 은 A 가 보유도 대기 주문도 없는 상태로 지난다.
+    // 봉 3 종가 20_000 은 이미 분할이 반영된 시장 가격이다.
+    //
+    // 봉 3 에서 기준 시각이 얼어붙으면 봉 5 에서 이 분할이 되살아난다.
+    // 10주(약 200_000 의도)가 50주(1_000_000)로 부풀어 5배를 투입한다.
+    const GAP_SPLIT_PERIOD_KEY = '2026-07-09';
+
+    const strategy: TradingStrategy<unknown, { step: number }> = {
+      id: 'reenter-during-halt',
+      version: '1.0.0',
+      name: 't',
+      description: 't',
+      parameterSchema: z.unknown(),
+      initialize: () => ({ step: 0 }),
+      onBars(_context, state) {
+        const orders: OrderIntent[] =
+          state.step === 0
+            ? [{ symbol: 'A', side: 'BUY', quantity: 10 }]
+            : state.step === 1
+              ? [{ symbol: 'A', side: 'SELL', quantity: 10 }]
+              : state.step === 4
+                ? [{ symbol: 'A', side: 'BUY', quantity: 10 }]
+                : [];
+        state.step += 1;
+        return { orders };
+      },
+    };
+
+    const candles = [
+      dailyBar(0, 100_000),
+      dailyBar(1, 100_000),
+      dailyBar(2, 100_000),
+      dailyBar(3, 20_000),
+      { ...dailyBar(4, 20_000), symbol: 'B' },
+      dailyBar(5, 20_000),
+    ];
+    const result = runBacktest(strategy as never, {
+      candles,
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+      facts: [splitFact('A', GAP_SPLIT_PERIOD_KEY, 5)],
+    });
+
+    const buyFills = result.fills.filter((fill) => fill.side === 'BUY');
+    expect(buyFills).toHaveLength(2);
+    expect(buyFills[1]!.quantity).toBe(10); // 이미 시장 가격에 흡수된 분할 — 재적용 금지
+    expect(buyFills[1]!.quantity * buyFills[1]!.price).toBe(200_000);
+    expect(result.openPositions).toHaveLength(1);
+    expect(result.openPositions[0]!.quantity).toBe(10);
+    expect(result.openPositions[0]!.avgEntryPrice).toBe(20_000);
+  });
+
   it('정지 중인 종목에 발행한 주문도 재개 봉에서 조정이 살아 있다', () => {
     // A 는 봉 1 에만 있고 봉 2~3 에는 없다(정지). 봉 4 에 재개한다.
     // B 는 봉 2~3 에도 있어 그 시각이 타임라인에서 사라지지 않게 한다.
