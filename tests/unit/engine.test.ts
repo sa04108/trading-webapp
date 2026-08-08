@@ -465,9 +465,10 @@ describe('취소 (D-042) — runBacktestCancellable', () => {
     expect(asyncResult.processedBars).toBeLessThan(manyBars.length);
 
     // 같은 신호원(마이크로태스크)을 동기 드라이버에 걸어도 뒤집히지 않는다.
-    // `runBacktest` 는 제너레이터를 한 호흡에 끝까지 비운다. 이벤트 루프에 양보하는
-    // 지점이 없어 그 신호가 도착할 콜스택의 빈틈 자체가 생기지 않는다 —
-    // D-042 가 고친 버그의 반대쪽이다.
+    // `runBacktest` 는 제너레이터를 한 호흡에 끝까지 비운다.
+    // 이벤트 루프에 양보하는 지점이 없다.
+    // 그 신호가 도착할 콜스택의 빈틈 자체가 생기지 않는다 — D-042 가 고친 버그의
+    // 반대쪽이다.
     let syncCancel = false;
     void Promise.resolve().then(() => {
       syncCancel = true;

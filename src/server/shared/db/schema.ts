@@ -202,9 +202,9 @@ export const symbolVersions = sqliteTable(
 /**
  * 수집 잡 (구 data_import_jobs) — 더는 쓰지 않는다. CSV 가져오기·증권사 봉
  * 동기화가 봉 수집 제거로 함께 사라져(D-041) 아무도 이 테이블에 쓰지 않는다.
- * `SymbolService.removeSymbols`가 진행 중 잡이 있는지 여전히 이 테이블로
- * 확인하지만, 이제 그 조회는 항상 빈 결과다. 테이블째 삭제는 스키마 정리
- * (후속 계획)에서 한다.
+ * `SymbolService.removeSymbols` 도 이 테이블을 더 이상 조회하지 않는다(리뷰
+ * finding, 2026-08-08) — 동시 수집 잡 개념 자체가 D-041 로 사라졌다. 테이블째
+ * 삭제는 스키마 정리(후속 계획)에서 한다.
  */
 export const dataSyncJobs = sqliteTable(
   'data_sync_jobs',

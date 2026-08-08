@@ -696,9 +696,10 @@ describe('backtest job queue (스펙 §10, §14)', () => {
   });
 
   it('초안은 옛 잡의 봉 주기(1h·1m)를 일봉으로 재기준한다 (D-041, Critical 1)', async () => {
-    // timeframe:'1d' 로 좁혀진 지금 스키마는 '1h' 를 거부한다. 하지만 옛 잡은
-    // 여전히 '1h'·'1m' 로 저장돼 있고, clone-draft 는 이걸 400 으로 끊지 않고
-    // 일봉으로 재기준해 화면을 열어줘야 한다(stored-request.ts rebaseStoredRequest).
+    // timeframe:'1d' 로 좁혀진 지금 스키마는 '1h' 를 거부한다.
+    // 하지만 옛 잡은 여전히 '1h'·'1m' 로 저장돼 있다.
+    // clone-draft 는 이걸 400 으로 끊지 않고 일봉으로 재기준해 화면을 열어줘야
+    // 한다(stored-request.ts rebaseStoredRequest).
     const legacy = { ...buildRequest(), timeframe: '1h' } as Record<string, unknown>;
     const job = ctx.container.jobQueue.enqueue(legacy as never);
 

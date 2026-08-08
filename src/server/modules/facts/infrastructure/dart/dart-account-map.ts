@@ -9,7 +9,7 @@ export interface DartAccountRule {
 /**
  * IFRS 표준 태그(account_id) 우선 매핑. 이것이 있으면 회사별 계정명 차이를 타지 않는다.
  * 태그·필드 이름은 DART API 키 발급 후 실제 응답으로 검증해 조정한다
- * (toss-market-data-source.ts 가 쓰는 것과 같은 관례).
+ * (toss-stock-info-source.ts 가 쓰는 것과 같은 관례).
  */
 const BY_ACCOUNT_ID: Record<string, DartAccountRule> = {
   'ifrs-full_ProfitLossFromOperatingActivities': { field: 'OPERATING_INCOME', statement: 'IS' },

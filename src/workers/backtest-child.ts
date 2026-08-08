@@ -173,10 +173,10 @@ async function main(): Promise<void> {
     const pinnedUniverseJson = job.universeJson ?? '[]';
     const pinnedUniverseHash = job.universeHash ?? 'unknown';
 
-    // 캔들 로드 (스펙 §11). 새 요청은 스키마가 timeframe 을 '1d' 하나로만 허용한다
-    // (D-041, backtest-request.ts). 아래 repository(KrxDailyCandleRepository)는
-    // 어차피 봉 주기를 보지 않고 KRX 일봉만 돌려준다 — timeframe 은 이제 표시·
-    // 에러 메시지용 값이다.
+    // 캔들 로드 (스펙 §11).
+    // 새 요청은 스키마가 timeframe 을 '1d' 하나로만 허용한다(D-041, backtest-request.ts).
+    // 아래 repository(KrxDailyCandleRepository)는 어차피 봉 주기를 보지 않고 KRX
+    // 일봉만 돌려준다 — timeframe 은 이제 표시·에러 메시지용 값이다.
     const timeframe = (request.timeframe ?? '1d') as Timeframe;
     // 봉은 KRX 일봉 하나뿐이다(container.ts 조립부와 같은 모양) — db 는 위에서 이미 연
     // handle 을 재사용한다. 워커가 잡 조회로 이미 DB 를 열어 둔 상태라 새로 열 이유가 없다.

@@ -152,8 +152,8 @@ export class SymbolService {
   removeSymbols(codes: readonly string[]): void {
     if (codes.length === 0) return;
     // 예전에는 여기서 dataSyncJobs 에 QUEUED/RUNNING 잡이 있는지 확인해 동시 수집과
-    // 제거가 겹치지 않게 막았다. 그 테이블에 쓰는 코드가 D-041 로 전부 사라져 이
-    // 조회는 항상 빈 결과라 도달 불가다(schema.ts dataSyncJobs 주석 참고).
+    // 제거가 겹치지 않게 막았다. 동시 수집 잡 개념 자체가 D-041 로 사라져 그 조회는
+    // 항상 빈 결과였다(도달 불가) — 조회 자체를 지웠다.
 
     for (const code of codes) {
       const row = this.db.select().from(symbolsTable).where(eq(symbolsTable.code, code)).get();

@@ -63,7 +63,7 @@ export const rsiReversionParameters = z
     maxHoldBars: z.number().int().min(1).max(10_000).optional().meta({
       title: '최대 보유 봉 수',
       description:
-        '이 봉 수를 넘기면 신호와 무관하게 팝니다. 분봉이면 390이 약 하루, 일봉이면 20이 약 1달입니다. 비우면 제한이 없습니다.',
+        '이 봉 수를 넘기면 신호와 무관하게 팝니다. 일봉 기준으로 20이면 약 1달입니다. 비우면 제한이 없습니다.',
     }),
     riskPerTradePercent: z.number().positive().max(5).default(1).meta({
       title: '1회 거래 리스크 (%)',
