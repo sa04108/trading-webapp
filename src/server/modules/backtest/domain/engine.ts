@@ -53,6 +53,12 @@ export interface BacktestRunInput {
    * 미지정이거나 빈 배열이면 tradableSymbols 는 항상 null(제한 없음) — 기존 전략 동작 불변.
    */
   readonly universeSchedule?: readonly { fromTsMs: number; symbols: readonly string[] }[];
+  /**
+   * 그 시점에 거래할 수 없었던 종목 (거래정지·무거래). 키는 봉 tsMs 다.
+   * 이 종목들은 매수 후보에서 빠진다 — 봉이 없어 체결도 되지 않는다.
+   * 보유분 청산(SELL)은 막지 않는다. 유니버스에서 빠진 종목도 항상 팔 수 있어야 한다.
+   */
+  readonly nonTradingSymbolsByTsMs?: ReadonlyMap<number, ReadonlySet<string>>;
 }
 
 export interface EngineHooks {
@@ -204,6 +210,9 @@ function* runBacktestSteps(
 
     const bars = barsByTs.get(tsMs) as Map<string, Candle>;
 
+    // 일정이 없는 실행에서 이전 시점의 거래불가 필터가 남지 않게 매 시점 초기화한다
+    if (sortedSchedule.length === 0) tradableSymbols = null;
+
     // 활성 멤버십 구간 갱신 — fromTsMs <= tsMs 인 항목 중 가장 늦은 것이 활성이다.
     // 첫 entry 이전 시점은 예외 없이 첫 entry(index 0)를 그대로 쓴다(위 jsdoc 참고).
     if (sortedSchedule.length > 0) {
@@ -214,6 +223,18 @@ function* runBacktestSteps(
         scheduleIndex += 1;
       }
       tradableSymbols = scheduleSets[scheduleIndex] as ReadonlySet<string>;
+    }
+
+    // 거래불가 종목을 매수 후보에서 뺀다. 멤버십 일정이 없어도(=제한 없음) 이날
+    // 거래불가인 종목이 있으면 전체 심볼에서 그만큼 뺀 집합을 만든다.
+    const nonTradingNow = input.nonTradingSymbolsByTsMs?.get(tsMs);
+    if (nonTradingNow !== undefined && nonTradingNow.size > 0) {
+      const base = tradableSymbols ?? new Set(symbols);
+      const filtered = new Set<string>();
+      for (const symbol of base) {
+        if (!nonTradingNow.has(symbol)) filtered.add(symbol);
+      }
+      tradableSymbols = filtered;
     }
 
     // 이 시점까지 공시된 팩트만 흡수한다 — 전략이 미래 공시를 볼 자리를 없앤다 (§9.4)
