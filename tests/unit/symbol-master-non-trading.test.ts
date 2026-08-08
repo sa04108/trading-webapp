@@ -111,6 +111,60 @@ describe('SymbolMasterService.ingestDate — 거래불가일', () => {
   });
 });
 
+/** 두 시장 응답을 한 날짜에 심는다 — KOSDAQ 에만 종목을 두고 KOSPI 는 빈 응답이다 */
+function seedDay(ctx: Ctx, basDd: string, trades: readonly Record<string, unknown>[]): void {
+  ctx.fake.setResponse('stk_bydd_trd', basDd, { body: krxEnvelope([]) });
+  ctx.fake.setResponse('stk_isu_base_info', basDd, { body: krxEnvelope([]) });
+  ctx.fake.setResponse('ksq_bydd_trd', basDd, { body: krxEnvelope(trades) });
+  ctx.fake.setResponse('ksq_isu_base_info', basDd, {
+    body: krxEnvelope([
+      baseInfoFixture({ ISU_CD: 'KR7215600008', ISU_SRT_CD: '215600', ISU_NM: '신라젠', MKT_TP_NM: 'KOSDAQ' }),
+      baseInfoFixture({ ISU_CD: 'KR7048260006', ISU_SRT_CD: '048260', ISU_NM: '오스템임플란트', MKT_TP_NM: 'KOSDAQ' }),
+    ]),
+  });
+}
+
+describe('SymbolMasterService.ingestDate — 거래불가 커버리지', () => {
+  it('정상 수집만으로도 커버로 남고, 하루씩 들어와도 한 구간으로 합쳐진다', async () => {
+    const ctx = await setup();
+    seedDay(ctx, '20210615', [NON_TRADING_ROW, NORMAL_ROW]);
+    seedDay(ctx, '20210616', [NON_TRADING_ROW, NORMAL_ROW]);
+
+    await ctx.svc.ingestDate('2021-06-15');
+    await ctx.svc.ingestDate('2021-06-16');
+
+    // 백필을 부르지 않았는데도 커버다 — 이 판정이 없으면 실행 경고가 "정보가 없다" 고
+    // 거짓말하면서 동시에 그 정보로 종목을 제외한다.
+    expect(ctx.svc.isNonTradingRangeCovered('2021-06-15', '2021-06-16')).toBe(true);
+    // 하루씩 쌓여도 구간이 조각나지 않는다
+    const ranges = ctx.t.container.database.db.select().from(krxNonTradingCoverage).all();
+    expect(ranges).toHaveLength(1);
+    expect(ranges[0]?.startDate).toBe('2021-06-15');
+    expect(ranges[0]?.endDate).toBe('2021-06-16');
+    // 실제 행도 함께 들어 있다
+    expect(ctx.svc.nonTradingDaysBetween('2021-06-15', '2021-06-16')).toHaveLength(2);
+
+    await teardown(ctx);
+  });
+
+  it('휴장일도 커버로 남아 앞뒤 거래일 구간이 이어진다', async () => {
+    const ctx = await setup();
+    seedDay(ctx, '20210618', [NON_TRADING_ROW, NORMAL_ROW]);
+    seedDay(ctx, '20210621', [NON_TRADING_ROW, NORMAL_ROW]);
+    // 6/19~6/20 은 주말이라 응답이 0행이다 — 그날도 "봤는데 없었다" 로 남아야
+    // 금요일과 월요일 구간이 이어진다.
+
+    for (const date of ['2021-06-18', '2021-06-19', '2021-06-20', '2021-06-21']) {
+      await ctx.svc.ingestDate(date);
+    }
+
+    expect(ctx.svc.isNonTradingRangeCovered('2021-06-18', '2021-06-21')).toBe(true);
+    expect(ctx.t.container.database.db.select().from(krxNonTradingCoverage).all()).toHaveLength(1);
+
+    await teardown(ctx);
+  });
+});
+
 describe('거래불가일 조회', () => {
   it('구간 안의 행만 날짜·코드 오름차순으로 돌려준다', async () => {
     const ctx = await setup();
@@ -167,6 +221,25 @@ describe('거래불가일 백필', () => {
     expect(ctx.t.container.database.db.select().from(symbolMasterCoverage).all()).toHaveLength(0);
 
     expect(ctx.svc.isNonTradingRangeCovered('2021-06-15', '2021-06-16')).toBe(true);
+    await teardown(ctx);
+  });
+
+  it('나눠 부르거나 다시 불러도 커버 구간이 겹쳐 쌓이지 않는다', async () => {
+    const ctx = await setup();
+    for (const basDd of ['20210615', '20210616', '20210617', '20210618']) {
+      ctx.fake.setResponse('ksq_bydd_trd', basDd, { body: krxEnvelope([NON_TRADING_ROW]) });
+    }
+
+    await ctx.svc.backfillNonTradingDays('2021-06-15', '2021-06-16');
+    await ctx.svc.backfillNonTradingDays('2021-06-16', '2021-06-18'); // 겹치는 재실행
+    await ctx.svc.backfillNonTradingDays('2021-06-19', '2021-06-20'); // 맞닿는 다음 구간
+
+    const ranges = ctx.t.container.database.db.select().from(krxNonTradingCoverage).all();
+    expect(ranges).toHaveLength(1);
+    expect(ranges[0]?.startDate).toBe('2021-06-15');
+    expect(ranges[0]?.endDate).toBe('2021-06-20');
+    expect(ctx.svc.isNonTradingRangeCovered('2021-06-15', '2021-06-20')).toBe(true);
+
     await teardown(ctx);
   });
 

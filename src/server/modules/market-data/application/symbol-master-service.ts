@@ -213,7 +213,12 @@ export class SymbolMasterService {
     const kospiTrades = await this.deps.source.fetchDailyTrades('KOSPI', date);
     const kosdaqTrades = await this.deps.source.fetchDailyTrades('KOSDAQ', date);
     if (kospiTrades.length === 0 && kosdaqTrades.length === 0) {
-      this.deps.db.transaction((tx) => this.mergeCoverage(tx, date));
+      // 휴장일도 거래불가 커버로 남긴다. 응답 0행을 실제로 확인했으니 "봤는데 없었다" 가
+      // 맞고, 주말·공휴일을 비워 두면 앞뒤 거래일 구간이 이어지지 않아 커버 판정이 끊긴다.
+      this.deps.db.transaction((tx) => {
+        this.mergeCoverage(tx, date);
+        this.mergeNonTradingCoverage(tx, date, date);
+      });
       return { kind: 'HOLIDAY' };
     }
 
@@ -236,6 +241,7 @@ export class SymbolMasterService {
         this.mergeCoverage(tx, date);
         this.recordTradingDay(tx, date);
         this.writeDailyBars(tx, date, kospiTrades, kosdaqTrades);
+        this.mergeNonTradingCoverage(tx, date, date);
       });
       return { kind: 'TRADING_DAY', eventCount: 0, checkpointSaved: true };
     }
@@ -270,6 +276,7 @@ export class SymbolMasterService {
       this.mergeCoverage(tx, date);
       this.recordTradingDay(tx, date);
       this.writeDailyBars(tx, date, kospiTrades, kosdaqTrades);
+      this.mergeNonTradingCoverage(tx, date, date);
     });
 
     // 분기 체크포인트 검증은 방금 확정한 이벤트를 getUniverseAsOf 로 다시 읽어야 하므로
@@ -748,11 +755,15 @@ export class SymbolMasterService {
   }
 
   /**
-   * 구간 전체를 덮는 커버 행이 하나라도 있는지. 구간을 이어 붙여 판정하지는 않는다 —
-   * 백필은 한 번에 한 구간을 처리하므로 조각난 커버가 생기지 않는다.
+   * 구간 전체를 덮는 커버 행이 하나라도 있는지.
    *
    * 행이 없는 날짜가 "거래불가 종목이 없었다" 인지 "아직 모른다" 인지를 이 메서드로만
    * 가른다. 이 구분이 없으면 결과 경고가 백필 전에도 "반영한다" 고 거짓말한다.
+   *
+   * 조각을 읽는 쪽에서 이어 붙이지 않는다. 쓰는 쪽(mergeNonTradingCoverage)이 맞닿거나
+   * 겹치는 구간을 그때그때 합치므로, 저장된 구간들은 항상 서로 떨어진 최대 구간이다.
+   * 하루씩 들어오는 수집 경로는 읽기 쪽 이어붙이기만으로는 10년치에 행 수천 개를 쌓게
+   * 되는데, 쓰기 쪽에서 합치면 그 문제까지 함께 사라진다.
    */
   isNonTradingRangeCovered(from: string, to: string): boolean {
     const row = this.deps.db
@@ -801,11 +812,42 @@ export class SymbolMasterService {
       });
       rows += values.length;
     }
-    this.deps.db
-      .insert(krxNonTradingCoverage)
-      .values({ startDate: from, endDate: to, syncedAtMs: this.deps.clock.now() })
-      .run();
+    this.deps.db.transaction((tx) => this.mergeNonTradingCoverage(tx, from, to));
     return { dates, rows };
+  }
+
+  /**
+   * [startDate, endDate] 를 거래불가 커버에 반영하며 맞닿거나 겹치는 구간과 합친다.
+   * `mergeCoverage` 와 같은 규칙을 구간 단위로 넓힌 것이다.
+   *
+   * 수집 경로는 하루씩, 백필은 한 번에 여러 날을 넣는다. 합치지 않으면 두 경로 모두
+   * 조각난 행을 쌓고, 구간 전체를 덮는 행이 없어 `isNonTradingRangeCovered` 가
+   * 실제로는 다 채운 기간을 "모른다" 로 판정한다.
+   *
+   * 수집 경로에서는 반드시 봉·거래일 기록과 같은 트랜잭션 안에서 불러야 한다 —
+   * 따로 두면 중간에 죽었을 때 거래불가일 행은 들어갔는데 커버는 안 남은 상태가 되고,
+   * 그 날짜는 재수집 게이트에 막혀 영영 커버로 바뀌지 않는다.
+   */
+  private mergeNonTradingCoverage(tx: AppDatabase, startDate: string, endDate: string): void {
+    // 하루 차이로 맞닿은 구간까지 합치려고 양쪽을 하루씩 넓혀 겹침을 본다
+    const touchStart = addCalendarDays(startDate, -1);
+    const touchEnd = addCalendarDays(endDate, 1);
+
+    let mergedStart = startDate;
+    let mergedEnd = endDate;
+    const ranges = tx.select().from(krxNonTradingCoverage).all();
+    for (const range of ranges) {
+      if (range.endDate < touchStart || range.startDate > touchEnd) continue;
+      if (range.startDate < mergedStart) mergedStart = range.startDate;
+      if (range.endDate > mergedEnd) mergedEnd = range.endDate;
+      tx.delete(krxNonTradingCoverage).where(eq(krxNonTradingCoverage.id, range.id)).run();
+    }
+
+    tx.insert(krxNonTradingCoverage).values({
+      startDate: mergedStart,
+      endDate: mergedEnd,
+      syncedAtMs: this.deps.clock.now(),
+    }).run();
   }
 
   /**
