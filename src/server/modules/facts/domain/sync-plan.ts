@@ -35,7 +35,7 @@ export const DART_MIN_INTERVAL_MS = 120;
 export const DART_DAILY_CALL_LIMIT = 40_000;
 
 /**
- * 자본변동 전용 종목·연도당 호출: irdsSttus 1회다.
+ * 자본변동 전용 종목·연도당 호출: `irdsSttus` 1회다.
  * `syncCorporateActions` 는 `fetchFinancials` 를 부르지 않는다.
  * 그래서 `fnlttSinglAcntAll` 4회가 빠진다(`fact-sync-service.ts` 참고).
  * `DART_CALLS_PER_SYMBOL_YEAR` 는 재무까지 포함한 값이라 이 경로에는 못 쓴다.
@@ -131,7 +131,7 @@ export interface CorporateActionSyncEstimate {
  * 증분·앵커 연도 선택 규칙은 자본변동 전용이라도 달라지지 않는다.
  * 여기서 다시 계산하면 두 계획이 갈라질 여지만 생긴다.
  * 승수만 실제 호출 횟수에 맞춰 다시 곱한다.
- * 연도당 irdsSttus 1회, shareYear 당 stockTotqySttus 4회다
+ * 연도당 `irdsSttus` 1회, `shareYear` 당 `stockTotqySttus` 4회다
  * (`dart-fact-source.ts` 의 `fetchCorporateActions` 참고).
  */
 export function estimateCorporateActionSyncCost(plan: FactSyncPlan): CorporateActionSyncEstimate {

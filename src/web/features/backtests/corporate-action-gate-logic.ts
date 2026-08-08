@@ -1,8 +1,9 @@
-// 확장자 .js 와 별칭(@/) 회피는 prefill.ts 와 같은 이유다.
-// tests/unit/corporate-action-gate.test.ts 가 이 모듈을 가져와 tsconfig.server.json 의
-// NodeNext 프로그램에 편입된다.
-// 그 프로그램은 DOM lib 가 없어 EventSource 같은 브라우저 전용 타입을 읽지 못한다.
-// 그래서 이 모듈은 DOM 을 쓰지 않는다. 렌더링·SSE 는 corporate-action-gate.tsx 가 맡는다.
+// 확장자 .js 와 별칭(@/) 회피는 `prefill.ts` 와 같은 이유다.
+// `tests/unit/corporate-action-gate.test.ts` 가 이 모듈을 가져와 `tsconfig.server.json` 의
+// `NodeNext` 프로그램에 편입된다.
+// 그 프로그램은 `DOM` lib 가 없어 `EventSource` 같은 브라우저 전용 타입을 읽지 못한다.
+// 그래서 이 모듈은 `DOM` 을 쓰지 않는다.
+// 렌더링·SSE 는 `corporate-action-gate.tsx` 가 맡는다.
 import { ApiError } from '../../lib/api-client.js';
 import { formatDuration } from '../../lib/format.js';
 import { formatSymbolLabel } from './symbol-summary.js';
@@ -80,6 +81,21 @@ export function isSyncJobTerminal(status: CorporateActionSyncJobStatus): boolean
 
 export function canCancelSyncJob(status: CorporateActionSyncJobStatus): boolean {
   return status === 'QUEUED' || status === 'RUNNING';
+}
+
+/**
+ * 잡 조회의 폴링 주기다.
+ * SSE 가 끊겼을 때만(`sseFailed`) 종료되지 않은 상태에서 2초마다 돈다.
+ * `useBacktestLive`(`features/backtests/api.ts` 의 `refetchInterval`)와 같은 규칙이다.
+ * 이 규칙을 되돌리면 SSE 연결이 끊긴 뒤 화면이 멈춘다(리뷰 finding).
+ */
+export function syncJobRefetchIntervalMs(
+  status: CorporateActionSyncJobStatus | null,
+  sseFailed: boolean,
+): number | false {
+  if (status === null) return false;
+  if (!isSyncJobTerminal(status) && sseFailed) return 2_000;
+  return false;
 }
 
 /** 0~100 정수. 분모가 0 이면(아직 계획을 못 받은 순간) 0 으로 둔다 */

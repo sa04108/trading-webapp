@@ -1,6 +1,7 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { RefreshCw, XCircle } from 'lucide-react';
+import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -14,6 +15,7 @@ import {
   formatGateHeadline,
   formatRemainingGateMessage,
   isSyncJobTerminal,
+  syncJobRefetchIntervalMs,
   syncProgressPercent,
   type CorporateActionGateDto,
   type CorporateActionSyncEstimateDto,
@@ -27,12 +29,12 @@ export interface CorporateActionGateProps {
   /** 이전에 한 번 수집을 마치고도 다시 이 화면을 보는 중인지 — 문구를 "여전히"로 바꾼다 */
   attempted: boolean;
   /**
-   * 수집이 끝나 게이트를 다시 평가해야 할 때 부모(위저드)를 부른다.
-   * 판정은 이 화면이 하지 않는다.
-   * 부모가 실제 제출(`POST /backtests`)을 다시 태워 서버가 통과·실패를 가른다.
-   * 화면이 종목·연도를 다시 계산하지 않는 것과 같은 이유다.
+   * 수집이 끝나면(`COMPLETED`) 딱 한 번 부모(위저드)에게 알린다.
+   * 제출은 이 화면이 하지 않는다.
+   * 부모는 이 신호로 막혔던 오류를 지워 실행 버튼을 다시 연다.
+   * 실제 제출은 사용자가 그 버튼을 눌러야 일어난다.
    */
-  onRetry: () => void;
+  onCollected: () => void;
 }
 
 /**
@@ -41,14 +43,24 @@ export interface CorporateActionGateProps {
  *
  * 진행률·SSE 는 백테스트 상세(`features/backtests/api.ts` 의 `useBacktestLive`)와
  * 같은 패턴이다. 새 방식을 만들지 않는다.
+ * SSE·GET 은 이 저장소에서 이미 백틱 없이 쓰는 도메인 약어다(예:
+ * `corporate-action-sync-orchestrator.ts` 의 "SSE 로 진행률을 흘린다",
+ * `backtest-routes.ts` 의 "POST 신규 제출뿐 아니라"). 그 관례를 그대로 따른다.
  */
-export function CorporateActionGate({ gate, nameOf, attempted, onRetry }: CorporateActionGateProps) {
-  const queryClient = useQueryClient();
+export function CorporateActionGate({
+  gate,
+  nameOf,
+  attempted,
+  onCollected,
+}: CorporateActionGateProps) {
   const [jobId, setJobId] = useState<string | null>(null);
   const [ssePayload, setSsePayload] = useState<CorporateActionSyncJobDto | null>(null);
+  // SSE 연결이 끊기면 켠다 — `useBacktestLive` 와 같은 폴백 신호다.
+  const [sseFailed, setSseFailed] = useState(false);
   const sourceRef = useRef<EventSource | null>(null);
-  // 잡 하나당 재평가를 한 번만 부른다 — SSE 는 같은 종료 상태를 여러 번 보낼 수 있다
-  const retriedForJob = useRef<string | null>(null);
+  // 잡 하나당 완료 알림을 한 번만 보낸다 — SSE·폴링 모두 같은 종료 상태를 여러 번
+  // 전할 수 있다.
+  const notifiedForJob = useRef<string | null>(null);
 
   const estimate = useQuery({
     queryKey: ['facts', 'corporate-action-sync-plan', gate.symbols, gate.fromYear, gate.toYear],
@@ -60,14 +72,22 @@ export function CorporateActionGate({ gate, nameOf, attempted, onRetry }: Corpor
       }),
   });
 
+  /**
+   * SSE 가 끊기면(`sseFailed`) 여기서 2초마다 조회한다.
+   * `useBacktestLive`(`features/backtests/api.ts:41-50`)와 같은 폴백 규칙이다 —
+   * 새 방식을 만들지 않는다.
+   */
   const jobQuery = useQuery({
     queryKey: ['facts', 'corporate-action-sync-jobs', jobId],
     queryFn: () =>
       api<{ job: CorporateActionSyncJobDto }>(`/facts/corporate-action-sync-jobs/${jobId}`),
     enabled: jobId !== null,
+    refetchInterval: (query) =>
+      syncJobRefetchIntervalMs(query.state.data?.job.status ?? null, sseFailed),
   });
 
   const job = ssePayload ?? jobQuery.data?.job ?? null;
+  const status = job?.status ?? null;
 
   const startMutation = useMutation({
     mutationFn: () =>
@@ -77,8 +97,9 @@ export function CorporateActionGate({ gate, nameOf, attempted, onRetry }: Corpor
         toYear: gate.toYear,
       }),
     onSuccess: (data) => {
-      retriedForJob.current = null;
+      notifiedForJob.current = null;
       setSsePayload(null);
+      setSseFailed(false);
       setJobId(data.job.id);
     },
   });
@@ -86,18 +107,21 @@ export function CorporateActionGate({ gate, nameOf, attempted, onRetry }: Corpor
   const cancelMutation = useMutation({
     mutationFn: () =>
       api(`/facts/corporate-action-sync-jobs/${jobId}/cancel`, { method: 'POST' }),
+    onError: (error: unknown) => {
+      // 취소 실패를 삼키면 사용자는 버튼을 눌렀는데 아무 일도 안 일어난 것처럼 본다.
+      toast.error(error instanceof ApiError ? error.message : '취소하지 못했습니다.');
+    },
   });
 
-  // SSE 로 진행률을 받는다. 연결이 끊기면 다시 열지 않는다.
-  // 종료 상태는 GET 조회로도 확인할 수 있다.
-  // 이 화면은 오래 떠 있지 않는다 — 수집이 끝나면 곧바로 onRetry 로 넘어간다.
+  // SSE 로 진행률을 받는다.
+  // 끊기면 다시 열지 않고 `sseFailed` 로 폴링에 넘긴다 — 위 `jobQuery` 가 받는다.
   useEffect(() => {
-    if (jobId === null || (job !== null && isSyncJobTerminal(job.status))) {
+    if (jobId === null || (status !== null && isSyncJobTerminal(status))) {
       sourceRef.current?.close();
       sourceRef.current = null;
       return;
     }
-    if (sourceRef.current) return;
+    if (sourceRef.current || sseFailed) return;
     const source = new EventSource(`/api/v1/facts/corporate-action-sync-jobs/${jobId}/events`);
     sourceRef.current = source;
     source.onmessage = (event) => {
@@ -106,23 +130,23 @@ export function CorporateActionGate({ gate, nameOf, attempted, onRetry }: Corpor
     source.onerror = () => {
       source.close();
       sourceRef.current = null;
+      setSseFailed(true);
     };
     return () => {
       source.close();
       sourceRef.current = null;
     };
-  }, [jobId, job]);
+  }, [jobId, status, sseFailed]);
 
-  // 수집이 끝나면 게이트를 다시 평가한다 — 위저드의 제출을 다시 태워 실제 통과
-  // 여부를 서버에 되묻는다(브리프 2번). 취소·실패는 재평가할 것이 없다 — 커버리지가
-  // 늘지 않았으므로 다시 물어봐도 같은 자리다.
+  // 수집이 끝나면 부모에게 딱 한 번 알린다.
+  // 제출은 여기서 하지 않는다 — 부모가 막혔던 오류를 지워 실행 버튼을 다시 열고,
+  // 실제 제출은 사용자가 그 버튼을 눌러야 일어난다(계획 §3, 리뷰 finding).
   useEffect(() => {
     if (job === null || job.status !== 'COMPLETED') return;
-    if (retriedForJob.current === job.id) return;
-    retriedForJob.current = job.id;
-    void queryClient.invalidateQueries({ queryKey: ['facts', 'corporate-action-sync-plan'] });
-    onRetry();
-  }, [job, onRetry, queryClient]);
+    if (notifiedForJob.current === job.id) return;
+    notifiedForJob.current = job.id;
+    onCollected();
+  }, [job, onCollected]);
 
   const canStart = job === null || job.status === 'FAILED' || job.status === 'CANCELLED';
   const running = job !== null && !isSyncJobTerminal(job.status);

@@ -899,9 +899,12 @@ export function NewBacktestWizard() {
           gate={actionGate}
           nameOf={nameOf}
           attempted={collectionAttempted}
-          onRetry={() => {
+          onCollected={() => {
+            // 제출은 여기서 하지 않는다 — 막혔던 오류만 지워 실행 버튼을 다시 연다.
+            // 실제 제출은 사용자가 그 버튼을 눌러야 일어난다(계획 §3, 리뷰 finding).
             setCollectionAttempted(true);
-            if (request && typeof request !== 'string') submitMutation.mutate(request);
+            submitMutation.reset();
+            toast.success('자본변동 이력 수집이 끝났습니다 — 실행 버튼을 눌러 다시 제출하세요');
           }}
         />
       ) : null}

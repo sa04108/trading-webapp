@@ -10,6 +10,7 @@ import {
   formatSymbolNames,
   formatYearRange,
   isSyncJobTerminal,
+  syncJobRefetchIntervalMs,
   syncProgressPercent,
 } from '../../src/web/features/backtests/corporate-action-gate-logic.js';
 
@@ -103,6 +104,27 @@ describe('isSyncJobTerminal / canCancelSyncJob', () => {
       expect(isSyncJobTerminal(status)).toBe(true);
       expect(canCancelSyncJob(status)).toBe(false);
     }
+  });
+});
+
+describe('syncJobRefetchIntervalMs — SSE 폴백(리뷰 finding 1)', () => {
+  it('상태를 아직 모르면 폴링하지 않는다', () => {
+    expect(syncJobRefetchIntervalMs(null, true)).toBe(false);
+  });
+
+  it('SSE 가 살아 있으면(sseFailed=false) 폴링하지 않는다 — SSE 가 진행률을 나른다', () => {
+    expect(syncJobRefetchIntervalMs('RUNNING', false)).toBe(false);
+  });
+
+  it('SSE 가 끊기고(sseFailed=true) 아직 종료 전이면 2초마다 폴링한다', () => {
+    expect(syncJobRefetchIntervalMs('RUNNING', true)).toBe(2_000);
+    expect(syncJobRefetchIntervalMs('QUEUED', true)).toBe(2_000);
+  });
+
+  it('이미 종료된 상태면 SSE 가 끊겼어도 더 폴링하지 않는다', () => {
+    expect(syncJobRefetchIntervalMs('COMPLETED', true)).toBe(false);
+    expect(syncJobRefetchIntervalMs('FAILED', true)).toBe(false);
+    expect(syncJobRefetchIntervalMs('CANCELLED', true)).toBe(false);
   });
 });
 
