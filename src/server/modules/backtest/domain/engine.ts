@@ -6,6 +6,7 @@ import type {
 } from '../../strategy/domain/strategy.js';
 import { CORPORATE_ACTION_FIELD, type Fact } from '../../facts/domain/fact.js';
 import { PitFactView } from '../../facts/domain/pit-fact-view.js';
+import { adjustForRatio } from './corporate-action-adjust.js';
 import { proceedsFromSell, requiredCashForBuy, simulateFill } from './execution.js';
 import {
   computeDrawdownSeries,
@@ -101,14 +102,15 @@ const CANCEL_YIELD_INTERVAL_BARS = 200;
 /**
  * 이벤트 루프 (스펙 §9.2):
  *  0. 이 시점까지 공시된 팩트 흡수 — 전략 호출 전이어야 한다 (PIT 커서, §9.4)
- *  1. 이전 시점의 대기 주문 체결 (이번 봉 시가)
- *  2. 현금·포지션 갱신
- *  3. 평가금액 갱신
- *  4. 현재까지 확정된 봉을 전략에 전달
- *  5. 신규 주문 의도 생성
- *  6. 리스크 검증
- *  7. 다음 봉 체결 대기열 등록
- *  8. 스냅샷·진행률
+ *  1. 보유 포지션에 자본변동 반영 — 대기 주문 체결보다 먼저다
+ *  2. 이전 시점의 대기 주문 체결 (이번 봉 시가)
+ *  3. 현금·포지션 갱신
+ *  4. 평가금액 갱신
+ *  5. 현재까지 확정된 봉을 전략에 전달
+ *  6. 신규 주문 의도 생성
+ *  7. 리스크 검증
+ *  8. 다음 봉 체결 대기열 등록
+ *  9. 스냅샷·진행률
  *
  * 전략은 현재 시점까지의 봉만 볼 수 있고(look-ahead 금지, §9.1),
  * 주문은 다음 거래 가능 봉의 시가에서 체결된다.
@@ -172,6 +174,9 @@ function* runBacktestSteps(
   const universeRejectedSymbols = new Set<string>();
 
   const factView = new PitFactView(input.facts ?? []);
+  // 자본변동 조정을 이미 반영한 마지막 시각. -1 로 시작하면 첫 봉은 포지션이
+  // 비어 있어 과거 이벤트가 전부 "due" 로 잡혀도 실제로는 아무 일도 하지 않는다.
+  let prevTsMs = -1;
 
   const state = strategy.initialize({ symbols, initialCash: input.initialCash, rng });
 
@@ -207,7 +212,32 @@ function* runBacktestSteps(
     // 이 시점까지 공시된 팩트만 흡수한다 — 전략이 미래 공시를 볼 자리를 없앤다 (§9.4)
     factView.advanceTo(tsMs);
 
-    // 1~2. 대기 주문 체결 + 현금·포지션 갱신
+    // 자본변동을 포지션에 반영한다 — 대기 주문 체결보다 먼저다. 분할일 매도 신호는
+    // 조정된 수량으로 팔아야 한다.
+    //
+    // (prevTsMs, tsMs] 에 효력이 발생한 이벤트만 적용한다. 이 구간 판정이 "이미
+    // 적용했는가" 를 종목별로 기억하지 않아도 되게 해 준다.
+    for (const position of [...positions.values()]) {
+      const bar = bars.get(position.symbol);
+      if (!bar) continue; // 거래 정지 등으로 봉이 없으면 다음 봉에서 적용한다
+      const due = factView
+        .corporateActions(position.symbol, tsMs)
+        .filter((action) => action.effectiveTsMs > prevTsMs);
+      if (due.length === 0) continue;
+      // 같은 날 여러 이벤트는 배수를 곱해 합성한다 — 순서에 무관하다
+      const ratio = due.reduce((acc, action) => acc * action.ratio, 1);
+      if (ratio === 1) continue;
+      const adjusted = adjustForRatio(position.quantity, position.avgEntryPrice, ratio, bar.open);
+      cash += adjusted.cashFromFraction;
+      if (adjusted.closed) {
+        positions.delete(position.symbol);
+        continue;
+      }
+      position.quantity = adjusted.quantity;
+      position.avgEntryPrice = adjusted.avgEntryPrice;
+    }
+
+    // 2~3. 대기 주문 체결 + 현금·포지션 갱신
     const stillPending: OrderIntent[] = [];
     for (const order of pendingOrders) {
       const bar = bars.get(order.symbol);
@@ -226,11 +256,11 @@ function* runBacktestSteps(
       lastCloseBySymbol.set(symbol, bar.close);
     }
 
-    // 3. 평가금액 갱신
+    // 4. 평가금액 갱신
     equityPoints.push({ tsMs, equity: markToMarket() });
     maxConcurrentPositions = Math.max(maxConcurrentPositions, positions.size);
 
-    // 4~5. 전략 호출
+    // 5~6. 전략 호출
     const portfolioView: PortfolioView = {
       cash,
       equity: equityPoints[equityPoints.length - 1]?.equity ?? cash,
@@ -248,13 +278,13 @@ function* runBacktestSteps(
     };
     const decision = strategy.onBars(context, state, input.parameters);
 
-    // 6~7. 리스크 검증 후 다음 봉 대기열 등록
+    // 7~8. 리스크 검증 후 다음 봉 대기열 등록
     for (const order of decision.orders) {
       const validated = validateOrder(order);
       if (validated) pendingOrders.push(validated);
     }
 
-    // 8. 진행률
+    // 9. 진행률
     processedBars += bars.size;
     if (hooks.onProgress && (processedBars % PROGRESS_INTERVAL_BARS < bars.size || tsMs === timeline[timeline.length - 1])) {
       hooks.onProgress({ processedBars, totalBars, currentTsMs: tsMs });
@@ -265,6 +295,8 @@ function* runBacktestSteps(
     if (processedBars % CANCEL_YIELD_INTERVAL_BARS < bars.size) {
       yield;
     }
+
+    prevTsMs = tsMs;
   }
 
   if (pendingOrders.length > 0) {
@@ -298,7 +330,8 @@ function* runBacktestSteps(
   warnings.push(
     '생존 편향, 공휴일 캘린더, 배당, 권리락은 이 백테스트에서 보정하지 않습니다. ' +
       (hasCorporateActionFacts
-        ? '액면분할은 분할 이력이 수집된 데이터셋에서, 보정을 사용하는 전략의 신호 계산에만 반영됩니다 — 체결가는 실제 거래 가격입니다.'
+        ? '액면분할은 분할 이력이 수집된 데이터셋에서 보유 포지션의 수량과 평균단가에 ' +
+          '반영됩니다. 이미 체결된 거래의 체결가는 조정하지 않습니다.'
         : '액면분할도 이 실행에서는 보정되지 않았습니다 (분할 이력 미수집).'),
   );
 

@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { runBacktest, runBacktestCancellable } from '../../src/server/modules/backtest/domain/engine.js';
 import type { ExecutionProfile, OrderIntent } from '../../src/server/modules/backtest/domain/types.js';
+import { CORPORATE_ACTION_FIELD, type Fact } from '../../src/server/modules/facts/domain/fact.js';
+import { PitFactView } from '../../src/server/modules/facts/domain/pit-fact-view.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import type {
   StrategyBarContext,
@@ -34,6 +36,30 @@ function bar(index: number, price: number, overrides: Partial<Candle> = {}): Can
     close: price,
     volume: 100,
     ...overrides,
+  };
+}
+
+const DAY = 86_400_000;
+
+/**
+ * 자본변동 테스트 전용 봉 헬퍼다. 기존 `bar()` 는 봉 간격이 한 시간이라
+ * 효력발생일이 어느 봉 사이에 떨어지는지 통제할 수 없다.
+ * 하루 간격으로 띄워야 효력 시각을 원하는 봉 경계에 정확히 맞출 수 있다.
+ */
+function dailyBar(index: number, price: number): Candle {
+  return { ...bar(index, price), tsMs: START + index * DAY };
+}
+
+/** 자본변동 테스트용 SPLIT_RATIO 팩트. asOfTsMs 는 게이트에 쓰이지 않으므로 아무 값이나 둔다 */
+function splitFact(symbol: string, periodKey: string, ratio: number): Fact {
+  return {
+    scope: 'SYMBOL',
+    key: symbol,
+    field: CORPORATE_ACTION_FIELD,
+    periodKey,
+    asOfTsMs: START,
+    value: ratio,
+    unit: 'ratio',
   };
 }
 
@@ -478,5 +504,110 @@ describe('취소 (D-042) — runBacktestCancellable', () => {
     });
     expect(syncResult.cancelled).toBe(false);
     expect(syncResult.processedBars).toBe(manyBars.length);
+  });
+});
+
+describe('분할을 걸친 보유 포지션 조정', () => {
+  // 아래 모든 테스트는 periodKey '2026-07-08' 을 쓴다.
+  // localDateToUtcMs 가 거래소 현지 자정을 UTC 로 옮기므로 효력 시각이 하루 밀린다.
+  // 그래서 이 날짜의 효력 시각은 dailyBar(1) 초과, dailyBar(2) 이하에 떨어진다.
+  // 분할은 봉 2 부터 적용된다.
+  const SPLIT_PERIOD_KEY = '2026-07-08';
+
+  it('효력발생일이 의도한 봉 사이에 떨어진다', () => {
+    const view = new PitFactView([splitFact('A', SPLIT_PERIOD_KEY, 5)]);
+    const [action] = view.corporateActions('A', dailyBar(2, 20_000).tsMs);
+    expect(action).toBeDefined();
+    expect(action!.effectiveTsMs).toBeGreaterThan(dailyBar(1, 100_000).tsMs);
+    expect(action!.effectiveTsMs).toBeLessThanOrEqual(dailyBar(2, 20_000).tsMs);
+    // 직전 봉 이전에는 아직 노출되지 않는다 — 위 경계 확인의 반대쪽
+    expect(view.corporateActions('A', dailyBar(1, 100_000).tsMs)).toHaveLength(0);
+  });
+
+  it('분할일을 걸쳐 보유하면 평가금액이 이어진다', () => {
+    const candles = [
+      dailyBar(0, 100_000),
+      dailyBar(1, 100_000),
+      dailyBar(2, 20_000),
+      dailyBar(3, 20_000),
+    ];
+    const result = runBacktest(buyAtBarStrategy(0, 10) as never, {
+      candles,
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+      facts: [splitFact('A', SPLIT_PERIOD_KEY, 5)],
+    });
+
+    // 분할 직전(봉1)과 직후(봉2) 종가 기준 평가금액이 같아야 한다.
+    // 5:1 분할로 종가가 1/5 이 됐지만 보유 수량도 5배가 됐으니 상쇄된다.
+    expect(result.equityPoints[1]!.equity).toBe(result.equityPoints[2]!.equity);
+  });
+
+  it('분할일 매도는 조정된 수량으로 체결된다', () => {
+    const strategy: TradingStrategy<unknown, { step: number }> = {
+      id: 'split-sell',
+      version: '1.0.0',
+      name: 't',
+      description: 't',
+      parameterSchema: z.unknown(),
+      initialize: () => ({ step: 0 }),
+      onBars(_context, state) {
+        const orders: OrderIntent[] =
+          state.step === 0
+            ? [{ symbol: 'A', side: 'BUY', quantity: 10 }]
+            : state.step === 2
+              ? [{ symbol: 'A', side: 'SELL', quantity: 999_999 }] // 전량 매도 의도 — 실제 보유량으로 잘린다
+              : [];
+        state.step += 1;
+        return { orders };
+      },
+    };
+
+    const candles = [
+      dailyBar(0, 100_000),
+      dailyBar(1, 100_000),
+      dailyBar(2, 20_000),
+      dailyBar(3, 20_000),
+    ];
+    const result = runBacktest(strategy as never, {
+      candles,
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+      facts: [splitFact('A', SPLIT_PERIOD_KEY, 5)],
+    });
+
+    const sellFill = result.fills.find((fill) => fill.side === 'SELL');
+    expect(sellFill).toBeDefined();
+    expect(sellFill!.quantity).toBe(50); // 10주 × 5 — 분할로 조정된 수량
+  });
+
+  it('분할 후 진입한 포지션은 그 분할의 영향을 받지 않는다', () => {
+    const candles = [
+      dailyBar(0, 100_000),
+      dailyBar(1, 100_000),
+      dailyBar(2, 20_000),
+      dailyBar(3, 20_000),
+      dailyBar(4, 20_000),
+    ];
+    const result = runBacktest(buyAtBarStrategy(3, 10) as never, {
+      candles,
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+      facts: [splitFact('A', SPLIT_PERIOD_KEY, 5)],
+    });
+
+    expect(result.fills).toHaveLength(1);
+    expect(result.fills[0]!.quantity).toBe(10); // 분할 이후 진입 — 조정 대상이 아니다
+    expect(result.openPositions).toHaveLength(1);
+    expect(result.openPositions[0]!.quantity).toBe(10);
   });
 });

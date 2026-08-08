@@ -188,7 +188,7 @@ describe('엔진 PIT 배선', () => {
     expect(biasWarning).not.toContain('신호 계산');
   });
 
-  it('facts 를 넘기면 경고가 분할 보정은 전략의 신호 계산에 한정된다고 말한다', () => {
+  it('facts 를 넘기면 경고가 분할 보정은 포지션 수량·평균단가에 한정된다고 말한다', () => {
     const { strategy } = observingStrategy();
     const facts: Fact[] = [
       {
@@ -212,7 +212,9 @@ describe('엔진 PIT 배선', () => {
     });
     const biasWarning = result.warnings.find((warning) => warning.includes('생존 편향'));
     expect(biasWarning).toBeDefined();
-    expect(biasWarning).toContain('보정을 사용하는 전략의 신호 계산에만 반영됩니다');
-    expect(biasWarning).toContain('체결가는 실제 거래 가격입니다');
+    // 엔진이 포지션 수량·평균단가를 조정한 뒤부터(Task 2)는 이 문구가 사실이다 —
+    // 조정되지 않는 건 이미 체결된 거래의 체결가뿐이다.
+    expect(biasWarning).toContain('보유 포지션의 수량과 평균단가에');
+    expect(biasWarning).toContain('체결가는 조정하지 않습니다');
   });
 });
