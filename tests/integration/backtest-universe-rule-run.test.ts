@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
-import { krxDailyBars } from '../../src/server/shared/db/schema.js';
+import { krxDailyBars, symbolMasterEvents } from '../../src/server/shared/db/schema.js';
+import {
+  DEFAULT_EXECUTION_RULES,
+  getCostProfile,
+  getSlippageProfile,
+} from '../../src/server/modules/backtest/domain/cost-profiles.js';
+import { simulateFill } from '../../src/server/modules/backtest/domain/execution.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
 import { registerSymbols, seedCorporateActionCoverage, seedDailyBars, yearRange } from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
@@ -764,4 +770,132 @@ describe('POST /backtests — 자본변동 수집 게이트 (Task 6)', () => {
     // 차단 사유가 아니라 경고다 — blockers 는 비어 있어야 한다.
     expect(body.blockers).toEqual([]);
   });
+});
+
+/**
+ * 워커 배선(Task 10) — 데이터 계층·유니버스·엔진(Task 4·6·7·8·9)은 이미 준비됐지만
+ * 아무도 그 정보를 엔진에 넘기지 않으면 실제 백테스트에서는 아무 것도 바뀌지 않는다.
+ * 이 테스트가 `backtest-child.ts` 가 실제로 그 배선을 잇는지 end-to-end 로 확인하는
+ * 유일한 자리다.
+ */
+describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
+  let ctx: TestApp;
+  let cookie: string;
+
+  beforeEach(async () => {
+    ctx = await createTestApp();
+    const { username, password } = await createTestAdmin(ctx.container);
+    const login = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { username, password },
+    });
+    cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+  });
+
+  afterEach(async () => {
+    await ctx.close();
+  });
+
+  it(
+    '상장폐지 종목이 마지막 거래 가능 봉 종가로 청산된다',
+    { timeout: 90_000 },
+    async () => {
+      const alive = buildDailyCandles('005930');
+      // 000660 은 기간의 절반까지만 거래된다 — 그 뒤 폐지된다
+      const doomedAll = buildDailyCandles('000660');
+      const doomed = doomedAll.slice(0, Math.floor(doomedAll.length / 2));
+      const lastDoomed = doomed[doomed.length - 1]!;
+      // 마지막 봉의 시가·종가가 달라야 "종가로 나갔다"를 증명할 수 있다
+      expect(lastDoomed.open).not.toBe(lastDoomed.close);
+
+      registerSymbols(ctx.container, 'KR', ['005930', '000660']);
+      seedDailyBars(ctx.container.database.db, [...alive, ...doomed]);
+      seedSymbolMasterUniverse(ctx.container, MASTER_DATES, [
+        { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '900' },
+        { standardCode: 'KR7000660001', shortCode: '000660', name: 'SK하이닉스', market: 'KOSPI', marketCapKrw: '800' },
+      ]);
+      seedCorporateActionCoverage(ctx.container, ['005930', '000660'], yearRange(2025, 2026));
+
+      // 마지막 봉 다음 날을 폐지 효력일로 둔다 — 워커가 이 이벤트를 읽어 엔진에 넘긴다
+      const delistedDate = new Date(lastDoomed.tsMs + DAY).toISOString().slice(0, 10);
+      ctx.container.database.db
+        .insert(symbolMasterEvents)
+        .values({
+          effectiveDate: delistedDate,
+          standardCode: 'KR7000660001',
+          eventType: 'DELISTED',
+          oldValue: JSON.stringify({
+            standardCode: 'KR7000660001',
+            shortCode: '000660',
+            name: 'SK하이닉스',
+            market: 'KOSPI',
+            sharesOutstanding: '1000000',
+            instrumentType: 'COMMON_STOCK',
+            listedDate: null,
+          }),
+          newValue: null,
+          observedSpanStart: delistedDate,
+          createdAtMs: 0,
+        })
+        .run();
+
+      const created = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/backtests',
+        cookies: { qp_session: cookie },
+        payload: buildRequest(2),
+      });
+      expect(created.statusCode).toBe(201);
+      const jobId = (created.json().job as { id: string }).id;
+
+      ctx.container.jobOrchestrator.tick();
+      await waitFor(() => {
+        const job = ctx.container.jobQueue.getJob(jobId);
+        return job !== null && ctx.container.jobQueue.isTerminal(job.status);
+      }, 60_000);
+
+      const job = ctx.container.jobQueue.getJob(jobId)!;
+      expect(job.error).toBeNull();
+      expect(job.status).toBe('COMPLETED');
+
+      const { trades } = ctx.container.resultsService.getTrades(jobId, { limit: 1000, offset: 0 });
+      // 전략이 000660 을 실제로 샀는지부터 확인한다 — 안 사면 청산 단언이 공허해진다
+      expect(trades.some((trade) => trade.symbol === '000660')).toBe(true);
+
+      const delistingTrade = trades.find(
+        (trade) => trade.symbol === '000660' && trade.exitReason === 'DELISTED',
+      );
+      expect(delistingTrade).toBeDefined();
+
+      // 체결가는 마지막 봉의 **종가** 를 기준으로 슬리피지를 적용한 값이어야 한다 —
+      // buildRequest 가 쓰는 실행 프로필(fixed-5bps)은 슬리피지가 0이 아니므로 종가와
+      // 정확히 같지는 않다. 시가를 기준으로 계산한 값과 달라야 "종가로 나갔다"를 증명한다.
+      const executionProfile = {
+        cost: getCostProfile('kr-equity-default')!,
+        slippage: getSlippageProfile('fixed-5bps')!,
+        rules: DEFAULT_EXECUTION_RULES,
+      };
+      const expectedFromClose = simulateFill(
+        { symbol: '000660', side: 'SELL', quantity: 1, reason: 'DELISTED' },
+        lastDoomed.close,
+        lastDoomed.tsMs,
+        executionProfile,
+      );
+      const expectedFromOpen = simulateFill(
+        { symbol: '000660', side: 'SELL', quantity: 1, reason: 'DELISTED' },
+        lastDoomed.open,
+        lastDoomed.tsMs,
+        executionProfile,
+      );
+      expect(delistingTrade?.exitPrice).toBe(expectedFromClose.price);
+      expect(delistingTrade?.exitPrice).not.toBe(expectedFromOpen.price);
+      expect(delistingTrade?.exitTsMs).toBe(lastDoomed.tsMs);
+
+      // 청산했으므로 기간 종료 시점 미청산 포지션으로 남지 않는다
+      const run = ctx.container.resultsService.getRun(jobId)!;
+      const openPositions = JSON.parse(run.openPositionsJson ?? '[]') as { symbol: string }[];
+      expect(openPositions.some((position) => position.symbol === '000660')).toBe(false);
+    },
+  );
 });

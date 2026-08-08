@@ -193,3 +193,157 @@ describe('SymbolMasterService.isRangeCovered', () => {
     await t.close();
   });
 });
+
+/**
+ * 워커 배선(Task 10)이 쓰는 조회 — DELISTED 이벤트의 oldValue 에서 shortCode 를
+ * 꺼낸다. standardCode 만으로는 봉 심볼(단축코드)과 이어지지 않기 때문이다.
+ *
+ * oldValue 가 손상됐거나 shortCode 가 없는 행을 조용히 버리면 "왜 이 종목이 폐지
+ * 처리되지 않았는지" 아무도 추적할 수 없다 — 그래서 그 두 경우를 각각 확인한다.
+ */
+describe('SymbolMasterService.delistedEventsBetween', () => {
+  function delistedEvent(overrides: {
+    readonly effectiveDate: string;
+    readonly standardCode: string;
+    readonly oldValue: string | null;
+  }): Parameters<typeof insertEvent>[1] {
+    return {
+      effectiveDate: overrides.effectiveDate,
+      standardCode: overrides.standardCode,
+      eventType: 'DELISTED',
+      oldValue: overrides.oldValue,
+      newValue: null,
+      observedSpanStart: overrides.effectiveDate,
+    };
+  }
+
+  it('DELISTED 이벤트의 oldValue 에서 shortCode 를 꺼낸다', async () => {
+    const t = await createTestApp();
+    const svc = makeService(t);
+    insertEvent(
+      t,
+      delistedEvent({
+        effectiveDate: '2026-03-10',
+        standardCode: 'KR7000660001',
+        oldValue: JSON.stringify(entry({ standardCode: 'KR7000660001', shortCode: '000660' })),
+      }),
+    );
+
+    const rows = svc.delistedEventsBetween('2026-01-01', '2026-12-31');
+
+    expect(rows).toEqual([{ shortCode: '000660', effectiveDate: '2026-03-10' }]);
+    await t.close();
+  });
+
+  it('DELISTED 가 아닌 이벤트는 제외한다', async () => {
+    const t = await createTestApp();
+    const svc = makeService(t);
+    insertEvent(t, {
+      effectiveDate: '2026-03-10',
+      standardCode: 'KR7005930003',
+      eventType: 'SHARES_CHANGED',
+      oldValue: '"100"',
+      newValue: '"90"',
+      observedSpanStart: '2026-03-10',
+    });
+
+    expect(svc.delistedEventsBetween('2026-01-01', '2026-12-31')).toEqual([]);
+    await t.close();
+  });
+
+  it('구간 밖 effectiveDate 는 제외한다', async () => {
+    const t = await createTestApp();
+    const svc = makeService(t);
+    insertEvent(
+      t,
+      delistedEvent({
+        effectiveDate: '2025-12-31',
+        standardCode: 'KR7000660001',
+        oldValue: JSON.stringify(entry({ standardCode: 'KR7000660001', shortCode: '000660' })),
+      }),
+    );
+
+    expect(svc.delistedEventsBetween('2026-01-01', '2026-12-31')).toEqual([]);
+    await t.close();
+  });
+
+  it('oldValue 가 없으면 건너뛴다', async () => {
+    const t = await createTestApp();
+    const svc = makeService(t);
+    insertEvent(
+      t,
+      delistedEvent({ effectiveDate: '2026-03-10', standardCode: 'KR7000660001', oldValue: null }),
+    );
+
+    expect(svc.delistedEventsBetween('2026-01-01', '2026-12-31')).toEqual([]);
+    await t.close();
+  });
+
+  it('oldValue 파싱에 실패하면 건너뛴다', async () => {
+    const t = await createTestApp();
+    const svc = makeService(t);
+    insertEvent(
+      t,
+      delistedEvent({
+        effectiveDate: '2026-03-10',
+        standardCode: 'KR7000660001',
+        oldValue: '{이것은-유효한-JSON이-아니다',
+      }),
+    );
+
+    expect(svc.delistedEventsBetween('2026-01-01', '2026-12-31')).toEqual([]);
+    await t.close();
+  });
+
+  it('oldValue 에 shortCode 가 없으면 건너뛴다', async () => {
+    const t = await createTestApp();
+    const svc = makeService(t);
+    insertEvent(
+      t,
+      delistedEvent({
+        effectiveDate: '2026-03-10',
+        standardCode: 'KR7000660001',
+        oldValue: JSON.stringify({ standardCode: 'KR7000660001', name: 'SK하이닉스' }),
+      }),
+    );
+
+    expect(svc.delistedEventsBetween('2026-01-01', '2026-12-31')).toEqual([]);
+    await t.close();
+  });
+
+  it('effectiveDate 오름차순, 같은 날짜는 id(입력) 순서로 정렬한다', async () => {
+    const t = await createTestApp();
+    const svc = makeService(t);
+    insertEvent(
+      t,
+      delistedEvent({
+        effectiveDate: '2026-05-01',
+        standardCode: 'KR7005930003',
+        oldValue: JSON.stringify(entry({ standardCode: 'KR7005930003', shortCode: '005930' })),
+      }),
+    );
+    insertEvent(
+      t,
+      delistedEvent({
+        effectiveDate: '2026-03-10',
+        standardCode: 'KR7000660001',
+        oldValue: JSON.stringify(entry({ standardCode: 'KR7000660001', shortCode: '000660' })),
+      }),
+    );
+    insertEvent(
+      t,
+      delistedEvent({
+        effectiveDate: '2026-03-10',
+        standardCode: 'KR7900001008',
+        oldValue: JSON.stringify(entry({ standardCode: 'KR7900001008', shortCode: '900001' })),
+      }),
+    );
+
+    expect(svc.delistedEventsBetween('2026-01-01', '2026-12-31')).toEqual([
+      { shortCode: '000660', effectiveDate: '2026-03-10' },
+      { shortCode: '900001', effectiveDate: '2026-03-10' },
+      { shortCode: '005930', effectiveDate: '2026-05-01' },
+    ]);
+    await t.close();
+  });
+});

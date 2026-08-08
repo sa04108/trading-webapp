@@ -845,6 +845,98 @@ export class SymbolMasterService {
   }
 
   /**
+   * [from, to] 구간에 효력이 발생한 상장폐지 이벤트. effectiveDate 오름차순, 같은
+   * 날짜 안에서는 id 오름차순이다 — 호출부(워커)가 이 순서에 의존하지는 않지만
+   * listEvents 와 같은 정렬 규칙을 유지해 둘을 헷갈리지 않게 한다.
+   *
+   * shortCode 는 oldValue JSON 에서 꺼낸다. standardCode 만으로는 봉이 쓰는
+   * 단축코드(shortCode)와 이어지지 않는다 — diffUniverse(symbol-master.ts)가 DELISTED
+   * 이벤트의 oldValue 에 SymbolMasterEntry 전체를 넣어 두므로 정상 데이터라면 항상 있다.
+   * 파싱에 실패하거나 shortCode 가 없는 행은 건너뛰고 경고를 남긴다 — 조용히 버리면
+   * 워커가 왜 그 종목의 폐지를 반영하지 못했는지 아무도 추적할 수 없다.
+   */
+  delistedEventsBetween(
+    from: string,
+    to: string,
+  ): readonly { shortCode: string; effectiveDate: string }[] {
+    const rows = this.deps.db
+      .select({
+        id: symbolMasterEvents.id,
+        effectiveDate: symbolMasterEvents.effectiveDate,
+        oldValue: symbolMasterEvents.oldValue,
+      })
+      .from(symbolMasterEvents)
+      .where(
+        and(
+          eq(symbolMasterEvents.eventType, 'DELISTED'),
+          gte(symbolMasterEvents.effectiveDate, from),
+          lte(symbolMasterEvents.effectiveDate, to),
+        ),
+      )
+      .orderBy(asc(symbolMasterEvents.effectiveDate), asc(symbolMasterEvents.id))
+      .all();
+
+    const result: { shortCode: string; effectiveDate: string }[] = [];
+    for (const row of rows) {
+      const shortCode = this.parseDelistedShortCode(row.oldValue, row.id, row.effectiveDate);
+      if (shortCode === undefined) continue;
+      result.push({ shortCode, effectiveDate: row.effectiveDate });
+    }
+    return result;
+  }
+
+  /** DELISTED 이벤트 한 행의 oldValue 에서 shortCode 를 꺼낸다. 실패하면 경고를 남기고 undefined 를 돌려준다 */
+  private parseDelistedShortCode(
+    oldValue: string | null,
+    id: number,
+    effectiveDate: string,
+  ): string | undefined {
+    if (oldValue === null) {
+      this.deps.logger.warn(
+        {
+          module: 'market-data',
+          event: 'symbol-master.delisted-event-missing-old-value',
+          id,
+          effectiveDate,
+        },
+        'DELISTED 이벤트에 oldValue 가 없어 건너뛴다',
+      );
+      return undefined;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(oldValue);
+    } catch {
+      this.deps.logger.warn(
+        {
+          module: 'market-data',
+          event: 'symbol-master.delisted-event-parse-failed',
+          id,
+          effectiveDate,
+        },
+        'DELISTED 이벤트의 oldValue 파싱에 실패해 건너뛴다',
+      );
+      return undefined;
+    }
+
+    const shortCode = (parsed as { shortCode?: unknown } | null)?.shortCode;
+    if (typeof shortCode !== 'string' || shortCode.length === 0) {
+      this.deps.logger.warn(
+        {
+          module: 'market-data',
+          event: 'symbol-master.delisted-event-missing-short-code',
+          id,
+          effectiveDate,
+        },
+        'DELISTED 이벤트의 oldValue 에 shortCode 가 없어 건너뛴다',
+      );
+      return undefined;
+    }
+    return shortCode;
+  }
+
+  /**
    * |checkpointDate - date| 최소인 체크포인트를 고른다. 동률이면 과거 쪽을 택한다 —
    * 체크포인트 개수가 적어(분기 경계마다 하나) 전체를 읽어 비교해도 비용이 무시할 만하다.
    */
