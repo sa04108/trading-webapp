@@ -123,7 +123,8 @@ Strategy Core
 
 - 자동매매 결과·상태 조회
 - 백테스트 생성·실행·취소
-- 백테스트용 데이터 관리 (CSV 업로드, 증권사 데이터 동기화)
+- 백테스트용 데이터 관리 (KRX 종목 마스터 동기화) — CSV 업로드·증권사 데이터 동기화는
+  D-041 로 사라졌다
 - 비상정지 — 자동매매를 **끄는 것만** 가능하다 (fail-safe)
 
 SSH CLI는 제어 평면이다. 다음은 CLI로만 한다.
@@ -149,17 +150,15 @@ SSH CLI는 제어 평면이다. 다음은 CLI로만 한다.
 - 모바일 대응 웹 UI (조회 평면, §2.6)
 - 등록 전략 목록
 - 전략 파라미터 스키마
-- 시간봉 백테스트
+- 일봉 백테스트 — 봉은 KRX 일별매매 하나로 좁혔다 (D-041)
 - 단일·복수 종목
 - 지속성 작업 큐
 - 동시 실행 1개
 - 진행률·취소
 - 재시작 후 작업 상태 복구
-- Parquet 시장 데이터
-- DuckDB 조회·분석
+- SQLite 일봉 저장 (KRX 일별매매 수집)
+- DuckDB 조회·분석 (재무 팩트 전용, D-041)
 - SQLite 메타데이터
-- CSV·Parquet 가져오기
-- 증권사 REST 캔들 수집 어댑터 (1차: 키움 REST API)
 - 자산 곡선·낙폭·월별 수익률
 - 거래 내역·비용 내역
 - 실행 재현 정보
@@ -199,8 +198,8 @@ SSH CLI는 제어 평면이다. 다음은 CLI로만 한다.
 | Metadata DB | SQLite |
 | SQLite | better-sqlite3 |
 | Migration | Drizzle ORM |
-| Analytical engine | DuckDB Node Neo |
-| Market data | Parquet |
+| Analytical engine | DuckDB Node Neo (재무 팩트 전용, D-041) |
+| Market data | SQLite (KRX 일별매매, D-041) |
 | Password hashing | Argon2id |
 | Test | Vitest |
 | E2E | Playwright |
@@ -248,8 +247,8 @@ quant-platform.service
    ├─ Job orchestrator
    └─ child_process.fork()
       └─ Backtest Child Process
-         ├─ DuckDB
-         ├─ Parquet reader
+         ├─ SQLite 일봉 조회 (KRX 일별매매, D-041)
+         ├─ DuckDB + Parquet (재무 팩트 전용)
          ├─ Strategy engine
          ├─ Simulated execution
          └─ Result writer
@@ -417,25 +416,30 @@ tests/architecture/module-boundaries.test.ts
 
 ## 시장 데이터
 
+봉의 유일한 출처는 KRX 일별매매다 (`krx_daily_bars`, SQLite, §11).
+`MarketDataSource` 포트는 D-041 로 사라졌다 — `fetchCandles`·`saveCandles`·
+`getCoverage`도 증권사 봉 수집·CSV/Parquet 가져오기와 함께 없어졌다.
+`CandleRepository`는 이제 읽기 전용이다. 쓰기는 `SymbolMasterService.ingestDate`가
+종목 마스터 이벤트·coverage 갱신과 같은 트랜잭션에서 하는 것이 유일한 경로다.
+
 ```ts
 export interface CandleRepository {
   getCandles(query: CandleQuery): AsyncIterable<Candle>;
-  getCoverage(query: CoverageQuery): Promise<DataCoverage>;
-  saveCandles(candles: readonly Candle[]): Promise<void>;
+  /** 저장된 봉의 시작 시각 목록 (coverage 계산용) */
+  getTimestamps(market: Market, timeframe: Timeframe, symbol: string): Promise<number[]>;
 }
 
-export interface MarketDataSource {
-  fetchCandles(request: FetchCandleRequest): Promise<FetchCandleResult>;
+export interface StockInfoSource {
+  /** 코드 목록의 기본 정보 조회 — 증권사 어댑터에 남은 유일한 책임 (D-041) */
+  getStockInfo(symbols: readonly string[]): Promise<StockInfoBatchResult>;
 }
 ```
 
 구현체:
 
 ```text
-ParquetCandleRepository
-RestBrokerMarketDataSource   # 증권사별 어댑터, 1차: Kiwoom
-CsvMarketDataSource
-ParquetImportDataSource
+KrxDailyCandleRepository    # krx_daily_bars(SQLite) 읽기 전용
+createTossStockInfoSource   # StockInfoSource 구현 (§13)
 ```
 
 ## 전략
@@ -557,10 +561,13 @@ completedAt
 
 같은 입력·버전·seed는 같은 결과를 만들어야 한다.
 
-봉·재무가 종목에 종속되고 데이터셋이 그것을 공유하므로(D-034), 실행 입력은 데이터셋
-버전 하나로 고정되지 않는다 — 소비한 `(종목, 슬라이스, 버전, 해시)` 목록을
-`universeJson` 에, 그 집계 해시를 `universeHash` 에 남긴다. 워커는 실행 시점의 현재
-버전과 비교해 변한 종목을 이름으로 경고한다.
+봉·재무가 종목에 종속되고 데이터셋이 그것을 공유하므로(D-034), 데이터셋 버전
+하나로는 실행 입력을 고정할 수 없다. 봉은 KRX 일별매매(`krx_daily_bars`) 하나가
+유일한 출처라 버전 pin 대상이 아니다(D-041) — 재무만 종목별 버전을 갖는다.
+
+실행 입력은 소비한 `(종목, 버전, 해시)` 목록을 `universeJson` 에 남긴다. 그 집계
+해시는 `universeHash` 에 남긴다. 워커는 실행 시점의 현재 버전과 비교해 변한 종목을
+이름으로 경고한다.
 
 ## 9.6 필수 지표
 
@@ -638,6 +645,12 @@ COMMIT;
 5. 임시 파일 삭제
 6. `CANCELLED` 확정
 
+자식 프로세스의 백테스트 실행은 better-sqlite3 기반이라 전부 동기다. 동기 코드는
+이벤트 루프에 양보하지 않으므로, 원래는 2번 IPC 취소 요청이 계산이 끝나야 처리됐다.
+엔진 루프(`runBacktestCancellable`)는 200봉마다 한 번 `setImmediate` 로 양보해 그
+매크로태스크 경계를 만든다 — 취소가 실행 도중에도 닿는다(D-042). 자식 프로세스 밖에서
+쓰는 동기 경로(`runBacktest`)는 이 양보를 넣지 않는다.
+
 ## 재시작 복구
 
 서버 시작 시 `STARTING`, `RUNNING`, `CANCELLING` 작업을 검사한다. 대응 OS 프로세스가 없으면 `INTERRUPTED`로 바꾼다. 자동 재실행은 하지 않고 사용자가 복제·재실행한다.
@@ -646,17 +659,18 @@ COMMIT;
 
 # 11. 데이터 저장
 
+봉은 `app.sqlite` 의 `krx_daily_bars` 테이블에 있다 — 종목이 저장 단위이고 데이터셋은
+참조만 갖는다 (D-034). `market-data/` 디렉터리는 재무 팩트 전용으로 좁혀졌다: 증권사
+캔들 수집·CSV/Parquet 가져오기가 사라지며(D-041) 봉 parquet 파티션도 함께 없어졌다.
+
 ```text
 /var/lib/quant-platform/
-├─ app.sqlite
-├─ market-data/                     # 종목이 저장 단위 — 데이터셋은 참조만 갖는다 (D-034)
-│  ├─ market=KR/
-│  │  ├─ timeframe=1m/symbol=005930/year=2026/month=07/data.parquet
-│  │  ├─ timeframe=1h/symbol=005930/year=2026/data.parquet
-│  │  └─ timeframe=1d/symbol=005930/year=2026/data.parquet
-│  ├─ market=US/
-│  └─ facts/scope=SYMBOL/symbol=005930/data.parquet
-├─ imports/
+├─ app.sqlite                       # krx_daily_bars 테이블에 일봉 저장 (D-041)
+├─ market-data/                     # 재무 팩트 전용 (D-041) — 종목이 저장 단위 (D-034)
+│  └─ facts/
+│     ├─ scope=SYMBOL/symbol=005930/data.parquet
+│     └─ scope=MACRO/data.parquet
+├─ imports/                         # 미사용 — CSV 가져오기가 D-041 로 사라졌다
 ├─ exports/
 ├─ temp/
 └─ backups/
@@ -669,12 +683,11 @@ COMMIT;
 - 원본은 수정하지 않음
 - 보정 여부 기록
 - 중복 수집 idempotent
-- 백테스트 기본 소비는 사전 집계 1시간봉 — 요청이 `timeframe` 을 명시하면 1m 원본도
-  소비할 수 있다 (D-026). 실행부가 전체 봉을 메모리에 올리므로 봉 수 상한(200만)을 둔다
-- 너무 작은 Parquet 조각 방지
-- 1분봉은 필요 시 S3 아카이브
+- 실행부가 전체 봉을 메모리에 올리므로 봉 수 상한(200만)을 둔다 — 유일한 timeframe 인
+  일봉만 소비한다 (D-041)
+- 너무 작은 Parquet 조각 방지 (재무 팩트 파티션)
 
-DuckDB 기본 제한:
+DuckDB 기본 제한 (재무 팩트 조회 전용, D-041):
 
 ```sql
 SET threads = 1;
@@ -695,6 +708,7 @@ symbol_slices
 symbol_coverage
 symbol_facts_state
 symbol_versions
+krx_daily_bars
 
 datasets
 dataset_symbols
@@ -717,9 +731,15 @@ __drizzle_migrations
 ```
 
 전략 테이블(`strategies`·`strategy_versions`)은 만들지 않는다 — 전략은 코드
-등록식 레지스트리가 유일한 출처다 (§2.5, D-009). 소비자 없는 테이블
-(`application_settings`, `data_sync_jobs`)도 같은 이유로 없다 — 필요해지는
-시점에 그 시점의 요구대로 신설한다.
+등록식 레지스트리가 유일한 출처다 (§2.5, D-009). `application_settings` 도 같은
+이유로 없다 — 필요해지는 시점에 그 시점의 요구대로 신설한다.
+
+`symbol_slices`·`symbol_coverage`·`data_sync_jobs`는 테이블이 남아 있지만 쓰는
+코드가 없다(D-041). 가격 데이터 기능 제거로 증권사 봉 수집·CSV 가져오기가 사라지며
+소비자를 잃었다. 스키마에서 실제로 지우는 것은 후속 계획이다.
+
+봉의 유일한 출처는 `krx_daily_bars` 다. `SymbolMasterService.ingestDate`가 종목
+마스터 이벤트·coverage 갱신과 같은 트랜잭션에서 쓴다.
 
 `universe_snapshots`·`universe_snapshot_symbols`는 과거 시점 고정 유니버스의
 소유자다(D-040). 데이터셋에 붙지 않고 저장 후 불변이며, `universe_snapshot_symbols`는
@@ -743,32 +763,20 @@ PRAGMA busy_timeout = 5000;
 
 # 13. 증권사 REST 데이터 어댑터
 
-애플리케이션 코어는 `MarketDataSource` port만 안다. 증권사별 구현은 infrastructure 계층의 어댑터이며, 다음 전제를 공유한다.
+이 절의 원래 범위(증권사 REST 봉 수집)는 D-041 로 사라졌다. 봉의 유일한 출처는 KRX
+일별매매(`krx_daily_bars`, §11)이고, 증권사 REST 는 더 이상 봉을 수집하지 않는다.
+
+애플리케이션 코어는 `StockInfoSource` port만 안다. 증권사별 구현은 infrastructure
+계층의 어댑터이며, 다음 전제를 공유한다.
 
 - REST 전용 — OCX·전용 프로그램·윈도우 브릿지 서버를 전제로 한 코드는 만들지 않는다
 - 토큰 기반 인증 (발급·캐싱·만료 전 재발급)
-- 1분봉·일봉 수집
+- 종목 이름 조회 — 백테스트 위저드·상세 화면의 표시용으로 남은 유일한 소비자다 (D-041)
 - 주문·계좌 기능 (실거래 단계)
 - 허용 IP 등록제 증권사 대응 — 서버의 고정 공인 IP 사용
 
-어댑터 구현 순서는 외부 사정에 따른 인프라 결정이며 코어에 영향을 주지 않는다.
-
-1. 키움증권 REST API — 1차 어댑터
-2. 토스증권 Open API — 사전신청 승인 후 추가
-
-## 시간봉 집계
-
-시간봉은 1분봉으로 생성한다.
-
-```text
-open   = 첫 1분봉 open
-high   = high 최댓값
-low    = low 최솟값
-close  = 마지막 1분봉 close
-volume = volume 합
-```
-
-거래소 세션 경계를 기준으로 집계한다. Unix timestamp의 단순 60분 bucket만 사용하지 않는다.
+현재 구현은 토스증권 Open API 하나다 (`toss-stock-info-source.ts`). 어댑터 구현 순서는
+외부 사정에 따른 인프라 결정이며 코어에 영향을 주지 않는다.
 
 ## 공통 REST 클라이언트
 
@@ -782,13 +790,8 @@ volume = volume 합
 - 동일 범위 요청 병합
 - 중단 후 이어받기
 
-과거 데이터가 부족할 수 있으므로 입력 어댑터는 최소 다음을 지원한다.
-
-```text
-증권사 REST API
-CSV Import
-Parquet Import
-```
+봉 입력 어댑터 목록(증권사 REST API·CSV Import·Parquet Import)은 D-041 로 사라졌다.
+과거 데이터 백필은 이제 KRX 재수집(`POST /symbol-master/backfill`)이 유일한 경로다.
 
 ---
 
@@ -823,10 +826,11 @@ GET /api/v1/strategies/:strategyId/schema
 GET  /api/v1/datasets
 GET  /api/v1/datasets/:datasetId
 GET  /api/v1/datasets/:datasetId/coverage
-POST /api/v1/datasets/import
-POST /api/v1/datasets/sync
-GET  /api/v1/data-jobs/:jobId
 ```
+
+`import`·`sync`·`data-jobs` 엔드포인트는 D-041 로 사라졌다 — CSV 가져오기·증권사 봉
+동기화 자체가 없어졌다. 봉 수집은 이제 KRX 동기화(`symbol-master/sync`·
+`symbol-master/backfill`)뿐이다.
 
 ## 백테스트
 
@@ -869,8 +873,8 @@ GET /api/v1/system/info
     "riskPerTradePercent": 1,
     "maxPositionWeightPercent": 20
   },
-  "datasetId": "kr-hourly-v1",
-  "timeframe": "1h",
+  "datasetId": "kr-daily-v1",
+  "timeframe": "1d",
   "universe": {
     "type": "SYMBOLS",
     "symbols": ["005930", "000660"]
@@ -897,6 +901,9 @@ GET /api/v1/system/info
 
 포지션 상한은 전략 파라미터가 아니라 요청의 `risk.maxPositions` 다 — 엔진의
 리스크 제약(§9.2-6)이지 전략 로직의 입력이 아니기 때문이다 (D-012).
+
+`timeframe` 은 이제 `'1d'` 고정 선택값이다 — KRX 일봉이 유일한 출처라 다른 값을
+받지 않는다 (D-041).
 
 ---
 
@@ -1192,7 +1199,7 @@ Accordion
 - 동시 백테스트 1개
 - DuckDB 1 thread
 - 메모리 제한 384MB
-- 시간봉 사전 집계
+- 봉 수 상한 200만 (§11) — 일봉만 소비하므로 사전 집계가 필요 없다 (D-041)
 - 대규모 sweep 금지
 
 Static IP는 인스턴스에 연결된 상태에서는 별도 비용이 없다. 연결하지 않은 Static IP는 과금될 수 있으므로 사용하지 않는 IP는 삭제한다.
@@ -1694,9 +1701,12 @@ dist/
 - 결과 export
 - 데이터셋·엔진 버전 정보
 
+일봉은 이제 `app.sqlite` 안에 있어(D-041) 별도 캔들 백업 제외 규칙이 필요 없다.
+D-019 가 두던 캔들 Parquet 제외 규칙의 전제(증권사 재수집·1분봉 집계 재생성)가
+함께 사라졌다.
+
 백업 제외:
 
-- 캔들 Parquet 전체 (D-019) — 1m/1d 는 증권사 재수집, 1h 는 1분봉 집계로 재생성
 - 증권사 API secret
 - 세션 secret (`app.env`)
 - 관리자 비밀번호
@@ -1731,8 +1741,8 @@ exports 의 복구 절차·무결성 검사·실패 시 원복은 Phase 7 disast
 ## 전고점 돌파 (range-breakout)
 
 직전 N개 봉이 만든 고가 상단을 종가가 넘어서면 사고, 추적 손절·익절·보유 상한으로
-판다. 모든 창이 봉 수라 분봉·시간봉·일봉에서 같은 로직이며, 파라미터의 의미가
-데이터셋에서 고른 소비 봉 주기에 따라 달라진다.
+판다. 창은 전부 봉 수 기준이라 봉 주기가 달라져도 같은 로직이 돈다. 지금은 일봉만
+남아 그 일반성이 겉으로 드러나지 않는다 (D-041).
 
 ```ts
 const RangeBreakoutParameters = z.object({
@@ -1796,7 +1806,6 @@ RSI 과매도에 사서 RSI 회복에 판다. 스톱은 고정(추적 아님) �
 ## Unit
 
 - Candle
-- 시간봉 집계
 - 주문 체결
 - 수수료·세금·슬리피지
 - 현금 부족
@@ -1866,7 +1875,7 @@ Playwright viewport:
 - 로그인 성공·실패
 - 로그아웃
 - 백테스트 생성·취소
-- 데이터 가져오기·동기화
+- 데이터 동기화 — CSV 가져오기는 D-041 로 사라졌다
 - 설정 변경
 - 향후 실거래 arm·disarm
 - 향후 주문
@@ -1964,13 +1973,11 @@ quant-platform-live.service
 ## Phase 2 — 데이터
 
 - Candle domain
-- Parquet repository
-- DuckDB
-- CSV/Parquet import
+- SQLite 일봉 (KRX 일별매매 수집, D-041)
+- DuckDB (재무 팩트 전용, D-041)
 - coverage
 - 누락 탐지
-- 시간봉 집계
-- 증권사 REST 데이터 어댑터 (1차: 키움)
+- 증권사 REST 어댑터 (종목 이름 조회, D-041)
 
 ## Phase 3 — 엔진
 
@@ -2188,10 +2195,10 @@ Metadata
 └─ SQLite WAL
 
 Market data
-└─ Parquet
+└─ SQLite, KRX 일별매매 하나가 유일한 출처 (D-041)
 
 Analytics
-└─ DuckDB Node Neo
+└─ DuckDB Node Neo, 재무 팩트 조회 전용 (D-041)
 
 Backtest isolation
 └─ Child process from same artifact
