@@ -145,6 +145,12 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     expect(job.status).toBe('COMPLETED');
     // 데이터셋 timeframe(1d) 봉을 전부 읽었는지 — 1h 로 읽으면 0봉이 된다
     expect(job.totalBars).toBe(dailyCandles.length);
+
+    // 알림 설명이 읽는 값 — getMetrics 의 metricsJson 파싱 결과와 같아야 한다
+    const metrics = ctx.container.resultsService.getMetrics(jobId) as { totalReturnPct: number };
+    expect(ctx.container.resultsService.getTotalReturnPct(jobId)).toBe(metrics.totalReturnPct);
+    // 결과가 없는 잡은 null 이다 — 0 으로 떨어지면 "수익 0%" 로 읽힌다
+    expect(ctx.container.resultsService.getTotalReturnPct('bt_없는잡')).toBeNull();
   });
 
   it('봉이 없는 종목을 실행 경고로 남긴다', { timeout: 90_000 }, async () => {

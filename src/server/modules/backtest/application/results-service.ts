@@ -52,6 +52,19 @@ export class ResultsService {
     return row ? (JSON.parse(row.metricsJson) as Record<string, unknown>) : null;
   }
 
+  /**
+   * 알림 설명이 쓰는 수익률. `getMetrics` 는 metricsJson 을 통째로 파싱하니 값
+   * 하나엔 과하다. 결과가 없으면 null — 0 을 돌려주면 "수익 0%" 로 읽힌다.
+   */
+  getTotalReturnPct(jobId: string): number | null {
+    const row = this.db
+      .select({ totalReturnPct: backtestMetrics.totalReturnPct })
+      .from(backtestMetrics)
+      .where(eq(backtestMetrics.jobId, jobId))
+      .get();
+    return row?.totalReturnPct ?? null;
+  }
+
   /** 차트용 시리즈 — 서버 측 LTTB 다운샘플 (표시 전용) */
   getChartSeries(jobId: string) {
     const equity = this.db
