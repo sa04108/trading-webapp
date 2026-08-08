@@ -360,8 +360,11 @@ function* runBacktestSteps(
         if (!input.delistedTsMsBySymbol.has(symbol)) continue;
         if (lastBarTsMsBySymbol.get(symbol) !== tsMs) continue;
 
-        // 체결될 봉이 다시 오지 않는다 — 남겨두면 기간 종료 폐기 경고만 늘린다
-        pendingOrders = pendingOrders.filter((order) => order.symbol !== symbol);
+        // 대기 주문을 따로 지우지 않는다. 이 시점 pendingOrders 에는 이번 봉에 봉이
+        // 없는 종목의 주문만 남아 있어 — 봉이 있는 종목은 위 체결 스텝이 이미 다
+        // 처리했다 — 폐지 종목(이번 봉이 있어야 여기 온다) 주문은 애초에 없다.
+        // 전략이 이 마지막 봉에서 새로 내는 주문은 이 블록 뒤(전략 호출)에 등록되므로
+        // 여기서 손댈 수 없고, 체결될 봉이 다시 오지 않아 기간 종료 폐기 경고로 드러난다.
 
         const position = positions.get(symbol);
         if (position === undefined || position.quantity <= 0) continue;
