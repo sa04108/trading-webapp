@@ -34,6 +34,14 @@ export const DART_MIN_INTERVAL_MS = 120;
 /** DART OpenAPI 일일 호출 한도 */
 export const DART_DAILY_CALL_LIMIT = 40_000;
 
+/**
+ * 자본변동 전용 종목·연도당 호출: irdsSttus 1회다.
+ * `syncCorporateActions` 는 `fetchFinancials` 를 부르지 않는다.
+ * 그래서 `fnlttSinglAcntAll` 4회가 빠진다(`fact-sync-service.ts` 참고).
+ * `DART_CALLS_PER_SYMBOL_YEAR` 는 재무까지 포함한 값이라 이 경로에는 못 쓴다.
+ */
+export const DART_CORPORATE_ACTION_CALLS_PER_YEAR = 1;
+
 export type FactSyncMode = 'FULL' | 'INCREMENTAL';
 
 export interface FactSyncPlan {
@@ -102,6 +110,43 @@ function anchoredShareYears(years: readonly number[]): number[] {
     withAnchors.add(year);
   }
   return [...withAnchors].sort((a, b) => a - b);
+}
+
+export interface CorporateActionSyncEstimate {
+  readonly calls: number;
+  readonly estimatedMs: number;
+  readonly overDailyLimit: boolean;
+}
+
+/**
+ * 자본변동 전용 수집 비용이다. 위저드 게이트 화면(Task 8)의
+ * "예상 호출·예상 시간" 이 여기서 나온다.
+ *
+ * `plan.calls` 를 그대로 쓰지 않는다.
+ * 그 값은 재무까지 포함한 종목당 9회 공식이다.
+ * `syncCorporateActions` 는 `fetchFinancials` 를 건너뛴다.
+ * 그래서 그 값은 실제보다 연도당 4회씩 많게 잡힌다.
+ *
+ * `plan.yearsBySymbol`·`plan.shareYearsBySymbol` 은 그대로 재사용한다.
+ * 증분·앵커 연도 선택 규칙은 자본변동 전용이라도 달라지지 않는다.
+ * 여기서 다시 계산하면 두 계획이 갈라질 여지만 생긴다.
+ * 승수만 실제 호출 횟수에 맞춰 다시 곱한다.
+ * 연도당 irdsSttus 1회, shareYear 당 stockTotqySttus 4회다
+ * (`dart-fact-source.ts` 의 `fetchCorporateActions` 참고).
+ */
+export function estimateCorporateActionSyncCost(plan: FactSyncPlan): CorporateActionSyncEstimate {
+  let calls = 0;
+  for (const years of plan.yearsBySymbol.values()) {
+    calls += years.length * DART_CORPORATE_ACTION_CALLS_PER_YEAR;
+  }
+  for (const shareYears of plan.shareYearsBySymbol.values()) {
+    calls += shareYears.length * DART_SHARE_ANCHOR_CALLS;
+  }
+  return {
+    calls,
+    estimatedMs: calls * DART_MIN_INTERVAL_MS,
+    overDailyLimit: calls > DART_DAILY_CALL_LIMIT,
+  };
 }
 
 function incrementalYears(

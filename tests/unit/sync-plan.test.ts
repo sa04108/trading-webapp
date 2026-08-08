@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DART_DAILY_CALL_LIMIT,
+  estimateCorporateActionSyncCost,
   planFactSync,
 } from '../../src/server/modules/facts/domain/sync-plan.js';
 
@@ -145,5 +146,54 @@ describe('planFactSync', () => {
     });
     expect(plan.yearsBySymbol.size).toBe(1);
     expect(plan.calls).toBe(13);
+  });
+});
+
+/**
+ * 자본변동 전용 비용(Task 8) — `planFactSync` 의 `calls` 는 재무(`fnlttSinglAcntAll`)
+ * 까지 포함하므로 `syncCorporateActions` 가 실제로 쏘는 호출보다 많다. 위저드 게이트
+ * 화면은 이 함수의 값을 써야 실행과 추정이 갈리지 않는다(브리프의 함정 1번).
+ */
+describe('estimateCorporateActionSyncCost', () => {
+  it('종목당 (연도 × 1 + shareYears × 4) 다 — 재무 호출을 세지 않는다', () => {
+    const plan = planFactSync({ ...BASE, mode: 'FULL' });
+    // 종목 2개, 각 3년(2020~2022) + 앵커 1(2019) = shareYears 4개
+    // 종목당 3×1 + 4×4 = 19, 2종목이면 38
+    expect(plan.calls).toBe(62); // planFactSync 의 값(재무 포함)과는 다르다는 대조군
+    const estimate = estimateCorporateActionSyncCost(plan);
+    expect(estimate.calls).toBe(38);
+    expect(estimate.estimatedMs).toBe(38 * 120);
+    expect(estimate.overDailyLimit).toBe(false);
+  });
+
+  it('불연속 구간에서도 앵커가 shareYears 에 그대로 반영된다', () => {
+    const plan = planFactSync({
+      symbols: ['005930'],
+      fromYear: 2019,
+      toYear: 2026,
+      currentYear: 2026,
+      coveredBySymbol: new Map([['005930', [2021, 2022, 2023, 2024, 2025]]]),
+      mode: 'INCREMENTAL',
+    });
+    // years=[2019,2020,2026](3) shareYears=[2018,2019,2020,2025,2026](5)
+    // 3×1 + 5×4 = 23
+    const estimate = estimateCorporateActionSyncCost(plan);
+    expect(estimate.calls).toBe(23);
+    expect(estimate.estimatedMs).toBe(23 * 120);
+  });
+
+  it('수집할 것이 없으면 비용도 없다', () => {
+    const plan = planFactSync({
+      symbols: ['005930'],
+      fromYear: 2020,
+      toYear: 2021,
+      currentYear: 2030,
+      coveredBySymbol: new Map([['005930', [2020, 2021]]]),
+      mode: 'INCREMENTAL',
+    });
+    const estimate = estimateCorporateActionSyncCost(plan);
+    expect(estimate.calls).toBe(0);
+    expect(estimate.estimatedMs).toBe(0);
+    expect(estimate.overDailyLimit).toBe(false);
   });
 });

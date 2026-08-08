@@ -6,6 +6,10 @@ import type { Clock } from '../../../shared/clock.js';
 import type { Logger } from '../../../shared/logger.js';
 import { newId } from '../../../shared/ids.js';
 import type { FactSyncService } from './fact-sync-service.js';
+import {
+  estimateCorporateActionSyncCost,
+  type CorporateActionSyncEstimate,
+} from '../domain/sync-plan.js';
 
 export type CorporateActionSyncJobStatus =
   | 'QUEUED'
@@ -101,6 +105,21 @@ export class CorporateActionSyncOrchestrator {
         );
       }
     }
+  }
+
+  /**
+   * 위저드 게이트 화면(Task 8)의 "예상 호출·예상 시간" 이다.
+   * 잡을 만들지 않고 계획만 미리 본다.
+   * `planCorporateActionSync` 는 `start()` 가 실제로 돌릴 계획과 같은 값을 낸다.
+   * 그래서 화면의 숫자와 실행이 갈리지 않는다.
+   */
+  estimate(request: CorporateActionSyncRequest): CorporateActionSyncEstimate {
+    const plan = this.factSync.planCorporateActionSync(
+      request.symbols,
+      request.fromYear,
+      request.toYear,
+    );
+    return estimateCorporateActionSyncCost(plan);
   }
 
   getJob(jobId: string): CorporateActionSyncJobRow | null {

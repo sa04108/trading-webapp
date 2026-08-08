@@ -678,11 +678,18 @@ describe('POST /backtests — 자본변동 수집 게이트 (Task 6)', () => {
     const created = await submit();
 
     expect(created.statusCode).toBe(400);
-    const error = (created.json() as { error: string }).error;
-    expect(error).toContain(CODE);
-    expect(error).toContain('게이트테스트');
+    const body = created.json() as {
+      error: string;
+      corporateActionGate?: { symbols: string[]; fromYear: number; toYear: number };
+    };
+    expect(body.error).toContain(CODE);
+    expect(body.error).toContain('게이트테스트');
     // 큐에 남지 않아야 한다 — 워커까지 가서 늦게 죽는 게 아니라 제출 시점에 막힌다.
     expect(ctx.container.jobQueue.countByStatus(['QUEUED'])).toBe(0);
+
+    // 위저드 게이트 화면(Task 8)이 이 값을 그대로 받아 쓴다 — 화면이 종목·연도를
+    // 다시 계산하지 않는다.
+    expect(body.corporateActionGate).toEqual({ symbols: [CODE], fromYear: 2026, toYear: 2026 });
   });
 
   it('수집했고 분할이 없는 종목은 통과한다', async () => {

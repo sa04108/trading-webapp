@@ -95,6 +95,53 @@ describe('자본변동 수집 잡 (Task 7)', () => {
     await ctx.close();
   });
 
+  it('계획만 미리 본다 — 잡을 만들지 않는다 (Task 8)', async () => {
+    registerSymbols(ctx.container, 'KR', ['005930', '000660']);
+
+    const previewed = await ctx.app.inject({
+      method: 'POST',
+      url: `${JOBS_URL.replace('-sync-jobs', '-sync-plan')}`,
+      cookies: { qp_session: cookie },
+      payload: { symbols: ['005930', '000660'], fromYear: 2020, toYear: 2022 },
+    });
+    expect(previewed.statusCode).toBe(200);
+    const body = previewed.json() as { calls: number; estimatedMs: number; overDailyLimit: boolean };
+    // 첫 수집(커버리지 없음)이므로 종목당 3년×1 + 4개 shareYears×4 = 19, 2종목 38
+    expect(body.calls).toBe(38);
+    expect(body.estimatedMs).toBe(38 * 120);
+    expect(body.overDailyLimit).toBe(false);
+
+    // 잡을 만들지 않았으니 실제 수집을 시작해도 409 가 아니어야 한다
+    const fake = gatedCorporateActionSource();
+    injectFakeFactSource(ctx.container.factSyncService, fake.source);
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: JOBS_URL,
+      cookies: { qp_session: cookie },
+      payload: { symbols: ['005930'], fromYear: 2020, toYear: 2022 },
+    });
+    expect(created.statusCode).toBe(201);
+    const jobId = (created.json().job as { id: string }).id;
+
+    // 뒷정리 — 잡을 끝내 다음 테스트에 영향이 남지 않게 한다
+    fake.release();
+    await waitFor(() =>
+      ctx.container.corporateActionSyncOrchestrator.isTerminal(
+        ctx.container.corporateActionSyncOrchestrator.getJob(jobId)?.status ?? '',
+      ),
+    );
+  });
+
+  it('연도 범위가 잘못되면 계획 미리보기도 400 이다', async () => {
+    const previewed = await ctx.app.inject({
+      method: 'POST',
+      url: `${JOBS_URL.replace('-sync-jobs', '-sync-plan')}`,
+      cookies: { qp_session: cookie },
+      payload: { symbols: ['005930'], fromYear: 2022, toYear: 2020 },
+    });
+    expect(previewed.statusCode).toBe(400);
+  });
+
   it('잡을 만들고 진행률을 준다', async () => {
     registerSymbols(ctx.container, 'KR', ['005930', '000660']);
     const fake = gatedCorporateActionSource();

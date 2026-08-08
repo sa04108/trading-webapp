@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { Clock } from '../../../shared/clock.js';
 import type { Logger } from '../../../shared/logger.js';
 import type { Fact } from '../domain/fact.js';
-import { planFactSync, type FactSyncMode } from '../domain/sync-plan.js';
+import { planFactSync, type FactSyncMode, type FactSyncPlan } from '../domain/sync-plan.js';
 // 원천은 market-data(symbol-service.ts) 쪽이다 — market-data 는 facts 를 몰라도
 // 되지만(§7) facts 는 이미 market-data 를 안다(예: exchange-session.js 사용).
 // 손으로 맞추던 중복 상수를 없앴다(리뷰 finding, 2026-08-08).
@@ -158,6 +158,28 @@ export class FactSyncService {
         this.actionCoverage.addCoveredYears(symbol, years, nowMs);
         this.actionCoverage.addGapYears(symbol, actionGapYears, nowMs);
       },
+    });
+  }
+
+  /**
+   * `syncCorporateActions` 가 실제로 쓸 연도 계획을 미리 본다 (Task 8 게이트 화면).
+   * 커버리지 조회(`actionCoverage`)·기준 연도(`clock`)·모드(`INCREMENTAL`)를 실행
+   * 경로와 완전히 같게 둔다 — 화면의 예상 호출·시간이 실제 수집과 갈리면 안 된다
+   * (`domain/sync-plan.ts` 헤더 참고).
+   */
+  planCorporateActionSync(
+    symbols: readonly string[],
+    fromYear: number,
+    toYear: number,
+  ): FactSyncPlan {
+    const unique = [...new Set(symbols)];
+    return planFactSync({
+      symbols: unique,
+      fromYear,
+      toYear,
+      currentYear: new Date(this.clock.now()).getUTCFullYear(),
+      coveredBySymbol: this.actionCoverage.getCoveredYears(unique),
+      mode: 'INCREMENTAL',
     });
   }
 

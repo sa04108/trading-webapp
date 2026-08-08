@@ -22,6 +22,8 @@ import { formatKrw, timeframeLabel } from '@/lib/format';
 import { wizardTimeframes } from '@/features/datasets/dataset-slices';
 import type { SymbolSummary } from '@/features/datasets/symbol-types';
 import { costProfileLabel, slippageProfileLabel } from './profile-labels';
+import { CorporateActionGate } from './corporate-action-gate';
+import { extractCorporateActionGate } from './corporate-action-gate-logic';
 import { useStockNames } from '@/lib/use-stock-names';
 import { requestToFormState } from './prefill';
 import { ParamHint } from './param-hint';
@@ -129,6 +131,12 @@ export function NewBacktestWizard() {
   const [slippageProfileId, setSlippageProfileId] = useState('fixed-5bps');
   const [randomSeed, setRandomSeed] = useState('42');
   const [stepError, setStepError] = useState<string | null>(null);
+  /**
+   * 자본변동 게이트 화면(Task 8)에서 수집을 한 번이라도 마쳤는지 — 다시 막히면
+   * 문구를 "여전히 실패" 로 바꾼다(브리프 3번, "일부 실패" 로 뭉뚱그리지 않는다).
+   * 단계를 벗어나면 다음 진입은 새 시도이므로 아래 stepError 리셋과 함께 지운다.
+   */
+  const [collectionAttempted, setCollectionAttempted] = useState(false);
 
   const strategies = useQuery({
     queryKey: ['strategies'],
@@ -337,9 +345,13 @@ export function NewBacktestWizard() {
       void navigate(`/backtests/${data.job.id}`);
     },
     onError: (error: unknown) => {
+      // 자본변동 게이트 오류는 CorporateActionGate 화면이 대신 안내한다 —
+      // 여기서 같은 사유를 빨간 배너로 한 번 더 띄우면 문구가 겹친다.
+      if (extractCorporateActionGate(error) !== null) return;
       setStepError(error instanceof ApiError ? error.message : '제출에 실패했습니다');
     },
   });
+  const actionGate = extractCorporateActionGate(submitMutation.error);
 
   // 단계 게이트가 보는 값만 모아 넘긴다 — 규칙은 wizard-steps.ts 한 곳에 있다
   /**
@@ -460,6 +472,12 @@ export function NewBacktestWizard() {
     // 검토보다 앞으로 돌아가면 '검토를 지났다' 를 취소한다 — 설정을 고친 뒤 앞으로가기로
     // 제출 화면에 되돌아오는 길을 막는다. 다시 들어가려면 검토에서 '다음' 을 눌러야 한다.
     if (step < REVIEW_STEP) setReviewPassed(false);
+    // 실행 화면을 벗어나면 다음 진입은 새 시도다 — "여전히 실패" 문구가 낡은 시도의
+    // 흔적으로 남지 않게 한다.
+    if (step !== RUN_STEP) {
+      setCollectionAttempted(false);
+      submitMutation.reset();
+    }
   }, [step]);
 
   return (
@@ -873,6 +891,21 @@ export function NewBacktestWizard() {
         ) : null
       ) : null}
 
+      {/* 제출이 막힌 그 자리에 붙인다 — 막힌 이유와 해소책이 같은 카드에 있어야
+          문맥을 잃지 않는다(설계 §3). 게이트가 떠 있는 동안은 아래 실행 버튼을
+          숨기고 이 카드의 버튼이 그 역할을 대신한다. */}
+      {!prefilling && step === RUN_STEP && actionGate ? (
+        <CorporateActionGate
+          gate={actionGate}
+          nameOf={nameOf}
+          attempted={collectionAttempted}
+          onRetry={() => {
+            setCollectionAttempted(true);
+            if (request && typeof request !== 'string') submitMutation.mutate(request);
+          }}
+        />
+      ) : null}
+
       {prefilling ? null : (
         <div className="flex items-center justify-between gap-2">
           <Button
@@ -887,7 +920,7 @@ export function NewBacktestWizard() {
             <Button className="h-11" onClick={goNext}>
               다음
             </Button>
-          ) : (
+          ) : actionGate ? null : (
             <Button
               className="h-11"
               disabled={typeof request === 'string' || submitMutation.isPending}

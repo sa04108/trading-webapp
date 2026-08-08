@@ -367,7 +367,15 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
   const checkCorporateActionCoverage = (
     codes: readonly string[],
     period: { from: string; to: string },
-  ): { error: string | null; warning: string | null } => {
+  ): {
+    error: string | null;
+    warning: string | null;
+    /** 미수집 종목 전체 목록 — 위저드 게이트 화면(Task 8)이 그대로 받아 쓴다.
+     *  `error` 문구의 `namedSymbolList` 는 10종목에서 접으므로 화면에는 못 쓴다. */
+    uncollectedSymbols: readonly string[];
+    fromYear: number;
+    toYear: number;
+  } => {
     const { fromTsMs, toTsMs } = periodToTsRange(period);
     const fromYear = new Date(fromTsMs).getUTCFullYear();
     const toYear = new Date(toTsMs).getUTCFullYear();
@@ -397,14 +405,22 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
           `다음 종목은 자본변동(액면분할 등) 이력을 수집한 적이 없습니다: ${namedSymbolList(uncollected)}. ` +
           '분할이 있었다면 결과가 틀어집니다. 종목 화면에서 자본변동을 동기화한 뒤 다시 제출하세요.',
         warning: null,
+        uncollectedSymbols: uncollected,
+        fromYear,
+        toYear,
       };
     }
-    if (gapped.length === 0) return { error: null, warning: null };
+    if (gapped.length === 0) {
+      return { error: null, warning: null, uncollectedSymbols: [], fromYear, toYear };
+    }
     return {
       error: null,
       warning:
         `다음 종목은 DART 가 자본변동 이력 일부에 응답하지 못했습니다: ${namedSymbolList(gapped)}. ` +
         '분할이 있었다면 결과가 틀어질 수 있습니다.',
+      uncollectedSymbols: [],
+      fromYear,
+      toYear,
     };
   };
 
@@ -417,7 +433,20 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
         readonly resolved: ResolvedUniverse;
         readonly warnings: readonly string[];
       }
-    | { readonly ok: false; readonly status: 400; readonly errors: string[] }
+    | {
+        readonly ok: false;
+        readonly status: 400;
+        readonly errors: string[];
+        /**
+         * 자본변동 미수집 게이트(Task 6)에 걸렸을 때만 있다. 위저드 게이트 화면
+         * (Task 8)이 종목·연도를 다시 계산하지 않고 이 값을 그대로 받아 쓴다.
+         */
+        readonly corporateActionGate?: {
+          readonly symbols: readonly string[];
+          readonly fromYear: number;
+          readonly toYear: number;
+        };
+      }
     | { readonly ok: false; readonly status: 422; readonly errors: string[]; readonly uncoveredDates: readonly string[] };
 
   /**
@@ -498,7 +527,16 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     // 틀린 결과를 낸다. unionSymbols·기간 기준으로 ②와 같은 층위에서 검사한다.
     const actionGate = checkCorporateActionCoverage(resolved.unionSymbols, body.period);
     if (actionGate.error !== null) {
-      return { ok: false, status: 400, errors: [actionGate.error] };
+      return {
+        ok: false,
+        status: 400,
+        errors: [actionGate.error],
+        corporateActionGate: {
+          symbols: actionGate.uncollectedSymbols,
+          fromYear: actionGate.fromYear,
+          toYear: actionGate.toYear,
+        },
+      };
     }
     const warnings: string[] = [];
     if (actionGate.warning !== null) warnings.push(actionGate.warning);
@@ -735,6 +773,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       return reply.code(validated.status).send({
         error: validated.errors[0] ?? '제출을 검증할 수 없습니다',
         ...('uncoveredDates' in validated ? { uncoveredDates: validated.uncoveredDates } : {}),
+        ...('corporateActionGate' in validated && validated.corporateActionGate
+          ? { corporateActionGate: validated.corporateActionGate }
+          : {}),
       });
     }
 

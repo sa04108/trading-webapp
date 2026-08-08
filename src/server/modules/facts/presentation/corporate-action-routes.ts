@@ -49,6 +49,32 @@ export function registerCorporateActionRoutes(
 ): void {
   const { orchestrator, symbolService } = deps;
 
+  /**
+   * 잡을 만들지 않고 예상 호출·시간만 미리 본다.
+   * 게이트 화면이 수집 버튼을 누르기 전에 보여줄 숫자다(Task 8).
+   *
+   * 종목 등록·시장 검사는 하지 않는다.
+   * 계획 자체는 부작용이 없어 등록 여부와 무관하게 계산할 수 있다.
+   * 여기서 막으면 미등록 종목은 추정치조차 볼 수 없다.
+   */
+  app.post(
+    '/facts/corporate-action-sync-plan',
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const parsed = createRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
+        });
+      }
+      const body = parsed.data;
+      if (body.fromYear > body.toYear) {
+        return reply.code(400).send({ error: '연도 범위가 올바르지 않습니다 (fromYear > toYear)' });
+      }
+      return orchestrator.estimate(body);
+    },
+  );
+
   app.post('/facts/corporate-action-sync-jobs', { preHandler: requireAuth }, async (request, reply) => {
     const parsed = createRequestSchema.safeParse(request.body);
     if (!parsed.success) {
