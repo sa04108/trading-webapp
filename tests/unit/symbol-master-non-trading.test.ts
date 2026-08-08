@@ -111,11 +111,13 @@ describe('거래불가일 조회', () => {
       { date: '2021-06-14', shortCode: '215600', market: 'KOSDAQ', lastClose: 12_100 },
       { date: '2021-06-16', shortCode: '950160', market: 'KOSDAQ', lastClose: 8_010 },
       { date: '2021-06-15', shortCode: '215600', market: 'KOSDAQ', lastClose: 12_100 },
+      { date: '2021-06-15', shortCode: '048260', market: 'KOSDAQ', lastClose: 99_400 },
     ]).run();
 
     const rows = ctx.svc.nonTradingDaysBetween('2021-06-15', '2021-06-16');
 
     expect(rows).toEqual([
+      { date: '2021-06-15', shortCode: '048260', lastClose: 99_400 },
       { date: '2021-06-15', shortCode: '215600', lastClose: 12_100 },
       { date: '2021-06-16', shortCode: '950160', lastClose: 8_010 },
     ]);
