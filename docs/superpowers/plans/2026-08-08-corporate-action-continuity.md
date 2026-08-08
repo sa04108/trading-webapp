@@ -671,7 +671,94 @@ git commit -m "feat(web): 자본변동 미수집을 안내하고 일괄 수집�
 
 ---
 
-### Task 9: e2e·문서·최종 검증
+### Task 9: 전략 상태의 가격도 분할을 넘게 한다
+
+**추가 (2026-08-08, Task 2 리뷰가 범위 밖에서 발견):** 이 계획은 포지션 수량만 봤다. 전략이 봉 사이에 들고 다니는 **가격 상태**는 그대로 남는다.
+
+`src/server/modules/strategy/strategies/shared/trailing-stop.ts:9-17` 의 `HoldingState` 가 세 가격 필드를 갖는다 — `entryAtr`, `stopLevel`, `highestClose`. 전부 분할 전 단위다.
+
+5:1 분할 후 원본 종가가 1/5 로 떨어지면 `close < stopLevel` 이 즉시 참이 된다. `ema-trend-switch`·`rsi-reversion`·`range-breakout` 이 **허위 스톱 청산**을 낸다. 우리가 고친 것과 같은 병이고 자리만 다르다.
+
+**전략이 스스로 처리하게 두지 않는다.** `context.corporateActions(symbol)` 는 "그 시점까지 전부" 를 주지 "이번 봉에 새로 생긴 것" 을 주지 않는다. 전략마다 커서를 두면 Task 2 가 네 라운드에 걸쳐 푼 문제를 전략 수만큼 다시 만든다. 엔진은 이미 `due` 와 합성 `ratio` 를 정확한 시점에 계산하므로 그것을 전략에 넘긴다.
+
+**Files:**
+- Modify: `src/server/modules/strategy/domain/strategy.ts` (선택적 훅 추가)
+- Modify: `src/server/modules/backtest/domain/engine.ts` (조정 루프에서 훅 호출)
+- Modify: `src/server/modules/strategy/strategies/shared/trailing-stop.ts` (가격 필드 스케일 헬퍼)
+- Modify: `ema-trend-switch.ts`, `rsi-reversion.ts`, `range-breakout.ts` (훅 구현)
+- Test: `tests/unit/trailing-stop.test.ts`(없으면 신설), `tests/unit/engine.test.ts`
+
+**Interfaces:**
+- Produces: `TradingStrategy` 에 선택적 훅. 이름·시그니처는 기존 `onBars` 관례를 읽고 맞춰라. 엔진이 종목과 합성 `ratio` 를 넘기고, 전략이 자기 상태를 고친다
+- Produces: `trailing-stop.ts` 에 `HoldingState` 의 세 가격 필드를 `ratio` 로 나누는 함수. `null` 필드는 그대로 둔다
+
+- [ ] **Step 1: 실패하는 테스트를 쓴다**
+
+두 층이다.
+
+`tests/unit/engine.test.ts` — 분할일에 훅이 불리는지, 그리고 **불리지 않아야 할 때 안 불리는지**:
+
+```ts
+it('분할 효력 봉에서 전략의 자본변동 훅을 부른다', () => {
+  // 훅 호출을 기록하는 가짜 전략. 심볼과 합성 ratio 가 정확한지 단언
+});
+
+it('자본변동이 없는 봉에서는 훅을 부르지 않는다', () => {
+  // 호출 0회
+});
+```
+
+전략 층 — 허위 스톱 청산이 실제로 사라지는지:
+
+```ts
+it('분할 후에도 스톱이 발동하지 않는다', () => {
+  // 진입가 100_000, 스톱 90_000. 5:1 분할로 종가가 20_000 이 된다.
+  // 조정 없으면 즉시 청산되고, 조정하면 스톱이 18_000 이라 살아남는다
+});
+```
+
+기존 전략 테스트의 `HoldingState` 조립 패턴을 먼저 읽고 그것을 따라라 — `ema-trend-switch.ts` 를 겨누는 테스트가 이미 있다.
+
+- [ ] **Step 2: 테스트가 실패하는지 확인한다**
+
+Run: `pnpm vitest run tests/unit/engine.test.ts tests/unit/ema-trend-switch.test.ts`
+Expected: 새 테스트 FAIL. **허위 청산이 실제로 일어나는 것을 출력에서 확인하고 리포트에 적어라** — 이 태스크가 고치는 것이 그것이다.
+
+- [ ] **Step 3: 훅과 스케일 함수를 만든다**
+
+`trailing-stop.ts` 의 함수는 `null` 을 보존한다. 진입 확인 전(`entryAtr === null`)에 분할이 나면 고칠 값이 없다.
+
+엔진은 **포지션 조정과 같은 자리에서** 훅을 부른다. 순서는 대기 주문 체결보다 먼저다 — 스톱 판정이 조정된 값으로 나야 한다.
+
+훅은 **선택적**이다. 구현하지 않은 전략은 영향이 없어야 한다.
+
+- [ ] **Step 4: 세 전략에 훅을 붙인다**
+
+`ema-trend-switch`, `rsi-reversion`, `range-breakout` 이 `HoldingState` 를 쓴다. 각자 자기 상태 맵을 순회해 해당 종목 항목을 고친다.
+
+**전략마다 상태를 어디에 어떻게 들고 있는지 다르다.** 각 파일을 읽고 맞춰라. 세 곳에 같은 코드를 복사하게 되면 `trailing-stop.ts` 로 올려라.
+
+- [ ] **Step 5: 테스트가 통과하는지 확인한다**
+
+Run: `pnpm test`
+Expected: 0 fail. 기준선은 이 태스크 시작 시점의 통과 수다
+
+**각 테스트의 판별력을 되돌려-깨뜨려 확인해라.** 훅 호출을 지우면 스톱 테스트가 깨져야 한다. 확인 방법을 리포트에 적어라 — 이 계획에서 "통과 확인" 만으로 세 번 놓쳤다.
+
+- [ ] **Step 6: `ENGINE_VERSION` 을 올린다**
+
+`engine.ts:83` 의 `ENGINE_VERSION` 이 `1.3.0` 그대로다. 이 계획이 체결 수량·평균단가·스톱 판정을 바꾸므로 §9.5 재현성 기준으로 올려야 한다. 기존 버전 증가 관례를 확인하고 맞춰라.
+
+- [ ] **Step 7: 커밋**
+
+```bash
+git add -A
+git commit -m "fix(backtests): 전략이 들고 있는 가격 상태도 분할을 넘게 한다"
+```
+
+---
+
+### Task 10: e2e·문서·최종 검증
 
 **Files:**
 - Modify: `tests/e2e/mvp-flow.spec.ts`, `scripts/e2e-server.ts`
@@ -688,7 +775,7 @@ Expected: 통과. **백그라운드로 띄운 서버를 반드시 정리해라**
 
 `docs/DECISIONS.md` 에 D-043 을 더한다. 다음 번호가 맞는지 `grep -n "^## D-0" docs/DECISIONS.md | tail -3` 로 확인해라 — 앞선 계획이 번호를 잘못 가정한 적이 있다.
 
-담을 것: 엔진이 분할을 걸친 포지션을 조정하지 않아 결과가 조용히 틀렸다는 것, 원본 봉을 고치지 않고 계산 시점에 반영하기로 한 이유, 게이트가 커버리지로 막고 gap 은 경고만 하는 이유(상장폐지 종목이 영원히 막히면 생존편향 제거와 충돌한다), 봉을 `onConflictDoNothing` 으로 바꾼 이유.
+담을 것: 엔진이 분할을 걸친 포지션·대기 주문·전략 가격 상태를 조정하지 않아 결과가 조용히 틀렸다는 것, 원본 봉을 고치지 않고 계산 시점에 반영하기로 한 이유, 게이트가 커버리지로 막고 gap 은 경고만 하는 이유(상장폐지 종목이 영원히 막히면 생존편향 제거와 충돌한다), 봉을 `onConflictDoNothing` 으로 바꾼 이유.
 
 - [ ] **Step 3: 스펙을 갱신한다**
 
