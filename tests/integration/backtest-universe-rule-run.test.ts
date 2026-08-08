@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
-import { krxDailyBars, symbolMasterEvents } from '../../src/server/shared/db/schema.js';
+import {
+  krxDailyBars,
+  krxNonTradingCoverage,
+  krxNonTradingDays,
+  symbolMasterEvents,
+} from '../../src/server/shared/db/schema.js';
 import {
   DEFAULT_EXECUTION_RULES,
   getCostProfile,
@@ -896,6 +901,86 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
       const run = ctx.container.resultsService.getRun(jobId)!;
       const openPositions = JSON.parse(run.openPositionsJson ?? '[]') as { symbol: string }[];
       expect(openPositions.some((position) => position.symbol === '000660')).toBe(false);
+
+      // 이 테스트는 거래불가일 커버리지를 심지 않는다 — nonTradingCoveredPeriod 가
+      // null 로 넘어와야 하고, 엔진은 그 상태를 "정보가 없다" 경고로 명시해야 한다.
+      // 세 값(null/미지정/구간)을 가르는 유일한 관측 지점이 이 경고 문구다.
+      const warnings = JSON.parse(run.warningsJson ?? '[]') as string[];
+      expect(warnings.some((w) => w.includes('거래불가일 정보가 없습니다'))).toBe(true);
+    },
+  );
+
+  it(
+    '거래불가일에는 매수 후보에서 빠지고, 커버리지가 있으면 구간을 명시한 경고만 남는다',
+    { timeout: 90_000 },
+    async () => {
+      const alive = buildDailyCandles('005930');
+      const nonTradingSymbolCandles = buildDailyCandles('000660');
+
+      registerSymbols(ctx.container, 'KR', ['005930', '000660']);
+      seedDailyBars(ctx.container.database.db, [...alive, ...nonTradingSymbolCandles]);
+      seedSymbolMasterUniverse(ctx.container, MASTER_DATES, [
+        { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '900' },
+        { standardCode: 'KR7000660001', shortCode: '000660', name: 'SK하이닉스', market: 'KOSPI', marketCapKrw: '800' },
+      ]);
+      seedCorporateActionCoverage(ctx.container, ['005930', '000660'], yearRange(2025, 2026));
+
+      // 이 픽스처(range-breakout, topN=2, 두 종목 모두 buildDailyCandles 의 동일한
+      // 가격 패턴)에서 두 종목은 항상 2025-08-12 에 첫 진입한다 — 신호는 전날
+      // (2025-08-11, lookbackBars=10 을 처음 채우는 봉)에 나고 NEXT_BAR_OPEN 으로
+      // 다음 거래일 시가에 체결된다. 000660 의 신호일(08-11)만 거래불가로 막아
+      // 그 진입 하나만 지연되는지 본다 — 워커가 tsMs 를 하루라도 다르게 구성했다면
+      // (Candle.tsMs 와 다른 규칙을 썼다면) 이 필터가 08-11 이 아닌 다른 날에 걸려
+      // 000660 도 005930 과 함께 08-12 에 그대로 들어가 버린다.
+      ctx.container.database.db
+        .insert(krxNonTradingDays)
+        .values({ date: '2025-08-11', shortCode: '000660', market: 'KOSPI', lastClose: 1 })
+        .run();
+      ctx.container.database.db
+        .insert(krxNonTradingCoverage)
+        .values({ startDate: '2025-07-27', endDate: '2026-07-24', syncedAtMs: 0 })
+        .run();
+
+      const created = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/backtests',
+        cookies: { qp_session: cookie },
+        payload: buildRequest(2),
+      });
+      expect(created.statusCode).toBe(201);
+      const jobId = (created.json().job as { id: string }).id;
+
+      ctx.container.jobOrchestrator.tick();
+      await waitFor(() => {
+        const job = ctx.container.jobQueue.getJob(jobId);
+        return job !== null && ctx.container.jobQueue.isTerminal(job.status);
+      }, 60_000);
+
+      const job = ctx.container.jobQueue.getJob(jobId)!;
+      expect(job.error).toBeNull();
+      expect(job.status).toBe('COMPLETED');
+
+      const { trades } = ctx.container.resultsService.getTrades(jobId, { limit: 1000, offset: 0 });
+      const blockedEntryTsMs = Date.UTC(2025, 7, 12); // 2025-08-12, 막지 않았다면 둘 다 여기서 들어간다
+
+      // 대조군: 거래불가로 막지 않은 005930 은 예정대로 그날 들어간다.
+      expect(trades.some((t) => t.symbol === '005930' && t.entryTsMs === blockedEntryTsMs)).toBe(
+        true,
+      );
+      // 000660 은 그날 들어가지 않는다 — 매수 후보에서 빠졌다는 증거다.
+      expect(trades.some((t) => t.symbol === '000660' && t.entryTsMs === blockedEntryTsMs)).toBe(
+        false,
+      );
+      // 그날만 미뤄졌을 뿐 완전히 매수를 못 하게 된 것은 아니다.
+      expect(trades.some((t) => t.symbol === '000660')).toBe(true);
+
+      // 커버리지를 심었으므로 "정보가 없습니다" 경고는 없고, 구간을 명시하는 경고만 남는다.
+      const run = ctx.container.resultsService.getRun(jobId)!;
+      const warnings = JSON.parse(run.warningsJson ?? '[]') as string[];
+      expect(warnings.some((w) => w.includes('거래불가일 정보가 없습니다'))).toBe(false);
+      expect(
+        warnings.some((w) => w.includes('거래불가일 정보는 2025-07-27 ~ 2026-07-24 구간만 반영됐습니다')),
+      ).toBe(true);
     },
   );
 });
