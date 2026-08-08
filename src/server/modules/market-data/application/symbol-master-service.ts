@@ -658,14 +658,16 @@ export class SymbolMasterService {
       }
     }
 
+    // `warn` 이다. 프로덕션 로그 레벨에서 `debug` 는 보이지 않는다.
+    // 봉이 조용히 빠진 채로 백테스트가 도는 것을 운영자가 알아야 한다.
     if (skipped > 0) {
-      this.deps.logger.debug(
+      this.deps.logger.warn(
         { module: 'market-data', event: 'symbol-master.daily-bars-skipped', date, skipped },
         '가격·거래량 중 null 값이 있는 일봉 행을 건너뛴다',
       );
     }
     if (invalidCount > 0) {
-      this.deps.logger.debug(
+      this.deps.logger.warn(
         { module: 'market-data', event: 'symbol-master.daily-bars-invalid', date, invalidCount },
         'OHLC 값이 서로 어긋난 일봉 행을 건너뛴다',
       );

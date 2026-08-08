@@ -42,9 +42,9 @@ export function adjustForRatio(
   // ratio가 정수가 아닌 유리수(예: 3/11, 0.7)일 때 누적 오차가 생긴다.
   // 값이 가장 가까운 정수에서 1e-9 이내면 그 정수가 수학적 참값이다.
   // epsilon = 1e-9 는 보수적인 선택이다:
-  // - 실제 오차는 typically 1e-15 ~ 1e-10
-  // - 1e-9는 machine epsilon(~2.2e-16) 보다 훨씬 크지만 0.5보다는 훨씬 작아
-  //   실제 단주를 놓치지 않는다
+  // - 실제 오차는 대개 1e-15 ~ 1e-10 범위다
+  // - 1e-9 는 배정밀도 부동소수점의 최소 오차 단위(약 2.2e-16)보다 훨씬 크다
+  // - 그러면서도 0.5 보다는 훨씬 작아 실제 단주를 놓치지 않는다
   const epsilon = 1e-9;
   const whole = Math.abs(raw - Math.round(raw)) < epsilon ? Math.round(raw) : Math.floor(raw);
   const fraction = raw - whole;

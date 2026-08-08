@@ -51,7 +51,7 @@ describe('adjustForRatio', () => {
 
   it('부동소수점 오차: 3/11 × 55 = 15', () => {
     // ratio = 3/11 ≈ 0.2727... 는 이진 표현으로 정확하지 않다
-    // 55 × (3/11) 수학적으로는 15 이지만 floating point로는 14.999... 가 될 수 있다
+    // 55 × (3/11) 은 수학적으로 15 지만 부동소수점으로는 14.999... 가 될 수 있다
     const ratio = 3 / 11;
     const result = adjustForRatio(55, 10_000, ratio, 10_000);
     expect(result.quantity).toBe(15);

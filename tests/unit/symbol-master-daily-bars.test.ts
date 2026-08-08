@@ -142,8 +142,8 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
     // 흉내낸다 — checkpointDate 는 있는데 coverage 는 비어 재수집이 다시 최초 수집 분기를 탄다.
     ctx.svc.saveCheckpoint(date, new Map(), true);
     expect(ctx.svc.isCovered(date)).toBe(false);
-    // 그 죽은 시도가 이미 남겨 둔 stale 일봉 행 두 개(서로 다른 종목·값) — 자본변동은
-    // 계산 시점에 반영하므로 재수집이 들어와도 이 값은 그대로 남아야 한다.
+    // 그 죽은 시도가 남겨 둔 낡은 일봉 행 두 개다(서로 다른 종목·값).
+    // 자본변동은 계산 시점에 반영하므로 재수집이 들어와도 이 값은 그대로 남아야 한다.
     ctx.t.container.database.db
       .insert(krxDailyBars)
       .values([
@@ -178,10 +178,10 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
     await teardown(ctx);
   });
 
-  it('가격 4개나 거래량 중 하나라도 null 인 행은 건너뛰고 건수를 debug 로 남긴다', async () => {
+  it('가격 4개나 거래량 중 하나라도 null 인 행은 건너뛰고 건수를 warn 으로 남긴다', async () => {
     const ctx = await setup();
     const date = '2023-01-02';
-    const debugSpy = vi.spyOn(ctx.t.container.logger, 'debug');
+    const warnSpy = vi.spyOn(ctx.t.container.logger, 'warn');
     ctx.fake.setResponse('stk_bydd_trd', '20230102', {
       body: krxEnvelope([
         dailyFixture(),
@@ -195,7 +195,7 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
     const rows = allBars(ctx);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ shortCode: '005930' });
-    expect(debugSpy).toHaveBeenCalledWith(
+    expect(warnSpy).toHaveBeenCalledWith(
       expect.objectContaining({ skipped: 1 }),
       expect.any(String),
     );
@@ -231,7 +231,7 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
   it('어긋난 행 건수를 로그에 남긴다', async () => {
     const ctx = await setup();
     const date = '2023-01-02';
-    const debugSpy = vi.spyOn(ctx.t.container.logger, 'debug');
+    const warnSpy = vi.spyOn(ctx.t.container.logger, 'warn');
     ctx.fake.setResponse('stk_bydd_trd', '20230102', {
       body: krxEnvelope([
         dailyFixture(),
@@ -249,7 +249,7 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
 
     await ctx.svc.ingestDate(date);
 
-    expect(debugSpy).toHaveBeenCalledWith(
+    expect(warnSpy).toHaveBeenCalledWith(
       expect.objectContaining({ invalidCount: 1 }),
       expect.any(String),
     );
