@@ -1197,8 +1197,42 @@ git commit -m "docs(decisions): 가격 데이터 기능 제거 결정을 남긴�
 
 이 계획이 끝나면 아래가 남는다. 후속 계획이 다룬다.
 
+### 원래 계획된 것
+
 1. `ParquetFactRepository` → SQLite 저장소 교체
 2. `DuckDbService` 제거, `@duckdb/node-api` 의존성 제거, `config.duckdbThreads`/`duckdbMemoryLimit` 제거
 3. 스키마 정리 — `symbol_slices`·`symbol_coverage`·`data_sync_jobs` 삭제, `symbol_versions.slice` 등 죽은 컬럼 제거
 4. 마이그레이션 0000~0007 스쿼시 (D-015 의 "모든 기존 DB 를 버릴 수 있을 때만 가능" 조건을 만족한다)
 5. `backup.sh` 에서 parquet 관련 잔재 정리
+
+### 실행 중 발견해 이월한 것
+
+6. **`docs/SPEC.md` 정리.** 아직 CSV Import(789행), `GET /api/v1/data-jobs/:jobId`(828행), 1시간봉 집계 규칙(761-767행), "백테스트 기본 소비는 사전 집계 1시간봉"(672행)을 계약으로 규정한다. 코드 전반이 `스펙 §8`·`§11`·`§13` 으로 인용하는 살아 있는 문서라 방치하면 다음 사람이 없는 계약을 읽는다. **이 계획이 `docs/DECISIONS.md` 만 대상으로 삼은 것이 공백이었다.**
+
+7. **봉 재현성 gap.** `writeDailyBars`(`symbol-master-service.ts`)의 `onConflictDoUpdate` 가 이미 pin 된 날짜의 OHLCV 를 덮어쓴다. 버전을 올리지 않아 `backtest-child.ts` 의 drift 경고도 뜨지 않는다 — 대기 중인 백테스트의 입력이 조용히 바뀔 수 있다. **Plan 1 이 만든 것이 아니다**: KRX 일봉은 종목별 버전 계보를 가진 적이 없다. 고치려면 봉 축 버전 설계가 선행돼야 한다.
+
+8. **OHLC 정합성 검사가 사라졌다.** `isValidCandle`(`candle.ts`)이 소비자를 잃었다 — CSV 파서와 broker sync 가 유일 호출부였다. `high >= low` 같은 검사를 하는 코드가 시스템에 하나도 없다. KRX 경로는 원래 검사한 적이 없어 회귀는 아니지만, 되살릴 자리는 `writeDailyBars` 다.
+
+9. **고아 코드 정리.** `use-market-support.ts`(파일 전체), `api-client.ts` 의 `postForm`, `server.ts` 의 `fastifyMultipart` 등록(multipart 라우트가 0개인데 50MB 바디 파서가 산다), `GET /markets`, `config.ts` 의 `syncMinFreeDiskMb`(+ `infra/app.env.example:36`), `candle.ts` 의 `isValidCandle`·`normalizeCandles`, `exchange-session.ts` 의 `fromLocalTime`·`hourlyBucketStarts`, `prefill.ts` 의 `PrefillState.timeframe`(쓰기 전용), `ports.ts` 의 `StockInfo.sharesOutstanding`.
+
+10. **구조 정리.** `ensureUniverseRegistered` 가 한 줄 통과 래퍼로 남았다(묶을 것이 하나뿐). `registeredCoverage` 가 제출 한 번에 3회 반복돼 200종목이면 `exists` 600회. `backtest-limits.ts` 는 존재 이유(§7 의존 방향)가 사라져 `bar-estimate.ts` 로 합칠 수 있다.
+
+11. **되살릴 테스트 하나.** `tests/unit/swing-strategies.test.ts` 의 "봉 주기 무관 — 같은 가격 경로면 같은 주문 시퀀스" 를 지웠는데, 검증하던 불변식("전략은 봉 수로 돌지 벽시계로 돌지 않는다")은 지금도 유효하다. `timeframe: '1d'` 를 유지한 채 `tsMs` 간격만 `DAY` vs `MINUTE` 로 바꾸면 되살아난다.
+
+12. **도달 불가 분기.** `symbol-routes.ts:157-161` 의 `message.includes('실행 중') ? 409`, `format.ts:103-104` 의 `'1m'`/`'1h'` 라벨 매핑(재기준이 생겨 사실상 도달 불가), 통합 테스트 4곳의 "가격 데이터 탭" 언급.
+
+---
+
+## 실행 회고 — 계획이 일곱 번 틀렸다
+
+이 계획은 실행 중 일곱 번 정정됐다. 여섯 번은 구현자가, 한 번은 최종 리뷰가 잡았다. 다음 계획을 쓸 때 같은 부류를 줄이려면:
+
+1. **한 객체가 여러 포트를 구현할 수 있다.** `createTossMarketDataSource` 는 포트 4개를 한 객체로 냈다. "이 포트를 지운다"는 판단 전에 그 구현체가 무엇을 더 제공하는지 확인해야 한다.
+2. **구조적 타입 의존은 grep 으로 안 보인다.** `FactSyncService` 는 `SymbolVersionBumper` 포트로 `bumpVersion` 을 받는다 — `symbolService.bumpVersion` 을 검색해도 안 걸린다.
+3. **캐시를 지우면 캐시의 부작용도 같이 지워진다.** `symbol_coverage` 를 걷어내니 그것이 부수적으로 제공하던 종목 등록 게이트가 사라졌다. 캐시 제거 계획은 "이 캐시가 우연히 보장하던 것"을 먼저 목록화해야 한다.
+4. **삭제가 부트스트랩을 깨뜨릴 수 있다.** `dataset-slice.ts` 삭제가 `container.ts` 의 로드 사슬을 끊어 앱이 뜨지 않았다.
+5. **문서 번호를 가정하지 마라.** 계획이 D-032 를 쓰라고 했으나 이미 D-040 까지 차 있었다.
+6. **정정 커밋마다 "이 정정이 무효화한 주석"을 확인해라.** 이 브랜치에서 주석과 코드가 어긋난 자리는 전부 태스크 경계 아니면 계획 정정 지점이었다. 등록 게이트 정정은 코드만 되돌리고 같은 파일 주석은 그대로 뒀다.
+7. **검증 grep 의 범위가 좁으면 확인했다는 착각만 남는다.** `MarketDataSource`(PascalCase)만 훑어 `toss-market-data-source`(kebab-case) 파일 경로 참조 3곳을 놓쳤다. 심볼과 파일명을 함께 훑어야 한다.
+
+CLAUDE.md 의 "3줄 이상 문장 금지" 는 여섯 번 어겨졌고 그중 네 번이 **그 규칙을 고치는 커밋에서** 재발했다. 문장을 쓴 뒤 줄 수를 세는 단계를 명시적으로 넣어야 한다.
