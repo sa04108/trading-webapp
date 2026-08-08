@@ -4,7 +4,7 @@ import {
   SymbolMasterService,
   type SymbolMasterServiceDeps,
 } from '../../src/server/modules/market-data/application/symbol-master-service.js';
-import { krxDailyBars, krxNonTradingDays } from '../../src/server/shared/db/schema.js';
+import { krxDailyBars, krxNonTradingDays, krxNonTradingCoverage } from '../../src/server/shared/db/schema.js';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
 import {
   baseInfoFixture,
@@ -100,6 +100,39 @@ describe('SymbolMasterService.ingestDate — 거래불가일', () => {
     expect(nonTrading[0]?.market).toBe('KOSDAQ');
     expect(nonTrading[0]?.lastClose).toBe(12_100);
 
+    await teardown(ctx);
+  });
+});
+
+describe('거래불가일 조회', () => {
+  it('구간 안의 행만 날짜·코드 오름차순으로 돌려준다', async () => {
+    const ctx = await setup();
+    ctx.t.container.database.db.insert(krxNonTradingDays).values([
+      { date: '2021-06-14', shortCode: '215600', market: 'KOSDAQ', lastClose: 12_100 },
+      { date: '2021-06-16', shortCode: '950160', market: 'KOSDAQ', lastClose: 8_010 },
+      { date: '2021-06-15', shortCode: '215600', market: 'KOSDAQ', lastClose: 12_100 },
+    ]).run();
+
+    const rows = ctx.svc.nonTradingDaysBetween('2021-06-15', '2021-06-16');
+
+    expect(rows).toEqual([
+      { date: '2021-06-15', shortCode: '215600', lastClose: 12_100 },
+      { date: '2021-06-16', shortCode: '950160', lastClose: 8_010 },
+    ]);
+    await teardown(ctx);
+  });
+
+  it('구간 전체를 덮는 커버 행이 있어야 covered 다', async () => {
+    const ctx = await setup();
+    expect(ctx.svc.isNonTradingRangeCovered('2021-06-01', '2021-06-30')).toBe(false);
+
+    ctx.t.container.database.db.insert(krxNonTradingCoverage).values({
+      startDate: '2021-01-01', endDate: '2021-12-31', syncedAtMs: 0,
+    }).run();
+
+    expect(ctx.svc.isNonTradingRangeCovered('2021-06-01', '2021-06-30')).toBe(true);
+    // 시작이 커버 밖이면 덮은 것이 아니다
+    expect(ctx.svc.isNonTradingRangeCovered('2020-06-01', '2021-06-30')).toBe(false);
     await teardown(ctx);
   });
 });

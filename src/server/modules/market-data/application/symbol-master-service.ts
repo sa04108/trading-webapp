@@ -4,6 +4,7 @@ import type { AppDatabase } from '../../../shared/db/database.js';
 import {
   krxDailyBars,
   krxNonTradingDays,
+  krxNonTradingCoverage,
   symbolMasterCheckpointSymbols,
   symbolMasterCheckpoints,
   symbolMasterCoverage,
@@ -722,6 +723,47 @@ export class SymbolMasterService {
       .select({ id: symbolMasterCoverage.id })
       .from(symbolMasterCoverage)
       .where(and(lte(symbolMasterCoverage.startDate, date), gte(symbolMasterCoverage.endDate, date)))
+      .get();
+    return row !== undefined;
+  }
+
+  /**
+   * 구간 안의 거래불가일 전체. 날짜 오름차순, 같은 날짜 안에서는 코드 오름차순이다 —
+   * 호출부가 이 순서를 그대로 해시에 넣을 수 있어야 재현성이 흔들리지 않는다.
+   */
+  nonTradingDaysBetween(
+    from: string,
+    to: string,
+  ): readonly { date: string; shortCode: string; lastClose: number }[] {
+    return this.deps.db
+      .select({
+        date: krxNonTradingDays.date,
+        shortCode: krxNonTradingDays.shortCode,
+        lastClose: krxNonTradingDays.lastClose,
+      })
+      .from(krxNonTradingDays)
+      .where(and(gte(krxNonTradingDays.date, from), lte(krxNonTradingDays.date, to)))
+      .orderBy(asc(krxNonTradingDays.date), asc(krxNonTradingDays.shortCode))
+      .all();
+  }
+
+  /**
+   * 구간 전체를 덮는 커버 행이 하나라도 있는지. 구간을 이어 붙여 판정하지는 않는다 —
+   * 백필은 한 번에 한 구간을 처리하므로 조각난 커버가 생기지 않는다.
+   *
+   * 행이 없는 날짜가 "거래불가 종목이 없었다" 인지 "아직 모른다" 인지를 이 메서드로만
+   * 가른다. 이 구분이 없으면 결과 경고가 백필 전에도 "반영한다" 고 거짓말한다.
+   */
+  isNonTradingRangeCovered(from: string, to: string): boolean {
+    const row = this.deps.db
+      .select({ id: krxNonTradingCoverage.id })
+      .from(krxNonTradingCoverage)
+      .where(
+        and(
+          lte(krxNonTradingCoverage.startDate, from),
+          gte(krxNonTradingCoverage.endDate, to),
+        ),
+      )
       .get();
     return row !== undefined;
   }
