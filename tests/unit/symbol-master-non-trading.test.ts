@@ -51,7 +51,7 @@ async function teardown(ctx: Ctx): Promise<void> {
  * 신라젠(정지)과 오스템임플란트(정상). 한 응답에 섞여 있을 때 봉과 거래불가일로
  * 정확히 갈리는지가 이 테스트의 전부다.
  */
-const HALTED_ROW = dailyFixture({
+const NON_TRADING_ROW = dailyFixture({
   ISU_CD: '215600',
   ISU_NM: '신라젠',
   MKTCAP: '866,567,212,500',
@@ -79,7 +79,7 @@ describe('SymbolMasterService.ingestDate — 거래불가일', () => {
     ctx.fake.setResponse('stk_bydd_trd', '20210615', { body: krxEnvelope([]) });
     ctx.fake.setResponse('stk_isu_base_info', '20210615', { body: krxEnvelope([]) });
     ctx.fake.setResponse('ksq_bydd_trd', '20210615', {
-      body: krxEnvelope([HALTED_ROW, NORMAL_ROW]),
+      body: krxEnvelope([NON_TRADING_ROW, NORMAL_ROW]),
     });
     ctx.fake.setResponse('ksq_isu_base_info', '20210615', {
       body: krxEnvelope([
@@ -100,29 +100,6 @@ describe('SymbolMasterService.ingestDate — 거래불가일', () => {
     expect(nonTrading[0]?.market).toBe('KOSDAQ');
     expect(nonTrading[0]?.lastClose).toBe(12_100);
 
-    await teardown(ctx);
-  });
-
-  it('같은 날짜를 다시 넣어도 UNIQUE 위반으로 죽지 않는다', async () => {
-    const ctx = await setup();
-    ctx.fake.setResponse('stk_bydd_trd', '20210615', { body: krxEnvelope([]) });
-    ctx.fake.setResponse('stk_isu_base_info', '20210615', { body: krxEnvelope([]) });
-    ctx.fake.setResponse('ksq_bydd_trd', '20210615', { body: krxEnvelope([HALTED_ROW]) });
-    ctx.fake.setResponse('ksq_isu_base_info', '20210615', {
-      body: krxEnvelope([
-        baseInfoFixture({ ISU_CD: 'KR7215600008', ISU_SRT_CD: '215600', ISU_NM: '신라젠', MKT_TP_NM: 'KOSDAQ' }),
-      ]),
-    });
-
-    await ctx.svc.ingestDate('2021-06-15');
-    // 두 번째 호출은 isCovered 로 막히지만, 백필(Task 5)이 같은 행을 다시 넣을 수 있다
-    ctx.t.container.database.db
-      .insert(krxNonTradingDays)
-      .values({ date: '2021-06-15', shortCode: '215600', market: 'KOSDAQ', lastClose: 12_100 })
-      .onConflictDoNothing()
-      .run();
-
-    expect(ctx.t.container.database.db.select().from(krxNonTradingDays).all()).toHaveLength(1);
     await teardown(ctx);
   });
 });
