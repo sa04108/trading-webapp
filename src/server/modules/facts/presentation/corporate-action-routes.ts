@@ -109,9 +109,14 @@ export function registerCorporateActionRoutes(
       toYear: body.toYear,
     });
     if (job === null) {
-      return reply
-        .code(409)
-        .send({ error: '이미 실행 중인 자본변동 수집 작업이 있습니다. 완료되거나 취소된 뒤 다시 시도하세요.' });
+      // 도는 잡의 id 를 함께 보낸다.
+      // 메시지만 보내면 새로고침한 클라이언트가 자기 잡에 다시 붙을 길이 없다.
+      const active = orchestrator.getActiveJob();
+      return reply.code(409).send({
+        error: '이미 실행 중인 자본변동 수집 작업이 있습니다. 완료되거나 취소된 뒤 다시 시도하세요.',
+        activeJobId: active?.id ?? null,
+        job: active ? serializeJob(active) : null,
+      });
     }
     return reply.code(201).send({ job: serializeJob(job) });
   });
@@ -146,7 +151,7 @@ export function registerCorporateActionRoutes(
       if (!job) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
 
       reply.hijack();
-      // hijack 은 onSend hook 을 우회하므로 §16 보안 헤더를 직접 포함한다
+      // `hijack` 은 `onSend` 훅을 건너뛴다 — §16 보안 헤더를 여기서 직접 넣는다
       reply.raw.writeHead(200, {
         ...SECURITY_HEADERS,
         'content-type': 'text/event-stream',

@@ -141,3 +141,105 @@ describe('CorporateActionSyncOrchestrator — CLI 컨테이너 생성이 실행 
     handle.close();
   });
 });
+
+/**
+ * 취소 플래그는 이 프로세스 안의 `Map` 이고 `start()` 만 채운다.
+ * `recoverOrphaned()` 를 부르지 않는 부팅 경로(`scripts/e2e-server.ts`,
+ * `tests/helpers/test-app.ts`)가 남긴 `RUNNING` 행에는 그 플래그가 없다.
+ * 그런 행에 취소를 걸어도 아무도 플래그를 보지 않으면 `hasActiveJob()` 이 참으로
+ * 굳어 새 잡이 계속 409 가 된다.
+ */
+describe('CorporateActionSyncOrchestrator.cancel — 남의 프로세스가 남긴 잡', () => {
+  it('플래그가 없는 잡이면 행을 직접 종료한다', () => {
+    const handle = openDatabase(':memory:');
+    const orphanId = insertOrphan(handle, 'RUNNING');
+    const orchestrator = new CorporateActionSyncOrchestrator(handle, noopFactSync(), CLOCK, LOGGER);
+
+    expect(orchestrator.cancel(orphanId)).toBe('CANCELLING');
+
+    // 회귀 지점: 플래그만 세우고 끝내면 이 행이 영원히 `RUNNING` 으로 남는다.
+    expect(orchestrator.getJob(orphanId)?.status).toBe('CANCELLED');
+    expect(orchestrator.hasActiveJob()).toBe(false);
+    handle.close();
+  });
+
+  it('행을 종료했으므로 곧바로 새 잡을 받는다', async () => {
+    const handle = openDatabase(':memory:');
+    const orphanId = insertOrphan(handle, 'RUNNING');
+    const orchestrator = new CorporateActionSyncOrchestrator(handle, noopFactSync(), CLOCK, LOGGER);
+
+    orchestrator.cancel(orphanId);
+    const job = orchestrator.start({ symbols: ['000660'], fromYear: 2026, toYear: 2026 });
+
+    expect(job).not.toBeNull();
+    await waitForTerminal(orchestrator, job!.id);
+    handle.close();
+  });
+
+  it('종료된 잡은 여전히 취소 대상이 아니다', () => {
+    const handle = openDatabase(':memory:');
+    const orphanId = insertOrphan(handle, 'RUNNING');
+    const orchestrator = new CorporateActionSyncOrchestrator(handle, noopFactSync(), CLOCK, LOGGER);
+
+    orchestrator.cancel(orphanId);
+
+    expect(orchestrator.cancel(orphanId)).toBe('NOT_CANCELLABLE');
+    handle.close();
+  });
+
+  it('없는 잡도 취소 대상이 아니다', () => {
+    const handle = openDatabase(':memory:');
+    const orchestrator = new CorporateActionSyncOrchestrator(handle, noopFactSync(), CLOCK, LOGGER);
+
+    expect(orchestrator.cancel('cas_nope')).toBe('NOT_CANCELLABLE');
+    handle.close();
+  });
+});
+
+describe('CorporateActionSyncOrchestrator.getActiveJob — 409 가 실어 보낼 잡', () => {
+  it('도는 잡이 없으면 null 이다', () => {
+    const handle = openDatabase(':memory:');
+    const orchestrator = new CorporateActionSyncOrchestrator(handle, noopFactSync(), CLOCK, LOGGER);
+
+    expect(orchestrator.getActiveJob()).toBeNull();
+    handle.close();
+  });
+
+  it('도는 잡이 있으면 그 행을 돌려준다 — 클라이언트가 이 id 로 다시 붙는다', () => {
+    const handle = openDatabase(':memory:');
+    const orphanId = insertOrphan(handle, 'RUNNING');
+    const orchestrator = new CorporateActionSyncOrchestrator(handle, noopFactSync(), CLOCK, LOGGER);
+
+    expect(orchestrator.getActiveJob()?.id).toBe(orphanId);
+    handle.close();
+  });
+});
+
+describe('CorporateActionSyncOrchestrator.stop — 종료 중에는 더 쓰지 않는다', () => {
+  it('stop() 뒤에 끝난 잡은 상태를 옮기지 않는다 — 다음 부팅이 거둔다', async () => {
+    const handle = openDatabase(':memory:');
+    // 첫 `await` 에서 멈춰 있다가 풀어주는 가짜 수집 — `stop()` 이 끼어들 틈을 만든다
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const factSync = {
+      syncCorporateActions: async () => {
+        await gate;
+        return { savedFacts: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null };
+      },
+    } as never;
+    const orchestrator = new CorporateActionSyncOrchestrator(handle, factSync, CLOCK, LOGGER);
+
+    const job = orchestrator.start({ symbols: ['005930'], fromYear: 2026, toYear: 2026 });
+    expect(orchestrator.getJob(job!.id)?.status).toBe('RUNNING');
+
+    orchestrator.stop();
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // 회귀 지점: 종료 중에 상태를 쓰면 이미 닫힌 DB 를 만날 수 있다.
+    expect(orchestrator.getJob(job!.id)?.status).toBe('RUNNING');
+    handle.close();
+  });
+});

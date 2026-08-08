@@ -323,6 +323,9 @@ export function createContainer(config: AppConfig): Container {
     close: () => {
       clearInterval(pruneTimer);
       jobOrchestrator.stop();
+      // 도는 자본변동 수집에 취소 플래그를 세운 뒤 DB 를 닫는다.
+      // 세우지 않으면 수집이 닫힌 DB 에 계속 쓰려 들고 그 실패가 밖으로 샌다.
+      corporateActionSyncOrchestrator.stop();
       duckdb.close();
       database.close();
     },
