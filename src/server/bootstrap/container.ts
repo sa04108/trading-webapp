@@ -37,6 +37,7 @@ import { JobOrchestrator } from '../modules/backtest/application/job-orchestrato
 import { JobQueue } from '../modules/backtest/application/job-queue.js';
 import { ResultsService } from '../modules/backtest/application/results-service.js';
 import type { FactRepository } from '../modules/facts/application/ports.js';
+import { SqliteCorporateActionCoverageStore } from '../modules/facts/application/corporate-action-coverage.js';
 import { SqliteFactCoverageStore } from '../modules/facts/application/fact-coverage-store.js';
 import { FactSyncService } from '../modules/facts/application/fact-sync-service.js';
 import { createDartFactSource } from '../modules/facts/infrastructure/dart/dart-fact-source.js';
@@ -191,6 +192,9 @@ export function createContainer(config: AppConfig): Container {
   // 팩트도 백테스트 입력이다 — 캔들과 같은 버전 체인에 올린다 (§9.5).
   // SymbolService 를 통째로 넘기지 않고 좁은 포트(SymbolVersionBumper)로 받는다.
   const factCoverageStore = new SqliteFactCoverageStore(database.db);
+  // 자본변동 전용 수집(Task 5)이 갱신하는 별도 커버리지 — 재무 커버리지와 컬럼이
+  // 다르다 (corporate-action-coverage.ts 헤더 참고).
+  const actionCoverageStore = new SqliteCorporateActionCoverageStore(database.db);
   const factSyncService = new FactSyncService(
     factSource,
     factRepository,
@@ -198,6 +202,7 @@ export function createContainer(config: AppConfig): Container {
     symbolService,
     clock,
     factCoverageStore,
+    actionCoverageStore,
   );
 
   // 증권사 선택은 조립부 전용 지식 (§2.4) — 애플리케이션은 StockInfoSource 만 안다.
