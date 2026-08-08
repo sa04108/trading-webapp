@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, gte, lt, lte, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, lt, lte } from 'drizzle-orm';
 import type { Clock } from '../../../shared/clock.js';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import {
@@ -12,6 +12,8 @@ import {
 } from '../../../shared/db/schema.js';
 import { newId } from '../../../shared/ids.js';
 import type { Logger } from '../../../shared/logger.js';
+import type { Candle } from '../domain/candle.js';
+import { isValidCandle } from '../domain/candle.js';
 import { classifyKrxIssue } from '../domain/krx-filter-policy.js';
 import { addCalendarDays } from '../domain/kst-date.js';
 import type {
@@ -589,12 +591,15 @@ export class SymbolMasterService {
    * 이벤트·coverage·거래일 기록과 같은 트랜잭션 안에서 불러야 한다 — 따로 두면 중간에
    * 죽었을 때 커버는 됐는데 봉만 빠진 상태가 남는다.
    *
-   * 가격 4개나 거래량 중 하나라도 null 인 행(거래정지 등)은 저장할 컬럼이 NOT NULL 이라
-   * 애초에 넣을 수 없으니 건너뛰고 건수만 남긴다.
+   * 가격 4개나 거래량 중 하나라도 null 인 행(거래정지 등)은 저장할 컬럼이 NOT NULL
+   * 이라 애초에 넣을 수 없다. 건너뛰고 건수만 남긴다.
+   * null 은 아니지만 high < low 처럼 OHLC 관계가 어긋난 행도 파싱 버그일 수 있다.
+   * `isValidCandle` 로 걸러 따로 센다 — 원인이 다르면 운영자가 로그에서 구분해야 한다.
    *
-   * onConflictDoUpdate 의 set 에 excluded.* 를 써서 배치 안 각 행이 자기 자신의 값으로
-   * 갱신되게 한다 — set 에 리터럴을 쓰면 배치 전체가 같은 값 하나로 덮이므로 재수집이
-   * 서로 다른 종목을 뒤섞어 버린다.
+   * 이미 있는 날짜는 건드리지 않는다. 자본변동은 계산 시점에 반영하므로(설계
+   * 2026-08-08-corporate-action-continuity) 봉을 고쳐 받을 이유가 없다.
+   * ingestDate 의 isCovered 게이트가 이미 재수집을 막지만, 저장 계층도 같은
+   * 규칙을 말해야 읽는 사람이 "봉이 바뀔 수 있다" 고 오해하지 않는다.
    */
   private writeDailyBars(
     tx: AppDatabase,
@@ -607,7 +612,11 @@ export class SymbolMasterService {
       ['KOSDAQ', kosdaqTrades],
     ];
 
+    // Candle.tsMs 규약은 그 거래일의 UTC 자정이다 (krx-daily-candle-repository.ts 참고).
+    const tsMs = Date.parse(`${date}T00:00:00Z`);
+
     let skipped = 0;
+    let invalidCount = 0;
     const rows: (typeof krxDailyBars.$inferInsert)[] = [];
     for (const [market, trades] of byMarket) {
       for (const trade of trades) {
@@ -619,6 +628,21 @@ export class SymbolMasterService {
           || trade.volume === null
         ) {
           skipped += 1;
+          continue;
+        }
+        const candle: Candle = {
+          symbol: trade.shortCode,
+          market: 'KR',
+          timeframe: '1d',
+          tsMs,
+          open: trade.open,
+          high: trade.high,
+          low: trade.low,
+          close: trade.close,
+          volume: trade.volume,
+        };
+        if (!isValidCandle(candle)) {
+          invalidCount += 1;
           continue;
         }
         rows.push({
@@ -640,22 +664,18 @@ export class SymbolMasterService {
         '가격·거래량 중 null 값이 있는 일봉 행을 건너뛴다',
       );
     }
+    if (invalidCount > 0) {
+      this.deps.logger.debug(
+        { module: 'market-data', event: 'symbol-master.daily-bars-invalid', date, invalidCount },
+        'OHLC 값이 서로 어긋난 일봉 행을 건너뛴다',
+      );
+    }
 
     // SQLite 바인딩 변수 한도(999)를 피하려 500개 단위로 나눠 넣는다 — writeCheckpoint 와 같은 이유다
     for (let i = 0; i < rows.length; i += 500) {
       tx.insert(krxDailyBars)
         .values(rows.slice(i, i + 500))
-        .onConflictDoUpdate({
-          target: [krxDailyBars.shortCode, krxDailyBars.date],
-          set: {
-            market: sql`excluded.market`,
-            open: sql`excluded.open`,
-            high: sql`excluded.high`,
-            low: sql`excluded.low`,
-            close: sql`excluded.close`,
-            volume: sql`excluded.volume`,
-          },
-        })
+        .onConflictDoNothing()
         .run();
     }
   }
