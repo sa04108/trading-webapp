@@ -31,6 +31,20 @@ export function updateEma(state: EmaState, price: number, bars: number): void {
   state.value = state.value + alpha * (price - state.value);
 }
 
+/**
+ * 액면분할 등 자본변동 비율만큼 누적값을 내린다.
+ *
+ * `value` 는 가격 그 자체라 분할 비율만큼 나눈다.
+ * 나누지 않으면 분할 봉에서 평활값이 분할 전 가격대에 머문다.
+ * 그 상태로 `fast`·`slow` 간격을 재면 없던 하락 추세가 보인다
+ * (`ema-trend-switch` 가 `TREND_END` 로 허위 청산한다).
+ *
+ * `barsSeen` 은 봉 개수라 건드리지 않는다 — 분할은 워밍업 진척을 되돌리지 않는다.
+ */
+export function scaleEma(state: EmaState, ratio: number): void {
+  if (state.value !== null) state.value /= ratio;
+}
+
 export interface AtrState {
   atr: number | null;
   prevClose: number | null;
@@ -61,6 +75,22 @@ export function updateAtr(
 }
 
 /**
+ * 자본변동 비율만큼 누적값을 내린다.
+ *
+ * `atr` 은 가격의 차이라 가격과 같은 단위다. 그래서 비율만큼 나눈다.
+ * `prevClose` 는 다음 봉의 진폭을 재는 기준 가격이라 함께 나눈다.
+ * 특히 `prevClose` 를 두면 분할 봉의 진폭이 분할 낙폭 전체가 된다.
+ * 그러면 `atr` 이 크게 튄다.
+ * 그 값을 손절 폭으로 쓰는 주문 수량은 1주 밑으로 떨어져 진입 자체가 사라진다.
+ *
+ * `barsSeen` 은 봉 개수라 그대로 둔다.
+ */
+export function scaleAtr(state: AtrState, ratio: number): void {
+  if (state.atr !== null) state.atr /= ratio;
+  if (state.prevClose !== null) state.prevClose /= ratio;
+}
+
+/**
  * 최근 `window` 개 값의 최대 — 돌파 기준선(전고점)용 고정 길이 창.
  *
  * 전략은 **현재 봉을 창에 넣기 전에** 값을 읽어야 한다. 그래야 기준선이 현재 봉을
@@ -88,6 +118,19 @@ export function rollingMaxValue(state: RollingMaxState, window: number): number 
   let max = state.values[0] as number;
   for (const value of state.values) if (value > max) max = value;
   return max;
+}
+
+/**
+ * 창에 담긴 값이 전부 가격(고가)이라 자본변동 비율만큼 모두 나눈다.
+ *
+ * 나누지 않으면 분할 봉 이후 기준선이 분할 전 고가에 남는다.
+ * 분할된 종가는 그 선을 넘을 수 없다.
+ * 창이 새 가격으로 다 갈릴 때까지, 즉 `lookbackBars` 동안 돌파 진입이 막힌다.
+ */
+export function scaleRollingMax(state: RollingMaxState, ratio: number): void {
+  for (let index = 0; index < state.values.length; index += 1) {
+    state.values[index] = (state.values[index] as number) / ratio;
+  }
 }
 
 export interface RsiState {
@@ -125,6 +168,31 @@ export function updateRsi(state: RsiState, close: number, period: number): void 
   }
   state.avgGain = (state.avgGain * (period - 1) + gain) / period;
   state.avgLoss = (state.avgLoss * (period - 1) + loss) / period;
+}
+
+/**
+ * 자본변동 비율만큼 누적값을 내린다.
+ *
+ * RSI 값 자체는 상승분과 하락분의 비율이라 분할에 영향받지 않는다.
+ * 그러나 그 값을 만드는 내부 누적은 전부 가격 단위다.
+ *
+ * `prevClose` 가 가장 급한 항목이다.
+ * 두고 가면 분할 봉의 변화량이 분할 낙폭 전체가 된다.
+ * 5대 1 분할이면 −80% 짜리 하락 한 번이 들어가 허위 과매도 진입을 만든다.
+ *
+ * `avgGain`·`avgLoss` 는 평균 상승·하락 폭이라 가격 단위다.
+ * 둘을 같은 비율로 나누면 지금의 RSI 값은 그대로다.
+ * 그래도 나눠야 이후 봉의 작아진 변화량이 옛 가격대의 평균과 섞이지 않는다.
+ * `sumGain`·`sumLoss` 는 시딩 구간의 같은 누적이라 함께 나눈다.
+ *
+ * `changesSeen` 은 변화 횟수라 그대로 둔다.
+ */
+export function scaleRsi(state: RsiState, ratio: number): void {
+  if (state.avgGain !== null) state.avgGain /= ratio;
+  if (state.avgLoss !== null) state.avgLoss /= ratio;
+  if (state.prevClose !== null) state.prevClose /= ratio;
+  state.sumGain /= ratio;
+  state.sumLoss /= ratio;
 }
 
 /** 시딩 전(변화 < period)이면 null. avgLoss 0 이면 100. */

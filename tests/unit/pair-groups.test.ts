@@ -4,6 +4,7 @@ import {
   newCorrelationWarmup,
   pearsonCorrelation,
   recordClose,
+  scaleWarmupCloses,
   tryBuildGroups,
 } from '../../src/server/modules/strategy/strategies/shared/pair-groups.js';
 
@@ -157,5 +158,59 @@ describe('tryBuildGroups', () => {
       if (index < 19) expect(groups).toBeNull();
       else expect(groups?.get('LEV')).toBe(groups?.get('INV'));
     });
+  });
+});
+
+describe('scaleWarmupCloses — 분할이 상관 계산을 오염시키지 않게 한다', () => {
+  /** A 는 진동하고 B 는 그 역수라 로그수익률이 정확히 반대다 */
+  function seedInversePair(bars: number) {
+    const warmup = newCorrelationWarmup();
+    for (let index = 0; index < bars; index += 1) {
+      const a = 100_000 + (index % 2 === 0 ? 4_000 : -4_000);
+      recordClose(warmup, 'A', index, a);
+      recordClose(warmup, 'B', index, 1e10 / a);
+    }
+    return warmup;
+  }
+
+  it('지정한 종목의 누적 종가만 내린다', () => {
+    const warmup = newCorrelationWarmup();
+    recordClose(warmup, 'A', 1, 100_000);
+    recordClose(warmup, 'A', 2, 110_000);
+    recordClose(warmup, 'B', 1, 50_000);
+
+    scaleWarmupCloses(warmup, 'A', 5);
+
+    expect([...(warmup.closesBySymbol.get('A') as Map<number, number>).values()]).toEqual([
+      20_000, 22_000,
+    ]);
+    expect([...(warmup.closesBySymbol.get('B') as Map<number, number>).values()]).toEqual([50_000]);
+  });
+
+  it('쌓인 적 없는 종목이면 아무 일도 하지 않는다', () => {
+    const warmup = newCorrelationWarmup();
+    expect(() => scaleWarmupCloses(warmup, 'A', 5)).not.toThrow();
+  });
+
+  it('분할 봉을 먹이기 전에 내리면 역상관 판정이 살아남는다', () => {
+    // 판별력 확인: `scaleWarmupCloses` 호출을 빼면 아래 두 단언 중 뒤엣것이 깨진다.
+    const unscaled = seedInversePair(20);
+    const scaled = seedInversePair(20);
+    scaleWarmupCloses(scaled, 'A', 5);
+
+    // 21번째 봉에서 A 에 5대 1 분할이 나 종가가 1/5 이 된다. B 는 그대로다.
+    const splitClose = (100_000 + 4_000) / 5;
+    recordClose(unscaled, 'A', 20, splitClose);
+    recordClose(scaled, 'A', 20, splitClose);
+    recordClose(unscaled, 'B', 20, 1e10 / (100_000 + 4_000));
+    recordClose(scaled, 'B', 20, 1e10 / (100_000 + 4_000));
+
+    // 조정하면 A 와 B 는 여전히 한 묶음이다
+    const scaledGroups = tryBuildGroups(scaled, ['A', 'B'], 21, 0.5) as Map<string, string>;
+    expect(scaledGroups.get('A')).toBe(scaledGroups.get('B'));
+
+    // 조정하지 않으면 −80% 한 점이 상관을 끌고 가 묶음이 깨진다
+    const unscaledGroups = tryBuildGroups(unscaled, ['A', 'B'], 21, 0.5) as Map<string, string>;
+    expect(unscaledGroups.get('A')).not.toBe(unscaledGroups.get('B'));
   });
 });

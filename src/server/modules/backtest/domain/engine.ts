@@ -234,13 +234,18 @@ function* runBacktestSteps(
     // 액면분할은 주권교체 기간에 매매거래가 정지되는 것이 표준 경로다.
     // 기준 시각을 그대로 둬야 재개 봉에서 밀린 이벤트를 따라잡는다.
     //
-    // 조정 대상은 포지션이 있는 종목과 대기 주문이 있는 종목이다.
+    // 수량·평균단가 조정 대상은 포지션이 있는 종목과 대기 주문이 있는 종목이다.
     // 정지 직전에 발행한 신규 진입 BUY 는 포지션이 아직 없어 대기 주문에만 걸린다.
+    //
+    // 전략 상태 조정은 그 둘로 좁히지 않는다.
+    // 전략은 보유하지 않는 종목의 지표도 봉마다 계속 누적한다.
+    // 그 상태를 놔두면 분할을 넘긴 종목에서 허위 **진입** 신호가 난다
+    // (`rsi-reversion` 의 허위 과매도, `range-breakout` 의 기준선 고착).
+    // 그래서 봉이 있는 종목이면 보유 여부와 무관하게 훅을 부른다.
     const pendingSymbols = new Set(pendingOrders.map((order) => order.symbol));
     for (const [symbol, bar] of bars) {
       const basisTsMs = quantityBasisTsMsBySymbol.get(symbol) ?? -1;
       quantityBasisTsMsBySymbol.set(symbol, tsMs);
-      if (!positions.has(symbol) && !pendingSymbols.has(symbol)) continue;
       const due = factView
         .corporateActions(symbol, tsMs)
         .filter((action) => action.effectiveTsMs > basisTsMs);
@@ -250,12 +255,17 @@ function* runBacktestSteps(
       // 역분할이 정지 구간에 겹쳐 쌓일 때만 닿는 구석이라 지금은 그대로 둔다.
       const ratio = due.reduce((acc, action) => acc * action.ratio, 1);
       if (ratio === 1) continue;
-      // 전략이 봉 사이에 들고 다니는 가격 상태(스톱 레벨 등)도 같은 자리에서 고친다.
+      // 전략이 봉 사이에 들고 다니는 가격 상태(지표 누적·스톱 레벨)를 같은 자리에서 고친다.
       // 대기 주문 체결보다 먼저 불러야 이번 봉의 스톱 판정이 조정된 값으로 난다.
       // `context.corporateActions()` 는 시점까지 전체 이력을 주지만
       // 이 훅은 방금 확정된 합성 `ratio` 하나만 정확히 준다.
       // 전략마다 커서를 새로 두면 이미 푼 문제를 다시 만든다.
+      //
+      // 그 종목의 첫 봉에서는 기준 시각이 -1 이라 상장 이후 전체 이력이 한꺼번에 걸린다.
+      // 그때는 아직 누적된 상태가 없어 어느 필드를 나눠도 값이 바뀌지 않는다.
       strategy.onCorporateAction?.(symbol, ratio, state);
+
+      if (!positions.has(symbol) && !pendingSymbols.has(symbol)) continue;
       // 이 종목을 겨냥한 대기 주문을 같은 비율로 스케일한다.
       // 발행 시점에 캡처된 수량을 그대로 체결하면 분할 이후 수량이 어긋난다.
       // BUY 도 같은 값 보존 규칙을 적용해야 의도한 투입 금액이 유지된다.
@@ -381,8 +391,10 @@ function* runBacktestSteps(
   warnings.push(
     '생존 편향, 공휴일 캘린더, 배당, 권리락은 이 백테스트에서 보정하지 않습니다. ' +
       (hasCorporateActionFacts
-        ? '액면분할은 분할 이력이 수집된 데이터셋에서 보유 포지션의 수량과 평균단가에 ' +
-          '반영됩니다. 이미 체결된 거래의 체결가는 조정하지 않습니다.'
+        ? '액면분할은 분할 이력이 수집된 데이터셋에서 보유 포지션의 수량과 평균단가, ' +
+          '대기 주문 수량, 전략이 들고 있는 가격 상태에 반영됩니다. ' +
+          '보정을 쓰는 전략의 신호 계산에도 반영됩니다. ' +
+          '이미 체결된 거래의 체결가는 조정하지 않습니다.'
         : '액면분할도 이 실행에서는 보정되지 않았습니다 (분할 이력 미수집).'),
   );
 

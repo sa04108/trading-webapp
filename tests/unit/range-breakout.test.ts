@@ -315,3 +315,47 @@ describe('range-breakout 분할 후 스톱 조정', () => {
     expect(result.trades[0]!.exitPrice).toBe(17_000);
   });
 });
+
+// --- 자본변동(액면분할)을 걸친 돌파 기준선 -----------------------------------
+//
+// 돌파 기준선은 직전 `lookbackBars` 개 봉의 고가로 만든다.
+// 창에 담긴 값은 전부 가격이라 분할 비율만큼 내려야 한다.
+// 내리지 않으면 기준선이 분할 전 고가에 남아 분할된 종가가 영영 못 넘는다.
+// 창이 새 가격으로 다 갈릴 때까지 돌파 진입이 통째로 막힌다.
+
+/**
+ * 봉 0~5: 평탄 워밍업. 종가 100_000 은 전고점 102_500 을 못 넘어 진입이 없다.
+ * 봉 6: 5:1 분할 효력. 조정하면 기준선은 20_500 이 된다.
+ * 봉 7: 종가 21_000 — 조정된 기준선은 넘고 조정 전 기준선(102_500)은 못 넘는다.
+ * 봉 8: 진입 체결.
+ */
+function splitChannelFixture(): Candle[] {
+  return [
+    ...Array.from({ length: 6 }, (_, i) =>
+      splitCandle(i, { open: 100_000, high: 102_500, low: 97_500, close: 100_000 }),
+    ),
+    splitCandle(6, { open: 20_000, high: 20_500, low: 19_500, close: 20_000 }),
+    splitCandle(7, { open: 20_100, high: 21_200, low: 20_000, close: 21_000 }),
+    splitCandle(8, { open: 21_000, high: 21_100, low: 20_900, close: 21_000 }),
+  ];
+}
+
+describe('range-breakout 분할 후 돌파 기준선 조정', () => {
+  it('분할 뒤 첫 돌파를 놓치지 않는다 (진입 봉쇄 방지)', () => {
+    const result = runWithFacts(splitChannelFixture(), [splitFact('A', 12, 5)]);
+
+    // 조정하지 않으면 기준선이 102_500 에 남아 종가 21_000 이 못 넘는다 — 매수가 없다.
+    const buys = result.fills.filter((fill) => fill.side === 'BUY');
+    expect(buys).toHaveLength(1);
+    expect(buys[0]!.tsMs).toBe(SPLIT_START + 8 * SPLIT_DAY);
+  });
+
+  it('조정된 기준선을 못 넘으면 진입하지 않는다 (훅이 기준선을 없앤 것이 아니다)', () => {
+    const candles = splitChannelFixture();
+    // 봉 7 종가를 조정된 기준선(20_500) 아래로 낮춘다
+    candles[7] = splitCandle(7, { open: 20_100, high: 20_400, low: 20_000, close: 20_300 });
+    const result = runWithFacts(candles, [splitFact('A', 12, 5)]);
+
+    expect(result.fills.filter((fill) => fill.side === 'BUY')).toHaveLength(0);
+  });
+});

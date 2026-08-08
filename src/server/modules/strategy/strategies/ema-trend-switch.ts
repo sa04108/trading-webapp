@@ -9,6 +9,8 @@ import type {
 import {
   newAtr,
   newEma,
+  scaleAtr,
+  scaleEma,
   updateAtr,
   updateEma,
   type AtrState,
@@ -17,6 +19,7 @@ import {
 import {
   newCorrelationWarmup,
   recordClose,
+  scaleWarmupCloses,
   tryBuildGroups,
   type CorrelationWarmup,
 } from './shared/pair-groups.js';
@@ -25,7 +28,7 @@ import {
   confirmEntry,
   holdLimitReached,
   newHolding,
-  scaleSymbolHolding,
+  scaleHoldingPrices,
   updateTrail,
   type HoldingState,
 } from './shared/trailing-stop.js';
@@ -282,9 +285,23 @@ export const emaTrendSwitchStrategy: TradingStrategy<
     return { orders };
   },
 
-  // 분할 등 자본변동이 걸린 종목의 `HoldingState` 가격 필드를 같은 비율로 고친다.
-  // `ratio`·호출 시점은 엔진이 정한다(`engine.ts` 조정 루프 참고).
+  // 분할 등 자본변동이 걸린 종목의 가격 상태를 같은 비율로 내린다.
+  // `ratio` 와 호출 시점은 엔진이 정한다(`engine.ts` 조정 루프 참고).
+  //
+  // 보유 상태만 고치면 부족하다.
+  // 두 EMA 와 ATR 은 분할 전 가격대에 그대로 남아 다음 봉과 단위가 어긋난다.
+  // 특히 `fast` 가 `slow` 보다 빨리 내려가 없던 하락 추세를 만든다.
+  // 그러면 이 전략이 분할 봉에서 `TREND_END` 로 허위 청산한다.
+  // 각 필드를 왜 나누는지는 지표별 `scale*` 함수 주석에 적었다.
   onCorporateAction(symbol, ratio, state) {
-    scaleSymbolHolding(state.bySymbol, symbol, ratio);
+    const symbolState = state.bySymbol.get(symbol);
+    if (symbolState !== undefined) {
+      scaleEma(symbolState.fast, ratio);
+      scaleEma(symbolState.slow, ratio);
+      scaleAtr(symbolState.atr, ratio);
+      scaleHoldingPrices(symbolState.holding, ratio);
+    }
+    // 그룹 확정 전이면 상관 워밍업에도 분할 전 종가가 쌓여 있다
+    if (state.warmup !== null) scaleWarmupCloses(state.warmup, symbol, ratio);
   },
 };

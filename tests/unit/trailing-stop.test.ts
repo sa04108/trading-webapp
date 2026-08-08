@@ -4,7 +4,6 @@ import {
   holdLimitReached,
   newHolding,
   scaleHoldingPrices,
-  scaleSymbolHolding,
   updateTrail,
   type HoldingState,
 } from '../../src/server/modules/strategy/strategies/shared/trailing-stop.js';
@@ -99,22 +98,5 @@ describe('scaleHoldingPrices — 분할 등 자본변동 비율로 가격 상태
       pendingEntry: false,
       exitPending: false,
     });
-  });
-});
-
-describe('scaleSymbolHolding — 심볼별 상태 맵에서 해당 종목만 스케일한다', () => {
-  it('맵에 있는 종목의 holding 을 스케일한다', () => {
-    const bySymbol = new Map<string, { holding: HoldingState }>([
-      ['A', { holding: { ...newHolding(), entryAtr: 1_000, stopLevel: 9_000, highestClose: 10_000 } }],
-    ]);
-
-    scaleSymbolHolding(bySymbol, 'A', 5);
-
-    expect(bySymbol.get('A')!.holding.stopLevel).toBe(1_800);
-  });
-
-  it('맵에 없는 종목이면 아무 일도 하지 않는다', () => {
-    const bySymbol = new Map<string, { holding: HoldingState }>();
-    expect(() => scaleSymbolHolding(bySymbol, 'A', 5)).not.toThrow();
   });
 });

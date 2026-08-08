@@ -214,7 +214,10 @@ describe('엔진 PIT 배선', () => {
     expect(biasWarning).toBeDefined();
     // 엔진이 포지션 수량·평균단가를 조정한 뒤부터(Task 2)는 이 문구가 사실이다 —
     // 조정되지 않는 건 이미 체결된 거래의 체결가뿐이다.
-    expect(biasWarning).toContain('보유 포지션의 수량과 평균단가에');
+    expect(biasWarning).toContain('보유 포지션의 수량과 평균단가');
+    expect(biasWarning).toContain('전략이 들고 있는 가격 상태');
+    // 모멘텀 전략의 신호 계산 보정은 여전히 사실이다 — 재작성이 이 절을 떨어뜨렸었다
+    expect(biasWarning).toContain('신호 계산');
     expect(biasWarning).toContain('체결가는 조정하지 않습니다');
   });
 });
