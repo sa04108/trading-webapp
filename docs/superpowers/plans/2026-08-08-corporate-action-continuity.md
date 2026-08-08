@@ -130,6 +130,12 @@ Expected: FAIL — `Failed to resolve import ".../corporate-action-adjust.js"`
 
 - [ ] **Step 3: 구현한다**
 
+**정정 (2026-08-08, Task 1 리뷰에서 발견): 아래 코드에 버그가 셋 있었다.** 실제로 커밋된 것은 `c82eb1d` 다. 이 계획서에서 브리프를 다시 만든다면 아래 코드를 그대로 쓰지 말고 그 커밋을 봐라.
+
+1. `Math.floor(quantity * ratio)` 가 부동소수점 경계에서 한 주를 잃는다. `ratio = 3/11`, `quantity = 55` 면 `raw = 14.999999999999998` 이라 floor 이 14 다. `ratio` 는 DART 주식수 두 개의 나눗셈이라 임의 유리수가 나온다 — 정수만 오지 않는다. `ε = 1e-9` 안이면 반올림하고 아니면 내린다
+2. `cashFromFraction` 주석의 "분할(ratio > 1)에서는 항상 0 이다" 가 거짓이다. `ratio = 1.5` 면 7주 × 1.5 = 10.5 로 잔여가 생긴다
+3. `ratio <= 0` 이 무방비였다. `ratio === 0` 은 100% 무상감자라 포지션을 닫고 `avgEntryPrice: 0` 으로 돌려준다(0 으로 나누지 않는다). 음수는 받은 값을 담아 throw 한다
+
 `src/server/modules/backtest/domain/corporate-action-adjust.ts`:
 
 ```ts
