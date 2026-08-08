@@ -100,8 +100,12 @@ describe('엔진 거래불가일', () => {
 describe('상장폐지 청산', () => {
   it('마지막 거래 가능 봉 종가로 청산하고 사유를 남긴다', () => {
     // A 는 2번 봉이 마지막이고 그 뒤 폐지된다. B 는 끝까지 산다.
+    // 2번 봉은 시가(600)와 종가(500)를 일부러 다르게 둔다 — bar() 헬퍼의 기본값(open ===
+    // close)을 그대로 쓰면 청산가가 시가로 퇴행해도 값이 우연히 같아 테스트가 못 잡는다.
+    // high/low 는 시가·종가를 모두 포함하도록 맞춘다.
     const candles = [
-      bar('A', 0, 1_000), bar('A', 1, 900), bar('A', 2, 500),
+      bar('A', 0, 1_000), bar('A', 1, 900),
+      { ...bar('A', 2, 500), open: 600, high: 610 },
       bar('B', 0), bar('B', 1), bar('B', 2), bar('B', 3),
     ];
     const result = runBacktest(buyOnceStrategy('A'), {
@@ -117,8 +121,9 @@ describe('상장폐지 청산', () => {
     const trade = result.trades.find((candidate) => candidate.symbol === 'A');
     expect(trade).toBeDefined();
     expect(trade?.exitReason).toBe('DELISTED');
-    // 2번 봉 종가 500 으로 나간다 — 시가가 아니다
+    // 2번 봉 종가 500 으로 나간다 — 시가(600)가 아니다
     expect(trade?.exitPrice).toBe(500);
+    expect(trade?.exitPrice).not.toBe(600);
     expect(trade?.exitTsMs).toBe(START + 2 * DAY);
     expect(result.delistingLiquidations).toHaveLength(1);
     // 청산했으니 미청산으로 남지 않는다
@@ -157,5 +162,55 @@ describe('상장폐지 청산', () => {
       delistedTsMsBySymbol: new Map([['A', START + 2 * DAY]]),
     });
     expect(seen).toEqual(['A']);
+  });
+
+  it('포지션 없는 종목에는 onForcedExit 를 부르지 않는다', () => {
+    const seen: string[] = [];
+    const strategy = buyOnceStrategy('A');
+    const withHook: TradingStrategy<unknown, { done: boolean }> = {
+      ...strategy,
+      onForcedExit: (symbol) => { seen.push(symbol); },
+    };
+    // C 는 폐지 대상이지만 전략이 A 만 사서 C 는 한 번도 보유하지 않는다 —
+    // 없는 포지션을 지우려 드는 회귀를 잡는다
+    const result = runBacktest(withHook, {
+      candles: [bar('A', 0), bar('A', 1), bar('C', 0), bar('C', 1)],
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 1,
+      maxPositions: 5,
+      delistedTsMsBySymbol: new Map([['C', START + 1 * DAY]]),
+    });
+    expect(seen).not.toContain('C');
+    expect(result.delistingLiquidations).toHaveLength(0);
+  });
+
+  it('폐지 종목의 마지막 봉에서 낸 매수 주문은 체결되지 않고 포지션도 남기지 않는다', () => {
+    // D 는 한 봉뿐이고 그 봉이 곧 마지막 봉이다. 전략은 그 봉에서 D 를 매수하려 든다.
+    // 다음 봉이 다시 오지 않으니 이 주문은 영원히 체결될 수 없다 — 대기 주문 정리가
+    // 포지션 유무와 무관하게 도는지 검증한다(포지션은 애초에 생긴 적이 없다).
+    const seen: string[] = [];
+    const strategy = buyOnceStrategy('D');
+    const withHook: TradingStrategy<unknown, { done: boolean }> = {
+      ...strategy,
+      onForcedExit: (symbol) => { seen.push(symbol); },
+    };
+    const result = runBacktest(withHook, {
+      candles: [bar('D', 0)],
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 1,
+      maxPositions: 5,
+      delistedTsMsBySymbol: new Map([['D', START]]),
+    });
+
+    expect(result.fills).toHaveLength(0);
+    expect(result.trades).toHaveLength(0);
+    expect(result.delistingLiquidations).toHaveLength(0);
+    expect(result.openPositions.some((position) => position.symbol === 'D')).toBe(false);
+    // 포지션이 생긴 적 없으니 강제 청산 훅도 불리지 않는다
+    expect(seen).not.toContain('D');
   });
 });
