@@ -173,11 +173,10 @@ async function main(): Promise<void> {
     const pinnedUniverseJson = job.universeJson ?? '[]';
     const pinnedUniverseHash = job.universeHash ?? 'unknown';
 
-    // 캔들 로드 (스펙 §11). 요청의 timeframe 이 소비 기준이고, 미지정이면 데이터셋
-    // timeframe (1m 수집·import 는 1h 로 사전 집계되어 '1h', 일봉 수집은 '1d').
-    // 여기를 '1h' 로 고정하면 일봉 데이터셋은 파티션이 없어 0봉으로 실패한다 (D-024).
-    // 데이터셋에 defaultTimeframe 이 없어졌다 — 요청이 소비 기준의 유일한 출처다.
-    // 미지정이면 일봉으로 본다 (구 legacyConsumeDefault 의 '1d' 분기와 같은 값).
+    // 캔들 로드 (스펙 §11). 새 요청은 스키마가 timeframe 을 '1d' 하나로만 허용한다
+    // (D-041, backtest-request.ts). 아래 repository(KrxDailyCandleRepository)는
+    // 어차피 봉 주기를 보지 않고 KRX 일봉만 돌려준다 — timeframe 은 이제 표시·
+    // 에러 메시지용 값이다.
     const timeframe = (request.timeframe ?? '1d') as Timeframe;
     // 봉은 KRX 일봉 하나뿐이다(container.ts 조립부와 같은 모양) — db 는 위에서 이미 연
     // handle 을 재사용한다. 워커가 잡 조회로 이미 DB 를 열어 둔 상태라 새로 열 이유가 없다.
@@ -195,7 +194,7 @@ async function main(): Promise<void> {
       // 제출 검증의 추정 상한을 실측으로 다시 지킨다 — 제출 후 import 로 봉이 는 경우의 방어선
       if (candles.length > MAX_BACKTEST_BARS) {
         throw new Error(
-          `봉 수가 상한(${MAX_BACKTEST_BARS.toLocaleString()})을 넘습니다. 기간이나 종목 수를 줄이거나 1h 봉을 사용하세요.`,
+          `봉 수가 상한(${MAX_BACKTEST_BARS.toLocaleString()})을 넘습니다. 기간이나 종목 수를 줄이세요.`,
         );
       }
     }

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { AppDatabase } from '../../../shared/db/database.js';
-import { dataSyncJobs, symbolVersions, symbols as symbolsTable } from '../../../shared/db/schema.js';
+import { symbolVersions, symbols as symbolsTable } from '../../../shared/db/schema.js';
 import type { Clock } from '../../../shared/clock.js';
 import { newId } from '../../../shared/ids.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
@@ -149,14 +149,11 @@ export class SymbolService {
    * KRX 일봉은 지우지 않는다. 시장 전체가 공유하는 자산이라 종목을 목록에서 빼는
    * 일과 함께 지우면, 그 종목을 참조하던 다른 백테스트·데이터셋의 봉까지 사라진다.
    */
-  async removeSymbols(codes: readonly string[]): Promise<void> {
+  removeSymbols(codes: readonly string[]): void {
     if (codes.length === 0) return;
-    const running = this.db
-      .select({ id: dataSyncJobs.id })
-      .from(dataSyncJobs)
-      .where(inArray(dataSyncJobs.status, ['QUEUED', 'RUNNING']))
-      .get();
-    if (running) throw new Error('데이터 작업이 실행 중입니다 — 완료 후 제거하세요');
+    // 예전에는 여기서 dataSyncJobs 에 QUEUED/RUNNING 잡이 있는지 확인해 동시 수집과
+    // 제거가 겹치지 않게 막았다. 그 테이블에 쓰는 코드가 D-041 로 전부 사라져 이
+    // 조회는 항상 빈 결과라 도달 불가다(schema.ts dataSyncJobs 주석 참고).
 
     for (const code of codes) {
       const row = this.db.select().from(symbolsTable).where(eq(symbolsTable.code, code)).get();

@@ -343,7 +343,10 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       const jobId = (created.json().job as { id: string }).id;
 
       // STARTING 취소는 자식 모듈 초기화와 문서화된 5초 escalation grace period가 경합한다.
-      // 따라서 통합 계약은 설정된 어느 취소 경로든 허용하고, IPC 리스너 자체는 단위 테스트가 증명한다.
+      // 따라서 통합 계약은 설정된 어느 취소 경로든 허용한다.
+      // IPC 리스너가 플래그를 세팅한다는 사실은 worker-cancellation.test.ts 가 증명한다.
+      // 그 플래그가 실행 도중 실제로 관찰된다는 사실(D-042)은 engine.test.ts 의
+      // runBacktestCancellable 취소 테스트가 증명한다.
       ctx.container.jobOrchestrator.tick();
       const cancelled = await ctx.app.inject({
         method: 'POST',
@@ -690,6 +693,28 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       ),
     ).toBe(true);
     expect(body.blockers).toEqual([]);
+  });
+
+  it('초안은 옛 잡의 봉 주기(1h·1m)를 일봉으로 재기준한다 (D-041, Critical 1)', async () => {
+    // timeframe:'1d' 로 좁혀진 지금 스키마는 '1h' 를 거부한다. 하지만 옛 잡은
+    // 여전히 '1h'·'1m' 로 저장돼 있고, clone-draft 는 이걸 400 으로 끊지 않고
+    // 일봉으로 재기준해 화면을 열어줘야 한다(stored-request.ts rebaseStoredRequest).
+    const legacy = { ...buildRequest(), timeframe: '1h' } as Record<string, unknown>;
+    const job = ctx.container.jobQueue.enqueue(legacy as never);
+
+    const draft = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${job.id}/clone-draft`,
+      cookies: { qp_session: cookie },
+    });
+    expect(draft.statusCode).toBe(200);
+    const body = draft.json() as {
+      request: BacktestRequest & { timeframe?: string };
+      warnings: string[];
+      blockers: string[];
+    };
+    expect(body.request.timeframe).toBe('1d');
+    expect(body.warnings.some((w) => w.includes('1h') && w.includes('일봉'))).toBe(true);
   });
 
   it('초안은 제출 불가한 원본도 열어준다 — 사유는 blockers 에 담는다', async () => {

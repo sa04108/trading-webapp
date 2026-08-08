@@ -518,16 +518,17 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    * 유니버스 미리보기가 만든 unionSymbols 를 `symbols` 에 자동 등록한다(브리프 §5,
    * 스펙 2026-08-06 Task 4) — 이름·시장·표준코드는 종목 마스터(`resolved.unionEntries`)
    * 에서 가져온다. 증권사 조회(symbolInfoService)는 상장폐지 종목의 이름을 주지
-   * 않아 그 출처로는 등록할 수 없다 — 그래서 가격 데이터 탭에서 상장폐지 종목이
-   * 조회되지 않던 문제가 이 등록으로 풀린다.
+   * 않아 그 출처로는 등록할 수 없다.
    *
-   * 이 등록이 필요한 이유는 이제 제출 검증이 아니라 표시다(Task 6 이전에는 반대였다).
-   * `resolveConsumedUniverse`/`checkPeriodCoverage` 는 `candleCoverage.getCoverage`
-   * (= `krx_daily_bars` 직접 집계)만 보므로 등록 여부와 무관하게 통과한다.
+   * 이 등록은 표시만이 아니라 제출 검증의 전제이기도 하다(리뷰 finding, 2026-08-08
+   * — Task 6 이 이 자리에 반대로 적어 뒀었다).
+   * `resolveConsumedUniverse` 가 쓰는 `registeredCoverage` 는 미등록 종목의
+   * 커버리지를 0으로 지운다(위 registeredCoverage 주석 참고).
+   * 유니버스 전체가 미등록이면 그 자리에서 400 으로 막힌다.
    *
-   * 대신 등록되지 않은 코드는 `missingCandleSymbolsOf` 가 "누락" 으로 계속 보고한다.
-   * 종목 화면·가격 데이터 탭에도 나타나지 않는다. 위저드 흐름을 벗어나 API 를 직접
-   * 호출하는 자동화 클라이언트는 이 사실을 알아야 한다.
+   * 일부만 미등록이면 제출은 통과한다 — 그래도 그 종목은 `missingCandleSymbolsOf`
+   * 가 계속 "누락" 으로 보고하고 종목 화면에도 나타나지 않는다. 위저드 흐름을
+   * 벗어나 API 를 직접 호출하는 자동화 클라이언트는 이 사실을 알아야 한다.
    *
    * KRX 응답 마켓(KOSPI/KOSDAQ)은 항상 'KR' 로 등록한다 — `symbols.market` 은
    * 세션 축(KR/US) 이고, `krxDailyBars` 는 애초에 국내 종목만 갖는다.
@@ -537,10 +538,11 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    *
    * 위저드가 제출 전에 거치는 미리보기와, 상세 화면의 원클릭 복제(`POST
    * /backtests/:id/clone`) 둘 다 이 등록을 거친다 — 아래 `ensureUniverseRegistered`
-   * 로 묶어 호출한다(리뷰 finding, 2026-08-06). 복제는 미리보기 화면을 거치지 않고
-   * 바로 제출하므로, 미리보기에서 한 번도 등록되지 않은 종목(예: 리밸런스 시점
-   * 시총이 바뀌어 새로 topN 에 든 종목)을 그대로 두면 실행은 되지만(§ 아래
-   * `checkPeriodCoverage` 참고) 가격 데이터 탭에는 보이지 않는 불일치가 남는다.
+   * 로 묶어 호출한다(리뷰 finding, 2026-08-06).
+   * 복제는 미리보기 화면을 거치지 않고 바로 제출한다.
+   * 미리보기에서 한 번도 등록되지 않은 종목이 있을 수 있다(예: 리밸런스 시점
+   * 시총이 바뀌어 새로 topN 에 든 종목). 등록해 두지 않으면 위 문단의
+   * "일부 미등록" 경로를 그대로 밟는다.
    * `clone-draft`(GET)에는 넣지 않는다 — "대기열에 넣지 않고 아무것도 확정하지
    * 않는다"는 읽기 전용 계약이라 등록도 하지 않는다.
    */
@@ -718,8 +720,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     try {
       // clone 은 위저드의 미리보기 화면을 거치지 않고 상세 화면에서 바로 제출한다.
       // 여기서 unionSymbols 를 직접 등록해야 한다(ensureUniverseRegistered 주석 참고).
-      // 등록이 없어도 제출 자체는 통과한다 — 커버리지 검사는 이제 등록 여부와
-      // 무관하다(Task 6). 다만 그 종목은 가격 데이터 탭에 나타나지 않는다.
+      // 유니버스 전체가 미등록이면 이 등록 없이는 제출이 400 으로 막힌다
+      // (resolveConsumedUniverse). 일부만 새로 편입된 종목은 등록이 없어도 제출은
+      // 통과하지만 종목 화면에 나타나지 않는 불일치가 남는다.
       ensureUniverseRegistered(await resolveScheduleForRequest(cloneRequest));
       validated = await validateSubmission(cloneRequest);
     } catch (error) {

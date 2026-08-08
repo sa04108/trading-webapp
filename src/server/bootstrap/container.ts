@@ -29,7 +29,7 @@ import { SymbolInfoService } from '../modules/market-data/application/symbol-inf
 import { SymbolService } from '../modules/market-data/application/symbol-service.js';
 import { CandleCoverageService } from '../modules/market-data/application/candle-coverage-service.js';
 import type { CandleRepository } from '../modules/market-data/application/ports.js';
-import { createTossMarketDataSource } from '../modules/broker/infrastructure/toss/toss-market-data-source.js';
+import { createTossStockInfoSource } from '../modules/broker/infrastructure/toss/toss-stock-info-source.js';
 import { DuckDbService } from '../modules/market-data/infrastructure/duckdb-service.js';
 import { KrxDailyCandleRepository } from '../modules/market-data/infrastructure/krx-daily-candle-repository.js';
 import { StrategyRegistry } from '../modules/strategy/application/strategy-registry.js';
@@ -202,7 +202,7 @@ export function createContainer(config: AppConfig): Container {
 
   // 증권사 선택은 조립부 전용 지식 (§2.4) — 애플리케이션은 StockInfoSource 만 안다.
   // 자격 증명 미설정이면 어댑터가 포트 에러를 던지는 비활성 소스가 된다.
-  const stockInfoSource = createTossMarketDataSource(
+  const stockInfoSource = createTossStockInfoSource(
     config.tossClientId && config.tossClientSecret
       ? {
           baseUrl: config.tossBaseUrl,

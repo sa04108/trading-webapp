@@ -55,7 +55,7 @@ export const rangeBreakoutParameters = z.object({
   lookbackBars: z.number().int().min(2).max(200).default(20).meta({
     title: '돌파 기준 봉 수',
     description:
-      '직전 N개 봉의 최고가를 넘어서면 매수 진입합니다. 크게 잡으면 큰 추세만 잡아 신호가 줄고, 작게 잡으면 신호가 잦아지되 잔신호가 늘어납니다. 봉 수이므로 1분봉이면 20이 20분, 일봉이면 20이 약 1달입니다.',
+      '직전 N개 봉의 최고가를 넘어서면 매수 진입합니다. 크게 잡으면 큰 추세만 잡아 신호가 줄고, 작게 잡으면 신호가 잦아지되 잔신호가 늘어납니다. 일봉 기준으로 20이면 약 1달입니다.',
   }),
   atrPeriod: z.number().int().min(2).max(100).default(14).meta({
     title: '변동성(ATR) 계산 기간',
@@ -81,7 +81,7 @@ export const rangeBreakoutParameters = z.object({
   maxHoldBars: z.number().int().min(1).max(10_000).optional().meta({
     title: '최대 보유 봉 수',
     description:
-      '이 봉 수를 넘기면 신호와 무관하게 팝니다. 분봉이면 390이 약 하루, 일봉이면 20이 약 1달입니다. 비우면 제한이 없습니다.',
+      '이 봉 수를 넘기면 신호와 무관하게 팝니다. 일봉 기준으로 20이면 약 1달입니다. 비우면 제한이 없습니다.',
   }),
   riskPerTradePercent: z.number().positive().max(5).default(1).meta({
     title: '1회 거래 리스크 (%)',
@@ -123,8 +123,7 @@ export const rangeBreakoutStrategy: TradingStrategy<RangeBreakoutParameters, Ran
   name: '전고점 돌파',
   description:
     '직전 N개 봉의 최고가를 종가가 넘어서면 사고, 고점을 따라 올라가는 손절선에 걸리면 팝니다. ' +
-    '모든 창이 봉 수라 분봉·시간봉·일봉에서 같은 로직이며, 파라미터의 의미가 고른 봉 주기에 따라 달라집니다 ' +
-    '— 돌파 기준 20봉은 1분봉이면 20분, 일봉이면 약 1달입니다.',
+    '모든 창이 봉 수입니다 — 일봉 기준으로 돌파 기준 20봉은 약 1달입니다.',
   parameterSchema: rangeBreakoutParameters,
 
   initialize(): RangeBreakoutState {

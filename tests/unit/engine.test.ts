@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { runBacktest } from '../../src/server/modules/backtest/domain/engine.js';
+import { runBacktest, runBacktestCancellable } from '../../src/server/modules/backtest/domain/engine.js';
 import type { ExecutionProfile, OrderIntent } from '../../src/server/modules/backtest/domain/types.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import type {
@@ -435,5 +435,47 @@ describe('range-breakout look-ahead fixture (스펙 §33)', () => {
     for (const fill of buyFills) {
       expect(fill.tsMs).toBeGreaterThan(spikeTs);
     }
+  });
+});
+
+describe('취소 (D-042) — runBacktestCancellable', () => {
+  it('실행 도중 취소 요청이 들어오면 중단한다 — 동기 드라이버는 같은 신호를 볼 틈이 없다', async () => {
+    // CANCEL_YIELD_INTERVAL_BARS(200) 보다 훨씬 많은 봉이 있어야 양보 창이 여러 번 열린다.
+    const manyBars = Array.from({ length: 1_000 }, (_, i) => bar(i, 100));
+    const input = {
+      candles: manyBars,
+      initialCash: 10_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+    };
+
+    // 마이크로태스크로 뒤집는다 — setTimeout 등 실제 타이머 해상도에 기대면 CI 에서
+    // flaky 해진다. 마이크로태스크 큐는 첫 `await setImmediate` 로 콜스택이 비는
+    // 순간 곧바로 비워지므로 실행 순서가 결정적이다.
+    let asyncCancel = false;
+    void Promise.resolve().then(() => {
+      asyncCancel = true;
+    });
+    const asyncResult = await runBacktestCancellable(buyAtBarStrategy(-1) as never, input, {
+      shouldCancel: () => asyncCancel,
+    });
+    expect(asyncResult.cancelled).toBe(true);
+    expect(asyncResult.processedBars).toBeLessThan(manyBars.length);
+
+    // 같은 신호원(마이크로태스크)을 동기 드라이버에 걸어도 뒤집히지 않는다.
+    // `runBacktest` 는 제너레이터를 한 호흡에 끝까지 비운다. 이벤트 루프에 양보하는
+    // 지점이 없어 그 신호가 도착할 콜스택의 빈틈 자체가 생기지 않는다 —
+    // D-042 가 고친 버그의 반대쪽이다.
+    let syncCancel = false;
+    void Promise.resolve().then(() => {
+      syncCancel = true;
+    });
+    const syncResult = runBacktest(buyAtBarStrategy(-1) as never, input, {
+      shouldCancel: () => syncCancel,
+    });
+    expect(syncResult.cancelled).toBe(false);
+    expect(syncResult.processedBars).toBe(manyBars.length);
   });
 });

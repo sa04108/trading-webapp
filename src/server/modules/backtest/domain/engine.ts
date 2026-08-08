@@ -467,7 +467,10 @@ function* runBacktestSteps(
 
 /**
  * 동기 실행 — 기존 호출부 전부(직접 엔진 테스트, 단위 테스트)가 이 시그니처를 쓴다.
- * 제너레이터를 끝까지 한 호흡에 비운다 — 성능·동작 모두 이전 `runBacktest` 와 같다.
+ * 제너레이터를 끝까지 한 호흡에 비운다 — 동작은 이전 `runBacktest` 와 같다.
+ * 제너레이터 프레임 비용은 따로 측정하지 않았다.
+ * 위 CANCEL_YIELD_INTERVAL_BARS 주석의 측정은 `runBacktestCancellable` 의
+ * setImmediate 양보 비용이지, 이 함수의 제너레이터 호출 자체와는 다른 수치다.
  */
 export function runBacktest(
   strategy: AnyTradingStrategy,

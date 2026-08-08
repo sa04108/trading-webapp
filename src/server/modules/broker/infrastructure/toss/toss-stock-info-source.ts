@@ -40,7 +40,7 @@ export interface TossSourceOptions {
  *   (캔들·현재가·랭킹 조회는 가격 데이터 기능 제거로 함께 사라졌다).
  * - Rate limit: STOCK 그룹 초당 5회.
  */
-export function createTossMarketDataSource(
+export function createTossStockInfoSource(
   config: TossConfig | null,
   logger: Logger,
   options: TossSourceOptions = {},

@@ -62,6 +62,15 @@ export function rebaseStoredRequest(
     delete draft.strategyVersion;
   }
 
+  // 봉 주기는 KRX 일봉 하나로 좁혀졌다(D-041). 옛 잡의 '1m'·'1h' 는 되살릴 대상이지
+  // 거부할 대상이 아니다. 재기준은 재현이 아니라 재실행이다.
+  if (draft.timeframe !== undefined && draft.timeframe !== '1d') {
+    warnings.push(
+      `봉 주기 ${String(draft.timeframe)} 는 더 이상 제공하지 않습니다. 일봉으로 재기준했습니다.`,
+    );
+    draft.timeframe = '1d';
+  }
+
   const parsed = backtestRequestSchema.safeParse(draft);
   if (!parsed.success) {
     return {

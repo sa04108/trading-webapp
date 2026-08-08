@@ -152,7 +152,7 @@ export function registerSymbolRoutes(
     const parsed = removeSymbolsSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'codes 가 필요합니다' });
     try {
-      await symbolService.removeSymbols(parsed.data.codes);
+      symbolService.removeSymbols(parsed.data.codes);
       return reply.code(204).send();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

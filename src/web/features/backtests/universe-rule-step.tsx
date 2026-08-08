@@ -115,11 +115,12 @@ export function UniverseRuleStep({
       postJson<UniversePreviewResponseDto>('/backtests/universe-preview', params),
     onSuccess: (data, params) => {
       onPreviewResolved(params, data);
-      // 이 응답 자체가 unionSymbols 를 등록하고 그 1일봉 커버리지를 갱신한다
-      // (backtest-routes.ts registerUniverseSymbols·refreshKrxDailyCoverage,
-      // 스펙 2026-08-06 리뷰 발견) — `['symbols']` 를 무효화하지 않으면 위저드
-      // 봉 주기 카드(`new-backtest-wizard.tsx` wizardTimeframes)가 마운트 시점의
-      // 낡은 스냅샷만 보고 방금 커버된 슬라이스를 "없음"으로 잘못 판정한다.
+      // 이 응답 자체가 unionSymbols 를 등록한다(backtest-routes.ts
+      // registerUniverseSymbols, 스펙 2026-08-06 리뷰 발견).
+      // 재무 게이트가 보는 hasFacts 는 `['symbols']` 조회로만 온다
+      // (new-backtest-wizard.tsx symbolsWithFacts).
+      // 무효화하지 않으면 방금 새로 등록된 종목이 마운트 시점의 낡은 스냅샷에는 없다.
+      // hasFacts 를 "모른다"로 보고 게이트가 근거 없이 다음 단계를 막는다.
       void queryClient.invalidateQueries({ queryKey: ['symbols'] });
     },
   });

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createTossMarketDataSource } from '../../src/server/modules/broker/infrastructure/toss/toss-market-data-source.js';
+import { createTossStockInfoSource } from '../../src/server/modules/broker/infrastructure/toss/toss-stock-info-source.js';
 import { StockInfoSourceNotConfiguredError } from '../../src/server/modules/market-data/application/ports.js';
 import { createLogger } from '../../src/server/shared/logger.js';
 import { loadConfig } from '../../src/server/bootstrap/config.js';
@@ -34,13 +34,13 @@ function buildFetch(responses: Response[]) {
 }
 
 function buildSource(fetchImpl: ReturnType<typeof vi.fn>) {
-  return createTossMarketDataSource(CONFIG, logger, {
+  return createTossStockInfoSource(CONFIG, logger, {
     fetchImpl: fetchImpl as unknown as typeof fetch,
     sleep: async () => {},
   });
 }
 
-describe('createTossMarketDataSource (스펙 §13 — 종목 이름 조회 전용)', () => {
+describe('createTossStockInfoSource (스펙 §13 — 종목 이름 조회 전용)', () => {
   it('fetches stock names and shares outstanding in one batched call (getStockInfo)', async () => {
     const fetchImpl = buildFetch([
       jsonResponse(200, {
@@ -144,7 +144,7 @@ describe('createTossMarketDataSource (스펙 §13 — 종목 이름 조회 전�
   });
 
   it('getStockInfo rejects when not configured and returns [] for empty input', async () => {
-    const unconfigured = createTossMarketDataSource(null, logger);
+    const unconfigured = createTossStockInfoSource(null, logger);
     await expect(unconfigured.getStockInfo(['005930'])).rejects.toBeInstanceOf(
       StockInfoSourceNotConfiguredError,
     );
