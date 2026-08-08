@@ -414,6 +414,23 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(ctx.container.jobQueue.getJob(jobId)!.status).toBe('CANCELLED');
   });
 
+  it('제출 경고를 job 에 저장한다 — 토스트 10초 뒤에도 남아야 한다', () => {
+    const job = ctx.container.jobQueue.enqueue(buildRequest(), [], undefined, null, [
+      '005930 자본변동 이력에 gap 이 있습니다',
+    ]);
+
+    const stored = ctx.container.jobQueue.getJob(job.id)!;
+    expect(JSON.parse(stored.submitWarningsJson!)).toEqual([
+      '005930 자본변동 이력에 gap 이 있습니다',
+    ]);
+  });
+
+  it('경고가 없으면 null 이다 — 빈 배열이면 "컬럼이 생기기 전 job" 과 구분되지 않는다', () => {
+    const job = ctx.container.jobQueue.enqueue(buildRequest());
+
+    expect(ctx.container.jobQueue.getJob(job.id)!.submitWarningsJson).toBeNull();
+  });
+
   it('never regresses a terminal status via late progress or status writes (C1)', () => {
     const queue = ctx.container.jobQueue;
     const job = queue.enqueue(buildRequest());
@@ -531,6 +548,10 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(stored.risk.maxPositions).toBe(5);
     expect(stored.strategyVersion).toBeUndefined();
     expect(stored.parameters.maxPositions).toBeUndefined();
+
+    // 복제 경로도 같다 — rebase 경고와 검증 경고를 합쳐 저장한다
+    const clonedStored = ctx.container.jobQueue.getJob(body.job.id)!;
+    expect(JSON.parse(clonedStored.submitWarningsJson!)).toEqual(body.warnings);
   });
 
   it('refuses to clone a stored request that cannot be rebased (400, not 500)', async () => {

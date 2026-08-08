@@ -322,6 +322,12 @@ export const backtestJobs = sqliteTable(
     // 진행 위치 표시용 텍스트 (엔진이 시간 우선이라 날짜가 들어간다) — "심볼" 이 아니다
     progressLabel: text('progress_label'),
     error: text('error'),
+    /**
+     * 제출·복제 검증이 만든 경고 원문(string[]). 화면 토스트는 10초 뒤 사라지므로
+     * 자본변동 gap 같은 "확인하지 못했다" 를 남길 곳이 여기밖에 없다.
+     * null 은 경고가 없었거나 이 컬럼이 생기기 전에 만들어진 job 이다.
+     */
+    submitWarningsJson: text('submit_warnings_json'),
     workerId: text('worker_id'),
     pid: integer('pid'),
     createdAtMs: integer('created_at_ms').notNull(),

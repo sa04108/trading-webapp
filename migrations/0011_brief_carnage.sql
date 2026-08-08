@@ -1,0 +1,1 @@
+ALTER TABLE `backtest_jobs` ADD `submit_warnings_json` text;

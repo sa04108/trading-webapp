@@ -803,6 +803,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       validated.resolved.schedule,
       validated.universe,
       validated.provenancePin,
+      validated.warnings,
     );
     audit.record(request.authUser?.username ?? 'admin', 'backtest.created', {
       jobId: job.id,
@@ -907,11 +908,14 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const resourceError = await checkResources(deps.dataRoot);
     if (resourceError) return reply.code(507).send({ error: resourceError });
 
+    // 응답과 저장이 같은 합집합을 써야 한다 — 한쪽만 고치면 화면과 기록이 갈라진다
+    const cloneWarnings = [...rebased.warnings, ...validated.warnings];
     const cloned = queue.enqueue(
       { ...cloneRequest, timeframe: validated.timeframe },
       validated.resolved.schedule,
       validated.universe,
       validated.provenancePin,
+      cloneWarnings,
     );
     audit.record(request.authUser?.username ?? 'admin', 'backtest.cloned', {
       sourceJobId: id,
@@ -920,7 +924,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     });
     return reply
       .code(201)
-      .send({ job: serializeJob(cloned), warnings: [...rebased.warnings, ...validated.warnings] });
+      .send({ job: serializeJob(cloned), warnings: cloneWarnings });
   });
 
   /**

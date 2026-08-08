@@ -711,6 +711,11 @@ describe('POST /backtests — 자본변동 수집 게이트 (Task 6)', () => {
     expect(created.statusCode).toBe(201);
     const warnings = (created.json() as { warnings: string[] }).warnings;
     expect(warnings.some((w) => w.includes(CODE))).toBe(true);
+
+    // 응답에만 실어 보내면 토스트 10초가 유일한 수명이 된다 — job 에도 남아야 한다
+    const jobId = (created.json().job as { id: string }).id;
+    const stored = ctx.container.jobQueue.getJob(jobId)!;
+    expect(JSON.parse(stored.submitWarningsJson!)).toEqual(warnings);
   });
 
   /**
