@@ -34,14 +34,14 @@ export interface CorporateActionSyncJobEvent {
  * 200종목이면 수 분이 걸려 HTTP 요청 하나로 붙들 수 없다.
  * 잡을 만들어 뒤에서 돌리고 SSE 로 진행률을 흘린다.
  *
- * 백테스트의 `JobOrchestrator` 와 달리 자식 프로세스를 fork 하지 않는다.
+ * 백테스트의 `JobOrchestrator` 와 달리 자식 프로세스를 새로 만들지 않는다.
  * 이 작업은 CPU 가 아니라 DART 응답 대기가 대부분이다.
  * 워커 프로세스를 띄울 이유가 없다 — 서버 이벤트 루프 안에서 비동기로
  * 돌려도 다른 요청을 막지 않는다.
  *
  * 동시에 한 잡만 허용한다.
  * 두 잡이 같은 종목을 나눠 수집하면 `symbol_facts_state` 갱신이 서로 경합한다.
- * DART rate limiter 도 전역 자원이라, 두 잡이 나눠 쓰면 화면에 보일
+ * DART 호출 속도 제한도 전역 자원이라, 두 잡이 나눠 쓰면 화면에 보일
  * 소요시간 추정이 거짓말을 하게 된다.
  * 그래서 새 잡 생성 시점에 활성 잡이 있으면 409 로 거절한다.
  * 기존 잡을 대신 돌려주지 않는다 — 그러면 호출부가 "내 요청이 받아들여졌다"
@@ -59,6 +59,35 @@ export class CorporateActionSyncOrchestrator {
     private readonly logger: Logger,
   ) {
     this.db = handle.db;
+    this.recoverOrphaned();
+  }
+
+  /**
+   * 부팅 시 고아 행 정리(리뷰 finding, 2026-08-08).
+   * 이 오케스트레이터는 자식 프로세스가 아니라 같은 서버 프로세스 안에서 잡을 돈다.
+   * 그래서 새 인스턴스가 막 만들어졌다는 사실 자체가 "지금 실제로 돌고 있는
+   * 잡은 없다" 는 뜻이다.
+   * `QUEUED`·`RUNNING` 으로 남은 행은 이전 실행이 중간에 죽은 흔적이다.
+   * `JobOrchestrator.recoverInterrupted` 와 같은 문제를 풀지만, 자식 PID 생존을
+   * 확인할 필요가 없어 더 단순하다 — 발견한 행을 전부 고아로 본다.
+   * 정리하지 않으면 `hasActiveJob()` 이 영원히 참이 되어 이후 모든 생성 요청이
+   * 409 로 막힌다.
+   */
+  private recoverOrphaned(): void {
+    const orphaned = this.db
+      .select({ id: corporateActionSyncJobs.id })
+      .from(corporateActionSyncJobs)
+      .where(inArray(corporateActionSyncJobs.status, ACTIVE_STATUSES))
+      .all();
+    for (const { id } of orphaned) {
+      this.setStatus(id, 'FAILED', {
+        error: '서버 재시작으로 작업이 중단되었습니다. 다시 실행하세요.',
+      });
+      this.logger.warn(
+        { module: 'facts', event: 'corporate-action-sync.job.recovered', jobId: id },
+        'orphaned corporate action sync job marked FAILED',
+      );
+    }
   }
 
   getJob(jobId: string): CorporateActionSyncJobRow | null {
@@ -84,7 +113,14 @@ export class CorporateActionSyncOrchestrator {
     return row !== undefined;
   }
 
-  /** 이미 도는 잡이 있으면 null 을 돌려준다 — 호출부(라우트)가 409 로 옮긴다. */
+  /**
+   * 이미 도는 잡이 있으면 null 을 돌려준다 — 호출부(라우트)가 409 로 옮긴다.
+   *
+   * `hasActiveJob()` 조회와 `insert()` 사이에 다른 요청이 끼어들 틈이 없다.
+   * better-sqlite3 가 동기 드라이버라서 그렇다 — 유니크 인덱스나 트랜잭션으로
+   * 강제한 것이 아니다.
+   * 드라이버를 비동기로 바꾸면 이 가정이 깨진다.
+   */
   start(request: CorporateActionSyncRequest): CorporateActionSyncJobRow | null {
     if (this.hasActiveJob()) return null;
 
@@ -104,10 +140,10 @@ export class CorporateActionSyncOrchestrator {
     this.db.insert(corporateActionSyncJobs).values(row).run();
     this.cancelFlags.set(row.id, false);
     // 응답을 기다리지 않는다 — 잡 생성 요청은 등록만 확인하고 바로 돌아가야 한다.
-    // 실패는 run() 내부에서 잡 상태(FAILED)로 흡수하므로 여기서 unhandled rejection
-    // 이 되지 않는다.
-    // run() 은 상태를 RUNNING 으로 옮기는 지점까지 동기적으로 실행된다(첫 await 전까지).
-    // 그래서 아래 조회는 QUEUED 가 아니라 RUNNING 을 돌려준다.
+    // 실패는 run() 내부에서 잡 상태(FAILED)로 흡수하므로 여기서 처리되지 않은
+    // 예외로 남지 않는다.
+    // run() 은 상태를 RUNNING 으로 옮기는 지점까지 동기적으로 실행된다
+    // (첫 `await` 전까지). 그래서 아래 조회는 QUEUED 가 아니라 RUNNING 을 돌려준다.
     void this.run(row.id, symbols, request.fromYear, request.toYear);
 
     return this.getJob(row.id) as CorporateActionSyncJobRow;
