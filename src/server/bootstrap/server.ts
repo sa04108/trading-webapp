@@ -20,6 +20,7 @@ import { registerStrategyRoutes } from '../modules/strategy/presentation/strateg
 import { registerBacktestRoutes } from '../modules/backtest/presentation/backtest-routes.js';
 import { registerNotificationRoutes } from '../modules/notification/presentation/notification-routes.js';
 import { registerSymbolMasterRoutes } from '../modules/market-data/presentation/symbol-master-routes.js';
+import { registerCorporateActionRoutes } from '../modules/facts/presentation/corporate-action-routes.js';
 
 function resolvePublicDir(): string | null {
   // 빌드 후: dist/server/bootstrap → dist/public.
@@ -95,6 +96,14 @@ export async function buildServer(container: Container): Promise<FastifyInstance
       registerSymbolMasterRoutes(
         api,
         { service: container.symbolMasterService, backfill: container.symbolMasterBackfill },
+        requireAuth,
+      );
+      registerCorporateActionRoutes(
+        api,
+        {
+          orchestrator: container.corporateActionSyncOrchestrator,
+          symbolService: container.symbolService,
+        },
         requireAuth,
       );
     },

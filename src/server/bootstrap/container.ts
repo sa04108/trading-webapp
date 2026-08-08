@@ -43,6 +43,7 @@ import {
 } from '../modules/facts/application/corporate-action-coverage.js';
 import { SqliteFactCoverageStore } from '../modules/facts/application/fact-coverage-store.js';
 import { FactSyncService } from '../modules/facts/application/fact-sync-service.js';
+import { CorporateActionSyncOrchestrator } from '../modules/facts/application/corporate-action-sync-orchestrator.js';
 import { createDartFactSource } from '../modules/facts/infrastructure/dart/dart-fact-source.js';
 import { ParquetFactRepository } from '../modules/facts/infrastructure/parquet-fact-repository.js';
 import { createKrxHistoricalUniverseSource } from '../modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
@@ -89,6 +90,8 @@ export interface Container {
   readonly universeRuleResolver: UniverseRuleResolver;
   /** 제출 게이트(Task 6)가 자본변동 수집 여부를 대조할 때 쓴다 */
   readonly actionCoverageStore: CorporateActionCoverageStore;
+  /** 자본변동 일괄 수집 잡·진행률(Task 7) */
+  readonly corporateActionSyncOrchestrator: CorporateActionSyncOrchestrator;
   close(): void;
 }
 
@@ -209,6 +212,14 @@ export function createContainer(config: AppConfig): Container {
     factCoverageStore,
     actionCoverageStore,
   );
+  // 자본변동 일괄 수집 잡(Task 7) — factSyncService 를 그대로 재사용해 CLI·웹이
+  // 같은 코드 경로(runSync)를 거치게 한다.
+  const corporateActionSyncOrchestrator = new CorporateActionSyncOrchestrator(
+    database,
+    factSyncService,
+    clock,
+    logger,
+  );
 
   // 증권사 선택은 조립부 전용 지식 (§2.4) — 애플리케이션은 StockInfoSource 만 안다.
   // 자격 증명 미설정이면 어댑터가 포트 에러를 던지는 비활성 소스가 된다.
@@ -308,6 +319,7 @@ export function createContainer(config: AppConfig): Container {
     symbolMasterScheduler,
     universeRuleResolver,
     actionCoverageStore,
+    corporateActionSyncOrchestrator,
     close: () => {
       clearInterval(pruneTimer);
       jobOrchestrator.stop();
