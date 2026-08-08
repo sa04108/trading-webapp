@@ -3,7 +3,8 @@ import type { KrxDailyTradeRow } from './krx-universe-types.js';
 /**
  * KRX 일별매매정보 행이 "그날 거래할 수 없었던" 행인지 본다.
  *
- * 실측(2026-08-08, scripts/krx-halt-probe.ts)에서 확인한 모양이다 —
+ * 실측(2026-08-08, `docs/superpowers/specs/2026-08-08-delisting-and-non-trading-days-design.md`
+ * "KRX 실응답 실측")에서 확인한 모양이다 —
  * 시·고·저가 "0", 종가는 직전 종가 유지, 거래량 0. `null` 로 오지 않는다.
  *
  * 거래정지와 무거래를 나누지 않는다. KRX 응답이 둘을 구분해 주지 않고,
