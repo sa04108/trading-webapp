@@ -19,6 +19,7 @@ import {
   confirmEntry,
   holdLimitReached,
   newHolding,
+  scaleSymbolHolding,
   updateTrail,
   type HoldingState,
 } from './shared/trailing-stop.js';
@@ -243,5 +244,11 @@ export const rangeBreakoutStrategy: TradingStrategy<RangeBreakoutParameters, Ran
     }
 
     return { orders };
+  },
+
+  // 분할 등 자본변동이 걸린 종목의 `HoldingState` 가격 필드를 같은 비율로 고친다.
+  // `ratio`·호출 시점은 엔진이 정한다(`engine.ts` 조정 루프 참고).
+  onCorporateAction(symbol, ratio, state) {
+    scaleSymbolHolding(state.bySymbol, symbol, ratio);
   },
 };

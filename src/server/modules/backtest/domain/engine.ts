@@ -80,7 +80,7 @@ export interface BacktestRunResult {
 }
 
 /** 재현성 메타데이터에 기록되는 엔진 버전 (스펙 §9.5) — 체결·지표 로직 변경 시 올린다 */
-export const ENGINE_VERSION = '1.3.0';
+export const ENGINE_VERSION = '1.4.0';
 
 const PROGRESS_INTERVAL_BARS = 500;
 
@@ -250,6 +250,12 @@ function* runBacktestSteps(
       // 역분할이 정지 구간에 겹쳐 쌓일 때만 닿는 구석이라 지금은 그대로 둔다.
       const ratio = due.reduce((acc, action) => acc * action.ratio, 1);
       if (ratio === 1) continue;
+      // 전략이 봉 사이에 들고 다니는 가격 상태(스톱 레벨 등)도 같은 자리에서 고친다.
+      // 대기 주문 체결보다 먼저 불러야 이번 봉의 스톱 판정이 조정된 값으로 난다.
+      // `context.corporateActions()` 는 시점까지 전체 이력을 주지만
+      // 이 훅은 방금 확정된 합성 `ratio` 하나만 정확히 준다.
+      // 전략마다 커서를 새로 두면 이미 푼 문제를 다시 만든다.
+      strategy.onCorporateAction?.(symbol, ratio, state);
       // 이 종목을 겨냥한 대기 주문을 같은 비율로 스케일한다.
       // 발행 시점에 캡처된 수량을 그대로 체결하면 분할 이후 수량이 어긋난다.
       // BUY 도 같은 값 보존 규칙을 적용해야 의도한 투입 금액이 유지된다.

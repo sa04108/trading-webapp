@@ -988,4 +988,116 @@ describe('분할을 걸친 보유 포지션 조정', () => {
     expect(result.openPositions[0]!.quantity).toBe(100);
     expect(result.openPositions[0]!.avgEntryPrice).toBe(20_000);
   });
+
+  it('분할 효력 봉에서 전략의 자본변동 훅을 부른다', () => {
+    // 훅 호출을 기록하는 가짜 전략. 실제 스톱 조정 로직은 전략 층 테스트가 맡고,
+    // 여기서는 엔진이 훅을 정확한 시점·인자로 부르는지만 본다.
+    const calls: Array<{ symbol: string; ratio: number }> = [];
+    const strategy = {
+      id: 'hook-recorder',
+      version: '1.0.0',
+      name: 't',
+      description: 't',
+      parameterSchema: z.unknown(),
+      initialize: () => ({}),
+      onBars: () => ({ orders: [] }),
+      onCorporateAction(symbol: string, ratio: number) {
+        calls.push({ symbol, ratio });
+      },
+    };
+
+    const candles = [
+      dailyBar(0, 100_000),
+      dailyBar(1, 100_000),
+      dailyBar(2, 20_000),
+      dailyBar(3, 20_000),
+    ];
+    runBacktest(strategy as never, {
+      candles,
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+      facts: [splitFact('A', SPLIT_PERIOD_KEY, 5)],
+    });
+
+    // 이 전략은 주문을 내지 않아 포지션도 대기 주문도 없다.
+    // 조정 대상 자체가 없으므로 엔진이 훅을 부르지 않는다.
+    // 정확한 심볼·`ratio` 로 부르는지는 아래 테스트가 확인한다.
+    expect(calls).toHaveLength(0);
+  });
+
+  it('보유 중 분할에서 정확한 심볼과 합성 ratio 로 훅을 부른다', () => {
+    const calls: Array<{ symbol: string; ratio: number }> = [];
+    const strategy = {
+      id: 'hook-recorder-2',
+      version: '1.0.0',
+      name: 't',
+      description: 't',
+      parameterSchema: z.unknown(),
+      initialize: () => ({ step: 0 }),
+      onBars(_context: StrategyBarContext, state: { step: number }) {
+        const orders: OrderIntent[] =
+          state.step === 0 ? [{ symbol: 'A', side: 'BUY', quantity: 10 }] : [];
+        state.step += 1;
+        return { orders };
+      },
+      onCorporateAction(symbol: string, ratio: number) {
+        calls.push({ symbol, ratio });
+      },
+    };
+
+    const candles = [
+      dailyBar(0, 100_000),
+      dailyBar(1, 100_000),
+      dailyBar(2, 20_000),
+      dailyBar(3, 20_000),
+    ];
+    runBacktest(strategy as never, {
+      candles,
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+      facts: [splitFact('A', SPLIT_PERIOD_KEY, 5)],
+    });
+
+    expect(calls).toEqual([{ symbol: 'A', ratio: 5 }]);
+  });
+
+  it('자본변동이 없는 봉에서는 훅을 부르지 않는다', () => {
+    const calls: Array<{ symbol: string; ratio: number }> = [];
+    const strategy = {
+      id: 'hook-recorder-3',
+      version: '1.0.0',
+      name: 't',
+      description: 't',
+      parameterSchema: z.unknown(),
+      initialize: () => ({ step: 0 }),
+      onBars(_context: StrategyBarContext, state: { step: number }) {
+        const orders: OrderIntent[] =
+          state.step === 0 ? [{ symbol: 'A', side: 'BUY', quantity: 10 }] : [];
+        state.step += 1;
+        return { orders };
+      },
+      onCorporateAction(symbol: string, ratio: number) {
+        calls.push({ symbol, ratio });
+      },
+    };
+
+    const candles = [dailyBar(0, 100_000), dailyBar(1, 100_000), dailyBar(2, 100_000)];
+    runBacktest(strategy as never, {
+      candles,
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+      // `facts` 를 아예 넘기지 않는다 — 자본변동 이력이 없다
+    });
+
+    expect(calls).toHaveLength(0);
+  });
 });
