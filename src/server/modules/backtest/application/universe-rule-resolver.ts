@@ -36,6 +36,15 @@ export interface UniverseRuleResolverDeps {
   readonly logger: Logger;
 }
 
+/**
+ * 일정 전체의 거래불가 제외 건수 합계 (중복 포함). `resolve()` 자체와 워커
+ * (job.universeScheduleJson 만 갖고 있다, `resolved` 전체는 못 받는다) 가 같은
+ * 합산 로직을 쓰게 해 실행 경고와 `excludedNonTradingTotal` 이 갈라지지 않게 한다.
+ */
+export function sumExcludedNonTrading(schedule: readonly UniverseScheduleEntry[]): number {
+  return schedule.reduce((sum, entry) => sum + entry.excludedNonTradingCount, 0);
+}
+
 /** 시총 내림차순 비교 — BigInt 차이를 Number 로 좁히면 큰 시총에서 오버플로가 나므로 부호만 본다 */
 function compareMarketCapDesc(a: bigint, b: bigint): number {
   if (a === b) return 0;
@@ -144,10 +153,7 @@ export class UniverseRuleResolver {
     }
 
     const scheduleHash = createHash('sha256').update(JSON.stringify(schedule)).digest('hex');
-    const excludedNonTradingTotal = schedule.reduce(
-      (sum, entry) => sum + entry.excludedNonTradingCount,
-      0,
-    );
+    const excludedNonTradingTotal = sumExcludedNonTrading(schedule);
 
     return {
       schedule,

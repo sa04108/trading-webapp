@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { UniverseRuleResolver } from '../../src/server/modules/backtest/application/universe-rule-resolver.js';
+import {
+  sumExcludedNonTrading,
+  UniverseRuleResolver,
+  type UniverseScheduleEntry,
+} from '../../src/server/modules/backtest/application/universe-rule-resolver.js';
 
 describe('UniverseRuleResolver 거래불가 제외', () => {
   it('기준일에 거래불가인 종목은 시총이 커도 후보에서 빠진다', async () => {
@@ -33,5 +37,23 @@ describe('UniverseRuleResolver 거래불가 제외', () => {
     expect(resolved.schedule[0]?.symbols).toEqual(['048260']);
     expect(resolved.schedule[0]?.excludedNonTradingCount).toBe(1);
     expect(resolved.excludedNonTradingTotal).toBe(1);
+  });
+});
+
+describe('sumExcludedNonTrading', () => {
+  // 워커는 resolved 전체가 아니라 job 에 저장된 schedule(UniverseScheduleEntry[])만
+  // 받는다 — resolve() 와 워커가 같은 합산 로직을 쓰게 해서, 리밸런스가 여러 번인
+  // 실행에서도 두 곳의 합계가 갈라지지 않게 한다.
+  it('일정 전체에서 제외 건수를 더한다 (중복 포함)', () => {
+    const schedule: UniverseScheduleEntry[] = [
+      { rebalanceDate: '2026-01-02', effectiveTradingDate: '2026-01-02', symbols: ['005930'], excludedNonTradingCount: 2 },
+      { rebalanceDate: '2026-04-01', effectiveTradingDate: '2026-04-01', symbols: ['005930'], excludedNonTradingCount: 0 },
+      { rebalanceDate: '2026-07-01', effectiveTradingDate: '2026-07-01', symbols: ['005930'], excludedNonTradingCount: 1 },
+    ];
+    expect(sumExcludedNonTrading(schedule)).toBe(3);
+  });
+
+  it('빈 일정은 0이다', () => {
+    expect(sumExcludedNonTrading([])).toBe(0);
   });
 });

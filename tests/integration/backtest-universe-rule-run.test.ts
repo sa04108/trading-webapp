@@ -983,4 +983,61 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
       ).toBe(true);
     },
   );
+
+  it(
+    '리밸런스 기준일에 거래정지인 종목은 유니버스 후보에서 빠지고 실행 경고로 남는다 (Task 11)',
+    { timeout: 90_000 },
+    async () => {
+      const alive = buildDailyCandles('005930');
+      registerSymbols(ctx.container, 'KR', ['005930', '000660']);
+      seedDailyBars(ctx.container.database.db, alive);
+      seedSymbolMasterUniverse(ctx.container, MASTER_DATES, [
+        { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '900' },
+        { standardCode: 'KR7000660001', shortCode: '000660', name: 'SK하이닉스', market: 'KOSPI', marketCapKrw: '800' },
+      ]);
+      seedCorporateActionCoverage(ctx.container, ['005930', '000660'], yearRange(2025, 2026));
+
+      // 이 파일의 유일한 리밸런스 날짜는 period.from(2025-07-27) 이다 — range-breakout 은
+      // rebalanceMonths 파라미터가 없어 제출 경로가 단일 리밸런스로 접는다
+      // (backtest-routes.ts resolveUniverse). 그 날짜에 000660 을 거래정지로 심으면
+      // UniverseRuleResolver.resolve() 가 후보에서 빼고 excludedNonTradingCount 를 센다 —
+      // 000660 은 봉이 없어도 상관없다(유니버스에 아예 들어오지 못하므로).
+      ctx.container.database.db
+        .insert(krxNonTradingDays)
+        .values({ date: '2025-07-27', shortCode: '000660', market: 'KOSPI', lastClose: 1 })
+        .run();
+
+      const created = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/backtests',
+        cookies: { qp_session: cookie },
+        payload: buildRequest(2),
+      });
+      expect(created.statusCode).toBe(201);
+      const jobId = (created.json().job as { id: string }).id;
+
+      ctx.container.jobOrchestrator.tick();
+      await waitFor(() => {
+        const job = ctx.container.jobQueue.getJob(jobId);
+        return job !== null && ctx.container.jobQueue.isTerminal(job.status);
+      }, 60_000);
+
+      const job = ctx.container.jobQueue.getJob(jobId)!;
+      expect(job.error).toBeNull();
+      expect(job.status).toBe('COMPLETED');
+
+      // 실제로 후보에서 빠졌다는 증거 — 그 리밸런스에서 거래정지가 아니었다면
+      // topN=2 라 000660 도 유니버스에 들어와 거래가 났을 것이다.
+      const { trades } = ctx.container.resultsService.getTrades(jobId, { limit: 1000, offset: 0 });
+      expect(trades.some((t) => t.symbol === '000660')).toBe(false);
+
+      const run = ctx.container.resultsService.getRun(jobId)!;
+      const warnings = JSON.parse(run.warningsJson ?? '[]') as string[];
+      expect(
+        warnings.some((w) =>
+          w.includes('리밸런스 기준일에 거래정지·무거래여서 유니버스 후보에서 제외된 종목 1건'),
+        ),
+      ).toBe(true);
+    },
+  );
 });

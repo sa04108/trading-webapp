@@ -50,11 +50,13 @@ import { useStockNames } from '@/lib/use-stock-names';
 import { useBacktestLive, useBacktestSeries, useBacktestTrades, useStrategies } from './api';
 import { exitReasonLabel } from './exit-reason';
 import { openPositionRows } from './open-position-rows';
+import { periodEndTsMs, staleDays } from './stale-days';
 import { parsePageSize } from '@/lib/page-size';
 import { pageWindow } from '@/lib/pagination';
 import { ParamHint } from './param-hint';
 import { extractNumberParams, paramLabel } from './param-specs';
 import {
+  formatDate,
   formatDateTime,
   formatDuration,
   formatKrw,
@@ -230,6 +232,10 @@ function TradesSection({
     page === 0
       ? sortOpenRows(openPositionRows(run?.openPositionsJson ?? null, symbol, periodTo), sort)
       : [];
+  // 봉 tsMs 규약(UTC 자정)과 맞춰야 한다 — 기간 종료일까지 거래된 정상 종목의 마지막
+  // 확인일도 이 값과 같다. KST 자정·23:59:59 같은 다른 규약을 쓰면 반나절 가까이
+  // 어긋나 정상 종목에도 "1일 경과" 가 붙는다.
+  const periodEndMsForStale = periodEndTsMs(periodTo);
 
   return (
     <Card>
@@ -291,42 +297,52 @@ function TradesSection({
                     align="right"
                   />
                   <SortableHead sortKey="HOLDING_TIME" sort={sort} onSort={changeSort} />
+                  {/* 미청산 행에만 값이 있다 — 청산된 거래는 이미 청산일이 있어 별도로
+                      "확인일" 을 말할 필요가 없다. 정렬 축으로 두지 않는 이유는 사유와 같다 */}
+                  <TableHead>마지막 확인일</TableHead>
                   <TableHead>사유</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {openRows.map((row) => (
-                  <TableRow key={`open-${row.symbol}`} className="bg-muted/40">
-                    <TableCell className="font-medium">
-                      <SymbolLabel symbol={row.symbol} name={nameOf(row.symbol)} />
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">{row.quantity}</TableCell>
-                    <TableCell className="whitespace-nowrap text-xs">
-                      {formatDateTime(row.entryTsMs)}
-                      <br />
-                      <span className="text-muted-foreground">{formatKrw(row.entryPrice)}</span>
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap text-xs">
-                      <Badge variant="outline">미청산</Badge>
-                      <br />
-                      <span className="text-muted-foreground">{formatKrw(row.lastPrice)}</span>
-                    </TableCell>
-                    <TableCell
-                      className={cn('text-right tabular-nums', pnlClass(row.unrealizedPnl))}
-                    >
-                      {formatSignedKrw(row.unrealizedPnl)}
-                    </TableCell>
-                    <TableCell
-                      className={cn('text-right tabular-nums', pnlClass(row.returnPct))}
-                    >
-                      {formatSignedPct(row.returnPct)}
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
-                      {formatDuration(row.holdingTimeMs)}
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">미청산</TableCell>
-                  </TableRow>
-                ))}
+                {openRows.map((row) => {
+                  const stale = staleDays(row.lastPriceTsMs, periodEndMsForStale);
+                  return (
+                    <TableRow key={`open-${row.symbol}`} className="bg-muted/40">
+                      <TableCell className="font-medium">
+                        <SymbolLabel symbol={row.symbol} name={nameOf(row.symbol)} />
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">{row.quantity}</TableCell>
+                      <TableCell className="whitespace-nowrap text-xs">
+                        {formatDateTime(row.entryTsMs)}
+                        <br />
+                        <span className="text-muted-foreground">{formatKrw(row.entryPrice)}</span>
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap text-xs">
+                        <Badge variant="outline">미청산</Badge>
+                        <br />
+                        <span className="text-muted-foreground">{formatKrw(row.lastPrice)}</span>
+                      </TableCell>
+                      <TableCell
+                        className={cn('text-right tabular-nums', pnlClass(row.unrealizedPnl))}
+                      >
+                        {formatSignedKrw(row.unrealizedPnl)}
+                      </TableCell>
+                      <TableCell
+                        className={cn('text-right tabular-nums', pnlClass(row.returnPct))}
+                      >
+                        {formatSignedPct(row.returnPct)}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                        {formatDuration(row.holdingTimeMs)}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                        {formatDate(row.lastPriceTsMs)}
+                        {stale > 0 ? ` (${stale}일 경과)` : ''}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">미청산</TableCell>
+                    </TableRow>
+                  );
+                })}
                 {trades.map((trade) => (
                   <TableRow key={trade.id}>
                     <TableCell className="font-medium">
@@ -356,6 +372,8 @@ function TradesSection({
                     <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
                       {formatDuration(trade.holdingTimeMs)}
                     </TableCell>
+                    {/* 이미 청산된 거래에는 "마지막 확인일" 개념이 없다 — 청산일이 그 역할이다 */}
+                    <TableCell className="text-xs text-muted-foreground">-</TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {exitReasonLabel(trade.exitReason)}
                     </TableCell>

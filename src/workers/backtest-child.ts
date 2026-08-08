@@ -20,7 +20,10 @@ import {
   symbolVersions,
   symbols as symbolsTable,
 } from '../server/shared/db/schema.js';
-import type { UniverseScheduleEntry } from '../server/modules/backtest/application/universe-rule-resolver.js';
+import {
+  sumExcludedNonTrading,
+  type UniverseScheduleEntry,
+} from '../server/modules/backtest/application/universe-rule-resolver.js';
 import { newId } from '../server/shared/ids.js';
 import { TERMINAL_STATUSES } from '../server/modules/backtest/application/job-queue.js';
 import { MAX_BACKTEST_BARS } from '../server/modules/backtest/domain/bar-estimate.js';
@@ -201,6 +204,16 @@ async function main(): Promise<void> {
         }, new Map<string, typeof symbolVersions.$inferSelect>()),
     );
     const datasetWarnings: string[] = [];
+    // 리밸런스 기준일에 거래정지·무거래로 후보에서 빠진 종목 — resolve() 가 이미 세어
+    // schedule 에 담아 뒀다(Task 6). 조용히 빠지면 "그날 왜 이 종목을 안 샀는지" 를
+    // 사용자가 결과만 보고는 알 수 없다.
+    const excludedNonTradingTotal = sumExcludedNonTrading(schedule);
+    if (excludedNonTradingTotal > 0) {
+      datasetWarnings.push(
+        `리밸런스 기준일에 거래정지·무거래여서 유니버스 후보에서 제외된 종목 ${excludedNonTradingTotal}건 `
+          + '(중복 포함). 그날 실제로 매수할 수 없는 종목입니다.',
+      );
+    }
     // 서버가 제출 시점에 조립한 pin(Task 12) — scheduleHash 를 재현성 기록에 쓴다.
     // run 에는 원문 그대로 복사한다(아래 provenancePinJson).
     const pin: ProvenancePin | null = job.provenancePinJson
