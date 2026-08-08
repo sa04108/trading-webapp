@@ -4,9 +4,11 @@ import { symbolFactsState } from '../../../shared/db/schema.js';
 import { parseYears } from './fact-coverage-store.js';
 
 /**
- * 종목별 자본변동 수집 커버리지. `symbolFactsState.coveredYearsJson` (재무용) 과는
- * 다른 컬럼 두 개를 쓴다 — 자본변동만 받는 경로가 생기면 재무 커버리지 목록에 그
- * 연도를 적는 순간 재무 전략이 "데이터 있음" 으로 오판하기 때문이다.
+ * 종목별 자본변동 수집 커버리지다. `symbolFactsState.coveredYearsJson`(재무용)과는
+ * 다른 컬럼 두 개를 쓴다.
+ *
+ * 자본변동만 받는 경로가 생기면 재무 커버리지 목록이 거짓말을 한다.
+ * 그 연도를 재무 커버리지에도 적으면 재무 전략이 데이터가 있다고 오판한다.
  *
  * 팩트 0건이 세 가지 상태를 가릴 수 있다: (1) 수집했고 분할이 없었다,
  * (2) 수집했는데 DART 가 응답하지 못했다, (3) 아예 수집하지 않았다. 커버리지가

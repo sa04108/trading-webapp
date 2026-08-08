@@ -161,6 +161,11 @@ export const symbolCoverage = sqliteTable(
  * 거짓말한다.
  *
  * 이제 데이터셋 축이 없다 — 같은 종목을 두 데이터셋에서 각각 받던 중복이 사라진다.
+ *
+ * **행 존재를 "재무를 수집했다" 신호로 쓰면 안 된다.** 자본변동 전용 수집 경로가
+ * 재무보다 먼저 행을 만들 수 있다(`SqliteCorporateActionCoverageStore.addYears`).
+ * 그 행의 `coveredYearsJson` 은 빈 배열이다. 재무 수집 여부는 반드시
+ * `coveredYearsJson` 의 배열 내용으로 판정해야 한다.
  */
 export const symbolFactsState = sqliteTable('symbol_facts_state', {
   code: text('code')

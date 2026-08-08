@@ -54,7 +54,7 @@ describe('SqliteCorporateActionCoverageStore', () => {
     expect(store.getCoveredYears().get('005930')).toEqual([2025]);
   });
 
-  it('없는 종목은 빈 목록을 준다', async () => {
+  it('없는 종목은 조회되지 않는다', async () => {
     const { store } = await setup();
     expect(store.getCoveredYears().get('999999')).toBeUndefined();
     expect(store.getGapYears().get('999999')).toBeUndefined();

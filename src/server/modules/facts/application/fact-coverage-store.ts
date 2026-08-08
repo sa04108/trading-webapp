@@ -9,6 +9,10 @@ import { symbolFactsState } from '../../../shared/db/schema.js';
  * **데이터셋 축이 없다** (설계 2026-07-31-symbol-as-first-class) — 같은 종목을 두
  * 데이터셋에서 각각 받던 중복이 여기서도 사라진다. 한 번 받은 연도는 어느 데이터셋을
  * 통해 요청해도 다시 받지 않는다.
+ *
+ * **`getCoveredYears()` 가 어떤 종목의 키를 돌려준다고 해서 재무를 수집했다는 뜻은
+ * 아니다.** 자본변동 전용 수집이 먼저 행을 만들면 그 종목의 배열은 빈 채로 키만
+ * 존재한다. 재무 수집 여부는 반드시 배열 길이로 판정한다(`symbolFactsState` 주석 참고).
  */
 export interface FactCoverageStore {
   /** 종목 → 수집 완료 연도 (오름차순). 인자를 주면 그 종목만 */
@@ -65,8 +69,8 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
  * 깨진 JSON 을 빈 목록으로 읽는다 — 여기서 던지면 수집 전체가 시작조차 못 한다.
  * 빈 목록이면 그 종목을 전 구간 다시 받으므로(멱등) 결과는 옳고 비용만 든다.
  *
- * `null` 도 여기로 들어온다 — nullable 컬럼(예: 자본변동 커버리지)이 아직 값을
- * 받지 못한 행을 가리킨다. `SqliteCorporateActionCoverageStore` 가 재사용한다.
+ * `null` 도 여기로 들어온다 — `null` 을 허용하는 컬럼(예: 자본변동 커버리지)이
+ * 아직 값을 받지 못한 행을 가리킨다. `SqliteCorporateActionCoverageStore` 가 재사용한다.
  */
 export function parseYears(json: string | null): readonly number[] {
   if (json === null) return [];
