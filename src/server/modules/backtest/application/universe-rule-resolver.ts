@@ -88,8 +88,10 @@ export class UniverseRuleResolver {
       const sortedDates = [...rebalanceDates].sort();
       const first = sortedDates[0] as string;
       const last = sortedDates[sortedDates.length - 1] as string;
-      // effectiveTradingDate 는 rebalanceDate 보다 앞설 수 있어(휴장 보정) 조회 하한에
-      // 여유를 둔다 — 31 은 이 저장소가 이미 쓰는 이전 거래일 탐색 상한과 같은 값이다.
+      // rebalanceDate 가 휴장일이면 effectiveTradingDateWithinCoverage 가 coverage 안에서
+      // 날짜 상한 없이 뒤로 찾아가므로, effectiveTradingDate 는 rebalanceDate 보다 앞설 수
+      // 있다 — 조회 하한을 rebalanceDate 그대로 두면 그 사이 거래불가일을 놓친다. 31일은
+      // KRX 최장 연휴(설·추석이 주말과 겹치는 경우)도 1주일 안팎이라 여유 있게 웃돈다.
       for (const row of this.deps.symbolMaster.nonTradingDaysBetween(
         addCalendarDays(first, -31),
         last,
