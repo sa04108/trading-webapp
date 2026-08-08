@@ -4,7 +4,13 @@ import {
   SymbolMasterService,
   type SymbolMasterServiceDeps,
 } from '../../src/server/modules/market-data/application/symbol-master-service.js';
-import { krxDailyBars, krxNonTradingDays, krxNonTradingCoverage } from '../../src/server/shared/db/schema.js';
+import {
+  krxDailyBars,
+  krxNonTradingDays,
+  krxNonTradingCoverage,
+  symbolMasterCoverage,
+  symbolMasterEvents,
+} from '../../src/server/shared/db/schema.js';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
 import {
   baseInfoFixture,
@@ -135,6 +141,43 @@ describe('거래불가일 조회', () => {
     expect(ctx.svc.isNonTradingRangeCovered('2021-06-01', '2021-06-30')).toBe(true);
     // 시작이 커버 밖이면 덮은 것이 아니다
     expect(ctx.svc.isNonTradingRangeCovered('2020-06-01', '2021-06-30')).toBe(false);
+    await teardown(ctx);
+  });
+});
+
+describe('거래불가일 백필', () => {
+  it('봉·이벤트·coverage 를 건드리지 않고 거래불가일만 채운다', async () => {
+    const ctx = await setup();
+    for (const basDd of ['20210615', '20210616']) {
+      ctx.fake.setResponse('stk_bydd_trd', basDd, { body: krxEnvelope([]) });
+      ctx.fake.setResponse('ksq_bydd_trd', basDd, { body: krxEnvelope([NON_TRADING_ROW, NORMAL_ROW]) });
+    }
+
+    const result = await ctx.svc.backfillNonTradingDays('2021-06-15', '2021-06-16');
+
+    expect(result.rows).toBe(2);
+    const rows = ctx.t.container.database.db.select().from(krxNonTradingDays).all();
+    expect(rows).toHaveLength(2);
+    expect(rows.every((row) => row.shortCode === '215600')).toBe(true);
+
+    // 백필은 봉·이벤트·마스터 coverage 를 쓰지 않는다 — 이벤트 재생성 위험이 없어야 한다
+    expect(ctx.t.container.database.db.select().from(krxDailyBars).all()).toHaveLength(0);
+    expect(ctx.t.container.database.db.select().from(symbolMasterEvents).all()).toHaveLength(0);
+    expect(ctx.t.container.database.db.select().from(symbolMasterCoverage).all()).toHaveLength(0);
+
+    expect(ctx.svc.isNonTradingRangeCovered('2021-06-15', '2021-06-16')).toBe(true);
+    await teardown(ctx);
+  });
+
+  it('응답이 0행인 날(휴장)은 건너뛴다', async () => {
+    const ctx = await setup();
+    // 어떤 날짜에도 응답을 심지 않는다 — fake 서버가 빈 OutBlock_1 을 돌려준다
+    const result = await ctx.svc.backfillNonTradingDays('2021-06-15', '2021-06-16');
+
+    expect(result.dates).toBe(0);
+    expect(result.rows).toBe(0);
+    // 그래도 커버 구간은 남는다 — "봤는데 없었다" 와 "안 봤다" 를 갈라야 한다
+    expect(ctx.svc.isNonTradingRangeCovered('2021-06-15', '2021-06-16')).toBe(true);
     await teardown(ctx);
   });
 });

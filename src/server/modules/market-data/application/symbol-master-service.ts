@@ -769,6 +769,46 @@ export class SymbolMasterService {
   }
 
   /**
+   * 이미 수집한 구간의 거래불가일을 뒤늦게 채운다.
+   *
+   * `ingestDate` 를 다시 부르지 않는다. 그쪽은 이벤트·coverage·봉을 함께 쓰므로
+   * 재실행하면 이벤트가 다시 생길 위험이 있다. 여기서는 일별매매정보만 부르고
+   * `krx_non_trading_days` 만 쓴다 — 되돌릴 것이 그 테이블 하나뿐이다.
+   *
+   * 휴장일은 응답이 0행이라 저절로 건너뛰어진다. 날짜 달력을 따로 두지 않는다.
+   */
+  async backfillNonTradingDays(from: string, to: string): Promise<{ dates: number; rows: number }> {
+    let dates = 0;
+    let rows = 0;
+    for (let date = from; date <= to; date = addCalendarDays(date, 1)) {
+      const byMarket: readonly [KrxMarket, readonly KrxDailyTradeRow[]][] = [
+        ['KOSPI', await this.deps.source.fetchDailyTrades('KOSPI', date)],
+        ['KOSDAQ', await this.deps.source.fetchDailyTrades('KOSDAQ', date)],
+      ];
+      const values: (typeof krxNonTradingDays.$inferInsert)[] = [];
+      for (const [market, trades] of byMarket) {
+        for (const trade of trades) {
+          if (trade.close === null || !isNonTradingRow(trade)) continue;
+          values.push({ shortCode: trade.shortCode, date, market, lastClose: trade.close });
+        }
+      }
+      if (byMarket.some(([, trades]) => trades.length > 0)) dates += 1;
+      if (values.length === 0) continue;
+      this.deps.db.transaction((tx) => {
+        for (let i = 0; i < values.length; i += 500) {
+          tx.insert(krxNonTradingDays).values(values.slice(i, i + 500)).onConflictDoNothing().run();
+        }
+      });
+      rows += values.length;
+    }
+    this.deps.db
+      .insert(krxNonTradingCoverage)
+      .values({ startDate: from, endDate: to, syncedAtMs: this.deps.clock.now() })
+      .run();
+    return { dates, rows };
+  }
+
+  /**
    * [from, to] 구간 전체가 빈틈없이 수집 완료 구간으로 덮였는지 본다. `isCovered`
    * 는 날짜 하나만 보므로, 리밸런스 날짜만 개별 동기화되고(예: `POST
    * /symbol-master/sync` 로 날짜 하나씩) 그 사이 평일이 비어 있는 부분 커버리지를

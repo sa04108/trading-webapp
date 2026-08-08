@@ -279,6 +279,35 @@ async function factsSync(argv: readonly string[]): Promise<void> {
   }
 }
 
+/**
+ * 이미 수집한 구간의 거래불가일을 뒤늦게 채운다 — `ingestDate` 를 다시 부르지 않으므로
+ * 이벤트·coverage·봉을 건드릴 위험이 없다 (SymbolMasterService.backfillNonTradingDays 참고).
+ */
+async function krxBackfillNonTrading(argv: readonly string[]): Promise<void> {
+  const flags = new Map<string, string>();
+  for (let i = 0; i < argv.length; i += 2) {
+    const key = argv[i];
+    const value = argv[i + 1];
+    if (key?.startsWith('--') && value !== undefined) flags.set(key.slice(2), value);
+  }
+  const from = flags.get('from');
+  const to = flags.get('to');
+  if (!from || !to) {
+    console.error('사용법: cli krx:backfill-non-trading --from YYYY-MM-DD --to YYYY-MM-DD');
+    process.exitCode = 1;
+    return;
+  }
+
+  const config = loadConfig();
+  const container = createContainer(config);
+  try {
+    const result = await container.symbolMasterService.backfillNonTradingDays(from, to);
+    console.log(`거래일 ${result.dates}일에서 거래불가 ${result.rows}건을 기록했습니다.`);
+  } finally {
+    container.close();
+  }
+}
+
 async function main(): Promise<void> {
   const command = process.argv[2];
   switch (command) {
@@ -291,11 +320,15 @@ async function main(): Promise<void> {
     case 'facts:sync':
       await factsSync(process.argv.slice(3));
       break;
+    case 'krx:backfill-non-trading':
+      await krxBackfillNonTrading(process.argv.slice(3));
+      break;
     default:
       console.log('사용법: cli <command>');
       console.log('  admin:create   관리자 계정 생성');
       console.log('  totp:enroll    TOTP 2단계 인증 등록·재발급 (CLI 전용)');
       console.log('  facts:sync     DART 재무·자본변동 수집 (--symbols <코드,코드,...> --from <연도> --to <연도> [--fs-div CFS|OFS])');
+      console.log('  krx:backfill-non-trading  이미 수집한 구간의 거래불가일 채우기 (--from <날짜> --to <날짜>)');
       process.exitCode = command ? 1 : 0;
   }
 }
