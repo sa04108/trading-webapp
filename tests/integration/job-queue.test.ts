@@ -23,7 +23,7 @@ const MAIN_DATE = '2026-01-05';
 const NO_CANDLE_DATE = '2020-01-01';
 
 /**
- * 자본변동 게이트(Task 6)용 커버리지 연도. 이 파일의 제출 period 가 걸치는
+ * 자본변동 게이트(Task 6)용 커버리지 연도. 이 파일의 제출 기간이 걸치는
  * 연도를 전부 담는다 — 취소 시퀀스 테스트가 2046 년까지 쓴다.
  */
 const ACTION_COVERAGE_YEARS = yearRange(2020, 2046);

@@ -111,7 +111,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     ]);
     dailyCandles = buildDailyCandles();
     seedDailyBars(ctx.container.database.db, dailyCandles);
-    // 자본변동 게이트(Task 6) — 이 파일의 제출 period 가 걸치는 연도(2025·2026)를 채운다
+    // 자본변동 게이트(Task 6) — 이 파일의 제출 기간이 걸치는 연도(2025·2026)를 채운다
     seedCorporateActionCoverage(ctx.container, ['005930', '000660'], yearRange(2025, 2026));
   });
 
@@ -615,7 +615,7 @@ describe('POST /backtests — 미등록 유니버스는 제출 시점에 거부�
  *
  * 팩트 0건은 세 상태를 가릴 수 있다: 수집했고 분할이 없다, 수집했는데 DART 가
  * 응답하지 못했다, 아예 수집하지 않았다. 커버리지가 셋째를 앞의 둘과 가르고,
- * gap 이 첫째와 둘째를 가른다. 이 describe 는 그 세 갈래를 그대로 재현한다.
+ * gap 이 첫째와 둘째를 가른다. 이 묶음은 그 세 갈래를 그대로 재현한다.
  */
 describe('POST /backtests — 자본변동 수집 게이트 (Task 6)', () => {
   const date = '2026-01-05';
@@ -704,5 +704,32 @@ describe('POST /backtests — 자본변동 수집 게이트 (Task 6)', () => {
     expect(created.statusCode).toBe(201);
     const warnings = (created.json() as { warnings: string[] }).warnings;
     expect(warnings.some((w) => w.includes(CODE))).toBe(true);
+  });
+
+  /**
+   * clone-draft 는 "검증을 돌리되 막지 않는다" — 그런데 비차단 경고까지 함께
+   * 삼키면 위저드가 자본변동 위험을 안내할 길이 없다(리뷰 finding, 2026-08-08).
+   */
+  it('gap 이 있는 잡의 clone-draft 도 경고를 낸다 (리뷰 finding, 2026-08-08)', async () => {
+    seedCorporateActionCoverage(ctx.container, [CODE], [2026]);
+    ctx.container.actionCoverageStore.addGapYears(CODE, [2026], ctx.container.clock.now());
+
+    // 검증을 우회해 큐에 직접 넣는다 — clone-draft 는 대기열 상태와 무관하게 동작한다.
+    const job = ctx.container.jobQueue.enqueue({
+      ...buildRequest(1),
+      period: { from: date, to: date },
+    });
+
+    const draft = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${job.id}/clone-draft`,
+      cookies: { qp_session: cookie },
+    });
+
+    expect(draft.statusCode).toBe(200);
+    const body = draft.json() as { warnings: string[]; blockers: string[] };
+    expect(body.warnings.some((w) => w.includes(CODE))).toBe(true);
+    // 차단 사유가 아니라 경고다 — blockers 는 비어 있어야 한다.
+    expect(body.blockers).toEqual([]);
   });
 });

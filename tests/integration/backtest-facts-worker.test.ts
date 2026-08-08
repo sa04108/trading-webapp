@@ -116,7 +116,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       { standardCode: 'KR7000003000', shortCode: 'NOFACTS', name: 'NOFACTS', market: 'KOSPI', marketCapKrw: '100000000000' },
     ]);
     seedDailyBars(ctx.container.database.db, candles(40));
-    // 자본변동 게이트(Task 6) — 이 파일의 제출 period(2025-01-02~2025-03-01)가 걸치는 연도
+    // 자본변동 게이트(Task 6) — 이 파일의 제출 기간(2025-01-02~2025-03-01)이 걸치는 연도
     seedCorporateActionCoverage(ctx.container, ['CHEAP', 'RICH'], yearRange(2025, 2025));
 
     // 컨테이너가 조립한 factRepository 로 저장한다 — 워커가 같은 dataRoot 를 통해
@@ -343,7 +343,7 @@ describe('워커의 자본변동 팩트 배선 — 접수일이 기간 종료 �
     ]);
     // 2025-01-02 ~ 2025-04-30 = 119봉
     seedDailyBars(ctx.container.database.db, splitScenarioCandles(119));
-    // 자본변동 게이트(Task 6) — 이 파일의 제출 period(2025-01-02~2025-04-30)가 걸치는 연도
+    // 자본변동 게이트(Task 6) — 이 파일의 제출 기간(2025-01-02~2025-04-30)이 걸치는 연도
     seedCorporateActionCoverage(ctx.container, ['SPLIT', 'FLAT'], yearRange(2025, 2025));
 
     await ctx.container.factRepository.saveFacts([

@@ -385,6 +385,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
         uncollected.push(code);
         continue;
       }
+      // 필요 연도로 좁히지 않는다 — gap 연도는 요청 연도의 부분집합이 아니다
+      // (fact-sync-service.ts 의 uniqueYearsFromGaps 주석 참고). 좁히면
+      // 실제 위험이 있는 gap 을 조용히 숨길 수 있다. 노이즈보다 그쪽이 더 위험하다.
       if ((gapsBySymbol.get(code) ?? []).length > 0) gapped.push(code);
     }
 
@@ -492,7 +495,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     }
 
     // ③ 자본변동 수집 게이트(Task 6) — 캔들은 있어도 분할 이력을 모르면 조용히
-    // 틀린 결과를 낸다. unionSymbols·period 기준으로 ②와 같은 층위에서 검사한다.
+    // 틀린 결과를 낸다. unionSymbols·기간 기준으로 ②와 같은 층위에서 검사한다.
     const actionGate = checkCorporateActionCoverage(resolved.unionSymbols, body.period);
     if (actionGate.error !== null) {
       return { ok: false, status: 400, errors: [actionGate.error] };
@@ -913,9 +916,12 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (fundamentalsError) blockers.push(fundamentalsError);
     const capacityError = checkPositionCapacity(rebased.request);
     if (capacityError) blockers.push(capacityError);
+    // 검증이 실패하면 그 사유는 blockers 로 이미 나간다 — warnings 는 통과했을 때만 있다.
+    // POST /backtests/:id/clone 핸들러와 같은 합류 방식이다 — 두 경로가 갈리면
+    // 위저드에서 자본변동 경고가 조용히 사라진다(리뷰 finding, 2026-08-08).
     return {
       request: rebased.request,
-      warnings: rebased.warnings,
+      warnings: [...rebased.warnings, ...(validated.ok ? validated.warnings : [])],
       blockers,
     };
   });
