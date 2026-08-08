@@ -43,3 +43,26 @@ export function seedDailyBars(db: AppDatabase, candles: readonly Candle[]): void
       .run();
   }
 }
+
+/**
+ * 자본변동 수집 커버리지를 심는다 — 제출 게이트(Task 6)가 이 표시를 보고
+ * 종목별 자본변동 이력을 실제로 수집했는지 판단한다.
+ * 실제 DART 동기화 없이 그 결과 상태만 재현한다.
+ */
+export function seedCorporateActionCoverage(
+  container: Container,
+  codes: readonly string[],
+  years: readonly number[],
+): void {
+  const nowMs = container.clock.now();
+  for (const code of codes) {
+    container.actionCoverageStore.addCoveredYears(code, years, nowMs);
+  }
+}
+
+/** fromYear 부터 toYear 까지(양끝 포함) 연도 배열을 만든다 — 커버리지 픽스처 전용 */
+export function yearRange(fromYear: number, toYear: number): number[] {
+  const years: number[] = [];
+  for (let year = fromYear; year <= toYear; year += 1) years.push(year);
+  return years;
+}

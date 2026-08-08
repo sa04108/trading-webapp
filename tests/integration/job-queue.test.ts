@@ -7,7 +7,7 @@ import { symbolVersions } from '../../src/server/shared/db/schema.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { currentStrategyVersion } from '../helpers/strategy-versions.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
-import { registerSymbols, seedDailyBars } from '../helpers/seed.js';
+import { registerSymbols, seedCorporateActionCoverage, seedDailyBars, yearRange } from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 
 const DAY = 86_400_000;
@@ -21,6 +21,12 @@ const MAIN_DATE = '2026-01-05';
 /** "봉이 전혀 없는 기간" 시나리오 전용 — 종목 마스터는 커버하되(coverage 는 넓은 고정 구간)
  *  가격 데이터가 없는 시점을 재현한다. 커버 밖(uncovered) 날짜와 구분하려고 별도로 캐시한다. */
 const NO_CANDLE_DATE = '2020-01-01';
+
+/**
+ * 자본변동 게이트(Task 6)용 커버리지 연도. 이 파일의 제출 period 가 걸치는
+ * 연도를 전부 담는다 — 취소 시퀀스 테스트가 2046 년까지 쓴다.
+ */
+const ACTION_COVERAGE_YEARS = yearRange(2020, 2046);
 
 /** 유니버스 규칙 — topN=1 이면 005930(시총 1위)만, topN=2 면 000660 도 함께 들어온다 */
 function universeRule(topN = 1): BacktestRequest['universeRule'] {
@@ -125,6 +131,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     seedDailyBars(ctx.container.database.db, dailyCandles);
     // 종목 마스터 — 유니버스 규칙(스펙 2026-08-05)이 여기서 종목을 골라낸다
     seedMaster(ctx.container, [MAIN_DATE, NO_CANDLE_DATE]);
+    // 자본변동 게이트(Task 6) — 수집을 마쳤다고 표시해야 제출이 통과한다
+    seedCorporateActionCoverage(ctx.container, ['005930'], ACTION_COVERAGE_YEARS);
   });
 
   afterEach(async () => {
@@ -654,6 +662,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     // 종목을 하나 더 등록하고 topN 을 2로 올려 유니버스에 넣되 봉은 넣지 않는다 —
     // 커버리지 행이 없는 종목이 섞여도 제출은 통과해야 한다 (D-025)
     ctx.container.symbolService.addSymbol('000660', 'KR');
+    // 000660 도 unionSymbols 에 들어오므로 자본변동 게이트도 통과해 둬야 한다
+    seedCorporateActionCoverage(ctx.container, ['000660'], ACTION_COVERAGE_YEARS);
 
     const partial = await ctx.app.inject({
       method: 'POST',
@@ -771,6 +781,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       registerSymbols(small.container, 'KR', ['005930']);
       seedDailyBars(small.container.database.db, buildTrendingDailyCandles());
       seedMaster(small.container, [MAIN_DATE]);
+      seedCorporateActionCoverage(small.container, ['005930'], ACTION_COVERAGE_YEARS);
       const payload = buildRequest();
 
       // 오케스트레이터를 tick 하지 않으므로 전부 QUEUED 로 남는다

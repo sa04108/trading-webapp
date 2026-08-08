@@ -37,7 +37,10 @@ import { JobOrchestrator } from '../modules/backtest/application/job-orchestrato
 import { JobQueue } from '../modules/backtest/application/job-queue.js';
 import { ResultsService } from '../modules/backtest/application/results-service.js';
 import type { FactRepository } from '../modules/facts/application/ports.js';
-import { SqliteCorporateActionCoverageStore } from '../modules/facts/application/corporate-action-coverage.js';
+import {
+  SqliteCorporateActionCoverageStore,
+  type CorporateActionCoverageStore,
+} from '../modules/facts/application/corporate-action-coverage.js';
 import { SqliteFactCoverageStore } from '../modules/facts/application/fact-coverage-store.js';
 import { FactSyncService } from '../modules/facts/application/fact-sync-service.js';
 import { createDartFactSource } from '../modules/facts/infrastructure/dart/dart-fact-source.js';
@@ -84,6 +87,8 @@ export interface Container {
   readonly symbolMasterBackfill: SymbolMasterBackfill;
   readonly symbolMasterScheduler: SymbolMasterScheduler;
   readonly universeRuleResolver: UniverseRuleResolver;
+  /** 제출 게이트(Task 6)가 자본변동 수집 여부를 대조할 때 쓴다 */
+  readonly actionCoverageStore: CorporateActionCoverageStore;
   close(): void;
 }
 
@@ -302,6 +307,7 @@ export function createContainer(config: AppConfig): Container {
     symbolMasterBackfill,
     symbolMasterScheduler,
     universeRuleResolver,
+    actionCoverageStore,
     close: () => {
       clearInterval(pruneTimer);
       jobOrchestrator.stop();
