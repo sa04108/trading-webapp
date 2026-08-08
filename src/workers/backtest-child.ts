@@ -22,7 +22,7 @@ import type { UniverseScheduleEntry } from '../server/modules/backtest/applicati
 import { newId } from '../server/shared/ids.js';
 import { TERMINAL_STATUSES } from '../server/modules/backtest/application/job-queue.js';
 import { MAX_BACKTEST_BARS } from '../server/modules/backtest/domain/bar-estimate.js';
-import { ENGINE_VERSION, runBacktest } from '../server/modules/backtest/domain/engine.js';
+import { ENGINE_VERSION, runBacktestCancellable } from '../server/modules/backtest/domain/engine.js';
 import {
   DEFAULT_EXECUTION_RULES,
   getCostProfile,
@@ -32,8 +32,7 @@ import { ParquetFactRepository } from '../server/modules/facts/infrastructure/pa
 import { CORPORATE_ACTION_FIELD, type Fact } from '../server/modules/facts/domain/fact.js';
 import type { Candle, Market, Timeframe } from '../server/modules/market-data/domain/candle.js';
 import { DuckDbService } from '../server/modules/market-data/infrastructure/duckdb-service.js';
-import { ParquetCandleRepository } from '../server/modules/market-data/infrastructure/parquet-candle-repository.js';
-import { CompositeCandleRepository } from '../server/modules/market-data/infrastructure/composite-candle-repository.js';
+import { KrxDailyCandleRepository } from '../server/modules/market-data/infrastructure/krx-daily-candle-repository.js';
 import { StrategyRegistry } from '../server/modules/strategy/application/strategy-registry.js';
 import { strategySourceHash } from '../server/modules/strategy/application/strategy-source-hash.js';
 import { backtestRequestSchema, periodToTsRange } from '../shared/schemas/backtest-request.js';
@@ -174,19 +173,14 @@ async function main(): Promise<void> {
     const pinnedUniverseJson = job.universeJson ?? '[]';
     const pinnedUniverseHash = job.universeHash ?? 'unknown';
 
-    // 캔들 로드 (스펙 §11). 요청의 timeframe 이 소비 기준이고, 미지정이면 데이터셋
-    // timeframe (1m 수집·import 는 1h 로 사전 집계되어 '1h', 일봉 수집은 '1d').
-    // 여기를 '1h' 로 고정하면 일봉 데이터셋은 파티션이 없어 0봉으로 실패한다 (D-024).
-    // 데이터셋에 defaultTimeframe 이 없어졌다 — 요청이 소비 기준의 유일한 출처다.
-    // 미지정이면 일봉으로 본다 (구 legacyConsumeDefault 의 '1d' 분기와 같은 값).
+    // 캔들 로드 (스펙 §11).
+    // 새 요청은 스키마가 timeframe 을 '1d' 하나로만 허용한다(D-041, backtest-request.ts).
+    // 아래 repository(KrxDailyCandleRepository)는 어차피 봉 주기를 보지 않고 KRX
+    // 일봉만 돌려준다 — timeframe 은 이제 표시·에러 메시지용 값이다.
     const timeframe = (request.timeframe ?? '1d') as Timeframe;
-    // 1일봉은 KRX 테이블 우선(설계 2026-08-06-krx-daily-bars) — container.ts 조립부와
-    // 같은 모양으로 감싼다. 여기서 새로 감싸지 않고 parquet 저장소만 쓰면, 미리보기·
-    // 커버리지(부모 프로세스, composite 경유)는 봉이 있다고 답하는데 실행(이 워커)은
-    // 0봉으로 실패하는 어긋남이 생긴다 — 상장폐지 종목처럼 KRX 에만 봉이 있는 경우가
-    // 정확히 이 상황이다. db 는 위에서 이미 연 handle 을 재사용한다 — 워커가 잡 조회로
-    // 이미 DB 를 열어 둔 상태라 새로 열 이유가 없다.
-    const repository = new CompositeCandleRepository(db, new ParquetCandleRepository(dataRoot, duckdb));
+    // 봉은 KRX 일봉 하나뿐이다(container.ts 조립부와 같은 모양) — db 는 위에서 이미 연
+    // handle 을 재사용한다. 워커가 잡 조회로 이미 DB 를 열어 둔 상태라 새로 열 이유가 없다.
+    const repository = new KrxDailyCandleRepository(db);
     const { fromTsMs, toTsMs } = periodToTsRange(request.period);
     const candles: Candle[] = [];
     for await (const candle of repository.getCandles({
@@ -200,7 +194,7 @@ async function main(): Promise<void> {
       // 제출 검증의 추정 상한을 실측으로 다시 지킨다 — 제출 후 import 로 봉이 는 경우의 방어선
       if (candles.length > MAX_BACKTEST_BARS) {
         throw new Error(
-          `봉 수가 상한(${MAX_BACKTEST_BARS.toLocaleString()})을 넘습니다. 기간이나 종목 수를 줄이거나 1h 봉을 사용하세요.`,
+          `봉 수가 상한(${MAX_BACKTEST_BARS.toLocaleString()})을 넘습니다. 기간이나 종목 수를 줄이세요.`,
         );
       }
     }
@@ -282,7 +276,9 @@ async function main(): Promise<void> {
 
     const parameters = validated.value as Record<string, unknown>;
 
-    const result = runBacktest(strategy, {
+    // 우아한 취소를 위해 주기적으로 이벤트 루프에 양보하는 버전을 쓴다 —
+    // 근거는 engine.ts 의 CANCEL_YIELD_INTERVAL_BARS 주석 참고.
+    const result = await runBacktestCancellable(strategy, {
       candles,
       initialCash: request.capital.initialCash,
       execution: {

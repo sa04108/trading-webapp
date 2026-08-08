@@ -36,8 +36,8 @@ describe('requestToFormState', () => {
   });
 
   it('timeframe 을 왕복시킨다 — 미지정은 빈 문자열(유니버스 기본)', () => {
-    const explicit = requestToFormState({ ...request, timeframe: '1m' }, catalog);
-    expect(explicit.state.timeframe).toBe('1m');
+    const explicit = requestToFormState({ ...request, timeframe: '1d' }, catalog);
+    expect(explicit.state.timeframe).toBe('1d');
 
     const unspecified = requestToFormState(request, catalog);
     expect(unspecified.state.timeframe).toBe('');

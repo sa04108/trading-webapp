@@ -3,7 +3,7 @@ import type { Candle } from '../../src/server/modules/market-data/domain/candle.
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { krxDailyBars } from '../../src/server/shared/db/schema.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
-import { registerSymbols } from '../helpers/seed.js';
+import { registerSymbols, seedDailyBars } from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 
 const DAY = 86_400_000;
@@ -48,11 +48,6 @@ function buildDailyCandles(symbol = '005930'): Candle[] {
     cursor += DAY;
   }
   return candles;
-}
-
-/** UTC epoch ms(자정) → krxDailyBars.date 텍스트('YYYY-MM-DD') */
-function toIsoDate(tsMs: number): string {
-  return new Date(tsMs).toISOString().slice(0, 10);
 }
 
 /** 이 파일의 테스트가 리밸런스 날짜로 쓰는 값 전부 — 종목 마스터 시총 캐시를 이 날짜들로 채운다 */
@@ -115,9 +110,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
       { standardCode: 'KR7000660001', shortCode: '000660', name: 'SK하이닉스', market: 'KOSPI', marketCapKrw: '1000000000000' },
     ]);
     dailyCandles = buildDailyCandles();
-    await ctx.container.candleRepository.saveCandles(dailyCandles);
-    await ctx.container.symbolService.refreshCoverage('005930', 'KR', '1d');
-    ctx.container.symbolService.bumpVersion('005930', '1d', 'broker:seed', Date.now());
+    seedDailyBars(ctx.container.database.db, dailyCandles);
   });
 
   afterEach(async () => {
@@ -126,7 +119,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
 
   it('커버리지가 보고한 일봉으로 백테스트가 완주한다', { timeout: 90_000 }, async () => {
     // 사용자가 보는 화면: 커버리지는 봉이 있다고 말한다
-    const coverage = ctx.container.symbolService.getCoverage(['005930']);
+    const coverage = ctx.container.candleCoverageService.getCoverage(['005930']);
     expect(coverage[0]!.barCount).toBe(dailyCandles.length);
 
     const created = await ctx.app.inject({
@@ -317,20 +310,16 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
 });
 
 /**
- * 생존편향 제거 회귀(설계 2026-08-06-krx-daily-bars) — 자식 프로세스가 실제로
- * CompositeCandleRepository 를 쓰는지의 유일한 증거다.
+ * 부모-자식 프로세스 봉 조회 회귀. `ctx.container.jobOrchestrator.tick()` 이 실제로
+ * 자식 프로세스를 fork 한다. 자식이 부모와 별도로 `krx_daily_bars` 를 읽어 백테스트를
+ * 완주하는지는 이 테스트만 검증한다 — 부모 프로세스 안에서 도는 단위 테스트는 이
+ * 경계를 볼 수 없다.
  *
- * 이 종목은 parquet 에 **전혀 저장하지 않는다** — krx_daily_bars 테이블에만 일봉을
- * 넣는다(증권사가 상장폐지 종목의 봉을 안 주는 상황을 그대로 흉내낸다). 부모 프로세스의
- * `container.candleRepository`(composite)로 미리보기·커버리지를 봤을 때 봉이 있는
- * 것처럼 보여도, 워커(`backtest-child.ts`)가 여전히 `ParquetCandleRepository` 를
- * 직접 만들면 실행 시점에는 0봉이라 "선택한 기간·종목에 데이터가 없습니다" 로 실패한다.
- * `ctx.container.jobOrchestrator.tick()` 이 실제로 자식 프로세스를 fork 하므로, 이
- * 테스트만이 워커 경로까지 검증한다 — 부모 프로세스 안에서 도는 다른 단위 테스트는
- * 이 불일치를 볼 수 없다.
+ * `CompositeCandleRepository`·`ParquetCandleRepository` 는 이제 없다(Task 5,
+ * 2026-08-07-price-data-removal). `krx_daily_bars` 가 유일한 봉 원천이다.
  */
-describe('KRX 전용 일봉으로 백테스트 실행 (워커의 생존편향 제거)', () => {
-  const KRX_ONLY_CODE = '900001'; // 가상의 상장폐지 종목 — parquet 에는 없고 krx_daily_bars 에만 있다
+describe('KRX 전용 일봉으로 백테스트 실행 (워커의 부모-자식 경계)', () => {
+  const KRX_ONLY_CODE = '900001'; // 상장폐지 종목을 흉내낸 임의 코드
 
   let ctx: TestApp;
   let cookie: string;
@@ -357,27 +346,8 @@ describe('KRX 전용 일봉으로 백테스트 실행 (워커의 생존편향 �
       },
     ]);
 
-    // parquet 저장(saveCandles)은 호출하지 않는다 — krx_daily_bars 테이블에만 직접 넣는다
     krxOnlyCandles = buildDailyCandles(KRX_ONLY_CODE);
-    ctx.container.database.db
-      .insert(krxDailyBars)
-      .values(
-        krxOnlyCandles.map((candle) => ({
-          shortCode: KRX_ONLY_CODE,
-          date: toIsoDate(candle.tsMs),
-          market: 'KOSPI',
-          open: candle.open,
-          high: candle.high,
-          low: candle.low,
-          close: candle.close,
-          volume: candle.volume,
-        })),
-      )
-      .run();
-    // 제출 검증이 보는 커버리지·버전은 candleRepository(composite)를 거쳐 계산된다 —
-    // KRX 테이블만 있어도 이 두 호출로 "수집된 봉이 있다"는 상태가 된다.
-    await ctx.container.symbolService.refreshCoverage(KRX_ONLY_CODE, 'KR', '1d');
-    ctx.container.symbolService.bumpVersion(KRX_ONLY_CODE, '1d', 'broker:seed', Date.now());
+    seedDailyBars(ctx.container.database.db, krxOnlyCandles);
   });
 
   afterEach(async () => {
@@ -416,23 +386,25 @@ describe('KRX 전용 일봉으로 백테스트 실행 (워커의 생존편향 �
 });
 
 /**
- * clone 의 유니버스 등록 누락 (리뷰 finding, 브랜치 fix/inplace-candle-sync) —
- * `POST /backtests/universe-preview` 는 `registerUniverseSymbols` +
- * `refreshKrxDailyCoverage` 를 부르지만, 상세 화면의 원클릭 복제
- * (`POST /backtests/:id/clone`)는 `validateSubmission` 만 거쳐 이 두 호출을
- * 건너뛰었다. 위저드 화면은 제출 전 항상 미리보기를 거치므로 이 등록이 이미
- * 끝나 있지만, 복제는 미리보기 화면 자체를 거치지 않는다 — 그래서 미리보기에서
- * 한 번도 보지 못한 종목(예: 리밸런스 시점 시총이 바뀌어 새로 topN 에 든 종목)을
- * 그대로 두면 실행은 되지만(`checkPeriodCoverage` 는 유니버스 중 일부만 데이터가
- * 있어도 통과시킨다 — D-025) 가격 데이터 탭에는 그 종목이 보이지 않는 불일치가
- * 남는다.
+ * clone 의 유니버스 등록 누락이다(리뷰 finding, 브랜치 fix/inplace-candle-sync).
+ * `POST /backtests/universe-preview` 는 `registerUniverseSymbols` 를 부른다.
+ * 상세 화면의 원클릭 복제(`POST /backtests/:id/clone`)는 `validateSubmission` 만
+ * 거쳐 이 호출을 건너뛰었다.
  *
- * 이 테스트는 미리보기를 한 번도 거치지 않고(=검증을 우회해 큐에 직접 넣어) 만든
- * 잡을 복제해, 이미 등록된 종목(005930) 옆에 미등록 종목(900010, KRX 일봉만 있고
- * 로컬 등록·커버리지 캐시는 없음)이 같이 있어도 `checkPeriodCoverage` 가 관대하게
- * 통과시켜 clone 자체는 성공한다는 점을 이용한다 — 그 성공 이후에도 900010 이
- * 등록되지 않은 채로 남는지를 확인한다. 수정 전에는 이 단언이 실패한다(clone 은
- * 201 로 성공하지만 900010 은 등록되지 않는다).
+ * 위저드 화면은 제출 전 항상 미리보기를 거치므로 이 등록이 이미 끝나 있다.
+ * 복제는 미리보기 화면 자체를 거치지 않는다. 리밸런스 시점 시총이 바뀌어 새로
+ * topN 에 든 종목처럼, 미리보기에서 한 번도 보지 못한 종목이 있으면 문제가 된다.
+ * `checkPeriodCoverage` 는 유니버스 중 일부만 데이터가 있어도 통과시키므로(D-025)
+ * 실행 자체는 되지만, 가격 데이터 탭에는 그 종목이 보이지 않는 불일치가 남는다.
+ *
+ * 이 테스트는 미리보기를 거치지 않고(검증을 우회해 큐에 직접 넣어) 만든 잡을
+ * 복제한다. 이미 등록된 종목(005930) 옆에 미등록 종목 900010(KRX 일봉만 있음)을
+ * 둔다. 900010 은 로컬 등록도 커버리지 캐시도 없다.
+ *
+ * `checkPeriodCoverage` 는 이런 부분 커버리지도 관대하게 통과시켜(D-025)
+ * clone 자체는 성공한다. 그 성공 이후에도 900010 이 등록되지 않은 채로
+ * 남는지를 확인한다. 수정 전에는 clone 이 201 로 성공하면서도 900010 을
+ * 등록하지 않아 이 단언이 실패했다.
  */
 describe('POST /backtests/:id/clone — 유니버스 자동 등록 (미리보기와 같은 전제)', () => {
   const date = '2026-01-05';
@@ -471,7 +443,7 @@ describe('POST /backtests/:id/clone — 유니버스 자동 등록 (미리보기
 
     // 005930 은 예전에 미리보기를 거쳐 이미 등록·커버리지가 있다고 가정한다.
     registerSymbols(ctx.container, 'KR', ['005930']);
-    await ctx.container.candleRepository.saveCandles([
+    seedDailyBars(ctx.container.database.db, [
       {
         symbol: '005930',
         market: 'KR',
@@ -484,7 +456,6 @@ describe('POST /backtests/:id/clone — 유니버스 자동 등록 (미리보기
         volume: 12_345,
       },
     ]);
-    await ctx.container.symbolService.refreshCoverage('005930', 'KR', '1d');
 
     // 900010 은 백필이 KRX 일봉을 이미 채워 뒀다고 가정한다(krx_daily_bars 직접
     // 삽입) — 다만 이 종목은 미리보기를 한 번도 거치지 않아 로컬 `symbols` 등록도,
@@ -532,9 +503,83 @@ describe('POST /backtests/:id/clone — 유니버스 자동 등록 (미리보기
     // 그런데도 900010 은 등록·커버리지 갱신 대상이어야 한다 — 미리보기가 했을 일을
     // clone 도 그대로 해야 가격 데이터 탭에서 빠지지 않는다.
     expect(ctx.container.symbolService.exists('900010')).toBe(true);
-    const summary = ctx.container.symbolService.getSymbol('900010');
-    const dailySlice = summary?.slices.find((slice) => slice.slice === '1d');
-    expect(dailySlice?.hasData).toBe(true);
-    expect(dailySlice?.barCount).toBe(1);
+    const coverage = ctx.container.candleCoverageService.getCoverage(['900010'])[0]!;
+    expect(coverage.barCount).toBe(1);
+  });
+});
+
+/**
+ * 리뷰 finding(2026-08-08): `checkPeriodCoverage`/`resolveConsumedUniverse` 가
+ * `candleCoverage`(원시 `krx_daily_bars`)만 보고 `symbolService.exists` 를 보지
+ * 않으면, 유니버스 전체가 미등록이어도 봉만 있으면 제출이 통과해 버린다. 그러면
+ * 큐 슬롯을 먹은 뒤 `backtest-child.ts` 가 "유니버스 종목이 등록돼 있지 않습니다"
+ * 로 늦게 죽는다 — 제출 시점에 빨리 거부하는 옛 동작(캐시가 등록 종목만 채워졌던
+ * 시절의 부작용)을 명시적인 검사로 되살렸는지 이 테스트가 지킨다.
+ *
+ * `registerSymbols` 를 의도적으로 부르지 않는다 — `krx_daily_bars` 는 백필이 이미
+ * 채워 뒀다고 가정하지만 `symbols` 등록은 한 번도 거치지 않은 상태를 재현한다.
+ */
+describe('POST /backtests — 미등록 유니버스는 제출 시점에 거부된다 (리뷰 finding, 2026-08-08)', () => {
+  const date = '2026-01-05';
+  const UNREGISTERED_CODE = '900099';
+
+  let ctx: TestApp;
+  let cookie: string;
+
+  beforeEach(async () => {
+    ctx = await createTestApp();
+    const { username, password } = await createTestAdmin(ctx.container);
+    const login = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { username, password },
+    });
+    cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+
+    seedSymbolMasterUniverse(ctx.container, [date], [
+      {
+        standardCode: 'KR7900099005',
+        shortCode: UNREGISTERED_CODE,
+        name: '미등록테스트',
+        market: 'KOSPI',
+        marketCapKrw: '500000000000000',
+      },
+    ]);
+
+    // krx_daily_bars 에는 봉이 있다 — 등록 게이트가 아니라면 이 봉만으로 제출이
+    // 통과해 버린다는 것을 보여주려는 픽스처다.
+    ctx.container.database.db
+      .insert(krxDailyBars)
+      .values({
+        shortCode: UNREGISTERED_CODE,
+        date,
+        market: 'KOSPI',
+        open: 1_000,
+        high: 1_100,
+        low: 900,
+        close: 1_050,
+        volume: 12_345,
+      })
+      .run();
+  });
+
+  afterEach(async () => {
+    await ctx.close();
+  });
+
+  it('종목이 봉을 갖고 있어도 하나도 등록돼 있지 않으면 400 이다', async () => {
+    expect(ctx.container.symbolService.exists(UNREGISTERED_CODE)).toBe(false);
+
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: { ...buildRequest(1), period: { from: date, to: date } },
+    });
+
+    expect(created.statusCode).toBe(400);
+    expect((created.json() as { error: string }).error).toContain('등록');
+    // 큐에 남지 않아야 한다 — 늦게 죽는 게 아니라 애초에 들어가지 않아야 한다.
+    expect(ctx.container.jobQueue.countByStatus(['QUEUED'])).toBe(0);
   });
 });

@@ -14,7 +14,6 @@ import { newId } from '../src/server/shared/ids.js';
 export const E2E_USERNAME = 'e2e-operator';
 export const E2E_PASSWORD = 'correct-horse-battery-staple';
 
-const HOUR = 3_600_000;
 const DAY = 86_400_000;
 
 // 종목 마스터·유니버스 규칙 e2e(스펙 2026-08-05) — 가짜 KRX Open API 서버가 쓰는 고정값.
@@ -68,35 +67,91 @@ const KOSPI_BASE_ROWS = [
 ];
 
 /**
- * 005930·900010 만 시가총액을 갖는다 — 우선주는 분류 단계에서 이미 제외돼 일별 시세가
- * 필요 없다. OHLCV(TDD_OPNPRC 등·ACC_TRDVOL)를 채워야 SymbolMasterService.ingestDate
- * 가 krx_daily_bars 에 봉을 적재한다(스펙 2026-08-06 Task 5) — 이 값이 없으면(이전
- * 버전처럼 MKTCAP 만 있으면) 가격·거래량이 모두 null 인 행으로 취급돼 저장 자체가
- * 건너뛰어진다(symbol-master-service.ts writeDailyBars). 값 자체는 임의다 — 이
- * 스위트가 보는 건 "봉이 존재하는가" 뿐이고 정확한 가격 수준은 검증하지 않는다.
+ * 900010(상장폐지예정1호) 은 날짜와 무관하게 고정된 시세를 낸다 — 이 스위트가
+ * 900010 에서 보는 건 "봉이 존재하는가" 뿐이고 정확한 가격 수준은 검증하지 않는다.
+ * 시가총액은 005930 보다 항상 낮게 잡아 topN=1 선정에서 자연히 빠지게 한다.
  */
-const KOSPI_DAILY_ROWS = [
-  {
+const DELISTED_DAILY_ROW = {
+  ISU_CD: '900010',
+  ISU_NM: '상장폐지예정1호',
+  MKTCAP: '10,000,000,000,000',
+  TDD_OPNPRC: '9,500',
+  TDD_HGPRC: '9,800',
+  TDD_LWPRC: '9,300',
+  TDD_CLSPRC: '9,600',
+  ACC_TRDVOL: '543,210',
+};
+
+/** 정수를 KRX 응답처럼 천 단위 콤마 문자열로 만든다 (parseNullableIntNumber 가 그 형식을 기대한다) */
+function krxInt(n: number): string {
+  return Math.round(n).toLocaleString('en-US');
+}
+
+/**
+ * 005930 의 종가가 그리는 추세 — 꾸준한 상승(하루 `TREND_DAILY_DRIFT`)에 삼각파
+ * 잔물결을 얹는다(주기 `TREND_RIPPLE_DAYS`, 진폭 `TREND_RIPPLE_AMPLITUDE`).
+ * 잔물결은 주기 경계에서 값이 끊기지 않는 연속 함수다. 하루짜리 큰 갭이 생기면
+ * 그날의 변동폭(ATR)이 과장돼 손절·익절 판정 폭 자체가 늘어나 버리기 때문이다.
+ * `basDd`(YYYYMMDD)를 기준 앵커(2026-01-05)로부터의 달력일 수로 환산해 순수
+ * 함수로 계산한다 — 어느 순서로 어느 날짜를 조회하든(백필은 날짜 순, 개별
+ * 소급은 거꾸로) 같은 날짜는 항상 같은 값을 낸다.
+ *
+ * 앵커 이전 날짜(다른 스펙이 쓰는 과거 날짜)는 경과일을 0 에 고정한다. 드리프트를
+ * 과거로 무한히 되돌리면 가격이 0 이하로 떨어질 수 있기 때문이다. 그 스펙들은
+ * 가격 수준을 검증하지 않으므로 항상 앵커 시점 모양을 반복해도 상관없다.
+ *
+ * 이 전략은 전고점 돌파(lookbackBars=10, atrPeriod=5)다.
+ * mvp-flow.spec.ts 는 익절 폭도 3배로 지정한다.
+ * 여러 번 매수·매도를 반복하려면 진입할 때마다 몇 거래일 안에 익절·손절
+ * 중 하나에 닿아야 한다. 꾸준한 드리프트가 익절까지 걸리는 날수를 짧게
+ * 만든다. 잔물결의 하강 구간이 이따금 손절도 만든다.
+ *
+ * 예전에는 CSV 로 심은 1분봉 추세가 이 역할을 했다.
+ * CSV 가져오기가 제거되며(Task 5) 그 경로가 사라졌다.
+ * 이제 백테스트가 소비하는 유일한 봉(KRX 일봉)이 이 추세를 대신 낸다.
+ * 900010·카카오는 이 추세와 무관하다. 두 종목은 여전히 날짜와 무관한
+ * 고정 시세를 낸다.
+ */
+const TREND_ANCHOR_MS = Date.UTC(2026, 0, 5);
+const TREND_DAILY_DRIFT = 1_600;
+const TREND_RIPPLE_DAYS = 6;
+const TREND_RIPPLE_AMPLITUDE = 1_200;
+
+/** 진폭 amplitude, 주기 period 인 삼각파 — t=0 과 t=period 에서 값이 이어진다(불연속 없음) */
+function triangleWave(t: number, period: number, amplitude: number): number {
+  const half = period / 2;
+  const phase = ((t % period) + period) % period;
+  const upSlope = phase <= half ? phase / half : (period - phase) / half;
+  return (upSlope * 2 - 1) * amplitude;
+}
+
+function samsungCloseFor(basDd: string): number {
+  const year = Number(basDd.slice(0, 4));
+  const month = Number(basDd.slice(4, 6));
+  const day = Number(basDd.slice(6, 8));
+  const rawElapsedDays = Math.floor((Date.UTC(year, month - 1, day) - TREND_ANCHOR_MS) / DAY);
+  const elapsedDays = Math.max(0, rawElapsedDays);
+  const ripple = triangleWave(elapsedDays, TREND_RIPPLE_DAYS, TREND_RIPPLE_AMPLITUDE);
+  return 70_000 + elapsedDays * TREND_DAILY_DRIFT + ripple;
+}
+
+/** 005930 일별시세 행 — 종가는 추세를 따르고 시가총액은 날짜와 무관하게 고정한다 */
+function samsungDailyRow(basDd: string): Record<string, unknown> {
+  const close = samsungCloseFor(basDd);
+  const open = close - 500;
+  const high = Math.max(open, close) + 500;
+  const low = Math.min(open, close) - 500;
+  return {
     ISU_CD: '005930',
     ISU_NM: '삼성전자',
     MKTCAP: '350,000,000,000,000',
-    TDD_OPNPRC: '71,500',
-    TDD_HGPRC: '72,000',
-    TDD_LWPRC: '71,000',
-    TDD_CLSPRC: '71,800',
+    TDD_OPNPRC: krxInt(open),
+    TDD_HGPRC: krxInt(high),
+    TDD_LWPRC: krxInt(low),
+    TDD_CLSPRC: krxInt(close),
     ACC_TRDVOL: '12,345,678',
-  },
-  {
-    ISU_CD: '900010',
-    ISU_NM: '상장폐지예정1호',
-    MKTCAP: '10,000,000,000,000',
-    TDD_OPNPRC: '9,500',
-    TDD_HGPRC: '9,800',
-    TDD_LWPRC: '9,300',
-    TDD_CLSPRC: '9,600',
-    ACC_TRDVOL: '543,210',
-  },
-];
+  };
+}
 
 /** 보통주 1(카카오) + 스팩 1(SECT_TP_NM 로 제외). */
 const KOSDAQ_BASE_ROWS = [
@@ -144,9 +199,9 @@ const KOSDAQ_DAILY_ROWS = [
  * "1월 1일이면 무조건 휴장" 같은 패턴 매칭 대신 이 정확한 날짜 집합만 겨냥한다 —
  * 패턴으로 두면 `tests/e2e/symbol-master.spec.ts` 가 쓰는 "오늘 기준 상대 날짜"
  * (`daysBeforeIso(todayIso(), 1|10)`)가 매년 1월 2일·1월 11일에 이 스위트를 돌릴 때
- * 우연히 1월 1일과 겹쳐, 그 스펙의 "가짜 KRX 는 어느 날짜를 물어도 같은 시세를
- * 낸다"는 전제를 깨뜨린다(리뷰에서 지적된 회귀). 고정 날짜 집합은 상대 날짜를 쓰는
- * 스펙과 영원히 부딪히지 않는다.
+ * 우연히 1월 1일과 겹쳐, 그 스펙의 "가짜 KRX 는 어느 날짜를 물어도 같은 유니버스
+ * 구성을 낸다"는 전제를 깨뜨린다(리뷰에서 지적된 회귀). 고정 날짜 집합은 상대 날짜를
+ * 쓰는 스펙과 영원히 부딪히지 않는다.
  */
 const HOLIDAY_BAS_DATES = new Set(['20250101', '20180101']);
 
@@ -158,14 +213,21 @@ function isHolidayBasDd(basDd: string | undefined): boolean {
  * e2e 전용 가짜 KRX Open API 서버.
  *
  * 기본정보(base_info)는 요청한 날짜와 무관하게 항상 같은 값을 돌려준다. 일별시세
- * (daily_trd) 도 원칙은 같지만 HOLIDAY_BAS_DATES 에 속한 날짜만 예외로 빈 배열을
- * 낸다 — 두 시장 모두 거래가 없는 날로 잡혀야 SymbolMasterService.ingestDate 가
- * 휴장으로 분류하고 ensureTradingDay 의 소급 수집을 재현할 수 있기 때문이다.
+ * (daily_trd) 도 원칙은 같지만 두 가지 예외가 있다.
+ *
+ * 하나는 HOLIDAY_BAS_DATES 에 속한 날짜의 빈 배열이다. 두 시장 모두 거래가 없는
+ * 날로 잡혀야 SymbolMasterService.ingestDate 가 휴장으로 분류한다. 그래야
+ * ensureTradingDay 의 소급 수집도 재현할 수 있다.
+ *
+ * 다른 하나는 005930 의 가격(OHLCV)이다 — `samsungCloseFor` 가 설명하듯 날짜에
+ * 따라 추세를 그린다. 시가총액·종목명은 005930 을 포함해 모든 종목이 날짜와
+ * 무관하게 고정이다. 그래서 유니버스 구성·분류·topN 선정을 겨냥한 스펙
+ * (symbol-master.spec.ts 등)은 이 가격 추세와 무관하다.
+ *
  * 종목 마스터는 요청한 날짜를 그대로 조회할 뿐 예전 KRX 과거 유니버스 경로가 하던
- * '휴장일이면 과거로 소급' 탐색을 하지 않는다(그 경로는 스펙 2026-08-05 Task 6 에서
- * 데이터셋·스냅샷과 함께 제거됐다) — 그래서 소급은 이제 ensureTradingDay 쪽 책임이고,
- * 이 스텁은 "그 날이 휴장이었다"는 사실 하나만 재현하면 된다. HOLIDAY_BAS_DATES 를
- * 겨냥하지 않는 스펙은 어떤 날짜를 동기화하든 여전히 같은 종목·시가총액을 얻는다.
+ * '휴장일이면 과거로 소급' 탐색을 하지 않는다. 그 경로는 스펙 2026-08-05 Task 6
+ * 에서 데이터셋·스냅샷과 함께 제거됐다. 그래서 소급은 이제 ensureTradingDay
+ * 쪽 책임이고, 이 스텁은 "그 날이 휴장이었다"는 사실 하나만 재현하면 된다.
  */
 async function startFakeKrxServer(): Promise<void> {
   const app = Fastify({ logger: false });
@@ -173,39 +235,14 @@ async function startFakeKrxServer(): Promise<void> {
   app.get('/svc/apis/sto/ksq_isu_base_info', async () => krxEnvelope(KOSDAQ_BASE_ROWS));
   app.get('/svc/apis/sto/stk_bydd_trd', async (request) => {
     const { basDd } = request.query as { basDd?: string };
-    return krxEnvelope(isHolidayBasDd(basDd) ? [] : KOSPI_DAILY_ROWS);
+    if (isHolidayBasDd(basDd)) return krxEnvelope([]);
+    return krxEnvelope([samsungDailyRow(basDd ?? '20260105'), DELISTED_DAILY_ROW]);
   });
   app.get('/svc/apis/sto/ksq_bydd_trd', async (request) => {
     const { basDd } = request.query as { basDd?: string };
     return krxEnvelope(isHolidayBasDd(basDd) ? [] : KOSDAQ_DAILY_ROWS);
   });
   await app.listen({ host: '127.0.0.1', port: KRX_FAKE_PORT });
-}
-
-function buildTrendingHourlyCsv(): string {
-  const lines = ['timestamp,open,high,low,close,volume'];
-  let tradingDays = 0;
-  let dayCursor = Date.UTC(2026, 0, 5);
-  const baseForDay = (day: number): number => {
-    if (day < 15) return 100 + day * 5;
-    if (day < 23) return 170 - (day - 14) * 6;
-    return 122 + (day - 22) * 5;
-  };
-  while (tradingDays < 30) {
-    const dow = new Date(dayCursor).getUTCDay();
-    if (dow !== 0 && dow !== 6) {
-      const base = baseForDay(tradingDays);
-      for (let barIndex = 0; barIndex < 7; barIndex += 1) {
-        const ts = dayCursor + barIndex * HOUR;
-        const open = base + barIndex * 0.3;
-        const close = open + 0.5;
-        lines.push(`${ts},${open},${close + 0.1},${open - 0.6},${close},1000`);
-      }
-      tradingDays += 1;
-    }
-    dayCursor += DAY;
-  }
-  return lines.join('\n');
 }
 
 async function main(): Promise<void> {
@@ -243,24 +280,13 @@ async function main(): Promise<void> {
     container.clock.now(),
   );
 
-  // timeframe '1m' — 슬라이스 모델에서 available timeframe 은 실제 저장된 봉으로
-  // 결정된다 (dataset.timeframe 고정 목록이 아니다). '1h' 로 직수입하면 1m 원본이
-  // 전혀 없어 데이터 검증 드로어의 1m→1h 폴백이 빈 성공 응답 대신 400 을 받아
-  // 깨진다. CSV 행은 이미 시간 경계에 맞춰져 있어 1m→1h 집계가 1:1 로 떨어진다.
-  // 봉은 **종목**으로 들어간다 — 위저드는 이제 데이터셋이 아니라 유니버스 규칙만
-  // 받으므로(스펙 2026-08-05) 여기서 참조 묶음을 따로 만들 필요가 없다.
-  await container.symbolService.importCsv({
-    market: 'KR',
-    timeframe: '1m',
-    symbol: '005930',
-    fileName: 'e2e.csv',
-    csvContent: buildTrendingHourlyCsv(),
-  });
-  // 표시명은 라우트(`POST /symbols/import`)가 SymbolInfoService 로 채운다. 이 시드는
-  // 서비스를 직접 부르므로 그 단계를 건너뛴다 — 실제 경로와 같은 상태를 만들려면
-  // 여기서 이름을 넣어야 한다. (테스트의 `/symbols/info` 스텁은 브라우저 요청만 가로챈다.)
-  container.symbolService.setName('005930', '삼성전자');
-
+  // e2e 픽스처 봉은 더 이상 여기서 직접 심지 않는다.
+  // Task 5 가 `symbolService.importCsv` 를 지웠다(스펙 2026-08-07-price-data-removal).
+  // 대신 가짜 KRX 서버가 005930 에 추세 있는 일별 시세를 낸다(`samsungCloseFor` 참고).
+  // 위저드의 '미리보기'·'기간 전체 동기화'가 그 시세를 `krx_daily_bars` 에 적재한다.
+  // 종목 등록도 그 미리보기 응답이 자동으로 한다.
+  // 그 등록 로직은 backtest-routes.ts 의 registerUniverseSymbols 다.
+  // 위저드를 통과하는 e2e 흐름은 별도 등록이 필요 없다.
   const app = await buildServer(container);
   await app.listen({ host: config.bindAddress, port: config.port });
   container.jobOrchestrator.start();

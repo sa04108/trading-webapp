@@ -15,7 +15,7 @@ import type {
  * 잃을 수 있었다 — 청크 하나의 실패가 같은 요청의 다른 종목까지 지웠기 때문이다.
  * 여기서는 그 상황에서도 로컬 종목 마스터(`symbols.name`)가 아는 이름은 화면에
  * 나와야 한다는 계약을 확인한다. 청크 격리 자체는
- * `tests/unit/toss-market-data-source.test.ts`, 캐시·폴백 병합 로직은
+ * `tests/unit/toss-stock-info-source.test.ts`, 캐시·폴백 병합 로직은
  * `tests/unit/symbol-info-service.test.ts` 가 소스 단위로 확인한다 — 여기서는 라우트부터
  * 실제 `SymbolService`(DB) 까지 이어지는 전체 경로만 본다.
  */

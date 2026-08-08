@@ -75,50 +75,24 @@ test('제출 화면 URL 을 직접 열면 검토를 거치도록 되돌린다', 
   await expect(page.getByRole('button', { name: '백테스트 실행' })).toHaveCount(0);
 });
 
-test('데이터 구획은 각자 URL 을 갖고 뒤로가기가 직전 구획으로 돌아간다', async ({ page }) => {
+// 데이터 화면은 구획이 종목 마스터 하나뿐이다(가격 데이터 구획은
+// 2026-08-07-price-data-removal 계획으로 제거됐다) — 그래서 탭 nav 자체가 없다
+// (data-page.tsx). 아래 시나리오는 구획 간 이동이 아니라 `/datasets` 진입·리다이렉트가
+// `/datasets/master`로 정확히 이어지는지, 그리고 그 경로가 쿼리를 잃지 않는지만 본다.
+
+test('옛 ?tab= 링크는 종목 마스터 경로로 이어지고 다른 쿼리는 남는다', async ({ page }) => {
   await login(page);
 
-  await page.goto('/datasets');
-  await expect(page).toHaveURL(/\/datasets\/master$/);
-  await expect(page.getByRole('link', { name: '종목 마스터' })).toHaveAttribute(
-    'aria-current',
-    'page',
-  );
-
-  await page.getByRole('link', { name: '가격 데이터' }).click();
-  await expect(page).toHaveURL(/\/datasets\/prices$/);
-  await expect(page.getByRole('link', { name: '가격 데이터' })).toHaveAttribute(
-    'aria-current',
-    'page',
-  );
-
-  await page.goBack();
-  await expect(page).toHaveURL(/\/datasets\/master$/);
-});
-
-test('옛 ?tab= 링크는 구획 경로로 이어지고 다른 쿼리는 남는다', async ({ page }) => {
-  await login(page);
-
-  // 데이터 탭이 데이터셋·종목이던 시절의 값
+  // 데이터 탭이 데이터셋·종목이던 시절의 값. 가격 데이터 구획이 있던 시절의
+  // ?tab=prices 도 지금은 구획이 하나뿐이라 같은 곳(종목 마스터)으로 이어진다.
   await page.goto('/datasets?tab=symbols');
-  await expect(page).toHaveURL(/\/datasets\/prices$/);
+  await expect(page).toHaveURL(/\/datasets\/master$/);
 
   await page.goto('/datasets?tab=prices');
-  await expect(page).toHaveURL(/\/datasets\/prices$/);
+  await expect(page).toHaveURL(/\/datasets\/master$/);
 
   // ?date= 는 종목 마스터가 쓰는 값이다 — 리다이렉트가 삼키면 날짜 링크가 끊긴다
   await page.goto('/datasets?tab=master&date=2024-12-30');
-  await expect(page).toHaveURL(/\/datasets\/master\?date=2024-12-30$/);
-});
-
-test('구획을 왕복해도 ?date= 가 남는다', async ({ page }) => {
-  await login(page);
-
-  // 보던 시점이 구획 왕복 사이에 사라지면 읽던 스냅샷이 조용히 최신 날짜로 바뀐다
-  await page.goto('/datasets/master?date=2024-12-30');
-  await page.getByRole('link', { name: '가격 데이터' }).click();
-  await expect(page).toHaveURL(/\/datasets\/prices\?date=2024-12-30$/);
-  await page.getByRole('link', { name: '종목 마스터' }).click();
   await expect(page).toHaveURL(/\/datasets\/master\?date=2024-12-30$/);
 });
 
@@ -126,23 +100,9 @@ test('모르는 데이터 하위 경로도 기본 구획으로 이어진다', as
   await login(page);
 
   // 자식 라우트가 다 어긋나면 매칭 실패가 앱 셸을 라우터 오류 화면으로 바꾼다 —
-  // 옛 tab 값을 경로로 손입력한 경우가 대표적이다
+  // 옛 tab 값을 경로로 손입력한 경우가 대표적이다. 탭 nav 가 없으므로 화면 확인은
+  // 종목 마스터에만 있는 컨트롤(자동 동기화 체크박스)로 한다.
   await page.goto('/datasets/symbols');
   await expect(page).toHaveURL(/\/datasets\/master$/);
-  await expect(page.getByRole('link', { name: '종목 마스터' })).toHaveAttribute(
-    'aria-current',
-    'page',
-  );
-});
-
-test('끝 슬래시가 붙은 경로도 활성 구획을 표시한다', async ({ page }) => {
-  await login(page);
-
-  // 같은 경로의 다른 표기 — 라우터는 매칭하므로 화면은 뜨는데, 활성 표시가 문자열
-  // 비교면 두 구획 모두 비활성으로 그려져 지금 위치를 알 방법이 없어진다
-  await page.goto('/datasets/prices/');
-  await expect(page.getByRole('link', { name: '가격 데이터' })).toHaveAttribute(
-    'aria-current',
-    'page',
-  );
+  await expect(page.getByRole('checkbox', { name: '자동 동기화(KRX)' })).toBeVisible();
 });

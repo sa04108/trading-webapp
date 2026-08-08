@@ -107,8 +107,9 @@ export const symbols = sqliteTable(
 );
 
 /**
- * 슬라이스별 수집 워터마크 (구 broker_sync_state).
- * 워터마크는 봉 저장 이후에만 갱신하므로 실제 저장소보다 앞서 주장하지 않는다.
+ * 슬라이스별 수집 워터마크 (구 broker_sync_state) — 더는 쓰지 않는다.
+ * 이 테이블에 쓰던 `BrokerSyncService`가 봉 수집 제거로 함께 사라졌다(D-041).
+ * 테이블째 삭제는 스키마 정리(후속 계획)에서 한다.
  */
 export const symbolSlices = sqliteTable(
   'symbol_slices',
@@ -124,9 +125,8 @@ export const symbolSlices = sqliteTable(
     /** 수집된 가장 최신 봉 */
     syncedLastTsMs: integer('synced_last_ts_ms'),
     /**
-     * 백필 완료 시각. 일봉은 API 보관 깊이 바닥까지 소진했다는 뜻이지만, 분봉은
-     * 2년 상한이 있어 API 바닥에는 닿지 않는다 — 분봉에서는 "현재 상한 기준으로
-     * 더 당길 백필 작업이 없다"는 뜻이다 (broker-sync-service.ts markBackfillDone 참고).
+     * 백필 완료 시각. 일봉은 API 보관 깊이 바닥까지, 분봉은 2년 상한까지
+     * 수집했다는 뜻이었다. `BrokerSyncService`가 사라지며 더는 갱신되지 않는다.
      */
     backfillDoneAtMs: integer('backfill_done_at_ms'),
     /** 마지막으로 이 슬라이스 수집이 완료된 시각 — 종목 화면의 「일봉 3일 전」 */
@@ -200,8 +200,11 @@ export const symbolVersions = sqliteTable(
 
 
 /**
- * 수집 잡 (구 data_import_jobs). 대상이 데이터셋이 아니라 **종목 집합**이다 —
- * 사용자가 종목 화면에서 여러 개를 체크해 한 번에 동기화한다.
+ * 수집 잡 (구 data_import_jobs) — 더는 쓰지 않는다. CSV 가져오기·증권사 봉
+ * 동기화가 봉 수집 제거로 함께 사라져(D-041) 아무도 이 테이블에 쓰지 않는다.
+ * `SymbolService.removeSymbols` 도 이 테이블을 더 이상 조회하지 않는다(리뷰
+ * finding, 2026-08-08) — 동시 수집 잡 개념 자체가 D-041 로 사라졌다. 테이블째
+ * 삭제는 스키마 정리(후속 계획)에서 한다.
  */
 export const dataSyncJobs = sqliteTable(
   'data_sync_jobs',
@@ -228,7 +231,7 @@ export const dataSyncJobs = sqliteTable(
     /** 재무 단계 진행·결과 (FactsJobState). null = 재무를 요청하지 않은 잡 */
     factsJson: text('facts_json'),
     /**
-     * 종목별 격리 실패 목록 (BrokerSyncFailedSymbol[] JSON). 증권사가 상장폐지
+     * 종목별 격리 실패 목록 ({code, market, reason}[] JSON). 증권사가 상장폐지
      * 종목을 모르는 탓에 나는 404 등은 그 종목만 건너뛰고 나머지는 계속 수집한다.
      * null = 실패한 종목이 없거나 봉 단계 자체를 아직 실행하지 않은 잡.
      */

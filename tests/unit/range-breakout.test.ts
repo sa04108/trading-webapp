@@ -83,7 +83,7 @@ function candle(index: number, ohlc: Pick<Candle, 'open' | 'high' | 'low' | 'clo
   return {
     symbol: 'A',
     market: 'KR',
-    timeframe: '1h',
+    timeframe: '1d',
     tsMs: START + index * HOUR,
     volume: 100,
     ...ohlc,

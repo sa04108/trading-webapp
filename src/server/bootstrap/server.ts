@@ -67,10 +67,7 @@ export async function buildServer(container: Container): Promise<FastifyInstance
       registerSymbolRoutes(
         api,
         container.symbolService,
-        container.brokerSyncService,
         container.symbolInfoService,
-        container.symbolMetricsService,
-        container.factsSyncEstimator,
         () => container.factRepository.symbolsWithFacts(),
         requireAuth,
       );
@@ -83,6 +80,7 @@ export async function buildServer(container: Container): Promise<FastifyInstance
           results: container.resultsService,
           strategies: container.strategyRegistry,
           symbolService: container.symbolService,
+          candleCoverage: container.candleCoverageService,
           universeRuleResolver: container.universeRuleResolver,
           audit: container.auditLog,
           factRepository: container.factRepository,

@@ -18,7 +18,7 @@ function bar(index: number, price: number, overrides: Partial<Candle> = {}): Can
   return {
     symbol: 'A',
     market: 'KR',
-    timeframe: '1h',
+    timeframe: '1d',
     tsMs: START + index * HOUR,
     open: price,
     high: price * 1.01,

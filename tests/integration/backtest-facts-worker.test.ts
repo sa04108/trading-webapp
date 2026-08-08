@@ -3,7 +3,7 @@ import type { Candle } from '../../src/server/modules/market-data/domain/candle.
 import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
-import { registerSymbols } from '../helpers/seed.js';
+import { registerSymbols, seedDailyBars } from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 
 const DAY = 86_400_000;
@@ -115,11 +115,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       { standardCode: 'KR7000002000', shortCode: 'RICH', name: 'RICH', market: 'KOSPI', marketCapKrw: '200000000000' },
       { standardCode: 'KR7000003000', shortCode: 'NOFACTS', name: 'NOFACTS', market: 'KOSPI', marketCapKrw: '100000000000' },
     ]);
-    await ctx.container.candleRepository.saveCandles(candles(40));
-    for (const code of ['CHEAP', 'RICH']) {
-      await ctx.container.symbolService.refreshCoverage(code, 'KR', '1d');
-      ctx.container.symbolService.bumpVersion(code, '1d', 'seed', Date.now());
-    }
+    seedDailyBars(ctx.container.database.db, candles(40));
 
     // 컨테이너가 조립한 factRepository 로 저장한다 — 워커가 같은 dataRoot 를 통해
     // 이 팩트를 다시 읽어야 하므로, 테스트 전용 repository 를 새로 만들지 않는다.
@@ -218,11 +214,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
           volume: 1_000,
         });
       }
-      await ctx.container.candleRepository.saveCandles(extra);
-      for (const code of ['CHEAP', 'RICH', 'NOFACTS']) {
-        await ctx.container.symbolService.refreshCoverage(code, 'KR', '1d');
-        ctx.container.symbolService.bumpVersion(code, '1d', 'seed', Date.now());
-      }
+      seedDailyBars(ctx.container.database.db, extra);
 
       const created = await ctx.app.inject({
         method: 'POST',
@@ -346,11 +338,7 @@ describe('워커의 자본변동 팩트 배선 — 접수일이 기간 종료 �
       { standardCode: 'KR7000005000', shortCode: 'FLAT', name: 'FLAT', market: 'KOSPI', marketCapKrw: '200000000000' },
     ]);
     // 2025-01-02 ~ 2025-04-30 = 119봉
-    await ctx.container.candleRepository.saveCandles(splitScenarioCandles(119));
-    for (const code of ['SPLIT', 'FLAT']) {
-      await ctx.container.symbolService.refreshCoverage(code, 'KR', '1d');
-      ctx.container.symbolService.bumpVersion(code, '1d', 'seed', Date.now());
-    }
+    seedDailyBars(ctx.container.database.db, splitScenarioCandles(119));
 
     await ctx.container.factRepository.saveFacts([
       {

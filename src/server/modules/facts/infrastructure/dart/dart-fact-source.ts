@@ -57,7 +57,7 @@ const OK_STATUS = '000';
  * 담당한다.
  *
  * 엔드포인트 경로·응답 필드 이름은 **API 키 발급 후 실제 응답으로 검증해 조정한다**
- * (kiwoom-market-data-source.ts 와 같은 관례). 필드 이름이 틀리면 파싱이 gap 으로
+ * (toss-stock-info-source.ts 와 같은 관례). 필드 이름이 틀리면 파싱이 gap 으로
  * 남으므로 수집 리포트에 드러난다 — 조용히 0 이 되지 않는다.
  */
 export function createDartFactSource(

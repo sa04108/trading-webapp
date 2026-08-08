@@ -101,10 +101,6 @@ export function NewBacktestWizard() {
   const [reviewPassed, setReviewPassed] = useState(false);
   const [strategyId, setStrategyId] = useState<string | null>(null);
   const [parameters, setParameters] = useState<Record<string, string>>({});
-  // 소비 봉 주기 — '' 는 아직 정해지지 않음(프리필 초기값이거나 유니버스 미리보기 전).
-  // 미리보기가 성공해 unionSymbols 가 정해지면 그 자리에서 wizardTimeframes 첫 항목으로
-  // 명시값을 채운다.
-  const [timeframe, setTimeframe] = useState('');
   /**
    * 유니버스 규칙 (스펙 2026-08-05) — 위저드는 더 이상 종목이나 데이터셋을 고르지
    * 않는다. 시장·상위 N 만 고르면 실제 종목 구성은 제출 시점에 서버가 리밸런스
@@ -171,23 +167,6 @@ export function NewBacktestWizard() {
   });
 
   const selectedStrategy = strategies.data?.strategies.find((s) => s.id === strategyId) ?? null;
-  const symbolByCode = useMemo(
-    () => new Map((symbolsQuery.data?.symbols ?? []).map((s) => [s.code, s])),
-    [symbolsQuery.data],
-  );
-  /**
-   * 유니버스의 봉 슬라이스 보유 = unionSymbols **전부** 가 그 슬라이스를 가진 경우.
-   * 하나라도 비면 그 봉으로 돌릴 수 없다 — any 로 열면 일부 종목이 조용히 0봉으로 빠진다.
-   */
-  const slicesOf = (codes: readonly string[]) =>
-    (['1d', '1m'] as const).map((slice) => ({
-      slice,
-      hasData:
-        codes.length > 0 &&
-        codes.every((code) =>
-          symbolByCode.get(code)?.slices.some((s) => s.slice === slice && s.hasData) === true,
-        ),
-    }));
   const paramSpecs = useMemo(() => extractNumberParams(schema.data?.schema), [schema.data]);
 
   /**
@@ -224,9 +203,8 @@ export function NewBacktestWizard() {
     currentPreviewResult !== null &&
     currentPreviewResult.uncoveredDates.length === 0 &&
     currentPreviewResult.missingCandleSymbols.length === 0;
-  /** 그 미리보기가 확정한 종목 목록 — 위저드 나머지 단계(봉 주기·재무 게이트·검토)가 본다 */
+  /** 그 미리보기가 확정한 종목 목록 — 위저드 나머지 단계(재무 게이트·검토)가 본다 */
   const unionSymbols = currentPreviewResult !== null && universePreviewOk ? currentPreviewResult.unionSymbols : [];
-  const timeframeOptions = wizardTimeframes(slicesOf(unionSymbols));
 
   const stockNames = useStockNames(unionSymbols);
   const nameOf = (symbol: string): string | null => stockNames.get(symbol)?.name ?? null;
@@ -249,17 +227,6 @@ export function NewBacktestWizard() {
     );
   }, [strategyId, paramSpecs]);
 
-  // unionSymbols 가 새로 확정될 때마다 봉 주기 기본값을 다시 도출한다 — 이전 유니버스에서
-  // 골랐던 선택이 새 유니버스로 새지 않게 한다. 문자열 키로 비교하는 이유는 unionSymbols
-  // 가 매 렌더 새 배열 참조(파생 값)라 배열 자체를 의존성에 넣으면 매 렌더 돈다.
-  const unionSymbolsKey = unionSymbols.join(',');
-  useEffect(() => {
-    const options = wizardTimeframes(slicesOf(unionSymbols));
-    setTimeframe(options[0] ?? '1d');
-    // slicesOf·unionSymbols 는 위 키가 바뀔 때만 실제로 달라진다고 보고 키만 의존성으로
-    // 둔다 — 이 프로젝트는 react-hooks lint 플러그인을 쓰지 않아 경고도 없다.
-  }, [unionSymbolsKey]);
-
   // 프리필은 원본 작업당 한 번만 — 사용자가 편집을 시작한 뒤 덮어쓰지 않는다.
   const prefilledFrom = useRef<string | null>(null);
   const [prefillNotes, setPrefillNotes] = useState<string[]>([]);
@@ -275,7 +242,8 @@ export function NewBacktestWizard() {
     });
     setStrategyId(state.strategyId);
     setParameters(state.parameters);
-    setTimeframe(state.timeframe);
+    // 원본 timeframe 은 옮기지 않는다 — 위저드가 만들 수 있는 값은 이제 '1d' 하나뿐이라
+    // 옛 잡의 값('1m'·'1h')을 그대로 두면 고칠 UI 도 없이 제출이 막힌다.
     setUniverseRule(state.universeRule);
     // 원본의 유니버스 규칙만 옮긴다 — 실제 종목 구성은 이 화면에서 다시 미리보기해야
     // 얻는다(제출 시점에 서버가 새로 재구성하므로 옛 목록은 의미가 없다). lastPreview 를
@@ -315,7 +283,7 @@ export function NewBacktestWizard() {
 
   // 위저드는 항상 timeframe 을 명시해 만든다(§9.5) — BacktestRequestBody 의 timeframe 이
   // optional 인 건 옛 잡과의 호환 때문이지, 이 화면이 만드는 요청과는 무관하다.
-  const buildRequest = (): (BacktestRequestBody & { timeframe: '1m' | '1h' | '1d' }) | string => {
+  const buildRequest = (): (BacktestRequestBody & { timeframe: '1d' }) | string => {
     if (!selectedStrategy) return '전략을 선택하세요';
     if (!universePreviewOk) return '유니버스 규칙을 미리보기하고 경고를 모두 해결하세요';
     if (!from || !to || from > to) return '기간이 올바르지 않습니다';
@@ -347,12 +315,9 @@ export function NewBacktestWizard() {
       strategyId: selectedStrategy.id,
       parameters: parsedParams,
       universeRule,
-      // 항상 명시해 보낸다 — 결과·복제가 "무슨 봉으로 돌렸는지" 를 들고 다니게 (§9.5)
-      // 사용자가 카드를 만지지 않았으면(timeframe==='') 도출 목록의 첫 항목이 기본이다.
-      // 도출 목록마저 비어 있는 극단적 경우엔 legacyConsumeDefault 와 같은 규칙으로 폴백한다.
-      timeframe: (timeframe === ''
-        ? (timeframeOptions[0] ?? '1d')
-        : timeframe) as '1m' | '1h' | '1d',
+      // 항상 명시해 보낸다 — 결과·복제가 "무슨 봉으로 돌렸는지" 를 들고 다니게 (§9.5).
+      // KRX 일봉이 유일한 출처라 고를 것 없이 이 값 하나로 고정한다.
+      timeframe: wizardTimeframes[0],
       period: { from, to },
       capital: { initialCash: cash, currency: 'KRW' },
       execution: { fillTiming: 'NEXT_BAR_OPEN', commissionProfileId, slippageProfileId },
@@ -735,37 +700,6 @@ export function NewBacktestWizard() {
             <Alert variant="destructive" role="alert">
               <AlertDescription>{stepBlocker(2, gate)}</AlertDescription>
             </Alert>
-          ) : null}
-
-          {timeframeOptions.length >= 2 ? (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">봉 주기</CardTitle>
-                {timeframeOptions.includes('1m') ? (
-                  <CardDescription>
-                    1분봉은 봉 수가 약 55배라 실행이 느리고, 기간·종목이 많으면 상한에 걸릴 수
-                    있습니다.
-                  </CardDescription>
-                ) : null}
-              </CardHeader>
-              <CardContent>
-                <Select
-                  value={timeframe === '' ? (timeframeOptions[0] ?? '') : timeframe}
-                  onValueChange={(value) => setTimeframe(value)}
-                >
-                  <SelectTrigger className="h-11 w-full sm:w-56">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {timeframeOptions.map((option) => (
-                      <SelectItem key={option} value={option}>
-                        {timeframeLabel(option)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </CardContent>
-            </Card>
           ) : null}
         </div>
       ) : null}

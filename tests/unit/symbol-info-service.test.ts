@@ -4,7 +4,7 @@ import {
   type LocalSymbolNameSource,
 } from '../../src/server/modules/market-data/application/symbol-info-service.js';
 import {
-  MarketDataSourceNotConfiguredError,
+  StockInfoSourceNotConfiguredError,
   type StockInfo,
   type StockInfoBatchResult,
   type StockInfoSource,
@@ -64,7 +64,7 @@ describe('SymbolInfoService (종목명 캐시)', () => {
 
   it('returns [] quietly when the source is not configured', async () => {
     const getStockInfo = vi.fn(() =>
-      Promise.reject(new MarketDataSourceNotConfiguredError()),
+      Promise.reject(new StockInfoSourceNotConfiguredError()),
     );
     const service = buildService({ getStockInfo });
 
@@ -166,7 +166,7 @@ describe('SymbolInfoService (종목명 캐시)', () => {
     });
 
     it('증권사 미설정 상태에서도 로컬 폴백은 그대로 동작한다', async () => {
-      const getStockInfo = vi.fn(() => Promise.reject(new MarketDataSourceNotConfiguredError()));
+      const getStockInfo = vi.fn(() => Promise.reject(new StockInfoSourceNotConfiguredError()));
       const localNames = fakeLocalNames({ '005930': { name: '로컬이름', market: 'KOSPI' } });
       const service = new SymbolInfoService(
         { getStockInfo },

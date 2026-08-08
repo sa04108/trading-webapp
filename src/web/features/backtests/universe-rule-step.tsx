@@ -1,6 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -15,11 +14,6 @@ import {
 } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { api, ApiError, postJson } from '@/lib/api-client';
-import {
-  parseFailedSymbols,
-  type BrokerSyncFailedSymbol,
-  type DataJob,
-} from '@/features/datasets/symbol-types';
 import { MAX_UNIVERSE_SYMBOLS } from '../../../shared/schemas/universe-limit.js';
 import type { UniverseRule } from '../../../shared/schemas/universe-rule.js';
 import type { SymbolMasterCoverageDto } from '../../../shared/schemas/symbol-master.js';
@@ -116,29 +110,17 @@ export function UniverseRuleStep({
   const [backfillRunning, setBackfillRunning] = useState(false);
   const [backfillCursor, setBackfillCursor] = useState<string | null>(null);
   const [backfillError, setBackfillError] = useState<string | null>(null);
-  // 봉 없는 종목 동기화 — 아래 syncMissingCandles 참고. 등록은 더 이상 여기서 하지
-  // 않는다: 미리보기 응답 자체가 unionSymbols 를 종목 마스터 정보로 자동 등록한다
-  // (backtest-routes.ts registerUniverseSymbols) — 이 목록의 종목은 이미 등록돼
-  // 있고, 남은 일은 봉 동기화뿐이다.
-  const [candlePhase, setCandlePhase] = useState<'SYNCING' | null>(null);
-  const [candleSyncError, setCandleSyncError] = useState<string | null>(null);
-  // 동기화가 성공적으로 끝났는데도 재미리보기에 missingCandleSymbols 가 남을 수
-  // 있다(상장폐지 종목은 증권사가 이름·봉을 안 준다) — 그때는 오류가 아니라 몇 종목이
-  // 빠졌고 왜인지 그대로 보여준다. 규칙을 다시 미리보기하면 지난 시도 결과이므로 지운다.
-  const [candleSyncResult, setCandleSyncResult] = useState<{
-    succeeded: number;
-    failed: BrokerSyncFailedSymbol[];
-  } | null>(null);
   const previewMutation = useMutation({
     mutationFn: (params: PreviewParams) =>
       postJson<UniversePreviewResponseDto>('/backtests/universe-preview', params),
     onSuccess: (data, params) => {
       onPreviewResolved(params, data);
-      // 이 응답 자체가 unionSymbols 를 등록하고 그 1일봉 커버리지를 갱신한다
-      // (backtest-routes.ts registerUniverseSymbols·refreshKrxDailyCoverage,
-      // 스펙 2026-08-06 리뷰 발견) — `['symbols']` 를 무효화하지 않으면 위저드
-      // 봉 주기 카드(`new-backtest-wizard.tsx` wizardTimeframes)가 마운트 시점의
-      // 낡은 스냅샷만 보고 방금 커버된 슬라이스를 "없음"으로 잘못 판정한다.
+      // 이 응답 자체가 unionSymbols 를 등록한다(backtest-routes.ts
+      // registerUniverseSymbols, 스펙 2026-08-06 리뷰 발견).
+      // 재무 게이트가 보는 hasFacts 는 `['symbols']` 조회로만 온다
+      // (new-backtest-wizard.tsx symbolsWithFacts).
+      // 무효화하지 않으면 방금 새로 등록된 종목이 마운트 시점의 낡은 스냅샷에는 없다.
+      // hasFacts 를 "모른다"로 보고 게이트가 근거 없이 다음 단계를 막는다.
       void queryClient.invalidateQueries({ queryKey: ['symbols'] });
     },
   });
@@ -183,10 +165,12 @@ export function UniverseRuleStep({
     return '기간 중 일부 날짜의 KRX 데이터가 아직 없습니다.';
   };
 
-  // 증권사 동기화는 기간이 완전히 커버된 뒤에도 여전히 봉이 없는 종목에만 보조로
-  // 남긴다 — 기간이 미커버인 동안 이 버튼을 보이면 사용자가 이 실패할 수밖에 없는
-  // 경로부터 밟게 된다(운영에서 실제로 재현된 순서).
-  const brokerSyncAvailable =
+  // 기간을 이미 다 커버했는데도(periodCovered) 여전히 봉이 없는 종목이
+  // 남아 있는지 본다. 그렇다면 KRX 에도 그 종목의 일봉이 없다는 뜻이다
+  // (증권사 동기화는 D-041 로 제거됐다) — 안내 알림만 보여준다.
+  // 기간이 아직 미커버인 동안은 이 알림을 띄우지 않는다.
+  // "기간 전체 동기화"부터 먼저 시도해야 하기 때문이다.
+  const missingCandlesAfterFullSync =
     preview !== null && preview.periodCovered && preview.missingCandleSymbols.length > 0;
 
   const runPreview = (params: PreviewParams): void => {
@@ -304,57 +288,6 @@ export function UniverseRuleStep({
     runPreview(previewMutation.variables);
   };
 
-  /**
-   * 봉 없는 종목을 그 자리에서 동기화한다 — 이 목록(missingCandleSymbols)의 종목은
-   * 미리보기 응답 시점에 이미 자동 등록돼 있다(backtest-routes.ts
-   * registerUniverseSymbols) — 그래서 이 화면은 더 이상 POST /symbols 로 직접
-   * 등록하지 않는다. 탭을 옮겨 종목을 등록하고 다시 동기화를 거는 왕복을 없앤다.
-   *
-   * 잡 폴링·완료 판정은 symbols-panel.tsx 와 같다: status 가 RUNNING/QUEUED 인 동안
-   * 1초 간격으로 다시 읽고, 그 밖의 상태는 끝난 것으로 본다.
-   */
-  const syncMissingCandles = async (codes: readonly string[]): Promise<void> => {
-    setCandleSyncError(null);
-    setCandleSyncResult(null);
-    setCandlePhase('SYNCING');
-
-    let job: DataJob | null = null;
-    try {
-      const started = await postJson<{ job: DataJob }>('/symbols/sync', { codes, slice: '1d' });
-      let current: DataJob = started.job;
-      while (current.status === 'RUNNING' || current.status === 'QUEUED') {
-        await new Promise((resolve) => setTimeout(resolve, 1_000));
-        const response = await api<{ job: DataJob }>(`/data-jobs/${current.id}`);
-        current = response.job;
-      }
-      job = current;
-
-      if (current.status === 'COMPLETED') {
-        // 종목 단위로 격리된 실패(상장폐지 종목 등)만 여기 남는다 — 잡 자체는 끝까지
-        // 돌았다(broker-sync-service.ts 종목 루프 참고). 성공 수는 요청한 코드
-        // 개수에서 실패 수를 뺀 값이다.
-        const failed = parseFailedSymbols(current.failedSymbolsJson);
-        setCandleSyncResult({ succeeded: Math.max(codes.length - failed.length, 0), failed });
-      } else if (current.status === 'CANCELLED') {
-        setCandleSyncError('봉 수집이 취소되었습니다');
-      } else {
-        setCandleSyncError(current.error ?? '봉 수집이 실패했습니다');
-      }
-    } catch (error) {
-      const reason = error instanceof ApiError ? error.message : '봉 수집에 실패했습니다';
-      setCandleSyncError(reason);
-    } finally {
-      setCandlePhase(null);
-    }
-
-    // 동기화 시도가 있었으면(잡을 실제로 받았으면) 결과와 무관하게 다시 미리보기해
-    // 남은 목록을 정확히 추린다 — syncFullPeriod 와 같은 방식.
-    if (job !== null) {
-      await queryClient.invalidateQueries({ queryKey: ['symbol-master'] });
-      if (previewMutation.variables) runPreview(previewMutation.variables);
-    }
-  };
-
   return (
     <div className="space-y-3">
       <Card>
@@ -406,12 +339,7 @@ export function UniverseRuleStep({
             <Button
               className="h-11"
               disabled={!canPreview || previewMutation.isPending}
-              onClick={() => {
-                // 직접 다시 미리보기하면 지난 동기화 시도의 설명은 더 이상 이 결과에
-                // 대한 것이 아니다 — 지운다.
-                setCandleSyncResult(null);
-                runPreview(currentParams);
-              }}
+              onClick={() => runPreview(currentParams)}
             >
               {previewMutation.isPending ? '조회 중…' : '미리보기'}
             </Button>
@@ -498,7 +426,7 @@ export function UniverseRuleStep({
               type="button"
               variant="outline"
               size="sm"
-              disabled={backfillRunning || candlePhase !== null}
+              disabled={backfillRunning}
               onClick={() => void syncFullPeriod()}
             >
               {backfillRunning
@@ -519,56 +447,27 @@ export function UniverseRuleStep({
         </Alert>
       ) : null}
 
-      {preview && brokerSyncAvailable ? (
+      {preview && missingCandlesAfterFullSync ? (
         <Alert variant="destructive" role="alert">
           <AlertDescription className="space-y-2">
             <p>다음 종목은 아직 봉 데이터가 없어 백테스트를 실행할 수 없습니다.</p>
             <p className="text-xs text-muted-foreground wrap-anywhere">
               {preview.missingCandleSymbols.join(', ')}
             </p>
-            {/* 기간을 이미 다 채운 상태에서만 이 블록이 뜬다. 즉 KRX 에도 이 종목의
-                일봉이 없다는 뜻이라, 증권사 재시도로 풀릴 가능성이 낮다는 걸 누르기
-                전에 알려야 한다 — 운영에서는 실패한 뒤에야 상장폐지를 알 수 있었고,
-                게이트가 이 목록을 0 으로 요구해 빠져나갈 길도 안 보였다. */}
+            {/* 기간을 이미 다 채운 상태에서만 이 블록이 뜬다. 그런데도 봉이
+                없다면 KRX 에도 이 종목의 일봉이 없다는 뜻이다. 봉 수집 경로가
+                종목 마스터 동기화 하나뿐이라(가격 데이터 화면·증권사 동기화는
+                D-041 로 제거됨) 이 화면에서 더 시도할 방법이 없다. */}
             <p className="text-xs text-muted-foreground">
-              기간은 이미 다 수집했다 — KRX 에도 이 종목의 일봉이 없다. 그 기간에 거래가
-              없었거나(거래정지·정리매매 종료) KRX 가 제공하지 않는 종목이다.
+              기간은 이미 다 수집했습니다 — KRX 에도 이 종목의 일봉이 없습니다.
+              그 기간에 거래가 없었거나(거래정지·정리매매 종료) KRX 가 제공하지
+              않는 종목입니다.
             </p>
             <p className="text-xs text-muted-foreground">
-              증권사 조회는 상장폐지 종목을 주지 않아 대개 실패한다. 실패하면 상위 N 이나
-              기간을 조정해 이 종목을 유니버스에서 빼거나, 가격 데이터 탭에서 CSV 로 직접
-              넣어야 한다.
-            </p>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={candlePhase !== null || backfillRunning}
-              onClick={() => void syncMissingCandles(preview.missingCandleSymbols)}
-            >
-              {candlePhase === 'SYNCING'
-                ? '봉 수집 중…'
-                : `${preview.missingCandleSymbols.length}개 종목 봉 수집`}
-            </Button>
-            {candleSyncResult && candleSyncResult.failed.length > 0 ? (
-              <p className="text-xs text-muted-foreground">
-                {candleSyncResult.succeeded}종목 수집, {candleSyncResult.failed.length}종목 실패 — 상장폐지
-                종목일 수 있습니다 ({candleSyncResult.failed.map((entry) => entry.code).join(', ')})
-              </p>
-            ) : null}
-            <p className="text-xs text-muted-foreground">
-              <Link to="/datasets/prices" className="underline">
-                가격 데이터 탭
-              </Link>
-              에서 직접 동기화할 수도 있습니다.
+              상위 N 이나 기간을 조정해 이 종목을 유니버스에서 빼는 것 외에는
+              방법이 없습니다.
             </p>
           </AlertDescription>
-        </Alert>
-      ) : null}
-
-      {candleSyncError !== null ? (
-        <Alert variant="destructive" role="alert">
-          <AlertDescription>{candleSyncError}</AlertDescription>
         </Alert>
       ) : null}
     </div>

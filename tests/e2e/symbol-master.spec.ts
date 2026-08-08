@@ -3,8 +3,12 @@ import { login } from './login';
 
 /**
  * 종목 마스터 화면(설계 2026-08-05-symbol-master-design) — 데이터 탭이 데이터셋·종목
- * 대신 종목 마스터·가격 데이터로 갈린 뒤 새로 생긴 첫 구획이다. 브리프 시나리오
- * 1·2·4 를 이 파일이 담당한다(시나리오 3 은 위저드 흐름이라 mvp-flow.spec.ts).
+ * 대신 종목 마스터·가격 데이터로 갈리며 새로 생긴 화면이다. 브리프 시나리오
+ * 1·4 를 이 파일이 담당한다(시나리오 3 은 위저드 흐름이라 mvp-flow.spec.ts).
+ *
+ * 가격 데이터 구획(시나리오 2)은 2026-08-07-price-data-removal 계획으로
+ * 제거됐다. 데이터 화면에 남은 구획이 종목 마스터 하나뿐이라 탭 nav 자체가
+ * 없다 — 이 파일의 남은 시나리오는 URL 로만 화면을 확인한다.
  *
  * 이 스펙이 만든 커버리지·체크포인트를 되돌리는 afterEach 가 없다 — 옛
  * krx-universe.spec.ts 의 자동 생성 데이터셋 정리와 달리, 여기서는 지울 게 없다.
@@ -34,10 +38,14 @@ function daysBeforeIso(iso: string, days: number): string {
 }
 
 /**
- * 과거의 임의의 하루 — 실제 날짜값 자체는 의미가 없다(가짜 KRX 서버는 이제 어느
- * 날짜를 물어도 같은 시세를 낸다, scripts/e2e-server.ts 참고). 이 값이 하는 일은
- * 딱 하나: mvp-flow.spec.ts 가 쓰는 2026년 리밸런스 날짜들과 겹치지 않는 것.
- * "오늘"보다 충분히 이전이어야 타임라인이 폭을 가진다(아래 본문 주석 참고).
+ * 과거의 임의의 하루 — 실제 날짜값 자체는 유니버스 구성에 의미가 없다.
+ * 가짜 KRX 서버는 어느 날짜를 물어도 같은 종목·시가총액을 낸다
+ * (scripts/e2e-server.ts 참고). 005930 의 일별 가격만은 날짜에 따라
+ * 추세를 그리지만, 이 스펙은 가격을 보지 않으므로 무관하다.
+ *
+ * 이 값이 하는 일은 딱 하나: mvp-flow.spec.ts 가 쓰는 2026년 리밸런스 날짜들과
+ * 겹치지 않는 것. "오늘"보다 충분히 이전이어야 타임라인이 폭을 가진다(아래
+ * 본문 주석 참고).
  */
 const SEED_DATE = '2024-12-30';
 
@@ -57,16 +65,11 @@ test('종목 마스터 기본 탭 — 미커버 날짜를 동기화하면 표와
   });
   expect(seedResponse.ok()).toBeTruthy();
 
-  // ── 기본 탭 확인 — 쿼리 없이 들어가면 종목 마스터가 뜨고, 이미 커버된 날짜를 기본으로 보여준다 ──
+  // ── 기본 화면 확인 — /datasets 로 들어가면 종목 마스터로 이어지고, 이미 커버된
+  // 날짜를 기본으로 보여준다. 데이터 화면에 구획이 하나뿐이라(가격 데이터 구획은
+  // 2026-08-07-price-data-removal 계획으로 제거됨) 탭 nav 자체가 없다 — URL 로 확인한다.
   await page.goto('/datasets');
-  await expect(page.getByRole('link', { name: '종목 마스터' })).toHaveAttribute(
-    'aria-current',
-    'page',
-  );
-  await expect(page.getByRole('link', { name: '가격 데이터' })).not.toHaveAttribute(
-    'aria-current',
-    'page',
-  );
+  await expect(page).toHaveURL(/\/datasets\/master$/);
   await expect(page.getByText(/기준 5종목/)).toBeVisible();
   // exact — '삼성전자우' 도 '삼성전자' 를 부분 문자열로 포함해 strict-mode 위반이 난다
   await expect(page.getByText('삼성전자', { exact: true })).toBeVisible();
@@ -148,36 +151,4 @@ test('종목 마스터 기본 탭 — 미커버 날짜를 동기화하면 표와
   await page.getByLabel('이벤트 종류 필터').click();
   await expect(page.getByRole('option', { name: '주식수 변경' })).toBeVisible();
   await page.getByRole('option', { name: '전체 보기' }).click();
-});
-
-test('가격 데이터 구획 — 구 링크(?tab=symbols)도 새 경로로 이어진다', async ({ page }) => {
-  await login(page);
-
-  // 구 링크 — 데이터 탭이 데이터셋·종목이던 시절의 URL. 새 경로로 이어져야 북마크·공유
-  // 링크가 끊기지 않는다 (data-page.tsx 의 DatasetsIndexRedirect 참고).
-  await page.goto('/datasets?tab=symbols');
-  await expect(page).toHaveURL(/\/datasets\/prices$/);
-  await expect(page.getByRole('link', { name: '가격 데이터' })).toHaveAttribute(
-    'aria-current',
-    'page',
-  );
-  await expect(page.getByRole('link', { name: '종목 마스터' })).not.toHaveAttribute(
-    'aria-current',
-    'page',
-  );
-  await expect(page.getByText('삼성전자')).toBeVisible();
-
-  // 새 경로로 직접
-  await page.goto('/datasets/prices');
-  await expect(page.getByRole('link', { name: '가격 데이터' })).toHaveAttribute(
-    'aria-current',
-    'page',
-  );
-  await expect(page.getByText('삼성전자')).toBeVisible();
-
-  await page.goto('/datasets/master');
-  await expect(page.getByRole('link', { name: '종목 마스터' })).toHaveAttribute(
-    'aria-current',
-    'page',
-  );
 });

@@ -5,7 +5,6 @@ import type { Candle, Timeframe } from '../../src/server/modules/market-data/dom
 import { emaTrendSwitchStrategy } from '../../src/server/modules/strategy/strategies/ema-trend-switch.js';
 
 const DAY = 86_400_000;
-const MINUTE = 60_000;
 const START = Date.UTC(2025, 0, 2);
 
 const ZERO_COST: ExecutionProfile = {
@@ -86,17 +85,6 @@ describe('방향 무지 — 전략은 어느 종목이 인버스인지 모른다
         ? signature.replace(/^AAA:/, 'BBB:')
         : signature.replace(/^BBB:/, 'AAA:');
     expect(fillSignature(swapped.fills)).toEqual(fillSignature(original.fills).map(relabel));
-  });
-});
-
-describe('봉 주기 무관 — 같은 가격 경로면 같은 주문 시퀀스', () => {
-  it('1m 과 1d 가 같은 체결 시퀀스를 낸다', () => {
-    const lev = levPath(60, 25);
-    const closes = new Map([['AAA', lev]]);
-    const daily = run(closes, '1d', DAY);
-    const minute = run(closes, '1m', MINUTE);
-    expect(fillSignature(minute.fills)).toEqual(fillSignature(daily.fills));
-    expect(minute.fills.length).toBeGreaterThan(0); // 공허 통과 방지
   });
 });
 

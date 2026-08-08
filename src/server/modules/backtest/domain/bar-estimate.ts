@@ -16,15 +16,14 @@ export interface CoverageSpan {
 
 /**
  * coverage 메타데이터만으로 소비 봉 수를 추정한다 (Parquet 을 읽지 않는다 — D-025).
- * 봉이 커버리지 구간에 고르게 있다고 가정한 선형 추정 + 배율(1h coverage 로 1m 소비를
- * 추정할 때 60). 상한 검사용이므로 과대추정이 안전한 방향이다.
+ * 봉이 커버리지 구간에 고르게 있다고 가정한 선형 추정이다. 상한 검사용이므로
+ * 과대추정이 안전한 방향이다.
  */
 export function estimateBars(
   coverage: readonly CoverageSpan[],
   symbols: readonly string[],
   fromTsMs: number,
   toTsMs: number,
-  multiplier: number,
 ): number {
   const bySymbol = new Map(coverage.map((row) => [row.symbol, row]));
   let total = 0;
@@ -35,7 +34,7 @@ export function estimateBars(
     if (overlap < 0) continue;
     const span = row.lastTsMs - row.firstTsMs;
     const fraction = span <= 0 ? 1 : Math.min(1, overlap / span);
-    total += Math.ceil(row.barCount * fraction * multiplier);
+    total += Math.ceil(row.barCount * fraction);
   }
   return total;
 }
