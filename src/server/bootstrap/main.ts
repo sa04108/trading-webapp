@@ -11,6 +11,10 @@ async function main(): Promise<void> {
 
   await app.listen({ host: config.bindAddress, port: config.port });
   container.jobOrchestrator.start();
+  // CLI 서브커맨드도 같은 컨테이너를 만들지만 이 메서드는 부르지 않는다.
+  // 서버 부팅 경로에서만 불러야 하는 근거는 recoverOrphaned 의 주석 참고
+  // (리뷰 finding, 2026-08-08).
+  container.corporateActionSyncOrchestrator.recoverOrphaned();
   const withoutTotp = container.userRepository.listUsernamesWithoutTotp();
   if (withoutTotp.length > 0) {
     container.logger.warn(

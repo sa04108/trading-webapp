@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import type { AppDatabase, DatabaseHandle } from '../../../shared/db/database.js';
 import { corporateActionSyncJobs } from '../../../shared/db/schema.js';
 import type { Clock } from '../../../shared/clock.js';
@@ -59,34 +59,47 @@ export class CorporateActionSyncOrchestrator {
     private readonly logger: Logger,
   ) {
     this.db = handle.db;
-    this.recoverOrphaned();
   }
 
   /**
-   * 부팅 시 고아 행 정리(리뷰 finding, 2026-08-08).
-   * 이 오케스트레이터는 자식 프로세스가 아니라 같은 서버 프로세스 안에서 잡을 돈다.
-   * 그래서 새 인스턴스가 막 만들어졌다는 사실 자체가 "지금 실제로 돌고 있는
-   * 잡은 없다" 는 뜻이다.
-   * `QUEUED`·`RUNNING` 으로 남은 행은 이전 실행이 중간에 죽은 흔적이다.
-   * `JobOrchestrator.recoverInterrupted` 와 같은 문제를 풀지만, 자식 PID 생존을
-   * 확인할 필요가 없어 더 단순하다 — 발견한 행을 전부 고아로 본다.
-   * 정리하지 않으면 `hasActiveJob()` 이 영원히 참이 되어 이후 모든 생성 요청이
-   * 409 로 막힌다.
+   * 서버 부팅 경로에서만 불러야 한다 — `main.ts` 가 `jobOrchestrator.start()` 를
+   * 부르는 자리에서 이 메서드도 함께 부른다.
+   *
+   * **생성자에서 불러서는 안 된다(리뷰 finding, 2026-08-08).**
+   * `createContainer()` 는 서버뿐 아니라 모든 CLI 서브커맨드
+   * (`admin:create`, `facts:sync` 등)에서도 호출된다.
+   * 그 CLI 들도 전부 서버와 같은 `DATABASE_PATH` 를 쓴다.
+   * 생성자에서 정리하면 서버가 잡을 돌리는 도중 CLI 를 한 번만 실행해도
+   * 그 `RUNNING` 행이 죽는다.
+   * 그때 "서버가 재시작됐다" 는 거짓 메시지까지 남는다.
+   * `hasActiveJob()` 도 거짓이 되어 두 번째 잡이 동시에 뜰 수 있다.
+   * 동시 실행을 막으려던 불변식 전체가 무너진다.
+   *
+   * 서버 부팅 경로에서만 부르면 안전하다.
+   * `JobOrchestrator.recoverInterrupted` 도 생성자가 아니라 `start()` 를 통해
+   * 부팅 시에만 불린다(`main.ts`).
+   * 그 시점에는 이 프로세스 안에서 아직 어떤 잡도 만든 적이 없으므로,
+   * `QUEUED`·`RUNNING` 으로 남은 행은 전부 이전 실행이 중간에 죽은 흔적이다.
    */
-  private recoverOrphaned(): void {
+  recoverOrphaned(): void {
     const orphaned = this.db
       .select({ id: corporateActionSyncJobs.id })
       .from(corporateActionSyncJobs)
       .where(inArray(corporateActionSyncJobs.status, ACTIVE_STATUSES))
       .all();
     for (const { id } of orphaned) {
-      this.setStatus(id, 'FAILED', {
-        error: '서버 재시작으로 작업이 중단되었습니다. 다시 실행하세요.',
-      });
-      this.logger.warn(
-        { module: 'facts', event: 'corporate-action-sync.job.recovered', jobId: id },
-        'orphaned corporate action sync job marked FAILED',
+      const recovered = this.setStatus(
+        id,
+        'FAILED',
+        { error: '서버 재시작으로 작업이 중단되었습니다. 다시 실행하세요.' },
+        ACTIVE_STATUSES,
       );
+      if (recovered) {
+        this.logger.warn(
+          { module: 'facts', event: 'corporate-action-sync.job.recovered', jobId: id },
+          'orphaned corporate action sync job marked FAILED',
+        );
+      }
     }
   }
 
@@ -162,18 +175,33 @@ export class CorporateActionSyncOrchestrator {
     return 'CANCELLING';
   }
 
+  /**
+   * `expectedCurrent` 를 주면 현재 상태가 그중 하나일 때만 쓴다(compare-and-swap,
+   * 리뷰 finding, 2026-08-08) — `JobQueue.setStatus` 의 `expectedCurrent` 와 같은
+   * 관례다.
+   * 이 오케스트레이터는 한 프로세스 안에서 잡 하나만 돌리므로 오늘은 실제로
+   * 경합할 두 번째 쓰기가 없다.
+   * 그래도 가드를 박아 두면, 나중에 다른 호출부(예: 또 다른 정리 경로)가 늘어도
+   * 종료된 잡을 실수로 덮어쓰는 사고가 코드 자체로 막힌다.
+   * 반환값은 실제로 갱신됐는지다.
+   */
   private setStatus(
     jobId: string,
     status: CorporateActionSyncJobStatus,
     patch: Partial<typeof corporateActionSyncJobs.$inferInsert> = {},
-  ): void {
+    expectedCurrent?: readonly CorporateActionSyncJobStatus[],
+  ): boolean {
     const terminal = TERMINAL_STATUSES.includes(status);
-    this.db
+    const where = expectedCurrent
+      ? and(eq(corporateActionSyncJobs.id, jobId), inArray(corporateActionSyncJobs.status, expectedCurrent))
+      : eq(corporateActionSyncJobs.id, jobId);
+    const result = this.db
       .update(corporateActionSyncJobs)
       .set({ status, ...(terminal ? { completedAtMs: this.clock.now() } : {}), ...patch })
-      .where(eq(corporateActionSyncJobs.id, jobId))
+      .where(where)
       .run();
     this.events.emit('job', { jobId } satisfies CorporateActionSyncJobEvent);
+    return result.changes > 0;
   }
 
   private async run(
@@ -182,7 +210,7 @@ export class CorporateActionSyncOrchestrator {
     fromYear: number,
     toYear: number,
   ): Promise<void> {
-    this.setStatus(jobId, 'RUNNING');
+    this.setStatus(jobId, 'RUNNING', {}, ['QUEUED']);
     try {
       const report = await this.factSync.syncCorporateActions(
         // 웹은 증분이다 — 매번 전 구간을 다시 받으면 버튼이 CLI 의 45분짜리가 된다.
@@ -192,7 +220,12 @@ export class CorporateActionSyncOrchestrator {
             this.db
               .update(corporateActionSyncJobs)
               .set({ doneSymbols: progress.index })
-              .where(eq(corporateActionSyncJobs.id, jobId))
+              .where(
+                and(
+                  eq(corporateActionSyncJobs.id, jobId),
+                  inArray(corporateActionSyncJobs.status, ACTIVE_STATUSES),
+                ),
+              )
               .run();
             this.events.emit('job', { jobId } satisfies CorporateActionSyncJobEvent);
           },
@@ -206,11 +239,12 @@ export class CorporateActionSyncOrchestrator {
           : report.stopReason === 'ERROR'
             ? 'FAILED'
             : 'COMPLETED';
-      this.setStatus(jobId, status, {
-        savedFacts: report.savedFacts,
-        gapCount: report.gaps.length,
-        error: report.failureMessage,
-      });
+      this.setStatus(
+        jobId,
+        status,
+        { savedFacts: report.savedFacts, gapCount: report.gaps.length, error: report.failureMessage },
+        ACTIVE_STATUSES,
+      );
     } catch (error) {
       // syncCorporateActions 자체는 종목 단위 오류를 리포트로 흡수하므로 여기까지
       // 던져 올라오는 것은 그 바깥의 문제(예: DART 인증키 미설정)다.
@@ -219,7 +253,7 @@ export class CorporateActionSyncOrchestrator {
         { module: 'facts', event: 'corporate-action-sync.job.failed', jobId, err: error },
         'corporate action sync job failed',
       );
-      this.setStatus(jobId, 'FAILED', { error: message });
+      this.setStatus(jobId, 'FAILED', { error: message }, ACTIVE_STATUSES);
     } finally {
       this.cancelFlags.delete(jobId);
     }
