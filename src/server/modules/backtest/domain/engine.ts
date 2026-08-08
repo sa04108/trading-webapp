@@ -102,7 +102,7 @@ const CANCEL_YIELD_INTERVAL_BARS = 200;
 /**
  * 이벤트 루프 (스펙 §9.2):
  *  0. 이 시점까지 공시된 팩트 흡수 — 전략 호출 전이어야 한다 (PIT 커서, §9.4)
- *  1. 보유 포지션에 자본변동 반영 — 대기 주문 체결보다 먼저다
+ *  1. 보유 포지션·대기 주문에 자본변동 반영 — 체결보다 먼저다
  *  2. 이전 시점의 대기 주문 체결 (이번 봉 시가)
  *  3. 현금·포지션 갱신
  *  4. 평가금액 갱신
@@ -174,9 +174,14 @@ function* runBacktestSteps(
   const universeRejectedSymbols = new Set<string>();
 
   const factView = new PitFactView(input.facts ?? []);
-  // 자본변동 조정을 이미 반영한 마지막 시각. -1 로 시작하면 첫 봉은 포지션이
-  // 비어 있어 과거 이벤트가 전부 "due" 로 잡혀도 실제로는 아무 일도 하지 않는다.
-  let prevTsMs = -1;
+  // 종목별 마지막 적용 시각 — 거래정지로 효력발생일에 봉이 없어도 놓치지 않는다.
+  // 액면분할은 주권교체 기간에 매매거래가 정지되는 것이 표준 경로다.
+  // 커서가 전역 하나면 그 종목은 재개 봉에서도 영영 조정되지 않는다.
+  //
+  // 심볼이 이 맵에 없으면 -1 로 본다. 새 포지션은 진입 시점에 이 맵을
+  // 채운다(executeOrder 의 BUY 분기). 그래야 진입 이전의 자본변동이 새
+  // 포지션에 잘못 적용되지 않는다.
+  const lastAppliedTsMsBySymbol = new Map<string, number>();
 
   const state = strategy.initialize({ symbols, initialCash: input.initialCash, rng });
 
@@ -215,18 +220,34 @@ function* runBacktestSteps(
     // 자본변동을 포지션에 반영한다 — 대기 주문 체결보다 먼저다. 분할일 매도 신호는
     // 조정된 수량으로 팔아야 한다.
     //
-    // (prevTsMs, tsMs] 에 효력이 발생한 이벤트만 적용한다. 이 구간 판정이 "이미
-    // 적용했는가" 를 종목별로 기억하지 않아도 되게 해 준다.
+    // 구간 판정은 종목별 커서로 한다.
+    // (lastApplied, tsMs] 에 효력이 발생한 이벤트만 적용한다.
+    // 커서는 봉이 있는 날에만 전진한다 — 그래야 거래정지로 빠진 구간의
+    // 이벤트를 재개 봉에서 따라잡을 수 있다.
     for (const position of [...positions.values()]) {
       const bar = bars.get(position.symbol);
-      if (!bar) continue; // 거래 정지 등으로 봉이 없으면 다음 봉에서 적용한다
+      if (!bar) continue; // 거래정지 등으로 봉이 없으면 거래 재개 봉에서 적용한다
+      const lastApplied = lastAppliedTsMsBySymbol.get(position.symbol) ?? -1;
       const due = factView
         .corporateActions(position.symbol, tsMs)
-        .filter((action) => action.effectiveTsMs > prevTsMs);
+        .filter((action) => action.effectiveTsMs > lastApplied);
+      // 이 봉을 확인했다는 사실을 커서에 남긴다.
+      // 조정 대상이 없어도 갱신해야 다음 봉이 같은 구간을 다시 검사하지 않는다.
+      lastAppliedTsMsBySymbol.set(position.symbol, tsMs);
       if (due.length === 0) continue;
       // 같은 날 여러 이벤트는 배수를 곱해 합성한다 — 순서에 무관하다
       const ratio = due.reduce((acc, action) => acc * action.ratio, 1);
       if (ratio === 1) continue;
+      // 이 종목을 겨냥한 대기 주문도 같은 비율로 스케일한다.
+      // 발행 시점에 캡처된 수량을 그대로 체결하면 분할 이후 수량이 어긋난다.
+      // BUY 도 같은 값 보존 규칙을 적용해야 의도한 투입 금액이 유지된다.
+      pendingOrders = pendingOrders
+        .map((order) =>
+          order.symbol === position.symbol
+            ? { ...order, quantity: adjustForRatio(order.quantity, 0, ratio, 0).quantity }
+            : order,
+        )
+        .filter((order) => order.quantity > 0);
       const adjusted = adjustForRatio(position.quantity, position.avgEntryPrice, ratio, bar.open);
       cash += adjusted.cashFromFraction;
       if (adjusted.closed) {
@@ -295,8 +316,6 @@ function* runBacktestSteps(
     if (processedBars % CANCEL_YIELD_INTERVAL_BARS < bars.size) {
       yield;
     }
-
-    prevTsMs = tsMs;
   }
 
   if (pendingOrders.length > 0) {
@@ -454,6 +473,10 @@ function* runBacktestSteps(
           entryCosts: fill.commission,
           entryTsMs: tsMs,
         });
+        // 진입 시점을 커서에 남긴다.
+        // 이 진입가는 이미 이전 분할을 반영한 시장 가격이다.
+        // 그 이전 이벤트를 새 포지션에 다시 적용하면 안 된다.
+        lastAppliedTsMsBySymbol.set(order.symbol, tsMs);
       }
       return fill;
     }

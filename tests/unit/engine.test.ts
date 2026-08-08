@@ -585,6 +585,11 @@ describe('분할을 걸친 보유 포지션 조정', () => {
     const sellFill = result.fills.find((fill) => fill.side === 'SELL');
     expect(sellFill).toBeDefined();
     expect(sellFill!.quantity).toBe(50); // 10주 × 5 — 분할로 조정된 수량
+    // avgEntryPrice 도 20_000 으로 조정돼야 체결가(20_000)와 맞아 손익이 0 이다.
+    // avgEntryPrice 조정을 빼면 100_000 이 그대로 남아 손익이 -4,000,000 으로 틀린다.
+    // 위의 quantity 단언만으로는 이 회귀를 잡지 못한다.
+    expect(result.trades).toHaveLength(1);
+    expect(result.trades[0]!.netPnl).toBeCloseTo(0);
   });
 
   it('분할 후 진입한 포지션은 그 분할의 영향을 받지 않는다', () => {
@@ -609,5 +614,121 @@ describe('분할을 걸친 보유 포지션 조정', () => {
     expect(result.fills[0]!.quantity).toBe(10); // 분할 이후 진입 — 조정 대상이 아니다
     expect(result.openPositions).toHaveLength(1);
     expect(result.openPositions[0]!.quantity).toBe(10);
+  });
+
+  it('거래정지로 효력발생일에 봉이 없어도 거래 재개 봉에서 조정된다', () => {
+    // 봉 2(효력발생일)를 통째로 뺀다 — 액면분할은 주권교체 기간에 매매거래가
+    // 정지되는 것이 표준 경로라, 이 시나리오가 오히려 흔한 경우다.
+    // 전역 커서였다면 재개 봉(3)에서도 영영 조정되지 않는다.
+    const candles = [dailyBar(0, 100_000), dailyBar(1, 100_000), dailyBar(3, 20_000)];
+    const result = runBacktest(buyAtBarStrategy(0, 10) as never, {
+      candles,
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+      facts: [splitFact('A', SPLIT_PERIOD_KEY, 5)],
+    });
+
+    // 재개 봉(3) 시가를 fractionPrice 로 써서 조정한다 — 수량 × 단가는 보존된다.
+    expect(result.openPositions).toHaveLength(1);
+    expect(result.openPositions[0]!.quantity).toBe(50);
+    expect(result.openPositions[0]!.avgEntryPrice).toBe(20_000);
+  });
+
+  it('분할 봉 이전에 발행한 매도가 분할 봉에서 조정된 수량으로 체결된다', () => {
+    // 조정이 체결보다 먼저인지 검증한다.
+    // 매도는 봉 1 에서 발행돼 분할 봉(봉 2)에서 체결된다.
+    // 발행 시점엔 아직 분할 전이라 quantity 가 10 으로 굳어 pendingOrders 에 들어간다.
+    //
+    // 그 굳은 수량도 분할 봉에서 같은 비율로 스케일해야 한다.
+    // 체결 순서와 대기 주문 스케일, 두 가지를 테스트 하나로 함께 검증한다.
+    const strategy: TradingStrategy<unknown, { step: number }> = {
+      id: 'presplit-sell',
+      version: '1.0.0',
+      name: 't',
+      description: 't',
+      parameterSchema: z.unknown(),
+      initialize: () => ({ step: 0 }),
+      onBars(_context, state) {
+        const orders: OrderIntent[] =
+          state.step === 0
+            ? [{ symbol: 'A', side: 'BUY', quantity: 10 }]
+            : state.step === 1
+              ? [{ symbol: 'A', side: 'SELL', quantity: 10 }]
+              : [];
+        state.step += 1;
+        return { orders };
+      },
+    };
+
+    const candles = [
+      dailyBar(0, 100_000),
+      dailyBar(1, 100_000),
+      dailyBar(2, 20_000),
+      dailyBar(3, 20_000),
+    ];
+    const result = runBacktest(strategy as never, {
+      candles,
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+      facts: [splitFact('A', SPLIT_PERIOD_KEY, 5)],
+    });
+
+    const sellFill = result.fills.find((fill) => fill.side === 'SELL');
+    expect(sellFill).toBeDefined();
+    expect(sellFill!.tsMs).toBe(dailyBar(2, 20_000).tsMs); // 분할 봉에서 체결
+    expect(sellFill!.quantity).toBe(50); // 발행 시점의 10 이 아니라 조정된 50
+  });
+
+  it('분할 봉 이전에 발행한 매수도 분할 봉에서 조정된 수량으로 체결된다', () => {
+    // BUY 도 SELL 과 같은 값 보존 규칙을 적용한다 — 발행 시점 가격 기준으로
+    // 정한 수량이 분할 후에도 같은 투입 금액을 의미하게 하려면 그렇다.
+    // 4주 × 100_000 = 400_000 을 의도했다면, 분할 후에는 20주 × 20_000 이
+    // 같은 400_000 이다.
+    const strategy: TradingStrategy<unknown, { step: number }> = {
+      id: 'presplit-buy',
+      version: '1.0.0',
+      name: 't',
+      description: 't',
+      parameterSchema: z.unknown(),
+      initialize: () => ({ step: 0 }),
+      onBars(_context, state) {
+        const orders: OrderIntent[] =
+          state.step === 0
+            ? [{ symbol: 'A', side: 'BUY', quantity: 10 }]
+            : state.step === 1
+              ? [{ symbol: 'A', side: 'BUY', quantity: 4 }]
+              : [];
+        state.step += 1;
+        return { orders };
+      },
+    };
+
+    const candles = [
+      dailyBar(0, 100_000),
+      dailyBar(1, 100_000),
+      dailyBar(2, 20_000),
+      dailyBar(3, 20_000),
+    ];
+    const result = runBacktest(strategy as never, {
+      candles,
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+      facts: [splitFact('A', SPLIT_PERIOD_KEY, 5)],
+    });
+
+    const buyFills = result.fills.filter((fill) => fill.side === 'BUY');
+    expect(buyFills).toHaveLength(2);
+    expect(buyFills[1]!.quantity).toBe(20); // 발행 시점의 4 가 아니라 조정된 20
+    expect(result.openPositions).toHaveLength(1);
+    expect(result.openPositions[0]!.quantity).toBe(70); // 분할 후 50 + 새 매수 20
   });
 });
