@@ -79,12 +79,20 @@ import {
   type TradeSortKey,
 } from './trade-sort';
 import { formatUniverseRuleSummary } from './universe-summary';
-import { isTerminal, type BacktestMetrics, type JobSummary, type RunMetadata } from './types';
+import {
+  isTerminal,
+  type BacktestMetrics,
+  type JobSummary,
+  type RunMetadata,
+  type SeriesResponse,
+} from './types';
 import { costSummary } from './cost-summary';
 import { costProfileLabel, slippageProfileLabel } from './profile-labels';
 import { groupWarnings } from './warning-groups';
 import { selectionMethodLabel, universeSourceLabel } from './universe-provenance';
 import type { ProvenancePin } from '../../../shared/schemas/provenance-pin.js';
+
+const RESULT_PAGE_SIZE = 10;
 
 function MetricCards({ metrics }: { metrics: BacktestMetrics }) {
   const cost = costSummary(metrics);
@@ -196,9 +204,9 @@ function TradesSection({
 }) {
   const [symbol, setSymbol] = useState<string>('ALL');
   const [page, setPage] = useState(0);
-  const [pageSizeText, setPageSizeText] = useState('10');
+  const [pageSizeText, setPageSizeText] = useState(String(RESULT_PAGE_SIZE));
   const [sort, setSort] = useState<TradeSort>(DEFAULT_TRADE_SORT);
-  const pageSize = parsePageSize(pageSizeText, 10);
+  const pageSize = parsePageSize(pageSizeText, RESULT_PAGE_SIZE);
   const { data, isLoading } = useBacktestTrades(
     jobId,
     {
@@ -375,6 +383,74 @@ function TradesSection({
           className="mt-3"
           ariaLabel="거래 내역 페이지 이동"
           currentPage={page}
+          pageCount={pageCount}
+          onPageChange={setPage}
+        />
+      </CardContent>
+    </Card>
+  );
+}
+
+function SymbolPerformanceSection({
+  rows,
+  nameOf,
+}: {
+  rows: SeriesResponse['symbols'];
+  nameOf: (symbol: string) => string | null;
+}) {
+  const [page, setPage] = useState(0);
+  const [pageSizeText, setPageSizeText] = useState(String(RESULT_PAGE_SIZE));
+  const pageSize = parsePageSize(pageSizeText, RESULT_PAGE_SIZE);
+  const { pageCount, currentPage, from, to } = pageWindow(rows.length, pageSize, page);
+  const visibleRows = rows.slice(from, to);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">종목별 성과</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="mb-2 flex justify-end">
+          <PageSizeInput
+            value={pageSizeText}
+            label="종목별 성과 페이지당 표시 수"
+            unit="종목"
+            onChange={(nextValue) => {
+              setPageSizeText(nextValue);
+              setPage(0);
+            }}
+          />
+        </div>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>종목</TableHead>
+              <TableHead className="text-right">거래</TableHead>
+              <TableHead className="text-right">순손익</TableHead>
+              <TableHead className="text-right">승률</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {visibleRows.map((row) => (
+              <TableRow key={row.symbol}>
+                <TableCell>
+                  <SymbolLabel symbol={row.symbol} name={nameOf(row.symbol)} />
+                </TableCell>
+                <TableCell className="text-right">{row.tradeCount}</TableCell>
+                <TableCell className={cn('text-right tabular-nums', pnlClass(row.netPnl))}>
+                  {formatSignedKrw(row.netPnl)}
+                </TableCell>
+                <TableCell className="text-right">
+                  {row.winRate === null ? '-' : `${row.winRate.toFixed(1)}%`}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+        <Pagination
+          className="mt-3"
+          ariaLabel="종목별 성과 페이지 이동"
+          currentPage={currentPage}
           pageCount={pageCount}
           onPageChange={setPage}
         />
@@ -787,41 +863,7 @@ export function BacktestDetailPage() {
               <MonthlyReturnsChart monthly={series.monthly} />
 
               {series.symbols.length > 1 ? (
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-base">종목별 성과</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>종목</TableHead>
-                          <TableHead className="text-right">거래</TableHead>
-                          <TableHead className="text-right">순손익</TableHead>
-                          <TableHead className="text-right">승률</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {series.symbols.map((row) => (
-                          <TableRow key={row.symbol}>
-                            <TableCell>
-                              <SymbolLabel symbol={row.symbol} name={nameOf(row.symbol)} />
-                            </TableCell>
-                            <TableCell className="text-right">{row.tradeCount}</TableCell>
-                            <TableCell
-                              className={cn('text-right tabular-nums', pnlClass(row.netPnl))}
-                            >
-                              {formatSignedKrw(row.netPnl)}
-                            </TableCell>
-                            <TableCell className="text-right">
-                              {row.winRate === null ? '-' : `${row.winRate.toFixed(1)}%`}
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </CardContent>
-                </Card>
+                <SymbolPerformanceSection rows={series.symbols} nameOf={nameOf} />
               ) : null}
             </div>
           ) : (
