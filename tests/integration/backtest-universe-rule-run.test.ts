@@ -145,6 +145,26 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     expect(job.status).toBe('COMPLETED');
     // 데이터셋 timeframe(1d) 봉을 전부 읽었는지 — 1h 로 읽으면 0봉이 된다
     expect(job.totalBars).toBe(dailyCandles.length);
+
+    // 알림 설명이 읽는 값 — getMetrics 의 metricsJson 파싱 결과와 같아야 한다
+    const metrics = ctx.container.resultsService.getMetrics(jobId) as { totalReturnPct: number };
+    expect(ctx.container.resultsService.getTotalReturnPct(jobId)).toBe(metrics.totalReturnPct);
+    // 결과가 없는 잡은 null 이다 — 0 으로 떨어지면 "수익 0%" 로 읽힌다
+    expect(ctx.container.resultsService.getTotalReturnPct('bt_없는잡')).toBeNull();
+
+    // 배선 전체가 이어졌는지 — 리스너가 레지스트리 이름과 수익률을 함께 담는다.
+    // 상태를 기다린 것만으로는 부족하다: 자식이 종료 전에 COMPLETED 를 DB 에 쓰고
+    // 알림은 그 뒤 부모의 exit 핸들러에서 뜬다(job-orchestrator).
+    const findNotification = () =>
+      ctx.container.notificationService.list().find((row) => row.link === `/backtests/${jobId}`);
+    await waitFor(() => findNotification() !== undefined, 10_000);
+
+    const notification = findNotification();
+    expect(notification?.title).toBe('백테스트가 완료되었습니다');
+    expect(notification?.body).toContain('전고점 돌파');
+    expect(notification?.body).toContain('수익률');
+    // kebab-case 식별자가 새면 안 된다
+    expect(notification?.body).not.toContain('range-breakout');
   });
 
   it('봉이 없는 종목을 실행 경고로 남긴다', { timeout: 90_000 }, async () => {
@@ -711,6 +731,11 @@ describe('POST /backtests — 자본변동 수집 게이트 (Task 6)', () => {
     expect(created.statusCode).toBe(201);
     const warnings = (created.json() as { warnings: string[] }).warnings;
     expect(warnings.some((w) => w.includes(CODE))).toBe(true);
+
+    // 응답에만 실어 보내면 토스트 10초가 유일한 수명이 된다 — job 에도 남아야 한다
+    const jobId = (created.json().job as { id: string }).id;
+    const stored = ctx.container.jobQueue.getJob(jobId)!;
+    expect(JSON.parse(stored.submitWarningsJson!)).toEqual(warnings);
   });
 
   /**

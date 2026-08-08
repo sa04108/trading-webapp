@@ -50,6 +50,11 @@ export class JobQueue {
     pinnedUniverse?: { entries: readonly unknown[]; hash: string },
     /** 서버 소유 provenance pin (Task 12, REVIEW §9.2) — validateSubmission 이 조립한 값이다 */
     provenancePin?: ProvenancePin | null,
+    /**
+     * 제출 검증이 만든 경고 — 응답으로만 나가면 토스트와 함께 사라진다.
+     * 기본값 `[]` 는 `schedule` 과 같은 이유다: 단위 테스트가 매번 채우지 않아도 된다.
+     */
+    submitWarnings: readonly string[] = [],
   ): BacktestJobRow {
     const row: typeof backtestJobs.$inferInsert = {
       id: newId('bt'),
@@ -61,6 +66,7 @@ export class JobQueue {
       provenancePinJson: provenancePin ? JSON.stringify(provenancePin) : null,
       universeJson: pinnedUniverse ? JSON.stringify(pinnedUniverse.entries) : null,
       universeHash: pinnedUniverse?.hash ?? null,
+      submitWarningsJson: submitWarnings.length > 0 ? JSON.stringify(submitWarnings) : null,
       createdAtMs: this.clock.now(),
     };
     this.db.insert(backtestJobs).values(row).run();

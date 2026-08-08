@@ -12,6 +12,32 @@ import {
   type TradeRow,
 } from './types';
 
+export interface StrategySummary {
+  id: string;
+  version: string;
+  name: string;
+  description: string;
+  /**
+   * 서버는 항상 boolean 을 내리지만(`toSummary`) 응답을 런타임 검증하지 않으므로
+   * 낡은 서버·프록시 응답에서는 없을 수 있다. 없는 것을 false 로 좁히지 않고 그대로
+   * 흘려보내 배지가 침묵하게 한다 (`strategyDataRequirement`).
+   */
+  requiresFundamentals?: boolean;
+}
+
+/**
+ * 전략 목록. 네 화면(대시보드·목록·상세·위저드)이 공유한다 — 화면마다 같은 useQuery 를
+ * 복사하면 캐시 키는 같은데 응답 타입이 갈라진다. 목록은 배포로만 바뀌므로
+ * staleTime 을 길게 둔다.
+ */
+export function useStrategies() {
+  return useQuery({
+    queryKey: ['strategies'],
+    queryFn: () => api<{ strategies: StrategySummary[] }>('/strategies'),
+    staleTime: 5 * 60_000,
+  });
+}
+
 export function useBacktests(refetchIntervalMs?: number) {
   return useQuery({
     queryKey: ['backtests'],

@@ -1,13 +1,11 @@
-import { useQuery } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import { Link } from 'react-router';
-import { api } from '@/lib/api-client';
 import { InfoHint } from '@/components/info-hint';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Skeleton } from '@/components/ui/skeleton';
-import { useBacktests } from './api';
+import { useBacktests, useStrategies } from './api';
 import { formatDateTime, formatSignedPct, pnlClass, timeframeLabel } from '@/lib/format';
 import { groupJobsByStrategy } from './job-groups';
 import { resolveJobTimeframe } from './job-timeframe';
@@ -67,19 +65,9 @@ function JobCard({
   );
 }
 
-interface StrategySummary {
-  id: string;
-  version: string;
-  name: string;
-  description: string;
-}
-
 export function BacktestsPage() {
   const { data, isLoading } = useBacktests(5_000);
-  const strategies = useQuery({
-    queryKey: ['strategies'],
-    queryFn: () => api<{ strategies: StrategySummary[] }>('/strategies'),
-  });
+  const strategies = useStrategies();
   const strategyById = new Map((strategies.data?.strategies ?? []).map((s) => [s.id, s]));
 
   return (

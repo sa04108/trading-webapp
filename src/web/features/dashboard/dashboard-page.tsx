@@ -7,7 +7,8 @@ import { Progress } from '@/components/ui/progress';
 import { Skeleton } from '@/components/ui/skeleton';
 import { api } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
-import { useBacktests } from '../backtests/api';
+import { useBacktests, useStrategies } from '../backtests/api';
+import { strategyLabel } from '../backtests/strategy-label';
 import { formatDateTime, formatSignedPct, pnlClass } from '@/lib/format';
 import { StatusBadge } from '../backtests/status-badge';
 import { isTerminal } from '../backtests/types';
@@ -29,6 +30,7 @@ function formatGb(bytes: number | null): string {
 
 export function DashboardPage() {
   const { data: backtests, isLoading } = useBacktests(5_000);
+  const { data: strategyList } = useStrategies();
   const { data: info } = useQuery({
     queryKey: ['system', 'info'],
     queryFn: () => api<SystemInfo>('/system/info'),
@@ -40,6 +42,7 @@ export function DashboardPage() {
   });
 
   const jobs = backtests?.jobs ?? [];
+  const strategies = strategyList?.strategies;
   const active = jobs.filter((job) => !isTerminal(job.status));
   const recentCompleted = jobs.filter((job) => job.status === 'COMPLETED').slice(0, 3);
 
@@ -74,7 +77,9 @@ export function DashboardPage() {
                 return (
                   <Link key={job.id} to={`/backtests/${job.id}`} className="block space-y-1">
                     <div className="flex items-center gap-2 text-sm">
-                      <span className="font-medium">{job.strategyId}</span>
+                      <span className="font-medium">
+                        {strategyLabel(job.strategyId, strategies)}
+                      </span>
                       <StatusBadge status={job.status} />
                       <span className="ml-auto text-xs text-muted-foreground">
                         {progress !== null ? `${progress}%` : ''}
@@ -102,7 +107,7 @@ export function DashboardPage() {
                   to={`/backtests/${job.id}`}
                   className="flex items-center gap-2 text-sm"
                 >
-                  <span className="font-medium">{job.strategyId}</span>
+                  <span className="font-medium">{strategyLabel(job.strategyId, strategies)}</span>
                   <span className="text-xs text-muted-foreground">
                     {formatDateTime(job.completedAtMs)}
                   </span>

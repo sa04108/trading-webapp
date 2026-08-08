@@ -479,6 +479,20 @@ test('backtest run completes using only KRX daily bars for a delisted stock', as
   await expect(page).toHaveURL(/\/backtests\/bt_/);
   await expect(page.getByText('완료', { exact: true })).toBeVisible({ timeout: 90_000 });
 
+  // 대시보드는 전략 한국어 이름을 보인다 — kebab-case 식별자가 새면 안 된다 (D-044)
+  await page.goto('/');
+  const recent = page.getByText('최근 결과').locator('..').locator('..');
+  await expect(recent.getByText('전고점 돌파').first()).toBeVisible();
+  await expect(page.getByText('range-breakout')).toHaveCount(0);
+
+  // 알림 항목 설명은 전략 이름과 수익률을 첫 줄에 함께 진다 (D-044)
+  await page.goto('/notifications');
+  const completed = page
+    .getByRole('button', { name: /백테스트가 완료되었습니다/ })
+    .first();
+  await expect(completed).toContainText('전고점 돌파');
+  await expect(completed).toContainText('수익률');
+
   // 이 테스트가 미리보기로 자동 등록한 900010 을 되돌린다 — 상장폐지 종목이
   // 다른 시나리오의 등록 종목 목록에 계속 남아 있을 이유가 없다. 두 프로젝트
   // (mobile·desktop)가 같은 서버를 공유하므로(playwright.config workers:1),
