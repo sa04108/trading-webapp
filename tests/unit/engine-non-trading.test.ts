@@ -216,3 +216,34 @@ describe('상장폐지 청산', () => {
     expect(seen).not.toContain('D');
   });
 });
+
+describe('실행 경고', () => {
+  it('보정하는 항목과 보정하지 않는 항목을 갈라 적는다', () => {
+    const result = runBacktest(buyOnceStrategy('A'), {
+      candles: [bar('A', 0), bar('A', 1)],
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 1,
+      maxPositions: 5,
+    });
+    const text = result.warnings.join('\n');
+    // "생존 편향" 이라는 단일 라벨은 더 이상 쓰지 않는다 — 부분 보정이라 예/아니오로 말할 수 없다
+    expect(text).not.toContain('생존 편향');
+    expect(text).toContain('배당');
+    expect(text).toContain('유상증자 권리락');
+  });
+
+  it('거래불가 정보가 백필되지 않았으면 그 사실을 적는다', () => {
+    const result = runBacktest(buyOnceStrategy('A'), {
+      candles: [bar('A', 0), bar('A', 1)],
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 1,
+      maxPositions: 5,
+      nonTradingCoveredPeriod: null,
+    });
+    expect(result.warnings.join('\n')).toContain('거래불가일 정보가 없습니다');
+  });
+});

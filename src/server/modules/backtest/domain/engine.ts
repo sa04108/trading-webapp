@@ -66,6 +66,11 @@ export interface BacktestRunInput {
    * 전략이 "이 종목이 곧 폐지된다" 를 미리 알 경로를 만들지 않기 위해서다.
    */
   readonly delistedTsMsBySymbol?: ReadonlyMap<string, number>;
+  /**
+   * 거래불가일이 실제로 채워진 구간. `null` 이면 이 실행 구간에 거래불가 정보가 없다.
+   * 행이 없는 것과 아직 모르는 것을 구분하지 않으면 경고가 "반영한다" 고 거짓말한다.
+   */
+  readonly nonTradingCoveredPeriod?: { readonly from: string; readonly to: string } | null;
 }
 
 export interface EngineHooks {
@@ -95,7 +100,7 @@ export interface BacktestRunResult {
 }
 
 /** 재현성 메타데이터에 기록되는 엔진 버전 (스펙 §9.5) — 체결·지표 로직 변경 시 올린다 */
-export const ENGINE_VERSION = '1.4.0';
+export const ENGINE_VERSION = '1.5.0';
 
 const PROGRESS_INTERVAL_BARS = 500;
 
@@ -465,15 +470,43 @@ function* runBacktestSteps(
   const hasCorporateActionFacts = (input.facts ?? []).some(
     (fact) => fact.field === CORPORATE_ACTION_FIELD,
   );
+
+  // "생존 편향" 이라는 단일 라벨은 쓰지 않는다. 시점별 유니버스 선정과 상장폐지 청산은
+  // 하고, 배당·권리락·과거 지수 구성원은 안 한다 — 예/아니오로 답할 수 없는 상태다.
+  // 화면(universe-provenance.ts)이 같은 이유로 "생존자 편향 제거" 표현을 금지한다.
   warnings.push(
-    '생존 편향, 공휴일 캘린더, 배당, 권리락은 이 백테스트에서 보정하지 않습니다. ' +
-      (hasCorporateActionFacts
-        ? '액면분할은 분할 이력이 수집된 데이터셋에서 보유 포지션의 수량과 평균단가, ' +
-          '대기 주문 수량, 전략이 들고 있는 가격 상태에 반영됩니다. ' +
-          '보정을 쓰는 전략의 신호 계산에도 반영됩니다. ' +
-          '이미 체결된 거래의 체결가는 조정하지 않습니다.'
-        : '액면분할도 이 실행에서는 보정되지 않았습니다 (분할 이력 미수집).'),
+    '이 백테스트가 보정하는 것: 시점별 유니버스 선정, 상장폐지 청산, 거래불가일(거래정지·무거래) 매수 제외'
+      + (hasCorporateActionFacts
+        ? ', 액면분할(보유 수량·평균단가·대기 주문·전략 가격 상태). 이미 체결된 거래의 체결가는 조정하지 않습니다.'
+        : '. 액면분할은 이 실행에서 보정되지 않았습니다 (분할 이력 미수집).'),
   );
+  warnings.push(
+    '이 백테스트가 보정하지 않는 것: 배당, 유상증자 권리락, 공휴일 캘린더, 과거 지수 구성원 복원. '
+      + '손절·익절은 종가로만 판정합니다.',
+  );
+
+  if (delistingLiquidations.length > 0) {
+    const netPnl = delistingLiquidations.reduce((sum, item) => sum + item.netPnl, 0);
+    const symbols = delistingLiquidations.map((item) => item.symbol).sort();
+    const shown = symbols.slice(0, 10).join(', ');
+    warnings.push(
+      `상장폐지로 강제 청산한 종목 ${symbols.length}건: ${shown}`
+        + (symbols.length > 10 ? ` 외 ${symbols.length - 10}종목` : '')
+        + `. 손익 합계 ${Math.round(netPnl).toLocaleString()}원. `
+        + '체결가는 그 종목의 마지막 거래 가능 봉 종가이며, 정리매매가 있었다면 그 가격이 반영됩니다.',
+    );
+  }
+
+  if (input.nonTradingCoveredPeriod === null) {
+    warnings.push(
+      '이 실행 구간에는 거래불가일 정보가 없습니다 — 거래정지 종목이 유니버스와 매수 후보에 그대로 들어갔을 수 있습니다. '
+        + '`cli krx:backfill-non-trading` 으로 채운 뒤 다시 실행하세요.',
+    );
+  } else if (input.nonTradingCoveredPeriod !== undefined) {
+    warnings.push(
+      `거래불가일 정보는 ${input.nonTradingCoveredPeriod.from} ~ ${input.nonTradingCoveredPeriod.to} 구간만 반영됐습니다.`,
+    );
+  }
 
   const metrics = computeMetrics(
     equityPoints,
