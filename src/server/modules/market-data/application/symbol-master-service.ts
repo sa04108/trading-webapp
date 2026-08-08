@@ -3,6 +3,7 @@ import type { Clock } from '../../../shared/clock.js';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import {
   krxDailyBars,
+  krxNonTradingDays,
   symbolMasterCheckpointSymbols,
   symbolMasterCheckpoints,
   symbolMasterCoverage,
@@ -16,6 +17,7 @@ import type { Candle } from '../domain/candle.js';
 import { isValidCandle } from '../domain/candle.js';
 import { classifyKrxIssue } from '../domain/krx-filter-policy.js';
 import { addCalendarDays } from '../domain/kst-date.js';
+import { isNonTradingRow } from '../domain/non-trading-day.js';
 import type {
   KrxDailyTradeRow,
   KrxIssueBaseInfoRow,
@@ -591,10 +593,15 @@ export class SymbolMasterService {
    * 이벤트·coverage·거래일 기록과 같은 트랜잭션 안에서 불러야 한다 — 따로 두면 중간에
    * 죽었을 때 커버는 됐는데 봉만 빠진 상태가 남는다.
    *
-   * 가격 4개나 거래량 중 하나라도 null 인 행(거래정지 등)은 저장할 컬럼이 NOT NULL
-   * 이라 애초에 넣을 수 없다. 건너뛰고 건수만 남긴다.
-   * null 은 아니지만 high < low 처럼 OHLC 관계가 어긋난 행도 파싱 버그일 수 있다.
-   * `isValidCandle` 로 걸러 따로 센다 — 원인이 다르면 운영자가 로그에서 구분해야 한다.
+   * KRX 는 거래정지·무거래 행을 `null` 이 아니라 시·고·저 "0", 종가는 직전가,
+   * 거래량 0 으로 준다 (실측 2026-08-08). 그 행은 `krx_non_trading_days` 에 따로
+   * 기록하고 봉으로는 넣지 않는다 — 시·고·저를 우리가 지어내지 않기 위해서다.
+   *
+   * 그래도 `null` 검사는 남긴다. 저장할 컬럼이 NOT NULL 이라 방어선이 필요하고,
+   * KRX 가 응답 모양을 바꾸면 여기서 건수로 드러난다.
+   *
+   * 위 둘 중 어디에도 안 걸리는데 `isValidCandle` 이 거부하는 행(high < low 등)은
+   * 진짜 파싱 버그다. `invalidCount` 로 따로 센다.
    *
    * 이미 있는 날짜는 건드리지 않는다. 자본변동은 계산 시점에 반영하므로(설계
    * 2026-08-08-corporate-action-continuity) 봉을 고쳐 받을 이유가 없다.
@@ -618,6 +625,7 @@ export class SymbolMasterService {
     let skipped = 0;
     let invalidCount = 0;
     const rows: (typeof krxDailyBars.$inferInsert)[] = [];
+    const nonTradingRows: (typeof krxNonTradingDays.$inferInsert)[] = [];
     for (const [market, trades] of byMarket) {
       for (const trade of trades) {
         if (
@@ -628,6 +636,15 @@ export class SymbolMasterService {
           || trade.volume === null
         ) {
           skipped += 1;
+          continue;
+        }
+        if (isNonTradingRow(trade)) {
+          nonTradingRows.push({
+            shortCode: trade.shortCode,
+            date,
+            market,
+            lastClose: trade.close,
+          });
           continue;
         }
         const candle: Candle = {
@@ -672,11 +689,28 @@ export class SymbolMasterService {
         'OHLC 값이 서로 어긋난 일봉 행을 건너뛴다',
       );
     }
+    if (nonTradingRows.length > 0) {
+      this.deps.logger.info(
+        {
+          module: 'market-data',
+          event: 'symbol-master.non-trading-days',
+          date,
+          count: nonTradingRows.length,
+        },
+        '거래정지·무거래로 봉이 없는 종목을 기록한다',
+      );
+    }
 
     // SQLite 바인딩 변수 한도(999)를 피하려 500개 단위로 나눠 넣는다 — writeCheckpoint 와 같은 이유다
     for (let i = 0; i < rows.length; i += 500) {
       tx.insert(krxDailyBars)
         .values(rows.slice(i, i + 500))
+        .onConflictDoNothing()
+        .run();
+    }
+    for (let i = 0; i < nonTradingRows.length; i += 500) {
+      tx.insert(krxNonTradingDays)
+        .values(nonTradingRows.slice(i, i + 500))
         .onConflictDoNothing()
         .run();
     }
