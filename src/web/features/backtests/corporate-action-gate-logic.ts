@@ -1,9 +1,9 @@
-// 확장자 .js 와 별칭(@/) 회피는 `prefill.ts` 와 같은 이유다.
-// `tests/unit/corporate-action-gate.test.ts` 가 이 모듈을 가져와 `tsconfig.server.json` 의
-// `NodeNext` 프로그램에 편입된다.
-// 그 프로그램은 `DOM` lib 가 없어 `EventSource` 같은 브라우저 전용 타입을 읽지 못한다.
-// 그래서 이 모듈은 `DOM` 을 쓰지 않는다.
-// 렌더링·SSE 는 `corporate-action-gate.tsx` 가 맡는다.
+// 확장자 `.js` 와 별칭(`@/`) 회피는 `prefill.ts` 와 같은 이유다.
+// `tests/unit/corporate-action-gate.test.ts` 가 이 모듈을 가져온다.
+// 그래서 이 모듈이 `tsconfig.server.json` 의 `NodeNext` 프로그램에 딸려 들어간다.
+// 그 프로그램에는 `lib.dom` 이 없어 `EventSource` 같은 브라우저 전용 타입을 읽지 못한다.
+// 그래서 이 모듈은 브라우저 전용 타입을 쓰지 않는다.
+// 렌더링과 SSE 는 `corporate-action-gate.tsx` 가 맡는다.
 import { ApiError } from '../../lib/api-client.js';
 import { formatDuration } from '../../lib/format.js';
 import { formatSymbolLabel } from './symbol-summary.js';
@@ -37,6 +37,21 @@ export function extractCorporateActionGate(error: unknown): CorporateActionGateD
     fromYear,
     toYear,
   };
+}
+
+/**
+ * 409 로 거절된 수집 요청에서 이미 도는 잡의 id 를 꺼낸다.
+ *
+ * 새로고침하면 화면은 잡 id 를 잃지만 서버에서는 잡이 계속 돈다.
+ * 그 상태에서 수집 버튼을 누르면 서버가 409 와 함께 그 잡의 id 를 준다.
+ * 이 값으로 화면을 도는 잡에 다시 붙인다.
+ */
+export function extractActiveSyncJobId(error: unknown): string | null {
+  if (!(error instanceof ApiError) || error.status !== 409) return null;
+  const details = error.details;
+  if (typeof details !== 'object' || details === null) return null;
+  const activeJobId = (details as { activeJobId?: unknown }).activeJobId;
+  return typeof activeJobId === 'string' ? activeJobId : null;
 }
 
 /** `POST /facts/corporate-action-sync-plan` 응답 (Task 8) */
@@ -87,7 +102,7 @@ export function canCancelSyncJob(status: CorporateActionSyncJobStatus): boolean 
  * 잡 조회의 폴링 주기다.
  * SSE 가 끊겼을 때만(`sseFailed`) 종료되지 않은 상태에서 2초마다 돈다.
  * `useBacktestLive`(`features/backtests/api.ts` 의 `refetchInterval`)와 같은 규칙이다.
- * 이 규칙을 되돌리면 SSE 연결이 끊긴 뒤 화면이 멈춘다(리뷰 finding).
+ * 이 규칙을 되돌리면 SSE 연결이 끊긴 뒤 화면이 멈춘다(2026-08-08 리뷰 지적).
  */
 export function syncJobRefetchIntervalMs(
   status: CorporateActionSyncJobStatus | null,
@@ -96,6 +111,27 @@ export function syncJobRefetchIntervalMs(
   if (status === null) return false;
   if (!isSyncJobTerminal(status) && sseFailed) return 2_000;
   return false;
+}
+
+/**
+ * 화면에 그릴 잡 스냅샷을 고른다.
+ *
+ * SSE 가 살아 있으면 그 값이 가장 최신이다.
+ * 끊기면 SSE 가 남긴 값은 끊긴 순간에 얼어붙는다.
+ * 그래서 `sseFailed` 면 폴링 값이 이겨야 한다.
+ * 얼어붙은 값을 계속 우선하면 진행률이 멈춘 채로 남는다.
+ * 완료 상태도 영영 오지 않아 수집이 끝났다는 사실을 부모에게 알리지 못한다.
+ *
+ * 끊긴 직후 폴링이 아직 첫 응답을 못 받았으면 얼어붙은 값이라도 쓴다.
+ * 잠깐 `null` 로 떨어뜨리면 화면이 "수집 시작 전" 으로 되돌아간다.
+ */
+export function selectSyncJob(
+  ssePayload: CorporateActionSyncJobDto | null,
+  polled: CorporateActionSyncJobDto | null,
+  sseFailed: boolean,
+): CorporateActionSyncJobDto | null {
+  if (sseFailed) return polled ?? ssePayload;
+  return ssePayload ?? polled;
 }
 
 /** 0~100 정수. 분모가 0 이면(아직 계획을 못 받은 순간) 0 으로 둔다 */
@@ -123,11 +159,22 @@ export function formatCollectionTarget(
   return `수집 대상: ${symbolCount}종목 × ${formatYearRange(fromYear, toYear)}`;
 }
 
-/** "예상 호출: 약 690회 · 예상 시간 약 4분" — 숫자는 실행과 같은 함수(서버)가 준다 */
+/**
+ * "예상 호출: 약 690회 · 예상 시간 약 4분" — 숫자는 실행과 같은 함수(서버)가 준다.
+ *
+ * `overDailyLimit` 이 참이면 경고를 이어 붙인다.
+ * 서버(`estimateCorporateActionSyncCost`)가 계산해 놓고도 화면이 읽지 않으면,
+ * 사용자는 DART 하루 한도를 소진할 잡을 아무 안내 없이 시작한다.
+ * 한도 숫자 자체는 여기 적지 않는다 — 서버가 가진 값과 갈라질 자리를 만들지 않는다.
+ */
 export function formatCollectionEstimate(estimate: CorporateActionSyncEstimateDto): string {
-  return (
+  const base =
     `예상 호출: 약 ${estimate.calls.toLocaleString('ko-KR')}회 · ` +
-    `예상 시간 약 ${formatDuration(estimate.estimatedMs)}`
+    `예상 시간 약 ${formatDuration(estimate.estimatedMs)}`;
+  if (!estimate.overDailyLimit) return base;
+  return (
+    `${base} — DART 하루 호출 한도를 넘습니다. ` +
+    '연도 범위를 좁히거나 종목을 나눠 여러 날에 받으세요.'
   );
 }
 

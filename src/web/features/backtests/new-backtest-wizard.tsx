@@ -339,9 +339,13 @@ export function NewBacktestWizard() {
 
   const submitMutation = useMutation({
     mutationFn: (body: BacktestRequestBody) =>
-      postJson<{ job: { id: string } }>('/backtests', body),
+      postJson<{ job: { id: string }; warnings?: string[] }>('/backtests', body),
     onSuccess: (data) => {
       toast.success('백테스트가 대기열에 추가되었습니다');
+      // 201 이 실어 보낸 경고를 버리지 않는다 — 복제 경로(`backtest-detail-page.tsx`)와 같다.
+      // 자본변동 gap 경고가 여기로 온다.
+      // 흘리면 "수집했고 분할이 없었다" 와 "gap 이 나서 확인하지 못했다" 가 같아 보인다.
+      for (const warning of data.warnings ?? []) toast.warning(warning, { duration: 10_000 });
       void navigate(`/backtests/${data.job.id}`);
     },
     onError: (error: unknown) => {

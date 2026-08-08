@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ApiError } from '../../src/web/lib/api-client.js';
 import {
   canCancelSyncJob,
+  extractActiveSyncJobId,
   extractCorporateActionGate,
   formatCollectionEstimate,
   formatCollectionTarget,
@@ -10,6 +11,7 @@ import {
   formatSymbolNames,
   formatYearRange,
   isSyncJobTerminal,
+  selectSyncJob,
   syncJobRefetchIntervalMs,
   syncProgressPercent,
 } from '../../src/web/features/backtests/corporate-action-gate-logic.js';
@@ -79,6 +81,21 @@ describe('formatCollectionEstimate', () => {
     const text = formatCollectionEstimate({ calls: 12_000, estimatedMs: 60_000, overDailyLimit: true });
     expect(text).toContain('12,000회');
   });
+
+  it('하루 한도를 넘으면 경고를 이어 붙인다 — 계산해 놓고 버리지 않는다', () => {
+    const text = formatCollectionEstimate({
+      calls: 120_000,
+      estimatedMs: 4 * 3_600_000,
+      overDailyLimit: true,
+    });
+    expect(text).toContain('하루 호출 한도를 넘습니다');
+    expect(text).toContain('나눠');
+  });
+
+  it('한도 안이면 경고를 붙이지 않는다', () => {
+    const text = formatCollectionEstimate({ calls: 690, estimatedMs: 60_000, overDailyLimit: false });
+    expect(text).not.toContain('한도');
+  });
 });
 
 describe('syncProgressPercent', () => {
@@ -139,5 +156,72 @@ describe('formatSymbolNames / formatRemainingGateMessage', () => {
     const message = formatRemainingGateMessage(['900050'], nameOf);
     expect(message).toContain('900050');
     expect(message).not.toContain('일부 실패');
+  });
+});
+
+describe('selectSyncJob — SSE 가 끊긴 뒤에도 진행률이 이어져야 한다', () => {
+  const job = (id: string, doneSymbols: number, status: 'RUNNING' | 'COMPLETED') =>
+    ({
+      id,
+      status,
+      symbols: ['005930'],
+      fromYear: 2025,
+      toYear: 2026,
+      doneSymbols,
+      totalSymbols: 10,
+      savedFacts: null,
+      gapCount: null,
+      error: null,
+      createdAtMs: 0,
+      completedAtMs: null,
+    }) as const;
+
+  it('SSE 가 살아 있으면 그 값이 이긴다', () => {
+    const chosen = selectSyncJob(job('cas1', 7, 'RUNNING'), job('cas1', 3, 'RUNNING'), false);
+    expect(chosen?.doneSymbols).toBe(7);
+  });
+
+  it('SSE 가 끊기면 폴링 값이 이긴다 — 얼어붙은 값을 계속 쓰면 진행률이 멈춘다', () => {
+    const frozen = job('cas1', 3, 'RUNNING');
+    const polled = job('cas1', 9, 'RUNNING');
+    expect(selectSyncJob(frozen, polled, true)?.doneSymbols).toBe(9);
+  });
+
+  it('SSE 가 끊긴 뒤 폴링이 완료를 물어오면 완료로 보인다', () => {
+    const frozen = job('cas1', 3, 'RUNNING');
+    const polled = job('cas1', 10, 'COMPLETED');
+    expect(selectSyncJob(frozen, polled, true)?.status).toBe('COMPLETED');
+  });
+
+  it('끊긴 직후 폴링이 아직 없으면 얼어붙은 값이라도 쓴다 — 화면을 비우지 않는다', () => {
+    const frozen = job('cas1', 3, 'RUNNING');
+    expect(selectSyncJob(frozen, null, true)?.doneSymbols).toBe(3);
+  });
+
+  it('둘 다 없으면 null 이다', () => {
+    expect(selectSyncJob(null, null, false)).toBeNull();
+  });
+});
+
+describe('extractActiveSyncJobId', () => {
+  it('409 응답에서 도는 잡의 id 를 꺼낸다', () => {
+    const error = new ApiError(409, '이미 실행 중입니다', {
+      error: '이미 실행 중입니다',
+      activeJobId: 'cas_abc',
+    });
+    expect(extractActiveSyncJobId(error)).toBe('cas_abc');
+  });
+
+  it('409 가 아니면 null 이다 — 다른 오류를 잡 id 로 오인하지 않는다', () => {
+    const error = new ApiError(400, '잘못된 요청', { error: '잘못된 요청', activeJobId: 'cas_abc' });
+    expect(extractActiveSyncJobId(error)).toBeNull();
+  });
+
+  it('id 가 없거나 문자열이 아니면 null 이다', () => {
+    expect(extractActiveSyncJobId(new ApiError(409, '이미 실행 중입니다', { error: 'x' }))).toBeNull();
+    expect(
+      extractActiveSyncJobId(new ApiError(409, '이미 실행 중입니다', { activeJobId: 42 })),
+    ).toBeNull();
+    expect(extractActiveSyncJobId(new Error('boom'))).toBeNull();
   });
 });

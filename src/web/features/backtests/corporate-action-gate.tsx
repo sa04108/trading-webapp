@@ -10,11 +10,13 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { api, ApiError, postJson } from '@/lib/api-client';
 import {
   canCancelSyncJob,
+  extractActiveSyncJobId,
   formatCollectionEstimate,
   formatCollectionTarget,
   formatGateHeadline,
   formatRemainingGateMessage,
   isSyncJobTerminal,
+  selectSyncJob,
   syncJobRefetchIntervalMs,
   syncProgressPercent,
   type CorporateActionGateDto,
@@ -41,11 +43,9 @@ export interface CorporateActionGateProps {
  * 위저드 제출 게이트(Task 6)가 자본변동 미수집으로 막았을 때 붙는 화면(Task 8).
  * 별도 화면으로 보내지 않는다 — 막힌 이유(문구)와 해소책(수집 버튼)을 한 카드에 둔다.
  *
- * 진행률·SSE 는 백테스트 상세(`features/backtests/api.ts` 의 `useBacktestLive`)와
- * 같은 패턴이다. 새 방식을 만들지 않는다.
- * SSE·GET 은 이 저장소에서 이미 백틱 없이 쓰는 도메인 약어다(예:
- * `corporate-action-sync-orchestrator.ts` 의 "SSE 로 진행률을 흘린다",
- * `backtest-routes.ts` 의 "POST 신규 제출뿐 아니라"). 그 관례를 그대로 따른다.
+ * 진행률은 SSE 를 기본으로 하고 끊기면 폴링으로 넘긴다.
+ * 백테스트 상세(`features/backtests/api.ts` 의 `useBacktestLive`)와 같은 골격이다.
+ * 다만 어느 값을 우선할지는 `selectSyncJob` 이 따로 정한다 — 그 함수 주석을 참고한다.
  */
 export function CorporateActionGate({
   gate,
@@ -86,8 +86,17 @@ export function CorporateActionGate({
       syncJobRefetchIntervalMs(query.state.data?.job.status ?? null, sseFailed),
   });
 
-  const job = ssePayload ?? jobQuery.data?.job ?? null;
+  // SSE 가 끊기면 그 값이 얼어붙으므로 폴링 값을 우선한다 — 규칙은 `selectSyncJob` 이 갖는다
+  const job = selectSyncJob(ssePayload, jobQuery.data?.job ?? null, sseFailed);
   const status = job?.status ?? null;
+
+  /** 화면을 잡 하나에 붙인다 — 새 잡을 만들었을 때와 도는 잡을 되찾았을 때가 같은 절차다 */
+  const attachTo = (id: string): void => {
+    notifiedForJob.current = null;
+    setSsePayload(null);
+    setSseFailed(false);
+    setJobId(id);
+  };
 
   const startMutation = useMutation({
     mutationFn: () =>
@@ -97,12 +106,20 @@ export function CorporateActionGate({
         toYear: gate.toYear,
       }),
     onSuccess: (data) => {
-      notifiedForJob.current = null;
-      setSsePayload(null);
-      setSseFailed(false);
-      setJobId(data.job.id);
+      attachTo(data.job.id);
+    },
+    onError: (error: unknown) => {
+      // 409 는 다른 잡이 이미 돈다는 뜻이고, 서버가 그 잡의 id 를 함께 보낸다.
+      // 새로고침으로 id 를 잃은 화면이 여기서 도는 잡에 다시 붙는다.
+      const activeJobId = extractActiveSyncJobId(error);
+      if (activeJobId !== null) attachTo(activeJobId);
     },
   });
+  // 409 로 붙은 경우에는 오류 배너를 띄우지 않는다 — 아래 진행률이 그 자리를 대신한다
+  const startError =
+    startMutation.isError && extractActiveSyncJobId(startMutation.error) === null
+      ? startMutation.error
+      : null;
 
   const cancelMutation = useMutation({
     mutationFn: () =>
@@ -168,7 +185,10 @@ export function CorporateActionGate({
 
         {job === null ? (
           estimate.data ? (
-            <p>{formatCollectionEstimate(estimate.data)}</p>
+            // 하루 한도를 넘는 계획은 눈에 띄게 그린다 — 문구는 `formatCollectionEstimate` 가 만든다
+            <p className={estimate.data.overDailyLimit ? 'text-destructive' : undefined}>
+              {formatCollectionEstimate(estimate.data)}
+            </p>
           ) : estimate.isError ? (
             <p className="text-xs text-muted-foreground">예상 호출·시간을 불러오지 못했습니다.</p>
           ) : (
@@ -198,12 +218,10 @@ export function CorporateActionGate({
           </div>
         ) : null}
 
-        {startMutation.isError ? (
+        {startError !== null ? (
           <Alert variant="destructive" role="alert">
             <AlertDescription>
-              {startMutation.error instanceof ApiError
-                ? startMutation.error.message
-                : '수집을 시작하지 못했습니다.'}
+              {startError instanceof ApiError ? startError.message : '수집을 시작하지 못했습니다.'}
             </AlertDescription>
           </Alert>
         ) : null}
