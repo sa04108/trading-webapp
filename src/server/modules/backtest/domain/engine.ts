@@ -160,10 +160,23 @@ function* runBacktestSteps(
   const symbols = [...new Set(sorted.map((c) => c.symbol))].sort();
   const totalBars = sorted.length;
 
-  // 폐지 청산은 "그 종목의 마지막 봉" 에서 일어난다. 봉은 전부 미리 들어와 있으므로
-  // 루프 중에 찾을 필요 없이 여기서 한 번에 접는다.
+  // 미청산 포지션 스냅샷이 "마지막으로 확인된 가격이 언제 것인지" 를 적는 데 쓴다.
   const lastBarTsMsBySymbol = new Map<string, number>();
   for (const candle of sorted) lastBarTsMsBySymbol.set(candle.symbol, candle.tsMs);
+
+  // 폐지 청산 시점 — 폐지 효력 시각보다 **앞선** 마지막 봉이다. 실행 전체의 마지막
+  // 봉으로 잡으면 안 된다. KRX 는 폐지된 여섯 자리 단축코드를 나중에 다른 회사에
+  // 다시 주므로, 같은 코드의 뒷날 봉이 실행 기간에 들어오면 몇 년 뒤 남의 회사
+  // 종가로 청산하게 된다. 봉은 전부 미리 들어와 있어 여기서 한 번에 접는다
+  // (sorted 가 시각 오름차순이라 마지막으로 써 넣은 값이 곧 직전 봉이다).
+  const lastBarBeforeDelistingBySymbol = new Map<string, number>();
+  if (input.delistedTsMsBySymbol !== undefined) {
+    for (const candle of sorted) {
+      const delistedTsMs = input.delistedTsMsBySymbol.get(candle.symbol);
+      if (delistedTsMs === undefined || candle.tsMs >= delistedTsMs) continue;
+      lastBarBeforeDelistingBySymbol.set(candle.symbol, candle.tsMs);
+    }
+  }
 
   const rng = createRng(input.randomSeed);
   const historyBySymbol = new Map<string, Candle[]>(symbols.map((s) => [s, []]));
@@ -354,7 +367,7 @@ function* runBacktestSteps(
       lastCloseBySymbol.set(symbol, bar.close);
     }
 
-    // 상장폐지 청산 — 그 종목의 마지막 봉에서 종가로 전량 나간다.
+    // 상장폐지 청산 — 폐지 효력 시각 직전 마지막 봉에서 종가로 전량 나간다.
     //
     // 평가금액 갱신보다 먼저다. 이 시점 자산곡선이 청산 대금을 이미 반영해야
     // 폐지 손실이 곡선에 남는다.
@@ -364,15 +377,14 @@ function* runBacktestSteps(
     // 정지 직전 실거래가로 나간다.
     //
     // 정리매매 종가를 따로 추정하지 않는다. KRX 일봉에 정리매매 기간 봉이 들어 있어
-    // 마지막 봉이 곧 정리매매 최종가다. 시장이 매긴 회수가치를 그대로 쓴다.
-    if (input.delistedTsMsBySymbol !== undefined) {
+    // 폐지 직전 마지막 봉이 곧 정리매매 최종가다. 시장이 매긴 회수가치를 그대로 쓴다.
+    if (lastBarBeforeDelistingBySymbol.size > 0) {
       for (const [symbol, bar] of bars) {
-        if (!input.delistedTsMsBySymbol.has(symbol)) continue;
-        if (lastBarTsMsBySymbol.get(symbol) !== tsMs) continue;
+        if (lastBarBeforeDelistingBySymbol.get(symbol) !== tsMs) continue;
 
         // 대기 주문을 따로 지우지 않는다. 이 시점 pendingOrders 에는 이번 봉에 봉이
-        // 없는 종목의 주문만 남아 있어 — 봉이 있는 종목은 위 체결 스텝이 이미 다
-        // 처리했다 — 폐지 종목(이번 봉이 있어야 여기 온다) 주문은 애초에 없다.
+        // 없는 종목의 주문만 남아 있다. 봉이 있는 종목은 위 체결 스텝이 이미 다
+        // 처리했으므로, 폐지 종목(이번 봉이 있어야 여기 온다) 주문은 애초에 없다.
         // 전략이 이 마지막 봉에서 새로 내는 주문은 이 블록 뒤(전략 호출)에 등록되므로
         // 여기서 손댈 수 없고, 체결될 봉이 다시 오지 않아 기간 종료 폐기 경고로 드러난다.
 

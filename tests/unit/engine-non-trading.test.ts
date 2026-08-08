@@ -158,6 +158,52 @@ describe('상장폐지 청산', () => {
     expect(result.openPositions.some((position) => position.symbol === 'A')).toBe(false);
   });
 
+  it('폐지 시각 뒤에도 봉이 있으면 그 시각 직전 봉에서 청산한다', () => {
+    // KRX 는 폐지된 단축코드를 나중에 다른 회사에 다시 준다. 그 봉까지 같은 심볼로
+    // 들어오면 "실행 전체의 마지막 봉" 을 청산 시점으로 잡는 구현은 몇 년 뒤 남의
+    // 회사 종가로 판다.
+    const candles = [
+      bar('A', 0, 1_000), bar('A', 1, 900),
+      { ...bar('A', 2, 500), open: 600, high: 610 },
+      bar('A', 3, 9_000), bar('A', 4, 9_500), // 같은 코드를 재사용한 다른 회사의 봉
+      bar('B', 0), bar('B', 4),
+    ];
+    const result = runBacktest(buyOnceStrategy('A'), {
+      candles,
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 1,
+      maxPositions: 5,
+      delistedTsMsBySymbol: new Map([['A', START + 3 * DAY]]),
+    });
+
+    const trade = result.trades.find((candidate) => candidate.symbol === 'A');
+    expect(trade?.exitReason).toBe('DELISTED');
+    expect(trade?.exitTsMs).toBe(START + 2 * DAY);
+    expect(trade?.exitPrice).toBe(500);
+    expect(result.delistingLiquidations).toEqual([
+      { symbol: 'A', tsMs: START + 2 * DAY, netPnl: trade?.netPnl },
+    ]);
+  });
+
+  it('폐지 시각 이전 봉이 하나도 없으면 청산하지 않는다', () => {
+    // 폐지 효력일이 실행 기간 첫 봉보다 앞선 경우다. 청산할 자리가 없으므로
+    // 아무 일도 일어나지 않아야 한다 — 마지막 봉으로 밀어 청산하면 폐지 뒤 가격으로 판다.
+    const result = runBacktest(buyOnceStrategy('A'), {
+      candles: [bar('A', 0, 1_000), bar('A', 1, 900), bar('A', 2, 500)],
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 1,
+      maxPositions: 5,
+      delistedTsMsBySymbol: new Map([['A', START]]),
+    });
+
+    expect(result.delistingLiquidations).toHaveLength(0);
+    expect(result.trades).toHaveLength(0);
+  });
+
   it('폐지 정보가 없으면 미청산으로 남는다', () => {
     const candles = [bar('A', 0, 1_000), bar('A', 1, 900), bar('A', 2, 500), bar('B', 3)];
     const result = runBacktest(buyOnceStrategy('A'), {
