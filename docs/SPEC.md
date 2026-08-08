@@ -509,6 +509,16 @@ RestBrokerOrderExecutor  # MVP 이후, 증권사별 어댑터
 발생일보다 최대 15개월 늦으므로 커서를 타지 않고, **효력 발생일 ≤ 현재 봉** 이라는
 조건만으로 노출된다 — 이미 발생한 분할로 과거 가격을 보정하는 것은 look-ahead 가 아니다.
 
+그 봉 시각에 효력이 발생한 자본변동이 있으면 1단계(대기 주문 체결)보다
+먼저 조정을 적용한다(D-043).
+조정 대상은 보유 포지션·대기 주문 수량·전략 가격 상태
+(`stopLevel`·`highestClose`·`entryAtr`)다.
+분할일 매도는 조정된 수량으로 체결돼야 한다.
+분할 직후의 미조정 가격 상태는 허위 손절을 만들 수 있다.
+수량 × 평균단가는 조정 전후로 보존된다.
+단주 잔여는 내림 처리해 그 봉 시가로 환산한 뒤 현금에 더한다.
+원본 봉 자체는 고치지 않는다.
+
 ## 9.3 비용 모델
 
 설정 가능해야 한다.
@@ -598,6 +608,33 @@ completedAt
 - 수수료·세금·슬리피지 총액
 - 월별 수익률
 - 종목별 성과
+
+## 9.7 제출 검증
+
+제출 시점에 유니버스 종목을 두 게이트가 검사한다. 하나는 재무 게이트다.
+`requiresFundamentals` 전략이 재무 있는 종목을 하나도 못 찾으면 막는다.
+다른 하나는 자본변동 게이트다(D-043). 이 절은 자본변동 게이트만 다룬다.
+
+판정 단위는 종목별 **연도**다. 백테스트 기간이 걸치는 연도 전부가 그
+종목의 자본변동 커버리지에 있어야 통과한다. 한 연도라도 없으면 그
+종목은 자본변동을 아예 수집하지 않은 것으로 본다.
+
+- **커버리지 없음 → 400.** 우회 수단을 두지 않는다. 수집하거나 돌리지
+  않거나 둘 중 하나다.
+- **gap 만 있음 → 통과, 이름으로 경고.** gap 은 수집은 했지만 DART 가
+  답하지 못한 연도다. DART 가 못 답하는 종목은 대체로 상장폐지 종목이라,
+  gap 까지 요구하면 생존편향 제거(D-041)와 충돌한다.
+- **팩트 0건, gap 없음, 커버리지 있음 → 통과, 경고 없음.** 분할이 없었던
+  것으로 확정된 상태다.
+
+이 세 상태는 팩트 건수만으로 가를 수 없다.
+팩트 0건은 세 상태 모두에서 나올 수 있다 — 수집했고 분할이 없었다,
+수집했는데 DART 가 못 답했다, 아예 수집하지 않았다.
+그래서 `symbol_facts_state` 가 자본변동 **수집 연도**와 **gap 연도**를
+재무 커버리지와 별도 컬럼으로 담는다(§12).
+
+자본변동만 받는 수집 경로가 따로 있다(§14). 재무 게이트가 재무를 따로
+막고 안내하므로, 분할 보정만 필요한 전략에 재무 수집 비용을 물리지 않는다.
 
 ---
 
@@ -728,6 +765,7 @@ symbol_master_market_caps
 symbol_master_trading_days
 
 data_sync_jobs
+corporate_action_sync_jobs
 
 backtest_jobs
 backtest_runs
@@ -749,6 +787,19 @@ __drizzle_migrations
 `symbol_slices`·`symbol_coverage`·`data_sync_jobs`는 테이블이 남아 있지만 쓰는
 코드가 없다(D-041). 가격 데이터 기능 제거로 증권사 봉 수집·CSV 가져오기가 사라지며
 소비자를 잃었다. 스키마에서 실제로 지우는 것은 후속 계획이다.
+
+`corporate_action_sync_jobs`는 `data_sync_jobs`와 다르다.
+자본변동 일괄 수집 잡 전용으로 새로 만든 테이블이고 지금도 쓰인다(D-043).
+`data_sync_jobs`를 재사용하지 않은 이유는 그 테이블이 CSV·증권사 봉·재무
+단계를 다 담느라 컬럼 12개 중 대부분이 죽어 있기 때문이다. 종목 코드
+목록·연도 범위·완료 종목 수·전체 종목 수를 담아 SSE 진행률에 쓴다(§14).
+
+`symbol_facts_state`는 재무 커버리지(`coveredYearsJson`) 옆에 자본변동
+전용 컬럼 둘을 더 갖는다(D-043). `actionCoveredYearsJson`은 자본변동을
+수집한 연도이고 제출 게이트가 읽는다(§9.7). `actionGapYearsJson`은
+DART 가 답하지 못해 gap 이 난 연도이고 위저드 경고가 읽는다.
+두 컬럼은 `coveredYearsJson`과 분리돼 있다.
+합쳐 두면 자본변동만 받은 종목을 재무 전략이 "데이터 있음"으로 오판한다.
 
 봉의 유일한 출처는 `krx_daily_bars` 다. `SymbolMasterService.ingestDate`가 종목
 마스터 이벤트·coverage 갱신과 같은 트랜잭션에서 쓴다.
@@ -867,6 +918,23 @@ POST /api/v1/symbol-master/backfill
 `import`·`sync`·`data-jobs` 엔드포인트는 그 뒤 D-041 로 사라졌다 — CSV 가져오기·
 증권사 봉 동기화 자체가 없어졌다. 봉 수집은 이제 KRX 동기화(`symbol-master/sync`·
 `symbol-master/backfill`)뿐이다.
+
+## 자본변동 수집
+
+```http
+POST /api/v1/facts/corporate-action-sync-plan
+POST /api/v1/facts/corporate-action-sync-jobs
+GET  /api/v1/facts/corporate-action-sync-jobs/:id
+POST /api/v1/facts/corporate-action-sync-jobs/:id/cancel
+GET  /api/v1/facts/corporate-action-sync-jobs/:id/events
+```
+
+§9.7 제출 게이트가 자본변동 커버리지 없는 종목을 막았을 때 위저드가 이
+경로로 일괄 수집을 건다(D-043). `sync-plan`은 잡을 만들지 않고 예상
+호출·시간만 미리 계산한다. `sync-jobs`는 실제 잡을 만들어 큐에 넣는다.
+진행률은 `events`가 SSE로 흘린다 — 백테스트 진행률(`/backtests/:id/events`)
+과 같은 골격이다. 재무는 이 경로로 받지 않는다. `FactSyncService`가
+`fetchFinancials`를 건너뛰고 자본변동만 받는 경로를 별도로 노출한다.
 
 ## 백테스트
 

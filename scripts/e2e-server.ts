@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import Fastify from 'fastify';
 import { loadConfig } from '../src/server/bootstrap/config.js';
-import { createContainer } from '../src/server/bootstrap/container.js';
+import { createContainer, type Container } from '../src/server/bootstrap/container.js';
 import { buildServer } from '../src/server/bootstrap/server.js';
 import { newId } from '../src/server/shared/ids.js';
 
@@ -191,6 +191,40 @@ const KOSDAQ_DAILY_ROWS = [
 ];
 
 /**
+ * 자본변동 미수집 게이트(Task 6, 설계 2026-08-08-corporate-action-continuity)가
+ * e2e 제출을 막지 않도록, 종목이 등록될 때마다 자본변동 커버리지를 함께 심는다.
+ *
+ * 가짜 DART 서버를 새로 만드는 대신 이 방법을 골랐다.
+ * 이 스위트는 DART 응답 파싱이 아니라 위저드 흐름을 검증한다.
+ * `corp_code` 매핑과 재무제표 형식까지 갖춘 가짜 DART 서버는 유지 비용만 키운다.
+ * 자본변동 수집 자체의 정확성은 `src/server/modules/facts` 의
+ * 단위·통합 테스트가 맡는다.
+ *
+ * 부팅 시점에 한 번만 심지 않고 등록 시점마다 심는 이유는 등록·해제가
+ * 반복되기 때문이다.
+ * `mvp-flow.spec.ts` 의 상장폐지 시나리오는 900010 을 등록했다가 시나리오
+ * 끝에서 지운다.
+ * `symbols` 삭제는 외래키 cascade 로 `symbol_facts_state` 행도 함께 지운다.
+ * 부팅 시점에만 심으면 그 삭제로 커버리지도 같이 사라진다.
+ * 그러면 다음 프로젝트(desktop)가 같은 종목을 다시 등록해 제출할 때
+ * 게이트가 다시 막는다 — 실제로 이 순서로 재현된 실패다.
+ * `addSymbol` 호출마다 다시 심으면 등록·해제를 몇 번 반복해도 커버리지가
+ * 항상 함께 붙는다.
+ *
+ * 연도 범위(2000~2035)는 이 저장소 e2e 시나리오가 쓰는 모든 기간을 덮는다.
+ * 새 시나리오가 이 범위 밖 기간으로 백테스트를 제출하면 범위도 함께 넓혀야 한다.
+ */
+function seedCorporateActionCoverageOnRegistration(container: Container): void {
+  const years = Array.from({ length: 36 }, (_, index) => 2000 + index);
+  const originalAddSymbol = container.symbolService.addSymbol.bind(container.symbolService);
+  container.symbolService.addSymbol = (code, market, name = null, standardCode = null) => {
+    const summary = originalAddSymbol(code, market, name, standardCode);
+    container.actionCoverageStore.addCoveredYears(code, years, container.clock.now());
+    return summary;
+  };
+}
+
+/**
  * 리밸런스 적용 거래일 표기 e2e(Task 4, 2026-08-06 스펙, `tests/e2e/mvp-flow.spec.ts`
  * `holidayPeriodFor`)가 정확히 이 두 날짜만 휴장 리밸런스로 쓴다 — mobile·desktop
  * 프로젝트가 같은 서버 상태를 공유해도(playwright.config workers:1) 부딪히지
@@ -287,6 +321,11 @@ async function main(): Promise<void> {
   // 종목 등록도 그 미리보기 응답이 자동으로 한다.
   // 그 등록 로직은 backtest-routes.ts 의 registerUniverseSymbols 다.
   // 위저드를 통과하는 e2e 흐름은 별도 등록이 필요 없다.
+  //
+  // 다만 그 등록 경로에 자본변동 커버리지 심기를 여기서 붙인다
+  // (seedCorporateActionCoverageOnRegistration 주석 참고).
+  // 붙이지 않으면 Task 6 게이트가 모든 e2e 백테스트 제출을 400 으로 막는다.
+  seedCorporateActionCoverageOnRegistration(container);
   const app = await buildServer(container);
   await app.listen({ host: config.bindAddress, port: config.port });
   container.jobOrchestrator.start();
