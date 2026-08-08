@@ -178,9 +178,9 @@ function* runBacktestSteps(
   // 액면분할은 주권교체 기간에 매매거래가 정지되는 것이 표준 경로다.
   // 커서가 전역 하나면 그 종목은 재개 봉에서도 영영 조정되지 않는다.
   //
-  // 심볼이 이 맵에 없으면 -1 로 본다. 새 포지션은 진입 시점에 이 맵을
-  // 채운다(executeOrder 의 BUY 분기). 그래야 진입 이전의 자본변동이 새
-  // 포지션에 잘못 적용되지 않는다.
+  // 심볼이 이 맵에 없으면 -1 로 본다. 보유가 없는 종목에 새 주문을 낼 때마다
+  // 이 맵을 지금 봉으로 seed 한다(주문 검증 구간 참고). 그래야 주문 발행
+  // 이전의 자본변동이 그 주문이나 뒤이은 포지션에 잘못 적용되지 않는다.
   const lastAppliedTsMsBySymbol = new Map<string, number>();
 
   const state = strategy.initialize({ symbols, initialCash: input.initialCash, rng });
@@ -217,41 +217,54 @@ function* runBacktestSteps(
     // 이 시점까지 공시된 팩트만 흡수한다 — 전략이 미래 공시를 볼 자리를 없앤다 (§9.4)
     factView.advanceTo(tsMs);
 
-    // 자본변동을 포지션에 반영한다 — 대기 주문 체결보다 먼저다. 분할일 매도 신호는
-    // 조정된 수량으로 팔아야 한다.
+    // 자본변동을 포지션·대기 주문에 반영한다 — 체결보다 먼저다. 분할일 매도
+    // 신호는 조정된 수량으로 팔아야 한다.
     //
     // 구간 판정은 종목별 커서로 한다.
     // (lastApplied, tsMs] 에 효력이 발생한 이벤트만 적용한다.
     // 커서는 봉이 있는 날에만 전진한다 — 그래야 거래정지로 빠진 구간의
     // 이벤트를 재개 봉에서 따라잡을 수 있다.
-    for (const position of [...positions.values()]) {
-      const bar = bars.get(position.symbol);
+    //
+    // 포지션이 있는 종목뿐 아니라 대기 주문만 있는 종목도 훑는다. 정지 직전
+    // 봉에서 발행된 신규 진입 BUY 는 재개 봉(=분할 봉일 수 있다)에서 체결될
+    // 때 포지션이 아직 없다 — 포지션만 훑으면 이 주문은 조정에서 빠진다.
+    const corpActionSymbols = new Set<string>([
+      ...positions.keys(),
+      ...pendingOrders.map((order) => order.symbol),
+    ]);
+    for (const symbol of corpActionSymbols) {
+      const bar = bars.get(symbol);
       if (!bar) continue; // 거래정지 등으로 봉이 없으면 거래 재개 봉에서 적용한다
-      const lastApplied = lastAppliedTsMsBySymbol.get(position.symbol) ?? -1;
+      const lastApplied = lastAppliedTsMsBySymbol.get(symbol) ?? -1;
       const due = factView
-        .corporateActions(position.symbol, tsMs)
+        .corporateActions(symbol, tsMs)
         .filter((action) => action.effectiveTsMs > lastApplied);
       // 이 봉을 확인했다는 사실을 커서에 남긴다.
       // 조정 대상이 없어도 갱신해야 다음 봉이 같은 구간을 다시 검사하지 않는다.
-      lastAppliedTsMsBySymbol.set(position.symbol, tsMs);
+      lastAppliedTsMsBySymbol.set(symbol, tsMs);
       if (due.length === 0) continue;
-      // 같은 날 여러 이벤트는 배수를 곱해 합성한다 — 순서에 무관하다
+      // 정지 구간을 건너뛰면 여러 날짜의 이벤트가 한꺼번에 걸릴 수 있다.
+      // 곱셈 자체는 순서에 무관하지만 내림은 그렇지 않다.
+      // 역분할이 정지 구간에 겹쳐 쌓일 때만 닿는 구석이라 지금은 그대로 둔다.
       const ratio = due.reduce((acc, action) => acc * action.ratio, 1);
       if (ratio === 1) continue;
-      // 이 종목을 겨냥한 대기 주문도 같은 비율로 스케일한다.
+      // 이 종목을 겨냥한 대기 주문을 같은 비율로 스케일한다.
       // 발행 시점에 캡처된 수량을 그대로 체결하면 분할 이후 수량이 어긋난다.
       // BUY 도 같은 값 보존 규칙을 적용해야 의도한 투입 금액이 유지된다.
       pendingOrders = pendingOrders
         .map((order) =>
-          order.symbol === position.symbol
+          order.symbol === symbol
             ? { ...order, quantity: adjustForRatio(order.quantity, 0, ratio, 0).quantity }
             : order,
         )
         .filter((order) => order.quantity > 0);
+
+      const position = positions.get(symbol);
+      if (!position) continue; // 대기 주문만 있었다 — 주문은 이미 위에서 스케일했다
       const adjusted = adjustForRatio(position.quantity, position.avgEntryPrice, ratio, bar.open);
       cash += adjusted.cashFromFraction;
       if (adjusted.closed) {
-        positions.delete(position.symbol);
+        positions.delete(symbol);
         continue;
       }
       position.quantity = adjusted.quantity;
@@ -302,7 +315,17 @@ function* runBacktestSteps(
     // 7~8. 리스크 검증 후 다음 봉 대기열 등록
     for (const order of decision.orders) {
       const validated = validateOrder(order);
-      if (validated) pendingOrders.push(validated);
+      if (!validated) continue;
+      pendingOrders.push(validated);
+      // 지금 보유가 없는 종목은 매번 지금 이 봉으로 커서를 seed 한다.
+      // 최초 진입이면 기본값 -1 때문에 문제가 된다.
+      // 청산 후 재진입이면 이전 포지션이 남긴 낡은 커서 때문에 문제가 된다.
+      // 두 경우 모두 발행 시점보다 앞선 분할이 새 주문에 다시 걸릴 수 있다.
+      // has() 로 조건을 좁히면 청산과 재진입 사이의 공백에서 일어난 분할을
+      // 놓친다.
+      if (!positions.has(validated.symbol)) {
+        lastAppliedTsMsBySymbol.set(validated.symbol, tsMs);
+      }
     }
 
     // 9. 진행률
@@ -473,10 +496,6 @@ function* runBacktestSteps(
           entryCosts: fill.commission,
           entryTsMs: tsMs,
         });
-        // 진입 시점을 커서에 남긴다.
-        // 이 진입가는 이미 이전 분할을 반영한 시장 가격이다.
-        // 그 이전 이벤트를 새 포지션에 다시 적용하면 안 된다.
-        lastAppliedTsMsBySymbol.set(order.symbol, tsMs);
       }
       return fill;
     }

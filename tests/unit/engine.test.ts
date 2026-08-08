@@ -593,12 +593,17 @@ describe('분할을 걸친 보유 포지션 조정', () => {
   });
 
   it('분할 후 진입한 포지션은 그 분할의 영향을 받지 않는다', () => {
+    // 봉 5 를 더 붙인다. buyAtBarStrategy(3) 은 봉 3 발행 → 봉 4 체결이라,
+    // 봉 4 가 마지막이면 조정 루프가 이 포지션을 한 번도 보지 못해 진입
+    // seed(executeOrder 의 BUY 분기) 를 지워도 테스트가 통과해버린다.
+    // 봉 5 를 더해야 조정 루프가 이 포지션을 실제로 훑어 seed 유무를 가른다.
     const candles = [
       dailyBar(0, 100_000),
       dailyBar(1, 100_000),
       dailyBar(2, 20_000),
       dailyBar(3, 20_000),
       dailyBar(4, 20_000),
+      dailyBar(5, 20_000),
     ];
     const result = runBacktest(buyAtBarStrategy(3, 10) as never, {
       candles,
@@ -614,13 +619,21 @@ describe('분할을 걸친 보유 포지션 조정', () => {
     expect(result.fills[0]!.quantity).toBe(10); // 분할 이후 진입 — 조정 대상이 아니다
     expect(result.openPositions).toHaveLength(1);
     expect(result.openPositions[0]!.quantity).toBe(10);
+    expect(result.openPositions[0]!.avgEntryPrice).toBe(20_000);
   });
 
   it('거래정지로 효력발생일에 봉이 없어도 거래 재개 봉에서 조정된다', () => {
-    // 봉 2(효력발생일)를 통째로 뺀다 — 액면분할은 주권교체 기간에 매매거래가
-    // 정지되는 것이 표준 경로라, 이 시나리오가 오히려 흔한 경우다.
-    // 전역 커서였다면 재개 봉(3)에서도 영영 조정되지 않는다.
-    const candles = [dailyBar(0, 100_000), dailyBar(1, 100_000), dailyBar(3, 20_000)];
+    // 봉 2(효력발생일)에서 A 의 봉만 뺀다. A 하나만 쓰면 그 시각 자체가
+    // 타임라인에서 사라져, 전역 커서를 쓰던 옛 코드도 그 시각을 지난 적이
+    // 없으니 재개 봉에서 우연히 통과해버린다 — 이 픽스처가 그 구멍을 막는다.
+    // B 를 봉 2 에 심어 타임라인에 그 시각을 남긴다.
+    // 전역 커서라면 봉 2 를 지나며 전진해 A 의 이벤트를 놓친다.
+    const candles = [
+      dailyBar(0, 100_000),
+      dailyBar(1, 100_000),
+      { ...dailyBar(2, 20_000), symbol: 'B' },
+      dailyBar(3, 20_000),
+    ];
     const result = runBacktest(buyAtBarStrategy(0, 10) as never, {
       candles,
       initialCash: 10_000_000,
@@ -632,9 +645,10 @@ describe('분할을 걸친 보유 포지션 조정', () => {
     });
 
     // 재개 봉(3) 시가를 fractionPrice 로 써서 조정한다 — 수량 × 단가는 보존된다.
-    expect(result.openPositions).toHaveLength(1);
-    expect(result.openPositions[0]!.quantity).toBe(50);
-    expect(result.openPositions[0]!.avgEntryPrice).toBe(20_000);
+    const positionA = result.openPositions.find((position) => position.symbol === 'A');
+    expect(positionA).toBeDefined();
+    expect(positionA!.quantity).toBe(50);
+    expect(positionA!.avgEntryPrice).toBe(20_000);
   });
 
   it('분할 봉 이전에 발행한 매도가 분할 봉에서 조정된 수량으로 체결된다', () => {
@@ -730,5 +744,87 @@ describe('분할을 걸친 보유 포지션 조정', () => {
     expect(buyFills[1]!.quantity).toBe(20); // 발행 시점의 4 가 아니라 조정된 20
     expect(result.openPositions).toHaveLength(1);
     expect(result.openPositions[0]!.quantity).toBe(70); // 분할 후 50 + 새 매수 20
+  });
+
+  it('포지션이 없는 종목의 신규 진입 BUY 도 분할 봉에서 조정된 수량으로 체결된다', () => {
+    // 봉 1 에서 처음 발행하는 BUY — 이 시점엔 A 포지션이 아예 없다.
+    // 체결은 다음 봉(분할 봉인 봉 2)에서 일어난다.
+    // 포지션 순회만으로는 이 종목이 걸리지 않는다 — 대기 주문도 훑어야 한다.
+    const result = runBacktest(buyAtBarStrategy(1, 5) as never, {
+      candles: [
+        dailyBar(0, 100_000),
+        dailyBar(1, 100_000),
+        dailyBar(2, 20_000),
+        dailyBar(3, 20_000),
+      ],
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+      facts: [splitFact('A', SPLIT_PERIOD_KEY, 5)],
+    });
+
+    // 5주 × 100_000 = 500_000 을 의도했다면, 분할 후 25주 × 20_000 이 같은
+    // 500_000 이다 — 조정 없이 5주 그대로 체결되면 100_000 만 들어간다.
+    expect(result.fills).toHaveLength(1);
+    expect(result.fills[0]!.quantity).toBe(25); // 발행 시점의 5 가 아니라 조정된 25
+    expect(result.openPositions).toHaveLength(1);
+    expect(result.openPositions[0]!.quantity).toBe(25);
+  });
+
+  it('청산 후 재진입하면 청산-재진입 공백에서 일어난 분할이 새 포지션에 다시 적용되지 않는다', () => {
+    // 이 테스트만 쓰는 별도 분할일 — 봉 2 와 봉 3 사이에 효력이 떨어진다.
+    // 청산(봉 2 체결)과 재진입 신호(봉 3 발행) 사이의 공백을 이 분할이 지나가게 만든다.
+    const GAP_SPLIT_PERIOD_KEY = '2026-07-09';
+
+    // 봉0 발행 BUY → 봉1 체결로 P1 개설. 봉1 발행 SELL → 봉2 체결로 P1 청산.
+    // 청산 이후 아무 포지션·대기 주문도 없는 공백(봉2~봉3)에 위 분할이 걸친다.
+    // 봉3 발행 BUY 로 재진입 → 봉4 체결. 재진입 신호는 분할이 이미 끝난 뒤라
+    // 이 새 주문은 조정 대상이 아니어야 한다.
+    const strategy: TradingStrategy<unknown, { step: number }> = {
+      id: 'close-then-reopen',
+      version: '1.0.0',
+      name: 't',
+      description: 't',
+      parameterSchema: z.unknown(),
+      initialize: () => ({ step: 0 }),
+      onBars(_context, state) {
+        const orders: OrderIntent[] =
+          state.step === 0
+            ? [{ symbol: 'A', side: 'BUY', quantity: 10 }]
+            : state.step === 1
+              ? [{ symbol: 'A', side: 'SELL', quantity: 10 }]
+              : state.step === 3
+                ? [{ symbol: 'A', side: 'BUY', quantity: 10 }]
+                : [];
+        state.step += 1;
+        return { orders };
+      },
+    };
+
+    const candles = [
+      dailyBar(0, 100_000),
+      dailyBar(1, 100_000),
+      dailyBar(2, 100_000),
+      dailyBar(3, 20_000),
+      dailyBar(4, 20_000),
+    ];
+    const result = runBacktest(strategy as never, {
+      candles,
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+      facts: [splitFact('A', GAP_SPLIT_PERIOD_KEY, 5)],
+    });
+
+    const buyFills = result.fills.filter((fill) => fill.side === 'BUY');
+    expect(buyFills).toHaveLength(2);
+    expect(buyFills[1]!.quantity).toBe(10); // 재진입 이전에 끝난 분할 — 조정 대상이 아니다
+    expect(result.openPositions).toHaveLength(1);
+    expect(result.openPositions[0]!.quantity).toBe(10);
+    expect(result.openPositions[0]!.avgEntryPrice).toBe(20_000);
   });
 });
