@@ -274,13 +274,22 @@ export function createContainer(config: AppConfig): Container {
   // 백테스트 제출·미리보기가 공유한다.
   const universeRuleResolver = new UniverseRuleResolver({ symbolMaster: symbolMasterService, logger });
 
+  // 알림 리스너와 라우트가 같은 인스턴스를 봐야 한다 — 두 개를 만들면 등록 목록이 갈라진다
+  const strategyRegistry = new StrategyRegistry();
+  const resultsService = new ResultsService(database.db);
+
   const jobQueue = new JobQueue(database, clock);
   const jobOrchestrator = new JobOrchestrator(jobQueue, config, logger, auditLog, clock);
   jobOrchestrator.events.on(
     'job',
-    createBacktestNotificationListener({ queue: jobQueue, notify: safeNotify, logger }),
+    createBacktestNotificationListener({
+      queue: jobQueue,
+      strategyName: (strategyId) => strategyRegistry.describe(strategyId)?.name ?? null,
+      totalReturnPct: (jobId) => resultsService.getTotalReturnPct(jobId),
+      notify: safeNotify,
+      logger,
+    }),
   );
-  const resultsService = new ResultsService(database.db);
 
   const systemStatus: SystemStatusProviders = {
     queueLength: () => jobQueue.countByStatus(['QUEUED']),
@@ -308,7 +317,7 @@ export function createContainer(config: AppConfig): Container {
     candleCoverageService,
     symbolService,
     symbolInfoService,
-    strategyRegistry: new StrategyRegistry(),
+    strategyRegistry,
     jobQueue,
     jobOrchestrator,
     resultsService,

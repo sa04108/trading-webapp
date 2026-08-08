@@ -151,6 +151,16 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     expect(ctx.container.resultsService.getTotalReturnPct(jobId)).toBe(metrics.totalReturnPct);
     // 결과가 없는 잡은 null 이다 — 0 으로 떨어지면 "수익 0%" 로 읽힌다
     expect(ctx.container.resultsService.getTotalReturnPct('bt_없는잡')).toBeNull();
+
+    // 배선 전체가 이어졌는지 — 리스너가 레지스트리 이름과 수익률을 함께 담는다
+    const notification = ctx.container.notificationService
+      .list()
+      .find((row) => row.link === `/backtests/${jobId}`);
+    expect(notification?.title).toBe('백테스트가 완료되었습니다');
+    expect(notification?.body).toContain('전고점 돌파');
+    expect(notification?.body).toContain('수익률');
+    // kebab-case 식별자가 새면 안 된다
+    expect(notification?.body).not.toContain('range-breakout');
   });
 
   it('봉이 없는 종목을 실행 경고로 남긴다', { timeout: 90_000 }, async () => {
