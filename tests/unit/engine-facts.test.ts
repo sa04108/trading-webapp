@@ -154,10 +154,12 @@ describe('엔진 PIT 배선', () => {
       maxPositions: 5,
       // facts 미지정 — 어떤 전략도 분할을 보정할 재료가 없다
     });
-    const biasWarning = result.warnings.find((warning) => warning.includes('생존 편향'));
-    expect(biasWarning).toBeDefined();
-    expect(biasWarning).toContain('액면분할도 이 실행에서는 보정되지 않았습니다');
-    expect(biasWarning).not.toContain('신호 계산');
+    const splitWarning = result.warnings.find((warning) => warning.includes('액면분할'));
+    expect(splitWarning).toBeDefined();
+    expect(splitWarning).toContain('액면분할은 이 실행에서 보정되지 않았습니다');
+    // 보정된 경우의 문구('보유 수량·평균단가·대기 주문·전략 가격 상태')가 섞여 나오면
+    // 안 일어난 보정을 일어났다고 말하는 셈이다.
+    expect(splitWarning).not.toContain('보유 수량');
   });
 
   it('재무 팩트만 있고 분할 이력이 없으면 보정했다고 말하지 않는다', () => {
@@ -183,9 +185,9 @@ describe('엔진 PIT 배선', () => {
         },
       ],
     });
-    const biasWarning = result.warnings.find((warning) => warning.includes('생존 편향'));
-    expect(biasWarning).toContain('액면분할도 이 실행에서는 보정되지 않았습니다');
-    expect(biasWarning).not.toContain('신호 계산');
+    const splitWarning = result.warnings.find((warning) => warning.includes('액면분할'));
+    expect(splitWarning).toContain('액면분할은 이 실행에서 보정되지 않았습니다');
+    expect(splitWarning).not.toContain('보유 수량');
   });
 
   it('facts 를 넘기면 경고가 분할 보정은 포지션 수량·평균단가에 한정된다고 말한다', () => {
@@ -210,14 +212,19 @@ describe('엔진 PIT 배선', () => {
       maxPositions: 5,
       facts,
     });
-    const biasWarning = result.warnings.find((warning) => warning.includes('생존 편향'));
-    expect(biasWarning).toBeDefined();
+    const splitWarning = result.warnings.find((warning) => warning.includes('액면분할'));
+    expect(splitWarning).toBeDefined();
     // 엔진이 포지션 수량·평균단가를 조정한 뒤부터(Task 2)는 이 문구가 사실이다 —
     // 조정되지 않는 건 이미 체결된 거래의 체결가뿐이다.
-    expect(biasWarning).toContain('보유 포지션의 수량과 평균단가');
-    expect(biasWarning).toContain('전략이 들고 있는 가격 상태');
-    // 모멘텀 전략의 신호 계산 보정은 여전히 사실이다 — 재작성이 이 절을 떨어뜨렸었다
-    expect(biasWarning).toContain('신호 계산');
-    expect(biasWarning).toContain('체결가는 조정하지 않습니다');
+    expect(splitWarning).toContain('보유 수량·평균단가·대기 주문·전략 가격 상태');
+    // 모멘텀 전략의 신호 계산 보정(adjusted-price.ts 의 splitAdjustedClose, 전략
+    // description 에 명시된 사실)은 포지션·주문 상태 조정과는 별개의 참인 사실이다.
+    // 이 절은 이미 두 번 빠졌다 — 한 번은 과거 재작성에서, 한 번은 "생존 편향" 단일
+    // 문장을 항목별 경고로 재작성하면서. 이 단언이 없으면 이 문구가 다시 조용히
+    // 빠져도 아무 테스트도 잡지 못한다.
+    expect(splitWarning).toContain('신호 계산');
+    expect(splitWarning).toContain('체결가는 조정하지 않습니다');
+    // 미보정 케이스의 문구가 섞여 나오면 안 일어난 미보정을 보정으로 잘못 말한 것이다
+    expect(splitWarning).not.toContain('보정되지 않았습니다');
   });
 });

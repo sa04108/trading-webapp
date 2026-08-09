@@ -251,6 +251,7 @@ describe('runBacktest 이벤트 순서 (스펙 §9.1, §9.2)', () => {
       avgEntryPrice: 110,
       entryTsMs: START + HOUR,
       lastPrice: 130,
+      lastPriceTsMs: START + 2 * HOUR,
       unrealizedPnl: 5 * (130 - 110),
       returnPct: ((130 - 110) / 110) * 100,
     });

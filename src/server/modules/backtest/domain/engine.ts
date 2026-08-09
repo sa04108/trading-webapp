@@ -53,6 +53,29 @@ export interface BacktestRunInput {
    * 미지정이거나 빈 배열이면 tradableSymbols 는 항상 null(제한 없음) — 기존 전략 동작 불변.
    */
   readonly universeSchedule?: readonly { fromTsMs: number; symbols: readonly string[] }[];
+  /**
+   * 그 시점에 거래할 수 없었던 종목 (거래정지·무거래). 키는 봉 tsMs 다.
+   * 이 종목들은 매수 후보에서 빠진다 — 봉이 없어 체결도 되지 않는다.
+   * 보유분 청산(SELL)은 막지 않는다. 유니버스에서 빠진 종목도 항상 팔 수 있어야 한다.
+   */
+  readonly nonTradingSymbolsByTsMs?: ReadonlyMap<number, ReadonlySet<string>>;
+  /**
+   * 상장폐지 효력 시각 (심볼 → tsMs). 기간 안에 폐지된 종목만 담는다.
+   *
+   * 이 맵은 엔진만 본다. `StrategyBarContext` 에 노출하지 않는다 —
+   * 전략이 "이 종목이 곧 폐지된다" 를 미리 알 경로를 만들지 않기 위해서다.
+   */
+  readonly delistedTsMsBySymbol?: ReadonlyMap<string, number>;
+  /**
+   * 거래불가일이 실제로 채워진 구간. `null` 이면 이 실행 구간에 거래불가 정보가 없다.
+   * 행이 없는 것과 아직 모르는 것을 구분하지 않으면 경고가 "반영한다" 고 거짓말한다.
+   *
+   * 엔진이 실제로 보는 것은 `null` 인지 아닌지뿐이다. 워커는 실행 기간 **전체**가
+   * 덮였을 때만 구간을 채워 넘기므로(backtest-child.ts), 그 구간을 경고에 적으면
+   * 전부 반영된 실행을 반쪽처럼 말하게 된다. 구간 값 자체는 부분 커버 구간을
+   * 계산할 수 있게 되면 그때 쓴다.
+   */
+  readonly nonTradingCoveredPeriod?: { readonly from: string; readonly to: string } | null;
 }
 
 export interface EngineHooks {
@@ -77,10 +100,12 @@ export interface BacktestRunResult {
   readonly warnings: readonly string[];
   readonly cancelled: boolean;
   readonly processedBars: number;
+  /** 상장폐지로 강제 청산한 내역 — 전략이 낸 매도와 구분해 결과 화면에 밝힌다 */
+  readonly delistingLiquidations: readonly { symbol: string; tsMs: number; netPnl: number }[];
 }
 
 /** 재현성 메타데이터에 기록되는 엔진 버전 (스펙 §9.5) — 체결·지표 로직 변경 시 올린다 */
-export const ENGINE_VERSION = '1.4.0';
+export const ENGINE_VERSION = '1.5.0';
 
 const PROGRESS_INTERVAL_BARS = 500;
 
@@ -140,6 +165,24 @@ function* runBacktestSteps(
   const symbols = [...new Set(sorted.map((c) => c.symbol))].sort();
   const totalBars = sorted.length;
 
+  // 미청산 포지션 스냅샷이 "마지막으로 확인된 가격이 언제 것인지" 를 적는 데 쓴다.
+  const lastBarTsMsBySymbol = new Map<string, number>();
+  for (const candle of sorted) lastBarTsMsBySymbol.set(candle.symbol, candle.tsMs);
+
+  // 폐지 청산 시점 — 폐지 효력 시각보다 **앞선** 마지막 봉이다. 실행 전체의 마지막
+  // 봉으로 잡으면 안 된다. KRX 는 폐지된 여섯 자리 단축코드를 나중에 다른 회사에
+  // 다시 주므로, 같은 코드의 뒷날 봉이 실행 기간에 들어오면 몇 년 뒤 남의 회사
+  // 종가로 청산하게 된다. 봉은 전부 미리 들어와 있어 여기서 한 번에 접는다
+  // (sorted 가 시각 오름차순이라 마지막으로 써 넣은 값이 곧 직전 봉이다).
+  const lastBarBeforeDelistingBySymbol = new Map<string, number>();
+  if (input.delistedTsMsBySymbol !== undefined) {
+    for (const candle of sorted) {
+      const delistedTsMs = input.delistedTsMsBySymbol.get(candle.symbol);
+      if (delistedTsMs === undefined || candle.tsMs >= delistedTsMs) continue;
+      lastBarBeforeDelistingBySymbol.set(candle.symbol, candle.tsMs);
+    }
+  }
+
   const rng = createRng(input.randomSeed);
   const historyBySymbol = new Map<string, Candle[]>(symbols.map((s) => [s, []]));
   const lastCloseBySymbol = new Map<string, number>();
@@ -155,6 +198,7 @@ function* runBacktestSteps(
   const fills: Fill[] = [];
   const trades: Trade[] = [];
   const warnings: string[] = [];
+  const delistingLiquidations: { symbol: string; tsMs: number; netPnl: number }[] = [];
   /**
    * 동시 보유 상한에 걸려 폐기된 매수 주문 — 종목별 건수. 봉마다 경고를 쌓지 않고
    * 마지막에 한 줄로 접는다: 월간 리밸런스 12년이면 같은 사유가 천 건 넘게 쌓여
@@ -172,6 +216,11 @@ function* runBacktestSteps(
   // 유니버스 밖 BUY 거부 warning 을 심볼당 한 번만 남기기 위한 추적 집합 — 리밸런스
   // 주기가 짧으면 같은 사유가 봉마다 반복돼 warningsJson 을 부풀린다(buysDroppedByCap 과 같은 이유)
   const universeRejectedSymbols = new Set<string>();
+  // 거래정지·무거래로 거부한 BUY 는 사유가 다르므로 집합도 따로 둔다 — 하나로 묶으면
+  // 정지 한 번이 그 종목의 경고 자리를 다 써버려 나중에 난 진짜 유니버스 위반이 사라진다.
+  const nonTradingRejectedSymbols = new Set<string>();
+  // 이번 봉에서 거래정지·무거래인 종목 — validateOrder 가 거부 사유를 가르는 데 쓴다
+  let nonTradingNow: ReadonlySet<string> | undefined;
 
   const factView = new PitFactView(input.facts ?? []);
   /**
@@ -204,6 +253,9 @@ function* runBacktestSteps(
 
     const bars = barsByTs.get(tsMs) as Map<string, Candle>;
 
+    // 일정이 없는 실행에서 이전 시점의 거래불가 필터가 남지 않게 매 시점 초기화한다
+    if (sortedSchedule.length === 0) tradableSymbols = null;
+
     // 활성 멤버십 구간 갱신 — fromTsMs <= tsMs 인 항목 중 가장 늦은 것이 활성이다.
     // 첫 entry 이전 시점은 예외 없이 첫 entry(index 0)를 그대로 쓴다(위 jsdoc 참고).
     if (sortedSchedule.length > 0) {
@@ -214,6 +266,18 @@ function* runBacktestSteps(
         scheduleIndex += 1;
       }
       tradableSymbols = scheduleSets[scheduleIndex] as ReadonlySet<string>;
+    }
+
+    // 거래불가 종목을 매수 후보에서 뺀다. 멤버십 일정이 없어도(=제한 없음) 이날
+    // 거래불가인 종목이 있으면 전체 심볼에서 그만큼 뺀 집합을 만든다.
+    nonTradingNow = input.nonTradingSymbolsByTsMs?.get(tsMs);
+    if (nonTradingNow !== undefined && nonTradingNow.size > 0) {
+      const base = tradableSymbols ?? new Set(symbols);
+      const filtered = new Set<string>();
+      for (const symbol of base) {
+        if (!nonTradingNow.has(symbol)) filtered.add(symbol);
+      }
+      tradableSymbols = filtered;
     }
 
     // 이 시점까지 공시된 팩트만 흡수한다 — 전략이 미래 공시를 볼 자리를 없앤다 (§9.4)
@@ -308,6 +372,46 @@ function* runBacktestSteps(
       lastCloseBySymbol.set(symbol, bar.close);
     }
 
+    // 상장폐지 청산 — 폐지 효력 시각 직전 마지막 봉에서 종가로 전량 나간다.
+    //
+    // 평가금액 갱신보다 먼저다. 이 시점 자산곡선이 청산 대금을 이미 반영해야
+    // 폐지 손실이 곡선에 남는다.
+    //
+    // 체결가는 이 봉의 종가다. `krx_non_trading_days.lastClose` 는 쓰지 않는다 —
+    // 정지 중 가격은 팔 수 있는 가격이 아니다. 정지 상태로 폐지된 종목은
+    // 정지 직전 실거래가로 나간다.
+    //
+    // 정리매매 종가를 따로 추정하지 않는다. KRX 일봉에 정리매매 기간 봉이 들어 있어
+    // 폐지 직전 마지막 봉이 곧 정리매매 최종가다. 시장이 매긴 회수가치를 그대로 쓴다.
+    if (lastBarBeforeDelistingBySymbol.size > 0) {
+      for (const [symbol, bar] of bars) {
+        if (lastBarBeforeDelistingBySymbol.get(symbol) !== tsMs) continue;
+
+        // 대기 주문을 따로 지우지 않는다. 이 시점 pendingOrders 에는 이번 봉에 봉이
+        // 없는 종목의 주문만 남아 있다. 봉이 있는 종목은 위 체결 스텝이 이미 다
+        // 처리했으므로, 폐지 종목(이번 봉이 있어야 여기 온다) 주문은 애초에 없다.
+        // 전략이 이 마지막 봉에서 새로 내는 주문은 이 블록 뒤(전략 호출)에 등록되므로
+        // 여기서 손댈 수 없고, 체결될 봉이 다시 오지 않아 기간 종료 폐기 경고로 드러난다.
+
+        const position = positions.get(symbol);
+        if (position === undefined || position.quantity <= 0) continue;
+
+        const before = trades.length;
+        const fill = executeOrder(
+          { symbol, side: 'SELL', quantity: position.quantity, reason: 'DELISTED' },
+          bar,
+          tsMs,
+          bar.close,
+        );
+        if (fill) fills.push(fill);
+        const trade = trades[before];
+        if (trade !== undefined) {
+          delistingLiquidations.push({ symbol, tsMs, netPnl: trade.netPnl });
+        }
+        strategy.onForcedExit?.(symbol, state);
+      }
+    }
+
     // 4. 평가금액 갱신
     equityPoints.push({ tsMs, equity: markToMarket() });
     maxConcurrentPositions = Math.max(maxConcurrentPositions, positions.size);
@@ -388,15 +492,46 @@ function* runBacktestSteps(
   const hasCorporateActionFacts = (input.facts ?? []).some(
     (fact) => fact.field === CORPORATE_ACTION_FIELD,
   );
+
+  // "생존 편향" 이라는 단일 라벨은 쓰지 않는다. 시점별 유니버스 선정과 상장폐지 청산은
+  // 하고, 배당·권리락·과거 지수 구성원은 안 한다 — 예/아니오로 답할 수 없는 상태다.
+  // 화면(universe-provenance.ts)이 같은 이유로 "생존자 편향 제거" 표현을 금지한다.
   warnings.push(
-    '생존 편향, 공휴일 캘린더, 배당, 권리락은 이 백테스트에서 보정하지 않습니다. ' +
-      (hasCorporateActionFacts
-        ? '액면분할은 분할 이력이 수집된 데이터셋에서 보유 포지션의 수량과 평균단가, ' +
-          '대기 주문 수량, 전략이 들고 있는 가격 상태에 반영됩니다. ' +
-          '보정을 쓰는 전략의 신호 계산에도 반영됩니다. ' +
-          '이미 체결된 거래의 체결가는 조정하지 않습니다.'
-        : '액면분할도 이 실행에서는 보정되지 않았습니다 (분할 이력 미수집).'),
+    '이 백테스트가 보정하는 것: 시점별 유니버스 선정, 상장폐지 청산, 거래불가일(거래정지·무거래) 매수 제외'
+      + (hasCorporateActionFacts
+        ? ', 액면분할(보유 수량·평균단가·대기 주문·전략 가격 상태). 보정 종가를 쓰는 전략은 '
+          + '신호 계산에도 반영됩니다. 이미 체결된 거래의 체결가는 조정하지 않습니다.'
+        : '. 액면분할은 이 실행에서 보정되지 않았습니다 (분할 이력 미수집).'),
   );
+  warnings.push(
+    '이 백테스트가 보정하지 않는 것: 배당, 유상증자 권리락, 공휴일 캘린더, 과거 지수 구성원 복원. '
+      + '손절·익절은 종가로만 판정합니다.',
+  );
+
+  if (delistingLiquidations.length > 0) {
+    const netPnl = delistingLiquidations.reduce((sum, item) => sum + item.netPnl, 0);
+    const symbols = delistingLiquidations.map((item) => item.symbol).sort();
+    const shown = symbols.slice(0, 10).join(', ');
+    warnings.push(
+      `상장폐지로 강제 청산한 종목 ${symbols.length}건: ${shown}`
+        + (symbols.length > 10 ? ` 외 ${symbols.length - 10}종목` : '')
+        // 로캘을 못박는다. 지정하지 않으면 기계마다 1,234,567 과 1.234.567 로 갈려
+        // 같은 실행의 warningsJson 이 달라진다 (재현성 §9.5).
+        + `. 손익 합계 ${Math.round(netPnl).toLocaleString('ko-KR')}원. `
+        + '체결가는 그 종목의 마지막 거래 가능 봉 종가이며, 정리매매가 있었다면 그 가격이 반영됩니다.',
+    );
+  }
+
+  // 덮인 경우에는 아무 말도 하지 않는다. 워커는 실행 기간 전체가 덮였을 때만 구간을
+  // 넘기므로(backtest-child.ts), 그 구간을 다시 적으면 "만 반영됐다" 가 되어 전부
+  // 반영된 실행을 반쪽처럼 읽게 만든다. 위 "보정하는 것" 줄이 이미 거래불가일 반영을
+  // 밝히고 있어 덧붙일 사실도 없다.
+  if (input.nonTradingCoveredPeriod === null) {
+    warnings.push(
+      '이 실행 구간에는 거래불가일 정보가 없습니다 — 거래정지 종목이 유니버스와 매수 후보에 그대로 들어갔을 수 있습니다. '
+        + '`cli krx:backfill-non-trading` 으로 채운 뒤 다시 실행하세요.',
+    );
+  }
 
   const metrics = computeMetrics(
     equityPoints,
@@ -412,12 +547,14 @@ function* runBacktestSteps(
     .filter((position) => position.quantity > 0)
     .map((position) => {
       const lastPrice = lastCloseBySymbol.get(position.symbol) ?? position.avgEntryPrice;
+      const lastPriceTsMs = lastBarTsMsBySymbol.get(position.symbol) ?? position.entryTsMs;
       return {
         symbol: position.symbol,
         quantity: position.quantity,
         avgEntryPrice: position.avgEntryPrice,
         entryTsMs: position.entryTsMs,
         lastPrice,
+        lastPriceTsMs,
         unrealizedPnl: position.quantity * (lastPrice - position.avgEntryPrice),
         returnPct: ((lastPrice - position.avgEntryPrice) / position.avgEntryPrice) * 100,
       };
@@ -436,6 +573,7 @@ function* runBacktestSteps(
     warnings,
     cancelled,
     processedBars,
+    delistingLiquidations,
   };
 
   // ── 내부 helpers ─────────────────────────────────────────────
@@ -450,6 +588,20 @@ function* runBacktestSteps(
       const position = positions.get(order.symbol);
       if (!position || position.quantity <= 0) return null;
       return { ...order, quantity: Math.min(quantity, position.quantity) };
+    }
+
+    // BUY: 그날 거래정지·무거래인 종목은 여기서 먼저 가른다. 거래불가 필터가 이미
+    // tradableSymbols 에서 그 종목을 빼 놓기 때문에, 순서를 바꾸면 아래 멤버십 안전망
+    // 문구가 나가 멀쩡한 전략을 버그라고 말하게 된다. 보유분 청산(SELL)은 위에서 이미
+    // 갈라져 이 검증을 타지 않는다 — 정지 종목이라도 청산은 막지 않는다.
+    if (nonTradingNow?.has(order.symbol) === true) {
+      if (!nonTradingRejectedSymbols.has(order.symbol)) {
+        nonTradingRejectedSymbols.add(order.symbol);
+        warnings.push(
+          `${order.symbol} 매수 거부: 그날 거래정지·무거래로 매수할 수 없는 종목입니다.`,
+        );
+      }
+      return null;
     }
 
     // BUY: 활성 멤버십 일정 밖 심볼은 거부한다 — 전략이 유니버스를 스스로 걸러내지
@@ -486,11 +638,17 @@ function* runBacktestSteps(
     return { ...order, quantity };
   }
 
-  function executeOrder(order: OrderIntent, bar: Candle, tsMs: number): Fill | null {
+  function executeOrder(
+    order: OrderIntent,
+    bar: Candle,
+    tsMs: number,
+    basePrice: number = bar.open,
+  ): Fill | null {
     if (order.side === 'BUY') {
-      let fill = simulateFill(order, bar.open, tsMs, input.execution);
+      let fill = simulateFill(order, basePrice, tsMs, input.execution);
       if (requiredCashForBuy(fill) > cash) {
         // 현금 부족: 감당 가능한 수량으로 축소, 최소 수량 미만이면 거부
+        // fill.price 는 이미 체결가라 basePrice 와 다르다 — 그대로 쓴다
         const affordable = Math.floor(
           cash / (fill.price * (1 + input.execution.cost.buyCommissionRate)),
         );
@@ -498,7 +656,7 @@ function* runBacktestSteps(
           warnings.push(`${order.symbol} 매수 거부: 현금 부족 (${new Date(tsMs).toISOString()})`);
           return null;
         }
-        fill = simulateFill({ ...order, quantity: affordable }, bar.open, tsMs, input.execution);
+        fill = simulateFill({ ...order, quantity: affordable }, basePrice, tsMs, input.execution);
       }
 
       cash -= requiredCashForBuy(fill);
@@ -525,7 +683,7 @@ function* runBacktestSteps(
     const position = positions.get(order.symbol);
     if (!position || position.quantity <= 0) return null;
     const sellQty = Math.min(order.quantity, position.quantity);
-    const fill = simulateFill({ ...order, quantity: sellQty }, bar.open, tsMs, input.execution);
+    const fill = simulateFill({ ...order, quantity: sellQty }, basePrice, tsMs, input.execution);
 
     cash += proceedsFromSell(fill);
 

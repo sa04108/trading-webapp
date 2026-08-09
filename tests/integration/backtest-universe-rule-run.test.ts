@@ -1,7 +1,19 @@
+import { and, eq, isNull } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
-import { krxDailyBars } from '../../src/server/shared/db/schema.js';
+import {
+  krxDailyBars,
+  krxNonTradingCoverage,
+  krxNonTradingDays,
+  symbolMasterVersions,
+} from '../../src/server/shared/db/schema.js';
+import {
+  DEFAULT_EXECUTION_RULES,
+  getCostProfile,
+  getSlippageProfile,
+} from '../../src/server/modules/backtest/domain/cost-profiles.js';
+import { simulateFill } from '../../src/server/modules/backtest/domain/execution.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
 import { registerSymbols, seedCorporateActionCoverage, seedDailyBars, yearRange } from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
@@ -764,4 +776,265 @@ describe('POST /backtests — 자본변동 수집 게이트 (Task 6)', () => {
     // 차단 사유가 아니라 경고다 — blockers 는 비어 있어야 한다.
     expect(body.blockers).toEqual([]);
   });
+});
+
+/**
+ * 워커 배선(Task 10) — 데이터 계층·유니버스·엔진(Task 4·6·7·8·9)은 이미 준비됐지만
+ * 아무도 그 정보를 엔진에 넘기지 않으면 실제 백테스트에서는 아무 것도 바뀌지 않는다.
+ * 이 테스트가 `backtest-child.ts` 가 실제로 그 배선을 잇는지 end-to-end 로 확인하는
+ * 유일한 자리다.
+ */
+describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
+  let ctx: TestApp;
+  let cookie: string;
+
+  beforeEach(async () => {
+    ctx = await createTestApp();
+    const { username, password } = await createTestAdmin(ctx.container);
+    const login = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { username, password },
+    });
+    cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+  });
+
+  afterEach(async () => {
+    await ctx.close();
+  });
+
+  it(
+    '상장폐지 종목이 마지막 거래 가능 봉 종가로 청산된다',
+    { timeout: 90_000 },
+    async () => {
+      const alive = buildDailyCandles('005930');
+      // 000660 은 기간의 절반까지만 거래된다 — 그 뒤 폐지된다
+      const doomedAll = buildDailyCandles('000660');
+      const doomed = doomedAll.slice(0, Math.floor(doomedAll.length / 2));
+      const lastDoomed = doomed[doomed.length - 1]!;
+      // 마지막 봉의 시가·종가가 달라야 "종가로 나갔다"를 증명할 수 있다
+      expect(lastDoomed.open).not.toBe(lastDoomed.close);
+
+      registerSymbols(ctx.container, 'KR', ['005930', '000660']);
+      seedDailyBars(ctx.container.database.db, [...alive, ...doomed]);
+      seedSymbolMasterUniverse(ctx.container, MASTER_DATES, [
+        { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '900' },
+        { standardCode: 'KR7000660001', shortCode: '000660', name: 'SK하이닉스', market: 'KOSPI', marketCapKrw: '800' },
+      ]);
+      seedCorporateActionCoverage(ctx.container, ['005930', '000660'], yearRange(2025, 2026));
+
+      // 마지막 봉 다음 날을 폐지 효력일로 둔다 — 워커가 listEvents 로 이 경계를 읽어
+      // 엔진에 넘긴다. SCD 이행(D-045) 후 delistedEventsBetween 은 legacy
+      // symbol_master_events 를 더 이상 읽지 않고 symbol_master_versions 의 버전
+      // 경계를 diffUniverse 로 비교해 이벤트를 파생한다 — 그래서 여기서도 legacy
+      // 테이블에 행을 심는 대신 000660 의 실제 유효 구간을 이 날짜에서 닫아야
+      // listEvents 가 DELISTED 경계를 본다. observedSpanStart 앵커(경계 이전 관측
+      // 거래일)는 seedSymbolMasterUniverse 가 MASTER_DATES 를 이미 거래일로 심어
+      // 뒀으므로 따로 채울 필요가 없다.
+      const delistedDate = new Date(lastDoomed.tsMs + DAY).toISOString().slice(0, 10);
+      ctx.container.database.db
+        .update(symbolMasterVersions)
+        .set({ validToDate: delistedDate })
+        .where(
+          and(
+            eq(symbolMasterVersions.standardCode, 'KR7000660001'),
+            isNull(symbolMasterVersions.validToDate),
+          ),
+        )
+        .run();
+
+      const created = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/backtests',
+        cookies: { qp_session: cookie },
+        payload: buildRequest(2),
+      });
+      expect(created.statusCode).toBe(201);
+      const jobId = (created.json().job as { id: string }).id;
+
+      ctx.container.jobOrchestrator.tick();
+      await waitFor(() => {
+        const job = ctx.container.jobQueue.getJob(jobId);
+        return job !== null && ctx.container.jobQueue.isTerminal(job.status);
+      }, 60_000);
+
+      const job = ctx.container.jobQueue.getJob(jobId)!;
+      expect(job.error).toBeNull();
+      expect(job.status).toBe('COMPLETED');
+
+      const { trades } = ctx.container.resultsService.getTrades(jobId, { limit: 1000, offset: 0 });
+      // 전략이 000660 을 실제로 샀는지부터 확인한다 — 안 사면 청산 단언이 공허해진다
+      expect(trades.some((trade) => trade.symbol === '000660')).toBe(true);
+
+      const delistingTrade = trades.find(
+        (trade) => trade.symbol === '000660' && trade.exitReason === 'DELISTED',
+      );
+      expect(delistingTrade).toBeDefined();
+
+      // 체결가는 마지막 봉의 **종가** 를 기준으로 슬리피지를 적용한 값이어야 한다 —
+      // buildRequest 가 쓰는 실행 프로필(fixed-5bps)은 슬리피지가 0이 아니므로 종가와
+      // 정확히 같지는 않다. 시가를 기준으로 계산한 값과 달라야 "종가로 나갔다"를 증명한다.
+      const executionProfile = {
+        cost: getCostProfile('kr-equity-default')!,
+        slippage: getSlippageProfile('fixed-5bps')!,
+        rules: DEFAULT_EXECUTION_RULES,
+      };
+      const expectedFromClose = simulateFill(
+        { symbol: '000660', side: 'SELL', quantity: 1, reason: 'DELISTED' },
+        lastDoomed.close,
+        lastDoomed.tsMs,
+        executionProfile,
+      );
+      const expectedFromOpen = simulateFill(
+        { symbol: '000660', side: 'SELL', quantity: 1, reason: 'DELISTED' },
+        lastDoomed.open,
+        lastDoomed.tsMs,
+        executionProfile,
+      );
+      expect(delistingTrade?.exitPrice).toBe(expectedFromClose.price);
+      expect(delistingTrade?.exitPrice).not.toBe(expectedFromOpen.price);
+      expect(delistingTrade?.exitTsMs).toBe(lastDoomed.tsMs);
+
+      // 청산했으므로 기간 종료 시점 미청산 포지션으로 남지 않는다
+      const run = ctx.container.resultsService.getRun(jobId)!;
+      const openPositions = JSON.parse(run.openPositionsJson ?? '[]') as { symbol: string }[];
+      expect(openPositions.some((position) => position.symbol === '000660')).toBe(false);
+
+      // 이 테스트는 거래불가일 커버리지를 심지 않는다 — nonTradingCoveredPeriod 가
+      // null 로 넘어와야 하고, 엔진은 그 상태를 "정보가 없다" 경고로 명시해야 한다.
+      // 세 값(null/미지정/구간)을 가르는 유일한 관측 지점이 이 경고 문구다.
+      const warnings = JSON.parse(run.warningsJson ?? '[]') as string[];
+      expect(warnings.some((w) => w.includes('거래불가일 정보가 없습니다'))).toBe(true);
+    },
+  );
+
+  it(
+    '거래불가일에는 매수 후보에서 빠지고, 커버리지가 있으면 구간을 명시한 경고만 남는다',
+    { timeout: 90_000 },
+    async () => {
+      const alive = buildDailyCandles('005930');
+      const nonTradingSymbolCandles = buildDailyCandles('000660');
+
+      registerSymbols(ctx.container, 'KR', ['005930', '000660']);
+      seedDailyBars(ctx.container.database.db, [...alive, ...nonTradingSymbolCandles]);
+      seedSymbolMasterUniverse(ctx.container, MASTER_DATES, [
+        { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '900' },
+        { standardCode: 'KR7000660001', shortCode: '000660', name: 'SK하이닉스', market: 'KOSPI', marketCapKrw: '800' },
+      ]);
+      seedCorporateActionCoverage(ctx.container, ['005930', '000660'], yearRange(2025, 2026));
+
+      // 이 픽스처(range-breakout, topN=2, 두 종목 모두 buildDailyCandles 의 동일한
+      // 가격 패턴)에서 두 종목은 항상 2025-08-12 에 첫 진입한다 — 신호는 전날
+      // (2025-08-11, lookbackBars=10 을 처음 채우는 봉)에 나고 NEXT_BAR_OPEN 으로
+      // 다음 거래일 시가에 체결된다. 000660 의 신호일(08-11)만 거래불가로 막아
+      // 그 진입 하나만 지연되는지 본다 — 워커가 tsMs 를 하루라도 다르게 구성했다면
+      // (Candle.tsMs 와 다른 규칙을 썼다면) 이 필터가 08-11 이 아닌 다른 날에 걸려
+      // 000660 도 005930 과 함께 08-12 에 그대로 들어가 버린다.
+      ctx.container.database.db
+        .insert(krxNonTradingDays)
+        .values({ date: '2025-08-11', shortCode: '000660', market: 'KOSPI', lastClose: 1 })
+        .run();
+      ctx.container.database.db
+        .insert(krxNonTradingCoverage)
+        .values({ startDate: '2025-07-27', endDate: '2026-07-24', syncedAtMs: 0 })
+        .run();
+
+      const created = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/backtests',
+        cookies: { qp_session: cookie },
+        payload: buildRequest(2),
+      });
+      expect(created.statusCode).toBe(201);
+      const jobId = (created.json().job as { id: string }).id;
+
+      ctx.container.jobOrchestrator.tick();
+      await waitFor(() => {
+        const job = ctx.container.jobQueue.getJob(jobId);
+        return job !== null && ctx.container.jobQueue.isTerminal(job.status);
+      }, 60_000);
+
+      const job = ctx.container.jobQueue.getJob(jobId)!;
+      expect(job.error).toBeNull();
+      expect(job.status).toBe('COMPLETED');
+
+      const { trades } = ctx.container.resultsService.getTrades(jobId, { limit: 1000, offset: 0 });
+      const blockedEntryTsMs = Date.UTC(2025, 7, 12); // 2025-08-12, 막지 않았다면 둘 다 여기서 들어간다
+
+      // 대조군: 거래불가로 막지 않은 005930 은 예정대로 그날 들어간다.
+      expect(trades.some((t) => t.symbol === '005930' && t.entryTsMs === blockedEntryTsMs)).toBe(
+        true,
+      );
+      // 000660 은 그날 들어가지 않는다 — 매수 후보에서 빠졌다는 증거다.
+      expect(trades.some((t) => t.symbol === '000660' && t.entryTsMs === blockedEntryTsMs)).toBe(
+        false,
+      );
+      // 그날만 진입을 미룰 뿐 매수 자체를 영영 막지는 않는다.
+      expect(trades.some((t) => t.symbol === '000660')).toBe(true);
+
+      // 실행 기간이 전부 덮였으므로 커버리지 이야기는 한 줄도 나오지 않는다 —
+      // "정보가 없습니다" 도, 구간을 다시 읊는 "…구간만 반영됐습니다" 도 거짓이다.
+      const run = ctx.container.resultsService.getRun(jobId)!;
+      const warnings = JSON.parse(run.warningsJson ?? '[]') as string[];
+      expect(warnings.some((w) => w.includes('거래불가일 정보가 없습니다'))).toBe(false);
+      expect(warnings.some((w) => w.includes('거래불가일 정보는'))).toBe(false);
+    },
+  );
+
+  it(
+    '리밸런스 기준일에 거래정지인 종목은 유니버스 후보에서 빠지고 실행 경고로 남는다 (Task 11)',
+    { timeout: 90_000 },
+    async () => {
+      const alive = buildDailyCandles('005930');
+      registerSymbols(ctx.container, 'KR', ['005930', '000660']);
+      seedDailyBars(ctx.container.database.db, alive);
+      seedSymbolMasterUniverse(ctx.container, MASTER_DATES, [
+        { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '900' },
+        { standardCode: 'KR7000660001', shortCode: '000660', name: 'SK하이닉스', market: 'KOSPI', marketCapKrw: '800' },
+      ]);
+      seedCorporateActionCoverage(ctx.container, ['005930', '000660'], yearRange(2025, 2026));
+
+      // 이 파일의 유일한 리밸런스 날짜는 period.from(2025-07-27) 이다 — range-breakout 은
+      // rebalanceMonths 파라미터가 없어 제출 경로가 단일 리밸런스로 접는다
+      // (backtest-routes.ts resolveUniverse). 그 날짜에 000660 을 거래정지로 심으면
+      // UniverseRuleResolver.resolve() 가 후보에서 빼고 excludedNonTradingCount 를 센다 —
+      // 000660 은 봉이 없어도 상관없다(유니버스에 아예 들어오지 못하므로).
+      ctx.container.database.db
+        .insert(krxNonTradingDays)
+        .values({ date: '2025-07-27', shortCode: '000660', market: 'KOSPI', lastClose: 1 })
+        .run();
+
+      const created = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/backtests',
+        cookies: { qp_session: cookie },
+        payload: buildRequest(2),
+      });
+      expect(created.statusCode).toBe(201);
+      const jobId = (created.json().job as { id: string }).id;
+
+      ctx.container.jobOrchestrator.tick();
+      await waitFor(() => {
+        const job = ctx.container.jobQueue.getJob(jobId);
+        return job !== null && ctx.container.jobQueue.isTerminal(job.status);
+      }, 60_000);
+
+      const job = ctx.container.jobQueue.getJob(jobId)!;
+      expect(job.error).toBeNull();
+      expect(job.status).toBe('COMPLETED');
+
+      // 실제로 후보에서 빠졌다는 증거 — 그 리밸런스에서 거래정지가 아니었다면
+      // topN=2 라 000660 도 유니버스에 들어와 거래가 났을 것이다.
+      const { trades } = ctx.container.resultsService.getTrades(jobId, { limit: 1000, offset: 0 });
+      expect(trades.some((t) => t.symbol === '000660')).toBe(false);
+
+      const run = ctx.container.resultsService.getRun(jobId)!;
+      const warnings = JSON.parse(run.warningsJson ?? '[]') as string[];
+      expect(
+        warnings.some((w) =>
+          w.includes('리밸런스 기준일에 거래정지·무거래여서 유니버스 후보에서 제외된 종목 1건'),
+        ),
+      ).toBe(true);
+    },
+  );
 });

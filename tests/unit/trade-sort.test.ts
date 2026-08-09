@@ -89,6 +89,7 @@ describe('sortOpenRows', () => {
       entryTsMs: 1_000,
       entryPrice: 100,
       lastPrice: 110,
+      lastPriceTsMs: 2_000,
       unrealizedPnl: 100,
       returnPct: 10,
       holdingTimeMs: 5_000,

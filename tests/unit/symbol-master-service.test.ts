@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
 import {
   symbolMasterCoverage,
+  symbolMasterEvents,
   symbolMasterTradingDays,
   symbolMasterVersions,
 } from '../../src/server/shared/db/schema.js';
@@ -191,6 +192,133 @@ describe('SymbolMasterService.isRangeCovered', () => {
     insertCoverage(t, '2026-02-05', '2026-03-05');
 
     expect(svc.isRangeCovered('2026-01-05', '2026-03-05')).toBe(true);
+    await t.close();
+  });
+});
+
+/**
+ * 워커 배선(Task 10)이 쓰는 조회 — DELISTED 이벤트의 oldValue 에서 shortCode 를
+ * 꺼낸다. standardCode 만으로는 봉 심볼(단축코드)과 이어지지 않기 때문이다.
+ *
+ * SCD 이행(D-045) 후 `listEvents` 는 legacy `symbol_master_events` 를 읽지 않고
+ * `symbol_master_versions` 의 버전 경계를 `diffUniverse` 로 비교해 이벤트를
+ * 파생한다. 그래서 여기서도 버전을 직접 심어 그 파생 경로를 그대로 태운다 — legacy
+ * 테이블에 행을 넣는 테스트는 `listEvents` 눈에 아예 보이지 않아 아무것도 증명하지
+ * 못한다.
+ *
+ * 파생 이벤트가 성립하려면 경계일 앞에 `observedSpanStart` 로 쓸 관측 거래일이
+ * 있어야 한다 — 그래서 각 테스트가 `insertCoverage` 로 앵커 거래일을 함께 심는다.
+ */
+describe('SymbolMasterService.delistedEventsBetween', () => {
+  it('DELISTED 이벤트의 oldValue 에서 shortCode 를 꺼낸다', async () => {
+    const t = await createTestApp();
+    const svc = makeService(t);
+    insertCoverage(t, '2020-01-01', '2026-12-31');
+    insertVersion(
+      t,
+      entry({ standardCode: 'KR7000660001', shortCode: '000660' }),
+      '2020-01-01',
+      '2026-03-10',
+    );
+
+    const rows = svc.delistedEventsBetween('2026-01-01', '2026-12-31');
+
+    expect(rows).toEqual([{ shortCode: '000660', effectiveDate: '2026-03-10' }]);
+    await t.close();
+  });
+
+  it('DELISTED 가 아닌 이벤트는 제외한다', async () => {
+    const t = await createTestApp();
+    const svc = makeService(t);
+    insertCoverage(t, '2020-01-01', '2026-12-31');
+    // 같은 종목이 폐지 없이 유통주식수만 바뀌는 경계 — SHARES_CHANGED 로 파생되고
+    // DELISTED 가 아니므로 걸러져야 한다.
+    insertVersion(
+      t,
+      entry({ standardCode: 'KR7005930003', sharesOutstanding: '100' }),
+      '2020-01-01',
+      '2026-03-10',
+    );
+    insertVersion(
+      t,
+      entry({ standardCode: 'KR7005930003', sharesOutstanding: '90' }),
+      '2026-03-10',
+      null,
+    );
+
+    expect(svc.delistedEventsBetween('2026-01-01', '2026-12-31')).toEqual([]);
+    await t.close();
+  });
+
+  it('구간 밖에서 폐지된 종목은 제외한다', async () => {
+    const t = await createTestApp();
+    const svc = makeService(t);
+    insertCoverage(t, '2020-01-01', '2026-12-31');
+    insertVersion(
+      t,
+      entry({ standardCode: 'KR7000660001', shortCode: '000660' }),
+      '2020-01-01',
+      '2025-12-31',
+    );
+
+    expect(svc.delistedEventsBetween('2026-01-01', '2026-12-31')).toEqual([]);
+    await t.close();
+  });
+
+  it('effectiveDate 오름차순, 같은 날짜는 id(=날짜:표준코드:이벤트타입) 순서로 정렬한다', async () => {
+    const t = await createTestApp();
+    const svc = makeService(t);
+    insertCoverage(t, '2020-01-01', '2026-12-31');
+    insertVersion(
+      t,
+      entry({ standardCode: 'KR7005930003', shortCode: '005930' }),
+      '2020-01-01',
+      '2026-05-01',
+    );
+    insertVersion(
+      t,
+      entry({ standardCode: 'KR7000660001', shortCode: '000660' }),
+      '2020-01-01',
+      '2026-03-10',
+    );
+    insertVersion(
+      t,
+      entry({ standardCode: 'KR7900001008', shortCode: '900001' }),
+      '2020-01-01',
+      '2026-03-10',
+    );
+
+    expect(svc.delistedEventsBetween('2026-01-01', '2026-12-31')).toEqual([
+      { shortCode: '000660', effectiveDate: '2026-03-10' },
+      { shortCode: '900001', effectiveDate: '2026-03-10' },
+      { shortCode: '005930', effectiveDate: '2026-05-01' },
+    ]);
+    await t.close();
+  });
+
+  /**
+   * 회귀 방지 — SCD 이행 전 구현은 `delistedEventsBetween` 이 `symbol_master_events`
+   * 를 직접 SELECT 했다. 이행 후 그 테이블에는 더 이상 아무것도 쓰이지 않으므로,
+   * 여전히 그 테이블을 읽는 구현이었다면 이 테스트는 에러도 경고도 없이 빈 배열만
+   * 돌려주는 낙관적 오답을 냈을 것이다 — 청산이 조용히 사라지는 바로 그 시나리오다.
+   * `symbol_master_events` 가 실제로 비어 있음을 함께 확인해 "legacy 테이블은
+   * 출처가 아니다" 라는 사실 자체를 고정한다.
+   */
+  it('symbol_master_events 에 아무것도 쓰지 않은 채로 SCD 버전만으로 상장폐지를 찾아낸다', async () => {
+    const t = await createTestApp();
+    const svc = makeService(t);
+    insertCoverage(t, '2020-01-01', '2026-12-31');
+    insertVersion(
+      t,
+      entry({ standardCode: 'KR7005380001', shortCode: '005380' }),
+      '2020-01-01',
+      '2026-06-15',
+    );
+
+    const rows = svc.delistedEventsBetween('2026-01-01', '2026-12-31');
+
+    expect(rows).toEqual([{ shortCode: '005380', effectiveDate: '2026-06-15' }]);
+    expect(t.container.database.db.select().from(symbolMasterEvents).all()).toHaveLength(0);
     await t.close();
   });
 });

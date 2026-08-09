@@ -3,12 +3,15 @@ import type { Logger } from '../../../shared/logger.js';
 import type { SymbolMasterEntry } from '../../market-data/domain/symbol-master.js';
 import type { SymbolMasterService } from '../../market-data/application/symbol-master-service.js';
 import type { UniverseRule } from '../../../../shared/schemas/universe-rule.js';
+import { addCalendarDays } from '../../market-data/domain/kst-date.js';
 
 export interface UniverseScheduleEntry {
   readonly rebalanceDate: string; // ISO
   /** 유니버스·시총을 실제로 읽은 거래일. 휴장이면 rebalanceDate 보다 앞선다 */
   readonly effectiveTradingDate: string;
   readonly symbols: readonly string[]; // shortCode, 시총 내림차순 상위 N
+  /** 그날 거래불가라 후보에서 뺀 종목 수 — 조용히 빠지면 추적할 방법이 없다 */
+  readonly excludedNonTradingCount: number;
 }
 
 export interface ResolvedUniverse {
@@ -29,6 +32,15 @@ export interface ResolvedUniverse {
 export interface UniverseRuleResolverDeps {
   readonly symbolMaster: SymbolMasterService;
   readonly logger: Logger;
+}
+
+/**
+ * 일정 전체의 거래불가 제외 건수 합계 (중복 포함). 워커는 `resolve()` 결과가 아니라
+ * job.universeScheduleJson 에 저장된 일정만 받으므로, 합산을 여기 한 곳에 두고
+ * 양쪽이 같은 함수를 부르게 한다.
+ */
+export function sumExcludedNonTrading(schedule: readonly UniverseScheduleEntry[]): number {
+  return schedule.reduce((sum, entry) => sum + entry.excludedNonTradingCount, 0);
 }
 
 /** 시총 내림차순 비교 — BigInt 차이를 Number 로 좁히면 큰 시총에서 오버플로가 나므로 부호만 본다 */
@@ -76,6 +88,27 @@ export class UniverseRuleResolver {
     const unionSymbols = new Set<string>();
     const unionEntries = new Map<string, SymbolMasterEntry>();
 
+    // 리밸런스 기준일들이 걸치는 최소·최대 날짜 한 번만 읽어 날짜별 집합으로 접는다 —
+    // 날짜마다 질의하면 리밸런스가 잦은 실행에서 같은 질의를 수십 번 반복하게 된다.
+    const nonTradingByDate = new Map<string, Set<string>>();
+    if (rebalanceDates.length > 0) {
+      const sortedDates = [...rebalanceDates].sort();
+      const first = sortedDates[0] as string;
+      const last = sortedDates[sortedDates.length - 1] as string;
+      // rebalanceDate 가 휴장일이면 effectiveTradingDateWithinCoverage 가 coverage 안에서
+      // 날짜 상한 없이 뒤로 찾아가므로, effectiveTradingDate 는 rebalanceDate 보다 앞설 수
+      // 있다 — 조회 하한을 rebalanceDate 그대로 두면 그 사이 거래불가일을 놓친다. 31일은
+      // KRX 최장 연휴(설·추석이 주말과 겹치는 경우)도 1주일 안팎이라 여유 있게 웃돈다.
+      for (const row of this.deps.symbolMaster.nonTradingDaysBetween(
+        addCalendarDays(first, -31),
+        last,
+      )) {
+        const set = nonTradingByDate.get(row.date) ?? new Set<string>();
+        set.add(row.shortCode);
+        nonTradingByDate.set(row.date, set);
+      }
+    }
+
     for (const date of rebalanceDates) {
       const effectiveTradingDate = this.deps.symbolMaster.effectiveTradingDateWithinCoverage(date);
       if (!this.deps.symbolMaster.isCovered(date) || effectiveTradingDate === undefined) {
@@ -91,9 +124,17 @@ export class UniverseRuleResolver {
         }
       }
 
+      const nonTrading = nonTradingByDate.get(effectiveTradingDate) ?? new Set<string>();
+      let excludedNonTradingCount = 0;
       const marketCaps = await this.deps.symbolMaster.getMarketCapsAt(effectiveTradingDate);
       const ranked: { entry: SymbolMasterEntry; marketCap: bigint }[] = [];
       for (const entry of candidates) {
+        // 그날 거래할 수 없으면 시총이 아무리 커도 살 수 없다 — 후보에 두면 그 자리가 헛돈다.
+        // 기준일 종가 시점에 이미 확정된 사실이라 look-ahead 가 아니다.
+        if (nonTrading.has(entry.shortCode)) {
+          excludedNonTradingCount += 1;
+          continue;
+        }
         const marketCapKrw = marketCaps.get(entry.standardCode);
         if (marketCapKrw === undefined) continue; // 시총 없는 종목은 순위에 넣지 않는다
         ranked.push({ entry, marketCap: BigInt(marketCapKrw) });
@@ -106,7 +147,7 @@ export class UniverseRuleResolver {
         unionSymbols.add(entry.shortCode);
         if (!unionEntries.has(entry.shortCode)) unionEntries.set(entry.shortCode, entry);
       }
-      schedule.push({ rebalanceDate: date, effectiveTradingDate, symbols });
+      schedule.push({ rebalanceDate: date, effectiveTradingDate, symbols, excludedNonTradingCount });
     }
 
     const scheduleHash = createHash('sha256').update(JSON.stringify(schedule)).digest('hex');

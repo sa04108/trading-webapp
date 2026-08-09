@@ -7,6 +7,8 @@ export interface OpenPositionRow {
   entryTsMs: number;
   entryPrice: number;
   lastPrice: number;
+  /** `lastPrice` 를 읽은 봉의 시각 — 기간 종료와 벌어져 있으면 stale 이다 */
+  lastPriceTsMs: number;
   unrealizedPnl: number;
   returnPct: number;
   holdingTimeMs: number;
@@ -37,6 +39,7 @@ export function openPositionRows(
       entryTsMs: p.entryTsMs,
       entryPrice: p.avgEntryPrice,
       lastPrice: p.lastPrice,
+      lastPriceTsMs: p.lastPriceTsMs,
       unrealizedPnl: p.unrealizedPnl,
       returnPct: p.returnPct,
       holdingTimeMs: Math.max(0, periodEndMs - p.entryTsMs),

@@ -3,6 +3,8 @@ import { openPositionRows } from '../../src/web/features/backtests/open-position
 
 const ENTRY_1 = Date.parse('2026-03-30T10:00:00+09:00');
 const ENTRY_2 = Date.parse('2026-03-31T14:00:00+09:00');
+const LAST_PRICE_TS_1 = Date.parse('2026-03-31T00:00:00Z');
+const LAST_PRICE_TS_2 = Date.parse('2026-03-25T00:00:00Z');
 
 const snapshotJson = JSON.stringify([
   {
@@ -11,6 +13,7 @@ const snapshotJson = JSON.stringify([
     avgEntryPrice: 70_000,
     entryTsMs: ENTRY_1,
     lastPrice: 71_000,
+    lastPriceTsMs: LAST_PRICE_TS_1,
     unrealizedPnl: 10_000,
     returnPct: 1.43,
   },
@@ -20,6 +23,7 @@ const snapshotJson = JSON.stringify([
     avgEntryPrice: 200_000,
     entryTsMs: ENTRY_2,
     lastPrice: 190_000,
+    lastPriceTsMs: LAST_PRICE_TS_2,
     unrealizedPnl: -50_000,
     returnPct: -5,
   },
@@ -43,6 +47,7 @@ describe('openPositionRows', () => {
       entryTsMs: ENTRY_1,
       entryPrice: 70_000,
       lastPrice: 71_000,
+      lastPriceTsMs: LAST_PRICE_TS_1,
       unrealizedPnl: 10_000,
       returnPct: 1.43,
       holdingTimeMs: Date.parse('2026-03-31T23:59:59+09:00') - ENTRY_1,

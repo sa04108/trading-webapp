@@ -70,15 +70,26 @@ describe('POST /backtests/universe-preview', () => {
 
     expect(res.statusCode).toBe(200);
     const body = res.json() as {
-      schedule: Array<{ rebalanceDate: string; effectiveTradingDate: string; symbols: string[] }>;
+      schedule: Array<{
+        rebalanceDate: string;
+        effectiveTradingDate: string;
+        symbols: string[];
+        excludedNonTradingCount: number;
+      }>;
       unionSymbols: string[];
       scheduleHash: string;
       uncoveredDates: string[];
       periodCovered: boolean;
       missingCandleSymbols: string[];
     };
+    // excludedNonTradingCount: 0 — 이 픽스처는 거래불가일을 채우지 않는다.
     expect(body.schedule).toEqual([
-      { rebalanceDate: '2026-01-05', effectiveTradingDate: '2026-01-05', symbols: ['005930'] },
+      {
+        rebalanceDate: '2026-01-05',
+        effectiveTradingDate: '2026-01-05',
+        symbols: ['005930'],
+        excludedNonTradingCount: 0,
+      },
     ]);
     expect(body.unionSymbols).toEqual(['005930']);
     expect(typeof body.scheduleHash).toBe('string');

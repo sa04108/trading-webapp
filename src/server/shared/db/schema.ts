@@ -594,6 +594,40 @@ export const symbolMasterCoverage = sqliteTable('symbol_master_coverage', {
   syncedAtMs: integer('synced_at_ms').notNull(),
 });
 
+/**
+ * 그날 거래할 수 없었던 종목 (거래정지·무거래). 봉이 아니라 사실 기록이다.
+ *
+ * `krx_daily_bars` 에 섞지 않는 이유: KRX 는 시·고·저를 주지 않는다. 봉으로 채우려면
+ * 없는 가격을 지어내야 한다. 테이블을 나눠 두면 청산 코드가 `lastClose` 를 체결가로
+ * 쓰는 실수를 타입 경계에서 막을 수 있다.
+ */
+export const krxNonTradingDays = sqliteTable(
+  'krx_non_trading_days',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    date: text('date').notNull(),
+    shortCode: text('short_code').notNull(),
+    market: text('market').notNull(), // KOSPI | KOSDAQ
+    /** TDD_CLSPRC 원값 — **평가용이지 체결 가능 가격이 아니다** */
+    lastClose: integer('last_close').notNull(),
+  },
+  (table) => [
+    uniqueIndex('idx_kntd_date_code').on(table.date, table.shortCode),
+    index('idx_kntd_date').on(table.date),
+  ],
+);
+
+/**
+ * 거래불가일을 채운 날짜 구간. 행이 없는 날짜가 "거래불가 종목이 없었다" 인지
+ * "아직 모른다" 인지는 이 기록으로만 갈린다. symbol_master_coverage 와 같은 구조다.
+ */
+export const krxNonTradingCoverage = sqliteTable('krx_non_trading_coverage', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  startDate: text('start_date').notNull(),
+  endDate: text('end_date').notNull(),
+  syncedAtMs: integer('synced_at_ms').notNull(),
+});
+
 /** 시총 랭킹 레이지 캐시 — 백테스트가 요청한 날짜만 쌓인다 (스펙 §데이터 모델) */
 export const symbolMasterMarketCaps = sqliteTable(
   'symbol_master_market_caps',

@@ -17,6 +17,8 @@ import type { Clock } from '../../../shared/clock.js';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import {
   krxDailyBars,
+  krxNonTradingDays,
+  krxNonTradingCoverage,
   symbolMasterCheckpointSymbols,
   symbolMasterCheckpoints,
   symbolMasterCoverage,
@@ -31,6 +33,7 @@ import type { Candle } from '../domain/candle.js';
 import { isValidCandle } from '../domain/candle.js';
 import { classifyKrxIssue } from '../domain/krx-filter-policy.js';
 import { addCalendarDays } from '../domain/kst-date.js';
+import { isNonTradingRow } from '../domain/non-trading-day.js';
 import type {
   KrxDailyTradeRow,
   KrxIssueBaseInfoRow,
@@ -469,6 +472,9 @@ export class SymbolMasterService {
         // 다른 서비스 인스턴스가 fetch 사이에 같은 휴장일을 커밋했을 수 있다.
         if (this.isCoveredIn(tx, date)) return { kind: 'ALREADY_COVERED' } as const;
         this.mergeCoverage(tx, date);
+        // 휴장일도 거래불가 커버로 남긴다. 응답 0행을 실제로 확인했으니 "봤는데 없었다" 가
+        // 맞고, 주말·공휴일을 비워 두면 앞뒤 거래일 구간이 이어지지 않아 커버 판정이 끊긴다.
+        this.mergeNonTradingCoverage(tx, date, date);
         return { kind: 'HOLIDAY' } as const;
       });
     }
@@ -522,6 +528,7 @@ export class SymbolMasterService {
       this.mergeCoverage(tx, date);
       this.recordTradingDay(tx, date);
       this.writeDailyBars(tx, date, kospiTrades, kosdaqTrades);
+      this.mergeNonTradingCoverage(tx, date, date);
       this.assertUniversesEqual(this.readUniverseAsOfInternal(date, tx), fetched, date);
       if (nextObservationDate !== undefined && preservedFuture !== undefined) {
         this.assertUniversesEqual(
@@ -854,10 +861,15 @@ export class SymbolMasterService {
    * SCD 버전·coverage·거래일 기록과 같은 트랜잭션 안에서 불러야 한다 — 따로 두면 중간에
    * 죽었을 때 커버는 됐는데 봉만 빠진 상태가 남는다.
    *
-   * 가격 4개나 거래량 중 하나라도 null 인 행(거래정지 등)은 저장할 컬럼이 NOT NULL
-   * 이라 애초에 넣을 수 없다. 건너뛰고 건수만 남긴다.
-   * null 은 아니지만 high < low 처럼 OHLC 관계가 어긋난 행도 파싱 버그일 수 있다.
-   * `isValidCandle` 로 걸러 따로 센다 — 원인이 다르면 운영자가 로그에서 구분해야 한다.
+   * KRX 는 거래정지·무거래 행을 `null` 이 아니라 시·고·저 "0", 종가는 직전가,
+   * 거래량 0 으로 준다 (실측 2026-08-08). 그 행은 `krx_non_trading_days` 에 따로
+   * 기록하고 봉으로는 넣지 않는다 — 시·고·저를 우리가 지어내지 않기 위해서다.
+   *
+   * 그래도 `null` 검사는 남긴다. 저장할 컬럼이 NOT NULL 이라 방어선이 필요하고,
+   * KRX 가 응답 모양을 바꾸면 여기서 건수로 드러난다.
+   *
+   * 위 둘 중 어디에도 안 걸리는데 `isValidCandle` 이 거부하는 행(high < low 등)은
+   * 진짜 파싱 버그다. `invalidCount` 로 따로 센다.
    *
    * 이미 있는 날짜는 건드리지 않는다. 자본변동은 계산 시점에 반영하므로(설계
    * 2026-08-08-corporate-action-continuity) 봉을 고쳐 받을 이유가 없다.
@@ -881,6 +893,7 @@ export class SymbolMasterService {
     let skipped = 0;
     let invalidCount = 0;
     const rows: (typeof krxDailyBars.$inferInsert)[] = [];
+    const nonTradingRows: (typeof krxNonTradingDays.$inferInsert)[] = [];
     for (const [market, trades] of byMarket) {
       for (const trade of trades) {
         if (
@@ -891,6 +904,15 @@ export class SymbolMasterService {
           || trade.volume === null
         ) {
           skipped += 1;
+          continue;
+        }
+        if (isNonTradingRow(trade)) {
+          nonTradingRows.push({
+            shortCode: trade.shortCode,
+            date,
+            market,
+            lastClose: trade.close,
+          });
           continue;
         }
         const candle: Candle = {
@@ -935,11 +957,28 @@ export class SymbolMasterService {
         'OHLC 값이 서로 어긋난 일봉 행을 건너뛴다',
       );
     }
+    if (nonTradingRows.length > 0) {
+      this.deps.logger.info(
+        {
+          module: 'market-data',
+          event: 'symbol-master.non-trading-days',
+          date,
+          count: nonTradingRows.length,
+        },
+        '거래정지·무거래로 봉이 없는 종목을 기록한다',
+      );
+    }
 
     // SQLite 바인딩 변수 한도(999)를 피하려 500개 단위로 나눠 넣는다 — writeCheckpoint 와 같은 이유다
     for (let i = 0; i < rows.length; i += 500) {
       tx.insert(krxDailyBars)
         .values(rows.slice(i, i + 500))
+        .onConflictDoNothing()
+        .run();
+    }
+    for (let i = 0; i < nonTradingRows.length; i += 500) {
+      tx.insert(krxNonTradingDays)
+        .values(nonTradingRows.slice(i, i + 500))
         .onConflictDoNothing()
         .run();
     }
@@ -953,6 +992,122 @@ export class SymbolMasterService {
       .where(and(lte(symbolMasterCoverage.startDate, date), gte(symbolMasterCoverage.endDate, date)))
       .get();
     return row !== undefined;
+  }
+
+  /**
+   * 구간 안의 거래불가일 전체. 날짜 오름차순, 같은 날짜 안에서는 코드 오름차순이다 —
+   * 호출부가 이 순서를 그대로 해시에 넣을 수 있어야 재현성이 흔들리지 않는다.
+   */
+  nonTradingDaysBetween(
+    from: string,
+    to: string,
+  ): readonly { date: string; shortCode: string; lastClose: number }[] {
+    return this.deps.db
+      .select({
+        date: krxNonTradingDays.date,
+        shortCode: krxNonTradingDays.shortCode,
+        lastClose: krxNonTradingDays.lastClose,
+      })
+      .from(krxNonTradingDays)
+      .where(and(gte(krxNonTradingDays.date, from), lte(krxNonTradingDays.date, to)))
+      .orderBy(asc(krxNonTradingDays.date), asc(krxNonTradingDays.shortCode))
+      .all();
+  }
+
+  /**
+   * 구간 전체를 덮는 커버 행이 하나라도 있는지.
+   *
+   * 행이 없는 날짜가 "거래불가 종목이 없었다" 인지 "아직 모른다" 인지를 이 메서드로만
+   * 가른다. 이 구분이 없으면 결과 경고가 백필 전에도 "반영한다" 고 거짓말한다.
+   *
+   * 조각을 읽는 쪽에서 이어 붙이지 않는다. 쓰는 쪽(mergeNonTradingCoverage)이 맞닿거나
+   * 겹치는 구간을 그때그때 합치므로, 저장된 구간들은 항상 서로 떨어진 최대 구간이다.
+   * 하루씩 들어오는 수집 경로는 읽기 쪽 이어붙이기만으로는 10년치에 행 수천 개를 쌓게
+   * 되는데, 쓰기 쪽에서 합치면 그 문제까지 함께 사라진다.
+   */
+  isNonTradingRangeCovered(from: string, to: string): boolean {
+    const row = this.deps.db
+      .select({ id: krxNonTradingCoverage.id })
+      .from(krxNonTradingCoverage)
+      .where(
+        and(
+          lte(krxNonTradingCoverage.startDate, from),
+          gte(krxNonTradingCoverage.endDate, to),
+        ),
+      )
+      .get();
+    return row !== undefined;
+  }
+
+  /**
+   * 이미 수집한 구간의 거래불가일을 뒤늦게 채운다.
+   *
+   * `ingestDate` 를 다시 부르지 않는다. 그쪽은 이벤트·coverage·봉을 함께 쓰므로
+   * 재실행하면 이벤트가 다시 생길 위험이 있다. 여기서는 일별매매정보만 부르고
+   * `krx_non_trading_days` 만 쓴다 — 되돌릴 것이 그 테이블 하나뿐이다.
+   *
+   * 휴장일은 응답이 0행이라 저절로 건너뛰어진다. 날짜 달력을 따로 두지 않는다.
+   */
+  async backfillNonTradingDays(from: string, to: string): Promise<{ dates: number; rows: number }> {
+    let dates = 0;
+    let rows = 0;
+    for (let date = from; date <= to; date = addCalendarDays(date, 1)) {
+      const byMarket: readonly [KrxMarket, readonly KrxDailyTradeRow[]][] = [
+        ['KOSPI', await this.deps.source.fetchDailyTrades('KOSPI', date)],
+        ['KOSDAQ', await this.deps.source.fetchDailyTrades('KOSDAQ', date)],
+      ];
+      const values: (typeof krxNonTradingDays.$inferInsert)[] = [];
+      for (const [market, trades] of byMarket) {
+        for (const trade of trades) {
+          if (trade.close === null || !isNonTradingRow(trade)) continue;
+          values.push({ shortCode: trade.shortCode, date, market, lastClose: trade.close });
+        }
+      }
+      if (byMarket.some(([, trades]) => trades.length > 0)) dates += 1;
+      if (values.length === 0) continue;
+      this.deps.db.transaction((tx) => {
+        for (let i = 0; i < values.length; i += 500) {
+          tx.insert(krxNonTradingDays).values(values.slice(i, i + 500)).onConflictDoNothing().run();
+        }
+      });
+      rows += values.length;
+    }
+    this.deps.db.transaction((tx) => this.mergeNonTradingCoverage(tx, from, to));
+    return { dates, rows };
+  }
+
+  /**
+   * [startDate, endDate] 를 거래불가 커버에 반영하며 맞닿거나 겹치는 구간과 합친다.
+   * `mergeCoverage` 와 같은 규칙을 구간 단위로 넓힌 것이다.
+   *
+   * 수집 경로는 하루씩, 백필은 한 번에 여러 날을 넣는다. 합치지 않으면 두 경로 모두
+   * 조각난 행을 쌓고, 구간 전체를 덮는 행이 없어 `isNonTradingRangeCovered` 가
+   * 실제로는 다 채운 기간을 "모른다" 로 판정한다.
+   *
+   * 수집 경로에서는 반드시 봉·거래일 기록과 같은 트랜잭션 안에서 불러야 한다 —
+   * 따로 두면 중간에 죽었을 때 거래불가일 행은 들어갔는데 커버는 안 남은 상태가 되고,
+   * 그 날짜는 재수집 게이트에 막혀 영영 커버로 바뀌지 않는다.
+   */
+  private mergeNonTradingCoverage(tx: AppDatabase, startDate: string, endDate: string): void {
+    // 하루 차이로 맞닿은 구간까지 합치려고 양쪽을 하루씩 넓혀 겹침을 본다
+    const touchStart = addCalendarDays(startDate, -1);
+    const touchEnd = addCalendarDays(endDate, 1);
+
+    let mergedStart = startDate;
+    let mergedEnd = endDate;
+    const ranges = tx.select().from(krxNonTradingCoverage).all();
+    for (const range of ranges) {
+      if (range.endDate < touchStart || range.startDate > touchEnd) continue;
+      if (range.startDate < mergedStart) mergedStart = range.startDate;
+      if (range.endDate > mergedEnd) mergedEnd = range.endDate;
+      tx.delete(krxNonTradingCoverage).where(eq(krxNonTradingCoverage.id, range.id)).run();
+    }
+
+    tx.insert(krxNonTradingCoverage).values({
+      startDate: mergedStart,
+      endDate: mergedEnd,
+      syncedAtMs: this.deps.clock.now(),
+    }).run();
   }
 
   /**
@@ -1067,6 +1222,95 @@ export class SymbolMasterService {
 
     return events.sort((a, b) =>
       a.effectiveDate.localeCompare(b.effectiveDate) || a.id.localeCompare(b.id));
+  }
+
+  /**
+   * [from, to] 구간에 효력이 발생한 상장폐지 이벤트. 백테스트 워커가 폐지 종목을
+   * 청산하는 데 쓴다.
+   *
+   * `symbol_master_events` 를 직접 읽지 않고 `listEvents` 를 거른다. 그 테이블은 SCD
+   * 이행(D-045) 전 legacy 이력일 뿐이라, 이행 후 발생한 폐지는 한 줄도 들어가지 않는다.
+   * 테이블을 읽으면 신규 폐지가 조용히 빠져 청산이 일어나지 않는데, 에러도 경고도 없이
+   * 결과만 낙관적으로 틀린다. "무엇이 폐지인가" 의 판정도 `diffUniverse` 한 곳에 남는다.
+   *
+   * shortCode 는 `oldValue` JSON 에서 꺼낸다. standardCode 만으로는 봉이 쓰는
+   * 단축코드와 이어지지 않는다 — `diffUniverse` 가 DELISTED 의 `oldValue` 에
+   * `SymbolMasterEntry` 전체를 넣으므로 정상 데이터라면 항상 있다. 파싱에 실패하거나
+   * shortCode 가 없는 행은 건너뛰고 경고를 남긴다. 조용히 버리면 워커가 왜 그 종목의
+   * 폐지를 반영하지 못했는지 아무도 추적할 수 없다.
+   */
+  delistedEventsBetween(
+    from: string,
+    to: string,
+  ): readonly { shortCode: string; effectiveDate: string }[] {
+    const result: { shortCode: string; effectiveDate: string }[] = [];
+    for (const event of this.listEvents(from, to)) {
+      if (event.eventType !== 'DELISTED') continue;
+      const shortCode = this.parseDelistedShortCode(event.oldValue, event.id, event.effectiveDate);
+      if (shortCode === undefined) continue;
+      result.push({ shortCode, effectiveDate: event.effectiveDate });
+    }
+    return result;
+  }
+
+  /**
+   * DELISTED 이벤트 한 건의 oldValue 에서 shortCode 를 꺼낸다. 실패하면 경고를 남기고 undefined 를 돌려준다.
+   *
+   * 아래 세 분기(oldValue 없음·파싱 실패·shortCode 없음)는 단위 테스트가 없다. `listEvents`
+   * 가 만드는 DELISTED oldValue 는 `diffUniverse` 가 항상 `SymbolMasterEntry` 전체를
+   * JSON.stringify 한 값이라 그 모양이 유지되는 한 이 분기들에 실제로 도달할 경로가 없다.
+   * 그래도 지우지 않는 이유는 diffUniverse 의 오래된 값이 언젠가 바뀔 수 있어서다 — 그때도
+   * 이 메서드가 throw 대신 skip+warn 으로 물러나야 손상된 이벤트 한 건이 백테스트 실행
+   * 전체를 끌고 내려가지 않는다.
+   */
+  private parseDelistedShortCode(
+    oldValue: string | null,
+    id: string,
+    effectiveDate: string,
+  ): string | undefined {
+    if (oldValue === null) {
+      this.deps.logger.warn(
+        {
+          module: 'market-data',
+          event: 'symbol-master.delisted-event-missing-old-value',
+          id,
+          effectiveDate,
+        },
+        'DELISTED 이벤트에 oldValue 가 없어 건너뛴다',
+      );
+      return undefined;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(oldValue);
+    } catch {
+      this.deps.logger.warn(
+        {
+          module: 'market-data',
+          event: 'symbol-master.delisted-event-parse-failed',
+          id,
+          effectiveDate,
+        },
+        'DELISTED 이벤트의 oldValue 파싱에 실패해 건너뛴다',
+      );
+      return undefined;
+    }
+
+    const shortCode = (parsed as { shortCode?: unknown } | null)?.shortCode;
+    if (typeof shortCode !== 'string' || shortCode.length === 0) {
+      this.deps.logger.warn(
+        {
+          module: 'market-data',
+          event: 'symbol-master.delisted-event-missing-short-code',
+          id,
+          effectiveDate,
+        },
+        'DELISTED 이벤트의 oldValue 에 shortCode 가 없어 건너뛴다',
+      );
+      return undefined;
+    }
+    return shortCode;
   }
 
   /**
