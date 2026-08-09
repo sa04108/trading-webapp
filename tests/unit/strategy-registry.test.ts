@@ -6,8 +6,14 @@ const registry = new StrategyRegistry();
 
 describe('StrategySummary 의 재무 요구 표시', () => {
   it('재무 전략은 true 로 내려간다', () => {
-    const summary = registry.list().find((s) => s.id === 'value-quality-rank');
-    expect(summary?.requiresFundamentals).toBe(true);
+    for (const id of [
+      'value-quality-rank',
+      'earnings-acceleration-rank',
+      'low-per-high-roe-rank',
+    ]) {
+      const summary = registry.list().find((s) => s.id === id);
+      expect(summary?.requiresFundamentals, id).toBe(true);
+    }
   });
 
   it('봉만 쓰는 전략은 undefined 가 아니라 false 로 내려간다', () => {
@@ -29,11 +35,50 @@ describe('전략 등록 목록', () => {
       'range-breakout',
       'cross-sectional-momentum',
       'value-quality-rank',
+      'earnings-acceleration-rank',
+      'low-per-high-roe-rank',
       'ema-trend-switch',
       'rsi-reversion',
     ]) {
       expect(ids, id).toContain(id);
     }
+  });
+});
+
+describe('재무 순위 전략 metadata', () => {
+  it('신규 ID, version, 이름, 설명을 정확히 등록한다', () => {
+    expect(registry.describe('earnings-acceleration-rank')).toEqual({
+      id: 'earnings-acceleration-rank',
+      version: '1.0.0',
+      name: '이익 가속·가격 확인 순위',
+      requiresFundamentals: true,
+      description: 'PIT 영업이익 가속과 양의 가격 모멘텀을 함께 순위화하는 동일가중 연구 전략',
+    });
+    expect(registry.describe('low-per-high-roe-rank')).toEqual({
+      id: 'low-per-high-roe-rank',
+      version: '1.0.0',
+      name: '저PER·고ROE 순위',
+      requiresFundamentals: true,
+      description: 'PIT TTM 순이익 기준 저PER과 고ROE를 결합하는 동일가중 연구 전략',
+    });
+  });
+
+  it('내부 리밸런스 계약을 제거한 기존 전략의 version을 올린다', () => {
+    expect(registry.describe('cross-sectional-momentum')?.version).toBe('2.0.0');
+    expect(registry.describe('value-quality-rank')?.version).toBe('2.0.0');
+  });
+
+  it('신규 전략 parameter JSON schema에 기본값을 노출한다', () => {
+    const earnings = registry.getParameterJsonSchema('earnings-acceleration-rank') as {
+      properties: Record<string, Record<string, unknown>>;
+    };
+    const lowPer = registry.getParameterJsonSchema('low-per-high-roe-rank') as {
+      properties: Record<string, Record<string, unknown>>;
+    };
+    expect(earnings.properties.topN?.default).toBe(40);
+    expect(earnings.properties.priceMomentumDays?.default).toBe(126);
+    expect(lowPer.properties.topN?.default).toBe(40);
+    expect(lowPer.properties.staleQuarters?.default).toBe(2);
   });
 });
 

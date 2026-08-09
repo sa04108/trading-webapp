@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { FundamentalField, FundamentalSnapshot } from '../../facts/domain/fact.js';
 import { quarterOrdinal } from '../../facts/domain/pit-fact-view.js';
+import { KR_SESSION, toLocalTime } from '../../market-data/domain/exchange-session.js';
 import type {
   StrategyBarContext,
   StrategyDecision,
@@ -8,7 +9,6 @@ import type {
   TradingStrategy,
 } from '../domain/strategy.js';
 import { rankDescending, type Scored } from './shared/rank.js';
-import { isRebalanceDue, localMonthKey } from './shared/rebalance-schedule.js';
 import { planBuyPhase, planSellPhase } from './shared/two-phase-rebalance.js';
 
 /**
@@ -32,11 +32,6 @@ export const valueQualityRankParameters = z.object({
     description:
       '두 지표 순위 합이 작은 상위 몇 종목을 동일가중으로 보유할지 정합니다. 종목당 비중은 자본의 1/N 입니다.',
   }),
-  rebalanceMonths: z.number().int().min(1).max(12).default(3).meta({
-    title: '리밸런스 주기 (개월)',
-    description:
-      '몇 개월마다 순위를 다시 매길지 정합니다. 분기 재무가 갱신되는 주기와 맞춰 3개월이 기본입니다. 새 주기의 첫 거래일에 실행됩니다.',
-  }),
   staleQuarters: z.number().int().min(1).max(8).default(2).meta({
     title: '허용 공시 지연 (분기)',
     description:
@@ -48,7 +43,6 @@ export type ValueQualityRankParameters = z.infer<typeof valueQualityRankParamete
 
 export interface ValueQualityRankState {
   readonly symbols: readonly string[];
-  lastRebalanceMonthKey: string | null;
   pendingBuys: readonly string[] | null;
 }
 
@@ -95,8 +89,9 @@ function sumFields(
 
 /** 봉 시각의 KST 월을 분기 서수로 접는다 (quarterOrdinal 과 같은 눈금) */
 export function currentQuarterOrdinal(tsMs: number): number {
-  const [year, month] = localMonthKey(tsMs).split('-').map(Number) as [number, number];
-  return year * 4 + Math.floor((month - 1) / 3);
+  const { dayIndex } = toLocalTime(tsMs, KR_SESSION);
+  const localDate = new Date(dayIndex * 86_400_000);
+  return localDate.getUTCFullYear() * 4 + Math.floor(localDate.getUTCMonth() / 3);
 }
 
 /**
@@ -160,7 +155,7 @@ export const valueQualityRankStrategy: TradingStrategy<
   ValueQualityRankState
 > = {
   id: 'value-quality-rank',
-  version: '1.0.1',
+  version: '2.0.0',
   name: '밸류·퀄리티 랭킹',
   description:
     '이익수익률(EBIT/EV)과 자본수익률(EBIT/투입자본) 순위를 합산해 상위 N 을 동일가중 보유합니다. 상장시점 재무제표가 수집된 데이터셋에서만 동작합니다.',
@@ -173,7 +168,7 @@ export const valueQualityRankStrategy: TradingStrategy<
   },
 
   initialize(context: StrategyInitializeContext): ValueQualityRankState {
-    return { symbols: [...context.symbols], lastRebalanceMonthKey: null, pendingBuys: null };
+    return { symbols: [...context.symbols], pendingBuys: null };
   },
 
   onBars(
@@ -193,10 +188,7 @@ export const valueQualityRankStrategy: TradingStrategy<
       return { orders: buys };
     }
 
-    const monthKey = localMonthKey(context.tsMs);
-    if (!isRebalanceDue(state.lastRebalanceMonthKey, monthKey, parameters.rebalanceMonths)) {
-      return { orders: [] };
-    }
+    if (!context.isRebalanceBar) return { orders: [] };
 
     const currentQuarter = currentQuarterOrdinal(context.tsMs);
     const earningsYield: Scored[] = [];
@@ -221,9 +213,8 @@ export const valueQualityRankStrategy: TradingStrategy<
       returnOnCapital.push({ symbol, score: metrics.returnOnCapital });
     }
 
-    // 재무가 아직 하나도 공시되지 않았으면 리밸런스 시점을 소진하지 않는다 —
-    // 다음 봉에서 다시 본다. 후보가 '자격 미달로' 비는 것과 구분되지 않지만, 둘 다
-    // 아무것도 사지 않는 것이 정답이므로 같은 경로로 둔다.
+    // 재무가 아직 하나도 공시되지 않았으면 이번 공유 리밸런스 봉에서는 기존 보유를
+    // 유지한다. 데이터 없음과 전 종목 자격 미달을 구분할 근거가 없으므로 같은 경로다.
     if (earningsYield.length === 0) return { orders: [] };
 
     const yieldRanks = rankDescending(earningsYield);
@@ -239,8 +230,6 @@ export const valueQualityRankStrategy: TradingStrategy<
       .filter(([, rank]) => rank <= parameters.topN)
       .map(([symbol]) => symbol)
       .sort();
-
-    state.lastRebalanceMonthKey = monthKey;
 
     const sells = planSellPhase({ targets, positions: context.portfolio.positions });
     const newEntries = targets.filter(

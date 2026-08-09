@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { runBacktest } from '../../src/server/modules/backtest/domain/engine.js';
+import { createRng } from '../../src/server/modules/backtest/domain/seeded-rng.js';
 import type { ExecutionProfile } from '../../src/server/modules/backtest/domain/types.js';
 import type {
   Fact,
@@ -8,6 +9,7 @@ import type {
 } from '../../src/server/modules/facts/domain/fact.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import { StrategyRegistry } from '../../src/server/modules/strategy/application/strategy-registry.js';
+import type { StrategyBarContext } from '../../src/server/modules/strategy/domain/strategy.js';
 import {
   computeValueQualityMetrics,
   currentQuarterOrdinal,
@@ -274,9 +276,14 @@ describe('valueQualityRankParameters', () => {
   it('기본값만으로 파싱된다', () => {
     expect(valueQualityRankParameters.parse({})).toEqual({
       topN: 20,
-      rebalanceMonths: 3,
       staleQuarters: 2,
     });
+  });
+
+  it('rebalanceMonths를 공개 파라미터에서 제거하고 unknown key를 strip한다', () => {
+    const parsed = valueQualityRankParameters.parse({ topN: 200, rebalanceMonths: 3 });
+    expect(parsed).not.toHaveProperty('rebalanceMonths');
+    expect(parsed.topN).toBe(200);
   });
 
   it('연결/별도(consolidated)는 파라미터가 아니다 — 수집 시점 선택이다', () => {
@@ -382,7 +389,29 @@ describe('밸류·퀄리티 랭킹 실행', () => {
     return out;
   }
 
-  const parameters = { topN: 1, rebalanceMonths: 3, staleQuarters: 2 };
+  const parameters = { topN: 1, staleQuarters: 2 };
+
+  it('context.isRebalanceBar가 false면 계산 가능한 재무가 있어도 주문을 내지 않는다', () => {
+    const bar = candleFor('CHEAP', 5, 1_000);
+    const noRebalanceContext: StrategyBarContext = {
+      tsMs: bar.tsMs,
+      isRebalanceBar: false,
+      bars: new Map([['CHEAP', bar]]),
+      getHistory: () => [bar],
+      portfolio: { cash: 10_000, equity: 10_000, positions: new Map() },
+      rng: createRng(1),
+      fundamentals: () => snapshot(HEALTHY, { ttmOperatingIncome: 120_000 }),
+      corporateActions: () => [],
+      tradableSymbols: new Set(['CHEAP']),
+      selectionMetric: () => null,
+    };
+    const state = valueQualityRankStrategy.initialize({
+      symbols: ['CHEAP'],
+      initialCash: 10_000,
+      rng: createRng(1),
+    });
+    expect(valueQualityRankStrategy.onBars(noRebalanceContext, state, parameters).orders).toEqual([]);
+  });
 
   it('두 지표 합산 상위만 편입한다', () => {
     const result = runBacktest(valueQualityRankStrategy, {
@@ -393,6 +422,7 @@ describe('밸류·퀄리티 랭킹 실행', () => {
       randomSeed: 1,
       maxPositions: 1,
       facts,
+      tradeFromTsMs: disclosed,
     });
     const buys = result.fills.filter((fill) => fill.side === 'BUY');
     expect(buys.length).toBeGreaterThan(0);
@@ -408,6 +438,7 @@ describe('밸류·퀄리티 랭킹 실행', () => {
       randomSeed: 1,
       maxPositions: 1,
       facts,
+      tradeFromTsMs: disclosed,
     });
     expect(result.fills).toEqual([]);
   });
@@ -420,6 +451,7 @@ describe('밸류·퀄리티 랭킹 실행', () => {
       parameters,
       randomSeed: 1,
       maxPositions: 1,
+      tradeFromTsMs: disclosed,
     });
     expect(result.fills).toEqual([]);
   });
@@ -501,10 +533,11 @@ describe('밸류·퀄리티 랭킹 실행', () => {
         candles: opposedCandles(40),
         initialCash: 10_000_000,
         execution: ZERO_COST,
-        parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+        parameters: { topN: 1, staleQuarters: 2 },
         randomSeed: 1,
         maxPositions: 1,
         facts: opposedFacts,
+        tradeFromTsMs: disclosed,
       });
       const bought = new Set(
         result.fills.filter((fill) => fill.side === 'BUY').map((fill) => fill.symbol),
@@ -518,10 +551,11 @@ describe('밸류·퀄리티 랭킹 실행', () => {
         candles: opposedCandles(40),
         initialCash: 10_000_000,
         execution: ZERO_COST,
-        parameters: { topN: 2, rebalanceMonths: 3, staleQuarters: 2 },
+        parameters: { topN: 2, staleQuarters: 2 },
         randomSeed: 1,
         maxPositions: 2,
         facts: opposedFacts,
+        tradeFromTsMs: disclosed,
       });
       const bought = new Set(
         result.fills.filter((fill) => fill.side === 'BUY').map((fill) => fill.symbol),
@@ -540,6 +574,7 @@ describe('밸류·퀄리티 랭킹 실행', () => {
       randomSeed: 1,
       maxPositions: 1,
       facts,
+      tradeFromTsMs: disclosed,
     };
     expect(runBacktest(valueQualityRankStrategy, input).fills).toEqual(
       runBacktest(valueQualityRankStrategy, input).fills,
@@ -599,12 +634,12 @@ describe('멤버십 일정 반영 랭킹 (리뷰 fix — 2026-08-05)', () => {
       candles: membershipCandles(35),
       initialCash: 10_000_000,
       execution: ZERO_COST,
-      parameters: { topN: 2, rebalanceMonths: 1, staleQuarters: 2 },
+      parameters: { topN: 2, staleQuarters: 2 },
       randomSeed: 1,
       maxPositions: 2,
       facts: membershipFacts,
       universeSchedule: [
-        { fromTsMs: START, symbols: ['A', 'B', 'C'] },
+        { fromTsMs: disclosedForMembership, symbols: ['A', 'B', 'C'] },
         { fromTsMs: START + 30 * DAY, symbols: ['B', 'C'] },
       ],
     });

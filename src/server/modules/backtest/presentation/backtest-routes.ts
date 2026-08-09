@@ -358,19 +358,6 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
   };
 
   /**
-   * 전략 내부 리밸런싱을 Task 8에서 요청 계약으로 완전히 옮기기 전까지의 임시
-   * 호환 입력이다. 저장·응답의 parameters에는 되살리지 않아 새 계약을 오염시키지 않는다.
-   */
-  const parametersForLegacyStrategySchedule = (body: BacktestRequest): Record<string, unknown> => {
-    if (typeof body.parameters.rebalanceMonths === 'number') return body.parameters;
-    const interval = body.universeRule.rebalanceInterval;
-    return {
-      ...body.parameters,
-      rebalanceMonths: interval.unit === 'MONTH' ? interval.value : 1,
-    };
-  };
-
-  /**
    * 종목 코드를 "코드(이름)" 형태로 늘어놓는다.
    * 목록이 길면 10종목만 보이고 나머지는 개수로 요약한다.
    * 유니버스 상한이 200종목이라 캡이 없으면 경고가 너무 길어진다.
@@ -494,7 +481,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     } else {
       const paramCheck = strategies.validateParameters(
         body.strategyId,
-        parametersForLegacyStrategySchedule(body),
+        body.parameters,
       );
       if (!paramCheck.ok) errors.push(paramCheck.error);
     }
@@ -656,7 +643,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
   const checkPositionCapacity = (body: BacktestRequest): string | null => {
     const validated = strategies.validateParameters(
       body.strategyId,
-      parametersForLegacyStrategySchedule(body),
+      body.parameters,
     );
     // 파라미터 자체가 스키마를 통과하지 못하는 경우는 validateSubmission 이 400 으로 말한다
     if (!validated.ok || typeof validated.value !== 'object' || validated.value === null) {

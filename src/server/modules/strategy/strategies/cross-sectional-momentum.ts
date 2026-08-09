@@ -9,7 +9,6 @@ import type {
 } from '../domain/strategy.js';
 import { splitAdjustedClose } from './shared/adjusted-price.js';
 import { rankDescending, type Scored } from './shared/rank.js';
-import { isRebalanceDue, localMonthKey } from './shared/rebalance-schedule.js';
 import { planBuyPhase, planSellPhase } from './shared/two-phase-rebalance.js';
 
 /**
@@ -45,11 +44,6 @@ export const crossSectionalMomentumParameters = z.object({
     description:
       '순위 상위 몇 종목을 동일가중으로 보유할지 정합니다. 종목당 비중은 자본의 1/N 입니다. 요청의 최대 동시 보유 종목 수보다 크게 잡으면 일부 종목이 편입되지 않습니다.',
   }),
-  rebalanceMonths: z.number().int().min(1).max(12).default(1).meta({
-    title: '리밸런스 주기 (개월)',
-    description:
-      '몇 개월마다 순위를 다시 매길지 정합니다. 새 주기의 첫 거래일에 실행됩니다. 짧게 잡으면 회전율과 거래비용이 올라갑니다.',
-  }),
   absoluteMomentumFilter: z.boolean().default(true).meta({
     title: '절대 모멘텀 필터',
     description:
@@ -62,8 +56,6 @@ export type CrossSectionalMomentumParameters = z.infer<typeof crossSectionalMome
 export interface CrossSectionalMomentumState {
   /** 유니버스 — 이번 봉에 거래가 없는 종목도 후보에서 빠지지 않게 초기화 시점에 고정한다 */
   readonly symbols: readonly string[];
-  /** 마지막 리밸런스가 일어난 KST 월 ('YYYY-MM') */
-  lastRebalanceMonthKey: string | null;
   /** 다음 봉에서 매수할 편입 종목. null 이면 매수 단계가 아니다 */
   pendingBuys: readonly string[] | null;
 }
@@ -95,7 +87,7 @@ export const crossSectionalMomentumStrategy: TradingStrategy<
   CrossSectionalMomentumState
 > = {
   id: 'cross-sectional-momentum',
-  version: '1.0.1',
+  version: '2.0.0',
   name: '횡단면 모멘텀',
   description:
     // "보정합니다" 로 단정하면 안 된다 — 분할 이력이 수집되지 않은 데이터셋에서는
@@ -114,7 +106,6 @@ export const crossSectionalMomentumStrategy: TradingStrategy<
   initialize(context: StrategyInitializeContext): CrossSectionalMomentumState {
     return {
       symbols: [...context.symbols],
-      lastRebalanceMonthKey: null,
       pendingBuys: null,
     };
   },
@@ -138,14 +129,11 @@ export const crossSectionalMomentumStrategy: TradingStrategy<
       return { orders: buys };
     }
 
-    const monthKey = localMonthKey(context.tsMs);
-    if (!isRebalanceDue(state.lastRebalanceMonthKey, monthKey, parameters.rebalanceMonths)) {
-      return { orders: [] };
-    }
+    if (!context.isRebalanceBar) return { orders: [] };
 
-    // 워밍업 중이면 아무것도 하지 않고 리밸런스 시점도 소진하지 않는다 — 첫 리밸런스는
-    // 창이 채워진 첫 봉에서 일어난다. 후보가 '필터에 걸려' 비는 경우와 구분해야 하는데,
-    // 그때는 목표가 빈 채로 진행해 전량 청산(현금)이 정답이다.
+    // 준비 파이프라인은 거래 시작 전 워밍업 이력을 채운다. 직접 엔진을 호출해 이력이
+    // 부족한 경우에는 이 공유 리밸런스 봉에서 아무 주문도 내지 않는다. 이 경우와 후보가
+    // '필터에 걸려' 빈 경우는 다르다 — 후자는 목표가 빈 채로 진행해 전량 청산한다.
     const minBars = parameters.formationDays + parameters.skipDays + 1;
     const warmedUp = state.symbols.some(
       (symbol) => context.getHistory(symbol).length >= minBars,
@@ -174,8 +162,6 @@ export const crossSectionalMomentumStrategy: TradingStrategy<
       .filter(([, rank]) => rank <= parameters.topN)
       .map(([symbol]) => symbol)
       .sort();
-
-    state.lastRebalanceMonthKey = monthKey;
 
     const sells = planSellPhase({ targets, positions: context.portfolio.positions });
     const newEntries = targets.filter(

@@ -3,12 +3,11 @@ import type { Position } from '../../src/server/modules/backtest/domain/types.js
 import type { CorporateAction } from '../../src/server/modules/facts/domain/fact.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import { splitAdjustedClose } from '../../src/server/modules/strategy/strategies/shared/adjusted-price.js';
-import { rankDescending } from '../../src/server/modules/strategy/strategies/shared/rank.js';
 import {
-  isRebalanceDue,
-  localMonthKey,
-  monthsBetween,
-} from '../../src/server/modules/strategy/strategies/shared/rebalance-schedule.js';
+  combineRanks,
+  ordinalRank,
+} from '../../src/server/modules/strategy/strategies/shared/fundamental-rank.js';
+import { rankDescending } from '../../src/server/modules/strategy/strategies/shared/rank.js';
 import {
   planBuyPhase,
   planSellPhase,
@@ -79,47 +78,22 @@ describe('rankDescending', () => {
   });
 });
 
-describe('localMonthKey (KST)', () => {
-  it('KST 기준 월을 낸다', () => {
-    // 2025-07-01 00:00 KST = 2025-06-30 15:00 UTC → KST 기준 7월
-    expect(localMonthKey(Date.UTC(2025, 5, 30, 15, 0))).toBe('2025-07');
-    // 2025-06-30 23:59 KST = 2025-06-30 14:59 UTC → 6월
-    expect(localMonthKey(Date.UTC(2025, 5, 30, 14, 59))).toBe('2025-06');
-  });
-
-  it('연말 경계를 넘긴다', () => {
-    expect(localMonthKey(Date.UTC(2025, 11, 31, 15, 0))).toBe('2026-01');
-  });
-});
-
-describe('monthsBetween', () => {
-  it('연을 넘는 개월 차를 낸다', () => {
-    expect(monthsBetween('2025-11', '2026-02')).toBe(3);
-    expect(monthsBetween('2025-01', '2025-01')).toBe(0);
-  });
-});
-
-describe('isRebalanceDue', () => {
-  it('최초 실행이면 항상 참', () => {
-    expect(isRebalanceDue(null, '2025-01', 3)).toBe(true);
-  });
-
-  it('같은 달이면 거짓', () => {
-    expect(isRebalanceDue('2025-01', '2025-01', 1)).toBe(false);
-  });
-
-  it('간격이 rebalanceMonths 미만이면 거짓', () => {
-    expect(isRebalanceDue('2025-01', '2025-02', 3)).toBe(false);
-    expect(isRebalanceDue('2025-01', '2025-03', 3)).toBe(false);
-  });
-
-  it('간격이 채워지면 참', () => {
-    expect(isRebalanceDue('2025-01', '2025-04', 3)).toBe(true);
-    expect(isRebalanceDue('2025-01', '2025-02', 1)).toBe(true);
-  });
-
-  it('휴장으로 달을 건너뛰어도 참 — 리밸런스를 놓치지 않는다', () => {
-    expect(isRebalanceDue('2025-01', '2025-06', 3)).toBe(true);
+describe('fundamental ordinal rank', () => {
+  it('ASC와 DESC를 각각 적용하고 입력 순서와 무관하게 코드로 동점을 깬다', () => {
+    const rows = [
+      { code: 'B', low: 1, high: 2 },
+      { code: 'A', low: 1, high: 3 },
+      { code: 'C', low: 3, high: 1 },
+    ];
+    const low = ordinalRank(rows, (row) => row.low, 'ASC', (row) => row.code);
+    const high = ordinalRank(rows, (row) => row.high, 'DESC', (row) => row.code);
+    expect(low.get(rows[1] as (typeof rows)[number])).toBe(1);
+    expect(low.get(rows[0] as (typeof rows)[number])).toBe(2);
+    expect(combineRanks(rows, [low, high], (row) => row.code).map((row) => row.code)).toEqual([
+      'A',
+      'B',
+      'C',
+    ]);
   });
 });
 
