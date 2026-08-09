@@ -27,6 +27,7 @@ const BASE_REQUEST = {
 const EMPTY_NEEDS: UniverseDataNeed = {
   factSymbols: [],
   actionSymbols: [],
+  priceSymbols: [],
   selectionMetricDates: [],
   priceRange: null,
 };
@@ -137,7 +138,7 @@ describe('buildBacktestPreparationPlan', () => {
       },
       resolutionNeeds: {
         ...EMPTY_NEEDS,
-        actionSymbols: ['035720', '005930'],
+        priceSymbols: ['035720', '005930'],
         priceRange: { from: '2025-11-09', to: '2026-01-02' },
       },
       finalUniverseSymbols: ['000660'],
@@ -145,11 +146,7 @@ describe('buildBacktestPreparationPlan', () => {
     });
 
     expect(plan.financial.symbols).toEqual([]);
-    expect(plan.actions).toEqual({
-      symbols: ['005930', '035720'],
-      fromYear: 2025,
-      toYear: 2026,
-    });
+    expect(plan.actions.symbols).toEqual([]);
     expect(plan.price).toEqual({
       symbols: ['005930', '035720'],
       from: '2025-11-09',

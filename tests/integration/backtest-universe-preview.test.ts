@@ -137,6 +137,7 @@ describe('POST /backtests/universe-preview', () => {
       needs: {
         factSymbols: ['005930'],
         actionSymbols: [],
+        priceSymbols: [],
         selectionMetricDates: [],
         priceRange: null,
       },
@@ -219,6 +220,7 @@ describe('POST /backtests/universe-preview', () => {
       needs: {
         factSymbols: [],
         actionSymbols: [],
+        priceSymbols: [],
         selectionMetricDates: ['2026-01-05'],
         priceRange: null,
       },

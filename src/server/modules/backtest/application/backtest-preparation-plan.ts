@@ -47,13 +47,8 @@ export function buildBacktestPreparationPlan(input: {
     fundamentalLookbackQuarters,
   );
 
-  const priceSymbols = new Set<string>();
+  const priceSymbols = new Set(resolutionNeeds.priceSymbols);
   let priceRange = resolutionNeeds.priceRange;
-  if (priceRange !== null) {
-    // UniverseDataNeed의 현재 contract에서 DECLINE 후보 종목을 보존하는 필드는
-    // actionSymbols다. Task 4가 계산한 범위는 다시 추정하지 않고 그대로 쓴다.
-    for (const symbol of resolutionNeeds.actionSymbols) priceSymbols.add(symbol);
-  }
 
   const priceWarmupBars = strategy.dataRequirements?.priceWarmupBars?.(request.parameters) ?? 0;
   if (priceWarmupBars > 0) {

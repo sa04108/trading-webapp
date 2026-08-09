@@ -316,14 +316,19 @@ export class FactSyncService {
           // 연도는 증분 재실행에서 건너뛸 수 있다.
           const fingerprintBefore = await this.storedFactsFingerprint(symbol);
           await this.repository.saveFacts(facts);
-          strategy.recordCoverage(symbol, [year], uniqueYearsFromGaps(actionGaps), this.clock.now());
-          await this.bumpVersionIfChanged(symbol, fingerprintBefore);
 
-          for (const shareYear of shareYears) requestedShareYears.add(shareYear);
+          // 저장 성공이 리포트의 확정 경계다. 뒤의 coverage나 버전 갱신이 실패해도
+          // repository에는 이미 팩트가 남았으므로, 이 수치를 먼저 반영해야 보고서가
+          // 실제 영속 상태와 어긋나지 않는다.
           savedFacts += facts.length;
           symbolSavedFacts += facts.length;
           symbolGapCount += workGaps.length;
           gaps.push(...workGaps);
+
+          strategy.recordCoverage(symbol, [year], uniqueYearsFromGaps(actionGaps), this.clock.now());
+          await this.bumpVersionIfChanged(symbol, fingerprintBefore);
+
+          for (const shareYear of shareYears) requestedShareYears.add(shareYear);
         }
 
         if (stopReason === 'DAILY_QUOTA') break;

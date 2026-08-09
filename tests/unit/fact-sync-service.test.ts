@@ -842,6 +842,48 @@ describe('FactSyncService — 증분과 취소', () => {
     expect(coverage.added.map((entry) => entry.symbol)).toEqual(['005930']);
   });
 
+  it('저장 뒤 coverage 갱신이 실패해도 이미 저장된 팩트와 gap을 리포트에 센다', async () => {
+    const repository = fakeRepository();
+    const gap = { symbol: '005930', periodKey: '2025Q1', reason: '계정 누락' };
+    const baseCoverage = fakeCoverage();
+    const failingCoverage: FactCoverageStore = {
+      ...baseCoverage,
+      addCoveredYears: () => {
+        throw new Error('coverage 쓰기 실패');
+      },
+    };
+    const service = new FactSyncService(
+      fakeSource(
+        { facts: [fact('CURRENT_ASSETS', 1)], gaps: [gap] },
+        { facts: [], gaps: [] },
+      ),
+      repository,
+      LOGGER,
+      fakeVersions(),
+      { now: () => Date.UTC(2025, 5, 1) },
+      failingCoverage,
+      fakeActionCoverage(),
+    );
+
+    const report = await service.sync({
+      symbols: ['005930'],
+      fromYear: 2025,
+      toYear: 2025,
+      consolidated: true,
+      mode: 'FULL',
+    });
+
+    expect(await repository.getFacts({ scope: 'SYMBOL' })).toHaveLength(1);
+    expect(report).toMatchObject({
+      savedFacts: 1,
+      gaps: [gap],
+      stoppedAtSymbol: '005930',
+      stopReason: 'ERROR',
+    });
+    expect(report.failureMessage).toContain('coverage 쓰기 실패');
+    expect(report.failureMessage).toContain('팩트 1건은 이미 저장');
+  });
+
   it('수집할 연도가 없는 종목은 소스를 부르지 않는다', async () => {
     const source = recordingSource();
     const service = new FactSyncService(

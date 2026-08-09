@@ -54,6 +54,8 @@ export interface UniverseRuleResolverDeps {
 export interface UniverseDataNeed {
   readonly factSymbols: readonly string[];
   readonly actionSymbols: readonly string[];
+  /** DECLINE stage 진입 후보 중 가격 warm-up이 부족한 종목. */
+  readonly priceSymbols: readonly string[];
   readonly selectionMetricDates: readonly string[];
   readonly priceRange: { from: string; to: string } | null;
 }
@@ -225,6 +227,7 @@ export class UniverseRuleResolver {
     const { selectionMetrics, candles, facts, actionCoverage } = this.requirePipelineDeps();
     const factSymbols = new Set<string>();
     const actionSymbols = new Set<string>();
+    const priceSymbols = new Set<string>();
     const selectionMetricDates = new Set<string>();
     let priceRange: { from: string; to: string } | null = null;
     const schedule: UniverseScheduleEntry[] = [];
@@ -314,11 +317,13 @@ export class UniverseRuleResolver {
             effectiveDate,
             -(stage.lookbackTradingDays * 2 + 14),
           );
-          const warmupMissing = codes.some(
+          const priceMissingCodes = codes.filter(
             (code) => (histories.get(code)?.length ?? 0) < stage.lookbackTradingDays,
           );
+          const warmupMissing = priceMissingCodes.length > 0;
           if (warmupMissing) {
             widenPriceRange(requiredFrom, effectiveDate);
+            for (const code of priceMissingCodes) priceSymbols.add(code);
             stageReady = false;
           }
 
@@ -399,6 +404,7 @@ export class UniverseRuleResolver {
     if (
       factSymbols.size > 0
       || actionSymbols.size > 0
+      || priceSymbols.size > 0
       || selectionMetricDates.size > 0
       || priceRange !== null
     ) {
@@ -407,6 +413,7 @@ export class UniverseRuleResolver {
         needs: {
           factSymbols: [...factSymbols].sort(),
           actionSymbols: [...actionSymbols].sort(),
+          priceSymbols: [...priceSymbols].sort(),
           selectionMetricDates: [...selectionMetricDates].sort(),
           priceRange,
         },

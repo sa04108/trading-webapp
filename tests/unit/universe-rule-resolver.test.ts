@@ -600,4 +600,28 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     expect(result.needs.priceRange).not.toBeNull();
     expect('schedule' in result).toBe(false);
   });
+
+  it('급하락 가격만 부족하면 자본변동과 무관하게 stage 진입 후보를 가격 대상으로 남긴다', async () => {
+    const complete = (offset: number): Candle => ({
+      symbol: '000001', market: 'KR', timeframe: '1d', tsMs: PIPELINE_TS - offset * 86_400_000,
+      open: 100, high: 100, low: 100, close: 100, volume: 1,
+    });
+    const resolver = makePipelineResolver({
+      // 000001만 3개 봉을 채웠다. 부족한 000002/000003만 가격 수집 대상이어야 한다.
+      candles: [complete(2), complete(1), complete(0)],
+      // 기본 actionCoverage는 세 후보의 2025년을 모두 덮는다. 가격 후보가
+      // actionSymbols에 기대면 이 상태에서 수집 대상을 잃는다.
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'DECLINE', limit: 1, lookbackTradingDays: 3 }]),
+      period,
+    );
+
+    expect(result.kind).toBe('NEEDS_DATA');
+    if (result.kind !== 'NEEDS_DATA') throw new Error('fixture는 가격 warm-up 부족이어야 합니다.');
+    expect(result.needs.actionSymbols).toEqual([]);
+    expect(result.needs.priceSymbols).toEqual(['000002', '000003']);
+    expect(result.needs.priceRange).not.toBeNull();
+  });
 });
