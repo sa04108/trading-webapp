@@ -641,6 +641,22 @@ export const symbolMasterMarketCaps = sqliteTable(
 );
 
 /**
+ * 날짜별 유니버스 선정 지표. 금액은 SQLite integer 범위와 JavaScript number 정밀도를
+ * 넘을 수 있어 10진 text 로 보관하고, repository 경계에서만 bigint 로 바꾼다.
+ */
+export const dailySelectionMetrics = sqliteTable(
+  'daily_selection_metrics',
+  {
+    date: text('date').notNull(),
+    standardCode: text('standard_code').notNull(),
+    marketCapKrw: text('market_cap_krw'),
+    volume: integer('volume'),
+    tradingValueKrw: text('trading_value_krw'),
+  },
+  (table) => [primaryKey({ columns: [table.date, table.standardCode] })],
+);
+
+/**
  * 실제로 거래가 있었던 날짜만 담는다. 휴장일과 무변화 거래일은 이벤트 건수로
  * 구별되지 않으므로, "거래일이었다"는 사실 자체를 별도로 남겨야 재구성 앵커를
  * 정확히 짚을 수 있다.

@@ -32,6 +32,7 @@ const dailyRowSchema = z.object({
   TDD_LWPRC: z.string().nullable().optional(),
   TDD_CLSPRC: z.string().nullable().optional(),
   ACC_TRDVOL: z.string().nullable().optional(),
+  ACC_TRDVAL: z.string().nullable().optional(),
 }).loose();
 
 /** KRX 가 새 필드를 더해도 필수 응답 필드는 계약대로 검증한다. */
@@ -104,10 +105,14 @@ export function parseDailyRows(rows: readonly Record<string, unknown>[]): KrxDai
 
     const row = parsed.data;
     const marketCap = parseNullableInt64(row.MKTCAP, 'MKTCAP');
+    const tradingValue = parseNullableInt64(row.ACC_TRDVAL, 'ACC_TRDVAL');
     return {
       shortCode: row.ISU_CD,
       name: row.ISU_NM,
       marketCapRaw: marketCap === null ? null : marketCap.toString(),
+      // 거래대금은 나중에 bigint/text 경계에서 처리한다. 여기서 Number 로 바꾸면
+      // 2^53 초과 실제 값이 조용히 손상되므로 KRX 원문 문자열을 그대로 둔다.
+      tradingValueRaw: tradingValue === null ? null : row.ACC_TRDVAL ?? null,
       open: parseNullableIntNumber(row.TDD_OPNPRC, 'TDD_OPNPRC'),
       high: parseNullableIntNumber(row.TDD_HGPRC, 'TDD_HGPRC'),
       low: parseNullableIntNumber(row.TDD_LWPRC, 'TDD_LWPRC'),

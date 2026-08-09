@@ -120,7 +120,15 @@ describe('parseDailyRows', () => {
       low: 71_000,
       close: 71_800,
       volume: 12_345_678,
+      tradingValueRaw: null,
     });
+  });
+
+  it('ACC_TRDVAL 거래대금 원문을 number 로 좁히지 않고 그대로 보존한다', () => {
+    // `Number` 로 바꾸면 이 값은 이후 더 큰 실제 거래대금에서 정밀도를 잃는다.
+    const [row] = parseDailyRows([{ ...dailyFixture(), ACC_TRDVAL: '123456789012345' }]);
+
+    expect(row?.tradingValueRaw).toBe('123456789012345');
   });
 
   it('OHLCV 4개 가격과 거래량을 콤마 없는 숫자로 파싱한다', () => {
