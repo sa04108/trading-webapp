@@ -322,6 +322,11 @@ describe('상장폐지 청산', () => {
 });
 
 describe('실행 경고', () => {
+  /** "이 백테스트가 보정하는 것" 한 줄만 꺼낸다 — 다른 줄에 같은 단어가 있어 join 으로는 못 가린다 */
+  function correctedLine(warnings: readonly string[]): string {
+    return warnings.find((warning) => warning.startsWith('이 백테스트가 보정하는 것')) ?? '';
+  }
+
   it('보정하는 항목과 보정하지 않는 항목을 갈라 적는다', () => {
     const result = runBacktest(buyOnceStrategy('A'), {
       candles: [bar('A', 0), bar('A', 1)],
@@ -336,6 +341,55 @@ describe('실행 경고', () => {
     expect(text).not.toContain('생존 편향');
     expect(text).toContain('배당');
     expect(text).toContain('유상증자 권리락');
+  });
+
+  it('실제로 넘어온 입력만 보정 항목으로 적는다', () => {
+    const result = runBacktest(buyOnceStrategy('A'), {
+      candles: [bar('A', 0), bar('A', 1)],
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 1,
+      maxPositions: 5,
+      universeSchedule: [{ fromTsMs: START, symbols: ['A'] }],
+      delistedTsMsBySymbol: new Map(),
+      nonTradingSymbolsByTsMs: new Map(),
+      nonTradingCoveredPeriod: { from: '2025-05-12', to: '2025-05-13' },
+    });
+    const corrected = correctedLine(result.warnings);
+    expect(corrected).toContain('시점별 유니버스 선정');
+    expect(corrected).toContain('상장폐지 청산');
+    expect(corrected).toContain('거래불가일');
+  });
+
+  it('거래불가 정보가 없는 실행은 거래불가일 매수 제외를 보정한다고 적지 않는다', () => {
+    // 같은 실행이 "거래불가일 매수를 제외한다" 와 "거래불가일 정보가 없습니다" 를
+    // 함께 내보내던 자리다. 백필 전 DB 의 모든 실행이 이 모순을 그대로 실어 날랐다.
+    const result = runBacktest(buyOnceStrategy('A'), {
+      candles: [bar('A', 0), bar('A', 1)],
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 1,
+      maxPositions: 5,
+      nonTradingCoveredPeriod: null,
+    });
+    expect(correctedLine(result.warnings)).not.toContain('거래불가일');
+    expect(result.warnings.join('\n')).toContain('거래불가일 정보가 없습니다');
+  });
+
+  it('유니버스 일정과 폐지 정보가 없으면 그 둘도 보정 항목에서 뺀다', () => {
+    const result = runBacktest(buyOnceStrategy('A'), {
+      candles: [bar('A', 0), bar('A', 1)],
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 1,
+      maxPositions: 5,
+    });
+    const corrected = correctedLine(result.warnings);
+    expect(corrected).not.toContain('시점별 유니버스 선정');
+    expect(corrected).not.toContain('상장폐지 청산');
   });
 
   it('거래불가 정보가 백필되지 않았으면 그 사실을 적는다', () => {

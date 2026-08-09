@@ -519,11 +519,28 @@ function* runBacktestSteps(
   // "생존 편향" 이라는 단일 라벨은 쓰지 않는다. 시점별 유니버스 선정과 상장폐지 청산은
   // 하고, 배당·권리락·과거 지수 구성원은 안 한다 — 예/아니오로 답할 수 없는 상태다.
   // 화면(universe-provenance.ts)이 같은 이유로 "생존자 편향 제거" 표현을 금지한다.
+  //
+  // 항목마다 그 보정을 실제로 돌린 입력이 들어왔을 때만 적는다. 전부 적어 두면 백필
+  // 전 DB 의 모든 실행이 "거래불가일 매수 제외" 를 보정한다고 말하면서 네 줄 아래에서
+  // "거래불가일 정보가 없습니다" 를 함께 내보낸다 — 경고가 다시 거짓말을 하는 자리다
+  // (D-046, 설계 §4). 판정 규칙은 액면분할(hasCorporateActionFacts)과 같다.
+  const correctedItems: string[] = [];
+  // 일정이 비면 엔진은 tradableSymbols 를 계속 null(제한 없음)로 두므로 유니버스 선정이 없다
+  if ((input.universeSchedule?.length ?? 0) > 0) correctedItems.push('시점별 유니버스 선정');
+  if (input.delistedTsMsBySymbol !== undefined) correctedItems.push('상장폐지 청산');
+  // 커버 구간으로만 가른다. 행이 몇 건 있어도 구간이 안 덮였으면 "모르는 날" 이 섞여 있다
+  if (input.nonTradingCoveredPeriod != null) {
+    correctedItems.push('거래불가일(거래정지·무거래) 매수 제외');
+  }
+  if (hasCorporateActionFacts) {
+    correctedItems.push('액면분할(보유 수량·평균단가·대기 주문·전략 가격 상태)');
+  }
   warnings.push(
-    '이 백테스트가 보정하는 것: 시점별 유니버스 선정, 상장폐지 청산, 거래불가일(거래정지·무거래) 매수 제외'
+    '이 백테스트가 보정하는 것: '
+      + (correctedItems.length > 0 ? correctedItems.join(', ') : '없습니다')
       + (hasCorporateActionFacts
-        ? ', 액면분할(보유 수량·평균단가·대기 주문·전략 가격 상태). 보정 종가를 쓰는 전략은 '
-          + '신호 계산에도 반영됩니다. 이미 체결된 거래의 체결가는 조정하지 않습니다.'
+        ? '. 보정 종가를 쓰는 전략은 신호 계산에도 반영됩니다. '
+          + '이미 체결된 거래의 체결가는 조정하지 않습니다.'
         : '. 액면분할은 이 실행에서 보정되지 않았습니다 (분할 이력 미수집).'),
   );
   warnings.push(
