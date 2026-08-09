@@ -33,6 +33,32 @@ function ask(question: string, hidden = false): Promise<string> {
   });
 }
 
+/**
+ * DB 를 새 릴리스가 기대하는 상태로 올려 둔다 — 스키마 마이그레이션과 데이터
+ * 마이그레이션을 전부 포함한다.
+ *
+ * 하는 일이 "컨테이너를 한 번 만들고 닫는다" 인 이유: 스키마 마이그레이션은
+ * `openDatabase` 가, 데이터 마이그레이션은 각 서비스 생성자가 이미 돌린다
+ * (`SymbolMasterService` 의 SCD 이행 등). 컨테이너 조립이 그 둘을 모두 태우므로
+ * 마이그레이션 목록을 여기에 따로 두지 않는다. 앞으로 같은 패턴의 데이터
+ * 마이그레이션이 늘어도 이 명령은 손대지 않아도 된다.
+ *
+ * 배포가 서비스를 멈춘 창에서 이걸 먼저 부른다. 그러지 않으면 부팅 안에서
+ * 마이그레이션이 돌아 포트가 늦게 열리고, 무거운 데이터 마이그레이션 한 번에
+ * readiness 확인이 타임아웃한다 — 2026-08-09 배포 장애가 그 경로였다
+ * (SCD 이행 16초, readiness 창 18초).
+ */
+async function dbPrepare(): Promise<void> {
+  const config = loadConfig();
+  const startedAtMs = Date.now();
+  const container = createContainer(config);
+  try {
+    console.log(`DB 준비 완료 (${Date.now() - startedAtMs}ms): ${config.databasePath}`);
+  } finally {
+    container.close();
+  }
+}
+
 async function adminCreate(): Promise<void> {
   const config = loadConfig();
   const container = createContainer(config);
@@ -319,6 +345,9 @@ async function krxBackfillNonTrading(argv: readonly string[]): Promise<void> {
 async function main(): Promise<void> {
   const command = process.argv[2];
   switch (command) {
+    case 'db:prepare':
+      await dbPrepare();
+      break;
     case 'admin:create':
       await adminCreate();
       break;
@@ -333,6 +362,7 @@ async function main(): Promise<void> {
       break;
     default:
       console.log('사용법: cli <command>');
+      console.log('  db:prepare     스키마·데이터 마이그레이션 적용 (서비스 기동 전에 실행)');
       console.log('  admin:create   관리자 계정 생성');
       console.log('  totp:enroll    TOTP 2단계 인증 등록·재발급 (CLI 전용)');
       console.log('  facts:sync     DART 재무·자본변동 수집 (--symbols <코드,코드,...> --from <연도> --to <연도> [--fs-div CFS|OFS])');

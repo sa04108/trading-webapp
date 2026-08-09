@@ -24,8 +24,13 @@
 # 비밀값을 command line argument 로 넘기지 않는다.
 set -euo pipefail
 
+# 기본 창은 60회 × 2초 = 2분이다. 옛 값(10회 = 18초)은 부팅이 마이그레이션까지
+# 떠안던 시절에도 빠듯했고, 2026-08-09 배포가 그 창을 2초 차이로 넘겨 롤백됐다.
+# 지금은 마이그레이션이 기동 전으로 빠져 부팅이 다시 짧지만, 창을 넓게 두는 값은
+# 여전히 필요하다 — EC2 t계열은 CPU 크레딧 상태에 따라 기동 시간이 흔들린다.
+# 넓혀도 정상 배포는 첫 시도에 통과하므로 배포 시간이 늘지 않는다.
 wait_for_ready() {
-  local max_attempts="${1:-10}"
+  local max_attempts="${1:-60}"
   local delay_seconds="${2:-2}"
   local attempt
   for ((attempt = 1; attempt <= max_attempts; attempt += 1)); do
@@ -283,7 +288,33 @@ sudo ln -sfn "/opt/quant-platform/releases/${RELEASE}" /opt/quant-platform/curre
 # 남은 채 롤백이 아예 돌지 않는다 (D-010 이 막으려던 바로 그 상태).
 DEPLOY_FAILED=0
 DEPLOY_ATTEMPT_STARTED_AT="\$(date --iso-8601=seconds)"
-sudo systemctl restart quant-platform || DEPLOY_FAILED=1
+
+# restart 를 stop → 마이그레이션 → start 로 나눈다.
+#
+# 마이그레이션을 부팅 안에서 돌리면 그동안 포트가 열리지 않아 readiness 확인이
+# 타임아웃한다 (2026-08-09 장애: SCD 이행 16초 vs readiness 창 18초). 게다가
+# 롤백이 DB 스냅샷을 되돌리므로 재시도해도 진행이 쌓이지 않아 같은 자리를 맴돈다.
+#
+# 서비스를 먼저 멈추는 이유는 DB 를 잡은 프로세스가 없는 창에서 스키마를 바꾸기
+# 위해서다. 옛 코드가 새 스키마를 만나는 구간을 만들지 않는다 (D-010).
+sudo systemctl stop quant-platform || DEPLOY_FAILED=1
+
+# 서비스와 같은 User·EnvironmentFile 로 돌린다 — DB 파일 소유자가 어긋나지 않고
+# 비밀값이 command line argument 로 새지 않는다. --wait 로 종료 코드를 그대로 받는다.
+if [ "\${DEPLOY_FAILED}" -eq 0 ]; then
+  sudo systemd-run --quiet --pipe --wait --collect \
+    --unit=quant-platform-db-prepare \
+    --property=User=quant \
+    --property=Group=quant \
+    --property=EnvironmentFile=/etc/quant-platform/app.env \
+    --property=WorkingDirectory=/opt/quant-platform/current \
+    /usr/local/bin/node /opt/quant-platform/current/dist/server/cli.js db:prepare \
+    || DEPLOY_FAILED=1
+fi
+
+if [ "\${DEPLOY_FAILED}" -eq 0 ]; then
+  sudo systemctl start quant-platform || DEPLOY_FAILED=1
+fi
 
 if [ "\${DEPLOY_FAILED}" -eq 0 ]; then
   wait_for_ready || DEPLOY_FAILED=1
