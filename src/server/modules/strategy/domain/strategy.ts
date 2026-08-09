@@ -1,6 +1,6 @@
 import type { z } from 'zod';
 import type { Candle } from '../../market-data/domain/candle.js';
-import type { OrderIntent, Position } from '../../backtest/domain/types.js';
+import type { OrderIntent, Position, SelectionMetricPin } from '../../backtest/domain/types.js';
 import type { Rng } from '../../backtest/domain/seeded-rng.js';
 import type { CorporateAction, FundamentalSnapshot } from '../../facts/domain/fact.js';
 
@@ -19,6 +19,8 @@ export interface StrategyInitializeContext {
 
 export interface StrategyBarContext {
   readonly tsMs: number;
+  /** 공유 멤버십 일정이 이 실제 거래 봉에서 처음 활성화됐을 때만 true */
+  readonly isRebalanceBar: boolean;
   /** 이번 시점에 확정된 봉 (심볼별) */
   readonly bars: ReadonlyMap<string, Candle>;
   /** 현재 시점까지 확정된 봉 이력 — 미래 봉은 절대 포함되지 않는다 */
@@ -38,6 +40,8 @@ export interface StrategyBarContext {
    * (엔진의 리스크 검증도 이때는 항상 통과시킨다).
    */
   readonly tradableSymbols: ReadonlySet<string> | null;
+  /** 현재 활성 schedule member에 제출 시점에 pin된 선정 지표 */
+  selectionMetric(symbol: string): SelectionMetricPin | null;
 }
 
 export interface StrategyDecision {
@@ -82,7 +86,7 @@ export interface TradingStrategy<TParameters, TState> {
 
   /**
    * 엔진이 보유 포지션을 강제로 청산한 직후 부르는 선택 훅이다.
-   * 지금은 상장폐지 청산 하나뿐이다.
+   * 상장폐지 또는 리밸런스 유니버스 이탈 청산에 사용한다.
    *
    * 전략이 낸 매도가 아니므로 전략은 자기가 아직 보유 중이라고 믿는다.
    * 봉 사이에 들고 다니는 스톱 레벨·보유 플래그를 여기서 지우지 않으면

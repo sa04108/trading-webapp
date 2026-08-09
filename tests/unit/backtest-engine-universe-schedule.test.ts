@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { runBacktest } from '../../src/server/modules/backtest/domain/engine.js';
 import type { ExecutionProfile, OrderIntent } from '../../src/server/modules/backtest/domain/types.js';
+import { CORPORATE_ACTION_FIELD, type Fact } from '../../src/server/modules/facts/domain/fact.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import type { StrategyBarContext, TradingStrategy } from '../../src/server/modules/strategy/domain/strategy.js';
 
@@ -26,6 +27,22 @@ function bar(index: number, price: number, overrides: Partial<Candle> = {}): Can
     close: price,
     volume: 100,
     ...overrides,
+  };
+}
+
+function member(
+  symbol: string,
+  metrics: {
+    marketCapKrw?: string | null;
+    volume?: number | null;
+    tradingValueKrw?: string | null;
+  } = {},
+) {
+  return {
+    symbol,
+    marketCapKrw: metrics.marketCapKrw ?? null,
+    volume: metrics.volume ?? null,
+    tradingValueKrw: metrics.tradingValueKrw ?? null,
   };
 }
 
@@ -77,21 +94,25 @@ describe('runBacktest — 멤버십 일정 기반 거래 대상 제한 (스펙 2
     expect(result.warnings.some((w) => w.includes('B'))).toBe(true);
   });
 
-  it('2구간 전환 후에는 B 가 매수되고, 보유 중이던 A 는 REBALANCE_EXIT 경로가 아니라 전략 자체 매도로 청산된다', () => {
-    // A 는 봉0 신호 → 봉1 체결. 봉2 부터 일정이 B 로 전환된다.
-    // 전략이 봉2 에서 A 를 매도하면(보유분 청산은 항상 허용) 봉3 시가에서 체결되고,
-    // 그 사이 B 는 일정 전환 이후 봉2 신호 → 봉3 체결로 새로 편입된다.
+  it('리밸런스 이탈 매도를 전략 매도와 한 건으로 접고, 청산 다음 봉에 신규 편입을 매수한다', () => {
+    // A 는 봉0 신호 → 봉1 체결. 봉2 에 B 유니버스가 활성화되면 엔진이 A 전량
+    // REBALANCE_EXIT 를 예약한다. 전략도 같은 A 매도를 내지만 엔진 주문 한 건만 남고,
+    // B 매수는 봉3 청산 뒤 대기열로 승격돼 봉4 시가에서 체결되어야 한다.
     const candles = [
       bar(0, 100),
       bar(1, 100),
       bar(2, 100),
       bar(3, 100),
+      bar(4, 100),
       bar(0, 200, { symbol: 'B' }),
       bar(1, 200, { symbol: 'B' }),
       bar(2, 200, { symbol: 'B' }),
       bar(3, 200, { symbol: 'B' }),
+      bar(4, 200, { symbol: 'B' }),
     ];
 
+    const rebalanceBars: number[] = [];
+    const forcedExitSymbols: string[] = [];
     const buyBFrom2: TradingStrategy<unknown, { seen: number }> = {
       id: 'test-buy-b-from-2',
       version: '1.0.0',
@@ -100,6 +121,7 @@ describe('runBacktest — 멤버십 일정 기반 거래 대상 제한 (스펙 2
       parameterSchema: z.unknown(),
       initialize: () => ({ seen: 0 }),
       onBars(context, state) {
+        if (context.isRebalanceBar) rebalanceBars.push(context.tsMs);
         const orders: OrderIntent[] = [];
         // 봉0 에서 A 매수(1구간에서 유효), 봉2 이후 B 매수 시도(2구간 전환 후 유효)
         if (state.seen === 0) orders.push({ symbol: 'A', side: 'BUY', quantity: 1 });
@@ -113,6 +135,9 @@ describe('runBacktest — 멤버십 일정 기반 거래 대상 제한 (스펙 2
         state.seen += 1;
         return { orders };
       },
+      onForcedExit(symbol) {
+        forcedExitSymbols.push(symbol);
+      },
     };
 
     const result = runBacktest(buyBFrom2 as never, {
@@ -123,16 +148,20 @@ describe('runBacktest — 멤버십 일정 기반 거래 대상 제한 (스펙 2
       randomSeed: 42,
       maxPositions: 5,
       universeSchedule: [
-        { fromTsMs: START, symbols: ['A'] },
-        { fromTsMs: START + 2 * HOUR, symbols: ['B'] },
+        { fromTsMs: START, members: [member('A')] },
+        { fromTsMs: START + 2 * HOUR, members: [member('B')] },
       ],
     });
 
     const aFills = result.fills.filter((f) => f.symbol === 'A');
     const bFills = result.fills.filter((f) => f.symbol === 'B');
-    expect(aFills.filter((f) => f.side === 'BUY')).toHaveLength(1); // 1구간 매수 성공, 2구간 재매수는 거부
-    expect(aFills.some((f) => f.side === 'SELL')).toBe(true); // 보유분 청산은 유니버스와 무관하게 허용
-    expect(bFills.some((f) => f.side === 'BUY')).toBe(true); // 2구간 전환 후 매수 성공
+    expect(aFills.filter((f) => f.side === 'BUY')).toHaveLength(1);
+    expect(aFills.filter((f) => f.side === 'SELL')).toHaveLength(1);
+    expect(result.trades.find((trade) => trade.symbol === 'A')?.exitReason).toBe('REBALANCE_EXIT');
+    expect(bFills.filter((f) => f.side === 'BUY')).toHaveLength(1);
+    expect(bFills.find((f) => f.side === 'BUY')?.tsMs).toBe(START + 4 * HOUR);
+    expect(forcedExitSymbols).toEqual(['A']);
+    expect(rebalanceBars).toEqual([START, START + 2 * HOUR]);
   });
 
   it('일정 밖 심볼의 BUY 의도는 거부되고 종목당 한 번만 warning 이 쌓인다', () => {
@@ -233,4 +262,255 @@ describe('runBacktest — 멤버십 일정 기반 거래 대상 제한 (스펙 2
     expect(seenAtFirstBar).toBeInstanceOf(Set);
     expect([...(seenAtFirstBar as ReadonlySet<string>)]).toEqual(['A']);
   });
+
+  it('warm-up은 PIT·자본변동·history·전략 state만 갱신하고 주문·자산곡선·진행률을 남기지 않는다', () => {
+    const day = 86_400_000;
+    const times = [START, START + day, START + 2 * day, START + 3 * day];
+    const seen: Array<{
+      tsMs: number;
+      history: number;
+      netIncome: number | null;
+      isRebalanceBar: boolean;
+    }> = [];
+    const corporateActionRatios: number[] = [];
+    const progress: Array<{ processedBars: number; totalBars: number; currentTsMs: number }> = [];
+    const facts: Fact[] = [
+      {
+        scope: 'SYMBOL', key: 'A', field: 'NET_INCOME', periodKey: '2026Q1',
+        asOfTsMs: times[1]!, value: 123, unit: 'KRW',
+      },
+      {
+        scope: 'SYMBOL', key: 'A', field: CORPORATE_ACTION_FIELD,
+        periodKey: '2026-07-07', asOfTsMs: times[3]!, value: 2, unit: 'ratio',
+      },
+    ];
+    const strategy: TradingStrategy<unknown, { calls: number }> = {
+      id: 'warmup-observer', version: '1', name: 'warmup', description: 'warmup',
+      parameterSchema: z.unknown(),
+      initialize: () => ({ calls: 0 }),
+      onBars(context, state) {
+        state.calls += 1;
+        seen.push({
+          tsMs: context.tsMs,
+          history: context.getHistory('A').length,
+          netIncome: context.fundamentals('A')?.get('NET_INCOME') ?? null,
+          isRebalanceBar: context.isRebalanceBar,
+        });
+        // warm-up 결정을 엔진이 대기열에 넣는 회귀를 잡는다.
+        return state.calls <= 2
+          ? { orders: [{ symbol: 'A', side: 'BUY', quantity: 1 }] }
+          : { orders: [] };
+      },
+      onCorporateAction(_symbol, ratio) {
+        corporateActionRatios.push(ratio);
+      },
+    };
+
+    const result = runBacktest(strategy as never, {
+      candles: times.map((tsMs, index) => bar(index, index < 2 ? 50 : 100, { tsMs })),
+      initialCash: 10_000,
+      execution: ZERO_COST,
+      parameters: {}, randomSeed: 42, maxPositions: 5,
+      facts,
+      tradeFromTsMs: times[2],
+    }, {
+      onProgress(item) { progress.push(item); },
+    });
+
+    expect(seen.map((item) => item.history)).toEqual([1, 2, 3, 4]);
+    expect(seen.map((item) => item.netIncome)).toEqual([null, 123, 123, 123]);
+    expect(seen.filter((item) => item.isRebalanceBar).map((item) => item.tsMs)).toEqual([times[2]]);
+    expect(corporateActionRatios).toEqual([2]);
+    expect(result.fills).toEqual([]);
+    expect(result.trades).toEqual([]);
+    expect(result.equityPoints.map((point) => point.tsMs)).toEqual([times[2], times[3]]);
+    expect(result.processedBars).toBe(2);
+    expect(progress).toEqual([{ processedBars: 2, totalBars: 2, currentTsMs: times[3] }]);
+  });
+
+  it('휴일 기준 schedule entry는 다음 실제 봉에서 한 번만 활성화된다', () => {
+    const seen: Array<{ tsMs: number; isRebalanceBar: boolean }> = [];
+    const strategy: TradingStrategy<unknown, null> = {
+      id: 'holiday-activation', version: '1', name: 'holiday', description: 'holiday',
+      parameterSchema: z.unknown(), initialize: () => null,
+      onBars(context) {
+        seen.push({ tsMs: context.tsMs, isRebalanceBar: context.isRebalanceBar });
+        return { orders: [] };
+      },
+    };
+    runBacktest(strategy as never, {
+      candles: [bar(0, 100), bar(1, 100), bar(3, 100), bar(4, 100)],
+      initialCash: 10_000, execution: ZERO_COST, parameters: {}, randomSeed: 42, maxPositions: 5,
+      universeSchedule: [
+        { fromTsMs: START, members: [member('A')] },
+        { fromTsMs: START + 2 * HOUR, members: [member('A')] },
+      ],
+    });
+    expect(seen.filter((item) => item.isRebalanceBar).map((item) => item.tsMs)).toEqual([
+      START,
+      START + 3 * HOUR,
+    ]);
+  });
+
+  it('활성 schedule member의 pin된 선정 지표만 context에서 반환한다', () => {
+    const seen: unknown[] = [];
+    const strategy: TradingStrategy<unknown, null> = {
+      id: 'pinned-metrics', version: '1', name: 'metrics', description: 'metrics',
+      parameterSchema: z.unknown(), initialize: () => null,
+      onBars(context) {
+        seen.push({
+          a: context.selectionMetric('A'),
+          b: context.selectionMetric('B'),
+          missing: context.selectionMetric('C'),
+        });
+        return { orders: [] };
+      },
+    };
+    runBacktest(strategy as never, {
+      candles: [bar(0, 100), bar(1, 100), bar(2, 100)],
+      initialCash: 10_000, execution: ZERO_COST, parameters: {}, randomSeed: 42, maxPositions: 5,
+      universeSchedule: [
+        {
+          fromTsMs: START,
+          members: [member('A', { marketCapKrw: '9007199254740993', volume: 11, tradingValueKrw: '101' })],
+        },
+        {
+          fromTsMs: START + HOUR,
+          members: [member('B', { marketCapKrw: '202', volume: 22, tradingValueKrw: '303' })],
+        },
+      ],
+    });
+    expect(seen).toEqual([
+      {
+        a: { marketCapKrw: '9007199254740993', volume: 11, tradingValueKrw: '101' },
+        b: null,
+        missing: null,
+      },
+      {
+        a: null,
+        b: { marketCapKrw: '202', volume: 22, tradingValueKrw: '303' },
+        missing: null,
+      },
+      {
+        a: null,
+        b: { marketCapKrw: '202', volume: 22, tradingValueKrw: '303' },
+        missing: null,
+      },
+    ]);
+  });
+
+  it('같은 membership의 다음 entry는 리밸런스 신호만 내고 보유분을 청산하지 않는다', () => {
+    const forced: string[] = [];
+    const strategy = buyAtFirstBarAndObserveForcedExit(forced);
+    const result = runBacktest(strategy as never, {
+      candles: [bar(0, 100), bar(1, 100), bar(2, 100), bar(3, 100)],
+      initialCash: 10_000, execution: ZERO_COST, parameters: {}, randomSeed: 42, maxPositions: 5,
+      universeSchedule: [
+        { fromTsMs: START, members: [member('A')] },
+        { fromTsMs: START + 2 * HOUR, members: [member('A')] },
+      ],
+    });
+    expect(result.fills.filter((fill) => fill.side === 'SELL')).toEqual([]);
+    expect(result.trades).toEqual([]);
+    expect(forced).toEqual([]);
+  });
+
+  it('이탈 종목의 다음 거래 가능 봉이 끝까지 없으면 신규 매수를 실행하지 않고 경고한다', () => {
+    const strategy: TradingStrategy<unknown, { step: number }> = {
+      id: 'unfilled-exit', version: '1', name: 'unfilled', description: 'unfilled',
+      parameterSchema: z.unknown(), initialize: () => ({ step: 0 }),
+      onBars(context, state) {
+        const orders: OrderIntent[] = [];
+        if (state.step === 0) orders.push({ symbol: 'A', side: 'BUY', quantity: 1 });
+        if (context.isRebalanceBar && state.step > 0) {
+          orders.push({ symbol: 'B', side: 'BUY', quantity: 1 });
+        }
+        state.step += 1;
+        return { orders };
+      },
+    };
+    const result = runBacktest(strategy as never, {
+      candles: [
+        bar(0, 100), bar(1, 100),
+        bar(0, 200, { symbol: 'B' }), bar(1, 200, { symbol: 'B' }),
+        bar(2, 200, { symbol: 'B' }), bar(3, 200, { symbol: 'B' }), bar(4, 200, { symbol: 'B' }),
+      ],
+      initialCash: 10_000, execution: ZERO_COST, parameters: {}, randomSeed: 42, maxPositions: 5,
+      universeSchedule: [
+        { fromTsMs: START, members: [member('A')] },
+        { fromTsMs: START + 2 * HOUR, members: [member('B')] },
+      ],
+    });
+    expect(result.fills.some((fill) => fill.symbol === 'B' && fill.side === 'BUY')).toBe(false);
+    expect(result.warnings.some((warning) => warning.includes('리밸런스') && warning.includes('체결'))).toBe(true);
+  });
+
+  it('지연된 이탈 청산 체결 봉에서 전략이 같은 BUY를 다시 내도 다음 open에 한 건만 체결한다', () => {
+    const strategy: TradingStrategy<unknown, { step: number; rebalanceSeen: boolean }> = {
+      id: 'repeat-deferred-buy', version: '1', name: 'repeat', description: 'repeat',
+      parameterSchema: z.unknown(), initialize: () => ({ step: 0, rebalanceSeen: false }),
+      onBars(context, state) {
+        const orders: OrderIntent[] = [];
+        if (state.step === 0) orders.push({ symbol: 'A', side: 'BUY', quantity: 1 });
+        if (context.isRebalanceBar && state.step > 0) state.rebalanceSeen = true;
+        if (state.rebalanceSeen && !context.portfolio.positions.has('B')) {
+          orders.push({ symbol: 'B', side: 'BUY', quantity: 1 });
+        }
+        state.step += 1;
+        return { orders };
+      },
+    };
+    const result = runBacktest(strategy as never, {
+      candles: [
+        // A는 D2 리밸런스 뒤 D3 봉이 없어 청산이 D4까지 지연된다.
+        bar(0, 100), bar(1, 100), bar(2, 100), bar(4, 100), bar(5, 100),
+        bar(0, 200, { symbol: 'B' }), bar(1, 200, { symbol: 'B' }),
+        bar(2, 200, { symbol: 'B' }), bar(3, 200, { symbol: 'B' }),
+        bar(4, 200, { symbol: 'B' }), bar(5, 200, { symbol: 'B' }),
+      ],
+      initialCash: 10_000, execution: ZERO_COST, parameters: {}, randomSeed: 42, maxPositions: 5,
+      universeSchedule: [
+        { fromTsMs: START, members: [member('A')] },
+        { fromTsMs: START + 2 * HOUR, members: [member('B')] },
+      ],
+    });
+
+    const bBuys = result.fills.filter((fill) => fill.symbol === 'B' && fill.side === 'BUY');
+    expect(bBuys).toHaveLength(1);
+    expect(bBuys[0]?.tsMs).toBe(START + 5 * HOUR);
+  });
+
+  it('schedule이 없으면 warm-up 뒤 첫 거래 봉만 isRebalanceBar=true다', () => {
+    const seen: Array<{ tsMs: number; isRebalanceBar: boolean; tradable: ReadonlySet<string> | null }> = [];
+    const strategy: TradingStrategy<unknown, null> = {
+      id: 'legacy-no-schedule', version: '1', name: 'legacy', description: 'legacy',
+      parameterSchema: z.unknown(), initialize: () => null,
+      onBars(context) {
+        seen.push({ tsMs: context.tsMs, isRebalanceBar: context.isRebalanceBar, tradable: context.tradableSymbols });
+        return { orders: [] };
+      },
+    };
+    runBacktest(strategy as never, {
+      candles: [bar(0, 100), bar(1, 100), bar(2, 100)],
+      initialCash: 10_000, execution: ZERO_COST, parameters: {}, randomSeed: 42, maxPositions: 5,
+      tradeFromTsMs: START + HOUR,
+    });
+    expect(seen.map((item) => item.isRebalanceBar)).toEqual([false, true, false]);
+    expect(seen.every((item) => item.tradable === null)).toBe(true);
+  });
 });
+
+function buyAtFirstBarAndObserveForcedExit(
+  forced: string[],
+): TradingStrategy<unknown, { fired: boolean }> {
+  return {
+    id: 'buy-and-observe', version: '1', name: 'buy', description: 'buy',
+    parameterSchema: z.unknown(), initialize: () => ({ fired: false }),
+    onBars(_context, state) {
+      if (state.fired) return { orders: [] };
+      state.fired = true;
+      return { orders: [{ symbol: 'A', side: 'BUY', quantity: 1 }] };
+    },
+    onForcedExit(symbol) { forced.push(symbol); },
+  };
+}

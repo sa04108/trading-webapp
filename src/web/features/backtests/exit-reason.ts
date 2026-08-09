@@ -9,6 +9,7 @@ const LABELS: Record<string, string> = {
   RSI_EXIT: 'RSI 회복',
   // 엔진이 강제로 낸 청산 — 전략 신호가 아니다 (Task 8)
   DELISTED: '상장폐지',
+  REBALANCE_EXIT: '리밸런스 유니버스 이탈',
 };
 
 export function exitReasonLabel(reason: string | null): string {

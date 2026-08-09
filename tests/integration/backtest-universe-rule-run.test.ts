@@ -251,6 +251,57 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     expect(notification?.body).not.toContain('range-breakout');
   });
 
+  it('worker가 period 이전 KRX warm-up을 전략에 공급하되 결과는 period 첫 봉부터 기록한다', { timeout: 90_000 }, async () => {
+    // 000660은 warm-up 봉만 있다. period 실측 누락 경고가 전체 로드 집합이 아니라
+    // 거래 결과 구간만 보도록 topN=2 schedule에 함께 넣는다.
+    seedDailyBars(ctx.container.database.db, [
+      {
+        symbol: '000660', market: 'KR', timeframe: '1d',
+        tsMs: Date.parse('2025-08-29T00:00:00Z'),
+        open: 50_000, high: 50_500, low: 49_500, close: 50_200, volume: 1_000,
+      },
+    ]);
+    const request = {
+      ...buildRequest(2),
+      period: { from: '2025-09-01', to: '2025-10-31' },
+    };
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: request,
+    });
+    expect(created.statusCode).toBe(201);
+    const jobId = (created.json().job as { id: string }).id;
+
+    ctx.container.jobOrchestrator.tick();
+    await waitFor(() => {
+      const job = ctx.container.jobQueue.getJob(jobId);
+      return job !== null && ctx.container.jobQueue.isTerminal(job.status);
+    }, 60_000);
+
+    const job = ctx.container.jobQueue.getJob(jobId)!;
+    expect(job.error).toBeNull();
+    expect(job.status).toBe('COMPLETED');
+    const periodFromTsMs = Date.parse('2025-09-01T00:00:00Z');
+    const periodToTsMs = Date.parse('2025-10-31T23:59:59.999Z');
+    const expectedPeriodBars = dailyCandles.filter(
+      (candle) => candle.tsMs >= periodFromTsMs && candle.tsMs <= periodToTsMs,
+    ).length;
+    const full = ctx.container.resultsService.getFullExport(jobId);
+
+    expect(job.totalBars).toBe(expectedPeriodBars);
+    expect(full.equityPoints[0]?.tsMs).toBe(periodFromTsMs);
+    expect(full.equityPoints).toHaveLength(expectedPeriodBars);
+    // warm-up 마지막 상승 봉의 BUY는 결과 주문으로 만들지 않지만 전략의 pendingEntry
+    // state는 갱신된다. Sep 1에 그 상태를 해소하고 Sep 2에 다시 신호를 내므로 실제
+    // NEXT_BAR_OPEN 진입은 Sep 3이다. warm-up 자체가 없으면 lookback을 다시 채우느라
+    // 이 날짜보다 늦어진다.
+    expect(full.trades[0]?.entryTsMs).toBe(Date.parse('2025-09-03T00:00:00Z'));
+    const warnings = JSON.parse(full.run?.warningsJson ?? '[]') as string[];
+    expect(warnings.some((warning) => warning.includes('000660') && warning.includes('봉이 없어'))).toBe(true);
+  });
+
   it('봉이 없는 종목을 실행 경고로 남긴다', { timeout: 90_000 }, async () => {
     // topN=2 로 올리면 시총 2위(000660, 봉 없음)도 유니버스에 들어온다 —
     // 제출 검증은 통과하고(005930 이 겹치므로 D-025 관용) 실행에서 그 종목만 빠진다

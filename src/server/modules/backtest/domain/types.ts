@@ -42,6 +42,29 @@ export interface OrderIntent {
   readonly reason?: string;
 }
 
+/** 제출 시점 유니버스 선정 자료를 그대로 고정한 값 — 실행 중 KRX 표를 다시 읽지 않는다. */
+export interface SelectionMetricPin {
+  readonly marketCapKrw: string | null;
+  readonly volume: number | null;
+  readonly tradingValueKrw: string | null;
+}
+
+export interface BacktestUniverseScheduleMember extends SelectionMetricPin {
+  readonly symbol: string;
+}
+
+/**
+ * 엔진이 소비하는 pin된 멤버십 일정.
+ *
+ * `symbols`는 Task 7 이전에 저장된 job과 직접 엔진 호출의 호환 경로다. 새 제출은
+ * `members`를 넘겨 `StrategyBarContext.selectionMetric()`까지 재현한다.
+ */
+export interface BacktestUniverseScheduleEntry {
+  readonly fromTsMs: number;
+  readonly members?: readonly BacktestUniverseScheduleMember[];
+  readonly symbols?: readonly string[];
+}
+
 export interface Fill {
   readonly symbol: string;
   readonly side: OrderSide;

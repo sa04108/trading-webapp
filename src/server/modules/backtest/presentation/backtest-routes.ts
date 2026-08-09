@@ -141,6 +141,7 @@ function preparedPreviewToResolved(preview: BacktestUniversePreview): ResolvedUn
     rebalanceDate: entry.rebalanceDate,
     effectiveTradingDate: entry.effectiveDate,
     symbols: entry.members.map((member) => member.symbol),
+    members: entry.members,
     excludedNonTradingCount: entry.excludedNonTradingCount,
   }));
   return {

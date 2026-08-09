@@ -23,6 +23,8 @@ export interface LegacyUniverseScheduleEntry {
   /** 유니버스·시총을 실제로 읽은 거래일. 휴장이면 rebalanceDate 보다 앞선다 */
   readonly effectiveTradingDate: string;
   readonly symbols: readonly string[]; // shortCode, 시총 내림차순 상위 N
+  /** Task 7 이후 job은 전략이 실행 중 선정 지표를 재조회하지 않도록 이 pin도 보존한다. */
+  readonly members?: readonly UniverseScheduleMember[];
   /** 그날 거래불가라 후보에서 뺀 종목 수 — 조용히 빠지면 추적할 방법이 없다 */
   readonly excludedNonTradingCount: number;
 }

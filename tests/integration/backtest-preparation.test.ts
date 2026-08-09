@@ -172,6 +172,13 @@ describe('backtest preparation HTTP/SSE', () => {
       rebalanceDate: '2026-01-05',
       effectiveTradingDate: '2026-01-05',
       symbols: ['005930'],
+      members: [{
+        symbol: '005930',
+        standardCode: 'KR7005930003',
+        marketCapKrw: '500000000000000',
+        volume: null,
+        tradingValueKrw: null,
+      }],
       excludedNonTradingCount: 0,
     }]);
     const persistedPin = JSON.parse(stored.provenancePinJson!) as { scheduleHash: string };
