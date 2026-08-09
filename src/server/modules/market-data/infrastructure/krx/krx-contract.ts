@@ -64,6 +64,18 @@ export function parseNullableInt64(raw: string | null | undefined, field: string
   return value;
 }
 
+/** text-backed 거래대금은 SQLite/signed-64 범위와 무관하게 10진 원문만 검증한다. */
+function parseNullableDecimalString(raw: string | null | undefined, field: string): string | null {
+  const trimmed = (raw ?? '').trim().replaceAll(',', '');
+  if (trimmed === '' || trimmed === '-') return null;
+  if (!/^\d+$/.test(trimmed)) {
+    throw new KrxContractError(`${field} 가 정수 형식이 아닙니다: ${trimmed.slice(0, 30)}`);
+  }
+  // BigInt 는 임의 정밀도라 source text 가 signed-64 범위에 갇히지 않음을 명시한다.
+  BigInt(trimmed);
+  return trimmed;
+}
+
 /** 기본정보 행은 표시 원문을 유지하고 날짜만 안정적인 내부 형식으로 바꾼다. */
 export function parseBaseInfoRows(rows: readonly Record<string, unknown>[]): KrxIssueBaseInfoRow[] {
   return rows.map((rawRow) => {
@@ -105,7 +117,7 @@ export function parseDailyRows(rows: readonly Record<string, unknown>[]): KrxDai
 
     const row = parsed.data;
     const marketCap = parseNullableInt64(row.MKTCAP, 'MKTCAP');
-    const tradingValue = parseNullableInt64(row.ACC_TRDVAL, 'ACC_TRDVAL');
+    const tradingValue = parseNullableDecimalString(row.ACC_TRDVAL, 'ACC_TRDVAL');
     return {
       shortCode: row.ISU_CD,
       name: row.ISU_NM,

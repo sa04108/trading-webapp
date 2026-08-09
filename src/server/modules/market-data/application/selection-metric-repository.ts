@@ -20,6 +20,9 @@ function fromRow(row: typeof dailySelectionMetrics.$inferSelect): DailySelection
   };
 }
 
+/** portable SQLite 999-bind limit below; date 조건까지 고려해 여유를 둔다. */
+const READ_BATCH_SIZE = 500;
+
 /** KRX 선정 지표의 bigint/text 변환을 이 저장소 경계에 가둔다. */
 export class SelectionMetricRepository {
   constructor(private readonly db: AppDatabase) {}
@@ -49,30 +52,36 @@ export class SelectionMetricRepository {
   }
 
   getAt(date: string, standardCodes: readonly string[]): ReadonlyMap<string, DailySelectionMetric> {
-    if (standardCodes.length === 0) return new Map();
-    const rows = this.db.select()
-      .from(dailySelectionMetrics)
-      .where(and(
-        eq(dailySelectionMetrics.date, date),
-        inArray(dailySelectionMetrics.standardCode, [...new Set(standardCodes)]),
-      ))
-      .all();
-    return new Map(rows.map((row) => [row.standardCode, fromRow(row)]));
+    const uniqueCodes = [...new Set(standardCodes)];
+    const metrics = new Map<string, DailySelectionMetric>();
+    for (let index = 0; index < uniqueCodes.length; index += READ_BATCH_SIZE) {
+      const rows = this.db.select()
+        .from(dailySelectionMetrics)
+        .where(and(
+          eq(dailySelectionMetrics.date, date),
+          inArray(dailySelectionMetrics.standardCode, uniqueCodes.slice(index, index + READ_BATCH_SIZE)),
+        ))
+        .all();
+      for (const row of rows) metrics.set(row.standardCode, fromRow(row));
+    }
+    return metrics;
   }
 
   findMissingTradingValueDates(dates: readonly string[]): string[] {
     const requestedDates = [...new Set(dates)];
     if (requestedDates.length === 0) return [];
-    const rows = this.db.select({
-      date: dailySelectionMetrics.date,
-      tradingValueKrw: dailySelectionMetrics.tradingValueKrw,
-    })
-      .from(dailySelectionMetrics)
-      .where(inArray(dailySelectionMetrics.date, requestedDates))
-      .all();
     const complete = new Map<string, boolean>();
-    for (const row of rows) {
-      complete.set(row.date, complete.get(row.date) !== false && row.tradingValueKrw !== null);
+    for (let index = 0; index < requestedDates.length; index += READ_BATCH_SIZE) {
+      const rows = this.db.select({
+        date: dailySelectionMetrics.date,
+        tradingValueKrw: dailySelectionMetrics.tradingValueKrw,
+      })
+        .from(dailySelectionMetrics)
+        .where(inArray(dailySelectionMetrics.date, requestedDates.slice(index, index + READ_BATCH_SIZE)))
+        .all();
+      for (const row of rows) {
+        complete.set(row.date, complete.get(row.date) !== false && row.tradingValueKrw !== null);
+      }
     }
     return requestedDates.filter((date) => complete.get(date) !== true);
   }

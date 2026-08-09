@@ -795,7 +795,8 @@ export class SymbolMasterService {
         .map((row) => [row.standardCode, row.volume]));
       const rows = bars.flatMap((bar) => {
         const standardCode = standardCodeByShortCode.get(bar.shortCode);
-        if (standardCode === undefined || existingVolumes.get(standardCode) !== undefined) return [];
+        const existingVolume = standardCode === undefined ? undefined : existingVolumes.get(standardCode);
+        if (standardCode === undefined || (existingVolume !== null && existingVolume !== undefined)) return [];
         return [{ date, standardCode, marketCapKrw: null, volume: bar.volume, tradingValueKrw: null }];
       });
       for (let index = 0; index < rows.length; index += 190) {

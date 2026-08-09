@@ -131,6 +131,18 @@ describe('parseDailyRows', () => {
     expect(row?.tradingValueRaw).toBe('123456789012345');
   });
 
+  it('ACC_TRDVAL 는 Number 안전 정수와 signed-64 경계를 넘어도 원문을 보존한다', () => {
+    const rows = parseDailyRows([
+      dailyFixture({ ACC_TRDVAL: '9007199254740993' }),
+      dailyFixture({ ACC_TRDVAL: '9223372036854775808' }),
+    ]);
+
+    expect(rows.map((row) => row.tradingValueRaw)).toEqual([
+      '9007199254740993',
+      '9223372036854775808',
+    ]);
+  });
+
   it('OHLCV 4개 가격과 거래량을 콤마 없는 숫자로 파싱한다', () => {
     const [row] = parseDailyRows([
       dailyFixture({
