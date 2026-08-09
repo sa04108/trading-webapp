@@ -45,6 +45,8 @@ export interface FetchFinancialsRequest {
   /**
    * 재무제표·자본변동을 읽을 연도 (오름차순). 범위 두 값이 아닌 이유는 수집 이력이
    * 불연속일 수 있기 때문이다 — from/to 로 접으면 가운데 구멍을 수집했다고 거짓말한다.
+   * FactSyncService의 quota-aware 실행은 저장 경계를 맞추기 위해 한 요청에 한 연도만
+   * 넘기지만, CLI 외 직접 어댑터 호출과 기존 구현 호환을 위해 배열 contract는 유지한다.
    */
   readonly years: readonly number[];
   /**

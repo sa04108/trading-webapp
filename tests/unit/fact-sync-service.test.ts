@@ -637,7 +637,10 @@ describe('FactSyncService — 증분과 취소', () => {
       mode: 'FULL',
     });
 
-    expect(source.requests[0]?.years).toEqual([2020, 2021, 2022]);
+    // 재무 + 자본변동 두 소스가 각각 연도 work unit으로 호출된다.
+    expect(source.requests.map((request) => request.years)).toEqual([
+      [2020], [2020], [2021], [2021], [2022], [2022],
+    ]);
   });
 
   it('종목을 저장한 직후 그 종목의 연도를 이력에 남긴다', async () => {
@@ -661,9 +664,68 @@ describe('FactSyncService — 증분과 취소', () => {
     });
 
     expect(coverage.added).toEqual([
-      { symbol: '005930', years: [2021, 2022] },
-      { symbol: '000660', years: [2021, 2022] },
+      { symbol: '005930', years: [2021] },
+      { symbol: '005930', years: [2022] },
+      { symbol: '000660', years: [2021] },
+      { symbol: '000660', years: [2022] },
     ]);
+  });
+
+  it('다음 종목·연도 work unit 전에 quota로 멈추고 저장·이력을 보존한다', async () => {
+    const coverage = fakeCoverage();
+    const repository = fakeRepository();
+    const seenWork: Array<{ year: number; shareYears: readonly number[]; calls: number }> = [];
+    const source: FactSource = {
+      fetchFinancials: async (request) => ({
+        facts: [
+          { ...fact('CURRENT_ASSETS', request.years[0]!), periodKey: `${request.years[0]}Q1` },
+          { ...fact('CURRENT_LIABILITIES', request.years[0]!), periodKey: `${request.years[0]}Q1` },
+        ],
+        gaps: [],
+      }),
+      fetchCorporateActions: async () => ({ facts: [], gaps: [] }),
+    };
+    const service = new FactSyncService(
+      source,
+      repository,
+      LOGGER,
+      fakeVersions(),
+      { now: () => Date.UTC(2025, 5, 1) },
+      coverage,
+      fakeActionCoverage(),
+    );
+
+    const report = await service.sync(
+      {
+        symbols: ['005930'],
+        fromYear: 2024,
+        toYear: 2025,
+        consolidated: true,
+        mode: 'FULL',
+      },
+      {
+        beforeWorkUnit: (work) => {
+          seenWork.push({
+            year: work.year,
+            shareYears: work.shareYears,
+            calls: work.estimatedDartCalls,
+          });
+          return work.year === 2025 ? 'PAUSE_DAILY_QUOTA' : 'CONTINUE';
+        },
+      },
+    );
+
+    expect(seenWork).toEqual([
+      { year: 2024, shareYears: [2023, 2024], calls: 13 },
+      { year: 2025, shareYears: [2024, 2025], calls: 9 },
+    ]);
+    expect(report).toMatchObject({
+      savedFacts: 2,
+      stoppedAtSymbol: '005930',
+      stopReason: 'DAILY_QUOTA',
+    });
+    expect(repository.saved).toHaveLength(1);
+    expect(coverage.added).toEqual([{ symbol: '005930', years: [2024] }]);
   });
 
   it('shouldStop 이 true 면 그 종목 전에 멈추고 CANCELLED 로 보고한다', async () => {

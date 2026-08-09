@@ -56,6 +56,12 @@ export interface TradingStrategy<TParameters, TState> {
    * 알 수 없다. 봉만 쓰는 전략은 이 필드를 생략한다.
    */
   readonly requiresFundamentals?: boolean;
+  /** 백테스트 준비 잡이 필요한 최소 데이터 범위를 전략 구현과 같은 곳에서 읽는다. */
+  readonly dataRequirements?: {
+    readonly fundamentalLookbackQuarters?: number;
+    readonly priceWarmupBars?: (parameters: TParameters) => number;
+    readonly requiresCorporateActions?: boolean;
+  };
   readonly parameterSchema: z.ZodType<TParameters>;
 
   initialize(context: StrategyInitializeContext): TState;
