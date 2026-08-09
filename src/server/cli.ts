@@ -303,6 +303,14 @@ async function krxBackfillNonTrading(argv: readonly string[]): Promise<void> {
   try {
     const result = await container.symbolMasterService.backfillNonTradingDays(from, to);
     console.log(`거래일 ${result.dates}일에서 거래불가 ${result.rows}건을 기록했습니다.`);
+    // 커버가 안 남았으면 다음 백테스트 경고가 여전히 "정보가 없습니다" 다 — 그 이유를 여기서 밝힌다
+    if (result.dates === 0) {
+      console.error(
+        '한 날짜도 응답을 받지 못해 이 구간을 수집 완료로 기록하지 않았습니다. '
+          + 'KRX 키·기간 설정을 확인한 뒤 다시 실행하세요.',
+      );
+      process.exitCode = 1;
+    }
   } finally {
     container.close();
   }

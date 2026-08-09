@@ -68,6 +68,17 @@ const NON_TRADING_ROW = dailyFixture({
   TDD_CLSPRC: '12,100',
   ACC_TRDVOL: '0',
 });
+/** 위 응답 원문이 파서를 거치면 나오는 모양 — 소스를 직접 스텁할 때 쓴다 */
+const NON_TRADING_TRADE_ROW = {
+  shortCode: '215600',
+  name: '신라젠',
+  marketCapRaw: '866567212500',
+  open: 0,
+  high: 0,
+  low: 0,
+  close: 12_100,
+  volume: 0,
+};
 const NORMAL_ROW = dailyFixture({
   ISU_CD: '048260',
   ISU_NM: '오스템임플란트',
@@ -226,7 +237,7 @@ describe('거래불가일 백필', () => {
 
   it('나눠 부르거나 다시 불러도 커버 구간이 겹쳐 쌓이지 않는다', async () => {
     const ctx = await setup();
-    for (const basDd of ['20210615', '20210616', '20210617', '20210618']) {
+    for (const basDd of ['20210615', '20210616', '20210617', '20210618', '20210619', '20210620']) {
       ctx.fake.setResponse('ksq_bydd_trd', basDd, { body: krxEnvelope([NON_TRADING_ROW]) });
     }
 
@@ -243,15 +254,60 @@ describe('거래불가일 백필', () => {
     await teardown(ctx);
   });
 
-  it('응답이 0행인 날(휴장)은 건너뛴다', async () => {
+  it('한 날짜도 응답을 받지 못하면 커버로 남기지 않는다', async () => {
     const ctx = await setup();
-    // 어떤 날짜에도 응답을 심지 않는다 — fake 서버가 빈 OutBlock_1 을 돌려준다
+    // 어떤 날짜에도 응답을 심지 않는다 — fake 서버가 빈 OutBlock_1 을 돌려준다.
+    // 잘못 설정된 소스로 10년치를 돌린 상태가 이 모양이다. 여기서 커버를 남기면
+    // 아무것도 안 본 10년이 "다 봤다" 가 되고 실행 경고가 영영 사라진다.
     const result = await ctx.svc.backfillNonTradingDays('2021-06-15', '2021-06-16');
 
     expect(result.dates).toBe(0);
     expect(result.rows).toBe(0);
-    // 그래도 커버 구간은 남는다 — "봤는데 없었다" 와 "안 봤다" 를 갈라야 한다
+    expect(ctx.svc.isNonTradingRangeCovered('2021-06-15', '2021-06-16')).toBe(false);
+    expect(ctx.t.container.database.db.select().from(krxNonTradingCoverage).all()).toHaveLength(0);
+    await teardown(ctx);
+  });
+
+  it('응답은 받았고 거래불가 종목만 0건이면 커버로 남는다', async () => {
+    const ctx = await setup();
+    // 정상 행만 오는 날이다 — "봤는데 없었다" 는 "안 봤다" 와 갈려야 한다
+    for (const basDd of ['20210615', '20210616']) {
+      ctx.fake.setResponse('ksq_bydd_trd', basDd, { body: krxEnvelope([NORMAL_ROW]) });
+    }
+
+    const result = await ctx.svc.backfillNonTradingDays('2021-06-15', '2021-06-16');
+
+    expect(result.dates).toBe(2);
+    expect(result.rows).toBe(0);
     expect(ctx.svc.isNonTradingRangeCovered('2021-06-15', '2021-06-16')).toBe(true);
+    await teardown(ctx);
+  });
+
+  it('도중에 실패해도 그때까지 처리한 날짜는 커버로 남는다', async () => {
+    const ctx = await setup();
+    // 커버를 마지막에 한 번만 쓰면 중간에 죽었을 때 행은 들어갔는데 커버는 없는
+    // 날짜가 남는다. 그 날짜는 다시 백필하지 않는 한 영영 "모른다" 로 읽힌다.
+    const days = ['2021-06-15', '2021-06-16', '2021-06-17'];
+    const svc = new SymbolMasterService({
+      db: ctx.t.container.database.db,
+      source: {
+        fetchIssueBaseInfo: () => Promise.reject(new Error('백필은 기초정보를 부르지 않는다')),
+        fetchDailyTrades: (market, isoDate) => {
+          if (isoDate === '2021-06-17') return Promise.reject(new Error('KRX 응답 실패'));
+          return Promise.resolve(market === 'KOSDAQ' ? [NON_TRADING_TRADE_ROW] : []);
+        },
+        todayMaxEndpointCallCount: () => 0,
+      },
+      clock: ctx.t.container.clock,
+      logger: ctx.t.container.logger,
+    });
+
+    await expect(svc.backfillNonTradingDays(days[0]!, days[2]!)).rejects.toThrow('KRX 응답 실패');
+
+    expect(svc.isNonTradingRangeCovered('2021-06-15', '2021-06-16')).toBe(true);
+    // 못 본 날까지 덮었다고 말하지는 않는다
+    expect(svc.isNonTradingRangeCovered('2021-06-15', '2021-06-17')).toBe(false);
+    expect(ctx.t.container.database.db.select().from(krxNonTradingDays).all()).toHaveLength(2);
     await teardown(ctx);
   });
 });

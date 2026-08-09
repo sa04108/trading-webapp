@@ -1047,6 +1047,12 @@ export class SymbolMasterService {
    * `krx_non_trading_days` 만 쓴다 — 되돌릴 것이 그 테이블 하나뿐이다.
    *
    * 휴장일은 응답이 0행이라 저절로 건너뛰어진다. 날짜 달력을 따로 두지 않는다.
+   *
+   * 커버는 응답을 하나라도 받은 날짜까지만 넓힌다. 한 날짜도 응답이 없으면 커버를
+   * 아예 남기지 않는다 — 잘못 설정된 소스로 10년치를 돌린 실행이 아무것도 저장하지
+   * 않고 그 10년을 "다 봤다" 로 만들면, 실행 경고가 영영 사라진다. 반대로 응답을
+   * 받았는데 거래불가 종목만 0건인 날은 커버로 남긴다. "봤는데 없었다" 와 "안 봤다"
+   * 는 끝까지 갈라야 한다.
    */
   async backfillNonTradingDays(from: string, to: string): Promise<{ dates: number; rows: number }> {
     let dates = 0;
@@ -1063,15 +1069,23 @@ export class SymbolMasterService {
           values.push({ shortCode: trade.shortCode, date, market, lastClose: trade.close });
         }
       }
-      if (byMarket.some(([, trades]) => trades.length > 0)) dates += 1;
-      if (values.length === 0) continue;
+      if (byMarket.every(([, trades]) => trades.length === 0)) continue;
+      dates += 1;
+      // 행 저장과 커버를 같은 트랜잭션에 넣는다. 나누면 중간에 죽었을 때 행은 들어갔는데
+      // 커버는 없는 날짜가 남고, 그 날짜는 다시 백필하지 않는 한 영영 "모른다" 로 읽힌다.
+      // 커버를 [from, date] 로 넓히는 이유는 그 사이 응답 0행인 날(휴장·주말)도 실제로
+      // 조회했기 때문이다 — 하루씩만 넣으면 주말에서 구간이 끊긴다.
       this.deps.db.transaction((tx) => {
         for (let i = 0; i < values.length; i += 500) {
           tx.insert(krxNonTradingDays).values(values.slice(i, i + 500)).onConflictDoNothing().run();
         }
+        this.mergeNonTradingCoverage(tx, from, date);
       });
       rows += values.length;
     }
+    // 한 날짜도 응답이 없으면 본 것이 없다 — 커버를 남기지 않는다
+    if (dates === 0) return { dates, rows };
+    // 마지막 응답일 뒤의 날짜(구간 끝이 주말·휴장인 경우)까지 넓힌다. 그 날짜들도 조회는 했다.
     this.deps.db.transaction((tx) => this.mergeNonTradingCoverage(tx, from, to));
     return { dates, rows };
   }
