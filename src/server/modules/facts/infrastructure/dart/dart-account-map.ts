@@ -14,6 +14,7 @@ export interface DartAccountRule {
 const BY_ACCOUNT_ID: Record<string, DartAccountRule> = {
   'ifrs-full_ProfitLossFromOperatingActivities': { field: 'OPERATING_INCOME', statement: 'IS' },
   'dart_OperatingIncomeLoss': { field: 'OPERATING_INCOME', statement: 'IS' },
+  'ifrs-full_ProfitLoss': { field: 'NET_INCOME', statement: 'IS' },
   'ifrs-full_CurrentAssets': { field: 'CURRENT_ASSETS', statement: 'BS' },
   'ifrs-full_CurrentLiabilities': { field: 'CURRENT_LIABILITIES', statement: 'BS' },
   'ifrs-full_PropertyPlantAndEquipment': { field: 'TANGIBLE_ASSETS', statement: 'BS' },
@@ -31,6 +32,7 @@ const BY_ACCOUNT_ID: Record<string, DartAccountRule> = {
   'dart_BondsIssued': { field: 'BONDS', statement: 'BS' },
   'ifrs-full_LongtermBorrowings': { field: 'LONG_TERM_BORROWINGS', statement: 'BS' },
   'dart_LongTermBorrowings': { field: 'LONG_TERM_BORROWINGS', statement: 'BS' },
+  'ifrs-full_Equity': { field: 'TOTAL_EQUITY', statement: 'BS' },
 };
 
 /**
@@ -41,6 +43,8 @@ const BY_ACCOUNT_ID: Record<string, DartAccountRule> = {
 const BY_ACCOUNT_NAME: Record<string, DartAccountRule> = {
   영업이익: { field: 'OPERATING_INCOME', statement: 'IS' },
   '영업이익(손실)': { field: 'OPERATING_INCOME', statement: 'IS' },
+  당기순이익: { field: 'NET_INCOME', statement: 'IS' },
+  '당기순이익(손실)': { field: 'NET_INCOME', statement: 'IS' },
   유동자산: { field: 'CURRENT_ASSETS', statement: 'BS' },
   유동부채: { field: 'CURRENT_LIABILITIES', statement: 'BS' },
   유형자산: { field: 'TANGIBLE_ASSETS', statement: 'BS' },
@@ -51,6 +55,7 @@ const BY_ACCOUNT_NAME: Record<string, DartAccountRule> = {
   유동성장기차입금: { field: 'CURRENT_LONG_TERM_DEBT', statement: 'BS' },
   사채: { field: 'BONDS', statement: 'BS' },
   장기차입금: { field: 'LONG_TERM_BORROWINGS', statement: 'BS' },
+  자본총계: { field: 'TOTAL_EQUITY', statement: 'BS' },
 };
 
 /**
