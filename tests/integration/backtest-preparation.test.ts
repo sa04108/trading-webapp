@@ -407,6 +407,75 @@ describe('backtest preparation HTTP/SSE', () => {
     expect(response.json<{ error: string }>().error).toMatch(/DART/);
   });
 
+  it('unresolved 후보를 후속 ready stage가 좁혀도 누락 후보의 DART 작업을 gate한다', async () => {
+    seedReadyUniverse([
+      { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '200' },
+      { standardCode: 'KR7000660001', shortCode: '000660', name: 'SK하이닉스', market: 'KOSPI', marketCapKrw: '100' },
+    ], false);
+    registerSymbols(ctx.container, 'KR', ['005930']);
+    seedCorporateActionCoverage(ctx.container, ['005930'], [2025, 2026]);
+    ctx.container.database.db.insert(symbolFactsState).values({
+      code: '005930',
+      coveredYearsJson: JSON.stringify([2025, 2026]),
+      actionCoveredYearsJson: JSON.stringify([2025, 2026]),
+      actionGapYearsJson: JSON.stringify([]),
+      updatedAtMs: ctx.container.clock.now(),
+    }).onConflictDoUpdate({
+      target: symbolFactsState.code,
+      set: {
+        coveredYearsJson: JSON.stringify([2025, 2026]),
+        actionCoveredYearsJson: JSON.stringify([2025, 2026]),
+      },
+    }).run();
+    const input = previewInput();
+    const preparation = {
+      ...input,
+      strategyId: 'value-quality-rank',
+      universeRule: {
+        ...input.universeRule,
+        stages: [
+          { criterion: 'TRADING_VALUE' as const, limit: 1 },
+          { criterion: 'MARKET_CAP' as const, limit: 1 },
+        ],
+      },
+    };
+
+    expect(await ctx.container.backtestPreparationOrchestrator.needsDart(preparation)).toBe(true);
+    const response = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie }, payload: preparation,
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json<{ error: string }>().error).toMatch(/DART/);
+  });
+
+  it('이전 PER이 unresolved여도 후속 ready stage가 최종 empty를 증명하면 DART를 gate하지 않는다', async () => {
+    seedReadyUniverse(undefined, false);
+    ctx.container.database.db.update(dailySelectionMetrics).set({ marketCapKrw: null }).run();
+    const input = previewInput();
+    const preparation = {
+      ...input,
+      strategyId: 'value-quality-rank',
+      universeRule: {
+        ...input.universeRule,
+        stages: [
+          { criterion: 'PER' as const, limit: 1 },
+          { criterion: 'MARKET_CAP' as const, limit: 1 },
+        ],
+      },
+    };
+
+    expect(await ctx.container.backtestPreparationOrchestrator.needsDart(preparation)).toBe(false);
+    const response = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie }, payload: preparation,
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({ job: { status: 'QUEUED' } });
+  });
+
   it('재무 coverage가 있어도 value 전략의 독립된 action coverage가 비면 DART 503이다', async () => {
     seedReadyUniverse(undefined, false);
     registerSymbols(ctx.container, 'KR', ['005930']);

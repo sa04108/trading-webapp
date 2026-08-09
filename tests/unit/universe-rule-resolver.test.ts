@@ -321,6 +321,7 @@ function makePipelineResolver(options: {
   actionGaps?: ReadonlyMap<string, readonly number[]>;
   priceRangeCovered?: boolean;
   masterCovered?: boolean;
+  effectiveTradingDate?: (rebalanceDate: string) => string | undefined;
   metricReads?: string[][];
 } = {}): UniverseRuleResolver {
   const metrics = options.metrics ?? pipelineMetrics;
@@ -340,7 +341,9 @@ function makePipelineResolver(options: {
     symbolMaster: {
       isCovered: () => options.masterCovered ?? true,
       isRangeCovered: () => options.priceRangeCovered ?? false,
-      effectiveTradingDateWithinCoverage: () => options.masterCovered === false ? undefined : PIPELINE_DATE,
+      effectiveTradingDateWithinCoverage: (rebalanceDate: string) => options.masterCovered === false
+        ? undefined
+        : options.effectiveTradingDate?.(rebalanceDate) ?? PIPELINE_DATE,
       getUniverseAsOf: () => new Map(PIPELINE_ENTRIES.map((entry) => [entry.standardCode, entry])),
       getMarketCapsAt: async () => new Map(metrics.flatMap((row) =>
         row.marketCapKrw === null ? [] : [[row.standardCode, row.marketCapKrw.toString()]],
@@ -502,6 +505,66 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     if (result.kind !== 'NEEDS_DATA') throw new Error('fixture는 데이터 부족이어야 합니다.');
     expect([...result.unionEntries.keys()]).toEqual(['000001', '000002', '000003']);
     expect(result.needs.priceRange).not.toBeNull();
+  });
+
+  it('첫 unresolved stage의 후보 상한을 후속 ready stage의 non-empty 선택으로 좁히지 않는다', async () => {
+    const resolver = makePipelineResolver({ missingTradingValueDates: [PIPELINE_DATE] });
+
+    const result = await resolver.resolveOrDescribeNeeds(pipelineRule([
+      { criterion: 'TRADING_VALUE', limit: 1 },
+      { criterion: 'MARKET_CAP', limit: 1 },
+    ]), period);
+
+    expect(result.kind).toBe('NEEDS_DATA');
+    if (result.kind !== 'NEEDS_DATA') throw new Error('fixture의 첫 stage는 unresolved여야 합니다.');
+    expect([...result.unionEntries.keys()]).toEqual(['000001', '000002', '000003']);
+    expect(result.needs.selectionMetricDates).toEqual([PIPELINE_DATE]);
+  });
+
+  it('후속 ready stage가 완전한 후보 상한의 eligible 0을 증명하면 이전 needs를 버린다', async () => {
+    const resolver = makePipelineResolver({
+      factsPresent: [],
+      metrics: pipelineMetrics.map((row) => ({ ...row, marketCapKrw: null })),
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(pipelineRule([
+      { criterion: 'PER', limit: 1 },
+      { criterion: 'MARKET_CAP', limit: 1 },
+    ]), period);
+
+    expect(result.kind).toBe('READY');
+    if (result.kind !== 'READY') throw new Error('완전한 empty 증명은 stale needs를 남기면 안 됩니다.');
+    expect(result.schedule[0]?.members).toEqual([]);
+    expect([...result.unionEntries.keys()]).toEqual([]);
+  });
+
+  it('한 날짜의 empty 증명이 다른 날짜의 non-empty 후보 needs를 지우지 않는다', async () => {
+    const secondDate = '2025-06-15';
+    const metrics = [PIPELINE_DATE, secondDate].flatMap((date) => PIPELINE_ENTRIES.map((entry, index) => ({
+      date,
+      standardCode: entry.standardCode,
+      marketCapKrw: date === secondDate ? null : [300n, 200n, 100n][index]!,
+      volume: null,
+      tradingValueKrw: null,
+    })));
+    const resolver = makePipelineResolver({
+      factsPresent: [],
+      metrics,
+      effectiveTradingDate: (date) => date,
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([
+        { criterion: 'PER', limit: 1 },
+        { criterion: 'MARKET_CAP', limit: 1 },
+      ]),
+      { from: PIPELINE_DATE, to: secondDate },
+    );
+
+    expect(result.kind).toBe('NEEDS_DATA');
+    if (result.kind !== 'NEEDS_DATA') throw new Error('첫 날짜의 needs는 남아야 합니다.');
+    expect(result.needs.factSymbols).toEqual(['000001', '000002', '000003']);
+    expect([...result.unionEntries.keys()]).toEqual(['000001', '000002', '000003']);
   });
 
   it('급하락은 effective date 포함 N개 봉의 분할보정 수익률을 오름차순으로 고른다', async () => {

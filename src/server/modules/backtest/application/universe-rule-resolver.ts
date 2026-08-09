@@ -280,6 +280,12 @@ export class UniverseRuleResolver {
         .filter((entry) => !nonTrading.has(entry.shortCode))
         .sort((a, b) => a.shortCode.localeCompare(b.shortCode));
       const stageDiagnostics: UniverseStageDiagnostic[] = [];
+      const dateFactSymbols = new Set<string>();
+      const dateActionSymbols = new Set<string>();
+      const datePriceSymbols = new Set<string>();
+      const dateSelectionMetricDates = new Set<string>();
+      const datePrice = { range: null as { from: string; to: string } | null };
+      let hasUnresolvedStage = false;
 
       for (const stage of rule.stages) {
         let stageReady = true;
@@ -291,7 +297,7 @@ export class UniverseRuleResolver {
             candidates.map((entry) => entry.standardCode),
           );
           if (selectionMetrics.findMissingTradingValueDates([effectiveDate]).length > 0) {
-            selectionMetricDates.add(effectiveDate);
+            dateSelectionMetricDates.add(effectiveDate);
             stageReady = false;
           }
           rows = candidates.map((entry) => ({
@@ -317,7 +323,7 @@ export class UniverseRuleResolver {
             candidates.map((entry) => entry.standardCode),
           );
           const missing = candidates.filter((entry) => !facts.hasFacts('SYMBOL', entry.shortCode));
-          for (const entry of missing) factSymbols.add(entry.shortCode);
+          for (const entry of missing) dateFactSymbols.add(entry.shortCode);
           if (missing.length > 0) stageReady = false;
 
           const loaded = await facts.getFacts({
@@ -346,8 +352,13 @@ export class UniverseRuleResolver {
           const priceFetchRequired = warmupMissing
             && !this.deps.symbolMaster.isRangeCovered(requiredFrom, effectiveDate);
           if (priceFetchRequired) {
-            widenPriceRange(requiredFrom, effectiveDate);
-            for (const code of priceMissingCodes) priceSymbols.add(code);
+            datePrice.range = datePrice.range === null
+              ? { from: requiredFrom, to: effectiveDate }
+              : {
+                  from: requiredFrom < datePrice.range.from ? requiredFrom : datePrice.range.from,
+                  to: effectiveDate > datePrice.range.to ? effectiveDate : datePrice.range.to,
+                };
+            for (const code of priceMissingCodes) datePriceSymbols.add(code);
             stageReady = false;
           }
 
@@ -373,7 +384,7 @@ export class UniverseRuleResolver {
             const covered = new Set(coveredBySymbol.get(code) ?? []);
             const gaps = new Set(gapsBySymbol.get(code) ?? []);
             if (requiredYears.some((year) => !covered.has(year) || gaps.has(year))) {
-              actionSymbols.add(code);
+              dateActionSymbols.add(code);
               stageReady = false;
             }
           }
@@ -397,13 +408,33 @@ export class UniverseRuleResolver {
 
         const ranked = rankUniverseStage(stage, rows);
         stageDiagnostics.push(ranked.diagnostic);
-        if (stageReady) {
+        if (!stageReady) {
+          // 이 stage의 순위가 미상이므로 현재 input 후보 전체가 이후
+          // final-union의 보수적 상한이다.
+          hasUnresolvedStage = true;
+        } else if (hasUnresolvedStage) {
+          // 앞 stage의 순위가 바뀌 수 있으므로 non-empty 후속 선택은 상한을
+          // 줄일 수 없다. 다만 완전한 상한 전체에서 eligible이 0이면
+          // 앞 stage 결과와 무관하게 final empty라는 단조로운 증명이다.
+          if (ranked.diagnostic.eligibleCount === 0) candidates = [];
+        } else {
           const byStandardCode = new Map(candidates.map((entry) => [entry.standardCode, entry]));
           candidates = ranked.selectedCodes.flatMap((code) => {
             const entry = byStandardCode.get(code);
             return entry === undefined ? [] : [entry];
           });
         }
+      }
+
+      // 이 날짜의 완전한 후보 상한이 비었다면 앞 unresolved stage가
+      // 남긴 needs는 final 선정을 바꿀 수 없는 stale work다. 날짜별로만 버려
+      // 다른 rebalance date의 non-empty 상한 needs는 지우지 않는다.
+      if (candidates.length > 0) {
+        for (const symbol of dateFactSymbols) factSymbols.add(symbol);
+        for (const symbol of dateActionSymbols) actionSymbols.add(symbol);
+        for (const symbol of datePriceSymbols) priceSymbols.add(symbol);
+        for (const date of dateSelectionMetricDates) selectionMetricDates.add(date);
+        if (datePrice.range !== null) widenPriceRange(datePrice.range.from, datePrice.range.to);
       }
 
       const finalMetrics = selectionMetrics.getAt(
