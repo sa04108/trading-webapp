@@ -74,6 +74,8 @@ export interface OpenPositionSnapshot {
   readonly avgEntryPrice: number;
   readonly entryTsMs: number;
   readonly lastPrice: number;
+  /** `lastPrice` 를 읽은 봉의 시각 — 기간 종료 시각과 벌어져 있으면 stale 이다 */
+  readonly lastPriceTsMs: number;
   /** 매도 비용 미반영 평가손익 — 실현 손익이 아니다 */
   readonly unrealizedPnl: number;
   readonly returnPct: number;

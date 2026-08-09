@@ -1,183 +1,177 @@
-# 종목 마스터 (point-in-time security master) 설계
+# 종목 마스터(point-in-time security master) 설계
 
-날짜: 2026-08-05
-브랜치: feat/symbol-master
+최초 작성: 2026-08-05
+SCD Type 2 개정: 2026-08-09
 
 ## 배경
 
-데이터셋("현재 종목 리스트")과 시점 고정 스냅샷은 백테스트에 맞지 않는 개념이다.
-백테스트는 거래 기간 내내 변하는 유니버스를 시점별로 재구성해야 한다.
-모든 날짜의 전체 스냅샷을 저장하면 용량을 낭비하므로,
-기준 스냅샷(체크포인트)과 변경 이벤트(delta)만 저장한다.
+백테스트는 현재 종목 목록이 아니라 각 날짜에 실제로 존재했던 종목 상태가 필요하다.
+날짜별 전체 스냅샷은 저장량이 크고, 체크포인트+가변 길이 이벤트 체인은 과거 시작점을
+하루씩 당겨 수집할 때 전체 체크포인트가 반복 생성될 수 있었다. 체크포인트 검증 상태를
+화면에 노출하는 방식도 사용자가 데이터 자체보다 내부 저장 구현을 해석하게 만들었다.
 
-이 구조의 업계 표준 명칭은 point-in-time security master다.
-화면·문서에서는 **종목 마스터**, 코드에서는 `symbolMaster` 접두어를 쓴다.
+입력은 계속 KRX의 날짜별 전체 유니버스다. 저장만 종목별 SCD Type 2로 바꾼다. 즉,
+“종목별 일별 행”을 만드는 것이 아니라 종목 상태가 실제로 달라진 관측일에만 새 버전을
+한 행 남긴다.
 
 ## 결정 사항
 
 | 항목 | 결정 |
 |---|---|
-| 명칭 | 종목 마스터 (`symbolMaster*`) |
-| delta 기록 단위 | 영업일 |
-| 체크포인트 간격 | 분기 경계 첫 거래일 (검증 앵커 겸용 — 그날 KRX 실측을 그대로 쓴다) |
-| 백필 범위 | 10년 |
-| 소유 구조 | 전역 단일 코퍼스. 사용자가 만들지 않는다 |
-| 저장 대상 | 구성원부(상장·폐지·시장·유형·이름) + 상장주식수 |
-| 저장 제외 | 시가총액·순위(가격×주식수로 계산), 재무 수치(추후 별도 분기 테이블) |
-| UI | 타임머신 중심 뷰, 미수집 날짜는 빈 상태(근사값 미표시) |
-| 동기화 의미 | KRX 온디맨드 수집. 표 재구성은 로컬 연산이라 항상 자동 |
+| 식별자 | `standardCode` |
+| 버전 구간 | 반개구간 `[validFromDate, validToDate)`, 현재 버전은 `validToDate=null` |
+| 저장 단위 | 최초 baseline 종목 수 + `(종목, 상태 변경 관측일)` 수 |
+| 상태 필드 | `shortCode`, `name`, `market`, `sharesOutstanding`, `instrumentType`, `listedDate` |
+| 수집 입력 | 거래일별 KRX 전체 KOSPI·KOSDAQ 기본정보 |
+| 수집 사실 | `symbol_master_coverage`와 `symbol_master_trading_days`가 별도 보존 |
+| 변경 이력 | SCD 경계의 이전·이후 상태를 비교해 조회 시 파생 |
+| 체크포인트 | 신규 저장·검증·조회·API·UI에서 제거 |
+| UI | 수집 구간과 종목 상태만 표시하며 내부 저장 앵커를 노출하지 않음 |
 
 ## 데이터 모델
 
-새 테이블 4개.
+```text
+symbol_master_versions
+  id
+  standard_code
+  valid_from_date          # 포함
+  valid_to_date            # 미포함, null이면 열린 버전
+  short_code
+  name
+  market
+  shares_outstanding
+  instrument_type
+  listed_date
+  recorded_at_ms
 
-```
-symbolMasterCheckpoints        — 분기 말 전체 스냅샷 (검증 앵커 + 재구성 시작점)
-  id, checkpointDate, source, verifiedAt, createdAt
-
-symbolMasterCheckpointSymbols  — 체크포인트 시점 종목 전량
-  checkpointId, standardCode, shortCode, name, market,
-  sharesOutstanding, instrumentType, listedDate
-
-symbolMasterEvents             — 변경 이벤트 (delta)
-  id, effectiveDate, standardCode, eventType, oldValue, newValue, observedSpan
-  eventType: LISTED | DELISTED | MARKET_MOVED | SHARES_CHANGED
-           | NAME_CHANGED | TYPE_CHANGED
-
-symbolMasterCoverage           — 수집 완료 날짜 구간
-  startDate, endDate, syncedAt
-
-symbolMasterMarketCaps         — 시총 랭킹 레이지 캐시
-  date, standardCode, marketCapKrw
-  백테스트가 리밸런스 날짜 랭킹을 요청할 때만 KRX에서 받아 저장한다.
-  재실행 시 오프라인 재현을 보장한다. 요청된 날짜만 저장하므로 희소하다.
+symbol_master_coverage     # 실제 확인한 날짜 구간, 휴장일 포함
+symbol_master_trading_days # 실제 거래가 있었던 관측일
+symbol_master_market_caps  # 시총 랭킹 레이지 캐시
 ```
 
-종목 마스터는 전 종목을 저장한다. `instrumentType`에는 `classifyKrxIssue` 결과
-(`COMMON_STOCK` 또는 제외 사유)를 그대로 넣고, 필터 정책은 읽기 시점에 적용한다.
+조회 조건은 다음과 같다.
 
-`observedSpan`은 diff 기준 구간(직전 수집일~당일)이다.
-갭을 건너뛴 온디맨드 수집이면 구간이 넓어지고,
-이벤트 날짜가 근사값임을 데이터 자체가 드러낸다.
-갭 구간 안에서 상장 후 폐지된 종목은 이벤트에 남지 않는다.
-정밀한 이력은 백필이 연속 수집으로 채울 때 완성된다.
-
-제거 대상: `datasets`, `datasetSymbols`, `universeSnapshots`, `universeSnapshotSymbols`
-테이블과 `DatasetService`, `UniverseSnapshotService`, `DatasetsPanel`, `KrxSnapshotStep`.
-
-### 재구성
-
-`getUniverseAsOf(date)`:
-date 이하 가장 가까운 체크포인트를 로드한 뒤 이벤트를 순차 적용한다.
-체크포인트 이전 날짜면 역방향으로 적용한다(oldValue 사용).
-
-## 수집 파이프라인
-
-경로 3개가 같은 코어를 공유한다.
-
-```
-ingestDate(date):
-  1. KRX에서 date 전체 유니버스 조회 (krx-historical-universe-source 재사용)
-  2. getUniverseAsOf(직전 수집일) 결과와 diff
-  3. 변경분만 symbolMasterEvents에 기록 (effectiveDate=date, observedSpan=직전 수집일~date)
-  4. coverage 구간 갱신
+```sql
+valid_from_date <= :date
+AND (valid_to_date IS NULL OR valid_to_date > :date)
 ```
 
-1. **일일 동기화** — 매 영업일 장 마감 후 스케줄 실행.
-   마지막 수집일 다음날부터 오늘까지 순차 ingest해 갭을 자동 보정한다.
-2. **백필 잡** — 10년치를 과거에서 현재로 진행한다.
-   분기 말 도달 시 체크포인트를 저장한다.
-   중단하면 coverage를 보고 이어서 재개한다. 진행률을 UI에 노출한다.
-3. **온디맨드** — 타임머신에서 미수집 날짜 요청 시 단일 날짜만 ingest한다.
-   자동 동기화 체크박스가 켜져 있거나 수동 버튼을 눌렀을 때만 동작한다.
+`validFromDate`는 실제 상장일이 아니라 이 저장소가 그 상태를 처음 확인한 날이다.
+실제 상장일은 `listedDate` 속성으로 따로 보존한다.
 
-### KRX 호출량
+DB 제약:
 
-엔드포인트(시장별 기본정보·일별매매)는 날짜당 벌크 응답이다.
-날짜 1개 ingest = 총 4호출 = 엔드포인트당 2호출.
+- `UNIQUE (standard_code, valid_from_date)`
+- `UNIQUE (standard_code) WHERE valid_to_date IS NULL`
+- `CHECK (valid_to_date IS NULL OR valid_to_date > valid_from_date)`
+- INSERT·UPDATE overlap 방지 trigger
 
-- 일일 동기화: 엔드포인트당 2호출/일 (한도 10,000의 0.02%)
-- 10년 백필 전체: 엔드포인트당 4,920호출 — 하루 한도 안
+서비스 불변식:
 
-백필 잡에 일일 호출 예산(기본 8,000/엔드포인트, 설정 가능)을 두고,
-예산 소진 시 중단 후 다음날 재개한다.
-기존 `todayCallCount()`와 `KrxQuotaError`(429)를 재사용한다.
+- 같은 종목의 구간은 겹치지 않는다.
+- 인접한 동일 상태 버전은 하나로 합친다.
+- 모든 수집 거래일 D에서 SCD 조회 결과는 그날 KRX full universe와 같다.
+- 과거 D를 삽입해도 다음 기수집 관측일 N의 상태는 삽입 전과 같다.
+- 버전·거래일·coverage는 한 트랜잭션에서 저장한다.
+- coverage 밖이거나 같은 연속 coverage 안에 거래일 anchor가 없는 날짜는 조회하지 않는다.
 
-일별매매 응답에 OHLCV가 포함된다.
-같은 호출로 가격 데이터를 저장해 캔들 수집과 일원화할 여지가 있다(이번 범위 밖).
+## 상태 변경 표현
 
-### 검증 (분기 체크포인트)
+- 최초 관측: `[D, null)` baseline 버전 삽입. 신규상장 이벤트로 노출하지 않는다.
+- 신규상장: D부터 새 버전 삽입.
+- 상장폐지: 직전 버전의 `validToDate=D`; D부터 유니버스에 없다.
+- 재상장: 부재 구간 뒤 D부터 새 버전 삽입.
+- 시장·주식 수·이름·유형·단축코드·상장일 변경: 직전 버전을 D에 닫고 변경된 전체
+  상태 한 행을 D부터 연다.
+- 같은 날 여러 필드가 바뀌어도 SCD 버전은 한 행이다.
 
-백필·일일 동기화가 분기 말을 지날 때:
+## 수집과 과거 구간 보정
 
-1. 이벤트 재구성 결과와 KRX 실조회를 diff한다.
-2. 일치하면 `verifiedAt`을 찍고 체크포인트를 저장한다.
-3. 불일치하면 KRX 실측값으로 체크포인트를 저장하고 불일치 내역을 로그와 UI에 남긴다.
-   이후 재구성은 이 체크포인트에서 시작하므로 오류가 전파되지 않는다.
+`ingestDate(D)`는 KRX full universe를 받은 뒤 D 다음의 가장 가까운 기수집 거래일 또는
+기존 버전 경계 N을 찾는다. 기존 타임라인에서 `[D,N)`만 실측 상태로 덮고 N 이후는
+보존한다. 덮기 전후 N의 전체 상태도 비교해 미래 훼손을 즉시 실패시킨다.
 
-KRX 조회 결과가 빈 날짜는 휴장으로 처리한다. coverage에 포함하되 이벤트는 없다.
+```text
+기존 A [01-01, 01-05), B [01-05, ∞)
+01-03 실측 C를 뒤늦게 수집
+
+결과 A [01-01, 01-03), C [01-03, 01-05), B [01-05, ∞)
+```
+
+동일 상태의 과거 날짜를 하루씩 추가하면 인접 구간이 합쳐진다.
+
+```text
+기존 A [01-04, ∞)
+01-03 A 수집 → A [01-03, ∞)
+01-02 A 수집 → A [01-02, ∞)
+```
+
+따라서 체크포인트 스냅샷이 날짜마다 쌓이지 않는다. 실제 백필은 호출 효율을 위해
+오름차순으로 수행하지만, 역순·중간 갭 수집도 최종 저장 행 수를 부풀리지 않는다.
+
+KRX 응답에 거래가 있는데 기본정보가 비거나 기존 시장 종목 수가 비정상적으로 급감하면
+저장을 거부한다. 한 번의 불완전 응답이 시장 전체 상장폐지로 굳는 것을 막기 위해서다.
+
+## 변경 이벤트
+
+이벤트는 재구성 원천으로 저장하지 않는다. 조회 구간의 SCD 경계에서 이전·이후 버전을
+비교해 다음 이벤트를 파생한다.
+
+```text
+LISTED
+DELISTED
+MARKET_MOVED
+SHARES_CHANGED
+NAME_CHANGED
+TYPE_CHANGED
+SHORT_CODE_CHANGED
+LISTED_DATE_CHANGED
+```
+
+여러 필드가 같은 날 바뀌면 사용자 이력에는 필드별 이벤트가 보이지만 저장 버전은 한
+행이다. 파생 ID는 `date:standardCode:eventType` 문자열이라 안정적이고 고유하다.
+`observedSpanStart`는 해당 경계 전 가장 가까운 관측 거래일에서 계산한다.
+
+## 기존 데이터 이행
+
+마이그레이션 0012는 `symbol_master_versions`와 단일 상태 행
+`symbol_master_storage_state(PENDING|ACTIVE)`를 추가한다. 서비스 첫 부팅에서 다음을 한
+SQLite 트랜잭션으로 실행한다.
+
+1. legacy 체크포인트·종목·이벤트와 거래일을 읽는다.
+2. 기존의 nearest-checkpoint 조회 의미를 날짜순으로 재현한다.
+3. 전체 6개 상태 필드를 비교해 SCD 버전으로 압축한다.
+4. 각 legacy 경계일에서 이전 조회와 SCD 조회의 SHA-256 상태 지문을 비교한다.
+5. 검증 성공 후 중복 checkpoint/event 행을 비우고 상태를 `ACTIVE`로 바꾼다.
+
+중간 실패는 전체 롤백되어 `PENDING`에서 다시 시도된다. legacy 흔적은 있는데 기준
+체크포인트가 없거나 체크포인트 종목이 비어 있으면 빈 SCD로 확정하지 않고 부팅을
+실패시킨다. 빈 legacy 테이블 자체는 후속 contract migration까지 남겨 구버전 DB의
+이행 코드를 안전하게 유지한다.
+
+이 배포 이후 코드만 과거 버전으로 되돌리는 것은 지원하지 않는다. 롤백할 때는 배포 전
+DB snapshot도 함께 복원해야 한다.
 
 ## UI
 
-### 종목 마스터 화면 (타임머신 뷰)
+- 선택 날짜 기준 유니버스 표와 coverage 타임라인을 표시한다.
+- 미수집 날짜는 빈 상태와 동기화 버튼을 표시한다.
+- 체크포인트·검증됨·불일치·미검증 마커나 문구는 표시하지 않는다.
+- 최근 변경 패널은 SCD에서 파생한 이벤트를 표시한다.
 
-- 상단 컨트롤 바: 날짜 이동(◀ ▶), 자동 동기화(KRX) 체크박스, [지금 동기화] 버튼
-- 타임라인 슬라이더: 수집 완료 구간 진하게, 미수집 구간 빗금, 분기 체크포인트 마커
-- 메인: 선택 날짜 기준 유니버스 표
-  (코드·이름·시장·상장주식수·상장일, 검색·시장 필터·정렬)
-  + 마지막 수집·체크포인트 검증 상태 표시
-- 사이드 패널: 선택 날짜 근처 변경 이벤트 (클릭 시 상세)
-- 미수집 날짜(자동 동기화 꺼짐): 표 대신 빈 상태
-  [이 날짜 동기화] / [가장 가까운 수집일로 이동] 버튼. 근사값을 보여주지 않는다.
-- 슬라이더 이동에 따른 표 갱신은 로컬 재구성이라 항상 자동이다.
-  체크박스는 KRX 수집 여부만 제어한다.
+## 테스트 기준
 
-### 네비게이션
-
-데이터 버튼과 `DataPage`는 유지하고 탭을 재구성한다.
-
-```
-데이터
- ├─ 종목 마스터   ← 데이터셋 탭 자리. 기본 탭
- └─ 가격 데이터   ← 기존 종목 탭 개명 (등록 종목·캔들 동기화)
-```
-
-쿼리스트링 탭 상태(`?tab=`) 구조는 유지한다.
-
-## 백테스트 통합
-
-- 위저드 2단계를 스냅샷 선택에서 **유니버스 규칙 정의**로 교체한다.
-  시장, 종목유형, 리밸런스 시점 상위 N(정렬 기준: 시총 등)을 입력한다.
-- 기간 입력 시 coverage를 검사한다.
-  미수집 구간이 있으면 경고와 [동기화] 버튼을 보여준다.
-- 제출 시점에 서버가 리밸런스 날짜별 멤버십 일정을 확정한다.
-  날짜마다 `getUniverseAsOf(date)`로 구성원을 얻고,
-  시총 상위 N 랭킹은 KRX 일별매매 MKTCAP으로 계산한다(레이지 캐시 경유).
-  로컬 캔들이 없는 선정 종목은 경고로 노출한다.
-- 엔진은 확정된 멤버십 일정을 받아 리밸런스 시점마다 거래 대상을 제한한다.
-- 재현성: `backtestRuns`에 규칙, `KRX_FILTER_POLICY_VERSION`, 멤버십 일정 해시를 저장한다.
-  종목 리스트 복사본은 저장하지 않는다 — 일정은 마스터+캐시에서 재도출 가능하다.
-
-## 마이그레이션
-
-- 테이블 4개 drop, 관련 서비스·컴포넌트 삭제.
-- 기존 `backtestRuns`가 snapshot을 참조하면 해당 이력도 정리한다(개발 단계 데이터).
-
-## 에러 처리
-
-- KRX 쿼터 초과·승인 만료: 기존 오류 타입 재사용, 타임라인 UI에 배너.
-- 재구성 불가(coverage 없음): 빈 상태.
-- 체크포인트 검증 불일치: 자동 교정 + 경고 표시.
-
-## 테스트
-
-- 단위: diff 엔진, 재구성(순방향·역방향·체크포인트 경계), observedSpan 기록.
-- 통합: fake KRX 소스로 ingest→재구성 왕복, 쿼터 예산 중단·재개.
-- e2e: 기존 KRX 유니버스 시나리오를 폐기하고
-  타임머신 뷰 + 새 위저드 시나리오로 재작성한다.
+- 반개구간 경계, overlap/열린 버전 제약
+- 변경 없는 날짜를 반복 수집해도 버전 행이 늘지 않음
+- 같은 날 여러 필드 변경은 버전 한 행, 이벤트 ID는 필드별로 고유
+- 과거 날짜를 하루씩 prepend해도 동일 상태는 한 행으로 병합
+- 중간 갭 overlay가 다음 미래 상태를 보존
+- 신규상장·상장폐지·재상장
+- 최초 baseline을 신규상장 이벤트로 오인하지 않음
+- 고립 휴장일이 다른 coverage 구간 상태를 노출하지 않음
+- legacy 이행의 상태 동등성·멱등성·중복 데이터 정리
 
 ## 범위 밖
 
-- 재무 수치(PER용 순이익 등) 분기 테이블
-- 일별매매 OHLCV를 캔들 수집과 일원화
-- PER/PBR/EV-EBITDA 정렬 기준 (krx-universe-sort-followups 참고)
+- 시총 외 추가 랭킹 팩터
+- legacy 빈 테이블을 실제 DROP하는 contract migration

@@ -223,6 +223,9 @@ test('full MVP flow', async ({ page }) => {
   // 별도 "미청산 포지션" 카드는 제거되고 거래 내역 테이블에 통합됐다
   await expect(page.getByText('미청산 포지션', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('row').filter({ hasText: '미청산' }).first()).toBeVisible();
+  // 미청산 행이 있는 실행이므로 "마지막 확인일" 열이 뜬다 (Task 11) — lastPriceTsMs 가
+  // 서버 응답부터 화면까지 이어졌다는 증거다.
+  await expect(page.getByRole('columnheader', { name: '마지막 확인일' })).toBeVisible();
   const tradeRows = page.getByRole('row').filter({ hasText: '005930' });
   await expect(tradeRows.first()).toBeVisible();
 

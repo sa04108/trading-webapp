@@ -43,17 +43,6 @@ function matchesQuery(entry: SymbolMasterEntryDto, query: string): boolean {
   );
 }
 
-/** 최신 체크포인트 — checkpointDate 문자열 비교로 가장 늦은 것을 고른다(ISO 형식이라 사전식 비교가 곧 시간 순서다) */
-function latestCheckpoint(
-  checkpoints: SymbolMasterCoverageDto['checkpoints'],
-): SymbolMasterCoverageDto['checkpoints'][number] | null {
-  return checkpoints.reduce<SymbolMasterCoverageDto['checkpoints'][number] | null>(
-    (latest, checkpoint) =>
-      latest === null || checkpoint.checkpointDate > latest.checkpointDate ? checkpoint : latest,
-    null,
-  );
-}
-
 /**
  * 종목 마스터 유니버스 표 — 「표」 구획 전체(헤더 요약·필터·행·미커버 빈 상태)를 담당한다.
  *
@@ -143,7 +132,6 @@ export function UniverseTable({
     );
   }
 
-  const checkpoint = latestCheckpoint(coverage?.checkpoints ?? []);
   const { pageCount, currentPage, from, to } = pageWindow(filtered.length, pageSize, page);
   const visible = filtered.slice(from, to);
 
@@ -152,9 +140,6 @@ export function UniverseTable({
       <p className="text-sm text-muted-foreground">
         {date} 기준 {universe.symbols.length}종목 · 마지막 수집{' '}
         {formatDateTime(coverage?.lastSyncedAtMs ?? null)}
-        {checkpoint !== null
-          ? ` · 체크포인트 ${checkpoint.checkpointDate} ${checkpoint.verified ? '✓' : '⚠'}`
-          : ''}
       </p>
 
       <div className="flex flex-wrap items-center gap-2">

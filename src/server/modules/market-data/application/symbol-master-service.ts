@@ -1,21 +1,39 @@
-import { and, asc, desc, eq, gt, gte, lt, lte } from 'drizzle-orm';
+import { createHash } from 'node:crypto';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  lte,
+  or,
+} from 'drizzle-orm';
 import type { Clock } from '../../../shared/clock.js';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import {
   krxDailyBars,
+  krxNonTradingDays,
+  krxNonTradingCoverage,
   symbolMasterCheckpointSymbols,
   symbolMasterCheckpoints,
   symbolMasterCoverage,
   symbolMasterEvents,
   symbolMasterMarketCaps,
+  symbolMasterStorageState,
   symbolMasterTradingDays,
+  symbolMasterVersions,
 } from '../../../shared/db/schema.js';
-import { newId } from '../../../shared/ids.js';
 import type { Logger } from '../../../shared/logger.js';
 import type { Candle } from '../domain/candle.js';
 import { isValidCandle } from '../domain/candle.js';
 import { classifyKrxIssue } from '../domain/krx-filter-policy.js';
 import { addCalendarDays } from '../domain/kst-date.js';
+import { isNonTradingRow } from '../domain/non-trading-day.js';
 import type {
   KrxDailyTradeRow,
   KrxIssueBaseInfoRow,
@@ -25,18 +43,25 @@ import {
   applyEventsBackward,
   applyEventsForward,
   diffUniverse,
-  findUniverseMismatch,
-  quarterOf,
   type SymbolMasterEntry,
   type SymbolMasterEventDraft,
   type SymbolMasterInstrumentType,
   type UniverseState,
 } from '../domain/symbol-master.js';
+import {
+  overlayVersionTimeline,
+  sameSymbolMasterEntry,
+  type SymbolMasterVersionSegment,
+} from '../domain/symbol-master-version.js';
 import type { KrxHistoricalUniverseSource } from './ports.js';
 
-export type SymbolMasterEventRow = typeof symbolMasterEvents.$inferSelect;
-type SymbolMasterCheckpointRow = typeof symbolMasterCheckpoints.$inferSelect;
+export interface SymbolMasterEventRow extends SymbolMasterEventDraft {
+  readonly id: string;
+}
+type LegacySymbolMasterEventRow = typeof symbolMasterEvents.$inferSelect;
+type LegacySymbolMasterCheckpointRow = typeof symbolMasterCheckpoints.$inferSelect;
 type SymbolMasterCoverageRow = typeof symbolMasterCoverage.$inferSelect;
+type SymbolMasterVersionRow = typeof symbolMasterVersions.$inferSelect;
 
 export interface SymbolMasterServiceDeps {
   readonly db: AppDatabase;
@@ -45,7 +70,7 @@ export interface SymbolMasterServiceDeps {
   readonly logger: Logger;
 }
 
-/** 요청한 날짜를 커버하는 체크포인트가 하나도 없을 때 던진다 */
+/** 요청한 날짜가 수집 완료 구간에 없을 때 던진다. */
 export class SymbolMasterNotCoveredError extends Error {
   constructor(readonly date: string) {
     super(`종목 마스터가 ${date} 를 커버하지 않는다`);
@@ -54,11 +79,11 @@ export class SymbolMasterNotCoveredError extends Error {
 }
 
 export type IngestResult =
-  | { readonly kind: 'TRADING_DAY'; readonly eventCount: number; readonly checkpointSaved: boolean }
+  | { readonly kind: 'TRADING_DAY' }
   | { readonly kind: 'HOLIDAY' }
   | { readonly kind: 'ALREADY_COVERED' };
 
-/** ensureTradingDay 의 소급 수집 결과 — 재구성 앵커 확보 여부와 실제 수집한 날짜들을 담는다 */
+/** ensureTradingDay 의 소급 수집 결과 — 조회 앵커 확보 여부와 실제 수집한 날짜들을 담는다 */
 export interface EnsureTradingDayResult {
   readonly requestedDate: string;
   /** 해소된 적용 거래일. 상한까지 거슬러도 못 찾으면 null */
@@ -75,7 +100,7 @@ export interface EnsureTradingDayResult {
 const DEFAULT_MAX_LOOKBACK_DAYS = 10;
 
 /** DB row 를 도메인 이벤트 draft 로 좁힌다 — drizzle 은 text 컬럼을 string 으로만 추론한다 */
-function toEventDraft(row: SymbolMasterEventRow): SymbolMasterEventDraft {
+function toEventDraft(row: LegacySymbolMasterEventRow): SymbolMasterEventDraft {
   return {
     effectiveDate: row.effectiveDate,
     standardCode: row.standardCode,
@@ -86,13 +111,46 @@ function toEventDraft(row: SymbolMasterEventRow): SymbolMasterEventDraft {
   };
 }
 
+function universeFingerprint(state: UniverseState): string {
+  const canonical = [...state.values()]
+    .sort((a, b) => a.standardCode.localeCompare(b.standardCode))
+    .map((entry) => [
+      entry.standardCode,
+      entry.shortCode,
+      entry.name,
+      entry.market,
+      entry.sharesOutstanding,
+      entry.instrumentType,
+      entry.listedDate,
+    ]);
+  return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
+}
+
+/** effectiveDate·id 정렬된 legacy 행에서 (from, to]만 이진 탐색으로 자른다. */
+function legacyEventsBetween(
+  rows: readonly LegacySymbolMasterEventRow[],
+  from: string,
+  to: string,
+): SymbolMasterEventDraft[] {
+  const firstAfter = (date: string): number => {
+    let low = 0;
+    let high = rows.length;
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2);
+      if (rows[mid]!.effectiveDate <= date) low = mid + 1;
+      else high = mid;
+    }
+    return low;
+  };
+  return rows.slice(firstAfter(from), firstAfter(to)).map(toEventDraft);
+}
+
 export class SymbolMasterService {
   /**
    * 같은 date 로 겹쳐 들어온 호출을 하나로 묶는다 — POST /symbol-master/sync 이중 클릭,
    * 백필 루프, 스케줄러 갭 루프가 모두 같은 date 로 ingestDate 를 부를 수 있는데,
    * isCovered 게이트만으로는 KRX await 도중 들어온 두 번째 호출을 막지 못한다. 그 상태로
-   * 진 쪽이 재개되면 previousCoveredDate 가 undefined 로 바뀌어 최초 수집 분기를 잘못 타
-   * mid-quarter 가짜 체크포인트·coverage 중복·이벤트 중복 삽입으로 이어진다.
+   * 늦게 재개된 호출이 같은 날짜의 coverage·버전을 다시 쓰는 문제로 이어질 수 있다.
    */
   private readonly inflightIngests = new Map<string, Promise<IngestResult>>();
 
@@ -104,10 +162,210 @@ export class SymbolMasterService {
    */
   private readonly inflightMarketCaps = new Map<string, Promise<ReadonlyMap<string, string>>>();
 
-  constructor(private readonly deps: SymbolMasterServiceDeps) {}
+  constructor(private readonly deps: SymbolMasterServiceDeps) {
+    this.ensureScdStorageReady();
+  }
 
   /**
-   * 하루치 KRX 유니버스를 수집해 이벤트·coverage 를 갱신한다. 이미 커버된 날짜는
+   * 0012 이전 DB 의 체크포인트+이벤트 조회 결과를 종목별 SCD 버전으로 한 번만
+   * 변환한다. 전체가 한 SQLite 트랜잭션이므로 중간 실패 시 legacy 이력과
+   * PENDING 상태가 그대로 남아 다음 부팅에서 안전하게 재시도한다.
+   */
+  private ensureScdStorageReady(): void {
+    const current = this.deps.db
+      .select()
+      .from(symbolMasterStorageState)
+      .where(eq(symbolMasterStorageState.singleton, 1))
+      .get();
+    if (current?.phase === 'ACTIVE') return;
+
+    this.deps.db.transaction((tx) => {
+      const state = tx
+        .select()
+        .from(symbolMasterStorageState)
+        .where(eq(symbolMasterStorageState.singleton, 1))
+        .get();
+      if (state === undefined) {
+        tx.insert(symbolMasterStorageState)
+          .values({ singleton: 1, phase: 'PENDING', migratedAtMs: null })
+          .run();
+      } else if (state.phase === 'ACTIVE') {
+        return;
+      }
+
+      const checkpoints = tx
+        .select()
+        .from(symbolMasterCheckpoints)
+        .orderBy(asc(symbolMasterCheckpoints.checkpointDate))
+        .all();
+      const legacyEvents = tx
+        .select()
+        .from(symbolMasterEvents)
+        .orderBy(asc(symbolMasterEvents.effectiveDate), asc(symbolMasterEvents.id))
+        .all();
+      const tradingDates = tx
+        .select({ date: symbolMasterTradingDays.date })
+        .from(symbolMasterTradingDays)
+        .orderBy(asc(symbolMasterTradingDays.date))
+        .all()
+        .map((row) => row.date);
+      const hasCheckpointSymbols = tx
+        .select({ id: symbolMasterCheckpointSymbols.id })
+        .from(symbolMasterCheckpointSymbols)
+        .limit(1)
+        .get() !== undefined;
+      if (
+        checkpoints.length === 0
+        && (legacyEvents.length > 0 || tradingDates.length > 0 || hasCheckpointSymbols)
+      ) {
+        throw new Error('종목 마스터 SCD 이행 실패: 거래 이력은 있지만 legacy 체크포인트가 없다');
+      }
+      tx.delete(symbolMasterVersions).run();
+
+      if (checkpoints.length > 0) {
+        const checkpointSymbols = tx.select().from(symbolMasterCheckpointSymbols).all();
+        const symbolsByCheckpoint = new Map<string, Map<string, SymbolMasterEntry>>();
+        for (const row of checkpointSymbols) {
+          let universe = symbolsByCheckpoint.get(row.checkpointId);
+          if (universe === undefined) {
+            universe = new Map();
+            symbolsByCheckpoint.set(row.checkpointId, universe);
+          }
+          universe.set(row.standardCode, {
+            standardCode: row.standardCode,
+            shortCode: row.shortCode,
+            name: row.name,
+            market: row.market as KrxMarket,
+            sharesOutstanding: row.sharesOutstanding,
+            instrumentType: row.instrumentType as SymbolMasterInstrumentType,
+            listedDate: row.listedDate,
+          });
+        }
+        for (const checkpoint of checkpoints) {
+          if ((symbolsByCheckpoint.get(checkpoint.id)?.size ?? 0) === 0) {
+            throw new Error(
+              `종목 마스터 SCD 이행 실패: ${checkpoint.checkpointDate} 체크포인트가 비어 있다`,
+            );
+          }
+        }
+        // 거래일 테이블이 도입되기 전 데이터나 부분 기록도 잃지 않도록 legacy 경계일을
+        // 항상 합친다. 체크포인트에만 있던 shortCode/listedDate 교정도 이 날짜에서 버전이 된다.
+        const dates = [...new Set([
+          ...tradingDates,
+          ...checkpoints.map((checkpoint) => checkpoint.checkpointDate),
+          ...legacyEvents.map((event) => event.effectiveDate),
+        ])].sort();
+
+        const recordedAtMs = this.deps.clock.now();
+        const versions: (typeof symbolMasterVersions.$inferInsert)[] = [];
+        const expectedFingerprints: Array<{ date: string; fingerprint: string }> = [];
+        const openIndex = new Map<string, number>();
+        let previous: UniverseState = new Map();
+
+        for (const date of dates) {
+          const next = this.legacyUniverseAsOf(
+            date,
+            checkpoints,
+            symbolsByCheckpoint,
+            legacyEvents,
+          );
+          for (const code of new Set([...previous.keys(), ...next.keys()])) {
+            const before = previous.get(code);
+            const after = next.get(code);
+            if (sameSymbolMasterEntry(before, after)) continue;
+
+            const existingIndex = openIndex.get(code);
+            if (existingIndex !== undefined) {
+              versions[existingIndex] = { ...versions[existingIndex]!, validToDate: date };
+              openIndex.delete(code);
+            }
+            if (after !== undefined) {
+              const index = versions.length;
+              versions.push({
+                standardCode: after.standardCode,
+                validFromDate: date,
+                validToDate: null,
+                shortCode: after.shortCode,
+                name: after.name,
+                market: after.market,
+                sharesOutstanding: after.sharesOutstanding,
+                instrumentType: after.instrumentType,
+                listedDate: after.listedDate,
+                recordedAtMs,
+              });
+              openIndex.set(code, index);
+            }
+          }
+          expectedFingerprints.push({ date, fingerprint: universeFingerprint(next) });
+          previous = next;
+        }
+
+        for (let i = 0; i < versions.length; i += 200) {
+          tx.insert(symbolMasterVersions).values(versions.slice(i, i + 200)).run();
+        }
+        for (const expected of expectedFingerprints) {
+          const actual = universeFingerprint(this.readUniverseAsOfInternal(expected.date, tx));
+          if (actual !== expected.fingerprint) {
+            throw new Error(`종목 마스터 SCD 이행 검증 실패: ${expected.date}`);
+          }
+        }
+        this.deps.logger.info(
+          {
+            module: 'market-data',
+            event: 'symbol-master.scd-migrated',
+            tradingDates: dates.length,
+            versions: versions.length,
+          },
+          '종목 마스터 legacy 이력을 SCD 버전으로 변환했다',
+        );
+
+        // 검증을 통과한 뒤에만 중복 저장을 비운다. 테이블 자체는 구버전 DB를 읽는
+        // expand-contract 코드가 제거되는 다음 contract migration까지 남겨 둔다.
+        tx.delete(symbolMasterCheckpointSymbols).run();
+        tx.delete(symbolMasterEvents).run();
+        tx.delete(symbolMasterCheckpoints).run();
+      }
+
+      tx.update(symbolMasterStorageState)
+        .set({ phase: 'ACTIVE', migratedAtMs: this.deps.clock.now() })
+        .where(eq(symbolMasterStorageState.singleton, 1))
+        .run();
+    });
+  }
+
+  private legacyUniverseAsOf(
+    date: string,
+    checkpoints: readonly LegacySymbolMasterCheckpointRow[],
+    symbolsByCheckpoint: ReadonlyMap<string, UniverseState>,
+    rows: readonly LegacySymbolMasterEventRow[],
+  ): UniverseState {
+    const target = Date.parse(date);
+    let checkpoint: LegacySymbolMasterCheckpointRow | undefined;
+    let bestDiff = Infinity;
+    for (const candidate of checkpoints) {
+      const diff = Math.abs(Date.parse(candidate.checkpointDate) - target);
+      if (
+        diff < bestDiff
+        || (diff === bestDiff && checkpoint !== undefined
+          && candidate.checkpointDate < checkpoint.checkpointDate)
+      ) {
+        checkpoint = candidate;
+        bestDiff = diff;
+      }
+    }
+    if (checkpoint === undefined) return new Map();
+
+    const base = new Map(symbolsByCheckpoint.get(checkpoint.id) ?? []);
+    if (date >= checkpoint.checkpointDate) {
+      const events = legacyEventsBetween(rows, checkpoint.checkpointDate, date);
+      return applyEventsForward(base, events);
+    }
+    const events = legacyEventsBetween(rows, date, checkpoint.checkpointDate);
+    return applyEventsBackward(base, events);
+  }
+
+  /**
+   * 하루치 KRX 유니버스를 수집해 SCD 버전·coverage 를 갱신한다. 이미 커버된 날짜는
    * KRX 를 부르지 않고 바로 돌아간다 — 재수집이 호출 한도를 갉아먹지 않게 하기 위해서다.
    *
    * 같은 date 의 두 번째 동시 호출자는 새로 실행하지 않고 진행 중인 Promise 를 그대로
@@ -125,7 +383,7 @@ export class SymbolMasterService {
   }
 
   /**
-   * date 가 휴장이면 직전 거래일까지 하루씩 거슬러 ingestDate 를 반복해 재구성 앵커를
+   * date 가 휴장이면 직전 거래일까지 하루씩 거슬러 ingestDate 를 반복해 조회 앵커를
    * 보장한다. date 자체의 ingestDate 는 각 호출이 내부에서 알아서 직렬화하므로 여기서
    * 별도 가드를 두지 않는다 — 소급 루프도 각 날짜의 ingestDate 호출 단위로 이미 안전하다.
    *
@@ -167,7 +425,7 @@ export class SymbolMasterService {
    * 이미 커버된 상태에서 date 와 전혀 안 이어진 먼 과거의 거래일을 우연히 찾아내
    * "직전 거래일을 안다"고 착각할 수 있다 — ensureTradingDay 의 소급 루프가 그 상태를
    * "이미 찾았다"고 오판해 실제로는 한 번도 확인하지 않은 날짜를 건너뛰고, 몇 년 전
-   * 무관한 거래일을 재구성 앵커로 굳혀 버린다. UniverseRuleResolver.resolve 도 이
+   * 무관한 거래일을 조회 앵커로 굳혀 버린다. UniverseRuleResolver.resolve 도 이
    * 버전을 써야 한다 — isCovered(date) 게이트만으로는 못 막는다: date 가 고립된
    * 구간이라도 "어떤 구간엔 있다"는 사실 자체는 참이 되기 때문이다. (두 경로 모두
    * 리밸런스 적용 거래일 표기 e2e(Task 4, 2026-08-06 스펙)에서 재현된 버그다.)
@@ -210,193 +468,96 @@ export class SymbolMasterService {
     const kospiTrades = await this.deps.source.fetchDailyTrades('KOSPI', date);
     const kosdaqTrades = await this.deps.source.fetchDailyTrades('KOSDAQ', date);
     if (kospiTrades.length === 0 && kosdaqTrades.length === 0) {
-      this.deps.db.transaction((tx) => this.mergeCoverage(tx, date));
-      return { kind: 'HOLIDAY' };
+      return this.deps.db.transaction((tx) => {
+        // 다른 서비스 인스턴스가 fetch 사이에 같은 휴장일을 커밋했을 수 있다.
+        if (this.isCoveredIn(tx, date)) return { kind: 'ALREADY_COVERED' } as const;
+        this.mergeCoverage(tx, date);
+        // 휴장일도 거래불가 커버로 남긴다. 응답 0행을 실제로 확인했으니 "봤는데 없었다" 가
+        // 맞고, 주말·공휴일을 비워 두면 앞뒤 거래일 구간이 이어지지 않아 커버 판정이 끊긴다.
+        this.mergeNonTradingCoverage(tx, date, date);
+        return { kind: 'HOLIDAY' } as const;
+      });
     }
 
+    const kospiBaseInfo = await this.deps.source.fetchIssueBaseInfo('KOSPI', date);
+    const kosdaqBaseInfo = await this.deps.source.fetchIssueBaseInfo('KOSDAQ', date);
+    const modeledBeforeWrite = this.readUniverseAsOfInternal(date);
+    this.assertBaseInfoPresent(date, 'KOSPI', kospiTrades, kospiBaseInfo, modeledBeforeWrite);
+    this.assertBaseInfoPresent(date, 'KOSDAQ', kosdaqTrades, kosdaqBaseInfo, modeledBeforeWrite);
+
     const fetched = new Map<string, SymbolMasterEntry>();
-    for (const row of await this.deps.source.fetchIssueBaseInfo('KOSPI', date)) {
+    for (const row of kospiBaseInfo) {
       this.putEntry(fetched, row, 'KOSPI');
     }
-    for (const row of await this.deps.source.fetchIssueBaseInfo('KOSDAQ', date)) {
+    for (const row of kosdaqBaseInfo) {
       this.putEntry(fetched, row, 'KOSDAQ');
     }
 
-    const prevDate = this.previousCoveredDate(date);
-    if (prevDate === undefined) {
-      // 직전 커버일이 없다 — 비교할 과거 이력이 없으니 오늘 스냅샷을 그대로 체크포인트로 굳힌다.
-      // 체크포인트 저장과 coverage 갱신을 같은 트랜잭션에 묶는다 — checkpointDate 에 unique
-      // 제약이 있어, 두 트랜잭션으로 나뉘어 있으면 그 사이에서 죽었을 때 체크포인트만 남고
-      // coverage 가 비어 같은 날짜 재수집이 영구히 UNIQUE 위반으로 실패한다.
-      this.deps.db.transaction((tx) => {
-        this.writeCheckpoint(tx, date, fetched, true);
-        this.mergeCoverage(tx, date);
-        this.recordTradingDay(tx, date);
-        this.writeDailyBars(tx, date, kospiTrades, kosdaqTrades);
-      });
-      return { kind: 'TRADING_DAY', eventCount: 0, checkpointSaved: true };
-    }
+    return this.persistTradingDay(date, fetched, kospiTrades, kosdaqTrades);
+  }
 
-    const todaysEvents = diffUniverse(this.getUniverseAsOf(prevDate), fetched, {
-      effectiveDate: date,
-      observedSpanStart: prevDate,
-    });
+  /**
+   * 하루 full universe 를 [date, 다음 기수집 거래일) 구간에 덮어쓴다.
+   * 중간 갭이나 과거 날짜를 나중에 채워도 다음 관측일 뒤의 상태는 보존된다.
+   */
+  private persistTradingDay(
+    date: string,
+    fetched: UniverseState,
+    kospiTrades: readonly KrxDailyTradeRow[],
+    kosdaqTrades: readonly KrxDailyTradeRow[],
+  ): IngestResult {
+    return this.deps.db.transaction((tx) => {
+      // fetch 중 같은 날짜의 다른 요청이 먼저 커밋했을 수 있다.
+      if (this.isCoveredIn(tx, date)) return { kind: 'ALREADY_COVERED' } as const;
 
-    // 갭 메우기: date 뒤에 이미 커버된 구간이 있으면 그 구간 첫날(D2)의 이벤트는 더 먼
-    // 과거를 기준으로 계산돼 있다. 지금 채운 date 를 기준으로 다시 diff 해야 중복 이벤트가
-    // 남지 않는다. D2 는 "이벤트가 있는 날"이 아니라 coverage 구간의 시작일로 찾는다 —
-    // 그래야 D2 가 우연히 무변화(이벤트 0개) 거래일이어도 건너뛰지 않는다. D2 의 실제 상태는
-    // 이벤트를 지우기 전에 먼저 읽어 둬야 한다 — 지운 뒤에 재구성하면 그 이벤트가 만들던
-    // 변화가 사라진 상태로 읽히기 때문이다.
-    // gapDate 는 재계산 대상일 뿐이다 — 이미 커버된 구간의 시작일이므로 그 자체로
-    // "date 에 거래가 있었다"는 근거가 되지 않는다(고립된 휴장일 하루짜리 구간일 수도
-    // 있다). 그래서 recordTradingDay 는 지금 ingest 중인 date 에만 걸고 gapDate 에는 걸지 않는다.
-    const gapDate = this.nextCoverageStart(date);
-    const gapState = gapDate === undefined ? undefined : this.getUniverseAsOf(gapDate);
-    const gapEvents =
-      gapDate === undefined || gapState === undefined
-        ? []
-        : diffUniverse(fetched, gapState, { effectiveDate: gapDate, observedSpanStart: date });
-
-    this.deps.db.transaction((tx) => {
-      this.insertEventDrafts(tx, todaysEvents);
-      if (gapDate !== undefined) {
-        tx.delete(symbolMasterEvents).where(eq(symbolMasterEvents.effectiveDate, gapDate)).run();
-        this.insertEventDrafts(tx, gapEvents);
+      const nextTradingDate = this.nextTradingDate(date, tx);
+      const nextBoundaryDate = this.nextVersionBoundary(date, tx);
+      const nextObservationDate = [nextTradingDate, nextBoundaryDate]
+        .filter((value): value is string => value !== undefined)
+        .sort()[0];
+      const modeled = this.readUniverseAsOfInternal(date, tx);
+      const preservedFuture = nextObservationDate === undefined
+        ? undefined
+        : this.readUniverseAsOfInternal(nextObservationDate, tx);
+      const changedCodes = new Set<string>();
+      for (const code of new Set([...modeled.keys(), ...fetched.keys()])) {
+        if (!sameSymbolMasterEntry(modeled.get(code), fetched.get(code))) changedCodes.add(code);
       }
+      this.overlayUniverseInterval(tx, date, nextObservationDate ?? null, fetched, changedCodes);
+
       this.mergeCoverage(tx, date);
       this.recordTradingDay(tx, date);
       this.writeDailyBars(tx, date, kospiTrades, kosdaqTrades);
+      this.mergeNonTradingCoverage(tx, date, date);
+      this.assertUniversesEqual(this.readUniverseAsOfInternal(date, tx), fetched, date);
+      if (nextObservationDate !== undefined && preservedFuture !== undefined) {
+        this.assertUniversesEqual(
+          this.readUniverseAsOfInternal(nextObservationDate, tx),
+          preservedFuture,
+          nextObservationDate,
+        );
+      }
+
+      return { kind: 'TRADING_DAY' } as const;
     });
-
-    // 분기 체크포인트 검증은 방금 확정한 이벤트를 getUniverseAsOf 로 다시 읽어야 하므로
-    // 위 트랜잭션과 묶지 않는다 — 검증 저장이 실패해도 이벤트·coverage 는 이미 커밋된 채로 남는다.
-    const checkpointSaved = this.verifyQuarterlyCheckpoint(date, prevDate, fetched);
-
-    return { kind: 'TRADING_DAY', eventCount: todaysEvents.length, checkpointSaved };
   }
 
-  /**
-   * 분기가 바뀌었거나(quarterOf(date) !== quarterOf(prevDate)) 이 분기에 체크포인트가
-   * 아직 없으면, 방금 확정한 이벤트로 재구성한 유니버스를 이번 ingest 의 KRX 실측과
-   * 비교해 체크포인트를 남긴다. 최초 수집(prevDate 없음)은 ingestDate 상단에서 이미
-   * writeCheckpoint 로 처리하므로 이 경로를 타지 않는다.
-   */
-  private verifyQuarterlyCheckpoint(
-    date: string,
-    prevDate: string,
-    fetched: UniverseState,
-  ): boolean {
-    const currentQuarter = quarterOf(date);
-    if (currentQuarter === quarterOf(prevDate) && this.hasCheckpointInQuarter(currentQuarter)) {
-      return false;
-    }
-
-    const reconstructed = this.getUniverseAsOf(date);
-    const mismatch = findUniverseMismatch(reconstructed, fetched);
-    if (mismatch === undefined) {
-      this.saveCheckpoint(date, fetched, true);
-      return true;
-    }
-
-    // mismatch 를 실측으로 덮어써 이후 재구성이 이 체크포인트에서 다시 시작하게 한다 —
-    // 이벤트 저장 오염이 있었더라도 여기서부터는 정상 상태로 복구된다.
-    this.deps.logger.warn(
-      { module: 'market-data', event: 'symbol-master.checkpoint-mismatch', date, mismatch },
-      '분기 체크포인트 재구성이 KRX 실측과 어긋나 실측으로 교정한다',
-    );
-    this.saveCheckpoint(date, fetched, false, mismatch);
-    return true;
-  }
-
-  /** checkpoints 테이블 전체를 훑어 해당 분기에 속하는 체크포인트가 있는지 본다 — 분기당 하나뿐이라 비용이 작다 */
-  private hasCheckpointInQuarter(quarter: string): boolean {
-    const rows = this.deps.db
-      .select({ checkpointDate: symbolMasterCheckpoints.checkpointDate })
-      .from(symbolMasterCheckpoints)
-      .all();
-    return rows.some((row) => quarterOf(row.checkpointDate) === quarter);
-  }
-
-  /** 유니버스 전체 스냅샷을 새 체크포인트로 저장한다. 반환값은 체크포인트 id */
-  saveCheckpoint(
-    date: string,
-    universeState: UniverseState,
-    verified: boolean,
-    mismatch?: object,
-  ): string {
-    return this.deps.db.transaction((tx) =>
-      this.writeCheckpoint(tx, date, universeState, verified, mismatch),
-    );
-  }
-
-  /**
-   * 체크포인트 insert 를 외부 트랜잭션 안에서도 실행할 수 있게 뽑아낸 헬퍼 —
-   * ingestDate 의 최초 수집 경로가 coverage 갱신과 원자적으로 묶어 쓴다.
-   * 같은 checkpointDate 가 이미 있으면 새로 만들지 않고 기존 id 를 재사용한다 —
-   * UNIQUE 제약 위반 방어이자, 이 원자성 수정 이전에 체크포인트만 남고 coverage 가
-   * 비었던 과거 데이터를 다시 수집할 때 복구 경로가 된다. 다만 id 만 재사용할 뿐
-   * verified/mismatch/symbols 는 이번 호출 값으로 덮어쓴다 — 그러지 않으면 분기
-   * 체크포인트 검증이 실제로 기록한 검증 결과가 과거 값에 가려 사라진다.
-   */
-  private writeCheckpoint(
-    tx: AppDatabase,
-    date: string,
-    universeState: UniverseState,
-    verified: boolean,
-    mismatch?: object,
-  ): string {
-    const existing = tx
-      .select({ id: symbolMasterCheckpoints.id })
-      .from(symbolMasterCheckpoints)
-      .where(eq(symbolMasterCheckpoints.checkpointDate, date))
-      .get();
-
-    const now = this.deps.clock.now();
-    const verifiedAtMs = verified ? now : null;
-    const mismatchJson = mismatch ? JSON.stringify(mismatch) : null;
-
-    let id: string;
-    if (existing) {
-      id = existing.id;
-      tx.update(symbolMasterCheckpoints)
-        .set({ verifiedAtMs, mismatchJson })
-        .where(eq(symbolMasterCheckpoints.id, id))
-        .run();
-      tx.delete(symbolMasterCheckpointSymbols)
-        .where(eq(symbolMasterCheckpointSymbols.checkpointId, id))
-        .run();
-    } else {
-      id = newId('smc');
-      tx.insert(symbolMasterCheckpoints).values({
-        id,
-        checkpointDate: date,
-        source: 'KRX',
-        verifiedAtMs,
-        mismatchJson,
-        createdAtMs: now,
-      }).run();
-    }
-
-    const rows = [...universeState.values()].map((entry) => ({ checkpointId: id, ...entry }));
-    // SQLite 바인딩 변수 한도(999)를 피하려 500개 단위로 나눠 넣는다
-    for (let i = 0; i < rows.length; i += 500) {
-      tx.insert(symbolMasterCheckpointSymbols).values(rows.slice(i, i + 500)).run();
-    }
-    return id;
-  }
-
-  /** 체크포인트 + 이벤트 재구성으로 특정 시점의 유니버스 상태를 만든다 */
-  getUniverseAsOf(date: string): UniverseState {
-    const cp = this.nearestCheckpoint(date);
-    if (!cp) throw new SymbolMasterNotCoveredError(date);
-
-    const symbolRows = this.deps.db
+  private readUniverseAsOfInternal(date: string, db: AppDatabase = this.deps.db): UniverseState {
+    const rows = db
       .select()
-      .from(symbolMasterCheckpointSymbols)
-      .where(eq(symbolMasterCheckpointSymbols.checkpointId, cp.id))
+      .from(symbolMasterVersions)
+      .where(
+        and(
+          lte(symbolMasterVersions.validFromDate, date),
+          or(isNull(symbolMasterVersions.validToDate), gt(symbolMasterVersions.validToDate, date)),
+        ),
+      )
       .all();
-    const base: UniverseState = new Map(symbolRows.map((row) => [row.standardCode, {
+    return new Map(rows.map((row) => [row.standardCode, this.entryFromVersion(row)]));
+  }
+
+  private entryFromVersion(row: SymbolMasterVersionRow): SymbolMasterEntry {
+    return {
       standardCode: row.standardCode,
       shortCode: row.shortCode,
       name: row.name,
@@ -404,16 +565,146 @@ export class SymbolMasterService {
       sharesOutstanding: row.sharesOutstanding,
       instrumentType: row.instrumentType as SymbolMasterInstrumentType,
       listedDate: row.listedDate,
-    } satisfies SymbolMasterEntry]));
+    };
+  }
 
-    if (date >= cp.checkpointDate) {
-      // (cp.checkpointDate, date] 구간을 순방향으로 적용한다
-      const events = this.eventsBetween(cp.checkpointDate, date);
-      return applyEventsForward(base, events);
+  private overlayUniverseInterval(
+    tx: AppDatabase,
+    fromDate: string,
+    toDate: string | null,
+    desired: UniverseState,
+    changedCodes: ReadonlySet<string>,
+  ): void {
+    const codes = [...changedCodes];
+    if (codes.length === 0) return;
+
+    const rowsByCode = new Map<string, SymbolMasterVersionRow[]>();
+    for (let i = 0; i < codes.length; i += 500) {
+      const chunk = codes.slice(i, i + 500);
+      for (const row of tx
+        .select()
+        .from(symbolMasterVersions)
+        .where(inArray(symbolMasterVersions.standardCode, chunk))
+        .orderBy(asc(symbolMasterVersions.standardCode), asc(symbolMasterVersions.validFromDate))
+        .all()) {
+        const rows = rowsByCode.get(row.standardCode) ?? [];
+        rows.push(row);
+        rowsByCode.set(row.standardCode, rows);
+      }
     }
-    // (date, cp.checkpointDate] 구간을 역방향으로 적용한다
-    const events = this.eventsBetween(date, cp.checkpointDate);
-    return applyEventsBackward(base, events);
+
+    const recordedAtMs = this.deps.clock.now();
+    const replacements: (typeof symbolMasterVersions.$inferInsert)[] = [];
+    for (const code of codes) {
+      const existing: SymbolMasterVersionSegment[] = (rowsByCode.get(code) ?? []).map((row) => ({
+        validFromDate: row.validFromDate,
+        validToDate: row.validToDate,
+        entry: this.entryFromVersion(row),
+        recordedAtMs: row.recordedAtMs,
+      }));
+      const timeline = overlayVersionTimeline(
+        existing,
+        fromDate,
+        toDate,
+        desired.get(code),
+        recordedAtMs,
+      );
+      for (const segment of timeline) {
+        replacements.push({
+          standardCode: segment.entry.standardCode,
+          validFromDate: segment.validFromDate,
+          validToDate: segment.validToDate,
+          shortCode: segment.entry.shortCode,
+          name: segment.entry.name,
+          market: segment.entry.market,
+          sharesOutstanding: segment.entry.sharesOutstanding,
+          instrumentType: segment.entry.instrumentType,
+          listedDate: segment.entry.listedDate,
+          recordedAtMs: segment.recordedAtMs,
+        });
+      }
+    }
+
+    // 바뀐 종목의 타임라인만 원자적으로 교체한다. 인접 동일 버전은 위에서
+    // 합쳐지므로 날짜를 역순으로 추가해도 행 수가 늘지 않는다.
+    for (let i = 0; i < codes.length; i += 500) {
+      tx.delete(symbolMasterVersions)
+        .where(inArray(symbolMasterVersions.standardCode, codes.slice(i, i + 500)))
+        .run();
+    }
+    for (let i = 0; i < replacements.length; i += 200) {
+      tx.insert(symbolMasterVersions).values(replacements.slice(i, i + 200)).run();
+    }
+  }
+
+  private nextTradingDate(date: string, db: AppDatabase = this.deps.db): string | undefined {
+    return db
+      .select({ date: symbolMasterTradingDays.date })
+      .from(symbolMasterTradingDays)
+      .where(gt(symbolMasterTradingDays.date, date))
+      .orderBy(asc(symbolMasterTradingDays.date))
+      .limit(1)
+      .get()?.date;
+  }
+
+  /** trading_days 누락에도 기존 SCD 경계를 덮지 않도록 가장 가까운 미래 경계를 찾는다. */
+  private nextVersionBoundary(date: string, db: AppDatabase = this.deps.db): string | undefined {
+    const nextStart = db
+      .select({ date: symbolMasterVersions.validFromDate })
+      .from(symbolMasterVersions)
+      .where(gt(symbolMasterVersions.validFromDate, date))
+      .orderBy(asc(symbolMasterVersions.validFromDate))
+      .limit(1)
+      .get()?.date;
+    const nextEnd = db
+      .select({ date: symbolMasterVersions.validToDate })
+      .from(symbolMasterVersions)
+      .where(
+        and(
+          isNotNull(symbolMasterVersions.validToDate),
+          gt(symbolMasterVersions.validToDate, date),
+        ),
+      )
+      .orderBy(asc(symbolMasterVersions.validToDate))
+      .limit(1)
+      .get()?.date ?? undefined;
+    return [nextStart, nextEnd]
+      .filter((value): value is string => value !== undefined)
+      .sort()[0];
+  }
+
+  private isCoveredIn(db: AppDatabase, date: string): boolean {
+    return db
+      .select({ id: symbolMasterCoverage.id })
+      .from(symbolMasterCoverage)
+      .where(and(lte(symbolMasterCoverage.startDate, date), gte(symbolMasterCoverage.endDate, date)))
+      .get() !== undefined;
+  }
+
+  private assertUniversesEqual(actual: UniverseState, expected: UniverseState, date: string): void {
+    if (actual.size !== expected.size) {
+      throw new Error(`SCD 저장 검증 실패(${date}): ${actual.size}종목 != ${expected.size}종목`);
+    }
+    for (const [code, entry] of expected) {
+      if (!sameSymbolMasterEntry(actual.get(code), entry)) {
+        throw new Error(`SCD 저장 검증 실패(${date}): ${code} 상태 불일치`);
+      }
+    }
+  }
+
+  /**
+   * 선택 날짜에 유효한 SCD 버전을 직접 조회해 전체 유니버스를 만든다.
+   * coverage 만 있고 같은 연속 구간 안에 앞선 거래일이 없으면 고립된 휴장일이므로
+   * 다른 구간의 열린 버전을 끌어오지 않는다.
+   */
+  getUniverseAsOf(date: string): UniverseState {
+    if (!this.canResolveUniverseAsOf(date)) throw new SymbolMasterNotCoveredError(date);
+    return this.readUniverseAsOfInternal(date);
+  }
+
+  /** date 를 포함한 연속 coverage 안에 실제 거래일 anchor 가 있어 유니버스를 읽을 수 있는지 본다. */
+  canResolveUniverseAsOf(date: string): boolean {
+    return this.effectiveTradingDateWithinCoverage(date) !== undefined;
   }
 
   /**
@@ -421,12 +712,9 @@ export class SymbolMasterService {
    * 행이 있으면 KRX 를 부르지 않고 그대로 반환한다. 미스면 getUniverseAsOf 로
    * shortCode→standardCode 매핑부터 얻는다.
    *
-   * 커버 판정은 isCovered 로 캐시 조회보다 먼저 확인한다 — getUniverseAsOf 는
-   * "체크포인트가 하나라도 있는지"만 보고 nearestCheckpoint 로 아무 날짜나 재구성해
-   * 버리기 때문에, 체크포인트는 있지만 coverage 갭인 날짜도 통과시킨다. 그런 날짜를
-   * isCovered 없이 캐시 히트 검사보다 뒤에 걸렀다면, 과거에 어쩌다 이미 캐시가 쌓인
-   * 갭 날짜는 그 검증 안 된 캐시를 그대로 반환해 버렸을 것이다 — 그래서 이 게이트를
-   * 캐시 조회보다도 앞에 둔다.
+   * 유니버스 해소 가능 여부는 캐시 조회보다 먼저 확인한다. SCD 구간은 미수집 날짜도
+   * 관통할 수 있고 고립 휴장일에는 거래일 anchor가 없으므로, 그 상태나 캐시를 검증된
+   * 데이터로 취급하면 안 된다.
    *
    * 같은 date 의 동시 호출은 inflightMarketCaps 가드가 하나로 묶는다 — 실제 로직은
    * getMarketCapsAtUnguarded 에 있고, 이 메서드는 가드 역할만 한다.
@@ -443,7 +731,7 @@ export class SymbolMasterService {
   }
 
   private async getMarketCapsAtUnguarded(date: string): Promise<ReadonlyMap<string, string>> {
-    if (!this.isCovered(date)) throw new SymbolMasterNotCoveredError(date);
+    if (!this.canResolveUniverseAsOf(date)) throw new SymbolMasterNotCoveredError(date);
 
     const cached = this.readCachedMarketCaps(date);
     if (cached !== undefined) return cached;
@@ -501,7 +789,7 @@ export class SymbolMasterService {
     return new Map(rows.map((row) => [row.standardCode, row.marketCapKrw]));
   }
 
-  /** SQLite 바인딩 변수 한도(999)를 피하려 500개 단위로 나눠 넣는다 — writeCheckpoint 와 같은 이유다 */
+  /** SQLite 바인딩 변수 한도(999)를 피하려 500개 단위로 나눠 넣는다. */
   private writeMarketCaps(
     tx: AppDatabase,
     date: string,
@@ -533,30 +821,12 @@ export class SymbolMasterService {
       .all();
   }
 
-  /** 체크포인트 전체 목록 — coverage API 응답용. checkpointDate 오름차순 */
-  listCheckpoints(): { checkpointDate: string; verified: boolean; mismatch: boolean }[] {
-    return this.deps.db
-      .select({
-        checkpointDate: symbolMasterCheckpoints.checkpointDate,
-        verifiedAtMs: symbolMasterCheckpoints.verifiedAtMs,
-        mismatchJson: symbolMasterCheckpoints.mismatchJson,
-      })
-      .from(symbolMasterCheckpoints)
-      .orderBy(asc(symbolMasterCheckpoints.checkpointDate))
-      .all()
-      .map((row) => ({
-        checkpointDate: row.checkpointDate,
-        verified: row.verifiedAtMs !== null,
-        mismatch: row.mismatchJson !== null,
-      }));
-  }
-
   /**
-   * date 이하에서 가장 가까운 거래일. 없으면 undefined — 재구성 앵커가 없다는 뜻이다.
+   * date 이하에서 가장 가까운 거래일. 없으면 undefined — 조회 앵커가 없다는 뜻이다.
    * 휴장일은 symbolMasterTradingDays 에 기록되지 않으므로 자연히 건너뛴다.
    *
    * 커버 여부와 무관하게 전역에서 찾는 raw 버전이다 — date 가 아예 커버 밖이어도,
-   * date 와 전혀 안 이어진 먼 과거 거래일이어도 값을 낼 수 있다. 그래서 "재구성해도
+   * date 와 전혀 안 이어진 먼 과거 거래일이어도 값을 낼 수 있다. 그래서 "조회해도
    * 되는 날짜"를 판정하는 실제 프로덕션 경로(ensureTradingDay 의 소급 루프,
    * UniverseRuleResolver.resolve)는 이 메서드를 직접 쓰지 않는다 — 대신 커버 구간
    * 안으로 한정하는 effectiveTradingDateWithinCoverage() 를 쓴다(그 메서드 주석에
@@ -578,7 +848,7 @@ export class SymbolMasterService {
 
   /**
    * date 를 거래일로 기록한다. 재수집으로 같은 날짜가 다시 들어와도 UNIQUE 위반이
-   * 나지 않게 onConflictDoNothing 을 쓴다. 호출자가 이벤트·coverage 갱신과 같은
+   * 나지 않게 onConflictDoNothing 을 쓴다. 호출자가 SCD 버전·coverage 갱신과 같은
    * 트랜잭션 안에서 불러야 한다 — 따로 두면 중간에 죽었을 때 거래일 기록만 빠진다.
    */
   private recordTradingDay(tx: AppDatabase, date: string): void {
@@ -588,13 +858,18 @@ export class SymbolMasterService {
   /**
    * 이미 받아 둔 kospiTrades·kosdaqTrades 로 그날의 일봉을 krxDailyBars 에 저장한다 —
    * ingestDateUnguarded 가 KRX 를 다시 부르지 않고 넘겨주는 값을 그대로 쓴다. 호출자가
-   * 이벤트·coverage·거래일 기록과 같은 트랜잭션 안에서 불러야 한다 — 따로 두면 중간에
+   * SCD 버전·coverage·거래일 기록과 같은 트랜잭션 안에서 불러야 한다 — 따로 두면 중간에
    * 죽었을 때 커버는 됐는데 봉만 빠진 상태가 남는다.
    *
-   * 가격 4개나 거래량 중 하나라도 null 인 행(거래정지 등)은 저장할 컬럼이 NOT NULL
-   * 이라 애초에 넣을 수 없다. 건너뛰고 건수만 남긴다.
-   * null 은 아니지만 high < low 처럼 OHLC 관계가 어긋난 행도 파싱 버그일 수 있다.
-   * `isValidCandle` 로 걸러 따로 센다 — 원인이 다르면 운영자가 로그에서 구분해야 한다.
+   * KRX 는 거래정지·무거래 행을 `null` 이 아니라 시·고·저 "0", 종가는 직전가,
+   * 거래량 0 으로 준다 (실측 2026-08-08). 그 행은 `krx_non_trading_days` 에 따로
+   * 기록하고 봉으로는 넣지 않는다 — 시·고·저를 우리가 지어내지 않기 위해서다.
+   *
+   * 그래도 `null` 검사는 남긴다. 저장할 컬럼이 NOT NULL 이라 방어선이 필요하고,
+   * KRX 가 응답 모양을 바꾸면 여기서 건수로 드러난다.
+   *
+   * 위 둘 중 어디에도 안 걸리는데 `isValidCandle` 이 거부하는 행(high < low 등)은
+   * 진짜 파싱 버그다. `invalidCount` 로 따로 센다.
    *
    * 이미 있는 날짜는 건드리지 않는다. 자본변동은 계산 시점에 반영하므로(설계
    * 2026-08-08-corporate-action-continuity) 봉을 고쳐 받을 이유가 없다.
@@ -618,6 +893,7 @@ export class SymbolMasterService {
     let skipped = 0;
     let invalidCount = 0;
     const rows: (typeof krxDailyBars.$inferInsert)[] = [];
+    const nonTradingRows: (typeof krxNonTradingDays.$inferInsert)[] = [];
     for (const [market, trades] of byMarket) {
       for (const trade of trades) {
         if (
@@ -628,6 +904,15 @@ export class SymbolMasterService {
           || trade.volume === null
         ) {
           skipped += 1;
+          continue;
+        }
+        if (isNonTradingRow(trade)) {
+          nonTradingRows.push({
+            shortCode: trade.shortCode,
+            date,
+            market,
+            lastClose: trade.close,
+          });
           continue;
         }
         const candle: Candle = {
@@ -672,11 +957,28 @@ export class SymbolMasterService {
         'OHLC 값이 서로 어긋난 일봉 행을 건너뛴다',
       );
     }
+    if (nonTradingRows.length > 0) {
+      this.deps.logger.info(
+        {
+          module: 'market-data',
+          event: 'symbol-master.non-trading-days',
+          date,
+          count: nonTradingRows.length,
+        },
+        '거래정지·무거래로 봉이 없는 종목을 기록한다',
+      );
+    }
 
     // SQLite 바인딩 변수 한도(999)를 피하려 500개 단위로 나눠 넣는다 — writeCheckpoint 와 같은 이유다
     for (let i = 0; i < rows.length; i += 500) {
       tx.insert(krxDailyBars)
         .values(rows.slice(i, i + 500))
+        .onConflictDoNothing()
+        .run();
+    }
+    for (let i = 0; i < nonTradingRows.length; i += 500) {
+      tx.insert(krxNonTradingDays)
+        .values(nonTradingRows.slice(i, i + 500))
         .onConflictDoNothing()
         .run();
     }
@@ -690,6 +992,136 @@ export class SymbolMasterService {
       .where(and(lte(symbolMasterCoverage.startDate, date), gte(symbolMasterCoverage.endDate, date)))
       .get();
     return row !== undefined;
+  }
+
+  /**
+   * 구간 안의 거래불가일 전체. 날짜 오름차순, 같은 날짜 안에서는 코드 오름차순이다 —
+   * 호출부가 이 순서를 그대로 해시에 넣을 수 있어야 재현성이 흔들리지 않는다.
+   */
+  nonTradingDaysBetween(
+    from: string,
+    to: string,
+  ): readonly { date: string; shortCode: string; lastClose: number }[] {
+    return this.deps.db
+      .select({
+        date: krxNonTradingDays.date,
+        shortCode: krxNonTradingDays.shortCode,
+        lastClose: krxNonTradingDays.lastClose,
+      })
+      .from(krxNonTradingDays)
+      .where(and(gte(krxNonTradingDays.date, from), lte(krxNonTradingDays.date, to)))
+      .orderBy(asc(krxNonTradingDays.date), asc(krxNonTradingDays.shortCode))
+      .all();
+  }
+
+  /**
+   * 구간 전체를 덮는 커버 행이 하나라도 있는지.
+   *
+   * 행이 없는 날짜가 "거래불가 종목이 없었다" 인지 "아직 모른다" 인지를 이 메서드로만
+   * 가른다. 이 구분이 없으면 결과 경고가 백필 전에도 "반영한다" 고 거짓말한다.
+   *
+   * 조각을 읽는 쪽에서 이어 붙이지 않는다. 쓰는 쪽(mergeNonTradingCoverage)이 맞닿거나
+   * 겹치는 구간을 그때그때 합치므로, 저장된 구간들은 항상 서로 떨어진 최대 구간이다.
+   * 하루씩 들어오는 수집 경로는 읽기 쪽 이어붙이기만으로는 10년치에 행 수천 개를 쌓게
+   * 되는데, 쓰기 쪽에서 합치면 그 문제까지 함께 사라진다.
+   */
+  isNonTradingRangeCovered(from: string, to: string): boolean {
+    const row = this.deps.db
+      .select({ id: krxNonTradingCoverage.id })
+      .from(krxNonTradingCoverage)
+      .where(
+        and(
+          lte(krxNonTradingCoverage.startDate, from),
+          gte(krxNonTradingCoverage.endDate, to),
+        ),
+      )
+      .get();
+    return row !== undefined;
+  }
+
+  /**
+   * 이미 수집한 구간의 거래불가일을 뒤늦게 채운다.
+   *
+   * `ingestDate` 를 다시 부르지 않는다. 그쪽은 이벤트·coverage·봉을 함께 쓰므로
+   * 재실행하면 이벤트가 다시 생길 위험이 있다. 여기서는 일별매매정보만 부르고
+   * `krx_non_trading_days` 만 쓴다 — 되돌릴 것이 그 테이블 하나뿐이다.
+   *
+   * 휴장일은 응답이 0행이라 저절로 건너뛰어진다. 날짜 달력을 따로 두지 않는다.
+   *
+   * 커버는 응답을 하나라도 받은 날짜까지만 넓힌다. 한 날짜도 응답이 없으면 커버를
+   * 아예 남기지 않는다 — 잘못 설정된 소스로 10년치를 돌린 실행이 아무것도 저장하지
+   * 않고 그 10년을 "다 봤다" 로 만들면, 실행 경고가 영영 사라진다. 반대로 응답을
+   * 받았는데 거래불가 종목만 0건인 날은 커버로 남긴다. "봤는데 없었다" 와 "안 봤다"
+   * 는 끝까지 갈라야 한다.
+   */
+  async backfillNonTradingDays(from: string, to: string): Promise<{ dates: number; rows: number }> {
+    let dates = 0;
+    let rows = 0;
+    for (let date = from; date <= to; date = addCalendarDays(date, 1)) {
+      const byMarket: readonly [KrxMarket, readonly KrxDailyTradeRow[]][] = [
+        ['KOSPI', await this.deps.source.fetchDailyTrades('KOSPI', date)],
+        ['KOSDAQ', await this.deps.source.fetchDailyTrades('KOSDAQ', date)],
+      ];
+      const values: (typeof krxNonTradingDays.$inferInsert)[] = [];
+      for (const [market, trades] of byMarket) {
+        for (const trade of trades) {
+          if (trade.close === null || !isNonTradingRow(trade)) continue;
+          values.push({ shortCode: trade.shortCode, date, market, lastClose: trade.close });
+        }
+      }
+      if (byMarket.every(([, trades]) => trades.length === 0)) continue;
+      dates += 1;
+      // 행 저장과 커버를 같은 트랜잭션에 넣는다. 나누면 중간에 죽었을 때 행은 들어갔는데
+      // 커버는 없는 날짜가 남고, 그 날짜는 다시 백필하지 않는 한 영영 "모른다" 로 읽힌다.
+      // 커버를 [from, date] 로 넓히는 이유는 그 사이 응답 0행인 날(휴장·주말)도 실제로
+      // 조회했기 때문이다 — 하루씩만 넣으면 주말에서 구간이 끊긴다.
+      this.deps.db.transaction((tx) => {
+        for (let i = 0; i < values.length; i += 500) {
+          tx.insert(krxNonTradingDays).values(values.slice(i, i + 500)).onConflictDoNothing().run();
+        }
+        this.mergeNonTradingCoverage(tx, from, date);
+      });
+      rows += values.length;
+    }
+    // 한 날짜도 응답이 없으면 본 것이 없다 — 커버를 남기지 않는다
+    if (dates === 0) return { dates, rows };
+    // 마지막 응답일 뒤의 날짜(구간 끝이 주말·휴장인 경우)까지 넓힌다. 그 날짜들도 조회는 했다.
+    this.deps.db.transaction((tx) => this.mergeNonTradingCoverage(tx, from, to));
+    return { dates, rows };
+  }
+
+  /**
+   * [startDate, endDate] 를 거래불가 커버에 반영하며 맞닿거나 겹치는 구간과 합친다.
+   * `mergeCoverage` 와 같은 규칙을 구간 단위로 넓힌 것이다.
+   *
+   * 수집 경로는 하루씩, 백필은 한 번에 여러 날을 넣는다. 합치지 않으면 두 경로 모두
+   * 조각난 행을 쌓고, 구간 전체를 덮는 행이 없어 `isNonTradingRangeCovered` 가
+   * 실제로는 다 채운 기간을 "모른다" 로 판정한다.
+   *
+   * 수집 경로에서는 반드시 봉·거래일 기록과 같은 트랜잭션 안에서 불러야 한다 —
+   * 따로 두면 중간에 죽었을 때 거래불가일 행은 들어갔는데 커버는 안 남은 상태가 되고,
+   * 그 날짜는 재수집 게이트에 막혀 영영 커버로 바뀌지 않는다.
+   */
+  private mergeNonTradingCoverage(tx: AppDatabase, startDate: string, endDate: string): void {
+    // 하루 차이로 맞닿은 구간까지 합치려고 양쪽을 하루씩 넓혀 겹침을 본다
+    const touchStart = addCalendarDays(startDate, -1);
+    const touchEnd = addCalendarDays(endDate, 1);
+
+    let mergedStart = startDate;
+    let mergedEnd = endDate;
+    const ranges = tx.select().from(krxNonTradingCoverage).all();
+    for (const range of ranges) {
+      if (range.endDate < touchStart || range.startDate > touchEnd) continue;
+      if (range.startDate < mergedStart) mergedStart = range.startDate;
+      if (range.endDate > mergedEnd) mergedEnd = range.endDate;
+      tx.delete(krxNonTradingCoverage).where(eq(krxNonTradingCoverage.id, range.id)).run();
+    }
+
+    tx.insert(krxNonTradingCoverage).values({
+      startDate: mergedStart,
+      endDate: mergedEnd,
+      syncedAtMs: this.deps.clock.now(),
+    }).run();
   }
 
   /**
@@ -718,51 +1150,228 @@ export class SymbolMasterService {
     return cursor > to;
   }
 
-  /** [from, to] 구간의 이벤트 원본 row (id 포함) — effectiveDate, id 오름차순 */
-  listEvents(from: string, to: string): SymbolMasterEventRow[] {
-    return this.deps.db
-      .select()
-      .from(symbolMasterEvents)
-      .where(and(gte(symbolMasterEvents.effectiveDate, from), lte(symbolMasterEvents.effectiveDate, to)))
-      .orderBy(asc(symbolMasterEvents.effectiveDate), asc(symbolMasterEvents.id))
-      .all();
-  }
-
   /**
-   * |checkpointDate - date| 최소인 체크포인트를 고른다. 동률이면 과거 쪽을 택한다 —
-   * 체크포인트 개수가 적어(분기 경계마다 하나) 전체를 읽어 비교해도 비용이 무시할 만하다.
+   * [from, to] 구간의 버전 경계를 비교해 변경 이벤트를 파생한다. 이벤트는
+   * 재구성 원천이 아니라 사용자에게 변경 이유를 보여 주는 read model 이다.
    */
-  private nearestCheckpoint(date: string): SymbolMasterCheckpointRow | undefined {
-    const rows = this.deps.db.select().from(symbolMasterCheckpoints).all();
-    const target = Date.parse(date);
-    let best: SymbolMasterCheckpointRow | undefined;
-    let bestDiff = Infinity;
+  listEvents(from: string, to: string): SymbolMasterEventRow[] {
+    const rows = this.deps.db
+      .select()
+      .from(symbolMasterVersions)
+      .where(
+        or(
+          and(
+            gte(symbolMasterVersions.validFromDate, from),
+            lte(symbolMasterVersions.validFromDate, to),
+          ),
+          and(
+            isNotNull(symbolMasterVersions.validToDate),
+            gte(symbolMasterVersions.validToDate, from),
+            lte(symbolMasterVersions.validToDate, to),
+          ),
+        ),
+      )
+      .all();
+    const observedDates = this.deps.db
+      .select({ date: symbolMasterTradingDays.date })
+      .from(symbolMasterTradingDays)
+      .where(lt(symbolMasterTradingDays.date, to))
+      .orderBy(asc(symbolMasterTradingDays.date))
+      .all()
+      .map((row) => row.date);
+    const previousObservedDate = (date: string): string | undefined => {
+      let low = 0;
+      let high = observedDates.length;
+      while (low < high) {
+        const mid = Math.floor((low + high) / 2);
+        if (observedDates[mid]! < date) low = mid + 1;
+        else high = mid;
+      }
+      return observedDates[low - 1];
+    };
+
+    const boundaries = new Map<string, {
+      date: string;
+      standardCode: string;
+      before?: SymbolMasterEntry;
+      after?: SymbolMasterEntry;
+    }>();
+    const boundary = (date: string, standardCode: string) => {
+      const key = `${date}|${standardCode}`;
+      const value = boundaries.get(key) ?? { date, standardCode };
+      boundaries.set(key, value);
+      return value;
+    };
+
     for (const row of rows) {
-      const diff = Math.abs(Date.parse(row.checkpointDate) - target);
-      if (
-        diff < bestDiff
-        || (diff === bestDiff && best !== undefined && row.checkpointDate < best.checkpointDate)
-      ) {
-        best = row;
-        bestDiff = diff;
+      if (row.validFromDate >= from && row.validFromDate <= to) {
+        boundary(row.validFromDate, row.standardCode).after = this.entryFromVersion(row);
+      }
+      if (row.validToDate !== null && row.validToDate >= from && row.validToDate <= to) {
+        boundary(row.validToDate, row.standardCode).before = this.entryFromVersion(row);
       }
     }
-    return best;
+
+    const events: SymbolMasterEventRow[] = [];
+    for (const item of boundaries.values()) {
+      const observedSpanStart = previousObservedDate(item.date);
+      // 저장소가 처음 관측한 baseline 전 종목을 신규상장으로 오인하지 않는다.
+      if (observedSpanStart === undefined) continue;
+      const previous: UniverseState = item.before === undefined
+        ? new Map()
+        : new Map([[item.standardCode, item.before]]);
+      const next: UniverseState = item.after === undefined
+        ? new Map()
+        : new Map([[item.standardCode, item.after]]);
+      for (const draft of diffUniverse(previous, next, {
+        effectiveDate: item.date,
+        observedSpanStart,
+      })) {
+        events.push({
+          ...draft,
+          id: `${draft.effectiveDate}:${draft.standardCode}:${draft.eventType}`,
+        });
+      }
+    }
+
+    return events.sort((a, b) =>
+      a.effectiveDate.localeCompare(b.effectiveDate) || a.id.localeCompare(b.id));
   }
 
   /**
-   * (from, to] 구간의 이벤트를 effectiveDate·id 오름차순으로 가져온다. from 을 배제해야
-   * 체크포인트 자체 날짜의 이벤트를 중복 적용하지 않는다. 같은 날 여러 이벤트가 있을 때도
-   * id 순서를 보존해야 순방향·역방향 적용이 서로 왕복 가능하다.
+   * [from, to] 구간에 효력이 발생한 상장폐지 이벤트. 백테스트 워커가 폐지 종목을
+   * 청산하는 데 쓴다.
+   *
+   * `symbol_master_events` 를 직접 읽지 않고 `listEvents` 를 거른다. 그 테이블은 SCD
+   * 이행(D-045) 전 legacy 이력일 뿐이라, 이행 후 발생한 폐지는 한 줄도 들어가지 않는다.
+   * 테이블을 읽으면 신규 폐지가 조용히 빠져 청산이 일어나지 않는데, 에러도 경고도 없이
+   * 결과만 낙관적으로 틀린다. "무엇이 폐지인가" 의 판정도 `diffUniverse` 한 곳에 남는다.
+   *
+   * shortCode 는 `oldValue` JSON 에서 꺼낸다. standardCode 만으로는 봉이 쓰는
+   * 단축코드와 이어지지 않는다 — `diffUniverse` 가 DELISTED 의 `oldValue` 에
+   * `SymbolMasterEntry` 전체를 넣으므로 정상 데이터라면 항상 있다. 파싱에 실패하거나
+   * shortCode 가 없는 행은 건너뛰고 경고를 남긴다. 조용히 버리면 워커가 왜 그 종목의
+   * 폐지를 반영하지 못했는지 아무도 추적할 수 없다.
    */
-  private eventsBetween(from: string, to: string): SymbolMasterEventDraft[] {
-    return this.deps.db
-      .select()
-      .from(symbolMasterEvents)
-      .where(and(gt(symbolMasterEvents.effectiveDate, from), lte(symbolMasterEvents.effectiveDate, to)))
-      .orderBy(asc(symbolMasterEvents.effectiveDate), asc(symbolMasterEvents.id))
-      .all()
-      .map(toEventDraft);
+  delistedEventsBetween(
+    from: string,
+    to: string,
+  ): readonly { shortCode: string; effectiveDate: string }[] {
+    const candidates: { standardCode: string; shortCode: string; effectiveDate: string }[] = [];
+    for (const event of this.listEvents(from, to)) {
+      if (event.eventType !== 'DELISTED') continue;
+      const shortCode = this.parseDelistedShortCode(event.oldValue, event.id, event.effectiveDate);
+      if (shortCode === undefined) continue;
+      candidates.push({ standardCode: event.standardCode, shortCode, effectiveDate: event.effectiveDate });
+    }
+    if (candidates.length === 0) return [];
+
+    // 같은 **표준코드**가 폐지일 뒤에 다시 열리면 폐지가 아니라 KRX 기초정보 응답의
+    // 하루짜리 결측이다. persistTradingDay 는 fetched 에 없는 종목의 구간을 닫으므로,
+    // 한 종목이 하루 빠졌다 돌아오면 D 에 DELISTED, D+1 에 LISTED 로 파생된다.
+    // assertBaseInfoPresent 의 80% 문턱은 이런 한 종목짜리 결측을 잡지 못한다.
+    //
+    // 진짜 재상장은 이 필터에 걸리지 않는다. 단축코드를 재사용해 다른 회사가 들어와도
+    // 표준코드는 언제나 새로 발급되기 때문이다 — 폐지된 표준코드가 되살아나는 일은 없다.
+    // 그래서 이 조건은 결측만 걸러내고 실제 폐지는 그대로 남긴다.
+    const codes = [...new Set(candidates.map((candidate) => candidate.standardCode))];
+    const reopenedFromDates = new Map<string, string[]>();
+    // SQLite 바인딩 변수 상한에 걸리지 않게 다른 조회와 같은 크기로 끊는다
+    for (let i = 0; i < codes.length; i += 500) {
+      for (const row of this.deps.db
+        .select({
+          standardCode: symbolMasterVersions.standardCode,
+          validFromDate: symbolMasterVersions.validFromDate,
+        })
+        .from(symbolMasterVersions)
+        .where(inArray(symbolMasterVersions.standardCode, codes.slice(i, i + 500)))
+        .all()) {
+        const dates = reopenedFromDates.get(row.standardCode) ?? [];
+        dates.push(row.validFromDate);
+        reopenedFromDates.set(row.standardCode, dates);
+      }
+    }
+
+    const result: { shortCode: string; effectiveDate: string }[] = [];
+    for (const candidate of candidates) {
+      const reopened = (reopenedFromDates.get(candidate.standardCode) ?? []).some(
+        (validFromDate) => validFromDate > candidate.effectiveDate,
+      );
+      if (reopened) {
+        this.deps.logger.warn(
+          {
+            module: 'market-data',
+            event: 'symbol-master.delisting-suppressed',
+            standardCode: candidate.standardCode,
+            effectiveDate: candidate.effectiveDate,
+          },
+          '폐지 뒤 같은 표준코드가 다시 열려 있어 폐지로 보지 않는다 — KRX 기초정보 결측으로 본다',
+        );
+        continue;
+      }
+      result.push({ shortCode: candidate.shortCode, effectiveDate: candidate.effectiveDate });
+    }
+    return result;
+  }
+
+  /**
+   * DELISTED 이벤트 한 건의 oldValue 에서 shortCode 를 꺼낸다. 실패하면 경고를 남기고 undefined 를 돌려준다.
+   *
+   * 아래 세 분기(oldValue 없음·파싱 실패·shortCode 없음)는 단위 테스트가 없다. `listEvents`
+   * 가 만드는 DELISTED oldValue 는 `diffUniverse` 가 항상 `SymbolMasterEntry` 전체를
+   * JSON.stringify 한 값이라 그 모양이 유지되는 한 이 분기들에 실제로 도달할 경로가 없다.
+   * 그래도 지우지 않는 이유는 diffUniverse 의 오래된 값이 언젠가 바뀔 수 있어서다 — 그때도
+   * 이 메서드가 throw 대신 skip+warn 으로 물러나야 손상된 이벤트 한 건이 백테스트 실행
+   * 전체를 끌고 내려가지 않는다.
+   */
+  private parseDelistedShortCode(
+    oldValue: string | null,
+    id: string,
+    effectiveDate: string,
+  ): string | undefined {
+    if (oldValue === null) {
+      this.deps.logger.warn(
+        {
+          module: 'market-data',
+          event: 'symbol-master.delisted-event-missing-old-value',
+          id,
+          effectiveDate,
+        },
+        'DELISTED 이벤트에 oldValue 가 없어 건너뛴다',
+      );
+      return undefined;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(oldValue);
+    } catch {
+      this.deps.logger.warn(
+        {
+          module: 'market-data',
+          event: 'symbol-master.delisted-event-parse-failed',
+          id,
+          effectiveDate,
+        },
+        'DELISTED 이벤트의 oldValue 파싱에 실패해 건너뛴다',
+      );
+      return undefined;
+    }
+
+    const shortCode = (parsed as { shortCode?: unknown } | null)?.shortCode;
+    if (typeof shortCode !== 'string' || shortCode.length === 0) {
+      this.deps.logger.warn(
+        {
+          module: 'market-data',
+          event: 'symbol-master.delisted-event-missing-short-code',
+          id,
+          effectiveDate,
+        },
+        'DELISTED 이벤트의 oldValue 에 shortCode 가 없어 건너뛴다',
+      );
+      return undefined;
+    }
+    return shortCode;
   }
 
   /**
@@ -775,6 +1384,9 @@ export class SymbolMasterService {
     row: KrxIssueBaseInfoRow,
     market: KrxMarket,
   ): void {
+    if (universe.has(row.standardCode)) {
+      throw new Error(`KRX 기본정보 중복 표준코드(${market}, ${row.standardCode})`);
+    }
     const decision = classifyKrxIssue(row);
     const instrumentType: SymbolMasterInstrumentType =
       decision.kind === 'INCLUDE' ? decision.instrumentType : decision.reason;
@@ -806,40 +1418,23 @@ export class SymbolMasterService {
     });
   }
 
-  /** date 이전 가장 가까운 커버 종료일 — 없으면 최초 수집이라는 뜻이다 */
-  private previousCoveredDate(date: string): string | undefined {
-    const row = this.deps.db
-      .select({ endDate: symbolMasterCoverage.endDate })
-      .from(symbolMasterCoverage)
-      .where(lt(symbolMasterCoverage.endDate, date))
-      .orderBy(desc(symbolMasterCoverage.endDate))
-      .limit(1)
-      .get();
-    return row?.endDate;
-  }
-
-  /**
-   * date 뒤에서 가장 가까운 coverage 구간의 시작일 — 갭 메우기가 다시 계산해야 할 D2 다.
-   * "이벤트가 있는 날"로 찾으면 D2 가 우연히 무변화(이벤트 0개) 거래일일 때 건너뛰게 되고
-   * 그 뒤 날짜의 observedSpanStart 가 오히려 갱신되지 않는다 — coverage 구간 자체를
-   * 기준으로 삼아야 그런 날도 정확히 짚는다.
-   */
-  private nextCoverageStart(date: string): string | undefined {
-    const row = this.deps.db
-      .select({ startDate: symbolMasterCoverage.startDate })
-      .from(symbolMasterCoverage)
-      .where(gt(symbolMasterCoverage.startDate, date))
-      .orderBy(asc(symbolMasterCoverage.startDate))
-      .limit(1)
-      .get();
-    return row?.startDate;
-  }
-
-  /** draft 이벤트를 createdAtMs 를 붙여 트랜잭션 안에 삽입한다. 빈 배열은 쓰기를 건너뛴다 */
-  private insertEventDrafts(tx: AppDatabase, drafts: readonly SymbolMasterEventDraft[]): void {
-    if (drafts.length === 0) return;
-    const now = this.deps.clock.now();
-    tx.insert(symbolMasterEvents).values(drafts.map((draft) => ({ ...draft, createdAtMs: now }))).run();
+  /** 거래가 있는데 같은 시장의 기본정보가 비면 전체 상폐로 오염시키지 않고 수집을 중단한다. */
+  private assertBaseInfoPresent(
+    date: string,
+    market: KrxMarket,
+    trades: readonly KrxDailyTradeRow[],
+    baseInfo: readonly KrxIssueBaseInfoRow[],
+    modeled: UniverseState,
+  ): void {
+    const modeledCount = [...modeled.values()].filter((entry) => entry.market === market).length;
+    if (baseInfo.length === 0 && (trades.length > 0 || modeledCount > 0)) {
+      throw new Error(`KRX ${market} 기본정보가 비어 있다(${date})`);
+    }
+    if (modeledCount >= 20 && baseInfo.length < modeledCount * 0.8) {
+      throw new Error(
+        `KRX ${market} 기본정보가 급감했다(${date}): ${modeledCount} → ${baseInfo.length}`,
+      );
+    }
   }
 
   /**

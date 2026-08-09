@@ -1,27 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
-import { symbolMasterCoverage, symbolMasterEvents } from '../../src/server/shared/db/schema.js';
+import {
+  symbolMasterCoverage,
+  symbolMasterEvents,
+  symbolMasterTradingDays,
+  symbolMasterVersions,
+} from '../../src/server/shared/db/schema.js';
 import type { KrxHistoricalUniverseSource } from '../../src/server/modules/market-data/application/ports.js';
 import {
   SymbolMasterService,
   type SymbolMasterServiceDeps,
 } from '../../src/server/modules/market-data/application/symbol-master-service.js';
-import type {
-  SymbolMasterEntry,
-  SymbolMasterEventType,
-  UniverseState,
-} from '../../src/server/modules/market-data/domain/symbol-master.js';
+import type { SymbolMasterEntry } from '../../src/server/modules/market-data/domain/symbol-master.js';
 
-// entry()/state() 헬퍼는 diff·apply 테스트와 동일하게 정의한다
 function entry(overrides: Partial<SymbolMasterEntry> = {}): SymbolMasterEntry {
   return {
     standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자',
     market: 'KOSPI', sharesOutstanding: '100', instrumentType: 'COMMON_STOCK',
     listedDate: '1975-06-11', ...overrides,
   };
-}
-function state(...entries: SymbolMasterEntry[]): UniverseState {
-  return new Map(entries.map((e) => [e.standardCode, e]));
 }
 
 // 이 태스크는 source 를 쓰지 않는다 (다음 태스크가 실제 KRX 조회에 쓴다) — 더미로 충분하다.
@@ -37,73 +34,73 @@ function makeService(t: TestApp): SymbolMasterService {
   return new SymbolMasterService(deps);
 }
 
-function insertEvent(t: TestApp, draft: {
-  readonly effectiveDate: string;
-  readonly standardCode: string;
-  readonly eventType: SymbolMasterEventType;
-  readonly oldValue: string | null;
-  readonly newValue: string | null;
-  readonly observedSpanStart: string;
-}): void {
-  t.container.database.db.insert(symbolMasterEvents).values({
-    ...draft,
-    createdAtMs: t.container.clock.now(),
+function insertVersion(
+  t: TestApp,
+  value: SymbolMasterEntry,
+  validFromDate: string,
+  validToDate: string | null,
+): void {
+  t.container.database.db.insert(symbolMasterVersions).values({
+    standardCode: value.standardCode,
+    validFromDate,
+    validToDate,
+    shortCode: value.shortCode,
+    name: value.name,
+    market: value.market,
+    sharesOutstanding: value.sharesOutstanding,
+    instrumentType: value.instrumentType,
+    listedDate: value.listedDate,
+    recordedAtMs: t.container.clock.now(),
   }).run();
 }
 
 describe('getUniverseAsOf', () => {
-  it('체크포인트 이후 날짜: 순방향 이벤트 적용', async () => {
+  it('validToDate는 미포함이고 같은 날 시작하는 새 버전은 포함한다', async () => {
     const t = await createTestApp();
     const svc = makeService(t);
-    svc.saveCheckpoint('2023-01-02', state(entry()), true);
-    insertEvent(t, {
-      effectiveDate: '2023-01-03', eventType: 'SHARES_CHANGED',
-      standardCode: 'KR7005930003', oldValue: '"100"', newValue: '"90"',
-      observedSpanStart: '2023-01-02',
-    });
+    insertCoverage(t, '2023-01-01', '2023-12-31');
+    insertVersion(t, entry(), '2023-01-02', '2023-02-01');
+    insertVersion(t, entry({ sharesOutstanding: '150' }), '2023-02-01', null);
 
-    expect(svc.getUniverseAsOf('2023-01-03').get('KR7005930003')!.sharesOutstanding)
-      .toBe('90');
-    // 이벤트 이전 날짜는 체크포인트 그대로 — (cp, date] 구간에 이벤트가 없다
-    expect(svc.getUniverseAsOf('2023-01-02').get('KR7005930003')!.sharesOutstanding)
+    expect(svc.getUniverseAsOf('2023-01-31').get('KR7005930003')?.sharesOutstanding)
       .toBe('100');
-    await t.close();
-  });
-
-  it('체크포인트 이전 날짜: 역방향 적용', async () => {
-    const t = await createTestApp();
-    const svc = makeService(t);
-    svc.saveCheckpoint('2023-04-03', state(entry()), true);
-    insertEvent(t, {
-      effectiveDate: '2023-02-01', eventType: 'SHARES_CHANGED',
-      standardCode: 'KR7005930003', oldValue: '"100"', newValue: '"90"',
-      observedSpanStart: '2023-02-01',
-    });
-
-    // 조회일이 이벤트보다도 앞이라 (date, cp] 구간의 이벤트를 되돌려 원래 값 100 을 복원한다.
-    // 방향을 거꾸로(순방향) 적용하는 버그가 있으면 90 이 나와 이 단언이 잡아낸다.
-    expect(svc.getUniverseAsOf('2023-01-15').get('KR7005930003')!.sharesOutstanding)
-      .toBe('100');
-    await t.close();
-  });
-
-  it('가장 가까운 체크포인트를 고른다 — 두 체크포인트 사이 날짜', async () => {
-    const t = await createTestApp();
-    const svc = makeService(t);
-    // 두 체크포인트의 값이 서로 달라야 잘못된 체크포인트를 골랐을 때 단언이 실패한다.
-    svc.saveCheckpoint('2023-01-02', state(entry()), true);
-    svc.saveCheckpoint('2023-04-03', state(entry({ sharesOutstanding: '999' })), true);
-    insertEvent(t, {
-      effectiveDate: '2023-01-10', eventType: 'SHARES_CHANGED',
-      standardCode: 'KR7005930003', oldValue: '"100"', newValue: '"150"',
-      observedSpanStart: '2023-01-02',
-    });
-
-    // 2023-01-20 은 1월 체크포인트(18일 차)가 4월 체크포인트(73일 차)보다 훨씬 가깝다 —
-    // 1월 cp 에서 순방향으로 이벤트를 적용해 150 이 나와야 한다. 999 가 나오면 4월 cp 를
-    // 잘못 골랐다는 뜻이고, 100 이 나오면 이벤트를 적용하지 않았다는 뜻이다.
-    expect(svc.getUniverseAsOf('2023-01-20').get('KR7005930003')!.sharesOutstanding)
+    expect(svc.getUniverseAsOf('2023-02-01').get('KR7005930003')?.sharesOutstanding)
       .toBe('150');
+    await t.close();
+  });
+
+  it('폐지일에는 validToDate가 끝난 종목을 유니버스에서 제외한다', async () => {
+    const t = await createTestApp();
+    const svc = makeService(t);
+    insertCoverage(t, '2023-01-01', '2023-12-31');
+    insertVersion(t, entry(), '2023-01-02', '2023-02-01');
+
+    expect(svc.getUniverseAsOf('2023-01-31').has('KR7005930003')).toBe(true);
+    expect(svc.getUniverseAsOf('2023-02-01').has('KR7005930003')).toBe(false);
+    await t.close();
+  });
+
+  it('폐지 후 재상장하면 부재 구간 뒤의 새 버전만 다시 노출한다', async () => {
+    const t = await createTestApp();
+    const svc = makeService(t);
+    insertCoverage(t, '2023-01-01', '2023-12-31');
+    insertVersion(t, entry(), '2023-01-02', '2023-02-01');
+    insertVersion(
+      t,
+      entry({ shortCode: '005931', name: '삼성전자 재상장' }),
+      '2023-03-01',
+      null,
+    );
+
+    expect(svc.getUniverseAsOf('2023-02-15').has('KR7005930003')).toBe(false);
+    expect(svc.getUniverseAsOf('2023-03-01').get('KR7005930003')).toMatchObject({
+      shortCode: '005931',
+      name: '삼성전자 재상장',
+    });
+    expect(svc.listEvents('2023-02-01', '2023-03-01').map((event) => event.eventType)).toEqual([
+      'DELISTED',
+      'LISTED',
+    ]);
     await t.close();
   });
 });
@@ -112,6 +109,11 @@ function insertCoverage(t: TestApp, startDate: string, endDate: string): void {
   t.container.database.db
     .insert(symbolMasterCoverage)
     .values({ startDate, endDate, syncedAtMs: t.container.clock.now() })
+    .run();
+  t.container.database.db
+    .insert(symbolMasterTradingDays)
+    .values({ date: startDate })
+    .onConflictDoNothing()
     .run();
 }
 
@@ -190,6 +192,165 @@ describe('SymbolMasterService.isRangeCovered', () => {
     insertCoverage(t, '2026-02-05', '2026-03-05');
 
     expect(svc.isRangeCovered('2026-01-05', '2026-03-05')).toBe(true);
+    await t.close();
+  });
+});
+
+/**
+ * 워커 배선(Task 10)이 쓰는 조회 — DELISTED 이벤트의 oldValue 에서 shortCode 를
+ * 꺼낸다. standardCode 만으로는 봉 심볼(단축코드)과 이어지지 않기 때문이다.
+ *
+ * SCD 이행(D-045) 후 `listEvents` 는 legacy `symbol_master_events` 를 읽지 않고
+ * `symbol_master_versions` 의 버전 경계를 `diffUniverse` 로 비교해 이벤트를
+ * 파생한다. 그래서 여기서도 버전을 직접 심어 그 파생 경로를 그대로 태운다 — legacy
+ * 테이블에 행을 넣는 테스트는 `listEvents` 눈에 아예 보이지 않아 아무것도 증명하지
+ * 못한다.
+ *
+ * 파생 이벤트가 성립하려면 경계일 앞에 `observedSpanStart` 로 쓸 관측 거래일이
+ * 있어야 한다 — 그래서 각 테스트가 `insertCoverage` 로 앵커 거래일을 함께 심는다.
+ */
+describe('SymbolMasterService.delistedEventsBetween', () => {
+  it('DELISTED 이벤트의 oldValue 에서 shortCode 를 꺼낸다', async () => {
+    const t = await createTestApp();
+    const svc = makeService(t);
+    insertCoverage(t, '2020-01-01', '2026-12-31');
+    insertVersion(
+      t,
+      entry({ standardCode: 'KR7000660001', shortCode: '000660' }),
+      '2020-01-01',
+      '2026-03-10',
+    );
+
+    const rows = svc.delistedEventsBetween('2026-01-01', '2026-12-31');
+
+    expect(rows).toEqual([{ shortCode: '000660', effectiveDate: '2026-03-10' }]);
+    await t.close();
+  });
+
+  it('DELISTED 가 아닌 이벤트는 제외한다', async () => {
+    const t = await createTestApp();
+    const svc = makeService(t);
+    insertCoverage(t, '2020-01-01', '2026-12-31');
+    // 같은 종목이 폐지 없이 유통주식수만 바뀌는 경계 — SHARES_CHANGED 로 파생되고
+    // DELISTED 가 아니므로 걸러져야 한다.
+    insertVersion(
+      t,
+      entry({ standardCode: 'KR7005930003', sharesOutstanding: '100' }),
+      '2020-01-01',
+      '2026-03-10',
+    );
+    insertVersion(
+      t,
+      entry({ standardCode: 'KR7005930003', sharesOutstanding: '90' }),
+      '2026-03-10',
+      null,
+    );
+
+    expect(svc.delistedEventsBetween('2026-01-01', '2026-12-31')).toEqual([]);
+    await t.close();
+  });
+
+  it('구간 밖에서 폐지된 종목은 제외한다', async () => {
+    const t = await createTestApp();
+    const svc = makeService(t);
+    insertCoverage(t, '2020-01-01', '2026-12-31');
+    insertVersion(
+      t,
+      entry({ standardCode: 'KR7000660001', shortCode: '000660' }),
+      '2020-01-01',
+      '2025-12-31',
+    );
+
+    expect(svc.delistedEventsBetween('2026-01-01', '2026-12-31')).toEqual([]);
+    await t.close();
+  });
+
+  it('하루 빠졌다 돌아온 종목은 폐지로 보고하지 않고, 돌아오지 않은 종목만 보고한다', async () => {
+    const t = await createTestApp();
+    const svc = makeService(t);
+    insertCoverage(t, '2020-01-01', '2026-12-31');
+    // 000660 은 KRX 기초정보 응답에서 하루(2026-03-10) 빠졌다가 다음 날 돌아왔다 —
+    // persistTradingDay 가 구간을 닫고 새로 열어 DELISTED + LISTED 로 파생된다.
+    insertVersion(
+      t,
+      entry({ standardCode: 'KR7000660001', shortCode: '000660' }),
+      '2020-01-01',
+      '2026-03-10',
+    );
+    insertVersion(
+      t,
+      entry({ standardCode: 'KR7000660001', shortCode: '000660' }),
+      '2026-03-11',
+      null,
+    );
+    // 005930 은 같은 날 닫히고 돌아오지 않았다 — 진짜 폐지다
+    insertVersion(
+      t,
+      entry({ standardCode: 'KR7005930003', shortCode: '005930' }),
+      '2020-01-01',
+      '2026-03-10',
+    );
+
+    expect(svc.delistedEventsBetween('2026-01-01', '2026-12-31')).toEqual([
+      { shortCode: '005930', effectiveDate: '2026-03-10' },
+    ]);
+    await t.close();
+  });
+
+  it('effectiveDate 오름차순, 같은 날짜는 id(=날짜:표준코드:이벤트타입) 순서로 정렬한다', async () => {
+    const t = await createTestApp();
+    const svc = makeService(t);
+    insertCoverage(t, '2020-01-01', '2026-12-31');
+    insertVersion(
+      t,
+      entry({ standardCode: 'KR7005930003', shortCode: '005930' }),
+      '2020-01-01',
+      '2026-05-01',
+    );
+    insertVersion(
+      t,
+      entry({ standardCode: 'KR7000660001', shortCode: '000660' }),
+      '2020-01-01',
+      '2026-03-10',
+    );
+    insertVersion(
+      t,
+      entry({ standardCode: 'KR7900001008', shortCode: '900001' }),
+      '2020-01-01',
+      '2026-03-10',
+    );
+
+    expect(svc.delistedEventsBetween('2026-01-01', '2026-12-31')).toEqual([
+      { shortCode: '000660', effectiveDate: '2026-03-10' },
+      { shortCode: '900001', effectiveDate: '2026-03-10' },
+      { shortCode: '005930', effectiveDate: '2026-05-01' },
+    ]);
+    await t.close();
+  });
+
+  /**
+   * 회귀 방지 — SCD 이행 전 구현은 `delistedEventsBetween` 이 `symbol_master_events`
+   * 를 직접 SELECT 했다. 이행 후 그 테이블에는 더 이상 아무것도 쓰이지 않으므로,
+   * 여전히 그 테이블을 읽는 구현이었다면 이 테스트는 에러도 경고도 없이 빈 배열만
+   * 돌려주는 낙관적 오답을 냈을 것이다 — 청산이 조용히 사라지는 바로 그 시나리오다.
+   * `symbol_master_events` 가 실제로 비어 있음을 함께 확인해 "legacy 테이블은
+   * 출처가 아니다" 라는 사실 자체를 고정한다.
+   */
+  it('symbol_master_events 에 아무것도 쓰지 않은 채로 SCD 버전만으로 상장폐지를 찾아낸다', async () => {
+    const t = await createTestApp();
+    const svc = makeService(t);
+    insertCoverage(t, '2020-01-01', '2026-12-31');
+    insertVersion(
+      t,
+      entry({ standardCode: 'KR7005380001', shortCode: '005380' }),
+      '2020-01-01',
+      '2026-06-15',
+    );
+
+    const rows = svc.delistedEventsBetween('2026-01-01', '2026-12-31');
+
+    expect(rows).toEqual([{ shortCode: '005380', effectiveDate: '2026-06-15' }]);
+    expect(t.container.database.db.select().from(symbolMasterEvents).all()).toHaveLength(0);
     await t.close();
   });
 });

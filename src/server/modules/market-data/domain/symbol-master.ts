@@ -17,7 +17,8 @@ export type UniverseState = ReadonlyMap<string, SymbolMasterEntry>; // key = sta
 
 export type SymbolMasterEventType =
   | 'LISTED' | 'DELISTED' | 'MARKET_MOVED'
-  | 'SHARES_CHANGED' | 'NAME_CHANGED' | 'TYPE_CHANGED';
+  | 'SHARES_CHANGED' | 'NAME_CHANGED' | 'TYPE_CHANGED'
+  | 'SHORT_CODE_CHANGED' | 'LISTED_DATE_CHANGED';
 
 export interface SymbolMasterEventDraft {
   readonly effectiveDate: string;
@@ -34,6 +35,8 @@ const FIELD_EVENTS = [
   ['sharesOutstanding', 'SHARES_CHANGED'],
   ['name', 'NAME_CHANGED'],
   ['instrumentType', 'TYPE_CHANGED'],
+  ['shortCode', 'SHORT_CODE_CHANGED'],
+  ['listedDate', 'LISTED_DATE_CHANGED'],
 ] as const satisfies ReadonlyArray<readonly [keyof SymbolMasterEntry, SymbolMasterEventType]>;
 
 export function diffUniverse(
@@ -73,8 +76,11 @@ const FIELD_BY_EVENT = {
   SHARES_CHANGED: 'sharesOutstanding',
   NAME_CHANGED: 'name',
   TYPE_CHANGED: 'instrumentType',
+  SHORT_CODE_CHANGED: 'shortCode',
+  LISTED_DATE_CHANGED: 'listedDate',
 } as const;
 
+/** 0012 이행 시 legacy 이벤트 체인을 읽기 위한 순방향 재생기. 신규 수집에는 쓰지 않는다. */
 export function applyEventsForward(
   state: UniverseState, events: readonly SymbolMasterEventDraft[],
 ): UniverseState {
@@ -94,69 +100,7 @@ export function applyEventsForward(
   return next;
 }
 
-/** ISO 날짜(YYYY-MM-DD)에서 분기 라벨을 뽑는다 — '2023-04-03' → '2023-Q2' */
-export function quarterOf(iso: string): string {
-  const year = iso.slice(0, 4);
-  const month = Number(iso.slice(5, 7));
-  const quarter = Math.ceil(month / 3);
-  return `${year}-Q${quarter}`;
-}
-
-/** 값이 다른 필드만 기록한다 — mismatch 는 로그에 그대로 실리므로 코드 목록 위주로 유지한다 */
-export interface UniverseMismatch {
-  /** 실측(KRX)에는 있지만 재구성에는 없는 종목코드 */
-  readonly added: readonly string[];
-  /** 재구성에는 있지만 실측에는 없는 종목코드 */
-  readonly removed: readonly string[];
-  readonly changed: ReadonlyArray<{
-    readonly code: string;
-    readonly field: keyof SymbolMasterEntry;
-    readonly reconstructed: unknown;
-    readonly actual: unknown;
-  }>;
-}
-
-const COMPARE_FIELDS = [
-  'shortCode', 'name', 'market', 'sharesOutstanding', 'instrumentType', 'listedDate',
-] as const satisfies ReadonlyArray<keyof SymbolMasterEntry>;
-
-/**
- * 이벤트 체인으로 재구성한 유니버스와 KRX 실측을 비교한다. 이벤트 저장이 오염돼
- * 재구성이 실측과 어긋났는지 분기 체크포인트 시점마다 검증하는 데 쓴다.
- * 일치하면 undefined — 호출부가 이 값으로 검증 통과 여부를 가른다.
- */
-export function findUniverseMismatch(
-  reconstructed: UniverseState,
-  actual: UniverseState,
-): UniverseMismatch | undefined {
-  const added: string[] = [];
-  const removed: string[] = [];
-  const changed: UniverseMismatch['changed'][number][] = [];
-
-  for (const [code, actualEntry] of actual) {
-    const reconstructedEntry = reconstructed.get(code);
-    if (!reconstructedEntry) {
-      added.push(code);
-      continue;
-    }
-    for (const field of COMPARE_FIELDS) {
-      if (reconstructedEntry[field] !== actualEntry[field]) {
-        changed.push({
-          code, field,
-          reconstructed: reconstructedEntry[field],
-          actual: actualEntry[field],
-        });
-      }
-    }
-  }
-  for (const code of reconstructed.keys()) {
-    if (!actual.has(code)) removed.push(code);
-  }
-
-  if (added.length === 0 && removed.length === 0 && changed.length === 0) return undefined;
-  return { added, removed, changed };
-}
-
+/** 0012 이행 시 legacy 이벤트 체인을 읽기 위한 역방향 재생기. 신규 수집에는 쓰지 않는다. */
 export function applyEventsBackward(
   state: UniverseState, events: readonly SymbolMasterEventDraft[],
 ): UniverseState {

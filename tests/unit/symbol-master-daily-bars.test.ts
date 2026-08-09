@@ -55,7 +55,7 @@ function allBars(ctx: Ctx) {
 }
 
 describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
-  it('최초 수집(체크포인트 분기)에서 두 시장의 일봉을 함께 저장한다', async () => {
+  it('최초 baseline 수집에서 두 시장의 일봉을 함께 저장한다', async () => {
     const ctx = await setup();
     const date = '2023-01-02';
     ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
@@ -72,6 +72,14 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
           ACC_TRDVOL: '500,000',
         }),
       ]),
+    });
+    ctx.fake.setResponse('ksq_isu_base_info', '20230102', {
+      body: krxEnvelope([baseInfoFixture({
+        ISU_CD: 'KR7000660001',
+        ISU_SRT_CD: '000660',
+        ISU_NM: 'SK하이닉스',
+        MKT_TP_NM: 'KOSDAQ',
+      })]),
     });
 
     const result = await ctx.svc.ingestDate(date);
@@ -138,9 +146,8 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
     const ctx = await setup();
     const date = '2023-01-02';
 
-    // 체크포인트 저장과 coverage 갱신이 원자적이지 않았던 과거에 죽었을 때 남았을 상태를
-    // 흉내낸다 — checkpointDate 는 있는데 coverage 는 비어 재수집이 다시 최초 수집 분기를 탄다.
-    ctx.svc.saveCheckpoint(date, new Map(), true);
+    // 커버리지를 기록하기 전에 죽어 일봉만 남은 상태를 흉내낸다. 재수집은 정상적으로
+    // 종목 버전과 coverage 를 만들되, 이미 저장된 일봉 값은 덮어쓰지 않아야 한다.
     expect(ctx.svc.isCovered(date)).toBe(false);
     // 그 죽은 시도가 남겨 둔 낡은 일봉 행 두 개다(서로 다른 종목·값).
     // 자본변동은 계산 시점에 반영하므로 재수집이 들어와도 이 값은 그대로 남아야 한다.
@@ -166,6 +173,14 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
           ACC_TRDVOL: '500,000',
         }),
       ]),
+    });
+    ctx.fake.setResponse('ksq_isu_base_info', '20230102', {
+      body: krxEnvelope([baseInfoFixture({
+        ISU_CD: 'KR7000660001',
+        ISU_SRT_CD: '000660',
+        ISU_NM: 'SK하이닉스',
+        MKT_TP_NM: 'KOSDAQ',
+      })]),
     });
 
     await ctx.svc.ingestDate(date);

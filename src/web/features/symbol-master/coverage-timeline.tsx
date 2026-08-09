@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
 import { Slider } from '@/components/ui/slider';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import type { SymbolMasterCoverageDto } from '../../../shared/schemas/symbol-master.js';
 import { buildTimelineSegments, dateToPct, dateToUtcMs, pctToDate } from './timeline-model';
@@ -51,34 +50,7 @@ export function CoverageTimeline({
   const step = 100 / totalDays;
 
   return (
-    <div className={cn('relative min-w-48 flex-1 pt-3', className)}>
-      {coverage?.checkpoints.map((checkpoint) => {
-        const pct = dateToPct(rangeStart, rangeEnd, checkpoint.checkpointDate);
-        const color = checkpoint.verified
-          ? 'border-b-primary'
-          : checkpoint.mismatch
-            ? 'border-b-destructive'
-            : 'border-b-muted-foreground';
-        return (
-          <Tooltip key={checkpoint.checkpointDate}>
-            <TooltipTrigger asChild>
-              <span
-                className={cn(
-                  'absolute top-0 h-0 w-0 -translate-x-1/2 border-x-4 border-b-4 border-x-transparent',
-                  color,
-                )}
-                style={{ left: `${pct}%` }}
-                aria-hidden
-              />
-            </TooltipTrigger>
-            <TooltipContent>
-              체크포인트 {checkpoint.checkpointDate} ·{' '}
-              {checkpoint.verified ? '검증됨' : checkpoint.mismatch ? '불일치' : '미검증'}
-            </TooltipContent>
-          </Tooltip>
-        );
-      })}
-
+    <div className={cn('relative min-w-48 flex-1', className)}>
       <Slider
         value={[valuePct]}
         min={0}

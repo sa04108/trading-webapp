@@ -111,11 +111,14 @@ describe('UniverseRuleResolver.resolve', () => {
     const result = await ctx.resolver.resolve(rule, ['2023-01-02']);
 
     // A(500) > B(300) > C(200) 순 — D 는 시장, F 는 instrumentType, E 는 시총 없음으로 제외된다.
+    // excludedNonTradingCount: 0 — 이 픽스처는 거래불가일을 하나도 채우지 않는다(거래불가
+    // 제외 필드가 schedule 항목에 추가되면서 이 값도 함께 검증해야 한다).
     expect(result.schedule).toEqual([
       {
         rebalanceDate: '2023-01-02',
         effectiveTradingDate: '2023-01-02',
         symbols: ['000010', '000020', '000030'],
+        excludedNonTradingCount: 0,
       },
     ]);
     expect(result.unionSymbols).toEqual(['000010', '000020', '000030']);
@@ -147,11 +150,13 @@ describe('UniverseRuleResolver.resolve', () => {
     const duringResolve = ctx.fake.requests.slice(before);
 
     expect(result.uncoveredDates).toEqual(['2023-02-01']);
+    // excludedNonTradingCount: 0 — 이 픽스처는 거래불가일을 채우지 않는다.
     expect(result.schedule).toEqual([
       {
         rebalanceDate: '2023-01-02',
         effectiveTradingDate: '2023-01-02',
         symbols: ['000010', '000020', '000030'],
+        excludedNonTradingCount: 0,
       },
     ]);
     // 커버된 날짜의 getMarketCapsAt 캐시 미스(KOSPI·KOSDAQ 2회)만 발생한다 —
@@ -170,11 +175,13 @@ describe('UniverseRuleResolver.resolve', () => {
     const result = await ctx.resolver.resolve(rule, ['2023-01-03']);
 
     expect(result.uncoveredDates).toEqual([]);
+    // excludedNonTradingCount: 0 — 이 픽스처는 거래불가일을 채우지 않는다.
     expect(result.schedule).toEqual([
       {
         rebalanceDate: '2023-01-03',
         effectiveTradingDate: '2023-01-02',
         symbols: ['000010', '000020', '000030'],
+        excludedNonTradingCount: 0,
       },
     ]);
 

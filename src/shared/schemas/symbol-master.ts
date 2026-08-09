@@ -28,13 +28,6 @@ export type SymbolMasterUniverseDto = z.infer<typeof symbolMasterUniverseDtoSche
 
 export const symbolMasterCoverageDtoSchema = z.object({
   ranges: z.array(z.object({ startDate: z.string(), endDate: z.string() })),
-  checkpoints: z.array(
-    z.object({
-      checkpointDate: z.string(),
-      verified: z.boolean(),
-      mismatch: z.boolean(),
-    }),
-  ),
   lastSyncedAtMs: z.number().nullable(),
   backfill: z.object({
     state: z.enum(['IDLE', 'RUNNING', 'BUDGET_EXHAUSTED', 'FAILED']),
@@ -61,7 +54,8 @@ export const symbolMasterSyncDtoSchema = z.object({
 export type SymbolMasterSyncDto = z.infer<typeof symbolMasterSyncDtoSchema>;
 
 export const symbolMasterEventDtoSchema = z.object({
-  id: z.number(),
+  /** SCD 버전 경계에서 파생한 안정 ID(date:code:type) */
+  id: z.string(),
   effectiveDate: z.string(),
   standardCode: z.string(),
   eventType: z.string(),

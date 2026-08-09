@@ -9,6 +9,7 @@ describe('exitReasonLabel', () => {
     expect(exitReasonLabel('TREND_END')).toBe('추세 반전');
     expect(exitReasonLabel('TIME')).toBe('보유 기간 만료');
     expect(exitReasonLabel('RSI_EXIT')).toBe('RSI 회복');
+    expect(exitReasonLabel('DELISTED')).toBe('상장폐지');
   });
 
   it('사유가 없으면 - 를 보여준다', () => {

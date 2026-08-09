@@ -7,6 +7,8 @@ const LABELS: Record<string, string> = {
   TREND_END: '추세 반전',
   TIME: '보유 기간 만료',
   RSI_EXIT: 'RSI 회복',
+  // 엔진이 강제로 낸 청산 — 전략 신호가 아니다 (Task 8)
+  DELISTED: '상장폐지',
 };
 
 export function exitReasonLabel(reason: string | null): string {

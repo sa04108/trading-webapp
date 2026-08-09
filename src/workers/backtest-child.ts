@@ -4,7 +4,9 @@
  * 환경변수는 §5 화이트리스트만 받는다. 종료 전 최종 상태를 DB 에 직접 기록한다.
  */
 import { and, eq, inArray, notInArray } from 'drizzle-orm';
+import { pino } from 'pino';
 import { readGitCommitSha } from '../server/shared/build-info.js';
+import { systemClock } from '../server/shared/clock.js';
 import { openDatabase } from '../server/shared/db/database.js';
 import {
   backtestDrawdownPoints,
@@ -15,10 +17,14 @@ import {
   backtestRuns,
   backtestSymbolMetrics,
   backtestTrades,
+  symbolMasterStorageState,
   symbolVersions,
   symbols as symbolsTable,
 } from '../server/shared/db/schema.js';
-import type { UniverseScheduleEntry } from '../server/modules/backtest/application/universe-rule-resolver.js';
+import {
+  sumExcludedNonTrading,
+  type UniverseScheduleEntry,
+} from '../server/modules/backtest/application/universe-rule-resolver.js';
 import { newId } from '../server/shared/ids.js';
 import { TERMINAL_STATUSES } from '../server/modules/backtest/application/job-queue.js';
 import { MAX_BACKTEST_BARS } from '../server/modules/backtest/domain/bar-estimate.js';
@@ -33,6 +39,8 @@ import { CORPORATE_ACTION_FIELD, type Fact } from '../server/modules/facts/domai
 import type { Candle, Market, Timeframe } from '../server/modules/market-data/domain/candle.js';
 import { DuckDbService } from '../server/modules/market-data/infrastructure/duckdb-service.js';
 import { KrxDailyCandleRepository } from '../server/modules/market-data/infrastructure/krx-daily-candle-repository.js';
+import type { KrxHistoricalUniverseSource } from '../server/modules/market-data/application/ports.js';
+import { SymbolMasterService } from '../server/modules/market-data/application/symbol-master-service.js';
 import { StrategyRegistry } from '../server/modules/strategy/application/strategy-registry.js';
 import { strategySourceHash } from '../server/modules/strategy/application/strategy-source-hash.js';
 import { backtestRequestSchema, periodToTsRange } from '../shared/schemas/backtest-request.js';
@@ -107,6 +115,74 @@ async function main(): Promise<void> {
       symbols: entry.symbols,
     }));
 
+    // SCD 이행이 끝났는지 먼저 확인한다. SymbolMasterService 생성자가
+    // ensureScdStorageReady 를 부르므로, 이 검사가 없으면 백테스트 잡 하나가 워커
+    // 프로세스 안에서 스키마 이행 전체(버전 테이블 재작성 + legacy 테이블 삭제)를
+    // 수행하거나 그 도중에 죽어 백테스트 실패로 둔갑한다. busy_timeout 이 5초라
+    // 워커 둘이 겹치면 큰 DB 에서 SQLITE_BUSY 로 갈린다. 이행은 서버만 한다.
+    const storagePhase = db
+      .select({ phase: symbolMasterStorageState.phase })
+      .from(symbolMasterStorageState)
+      .where(eq(symbolMasterStorageState.singleton, 1))
+      .get()?.phase;
+    if (storagePhase !== 'ACTIVE') {
+      throw new Error(
+        `종목 마스터 저장소가 아직 SCD 로 이행되지 않았습니다 (현재 ${storagePhase ?? '기록 없음'}). `
+          + '서버를 먼저 한 번 띄워 이행을 끝낸 뒤 다시 실행하세요 — 워커는 이행하지 않습니다.',
+      );
+    }
+
+    // 종목 마스터 읽기 전용 조회 — 워커는 db handle 을 재사용하고 KRX 를 직접 부르지
+    // 않는다(ingestDate 류는 호출하지 않는다). 위 phase 검사가 통과했으므로 생성자의
+    // ensureScdStorageReady 는 곧바로 돌아온다 — 이 경로에서 쓰기가 일어나지 않는다.
+    // source 는 계약을 채우기 위한 자리표시일 뿐이며 실제로 불리면 버그이므로 던진다.
+    // clock 도 쓰기 경로 전용이라 systemClock 이면 충분하다.
+    const unusedKrxSource: KrxHistoricalUniverseSource = {
+      fetchIssueBaseInfo: () =>
+        Promise.reject(new Error('워커는 종목 마스터를 읽기 전용으로만 쓴다 — KRX 를 부르지 않는다')),
+      fetchDailyTrades: () =>
+        Promise.reject(new Error('워커는 종목 마스터를 읽기 전용으로만 쓴다 — KRX 를 부르지 않는다')),
+      todayMaxEndpointCallCount: () => 0,
+    };
+    const symbolMaster = new SymbolMasterService({
+      db,
+      source: unusedKrxSource,
+      clock: systemClock,
+      logger: pino({ level: 'warn' }),
+    });
+
+    // 거래불가일 — 봉 tsMs 로 접어 엔진에 넘긴다. Candle.tsMs 규약은 거래일의 UTC 자정이다
+    // (krx-daily-candle-repository.ts). 여기서 같은 규칙을 쓰지 않으면 하루 어긋난다(D-024 류).
+    const unionSymbolSet = new Set(unionSymbols);
+    const nonTradingSymbolsByTsMs = new Map<number, Set<string>>();
+    for (const row of symbolMaster.nonTradingDaysBetween(request.period.from, request.period.to)) {
+      if (!unionSymbolSet.has(row.shortCode)) continue;
+      const ts = Date.parse(`${row.date}T00:00:00Z`);
+      const set = nonTradingSymbolsByTsMs.get(ts) ?? new Set<string>();
+      set.add(row.shortCode);
+      nonTradingSymbolsByTsMs.set(ts, set);
+    }
+    const nonTradingCoveredPeriod = symbolMaster.isNonTradingRangeCovered(
+      request.period.from,
+      request.period.to,
+    )
+      ? { from: request.period.from, to: request.period.to }
+      : null;
+
+    // 상장폐지 — 기간 안에 효력이 발생한 것만. 기간이 끝난 뒤 폐지된 종목은 그 시점에는
+    // 아직 폐지가 아니므로 청산하지 않는다. 유니버스 밖 종목은 엔진이 모르는 심볼이라 걸러낸다.
+    //
+    // 코드당 폐지를 **전부** 담는다. KRX 가 폐지된 단축코드를 다른 회사에 다시 주므로
+    // 한 코드가 기간 안에서 두 번 폐지될 수 있다. 하나만 남기면 뒤 폐지가 앞 폐지를
+    // 덮어써, 앞 회사를 들고 있던 포지션이 뒷 회사의 종가로 청산된다.
+    const delistedTsMsBySymbol = new Map<string, number[]>();
+    for (const event of symbolMaster.delistedEventsBetween(request.period.from, request.period.to)) {
+      if (!unionSymbolSet.has(event.shortCode)) continue;
+      const list = delistedTsMsBySymbol.get(event.shortCode) ?? [];
+      list.push(Date.parse(`${event.effectiveDate}T00:00:00Z`));
+      delistedTsMsBySymbol.set(event.shortCode, list);
+    }
+
     // market 은 이제 종목의 속성이다 — 유니버스 종목들에서 읽는다. 여러 시장이
     // 섞이면 세션·집계 기준이 하나로 정해지지 않아 실행 자체가 성립하지 않는다.
     const universeMarkets = [
@@ -154,6 +230,16 @@ async function main(): Promise<void> {
         }, new Map<string, typeof symbolVersions.$inferSelect>()),
     );
     const datasetWarnings: string[] = [];
+    // 리밸런스 기준일에 거래정지·무거래로 후보에서 빠진 종목 — resolve() 가 이미 세어
+    // schedule 에 담아 뒀다(Task 6). 조용히 빠지면 "그날 왜 이 종목을 안 샀는지" 를
+    // 사용자가 결과만 보고는 알 수 없다.
+    const excludedNonTradingTotal = sumExcludedNonTrading(schedule);
+    if (excludedNonTradingTotal > 0) {
+      datasetWarnings.push(
+        `리밸런스 기준일에 거래정지·무거래여서 유니버스 후보에서 제외된 종목 ${excludedNonTradingTotal}건 `
+          + '(중복 포함). 그날 실제로 매수할 수 없는 종목입니다.',
+      );
+    }
     // 서버가 제출 시점에 조립한 pin(Task 12) — scheduleHash 를 재현성 기록에 쓴다.
     // run 에는 원문 그대로 복사한다(아래 provenancePinJson).
     const pin: ProvenancePin | null = job.provenancePinJson
@@ -291,6 +377,9 @@ async function main(): Promise<void> {
       maxPositions: request.risk.maxPositions,
       facts,
       universeSchedule,
+      nonTradingSymbolsByTsMs,
+      nonTradingCoveredPeriod,
+      delistedTsMsBySymbol,
     }, {
       shouldCancel: () => cancellation.isRequested(),
       onProgress: ({ processedBars, totalBars, currentTsMs }) => {

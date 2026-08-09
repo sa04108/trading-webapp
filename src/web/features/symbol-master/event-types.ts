@@ -12,6 +12,8 @@ const EVENT_TYPE_LABELS = {
   SHARES_CHANGED: '주식수 변경',
   NAME_CHANGED: '종목명 변경',
   TYPE_CHANGED: '유형 변경',
+  SHORT_CODE_CHANGED: '단축코드 변경',
+  LISTED_DATE_CHANGED: '상장일 변경',
 } as const;
 
 export type SymbolMasterEventType = keyof typeof EVENT_TYPE_LABELS;

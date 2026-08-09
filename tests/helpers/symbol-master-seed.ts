@@ -3,6 +3,7 @@ import {
   symbolMasterCoverage,
   symbolMasterMarketCaps,
   symbolMasterTradingDays,
+  symbolMasterVersions,
 } from '../../src/server/shared/db/schema.js';
 
 /** `UniverseRuleResolver` 테스트 픽스처 — 실제 KRX 마스터가 갖는 필드의 최소 부분집합 */
@@ -20,32 +21,30 @@ export interface SymbolMasterFixtureEntry {
  * 태울 수 있게 종목 마스터를 직접 채운다 (HTTP 를 거치는 fake KRX 서버 왕복 대신
  * DB 를 직접 채우는 편이 테스트당 필요한 배선을 훨씬 줄인다).
  *
- * coverage 는 아주 넓은 고정 구간으로 한 번만 잡는다 — 체크포인트 하나에 이벤트가
- * 전혀 없으므로(symbol_master_events 비어 있음) `getUniverseAsOf` 는 어느 날짜를 물어도
- * 항상 이 체크포인트 그대로를 재구성한다. 그래서 여러 리밸런스 날짜가 필요해도
- * 체크포인트는 하나만 있으면 된다 — 시총 캐시만 각 날짜별로 채우면 된다.
+ * coverage 는 아주 넓은 고정 구간으로 한 번만 잡고, 종목당 열린 SCD 버전 하나를
+ * 심는다. 그래서 여러 리밸런스 날짜가 필요해도 시총 캐시만 각 날짜별로 채우면 된다.
  */
 export function seedSymbolMasterUniverse(
   container: Container,
   rebalanceDates: readonly string[],
   entries: readonly SymbolMasterFixtureEntry[],
 ): void {
-  const checkpointDate = rebalanceDates[0] ?? '2020-01-01';
-  const universe = new Map(
-    entries.map((entry) => [
-      entry.standardCode,
-      {
+  if (entries.length > 0) {
+    container.database.db.insert(symbolMasterVersions).values(
+      entries.map((entry) => ({
         standardCode: entry.standardCode,
+        validFromDate: '2000-01-01',
+        validToDate: null,
         shortCode: entry.shortCode,
         name: entry.name,
         market: entry.market,
         sharesOutstanding: '1000000',
-        instrumentType: 'COMMON_STOCK' as const,
+        instrumentType: 'COMMON_STOCK',
         listedDate: null,
-      },
-    ]),
-  );
-  container.symbolMasterService.saveCheckpoint(checkpointDate, universe, true);
+        recordedAtMs: container.clock.now(),
+      })),
+    ).run();
+  }
 
   container.database.db
     .insert(symbolMasterCoverage)

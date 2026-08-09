@@ -67,7 +67,7 @@ export function registerSymbolMasterRoutes(
     // 미커버는 오류가 아니라 정상 응답이다 — 화면이 "아직 수집되지 않음" 을 표시할 수 있게
     // covered:false + 빈 배열로 답한다. isCovered 로 먼저 확인하니 getUniverseAsOf 는
     // SymbolMasterNotCoveredError 를 던지지 않는다.
-    if (!deps.service.isCovered(date)) {
+    if (!deps.service.canResolveUniverseAsOf(date)) {
       const dto: SymbolMasterUniverseDto = { date, covered: false, symbols: [] };
       return dto;
     }
@@ -83,7 +83,6 @@ export function registerSymbolMasterRoutes(
 
   app.get('/symbol-master/coverage', { preHandler: requireAuth }, async () => {
     const ranges = deps.service.coverageRanges();
-    const checkpoints = deps.service.listCheckpoints();
     const backfillStatus = deps.backfill.status();
 
     // 구간이 하나도 없으면 동기화된 적이 없다는 뜻 — null 로 답한다.
@@ -92,7 +91,6 @@ export function registerSymbolMasterRoutes(
 
     const dto: SymbolMasterCoverageDto = {
       ranges: ranges.map(({ startDate, endDate }) => ({ startDate, endDate })),
-      checkpoints,
       lastSyncedAtMs,
       backfill: {
         state: backfillStatus.state,
@@ -113,8 +111,7 @@ export function registerSymbolMasterRoutes(
     const { from, to } = parsed.data;
 
     // listEvents 는 effectiveDate·id 오름차순으로 준다 — API 계약(내림차순·최대 500행)에
-    // 맞추려 뒤집고 자른다. 재구성 로직(eventsBetween)이 쓰는 순서를 건드리지 않으려
-    // 여기서 후처리한다.
+    // 맞추려 여기서 뒤집고 자른다.
     const events = deps.service.listEvents(from, to);
     const descending = events.slice().reverse().slice(0, EVENTS_LIMIT);
     return { events: descending.map(eventDto) };
