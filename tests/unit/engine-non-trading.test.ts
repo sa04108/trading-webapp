@@ -143,7 +143,7 @@ describe('상장폐지 청산', () => {
       parameters: {},
       randomSeed: 1,
       maxPositions: 5,
-      delistedTsMsBySymbol: new Map([['A', START + 3 * DAY]]),
+      delistedTsMsBySymbol: new Map([['A', [START + 3 * DAY]]]),
     });
 
     const trade = result.trades.find((candidate) => candidate.symbol === 'A');
@@ -175,11 +175,41 @@ describe('상장폐지 청산', () => {
       parameters: {},
       randomSeed: 1,
       maxPositions: 5,
-      delistedTsMsBySymbol: new Map([['A', START + 3 * DAY]]),
+      delistedTsMsBySymbol: new Map([['A', [START + 3 * DAY]]]),
     });
 
     const trade = result.trades.find((candidate) => candidate.symbol === 'A');
     expect(trade?.exitReason).toBe('DELISTED');
+    expect(trade?.exitTsMs).toBe(START + 2 * DAY);
+    expect(trade?.exitPrice).toBe(500);
+    expect(result.delistingLiquidations).toEqual([
+      { symbol: 'A', tsMs: START + 2 * DAY, netPnl: trade?.netPnl },
+    ]);
+  });
+
+  it('한 코드가 기간 안에 두 번 폐지되면 각 폐지 직전 봉에서 청산한다', () => {
+    // KRX 가 여섯 자리 단축코드를 재사용하므로 한 코드가 실행 기간 안에서 두 번
+    // 폐지될 수 있다. 폐지 시각을 코드당 하나만 들고 있으면 뒤 폐지가 앞 폐지를
+    // 덮어써, 앞 회사를 들고 있던 포지션이 몇 년 뒤 뒷 회사 종가로 나간다.
+    const candles = [
+      bar('A', 0, 1_000), bar('A', 1, 900),
+      { ...bar('A', 2, 500), open: 600, high: 610 }, // 첫 회사의 마지막 봉
+      bar('A', 5, 9_000), bar('A', 6, 9_500), // 코드를 다시 받은 회사의 봉
+      bar('B', 0), bar('B', 6),
+    ];
+    const result = runBacktest(buyOnceStrategy('A'), {
+      candles,
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 1,
+      maxPositions: 5,
+      delistedTsMsBySymbol: new Map([['A', [START + 3 * DAY, START + 7 * DAY]]]),
+    });
+
+    const trade = result.trades.find((candidate) => candidate.symbol === 'A');
+    expect(trade?.exitReason).toBe('DELISTED');
+    // 첫 폐지 직전 봉(2번)에서 나간다 — 두 번째 폐지 직전 봉(6번, 9,500)이 아니다
     expect(trade?.exitTsMs).toBe(START + 2 * DAY);
     expect(trade?.exitPrice).toBe(500);
     expect(result.delistingLiquidations).toEqual([
@@ -197,7 +227,7 @@ describe('상장폐지 청산', () => {
       parameters: {},
       randomSeed: 1,
       maxPositions: 5,
-      delistedTsMsBySymbol: new Map([['A', START]]),
+      delistedTsMsBySymbol: new Map([['A', [START]]]),
     });
 
     expect(result.delistingLiquidations).toHaveLength(0);
@@ -233,7 +263,7 @@ describe('상장폐지 청산', () => {
       parameters: {},
       randomSeed: 1,
       maxPositions: 5,
-      delistedTsMsBySymbol: new Map([['A', START + 2 * DAY]]),
+      delistedTsMsBySymbol: new Map([['A', [START + 2 * DAY]]]),
     });
     expect(seen).toEqual(['A']);
   });
@@ -254,7 +284,7 @@ describe('상장폐지 청산', () => {
       parameters: {},
       randomSeed: 1,
       maxPositions: 5,
-      delistedTsMsBySymbol: new Map([['C', START + 1 * DAY]]),
+      delistedTsMsBySymbol: new Map([['C', [START + 1 * DAY]]]),
     });
     expect(seen).not.toContain('C');
     expect(result.delistingLiquidations).toHaveLength(0);
@@ -279,7 +309,7 @@ describe('상장폐지 청산', () => {
       parameters: {},
       randomSeed: 1,
       maxPositions: 5,
-      delistedTsMsBySymbol: new Map([['D', START]]),
+      delistedTsMsBySymbol: new Map([['D', [START]]]),
     });
 
     expect(result.fills).toHaveLength(0);
@@ -362,7 +392,7 @@ describe('실행 경고', () => {
         parameters: {},
         randomSeed: 1,
         maxPositions: 5,
-        delistedTsMsBySymbol: new Map([['A', START + 3 * DAY]]),
+        delistedTsMsBySymbol: new Map([['A', [START + 3 * DAY]]]),
       },
     );
 

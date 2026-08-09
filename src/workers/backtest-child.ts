@@ -151,10 +151,16 @@ async function main(): Promise<void> {
 
     // 상장폐지 — 기간 안에 효력이 발생한 것만. 기간이 끝난 뒤 폐지된 종목은 그 시점에는
     // 아직 폐지가 아니므로 청산하지 않는다. 유니버스 밖 종목은 엔진이 모르는 심볼이라 걸러낸다.
-    const delistedTsMsBySymbol = new Map<string, number>();
+    //
+    // 코드당 폐지를 **전부** 담는다. KRX 가 폐지된 단축코드를 다른 회사에 다시 주므로
+    // 한 코드가 기간 안에서 두 번 폐지될 수 있다. 하나만 남기면 뒤 폐지가 앞 폐지를
+    // 덮어써, 앞 회사를 들고 있던 포지션이 뒷 회사의 종가로 청산된다.
+    const delistedTsMsBySymbol = new Map<string, number[]>();
     for (const event of symbolMaster.delistedEventsBetween(request.period.from, request.period.to)) {
       if (!unionSymbolSet.has(event.shortCode)) continue;
-      delistedTsMsBySymbol.set(event.shortCode, Date.parse(`${event.effectiveDate}T00:00:00Z`));
+      const list = delistedTsMsBySymbol.get(event.shortCode) ?? [];
+      list.push(Date.parse(`${event.effectiveDate}T00:00:00Z`));
+      delistedTsMsBySymbol.set(event.shortCode, list);
     }
 
     // market 은 이제 종목의 속성이다 — 유니버스 종목들에서 읽는다. 여러 시장이

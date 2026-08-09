@@ -60,12 +60,17 @@ export interface BacktestRunInput {
    */
   readonly nonTradingSymbolsByTsMs?: ReadonlyMap<number, ReadonlySet<string>>;
   /**
-   * 상장폐지 효력 시각 (심볼 → tsMs). 기간 안에 폐지된 종목만 담는다.
+   * 상장폐지 효력 시각 (심볼 → tsMs 목록). 기간 안에 폐지된 종목만 담는다.
+   *
+   * 값이 목록인 이유는 KRX 가 폐지된 여섯 자리 단축코드를 나중에 다른 회사에 다시
+   * 주기 때문이다. 한 코드가 실행 기간 안에서 두 번 폐지될 수 있고, 앞 폐지가 먼저
+   * 산 포지션이 실제로 맞는 폐지다. 코드당 하나만 담으면 그 포지션이 몇 년 뒤
+   * 다른 회사의 종가로 나간다. 순서는 상관없다 — 엔진이 폐지마다 따로 접는다.
    *
    * 이 맵은 엔진만 본다. `StrategyBarContext` 에 노출하지 않는다 —
    * 전략이 "이 종목이 곧 폐지된다" 를 미리 알 경로를 만들지 않기 위해서다.
    */
-  readonly delistedTsMsBySymbol?: ReadonlyMap<string, number>;
+  readonly delistedTsMsBySymbol?: ReadonlyMap<string, readonly number[]>;
   /**
    * 거래불가일이 실제로 채워진 구간. `null` 이면 이 실행 구간에 거래불가 정보가 없다.
    * 행이 없는 것과 아직 모르는 것을 구분하지 않으면 경고가 "반영한다" 고 거짓말한다.
@@ -169,17 +174,35 @@ function* runBacktestSteps(
   const lastBarTsMsBySymbol = new Map<string, number>();
   for (const candle of sorted) lastBarTsMsBySymbol.set(candle.symbol, candle.tsMs);
 
-  // 폐지 청산 시점 — 폐지 효력 시각보다 **앞선** 마지막 봉이다. 실행 전체의 마지막
-  // 봉으로 잡으면 안 된다. KRX 는 폐지된 여섯 자리 단축코드를 나중에 다른 회사에
-  // 다시 주므로, 같은 코드의 뒷날 봉이 실행 기간에 들어오면 몇 년 뒤 남의 회사
-  // 종가로 청산하게 된다. 봉은 전부 미리 들어와 있어 여기서 한 번에 접는다
-  // (sorted 가 시각 오름차순이라 마지막으로 써 넣은 값이 곧 직전 봉이다).
-  const lastBarBeforeDelistingBySymbol = new Map<string, number>();
+  // 폐지 청산 시점 — 폐지 하나하나마다 그 효력 시각보다 **앞선** 마지막 봉이다.
+  // 실행 전체의 마지막 봉으로 잡으면 안 된다. KRX 는 폐지된 여섯 자리 단축코드를
+  // 나중에 다른 회사에 다시 주므로, 같은 코드의 뒷날 봉이 실행 기간에 들어오면
+  // 몇 년 뒤 남의 회사 종가로 청산하게 된다. 같은 이유로 폐지를 코드당 하나로
+  // 접어서도 안 된다 — 재사용된 코드가 기간 안에서 두 번 폐지되면 먼저 산 포지션은
+  // 앞 폐지에서 나가야 한다. 봉은 전부 미리 들어와 있어 여기서 한 번에 접는다.
+  const liquidationBarTsMsBySymbol = new Map<string, Set<number>>();
   if (input.delistedTsMsBySymbol !== undefined) {
+    // 폐지 대상 종목의 봉 시각만 모은다 — sorted 가 오름차순이라 이 목록도 오름차순이다
+    const barTsMsBySymbol = new Map<string, number[]>();
     for (const candle of sorted) {
-      const delistedTsMs = input.delistedTsMsBySymbol.get(candle.symbol);
-      if (delistedTsMs === undefined || candle.tsMs >= delistedTsMs) continue;
-      lastBarBeforeDelistingBySymbol.set(candle.symbol, candle.tsMs);
+      if (!input.delistedTsMsBySymbol.has(candle.symbol)) continue;
+      const list = barTsMsBySymbol.get(candle.symbol) ?? [];
+      list.push(candle.tsMs);
+      barTsMsBySymbol.set(candle.symbol, list);
+    }
+    for (const [symbol, delistedTsMsList] of input.delistedTsMsBySymbol) {
+      const barTsMsList = barTsMsBySymbol.get(symbol) ?? [];
+      const liquidationTsMsSet = new Set<number>();
+      for (const delistedTsMs of delistedTsMsList) {
+        let lastBefore: number | undefined;
+        for (const barTsMs of barTsMsList) {
+          if (barTsMs >= delistedTsMs) break;
+          lastBefore = barTsMs;
+        }
+        // 폐지 시각 이전 봉이 하나도 없으면 청산할 자리가 없다
+        if (lastBefore !== undefined) liquidationTsMsSet.add(lastBefore);
+      }
+      if (liquidationTsMsSet.size > 0) liquidationBarTsMsBySymbol.set(symbol, liquidationTsMsSet);
     }
   }
 
@@ -383,9 +406,9 @@ function* runBacktestSteps(
     //
     // 정리매매 종가를 따로 추정하지 않는다. KRX 일봉에 정리매매 기간 봉이 들어 있어
     // 폐지 직전 마지막 봉이 곧 정리매매 최종가다. 시장이 매긴 회수가치를 그대로 쓴다.
-    if (lastBarBeforeDelistingBySymbol.size > 0) {
+    if (liquidationBarTsMsBySymbol.size > 0) {
       for (const [symbol, bar] of bars) {
-        if (lastBarBeforeDelistingBySymbol.get(symbol) !== tsMs) continue;
+        if (liquidationBarTsMsBySymbol.get(symbol)?.has(tsMs) !== true) continue;
 
         // 대기 주문을 따로 지우지 않는다. 이 시점 pendingOrders 에는 이번 봉에 봉이
         // 없는 종목의 주문만 남아 있다. 봉이 있는 종목은 위 체결 스텝이 이미 다
