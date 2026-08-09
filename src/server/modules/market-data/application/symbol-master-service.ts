@@ -1243,12 +1243,59 @@ export class SymbolMasterService {
     from: string,
     to: string,
   ): readonly { shortCode: string; effectiveDate: string }[] {
-    const result: { shortCode: string; effectiveDate: string }[] = [];
+    const candidates: { standardCode: string; shortCode: string; effectiveDate: string }[] = [];
     for (const event of this.listEvents(from, to)) {
       if (event.eventType !== 'DELISTED') continue;
       const shortCode = this.parseDelistedShortCode(event.oldValue, event.id, event.effectiveDate);
       if (shortCode === undefined) continue;
-      result.push({ shortCode, effectiveDate: event.effectiveDate });
+      candidates.push({ standardCode: event.standardCode, shortCode, effectiveDate: event.effectiveDate });
+    }
+    if (candidates.length === 0) return [];
+
+    // 같은 **표준코드**가 폐지일 뒤에 다시 열리면 폐지가 아니라 KRX 기초정보 응답의
+    // 하루짜리 결측이다. persistTradingDay 는 fetched 에 없는 종목의 구간을 닫으므로,
+    // 한 종목이 하루 빠졌다 돌아오면 D 에 DELISTED, D+1 에 LISTED 로 파생된다.
+    // assertBaseInfoPresent 의 80% 문턱은 이런 한 종목짜리 결측을 잡지 못한다.
+    //
+    // 진짜 재상장은 이 필터에 걸리지 않는다. 단축코드를 재사용해 다른 회사가 들어와도
+    // 표준코드는 언제나 새로 발급되기 때문이다 — 폐지된 표준코드가 되살아나는 일은 없다.
+    // 그래서 이 조건은 결측만 걸러내고 실제 폐지는 그대로 남긴다.
+    const codes = [...new Set(candidates.map((candidate) => candidate.standardCode))];
+    const reopenedFromDates = new Map<string, string[]>();
+    // SQLite 바인딩 변수 상한에 걸리지 않게 다른 조회와 같은 크기로 끊는다
+    for (let i = 0; i < codes.length; i += 500) {
+      for (const row of this.deps.db
+        .select({
+          standardCode: symbolMasterVersions.standardCode,
+          validFromDate: symbolMasterVersions.validFromDate,
+        })
+        .from(symbolMasterVersions)
+        .where(inArray(symbolMasterVersions.standardCode, codes.slice(i, i + 500)))
+        .all()) {
+        const dates = reopenedFromDates.get(row.standardCode) ?? [];
+        dates.push(row.validFromDate);
+        reopenedFromDates.set(row.standardCode, dates);
+      }
+    }
+
+    const result: { shortCode: string; effectiveDate: string }[] = [];
+    for (const candidate of candidates) {
+      const reopened = (reopenedFromDates.get(candidate.standardCode) ?? []).some(
+        (validFromDate) => validFromDate > candidate.effectiveDate,
+      );
+      if (reopened) {
+        this.deps.logger.warn(
+          {
+            module: 'market-data',
+            event: 'symbol-master.delisting-suppressed',
+            standardCode: candidate.standardCode,
+            effectiveDate: candidate.effectiveDate,
+          },
+          '폐지 뒤 같은 표준코드가 다시 열려 있어 폐지로 보지 않는다 — KRX 기초정보 결측으로 본다',
+        );
+        continue;
+      }
+      result.push({ shortCode: candidate.shortCode, effectiveDate: candidate.effectiveDate });
     }
     return result;
   }

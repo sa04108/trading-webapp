@@ -265,6 +265,38 @@ describe('SymbolMasterService.delistedEventsBetween', () => {
     await t.close();
   });
 
+  it('하루 빠졌다 돌아온 종목은 폐지로 보고하지 않고, 돌아오지 않은 종목만 보고한다', async () => {
+    const t = await createTestApp();
+    const svc = makeService(t);
+    insertCoverage(t, '2020-01-01', '2026-12-31');
+    // 000660 은 KRX 기초정보 응답에서 하루(2026-03-10) 빠졌다가 다음 날 돌아왔다 —
+    // persistTradingDay 가 구간을 닫고 새로 열어 DELISTED + LISTED 로 파생된다.
+    insertVersion(
+      t,
+      entry({ standardCode: 'KR7000660001', shortCode: '000660' }),
+      '2020-01-01',
+      '2026-03-10',
+    );
+    insertVersion(
+      t,
+      entry({ standardCode: 'KR7000660001', shortCode: '000660' }),
+      '2026-03-11',
+      null,
+    );
+    // 005930 은 같은 날 닫히고 돌아오지 않았다 — 진짜 폐지다
+    insertVersion(
+      t,
+      entry({ standardCode: 'KR7005930003', shortCode: '005930' }),
+      '2020-01-01',
+      '2026-03-10',
+    );
+
+    expect(svc.delistedEventsBetween('2026-01-01', '2026-12-31')).toEqual([
+      { shortCode: '005930', effectiveDate: '2026-03-10' },
+    ]);
+    await t.close();
+  });
+
   it('effectiveDate 오름차순, 같은 날짜는 id(=날짜:표준코드:이벤트타입) 순서로 정렬한다', async () => {
     const t = await createTestApp();
     const svc = makeService(t);
