@@ -109,8 +109,14 @@ export interface BacktestRunResult {
   readonly delistingLiquidations: readonly { symbol: string; tsMs: number; netPnl: number }[];
 }
 
-/** 재현성 메타데이터에 기록되는 엔진 버전 (스펙 §9.5) — 체결·지표 로직 변경 시 올린다 */
-export const ENGINE_VERSION = '1.5.0';
+/**
+ * 재현성 메타데이터에 기록되는 엔진 버전 (스펙 §9.5) — 체결·지표 로직이 바뀌거나,
+ * 워커가 엔진에 넘기는 입력을 조립하는 규칙이 바뀌어 같은 요청의 결과가 달라질 때 올린다.
+ *
+ * 1.6.0: 자본변동 효력발생일을 DART 기준일이 아니라 KRX 상장주식수 변경일로 옮긴다
+ * (corporate-action-effective-date.ts). 분할을 낀 실행은 이전 버전과 자산곡선이 다르다.
+ */
+export const ENGINE_VERSION = '1.6.0';
 
 const PROGRESS_INTERVAL_BARS = 500;
 
@@ -544,7 +550,9 @@ function* runBacktestSteps(
         : '. 액면분할은 이 실행에서 보정되지 않았습니다 (분할 이력 미수집).'),
   );
   warnings.push(
-    '이 백테스트가 보정하지 않는 것: 배당, 유상증자 권리락, 공휴일 캘린더, 과거 지수 구성원 복원. '
+    '이 백테스트가 보정하지 않는 것: 배당, 유상증자 권리락, 무상증자·주식배당 권리락, 공휴일 캘린더, '
+      + '과거 지수 구성원 복원. 무상증자·주식배당은 주가가 권리락일에 떨어지는데 수량은 신주상장일에 늘어나므로 '
+      + '그 사이 구간의 평가금액이 실제보다 낮습니다 (권리락일은 수집하는 데이터에 없습니다). '
       + '손절·익절은 종가로만 판정합니다.',
   );
 

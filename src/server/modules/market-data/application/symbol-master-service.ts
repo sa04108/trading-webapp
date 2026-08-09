@@ -1315,6 +1315,68 @@ export class SymbolMasterService {
   }
 
   /**
+   * [from, to] 구간에 KRX 상장주식수가 바뀐 날. 백테스트 워커가 DART 자본변동의
+   * 효력발생일을 **주가가 실제로 조정된 날**로 옮기는 데 쓴다
+   * (corporate-action-effective-date.ts 참고).
+   *
+   * 액면분할에서 이 날이 곧 변경상장일이다. DART 가 주는 날짜는 분할 기준일이라
+   * 그 사이 주권교체 정지 구간만큼 어긋난다.
+   *
+   * `delistedEventsBetween` 과 같은 이유로 `symbol_master_events` 가 아니라
+   * `listEvents` 를 거른다 — 그 테이블은 SCD 이행(D-045) 전 legacy 이력이다.
+   * 저장소가 처음 관측한 날은 LISTED 라 여기 걸리지 않는다.
+   */
+  sharesChangesBetween(
+    from: string,
+    to: string,
+  ): readonly { shortCode: string; effectiveDate: string; ratio: number }[] {
+    const events = this.listEvents(from, to).filter((event) => event.eventType === 'SHARES_CHANGED');
+    if (events.length === 0) return [];
+
+    // 단축코드는 이벤트에 없다 — SHARES_CHANGED 의 old/newValue 는 주식수 문자열뿐이다.
+    // 그 날 유효한 버전 행에서 읽는다. 봉·팩트가 쓰는 키가 단축코드라 표준코드로는 잇지 못한다.
+    const codes = [...new Set(events.map((event) => event.standardCode))];
+    const versions: { standardCode: string; validFromDate: string; validToDate: string | null; shortCode: string }[] = [];
+    for (let i = 0; i < codes.length; i += 500) {
+      versions.push(
+        ...this.deps.db
+          .select({
+            standardCode: symbolMasterVersions.standardCode,
+            validFromDate: symbolMasterVersions.validFromDate,
+            validToDate: symbolMasterVersions.validToDate,
+            shortCode: symbolMasterVersions.shortCode,
+          })
+          .from(symbolMasterVersions)
+          .where(inArray(symbolMasterVersions.standardCode, codes.slice(i, i + 500)))
+          .all(),
+      );
+    }
+
+    const result: { shortCode: string; effectiveDate: string; ratio: number }[] = [];
+    for (const event of events) {
+      const before = Number(JSON.parse(event.oldValue ?? 'null') as unknown);
+      const after = Number(JSON.parse(event.newValue ?? 'null') as unknown);
+      if (!Number.isFinite(before) || !Number.isFinite(after) || before <= 0 || after <= 0) continue;
+      const version = versions.find(
+        (row) =>
+          row.standardCode === event.standardCode
+          && row.validFromDate <= event.effectiveDate
+          && (row.validToDate === null || row.validToDate > event.effectiveDate),
+      );
+      if (version === undefined) continue;
+      result.push({
+        shortCode: version.shortCode,
+        effectiveDate: event.effectiveDate,
+        ratio: after / before,
+      });
+    }
+    return result.sort(
+      (a, b) =>
+        a.effectiveDate.localeCompare(b.effectiveDate) || a.shortCode.localeCompare(b.shortCode),
+    );
+  }
+
+  /**
    * DELISTED 이벤트 한 건의 oldValue 에서 shortCode 를 꺼낸다. 실패하면 경고를 남기고 undefined 를 돌려준다.
    *
    * 아래 세 분기(oldValue 없음·파싱 실패·shortCode 없음)는 단위 테스트가 없다. `listEvents`

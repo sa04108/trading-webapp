@@ -36,7 +36,9 @@ import {
 } from '../server/modules/backtest/domain/cost-profiles.js';
 import { ParquetFactRepository } from '../server/modules/facts/infrastructure/parquet-fact-repository.js';
 import { CORPORATE_ACTION_FIELD, type Fact } from '../server/modules/facts/domain/fact.js';
+import { alignCorporateActionEffectiveDates } from '../server/modules/facts/domain/corporate-action-effective-date.js';
 import type { Candle, Market, Timeframe } from '../server/modules/market-data/domain/candle.js';
+import { addCalendarDays } from '../server/modules/market-data/domain/kst-date.js';
 import { DuckDbService } from '../server/modules/market-data/infrastructure/duckdb-service.js';
 import { KrxDailyCandleRepository } from '../server/modules/market-data/infrastructure/krx-daily-candle-repository.js';
 import type { KrxHistoricalUniverseSource } from '../server/modules/market-data/application/ports.js';
@@ -323,11 +325,46 @@ async function main(): Promise<void> {
         asOfMaxTsMs: toTsMs,
       })
     ).filter((fact) => fact.field !== CORPORATE_ACTION_FIELD);
-    const corporateActionFacts: Fact[] = await factRepository.getFacts({
+    const rawCorporateActionFacts: Fact[] = await factRepository.getFacts({
       scope: 'SYMBOL',
       keys: unionSymbols,
       fields: [CORPORATE_ACTION_FIELD],
     });
+
+    // 자본변동 효력발생일을 KRX 가 주가를 조정한 날로 옮긴다.
+    //
+    // DART 가 주는 날짜는 액면분할의 **기준일**이고, 일봉 주가가 분할 후 값이 되는 날은
+    // **변경상장일**이다. 그 사이(주권교체 정지 구간)에는 엔진이 수량만 ×비율 해 놓고
+    // 단가는 분할 전 값을 쓰므로 평가금액이 비율 배로 뛰었다가 재개 봉에서 되돌아온다
+    // — 자산곡선에 없던 봉우리가 서고 MDD·변동성이 그 봉우리에서 계산된다.
+    //
+    // 창을 실행 기간 ±120일로 잡는다. 기간 밖에서 효력이 난 자본변동은 이 실행의
+    // 평가금액을 흔들 수 없고(포지션이 없거나 봉이 없다), alignment 창이 최대 +90일이라
+    // 기간 밖 기준일이 기간 안 날짜로 옮겨질 여지도 이 범위 안에 다 들어온다.
+    const sharesChanges = symbolMaster.sharesChangesBetween(
+      addCalendarDays(request.period.from, -120),
+      addCalendarDays(request.period.to, 120),
+    );
+    const aligned = alignCorporateActionEffectiveDates(rawCorporateActionFacts, sharesChanges);
+    const corporateActionFacts = aligned.facts;
+
+    // 짝을 못 찾은 자본변동만 밝힌다 — 실행 기간 안에 효력이 나는 것으로 좁힌다.
+    // 기간 밖 자본변동까지 세면 10년치 분할 목록이 경고 한 줄에 쏟아진다.
+    const unalignedInPeriod = aligned.unaligned.filter(
+      (action) => action.periodKey >= request.period.from && action.periodKey <= request.period.to,
+    );
+    if (unalignedInPeriod.length > 0) {
+      const unalignedSymbols = [...new Set(unalignedInPeriod.map((action) => action.symbol))].sort();
+      const shown = unalignedSymbols.slice(0, 10).join(', ');
+      datasetWarnings.push(
+        `자본변동 ${unalignedInPeriod.length}건은 KRX 상장주식수 변경과 짝지어지지 않아 DART 기준일을 그대로 씁니다 `
+          + `— 대상 ${unalignedSymbols.length}종목: ${shown}`
+          + (unalignedSymbols.length > 10 ? ` 외 ${unalignedSymbols.length - 10}종목` : '')
+          + '. 기준일과 변경상장일이 다르면 그 사이 구간의 평가금액이 실제와 어긋납니다. '
+          + '종목 마스터를 그 구간까지 수집하면 짝을 찾습니다.',
+      );
+    }
+
     const facts: Fact[] = [...financialFacts, ...corporateActionFacts];
     // 아래 두 검사는 **재무** 팩트만 본다 — 분할만 기록된 종목은 재무가 없는 종목이다
     if (strategy.requiresFundamentals === true && financialFacts.length === 0) {
