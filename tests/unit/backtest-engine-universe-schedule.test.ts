@@ -164,6 +164,76 @@ describe('runBacktest — 멤버십 일정 기반 거래 대상 제한 (스펙 2
     expect(rebalanceBars).toEqual([START, START + 2 * HOUR]);
   });
 
+  it('D-1 전략 SELL은 D0 편출 판정 후 REBALANCE_EXIT로 교체해 체결한다', () => {
+    const forced: string[] = [];
+    const strategy: TradingStrategy<unknown, { step: number }> = {
+      id: 'pending-sell-collision', version: '1', name: 'pending sell', description: 'pending sell',
+      parameterSchema: z.unknown(), initialize: () => ({ step: 0 }),
+      onBars(_context, state) {
+        const orders: OrderIntent[] = [];
+        if (state.step === 0) orders.push({ symbol: 'A', side: 'BUY', quantity: 1 });
+        if (state.step === 2) orders.push({ symbol: 'A', side: 'SELL', quantity: 1 });
+        state.step += 1;
+        return { orders };
+      },
+      onForcedExit(symbol) { forced.push(symbol); },
+    };
+
+    const result = runBacktest(strategy as never, {
+      candles: [
+        ...[0, 1, 2, 3, 4].map((index) => bar(index, 100)),
+        ...[0, 1, 2, 3, 4].map((index) => bar(index, 200, { symbol: 'B' })),
+      ],
+      initialCash: 10_000, execution: ZERO_COST, parameters: {}, randomSeed: 42, maxPositions: 5,
+      universeSchedule: [
+        { fromTsMs: START, members: [member('A')] },
+        { fromTsMs: START + 3 * HOUR, members: [member('B')] },
+      ],
+    });
+
+    const sell = result.fills.find((fill) => fill.symbol === 'A' && fill.side === 'SELL');
+    expect(sell?.tsMs).toBe(START + 3 * HOUR);
+    expect(result.trades.find((trade) => trade.symbol === 'A')?.exitReason).toBe('REBALANCE_EXIT');
+    expect(forced).toEqual(['A']);
+  });
+
+  it('D-1 pending BUY는 D0 멤버십으로 재검증해 편출은 취소하고 유효 매수는 청산 뒤로 미룬다', () => {
+    const strategy: TradingStrategy<unknown, { step: number }> = {
+      id: 'pending-buy-collision', version: '1', name: 'pending buy', description: 'pending buy',
+      parameterSchema: z.unknown(), initialize: () => ({ step: 0 }),
+      onBars(_context, state) {
+        const orders: OrderIntent[] = [];
+        if (state.step === 0) orders.push({ symbol: 'A', side: 'BUY', quantity: 1 });
+        if (state.step === 2) {
+          orders.push({ symbol: 'A', side: 'BUY', quantity: 1 });
+          orders.push({ symbol: 'B', side: 'BUY', quantity: 1 });
+        }
+        state.step += 1;
+        return { orders };
+      },
+    };
+
+    const result = runBacktest(strategy as never, {
+      candles: [
+        ...[0, 1, 2, 3, 4, 5].map((index) => bar(index, 100)),
+        ...[0, 1, 2, 3, 4, 5].map((index) => bar(index, 200, { symbol: 'B' })),
+      ],
+      initialCash: 10_000, execution: ZERO_COST, parameters: {}, randomSeed: 42, maxPositions: 5,
+      universeSchedule: [
+        { fromTsMs: START, members: [member('A'), member('B')] },
+        { fromTsMs: START + 3 * HOUR, members: [member('B')] },
+      ],
+    });
+
+    const aBuys = result.fills.filter((fill) => fill.symbol === 'A' && fill.side === 'BUY');
+    const aSell = result.fills.find((fill) => fill.symbol === 'A' && fill.side === 'SELL');
+    const bBuy = result.fills.find((fill) => fill.symbol === 'B' && fill.side === 'BUY');
+    expect(aBuys).toHaveLength(1);
+    expect(aSell?.tsMs).toBe(START + 4 * HOUR);
+    expect(bBuy?.tsMs).toBe(START + 5 * HOUR);
+    expect((aSell?.tsMs ?? Infinity) < (bBuy?.tsMs ?? -Infinity)).toBe(true);
+  });
+
   it('일정 밖 심볼의 BUY 의도는 거부되고 종목당 한 번만 warning 이 쌓인다', () => {
     const candles = [
       bar(0, 100),
@@ -443,6 +513,43 @@ describe('runBacktest — 멤버십 일정 기반 거래 대상 제한 (스펙 2
     });
     expect(result.fills.some((fill) => fill.symbol === 'B' && fill.side === 'BUY')).toBe(false);
     expect(result.warnings.some((warning) => warning.includes('리밸런스') && warning.includes('체결'))).toBe(true);
+  });
+
+  it('지연된 REBALANCE_EXIT 체결 전 재편입되면 청산을 취소하고 deferred BUY를 해제한다', () => {
+    const forced: string[] = [];
+    const strategy: TradingStrategy<unknown, { step: number }> = {
+      id: 'reentry-before-exit-fill', version: '1', name: 'reentry', description: 'reentry',
+      parameterSchema: z.unknown(), initialize: () => ({ step: 0 }),
+      onBars(_context, state) {
+        const orders: OrderIntent[] = [];
+        if (state.step === 0) orders.push({ symbol: 'A', side: 'BUY', quantity: 1 });
+        if (state.step === 2) orders.push({ symbol: 'B', side: 'BUY', quantity: 1 });
+        state.step += 1;
+        return { orders };
+      },
+      onForcedExit(symbol) { forced.push(symbol); },
+    };
+
+    const result = runBacktest(strategy as never, {
+      candles: [
+        ...[0, 1, 2, 3, 4].map((index) => bar(index, 100)),
+        ...[0, 1, 2, 3, 4].map((index) => bar(index, 200, { symbol: 'B' })),
+      ],
+      initialCash: 10_000, execution: ZERO_COST, parameters: {}, randomSeed: 42, maxPositions: 5,
+      universeSchedule: [
+        { fromTsMs: START, members: [member('A')] },
+        { fromTsMs: START + 2 * HOUR, members: [member('B')] },
+        { fromTsMs: START + 3 * HOUR, members: [member('A'), member('B')] },
+      ],
+    });
+
+    expect(result.fills.filter((fill) => fill.symbol === 'A' && fill.side === 'SELL')).toEqual([]);
+    expect(result.openPositions.find((position) => position.symbol === 'A')?.quantity).toBe(1);
+    expect(result.fills.find((fill) => fill.symbol === 'B' && fill.side === 'BUY')?.tsMs)
+      .toBe(START + 4 * HOUR);
+    expect(forced).toEqual([]);
+    expect(result.warnings.some((warning) => warning.includes('리밸런스 유니버스 이탈 청산')))
+      .toBe(false);
   });
 
   it('지연된 이탈 청산 체결 봉에서 전략이 같은 BUY를 다시 내도 다음 open에 한 건만 체결한다', () => {

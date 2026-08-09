@@ -447,6 +447,65 @@ function* runBacktestSteps(
       position.avgEntryPrice = adjusted.avgEntryPrice;
     }
 
+    // 리밸런스 활성화는 D-1 주문의 D0 open 체결보다 먼저 적용한다.
+    // 그렇지 않으면 편출 종목 BUY가 한 번 더 체결되고, 이미 D-1에 나온
+    // 전략 SELL은 정상 매도로 체결돼 REBALANCE_EXIT 사유와 훅이 유실된다.
+    //
+    // D0에 처음 만든 forced SELL은 기존 계약대로 D1 open에 체결해야 한다.
+    // D-1 SELL을 교체한 건만 기존 D0 체결 자격을 승계하고, 새 forced SELL은
+    // 아래 체결 루프가 끝난 뒤 pending queue에 넣는다.
+    const forcedExitsForNextOpen: OrderIntent[] = [];
+    if (isRebalanceBar && activeMembershipSymbols !== null) {
+      const membershipSymbols = activeMembershipSymbols;
+      // 지연 청산 중 다음 schedule에 재편입된 종목은 더 이상 이탈이 아니다.
+      // 전략에는 실제 청산이 일어나지 않았으므로 onForcedExit를 부르지 않는다.
+      for (const symbol of [...unresolvedForcedExitSymbols]) {
+        if (membershipSymbols.has(symbol)) resolveForcedExit(symbol, false);
+      }
+
+      const sellEligibleNow = new Set(
+        pendingOrders.filter((order) => order.side === 'SELL').map((order) => order.symbol),
+      );
+      for (const [symbol, position] of positions) {
+        if (membershipSymbols.has(symbol) || position.quantity <= 0) continue;
+        // 이전 전략 SELL이나 지연된 forced SELL을 전량 engine order 한 건으로 교체한다.
+        pendingOrders = pendingOrders.filter(
+          (order) => !(order.symbol === symbol && order.side === 'SELL'),
+        );
+        const forcedExit: OrderIntent = {
+          symbol,
+          side: 'SELL',
+          quantity: position.quantity,
+          reason: 'REBALANCE_EXIT',
+        };
+        if (sellEligibleNow.has(symbol)) pendingOrders.push(forcedExit);
+        else forcedExitsForNextOpen.push(forcedExit);
+        unresolvedForcedExitSymbols.add(symbol);
+        if (!quantityBasisTsMsBySymbol.has(symbol)) quantityBasisTsMsBySymbol.set(symbol, tsMs);
+      }
+
+      // D-1 BUY는 발행 때의 예전 schedule이 아니라 방금 활성화된 membership으로
+      // 다시 판정한다. 편출 BUY는 취소하고, 아직 유효해도 forced exit가 남아
+      // 있으면 청산 다음 open까지 미룬다. 이전에 미뤄 둔 BUY도 같은 규칙이다.
+      deferredRebalanceBuys = deferredRebalanceBuys.filter(
+        (order) => membershipSymbols.has(order.symbol),
+      );
+      const reconciledPending: OrderIntent[] = [];
+      for (const order of pendingOrders) {
+        if (order.side !== 'BUY') {
+          reconciledPending.push(order);
+        } else if (!membershipSymbols.has(order.symbol)) {
+          // stale membership에서는 유효했던 주문이므로 전략 버그 warning은 남기지 않는다.
+          continue;
+        } else if (unresolvedForcedExitSymbols.size > 0) {
+          deferBuy(order);
+        } else {
+          reconciledPending.push(order);
+        }
+      }
+      pendingOrders = reconciledPending;
+    }
+
     // 2~3. 대기 주문 체결 + 현금·포지션 갱신
     const stillPending: OrderIntent[] = [];
     for (const order of pendingOrders) {
@@ -470,6 +529,7 @@ function* runBacktestSteps(
       }
     }
     pendingOrders = stillPending;
+    pendingOrders.push(...forcedExitsForNextOpen);
 
     // 역분할 단주 현금화 등으로 주문 체결 전에 포지션이 사라진 경우도 대기 상태를
     // 영원히 붙들지 않는다. 멤버십 이탈로 전략 보유 상태를 지워야 하므로 훅은 부른다.
@@ -523,9 +583,8 @@ function* runBacktestSteps(
       for (const [symbol, bar] of bars) {
         if (liquidationBarTsMsBySymbol.get(symbol)?.has(tsMs) !== true) continue;
 
-        // 대기 주문을 따로 지우지 않는다. 이 시점 pendingOrders 에는 이번 봉에 봉이
-        // 없는 종목의 주문만 남아 있다. 봉이 있는 종목은 위 체결 스텝이 이미 다
-        // 처리했으므로, 폐지 종목(이번 봉이 있어야 여기 온다) 주문은 애초에 없다.
+        // D0에 방금 만든 REBALANCE_EXIT가 pendingOrders에 있을 수 있다.
+        // 이 폐지 청산이 선행하면 아래 resolveForcedExit가 그 주문도 같이 제거한다.
         // 전략이 이 마지막 봉에서 새로 내는 주문은 이 블록 뒤(전략 호출)에 등록되므로
         // 여기서 손댈 수 없고, 체결될 봉이 다시 오지 않아 기간 종료 폐기 경고로 드러난다.
 
@@ -546,31 +605,6 @@ function* runBacktestSteps(
         }
         strategy.onForcedExit?.(symbol, state);
         if (unresolvedForcedExitSymbols.has(symbol)) resolveForcedExit(symbol, false);
-      }
-    }
-
-    // 리밸런스 활성화 뒤 현재 보유분을 기준으로 이탈을 판정한다. 위의 기존 대기 주문
-    // 체결·상장폐지 처리가 끝난 뒤여야 D0 open에 새로 생기거나 사라진 포지션을 놓치지 않는다.
-    if (isRebalanceBar && activeMembershipSymbols !== null) {
-      for (const [symbol, position] of positions) {
-        if (activeMembershipSymbols.has(symbol) || position.quantity <= 0) continue;
-        // 이전 전략 SELL이나 같은 봉의 중복 SELL보다 엔진 사유가 우선한다.
-        pendingOrders = pendingOrders.filter(
-          (order) => !(order.symbol === symbol && order.side === 'SELL'),
-        );
-        pendingOrders.push({
-          symbol,
-          side: 'SELL',
-          quantity: position.quantity,
-          reason: 'REBALANCE_EXIT',
-        });
-        unresolvedForcedExitSymbols.add(symbol);
-        if (!quantityBasisTsMsBySymbol.has(symbol)) quantityBasisTsMsBySymbol.set(symbol, tsMs);
-      }
-      if (unresolvedForcedExitSymbols.size > 0) {
-        const buysWaitingForOpen = pendingOrders.filter((order) => order.side === 'BUY');
-        pendingOrders = pendingOrders.filter((order) => order.side !== 'BUY');
-        for (const buy of buysWaitingForOpen) deferBuy(buy);
       }
     }
 
