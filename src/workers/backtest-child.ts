@@ -17,6 +17,7 @@ import {
   backtestRuns,
   backtestSymbolMetrics,
   backtestTrades,
+  symbolMasterStorageState,
   symbolVersions,
   symbols as symbolsTable,
 } from '../server/shared/db/schema.js';
@@ -114,9 +115,28 @@ async function main(): Promise<void> {
       symbols: entry.symbols,
     }));
 
+    // SCD 이행이 끝났는지 먼저 확인한다. SymbolMasterService 생성자가
+    // ensureScdStorageReady 를 부르므로, 이 검사가 없으면 백테스트 잡 하나가 워커
+    // 프로세스 안에서 스키마 이행 전체(버전 테이블 재작성 + legacy 테이블 삭제)를
+    // 수행하거나 그 도중에 죽어 백테스트 실패로 둔갑한다. busy_timeout 이 5초라
+    // 워커 둘이 겹치면 큰 DB 에서 SQLITE_BUSY 로 갈린다. 이행은 서버만 한다.
+    const storagePhase = db
+      .select({ phase: symbolMasterStorageState.phase })
+      .from(symbolMasterStorageState)
+      .where(eq(symbolMasterStorageState.singleton, 1))
+      .get()?.phase;
+    if (storagePhase !== 'ACTIVE') {
+      throw new Error(
+        `종목 마스터 저장소가 아직 SCD 로 이행되지 않았습니다 (현재 ${storagePhase ?? '기록 없음'}). `
+          + '서버를 먼저 한 번 띄워 이행을 끝낸 뒤 다시 실행하세요 — 워커는 이행하지 않습니다.',
+      );
+    }
+
     // 종목 마스터 읽기 전용 조회 — 워커는 db handle 을 재사용하고 KRX 를 직접 부르지
-    // 않는다(ingestDate 류는 호출하지 않는다). source 는 계약을 채우기 위한 자리표시일
-    // 뿐이며 실제로 불리면 버그이므로 던진다. clock 도 쓰기 경로 전용이라 systemClock 이면 충분하다.
+    // 않는다(ingestDate 류는 호출하지 않는다). 위 phase 검사가 통과했으므로 생성자의
+    // ensureScdStorageReady 는 곧바로 돌아온다 — 이 경로에서 쓰기가 일어나지 않는다.
+    // source 는 계약을 채우기 위한 자리표시일 뿐이며 실제로 불리면 버그이므로 던진다.
+    // clock 도 쓰기 경로 전용이라 systemClock 이면 충분하다.
     const unusedKrxSource: KrxHistoricalUniverseSource = {
       fetchIssueBaseInfo: () =>
         Promise.reject(new Error('워커는 종목 마스터를 읽기 전용으로만 쓴다 — KRX 를 부르지 않는다')),

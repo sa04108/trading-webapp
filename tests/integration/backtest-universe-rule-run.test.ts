@@ -6,6 +6,7 @@ import {
   krxDailyBars,
   krxNonTradingCoverage,
   krxNonTradingDays,
+  symbolMasterStorageState,
   symbolMasterVersions,
 } from '../../src/server/shared/db/schema.js';
 import {
@@ -978,6 +979,64 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
       const warnings = JSON.parse(run.warningsJson ?? '[]') as string[];
       expect(warnings.some((w) => w.includes('거래불가일 정보가 없습니다'))).toBe(false);
       expect(warnings.some((w) => w.includes('거래불가일 정보는'))).toBe(false);
+    },
+  );
+
+  it(
+    '종목 마스터가 SCD 이행 전이면 워커는 이행하지 않고 바로 실패한다',
+    { timeout: 90_000 },
+    async () => {
+      // 워커가 SymbolMasterService 를 만들면 생성자가 ensureScdStorageReady 를 부른다 —
+      // 백테스트 잡 하나가 트랜잭션을 열어 버전 테이블을 다시 쓰고 legacy 테이블을
+      // 비우는 이행을 수행하게 된다. 워커는 절대 이행하지 않고, 운영자에게 서버를
+      // 먼저 띄우라고 말하고 죽어야 한다.
+      const alive = buildDailyCandles('005930');
+      registerSymbols(ctx.container, 'KR', ['005930']);
+      seedDailyBars(ctx.container.database.db, alive);
+      seedSymbolMasterUniverse(ctx.container, MASTER_DATES, [
+        { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '900' },
+      ]);
+      seedCorporateActionCoverage(ctx.container, ['005930'], yearRange(2025, 2026));
+
+      // 제출은 이행이 끝난 서버가 받는다. 워커가 열 때만 PENDING 이다 —
+      // 서버 배포와 워커 실행 사이에 DB 가 교체된 상황이 이 모양이다.
+      const created = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/backtests',
+        cookies: { qp_session: cookie },
+        payload: buildRequest(1),
+      });
+      expect(created.statusCode).toBe(201);
+      const jobId = (created.json().job as { id: string }).id;
+
+      ctx.container.database.db
+        .update(symbolMasterStorageState)
+        .set({ phase: 'PENDING', migratedAtMs: null })
+        .where(eq(symbolMasterStorageState.singleton, 1))
+        .run();
+      const versionsBefore = ctx.container.database.db.select().from(symbolMasterVersions).all();
+
+      ctx.container.jobOrchestrator.tick();
+      await waitFor(() => {
+        const job = ctx.container.jobQueue.getJob(jobId);
+        return job !== null && ctx.container.jobQueue.isTerminal(job.status);
+      }, 60_000);
+
+      const job = ctx.container.jobQueue.getJob(jobId)!;
+      expect(job.status).toBe('FAILED');
+      // 이행을 시도하다 죽은 것이 아니라, 시도 전에 멈춰 운영자에게 할 일을 알린다
+      expect(job.error).toContain('서버를 먼저');
+      expect(job.error).not.toContain('SCD 이행 실패');
+
+      // 이행 흔적이 없어야 한다 — 상태도 버전 행도 그대로다
+      const state = ctx.container.database.db
+        .select()
+        .from(symbolMasterStorageState)
+        .where(eq(symbolMasterStorageState.singleton, 1))
+        .get();
+      expect(state?.phase).toBe('PENDING');
+      expect(ctx.container.database.db.select().from(symbolMasterVersions).all())
+        .toHaveLength(versionsBefore.length);
     },
   );
 
