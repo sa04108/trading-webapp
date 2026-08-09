@@ -5,7 +5,7 @@ import type { SymbolMasterService } from '../../market-data/application/symbol-m
 import type { UniverseRule } from '../../../../shared/schemas/universe-rule.js';
 import type { BacktestPeriod } from '../../../../shared/schemas/backtest-request.js';
 import { computeRebalanceDates as computeSharedRebalanceDates } from '../../../../shared/schemas/rebalance-interval.js';
-import { addCalendarDays } from '../../market-data/domain/kst-date.js';
+import { addCalendarDays, kstEndOfDayMs } from '../../market-data/domain/kst-date.js';
 import type { SelectionMetricRepository } from '../../market-data/application/selection-metric-repository.js';
 import type { CandleRepository } from '../../market-data/application/ports.js';
 import type { FactRepository } from '../../facts/application/ports.js';
@@ -84,6 +84,8 @@ export type UniverseResolveAttempt =
       readonly kind: 'READY';
       readonly schedule: readonly UniverseScheduleEntry[];
       readonly diagnostics: readonly RebalanceDiagnostic[];
+      /** READY schedule 멤버를 자동 등록할 때 쓰는 실제 선정 시점의 master entry */
+      readonly unionEntries: ReadonlyMap<string, SymbolMasterEntry>;
     }
   | { readonly kind: 'NEEDS_DATA'; readonly needs: UniverseDataNeed };
 
@@ -227,6 +229,7 @@ export class UniverseRuleResolver {
     let priceRange: { from: string; to: string } | null = null;
     const schedule: UniverseScheduleEntry[] = [];
     const diagnostics: RebalanceDiagnostic[] = [];
+    const unionEntries = new Map<string, SymbolMasterEntry>();
 
     const widenPriceRange = (from: string, to: string): void => {
       priceRange = priceRange === null
@@ -302,7 +305,7 @@ export class UniverseRuleResolver {
             keys: candidates.map((entry) => entry.shortCode),
           });
           const view = new PitFactView(loaded);
-          view.advanceTo(endOfDateMs(effectiveDate));
+          view.advanceTo(kstEndOfDayMs(effectiveDate));
           rows = exactPerRankingRows(candidates, stageMetrics, view);
         } else {
           const codes = candidates.map((entry) => entry.shortCode);
@@ -347,7 +350,7 @@ export class UniverseRuleResolver {
             if (history.length !== stage.lookbackTradingDays) {
               return { standardCode: entry.standardCode, shortCode: entry.shortCode, value: null };
             }
-            const actions = view.corporateActions(entry.shortCode, endOfDateMs(effectiveDate));
+            const actions = view.corporateActions(entry.shortCode, kstEndOfDayMs(effectiveDate));
             const first = splitAdjustedClose(history, actions, 0);
             const last = splitAdjustedClose(history, actions, history.length - 1);
             const value = first === null || last === null || first <= 0
@@ -372,6 +375,9 @@ export class UniverseRuleResolver {
         effectiveDate,
         candidates.map((entry) => entry.standardCode),
       );
+      for (const entry of candidates) {
+        if (!unionEntries.has(entry.shortCode)) unionEntries.set(entry.shortCode, entry);
+      }
       diagnostics.push({ rebalanceDate, effectiveDate, stages: stageDiagnostics });
       schedule.push({
         rebalanceDate,
@@ -406,7 +412,7 @@ export class UniverseRuleResolver {
         },
       };
     }
-    return { kind: 'READY', schedule, diagnostics };
+    return { kind: 'READY', schedule, diagnostics, unionEntries };
   }
 
   private requirePipelineDeps(): Required<Pick<
@@ -419,10 +425,6 @@ export class UniverseRuleResolver {
     }
     return { selectionMetrics, candles, facts, actionCoverage };
   }
-}
-
-function endOfDateMs(date: string): number {
-  return Date.parse(`${date}T23:59:59.999Z`);
 }
 
 function yearsBetween(from: string, to: string): number[] {
@@ -502,7 +504,7 @@ async function loadCandleHistories(
     market: 'KR',
     timeframe: '1d',
     symbols,
-    toTsMs: endOfDateMs(effectiveDate),
+    toTsMs: kstEndOfDayMs(effectiveDate),
   })) {
     const list = histories.get(candle.symbol) ?? [];
     list.push(candle);

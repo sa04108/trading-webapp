@@ -424,6 +424,48 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
     expect(readStandardCode('005930')).toBe('KR7005930003');
   });
 
+  it('VOLUME-first READY는 staged member만 해당 master entry로 등록한다', async () => {
+    seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
+      { standardCode: 'KR7000001001', shortCode: '000001', name: '시총상위', market: 'KOSPI', marketCapKrw: '500000000000000' },
+      { standardCode: 'KR7000002002', shortCode: '000002', name: '거래량상위', market: 'KOSPI', marketCapKrw: '20000000000000' },
+    ]);
+    ctx.container.database.db.update(dailySelectionMetrics)
+      .set({ volume: 100, tradingValueKrw: '1000000' })
+      .where(eq(dailySelectionMetrics.standardCode, 'KR7000001001')).run();
+    ctx.container.database.db.update(dailySelectionMetrics)
+      .set({ volume: 10_000, tradingValueKrw: '2000000' })
+      .where(eq(dailySelectionMetrics.standardCode, 'KR7000002002')).run();
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: {
+          markets: ['KOSPI'],
+          stages: [{ criterion: 'VOLUME', limit: 1 }],
+          rebalanceInterval: { unit: 'MONTH', value: 1 },
+        },
+        period: { from: '2026-01-05', to: '2026-01-05' },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      schedule: Array<{ members: Array<{ symbol: string; standardCode: string }> }>;
+      unionSymbols: string[];
+    };
+    expect(body.schedule[0]?.members).toMatchObject([
+      { symbol: '000002', standardCode: 'KR7000002002' },
+    ]);
+    expect(body.unionSymbols).toEqual(['000002']);
+    expect(ctx.container.symbolService.exists('000001')).toBe(false);
+    expect(ctx.container.symbolService.getSymbol('000002')).toMatchObject({
+      code: '000002', market: 'KR', name: '거래량상위',
+    });
+    expect(readStandardCode('000002')).toBe('KR7000002002');
+  });
+
   it('이미 등록된 종목은 다시 미리보기해도 실패하지 않고 표준코드를 덮어쓰지 않는다', async () => {
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
       { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
@@ -508,14 +550,8 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
   });
 });
 
-/**
- * KRX 오류 매핑 (리뷰 finding) — `UniverseRuleResolver.resolve` 는 시총 캐시 미스일 때
- * `getMarketCapsAt` 을 통해 실제 KRX 를 부른다. `symbol-master-routes.ts` 의
- * `/symbol-master/sync` 와 같은 관례로 KrxQuotaError→429 를 매핑해야 한다 — 매핑이
- * 없으면 쿼터 초과가 일반 500 으로 노출된다. 제출 경로(`validateSubmission`)는 같은
- * `sendIfKrxError` 헬퍼를 타므로 별도 테스트를 생략한다.
- */
-describe('POST /backtests/universe-preview — KRX 오류 매핑', () => {
+/** staged READY 뒤에는 legacy 시총 resolver를 다시 실행하지 않는다. */
+describe('POST /backtests/universe-preview — staged READY 재조회 방지', () => {
   let ctx: TestApp;
   let fake: KrxFakeServer;
   let cookie: string;
@@ -537,12 +573,12 @@ describe('POST /backtests/universe-preview — KRX 오류 매핑', () => {
     await fake.close();
   });
 
-  it('KRX 가 429 를 돌려주면 미리보기도 429 로 응답한다 (일반 500 이 아니다)', async () => {
+  it('선정 지표가 준비됐으면 legacy 시총 캐시가 비어 있어도 KRX를 부르지 않고 200이다', async () => {
     const date = '2026-01-05';
     const basDd = date.replaceAll('-', '');
 
-    // 리밸런스 날짜는 커버되지만(SCD 버전+coverage) 시총 캐시는 비워 둔다 —
-    // getMarketCapsAt 이 캐시 미스로 실제 KRX(fake 서버)를 부르게 하기 위해서다.
+    // 리밸런스 날짜와 staged 선정 지표는 준비하되 legacy 시총 캐시는 비워 둔다.
+    // 옛 preview는 READY 뒤 resolve()를 한 번 더 호출해 아래 fake 429를 그대로 받았다.
     ctx.container.database.db.insert(symbolMasterVersions).values({
       standardCode: 'KR7005930003',
       validFromDate: date,
@@ -559,9 +595,15 @@ describe('POST /backtests/universe-preview — KRX 오류 매핑', () => {
       .insert(symbolMasterCoverage)
       .values({ startDate: date, endDate: date, syncedAtMs: ctx.container.clock.now() })
       .run();
-    // resolver 는 이제 effectiveTradingDate(date) 도 게이트로 보므로, 이 날짜를 거래일로도
-    // 기록해 둬야 게이트를 통과해 getMarketCapsAt 까지 도달한다.
+    // staged resolver가 effective date를 해소할 수 있도록 이 날짜를 거래일로 기록한다.
     ctx.container.database.db.insert(symbolMasterTradingDays).values({ date }).run();
+    ctx.container.database.db.insert(dailySelectionMetrics).values({
+      date,
+      standardCode: 'KR7005930003',
+      marketCapKrw: '500000000000000',
+      volume: 1_000,
+      tradingValueKrw: '1000000000',
+    }).run();
 
     fake.setResponse('stk_bydd_trd', basDd, { status: 429, body: { error: 'quota exceeded' } });
     fake.setResponse('ksq_bydd_trd', basDd, { status: 429, body: { error: 'quota exceeded' } });
@@ -576,8 +618,9 @@ describe('POST /backtests/universe-preview — KRX 오류 매핑', () => {
       },
     });
 
-    expect(res.statusCode).toBe(429);
-    expect((res.json() as { error: string }).error).toContain('한도');
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { unionSymbols: string[] }).unionSymbols).toEqual(['005930']);
+    expect(fake.requests).toEqual([]);
   });
 });
 

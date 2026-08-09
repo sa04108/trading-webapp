@@ -426,14 +426,18 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     ]);
   });
 
-  it('PER은 effective date까지 공시된 양수 TTM 순이익과 그날 시가총액만 쓴다', async () => {
-    const futureRestatement = netIncomeFacts('000003', [1_000, 1_000, 1_000, 1_000], PIPELINE_TS + 86_400_000);
+  it('PER은 effective KST date가 끝난 뒤 다음 KST 날짜에 공시된 재집계를 제외한다', async () => {
+    const nextKstDateRestatement = netIncomeFacts(
+      '000001',
+      [1_000, 1_000, 1_000, 1_000],
+      Date.parse('2025-05-15T15:00:00.000Z'),
+    );
     const resolver = makePipelineResolver({
       facts: [
         ...netIncomeFacts('000001', [5, 5, 5, 5]),
         ...netIncomeFacts('000002', [-5, -5, -5, -5]),
         ...netIncomeFacts('000003', [5, 5, 5, 5]),
-        ...futureRestatement,
+        ...nextKstDateRestatement,
       ],
     });
 
@@ -443,7 +447,8 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     );
     expect(result.kind).toBe('READY');
     if (result.kind !== 'READY') throw new Error('fixture coverage가 완전해야 합니다.');
-    // 000002는 TTM 순이익이 0 이하라 제외. 미래 재집계가 보였다면 000003이 1위가 된다.
+    // 000002는 TTM 순이익이 0 이하라 제외. 다음 KST 날짜의 재집계가 보였다면
+    // 000001의 PER이 15에서 0.075로 낮아져 000003보다 먼저 선정된다.
     expect(result.schedule[0]?.members.map((member) => member.symbol)).toEqual(['000003', '000001']);
     expect(result.diagnostics[0]?.stages[0]).toMatchObject({
       inputCount: 3,
@@ -509,6 +514,43 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
       marketCapKrw: '200',
       volume: 2_000,
       tradingValueKrw: '20000',
+    });
+  });
+
+  it('급하락은 effective KST date 다음 날의 자본변동을 분할보정에서 제외한다', async () => {
+    const candle = (symbol: string, tsMs: number, close: number): Candle => ({
+      symbol, market: 'KR', timeframe: '1d', tsMs,
+      open: close, high: close, low: close, close, volume: 1,
+    });
+    const tiny = Number.MIN_VALUE;
+    const resolver = makePipelineResolver({
+      candles: [
+        candle('000001', PIPELINE_TS - 86_400_000, tiny),
+        candle('000001', PIPELINE_TS, tiny * 2),
+        candle('000002', PIPELINE_TS - 86_400_000, 1),
+        candle('000002', PIPELINE_TS, 3),
+        candle('000003', PIPELINE_TS - 86_400_000, 1),
+        candle('000003', PIPELINE_TS, 4),
+      ],
+      facts: [{
+        scope: 'SYMBOL', key: '000001', field: 'SPLIT_RATIO', periodKey: '2025-05-16',
+        asOfTsMs: PIPELINE_TS, value: 2, unit: 'ratio',
+      }],
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'DECLINE', limit: 1, lookbackTradingDays: 2 }]),
+      period,
+    );
+
+    expect(result.kind).toBe('READY');
+    if (result.kind !== 'READY') throw new Error('fixture coverage가 완전해야 합니다.');
+    // 다음 KST 날짜의 2:1 분할을 잘못 포함하면 tiny / 2가 0으로 underflow되어
+    // 000001이 결측으로 제외된다. 올바른 컷오프에서는 원수익률 +100%로 가장 낮다.
+    expect(result.schedule[0]?.members.map((member) => member.symbol)).toEqual(['000001']);
+    expect(result.diagnostics[0]?.stages[0]).toMatchObject({
+      eligibleCount: 3,
+      excludedMissingCount: 0,
     });
   });
 

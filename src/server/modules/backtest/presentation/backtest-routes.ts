@@ -703,7 +703,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    * `clone-draft`(GET)에는 넣지 않는다 — "대기열에 넣지 않고 아무것도 확정하지
    * 않는다"는 읽기 전용 계약이라 등록도 하지 않는다.
    */
-  const registerUniverseSymbols = (resolved: ResolvedUniverse): void => {
+  const registerUniverseSymbols = (
+    resolved: Pick<ResolvedUniverse, 'unionSymbols' | 'unionEntries'>,
+  ): void => {
     for (const code of resolved.unionSymbols) {
       if (symbolService.exists(code)) continue;
       const entry = resolved.unionEntries.get(code);
@@ -722,7 +724,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    * `POST /backtests`(신규 제출)에는 붙이지 않는다 — 위저드는 제출 전에 항상
    * 미리보기를 거치므로 그때 이미 등록이 끝나 있다.
    */
-  const ensureUniverseRegistered = (resolved: ResolvedUniverse): void => {
+  const ensureUniverseRegistered = (
+    resolved: Pick<ResolvedUniverse, 'unionSymbols' | 'unionEntries'>,
+  ): void => {
     registerUniverseSymbols(resolved);
   };
 
@@ -738,19 +742,15 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       return reply.code(400).send({ error: '기간이 올바르지 않습니다 (from > to)' });
     }
 
-    const rebalanceDates = computeRebalanceDates(period, universeRule.rebalanceInterval);
     try {
       const attempt = await universeRuleResolver.resolveOrDescribeNeeds(universeRule, period);
       if (attempt.kind === 'NEEDS_DATA') {
         return reply.code(409).send({ needs: attempt.needs });
       }
-      // 기존 제출 bridge는 Task 7/8에서 새 schedule을 직접 소비하도록 바뀐다. 그 전까지
-      // 자동 등록에 필요한 종목명·표준코드는 기존 resolver 결과에서만 가져온다.
-      const resolved = await universeRuleResolver.resolve(universeRule, rebalanceDates);
-      ensureUniverseRegistered(resolved);
       const unionSymbols = [...new Set(
         attempt.schedule.flatMap((entry) => entry.members.map((member) => member.symbol)),
       )].sort();
+      ensureUniverseRegistered({ unionSymbols, unionEntries: attempt.unionEntries });
       const scheduleHash = createHash('sha256')
         .update(JSON.stringify(attempt.schedule))
         .digest('hex');
