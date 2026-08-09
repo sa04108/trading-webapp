@@ -86,6 +86,8 @@ describe('crossSectionalMomentumParameters', () => {
     expect(crossSectionalMomentumParameters.safeParse({ formationDays: 19 }).success).toBe(false);
     expect(crossSectionalMomentumParameters.safeParse({ skipDays: 64 }).success).toBe(false);
     expect(crossSectionalMomentumParameters.safeParse({ topN: 0 }).success).toBe(false);
+    expect(crossSectionalMomentumParameters.safeParse({ topN: 200 }).success).toBe(true);
+    expect(crossSectionalMomentumParameters.safeParse({ topN: 201 }).success).toBe(false);
   });
 });
 

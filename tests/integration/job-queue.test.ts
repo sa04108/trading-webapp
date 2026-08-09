@@ -21,6 +21,18 @@ const MAIN_DATE = '2026-01-05';
 /** "봉이 전혀 없는 기간" 시나리오 전용 — 종목 마스터는 커버하되(coverage 는 넓은 고정 구간)
  *  가격 데이터가 없는 시점을 재현한다. 커버 밖(uncovered) 날짜와 구분하려고 별도로 캐시한다. */
 const NO_CANDLE_DATE = '2020-01-01';
+const REBALANCE_DATES = [
+  MAIN_DATE,
+  '2026-02-05',
+  '2026-03-05',
+  '2026-04-05',
+  '2026-05-05',
+  '2026-06-05',
+  '2026-01-06',
+  '2026-01-07',
+  NO_CANDLE_DATE,
+  '2020-07-01',
+];
 
 /**
  * 자본변동 게이트(Task 6)용 커버리지 연도. 이 파일의 제출 기간이 걸치는
@@ -134,7 +146,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     dailyCandles = buildTrendingDailyCandles();
     seedDailyBars(ctx.container.database.db, dailyCandles);
     // 종목 마스터 — 유니버스 규칙(스펙 2026-08-05)이 여기서 종목을 골라낸다
-    seedMaster(ctx.container, [MAIN_DATE, NO_CANDLE_DATE]);
+    seedMaster(ctx.container, REBALANCE_DATES);
     // 자본변동 게이트(Task 6) — 수집을 마쳤다고 표시해야 제출이 통과한다
     seedCorporateActionCoverage(ctx.container, ['005930'], ACTION_COVERAGE_YEARS);
   });
@@ -321,6 +333,34 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const job = ctx.container.jobQueue.getJob(jobId)!;
     const pinned = JSON.parse(job.universeJson!) as Array<{ code: string }>;
     expect([...new Set(pinned.map(({ code }) => code))]).toEqual(['005930']);
+  });
+
+  it('요청 interval의 DAY 일정으로 유니버스를 해소해 job에 고정한다', async () => {
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: {
+        ...buildRequest(),
+        period: { from: MAIN_DATE, to: '2026-01-07' },
+        universeRule: {
+          markets: ['KOSPI'],
+          stages: [{ criterion: 'MARKET_CAP', limit: 1 }],
+          rebalanceInterval: { value: 1, unit: 'DAY' },
+        },
+      },
+    });
+
+    expect(created.statusCode).toBe(201);
+    const jobId = (created.json() as { job: { id: string } }).job.id;
+    const schedule = JSON.parse(ctx.container.jobQueue.getJob(jobId)!.universeScheduleJson) as Array<{
+      rebalanceDate: string;
+    }>;
+    expect(schedule.map((entry) => entry.rebalanceDate)).toEqual([
+      '2026-01-05',
+      '2026-01-06',
+      '2026-01-07',
+    ]);
   });
 
   it('claims jobs atomically in FIFO order', () => {

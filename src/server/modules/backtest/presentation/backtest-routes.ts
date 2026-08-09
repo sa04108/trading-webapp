@@ -40,8 +40,8 @@ import type { JobOrchestrator, JobEvent } from '../application/job-orchestrator.
 import type { BacktestJobRow, JobQueue } from '../application/job-queue.js';
 import type { ResultsService } from '../application/results-service.js';
 import { rebaseStoredRequest } from '../application/stored-request.js';
+import { computeRebalanceDates } from '../../../../shared/schemas/rebalance-interval.js';
 import {
-  computeRebalanceDates,
   type ResolvedUniverse,
   type UniverseRuleResolver,
 } from '../application/universe-rule-resolver.js';
@@ -313,28 +313,12 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     return { universe, timeframe: consumed };
   };
 
-  /**
-   * 전략 파라미터에서 `rebalanceMonths` 를 읽어 리밸런스 날짜를 만든다 — 그 파라미터가
-   * 없는 전략(예: range-breakout)은 리밸런스가 하나(`period.from`)뿐이라고 본다
-   * (브리프 외 결정, 스펙 2026-08-05). 파라미터가 스키마를 통과하지 못해도(전략 미지정
-   * 등) 여기서는 실패시키지 않는다 — 그 오류는 `validateSubmission` 의 다른 검사가
-   * 이미 잡으므로, 유니버스 해소 자체는 관대한 기본값(1회 리밸런스)으로 계속 진행해
-   * clone-draft 같은 읽기 전용 경로도 unionSymbols 를 얻을 수 있게 한다.
-   */
+  /** 유니버스 일정은 전략 파라미터가 아니라 요청의 공유 interval 계약만 따른다. */
   const resolveScheduleForRequest = (body: BacktestRequest): Promise<ResolvedUniverse> => {
-    const paramCheck = strategies.validateParameters(
-      body.strategyId,
-      parametersForLegacyStrategySchedule(body),
+    return universeRuleResolver.resolve(
+      body.universeRule,
+      computeRebalanceDates(body.period, body.universeRule.rebalanceInterval),
     );
-    const rebalanceMonthsRaw =
-      paramCheck.ok && typeof paramCheck.value === 'object' && paramCheck.value !== null
-        ? (paramCheck.value as Record<string, unknown>)['rebalanceMonths']
-        : undefined;
-    const rebalanceDates =
-      typeof rebalanceMonthsRaw === 'number' && Number.isFinite(rebalanceMonthsRaw)
-        ? computeRebalanceDates(body.period, rebalanceMonthsRaw)
-        : [body.period.from];
-    return universeRuleResolver.resolve(body.universeRule, rebalanceDates);
   };
 
   /**
@@ -748,12 +732,12 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
         error: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
       });
     }
-    const { universeRule, period, rebalanceMonths } = parsed.data;
+    const { universeRule, period } = parsed.data;
     if (period.from > period.to) {
       return reply.code(400).send({ error: '기간이 올바르지 않습니다 (from > to)' });
     }
 
-    const rebalanceDates = computeRebalanceDates(period, rebalanceMonths);
+    const rebalanceDates = computeRebalanceDates(period, universeRule.rebalanceInterval);
     try {
       const resolved = await universeRuleResolver.resolve(universeRule, rebalanceDates);
       ensureUniverseRegistered(resolved);

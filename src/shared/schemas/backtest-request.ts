@@ -46,8 +46,8 @@ export const backtestRequestSchema = z.object({
   }),
   /** 엔진 리스크 상한 (§9.2-6) — 전략 파라미터가 아니라 요청의 명시 필드다 */
   risk: z.object({
-    maxPositions: z.number().int().min(1).max(200),
-  }),
+    maxPositions: z.number().int().min(1).max(200).default(40),
+  }).default({ maxPositions: 40 }),
   randomSeed: z.number().int().nonnegative().default(42),
 }).superRefine((request, ctx) => {
   const issue = (message: string): void => {

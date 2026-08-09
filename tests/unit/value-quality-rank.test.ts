@@ -283,7 +283,8 @@ describe('valueQualityRankParameters', () => {
   it('범위 밖 값을 거부한다', () => {
     expect(valueQualityRankParameters.safeParse({ staleQuarters: 0 }).success).toBe(false);
     expect(valueQualityRankParameters.safeParse({ staleQuarters: 9 }).success).toBe(false);
-    expect(valueQualityRankParameters.safeParse({ topN: 51 }).success).toBe(false);
+    expect(valueQualityRankParameters.safeParse({ topN: 200 }).success).toBe(true);
+    expect(valueQualityRankParameters.safeParse({ topN: 201 }).success).toBe(false);
   });
 });
 

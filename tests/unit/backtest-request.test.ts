@@ -106,6 +106,13 @@ describe('universeRule', () => {
 });
 
 describe('요청 교차 검증', () => {
+  it('risk를 생략한 신규 요청에는 maxPositions 40을 채운다', () => {
+    const { risk: _risk, ...requestWithoutRisk } = baseRequest();
+    const parsed = backtestRequestSchema.safeParse(requestWithoutRisk);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.risk.maxPositions).toBe(40);
+  });
+
   it('maxPositions 40을 허용한다', () => {
     expect(backtestRequestSchema.safeParse({ ...baseRequest(), risk: { maxPositions: 40 } }).success).toBe(true);
   });

@@ -37,10 +37,10 @@ export const crossSectionalMomentumParameters = z.object({
     description:
       '가장 최근 N봉을 빼고 그 앞에서 측정 기간만큼 잽니다 — 측정 구간이 짧아지는 것이 아니라 뒤로 밀립니다. 일봉 기준 21봉이 약 1개월이라, 기본값이면 13개월 전부터 1개월 전까지의 12개월 상승률을 봅니다. 갓 오른 종목은 곧 되돌리는 일이 잦아 직전 한 달을 빼는 것이 표준입니다. 0 으로 두면 마지막 봉까지 씁니다.',
   }),
-  // 상한은 요청의 `risk.maxPositions` 상한(20)과 같아야 한다 — 제출 게이트가
+  // 상한은 요청의 `risk.maxPositions` 상한(200)과 같아야 한다 — 제출 게이트가
   // topN <= maxPositions 를 요구하므로 여기가 더 크면 그 구간이 어떤 경로로도
   // 제출될 수 없고, 게이트 메시지는 도달할 수 없는 값까지 올리라고 안내한다.
-  topN: z.number().int().min(1).max(20).default(10).meta({
+  topN: z.number().int().min(1).max(200).default(10).meta({
     title: '보유 종목 수',
     description:
       '순위 상위 몇 종목을 동일가중으로 보유할지 정합니다. 종목당 비중은 자본의 1/N 입니다. 요청의 최대 동시 보유 종목 수보다 크게 잡으면 일부 종목이 편입되지 않습니다.',
