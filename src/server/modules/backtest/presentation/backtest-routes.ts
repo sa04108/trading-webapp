@@ -1,5 +1,6 @@
 import os from 'node:os';
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import type { FastifyBaseLogger, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
@@ -555,7 +556,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const provenancePin: ProvenancePin = {
       sourceKind: 'SYMBOL_MASTER',
       filterPolicyVersion: KRX_FILTER_POLICY_VERSION,
-      selectionMethod: 'TOP_MARKET_CAP_N',
+      selectionMethod: body.universeRule.stages.map((stage) => stage.criterion).join(' → '),
       scheduleHash: resolved.scheduleHash,
     };
 
@@ -739,17 +740,31 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
 
     const rebalanceDates = computeRebalanceDates(period, universeRule.rebalanceInterval);
     try {
+      const attempt = await universeRuleResolver.resolveOrDescribeNeeds(universeRule, period);
+      if (attempt.kind === 'NEEDS_DATA') {
+        return reply.code(409).send({ needs: attempt.needs });
+      }
+      // 기존 제출 bridge는 Task 7/8에서 새 schedule을 직접 소비하도록 바뀐다. 그 전까지
+      // 자동 등록에 필요한 종목명·표준코드는 기존 resolver 결과에서만 가져온다.
       const resolved = await universeRuleResolver.resolve(universeRule, rebalanceDates);
       ensureUniverseRegistered(resolved);
+      const unionSymbols = [...new Set(
+        attempt.schedule.flatMap((entry) => entry.members.map((member) => member.symbol)),
+      )].sort();
+      const scheduleHash = createHash('sha256')
+        .update(JSON.stringify(attempt.schedule))
+        .digest('hex');
       return {
-        schedule: resolved.schedule,
-        unionSymbols: resolved.unionSymbols,
-        scheduleHash: resolved.scheduleHash,
-        uncoveredDates: resolved.uncoveredDates,
+        schedule: attempt.schedule,
+        diagnostics: attempt.diagnostics,
+        stages: universeRule.stages,
+        unionSymbols,
+        scheduleHash,
+        uncoveredDates: [],
         // 리밸런스 날짜만 보는 uncoveredDates 와 달리 period 전체의 빈틈을 본다 —
         // 위저드가 "기간 전체 동기화" 버튼을 띄울지 이 값으로 판정한다(운영 버그 fix).
         periodCovered: universeRuleResolver.isPeriodCovered(period),
-        missingCandleSymbols: missingCandleSymbolsOf(resolved.unionSymbols),
+        missingCandleSymbols: missingCandleSymbolsOf(unionSymbols),
       };
     } catch (error) {
       if (sendIfKrxError(reply, error)) return reply;

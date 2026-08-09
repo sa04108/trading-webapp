@@ -5,10 +5,19 @@ export const universeCriterionSchema = z.enum([
 ]);
 export type UniverseCriterion = z.infer<typeof universeCriterionSchema>;
 
-export const universeStageSchema = z.object({
-  criterion: universeCriterionSchema,
-  limit: z.number().int().min(1).max(200),
-});
+const stageLimitSchema = z.number().int().min(1).max(200);
+
+export const universeStageSchema = z.discriminatedUnion('criterion', [
+  z.object({ criterion: z.literal('MARKET_CAP'), limit: stageLimitSchema }),
+  z.object({ criterion: z.literal('VOLUME'), limit: stageLimitSchema }),
+  z.object({ criterion: z.literal('TRADING_VALUE'), limit: stageLimitSchema }),
+  z.object({ criterion: z.literal('PER'), limit: stageLimitSchema }),
+  z.object({
+    criterion: z.literal('DECLINE'),
+    limit: stageLimitSchema,
+    lookbackTradingDays: z.number().int().min(1).max(252),
+  }),
+]);
 export type UniverseStage = z.infer<typeof universeStageSchema>;
 
 export const rebalanceIntervalSchema = z.discriminatedUnion('unit', [

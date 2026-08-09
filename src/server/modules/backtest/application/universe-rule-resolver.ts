@@ -3,9 +3,22 @@ import type { Logger } from '../../../shared/logger.js';
 import type { SymbolMasterEntry } from '../../market-data/domain/symbol-master.js';
 import type { SymbolMasterService } from '../../market-data/application/symbol-master-service.js';
 import type { UniverseRule } from '../../../../shared/schemas/universe-rule.js';
+import type { BacktestPeriod } from '../../../../shared/schemas/backtest-request.js';
+import { computeRebalanceDates as computeSharedRebalanceDates } from '../../../../shared/schemas/rebalance-interval.js';
 import { addCalendarDays } from '../../market-data/domain/kst-date.js';
+import type { SelectionMetricRepository } from '../../market-data/application/selection-metric-repository.js';
+import type { CandleRepository } from '../../market-data/application/ports.js';
+import type { FactRepository } from '../../facts/application/ports.js';
+import type { CorporateActionCoverageStore } from '../../facts/application/corporate-action-coverage.js';
+import { PitFactView } from '../../facts/domain/pit-fact-view.js';
+import { splitAdjustedClose } from '../../strategy/strategies/shared/adjusted-price.js';
+import {
+  rankUniverseStage,
+  type UniverseStageDiagnostic,
+  type UniverseStageValue,
+} from './universe-stage-ranking.js';
 
-export interface UniverseScheduleEntry {
+export interface LegacyUniverseScheduleEntry {
   readonly rebalanceDate: string; // ISO
   /** 유니버스·시총을 실제로 읽은 거래일. 휴장이면 rebalanceDate 보다 앞선다 */
   readonly effectiveTradingDate: string;
@@ -15,7 +28,7 @@ export interface UniverseScheduleEntry {
 }
 
 export interface ResolvedUniverse {
-  readonly schedule: readonly UniverseScheduleEntry[];
+  readonly schedule: readonly LegacyUniverseScheduleEntry[];
   readonly unionSymbols: readonly string[];
   /**
    * unionSymbols 각 shortCode 의 종목 마스터 원본 항목(Task 4, 스펙 2026-08-06) —
@@ -31,15 +44,55 @@ export interface ResolvedUniverse {
 
 export interface UniverseRuleResolverDeps {
   readonly symbolMaster: SymbolMasterService;
+  readonly selectionMetrics?: SelectionMetricRepository;
+  readonly candles?: CandleRepository;
+  readonly facts?: FactRepository;
+  readonly actionCoverage?: CorporateActionCoverageStore;
   readonly logger: Logger;
 }
+
+export interface UniverseDataNeed {
+  readonly factSymbols: readonly string[];
+  readonly actionSymbols: readonly string[];
+  readonly selectionMetricDates: readonly string[];
+  readonly priceRange: { from: string; to: string } | null;
+}
+
+export interface UniverseScheduleMember {
+  readonly symbol: string;
+  readonly standardCode: string;
+  readonly marketCapKrw: string | null;
+  readonly volume: number | null;
+  readonly tradingValueKrw: string | null;
+}
+
+export interface UniverseScheduleEntry {
+  readonly rebalanceDate: string;
+  readonly effectiveDate: string;
+  readonly fromTsMs: number;
+  readonly members: readonly UniverseScheduleMember[];
+}
+
+export interface RebalanceDiagnostic {
+  readonly rebalanceDate: string;
+  readonly effectiveDate: string;
+  readonly stages: readonly UniverseStageDiagnostic[];
+}
+
+export type UniverseResolveAttempt =
+  | {
+      readonly kind: 'READY';
+      readonly schedule: readonly UniverseScheduleEntry[];
+      readonly diagnostics: readonly RebalanceDiagnostic[];
+    }
+  | { readonly kind: 'NEEDS_DATA'; readonly needs: UniverseDataNeed };
 
 /**
  * 일정 전체의 거래불가 제외 건수 합계 (중복 포함). 워커는 `resolve()` 결과가 아니라
  * job.universeScheduleJson 에 저장된 일정만 받으므로, 합산을 여기 한 곳에 두고
  * 양쪽이 같은 함수를 부르게 한다.
  */
-export function sumExcludedNonTrading(schedule: readonly UniverseScheduleEntry[]): number {
+export function sumExcludedNonTrading(schedule: readonly LegacyUniverseScheduleEntry[]): number {
   return schedule.reduce((sum, entry) => sum + entry.excludedNonTradingCount, 0);
 }
 
@@ -83,7 +136,7 @@ export class UniverseRuleResolver {
     rule: UniverseRule,
     rebalanceDates: readonly string[],
   ): Promise<ResolvedUniverse> {
-    const schedule: UniverseScheduleEntry[] = [];
+    const schedule: LegacyUniverseScheduleEntry[] = [];
     const uncoveredDates: string[] = [];
     const unionSymbols = new Set<string>();
     const unionEntries = new Map<string, SymbolMasterEntry>();
@@ -162,6 +215,301 @@ export class UniverseRuleResolver {
       uncoveredDates,
     };
   }
+
+  async resolveOrDescribeNeeds(
+    rule: UniverseRule,
+    period: BacktestPeriod,
+  ): Promise<UniverseResolveAttempt> {
+    const { selectionMetrics, candles, facts, actionCoverage } = this.requirePipelineDeps();
+    const factSymbols = new Set<string>();
+    const actionSymbols = new Set<string>();
+    const selectionMetricDates = new Set<string>();
+    let priceRange: { from: string; to: string } | null = null;
+    const schedule: UniverseScheduleEntry[] = [];
+    const diagnostics: RebalanceDiagnostic[] = [];
+
+    const widenPriceRange = (from: string, to: string): void => {
+      priceRange = priceRange === null
+        ? { from, to }
+        : {
+            from: from < priceRange.from ? from : priceRange.from,
+            to: to > priceRange.to ? to : priceRange.to,
+          };
+    };
+
+    for (const rebalanceDate of computeSharedRebalanceDates(period, rule.rebalanceInterval)) {
+      const effectiveDate = this.deps.symbolMaster.effectiveTradingDateWithinCoverage(rebalanceDate);
+      if (!this.deps.symbolMaster.isCovered(rebalanceDate) || effectiveDate === undefined) {
+        selectionMetricDates.add(rebalanceDate);
+        continue;
+      }
+
+      const nonTrading = new Set(
+        this.deps.symbolMaster.nonTradingDaysBetween(effectiveDate, effectiveDate)
+          .map((row) => row.shortCode),
+      );
+      const universe = this.deps.symbolMaster.getUniverseAsOf(effectiveDate);
+      let candidates = [...universe.values()]
+        .filter((entry) =>
+          entry.instrumentType === 'COMMON_STOCK'
+          && rule.markets.includes(entry.market)
+          && !nonTrading.has(entry.shortCode),
+        )
+        .sort((a, b) => a.shortCode.localeCompare(b.shortCode));
+      const stageDiagnostics: UniverseStageDiagnostic[] = [];
+
+      for (const stage of rule.stages) {
+        let stageReady = true;
+        let rows: UniverseStageValue[];
+
+        if (stage.criterion === 'TRADING_VALUE') {
+          const stageMetrics = selectionMetrics.getAt(
+            effectiveDate,
+            candidates.map((entry) => entry.standardCode),
+          );
+          if (selectionMetrics.findMissingTradingValueDates([effectiveDate]).length > 0) {
+            selectionMetricDates.add(effectiveDate);
+            stageReady = false;
+          }
+          rows = candidates.map((entry) => ({
+            standardCode: entry.standardCode,
+            shortCode: entry.shortCode,
+            value: stageMetrics.get(entry.standardCode)?.tradingValueKrw ?? null,
+          }));
+        } else if (stage.criterion === 'MARKET_CAP' || stage.criterion === 'VOLUME') {
+          const stageMetrics = selectionMetrics.getAt(
+            effectiveDate,
+            candidates.map((entry) => entry.standardCode),
+          );
+          rows = candidates.map((entry) => ({
+            standardCode: entry.standardCode,
+            shortCode: entry.shortCode,
+            value: stage.criterion === 'MARKET_CAP'
+              ? stageMetrics.get(entry.standardCode)?.marketCapKrw ?? null
+              : stageMetrics.get(entry.standardCode)?.volume ?? null,
+          }));
+        } else if (stage.criterion === 'PER') {
+          const stageMetrics = selectionMetrics.getAt(
+            effectiveDate,
+            candidates.map((entry) => entry.standardCode),
+          );
+          const missing = candidates.filter((entry) => !facts.hasFacts('SYMBOL', entry.shortCode));
+          for (const entry of missing) factSymbols.add(entry.shortCode);
+          if (missing.length > 0) stageReady = false;
+
+          const loaded = await facts.getFacts({
+            scope: 'SYMBOL',
+            keys: candidates.map((entry) => entry.shortCode),
+          });
+          const view = new PitFactView(loaded);
+          view.advanceTo(endOfDateMs(effectiveDate));
+          rows = exactPerRankingRows(candidates, stageMetrics, view);
+        } else {
+          const codes = candidates.map((entry) => entry.shortCode);
+          const histories = await loadCandleHistories(candles, codes, effectiveDate);
+          const requiredFrom = addCalendarDays(
+            effectiveDate,
+            -(stage.lookbackTradingDays * 2 + 14),
+          );
+          const warmupMissing = codes.some(
+            (code) => (histories.get(code)?.length ?? 0) < stage.lookbackTradingDays,
+          );
+          if (warmupMissing) {
+            widenPriceRange(requiredFrom, effectiveDate);
+            stageReady = false;
+          }
+
+          let actualFrom = effectiveDate;
+          for (const code of codes) {
+            const history = (histories.get(code) ?? []).slice(-stage.lookbackTradingDays);
+            const first = history[0];
+            if (first !== undefined) {
+              const firstDate = new Date(first.tsMs).toISOString().slice(0, 10);
+              if (firstDate < actualFrom) actualFrom = firstDate;
+            }
+          }
+          const requiredYears = yearsBetween(warmupMissing ? requiredFrom : actualFrom, effectiveDate);
+          const coveredBySymbol = actionCoverage.getCoveredYears(codes);
+          const gapsBySymbol = actionCoverage.getGapYears(codes);
+          for (const code of codes) {
+            const covered = new Set(coveredBySymbol.get(code) ?? []);
+            const gaps = new Set(gapsBySymbol.get(code) ?? []);
+            if (requiredYears.some((year) => !covered.has(year) || gaps.has(year))) {
+              actionSymbols.add(code);
+              stageReady = false;
+            }
+          }
+
+          const loaded = await facts.getFacts({ scope: 'SYMBOL', keys: codes });
+          const view = new PitFactView(loaded);
+          rows = candidates.map((entry) => {
+            const history = (histories.get(entry.shortCode) ?? []).slice(-stage.lookbackTradingDays);
+            if (history.length !== stage.lookbackTradingDays) {
+              return { standardCode: entry.standardCode, shortCode: entry.shortCode, value: null };
+            }
+            const actions = view.corporateActions(entry.shortCode, endOfDateMs(effectiveDate));
+            const first = splitAdjustedClose(history, actions, 0);
+            const last = splitAdjustedClose(history, actions, history.length - 1);
+            const value = first === null || last === null || first <= 0
+              ? null
+              : (last / first) - 1;
+            return { standardCode: entry.standardCode, shortCode: entry.shortCode, value };
+          });
+        }
+
+        const ranked = rankUniverseStage(stage, rows);
+        stageDiagnostics.push(ranked.diagnostic);
+        if (stageReady) {
+          const byStandardCode = new Map(candidates.map((entry) => [entry.standardCode, entry]));
+          candidates = ranked.selectedCodes.flatMap((code) => {
+            const entry = byStandardCode.get(code);
+            return entry === undefined ? [] : [entry];
+          });
+        }
+      }
+
+      const finalMetrics = selectionMetrics.getAt(
+        effectiveDate,
+        candidates.map((entry) => entry.standardCode),
+      );
+      diagnostics.push({ rebalanceDate, effectiveDate, stages: stageDiagnostics });
+      schedule.push({
+        rebalanceDate,
+        effectiveDate,
+        fromTsMs: Date.parse(`${rebalanceDate}T00:00:00Z`),
+        members: candidates.map((entry) => {
+          const metric = finalMetrics.get(entry.standardCode);
+          return {
+            symbol: entry.shortCode,
+            standardCode: entry.standardCode,
+            marketCapKrw: metric?.marketCapKrw?.toString() ?? null,
+            volume: metric?.volume ?? null,
+            tradingValueKrw: metric?.tradingValueKrw?.toString() ?? null,
+          };
+        }),
+      });
+    }
+
+    if (
+      factSymbols.size > 0
+      || actionSymbols.size > 0
+      || selectionMetricDates.size > 0
+      || priceRange !== null
+    ) {
+      return {
+        kind: 'NEEDS_DATA',
+        needs: {
+          factSymbols: [...factSymbols].sort(),
+          actionSymbols: [...actionSymbols].sort(),
+          selectionMetricDates: [...selectionMetricDates].sort(),
+          priceRange,
+        },
+      };
+    }
+    return { kind: 'READY', schedule, diagnostics };
+  }
+
+  private requirePipelineDeps(): Required<Pick<
+    UniverseRuleResolverDeps,
+    'selectionMetrics' | 'candles' | 'facts' | 'actionCoverage'
+  >> {
+    const { selectionMetrics, candles, facts, actionCoverage } = this.deps;
+    if (!selectionMetrics || !candles || !facts || !actionCoverage) {
+      throw new Error('유니버스 선정 파이프라인 의존성이 연결되지 않았습니다.');
+    }
+    return { selectionMetrics, candles, facts, actionCoverage };
+  }
+}
+
+function endOfDateMs(date: string): number {
+  return Date.parse(`${date}T23:59:59.999Z`);
+}
+
+function yearsBetween(from: string, to: string): number[] {
+  const years: number[] = [];
+  for (let year = Number(from.slice(0, 4)); year <= Number(to.slice(0, 4)); year += 1) {
+    years.push(year);
+  }
+  return years;
+}
+
+interface PositiveFraction {
+  readonly numerator: bigint;
+  readonly denominator: bigint;
+}
+
+function positiveNumberFraction(value: number | null): PositiveFraction | null {
+  if (value === null || !Number.isFinite(value) || value <= 0) return null;
+  const [coefficient, exponentText] = value.toString().toLowerCase().split('e');
+  const exponent = exponentText === undefined ? 0 : Number(exponentText);
+  const [whole, fraction = ''] = coefficient!.split('.');
+  const digits = `${whole}${fraction}`;
+  if (!/^\d+$/.test(digits)) return null;
+  let numerator = BigInt(digits);
+  let denominator = 10n ** BigInt(fraction.length);
+  if (exponent > 0) numerator *= 10n ** BigInt(exponent);
+  if (exponent < 0) denominator *= 10n ** BigInt(-exponent);
+  return { numerator, denominator };
+}
+
+function exactPerRankingRows(
+  candidates: readonly SymbolMasterEntry[],
+  metrics: ReturnType<SelectionMetricRepository['getAt']>,
+  view: PitFactView,
+): UniverseStageValue[] {
+  const ratios = candidates.flatMap((entry) => {
+    const cap = metrics.get(entry.standardCode)?.marketCapKrw ?? null;
+    const income = positiveNumberFraction(view.fundamentals(entry.shortCode)?.ttm('NET_INCOME') ?? null);
+    if (cap === null || cap <= 0n || income === null) return [];
+    return [{
+      entry,
+      numerator: cap * income.denominator,
+      denominator: income.numerator,
+    }];
+  });
+  ratios.sort((a, b) => {
+    const left = a.numerator * b.denominator;
+    const right = b.numerator * a.denominator;
+    if (left !== right) return left < right ? -1 : 1;
+    return a.entry.shortCode.localeCompare(b.entry.shortCode);
+  });
+  const rankByCode = new Map<string, number>();
+  let rank = 0;
+  for (let index = 0; index < ratios.length; index += 1) {
+    if (index > 0) {
+      const previous = ratios[index - 1]!;
+      const current = ratios[index]!;
+      if (previous.numerator * current.denominator !== current.numerator * previous.denominator) {
+        rank += 1;
+      }
+    }
+    rankByCode.set(ratios[index]!.entry.standardCode, rank);
+  }
+  return candidates.map((entry) => ({
+    standardCode: entry.standardCode,
+    shortCode: entry.shortCode,
+    value: rankByCode.get(entry.standardCode) ?? null,
+  }));
+}
+
+async function loadCandleHistories(
+  candles: CandleRepository,
+  symbols: readonly string[],
+  effectiveDate: string,
+): Promise<Map<string, import('../../market-data/domain/candle.js').Candle[]>> {
+  const histories = new Map<string, import('../../market-data/domain/candle.js').Candle[]>();
+  for await (const candle of candles.getCandles({
+    market: 'KR',
+    timeframe: '1d',
+    symbols,
+    toTsMs: endOfDateMs(effectiveDate),
+  })) {
+    const list = histories.get(candle.symbol) ?? [];
+    list.push(candle);
+    histories.set(candle.symbol, list);
+  }
+  for (const list of histories.values()) list.sort((a, b) => a.tsMs - b.tsMs);
+  return histories;
 }
 
 /** 대상 월의 마지막 일 — 1-indexed month(1~12) */

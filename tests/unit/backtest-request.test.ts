@@ -77,6 +77,40 @@ describe('universeRule', () => {
     }
   });
 
+  it('DECLINE 단계는 1~252 거래일 lookback을 명시해야 한다', () => {
+    const withLookback = {
+      ...validRule,
+      stages: [{ criterion: 'DECLINE', limit: 40, lookbackTradingDays: 20 }],
+    };
+    const parsed = backtestRequestSchema.safeParse({ ...baseRequest(), universeRule: withLookback });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.universeRule).toEqual(withLookback);
+
+    for (const lookbackTradingDays of [undefined, 0, 253]) {
+      expect(backtestRequestSchema.safeParse({
+        ...baseRequest(),
+        universeRule: {
+          ...validRule,
+          stages: [{ criterion: 'DECLINE', limit: 40, lookbackTradingDays }],
+        },
+      }).success).toBe(false);
+    }
+  });
+
+  it('DECLINE 이외 단계는 lookbackTradingDays를 보존하지 않는다', () => {
+    const parsed = backtestRequestSchema.safeParse({
+      ...baseRequest(),
+      universeRule: {
+        ...validRule,
+        stages: [{ criterion: 'MARKET_CAP', limit: 40, lookbackTradingDays: 20 }],
+      },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.universeRule.stages).toEqual([{ criterion: 'MARKET_CAP', limit: 40 }]);
+    }
+  });
+
   it.each([
     ['중복 기준', { ...validRule, stages: [{ criterion: 'PER', limit: 100 }, { criterion: 'PER', limit: 40 }] }],
     ['증가하는 N', { ...validRule, stages: [{ criterion: 'MARKET_CAP', limit: 40 }, { criterion: 'PER', limit: 41 }] }],

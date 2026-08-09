@@ -50,6 +50,7 @@ import { createKrxHistoricalUniverseSource } from '../modules/market-data/infras
 import { SymbolMasterService } from '../modules/market-data/application/symbol-master-service.js';
 import { SymbolMasterBackfill } from '../modules/market-data/application/symbol-master-backfill.js';
 import { SymbolMasterScheduler } from '../modules/market-data/application/symbol-master-scheduler.js';
+import { SelectionMetricRepository } from '../modules/market-data/application/selection-metric-repository.js';
 import { UniverseRuleResolver } from '../modules/backtest/application/universe-rule-resolver.js';
 
 export interface SystemStatusProviders {
@@ -272,7 +273,15 @@ export function createContainer(config: AppConfig): Container {
   });
   // 유니버스 규칙(시총 상위 N) → 리밸런스 날짜별 멤버십 일정 (스펙 2026-08-05) —
   // 백테스트 제출·미리보기가 공유한다.
-  const universeRuleResolver = new UniverseRuleResolver({ symbolMaster: symbolMasterService, logger });
+  const selectionMetricRepository = new SelectionMetricRepository(database.db);
+  const universeRuleResolver = new UniverseRuleResolver({
+    symbolMaster: symbolMasterService,
+    selectionMetrics: selectionMetricRepository,
+    candles: candleRepository,
+    facts: factRepository,
+    actionCoverage: actionCoverageStore,
+    logger,
+  });
 
   // 알림 리스너와 라우트가 같은 인스턴스를 봐야 한다 — 두 개를 만들면 등록 목록이 갈라진다
   const strategyRegistry = new StrategyRegistry();

@@ -36,6 +36,10 @@ function snapshot(
     latestPeriodKey,
     latestAsOfTsMs: 0,
     get: (field) => values[field] ?? null,
+    quarter: (field, offset = 0) => {
+      const value = values[field];
+      return offset === 0 && value !== undefined ? { periodKey: latestPeriodKey, value } : null;
+    },
     ttm: (field) =>
       field === 'OPERATING_INCOME' ? (options.ttmOperatingIncome ?? null) : null,
     periodKeyOf: (field) => {

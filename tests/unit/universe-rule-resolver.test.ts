@@ -10,6 +10,9 @@ import {
   UniverseRuleResolver,
 } from '../../src/server/modules/backtest/application/universe-rule-resolver.js';
 import type { UniverseRule } from '../../src/shared/schemas/universe-rule.js';
+import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
+import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
+import type { DailySelectionMetric } from '../../src/server/modules/market-data/application/selection-metric-repository.js';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
 import {
   baseInfoFixture,
@@ -269,5 +272,290 @@ describe('computeRebalanceDates', () => {
     // 다음 리밸런스(2023-07-15)가 to 를 넘으므로 목록은 여기서 끝난다.
     const bounded = computeRebalanceDates({ from: '2023-01-01', to: '2023-01-31' }, 1);
     expect(bounded).toEqual(['2023-01-01']);
+  });
+});
+
+const PIPELINE_DATE = '2025-05-15';
+const PIPELINE_TS = Date.parse(`${PIPELINE_DATE}T00:00:00Z`);
+const PIPELINE_ENTRIES = [
+  { standardCode: 'KR7000001001', shortCode: '000001', name: '하나', market: 'KOSPI', sharesOutstanding: '1', instrumentType: 'COMMON_STOCK', listedDate: null },
+  { standardCode: 'KR7000002002', shortCode: '000002', name: '둘', market: 'KOSPI', sharesOutstanding: '1', instrumentType: 'COMMON_STOCK', listedDate: null },
+  { standardCode: 'KR7000003003', shortCode: '000003', name: '셋', market: 'KOSPI', sharesOutstanding: '1', instrumentType: 'COMMON_STOCK', listedDate: null },
+] as const;
+
+const pipelineMetrics: DailySelectionMetric[] = PIPELINE_ENTRIES.map((entry, index) => ({
+  date: PIPELINE_DATE,
+  standardCode: entry.standardCode,
+  marketCapKrw: [300n, 200n, 100n][index]!,
+  volume: [3_000, 2_000, 1_000][index]!,
+  tradingValueKrw: [30_000n, 20_000n, 10_000n][index]!,
+}));
+
+function netIncomeFacts(symbol: string, quarterly: readonly number[], disclosedAt = PIPELINE_TS - 1): Fact[] {
+  return quarterly.map((value, index) => ({
+    scope: 'SYMBOL',
+    key: symbol,
+    field: 'NET_INCOME',
+    periodKey: ['2024Q2', '2024Q3', '2024Q4', '2025Q1'][index]!,
+    asOfTsMs: disclosedAt,
+    value,
+    unit: 'KRW',
+  }));
+}
+
+function pipelineRule(stages: UniverseRule['stages']): UniverseRule {
+  return {
+    markets: ['KOSPI'],
+    stages,
+    rebalanceInterval: { unit: 'MONTH', value: 1 },
+  };
+}
+
+function makePipelineResolver(options: {
+  metrics?: readonly DailySelectionMetric[];
+  missingTradingValueDates?: readonly string[];
+  facts?: readonly Fact[];
+  factsPresent?: readonly string[];
+  candles?: readonly Candle[];
+  actionCoverage?: ReadonlyMap<string, readonly number[]>;
+  actionGaps?: ReadonlyMap<string, readonly number[]>;
+  metricReads?: string[][];
+} = {}): UniverseRuleResolver {
+  const metrics = options.metrics ?? pipelineMetrics;
+  const facts = options.facts ?? [
+    ...netIncomeFacts('000001', [1]),
+    ...netIncomeFacts('000002', [5, 5, 5, 5]),
+    ...netIncomeFacts('000003', [5, 5, 5, 5]),
+  ];
+  const factsPresent = new Set(options.factsPresent ?? PIPELINE_ENTRIES.map((entry) => entry.shortCode));
+  const candles = options.candles ?? [];
+  const actionCoverage = options.actionCoverage ?? new Map(
+    PIPELINE_ENTRIES.map((entry) => [entry.shortCode, [2025] as const]),
+  );
+  const actionGaps = options.actionGaps ?? new Map<string, readonly number[]>();
+
+  return new UniverseRuleResolver({
+    symbolMaster: {
+      isCovered: () => true,
+      effectiveTradingDateWithinCoverage: () => PIPELINE_DATE,
+      getUniverseAsOf: () => new Map(PIPELINE_ENTRIES.map((entry) => [entry.standardCode, entry])),
+      getMarketCapsAt: async () => new Map(metrics.flatMap((row) =>
+        row.marketCapKrw === null ? [] : [[row.standardCode, row.marketCapKrw.toString()]],
+      )),
+      nonTradingDaysBetween: () => [],
+    } as never,
+    selectionMetrics: {
+      getAt: (date: string, standardCodes: readonly string[]) => {
+        options.metricReads?.push([...standardCodes]);
+        return new Map(metrics
+          .filter((row) => row.date === date && standardCodes.includes(row.standardCode))
+          .map((row) => [row.standardCode, row]));
+      },
+      findMissingTradingValueDates: () => [...(options.missingTradingValueDates ?? [])],
+    } as never,
+    facts: {
+      getFacts: async ({ keys }: { keys?: readonly string[] }) => facts.filter((fact) => keys?.includes(fact.key) ?? true),
+      hasFacts: (_scope: 'SYMBOL' | 'MACRO', key: string) => factsPresent.has(key),
+      symbolsWithFacts: () => factsPresent,
+      saveFacts: async () => undefined,
+    },
+    candles: {
+      async *getCandles(query: { symbols: readonly string[]; fromTsMs?: number; toTsMs?: number }) {
+        for (const candle of candles) {
+          if (
+            query.symbols.includes(candle.symbol)
+            && (query.fromTsMs === undefined || candle.tsMs >= query.fromTsMs)
+            && (query.toTsMs === undefined || candle.tsMs <= query.toTsMs)
+          ) yield candle;
+        }
+      },
+      getTimestamps: async () => [],
+    },
+    actionCoverage: {
+      getCoveredYears: () => actionCoverage,
+      getGapYears: () => actionGaps,
+      addCoveredYears: () => undefined,
+      addGapYears: () => undefined,
+    },
+    logger: { warn: () => {}, info: () => {}, error: () => {}, debug: () => {} } as never,
+  });
+}
+
+describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
+  const period = { from: PIPELINE_DATE, to: PIPELINE_DATE };
+
+  it('stage 순서를 그대로 적용해 MARKET_CAP→PER와 PER→MARKET_CAP 결과가 달라진다', async () => {
+    const resolver = makePipelineResolver();
+    const capThenPer = await resolver.resolveOrDescribeNeeds(pipelineRule([
+      { criterion: 'MARKET_CAP', limit: 2 },
+      { criterion: 'PER', limit: 1 },
+    ]), period);
+    const perThenCap = await resolver.resolveOrDescribeNeeds(pipelineRule([
+      { criterion: 'PER', limit: 1 },
+      { criterion: 'MARKET_CAP', limit: 1 },
+    ]), period);
+
+    expect(capThenPer.kind).toBe('READY');
+    expect(perThenCap.kind).toBe('READY');
+    if (capThenPer.kind !== 'READY' || perThenCap.kind !== 'READY') {
+      throw new Error('fixture coverage가 완전해야 합니다.');
+    }
+    expect(capThenPer.schedule[0]?.members.map((member) => member.symbol)).toEqual(['000002']);
+    expect(perThenCap.schedule[0]?.members.map((member) => member.symbol)).toEqual(['000003']);
+    expect(capThenPer.diagnostics[0]?.stages[1]).toMatchObject({
+      inputCount: 2,
+      eligibleCount: 1,
+      selectedCount: 1,
+      excludedMissingCount: 1,
+    });
+  });
+
+  it('각 stage와 READY pin은 그 시점의 현재 후보만 선정 지표 저장소에서 읽는다', async () => {
+    const metricReads: string[][] = [];
+    const resolver = makePipelineResolver({ metricReads });
+    const result = await resolver.resolveOrDescribeNeeds(pipelineRule([
+      { criterion: 'MARKET_CAP', limit: 2 },
+      { criterion: 'PER', limit: 1 },
+    ]), period);
+
+    expect(result.kind).toBe('READY');
+    expect(metricReads).toEqual([
+      ['KR7000001001', 'KR7000002002', 'KR7000003003'],
+      ['KR7000001001', 'KR7000002002'],
+      ['KR7000002002'],
+    ]);
+  });
+
+  it('PER은 effective date까지 공시된 양수 TTM 순이익과 그날 시가총액만 쓴다', async () => {
+    const futureRestatement = netIncomeFacts('000003', [1_000, 1_000, 1_000, 1_000], PIPELINE_TS + 86_400_000);
+    const resolver = makePipelineResolver({
+      facts: [
+        ...netIncomeFacts('000001', [5, 5, 5, 5]),
+        ...netIncomeFacts('000002', [-5, -5, -5, -5]),
+        ...netIncomeFacts('000003', [5, 5, 5, 5]),
+        ...futureRestatement,
+      ],
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'PER', limit: 3 }]),
+      period,
+    );
+    expect(result.kind).toBe('READY');
+    if (result.kind !== 'READY') throw new Error('fixture coverage가 완전해야 합니다.');
+    // 000002는 TTM 순이익이 0 이하라 제외. 미래 재집계가 보였다면 000003이 1위가 된다.
+    expect(result.schedule[0]?.members.map((member) => member.symbol)).toEqual(['000003', '000001']);
+    expect(result.diagnostics[0]?.stages[0]).toMatchObject({
+      inputCount: 3,
+      eligibleCount: 2,
+      selectedCount: 2,
+      excludedMissingCount: 1,
+    });
+  });
+
+  it('모든 날짜와 아직 좁힐 수 없는 후속 단계의 데이터 필요량을 합집합으로 반환한다', async () => {
+    const resolver = makePipelineResolver({
+      missingTradingValueDates: [PIPELINE_DATE],
+      factsPresent: [],
+      candles: [],
+      actionCoverage: new Map(),
+    });
+    const result = await resolver.resolveOrDescribeNeeds(pipelineRule([
+      { criterion: 'TRADING_VALUE', limit: 3 },
+      { criterion: 'PER', limit: 2 },
+      { criterion: 'DECLINE', limit: 1, lookbackTradingDays: 3 },
+    ]), period);
+
+    expect(result).toMatchObject({
+      kind: 'NEEDS_DATA',
+      needs: {
+        factSymbols: ['000001', '000002', '000003'],
+        actionSymbols: ['000001', '000002', '000003'],
+        selectionMetricDates: [PIPELINE_DATE],
+      },
+    });
+    if (result.kind !== 'NEEDS_DATA') throw new Error('fixture는 데이터 부족이어야 합니다.');
+    expect(result.needs.priceRange).not.toBeNull();
+  });
+
+  it('급하락은 effective date 포함 N개 봉의 분할보정 수익률을 오름차순으로 고른다', async () => {
+    const day = (offset: number) => PIPELINE_TS - offset * 86_400_000;
+    const candle = (symbol: string, offset: number, close: number): Candle => ({
+      symbol, market: 'KR', timeframe: '1d', tsMs: day(offset),
+      open: close, high: close, low: close, close, volume: 1,
+    });
+    const resolver = makePipelineResolver({
+      candles: [
+        candle('000001', 2, 100), candle('000001', 1, 50), candle('000001', 0, 55),
+        candle('000002', 2, 100), candle('000002', 1, 90), candle('000002', 0, 80),
+        candle('000003', 2, 100), candle('000003', 1, 100), candle('000003', 0, 100),
+      ],
+      facts: [{
+        scope: 'SYMBOL', key: '000001', field: 'SPLIT_RATIO', periodKey: '2025-05-14',
+        asOfTsMs: PIPELINE_TS + 365 * 86_400_000, value: 2, unit: 'ratio',
+      }],
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'DECLINE', limit: 1, lookbackTradingDays: 3 }]),
+      period,
+    );
+    expect(result.kind).toBe('READY');
+    if (result.kind !== 'READY') throw new Error('fixture coverage가 완전해야 합니다.');
+    // 000001은 분할보정 후 +10%, 000002는 -20%다. 분할 미보정이면 000001(-45%)이 잘못 뽑힌다.
+    expect(result.schedule[0]?.members.map((member) => member.symbol)).toEqual(['000002']);
+    expect(result.schedule[0]?.members[0]).toMatchObject({
+      standardCode: 'KR7000002002',
+      marketCapKrw: '200',
+      volume: 2_000,
+      tradingValueKrw: '20000',
+    });
+  });
+
+  it('급하락 자본변동 coverage는 추정 달력 범위가 아니라 실제 N개 봉 범위만 요구한다', async () => {
+    const candles = PIPELINE_ENTRIES.flatMap((entry) =>
+      Array.from({ length: 100 }, (_, index): Candle => {
+        const tsMs = PIPELINE_TS - (99 - index) * 86_400_000;
+        return {
+          symbol: entry.shortCode,
+          market: 'KR',
+          timeframe: '1d',
+          tsMs,
+          open: 100 + index,
+          high: 100 + index,
+          low: 100 + index,
+          close: 100 + index,
+          volume: 1,
+        };
+      }),
+    );
+    const resolver = makePipelineResolver({ candles });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'DECLINE', limit: 1, lookbackTradingDays: 100 }]),
+      period,
+    );
+    expect(result.kind).toBe('READY');
+  });
+
+  it('급하락 warm-up 또는 자본변동 coverage가 부족하면 부분 schedule 없이 NEEDS_DATA다', async () => {
+    const candle = (symbol: string, offset: number): Candle => ({
+      symbol, market: 'KR', timeframe: '1d', tsMs: PIPELINE_TS - offset * 86_400_000,
+      open: 100, high: 100, low: 100, close: 100, volume: 1,
+    });
+    const resolver = makePipelineResolver({
+      candles: PIPELINE_ENTRIES.flatMap((entry) => [candle(entry.shortCode, 1), candle(entry.shortCode, 0)]),
+      actionCoverage: new Map([['000001', [2025]]]),
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'DECLINE', limit: 1, lookbackTradingDays: 3 }]),
+      period,
+    );
+    expect(result.kind).toBe('NEEDS_DATA');
+    if (result.kind !== 'NEEDS_DATA') throw new Error('fixture는 데이터 부족이어야 합니다.');
+    expect(result.needs.actionSymbols).toEqual(['000002', '000003']);
+    expect(result.needs.priceRange).not.toBeNull();
+    expect('schedule' in result).toBe(false);
   });
 });

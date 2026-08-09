@@ -23,7 +23,7 @@ import {
 } from '../server/shared/db/schema.js';
 import {
   sumExcludedNonTrading,
-  type UniverseScheduleEntry,
+  type LegacyUniverseScheduleEntry,
 } from '../server/modules/backtest/application/universe-rule-resolver.js';
 import { newId } from '../server/shared/ids.js';
 import { TERMINAL_STATUSES } from '../server/modules/backtest/application/job-queue.js';
@@ -105,7 +105,7 @@ async function main(): Promise<void> {
     // 2026-08-05) — `request.universeRule` 은 규칙일 뿐, 실제로 어떤 종목이었는지는
     // 여기 job.universeScheduleJson 에 이미 확정돼 있다. 워커가 규칙을 다시 해석하면
     // 대기 중 종목 마스터가 갱신됐을 때 제출 시점과 다른 유니버스로 돌게 된다.
-    const schedule = JSON.parse(job.universeScheduleJson) as UniverseScheduleEntry[];
+    const schedule = JSON.parse(job.universeScheduleJson) as LegacyUniverseScheduleEntry[];
     const unionSymbols = [...new Set(schedule.flatMap((entry) => entry.symbols))].sort();
     // 엔진에 넘길 멤버십 일정 — rebalanceDate 를 periodToTsRange 와 같은 자정 규칙으로
     // ms 로 바꾼다. 두 곳이 각자 계산하면 제출·미리보기는 맞는데 실행부만 하루 어긋나는

@@ -73,6 +73,7 @@ const NON_TRADING_TRADE_ROW = {
   shortCode: '215600',
   name: '신라젠',
   marketCapRaw: '866567212500',
+  tradingValueRaw: null,
   open: 0,
   high: 0,
   low: 0,
