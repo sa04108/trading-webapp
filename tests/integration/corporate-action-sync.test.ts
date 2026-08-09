@@ -304,7 +304,11 @@ describe('자본변동 수집 잡 (Task 7)', () => {
         takeProfitAtrMultiplier: 3,
         riskPerTradePercent: 2,
       },
-      universeRule: { markets: ['KOSPI'], topN: 1, sortKey: 'MKTCAP' },
+      universeRule: {
+        markets: ['KOSPI'],
+        stages: [{ criterion: 'MARKET_CAP', limit: 1 }],
+        rebalanceInterval: { value: 1, unit: 'MONTH' },
+      },
       period: { from: date, to: date },
       capital: { initialCash: 10_000_000, currency: 'KRW' },
       execution: {

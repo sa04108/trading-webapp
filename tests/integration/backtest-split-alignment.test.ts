@@ -167,7 +167,11 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
         riskPerTradePercent: 5,
         maxPositionWeightPercent: 100,
       },
-      universeRule: { markets: ['KOSPI'], topN: 1, sortKey: 'MKTCAP' },
+      universeRule: {
+        markets: ['KOSPI'],
+        stages: [{ criterion: 'MARKET_CAP', limit: 1 }],
+        rebalanceInterval: { value: 1, unit: 'MONTH' },
+      },
       timeframe: '1d',
       period: { from: PERIOD_FROM, to: PERIOD_TO },
       capital: { initialCash: 10_000_000, currency: 'KRW' },

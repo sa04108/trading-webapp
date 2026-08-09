@@ -11,7 +11,34 @@ export type StoredRequestRebase =
  * I3 이전 요청은 포지션 상한을 parameters.maxPositions 에서 이름으로 찾았고,
  * 없으면 조용히 10 을 썼다. 재기준 시에도 그 작업이 실제로 돌았던 값을 유지한다.
  */
-const LEGACY_MAX_POSITIONS = 10;
+const LEGACY_MAX_POSITIONS = 40;
+
+function rebaseUniverseRule(draft: Record<string, unknown>, warnings: string[]): void {
+  const rawRule = draft.universeRule;
+  if (typeof rawRule !== 'object' || rawRule === null || Array.isArray(rawRule)) return;
+  const rule = rawRule as Record<string, unknown>;
+  if (Array.isArray(rule.stages) && rule.rebalanceInterval !== undefined) return;
+
+  const parameters = draft.parameters;
+  const parameterRecord = typeof parameters === 'object' && parameters !== null && !Array.isArray(parameters)
+    ? parameters as Record<string, unknown>
+    : null;
+  const rebalanceMonths = parameterRecord?.rebalanceMonths;
+  const months = typeof rebalanceMonths === 'number' ? rebalanceMonths : 1;
+  if (parameterRecord !== null) {
+    const { rebalanceMonths: _legacyRebalanceMonths, ...rest } = parameterRecord;
+    draft.parameters = rest;
+  }
+  if (typeof rebalanceMonths !== 'number') {
+    warnings.push('리밸런싱 주기가 없어 1개월로 재기준했습니다 (구 스키마 요청)');
+  }
+
+  draft.universeRule = {
+    markets: rule.markets,
+    stages: [{ criterion: 'MARKET_CAP', limit: rule.topN }],
+    rebalanceInterval: { value: months, unit: 'MONTH' },
+  };
+}
 
 /**
  * 저장된 요청을 현재 스키마 기준으로 재기준(rebase)한다.
@@ -49,6 +76,10 @@ export function rebaseStoredRequest(
     draft.risk = { maxPositions: carried };
     warnings.push(`포지션 상한을 risk.maxPositions=${carried} 로 이관했습니다 (구 스키마 요청)`);
   }
+
+  // 단계형 규칙 이전의 topN/sortKey와 전략별 리밸런싱 주기는 저장 원본을 바꾸지
+  // 않고, 복제할 요청에만 새 계약으로 승격한다.
+  rebaseUniverseRule(draft, warnings);
 
   // D-029 이전 요청은 전략 버전을 품고 있다. 요청은 더 이상 버전을 나르지 않으므로
   // 필드는 버리되, 그때와 지금의 전략이 다르다는 사실은 경고로 남긴다 — 복제는 재현이

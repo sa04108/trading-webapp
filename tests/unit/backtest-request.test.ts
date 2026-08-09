@@ -3,7 +3,6 @@ import {
   backtestRequestSchema,
   periodToTsRange,
 } from '../../src/shared/schemas/backtest-request.js';
-import { MAX_UNIVERSE_SYMBOLS } from '../../src/shared/schemas/universe-limit.js';
 
 describe('periodToTsRange', () => {
   it('구간은 to 일자의 끝까지 포함한다 (UTC)', () => {
@@ -19,7 +18,11 @@ function baseRequest(): Record<string, unknown> {
   return {
     strategyId: 'range-breakout',
     parameters: {},
-    universeRule: { markets: ['KOSPI'], topN: 50, sortKey: 'MKTCAP' },
+    universeRule: {
+      markets: ['KOSPI'],
+      stages: [{ criterion: 'MARKET_CAP', limit: 50 }],
+      rebalanceInterval: { value: 1, unit: 'MONTH' },
+    },
     period: { from: '2020-01-01', to: '2025-12-31' },
     capital: { initialCash: 10_000_000, currency: 'KRW' },
     execution: {
@@ -32,38 +35,19 @@ function baseRequest(): Record<string, unknown> {
 }
 
 /**
- * 유니버스 상한 (랭킹 전략용 확대). 스펙 2026-08-05 이후로는 종목 배열이 아니라
- * `universeRule.topN` 이 이 상한을 진다 — `MAX_UNIVERSE_SYMBOLS` 는 여전히 같은 상수다
- * (universe-rule.ts 참고).
- */
-describe('유니버스 상한 (universeRule.topN)', () => {
-  function requestWithTopN(topN: number): Record<string, unknown> {
-    return {
-      ...baseRequest(),
-      strategyId: 'cross-sectional-momentum',
-      universeRule: { markets: ['KOSPI'], topN, sortKey: 'MKTCAP' },
-    };
-  }
-
-  it(`상한(${MAX_UNIVERSE_SYMBOLS})은 받는다`, () => {
-    expect(backtestRequestSchema.safeParse(requestWithTopN(MAX_UNIVERSE_SYMBOLS)).success).toBe(true);
-  });
-
-  it('상한을 하나라도 넘으면 거부한다', () => {
-    expect(backtestRequestSchema.safeParse(requestWithTopN(MAX_UNIVERSE_SYMBOLS + 1)).success).toBe(false);
-  });
-
-  it('하한 경계 — 1은 받고 0은 거부한다', () => {
-    expect(backtestRequestSchema.safeParse(requestWithTopN(1)).success).toBe(true);
-    expect(backtestRequestSchema.safeParse(requestWithTopN(0)).success).toBe(false);
-  });
-});
-
-/**
- * universeRule (스펙 2026-08-05) — datasetId/universeSnapshotId/universe 를 대신한다.
- * markets 는 워커의 단일 시장 제약으로 정확히 1개여야 한다(universe-rule.ts).
+ * 단계형 유니버스 규칙은 1~5개의 기준을 순서대로 적용한다. 이후 단계는 앞 단계가
+ * 남긴 후보 수를 늘릴 수 없고 같은 기준을 반복할 수 없다.
  */
 describe('universeRule', () => {
+  const validRule = {
+    markets: ['KOSPI'] as const,
+    stages: [
+      { criterion: 'MARKET_CAP' as const, limit: 100 },
+      { criterion: 'PER' as const, limit: 40 },
+    ],
+    rebalanceInterval: { value: 1, unit: 'MONTH' as const },
+  };
+
   it('universeRule 이 없으면 거부한다', () => {
     const { universeRule: _drop, ...rest } = baseRequest();
     expect(backtestRequestSchema.safeParse(rest).success).toBe(false);
@@ -72,7 +56,7 @@ describe('universeRule', () => {
   it('markets 가 2개면 거부한다 — 워커가 단일 시장만 다룬다', () => {
     const result = backtestRequestSchema.safeParse({
       ...baseRequest(),
-      universeRule: { markets: ['KOSPI', 'KOSDAQ'], topN: 50, sortKey: 'MKTCAP' },
+      universeRule: { ...validRule, markets: ['KOSPI', 'KOSDAQ'] },
     });
     expect(result.success).toBe(false);
   });
@@ -80,17 +64,25 @@ describe('universeRule', () => {
   it('markets 가 0개면 거부한다', () => {
     const result = backtestRequestSchema.safeParse({
       ...baseRequest(),
-      universeRule: { markets: [], topN: 50, sortKey: 'MKTCAP' },
+      universeRule: { ...validRule, markets: [] },
     });
     expect(result.success).toBe(false);
   });
 
-  it('정상 유니버스 규칙은 그대로 파싱된다', () => {
-    const result = backtestRequestSchema.safeParse(baseRequest());
+  it('정상 단계형 유니버스 규칙은 그대로 파싱된다', () => {
+    const result = backtestRequestSchema.safeParse({ ...baseRequest(), universeRule: validRule });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.universeRule).toEqual({ markets: ['KOSPI'], topN: 50, sortKey: 'MKTCAP' });
+      expect(result.data.universeRule).toEqual(validRule);
     }
+  });
+
+  it.each([
+    ['중복 기준', { ...validRule, stages: [{ criterion: 'PER', limit: 100 }, { criterion: 'PER', limit: 40 }] }],
+    ['증가하는 N', { ...validRule, stages: [{ criterion: 'MARKET_CAP', limit: 40 }, { criterion: 'PER', limit: 41 }] }],
+    ['6개 단계', { ...validRule, stages: Array.from({ length: 6 }, (_, i) => ({ criterion: ['MARKET_CAP', 'VOLUME', 'TRADING_VALUE', 'PER', 'DECLINE'][i % 5], limit: 10 })) }],
+  ])('%s 규칙을 거부한다', (_name, universeRule) => {
+    expect(backtestRequestSchema.safeParse({ ...baseRequest(), universeRule }).success).toBe(false);
   });
 
   /**
@@ -110,5 +102,37 @@ describe('universeRule', () => {
       expect((result.data as Record<string, unknown>).universeSnapshotId).toBeUndefined();
       expect((result.data as Record<string, unknown>).universe).toBeUndefined();
     }
+  });
+});
+
+describe('요청 교차 검증', () => {
+  it('maxPositions 40을 허용한다', () => {
+    expect(backtestRequestSchema.safeParse({ ...baseRequest(), risk: { maxPositions: 40 } }).success).toBe(true);
+  });
+
+  it('리밸런싱 주기가 기간을 넘으면 거부한다', () => {
+    expect(backtestRequestSchema.safeParse({
+      ...baseRequest(),
+      period: { from: '2025-01-01', to: '2025-01-31' },
+      universeRule: {
+        markets: ['KOSPI'],
+        stages: [{ criterion: 'MARKET_CAP', limit: 50 }],
+        rebalanceInterval: { value: 2, unit: 'MONTH' },
+      },
+    }).success).toBe(false);
+  });
+
+  it('전략 topN이 동시 보유 상한 또는 마지막 단계 N을 넘으면 거부한다', () => {
+    const request = {
+      ...baseRequest(),
+      parameters: { topN: 41 },
+      universeRule: {
+        markets: ['KOSPI'],
+        stages: [{ criterion: 'MARKET_CAP', limit: 40 }],
+        rebalanceInterval: { value: 1, unit: 'MONTH' },
+      },
+      risk: { maxPositions: 40 },
+    };
+    expect(backtestRequestSchema.safeParse(request).success).toBe(false);
   });
 });

@@ -90,7 +90,11 @@ async function waitFor(condition: () => boolean, timeoutMs: number): Promise<voi
 const FACTS_MASTER_DATE = '2025-01-02';
 
 function factsUniverseRule(topN: number): BacktestRequest['universeRule'] {
-  return { markets: ['KOSPI'], topN, sortKey: 'MKTCAP' };
+  return {
+    markets: ['KOSPI'],
+    stages: [{ criterion: 'MARKET_CAP', limit: topN }],
+    rebalanceInterval: { value: 1, unit: 'MONTH' },
+  };
 }
 
 describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로세스', () => {
@@ -376,7 +380,11 @@ describe('워커의 자본변동 팩트 배선 — 접수일이 기간 종료 �
           rebalanceMonths: 1,
           absoluteMomentumFilter: true,
         },
-        universeRule: { markets: ['KOSPI'], topN: 2, sortKey: 'MKTCAP' },
+        universeRule: {
+          markets: ['KOSPI'],
+          stages: [{ criterion: 'MARKET_CAP', limit: 2 }],
+          rebalanceInterval: { value: 1, unit: 'MONTH' },
+        },
         timeframe: '1d',
         period: { from: '2025-01-02', to: '2025-04-30' },
         capital: { initialCash: 10_000_000, currency: 'KRW' },

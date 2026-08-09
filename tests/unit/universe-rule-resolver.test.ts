@@ -103,11 +103,17 @@ async function ingestFixtureUniverse(ctx: Ctx): Promise<void> {
 }
 
 describe('UniverseRuleResolver.resolve', () => {
+  const marketCapRule = (limit: number): UniverseRule => ({
+    markets: ['KOSPI'],
+    stages: [{ criterion: 'MARKET_CAP', limit }],
+    rebalanceInterval: { value: 1, unit: 'MONTH' },
+  });
+
   it('시총 상위 N 을 내림차순으로 고르고, 시장·instrumentType·시총 유무로 거른다', async () => {
     const ctx = await setup();
     await ingestFixtureUniverse(ctx);
 
-    const rule: UniverseRule = { markets: ['KOSPI'], topN: 3, sortKey: 'MKTCAP' };
+    const rule = marketCapRule(3);
     const result = await ctx.resolver.resolve(rule, ['2023-01-02']);
 
     // A(500) > B(300) > C(200) 순 — D 는 시장, F 는 instrumentType, E 는 시총 없음으로 제외된다.
@@ -144,7 +150,7 @@ describe('UniverseRuleResolver.resolve', () => {
     const ctx = await setup();
     await ingestFixtureUniverse(ctx);
 
-    const rule: UniverseRule = { markets: ['KOSPI'], topN: 3, sortKey: 'MKTCAP' };
+    const rule = marketCapRule(3);
     const before = ctx.fake.requests.length;
     const result = await ctx.resolver.resolve(rule, ['2023-01-02', '2023-02-01']);
     const duringResolve = ctx.fake.requests.slice(before);
@@ -171,7 +177,7 @@ describe('UniverseRuleResolver.resolve', () => {
     await ingestFixtureUniverse(ctx); // 2023-01-02 거래일 수집
     await ctx.svc.ingestDate('2023-01-03'); // fake 서버 기본값(빈 응답) → 휴장으로 수집된다
 
-    const rule: UniverseRule = { markets: ['KOSPI'], topN: 3, sortKey: 'MKTCAP' };
+    const rule = marketCapRule(3);
     const result = await ctx.resolver.resolve(rule, ['2023-01-03']);
 
     expect(result.uncoveredDates).toEqual([]);
@@ -193,7 +199,7 @@ describe('UniverseRuleResolver.resolve', () => {
     // 휴장만 수집된 상태 — coverage 는 생기지만 거래일 기록은 하나도 없다
     await ctx.svc.ingestDate('2023-01-03');
 
-    const rule: UniverseRule = { markets: ['KOSPI'], topN: 3, sortKey: 'MKTCAP' };
+    const rule = marketCapRule(3);
     const result = await ctx.resolver.resolve(rule, ['2023-01-03']);
 
     expect(result.uncoveredDates).toEqual(['2023-01-03']);
@@ -212,7 +218,7 @@ describe('UniverseRuleResolver.resolve', () => {
     expect(ctx.svc.effectiveTradingDate('2026-01-01')).toBe('2023-01-02');
     expect(ctx.svc.isCovered('2026-01-01')).toBe(false);
 
-    const rule: UniverseRule = { markets: ['KOSPI'], topN: 3, sortKey: 'MKTCAP' };
+    const rule = marketCapRule(3);
     const result = await ctx.resolver.resolve(rule, ['2026-01-01']);
 
     expect(result.uncoveredDates).toEqual(['2026-01-01']);
@@ -237,7 +243,7 @@ describe('UniverseRuleResolver.resolve', () => {
     // 것이다 — 두 날짜가 안 이어져 있다는 사실은 이 값만으로는 알 수 없다.
     expect(ctx.svc.effectiveTradingDate('2023-06-01')).toBe('2023-01-02');
 
-    const rule: UniverseRule = { markets: ['KOSPI'], topN: 3, sortKey: 'MKTCAP' };
+    const rule = marketCapRule(3);
     const result = await ctx.resolver.resolve(rule, ['2023-06-01']);
 
     expect(result.uncoveredDates).toEqual(['2023-06-01']);

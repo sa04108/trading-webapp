@@ -67,7 +67,11 @@ function buildDailyCandles(symbol = '005930'): Candle[] {
 const MASTER_DATES = ['2025-07-27', '2025-08-01', '2025-09-01', '2025-10-01'];
 
 function universeRule(topN: number): BacktestRequest['universeRule'] {
-  return { markets: ['KOSPI'], topN, sortKey: 'MKTCAP' };
+  return {
+    markets: ['KOSPI'],
+    stages: [{ criterion: 'MARKET_CAP', limit: topN }],
+    rebalanceInterval: { value: 1, unit: 'MONTH' },
+  };
 }
 
 function buildRequest(topN = 1): BacktestRequest {

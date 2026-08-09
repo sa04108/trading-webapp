@@ -322,7 +322,10 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    * clone-draft 같은 읽기 전용 경로도 unionSymbols 를 얻을 수 있게 한다.
    */
   const resolveScheduleForRequest = (body: BacktestRequest): Promise<ResolvedUniverse> => {
-    const paramCheck = strategies.validateParameters(body.strategyId, body.parameters);
+    const paramCheck = strategies.validateParameters(
+      body.strategyId,
+      parametersForLegacyStrategySchedule(body),
+    );
     const rebalanceMonthsRaw =
       paramCheck.ok && typeof paramCheck.value === 'object' && paramCheck.value !== null
         ? (paramCheck.value as Record<string, unknown>)['rebalanceMonths']
@@ -332,6 +335,19 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
         ? computeRebalanceDates(body.period, rebalanceMonthsRaw)
         : [body.period.from];
     return universeRuleResolver.resolve(body.universeRule, rebalanceDates);
+  };
+
+  /**
+   * 전략 내부 리밸런싱을 Task 8에서 요청 계약으로 완전히 옮기기 전까지의 임시
+   * 호환 입력이다. 저장·응답의 parameters에는 되살리지 않아 새 계약을 오염시키지 않는다.
+   */
+  const parametersForLegacyStrategySchedule = (body: BacktestRequest): Record<string, unknown> => {
+    if (typeof body.parameters.rebalanceMonths === 'number') return body.parameters;
+    const interval = body.universeRule.rebalanceInterval;
+    return {
+      ...body.parameters,
+      rebalanceMonths: interval.unit === 'MONTH' ? interval.value : 1,
+    };
   };
 
   /**
@@ -472,7 +488,10 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       // 전략 버전은 검사하지 않는다 (D-029) — 요청이 버전을 들고 다니지 않는다.
       // 실행되는 것은 언제나 지금 등록된 전략이고, 파라미터가 그 전략과 안 맞으면
       // 바로 아래 검증이 잡는다.
-      const paramCheck = strategies.validateParameters(body.strategyId, body.parameters);
+      const paramCheck = strategies.validateParameters(
+        body.strategyId,
+        parametersForLegacyStrategySchedule(body),
+      );
       if (!paramCheck.ok) errors.push(paramCheck.error);
     }
 
@@ -609,7 +628,10 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    * 요청 자체는 유효하고 "전략 파라미터와 리스크 설정의 조합" 이 문제다.
    */
   const checkPositionCapacity = (body: BacktestRequest): string | null => {
-    const validated = strategies.validateParameters(body.strategyId, body.parameters);
+    const validated = strategies.validateParameters(
+      body.strategyId,
+      parametersForLegacyStrategySchedule(body),
+    );
     // 파라미터 자체가 스키마를 통과하지 못하는 경우는 validateSubmission 이 400 으로 말한다
     if (!validated.ok || typeof validated.value !== 'object' || validated.value === null) {
       return null;

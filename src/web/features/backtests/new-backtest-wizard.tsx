@@ -73,7 +73,11 @@ interface SlippageProfileSummary {
   fixed: number;
 }
 
-const DEFAULT_UNIVERSE_RULE: UniverseRule = { markets: ['KOSPI'], topN: 200, sortKey: 'MKTCAP' };
+const DEFAULT_UNIVERSE_RULE: UniverseRule = {
+  markets: ['KOSPI'],
+  stages: [{ criterion: 'MARKET_CAP', limit: 200 }],
+  rebalanceInterval: { value: 1, unit: 'MONTH' },
+};
 
 export function NewBacktestWizard() {
   const navigate = useNavigate();
@@ -820,7 +824,7 @@ export function NewBacktestWizard() {
                 <span className="shrink-0 text-muted-foreground">유니버스 규칙</span>
                 <span>
                   {request.universeRule.markets.join('·')} 시가총액 상위{' '}
-                  {request.universeRule.topN}
+                  {request.universeRule.stages[0]?.limit}
                 </span>
               </div>
               <Separator />

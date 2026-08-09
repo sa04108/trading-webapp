@@ -28,9 +28,13 @@ const NO_CANDLE_DATE = '2020-01-01';
  */
 const ACTION_COVERAGE_YEARS = yearRange(2020, 2046);
 
-/** 유니버스 규칙 — topN=1 이면 005930(시총 1위)만, topN=2 면 000660 도 함께 들어온다 */
+/** 유니버스 규칙 — MARKET_CAP 단계 limit=1 이면 005930만, 2면 000660도 함께 들어온다 */
 function universeRule(topN = 1): BacktestRequest['universeRule'] {
-  return { markets: ['KOSPI'], topN, sortKey: 'MKTCAP' };
+  return {
+    markets: ['KOSPI'],
+    stages: [{ criterion: 'MARKET_CAP', limit: topN }],
+    rebalanceInterval: { value: 1, unit: 'MONTH' },
+  };
 }
 
 /** 이 파일이 공유하는 종목 마스터 픽스처 — 005930 시총 1위, 000660 2위 */
@@ -554,6 +558,58 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(JSON.parse(clonedStored.submitWarningsJson!)).toEqual(body.warnings);
   });
 
+  it('clone에서 레거시 유니버스 규칙과 전략 리밸런싱 주기를 단계형 계약으로 승격한다', async () => {
+    const legacy = {
+      ...buildRequest(),
+      parameters: { ...buildRequest().parameters, rebalanceMonths: 3 },
+      universeRule: { markets: ['KOSPI'], sortKey: 'MKTCAP', topN: 200 },
+      risk: { maxPositions: 40 },
+    };
+    const job = ctx.container.jobQueue.enqueue(legacy as never);
+    registerSymbols(ctx.container, 'KR', ['000660']);
+    seedCorporateActionCoverage(ctx.container, ['000660'], ACTION_COVERAGE_YEARS);
+
+    const cloned = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${job.id}/clone`,
+      cookies: { qp_session: cookie },
+    });
+
+    expect(cloned.statusCode).toBe(201);
+    const clonedJob = ctx.container.jobQueue.getJob((cloned.json() as { job: { id: string } }).job.id)!;
+    const request = JSON.parse(clonedJob.requestJson) as BacktestRequest;
+    expect(request.universeRule).toEqual({
+      markets: ['KOSPI'],
+      stages: [{ criterion: 'MARKET_CAP', limit: 200 }],
+      rebalanceInterval: { value: 3, unit: 'MONTH' },
+    });
+    expect(request.parameters).not.toHaveProperty('rebalanceMonths');
+    expect(JSON.parse(ctx.container.jobQueue.getJob(job.id)!.requestJson)).toMatchObject({
+      universeRule: { markets: ['KOSPI'], sortKey: 'MKTCAP', topN: 200 },
+      parameters: { rebalanceMonths: 3 },
+    });
+  });
+
+  it('clone은 레거시 리밸런싱 주기가 없으면 1개월을 채우고 경고한다', async () => {
+    const legacy = {
+      ...buildRequest(),
+      universeRule: { markets: ['KOSPI'], sortKey: 'MKTCAP', topN: 1 },
+    };
+    const job = ctx.container.jobQueue.enqueue(legacy as never);
+
+    const cloned = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${job.id}/clone`,
+      cookies: { qp_session: cookie },
+    });
+
+    expect(cloned.statusCode).toBe(201);
+    const body = cloned.json() as { job: { id: string }; warnings: string[] };
+    const request = JSON.parse(ctx.container.jobQueue.getJob(body.job.id)!.requestJson) as BacktestRequest;
+    expect(request.universeRule.rebalanceInterval).toEqual({ value: 1, unit: 'MONTH' });
+    expect(body.warnings.some((warning) => warning.includes('1개월'))).toBe(true);
+  });
+
   it('refuses to clone a stored request that cannot be rebased (400, not 500)', async () => {
     const broken = { ...buildRequest() } as Record<string, unknown>;
     delete broken.period; // 기계적으로 되살릴 수 없는 편차
@@ -650,7 +706,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const job = ctx.container.jobQueue.enqueue({
       ...buildRequest(),
       strategyId: 'value-quality-rank',
-      parameters: { topN: 20, rebalanceMonths: 3, staleQuarters: 2 },
+      parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
     });
 
     const cloned = await ctx.app.inject({
@@ -666,7 +722,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const job = ctx.container.jobQueue.enqueue({
       ...buildRequest(),
       strategyId: 'value-quality-rank',
-      parameters: { topN: 20, rebalanceMonths: 3, staleQuarters: 2 },
+      parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
     });
 
     const draft = await ctx.app.inject({

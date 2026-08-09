@@ -53,8 +53,8 @@ export interface PreviewParams {
 export function sameUniverseParams(a: PreviewParams, b: PreviewParams): boolean {
   return (
     a.universeRule.markets[0] === b.universeRule.markets[0] &&
-    a.universeRule.topN === b.universeRule.topN &&
-    a.universeRule.sortKey === b.universeRule.sortKey &&
+    a.universeRule.stages[0]?.criterion === b.universeRule.stages[0]?.criterion &&
+    a.universeRule.stages[0]?.limit === b.universeRule.stages[0]?.limit &&
     a.period.from === b.period.from &&
     a.period.to === b.period.to &&
     a.rebalanceMonths === b.rebalanceMonths
@@ -127,10 +127,10 @@ export function UniverseRuleStep({
 
   // topN 은 유효한 정수일 때만 부모에 커밋한다 — 입력 중 빈 문자열·범위 밖 값은
   // 로컬 텍스트로만 남기고 `value`(항상 유효한 UniverseRule)는 건드리지 않는다.
-  const [topNText, setTopNText] = useState(String(value.topN));
+  const [topNText, setTopNText] = useState(String(value.stages[0]?.limit ?? ''));
   useEffect(() => {
-    setTopNText(String(value.topN));
-  }, [value.topN]);
+    setTopNText(String(value.stages[0]?.limit ?? ''));
+  }, [value.stages]);
 
   const currentParams: PreviewParams = { universeRule: value, period, rebalanceMonths };
   const preview = previewMutation.data ?? null;
@@ -331,7 +331,10 @@ export function UniverseRuleStep({
                   setTopNText(text);
                   const n = Number(text);
                   if (Number.isInteger(n) && n >= 1 && n <= MAX_UNIVERSE_SYMBOLS) {
-                    onChange({ ...value, topN: n });
+                    onChange({
+                      ...value,
+                      stages: [{ ...value.stages[0]!, limit: n }],
+                    });
                   }
                 }}
               />

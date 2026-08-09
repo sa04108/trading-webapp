@@ -5,7 +5,11 @@ import type { BacktestRequestBody } from '../../src/web/features/backtests/types
 const request: BacktestRequestBody = {
   strategyId: 'range-breakout',
   parameters: { lookbackBars: 10, atrPeriod: 5 },
-  universeRule: { markets: ['KOSPI'], topN: 200, sortKey: 'MKTCAP' },
+  universeRule: {
+    markets: ['KOSPI'],
+    stages: [{ criterion: 'MARKET_CAP', limit: 200 }],
+    rebalanceInterval: { value: 1, unit: 'MONTH' },
+  },
   period: { from: '2025-07-27', to: '2026-07-24' },
   capital: { initialCash: 10_000_000, currency: 'KRW' },
   execution: {
@@ -27,7 +31,11 @@ describe('requestToFormState', () => {
     expect(notes).toEqual([]);
     expect(state.strategyId).toBe('range-breakout');
     expect(state.parameters).toEqual({ lookbackBars: '10', atrPeriod: '5' });
-    expect(state.universeRule).toEqual({ markets: ['KOSPI'], topN: 200, sortKey: 'MKTCAP' });
+    expect(state.universeRule).toEqual({
+      markets: ['KOSPI'],
+      stages: [{ criterion: 'MARKET_CAP', limit: 200 }],
+      rebalanceInterval: { value: 1, unit: 'MONTH' },
+    });
     expect(state.from).toBe('2025-07-27');
     expect(state.to).toBe('2026-07-24');
     expect(state.initialCash).toBe('10000000');

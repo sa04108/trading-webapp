@@ -141,7 +141,9 @@ export class UniverseRuleResolver {
       }
       ranked.sort((a, b) => compareMarketCapDesc(a.marketCap, b.marketCap));
 
-      const top = ranked.slice(0, rule.topN);
+      // Task 1 호환 경로: 선정 지표 단계 파이프라인(Task 4)이 들어오기 전까지는
+      // 기존 resolver가 지원하던 MARKET_CAP 첫 단계만 소비한다.
+      const top = ranked.slice(0, rule.stages[0]!.limit);
       const symbols = top.map(({ entry }) => entry.shortCode);
       for (const { entry } of top) {
         unionSymbols.add(entry.shortCode);
