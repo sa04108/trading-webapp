@@ -73,6 +73,8 @@ export interface UniverseScheduleEntry {
   readonly effectiveDate: string;
   readonly fromTsMs: number;
   readonly members: readonly UniverseScheduleMember[];
+  /** staged resolver에서도 worker 경고에 필요한 거래불가 제외 건수를 잃지 않는다. */
+  readonly excludedNonTradingCount: number;
 }
 
 export interface RebalanceDiagnostic {
@@ -255,12 +257,13 @@ export class UniverseRuleResolver {
           .map((row) => row.shortCode),
       );
       const universe = this.deps.symbolMaster.getUniverseAsOf(effectiveDate);
-      let candidates = [...universe.values()]
-        .filter((entry) =>
-          entry.instrumentType === 'COMMON_STOCK'
-          && rule.markets.includes(entry.market)
-          && !nonTrading.has(entry.shortCode),
-        )
+      const marketCandidates = [...universe.values()]
+        .filter((entry) => entry.instrumentType === 'COMMON_STOCK' && rule.markets.includes(entry.market));
+      const excludedNonTradingCount = marketCandidates
+        .filter((entry) => nonTrading.has(entry.shortCode))
+        .length;
+      let candidates = marketCandidates
+        .filter((entry) => !nonTrading.has(entry.shortCode))
         .sort((a, b) => a.shortCode.localeCompare(b.shortCode));
       const stageDiagnostics: UniverseStageDiagnostic[] = [];
 
@@ -321,7 +324,14 @@ export class UniverseRuleResolver {
             (code) => (histories.get(code)?.length ?? 0) < stage.lookbackTradingDays,
           );
           const warmupMissing = priceMissingCodes.length > 0;
-          if (warmupMissing) {
+          // symbol_master_coverage 는 해당 날짜의 두 KRX 시장 응답을 실제로 받아
+          // 일봉까지 저장한 뒤에만 닫힌다. 따라서 보수 범위 전체가 covered인데도
+          // N봉이 안 되는 종목은 재수집 가능한 누락이 아니라 신규 상장·장기 거래정지
+          // 같은 구조적 짧은 이력이다. 이 경우 value=null로 랭킹에서 제외하고 다시
+          // priceSymbols를 내지 않아 preparation이 같은 범위를 영원히 반복하지 않게 한다.
+          const priceFetchRequired = warmupMissing
+            && !this.deps.symbolMaster.isRangeCovered(requiredFrom, effectiveDate);
+          if (priceFetchRequired) {
             widenPriceRange(requiredFrom, effectiveDate);
             for (const code of priceMissingCodes) priceSymbols.add(code);
             stageReady = false;
@@ -336,10 +346,16 @@ export class UniverseRuleResolver {
               if (firstDate < actualFrom) actualFrom = firstDate;
             }
           }
-          const requiredYears = yearsBetween(warmupMissing ? requiredFrom : actualFrom, effectiveDate);
-          const coveredBySymbol = actionCoverage.getCoveredYears(codes);
-          const gapsBySymbol = actionCoverage.getGapYears(codes);
-          for (const code of codes) {
+          // 아직 가격 범위를 덜 조회했다면 짧은 후보도 다음 재해소에서 N봉을 채울 수
+          // 있으므로 보수 범위의 action을 함께 준비한다. 반대로 전 범위를 이미 조회한
+          // 구조적 짧은 이력은 이 stage에서 확실히 탈락하므로 DART까지 낭비하지 않는다.
+          const actionCandidateCodes = priceFetchRequired
+            ? codes
+            : codes.filter((code) => !priceMissingCodes.includes(code));
+          const requiredYears = yearsBetween(priceFetchRequired ? requiredFrom : actualFrom, effectiveDate);
+          const coveredBySymbol = actionCoverage.getCoveredYears(actionCandidateCodes);
+          const gapsBySymbol = actionCoverage.getGapYears(actionCandidateCodes);
+          for (const code of actionCandidateCodes) {
             const covered = new Set(coveredBySymbol.get(code) ?? []);
             const gaps = new Set(gapsBySymbol.get(code) ?? []);
             if (requiredYears.some((year) => !covered.has(year) || gaps.has(year))) {
@@ -388,6 +404,7 @@ export class UniverseRuleResolver {
         rebalanceDate,
         effectiveDate,
         fromTsMs: Date.parse(`${rebalanceDate}T00:00:00Z`),
+        excludedNonTradingCount,
         members: candidates.map((entry) => {
           const metric = finalMetrics.get(entry.standardCode);
           return {

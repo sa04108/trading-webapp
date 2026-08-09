@@ -97,12 +97,56 @@ function buildRequest(topN = 1): BacktestRequest {
   };
 }
 
+function singleDayRequest(topN: number, date: string): BacktestRequest {
+  const request = buildRequest(topN);
+  return {
+    ...request,
+    universeRule: {
+      ...request.universeRule,
+      rebalanceInterval: { unit: 'DAY', value: 1 },
+    },
+    period: { from: date, to: date },
+  };
+}
+
 async function waitFor(condition: () => boolean, timeoutMs: number): Promise<void> {
   const start = Date.now();
   while (!condition()) {
     if (Date.now() - start > timeoutMs) throw new Error('waitFor timeout');
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
+}
+
+/** 이 파일의 실행/게이트 테스트가 Task 6의 완료된 preparation 전제를 갖추게 한다. */
+function installPreparedSubmissionFixture(ctx: TestApp): void {
+  const rawInject = ctx.app.inject.bind(ctx.app);
+  ctx.app.inject = (async (options: unknown) => {
+    const request = options as { method?: string; url?: string; payload?: BacktestRequest };
+    const first = await rawInject(options as never);
+    if (
+      request.method !== 'POST'
+      || request.url !== '/api/v1/backtests'
+      || first.statusCode !== 409
+      || (first.json() as { error?: string }).error !== 'PREPARATION_REQUIRED'
+      || request.payload === undefined
+    ) return first;
+
+    const body = request.payload;
+    const preparation = ctx.container.backtestPreparationOrchestrator.start({
+      universeRule: body.universeRule,
+      period: body.period,
+      strategyId: body.strategyId,
+      parameters: body.parameters,
+    });
+    await waitFor(() => {
+      const status = ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status;
+      return status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED';
+    }, 5_000);
+    if (ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status !== 'COMPLETED') {
+      return first;
+    }
+    return rawInject(options as never);
+  }) as typeof ctx.app.inject;
 }
 
 describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
@@ -119,6 +163,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
       payload: { username, password },
     });
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+    installPreparedSubmissionFixture(ctx);
 
     // 증권사 일봉 동기화가 만드는 상태를 그대로 재현한다 (로컬 종목 등록 + 1d 파티션)
     registerSymbols(ctx.container, 'KR', ['005930', '000660']);
@@ -218,7 +263,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
       cookies: { qp_session: cookie },
       payload: {
         strategyId: 'value-quality-rank',
-        parameters: { topN: 20, rebalanceMonths: 3, staleQuarters: 2 },
+        parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
         universeRule: universeRule(1),
         timeframe: '1d',
         period: { from: '2025-08-01', to: '2025-10-31' },
@@ -253,7 +298,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
         rebalanceMonths: 1,
         absoluteMomentumFilter: true,
       },
-      universeRule: universeRule(1),
+      universeRule: universeRule(topN),
       timeframe: '1d',
       period: { from: '2025-08-01', to: '2025-10-31' },
       capital: { initialCash: 10_000_000, currency: 'KRW' },
@@ -267,7 +312,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     };
   }
 
-  it('topN 이 최대 동시 보유 종목 수보다 크면 422 로 거부한다', async () => {
+  it('topN 이 최대 동시 보유 종목 수보다 크면 공유 요청 스키마에서 400 으로 거부한다', async () => {
     const response = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
@@ -275,12 +320,9 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
       payload: momentumPayload(20, 10),
     });
 
-    expect(response.statusCode).toBe(422);
+    expect(response.statusCode).toBe(400);
     const error = response.json().error as string;
-    // 두 숫자를 다 밝히고 무엇을 고쳐야 하는지 말해야 한다
-    expect(error).toContain('20');
-    expect(error).toContain('10');
-    expect(error).toContain('최대 동시 보유 종목 수');
+    expect(error).toContain('전략 topN은 동시 보유 상한 이하여야 합니다');
   });
 
   it('topN === maxPositions 는 통과한다 — 게이트가 전부를 막지 않는다', async () => {
@@ -293,7 +335,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     expect(response.statusCode).toBe(201);
   });
 
-  it('clone-draft 는 같은 조건을 blockers 로 알린다 (막지 않고 고칠 화면은 열어준다)', async () => {
+  it('현재 공유 스키마로 복원할 수 없는 구 요청의 clone-draft 는 400 이다', async () => {
     // 게이트가 생기기 전에 제출된 잡을 재현한다 — 큐에 직접 넣어 제출 검증을 우회한다
     const job = ctx.container.jobQueue.enqueue(momentumPayload(20, 10) as never, [], { entries: [], hash: 'seed' });
 
@@ -302,18 +344,17 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
       url: `/api/v1/backtests/${job.id}/clone-draft`,
       cookies: { qp_session: cookie },
     });
-    expect(draft.statusCode).toBe(200);
-    const blockers = draft.json().blockers as string[];
-    expect(blockers.some((b) => b.includes('최대 동시 보유 종목 수'))).toBe(true);
+    expect(draft.statusCode).toBe(400);
+    expect(draft.json().error).toContain('현재 스키마로 복원할 수 없습니다');
 
-    // 그리고 실제 복제 제출은 422 로 막힌다
+    // 현재 공유 요청 스키마로 복원할 수 없는 구 요청이라 실제 복제도 400으로 막힌다.
     const cloned = await ctx.app.inject({
       method: 'POST',
       url: `/api/v1/backtests/${job.id}/clone`,
       cookies: { qp_session: cookie },
     });
-    expect(cloned.statusCode).toBe(422);
-    expect(cloned.json().error).toContain('최대 동시 보유 종목 수');
+    expect(cloned.statusCode).toBe(400);
+    expect(cloned.json().error).toContain('현재 스키마로 복원할 수 없습니다');
   });
 
   it('봉만 쓰는 전략은 재무 없이도 제출된다', async () => {
@@ -373,6 +414,7 @@ describe('KRX 전용 일봉으로 백테스트 실행 (워커의 부모-자식 �
       payload: { username, password },
     });
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+    installPreparedSubmissionFixture(ctx);
 
     registerSymbols(ctx.container, 'KR', [KRX_ONLY_CODE]);
     seedSymbolMasterUniverse(ctx.container, MASTER_DATES, [
@@ -527,15 +569,14 @@ describe('POST /backtests/:id/clone — 유니버스 자동 등록 (미리보기
     await ctx.close();
   });
 
-  it('미리보기를 거치지 않고 큐에 바로 들어간 잡을 복제하면 unionSymbols 를 등록한다 — 다만 900010 의 자본변동 미수집이 최종 제출은 막는다(Task 6)', async () => {
+  it('복제도 동일 hash 준비 완료 전에는 409이고 완료 뒤 unionSymbols 를 등록한다(Task 6)', async () => {
     expect(ctx.container.symbolService.exists('900010')).toBe(false);
 
     // 위저드의 미리보기를 거치지 않고 제출된 잡을 재현한다 — clone-draft 테스트와
     // 같은 패턴으로 검증을 우회해 큐에 직접 넣는다.
     const request: BacktestRequest = {
-      ...buildRequest(2),
+      ...singleDayRequest(2, date),
       timeframe: '1d',
-      period: { from: date, to: date },
     };
     const job = ctx.container.jobQueue.enqueue(request, [], { entries: [], hash: 'seed' });
 
@@ -545,17 +586,39 @@ describe('POST /backtests/:id/clone — 유니버스 자동 등록 (미리보기
       cookies: { qp_session: cookie },
     });
 
-    // 등록은 검증보다 먼저 일어난다(ensureUniverseRegistered → validateSubmission
-    // 순서, clone 핸들러 참고) — 그래서 최종 제출이 막혀도 등록은 이미 끝나 있다.
-    // 미리보기가 했을 일을 clone 도 그대로 해야 가격 데이터 탭에서 빠지지 않는다.
+    // 복제도 새 제출과 같은 durable preparation을 먼저 요구한다. 완료 전에는 resolver
+    // 결과를 임의 등록하거나 queue에 넣지 않는다.
+    expect(cloned.statusCode).toBe(409);
+    expect((cloned.json() as { error: string }).error).toBe('PREPARATION_REQUIRED');
+    expect(ctx.container.symbolService.exists('900010')).toBe(false);
+
+    const preparation = ctx.container.backtestPreparationOrchestrator.start({
+      universeRule: request.universeRule,
+      period: request.period,
+      strategyId: request.strategyId,
+      parameters: request.parameters,
+    });
+    await waitFor(() => {
+      const status = ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status;
+      return status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED';
+    }, 5_000);
+    expect(ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status).toBe('COMPLETED');
+
+    // 최종 READY schedule을 확정할 때 등록한다. 이 경계가 preview/submit/clone 모두에
+    // 하나뿐이므로 가격 데이터 탭과 실행 pin이 갈라지지 않는다.
     expect(ctx.container.symbolService.exists('900010')).toBe(true);
     const coverage = ctx.container.candleCoverageService.getCoverage(['900010'])[0]!;
     expect(coverage.barCount).toBe(1);
 
-    // 그래도 900010 은 자본변동을 한 번도 수집하지 않았다 — D-025 캔들 관용과
-    // 달리 이 게이트는 종목 하나하나를 다 채워야 한다. 최종 제출은 400 이다.
-    expect(cloned.statusCode).toBe(400);
-    expect((cloned.json() as { error: string }).error).toContain('900010');
+    // 그래도 900010 은 자본변동을 한 번도 수집하지 않았다 — 기존 제출 게이트는
+    // preparation 완료 뒤에도 이 사실을 사용자에게 밝힌다.
+    const afterPreparation = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${job.id}/clone`,
+      cookies: { qp_session: cookie },
+    });
+    expect(afterPreparation.statusCode).toBe(400);
+    expect((afterPreparation.json() as { error: string }).error).toContain('900010');
 
     // 자본변동을 실제로 수집하면(방금 등록됐으므로 이제 FK 를 만족한다) 같은
     // 요청이 통과한다 — 게이트가 '수집 여부' 만 본다는 것을 보여준다.
@@ -628,18 +691,19 @@ describe('POST /backtests — 미등록 유니버스는 제출 시점에 거부�
     await ctx.close();
   });
 
-  it('종목이 봉을 갖고 있어도 하나도 등록돼 있지 않으면 400 이다', async () => {
+  it('종목이 봉을 갖고 있어도 준비 완료 전에는 409이고 등록·큐 변경이 없다', async () => {
     expect(ctx.container.symbolService.exists(UNREGISTERED_CODE)).toBe(false);
 
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
-      payload: { ...buildRequest(1), period: { from: date, to: date } },
+      payload: singleDayRequest(1, date),
     });
 
-    expect(created.statusCode).toBe(400);
-    expect((created.json() as { error: string }).error).toContain('등록');
+    expect(created.statusCode).toBe(409);
+    expect((created.json() as { error: string }).error).toBe('PREPARATION_REQUIRED');
+    expect(ctx.container.symbolService.exists(UNREGISTERED_CODE)).toBe(false);
     // 큐에 남지 않아야 한다 — 늦게 죽는 게 아니라 애초에 들어가지 않아야 한다.
     expect(ctx.container.jobQueue.countByStatus(['QUEUED'])).toBe(0);
   });
@@ -670,6 +734,7 @@ describe('POST /backtests — 자본변동 수집 게이트 (Task 6)', () => {
       payload: { username, password },
     });
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+    installPreparedSubmissionFixture(ctx);
 
     // 봉·등록·종목 마스터는 모두 갖춘다 — 자본변동 커버리지만 이 게이트가 보는 유일한 변수다.
     // 이름까지 등록해야 에러·경고 문구가 종목을 이름으로 밝히는지 확인할 수 있다.
@@ -707,7 +772,7 @@ describe('POST /backtests — 자본변동 수집 게이트 (Task 6)', () => {
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
-      payload: { ...buildRequest(1), period: { from: date, to: date } },
+      payload: singleDayRequest(1, date),
     });
 
   it('자본변동을 수집하지 않은 종목이 있으면 400 이다', async () => {
@@ -765,8 +830,7 @@ describe('POST /backtests — 자본변동 수집 게이트 (Task 6)', () => {
 
     // 검증을 우회해 큐에 직접 넣는다 — clone-draft 는 대기열 상태와 무관하게 동작한다.
     const job = ctx.container.jobQueue.enqueue({
-      ...buildRequest(1),
-      period: { from: date, to: date },
+      ...singleDayRequest(1, date),
     });
 
     const draft = await ctx.app.inject({
@@ -802,6 +866,7 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
       payload: { username, password },
     });
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+    installPreparedSubmissionFixture(ctx);
   });
 
   afterEach(async () => {

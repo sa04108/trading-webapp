@@ -20,6 +20,39 @@ const marketCapRule = (markets: readonly string[] = ['KOSPI']) => ({
   rebalanceInterval: { unit: 'MONTH', value: 1 },
 });
 
+async function waitForPreparation(ctx: TestApp, jobId: string): Promise<'COMPLETED' | 'FAILED' | 'CANCELLED'> {
+  const started = Date.now();
+  for (;;) {
+    const status = ctx.container.backtestPreparationOrchestrator.get(jobId)?.status;
+    if (status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED') return status;
+    if (Date.now() - started > 2_000) throw new Error('preparation timeout');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+function installPreparedPreviewFixture(ctx: TestApp): void {
+  const rawInject = ctx.app.inject.bind(ctx.app);
+  ctx.app.inject = (async (options: unknown) => {
+    const request = options as { method?: string; url?: string; payload?: Record<string, unknown> };
+    if (request.method === 'POST' && request.url === '/api/v1/backtests/universe-preview') {
+      const enriched = {
+        ...request,
+        payload: {
+          ...request.payload,
+          strategyId: request.payload?.strategyId ?? 'range-breakout',
+          parameters: request.payload?.parameters ?? {},
+        },
+      };
+      const first = await rawInject(enriched as never);
+      if (first.statusCode !== 202) return first;
+      const jobId = (first.json() as { job: { id: string } }).job.id;
+      if (await waitForPreparation(ctx, jobId) !== 'COMPLETED') return first;
+      return rawInject(enriched as never);
+    }
+    return rawInject(options as never);
+  }) as typeof ctx.app.inject;
+}
+
 /**
  * `POST /backtests/universe-preview` (Task 2, 스펙 2026-08-05) — 위저드가 제출 전에
  * 유니버스 규칙이 실제로 어떤 종목을 고르는지 미리 보는 라우트. `validateSubmission`
@@ -39,6 +72,10 @@ describe('POST /backtests/universe-preview', () => {
       payload: { username, password },
     });
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+
+    // 이 파일은 staged preview 내용·자동 등록 회귀를 검증한다. Task 6부터 첫 호출은
+    // durable job(202)을 만들므로 fixture가 그 전제만 완료한 뒤 같은 hash를 재조회한다.
+    installPreparedPreviewFixture(ctx);
   });
 
   afterEach(async () => {
@@ -103,7 +140,7 @@ describe('POST /backtests/universe-preview', () => {
     });
   });
 
-  it('PER 후보 재무가 준비되지 않으면 409와 구조화된 needs만 반환한다', async () => {
+  it('PER 후보 재무가 필요하고 DART key가 없으면 그 요청만 503이다', async () => {
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
       { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
     ]);
@@ -132,16 +169,8 @@ describe('POST /backtests/universe-preview', () => {
       },
     });
 
-    expect(res.statusCode).toBe(409);
-    expect(res.json()).toEqual({
-      needs: {
-        factSymbols: ['005930'],
-        actionSymbols: [],
-        priceSymbols: [],
-        selectionMetricDates: [],
-        priceRange: null,
-      },
-    });
+    expect(res.statusCode).toBe(503);
+    expect((res.json() as { error: string }).error).toContain('DART');
   });
 
   it('정상 요청은 schedule·unionSymbols·scheduleHash·missingCandleSymbols 를 담아 200 이다', async () => {
@@ -203,7 +232,7 @@ describe('POST /backtests/universe-preview', () => {
     expect(body.missingCandleSymbols).toEqual([]);
   });
 
-  it('종목 마스터가 커버하지 않는 날짜는 409 selectionMetricDates 필요량으로 응답한다', async () => {
+  it('종목 마스터가 커버하지 않는 날짜는 durable preparation job을 시작한다', async () => {
     // 마스터를 전혀 채우지 않는다 — 어떤 날짜도 커버되지 않는다
     const res = await ctx.app.inject({
       method: 'POST',
@@ -215,16 +244,8 @@ describe('POST /backtests/universe-preview', () => {
       },
     });
 
-    expect(res.statusCode).toBe(409);
-    expect(res.json()).toEqual({
-      needs: {
-        factSymbols: [],
-        actionSymbols: [],
-        priceSymbols: [],
-        selectionMetricDates: ['2026-01-05'],
-        priceRange: null,
-      },
-    });
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toMatchObject({ job: { status: 'QUEUED' } });
   });
 
   /**
@@ -386,6 +407,7 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
       payload: { username, password },
     });
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+    installPreparedPreviewFixture(ctx);
   });
 
   afterEach(async () => {
@@ -568,6 +590,7 @@ describe('POST /backtests/universe-preview — staged READY 재조회 방지', (
       payload: { username, password },
     });
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+    installPreparedPreviewFixture(ctx);
   });
 
   afterEach(async () => {
@@ -661,7 +684,7 @@ describe('POST /backtests/universe-preview — SymbolMasterNotCoveredError 매�
     await fake.close();
   });
 
-  it('휴장일만 수집돼 거래일 anchor가 없으면 미리보기는 409 needs로 걸러진다', async () => {
+  it('휴장일만 수집돼 거래일 anchor가 없으면 durable preparation job을 시작한다', async () => {
     const date = '2026-01-05';
     // KOSPI·KOSDAQ 양쪽 다 fake 서버 기본값(빈 응답)이라 ingestDate 는 이 날짜를
     // 휴장으로 처리한다 — coverage 는 생기지만 거래일 기록은 생기지 않는다.
@@ -676,10 +699,12 @@ describe('POST /backtests/universe-preview — SymbolMasterNotCoveredError 매�
       payload: {
         universeRule: marketCapRule(),
         period: { from: date, to: date },
+        strategyId: 'range-breakout',
+        parameters: {},
       },
     });
 
-    expect(res.statusCode).toBe(409);
-    expect(res.json()).toMatchObject({ needs: { selectionMetricDates: [date] } });
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toMatchObject({ job: { status: 'QUEUED' } });
   });
 });

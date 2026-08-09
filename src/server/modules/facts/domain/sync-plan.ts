@@ -91,6 +91,8 @@ export interface PlanFactSyncArgs {
   readonly currentYear: number;
   readonly coveredBySymbol: ReadonlyMap<string, readonly number[]>;
   readonly mode: FactSyncMode;
+  /** INCREMENTAL에서 이미 커버한 현재 연도도 다시 받을지. 기본 true. */
+  readonly refreshCurrentYear?: boolean;
 }
 
 export function planFactSync(args: PlanFactSyncArgs): FactSyncPlan {
@@ -104,7 +106,14 @@ export function planFactSync(args: PlanFactSyncArgs): FactSyncPlan {
   // 같은 종목이 두 번 들어와도 한 번만 계획한다 — 호출 수가 부풀면 예상 시간도 부푼다
   for (const symbol of new Set(args.symbols)) {
     const years =
-      args.mode === 'FULL' ? target : incrementalYears(target, args.coveredBySymbol.get(symbol) ?? [], args.currentYear);
+      args.mode === 'FULL'
+        ? target
+        : incrementalYears(
+            target,
+            args.coveredBySymbol.get(symbol) ?? [],
+            args.currentYear,
+            args.refreshCurrentYear ?? true,
+          );
     yearsBySymbol.set(symbol, years);
 
     // 수집할 것이 없으면 앵커도 읽지 않는다 — 0건 종목에 호출을 쓰지 않는다
@@ -193,7 +202,8 @@ function incrementalYears(
   target: readonly number[],
   covered: readonly number[],
   currentYear: number,
+  refreshCurrentYear: boolean,
 ): number[] {
   const coveredSet = new Set(covered);
-  return target.filter((year) => year === currentYear || !coveredSet.has(year));
+  return target.filter((year) => (refreshCurrentYear && year === currentYear) || !coveredSet.has(year));
 }

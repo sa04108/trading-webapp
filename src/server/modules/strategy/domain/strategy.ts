@@ -93,5 +93,12 @@ export interface TradingStrategy<TParameters, TState> {
   onForcedExit?(symbol: string, state: TState): void;
 }
 
-/** 레지스트리 저장용 — 파라미터·상태 타입을 지운 형태 */
-export type AnyTradingStrategy = TradingStrategy<unknown, unknown>;
+/**
+ * 레지스트리 저장용 — 파라미터·상태 타입을 지운 형태.
+ *
+ * `dataRequirements.priceWarmupBars`는 구체 파라미터를 입력으로 받으므로 `unknown`은
+ * 함수 매개변수 반공변성상 개별 전략을 담을 수 없다. 레지스트리 경계에서만 타입을
+ * 지우고, 실제 호출 전에는 각 전략의 parameterSchema로 검증한다.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type AnyTradingStrategy = TradingStrategy<any, any>;

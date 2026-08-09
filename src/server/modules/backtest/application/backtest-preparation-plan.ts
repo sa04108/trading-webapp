@@ -68,7 +68,7 @@ export function buildBacktestPreparationPlan(input: {
   const actionTo = priceRange?.to ?? request.period.to;
 
   return {
-    requestHash: requestDataHash(request, strategy),
+    requestHash: backtestPreparationRequestHash(request, strategy),
     rebalanceDates: computeRebalanceDates(request.period, request.universeRule.rebalanceInterval),
     financial: {
       symbols: sortedUnique(financialSymbols),
@@ -87,7 +87,10 @@ export function buildBacktestPreparationPlan(input: {
   };
 }
 
-function requestDataHash(request: BacktestRequest, strategy: AnyTradingStrategy): string {
+export function backtestPreparationRequestHash(
+  request: Pick<BacktestRequest, 'period' | 'universeRule' | 'strategyId' | 'parameters'>,
+  strategy: Pick<AnyTradingStrategy, 'version'>,
+): string {
   const canonicalInput = {
     period: request.period,
     universeRule: request.universeRule,

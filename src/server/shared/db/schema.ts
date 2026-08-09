@@ -260,41 +260,30 @@ export const dataSyncJobs = sqliteTable(
 );
 
 
-/**
- * 자본변동 일괄 수집 잡 (Task 7, 설계 2026-08-08-corporate-action-continuity).
- *
- * `dataSyncJobs`(구 data_import_jobs)를 재사용하지 않는다.
- * 그 테이블은 CSV·증권사 봉·재무 단계를 다 담느라 컬럼이 12개고 대부분 죽어 있다.
- * 자본변동 하나만 담는 좁은 테이블을 새로 둔다.
- *
- * 컬럼 관례는 `backtestJobs` 를 따른다: 상태는 문자열, 시각은 `createdAtMs`·
- * `completedAtMs` 다. 200종목 수집은 수 분이 걸려 SSE 로 진행률을 흘려야 하므로
- * `doneSymbols`·`totalSymbols` 를 둔다.
- */
-export const corporateActionSyncJobs = sqliteTable(
-  'corporate_action_sync_jobs',
+/** 백테스트 유니버스·재무·가격을 온디맨드로 준비하는 영속 작업. */
+export const backtestPreparationJobs = sqliteTable(
+  'backtest_preparation_jobs',
   {
     id: text('id').primaryKey(),
-    // QUEUED | RUNNING | COMPLETED | FAILED | CANCELLED
+    requestHash: text('request_hash').notNull(),
+    requestJson: text('request_json').notNull(),
     status: text('status').notNull(),
-    /** 수집 대상 종목 코드 (string[] JSON) */
-    symbolsJson: text('symbols_json').notNull(),
-    fromYear: integer('from_year').notNull(),
-    toYear: integer('to_year').notNull(),
-    /** 완료 종목 수 — SSE 진행률의 분자 */
+    phase: text('phase').notNull(),
     doneSymbols: integer('done_symbols').notNull().default(0),
-    /** 전체 종목 수(중복 제거 후) — SSE 진행률의 분모 */
-    totalSymbols: integer('total_symbols').notNull(),
-    /** 저장된 팩트 수 — 완료 후에만 채워진다 */
-    savedFacts: integer('saved_facts'),
-    /** gap 건수 — 완료 후에만 채워진다 */
-    gapCount: integer('gap_count'),
-    /** 실패·취소 사유. FactSyncService.runSync 의 failureMessage 를 그대로 담는다 */
+    totalSymbols: integer('total_symbols').notNull().default(0),
+    savedFacts: integer('saved_facts').notNull().default(0),
+    gapCount: integer('gap_count').notNull().default(0),
+    dartQuotaDateKst: text('dart_quota_date_kst'),
+    dartCallsUsed: integer('dart_calls_used').notNull().default(0),
+    nextResumeAtMs: integer('next_resume_at_ms'),
+    previewJson: text('preview_json'),
     error: text('error'),
+    cancelRequested: integer('cancel_requested', { mode: 'boolean' }).notNull().default(false),
     createdAtMs: integer('created_at_ms').notNull(),
+    updatedAtMs: integer('updated_at_ms').notNull(),
     completedAtMs: integer('completed_at_ms'),
   },
-  (table) => [index('idx_corporate_action_sync_jobs_status').on(table.status)],
+  (table) => [index('preparation_jobs_hash_idx').on(table.requestHash, table.status)],
 );
 
 // ── 백테스트 (스펙 §10, §12) ──────────────────────────────────────

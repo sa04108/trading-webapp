@@ -617,6 +617,30 @@ describe('FactSyncService — 증분과 취소', () => {
     expect(source.requests[0]?.shareYears).toEqual([2021, 2022]);
   });
 
+  it('durable resume은 이미 커버한 현재연도 symbol-year도 다시 요청하지 않는다', async () => {
+    const source = recordingSource();
+    const service = new FactSyncService(
+      source,
+      fakeRepository(),
+      LOGGER,
+      fakeVersions(),
+      { now: () => Date.UTC(2022, 5, 1) },
+      fakeCoverage(new Map([['005930', [2022]]])),
+      fakeActionCoverage(),
+    );
+
+    await service.sync({
+      symbols: ['005930'],
+      fromYear: 2022,
+      toYear: 2022,
+      consolidated: true,
+      mode: 'INCREMENTAL',
+      refreshCurrentYear: false,
+    });
+
+    expect(source.requests).toEqual([]);
+  });
+
   it('FULL 은 수집 이력을 무시한다', async () => {
     const source = recordingSource();
     const service = new FactSyncService(

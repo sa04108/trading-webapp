@@ -43,7 +43,6 @@ import {
 } from '../modules/facts/application/corporate-action-coverage.js';
 import { SqliteFactCoverageStore } from '../modules/facts/application/fact-coverage-store.js';
 import { FactSyncService } from '../modules/facts/application/fact-sync-service.js';
-import { CorporateActionSyncOrchestrator } from '../modules/facts/application/corporate-action-sync-orchestrator.js';
 import { createDartFactSource } from '../modules/facts/infrastructure/dart/dart-fact-source.js';
 import { ParquetFactRepository } from '../modules/facts/infrastructure/parquet-fact-repository.js';
 import { createKrxHistoricalUniverseSource } from '../modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
@@ -52,6 +51,7 @@ import { SymbolMasterBackfill } from '../modules/market-data/application/symbol-
 import { SymbolMasterScheduler } from '../modules/market-data/application/symbol-master-scheduler.js';
 import { SelectionMetricRepository } from '../modules/market-data/application/selection-metric-repository.js';
 import { UniverseRuleResolver } from '../modules/backtest/application/universe-rule-resolver.js';
+import { BacktestPreparationOrchestrator } from '../modules/backtest/application/backtest-preparation-orchestrator.js';
 
 export interface SystemStatusProviders {
   queueLength: () => number;
@@ -91,8 +91,7 @@ export interface Container {
   readonly universeRuleResolver: UniverseRuleResolver;
   /** 제출 게이트(Task 6)가 자본변동 수집 여부를 대조할 때 쓴다 */
   readonly actionCoverageStore: CorporateActionCoverageStore;
-  /** 자본변동 일괄 수집 잡·진행률(Task 7) */
-  readonly corporateActionSyncOrchestrator: CorporateActionSyncOrchestrator;
+  readonly backtestPreparationOrchestrator: BacktestPreparationOrchestrator;
   close(): void;
 }
 
@@ -213,15 +212,6 @@ export function createContainer(config: AppConfig): Container {
     factCoverageStore,
     actionCoverageStore,
   );
-  // 자본변동 일괄 수집 잡(Task 7) — factSyncService 를 그대로 재사용해 CLI·웹이
-  // 같은 코드 경로(runSync)를 거치게 한다.
-  const corporateActionSyncOrchestrator = new CorporateActionSyncOrchestrator(
-    database,
-    factSyncService,
-    clock,
-    logger,
-  );
-
   // 증권사 선택은 조립부 전용 지식 (§2.4) — 애플리케이션은 StockInfoSource 만 안다.
   // 자격 증명 미설정이면 어댑터가 포트 에러를 던지는 비활성 소스가 된다.
   const stockInfoSource = createTossStockInfoSource(
@@ -285,6 +275,17 @@ export function createContainer(config: AppConfig): Container {
 
   // 알림 리스너와 라우트가 같은 인스턴스를 봐야 한다 — 두 개를 만들면 등록 목록이 갈라진다
   const strategyRegistry = new StrategyRegistry();
+  const backtestPreparationOrchestrator = new BacktestPreparationOrchestrator({
+    database,
+    resolver: universeRuleResolver,
+    factSync: factSyncService,
+    symbolMaster: symbolMasterService,
+    strategies: strategyRegistry,
+    symbolService,
+    candleCoverage: candleCoverageService,
+    clock,
+    logger,
+  });
   const resultsService = new ResultsService(database.db);
 
   const jobQueue = new JobQueue(database, clock);
@@ -337,13 +338,11 @@ export function createContainer(config: AppConfig): Container {
     symbolMasterScheduler,
     universeRuleResolver,
     actionCoverageStore,
-    corporateActionSyncOrchestrator,
+    backtestPreparationOrchestrator,
     close: () => {
       clearInterval(pruneTimer);
       jobOrchestrator.stop();
-      // 도는 자본변동 수집에 취소 플래그를 세운 뒤 DB 를 닫는다.
-      // 세우지 않으면 수집이 닫힌 DB 에 계속 쓰려 들고 그 실패가 밖으로 샌다.
-      corporateActionSyncOrchestrator.stop();
+      backtestPreparationOrchestrator.stop();
       duckdb.close();
       database.close();
     },

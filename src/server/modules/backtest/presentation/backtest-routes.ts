@@ -1,6 +1,5 @@
 import os from 'node:os';
 import fs from 'node:fs';
-import { createHash } from 'node:crypto';
 import type { FastifyBaseLogger, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
@@ -8,7 +7,6 @@ import {
   periodToTsRange,
   type BacktestRequest,
 } from '../../../../shared/schemas/backtest-request.js';
-import { universeRuleSchema } from '../../../../shared/schemas/universe-rule.js';
 import type { ProvenancePin } from '../../../../shared/schemas/provenance-pin.js';
 import {
   DEFAULT_TRADE_SORT_DIRECTION,
@@ -46,6 +44,11 @@ import {
   type ResolvedUniverse,
   type UniverseRuleResolver,
 } from '../application/universe-rule-resolver.js';
+import type {
+  BacktestPreparationOrchestrator,
+  BacktestUniversePreview,
+  PreparationInput,
+} from '../application/backtest-preparation-orchestrator.js';
 
 type PreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -59,6 +62,7 @@ export interface BacktestRouteDeps {
   readonly candleCoverage: CandleCoverageService;
   /** 유니버스 규칙 → 리밸런스 날짜별 멤버십 일정 (스펙 2026-08-05) */
   readonly universeRuleResolver: UniverseRuleResolver;
+  readonly preparation: BacktestPreparationOrchestrator;
   readonly audit: AuditLogService;
   readonly factRepository: FactRepository;
   /** 자본변동 수집 커버리지 — 제출 게이트가 대조한다(Task 6) */
@@ -118,6 +122,31 @@ function serializeJob(job: BacktestJobRow) {
     createdAtMs: job.createdAtMs,
     startedAtMs: job.startedAtMs,
     completedAtMs: job.completedAtMs,
+  };
+}
+
+function preparationInputOf(body: BacktestRequest): PreparationInput {
+  return {
+    universeRule: body.universeRule,
+    period: body.period,
+    strategyId: body.strategyId,
+    parameters: body.parameters,
+  };
+}
+
+/** 준비 job의 staged schedule을 기존 worker가 소비하는 pin 모양으로 좁힌다. */
+function preparedPreviewToResolved(preview: BacktestUniversePreview): ResolvedUniverse {
+  return {
+    schedule: preview.schedule.map((entry) => ({
+      rebalanceDate: entry.rebalanceDate,
+      effectiveTradingDate: entry.effectiveDate,
+      symbols: entry.members.map((member) => member.symbol),
+      excludedNonTradingCount: entry.excludedNonTradingCount,
+    })),
+    unionSymbols: [...preview.unionSymbols],
+    unionEntries: new Map(),
+    scheduleHash: preview.scheduleHash,
+    uncoveredDates: [...preview.uncoveredDates],
   };
 }
 
@@ -197,6 +226,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     symbolService,
     candleCoverage,
     universeRuleResolver,
+    preparation,
     audit,
     factRepository,
     corporateActionCoverage,
@@ -462,7 +492,10 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    * 순서는 uncovered 리밸런스 날짜(422) → 캔들 존재 검증(400) → 자본변동
    * 수집 검증(400) 이다(①②③, Task 6 이 ③을 더했다).
    */
-  const validateSubmission = async (body: BacktestRequest): Promise<ValidationResult> => {
+  const validateSubmission = async (
+    body: BacktestRequest,
+    preparedPreview?: BacktestUniversePreview,
+  ): Promise<ValidationResult> => {
     const errors: string[] = [];
 
     // 전략 — 파라미터 검증의 전제다
@@ -498,7 +531,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     // ① 유니버스 규칙 → 리밸런스 날짜별 멤버십 일정. 커버 밖 날짜가 있으면 캔들
     // 검증으로 넘어가지 않고 바로 422 로 알린다 — 종목 구성 자체를 모르는 날짜의
     // 캔들을 따질 수 없다.
-    const resolved = await resolveScheduleForRequest(body);
+    const resolved = preparedPreview
+      ? preparedPreviewToResolved(preparedPreview)
+      : await resolveScheduleForRequest(body);
     if (resolved.uncoveredDates.length > 0) {
       return {
         ok: false,
@@ -646,133 +681,6 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     slippageProfiles: listSlippageProfiles(),
   }));
 
-  const universePreviewRequestSchema = z.object({
-    universeRule: universeRuleSchema,
-    period: z.object({
-      from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-      to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    }),
-    rebalanceMonths: z.number().int().positive().default(1),
-  });
-
-  /**
-   * unionSymbols 중 이 화면이 아직 실행할 수 없는 종목이다. 종목 마스터에는
-   * 있지만 로컬 `symbols` 테이블에 등록되지 않았거나, 등록은 됐어도 일봉을
-   * 하나도 수집하지 않은 경우를 가리킨다. 봉 주기가 '1d' 하나뿐이라(Task 4)
-   * 예전처럼 슬라이스를 가려 볼 필요가 없다.
-   */
-  const missingCandleSymbolsOf = (codes: readonly string[]): string[] => {
-    const hasBars = new Set(
-      candleCoverage
-        .getCoverage(codes)
-        .filter((row) => row.barCount > 0)
-        .map((row) => row.code),
-    );
-    return codes.filter((code) => !symbolService.exists(code) || !hasBars.has(code));
-  };
-
-  /**
-   * 유니버스 미리보기가 만든 unionSymbols 를 `symbols` 에 자동 등록한다(브리프 §5,
-   * 스펙 2026-08-06 Task 4) — 이름·시장·표준코드는 종목 마스터(`resolved.unionEntries`)
-   * 에서 가져온다. 증권사 조회(symbolInfoService)는 상장폐지 종목의 이름을 주지
-   * 않아 그 출처로는 등록할 수 없다.
-   *
-   * 이 등록은 표시만이 아니라 제출 검증의 전제이기도 하다(리뷰 finding, 2026-08-08
-   * — Task 6 이 이 자리에 반대로 적어 뒀었다).
-   * `resolveConsumedUniverse` 가 쓰는 `registeredCoverage` 는 미등록 종목의
-   * 커버리지를 0으로 지운다(위 registeredCoverage 주석 참고).
-   * 유니버스 전체가 미등록이면 그 자리에서 400 으로 막힌다.
-   *
-   * 일부만 미등록이면 제출은 통과한다 — 그래도 그 종목은 `missingCandleSymbolsOf`
-   * 가 계속 "누락" 으로 보고하고 종목 화면에도 나타나지 않는다. 위저드 흐름을
-   * 벗어나 API 를 직접 호출하는 자동화 클라이언트는 이 사실을 알아야 한다.
-   *
-   * KRX 응답 마켓(KOSPI/KOSDAQ)은 항상 'KR' 로 등록한다 — `symbols.market` 은
-   * 세션 축(KR/US) 이고, `krxDailyBars` 는 애초에 국내 종목만 갖는다.
-   *
-   * 이미 등록된 코드는 건너뛴다 — 재등록을 실패로 다루지 않기 위해서고, 동시에
-   * standardCode 를 덮어쓰지 않기 위해서다(addSymbol 주석 참고).
-   *
-   * 위저드가 제출 전에 거치는 미리보기와, 상세 화면의 원클릭 복제(`POST
-   * /backtests/:id/clone`) 둘 다 이 등록을 거친다 — 아래 `ensureUniverseRegistered`
-   * 로 묶어 호출한다(리뷰 finding, 2026-08-06).
-   * 복제는 미리보기 화면을 거치지 않고 바로 제출한다.
-   * 미리보기에서 한 번도 등록되지 않은 종목이 있을 수 있다(예: 리밸런스 시점
-   * 시총이 바뀌어 새로 topN 에 든 종목). 등록해 두지 않으면 위 문단의
-   * "일부 미등록" 경로를 그대로 밟는다.
-   * `clone-draft`(GET)에는 넣지 않는다 — "대기열에 넣지 않고 아무것도 확정하지
-   * 않는다"는 읽기 전용 계약이라 등록도 하지 않는다.
-   */
-  const registerUniverseSymbols = (
-    resolved: Pick<ResolvedUniverse, 'unionSymbols' | 'unionEntries'>,
-  ): void => {
-    for (const code of resolved.unionSymbols) {
-      if (symbolService.exists(code)) continue;
-      const entry = resolved.unionEntries.get(code);
-      if (!entry) continue; // 이론상 항상 있다 — unionSymbols 는 unionEntries 와 같은 루프에서 채워진다
-      symbolService.addSymbol(code, 'KR', entry.name, entry.standardCode);
-    }
-  };
-
-  /**
-   * `registerUniverseSymbols` 호출을 한 곳에 묶는다. 두 제출 경로가 같은 등록
-   * 전제를 공유하는데 복붙하면 한쪽만 고치고 잊기 쉽다(리뷰 finding, 2026-08-06).
-   *
-   * 커버리지 캐시 갱신은 더 없다. `CandleCoverageService` 는 캐시 없이
-   * `krx_daily_bars` 를 직접 집계해 갱신할 사본이 없다(Task 6).
-   *
-   * `POST /backtests`(신규 제출)에는 붙이지 않는다 — 위저드는 제출 전에 항상
-   * 미리보기를 거치므로 그때 이미 등록이 끝나 있다.
-   */
-  const ensureUniverseRegistered = (
-    resolved: Pick<ResolvedUniverse, 'unionSymbols' | 'unionEntries'>,
-  ): void => {
-    registerUniverseSymbols(resolved);
-  };
-
-  app.post('/backtests/universe-preview', { preHandler: requireAuth }, async (request, reply) => {
-    const parsed = universePreviewRequestSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send({
-        error: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
-      });
-    }
-    const { universeRule, period } = parsed.data;
-    if (period.from > period.to) {
-      return reply.code(400).send({ error: '기간이 올바르지 않습니다 (from > to)' });
-    }
-
-    try {
-      const attempt = await universeRuleResolver.resolveOrDescribeNeeds(universeRule, period);
-      if (attempt.kind === 'NEEDS_DATA') {
-        return reply.code(409).send({ needs: attempt.needs });
-      }
-      const unionSymbols = [...new Set(
-        attempt.schedule.flatMap((entry) => entry.members.map((member) => member.symbol)),
-      )].sort();
-      ensureUniverseRegistered({ unionSymbols, unionEntries: attempt.unionEntries });
-      const scheduleHash = createHash('sha256')
-        .update(JSON.stringify(attempt.schedule))
-        .digest('hex');
-      return {
-        schedule: attempt.schedule,
-        diagnostics: attempt.diagnostics,
-        stages: universeRule.stages,
-        unionSymbols,
-        scheduleHash,
-        uncoveredDates: [],
-        // 리밸런스 날짜만 보는 uncoveredDates 와 달리 period 전체의 빈틈을 본다 —
-        // 위저드가 "기간 전체 동기화" 버튼을 띄울지 이 값으로 판정한다(운영 버그 fix).
-        periodCovered: universeRuleResolver.isPeriodCovered(period),
-        missingCandleSymbols: missingCandleSymbolsOf(unionSymbols),
-      };
-    } catch (error) {
-      if (sendIfKrxError(reply, error)) return reply;
-      if (sendIfNotCovered(reply, error)) return reply;
-      throw error;
-    }
-  });
-
   app.post('/backtests', { preHandler: requireAuth }, async (request, reply) => {
     const parsed = backtestRequestSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -782,9 +690,17 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     }
     const body = parsed.data;
 
+    const prepared = await preparation.getReadyPreview(preparationInputOf(body));
+    if (!prepared) {
+      return reply.code(409).send({
+        error: 'PREPARATION_REQUIRED',
+        message: '동일한 조건의 데이터 준비를 먼저 완료하세요.',
+      });
+    }
+
     let validated: Awaited<ReturnType<typeof validateSubmission>>;
     try {
-      validated = await validateSubmission(body);
+      validated = await validateSubmission(body, prepared);
     } catch (error) {
       if (sendIfKrxError(reply, error)) return reply;
       if (sendIfNotCovered(reply, error)) return reply;
@@ -890,16 +806,18 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     );
     if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
     const cloneRequest = rebased.request;
+    const prepared = await preparation.getReadyPreview(preparationInputOf(cloneRequest));
+    if (!prepared) {
+      return reply.code(409).send({
+        error: 'PREPARATION_REQUIRED',
+        message: '동일한 조건의 데이터 준비를 먼저 완료하세요.',
+      });
+    }
     // 재기준 후에도 새 제출이다 — POST 와 동일한 검증 관문을 거치고 버전을 다시 고정한다.
     let validated: Awaited<ReturnType<typeof validateSubmission>>;
     try {
-      // clone 은 위저드의 미리보기 화면을 거치지 않고 상세 화면에서 바로 제출한다.
-      // 여기서 unionSymbols 를 직접 등록해야 한다(ensureUniverseRegistered 주석 참고).
-      // 유니버스 전체가 미등록이면 이 등록 없이는 제출이 400 으로 막힌다
-      // (resolveConsumedUniverse). 일부만 새로 편입된 종목은 등록이 없어도 제출은
-      // 통과하지만 종목 화면에 나타나지 않는 불일치가 남는다.
-      ensureUniverseRegistered(await resolveScheduleForRequest(cloneRequest));
-      validated = await validateSubmission(cloneRequest);
+      // 완료된 preparation이 같은 staged schedule을 이미 등록·고정했다.
+      validated = await validateSubmission(cloneRequest, prepared);
     } catch (error) {
       if (sendIfKrxError(reply, error)) return reply;
       if (sendIfNotCovered(reply, error)) return reply;

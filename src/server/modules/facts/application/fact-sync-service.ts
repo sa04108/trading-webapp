@@ -33,6 +33,12 @@ export interface FactSyncRequest {
    * 현재 연도 (웹). 웹이 매번 전 구간을 다시 받으면 45분짜리 버튼이 된다.
    */
   readonly mode: FactSyncMode;
+  /**
+   * INCREMENTAL의 기본값은 현재 연도 재수집이다. 영속 준비 잡의 quota/crash 재개는
+   * 이미 닫힌 symbol-year를 반복하면 안 되므로 false를 명시해 coverage를 그대로
+   * 복구 체크포인트로 쓴다. FULL에는 영향이 없다.
+   */
+  readonly refreshCurrentYear?: boolean;
 }
 
 /** 종목 하나가 끝날 때마다 호출된다 — 45분짜리 실행이 조용하지 않게 한다 */
@@ -255,6 +261,7 @@ export class FactSyncService {
       currentYear: new Date(this.clock.now()).getUTCFullYear(),
       coveredBySymbol: strategy.getCoveredYears(symbols),
       mode: request.mode,
+      refreshCurrentYear: request.refreshCurrentYear,
     });
 
     for (const [index, symbol] of symbols.entries()) {

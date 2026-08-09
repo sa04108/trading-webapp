@@ -319,6 +319,7 @@ function makePipelineResolver(options: {
   candles?: readonly Candle[];
   actionCoverage?: ReadonlyMap<string, readonly number[]>;
   actionGaps?: ReadonlyMap<string, readonly number[]>;
+  priceRangeCovered?: boolean;
   metricReads?: string[][];
 } = {}): UniverseRuleResolver {
   const metrics = options.metrics ?? pipelineMetrics;
@@ -337,6 +338,7 @@ function makePipelineResolver(options: {
   return new UniverseRuleResolver({
     symbolMaster: {
       isCovered: () => true,
+      isRangeCovered: () => options.priceRangeCovered ?? false,
       effectiveTradingDateWithinCoverage: () => PIPELINE_DATE,
       getUniverseAsOf: () => new Map(PIPELINE_ENTRIES.map((entry) => [entry.standardCode, entry])),
       getMarketCapsAt: async () => new Map(metrics.flatMap((row) =>
@@ -623,5 +625,44 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     expect(result.needs.actionSymbols).toEqual([]);
     expect(result.needs.priceSymbols).toEqual(['000002', '000003']);
     expect(result.needs.priceRange).not.toBeNull();
+  });
+
+  it('급하락 보수 범위를 아직 모두 조회하지 않았으면 부족한 봉을 계속 가격 대상으로 남긴다', async () => {
+    const resolver = makePipelineResolver({ priceRangeCovered: false });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'DECLINE', limit: 1, lookbackTradingDays: 3 }]),
+      period,
+    );
+
+    expect(result.kind).toBe('NEEDS_DATA');
+    if (result.kind !== 'NEEDS_DATA') throw new Error('불완전 coverage는 가격 수집이 필요해야 합니다.');
+    expect(result.needs.priceSymbols).toEqual(['000001', '000002', '000003']);
+  });
+
+  it('급하락 보수 범위를 모두 조회했는데 N봉 미만이면 결측 후보로 진단하고 재요청하지 않는다', async () => {
+    const complete = (offset: number): Candle => ({
+      symbol: '000001', market: 'KR', timeframe: '1d', tsMs: PIPELINE_TS - offset * 86_400_000,
+      open: 100, high: 100, low: 100, close: 100, volume: 1,
+    });
+    const resolver = makePipelineResolver({
+      candles: [complete(2), complete(1), complete(0)],
+      priceRangeCovered: true,
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'DECLINE', limit: 3, lookbackTradingDays: 3 }]),
+      period,
+    );
+
+    expect(result.kind).toBe('READY');
+    if (result.kind !== 'READY') throw new Error('완전 시도된 짧은 이력은 terminal READY여야 합니다.');
+    expect(result.schedule[0]?.members.map((member) => member.symbol)).toEqual(['000001']);
+    expect(result.diagnostics[0]?.stages[0]).toMatchObject({
+      inputCount: 3,
+      eligibleCount: 1,
+      selectedCount: 1,
+      excludedMissingCount: 2,
+    });
   });
 });
