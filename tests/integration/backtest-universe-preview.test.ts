@@ -691,7 +691,13 @@ describe('POST /backtests/universe-preview — SymbolMasterNotCoveredError 매�
 
   beforeEach(async () => {
     fake = await startKrxFakeServer();
-    ctx = await createTestApp({ KRX_BASE_URL: fake.baseUrl, KRX_API_KEY: 'test-krx-key' });
+    ctx = await createTestApp({
+      KRX_BASE_URL: fake.baseUrl,
+      KRX_API_KEY: 'test-krx-key',
+      // 이 describe는 master anchor 해소 경로가 대상이다. 후보 scope가
+      // 미상인 range-breakout의 정상 DART gate가 그 경로를 가리지 않게 한다.
+      DART_API_KEY: 'test-dart-key',
+    });
     const { username, password } = await createTestAdmin(ctx.container);
     const login = await ctx.app.inject({
       method: 'POST',

@@ -94,8 +94,15 @@ export type UniverseResolveAttempt =
   | {
       readonly kind: 'NEEDS_DATA';
       readonly needs: UniverseDataNeed;
-      /** 후보 fact/action sync 전에 symbols FK를 실제 master 정보로 등록할 때 쓴다. */
-      readonly unionEntries?: ReadonlyMap<string, SymbolMasterEntry>;
+      /** false면 아직 수집하지 않은 master 날짜가 있어 unionEntries가 후보 전체를 덮지 않는다. */
+      readonly candidateScopeKnown: boolean;
+      /**
+       * 현재까지의 stage를 통과했거나, 미준비 stage에서 아직 줄일 수 없는
+       * 알려진 master 후보. sync 전 symbols FK 등록과 future final-union 상한의
+       * DART 필요 계획에 모두 쓴다. `candidateScopeKnown=true`인 빈 Map만
+       * 선정 가능한 후보가 없음을 뜻한다.
+       */
+      readonly unionEntries: ReadonlyMap<string, SymbolMasterEntry>;
     };
 
 /**
@@ -240,6 +247,7 @@ export class UniverseRuleResolver {
     const schedule: UniverseScheduleEntry[] = [];
     const diagnostics: RebalanceDiagnostic[] = [];
     const unionEntries = new Map<string, SymbolMasterEntry>();
+    let candidateScopeKnown = true;
 
     const widenPriceRange = (from: string, to: string): void => {
       priceRange = priceRange === null
@@ -253,6 +261,7 @@ export class UniverseRuleResolver {
     for (const rebalanceDate of computeSharedRebalanceDates(period, rule.rebalanceInterval)) {
       const effectiveDate = this.deps.symbolMaster.effectiveTradingDateWithinCoverage(rebalanceDate);
       if (!this.deps.symbolMaster.isCovered(rebalanceDate) || effectiveDate === undefined) {
+        candidateScopeKnown = false;
         selectionMetricDates.add(rebalanceDate);
         continue;
       }
@@ -432,6 +441,7 @@ export class UniverseRuleResolver {
     ) {
       return {
         kind: 'NEEDS_DATA',
+        candidateScopeKnown,
         unionEntries,
         needs: {
           factSymbols: [...factSymbols].sort(),

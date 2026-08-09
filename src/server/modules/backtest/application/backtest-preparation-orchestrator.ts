@@ -98,6 +98,9 @@ const EMPTY_NEEDS: UniverseDataNeed = {
   priceRange: null,
 };
 
+/** needsDart 계획에만 쓰고 저장·sync하지 않는 미상 future candidate probe. */
+const UNKNOWN_CANDIDATE_PROBE = '__UNKNOWN_FUTURE_UNIVERSE_CANDIDATE__';
+
 export interface BacktestPreparationOrchestratorDeps {
   readonly database: DatabaseHandle;
   readonly resolver: Pick<UniverseRuleResolver, 'resolveOrDescribeNeeds' | 'isPeriodCovered'>;
@@ -227,9 +230,18 @@ export class BacktestPreparationOrchestrator {
     const strategy = this.requireStrategy(input);
     const attempt = await this.deps.resolver.resolveOrDescribeNeeds(input.universeRule, input.period);
     if (attempt.kind === 'NEEDS_DATA') {
+      const candidateSymbols = [...attempt.unionEntries.keys()];
+      // master 날짜 자체가 미수집이면 빈 Map은 빈 유니버스라는 뜻이 아니다.
+      // 하나의 가상 후보를 planner에 넣어 rule/strategy metadata가 future fact/action을
+      // 요구하는지만 본다. price-only면 plan에 DART symbol이 생기지 않는다.
+      if (!attempt.candidateScopeKnown) candidateSymbols.push(UNKNOWN_CANDIDATE_PROBE);
       return this.planNeedsDart(buildBacktestPreparationPlan({
         request: preparationRequest(input),
         resolutionNeeds: attempt.needs,
+        // 시장 데이터가 빈 stage는 아직 최종 멤버를 정할 수 없다.
+        // resolver가 알려준 현재 후보 scope를 final-union의 상한으로 계획해야
+        // 뒤에 전략 fact/action이 필요해지는 요청을 DART 없이 받지 않는다.
+        finalUniverseSymbols: candidateSymbols,
         strategy,
       }));
     }
@@ -695,7 +707,7 @@ export class BacktestPreparationOrchestrator {
   ): void {
     for (const symbol of new Set(symbols)) {
       if (this.deps.symbolService.exists(symbol)) continue;
-      const entry = attempt.unionEntries?.get(symbol);
+      const entry = attempt.unionEntries.get(symbol);
       if (entry) this.deps.symbolService.addSymbol(symbol, 'KR', entry.name, entry.standardCode);
     }
   }

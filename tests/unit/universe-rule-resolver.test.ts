@@ -320,6 +320,7 @@ function makePipelineResolver(options: {
   actionCoverage?: ReadonlyMap<string, readonly number[]>;
   actionGaps?: ReadonlyMap<string, readonly number[]>;
   priceRangeCovered?: boolean;
+  masterCovered?: boolean;
   metricReads?: string[][];
 } = {}): UniverseRuleResolver {
   const metrics = options.metrics ?? pipelineMetrics;
@@ -337,9 +338,9 @@ function makePipelineResolver(options: {
 
   return new UniverseRuleResolver({
     symbolMaster: {
-      isCovered: () => true,
+      isCovered: () => options.masterCovered ?? true,
       isRangeCovered: () => options.priceRangeCovered ?? false,
-      effectiveTradingDateWithinCoverage: () => PIPELINE_DATE,
+      effectiveTradingDateWithinCoverage: () => options.masterCovered === false ? undefined : PIPELINE_DATE,
       getUniverseAsOf: () => new Map(PIPELINE_ENTRIES.map((entry) => [entry.standardCode, entry])),
       getMarketCapsAt: async () => new Map(metrics.flatMap((row) =>
         row.marketCapKrw === null ? [] : [[row.standardCode, row.marketCapKrw.toString()]],
@@ -385,6 +386,22 @@ function makePipelineResolver(options: {
 
 describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
   const period = { from: PIPELINE_DATE, to: PIPELINE_DATE };
+
+  it('master 날짜를 아직 수집하지 않았으면 빈 후보 Map을 실제 빈 scope로 확정하지 않는다', async () => {
+    const resolver = makePipelineResolver({ masterCovered: false });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'MARKET_CAP', limit: 1 }]),
+      period,
+    );
+
+    expect(result).toMatchObject({
+      kind: 'NEEDS_DATA',
+      candidateScopeKnown: false,
+      unionEntries: new Map(),
+      needs: { selectionMetricDates: [PIPELINE_DATE] },
+    });
+  });
 
   it('stage 순서를 그대로 적용해 MARKET_CAP→PER와 PER→MARKET_CAP 결과가 달라진다', async () => {
     const resolver = makePipelineResolver();
@@ -475,6 +492,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
 
     expect(result).toMatchObject({
       kind: 'NEEDS_DATA',
+      candidateScopeKnown: true,
       needs: {
         factSymbols: ['000001', '000002', '000003'],
         actionSymbols: ['000001', '000002', '000003'],
@@ -482,6 +500,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
       },
     });
     if (result.kind !== 'NEEDS_DATA') throw new Error('fixture는 데이터 부족이어야 합니다.');
+    expect([...result.unionEntries.keys()]).toEqual(['000001', '000002', '000003']);
     expect(result.needs.priceRange).not.toBeNull();
   });
 

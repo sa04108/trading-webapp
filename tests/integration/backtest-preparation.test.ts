@@ -371,6 +371,42 @@ describe('backtest preparation HTTP/SSE', () => {
     },
   );
 
+  it('market-data만 NEEDS_DATA여도 value 전략의 알려진 후보가 있으면 DART 503이다', async () => {
+    seedReadyUniverse(undefined, false);
+    const input = previewInput();
+    const universeRule = {
+      ...input.universeRule,
+      stages: [{ criterion: 'TRADING_VALUE' as const, limit: 1 }],
+    };
+    const initial = await ctx.container.universeRuleResolver.resolveOrDescribeNeeds(
+      universeRule,
+      input.period,
+    );
+    expect(initial).toMatchObject({
+      kind: 'NEEDS_DATA',
+      candidateScopeKnown: true,
+      needs: {
+        factSymbols: [], actionSymbols: [], priceSymbols: [],
+        selectionMetricDates: ['2026-01-05'], priceRange: null,
+      },
+    });
+    if (initial.kind !== 'NEEDS_DATA') throw new Error('fixture는 시장 데이터만 부족해야 합니다.');
+    expect([...initial.unionEntries.keys()]).toEqual(['005930']);
+
+    const response = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        ...input,
+        strategyId: 'value-quality-rank',
+        universeRule,
+      },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json<{ error: string }>().error).toMatch(/DART/);
+  });
+
   it('재무 coverage가 있어도 value 전략의 독립된 action coverage가 비면 DART 503이다', async () => {
     seedReadyUniverse(undefined, false);
     registerSymbols(ctx.container, 'KR', ['005930']);

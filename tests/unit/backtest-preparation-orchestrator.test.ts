@@ -10,6 +10,8 @@ import {
   type PreparationInput,
 } from '../../src/server/modules/backtest/application/backtest-preparation-orchestrator.js';
 import { backtestPreparationRequestHash } from '../../src/server/modules/backtest/application/backtest-preparation-plan.js';
+import { StrategyRegistry } from '../../src/server/modules/strategy/application/strategy-registry.js';
+import type { SymbolMasterEntry } from '../../src/server/modules/market-data/domain/symbol-master.js';
 
 const LOGGER = { debug() {}, info() {}, warn() {}, error() {} } as never;
 
@@ -52,6 +54,10 @@ function ready(symbols: readonly string[] = ['005930']) {
     diagnostics: [{ rebalanceDate: '2026-01-05', effectiveDate: '2026-01-05', stages: [] }],
     unionEntries: new Map(symbols.map((symbol) => [symbol, { ...ENTRY, shortCode: symbol }])),
   };
+}
+
+function candidateEntries(symbols: readonly string[]): Map<string, SymbolMasterEntry> {
+  return new Map(symbols.map((symbol) => [symbol, { ...ENTRY, shortCode: symbol }]));
 }
 
 function deferred<T>() {
@@ -112,6 +118,103 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
     setNow(value: number) { nowMs = value; },
   };
 }
+
+const MARKET_ONLY_NEEDS = {
+  kind: 'NEEDS_DATA' as const,
+  candidateScopeKnown: true,
+  unionEntries: new Map([['005930', ENTRY]]),
+  needs: {
+    factSymbols: [], actionSymbols: [], priceSymbols: [],
+    selectionMetricDates: ['2026-01-05'], priceRange: null,
+  },
+};
+
+function dartPlanningDeps() {
+  return {
+    sync: async () => ({ savedFacts: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
+    syncCorporateActions: async () => ({ savedFacts: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
+    planFinancialSync: (symbols: readonly string[]) => ({ calls: symbols.length }),
+    planCorporateActionSync: (symbols: readonly string[]) => ({ calls: symbols.length }),
+  };
+}
+
+describe('BacktestPreparationOrchestrator NEEDS_DATA DART gate', () => {
+  it('실전 value 전략은 market-data 공백 단계에서도 알려진 후보의 future final-union을 계획한다', async () => {
+    const ctx = makeDeps({
+      resolver: { resolveOrDescribeNeeds: async () => MARKET_ONLY_NEEDS, isPeriodCovered: () => true },
+      strategies: new StrategyRegistry(),
+      factSync: dartPlanningDeps(),
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const required = await orchestrator.needsDart({ ...INPUT, strategyId: 'value-quality-rank' });
+
+    expect(required).toBe(true);
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
+  it('master 미수집으로 후보 scope가 미상이면 DART 전략의 future sync를 예고한다', async () => {
+    const ctx = makeDeps({
+      resolver: {
+        resolveOrDescribeNeeds: async () => ({
+          ...MARKET_ONLY_NEEDS,
+          candidateScopeKnown: false,
+          unionEntries: new Map(),
+        }),
+        isPeriodCovered: () => false,
+      },
+      strategies: new StrategyRegistry(),
+      factSync: dartPlanningDeps(),
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const required = await orchestrator.needsDart({ ...INPUT, strategyId: 'value-quality-rank' });
+
+    expect(required).toBe(true);
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
+  it('후보 master scope가 비었으면 DART 전략이어도 future sync를 예고하지 않는다', async () => {
+    const ctx = makeDeps({
+      resolver: {
+        resolveOrDescribeNeeds: async () => ({ ...MARKET_ONLY_NEEDS, unionEntries: new Map() }),
+        isPeriodCovered: () => true,
+      },
+      strategies: new StrategyRegistry(),
+      factSync: dartPlanningDeps(),
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const required = await orchestrator.needsDart({ ...INPUT, strategyId: 'value-quality-rank' });
+
+    expect(required).toBe(false);
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
+  it('후보 scope가 미상이어도 fact/action 요구가 없는 price-only 전략은 DART가 필요 없다', async () => {
+    const ctx = makeDeps({
+      resolver: {
+        resolveOrDescribeNeeds: async () => ({
+          ...MARKET_ONLY_NEEDS,
+          candidateScopeKnown: false,
+          unionEntries: new Map(),
+        }),
+        isPeriodCovered: () => false,
+      },
+      factSync: dartPlanningDeps(),
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const required = await orchestrator.needsDart(INPUT);
+
+    expect(required).toBe(false);
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+});
 
 describe('BacktestPreparationOrchestrator single-flight와 직렬 실행', () => {
   it('공유 DB의 경쟁 write가 먼저 commit돼도 두 orchestrator는 같은 active id를 반환한다', async () => {
@@ -234,6 +337,8 @@ describe('BacktestPreparationOrchestrator recovery와 취소', () => {
       resolver: {
         resolveOrDescribeNeeds: async () => ({
           kind: 'NEEDS_DATA',
+          candidateScopeKnown: true,
+          unionEntries: candidateEntries(['005930']),
           needs: {
             factSymbols: ['005930'], actionSymbols: [], priceSymbols: [],
             selectionMetricDates: [], priceRange: null,
@@ -318,6 +423,8 @@ describe('BacktestPreparationOrchestrator recovery와 취소', () => {
       resolver: {
         resolveOrDescribeNeeds: async () => ({
           kind: 'NEEDS_DATA',
+          candidateScopeKnown: true,
+          unionEntries: candidateEntries(['005930', '000660']),
           needs: { factSymbols: ['005930', '000660'], actionSymbols: [], priceSymbols: [], selectionMetricDates: [], priceRange: null },
         }),
         isPeriodCovered: () => true,
@@ -363,6 +470,8 @@ describe('BacktestPreparationOrchestrator quota resume와 terminal 결과', () =
       resolver: {
         resolveOrDescribeNeeds: async () => completedSymbols.size === 2 ? ready() : ({
           kind: 'NEEDS_DATA',
+          candidateScopeKnown: true,
+          unionEntries: candidateEntries(['005930', '000660']),
           needs: { factSymbols: ['005930', '000660'], actionSymbols: [], priceSymbols: [], selectionMetricDates: [], priceRange: null },
         }),
         isPeriodCovered: () => true,
