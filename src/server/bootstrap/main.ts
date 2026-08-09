@@ -37,7 +37,7 @@ async function main(): Promise<void> {
     shuttingDown = true;
     container.logger.info({ module: 'bootstrap', event: 'server.stopping', signal }, 'shutting down');
     await app.close();
-    container.close();
+    await container.close();
     process.exit(0);
   };
 

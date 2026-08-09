@@ -91,7 +91,12 @@ export type UniverseResolveAttempt =
       /** READY schedule 멤버를 자동 등록할 때 쓰는 실제 선정 시점의 master entry */
       readonly unionEntries: ReadonlyMap<string, SymbolMasterEntry>;
     }
-  | { readonly kind: 'NEEDS_DATA'; readonly needs: UniverseDataNeed };
+  | {
+      readonly kind: 'NEEDS_DATA';
+      readonly needs: UniverseDataNeed;
+      /** 후보 fact/action sync 전에 symbols FK를 실제 master 정보로 등록할 때 쓴다. */
+      readonly unionEntries?: ReadonlyMap<string, SymbolMasterEntry>;
+    };
 
 /**
  * 일정 전체의 거래불가 제외 건수 합계 (중복 포함). 워커는 `resolve()` 결과가 아니라
@@ -427,6 +432,7 @@ export class UniverseRuleResolver {
     ) {
       return {
         kind: 'NEEDS_DATA',
+        unionEntries,
         needs: {
           factSymbols: [...factSymbols].sort(),
           actionSymbols: [...actionSymbols].sort(),

@@ -101,7 +101,10 @@ const EMPTY_NEEDS: UniverseDataNeed = {
 export interface BacktestPreparationOrchestratorDeps {
   readonly database: DatabaseHandle;
   readonly resolver: Pick<UniverseRuleResolver, 'resolveOrDescribeNeeds' | 'isPeriodCovered'>;
-  readonly factSync: Pick<FactSyncService, 'sync' | 'syncCorporateActions'>;
+  readonly factSync: Pick<
+    FactSyncService,
+    'sync' | 'syncCorporateActions' | 'planFinancialSync' | 'planCorporateActionSync'
+  >;
   readonly symbolMaster: Pick<
     SymbolMasterService,
     'ensureTradingDay' | 'ensureSelectionMetrics' | 'ingestDate' | 'isRangeCovered'
@@ -122,6 +125,7 @@ export class BacktestPreparationOrchestrator {
   private readonly listeners = new Map<string, Set<(job: BacktestPreparationJobDto) => void>>();
   private readonly resumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private runnerActive = false;
+  private runnerPromise: Promise<void> | null = null;
   private stopping = false;
   private readonly dailyLimit: number;
 
@@ -132,33 +136,43 @@ export class BacktestPreparationOrchestrator {
   start(input: PreparationInput): BacktestPreparationJobDto {
     const strategy = this.requireStrategy(input);
     const requestHash = backtestPreparationRequestHash(input, strategy);
-    const existing = this.deps.database.db
-      .select()
-      .from(backtestPreparationJobs)
-      .where(eq(backtestPreparationJobs.requestHash, requestHash))
-      .orderBy(desc(backtestPreparationJobs.createdAtMs))
-      .all()
-      .find((row) => ACTIVE_STATUSES.includes(row.status as PreparationStatus));
-    if (existing) return toDto(existing);
+    // 읽기와 insert 사이에 다른 프로세스가 같은 hash를 넣을 수 있으므로 write lock을
+    // 먼저 잡는다. WAL의 일반 SELECT는 다른 writer와 겹칠 수 있어 transaction 없이
+    // 두 문장을 잇는 것만으로는 single-flight가 아니다.
+    const selected = this.deps.database.sqlite.transaction(() => {
+      const existing = this.deps.database.db
+        .select()
+        .from(backtestPreparationJobs)
+        .where(eq(backtestPreparationJobs.requestHash, requestHash))
+        .orderBy(desc(backtestPreparationJobs.createdAtMs))
+        .all()
+        .find((row) => ACTIVE_STATUSES.includes(row.status as PreparationStatus));
+      if (existing) return { row: existing, inserted: false } as const;
 
-    const now = this.deps.clock.now();
-    const id = newId('prep');
-    this.deps.database.db.insert(backtestPreparationJobs).values({
-      id,
-      requestHash,
-      requestJson: JSON.stringify(input),
-      status: 'QUEUED',
-      phase: 'MARKET_DATA',
-      doneSymbols: 0,
-      totalSymbols: 0,
-      savedFacts: 0,
-      gapCount: 0,
-      dartCallsUsed: 0,
-      cancelRequested: false,
-      createdAtMs: now,
-      updatedAtMs: now,
-    }).run();
-    const created = this.persistAndEmit(id, {});
+      const now = this.deps.clock.now();
+      const id = newId('prep');
+      this.deps.database.db.insert(backtestPreparationJobs).values({
+        id,
+        requestHash,
+        requestJson: JSON.stringify(input),
+        status: 'QUEUED',
+        phase: 'MARKET_DATA',
+        doneSymbols: 0,
+        totalSymbols: 0,
+        savedFacts: 0,
+        gapCount: 0,
+        dartCallsUsed: 0,
+        cancelRequested: false,
+        createdAtMs: now,
+        updatedAtMs: now,
+      }).run();
+      const row = this.getRow(id);
+      if (!row) throw new Error('준비 작업을 저장하지 못했습니다.');
+      return { row, inserted: true } as const;
+    }).immediate();
+    if (!selected.inserted) return toDto(selected.row);
+
+    const created = this.persistAndEmit(selected.row.id, {});
     if (!created) throw new Error('준비 작업을 저장하지 못했습니다.');
     this.queuePump();
     return created;
@@ -213,7 +227,11 @@ export class BacktestPreparationOrchestrator {
     const strategy = this.requireStrategy(input);
     const attempt = await this.deps.resolver.resolveOrDescribeNeeds(input.universeRule, input.period);
     if (attempt.kind === 'NEEDS_DATA') {
-      return attempt.needs.factSymbols.length > 0 || attempt.needs.actionSymbols.length > 0;
+      return this.planNeedsDart(buildBacktestPreparationPlan({
+        request: preparationRequest(input),
+        resolutionNeeds: attempt.needs,
+        strategy,
+      }));
     }
     const finalSymbols = unionSymbols(attempt.schedule);
     const plan = buildBacktestPreparationPlan({
@@ -222,7 +240,7 @@ export class BacktestPreparationOrchestrator {
       finalUniverseSymbols: finalSymbols,
       strategy,
     });
-    return plan.financial.symbols.length > 0 || plan.actions.symbols.length > 0;
+    return this.planNeedsDart(plan);
   }
 
   cancel(jobId: string): boolean {
@@ -281,11 +299,12 @@ export class BacktestPreparationOrchestrator {
     return TERMINAL_STATUSES.includes(status as PreparationStatus);
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     this.stopping = true;
     for (const timer of this.resumeTimers.values()) clearTimeout(timer);
     this.resumeTimers.clear();
     this.listeners.clear();
+    await this.runnerPromise;
   }
 
   private queuePump(): void {
@@ -317,7 +336,7 @@ export class BacktestPreparationOrchestrator {
     if (!claimed || claimed.status !== 'RUNNING') return;
 
     this.runnerActive = true;
-    void this.run(claimed.id)
+    const runner = this.run(claimed.id)
       .catch((error: unknown) => {
         this.deps.logger.error(
           { module: 'backtest', event: 'preparation.unhandled', jobId: claimed.id, err: error },
@@ -326,8 +345,10 @@ export class BacktestPreparationOrchestrator {
       })
       .finally(() => {
         this.runnerActive = false;
+        if (this.runnerPromise === runner) this.runnerPromise = null;
         if (!this.stopping) this.queuePump();
       });
+    this.runnerPromise = runner;
   }
 
   private async run(jobId: string): Promise<void> {
@@ -358,6 +379,10 @@ export class BacktestPreparationOrchestrator {
           resolutionNeeds: attempt.needs,
           strategy,
         });
+        this.registerNeededSymbols(attempt, [
+          ...plan.financial.symbols,
+          ...plan.actions.symbols,
+        ]);
         const hasMarketWork = attempt.needs.selectionMetricDates.length > 0
           || (plan.price.symbols.length > 0 && attempt.needs.priceRange !== null);
         const hasDartWork = plan.financial.symbols.length > 0 || plan.actions.symbols.length > 0;
@@ -383,6 +408,9 @@ export class BacktestPreparationOrchestrator {
       }
 
       const finalSymbols = unionSymbols(finalAttempt.schedule);
+      // coverage와 fact 버전은 symbols FK를 쓴다. 최종 sync보다 먼저 실제 master
+      // entry로 등록해야 새로 선정된 종목의 첫 준비도 저장 경계에서 실패하지 않는다.
+      this.registerUniverse(finalAttempt);
       const finalPlan = buildBacktestPreparationPlan({
         request: preparationRequest(input),
         resolutionNeeds: EMPTY_NEEDS,
@@ -473,13 +501,12 @@ export class BacktestPreparationOrchestrator {
       if (!this.consumeFactReport(jobId, report)) return false;
     }
 
-    // sync()가 재무와 자본변동을 함께 받으므로, 같은 심볼을 action-only 경로로
-    // 다시 청구하지 않는다. actionSymbols는 priceSymbols와 독립된 채로 여기까지 온다.
-    const financial = new Set(plan.financial.symbols);
-    const actionOnly = plan.actions.symbols.filter((symbol) => !financial.has(symbol));
-    if (actionOnly.length > 0) {
+    // 재무 sync가 실행한 연도의 action coverage는 즉시 닫힌다. action 경로에는 전체
+    // actionSymbols를 그대로 넘기고 그 coverage가 남은 연도만 증분 계획하게 한다.
+    // 심볼만 보고 제외하면 "재무는 이미 커버됐지만 action은 비어 있는" 경우를 놓친다.
+    if (plan.actions.symbols.length > 0) {
       const report = await this.runFactRequest(jobId, 'ACTIONS', {
-        symbols: actionOnly,
+        symbols: plan.actions.symbols,
         fromYear: plan.actions.fromYear,
         toYear: plan.actions.toYear,
       });
@@ -529,6 +556,9 @@ export class BacktestPreparationOrchestrator {
     }));
     if (report.stopReason === 'DAILY_QUOTA') return false;
     if (report.stopReason === 'CANCELLED') {
+      // 프로세스 종료는 사용자 취소가 아니다. 현재 symbol 저장 결과까지만 반영하고
+      // RUNNING 복구점을 남기면 다음 부팅의 recoverOrphaned가 QUEUED로 이어받는다.
+      if (this.stopping) return false;
       this.persistAndEmit(
         jobId,
         { status: 'CANCELLED', error: report.failureMessage ?? '사용자가 준비 작업을 취소했습니다.' },
@@ -633,10 +663,39 @@ export class BacktestPreparationOrchestrator {
     this.persistAndEmit(jobId, { status: 'FAILED', error }, ['RUNNING']);
   }
 
+  /** preparation과 같은 refreshCurrentYear=false 계획에서 실제 DART 호출만 센다. */
+  private planNeedsDart(plan: BacktestPreparationPlan): boolean {
+    const financialPlan = this.deps.factSync.planFinancialSync(
+      plan.financial.symbols,
+      plan.financial.fromYear,
+      plan.financial.toYear,
+      false,
+    );
+    if (financialPlan.calls > 0) return true;
+
+    return this.deps.factSync.planCorporateActionSync(
+      plan.actions.symbols,
+      plan.actions.fromYear,
+      plan.actions.toYear,
+      false,
+    ).calls > 0;
+  }
+
   private registerUniverse(attempt: Extract<UniverseResolveAttempt, { kind: 'READY' }>): void {
     for (const symbol of unionSymbols(attempt.schedule)) {
       if (this.deps.symbolService.exists(symbol)) continue;
       const entry = attempt.unionEntries.get(symbol);
+      if (entry) this.deps.symbolService.addSymbol(symbol, 'KR', entry.name, entry.standardCode);
+    }
+  }
+
+  private registerNeededSymbols(
+    attempt: Extract<UniverseResolveAttempt, { kind: 'NEEDS_DATA' }>,
+    symbols: readonly string[],
+  ): void {
+    for (const symbol of new Set(symbols)) {
+      if (this.deps.symbolService.exists(symbol)) continue;
+      const entry = attempt.unionEntries?.get(symbol);
       if (entry) this.deps.symbolService.addSymbol(symbol, 'KR', entry.name, entry.standardCode);
     }
   }

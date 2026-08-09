@@ -30,6 +30,13 @@ export function registerBacktestPreparationRoutes(
   requireAuth: PreHandler,
 ): void {
   const { orchestrator } = deps;
+  const activeStreams = new Set<() => void>();
+
+  // Fastify는 open SSE가 있으면 일반 connection drain 전에 기다릴 수 있다. preClose는
+  // 그 기다림보다 먼저 실행되므로 heartbeat·구독·reply를 라우트가 명시적으로 닫는다.
+  app.addHook('preClose', async () => {
+    for (const cleanup of [...activeStreams]) cleanup();
+  });
 
   app.post('/backtests/universe-preview', { preHandler: requireAuth }, async (request, reply) => {
     const parsed = previewRequestSchema.safeParse(request.body);
@@ -107,8 +114,10 @@ export function registerBacktestPreparationRoutes(
         closed = true;
         clearInterval(heartbeat);
         unsubscribe();
+        activeStreams.delete(cleanup);
         reply.raw.end();
       };
+      activeStreams.add(cleanup);
       unsubscribe = orchestrator.subscribe(id, (job) => {
         // subscribe가 현재 snapshot을 동기적으로 주므로 첫 응답도 이 경계 하나에서
         // 쓴다. initial GET 뒤 terminal이 된 race도 최신 snapshot을 놓치지 않는다.

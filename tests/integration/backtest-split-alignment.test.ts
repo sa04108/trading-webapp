@@ -3,7 +3,12 @@ import type { Candle } from '../../src/server/modules/market-data/domain/candle.
 import { CORPORATE_ACTION_FIELD, type Fact } from '../../src/server/modules/facts/domain/fact.js';
 import { symbolMasterVersions } from '../../src/server/shared/db/schema.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
-import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
+import {
+  createTestAdmin,
+  createTestApp,
+  installPreparedSubmissionFixture,
+  type TestApp,
+} from '../helpers/test-app.js';
 import { registerSymbols, seedCorporateActionCoverage, seedDailyBars, yearRange } from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 
@@ -95,6 +100,7 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
       payload: { username, password },
     });
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+    installPreparedSubmissionFixture(ctx);
 
     registerSymbols(ctx.container, 'KR', [SYMBOL]);
     // 모든 봉 날짜를 거래일로 남긴다 — listEvents 가 변경일 직전 관측일을 찾아야

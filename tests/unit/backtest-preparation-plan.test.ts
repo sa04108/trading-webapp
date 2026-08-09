@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import type { UniverseDataNeed } from '../../src/server/modules/backtest/application/universe-rule-resolver.js';
 import { buildBacktestPreparationPlan } from '../../src/server/modules/backtest/application/backtest-preparation-plan.js';
+import { StrategyRegistry } from '../../src/server/modules/strategy/application/strategy-registry.js';
 import type { AnyTradingStrategy } from '../../src/server/modules/strategy/domain/strategy.js';
 
 const BASE_REQUEST = {
@@ -42,7 +43,10 @@ function strategy(
     version,
     name: id,
     description: id,
-    parameterSchema: { parse: (value: unknown) => value },
+    parameterSchema: {
+      parse: (value: unknown) => value,
+      safeParse: (value: unknown) => ({ success: true, data: value }),
+    },
     dataRequirements,
     initialize: () => ({}),
     onBars: () => ({ orders: [] }),
@@ -50,6 +54,59 @@ function strategy(
 }
 
 describe('buildBacktestPreparationPlan', () => {
+  it.each([
+    {
+      strategyId: 'range-breakout',
+      financial: { symbols: [], fromYear: 2026, toYear: 2026 },
+      actions: { symbols: ['000660', '005930'], fromYear: 2025, toYear: 2026 },
+      price: { symbols: ['000660', '005930'], from: '2025-11-09', to: '2026-03-31' },
+    },
+    {
+      strategyId: 'cross-sectional-momentum',
+      financial: { symbols: [], fromYear: 2026, toYear: 2026 },
+      actions: { symbols: ['000660', '005930'], fromYear: 2024, toYear: 2026 },
+      price: { symbols: ['000660', '005930'], from: '2024-06-19', to: '2026-03-31' },
+    },
+    {
+      strategyId: 'value-quality-rank',
+      financial: { symbols: ['000660', '005930'], fromYear: 2025, toYear: 2026 },
+      actions: { symbols: ['000660', '005930'], fromYear: 2026, toYear: 2026 },
+      price: { symbols: [], from: '2026-01-02', to: '2026-03-31' },
+    },
+    {
+      strategyId: 'ema-trend-switch',
+      financial: { symbols: [], fromYear: 2026, toYear: 2026 },
+      actions: { symbols: ['000660', '005930'], fromYear: 2025, toYear: 2026 },
+      price: { symbols: ['000660', '005930'], from: '2025-08-21', to: '2026-03-31' },
+    },
+    {
+      strategyId: 'rsi-reversion',
+      financial: { symbols: [], fromYear: 2026, toYear: 2026 },
+      actions: { symbols: ['000660', '005930'], fromYear: 2025, toYear: 2026 },
+      price: { symbols: ['000660', '005930'], from: '2025-08-21', to: '2026-03-31' },
+    },
+  ])('$strategyId 실전 기본값의 final-union 데이터 요구를 계획한다', ({
+    strategyId,
+    financial,
+    actions,
+    price,
+  }) => {
+    const registry = new StrategyRegistry();
+    const selected = registry.get(strategyId);
+    expect(selected).not.toBeNull();
+
+    const plan = buildBacktestPreparationPlan({
+      request: { ...BASE_REQUEST, strategyId, parameters: {} },
+      resolutionNeeds: EMPTY_NEEDS,
+      finalUniverseSymbols: ['005930', '000660', '005930'],
+      strategy: selected!,
+    });
+
+    expect(plan.financial).toEqual(financial);
+    expect(plan.actions).toEqual(actions);
+    expect(plan.price).toEqual(price);
+  });
+
   it('PER stage 후보에 4분기 재무만 준비한다', () => {
     const plan = buildBacktestPreparationPlan({
       request: {

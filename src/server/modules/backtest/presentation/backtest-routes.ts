@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import fs from 'node:fs';
 import type { FastifyBaseLogger, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -136,16 +137,19 @@ function preparationInputOf(body: BacktestRequest): PreparationInput {
 
 /** 준비 job의 staged schedule을 기존 worker가 소비하는 pin 모양으로 좁힌다. */
 function preparedPreviewToResolved(preview: BacktestUniversePreview): ResolvedUniverse {
+  const schedule = preview.schedule.map((entry) => ({
+    rebalanceDate: entry.rebalanceDate,
+    effectiveTradingDate: entry.effectiveDate,
+    symbols: entry.members.map((member) => member.symbol),
+    excludedNonTradingCount: entry.excludedNonTradingCount,
+  }));
   return {
-    schedule: preview.schedule.map((entry) => ({
-      rebalanceDate: entry.rebalanceDate,
-      effectiveTradingDate: entry.effectiveDate,
-      symbols: entry.members.map((member) => member.symbol),
-      excludedNonTradingCount: entry.excludedNonTradingCount,
-    })),
+    schedule,
     unionSymbols: [...preview.unionSymbols],
     unionEntries: new Map(),
-    scheduleHash: preview.scheduleHash,
+    // worker가 실제 소비하는 legacy JSON 자체의 hash여야 provenance pin을 독립적으로
+    // 재계산할 수 있다. staged hash는 preparation preview 안에 그대로 보존된다.
+    scheduleHash: createHash('sha256').update(JSON.stringify(schedule)).digest('hex'),
     uncoveredDates: [...preview.uncoveredDates],
   };
 }
@@ -480,6 +484,31 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       }
     | { readonly ok: false; readonly status: 422; readonly errors: string[]; readonly uncoveredDates: readonly string[] };
 
+  /** 준비 hash를 조회하기 전에 끝낼 수 있는 요청 자체의 검증. */
+  const validateStaticSubmission = (body: BacktestRequest): string[] => {
+    const errors: string[] = [];
+    const strategy = strategies.get(body.strategyId);
+    if (!strategy) {
+      errors.push(`알 수 없는 전략: ${body.strategyId}`);
+    } else {
+      const paramCheck = strategies.validateParameters(
+        body.strategyId,
+        parametersForLegacyStrategySchedule(body),
+      );
+      if (!paramCheck.ok) errors.push(paramCheck.error);
+    }
+    if (body.period.from > body.period.to) {
+      errors.push('기간이 올바르지 않습니다 (from > to)');
+    }
+    if (!getCostProfile(body.execution.commissionProfileId)) {
+      errors.push('알 수 없는 수수료 프로파일');
+    }
+    if (!getSlippageProfile(body.execution.slippageProfileId)) {
+      errors.push('알 수 없는 슬리피지 프로파일');
+    }
+    return errors;
+  };
+
   /**
    * 제출 검증 — 신규 제출(POST)·복제(clone)·초안(clone-draft)이 동일한 기준을 거친다.
    * 통과 시 제출 시점의 유니버스 버전과 서버 소유 provenance pin(Task 12)을 함께
@@ -496,33 +525,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     body: BacktestRequest,
     preparedPreview?: BacktestUniversePreview,
   ): Promise<ValidationResult> => {
-    const errors: string[] = [];
-
-    // 전략 — 파라미터 검증의 전제다
-    const strategy = strategies.get(body.strategyId);
-    if (!strategy) {
-      errors.push(`알 수 없는 전략: ${body.strategyId}`);
-    } else {
-      // 전략 버전은 검사하지 않는다 (D-029) — 요청이 버전을 들고 다니지 않는다.
-      // 실행되는 것은 언제나 지금 등록된 전략이고, 파라미터가 그 전략과 안 맞으면
-      // 바로 아래 검증이 잡는다.
-      const paramCheck = strategies.validateParameters(
-        body.strategyId,
-        parametersForLegacyStrategySchedule(body),
-      );
-      if (!paramCheck.ok) errors.push(paramCheck.error);
-    }
-
-    if (body.period.from > body.period.to) {
-      errors.push('기간이 올바르지 않습니다 (from > to)');
-    }
-
-    if (!getCostProfile(body.execution.commissionProfileId)) {
-      errors.push('알 수 없는 수수료 프로파일');
-    }
-    if (!getSlippageProfile(body.execution.slippageProfileId)) {
-      errors.push('알 수 없는 슬리피지 프로파일');
-    }
+    // 전략 버전은 검사하지 않는다 (D-029) — 요청이 버전을 들고 다니지 않는다.
+    // 실행되는 것은 언제나 지금 등록된 전략이다.
+    const errors = validateStaticSubmission(body);
 
     if (errors.length > 0) {
       return { ok: false, status: 400, errors };
@@ -689,6 +694,13 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       });
     }
     const body = parsed.data;
+
+    // 잘못된 요청을 PREPARATION_REQUIRED로 가리면 사용자는 완료할 수 없는 준비를
+    // 시작하게 된다. 외부 데이터와 무관한 검증은 preparation hash 조회보다 먼저 한다.
+    const staticErrors = validateStaticSubmission(body);
+    if (staticErrors.length > 0) {
+      return reply.code(400).send({ error: staticErrors[0] });
+    }
 
     const prepared = await preparation.getReadyPreview(preparationInputOf(body));
     if (!prepared) {

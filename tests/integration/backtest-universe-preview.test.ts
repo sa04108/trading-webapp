@@ -31,6 +31,28 @@ async function waitForPreparation(ctx: TestApp, jobId: string): Promise<'COMPLET
 }
 
 function installPreparedPreviewFixture(ctx: TestApp): void {
+  // 이 파일은 preview 내용·자동 등록만 격리해 본다. 실전 registry의 DART 요구와
+  // 실제 coverage gate는 backtest-preparation.test.ts가 별도로 검증한다.
+  const noActionWork: typeof ctx.container.factSyncService.planCorporateActionSync = () => ({
+    yearsBySymbol: new Map(),
+    shareYearsBySymbol: new Map(),
+    calls: 0,
+    estimatedMs: 0,
+    overDailyLimit: false,
+  });
+  ctx.container.factSyncService.planCorporateActionSync = noActionWork;
+  const noActionSync: typeof ctx.container.factSyncService.syncCorporateActions = async () => ({
+    savedFacts: 0,
+    gaps: [],
+    stoppedAtSymbol: null,
+    stopReason: null,
+    failureMessage: null,
+  });
+  ctx.container.factSyncService.syncCorporateActions = noActionSync;
+  const noMarketSync: typeof ctx.container.symbolMasterService.ingestDate = async () => ({
+    kind: 'ALREADY_COVERED',
+  });
+  ctx.container.symbolMasterService.ingestDate = noMarketSync;
   const rawInject = ctx.app.inject.bind(ctx.app);
   ctx.app.inject = (async (options: unknown) => {
     const request = options as { method?: string; url?: string; payload?: Record<string, unknown> };

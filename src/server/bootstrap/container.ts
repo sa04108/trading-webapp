@@ -92,7 +92,7 @@ export interface Container {
   /** 제출 게이트(Task 6)가 자본변동 수집 여부를 대조할 때 쓴다 */
   readonly actionCoverageStore: CorporateActionCoverageStore;
   readonly backtestPreparationOrchestrator: BacktestPreparationOrchestrator;
-  close(): void;
+  close(): Promise<void>;
 }
 
 function readAppVersion(): string {
@@ -306,6 +306,7 @@ export function createContainer(config: AppConfig): Container {
     runningJobs: () => jobQueue.countByStatus(['STARTING', 'RUNNING', 'CANCELLING']),
   };
 
+  let closing: Promise<void> | null = null;
   return {
     config,
     logger,
@@ -340,11 +341,17 @@ export function createContainer(config: AppConfig): Container {
     actionCoverageStore,
     backtestPreparationOrchestrator,
     close: () => {
-      clearInterval(pruneTimer);
-      jobOrchestrator.stop();
-      backtestPreparationOrchestrator.stop();
-      duckdb.close();
-      database.close();
+      if (closing !== null) return closing;
+      closing = (async () => {
+        clearInterval(pruneTimer);
+        jobOrchestrator.stop();
+        // FactSync는 symbol 단위 저장이 끝난 뒤 멈춘다. 이 경계를 기다리기 전에
+        // DuckDB/SQLite를 닫으면 저장 callback이 닫힌 자원을 다시 건드린다.
+        await backtestPreparationOrchestrator.stop();
+        duckdb.close();
+        database.close();
+      })();
+      return closing;
     },
   };
 }

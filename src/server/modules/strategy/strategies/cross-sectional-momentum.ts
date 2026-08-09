@@ -95,7 +95,7 @@ export const crossSectionalMomentumStrategy: TradingStrategy<
   CrossSectionalMomentumState
 > = {
   id: 'cross-sectional-momentum',
-  version: '1.0.0',
+  version: '1.0.1',
   name: '횡단면 모멘텀',
   description:
     // "보정합니다" 로 단정하면 안 된다 — 분할 이력이 수집되지 않은 데이터셋에서는
@@ -106,6 +106,10 @@ export const crossSectionalMomentumStrategy: TradingStrategy<
     '상승률은 직전 한 달을 빼고 그 앞 1년을 봅니다 — 갓 오른 종목은 곧 되돌리는 일이 잦기 때문입니다. ' +
     '액면분할은 분할 이력이 수집된 데이터셋에서만 신호 계산에 보정됩니다 — 체결가는 항상 실제 거래 가격입니다.',
   parameterSchema: crossSectionalMomentumParameters,
+  dataRequirements: {
+    priceWarmupBars: (parameters) => parameters.formationDays + parameters.skipDays + 1,
+    requiresCorporateActions: true,
+  },
 
   initialize(context: StrategyInitializeContext): CrossSectionalMomentumState {
     return {

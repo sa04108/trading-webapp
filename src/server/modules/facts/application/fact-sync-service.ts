@@ -179,6 +179,29 @@ export class FactSyncService {
   }
 
   /**
+   * `sync`가 실제로 쓸 재무 symbol-year 계획을 외부 호출 없이 미리 본다.
+   * 준비 API의 DART-key 게이트가 "메타데이터상 필요"가 아니라 남은 coverage 작업을
+   * 기준으로 판단할 때 쓴다.
+   */
+  planFinancialSync(
+    symbols: readonly string[],
+    fromYear: number,
+    toYear: number,
+    refreshCurrentYear = true,
+  ): FactSyncPlan {
+    const unique = [...new Set(symbols)];
+    return planFactSync({
+      symbols: unique,
+      fromYear,
+      toYear,
+      currentYear: new Date(this.clock.now()).getUTCFullYear(),
+      coveredBySymbol: this.coverage.getCoveredYears(unique),
+      mode: 'INCREMENTAL',
+      refreshCurrentYear,
+    });
+  }
+
+  /**
    * `syncCorporateActions` 가 실제로 쓸 연도 계획을 미리 본다 (Task 8 게이트 화면).
    * 커버리지 조회(`actionCoverage`)·기준 연도(`clock`)·모드(`INCREMENTAL`)를 실행
    * 경로와 완전히 같게 둔다 — 화면의 예상 호출·시간이 실제 수집과 갈리면 안 된다
@@ -188,6 +211,7 @@ export class FactSyncService {
     symbols: readonly string[],
     fromYear: number,
     toYear: number,
+    refreshCurrentYear = true,
   ): FactSyncPlan {
     const unique = [...new Set(symbols)];
     return planFactSync({
@@ -197,6 +221,7 @@ export class FactSyncService {
       currentYear: new Date(this.clock.now()).getUTCFullYear(),
       coveredBySymbol: this.actionCoverage.getCoveredYears(unique),
       mode: 'INCREMENTAL',
+      refreshCurrentYear,
     });
   }
 

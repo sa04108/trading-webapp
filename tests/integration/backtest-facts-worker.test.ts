@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
-import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
+import {
+  createTestAdmin,
+  createTestApp,
+  installPreparedSubmissionFixture,
+  type TestApp,
+} from '../helpers/test-app.js';
 import { registerSymbols, seedCorporateActionCoverage, seedDailyBars, yearRange } from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 
@@ -110,6 +115,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       payload: { username, password },
     });
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+    installPreparedSubmissionFixture(ctx);
 
     registerSymbols(ctx.container, 'KR', ['CHEAP', 'RICH']);
     // 시총 내림차순: CHEAP > RICH > NOFACTS — topN=2 면 앞의 둘, topN=3 이면 셋 다 들어온다.
@@ -339,6 +345,7 @@ describe('워커의 자본변동 팩트 배선 — 접수일이 기간 종료 �
       payload: { username, password },
     });
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+    installPreparedSubmissionFixture(ctx);
 
     registerSymbols(ctx.container, 'KR', ['SPLIT', 'FLAT']);
     seedSymbolMasterUniverse(ctx.container, SPLIT_MASTER_DATES, [

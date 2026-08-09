@@ -55,7 +55,7 @@ async function dbPrepare(): Promise<void> {
   try {
     console.log(`DB 준비 완료 (${Date.now() - startedAtMs}ms): ${config.databasePath}`);
   } finally {
-    container.close();
+    await container.close();
   }
 }
 
@@ -102,7 +102,7 @@ async function adminCreate(): Promise<void> {
     console.log(`\n관리자 계정 '${username}' 이 생성되었습니다.`);
     console.log('다음: pnpm cli totp:enroll 로 TOTP 를 등록하세요 — 외부에 공개하기 전 필수입니다.');
   } finally {
-    container.close();
+    await container.close();
   }
 }
 
@@ -160,7 +160,7 @@ async function totpEnroll(): Promise<void> {
     for (const code of recoveryCodes) console.log(`   ${code}`);
     console.log('\n이 정보는 다시 표시되지 않습니다.');
   } finally {
-    container.close();
+    await container.close();
   }
 }
 
@@ -301,7 +301,7 @@ async function factsSync(argv: readonly string[]): Promise<void> {
       }
     }
   } finally {
-    container.close();
+    await container.close();
   }
 }
 
@@ -338,7 +338,7 @@ async function krxBackfillNonTrading(argv: readonly string[]): Promise<void> {
       process.exitCode = 1;
     }
   } finally {
-    container.close();
+    await container.close();
   }
 }
 

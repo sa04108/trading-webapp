@@ -1,3 +1,7 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { Worker } from 'node:worker_threads';
 import { describe, expect, it } from 'vitest';
 import { openDatabase } from '../../src/server/shared/db/database.js';
 import { backtestPreparationJobs } from '../../src/server/shared/db/schema.js';
@@ -5,6 +9,7 @@ import {
   BacktestPreparationOrchestrator,
   type PreparationInput,
 } from '../../src/server/modules/backtest/application/backtest-preparation-orchestrator.js';
+import { backtestPreparationRequestHash } from '../../src/server/modules/backtest/application/backtest-preparation-plan.js';
 
 const LOGGER = { debug() {}, info() {}, warn() {}, error() {} } as never;
 
@@ -109,6 +114,66 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
 }
 
 describe('BacktestPreparationOrchestrator single-flight와 직렬 실행', () => {
+  it('공유 DB의 경쟁 write가 먼저 commit돼도 두 orchestrator는 같은 active id를 반환한다', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qp-prep-race-'));
+    const databasePath = path.join(dir, 'app.sqlite');
+    const firstHandle = openDatabase(databasePath);
+    const secondHandle = openDatabase(databasePath);
+    const firstCtx = makeDeps({ database: firstHandle });
+    firstCtx.handle.close();
+    const secondCtx = makeDeps({ database: secondHandle });
+    secondCtx.handle.close();
+    const first = new BacktestPreparationOrchestrator(firstCtx.deps as never);
+    const second = new BacktestPreparationOrchestrator(secondCtx.deps as never);
+    const requestHash = backtestPreparationRequestHash(INPUT, {
+      version: '1.0.0',
+    } as never);
+    const competitorId = 'prep_competing';
+    const worker = new Worker(`
+      const { parentPort, workerData } = require('node:worker_threads');
+      const Database = require('better-sqlite3');
+      const db = new Database(workerData.databasePath);
+      db.pragma('journal_mode = WAL');
+      db.pragma('busy_timeout = 5000');
+      db.exec('BEGIN IMMEDIATE');
+      parentPort.postMessage('LOCKED');
+      setTimeout(() => {
+        db.prepare(\`
+          INSERT INTO backtest_preparation_jobs
+            (id, request_hash, request_json, status, phase, created_at_ms, updated_at_ms)
+          VALUES (?, ?, ?, 'RUNNING', 'MARKET_DATA', 1, 1)
+        \`).run(workerData.id, workerData.requestHash, workerData.requestJson);
+        db.exec('COMMIT');
+        db.close();
+        parentPort.postMessage('COMMITTED');
+      }, 100);
+    `, {
+      eval: true,
+      workerData: { databasePath, id: competitorId, requestHash, requestJson: JSON.stringify(INPUT) },
+    });
+    await new Promise<void>((resolve, reject) => {
+      worker.once('message', (message) => message === 'LOCKED' && resolve());
+      worker.once('error', reject);
+    });
+
+    const raced = first.start(INPUT);
+    await new Promise<void>((resolve, reject) => {
+      worker.once('message', (message) => message === 'COMMITTED' && resolve());
+      worker.once('error', reject);
+    });
+    const fromSecondInstance = second.start(INPUT);
+
+    expect(raced.id).toBe(competitorId);
+    expect(fromSecondInstance.id).toBe(competitorId);
+    expect(firstHandle.db.select().from(backtestPreparationJobs).all()).toHaveLength(1);
+
+    await first.stop();
+    await second.stop();
+    firstHandle.close();
+    secondHandle.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it('같은 hash는 같은 active id를 돌려주고 다른 hash는 한 runner 뒤 QUEUED로 남긴다', async () => {
     const firstResolve = deferred<ReturnType<typeof ready>>();
     let calls = 0;
@@ -135,7 +200,7 @@ describe('BacktestPreparationOrchestrator single-flight와 직렬 실행', () =>
     firstResolve.resolve(ready());
     await waitFor(() => orchestrator.get(first.id)?.status === 'COMPLETED');
     await waitFor(() => orchestrator.get(second.id)?.status === 'COMPLETED');
-    orchestrator.stop();
+    await orchestrator.stop();
     ctx.handle.close();
   });
 
@@ -155,13 +220,74 @@ describe('BacktestPreparationOrchestrator single-flight와 직렬 실행', () =>
       'QUEUED', 'RUNNING', 'COMPLETED',
     ]);
     unsubscribe();
-    orchestrator.stop();
+    await orchestrator.stop();
     ctx.handle.close();
   });
 });
 
 describe('BacktestPreparationOrchestrator recovery와 취소', () => {
-  it('RUNNING은 QUEUED로 회수하고 미래 quota wait는 그대로 두며 만기 wait만 QUEUED로 회수한다', () => {
+  it('stop은 진행 중인 DART symbol 저장 경계까지 기다리고 RUNNING 복구점을 남긴다', async () => {
+    const symbolStarted = deferred<void>();
+    const finishSymbol = deferred<void>();
+    const events: string[] = [];
+    const ctx = makeDeps({
+      resolver: {
+        resolveOrDescribeNeeds: async () => ({
+          kind: 'NEEDS_DATA',
+          needs: {
+            factSymbols: ['005930'], actionSymbols: [], priceSymbols: [],
+            selectionMetricDates: [], priceRange: null,
+          },
+        }),
+        isPeriodCovered: () => true,
+      },
+      factSync: {
+        sync: async (_request: unknown, hooks: {
+          onSymbolDone?: (progress: { index: number; total: number }) => void;
+          shouldStop?: () => boolean;
+        }) => {
+          symbolStarted.resolve();
+          await finishSymbol.promise;
+          events.push('symbol-saved');
+          hooks.onSymbolDone?.({ index: 1, total: 1 });
+          return {
+            savedFacts: 1,
+            gaps: [],
+            stoppedAtSymbol: hooks.shouldStop?.() ? '005930' : null,
+            stopReason: hooks.shouldStop?.() ? 'CANCELLED' : null,
+            failureMessage: null,
+          };
+        },
+        syncCorporateActions: async () => ({ savedFacts: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const job = orchestrator.start(INPUT);
+    await symbolStarted.promise;
+
+    let stopResolved = false;
+    const stopping = Promise.resolve(orchestrator.stop()).then(() => {
+      stopResolved = true;
+      events.push('stop-resolved');
+    });
+    await Promise.resolve();
+    const resolvedBeforeSymbolBoundary = stopResolved;
+    finishSymbol.resolve();
+    await stopping;
+    await waitFor(() => events.includes('symbol-saved'));
+
+    expect(resolvedBeforeSymbolBoundary).toBe(false);
+    expect(events).toEqual(['symbol-saved', 'stop-resolved']);
+    expect(orchestrator.get(job.id)?.status).toBe('RUNNING');
+    expect(orchestrator.get(job.id)?.doneSymbols).toBe(1);
+
+    ctx.handle.close();
+    events.push('db-closed');
+    await Promise.resolve();
+    expect(events).toEqual(['symbol-saved', 'stop-resolved', 'db-closed']);
+  });
+
+  it('RUNNING은 QUEUED로 회수하고 미래 quota wait는 그대로 두며 만기 wait만 QUEUED로 회수한다', async () => {
     const ctx = makeDeps();
     const now = ctx.deps.clock.now();
     const base = {
@@ -181,7 +307,7 @@ describe('BacktestPreparationOrchestrator recovery와 취소', () => {
     expect(orchestrator.get('prep_running')?.status).toBe('QUEUED');
     expect(orchestrator.get('prep_due')?.status).toBe('QUEUED');
     expect(orchestrator.get('prep_future')?.status).toBe('WAITING_DAILY_QUOTA');
-    orchestrator.stop();
+    await orchestrator.stop();
     ctx.handle.close();
   });
 
@@ -222,7 +348,7 @@ describe('BacktestPreparationOrchestrator recovery와 취소', () => {
     await waitFor(() => orchestrator.get(job.id)?.status === 'CANCELLED');
     expect(orchestrator.get(job.id)?.doneSymbols).toBe(1);
     expect(orchestrator.cancel(job.id)).toBe(true);
-    orchestrator.stop();
+    await orchestrator.stop();
     ctx.handle.close();
   });
 });
@@ -281,7 +407,7 @@ describe('BacktestPreparationOrchestrator quota resume와 terminal 결과', () =
 
     expect(requestedSymbols).toEqual(['000660', '005930']);
     expect(modes).toEqual(['INCREMENTAL', 'INCREMENTAL']);
-    orchestrator.stop();
+    await orchestrator.stop();
     ctx.handle.close();
   });
 
@@ -293,7 +419,7 @@ describe('BacktestPreparationOrchestrator quota resume와 terminal 결과', () =
     await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
 
     expect(orchestrator.get(job.id)?.error).toMatch(/선정된 종목|유니버스/);
-    orchestrator.stop();
+    await orchestrator.stop();
     ctx.handle.close();
   });
 });

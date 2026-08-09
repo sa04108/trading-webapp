@@ -50,7 +50,17 @@ export function buildBacktestPreparationPlan(input: {
   const priceSymbols = new Set(resolutionNeeds.priceSymbols);
   let priceRange = resolutionNeeds.priceRange;
 
-  const priceWarmupBars = strategy.dataRequirements?.priceWarmupBars?.(request.parameters) ?? 0;
+  // HTTP 요청은 기본값 필드를 생략할 수 있다. 전략 구현이 실제로 받는 것과 같은
+  // Zod 파싱 결과를 메타데이터에도 넘겨야 undefined/NaN 워밍업이 되지 않는다.
+  const parsedParameters = strategy.parameterSchema.safeParse(request.parameters);
+  if (!parsedParameters.success) {
+    throw new Error(
+      parsedParameters.error.issues
+        .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
+        .join('; '),
+    );
+  }
+  const priceWarmupBars = strategy.dataRequirements?.priceWarmupBars?.(parsedParameters.data) ?? 0;
   if (priceWarmupBars > 0) {
     for (const symbol of finalSymbols) priceSymbols.add(symbol);
     const strategyRange = {

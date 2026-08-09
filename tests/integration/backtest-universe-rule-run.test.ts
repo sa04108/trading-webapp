@@ -119,6 +119,28 @@ async function waitFor(condition: () => boolean, timeoutMs: number): Promise<voi
 
 /** 이 파일의 실행/게이트 테스트가 Task 6의 완료된 preparation 전제를 갖추게 한다. */
 function installPreparedSubmissionFixture(ctx: TestApp): void {
+  // 제출 검증/worker 회귀가 관찰 대상이다. preparation의 실제 DART gate와 coverage
+  // 실행은 backtest-preparation.test.ts에서 검증하므로 여기서는 외부 sync만 격리한다.
+  const noWorkPlan = {
+    yearsBySymbol: new Map(),
+    shareYearsBySymbol: new Map(),
+    calls: 0,
+    estimatedMs: 0,
+    overDailyLimit: false,
+  };
+  const planFinancialSync: typeof ctx.container.factSyncService.planFinancialSync = () => noWorkPlan;
+  const planCorporateActionSync: typeof ctx.container.factSyncService.planCorporateActionSync = () => noWorkPlan;
+  ctx.container.factSyncService.planFinancialSync = planFinancialSync;
+  ctx.container.factSyncService.planCorporateActionSync = planCorporateActionSync;
+  const noWorkReport: typeof ctx.container.factSyncService.sync = async () => ({
+    savedFacts: 0,
+    gaps: [],
+    stoppedAtSymbol: null,
+    stopReason: null,
+    failureMessage: null,
+  });
+  ctx.container.factSyncService.sync = noWorkReport;
+  ctx.container.factSyncService.syncCorporateActions = noWorkReport;
   const rawInject = ctx.app.inject.bind(ctx.app);
   ctx.app.inject = (async (options: unknown) => {
     const request = options as { method?: string; url?: string; payload?: BacktestRequest };
@@ -506,6 +528,7 @@ describe('POST /backtests/:id/clone — 유니버스 자동 등록 (미리보기
       payload: { username, password },
     });
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+    installPreparedSubmissionFixture(ctx);
 
     // 시총 순위: 900010(상장폐지 예정, 미등록) > 005930(이미 등록·커버리지 있음) —
     // topN=2 유니버스 규칙이 둘 다 고른다.

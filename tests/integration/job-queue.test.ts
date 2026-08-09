@@ -6,7 +6,12 @@ import type { Candle } from '../../src/server/modules/market-data/domain/candle.
 import { symbolVersions } from '../../src/server/shared/db/schema.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { currentStrategyVersion } from '../helpers/strategy-versions.js';
-import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
+import {
+  createTestAdmin,
+  createTestApp,
+  installPreparedSubmissionFixture,
+  type TestApp,
+} from '../helpers/test-app.js';
 import { registerSymbols, seedCorporateActionCoverage, seedDailyBars, yearRange } from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 
@@ -141,6 +146,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       payload: { username, password },
     });
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+    installPreparedSubmissionFixture(ctx);
 
     registerSymbols(ctx.container, 'KR', ['005930']);
     dailyCandles = buildTrendingDailyCandles();
@@ -673,18 +679,16 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
     expect(badStrategy.statusCode).toBe(400);
 
-    // 옛 "존재하지 않는 데이터셋" 자리 — 유니버스 규칙 모델에서는 "종목 마스터가 커버하지
-    // 않는 리밸런스 날짜" 가 같은 종류의 참조 오류다 (422 + uncoveredDates 목록).
+    // 종목 마스터가 커버하지 않는 날짜는 Task 6부터 제출 검증 전에 durable
+    // preparation으로 해소한다. KRX를 준비하지 않은 이 fixture에서는 409가 계약이다.
     const badUniverseDate = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
       payload: { ...buildRequest(), period: { from: '1999-01-01', to: '1999-06-30' } },
     });
-    expect(badUniverseDate.statusCode).toBe(422);
-    expect((badUniverseDate.json() as { uncoveredDates: string[] }).uncoveredDates).toContain(
-      '1999-01-01',
-    );
+    expect(badUniverseDate.statusCode).toBe(409);
+    expect((badUniverseDate.json() as { error: string }).error).toBe('PREPARATION_REQUIRED');
 
     const badParams = await ctx.app.inject({
       method: 'POST',
@@ -887,6 +891,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
   it('대기열 상한을 넘는 제출을 429 로 거부한다 (신규·복제 공통)', async () => {
     const small = await createTestApp({ MAX_QUEUED_BACKTESTS: '3' });
     try {
+      installPreparedSubmissionFixture(small);
       const { username, password } = await createTestAdmin(small.container);
       const login = await small.app.inject({
         method: 'POST',
