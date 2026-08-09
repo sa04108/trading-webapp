@@ -1,10 +1,12 @@
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { CalendarDays as CalendarIcon, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { Calendar } from '@/components/ui/calendar';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { CoverageTimeline } from './coverage-timeline';
 import { EventsSidebar } from './events-sidebar';
 import { addDays } from './timeline-model';
@@ -150,6 +152,15 @@ export function SymbolMasterPanel() {
   const prevDisabled = coverageLoading || !hasCoverage || committedDate <= rangeStart;
   const nextDisabled = coverageLoading || !hasCoverage || committedDate >= rangeEnd;
 
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  // 달력 칸에 커버 여부 점을 찍는다 — 어느 날에 데이터가 있는지 슬라이더 막대에만
+  // 있던 정보를 달력에서도 잃지 않게 한다. ISO 문자열은 사전순 비교가 곧 날짜 비교다.
+  const isCovered = useMemo(
+    () => (date: string) =>
+      sortedRanges.some((range) => range.startDate <= date && date <= range.endDate),
+    [sortedRanges],
+  );
+
   const backfill = coverage?.backfill ?? null;
 
   return (
@@ -187,9 +198,34 @@ export function SymbolMasterPanel() {
           >
             <ChevronLeft aria-hidden />
           </Button>
-          <span className="min-w-24 text-center text-sm font-medium tabular-nums">
-            {displayDate}
-          </span>
+          <Popover open={calendarOpen} onOpenChange={setCalendarOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                aria-label="날짜 선택"
+                disabled={coverageLoading}
+                className="min-w-28 font-medium tabular-nums"
+              >
+                <CalendarIcon aria-hidden />
+                {displayDate}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-auto p-3">
+              <Calendar
+                value={committedDate}
+                min={rangeStart}
+                max={rangeEnd}
+                isMarked={isCovered}
+                onSelect={(next) => {
+                  setPreviewDate(null);
+                  setDate(next);
+                  setCalendarOpen(false);
+                }}
+              />
+            </PopoverContent>
+          </Popover>
           <Button
             type="button"
             variant="outline"
