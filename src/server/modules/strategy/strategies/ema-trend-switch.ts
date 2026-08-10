@@ -143,13 +143,21 @@ export const emaTrendSwitchStrategy: TradingStrategy<
   EmaTrendSwitchState
 > = {
   id: 'ema-trend-switch',
-  version: '1.0.0',
+  version: '1.0.1',
   name: 'EMA 추세 스위치',
   description:
     '단기·장기 이동평균 간격이 벌어진 종목에 올라타고, 고점에서 변동성 폭만큼 내려오면 팝니다. ' +
     '반대로 움직이는 종목(예: 레버리지·인버스 쌍)을 함께 넣으면 같은 묶음에서 한 종목만 보유해 ' +
     '방향 전환이 종목 교체로 표현됩니다.',
   parameterSchema: emaTrendSwitchParameters,
+  dataRequirements: {
+    priceWarmupBars: (parameters) => Math.max(
+      parameters.slowEmaBars,
+      parameters.atrPeriod + 1,
+      parameters.correlationBars,
+    ),
+    requiresCorporateActions: true,
+  },
 
   initialize(context: StrategyInitializeContext): EmaTrendSwitchState {
     return {

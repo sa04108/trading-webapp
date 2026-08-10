@@ -1,7 +1,9 @@
 import { z } from 'zod';
 import type { AnyTradingStrategy } from '../domain/strategy.js';
 import { crossSectionalMomentumStrategy } from '../strategies/cross-sectional-momentum.js';
+import { earningsAccelerationRankStrategy } from '../strategies/earnings-acceleration-rank.js';
 import { emaTrendSwitchStrategy } from '../strategies/ema-trend-switch.js';
+import { lowPerHighRoeRankStrategy } from '../strategies/low-per-high-roe-rank.js';
 import { rangeBreakoutStrategy } from '../strategies/range-breakout.js';
 import { rsiReversionStrategy } from '../strategies/rsi-reversion.js';
 import { valueQualityRankStrategy } from '../strategies/value-quality-rank.js';
@@ -14,6 +16,8 @@ const STRATEGIES: readonly AnyTradingStrategy[] = [
   rangeBreakoutStrategy as AnyTradingStrategy,
   crossSectionalMomentumStrategy as AnyTradingStrategy,
   valueQualityRankStrategy as AnyTradingStrategy,
+  earningsAccelerationRankStrategy as AnyTradingStrategy,
+  lowPerHighRoeRankStrategy as AnyTradingStrategy,
   emaTrendSwitchStrategy as AnyTradingStrategy,
   rsiReversionStrategy as AnyTradingStrategy,
 ];

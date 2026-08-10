@@ -7,6 +7,7 @@ function row(partial: Partial<KrxDailyTradeRow>): KrxDailyTradeRow {
     shortCode: '000000',
     name: '테스트',
     marketCapRaw: '1000',
+    tradingValueRaw: null,
     open: 1_000,
     high: 1_100,
     low: 900,

@@ -32,6 +32,7 @@ const dailyRowSchema = z.object({
   TDD_LWPRC: z.string().nullable().optional(),
   TDD_CLSPRC: z.string().nullable().optional(),
   ACC_TRDVOL: z.string().nullable().optional(),
+  ACC_TRDVAL: z.string().nullable().optional(),
 }).loose();
 
 /** KRX 가 새 필드를 더해도 필수 응답 필드는 계약대로 검증한다. */
@@ -61,6 +62,18 @@ export function parseNullableInt64(raw: string | null | undefined, field: string
     throw new KrxContractError(`${field} 가 64비트 범위를 넘습니다`);
   }
   return value;
+}
+
+/** text-backed 거래대금은 SQLite/signed-64 범위와 무관하게 10진 원문만 검증한다. */
+function parseNullableDecimalString(raw: string | null | undefined, field: string): string | null {
+  const trimmed = (raw ?? '').trim().replaceAll(',', '');
+  if (trimmed === '' || trimmed === '-') return null;
+  if (!/^\d+$/.test(trimmed)) {
+    throw new KrxContractError(`${field} 가 정수 형식이 아닙니다: ${trimmed.slice(0, 30)}`);
+  }
+  // BigInt 는 임의 정밀도라 source text 가 signed-64 범위에 갇히지 않음을 명시한다.
+  BigInt(trimmed);
+  return trimmed;
 }
 
 /** 기본정보 행은 표시 원문을 유지하고 날짜만 안정적인 내부 형식으로 바꾼다. */
@@ -104,10 +117,16 @@ export function parseDailyRows(rows: readonly Record<string, unknown>[]): KrxDai
 
     const row = parsed.data;
     const marketCap = parseNullableInt64(row.MKTCAP, 'MKTCAP');
+    const tradingValue = parseNullableDecimalString(row.ACC_TRDVAL, 'ACC_TRDVAL');
     return {
       shortCode: row.ISU_CD,
       name: row.ISU_NM,
       marketCapRaw: marketCap === null ? null : marketCap.toString(),
+      // 거래대금은 나중에 bigint/text 경계에서 처리한다. 여기서 Number 로 바꾸면
+      // 2^53 초과 실제 값이 조용히 손상되므로 10진 문자열을 그대로 둔다.
+      // marketCapRaw 와 같은 콤마 제거 정규화 결과를 돌려줘야 소비자가
+      // BigInt(tradingValueRaw) 를 바로 부를 수 있다.
+      tradingValueRaw: tradingValue,
       open: parseNullableIntNumber(row.TDD_OPNPRC, 'TDD_OPNPRC'),
       high: parseNullableIntNumber(row.TDD_HGPRC, 'TDD_HGPRC'),
       low: parseNullableIntNumber(row.TDD_LWPRC, 'TDD_LWPRC'),

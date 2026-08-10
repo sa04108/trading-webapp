@@ -1,6 +1,6 @@
 import type { z } from 'zod';
 import type { Candle } from '../../market-data/domain/candle.js';
-import type { OrderIntent, Position } from '../../backtest/domain/types.js';
+import type { OrderIntent, Position, SelectionMetricPin } from '../../backtest/domain/types.js';
 import type { Rng } from '../../backtest/domain/seeded-rng.js';
 import type { CorporateAction, FundamentalSnapshot } from '../../facts/domain/fact.js';
 
@@ -19,6 +19,8 @@ export interface StrategyInitializeContext {
 
 export interface StrategyBarContext {
   readonly tsMs: number;
+  /** 공유 멤버십 일정이 이 실제 거래 봉에서 처음 활성화됐을 때만 true */
+  readonly isRebalanceBar: boolean;
   /** 이번 시점에 확정된 봉 (심볼별) */
   readonly bars: ReadonlyMap<string, Candle>;
   /** 현재 시점까지 확정된 봉 이력 — 미래 봉은 절대 포함되지 않는다 */
@@ -38,6 +40,8 @@ export interface StrategyBarContext {
    * (엔진의 리스크 검증도 이때는 항상 통과시킨다).
    */
   readonly tradableSymbols: ReadonlySet<string> | null;
+  /** 현재 활성 schedule member에 제출 시점에 pin된 선정 지표 */
+  selectionMetric(symbol: string): SelectionMetricPin | null;
 }
 
 export interface StrategyDecision {
@@ -56,6 +60,12 @@ export interface TradingStrategy<TParameters, TState> {
    * 알 수 없다. 봉만 쓰는 전략은 이 필드를 생략한다.
    */
   readonly requiresFundamentals?: boolean;
+  /** 백테스트 준비 잡이 필요한 최소 데이터 범위를 전략 구현과 같은 곳에서 읽는다. */
+  readonly dataRequirements?: {
+    readonly fundamentalLookbackQuarters?: number;
+    readonly priceWarmupBars?: (parameters: TParameters) => number;
+    readonly requiresCorporateActions?: boolean;
+  };
   readonly parameterSchema: z.ZodType<TParameters>;
 
   initialize(context: StrategyInitializeContext): TState;
@@ -76,7 +86,7 @@ export interface TradingStrategy<TParameters, TState> {
 
   /**
    * 엔진이 보유 포지션을 강제로 청산한 직후 부르는 선택 훅이다.
-   * 지금은 상장폐지 청산 하나뿐이다.
+   * 상장폐지 또는 리밸런스 유니버스 이탈 청산에 사용한다.
    *
    * 전략이 낸 매도가 아니므로 전략은 자기가 아직 보유 중이라고 믿는다.
    * 봉 사이에 들고 다니는 스톱 레벨·보유 플래그를 여기서 지우지 않으면
@@ -87,5 +97,12 @@ export interface TradingStrategy<TParameters, TState> {
   onForcedExit?(symbol: string, state: TState): void;
 }
 
-/** 레지스트리 저장용 — 파라미터·상태 타입을 지운 형태 */
-export type AnyTradingStrategy = TradingStrategy<unknown, unknown>;
+/**
+ * 레지스트리 저장용 — 파라미터·상태 타입을 지운 형태.
+ *
+ * `dataRequirements.priceWarmupBars`는 구체 파라미터를 입력으로 받으므로 `unknown`은
+ * 함수 매개변수 반공변성상 개별 전략을 담을 수 없다. 레지스트리 경계에서만 타입을
+ * 지우고, 실제 호출 전에는 각 전략의 parameterSchema로 검증한다.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type AnyTradingStrategy = TradingStrategy<any, any>;

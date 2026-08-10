@@ -158,6 +158,38 @@ describe('parseFinancialRows — 누적값 차분', () => {
     ]);
   });
 
+  it('순이익은 IS 누적 차분을 거치고 자본총계는 BS 시점값으로 저장한다', () => {
+    const netIncome = (report: DartReportCode, cumulative: number): DartFinancialRow => ({
+      ...incomeRow(report, cumulative),
+      account_id: 'ifrs-full_ProfitLoss',
+      account_nm: '당기순이익',
+    });
+    const totalEquity = (report: DartReportCode, value: number): DartFinancialRow => ({
+      ...balanceRow(report, value),
+      account_id: 'ifrs-full_Equity',
+      account_nm: '자본총계',
+      thstrm_amount: value.toLocaleString('en-US'),
+    });
+    const rows = new Map<DartReportCode, DartFinancialRow[]>([
+      ['11013', [netIncome('11013', 100), totalEquity('11013', 900)]],
+      ['11012', [netIncome('11012', 250), totalEquity('11012', 1_000)]],
+    ]);
+
+    const { facts } = parseFinancialRows('005930', rows);
+    expect(
+      facts.filter((entry) => entry.field === 'NET_INCOME').map((entry) => [entry.periodKey, entry.value]),
+    ).toEqual([
+      ['2025Q1', 100],
+      ['2025Q2', 150],
+    ]);
+    expect(
+      facts.filter((entry) => entry.field === 'TOTAL_EQUITY').map((entry) => [entry.periodKey, entry.value]),
+    ).toEqual([
+      ['2025Q1', 900],
+      ['2025Q2', 1_000],
+    ]);
+  });
+
   it('중간 보고서가 없으면 그 뒤 분기를 만들지 않고 gap 으로 남긴다', () => {
     const rows = new Map<DartReportCode, DartFinancialRow[]>([
       ['11013', [incomeRow('11013', 100)]],

@@ -171,7 +171,11 @@ describe('유니버스 규칙 topN 상한 — 요청 스키마 경계', () => {
     const parse = (topN: number): boolean =>
       backtestRequestSchema.safeParse({
         ...request,
-        universeRule: { markets: ['KOSPI'], topN, sortKey: 'MKTCAP' },
+        universeRule: {
+          markets: ['KOSPI'],
+          stages: [{ criterion: 'MARKET_CAP', limit: topN }],
+          rebalanceInterval: { value: 1, unit: 'MONTH' },
+        },
       }).success;
 
     expect(parse(MAX_UNIVERSE_SYMBOLS)).toBe(true);

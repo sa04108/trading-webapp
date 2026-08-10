@@ -107,10 +107,12 @@ describe('저장소 → 엔진 왕복', () => {
       candles: candles(40),
       initialCash: 10_000_000,
       execution: ZERO_COST,
-      parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+      parameters: { topN: 1, staleQuarters: 2 },
       randomSeed: 1,
       maxPositions: 1,
       facts,
+      // 공유 리밸런스 계약의 첫 거래 봉을 공시 시점에 맞춘다. 그 전 봉은 PIT warm-up이다.
+      tradeFromTsMs: disclosed,
     });
 
     const buys = result.fills.filter((fill) => fill.side === 'BUY');

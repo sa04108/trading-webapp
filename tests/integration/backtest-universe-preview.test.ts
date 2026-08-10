@@ -1,7 +1,10 @@
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
 import {
+  dailySelectionMetrics,
   krxDailyBars,
+  symbolFactsState,
   symbolMasterCoverage,
   symbolMasterMarketCaps,
   symbolMasterTradingDays,
@@ -9,9 +12,77 @@ import {
   symbols as symbolsTable,
 } from '../../src/server/shared/db/schema.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
-import { registerSymbols, seedDailyBars } from '../helpers/seed.js';
+import { registerSymbols, seedCorporateActionCoverage, seedDailyBars, yearRange } from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 import { startKrxFakeServer, type KrxFakeServer } from '../helpers/krx-fixtures.js';
+
+// 이 파일 대부분은 period 가 하루짜리다 — rebalanceInterval 은 그 하루를 리밸런스
+// 날짜로 잡는 데만 쓰이고 실제 간격은 의미가 없다. 기본값을 DAY 로 둬 그런 호출이
+// rebalanceIntervalFitsPeriod(리뷰 finding, 2026-08-09)에 걸리지 않게 한다 — 여러
+// 리밸런스가 실제로 필요한 호출만 MONTH 등으로 명시한다.
+const marketCapRule = (
+  markets: readonly string[] = ['KOSPI'],
+  rebalanceInterval: { unit: 'DAY' | 'WEEK' | 'MONTH' | 'YEAR'; value: number } = { unit: 'DAY', value: 1 },
+) => ({
+  markets,
+  stages: [{ criterion: 'MARKET_CAP', limit: 10 }],
+  rebalanceInterval,
+});
+
+async function waitForPreparation(ctx: TestApp, jobId: string): Promise<'COMPLETED' | 'FAILED' | 'CANCELLED'> {
+  const started = Date.now();
+  for (;;) {
+    const status = ctx.container.backtestPreparationOrchestrator.get(jobId)?.status;
+    if (status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED') return status;
+    if (Date.now() - started > 2_000) throw new Error('preparation timeout');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+function installPreparedPreviewFixture(ctx: TestApp): void {
+  // 이 파일은 preview 내용·자동 등록만 격리해 본다. 실전 registry의 DART 요구와
+  // 실제 coverage gate는 backtest-preparation.test.ts가 별도로 검증한다.
+  const noActionWork: typeof ctx.container.factSyncService.planCorporateActionSync = () => ({
+    yearsBySymbol: new Map(),
+    shareYearsBySymbol: new Map(),
+    calls: 0,
+    estimatedMs: 0,
+    overDailyLimit: false,
+  });
+  ctx.container.factSyncService.planCorporateActionSync = noActionWork;
+  const noActionSync: typeof ctx.container.factSyncService.syncCorporateActions = async () => ({
+    savedFacts: 0,
+    gaps: [],
+    stoppedAtSymbol: null,
+    stopReason: null,
+    failureMessage: null,
+  });
+  ctx.container.factSyncService.syncCorporateActions = noActionSync;
+  const noMarketSync: typeof ctx.container.symbolMasterService.ingestDate = async () => ({
+    kind: 'ALREADY_COVERED',
+  });
+  ctx.container.symbolMasterService.ingestDate = noMarketSync;
+  const rawInject = ctx.app.inject.bind(ctx.app);
+  ctx.app.inject = (async (options: unknown) => {
+    const request = options as { method?: string; url?: string; payload?: Record<string, unknown> };
+    if (request.method === 'POST' && request.url === '/api/v1/backtests/universe-preview') {
+      const enriched = {
+        ...request,
+        payload: {
+          ...request.payload,
+          strategyId: request.payload?.strategyId ?? 'range-breakout',
+          parameters: request.payload?.parameters ?? {},
+        },
+      };
+      const first = await rawInject(enriched as never);
+      if (first.statusCode !== 202) return first;
+      const jobId = (first.json() as { job: { id: string } }).job.id;
+      if (await waitForPreparation(ctx, jobId) !== 'COMPLETED') return first;
+      return rawInject(enriched as never);
+    }
+    return rawInject(options as never);
+  }) as typeof ctx.app.inject;
+}
 
 /**
  * `POST /backtests/universe-preview` (Task 2, 스펙 2026-08-05) — 위저드가 제출 전에
@@ -32,10 +103,107 @@ describe('POST /backtests/universe-preview', () => {
       payload: { username, password },
     });
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+
+    // 이 파일은 staged preview 내용·자동 등록 회귀를 검증한다. Task 6부터 첫 호출은
+    // durable job(202)을 만들므로 fixture가 그 전제만 완료한 뒤 같은 hash를 재조회한다.
+    installPreparedPreviewFixture(ctx);
   });
 
   afterEach(async () => {
     await ctx.close();
+  });
+
+  it('단계 파이프라인이 준비되면 pin된 member와 날짜별 단계 진단을 반환한다', async () => {
+    seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
+      { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
+    ]);
+    ctx.container.database.db.insert(dailySelectionMetrics).values({
+      date: '2026-01-05',
+      standardCode: 'KR7005930003',
+      marketCapKrw: '500000000000000',
+      volume: 1_000,
+      tradingValueKrw: '1000000000',
+    }).onConflictDoUpdate({
+      target: [dailySelectionMetrics.date, dailySelectionMetrics.standardCode],
+      set: { marketCapKrw: '500000000000000', volume: 1_000, tradingValueKrw: '1000000000' },
+    }).run();
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: {
+          markets: ['KOSPI'],
+          stages: [{ criterion: 'MARKET_CAP', limit: 10 }],
+          // 이 test는 하루짜리 period 하나만 본다 — 리밸런스 간격 자체는 무관하다.
+          rebalanceInterval: { unit: 'DAY', value: 1 },
+        },
+        period: { from: '2026-01-05', to: '2026-01-05' },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      schedule: [{
+        rebalanceDate: '2026-01-05',
+        effectiveDate: '2026-01-05',
+        fromTsMs: Date.parse('2026-01-05T00:00:00Z'),
+        members: [{
+          symbol: '005930',
+          standardCode: 'KR7005930003',
+          marketCapKrw: '500000000000000',
+          volume: 1_000,
+          tradingValueKrw: '1000000000',
+        }],
+      }],
+      diagnostics: [{
+        rebalanceDate: '2026-01-05',
+        effectiveDate: '2026-01-05',
+        stages: [{
+          criterion: 'MARKET_CAP',
+          inputCount: 1,
+          eligibleCount: 1,
+          selectedCount: 1,
+          excludedMissingCount: 0,
+        }],
+      }],
+      stages: [{ criterion: 'MARKET_CAP', limit: 10 }],
+    });
+  });
+
+  it('PER 후보 재무가 필요하고 DART key가 없으면 그 요청만 503이다', async () => {
+    seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
+      { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
+    ]);
+    ctx.container.database.db.insert(dailySelectionMetrics).values({
+      date: '2026-01-05',
+      standardCode: 'KR7005930003',
+      marketCapKrw: '500000000000000',
+      volume: 1_000,
+      tradingValueKrw: '1000000000',
+    }).onConflictDoUpdate({
+      target: [dailySelectionMetrics.date, dailySelectionMetrics.standardCode],
+      set: { marketCapKrw: '500000000000000', volume: 1_000, tradingValueKrw: '1000000000' },
+    }).run();
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: {
+          markets: ['KOSPI'],
+          stages: [{ criterion: 'PER', limit: 10 }],
+          // 이 test는 하루짜리 period 하나만 본다 — 리밸런스 간격 자체는 무관하다.
+          rebalanceInterval: { unit: 'DAY', value: 1 },
+        },
+        period: { from: '2026-01-05', to: '2026-01-05' },
+      },
+    });
+
+    expect(res.statusCode).toBe(503);
+    expect((res.json() as { error: string }).error).toContain('DART');
   });
 
   it('정상 요청은 schedule·unionSymbols·scheduleHash·missingCandleSymbols 를 담아 200 이다', async () => {
@@ -62,9 +230,8 @@ describe('POST /backtests/universe-preview', () => {
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
       payload: {
-        universeRule: { markets: ['KOSPI'], topN: 10, sortKey: 'MKTCAP' },
+        universeRule: marketCapRule(),
         period: { from: '2026-01-05', to: '2026-01-05' },
-        rebalanceMonths: 1,
       },
     });
 
@@ -72,9 +239,9 @@ describe('POST /backtests/universe-preview', () => {
     const body = res.json() as {
       schedule: Array<{
         rebalanceDate: string;
-        effectiveTradingDate: string;
-        symbols: string[];
-        excludedNonTradingCount: number;
+        effectiveDate: string;
+        fromTsMs: number;
+        members: Array<{ symbol: string }>;
       }>;
       unionSymbols: string[];
       scheduleHash: string;
@@ -82,15 +249,12 @@ describe('POST /backtests/universe-preview', () => {
       periodCovered: boolean;
       missingCandleSymbols: string[];
     };
-    // excludedNonTradingCount: 0 — 이 픽스처는 거래불가일을 채우지 않는다.
-    expect(body.schedule).toEqual([
-      {
-        rebalanceDate: '2026-01-05',
-        effectiveTradingDate: '2026-01-05',
-        symbols: ['005930'],
-        excludedNonTradingCount: 0,
-      },
-    ]);
+    expect(body.schedule).toMatchObject([{
+      rebalanceDate: '2026-01-05',
+      effectiveDate: '2026-01-05',
+      fromTsMs: Date.parse('2026-01-05T00:00:00Z'),
+      members: [{ symbol: '005930' }],
+    }]);
     expect(body.unionSymbols).toEqual(['005930']);
     expect(typeof body.scheduleHash).toBe('string');
     expect(body.scheduleHash.length).toBeGreaterThan(0);
@@ -101,30 +265,20 @@ describe('POST /backtests/universe-preview', () => {
     expect(body.missingCandleSymbols).toEqual([]);
   });
 
-  it('종목 마스터가 커버하지 않는 날짜는 uncoveredDates 에 담아 응답한다 (200, 차단 아님)', async () => {
+  it('종목 마스터가 커버하지 않는 날짜는 durable preparation job을 시작한다', async () => {
     // 마스터를 전혀 채우지 않는다 — 어떤 날짜도 커버되지 않는다
     const res = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
       payload: {
-        universeRule: { markets: ['KOSPI'], topN: 10, sortKey: 'MKTCAP' },
+        universeRule: marketCapRule(),
         period: { from: '2026-01-05', to: '2026-01-05' },
-        rebalanceMonths: 1,
       },
     });
 
-    expect(res.statusCode).toBe(200);
-    const body = res.json() as {
-      uncoveredDates: string[];
-      periodCovered: boolean;
-      schedule: unknown[];
-      unionSymbols: string[];
-    };
-    expect(body.uncoveredDates).toEqual(['2026-01-05']);
-    expect(body.periodCovered).toBe(false);
-    expect(body.schedule).toEqual([]);
-    expect(body.unionSymbols).toEqual([]);
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toMatchObject({ job: { status: 'QUEUED' } });
   });
 
   /**
@@ -166,6 +320,13 @@ describe('POST /backtests/universe-preview', () => {
         .insert(symbolMasterMarketCaps)
         .values({ date, standardCode: entry.standardCode, marketCapKrw: '500000000000000' })
         .run();
+      ctx.container.database.db.insert(dailySelectionMetrics).values({
+        date,
+        standardCode: entry.standardCode,
+        marketCapKrw: '500000000000000',
+        volume: null,
+        tradingValueKrw: null,
+      }).run();
     }
 
     const res = await ctx.app.inject({
@@ -173,9 +334,10 @@ describe('POST /backtests/universe-preview', () => {
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
       payload: {
-        universeRule: { markets: ['KOSPI'], topN: 10, sortKey: 'MKTCAP' },
+        // 이 test는 3개의 월간 리밸런스 날짜가 실제로 필요하다 — 기본값(DAY)이 아니라
+        // 명시적으로 MONTH 를 쓴다.
+        universeRule: marketCapRule(['KOSPI'], { unit: 'MONTH', value: 1 }),
         period: { from: '2026-01-05', to: '2026-03-05' },
-        rebalanceMonths: 1,
       },
     });
 
@@ -205,9 +367,8 @@ describe('POST /backtests/universe-preview', () => {
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
       payload: {
-        universeRule: { markets: ['KOSPI'], topN: 10, sortKey: 'MKTCAP' },
+        universeRule: marketCapRule(),
         period: { from: '2026-01-05', to: '2026-01-05' },
-        rebalanceMonths: 1,
       },
     });
 
@@ -222,15 +383,14 @@ describe('POST /backtests/universe-preview', () => {
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
       payload: {
-        universeRule: { markets: ['KOSPI', 'KOSDAQ'], topN: 10, sortKey: 'MKTCAP' },
+        universeRule: marketCapRule(['KOSPI', 'KOSDAQ']),
         period: { from: '2026-01-05', to: '2026-01-05' },
-        rebalanceMonths: 1,
       },
     });
     expect(res.statusCode).toBe(400);
   });
 
-  it('rebalanceMonths 미지정은 기본값 1 이다', async () => {
+  it('rule의 shared interval로 단일 리밸런스 일정을 만든다', async () => {
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
       { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
     ]);
@@ -239,7 +399,7 @@ describe('POST /backtests/universe-preview', () => {
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
       payload: {
-        universeRule: { markets: ['KOSPI'], topN: 10, sortKey: 'MKTCAP' },
+        universeRule: marketCapRule(),
         period: { from: '2026-01-05', to: '2026-01-05' },
       },
     });
@@ -254,9 +414,41 @@ describe('POST /backtests/universe-preview', () => {
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
       payload: {
-        universeRule: { markets: ['KOSPI'], topN: 10, sortKey: 'MKTCAP' },
+        universeRule: marketCapRule(),
         period: { from: '2026-01-10', to: '2026-01-05' },
-        rebalanceMonths: 1,
+      },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('리밸런싱 주기가 기간을 넘으면 400 이다 (backtest-request.ts superRefine과 같은 검사)', async () => {
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: {
+          markets: ['KOSPI'],
+          stages: [{ criterion: 'MARKET_CAP', limit: 10 }],
+          rebalanceInterval: { unit: 'MONTH', value: 2 },
+        },
+        period: { from: '2026-01-05', to: '2026-01-06' },
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { error: string }).error).toContain('리밸런싱 주기가 백테스트 전체 기간을 초과합니다');
+  });
+
+  it('존재하지 않는 날짜(2026-13-45)는 500 이 아니라 400 이다', async () => {
+    // 정규식만으로는 자릿수만 보고 통과시킨다 — 그러면 준비 파이프라인이 리밸런스
+    // 날짜를 계산할 때 RangeError 를 던져 500 이 된다(리뷰 finding, 2026-08-09).
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: marketCapRule(),
+        period: { from: '2026-13-45', to: '2026-12-31' },
       },
     });
     expect(res.statusCode).toBe(400);
@@ -283,6 +475,7 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
       payload: { username, password },
     });
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+    installPreparedPreviewFixture(ctx);
   });
 
   afterEach(async () => {
@@ -309,9 +502,8 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
       payload: {
-        universeRule: { markets: ['KOSPI'], topN: 10, sortKey: 'MKTCAP' },
+        universeRule: marketCapRule(),
         period: { from: '2026-01-05', to: '2026-01-05' },
-        rebalanceMonths: 1,
       },
     });
     expect(res.statusCode).toBe(200);
@@ -322,6 +514,49 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
     const registered = ctx.container.symbolService.getSymbol('005930');
     expect(registered).toMatchObject({ code: '005930', market: 'KR', name: '삼성전자' });
     expect(readStandardCode('005930')).toBe('KR7005930003');
+  });
+
+  it('VOLUME-first READY는 staged member만 해당 master entry로 등록한다', async () => {
+    seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
+      { standardCode: 'KR7000001001', shortCode: '000001', name: '시총상위', market: 'KOSPI', marketCapKrw: '500000000000000' },
+      { standardCode: 'KR7000002002', shortCode: '000002', name: '거래량상위', market: 'KOSPI', marketCapKrw: '20000000000000' },
+    ]);
+    ctx.container.database.db.update(dailySelectionMetrics)
+      .set({ volume: 100, tradingValueKrw: '1000000' })
+      .where(eq(dailySelectionMetrics.standardCode, 'KR7000001001')).run();
+    ctx.container.database.db.update(dailySelectionMetrics)
+      .set({ volume: 10_000, tradingValueKrw: '2000000' })
+      .where(eq(dailySelectionMetrics.standardCode, 'KR7000002002')).run();
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: {
+          markets: ['KOSPI'],
+          stages: [{ criterion: 'VOLUME', limit: 1 }],
+          // 이 test는 하루짜리 period 하나만 본다 — 리밸런스 간격 자체는 무관하다.
+          rebalanceInterval: { unit: 'DAY', value: 1 },
+        },
+        period: { from: '2026-01-05', to: '2026-01-05' },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      schedule: Array<{ members: Array<{ symbol: string; standardCode: string }> }>;
+      unionSymbols: string[];
+    };
+    expect(body.schedule[0]?.members).toMatchObject([
+      { symbol: '000002', standardCode: 'KR7000002002' },
+    ]);
+    expect(body.unionSymbols).toEqual(['000002']);
+    expect(ctx.container.symbolService.exists('000001')).toBe(false);
+    expect(ctx.container.symbolService.getSymbol('000002')).toMatchObject({
+      code: '000002', market: 'KR', name: '거래량상위',
+    });
+    expect(readStandardCode('000002')).toBe('KR7000002002');
   });
 
   it('이미 등록된 종목은 다시 미리보기해도 실패하지 않고 표준코드를 덮어쓰지 않는다', async () => {
@@ -338,9 +573,8 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
         url: '/api/v1/backtests/universe-preview',
         cookies: { qp_session: cookie },
         payload: {
-          universeRule: { markets: ['KOSPI'], topN: 10, sortKey: 'MKTCAP' },
+          universeRule: marketCapRule(),
           period: { from: '2026-01-05', to: '2026-01-05' },
-          rebalanceMonths: 1,
         },
       });
       expect(res.statusCode).toBe(200);
@@ -394,9 +628,8 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
       payload: {
-        universeRule: { markets: ['KOSPI'], topN: 10, sortKey: 'MKTCAP' },
+        universeRule: marketCapRule(),
         period: { from: '2026-01-05', to: '2026-01-05' },
-        rebalanceMonths: 1,
       },
     });
     expect(res.statusCode).toBe(200);
@@ -410,14 +643,8 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
   });
 });
 
-/**
- * KRX 오류 매핑 (리뷰 finding) — `UniverseRuleResolver.resolve` 는 시총 캐시 미스일 때
- * `getMarketCapsAt` 을 통해 실제 KRX 를 부른다. `symbol-master-routes.ts` 의
- * `/symbol-master/sync` 와 같은 관례로 KrxQuotaError→429 를 매핑해야 한다 — 매핑이
- * 없으면 쿼터 초과가 일반 500 으로 노출된다. 제출 경로(`validateSubmission`)는 같은
- * `sendIfKrxError` 헬퍼를 타므로 별도 테스트를 생략한다.
- */
-describe('POST /backtests/universe-preview — KRX 오류 매핑', () => {
+/** staged READY 뒤에는 legacy 시총 resolver를 다시 실행하지 않는다. */
+describe('POST /backtests/universe-preview — staged READY 재조회 방지', () => {
   let ctx: TestApp;
   let fake: KrxFakeServer;
   let cookie: string;
@@ -432,6 +659,7 @@ describe('POST /backtests/universe-preview — KRX 오류 매핑', () => {
       payload: { username, password },
     });
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+    installPreparedPreviewFixture(ctx);
   });
 
   afterEach(async () => {
@@ -439,12 +667,12 @@ describe('POST /backtests/universe-preview — KRX 오류 매핑', () => {
     await fake.close();
   });
 
-  it('KRX 가 429 를 돌려주면 미리보기도 429 로 응답한다 (일반 500 이 아니다)', async () => {
+  it('선정 지표가 준비됐으면 legacy 시총 캐시가 비어 있어도 KRX를 부르지 않고 200이다', async () => {
     const date = '2026-01-05';
     const basDd = date.replaceAll('-', '');
 
-    // 리밸런스 날짜는 커버되지만(SCD 버전+coverage) 시총 캐시는 비워 둔다 —
-    // getMarketCapsAt 이 캐시 미스로 실제 KRX(fake 서버)를 부르게 하기 위해서다.
+    // 리밸런스 날짜와 staged 선정 지표는 준비하되 legacy 시총 캐시는 비워 둔다.
+    // 옛 preview는 READY 뒤 resolve()를 한 번 더 호출해 아래 fake 429를 그대로 받았다.
     ctx.container.database.db.insert(symbolMasterVersions).values({
       standardCode: 'KR7005930003',
       validFromDate: date,
@@ -461,9 +689,15 @@ describe('POST /backtests/universe-preview — KRX 오류 매핑', () => {
       .insert(symbolMasterCoverage)
       .values({ startDate: date, endDate: date, syncedAtMs: ctx.container.clock.now() })
       .run();
-    // resolver 는 이제 effectiveTradingDate(date) 도 게이트로 보므로, 이 날짜를 거래일로도
-    // 기록해 둬야 게이트를 통과해 getMarketCapsAt 까지 도달한다.
+    // staged resolver가 effective date를 해소할 수 있도록 이 날짜를 거래일로 기록한다.
     ctx.container.database.db.insert(symbolMasterTradingDays).values({ date }).run();
+    ctx.container.database.db.insert(dailySelectionMetrics).values({
+      date,
+      standardCode: 'KR7005930003',
+      marketCapKrw: '500000000000000',
+      volume: 1_000,
+      tradingValueKrw: '1000000000',
+    }).run();
 
     fake.setResponse('stk_bydd_trd', basDd, { status: 429, body: { error: 'quota exceeded' } });
     fake.setResponse('ksq_bydd_trd', basDd, { status: 429, body: { error: 'quota exceeded' } });
@@ -473,14 +707,14 @@ describe('POST /backtests/universe-preview — KRX 오류 매핑', () => {
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
       payload: {
-        universeRule: { markets: ['KOSPI'], topN: 10, sortKey: 'MKTCAP' },
+        universeRule: marketCapRule(),
         period: { from: date, to: date },
-        rebalanceMonths: 1,
       },
     });
 
-    expect(res.statusCode).toBe(429);
-    expect((res.json() as { error: string }).error).toContain('한도');
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { unionSymbols: string[] }).unionSymbols).toEqual(['005930']);
+    expect(fake.requests).toEqual([]);
   });
 });
 
@@ -504,7 +738,13 @@ describe('POST /backtests/universe-preview — SymbolMasterNotCoveredError 매�
 
   beforeEach(async () => {
     fake = await startKrxFakeServer();
-    ctx = await createTestApp({ KRX_BASE_URL: fake.baseUrl, KRX_API_KEY: 'test-krx-key' });
+    ctx = await createTestApp({
+      KRX_BASE_URL: fake.baseUrl,
+      KRX_API_KEY: 'test-krx-key',
+      // 이 describe는 master anchor 해소 경로가 대상이다. 후보 scope가
+      // 미상인 range-breakout의 정상 DART gate가 그 경로를 가리지 않게 한다.
+      DART_API_KEY: 'test-dart-key',
+    });
     const { username, password } = await createTestAdmin(ctx.container);
     const login = await ctx.app.inject({
       method: 'POST',
@@ -519,7 +759,7 @@ describe('POST /backtests/universe-preview — SymbolMasterNotCoveredError 매�
     await fake.close();
   });
 
-  it('휴장일만 수집돼 거래일 anchor가 없으면 미리보기는 uncoveredDates 로 걸러진다', async () => {
+  it('휴장일만 수집돼 거래일 anchor가 없으면 durable preparation job을 시작한다', async () => {
     const date = '2026-01-05';
     // KOSPI·KOSDAQ 양쪽 다 fake 서버 기본값(빈 응답)이라 ingestDate 는 이 날짜를
     // 휴장으로 처리한다 — coverage 는 생기지만 거래일 기록은 생기지 않는다.
@@ -532,15 +772,143 @@ describe('POST /backtests/universe-preview — SymbolMasterNotCoveredError 매�
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
       payload: {
-        universeRule: { markets: ['KOSPI'], topN: 10, sortKey: 'MKTCAP' },
+        universeRule: marketCapRule(),
         period: { from: date, to: date },
-        rebalanceMonths: 1,
+        strategyId: 'range-breakout',
+        parameters: {},
+      },
+    });
+
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toMatchObject({ job: { status: 'QUEUED' } });
+  });
+});
+
+/**
+ * Task 12 — 3단계(시가총액→PER→급하락) 파이프라인의 단계별 진단(N·missing 제외 수·
+ * effective date)을 preview 응답만으로 확인한다. DART·자본변동은 이 test의 관심사가
+ * 아니므로 직접 seed해 durable job을 거치더라도(`installPreparedPreviewFixture`가
+ * 그 202→완료→재조회를 자동으로 처리한다) 실제 sync 호출 없이 곧바로 해소되게 한다.
+ */
+describe('POST /backtests/universe-preview — 3단계 파이프라인 진단 (Task 12)', () => {
+  let ctx: TestApp;
+  let cookie: string;
+  const EFFECTIVE_DATE = '2025-06-02';
+  const CANDLE_START_MS = Date.parse('2025-05-01T00:00:00Z');
+
+  beforeEach(async () => {
+    ctx = await createTestApp();
+    const { username, password } = await createTestAdmin(ctx.container);
+    const login = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { username, password },
+    });
+    cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+    installPreparedPreviewFixture(ctx);
+
+    registerSymbols(ctx.container, 'KR', ['X', 'Y', 'Z']);
+    seedSymbolMasterUniverse(ctx.container, [EFFECTIVE_DATE], [
+      { standardCode: 'KR7000101000', shortCode: 'X', name: 'X', market: 'KOSPI', marketCapKrw: '300' },
+      { standardCode: 'KR7000102000', shortCode: 'Y', name: 'Y', market: 'KOSPI', marketCapKrw: '200' },
+      { standardCode: 'KR7000103000', shortCode: 'Z', name: 'Z', market: 'KOSPI', marketCapKrw: '100' },
+    ]);
+
+    // 급하락(5일) stage 조회 하한(effectiveDate - 5*2-14 = 24일) 보다 이르게 캔들을 채운다.
+    // X는 마지막 5일 사이 1000→500으로 급락, Y는 평탄해 X만 급하락 상위로 뽑힌다.
+    const candles = [];
+    for (let ts = CANDLE_START_MS; ts <= Date.parse(`${EFFECTIVE_DATE}T00:00:00Z`); ts += 86_400_000) {
+      const daysFromEffective = Math.round((Date.parse(`${EFFECTIVE_DATE}T00:00:00Z`) - ts) / 86_400_000);
+      const xClose = daysFromEffective >= 4 ? 1_000 : 1_000 - (4 - daysFromEffective) * 100;
+      candles.push(
+        { symbol: 'X', market: 'KR' as const, timeframe: '1d' as const, tsMs: ts, open: xClose, high: xClose, low: xClose, close: xClose, volume: 1_000 },
+        { symbol: 'Y', market: 'KR' as const, timeframe: '1d' as const, tsMs: ts, open: 1_000, high: 1_000, low: 1_000, close: 1_000, volume: 1_000 },
+      );
+    }
+    seedDailyBars(ctx.container.database.db, candles);
+    seedCorporateActionCoverage(ctx.container, ['X', 'Y'], yearRange(2024, 2025));
+
+    // PER stage: X·Y는 순이익이 있어 통과하고, Z는 재무가 전혀 없어 missing 제외된다.
+    // coverage는 세 종목 모두 "시도했다" 로 직접 심어 DART 호출 없이 즉시 해소되게 한다.
+    for (const code of ['X', 'Y', 'Z']) {
+      // X·Y는 위 seedCorporateActionCoverage가 이미 symbol_facts_state 행을 만들어 뒀다
+      // (actionCoveredYearsJson만 채운 채) — 같은 행에 재무 coveredYearsJson만 덧붙인다.
+      ctx.container.database.db
+        .insert(symbolFactsState)
+        .values({ code, coveredYearsJson: JSON.stringify([2024, 2025]), updatedAtMs: ctx.container.clock.now() })
+        .onConflictDoUpdate({
+          target: symbolFactsState.code,
+          set: { coveredYearsJson: JSON.stringify([2024, 2025]), updatedAtMs: ctx.container.clock.now() },
+        })
+        .run();
+    }
+    const netIncomeFacts: Fact[] = ['X', 'Y'].flatMap((symbol) =>
+      [40, 30, 20, 10].map((value, offset) => ({
+        scope: 'SYMBOL' as const,
+        key: symbol,
+        field: 'NET_INCOME' as const,
+        periodKey: `2024Q${4 - offset}`,
+        asOfTsMs: Date.parse('2024-01-01T00:00:00Z'),
+        value,
+        unit: 'KRW',
+      })),
+    );
+    await ctx.container.factRepository.saveFacts(netIncomeFacts);
+  });
+
+  afterEach(async () => {
+    await ctx.close();
+  });
+
+  it('시가총액→PER→급하락 단계별로 N·missing 제외 수·effective date를 정확히 보고한다', async () => {
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: {
+          markets: ['KOSPI'],
+          stages: [
+            { criterion: 'MARKET_CAP', limit: 3 },
+            { criterion: 'PER', limit: 2 },
+            { criterion: 'DECLINE', limit: 1, lookbackTradingDays: 5 },
+          ],
+          // 이 test는 하루짜리 period 하나만 본다 — 리밸런스 간격 자체는 무관하다.
+          rebalanceInterval: { unit: 'DAY', value: 1 },
+        },
+        period: { from: EFFECTIVE_DATE, to: EFFECTIVE_DATE },
+        strategyId: 'range-breakout',
+        parameters: {},
       },
     });
 
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { uncoveredDates: string[]; schedule: unknown[] };
-    expect(body.uncoveredDates).toEqual([date]);
-    expect(body.schedule).toEqual([]);
+    const body = res.json() as {
+      schedule: Array<{ rebalanceDate: string; effectiveDate: string; members: Array<{ symbol: string }> }>;
+      diagnostics: Array<{
+        rebalanceDate: string;
+        effectiveDate: string;
+        stages: Array<{
+          criterion: string;
+          inputCount: number;
+          eligibleCount: number;
+          selectedCount: number;
+          excludedMissingCount: number;
+        }>;
+      }>;
+    };
+    expect(body.schedule).toMatchObject([
+      { rebalanceDate: EFFECTIVE_DATE, effectiveDate: EFFECTIVE_DATE, members: [{ symbol: 'X' }] },
+    ]);
+    expect(body.diagnostics).toHaveLength(1);
+    expect(body.diagnostics[0]).toMatchObject({
+      rebalanceDate: EFFECTIVE_DATE,
+      effectiveDate: EFFECTIVE_DATE,
+      stages: [
+        { criterion: 'MARKET_CAP', inputCount: 3, eligibleCount: 3, selectedCount: 3, excludedMissingCount: 0 },
+        { criterion: 'PER', inputCount: 3, eligibleCount: 2, selectedCount: 2, excludedMissingCount: 1 },
+        { criterion: 'DECLINE', inputCount: 2, eligibleCount: 2, selectedCount: 1, excludedMissingCount: 0 },
+      ],
+    });
   });
 });

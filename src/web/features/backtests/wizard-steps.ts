@@ -139,7 +139,7 @@ function fundamentalsBlocker(state: StepGateState): string | null {
   if (state.unionSymbols.some((code) => state.symbolsWithFacts!.includes(code))) return null;
   return (
     '이 전략은 재무 데이터가 필요하지만 이 유니버스에는 재무 있는 종목이 없습니다 — ' +
-    '종목 화면에서 해당 종목의 재무를 함께 동기화하거나 봉만 쓰는 전략을 고르세요'
+    '미리보기를 다시 실행해 데이터 준비를 완료하거나 봉만 쓰는 전략을 고르세요'
   );
 }
 

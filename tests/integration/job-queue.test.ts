@@ -6,7 +6,12 @@ import type { Candle } from '../../src/server/modules/market-data/domain/candle.
 import { symbolVersions } from '../../src/server/shared/db/schema.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { currentStrategyVersion } from '../helpers/strategy-versions.js';
-import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
+import {
+  createTestAdmin,
+  createTestApp,
+  installPreparedSubmissionFixture,
+  type TestApp,
+} from '../helpers/test-app.js';
 import { registerSymbols, seedCorporateActionCoverage, seedDailyBars, yearRange } from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 
@@ -21,6 +26,18 @@ const MAIN_DATE = '2026-01-05';
 /** "봉이 전혀 없는 기간" 시나리오 전용 — 종목 마스터는 커버하되(coverage 는 넓은 고정 구간)
  *  가격 데이터가 없는 시점을 재현한다. 커버 밖(uncovered) 날짜와 구분하려고 별도로 캐시한다. */
 const NO_CANDLE_DATE = '2020-01-01';
+const REBALANCE_DATES = [
+  MAIN_DATE,
+  '2026-02-05',
+  '2026-03-05',
+  '2026-04-05',
+  '2026-05-05',
+  '2026-06-05',
+  '2026-01-06',
+  '2026-01-07',
+  NO_CANDLE_DATE,
+  '2020-07-01',
+];
 
 /**
  * 자본변동 게이트(Task 6)용 커버리지 연도. 이 파일의 제출 기간이 걸치는
@@ -28,9 +45,13 @@ const NO_CANDLE_DATE = '2020-01-01';
  */
 const ACTION_COVERAGE_YEARS = yearRange(2020, 2046);
 
-/** 유니버스 규칙 — topN=1 이면 005930(시총 1위)만, topN=2 면 000660 도 함께 들어온다 */
+/** 유니버스 규칙 — MARKET_CAP 단계 limit=1 이면 005930만, 2면 000660도 함께 들어온다 */
 function universeRule(topN = 1): BacktestRequest['universeRule'] {
-  return { markets: ['KOSPI'], topN, sortKey: 'MKTCAP' };
+  return {
+    markets: ['KOSPI'],
+    stages: [{ criterion: 'MARKET_CAP', limit: topN }],
+    rebalanceInterval: { value: 1, unit: 'MONTH' },
+  };
 }
 
 /** 이 파일이 공유하는 종목 마스터 픽스처 — 005930 시총 1위, 000660 2위 */
@@ -125,12 +146,13 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       payload: { username, password },
     });
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+    installPreparedSubmissionFixture(ctx);
 
     registerSymbols(ctx.container, 'KR', ['005930']);
     dailyCandles = buildTrendingDailyCandles();
     seedDailyBars(ctx.container.database.db, dailyCandles);
     // 종목 마스터 — 유니버스 규칙(스펙 2026-08-05)이 여기서 종목을 골라낸다
-    seedMaster(ctx.container, [MAIN_DATE, NO_CANDLE_DATE]);
+    seedMaster(ctx.container, REBALANCE_DATES);
     // 자본변동 게이트(Task 6) — 수집을 마쳤다고 표시해야 제출이 통과한다
     seedCorporateActionCoverage(ctx.container, ['005930'], ACTION_COVERAGE_YEARS);
   });
@@ -317,6 +339,34 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const job = ctx.container.jobQueue.getJob(jobId)!;
     const pinned = JSON.parse(job.universeJson!) as Array<{ code: string }>;
     expect([...new Set(pinned.map(({ code }) => code))]).toEqual(['005930']);
+  });
+
+  it('요청 interval의 DAY 일정으로 유니버스를 해소해 job에 고정한다', async () => {
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: {
+        ...buildRequest(),
+        period: { from: MAIN_DATE, to: '2026-01-07' },
+        universeRule: {
+          markets: ['KOSPI'],
+          stages: [{ criterion: 'MARKET_CAP', limit: 1 }],
+          rebalanceInterval: { value: 1, unit: 'DAY' },
+        },
+      },
+    });
+
+    expect(created.statusCode).toBe(201);
+    const jobId = (created.json() as { job: { id: string } }).job.id;
+    const schedule = JSON.parse(ctx.container.jobQueue.getJob(jobId)!.universeScheduleJson) as Array<{
+      rebalanceDate: string;
+    }>;
+    expect(schedule.map((entry) => entry.rebalanceDate)).toEqual([
+      '2026-01-05',
+      '2026-01-06',
+      '2026-01-07',
+    ]);
   });
 
   it('claims jobs atomically in FIFO order', () => {
@@ -554,6 +604,58 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(JSON.parse(clonedStored.submitWarningsJson!)).toEqual(body.warnings);
   });
 
+  it('clone에서 레거시 유니버스 규칙과 전략 리밸런싱 주기를 단계형 계약으로 승격한다', async () => {
+    const legacy = {
+      ...buildRequest(),
+      parameters: { ...buildRequest().parameters, rebalanceMonths: 3 },
+      universeRule: { markets: ['KOSPI'], sortKey: 'MKTCAP', topN: 200 },
+      risk: { maxPositions: 40 },
+    };
+    const job = ctx.container.jobQueue.enqueue(legacy as never);
+    registerSymbols(ctx.container, 'KR', ['000660']);
+    seedCorporateActionCoverage(ctx.container, ['000660'], ACTION_COVERAGE_YEARS);
+
+    const cloned = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${job.id}/clone`,
+      cookies: { qp_session: cookie },
+    });
+
+    expect(cloned.statusCode).toBe(201);
+    const clonedJob = ctx.container.jobQueue.getJob((cloned.json() as { job: { id: string } }).job.id)!;
+    const request = JSON.parse(clonedJob.requestJson) as BacktestRequest;
+    expect(request.universeRule).toEqual({
+      markets: ['KOSPI'],
+      stages: [{ criterion: 'MARKET_CAP', limit: 200 }],
+      rebalanceInterval: { value: 3, unit: 'MONTH' },
+    });
+    expect(request.parameters).not.toHaveProperty('rebalanceMonths');
+    expect(JSON.parse(ctx.container.jobQueue.getJob(job.id)!.requestJson)).toMatchObject({
+      universeRule: { markets: ['KOSPI'], sortKey: 'MKTCAP', topN: 200 },
+      parameters: { rebalanceMonths: 3 },
+    });
+  });
+
+  it('clone은 레거시 리밸런싱 주기가 없으면 1개월을 채우고 경고한다', async () => {
+    const legacy = {
+      ...buildRequest(),
+      universeRule: { markets: ['KOSPI'], sortKey: 'MKTCAP', topN: 1 },
+    };
+    const job = ctx.container.jobQueue.enqueue(legacy as never);
+
+    const cloned = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${job.id}/clone`,
+      cookies: { qp_session: cookie },
+    });
+
+    expect(cloned.statusCode).toBe(201);
+    const body = cloned.json() as { job: { id: string }; warnings: string[] };
+    const request = JSON.parse(ctx.container.jobQueue.getJob(body.job.id)!.requestJson) as BacktestRequest;
+    expect(request.universeRule.rebalanceInterval).toEqual({ value: 1, unit: 'MONTH' });
+    expect(body.warnings.some((warning) => warning.includes('1개월'))).toBe(true);
+  });
+
   it('refuses to clone a stored request that cannot be rebased (400, not 500)', async () => {
     const broken = { ...buildRequest() } as Record<string, unknown>;
     delete broken.period; // 기계적으로 되살릴 수 없는 편차
@@ -577,18 +679,16 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
     expect(badStrategy.statusCode).toBe(400);
 
-    // 옛 "존재하지 않는 데이터셋" 자리 — 유니버스 규칙 모델에서는 "종목 마스터가 커버하지
-    // 않는 리밸런스 날짜" 가 같은 종류의 참조 오류다 (422 + uncoveredDates 목록).
+    // 종목 마스터가 커버하지 않는 날짜는 Task 6부터 제출 검증 전에 durable
+    // preparation으로 해소한다. KRX를 준비하지 않은 이 fixture에서는 409가 계약이다.
     const badUniverseDate = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
       payload: { ...buildRequest(), period: { from: '1999-01-01', to: '1999-06-30' } },
     });
-    expect(badUniverseDate.statusCode).toBe(422);
-    expect((badUniverseDate.json() as { uncoveredDates: string[] }).uncoveredDates).toContain(
-      '1999-01-01',
-    );
+    expect(badUniverseDate.statusCode).toBe(409);
+    expect((badUniverseDate.json() as { error: string }).error).toBe('PREPARATION_REQUIRED');
 
     const badParams = await ctx.app.inject({
       method: 'POST',
@@ -650,7 +750,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const job = ctx.container.jobQueue.enqueue({
       ...buildRequest(),
       strategyId: 'value-quality-rank',
-      parameters: { topN: 20, rebalanceMonths: 3, staleQuarters: 2 },
+      parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
     });
 
     const cloned = await ctx.app.inject({
@@ -662,12 +762,27 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect((cloned.json() as { error: string }).error).toContain('상장시점 재무 데이터가 필요');
   });
 
-  it('초안은 재무 요구 미충족도 blockers 에 담는다', async () => {
-    const job = ctx.container.jobQueue.enqueue({
+  it('준비가 완료된 초안은 재무 요구 미충족도 blockers 에 담는다', async () => {
+    const request: BacktestRequest = {
       ...buildRequest(),
       strategyId: 'value-quality-rank',
-      parameters: { topN: 20, rebalanceMonths: 3, staleQuarters: 2 },
+      parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+    };
+    const job = ctx.container.jobQueue.enqueue(request);
+
+    // 완료된 준비가 있어야 초안이 실제 union으로 재무 blockers 를 계산한다(리뷰
+    // finding, 2026-08-09) — 준비 없이 유니버스를 추측하지 않는다.
+    const preparation = ctx.container.backtestPreparationOrchestrator.start({
+      universeRule: request.universeRule,
+      period: request.period,
+      strategyId: request.strategyId,
+      parameters: request.parameters,
     });
+    await waitFor(() => {
+      const status = ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status;
+      return status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED';
+    }, 5_000);
+    expect(ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status).toBe('COMPLETED');
 
     const draft = await ctx.app.inject({
       method: 'GET',
@@ -677,6 +792,41 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(draft.statusCode).toBe(200);
     const body = draft.json() as { blockers: string[] };
     expect(body.blockers.some((b) => b.includes('상장시점 재무 데이터가 필요'))).toBe(true);
+  });
+
+  /**
+   * 리뷰 finding(2026-08-09): 완료된 준비가 없는 초안은 `UniverseRuleResolver.
+   * resolve()`(stages[0] 하나만 시총으로 보는 stopgap)로 유니버스를 추측하지
+   * 않는다. PER 을 첫 단계로 두면 그 stopgap이 기준을 완전히 무시하고 시총으로만
+   * 뽑았을 잘못된 유니버스가 재무 blockers 에 들어갔을 것이다 — 지금은 준비가
+   * 없으면 그 계산 자체를 건너뛰고 "데이터 준비 필요" 신호만 담는다.
+   */
+  it('여러 단계(PER 우선) 규칙의 초안은 준비 완료 전에는 유니버스를 추측하지 않는다', async () => {
+    const job = ctx.container.jobQueue.enqueue({
+      ...buildRequest(),
+      universeRule: {
+        markets: ['KOSPI'],
+        stages: [
+          { criterion: 'PER', limit: 5 },
+          { criterion: 'MARKET_CAP', limit: 1 },
+        ],
+        rebalanceInterval: { value: 1, unit: 'MONTH' },
+      },
+    });
+
+    const draft = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${job.id}/clone-draft`,
+      cookies: { qp_session: cookie },
+    });
+    expect(draft.statusCode).toBe(200);
+    const body = draft.json() as { blockers: string[] };
+    expect(body.blockers.some((b) => b.includes('데이터 준비'))).toBe(true);
+    // 옛 stopgap이 살아 있었다면 미커버 리밸런스 날짜를 그릇된(시총 전용) 유니버스로
+    // 판정해 이 문구를 냈을 것이다 — 이제는 그 경로를 아예 타지 않는다.
+    expect(
+      body.blockers.some((b) => b.includes('종목 마스터가 다음 리밸런스 날짜를 커버하지 않습니다')),
+    ).toBe(false);
   });
 
   it('일부 종목만 봉이 없으면 거부하지 않는다 (신규 상장 등 정상)', async () => {
@@ -703,6 +853,27 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     } as Record<string, unknown>;
     delete legacy.risk;
     const job = ctx.container.jobQueue.enqueue(legacy as never);
+
+    // 재기준된 요청 모양을 먼저 읽어(blockers 는 아직 무시) 그 값으로 준비를
+    // 완료해 둔다 — 완료된 준비가 없으면 blockers 는 이제 "데이터 준비 필요" 로
+    // 채워진다(리뷰 finding, 2026-08-09), 유니버스를 추측하지 않기 때문이다.
+    const firstDraft = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${job.id}/clone-draft`,
+      cookies: { qp_session: cookie },
+    });
+    const rebasedRequest = (firstDraft.json() as { request: BacktestRequest }).request;
+    const preparation = ctx.container.backtestPreparationOrchestrator.start({
+      universeRule: rebasedRequest.universeRule,
+      period: rebasedRequest.period,
+      strategyId: rebasedRequest.strategyId,
+      parameters: rebasedRequest.parameters,
+    });
+    await waitFor(() => {
+      const status = ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status;
+      return status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED';
+    }, 5_000);
+    expect(ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status).toBe('COMPLETED');
 
     const draft = await ctx.app.inject({
       method: 'GET',
@@ -751,10 +922,25 @@ describe('backtest job queue (스펙 §10, §14)', () => {
 
   it('초안은 제출 불가한 원본도 열어준다 — 사유는 blockers 에 담는다', async () => {
     // 봉이 없는 기간 → 제출은 400 이지만 초안은 열려야 고칠 수 있다
-    const job = ctx.container.jobQueue.enqueue({
+    const request: BacktestRequest = {
       ...buildRequest(),
       period: { from: NO_CANDLE_DATE, to: '2020-12-31' },
+    };
+    const job = ctx.container.jobQueue.enqueue(request);
+
+    // 완료된 준비가 있어야 초안이 실제 union으로 캔들 존재 여부를 판정한다
+    // (리뷰 finding, 2026-08-09) — 준비 없이 유니버스를 추측하지 않는다.
+    const preparation = ctx.container.backtestPreparationOrchestrator.start({
+      universeRule: request.universeRule,
+      period: request.period,
+      strategyId: request.strategyId,
+      parameters: request.parameters,
     });
+    await waitFor(() => {
+      const status = ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status;
+      return status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED';
+    }, 5_000);
+    expect(ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status).toBe('COMPLETED');
 
     const draft = await ctx.app.inject({
       method: 'GET',
@@ -791,6 +977,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
   it('대기열 상한을 넘는 제출을 429 로 거부한다 (신규·복제 공통)', async () => {
     const small = await createTestApp({ MAX_QUEUED_BACKTESTS: '3' });
     try {
+      installPreparedSubmissionFixture(small);
       const { username, password } = await createTestAdmin(small.container);
       const login = await small.app.inject({
         method: 'POST',

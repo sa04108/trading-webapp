@@ -27,6 +27,33 @@ function krxEnvelope(rows: readonly Record<string, unknown>[]): {
 }
 
 /**
+ * DART `corpCode.xml` 이 실제로 내려주는 단일 엔트리 ZIP(무압축/STORED)을 손으로
+ * 만든다 — `dart-corp-code-cache.ts` 의 `extractSingleFileFromZip` 은 local file
+ * header 하나만 읽으므로 central directory는 필요 없다. 매핑을 빈 채로 둔다:
+ * 이 서버가 재무를 요구하는 어떤 종목도 실제 DART corp_code로 매핑해 줄 필요가
+ * 없다 — `resolve()` 가 null을 돌려주면 호출부가 "매핑에 없는 종목코드" gap
+ * 하나만 남기고 정상적으로 완주한다(dart-fact-source.ts fetchFinancials 참고).
+ */
+function emptyCorpCodeZip(): Buffer {
+  const xml = '<result><list><corp_code></corp_code><corp_name></corp_name></list></result>';
+  const data = Buffer.from(xml, 'utf8');
+  const name = Buffer.from('CORPCODE.xml', 'utf8');
+  const header = Buffer.alloc(30);
+  header.writeUInt32LE(0x04034b50, 0); // local file header signature
+  header.writeUInt16LE(20, 4); // version needed
+  header.writeUInt16LE(0, 6); // flags
+  header.writeUInt16LE(0, 8); // method: STORED
+  header.writeUInt16LE(0, 10); // mod time
+  header.writeUInt16LE(0, 12); // mod date
+  header.writeUInt32LE(0, 14); // crc32 — extractSingleFileFromZip은 검증하지 않는다
+  header.writeUInt32LE(data.length, 18); // compressed size
+  header.writeUInt32LE(data.length, 22); // uncompressed size
+  header.writeUInt16LE(name.length, 26); // filename length
+  header.writeUInt16LE(0, 28); // extra field length
+  return Buffer.concat([header, name, data]);
+}
+
+/**
  * 보통주 1(005930, 시가총액 1위) + 우선주 1(분류 단계에서 제외) + 상장폐지 가정
  * 종목 1(900010, 가격 없음). 900010 은 KRX 기본정보에는 남아 있지만(과거엔 상장)
  * 최근 캔들이 전혀 없어 시가총액은 005930 보다 작게 잡아 둔다 — 위저드가 상위 N=1
@@ -276,6 +303,32 @@ async function startFakeKrxServer(): Promise<void> {
     const { basDd } = request.query as { basDd?: string };
     return krxEnvelope(isHolidayBasDd(basDd) ? [] : KOSDAQ_DAILY_ROWS);
   });
+
+  /**
+   * DART 무자료 응답(§013) — corp_code 매핑 없이도 "조회된 데이터가 없다"는 뜻이라
+   * 파서가 gap 하나로만 남기고 실행을 막지 않는다(dart-fact-source.ts NO_DATA_STATUS
+   * 참고). `preparation-routes.ts` 의 `needsDart` 사전 판정을 통과시키는 것이 목적이라
+   * `DART_API_KEY` 를 설정해 그 판정을 여는 쪽이 주 해결책이다(아래 main() 참고) — 이
+   * 라우트들은 대부분 호출될 일이 없다: `seedCorporateActionCoverageOnRegistration`
+   * 이 등록 시점에 이미 전체 연도 커버리지(자본변동)를 심어 두므로, 준비 작업이 자본
+   * 변동을 요청할 시점엔 `FactSyncService.runSync` 가 남은 연도가 0건임을 보고 이
+   * 라우트를 부르지 않고 건너뛴다(fact-sync-service.ts 주석 "받을 것이 없다 — 호출도
+   * 이력 갱신도 하지 않는다" 참고). 다만 **재무**(fnlttSinglAcntAll)는 별도 커버리지
+   * 저장소(factCoverageStore)를 쓰고 등록 시점에 같이 심지 않으므로(D-043 이후 자동
+   * 수집 전용 경로), 재무 이력을 요구하는 전략(예: 밸류·퀄리티 랭킹)의 준비 작업은
+   * 실제로 이 경로를 탄다 — 그래서 무자료로 안전하게 응답해 실행이 막히지 않게 한다.
+   */
+  const dartNoData = async () => ({ status: '013', message: '조회된 데이타가 없습니다.' });
+  app.get('/api/fnlttSinglAcntAll.json', dartNoData);
+  app.get('/api/stockTotqySttus.json', dartNoData);
+  app.get('/api/irdsSttus.json', dartNoData);
+  // corp_code 매핑 zip — 빈 매핑을 준다. 재무 요청 종목은 매핑 실패 gap 하나로 남고
+  // (dart-fact-source.ts fetchFinancials) 수집 자체는 정상 완주한다.
+  app.get('/api/corpCode.xml', async (_request, reply) => {
+    reply.header('content-type', 'application/zip');
+    return emptyCorpCodeZip();
+  });
+
   await app.listen({ host: '127.0.0.1', port: KRX_FAKE_PORT });
 }
 
@@ -298,6 +351,13 @@ async function main(): Promise<void> {
     LOG_LEVEL: 'warn',
     KRX_API_KEY,
     KRX_BASE_URL: `http://127.0.0.1:${KRX_FAKE_PORT}`,
+    // DART 키를 열어 둔다 — 준비 API의 사전 판정(`needsDart`, backtest-preparation-routes.ts)은
+    // 키 존재 여부만 보고 503을 가른다. 위 가짜 KRX 서버가 DART 무자료(§013) 라우트도
+    // 함께 서빙한다(`startFakeKrxServer` 주석 참고) — corporate-action 을 요구하는
+    // 전략(예: 전고점 돌파)이 이 키 없이는 시가총액 단일 단계 유니버스조차 준비를
+    // 시작하지 못한다(리뷰에서 재현된 회귀, task-12-report.md 참고).
+    DART_API_KEY: 'e2e-dart-key',
+    DART_BASE_URL: `http://127.0.0.1:${KRX_FAKE_PORT}`,
   });
   const container = createContainer(config);
 

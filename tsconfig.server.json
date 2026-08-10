@@ -17,5 +17,7 @@
     "types": ["node"]
   },
   "include": ["src/server", "src/workers", "src/shared", "scripts", "tests"],
-  "exclude": ["tests/e2e"]
+  // .tsx 테스트(웹 markup 검증, Task 9부터)는 jsx·DOM lib 이 필요해 tsconfig.web.json 이
+  // 대신 검사한다 — 이 설정엔 jsx 플래그가 없어 그대로 두면 TS17004 로 실패한다.
+  "exclude": ["tests/e2e", "tests/unit/**/*.test.tsx"]
 }

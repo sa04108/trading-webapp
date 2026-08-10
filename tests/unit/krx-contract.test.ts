@@ -120,7 +120,34 @@ describe('parseDailyRows', () => {
       low: 71_000,
       close: 71_800,
       volume: 12_345_678,
+      tradingValueRaw: null,
     });
+  });
+
+  it('ACC_TRDVAL 거래대금 원문을 number 로 좁히지 않고 그대로 보존한다', () => {
+    // `Number` 로 바꾸면 이 값은 이후 더 큰 실제 거래대금에서 정밀도를 잃는다.
+    const [row] = parseDailyRows([{ ...dailyFixture(), ACC_TRDVAL: '123456789012345' }]);
+
+    expect(row?.tradingValueRaw).toBe('123456789012345');
+  });
+
+  it('ACC_TRDVAL 의 콤마는 marketCapRaw 와 같게 제거해 돌려준다', () => {
+    // 소비자가 BigInt(tradingValueRaw) 를 바로 부를 수 있어야 한다.
+    const [row] = parseDailyRows([dailyFixture({ ACC_TRDVAL: '123,456,789' })]);
+
+    expect(row?.tradingValueRaw).toBe('123456789');
+  });
+
+  it('ACC_TRDVAL 는 Number 안전 정수와 signed-64 경계를 넘어도 원문을 보존한다', () => {
+    const rows = parseDailyRows([
+      dailyFixture({ ACC_TRDVAL: '9007199254740993' }),
+      dailyFixture({ ACC_TRDVAL: '9223372036854775808' }),
+    ]);
+
+    expect(rows.map((row) => row.tradingValueRaw)).toEqual([
+      '9007199254740993',
+      '9223372036854775808',
+    ]);
   });
 
   it('OHLCV 4개 가격과 거래량을 콤마 없는 숫자로 파싱한다', () => {

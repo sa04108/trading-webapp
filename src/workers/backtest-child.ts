@@ -3,7 +3,7 @@
  * 부모의 HTTP 이벤트 루프·메모리와 격리되어 DuckDB 로드 → 엔진 실행 → 결과 저장을 수행한다.
  * 환경변수는 §5 화이트리스트만 받는다. 종료 전 최종 상태를 DB 에 직접 기록한다.
  */
-import { and, eq, inArray, notInArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, lt, notInArray } from 'drizzle-orm';
 import { pino } from 'pino';
 import { readGitCommitSha } from '../server/shared/build-info.js';
 import { systemClock } from '../server/shared/clock.js';
@@ -18,12 +18,13 @@ import {
   backtestSymbolMetrics,
   backtestTrades,
   symbolMasterStorageState,
+  symbolMasterTradingDays,
   symbolVersions,
   symbols as symbolsTable,
 } from '../server/shared/db/schema.js';
 import {
   sumExcludedNonTrading,
-  type UniverseScheduleEntry,
+  type LegacyUniverseScheduleEntry,
 } from '../server/modules/backtest/application/universe-rule-resolver.js';
 import { newId } from '../server/shared/ids.js';
 import { TERMINAL_STATUSES } from '../server/modules/backtest/application/job-queue.js';
@@ -96,6 +97,7 @@ async function main(): Promise<void> {
     if (!strategy) throw new Error(`unknown strategy: ${request.strategyId}`);
     const validated = registry.validateParameters(request.strategyId, request.parameters);
     if (!validated.ok) throw new Error(`invalid parameters: ${validated.error}`);
+    const parameters = validated.value as Record<string, unknown>;
 
     const costProfile = getCostProfile(request.execution.commissionProfileId);
     const slippageProfile = getSlippageProfile(request.execution.slippageProfileId);
@@ -105,7 +107,7 @@ async function main(): Promise<void> {
     // 2026-08-05) — `request.universeRule` 은 규칙일 뿐, 실제로 어떤 종목이었는지는
     // 여기 job.universeScheduleJson 에 이미 확정돼 있다. 워커가 규칙을 다시 해석하면
     // 대기 중 종목 마스터가 갱신됐을 때 제출 시점과 다른 유니버스로 돌게 된다.
-    const schedule = JSON.parse(job.universeScheduleJson) as UniverseScheduleEntry[];
+    const schedule = JSON.parse(job.universeScheduleJson) as LegacyUniverseScheduleEntry[];
     const unionSymbols = [...new Set(schedule.flatMap((entry) => entry.symbols))].sort();
     // 엔진에 넘길 멤버십 일정 — rebalanceDate 를 periodToTsRange 와 같은 자정 규칙으로
     // ms 로 바꾼다. 두 곳이 각자 계산하면 제출·미리보기는 맞는데 실행부만 하루 어긋나는
@@ -115,6 +117,16 @@ async function main(): Promise<void> {
     const universeSchedule = schedule.map((entry) => ({
       fromTsMs: Date.parse(`${entry.rebalanceDate}T00:00:00Z`),
       symbols: entry.symbols,
+      ...(entry.members === undefined
+        ? {}
+        : {
+            members: entry.members.map((member) => ({
+              symbol: member.symbol,
+              marketCapKrw: member.marketCapKrw,
+              volume: member.volume,
+              tradingValueKrw: member.tradingValueKrw,
+            })),
+          }),
     }));
 
     // SCD 이행이 끝났는지 먼저 확인한다. SymbolMasterService 생성자가
@@ -157,7 +169,27 @@ async function main(): Promise<void> {
     // (krx-daily-candle-repository.ts). 여기서 같은 규칙을 쓰지 않으면 하루 어긋난다(D-024 류).
     const unionSymbolSet = new Set(unionSymbols);
     const nonTradingSymbolsByTsMs = new Map<number, Set<string>>();
-    for (const row of symbolMaster.nonTradingDaysBetween(request.period.from, request.period.to)) {
+    const strategyWarmupBars = strategy.dataRequirements?.priceWarmupBars?.(parameters) ?? 0;
+    const declineWarmupBars = request.universeRule.stages.reduce(
+      (maximum, stage) => stage.criterion === 'DECLINE'
+        ? Math.max(maximum, stage.lookbackTradingDays)
+        : maximum,
+      0,
+    );
+    const warmupBars = Math.ceil(Math.max(0, strategyWarmupBars, declineWarmupBars));
+    const priorTradingDays = warmupBars === 0
+      ? []
+      : db
+          .select({ date: symbolMasterTradingDays.date })
+          .from(symbolMasterTradingDays)
+          .where(lt(symbolMasterTradingDays.date, request.period.from))
+          .orderBy(desc(symbolMasterTradingDays.date))
+          .limit(warmupBars)
+          .all();
+    const warmupFromDate = priorTradingDays[priorTradingDays.length - 1]?.date
+      ?? request.period.from;
+
+    for (const row of symbolMaster.nonTradingDaysBetween(warmupFromDate, request.period.to)) {
       if (!unionSymbolSet.has(row.shortCode)) continue;
       const ts = Date.parse(`${row.date}T00:00:00Z`);
       const set = nonTradingSymbolsByTsMs.get(ts) ?? new Set<string>();
@@ -242,6 +274,14 @@ async function main(): Promise<void> {
           + '(중복 포함). 그날 실제로 매수할 수 없는 종목입니다.',
       );
     }
+    // warm-up 봉이 모자라면 전략이 첫 리밸런스 bar 를 지표 미준비로 건너뛰어
+    // 한 주기 동안 현금이 놀 수 있다 — 조용히 지나가면 결과만 보고는 알 수 없다.
+    if (warmupBars > 0 && priorTradingDays.length < warmupBars) {
+      datasetWarnings.push(
+        `기간 시작 전 warm-up 거래일이 부족합니다 (필요 ${warmupBars}일, 확보 ${priorTradingDays.length}일). `
+          + '첫 리밸런스에서 지표가 준비되지 않아 주문이 나가지 않을 수 있습니다.',
+      );
+    }
     // 서버가 제출 시점에 조립한 pin(Task 12) — scheduleHash 를 재현성 기록에 쓴다.
     // run 에는 원문 그대로 복사한다(아래 provenancePinJson).
     const pin: ProvenancePin | null = job.provenancePinJson
@@ -270,12 +310,13 @@ async function main(): Promise<void> {
     // handle 을 재사용한다. 워커가 잡 조회로 이미 DB 를 열어 둔 상태라 새로 열 이유가 없다.
     const repository = new KrxDailyCandleRepository(db);
     const { fromTsMs, toTsMs } = periodToTsRange(request.period);
+    const candleFromTsMs = Date.parse(`${warmupFromDate}T00:00:00Z`);
     const candles: Candle[] = [];
     for await (const candle of repository.getCandles({
       market: datasetMarket,
       timeframe,
       symbols: unionSymbols,
-      fromTsMs,
+      fromTsMs: candleFromTsMs,
       toTsMs,
     })) {
       candles.push(candle);
@@ -286,7 +327,13 @@ async function main(): Promise<void> {
         );
       }
     }
-    if (candles.length === 0) {
+    const tradeFromTsMs = candles
+      .filter((candle) => candle.tsMs >= fromTsMs && candle.tsMs <= toTsMs)
+      .reduce<number | undefined>(
+        (minimum, candle) => minimum === undefined || candle.tsMs < minimum ? candle.tsMs : minimum,
+        undefined,
+      );
+    if (tradeFromTsMs === undefined) {
       // 어떤 timeframe 을 찾았는지 밝힌다 — 커버리지가 정상인데 실패하면 여기서 갈린다
       throw new Error(
         `선택한 기간·종목에 ${timeframe} 데이터가 없습니다. 데이터 커버리지를 확인하세요.`,
@@ -295,7 +342,11 @@ async function main(): Promise<void> {
 
     // 일부 종목만 구간에 봉이 없는 경우 — 제출 검증은 통과시킨다(신규 상장 등 정상).
     // 조용히 빠지면 결과를 오해하므로 실측 기준으로 경고를 남긴다 (D-025).
-    const symbolsWithBars = new Set(candles.map((candle) => candle.symbol));
+    const symbolsWithBars = new Set(
+      candles
+        .filter((candle) => candle.tsMs >= fromTsMs && candle.tsMs <= toTsMs)
+        .map((candle) => candle.symbol),
+    );
     const emptySymbols = unionSymbols.filter((s) => !symbolsWithBars.has(s));
     if (emptySymbols.length > 0) {
       datasetWarnings.push(
@@ -342,7 +393,7 @@ async function main(): Promise<void> {
     // 평가금액을 흔들 수 없고(포지션이 없거나 봉이 없다), alignment 창이 최대 +90일이라
     // 기간 밖 기준일이 기간 안 날짜로 옮겨질 여지도 이 범위 안에 다 들어온다.
     const sharesChanges = symbolMaster.sharesChangesBetween(
-      addCalendarDays(request.period.from, -120),
+      addCalendarDays(warmupFromDate, -120),
       addCalendarDays(request.period.to, 120),
     );
     const aligned = alignCorporateActionEffectiveDates(rawCorporateActionFacts, sharesChanges);
@@ -370,7 +421,7 @@ async function main(): Promise<void> {
     if (strategy.requiresFundamentals === true && financialFacts.length === 0) {
       // 제출 검증이 걸렀어야 하는 상태다. 실행 중 데이터가 지워진 경우의 뒤늦은 방어선.
       throw new Error(
-        '이 전략은 상장시점 재무 데이터가 필요합니다. 데이터 화면에서 이 데이터셋을 동기화할 때 "재무" 를 함께 선택해 수집한 뒤 다시 실행하세요.',
+        '이 전략은 상장시점 재무 데이터가 필요합니다. 미리보기를 다시 실행해 데이터 준비를 완료한 뒤 다시 실행하세요.',
       );
     }
     if (strategy.requiresFundamentals === true) {
@@ -390,14 +441,12 @@ async function main(): Promise<void> {
             '. '
           : '') +
           '재무 데이터는 수집 시점 기준입니다. 계정이 일부만 누락된 종목도 랭킹에서 조용히 빠질 수 있습니다 ' +
-          '— 데이터 화면에서 재무를 다시 수집하면 누락 건수를 확인할 수 있습니다.',
+          '— 미리보기를 다시 실행해 데이터 준비를 완료하면 누락 건수를 확인할 수 있습니다.',
       );
     }
 
     const startedAtMs = Date.now();
     let lastProgressSentAt = 0;
-
-    const parameters = validated.value as Record<string, unknown>;
 
     // 우아한 취소를 위해 주기적으로 이벤트 루프에 양보하는 버전을 쓴다 —
     // 근거는 engine.ts 의 CANCEL_YIELD_INTERVAL_BARS 주석 참고.
@@ -413,6 +462,7 @@ async function main(): Promise<void> {
       randomSeed: request.randomSeed,
       maxPositions: request.risk.maxPositions,
       facts,
+      tradeFromTsMs,
       universeSchedule,
       nonTradingSymbolsByTsMs,
       nonTradingCoveredPeriod,

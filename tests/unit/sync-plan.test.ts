@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DART_DAILY_CALL_LIMIT,
+  estimateDartCalls,
   estimateCorporateActionSyncCost,
   planFactSync,
 } from '../../src/server/modules/facts/domain/sync-plan.js';
@@ -14,6 +15,21 @@ const BASE = {
 };
 
 describe('planFactSync', () => {
+  it('연도 work unit 비용은 이미 읽은 주식총수 연도를 다시 세지 않는다', () => {
+    expect(estimateDartCalls({
+      symbol: '005930',
+      year: 2025,
+      shareYears: [2024, 2025],
+      estimatedDartCalls: 0,
+    })).toBe(13);
+    expect(estimateDartCalls({
+      symbol: '005930',
+      year: 2026,
+      shareYears: [2025, 2026],
+      estimatedDartCalls: 0,
+    }, new Set([2024, 2025]))).toBe(9);
+  });
+
   it('FULL 은 수집 이력을 무시하고 전 구간을 계획한다', () => {
     const plan = planFactSync({
       ...BASE,

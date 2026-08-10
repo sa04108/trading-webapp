@@ -1,5 +1,6 @@
 import type { Container } from '../../src/server/bootstrap/container.js';
 import {
+  dailySelectionMetrics,
   symbolMasterCoverage,
   symbolMasterMarketCaps,
   symbolMasterTradingDays,
@@ -66,5 +67,14 @@ export function seedSymbolMasterUniverse(
   );
   if (marketCapRows.length > 0) {
     container.database.db.insert(symbolMasterMarketCaps).values(marketCapRows).run();
+    container.database.db.insert(dailySelectionMetrics).values(
+      marketCapRows.map((row) => ({
+        date: row.date,
+        standardCode: row.standardCode,
+        marketCapKrw: row.marketCapKrw,
+        volume: null,
+        tradingValueKrw: null,
+      })),
+    ).onConflictDoNothing().run();
   }
 }

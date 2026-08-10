@@ -116,12 +116,20 @@ function getSymbolState(state: RsiReversionState, symbol: string): SymbolState {
 
 export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiReversionState> = {
   id: 'rsi-reversion',
-  version: '1.0.0',
+  version: '1.0.1',
   name: 'RSI 되돌림',
   description:
     'RSI 과매도 종목을 사서 RSI 가 회복하면 팝니다. 반대로 움직이는 종목(예: 레버리지·인버스 쌍)을 ' +
     '함께 넣으면 같은 묶음에서 한 종목만 보유합니다.',
   parameterSchema: rsiReversionParameters,
+  dataRequirements: {
+    priceWarmupBars: (parameters) => Math.max(
+      parameters.rsiPeriod + 1,
+      parameters.atrPeriod + 1,
+      parameters.correlationBars,
+    ),
+    requiresCorporateActions: true,
+  },
 
   initialize(context: StrategyInitializeContext): RsiReversionState {
     return {

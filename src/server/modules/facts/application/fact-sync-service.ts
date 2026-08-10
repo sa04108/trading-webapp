@@ -2,7 +2,13 @@ import { createHash } from 'node:crypto';
 import type { Clock } from '../../../shared/clock.js';
 import type { Logger } from '../../../shared/logger.js';
 import type { Fact } from '../domain/fact.js';
-import { planFactSync, type FactSyncMode, type FactSyncPlan } from '../domain/sync-plan.js';
+import {
+  estimateDartCalls,
+  planFactSync,
+  type FactSyncMode,
+  type FactSyncPlan,
+  type FactSyncWorkUnit,
+} from '../domain/sync-plan.js';
 // 원천은 market-data(symbol-service.ts) 쪽이다 — market-data 는 facts 를 몰라도
 // 되지만(§7) facts 는 이미 market-data 를 안다(예: exchange-session.js 사용).
 // 손으로 맞추던 중복 상수를 없앴다(리뷰 finding, 2026-08-08).
@@ -27,6 +33,12 @@ export interface FactSyncRequest {
    * 현재 연도 (웹). 웹이 매번 전 구간을 다시 받으면 45분짜리 버튼이 된다.
    */
   readonly mode: FactSyncMode;
+  /**
+   * INCREMENTAL의 기본값은 현재 연도 재수집이다. 영속 준비 잡의 quota/crash 재개는
+   * 이미 닫힌 symbol-year를 반복하면 안 되므로 false를 명시해 coverage를 그대로
+   * 복구 체크포인트로 쓴다. FULL에는 영향이 없다.
+   */
+  readonly refreshCurrentYear?: boolean;
 }
 
 /** 종목 하나가 끝날 때마다 호출된다 — 45분짜리 실행이 조용하지 않게 한다 */
@@ -48,6 +60,8 @@ export interface FactSyncHooks {
    * 입자다 — 저장이 종목 단위이므로 여기서 멈추면 저장분과 이력이 정합하게 남는다.
    */
   shouldStop?(): boolean;
+  /** 다음 종목·연도 외부 호출 전에 일일 quota를 예약한다. */
+  beforeWorkUnit?(work: FactSyncWorkUnit): 'CONTINUE' | 'PAUSE_DAILY_QUOTA';
 }
 
 export interface FactSyncReport {
@@ -59,7 +73,7 @@ export interface FactSyncReport {
    * 중단 원인. 호출부가 잡 상태를 FAILED/CANCELLED 로 갈라야 하므로
    * stoppedAtSymbol 만으로는 부족하다.
    */
-  readonly stopReason: 'ERROR' | 'CANCELLED' | null;
+  readonly stopReason: 'ERROR' | 'CANCELLED' | 'DAILY_QUOTA' | null;
   /** 중단 사유 + 이어받는 방법을 담은 한국어 안내. 완주하면 null */
   readonly failureMessage: string | null;
 }
@@ -70,6 +84,8 @@ export interface FactSyncReport {
  * `FactSyncService.runSync` 하나가 공유한다.
  */
 interface SyncStrategy {
+  /** 재무까지 받는 경로인지, 자본변동만 받는 경로인지 quota 비용 계산에 쓴다. */
+  readonly includeFinancials: boolean;
   /** 증분 계획이 기준으로 삼을 커버리지. 경로마다 다른 저장소를 본다. */
   getCoveredYears(symbols: readonly string[]): ReadonlyMap<string, readonly number[]>;
   /**
@@ -140,6 +156,7 @@ export class FactSyncService {
    */
   async sync(request: FactSyncRequest, hooks: FactSyncHooks = {}): Promise<FactSyncReport> {
     return this.runSync(request, hooks, {
+      includeFinancials: true,
       getCoveredYears: (symbols) => this.coverage.getCoveredYears(symbols),
       fetch: async (scoped) => {
         // 종목별 호출이지만 corp_code 매핑과 주식총수(stockTotqySttus) 응답 캐시는 소스
@@ -162,6 +179,29 @@ export class FactSyncService {
   }
 
   /**
+   * `sync`가 실제로 쓸 재무 symbol-year 계획을 외부 호출 없이 미리 본다.
+   * 준비 API의 DART-key 게이트가 "메타데이터상 필요"가 아니라 남은 coverage 작업을
+   * 기준으로 판단할 때 쓴다.
+   */
+  planFinancialSync(
+    symbols: readonly string[],
+    fromYear: number,
+    toYear: number,
+    refreshCurrentYear = true,
+  ): FactSyncPlan {
+    const unique = [...new Set(symbols)];
+    return planFactSync({
+      symbols: unique,
+      fromYear,
+      toYear,
+      currentYear: new Date(this.clock.now()).getUTCFullYear(),
+      coveredBySymbol: this.coverage.getCoveredYears(unique),
+      mode: 'INCREMENTAL',
+      refreshCurrentYear,
+    });
+  }
+
+  /**
    * `syncCorporateActions` 가 실제로 쓸 연도 계획을 미리 본다 (Task 8 게이트 화면).
    * 커버리지 조회(`actionCoverage`)·기준 연도(`clock`)·모드(`INCREMENTAL`)를 실행
    * 경로와 완전히 같게 둔다 — 화면의 예상 호출·시간이 실제 수집과 갈리면 안 된다
@@ -171,6 +211,7 @@ export class FactSyncService {
     symbols: readonly string[],
     fromYear: number,
     toYear: number,
+    refreshCurrentYear = true,
   ): FactSyncPlan {
     const unique = [...new Set(symbols)];
     return planFactSync({
@@ -180,6 +221,7 @@ export class FactSyncService {
       currentYear: new Date(this.clock.now()).getUTCFullYear(),
       coveredBySymbol: this.actionCoverage.getCoveredYears(unique),
       mode: 'INCREMENTAL',
+      refreshCurrentYear,
     });
   }
 
@@ -197,6 +239,7 @@ export class FactSyncService {
     hooks: FactSyncHooks = {},
   ): Promise<FactSyncReport> {
     return this.runSync(request, hooks, {
+      includeFinancials: false,
       getCoveredYears: (symbols) => this.actionCoverage.getCoveredYears(symbols),
       fetch: async (scoped) => {
         const actions = await this.source.fetchCorporateActions(scoped);
@@ -231,7 +274,7 @@ export class FactSyncService {
     let savedFacts = 0;
     let doneSymbols = 0;
     let stoppedAtSymbol: string | null = null;
-    let stopReason: 'ERROR' | 'CANCELLED' | null = null;
+    let stopReason: 'ERROR' | 'CANCELLED' | 'DAILY_QUOTA' | null = null;
     let failureReason: string | null = null;
 
     // 계획은 추정 경로와 같은 함수로 만든다 — 화면의 "약 30분" 과 실제 호출이 갈리지
@@ -243,6 +286,7 @@ export class FactSyncService {
       currentYear: new Date(this.clock.now()).getUTCFullYear(),
       coveredBySymbol: strategy.getCoveredYears(symbols),
       mode: request.mode,
+      refreshCurrentYear: request.refreshCurrentYear,
     });
 
     for (const [index, symbol] of symbols.entries()) {
@@ -255,7 +299,6 @@ export class FactSyncService {
       }
 
       const years = plan.yearsBySymbol.get(symbol) ?? [];
-      const shareYears = plan.shareYearsBySymbol.get(symbol) ?? [];
       if (years.length === 0) {
         // 받을 것이 없다 — 호출도 이력 갱신도 하지 않는다
         doneSymbols += 1;
@@ -269,34 +312,65 @@ export class FactSyncService {
         continue;
       }
 
+      let symbolSavedFacts = 0;
+      let symbolGapCount = 0;
+      const requestedShareYears = new Set<number>();
       try {
-        const scoped = {
-          symbols: [symbol],
-          years,
-          shareYears,
-          consolidated: request.consolidated,
-        };
-        const { facts, gaps: symbolGaps, actionGaps } = await strategy.fetch(scoped);
+        for (const year of years) {
+          // 단일 연도라도 연초 자본변동의 직전 주식총수 앵커가 필요하다. 소스 캐시가
+          // 이전 unit의 응답을 재사용하므로 요청에는 둘 다 넣되 quota에는 새 연도만 센다.
+          const shareYears = [year - 1, year];
+          const work: FactSyncWorkUnit = {
+            symbol,
+            year,
+            shareYears,
+            estimatedDartCalls: estimateDartCalls(
+              { symbol, year, shareYears },
+              requestedShareYears,
+              strategy.includeFinancials,
+            ),
+          };
+          if (hooks.beforeWorkUnit?.(work) === 'PAUSE_DAILY_QUOTA') {
+            stoppedAtSymbol = symbol;
+            stopReason = 'DAILY_QUOTA';
+            break;
+          }
 
-        // 종목마다 저장한다 — 뒤에서 터져도 여기까지는 남는다
-        const fingerprintBefore = await this.storedFactsFingerprint(symbol);
-        await this.repository.saveFacts(facts);
-        // 저장 직후에 이력을 남긴다. 순서가 뒤집히면 저장 실패한 연도를
-        // 수집했다고 기록해 다음 실행이 그 구간을 건너뛴다.
-        strategy.recordCoverage(symbol, years, uniqueYearsFromGaps(actionGaps), this.clock.now());
-        // 버전도 종목마다 닫는다 — 180/200 에서 멈춘 실행의 앞선 179종목은 버전이
-        // 올라가 있어야 그 종목을 쓰는 백테스트가 변경을 인식한다 (§9.5)
-        await this.bumpVersionIfChanged(symbol, fingerprintBefore);
+          const scoped = {
+            symbols: [symbol],
+            years: [year],
+            shareYears,
+            consolidated: request.consolidated,
+          };
+          const { facts, gaps: workGaps, actionGaps } = await strategy.fetch(scoped);
 
-        savedFacts += facts.length;
+          // work unit마다 저장·커버리지를 닫는다 — 다음 연도 전에 quota로 멈춰도 이
+          // 연도는 증분 재실행에서 건너뛸 수 있다.
+          const fingerprintBefore = await this.storedFactsFingerprint(symbol);
+          await this.repository.saveFacts(facts);
+
+          // 저장 성공이 리포트의 확정 경계다. 뒤의 coverage나 버전 갱신이 실패해도
+          // repository에는 이미 팩트가 남았으므로, 이 수치를 먼저 반영해야 보고서가
+          // 실제 영속 상태와 어긋나지 않는다.
+          savedFacts += facts.length;
+          symbolSavedFacts += facts.length;
+          symbolGapCount += workGaps.length;
+          gaps.push(...workGaps);
+
+          strategy.recordCoverage(symbol, [year], uniqueYearsFromGaps(actionGaps), this.clock.now());
+          await this.bumpVersionIfChanged(symbol, fingerprintBefore);
+
+          for (const shareYear of shareYears) requestedShareYears.add(shareYear);
+        }
+
+        if (stopReason === 'DAILY_QUOTA') break;
         doneSymbols += 1;
-        gaps.push(...symbolGaps);
         hooks.onSymbolDone?.({
           symbol,
           index: index + 1,
           total: symbols.length,
-          savedFacts: facts.length,
-          gapCount: symbolGaps.length,
+          savedFacts: symbolSavedFacts,
+          gapCount: symbolGapCount,
         });
       } catch (error) {
         // 그대로 던지면 지금까지 저장한 것을 알려줄 자리가 없다 — 리포트로 되돌려
@@ -345,6 +419,11 @@ export class FactSyncService {
             ? `수집이 사용자 요청으로 취소됐습니다 ` +
               `(${doneSymbols}/${symbols.length}종목 완료). ` +
               `수집된 팩트 ${savedFacts}건은 저장됐습니다 — 다시 실행하면 남은 종목만 이어받습니다.`
+            : stopReason === 'DAILY_QUOTA'
+              ? `DART 일일 호출 한도에 도달해 ${stoppedAtSymbol} 수집을 잠시 멈췄습니다 ` +
+                `(${doneSymbols}/${symbols.length}종목 완료). ` +
+                `여기까지 수집된 팩트 ${savedFacts}건은 이미 저장됐습니다 — 다음 실행은 ` +
+                `남은 연도부터 이어받습니다.`
             : `수집이 ${stoppedAtSymbol} 에서 중단됐습니다 ` +
               `(${doneSymbols}/${symbols.length}종목 완료). ` +
               `사유: ${failureReason ?? '알 수 없음'}. ` +

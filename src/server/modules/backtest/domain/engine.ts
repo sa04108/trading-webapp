@@ -17,6 +17,7 @@ import {
 import { createRng } from './seeded-rng.js';
 import type {
   BacktestMetrics,
+  BacktestUniverseScheduleEntry,
   DrawdownPoint,
   EquityPoint,
   ExecutionProfile,
@@ -25,6 +26,7 @@ import type {
   OpenPositionSnapshot,
   OrderIntent,
   Position,
+  SelectionMetricPin,
   SymbolMetrics,
   Trade,
 } from './types.js';
@@ -39,6 +41,8 @@ export interface BacktestRunInput {
   readonly randomSeed: number;
   /** 동시 보유 종목 상한 (리스크 검증 §9.2-6) */
   readonly maxPositions: number;
+  /** 이 시각 전 봉은 전략 warm-up에만 쓰고 주문·체결·결과 스냅샷을 만들지 않는다. */
+  readonly tradeFromTsMs?: number;
   /**
    * 상장시점 팩트. 미지정이면 전략의 fundamentals/corporateActions 가 항상 비어 있다 —
    * 재무를 쓰지 않는 전략(range-breakout 등)은 넘길 필요가 없다.
@@ -52,7 +56,7 @@ export interface BacktestRunInput {
    * 그 짧은 구간에서만 안전망이 꺼지는 방어 구멍이 된다.
    * 미지정이거나 빈 배열이면 tradableSymbols 는 항상 null(제한 없음) — 기존 전략 동작 불변.
    */
-  readonly universeSchedule?: readonly { fromTsMs: number; symbols: readonly string[] }[];
+  readonly universeSchedule?: readonly BacktestUniverseScheduleEntry[];
   /**
    * 그 시점에 거래할 수 없었던 종목 (거래정지·무거래). 키는 봉 tsMs 다.
    * 이 종목들은 매수 후보에서 빠진다 — 봉이 없어 체결도 되지 않는다.
@@ -113,10 +117,10 @@ export interface BacktestRunResult {
  * 재현성 메타데이터에 기록되는 엔진 버전 (스펙 §9.5) — 체결·지표 로직이 바뀌거나,
  * 워커가 엔진에 넘기는 입력을 조립하는 규칙이 바뀌어 같은 요청의 결과가 달라질 때 올린다.
  *
- * 1.6.0: 자본변동 효력발생일을 DART 기준일이 아니라 KRX 상장주식수 변경일로 옮긴다
- * (corporate-action-effective-date.ts). 분할을 낀 실행은 이전 버전과 자산곡선이 다르다.
+ * 1.7.0: warm-up 결과 경계를 분리하고 공유 리밸런스 신호·유니버스 이탈 청산·
+ * sell-before-buy 대기열을 적용한다.
  */
-export const ENGINE_VERSION = '1.6.0';
+export const ENGINE_VERSION = '1.7.0';
 
 const PROGRESS_INTERVAL_BARS = 500;
 
@@ -174,7 +178,9 @@ function* runBacktestSteps(
   }
   const timeline = [...barsByTs.keys()].sort((a, b) => a - b);
   const symbols = [...new Set(sorted.map((c) => c.symbol))].sort();
-  const totalBars = sorted.length;
+  const totalBars = sorted.filter(
+    (candle) => input.tradeFromTsMs === undefined || candle.tsMs >= input.tradeFromTsMs,
+  ).length;
 
   // 미청산 포지션 스냅샷이 "마지막으로 확인된 가격이 언제 것인지" 를 적는 데 쓴다.
   const lastBarTsMsBySymbol = new Map<string, number>();
@@ -219,7 +225,10 @@ function* runBacktestSteps(
 
   let cash = input.initialCash;
   let pendingOrders: OrderIntent[] = [];
+  let deferredRebalanceBuys: OrderIntent[] = [];
+  const unresolvedForcedExitSymbols = new Set<string>();
   let processedBars = 0;
+  let visitedBars = 0;
   let maxConcurrentPositions = 0;
   let cancelled = false;
 
@@ -238,8 +247,27 @@ function* runBacktestSteps(
   // 멤버십 일정 — fromTsMs 오름차순으로 정렬해두고 타임라인을 정방향으로 훑으며
   // 활성 구간 index 만 전진시킨다(타임라인도 오름차순이라 되돌아갈 일이 없다).
   const sortedSchedule = [...(input.universeSchedule ?? [])].sort((a, b) => a.fromTsMs - b.fromTsMs);
-  const scheduleSets = sortedSchedule.map((entry) => new Set(entry.symbols));
+  const scheduleMetricMaps = sortedSchedule.map((entry) => {
+    const metrics = new Map<string, SelectionMetricPin | null>();
+    if (entry.members !== undefined) {
+      for (const member of entry.members) {
+        metrics.set(member.symbol, {
+          marketCapKrw: member.marketCapKrw,
+          volume: member.volume,
+          tradingValueKrw: member.tradingValueKrw,
+        });
+      }
+    } else {
+      for (const symbol of entry.symbols ?? []) metrics.set(symbol, null);
+    }
+    return metrics;
+  });
+  const scheduleSets = scheduleMetricMaps.map((metrics) => new Set(metrics.keys()));
   let scheduleIndex = 0;
+  let activatedScheduleIndex = -1;
+  let schedulelessRebalanceEmitted = false;
+  let activeSelectionMetrics: ReadonlyMap<string, SelectionMetricPin | null> | null = null;
+  let activeMembershipSymbols: ReadonlySet<string> | null = null;
   // 이번 봉에서 매수 가능한 종목 — 일정 미지정/빈 배열이면 계속 null(제한 없음)
   let tradableSymbols: ReadonlySet<string> | null = null;
   // 유니버스 밖 BUY 거부 warning 을 심볼당 한 번만 남기기 위한 추적 집합 — 리밸런스
@@ -281,9 +309,16 @@ function* runBacktestSteps(
     }
 
     const bars = barsByTs.get(tsMs) as Map<string, Candle>;
+    const isTradeBar = input.tradeFromTsMs === undefined || tsMs >= input.tradeFromTsMs;
+    const promotedBuySymbolsThisBar = new Set<string>();
+    visitedBars += bars.size;
 
     // 일정이 없는 실행에서 이전 시점의 거래불가 필터가 남지 않게 매 시점 초기화한다
-    if (sortedSchedule.length === 0) tradableSymbols = null;
+    if (sortedSchedule.length === 0) {
+      tradableSymbols = null;
+      activeMembershipSymbols = null;
+      activeSelectionMetrics = null;
+    }
 
     // 활성 멤버십 구간 갱신 — fromTsMs <= tsMs 인 항목 중 가장 늦은 것이 활성이다.
     // 첫 entry 이전 시점은 예외 없이 첫 entry(index 0)를 그대로 쓴다(위 jsdoc 참고).
@@ -294,7 +329,28 @@ function* runBacktestSteps(
       ) {
         scheduleIndex += 1;
       }
-      tradableSymbols = scheduleSets[scheduleIndex] as ReadonlySet<string>;
+      activeMembershipSymbols = scheduleSets[scheduleIndex] as ReadonlySet<string>;
+      activeSelectionMetrics = scheduleMetricMaps[scheduleIndex] as ReadonlyMap<
+        string,
+        SelectionMetricPin | null
+      >;
+      tradableSymbols = activeMembershipSymbols;
+    }
+
+    // schedule entry의 달력 날짜가 휴일이면 이 조건은 다음 실제 봉에서 처음 참이 된다.
+    // warm-up 봉은 멤버십과 지표만 갱신하고 activation을 소비하지 않는다.
+    let isRebalanceBar = false;
+    if (isTradeBar) {
+      if (sortedSchedule.length === 0) {
+        isRebalanceBar = !schedulelessRebalanceEmitted;
+        schedulelessRebalanceEmitted = true;
+      } else if (
+        activatedScheduleIndex !== scheduleIndex
+        && (sortedSchedule[scheduleIndex] as BacktestUniverseScheduleEntry).fromTsMs <= tsMs
+      ) {
+        isRebalanceBar = true;
+        activatedScheduleIndex = scheduleIndex;
+      }
     }
 
     // 거래불가 종목을 매수 후보에서 뺀다. 멤버십 일정이 없어도(=제한 없음) 이날
@@ -335,7 +391,9 @@ function* runBacktestSteps(
     // 그 상태를 놔두면 분할을 넘긴 종목에서 허위 **진입** 신호가 난다
     // (`rsi-reversion` 의 허위 과매도, `range-breakout` 의 기준선 고착).
     // 그래서 봉이 있는 종목이면 보유 여부와 무관하게 훅을 부른다.
-    const pendingSymbols = new Set(pendingOrders.map((order) => order.symbol));
+    const pendingSymbols = new Set(
+      [...pendingOrders, ...deferredRebalanceBuys].map((order) => order.symbol),
+    );
     for (const [symbol, bar] of bars) {
       const basisTsMs = quantityBasisTsMsBySymbol.get(symbol) ?? -1;
       quantityBasisTsMsBySymbol.set(symbol, tsMs);
@@ -369,6 +427,13 @@ function* runBacktestSteps(
             : order,
         )
         .filter((order) => order.quantity > 0);
+      deferredRebalanceBuys = deferredRebalanceBuys
+        .map((order) =>
+          order.symbol === symbol
+            ? { ...order, quantity: adjustForRatio(order.quantity, 0, ratio, 0).quantity }
+            : order,
+        )
+        .filter((order) => order.quantity > 0);
 
       const position = positions.get(symbol);
       if (!position) continue; // 대기 주문만 있었다 — 주문은 이미 위에서 스케일했다
@@ -382,9 +447,72 @@ function* runBacktestSteps(
       position.avgEntryPrice = adjusted.avgEntryPrice;
     }
 
+    // 리밸런스 활성화는 D-1 주문의 D0 open 체결보다 먼저 적용한다.
+    // 그렇지 않으면 편출 종목 BUY가 한 번 더 체결되고, 이미 D-1에 나온
+    // 전략 SELL은 정상 매도로 체결돼 REBALANCE_EXIT 사유와 훅이 유실된다.
+    //
+    // D0에 처음 만든 forced SELL은 기존 계약대로 D1 open에 체결해야 한다.
+    // D-1 SELL을 교체한 건만 기존 D0 체결 자격을 승계하고, 새 forced SELL은
+    // 아래 체결 루프가 끝난 뒤 pending queue에 넣는다.
+    const forcedExitsForNextOpen: OrderIntent[] = [];
+    if (isRebalanceBar && activeMembershipSymbols !== null) {
+      const membershipSymbols = activeMembershipSymbols;
+      // 지연 청산 중 다음 schedule에 재편입된 종목은 더 이상 이탈이 아니다.
+      // 전략에는 실제 청산이 일어나지 않았으므로 onForcedExit를 부르지 않는다.
+      for (const symbol of [...unresolvedForcedExitSymbols]) {
+        if (membershipSymbols.has(symbol)) resolveForcedExit(symbol, false);
+      }
+
+      const sellEligibleNow = new Set(
+        pendingOrders.filter((order) => order.side === 'SELL').map((order) => order.symbol),
+      );
+      for (const [symbol, position] of positions) {
+        if (membershipSymbols.has(symbol) || position.quantity <= 0) continue;
+        // 이전 전략 SELL이나 지연된 forced SELL을 전량 engine order 한 건으로 교체한다.
+        pendingOrders = pendingOrders.filter(
+          (order) => !(order.symbol === symbol && order.side === 'SELL'),
+        );
+        const forcedExit: OrderIntent = {
+          symbol,
+          side: 'SELL',
+          quantity: position.quantity,
+          reason: 'REBALANCE_EXIT',
+        };
+        if (sellEligibleNow.has(symbol)) pendingOrders.push(forcedExit);
+        else forcedExitsForNextOpen.push(forcedExit);
+        unresolvedForcedExitSymbols.add(symbol);
+        if (!quantityBasisTsMsBySymbol.has(symbol)) quantityBasisTsMsBySymbol.set(symbol, tsMs);
+      }
+
+      // D-1 BUY는 발행 때의 예전 schedule이 아니라 방금 활성화된 membership으로
+      // 다시 판정한다. 편출 BUY는 취소하고, 아직 유효해도 forced exit가 남아
+      // 있으면 청산 다음 open까지 미룬다. 이전에 미뤄 둔 BUY도 같은 규칙이다.
+      deferredRebalanceBuys = deferredRebalanceBuys.filter(
+        (order) => membershipSymbols.has(order.symbol),
+      );
+      const reconciledPending: OrderIntent[] = [];
+      for (const order of pendingOrders) {
+        if (order.side !== 'BUY') {
+          reconciledPending.push(order);
+        } else if (!membershipSymbols.has(order.symbol)) {
+          // stale membership에서는 유효했던 주문이므로 전략 버그 warning은 남기지 않는다.
+          continue;
+        } else if (unresolvedForcedExitSymbols.size > 0) {
+          deferBuy(order);
+        } else {
+          reconciledPending.push(order);
+        }
+      }
+      pendingOrders = reconciledPending;
+    }
+
     // 2~3. 대기 주문 체결 + 현금·포지션 갱신
     const stillPending: OrderIntent[] = [];
     for (const order of pendingOrders) {
+      if (order.side === 'BUY' && unresolvedForcedExitSymbols.size > 0) {
+        deferBuy(order);
+        continue;
+      }
       const bar = bars.get(order.symbol);
       if (!bar) {
         stillPending.push(order); // 다음 거래 가능 봉까지 대기 (§9.1)
@@ -392,13 +520,52 @@ function* runBacktestSteps(
       }
       const executed = executeOrder(order, bar, tsMs);
       if (executed) fills.push(executed);
+      if (
+        order.reason === 'REBALANCE_EXIT'
+        && unresolvedForcedExitSymbols.has(order.symbol)
+        && !positions.has(order.symbol)
+      ) {
+        resolveForcedExit(order.symbol, true);
+      }
     }
     pendingOrders = stillPending;
+    pendingOrders.push(...forcedExitsForNextOpen);
+
+    // 역분할 단주 현금화 등으로 주문 체결 전에 포지션이 사라진 경우도 대기 상태를
+    // 영원히 붙들지 않는다. 멤버십 이탈로 전략 보유 상태를 지워야 하므로 훅은 부른다.
+    for (const symbol of [...unresolvedForcedExitSymbols]) {
+      if (!positions.has(symbol)) resolveForcedExit(symbol, true);
+    }
+
+    // 청산을 방금 모두 마쳤다면 미뤄 둔 매수는 **이번** 체결 루프로 되돌리지 않고
+    // 다음 봉 대기열에 둔다. 이 줄이 D1 sell → D2 buy 간격을 만든다.
+    if (isTradeBar && unresolvedForcedExitSymbols.size === 0 && deferredRebalanceBuys.length > 0) {
+      promoteDeferredBuys(promotedBuySymbolsThisBar);
+    }
 
     // 봉 이력·마지막 종가 갱신
     for (const [symbol, bar] of bars) {
       (historyBySymbol.get(symbol) as Candle[]).push(bar);
       lastCloseBySymbol.set(symbol, bar.close);
+    }
+
+    if (!isTradeBar) {
+      const warmupContext: StrategyBarContext = {
+        tsMs,
+        isRebalanceBar: false,
+        bars,
+        getHistory: (symbol) => historyBySymbol.get(symbol) ?? [],
+        portfolio: { cash, equity: markToMarket(), positions },
+        rng,
+        fundamentals: (symbol) => factView.fundamentals(symbol),
+        corporateActions: (symbol) => factView.corporateActions(symbol, tsMs),
+        tradableSymbols,
+        selectionMetric: (symbol) => activeSelectionMetrics?.get(symbol) ?? null,
+      };
+      // warm-up은 전략 지표/커서 상태만 전진시킨다. 반환 주문은 의도적으로 버린다.
+      strategy.onBars(warmupContext, state, input.parameters);
+      if (visitedBars % CANCEL_YIELD_INTERVAL_BARS < bars.size) yield;
+      continue;
     }
 
     // 상장폐지 청산 — 폐지 효력 시각 직전 마지막 봉에서 종가로 전량 나간다.
@@ -416,9 +583,8 @@ function* runBacktestSteps(
       for (const [symbol, bar] of bars) {
         if (liquidationBarTsMsBySymbol.get(symbol)?.has(tsMs) !== true) continue;
 
-        // 대기 주문을 따로 지우지 않는다. 이 시점 pendingOrders 에는 이번 봉에 봉이
-        // 없는 종목의 주문만 남아 있다. 봉이 있는 종목은 위 체결 스텝이 이미 다
-        // 처리했으므로, 폐지 종목(이번 봉이 있어야 여기 온다) 주문은 애초에 없다.
+        // D0에 방금 만든 REBALANCE_EXIT가 pendingOrders에 있을 수 있다.
+        // 이 폐지 청산이 선행하면 아래 resolveForcedExit가 그 주문도 같이 제거한다.
         // 전략이 이 마지막 봉에서 새로 내는 주문은 이 블록 뒤(전략 호출)에 등록되므로
         // 여기서 손댈 수 없고, 체결될 봉이 다시 오지 않아 기간 종료 폐기 경고로 드러난다.
 
@@ -438,6 +604,7 @@ function* runBacktestSteps(
           delistingLiquidations.push({ symbol, tsMs, netPnl: trade.netPnl });
         }
         strategy.onForcedExit?.(symbol, state);
+        if (unresolvedForcedExitSymbols.has(symbol)) resolveForcedExit(symbol, false);
       }
     }
 
@@ -453,6 +620,7 @@ function* runBacktestSteps(
     };
     const context: StrategyBarContext = {
       tsMs,
+      isRebalanceBar,
       bars,
       getHistory: (symbol) => historyBySymbol.get(symbol) ?? [],
       portfolio: portfolioView,
@@ -460,14 +628,34 @@ function* runBacktestSteps(
       fundamentals: (symbol) => factView.fundamentals(symbol),
       corporateActions: (symbol) => factView.corporateActions(symbol, tsMs),
       tradableSymbols,
+      selectionMetric: (symbol) => activeSelectionMetrics?.get(symbol) ?? null,
     };
     const decision = strategy.onBars(context, state, input.parameters);
 
     // 7~8. 리스크 검증 후 다음 봉 대기열 등록
     for (const order of decision.orders) {
-      const validated = validateOrder(order);
+      if (
+        order.side === 'SELL'
+        && unresolvedForcedExitSymbols.has(order.symbol)
+      ) {
+        continue; // 엔진의 전량 REBALANCE_EXIT 한 건이 같은 symbol 전략 SELL을 대체한다
+      }
+      const shouldDeferBuy = order.side === 'BUY'
+        && (isRebalanceBar || unresolvedForcedExitSymbols.size > 0);
+      const validated = validateOrder(order, shouldDeferBuy);
       if (!validated) continue;
-      pendingOrders.push(validated);
+      if (shouldDeferBuy) {
+        deferBuy(validated);
+      } else {
+        if (order.side === 'BUY' && promotedBuySymbolsThisBar.has(order.symbol)) {
+          // 청산 체결 직후 승격된 BUY를 전략이 같은 봉에서 다시 계산하면 최신 수량 한
+          // 건으로 바꾼다. 둘 다 남기면 다음 open에 같은 종목을 두 번 산다.
+          pendingOrders = pendingOrders.filter(
+            (pending) => !(pending.side === 'BUY' && pending.symbol === order.symbol),
+          );
+        }
+        pendingOrders.push(validated);
+      }
       // 이 종목의 봉을 한 번도 본 적이 없을 때만 기준 시각을 지금으로 놓는다.
       // 참조할 이전 단위가 없으니 발행 시각을 기준으로 삼는다.
       // 기본값 -1 을 그대로 두면 상장 이전의 분할까지 이 주문에 걸린다.
@@ -480,6 +668,12 @@ function* runBacktestSteps(
       }
     }
 
+    // 이 리밸런스에 청산할 이탈 보유분이 없었다면 일반 NEXT_BAR_OPEN과 같은 D1에
+    // 매수한다. 이탈 보유분이 있었던 경우에는 위 체결 단계에서 해소되는 D1까지 남는다.
+    if (unresolvedForcedExitSymbols.size === 0 && deferredRebalanceBuys.length > 0) {
+      promoteDeferredBuys(promotedBuySymbolsThisBar);
+    }
+
     // 9. 진행률
     processedBars += bars.size;
     if (hooks.onProgress && (processedBars % PROGRESS_INTERVAL_BARS < bars.size || tsMs === timeline[timeline.length - 1])) {
@@ -488,13 +682,21 @@ function* runBacktestSteps(
 
     // 취소 확인 창. `runBacktest`(동기 드라이버)는 이 yield 를 그냥 흘려보낸다.
     // `runBacktestCancellable` 만 여기서 실제로 이벤트 루프에 양보한다.
-    if (processedBars % CANCEL_YIELD_INTERVAL_BARS < bars.size) {
+    if (visitedBars % CANCEL_YIELD_INTERVAL_BARS < bars.size) {
       yield;
     }
   }
 
-  if (pendingOrders.length > 0) {
-    warnings.push(`기간 종료로 체결되지 않은 주문 ${pendingOrders.length}건이 폐기되었습니다.`);
+  if (unresolvedForcedExitSymbols.size > 0) {
+    warnings.push(
+      `리밸런스 유니버스 이탈 청산 ${unresolvedForcedExitSymbols.size}건이 기간 종료까지 체결되지 않아 `
+        + `후속 매수 주문 ${deferredRebalanceBuys.length}건을 실행하지 않았습니다.`,
+    );
+  }
+  if (pendingOrders.length > 0 || deferredRebalanceBuys.length > 0) {
+    warnings.push(
+      `기간 종료로 체결되지 않은 주문 ${pendingOrders.length + deferredRebalanceBuys.length}건이 폐기되었습니다.`,
+    );
   }
   if (positions.size > 0) {
     warnings.push(
@@ -626,7 +828,35 @@ function* runBacktestSteps(
 
   // ── 내부 helpers ─────────────────────────────────────────────
 
-  function validateOrder(order: OrderIntent): OrderIntent | null {
+  function deferBuy(order: OrderIntent): void {
+    // 같은 이탈 청산을 기다리는 동안 전략이 매 봉 같은 후보를 다시 내도 한 건만 둔다.
+    deferredRebalanceBuys = deferredRebalanceBuys.filter(
+      (pending) => pending.symbol !== order.symbol,
+    );
+    deferredRebalanceBuys.push(order);
+  }
+
+  function promoteDeferredBuys(promotedSymbols: Set<string>): void {
+    const deferred = deferredRebalanceBuys;
+    deferredRebalanceBuys = [];
+    for (const order of deferred) {
+      const validated = validateOrder(order);
+      if (validated) {
+        pendingOrders.push(validated);
+        promotedSymbols.add(validated.symbol);
+      }
+    }
+  }
+
+  function resolveForcedExit(symbol: string, notifyStrategy: boolean): void {
+    unresolvedForcedExitSymbols.delete(symbol);
+    pendingOrders = pendingOrders.filter(
+      (order) => !(order.symbol === symbol && order.reason === 'REBALANCE_EXIT'),
+    );
+    if (notifyStrategy) strategy.onForcedExit?.(symbol, state);
+  }
+
+  function validateOrder(order: OrderIntent, ignorePositionCap = false): OrderIntent | null {
     if (!Number.isFinite(order.quantity) || order.quantity < input.execution.rules.minOrderQty) {
       return null;
     }
@@ -668,7 +898,7 @@ function* runBacktestSteps(
     // BUY: 신규 심볼이면 동시 포지션 상한 확인.
     // 대기 중인 신규 매수도 슬롯을 소비한다 — 같은 봉에서 여러 심볼이 동시에
     // 신호를 내면 보유 수만으로는 상한이 뚫린다.
-    if (!positions.has(order.symbol)) {
+    if (!ignorePositionCap && !positions.has(order.symbol)) {
       const pendingNewBuySymbols = new Set(
         pendingOrders
           .filter((o) => o.side === 'BUY' && !positions.has(o.symbol))

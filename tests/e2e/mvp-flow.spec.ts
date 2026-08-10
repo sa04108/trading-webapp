@@ -28,18 +28,51 @@ const TOP_N = 1;
  * 밀려나는 연쇄 실패로 번진다(리뷰에서 재현·확인).
  */
 const BACKFILL_WAIT_TIMEOUT_MS = 150_000;
+/**
+ * durable 준비 작업(Task 6) 완료 대기 상한. 재무·자본변동 DART 호출은 실제로 일어나지
+ * 않는다(`seedCorporateActionCoverageOnRegistration` 이 등록 시점에 커버리지를 이미
+ * 채워 `FactSyncService.runSync` 가 남은 연도 0건으로 건너뛴다 — scripts/e2e-server.ts
+ * 주석 참고). 그런데도 시장 데이터 phase는 짧지 않다 — `range-breakout` 의
+ * `priceWarmupBars` 요구 때문에 `syncMarketData` 가 price.from(≈ period.from - 36일)
+ * ~ price.to(period.to) 전체를 하루 단위로 순회하며 `ingestDate` 를 부른다(옛
+ * "기간 전체 동기화" 가 하던 일을 이 준비 작업이 그대로 흡수했다) — KOSPI·KOSDAQ ×
+ * 기본정보·일별매매 최소 4호출을 250ms 간격으로 반복하므로(krx-historical-universe-source.ts
+ * `groupMinIntervalMs`) 실측(로컬)으로 약 100~130초 걸린다. 기간 전체 백필
+ * (`BACKFILL_WAIT_TIMEOUT_MS`)과 같은 일을 하므로 상한도 비슷하게 넉넉히 잡는다.
+ */
+const PREPARATION_WAIT_TIMEOUT_MS = 200_000;
 
 /**
- * 위저드 유니버스 단계 — [미리보기] 를 누르고, 리밸런스 날짜가 아직 커버되지 않았다는
- * 경고가 뜨면 [기간 전체 동기화] 로 기간 전체(period.from~to)를 채운다(Task 4, 스펙
- * 2026-08-06). 서버가 백그라운드 백필을 돌리는 동안 컴포넌트가 `GET
- * /symbol-master/coverage` 를 폴링하고, 백필이 끝나면 같은 params 로 미리보기를
- * 자동으로 다시 던진다(universe-rule-step.tsx `syncFullPeriod`) — 그 응답을 기다리면
- * 버튼이 사라진(=기간 전체가 커버된) 상태로 정리된다.
+ * 준비 작업(Task 6)이 202로 시작됐으면, 완료 뒤 컴포넌트가 같은 params로 자동
+ * 재요청하는 응답(universe-rule-step.tsx COMPLETED effect)까지 기다린다. 200으로
+ * 바로 끝났으면(이미 준비된 요청) 아무 것도 하지 않는다.
+ */
+async function waitForDurablePreparation(
+  page: Page,
+  firstResponse: { status(): number },
+): Promise<void> {
+  if (firstResponse.status() !== 202) return;
+  const autoRetried = page.waitForResponse(
+    (resp) =>
+      resp.url().includes('/backtests/universe-preview') && resp.request().method() === 'POST',
+    { timeout: PREPARATION_WAIT_TIMEOUT_MS },
+  );
+  await autoRetried;
+}
+
+/**
+ * 위저드 유니버스 단계 — [미리보기] 를 누르고, ① durable 준비 작업(202)이 시작되면
+ * `waitForDurablePreparation` 으로 완료를 기다리고, ② 그 결과에 리밸런스 날짜가
+ * 아직 커버되지 않았다는 경고가 뜨면 [기간 전체 동기화] 로 기간 전체
+ * (period.from~to)를 채운다(Task 4, 스펙 2026-08-06). 서버가 백그라운드 백필을
+ * 돌리는 동안 컴포넌트가 `GET /symbol-master/coverage` 를 폴링하고, 백필이 끝나면
+ * 같은 params 로 미리보기를 자동으로 다시 던진다(universe-rule-step.tsx
+ * `syncFullPeriod`) — 그 응답을 기다리면 버튼이 사라진(=기간 전체가 커버된) 상태로
+ * 정리된다.
  *
  * 이미 같은 기간을 동기화해 둔 뒤(예: 이 파일의 재무 게이트 시나리오가 앞선 시나리오와
- * 같은 PERIOD 를 쓴다) 다시 부르면 경고 자체가 뜨지 않아 버튼을 누르지 않고 끝난다 —
- * 그래서 두 시나리오가 이 함수를 그대로 공유해도 안전하다.
+ * 같은 PERIOD 를 쓴다) 다시 부르면 202도, 경고도 뜨지 않아 아무 것도 누르지 않고
+ * 끝난다 — 그래서 두 시나리오가 이 함수를 그대로 공유해도 안전하다.
  */
 async function previewAndSyncUniverse(page: Page): Promise<void> {
   const initialPreview = page.waitForResponse(
@@ -47,11 +80,12 @@ async function previewAndSyncUniverse(page: Page): Promise<void> {
       resp.url().includes('/backtests/universe-preview') && resp.request().method() === 'POST',
   );
   await page.getByRole('button', { name: '미리보기' }).click();
-  // 클릭 직후 count() 는 자동 대기하지 않는다 — 응답이 아직 안 온 시점의 DOM(버튼 0개)
-  // 을 그대로 읽으면 실제로는 곧 뜨는데도 없는 것으로 판정해 버린다. 첫 미리보기
-  // 응답을 기다린 뒤에야 버튼 유무를 확인한다.
-  await initialPreview;
+  const first = await initialPreview;
+  await waitForDurablePreparation(page, first);
 
+  // 클릭 직후 count() 는 자동 대기하지 않는다 — 응답이 아직 안 온 시점의 DOM(버튼 0개)
+  // 을 그대로 읽으면 실제로는 곧 뜨는데도 없는 것으로 판정해 버린다. 위에서 이미
+  // (durable 작업이 있었다면) 그 완료 응답까지 기다렸으므로 여기서는 곧바로 확인한다.
   const fullSync = page.getByRole('button', { name: '기간 전체 동기화' });
   if ((await fullSync.count()) === 0) return;
 
@@ -146,7 +180,9 @@ test('full MVP flow', async ({ page }) => {
   );
   await expect(page.getByRole('checkbox')).toHaveCount(0);
   await expect(page.getByLabel('시장')).toContainText('KOSPI');
-  await page.getByLabel('상위 N (시가총액)').fill(String(TOP_N));
+  // 단계형 유니버스 편집기(Task 9)가 라벨을 '상위 N (시가총액)'에서 단계 공용 'N'으로
+  // 바꿨다 — 이 시나리오는 항상 기본 단일 MARKET_CAP 단계뿐이라 'N' 하나만 있다.
+  await page.getByLabel('N', { exact: true }).fill(String(TOP_N));
   await previewAndSyncUniverse(page);
   await expect(page.getByText('종목 1개 · 리밸런스 3회')).toBeVisible();
   // 봉 주기를 고르는 UI 는 없다 — `Timeframe` 이 `'1d'` 하나뿐이라(D-041) 고를
@@ -165,7 +201,7 @@ test('full MVP flow', async ({ page }) => {
   );
   // 검토 줄은 데이터셋이 아니라 유니버스 규칙을 적는다(universe-summary.ts) — 실제
   // 리밸런스 결과 종목 수는 여기 적지 않는다(다시 미리보기해야 아는 값이라서다)
-  await expect(page.getByText('KOSPI 시가총액 상위 1').first()).toBeVisible();
+  await expect(page.getByText('KOSPI · 시가총액 1 · 매월').first()).toBeVisible();
 
   // 2-3. 상단 단계 버튼 — 뒤로는 자유롭게, 앞으로는 검토까지만
   await page.getByRole('button', { name: '3. 유니버스' }).click();
@@ -219,7 +255,7 @@ test('full MVP flow', async ({ page }) => {
   await expect(feeModelValue).not.toHaveCSS('text-overflow', 'ellipsis');
   // 5-1. 설명 줄은 종목을 나열하지 않고 유니버스 규칙을 적는다(스펙 2026-08-05) —
   // 데이터셋·스냅샷 개념 자체가 제거됐다. 여기에 id(ds_…) 가 뜨면 옛 경로로 되돌아간 것이다.
-  await expect(page.getByText('KOSPI 시가총액 상위 1')).toBeVisible();
+  await expect(page.getByText('KOSPI · 시가총액 1 · 매월')).toBeVisible();
   // 별도 "미청산 포지션" 카드는 제거되고 거래 내역 테이블에 통합됐다
   await expect(page.getByText('미청산 포지션', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('row').filter({ hasText: '미청산' }).first()).toBeVisible();
@@ -301,7 +337,7 @@ test('full MVP flow', async ({ page }) => {
   await page.getByLabel('시작일').fill(PERIOD.from);
   await page.getByLabel('종료일').fill(PERIOD.to);
   await page.getByRole('button', { name: '다음' }).click(); // 기간 → 유니버스
-  await page.getByLabel('상위 N (시가총액)').fill(String(TOP_N));
+  await page.getByLabel('N', { exact: true }).fill(String(TOP_N));
   // 이 전략은 리밸런스 주기 기본값이 3개월이라 이 기간엔 리밸런스 날짜가 하나뿐이고
   // (PERIOD.from), 위 시나리오가 이미 그 날짜를 동기화해 둬서 곧바로 통과한다.
   await previewAndSyncUniverse(page);
@@ -388,38 +424,25 @@ test('rebalance schedule shows the applied trading day when a rebalance date fal
   await page.getByLabel('종료일').fill(period.to);
   await page.getByRole('button', { name: '다음' }).click(); // 기간 → 유니버스
 
-  await page.getByLabel('상위 N (시가총액)').fill(String(TOP_N));
+  await page.getByLabel('N', { exact: true }).fill(String(TOP_N));
 
   const firstPreview = page.waitForResponse(
     (resp) =>
       resp.url().includes('/backtests/universe-preview') && resp.request().method() === 'POST',
   );
   await page.getByRole('button', { name: '미리보기' }).click();
-  await firstPreview;
-
-  // 두 리밸런스 날짜(1월 1일 휴장, 2월 1일 정상 거래일) 모두 아직 커버되지 않아
-  // "기간 전체 동기화" 버튼 하나가 기간 전체(휴장일 포함)를 채운다.
-  await expect(page.getByRole('button', { name: '기간 전체 동기화' })).toBeVisible();
-  // 미커버 날짜 목록은 한 줄로 모아 보여준다 — 어느 날짜가 빠졌는지는 여전히 읽힌다.
-  await expect(
-    page.getByText(`${period.from}, ${period.to}`, { exact: true }),
-  ).toBeVisible();
-
-  const previewRefreshed = page.waitForResponse(
-    (resp) =>
-      resp.url().includes('/backtests/universe-preview') && resp.request().method() === 'POST',
-    { timeout: BACKFILL_WAIT_TIMEOUT_MS },
-  );
-  await page.getByRole('button', { name: '기간 전체 동기화' }).click();
-  await previewRefreshed;
-  // 이 시나리오가 바로 그 "리밸런스 날짜가 휴장일" 경우다 — period.from(1월 1일)
-  // 자체가 휴장이라 재구성 앵커(전년 12월 31일)가 백필 구간 밖에 있다. syncFullPeriod
-  // 가 남은 uncoveredDates 만 ensureTradingDay 로 개별 소급한 뒤 다시 미리보기하므로
-  // (previewAndSyncUniverse 주석 참고), 버튼이 사라지기까지 첫 응답 이후로도 시간이
-  // 더 걸릴 수 있어 넉넉히 잡는다.
-  await expect(page.getByRole('button', { name: '기간 전체 동기화' })).toHaveCount(0, {
-    timeout: 30_000,
-  });
+  const first = await firstPreview;
+  // 이 기간(휴장일 포함 두 리밸런스 날짜)은 처음 요청되므로 시장 데이터가 durable
+  // 준비 작업(202)으로 시작된다 — 완료를 먼저 기다려야 그 다음 "기간 전체 동기화"
+  // 판단이 최신 상태를 본다.
+  // durable 준비 작업(Task 6)의 시장 데이터 phase가 range-breakout의 price warm-up
+  // 요구 때문에 기간 전체(휴장일 포함)를 이미 하루 단위로 순회해 채운다 — 옛
+  // "기간 전체 동기화" 버튼이 하던 일을 이 준비 작업이 흡수했으므로(이 파일
+  // `PREPARATION_WAIT_TIMEOUT_MS` 주석 참고) 완료 뒤에는 그 버튼 없이 곧바로
+  // 리밸런스 일정이 뜬다.
+  await waitForDurablePreparation(page, first);
+  await expect(page.getByRole('button', { name: '기간 전체 동기화' })).toHaveCount(0);
+  await expect(page.getByText('리밸런스 일정')).toBeVisible();
 
   // 휴장 리밸런스 날짜(1월 1일)는 소급된 직전 거래일이 덧붙어 보이고, 정상 거래일
   // (2월 1일)은 요청 날짜와 같아 아무것도 덧붙지 않는다 — 표기 규약(잡음 없음)이다.
@@ -446,7 +469,11 @@ test('rebalance schedule shows the applied trading day when a rebalance date fal
  * 기능 전체의 목적(생존편향 제거)이 무너진 것이다.
  */
 test('backtest run completes using only KRX daily bars for a delisted stock', async ({ page }) => {
-  const period = { from: '2026-04-01', to: '2026-04-20' };
+  // to는 적어도 한 달 뒤까지 — 단계 편집기의 주기 초과 차단(Task 9,
+  // rebalanceIntervalFitsPeriod)이 기본 주기(매월)로 다음 리밸런스가 기간 안에 한
+  // 번도 올 수 없는 기간을 막는다. 20일짜리 옛 기간은 이제 이 검증에 걸려
+  // '미리보기'가 계속 비활성 상태로 남는다 — 리밸런스는 여전히 1회(4월 1일)뿐이다.
+  const period = { from: '2026-04-01', to: '2026-04-30' };
 
   await page.goto('/login');
   await page.getByLabel('사용자 이름').fill(USERNAME);
@@ -464,7 +491,7 @@ test('backtest run completes using only KRX daily bars for a delisted stock', as
   await page.getByLabel('종료일').fill(period.to);
   await page.getByRole('button', { name: '다음' }).click(); // 기간 → 유니버스
 
-  await page.getByLabel('상위 N (시가총액)').fill('2');
+  await page.getByLabel('N', { exact: true }).fill('2');
   await previewAndSyncUniverse(page);
 
   // 두 종목 모두 유니버스에 들어왔고, 봉이 없다는 경고가 없다 — 상장폐지 종목도

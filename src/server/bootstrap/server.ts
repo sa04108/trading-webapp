@@ -18,9 +18,9 @@ import {
 import { registerSymbolRoutes } from '../modules/market-data/presentation/symbol-routes.js';
 import { registerStrategyRoutes } from '../modules/strategy/presentation/strategy-routes.js';
 import { registerBacktestRoutes } from '../modules/backtest/presentation/backtest-routes.js';
+import { registerBacktestPreparationRoutes } from '../modules/backtest/presentation/backtest-preparation-routes.js';
 import { registerNotificationRoutes } from '../modules/notification/presentation/notification-routes.js';
 import { registerSymbolMasterRoutes } from '../modules/market-data/presentation/symbol-master-routes.js';
-import { registerCorporateActionRoutes } from '../modules/facts/presentation/corporate-action-routes.js';
 
 function resolvePublicDir(): string | null {
   // 빌드 후: dist/server/bootstrap → dist/public.
@@ -82,13 +82,20 @@ export async function buildServer(container: Container): Promise<FastifyInstance
           strategies: container.strategyRegistry,
           symbolService: container.symbolService,
           candleCoverage: container.candleCoverageService,
-          universeRuleResolver: container.universeRuleResolver,
+          preparation: container.backtestPreparationOrchestrator,
           audit: container.auditLog,
           factRepository: container.factRepository,
-          corporateActionCoverage: container.actionCoverageStore,
           dataRoot: container.config.dataRoot,
           maxQueuedBacktests: container.config.maxQueuedBacktests,
           clock: container.clock,
+        },
+        requireAuth,
+      );
+      registerBacktestPreparationRoutes(
+        api,
+        {
+          orchestrator: container.backtestPreparationOrchestrator,
+          dartApiKeyAvailable: container.config.dartApiKey !== null,
         },
         requireAuth,
       );
@@ -96,14 +103,6 @@ export async function buildServer(container: Container): Promise<FastifyInstance
       registerSymbolMasterRoutes(
         api,
         { service: container.symbolMasterService, backfill: container.symbolMasterBackfill },
-        requireAuth,
-      );
-      registerCorporateActionRoutes(
-        api,
-        {
-          orchestrator: container.corporateActionSyncOrchestrator,
-          symbolService: container.symbolService,
-        },
         requireAuth,
       );
     },

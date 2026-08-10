@@ -91,7 +91,8 @@ import {
 import { costSummary } from './cost-summary';
 import { costProfileLabel, slippageProfileLabel } from './profile-labels';
 import { groupWarnings } from './warning-groups';
-import { selectionMethodLabel, universeSourceLabel } from './universe-provenance';
+import { provenanceDiagnostics, selectionMethodLabel, universeSourceLabel } from './universe-provenance';
+import { CRITERION_LABEL } from './universe-summary';
 import type { ProvenancePin } from '../../../shared/schemas/provenance-pin.js';
 
 const RESULT_PAGE_SIZE = 10;
@@ -529,6 +530,83 @@ function WarningsSection({ warnings }: { warnings: string[] }) {
   );
 }
 
+/**
+ * 리밸런스마다 단계별로 몇 종목이 통과했는지 보여준다 — `ORDERED_UNIVERSE_PIPELINE`
+ * pin(Task 11)에만 있는 값이라, 옛 pin·pin 없음은 `provenanceDiagnostics` 가 빈
+ * 배열을 주고 이 섹션 자체가 사라진다. 리밸런스가 잦은 실행은 진단이 수백 건이라
+ * `WarningsSection` 과 같은 페이지네이션을 쓴다.
+ */
+function UniverseDiagnosticsSection({ provenancePin }: { provenancePin: ProvenancePin | null }) {
+  const [page, setPage] = useState(0);
+  const [pageSizeText, setPageSizeText] = useState('20');
+  const pageSize = parsePageSize(pageSizeText, 20);
+  const diagnostics = provenanceDiagnostics(provenancePin);
+  const { pageCount, currentPage, from, to } = pageWindow(diagnostics.length, pageSize, page);
+  const visible = diagnostics.slice(from, to);
+
+  if (diagnostics.length === 0) return null;
+
+  return (
+    <Card className="lg:col-span-2">
+      <CardHeader className="flex flex-row items-center justify-between gap-2">
+        <CardTitle className="text-base">유니버스 단계 진단</CardTitle>
+        <PageSizeInput
+          value={pageSizeText}
+          label="유니버스 단계 진단 페이지당 표시 수"
+          unit="건"
+          onChange={(nextValue) => {
+            setPageSizeText(nextValue);
+            setPage(0);
+          }}
+        />
+      </CardHeader>
+      <CardContent>
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>리밸런스일</TableHead>
+                <TableHead>기준일</TableHead>
+                <TableHead>단계별 통과(통과/후보)</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {visible.map((diagnostic) => (
+                <TableRow key={diagnostic.rebalanceDate}>
+                  <TableCell className="whitespace-nowrap text-xs">
+                    {diagnostic.rebalanceDate}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs">
+                    {diagnostic.effectiveDate}
+                    {diagnostic.effectiveDate !== diagnostic.rebalanceDate ? (
+                      <span className="text-muted-foreground"> (휴장 조정)</span>
+                    ) : null}
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {diagnostic.stages
+                      .map(
+                        (stage) =>
+                          `${CRITERION_LABEL[stage.criterion]} ${stage.selectedCount}/${stage.eligibleCount}`,
+                      )
+                      .join(' → ')}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+        <Pagination
+          className="mt-3"
+          ariaLabel="유니버스 단계 진단 페이지 이동"
+          currentPage={currentPage}
+          pageCount={pageCount}
+          onPageChange={setPage}
+        />
+      </CardContent>
+    </Card>
+  );
+}
+
 function RunMetadataCard({
   run,
   job,
@@ -647,6 +725,7 @@ function RunMetadataCard({
         </CardContent>
       </Card>
       {warnings.length > 0 ? <WarningsSection warnings={warnings} /> : null}
+      <UniverseDiagnosticsSection provenancePin={provenancePin} />
     </div>
   );
 }

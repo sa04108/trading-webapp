@@ -119,6 +119,57 @@ describe('PitFactView TTM', () => {
   });
 });
 
+describe('PitFactView 분기 offset', () => {
+  const announcedAt = 10_000;
+  const eightQuarters: Fact[] = [
+    ['2024Q1', 10],
+    ['2024Q2', 20],
+    ['2024Q3', 30],
+    ['2024Q4', 40],
+    ['2025Q1', 50],
+    ['2025Q2', 60],
+    ['2025Q3', 70],
+    ['2025Q4', 80],
+  ].map(([periodKey, value]) =>
+    fact({ field: 'NET_INCOME', periodKey: String(periodKey), asOfTsMs: announcedAt, value: Number(value) }),
+  );
+
+  it('공시 시각 전에는 보이지 않고, 공시 뒤 calendar quarter offset으로 최대 8개 분기를 조회한다', () => {
+    const view = new PitFactView([
+      fact({ field: 'OPERATING_INCOME', periodKey: '2023Q4', asOfTsMs: 1, value: 1 }),
+      ...eightQuarters,
+    ]);
+    view.advanceTo(announcedAt - 1);
+    expect(view.fundamentals('005930')?.quarter('NET_INCOME', 0)).toBeNull();
+
+    view.advanceTo(announcedAt);
+    const snapshot = view.fundamentals('005930')!;
+    expect(snapshot.quarter('NET_INCOME', 0)).toEqual({ periodKey: '2025Q4', value: 80 });
+    expect(snapshot.quarter('NET_INCOME', 1)).toEqual({ periodKey: '2025Q3', value: 70 });
+    expect(snapshot.quarter('NET_INCOME', 7)?.periodKey).toBe('2024Q1');
+    expect(snapshot.ttm('NET_INCOME', 0)).toBe(260);
+    expect(snapshot.ttm('NET_INCOME', 4)).toBe(100);
+  });
+
+  it('중간 분기가 비면 offset이 이전 공시를 건너뛰지 않고 null을 준다', () => {
+    const view = new PitFactView(eightQuarters.filter((entry) => entry.periodKey !== '2024Q4'));
+    view.advanceTo(announcedAt);
+
+    const snapshot = view.fundamentals('005930')!;
+    expect(snapshot.quarter('NET_INCOME', 4)).toBeNull();
+    expect(snapshot.ttm('NET_INCOME', 4)).toBeNull();
+  });
+
+  it('시점 계정은 TTM 합산 대상이 아니다', () => {
+    const view = new PitFactView(
+      eightQuarters.map((entry) => ({ ...entry, field: 'TOTAL_EQUITY' })),
+    );
+    view.advanceTo(announcedAt);
+
+    expect(view.fundamentals('005930')?.ttm('TOTAL_EQUITY', 0)).toBeNull();
+  });
+});
+
 describe('PitFactView 계정별 최신 분기 커서', () => {
   it('느린 주기의 계정은 다른 계정이 커서를 4분기 넘게 앞서 밀어도 값을 잃지 않는다', () => {
     // CURRENT_ASSETS 는 2024Q1 딱 한 번만 공시된다. OPERATING_INCOME 은 매 분기

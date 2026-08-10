@@ -246,6 +246,7 @@ describe('KRX 과거 유니버스 어댑터', () => {
       low: 71_000,
       close: 71_800,
       volume: 12_345_678,
+      tradingValueRaw: null,
     });
   });
 

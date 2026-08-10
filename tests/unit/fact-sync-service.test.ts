@@ -617,6 +617,30 @@ describe('FactSyncService — 증분과 취소', () => {
     expect(source.requests[0]?.shareYears).toEqual([2021, 2022]);
   });
 
+  it('durable resume은 이미 커버한 현재연도 symbol-year도 다시 요청하지 않는다', async () => {
+    const source = recordingSource();
+    const service = new FactSyncService(
+      source,
+      fakeRepository(),
+      LOGGER,
+      fakeVersions(),
+      { now: () => Date.UTC(2022, 5, 1) },
+      fakeCoverage(new Map([['005930', [2022]]])),
+      fakeActionCoverage(),
+    );
+
+    await service.sync({
+      symbols: ['005930'],
+      fromYear: 2022,
+      toYear: 2022,
+      consolidated: true,
+      mode: 'INCREMENTAL',
+      refreshCurrentYear: false,
+    });
+
+    expect(source.requests).toEqual([]);
+  });
+
   it('FULL 은 수집 이력을 무시한다', async () => {
     const source = recordingSource();
     const service = new FactSyncService(
@@ -637,7 +661,10 @@ describe('FactSyncService — 증분과 취소', () => {
       mode: 'FULL',
     });
 
-    expect(source.requests[0]?.years).toEqual([2020, 2021, 2022]);
+    // 재무 + 자본변동 두 소스가 각각 연도 work unit으로 호출된다.
+    expect(source.requests.map((request) => request.years)).toEqual([
+      [2020], [2020], [2021], [2021], [2022], [2022],
+    ]);
   });
 
   it('종목을 저장한 직후 그 종목의 연도를 이력에 남긴다', async () => {
@@ -661,9 +688,68 @@ describe('FactSyncService — 증분과 취소', () => {
     });
 
     expect(coverage.added).toEqual([
-      { symbol: '005930', years: [2021, 2022] },
-      { symbol: '000660', years: [2021, 2022] },
+      { symbol: '005930', years: [2021] },
+      { symbol: '005930', years: [2022] },
+      { symbol: '000660', years: [2021] },
+      { symbol: '000660', years: [2022] },
     ]);
+  });
+
+  it('다음 종목·연도 work unit 전에 quota로 멈추고 저장·이력을 보존한다', async () => {
+    const coverage = fakeCoverage();
+    const repository = fakeRepository();
+    const seenWork: Array<{ year: number; shareYears: readonly number[]; calls: number }> = [];
+    const source: FactSource = {
+      fetchFinancials: async (request) => ({
+        facts: [
+          { ...fact('CURRENT_ASSETS', request.years[0]!), periodKey: `${request.years[0]}Q1` },
+          { ...fact('CURRENT_LIABILITIES', request.years[0]!), periodKey: `${request.years[0]}Q1` },
+        ],
+        gaps: [],
+      }),
+      fetchCorporateActions: async () => ({ facts: [], gaps: [] }),
+    };
+    const service = new FactSyncService(
+      source,
+      repository,
+      LOGGER,
+      fakeVersions(),
+      { now: () => Date.UTC(2025, 5, 1) },
+      coverage,
+      fakeActionCoverage(),
+    );
+
+    const report = await service.sync(
+      {
+        symbols: ['005930'],
+        fromYear: 2024,
+        toYear: 2025,
+        consolidated: true,
+        mode: 'FULL',
+      },
+      {
+        beforeWorkUnit: (work) => {
+          seenWork.push({
+            year: work.year,
+            shareYears: work.shareYears,
+            calls: work.estimatedDartCalls,
+          });
+          return work.year === 2025 ? 'PAUSE_DAILY_QUOTA' : 'CONTINUE';
+        },
+      },
+    );
+
+    expect(seenWork).toEqual([
+      { year: 2024, shareYears: [2023, 2024], calls: 13 },
+      { year: 2025, shareYears: [2024, 2025], calls: 9 },
+    ]);
+    expect(report).toMatchObject({
+      savedFacts: 2,
+      stoppedAtSymbol: '005930',
+      stopReason: 'DAILY_QUOTA',
+    });
+    expect(repository.saved).toHaveLength(1);
+    expect(coverage.added).toEqual([{ symbol: '005930', years: [2024] }]);
   });
 
   it('shouldStop 이 true 면 그 종목 전에 멈추고 CANCELLED 로 보고한다', async () => {
@@ -778,6 +864,48 @@ describe('FactSyncService — 증분과 취소', () => {
     // 저장이 성공한 종목만 이력에 남는다 — 이력 기록이 저장보다 앞서면 여기에
     // '000660' 이 섞이고, 다음 증분 실행이 그 종목의 2022 를 건너뛴다
     expect(coverage.added.map((entry) => entry.symbol)).toEqual(['005930']);
+  });
+
+  it('저장 뒤 coverage 갱신이 실패해도 이미 저장된 팩트와 gap을 리포트에 센다', async () => {
+    const repository = fakeRepository();
+    const gap = { symbol: '005930', periodKey: '2025Q1', reason: '계정 누락' };
+    const baseCoverage = fakeCoverage();
+    const failingCoverage: FactCoverageStore = {
+      ...baseCoverage,
+      addCoveredYears: () => {
+        throw new Error('coverage 쓰기 실패');
+      },
+    };
+    const service = new FactSyncService(
+      fakeSource(
+        { facts: [fact('CURRENT_ASSETS', 1)], gaps: [gap] },
+        { facts: [], gaps: [] },
+      ),
+      repository,
+      LOGGER,
+      fakeVersions(),
+      { now: () => Date.UTC(2025, 5, 1) },
+      failingCoverage,
+      fakeActionCoverage(),
+    );
+
+    const report = await service.sync({
+      symbols: ['005930'],
+      fromYear: 2025,
+      toYear: 2025,
+      consolidated: true,
+      mode: 'FULL',
+    });
+
+    expect(await repository.getFacts({ scope: 'SYMBOL' })).toHaveLength(1);
+    expect(report).toMatchObject({
+      savedFacts: 1,
+      gaps: [gap],
+      stoppedAtSymbol: '005930',
+      stopReason: 'ERROR',
+    });
+    expect(report.failureMessage).toContain('coverage 쓰기 실패');
+    expect(report.failureMessage).toContain('팩트 1건은 이미 저장');
   });
 
   it('수집할 연도가 없는 종목은 소스를 부르지 않는다', async () => {

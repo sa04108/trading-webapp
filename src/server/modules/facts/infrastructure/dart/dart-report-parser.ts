@@ -1,6 +1,6 @@
 import { KR_SESSION } from '../../../market-data/domain/exchange-session.js';
 import type { FactIngestionGap } from '../../application/ports.js';
-import { CORPORATE_ACTION_FIELD, type Fact } from '../../domain/fact.js';
+import { CORPORATE_ACTION_FIELD, type Fact, type FundamentalField } from '../../domain/fact.js';
 import { resolveAccount } from './dart-account-map.js';
 
 /** 정기보고서 코드 (DART reprt_code) */
@@ -179,7 +179,7 @@ export function parseFinancialRows(
   const gaps: FactIngestionGap[] = [];
 
   /** field → quarter(1~4) → 누적값(+asOf) */
-  const cumulative = new Map<string, Map<number, CumulativePoint>>();
+  const cumulative = new Map<FundamentalField, Map<number, CumulativePoint>>();
   /** report → bsns_year — 분기 간 사업연도가 섞여 차분되는 것을 막는다 */
   const yearByReport = new Map<DartReportCode, string>();
 

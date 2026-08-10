@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
-import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
+import {
+  createTestAdmin,
+  createTestApp,
+  installPreparedSubmissionFixture,
+  type TestApp,
+} from '../helpers/test-app.js';
 import { registerSymbols, seedCorporateActionCoverage, seedDailyBars, yearRange } from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 
@@ -90,7 +95,11 @@ async function waitFor(condition: () => boolean, timeoutMs: number): Promise<voi
 const FACTS_MASTER_DATE = '2025-01-02';
 
 function factsUniverseRule(topN: number): BacktestRequest['universeRule'] {
-  return { markets: ['KOSPI'], topN, sortKey: 'MKTCAP' };
+  return {
+    markets: ['KOSPI'],
+    stages: [{ criterion: 'MARKET_CAP', limit: topN }],
+    rebalanceInterval: { value: 1, unit: 'MONTH' },
+  };
 }
 
 describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로세스', () => {
@@ -106,6 +115,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       payload: { username, password },
     });
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+    installPreparedSubmissionFixture(ctx);
 
     registerSymbols(ctx.container, 'KR', ['CHEAP', 'RICH']);
     // 시총 내림차순: CHEAP > RICH > NOFACTS — topN=2 면 앞의 둘, topN=3 이면 셋 다 들어온다.
@@ -262,7 +272,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       expect(factWarning).not.toContain('CHEAP');
       expect(factWarning).not.toContain('RICH');
       // 더 이상 존재하지 않는 리포트를 가리키지 않는다
-      // CLI 명령을 안내하지 않는다 — 재무 수집은 데이터 화면에서 한다
+      // CLI 명령을 안내하지 않는다 — 재무 수집은 준비(preparation) 흐름이 한다(D-049)
       expect(factWarning).not.toContain('facts:sync');
     },
   );
@@ -335,6 +345,7 @@ describe('워커의 자본변동 팩트 배선 — 접수일이 기간 종료 �
       payload: { username, password },
     });
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+    installPreparedSubmissionFixture(ctx);
 
     registerSymbols(ctx.container, 'KR', ['SPLIT', 'FLAT']);
     seedSymbolMasterUniverse(ctx.container, SPLIT_MASTER_DATES, [
@@ -376,7 +387,11 @@ describe('워커의 자본변동 팩트 배선 — 접수일이 기간 종료 �
           rebalanceMonths: 1,
           absoluteMomentumFilter: true,
         },
-        universeRule: { markets: ['KOSPI'], topN: 2, sortKey: 'MKTCAP' },
+        universeRule: {
+          markets: ['KOSPI'],
+          stages: [{ criterion: 'MARKET_CAP', limit: 2 }],
+          rebalanceInterval: { value: 1, unit: 'MONTH' },
+        },
         timeframe: '1d',
         period: { from: '2025-01-02', to: '2025-04-30' },
         capital: { initialCash: 10_000_000, currency: 'KRW' },
@@ -419,6 +434,304 @@ describe('워커의 자본변동 팩트 배선 — 접수일이 기간 종료 �
       expect(warnings.some((w) => w.includes('액면분할도 이 실행에서는 보정되지 않았습니다'))).toBe(
         false,
       );
+    },
+  );
+});
+
+/**
+ * Task 12 — 신규 재무전략(이익 가속·저PER·고ROE) 회귀. 실제 HTTP 제출 → 큐 → 자식
+ * 프로세스 경로로 두 전략을 각각 검증한다: 최소 3종목으로 서로 다른 게이트(가속·
+ * 모멘텀 / 순이익·자본총계)에서 제외되는 경로와, PIT 공시 경계에서 후보 편입이
+ * 갈리는 경로를 함께 확인한다.
+ *
+ * `installPreparedSubmissionFixture` 로 DART 를 no-op 처리하고(위 CHEAP/RICH
+ * 시나리오와 같은 관례) 팩트는 `factRepository.saveFacts` 로 직접 저장한다 —
+ * 오케스트레이터가 실제로 DART coverage 를 판정하는 경로는 `backtest-preparation.test.ts`
+ * 가 이미 촘촘히 덮으므로 여기서는 전략의 팩트 배선·PIT 게이트만 격리해 본다.
+ *
+ * 캘린더는 평일만 남기지 않고 하루도 거르지 않는다 — 실제 거래일력을 흉내 내는
+ * 대신(이 픽스처가 스스로 정의하는 합성 캘린더이므로) 요일 계산의 부담을 없앤다.
+ */
+const FIN_DAY = 86_400_000;
+/** priceMomentumDays(60) 최소값의 warm-up 을 여유 있게 덮는 시작점 */
+const FIN_START = Date.UTC(2024, 9, 1); // 2024-10-01
+
+function allDatesBetween(fromMs: number, toMs: number): string[] {
+  const dates: string[] = [];
+  for (let ts = fromMs; ts <= toMs; ts += FIN_DAY) dates.push(new Date(ts).toISOString().slice(0, 10));
+  return dates;
+}
+
+/** 최신 분기를 2024Q4 에 고정한다 — 2025년 1·2월 리밸런스 모두 lag=1로 기본 staleQuarters(2) 안에 든다 */
+function finQuarterPeriodKey(offset: number): string {
+  const ordinal = 2024 * 4 + 3 - offset;
+  return `${Math.floor(ordinal / 4)}Q${(ordinal % 4) + 1}`;
+}
+
+function operatingIncomeFacts(symbol: string, quarters: readonly number[], asOfTsMs: number): Fact[] {
+  return quarters.map((value, offset) => ({
+    scope: 'SYMBOL' as const,
+    key: symbol,
+    field: 'OPERATING_INCOME' as const,
+    periodKey: finQuarterPeriodKey(offset),
+    asOfTsMs,
+    value,
+    unit: 'KRW',
+  }));
+}
+
+function netIncomeFacts(symbol: string, quarters: readonly number[], asOfTsMs: number): Fact[] {
+  return quarters.map((value, offset) => ({
+    scope: 'SYMBOL' as const,
+    key: symbol,
+    field: 'NET_INCOME' as const,
+    periodKey: finQuarterPeriodKey(offset),
+    asOfTsMs,
+    value,
+    unit: 'KRW',
+  }));
+}
+
+function totalEquityFact(symbol: string, value: number, asOfTsMs: number): Fact {
+  return {
+    scope: 'SYMBOL',
+    key: symbol,
+    field: 'TOTAL_EQUITY',
+    periodKey: finQuarterPeriodKey(0),
+    asOfTsMs,
+    value,
+    unit: 'KRW',
+  };
+}
+
+describe('이익 가속·가격 확인 순위 워커 배선 — PIT 공시 경계 (Task 12)', () => {
+  let ctx: TestApp;
+  let cookie: string;
+  const PERIOD = { from: '2025-01-02', to: '2025-02-06' };
+  const REBALANCE_2_TS = Date.parse('2025-02-02T00:00:00Z');
+
+  beforeEach(async () => {
+    ctx = await createTestApp();
+    const { username, password } = await createTestAdmin(ctx.container);
+    const login = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { username, password },
+    });
+    cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+    installPreparedSubmissionFixture(ctx);
+
+    registerSymbols(ctx.container, 'KR', ['FUTURE_WINNER', 'NO_ACCEL', 'NO_MOMENTUM']);
+    seedSymbolMasterUniverse(ctx.container, allDatesBetween(FIN_START, Date.parse(`${PERIOD.to}T00:00:00Z`)), [
+      { standardCode: 'KR7000010000', shortCode: 'FUTURE_WINNER', name: 'FUTURE_WINNER', market: 'KOSPI', marketCapKrw: '300000000000' },
+      { standardCode: 'KR7000020000', shortCode: 'NO_ACCEL', name: 'NO_ACCEL', market: 'KOSPI', marketCapKrw: '200000000000' },
+      { standardCode: 'KR7000030000', shortCode: 'NO_MOMENTUM', name: 'NO_MOMENTUM', market: 'KOSPI', marketCapKrw: '100000000000' },
+    ]);
+    const candles: Candle[] = [];
+    const priceAt = new Map<string, (index: number) => number>([
+      ['FUTURE_WINNER', (index) => 1_000 + index * 10], // 꾸준히 상승 — 가격 모멘텀은 항상 양수다
+      ['NO_ACCEL', () => 1_000], // 가격은 문제없지만 영업이익이 가속하지 않는다
+      ['NO_MOMENTUM', () => 1_000], // 영업이익은 가속하지만 가격이 오르지 않는다
+    ]);
+    let index = 0;
+    for (let ts = FIN_START; ts <= Date.parse(`${PERIOD.to}T00:00:00Z`); ts += FIN_DAY) {
+      for (const [symbol, fn] of priceAt) {
+        const close = fn(index);
+        candles.push({ symbol, market: 'KR', timeframe: '1d', tsMs: ts, open: close, high: close, low: close, close, volume: 1_000 });
+      }
+      index += 1;
+    }
+    seedDailyBars(ctx.container.database.db, candles);
+    seedCorporateActionCoverage(ctx.container, ['FUTURE_WINNER', 'NO_ACCEL', 'NO_MOMENTUM'], yearRange(2024, 2025));
+
+    await ctx.container.factRepository.saveFacts([
+      // 영업이익이 가속하지 않는다 (8분기 모두 동일 → TTM 성장률 0, 양수 조건 불충족)
+      ...operatingIncomeFacts('NO_ACCEL', [25, 25, 25, 25, 25, 25, 25, 25], FIN_START),
+      // 영업이익은 FUTURE_WINNER 와 같은 가속 패턴이지만 가격이 오르지 않아 모멘텀 게이트에서 빠진다
+      ...operatingIncomeFacts('NO_MOMENTUM', [40, 30, 20, 10, 20, 20, 20, 20], FIN_START),
+    ]);
+  });
+
+  afterEach(async () => {
+    await ctx.close();
+  });
+
+  /** FUTURE_WINNER 공시(8분기 배치)를 disclosureTsMs 로 저장한 뒤 제출·완주해 미청산 종목을 돌려준다 */
+  async function runFutureWinnerScenario(disclosureTsMs: number): Promise<string[]> {
+    await ctx.container.factRepository.saveFacts(
+      operatingIncomeFacts('FUTURE_WINNER', [40, 30, 20, 10, 20, 20, 20, 20], disclosureTsMs),
+    );
+    const payload: BacktestRequest = {
+      strategyId: 'earnings-acceleration-rank',
+      parameters: { topN: 1, priceMomentumDays: 60, staleQuarters: 2 },
+      universeRule: factsUniverseRule(3),
+      timeframe: '1d',
+      period: PERIOD,
+      capital: { initialCash: 10_000_000, currency: 'KRW' },
+      execution: {
+        fillTiming: 'NEXT_BAR_OPEN',
+        commissionProfileId: 'zero-cost',
+        slippageProfileId: 'zero-slippage',
+      },
+      risk: { maxPositions: 1 },
+      randomSeed: 1,
+    };
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload,
+    });
+    expect(created.statusCode).toBe(201);
+    const jobId = (created.json().job as { id: string }).id;
+
+    ctx.container.jobOrchestrator.tick();
+    await waitFor(() => {
+      const job = ctx.container.jobQueue.getJob(jobId);
+      return job !== null && ctx.container.jobQueue.isTerminal(job.status);
+    }, 60_000);
+
+    const job = ctx.container.jobQueue.getJob(jobId)!;
+    expect(job.error).toBeNull();
+    expect(job.status).toBe('COMPLETED');
+
+    const run = ctx.container.resultsService.getRun(jobId)!;
+    const openPositions = JSON.parse(run.openPositionsJson ?? '[]') as Array<{ symbol: string }>;
+    return openPositions.map((position) => position.symbol);
+  }
+
+  it(
+    '두 번째 리밸런스 다음날 공시된 미래 팩트는 보이지 않아 후보에서 빠진다',
+    { timeout: 90_000 },
+    async () => {
+      const symbols = await runFutureWinnerScenario(REBALANCE_2_TS + FIN_DAY);
+      expect(symbols).not.toContain('FUTURE_WINNER');
+    },
+  );
+
+  it(
+    '두 번째 리밸런스 직전 공시는 보여 유일한 유효 후보로 매수된다',
+    { timeout: 90_000 },
+    async () => {
+      const symbols = await runFutureWinnerScenario(REBALANCE_2_TS - 1);
+      expect(symbols).toContain('FUTURE_WINNER');
+      // 가속 실패(NO_ACCEL)·모멘텀 실패(NO_MOMENTUM)는 공시 시점과 무관하게 항상 제외된다
+      expect(symbols).not.toContain('NO_ACCEL');
+      expect(symbols).not.toContain('NO_MOMENTUM');
+    },
+  );
+});
+
+describe('저PER·고ROE 순위 워커 배선 — PIT 공시 경계 (Task 12)', () => {
+  let ctx: TestApp;
+  let cookie: string;
+  const PERIOD = { from: '2025-01-02', to: '2025-02-06' };
+  const REBALANCE_2_TS = Date.parse('2025-02-02T00:00:00Z');
+
+  beforeEach(async () => {
+    ctx = await createTestApp();
+    const { username, password } = await createTestAdmin(ctx.container);
+    const login = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { username, password },
+    });
+    cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+    installPreparedSubmissionFixture(ctx);
+
+    registerSymbols(ctx.container, 'KR', ['FUTURE_WINNER', 'NEG_INCOME', 'NO_EQUITY']);
+    // 이 전략은 price warm-up 이 없다(dataRequirements.priceWarmupBars 미정의) — 기간
+    // 안쪽 날짜만 있으면 된다.
+    seedSymbolMasterUniverse(ctx.container, allDatesBetween(Date.parse(`${PERIOD.from}T00:00:00Z`), Date.parse(`${PERIOD.to}T00:00:00Z`)), [
+      { standardCode: 'KR7000040000', shortCode: 'FUTURE_WINNER', name: 'FUTURE_WINNER', market: 'KOSPI', marketCapKrw: '400000000000' },
+      { standardCode: 'KR7000050000', shortCode: 'NEG_INCOME', name: 'NEG_INCOME', market: 'KOSPI', marketCapKrw: '300000000000' },
+      { standardCode: 'KR7000060000', shortCode: 'NO_EQUITY', name: 'NO_EQUITY', market: 'KOSPI', marketCapKrw: '200000000000' },
+    ]);
+    const candles: Candle[] = [];
+    for (const symbol of ['FUTURE_WINNER', 'NEG_INCOME', 'NO_EQUITY']) {
+      for (let ts = Date.parse(`${PERIOD.from}T00:00:00Z`); ts <= Date.parse(`${PERIOD.to}T00:00:00Z`); ts += FIN_DAY) {
+        candles.push({ symbol, market: 'KR', timeframe: '1d', tsMs: ts, open: 1_000, high: 1_000, low: 1_000, close: 1_000, volume: 1_000 });
+      }
+    }
+    seedDailyBars(ctx.container.database.db, candles);
+    seedCorporateActionCoverage(ctx.container, ['FUTURE_WINNER', 'NEG_INCOME', 'NO_EQUITY'], yearRange(2024, 2025));
+
+    await ctx.container.factRepository.saveFacts([
+      // 순이익이 음수라 PER·ROE 계산 자체가 성립하지 않는다
+      ...netIncomeFacts('NEG_INCOME', [-500, -500, -500, -500], FIN_START),
+      totalEquityFact('NEG_INCOME', 5_000, FIN_START),
+      // 자본총계 공시가 없다 — PER은 순이익만으로 계산되지 않으므로 ROE 를 못 구해 제외된다
+      ...netIncomeFacts('NO_EQUITY', [1_000, 1_000, 1_000, 1_000], FIN_START),
+    ]);
+  });
+
+  afterEach(async () => {
+    await ctx.close();
+  });
+
+  /** FUTURE_WINNER 공시(4분기 순이익 + 자본총계)를 disclosureTsMs 로 저장한 뒤 제출·완주해 미청산 종목을 돌려준다 */
+  async function runFutureWinnerScenario(disclosureTsMs: number): Promise<string[]> {
+    await ctx.container.factRepository.saveFacts([
+      ...netIncomeFacts('FUTURE_WINNER', [1_000, 1_000, 1_000, 1_000], disclosureTsMs),
+      totalEquityFact('FUTURE_WINNER', 5_000, disclosureTsMs),
+    ]);
+    const payload: BacktestRequest = {
+      strategyId: 'low-per-high-roe-rank',
+      parameters: { topN: 1, staleQuarters: 2 },
+      universeRule: factsUniverseRule(3),
+      timeframe: '1d',
+      period: PERIOD,
+      capital: { initialCash: 10_000_000, currency: 'KRW' },
+      execution: {
+        fillTiming: 'NEXT_BAR_OPEN',
+        commissionProfileId: 'zero-cost',
+        slippageProfileId: 'zero-slippage',
+      },
+      risk: { maxPositions: 1 },
+      randomSeed: 1,
+    };
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload,
+    });
+    expect(created.statusCode).toBe(201);
+    const jobId = (created.json().job as { id: string }).id;
+
+    ctx.container.jobOrchestrator.tick();
+    await waitFor(() => {
+      const job = ctx.container.jobQueue.getJob(jobId);
+      return job !== null && ctx.container.jobQueue.isTerminal(job.status);
+    }, 60_000);
+
+    const job = ctx.container.jobQueue.getJob(jobId)!;
+    expect(job.error).toBeNull();
+    expect(job.status).toBe('COMPLETED');
+
+    const run = ctx.container.resultsService.getRun(jobId)!;
+    const openPositions = JSON.parse(run.openPositionsJson ?? '[]') as Array<{ symbol: string }>;
+    return openPositions.map((position) => position.symbol);
+  }
+
+  it(
+    '두 번째 리밸런스 다음날 공시된 미래 팩트는 보이지 않아 후보에서 빠진다',
+    { timeout: 90_000 },
+    async () => {
+      const symbols = await runFutureWinnerScenario(REBALANCE_2_TS + FIN_DAY);
+      expect(symbols).not.toContain('FUTURE_WINNER');
+    },
+  );
+
+  it(
+    '두 번째 리밸런스 직전 공시는 보여 유일한 유효 후보로 매수된다',
+    { timeout: 90_000 },
+    async () => {
+      const symbols = await runFutureWinnerScenario(REBALANCE_2_TS - 1);
+      expect(symbols).toContain('FUTURE_WINNER');
+      // 순이익 음수(NEG_INCOME)·자본총계 결측(NO_EQUITY)은 공시 시점과 무관하게 항상 제외된다
+      expect(symbols).not.toContain('NEG_INCOME');
+      expect(symbols).not.toContain('NO_EQUITY');
     },
   );
 });

@@ -12,10 +12,12 @@ import {
   lt,
   lte,
   or,
+  sql,
 } from 'drizzle-orm';
 import type { Clock } from '../../../shared/clock.js';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import {
+  dailySelectionMetrics,
   krxDailyBars,
   krxNonTradingDays,
   krxNonTradingCoverage,
@@ -53,6 +55,7 @@ import {
   sameSymbolMasterEntry,
   type SymbolMasterVersionSegment,
 } from '../domain/symbol-master-version.js';
+import { SelectionMetricRepository } from './selection-metric-repository.js';
 import type { KrxHistoricalUniverseSource } from './ports.js';
 
 export interface SymbolMasterEventRow extends SymbolMasterEventDraft {
@@ -124,6 +127,11 @@ function universeFingerprint(state: UniverseState): string {
       entry.listedDate,
     ]);
   return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
+}
+
+/** KRX 계약 파서가 검증한 원문을 bigint 정밀도 손실 없이 DB text 로 정규화한다. */
+function metricDecimalText(raw: string | null): string | null {
+  return raw === null ? null : BigInt(raw.replaceAll(',', '').trim()).toString();
 }
 
 /** effectiveDate·id 정렬된 legacy 행에서 (from, to]만 이진 탐색으로 자른다. */
@@ -528,6 +536,7 @@ export class SymbolMasterService {
       this.mergeCoverage(tx, date);
       this.recordTradingDay(tx, date);
       this.writeDailyBars(tx, date, kospiTrades, kosdaqTrades);
+      this.writeSelectionMetrics(tx, date, fetched, kospiTrades, kosdaqTrades);
       this.mergeNonTradingCoverage(tx, date, date);
       this.assertUniversesEqual(this.readUniverseAsOfInternal(date, tx), fetched, date);
       if (nextObservationDate !== undefined && preservedFuture !== undefined) {
@@ -728,6 +737,78 @@ export class SymbolMasterService {
     });
     this.inflightMarketCaps.set(date, promise);
     return promise;
+  }
+
+  /**
+   * 이미 symbol master coverage 가 있는 날짜에서 거래대금이 빈 경우만 KRX 일별
+   * 응답을 다시 받아 선정 지표를 보강한다. 기존 일봉·legacy 시총 캐시는 건드리지 않는다.
+   */
+  async ensureSelectionMetrics(dates: readonly string[]): Promise<void> {
+    const requestedDates = [...new Set(dates)];
+    if (requestedDates.length === 0) return;
+
+    this.backfillSelectionMetricVolume(requestedDates);
+    const repository = new SelectionMetricRepository(this.deps.db);
+    for (const date of repository.findMissingTradingValueDates(requestedDates)) {
+      const universe = this.getUniverseAsOf(date);
+      const kospiTrades = await this.deps.source.fetchDailyTrades('KOSPI', date);
+      const kosdaqTrades = await this.deps.source.fetchDailyTrades('KOSDAQ', date);
+      this.deps.db.transaction((tx) => {
+        this.writeSelectionMetrics(tx, date, universe, kospiTrades, kosdaqTrades);
+      });
+    }
+  }
+
+  /**
+   * 0014 migration 뒤에는 기존 일봉 volume 만 남아 있다. 날짜별 SCD 유니버스로
+   * short-code 를 standard-code 로 해소하고, 아직 volume 이 없는 metric 만 채운다.
+   */
+  private backfillSelectionMetricVolume(dates: readonly string[]): void {
+    for (const date of dates) {
+      const bars = this.deps.db.select({
+        shortCode: krxDailyBars.shortCode,
+        volume: krxDailyBars.volume,
+      })
+        .from(krxDailyBars)
+        .where(eq(krxDailyBars.date, date))
+        .all();
+      if (bars.length === 0) continue;
+
+      const standardCodeByShortCode = new Map<string, string>();
+      for (const entry of this.getUniverseAsOf(date).values()) {
+        standardCodeByShortCode.set(entry.shortCode, entry.standardCode);
+      }
+      const codes = [...new Set(bars
+        .map((bar) => standardCodeByShortCode.get(bar.shortCode))
+        .filter((code): code is string => code !== undefined))];
+      if (codes.length === 0) continue;
+      const existingVolumes = new Map(this.deps.db.select({
+        standardCode: dailySelectionMetrics.standardCode,
+        volume: dailySelectionMetrics.volume,
+      })
+        .from(dailySelectionMetrics)
+        .where(and(
+          eq(dailySelectionMetrics.date, date),
+          inArray(dailySelectionMetrics.standardCode, codes),
+        ))
+        .all()
+        .map((row) => [row.standardCode, row.volume]));
+      const rows = bars.flatMap((bar) => {
+        const standardCode = standardCodeByShortCode.get(bar.shortCode);
+        const existingVolume = standardCode === undefined ? undefined : existingVolumes.get(standardCode);
+        if (standardCode === undefined || (existingVolume !== null && existingVolume !== undefined)) return [];
+        return [{ date, standardCode, marketCapKrw: null, volume: bar.volume, tradingValueKrw: null }];
+      });
+      for (let index = 0; index < rows.length; index += 190) {
+        this.deps.db.insert(dailySelectionMetrics)
+          .values(rows.slice(index, index + 190))
+          .onConflictDoUpdate({
+            target: [dailySelectionMetrics.date, dailySelectionMetrics.standardCode],
+            set: { volume: sql`excluded.volume` },
+          })
+          .run();
+      }
+    }
   }
 
   private async getMarketCapsAtUnguarded(date: string): Promise<ReadonlyMap<string, string>> {
@@ -980,6 +1061,46 @@ export class SymbolMasterService {
       tx.insert(krxNonTradingDays)
         .values(nonTradingRows.slice(i, i + 500))
         .onConflictDoNothing()
+        .run();
+    }
+  }
+
+  /** SCD·coverage·일봉 write 와 같은 transaction 안에서 KRX 선정 지표를 보관한다. */
+  private writeSelectionMetrics(
+    tx: AppDatabase,
+    date: string,
+    universe: UniverseState,
+    kospiTrades: readonly KrxDailyTradeRow[],
+    kosdaqTrades: readonly KrxDailyTradeRow[],
+  ): void {
+    const standardCodeByShortCode = new Map<string, string>();
+    for (const entry of universe.values()) {
+      standardCodeByShortCode.set(entry.shortCode, entry.standardCode);
+    }
+    const rows: (typeof dailySelectionMetrics.$inferInsert)[] = [];
+    for (const trade of [...kospiTrades, ...kosdaqTrades]) {
+      const standardCode = standardCodeByShortCode.get(trade.shortCode);
+      if (standardCode === undefined) continue;
+      rows.push({
+        date,
+        standardCode,
+        marketCapKrw: metricDecimalText(trade.marketCapRaw),
+        volume: trade.volume,
+        tradingValueKrw: metricDecimalText(trade.tradingValueRaw),
+      });
+    }
+    for (let index = 0; index < rows.length; index += 190) {
+      tx.insert(dailySelectionMetrics)
+        .values(rows.slice(index, index + 190))
+        .onConflictDoUpdate({
+          target: [dailySelectionMetrics.date, dailySelectionMetrics.standardCode],
+          // 재조회가 KRX 빈 값을 받더라도 migration 으로 옮긴 cap·기존 보강값은 지우지 않는다.
+          set: {
+            marketCapKrw: sql`coalesce(excluded.market_cap_krw, daily_selection_metrics.market_cap_krw)`,
+            volume: sql`coalesce(excluded.volume, daily_selection_metrics.volume)`,
+            tradingValueKrw: sql`coalesce(excluded.trading_value_krw, daily_selection_metrics.trading_value_krw)`,
+          },
+        })
         .run();
     }
   }

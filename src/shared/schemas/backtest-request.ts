@@ -1,5 +1,21 @@
 import { z } from 'zod';
 import { universeRuleSchema } from './universe-rule.js';
+import { isCalendarDate, rebalanceIntervalFitsPeriod } from './rebalance-interval.js';
+
+export interface BacktestPeriod {
+  readonly from: string;
+  readonly to: string;
+}
+
+/**
+ * 정규식은 자릿수만 보므로 2026-13-45 같은 존재하지 않는 날짜를 그대로 통과시킨다 —
+ * 그러면 리밸런스 날짜 계산(rebalance-interval.ts)이 나중에 RangeError 로 500 을
+ * 낸다. 준비 미리보기 라우트도 같은 기간 형식을 받으므로 스키마를 함께 쓴다.
+ */
+export const isoDateSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, '날짜 형식이 올바르지 않습니다 (YYYY-MM-DD)')
+  .refine(isCalendarDate, { message: '존재하지 않는 날짜입니다' });
 
 /**
  * 백테스트 요청 (스펙 §15) — 웹과 서버가 공유하는 계약.
@@ -26,8 +42,8 @@ export const backtestRequestSchema = z.object({
   /** 소비 봉 주기. KRX 일봉이 유일한 출처라 일봉뿐이다 (설계 2026-08-07-price-data-removal). */
   timeframe: z.literal('1d').optional(),
   period: z.object({
-    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    from: isoDateSchema,
+    to: isoDateSchema,
   }),
   capital: z.object({
     initialCash: z.number().positive(),
@@ -40,9 +56,26 @@ export const backtestRequestSchema = z.object({
   }),
   /** 엔진 리스크 상한 (§9.2-6) — 전략 파라미터가 아니라 요청의 명시 필드다 */
   risk: z.object({
-    maxPositions: z.number().int().min(1).max(20),
-  }),
+    maxPositions: z.number().int().min(1).max(200).default(40),
+  }).default({ maxPositions: 40 }),
   randomSeed: z.number().int().nonnegative().default(42),
+}).superRefine((request, ctx) => {
+  const issue = (message: string): void => {
+    ctx.addIssue({ code: 'custom', message });
+  };
+  const lastLimit = request.universeRule.stages.at(-1)!.limit;
+  if (
+    request.period.from <= request.period.to &&
+    !rebalanceIntervalFitsPeriod(request.period, request.universeRule.rebalanceInterval)
+  ) {
+    issue('리밸런싱 주기가 백테스트 전체 기간을 초과합니다.');
+  }
+  if (typeof request.parameters.topN === 'number' && request.parameters.topN > request.risk.maxPositions) {
+    issue('전략 topN은 동시 보유 상한 이하여야 합니다.');
+  }
+  if (typeof request.parameters.topN === 'number' && request.parameters.topN > lastLimit) {
+    issue('전략 topN은 최종 유니버스 N 이하여야 합니다.');
+  }
 });
 
 export type BacktestRequest = z.infer<typeof backtestRequestSchema>;

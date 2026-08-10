@@ -168,7 +168,8 @@ export function SymbolMasterPanel() {
       {backfill?.state === 'RUNNING' ? (
         <Alert>
           <AlertDescription>
-            과거 데이터 백필 진행 중 — {backfill.cursorDate ?? '진행 중'}
+            과거 데이터 백필 진행 중 — {backfill.cursorDate ?? '진행 중'}. 수집은 서버에서
+            진행되므로 화면을 나가거나 브라우저를 닫아도 계속됩니다.
           </AlertDescription>
         </Alert>
       ) : null}

@@ -987,8 +987,8 @@ GET /api/v1/system/info
   },
   "universeRule": {
     "markets": ["KOSPI"],
-    "topN": 10,
-    "sortKey": "MKTCAP"
+    "stages": [{ "criterion": "MARKET_CAP", "limit": 10 }],
+    "rebalanceInterval": { "unit": "MONTH", "value": 1 }
   },
   "timeframe": "1d",
   "period": {
@@ -1014,8 +1014,10 @@ GET /api/v1/system/info
 포지션 상한은 전략 파라미터가 아니라 요청의 `risk.maxPositions` 다 — 엔진의
 리스크 제약(§9.2-6)이지 전략 로직의 입력이 아니기 때문이다 (D-012).
 
-`universeRule` 은 개별 종목을 직접 고르지 않는다. 시장(`markets`)·정렬 기준
-(`sortKey`, 현재 `MKTCAP` 하나) 상위 `topN` 을 규칙으로 받는다.
+`universeRule` 은 개별 종목을 직접 고르지 않는다. 시장(`markets`)·정렬 단계
+(`stages`, 최대 5단계 — 시가총액·거래량·거래대금·PER·급하락을 순서대로 적용해
+좁힌다)·리밸런스 주기(`rebalanceInterval`)를 규칙으로 받는다(스펙 2026-08-09,
+순서형 유니버스 파이프라인).
 
 `datasetId`·`universe` 필드를 대신하는 이유는 §9.5 를 본다.
 
@@ -1646,15 +1648,15 @@ sudo systemctl is-active quant-platform
 ## 28.2 운영에서 CLI 실행
 
 CLI 는 별도 프로세스이고 `app.env` 를 **자동으로 읽지 않는다**. `admin:create`·
-`totp:enroll`·`facts:sync` **모두** systemd 와 같은 환경으로 띄워야 한다 — 자격 증명이
-필요한 명령만이 아니다:
+`totp:enroll` **모두** systemd 와 같은 환경으로 띄워야 한다 — 자격 증명이 필요한
+명령만이 아니다:
 
 ```bash
 sudo systemd-run --uid=quant --gid=quant --pty --wait \
   --working-directory=/opt/quant-platform/current \
   --property=EnvironmentFile=/etc/quant-platform/app.env \
   /usr/local/bin/node /opt/quant-platform/current/dist/server/cli.js \
-  facts:sync --dataset <데이터셋_id> --from 2015 --to 2026
+  totp:enroll
 ```
 
 네 부분이 각각 다른 사고를 막는다:
@@ -1679,10 +1681,19 @@ sudo systemd-run --uid=quant --gid=quant --pty --wait \
 `app.env` 는 `chmod 600 root:root` 라서 quant 는 읽을 수도 없다 — 파일 경로만 넘기고
 실제로 여는 것은 PID 1 이라는 점이 systemd-run 을 쓰는 이유다.
 
-재무 수집은 종목·연도당 9건을 호출한다 (200종목 10년치 ≈ 18,000건). DART 일일 한도
-40,000건에는 여유가 있지만 rate limiter 가 120ms 간격이라 **최소 36분**이 걸린다 —
-`tmux`/`screen` 안에서 돌릴 것. SSH 가 끊기면 수집이 죽는다. 중단되면 그 지점까지는
-저장되고, CLI 가 어느 종목에서 멈췄는지와 몇 건을 저장했는지 출력한다.
+## 28.3 재무·자본변동 자동 수집
+
+DART 재무·자본변동 수집은 CLI 명령이 아니다(D-049). 재무전략이나 PER 유니버스
+단계를 쓰는 백테스트를 준비(preparation)할 때 서버가 필요한 만큼만 자동으로
+수집한다.
+
+- `DART_API_KEY` 는 재무전략 또는 PER 단계의 preview 를 준비할 때만 필요하다.
+- 수집 범위는 요청한 기간과 최소 warm-up 뿐이다 — 연도·종목을 지정해 미리 돌리는
+  절차는 없다.
+- 일일 호출 한도(40,000건, rate limiter 120ms 간격)에 닿아 대기하는 것은 실패가
+  아니다. 다음 KST 날짜가 되면 자동으로 이어서 수집한다.
+- 준비 작업은 한 번에 하나만 돈다. 서버가 재시작돼도 중단된 지점부터 이어진다.
+- 준비를 취소해도 그때까지 저장한 종목 데이터는 지우지 않는다.
 
 ---
 
@@ -1900,9 +1911,9 @@ const RangeBreakoutParameters = z.object({
 
 이익수익률(TTM EBIT / EV)과 자본수익률(TTM EBIT / 투입자본) 순위를 합산해 상위
 N 을 동일가중 보유한다. `requiresFundamentals: true` 로 선언되어 있어, 상장시점
-재무(point-in-time 팩트 저장소, `pnpm cli facts:sync` 로 DART 공시를 수집)가
-수집되지 않은 데이터셋에 제출하면 422 로 거부된다 — 실행 후 "거래 0건" 으로
-끝나 원인을 알 수 없는 상태를 막기 위해서다.
+재무(point-in-time 팩트 저장소, 백테스트 준비 단계가 DART 공시를 자동 수집한다,
+§28.3)가 하나도 없는 유니버스에 제출하면 422 로 거부된다 — 실행 후 "거래 0건"
+으로 끝나 원인을 알 수 없는 상태를 막기 위해서다.
 
 ## EMA 추세 스위치 (ema-trend-switch)
 

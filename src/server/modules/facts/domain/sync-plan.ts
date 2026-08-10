@@ -44,6 +44,35 @@ export const DART_CORPORATE_ACTION_CALLS_PER_YEAR = 1;
 
 export type FactSyncMode = 'FULL' | 'INCREMENTAL';
 
+/** DART 외부 호출을 시작하기 전에 quota를 확인하는 최소 중단 단위. */
+export interface FactSyncWorkUnit {
+  readonly symbol: string;
+  readonly year: number;
+  /** 이 연도 자본변동 비율에 필요한 직전 연도 앵커와 대상 연도. */
+  readonly shareYears: readonly number[];
+  readonly estimatedDartCalls: number;
+}
+
+/**
+ * 재무 + 자본변동 work unit의 실제 DART 호출 수를 계산한다.
+ *
+ * 한 사업연도는 재무보고서 4회 + 자본변동 1회다. 주식총수는 연도당 4회지만
+ * `dart-fact-source`가 같은 종목·연도·보고서 응답을 캐시하므로, 앞 work unit에서 이미
+ * 읽은 share year는 다시 세지 않는다. 이 함수가 `planFactSync`와 실행 hook 양쪽의
+ * 숫자를 만든다.
+ */
+export function estimateDartCalls(
+  work: Omit<FactSyncWorkUnit, 'estimatedDartCalls'> | FactSyncWorkUnit,
+  requestedShareYears: ReadonlySet<number> = new Set(),
+  includeFinancials = true,
+): number {
+  const yearCalls = includeFinancials
+    ? DART_CALLS_PER_SYMBOL_YEAR - DART_SHARE_ANCHOR_CALLS
+    : DART_CORPORATE_ACTION_CALLS_PER_YEAR;
+  const newShareYears = work.shareYears.filter((year) => !requestedShareYears.has(year)).length;
+  return yearCalls + newShareYears * DART_SHARE_ANCHOR_CALLS;
+}
+
 export interface FactSyncPlan {
   /** 종목 → 재무·자본변동을 수집할 연도 (오름차순) */
   readonly yearsBySymbol: ReadonlyMap<string, readonly number[]>;
@@ -62,6 +91,8 @@ export interface PlanFactSyncArgs {
   readonly currentYear: number;
   readonly coveredBySymbol: ReadonlyMap<string, readonly number[]>;
   readonly mode: FactSyncMode;
+  /** INCREMENTAL에서 이미 커버한 현재 연도도 다시 받을지. 기본 true. */
+  readonly refreshCurrentYear?: boolean;
 }
 
 export function planFactSync(args: PlanFactSyncArgs): FactSyncPlan {
@@ -75,17 +106,29 @@ export function planFactSync(args: PlanFactSyncArgs): FactSyncPlan {
   // 같은 종목이 두 번 들어와도 한 번만 계획한다 — 호출 수가 부풀면 예상 시간도 부푼다
   for (const symbol of new Set(args.symbols)) {
     const years =
-      args.mode === 'FULL' ? target : incrementalYears(target, args.coveredBySymbol.get(symbol) ?? [], args.currentYear);
+      args.mode === 'FULL'
+        ? target
+        : incrementalYears(
+            target,
+            args.coveredBySymbol.get(symbol) ?? [],
+            args.currentYear,
+            args.refreshCurrentYear ?? true,
+          );
     yearsBySymbol.set(symbol, years);
 
     // 수집할 것이 없으면 앵커도 읽지 않는다 — 0건 종목에 호출을 쓰지 않는다
     const shareYears = anchoredShareYears(years);
     shareYearsBySymbol.set(symbol, shareYears);
 
-    calls += years.length * DART_CALLS_PER_SYMBOL_YEAR;
-    // 앵커 수 = 연속 구간 수 = |shareYears| - |years|. 연속 구간이 하나면 (첫 실행·
-    // 단일 연도 증분) 종전과 같은 4회다 — 불연속일 때만 늘어난다.
-    calls += (shareYears.length - years.length) * DART_SHARE_ANCHOR_CALLS;
+    const requestedShareYears = new Set<number>();
+    for (const year of years) {
+      const workShareYears = [year - 1, year];
+      calls += estimateDartCalls(
+        { symbol, year, shareYears: workShareYears },
+        requestedShareYears,
+      );
+      for (const shareYear of workShareYears) requestedShareYears.add(shareYear);
+    }
   }
 
   return {
@@ -136,11 +179,17 @@ export interface CorporateActionSyncEstimate {
  */
 export function estimateCorporateActionSyncCost(plan: FactSyncPlan): CorporateActionSyncEstimate {
   let calls = 0;
-  for (const years of plan.yearsBySymbol.values()) {
-    calls += years.length * DART_CORPORATE_ACTION_CALLS_PER_YEAR;
-  }
-  for (const shareYears of plan.shareYearsBySymbol.values()) {
-    calls += shareYears.length * DART_SHARE_ANCHOR_CALLS;
+  for (const [symbol, years] of plan.yearsBySymbol) {
+    const requestedShareYears = new Set<number>();
+    for (const year of years) {
+      const shareYears = [year - 1, year];
+      calls += estimateDartCalls(
+        { symbol, year, shareYears },
+        requestedShareYears,
+        false,
+      );
+      for (const shareYear of shareYears) requestedShareYears.add(shareYear);
+    }
   }
   return {
     calls,
@@ -153,7 +202,8 @@ function incrementalYears(
   target: readonly number[],
   covered: readonly number[],
   currentYear: number,
+  refreshCurrentYear: boolean,
 ): number[] {
   const coveredSet = new Set(covered);
-  return target.filter((year) => year === currentYear || !coveredSet.has(year));
+  return target.filter((year) => (refreshCurrentYear && year === currentYear) || !coveredSet.has(year));
 }

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
+import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { loadConfig } from '../../src/server/bootstrap/config.js';
 import { createContainer, type Container } from '../../src/server/bootstrap/container.js';
 import { buildServer } from '../../src/server/bootstrap/server.js';
@@ -41,10 +42,91 @@ export async function createTestApp(
     dir,
     async close() {
       await app.close();
-      container.close();
+      await container.close();
       fs.rmSync(dir, { recursive: true, force: true });
     },
   };
+}
+
+/**
+ * Task 6 이전부터 있던 제출/worker 통합 테스트가 관찰하려는 것은 queue 이후다.
+ * 그 테스트들에서만 DART 외부 호출을 no-op으로 격리하고, 첫 409 뒤 동일 요청의
+ * durable preparation을 완료한 다음 원 요청을 재시도한다. preparation 자체의 실제
+ * registry/coverage/DART 계약은 backtest-preparation.test.ts가 별도로 검증한다.
+ */
+export function installPreparedSubmissionFixture(ctx: TestApp): void {
+  const noWorkPlan = {
+    yearsBySymbol: new Map(),
+    shareYearsBySymbol: new Map(),
+    calls: 0,
+    estimatedMs: 0,
+    overDailyLimit: false,
+  };
+  const planFinancialSync: typeof ctx.container.factSyncService.planFinancialSync = () => noWorkPlan;
+  const planCorporateActionSync: typeof ctx.container.factSyncService.planCorporateActionSync = () => noWorkPlan;
+  ctx.container.factSyncService.planFinancialSync = planFinancialSync;
+  ctx.container.factSyncService.planCorporateActionSync = planCorporateActionSync;
+  const noWorkReport: typeof ctx.container.factSyncService.sync = async () => ({
+    savedFacts: 0,
+    gaps: [],
+    stoppedAtSymbol: null,
+    stopReason: null,
+    failureMessage: null,
+  });
+  ctx.container.factSyncService.sync = noWorkReport;
+  ctx.container.factSyncService.syncCorporateActions = noWorkReport;
+
+  const waitForPreparation = async (jobId: string): Promise<boolean> => {
+    const started = Date.now();
+    for (;;) {
+      const status = ctx.container.backtestPreparationOrchestrator.get(jobId)?.status;
+      if (status === 'COMPLETED') return true;
+      if (status === 'FAILED' || status === 'CANCELLED') return false;
+      if (Date.now() - started > 5_000) throw new Error('preparation fixture timeout');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  };
+
+  const rawInject = ctx.app.inject.bind(ctx.app);
+  ctx.app.inject = (async (options: unknown) => {
+    const request = options as {
+      method?: string;
+      url?: string;
+      payload?: BacktestRequest;
+      cookies?: Record<string, string>;
+    };
+    const first = await rawInject(options as never);
+    const isSubmit = request.method === 'POST' && request.url === '/api/v1/backtests';
+    const cloneMatch = request.method === 'POST'
+      ? /^\/api\/v1\/backtests\/([^/]+)\/clone$/.exec(request.url ?? '')
+      : null;
+    if (
+      (!isSubmit && cloneMatch === null)
+      || first.statusCode !== 409
+      || (first.json() as { error?: string }).error !== 'PREPARATION_REQUIRED'
+    ) return first;
+
+    let body = request.payload;
+    if (body === undefined && cloneMatch !== null) {
+      const draft = await rawInject({
+        method: 'GET',
+        url: `/api/v1/backtests/${cloneMatch[1]}/clone-draft`,
+        cookies: request.cookies,
+      });
+      if (draft.statusCode !== 200) return first;
+      body = (draft.json() as { request: BacktestRequest }).request;
+    }
+    if (body === undefined) return first;
+
+    const preparation = ctx.container.backtestPreparationOrchestrator.start({
+      universeRule: body.universeRule,
+      period: body.period,
+      strategyId: body.strategyId,
+      parameters: body.parameters,
+    });
+    if (!await waitForPreparation(preparation.id)) return first;
+    return rawInject(options as never);
+  }) as typeof ctx.app.inject;
 }
 
 export interface TestAdminOptions {

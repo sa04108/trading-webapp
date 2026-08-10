@@ -22,8 +22,6 @@ import { formatKrw, timeframeLabel } from '@/lib/format';
 import { wizardTimeframes } from '@/features/datasets/dataset-slices';
 import type { SymbolSummary } from '@/features/datasets/symbol-types';
 import { costProfileLabel, slippageProfileLabel } from './profile-labels';
-import { CorporateActionGate } from './corporate-action-gate';
-import { extractCorporateActionGate } from './corporate-action-gate-logic';
 import { useStockNames } from '@/lib/use-stock-names';
 import { requestToFormState } from './prefill';
 import { ParamHint } from './param-hint';
@@ -32,6 +30,7 @@ import { StrategyDataBadge } from './strategy-data-badge';
 import { useStrategies } from './api';
 import { STRATEGY_DATA_DETAILS, strategyDataRequirement } from './strategy-data-requirement';
 import { SymbolLabel } from '@/components/symbol-label';
+import { formatUniverseRuleSummary } from './universe-summary';
 import {
   clampSymbolName,
   formatSymbolLabel,
@@ -73,7 +72,49 @@ interface SlippageProfileSummary {
   fixed: number;
 }
 
-const DEFAULT_UNIVERSE_RULE: UniverseRule = { markets: ['KOSPI'], topN: 200, sortKey: 'MKTCAP' };
+// 마크업 테스트(universe-stage-editor-markup.test.tsx)도 이 두 값을 그대로 임포트해
+// "신규 진입 기본값" 계약을 고정한다 — 위저드 밖에서 다시 선언하면 두 곳이 어긋날 수 있다.
+export const DEFAULT_UNIVERSE_RULE: UniverseRule = {
+  markets: ['KOSPI'],
+  stages: [{ criterion: 'MARKET_CAP', limit: 200 }],
+  rebalanceInterval: { value: 1, unit: 'MONTH' },
+};
+
+// 스키마 기본값(risk.maxPositions default 40, max 200 — backtest-request.ts)과 같은 값이다.
+export const DEFAULT_MAX_POSITIONS = '40';
+
+/**
+ * 전략 파라미터 입력(문자열)을 서버가 받는 숫자로 파싱한다.
+ *
+ * 검토 단계(`buildRequest`)와 유니버스 단계(미리보기 요청)가 같은 파싱을 쓴다 — 둘이
+ * 각자 파싱하면, 값이 같아도 라운딩·범위 판단이 갈라져 미리보기 때 만든 준비 작업의
+ * requestHash 와 실제 제출 requestHash 가 어긋날 수 있다(Task 6 hash 는 파싱된 값
+ * 기준이다). 실패하면 사람이 읽을 오류 문장을 그대로 돌려준다.
+ */
+function parseStrategyParameters(
+  paramSpecs: readonly NumberParamSpec[],
+  parameters: Record<string, string>,
+): Record<string, number> | string {
+  const parsed: Record<string, number> = {};
+  for (const spec of paramSpecs) {
+    const raw = parameters[spec.key] ?? '';
+    const label = paramLabel(spec);
+    if (raw === '') {
+      if (spec.optional) continue;
+      return `${label} 을(를) 입력하세요`;
+    }
+    const value = Number(raw);
+    if (!Number.isFinite(value)) return `${label} 이(가) 숫자가 아닙니다`;
+    if (spec.minimum !== undefined && value < spec.minimum) {
+      return `${label} 은(는) ${spec.minimum} 이상이어야 합니다`;
+    }
+    if (spec.maximum !== undefined && value > spec.maximum) {
+      return `${label} 은(는) ${spec.maximum} 이하여야 합니다`;
+    }
+    parsed[spec.key] = spec.isInteger ? Math.round(value) : value;
+  }
+  return parsed;
+}
 
 export function NewBacktestWizard() {
   const navigate = useNavigate();
@@ -93,14 +134,14 @@ export function NewBacktestWizard() {
   const [parameters, setParameters] = useState<Record<string, string>>({});
   /**
    * 유니버스 규칙 (스펙 2026-08-05) — 위저드는 더 이상 종목이나 데이터셋을 고르지
-   * 않는다. 시장·상위 N 만 고르면 실제 종목 구성은 제출 시점에 서버가 리밸런스
-   * 날짜별로 재구성한다 (`UniverseRuleResolver`).
+   * 않는다. 시장·단계(최대 5개)·리밸런스 주기만 고르면 실제 종목 구성은 제출 시점에
+   * 서버가 리밸런스 날짜별로 재구성한다 (`UniverseRuleResolver`).
    */
   const [universeRule, setUniverseRule] = useState<UniverseRule>(DEFAULT_UNIVERSE_RULE);
   /**
    * `UniverseRuleStep` 이 마지막으로 성공시킨 미리보기 원재료(그때 쓴 params·결과) —
    * **판정 결과가 아니라 원재료만** 저장한다(리뷰 fix). `universePreviewOk`·
-   * `unionSymbols` 는 아래에서 이 값과 지금 값(universeRule·from·to·rebalanceMonths)을
+   * `unionSymbols` 는 아래에서 이 값과 지금 값(universeRule·from·to)을
    * 매 렌더 비교해 도출한다 — state 로 따로 들고 있다가 규칙·기간이 바뀔 때마다 수동으로
    * false 로 되돌리는 방식은, `UniverseRuleStep` 이 화면에 없는 동안(다른 단계에 있는
    * 동안) 그 되돌림 자체가 일어날 기회가 없어 낡은 성공이 유효한 척 남는 버그가 있었다.
@@ -112,19 +153,20 @@ export function NewBacktestWizard() {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [initialCash, setInitialCash] = useState('10000000');
-  // 기본값 20 — 스키마 최댓값(risk.maxPositions ≤ 20)이자, 등록된 세 전략(topN 없음/10/20)이
-  // 모두 기본값만으로 제출 게이트(topN > maxPositions 422)를 통과하는 값이다
-  const [maxPositions, setMaxPositions] = useState('20');
+  // 스키마 기본값 40 (backtest-request.ts risk.maxPositions default) — 등록된 전략들의
+  // topN 기본값(없음/10/20/최대 200)이 모두 이 값만으로 제출 게이트(topN > maxPositions
+  // 422)를 통과한다.
+  const [maxPositions, setMaxPositions] = useState(DEFAULT_MAX_POSITIONS);
   const [commissionProfileId, setCommissionProfileId] = useState('kr-equity-default');
   const [slippageProfileId, setSlippageProfileId] = useState('fixed-5bps');
   const [randomSeed, setRandomSeed] = useState('42');
   const [stepError, setStepError] = useState<string | null>(null);
   /**
-   * 자본변동 게이트 화면(Task 8)에서 수집을 한 번이라도 마쳤는지 — 다시 막히면
-   * 문구를 "여전히 실패" 로 바꾼다(브리프 3번, "일부 실패" 로 뭉뚱그리지 않는다).
-   * 단계를 벗어나면 다음 진입은 새 시도이므로 아래 stepError 리셋과 함께 지운다.
+   * 제출이 409 PREPARATION_REQUIRED 로 거절되면(Task 10, 브리프 5번) 이 값을 올려
+   * `UniverseRuleStep` 에게 새 준비 요청을 다시 시작하라고 신호한다 — 값 자체는
+   * 의미가 없고 "이전보다 커졌다" 만 신호다.
    */
-  const [collectionAttempted, setCollectionAttempted] = useState(false);
+  const [previewRetryToken, setPreviewRetryToken] = useState(0);
 
   const strategies = useStrategies();
   const schema = useQuery({
@@ -161,31 +203,31 @@ export function NewBacktestWizard() {
 
   const selectedStrategy = strategies.data?.strategies.find((s) => s.id === strategyId) ?? null;
   const paramSpecs = useMemo(() => extractNumberParams(schema.data?.schema), [schema.data]);
-
-  /**
-   * rebalanceMonths — 전략 파라미터에 값이 있으면 그 값, 없으면 1(브리프 규약).
-   * 위저드가 파라미터에 접근하는 소스(paramSpecs·parameters)를 그대로 재사용한다 —
-   * 미리보기가 제출과 다른 리밸런스 주기로 리밸런스 날짜를 계산하면 미리본 일정과
-   * 실제로 돌아갈 일정이 어긋난다.
-   */
-  const rebalanceMonths = ((): number => {
-    const spec = paramSpecs.find((s) => s.key === 'rebalanceMonths');
-    if (!spec) return 1;
-    const raw = parameters['rebalanceMonths'];
-    const value = raw !== undefined && raw !== '' ? Number(raw) : spec.defaultValue;
-    return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : 1;
-  })();
+  // 미리보기 요청·검토 단계 제출이 같은 파싱을 쓴다(위 parseStrategyParameters 주석
+  // 참고) — 문자열이면 아직 파싱에 실패한 상태라는 뜻이다.
+  const parsedParameters = useMemo(
+    () => parseStrategyParameters(paramSpecs, parameters),
+    [paramSpecs, parameters],
+  );
 
   /**
    * 유니버스 미리보기 유효성 — `lastPreview` 와 지금 값을 매 렌더 비교해서 도출한다
    * (리뷰 fix). `UniverseRuleStep` 이 화면에 없어도(다른 단계에 있어도) 이 계산은
-   * 항상 이 렌더의 최신 `universeRule`/`from`/`to`/`rebalanceMonths` 를 본다 — 컴포넌트
-   * 마운트 여부와 무관하다.
+   * 항상 이 렌더의 최신 `universeRule`/`from`/`to` 를 본다 — 컴포넌트 마운트 여부와
+   * 무관하다.
+   *
+   * 리밸런스 주기는 더 이상 전략 파라미터에서 도출하지 않는다(Task 9) — `universeRule.
+   * rebalanceInterval` 이 그 자체로 완결된 값이라 여기서 따로 뽑을 것이 없다.
+   *
+   * strategyId·parameters 도 포함한다(Task 10) — 준비 작업(Task 6)의 requestHash 가
+   * 이 둘까지 본다. 전략을 아직 못 골랐거나 파라미터가 아직 안 맞으면 빈 값으로
+   * 채운다 — 어차피 그 상태에서는 `UniverseRuleStep` 이 미리보기 자체를 막는다.
    */
   const currentUniverseParams: PreviewParams = {
     universeRule,
     period: { from, to },
-    rebalanceMonths,
+    strategyId: strategyId ?? '',
+    parameters: typeof parsedParameters === 'string' ? {} : parsedParameters,
   };
   // 지금 값과 일치하는 미리보기 결과 — 일치하지 않으면(규칙·기간이 바뀌었으면) null.
   const currentPreviewResult =
@@ -283,30 +325,16 @@ export function NewBacktestWizard() {
     const cash = Number(initialCash);
     if (!Number.isFinite(cash) || cash <= 0) return '초기 자본이 올바르지 않습니다';
     const positions = Number(maxPositions);
-    if (!Number.isInteger(positions) || positions < 1 || positions > 20) {
-      return '동시 보유 종목 상한은 1~20 이어야 합니다';
+    // 상한 200 은 스키마(backtest-request.ts risk.maxPositions max)와 같은 값이다.
+    if (!Number.isInteger(positions) || positions < 1 || positions > 200) {
+      return '동시 보유 종목 상한은 1~200 이어야 합니다';
     }
 
-    const parsedParams: Record<string, number> = {};
-    for (const spec of paramSpecs) {
-      const raw = paramValue(spec);
-      const label = paramLabel(spec);
-      if (raw === '') {
-        if (spec.optional) continue;
-        return `${label} 을(를) 입력하세요`;
-      }
-      const value = Number(raw);
-      if (!Number.isFinite(value)) return `${label} 이(가) 숫자가 아닙니다`;
-      if (spec.minimum !== undefined && value < spec.minimum)
-        return `${label} 은(는) ${spec.minimum} 이상이어야 합니다`;
-      if (spec.maximum !== undefined && value > spec.maximum)
-        return `${label} 은(는) ${spec.maximum} 이하여야 합니다`;
-      parsedParams[spec.key] = spec.isInteger ? Math.round(value) : value;
-    }
+    if (typeof parsedParameters === 'string') return parsedParameters;
 
     return {
       strategyId: selectedStrategy.id,
-      parameters: parsedParams,
+      parameters: parsedParameters,
       universeRule,
       // 항상 명시해 보낸다 — 결과·복제가 "무슨 봉으로 돌렸는지" 를 들고 다니게 (§9.5).
       // KRX 일봉이 유일한 출처라 고를 것 없이 이 값 하나로 고정한다.
@@ -334,13 +362,24 @@ export function NewBacktestWizard() {
       void navigate(`/backtests/${data.job.id}`);
     },
     onError: (error: unknown) => {
-      // 자본변동 게이트 오류는 CorporateActionGate 화면이 대신 안내한다 —
-      // 여기서 같은 사유를 빨간 배너로 한 번 더 띄우면 문구가 겹친다.
-      if (extractCorporateActionGate(error) !== null) return;
+      // 준비된 데이터가 아직 없다는 뜻이다(Task 6) — 검토·실행 단계에 머물며 같은
+      // 사유를 빨간 배너로 띄우면 사용자는 "왜 실패했는지" 를 알 방법이 없다. 대신
+      // 미리보기 단계로 돌려보내고 새 준비 요청을 바로 시작시킨다(브리프 5번).
+      // 서버 `{error, message}` 관례상 사람이 읽는 문장은 details.message 에 있고
+      // `error.message` 자체는 코드('PREPARATION_REQUIRED')다(api-client.ts 참고).
+      if (
+        error instanceof ApiError &&
+        error.status === 409 &&
+        error.message === 'PREPARATION_REQUIRED'
+      ) {
+        setLastPreview(null);
+        setPreviewRetryToken((token) => token + 1);
+        goToSlug(recordTraversal(2));
+        return;
+      }
       setStepError(error instanceof ApiError ? error.message : '제출에 실패했습니다');
     },
   });
-  const actionGate = extractCorporateActionGate(submitMutation.error);
 
   // 단계 게이트가 보는 값만 모아 넘긴다 — 규칙은 wizard-steps.ts 한 곳에 있다
   /**
@@ -461,12 +500,8 @@ export function NewBacktestWizard() {
     // 검토보다 앞으로 돌아가면 '검토를 지났다' 를 취소한다 — 설정을 고친 뒤 앞으로가기로
     // 제출 화면에 되돌아오는 길을 막는다. 다시 들어가려면 검토에서 '다음' 을 눌러야 한다.
     if (step < REVIEW_STEP) setReviewPassed(false);
-    // 실행 화면을 벗어나면 다음 진입은 새 시도다 — "여전히 실패" 문구가 낡은 시도의
-    // 흔적으로 남지 않게 한다.
-    if (step !== RUN_STEP) {
-      setCollectionAttempted(false);
-      submitMutation.reset();
-    }
+    // 실행 화면을 벗어나면 다음 진입은 새 시도다 — 낡은 제출 실패가 흔적으로 남지 않게 한다.
+    if (step !== RUN_STEP) submitMutation.reset();
   }, [step]);
 
   return (
@@ -696,7 +731,9 @@ export function NewBacktestWizard() {
             value={universeRule}
             onChange={setUniverseRule}
             period={{ from, to }}
-            rebalanceMonths={rebalanceMonths}
+            strategyId={strategyId}
+            parameters={parsedParameters}
+            previewRetryToken={previewRetryToken}
             onPreviewResolved={handlePreviewResolved}
           />
 
@@ -765,7 +802,7 @@ export function NewBacktestWizard() {
                 inputMode="numeric"
                 className="h-11"
                 min={1}
-                max={20}
+                max={200}
                 step={1}
                 value={maxPositions}
                 onChange={(e) => setMaxPositions(e.target.value)}
@@ -818,10 +855,10 @@ export function NewBacktestWizard() {
               <Separator />
               <div className="flex justify-between gap-3">
                 <span className="shrink-0 text-muted-foreground">유니버스 규칙</span>
-                <span>
-                  {request.universeRule.markets.join('·')} 시가총액 상위{' '}
-                  {request.universeRule.topN}
-                </span>
+                {/* 단계형 편집기(Task 9)가 시가총액 외 기준·다단계를 허용한 뒤로는 첫
+                    단계만 읽는 하드코딩된 문구가 실제 규칙과 어긋날 수 있다 — 상세
+                    화면과 같은 요약 함수를 그대로 쓴다(리뷰에서 재현된 회귀). */}
+                <span>{formatUniverseRuleSummary(request.universeRule)}</span>
               </div>
               <Separator />
               <div className="flex justify-between gap-3">
@@ -880,24 +917,6 @@ export function NewBacktestWizard() {
         ) : null
       ) : null}
 
-      {/* 제출이 막힌 그 자리에 붙인다 — 막힌 이유와 해소책이 같은 카드에 있어야
-          문맥을 잃지 않는다(설계 §3). 게이트가 떠 있는 동안은 아래 실행 버튼을
-          숨기고 이 카드의 버튼이 그 역할을 대신한다. */}
-      {!prefilling && step === RUN_STEP && actionGate ? (
-        <CorporateActionGate
-          gate={actionGate}
-          nameOf={nameOf}
-          attempted={collectionAttempted}
-          onCollected={() => {
-            // 제출은 여기서 하지 않는다 — 막혔던 오류만 지워 실행 버튼을 다시 연다.
-            // 실제 제출은 사용자가 그 버튼을 눌러야 일어난다(계획 §3, 리뷰 finding).
-            setCollectionAttempted(true);
-            submitMutation.reset();
-            toast.success('자본변동 이력 수집이 끝났습니다 — 실행 버튼을 눌러 다시 제출하세요');
-          }}
-        />
-      ) : null}
-
       {prefilling ? null : (
         <div className="flex items-center justify-between gap-2">
           <Button
@@ -912,7 +931,7 @@ export function NewBacktestWizard() {
             <Button className="h-11" onClick={goNext}>
               다음
             </Button>
-          ) : actionGate ? null : (
+          ) : (
             <Button
               className="h-11"
               disabled={typeof request === 'string' || submitMutation.isPending}

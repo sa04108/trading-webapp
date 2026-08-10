@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   sumExcludedNonTrading,
   UniverseRuleResolver,
-  type UniverseScheduleEntry,
+  type LegacyUniverseScheduleEntry,
 } from '../../src/server/modules/backtest/application/universe-rule-resolver.js';
 
 describe('UniverseRuleResolver 거래불가 제외', () => {
@@ -30,7 +30,11 @@ describe('UniverseRuleResolver 거래불가 제외', () => {
     });
 
     const resolved = await resolver.resolve(
-      { markets: ['KOSDAQ'], topN: 1, sortKey: 'MKTCAP' },
+      {
+        markets: ['KOSDAQ'],
+        stages: [{ criterion: 'MARKET_CAP', limit: 1 }],
+        rebalanceInterval: { value: 1, unit: 'MONTH' },
+      },
       ['2022-02-15'],
     );
 
@@ -59,7 +63,11 @@ describe('UniverseRuleResolver 거래불가 제외', () => {
     });
 
     await resolver.resolve(
-      { markets: ['KOSDAQ'], topN: 1, sortKey: 'MKTCAP' },
+      {
+        markets: ['KOSDAQ'],
+        stages: [{ criterion: 'MARKET_CAP', limit: 1 }],
+        rebalanceInterval: { value: 1, unit: 'MONTH' },
+      },
       ['2022-02-15', '2022-03-15'],
     );
 
@@ -73,7 +81,7 @@ describe('sumExcludedNonTrading', () => {
   // 받는다 — resolve() 와 워커가 같은 합산 로직을 쓰게 해서, 리밸런스가 여러 번인
   // 실행에서도 두 곳의 합계가 갈라지지 않게 한다.
   it('일정 전체에서 제외 건수를 더한다 (중복 포함)', () => {
-    const schedule: UniverseScheduleEntry[] = [
+    const schedule: LegacyUniverseScheduleEntry[] = [
       { rebalanceDate: '2026-01-02', effectiveTradingDate: '2026-01-02', symbols: ['005930'], excludedNonTradingCount: 2 },
       { rebalanceDate: '2026-04-01', effectiveTradingDate: '2026-04-01', symbols: ['005930'], excludedNonTradingCount: 0 },
       { rebalanceDate: '2026-07-01', effectiveTradingDate: '2026-07-01', symbols: ['005930'], excludedNonTradingCount: 1 },

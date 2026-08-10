@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import fs from 'node:fs';
 import type { FastifyBaseLogger, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -7,7 +8,6 @@ import {
   periodToTsRange,
   type BacktestRequest,
 } from '../../../../shared/schemas/backtest-request.js';
-import { universeRuleSchema } from '../../../../shared/schemas/universe-rule.js';
 import type { ProvenancePin } from '../../../../shared/schemas/provenance-pin.js';
 import {
   DEFAULT_TRADE_SORT_DIRECTION,
@@ -19,10 +19,8 @@ import { SECURITY_HEADERS } from '../../../shared/security.js';
 import type { Clock } from '../../../shared/clock.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
 import type { FactRepository } from '../../facts/application/ports.js';
-import type { CorporateActionCoverageStore } from '../../facts/application/corporate-action-coverage.js';
 import type { ConsumedVersionSnapshot, SymbolService } from '../../market-data/application/symbol-service.js';
-import { KrxNotConfiguredError, KrxQuotaError } from '../../market-data/application/ports.js';
-import { SymbolMasterNotCoveredError } from '../../market-data/application/symbol-master-service.js';
+import { sendIfKrxError, sendIfNotCovered } from './krx-error-mapping.js';
 import { KRX_FILTER_POLICY_VERSION } from '../../market-data/domain/krx-filter-policy.js';
 import type {
   CandleCoverageRow,
@@ -40,11 +38,12 @@ import type { JobOrchestrator, JobEvent } from '../application/job-orchestrator.
 import type { BacktestJobRow, JobQueue } from '../application/job-queue.js';
 import type { ResultsService } from '../application/results-service.js';
 import { rebaseStoredRequest } from '../application/stored-request.js';
-import {
-  computeRebalanceDates,
-  type ResolvedUniverse,
-  type UniverseRuleResolver,
-} from '../application/universe-rule-resolver.js';
+import { type ResolvedUniverse } from '../application/universe-rule-resolver.js';
+import type {
+  BacktestPreparationOrchestrator,
+  BacktestUniversePreview,
+  PreparationInput,
+} from '../application/backtest-preparation-orchestrator.js';
 
 type PreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -56,12 +55,9 @@ export interface BacktestRouteDeps {
   readonly symbolService: SymbolService;
   /** 종목별 일봉 보유 구간 — `krx_daily_bars` 를 직접 집계한다(Task 6) */
   readonly candleCoverage: CandleCoverageService;
-  /** 유니버스 규칙 → 리밸런스 날짜별 멤버십 일정 (스펙 2026-08-05) */
-  readonly universeRuleResolver: UniverseRuleResolver;
+  readonly preparation: BacktestPreparationOrchestrator;
   readonly audit: AuditLogService;
   readonly factRepository: FactRepository;
-  /** 자본변동 수집 커버리지 — 제출 게이트가 대조한다(Task 6) */
-  readonly corporateActionCoverage: CorporateActionCoverageStore;
   readonly dataRoot: string;
   readonly maxQueuedBacktests: number;
   readonly clock: Clock;
@@ -120,6 +116,35 @@ function serializeJob(job: BacktestJobRow) {
   };
 }
 
+function preparationInputOf(body: BacktestRequest): PreparationInput {
+  return {
+    universeRule: body.universeRule,
+    period: body.period,
+    strategyId: body.strategyId,
+    parameters: body.parameters,
+  };
+}
+
+/** 준비 job의 staged schedule을 기존 worker가 소비하는 pin 모양으로 좁힌다. */
+function preparedPreviewToResolved(preview: BacktestUniversePreview): ResolvedUniverse {
+  const schedule = preview.schedule.map((entry) => ({
+    rebalanceDate: entry.rebalanceDate,
+    effectiveTradingDate: entry.effectiveDate,
+    symbols: entry.members.map((member) => member.symbol),
+    members: entry.members,
+    excludedNonTradingCount: entry.excludedNonTradingCount,
+  }));
+  return {
+    schedule,
+    unionSymbols: [...preview.unionSymbols],
+    unionEntries: new Map(),
+    // worker가 실제 소비하는 legacy JSON 자체의 hash여야 provenance pin을 독립적으로
+    // 재계산할 수 있다. staged hash는 preparation preview 안에 그대로 보존된다.
+    scheduleHash: createHash('sha256').update(JSON.stringify(schedule)).digest('hex'),
+    uncoveredDates: [...preview.uncoveredDates],
+  };
+}
+
 /**
  * provenancePinJson 은 저장 시점에 이미 검증된 값이라 정상 상태에서는 항상 파싱된다.
  * 그래도 행이 손상돼 있으면(예: 수동 DB 편집) 상세 조회 전체를 500 으로 죽이는 대신
@@ -154,39 +179,6 @@ async function checkResources(dataRoot: string): Promise<string | null> {
   return null;
 }
 
-/**
- * `UniverseRuleResolver.resolve` (제출 검증·미리보기 공용)는 시총 캐시 미스일 때 KRX 를
- * 부른다 — `symbol-master-routes.ts` 의 `/symbol-master/sync`·`/backfill` 과 같은
- * 호출부다. 같은 관례로 매핑한다: 쿼터 초과는 429(사용자가 기다리면 되는 문제), 미설정은
- * 503(운영이 키를 넣어야 하는 문제). 나머지 오류(분류 불가 등)는 처리하지 않고 그대로
- * 위로 던져 기본 오류 처리기(500)가 받게 한다.
- */
-function sendIfKrxError(reply: FastifyReply, error: unknown): boolean {
-  if (error instanceof KrxQuotaError) {
-    reply.code(429).send({ error: error.message });
-    return true;
-  }
-  if (error instanceof KrxNotConfiguredError) {
-    reply.code(503).send({ error: error.message });
-    return true;
-  }
-  return false;
-}
-
-/**
- * SymbolMasterNotCoveredError 는 종목 마스터가 그 날짜의 coverage·거래일 anchor를
- * 갖지 못했다는 뜻이다 — 클라이언트가 먼저 동기화해야 하는 409 상황이지 서버 결함(500)이
- * 아니다. sendIfKrxError 와 나란히 둔다: 두 오류 모두 "지금은 KRX/마스터 상태가 준비되지
- * 않았다"는 같은 층위의 신호라 호출부에서 순서를 가리지 않고 둘 다 확인하면 된다.
- */
-function sendIfNotCovered(reply: FastifyReply, error: unknown): boolean {
-  if (error instanceof SymbolMasterNotCoveredError) {
-    reply.code(409).send({ error: error.message });
-    return true;
-  }
-  return false;
-}
-
 export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRouteDeps, requireAuth: PreHandler): void {
   const {
     queue,
@@ -195,10 +187,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     strategies,
     symbolService,
     candleCoverage,
-    universeRuleResolver,
+    preparation,
     audit,
     factRepository,
-    corporateActionCoverage,
     clock,
   } = deps;
 
@@ -313,117 +304,6 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     return { universe, timeframe: consumed };
   };
 
-  /**
-   * 전략 파라미터에서 `rebalanceMonths` 를 읽어 리밸런스 날짜를 만든다 — 그 파라미터가
-   * 없는 전략(예: range-breakout)은 리밸런스가 하나(`period.from`)뿐이라고 본다
-   * (브리프 외 결정, 스펙 2026-08-05). 파라미터가 스키마를 통과하지 못해도(전략 미지정
-   * 등) 여기서는 실패시키지 않는다 — 그 오류는 `validateSubmission` 의 다른 검사가
-   * 이미 잡으므로, 유니버스 해소 자체는 관대한 기본값(1회 리밸런스)으로 계속 진행해
-   * clone-draft 같은 읽기 전용 경로도 unionSymbols 를 얻을 수 있게 한다.
-   */
-  const resolveScheduleForRequest = (body: BacktestRequest): Promise<ResolvedUniverse> => {
-    const paramCheck = strategies.validateParameters(body.strategyId, body.parameters);
-    const rebalanceMonthsRaw =
-      paramCheck.ok && typeof paramCheck.value === 'object' && paramCheck.value !== null
-        ? (paramCheck.value as Record<string, unknown>)['rebalanceMonths']
-        : undefined;
-    const rebalanceDates =
-      typeof rebalanceMonthsRaw === 'number' && Number.isFinite(rebalanceMonthsRaw)
-        ? computeRebalanceDates(body.period, rebalanceMonthsRaw)
-        : [body.period.from];
-    return universeRuleResolver.resolve(body.universeRule, rebalanceDates);
-  };
-
-  /**
-   * 종목 코드를 "코드(이름)" 형태로 늘어놓는다.
-   * 목록이 길면 10종목만 보이고 나머지는 개수로 요약한다.
-   * 유니버스 상한이 200종목이라 캡이 없으면 경고가 너무 길어진다.
-   * 엔진의 buysDroppedByCap 과 같은 관례다(backtest-child.ts 참고).
-   */
-  const namedSymbolList = (codes: readonly string[]): string => {
-    const localNames = symbolService.getLocalNames(codes);
-    const labels = codes.map((code) => {
-      const local = localNames.get(code);
-      return local ? `${code}(${local.name})` : code;
-    });
-    const shown = labels.slice(0, 10).join(', ');
-    return labels.length > 10 ? `${shown} 외 ${labels.length - 10}종목` : shown;
-  };
-
-  /**
-   * 자본변동 수집 게이트(Task 6)다.
-   * 팩트 0건은 세 상태를 가릴 수 있다: 수집했고 분할이 없었다,
-   * 수집했는데 DART 가 응답하지 못했다, 아예 수집하지 않았다.
-   * 커버리지가 셋째를 앞의 둘과 가르고, gap 이 첫째와 둘째를 가른다
-   * (corporate-action-coverage.ts 헤더 참고).
-   *
-   * gap 이 난 종목은 막지 않는다.
-   * DART 가 못 답하는 종목은 대체로 상장폐지 종목이다.
-   * 여기서 막으면 생존편향을 없애려고 들여온 종목이 영원히 막힌다.
-   *
-   * 필요 연도는 백테스트 기간이 걸치는 연도 전부다.
-   * 그중 한 연도라도 커버리지에 없으면 그 종목은 아예 수집하지 않은 것으로 본다.
-   */
-  const checkCorporateActionCoverage = (
-    codes: readonly string[],
-    period: { from: string; to: string },
-  ): {
-    error: string | null;
-    warning: string | null;
-    /** 미수집 종목 전체 목록 — 위저드 게이트 화면(Task 8)이 그대로 받아 쓴다.
-     *  `error` 문구의 `namedSymbolList` 는 10종목에서 접으므로 화면에는 못 쓴다. */
-    uncollectedSymbols: readonly string[];
-    fromYear: number;
-    toYear: number;
-  } => {
-    const { fromTsMs, toTsMs } = periodToTsRange(period);
-    const fromYear = new Date(fromTsMs).getUTCFullYear();
-    const toYear = new Date(toTsMs).getUTCFullYear();
-    const neededYears: number[] = [];
-    for (let year = fromYear; year <= toYear; year += 1) neededYears.push(year);
-
-    const coveredBySymbol = corporateActionCoverage.getCoveredYears(codes);
-    const gapsBySymbol = corporateActionCoverage.getGapYears(codes);
-
-    const uncollected: string[] = [];
-    const gapped: string[] = [];
-    for (const code of codes) {
-      const coveredYears = coveredBySymbol.get(code) ?? [];
-      if (neededYears.some((year) => !coveredYears.includes(year))) {
-        uncollected.push(code);
-        continue;
-      }
-      // 필요 연도로 좁히지 않는다 — gap 연도는 요청 연도의 부분집합이 아니다
-      // (fact-sync-service.ts 의 uniqueYearsFromGaps 주석 참고). 좁히면
-      // 실제 위험이 있는 gap 을 조용히 숨길 수 있다. 노이즈보다 그쪽이 더 위험하다.
-      if ((gapsBySymbol.get(code) ?? []).length > 0) gapped.push(code);
-    }
-
-    if (uncollected.length > 0) {
-      return {
-        error:
-          `다음 종목은 자본변동(액면분할 등) 이력을 수집한 적이 없습니다: ${namedSymbolList(uncollected)}. ` +
-          '분할이 있었다면 결과가 틀어집니다. 종목 화면에서 자본변동을 동기화한 뒤 다시 제출하세요.',
-        warning: null,
-        uncollectedSymbols: uncollected,
-        fromYear,
-        toYear,
-      };
-    }
-    if (gapped.length === 0) {
-      return { error: null, warning: null, uncollectedSymbols: [], fromYear, toYear };
-    }
-    return {
-      error: null,
-      warning:
-        `다음 종목은 DART 가 자본변동 이력 일부에 응답하지 못했습니다: ${namedSymbolList(gapped)}. ` +
-        '분할이 있었다면 결과가 틀어질 수 있습니다.',
-      uncollectedSymbols: [],
-      fromYear,
-      toYear,
-    };
-  };
-
   type ValidationResult =
     | {
         readonly ok: true;
@@ -433,21 +313,33 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
         readonly resolved: ResolvedUniverse;
         readonly warnings: readonly string[];
       }
-    | {
-        readonly ok: false;
-        readonly status: 400;
-        readonly errors: string[];
-        /**
-         * 자본변동 미수집 게이트(Task 6)에 걸렸을 때만 있다. 위저드 게이트 화면
-         * (Task 8)이 종목·연도를 다시 계산하지 않고 이 값을 그대로 받아 쓴다.
-         */
-        readonly corporateActionGate?: {
-          readonly symbols: readonly string[];
-          readonly fromYear: number;
-          readonly toYear: number;
-        };
-      }
+    | { readonly ok: false; readonly status: 400; readonly errors: string[] }
     | { readonly ok: false; readonly status: 422; readonly errors: string[]; readonly uncoveredDates: readonly string[] };
+
+  /** 준비 hash를 조회하기 전에 끝낼 수 있는 요청 자체의 검증. */
+  const validateStaticSubmission = (body: BacktestRequest): string[] => {
+    const errors: string[] = [];
+    const strategy = strategies.get(body.strategyId);
+    if (!strategy) {
+      errors.push(`알 수 없는 전략: ${body.strategyId}`);
+    } else {
+      const paramCheck = strategies.validateParameters(
+        body.strategyId,
+        body.parameters,
+      );
+      if (!paramCheck.ok) errors.push(paramCheck.error);
+    }
+    if (body.period.from > body.period.to) {
+      errors.push('기간이 올바르지 않습니다 (from > to)');
+    }
+    if (!getCostProfile(body.execution.commissionProfileId)) {
+      errors.push('알 수 없는 수수료 프로파일');
+    }
+    if (!getSlippageProfile(body.execution.slippageProfileId)) {
+      errors.push('알 수 없는 슬리피지 프로파일');
+    }
+    return errors;
+  };
 
   /**
    * 제출 검증 — 신규 제출(POST)·복제(clone)·초안(clone-draft)이 동일한 기준을 거친다.
@@ -458,34 +350,28 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    * 전략·기간·프로파일처럼 요청 자체의 형식 오류는 유니버스 해소보다 먼저 걸러
    * 반환한다. 어차피 거부할 요청 때문에 KRX 호출 예산(종목 마스터 조회·시총
    * join)을 쓰지 않기 위해서다.
-   * 순서는 uncovered 리밸런스 날짜(422) → 캔들 존재 검증(400) → 자본변동
-   * 수집 검증(400) 이다(①②③, Task 6 이 ③을 더했다).
+   * 순서는 uncovered 리밸런스 날짜(422) → 캔들 존재 검증(400) 이다(①②).
+   *
+   * 자본변동 수집 게이트(Task 6, 여기 있던 ③)는 Task 10에서 없앴다 — 제출은 이제
+   * 같은 requestHash 의 COMPLETED 준비(`preparation.getReadyPreview`)를 전제하고,
+   * 그 준비(`buildBacktestPreparationPlan`)가 전략의 `dataRequirements.
+   * requiresCorporateActions`·DECLINE stage 후보에 따라 최종 유니버스의 자본변동을
+   * 이미 동기화해 둔다. 실전에 등록된 전략은 전부 이 조건을 충족한다
+   * (tests/unit/backtest-preparation-plan.test.ts 전략별 표 참고) — 제출 시점에
+   * 다시 대조해도 잡을 수 있는 결측이 남지 않는다.
+   *
+   * `preparedPreview` 는 항상 있어야 한다 — 완료된 준비 없이 유니버스를 다시
+   * 추측하는 옛 경로(`UniverseRuleResolver.resolve`, stages[0] 만 보는 stopgap)는
+   * clone-draft 개편(리뷰 finding, 2026-08-09)으로 없앴다. 완료된 준비가 없는
+   * 호출자는 이 함수를 부르기 전에 스스로 "데이터 준비 필요" 로 갈라져야 한다.
    */
-  const validateSubmission = async (body: BacktestRequest): Promise<ValidationResult> => {
-    const errors: string[] = [];
-
-    // 전략 — 파라미터 검증의 전제다
-    const strategy = strategies.get(body.strategyId);
-    if (!strategy) {
-      errors.push(`알 수 없는 전략: ${body.strategyId}`);
-    } else {
-      // 전략 버전은 검사하지 않는다 (D-029) — 요청이 버전을 들고 다니지 않는다.
-      // 실행되는 것은 언제나 지금 등록된 전략이고, 파라미터가 그 전략과 안 맞으면
-      // 바로 아래 검증이 잡는다.
-      const paramCheck = strategies.validateParameters(body.strategyId, body.parameters);
-      if (!paramCheck.ok) errors.push(paramCheck.error);
-    }
-
-    if (body.period.from > body.period.to) {
-      errors.push('기간이 올바르지 않습니다 (from > to)');
-    }
-
-    if (!getCostProfile(body.execution.commissionProfileId)) {
-      errors.push('알 수 없는 수수료 프로파일');
-    }
-    if (!getSlippageProfile(body.execution.slippageProfileId)) {
-      errors.push('알 수 없는 슬리피지 프로파일');
-    }
+  const validateSubmission = async (
+    body: BacktestRequest,
+    preparedPreview: BacktestUniversePreview,
+  ): Promise<ValidationResult> => {
+    // 전략 버전은 검사하지 않는다 (D-029) — 요청이 버전을 들고 다니지 않는다.
+    // 실행되는 것은 언제나 지금 등록된 전략이다.
+    const errors = validateStaticSubmission(body);
 
     if (errors.length > 0) {
       return { ok: false, status: 400, errors };
@@ -494,7 +380,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     // ① 유니버스 규칙 → 리밸런스 날짜별 멤버십 일정. 커버 밖 날짜가 있으면 캔들
     // 검증으로 넘어가지 않고 바로 422 로 알린다 — 종목 구성 자체를 모르는 날짜의
     // 캔들을 따질 수 없다.
-    const resolved = await resolveScheduleForRequest(body);
+    const resolved = preparedPreviewToResolved(preparedPreview);
     if (resolved.uncoveredDates.length > 0) {
       return {
         ok: false,
@@ -523,23 +409,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       };
     }
 
-    // ③ 자본변동 수집 게이트(Task 6) — 캔들은 있어도 분할 이력을 모르면 조용히
-    // 틀린 결과를 낸다. unionSymbols·기간 기준으로 ②와 같은 층위에서 검사한다.
-    const actionGate = checkCorporateActionCoverage(resolved.unionSymbols, body.period);
-    if (actionGate.error !== null) {
-      return {
-        ok: false,
-        status: 400,
-        errors: [actionGate.error],
-        corporateActionGate: {
-          symbols: actionGate.uncollectedSymbols,
-          fromYear: actionGate.fromYear,
-          toYear: actionGate.toYear,
-        },
-      };
-    }
+    // 그래도 DART 공시 지연은 준비가 끝났다는 사실과 무관하게 남는 위험이라 경고는
+    // 유지한다 — 최근 기간은 분할이 있었어도 아직 접수되지 않았을 수 있다.
     const warnings: string[] = [];
-    if (actionGate.warning !== null) warnings.push(actionGate.warning);
     if (isRecentPeriodEnd(periodToTsRange(body.period).toTsMs, clock.now())) {
       warnings.push(
         '선택한 기간이 최근이라 아직 DART 에 공시되지 않은 자본변동이 있을 수 있습니다. ' +
@@ -547,13 +419,17 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       );
     }
 
-    // ④ 종목 버전 pin 은 기존 universeJson 메커니즘을 그대로 쓴다 — unionSymbols 기준.
-    // ⑤ provenancePin — 유니버스 규칙 경로(스펙 2026-08-05)는 늘 이 모양이다.
+    // ③ 종목 버전 pin 은 기존 universeJson 메커니즘을 그대로 쓴다 — unionSymbols 기준.
+    // ④ provenancePin — 순서형 유니버스 파이프라인(Task 11, 스펙 2026-08-09)은 늘 이
+    // 모양이다. preparedPreview 가 항상 있으므로 diagnostics 도 늘 그 값에서 나온다.
     const provenancePin: ProvenancePin = {
       sourceKind: 'SYMBOL_MASTER',
       filterPolicyVersion: KRX_FILTER_POLICY_VERSION,
-      selectionMethod: 'TOP_MARKET_CAP_N',
+      selectionMethod: 'ORDERED_UNIVERSE_PIPELINE',
+      universeRule: body.universeRule,
       scheduleHash: resolved.scheduleHash,
+      diagnostics: preparedPreview.diagnostics,
+      preparedAtMs: clock.now(),
     };
 
     return {
@@ -588,8 +464,8 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (unionSymbols.some((code) => factRepository.hasFacts('SYMBOL', code))) return null;
     return (
       '이 전략은 상장시점 재무 데이터가 필요하지만 선택한 종목에는 아직 없습니다: ' +
-      `${unionSymbols.join(', ')} — 종목 화면에서 해당 종목을 선택해 "재무" 를 함께 ` +
-      '동기화하세요.'
+      `${unionSymbols.join(', ')} — 미리보기를 다시 실행해 데이터 준비를 완료하세요. ` +
+      'DART 일일 한도로 대기 중이면 다음 날 자동으로 재개됩니다.'
     );
   };
 
@@ -609,7 +485,10 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    * 요청 자체는 유효하고 "전략 파라미터와 리스크 설정의 조합" 이 문제다.
    */
   const checkPositionCapacity = (body: BacktestRequest): string | null => {
-    const validated = strategies.validateParameters(body.strategyId, body.parameters);
+    const validated = strategies.validateParameters(
+      body.strategyId,
+      body.parameters,
+    );
     // 파라미터 자체가 스키마를 통과하지 못하는 경우는 validateSubmission 이 400 으로 말한다
     if (!validated.ok || typeof validated.value !== 'object' || validated.value === null) {
       return null;
@@ -639,119 +518,6 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     slippageProfiles: listSlippageProfiles(),
   }));
 
-  const universePreviewRequestSchema = z.object({
-    universeRule: universeRuleSchema,
-    period: z.object({
-      from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-      to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    }),
-    rebalanceMonths: z.number().int().positive().default(1),
-  });
-
-  /**
-   * unionSymbols 중 이 화면이 아직 실행할 수 없는 종목이다. 종목 마스터에는
-   * 있지만 로컬 `symbols` 테이블에 등록되지 않았거나, 등록은 됐어도 일봉을
-   * 하나도 수집하지 않은 경우를 가리킨다. 봉 주기가 '1d' 하나뿐이라(Task 4)
-   * 예전처럼 슬라이스를 가려 볼 필요가 없다.
-   */
-  const missingCandleSymbolsOf = (codes: readonly string[]): string[] => {
-    const hasBars = new Set(
-      candleCoverage
-        .getCoverage(codes)
-        .filter((row) => row.barCount > 0)
-        .map((row) => row.code),
-    );
-    return codes.filter((code) => !symbolService.exists(code) || !hasBars.has(code));
-  };
-
-  /**
-   * 유니버스 미리보기가 만든 unionSymbols 를 `symbols` 에 자동 등록한다(브리프 §5,
-   * 스펙 2026-08-06 Task 4) — 이름·시장·표준코드는 종목 마스터(`resolved.unionEntries`)
-   * 에서 가져온다. 증권사 조회(symbolInfoService)는 상장폐지 종목의 이름을 주지
-   * 않아 그 출처로는 등록할 수 없다.
-   *
-   * 이 등록은 표시만이 아니라 제출 검증의 전제이기도 하다(리뷰 finding, 2026-08-08
-   * — Task 6 이 이 자리에 반대로 적어 뒀었다).
-   * `resolveConsumedUniverse` 가 쓰는 `registeredCoverage` 는 미등록 종목의
-   * 커버리지를 0으로 지운다(위 registeredCoverage 주석 참고).
-   * 유니버스 전체가 미등록이면 그 자리에서 400 으로 막힌다.
-   *
-   * 일부만 미등록이면 제출은 통과한다 — 그래도 그 종목은 `missingCandleSymbolsOf`
-   * 가 계속 "누락" 으로 보고하고 종목 화면에도 나타나지 않는다. 위저드 흐름을
-   * 벗어나 API 를 직접 호출하는 자동화 클라이언트는 이 사실을 알아야 한다.
-   *
-   * KRX 응답 마켓(KOSPI/KOSDAQ)은 항상 'KR' 로 등록한다 — `symbols.market` 은
-   * 세션 축(KR/US) 이고, `krxDailyBars` 는 애초에 국내 종목만 갖는다.
-   *
-   * 이미 등록된 코드는 건너뛴다 — 재등록을 실패로 다루지 않기 위해서고, 동시에
-   * standardCode 를 덮어쓰지 않기 위해서다(addSymbol 주석 참고).
-   *
-   * 위저드가 제출 전에 거치는 미리보기와, 상세 화면의 원클릭 복제(`POST
-   * /backtests/:id/clone`) 둘 다 이 등록을 거친다 — 아래 `ensureUniverseRegistered`
-   * 로 묶어 호출한다(리뷰 finding, 2026-08-06).
-   * 복제는 미리보기 화면을 거치지 않고 바로 제출한다.
-   * 미리보기에서 한 번도 등록되지 않은 종목이 있을 수 있다(예: 리밸런스 시점
-   * 시총이 바뀌어 새로 topN 에 든 종목). 등록해 두지 않으면 위 문단의
-   * "일부 미등록" 경로를 그대로 밟는다.
-   * `clone-draft`(GET)에는 넣지 않는다 — "대기열에 넣지 않고 아무것도 확정하지
-   * 않는다"는 읽기 전용 계약이라 등록도 하지 않는다.
-   */
-  const registerUniverseSymbols = (resolved: ResolvedUniverse): void => {
-    for (const code of resolved.unionSymbols) {
-      if (symbolService.exists(code)) continue;
-      const entry = resolved.unionEntries.get(code);
-      if (!entry) continue; // 이론상 항상 있다 — unionSymbols 는 unionEntries 와 같은 루프에서 채워진다
-      symbolService.addSymbol(code, 'KR', entry.name, entry.standardCode);
-    }
-  };
-
-  /**
-   * `registerUniverseSymbols` 호출을 한 곳에 묶는다. 두 제출 경로가 같은 등록
-   * 전제를 공유하는데 복붙하면 한쪽만 고치고 잊기 쉽다(리뷰 finding, 2026-08-06).
-   *
-   * 커버리지 캐시 갱신은 더 없다. `CandleCoverageService` 는 캐시 없이
-   * `krx_daily_bars` 를 직접 집계해 갱신할 사본이 없다(Task 6).
-   *
-   * `POST /backtests`(신규 제출)에는 붙이지 않는다 — 위저드는 제출 전에 항상
-   * 미리보기를 거치므로 그때 이미 등록이 끝나 있다.
-   */
-  const ensureUniverseRegistered = (resolved: ResolvedUniverse): void => {
-    registerUniverseSymbols(resolved);
-  };
-
-  app.post('/backtests/universe-preview', { preHandler: requireAuth }, async (request, reply) => {
-    const parsed = universePreviewRequestSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send({
-        error: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
-      });
-    }
-    const { universeRule, period, rebalanceMonths } = parsed.data;
-    if (period.from > period.to) {
-      return reply.code(400).send({ error: '기간이 올바르지 않습니다 (from > to)' });
-    }
-
-    const rebalanceDates = computeRebalanceDates(period, rebalanceMonths);
-    try {
-      const resolved = await universeRuleResolver.resolve(universeRule, rebalanceDates);
-      ensureUniverseRegistered(resolved);
-      return {
-        schedule: resolved.schedule,
-        unionSymbols: resolved.unionSymbols,
-        scheduleHash: resolved.scheduleHash,
-        uncoveredDates: resolved.uncoveredDates,
-        // 리밸런스 날짜만 보는 uncoveredDates 와 달리 period 전체의 빈틈을 본다 —
-        // 위저드가 "기간 전체 동기화" 버튼을 띄울지 이 값으로 판정한다(운영 버그 fix).
-        periodCovered: universeRuleResolver.isPeriodCovered(period),
-        missingCandleSymbols: missingCandleSymbolsOf(resolved.unionSymbols),
-      };
-    } catch (error) {
-      if (sendIfKrxError(reply, error)) return reply;
-      if (sendIfNotCovered(reply, error)) return reply;
-      throw error;
-    }
-  });
-
   app.post('/backtests', { preHandler: requireAuth }, async (request, reply) => {
     const parsed = backtestRequestSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -761,9 +527,33 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     }
     const body = parsed.data;
 
+    // 잘못된 요청을 PREPARATION_REQUIRED로 가리면 사용자는 완료할 수 없는 준비를
+    // 시작하게 된다. 외부 데이터와 무관한 검증은 preparation hash 조회보다 먼저 한다.
+    const staticErrors = validateStaticSubmission(body);
+    if (staticErrors.length > 0) {
+      return reply.code(400).send({ error: staticErrors[0] });
+    }
+
+    // getReadyPreview 도 resolver 를 거치므로 validateSubmission 과 같은 KRX/coverage
+    // 오류가 난다 — 같은 매핑(429/503/409)을 적용해야 네 줄 아래와 다른 500 이 되지 않는다.
+    let prepared: Awaited<ReturnType<typeof preparation.getReadyPreview>>;
+    try {
+      prepared = await preparation.getReadyPreview(preparationInputOf(body));
+    } catch (error) {
+      if (sendIfKrxError(reply, error)) return reply;
+      if (sendIfNotCovered(reply, error)) return reply;
+      throw error;
+    }
+    if (!prepared) {
+      return reply.code(409).send({
+        error: 'PREPARATION_REQUIRED',
+        message: '동일한 조건의 데이터 준비를 먼저 완료하세요.',
+      });
+    }
+
     let validated: Awaited<ReturnType<typeof validateSubmission>>;
     try {
-      validated = await validateSubmission(body);
+      validated = await validateSubmission(body, prepared);
     } catch (error) {
       if (sendIfKrxError(reply, error)) return reply;
       if (sendIfNotCovered(reply, error)) return reply;
@@ -773,9 +563,6 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       return reply.code(validated.status).send({
         error: validated.errors[0] ?? '제출을 검증할 수 없습니다',
         ...('uncoveredDates' in validated ? { uncoveredDates: validated.uncoveredDates } : {}),
-        ...('corporateActionGate' in validated && validated.corporateActionGate
-          ? { corporateActionGate: validated.corporateActionGate }
-          : {}),
       });
     }
 
@@ -869,16 +656,18 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     );
     if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
     const cloneRequest = rebased.request;
+    const prepared = await preparation.getReadyPreview(preparationInputOf(cloneRequest));
+    if (!prepared) {
+      return reply.code(409).send({
+        error: 'PREPARATION_REQUIRED',
+        message: '동일한 조건의 데이터 준비를 먼저 완료하세요.',
+      });
+    }
     // 재기준 후에도 새 제출이다 — POST 와 동일한 검증 관문을 거치고 버전을 다시 고정한다.
     let validated: Awaited<ReturnType<typeof validateSubmission>>;
     try {
-      // clone 은 위저드의 미리보기 화면을 거치지 않고 상세 화면에서 바로 제출한다.
-      // 여기서 unionSymbols 를 직접 등록해야 한다(ensureUniverseRegistered 주석 참고).
-      // 유니버스 전체가 미등록이면 이 등록 없이는 제출이 400 으로 막힌다
-      // (resolveConsumedUniverse). 일부만 새로 편입된 종목은 등록이 없어도 제출은
-      // 통과하지만 종목 화면에 나타나지 않는 불일치가 남는다.
-      ensureUniverseRegistered(await resolveScheduleForRequest(cloneRequest));
-      validated = await validateSubmission(cloneRequest);
+      // 완료된 preparation이 같은 staged schedule을 이미 등록·고정했다.
+      validated = await validateSubmission(cloneRequest, prepared);
     } catch (error) {
       if (sendIfKrxError(reply, error)) return reply;
       if (sendIfNotCovered(reply, error)) return reply;
@@ -931,6 +720,15 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    * 재설정 및 복제용 초안 (D-025). 읽기 전용 — 대기열에 넣지 않고 유니버스 버전도 고정하지 않는다.
    * 검증을 **돌리되 막지 않는다**: 여기서 400 으로 끊으면 조건이 틀어진 백테스트를 고칠
    * 화면 자체가 열리지 않는다. 실제 차단은 제출 시점 POST /backtests 가 그대로 지킨다.
+   *
+   * 완료된 준비(preparation)가 이미 있으면 그 union으로 blockers 를 계산한다. 없으면
+   * 유니버스를 추측하지 않는다(리뷰 finding, 2026-08-09) — `UniverseRuleResolver.
+   * resolve()` 는 stages[0](MARKET_CAP)만 보는 옛 경로라, PER·DECLINE 처럼 여러
+   * 단계인 규칙을 잘못된 유니버스로 판정해 재무·상한 blockers 를 그릇된 종목 집합으로
+   * 매기고 KRX 호출까지 낭비한다. 이 경우는 union이 필요한 검사(재무·커버리지·등록)를
+   * 건너뛰고, 위저드가 이미 아는 "데이터 준비 필요" 신호를 대신 담는다 — 위저드는 이
+   * 신호를 받으면 미리보기→준비를 그대로 다시 돌린다. 파라미터·프로파일처럼 유니버스와
+   * 무관한 정적 검증과 topN vs maxPositions 상한 검사는 준비 여부와 관계없이 그대로 돈다.
    */
   app.get('/backtests/:id/clone-draft', { preHandler: requireAuth }, async (request, reply) => {
     const { id } = request.params as { id: string };
@@ -943,21 +741,41 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     );
     if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
 
-    let validated: Awaited<ReturnType<typeof validateSubmission>>;
-    let resolvedUniverse: ResolvedUniverse;
+    let prepared: Awaited<ReturnType<typeof preparation.getReadyPreview>>;
     try {
-      validated = await validateSubmission(rebased.request);
-      // 검증이 실패해도 재무·상한 검사에는 unionSymbols 이 필요하다 — blockers 목록이
-      // 완전하려면 이 값을 다시 구해야 한다. resolve 는 uncovered 여도 예외를 던지지
-      // 않으므로 안전하게 재사용한다.
-      resolvedUniverse = validated.ok ? validated.resolved : await resolveScheduleForRequest(rebased.request);
+      prepared = await preparation.getReadyPreview(preparationInputOf(rebased.request));
+    } catch (error) {
+      if (sendIfKrxError(reply, error)) return reply;
+      if (sendIfNotCovered(reply, error)) return reply;
+      throw error;
+    }
+
+    if (!prepared) {
+      const capacityError = checkPositionCapacity(rebased.request);
+      return {
+        request: rebased.request,
+        warnings: rebased.warnings,
+        blockers: [
+          ...validateStaticSubmission(rebased.request),
+          '동일한 조건의 데이터 준비가 아직 완료되지 않았습니다 — 미리보기를 다시 실행해 데이터 준비를 완료하세요.',
+          ...(capacityError ? [capacityError] : []),
+        ],
+      };
+    }
+
+    let validated: Awaited<ReturnType<typeof validateSubmission>>;
+    try {
+      validated = await validateSubmission(rebased.request, prepared);
     } catch (error) {
       if (sendIfKrxError(reply, error)) return reply;
       if (sendIfNotCovered(reply, error)) return reply;
       throw error;
     }
     const blockers = validated.ok ? [] : [...validated.errors];
-    const fundamentalsError = checkFundamentalsRequirement(rebased.request, resolvedUniverse.unionSymbols);
+    // 검증이 실패해도 재무 blockers 에는 unionSymbols 이 필요하다 — 완료된 준비의
+    // union 을 그대로 쓴다(예외를 던지지 않으므로 안전하게 재사용한다).
+    const unionSymbols = validated.ok ? validated.resolved.unionSymbols : preparedPreviewToResolved(prepared).unionSymbols;
+    const fundamentalsError = checkFundamentalsRequirement(rebased.request, unionSymbols);
     if (fundamentalsError) blockers.push(fundamentalsError);
     const capacityError = checkPositionCapacity(rebased.request);
     if (capacityError) blockers.push(capacityError);

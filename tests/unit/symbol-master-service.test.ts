@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
 import {
+  dailySelectionMetrics,
+  krxDailyBars,
   symbolMasterCoverage,
   symbolMasterEvents,
   symbolMasterTradingDays,
@@ -101,6 +103,83 @@ describe('getUniverseAsOf', () => {
       'DELISTED',
       'LISTED',
     ]);
+    await t.close();
+  });
+});
+
+describe('SymbolMasterService.ingestDate selection metrics', () => {
+  it('daily trade 의 cap·volume·거래대금을 표준코드 metric 으로 같은 ingest transaction 에 저장한다', async () => {
+    const t = await createTestApp();
+    const source: KrxHistoricalUniverseSource = {
+      async fetchDailyTrades(market) {
+        if (market === 'KOSDAQ') return [];
+        return [{
+          shortCode: '005930', name: '삼성전자', marketCapRaw: '350000000000000',
+          open: 71_500, high: 72_000, low: 71_000, close: 71_800, volume: 12_345_678,
+          tradingValueRaw: '123456789012345',
+        }];
+      },
+      async fetchIssueBaseInfo(market) {
+        if (market === 'KOSDAQ') return [];
+        return [{
+          standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자',
+          listedDate: '1975-06-11', marketRaw: 'KOSPI', securityGroupRaw: '주권',
+          sectionRaw: '대형주', stockKindRaw: '보통주', listedShares: '100',
+        }];
+      },
+      todayMaxEndpointCallCount() { return 0; },
+    };
+    const svc = new SymbolMasterService({
+      db: t.container.database.db, source, clock: t.container.clock, logger: t.container.logger,
+    });
+
+    await svc.ingestDate('2026-08-07');
+
+    expect(t.container.database.db.select().from(dailySelectionMetrics).all()).toEqual([{
+      date: '2026-08-07', standardCode: 'KR7005930003', marketCapKrw: '350000000000000',
+      volume: 12_345_678, tradingValueKrw: '123456789012345',
+    }]);
+    await t.close();
+  });
+});
+
+describe('SymbolMasterService.ensureSelectionMetrics', () => {
+  it('migration 이 남긴 cap-only metric 에 PIT 일봉 volume 을 보강한다', async () => {
+    const t = await createTestApp();
+    const date = '2026-08-07';
+    insertCoverage(t, date, date);
+    insertVersion(t, entry(), date, null);
+    t.container.database.db.insert(krxDailyBars).values({
+      shortCode: '005930', date, market: 'KOSPI',
+      open: 71_500, high: 72_000, low: 71_000, close: 71_800, volume: 42,
+    }).run();
+    // 0014 migration 이 symbol_master_market_caps 에서 복사한 형태다.
+    t.container.database.db.insert(dailySelectionMetrics).values({
+      date, standardCode: 'KR7005930003', marketCapKrw: '350000000000000',
+      volume: null, tradingValueKrw: null,
+    }).run();
+    const source: KrxHistoricalUniverseSource = {
+      async fetchDailyTrades(market) {
+        if (market === 'KOSDAQ') return [];
+        return [{
+          shortCode: '005930', name: '삼성전자', marketCapRaw: null,
+          open: null, high: null, low: null, close: null, volume: null,
+          tradingValueRaw: '123456789012345',
+        }];
+      },
+      async fetchIssueBaseInfo() { return []; },
+      todayMaxEndpointCallCount() { return 0; },
+    };
+    const svc = new SymbolMasterService({
+      db: t.container.database.db, source, clock: t.container.clock, logger: t.container.logger,
+    });
+
+    await svc.ensureSelectionMetrics([date]);
+
+    expect(t.container.database.db.select().from(dailySelectionMetrics).all()).toEqual([{
+      date, standardCode: 'KR7005930003', marketCapKrw: '350000000000000',
+      volume: 42, tradingValueKrw: '123456789012345',
+    }]);
     await t.close();
   });
 });

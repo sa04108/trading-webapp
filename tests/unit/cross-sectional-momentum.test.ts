@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { runBacktest } from '../../src/server/modules/backtest/domain/engine.js';
+import { createRng } from '../../src/server/modules/backtest/domain/seeded-rng.js';
 import type { ExecutionProfile } from '../../src/server/modules/backtest/domain/types.js';
 import type { CorporateAction } from '../../src/server/modules/facts/domain/fact.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import { StrategyRegistry } from '../../src/server/modules/strategy/application/strategy-registry.js';
+import type { StrategyBarContext } from '../../src/server/modules/strategy/domain/strategy.js';
 import {
   crossSectionalMomentumParameters,
   crossSectionalMomentumStrategy,
@@ -77,15 +79,22 @@ describe('crossSectionalMomentumParameters', () => {
       formationDays: 252,
       skipDays: 21,
       topN: 10,
-      rebalanceMonths: 1,
       absoluteMomentumFilter: true,
     });
+  });
+
+  it('rebalanceMonths를 공개 파라미터에서 제거하고 unknown key를 strip한다', () => {
+    const parsed = crossSectionalMomentumParameters.parse({ topN: 200, rebalanceMonths: 1 });
+    expect(parsed).not.toHaveProperty('rebalanceMonths');
+    expect(parsed.topN).toBe(200);
   });
 
   it('범위 밖 값을 거부한다', () => {
     expect(crossSectionalMomentumParameters.safeParse({ formationDays: 19 }).success).toBe(false);
     expect(crossSectionalMomentumParameters.safeParse({ skipDays: 64 }).success).toBe(false);
     expect(crossSectionalMomentumParameters.safeParse({ topN: 0 }).success).toBe(false);
+    expect(crossSectionalMomentumParameters.safeParse({ topN: 200 }).success).toBe(true);
+    expect(crossSectionalMomentumParameters.safeParse({ topN: 201 }).success).toBe(false);
   });
 });
 
@@ -126,9 +135,35 @@ describe('2단계 리밸런스 실행', () => {
     formationDays: 20,
     skipDays: 0,
     topN: 1,
-    rebalanceMonths: 1,
     absoluteMomentumFilter: true,
   };
+
+  function noRebalanceContext(): StrategyBarContext {
+    const bars = new Map<string, Candle>([['AAA', candle('AAA', 20, 1_200)]]);
+    return {
+      tsMs: START + 20 * DAY,
+      isRebalanceBar: false,
+      bars,
+      getHistory: () => buildCandles(21).filter((bar) => bar.symbol === 'AAA'),
+      portfolio: { cash: 10_000, equity: 10_000, positions: new Map() },
+      rng: createRng(1),
+      fundamentals: () => null,
+      corporateActions: () => [],
+      tradableSymbols: new Set(['AAA']),
+      selectionMetric: () => null,
+    };
+  }
+
+  it('context.isRebalanceBar가 false면 워밍업된 신호가 있어도 주문을 내지 않는다', () => {
+    const state = crossSectionalMomentumStrategy.initialize({
+      symbols: ['AAA'],
+      initialCash: 10_000,
+      rng: createRng(1),
+    });
+    expect(
+      crossSectionalMomentumStrategy.onBars(noRebalanceContext(), state, parameters).orders,
+    ).toEqual([]);
+  });
 
   it('topN 과 maxPositions 가 같아도 전량 회전이 막히지 않는다', () => {
     const result = runBacktest(crossSectionalMomentumStrategy, {
@@ -138,6 +173,7 @@ describe('2단계 리밸런스 실행', () => {
       parameters,
       randomSeed: 1,
       maxPositions: 1,
+      tradeFromTsMs: START + 20 * DAY,
     });
 
     const buys = result.fills.filter((fill) => fill.side === 'BUY');
@@ -173,6 +209,10 @@ describe('2단계 리밸런스 실행', () => {
       parameters,
       randomSeed: 1,
       maxPositions: 1,
+      universeSchedule: [
+        { fromTsMs: START + 20 * DAY, symbols: ['AAA', 'BBB'] },
+        { fromTsMs: START + 30 * DAY, symbols: ['AAA', 'BBB'] },
+      ],
     });
 
     const sellAaa = result.fills.find((fill) => fill.symbol === 'AAA' && fill.side === 'SELL');
@@ -188,8 +228,7 @@ describe('2단계 리밸런스 실행', () => {
   it('절대 모멘텀 필터가 모두 걸러내면 현금으로 남는다 (리밸런스 경계 전까지는 재평가하지 않는다)', () => {
     // AAA 는 index 18 까지 하락하다 급반등한다. 첫 리밸런스 판정 봉(index 20)의 창[0,20]은
     // 아직 마이너스라 AAA·BBB 둘 다 걸러져 후보가 없다. 하지만 index 21 부터는 롤링 창이
-    // 곧 플러스로 바뀐다 — '후보 없음'을 워밍업으로 오인해 lastRebalanceMonthKey 를 못
-    // 박지 않는 버그가 있다면, 다음 캘린더 리밸런스(2월 1일 = index 30)를 기다리지 않고
+    // 곧 플러스로 바뀐다. 공유 일정의 다음 리밸런스(2월 1일 = index 30)를 기다리지 않고
     // 반등 직후(index 21 부근)에 곧바로 매수했을 것이다. BBB 는 끝까지 하락해 항상 걸러진다.
     const candles: Candle[] = [];
     for (let index = 0; index < 40; index += 1) {
@@ -204,6 +243,10 @@ describe('2단계 리밸런스 실행', () => {
       parameters,
       randomSeed: 1,
       maxPositions: 1,
+      universeSchedule: [
+        { fromTsMs: START + 20 * DAY, symbols: ['AAA', 'BBB'] },
+        { fromTsMs: START + 30 * DAY, symbols: ['AAA', 'BBB'] },
+      ],
     });
     // 2월 1일(index 30) 이전에는 어떤 체결도 없어야 한다 — 반등에 즉시 반응하지 않는다
     expect(result.fills.every((fill) => fill.tsMs >= START + 30 * DAY)).toBe(true);
@@ -224,6 +267,7 @@ describe('2단계 리밸런스 실행', () => {
       parameters: { ...parameters, absoluteMomentumFilter: false },
       randomSeed: 1,
       maxPositions: 1,
+      tradeFromTsMs: START + 20 * DAY,
     });
     // 덜 빠진 BBB 가 1위
     expect(result.fills.filter((f) => f.side === 'BUY').map((f) => f.symbol)).toContain('BBB');
@@ -273,7 +317,6 @@ describe('멤버십 일정 반영 랭킹 (리뷰 fix — 2026-08-05)', () => {
     formationDays: 20,
     skipDays: 0,
     topN: 2,
-    rebalanceMonths: 1,
     absoluteMomentumFilter: true,
   };
 
@@ -286,7 +329,7 @@ describe('멤버십 일정 반영 랭킹 (리뷰 fix — 2026-08-05)', () => {
       randomSeed: 1,
       maxPositions: 2,
       universeSchedule: [
-        { fromTsMs: START, symbols: ['A', 'B', 'C'] },
+        { fromTsMs: START + 20 * DAY, symbols: ['A', 'B', 'C'] },
         { fromTsMs: START + 30 * DAY, symbols: ['B', 'C'] },
       ],
     });

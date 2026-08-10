@@ -3,19 +3,37 @@ import type { Logger } from '../../../shared/logger.js';
 import type { SymbolMasterEntry } from '../../market-data/domain/symbol-master.js';
 import type { SymbolMasterService } from '../../market-data/application/symbol-master-service.js';
 import type { UniverseRule } from '../../../../shared/schemas/universe-rule.js';
-import { addCalendarDays } from '../../market-data/domain/kst-date.js';
+import type { BacktestPeriod } from '../../../../shared/schemas/backtest-request.js';
+import { computeRebalanceDates as computeSharedRebalanceDates } from '../../../../shared/schemas/rebalance-interval.js';
+import { addCalendarDays, kstEndOfDayMs } from '../../market-data/domain/kst-date.js';
+import type { SelectionMetricRepository } from '../../market-data/application/selection-metric-repository.js';
+import type { CandleRepository } from '../../market-data/application/ports.js';
+import type { FactRepository } from '../../facts/application/ports.js';
+import type { FactCoverageStore } from '../../facts/application/fact-coverage-store.js';
+import type { CorporateActionCoverageStore } from '../../facts/application/corporate-action-coverage.js';
+import { derivePreparationFactYearRange } from '../../market-data/domain/fact-year-range.js';
+import { PitFactView } from '../../facts/domain/pit-fact-view.js';
+import { splitAdjustedClose } from '../../strategy/strategies/shared/adjusted-price.js';
+import {
+  compareShortCodes,
+  rankUniverseStage,
+  type UniverseStageDiagnostic,
+  type UniverseStageValue,
+} from './universe-stage-ranking.js';
 
-export interface UniverseScheduleEntry {
+export interface LegacyUniverseScheduleEntry {
   readonly rebalanceDate: string; // ISO
   /** 유니버스·시총을 실제로 읽은 거래일. 휴장이면 rebalanceDate 보다 앞선다 */
   readonly effectiveTradingDate: string;
   readonly symbols: readonly string[]; // shortCode, 시총 내림차순 상위 N
+  /** Task 7 이후 job은 전략이 실행 중 선정 지표를 재조회하지 않도록 이 pin도 보존한다. */
+  readonly members?: readonly UniverseScheduleMember[];
   /** 그날 거래불가라 후보에서 뺀 종목 수 — 조용히 빠지면 추적할 방법이 없다 */
   readonly excludedNonTradingCount: number;
 }
 
 export interface ResolvedUniverse {
-  readonly schedule: readonly UniverseScheduleEntry[];
+  readonly schedule: readonly LegacyUniverseScheduleEntry[];
   readonly unionSymbols: readonly string[];
   /**
    * unionSymbols 각 shortCode 의 종목 마스터 원본 항목(Task 4, 스펙 2026-08-06) —
@@ -31,15 +49,74 @@ export interface ResolvedUniverse {
 
 export interface UniverseRuleResolverDeps {
   readonly symbolMaster: SymbolMasterService;
+  readonly selectionMetrics?: SelectionMetricRepository;
+  readonly candles?: CandleRepository;
+  readonly facts?: FactRepository;
+  readonly factCoverage?: FactCoverageStore;
+  readonly actionCoverage?: CorporateActionCoverageStore;
   readonly logger: Logger;
 }
+
+export interface UniverseDataNeed {
+  readonly factSymbols: readonly string[];
+  readonly actionSymbols: readonly string[];
+  /** DECLINE stage 진입 후보 중 가격 warm-up이 부족한 종목. */
+  readonly priceSymbols: readonly string[];
+  readonly selectionMetricDates: readonly string[];
+  readonly priceRange: { from: string; to: string } | null;
+}
+
+export interface UniverseScheduleMember {
+  readonly symbol: string;
+  readonly standardCode: string;
+  readonly marketCapKrw: string | null;
+  readonly volume: number | null;
+  readonly tradingValueKrw: string | null;
+}
+
+export interface UniverseScheduleEntry {
+  readonly rebalanceDate: string;
+  readonly effectiveDate: string;
+  readonly fromTsMs: number;
+  readonly members: readonly UniverseScheduleMember[];
+  /** staged resolver에서도 worker 경고에 필요한 거래불가 제외 건수를 잃지 않는다. */
+  readonly excludedNonTradingCount: number;
+}
+
+export interface RebalanceDiagnostic {
+  readonly rebalanceDate: string;
+  readonly effectiveDate: string;
+  readonly stages: readonly UniverseStageDiagnostic[];
+}
+
+export type UniverseResolveAttempt =
+  | {
+      readonly kind: 'READY';
+      readonly schedule: readonly UniverseScheduleEntry[];
+      readonly diagnostics: readonly RebalanceDiagnostic[];
+      /** READY schedule 멤버를 자동 등록할 때 쓰는 실제 선정 시점의 master entry */
+      readonly unionEntries: ReadonlyMap<string, SymbolMasterEntry>;
+    }
+  | {
+      readonly kind: 'NEEDS_DATA';
+      readonly needs: UniverseDataNeed;
+      /** false면 아직 수집하지 않은 master 날짜가 있어 unionEntries가 후보 전체를 덮지 않는다. */
+      readonly candidateScopeKnown: boolean;
+      /**
+       * 현재까지의 stage를 통과했거나, 미준비 stage에서 아직 줄일 수 없는
+       * 알려진 master 후보. sync 전 symbols FK 등록과 future final-union 상한의
+       * DART 필요 계획에 모두 쓴다. `candidateScopeKnown=true`인 빈 Map만
+       * 선정 가능한 후보가 없음을 뜻한다.
+       */
+      readonly unionEntries: ReadonlyMap<string, SymbolMasterEntry>;
+    };
 
 /**
  * 일정 전체의 거래불가 제외 건수 합계 (중복 포함). 워커는 `resolve()` 결과가 아니라
  * job.universeScheduleJson 에 저장된 일정만 받으므로, 합산을 여기 한 곳에 두고
  * 양쪽이 같은 함수를 부르게 한다.
  */
-export function sumExcludedNonTrading(schedule: readonly UniverseScheduleEntry[]): number {
+export function sumExcludedNonTrading(schedule: readonly LegacyUniverseScheduleEntry[]): number {
   return schedule.reduce((sum, entry) => sum + entry.excludedNonTradingCount, 0);
 }
 
@@ -78,12 +155,18 @@ export class UniverseRuleResolver {
    * 둘 중 하나라도 없는 날짜는 getMarketCapsAt 을 부르지 않고 바로 uncoveredDates 에
    * 담는다 — 커버 밖 날짜는 어차피 제출 검증이 거부하므로, 여기서 KRX 호출 예산을
    * 미리 쓰지 않는다.
+   *
+   * MARKET_CAP 첫 단계만 보는 단순 경로라 PER·DECLINE 같은 여러 단계 규칙에는 쓸 수
+   * 없다 — 그 경로는 `resolveOrDescribeNeeds` 가 맡는다. clone-draft 가 완료된 준비
+   * 없이 이 메서드로 blockers 를 추측하던 마지막 프로덕션 호출자였는데, 잘못된
+   * 유니버스로 판정한다는 문제가 있어 없앴다(리뷰 finding, 2026-08-09) — 지금은 이
+   * 아래 테스트가 직접 부르는 것 외에는 호출자가 없다.
    */
   async resolve(
     rule: UniverseRule,
     rebalanceDates: readonly string[],
   ): Promise<ResolvedUniverse> {
-    const schedule: UniverseScheduleEntry[] = [];
+    const schedule: LegacyUniverseScheduleEntry[] = [];
     const uncoveredDates: string[] = [];
     const unionSymbols = new Set<string>();
     const unionEntries = new Map<string, SymbolMasterEntry>();
@@ -141,7 +224,9 @@ export class UniverseRuleResolver {
       }
       ranked.sort((a, b) => compareMarketCapDesc(a.marketCap, b.marketCap));
 
-      const top = ranked.slice(0, rule.topN);
+      // 이 메서드는 MARKET_CAP 첫 단계만 본다(위 docblock 참고) — stages[1..] 는
+      // 여기서 소비하지 않는다.
+      const top = ranked.slice(0, rule.stages[0]!.limit);
       const symbols = top.map(({ entry }) => entry.shortCode);
       for (const { entry } of top) {
         unionSymbols.add(entry.shortCode);
@@ -160,48 +245,398 @@ export class UniverseRuleResolver {
       uncoveredDates,
     };
   }
-}
 
-/** 대상 월의 마지막 일 — 1-indexed month(1~12) */
-function lastDayOfMonth(year: number, month: number): number {
-  return new Date(Date.UTC(year, month, 0)).getUTCDate();
-}
+  async resolveOrDescribeNeeds(
+    rule: UniverseRule,
+    period: BacktestPeriod,
+  ): Promise<UniverseResolveAttempt> {
+    const { selectionMetrics, candles, facts, factCoverage, actionCoverage } = this.requirePipelineDeps();
+    const factSymbols = new Set<string>();
+    const actionSymbols = new Set<string>();
+    const priceSymbols = new Set<string>();
+    const selectionMetricDates = new Set<string>();
+    let priceRange: { from: string; to: string } | null = null;
+    const schedule: UniverseScheduleEntry[] = [];
+    const diagnostics: RebalanceDiagnostic[] = [];
+    const unionEntries = new Map<string, SymbolMasterEntry>();
+    let candidateScopeKnown = true;
 
-/**
- * `iso` 에 `months` 개월을 더하되 일자는 `iso` 의 원래 일자를 유지한다. 대상 월이 그
- * 일자보다 짧으면(월말 넘침) 그 달의 말일로 클램프한다 — 매번 원본 `from` 을 기준으로
- * 계산하므로, 2월처럼 짧은 달을 한 번 거쳐도 이후 리밸런스가 28/29일에 눌러앉지 않는다.
- */
-function addMonthsClampingToMonthEnd(iso: string, months: number): string {
-  const year = Number(iso.slice(0, 4));
-  const month = Number(iso.slice(5, 7)); // 1~12
-  const day = Number(iso.slice(8, 10));
+    const widenPriceRange = (from: string, to: string): void => {
+      priceRange = priceRange === null
+        ? { from, to }
+        : {
+            from: from < priceRange.from ? from : priceRange.from,
+            to: to > priceRange.to ? to : priceRange.to,
+          };
+    };
 
-  const totalMonths = (month - 1) + months;
-  const targetYear = year + Math.floor(totalMonths / 12);
-  const targetMonth = ((totalMonths % 12) + 12) % 12; // 0~11
-  const clampedDay = Math.min(day, lastDayOfMonth(targetYear, targetMonth + 1));
+    for (const rebalanceDate of computeSharedRebalanceDates(period, rule.rebalanceInterval)) {
+      const effectiveDate = this.deps.symbolMaster.effectiveTradingDateWithinCoverage(rebalanceDate);
+      if (!this.deps.symbolMaster.isCovered(rebalanceDate) || effectiveDate === undefined) {
+        candidateScopeKnown = false;
+        selectionMetricDates.add(rebalanceDate);
+        continue;
+      }
 
-  const mm = String(targetMonth + 1).padStart(2, '0');
-  const dd = String(clampedDay).padStart(2, '0');
-  return `${targetYear}-${mm}-${dd}`;
-}
+      const nonTrading = new Set(
+        this.deps.symbolMaster.nonTradingDaysBetween(effectiveDate, effectiveDate)
+          .map((row) => row.shortCode),
+      );
+      const universe = this.deps.symbolMaster.getUniverseAsOf(effectiveDate);
+      const marketCandidates = [...universe.values()]
+        .filter((entry) => entry.instrumentType === 'COMMON_STOCK' && rule.markets.includes(entry.market));
+      const excludedNonTradingCount = marketCandidates
+        .filter((entry) => nonTrading.has(entry.shortCode))
+        .length;
+      let candidates = marketCandidates
+        .filter((entry) => !nonTrading.has(entry.shortCode))
+        .sort((a, b) => compareShortCodes(a.shortCode, b.shortCode));
+      const stageDiagnostics: UniverseStageDiagnostic[] = [];
+      const dateFactSymbols = new Set<string>();
+      const dateActionSymbols = new Set<string>();
+      const datePriceSymbols = new Set<string>();
+      const dateSelectionMetricDates = new Set<string>();
+      const datePrice = { range: null as { from: string; to: string } | null };
+      let hasUnresolvedStage = false;
 
-/**
- * period.from 을 첫 리밸런스 날짜로 삼아 rebalanceMonths 간격으로 이후 날짜를 만든다.
- * 거래일 보정은 하지 않는다 — 리밸런스 날짜가 휴장일이어도 getUniverseAsOf 가 직전
- * 상태를 그대로 재구성하므로 resolver 입장에서 여전히 유효한 날짜이기 때문이다.
- * period.to 를 넘는 날짜는 결과에서 제외한다.
- */
-export function computeRebalanceDates(
-  period: { from: string; to: string },
-  rebalanceMonths: number,
-): string[] {
-  const dates: string[] = [];
-  for (let k = 0; ; k += 1) {
-    const date = k === 0 ? period.from : addMonthsClampingToMonthEnd(period.from, k * rebalanceMonths);
-    if (date > period.to) break;
-    dates.push(date);
+      for (const stage of rule.stages) {
+        let stageReady = true;
+        let rows: UniverseStageValue[];
+
+        if (stage.criterion === 'TRADING_VALUE') {
+          const stageMetrics = selectionMetrics.getAt(
+            effectiveDate,
+            candidates.map((entry) => entry.standardCode),
+          );
+          if (selectionMetrics.findMissingTradingValueDates([effectiveDate]).length > 0) {
+            dateSelectionMetricDates.add(effectiveDate);
+            stageReady = false;
+          }
+          rows = candidates.map((entry) => ({
+            standardCode: entry.standardCode,
+            shortCode: entry.shortCode,
+            value: stageMetrics.get(entry.standardCode)?.tradingValueKrw ?? null,
+          }));
+        } else if (stage.criterion === 'MARKET_CAP' || stage.criterion === 'VOLUME') {
+          const stageMetrics = selectionMetrics.getAt(
+            effectiveDate,
+            candidates.map((entry) => entry.standardCode),
+          );
+          rows = candidates.map((entry) => ({
+            standardCode: entry.standardCode,
+            shortCode: entry.shortCode,
+            value: stage.criterion === 'MARKET_CAP'
+              ? stageMetrics.get(entry.standardCode)?.marketCapKrw ?? null
+              : stageMetrics.get(entry.standardCode)?.volume ?? null,
+          }));
+          // 0014 migration 은 시총만 복사하고 volume 은 ensureSelectionMetrics 의
+          // backfill 이 채운다. KRX ingest 흔적이 없는 날짜에서 값이 비면 결측 제외로
+          // 추측하지 않고 TRADING_VALUE 와 같은 신호로 metric 수집을 요구한다 —
+          // 한 번의 ingest 로 채워질 수 있는 결측이기 때문이다. ingest 된 날짜의
+          // null 은 구조적 결측이므로 그대로 제외한다.
+          if (
+            rows.some((row) => row.value === null)
+            && selectionMetrics.findMissingTradingValueDates([effectiveDate]).length > 0
+          ) {
+            dateSelectionMetricDates.add(effectiveDate);
+            stageReady = false;
+          }
+        } else if (stage.criterion === 'PER') {
+          const stageMetrics = selectionMetrics.getAt(
+            effectiveDate,
+            candidates.map((entry) => entry.standardCode),
+          );
+          // 재무 결측은 parquet 파일 존재(hasFacts)가 아니라 financial coverage 연도로
+          // 판정한다. 자본변동 전용 수집도 같은 파일에 fact 를 남기므로 파일 존재는
+          // 재무 있음을 증명하지 못한다 (fact-coverage-store.ts 주석). coverage 는
+          // 공시가 없던 연도도 시도 후 기록되므로 이 판정은 sync 한 번이면 수렴한다.
+          const requiredYears = perRequiredFactYears(effectiveDate, period);
+          const coveredBySymbol = factCoverage.getCoveredYears(
+            candidates.map((entry) => entry.shortCode),
+          );
+          const missing = candidates.filter((entry) => {
+            const covered = new Set(coveredBySymbol.get(entry.shortCode) ?? []);
+            return requiredYears.some((year) => !covered.has(year));
+          });
+          for (const entry of missing) dateFactSymbols.add(entry.shortCode);
+          if (missing.length > 0) stageReady = false;
+
+          const loaded = await facts.getFacts({
+            scope: 'SYMBOL',
+            keys: candidates.map((entry) => entry.shortCode),
+          });
+          const view = new PitFactView(loaded);
+          view.advanceTo(kstEndOfDayMs(effectiveDate));
+          rows = exactPerRankingRows(candidates, stageMetrics, view);
+        } else {
+          const codes = candidates.map((entry) => entry.shortCode);
+          // 조회 하한 없이 부르면 후보 × 리밸런스 날짜마다 전체 일봉 이력을 읽는다.
+          // 보수 범위(requiredFrom)만 있으면 N봉 판정과 수익률 계산에 충분하다.
+          const requiredFrom = addCalendarDays(
+            effectiveDate,
+            -(stage.lookbackTradingDays * 2 + 14),
+          );
+          const histories = await loadCandleHistories(candles, codes, requiredFrom, effectiveDate);
+          const priceMissingCodes = codes.filter(
+            (code) => (histories.get(code)?.length ?? 0) < stage.lookbackTradingDays,
+          );
+          const warmupMissing = priceMissingCodes.length > 0;
+          // symbol_master_coverage 는 해당 날짜의 두 KRX 시장 응답을 실제로 받아
+          // 일봉까지 저장한 뒤에만 닫힌다. 따라서 보수 범위 전체가 covered인데도
+          // N봉이 안 되는 종목은 재수집 가능한 누락이 아니라 신규 상장·장기 거래정지
+          // 같은 구조적 짧은 이력이다. 이 경우 value=null로 랭킹에서 제외하고 다시
+          // priceSymbols를 내지 않아 preparation이 같은 범위를 영원히 반복하지 않게 한다.
+          const priceFetchRequired = warmupMissing
+            && !this.deps.symbolMaster.isRangeCovered(requiredFrom, effectiveDate);
+          if (priceFetchRequired) {
+            datePrice.range = datePrice.range === null
+              ? { from: requiredFrom, to: effectiveDate }
+              : {
+                  from: requiredFrom < datePrice.range.from ? requiredFrom : datePrice.range.from,
+                  to: effectiveDate > datePrice.range.to ? effectiveDate : datePrice.range.to,
+                };
+            for (const code of priceMissingCodes) datePriceSymbols.add(code);
+            stageReady = false;
+          }
+
+          let actualFrom = effectiveDate;
+          for (const code of codes) {
+            const history = (histories.get(code) ?? []).slice(-stage.lookbackTradingDays);
+            const first = history[0];
+            if (first !== undefined) {
+              const firstDate = new Date(first.tsMs).toISOString().slice(0, 10);
+              if (firstDate < actualFrom) actualFrom = firstDate;
+            }
+          }
+          // 아직 가격 범위를 덜 조회했다면 짧은 후보도 다음 재해소에서 N봉을 채울 수
+          // 있으므로 보수 범위의 action을 함께 준비한다. 반대로 전 범위를 이미 조회한
+          // 구조적 짧은 이력은 이 stage에서 확실히 탈락하므로 DART까지 낭비하지 않는다.
+          const actionCandidateCodes = priceFetchRequired
+            ? codes
+            : codes.filter((code) => !priceMissingCodes.includes(code));
+          const requiredYears = yearsBetween(priceFetchRequired ? requiredFrom : actualFrom, effectiveDate);
+          const coveredBySymbol = actionCoverage.getCoveredYears(actionCandidateCodes);
+          const gapsBySymbol = actionCoverage.getGapYears(actionCandidateCodes);
+          for (const code of actionCandidateCodes) {
+            const covered = new Set(coveredBySymbol.get(code) ?? []);
+            const gaps = new Set(gapsBySymbol.get(code) ?? []);
+            if (requiredYears.some((year) => !covered.has(year) || gaps.has(year))) {
+              dateActionSymbols.add(code);
+              stageReady = false;
+            }
+          }
+
+          const loaded = await facts.getFacts({ scope: 'SYMBOL', keys: codes });
+          const view = new PitFactView(loaded);
+          rows = candidates.map((entry) => {
+            const history = (histories.get(entry.shortCode) ?? []).slice(-stage.lookbackTradingDays);
+            if (history.length !== stage.lookbackTradingDays) {
+              return { standardCode: entry.standardCode, shortCode: entry.shortCode, value: null };
+            }
+            const actions = view.corporateActions(entry.shortCode, kstEndOfDayMs(effectiveDate));
+            const first = splitAdjustedClose(history, actions, 0);
+            const last = splitAdjustedClose(history, actions, history.length - 1);
+            const value = first === null || last === null || first <= 0
+              ? null
+              : (last / first) - 1;
+            return { standardCode: entry.standardCode, shortCode: entry.shortCode, value };
+          });
+        }
+
+        const ranked = rankUniverseStage(stage, rows);
+        stageDiagnostics.push(ranked.diagnostic);
+        if (!stageReady) {
+          // 이 stage의 순위가 미상이므로 현재 input 후보 전체가 이후
+          // final-union의 보수적 상한이다.
+          hasUnresolvedStage = true;
+        } else if (hasUnresolvedStage) {
+          // 앞 stage의 순위가 바뀌 수 있으므로 non-empty 후속 선택은 상한을
+          // 줄일 수 없다. 다만 완전한 상한 전체에서 eligible이 0이면
+          // 앞 stage 결과와 무관하게 final empty라는 단조로운 증명이다.
+          if (ranked.diagnostic.eligibleCount === 0) candidates = [];
+        } else {
+          const byStandardCode = new Map(candidates.map((entry) => [entry.standardCode, entry]));
+          candidates = ranked.selectedCodes.flatMap((code) => {
+            const entry = byStandardCode.get(code);
+            return entry === undefined ? [] : [entry];
+          });
+        }
+      }
+
+      // 이 날짜의 완전한 후보 상한이 비었다면 앞 unresolved stage가
+      // 남긴 needs는 final 선정을 바꿀 수 없는 stale work다. 날짜별로만 버려
+      // 다른 rebalance date의 non-empty 상한 needs는 지우지 않는다.
+      if (candidates.length > 0) {
+        for (const symbol of dateFactSymbols) factSymbols.add(symbol);
+        for (const symbol of dateActionSymbols) actionSymbols.add(symbol);
+        for (const symbol of datePriceSymbols) priceSymbols.add(symbol);
+        for (const date of dateSelectionMetricDates) selectionMetricDates.add(date);
+        if (datePrice.range !== null) widenPriceRange(datePrice.range.from, datePrice.range.to);
+      }
+
+      const finalMetrics = selectionMetrics.getAt(
+        effectiveDate,
+        candidates.map((entry) => entry.standardCode),
+      );
+      for (const entry of candidates) {
+        if (!unionEntries.has(entry.shortCode)) unionEntries.set(entry.shortCode, entry);
+      }
+      diagnostics.push({ rebalanceDate, effectiveDate, stages: stageDiagnostics });
+      schedule.push({
+        rebalanceDate,
+        effectiveDate,
+        fromTsMs: Date.parse(`${rebalanceDate}T00:00:00Z`),
+        excludedNonTradingCount,
+        members: candidates.map((entry) => {
+          const metric = finalMetrics.get(entry.standardCode);
+          return {
+            symbol: entry.shortCode,
+            standardCode: entry.standardCode,
+            marketCapKrw: metric?.marketCapKrw?.toString() ?? null,
+            volume: metric?.volume ?? null,
+            tradingValueKrw: metric?.tradingValueKrw?.toString() ?? null,
+          };
+        }),
+      });
+    }
+
+    if (
+      factSymbols.size > 0
+      || actionSymbols.size > 0
+      || priceSymbols.size > 0
+      || selectionMetricDates.size > 0
+      || priceRange !== null
+    ) {
+      return {
+        kind: 'NEEDS_DATA',
+        candidateScopeKnown,
+        unionEntries,
+        needs: {
+          factSymbols: [...factSymbols].sort(),
+          actionSymbols: [...actionSymbols].sort(),
+          priceSymbols: [...priceSymbols].sort(),
+          selectionMetricDates: [...selectionMetricDates].sort(),
+          priceRange,
+        },
+      };
+    }
+    return { kind: 'READY', schedule, diagnostics, unionEntries };
   }
-  return dates;
+
+  private requirePipelineDeps(): Required<Pick<
+    UniverseRuleResolverDeps,
+    'selectionMetrics' | 'candles' | 'facts' | 'factCoverage' | 'actionCoverage'
+  >> {
+    const { selectionMetrics, candles, facts, factCoverage, actionCoverage } = this.deps;
+    if (!selectionMetrics || !candles || !facts || !factCoverage || !actionCoverage) {
+      throw new Error('유니버스 선정 파이프라인 의존성이 연결되지 않았습니다.');
+    }
+    return { selectionMetrics, candles, facts, factCoverage, actionCoverage };
+  }
 }
+
+/**
+ * effectiveDate 시점 TTM 순이익에 필요한 재무 coverage 연도. 공시 지연 때문에 직전
+ * 사업연도까지 본다. 하한은 준비 작업이 실제로 동기화하는 계획 범위
+ * (`derivePreparationFactYearRange(period, 4)`)로 클램프한다 — 그보다 이른 연도를
+ * 요구하면 어떤 sync 도 채울 수 없어 준비 작업이 같은 needs 를 반복하다 실패한다.
+ */
+function perRequiredFactYears(effectiveDate: string, period: BacktestPeriod): number[] {
+  const planRange = derivePreparationFactYearRange(period, 4);
+  const effectiveYear = Number(effectiveDate.slice(0, 4));
+  const fromYear = Math.max(effectiveYear - 1, planRange.fromYear);
+  const years: number[] = [];
+  for (let year = fromYear; year <= effectiveYear; year += 1) years.push(year);
+  return years;
+}
+
+function yearsBetween(from: string, to: string): number[] {
+  const years: number[] = [];
+  for (let year = Number(from.slice(0, 4)); year <= Number(to.slice(0, 4)); year += 1) {
+    years.push(year);
+  }
+  return years;
+}
+
+interface PositiveFraction {
+  readonly numerator: bigint;
+  readonly denominator: bigint;
+}
+
+function positiveNumberFraction(value: number | null): PositiveFraction | null {
+  if (value === null || !Number.isFinite(value) || value <= 0) return null;
+  const [coefficient, exponentText] = value.toString().toLowerCase().split('e');
+  const exponent = exponentText === undefined ? 0 : Number(exponentText);
+  const [whole, fraction = ''] = coefficient!.split('.');
+  const digits = `${whole}${fraction}`;
+  if (!/^\d+$/.test(digits)) return null;
+  let numerator = BigInt(digits);
+  let denominator = 10n ** BigInt(fraction.length);
+  if (exponent > 0) numerator *= 10n ** BigInt(exponent);
+  if (exponent < 0) denominator *= 10n ** BigInt(-exponent);
+  return { numerator, denominator };
+}
+
+function exactPerRankingRows(
+  candidates: readonly SymbolMasterEntry[],
+  metrics: ReturnType<SelectionMetricRepository['getAt']>,
+  view: PitFactView,
+): UniverseStageValue[] {
+  const ratios = candidates.flatMap((entry) => {
+    const cap = metrics.get(entry.standardCode)?.marketCapKrw ?? null;
+    const income = positiveNumberFraction(view.fundamentals(entry.shortCode)?.ttm('NET_INCOME') ?? null);
+    if (cap === null || cap <= 0n || income === null) return [];
+    return [{
+      entry,
+      numerator: cap * income.denominator,
+      denominator: income.numerator,
+    }];
+  });
+  ratios.sort((a, b) => {
+    const left = a.numerator * b.denominator;
+    const right = b.numerator * a.denominator;
+    if (left !== right) return left < right ? -1 : 1;
+    return compareShortCodes(a.entry.shortCode, b.entry.shortCode);
+  });
+  const rankByCode = new Map<string, number>();
+  let rank = 0;
+  for (let index = 0; index < ratios.length; index += 1) {
+    if (index > 0) {
+      const previous = ratios[index - 1]!;
+      const current = ratios[index]!;
+      if (previous.numerator * current.denominator !== current.numerator * previous.denominator) {
+        rank += 1;
+      }
+    }
+    rankByCode.set(ratios[index]!.entry.standardCode, rank);
+  }
+  return candidates.map((entry) => ({
+    standardCode: entry.standardCode,
+    shortCode: entry.shortCode,
+    value: rankByCode.get(entry.standardCode) ?? null,
+  }));
+}
+
+async function loadCandleHistories(
+  candles: CandleRepository,
+  symbols: readonly string[],
+  fromDate: string,
+  effectiveDate: string,
+): Promise<Map<string, import('../../market-data/domain/candle.js').Candle[]>> {
+  const histories = new Map<string, import('../../market-data/domain/candle.js').Candle[]>();
+  for await (const candle of candles.getCandles({
+    market: 'KR',
+    timeframe: '1d',
+    symbols,
+    // fromDate 의 KST 자정부터 — 직전 달력일의 끝 다음 ms 가 그 경계다.
+    fromTsMs: kstEndOfDayMs(addCalendarDays(fromDate, -1)) + 1,
+    toTsMs: kstEndOfDayMs(effectiveDate),
+  })) {
+    const list = histories.get(candle.symbol) ?? [];
+    list.push(candle);
+    histories.set(candle.symbol, list);
+  }
+  for (const list of histories.values()) list.sort((a, b) => a.tsMs - b.tsMs);
+  return histories;
+}
+

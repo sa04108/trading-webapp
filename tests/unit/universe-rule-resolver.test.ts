@@ -5,11 +5,11 @@ import {
   SymbolMasterService,
   type SymbolMasterServiceDeps,
 } from '../../src/server/modules/market-data/application/symbol-master-service.js';
-import {
-  computeRebalanceDates,
-  UniverseRuleResolver,
-} from '../../src/server/modules/backtest/application/universe-rule-resolver.js';
+import { UniverseRuleResolver } from '../../src/server/modules/backtest/application/universe-rule-resolver.js';
 import type { UniverseRule } from '../../src/shared/schemas/universe-rule.js';
+import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
+import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
+import type { DailySelectionMetric } from '../../src/server/modules/market-data/application/selection-metric-repository.js';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
 import {
   baseInfoFixture,
@@ -103,11 +103,17 @@ async function ingestFixtureUniverse(ctx: Ctx): Promise<void> {
 }
 
 describe('UniverseRuleResolver.resolve', () => {
+  const marketCapRule = (limit: number): UniverseRule => ({
+    markets: ['KOSPI'],
+    stages: [{ criterion: 'MARKET_CAP', limit }],
+    rebalanceInterval: { value: 1, unit: 'MONTH' },
+  });
+
   it('시총 상위 N 을 내림차순으로 고르고, 시장·instrumentType·시총 유무로 거른다', async () => {
     const ctx = await setup();
     await ingestFixtureUniverse(ctx);
 
-    const rule: UniverseRule = { markets: ['KOSPI'], topN: 3, sortKey: 'MKTCAP' };
+    const rule = marketCapRule(3);
     const result = await ctx.resolver.resolve(rule, ['2023-01-02']);
 
     // A(500) > B(300) > C(200) 순 — D 는 시장, F 는 instrumentType, E 는 시총 없음으로 제외된다.
@@ -144,7 +150,7 @@ describe('UniverseRuleResolver.resolve', () => {
     const ctx = await setup();
     await ingestFixtureUniverse(ctx);
 
-    const rule: UniverseRule = { markets: ['KOSPI'], topN: 3, sortKey: 'MKTCAP' };
+    const rule = marketCapRule(3);
     const before = ctx.fake.requests.length;
     const result = await ctx.resolver.resolve(rule, ['2023-01-02', '2023-02-01']);
     const duringResolve = ctx.fake.requests.slice(before);
@@ -171,7 +177,7 @@ describe('UniverseRuleResolver.resolve', () => {
     await ingestFixtureUniverse(ctx); // 2023-01-02 거래일 수집
     await ctx.svc.ingestDate('2023-01-03'); // fake 서버 기본값(빈 응답) → 휴장으로 수집된다
 
-    const rule: UniverseRule = { markets: ['KOSPI'], topN: 3, sortKey: 'MKTCAP' };
+    const rule = marketCapRule(3);
     const result = await ctx.resolver.resolve(rule, ['2023-01-03']);
 
     expect(result.uncoveredDates).toEqual([]);
@@ -193,7 +199,7 @@ describe('UniverseRuleResolver.resolve', () => {
     // 휴장만 수집된 상태 — coverage 는 생기지만 거래일 기록은 하나도 없다
     await ctx.svc.ingestDate('2023-01-03');
 
-    const rule: UniverseRule = { markets: ['KOSPI'], topN: 3, sortKey: 'MKTCAP' };
+    const rule = marketCapRule(3);
     const result = await ctx.resolver.resolve(rule, ['2023-01-03']);
 
     expect(result.uncoveredDates).toEqual(['2023-01-03']);
@@ -212,7 +218,7 @@ describe('UniverseRuleResolver.resolve', () => {
     expect(ctx.svc.effectiveTradingDate('2026-01-01')).toBe('2023-01-02');
     expect(ctx.svc.isCovered('2026-01-01')).toBe(false);
 
-    const rule: UniverseRule = { markets: ['KOSPI'], topN: 3, sortKey: 'MKTCAP' };
+    const rule = marketCapRule(3);
     const result = await ctx.resolver.resolve(rule, ['2026-01-01']);
 
     expect(result.uncoveredDates).toEqual(['2026-01-01']);
@@ -237,7 +243,7 @@ describe('UniverseRuleResolver.resolve', () => {
     // 것이다 — 두 날짜가 안 이어져 있다는 사실은 이 값만으로는 알 수 없다.
     expect(ctx.svc.effectiveTradingDate('2023-06-01')).toBe('2023-01-02');
 
-    const rule: UniverseRule = { markets: ['KOSPI'], topN: 3, sortKey: 'MKTCAP' };
+    const rule = marketCapRule(3);
     const result = await ctx.resolver.resolve(rule, ['2023-06-01']);
 
     expect(result.uncoveredDates).toEqual(['2023-06-01']);
@@ -247,21 +253,566 @@ describe('UniverseRuleResolver.resolve', () => {
   });
 });
 
-describe('computeRebalanceDates', () => {
-  it('월말 시작일은 각 리밸런스마다 그 달의 말일로 자연 클램프된다', () => {
-    const dates = computeRebalanceDates({ from: '2023-01-31', to: '2023-12-31' }, 1);
-    expect(dates).toEqual([
-      '2023-01-31', '2023-02-28', '2023-03-31', '2023-04-30', '2023-05-31', '2023-06-30',
-      '2023-07-31', '2023-08-31', '2023-09-30', '2023-10-31', '2023-11-30', '2023-12-31',
+const PIPELINE_DATE = '2025-05-15';
+const PIPELINE_TS = Date.parse(`${PIPELINE_DATE}T00:00:00Z`);
+const PIPELINE_ENTRIES = [
+  { standardCode: 'KR7000001001', shortCode: '000001', name: '하나', market: 'KOSPI', sharesOutstanding: '1', instrumentType: 'COMMON_STOCK', listedDate: null },
+  { standardCode: 'KR7000002002', shortCode: '000002', name: '둘', market: 'KOSPI', sharesOutstanding: '1', instrumentType: 'COMMON_STOCK', listedDate: null },
+  { standardCode: 'KR7000003003', shortCode: '000003', name: '셋', market: 'KOSPI', sharesOutstanding: '1', instrumentType: 'COMMON_STOCK', listedDate: null },
+] as const;
+
+const pipelineMetrics: DailySelectionMetric[] = PIPELINE_ENTRIES.map((entry, index) => ({
+  date: PIPELINE_DATE,
+  standardCode: entry.standardCode,
+  marketCapKrw: [300n, 200n, 100n][index]!,
+  volume: [3_000, 2_000, 1_000][index]!,
+  tradingValueKrw: [30_000n, 20_000n, 10_000n][index]!,
+}));
+
+function netIncomeFacts(symbol: string, quarterly: readonly number[], disclosedAt = PIPELINE_TS - 1): Fact[] {
+  return quarterly.map((value, index) => ({
+    scope: 'SYMBOL',
+    key: symbol,
+    field: 'NET_INCOME',
+    periodKey: ['2024Q2', '2024Q3', '2024Q4', '2025Q1'][index]!,
+    asOfTsMs: disclosedAt,
+    value,
+    unit: 'KRW',
+  }));
+}
+
+function pipelineRule(stages: UniverseRule['stages']): UniverseRule {
+  return {
+    markets: ['KOSPI'],
+    stages,
+    rebalanceInterval: { unit: 'MONTH', value: 1 },
+  };
+}
+
+function makePipelineResolver(options: {
+  metrics?: readonly DailySelectionMetric[];
+  missingTradingValueDates?: readonly string[];
+  facts?: readonly Fact[];
+  factsPresent?: readonly string[];
+  financialCoverage?: ReadonlyMap<string, readonly number[]>;
+  candles?: readonly Candle[];
+  actionCoverage?: ReadonlyMap<string, readonly number[]>;
+  actionGaps?: ReadonlyMap<string, readonly number[]>;
+  priceRangeCovered?: boolean;
+  masterCovered?: boolean;
+  effectiveTradingDate?: (rebalanceDate: string) => string | undefined;
+  metricReads?: string[][];
+} = {}): UniverseRuleResolver {
+  const metrics = options.metrics ?? pipelineMetrics;
+  const facts = options.facts ?? [
+    ...netIncomeFacts('000001', [1]),
+    ...netIncomeFacts('000002', [5, 5, 5, 5]),
+    ...netIncomeFacts('000003', [5, 5, 5, 5]),
+  ];
+  const factsPresent = new Set(options.factsPresent ?? PIPELINE_ENTRIES.map((entry) => entry.shortCode));
+  // PER 결측 판정은 financial coverage 연도를 본다 — factsPresent 종목은 PIPELINE_DATE
+  // (2025) 기준 필요 연도 [2024, 2025]를 모두 덮은 것으로 둔다.
+  const financialCoverage = options.financialCoverage ?? new Map(
+    [...factsPresent].map((code) => [code, [2024, 2025] as readonly number[]]),
+  );
+  const candles = options.candles ?? [];
+  const actionCoverage = options.actionCoverage ?? new Map(
+    PIPELINE_ENTRIES.map((entry) => [entry.shortCode, [2025] as const]),
+  );
+  const actionGaps = options.actionGaps ?? new Map<string, readonly number[]>();
+
+  return new UniverseRuleResolver({
+    symbolMaster: {
+      isCovered: () => options.masterCovered ?? true,
+      isRangeCovered: () => options.priceRangeCovered ?? false,
+      effectiveTradingDateWithinCoverage: (rebalanceDate: string) => options.masterCovered === false
+        ? undefined
+        : options.effectiveTradingDate?.(rebalanceDate) ?? PIPELINE_DATE,
+      getUniverseAsOf: () => new Map(PIPELINE_ENTRIES.map((entry) => [entry.standardCode, entry])),
+      getMarketCapsAt: async () => new Map(metrics.flatMap((row) =>
+        row.marketCapKrw === null ? [] : [[row.standardCode, row.marketCapKrw.toString()]],
+      )),
+      nonTradingDaysBetween: () => [],
+    } as never,
+    selectionMetrics: {
+      getAt: (date: string, standardCodes: readonly string[]) => {
+        options.metricReads?.push([...standardCodes]);
+        return new Map(metrics
+          .filter((row) => row.date === date && standardCodes.includes(row.standardCode))
+          .map((row) => [row.standardCode, row]));
+      },
+      findMissingTradingValueDates: () => [...(options.missingTradingValueDates ?? [])],
+    } as never,
+    facts: {
+      getFacts: async ({ keys }: { keys?: readonly string[] }) => facts.filter((fact) => keys?.includes(fact.key) ?? true),
+      hasFacts: (_scope: 'SYMBOL' | 'MACRO', key: string) => factsPresent.has(key),
+      symbolsWithFacts: () => factsPresent,
+      saveFacts: async () => undefined,
+    },
+    factCoverage: {
+      getCoveredYears: (codes?: readonly string[]) => codes === undefined
+        ? financialCoverage
+        : new Map([...financialCoverage].filter(([code]) => codes.includes(code))),
+      addCoveredYears: () => undefined,
+    },
+    candles: {
+      async *getCandles(query: { symbols: readonly string[]; fromTsMs?: number; toTsMs?: number }) {
+        for (const candle of candles) {
+          if (
+            query.symbols.includes(candle.symbol)
+            && (query.fromTsMs === undefined || candle.tsMs >= query.fromTsMs)
+            && (query.toTsMs === undefined || candle.tsMs <= query.toTsMs)
+          ) yield candle;
+        }
+      },
+      getTimestamps: async () => [],
+    },
+    actionCoverage: {
+      getCoveredYears: () => actionCoverage,
+      getGapYears: () => actionGaps,
+      addCoveredYears: () => undefined,
+      addGapYears: () => undefined,
+    },
+    logger: { warn: () => {}, info: () => {}, error: () => {}, debug: () => {} } as never,
+  });
+}
+
+describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
+  const period = { from: PIPELINE_DATE, to: PIPELINE_DATE };
+
+  it('master 날짜를 아직 수집하지 않았으면 빈 후보 Map을 실제 빈 scope로 확정하지 않는다', async () => {
+    const resolver = makePipelineResolver({ masterCovered: false });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'MARKET_CAP', limit: 1 }]),
+      period,
+    );
+
+    expect(result).toMatchObject({
+      kind: 'NEEDS_DATA',
+      candidateScopeKnown: false,
+      unionEntries: new Map(),
+      needs: { selectionMetricDates: [PIPELINE_DATE] },
+    });
+  });
+
+  it('stage 순서를 그대로 적용해 MARKET_CAP→PER와 PER→MARKET_CAP 결과가 달라진다', async () => {
+    const resolver = makePipelineResolver();
+    const capThenPer = await resolver.resolveOrDescribeNeeds(pipelineRule([
+      { criterion: 'MARKET_CAP', limit: 2 },
+      { criterion: 'PER', limit: 1 },
+    ]), period);
+    const perThenCap = await resolver.resolveOrDescribeNeeds(pipelineRule([
+      { criterion: 'PER', limit: 1 },
+      { criterion: 'MARKET_CAP', limit: 1 },
+    ]), period);
+
+    expect(capThenPer.kind).toBe('READY');
+    expect(perThenCap.kind).toBe('READY');
+    if (capThenPer.kind !== 'READY' || perThenCap.kind !== 'READY') {
+      throw new Error('fixture coverage가 완전해야 합니다.');
+    }
+    expect(capThenPer.schedule[0]?.members.map((member) => member.symbol)).toEqual(['000002']);
+    expect(perThenCap.schedule[0]?.members.map((member) => member.symbol)).toEqual(['000003']);
+    expect(capThenPer.diagnostics[0]?.stages[1]).toMatchObject({
+      inputCount: 2,
+      eligibleCount: 1,
+      selectedCount: 1,
+      excludedMissingCount: 1,
+    });
+  });
+
+  it('각 stage와 READY pin은 그 시점의 현재 후보만 선정 지표 저장소에서 읽는다', async () => {
+    const metricReads: string[][] = [];
+    const resolver = makePipelineResolver({ metricReads });
+    const result = await resolver.resolveOrDescribeNeeds(pipelineRule([
+      { criterion: 'MARKET_CAP', limit: 2 },
+      { criterion: 'PER', limit: 1 },
+    ]), period);
+
+    expect(result.kind).toBe('READY');
+    expect(metricReads).toEqual([
+      ['KR7000001001', 'KR7000002002', 'KR7000003003'],
+      ['KR7000001001', 'KR7000002002'],
+      ['KR7000002002'],
     ]);
   });
 
-  it('rebalanceMonths 간격으로 같은 일자를 유지하고, to 초과 날짜는 제외한다', () => {
-    const dates = computeRebalanceDates({ from: '2023-01-15', to: '2023-04-15' }, 3);
-    expect(dates).toEqual(['2023-01-15', '2023-04-15']);
+  it('PER은 effective KST date가 끝난 뒤 다음 KST 날짜에 공시된 재집계를 제외한다', async () => {
+    const nextKstDateRestatement = netIncomeFacts(
+      '000001',
+      [1_000, 1_000, 1_000, 1_000],
+      Date.parse('2025-05-15T15:00:00.000Z'),
+    );
+    const resolver = makePipelineResolver({
+      facts: [
+        ...netIncomeFacts('000001', [5, 5, 5, 5]),
+        ...netIncomeFacts('000002', [-5, -5, -5, -5]),
+        ...netIncomeFacts('000003', [5, 5, 5, 5]),
+        ...nextKstDateRestatement,
+      ],
+    });
 
-    // 다음 리밸런스(2023-07-15)가 to 를 넘으므로 목록은 여기서 끝난다.
-    const bounded = computeRebalanceDates({ from: '2023-01-01', to: '2023-01-31' }, 1);
-    expect(bounded).toEqual(['2023-01-01']);
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'PER', limit: 3 }]),
+      period,
+    );
+    expect(result.kind).toBe('READY');
+    if (result.kind !== 'READY') throw new Error('fixture coverage가 완전해야 합니다.');
+    // 000002는 TTM 순이익이 0 이하라 제외. 다음 KST 날짜의 재집계가 보였다면
+    // 000001의 PER이 15에서 0.075로 낮아져 000003보다 먼저 선정된다.
+    expect(result.schedule[0]?.members.map((member) => member.symbol)).toEqual(['000003', '000001']);
+    expect(result.diagnostics[0]?.stages[0]).toMatchObject({
+      inputCount: 3,
+      eligibleCount: 2,
+      selectedCount: 2,
+      excludedMissingCount: 1,
+    });
+  });
+
+  it('모든 날짜와 아직 좁힐 수 없는 후속 단계의 데이터 필요량을 합집합으로 반환한다', async () => {
+    const resolver = makePipelineResolver({
+      missingTradingValueDates: [PIPELINE_DATE],
+      factsPresent: [],
+      candles: [],
+      actionCoverage: new Map(),
+    });
+    const result = await resolver.resolveOrDescribeNeeds(pipelineRule([
+      { criterion: 'TRADING_VALUE', limit: 3 },
+      { criterion: 'PER', limit: 2 },
+      { criterion: 'DECLINE', limit: 1, lookbackTradingDays: 3 },
+    ]), period);
+
+    expect(result).toMatchObject({
+      kind: 'NEEDS_DATA',
+      candidateScopeKnown: true,
+      needs: {
+        factSymbols: ['000001', '000002', '000003'],
+        actionSymbols: ['000001', '000002', '000003'],
+        selectionMetricDates: [PIPELINE_DATE],
+      },
+    });
+    if (result.kind !== 'NEEDS_DATA') throw new Error('fixture는 데이터 부족이어야 합니다.');
+    expect([...result.unionEntries.keys()]).toEqual(['000001', '000002', '000003']);
+    expect(result.needs.priceRange).not.toBeNull();
+  });
+
+  it('첫 unresolved stage의 후보 상한을 후속 ready stage의 non-empty 선택으로 좁히지 않는다', async () => {
+    const resolver = makePipelineResolver({ missingTradingValueDates: [PIPELINE_DATE] });
+
+    const result = await resolver.resolveOrDescribeNeeds(pipelineRule([
+      { criterion: 'TRADING_VALUE', limit: 1 },
+      { criterion: 'MARKET_CAP', limit: 1 },
+    ]), period);
+
+    expect(result.kind).toBe('NEEDS_DATA');
+    if (result.kind !== 'NEEDS_DATA') throw new Error('fixture의 첫 stage는 unresolved여야 합니다.');
+    expect([...result.unionEntries.keys()]).toEqual(['000001', '000002', '000003']);
+    expect(result.needs.selectionMetricDates).toEqual([PIPELINE_DATE]);
+  });
+
+  it('ingest 안 된 날짜의 VOLUME 결측은 제외 대신 metric 수집을 요구한다', async () => {
+    // 0014 migration 직후: 시총만 복사돼 volume/거래대금이 비어 있다. 한 번의 KRX
+    // ingest 로 채워질 결측이므로 eligible 0 실패가 아니라 NEEDS_DATA 여야 한다.
+    const resolver = makePipelineResolver({
+      metrics: pipelineMetrics.map((row) => ({ ...row, volume: null, tradingValueKrw: null })),
+      missingTradingValueDates: [PIPELINE_DATE],
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'VOLUME', limit: 2 }]),
+      period,
+    );
+
+    expect(result).toMatchObject({ kind: 'NEEDS_DATA' });
+    if (result.kind !== 'NEEDS_DATA') throw new Error('NEEDS_DATA 여야 한다');
+    expect(result.needs.selectionMetricDates).toEqual([PIPELINE_DATE]);
+  });
+
+  it('ingest 된 날짜의 VOLUME null 은 구조적 결측으로 확정해 제외한다', async () => {
+    const metrics = pipelineMetrics.map((row, index) => (
+      index === 2 ? { ...row, volume: null } : row
+    ));
+    const resolver = makePipelineResolver({ metrics, missingTradingValueDates: [] });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'VOLUME', limit: 3 }]),
+      period,
+    );
+
+    expect(result).toMatchObject({ kind: 'READY' });
+    if (result.kind !== 'READY') throw new Error('READY 여야 한다');
+    expect(result.diagnostics[0]?.stages[0]).toMatchObject({
+      inputCount: 3,
+      eligibleCount: 2,
+      excludedMissingCount: 1,
+    });
+  });
+
+  it('자본변동만 받은 종목은 parquet 이 있어도 재무 coverage 가 없으면 NEEDS_DATA 로 요구한다', async () => {
+    // hasFacts(파일 존재)로 판정하던 회귀: SPLIT_RATIO 만 저장된 종목이 재무 있음으로
+    // 오인돼 PER 결측 제외됐다. factsPresent 는 세 종목 모두 파일이 있다고 답한다.
+    const resolver = makePipelineResolver({
+      financialCoverage: new Map([
+        ['000001', [2024, 2025]],
+        ['000002', [2024, 2025]],
+      ]),
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'PER', limit: 2 }]),
+      period,
+    );
+
+    expect(result).toMatchObject({ kind: 'NEEDS_DATA' });
+    if (result.kind !== 'NEEDS_DATA') throw new Error('NEEDS_DATA 여야 한다');
+    expect(result.needs.factSymbols).toEqual(['000003']);
+  });
+
+  it('재무 coverage 가 필요 연도 일부만 덮으면 결측으로 본다', async () => {
+    // 2025-05-15 효력일의 TTM 은 공시 지연 때문에 2024 사업연도까지 필요하다.
+    const resolver = makePipelineResolver({
+      financialCoverage: new Map([
+        ['000001', [2024, 2025]],
+        ['000002', [2024, 2025]],
+        ['000003', [2025]],
+      ]),
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'PER', limit: 2 }]),
+      period,
+    );
+
+    expect(result).toMatchObject({ kind: 'NEEDS_DATA' });
+    if (result.kind !== 'NEEDS_DATA') throw new Error('NEEDS_DATA 여야 한다');
+    expect(result.needs.factSymbols).toEqual(['000003']);
+  });
+
+  it('후속 ready stage가 완전한 후보 상한의 eligible 0을 증명하면 이전 needs를 버린다', async () => {
+    const resolver = makePipelineResolver({
+      factsPresent: [],
+      metrics: pipelineMetrics.map((row) => ({ ...row, marketCapKrw: null })),
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(pipelineRule([
+      { criterion: 'PER', limit: 1 },
+      { criterion: 'MARKET_CAP', limit: 1 },
+    ]), period);
+
+    expect(result.kind).toBe('READY');
+    if (result.kind !== 'READY') throw new Error('완전한 empty 증명은 stale needs를 남기면 안 됩니다.');
+    expect(result.schedule[0]?.members).toEqual([]);
+    expect([...result.unionEntries.keys()]).toEqual([]);
+  });
+
+  it('한 날짜의 empty 증명이 다른 날짜의 non-empty 후보 needs를 지우지 않는다', async () => {
+    const secondDate = '2025-06-15';
+    const metrics = [PIPELINE_DATE, secondDate].flatMap((date) => PIPELINE_ENTRIES.map((entry, index) => ({
+      date,
+      standardCode: entry.standardCode,
+      marketCapKrw: date === secondDate ? null : [300n, 200n, 100n][index]!,
+      volume: null,
+      tradingValueKrw: null,
+    })));
+    const resolver = makePipelineResolver({
+      factsPresent: [],
+      metrics,
+      effectiveTradingDate: (date) => date,
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([
+        { criterion: 'PER', limit: 1 },
+        { criterion: 'MARKET_CAP', limit: 1 },
+      ]),
+      { from: PIPELINE_DATE, to: secondDate },
+    );
+
+    expect(result.kind).toBe('NEEDS_DATA');
+    if (result.kind !== 'NEEDS_DATA') throw new Error('첫 날짜의 needs는 남아야 합니다.');
+    expect(result.needs.factSymbols).toEqual(['000001', '000002', '000003']);
+    expect([...result.unionEntries.keys()]).toEqual(['000001', '000002', '000003']);
+  });
+
+  it('급하락은 effective date 포함 N개 봉의 분할보정 수익률을 오름차순으로 고른다', async () => {
+    const day = (offset: number) => PIPELINE_TS - offset * 86_400_000;
+    const candle = (symbol: string, offset: number, close: number): Candle => ({
+      symbol, market: 'KR', timeframe: '1d', tsMs: day(offset),
+      open: close, high: close, low: close, close, volume: 1,
+    });
+    const resolver = makePipelineResolver({
+      candles: [
+        candle('000001', 2, 100), candle('000001', 1, 50), candle('000001', 0, 55),
+        candle('000002', 2, 100), candle('000002', 1, 90), candle('000002', 0, 80),
+        candle('000003', 2, 100), candle('000003', 1, 100), candle('000003', 0, 100),
+      ],
+      facts: [{
+        scope: 'SYMBOL', key: '000001', field: 'SPLIT_RATIO', periodKey: '2025-05-14',
+        asOfTsMs: PIPELINE_TS + 365 * 86_400_000, value: 2, unit: 'ratio',
+      }],
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'DECLINE', limit: 1, lookbackTradingDays: 3 }]),
+      period,
+    );
+    expect(result.kind).toBe('READY');
+    if (result.kind !== 'READY') throw new Error('fixture coverage가 완전해야 합니다.');
+    // 000001은 분할보정 후 +10%, 000002는 -20%다. 분할 미보정이면 000001(-45%)이 잘못 뽑힌다.
+    expect(result.schedule[0]?.members.map((member) => member.symbol)).toEqual(['000002']);
+    expect(result.schedule[0]?.members[0]).toMatchObject({
+      standardCode: 'KR7000002002',
+      marketCapKrw: '200',
+      volume: 2_000,
+      tradingValueKrw: '20000',
+    });
+  });
+
+  it('급하락은 effective KST date 다음 날의 자본변동을 분할보정에서 제외한다', async () => {
+    const candle = (symbol: string, tsMs: number, close: number): Candle => ({
+      symbol, market: 'KR', timeframe: '1d', tsMs,
+      open: close, high: close, low: close, close, volume: 1,
+    });
+    const tiny = Number.MIN_VALUE;
+    const resolver = makePipelineResolver({
+      candles: [
+        candle('000001', PIPELINE_TS - 86_400_000, tiny),
+        candle('000001', PIPELINE_TS, tiny * 2),
+        candle('000002', PIPELINE_TS - 86_400_000, 1),
+        candle('000002', PIPELINE_TS, 3),
+        candle('000003', PIPELINE_TS - 86_400_000, 1),
+        candle('000003', PIPELINE_TS, 4),
+      ],
+      facts: [{
+        scope: 'SYMBOL', key: '000001', field: 'SPLIT_RATIO', periodKey: '2025-05-16',
+        asOfTsMs: PIPELINE_TS, value: 2, unit: 'ratio',
+      }],
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'DECLINE', limit: 1, lookbackTradingDays: 2 }]),
+      period,
+    );
+
+    expect(result.kind).toBe('READY');
+    if (result.kind !== 'READY') throw new Error('fixture coverage가 완전해야 합니다.');
+    // 다음 KST 날짜의 2:1 분할을 잘못 포함하면 tiny / 2가 0으로 underflow되어
+    // 000001이 결측으로 제외된다. 올바른 컷오프에서는 원수익률 +100%로 가장 낮다.
+    expect(result.schedule[0]?.members.map((member) => member.symbol)).toEqual(['000001']);
+    expect(result.diagnostics[0]?.stages[0]).toMatchObject({
+      eligibleCount: 3,
+      excludedMissingCount: 0,
+    });
+  });
+
+  it('급하락 자본변동 coverage는 추정 달력 범위가 아니라 실제 N개 봉 범위만 요구한다', async () => {
+    const candles = PIPELINE_ENTRIES.flatMap((entry) =>
+      Array.from({ length: 100 }, (_, index): Candle => {
+        const tsMs = PIPELINE_TS - (99 - index) * 86_400_000;
+        return {
+          symbol: entry.shortCode,
+          market: 'KR',
+          timeframe: '1d',
+          tsMs,
+          open: 100 + index,
+          high: 100 + index,
+          low: 100 + index,
+          close: 100 + index,
+          volume: 1,
+        };
+      }),
+    );
+    const resolver = makePipelineResolver({ candles });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'DECLINE', limit: 1, lookbackTradingDays: 100 }]),
+      period,
+    );
+    expect(result.kind).toBe('READY');
+  });
+
+  it('급하락 warm-up 또는 자본변동 coverage가 부족하면 부분 schedule 없이 NEEDS_DATA다', async () => {
+    const candle = (symbol: string, offset: number): Candle => ({
+      symbol, market: 'KR', timeframe: '1d', tsMs: PIPELINE_TS - offset * 86_400_000,
+      open: 100, high: 100, low: 100, close: 100, volume: 1,
+    });
+    const resolver = makePipelineResolver({
+      candles: PIPELINE_ENTRIES.flatMap((entry) => [candle(entry.shortCode, 1), candle(entry.shortCode, 0)]),
+      actionCoverage: new Map([['000001', [2025]]]),
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'DECLINE', limit: 1, lookbackTradingDays: 3 }]),
+      period,
+    );
+    expect(result.kind).toBe('NEEDS_DATA');
+    if (result.kind !== 'NEEDS_DATA') throw new Error('fixture는 데이터 부족이어야 합니다.');
+    expect(result.needs.actionSymbols).toEqual(['000002', '000003']);
+    expect(result.needs.priceRange).not.toBeNull();
+    expect('schedule' in result).toBe(false);
+  });
+
+  it('급하락 가격만 부족하면 자본변동과 무관하게 stage 진입 후보를 가격 대상으로 남긴다', async () => {
+    const complete = (offset: number): Candle => ({
+      symbol: '000001', market: 'KR', timeframe: '1d', tsMs: PIPELINE_TS - offset * 86_400_000,
+      open: 100, high: 100, low: 100, close: 100, volume: 1,
+    });
+    const resolver = makePipelineResolver({
+      // 000001만 3개 봉을 채웠다. 부족한 000002/000003만 가격 수집 대상이어야 한다.
+      candles: [complete(2), complete(1), complete(0)],
+      // 기본 actionCoverage는 세 후보의 2025년을 모두 덮는다. 가격 후보가
+      // actionSymbols에 기대면 이 상태에서 수집 대상을 잃는다.
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'DECLINE', limit: 1, lookbackTradingDays: 3 }]),
+      period,
+    );
+
+    expect(result.kind).toBe('NEEDS_DATA');
+    if (result.kind !== 'NEEDS_DATA') throw new Error('fixture는 가격 warm-up 부족이어야 합니다.');
+    expect(result.needs.actionSymbols).toEqual([]);
+    expect(result.needs.priceSymbols).toEqual(['000002', '000003']);
+    expect(result.needs.priceRange).not.toBeNull();
+  });
+
+  it('급하락 보수 범위를 아직 모두 조회하지 않았으면 부족한 봉을 계속 가격 대상으로 남긴다', async () => {
+    const resolver = makePipelineResolver({ priceRangeCovered: false });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'DECLINE', limit: 1, lookbackTradingDays: 3 }]),
+      period,
+    );
+
+    expect(result.kind).toBe('NEEDS_DATA');
+    if (result.kind !== 'NEEDS_DATA') throw new Error('불완전 coverage는 가격 수집이 필요해야 합니다.');
+    expect(result.needs.priceSymbols).toEqual(['000001', '000002', '000003']);
+  });
+
+  it('급하락 보수 범위를 모두 조회했는데 N봉 미만이면 결측 후보로 진단하고 재요청하지 않는다', async () => {
+    const complete = (offset: number): Candle => ({
+      symbol: '000001', market: 'KR', timeframe: '1d', tsMs: PIPELINE_TS - offset * 86_400_000,
+      open: 100, high: 100, low: 100, close: 100, volume: 1,
+    });
+    const resolver = makePipelineResolver({
+      candles: [complete(2), complete(1), complete(0)],
+      priceRangeCovered: true,
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'DECLINE', limit: 3, lookbackTradingDays: 3 }]),
+      period,
+    );
+
+    expect(result.kind).toBe('READY');
+    if (result.kind !== 'READY') throw new Error('완전 시도된 짧은 이력은 terminal READY여야 합니다.');
+    expect(result.schedule[0]?.members.map((member) => member.symbol)).toEqual(['000001']);
+    expect(result.diagnostics[0]?.stages[0]).toMatchObject({
+      inputCount: 3,
+      eligibleCount: 1,
+      selectedCount: 1,
+      excludedMissingCount: 2,
+    });
   });
 });

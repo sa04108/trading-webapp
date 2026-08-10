@@ -148,19 +148,34 @@ export class PitFactView {
         const found = fieldEntry.byPeriod.get(ordinalToPeriodKey(fieldEntry.latestQuarter));
         return found ? found.value : null;
       },
+      quarter(field: FundamentalField, offset = 0): { periodKey: string; value: number } | null {
+        const fieldEntry = entry.fields.get(field);
+        if (!fieldEntry || fieldEntry.latestQuarter === null || !Number.isInteger(offset) || offset < 0) {
+          return null;
+        }
+        const periodKey = ordinalToPeriodKey(fieldEntry.latestQuarter - offset);
+        const found = fieldEntry.byPeriod.get(periodKey);
+        return found ? { periodKey, value: found.value } : null;
+      },
       periodKeyOf(field: FundamentalField): string | null {
         // get() 이 반환할 값이 속한 분기 키 — 계정별 최신 분기 커서를 그대로 재사용한다.
         const fieldEntry = entry.fields.get(field);
         if (!fieldEntry || fieldEntry.latestQuarter === null) return null;
         return ordinalToPeriodKey(fieldEntry.latestQuarter);
       },
-      ttm(field: FundamentalField): number | null {
-        if (!FLOW_FIELDS.includes(field)) return null;
+      ttm(field: FundamentalField, endOffset = 0): number | null {
+        if (
+          !FLOW_FIELDS.includes(field as (typeof FLOW_FIELDS)[number]) ||
+          !Number.isInteger(endOffset) ||
+          endOffset < 0
+        ) {
+          return null;
+        }
         const fieldEntry = entry.fields.get(field);
         if (!fieldEntry || fieldEntry.latestQuarter === null) return null;
-        const latestQuarter = fieldEntry.latestQuarter;
+        const endQuarter = fieldEntry.latestQuarter - endOffset;
         let sum = 0;
-        for (let ordinal = latestQuarter; ordinal > latestQuarter - 4; ordinal -= 1) {
+        for (let ordinal = endQuarter; ordinal > endQuarter - 4; ordinal -= 1) {
           const found = fieldEntry.byPeriod.get(ordinalToPeriodKey(ordinal));
           if (!found) return null; // 구멍이 있으면 4개인 척 더하지 않는다
           sum += found.value;

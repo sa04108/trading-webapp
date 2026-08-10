@@ -5,7 +5,7 @@ import type { Clock } from '../../../shared/clock.js';
 import { newId } from '../../../shared/ids.js';
 import type { BacktestRequest } from '../../../../shared/schemas/backtest-request.js';
 import type { ProvenancePin } from '../../../../shared/schemas/provenance-pin.js';
-import type { UniverseScheduleEntry } from './universe-rule-resolver.js';
+import type { LegacyUniverseScheduleEntry } from './universe-rule-resolver.js';
 
 export type BacktestJobStatus =
   | 'QUEUED'
@@ -45,7 +45,7 @@ export class JobQueue {
      * 유니버스 소스가 된다 (스펙 2026-08-05). 기본값 `[]` 는 JobQueue 자체를 단위
      * 테스트할 때(HTTP 제출 경로를 거치지 않을 때) 매번 채우지 않아도 되게 한다.
      */
-    schedule: readonly UniverseScheduleEntry[] = [],
+    schedule: readonly LegacyUniverseScheduleEntry[] = [],
     /** 제출 시점 종목 버전 스냅샷 — 실행 시점의 latest 로 대체되지 않도록 고정한다 (§9.5) */
     pinnedUniverse?: { entries: readonly unknown[]; hash: string },
     /** 서버 소유 provenance pin (Task 12, REVIEW §9.2) — validateSubmission 이 조립한 값이다 */
