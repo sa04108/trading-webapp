@@ -248,6 +248,57 @@ describe('BacktestPreparationOrchestrator NEEDS_DATA DART gate', () => {
   });
 });
 
+describe('BacktestPreparationOrchestrator MARKET_DATA 진행 표시', () => {
+  it('분모는 수집할 날짜 수이고 날짜마다 진행을 갱신한다', async () => {
+    // 운영 리포트(2026-08-10): 분모가 심볼 수(예: 275)인데 시장 데이터는 날짜 단위로
+    // 돌아 진행이 phase 끝까지 0 에 머물렀다. metric 날짜 2개 + 가격 3일 = 5 를
+    // 분모로 두고 날짜마다 1씩 오르는지 고정한다.
+    let resolveCalls = 0;
+    const marketNeeds = {
+      kind: 'NEEDS_DATA' as const,
+      candidateScopeKnown: true,
+      unionEntries: new Map([['005930', ENTRY]]),
+      needs: {
+        factSymbols: [],
+        actionSymbols: [],
+        priceSymbols: ['005930'],
+        selectionMetricDates: ['2026-01-05', '2026-01-06'],
+        priceRange: { from: '2026-01-02', to: '2026-01-04' },
+      },
+    };
+    const ctx = makeDeps({
+      resolver: {
+        resolveOrDescribeNeeds: async () => (resolveCalls++ === 0 ? marketNeeds : ready()),
+        isPeriodCovered: () => true,
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const progress: { done: number; total: number }[] = [];
+    const id = orchestrator.start(INPUT).id;
+    const unsubscribe = orchestrator.subscribe(id, (job) => {
+      // 생성 직후 QUEUED snapshot 도 기본 phase 가 MARKET_DATA 다 — 실제 수집 중
+      // (RUNNING) 의 진행만 본다.
+      if (job.status === 'RUNNING' && job.phase === 'MARKET_DATA') {
+        progress.push({ done: job.doneSymbols, total: job.totalSymbols });
+      }
+    });
+    await waitFor(() => orchestrator.get(id)?.status === 'COMPLETED');
+    unsubscribe();
+
+    // QUEUED→RUNNING 전이 직후의 snapshot 은 아직 분모를 못 받았다(total 0) —
+    // 실제 수집이 시작된 snapshot 만 본다.
+    const active = progress.filter((entry) => entry.total > 0);
+    expect(new Set(active.map((entry) => entry.total))).toEqual(new Set([5]));
+    expect(Math.max(...active.map((entry) => entry.done))).toBe(5);
+    // 날짜마다 갱신 — 시작 0 과 완료 5 사이의 중간 값이 실제로 흐른다.
+    expect(active.some((entry) => entry.done > 0 && entry.done < 5)).toBe(true);
+
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+});
+
 describe('BacktestPreparationOrchestrator single-flight와 직렬 실행', () => {
   it('공유 DB의 경쟁 write가 먼저 commit돼도 두 orchestrator는 같은 active id를 반환한다', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qp-prep-race-'));

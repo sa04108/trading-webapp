@@ -511,24 +511,35 @@ export class BacktestPreparationOrchestrator {
     selectionMetricDates: readonly string[],
     price: BacktestPreparationPlan['price'],
   ): Promise<void> {
+    // 이 phase 의 작업 단위는 심볼이 아니라 날짜다 — 심볼 수를 분모로 두면 warm-up
+    // 몇 달치를 받는 동안 진행이 끝까지 0 에 머문다 (운영 리포트, 2026-08-10).
+    // 가격 구간은 아래 ingest 루프가 실제로 돌 때만 분모에 넣는다.
+    const metricDates = [...new Set(selectionMetricDates)];
+    const priceIngestNeeded = price.symbols.length > 0
+      && this.deps.symbolMaster.isRangeCovered?.(price.from, price.to) !== true;
+    const priceDays = priceIngestNeeded ? calendarDaysInclusive(price.from, price.to) : 0;
+    let done = 0;
     this.persistAndEmit(jobId, {
       phase: 'MARKET_DATA',
       doneSymbols: 0,
-      totalSymbols: new Set(price.symbols).size,
+      totalSymbols: metricDates.length + priceDays,
     }, ['RUNNING']);
 
-    for (const date of new Set(selectionMetricDates)) {
+    for (const date of metricDates) {
       if (this.cancelOrStopRequested(jobId)) return;
       await this.deps.symbolMaster.ensureTradingDay(date);
+      done += 1;
+      this.persistAndEmit(jobId, { doneSymbols: done }, ['RUNNING']);
     }
     await this.deps.symbolMaster.ensureSelectionMetrics(selectionMetricDates);
 
-    if (price.symbols.length === 0) return;
-    if (this.deps.symbolMaster.isRangeCovered?.(price.from, price.to)) return;
+    if (!priceIngestNeeded) return;
     let cursor = price.from;
     while (cursor <= price.to) {
       if (this.cancelOrStopRequested(jobId)) return;
       await this.deps.symbolMaster.ingestDate(cursor);
+      done += 1;
+      this.persistAndEmit(jobId, { doneSymbols: done }, ['RUNNING']);
       cursor = addCalendarDays(cursor, 1);
     }
   }
@@ -834,6 +845,12 @@ export class BacktestPreparationOrchestrator {
     }
     return snapshot;
   }
+}
+
+/** from~to 를 포함하는 달력일 수 — MARKET_DATA 진행 분모가 ingest 루프와 같은 눈금을 쓴다. */
+function calendarDaysInclusive(from: string, to: string): number {
+  const days = (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000;
+  return days < 0 ? 0 : Math.round(days) + 1;
 }
 
 function preparationRequest(input: PreparationInput): BacktestRequest {
