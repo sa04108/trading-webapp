@@ -328,6 +328,35 @@ describe('이익 가속 전략', () => {
     expect(state.pendingBuys).toBeNull();
   });
 
+  it('아무도 점수를 못 내면 기존 보유를 청산하지 않고 유지한다 (판단 근거가 없으면 보유 유지)', () => {
+    // 유일한 후보가 staleQuarters 를 넘겨 뒤처져 후보에서 빠지면 candidates 가 비고,
+    // 이전 코드는 targets=[] 로 planSellPhase 가 기존 보유를 전량 SELL 했다 —
+    // value-quality-rank·low-per-high-roe-rank 의 no-data hold 와 다른 방침이었다.
+    const inputs = { STALE: BASE };
+    const histories = new Map([['STALE', history('STALE', 100, 130)]]);
+    const state = earningsAccelerationRankStrategy.initialize({
+      symbols: ['STALE'],
+      initialCash: 10_000,
+      rng: createRng(1),
+    });
+    const staleContext = strategyContext({
+      inputs,
+      histories,
+      isRebalanceBar: true,
+      tsMs: Date.UTC(2025, 9, 1),
+      positions: new Map([
+        ['STALE', { symbol: 'STALE', quantity: 10, avgEntryPrice: 100, entryCosts: 0, entryTsMs: AT }],
+      ]),
+    });
+    const decision = earningsAccelerationRankStrategy.onBars(
+      staleContext,
+      state,
+      { topN: 1, priceMomentumDays: 60, staleQuarters: 2 },
+    );
+    expect(decision.orders).toEqual([]);
+    expect(state.pendingBuys).toBeNull();
+  });
+
   it('리밸런스 봉이 아니고 대기 매수도 없으면 주문을 내지 않는다', () => {
     const inputs = { FAST_GROWTH: BASE };
     const histories = new Map([['FAST_GROWTH', history('FAST_GROWTH', 100, 130)]]);

@@ -8,11 +8,13 @@ import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-ap
 import { registerSymbols, seedCorporateActionCoverage, seedDailyBars } from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 
+// period 가 하루짜리라 rebalanceInterval 값 자체는 무관하다 — DAY 를 써서
+// rebalanceIntervalFitsPeriod(리뷰 finding, 2026-08-09) 에 걸리지 않게 한다.
 const previewInput = (criterion: 'MARKET_CAP' | 'PER' = 'MARKET_CAP'): PreparationInput => ({
   universeRule: {
     markets: ['KOSPI'],
     stages: [{ criterion, limit: 1 }],
-    rebalanceInterval: { unit: 'MONTH', value: 1 },
+    rebalanceInterval: { unit: 'DAY', value: 1 },
   },
   period: { from: '2026-01-05', to: '2026-01-05' },
   strategyId: 'range-breakout',

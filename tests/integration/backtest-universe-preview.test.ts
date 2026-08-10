@@ -16,10 +16,17 @@ import { registerSymbols, seedCorporateActionCoverage, seedDailyBars, yearRange 
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 import { startKrxFakeServer, type KrxFakeServer } from '../helpers/krx-fixtures.js';
 
-const marketCapRule = (markets: readonly string[] = ['KOSPI']) => ({
+// 이 파일 대부분은 period 가 하루짜리다 — rebalanceInterval 은 그 하루를 리밸런스
+// 날짜로 잡는 데만 쓰이고 실제 간격은 의미가 없다. 기본값을 DAY 로 둬 그런 호출이
+// rebalanceIntervalFitsPeriod(리뷰 finding, 2026-08-09)에 걸리지 않게 한다 — 여러
+// 리밸런스가 실제로 필요한 호출만 MONTH 등으로 명시한다.
+const marketCapRule = (
+  markets: readonly string[] = ['KOSPI'],
+  rebalanceInterval: { unit: 'DAY' | 'WEEK' | 'MONTH' | 'YEAR'; value: number } = { unit: 'DAY', value: 1 },
+) => ({
   markets,
   stages: [{ criterion: 'MARKET_CAP', limit: 10 }],
-  rebalanceInterval: { unit: 'MONTH', value: 1 },
+  rebalanceInterval,
 });
 
 async function waitForPreparation(ctx: TestApp, jobId: string): Promise<'COMPLETED' | 'FAILED' | 'CANCELLED'> {
@@ -129,7 +136,8 @@ describe('POST /backtests/universe-preview', () => {
         universeRule: {
           markets: ['KOSPI'],
           stages: [{ criterion: 'MARKET_CAP', limit: 10 }],
-          rebalanceInterval: { unit: 'MONTH', value: 1 },
+          // 이 test는 하루짜리 period 하나만 본다 — 리밸런스 간격 자체는 무관하다.
+          rebalanceInterval: { unit: 'DAY', value: 1 },
         },
         period: { from: '2026-01-05', to: '2026-01-05' },
       },
@@ -187,7 +195,8 @@ describe('POST /backtests/universe-preview', () => {
         universeRule: {
           markets: ['KOSPI'],
           stages: [{ criterion: 'PER', limit: 10 }],
-          rebalanceInterval: { unit: 'MONTH', value: 1 },
+          // 이 test는 하루짜리 period 하나만 본다 — 리밸런스 간격 자체는 무관하다.
+          rebalanceInterval: { unit: 'DAY', value: 1 },
         },
         period: { from: '2026-01-05', to: '2026-01-05' },
       },
@@ -325,7 +334,9 @@ describe('POST /backtests/universe-preview', () => {
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
       payload: {
-        universeRule: marketCapRule(),
+        // 이 test는 3개의 월간 리밸런스 날짜가 실제로 필요하다 — 기본값(DAY)이 아니라
+        // 명시적으로 MONTH 를 쓴다.
+        universeRule: marketCapRule(['KOSPI'], { unit: 'MONTH', value: 1 }),
         period: { from: '2026-01-05', to: '2026-03-05' },
       },
     });
@@ -405,6 +416,39 @@ describe('POST /backtests/universe-preview', () => {
       payload: {
         universeRule: marketCapRule(),
         period: { from: '2026-01-10', to: '2026-01-05' },
+      },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('리밸런싱 주기가 기간을 넘으면 400 이다 (backtest-request.ts superRefine과 같은 검사)', async () => {
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: {
+          markets: ['KOSPI'],
+          stages: [{ criterion: 'MARKET_CAP', limit: 10 }],
+          rebalanceInterval: { unit: 'MONTH', value: 2 },
+        },
+        period: { from: '2026-01-05', to: '2026-01-06' },
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { error: string }).error).toContain('리밸런싱 주기가 백테스트 전체 기간을 초과합니다');
+  });
+
+  it('존재하지 않는 날짜(2026-13-45)는 500 이 아니라 400 이다', async () => {
+    // 정규식만으로는 자릿수만 보고 통과시킨다 — 그러면 준비 파이프라인이 리밸런스
+    // 날짜를 계산할 때 RangeError 를 던져 500 이 된다(리뷰 finding, 2026-08-09).
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: marketCapRule(),
+        period: { from: '2026-13-45', to: '2026-12-31' },
       },
     });
     expect(res.statusCode).toBe(400);
@@ -492,7 +536,8 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
         universeRule: {
           markets: ['KOSPI'],
           stages: [{ criterion: 'VOLUME', limit: 1 }],
-          rebalanceInterval: { unit: 'MONTH', value: 1 },
+          // 이 test는 하루짜리 period 하나만 본다 — 리밸런스 간격 자체는 무관하다.
+          rebalanceInterval: { unit: 'DAY', value: 1 },
         },
         period: { from: '2026-01-05', to: '2026-01-05' },
       },
@@ -828,7 +873,8 @@ describe('POST /backtests/universe-preview — 3단계 파이프라인 진단 (T
             { criterion: 'PER', limit: 2 },
             { criterion: 'DECLINE', limit: 1, lookbackTradingDays: 5 },
           ],
-          rebalanceInterval: { unit: 'MONTH', value: 1 },
+          // 이 test는 하루짜리 period 하나만 본다 — 리밸런스 간격 자체는 무관하다.
+          rebalanceInterval: { unit: 'DAY', value: 1 },
         },
         period: { from: EFFECTIVE_DATE, to: EFFECTIVE_DATE },
         strategyId: 'range-breakout',

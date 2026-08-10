@@ -1,6 +1,8 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { universeRuleSchema } from '../../../../shared/schemas/universe-rule.js';
+import { isoDateSchema } from '../../../../shared/schemas/backtest-request.js';
+import { rebalanceIntervalFitsPeriod } from '../../../../shared/schemas/rebalance-interval.js';
 import { SECURITY_HEADERS } from '../../../shared/security.js';
 import {
   PreparationInputError,
@@ -19,8 +21,8 @@ export interface BacktestPreparationRouteDeps {
 const previewRequestSchema = z.object({
   universeRule: universeRuleSchema,
   period: z.object({
-    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    from: isoDateSchema,
+    to: isoDateSchema,
   }),
   strategyId: z.string().min(1),
   parameters: z.record(z.string(), z.unknown()),
@@ -50,6 +52,11 @@ export function registerBacktestPreparationRoutes(
     const input: PreparationInput = parsed.data;
     if (input.period.from > input.period.to) {
       return reply.code(400).send({ error: '기간이 올바르지 않습니다 (from > to)' });
+    }
+    // 제출 스키마(backtest-request.ts superRefine)와 같은 검사다 — 여기서 걸러내지
+    // 않으면 준비가 끝난 뒤 제출 시점에야 400 이 나 준비가 헛수고가 된다.
+    if (!rebalanceIntervalFitsPeriod(input.period, input.universeRule.rebalanceInterval)) {
+      return reply.code(400).send({ error: '리밸런싱 주기가 백테스트 전체 기간을 초과합니다.' });
     }
 
     try {

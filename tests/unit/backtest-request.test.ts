@@ -163,6 +163,24 @@ describe('요청 교차 검증', () => {
     }).success).toBe(false);
   });
 
+  it('존재하지 않는 날짜(2026-13-45)는 형식 검사를 통과해도 거부한다', () => {
+    // 정규식만으로는 자릿수만 보고 통과시킨다 — 그러면 리밸런스 날짜 계산이
+    // 나중에 RangeError 를 던져 500 이 된다(리뷰 finding, 2026-08-09).
+    const result = backtestRequestSchema.safeParse({
+      ...baseRequest(),
+      period: { from: '2026-13-45', to: '2026-12-31' },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('굴러 넘어가는 날짜(2026-02-30)도 거부한다 — Date 생성자가 조용히 다음 달로 굴린다', () => {
+    const result = backtestRequestSchema.safeParse({
+      ...baseRequest(),
+      period: { from: '2026-02-30', to: '2026-12-31' },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it('전략 topN이 동시 보유 상한 또는 마지막 단계 N을 넘으면 거부한다', () => {
     const request = {
       ...baseRequest(),

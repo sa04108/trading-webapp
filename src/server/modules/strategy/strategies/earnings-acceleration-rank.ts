@@ -143,6 +143,11 @@ export const earningsAccelerationRankStrategy: TradingStrategy<
       candidates.push({ symbol, ...score });
     }
 
+    // 아무도 점수를 못 냈으면(공시 지연·PIT 8분기 미달·모멘텀 계산 불가 등) 이번
+    // 리밸런스에서는 기존 보유를 유지한다 — value-quality-rank·low-per-high-roe-rank
+    // 의 no-data hold 와 같은 방침이다. 판단 근거가 없으면 보유 유지.
+    if (candidates.length === 0) return { orders: [] };
+
     const growthRanks = ordinalRank(
       candidates,
       (candidate) => candidate.ttmGrowth,
