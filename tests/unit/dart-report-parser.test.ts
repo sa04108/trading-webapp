@@ -45,6 +45,15 @@ describe('parseAmount', () => {
     expect(parseAmount('1,234,567')).toBe(1_234_567);
   });
 
+  it('쉼표 없는 순수 숫자를 받는다 — fnlttSinglAcntAll 의 실제 금액 형식이다', () => {
+    // 운영 장애(2026-08-10): 쉼표 묶음만 허용하는 검증이 실제 응답의 전 계정을
+    // gap 으로 버려 재무 팩트가 저장소에 거의 남지 않았다.
+    expect(parseAmount('9251406000000')).toBe(9_251_406_000_000);
+    expect(parseAmount('-123456')).toBe(-123_456);
+    expect(parseAmount('(1234)')).toBe(-1_234);
+    expect(parseAmount('0')).toBe(0);
+  });
+
   it('괄호 음수를 처리한다', () => {
     expect(parseAmount('(1,234)')).toBe(-1_234);
   });
