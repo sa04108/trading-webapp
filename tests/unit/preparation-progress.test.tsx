@@ -42,6 +42,8 @@ describe('PreparationProgress', () => {
     expect(html).toContain('3');
     expect(html).toContain('10');
     expect(html).toContain('취소');
+    // 진행 중 화면을 떠나도 준비가 계속된다는 안내 — 사용자가 붙어 있을 필요가 없다.
+    expect(html).toContain('브라우저를 닫아도 계속됩니다');
   });
 
   it('WAITING_DAILY_QUOTA 는 일일 호출 한도와 다음 KST 재개 시각, 취소 버튼을 보여준다', () => {

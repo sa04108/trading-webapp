@@ -662,6 +662,12 @@ export function UniverseRuleStep({
                   : '동기화 중…'
                 : '기간 전체 동기화'}
             </Button>
+            {backfillRunning ? (
+              <p className="text-xs opacity-80">
+                동기화는 서버에서 진행되므로 화면을 나가거나 브라우저를 닫아도 계속됩니다.
+                나중에 돌아와서 미리보기를 다시 누르면 그 사이 수집된 데이터가 반영됩니다.
+              </p>
+            ) : null}
           </AlertDescription>
         </Alert>
       ) : null}
