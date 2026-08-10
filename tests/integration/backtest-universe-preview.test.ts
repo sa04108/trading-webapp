@@ -1,8 +1,10 @@
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
 import {
   dailySelectionMetrics,
   krxDailyBars,
+  symbolFactsState,
   symbolMasterCoverage,
   symbolMasterMarketCaps,
   symbolMasterTradingDays,
@@ -10,7 +12,7 @@ import {
   symbols as symbolsTable,
 } from '../../src/server/shared/db/schema.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
-import { registerSymbols, seedDailyBars } from '../helpers/seed.js';
+import { registerSymbols, seedCorporateActionCoverage, seedDailyBars, yearRange } from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 import { startKrxFakeServer, type KrxFakeServer } from '../helpers/krx-fixtures.js';
 
@@ -734,5 +736,133 @@ describe('POST /backtests/universe-preview — SymbolMasterNotCoveredError 매�
 
     expect(res.statusCode).toBe(202);
     expect(res.json()).toMatchObject({ job: { status: 'QUEUED' } });
+  });
+});
+
+/**
+ * Task 12 — 3단계(시가총액→PER→급하락) 파이프라인의 단계별 진단(N·missing 제외 수·
+ * effective date)을 preview 응답만으로 확인한다. DART·자본변동은 이 test의 관심사가
+ * 아니므로 직접 seed해 durable job을 거치더라도(`installPreparedPreviewFixture`가
+ * 그 202→완료→재조회를 자동으로 처리한다) 실제 sync 호출 없이 곧바로 해소되게 한다.
+ */
+describe('POST /backtests/universe-preview — 3단계 파이프라인 진단 (Task 12)', () => {
+  let ctx: TestApp;
+  let cookie: string;
+  const EFFECTIVE_DATE = '2025-06-02';
+  const CANDLE_START_MS = Date.parse('2025-05-01T00:00:00Z');
+
+  beforeEach(async () => {
+    ctx = await createTestApp();
+    const { username, password } = await createTestAdmin(ctx.container);
+    const login = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { username, password },
+    });
+    cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+    installPreparedPreviewFixture(ctx);
+
+    registerSymbols(ctx.container, 'KR', ['X', 'Y', 'Z']);
+    seedSymbolMasterUniverse(ctx.container, [EFFECTIVE_DATE], [
+      { standardCode: 'KR7000101000', shortCode: 'X', name: 'X', market: 'KOSPI', marketCapKrw: '300' },
+      { standardCode: 'KR7000102000', shortCode: 'Y', name: 'Y', market: 'KOSPI', marketCapKrw: '200' },
+      { standardCode: 'KR7000103000', shortCode: 'Z', name: 'Z', market: 'KOSPI', marketCapKrw: '100' },
+    ]);
+
+    // 급하락(5일) stage 조회 하한(effectiveDate - 5*2-14 = 24일) 보다 이르게 캔들을 채운다.
+    // X는 마지막 5일 사이 1000→500으로 급락, Y는 평탄해 X만 급하락 상위로 뽑힌다.
+    const candles = [];
+    for (let ts = CANDLE_START_MS; ts <= Date.parse(`${EFFECTIVE_DATE}T00:00:00Z`); ts += 86_400_000) {
+      const daysFromEffective = Math.round((Date.parse(`${EFFECTIVE_DATE}T00:00:00Z`) - ts) / 86_400_000);
+      const xClose = daysFromEffective >= 4 ? 1_000 : 1_000 - (4 - daysFromEffective) * 100;
+      candles.push(
+        { symbol: 'X', market: 'KR' as const, timeframe: '1d' as const, tsMs: ts, open: xClose, high: xClose, low: xClose, close: xClose, volume: 1_000 },
+        { symbol: 'Y', market: 'KR' as const, timeframe: '1d' as const, tsMs: ts, open: 1_000, high: 1_000, low: 1_000, close: 1_000, volume: 1_000 },
+      );
+    }
+    seedDailyBars(ctx.container.database.db, candles);
+    seedCorporateActionCoverage(ctx.container, ['X', 'Y'], yearRange(2024, 2025));
+
+    // PER stage: X·Y는 순이익이 있어 통과하고, Z는 재무가 전혀 없어 missing 제외된다.
+    // coverage는 세 종목 모두 "시도했다" 로 직접 심어 DART 호출 없이 즉시 해소되게 한다.
+    for (const code of ['X', 'Y', 'Z']) {
+      // X·Y는 위 seedCorporateActionCoverage가 이미 symbol_facts_state 행을 만들어 뒀다
+      // (actionCoveredYearsJson만 채운 채) — 같은 행에 재무 coveredYearsJson만 덧붙인다.
+      ctx.container.database.db
+        .insert(symbolFactsState)
+        .values({ code, coveredYearsJson: JSON.stringify([2024, 2025]), updatedAtMs: ctx.container.clock.now() })
+        .onConflictDoUpdate({
+          target: symbolFactsState.code,
+          set: { coveredYearsJson: JSON.stringify([2024, 2025]), updatedAtMs: ctx.container.clock.now() },
+        })
+        .run();
+    }
+    const netIncomeFacts: Fact[] = ['X', 'Y'].flatMap((symbol) =>
+      [40, 30, 20, 10].map((value, offset) => ({
+        scope: 'SYMBOL' as const,
+        key: symbol,
+        field: 'NET_INCOME' as const,
+        periodKey: `2024Q${4 - offset}`,
+        asOfTsMs: Date.parse('2024-01-01T00:00:00Z'),
+        value,
+        unit: 'KRW',
+      })),
+    );
+    await ctx.container.factRepository.saveFacts(netIncomeFacts);
+  });
+
+  afterEach(async () => {
+    await ctx.close();
+  });
+
+  it('시가총액→PER→급하락 단계별로 N·missing 제외 수·effective date를 정확히 보고한다', async () => {
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: {
+          markets: ['KOSPI'],
+          stages: [
+            { criterion: 'MARKET_CAP', limit: 3 },
+            { criterion: 'PER', limit: 2 },
+            { criterion: 'DECLINE', limit: 1, lookbackTradingDays: 5 },
+          ],
+          rebalanceInterval: { unit: 'MONTH', value: 1 },
+        },
+        period: { from: EFFECTIVE_DATE, to: EFFECTIVE_DATE },
+        strategyId: 'range-breakout',
+        parameters: {},
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      schedule: Array<{ rebalanceDate: string; effectiveDate: string; members: Array<{ symbol: string }> }>;
+      diagnostics: Array<{
+        rebalanceDate: string;
+        effectiveDate: string;
+        stages: Array<{
+          criterion: string;
+          inputCount: number;
+          eligibleCount: number;
+          selectedCount: number;
+          excludedMissingCount: number;
+        }>;
+      }>;
+    };
+    expect(body.schedule).toMatchObject([
+      { rebalanceDate: EFFECTIVE_DATE, effectiveDate: EFFECTIVE_DATE, members: [{ symbol: 'X' }] },
+    ]);
+    expect(body.diagnostics).toHaveLength(1);
+    expect(body.diagnostics[0]).toMatchObject({
+      rebalanceDate: EFFECTIVE_DATE,
+      effectiveDate: EFFECTIVE_DATE,
+      stages: [
+        { criterion: 'MARKET_CAP', inputCount: 3, eligibleCount: 3, selectedCount: 3, excludedMissingCount: 0 },
+        { criterion: 'PER', inputCount: 3, eligibleCount: 2, selectedCount: 2, excludedMissingCount: 1 },
+        { criterion: 'DECLINE', inputCount: 2, eligibleCount: 2, selectedCount: 1, excludedMissingCount: 0 },
+      ],
+    });
   });
 });

@@ -51,8 +51,8 @@ function buildRebalanceInterval(unit: RebalanceInterval['unit'], value: number):
 interface UniverseScheduleEntryDto {
   readonly rebalanceDate: string;
   /** 실제 유니버스·시총을 읽은 거래일 — 휴장일이면 소급된 직전 거래일이다 */
-  readonly effectiveTradingDate: string;
-  readonly symbols: readonly string[];
+  readonly effectiveDate: string;
+  readonly members: readonly { readonly symbol: string }[];
 }
 
 /** `POST /backtests/universe-preview` 응답 (스펙 2026-08-05, backtest-routes.ts 와 같은 모양) */
@@ -618,15 +618,15 @@ export function UniverseRuleStep({
                         {entry.rebalanceDate}
                         {/* 요청 날짜와 적용 거래일이 같으면 덧붙이지 않는다 — 휴장일 소급이
                             있을 때만 알려주면 된다(브리프 표기 규약) */}
-                        {entry.effectiveTradingDate !== entry.rebalanceDate ? (
+                        {entry.effectiveDate !== entry.rebalanceDate ? (
                           <span className="text-muted-foreground">
                             {' '}
-                            (적용 {entry.effectiveTradingDate})
+                            (적용 {entry.effectiveDate})
                           </span>
                         ) : null}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
-                        {entry.symbols.length}
+                        {entry.members.length}
                       </TableCell>
                     </TableRow>
                   ))}

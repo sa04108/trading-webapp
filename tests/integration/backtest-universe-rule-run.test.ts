@@ -1,11 +1,15 @@
+import { createHash } from 'node:crypto';
 import { and, eq, isNull } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
+import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
+import type { FactSyncReport, FactSyncRequest } from '../../src/server/modules/facts/application/fact-sync-service.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import {
   krxDailyBars,
   krxNonTradingCoverage,
   krxNonTradingDays,
+  symbolFactsState,
   symbolMasterStorageState,
   symbolMasterVersions,
 } from '../../src/server/shared/db/schema.js';
@@ -1187,4 +1191,373 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
       ).toBe(true);
     },
   );
+});
+
+/**
+ * Task 12 — preview→prepare→submit→run 전체 회귀. KOSPI `시가총액 5 → PER 3 →
+ * 급하락(20) 2` 3단계 규칙(매월 rule)을 실제 durable preparation job(202)부터
+ * 완주까지 한 번에 태운다.
+ *
+ * 후보 7종목으로 단계별 배제를 실제로 겪는다: F·G는 시가총액 stage에서 이미
+ * 빠지고, D·E는 시가총액 top5(A~E)에는 들되 재무(NET_INCOME)가 없어 PER stage에서
+ * 빠진다 — 그래서 DART(financial fact) 요청은 정확히 {A,B,C,D,E} 만 받아야 한다(F·G는
+ * 결코 요청되지 않는다). 급하락(20일) stage는 A·B·C 세 종목의 가격 추이를 서로 다르게
+ * 둬 리밸런스 1(1월)엔 {A,B}, 리밸런스 2(2월)엔 {B,C}가 선정되도록 만든다 — A는
+ * 멤버십을 잃고, C는 새로 들어온다.
+ *
+ * 전략은 `low-per-high-roe-rank` 를 쓴다: 가격 패턴에 기대는 기술적 전략과 달리
+ * 이 전략은 "그 시점 유니버스 멤버 중 유효 후보를 그대로 산다" 는 결정적 규칙이라
+ * REBALANCE_EXIT(멤버십 이탈)을 가격 신호 타이밍 없이 재현할 수 있다. NET_INCOME은
+ * PER stage(유니버스)와 이 전략의 순위 계산이 함께 쓴다 — 실전에서도 같은 재무
+ * 원천을 공유하므로 이 픽스처가 그 배선을 그대로 반영한다.
+ *
+ * DART는 실제 HTTP 요청 없이 `factSyncService.sync` 를 스파이로 감싼다 — 위
+ * `installPreparedSubmissionFixture` 류와 같은 관례(이 파일 상단)를 따르되, 이번엔
+ * 완전한 no-op이 아니라 실제로 NET_INCOME을 저장하고 coverage를 기록해 "각 phase가
+ * 정확히 어떤 symbol을 요청했는지" 를 관찰할 수 있게 한다.
+ */
+describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepare→submit→run (Task 12)', () => {
+  const STEP12_DAY = 86_400_000;
+  /** 급하락(20일) stage의 조회 하한(effectiveDate - 54일) 보다 이르게 잡은 캔들 시작점 */
+  const STEP12_CANDLE_START = Date.UTC(2024, 9, 1); // 2024-10-01
+  const STEP12_REBALANCE_1 = '2025-01-02';
+  const STEP12_REBALANCE_2 = '2025-02-02';
+  const STEP12_PERIOD = { from: STEP12_REBALANCE_1, to: '2025-02-10' };
+  /** NET_INCOME 공시 시각 — PIT 은 이 test의 관심사가 아니므로 두 리밸런스보다 훨씬 이르게 고정한다 */
+  const STEP12_DISCLOSED_TS = Date.UTC(2024, 0, 1);
+
+  const THREE_STAGE_RULE: BacktestRequest['universeRule'] = {
+    markets: ['KOSPI'],
+    stages: [
+      { criterion: 'MARKET_CAP', limit: 5 },
+      { criterion: 'PER', limit: 3 },
+      { criterion: 'DECLINE', limit: 2, lookbackTradingDays: 20 },
+    ],
+    rebalanceInterval: { unit: 'MONTH', value: 1 },
+  };
+
+  function step12PreviewInput() {
+    return {
+      universeRule: THREE_STAGE_RULE,
+      period: STEP12_PERIOD,
+      strategyId: 'low-per-high-roe-rank',
+      parameters: { topN: 2, staleQuarters: 8 },
+    };
+  }
+
+  /** fromMs~toMs 구간의 모든 캘린더 날짜 — 이 픽스처는 스스로 정의하는 합성 거래일력이라 요일을 가리지 않는다 */
+  function step12AllDates(fromMs: number, toMs: number): string[] {
+    const dates: string[] = [];
+    for (let ts = fromMs; ts <= toMs; ts += STEP12_DAY) dates.push(new Date(ts).toISOString().slice(0, 10));
+    return dates;
+  }
+
+  /** anchor 두 점 사이는 선형보간, 바깥은 양끝 값으로 고정한다 */
+  function linearBetween(fromMs: number, fromPrice: number, toMs: number, toPrice: number, tsMs: number): number {
+    if (tsMs <= fromMs) return fromPrice;
+    if (tsMs >= toMs) return toPrice;
+    return fromPrice + (toPrice - fromPrice) * ((tsMs - fromMs) / (toMs - fromMs));
+  }
+
+  /**
+   * A·B·C의 20일 급락 순위가 리밸런스 1→2 사이에 뒤집히도록 가격을 설계한다:
+   * - A: 리밸런스 1 직전 20일 동안 2000→1000(-50%)으로 급락한 뒤, 리밸런스 2 직전
+   *   20일 구간(1/14~2/2)은 2000 평탄(0%) — 리밸런스 1에서만 급락 상위다.
+   * - C: 리밸런스 1 직전 20일은 2000 평탄(0%), 리밸런스 2 직전 20일(1/14~2/2)에
+   *   2000→1000(-50%) 으로 급락 — 리밸런스 2에서만 급락 상위다.
+   * - B: 항상 완만하게 하락해(-0.3%대) 두 리밸런스 모두 A/C의 급락(-50%)과 무하락
+   *   (0%) 사이의 중간 순위를 지킨다 — 매번 두 자리 중 하나를 차지한다.
+   */
+  function decliningPriceAt(symbol: 'A' | 'B' | 'C', tsMs: number): number {
+    const jan2 = Date.parse('2025-01-02T00:00:00Z');
+    const jan14 = Date.parse('2025-01-14T00:00:00Z');
+    const dec14 = Date.parse('2024-12-14T00:00:00Z');
+    const feb2 = Date.parse('2025-02-02T00:00:00Z');
+    if (symbol === 'A') {
+      if (tsMs <= dec14) return 2000;
+      if (tsMs < jan2) return linearBetween(dec14, 2000, jan2, 1000, tsMs);
+      if (tsMs < jan14) return linearBetween(jan2, 1000, jan14, 2000, tsMs);
+      return 2000;
+    }
+    if (symbol === 'C') {
+      if (tsMs < jan14) return 2000;
+      if (tsMs < feb2) return linearBetween(jan14, 2000, feb2, 1000, tsMs);
+      return 1000;
+    }
+    const daysSinceStart = (tsMs - STEP12_CANDLE_START) / STEP12_DAY;
+    return 3000 - 0.4 * daysSinceStart;
+  }
+
+  let ctx: TestApp;
+  let cookie: string;
+  let dartCalls: string[][];
+
+  /**
+   * 실제 DART 네트워크 없이 `factSyncService.sync` 만 감싼다 — 요청받은 symbol을
+   * 기록하고(브리프의 `fakeDart.requestedSymbols()`/`callCount()` 에 대응), NET_INCOME
+   * 이 있는 symbol(A·B·C)만 실제로 저장한다. D·E는 재무가 전혀 없다고 응답하되
+   * "시도했다" 는 coverage 만 남겨 오케스트레이터가 같은 요청을 영원히 반복하지 않게 한다 —
+   * 실제 DART도 신규상장·미제출 분기에서 이렇게 응답한다(§013 무자료 상태).
+   */
+  function installDartFinancialSpy(netIncomeBySymbol: ReadonlyMap<string, number>): void {
+    ctx.container.factSyncService.sync = (async (request: FactSyncRequest): Promise<FactSyncReport> => {
+      dartCalls.push([...request.symbols]);
+      const facts: Fact[] = [];
+      for (const symbol of request.symbols) {
+        const income = netIncomeBySymbol.get(symbol);
+        if (income !== undefined) {
+          for (let offset = 0; offset < 4; offset += 1) {
+            facts.push({
+              scope: 'SYMBOL',
+              key: symbol,
+              field: 'NET_INCOME',
+              periodKey: `202${4 - Math.floor(offset / 4)}Q${4 - (offset % 4)}`,
+              asOfTsMs: STEP12_DISCLOSED_TS,
+              value: income,
+              unit: 'KRW',
+            });
+          }
+        }
+        const nowMs = ctx.container.clock.now();
+        const existing = ctx.container.database.db
+          .select()
+          .from(symbolFactsState)
+          .where(eq(symbolFactsState.code, symbol))
+          .get();
+        const coveredYearsJson = JSON.stringify([2024, 2025]);
+        if (existing) {
+          ctx.container.database.db
+            .update(symbolFactsState)
+            .set({ coveredYearsJson, updatedAtMs: nowMs })
+            .where(eq(symbolFactsState.code, symbol))
+            .run();
+        } else {
+          ctx.container.database.db
+            .insert(symbolFactsState)
+            .values({ code: symbol, coveredYearsJson, updatedAtMs: nowMs })
+            .run();
+        }
+      }
+      if (facts.length > 0) await ctx.container.factRepository.saveFacts(facts);
+      return { savedFacts: facts.length, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null };
+    }) as typeof ctx.container.factSyncService.sync;
+  }
+
+  beforeEach(async () => {
+    ctx = await createTestApp();
+    dartCalls = [];
+    const { username, password } = await createTestAdmin(ctx.container);
+    const login = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { username, password },
+    });
+    cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+
+    // 자본변동은 이 test의 관심사가 아니다 — A·B·C(급하락 stage까지 도달하는 후보)만
+    // 직접 커버리지를 심어 DART 왕복 없이 통과시킨다(이 파일 상단 관례와 동일).
+    ctx.container.factSyncService.syncCorporateActions = (async () => ({
+      savedFacts: 0,
+      gaps: [],
+      stoppedAtSymbol: null,
+      stopReason: null,
+      failureMessage: null,
+    })) as typeof ctx.container.factSyncService.syncCorporateActions;
+    ctx.container.factSyncService.planFinancialSync = (() => ({
+      yearsBySymbol: new Map(),
+      shareYearsBySymbol: new Map(),
+      calls: 0,
+      estimatedMs: 0,
+      overDailyLimit: false,
+    })) as typeof ctx.container.factSyncService.planFinancialSync;
+    ctx.container.factSyncService.planCorporateActionSync = ctx.container.factSyncService.planFinancialSync;
+    installDartFinancialSpy(new Map([['A', 500_000], ['B', 400_000], ['C', 300_000]]));
+
+    registerSymbols(ctx.container, 'KR', ['A', 'B', 'C', 'D', 'E']);
+    seedSymbolMasterUniverse(
+      ctx.container,
+      step12AllDates(STEP12_CANDLE_START, Date.parse(`${STEP12_PERIOD.to}T00:00:00Z`)),
+      [
+        { standardCode: 'KR7000001000', shortCode: 'A', name: 'A', market: 'KOSPI', marketCapKrw: '500' },
+        { standardCode: 'KR7000002000', shortCode: 'B', name: 'B', market: 'KOSPI', marketCapKrw: '400' },
+        { standardCode: 'KR7000003000', shortCode: 'C', name: 'C', market: 'KOSPI', marketCapKrw: '300' },
+        { standardCode: 'KR7000004000', shortCode: 'D', name: 'D', market: 'KOSPI', marketCapKrw: '200' },
+        { standardCode: 'KR7000005000', shortCode: 'E', name: 'E', market: 'KOSPI', marketCapKrw: '100' },
+        // F·G는 시가총액 5위(=E) 보다 낮아 첫 stage에서 이미 떨어진다 — 이후 어떤 phase 도
+        // 이 둘을 요청하지 않는다.
+        { standardCode: 'KR7000006000', shortCode: 'F', name: 'F', market: 'KOSPI', marketCapKrw: '50' },
+        { standardCode: 'KR7000007000', shortCode: 'G', name: 'G', market: 'KOSPI', marketCapKrw: '40' },
+      ],
+    );
+
+    const candles: Candle[] = [];
+    for (const symbol of ['A', 'B', 'C'] as const) {
+      for (let ts = STEP12_CANDLE_START; ts <= Date.parse(`${STEP12_PERIOD.to}T00:00:00Z`); ts += STEP12_DAY) {
+        const close = decliningPriceAt(symbol, ts);
+        candles.push({ symbol, market: 'KR', timeframe: '1d', tsMs: ts, open: close, high: close, low: close, close, volume: 1_000 });
+      }
+    }
+    seedDailyBars(ctx.container.database.db, candles);
+    // 자본총계는 coverage 게이트가 없다 — DART 스파이와 무관하게 미리 심어 둔다
+    // (이 test의 관심사는 PER/급하락 stage 와 REBALANCE_EXIT 이다, PIT 은 Task 12의
+    // 재무전략 회귀 test(backtest-facts-worker.test.ts)가 이미 검증한다).
+    await ctx.container.factRepository.saveFacts(
+      (['A', 'B', 'C'] as const).map((symbol) => ({
+        scope: 'SYMBOL' as const,
+        key: symbol,
+        field: 'TOTAL_EQUITY' as const,
+        periodKey: '2024Q4',
+        asOfTsMs: STEP12_DISCLOSED_TS,
+        value: 1_000_000,
+        unit: 'KRW',
+      })),
+    );
+    seedCorporateActionCoverage(ctx.container, ['A', 'B', 'C'], yearRange(2024, 2025));
+  });
+
+  afterEach(async () => {
+    await ctx.close();
+  });
+
+  it(
+    '전체 파이프라인이 preview→durable prepare→idempotent 재조회→submit→run→REBALANCE_EXIT 을 한 번에 완주한다',
+    { timeout: 90_000 },
+    async () => {
+      // 1~4. 202 job 을 시작해 COMPLETED 까지 기다린 뒤 단계별 진단을 확인한다
+      const started = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/backtests/universe-preview',
+        cookies: { qp_session: cookie },
+        payload: step12PreviewInput(),
+      });
+      expect(started.statusCode).toBe(202);
+      const jobId = (started.json() as { job: { id: string } }).job.id;
+      const completed = await waitForPreparation(jobId);
+      expect(completed).toBe('COMPLETED');
+
+      // 3. DART(재무)는 두 phase로만 불린다 — F·G는 어느 phase에도 등장하지 않는다.
+      // ① 유니버스 PER stage의 필요(시가총액 top5 = A~E) ② 전략(저PER·고ROE)이
+      // 최종 확정 유니버스(A~C)에 요구하는 재무(dataRequirements.fundamentalLookbackQuarters)
+      expect(dartCalls).toHaveLength(2);
+      expect([...dartCalls[0]!].sort()).toEqual(['A', 'B', 'C', 'D', 'E']);
+      expect([...dartCalls[1]!].sort()).toEqual(['A', 'B', 'C']);
+      const callsAfterFirstPreparation = dartCalls.length;
+
+      const ready = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/backtests/universe-preview',
+        cookies: { qp_session: cookie },
+        payload: step12PreviewInput(),
+      });
+      expect(ready.statusCode).toBe(200);
+      const preview = ready.json() as {
+        schedule: Array<{ rebalanceDate: string; effectiveDate: string; members: Array<{ symbol: string }> }>;
+        unionSymbols: string[];
+        scheduleHash: string;
+        diagnostics: Array<{
+          rebalanceDate: string;
+          effectiveDate: string;
+          stages: Array<{
+            criterion: string;
+            inputCount: number;
+            eligibleCount: number;
+            selectedCount: number;
+            excludedMissingCount: number;
+          }>;
+        }>;
+      };
+
+      // 5. 같은 body 재요청은 source 추가 호출 없이 200 READY다
+      expect(dartCalls.length).toBe(callsAfterFirstPreparation);
+
+      // 4. preview의 단계별 N·missing 제외 수·effective date
+      expect(preview.schedule).toHaveLength(2);
+      expect(preview.schedule[0]).toMatchObject({
+        rebalanceDate: STEP12_REBALANCE_1,
+        effectiveDate: STEP12_REBALANCE_1,
+        members: [{ symbol: 'A' }, { symbol: 'B' }],
+      });
+      expect(preview.schedule[1]).toMatchObject({
+        rebalanceDate: STEP12_REBALANCE_2,
+        effectiveDate: STEP12_REBALANCE_2,
+        members: [{ symbol: 'C' }, { symbol: 'B' }],
+      });
+      expect(preview.unionSymbols.slice().sort()).toEqual(['A', 'B', 'C']);
+      for (const entry of preview.diagnostics) {
+        const [marketCap, per, decline] = entry.stages;
+        expect(marketCap).toMatchObject({ criterion: 'MARKET_CAP', inputCount: 7, selectedCount: 5, excludedMissingCount: 0 });
+        expect(per).toMatchObject({ criterion: 'PER', inputCount: 5, eligibleCount: 3, selectedCount: 3, excludedMissingCount: 2 });
+        expect(decline).toMatchObject({ criterion: 'DECLINE', inputCount: 3, selectedCount: 2 });
+      }
+
+      // 6. 백테스트 제출·worker 실행 후 schedule hash와 provenance를 확인한다
+      const submitPayload: BacktestRequest = {
+        strategyId: 'low-per-high-roe-rank',
+        parameters: { topN: 2, staleQuarters: 8 },
+        universeRule: THREE_STAGE_RULE,
+        timeframe: '1d',
+        period: STEP12_PERIOD,
+        capital: { initialCash: 10_000_000, currency: 'KRW' },
+        execution: {
+          fillTiming: 'NEXT_BAR_OPEN',
+          commissionProfileId: 'zero-cost',
+          slippageProfileId: 'zero-slippage',
+        },
+        risk: { maxPositions: 2 },
+        randomSeed: 1,
+      };
+      const created = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/backtests',
+        cookies: { qp_session: cookie },
+        payload: submitPayload,
+      });
+      expect(created.statusCode).toBe(201);
+      const backtestJobId = (created.json().job as { id: string }).id;
+      const stored = ctx.container.jobQueue.getJob(backtestJobId)!;
+      const pinnedSchedule = JSON.parse(stored.universeScheduleJson);
+      const persistedPin = JSON.parse(stored.provenancePinJson!) as { scheduleHash: string };
+      expect(persistedPin.scheduleHash).toBe(
+        createHash('sha256').update(JSON.stringify(pinnedSchedule)).digest('hex'),
+      );
+      // preview와 실행이 같은 UniverseRuleResolver를 쓴다는 증거 — pin된 스키마는
+      // legacy(symbols) 모양으로 재구성되고 preview는 staged(members) 모양을 그대로
+      // 보존해 해시 namespace 자체는 다르지만(backtest-routes.ts
+      // preparedPreviewToResolved 주석 참고), 멤버십(리밸런스 날짜별 종목 집합)은
+      // 정확히 같아야 한다.
+      expect(pinnedSchedule.map((entry: { symbols: string[] }) => entry.symbols)).toEqual(
+        preview.schedule.map((entry) => entry.members.map((member) => member.symbol)),
+      );
+
+      ctx.container.jobOrchestrator.tick();
+      await waitFor(() => {
+        const job = ctx.container.jobQueue.getJob(backtestJobId);
+        return job !== null && ctx.container.jobQueue.isTerminal(job.status);
+      }, 60_000);
+      const job = ctx.container.jobQueue.getJob(backtestJobId)!;
+      expect(job.error).toBeNull();
+      expect(job.status).toBe('COMPLETED');
+
+      // 7. 첫 리밸런스 뒤 멤버십을 잃는 A의 exit가 REBALANCE_EXIT인지 확인한다
+      const { trades } = ctx.container.resultsService.getTrades(backtestJobId, { limit: 1000, offset: 0 });
+      const aExit = trades.find((trade) => trade.symbol === 'A');
+      expect(aExit).toBeDefined();
+      expect(aExit?.exitReason).toBe('REBALANCE_EXIT');
+
+      // B는 두 리밸런스 모두의 멤버라 팔렸다 다시 사지 않고 계속 보유한다(미청산으로 남는다)
+      const run = ctx.container.resultsService.getRun(backtestJobId)!;
+      const openPositions = JSON.parse(run.openPositionsJson ?? '[]') as Array<{ symbol: string }>;
+      expect(openPositions.map((p) => p.symbol).sort()).toEqual(['B', 'C']);
+    },
+  );
+
+  async function waitForPreparation(jobId: string): Promise<'COMPLETED' | 'FAILED' | 'CANCELLED'> {
+    const started = Date.now();
+    for (;;) {
+      const status = ctx.container.backtestPreparationOrchestrator.get(jobId)?.status;
+      if (status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED') return status;
+      if (Date.now() - started > 5_000) throw new Error('preparation timeout');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
 });

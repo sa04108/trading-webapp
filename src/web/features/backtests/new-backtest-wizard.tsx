@@ -30,6 +30,7 @@ import { StrategyDataBadge } from './strategy-data-badge';
 import { useStrategies } from './api';
 import { STRATEGY_DATA_DETAILS, strategyDataRequirement } from './strategy-data-requirement';
 import { SymbolLabel } from '@/components/symbol-label';
+import { formatUniverseRuleSummary } from './universe-summary';
 import {
   clampSymbolName,
   formatSymbolLabel,
@@ -854,10 +855,10 @@ export function NewBacktestWizard() {
               <Separator />
               <div className="flex justify-between gap-3">
                 <span className="shrink-0 text-muted-foreground">유니버스 규칙</span>
-                <span>
-                  {request.universeRule.markets.join('·')} 시가총액 상위{' '}
-                  {request.universeRule.stages[0]?.limit}
-                </span>
+                {/* 단계형 편집기(Task 9)가 시가총액 외 기준·다단계를 허용한 뒤로는 첫
+                    단계만 읽는 하드코딩된 문구가 실제 규칙과 어긋날 수 있다 — 상세
+                    화면과 같은 요약 함수를 그대로 쓴다(리뷰에서 재현된 회귀). */}
+                <span>{formatUniverseRuleSummary(request.universeRule)}</span>
               </div>
               <Separator />
               <div className="flex justify-between gap-3">
