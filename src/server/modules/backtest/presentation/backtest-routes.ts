@@ -18,7 +18,7 @@ import {
 import { SECURITY_HEADERS } from '../../../shared/security.js';
 import type { Clock } from '../../../shared/clock.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
-import type { FactRepository } from '../../facts/application/ports.js';
+import type { FactCoverageStore } from '../../facts/application/fact-coverage-store.js';
 import type { ConsumedVersionSnapshot, SymbolService } from '../../market-data/application/symbol-service.js';
 import { sendIfKrxError, sendIfNotCovered } from './krx-error-mapping.js';
 import { KRX_FILTER_POLICY_VERSION } from '../../market-data/domain/krx-filter-policy.js';
@@ -57,7 +57,8 @@ export interface BacktestRouteDeps {
   readonly candleCoverage: CandleCoverageService;
   readonly preparation: BacktestPreparationOrchestrator;
   readonly audit: AuditLogService;
-  readonly factRepository: FactRepository;
+  /** 재무 요구 검사(422)가 보는 coverage — parquet 정합성 게이트를 거친 store 다. */
+  readonly factCoverage: FactCoverageStore;
   readonly dataRoot: string;
   readonly maxQueuedBacktests: number;
   readonly clock: Clock;
@@ -189,7 +190,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     candleCoverage,
     preparation,
     audit,
-    factRepository,
+    factCoverage,
     clock,
   } = deps;
 
@@ -460,8 +461,13 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
      * 아니다 — 신규 상장처럼 이력이 짧은 종목 하나 때문에 유니버스 전체를 막지 않는
      * `checkPeriodCoverage` 와 같은 원칙이고(D-025), 빠진 종목은 워커가 실행 경고에
      * **이름으로** 남긴다. 여기서 전부 422 로 바꾸면 그 경고 경로가 죽는다.
+     *
+     * 판정은 파일 존재(hasFacts)가 아니라 재무 coverage 로 한다 — 자본변동만 받은
+     * 종목도 parquet 파일은 있어서 파일 존재는 재무 있음을 증명하지 못한다
+     * (fact-coverage-store.ts 주석, resolver 의 PER 결측 판정과 같은 이유).
      */
-    if (unionSymbols.some((code) => factRepository.hasFacts('SYMBOL', code))) return null;
+    const covered = factCoverage.getCoveredYears(unionSymbols);
+    if (unionSymbols.some((code) => (covered.get(code)?.length ?? 0) > 0)) return null;
     return (
       '이 전략은 상장시점 재무 데이터가 필요하지만 선택한 종목에는 아직 없습니다: ' +
       `${unionSymbols.join(', ')} — 미리보기를 다시 실행해 데이터 준비를 완료하세요. ` +

@@ -83,6 +83,8 @@ describe('0010 자본변동 커버리지 백필', () => {
     db.insert(symbolFactsState)
       .values({ code: '005930', coveredYearsJson: '[2025,2026]', updatedAtMs: 1 })
       .run();
+    // coverage 는 parquet 실체와 교차 확인해서만 읽힌다 — 시도의 실체를 함께 심는다.
+    await t.container.factRepository.ensurePartition('SYMBOL', '005930');
 
     const store = t.container.actionCoverageStore;
     // 백필 전에는 미수집으로 보인다 — `parseYears(null)` 이 빈 목록이라 그렇다

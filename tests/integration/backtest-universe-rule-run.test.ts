@@ -200,7 +200,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     dailyCandles = buildDailyCandles();
     seedDailyBars(ctx.container.database.db, dailyCandles);
     // 자본변동 게이트(Task 6) — 이 파일의 제출 기간이 걸치는 연도(2025·2026)를 채운다
-    seedCorporateActionCoverage(ctx.container, ['005930', '000660'], yearRange(2025, 2026));
+    await seedCorporateActionCoverage(ctx.container, ['005930', '000660'], yearRange(2025, 2026));
   });
 
   afterEach(async () => {
@@ -507,7 +507,7 @@ describe('KRX 전용 일봉으로 백테스트 실행 (워커의 부모-자식 �
     krxOnlyCandles = buildDailyCandles(KRX_ONLY_CODE);
     seedDailyBars(ctx.container.database.db, krxOnlyCandles);
     // 자본변동 게이트(Task 6) — 상장폐지 종목이라도 수집 자체는 마쳤다고 가정한다
-    seedCorporateActionCoverage(ctx.container, [KRX_ONLY_CODE], yearRange(2025, 2026));
+    await seedCorporateActionCoverage(ctx.container, [KRX_ONLY_CODE], yearRange(2025, 2026));
   });
 
   afterEach(async () => {
@@ -862,7 +862,7 @@ describe('POST /backtests — 준비 완료 뒤 제출 (자본변동 게이트 �
     // 커버리지도 있고 gap 도 있다 — 옛 게이트라면 "수집했는데 DART 가 응답하지
     // 못했다" 로 읽어 경고에 이름을 남겼다. 게이트를 통째로 없앤 지금은 그 경고
     // 자체가 나올 곳이 없다.
-    seedCorporateActionCoverage(ctx.container, [CODE], [2026]);
+    await seedCorporateActionCoverage(ctx.container, [CODE], [2026]);
     ctx.container.actionCoverageStore.addGapYears(CODE, [2026], ctx.container.clock.now());
 
     const created = await submit();
@@ -917,7 +917,7 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
         { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '900' },
         { standardCode: 'KR7000660001', shortCode: '000660', name: 'SK하이닉스', market: 'KOSPI', marketCapKrw: '800' },
       ]);
-      seedCorporateActionCoverage(ctx.container, ['005930', '000660'], yearRange(2025, 2026));
+      await seedCorporateActionCoverage(ctx.container, ['005930', '000660'], yearRange(2025, 2026));
 
       // 마지막 봉 다음 날을 폐지 효력일로 둔다 — 워커가 listEvents 로 이 경계를 읽어
       // 엔진에 넘긴다. SCD 이행(D-045) 후 delistedEventsBetween 은 legacy
@@ -1017,7 +1017,7 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
         { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '900' },
         { standardCode: 'KR7000660001', shortCode: '000660', name: 'SK하이닉스', market: 'KOSPI', marketCapKrw: '800' },
       ]);
-      seedCorporateActionCoverage(ctx.container, ['005930', '000660'], yearRange(2025, 2026));
+      await seedCorporateActionCoverage(ctx.container, ['005930', '000660'], yearRange(2025, 2026));
 
       // 이 픽스처(range-breakout, topN=2, 두 종목 모두 buildDailyCandles 의 동일한
       // 가격 패턴)에서 두 종목은 항상 2025-08-12 에 첫 진입한다 — 신호는 전날
@@ -1091,7 +1091,7 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
       seedSymbolMasterUniverse(ctx.container, MASTER_DATES, [
         { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '900' },
       ]);
-      seedCorporateActionCoverage(ctx.container, ['005930'], yearRange(2025, 2026));
+      await seedCorporateActionCoverage(ctx.container, ['005930'], yearRange(2025, 2026));
 
       // 제출은 이행이 끝난 서버가 받는다. 워커가 열 때만 PENDING 이다 —
       // 서버 배포와 워커 실행 사이에 DB 가 교체된 상황이 이 모양이다.
@@ -1146,7 +1146,7 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
         { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '900' },
         { standardCode: 'KR7000660001', shortCode: '000660', name: 'SK하이닉스', market: 'KOSPI', marketCapKrw: '800' },
       ]);
-      seedCorporateActionCoverage(ctx.container, ['005930', '000660'], yearRange(2025, 2026));
+      await seedCorporateActionCoverage(ctx.container, ['005930', '000660'], yearRange(2025, 2026));
 
       // 이 파일의 유일한 리밸런스 날짜는 period.from(2025-07-27) 이다 — range-breakout 은
       // rebalanceMonths 파라미터가 없어 제출 경로가 단일 리밸런스로 접는다
@@ -1318,6 +1318,9 @@ describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepar
             });
           }
         }
+        // 실제 FactSyncService 처럼 팩트 0건이어도 시도의 실체(빈 파티션)를 남긴다 —
+        // coverage 는 parquet 존재와 교차 확인해서만 읽힌다(parquet-consistent-coverage.ts).
+        await ctx.container.factRepository.ensurePartition('SYMBOL', symbol);
         const nowMs = ctx.container.clock.now();
         const existing = ctx.container.database.db
           .select()
@@ -1412,7 +1415,7 @@ describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepar
         unit: 'KRW',
       })),
     );
-    seedCorporateActionCoverage(ctx.container, ['A', 'B', 'C'], yearRange(2024, 2025));
+    await seedCorporateActionCoverage(ctx.container, ['A', 'B', 'C'], yearRange(2024, 2025));
   });
 
   afterEach(async () => {

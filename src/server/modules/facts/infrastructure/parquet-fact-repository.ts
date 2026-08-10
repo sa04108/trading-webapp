@@ -225,6 +225,37 @@ export class ParquetFactRepository implements FactRepository {
     }
   }
 
+  /** 팩트 0건 시도의 실체 — 스키마만 있는 빈 parquet 을 만든다 (ports.ts 주석 참고). */
+  async ensurePartition(scope: FactScope, key: string): Promise<void> {
+    const target = this.filePath(scope, scope === 'SYMBOL' ? key : null);
+    if (fs.existsSync(target)) return;
+    const dir = this.partitionDir(scope, scope === 'SYMBOL' ? key : null);
+    fs.mkdirSync(dir, { recursive: true });
+    tmpCounter += 1;
+    const tmpPath = path.join(dir, `data.parquet.tmp-${process.pid}-${tmpCounter}`);
+    try {
+      await this.duckdb.run(
+        `COPY (
+           SELECT CAST(NULL AS VARCHAR) AS key,
+                  CAST(NULL AS VARCHAR) AS field,
+                  CAST(NULL AS VARCHAR) AS period_key,
+                  CAST(NULL AS BIGINT) AS as_of_ts_ms,
+                  CAST(NULL AS DOUBLE) AS value,
+                  CAST(NULL AS VARCHAR) AS unit
+           WHERE 1 = 0
+         ) TO ${sqlString(tmpPath.replaceAll('\\', '/'))} (FORMAT PARQUET, COMPRESSION ZSTD)`,
+      );
+      fs.renameSync(tmpPath, target);
+    } catch (error) {
+      try {
+        fs.rmSync(tmpPath, { force: true });
+      } catch {
+        /* 원인 오류를 그대로 올린다 */
+      }
+      throw error;
+    }
+  }
+
   async getFacts(query: FactQuery): Promise<Fact[]> {
     // 읽기 대상 결정: keys 가 있으면 그 종목 파일만, 없으면 스코프 전체를 glob 한다.
     // 종목 파티션으로 쪼갠 뒤 "전 종목" 조회가 여러 파일을 걸치므로 read_parquet 에

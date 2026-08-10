@@ -142,11 +142,17 @@ function fakeSource(
  */
 function fakeRepository(): FactRepository & {
   saved: Array<{ facts: readonly Fact[] }>;
+  partitions: string[];
 } {
   const saved: Array<{ facts: readonly Fact[] }> = [];
+  const partitions: string[] = [];
   const store = new Map<string, Map<string, Fact>>();
   return {
     saved,
+    partitions,
+    ensurePartition: async (_scope, key) => {
+      partitions.push(key);
+    },
     getFacts: async (query) => {
       // 종목 파티션 — keys 를 주면 그 종목만, 없으면 스코프 전체
       const out: Fact[] = [];
@@ -268,6 +274,9 @@ describe('FactSyncService', () => {
     expect(report.gaps).toHaveLength(0);
     expect(repository.saved).toHaveLength(1);
     expect(repository.saved[0]?.facts).toHaveLength(0);
+    // 팩트 0건이어도 시도의 실체(빈 파티션)는 남긴다 — coverage 정합성 게이트
+    // (parquet-consistent-coverage.ts)가 이 시도를 "받았다" 로 인정할 근거다.
+    expect(repository.partitions).toEqual(['005930']);
   });
 
   /**
@@ -838,6 +847,7 @@ describe('FactSyncService — 증분과 취소', () => {
         if (saveCalls === 2) throw new Error('parquet 쓰기 실패');
       },
       hasFacts: () => false,
+      ensurePartition: async () => undefined,
       symbolsWithFacts: () => new Set(),
     };
     const service = new FactSyncService(

@@ -826,7 +826,7 @@ describe('POST /backtests/universe-preview — 3단계 파이프라인 진단 (T
       );
     }
     seedDailyBars(ctx.container.database.db, candles);
-    seedCorporateActionCoverage(ctx.container, ['X', 'Y'], yearRange(2024, 2025));
+    await seedCorporateActionCoverage(ctx.container, ['X', 'Y'], yearRange(2024, 2025));
 
     // PER stage: X·Y는 순이익이 있어 통과하고, Z는 재무가 전혀 없어 missing 제외된다.
     // coverage는 세 종목 모두 "시도했다" 로 직접 심어 DART 호출 없이 즉시 해소되게 한다.
@@ -842,6 +842,9 @@ describe('POST /backtests/universe-preview — 3단계 파이프라인 진단 (T
         })
         .run();
     }
+    // Z 는 "시도했지만 공시 0건" 상태다 — 시도의 실체(빈 파티션)가 있어야 coverage
+    // 정합성 게이트(parquet-consistent-coverage.ts)가 위 coverage 를 인정한다.
+    await ctx.container.factRepository.ensurePartition('SYMBOL', 'Z');
     const netIncomeFacts: Fact[] = ['X', 'Y'].flatMap((symbol) =>
       [40, 30, 20, 10].map((value, offset) => ({
         scope: 'SYMBOL' as const,

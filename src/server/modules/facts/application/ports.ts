@@ -12,6 +12,13 @@ export interface FactRepository {
   getFacts(query: FactQuery): Promise<Fact[]>;
   saveFacts(facts: readonly Fact[]): Promise<void>;
   /**
+   * 팩트 0건짜리 수집 시도도 파티션 파일을 남긴다 — "시도했지만 공시가 없었다"(정상)와
+   * "파일이 지워졌다"(재수집 필요)를 파일 존재 하나로 가르기 위해서다
+   * (parquet-consistent-coverage.ts). saveFacts 는 빈 목록에 아무것도 안 만들므로
+   * sync 가 coverage 를 기록하기 전에 이것을 불러 실체를 보장한다.
+   */
+  ensurePartition(scope: FactScope, key: string): Promise<void>;
+  /**
    * 종목 하나의 재무 보유 여부. 제출 검증(422)과 종목 화면 배지가 같은 판정을 본다 —
    * 화면과 게이트가 어긋날 수 없다 (D-033).
    */

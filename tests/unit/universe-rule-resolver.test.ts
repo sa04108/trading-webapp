@@ -348,6 +348,7 @@ function makePipelineResolver(options: {
       hasFacts: (_scope: 'SYMBOL' | 'MACRO', key: string) => factsPresent.has(key),
       symbolsWithFacts: () => factsPresent,
       saveFacts: async () => undefined,
+      ensurePartition: async () => undefined,
     },
     factCoverage: {
       getCoveredYears: (codes?: readonly string[]) => codes === undefined

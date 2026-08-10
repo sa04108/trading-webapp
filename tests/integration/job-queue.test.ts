@@ -154,7 +154,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     // 종목 마스터 — 유니버스 규칙(스펙 2026-08-05)이 여기서 종목을 골라낸다
     seedMaster(ctx.container, REBALANCE_DATES);
     // 자본변동 게이트(Task 6) — 수집을 마쳤다고 표시해야 제출이 통과한다
-    seedCorporateActionCoverage(ctx.container, ['005930'], ACTION_COVERAGE_YEARS);
+    await seedCorporateActionCoverage(ctx.container, ['005930'], ACTION_COVERAGE_YEARS);
   });
 
   afterEach(async () => {
@@ -613,7 +613,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     };
     const job = ctx.container.jobQueue.enqueue(legacy as never);
     registerSymbols(ctx.container, 'KR', ['000660']);
-    seedCorporateActionCoverage(ctx.container, ['000660'], ACTION_COVERAGE_YEARS);
+    await seedCorporateActionCoverage(ctx.container, ['000660'], ACTION_COVERAGE_YEARS);
 
     const cloned = await ctx.app.inject({
       method: 'POST',
@@ -834,7 +834,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     // 커버리지 행이 없는 종목이 섞여도 제출은 통과해야 한다 (D-025)
     ctx.container.symbolService.addSymbol('000660', 'KR');
     // 000660 도 unionSymbols 에 들어오므로 자본변동 게이트도 통과해 둬야 한다
-    seedCorporateActionCoverage(ctx.container, ['000660'], ACTION_COVERAGE_YEARS);
+    await seedCorporateActionCoverage(ctx.container, ['000660'], ACTION_COVERAGE_YEARS);
 
     const partial = await ctx.app.inject({
       method: 'POST',
@@ -989,7 +989,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       registerSymbols(small.container, 'KR', ['005930']);
       seedDailyBars(small.container.database.db, buildTrendingDailyCandles());
       seedMaster(small.container, [MAIN_DATE]);
-      seedCorporateActionCoverage(small.container, ['005930'], ACTION_COVERAGE_YEARS);
+      await seedCorporateActionCoverage(small.container, ['005930'], ACTION_COVERAGE_YEARS);
       const payload = buildRequest();
 
       // 오케스트레이터를 tick 하지 않으므로 전부 QUEUED 로 남는다

@@ -51,6 +51,24 @@ describe('ParquetFactRepository', () => {
     expect(repository.hasFacts('SYMBOL', 'nope!')).toBe(false);
   });
 
+  it('ensurePartition 은 빈 파티션을 만들고 조회·병합 읽기를 깨뜨리지 않는다', async () => {
+    // 팩트 0건 수집 시도의 실체 — coverage 정합성 게이트(parquet-consistent-coverage.ts)
+    // 가 "시도했지만 공시 없음" 을 "파일이 지워짐" 과 가르는 근거다.
+    await repository.ensurePartition('SYMBOL', '005930');
+    expect(repository.hasFacts('SYMBOL', '005930')).toBe(true);
+    expect(await repository.getFacts({ scope: 'SYMBOL', keys: ['005930'] })).toEqual([]);
+
+    // 빈 파티션이 여러 파일 read_parquet 목록에 섞여도 스키마가 맞아 던지지 않는다.
+    await repository.saveFacts([fact({ key: '000660' })]);
+    expect(await repository.getFacts({ scope: 'SYMBOL' })).toEqual([fact({ key: '000660' })]);
+
+    // 이미 팩트가 있는 파티션에는 아무 일도 하지 않는다 — 내용이 지워지면 안 된다.
+    await repository.ensurePartition('SYMBOL', '000660');
+    expect(await repository.getFacts({ scope: 'SYMBOL', keys: ['000660'] })).toEqual([
+      fact({ key: '000660' }),
+    ]);
+  });
+
   /**
    * 목록 화면은 종목마다 묻지 않고 집합을 한 번 받는다 — 1,000종목에서 stat 1,000회를
    * 5초마다 반복하지 않기 위해서다. `hasFacts` 와 **같은 판정**을 내야 한다: 갈라지면

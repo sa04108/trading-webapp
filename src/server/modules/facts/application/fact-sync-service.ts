@@ -348,6 +348,10 @@ export class FactSyncService {
           // 연도는 증분 재실행에서 건너뛸 수 있다.
           const fingerprintBefore = await this.storedFactsFingerprint(symbol);
           await this.repository.saveFacts(facts);
+          // 팩트 0건이어도 시도의 실체(빈 파티션)를 남긴다 — coverage 는 parquet
+          // 존재와 교차 확인해서만 읽히므로(parquet-consistent-coverage.ts), 파일이
+          // 없으면 아래 recordCoverage 가 다음 조회에서 없던 일이 된다.
+          await this.repository.ensurePartition('SYMBOL', symbol);
 
           // 저장 성공이 리포트의 확정 경계다. 뒤의 coverage나 버전 갱신이 실패해도
           // repository에는 이미 팩트가 남았으므로, 이 수치를 먼저 반영해야 보고서가

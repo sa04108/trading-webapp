@@ -41,7 +41,14 @@ import {
   SqliteCorporateActionCoverageStore,
   type CorporateActionCoverageStore,
 } from '../modules/facts/application/corporate-action-coverage.js';
-import { SqliteFactCoverageStore } from '../modules/facts/application/fact-coverage-store.js';
+import {
+  SqliteFactCoverageStore,
+  type FactCoverageStore,
+} from '../modules/facts/application/fact-coverage-store.js';
+import {
+  ParquetConsistentActionCoverageStore,
+  ParquetConsistentFactCoverageStore,
+} from '../modules/facts/application/parquet-consistent-coverage.js';
 import { FactSyncService } from '../modules/facts/application/fact-sync-service.js';
 import { createDartFactSource } from '../modules/facts/infrastructure/dart/dart-fact-source.js';
 import { ParquetFactRepository } from '../modules/facts/infrastructure/parquet-fact-repository.js';
@@ -96,6 +103,8 @@ export interface Container {
    * 없앴다.
    */
   readonly actionCoverageStore: CorporateActionCoverageStore;
+  /** 재무 수집 coverage — parquet 정합성 게이트를 거친 인스턴스만 노출한다. */
+  readonly factCoverageStore: FactCoverageStore;
   readonly backtestPreparationOrchestrator: BacktestPreparationOrchestrator;
   close(): Promise<void>;
 }
@@ -204,10 +213,19 @@ export function createContainer(config: AppConfig): Container {
   );
   // 팩트도 백테스트 입력이다 — 캔들과 같은 버전 체인에 올린다 (§9.5).
   // SymbolService 를 통째로 넘기지 않고 좁은 포트(SymbolVersionBumper)로 받는다.
-  const factCoverageStore = new SqliteFactCoverageStore(database.db);
+  // coverage 는 parquet 실체와 교차 확인해서만 읽는다 (parquet-consistent-coverage.ts,
+  // 운영 장애 2026-08-10) — DB 만 남고 파티션이 사라진 종목을 "받았다" 로 두면
+  // INCREMENTAL sync 가 영원히 건너뛰어 재무가 복구되지 않는다.
+  const factCoverageStore = new ParquetConsistentFactCoverageStore(
+    new SqliteFactCoverageStore(database.db),
+    factRepository,
+  );
   // 자본변동 전용 수집(Task 5)이 갱신하는 별도 커버리지 — 재무 커버리지와 컬럼이
   // 다르다 (corporate-action-coverage.ts 헤더 참고).
-  const actionCoverageStore = new SqliteCorporateActionCoverageStore(database.db);
+  const actionCoverageStore = new ParquetConsistentActionCoverageStore(
+    new SqliteCorporateActionCoverageStore(database.db),
+    factRepository,
+  );
   const factSyncService = new FactSyncService(
     factSource,
     factRepository,
@@ -339,6 +357,7 @@ export function createContainer(config: AppConfig): Container {
     jobOrchestrator,
     resultsService,
     factRepository,
+    factCoverageStore,
     factSyncService,
     symbolMasterService,
     symbolMasterBackfill,

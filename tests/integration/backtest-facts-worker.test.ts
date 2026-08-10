@@ -8,7 +8,8 @@ import {
   installPreparedSubmissionFixture,
   type TestApp,
 } from '../helpers/test-app.js';
-import { registerSymbols, seedCorporateActionCoverage, seedDailyBars, yearRange } from '../helpers/seed.js';
+import { registerSymbols, seedCorporateActionCoverage,
+  seedFinancialCoverage, seedDailyBars, yearRange } from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 
 const DAY = 86_400_000;
@@ -127,7 +128,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
     ]);
     seedDailyBars(ctx.container.database.db, candles(40));
     // 자본변동 게이트(Task 6) — 이 파일의 제출 기간(2025-01-02~2025-03-01)이 걸치는 연도
-    seedCorporateActionCoverage(ctx.container, ['CHEAP', 'RICH'], yearRange(2025, 2025));
+    await seedCorporateActionCoverage(ctx.container, ['CHEAP', 'RICH'], yearRange(2025, 2025));
 
     // 컨테이너가 조립한 factRepository 로 저장한다 — 워커가 같은 dataRoot 를 통해
     // 이 팩트를 다시 읽어야 하므로, 테스트 전용 repository 를 새로 만들지 않는다.
@@ -135,6 +136,9 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       ...factsFor('CHEAP', 50_000),
       ...factsFor('RICH', 5_000),
     ]);
+    // 재무 요구 검사(422)는 파일 존재가 아니라 재무 coverage 를 본다 — 운영에서는
+    // FactSyncService 가 저장과 동시에 남기는 기록이므로 픽스처도 함께 심는다.
+    seedFinancialCoverage(ctx.container, ['CHEAP', 'RICH'], yearRange(2025, 2025));
   });
 
   afterEach(async () => {
@@ -213,7 +217,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       // 마스터에 미리 둔 NOFACTS 도 유니버스에 들어오게 한다
       registerSymbols(ctx.container, 'KR', ['NOFACTS']);
       // NOFACTS 도 unionSymbols 에 들어오므로 자본변동 게이트도 통과해 둬야 한다
-      seedCorporateActionCoverage(ctx.container, ['NOFACTS'], yearRange(2025, 2025));
+      await seedCorporateActionCoverage(ctx.container, ['NOFACTS'], yearRange(2025, 2025));
       const extra: Candle[] = [];
       for (let index = 0; index < 40; index += 1) {
         extra.push({
@@ -355,7 +359,7 @@ describe('워커의 자본변동 팩트 배선 — 접수일이 기간 종료 �
     // 2025-01-02 ~ 2025-04-30 = 119봉
     seedDailyBars(ctx.container.database.db, splitScenarioCandles(119));
     // 자본변동 게이트(Task 6) — 이 파일의 제출 기간(2025-01-02~2025-04-30)이 걸치는 연도
-    seedCorporateActionCoverage(ctx.container, ['SPLIT', 'FLAT'], yearRange(2025, 2025));
+    await seedCorporateActionCoverage(ctx.container, ['SPLIT', 'FLAT'], yearRange(2025, 2025));
 
     await ctx.container.factRepository.saveFacts([
       {
@@ -542,7 +546,7 @@ describe('이익 가속·가격 확인 순위 워커 배선 — PIT 공시 경�
       index += 1;
     }
     seedDailyBars(ctx.container.database.db, candles);
-    seedCorporateActionCoverage(ctx.container, ['FUTURE_WINNER', 'NO_ACCEL', 'NO_MOMENTUM'], yearRange(2024, 2025));
+    await seedCorporateActionCoverage(ctx.container, ['FUTURE_WINNER', 'NO_ACCEL', 'NO_MOMENTUM'], yearRange(2024, 2025));
 
     await ctx.container.factRepository.saveFacts([
       // 영업이익이 가속하지 않는다 (8분기 모두 동일 → TTM 성장률 0, 양수 조건 불충족)
@@ -550,6 +554,11 @@ describe('이익 가속·가격 확인 순위 워커 배선 — PIT 공시 경�
       // 영업이익은 FUTURE_WINNER 와 같은 가속 패턴이지만 가격이 오르지 않아 모멘텀 게이트에서 빠진다
       ...operatingIncomeFacts('NO_MOMENTUM', [40, 30, 20, 10, 20, 20, 20, 20], FIN_START),
     ]);
+    seedFinancialCoverage(
+      ctx.container,
+      ['FUTURE_WINNER', 'NO_ACCEL', 'NO_MOMENTUM'],
+      yearRange(2024, 2025),
+    );
   });
 
   afterEach(async () => {
@@ -654,7 +663,7 @@ describe('저PER·고ROE 순위 워커 배선 — PIT 공시 경계 (Task 12)', 
       }
     }
     seedDailyBars(ctx.container.database.db, candles);
-    seedCorporateActionCoverage(ctx.container, ['FUTURE_WINNER', 'NEG_INCOME', 'NO_EQUITY'], yearRange(2024, 2025));
+    await seedCorporateActionCoverage(ctx.container, ['FUTURE_WINNER', 'NEG_INCOME', 'NO_EQUITY'], yearRange(2024, 2025));
 
     await ctx.container.factRepository.saveFacts([
       // 순이익이 음수라 PER·ROE 계산 자체가 성립하지 않는다
@@ -663,6 +672,11 @@ describe('저PER·고ROE 순위 워커 배선 — PIT 공시 경계 (Task 12)', 
       // 자본총계 공시가 없다 — PER은 순이익만으로 계산되지 않으므로 ROE 를 못 구해 제외된다
       ...netIncomeFacts('NO_EQUITY', [1_000, 1_000, 1_000, 1_000], FIN_START),
     ]);
+    seedFinancialCoverage(
+      ctx.container,
+      ['FUTURE_WINNER', 'NEG_INCOME', 'NO_EQUITY'],
+      yearRange(2024, 2025),
+    );
   });
 
   afterEach(async () => {

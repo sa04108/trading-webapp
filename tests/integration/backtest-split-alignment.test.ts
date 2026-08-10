@@ -117,7 +117,7 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
       }],
     );
     seedDailyBars(ctx.container.database.db, candles());
-    seedCorporateActionCoverage(ctx.container, [SYMBOL], yearRange(2025, 2025));
+    await seedCorporateActionCoverage(ctx.container, [SYMBOL], yearRange(2025, 2025));
     await ctx.container.factRepository.saveFacts([splitFact()]);
   });
 
