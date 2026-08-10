@@ -5,10 +5,7 @@ import {
   SymbolMasterService,
   type SymbolMasterServiceDeps,
 } from '../../src/server/modules/market-data/application/symbol-master-service.js';
-import {
-  computeRebalanceDates,
-  UniverseRuleResolver,
-} from '../../src/server/modules/backtest/application/universe-rule-resolver.js';
+import { UniverseRuleResolver } from '../../src/server/modules/backtest/application/universe-rule-resolver.js';
 import type { UniverseRule } from '../../src/shared/schemas/universe-rule.js';
 import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
@@ -253,25 +250,6 @@ describe('UniverseRuleResolver.resolve', () => {
     expect(result.schedule).toEqual([]);
 
     await teardown(ctx);
-  });
-});
-
-describe('computeRebalanceDates', () => {
-  it('월말 시작일은 각 리밸런스마다 그 달의 말일로 자연 클램프된다', () => {
-    const dates = computeRebalanceDates({ from: '2023-01-31', to: '2023-12-31' }, 1);
-    expect(dates).toEqual([
-      '2023-01-31', '2023-02-28', '2023-03-31', '2023-04-30', '2023-05-31', '2023-06-30',
-      '2023-07-31', '2023-08-31', '2023-09-30', '2023-10-31', '2023-11-30', '2023-12-31',
-    ]);
-  });
-
-  it('rebalanceMonths 간격으로 같은 일자를 유지하고, to 초과 날짜는 제외한다', () => {
-    const dates = computeRebalanceDates({ from: '2023-01-15', to: '2023-04-15' }, 3);
-    expect(dates).toEqual(['2023-01-15', '2023-04-15']);
-
-    // 다음 리밸런스(2023-07-15)가 to 를 넘으므로 목록은 여기서 끝난다.
-    const bounded = computeRebalanceDates({ from: '2023-01-01', to: '2023-01-31' }, 1);
-    expect(bounded).toEqual(['2023-01-01']);
   });
 });
 

@@ -762,12 +762,27 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect((cloned.json() as { error: string }).error).toContain('상장시점 재무 데이터가 필요');
   });
 
-  it('초안은 재무 요구 미충족도 blockers 에 담는다', async () => {
-    const job = ctx.container.jobQueue.enqueue({
+  it('준비가 완료된 초안은 재무 요구 미충족도 blockers 에 담는다', async () => {
+    const request: BacktestRequest = {
       ...buildRequest(),
       strategyId: 'value-quality-rank',
       parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+    };
+    const job = ctx.container.jobQueue.enqueue(request);
+
+    // 완료된 준비가 있어야 초안이 실제 union으로 재무 blockers 를 계산한다(리뷰
+    // finding, 2026-08-09) — 준비 없이 유니버스를 추측하지 않는다.
+    const preparation = ctx.container.backtestPreparationOrchestrator.start({
+      universeRule: request.universeRule,
+      period: request.period,
+      strategyId: request.strategyId,
+      parameters: request.parameters,
     });
+    await waitFor(() => {
+      const status = ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status;
+      return status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED';
+    }, 5_000);
+    expect(ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status).toBe('COMPLETED');
 
     const draft = await ctx.app.inject({
       method: 'GET',
@@ -777,6 +792,41 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(draft.statusCode).toBe(200);
     const body = draft.json() as { blockers: string[] };
     expect(body.blockers.some((b) => b.includes('상장시점 재무 데이터가 필요'))).toBe(true);
+  });
+
+  /**
+   * 리뷰 finding(2026-08-09): 완료된 준비가 없는 초안은 `UniverseRuleResolver.
+   * resolve()`(stages[0] 하나만 시총으로 보는 stopgap)로 유니버스를 추측하지
+   * 않는다. PER 을 첫 단계로 두면 그 stopgap이 기준을 완전히 무시하고 시총으로만
+   * 뽑았을 잘못된 유니버스가 재무 blockers 에 들어갔을 것이다 — 지금은 준비가
+   * 없으면 그 계산 자체를 건너뛰고 "데이터 준비 필요" 신호만 담는다.
+   */
+  it('여러 단계(PER 우선) 규칙의 초안은 준비 완료 전에는 유니버스를 추측하지 않는다', async () => {
+    const job = ctx.container.jobQueue.enqueue({
+      ...buildRequest(),
+      universeRule: {
+        markets: ['KOSPI'],
+        stages: [
+          { criterion: 'PER', limit: 5 },
+          { criterion: 'MARKET_CAP', limit: 1 },
+        ],
+        rebalanceInterval: { value: 1, unit: 'MONTH' },
+      },
+    });
+
+    const draft = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${job.id}/clone-draft`,
+      cookies: { qp_session: cookie },
+    });
+    expect(draft.statusCode).toBe(200);
+    const body = draft.json() as { blockers: string[] };
+    expect(body.blockers.some((b) => b.includes('데이터 준비'))).toBe(true);
+    // 옛 stopgap이 살아 있었다면 미커버 리밸런스 날짜를 그릇된(시총 전용) 유니버스로
+    // 판정해 이 문구를 냈을 것이다 — 이제는 그 경로를 아예 타지 않는다.
+    expect(
+      body.blockers.some((b) => b.includes('종목 마스터가 다음 리밸런스 날짜를 커버하지 않습니다')),
+    ).toBe(false);
   });
 
   it('일부 종목만 봉이 없으면 거부하지 않는다 (신규 상장 등 정상)', async () => {
@@ -803,6 +853,27 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     } as Record<string, unknown>;
     delete legacy.risk;
     const job = ctx.container.jobQueue.enqueue(legacy as never);
+
+    // 재기준된 요청 모양을 먼저 읽어(blockers 는 아직 무시) 그 값으로 준비를
+    // 완료해 둔다 — 완료된 준비가 없으면 blockers 는 이제 "데이터 준비 필요" 로
+    // 채워진다(리뷰 finding, 2026-08-09), 유니버스를 추측하지 않기 때문이다.
+    const firstDraft = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${job.id}/clone-draft`,
+      cookies: { qp_session: cookie },
+    });
+    const rebasedRequest = (firstDraft.json() as { request: BacktestRequest }).request;
+    const preparation = ctx.container.backtestPreparationOrchestrator.start({
+      universeRule: rebasedRequest.universeRule,
+      period: rebasedRequest.period,
+      strategyId: rebasedRequest.strategyId,
+      parameters: rebasedRequest.parameters,
+    });
+    await waitFor(() => {
+      const status = ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status;
+      return status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED';
+    }, 5_000);
+    expect(ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status).toBe('COMPLETED');
 
     const draft = await ctx.app.inject({
       method: 'GET',
@@ -851,10 +922,25 @@ describe('backtest job queue (스펙 §10, §14)', () => {
 
   it('초안은 제출 불가한 원본도 열어준다 — 사유는 blockers 에 담는다', async () => {
     // 봉이 없는 기간 → 제출은 400 이지만 초안은 열려야 고칠 수 있다
-    const job = ctx.container.jobQueue.enqueue({
+    const request: BacktestRequest = {
       ...buildRequest(),
       period: { from: NO_CANDLE_DATE, to: '2020-12-31' },
+    };
+    const job = ctx.container.jobQueue.enqueue(request);
+
+    // 완료된 준비가 있어야 초안이 실제 union으로 캔들 존재 여부를 판정한다
+    // (리뷰 finding, 2026-08-09) — 준비 없이 유니버스를 추측하지 않는다.
+    const preparation = ctx.container.backtestPreparationOrchestrator.start({
+      universeRule: request.universeRule,
+      period: request.period,
+      strategyId: request.strategyId,
+      parameters: request.parameters,
     });
+    await waitFor(() => {
+      const status = ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status;
+      return status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED';
+    }, 5_000);
+    expect(ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status).toBe('COMPLETED');
 
     const draft = await ctx.app.inject({
       method: 'GET',

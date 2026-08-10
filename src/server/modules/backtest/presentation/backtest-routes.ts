@@ -38,11 +38,7 @@ import type { JobOrchestrator, JobEvent } from '../application/job-orchestrator.
 import type { BacktestJobRow, JobQueue } from '../application/job-queue.js';
 import type { ResultsService } from '../application/results-service.js';
 import { rebaseStoredRequest } from '../application/stored-request.js';
-import { computeRebalanceDates } from '../../../../shared/schemas/rebalance-interval.js';
-import {
-  type ResolvedUniverse,
-  type UniverseRuleResolver,
-} from '../application/universe-rule-resolver.js';
+import { type ResolvedUniverse } from '../application/universe-rule-resolver.js';
 import type {
   BacktestPreparationOrchestrator,
   BacktestUniversePreview,
@@ -59,8 +55,6 @@ export interface BacktestRouteDeps {
   readonly symbolService: SymbolService;
   /** 종목별 일봉 보유 구간 — `krx_daily_bars` 를 직접 집계한다(Task 6) */
   readonly candleCoverage: CandleCoverageService;
-  /** 유니버스 규칙 → 리밸런스 날짜별 멤버십 일정 (스펙 2026-08-05) */
-  readonly universeRuleResolver: UniverseRuleResolver;
   readonly preparation: BacktestPreparationOrchestrator;
   readonly audit: AuditLogService;
   readonly factRepository: FactRepository;
@@ -193,7 +187,6 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     strategies,
     symbolService,
     candleCoverage,
-    universeRuleResolver,
     preparation,
     audit,
     factRepository,
@@ -311,14 +304,6 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     return { universe, timeframe: consumed };
   };
 
-  /** 유니버스 일정은 전략 파라미터가 아니라 요청의 공유 interval 계약만 따른다. */
-  const resolveScheduleForRequest = (body: BacktestRequest): Promise<ResolvedUniverse> => {
-    return universeRuleResolver.resolve(
-      body.universeRule,
-      computeRebalanceDates(body.period, body.universeRule.rebalanceInterval),
-    );
-  };
-
   type ValidationResult =
     | {
         readonly ok: true;
@@ -374,10 +359,15 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    * 이미 동기화해 둔다. 실전에 등록된 전략은 전부 이 조건을 충족한다
    * (tests/unit/backtest-preparation-plan.test.ts 전략별 표 참고) — 제출 시점에
    * 다시 대조해도 잡을 수 있는 결측이 남지 않는다.
+   *
+   * `preparedPreview` 는 항상 있어야 한다 — 완료된 준비 없이 유니버스를 다시
+   * 추측하는 옛 경로(`UniverseRuleResolver.resolve`, stages[0] 만 보는 stopgap)는
+   * clone-draft 개편(리뷰 finding, 2026-08-09)으로 없앴다. 완료된 준비가 없는
+   * 호출자는 이 함수를 부르기 전에 스스로 "데이터 준비 필요" 로 갈라져야 한다.
    */
   const validateSubmission = async (
     body: BacktestRequest,
-    preparedPreview?: BacktestUniversePreview,
+    preparedPreview: BacktestUniversePreview,
   ): Promise<ValidationResult> => {
     // 전략 버전은 검사하지 않는다 (D-029) — 요청이 버전을 들고 다니지 않는다.
     // 실행되는 것은 언제나 지금 등록된 전략이다.
@@ -390,9 +380,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     // ① 유니버스 규칙 → 리밸런스 날짜별 멤버십 일정. 커버 밖 날짜가 있으면 캔들
     // 검증으로 넘어가지 않고 바로 422 로 알린다 — 종목 구성 자체를 모르는 날짜의
     // 캔들을 따질 수 없다.
-    const resolved = preparedPreview
-      ? preparedPreviewToResolved(preparedPreview)
-      : await resolveScheduleForRequest(body);
+    const resolved = preparedPreviewToResolved(preparedPreview);
     if (resolved.uncoveredDates.length > 0) {
       return {
         ok: false,
@@ -433,16 +421,14 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
 
     // ③ 종목 버전 pin 은 기존 universeJson 메커니즘을 그대로 쓴다 — unionSymbols 기준.
     // ④ provenancePin — 순서형 유니버스 파이프라인(Task 11, 스펙 2026-08-09)은 늘 이
-    // 모양이다. 단계 진단(`diagnostics`)은 완료된 준비(preview)에서만 나온다 —
-    // clone-draft 처럼 preparedPreview 없이 검증만 하는 경로는 절대 enqueue 하지
-    // 않으므로, 그때는 진단 없는 빈 배열을 pin 에 채워도 저장되는 값을 왜곡하지 않는다.
+    // 모양이다. preparedPreview 가 항상 있으므로 diagnostics 도 늘 그 값에서 나온다.
     const provenancePin: ProvenancePin = {
       sourceKind: 'SYMBOL_MASTER',
       filterPolicyVersion: KRX_FILTER_POLICY_VERSION,
       selectionMethod: 'ORDERED_UNIVERSE_PIPELINE',
       universeRule: body.universeRule,
       scheduleHash: resolved.scheduleHash,
-      diagnostics: preparedPreview?.diagnostics ?? [],
+      diagnostics: preparedPreview.diagnostics,
       preparedAtMs: clock.now(),
     };
 
@@ -478,8 +464,8 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (unionSymbols.some((code) => factRepository.hasFacts('SYMBOL', code))) return null;
     return (
       '이 전략은 상장시점 재무 데이터가 필요하지만 선택한 종목에는 아직 없습니다: ' +
-      `${unionSymbols.join(', ')} — 종목 화면에서 해당 종목을 선택해 "재무" 를 함께 ` +
-      '동기화하세요.'
+      `${unionSymbols.join(', ')} — 미리보기를 다시 실행해 데이터 준비를 완료하세요. ` +
+      'DART 일일 한도로 대기 중이면 다음 날 자동으로 재개됩니다.'
     );
   };
 
@@ -734,6 +720,15 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    * 재설정 및 복제용 초안 (D-025). 읽기 전용 — 대기열에 넣지 않고 유니버스 버전도 고정하지 않는다.
    * 검증을 **돌리되 막지 않는다**: 여기서 400 으로 끊으면 조건이 틀어진 백테스트를 고칠
    * 화면 자체가 열리지 않는다. 실제 차단은 제출 시점 POST /backtests 가 그대로 지킨다.
+   *
+   * 완료된 준비(preparation)가 이미 있으면 그 union으로 blockers 를 계산한다. 없으면
+   * 유니버스를 추측하지 않는다(리뷰 finding, 2026-08-09) — `UniverseRuleResolver.
+   * resolve()` 는 stages[0](MARKET_CAP)만 보는 옛 경로라, PER·DECLINE 처럼 여러
+   * 단계인 규칙을 잘못된 유니버스로 판정해 재무·상한 blockers 를 그릇된 종목 집합으로
+   * 매기고 KRX 호출까지 낭비한다. 이 경우는 union이 필요한 검사(재무·커버리지·등록)를
+   * 건너뛰고, 위저드가 이미 아는 "데이터 준비 필요" 신호를 대신 담는다 — 위저드는 이
+   * 신호를 받으면 미리보기→준비를 그대로 다시 돌린다. 파라미터·프로파일처럼 유니버스와
+   * 무관한 정적 검증과 topN vs maxPositions 상한 검사는 준비 여부와 관계없이 그대로 돈다.
    */
   app.get('/backtests/:id/clone-draft', { preHandler: requireAuth }, async (request, reply) => {
     const { id } = request.params as { id: string };
@@ -746,21 +741,41 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     );
     if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
 
-    let validated: Awaited<ReturnType<typeof validateSubmission>>;
-    let resolvedUniverse: ResolvedUniverse;
+    let prepared: Awaited<ReturnType<typeof preparation.getReadyPreview>>;
     try {
-      validated = await validateSubmission(rebased.request);
-      // 검증이 실패해도 재무·상한 검사에는 unionSymbols 이 필요하다 — blockers 목록이
-      // 완전하려면 이 값을 다시 구해야 한다. resolve 는 uncovered 여도 예외를 던지지
-      // 않으므로 안전하게 재사용한다.
-      resolvedUniverse = validated.ok ? validated.resolved : await resolveScheduleForRequest(rebased.request);
+      prepared = await preparation.getReadyPreview(preparationInputOf(rebased.request));
+    } catch (error) {
+      if (sendIfKrxError(reply, error)) return reply;
+      if (sendIfNotCovered(reply, error)) return reply;
+      throw error;
+    }
+
+    if (!prepared) {
+      const capacityError = checkPositionCapacity(rebased.request);
+      return {
+        request: rebased.request,
+        warnings: rebased.warnings,
+        blockers: [
+          ...validateStaticSubmission(rebased.request),
+          '동일한 조건의 데이터 준비가 아직 완료되지 않았습니다 — 미리보기를 다시 실행해 데이터 준비를 완료하세요.',
+          ...(capacityError ? [capacityError] : []),
+        ],
+      };
+    }
+
+    let validated: Awaited<ReturnType<typeof validateSubmission>>;
+    try {
+      validated = await validateSubmission(rebased.request, prepared);
     } catch (error) {
       if (sendIfKrxError(reply, error)) return reply;
       if (sendIfNotCovered(reply, error)) return reply;
       throw error;
     }
     const blockers = validated.ok ? [] : [...validated.errors];
-    const fundamentalsError = checkFundamentalsRequirement(rebased.request, resolvedUniverse.unionSymbols);
+    // 검증이 실패해도 재무 blockers 에는 unionSymbols 이 필요하다 — 완료된 준비의
+    // union 을 그대로 쓴다(예외를 던지지 않으므로 안전하게 재사용한다).
+    const unionSymbols = validated.ok ? validated.resolved.unionSymbols : preparedPreviewToResolved(prepared).unionSymbols;
+    const fundamentalsError = checkFundamentalsRequirement(rebased.request, unionSymbols);
     if (fundamentalsError) blockers.push(fundamentalsError);
     const capacityError = checkPositionCapacity(rebased.request);
     if (capacityError) blockers.push(capacityError);

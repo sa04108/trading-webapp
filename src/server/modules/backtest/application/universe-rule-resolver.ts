@@ -155,6 +155,12 @@ export class UniverseRuleResolver {
    * 둘 중 하나라도 없는 날짜는 getMarketCapsAt 을 부르지 않고 바로 uncoveredDates 에
    * 담는다 — 커버 밖 날짜는 어차피 제출 검증이 거부하므로, 여기서 KRX 호출 예산을
    * 미리 쓰지 않는다.
+   *
+   * MARKET_CAP 첫 단계만 보는 단순 경로라 PER·DECLINE 같은 여러 단계 규칙에는 쓸 수
+   * 없다 — 그 경로는 `resolveOrDescribeNeeds` 가 맡는다. clone-draft 가 완료된 준비
+   * 없이 이 메서드로 blockers 를 추측하던 마지막 프로덕션 호출자였는데, 잘못된
+   * 유니버스로 판정한다는 문제가 있어 없앴다(리뷰 finding, 2026-08-09) — 지금은 이
+   * 아래 테스트가 직접 부르는 것 외에는 호출자가 없다.
    */
   async resolve(
     rule: UniverseRule,
@@ -218,8 +224,8 @@ export class UniverseRuleResolver {
       }
       ranked.sort((a, b) => compareMarketCapDesc(a.marketCap, b.marketCap));
 
-      // Task 1 호환 경로: 선정 지표 단계 파이프라인(Task 4)이 들어오기 전까지는
-      // 기존 resolver가 지원하던 MARKET_CAP 첫 단계만 소비한다.
+      // 이 메서드는 MARKET_CAP 첫 단계만 본다(위 docblock 참고) — stages[1..] 는
+      // 여기서 소비하지 않는다.
       const top = ranked.slice(0, rule.stages[0]!.limit);
       const symbols = top.map(({ entry }) => entry.shortCode);
       for (const { entry } of top) {
@@ -634,46 +640,3 @@ async function loadCandleHistories(
   return histories;
 }
 
-/** 대상 월의 마지막 일 — 1-indexed month(1~12) */
-function lastDayOfMonth(year: number, month: number): number {
-  return new Date(Date.UTC(year, month, 0)).getUTCDate();
-}
-
-/**
- * `iso` 에 `months` 개월을 더하되 일자는 `iso` 의 원래 일자를 유지한다. 대상 월이 그
- * 일자보다 짧으면(월말 넘침) 그 달의 말일로 클램프한다 — 매번 원본 `from` 을 기준으로
- * 계산하므로, 2월처럼 짧은 달을 한 번 거쳐도 이후 리밸런스가 28/29일에 눌러앉지 않는다.
- */
-function addMonthsClampingToMonthEnd(iso: string, months: number): string {
-  const year = Number(iso.slice(0, 4));
-  const month = Number(iso.slice(5, 7)); // 1~12
-  const day = Number(iso.slice(8, 10));
-
-  const totalMonths = (month - 1) + months;
-  const targetYear = year + Math.floor(totalMonths / 12);
-  const targetMonth = ((totalMonths % 12) + 12) % 12; // 0~11
-  const clampedDay = Math.min(day, lastDayOfMonth(targetYear, targetMonth + 1));
-
-  const mm = String(targetMonth + 1).padStart(2, '0');
-  const dd = String(clampedDay).padStart(2, '0');
-  return `${targetYear}-${mm}-${dd}`;
-}
-
-/**
- * period.from 을 첫 리밸런스 날짜로 삼아 rebalanceMonths 간격으로 이후 날짜를 만든다.
- * 거래일 보정은 하지 않는다 — 리밸런스 날짜가 휴장일이어도 getUniverseAsOf 가 직전
- * 상태를 그대로 재구성하므로 resolver 입장에서 여전히 유효한 날짜이기 때문이다.
- * period.to 를 넘는 날짜는 결과에서 제외한다.
- */
-export function computeRebalanceDates(
-  period: { from: string; to: string },
-  rebalanceMonths: number,
-): string[] {
-  const dates: string[] = [];
-  for (let k = 0; ; k += 1) {
-    const date = k === 0 ? period.from : addMonthsClampingToMonthEnd(period.from, k * rebalanceMonths);
-    if (date > period.to) break;
-    dates.push(date);
-  }
-  return dates;
-}

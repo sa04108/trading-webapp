@@ -89,7 +89,12 @@ export interface Container {
   readonly symbolMasterBackfill: SymbolMasterBackfill;
   readonly symbolMasterScheduler: SymbolMasterScheduler;
   readonly universeRuleResolver: UniverseRuleResolver;
-  /** 제출 게이트(Task 6)가 자본변동 수집 여부를 대조할 때 쓴다 */
+  /**
+   * DECLINE stage 후보의 자본변동 수집 연도를 판정할 때 쓴다(`UniverseRuleResolver.
+   * resolveOrDescribeNeeds`) — 준비(preparation) orchestrator 가 이 판정으로 아직
+   * 못 채운 연도를 알아내 동기화 계획을 세운다. 제출 시점 게이트(Task 6)는 Task 10에서
+   * 없앴다.
+   */
   readonly actionCoverageStore: CorporateActionCoverageStore;
   readonly backtestPreparationOrchestrator: BacktestPreparationOrchestrator;
   close(): Promise<void>;

@@ -1,5 +1,5 @@
-// 확장자 `.js` 와 별칭(`@/`) 회피는 `corporate-action-gate-logic.ts`/`prefill.ts` 와 같은
-// 이유다. `tests/unit/preparation-live.test.ts` 가 이 모듈을 가져오는데, 그 테스트는
+// 확장자 `.js` 와 별칭(`@/`) 회피는 `prefill.ts` 와 같은 이유다.
+// `tests/unit/preparation-live.test.ts` 가 이 모듈을 가져오는데, 그 테스트는
 // `tsconfig.server.json` 의 NodeNext 프로그램에 편입된다 — `@/` alias 는 vite·
 // tsconfig.web.json 에만 있어 그 프로그램에서는 풀리지 않는다.
 import { useQuery, useQueryClient } from '@tanstack/react-query';
