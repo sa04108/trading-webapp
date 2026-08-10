@@ -27,6 +27,9 @@ function renderRuleStep(period: { from: string; to: string }): string {
         value={DEFAULT_UNIVERSE_RULE}
         onChange={() => undefined}
         period={period}
+        strategyId="dummy-strategy"
+        parameters={{}}
+        previewRetryToken={0}
         onPreviewResolved={() => undefined}
       />
     </QueryClientProvider>,

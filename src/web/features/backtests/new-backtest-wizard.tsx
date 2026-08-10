@@ -22,8 +22,6 @@ import { formatKrw, timeframeLabel } from '@/lib/format';
 import { wizardTimeframes } from '@/features/datasets/dataset-slices';
 import type { SymbolSummary } from '@/features/datasets/symbol-types';
 import { costProfileLabel, slippageProfileLabel } from './profile-labels';
-import { CorporateActionGate } from './corporate-action-gate';
-import { extractCorporateActionGate } from './corporate-action-gate-logic';
 import { useStockNames } from '@/lib/use-stock-names';
 import { requestToFormState } from './prefill';
 import { ParamHint } from './param-hint';
@@ -84,6 +82,39 @@ export const DEFAULT_UNIVERSE_RULE: UniverseRule = {
 // 스키마 기본값(risk.maxPositions default 40, max 200 — backtest-request.ts)과 같은 값이다.
 export const DEFAULT_MAX_POSITIONS = '40';
 
+/**
+ * 전략 파라미터 입력(문자열)을 서버가 받는 숫자로 파싱한다.
+ *
+ * 검토 단계(`buildRequest`)와 유니버스 단계(미리보기 요청)가 같은 파싱을 쓴다 — 둘이
+ * 각자 파싱하면, 값이 같아도 라운딩·범위 판단이 갈라져 미리보기 때 만든 준비 작업의
+ * requestHash 와 실제 제출 requestHash 가 어긋날 수 있다(Task 6 hash 는 파싱된 값
+ * 기준이다). 실패하면 사람이 읽을 오류 문장을 그대로 돌려준다.
+ */
+function parseStrategyParameters(
+  paramSpecs: readonly NumberParamSpec[],
+  parameters: Record<string, string>,
+): Record<string, number> | string {
+  const parsed: Record<string, number> = {};
+  for (const spec of paramSpecs) {
+    const raw = parameters[spec.key] ?? '';
+    const label = paramLabel(spec);
+    if (raw === '') {
+      if (spec.optional) continue;
+      return `${label} 을(를) 입력하세요`;
+    }
+    const value = Number(raw);
+    if (!Number.isFinite(value)) return `${label} 이(가) 숫자가 아닙니다`;
+    if (spec.minimum !== undefined && value < spec.minimum) {
+      return `${label} 은(는) ${spec.minimum} 이상이어야 합니다`;
+    }
+    if (spec.maximum !== undefined && value > spec.maximum) {
+      return `${label} 은(는) ${spec.maximum} 이하여야 합니다`;
+    }
+    parsed[spec.key] = spec.isInteger ? Math.round(value) : value;
+  }
+  return parsed;
+}
+
 export function NewBacktestWizard() {
   const navigate = useNavigate();
   const params = useParams();
@@ -130,11 +161,11 @@ export function NewBacktestWizard() {
   const [randomSeed, setRandomSeed] = useState('42');
   const [stepError, setStepError] = useState<string | null>(null);
   /**
-   * 자본변동 게이트 화면(Task 8)에서 수집을 한 번이라도 마쳤는지 — 다시 막히면
-   * 문구를 "여전히 실패" 로 바꾼다(브리프 3번, "일부 실패" 로 뭉뚱그리지 않는다).
-   * 단계를 벗어나면 다음 진입은 새 시도이므로 아래 stepError 리셋과 함께 지운다.
+   * 제출이 409 PREPARATION_REQUIRED 로 거절되면(Task 10, 브리프 5번) 이 값을 올려
+   * `UniverseRuleStep` 에게 새 준비 요청을 다시 시작하라고 신호한다 — 값 자체는
+   * 의미가 없고 "이전보다 커졌다" 만 신호다.
    */
-  const [collectionAttempted, setCollectionAttempted] = useState(false);
+  const [previewRetryToken, setPreviewRetryToken] = useState(0);
 
   const strategies = useStrategies();
   const schema = useQuery({
@@ -171,6 +202,12 @@ export function NewBacktestWizard() {
 
   const selectedStrategy = strategies.data?.strategies.find((s) => s.id === strategyId) ?? null;
   const paramSpecs = useMemo(() => extractNumberParams(schema.data?.schema), [schema.data]);
+  // 미리보기 요청·검토 단계 제출이 같은 파싱을 쓴다(위 parseStrategyParameters 주석
+  // 참고) — 문자열이면 아직 파싱에 실패한 상태라는 뜻이다.
+  const parsedParameters = useMemo(
+    () => parseStrategyParameters(paramSpecs, parameters),
+    [paramSpecs, parameters],
+  );
 
   /**
    * 유니버스 미리보기 유효성 — `lastPreview` 와 지금 값을 매 렌더 비교해서 도출한다
@@ -180,10 +217,16 @@ export function NewBacktestWizard() {
    *
    * 리밸런스 주기는 더 이상 전략 파라미터에서 도출하지 않는다(Task 9) — `universeRule.
    * rebalanceInterval` 이 그 자체로 완결된 값이라 여기서 따로 뽑을 것이 없다.
+   *
+   * strategyId·parameters 도 포함한다(Task 10) — 준비 작업(Task 6)의 requestHash 가
+   * 이 둘까지 본다. 전략을 아직 못 골랐거나 파라미터가 아직 안 맞으면 빈 값으로
+   * 채운다 — 어차피 그 상태에서는 `UniverseRuleStep` 이 미리보기 자체를 막는다.
    */
   const currentUniverseParams: PreviewParams = {
     universeRule,
     period: { from, to },
+    strategyId: strategyId ?? '',
+    parameters: typeof parsedParameters === 'string' ? {} : parsedParameters,
   };
   // 지금 값과 일치하는 미리보기 결과 — 일치하지 않으면(규칙·기간이 바뀌었으면) null.
   const currentPreviewResult =
@@ -286,26 +329,11 @@ export function NewBacktestWizard() {
       return '동시 보유 종목 상한은 1~200 이어야 합니다';
     }
 
-    const parsedParams: Record<string, number> = {};
-    for (const spec of paramSpecs) {
-      const raw = paramValue(spec);
-      const label = paramLabel(spec);
-      if (raw === '') {
-        if (spec.optional) continue;
-        return `${label} 을(를) 입력하세요`;
-      }
-      const value = Number(raw);
-      if (!Number.isFinite(value)) return `${label} 이(가) 숫자가 아닙니다`;
-      if (spec.minimum !== undefined && value < spec.minimum)
-        return `${label} 은(는) ${spec.minimum} 이상이어야 합니다`;
-      if (spec.maximum !== undefined && value > spec.maximum)
-        return `${label} 은(는) ${spec.maximum} 이하여야 합니다`;
-      parsedParams[spec.key] = spec.isInteger ? Math.round(value) : value;
-    }
+    if (typeof parsedParameters === 'string') return parsedParameters;
 
     return {
       strategyId: selectedStrategy.id,
-      parameters: parsedParams,
+      parameters: parsedParameters,
       universeRule,
       // 항상 명시해 보낸다 — 결과·복제가 "무슨 봉으로 돌렸는지" 를 들고 다니게 (§9.5).
       // KRX 일봉이 유일한 출처라 고를 것 없이 이 값 하나로 고정한다.
@@ -333,13 +361,24 @@ export function NewBacktestWizard() {
       void navigate(`/backtests/${data.job.id}`);
     },
     onError: (error: unknown) => {
-      // 자본변동 게이트 오류는 CorporateActionGate 화면이 대신 안내한다 —
-      // 여기서 같은 사유를 빨간 배너로 한 번 더 띄우면 문구가 겹친다.
-      if (extractCorporateActionGate(error) !== null) return;
+      // 준비된 데이터가 아직 없다는 뜻이다(Task 6) — 검토·실행 단계에 머물며 같은
+      // 사유를 빨간 배너로 띄우면 사용자는 "왜 실패했는지" 를 알 방법이 없다. 대신
+      // 미리보기 단계로 돌려보내고 새 준비 요청을 바로 시작시킨다(브리프 5번).
+      // 서버 `{error, message}` 관례상 사람이 읽는 문장은 details.message 에 있고
+      // `error.message` 자체는 코드('PREPARATION_REQUIRED')다(api-client.ts 참고).
+      if (
+        error instanceof ApiError &&
+        error.status === 409 &&
+        error.message === 'PREPARATION_REQUIRED'
+      ) {
+        setLastPreview(null);
+        setPreviewRetryToken((token) => token + 1);
+        goToSlug(recordTraversal(2));
+        return;
+      }
       setStepError(error instanceof ApiError ? error.message : '제출에 실패했습니다');
     },
   });
-  const actionGate = extractCorporateActionGate(submitMutation.error);
 
   // 단계 게이트가 보는 값만 모아 넘긴다 — 규칙은 wizard-steps.ts 한 곳에 있다
   /**
@@ -460,12 +499,8 @@ export function NewBacktestWizard() {
     // 검토보다 앞으로 돌아가면 '검토를 지났다' 를 취소한다 — 설정을 고친 뒤 앞으로가기로
     // 제출 화면에 되돌아오는 길을 막는다. 다시 들어가려면 검토에서 '다음' 을 눌러야 한다.
     if (step < REVIEW_STEP) setReviewPassed(false);
-    // 실행 화면을 벗어나면 다음 진입은 새 시도다 — "여전히 실패" 문구가 낡은 시도의
-    // 흔적으로 남지 않게 한다.
-    if (step !== RUN_STEP) {
-      setCollectionAttempted(false);
-      submitMutation.reset();
-    }
+    // 실행 화면을 벗어나면 다음 진입은 새 시도다 — 낡은 제출 실패가 흔적으로 남지 않게 한다.
+    if (step !== RUN_STEP) submitMutation.reset();
   }, [step]);
 
   return (
@@ -695,6 +730,9 @@ export function NewBacktestWizard() {
             value={universeRule}
             onChange={setUniverseRule}
             period={{ from, to }}
+            strategyId={strategyId}
+            parameters={parsedParameters}
+            previewRetryToken={previewRetryToken}
             onPreviewResolved={handlePreviewResolved}
           />
 
@@ -878,24 +916,6 @@ export function NewBacktestWizard() {
         ) : null
       ) : null}
 
-      {/* 제출이 막힌 그 자리에 붙인다 — 막힌 이유와 해소책이 같은 카드에 있어야
-          문맥을 잃지 않는다(설계 §3). 게이트가 떠 있는 동안은 아래 실행 버튼을
-          숨기고 이 카드의 버튼이 그 역할을 대신한다. */}
-      {!prefilling && step === RUN_STEP && actionGate ? (
-        <CorporateActionGate
-          gate={actionGate}
-          nameOf={nameOf}
-          attempted={collectionAttempted}
-          onCollected={() => {
-            // 제출은 여기서 하지 않는다 — 막혔던 오류만 지워 실행 버튼을 다시 연다.
-            // 실제 제출은 사용자가 그 버튼을 눌러야 일어난다(계획 §3, 리뷰 finding).
-            setCollectionAttempted(true);
-            submitMutation.reset();
-            toast.success('자본변동 이력 수집이 끝났습니다 — 실행 버튼을 눌러 다시 제출하세요');
-          }}
-        />
-      ) : null}
-
       {prefilling ? null : (
         <div className="flex items-center justify-between gap-2">
           <Button
@@ -910,7 +930,7 @@ export function NewBacktestWizard() {
             <Button className="h-11" onClick={goNext}>
               다음
             </Button>
-          ) : actionGate ? null : (
+          ) : (
             <Button
               className="h-11"
               disabled={typeof request === 'string' || submitMutation.isPending}
