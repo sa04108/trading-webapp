@@ -10,6 +10,7 @@ import {
   DEFAULT_DECLINE_LOOKBACK_TRADING_DAYS,
   FIRST_STAGE_LIMIT_MAX,
   moveStage,
+  parseStageLimitInput,
   removeStage,
   type PipelineUpdate,
 } from './universe-pipeline';
@@ -162,8 +163,8 @@ export function UniverseStageEditor({ stages, onChange }: UniverseStageEditorPro
                 max={maxLimit}
                 value={stage.limit}
                 onChange={(event) => {
-                  const n = Number(event.target.value);
-                  if (!Number.isInteger(n) || n < 1) return;
+                  const n = parseStageLimitInput(event.target.value, maxLimit);
+                  if (n === null) return;
                   applyUpdate(changeStageLimit(stages, index, n));
                 }}
               />

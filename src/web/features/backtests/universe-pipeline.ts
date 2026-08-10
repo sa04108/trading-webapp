@@ -82,3 +82,17 @@ export function changeStageLimit(
   const next = stages.map((stage, i) => (i === index ? { ...stage, limit } : stage));
   return cascadeLimits(next);
 }
+
+/**
+ * N 입력의 원문 문자열을 `changeStageLimit()` 에 넘기기 전에 검증한다.
+ *
+ * HTML `max` 속성은 키보드 입력 자체를 막지 않는다 — 첫 단계는 뒤 단계가 없어
+ * `cascadeLimits` 가 절대 건드리지 않으므로(주석 참고), 편집기가 여기서 다시
+ * `maxLimit` 을 확인해야 500 같은 값을 타이핑해도 universeRuleSchema 의 절대
+ * 상한(1~200)을 벗어난 rule 이 상태에 만들어지지 않는다.
+ */
+export function parseStageLimitInput(raw: string, maxLimit: number): number | null {
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > maxLimit) return null;
+  return n;
+}

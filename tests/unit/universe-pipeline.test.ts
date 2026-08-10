@@ -3,6 +3,7 @@ import {
   addStage,
   changeStageLimit,
   moveStage,
+  parseStageLimitInput,
   removeStage,
 } from '../../src/web/features/backtests/universe-pipeline.js';
 
@@ -174,5 +175,30 @@ describe('removeStage', () => {
 
   it('마지막 한 단계는 삭제를 거부한다', () => {
     expect(() => removeStage([{ criterion: 'MARKET_CAP', limit: 100 }], 0)).toThrow();
+  });
+});
+
+describe('parseStageLimitInput', () => {
+  // HTML max 속성은 키보드 입력을 막지 않는다 — 첫 단계는 cascadeLimits 가 절대
+  // 건드리지 않으므로(리뷰 지적), 이 함수가 changeStageLimit() 앞에서 상한을
+  // 확인해야 500 같은 값이 그대로 상태에 반영되지 않는다.
+  it('첫 단계 상한(200)을 넘는 입력은 거부한다', () => {
+    expect(parseStageLimitInput('500', 200)).toBeNull();
+  });
+
+  it('상한 이하의 정수는 그대로 통과시킨다', () => {
+    expect(parseStageLimitInput('200', 200)).toBe(200);
+    expect(parseStageLimitInput('1', 200)).toBe(1);
+  });
+
+  it('뒤 단계는 직전 단계 값(예: 80)을 넘는 입력을 거부한다', () => {
+    expect(parseStageLimitInput('81', 80)).toBeNull();
+    expect(parseStageLimitInput('80', 80)).toBe(80);
+  });
+
+  it('정수가 아니거나 1 미만인 입력은 거부한다', () => {
+    expect(parseStageLimitInput('0', 200)).toBeNull();
+    expect(parseStageLimitInput('1.5', 200)).toBeNull();
+    expect(parseStageLimitInput('', 200)).toBeNull();
   });
 });
