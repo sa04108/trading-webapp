@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -14,9 +14,32 @@ import {
 } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { api, ApiError, postJson } from '@/lib/api-client';
-import { MAX_UNIVERSE_SYMBOLS } from '../../../shared/schemas/universe-limit.js';
-import type { UniverseRule } from '../../../shared/schemas/universe-rule.js';
+import { rebalanceIntervalFitsPeriod } from '../../../shared/schemas/rebalance-interval.js';
+import type { RebalanceInterval, UniverseRule } from '../../../shared/schemas/universe-rule.js';
 import type { SymbolMasterCoverageDto } from '../../../shared/schemas/symbol-master.js';
+import { UniverseStageEditor } from './universe-stage-editor';
+
+/** 주기 unit 마다 허용하는 최댓값 — 스키마(universe-rule.ts rebalanceIntervalSchema)와 같은 값 */
+const REBALANCE_UNIT_MAX: Record<RebalanceInterval['unit'], number> = {
+  DAY: 365,
+  WEEK: 52,
+  MONTH: 12,
+  YEAR: 1,
+};
+
+/** unit 마다 필드 모양이 다른 discriminated union 이라 값을 조립하는 지점을 한 곳에 모은다 */
+function buildRebalanceInterval(unit: RebalanceInterval['unit'], value: number): RebalanceInterval {
+  switch (unit) {
+    case 'DAY':
+      return { unit, value };
+    case 'WEEK':
+      return { unit, value };
+    case 'MONTH':
+      return { unit, value };
+    case 'YEAR':
+      return { unit, value: 1 };
+  }
+}
 
 interface UniverseScheduleEntryDto {
   readonly rebalanceDate: string;
@@ -43,21 +66,22 @@ export interface UniversePreviewResponseDto {
 export interface PreviewParams {
   readonly universeRule: UniverseRule;
   readonly period: { readonly from: string; readonly to: string };
-  readonly rebalanceMonths: number;
 }
 
 /**
  * 파라미터 동등성 — 부모(new-backtest-wizard.tsx)와 이 컴포넌트가 같은 정의를 써야
  * "이 미리보기가 지금 값과 여전히 일치하는가" 판정이 두 곳에서 어긋나지 않는다.
+ *
+ * 단계 편집기(Task 9)가 들어오면서 규칙이 stages[0] 하나가 아니라 최대 5단계 배열과
+ * rebalanceInterval 전체로 커졌다 — 첫 단계만 비교하던 예전 방식은 두 번째 단계 이후를
+ * 바꿔도 "그대로" 로 오판해 이미 무효해진 미리보기를 유효하다고 계속 보여준다. 전부
+ * 원시값(배열·객체)이라 JSON 문자열 비교로 충분하다.
  */
 export function sameUniverseParams(a: PreviewParams, b: PreviewParams): boolean {
   return (
-    a.universeRule.markets[0] === b.universeRule.markets[0] &&
-    a.universeRule.stages[0]?.criterion === b.universeRule.stages[0]?.criterion &&
-    a.universeRule.stages[0]?.limit === b.universeRule.stages[0]?.limit &&
+    JSON.stringify(a.universeRule) === JSON.stringify(b.universeRule) &&
     a.period.from === b.period.from &&
-    a.period.to === b.period.to &&
-    a.rebalanceMonths === b.rebalanceMonths
+    a.period.to === b.period.to
   );
 }
 
@@ -66,8 +90,6 @@ export interface UniverseRuleStepProps {
   onChange: (rule: UniverseRule) => void;
   /** 위저드 '기간' 단계가 정한 값 — 이 화면에서는 읽기 전용이다(리뷰 fix, 아래 참고) */
   period: { from: string; to: string };
-  /** 전략 파라미터의 rebalanceMonths(없으면 1) — 위저드가 같은 소스로 도출해 넘긴다 */
-  rebalanceMonths: number;
   /**
    * 미리보기가 성공할 때마다(재동기화 뒤 재시도 포함) 그때 실제로 쓴 params 와 결과를
    * 그대로 올려 보낸다. **유효성 판정 자체는 하지 않는다** — 부모가 지금 값과 비교해
@@ -98,7 +120,6 @@ export function UniverseRuleStep({
   value,
   onChange,
   period,
-  rebalanceMonths,
   onPreviewResolved,
 }: UniverseRuleStepProps) {
   const queryClient = useQueryClient();
@@ -125,14 +146,7 @@ export function UniverseRuleStep({
     },
   });
 
-  // topN 은 유효한 정수일 때만 부모에 커밋한다 — 입력 중 빈 문자열·범위 밖 값은
-  // 로컬 텍스트로만 남기고 `value`(항상 유효한 UniverseRule)는 건드리지 않는다.
-  const [topNText, setTopNText] = useState(String(value.stages[0]?.limit ?? ''));
-  useEffect(() => {
-    setTopNText(String(value.stages[0]?.limit ?? ''));
-  }, [value.stages]);
-
-  const currentParams: PreviewParams = { universeRule: value, period, rebalanceMonths };
+  const currentParams: PreviewParams = { universeRule: value, period };
   const preview = previewMutation.data ?? null;
   // 이 컴포넌트가 화면에 떠 있는 동안 "다시 미리보기하세요" 안내를 보여줄 뿐이다 —
   // 실제 다음 단계 게이트는 부모가 판정한다(위 컴포넌트 주석 참고).
@@ -141,7 +155,11 @@ export function UniverseRuleStep({
     (previewMutation.variables === undefined ||
       !sameUniverseParams(previewMutation.variables, currentParams));
 
-  const canPreview = period.from !== '' && period.to !== '' && period.from <= period.to;
+  const periodReady = period.from !== '' && period.to !== '' && period.from <= period.to;
+  // 기간이 아직 없으면 이 판정 자체가 의미가 없다 — periodReady 부재 안내가 이미 따로 뜬다.
+  const intervalFitsPeriod =
+    !periodReady || rebalanceIntervalFitsPeriod(period, value.rebalanceInterval);
+  const canPreview = periodReady && intervalFitsPeriod;
 
   /**
    * "기간 전체 동기화" 버튼의 주 해결책 조건 — uncoveredDates(리밸런스 날짜만) 뿐
@@ -294,50 +312,78 @@ export function UniverseRuleStep({
         <CardHeader>
           <CardTitle className="text-base">유니버스 규칙</CardTitle>
           <CardDescription>
-            리밸런스 날짜마다 시가총액 상위 N종목으로 유니버스를 다시 구성
+            리밸런스 날짜마다 아래 단계를 순서대로 적용해 유니버스를 다시 구성
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
+          <div className="space-y-1">
+            <Label htmlFor="universe-market">시장</Label>
+            <Select
+              value={value.markets[0]}
+              onValueChange={(next) =>
+                onChange({ ...value, markets: [next as 'KOSPI' | 'KOSDAQ'] })
+              }
+            >
+              <SelectTrigger id="universe-market" className="h-11 w-32">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="KOSPI">KOSPI</SelectItem>
+                <SelectItem value="KOSDAQ">KOSDAQ</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <UniverseStageEditor
+            stages={value.stages}
+            onChange={(stages) => onChange({ ...value, stages })}
+          />
+
           <div className="flex flex-wrap items-end gap-2">
             <div className="space-y-1">
-              <Label htmlFor="universe-market">시장</Label>
+              <Label htmlFor="rebalance-interval-value">리밸런스 주기</Label>
+              <Input
+                id="rebalance-interval-value"
+                name="rebalanceIntervalValue"
+                type="number"
+                inputMode="numeric"
+                className="h-11 w-24"
+                min={1}
+                max={REBALANCE_UNIT_MAX[value.rebalanceInterval.unit]}
+                disabled={value.rebalanceInterval.unit === 'YEAR'}
+                value={value.rebalanceInterval.value}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  const max = REBALANCE_UNIT_MAX[value.rebalanceInterval.unit];
+                  if (!Number.isInteger(n) || n < 1 || n > max) return;
+                  onChange({
+                    ...value,
+                    rebalanceInterval: buildRebalanceInterval(value.rebalanceInterval.unit, n),
+                  });
+                }}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="rebalance-interval-unit">주기 단위</Label>
               <Select
-                value={value.markets[0]}
-                onValueChange={(next) =>
-                  onChange({ ...value, markets: [next as 'KOSPI' | 'KOSDAQ'] })
-                }
+                value={value.rebalanceInterval.unit}
+                onValueChange={(next) => {
+                  const unit = next as RebalanceInterval['unit'];
+                  const max = REBALANCE_UNIT_MAX[unit];
+                  const clamped = unit === 'YEAR' ? 1 : Math.min(value.rebalanceInterval.value, max);
+                  onChange({ ...value, rebalanceInterval: buildRebalanceInterval(unit, clamped) });
+                }}
               >
-                <SelectTrigger id="universe-market" className="h-11 w-32">
+                <SelectTrigger id="rebalance-interval-unit" className="h-11 w-24">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="KOSPI">KOSPI</SelectItem>
-                  <SelectItem value="KOSDAQ">KOSDAQ</SelectItem>
+                  <SelectItem value="DAY">일</SelectItem>
+                  <SelectItem value="WEEK">주</SelectItem>
+                  <SelectItem value="MONTH">개월</SelectItem>
+                  <SelectItem value="YEAR">년</SelectItem>
                 </SelectContent>
               </Select>
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="universe-topn">상위 N (시가총액)</Label>
-              <Input
-                id="universe-topn"
-                type="number"
-                inputMode="numeric"
-                className="h-11 w-28"
-                min={1}
-                max={MAX_UNIVERSE_SYMBOLS}
-                value={topNText}
-                onChange={(e) => {
-                  const text = e.target.value;
-                  setTopNText(text);
-                  const n = Number(text);
-                  if (Number.isInteger(n) && n >= 1 && n <= MAX_UNIVERSE_SYMBOLS) {
-                    onChange({
-                      ...value,
-                      stages: [{ ...value.stages[0]!, limit: n }],
-                    });
-                  }
-                }}
-              />
             </div>
             <Button
               className="h-11"
@@ -348,12 +394,19 @@ export function UniverseRuleStep({
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            기간 {period.from || '?'} ~ {period.to || '?'} · 리밸런스 주기 {rebalanceMonths}
-            개월마다 — 전략 파라미터 기본값
+            기간 {period.from || '?'} ~ {period.to || '?'}
           </p>
-          {!canPreview ? (
+          {!periodReady ? (
             <Alert variant="destructive" role="alert">
               <AlertDescription>먼저 '기간' 단계에서 기간을 입력하세요</AlertDescription>
+            </Alert>
+          ) : null}
+          {periodReady && !intervalFitsPeriod ? (
+            <Alert variant="destructive" role="alert">
+              <AlertDescription>
+                리밸런스 주기가 기간보다 길어 리밸런스가 한 번도 일어나지 않습니다 — 주기를
+                줄이거나 기간을 늘리세요.
+              </AlertDescription>
             </Alert>
           ) : null}
           {previewMutation.isError ? (

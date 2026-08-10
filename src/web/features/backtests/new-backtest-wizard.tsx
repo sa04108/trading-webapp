@@ -73,11 +73,16 @@ interface SlippageProfileSummary {
   fixed: number;
 }
 
-const DEFAULT_UNIVERSE_RULE: UniverseRule = {
+// 마크업 테스트(universe-stage-editor-markup.test.tsx)도 이 두 값을 그대로 임포트해
+// "신규 진입 기본값" 계약을 고정한다 — 위저드 밖에서 다시 선언하면 두 곳이 어긋날 수 있다.
+export const DEFAULT_UNIVERSE_RULE: UniverseRule = {
   markets: ['KOSPI'],
   stages: [{ criterion: 'MARKET_CAP', limit: 200 }],
   rebalanceInterval: { value: 1, unit: 'MONTH' },
 };
+
+// 스키마 기본값(risk.maxPositions default 40, max 200 — backtest-request.ts)과 같은 값이다.
+export const DEFAULT_MAX_POSITIONS = '40';
 
 export function NewBacktestWizard() {
   const navigate = useNavigate();
@@ -97,14 +102,14 @@ export function NewBacktestWizard() {
   const [parameters, setParameters] = useState<Record<string, string>>({});
   /**
    * 유니버스 규칙 (스펙 2026-08-05) — 위저드는 더 이상 종목이나 데이터셋을 고르지
-   * 않는다. 시장·상위 N 만 고르면 실제 종목 구성은 제출 시점에 서버가 리밸런스
-   * 날짜별로 재구성한다 (`UniverseRuleResolver`).
+   * 않는다. 시장·단계(최대 5개)·리밸런스 주기만 고르면 실제 종목 구성은 제출 시점에
+   * 서버가 리밸런스 날짜별로 재구성한다 (`UniverseRuleResolver`).
    */
   const [universeRule, setUniverseRule] = useState<UniverseRule>(DEFAULT_UNIVERSE_RULE);
   /**
    * `UniverseRuleStep` 이 마지막으로 성공시킨 미리보기 원재료(그때 쓴 params·결과) —
    * **판정 결과가 아니라 원재료만** 저장한다(리뷰 fix). `universePreviewOk`·
-   * `unionSymbols` 는 아래에서 이 값과 지금 값(universeRule·from·to·rebalanceMonths)을
+   * `unionSymbols` 는 아래에서 이 값과 지금 값(universeRule·from·to)을
    * 매 렌더 비교해 도출한다 — state 로 따로 들고 있다가 규칙·기간이 바뀔 때마다 수동으로
    * false 로 되돌리는 방식은, `UniverseRuleStep` 이 화면에 없는 동안(다른 단계에 있는
    * 동안) 그 되돌림 자체가 일어날 기회가 없어 낡은 성공이 유효한 척 남는 버그가 있었다.
@@ -116,9 +121,10 @@ export function NewBacktestWizard() {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [initialCash, setInitialCash] = useState('10000000');
-  // 기본값 20 — 스키마 최댓값(risk.maxPositions ≤ 20)이자, 등록된 세 전략(topN 없음/10/20)이
-  // 모두 기본값만으로 제출 게이트(topN > maxPositions 422)를 통과하는 값이다
-  const [maxPositions, setMaxPositions] = useState('20');
+  // 스키마 기본값 40 (backtest-request.ts risk.maxPositions default) — 등록된 전략들의
+  // topN 기본값(없음/10/20/최대 200)이 모두 이 값만으로 제출 게이트(topN > maxPositions
+  // 422)를 통과한다.
+  const [maxPositions, setMaxPositions] = useState(DEFAULT_MAX_POSITIONS);
   const [commissionProfileId, setCommissionProfileId] = useState('kr-equity-default');
   const [slippageProfileId, setSlippageProfileId] = useState('fixed-5bps');
   const [randomSeed, setRandomSeed] = useState('42');
@@ -167,29 +173,17 @@ export function NewBacktestWizard() {
   const paramSpecs = useMemo(() => extractNumberParams(schema.data?.schema), [schema.data]);
 
   /**
-   * rebalanceMonths — 전략 파라미터에 값이 있으면 그 값, 없으면 1(브리프 규약).
-   * 위저드가 파라미터에 접근하는 소스(paramSpecs·parameters)를 그대로 재사용한다 —
-   * 미리보기가 제출과 다른 리밸런스 주기로 리밸런스 날짜를 계산하면 미리본 일정과
-   * 실제로 돌아갈 일정이 어긋난다.
-   */
-  const rebalanceMonths = ((): number => {
-    const spec = paramSpecs.find((s) => s.key === 'rebalanceMonths');
-    if (!spec) return 1;
-    const raw = parameters['rebalanceMonths'];
-    const value = raw !== undefined && raw !== '' ? Number(raw) : spec.defaultValue;
-    return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : 1;
-  })();
-
-  /**
    * 유니버스 미리보기 유효성 — `lastPreview` 와 지금 값을 매 렌더 비교해서 도출한다
    * (리뷰 fix). `UniverseRuleStep` 이 화면에 없어도(다른 단계에 있어도) 이 계산은
-   * 항상 이 렌더의 최신 `universeRule`/`from`/`to`/`rebalanceMonths` 를 본다 — 컴포넌트
-   * 마운트 여부와 무관하다.
+   * 항상 이 렌더의 최신 `universeRule`/`from`/`to` 를 본다 — 컴포넌트 마운트 여부와
+   * 무관하다.
+   *
+   * 리밸런스 주기는 더 이상 전략 파라미터에서 도출하지 않는다(Task 9) — `universeRule.
+   * rebalanceInterval` 이 그 자체로 완결된 값이라 여기서 따로 뽑을 것이 없다.
    */
   const currentUniverseParams: PreviewParams = {
     universeRule,
     period: { from, to },
-    rebalanceMonths,
   };
   // 지금 값과 일치하는 미리보기 결과 — 일치하지 않으면(규칙·기간이 바뀌었으면) null.
   const currentPreviewResult =
@@ -287,8 +281,9 @@ export function NewBacktestWizard() {
     const cash = Number(initialCash);
     if (!Number.isFinite(cash) || cash <= 0) return '초기 자본이 올바르지 않습니다';
     const positions = Number(maxPositions);
-    if (!Number.isInteger(positions) || positions < 1 || positions > 20) {
-      return '동시 보유 종목 상한은 1~20 이어야 합니다';
+    // 상한 200 은 스키마(backtest-request.ts risk.maxPositions max)와 같은 값이다.
+    if (!Number.isInteger(positions) || positions < 1 || positions > 200) {
+      return '동시 보유 종목 상한은 1~200 이어야 합니다';
     }
 
     const parsedParams: Record<string, number> = {};
@@ -700,7 +695,6 @@ export function NewBacktestWizard() {
             value={universeRule}
             onChange={setUniverseRule}
             period={{ from, to }}
-            rebalanceMonths={rebalanceMonths}
             onPreviewResolved={handlePreviewResolved}
           />
 
@@ -769,7 +763,7 @@ export function NewBacktestWizard() {
                 inputMode="numeric"
                 className="h-11"
                 min={1}
-                max={20}
+                max={200}
                 step={1}
                 value={maxPositions}
                 onChange={(e) => setMaxPositions(e.target.value)}

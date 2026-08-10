@@ -59,4 +59,23 @@ describe('requestToFormState', () => {
     // 전략이 사라져도 유니버스 규칙은 그대로 옮긴다 — 규칙은 전략과 무관한 값이다
     expect(state.universeRule).toEqual(request.universeRule);
   });
+
+  it('여러 단계 규칙과 급하락 단계도 그대로 옮긴다 (단계 편집기, Task 9)', () => {
+    // stages[0] 만 보던 예전 화면과 달리, 지금은 최대 5단계 전부와 급하락의
+    // lookbackTradingDays 까지 옮겨야 편집기가 원본 그대로를 이어서 보여준다.
+    const multiStageRequest: BacktestRequestBody = {
+      ...request,
+      universeRule: {
+        markets: ['KOSDAQ'],
+        stages: [
+          { criterion: 'MARKET_CAP', limit: 200 },
+          { criterion: 'PER', limit: 80 },
+          { criterion: 'DECLINE', limit: 40, lookbackTradingDays: 60 },
+        ],
+        rebalanceInterval: { value: 2, unit: 'WEEK' },
+      },
+    };
+    const { state } = requestToFormState(multiStageRequest, catalog);
+    expect(state.universeRule).toEqual(multiStageRequest.universeRule);
+  });
 });
