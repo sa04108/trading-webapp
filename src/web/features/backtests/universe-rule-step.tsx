@@ -19,7 +19,11 @@ import { rebalanceIntervalFitsPeriod } from '../../../shared/schemas/rebalance-i
 import type { RebalanceInterval, UniverseRule } from '../../../shared/schemas/universe-rule.js';
 import type { SymbolMasterCoverageDto } from '../../../shared/schemas/symbol-master.js';
 import { PreparationProgress } from './preparation-progress';
-import { shouldCloseStream, usePreparationLive, type BacktestPreparationJob } from './preparation-live';
+import {
+  isPreparingCurrentParams,
+  usePreparationLive,
+  type BacktestPreparationJob,
+} from './preparation-live';
 import { UniverseStageEditor } from './universe-stage-editor';
 
 /** 주기 unit 마다 허용하는 최댓값 — 스키마(universe-rule.ts rebalanceIntervalSchema)와 같은 값 */
@@ -294,10 +298,17 @@ export function UniverseRuleStep({
   const intervalFitsPeriod =
     !periodReady || rebalanceIntervalFitsPeriod(period, value.rebalanceInterval);
   const canPreview = periodReady && intervalFitsPeriod && strategyReady && paramsReady;
-  // 이미 준비 작업이 눈에 보이게 도는 동안은 같은 버튼으로 또 시작시키지 않는다 —
-  // 서버가 같은 hash 를 재사용해 주더라도(single-flight), 화면이 두 상태(진행 카드·
-  // 미리보기 중… 버튼)를 동시에 보여줄 이유가 없다.
-  const preparing = preparingJobId !== null && liveJob !== null && !shouldCloseStream(liveJob.status);
+  // 지금 값과 같은 params 로 시작된 job 이 아직 진행 중일 때만 버튼을 잠근다
+  // (코디네이터 리뷰 finding 1) — 추적 중인 job 이 있다는 사실만으로 잠그면,
+  // WAITING_DAILY_QUOTA 로 하루를 넘겨 기다리는 job 을 rule A 로 시작시킨 뒤
+  // 화면에서 rule B 로 바꿔도 버튼이 "조회 중…" 에 갇힌다. 그 job 자체는 취소하지
+  // 않는다 — 진행 카드는 `preparingJobId`/`liveJob` 만 보고 계속 그린다(아래).
+  const preparing = isPreparingCurrentParams(
+    preparingParamsRef.current,
+    currentParams,
+    liveJob?.status ?? null,
+    sameUniverseParams,
+  );
 
   /**
    * "기간 전체 동기화" 버튼의 주 해결책 조건 — uncoveredDates(리밸런스 날짜만) 뿐

@@ -61,6 +61,38 @@ export function pollInterval(
   return shouldCloseStream(status) ? false : 2_000;
 }
 
+/**
+ * "미리보기" 버튼을 잠글지 판정한다.
+ *
+ * 추적 중인 job 이 있다는 사실만으로 잠그면 안 된다 — WAITING_DAILY_QUOTA 처럼
+ * 하루를 넘겨 기다리는 job 을 rule A 로 시작시킨 뒤 화면에서 rule B 로 바꾸면,
+ * 그 job 은 이제 지금 값과 무관한 낡은 요청이다. 그런데도 계속 잠그면 브리프의
+ * "새 hash로 다시 미리보기를 누르면 새 job 또는 queue를 받는다" 를 어기고,
+ * 사용자는 새 규칙을 아무리 다시 눌러도 "조회 중…" 에서 벗어날 방법이 없다
+ * (코디네이터 리뷰 finding 1, 2026-08-10).
+ *
+ * `paramsEqual` 을 주입받는 이유는 이 모듈이 웹 화면의 `PreviewParams`(전략·
+ * 유니버스 규칙까지 포함한 구체 타입)를 모른다는 데 있다 — 그 타입은
+ * `universe-rule-step.tsx` 에 있고, 그 파일은 JSX 를 써서 `tsconfig.server.json`
+ * (NodeNext, jsx 플래그 없음)에서 타입 검사할 수 없다. 이 파일은
+ * `tests/unit/preparation-live.test.ts` 를 통해 그 프로그램에 편입되므로, 구체
+ * 타입에 의존하지 않는 제네릭 함수로 남겨 둔다.
+ *
+ * terminal 상태는 이미 잠글 이유가 없다 — 진행 중이 아니므로 `shouldCloseStream`
+ * 으로 판정한다. `trackedParams` 가 없으면(추적 중인 job 자체가 없으면) 당연히
+ * false 다.
+ */
+export function isPreparingCurrentParams<TParams>(
+  trackedParams: TParams | null,
+  currentParams: TParams,
+  status: PreparationStatus | null,
+  paramsEqual: (a: TParams, b: TParams) => boolean,
+): boolean {
+  if (trackedParams === null || status === null) return false;
+  if (shouldCloseStream(status)) return false;
+  return paramsEqual(trackedParams, currentParams);
+}
+
 const KST_RESUME_FORMATTER = new Intl.DateTimeFormat('ko-KR', {
   timeZone: 'Asia/Seoul',
   month: 'long',
