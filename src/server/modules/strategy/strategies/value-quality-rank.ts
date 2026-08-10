@@ -1,13 +1,13 @@
 import { z } from 'zod';
 import type { FundamentalField, FundamentalSnapshot } from '../../facts/domain/fact.js';
 import { quarterOrdinal } from '../../facts/domain/pit-fact-view.js';
-import { KR_SESSION, toLocalTime } from '../../market-data/domain/exchange-session.js';
 import type {
   StrategyBarContext,
   StrategyDecision,
   StrategyInitializeContext,
   TradingStrategy,
 } from '../domain/strategy.js';
+import { currentQuarterOrdinal } from './shared/fundamental-rank.js';
 import { rankDescending, type Scored } from './shared/rank.js';
 import { planBuyPhase, planSellPhase } from './shared/two-phase-rebalance.js';
 
@@ -87,12 +87,8 @@ function sumFields(
   return total;
 }
 
-/** 봉 시각의 KST 월을 분기 서수로 접는다 (quarterOrdinal 과 같은 눈금) */
-export function currentQuarterOrdinal(tsMs: number): number {
-  const { dayIndex } = toLocalTime(tsMs, KR_SESSION);
-  const localDate = new Date(dayIndex * 86_400_000);
-  return localDate.getUTCFullYear() * 4 + Math.floor(localDate.getUTCMonth() / 3);
-}
+// 달력 경계 계산은 한 곳에만 둔다 — 복제본이 있으면 KST off-by-one 을 한쪽만 고친다.
+export { currentQuarterOrdinal };
 
 /**
  * 두 지표 계산. 후보 자격이 없으면 null 을 준다 — 호출부가 조용히 0 으로 세지 않도록

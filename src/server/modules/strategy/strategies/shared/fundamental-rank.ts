@@ -26,7 +26,8 @@ export interface LowPerHighRoeCandidate extends LowPerHighRoeInput {
 const MS_PER_DAY = 86_400_000;
 const MAX_SAFE_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
-function effectiveQuarterOrdinal(atTsMs: number): number {
+/** 봉 시각의 KST 월을 분기 서수로 접는다 (quarterOrdinal 과 같은 눈금). */
+export function currentQuarterOrdinal(atTsMs: number): number {
   const { dayIndex } = toLocalTime(atTsMs, KR_SESSION);
   const localDate = new Date(dayIndex * MS_PER_DAY);
   return localDate.getUTCFullYear() * 4 + Math.floor(localDate.getUTCMonth() / 3);
@@ -47,7 +48,7 @@ export function isFreshQuarter(
   }
   const disclosedQuarter = quarterOrdinal(periodKey);
   if (disclosedQuarter === null) return false;
-  const lag = effectiveQuarterOrdinal(atTsMs) - disclosedQuarter;
+  const lag = currentQuarterOrdinal(atTsMs) - disclosedQuarter;
   return lag >= 0 && lag <= staleQuarters;
 }
 
@@ -94,12 +95,16 @@ export function scoreEarningsAcceleration(
   input: EarningsAccelerationInput,
 ): { ttmGrowth: number; priceMomentum: number } | null {
   const quarters = [input.q0, input.q1, input.q2, input.q3, input.q4, input.q5, input.q6, input.q7];
-  if (quarters.some((value) => !Number.isFinite(value) || value <= 0)) return null;
+  if (quarters.some((value) => !Number.isFinite(value))) return null;
   if (!Number.isFinite(input.priceMomentum) || input.priceMomentum <= 0) return null;
 
+  // 스펙 §8.2: 양수 조건은 두 TTM 합과 YoY 분모 q4·q5 에만 건다. 개별 분기 전부에
+  // 걸면 한 분기 적자였지만 TTM 이 견조한 기업까지 잘못 제외한다. 음수→양수 전환
+  // (작은 분모 폭발) 차단은 priorTtm·q4·q5 양수 조건이 담당한다.
   const currentTtm = input.q0 + input.q1 + input.q2 + input.q3;
   const priorTtm = input.q4 + input.q5 + input.q6 + input.q7;
-  if (!Number.isFinite(currentTtm) || !Number.isFinite(priorTtm)) return null;
+  if (currentTtm <= 0 || priorTtm <= 0) return null;
+  if (input.q4 <= 0 || input.q5 <= 0) return null;
 
   const ttmGrowth = currentTtm / priorTtm - 1;
   const latestQuarterYoy = input.q0 / input.q4 - 1;

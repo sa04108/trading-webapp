@@ -117,12 +117,26 @@ describe('scoreEarningsAcceleration', () => {
     expect(scoreEarningsAcceleration(BASE)).toEqual({ ttmGrowth: 0.25, priceMomentum: 0.2 });
   });
 
-  it.each(['q0', 'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'q7'] as const)(
-    '%s가 0 이하면 다른 조건이 좋아도 제외한다',
-    (field) => {
-      expect(scoreEarningsAcceleration({ ...BASE, [field]: field === 'q0' ? -1 : 0 })).toBeNull();
-    },
-  );
+  it('현재 TTM 합이 0 이하면 제외한다', () => {
+    expect(scoreEarningsAcceleration({ ...BASE, q0: -40, q1: -30, q2: -20, q3: -11 })).toBeNull();
+  });
+
+  it('전년 TTM 합이 0 이하면 제외한다', () => {
+    // q4·q5 는 양수로 유지해 TTM 합 조건만 깨뜨린다.
+    expect(scoreEarningsAcceleration({ ...BASE, q6: -30, q7: -30 })).toBeNull();
+  });
+
+  it.each(['q4', 'q5'] as const)('YoY 분모 %s가 0 이하면 제외한다', (field) => {
+    expect(scoreEarningsAcceleration({ ...BASE, [field]: 0 })).toBeNull();
+    expect(scoreEarningsAcceleration({ ...BASE, [field]: -1 })).toBeNull();
+  });
+
+  it('한 분기 적자여도 TTM·가속 조건을 만족하면 포함한다', () => {
+    // 스펙 §8.2 는 개별 분기가 아니라 두 TTM 합과 YoY 분모에만 양수를 요구한다.
+    const result = scoreEarningsAcceleration({ ...BASE, q3: -5 });
+    expect(result).not.toBeNull();
+    expect(result?.ttmGrowth).toBeCloseTo(85 / 80 - 1);
+  });
 
   it('현재 TTM이 전년 TTM보다 성장하지 않으면 제외한다', () => {
     expect(

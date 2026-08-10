@@ -67,6 +67,13 @@ export const lowPerHighRoeRankStrategy: TradingStrategy<
     }
     if (!context.isRebalanceBar) return { orders: [] };
 
+    // 레거시 symbols-only 일정은 selectionMetric pin 이 전혀 없다(전부 null). 그대로
+    // 진행하면 후보 0 → 목표 0 → 전량 청산이 매 리밸런스 반복된다. 판단 근거가
+    // 없으면 보유를 유지한다 — value-quality-rank 의 no-data hold 와 같은 방침이다.
+    if (state.symbols.every((symbol) => context.selectionMetric(symbol) === null)) {
+      return { orders: [] };
+    }
+
     const candidates: LowPerHighRoeCandidate[] = [];
     for (const symbol of state.symbols) {
       if (context.tradableSymbols !== null && !context.tradableSymbols.has(symbol)) continue;
