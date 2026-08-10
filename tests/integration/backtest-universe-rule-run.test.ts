@@ -555,14 +555,16 @@ describe('KRX 전용 일봉으로 백테스트 실행 (워커의 부모-자식 �
  *
  * 이 테스트는 미리보기를 거치지 않고(검증을 우회해 큐에 직접 넣어) 만든 잡을
  * 복제한다. 이미 등록된 종목(005930) 옆에 미등록 종목 900010(KRX 일봉만 있음)을
- * 둔다. 900010 은 로컬 등록도 자본변동 수집도 없다.
+ * 둔다. 900010 은 로컬 등록이 없다.
  *
  * 등록은 `checkPeriodCoverage` 의 D-025 관용과 무관하게 clone 핸들러가 검증보다
  * 먼저 실행한다 — 그래서 900010 은 항상 등록된다.
- * 다만 자본변동 게이트(Task 6)는 종목 하나하나를 다 채워야 하므로, 등록 직후에도
- * 900010 이 자본변동을 수집하지 않았다면 최종 제출은 400 으로 막힌다.
  * 수정 전에는 clone 이 201 로 성공하면서도 900010 을 등록하지 않아 등록 단언이
- * 실패했다 — 지금은 그 등록 단언에 더해 자본변동 게이트 상호작용까지 함께 지킨다.
+ * 실패했다 — 지금은 그 등록이 준비 완료 시점에 실제로 일어나는지를 지킨다.
+ *
+ * 자본변동 수집 게이트(Task 6)는 Task 10에서 없앴다 — 준비
+ * (`buildBacktestPreparationPlan`)가 이미 최종 유니버스의 자본변동을 동기화해
+ * 두므로, 제출·복제 시점에 커버리지를 다시 대조하지 않는다.
  */
 describe('POST /backtests/:id/clone — 유니버스 자동 등록 (미리보기와 같은 전제)', () => {
   const date = '2026-01-05';
@@ -617,8 +619,8 @@ describe('POST /backtests/:id/clone — 유니버스 자동 등록 (미리보기
     ]);
 
     // 900010 은 백필이 KRX 일봉을 이미 채워 뒀다고 가정한다(krx_daily_bars 직접
-    // 삽입) — 다만 이 종목은 미리보기를 한 번도 거치지 않아 로컬 `symbols` 등록도,
-    // 커버리지 캐시도 없다.
+    // 삽입) — 다만 이 종목은 미리보기를 한 번도 거치지 않아 로컬 `symbols` 등록이
+    // 없다.
     ctx.container.database.db
       .insert(krxDailyBars)
       .values({
@@ -632,11 +634,6 @@ describe('POST /backtests/:id/clone — 유니버스 자동 등록 (미리보기
         volume: 12_345,
       })
       .run();
-
-    // 자본변동 게이트(Task 6) — 005930 은 수집을 마쳤다고 둔다.
-    // 900010 은 아직 로컬 미등록이라 여기서 심을 수 없다(symbol_facts_state 의
-    // FK 가 symbols 등록을 요구한다) — 그 자체가 "수집한 적 없음" 의 실제 모습이다.
-    seedCorporateActionCoverage(ctx.container, ['005930'], yearRange(2026, 2026));
   });
 
   afterEach(async () => {
@@ -684,25 +681,14 @@ describe('POST /backtests/:id/clone — 유니버스 자동 등록 (미리보기
     const coverage = ctx.container.candleCoverageService.getCoverage(['900010'])[0]!;
     expect(coverage.barCount).toBe(1);
 
-    // 그래도 900010 은 자본변동을 한 번도 수집하지 않았다 — 기존 제출 게이트는
-    // preparation 완료 뒤에도 이 사실을 사용자에게 밝힌다.
+    // 자본변동 수집 게이트(Task 6)는 없앴다(Task 10) — 준비가 COMPLETED 라는
+    // 사실만으로 같은 요청의 복제가 곧바로 통과한다.
     const afterPreparation = await ctx.app.inject({
       method: 'POST',
       url: `/api/v1/backtests/${job.id}/clone`,
       cookies: { qp_session: cookie },
     });
-    expect(afterPreparation.statusCode).toBe(400);
-    expect((afterPreparation.json() as { error: string }).error).toContain('900010');
-
-    // 자본변동을 실제로 수집하면(방금 등록됐으므로 이제 FK 를 만족한다) 같은
-    // 요청이 통과한다 — 게이트가 '수집 여부' 만 본다는 것을 보여준다.
-    seedCorporateActionCoverage(ctx.container, ['900010'], yearRange(2026, 2026));
-    const retried = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${job.id}/clone`,
-      cookies: { qp_session: cookie },
-    });
-    expect(retried.statusCode).toBe(201);
+    expect(afterPreparation.statusCode).toBe(201);
   });
 });
 
@@ -784,15 +770,18 @@ describe('POST /backtests — 미등록 유니버스는 제출 시점에 거부�
 });
 
 /**
- * 자본변동 수집 게이트(Task 6). 엔진은 이제 액면분할을 걸친 포지션을 조정하지만
- * (Task 1·2), 자본변동 이력을 받아본 적 없는 종목은 분할이 있었는지 알 도리가
- * 없어 결과가 조용히 틀린다.
+ * 자본변동 수집 게이트(Task 6)는 Task 10에서 제거했다. 제출은 이제 같은
+ * requestHash의 COMPLETED 준비(`preparation.getReadyPreview`)를 전제하고, 그
+ * 준비(`buildBacktestPreparationPlan`)가 전략의 `dataRequirements.
+ * requiresCorporateActions`·DECLINE stage 후보에 따라 최종 유니버스의 자본변동을
+ * 이미 동기화해 둔다. 실전에 등록된 전략은 전부 이 조건을 충족한다
+ * (tests/unit/backtest-preparation-plan.test.ts 전략별 표 참고) — 제출 시점에
+ * 커버리지를 다시 대조해도 잡을 수 있는 결측이 남지 않는다.
  *
- * 팩트 0건은 세 상태를 가릴 수 있다: 수집했고 분할이 없다, 수집했는데 DART 가
- * 응답하지 못했다, 아예 수집하지 않았다. 커버리지가 셋째를 앞의 둘과 가르고,
- * gap 이 첫째와 둘째를 가른다. 이 묶음은 그 세 갈래를 그대로 재현한다.
+ * 이 묶음은 "게이트가 막던 자리" 가 이제 막지 않는지를 확인한다 — 옛 게이트
+ * 테스트가 세웠던 픽스처(코드·연도)는 그대로 두고 기대값만 뒤집었다.
  */
-describe('POST /backtests — 자본변동 수집 게이트 (Task 6)', () => {
+describe('POST /backtests — 준비 완료 뒤 제출 (자본변동 게이트 제거, Task 10)', () => {
   const date = '2026-01-05';
   const CODE = '900050';
 
@@ -810,8 +799,9 @@ describe('POST /backtests — 자본변동 수집 게이트 (Task 6)', () => {
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
     installPreparedSubmissionFixture(ctx);
 
-    // 봉·등록·종목 마스터는 모두 갖춘다 — 자본변동 커버리지만 이 게이트가 보는 유일한 변수다.
-    // 이름까지 등록해야 에러·경고 문구가 종목을 이름으로 밝히는지 확인할 수 있다.
+    // 봉·등록·종목 마스터는 모두 갖춘다. 자본변동 커버리지는 더 이상 제출을
+    // 막는 변수가 아니므로 기본으로는 심지 않는다 — 아래 각 테스트가 필요하면 심는다.
+    // 이름까지 등록해야 오류·경고 문구가 종목을 이름으로 밝히는지 확인할 수 있다.
     ctx.container.symbolService.addSymbol(CODE, 'KR', '게이트테스트');
     seedSymbolMasterUniverse(ctx.container, [date], [
       {
@@ -849,36 +839,25 @@ describe('POST /backtests — 자본변동 수집 게이트 (Task 6)', () => {
       payload: singleDayRequest(1, date),
     });
 
-  it('자본변동을 수집하지 않은 종목이 있으면 400 이다', async () => {
-    // 커버리지 저장소에 아무것도 심지 않는다 — "아예 수집하지 않음" 을 재현한다.
-    const created = await submit();
-
-    expect(created.statusCode).toBe(400);
-    const body = created.json() as {
-      error: string;
-      corporateActionGate?: { symbols: string[]; fromYear: number; toYear: number };
-    };
-    expect(body.error).toContain(CODE);
-    expect(body.error).toContain('게이트테스트');
-    // 큐에 남지 않아야 한다 — 워커까지 가서 늦게 죽는 게 아니라 제출 시점에 막힌다.
-    expect(ctx.container.jobQueue.countByStatus(['QUEUED'])).toBe(0);
-
-    // 위저드 게이트 화면(Task 8)이 이 값을 그대로 받아 쓴다 — 화면이 종목·연도를
-    // 다시 계산하지 않는다.
-    expect(body.corporateActionGate).toEqual({ symbols: [CODE], fromYear: 2026, toYear: 2026 });
-  });
-
-  it('수집했고 분할이 없는 종목은 통과한다', async () => {
-    // 커버리지만 있고 팩트는 0건이다 — "수집했고 분할이 없었다" 상태.
-    seedCorporateActionCoverage(ctx.container, [CODE], [2026]);
-
+  it('자본변동 커버리지를 전혀 수집하지 않아도 준비가 끝났으면 201이다', async () => {
+    // 커버리지 저장소에 아무것도 심지 않는다 — 옛 게이트라면 400으로 막던 상태다.
+    // installPreparedSubmissionFixture가 첫 409 PREPARATION_REQUIRED를 새 준비
+    // 요청으로 이어받아 COMPLETED까지 기다린 뒤 재제출하므로, 그 뒤에는 커버리지와
+    // 무관하게 통과해야 한다.
     const created = await submit();
 
     expect(created.statusCode).toBe(201);
+    const body = created.json() as { corporateActionGate?: unknown };
+    // 필드 자체가 더 이상 없다 — 남아 있으면 제거가 불완전하다는 뜻이다.
+    expect(body.corporateActionGate).toBeUndefined();
+    // 제출 시점에 막히지 않고 큐까지 들어간다(옛 게이트 테스트는 여기서 0을 기대했다).
+    expect(ctx.container.jobQueue.countByStatus(['QUEUED'])).toBe(1);
   });
 
-  it('gap 이 난 종목은 통과하고 경고에 이름이 나온다', async () => {
-    // 커버리지도 있고 gap 도 있다 — "수집했는데 DART 가 응답하지 못했다" 상태.
+  it('자본변동 gap 이 있어도 더 이상 제출 경고를 만들지 않는다', async () => {
+    // 커버리지도 있고 gap 도 있다 — 옛 게이트라면 "수집했는데 DART 가 응답하지
+    // 못했다" 로 읽어 경고에 이름을 남겼다. 게이트를 통째로 없앤 지금은 그 경고
+    // 자체가 나올 곳이 없다.
     seedCorporateActionCoverage(ctx.container, [CODE], [2026]);
     ctx.container.actionCoverageStore.addGapYears(CODE, [2026], ctx.container.clock.now());
 
@@ -886,38 +865,7 @@ describe('POST /backtests — 자본변동 수집 게이트 (Task 6)', () => {
 
     expect(created.statusCode).toBe(201);
     const warnings = (created.json() as { warnings: string[] }).warnings;
-    expect(warnings.some((w) => w.includes(CODE))).toBe(true);
-
-    // 응답에만 실어 보내면 토스트 10초가 유일한 수명이 된다 — job 에도 남아야 한다
-    const jobId = (created.json().job as { id: string }).id;
-    const stored = ctx.container.jobQueue.getJob(jobId)!;
-    expect(JSON.parse(stored.submitWarningsJson!)).toEqual(warnings);
-  });
-
-  /**
-   * clone-draft 는 "검증을 돌리되 막지 않는다" — 그런데 비차단 경고까지 함께
-   * 삼키면 위저드가 자본변동 위험을 안내할 길이 없다(리뷰 finding, 2026-08-08).
-   */
-  it('gap 이 있는 잡의 clone-draft 도 경고를 낸다 (리뷰 finding, 2026-08-08)', async () => {
-    seedCorporateActionCoverage(ctx.container, [CODE], [2026]);
-    ctx.container.actionCoverageStore.addGapYears(CODE, [2026], ctx.container.clock.now());
-
-    // 검증을 우회해 큐에 직접 넣는다 — clone-draft 는 대기열 상태와 무관하게 동작한다.
-    const job = ctx.container.jobQueue.enqueue({
-      ...singleDayRequest(1, date),
-    });
-
-    const draft = await ctx.app.inject({
-      method: 'GET',
-      url: `/api/v1/backtests/${job.id}/clone-draft`,
-      cookies: { qp_session: cookie },
-    });
-
-    expect(draft.statusCode).toBe(200);
-    const body = draft.json() as { warnings: string[]; blockers: string[] };
-    expect(body.warnings.some((w) => w.includes(CODE))).toBe(true);
-    // 차단 사유가 아니라 경고다 — blockers 는 비어 있어야 한다.
-    expect(body.blockers).toEqual([]);
+    expect(warnings.some((w) => w.includes(CODE))).toBe(false);
   });
 });
 

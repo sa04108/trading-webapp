@@ -3,8 +3,7 @@ export class ApiError extends Error {
     public readonly status: number,
     message: string,
     /**
-     * 서버가 오류 메시지 옆에 실어 보낸 구조화된 값이다.
-     * 예: `corporateActionGate`, `uncoveredDates`.
+     * 서버가 오류 메시지 옆에 실어 보낸 구조화된 값이다. 예: `uncoveredDates`.
      * 기존 호출부는 `message` 만 보고 이 필드를 몰라도 된다.
      * 그래서 선택 필드로 둔다 — 필요한 곳만 꺼내 쓴다.
      */

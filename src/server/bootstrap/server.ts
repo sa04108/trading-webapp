@@ -86,7 +86,6 @@ export async function buildServer(container: Container): Promise<FastifyInstance
           preparation: container.backtestPreparationOrchestrator,
           audit: container.auditLog,
           factRepository: container.factRepository,
-          corporateActionCoverage: container.actionCoverageStore,
           dataRoot: container.config.dataRoot,
           maxQueuedBacktests: container.config.maxQueuedBacktests,
           clock: container.clock,

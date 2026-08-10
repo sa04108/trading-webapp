@@ -42,10 +42,10 @@ describe('api client (웹 공용 fetch 래퍼)', () => {
     await expect(failure).rejects.toMatchObject({ status: 400, message: '알 수 없는 데이터셋' });
   });
 
-  it('ApiError 가 응답 본문 전체를 details 로 들고 있다 (자본변동 게이트 화면용, Task 8)', async () => {
+  it('ApiError 가 응답 본문 전체를 details 로 들고 있다 (구조화 오류 필드용, 예: uncoveredDates)', async () => {
     const payload = {
-      error: '수집한 적이 없습니다',
-      corporateActionGate: { symbols: ['005930'], fromYear: 2025, toYear: 2026 },
+      error: '종목 마스터가 다음 리밸런스 날짜를 커버하지 않습니다',
+      uncoveredDates: ['2026-01-05'],
     };
     vi.stubGlobal(
       'fetch',
