@@ -183,16 +183,13 @@ pnpm dev                     # Fastify — http://127.0.0.1:3000
 pnpm dev:web                 # Vite dev 서버 (API 프록시) — 웹 작업 시
 ```
 
-재무 데이터가 필요한 전략(`value-quality-rank`)을 만지려면 DART 공시를 먼저 수집해야
-한다. `DART_API_KEY` 를 `.env` 에 넣고:
-
-```bash
-pnpm cli facts:sync --dataset <데이터셋_id> --from 2015 --to 2026
-```
-
-키가 없으면 그 전략은 제출 단계에서 422 로 거부된다 (실행 후 "거래 0건" 으로 끝나
-원인을 못 찾는 상태를 막는다). **운영 서버에서는 CLI 가 `app.env` 를 자동으로 읽지
-않는다** — `systemd-run` 으로 같은 환경을 줘야 한다. 스펙 §28.2 참고.
+재무전략(`value-quality-rank` 등)이나 PER 유니버스 단계를 만지려면 `DART_API_KEY` 를
+`.env` 에 넣는다. 수집은 CLI 명령이 아니라 백테스트 준비(preparation)가 요청 기간과
+최소 warm-up 만큼만 자동으로 한다 — 연도·종목을 지정해 미리 돌리는 절차는 없다. 키가
+없으면 그 준비가 막힌다 (실행 후 "거래 0건" 으로 끝나 원인을 못 찾는 상태를 막는다).
+일일 호출 한도에 닿으면 준비가 대기 상태로 남아 다음 KST 날짜에 자동으로 이어지고,
+서버 재시작 뒤에도 중단된 지점부터 이어진다 — 실패가 아니다. 준비를 취소해도 그때까지
+저장한 종목 데이터는 지우지 않는다.
 
 환경변수는 전부 개발용 기본값이 있어서 `.env` 없이 바로 뜬다 (`bootstrap/config.ts`
 참고). `SESSION_SECRET` 은 production 에서만 필수다. TOTP 는 등록해야 켜진다 —

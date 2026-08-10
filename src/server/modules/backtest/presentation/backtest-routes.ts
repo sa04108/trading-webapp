@@ -432,12 +432,18 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     }
 
     // ③ 종목 버전 pin 은 기존 universeJson 메커니즘을 그대로 쓴다 — unionSymbols 기준.
-    // ④ provenancePin — 유니버스 규칙 경로(스펙 2026-08-05)는 늘 이 모양이다.
+    // ④ provenancePin — 순서형 유니버스 파이프라인(Task 11, 스펙 2026-08-09)은 늘 이
+    // 모양이다. 단계 진단(`diagnostics`)은 완료된 준비(preview)에서만 나온다 —
+    // clone-draft 처럼 preparedPreview 없이 검증만 하는 경로는 절대 enqueue 하지
+    // 않으므로, 그때는 진단 없는 빈 배열을 pin 에 채워도 저장되는 값을 왜곡하지 않는다.
     const provenancePin: ProvenancePin = {
       sourceKind: 'SYMBOL_MASTER',
       filterPolicyVersion: KRX_FILTER_POLICY_VERSION,
-      selectionMethod: body.universeRule.stages.map((stage) => stage.criterion).join(' → '),
+      selectionMethod: 'ORDERED_UNIVERSE_PIPELINE',
+      universeRule: body.universeRule,
       scheduleHash: resolved.scheduleHash,
+      diagnostics: preparedPreview?.diagnostics ?? [],
+      preparedAtMs: clock.now(),
     };
 
     return {

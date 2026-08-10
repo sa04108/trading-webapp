@@ -10,7 +10,6 @@ import { Writable } from 'node:stream';
 import { loadConfig } from './bootstrap/config.js';
 import { createContainer } from './bootstrap/container.js';
 import { newId } from './shared/ids.js';
-import type { FactIngestionGap } from './modules/facts/application/ports.js';
 
 function ask(question: string, hidden = false): Promise<string> {
   const muted = new Writable({
@@ -165,147 +164,6 @@ async function totpEnroll(): Promise<void> {
 }
 
 /**
- * gap 사유 문구에서 값이 섞이기 전 앞부분만 묶는 키로 쓴다(':' 나 '(' 앞까지) — 같은
- * 실패 유형이 종목마다 다른 값을 물고 나와도 하나로 묶여 세어지도록 한다.
- */
-function reasonBucket(reason: string): string {
-  const cutCandidates = [reason.indexOf(':'), reason.indexOf('(')].filter((index) => index >= 0);
-  const cut = cutCandidates.length > 0 ? Math.min(...cutCandidates) : reason.length;
-  return reason.slice(0, cut).trim();
-}
-
-/** 인자 파싱: --symbols 005930,000660 --from 2015 --to 2026 [--fs-div OFS] */
-function parseFactsSyncArgs(argv: readonly string[]): {
-  symbols: readonly string[];
-  fromYear: number;
-  toYear: number;
-  consolidated: boolean;
-} {
-  const flags = new Map<string, string>();
-  for (let index = 0; index < argv.length; index += 2) {
-    const key = argv[index];
-    const value = argv[index + 1];
-    if (key?.startsWith('--') && value !== undefined) flags.set(key.slice(2), value);
-  }
-
-  const symbolsRaw = flags.get('symbols');
-  if (!symbolsRaw) throw new Error('--symbols <종목코드,종목코드,...> 가 필요합니다');
-  const symbols = symbolsRaw
-    .split(',')
-    .map((code) => code.trim())
-    .filter((code) => code.length > 0);
-  if (symbols.length === 0) throw new Error('--symbols 가 비어 있습니다');
-
-  const fromYear = Number(flags.get('from'));
-  const toYear = Number(flags.get('to'));
-  if (!Number.isInteger(fromYear) || !Number.isInteger(toYear) || fromYear > toYear) {
-    throw new Error('--from <연도> --to <연도> 를 올바르게 지정하세요 (예: --from 2015 --to 2026)');
-  }
-
-  const fsDiv = (flags.get('fs-div') ?? 'CFS').toUpperCase();
-  if (fsDiv !== 'CFS' && fsDiv !== 'OFS') {
-    throw new Error('--fs-div 는 CFS(연결) 또는 OFS(별도) 입니다');
-  }
-
-  return { symbols, fromYear, toYear, consolidated: fsDiv === 'CFS' };
-}
-
-async function factsSync(argv: readonly string[]): Promise<void> {
-  const { symbols, fromYear, toYear, consolidated } = parseFactsSyncArgs(argv);
-  const config = loadConfig();
-  if (!config.dartApiKey) {
-    throw new Error('DART_API_KEY 가 설정되지 않았습니다. .env 에 추가한 뒤 다시 실행하세요.');
-  }
-
-  const container = createContainer(config);
-  try {
-    // 컨테이너는 `database: DatabaseHandle` 을 노출한다 — Drizzle 인스턴스는 그 안의 `.db` 다
-    // 종목이 데이터 소관이다(설계 2026-07-31-symbol-as-first-class) — 데이터셋 개념이
-    // 사라지면서(스펙 2026-08-05, Task 6) 이 명령도 종목 코드를 직접 받는다.
-    const registered = new Set(
-      container.symbolService.listSymbols().map((symbol) => symbol.code),
-    );
-    const missing = symbols.filter((code) => !registered.has(code));
-    if (missing.length > 0) {
-      throw new Error(`등록되지 않은 종목입니다: ${missing.join(', ')}`);
-    }
-    const foreign = container.symbolService
-      .listSymbols()
-      .filter((symbol) => symbols.includes(symbol.code) && symbol.market !== 'KR');
-    if (foreign.length > 0) {
-      throw new Error(
-        `DART 수집은 KR 종목만 지원합니다 — ${foreign.map((s) => s.code).join(', ')}`,
-      );
-    }
-    console.log(
-      `${symbols.length}종목, ${fromYear}~${toYear}년, ` +
-        `${consolidated ? '연결(CFS)' : '별도(OFS)'} 기준으로 수집합니다.`,
-    );
-
-    // 40분 넘게 걸리는 실행이라 진행 상황을 종목마다 찍는다 — 조용한 40분은 멈춘 것과
-    // 구분되지 않는다. 팩트 저장도 종목 단위이므로 이 줄이 곧 "여기까지는 남는다" 다.
-    const report = await container.factSyncService.sync(
-      // CLI 는 지정한 구간을 전부 다시 받는다 — 과거 연도 정정공시 재수집이
-      // 이 명령의 역할이다 (웹은 증분)
-      { symbols, fromYear, toYear, consolidated, mode: 'FULL' },
-      {
-        onSymbolDone: ({ symbol, index, total, savedFacts, gapCount }) => {
-          console.log(
-            `  [${index}/${total}] ${symbol}: 팩트 ${savedFacts}건 저장` +
-              (gapCount > 0 ? `, 누락 ${gapCount}건` : ''),
-          );
-        },
-      },
-    );
-
-    console.log(`\n저장된 팩트: ${report.savedFacts}건`);
-    // 중단은 조용히 넘기지 않는다 — "어디까지 갔는지" 를 모르면 운영자는 처음부터 다시
-    // 돌릴 수밖에 없다. 누락 리포트는 그대로 이어서 찍는다.
-    if (report.failureMessage !== null) {
-      console.error(`\n${report.failureMessage}`);
-      process.exitCode = 1;
-    }
-    if (report.savedFacts === 0 && report.gaps.length === 0 && report.failureMessage === null) {
-      // 저장된 것도 누락도 0건이면 "성공적으로 아무것도 안 함" 처럼 읽히는 결과다 —
-      // 대개는 수집 범위·API 키·종목 목록이 잘못됐다는 신호이므로 경고한다
-      console.warn(
-        '경고: 저장된 팩트도 누락도 0건입니다. 수집 범위(연도·종목)나 DART 응답을 확인하세요 ' +
-          '— 수집이 조용히 아무 일도 하지 않았을 수 있습니다.',
-      );
-      return;
-    }
-    if (report.gaps.length === 0) {
-      console.log('누락 없음.');
-      return;
-    }
-    // 누락을 조용히 넘기면 랭킹이 소리 없이 왜곡된다 — 전부 보여준다.
-    // 단순히 앞의 50건만 보여주면 종목 수가 많은 백필에서 첫 종목의 실패만 보이고
-    // 나머지 199개 종목의 서로 다른 실패 유형은 가려진다 — 사유별로 묶어 개수부터 보여준다.
-    console.log(`\n누락 ${report.gaps.length}건:`);
-    const buckets = new Map<string, FactIngestionGap[]>();
-    for (const gap of report.gaps) {
-      const bucket = reasonBucket(gap.reason);
-      const list = buckets.get(bucket) ?? [];
-      list.push(gap);
-      buckets.set(bucket, list);
-    }
-    const EXAMPLES_PER_REASON = 5;
-    const sortedBuckets = [...buckets.entries()].sort((a, b) => b[1].length - a[1].length);
-    for (const [bucket, gaps] of sortedBuckets) {
-      console.log(`  [${gaps.length}건] ${bucket}`);
-      for (const gap of gaps.slice(0, EXAMPLES_PER_REASON)) {
-        console.log(`    - ${gap.symbol} ${gap.periodKey}: ${gap.reason}`);
-      }
-      if (gaps.length > EXAMPLES_PER_REASON) {
-        console.log(`    ... 그 외 ${gaps.length - EXAMPLES_PER_REASON}건 (같은 사유)`);
-      }
-    }
-  } finally {
-    await container.close();
-  }
-}
-
-/**
  * 이미 수집한 구간의 거래불가일을 뒤늦게 채운다 — `ingestDate` 를 다시 부르지 않으므로
  * 이벤트·coverage·봉을 건드릴 위험이 없다 (SymbolMasterService.backfillNonTradingDays 참고).
  */
@@ -354,18 +212,22 @@ async function main(): Promise<void> {
     case 'totp:enroll':
       await totpEnroll();
       break;
-    case 'facts:sync':
-      await factsSync(process.argv.slice(3));
-      break;
     case 'krx:backfill-non-trading':
       await krxBackfillNonTrading(process.argv.slice(3));
       break;
     default:
+      // 재무·자본변동 수집은 더 이상 CLI 명령이 아니다 — 백테스트 준비(preparation)가
+      // 필요한 구간만 자동으로 수집한다(스펙 2026-08-09, D-049). 여기서 옛 `facts:sync`
+      // 를 명시적으로 "지원하지 않는 명령"이라 밝히는 이유: 사용법에서만 지우면 그
+      // 명령을 그대로 치는 운영 스크립트·습관이 조용히 아무 일도 안 하는 성공으로
+      // 읽힐 수 있다.
+      if (command) {
+        console.error(`지원하지 않는 명령입니다: ${command}`);
+      }
       console.log('사용법: cli <command>');
       console.log('  db:prepare     스키마·데이터 마이그레이션 적용 (서비스 기동 전에 실행)');
       console.log('  admin:create   관리자 계정 생성');
       console.log('  totp:enroll    TOTP 2단계 인증 등록·재발급 (CLI 전용)');
-      console.log('  facts:sync     DART 재무·자본변동 수집 (--symbols <코드,코드,...> --from <연도> --to <연도> [--fs-div CFS|OFS])');
       console.log('  krx:backfill-non-trading  이미 수집한 구간의 거래불가일 채우기 (--from <날짜> --to <날짜>)');
       process.exitCode = command ? 1 : 0;
   }

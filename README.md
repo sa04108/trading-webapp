@@ -18,6 +18,13 @@ pnpm cli admin:create
 
 CSV 형식: `timestamp,open,high,low,close,volume` (timestamp 는 ISO 8601 UTC 또는 epoch ms). 1분봉은 가져올 때 KR 세션(09:00–15:30 KST) 기준 1시간봉으로 자동 집계된다.
 
+재무전략이나 PER 유니버스 단계를 쓰는 백테스트는 준비(preparation) 단계가 DART 공시를
+요청 기간과 최소 warm-up 만큼만 자동으로 수집한다 — CLI 로 미리 돌리는 절차는 없다.
+`DART_API_KEY` 를 넣지 않으면 그 준비만 비활성이다(`infra/app.env.example` 참고). 일일
+호출 한도에 닿아 대기하는 것은 실패가 아니라 다음 KST 날짜에 자동으로 이어진다. 준비
+작업은 한 번에 하나만 돌고 서버가 재시작돼도 중단된 지점부터 이어지며, 취소해도 이미
+저장한 종목 데이터는 지우지 않는다.
+
 ## 검증 게이트
 
 ```bash
