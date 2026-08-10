@@ -269,6 +269,7 @@ export function createContainer(config: AppConfig): Container {
     selectionMetrics: selectionMetricRepository,
     candles: candleRepository,
     facts: factRepository,
+    factCoverage: factCoverageStore,
     actionCoverage: actionCoverageStore,
     logger,
   });

@@ -224,8 +224,8 @@ describe('backtest preparation HTTP/SSE', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.headers['content-type']).toContain('text/event-stream');
-    expect(response.body).toContain(`\"id\":\"${id}\"`);
-    expect(response.body).toContain('\"status\":\"COMPLETED\"');
+    expect(response.body).toContain(`"id":"${id}"`);
+    expect(response.body).toContain('"status":"COMPLETED"');
   });
 
   it('SSE initial 조회 직후 terminal이 된 race도 최신 snapshot을 보내고 닫는다', async () => {
@@ -251,7 +251,7 @@ describe('backtest preparation HTTP/SSE', () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.body).toContain('\"status\":\"COMPLETED\"');
+    expect(response.body).toContain('"status":"COMPLETED"');
   });
 
   it('app.close는 active preparation SSE heartbeat와 구독을 먼저 정리한다', async () => {
@@ -315,7 +315,7 @@ describe('backtest preparation HTTP/SSE', () => {
 
     expect(closedBeforeForcedClientDisconnect).toBe(true);
     expect(unsubscribedBeforeServerClose).toBe(true);
-    expect(body).toContain('\"status\":\"RUNNING\"');
+    expect(body).toContain('"status":"RUNNING"');
   });
 
   it('cancel은 idempotent하고 job을 terminal CANCELLED로 만든다', async () => {
@@ -459,7 +459,11 @@ describe('backtest preparation HTTP/SSE', () => {
 
   it('이전 PER이 unresolved여도 후속 ready stage가 최종 empty를 증명하면 DART를 gate하지 않는다', async () => {
     seedReadyUniverse(undefined, false);
-    ctx.container.database.db.update(dailySelectionMetrics).set({ marketCapKrw: null }).run();
+    // 거래대금을 채워 이 날짜를 ingest 완료로 만든다 — ingest 흔적 없는 날짜의
+    // 시총 null 은 empty 증명이 아니라 NEEDS_DATA(metric 수집) 신호이기 때문이다.
+    ctx.container.database.db.update(dailySelectionMetrics)
+      .set({ marketCapKrw: null, tradingValueKrw: '1' })
+      .run();
     const input = previewInput();
     const preparation = {
       ...input,

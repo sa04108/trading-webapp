@@ -21,8 +21,7 @@ import type { AuditLogService } from '../../audit/audit-service.js';
 import type { FactRepository } from '../../facts/application/ports.js';
 import type { CorporateActionCoverageStore } from '../../facts/application/corporate-action-coverage.js';
 import type { ConsumedVersionSnapshot, SymbolService } from '../../market-data/application/symbol-service.js';
-import { KrxNotConfiguredError, KrxQuotaError } from '../../market-data/application/ports.js';
-import { SymbolMasterNotCoveredError } from '../../market-data/application/symbol-master-service.js';
+import { sendIfKrxError, sendIfNotCovered } from './krx-error-mapping.js';
 import { KRX_FILTER_POLICY_VERSION } from '../../market-data/domain/krx-filter-policy.js';
 import type {
   CandleCoverageRow,
@@ -187,39 +186,6 @@ async function checkResources(dataRoot: string): Promise<string | null> {
     // statfs 실패 시 가드를 건너뛴다
   }
   return null;
-}
-
-/**
- * `UniverseRuleResolver.resolve` (제출 검증·미리보기 공용)는 시총 캐시 미스일 때 KRX 를
- * 부른다 — `symbol-master-routes.ts` 의 `/symbol-master/sync`·`/backfill` 과 같은
- * 호출부다. 같은 관례로 매핑한다: 쿼터 초과는 429(사용자가 기다리면 되는 문제), 미설정은
- * 503(운영이 키를 넣어야 하는 문제). 나머지 오류(분류 불가 등)는 처리하지 않고 그대로
- * 위로 던져 기본 오류 처리기(500)가 받게 한다.
- */
-function sendIfKrxError(reply: FastifyReply, error: unknown): boolean {
-  if (error instanceof KrxQuotaError) {
-    reply.code(429).send({ error: error.message });
-    return true;
-  }
-  if (error instanceof KrxNotConfiguredError) {
-    reply.code(503).send({ error: error.message });
-    return true;
-  }
-  return false;
-}
-
-/**
- * SymbolMasterNotCoveredError 는 종목 마스터가 그 날짜의 coverage·거래일 anchor를
- * 갖지 못했다는 뜻이다 — 클라이언트가 먼저 동기화해야 하는 409 상황이지 서버 결함(500)이
- * 아니다. sendIfKrxError 와 나란히 둔다: 두 오류 모두 "지금은 KRX/마스터 상태가 준비되지
- * 않았다"는 같은 층위의 신호라 호출부에서 순서를 가리지 않고 둘 다 확인하면 된다.
- */
-function sendIfNotCovered(reply: FastifyReply, error: unknown): boolean {
-  if (error instanceof SymbolMasterNotCoveredError) {
-    reply.code(409).send({ error: error.message });
-    return true;
-  }
-  return false;
 }
 
 export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRouteDeps, requireAuth: PreHandler): void {
@@ -690,7 +656,16 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       return reply.code(400).send({ error: staticErrors[0] });
     }
 
-    const prepared = await preparation.getReadyPreview(preparationInputOf(body));
+    // getReadyPreview 도 resolver 를 거치므로 validateSubmission 과 같은 KRX/coverage
+    // 오류가 난다 — 같은 매핑(429/503/409)을 적용해야 네 줄 아래와 다른 500 이 되지 않는다.
+    let prepared: Awaited<ReturnType<typeof preparation.getReadyPreview>>;
+    try {
+      prepared = await preparation.getReadyPreview(preparationInputOf(body));
+    } catch (error) {
+      if (sendIfKrxError(reply, error)) return reply;
+      if (sendIfNotCovered(reply, error)) return reply;
+      throw error;
+    }
     if (!prepared) {
       return reply.code(409).send({
         error: 'PREPARATION_REQUIRED',

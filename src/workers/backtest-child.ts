@@ -274,6 +274,14 @@ async function main(): Promise<void> {
           + '(중복 포함). 그날 실제로 매수할 수 없는 종목입니다.',
       );
     }
+    // warm-up 봉이 모자라면 전략이 첫 리밸런스 bar 를 지표 미준비로 건너뛰어
+    // 한 주기 동안 현금이 놀 수 있다 — 조용히 지나가면 결과만 보고는 알 수 없다.
+    if (warmupBars > 0 && priorTradingDays.length < warmupBars) {
+      datasetWarnings.push(
+        `기간 시작 전 warm-up 거래일이 부족합니다 (필요 ${warmupBars}일, 확보 ${priorTradingDays.length}일). `
+          + '첫 리밸런스에서 지표가 준비되지 않아 주문이 나가지 않을 수 있습니다.',
+      );
+    }
     // 서버가 제출 시점에 조립한 pin(Task 12) — scheduleHash 를 재현성 기록에 쓴다.
     // run 에는 원문 그대로 복사한다(아래 provenancePinJson).
     const pin: ProvenancePin | null = job.provenancePinJson

@@ -194,6 +194,38 @@ describe('BacktestPreparationOrchestrator NEEDS_DATA DART gate', () => {
     ctx.handle.close();
   });
 
+  it.each([
+    { criterion: 'PER' as const, stage: { criterion: 'PER' as const, limit: 1 } },
+    {
+      criterion: 'DECLINE' as const,
+      stage: { criterion: 'DECLINE' as const, limit: 1, lookbackTradingDays: 20 },
+    },
+  ])('후보 scope 미상이면 price-only 전략이어도 $criterion stage 가 DART 를 예고한다', async ({ stage }) => {
+    // 전략 metadata 가 아니라 유니버스 stage 가 DART 를 요구하는 경우 —
+    // resolver 는 master 미수집이라 factSymbols/actionSymbols 를 아직 못 채웠다.
+    const ctx = makeDeps({
+      resolver: {
+        resolveOrDescribeNeeds: async () => ({
+          ...MARKET_ONLY_NEEDS,
+          candidateScopeKnown: false,
+          unionEntries: new Map(),
+        }),
+        isPeriodCovered: () => false,
+      },
+      factSync: dartPlanningDeps(),
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const required = await orchestrator.needsDart({
+      ...INPUT,
+      universeRule: { ...INPUT.universeRule, stages: [stage] },
+    });
+
+    expect(required).toBe(true);
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
   it('후보 scope가 미상이어도 fact/action 요구가 없는 price-only 전략은 DART가 필요 없다', async () => {
     const ctx = makeDeps({
       resolver: {

@@ -8,7 +8,7 @@ import { backtestPreparationJobs } from '../../../shared/db/schema.js';
 import { newId } from '../../../shared/ids.js';
 import type { Logger } from '../../../shared/logger.js';
 import type { FactSyncService, FactSyncReport } from '../../facts/application/fact-sync-service.js';
-import type { FactSyncWorkUnit } from '../../facts/domain/sync-plan.js';
+import { DART_DAILY_CALL_LIMIT, type FactSyncWorkUnit } from '../../facts/domain/sync-plan.js';
 import type { CandleCoverageService } from '../../market-data/application/candle-coverage-service.js';
 import type { SymbolMasterService } from '../../market-data/application/symbol-master-service.js';
 import { addCalendarDays, kstDateOf } from '../../market-data/domain/kst-date.js';
@@ -98,6 +98,14 @@ const EMPTY_NEEDS: UniverseDataNeed = {
   priceRange: null,
 };
 
+/** 요청 입력 자체의 문제(미지 전략, 파라미터 형식) — 라우트가 400 으로 매핑한다. */
+export class PreparationInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PreparationInputError';
+  }
+}
+
 /** needsDart 계획에만 쓰고 저장·sync하지 않는 미상 future candidate probe. */
 const UNKNOWN_CANDIDATE_PROBE = '__UNKNOWN_FUTURE_UNIVERSE_CANDIDATE__';
 
@@ -133,7 +141,7 @@ export class BacktestPreparationOrchestrator {
   private readonly dailyLimit: number;
 
   constructor(private readonly deps: BacktestPreparationOrchestratorDeps) {
-    this.dailyLimit = deps.dartDailyCallLimit ?? 40_000;
+    this.dailyLimit = deps.dartDailyCallLimit ?? DART_DAILY_CALL_LIMIT;
   }
 
   start(input: PreparationInput): BacktestPreparationJobDto {
@@ -234,10 +242,27 @@ export class BacktestPreparationOrchestrator {
       // master 날짜 자체가 미수집이면 빈 Map은 빈 유니버스라는 뜻이 아니다.
       // 하나의 가상 후보를 planner에 넣어 rule/strategy metadata가 future fact/action을
       // 요구하는지만 본다. price-only면 plan에 DART symbol이 생기지 않는다.
-      if (!attempt.candidateScopeKnown) candidateSymbols.push(UNKNOWN_CANDIDATE_PROBE);
+      let resolutionNeeds = attempt.needs;
+      if (!attempt.candidateScopeKnown) {
+        candidateSymbols.push(UNKNOWN_CANDIDATE_PROBE);
+        // 후보 scope 미상이면 resolver 는 PER 재무·DECLINE 자본변동 후보를 아직
+        // 못 채웠다. plan 은 stage 요구를 resolutionNeeds 로만 받으므로, probe 를
+        // 여기에도 넣어야 price-only 전략 + PER/DECLINE stage 요청이 DART-key
+        // 게이트를 그냥 통과해 뒤늦게 raw 설정 오류로 죽지 않는다.
+        const stages = input.universeRule.stages;
+        resolutionNeeds = {
+          ...resolutionNeeds,
+          factSymbols: stages.some((stage) => stage.criterion === 'PER')
+            ? [...resolutionNeeds.factSymbols, UNKNOWN_CANDIDATE_PROBE]
+            : resolutionNeeds.factSymbols,
+          actionSymbols: stages.some((stage) => stage.criterion === 'DECLINE')
+            ? [...resolutionNeeds.actionSymbols, UNKNOWN_CANDIDATE_PROBE]
+            : resolutionNeeds.actionSymbols,
+        };
+      }
       return this.planNeedsDart(buildBacktestPreparationPlan({
         request: preparationRequest(input),
-        resolutionNeeds: attempt.needs,
+        resolutionNeeds,
         // 시장 데이터가 빈 stage는 아직 최종 멤버를 정할 수 없다.
         // resolver가 알려준 현재 후보 scope를 final-union의 상한으로 계획해야
         // 뒤에 전략 fact/action이 필요해지는 요청을 DART 없이 받지 않는다.
@@ -405,6 +430,12 @@ export class BacktestPreparationOrchestrator {
         if (hasMarketWork) {
           await this.syncMarketData(jobId, attempt.needs.selectionMetricDates, plan.price);
           if (this.shouldReturnFromRun(jobId)) return;
+          // 시장 데이터가 아직 없는 iteration 의 DART 요구는 좁혀지지 않은 상한
+          // (예: PER 앞 stage 가 미해소면 전체 시장)이다. 값싼 시장 데이터를 먼저
+          // 채우고 다시 resolve 해 후보가 줄어든 뒤에만 DART 를 부른다 — 그대로
+          // 진행하면 수천 종목 × 연도 호출로 일일 quota 를 통째로 태울 수 있다.
+          attempt = await this.resolve(jobId, input);
+          continue;
         }
         if (hasDartWork) {
           const continued = await this.syncFacts(jobId, plan);
@@ -736,10 +767,12 @@ export class BacktestPreparationOrchestrator {
 
   private requireStrategy(input: PreparationInput): AnyTradingStrategy {
     const strategy = this.deps.strategies.get(input.strategyId);
-    if (!strategy) throw new Error(`알 수 없는 전략: ${input.strategyId}`);
+    if (!strategy) throw new PreparationInputError(`알 수 없는 전략: ${input.strategyId}`);
     const validated = strategy.parameterSchema.safeParse(input.parameters);
     if (!validated.success) {
-      throw new Error(validated.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; '));
+      throw new PreparationInputError(
+        validated.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; '),
+      );
     }
     return strategy;
   }

@@ -316,6 +316,7 @@ function makePipelineResolver(options: {
   missingTradingValueDates?: readonly string[];
   facts?: readonly Fact[];
   factsPresent?: readonly string[];
+  financialCoverage?: ReadonlyMap<string, readonly number[]>;
   candles?: readonly Candle[];
   actionCoverage?: ReadonlyMap<string, readonly number[]>;
   actionGaps?: ReadonlyMap<string, readonly number[]>;
@@ -331,6 +332,11 @@ function makePipelineResolver(options: {
     ...netIncomeFacts('000003', [5, 5, 5, 5]),
   ];
   const factsPresent = new Set(options.factsPresent ?? PIPELINE_ENTRIES.map((entry) => entry.shortCode));
+  // PER 결측 판정은 financial coverage 연도를 본다 — factsPresent 종목은 PIPELINE_DATE
+  // (2025) 기준 필요 연도 [2024, 2025]를 모두 덮은 것으로 둔다.
+  const financialCoverage = options.financialCoverage ?? new Map(
+    [...factsPresent].map((code) => [code, [2024, 2025] as readonly number[]]),
+  );
   const candles = options.candles ?? [];
   const actionCoverage = options.actionCoverage ?? new Map(
     PIPELINE_ENTRIES.map((entry) => [entry.shortCode, [2025] as const]),
@@ -364,6 +370,12 @@ function makePipelineResolver(options: {
       hasFacts: (_scope: 'SYMBOL' | 'MACRO', key: string) => factsPresent.has(key),
       symbolsWithFacts: () => factsPresent,
       saveFacts: async () => undefined,
+    },
+    factCoverage: {
+      getCoveredYears: (codes?: readonly string[]) => codes === undefined
+        ? financialCoverage
+        : new Map([...financialCoverage].filter(([code]) => codes.includes(code))),
+      addCoveredYears: () => undefined,
     },
     candles: {
       async *getCandles(query: { symbols: readonly string[]; fromTsMs?: number; toTsMs?: number }) {
@@ -519,6 +531,84 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     if (result.kind !== 'NEEDS_DATA') throw new Error('fixture의 첫 stage는 unresolved여야 합니다.');
     expect([...result.unionEntries.keys()]).toEqual(['000001', '000002', '000003']);
     expect(result.needs.selectionMetricDates).toEqual([PIPELINE_DATE]);
+  });
+
+  it('ingest 안 된 날짜의 VOLUME 결측은 제외 대신 metric 수집을 요구한다', async () => {
+    // 0014 migration 직후: 시총만 복사돼 volume/거래대금이 비어 있다. 한 번의 KRX
+    // ingest 로 채워질 결측이므로 eligible 0 실패가 아니라 NEEDS_DATA 여야 한다.
+    const resolver = makePipelineResolver({
+      metrics: pipelineMetrics.map((row) => ({ ...row, volume: null, tradingValueKrw: null })),
+      missingTradingValueDates: [PIPELINE_DATE],
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'VOLUME', limit: 2 }]),
+      period,
+    );
+
+    expect(result).toMatchObject({ kind: 'NEEDS_DATA' });
+    if (result.kind !== 'NEEDS_DATA') throw new Error('NEEDS_DATA 여야 한다');
+    expect(result.needs.selectionMetricDates).toEqual([PIPELINE_DATE]);
+  });
+
+  it('ingest 된 날짜의 VOLUME null 은 구조적 결측으로 확정해 제외한다', async () => {
+    const metrics = pipelineMetrics.map((row, index) => (
+      index === 2 ? { ...row, volume: null } : row
+    ));
+    const resolver = makePipelineResolver({ metrics, missingTradingValueDates: [] });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'VOLUME', limit: 3 }]),
+      period,
+    );
+
+    expect(result).toMatchObject({ kind: 'READY' });
+    if (result.kind !== 'READY') throw new Error('READY 여야 한다');
+    expect(result.diagnostics[0]?.stages[0]).toMatchObject({
+      inputCount: 3,
+      eligibleCount: 2,
+      excludedMissingCount: 1,
+    });
+  });
+
+  it('자본변동만 받은 종목은 parquet 이 있어도 재무 coverage 가 없으면 NEEDS_DATA 로 요구한다', async () => {
+    // hasFacts(파일 존재)로 판정하던 회귀: SPLIT_RATIO 만 저장된 종목이 재무 있음으로
+    // 오인돼 PER 결측 제외됐다. factsPresent 는 세 종목 모두 파일이 있다고 답한다.
+    const resolver = makePipelineResolver({
+      financialCoverage: new Map([
+        ['000001', [2024, 2025]],
+        ['000002', [2024, 2025]],
+      ]),
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'PER', limit: 2 }]),
+      period,
+    );
+
+    expect(result).toMatchObject({ kind: 'NEEDS_DATA' });
+    if (result.kind !== 'NEEDS_DATA') throw new Error('NEEDS_DATA 여야 한다');
+    expect(result.needs.factSymbols).toEqual(['000003']);
+  });
+
+  it('재무 coverage 가 필요 연도 일부만 덮으면 결측으로 본다', async () => {
+    // 2025-05-15 효력일의 TTM 은 공시 지연 때문에 2024 사업연도까지 필요하다.
+    const resolver = makePipelineResolver({
+      financialCoverage: new Map([
+        ['000001', [2024, 2025]],
+        ['000002', [2024, 2025]],
+        ['000003', [2025]],
+      ]),
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'PER', limit: 2 }]),
+      period,
+    );
+
+    expect(result).toMatchObject({ kind: 'NEEDS_DATA' });
+    if (result.kind !== 'NEEDS_DATA') throw new Error('NEEDS_DATA 여야 한다');
+    expect(result.needs.factSymbols).toEqual(['000003']);
   });
 
   it('후속 ready stage가 완전한 후보 상한의 eligible 0을 증명하면 이전 needs를 버린다', async () => {

@@ -9,10 +9,13 @@ import { addCalendarDays, kstEndOfDayMs } from '../../market-data/domain/kst-dat
 import type { SelectionMetricRepository } from '../../market-data/application/selection-metric-repository.js';
 import type { CandleRepository } from '../../market-data/application/ports.js';
 import type { FactRepository } from '../../facts/application/ports.js';
+import type { FactCoverageStore } from '../../facts/application/fact-coverage-store.js';
 import type { CorporateActionCoverageStore } from '../../facts/application/corporate-action-coverage.js';
+import { derivePreparationFactYearRange } from '../../market-data/domain/fact-year-range.js';
 import { PitFactView } from '../../facts/domain/pit-fact-view.js';
 import { splitAdjustedClose } from '../../strategy/strategies/shared/adjusted-price.js';
 import {
+  compareShortCodes,
   rankUniverseStage,
   type UniverseStageDiagnostic,
   type UniverseStageValue,
@@ -49,6 +52,7 @@ export interface UniverseRuleResolverDeps {
   readonly selectionMetrics?: SelectionMetricRepository;
   readonly candles?: CandleRepository;
   readonly facts?: FactRepository;
+  readonly factCoverage?: FactCoverageStore;
   readonly actionCoverage?: CorporateActionCoverageStore;
   readonly logger: Logger;
 }
@@ -240,7 +244,7 @@ export class UniverseRuleResolver {
     rule: UniverseRule,
     period: BacktestPeriod,
   ): Promise<UniverseResolveAttempt> {
-    const { selectionMetrics, candles, facts, actionCoverage } = this.requirePipelineDeps();
+    const { selectionMetrics, candles, facts, factCoverage, actionCoverage } = this.requirePipelineDeps();
     const factSymbols = new Set<string>();
     const actionSymbols = new Set<string>();
     const priceSymbols = new Set<string>();
@@ -280,7 +284,7 @@ export class UniverseRuleResolver {
         .length;
       let candidates = marketCandidates
         .filter((entry) => !nonTrading.has(entry.shortCode))
-        .sort((a, b) => a.shortCode.localeCompare(b.shortCode));
+        .sort((a, b) => compareShortCodes(a.shortCode, b.shortCode));
       const stageDiagnostics: UniverseStageDiagnostic[] = [];
       const dateFactSymbols = new Set<string>();
       const dateActionSymbols = new Set<string>();
@@ -319,12 +323,35 @@ export class UniverseRuleResolver {
               ? stageMetrics.get(entry.standardCode)?.marketCapKrw ?? null
               : stageMetrics.get(entry.standardCode)?.volume ?? null,
           }));
+          // 0014 migration 은 시총만 복사하고 volume 은 ensureSelectionMetrics 의
+          // backfill 이 채운다. KRX ingest 흔적이 없는 날짜에서 값이 비면 결측 제외로
+          // 추측하지 않고 TRADING_VALUE 와 같은 신호로 metric 수집을 요구한다 —
+          // 한 번의 ingest 로 채워질 수 있는 결측이기 때문이다. ingest 된 날짜의
+          // null 은 구조적 결측이므로 그대로 제외한다.
+          if (
+            rows.some((row) => row.value === null)
+            && selectionMetrics.findMissingTradingValueDates([effectiveDate]).length > 0
+          ) {
+            dateSelectionMetricDates.add(effectiveDate);
+            stageReady = false;
+          }
         } else if (stage.criterion === 'PER') {
           const stageMetrics = selectionMetrics.getAt(
             effectiveDate,
             candidates.map((entry) => entry.standardCode),
           );
-          const missing = candidates.filter((entry) => !facts.hasFacts('SYMBOL', entry.shortCode));
+          // 재무 결측은 parquet 파일 존재(hasFacts)가 아니라 financial coverage 연도로
+          // 판정한다. 자본변동 전용 수집도 같은 파일에 fact 를 남기므로 파일 존재는
+          // 재무 있음을 증명하지 못한다 (fact-coverage-store.ts 주석). coverage 는
+          // 공시가 없던 연도도 시도 후 기록되므로 이 판정은 sync 한 번이면 수렴한다.
+          const requiredYears = perRequiredFactYears(effectiveDate, period);
+          const coveredBySymbol = factCoverage.getCoveredYears(
+            candidates.map((entry) => entry.shortCode),
+          );
+          const missing = candidates.filter((entry) => {
+            const covered = new Set(coveredBySymbol.get(entry.shortCode) ?? []);
+            return requiredYears.some((year) => !covered.has(year));
+          });
           for (const entry of missing) dateFactSymbols.add(entry.shortCode);
           if (missing.length > 0) stageReady = false;
 
@@ -337,11 +364,13 @@ export class UniverseRuleResolver {
           rows = exactPerRankingRows(candidates, stageMetrics, view);
         } else {
           const codes = candidates.map((entry) => entry.shortCode);
-          const histories = await loadCandleHistories(candles, codes, effectiveDate);
+          // 조회 하한 없이 부르면 후보 × 리밸런스 날짜마다 전체 일봉 이력을 읽는다.
+          // 보수 범위(requiredFrom)만 있으면 N봉 판정과 수익률 계산에 충분하다.
           const requiredFrom = addCalendarDays(
             effectiveDate,
             -(stage.lookbackTradingDays * 2 + 14),
           );
+          const histories = await loadCandleHistories(candles, codes, requiredFrom, effectiveDate);
           const priceMissingCodes = codes.filter(
             (code) => (histories.get(code)?.length ?? 0) < stage.lookbackTradingDays,
           );
@@ -490,14 +519,29 @@ export class UniverseRuleResolver {
 
   private requirePipelineDeps(): Required<Pick<
     UniverseRuleResolverDeps,
-    'selectionMetrics' | 'candles' | 'facts' | 'actionCoverage'
+    'selectionMetrics' | 'candles' | 'facts' | 'factCoverage' | 'actionCoverage'
   >> {
-    const { selectionMetrics, candles, facts, actionCoverage } = this.deps;
-    if (!selectionMetrics || !candles || !facts || !actionCoverage) {
+    const { selectionMetrics, candles, facts, factCoverage, actionCoverage } = this.deps;
+    if (!selectionMetrics || !candles || !facts || !factCoverage || !actionCoverage) {
       throw new Error('유니버스 선정 파이프라인 의존성이 연결되지 않았습니다.');
     }
-    return { selectionMetrics, candles, facts, actionCoverage };
+    return { selectionMetrics, candles, facts, factCoverage, actionCoverage };
   }
+}
+
+/**
+ * effectiveDate 시점 TTM 순이익에 필요한 재무 coverage 연도. 공시 지연 때문에 직전
+ * 사업연도까지 본다. 하한은 준비 작업이 실제로 동기화하는 계획 범위
+ * (`derivePreparationFactYearRange(period, 4)`)로 클램프한다 — 그보다 이른 연도를
+ * 요구하면 어떤 sync 도 채울 수 없어 준비 작업이 같은 needs 를 반복하다 실패한다.
+ */
+function perRequiredFactYears(effectiveDate: string, period: BacktestPeriod): number[] {
+  const planRange = derivePreparationFactYearRange(period, 4);
+  const effectiveYear = Number(effectiveDate.slice(0, 4));
+  const fromYear = Math.max(effectiveYear - 1, planRange.fromYear);
+  const years: number[] = [];
+  for (let year = fromYear; year <= effectiveYear; year += 1) years.push(year);
+  return years;
 }
 
 function yearsBetween(from: string, to: string): number[] {
@@ -546,7 +590,7 @@ function exactPerRankingRows(
     const left = a.numerator * b.denominator;
     const right = b.numerator * a.denominator;
     if (left !== right) return left < right ? -1 : 1;
-    return a.entry.shortCode.localeCompare(b.entry.shortCode);
+    return compareShortCodes(a.entry.shortCode, b.entry.shortCode);
   });
   const rankByCode = new Map<string, number>();
   let rank = 0;
@@ -570,6 +614,7 @@ function exactPerRankingRows(
 async function loadCandleHistories(
   candles: CandleRepository,
   symbols: readonly string[],
+  fromDate: string,
   effectiveDate: string,
 ): Promise<Map<string, import('../../market-data/domain/candle.js').Candle[]>> {
   const histories = new Map<string, import('../../market-data/domain/candle.js').Candle[]>();
@@ -577,6 +622,8 @@ async function loadCandleHistories(
     market: 'KR',
     timeframe: '1d',
     symbols,
+    // fromDate 의 KST 자정부터 — 직전 달력일의 끝 다음 ms 가 그 경계다.
+    fromTsMs: kstEndOfDayMs(addCalendarDays(fromDate, -1)) + 1,
     toTsMs: kstEndOfDayMs(effectiveDate),
   })) {
     const list = histories.get(candle.symbol) ?? [];

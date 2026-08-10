@@ -2,10 +2,12 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { universeRuleSchema } from '../../../../shared/schemas/universe-rule.js';
 import { SECURITY_HEADERS } from '../../../shared/security.js';
-import type {
-  BacktestPreparationOrchestrator,
-  PreparationInput,
+import {
+  PreparationInputError,
+  type BacktestPreparationOrchestrator,
+  type PreparationInput,
 } from '../application/backtest-preparation-orchestrator.js';
+import { sendIfKrxError, sendIfNotCovered } from './krx-error-mapping.js';
 
 type PreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -60,8 +62,15 @@ export function registerBacktestPreparationRoutes(
       }
       return reply.code(202).send({ job: orchestrator.start(input) });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return reply.code(400).send({ error: message });
+      // resolver 경유 오류는 제출 라우트와 같은 코드로 매핑한다. 그 밖의 오류를
+      // 일괄 400 으로 접으면 내부 wiring 결함까지 사용자 요청 문제로 둔갑한다 —
+      // 알려진 사용자 오류(미지 전략 등)만 400, 나머지는 500 처리기로 던진다.
+      if (sendIfKrxError(reply, error)) return reply;
+      if (sendIfNotCovered(reply, error)) return reply;
+      if (error instanceof PreparationInputError) {
+        return reply.code(400).send({ error: error.message });
+      }
+      throw error;
     }
   });
 
