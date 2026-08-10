@@ -67,10 +67,16 @@ export class SelectionMetricRepository {
     return metrics;
   }
 
+  /**
+   * 거래대금 ingest 흔적이 전혀 없는 날짜만 돌려준다. KRX 일별 응답은 한 transaction
+   * 으로 쓰므로 non-null 행이 하나라도 있으면 그 날짜는 이미 수집한 것이다. "모든 행이
+   * non-null" 기준을 쓰면 KRX 가 끝내 값을 주지 않는 종목('-' 거래대금, 상장폐지 등)
+   * 하나가 그 날짜를 영원히 재수집 대상으로 만든다.
+   */
   findMissingTradingValueDates(dates: readonly string[]): string[] {
     const requestedDates = [...new Set(dates)];
     if (requestedDates.length === 0) return [];
-    const complete = new Map<string, boolean>();
+    const ingested = new Set<string>();
     for (let index = 0; index < requestedDates.length; index += READ_BATCH_SIZE) {
       const rows = this.db.select({
         date: dailySelectionMetrics.date,
@@ -80,9 +86,9 @@ export class SelectionMetricRepository {
         .where(inArray(dailySelectionMetrics.date, requestedDates.slice(index, index + READ_BATCH_SIZE)))
         .all();
       for (const row of rows) {
-        complete.set(row.date, complete.get(row.date) !== false && row.tradingValueKrw !== null);
+        if (row.tradingValueKrw !== null) ingested.add(row.date);
       }
     }
-    return requestedDates.filter((date) => complete.get(date) !== true);
+    return requestedDates.filter((date) => !ingested.has(date));
   }
 }

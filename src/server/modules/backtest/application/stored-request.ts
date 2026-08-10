@@ -9,9 +9,11 @@ export type StoredRequestRebase =
 
 /**
  * I3 이전 요청은 포지션 상한을 parameters.maxPositions 에서 이름으로 찾았고,
- * 없으면 조용히 10 을 썼다. 재기준 시에도 그 작업이 실제로 돌았던 값을 유지한다.
+ * 없으면 엔진이 조용히 10 을 썼다. 단계형 유니버스 계획(2026-08-09)은 상한이 없는
+ * 요청에 신규 기본값 40 을 채우기로 정했다 — 재기준은 재현이 아니라 재실행이므로
+ * 옛 암묵값 10 을 복원하지 않고, 기본값을 채웠다는 사실을 경고로 남긴다.
  */
-const LEGACY_MAX_POSITIONS = 40;
+const DEFAULT_MAX_POSITIONS = 40;
 
 function rebaseUniverseRule(draft: Record<string, unknown>, warnings: string[]): void {
   const rawRule = draft.universeRule;
@@ -67,14 +69,18 @@ export function rebaseStoredRequest(
   // I3: maxPositions 는 전략 파라미터 네이밍 관례에서 요청의 명시 필드로 옮겨졌다
   if (draft.risk === undefined) {
     const parameters = draft.parameters;
-    let carried: number = LEGACY_MAX_POSITIONS;
+    let carried: number | null = null;
     if (typeof parameters === 'object' && parameters !== null && !Array.isArray(parameters)) {
       const { maxPositions, ...rest } = parameters as Record<string, unknown>;
       if (typeof maxPositions === 'number') carried = maxPositions;
       draft.parameters = rest;
     }
-    draft.risk = { maxPositions: carried };
-    warnings.push(`포지션 상한을 risk.maxPositions=${carried} 로 이관했습니다 (구 스키마 요청)`);
+    draft.risk = { maxPositions: carried ?? DEFAULT_MAX_POSITIONS };
+    warnings.push(
+      carried !== null
+        ? `포지션 상한을 risk.maxPositions=${carried} 로 이관했습니다 (구 스키마 요청)`
+        : `포지션 상한이 없어 기본값 ${DEFAULT_MAX_POSITIONS} 을 채웠습니다 (구 스키마 요청)`,
+    );
   }
 
   // 단계형 규칙 이전의 topN/sortKey와 전략별 리밸런싱 주기는 저장 원본을 바꾸지

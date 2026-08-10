@@ -131,6 +131,13 @@ describe('parseDailyRows', () => {
     expect(row?.tradingValueRaw).toBe('123456789012345');
   });
 
+  it('ACC_TRDVAL 의 콤마는 marketCapRaw 와 같게 제거해 돌려준다', () => {
+    // 소비자가 BigInt(tradingValueRaw) 를 바로 부를 수 있어야 한다.
+    const [row] = parseDailyRows([dailyFixture({ ACC_TRDVAL: '123,456,789' })]);
+
+    expect(row?.tradingValueRaw).toBe('123456789');
+  });
+
   it('ACC_TRDVAL 는 Number 안전 정수와 signed-64 경계를 넘어도 원문을 보존한다', () => {
     const rows = parseDailyRows([
       dailyFixture({ ACC_TRDVAL: '9007199254740993' }),

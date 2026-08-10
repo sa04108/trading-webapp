@@ -12,19 +12,22 @@ describe('SelectionMetricRepository', () => {
     const t = await createTestApp();
     const repository = new SelectionMetricRepository(t.container.database.db);
 
+    // 2^53+1 과 2^63 초과 값 — 내부에서 Number() 를 거치는 구현은 여기서 깨진다.
+    const overDoubleCap = 9_007_199_254_740_993n;
+    const overInt64TradingValue = 18_446_744_073_709_551_617n;
     repository.upsertMany([{
       date: '2026-08-07',
       standardCode: 'KR7005930003',
-      marketCapKrw: 123_456_789_012_345n,
+      marketCapKrw: overDoubleCap,
       volume: null,
       tradingValueKrw: null,
     }]);
     repository.upsertMany([{
       date: '2026-08-07',
       standardCode: 'KR7005930003',
-      marketCapKrw: 123_456_789_012_345n,
+      marketCapKrw: overDoubleCap,
       volume: 2,
-      tradingValueKrw: 987_654_321_098_765n,
+      tradingValueKrw: overInt64TradingValue,
     }]);
 
     expect(repository.getAt('2026-08-07', ['KR7005930003'])).toEqual(new Map([[
@@ -32,15 +35,15 @@ describe('SelectionMetricRepository', () => {
       {
         date: '2026-08-07',
         standardCode: 'KR7005930003',
-        marketCapKrw: 123_456_789_012_345n,
+        marketCapKrw: overDoubleCap,
         volume: 2,
-        tradingValueKrw: 987_654_321_098_765n,
+        tradingValueKrw: overInt64TradingValue,
       },
     ]]));
     await t.close();
   });
 
-  it('거래대금 행이 없거나 nullable 이면 해당 날짜를 다시 수집 대상으로 돌려준다', async () => {
+  it('거래대금 행이 없거나 전부 null 이면 해당 날짜를 다시 수집 대상으로 돌려준다', async () => {
     const t = await createTestApp();
     const repository = new SelectionMetricRepository(t.container.database.db);
     repository.upsertMany([{
@@ -59,6 +62,29 @@ describe('SelectionMetricRepository', () => {
 
     expect(repository.findMissingTradingValueDates(['2026-08-06', '2026-08-07', '2026-08-08']))
       .toEqual(['2026-08-06', '2026-08-07']);
+    await t.close();
+  });
+
+  it('일부 종목의 거래대금이 영영 null 이어도 ingest 흔적이 있는 날짜는 재수집하지 않는다', async () => {
+    const t = await createTestApp();
+    const repository = new SelectionMetricRepository(t.container.database.db);
+    // KRX 가 '-' 거래대금을 준 종목은 null 로 남는다. 같은 transaction 의 다른 종목이
+    // 값을 가지면 그 날짜는 이미 수집한 것이다.
+    repository.upsertMany([{
+      date: '2026-08-07',
+      standardCode: 'KR7005930003',
+      marketCapKrw: 1n,
+      volume: 2,
+      tradingValueKrw: null,
+    }, {
+      date: '2026-08-07',
+      standardCode: 'KR7000660001',
+      marketCapKrw: 4n,
+      volume: 5,
+      tradingValueKrw: 6n,
+    }]);
+
+    expect(repository.findMissingTradingValueDates(['2026-08-07'])).toEqual([]);
     await t.close();
   });
 
