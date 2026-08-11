@@ -20,7 +20,6 @@ import { api, ApiError, postJson } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 import { formatKrw, timeframeLabel } from '@/lib/format';
 import { wizardTimeframes } from '@/features/datasets/dataset-slices';
-import type { SymbolSummary } from '@/features/datasets/symbol-types';
 import { costProfileLabel, slippageProfileLabel } from './profile-labels';
 import { useStockNames } from '@/lib/use-stock-names';
 import { requestToFormState } from './prefill';
@@ -173,20 +172,6 @@ export function NewBacktestWizard() {
     queryKey: ['strategies', strategyId, 'schema'],
     queryFn: () => api<{ schema: Record<string, unknown> }>(`/strategies/${strategyId}/schema`),
     enabled: strategyId !== null,
-  });
-  // 재무 게이트가 봐야 하는 hasFacts 조회 — unionSymbols 는 미리보기 이후에만 정해지므로
-  // 이 카탈로그는 전체 종목을 미리 받아 둔다(설계 2026-07-31-symbol-as-first-class 와 같은 이유)
-  const symbolsQuery = useQuery({
-    queryKey: ['symbols'],
-    queryFn: () => api<{ symbols: SymbolSummary[] }>('/symbols'),
-  });
-  const profiles = useQuery({
-    queryKey: ['backtests', 'profiles'],
-    queryFn: () =>
-      api<{
-        commissionProfiles: CommissionProfileSummary[];
-        slippageProfiles: SlippageProfileSummary[];
-      }>('/backtests/profiles'),
   });
 
   const [searchParams] = useSearchParams();
@@ -382,21 +367,9 @@ export function NewBacktestWizard() {
   });
 
   // 단계 게이트가 보는 값만 모아 넘긴다 — 규칙은 wizard-steps.ts 한 곳에 있다
-  /**
-   * unionSymbols 중 재무를 가진 코드. **unionSymbols 전부의 재무 보유를 알 때만** 배열을
-   * 만든다.
-   *
-   * 응답이 아직 없거나, 목록에 없는 종목이 섞여 있거나, `hasFacts` 가 빠진 응답이면
-   * undefined 다 — 그런 상태에서 배열을 만들면 "모른다" 가 "전부 없다" 로 바뀌어
-   * (`filter(hasFacts === true)` 가 빈 배열을 낸다) 게이트가 근거 없이 문을 잠근다.
-   * D-032 배지가 필드 부재에 침묵하는 것과 같은 이유다.
-   */
-  const symbolsWithFacts = ((): readonly string[] | undefined => {
-    if (symbolsQuery.data === undefined) return undefined;
-    const known = new Map(symbolsQuery.data.symbols.map((s) => [s.code, s.hasFacts]));
-    if (unionSymbols.some((code) => known.get(code) === undefined)) return undefined;
-    return unionSymbols.filter((code) => known.get(code) === true);
-  })();
+  // preview가 확정한 종목만 서버의 실제 재무 행으로 판정한다. 구 서버가 이 필드를
+  // 내리지 않으면 undefined로 남겨 근거 없이 "재무 없음"으로 단정하지 않는다.
+  const symbolsWithFacts = currentPreviewResult?.fundamentalSymbols;
   const gate: StepGateState = {
     strategyId,
     from,
@@ -418,6 +391,18 @@ export function NewBacktestWizard() {
    */
   const step = urlStep === null ? 0 : Math.min(urlStep, reachable);
   const navLimit = navigableStepLimit(step, gate);
+
+  // 비용 프로필은 자본·비용 단계에서만 표시한다. 실제 렌더 단계에 묶어 갈 수 없는
+  // deep link가 첫 단계로 접힐 때도 불필요한 조회를 시작하지 않는다.
+  const profiles = useQuery({
+    queryKey: ['backtests', 'profiles'],
+    queryFn: () =>
+      api<{
+        commissionProfiles: CommissionProfileSummary[];
+        slippageProfiles: SlippageProfileSummary[];
+      }>('/backtests/profiles'),
+    enabled: step === 3,
+  });
 
   /**
    * 단계 이동은 모두 push 다 — 이동 하나가 이력 한 칸을 차지해야 뒤로가기가 직전

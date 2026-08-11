@@ -343,7 +343,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
   };
 
   /**
-   * 제출 검증 — 신규 제출(POST)·복제(clone)·초안(clone-draft)이 동일한 기준을 거친다.
+   * 제출 검증 — 신규 제출(POST)과 즉시 복제(clone)가 동일한 기준을 거친다.
    * 통과 시 제출 시점의 유니버스 버전과 서버 소유 provenance pin(Task 12)을 함께
    * 반환한다 (재현성 §9.5, REVIEW §9.2). 400 메시지는 `errors[0]` 이므로 검사 순서가
    * 곧 우선순위다.
@@ -363,8 +363,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    *
    * `preparedPreview` 는 항상 있어야 한다 — 완료된 준비 없이 유니버스를 다시
    * 추측하는 옛 경로(`UniverseRuleResolver.resolve`, stages[0] 만 보는 stopgap)는
-   * clone-draft 개편(리뷰 finding, 2026-08-09)으로 없앴다. 완료된 준비가 없는
-   * 호출자는 이 함수를 부르기 전에 스스로 "데이터 준비 필요" 로 갈라져야 한다.
+   * 없앴다. 완료된 준비가 없는 제출 호출자는 이 함수를 부르기 전에 스스로
+   * "데이터 준비 필요" 로 갈라져야 한다. 초안 조회는 이 검증 자체를 호출하지 않는다
+   * (D-050).
    */
   const validateSubmission = async (
     body: BacktestRequest,
@@ -448,8 +449,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    * 없다 (D-025 와 같은 원칙: 조용히 빠지지 않는다). `validateSubmission` 이 만드는
    * `errors` 배열에 합류시키지 않는 이유: 그 배열은 항상 400 으로 변환되는데, 이 조건은
    * 요청 형식·데이터셋 상태가 아니라 "전략과 유니버스의 조합" 문제라 422 여야 한다.
-   * POST 신규 제출뿐 아니라 clone·clone-draft 도 같은 검사를 거친다 — 데이터가 제출
-   * 이후 지워진 job 을 clone 하면 이 관문에서 다시 걸린다.
+   * POST 신규 제출과 즉시 clone이 같은 검사를 거친다 — 데이터가 제출 이후 지워진
+   * job을 clone하면 이 관문에서 다시 걸린다. 재설정용 초안은 D-050에 따라 유니버스
+   * 단계 전에는 이 검사를 미룬다.
    */
   const checkFundamentalsRequirement = (
     body: BacktestRequest,
@@ -723,20 +725,12 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
   });
 
   /**
-   * 재설정 및 복제용 초안 (D-025). 읽기 전용 — 대기열에 넣지 않고 유니버스 버전도 고정하지 않는다.
-   * 검증을 **돌리되 막지 않는다**: 여기서 400 으로 끊으면 조건이 틀어진 백테스트를 고칠
-   * 화면 자체가 열리지 않는다. 실제 차단은 제출 시점 POST /backtests 가 그대로 지킨다.
-   *
-   * 완료된 준비(preparation)가 이미 있으면 그 union으로 blockers 를 계산한다. 없으면
-   * 유니버스를 추측하지 않는다(리뷰 finding, 2026-08-09) — `UniverseRuleResolver.
-   * resolve()` 는 stages[0](MARKET_CAP)만 보는 옛 경로라, PER·DECLINE 처럼 여러
-   * 단계인 규칙을 잘못된 유니버스로 판정해 재무·상한 blockers 를 그릇된 종목 집합으로
-   * 매기고 KRX 호출까지 낭비한다. 이 경우는 union이 필요한 검사(재무·커버리지·등록)를
-   * 건너뛰고, 위저드가 이미 아는 "데이터 준비 필요" 신호를 대신 담는다 — 위저드는 이
-   * 신호를 받으면 미리보기→준비를 그대로 다시 돌린다. 파라미터·프로파일처럼 유니버스와
-   * 무관한 정적 검증과 topN vs maxPositions 상한 검사는 준비 여부와 관계없이 그대로 돈다.
+   * 재설정 및 복제용 초안 (D-025). 첫 화면은 저장 요청과 전략만 필요하다. 여기서 전체
+   * 기간의 유니버스를 다시 해소하면 전략 화면 진입이 리밸런스 횟수와 후보 종목 수에
+   * 비례해 느려진다. 유니버스·coverage 검증은 위저드의 유니버스 단계와 실제 제출에서
+   * 수행한다. 이 route는 저장 요청 복원과 현재 스키마 재기준만 맡는다.
    */
-  app.get('/backtests/:id/clone-draft', { preHandler: requireAuth }, async (request, reply) => {
+  app.get('/backtests/:id/clone-draft', { preHandler: requireAuth }, (request, reply) => {
     const { id } = request.params as { id: string };
     const job = queue.getJob(id);
     if (!job) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
@@ -747,51 +741,10 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     );
     if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
 
-    let prepared: Awaited<ReturnType<typeof preparation.getReadyPreview>>;
-    try {
-      prepared = await preparation.getReadyPreview(preparationInputOf(rebased.request));
-    } catch (error) {
-      if (sendIfKrxError(reply, error)) return reply;
-      if (sendIfNotCovered(reply, error)) return reply;
-      throw error;
-    }
-
-    if (!prepared) {
-      const capacityError = checkPositionCapacity(rebased.request);
-      return {
-        request: rebased.request,
-        warnings: rebased.warnings,
-        blockers: [
-          ...validateStaticSubmission(rebased.request),
-          '동일한 조건의 데이터 준비가 아직 완료되지 않았습니다 — 미리보기를 다시 실행해 데이터 준비를 완료하세요.',
-          ...(capacityError ? [capacityError] : []),
-        ],
-      };
-    }
-
-    let validated: Awaited<ReturnType<typeof validateSubmission>>;
-    try {
-      validated = await validateSubmission(rebased.request, prepared);
-    } catch (error) {
-      if (sendIfKrxError(reply, error)) return reply;
-      if (sendIfNotCovered(reply, error)) return reply;
-      throw error;
-    }
-    const blockers = validated.ok ? [] : [...validated.errors];
-    // 검증이 실패해도 재무 blockers 에는 unionSymbols 이 필요하다 — 완료된 준비의
-    // union 을 그대로 쓴다(예외를 던지지 않으므로 안전하게 재사용한다).
-    const unionSymbols = validated.ok ? validated.resolved.unionSymbols : preparedPreviewToResolved(prepared).unionSymbols;
-    const fundamentalsError = checkFundamentalsRequirement(rebased.request, unionSymbols);
-    if (fundamentalsError) blockers.push(fundamentalsError);
-    const capacityError = checkPositionCapacity(rebased.request);
-    if (capacityError) blockers.push(capacityError);
-    // 검증이 실패하면 그 사유는 blockers 로 이미 나간다 — warnings 는 통과했을 때만 있다.
-    // POST /backtests/:id/clone 핸들러와 같은 합류 방식이다 — 두 경로가 갈리면
-    // 위저드에서 자본변동 경고가 조용히 사라진다(리뷰 finding, 2026-08-08).
     return {
       request: rebased.request,
-      warnings: [...rebased.warnings, ...(validated.ok ? validated.warnings : [])],
-      blockers,
+      warnings: rebased.warnings,
+      blockers: [],
     };
   });
 

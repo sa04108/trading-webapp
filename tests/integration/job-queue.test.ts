@@ -762,7 +762,27 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect((cloned.json() as { error: string }).error).toContain('상장시점 재무 데이터가 필요');
   });
 
-  it('준비가 완료된 초안은 재무 요구 미충족도 blockers 에 담는다', async () => {
+  it('재설정 및 복제 초안은 유니버스 준비와 무관하게 저장 요청을 복원한다', async () => {
+    const request = buildRequest();
+    const job = ctx.container.jobQueue.enqueue(request);
+
+    // 이 경계 아래는 전체 기간의 유니버스 해소와 coverage 검증이다. 초안 조회는 이
+    // 작업이 불가능한 상태에서도 저장 요청과 재기준 경고를 돌려줘야 한다.
+    ctx.container.backtestPreparationOrchestrator.getReadyPreview = async () => {
+      throw new Error('clone-draft가 유니버스 준비를 호출했습니다');
+    };
+
+    const draft = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${job.id}/clone-draft`,
+      cookies: { qp_session: cookie },
+    });
+
+    expect(draft.statusCode).toBe(200);
+    expect(draft.json()).toEqual({ request, warnings: [], blockers: [] });
+  });
+
+  it('재무가 필요한 원본도 유니버스 단계 전에는 blockers 없이 연다', async () => {
     const request: BacktestRequest = {
       ...buildRequest(),
       strategyId: 'value-quality-rank',
@@ -770,38 +790,18 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     };
     const job = ctx.container.jobQueue.enqueue(request);
 
-    // 완료된 준비가 있어야 초안이 실제 union으로 재무 blockers 를 계산한다(리뷰
-    // finding, 2026-08-09) — 준비 없이 유니버스를 추측하지 않는다.
-    const preparation = ctx.container.backtestPreparationOrchestrator.start({
-      universeRule: request.universeRule,
-      period: request.period,
-      strategyId: request.strategyId,
-      parameters: request.parameters,
-    });
-    await waitFor(() => {
-      const status = ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status;
-      return status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED';
-    }, 5_000);
-    expect(ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status).toBe('COMPLETED');
-
     const draft = await ctx.app.inject({
       method: 'GET',
       url: `/api/v1/backtests/${job.id}/clone-draft`,
       cookies: { qp_session: cookie },
     });
     expect(draft.statusCode).toBe(200);
-    const body = draft.json() as { blockers: string[] };
-    expect(body.blockers.some((b) => b.includes('상장시점 재무 데이터가 필요'))).toBe(true);
+    const body = draft.json() as { request: BacktestRequest; blockers: string[] };
+    expect(body.request.strategyId).toBe('value-quality-rank');
+    expect(body.blockers).toEqual([]);
   });
 
-  /**
-   * 리뷰 finding(2026-08-09): 완료된 준비가 없는 초안은 `UniverseRuleResolver.
-   * resolve()`(stages[0] 하나만 시총으로 보는 stopgap)로 유니버스를 추측하지
-   * 않는다. PER 을 첫 단계로 두면 그 stopgap이 기준을 완전히 무시하고 시총으로만
-   * 뽑았을 잘못된 유니버스가 재무 blockers 에 들어갔을 것이다 — 지금은 준비가
-   * 없으면 그 계산 자체를 건너뛰고 "데이터 준비 필요" 신호만 담는다.
-   */
-  it('여러 단계(PER 우선) 규칙의 초안은 준비 완료 전에는 유니버스를 추측하지 않는다', async () => {
+  it('여러 단계(PER 우선) 규칙도 유니버스 검증 없이 초안으로 복원한다', async () => {
     const job = ctx.container.jobQueue.enqueue({
       ...buildRequest(),
       universeRule: {
@@ -820,13 +820,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       cookies: { qp_session: cookie },
     });
     expect(draft.statusCode).toBe(200);
-    const body = draft.json() as { blockers: string[] };
-    expect(body.blockers.some((b) => b.includes('데이터 준비'))).toBe(true);
-    // 옛 stopgap이 살아 있었다면 미커버 리밸런스 날짜를 그릇된(시총 전용) 유니버스로
-    // 판정해 이 문구를 냈을 것이다 — 이제는 그 경로를 아예 타지 않는다.
-    expect(
-      body.blockers.some((b) => b.includes('종목 마스터가 다음 리밸런스 날짜를 커버하지 않습니다')),
-    ).toBe(false);
+    const body = draft.json() as { request: BacktestRequest; blockers: string[] };
+    expect(body.request.universeRule.stages[0]?.criterion).toBe('PER');
+    expect(body.blockers).toEqual([]);
   });
 
   it('일부 종목만 봉이 없으면 거부하지 않는다 (신규 상장 등 정상)', async () => {
@@ -853,27 +849,6 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     } as Record<string, unknown>;
     delete legacy.risk;
     const job = ctx.container.jobQueue.enqueue(legacy as never);
-
-    // 재기준된 요청 모양을 먼저 읽어(blockers 는 아직 무시) 그 값으로 준비를
-    // 완료해 둔다 — 완료된 준비가 없으면 blockers 는 이제 "데이터 준비 필요" 로
-    // 채워진다(리뷰 finding, 2026-08-09), 유니버스를 추측하지 않기 때문이다.
-    const firstDraft = await ctx.app.inject({
-      method: 'GET',
-      url: `/api/v1/backtests/${job.id}/clone-draft`,
-      cookies: { qp_session: cookie },
-    });
-    const rebasedRequest = (firstDraft.json() as { request: BacktestRequest }).request;
-    const preparation = ctx.container.backtestPreparationOrchestrator.start({
-      universeRule: rebasedRequest.universeRule,
-      period: rebasedRequest.period,
-      strategyId: rebasedRequest.strategyId,
-      parameters: rebasedRequest.parameters,
-    });
-    await waitFor(() => {
-      const status = ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status;
-      return status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED';
-    }, 5_000);
-    expect(ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status).toBe('COMPLETED');
 
     const draft = await ctx.app.inject({
       method: 'GET',
@@ -920,27 +895,13 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(body.warnings.some((w) => w.includes('1h') && w.includes('일봉'))).toBe(true);
   });
 
-  it('초안은 제출 불가한 원본도 열어준다 — 사유는 blockers 에 담는다', async () => {
-    // 봉이 없는 기간 → 제출은 400 이지만 초안은 열려야 고칠 수 있다
+  it('봉이 없는 원본도 초기 단계에서는 coverage 검증 없이 연다', async () => {
+    // 봉이 없는 기간은 제출 시 400이지만 유니버스 단계 전의 초안 복원을 막지 않는다.
     const request: BacktestRequest = {
       ...buildRequest(),
       period: { from: NO_CANDLE_DATE, to: '2020-12-31' },
     };
     const job = ctx.container.jobQueue.enqueue(request);
-
-    // 완료된 준비가 있어야 초안이 실제 union으로 캔들 존재 여부를 판정한다
-    // (리뷰 finding, 2026-08-09) — 준비 없이 유니버스를 추측하지 않는다.
-    const preparation = ctx.container.backtestPreparationOrchestrator.start({
-      universeRule: request.universeRule,
-      period: request.period,
-      strategyId: request.strategyId,
-      parameters: request.parameters,
-    });
-    await waitFor(() => {
-      const status = ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status;
-      return status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED';
-    }, 5_000);
-    expect(ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status).toBe('COMPLETED');
 
     const draft = await ctx.app.inject({
       method: 'GET',
@@ -951,7 +912,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const body = draft.json() as { request: BacktestRequest; blockers: string[] };
     // 원본 값은 그대로 돌려준다 — 사용자가 이 값을 보고 고친다
     expect(body.request.period.from).toBe(NO_CANDLE_DATE);
-    expect(body.blockers.some((b) => b.includes('005930'))).toBe(true);
+    expect(body.blockers).toEqual([]);
   });
 
   it('초안은 없는 작업에 404, 되살릴 수 없는 요청에 400', async () => {

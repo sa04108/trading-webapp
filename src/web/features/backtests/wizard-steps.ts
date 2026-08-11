@@ -124,10 +124,8 @@ export function stepBlocker(index: number, state: StepGateState): string | null 
 /**
  * 재무 필요 전략 + 재무 없는 유니버스 조합을 제출 전에 막는다.
  *
- * **서버의 422 와 같은 조건이다** (`checkFundamentalsRequirement`): unionSymbols 가
- * **전부** 비었을 때만 막는다. 일부만 없는 경우는 거부 사유가 아니고 워커가 실행 경고에
- * 이름으로 남긴다 (D-025). 여기서 더 조이면 화면과 서버가 서로 다른 정책을 갖게 되고, 화면이
- * 막은 제출은 서버가 허용했을 것이라는 사실을 사용자가 알 방법이 없다.
+ * 워커의 실행 조건과 같은 기준으로 unionSymbols 가 **전부** 비었을 때만 막는다. 일부만
+ * 없는 경우는 거부 사유가 아니고 워커가 실행 경고에 이름으로 남긴다 (D-025).
  *
  * 모르는 상태에서는 통과시킨다 — `requiresFundamentals`·`symbolsWithFacts` 가 undefined
  * 면 아직 응답이 없거나 낡은 서버다. 근거 없이 막으면 사용자가 열 수 없는 문이 된다.

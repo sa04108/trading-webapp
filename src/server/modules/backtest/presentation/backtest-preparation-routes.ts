@@ -9,12 +9,15 @@ import {
   type BacktestPreparationOrchestrator,
   type PreparationInput,
 } from '../application/backtest-preparation-orchestrator.js';
+import type { FactRepository } from '../../facts/application/ports.js';
+import { CORPORATE_ACTION_FIELD } from '../../facts/domain/fact.js';
 import { sendIfKrxError, sendIfNotCovered } from './krx-error-mapping.js';
 
 type PreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
 export interface BacktestPreparationRouteDeps {
   readonly orchestrator: BacktestPreparationOrchestrator;
+  readonly facts: Pick<FactRepository, 'getFacts'>;
   readonly dartApiKeyAvailable: boolean;
 }
 
@@ -61,7 +64,28 @@ export function registerBacktestPreparationRoutes(
 
     try {
       const preview = await orchestrator.getReadyPreview(input);
-      if (preview) return reply.code(200).send(preview);
+      if (preview) {
+        // 유니버스 단계의 재무 게이트는 확정된 종목의 실제 재무 행만 본다. 전체
+        // `/symbols`의 hasFacts는 자본변동만 있어도 true고, 재무 coverage는 DART
+        // 무자료 수집에도 생기므로 둘 다 재무 보유 근거가 될 수 없다.
+        // FactRepository의 빈 keys는 "필터 없음"(전체 스코프)을 뜻한다. 빈 유니버스는
+        // 저장소를 건너뛰어 전체 Parquet 파티션을 읽는 역방향 병목을 만들지 않는다.
+        const storedFacts = preview.unionSymbols.length === 0
+          ? []
+          : await deps.facts.getFacts({
+              scope: 'SYMBOL',
+              keys: preview.unionSymbols,
+            });
+        const codesWithFundamentals = new Set(
+          storedFacts
+            .filter((fact) => fact.field !== CORPORATE_ACTION_FIELD)
+            .map((fact) => fact.key),
+        );
+        const fundamentalSymbols = preview.unionSymbols.filter((code) =>
+          codesWithFundamentals.has(code),
+        );
+        return reply.code(200).send({ ...preview, fundamentalSymbols });
+      }
       if (!deps.dartApiKeyAvailable && await orchestrator.needsDart(input)) {
         return reply.code(503).send({
           error: 'DART API 키가 설정되지 않아 필요한 재무·자본변동 데이터를 동기화할 수 없습니다.',

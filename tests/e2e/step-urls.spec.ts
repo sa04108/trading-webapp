@@ -66,6 +66,70 @@ test('복제 진입의 ?from= 은 단계를 옮겨도 남는다', async ({ page 
   await expect(page).toHaveURL(/\/backtests\/new\/period\?from=bt_nonexistent$/);
 });
 
+test('재설정 및 복제의 전략 단계는 종목과 비용 프로필을 미리 조회하지 않는다', async ({
+  page,
+}) => {
+  await login(page);
+
+  await page.route('**/api/v1/backtests/bt_clone_fixture/clone-draft', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        request: {
+          strategyId: 'range-breakout',
+          parameters: {
+            lookbackBars: 10,
+            atrPeriod: 5,
+            stopAtrMultiplier: 2,
+            takeProfitAtrMultiplier: 3,
+            riskPerTradePercent: 2,
+          },
+          universeRule: {
+            markets: ['KOSPI'],
+            stages: [{ criterion: 'MARKET_CAP', limit: 1 }],
+            rebalanceInterval: { value: 1, unit: 'MONTH' },
+          },
+          timeframe: '1d',
+          period: { from: '2026-01-05', to: '2026-03-31' },
+          capital: { initialCash: 10_000_000, currency: 'KRW' },
+          execution: {
+            fillTiming: 'NEXT_BAR_OPEN',
+            commissionProfileId: 'kr-equity-default',
+            slippageProfileId: 'fixed-5bps',
+          },
+          risk: { maxPositions: 5 },
+          randomSeed: 42,
+        },
+        warnings: [],
+        blockers: [],
+      }),
+    });
+  });
+
+  // 새 문서 탐색으로 앱의 Query cache를 비운 뒤 이 진입에서 발생한 요청만 관찰한다.
+  const apiRequests: string[] = [];
+  page.on('request', (request) => {
+    const pathname = new URL(request.url()).pathname;
+    if (pathname.startsWith('/api/v1/')) apiRequests.push(pathname);
+  });
+
+  await page.goto('/backtests/new/strategy?from=bt_clone_fixture');
+  await expect(page.getByRole('heading', { name: '재설정 및 복제' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /전고점 돌파/ })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  // schema 조회와 프리필까지 끝난 안정 시점 — mount 직후만 보고 금지 요청을 단언하지 않는다.
+  await expect(page.getByLabel('돌파 기준 봉 수', { exact: true })).toHaveValue('10');
+
+  expect(apiRequests).toContain('/api/v1/backtests/bt_clone_fixture/clone-draft');
+  expect(apiRequests).toContain('/api/v1/strategies');
+  expect(apiRequests).toContain('/api/v1/strategies/range-breakout/schema');
+  expect(apiRequests).not.toContain('/api/v1/backtests/universe-preview');
+  expect(apiRequests).not.toContain('/api/v1/symbols');
+  expect(apiRequests).not.toContain('/api/v1/backtests/profiles');
+});
+
 test('제출 화면 URL 을 직접 열면 검토를 거치도록 되돌린다', async ({ page }) => {
   await login(page);
 

@@ -95,6 +95,7 @@ export async function buildServer(container: Container): Promise<FastifyInstance
         api,
         {
           orchestrator: container.backtestPreparationOrchestrator,
+          facts: container.factRepository,
           dartApiKeyAvailable: container.config.dartApiKey !== null,
         },
         requireAuth,

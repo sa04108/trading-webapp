@@ -59,6 +59,8 @@ interface UniverseScheduleEntryDto {
 export interface UniversePreviewResponseDto {
   readonly schedule: readonly UniverseScheduleEntryDto[];
   readonly unionSymbols: readonly string[];
+  /** unionSymbols 중 실제 재무 행이 있는 종목. 구 서버 응답에서는 없을 수 있다. */
+  readonly fundamentalSymbols?: readonly string[];
   readonly scheduleHash: string;
   readonly uncoveredDates: readonly string[];
   /**
@@ -227,13 +229,6 @@ export function UniverseRuleStep({
       setPreparingJobId(null);
       setResolved({ params, result: startResponse.preview });
       onPreviewResolved(params, startResponse.preview);
-      // 이 응답 자체가 unionSymbols 를 등록한다(backtest-routes.ts
-      // registerUniverseSymbols, 스펙 2026-08-06 리뷰 발견).
-      // 재무 게이트가 보는 hasFacts 는 `['symbols']` 조회로만 온다
-      // (new-backtest-wizard.tsx symbolsWithFacts).
-      // 무효화하지 않으면 방금 새로 등록된 종목이 마운트 시점의 낡은 스냅샷에는 없다.
-      // hasFacts 를 "모른다"로 보고 게이트가 근거 없이 다음 단계를 막는다.
-      void queryClient.invalidateQueries({ queryKey: ['symbols'] });
     },
   });
 
