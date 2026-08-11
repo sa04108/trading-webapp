@@ -1081,6 +1081,41 @@ describe('FactSyncService — 자본변동 전용 수집', () => {
     expect(actionCoverage.getCoveredYears().get('005930')).toEqual([2025]);
   });
 
+  /**
+   * irdsSttus 는 자본변동 이력을 누적 반환하므로 2025 요청에 2017 이벤트의 gap 이
+   * 딸려 올 수 있다 (앵커 부재 등 — sync-plan.ts 의 uniqueYearsFromGaps 주석).
+   * 그 연도를 gap 으로 적으면 2017 자체 수집이 이미 성공했어도 gap 기록이 남고,
+   * 어떤 sync 도 지우지 못해(covered 연도는 증분 계획에서 제외) 준비 작업이 같은
+   * needs 를 반복하다 실패한다 — 운영 장애 2026-08-11 의 원인.
+   */
+  it('요청 연도 밖의 gap 연도는 기록하지 않는다', async () => {
+    const source: FactSource = {
+      fetchFinancials: () => Promise.resolve({ facts: [], gaps: [] }),
+      fetchCorporateActions: () =>
+        Promise.resolve({
+          facts: [],
+          gaps: [
+            { symbol: '005930', periodKey: '2017-05-10', reason: '직전 발행주식수를 찾을 수 없습니다' },
+            { symbol: '005930', periodKey: '2025-03-14', reason: '자본변동 gap' },
+          ],
+        }),
+    };
+    const actionCoverage = fakeActionCoverage();
+    const service = new FactSyncService(
+      source,
+      fakeRepository(),
+      LOGGER,
+      fakeVersions(),
+      CLOCK,
+      fakeCoverage(),
+      actionCoverage,
+    );
+
+    await service.syncCorporateActions(request);
+
+    expect(actionCoverage.getGapYears().get('005930')).toEqual([2025]);
+  });
+
   it('종목마다 저장해 중단 지점까지 남는다', async () => {
     const repository = fakeRepository();
     const calls: string[] = [];

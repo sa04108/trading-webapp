@@ -778,6 +778,70 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     expect(result.needs.priceRange).not.toBeNull();
   });
 
+  /**
+   * gap 연도는 "수집을 시도했지만 DART 가 비율을 주지 못했다"는 영구 상태다
+   * (예: 발행형태 '-' 인 인적분할 — 운영 장애 2026-08-11). 이를 sync 재요구로
+   * 돌려주면 증분 계획이 covered 연도를 건너뛰어 어떤 sync 도 해소하지 못하고,
+   * 준비 작업이 같은 needs 를 반복하다 실패한다. 대신 그 연도가 lookback 윈도우에
+   * 걸리는 날짜에서만 해당 종목을 결측으로 제외한다 — 비율 미상인 가격 시계열로
+   * 급하락을 랭킹하면 인적분할이 -60% 급락으로 잘못 뽑힌다.
+   */
+  it('급하락 자본변동이 covered+gap 연도면 재수집 대신 그 날짜 랭킹에서 제외한다', async () => {
+    const candle = (symbol: string, offset: number, close: number): Candle => ({
+      symbol, market: 'KR', timeframe: '1d', tsMs: PIPELINE_TS - offset * 86_400_000,
+      open: close, high: close, low: close, close, volume: 1,
+    });
+    const resolver = makePipelineResolver({
+      candles: PIPELINE_ENTRIES.flatMap((entry) => [
+        candle(entry.shortCode, 2, 100),
+        candle(entry.shortCode, 1, 90),
+        candle(entry.shortCode, 0, 80),
+      ]),
+      // 세 후보 모두 2025 covered. 000002 만 2025 에 gap — 시도했지만 비율 미상.
+      actionGaps: new Map([['000002', [2025]]]),
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'DECLINE', limit: 3, lookbackTradingDays: 3 }]),
+      period,
+    );
+
+    expect(result.kind).toBe('READY');
+    if (result.kind !== 'READY') throw new Error('covered+gap 은 재수집 요구 없이 해소돼야 합니다.');
+    expect(result.schedule[0]?.members.map((member) => member.symbol)).toEqual(['000001', '000003']);
+    expect(result.diagnostics[0]?.stages[0]).toMatchObject({
+      inputCount: 3,
+      eligibleCount: 2,
+      excludedMissingCount: 1,
+    });
+  });
+
+  it('급하락 gap 연도가 lookback 윈도우 밖이면 후보를 제외하지 않는다', async () => {
+    const candle = (symbol: string, offset: number, close: number): Candle => ({
+      symbol, market: 'KR', timeframe: '1d', tsMs: PIPELINE_TS - offset * 86_400_000,
+      open: close, high: close, low: close, close, volume: 1,
+    });
+    const resolver = makePipelineResolver({
+      candles: PIPELINE_ENTRIES.flatMap((entry) => [
+        candle(entry.shortCode, 2, 100),
+        candle(entry.shortCode, 1, 90),
+        candle(entry.shortCode, 0, 80),
+      ]),
+      // 윈도우(2025)에 걸리지 않는 옛 gap — 누적 응답 노이즈로 남은 기록일 수 있다.
+      actionGaps: new Map([['000002', [2017]]]),
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'DECLINE', limit: 3, lookbackTradingDays: 3 }]),
+      period,
+    );
+
+    expect(result.kind).toBe('READY');
+    if (result.kind !== 'READY') throw new Error('윈도우 밖 gap 은 영향이 없어야 합니다.');
+    expect(result.schedule[0]?.members.map((member) => member.symbol))
+      .toEqual(['000001', '000002', '000003']);
+  });
+
   it('급하락 보수 범위를 아직 모두 조회하지 않았으면 부족한 봉을 계속 가격 대상으로 남긴다', async () => {
     const resolver = makePipelineResolver({ priceRangeCovered: false });
 

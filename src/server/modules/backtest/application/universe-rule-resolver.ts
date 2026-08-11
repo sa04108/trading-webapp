@@ -417,20 +417,32 @@ export class UniverseRuleResolver {
           const requiredYears = yearsBetween(priceFetchRequired ? requiredFrom : actualFrom, effectiveDate);
           const coveredBySymbol = actionCoverage.getCoveredYears(actionCandidateCodes);
           const gapsBySymbol = actionCoverage.getGapYears(actionCandidateCodes);
+          // covered+gap 연도는 "시도했지만 DART 가 비율을 주지 못한" 영구 상태다
+          // (예: 발행형태 '-' 인 인적분할). 재수집을 요구하면 증분 계획이 covered
+          // 연도를 건너뛰어 어떤 sync 도 해소하지 못하고 준비 작업이 같은 needs 를
+          // 반복하다 실패한다. 대신 그 연도가 윈도우에 걸리는 날짜에서만 후보를
+          // 결측으로 제외한다 — 비율 미상 시계열로 랭킹하면 인적분할이 급락으로
+          // 잘못 뽑힌다 (조용히 틀리는 쪽이 아니라 빠지는 쪽을 고른다).
+          const gapExcludedCodes = new Set<string>();
           for (const code of actionCandidateCodes) {
             const covered = new Set(coveredBySymbol.get(code) ?? []);
-            const gaps = new Set(gapsBySymbol.get(code) ?? []);
-            if (requiredYears.some((year) => !covered.has(year) || gaps.has(year))) {
+            if (requiredYears.some((year) => !covered.has(year))) {
               dateActionSymbols.add(code);
               stageReady = false;
+              continue;
             }
+            const gaps = new Set(gapsBySymbol.get(code) ?? []);
+            if (requiredYears.some((year) => gaps.has(year))) gapExcludedCodes.add(code);
           }
 
           const loaded = await facts.getFacts({ scope: 'SYMBOL', keys: codes });
           const view = new PitFactView(loaded);
           rows = candidates.map((entry) => {
             const history = (histories.get(entry.shortCode) ?? []).slice(-stage.lookbackTradingDays);
-            if (history.length !== stage.lookbackTradingDays) {
+            if (
+              history.length !== stage.lookbackTradingDays
+              || gapExcludedCodes.has(entry.shortCode)
+            ) {
               return { standardCode: entry.standardCode, shortCode: entry.shortCode, value: null };
             }
             const actions = view.corporateActions(entry.shortCode, kstEndOfDayMs(effectiveDate));

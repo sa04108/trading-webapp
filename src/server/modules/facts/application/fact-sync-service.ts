@@ -361,7 +361,12 @@ export class FactSyncService {
           symbolGapCount += workGaps.length;
           gaps.push(...workGaps);
 
-          strategy.recordCoverage(symbol, [year], uniqueYearsFromGaps(actionGaps), this.clock.now());
+          // gap 연도는 이번에 요청한 연도로 한정한다. irdsSttus 가 누적 이력을 주므로
+          // 요청 밖 연도의 이벤트 gap(앵커 부재 등)이 딸려 오는데, 그 연도를 적으면
+          // 해당 연도 자체 수집이 성공했어도 gap 이 남고 어떤 sync 도 지우지 못해
+          // (covered 연도는 증분 계획에서 제외) 준비 작업이 무한 반복하다 실패한다.
+          const gapYears = uniqueYearsFromGaps(actionGaps).filter((gapYear) => gapYear === year);
+          strategy.recordCoverage(symbol, [year], gapYears, this.clock.now());
           await this.bumpVersionIfChanged(symbol, fingerprintBefore);
 
           for (const shareYear of shareYears) requestedShareYears.add(shareYear);
