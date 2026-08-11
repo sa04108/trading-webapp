@@ -44,6 +44,37 @@ export const DART_CORPORATE_ACTION_CALLS_PER_YEAR = 1;
 
 export type FactSyncMode = 'FULL' | 'INCREMENTAL';
 
+/** 분기 누적 보고서의 대상 기간 말일 (1Q·반기·3Q·사업보고서 순). */
+const QUARTER_END_MONTH_DAYS = ['03-31', '06-30', '09-30', '12-31'] as const;
+
+/**
+ * 오늘(KST) 기준으로 존재할 수 있는 `year` 사업연도 정기보고서 수 (0~4).
+ *
+ * 분기말이 지나야 그 분기 보고서가 제출될 수 있다 — 기간이 끝나지 않은 보고서
+ * 조회는 항상 013(조회 없음)이다 (2026-08-11 운영 DART 검증: bsns_year=2026 의
+ * 3Q·사업보고서·irdsSttus 모두 013). 계획(estimateDartCalls)과 실행
+ * (dart-fact-source)이 이 함수 하나를 공유해야 화면 추정치가 실제 호출과 갈리지
+ * 않는다 — 파일 헤더의 계약이다.
+ *
+ * 12월 결산을 가정한다. 종목 마스터·재무 파이프라인 전체가 같은 가정을 쓴다
+ * (REPORT_CODE_TO_QUARTER 참고).
+ */
+export function filableReportCount(year: number, todayKstDate: string): number {
+  let count = 0;
+  for (const monthDay of QUARTER_END_MONTH_DAYS) {
+    if (`${year}-${monthDay}` < todayKstDate) count += 1;
+  }
+  return count;
+}
+
+/**
+ * `irdsSttus`(자본변동)가 조회 가능한지 — 사업보고서 기준 누적 제공이므로 사업연도가
+ * 끝나야 데이터가 존재할 수 있다.
+ */
+export function irdsReportAvailable(year: number, todayKstDate: string): boolean {
+  return filableReportCount(year, todayKstDate) === 4;
+}
+
 /** DART 외부 호출을 시작하기 전에 quota를 확인하는 최소 중단 단위. */
 export interface FactSyncWorkUnit {
   readonly symbol: string;
@@ -56,21 +87,28 @@ export interface FactSyncWorkUnit {
 /**
  * 재무 + 자본변동 work unit의 실제 DART 호출 수를 계산한다.
  *
- * 한 사업연도는 재무보고서 4회 + 자본변동 1회다. 주식총수는 연도당 4회지만
- * `dart-fact-source`가 같은 종목·연도·보고서 응답을 캐시하므로, 앞 work unit에서 이미
- * 읽은 share year는 다시 세지 않는다. 이 함수가 `planFactSync`와 실행 hook 양쪽의
- * 숫자를 만든다.
+ * 한 사업연도는 최대 재무보고서 4회 + 자본변동 1회지만, 아직 기간이 끝나지 않은
+ * 보고서는 존재할 수 없으므로 세지 않는다 (`filableReportCount`). 주식총수는 연도당
+ * 최대 4회지만 `dart-fact-source`가 같은 종목·연도·보고서 응답을 캐시하므로, 앞
+ * work unit에서 이미 읽은 share year는 다시 세지 않는다. 이 함수가 `planFactSync`와
+ * 실행 hook 양쪽의 숫자를 만든다.
  */
 export function estimateDartCalls(
   work: Omit<FactSyncWorkUnit, 'estimatedDartCalls'> | FactSyncWorkUnit,
+  todayKstDate: string,
   requestedShareYears: ReadonlySet<number> = new Set(),
   includeFinancials = true,
 ): number {
+  const irdsCalls = irdsReportAvailable(work.year, todayKstDate)
+    ? DART_CORPORATE_ACTION_CALLS_PER_YEAR
+    : 0;
   const yearCalls = includeFinancials
-    ? DART_CALLS_PER_SYMBOL_YEAR - DART_SHARE_ANCHOR_CALLS
-    : DART_CORPORATE_ACTION_CALLS_PER_YEAR;
-  const newShareYears = work.shareYears.filter((year) => !requestedShareYears.has(year)).length;
-  return yearCalls + newShareYears * DART_SHARE_ANCHOR_CALLS;
+    ? filableReportCount(work.year, todayKstDate) + irdsCalls
+    : irdsCalls;
+  const shareCalls = work.shareYears
+    .filter((year) => !requestedShareYears.has(year))
+    .reduce((sum, year) => sum + filableReportCount(year, todayKstDate), 0);
+  return yearCalls + shareCalls;
 }
 
 export interface FactSyncPlan {
@@ -78,6 +116,8 @@ export interface FactSyncPlan {
   readonly yearsBySymbol: ReadonlyMap<string, readonly number[]>;
   /** 종목 → 주식총수를 읽을 연도 (= 위 + **각 연도의** 직전 1년) */
   readonly shareYearsBySymbol: ReadonlyMap<string, readonly number[]>;
+  /** 계획 기준일 — 파생 추정(estimateCorporateActionSyncCost)이 같은 날짜를 쓴다 */
+  readonly todayKstDate: string;
   readonly calls: number;
   readonly estimatedMs: number;
   readonly overDailyLimit: boolean;
@@ -87,12 +127,17 @@ export interface PlanFactSyncArgs {
   readonly symbols: readonly string[];
   readonly fromYear: number;
   readonly toYear: number;
-  /** 오늘이 속한 연도 — 분기 보고서가 그 안에서 갱신되므로 증분에서도 다시 읽는다 */
-  readonly currentYear: number;
+  /** 오늘(KST) — 아직 기간이 끝나지 않은 보고서 호출을 계획에서 뺀다 */
+  readonly todayKstDate: string;
   readonly coveredBySymbol: ReadonlyMap<string, readonly number[]>;
   readonly mode: FactSyncMode;
-  /** INCREMENTAL에서 이미 커버한 현재 연도도 다시 받을지. 기본 true. */
-  readonly refreshCurrentYear?: boolean;
+  /**
+   * 공시 갱신이 확인된 종목의 연도 — INCREMENTAL 에서 covered 여도 다시 계획한다.
+   * 예전의 "현재 연도는 항상 다시 받는다"(refreshCurrentYear)를 대체한다: 공시가
+   * 없는 종목까지 매번 다시 받으면 유니버스 전체 × 연도당 최대 9회가 그대로
+   * 낭비된다. 공시검색(list.json) 결과에서 만든다 (fact-sync-service 참고).
+   */
+  readonly forcedYearsBySymbol?: ReadonlyMap<string, readonly number[]>;
 }
 
 export function planFactSync(args: PlanFactSyncArgs): FactSyncPlan {
@@ -111,8 +156,7 @@ export function planFactSync(args: PlanFactSyncArgs): FactSyncPlan {
         : incrementalYears(
             target,
             args.coveredBySymbol.get(symbol) ?? [],
-            args.currentYear,
-            args.refreshCurrentYear ?? true,
+            new Set(args.forcedYearsBySymbol?.get(symbol) ?? []),
           );
     yearsBySymbol.set(symbol, years);
 
@@ -125,6 +169,7 @@ export function planFactSync(args: PlanFactSyncArgs): FactSyncPlan {
       const workShareYears = [year - 1, year];
       calls += estimateDartCalls(
         { symbol, year, shareYears: workShareYears },
+        args.todayKstDate,
         requestedShareYears,
       );
       for (const shareYear of workShareYears) requestedShareYears.add(shareYear);
@@ -134,6 +179,7 @@ export function planFactSync(args: PlanFactSyncArgs): FactSyncPlan {
   return {
     yearsBySymbol,
     shareYearsBySymbol,
+    todayKstDate: args.todayKstDate,
     calls,
     estimatedMs: calls * DART_MIN_INTERVAL_MS,
     overDailyLimit: calls > DART_DAILY_CALL_LIMIT,
@@ -185,6 +231,7 @@ export function estimateCorporateActionSyncCost(plan: FactSyncPlan): CorporateAc
       const shareYears = [year - 1, year];
       calls += estimateDartCalls(
         { symbol, year, shareYears },
+        plan.todayKstDate,
         requestedShareYears,
         false,
       );
@@ -201,9 +248,8 @@ export function estimateCorporateActionSyncCost(plan: FactSyncPlan): CorporateAc
 function incrementalYears(
   target: readonly number[],
   covered: readonly number[],
-  currentYear: number,
-  refreshCurrentYear: boolean,
+  forced: ReadonlySet<number>,
 ): number[] {
   const coveredSet = new Set(covered);
-  return target.filter((year) => (refreshCurrentYear && year === currentYear) || !coveredSet.has(year));
+  return target.filter((year) => forced.has(year) || !coveredSet.has(year));
 }

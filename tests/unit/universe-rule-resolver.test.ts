@@ -354,6 +354,7 @@ function makePipelineResolver(options: {
       getCoveredYears: (codes?: readonly string[]) => codes === undefined
         ? financialCoverage
         : new Map([...financialCoverage].filter(([code]) => codes.includes(code))),
+      getUpdatedAtMs: () => new Map<string, number>(),
       addCoveredYears: () => undefined,
     },
     candles: {

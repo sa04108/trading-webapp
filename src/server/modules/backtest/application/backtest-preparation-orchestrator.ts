@@ -589,13 +589,13 @@ export class BacktestPreparationOrchestrator {
       beforeWorkUnit: (work: FactSyncWorkUnit): 'CONTINUE' | 'PAUSE_DAILY_QUOTA' =>
         this.reserveDartCalls(jobId, work.estimatedDartCalls),
     };
+    // 최신화는 sync 내부의 공시검색 판정이 맡는다 — coverage watermark 이후 정기공시가
+    // 접수된 종목·연도만 다시 받으므로 quota/재시작 복구가 닫힌 symbol-year 를
+    // 반복하지 않는 성질은 그대로다 (fact-sync-service.ts detectRedisclosedYears).
     const input = {
       ...request,
       consolidated: true,
       mode: 'INCREMENTAL' as const,
-      // coverage가 work-unit 저장 직후 닫히므로 quota/재시작 복구에서 현재 연도도
-      // 다시 호출하지 않는다. 일반 수동 INCREMENTAL sync의 최신화 기본값은 유지한다.
-      refreshCurrentYear: false,
     };
     return kind === 'FINANCIAL'
       ? this.deps.factSync.sync(input, hooks)
@@ -717,13 +717,12 @@ export class BacktestPreparationOrchestrator {
     this.persistAndEmit(jobId, { status: 'FAILED', error }, ['RUNNING']);
   }
 
-  /** preparation과 같은 refreshCurrentYear=false 계획에서 실제 DART 호출만 센다. */
+  /** preparation과 같은 증분 계획에서 실제 DART 호출만 센다 (공시 재수집 전 하한). */
   private planNeedsDart(plan: BacktestPreparationPlan): boolean {
     const financialPlan = this.deps.factSync.planFinancialSync(
       plan.financial.symbols,
       plan.financial.fromYear,
       plan.financial.toYear,
-      false,
     );
     if (financialPlan.calls > 0) return true;
 
@@ -731,7 +730,6 @@ export class BacktestPreparationOrchestrator {
       plan.actions.symbols,
       plan.actions.fromYear,
       plan.actions.toYear,
-      false,
     ).calls > 0;
   }
 

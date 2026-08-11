@@ -39,6 +39,12 @@ export class ParquetConsistentFactCoverageStore implements FactCoverageStore {
     return filterByPartition(this.inner.getCoveredYears(codes), this.repository);
   }
 
+  // 파티션 필터 없이 위임한다 — 파티션이 사라진 종목은 getCoveredYears 가 이미
+  // "미수집" 으로 되돌리므로 watermark 는 어차피 참조되지 않는다.
+  getUpdatedAtMs(codes: readonly string[]): ReadonlyMap<string, number> {
+    return this.inner.getUpdatedAtMs(codes);
+  }
+
   addCoveredYears(symbol: string, years: readonly number[], nowMs: number): void {
     this.inner.addCoveredYears(symbol, years, nowMs);
   }

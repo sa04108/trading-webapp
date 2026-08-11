@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Clock } from '../../../shared/clock.js';
 import type { Logger } from '../../../shared/logger.js';
+import { addCalendarDays, kstDateOf } from '../../market-data/domain/kst-date.js';
 import type { Fact } from '../domain/fact.js';
 import {
   estimateDartCalls,
@@ -30,16 +31,18 @@ export interface FactSyncRequest {
   readonly consolidated: boolean;
   /**
    * FULL = 이력을 무시하고 지정 구간 전체 (CLI). INCREMENTAL = 미수집 연도 +
-   * 현재 연도 (웹). 웹이 매번 전 구간을 다시 받으면 45분짜리 버튼이 된다.
+   * watermark 이후 새 정기공시가 접수된 연도 (웹·준비 잡, detectRedisclosedYears
+   * 참고). 웹이 매번 전 구간을 다시 받으면 45분짜리 버튼이 된다.
    */
   readonly mode: FactSyncMode;
-  /**
-   * INCREMENTAL의 기본값은 현재 연도 재수집이다. 영속 준비 잡의 quota/crash 재개는
-   * 이미 닫힌 symbol-year를 반복하면 안 되므로 false를 명시해 coverage를 그대로
-   * 복구 체크포인트로 쓴다. FULL에는 영향이 없다.
-   */
-  readonly refreshCurrentYear?: boolean;
 }
+
+/**
+ * 공시검색(watermark 기반 재수집 판정)의 최대 되짚기 일수. 이보다 오래된 watermark 는
+ * 목록 조회 구간이 커져 페이지 상한을 넘을 수 있으므로, 그 종목은 옛 blanket 규칙
+ * (현재 연도 강제 재수집)으로 되돌린다.
+ */
+const FILING_LOOKBACK_MAX_DAYS = 90;
 
 /** 종목 하나가 끝날 때마다 호출된다 — 45분짜리 실행이 조용하지 않게 한다 */
 export interface FactSyncProgress {
@@ -182,46 +185,46 @@ export class FactSyncService {
    * `sync`가 실제로 쓸 재무 symbol-year 계획을 외부 호출 없이 미리 본다.
    * 준비 API의 DART-key 게이트가 "메타데이터상 필요"가 아니라 남은 coverage 작업을
    * 기준으로 판단할 때 쓴다.
+   *
+   * 공시 기반 강제 재수집(forcedYearsBySymbol)은 외부 호출이 필요해 여기 없다 —
+   * 이 계획은 하한이다. 실행이 공시 갱신을 발견하면 실제 호출이 이보다 늘 수 있다.
    */
   planFinancialSync(
     symbols: readonly string[],
     fromYear: number,
     toYear: number,
-    refreshCurrentYear = true,
   ): FactSyncPlan {
     const unique = [...new Set(symbols)];
     return planFactSync({
       symbols: unique,
       fromYear,
       toYear,
-      currentYear: new Date(this.clock.now()).getUTCFullYear(),
+      todayKstDate: kstDateOf(this.clock.now()),
       coveredBySymbol: this.coverage.getCoveredYears(unique),
       mode: 'INCREMENTAL',
-      refreshCurrentYear,
     });
   }
 
   /**
    * `syncCorporateActions` 가 실제로 쓸 연도 계획을 미리 본다 (Task 8 게이트 화면).
-   * 커버리지 조회(`actionCoverage`)·기준 연도(`clock`)·모드(`INCREMENTAL`)를 실행
+   * 커버리지 조회(`actionCoverage`)·기준일(`clock`)·모드(`INCREMENTAL`)를 실행
    * 경로와 완전히 같게 둔다 — 화면의 예상 호출·시간이 실제 수집과 갈리면 안 된다
-   * (`domain/sync-plan.ts` 헤더 참고).
+   * (`domain/sync-plan.ts` 헤더 참고). 강제 재수집이 빠진 하한인 것은
+   * `planFinancialSync` 와 같다.
    */
   planCorporateActionSync(
     symbols: readonly string[],
     fromYear: number,
     toYear: number,
-    refreshCurrentYear = true,
   ): FactSyncPlan {
     const unique = [...new Set(symbols)];
     return planFactSync({
       symbols: unique,
       fromYear,
       toYear,
-      currentYear: new Date(this.clock.now()).getUTCFullYear(),
+      todayKstDate: kstDateOf(this.clock.now()),
       coveredBySymbol: this.actionCoverage.getCoveredYears(unique),
       mode: 'INCREMENTAL',
-      refreshCurrentYear,
     });
   }
 
@@ -269,6 +272,7 @@ export class FactSyncService {
      * 진행률이 100% 에 닿는다 (설계 §3).
      */
     const symbols = [...new Set(request.symbols)];
+    const todayKstDate = kstDateOf(this.clock.now());
 
     const gaps: FactIngestionGap[] = [];
     let savedFacts = 0;
@@ -283,10 +287,11 @@ export class FactSyncService {
       symbols,
       fromYear: request.fromYear,
       toYear: request.toYear,
-      currentYear: new Date(this.clock.now()).getUTCFullYear(),
+      todayKstDate,
       coveredBySymbol: strategy.getCoveredYears(symbols),
       mode: request.mode,
-      refreshCurrentYear: request.refreshCurrentYear,
+      forcedYearsBySymbol:
+        request.mode === 'INCREMENTAL' ? await this.detectRedisclosedYears(symbols) : undefined,
     });
 
     for (const [index, symbol] of symbols.entries()) {
@@ -326,6 +331,7 @@ export class FactSyncService {
             shareYears,
             estimatedDartCalls: estimateDartCalls(
               { symbol, year, shareYears },
+              todayKstDate,
               requestedShareYears,
               strategy.includeFinancials,
             ),
@@ -439,6 +445,68 @@ export class FactSyncService {
               `여기까지 수집된 팩트 ${savedFacts}건은 이미 저장됐습니다 — 다시 실행하면 ` +
               `남은 구간만 이어받습니다.`,
     };
+  }
+
+  /**
+   * 이미 covered 인 연도 중 다시 받아야 할 것을 공시검색으로 알아낸다.
+   *
+   * 예전의 "현재 연도는 항상 다시 받는다" 는 유니버스 전체 × 연도당 최대 9회를
+   * 공시가 없어도 태웠다. 여기서는 종목별 coverage 기록 시각(watermark) 이후 접수된
+   * 정기공시가 있는 종목·사업연도만 돌려준다 — 공시 없는 종목은 0 호출이다.
+   *
+   * watermark 가 조회 하한보다 오래된 종목은 공시 목록으로 판정할 수 없으므로
+   * 옛 blanket 규칙(현재 연도 강제)으로 되돌린다. 목록 조회 실패는 강제 재수집만
+   * 포기하고 던지지 않는다 — 신선도 최적화가 미수집 연도 수집까지 막으면 안 된다.
+   */
+  private async detectRedisclosedYears(
+    symbols: readonly string[],
+  ): Promise<ReadonlyMap<string, readonly number[]> | undefined> {
+    const watermarks = this.coverage.getUpdatedAtMs(symbols);
+    if (watermarks.size === 0) return undefined; // 수집 이력이 없다 — 증분 계획이 전부 받는다
+
+    const today = kstDateOf(this.clock.now());
+    const currentYear = Number(today.slice(0, 4));
+    const lookbackFloor = addCalendarDays(today, -FILING_LOOKBACK_MAX_DAYS);
+
+    const forced = new Map<string, number[]>();
+    const addForced = (symbol: string, year: number): void => {
+      const years = forced.get(symbol) ?? [];
+      if (!years.includes(year)) years.push(year);
+      forced.set(symbol, years);
+    };
+
+    const watermarkDates = new Map<string, string>();
+    let fromDate: string | null = null;
+    for (const [symbol, updatedAtMs] of watermarks) {
+      const date = kstDateOf(updatedAtMs);
+      if (date < lookbackFloor) {
+        addForced(symbol, currentYear);
+        continue;
+      }
+      watermarkDates.set(symbol, date);
+      if (fromDate === null || date < fromDate) fromDate = date;
+    }
+
+    if (fromDate !== null) {
+      try {
+        const filings = await this.source.listRecentPeriodicFilings(fromDate, today);
+        for (const filing of filings) {
+          const watermarkDate = watermarkDates.get(filing.stockCode);
+          if (watermarkDate === undefined) continue; // 이번 요청 밖 종목이거나 blanket 처리됨
+          // 같은 날 접수는 포함한다 — watermark 는 시각, 접수일은 날짜라 경계에서
+          // 놓치는 쪽보다 한 번 더 받는 쪽이 싸다 (내용이 같으면 버전도 안 오른다)
+          if (filing.receiptDate < watermarkDate) continue;
+          addForced(filing.stockCode, filing.businessYear ?? currentYear);
+        }
+      } catch (error) {
+        this.logger.warn(
+          { module: 'facts', event: 'facts.filings.lookup-failed', err: error },
+          '정기공시 목록 조회에 실패해 재공시 재수집을 건너뛴다 — 미수집 연도 수집은 계속한다',
+        );
+      }
+    }
+
+    return forced;
   }
 
   /**

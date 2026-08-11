@@ -1,14 +1,21 @@
+import type { Clock } from '../../../../shared/clock.js';
 import type { Logger } from '../../../../shared/logger.js';
 import { RestClient } from '../../../../shared/rest-client.js';
+import { kstDateOf } from '../../../market-data/domain/kst-date.js';
 import {
   FactSourceNotConfiguredError,
   type FactIngestionGap,
   type FactIngestionResult,
   type FactSource,
   type FetchFinancialsRequest,
+  type PeriodicFiling,
 } from '../../application/ports.js';
 import type { Fact } from '../../domain/fact.js';
-import { DART_MIN_INTERVAL_MS } from '../../domain/sync-plan.js';
+import {
+  DART_MIN_INTERVAL_MS,
+  filableReportCount,
+  irdsReportAvailable,
+} from '../../domain/sync-plan.js';
 import {
   createDartCorpCodeCache,
   type CorpCodeResolver,
@@ -45,6 +52,32 @@ interface DartShareRow {
   readonly istc_totqy: string;
 }
 
+/** 공시검색(list.json) 응답 한 건 — 이 어댑터가 소비하는 필드만 */
+interface DartFilingRow {
+  readonly stock_code?: string;
+  readonly report_nm?: string;
+  readonly rcept_dt?: string;
+}
+
+/** 공시검색 봉투 — 목록 API 만 페이지 정보를 함께 준다 */
+interface DartListEnvelope {
+  readonly status: string;
+  readonly message: string;
+  readonly page_no?: number;
+  readonly total_page?: number;
+  readonly list?: readonly DartFilingRow[];
+}
+
+/** '분기보고서 (2026.03)' / '[기재정정]사업보고서 (2025.12)' 의 사업연도 */
+const REPORT_NAME_YEAR_PATTERN = /\((\d{4})\.\d{2}\)/;
+
+/**
+ * 페이지네이션 상한. 90일 구간의 정기공시는 성수기(사업보고서 시즌)에도 1만 건
+ * 안팎이라 100페이지면 넉넉하다. 넘치면 조용히 자르지 않고 던진다 — 잘린 목록으로
+ * 재수집 대상을 정하면 빠진 종목이 소리 없이 낡는다.
+ */
+const FILING_LIST_MAX_PAGES = 200;
+
 /** 조회 결과 없음 — 에러가 아니다 (신규 상장·미제출 분기) */
 const NO_DATA_STATUS = '013';
 const OK_STATUS = '000';
@@ -67,17 +100,27 @@ export function createDartFactSource(
     fetchImpl?: typeof fetch;
     sleep?: (ms: number) => Promise<void>;
     corpCodeResolver?: CorpCodeResolver;
+    /** 미래 보고서 생략 판정(filableReportCount)의 기준 시각. 기본은 실제 시각 */
+    clock?: Clock;
   } = {},
 ): FactSource {
   if (!config) {
     return {
       fetchFinancials: () => Promise.reject(new FactSourceNotConfiguredError()),
       fetchCorporateActions: () => Promise.reject(new FactSourceNotConfiguredError()),
+      listRecentPeriodicFilings: () => Promise.reject(new FactSourceNotConfiguredError()),
     };
   }
   // 내부 함수(call, corp_code fetcher)들은 나중에 호출되므로 nullable 파라미터에 대한
   // 좁힘(narrowing)이 클로저 안까지 전달되지 않는다 — non-null 로컬 상수에 옮겨 담는다
   const dartConfig: DartConfig = config;
+  const clock: Clock = options.clock ?? { now: () => Date.now() };
+  // 기간이 끝나지 않은 보고서는 존재할 수 없어 조회가 항상 013 이다 — 호출을 생략한다.
+  // 판정은 sync-plan 의 estimateDartCalls 와 같은 함수를 쓴다 (추정=실행 계약).
+  const filableReports = (year: number): readonly DartReportCode[] =>
+    REPORT_ORDER.filter(
+      (code) => REPORT_CODE_TO_QUARTER[code] <= filableReportCount(year, kstDateOf(clock.now())),
+    );
 
   const client = new RestClient({
     baseUrl: dartConfig.baseUrl,
@@ -168,7 +211,7 @@ export function createDartFactSource(
       for (const year of request.years) {
         const rowsByReport = new Map<DartReportCode, readonly DartFinancialRow[]>();
 
-        for (const reportCode of REPORT_ORDER) {
+        for (const reportCode of filableReports(year)) {
           const rows = await call<DartFinancialRow>('/api/fnlttSinglAcntAll.json', {
             corp_code: corpCode,
             bsns_year: String(year),
@@ -223,7 +266,7 @@ export function createDartFactSource(
       // shareYears 는 years 의 각 연도마다 직전 1년을 더한 집합이라 원소 수가 다르다 —
       // 재무 루프 안에 두면 연도가 어긋나므로 별도 루프로 돈다.
       for (const year of request.shareYears) {
-        for (const reportCode of REPORT_ORDER) {
+        for (const reportCode of filableReports(year)) {
           const shareRows = await fetchShareRows(corpCode, year, reportCode);
           // 보통주만 쓴다 — 시가총액은 봉 종가(보통주 가격) × 보통주 수다.
           // '합계' 행을 쓰면 우선주가 섞여 시가총액이 과대계상된다.
@@ -290,7 +333,7 @@ export function createDartFactSource(
       // 직전 발행주식수가 없어 비율이 gap 이 되고, 불연속 구간의 앵커가 빠지면 구멍
       // 건너편의 낡은 공시가 분모로 잡혀 gap 도 없이 틀린다 (domain/sync-plan.ts 참고)
       for (const year of request.shareYears) {
-        for (const reportCode of REPORT_ORDER) {
+        for (const reportCode of filableReports(year)) {
           const shareRows = await fetchShareRows(corpCode, year, reportCode);
           const common = findCommonShareRow(shareRows);
           if (!common) continue;
@@ -312,6 +355,8 @@ export function createDartFactSource(
       };
 
       for (const year of request.years) {
+        // 사업보고서 기준 누적 제공 — 사업연도가 끝나지 않은 해는 존재할 수 없다
+        if (!irdsReportAvailable(year, kstDateOf(clock.now()))) continue;
         const rows = await call<DartIssuanceRow>('/api/irdsSttus.json', {
           corp_code: corpCode,
           bsns_year: String(year),
@@ -349,5 +394,47 @@ export function createDartFactSource(
     return { facts, gaps };
   }
 
-  return { fetchFinancials, fetchCorporateActions };
+  async function listRecentPeriodicFilings(
+    fromDate: string,
+    toDate: string,
+  ): Promise<readonly PeriodicFiling[]> {
+    const filings: PeriodicFiling[] = [];
+    for (let pageNo = 1; pageNo <= FILING_LIST_MAX_PAGES; pageNo += 1) {
+      const query = new URLSearchParams({
+        crtfc_key: dartConfig.apiKey,
+        bgn_de: fromDate.replaceAll('-', ''),
+        end_de: toDate.replaceAll('-', ''),
+        pblntf_ty: 'A', // 정기공시(사업·반기·분기보고서) — 정정도 같은 유형으로 온다
+        page_no: String(pageNo),
+        page_count: '100',
+      });
+      const envelope = await client.request<DartListEnvelope>(
+        'default',
+        `/api/list.json?${query.toString()}`,
+      );
+      if (envelope.status === NO_DATA_STATUS) return filings;
+      if (envelope.status !== OK_STATUS) {
+        throw new Error(`DART 응답 오류 ${envelope.status}: ${envelope.message}`);
+      }
+      for (const row of envelope.list ?? []) {
+        // 종목코드 없는 비상장 제출자 — 이 시스템의 종목과 만날 수 없다
+        const stockCode = row.stock_code?.trim() ?? '';
+        if (!/^\d{6}$/.test(stockCode)) continue;
+        const rawDate = row.rcept_dt ?? '';
+        if (!/^\d{8}$/.test(rawDate)) continue;
+        const yearMatch = REPORT_NAME_YEAR_PATTERN.exec(row.report_nm ?? '');
+        filings.push({
+          stockCode,
+          businessYear: yearMatch ? Number(yearMatch[1]) : null,
+          receiptDate: `${rawDate.slice(0, 4)}-${rawDate.slice(4, 6)}-${rawDate.slice(6, 8)}`,
+        });
+      }
+      if (pageNo >= (envelope.total_page ?? 1)) return filings;
+    }
+    throw new Error(
+      `DART 정기공시 목록이 ${FILING_LIST_MAX_PAGES}페이지를 넘습니다 — 조회 구간을 줄이세요.`,
+    );
+  }
+
+  return { fetchFinancials, fetchCorporateActions, listRecentPeriodicFilings };
 }

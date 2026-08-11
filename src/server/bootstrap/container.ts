@@ -210,6 +210,8 @@ export function createContainer(config: AppConfig): Container {
   const factSource = createDartFactSource(
     config.dartApiKey ? { baseUrl: config.dartBaseUrl, apiKey: config.dartApiKey } : null,
     logger,
+    // 미래 보고서 생략(filableReportCount)이 sync 계획과 같은 시각을 봐야 한다
+    { clock },
   );
   // 팩트도 백테스트 입력이다 — 캔들과 같은 버전 체인에 올린다 (§9.5).
   // SymbolService 를 통째로 넘기지 않고 좁은 포트(SymbolVersionBumper)로 받는다.

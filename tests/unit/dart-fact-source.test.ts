@@ -105,6 +105,143 @@ describe('createDartFactSource — 연도 목록 포트', () => {
   });
 });
 
+describe('createDartFactSource — 미래 보고서 생략', () => {
+  /**
+   * 기간이 끝나지 않은 보고서 조회는 항상 013 이다 (2026-08-11 운영 DART 검증).
+   * 그 호출을 생략해야 현재 연도 work unit 이 (최대 9회 대신) 실제로 존재할 수
+   * 있는 보고서만 요청한다 — sync-plan 의 estimateDartCalls 와 같은 판정을 쓴다.
+   */
+  it('현재 연도는 분기말이 지난 보고서만 조회하고 irdsSttus 를 건너뛴다', async () => {
+    const calls: string[] = [];
+    const options = {
+      fetchImpl: (async (url: string | URL) => {
+        calls.push(String(url));
+        return jsonResponse({ status: '013', message: '조회된 데이타가 없습니다.' });
+      }) as typeof fetch,
+      sleep: async () => {},
+      corpCodeResolver: { resolve: async () => '00126380' },
+      clock: { now: () => Date.parse('2026-08-11T03:00:00Z') }, // KST 2026-08-11 12:00
+    };
+    const source = createDartFactSource({ baseUrl: 'https://dart.test', apiKey: 'k' }, LOGGER, options);
+
+    await source.fetchFinancials({
+      symbols: ['005930'],
+      years: [2026],
+      shareYears: [2025, 2026],
+      consolidated: true,
+    });
+
+    const reportsByEndpoint = (endpoint: string, year: string): string[] => calls
+      .filter((url) => url.includes(endpoint))
+      .filter((url) => new URL(url).searchParams.get('bsns_year') === year)
+      .map((url) => new URL(url).searchParams.get('reprt_code') as string)
+      .sort();
+    // 1Q(11013)·반기(11012)만 — 3Q·사업보고서는 기간이 끝나지 않았다
+    expect(reportsByEndpoint('fnlttSinglAcntAll', '2026')).toEqual(['11012', '11013']);
+    expect(reportsByEndpoint('stockTotqySttus', '2026')).toEqual(['11012', '11013']);
+    // 지난 연도는 4개 전부
+    expect(reportsByEndpoint('stockTotqySttus', '2025')).toEqual(['11011', '11012', '11013', '11014']);
+
+    calls.length = 0;
+    // 주식총수 캐시가 첫 fetch 의 응답을 재사용하므로 새 인스턴스로 확인한다
+    const freshSource = createDartFactSource(
+      { baseUrl: 'https://dart.test', apiKey: 'k' },
+      LOGGER,
+      options,
+    );
+    await freshSource.fetchCorporateActions({
+      symbols: ['005930'],
+      years: [2026],
+      shareYears: [2025, 2026],
+      consolidated: true,
+    });
+    // 자본변동은 사업보고서 기준 누적 제공 — 2026 사업연도가 끝나지 않아 존재할 수 없다
+    expect(calls.filter((url) => url.includes('irdsSttus'))).toEqual([]);
+    expect(reportsByEndpoint('stockTotqySttus', '2026')).toEqual(['11012', '11013']);
+  });
+});
+
+describe('createDartFactSource — 정기공시 목록 (list.json)', () => {
+  const filing = (over: Record<string, string>) => ({
+    corp_code: '00126380',
+    corp_name: '삼성전자',
+    stock_code: '005930',
+    corp_cls: 'Y',
+    report_nm: '분기보고서 (2026.03)',
+    rcept_no: '20260515000001',
+    flr_nm: '삼성전자',
+    rcept_dt: '20260515',
+    rm: '',
+    ...over,
+  });
+
+  it('페이지를 모두 읽고 종목코드·사업연도·접수일로 매핑한다', async () => {
+    const urls: string[] = [];
+    const source = createDartFactSource(
+      { baseUrl: 'https://dart.test', apiKey: 'k' },
+      LOGGER,
+      {
+        fetchImpl: async (url) => {
+          urls.push(String(url));
+          const pageNo = new URL(String(url)).searchParams.get('page_no');
+          return jsonResponse({
+            status: '000',
+            message: '정상',
+            page_no: Number(pageNo),
+            total_page: 2,
+            list: pageNo === '1'
+              ? [
+                  filing({}),
+                  // 종목코드 없는 비상장 제출자는 걸러진다
+                  filing({ stock_code: ' ', corp_name: '비상장' }),
+                ]
+              : [
+                  filing({
+                    report_nm: '[기재정정]사업보고서 (2025.12)',
+                    stock_code: '000660',
+                    rcept_dt: '20260601',
+                  }),
+                  // 사업연도 표기가 예상과 다르면 null 로 넘긴다
+                  filing({ report_nm: '분기보고서', stock_code: '000100' }),
+                ],
+          });
+        },
+        sleep: async () => {},
+        corpCodeResolver: STUB_RESOLVER,
+      },
+    );
+
+    const filings = await source.listRecentPeriodicFilings('2026-05-01', '2026-06-02');
+
+    expect(filings).toEqual([
+      { stockCode: '005930', businessYear: 2026, receiptDate: '2026-05-15' },
+      { stockCode: '000660', businessYear: 2025, receiptDate: '2026-06-01' },
+      { stockCode: '000100', businessYear: null, receiptDate: '2026-05-15' },
+    ]);
+
+    // 정기공시만, 요청 구간 그대로, 페이지 2개
+    const first = new URL(urls[0] as string);
+    expect(first.pathname).toBe('/api/list.json');
+    expect(first.searchParams.get('pblntf_ty')).toBe('A');
+    expect(first.searchParams.get('bgn_de')).toBe('20260501');
+    expect(first.searchParams.get('end_de')).toBe('20260602');
+    expect(urls).toHaveLength(2);
+  });
+
+  it('조회 없음(013)은 빈 목록이다', async () => {
+    const source = createDartFactSource(
+      { baseUrl: 'https://dart.test', apiKey: 'k' },
+      LOGGER,
+      {
+        fetchImpl: async () => jsonResponse({ status: '013', message: '조회된 데이타가 없습니다.' }),
+        sleep: async () => {},
+        corpCodeResolver: STUB_RESOLVER,
+      },
+    );
+    expect(await source.listRecentPeriodicFilings('2026-05-01', '2026-05-02')).toEqual([]);
+  });
+});
+
 describe('createDartFactSource — 요청 구성', () => {
   it('crtfc_key 를 쿼리로 보내고 Authorization 헤더는 붙이지 않는다', async () => {
     const urls: string[] = [];

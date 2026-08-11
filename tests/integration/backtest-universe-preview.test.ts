@@ -45,6 +45,7 @@ function installPreparedPreviewFixture(ctx: TestApp): void {
   const noActionWork: typeof ctx.container.factSyncService.planCorporateActionSync = () => ({
     yearsBySymbol: new Map(),
     shareYearsBySymbol: new Map(),
+    todayKstDate: '2026-01-01',
     calls: 0,
     estimatedMs: 0,
     overDailyLimit: false,

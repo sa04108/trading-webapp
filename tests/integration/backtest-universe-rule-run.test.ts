@@ -128,6 +128,7 @@ function installPreparedSubmissionFixture(ctx: TestApp): void {
   const noWorkPlan = {
     yearsBySymbol: new Map(),
     shareYearsBySymbol: new Map(),
+    todayKstDate: '2026-01-01',
     calls: 0,
     estimatedMs: 0,
     overDailyLimit: false,
@@ -1369,6 +1370,7 @@ describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepar
     ctx.container.factSyncService.planFinancialSync = (() => ({
       yearsBySymbol: new Map(),
       shareYearsBySymbol: new Map(),
+      todayKstDate: '2026-01-01',
       calls: 0,
       estimatedMs: 0,
       overDailyLimit: false,

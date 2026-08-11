@@ -19,6 +19,7 @@ function fakeFactStore(covered: ReadonlyMap<string, readonly number[]>): FactCov
       codes === undefined
         ? covered
         : new Map([...covered].filter(([code]) => codes.includes(code))),
+    getUpdatedAtMs: () => new Map<string, number>(),
     addCoveredYears: (symbol, years, nowMs) => {
       added.push([symbol, years, nowMs]);
     },
@@ -55,6 +56,7 @@ describe('ParquetConsistentFactCoverageStore', () => {
     const calls: unknown[][] = [];
     const inner: FactCoverageStore = {
       getCoveredYears: () => new Map(),
+      getUpdatedAtMs: () => new Map<string, number>(),
       addCoveredYears: (...args) => {
         calls.push(args);
       },

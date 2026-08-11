@@ -561,7 +561,7 @@ describe('BacktestPreparationOrchestrator quota resume와 terminal 결과', () =
       },
       factSync: {
         sync: async (
-          request: { symbols: readonly string[]; mode: string; refreshCurrentYear?: boolean },
+          request: { symbols: readonly string[]; mode: string },
           hooks: {
             beforeWorkUnit?: (work: unknown) => string;
             onSymbolDone?: (progress: { index: number; total: number }) => void;
@@ -569,7 +569,9 @@ describe('BacktestPreparationOrchestrator quota resume와 terminal 결과', () =
         ) => {
           modes.push(request.mode);
           for (const [index, symbol] of request.symbols.entries()) {
-            if (completedSymbols.has(symbol) && request.refreshCurrentYear === false) {
+            // 실물 INCREMENTAL 은 coverage 로 닫힌 symbol-year 를 건너뛴다 (공시 갱신이
+            // 없는 한) — 이 가짜는 그 성질만 모델링한다
+            if (completedSymbols.has(symbol) && request.mode === 'INCREMENTAL') {
               hooks.onSymbolDone?.({ index: index + 1, total: request.symbols.length });
               continue;
             }

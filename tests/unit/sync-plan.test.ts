@@ -3,16 +3,33 @@ import {
   DART_DAILY_CALL_LIMIT,
   estimateDartCalls,
   estimateCorporateActionSyncCost,
+  filableReportCount,
   planFactSync,
 } from '../../src/server/modules/facts/domain/sync-plan.js';
+
+// 모든 대상 연도(~2022)가 끝난 뒤다 — 보고서 4종이 전부 존재할 수 있어
+// 기존 호출 수 공식(연도당 9회)이 그대로 성립하는 대조군 날짜.
+const AFTER_ALL_YEARS = '2023-06-01';
 
 const BASE = {
   symbols: ['005930', '000660'],
   fromYear: 2020,
   toYear: 2022,
-  currentYear: 2022,
+  todayKstDate: AFTER_ALL_YEARS,
   coveredBySymbol: new Map<string, readonly number[]>(),
 };
+
+describe('filableReportCount', () => {
+  it('분기말이 지난 보고서만 센다', () => {
+    // 2026-08-11: 1Q(03-31)·반기(06-30)는 지났고 3Q(09-30)·사업(12-31)은 아직이다
+    expect(filableReportCount(2026, '2026-08-11')).toBe(2);
+    expect(filableReportCount(2025, '2026-08-11')).toBe(4);
+    expect(filableReportCount(2026, '2026-01-15')).toBe(0);
+    // 분기말 당일에는 아직 기간이 끝나지 않았다
+    expect(filableReportCount(2026, '2026-03-31')).toBe(0);
+    expect(filableReportCount(2026, '2026-04-01')).toBe(1);
+  });
+});
 
 describe('planFactSync', () => {
   it('연도 work unit 비용은 이미 읽은 주식총수 연도를 다시 세지 않는다', () => {
@@ -21,13 +38,61 @@ describe('planFactSync', () => {
       year: 2025,
       shareYears: [2024, 2025],
       estimatedDartCalls: 0,
-    })).toBe(13);
+    }, '2026-06-01')).toBe(13);
     expect(estimateDartCalls({
       symbol: '005930',
       year: 2026,
       shareYears: [2025, 2026],
       estimatedDartCalls: 0,
-    }, new Set([2024, 2025]))).toBe(9);
+    }, '2027-06-01', new Set([2024, 2025]))).toBe(9);
+  });
+
+  /**
+   * 아직 기간이 끝나지 않은 보고서 조회는 항상 013(조회 없음)이다 (2026-08-11 운영
+   * DART 검증: bsns_year=2026 의 3Q·사업보고서·irdsSttus 모두 013). 호출만 쓰고
+   * 아무것도 받지 못하므로 계획에서 뺀다 — 이 수가 어댑터의 실제 호출과 같아야
+   * 화면 추정치가 거짓말하지 않는다.
+   */
+  it('연도 work unit 비용은 미래 보고서를 세지 않는다', () => {
+    // 2026-08-11 기준 2026년: fnltt 2(1Q·반기) + irds 0(사업보고서 없음)
+    // + 주식총수 2025년 4 + 2026년 2 = 8
+    expect(estimateDartCalls({
+      symbol: '005930',
+      year: 2026,
+      shareYears: [2025, 2026],
+      estimatedDartCalls: 0,
+    }, '2026-08-11')).toBe(8);
+    // 자본변동 전용: 연도가 끝나지 않아 irds 0 + 주식총수 2 (2025 앵커는 이미 읽음)
+    expect(estimateDartCalls({
+      symbol: '005930',
+      year: 2026,
+      shareYears: [2025, 2026],
+      estimatedDartCalls: 0,
+    }, '2026-08-11', new Set([2025]), false)).toBe(2);
+  });
+
+  it('INCREMENTAL 은 covered 연도를 forced 로 지정해야만 다시 계획한다', () => {
+    const plan = planFactSync({
+      ...BASE,
+      symbols: ['005930'],
+      coveredBySymbol: new Map([['005930', [2020, 2021, 2022]]]),
+      forcedYearsBySymbol: new Map([['005930', [2022]]]),
+      mode: 'INCREMENTAL',
+    });
+    expect(plan.yearsBySymbol.get('005930')).toEqual([2022]);
+  });
+
+  it('forced 연도도 대상 구간 밖이면 계획하지 않는다', () => {
+    const plan = planFactSync({
+      ...BASE,
+      symbols: ['005930'],
+      coveredBySymbol: new Map([['005930', [2020, 2021, 2022]]]),
+      // 2019 는 fromYear(2020) 앞이다 — 구간 밖 공시 갱신이 계획을 부풀리면 안 된다
+      forcedYearsBySymbol: new Map([['005930', [2019]]]),
+      mode: 'INCREMENTAL',
+    });
+    expect(plan.yearsBySymbol.get('005930')).toEqual([]);
+    expect(plan.calls).toBe(0);
   });
 
   it('FULL 은 수집 이력을 무시하고 전 구간을 계획한다', () => {
@@ -40,14 +105,16 @@ describe('planFactSync', () => {
     expect(plan.yearsBySymbol.get('000660')).toEqual([2020, 2021, 2022]);
   });
 
-  it('INCREMENTAL 은 미수집 연도 + 현재 연도만 계획한다', () => {
+  it('INCREMENTAL 은 미수집 연도만 계획한다 — 현재 연도도 covered 면 건너뛴다', () => {
     const plan = planFactSync({
       ...BASE,
+      todayKstDate: '2022-08-15',
       coveredBySymbol: new Map([['005930', [2020, 2022]]]),
       mode: 'INCREMENTAL',
     });
-    // 2021 미수집 + 2022 는 현재 연도라 항상 다시 읽는다
-    expect(plan.yearsBySymbol.get('005930')).toEqual([2021, 2022]);
+    // 예전의 "현재 연도는 항상 다시 읽는다" 규칙은 공시 갱신 감지(forcedYearsBySymbol)
+    // 로 대체됐다 — 새 공시가 없으면 covered 현재 연도(2022)를 다시 읽지 않는다.
+    expect(plan.yearsBySymbol.get('005930')).toEqual([2021]);
     expect(plan.yearsBySymbol.get('000660')).toEqual([2020, 2021, 2022]);
   });
 
@@ -56,7 +123,7 @@ describe('planFactSync', () => {
       symbols: ['005930'],
       fromYear: 2018,
       toYear: 2024,
-      currentYear: 2024,
+      todayKstDate: '2025-06-01',
       coveredBySymbol: new Map([['005930', [2018, 2019, 2023]]]),
       mode: 'INCREMENTAL',
     });
@@ -68,7 +135,7 @@ describe('planFactSync', () => {
       symbols: ['005930'],
       fromYear: 2020,
       toYear: 2022,
-      currentYear: 2022,
+      todayKstDate: AFTER_ALL_YEARS,
       coveredBySymbol: new Map([['005930', [2020, 2021]]]),
       mode: 'INCREMENTAL',
     });
@@ -88,7 +155,7 @@ describe('planFactSync', () => {
     symbols: ['005930'],
     fromYear: 2019,
     toYear: 2026,
-    currentYear: 2026,
+    todayKstDate: '2027-06-01',
     coveredBySymbol: new Map([['005930', [2021, 2022, 2023, 2024, 2025]]]),
     mode: 'INCREMENTAL',
   } as const;
@@ -117,7 +184,7 @@ describe('planFactSync', () => {
       symbols: ['005930'],
       fromYear: 2020,
       toYear: 2021,
-      currentYear: 2030,
+      todayKstDate: '2030-06-01',
       coveredBySymbol: new Map([['005930', [2020, 2021]]]),
       mode: 'INCREMENTAL',
     });
@@ -141,7 +208,7 @@ describe('planFactSync', () => {
       symbols,
       fromYear: 2000,
       toYear: 2025,
-      currentYear: 2025,
+      todayKstDate: '2026-06-01',
       coveredBySymbol: new Map(),
       mode: 'FULL',
     });
@@ -156,7 +223,7 @@ describe('planFactSync', () => {
       symbols: ['005930', '005930'],
       fromYear: 2022,
       toYear: 2022,
-      currentYear: 2022,
+      todayKstDate: AFTER_ALL_YEARS,
       coveredBySymbol: new Map(),
       mode: 'FULL',
     });
@@ -187,7 +254,7 @@ describe('estimateCorporateActionSyncCost', () => {
       symbols: ['005930'],
       fromYear: 2019,
       toYear: 2026,
-      currentYear: 2026,
+      todayKstDate: '2027-06-01',
       coveredBySymbol: new Map([['005930', [2021, 2022, 2023, 2024, 2025]]]),
       mode: 'INCREMENTAL',
     });
@@ -203,7 +270,7 @@ describe('estimateCorporateActionSyncCost', () => {
       symbols: ['005930'],
       fromYear: 2020,
       toYear: 2021,
-      currentYear: 2030,
+      todayKstDate: '2030-06-01',
       coveredBySymbol: new Map([['005930', [2020, 2021]]]),
       mode: 'INCREMENTAL',
     });

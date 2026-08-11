@@ -47,6 +47,19 @@ describe('SqliteFactCoverageStore', () => {
     database.close();
   });
 
+  it('마지막 기록 시각을 종목별로 돌려준다 — 공시 watermark 용', () => {
+    const { store, database } = setup();
+    store.addCoveredYears('005930', [2020], 100);
+    store.addCoveredYears('005930', [2021], 250);
+    store.addCoveredYears('000660', [2020], 300);
+    const updated = store.getUpdatedAtMs(['005930', '000660', '999999']);
+    expect(updated.get('005930')).toBe(250);
+    expect(updated.get('000660')).toBe(300);
+    // 기록이 없는 종목은 키 자체가 없다 — 0 을 돌려주면 "1970년 이후 전부" 로 오해된다
+    expect(updated.has('999999')).toBe(false);
+    database.close();
+  });
+
   it('빈 연도 목록은 기록하지 않는다', () => {
     const { store, database } = setup();
     store.addCoveredYears('005930', [], 100);
