@@ -3,6 +3,7 @@ import {
   buildCorrelationGroups,
   newCorrelationWarmup,
   pearsonCorrelation,
+  pruneWarmupCloses,
   recordClose,
   scaleWarmupCloses,
   tryBuildGroups,
@@ -104,7 +105,7 @@ describe('tryBuildGroups', () => {
     expect(groups?.get('LEV')).toBe(groups?.get('INV'));
   });
 
-  it('공통 봉이 부족하면 null — 인덱스로 억지로 맞추지 않는다', () => {
+  it('짧은 이력 종목은 단독 그룹으로 남고 준비된 종목을 막지 않는다', () => {
     const path = oscillate(30);
     const warmup = newCorrelationWarmup();
     for (let index = 0; index < 30; index += 1) {
@@ -112,15 +113,37 @@ describe('tryBuildGroups', () => {
       recordClose(warmup, 'LEV', T0 + index * DAY, close);
       if (index >= 20) recordClose(warmup, 'INV', T0 + index * DAY, 1_000_000 / close);
     }
-    // LEV 는 30봉이라 예전 조건(종목별 종가 개수 ≥ 20)은 충족하지만 공통 봉은 10개다
-    expect(tryBuildGroups(warmup, ['INV', 'LEV'], 20, 0.5)).toBeNull();
+    const groups = tryBuildGroups(warmup, ['INV', 'LEV'], 20, 0.5);
+    expect(groups).not.toBeNull();
+    expect(groups?.get('INV')).toBe('INV');
+    expect(groups?.get('LEV')).toBe('LEV');
   });
 
-  it('봉이 아예 없는 종목이 유니버스에 있으면 영영 null 이다', () => {
+  it('봉이 아예 없는 종목도 단독 그룹으로 남아 전체 준비를 막지 않는다', () => {
     const path = oscillate(30);
     const warmup = newCorrelationWarmup();
     path.forEach((close, index) => recordClose(warmup, 'LEV', T0 + index * DAY, close));
-    expect(tryBuildGroups(warmup, ['LEV', 'NO_BARS'], 20, 0.5)).toBeNull();
+    const groups = tryBuildGroups(warmup, ['LEV', 'NO_BARS'], 20, 0.5);
+    expect(groups).not.toBeNull();
+    expect(groups?.get('LEV')).toBe('LEV');
+    expect(groups?.get('NO_BARS')).toBe('NO_BARS');
+  });
+
+  it('전체 공통 봉이 부족해도 충분한 역상관 pair만 병합한다', () => {
+    const path = oscillate(30);
+    const warmup = newCorrelationWarmup();
+    for (let index = 0; index < 30; index += 1) {
+      const close = path[index] as number;
+      recordClose(warmup, 'A', T0 + index * DAY, close);
+      recordClose(warmup, 'B', T0 + index * DAY, 1_000_000 / close);
+      if (index >= 25) recordClose(warmup, 'C', T0 + index * DAY, 2_000 + index);
+    }
+
+    const groups = tryBuildGroups(warmup, ['A', 'B', 'C'], 20, 0.5);
+    expect(groups).not.toBeNull();
+    expect(groups?.get('A')).toBe('A');
+    expect(groups?.get('B')).toBe('A');
+    expect(groups?.get('C')).toBe('C');
   });
 
   it('한 봉 밀린 인덱스 정렬은 단독 그룹 2개지만 시각 정렬은 병합한다', () => {
@@ -212,5 +235,26 @@ describe('scaleWarmupCloses — 분할이 상관 계산을 오염시키지 않�
     // 조정하지 않으면 −80% 한 점이 상관을 끌고 가 묶음이 깨진다
     const unscaledGroups = tryBuildGroups(unscaled, ['A', 'B'], 21, 0.5) as Map<string, string>;
     expect(unscaledGroups.get('A')).not.toBe(unscaledGroups.get('B'));
+  });
+});
+
+describe('pruneWarmupCloses', () => {
+  it('종목별로 최근 N개 시각만 남긴다', () => {
+    const warmup = newCorrelationWarmup();
+    for (let index = 0; index < 5; index += 1) {
+      recordClose(warmup, 'A', T0 + index * DAY, 1_000 + index);
+      if (index >= 3) recordClose(warmup, 'B', T0 + index * DAY, 2_000 + index);
+    }
+    pruneWarmupCloses(warmup, 3);
+
+    expect([...(warmup.closesBySymbol.get('A')?.keys() ?? [])]).toEqual([
+      T0 + 2 * DAY,
+      T0 + 3 * DAY,
+      T0 + 4 * DAY,
+    ]);
+    expect([...(warmup.closesBySymbol.get('B')?.keys() ?? [])]).toEqual([
+      T0 + 3 * DAY,
+      T0 + 4 * DAY,
+    ]);
   });
 });
