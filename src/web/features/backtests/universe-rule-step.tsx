@@ -188,6 +188,13 @@ export function UniverseRuleStep({
   const [backfillRunning, setBackfillRunning] = useState(false);
   const [backfillCursor, setBackfillCursor] = useState<string | null>(null);
   const [backfillError, setBackfillError] = useState<string | null>(null);
+  const [rebalanceIntervalText, setRebalanceIntervalText] = useState(() =>
+    String(value.rebalanceInterval.value),
+  );
+
+  useEffect(() => {
+    setRebalanceIntervalText(String(value.rebalanceInterval.value));
+  }, [value.rebalanceInterval.unit, value.rebalanceInterval.value]);
 
   // 마지막으로 성공(READY)한 미리보기 원재료 — previewMutation.data 는 이제
   // READY/PREPARING 두 모양을 다 담는 discriminated union 이라, 화면에 그릴 "완성된
@@ -491,15 +498,43 @@ export function UniverseRuleStep({
                 min={1}
                 max={REBALANCE_UNIT_MAX[value.rebalanceInterval.unit]}
                 disabled={value.rebalanceInterval.unit === 'YEAR'}
-                value={value.rebalanceInterval.value}
+                value={rebalanceIntervalText}
                 onChange={(e) => {
-                  const n = Number(e.target.value);
+                  const text = e.target.value;
+                  setRebalanceIntervalText(text);
+
+                  if (text.trim() === '') return;
+                  const n = Number(text);
                   const max = REBALANCE_UNIT_MAX[value.rebalanceInterval.unit];
                   if (!Number.isInteger(n) || n < 1 || n > max) return;
+
                   onChange({
                     ...value,
                     rebalanceInterval: buildRebalanceInterval(value.rebalanceInterval.unit, n),
                   });
+                }}
+                onBlur={() => {
+                  const text = rebalanceIntervalText.trim();
+                  const n = Number(text);
+
+                  if (text === '' || !Number.isInteger(n)) {
+                    setRebalanceIntervalText(String(value.rebalanceInterval.value));
+                    return;
+                  }
+
+                  const max = REBALANCE_UNIT_MAX[value.rebalanceInterval.unit];
+                  const clamped = Math.min(max, Math.max(1, n));
+                  setRebalanceIntervalText(String(clamped));
+
+                  if (clamped !== value.rebalanceInterval.value) {
+                    onChange({
+                      ...value,
+                      rebalanceInterval: buildRebalanceInterval(
+                        value.rebalanceInterval.unit,
+                        clamped,
+                      ),
+                    });
+                  }
                 }}
               />
             </div>
