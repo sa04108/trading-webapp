@@ -62,6 +62,44 @@ test('새 전략 목록에 이익 가속·저PER·고ROE 순위가 있고 기본
   await expect(page.getByLabel('보유 종목 수', { exact: true })).toHaveValue('40');
 });
 
+test('리밸런스 주기 입력은 편집 중 임시값을 허용하고 blur에서 보정한다', async ({
+  page,
+}) => {
+  await login(page);
+  await page.goto('/backtests/new');
+  await page.getByRole('button', { name: /전고점 돌파/ }).click();
+  await page.getByLabel('돌파 기준 봉 수', { exact: true }).fill('10');
+  await page.getByLabel('변동성(ATR) 계산 기간', { exact: true }).fill('5');
+  await page.getByRole('button', { name: '다음' }).click();
+
+  await page.getByLabel('시작일').fill('2026-01-01');
+  await page.getByLabel('종료일').fill('2026-12-31');
+  await page.getByRole('button', { name: '다음' }).click();
+
+  const interval = page.getByLabel('리밸런스 주기', { exact: true });
+  await expect(interval).toHaveValue('1');
+
+  await interval.fill('');
+  await expect(interval).toHaveValue('');
+  await interval.fill('3');
+  await expect(interval).toHaveValue('3');
+
+  await interval.fill('99');
+  await expect(interval).toHaveValue('99');
+  await interval.blur();
+  await expect(interval).toHaveValue('12');
+
+  await interval.fill('0');
+  await expect(interval).toHaveValue('0');
+  await interval.blur();
+  await expect(interval).toHaveValue('1');
+
+  await interval.fill('3');
+  await interval.fill('');
+  await interval.blur();
+  await expect(interval).toHaveValue('3');
+});
+
 test('단계 추가·N 기본 복사·cascade 안내·순서 변경·주기 초과 차단을 거쳐 준비→제출까지 완주한다', async ({
   page,
 }, testInfo) => {
