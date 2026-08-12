@@ -122,8 +122,8 @@ function getSymbolState(state: RsiReversionState, symbol: string): SymbolState {
 }
 
 function activeSymbols(context: StrategyBarContext, state: RsiReversionState): readonly string[] {
-  if (context.tradableSymbols === null) return state.symbols;
-  return state.symbols.filter((symbol) => context.tradableSymbols?.has(symbol) === true);
+  if (context.activeUniverseSymbols === null) return state.symbols;
+  return state.symbols.filter((symbol) => context.activeUniverseSymbols?.has(symbol) === true);
 }
 
 export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiReversionState> = {

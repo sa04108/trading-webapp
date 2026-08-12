@@ -249,4 +249,3 @@ Run: `git status -sb`
 Run: `git log --oneline origin/main..HEAD`
 
 Run: `git diff --stat origin/main...HEAD`
-

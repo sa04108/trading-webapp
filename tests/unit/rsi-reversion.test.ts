@@ -179,6 +179,44 @@ describe('실행 동작', () => {
     expect(result.warnings.join('\n')).toContain('상관 그룹 워밍업 부족');
     expect(result.warnings.join('\n')).toContain('필요 20봉, 확보 최대 10봉');
   });
+
+  it('보유 중인 역상관 종목이 거래정지여도 같은 그룹 종목을 추가 매수하지 않는다', () => {
+    const candles: Candle[] = [];
+    let aaa = 1_000;
+    let bbb = 1_000;
+    for (let index = 0; index < 50; index += 1) {
+      if (index < 25) {
+        aaa = 1_000 + (index % 2 === 0 ? 10 : -10);
+        bbb = 1_000_000 / aaa;
+      } else if (index < 31) {
+        aaa -= 20;
+        bbb += 20;
+      } else {
+        bbb -= 30;
+      }
+      candles.push(candle('AAA', index, aaa));
+      candles.push(candle('BBB', index, bbb));
+    }
+
+    const result = runBacktest(rsiReversionStrategy, {
+      candles: candles.sort(
+        (left, right) => left.tsMs - right.tsMs || (left.symbol < right.symbol ? -1 : 1),
+      ),
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: { ...FAST_PARAMS, stopAtrMultiplier: 20 },
+      randomSeed: 1,
+      maxPositions: 5,
+      universeSchedule: [{ fromTsMs: START, symbols: ['AAA', 'BBB'] }],
+      nonTradingSymbolsByTsMs: new Map([
+        [START + 36 * DAY, new Set(['AAA'])],
+      ]),
+    });
+
+    expect(result.fills.filter((fill) => fill.side === 'BUY').map((fill) => fill.symbol)).toEqual([
+      'AAA',
+    ]);
+  });
 });
 
 // --- 자본변동(액면분할)을 걸친 RSI 누적 ---------------------------------------

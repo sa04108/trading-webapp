@@ -560,6 +560,7 @@ function* runBacktestSteps(
         fundamentals: (symbol) => factView.fundamentals(symbol),
         corporateActions: (symbol) => factView.corporateActions(symbol, tsMs),
         tradableSymbols,
+        activeUniverseSymbols: activeMembershipSymbols,
         selectionMetric: (symbol) => activeSelectionMetrics?.get(symbol) ?? null,
       };
       // warm-up은 전략 지표/커서 상태만 전진시킨다. 반환 주문은 의도적으로 버린다.
@@ -628,6 +629,7 @@ function* runBacktestSteps(
       fundamentals: (symbol) => factView.fundamentals(symbol),
       corporateActions: (symbol) => factView.corporateActions(symbol, tsMs),
       tradableSymbols,
+      activeUniverseSymbols: activeMembershipSymbols,
       selectionMetric: (symbol) => activeSelectionMetrics?.get(symbol) ?? null,
     };
     const decision = strategy.onBars(context, state, input.parameters);

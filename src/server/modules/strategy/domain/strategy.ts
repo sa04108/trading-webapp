@@ -40,6 +40,11 @@ export interface StrategyBarContext {
    * (엔진의 리스크 검증도 이때는 항상 통과시킨다).
    */
   readonly tradableSymbols: ReadonlySet<string> | null;
+  /**
+   * 현재 schedule의 활성 멤버십. 거래정지·무거래 종목도 포함한다. 그룹·보유 제약처럼
+   * "유니버스에 속하는가"를 판단할 때 쓰고, 실제 신규 매수 가능 여부는 tradableSymbols를 쓴다.
+   */
+  readonly activeUniverseSymbols: ReadonlySet<string> | null;
   /** 현재 활성 schedule member에 제출 시점에 pin된 선정 지표 */
   selectionMetric(symbol: string): SelectionMetricPin | null;
 }

@@ -304,8 +304,9 @@ describe('runBacktest — 멤버십 일정 기반 거래 대상 제한 (스펙 2
     expect(filledSymbols).toEqual(new Set(['A'])); // 봉0 신호도 A 만 허용됨
   });
 
-  it('context.tradableSymbols 가 전략에 전달된다', () => {
+  it('활성 멤버십과 당일 매수 가능 종목을 분리해 전략에 전달한다', () => {
     let seenAtFirstBar: ReadonlySet<string> | null | undefined;
+    let activeAtFirstBar: ReadonlySet<string> | null | undefined;
     const spy: TradingStrategy<unknown, null> = {
       id: 'spy-tradable',
       version: '1.0.0',
@@ -314,23 +315,34 @@ describe('runBacktest — 멤버십 일정 기반 거래 대상 제한 (스펙 2
       parameterSchema: z.unknown(),
       initialize: () => null,
       onBars(context: StrategyBarContext) {
-        if (seenAtFirstBar === undefined) seenAtFirstBar = context.tradableSymbols;
+        if (seenAtFirstBar === undefined) {
+          seenAtFirstBar = context.tradableSymbols;
+          activeAtFirstBar = context.activeUniverseSymbols;
+        }
         return { orders: [] };
       },
     };
 
     runBacktest(spy as never, {
-      candles: [bar(0, 100), bar(1, 100)],
+      candles: [
+        bar(0, 100),
+        bar(1, 100),
+        bar(0, 200, { symbol: 'B' }),
+        bar(1, 200, { symbol: 'B' }),
+      ],
       initialCash: 10_000,
       execution: ZERO_COST,
       parameters: {},
       randomSeed: 42,
       maxPositions: 5,
-      universeSchedule: [{ fromTsMs: START, symbols: ['A'] }],
+      universeSchedule: [{ fromTsMs: START, symbols: ['A', 'B'] }],
+      nonTradingSymbolsByTsMs: new Map([[START, new Set(['B'])]]),
     });
 
     expect(seenAtFirstBar).toBeInstanceOf(Set);
     expect([...(seenAtFirstBar as ReadonlySet<string>)]).toEqual(['A']);
+    expect(activeAtFirstBar).toBeInstanceOf(Set);
+    expect([...(activeAtFirstBar as ReadonlySet<string>)]).toEqual(['A', 'B']);
   });
 
   it('warm-up은 PIT·자본변동·history·전략 state만 갱신하고 주문·자산곡선·진행률을 남기지 않는다', () => {

@@ -304,4 +304,40 @@ describe('그룹 배타성', () => {
     expect(finalState?.groupOf?.get('AAA')).toBe('AAA');
     expect(finalState?.groupOf?.get('BBB')).toBe('BBB');
   });
+
+  it('보유 중인 역상관 종목이 거래정지여도 같은 그룹 종목을 추가 매수하지 않는다', () => {
+    const aaa: number[] = [];
+    const bbb: number[] = [];
+    for (let index = 0; index < 50; index += 1) {
+      if (index < 25) {
+        const value = 1_000 + (index % 2 === 0 ? 10 : -10);
+        aaa.push(value);
+        bbb.push(1_000_000 / value);
+      } else {
+        aaa.push((aaa[index - 1] as number) + 20);
+        bbb.push(
+          index < 31
+            ? (bbb[index - 1] as number) - 15
+            : (bbb[index - 1] as number) + 40,
+        );
+      }
+    }
+
+    const result = runBacktest(emaTrendSwitchStrategy, {
+      candles: toCandles(new Map([['AAA', aaa], ['BBB', bbb]]), '1d', DAY),
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: FAST_PARAMS,
+      randomSeed: 1,
+      maxPositions: 5,
+      universeSchedule: [{ fromTsMs: START, symbols: ['AAA', 'BBB'] }],
+      nonTradingSymbolsByTsMs: new Map([
+        [START + 36 * DAY, new Set(['AAA'])],
+      ]),
+    });
+
+    expect(result.fills.filter((fill) => fill.side === 'BUY').map((fill) => fill.symbol)).toEqual([
+      'AAA',
+    ]);
+  });
 });

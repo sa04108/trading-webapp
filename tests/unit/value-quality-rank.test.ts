@@ -403,6 +403,7 @@ describe('밸류·퀄리티 랭킹 실행', () => {
       fundamentals: () => snapshot(HEALTHY, { ttmOperatingIncome: 120_000 }),
       corporateActions: () => [],
       tradableSymbols: new Set(['CHEAP']),
+      activeUniverseSymbols: new Set(['CHEAP']),
       selectionMetric: () => null,
     };
     const state = valueQualityRankStrategy.initialize({

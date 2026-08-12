@@ -108,6 +108,7 @@ function strategyContext(input: {
     },
     corporateActions: (symbol) => input.actions?.get(symbol) ?? [],
     tradableSymbols: new Set(Object.keys(input.inputs)),
+    activeUniverseSymbols: new Set(Object.keys(input.inputs)),
     selectionMetric: () => null,
   };
 }
