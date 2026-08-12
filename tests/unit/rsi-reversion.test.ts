@@ -79,6 +79,7 @@ describe('레지스트리 등록', () => {
     const properties = (schema as { properties: Record<string, Record<string, unknown>> })
       .properties;
     expect(properties.entryRsi?.title).toBe('진입 RSI');
+    expect(rsiReversionStrategy.version).toBe('1.0.2');
   });
 });
 
@@ -98,6 +99,7 @@ describe('실행 동작', () => {
     expect(buys[0]?.reason).toBe('REVERSION');
     expect(sells.length).toBeGreaterThan(0);
     expect(sells[0]?.reason).toBe('RSI_EXIT');
+    expect(result.warnings.join('\n')).not.toContain('상관 그룹 워밍업 부족');
   });
 
   it('maxHoldBars 를 지정하면 그 봉 수 뒤 TIME 으로 판다', () => {
@@ -161,6 +163,21 @@ describe('실행 동작', () => {
     expect(buySymbols.length).toBeGreaterThan(0);
     expect(new Set(buySymbols)).toEqual(new Set(['ZZZ']));
     expect(result.warnings.some((warning) => warning.includes('AAA 매수 거부'))).toBe(false);
+  });
+
+  it('상관 워밍업이 부족해 진입을 평가하지 못하면 원인을 경고한다', () => {
+    const result = runBacktest(rsiReversionStrategy, {
+      candles: Array.from({ length: 10 }, (_, index) => candle('AAA', index, 1_000 - index * 10)),
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: FAST_PARAMS,
+      randomSeed: 1,
+      maxPositions: 5,
+    });
+
+    expect(result.fills).toHaveLength(0);
+    expect(result.warnings.join('\n')).toContain('상관 그룹 워밍업 부족');
+    expect(result.warnings.join('\n')).toContain('필요 20봉, 확보 최대 10봉');
   });
 });
 

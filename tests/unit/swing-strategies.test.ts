@@ -230,4 +230,78 @@ describe('그룹 배타성', () => {
     expect(finalState?.groupOf?.get('AAA')).toBe('AAA');
     expect(finalState?.groupOf?.get('BBB')).toBe('AAA');
   });
+
+  it('새 멤버십 종목의 워밍업이 부족하면 이전 그룹을 재사용하지 않는다', () => {
+    const aaa = levPath(40, 25);
+    const bbb = [1_000, 1_020];
+    let finalState: EmaTrendSwitchState | undefined;
+    const observingStrategy = {
+      ...emaTrendSwitchStrategy,
+      initialize(context: Parameters<typeof emaTrendSwitchStrategy.initialize>[0]) {
+        finalState = emaTrendSwitchStrategy.initialize(context);
+        return finalState;
+      },
+    };
+    const candles = [
+      ...toCandles(new Map([['AAA', aaa]]), '1d', DAY),
+      ...toCandles(new Map([['BBB', bbb]]), '1d', DAY).map((bar) => ({
+        ...bar,
+        tsMs: bar.tsMs + 38 * DAY,
+      })),
+    ].sort((a, b) => a.tsMs - b.tsMs || (a.symbol < b.symbol ? -1 : 1));
+
+    runBacktest(observingStrategy, {
+      candles,
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: FAST_PARAMS,
+      randomSeed: 1,
+      maxPositions: 5,
+      universeSchedule: [
+        { fromTsMs: START, symbols: ['AAA'] },
+        { fromTsMs: START + 38 * DAY, symbols: ['BBB'] },
+      ],
+    });
+
+    expect(finalState?.groupOf).toBeNull();
+  });
+
+  it('활성 종목이 같아도 리밸런스 봉에서는 최근 상관으로 그룹을 갱신한다', () => {
+    const aaa: number[] = [];
+    const bbb: number[] = [];
+    for (let index = 0; index < 45; index += 1) {
+      if (index < 20) {
+        const value = 1_000 + (index % 2 === 0 ? 10 : -10);
+        aaa.push(value);
+        bbb.push(1_000_000 / value);
+      } else {
+        aaa.push((aaa[index - 1] as number) + 10);
+        bbb.push((bbb[index - 1] as number) + 10);
+      }
+    }
+    let finalState: EmaTrendSwitchState | undefined;
+    const observingStrategy = {
+      ...emaTrendSwitchStrategy,
+      initialize(context: Parameters<typeof emaTrendSwitchStrategy.initialize>[0]) {
+        finalState = emaTrendSwitchStrategy.initialize(context);
+        return finalState;
+      },
+    };
+
+    runBacktest(observingStrategy, {
+      candles: toCandles(new Map([['AAA', aaa], ['BBB', bbb]]), '1d', DAY),
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: FAST_PARAMS,
+      randomSeed: 1,
+      maxPositions: 5,
+      universeSchedule: [
+        { fromTsMs: START, symbols: ['AAA', 'BBB'] },
+        { fromTsMs: START + 40 * DAY, symbols: ['AAA', 'BBB'] },
+      ],
+    });
+
+    expect(finalState?.groupOf?.get('AAA')).toBe('AAA');
+    expect(finalState?.groupOf?.get('BBB')).toBe('BBB');
+  });
 });

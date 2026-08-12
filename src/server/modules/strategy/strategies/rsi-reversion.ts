@@ -77,7 +77,7 @@ export const rsiReversionParameters = z
     correlationBars: z.number().int().min(20).max(500).default(60).meta({
       title: '상관 계산 봉 수',
       description:
-        '이 봉 수가 쌓이면 종목간 상관을 한 번 계산해 반대로 움직이는 종목들을 한 묶음으로 봅니다. 이 구간에는 진입하지 않습니다.',
+        '활성 종목 중 이 봉 수를 확보한 종목이 생기면 종목쌍별 상관을 계산해 반대로 움직이는 종목들을 한 묶음으로 봅니다. 이 구간에는 진입하지 않습니다.',
     }),
     correlationThreshold: z.number().min(0.1).max(0.95).default(0.5).meta({
       title: '역상관 판정 기준',
@@ -104,6 +104,8 @@ export interface RsiReversionState {
   groupOf: Map<string, string> | null;
   /** 마지막으로 그룹을 계산한 활성 심볼 집합 */
   groupedSymbolsKey: string | null;
+  /** 종료 진단에 쓰는 마지막 활성 심볼 집합 */
+  lastActiveSymbols: readonly string[];
   /** 마지막 그룹 계산 시점에 correlationBars 를 채운 활성 심볼 수 */
   groupReadyCount: number;
   /** 상관 계산용 종가 누적 — 동적 유니버스에서는 제한된 크기로 유지한다 */
@@ -126,7 +128,7 @@ function activeSymbols(context: StrategyBarContext, state: RsiReversionState): r
 
 export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiReversionState> = {
   id: 'rsi-reversion',
-  version: '1.0.1',
+  version: '1.0.2',
   name: 'RSI 되돌림',
   description:
     'RSI 과매도 종목을 사서 RSI 가 회복하면 팝니다. 반대로 움직이는 종목(예: 레버리지·인버스 쌍)을 ' +
@@ -147,6 +149,7 @@ export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiRe
       symbols: [...context.symbols].sort(),
       groupOf: null,
       groupedSymbolsKey: null,
+      lastActiveSymbols: [],
       groupReadyCount: 0,
       warmup: newCorrelationWarmup(),
     };
@@ -172,6 +175,7 @@ export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiRe
 
     // 2) 현재 활성 멤버십의 그룹 확정 (ema-trend-switch 와 같은 규칙).
     const currentSymbols = activeSymbols(context, state);
+    state.lastActiveSymbols = currentSymbols;
     if (state.warmup !== null) {
       pruneWarmupCloses(state.warmup, parameters.correlationBars * 2 + 14);
       const groupedSymbolsKey = currentSymbols.join('\u0000');
@@ -179,9 +183,11 @@ export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiRe
         (symbol) =>
           (state.warmup?.closesBySymbol.get(symbol)?.size ?? 0) >= parameters.correlationBars,
       ).length;
+      const membershipChanged = groupedSymbolsKey !== state.groupedSymbolsKey;
       if (
         state.groupOf === null ||
-        groupedSymbolsKey !== state.groupedSymbolsKey ||
+        membershipChanged ||
+        context.isRebalanceBar ||
         readyCount > state.groupReadyCount
       ) {
         const groupOf = tryBuildGroups(
@@ -197,6 +203,10 @@ export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiRe
           if (context.tradableSymbols === null && readyCount === state.symbols.length) {
             state.warmup = null;
           }
+        } else if (membershipChanged) {
+          state.groupOf = null;
+          state.groupedSymbolsKey = groupedSymbolsKey;
+          state.groupReadyCount = readyCount;
         }
       }
     }
@@ -286,6 +296,19 @@ export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiRe
     }
 
     return { orders };
+  },
+
+  completionWarnings(state, parameters) {
+    if (state.groupOf !== null) return [];
+    const symbols = state.lastActiveSymbols.length > 0 ? state.lastActiveSymbols : state.symbols;
+    const maxBars = Math.max(
+      0,
+      ...symbols.map((symbol) => state.warmup?.closesBySymbol.get(symbol)?.size ?? 0),
+    );
+    return [
+      `RSI 되돌림: 상관 그룹 워밍업 부족 (필요 ${parameters.correlationBars}봉, `
+        + `확보 최대 ${maxBars}봉). 워밍업 중에는 신규 진입을 평가하지 않습니다.`,
+    ];
   },
 
   // 분할 등 자본변동이 걸린 종목의 가격 상태를 같은 비율로 내린다.

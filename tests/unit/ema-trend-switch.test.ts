@@ -85,6 +85,7 @@ describe('레지스트리 등록', () => {
       .properties;
     expect(properties.fastEmaBars?.title).toBe('단기 이동평균 봉 수');
     expect(properties.fastEmaBars?.default).toBe(12);
+    expect(emaTrendSwitchStrategy.version).toBe('1.0.2');
   });
 });
 
@@ -101,6 +102,7 @@ describe('실행 동작', () => {
     const buys = result.fills.filter((fill) => fill.side === 'BUY');
     expect(buys.length).toBeGreaterThan(0);
     expect(new Set(buys.map((fill) => fill.symbol))).toEqual(new Set(['LEV']));
+    expect(result.warnings.join('\n')).not.toContain('상관 그룹 워밍업 부족');
   });
 
   it('상관 워밍업이 차기 전에는 진입하지 않는다', () => {
@@ -118,6 +120,8 @@ describe('실행 동작', () => {
       maxPositions: 5,
     });
     expect(result.fills).toHaveLength(0);
+    expect(result.warnings.join('\n')).toContain('상관 그룹 워밍업 부족');
+    expect(result.warnings.join('\n')).toContain('필요 20봉, 확보 최대 15봉');
   });
 
   it('진입가 위에서 트레일링 스톱에 걸리면 TRAIL_STOP 이다 (수익 청산)', () => {

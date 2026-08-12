@@ -73,6 +73,12 @@ export interface TradingStrategy<TParameters, TState> {
   onBars(context: StrategyBarContext, state: TState, parameters: TParameters): StrategyDecision;
 
   /**
+   * 모든 봉 처리가 끝난 뒤 결과에 덧붙일 전략별 진단 경고다.
+   * 주문이 한 건도 없었던 이유처럼 봉 처리 중에는 확정할 수 없는 상태를 설명한다.
+   */
+  completionWarnings?(state: TState, parameters: TParameters): readonly string[];
+
+  /**
    * 보유 종목에 자본변동이 걸린 시점에 엔진이 부르는 선택 훅이다.
    * 엔진은 포지션 수량 조정과 같은 자리에서, 대기 주문 체결보다 먼저 부른다.
    *
