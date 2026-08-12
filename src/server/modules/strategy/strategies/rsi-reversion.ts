@@ -19,6 +19,7 @@ import {
 } from './shared/indicators.js';
 import {
   newCorrelationWarmup,
+  pruneWarmupCloses,
   recordClose,
   scaleWarmupCloses,
   tryBuildGroups,
@@ -101,7 +102,11 @@ export interface RsiReversionState {
   readonly bySymbol: Map<string, SymbolState>;
   readonly symbols: readonly string[];
   groupOf: Map<string, string> | null;
-  /** 상관 계산용 종가 누적 — 그룹 확정 후 null 로 비운다 */
+  /** 마지막으로 그룹을 계산한 활성 심볼 집합 */
+  groupedSymbolsKey: string | null;
+  /** 마지막 그룹 계산 시점에 correlationBars 를 채운 활성 심볼 수 */
+  groupReadyCount: number;
+  /** 상관 계산용 종가 누적 — 동적 유니버스에서는 제한된 크기로 유지한다 */
   warmup: CorrelationWarmup | null;
 }
 
@@ -112,6 +117,11 @@ function getSymbolState(state: RsiReversionState, symbol: string): SymbolState {
     state.bySymbol.set(symbol, symbolState);
   }
   return symbolState;
+}
+
+function activeSymbols(context: StrategyBarContext, state: RsiReversionState): readonly string[] {
+  if (context.tradableSymbols === null) return state.symbols;
+  return state.symbols.filter((symbol) => context.tradableSymbols?.has(symbol) === true);
 }
 
 export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiReversionState> = {
@@ -136,6 +146,8 @@ export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiRe
       bySymbol: new Map(),
       symbols: [...context.symbols].sort(),
       groupOf: null,
+      groupedSymbolsKey: null,
+      groupReadyCount: 0,
       warmup: newCorrelationWarmup(),
     };
   },
@@ -158,18 +170,34 @@ export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiRe
       if (state.warmup !== null) recordClose(state.warmup, symbol, bar.tsMs, bar.close);
     }
 
-    // 2) 그룹 확정 (ema-trend-switch 와 동일한 규칙 — 전 종목 공통 봉이 쌓이면 1회).
-    //    미확정의 의미(진입 영영 없음·경고 없음)는 tryBuildGroups 주석 참고.
-    if (state.groupOf === null && state.warmup !== null) {
-      const groupOf = tryBuildGroups(
-        state.warmup,
-        state.symbols,
-        parameters.correlationBars,
-        parameters.correlationThreshold,
-      );
-      if (groupOf !== null) {
-        state.groupOf = groupOf;
-        state.warmup = null;
+    // 2) 현재 활성 멤버십의 그룹 확정 (ema-trend-switch 와 같은 규칙).
+    const currentSymbols = activeSymbols(context, state);
+    if (state.warmup !== null) {
+      pruneWarmupCloses(state.warmup, parameters.correlationBars * 2 + 14);
+      const groupedSymbolsKey = currentSymbols.join('\u0000');
+      const readyCount = currentSymbols.filter(
+        (symbol) =>
+          (state.warmup?.closesBySymbol.get(symbol)?.size ?? 0) >= parameters.correlationBars,
+      ).length;
+      if (
+        state.groupOf === null ||
+        groupedSymbolsKey !== state.groupedSymbolsKey ||
+        readyCount > state.groupReadyCount
+      ) {
+        const groupOf = tryBuildGroups(
+          state.warmup,
+          currentSymbols,
+          parameters.correlationBars,
+          parameters.correlationThreshold,
+        );
+        if (groupOf !== null) {
+          state.groupOf = groupOf;
+          state.groupedSymbolsKey = groupedSymbolsKey;
+          state.groupReadyCount = readyCount;
+          if (context.tradableSymbols === null && readyCount === state.symbols.length) {
+            state.warmup = null;
+          }
+        }
       }
     }
 
@@ -211,7 +239,7 @@ export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiRe
     if (state.groupOf !== null) {
       const groupOf = state.groupOf;
       const claimed = new Set<string>();
-      for (const symbol of state.symbols) {
+      for (const symbol of currentSymbols) {
         const position = context.portfolio.positions.get(symbol);
         const holding = state.bySymbol.get(symbol)?.holding;
         if ((position && position.quantity > 0) || holding?.pendingEntry === true) {
@@ -221,6 +249,10 @@ export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiRe
 
       for (const symbol of barSymbols) {
         const symbolState = getSymbolState(state, symbol);
+        if (context.tradableSymbols !== null && !context.tradableSymbols.has(symbol)) {
+          symbolState.holding.pendingEntry = false;
+          continue;
+        }
         const position = context.portfolio.positions.get(symbol);
         if (position && position.quantity > 0) continue;
 
@@ -270,7 +302,7 @@ export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiRe
       scaleAtr(symbolState.atr, ratio);
       scaleHoldingPrices(symbolState.holding, ratio);
     }
-    // 그룹 확정 전이면 상관 워밍업에도 분할 전 종가가 쌓여 있다
+    // 동적 그룹 재계산용 워밍업에도 분할 전 종가가 쌓여 있을 수 있다
     if (state.warmup !== null) scaleWarmupCloses(state.warmup, symbol, ratio);
   },
 };

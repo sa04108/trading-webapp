@@ -125,6 +125,43 @@ describe('실행 동작', () => {
     const buyTs = result.fills.find((fill) => fill.side === 'BUY')?.tsMs as number;
     expect((sells[0]?.tsMs as number) - buyTs).toBe(3 * DAY);
   });
+
+  it('비활성 종목의 과매도 신호가 활성 종목의 진입을 선점하지 않는다', () => {
+    const inactiveFirst: Candle[] = [];
+    const activeSecond: Candle[] = [];
+    let aaa = 1_000;
+    let zzz = 1_000;
+    for (let index = 0; index < 55; index += 1) {
+      if (index < 25) {
+        aaa = 1_000 + (index % 2 === 0 ? 10 : -10);
+        zzz = 1_000_000 / aaa;
+      } else {
+        aaa -= 20;
+        zzz -= 20;
+      }
+      inactiveFirst.push(candle('AAA', index, aaa));
+      activeSecond.push(candle('ZZZ', index, zzz));
+    }
+
+    const result = runBacktest(rsiReversionStrategy, {
+      candles: [...inactiveFirst, ...activeSecond].sort(
+        (left, right) => left.tsMs - right.tsMs || (left.symbol < right.symbol ? -1 : 1),
+      ),
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: FAST_PARAMS,
+      randomSeed: 1,
+      maxPositions: 5,
+      universeSchedule: [{ fromTsMs: START, symbols: ['ZZZ'] }],
+    });
+
+    const buySymbols = result.fills
+      .filter((fill) => fill.side === 'BUY')
+      .map((fill) => fill.symbol);
+    expect(buySymbols.length).toBeGreaterThan(0);
+    expect(new Set(buySymbols)).toEqual(new Set(['ZZZ']));
+    expect(result.warnings.some((warning) => warning.includes('AAA 매수 거부'))).toBe(false);
+  });
 });
 
 // --- 자본변동(액면분할)을 걸친 RSI 누적 ---------------------------------------

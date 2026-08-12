@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { runBacktest } from '../../src/server/modules/backtest/domain/engine.js';
 import type { ExecutionProfile, Fill } from '../../src/server/modules/backtest/domain/types.js';
 import type { Candle, Timeframe } from '../../src/server/modules/market-data/domain/candle.js';
-import { emaTrendSwitchStrategy } from '../../src/server/modules/strategy/strategies/ema-trend-switch.js';
+import {
+  emaTrendSwitchStrategy,
+  type EmaTrendSwitchState,
+} from '../../src/server/modules/strategy/strategies/ema-trend-switch.js';
 
 const DAY = 86_400_000;
 const START = Date.UTC(2025, 0, 2);
@@ -151,5 +154,80 @@ describe('그룹 배타성', () => {
     );
     // 공통 봉 20개는 index 24 에 차므로 상승(index 25~) 전에 그룹이 확정된다
     expect([...buySymbols]).toEqual(['AAA']);
+  });
+
+  it('비활성 종목의 신호가 활성 종목의 진입을 선점하지 않는다', () => {
+    const inactiveFirst: number[] = [];
+    const activeSecond: number[] = [];
+    for (let index = 0; index < 60; index += 1) {
+      if (index < 25) {
+        const value = 1_000 + (index % 2 === 0 ? 10 : -10);
+        inactiveFirst.push(value);
+        activeSecond.push(1_000_000 / value);
+      } else {
+        inactiveFirst.push((inactiveFirst[index - 1] as number) + 15);
+        activeSecond.push((activeSecond[index - 1] as number) + 15);
+      }
+    }
+
+    const result = runBacktest(emaTrendSwitchStrategy, {
+      candles: toCandles(
+        new Map([
+          ['AAA', inactiveFirst],
+          ['ZZZ', activeSecond],
+        ]),
+        '1d',
+        DAY,
+      ),
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: FAST_PARAMS,
+      randomSeed: 1,
+      maxPositions: 5,
+      universeSchedule: [{ fromTsMs: START, symbols: ['ZZZ'] }],
+    });
+
+    expect(result.fills.filter((fill) => fill.side === 'BUY').map((fill) => fill.symbol)).toEqual([
+      'ZZZ',
+    ]);
+    expect(result.warnings.some((warning) => warning.includes('AAA 매수 거부'))).toBe(false);
+  });
+
+  it('새 멤버십이 활성화되면 그 종목들의 상관 그룹을 다시 계산한다', () => {
+    const aaa = Array.from({ length: 40 }, (_, index) =>
+      1_000 + (index % 2 === 0 ? 10 : -10),
+    );
+    const bbb = aaa.slice(10).map((value) => 1_000_000 / value);
+    let finalState: EmaTrendSwitchState | undefined;
+    const observingStrategy = {
+      ...emaTrendSwitchStrategy,
+      initialize(context: Parameters<typeof emaTrendSwitchStrategy.initialize>[0]) {
+        finalState = emaTrendSwitchStrategy.initialize(context);
+        return finalState;
+      },
+    };
+    const candles = [
+      ...toCandles(new Map([['AAA', aaa]]), '1d', DAY),
+      ...toCandles(new Map([['BBB', bbb]]), '1d', DAY).map((bar) => ({
+        ...bar,
+        tsMs: bar.tsMs + 10 * DAY,
+      })),
+    ].sort((a, b) => a.tsMs - b.tsMs || (a.symbol < b.symbol ? -1 : 1));
+
+    runBacktest(observingStrategy, {
+      candles,
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: FAST_PARAMS,
+      randomSeed: 1,
+      maxPositions: 5,
+      universeSchedule: [
+        { fromTsMs: START, symbols: ['AAA'] },
+        { fromTsMs: START + 30 * DAY, symbols: ['AAA', 'BBB'] },
+      ],
+    });
+
+    expect(finalState?.groupOf?.get('AAA')).toBe('AAA');
+    expect(finalState?.groupOf?.get('BBB')).toBe('AAA');
   });
 });
