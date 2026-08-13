@@ -96,3 +96,15 @@ export function parseStageLimitInput(raw: string, maxLimit: number): number | nu
   if (!Number.isInteger(n) || n < 1 || n > maxLimit) return null;
   return n;
 }
+
+export function normalizeStageLimitInput(
+  raw: string,
+  fallback: number,
+  maxLimit: number,
+): number {
+  const text = raw.trim();
+  if (text === '') return fallback;
+  const n = Number(text);
+  if (!Number.isInteger(n)) return fallback;
+  return Math.min(maxLimit, Math.max(1, n));
+}

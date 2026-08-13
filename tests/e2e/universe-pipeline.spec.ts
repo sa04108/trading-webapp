@@ -100,6 +100,52 @@ test('리밸런스 주기 입력은 편집 중 임시값을 허용하고 blur에
   await expect(interval).toHaveValue('3');
 });
 
+test('단계별 N 입력은 편집 중 임시값을 허용하고 blur에서 복구·clamp한다', async ({
+  page,
+}) => {
+  await login(page);
+  await page.goto('/backtests/new');
+  await page.getByRole('button', { name: /전고점 돌파/ }).click();
+  await page.getByLabel('돌파 기준 봉 수', { exact: true }).fill('10');
+  await page.getByLabel('변동성(ATR) 계산 기간', { exact: true }).fill('5');
+  await page.getByRole('button', { name: '다음' }).click();
+  await page.getByLabel('시작일').fill('2026-01-01');
+  await page.getByLabel('종료일').fill('2026-12-31');
+  await page.getByRole('button', { name: '다음' }).click();
+
+  const first = page.locator('#stage-limit-0');
+  await expect(first).toHaveValue('200');
+  await first.fill('');
+  await expect(first).toHaveValue('');
+  await first.fill('500');
+  await expect(first).toHaveValue('500');
+  await first.blur();
+  await expect(first).toHaveValue('200');
+
+  await first.fill('50');
+  await page.getByRole('button', { name: 'PER 단계 추가' }).click();
+  const second = page.locator('#stage-limit-1');
+  await expect(second).toHaveValue('50');
+  await second.fill('99');
+  await expect(second).toHaveValue('99');
+  await second.blur();
+  await expect(second).toHaveValue('50');
+
+  await first.fill('0');
+  await expect(first).toHaveValue('0');
+  await first.blur();
+  await expect(first).toHaveValue('1');
+  await expect(second).toHaveValue('1');
+  await expect(
+    page.getByText('앞 단계 N을 넘지 않도록 뒤 단계 값을 함께 조정했습니다.'),
+  ).toBeVisible();
+
+  await first.fill('37');
+  await first.fill('');
+  await first.blur();
+  await expect(first).toHaveValue('37');
+});
+
 test('단계 추가·N 기본 복사·cascade 안내·순서 변경·주기 초과 차단을 거쳐 준비→제출까지 완주한다', async ({
   page,
 }, testInfo) => {

@@ -10,6 +10,7 @@ import {
   DEFAULT_DECLINE_LOOKBACK_TRADING_DAYS,
   FIRST_STAGE_LIMIT_MAX,
   moveStage,
+  normalizeStageLimitInput,
   parseStageLimitInput,
   removeStage,
   type PipelineUpdate,
@@ -42,6 +43,50 @@ const HIGHLIGHT_DURATION_MS = 2000;
 export interface UniverseStageEditorProps {
   stages: readonly UniverseStage[];
   onChange: (stages: UniverseStage[]) => void;
+}
+
+function StageLimitInput({
+  index,
+  value,
+  max,
+  highlighted,
+  onValueChange,
+}: {
+  index: number;
+  value: number;
+  max: number;
+  highlighted: boolean;
+  onValueChange: (value: number) => void;
+}) {
+  const [text, setText] = useState(String(value));
+
+  useEffect(() => {
+    setText(String(value));
+  }, [value]);
+
+  return (
+    <Input
+      id={`stage-limit-${index}`}
+      name="limit"
+      type="number"
+      inputMode="numeric"
+      className={cn('h-8 w-24', highlighted && 'ring-2 ring-amber-400')}
+      min={1}
+      max={max}
+      value={text}
+      onChange={(event) => {
+        const nextText = event.target.value;
+        setText(nextText);
+        const parsed = parseStageLimitInput(nextText, max);
+        if (parsed !== null) onValueChange(parsed);
+      }}
+      onBlur={() => {
+        const normalized = normalizeStageLimitInput(text, value, max);
+        setText(String(normalized));
+        if (normalized !== value) onValueChange(normalized);
+      }}
+    />
+  );
 }
 
 /**
@@ -153,20 +198,14 @@ export function UniverseStageEditor({ stages, onChange }: UniverseStageEditorPro
 
             <div className="space-y-1">
               <Label htmlFor={`stage-limit-${index}`}>N</Label>
-              <Input
-                id={`stage-limit-${index}`}
-                name="limit"
-                type="number"
-                inputMode="numeric"
-                className={cn('h-8 w-24', isHighlighted && 'ring-2 ring-amber-400')}
-                min={1}
-                max={maxLimit}
+              <StageLimitInput
                 value={stage.limit}
-                onChange={(event) => {
-                  const n = parseStageLimitInput(event.target.value, maxLimit);
-                  if (n === null) return;
-                  applyUpdate(changeStageLimit(stages, index, n));
-                }}
+                index={index}
+                max={maxLimit}
+                highlighted={isHighlighted}
+                onValueChange={(nextLimit) =>
+                  applyUpdate(changeStageLimit(stages, index, nextLimit))
+                }
               />
             </div>
 

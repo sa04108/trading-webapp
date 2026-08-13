@@ -3,6 +3,7 @@ import {
   addStage,
   changeStageLimit,
   moveStage,
+  normalizeStageLimitInput,
   parseStageLimitInput,
   removeStage,
 } from '../../src/web/features/backtests/universe-pipeline.js';
@@ -200,5 +201,23 @@ describe('parseStageLimitInput', () => {
     expect(parseStageLimitInput('0', 200)).toBeNull();
     expect(parseStageLimitInput('1.5', 200)).toBeNull();
     expect(parseStageLimitInput('', 200)).toBeNull();
+  });
+});
+
+describe('normalizeStageLimitInput', () => {
+  it('빈 값과 정수가 아닌 값은 직전 유효값을 복구한다', () => {
+    expect(normalizeStageLimitInput('', 37, 200)).toBe(37);
+    expect(normalizeStageLimitInput('1.5', 37, 200)).toBe(37);
+  });
+
+  it('범위 밖 정수는 1과 현재 단계 상한으로 clamp한다', () => {
+    expect(normalizeStageLimitInput('0', 37, 200)).toBe(1);
+    expect(normalizeStageLimitInput('-5', 37, 200)).toBe(1);
+    expect(normalizeStageLimitInput('500', 37, 200)).toBe(200);
+    expect(normalizeStageLimitInput('81', 37, 80)).toBe(80);
+  });
+
+  it('범위 안 정수는 그대로 확정한다', () => {
+    expect(normalizeStageLimitInput('42', 37, 200)).toBe(42);
   });
 });
