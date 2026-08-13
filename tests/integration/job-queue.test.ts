@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ENGINE_VERSION } from '../../src/server/modules/backtest/domain/engine.js';
 import { FACTS_SLICE } from '../../src/server/modules/market-data/application/symbol-service.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
-import { symbolVersions } from '../../src/server/shared/db/schema.js';
+import { backtestJobs, symbolVersions } from '../../src/server/shared/db/schema.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { currentStrategyVersion } from '../helpers/strategy-versions.js';
 import {
@@ -159,6 +159,66 @@ describe('backtest job queue (스펙 §10, §14)', () => {
 
   afterEach(async () => {
     await ctx.close();
+  });
+
+  it('상세 조회는 멤버 원문 대신 최초 구성과 편입·편출 요약을 반환한다', async () => {
+    const job = ctx.container.jobQueue.enqueue(buildRequest(), [
+      {
+        rebalanceDate: '2026-01-05',
+        effectiveTradingDate: '2026-01-02',
+        symbols: ['005930', '000660'],
+        excludedNonTradingCount: 0,
+      },
+      {
+        rebalanceDate: '2026-02-05',
+        effectiveTradingDate: '2026-02-05',
+        symbols: ['000660', '035420', '051910'],
+        excludedNonTradingCount: 0,
+      },
+    ]);
+
+    const response = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${job.id}`,
+      cookies: { qp_session: cookie },
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.universeRebalancing).toEqual([
+      {
+        kind: 'INITIAL',
+        rebalanceDate: '2026-01-05',
+        effectiveDate: '2026-01-02',
+        memberCount: 2,
+      },
+      {
+        kind: 'CHANGE',
+        rebalanceDate: '2026-02-05',
+        effectiveDate: '2026-02-05',
+        addedCount: 2,
+        removedCount: 1,
+        changedCount: 3,
+      },
+    ]);
+    expect(body.job).not.toHaveProperty('universeScheduleJson');
+  });
+
+  it('저장된 멤버십 일정 JSON이 손상돼도 상세 조회와 나머지 결과는 유지한다', async () => {
+    const job = ctx.container.jobQueue.enqueue(buildRequest());
+    ctx.container.database.db
+      .update(backtestJobs)
+      .set({ universeScheduleJson: '{' })
+      .where(eq(backtestJobs.id, job.id))
+      .run();
+
+    const response = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${job.id}`,
+      cookies: { qp_session: cookie },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().job.id).toBe(job.id);
+    expect(response.json().universeRebalancing).toEqual([]);
   });
 
   it('runs a backtest end-to-end in a child process', { timeout: 90_000 }, async () => {

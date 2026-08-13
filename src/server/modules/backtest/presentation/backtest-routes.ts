@@ -9,6 +9,7 @@ import {
   type BacktestRequest,
 } from '../../../../shared/schemas/backtest-request.js';
 import type { ProvenancePin } from '../../../../shared/schemas/provenance-pin.js';
+import type { UniverseRebalancingEntryDto } from '../../../../shared/schemas/universe-rebalancing.js';
 import {
   DEFAULT_TRADE_SORT_DIRECTION,
   DEFAULT_TRADE_SORT_KEY,
@@ -38,7 +39,8 @@ import type { JobOrchestrator, JobEvent } from '../application/job-orchestrator.
 import type { BacktestJobRow, JobQueue } from '../application/job-queue.js';
 import type { ResultsService } from '../application/results-service.js';
 import { rebaseStoredRequest } from '../application/stored-request.js';
-import { type ResolvedUniverse } from '../application/universe-rule-resolver.js';
+import { summarizeUniverseRebalancing } from '../application/universe-rebalancing.js';
+import type { LegacyUniverseScheduleEntry, ResolvedUniverse } from '../application/universe-rule-resolver.js';
 import type {
   BacktestPreparationOrchestrator,
   BacktestUniversePreview,
@@ -162,6 +164,23 @@ function parseProvenancePin(
   } catch (error) {
     logger.warn({ event: 'backtest.provenance_pin.parse_failed', jobId, err: error }, 'provenancePinJson 파싱에 실패해 pin 없이 응답한다');
     return null;
+  }
+}
+
+function parseUniverseRebalancing(
+  universeScheduleJson: string,
+  jobId: string,
+  logger: FastifyBaseLogger,
+): UniverseRebalancingEntryDto[] {
+  try {
+    const schedule = JSON.parse(universeScheduleJson) as LegacyUniverseScheduleEntry[];
+    return summarizeUniverseRebalancing(schedule);
+  } catch (error) {
+    logger.warn(
+      { event: 'backtest.universe_schedule.parse_failed', jobId, err: error },
+      'universeScheduleJson 파싱에 실패해 종목 리밸런싱 요약 없이 응답한다',
+    );
+    return [];
   }
 }
 
@@ -640,6 +659,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       // job 이 제출 시점부터 갖고 있다 — run 완료를 기다릴 필요가 없다 (Task 12).
       // 완료 후에는 backtestRuns.provenancePinJson 에 같은 값이 복사돼 있다.
       provenancePin: parseProvenancePin(job.provenancePinJson, id, request.log),
+      universeRebalancing: parseUniverseRebalancing(job.universeScheduleJson, id, request.log),
     };
   });
 
