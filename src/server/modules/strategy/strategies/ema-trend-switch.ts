@@ -17,12 +17,12 @@ import {
   type EmaState,
 } from './shared/indicators.js';
 import {
-  newCorrelationWarmup,
-  pruneWarmupCloses,
-  recordClose,
-  scaleWarmupCloses,
-  tryBuildGroups,
-  type CorrelationWarmup,
+  correlationWarmupWarnings,
+  newCorrelationGroupingState,
+  recordCorrelationClose,
+  scaleCorrelationGrouping,
+  updateCorrelationGrouping,
+  type CorrelationGroupingState,
 } from './shared/pair-groups.js';
 import { riskQuantity } from './shared/position-sizing.js';
 import {
@@ -109,18 +109,9 @@ interface SymbolState {
   holding: HoldingState;
 }
 
-export interface EmaTrendSwitchState {
+export interface EmaTrendSwitchState extends CorrelationGroupingState {
   readonly bySymbol: Map<string, SymbolState>;
   readonly symbols: readonly string[];
-  groupOf: Map<string, string> | null;
-  /** 마지막으로 그룹을 계산한 활성 심볼 집합 */
-  groupedSymbolsKey: string | null;
-  /** 종료 진단에 쓰는 마지막 활성 심볼 집합 */
-  lastActiveSymbols: readonly string[];
-  /** 마지막 그룹 계산 시점에 correlationBars 를 채운 활성 심볼 수 */
-  groupReadyCount: number;
-  /** 상관 계산용 종가 누적 — 동적 유니버스에서는 제한된 크기로 유지한다 */
-  warmup: CorrelationWarmup | null;
 }
 
 function getSymbolState(state: EmaTrendSwitchState, symbol: string): SymbolState {
@@ -143,14 +134,6 @@ function spreadPercent(symbolState: SymbolState, slowEmaBars: number): number | 
     return null;
   }
   return ((symbolState.fast.value - symbolState.slow.value) / symbolState.slow.value) * 100;
-}
-
-function activeSymbols(
-  context: StrategyBarContext,
-  state: EmaTrendSwitchState,
-): readonly string[] {
-  if (context.activeUniverseSymbols === null) return state.symbols;
-  return state.symbols.filter((symbol) => context.activeUniverseSymbols?.has(symbol) === true);
 }
 
 export const emaTrendSwitchStrategy: TradingStrategy<
@@ -178,11 +161,7 @@ export const emaTrendSwitchStrategy: TradingStrategy<
     return {
       bySymbol: new Map(),
       symbols: [...context.symbols].sort(),
-      groupOf: null,
-      groupedSymbolsKey: null,
-      lastActiveSymbols: [],
-      groupReadyCount: 0,
-      warmup: newCorrelationWarmup(),
+      ...newCorrelationGroupingState(),
     };
   },
 
@@ -202,48 +181,19 @@ export const emaTrendSwitchStrategy: TradingStrategy<
       updateEma(symbolState.fast, bar.close, parameters.fastEmaBars);
       updateEma(symbolState.slow, bar.close, parameters.slowEmaBars);
       updateAtr(symbolState.atr, bar, parameters.atrPeriod);
-      if (state.warmup !== null) recordClose(state.warmup, symbol, bar.tsMs, bar.close);
+      recordCorrelationClose(state, symbol, bar.tsMs, bar.close);
     }
 
     // 2) 현재 활성 멤버십의 그룹 확정. 새 종목이 충분한 이력을 채우거나 멤버십이
     //    바뀌면 다시 계산한다. 짧은 이력 종목 하나는 준비된 종목을 막지 않는다.
-    const currentSymbols = activeSymbols(context, state);
-    state.lastActiveSymbols = currentSymbols;
-    if (state.warmup !== null) {
-      pruneWarmupCloses(state.warmup, parameters.correlationBars * 2 + 14);
-      const groupedSymbolsKey = currentSymbols.join('\u0000');
-      const readyCount = currentSymbols.filter(
-        (symbol) =>
-          (state.warmup?.closesBySymbol.get(symbol)?.size ?? 0) >= parameters.correlationBars,
-      ).length;
-      const membershipChanged = groupedSymbolsKey !== state.groupedSymbolsKey;
-      if (
-        state.groupOf === null ||
-        membershipChanged ||
-        context.isRebalanceBar ||
-        readyCount > state.groupReadyCount
-      ) {
-        const groupOf = tryBuildGroups(
-          state.warmup,
-          currentSymbols,
-          parameters.correlationBars,
-          parameters.correlationThreshold,
-        );
-        if (groupOf !== null) {
-          state.groupOf = groupOf;
-          state.groupedSymbolsKey = groupedSymbolsKey;
-          state.groupReadyCount = readyCount;
-          // 일정이 없는 정적 실행은 전 종목 준비 뒤 재계산할 이유가 없다.
-          if (context.tradableSymbols === null && readyCount === state.symbols.length) {
-            state.warmup = null;
-          }
-        } else if (membershipChanged) {
-          state.groupOf = null;
-          state.groupedSymbolsKey = groupedSymbolsKey;
-          state.groupReadyCount = readyCount;
-        }
-      }
-    }
+    const currentSymbols = updateCorrelationGrouping({
+      state,
+      allSymbols: state.symbols,
+      activeUniverseSymbols: context.activeUniverseSymbols,
+      isRebalanceBar: context.isRebalanceBar,
+      correlationBars: parameters.correlationBars,
+      threshold: parameters.correlationThreshold,
+    });
 
     // 3) 청산 — 보유 종목만
     for (const [symbol, bar] of sortedBars) {
@@ -341,16 +291,7 @@ export const emaTrendSwitchStrategy: TradingStrategy<
   },
 
   completionWarnings(state, parameters) {
-    if (state.groupOf !== null) return [];
-    const symbols = state.lastActiveSymbols.length > 0 ? state.lastActiveSymbols : state.symbols;
-    const maxBars = Math.max(
-      0,
-      ...symbols.map((symbol) => state.warmup?.closesBySymbol.get(symbol)?.size ?? 0),
-    );
-    return [
-      `EMA 추세 스위치: 상관 그룹 워밍업 부족 (필요 ${parameters.correlationBars}봉, `
-        + `확보 최대 ${maxBars}봉). 워밍업 중에는 신규 진입을 평가하지 않습니다.`,
-    ];
+    return correlationWarmupWarnings(state, parameters.correlationBars, 'EMA 추세 스위치');
   },
 
   // 분할 등 자본변동이 걸린 종목의 가격 상태를 같은 비율로 내린다.
@@ -370,6 +311,6 @@ export const emaTrendSwitchStrategy: TradingStrategy<
       scaleHoldingPrices(symbolState.holding, ratio);
     }
     // 동적 그룹 재계산용 워밍업에도 분할 전 종가가 쌓여 있을 수 있다
-    if (state.warmup !== null) scaleWarmupCloses(state.warmup, symbol, ratio);
+    scaleCorrelationGrouping(state, symbol, ratio);
   },
 };
