@@ -246,7 +246,7 @@ Expected:
 
 - diff check, lint, typecheck, and build exit 0;
 - 129 test files pass;
-- 1,321 tests pass (the previous 1,319 plus two regressions);
+- 1,323 tests pass (the previous 1,319 plus two pending-entry and two pair-readiness regressions);
 - the existing Vite chunk-size warning is non-blocking.
 
 - [ ] **Step 4: Push the existing feature branch**
