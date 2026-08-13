@@ -23,7 +23,7 @@
 
 **Files:**
 - Modify: `src/server/modules/strategy/strategies/shared/pair-groups.ts`
-- Verify: `tests/unit/pair-groups.test.ts`
+- Modify: `tests/unit/pair-groups.test.ts`
 - Verify: `tests/unit/swing-strategies.test.ts`
 
 **Interfaces:**
@@ -42,9 +42,76 @@ Run:
 pnpm exec vitest run tests/unit/pair-groups.test.ts tests/unit/swing-strategies.test.ts tests/unit/ema-trend-switch.test.ts tests/unit/rsi-reversion.test.ts --reporter=verbose
 ```
 
-Expected: 모든 테스트 PASS. 이 테스트들이 리팩터링의 특성화 테스트이므로 같은 계약을 반복하는 새 테스트를 추가하지 않는다.
+Expected: 모든 테스트 PASS. 기존 전략 테스트는 리팩터링의 행동 특성화 테스트로 유지한다.
 
-- [ ] **Step 2: 공용 상태 타입과 생성 함수를 작성한다**
+- [ ] **Step 2: 공용 수명주기 API의 실패 테스트를 작성한다**
+
+`tests/unit/pair-groups.test.ts`에 namespace import를 추가해 아직 없는 공용 API를 런타임에서 확인한다. API 존재만 검사하지 않고, 종가 기록부터 역상관 그룹 확정까지 실제 상태 전이를 검증한다.
+
+```ts
+it('공용 수명주기가 종가를 누적해 준비된 역상관 그룹을 확정한다', () => {
+  type TestGroupingState = {
+    groupOf: Map<string, string> | null;
+    groupedSymbols: readonly string[];
+    groupReadyCount: number;
+    warmup: ReturnType<typeof newCorrelationWarmup> | null;
+  };
+  const api = pairGroups as unknown as {
+    newCorrelationGroupingState?: () => TestGroupingState;
+    recordCorrelationClose?: (
+      state: TestGroupingState,
+      symbol: string,
+      tsMs: number,
+      close: number,
+    ) => void;
+    updateCorrelationGrouping?: (input: {
+      state: TestGroupingState;
+      allSymbols: readonly string[];
+      activeUniverseSymbols: ReadonlySet<string> | null;
+      isRebalanceBar: boolean;
+      correlationBars: number;
+      threshold: number;
+    }) => readonly string[];
+  };
+  expect(api.newCorrelationGroupingState).toBeTypeOf('function');
+  expect(api.recordCorrelationClose).toBeTypeOf('function');
+  expect(api.updateCorrelationGrouping).toBeTypeOf('function');
+  if (!api.newCorrelationGroupingState || !api.recordCorrelationClose || !api.updateCorrelationGrouping) return;
+
+  const state = api.newCorrelationGroupingState();
+  const path = oscillate(20);
+  path.forEach((close, index) => {
+    api.recordCorrelationClose!(state, 'A', T0 + index * DAY, close);
+    api.recordCorrelationClose!(state, 'B', T0 + index * DAY, 1_000_000 / close);
+  });
+  const symbols = api.updateCorrelationGrouping({
+    state,
+    allSymbols: ['A', 'B'],
+    activeUniverseSymbols: new Set(['A', 'B']),
+    isRebalanceBar: false,
+    correlationBars: 20,
+    threshold: 0.5,
+  });
+
+  expect(symbols).toEqual(['A', 'B']);
+  expect(state.groupOf?.get('A')).toBe('A');
+  expect(state.groupOf?.get('B')).toBe('A');
+});
+```
+
+테스트 안의 최소 로컬 타입은 아직 없는 production export를 참조하지 않도록 실제 필드 모양을 literal로 적는다. GREEN 뒤에는 namespace cast를 새 타입의 named import로 교체한다.
+
+- [ ] **Step 3: 새 테스트가 공용 API 부재 때문에 실패하는지 확인한다**
+
+Run:
+
+```bash
+pnpm exec vitest run tests/unit/pair-groups.test.ts --reporter=verbose
+```
+
+Expected: `newCorrelationGroupingState`가 `undefined`라서 새 테스트만 FAIL한다.
+
+- [ ] **Step 4: 공용 상태 타입과 생성 함수를 작성한다**
 
 `pair-groups.ts`에 다음 상태를 추가한다. `groupedSymbolsKey`와 `lastActiveSymbols` 대신 정렬된 `groupedSymbols` 하나만 저장한다.
 
@@ -66,7 +133,7 @@ export function newCorrelationGroupingState(): CorrelationGroupingState {
 }
 ```
 
-- [ ] **Step 3: 기록·스케일·경고 wrapper를 작성한다**
+- [ ] **Step 5: 기록·스케일·경고 wrapper를 작성한다**
 
 호출자가 매번 `warmup !== null`을 확인하지 않게 다음 함수를 추가한다.
 
@@ -109,7 +176,7 @@ export function correlationWarmupWarnings(
 
 빈 `groupedSymbols` fallback은 상태 전이 함수가 첫 봉부터 전체 심볼 또는 활성 멤버십을 저장하므로 필요 없다. 봉이 전혀 없는 실행은 엔진이 전략을 호출하지 않아 기존에도 전략 완료 경고가 생성되지 않는다.
 
-- [ ] **Step 4: 활성 멤버십 선택과 그룹 전이를 한 함수로 옮긴다**
+- [ ] **Step 6: 활성 멤버십 선택과 그룹 전이를 한 함수로 옮긴다**
 
 다음 입력 타입과 함수를 추가한다.
 
@@ -162,7 +229,11 @@ export function updateCorrelationGrouping(
 
 `sameSymbols()`는 길이와 같은 인덱스의 문자열만 비교하는 비공개 함수로 둔다. `allSymbols`와 엔진 멤버십이 이미 정렬·결정적이므로 Set 직렬화나 구분자 문자열은 만들지 않는다.
 
-- [ ] **Step 5: 공용 파일의 기존 테스트와 정적 검사를 실행한다**
+- [ ] **Step 7: 테스트 import를 production 타입으로 정리한다**
+
+GREEN 확인 뒤 namespace cast를 제거하고 `CorrelationGroupingState`, `newCorrelationGroupingState`, `recordCorrelationClose`, `updateCorrelationGrouping`을 named import한다. 테스트 본문도 optional 호출과 API 존재 단언을 제거해 실제 함수를 직접 호출한다.
+
+- [ ] **Step 8: 공용 파일의 테스트와 정적 검사를 실행한다**
 
 Run:
 
@@ -173,10 +244,10 @@ pnpm typecheck
 
 Expected: PASS. 새 API는 아직 전략에서 소비하지 않아 기존 동작이 바뀌지 않는다.
 
-- [ ] **Step 6: Task 1을 커밋한다**
+- [ ] **Step 9: Task 1을 커밋한다**
 
 ```bash
-git add src/server/modules/strategy/strategies/shared/pair-groups.ts
+git add src/server/modules/strategy/strategies/shared/pair-groups.ts tests/unit/pair-groups.test.ts docs/superpowers/plans/2026-08-13-swing-strategy-minimal-cleanup.md
 git commit -m "refactor: centralize correlation group lifecycle"
 ```
 
@@ -365,7 +436,7 @@ Run:
 pnpm test
 ```
 
-Expected: 모든 테스트 PASS. 기준선은 129 files, 1,318 tests이고 새 테스트를 추가하지 않으므로 총수도 동일해야 한다.
+Expected: 모든 테스트 PASS. 기준선 129 files, 1,318 tests에 공용 수명주기 테스트 1개가 추가되어 1,319 tests여야 한다.
 
 - [ ] **Step 4: 프로덕션 빌드를 실행한다**
 

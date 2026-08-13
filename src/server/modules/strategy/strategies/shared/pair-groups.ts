@@ -111,8 +111,28 @@ export interface CorrelationWarmup {
   readonly closesBySymbol: Map<string, Map<number, number>>;
 }
 
+/** EMA·RSI가 공유하는 상관 그룹 수명주기 상태. */
+export interface CorrelationGroupingState {
+  groupOf: Map<string, string> | null;
+  /** 마지막으로 그룹 계산·종료 진단에 사용한 활성 심볼. */
+  groupedSymbols: readonly string[];
+  /** 마지막 그룹 계산 시점에 correlationBars를 채운 활성 심볼 수. */
+  groupReadyCount: number;
+  /** 동적 유니버스에서는 제한된 크기로 유지하고, 정적 실행 완료 뒤 비운다. */
+  warmup: CorrelationWarmup | null;
+}
+
 export function newCorrelationWarmup(): CorrelationWarmup {
   return { closesBySymbol: new Map() };
+}
+
+export function newCorrelationGroupingState(): CorrelationGroupingState {
+  return {
+    groupOf: null,
+    groupedSymbols: [],
+    groupReadyCount: 0,
+    warmup: newCorrelationWarmup(),
+  };
 }
 
 export function recordClose(
@@ -127,6 +147,15 @@ export function recordClose(
     warmup.closesBySymbol.set(symbol, closes);
   }
   closes.set(tsMs, close);
+}
+
+export function recordCorrelationClose(
+  state: CorrelationGroupingState,
+  symbol: string,
+  tsMs: number,
+  close: number,
+): void {
+  if (state.warmup !== null) recordClose(state.warmup, symbol, tsMs, close);
 }
 
 /**
@@ -147,6 +176,14 @@ export function scaleWarmupCloses(
   const closes = warmup.closesBySymbol.get(symbol);
   if (!closes) return;
   for (const [tsMs, close] of closes) closes.set(tsMs, close / ratio);
+}
+
+export function scaleCorrelationGrouping(
+  state: CorrelationGroupingState,
+  symbol: string,
+  ratio: number,
+): void {
+  if (state.warmup !== null) scaleWarmupCloses(state.warmup, symbol, ratio);
 }
 
 /** 동적 유니버스 재계산용 종가를 종목별 최근 N개로 제한한다. */
@@ -198,4 +235,77 @@ export function tryBuildGroups(
     );
     return correlation !== null && correlation <= -threshold;
   });
+}
+
+export interface UpdateCorrelationGroupingInput {
+  readonly state: CorrelationGroupingState;
+  /** initialize 시 정렬한 전체 실행 심볼. */
+  readonly allSymbols: readonly string[];
+  readonly activeUniverseSymbols: ReadonlySet<string> | null;
+  readonly isRebalanceBar: boolean;
+  readonly correlationBars: number;
+  readonly threshold: number;
+}
+
+/** 현재 활성 멤버십을 반환하고 필요할 때 상관 그룹을 갱신한다. */
+export function updateCorrelationGrouping(
+  input: UpdateCorrelationGroupingInput,
+): readonly string[] {
+  const membership = input.activeUniverseSymbols;
+  const symbols = membership === null
+    ? input.allSymbols
+    : input.allSymbols.filter((symbol) => membership.has(symbol));
+  const membershipChanged = !sameSymbols(symbols, input.state.groupedSymbols);
+  input.state.groupedSymbols = symbols;
+
+  const warmup = input.state.warmup;
+  if (warmup === null) return symbols;
+
+  pruneWarmupCloses(warmup, input.correlationBars * 2 + 14);
+  const readyCount = symbols.filter(
+    (symbol) => (warmup.closesBySymbol.get(symbol)?.size ?? 0) >= input.correlationBars,
+  ).length;
+  if (
+    input.state.groupOf !== null &&
+    !membershipChanged &&
+    !input.isRebalanceBar &&
+    readyCount <= input.state.groupReadyCount
+  ) {
+    return symbols;
+  }
+
+  const groupOf = tryBuildGroups(warmup, symbols, input.correlationBars, input.threshold);
+  if (groupOf !== null) {
+    input.state.groupOf = groupOf;
+    input.state.groupReadyCount = readyCount;
+    if (membership === null && readyCount === input.allSymbols.length) {
+      input.state.warmup = null;
+    }
+  } else if (membershipChanged) {
+    input.state.groupOf = null;
+    input.state.groupReadyCount = readyCount;
+  }
+  return symbols;
+}
+
+export function correlationWarmupWarnings(
+  state: CorrelationGroupingState,
+  correlationBars: number,
+  strategyName: string,
+): readonly string[] {
+  if (state.groupOf !== null) return [];
+  const maxBars = Math.max(
+    0,
+    ...state.groupedSymbols.map(
+      (symbol) => state.warmup?.closesBySymbol.get(symbol)?.size ?? 0,
+    ),
+  );
+  return [
+    `${strategyName}: 상관 그룹 워밍업 부족 (필요 ${correlationBars}봉, `
+      + `확보 최대 ${maxBars}봉). 워밍업 중에는 신규 진입을 평가하지 않습니다.`,
+  ];
+}
+
+function sameSymbols(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((symbol, index) => symbol === right[index]);
 }

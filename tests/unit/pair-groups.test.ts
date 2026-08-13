@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildCorrelationGroups,
+  newCorrelationGroupingState,
   newCorrelationWarmup,
   pearsonCorrelation,
   pruneWarmupCloses,
   recordClose,
+  recordCorrelationClose,
   scaleWarmupCloses,
   tryBuildGroups,
+  updateCorrelationGrouping,
 } from '../../src/server/modules/strategy/strategies/shared/pair-groups.js';
 
 /** 기하 경로 — B = 1e6/A 면 로그수익률이 정확히 반대(상관 −1)다 */
@@ -181,6 +184,29 @@ describe('tryBuildGroups', () => {
       if (index < 19) expect(groups).toBeNull();
       else expect(groups?.get('LEV')).toBe(groups?.get('INV'));
     });
+  });
+});
+
+describe('CorrelationGroupingState', () => {
+  it('공용 수명주기가 종가를 누적해 준비된 역상관 그룹을 확정한다', () => {
+    const state = newCorrelationGroupingState();
+    const path = oscillate(20);
+    path.forEach((close, index) => {
+      recordCorrelationClose(state, 'A', T0 + index * DAY, close);
+      recordCorrelationClose(state, 'B', T0 + index * DAY, 1_000_000 / close);
+    });
+    const symbols = updateCorrelationGrouping({
+      state,
+      allSymbols: ['A', 'B'],
+      activeUniverseSymbols: new Set(['A', 'B']),
+      isRebalanceBar: false,
+      correlationBars: 20,
+      threshold: 0.5,
+    });
+
+    expect(symbols).toEqual(['A', 'B']);
+    expect(state.groupOf?.get('A')).toBe('A');
+    expect(state.groupOf?.get('B')).toBe('A');
   });
 });
 
