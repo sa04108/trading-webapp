@@ -118,6 +118,11 @@ export interface CorrelationGroupingState {
   groupedSymbols: readonly string[];
   /** 마지막 그룹 계산 시점에 correlationBars를 채운 활성 심볼 수. */
   groupReadyCount: number;
+  /**
+   * 마지막 그룹 계산에서 공통 봉이 부족했던 활성 pair들. membership 변경 또는 다음
+   * 계산 때 교체하며, 이 중 하나가 준비되면 리밸런싱 없이 그룹을 다시 계산한다.
+   */
+  unmeasurablePairs: Map<string, Set<string>>;
   /** 동적 유니버스에서는 제한된 크기로 유지하고, 정적 실행 완료 뒤 비운다. */
   warmup: CorrelationWarmup | null;
 }
@@ -131,6 +136,7 @@ export function newCorrelationGroupingState(): CorrelationGroupingState {
     groupOf: null,
     groupedSymbols: [],
     groupReadyCount: 0,
+    unmeasurablePairs: new Map(),
     warmup: newCorrelationWarmup(),
   };
 }
@@ -198,6 +204,70 @@ export function pruneWarmupCloses(
     const oldest = [...closes.keys()].sort((a, b) => a - b).slice(0, excess);
     for (const tsMs of oldest) closes.delete(tsMs);
   }
+}
+
+function pairHasEnoughCommonTimestamps(
+  left: ReadonlyMap<number, number> | undefined,
+  right: ReadonlyMap<number, number> | undefined,
+  correlationBars: number,
+): boolean {
+  if (correlationBars <= 0) return true;
+  if (left === undefined || right === undefined || Math.min(left.size, right.size) < correlationBars) {
+    return false;
+  }
+  const [smaller, larger] = left.size <= right.size ? [left, right] : [right, left];
+  let commonCount = 0;
+  for (const tsMs of smaller.keys()) {
+    if (!larger.has(tsMs)) continue;
+    commonCount += 1;
+    if (commonCount >= correlationBars) return true;
+  }
+  return false;
+}
+
+function unmeasurablePairs(
+  warmup: CorrelationWarmup,
+  symbols: readonly string[],
+  correlationBars: number,
+): Map<string, Set<string>> {
+  const pairs = new Map<string, Set<string>>();
+  for (let leftIndex = 0; leftIndex < symbols.length; leftIndex += 1) {
+    const leftSymbol = symbols[leftIndex] as string;
+    const left = warmup.closesBySymbol.get(leftSymbol);
+    for (let rightIndex = leftIndex + 1; rightIndex < symbols.length; rightIndex += 1) {
+      const rightSymbol = symbols[rightIndex] as string;
+      if (pairHasEnoughCommonTimestamps(
+        left,
+        warmup.closesBySymbol.get(rightSymbol),
+        correlationBars,
+      )) continue;
+      let partners = pairs.get(leftSymbol);
+      if (!partners) {
+        partners = new Set();
+        pairs.set(leftSymbol, partners);
+      }
+      partners.add(rightSymbol);
+    }
+  }
+  return pairs;
+}
+
+function hasNewlyMeasurablePair(
+  warmup: CorrelationWarmup,
+  pairs: ReadonlyMap<string, ReadonlySet<string>>,
+  correlationBars: number,
+): boolean {
+  for (const [leftSymbol, rightSymbols] of pairs) {
+    const left = warmup.closesBySymbol.get(leftSymbol);
+    for (const rightSymbol of rightSymbols) {
+      if (pairHasEnoughCommonTimestamps(
+        left,
+        warmup.closesBySymbol.get(rightSymbol),
+        correlationBars,
+      )) return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -269,7 +339,8 @@ export function updateCorrelationGrouping(
     input.state.groupOf !== null &&
     !membershipChanged &&
     !input.isRebalanceBar &&
-    readyCount <= input.state.groupReadyCount
+    readyCount <= input.state.groupReadyCount &&
+    !hasNewlyMeasurablePair(warmup, input.state.unmeasurablePairs, input.correlationBars)
   ) {
     return symbols;
   }
@@ -278,12 +349,18 @@ export function updateCorrelationGrouping(
   if (groupOf !== null) {
     input.state.groupOf = groupOf;
     input.state.groupReadyCount = readyCount;
-    if (membership === null && readyCount === input.allSymbols.length) {
+    input.state.unmeasurablePairs = unmeasurablePairs(warmup, symbols, input.correlationBars);
+    if (
+      membership === null &&
+      readyCount === input.allSymbols.length &&
+      input.state.unmeasurablePairs.size === 0
+    ) {
       input.state.warmup = null;
     }
   } else if (membershipChanged) {
     input.state.groupOf = null;
     input.state.groupReadyCount = readyCount;
+    input.state.unmeasurablePairs = new Map();
   }
   return symbols;
 }

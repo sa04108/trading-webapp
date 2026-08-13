@@ -208,6 +208,66 @@ describe('CorrelationGroupingState', () => {
     expect(state.groupOf?.get('A')).toBe('A');
     expect(state.groupOf?.get('B')).toBe('A');
   });
+
+  it('개별 준비 뒤 공통 봉이 차면 리밸런싱 없이 역상관 pair를 다시 묶는다', () => {
+    const state = newCorrelationGroupingState();
+    const initialA = oscillate(20);
+    const initialB = oscillate(20);
+    initialA.forEach((close, index) => {
+      recordCorrelationClose(state, 'A', T0 + index * DAY, close);
+      recordCorrelationClose(state, 'B', T0 + (100 + index) * DAY, initialB[index] as number);
+    });
+    const input = {
+      state,
+      allSymbols: ['A', 'B'],
+      activeUniverseSymbols: new Set(['A', 'B']),
+      isRebalanceBar: false,
+      correlationBars: 20,
+      threshold: 0.5,
+    };
+
+    updateCorrelationGrouping(input);
+    expect(state.groupOf?.get('A')).toBe('A');
+    expect(state.groupOf?.get('B')).toBe('B');
+
+    oscillate(20).forEach((close, index) => {
+      recordCorrelationClose(state, 'A', T0 + (200 + index) * DAY, close);
+      recordCorrelationClose(state, 'B', T0 + (200 + index) * DAY, 1_000_000 / close);
+    });
+
+    updateCorrelationGrouping(input);
+    expect(state.groupOf?.get('A')).toBe('A');
+    expect(state.groupOf?.get('B')).toBe('A');
+  });
+
+  it('정적 유니버스는 모든 활성 pair가 측정 가능해진 뒤에만 워밍업을 끝낸다', () => {
+    const state = newCorrelationGroupingState();
+    oscillate(20).forEach((close, index) => {
+      recordCorrelationClose(state, 'A', T0 + index * DAY, close);
+      recordCorrelationClose(state, 'B', T0 + (100 + index) * DAY, 1_000_000 / close);
+    });
+    const input = {
+      state,
+      allSymbols: ['A', 'B'],
+      activeUniverseSymbols: null,
+      isRebalanceBar: false,
+      correlationBars: 20,
+      threshold: 0.5,
+    };
+
+    updateCorrelationGrouping(input);
+    expect(state.warmup).not.toBeNull();
+
+    oscillate(20).forEach((close, index) => {
+      recordCorrelationClose(state, 'A', T0 + (200 + index) * DAY, close);
+      recordCorrelationClose(state, 'B', T0 + (200 + index) * DAY, 1_000_000 / close);
+    });
+
+    updateCorrelationGrouping(input);
+    expect(state.groupOf?.get('A')).toBe('A');
+    expect(state.groupOf?.get('B')).toBe('A');
+    expect(state.warmup).toBeNull();
+  });
 });
 
 describe('scaleWarmupCloses — 분할이 상관 계산을 오염시키지 않게 한다', () => {
