@@ -86,14 +86,14 @@ import {
   type BacktestMetrics,
   type JobSummary,
   type RunMetadata,
-  type SeriesResponse,
 } from './types';
 import { costSummary } from './cost-summary';
 import { costProfileLabel, slippageProfileLabel } from './profile-labels';
 import { groupWarnings } from './warning-groups';
-import { provenanceDiagnostics, selectionMethodLabel, universeSourceLabel } from './universe-provenance';
-import { CRITERION_LABEL } from './universe-summary';
+import { selectionMethodLabel, universeSourceLabel } from './universe-provenance';
+import { UniverseRebalancingSection } from './universe-rebalancing-section';
 import type { ProvenancePin } from '../../../shared/schemas/provenance-pin.js';
+import type { UniverseRebalancingEntryDto } from '../../../shared/schemas/universe-rebalancing.js';
 
 const RESULT_PAGE_SIZE = 10;
 
@@ -410,74 +410,6 @@ function TradesSection({
   );
 }
 
-function SymbolPerformanceSection({
-  rows,
-  nameOf,
-}: {
-  rows: SeriesResponse['symbols'];
-  nameOf: (symbol: string) => string | null;
-}) {
-  const [page, setPage] = useState(0);
-  const [pageSizeText, setPageSizeText] = useState(String(RESULT_PAGE_SIZE));
-  const pageSize = parsePageSize(pageSizeText, RESULT_PAGE_SIZE);
-  const { pageCount, currentPage, from, to } = pageWindow(rows.length, pageSize, page);
-  const visibleRows = rows.slice(from, to);
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">종목별 성과</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="mb-2 flex justify-end">
-          <PageSizeInput
-            value={pageSizeText}
-            label="종목별 성과 페이지당 표시 수"
-            unit="종목"
-            onChange={(nextValue) => {
-              setPageSizeText(nextValue);
-              setPage(0);
-            }}
-          />
-        </div>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>종목</TableHead>
-              <TableHead className="text-right">거래</TableHead>
-              <TableHead className="text-right">순손익</TableHead>
-              <TableHead className="text-right">승률</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {visibleRows.map((row) => (
-              <TableRow key={row.symbol}>
-                <TableCell>
-                  <SymbolLabel symbol={row.symbol} name={nameOf(row.symbol)} />
-                </TableCell>
-                <TableCell className="text-right">{row.tradeCount}</TableCell>
-                <TableCell className={cn('text-right tabular-nums', pnlClass(row.netPnl))}>
-                  {formatSignedKrw(row.netPnl)}
-                </TableCell>
-                <TableCell className="text-right">
-                  {row.winRate === null ? '-' : `${row.winRate.toFixed(1)}%`}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-        <Pagination
-          className="mt-3"
-          ariaLabel="종목별 성과 페이지 이동"
-          currentPage={currentPage}
-          pageCount={pageCount}
-          onPageChange={setPage}
-        />
-      </CardContent>
-    </Card>
-  );
-}
-
 function WarningsSection({ warnings }: { warnings: string[] }) {
   const [grouped, setGrouped] = useState(true);
   const [page, setPage] = useState(0);
@@ -530,95 +462,20 @@ function WarningsSection({ warnings }: { warnings: string[] }) {
   );
 }
 
-/**
- * 리밸런스마다 단계별로 몇 종목이 통과했는지 보여준다 — `ORDERED_UNIVERSE_PIPELINE`
- * pin(Task 11)에만 있는 값이라, 옛 pin·pin 없음은 `provenanceDiagnostics` 가 빈
- * 배열을 주고 이 섹션 자체가 사라진다. 리밸런스가 잦은 실행은 진단이 수백 건이라
- * `WarningsSection` 과 같은 페이지네이션을 쓴다.
- */
-function UniverseDiagnosticsSection({ provenancePin }: { provenancePin: ProvenancePin | null }) {
-  const [page, setPage] = useState(0);
-  const [pageSizeText, setPageSizeText] = useState('20');
-  const pageSize = parsePageSize(pageSizeText, 20);
-  const diagnostics = provenanceDiagnostics(provenancePin);
-  const { pageCount, currentPage, from, to } = pageWindow(diagnostics.length, pageSize, page);
-  const visible = diagnostics.slice(from, to);
-
-  if (diagnostics.length === 0) return null;
-
-  return (
-    <Card className="lg:col-span-2">
-      <CardHeader className="flex flex-row items-center justify-between gap-2">
-        <CardTitle className="text-base">유니버스 단계 진단</CardTitle>
-        <PageSizeInput
-          value={pageSizeText}
-          label="유니버스 단계 진단 페이지당 표시 수"
-          unit="건"
-          onChange={(nextValue) => {
-            setPageSizeText(nextValue);
-            setPage(0);
-          }}
-        />
-      </CardHeader>
-      <CardContent>
-        <div className="overflow-x-auto">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>리밸런스일</TableHead>
-                <TableHead>기준일</TableHead>
-                <TableHead>단계별 통과(통과/후보)</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {visible.map((diagnostic) => (
-                <TableRow key={diagnostic.rebalanceDate}>
-                  <TableCell className="whitespace-nowrap text-xs">
-                    {diagnostic.rebalanceDate}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-xs">
-                    {diagnostic.effectiveDate}
-                    {diagnostic.effectiveDate !== diagnostic.rebalanceDate ? (
-                      <span className="text-muted-foreground"> (휴장 조정)</span>
-                    ) : null}
-                  </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
-                    {diagnostic.stages
-                      .map(
-                        (stage) =>
-                          `${CRITERION_LABEL[stage.criterion]} ${stage.selectedCount}/${stage.eligibleCount}`,
-                      )
-                      .join(' → ')}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-        <Pagination
-          className="mt-3"
-          ariaLabel="유니버스 단계 진단 페이지 이동"
-          currentPage={currentPage}
-          pageCount={pageCount}
-          onPageChange={setPage}
-        />
-      </CardContent>
-    </Card>
-  );
-}
-
 function RunMetadataCard({
   run,
   job,
   strategyName,
   timeframe,
   provenancePin,
+  universeRebalancing,
 }: {
   run: RunMetadata;
   job: JobSummary;
   strategyName: string | undefined;
   timeframe: string | null;
   provenancePin: ProvenancePin | null;
+  universeRebalancing: readonly UniverseRebalancingEntryDto[];
 }) {
   const warnings = run.warningsJson ? (JSON.parse(run.warningsJson) as string[]) : [];
   // 라벨·설명은 서버 스키마에서 읽는다 (위저드와 같은 캐시 키).
@@ -725,7 +582,7 @@ function RunMetadataCard({
         </CardContent>
       </Card>
       {warnings.length > 0 ? <WarningsSection warnings={warnings} /> : null}
-      <UniverseDiagnosticsSection provenancePin={provenancePin} />
+      <UniverseRebalancingSection entries={universeRebalancing} />
     </div>
   );
 }
@@ -736,22 +593,16 @@ export function BacktestDetailPage() {
   const queryClient = useQueryClient();
   const [deleteOpen, setDeleteOpen] = useState(false);
 
-  const { job, run, metrics, provenancePin, isLoading, isError, error } = useBacktestLive(id);
+  const { job, run, metrics, provenancePin, universeRebalancing, isLoading, isError, error } = useBacktestLive(id);
   const completed = job?.status === 'COMPLETED';
   const { data: series } = useBacktestSeries(id, completed === true);
 
-  /**
-   * 실행된 종목 목록 — `job.request` 에는 더 이상 종목 목록이 없다(스펙 2026-08-05,
-   * `universeRule` 만 있다). 실제 구성은 서버가 제출 시점에 재구성해 잡에 pin 하지만
-   * 이 화면은 그 pin 원문을 내려받지 않으므로, 대신 이미 조회하는 `series.symbols`
-   * (실거래가 있었던 종목)로 표시용 목록을 삼는다 — 거래가 0건인 종목은 빠진다.
-   * 개념을 온전히 다시 세우는 작업은 T6 로 미룬다.
-   */
+  // `series.symbols` 는 거래 내역에 종목 이름을 붙일 목록이다 — 거래가 0건인 종목은 빠진다.
   const resolvedSymbols = useMemo(
     () => series?.symbols.map((s) => s.symbol) ?? [],
     [series],
   );
-  // 전 종목을 한 번에 조회한다 — 거래 내역과 종목별 성과가 같은 Map 을 쓴다.
+  // 거래 내역에 이름을 붙이기 위해 전 종목을 한 번에 조회한다.
   const stockNames = useStockNames(resolvedSymbols);
   const nameOf = (symbol: string): string | null => stockNames.get(symbol)?.name ?? null;
 
@@ -959,9 +810,6 @@ export function BacktestDetailPage() {
               />
               <MonthlyReturnsChart monthly={series.monthly} />
 
-              {series.symbols.length > 1 ? (
-                <SymbolPerformanceSection rows={series.symbols} nameOf={nameOf} />
-              ) : null}
             </div>
           ) : (
             <Skeleton className="h-60 w-full" />
@@ -985,6 +833,7 @@ export function BacktestDetailPage() {
             strategyName={strategyName}
             timeframe={resolvedTimeframe}
             provenancePin={provenancePin}
+            universeRebalancing={universeRebalancing}
           />
         </>
       ) : null}

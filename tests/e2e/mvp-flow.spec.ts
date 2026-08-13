@@ -245,6 +245,12 @@ test('full MVP flow', async ({ page }) => {
   await expect(page.getByText('월별 수익률')).toBeVisible();
   await expect(page.getByText('거래 내역', { exact: true })).toBeVisible();
   await expect(page.getByText('재현 정보')).toBeVisible();
+  await expect(page.getByText('종목 리밸런싱', { exact: true })).toBeVisible();
+  await expect(page.getByText('최초 구성 1종목', { exact: true })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: '변동 종목 수' })).toBeVisible();
+  await expect(page.getByText('유니버스 단계 진단', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('columnheader', { name: '단계별 통과(통과/후보)' })).toHaveCount(0);
+  await expect(page.getByText('종목별 성과', { exact: true })).toHaveCount(0);
   // 재현 정보의 긴 값은 잘리지 않고 접힌다 — 해시가 「a1b2…」로 잘리면 다른 실행과 같은지
   // 비교할 수 없다. 390px 에서 가로 스크롤이 생기지 않는 것은 아래 mobile 전용 테스트가 본다.
   const feeModelValue = page

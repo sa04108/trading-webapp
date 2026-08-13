@@ -2,10 +2,7 @@
 // import 해 tsconfig.server.json 의 NodeNext 프로그램에 편입되는데, 거기서는 확장자 없는
 // 상대 import 가 에러다 (prefill.ts·wizard-steps.ts 와 같은 이유). 이 모듈은 DOM 을
 // 쓰지 않고 별칭(@/) import 도 쓰지 않는다.
-import type {
-  ProvenancePin,
-  RebalanceDiagnosticSnapshot,
-} from '../../../shared/schemas/provenance-pin.js';
+import type { ProvenancePin } from '../../../shared/schemas/provenance-pin.js';
 
 /**
  * 백테스트 결과 화면에 쓰는 유니버스 출처 문구 (Task 14, REVIEW §9.3).
@@ -45,18 +42,4 @@ export function selectionMethodLabel(method: string | null): string {
   if (method === 'TOP_MARKET_CAP_N') return '시가총액 상위 N종목';
   if (method === 'MANUAL_FROM_KRX_SNAPSHOT') return '수동 선택';
   return '-';
-}
-
-/**
- * 리밸런스별 단계 진단 — `ORDERED_UNIVERSE_PIPELINE` pin 에만 있다.
- *
- * 옛 pin·pin 없음은 빈 배열을 답한다. 결과 상세 화면이 리밸런스마다 어느 단계에서
- * 몇 종목이 걸러졌는지, 기준일(`effectiveDate`)이 리밸런스일과 달랐는지를 그대로
- * 보여주려면 이 값을 저장·조회 과정에서 잃지 않아야 한다.
- */
-export function provenanceDiagnostics(
-  pin: ProvenancePin | null,
-): readonly RebalanceDiagnosticSnapshot[] {
-  if (pin === null) return [];
-  return 'diagnostics' in pin ? pin.diagnostics : [];
 }
