@@ -26,15 +26,17 @@
 - `src/server/modules/strategy/strategies/ema-trend-switch.ts`: clear stale entry reservations for symbols outside active membership.
 - `src/server/modules/strategy/strategies/rsi-reversion.ts`: apply the same strategy-local state transition.
 
-### Task 1: Reproduce the canceled-reservation deadlock
+### Task 1: Reproduce and fix the canceled-reservation deadlock
 
 **Files:**
 - Modify: `tests/unit/swing-strategies.test.ts`
 - Modify: `tests/unit/rsi-reversion.test.ts`
+- Modify: `src/server/modules/strategy/strategies/ema-trend-switch.ts`
+- Modify: `src/server/modules/strategy/strategies/rsi-reversion.ts`
 
 **Interfaces:**
-- Consumes: `runBacktest(strategy, input)`, each strategy's existing `FAST_PARAMS`, `Candle`, and universe schedule input.
-- Produces: two engine-level regression tests whose expected observable result is a filled `BBB` BUY after `AAA` is removed and reactivated without a bar.
+- Consumes: `runBacktest(strategy, input)`, each strategy's existing `FAST_PARAMS`, `Candle`, universe schedule input, `context.activeUniverseSymbols: ReadonlySet<string> | null`, each strategy state's `bySymbol` map, and `HoldingState.pendingEntry`.
+- Produces: two engine-level regression tests and no new public API; only a corrected state transition inside each `onBars()` implementation.
 
 - [ ] **Step 1: Add the failing EMA regression test**
 
@@ -126,19 +128,7 @@ pnpm exec vitest run tests/unit/swing-strategies.test.ts tests/unit/rsi-reversio
 
 Expected: exactly the two new tests fail because their BUY symbol arrays are `[]` instead of `['BBB']`; all pre-existing tests in both files pass.
 
-### Task 2: Clear reservations when membership ends
-
-**Files:**
-- Modify: `src/server/modules/strategy/strategies/ema-trend-switch.ts`
-- Modify: `src/server/modules/strategy/strategies/rsi-reversion.ts`
-- Test: `tests/unit/swing-strategies.test.ts`
-- Test: `tests/unit/rsi-reversion.test.ts`
-
-**Interfaces:**
-- Consumes: `context.activeUniverseSymbols: ReadonlySet<string> | null`, each strategy state's `bySymbol` map, and `HoldingState.pendingEntry`.
-- Produces: no new public API; only a corrected state transition inside each `onBars()` implementation.
-
-- [ ] **Step 1: Implement the minimal EMA state cleanup**
+- [ ] **Step 4: Implement the minimal EMA state cleanup**
 
 Immediately after `updateCorrelationGrouping(...)` returns in `ema-trend-switch.ts`, add:
 
@@ -154,7 +144,7 @@ if (context.activeUniverseSymbols !== null) {
 
 Do not call `getSymbolState()` here: symbols with no prior bars have no stale reservation and should not allocate indicator state.
 
-- [ ] **Step 2: Implement the minimal RSI state cleanup**
+- [ ] **Step 5: Implement the minimal RSI state cleanup**
 
 Immediately after `updateCorrelationGrouping(...)` returns in `rsi-reversion.ts`, add the same membership-scoped loop:
 
@@ -170,7 +160,7 @@ if (context.activeUniverseSymbols !== null) {
 
 Keep the existing `tradableSymbols` check in the bar loop. It handles the different case where a bar is present but a BUY cannot be issued that day.
 
-- [ ] **Step 3: Run the focused tests and verify GREEN**
+- [ ] **Step 6: Run the focused tests and verify GREEN**
 
 Run:
 
@@ -180,7 +170,7 @@ pnpm exec vitest run tests/unit/swing-strategies.test.ts tests/unit/ema-trend-sw
 
 Expected: all tests pass, including both new `편출로 취소된 진입 예약...` cases and the existing suspended-active-member ownership cases.
 
-- [ ] **Step 4: Run static checks**
+- [ ] **Step 7: Run static checks**
 
 Run:
 
@@ -192,7 +182,7 @@ pnpm typecheck
 
 Expected: all commands exit 0 with no lint or type errors.
 
-- [ ] **Step 5: Commit the bug fix**
+- [ ] **Step 8: Commit the bug fix**
 
 ```bash
 git add \
@@ -203,7 +193,7 @@ git add \
 git commit -m "fix: clear canceled swing entry reservations"
 ```
 
-### Task 3: Verify and publish the review fix
+### Task 2: Verify and publish the review fix
 
 **Files:**
 - No additional source files.
