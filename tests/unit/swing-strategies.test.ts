@@ -116,6 +116,38 @@ describe('그룹 배타성', () => {
     expect([...buySymbols]).toEqual(['AAA']);
   });
 
+  it('편출로 취소된 진입 예약이 봉 없는 재편입 뒤 같은 그룹 종목을 막지 않는다', () => {
+    const aaa = levPath(20, 15);
+    const bbb = [
+      ...aaa.map((close) => 1_000_000 / close),
+      900,
+      2_000,
+      2_000,
+    ];
+    const candles = [
+      ...toCandles(new Map([['AAA', aaa]]), '1d', DAY),
+      ...toCandles(new Map([['BBB', bbb]]), '1d', DAY),
+    ].sort((left, right) => left.tsMs - right.tsMs || left.symbol.localeCompare(right.symbol));
+
+    const result = runBacktest(emaTrendSwitchStrategy, {
+      candles,
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: FAST_PARAMS,
+      randomSeed: 1,
+      maxPositions: 5,
+      universeSchedule: [
+        { fromTsMs: START, symbols: ['AAA', 'BBB'] },
+        { fromTsMs: START + 20 * DAY, symbols: ['BBB'] },
+        { fromTsMs: START + 21 * DAY, symbols: ['AAA', 'BBB'] },
+      ],
+    });
+
+    expect(result.fills.filter((fill) => fill.side === 'BUY').map((fill) => fill.symbol)).toEqual([
+      'BBB',
+    ]);
+  });
+
   it('한쪽이 5봉 늦게 상장해도(들쭉날쭉 커버리지) 역상관 짝을 동시에 사지 않는다', () => {
     // 종가를 배열 인덱스로 누적하면 BBB 의 첫 종가가 AAA 의 6번째 봉과 대응해
     // 5봉(홀수) 밀린다 — 진동 구간의 완전 역상관이 +1 로 뒤집혀 그룹이 병합되지

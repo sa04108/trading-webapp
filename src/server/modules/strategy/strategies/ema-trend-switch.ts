@@ -194,6 +194,13 @@ export const emaTrendSwitchStrategy: TradingStrategy<
       correlationBars: parameters.correlationBars,
       threshold: parameters.correlationThreshold,
     });
+    if (context.activeUniverseSymbols !== null) {
+      for (const [symbol, symbolState] of state.bySymbol) {
+        if (!context.activeUniverseSymbols.has(symbol)) {
+          symbolState.holding.pendingEntry = false;
+        }
+      }
+    }
 
     // 3) 청산 — 보유 종목만
     for (const [symbol, bar] of sortedBars) {

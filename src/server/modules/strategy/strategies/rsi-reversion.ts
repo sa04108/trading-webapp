@@ -164,6 +164,13 @@ export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiRe
       correlationBars: parameters.correlationBars,
       threshold: parameters.correlationThreshold,
     });
+    if (context.activeUniverseSymbols !== null) {
+      for (const [symbol, symbolState] of state.bySymbol) {
+        if (!context.activeUniverseSymbols.has(symbol)) {
+          symbolState.holding.pendingEntry = false;
+        }
+      }
+    }
 
     // 3) 청산
     for (const [symbol, bar] of sortedBars) {

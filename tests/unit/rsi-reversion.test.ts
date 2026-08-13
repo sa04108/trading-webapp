@@ -102,6 +102,38 @@ describe('실행 동작', () => {
     expect(result.warnings.join('\n')).not.toContain('상관 그룹 워밍업 부족');
   });
 
+  it('편출로 취소된 진입 예약이 봉 없는 재편입 뒤 같은 그룹 종목을 막지 않는다', () => {
+    const rising = Array.from({ length: 20 }, (_, index) =>
+      index < 15
+        ? 1_000 + (index % 2 === 0 ? 10 : -10)
+        : 1_000 + (index - 15 + 1) * 15,
+    );
+    const aaa = rising.map((close) => 1_000_000 / close);
+    const bbb = [...rising, 1_100, 500, 500];
+    const candles = [
+      ...aaa.map((close, index) => candle('AAA', index, close)),
+      ...bbb.map((close, index) => candle('BBB', index, close)),
+    ].sort((left, right) => left.tsMs - right.tsMs || left.symbol.localeCompare(right.symbol));
+
+    const result = runBacktest(rsiReversionStrategy, {
+      candles,
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: FAST_PARAMS,
+      randomSeed: 1,
+      maxPositions: 5,
+      universeSchedule: [
+        { fromTsMs: START, symbols: ['AAA', 'BBB'] },
+        { fromTsMs: START + 20 * DAY, symbols: ['BBB'] },
+        { fromTsMs: START + 21 * DAY, symbols: ['AAA', 'BBB'] },
+      ],
+    });
+
+    expect(result.fills.filter((fill) => fill.side === 'BUY').map((fill) => fill.symbol)).toEqual([
+      'BBB',
+    ]);
+  });
+
   it('maxHoldBars 를 지정하면 그 봉 수 뒤 TIME 으로 판다', () => {
     // 하락이 계속되어 RSI 회복이 없는 경로 — 시간 상한만이 청산 경로다
     const candles: Candle[] = [];
