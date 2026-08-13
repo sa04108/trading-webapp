@@ -150,6 +150,7 @@ describe('2단계 리밸런스 실행', () => {
       fundamentals: () => null,
       corporateActions: () => [],
       tradableSymbols: new Set(['AAA']),
+      activeUniverseSymbols: new Set(['AAA']),
       selectionMetric: () => null,
     };
   }

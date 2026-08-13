@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { runBacktest } from '../../src/server/modules/backtest/domain/engine.js';
 import type { ExecutionProfile, Fill } from '../../src/server/modules/backtest/domain/types.js';
 import type { Candle, Timeframe } from '../../src/server/modules/market-data/domain/candle.js';
-import { emaTrendSwitchStrategy } from '../../src/server/modules/strategy/strategies/ema-trend-switch.js';
+import {
+  emaTrendSwitchStrategy,
+  type EmaTrendSwitchState,
+} from '../../src/server/modules/strategy/strategies/ema-trend-switch.js';
 
 const DAY = 86_400_000;
 const START = Date.UTC(2025, 0, 2);
@@ -113,6 +116,38 @@ describe('그룹 배타성', () => {
     expect([...buySymbols]).toEqual(['AAA']);
   });
 
+  it('편출로 취소된 진입 예약이 봉 없는 재편입 뒤 같은 그룹 종목을 막지 않는다', () => {
+    const aaa = levPath(20, 15);
+    const bbb = [
+      ...aaa.map((close) => 1_000_000 / close),
+      900,
+      2_000,
+      2_000,
+    ];
+    const candles = [
+      ...toCandles(new Map([['AAA', aaa]]), '1d', DAY),
+      ...toCandles(new Map([['BBB', bbb]]), '1d', DAY),
+    ].sort((left, right) => left.tsMs - right.tsMs || left.symbol.localeCompare(right.symbol));
+
+    const result = runBacktest(emaTrendSwitchStrategy, {
+      candles,
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: FAST_PARAMS,
+      randomSeed: 1,
+      maxPositions: 5,
+      universeSchedule: [
+        { fromTsMs: START, symbols: ['AAA', 'BBB'] },
+        { fromTsMs: START + 20 * DAY, symbols: ['BBB'] },
+        { fromTsMs: START + 21 * DAY, symbols: ['AAA', 'BBB'] },
+      ],
+    });
+
+    expect(result.fills.filter((fill) => fill.side === 'BUY').map((fill) => fill.symbol)).toEqual([
+      'BBB',
+    ]);
+  });
+
   it('한쪽이 5봉 늦게 상장해도(들쭉날쭉 커버리지) 역상관 짝을 동시에 사지 않는다', () => {
     // 종가를 배열 인덱스로 누적하면 BBB 의 첫 종가가 AAA 의 6번째 봉과 대응해
     // 5봉(홀수) 밀린다 — 진동 구간의 완전 역상관이 +1 로 뒤집혀 그룹이 병합되지
@@ -151,5 +186,190 @@ describe('그룹 배타성', () => {
     );
     // 공통 봉 20개는 index 24 에 차므로 상승(index 25~) 전에 그룹이 확정된다
     expect([...buySymbols]).toEqual(['AAA']);
+  });
+
+  it('비활성 종목의 신호가 활성 종목의 진입을 선점하지 않는다', () => {
+    const inactiveFirst: number[] = [];
+    const activeSecond: number[] = [];
+    for (let index = 0; index < 60; index += 1) {
+      if (index < 25) {
+        const value = 1_000 + (index % 2 === 0 ? 10 : -10);
+        inactiveFirst.push(value);
+        activeSecond.push(1_000_000 / value);
+      } else {
+        inactiveFirst.push((inactiveFirst[index - 1] as number) + 15);
+        activeSecond.push((activeSecond[index - 1] as number) + 15);
+      }
+    }
+
+    const result = runBacktest(emaTrendSwitchStrategy, {
+      candles: toCandles(
+        new Map([
+          ['AAA', inactiveFirst],
+          ['ZZZ', activeSecond],
+        ]),
+        '1d',
+        DAY,
+      ),
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: FAST_PARAMS,
+      randomSeed: 1,
+      maxPositions: 5,
+      universeSchedule: [{ fromTsMs: START, symbols: ['ZZZ'] }],
+    });
+
+    expect(result.fills.filter((fill) => fill.side === 'BUY').map((fill) => fill.symbol)).toEqual([
+      'ZZZ',
+    ]);
+    expect(result.warnings.some((warning) => warning.includes('AAA 매수 거부'))).toBe(false);
+  });
+
+  it('새 멤버십이 활성화되면 그 종목들의 상관 그룹을 다시 계산한다', () => {
+    const aaa = Array.from({ length: 40 }, (_, index) =>
+      1_000 + (index % 2 === 0 ? 10 : -10),
+    );
+    const bbb = aaa.slice(10).map((value) => 1_000_000 / value);
+    let finalState: EmaTrendSwitchState | undefined;
+    const observingStrategy = {
+      ...emaTrendSwitchStrategy,
+      initialize(context: Parameters<typeof emaTrendSwitchStrategy.initialize>[0]) {
+        finalState = emaTrendSwitchStrategy.initialize(context);
+        return finalState;
+      },
+    };
+    const candles = [
+      ...toCandles(new Map([['AAA', aaa]]), '1d', DAY),
+      ...toCandles(new Map([['BBB', bbb]]), '1d', DAY).map((bar) => ({
+        ...bar,
+        tsMs: bar.tsMs + 10 * DAY,
+      })),
+    ].sort((a, b) => a.tsMs - b.tsMs || (a.symbol < b.symbol ? -1 : 1));
+
+    runBacktest(observingStrategy, {
+      candles,
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: FAST_PARAMS,
+      randomSeed: 1,
+      maxPositions: 5,
+      universeSchedule: [
+        { fromTsMs: START, symbols: ['AAA'] },
+        { fromTsMs: START + 30 * DAY, symbols: ['AAA', 'BBB'] },
+      ],
+    });
+
+    expect(finalState?.groupOf?.get('AAA')).toBe('AAA');
+    expect(finalState?.groupOf?.get('BBB')).toBe('AAA');
+  });
+
+  it('새 멤버십 종목의 워밍업이 부족하면 이전 그룹을 재사용하지 않는다', () => {
+    const aaa = levPath(40, 25);
+    const bbb = [1_000, 1_020];
+    let finalState: EmaTrendSwitchState | undefined;
+    const observingStrategy = {
+      ...emaTrendSwitchStrategy,
+      initialize(context: Parameters<typeof emaTrendSwitchStrategy.initialize>[0]) {
+        finalState = emaTrendSwitchStrategy.initialize(context);
+        return finalState;
+      },
+    };
+    const candles = [
+      ...toCandles(new Map([['AAA', aaa]]), '1d', DAY),
+      ...toCandles(new Map([['BBB', bbb]]), '1d', DAY).map((bar) => ({
+        ...bar,
+        tsMs: bar.tsMs + 38 * DAY,
+      })),
+    ].sort((a, b) => a.tsMs - b.tsMs || (a.symbol < b.symbol ? -1 : 1));
+
+    runBacktest(observingStrategy, {
+      candles,
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: FAST_PARAMS,
+      randomSeed: 1,
+      maxPositions: 5,
+      universeSchedule: [
+        { fromTsMs: START, symbols: ['AAA'] },
+        { fromTsMs: START + 38 * DAY, symbols: ['BBB'] },
+      ],
+    });
+
+    expect(finalState?.groupOf).toBeNull();
+  });
+
+  it('활성 종목이 같아도 리밸런스 봉에서는 최근 상관으로 그룹을 갱신한다', () => {
+    const aaa: number[] = [];
+    const bbb: number[] = [];
+    for (let index = 0; index < 45; index += 1) {
+      if (index < 20) {
+        const value = 1_000 + (index % 2 === 0 ? 10 : -10);
+        aaa.push(value);
+        bbb.push(1_000_000 / value);
+      } else {
+        aaa.push((aaa[index - 1] as number) + 10);
+        bbb.push((bbb[index - 1] as number) + 10);
+      }
+    }
+    let finalState: EmaTrendSwitchState | undefined;
+    const observingStrategy = {
+      ...emaTrendSwitchStrategy,
+      initialize(context: Parameters<typeof emaTrendSwitchStrategy.initialize>[0]) {
+        finalState = emaTrendSwitchStrategy.initialize(context);
+        return finalState;
+      },
+    };
+
+    runBacktest(observingStrategy, {
+      candles: toCandles(new Map([['AAA', aaa], ['BBB', bbb]]), '1d', DAY),
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: FAST_PARAMS,
+      randomSeed: 1,
+      maxPositions: 5,
+      universeSchedule: [
+        { fromTsMs: START, symbols: ['AAA', 'BBB'] },
+        { fromTsMs: START + 40 * DAY, symbols: ['AAA', 'BBB'] },
+      ],
+    });
+
+    expect(finalState?.groupOf?.get('AAA')).toBe('AAA');
+    expect(finalState?.groupOf?.get('BBB')).toBe('BBB');
+  });
+
+  it('보유 중인 역상관 종목이 거래정지여도 같은 그룹 종목을 추가 매수하지 않는다', () => {
+    const aaa: number[] = [];
+    const bbb: number[] = [];
+    for (let index = 0; index < 50; index += 1) {
+      if (index < 25) {
+        const value = 1_000 + (index % 2 === 0 ? 10 : -10);
+        aaa.push(value);
+        bbb.push(1_000_000 / value);
+      } else {
+        aaa.push((aaa[index - 1] as number) + 20);
+        bbb.push(
+          index < 31
+            ? (bbb[index - 1] as number) - 15
+            : (bbb[index - 1] as number) + 40,
+        );
+      }
+    }
+
+    const result = runBacktest(emaTrendSwitchStrategy, {
+      candles: toCandles(new Map([['AAA', aaa], ['BBB', bbb]]), '1d', DAY),
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: FAST_PARAMS,
+      randomSeed: 1,
+      maxPositions: 5,
+      universeSchedule: [{ fromTsMs: START, symbols: ['AAA', 'BBB'] }],
+      nonTradingSymbolsByTsMs: new Map([
+        [START + 36 * DAY, new Set(['AAA'])],
+      ]),
+    });
+
+    expect(result.fills.filter((fill) => fill.side === 'BUY').map((fill) => fill.symbol)).toEqual([
+      'AAA',
+    ]);
   });
 });

@@ -74,6 +74,7 @@ function context(input: {
     },
     corporateActions: () => [],
     tradableSymbols: new Set(Object.keys(input.candidates)),
+    activeUniverseSymbols: new Set(Object.keys(input.candidates)),
     selectionMetric: (symbol): SelectionMetricPin | null => {
       const row = input.candidates[symbol];
       return row

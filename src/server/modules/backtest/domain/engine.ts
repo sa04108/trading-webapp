@@ -560,6 +560,7 @@ function* runBacktestSteps(
         fundamentals: (symbol) => factView.fundamentals(symbol),
         corporateActions: (symbol) => factView.corporateActions(symbol, tsMs),
         tradableSymbols,
+        activeUniverseSymbols: activeMembershipSymbols,
         selectionMetric: (symbol) => activeSelectionMetrics?.get(symbol) ?? null,
       };
       // warm-up은 전략 지표/커서 상태만 전진시킨다. 반환 주문은 의도적으로 버린다.
@@ -628,6 +629,7 @@ function* runBacktestSteps(
       fundamentals: (symbol) => factView.fundamentals(symbol),
       corporateActions: (symbol) => factView.corporateActions(symbol, tsMs),
       tradableSymbols,
+      activeUniverseSymbols: activeMembershipSymbols,
       selectionMetric: (symbol) => activeSelectionMetrics?.get(symbol) ?? null,
     };
     const decision = strategy.onBars(context, state, input.parameters);
@@ -717,6 +719,7 @@ function* runBacktestSteps(
         '. 그만큼 자본이 현금으로 남았습니다. 전략의 보유 종목 수를 상한 이하로 줄이거나 상한을 올리세요.',
     );
   }
+  warnings.push(...(strategy.completionWarnings?.(state, input.parameters) ?? []));
   // 분할 보정 여부는 "팩트가 있는가" 가 아니라 "**자본변동** 팩트가 있는가" 다 —
   // 재무만 수집된 데이터셋(SPLIT_RATIO 0건)에서 팩트 건수로 판단하면 일어나지 않은
   // 보정을 일어났다고 말한다.

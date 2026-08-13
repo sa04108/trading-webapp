@@ -347,6 +347,34 @@ describe('runBacktest 이벤트 순서 (스펙 §9.1, §9.2)', () => {
     expect(result.warnings.some((warning) => warning.includes('동시 보유 종목 상한'))).toBe(false);
   });
 
+  it('전략이 반환한 종료 경고를 결과에 포함한다', () => {
+    const strategy: TradingStrategy<{ label: string }, { seen: number }> = {
+      id: 'completion-warning',
+      version: '1.0.0',
+      name: 'completion warning',
+      description: 'completion warning',
+      parameterSchema: z.object({ label: z.string() }),
+      initialize: () => ({ seen: 0 }),
+      onBars(_context, state) {
+        state.seen += 1;
+        return { orders: [] };
+      },
+      completionWarnings(state, parameters) {
+        return [`${parameters.label}: ${state.seen}봉 처리`];
+      },
+    };
+    const result = runBacktest(strategy, {
+      candles: [bar(0, 100), bar(1, 101)],
+      initialCash: 10_000,
+      execution: ZERO_COST,
+      parameters: { label: '전략 종료' },
+      randomSeed: 42,
+      maxPositions: 5,
+    });
+
+    expect(result.warnings).toContain('전략 종료: 2봉 처리');
+  });
+
   it('is deterministic: same input and seed produce identical results (스펙 §9.5)', () => {
     const candles = Array.from({ length: 300 }, (_, i) =>
       bar(i, 100 + 10 * Math.sin(i / 7) + (i % 13)),

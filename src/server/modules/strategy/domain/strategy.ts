@@ -40,6 +40,11 @@ export interface StrategyBarContext {
    * (엔진의 리스크 검증도 이때는 항상 통과시킨다).
    */
   readonly tradableSymbols: ReadonlySet<string> | null;
+  /**
+   * 현재 schedule의 활성 멤버십. 거래정지·무거래 종목도 포함한다. 그룹·보유 제약처럼
+   * "유니버스에 속하는가"를 판단할 때 쓰고, 실제 신규 매수 가능 여부는 tradableSymbols를 쓴다.
+   */
+  readonly activeUniverseSymbols: ReadonlySet<string> | null;
   /** 현재 활성 schedule member에 제출 시점에 pin된 선정 지표 */
   selectionMetric(symbol: string): SelectionMetricPin | null;
 }
@@ -71,6 +76,12 @@ export interface TradingStrategy<TParameters, TState> {
   initialize(context: StrategyInitializeContext): TState;
 
   onBars(context: StrategyBarContext, state: TState, parameters: TParameters): StrategyDecision;
+
+  /**
+   * 모든 봉 처리가 끝난 뒤 결과에 덧붙일 전략별 진단 경고다.
+   * 주문이 한 건도 없었던 이유처럼 봉 처리 중에는 확정할 수 없는 상태를 설명한다.
+   */
+  completionWarnings?(state: TState, parameters: TParameters): readonly string[];
 
   /**
    * 보유 종목에 자본변동이 걸린 시점에 엔진이 부르는 선택 훅이다.

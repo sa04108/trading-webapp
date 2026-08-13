@@ -57,7 +57,22 @@ export function buildCorrelationGroups(
     symbols.map((symbol) => [symbol, logReturns(closesBySymbol.get(symbol) ?? [])]),
   );
 
-  const parent = new Map<string, string>(symbols.map((symbol) => [symbol, symbol]));
+  return buildGroups(symbols, (left, right) => {
+    const correlation = pearsonCorrelation(
+      returns.get(left) ?? [],
+      returns.get(right) ?? [],
+    );
+    return correlation !== null && correlation <= -threshold;
+  });
+}
+
+function buildGroups(
+  symbols: readonly string[],
+  shouldMerge: (left: string, right: string) => boolean,
+): Map<string, string> {
+  const sorted = [...symbols].sort();
+
+  const parent = new Map<string, string>(sorted.map((symbol) => [symbol, symbol]));
   const find = (symbol: string): string => {
     let root = symbol;
     while (parent.get(root) !== root) root = parent.get(root) as string;
@@ -72,19 +87,15 @@ export function buildCorrelationGroups(
     else parent.set(rootA, rootB);
   };
 
-  for (let i = 0; i < symbols.length; i += 1) {
-    for (let j = i + 1; j < symbols.length; j += 1) {
-      const correlation = pearsonCorrelation(
-        returns.get(symbols[i] as string) ?? [],
-        returns.get(symbols[j] as string) ?? [],
-      );
-      if (correlation !== null && correlation <= -threshold) {
-        union(symbols[i] as string, symbols[j] as string);
-      }
+  for (let i = 0; i < sorted.length; i += 1) {
+    for (let j = i + 1; j < sorted.length; j += 1) {
+      const left = sorted[i] as string;
+      const right = sorted[j] as string;
+      if (shouldMerge(left, right)) union(left, right);
     }
   }
 
-  return new Map(symbols.map((symbol) => [symbol, find(symbol)]));
+  return new Map(sorted.map((symbol) => [symbol, find(symbol)]));
 }
 
 /**
@@ -100,8 +111,34 @@ export interface CorrelationWarmup {
   readonly closesBySymbol: Map<string, Map<number, number>>;
 }
 
+/** EMA·RSI가 공유하는 상관 그룹 수명주기 상태. */
+export interface CorrelationGroupingState {
+  groupOf: Map<string, string> | null;
+  /** 마지막으로 그룹 계산·종료 진단에 사용한 활성 심볼. */
+  groupedSymbols: readonly string[];
+  /** 마지막 그룹 계산 시점에 correlationBars를 채운 활성 심볼 수. */
+  groupReadyCount: number;
+  /**
+   * 마지막 그룹 계산에서 공통 봉이 부족했던 활성 pair들. membership 변경 또는 다음
+   * 계산 때 교체하며, 이 중 하나가 준비되면 리밸런싱 없이 그룹을 다시 계산한다.
+   */
+  unmeasurablePairs: Map<string, Set<string>>;
+  /** 동적 유니버스에서는 제한된 크기로 유지하고, 정적 실행 완료 뒤 비운다. */
+  warmup: CorrelationWarmup | null;
+}
+
 export function newCorrelationWarmup(): CorrelationWarmup {
   return { closesBySymbol: new Map() };
+}
+
+export function newCorrelationGroupingState(): CorrelationGroupingState {
+  return {
+    groupOf: null,
+    groupedSymbols: [],
+    groupReadyCount: 0,
+    unmeasurablePairs: new Map(),
+    warmup: newCorrelationWarmup(),
+  };
 }
 
 export function recordClose(
@@ -116,6 +153,15 @@ export function recordClose(
     warmup.closesBySymbol.set(symbol, closes);
   }
   closes.set(tsMs, close);
+}
+
+export function recordCorrelationClose(
+  state: CorrelationGroupingState,
+  symbol: string,
+  tsMs: number,
+  close: number,
+): void {
+  if (state.warmup !== null) recordClose(state.warmup, symbol, tsMs, close);
 }
 
 /**
@@ -138,14 +184,97 @@ export function scaleWarmupCloses(
   for (const [tsMs, close] of closes) closes.set(tsMs, close / ratio);
 }
 
+export function scaleCorrelationGrouping(
+  state: CorrelationGroupingState,
+  symbol: string,
+  ratio: number,
+): void {
+  if (state.warmup !== null) scaleWarmupCloses(state.warmup, symbol, ratio);
+}
+
+/** 동적 유니버스 재계산용 종가를 종목별 최근 N개로 제한한다. */
+export function pruneWarmupCloses(
+  warmup: CorrelationWarmup,
+  maxEntriesPerSymbol: number,
+): void {
+  const limit = Math.max(0, Math.floor(maxEntriesPerSymbol));
+  for (const closes of warmup.closesBySymbol.values()) {
+    const excess = closes.size - limit;
+    if (excess <= 0) continue;
+    const oldest = [...closes.keys()].sort((a, b) => a - b).slice(0, excess);
+    for (const tsMs of oldest) closes.delete(tsMs);
+  }
+}
+
+function pairHasEnoughCommonTimestamps(
+  left: ReadonlyMap<number, number> | undefined,
+  right: ReadonlyMap<number, number> | undefined,
+  correlationBars: number,
+): boolean {
+  if (correlationBars <= 0) return true;
+  if (left === undefined || right === undefined || Math.min(left.size, right.size) < correlationBars) {
+    return false;
+  }
+  const [smaller, larger] = left.size <= right.size ? [left, right] : [right, left];
+  let commonCount = 0;
+  for (const tsMs of smaller.keys()) {
+    if (!larger.has(tsMs)) continue;
+    commonCount += 1;
+    if (commonCount >= correlationBars) return true;
+  }
+  return false;
+}
+
+function unmeasurablePairs(
+  warmup: CorrelationWarmup,
+  symbols: readonly string[],
+  correlationBars: number,
+): Map<string, Set<string>> {
+  const pairs = new Map<string, Set<string>>();
+  for (let leftIndex = 0; leftIndex < symbols.length; leftIndex += 1) {
+    const leftSymbol = symbols[leftIndex] as string;
+    const left = warmup.closesBySymbol.get(leftSymbol);
+    for (let rightIndex = leftIndex + 1; rightIndex < symbols.length; rightIndex += 1) {
+      const rightSymbol = symbols[rightIndex] as string;
+      if (pairHasEnoughCommonTimestamps(
+        left,
+        warmup.closesBySymbol.get(rightSymbol),
+        correlationBars,
+      )) continue;
+      let partners = pairs.get(leftSymbol);
+      if (!partners) {
+        partners = new Set();
+        pairs.set(leftSymbol, partners);
+      }
+      partners.add(rightSymbol);
+    }
+  }
+  return pairs;
+}
+
+function hasNewlyMeasurablePair(
+  warmup: CorrelationWarmup,
+  pairs: ReadonlyMap<string, ReadonlySet<string>>,
+  correlationBars: number,
+): boolean {
+  for (const [leftSymbol, rightSymbols] of pairs) {
+    const left = warmup.closesBySymbol.get(leftSymbol);
+    for (const rightSymbol of rightSymbols) {
+      if (pairHasEnoughCommonTimestamps(
+        left,
+        warmup.closesBySymbol.get(rightSymbol),
+        correlationBars,
+      )) return true;
+    }
+  }
+  return false;
+}
+
 /**
- * 유니버스 **전 종목에 공통으로 존재하는** 봉 시각이 correlationBars 개 이상
- * 쌓였으면 그 시각들(가장 최근 correlationBars 개, 오름차순)만으로 상관 그룹을
- * 만든다. 아직이면 null — 호출자가 다음 봉에 다시 시도한다.
- *
- * 봉이 아예 없는 종목이 유니버스에 있으면 공통 시각이 영영 쌓이지 않아 그룹이
- * 확정되지 않는다. 그러면 진입이 영영 없고 경고도 나오지 않는다 (전략에는 경고
- * 채널이 없다 — 거래 0건으로 끝난다). 봉 없는 종목을 유니버스에 넣지 말라는 뜻이다.
+ * 어느 한 종목이라도 correlationBars 개를 확보하면 초기 그룹을 만든다. 상관은
+ * 종목 pair마다 둘에 공통인 최근 시각만 맞춰 계산한다. 공통 봉이 부족한 pair는
+ * 판정하지 않아 각각 단독 그룹으로 남긴다 — 짧은 이력 종목 하나가 유니버스 전체의
+ * 진입을 막지 않게 하려는 것이다.
  */
 export function tryBuildGroups(
   warmup: CorrelationWarmup,
@@ -153,29 +282,107 @@ export function tryBuildGroups(
   correlationBars: number,
   threshold: number,
 ): Map<string, string> | null {
-  const perSymbol: Map<number, number>[] = [];
-  for (const symbol of symbols) {
-    const closes = warmup.closesBySymbol.get(symbol);
-    if (!closes) return null;
-    perSymbol.push(closes);
-  }
-
-  const first = perSymbol[0];
-  if (first === undefined) return new Map();
-
-  const aligned: number[] = [];
-  for (const tsMs of first.keys()) {
-    if (perSymbol.every((closes) => closes.has(tsMs))) aligned.push(tsMs);
-  }
-  if (aligned.length < correlationBars) return null;
-
-  aligned.sort((a, b) => a - b);
-  const window = aligned.slice(-correlationBars);
-  const closesBySymbol = new Map<string, readonly number[]>(
-    symbols.map((symbol, index) => [
-      symbol,
-      window.map((tsMs) => (perSymbol[index] as Map<number, number>).get(tsMs) as number),
-    ]),
+  if (symbols.length === 0) return new Map();
+  const ready = symbols.some(
+    (symbol) => (warmup.closesBySymbol.get(symbol)?.size ?? 0) >= correlationBars,
   );
-  return buildCorrelationGroups(closesBySymbol, threshold);
+  if (!ready) return null;
+
+  return buildGroups(symbols, (leftSymbol, rightSymbol) => {
+    const left = warmup.closesBySymbol.get(leftSymbol);
+    const right = warmup.closesBySymbol.get(rightSymbol);
+    if (left === undefined || right === undefined) return false;
+
+    const commonTs = [...left.keys()]
+      .filter((tsMs) => right.has(tsMs))
+      .sort((a, b) => a - b)
+      .slice(-correlationBars);
+    if (commonTs.length < correlationBars) return false;
+
+    const correlation = pearsonCorrelation(
+      logReturns(commonTs.map((tsMs) => left.get(tsMs) as number)),
+      logReturns(commonTs.map((tsMs) => right.get(tsMs) as number)),
+    );
+    return correlation !== null && correlation <= -threshold;
+  });
+}
+
+export interface UpdateCorrelationGroupingInput {
+  readonly state: CorrelationGroupingState;
+  /** initialize 시 정렬한 전체 실행 심볼. */
+  readonly allSymbols: readonly string[];
+  readonly activeUniverseSymbols: ReadonlySet<string> | null;
+  readonly isRebalanceBar: boolean;
+  readonly correlationBars: number;
+  readonly threshold: number;
+}
+
+/** 현재 활성 멤버십을 반환하고 필요할 때 상관 그룹을 갱신한다. */
+export function updateCorrelationGrouping(
+  input: UpdateCorrelationGroupingInput,
+): readonly string[] {
+  const membership = input.activeUniverseSymbols;
+  const symbols = membership === null
+    ? input.allSymbols
+    : input.allSymbols.filter((symbol) => membership.has(symbol));
+  const membershipChanged = !sameSymbols(symbols, input.state.groupedSymbols);
+  input.state.groupedSymbols = symbols;
+
+  const warmup = input.state.warmup;
+  if (warmup === null) return symbols;
+
+  pruneWarmupCloses(warmup, input.correlationBars * 2 + 14);
+  const readyCount = symbols.filter(
+    (symbol) => (warmup.closesBySymbol.get(symbol)?.size ?? 0) >= input.correlationBars,
+  ).length;
+  if (
+    input.state.groupOf !== null &&
+    !membershipChanged &&
+    !input.isRebalanceBar &&
+    readyCount <= input.state.groupReadyCount &&
+    !hasNewlyMeasurablePair(warmup, input.state.unmeasurablePairs, input.correlationBars)
+  ) {
+    return symbols;
+  }
+
+  const groupOf = tryBuildGroups(warmup, symbols, input.correlationBars, input.threshold);
+  if (groupOf !== null) {
+    input.state.groupOf = groupOf;
+    input.state.groupReadyCount = readyCount;
+    input.state.unmeasurablePairs = unmeasurablePairs(warmup, symbols, input.correlationBars);
+    if (
+      membership === null &&
+      readyCount === input.allSymbols.length &&
+      input.state.unmeasurablePairs.size === 0
+    ) {
+      input.state.warmup = null;
+    }
+  } else if (membershipChanged) {
+    input.state.groupOf = null;
+    input.state.groupReadyCount = readyCount;
+    input.state.unmeasurablePairs = new Map();
+  }
+  return symbols;
+}
+
+export function correlationWarmupWarnings(
+  state: CorrelationGroupingState,
+  correlationBars: number,
+  strategyName: string,
+): readonly string[] {
+  if (state.groupOf !== null) return [];
+  const maxBars = Math.max(
+    0,
+    ...state.groupedSymbols.map(
+      (symbol) => state.warmup?.closesBySymbol.get(symbol)?.size ?? 0,
+    ),
+  );
+  return [
+    `${strategyName}: 상관 그룹 워밍업 부족 (필요 ${correlationBars}봉, `
+      + `확보 최대 ${maxBars}봉). 워밍업 중에는 신규 진입을 평가하지 않습니다.`,
+  ];
+}
+
+function sameSymbols(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((symbol, index) => symbol === right[index]);
 }

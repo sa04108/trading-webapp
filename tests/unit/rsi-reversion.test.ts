@@ -79,6 +79,7 @@ describe('레지스트리 등록', () => {
     const properties = (schema as { properties: Record<string, Record<string, unknown>> })
       .properties;
     expect(properties.entryRsi?.title).toBe('진입 RSI');
+    expect(rsiReversionStrategy.version).toBe('1.0.2');
   });
 });
 
@@ -98,6 +99,39 @@ describe('실행 동작', () => {
     expect(buys[0]?.reason).toBe('REVERSION');
     expect(sells.length).toBeGreaterThan(0);
     expect(sells[0]?.reason).toBe('RSI_EXIT');
+    expect(result.warnings.join('\n')).not.toContain('상관 그룹 워밍업 부족');
+  });
+
+  it('편출로 취소된 진입 예약이 봉 없는 재편입 뒤 같은 그룹 종목을 막지 않는다', () => {
+    const rising = Array.from({ length: 20 }, (_, index) =>
+      index < 15
+        ? 1_000 + (index % 2 === 0 ? 10 : -10)
+        : 1_000 + (index - 15 + 1) * 15,
+    );
+    const aaa = rising.map((close) => 1_000_000 / close);
+    const bbb = [...rising, 1_100, 500, 500];
+    const candles = [
+      ...aaa.map((close, index) => candle('AAA', index, close)),
+      ...bbb.map((close, index) => candle('BBB', index, close)),
+    ].sort((left, right) => left.tsMs - right.tsMs || left.symbol.localeCompare(right.symbol));
+
+    const result = runBacktest(rsiReversionStrategy, {
+      candles,
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: FAST_PARAMS,
+      randomSeed: 1,
+      maxPositions: 5,
+      universeSchedule: [
+        { fromTsMs: START, symbols: ['AAA', 'BBB'] },
+        { fromTsMs: START + 20 * DAY, symbols: ['BBB'] },
+        { fromTsMs: START + 21 * DAY, symbols: ['AAA', 'BBB'] },
+      ],
+    });
+
+    expect(result.fills.filter((fill) => fill.side === 'BUY').map((fill) => fill.symbol)).toEqual([
+      'BBB',
+    ]);
   });
 
   it('maxHoldBars 를 지정하면 그 봉 수 뒤 TIME 으로 판다', () => {
@@ -124,6 +158,96 @@ describe('실행 동작', () => {
     // 매수 체결 봉과 매도 체결 봉의 간격 = 3봉.
     const buyTs = result.fills.find((fill) => fill.side === 'BUY')?.tsMs as number;
     expect((sells[0]?.tsMs as number) - buyTs).toBe(3 * DAY);
+  });
+
+  it('비활성 종목의 과매도 신호가 활성 종목의 진입을 선점하지 않는다', () => {
+    const inactiveFirst: Candle[] = [];
+    const activeSecond: Candle[] = [];
+    let aaa = 1_000;
+    let zzz = 1_000;
+    for (let index = 0; index < 55; index += 1) {
+      if (index < 25) {
+        aaa = 1_000 + (index % 2 === 0 ? 10 : -10);
+        zzz = 1_000_000 / aaa;
+      } else {
+        aaa -= 20;
+        zzz -= 20;
+      }
+      inactiveFirst.push(candle('AAA', index, aaa));
+      activeSecond.push(candle('ZZZ', index, zzz));
+    }
+
+    const result = runBacktest(rsiReversionStrategy, {
+      candles: [...inactiveFirst, ...activeSecond].sort(
+        (left, right) => left.tsMs - right.tsMs || (left.symbol < right.symbol ? -1 : 1),
+      ),
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: FAST_PARAMS,
+      randomSeed: 1,
+      maxPositions: 5,
+      universeSchedule: [{ fromTsMs: START, symbols: ['ZZZ'] }],
+    });
+
+    const buySymbols = result.fills
+      .filter((fill) => fill.side === 'BUY')
+      .map((fill) => fill.symbol);
+    expect(buySymbols.length).toBeGreaterThan(0);
+    expect(new Set(buySymbols)).toEqual(new Set(['ZZZ']));
+    expect(result.warnings.some((warning) => warning.includes('AAA 매수 거부'))).toBe(false);
+  });
+
+  it('상관 워밍업이 부족해 진입을 평가하지 못하면 원인을 경고한다', () => {
+    const result = runBacktest(rsiReversionStrategy, {
+      candles: Array.from({ length: 10 }, (_, index) => candle('AAA', index, 1_000 - index * 10)),
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: FAST_PARAMS,
+      randomSeed: 1,
+      maxPositions: 5,
+    });
+
+    expect(result.fills).toHaveLength(0);
+    expect(result.warnings.join('\n')).toContain('상관 그룹 워밍업 부족');
+    expect(result.warnings.join('\n')).toContain('필요 20봉, 확보 최대 10봉');
+  });
+
+  it('보유 중인 역상관 종목이 거래정지여도 같은 그룹 종목을 추가 매수하지 않는다', () => {
+    const candles: Candle[] = [];
+    let aaa = 1_000;
+    let bbb = 1_000;
+    for (let index = 0; index < 50; index += 1) {
+      if (index < 25) {
+        aaa = 1_000 + (index % 2 === 0 ? 10 : -10);
+        bbb = 1_000_000 / aaa;
+      } else if (index < 31) {
+        aaa -= 20;
+        bbb += 20;
+      } else {
+        bbb -= 30;
+      }
+      candles.push(candle('AAA', index, aaa));
+      candles.push(candle('BBB', index, bbb));
+    }
+
+    const result = runBacktest(rsiReversionStrategy, {
+      candles: candles.sort(
+        (left, right) => left.tsMs - right.tsMs || (left.symbol < right.symbol ? -1 : 1),
+      ),
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: { ...FAST_PARAMS, stopAtrMultiplier: 20 },
+      randomSeed: 1,
+      maxPositions: 5,
+      universeSchedule: [{ fromTsMs: START, symbols: ['AAA', 'BBB'] }],
+      nonTradingSymbolsByTsMs: new Map([
+        [START + 36 * DAY, new Set(['AAA'])],
+      ]),
+    });
+
+    expect(result.fills.filter((fill) => fill.side === 'BUY').map((fill) => fill.symbol)).toEqual([
+      'AAA',
+    ]);
   });
 });
 
