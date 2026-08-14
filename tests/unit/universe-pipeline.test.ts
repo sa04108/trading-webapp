@@ -24,7 +24,7 @@ describe('addStage', () => {
     expect(result).toEqual({
       stages: [
         { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 100 },
-        { criterion: 'DECLINE', direction: 'LOW', limit: 100, lookbackTradingDays: 20 },
+        { criterion: 'DECLINE', direction: 'HIGH', limit: 100, lookbackTradingDays: 20 },
       ],
       changedIndices: [],
     });
