@@ -1,5 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import {
+  CartesianGrid,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -69,7 +78,6 @@ export function BenchmarkPanel() {
   const first = points[0];
   const last = points.at(-1);
   const returnPct = first && last ? (last.close / first.close - 1) * 100 : null;
-  const shown = points.slice(-500).reverse();
 
   return (
     <div className="space-y-4">
@@ -116,7 +124,7 @@ export function BenchmarkPanel() {
           <AlertDescription>{query.error instanceof Error ? query.error.message : '조회에 실패했습니다.'}</AlertDescription>
         </Alert>
       ) : null}
-      {query.data && !query.data.covered ? (
+      {query.data && (query.data.tradingDays === 0 || query.data.missingTradingDays > 0) ? (
         <Alert>
           <AlertDescription>
             {query.data.tradingDays === 0
@@ -129,24 +137,54 @@ export function BenchmarkPanel() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">
-            {BENCHMARK_NAMES[benchmarkId]} 일별 종가 · {points.length.toLocaleString()}건
+            {BENCHMARK_NAMES[benchmarkId]} · {points.length.toLocaleString()}건
             {returnPct === null ? '' : ` · 기간 수익률 ${returnPct >= 0 ? '+' : ''}${returnPct.toFixed(2)}%`}
           </CardTitle>
         </CardHeader>
         <CardContent>
           {query.isLoading ? <p className="text-sm text-muted-foreground">조회 중...</p> : null}
           {!query.isLoading && points.length === 0 ? <p className="text-sm text-muted-foreground">저장된 데이터가 없습니다.</p> : null}
-          {shown.length > 0 ? (
-            <div className="max-h-[32rem] overflow-auto">
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-card text-left"><tr><th className="py-2">날짜</th><th className="py-2 text-right">종가</th></tr></thead>
-                <tbody>
-                  {shown.map((point) => (
-                    <tr key={point.date} className="border-t"><td className="py-2 tabular-nums">{point.date}</td><td className="py-2 text-right tabular-nums">{point.close.toLocaleString()}</td></tr>
-                  ))}
-                </tbody>
-              </table>
-              {points.length > shown.length ? <p className="mt-2 text-xs text-muted-foreground">최근 500건만 표시합니다.</p> : null}
+          {points.length > 0 ? (
+            <div className="h-80 w-full" role="img" aria-label={`${BENCHMARK_NAMES[benchmarkId]} 종가 차트`}>
+              <ResponsiveContainer>
+                <LineChart data={points} margin={{ top: 4, right: 8, bottom: 0, left: 4 }}>
+                  <CartesianGrid stroke="var(--border)" strokeDasharray="2 4" vertical={false} />
+                  <XAxis
+                    dataKey="date"
+                    tickFormatter={(date: string) => date.slice(2)}
+                    tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
+                    tickLine={false}
+                    axisLine={{ stroke: 'var(--border)' }}
+                    minTickGap={48}
+                  />
+                  <YAxis
+                    tickFormatter={(value: number) => value.toLocaleString()}
+                    tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
+                    tickLine={false}
+                    axisLine={false}
+                    width={64}
+                    domain={['auto', 'auto']}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: 'var(--popover)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      color: 'var(--popover-foreground)',
+                      fontSize: 12,
+                    }}
+                    formatter={(value) => [Number(value).toLocaleString(), '종가']}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="close"
+                    stroke="var(--primary)"
+                    strokeWidth={2}
+                    dot={false}
+                    isAnimationActive={false}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
             </div>
           ) : null}
         </CardContent>
