@@ -75,6 +75,20 @@ describe('단계 추가', () => {
   });
 });
 
+describe('방향 선택', () => {
+  it('기준마다 사람이 읽는 두 방향을 유리한 순서로 보여준다', () => {
+    const html = renderEditor([
+      { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 200 },
+      { criterion: 'PER', direction: 'LOW', limit: 100 },
+      { criterion: 'DECLINE', direction: 'HIGH', limit: 50, lookbackTradingDays: 20 },
+    ]);
+    expect(html).toContain('id="stage-direction-0"');
+    expect(html).toContain('<option value="HIGH" selected="">상위</option><option value="LOW">하위</option>');
+    expect(html).toContain('<option value="LOW" selected="">낮음</option><option value="HIGH">높음</option>');
+    expect(html).toContain('<option value="HIGH" selected="">급상승</option><option value="LOW">급하락</option>');
+  });
+});
+
 describe('접근성', () => {
   it('위/아래 이동 버튼의 접근 가능한 이름과 drag handle 이 markup 에 있다', () => {
     const html = renderEditor(declineStages);

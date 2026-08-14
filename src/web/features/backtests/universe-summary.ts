@@ -1,6 +1,10 @@
+import {
+  LEGACY_STAGE_DIRECTION,
+} from '../../../shared/schemas/universe-rule.js';
 import type {
   RebalanceInterval,
   UniverseCriterion,
+  UniverseDirection,
   UniverseRule,
   UniverseStage,
 } from '../../../shared/schemas/universe-rule.js';
@@ -15,15 +19,27 @@ export const CRITERION_LABEL: Record<UniverseCriterion, string> = {
   VOLUME: '거래량',
   TRADING_VALUE: '거래대금',
   PER: 'PER',
-  DECLINE: '급하락',
+  DECLINE: '가격 변동',
+};
+
+const DIRECTION_LABEL: Record<
+  UniverseCriterion,
+  Record<UniverseDirection, string>
+> = {
+  MARKET_CAP: { HIGH: '상위', LOW: '하위' },
+  VOLUME: { HIGH: '상위', LOW: '하위' },
+  TRADING_VALUE: { HIGH: '상위', LOW: '하위' },
+  PER: { HIGH: '높음', LOW: '낮음' },
+  DECLINE: { HIGH: '급상승', LOW: '급하락' },
 };
 
 function stageLabel(stage: UniverseStage): string {
-  const label =
+  const direction = stage.direction ?? LEGACY_STAGE_DIRECTION[stage.criterion];
+  const criterion =
     stage.criterion === 'DECLINE'
-      ? `${CRITERION_LABEL.DECLINE}(${stage.lookbackTradingDays}일)`
-      : CRITERION_LABEL[stage.criterion];
-  return `${label} ${stage.limit}`;
+      ? `${CRITERION_LABEL.DECLINE} ${DIRECTION_LABEL.DECLINE[direction]}(${stage.lookbackTradingDays}일)`
+      : `${CRITERION_LABEL[stage.criterion]} ${DIRECTION_LABEL[stage.criterion][direction]}`;
+  return `${criterion} ${stage.limit}`;
 }
 
 const UNIT_SUFFIX: Record<RebalanceInterval['unit'], string> = {

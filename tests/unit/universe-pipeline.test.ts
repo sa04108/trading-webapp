@@ -1,12 +1,51 @@
 import { describe, expect, it } from 'vitest';
 import {
   addStage,
+  changeStageCriterion,
+  changeStageDirection,
   changeStageLimit,
   moveStage,
   normalizeStageLimitInput,
   parseStageLimitInput,
   removeStage,
 } from '../../src/web/features/backtests/universe-pipeline.js';
+
+describe('changeStageCriterion', () => {
+  it('PER로 바꾸면 선호 방향 LOW를 넣고 DECLINE 전용 조회기간을 제거한다', () => {
+    expect(changeStageCriterion([
+      { criterion: 'DECLINE', direction: 'LOW', limit: 50, lookbackTradingDays: 60 },
+    ], 0, 'PER')).toEqual({
+      stages: [{ criterion: 'PER', direction: 'LOW', limit: 50 }],
+      changedIndices: [],
+    });
+  });
+
+  it('가격 변동으로 바꾸면 선호 방향 HIGH와 조회기간 20일을 넣는다', () => {
+    expect(changeStageCriterion([
+      { criterion: 'MARKET_CAP', direction: 'LOW', limit: 50 },
+    ], 0, 'DECLINE')).toEqual({
+      stages: [{
+        criterion: 'DECLINE', direction: 'HIGH', limit: 50, lookbackTradingDays: 20,
+      }],
+      changedIndices: [],
+    });
+  });
+});
+
+describe('changeStageDirection', () => {
+  it('고른 단계의 방향만 바꾸고 cascade 표시를 만들지 않는다', () => {
+    expect(changeStageDirection([
+      { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 100 },
+      { criterion: 'PER', direction: 'LOW', limit: 50 },
+    ], 1, 'HIGH')).toEqual({
+      stages: [
+        { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 100 },
+        { criterion: 'PER', direction: 'HIGH', limit: 50 },
+      ],
+      changedIndices: [],
+    });
+  });
+});
 
 describe('addStage', () => {
   it('새 단계의 N 을 직전 단계 값으로 복사한다', () => {

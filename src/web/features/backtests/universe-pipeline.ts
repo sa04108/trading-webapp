@@ -1,6 +1,7 @@
 import {
   PREFERRED_STAGE_DIRECTION,
   type UniverseCriterion,
+  type UniverseDirection,
   type UniverseStage,
 } from '../../../shared/schemas/universe-rule.js';
 
@@ -90,6 +91,38 @@ export function changeStageLimit(
 ): PipelineUpdate {
   const next = stages.map((stage, i) => (i === index ? { ...stage, limit } : stage));
   return cascadeLimits(next);
+}
+
+export function changeStageCriterion(
+  stages: readonly UniverseStage[],
+  index: number,
+  criterion: UniverseCriterion,
+): PipelineUpdate {
+  return {
+    stages: stages.map((stage, i): UniverseStage => {
+      if (i !== index) return stage;
+      return criterion === 'DECLINE'
+        ? {
+            criterion,
+            direction: PREFERRED_STAGE_DIRECTION[criterion],
+            limit: stage.limit,
+            lookbackTradingDays: DEFAULT_DECLINE_LOOKBACK_TRADING_DAYS,
+          }
+        : { criterion, direction: PREFERRED_STAGE_DIRECTION[criterion], limit: stage.limit };
+    }),
+    changedIndices: [],
+  };
+}
+
+export function changeStageDirection(
+  stages: readonly UniverseStage[],
+  index: number,
+  direction: UniverseDirection,
+): PipelineUpdate {
+  return {
+    stages: stages.map((stage, i) => (i === index ? { ...stage, direction } : stage)),
+    changedIndices: [],
+  };
 }
 
 /**
