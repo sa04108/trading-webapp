@@ -129,6 +129,25 @@ describe('buildBacktestPreparationPlan', () => {
     expect(plan.price.symbols).toEqual([]);
   });
 
+  it('ROE stage 후보에 4분기 재무를 준비한다', () => {
+    const plan = buildBacktestPreparationPlan({
+      request: {
+        ...BASE_REQUEST,
+        universeRule: {
+          ...BASE_REQUEST.universeRule,
+          stages: [{ criterion: 'ROE', direction: 'HIGH', limit: 20 }],
+        },
+      },
+      resolutionNeeds: { ...EMPTY_NEEDS, factSymbols: ['005930', '000660'] },
+      strategy: strategy('price-only'),
+    });
+    expect(plan.financial).toEqual({
+      symbols: ['000660', '005930'],
+      fromYear: 2025,
+      toYear: 2026,
+    });
+  });
+
   it('저PER·고ROE는 최종 유니버스의 4분기 재무와 자본변동을 준비한다', () => {
     const plan = buildBacktestPreparationPlan({
       request: BASE_REQUEST,

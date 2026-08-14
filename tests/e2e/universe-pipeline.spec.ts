@@ -171,6 +171,13 @@ test('유니버스 정렬 방향을 기준별 문구로 명시해 고른다', as
   await expect(page.locator('#stage-direction-2 option')).toHaveText(['급상승', '급하락']);
   await page.locator('#stage-direction-2').selectOption('LOW');
   await expect(page.locator('#stage-direction-2')).toHaveValue('LOW');
+
+  await page.getByRole('button', { name: '거래량 단계 추가' }).click();
+  await page.getByRole('button', { name: '거래대금 단계 추가' }).click();
+  await page.getByRole('button', { name: 'ROE 단계 추가' }).click();
+  await expect(page.locator('[id^="stage-criterion-"]')).toHaveCount(6);
+  await expect(page.getByRole('button', { name: /단계 추가/ })).toHaveCount(0);
+  await expect(page.locator('#stage-direction-5 option')).toHaveText(['높음', '낮음']);
 });
 
 test('단계 추가·N 기본 복사·cascade 안내·순서 변경·주기 초과 차단을 거쳐 준비→제출까지 완주한다', async ({

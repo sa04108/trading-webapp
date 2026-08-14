@@ -26,6 +26,7 @@ const ALL_CRITERIA: readonly UniverseCriterion[] = [
   'VOLUME',
   'TRADING_VALUE',
   'PER',
+  'ROE',
   'DECLINE',
 ];
 
@@ -35,6 +36,7 @@ const CRITERION_LABEL: Record<UniverseCriterion, string> = {
   VOLUME: '거래량',
   TRADING_VALUE: '거래대금',
   PER: 'PER',
+  ROE: 'ROE',
   DECLINE: '가격 변동',
 };
 
@@ -46,12 +48,13 @@ const DIRECTION_OPTIONS: Record<UniverseCriterion, readonly [
   VOLUME: [{ value: 'HIGH', label: '상위' }, { value: 'LOW', label: '하위' }],
   TRADING_VALUE: [{ value: 'HIGH', label: '상위' }, { value: 'LOW', label: '하위' }],
   PER: [{ value: 'LOW', label: '낮음' }, { value: 'HIGH', label: '높음' }],
+  ROE: [{ value: 'HIGH', label: '높음' }, { value: 'LOW', label: '낮음' }],
   DECLINE: [{ value: 'HIGH', label: '급상승' }, { value: 'LOW', label: '급하락' }],
 };
 
 const DECLINE_LOOKBACK_MIN = 1;
 const DECLINE_LOOKBACK_MAX = 252;
-const MAX_STAGE_COUNT = 5;
+const MAX_STAGE_COUNT = 6;
 
 /** cascade 강조를 지우는 시간 — 브리프가 지정한 2초 */
 const HIGHLIGHT_DURATION_MS = 2000;
@@ -106,7 +109,7 @@ function StageLimitInput({
 }
 
 /**
- * 유니버스 단계(최대 5단계) 편집기 — 시가총액·거래량·거래대금·PER·가격 변동 순서를
+ * 유니버스 단계(최대 6단계) 편집기 — 시가총액·거래량·거래대금·PER·ROE·가격 변동 순서를
  * 사용자가 직접 쌓고 재배열한다.
  *
  * 상태 전이(add·remove·move·changeLimit) 자체는 `universe-pipeline.ts` 의 순수

@@ -295,6 +295,22 @@ function netIncomeFacts(symbol: string, quarterly: readonly number[], disclosedA
   }));
 }
 
+function totalEquityFact(
+  symbol: string,
+  value: number,
+  disclosedAt = PIPELINE_TS - 1,
+): Fact {
+  return {
+    scope: 'SYMBOL',
+    key: symbol,
+    field: 'TOTAL_EQUITY',
+    periodKey: '2025Q1',
+    asOfTsMs: disclosedAt,
+    value,
+    unit: 'KRW',
+  };
+}
+
 function pipelineRule(stages: UniverseRule['stages']): UniverseRule {
   return {
     markets: ['KOSPI'],
@@ -395,6 +411,36 @@ function makePipelineResolver(options: {
 
 describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
   const period = { from: PIPELINE_DATE, to: PIPELINE_DATE };
+
+  it('ROE는 PIT 양수 재무 안에서 HIGH와 LOW를 반대로 고른다', async () => {
+    const facts = [
+      ...netIncomeFacts('000001', [10, 10, 10, 10]),
+      totalEquityFact('000001', 100),
+      totalEquityFact('000001', 10_000, Date.parse('2025-05-15T15:00:00.000Z')),
+      ...netIncomeFacts('000002', [5, 5, 5, 5]),
+      totalEquityFact('000002', 100),
+      ...netIncomeFacts('000003', [5, 5, 5, 5]),
+      totalEquityFact('000003', -100),
+    ];
+
+    const high = await makePipelineResolver({ facts }).resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'ROE', direction: 'HIGH', limit: 1 }]),
+      period,
+    );
+    const low = await makePipelineResolver({ facts }).resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'ROE', direction: 'LOW', limit: 1 }]),
+      period,
+    );
+
+    expect(high.kind).toBe('READY');
+    expect(low.kind).toBe('READY');
+    if (high.kind !== 'READY' || low.kind !== 'READY') throw new Error('재무 coverage가 완전해야 한다');
+    expect(high.schedule[0]?.members.map((member) => member.symbol)).toEqual(['000001']);
+    expect(low.schedule[0]?.members.map((member) => member.symbol)).toEqual(['000002']);
+    expect(high.diagnostics[0]?.stages[0]).toMatchObject({
+      criterion: 'ROE', direction: 'HIGH', eligibleCount: 2, excludedMissingCount: 1,
+    });
+  });
 
   it('master 날짜를 아직 수집하지 않았으면 빈 후보 Map을 실제 빈 scope로 확정하지 않는다', async () => {
     const resolver = makePipelineResolver({ masterCovered: false });

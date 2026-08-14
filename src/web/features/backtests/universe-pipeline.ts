@@ -11,7 +11,7 @@ export const FIRST_STAGE_LIMIT_MAX = 200;
 /** 급하락 단계를 새로 추가할 때 붙이는 기본 조회기간 — 편집기가 곧바로 유효한 값을 보여주기 위함 */
 export const DEFAULT_DECLINE_LOOKBACK_TRADING_DAYS = 20;
 
-const MAX_STAGE_COUNT = 5;
+const MAX_STAGE_COUNT = 6;
 
 export interface PipelineUpdate {
   stages: UniverseStage[];

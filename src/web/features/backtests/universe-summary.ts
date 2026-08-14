@@ -19,6 +19,7 @@ export const CRITERION_LABEL: Record<UniverseCriterion, string> = {
   VOLUME: '거래량',
   TRADING_VALUE: '거래대금',
   PER: 'PER',
+  ROE: 'ROE',
   DECLINE: '가격 변동',
 };
 
@@ -30,6 +31,7 @@ const DIRECTION_LABEL: Record<
   VOLUME: { HIGH: '상위', LOW: '하위' },
   TRADING_VALUE: { HIGH: '상위', LOW: '하위' },
   PER: { HIGH: '높음', LOW: '낮음' },
+  ROE: { HIGH: '높음', LOW: '낮음' },
   DECLINE: { HIGH: '급상승', LOW: '급하락' },
 };
 

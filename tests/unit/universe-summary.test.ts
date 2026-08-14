@@ -3,6 +3,18 @@ import { formatUniverseRuleSummary } from '../../src/web/features/backtests/univ
 import type { UniverseRule } from '../../src/shared/schemas/universe-rule.js';
 
 describe('formatUniverseRuleSummary', () => {
+  it.each([
+    ['HIGH', 'ROE 높음 40'],
+    ['LOW', 'ROE 낮음 40'],
+  ] as const)('ROE %s 방향을 요약한다', (direction, expectedStage) => {
+    const rule: UniverseRule = {
+      markets: ['KOSPI'],
+      stages: [{ criterion: 'ROE', direction, limit: 40 }],
+      rebalanceInterval: { unit: 'MONTH', value: 1 },
+    };
+    expect(formatUniverseRuleSummary(rule)).toBe(`KOSPI · ${expectedStage} · 매월`);
+  });
+
   it('시장 · 단계(→로 연결) · 주기 순서로 한 줄 요약을 만든다', () => {
     const rule: UniverseRule = {
       markets: ['KOSPI'],

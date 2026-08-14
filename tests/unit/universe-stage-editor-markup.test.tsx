@@ -73,6 +73,19 @@ describe('단계 추가', () => {
     expect(html).toContain('name="lookbackTradingDays"');
     expect(html).toContain('value="20"');
   });
+
+  it('서로 다른 여섯 기준을 모두 쓰면 여섯 행을 그리고 추가 버튼을 숨긴다', () => {
+    const html = renderEditor([
+      { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 100 },
+      { criterion: 'VOLUME', direction: 'HIGH', limit: 90 },
+      { criterion: 'TRADING_VALUE', direction: 'HIGH', limit: 80 },
+      { criterion: 'PER', direction: 'LOW', limit: 70 },
+      { criterion: 'ROE', direction: 'HIGH', limit: 60 },
+      { criterion: 'DECLINE', direction: 'LOW', limit: 50, lookbackTradingDays: 20 },
+    ]);
+    expect(html.match(/name="criterion"/g)).toHaveLength(6);
+    expect(html).not.toContain('단계 추가');
+  });
 });
 
 describe('방향 선택', () => {

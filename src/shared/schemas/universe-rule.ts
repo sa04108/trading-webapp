@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const universeCriterionSchema = z.enum([
-  'MARKET_CAP', 'VOLUME', 'TRADING_VALUE', 'PER', 'DECLINE',
+  'MARKET_CAP', 'VOLUME', 'TRADING_VALUE', 'PER', 'ROE', 'DECLINE',
 ]);
 export type UniverseCriterion = z.infer<typeof universeCriterionSchema>;
 
@@ -13,6 +13,7 @@ export const LEGACY_STAGE_DIRECTION = {
   VOLUME: 'HIGH',
   TRADING_VALUE: 'HIGH',
   PER: 'LOW',
+  ROE: 'HIGH',
   DECLINE: 'LOW',
 } as const satisfies Record<UniverseCriterion, UniverseDirection>;
 
@@ -21,6 +22,7 @@ export const PREFERRED_STAGE_DIRECTION = {
   VOLUME: 'HIGH',
   TRADING_VALUE: 'HIGH',
   PER: 'LOW',
+  ROE: 'HIGH',
   DECLINE: 'HIGH',
 } as const satisfies Record<UniverseCriterion, UniverseDirection>;
 
@@ -31,6 +33,7 @@ const rawUniverseStageSchema = z.discriminatedUnion('criterion', [
   z.object({ criterion: z.literal('VOLUME'), direction: universeDirectionSchema.optional(), limit: stageLimitSchema }),
   z.object({ criterion: z.literal('TRADING_VALUE'), direction: universeDirectionSchema.optional(), limit: stageLimitSchema }),
   z.object({ criterion: z.literal('PER'), direction: universeDirectionSchema.optional(), limit: stageLimitSchema }),
+  z.object({ criterion: z.literal('ROE'), direction: universeDirectionSchema.optional(), limit: stageLimitSchema }),
   z.object({
     criterion: z.literal('DECLINE'),
     direction: universeDirectionSchema.optional(),
@@ -56,7 +59,7 @@ export type RebalanceInterval = z.infer<typeof rebalanceIntervalSchema>;
 
 export const universeRuleSchema = z.object({
   markets: z.array(z.enum(['KOSPI', 'KOSDAQ'])).length(1),
-  stages: z.array(universeStageSchema).min(1).max(5),
+  stages: z.array(universeStageSchema).min(1).max(6),
   rebalanceInterval: rebalanceIntervalSchema,
 }).superRefine((rule, ctx) => {
   const seen = new Set<UniverseCriterion>();

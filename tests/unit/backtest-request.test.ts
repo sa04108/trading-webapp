@@ -112,6 +112,38 @@ describe('universeRule', () => {
     if (parsed.success) expect(parsed.data.universeRule.stages[0]?.direction).toBe('HIGH');
   });
 
+  it('ROE 양방향과 서로 다른 여섯 단계를 허용한다', () => {
+    const parsed = backtestRequestSchema.safeParse({
+      ...baseRequest(),
+      universeRule: {
+        markets: ['KOSPI'],
+        stages: [
+          { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 100 },
+          { criterion: 'VOLUME', direction: 'HIGH', limit: 90 },
+          { criterion: 'TRADING_VALUE', direction: 'HIGH', limit: 80 },
+          { criterion: 'PER', direction: 'LOW', limit: 70 },
+          { criterion: 'ROE', direction: 'HIGH', limit: 60 },
+          { criterion: 'DECLINE', direction: 'LOW', limit: 50, lookbackTradingDays: 20 },
+        ],
+        rebalanceInterval: { value: 1, unit: 'MONTH' },
+      },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('일곱 단계는 거부한다', () => {
+    const stages = Array.from({ length: 7 }, (_, index) => ({
+      criterion: ['MARKET_CAP', 'VOLUME', 'TRADING_VALUE', 'PER', 'ROE', 'DECLINE', 'ROE'][index],
+      direction: 'HIGH',
+      limit: 10,
+      ...(index === 5 ? { lookbackTradingDays: 20 } : {}),
+    }));
+    expect(backtestRequestSchema.safeParse({
+      ...baseRequest(),
+      universeRule: { markets: ['KOSPI'], stages, rebalanceInterval: { value: 1, unit: 'MONTH' } },
+    }).success).toBe(false);
+  });
+
   it('알 수 없는 방향은 거부한다', () => {
     const parsed = backtestRequestSchema.safeParse({
       ...baseRequest(),
@@ -161,7 +193,7 @@ describe('universeRule', () => {
   it.each([
     ['중복 기준', { ...validRule, stages: [{ criterion: 'PER', direction: 'LOW', limit: 100 }, { criterion: 'PER', direction: 'LOW', limit: 40 }] }],
     ['증가하는 N', { ...validRule, stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 40 }, { criterion: 'PER', direction: 'LOW', limit: 41 }] }],
-    ['6개 단계', { ...validRule, stages: Array.from({ length: 6 }, (_, i) => ({ criterion: ['MARKET_CAP', 'VOLUME', 'TRADING_VALUE', 'PER', 'DECLINE'][i % 5], limit: 10 })) }],
+    ['7개 단계', { ...validRule, stages: Array.from({ length: 7 }, (_, i) => ({ criterion: ['MARKET_CAP', 'VOLUME', 'TRADING_VALUE', 'PER', 'DECLINE'][i % 5], limit: 10 })) }],
   ])('%s 규칙을 거부한다', (_name, universeRule) => {
     expect(backtestRequestSchema.safeParse({ ...baseRequest(), universeRule }).success).toBe(false);
   });

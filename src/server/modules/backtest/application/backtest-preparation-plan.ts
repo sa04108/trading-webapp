@@ -34,7 +34,9 @@ export function buildBacktestPreparationPlan(input: {
 }): BacktestPreparationPlan {
   const { request, resolutionNeeds, strategy } = input;
   const finalSymbols = sortedUnique(input.finalUniverseSymbols ?? []);
-  const universeLookback = request.universeRule.stages.some((stage) => stage.criterion === 'PER')
+  const universeLookback = request.universeRule.stages.some(
+    (stage) => stage.criterion === 'PER' || stage.criterion === 'ROE',
+  )
     ? 4
     : 0;
   const strategyLookback = strategy.dataRequirements?.fundamentalLookbackQuarters ?? 0;

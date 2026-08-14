@@ -61,6 +61,12 @@ describe('rankUniverseStage', () => {
     }
   });
 
+  it('LOW 방향 동률도 단축코드 오름차순으로 결정한다', () => {
+    expect(rankUniverseStage(stage('PER', 3, 'LOW'), rows(
+      ['000003', 10], ['000001', 10], ['000002', 10],
+    )).selectedCodes).toEqual(['KR7000001', 'KR7000002', 'KR7000003']);
+  });
+
   it('결측과 비유한 PER을 제외하고 단계 진단 수를 정확히 센다', () => {
     const result = rankUniverseStage(stage('PER', 2, 'LOW'), rows(
       ['000001', 5], ['000002', null], ['000003', Number.NaN], ['000004', 7],

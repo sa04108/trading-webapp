@@ -340,16 +340,12 @@ export class UniverseRuleResolver {
             dateSelectionMetricDates.add(effectiveDate);
             stageReady = false;
           }
-        } else if (stage.criterion === 'PER') {
-          const stageMetrics = selectionMetrics.getAt(
-            effectiveDate,
-            candidates.map((entry) => entry.standardCode),
-          );
+        } else if (stage.criterion === 'PER' || stage.criterion === 'ROE') {
           // 재무 결측은 parquet 파일 존재(hasFacts)가 아니라 financial coverage 연도로
           // 판정한다. 자본변동 전용 수집도 같은 파일에 fact 를 남기므로 파일 존재는
           // 재무 있음을 증명하지 못한다 (fact-coverage-store.ts 주석). coverage 는
           // 공시가 없던 연도도 시도 후 기록되므로 이 판정은 sync 한 번이면 수렴한다.
-          const requiredYears = perRequiredFactYears(effectiveDate, period);
+          const requiredYears = financialStageRequiredFactYears(effectiveDate, period);
           const coveredBySymbol = factCoverage.getCoveredYears(
             candidates.map((entry) => entry.shortCode),
           );
@@ -366,7 +362,33 @@ export class UniverseRuleResolver {
           });
           const view = new PitFactView(loaded);
           view.advanceTo(kstEndOfDayMs(effectiveDate));
-          rows = exactPerRankingRows(candidates, stageMetrics, view);
+          if (stage.criterion === 'PER') {
+            const stageMetrics = selectionMetrics.getAt(
+              effectiveDate,
+              candidates.map((entry) => entry.standardCode),
+            );
+            rows = exactRatioRankingRows(candidates, (entry) => {
+              const cap = stageMetrics.get(entry.standardCode)?.marketCapKrw ?? null;
+              const income = positiveNumberFraction(
+                view.fundamentals(entry.shortCode)?.ttm('NET_INCOME') ?? null,
+              );
+              return cap === null || cap <= 0n || income === null
+                ? null
+                : { numerator: cap * income.denominator, denominator: income.numerator };
+            });
+          } else {
+            rows = exactRatioRankingRows(candidates, (entry) => {
+              const snapshot = view.fundamentals(entry.shortCode);
+              const income = positiveNumberFraction(snapshot?.ttm('NET_INCOME') ?? null);
+              const equity = positiveNumberFraction(snapshot?.get('TOTAL_EQUITY') ?? null);
+              return income === null || equity === null
+                ? null
+                : {
+                    numerator: income.numerator * equity.denominator,
+                    denominator: income.denominator * equity.numerator,
+                  };
+            });
+          }
         } else {
           const codes = candidates.map((entry) => entry.shortCode);
           // 조회 하한 없이 부르면 후보 × 리밸런스 날짜마다 전체 일봉 이력을 읽는다.
@@ -552,7 +574,7 @@ export class UniverseRuleResolver {
  * (`derivePreparationFactYearRange(period, 4)`)로 클램프한다 — 그보다 이른 연도를
  * 요구하면 어떤 sync 도 채울 수 없어 준비 작업이 같은 needs 를 반복하다 실패한다.
  */
-function perRequiredFactYears(effectiveDate: string, period: BacktestPeriod): number[] {
+function financialStageRequiredFactYears(effectiveDate: string, period: BacktestPeriod): number[] {
   const planRange = derivePreparationFactYearRange(period, 4);
   const effectiveYear = Number(effectiveDate.slice(0, 4));
   const fromYear = Math.max(effectiveYear - 1, planRange.fromYear);
@@ -569,12 +591,12 @@ function yearsBetween(from: string, to: string): number[] {
   return years;
 }
 
-interface PositiveFraction {
+interface ExactPositiveRatio {
   readonly numerator: bigint;
   readonly denominator: bigint;
 }
 
-function positiveNumberFraction(value: number | null): PositiveFraction | null {
+function positiveNumberFraction(value: number | null): ExactPositiveRatio | null {
   if (value === null || !Number.isFinite(value) || value <= 0) return null;
   const [coefficient, exponentText] = value.toString().toLowerCase().split('e');
   const exponent = exponentText === undefined ? 0 : Number(exponentText);
@@ -588,20 +610,13 @@ function positiveNumberFraction(value: number | null): PositiveFraction | null {
   return { numerator, denominator };
 }
 
-function exactPerRankingRows(
+function exactRatioRankingRows(
   candidates: readonly SymbolMasterEntry[],
-  metrics: ReturnType<SelectionMetricRepository['getAt']>,
-  view: PitFactView,
+  ratioOf: (entry: SymbolMasterEntry) => ExactPositiveRatio | null,
 ): UniverseStageValue[] {
   const ratios = candidates.flatMap((entry) => {
-    const cap = metrics.get(entry.standardCode)?.marketCapKrw ?? null;
-    const income = positiveNumberFraction(view.fundamentals(entry.shortCode)?.ttm('NET_INCOME') ?? null);
-    if (cap === null || cap <= 0n || income === null) return [];
-    return [{
-      entry,
-      numerator: cap * income.denominator,
-      denominator: income.numerator,
-    }];
+    const ratio = ratioOf(entry);
+    return ratio === null ? [] : [{ entry, ...ratio }];
   });
   ratios.sort((a, b) => {
     const left = a.numerator * b.denominator;

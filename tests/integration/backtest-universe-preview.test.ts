@@ -972,7 +972,11 @@ describe('POST /backtests/universe-preview — 3단계 파이프라인 진단 (T
         unit: 'KRW',
       })),
     );
-    await ctx.container.factRepository.saveFacts(netIncomeFacts);
+    const equityFacts: Fact[] = [
+      { scope: 'SYMBOL', key: 'X', field: 'TOTAL_EQUITY', periodKey: '2025Q1', asOfTsMs: Date.parse('2025-01-01T00:00:00Z'), value: 200, unit: 'KRW' },
+      { scope: 'SYMBOL', key: 'Y', field: 'TOTAL_EQUITY', periodKey: '2025Q1', asOfTsMs: Date.parse('2025-01-01T00:00:00Z'), value: 400, unit: 'KRW' },
+    ];
+    await ctx.container.factRepository.saveFacts([...netIncomeFacts, ...equityFacts]);
   });
 
   afterEach(async () => {
@@ -1028,6 +1032,32 @@ describe('POST /backtests/universe-preview — 3단계 파이프라인 진단 (T
         { criterion: 'PER', direction: 'LOW', inputCount: 3, eligibleCount: 2, selectedCount: 2, excludedMissingCount: 1 },
         { criterion: 'DECLINE', direction: 'LOW', inputCount: 2, eligibleCount: 2, selectedCount: 1, excludedMissingCount: 0 },
       ],
+    });
+  });
+
+  it.each([
+    ['HIGH', 'X'],
+    ['LOW', 'Y'],
+  ] as const)('ROE %s preview가 %s를 고르고 방향 진단을 반환한다', async (direction, symbol) => {
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: {
+          markets: ['KOSPI'],
+          stages: [{ criterion: 'ROE', direction, limit: 1 }],
+          rebalanceInterval: { unit: 'DAY', value: 1 },
+        },
+        period: { from: EFFECTIVE_DATE, to: EFFECTIVE_DATE },
+        strategyId: 'range-breakout',
+        parameters: {},
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      schedule: [{ members: [{ symbol }] }],
+      diagnostics: [{ stages: [{ criterion: 'ROE', direction, eligibleCount: 2, selectedCount: 1 }] }],
     });
   });
 });
