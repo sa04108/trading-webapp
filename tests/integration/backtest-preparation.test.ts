@@ -13,7 +13,11 @@ import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 const previewInput = (criterion: 'MARKET_CAP' | 'PER' = 'MARKET_CAP'): PreparationInput => ({
   universeRule: {
     markets: ['KOSPI'],
-    stages: [{ criterion, limit: 1 }],
+    stages: [{
+      criterion,
+      direction: criterion === 'PER' ? 'LOW' : 'HIGH',
+      limit: 1,
+    }],
     rebalanceInterval: { unit: 'DAY', value: 1 },
   },
   period: { from: '2026-01-05', to: '2026-01-05' },
@@ -385,7 +389,7 @@ describe('backtest preparation HTTP/SSE', () => {
     const input = previewInput();
     const universeRule = {
       ...input.universeRule,
-      stages: [{ criterion: 'TRADING_VALUE' as const, direction: 'HIGH', limit: 1 }],
+      stages: [{ criterion: 'TRADING_VALUE' as const, direction: 'HIGH' as const, limit: 1 }],
     };
     const initial = await ctx.container.universeRuleResolver.resolveOrDescribeNeeds(
       universeRule,
@@ -443,8 +447,8 @@ describe('backtest preparation HTTP/SSE', () => {
       universeRule: {
         ...input.universeRule,
         stages: [
-          { criterion: 'TRADING_VALUE' as const, direction: 'HIGH', limit: 1 },
-          { criterion: 'MARKET_CAP' as const, direction: 'HIGH', limit: 1 },
+          { criterion: 'TRADING_VALUE' as const, direction: 'HIGH' as const, limit: 1 },
+          { criterion: 'MARKET_CAP' as const, direction: 'HIGH' as const, limit: 1 },
         ],
       },
     };
@@ -473,8 +477,8 @@ describe('backtest preparation HTTP/SSE', () => {
       universeRule: {
         ...input.universeRule,
         stages: [
-          { criterion: 'PER' as const, direction: 'LOW', limit: 1 },
-          { criterion: 'MARKET_CAP' as const, direction: 'HIGH', limit: 1 },
+          { criterion: 'PER' as const, direction: 'LOW' as const, limit: 1 },
+          { criterion: 'MARKET_CAP' as const, direction: 'HIGH' as const, limit: 1 },
         ],
       },
     };

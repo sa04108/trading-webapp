@@ -195,10 +195,10 @@ describe('BacktestPreparationOrchestrator NEEDS_DATA DART gate', () => {
   });
 
   it.each([
-    { criterion: 'PER' as const, stage: { criterion: 'PER' as const, direction: 'LOW', limit: 1 } },
+    { criterion: 'PER' as const, stage: { criterion: 'PER' as const, direction: 'LOW' as const, limit: 1 } },
     {
       criterion: 'DECLINE' as const,
-      stage: { criterion: 'DECLINE' as const, direction: 'LOW', limit: 1, lookbackTradingDays: 20 },
+      stage: { criterion: 'DECLINE' as const, direction: 'LOW' as const, limit: 1, lookbackTradingDays: 20 },
     },
   ])('후보 scope 미상이면 price-only 전략이어도 $criterion stage 가 DART 를 예고한다', async ({ stage }) => {
     // 전략 metadata 가 아니라 유니버스 stage 가 DART 를 요구하는 경우 —

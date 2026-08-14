@@ -82,11 +82,11 @@ describe('addStage', () => {
 
   it('6번째 단계 추가는 거부한다', () => {
     const fiveStages = [
-      { criterion: 'MARKET_CAP' as const, direction: 'HIGH', limit: 100 },
-      { criterion: 'VOLUME' as const, direction: 'HIGH', limit: 90 },
-      { criterion: 'TRADING_VALUE' as const, direction: 'HIGH', limit: 80 },
-      { criterion: 'PER' as const, direction: 'LOW', limit: 70 },
-      { criterion: 'DECLINE' as const, direction: 'LOW', limit: 60, lookbackTradingDays: 20 },
+      { criterion: 'MARKET_CAP' as const, direction: 'HIGH' as const, limit: 100 },
+      { criterion: 'VOLUME' as const, direction: 'HIGH' as const, limit: 90 },
+      { criterion: 'TRADING_VALUE' as const, direction: 'HIGH' as const, limit: 80 },
+      { criterion: 'PER' as const, direction: 'LOW' as const, limit: 70 },
+      { criterion: 'DECLINE' as const, direction: 'LOW' as const, limit: 60, lookbackTradingDays: 20 },
     ];
     expect(() => addStage(fiveStages, 'MARKET_CAP')).toThrow();
   });
