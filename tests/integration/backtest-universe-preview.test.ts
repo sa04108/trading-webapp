@@ -164,6 +164,7 @@ describe('POST /backtests/universe-preview', () => {
         effectiveDate: '2026-01-05',
         stages: [{
           criterion: 'MARKET_CAP',
+          direction: 'HIGH',
           inputCount: 1,
           eligibleCount: 1,
           selectedCount: 1,
@@ -1012,6 +1013,7 @@ describe('POST /backtests/universe-preview — 3단계 파이프라인 진단 (T
         effectiveDate: string;
         stages: Array<{
           criterion: string;
+          direction: 'HIGH' | 'LOW';
           inputCount: number;
           eligibleCount: number;
           selectedCount: number;

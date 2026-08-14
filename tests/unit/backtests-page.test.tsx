@@ -43,7 +43,7 @@ function job(id: string, status: JobSummary['status']): JobSummary {
       parameters: {},
       universeRule: {
         markets: ['KOSPI'],
-        stages: [{ criterion: 'MARKET_CAP', limit: 10 }],
+        stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 10 }],
         rebalanceInterval: { value: 1, unit: 'MONTH' },
       },
       period: { from: '2025-01-01', to: '2026-01-01' },

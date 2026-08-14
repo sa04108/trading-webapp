@@ -193,7 +193,15 @@ describe('universeRule', () => {
   it.each([
     ['중복 기준', { ...validRule, stages: [{ criterion: 'PER', direction: 'LOW', limit: 100 }, { criterion: 'PER', direction: 'LOW', limit: 40 }] }],
     ['증가하는 N', { ...validRule, stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 40 }, { criterion: 'PER', direction: 'LOW', limit: 41 }] }],
-    ['7개 단계', { ...validRule, stages: Array.from({ length: 7 }, (_, i) => ({ criterion: ['MARKET_CAP', 'VOLUME', 'TRADING_VALUE', 'PER', 'DECLINE'][i % 5], limit: 10 })) }],
+    ['7개 단계', {
+      ...validRule,
+      stages: Array.from({ length: 7 }, (_, i) => ({
+        criterion: ['MARKET_CAP', 'VOLUME', 'TRADING_VALUE', 'PER', 'DECLINE'][i % 5],
+        direction: 'HIGH',
+        limit: 10,
+        ...(i % 5 === 4 ? { lookbackTradingDays: 20 } : {}),
+      })),
+    }],
   ])('%s 규칙을 거부한다', (_name, universeRule) => {
     expect(backtestRequestSchema.safeParse({ ...baseRequest(), universeRule }).success).toBe(false);
   });

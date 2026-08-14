@@ -11,7 +11,7 @@ const currentPin: ProvenancePin = {
   selectionMethod: 'ORDERED_UNIVERSE_PIPELINE',
   universeRule: {
     markets: ['KOSPI'],
-    stages: [{ criterion: 'MARKET_CAP', limit: 40 }],
+    stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 40 }],
     rebalanceInterval: { value: 1, unit: 'MONTH' },
   },
   scheduleHash: 'schedule-hash',

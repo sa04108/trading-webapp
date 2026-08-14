@@ -1274,6 +1274,7 @@ describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepar
           effectiveDate: string;
           stages: Array<{
             criterion: string;
+            direction: 'HIGH' | 'LOW';
             inputCount: number;
             eligibleCount: number;
             selectedCount: number;
