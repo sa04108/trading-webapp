@@ -12,7 +12,6 @@ import {
   computeDrawdownSeries,
   computeMetrics,
   computeMonthlyReturns,
-  computeSymbolMetrics,
 } from './metrics.js';
 import { createRng } from './seeded-rng.js';
 import type {
@@ -27,7 +26,6 @@ import type {
   OrderIntent,
   Position,
   SelectionMetricPin,
-  SymbolMetrics,
   Trade,
 } from './types.js';
 
@@ -105,7 +103,6 @@ export interface BacktestRunResult {
   readonly trades: readonly Trade[];
   readonly fills: readonly Fill[];
   readonly monthlyReturns: readonly MonthlyReturn[];
-  readonly symbolMetrics: readonly SymbolMetrics[];
   readonly warnings: readonly string[];
   readonly cancelled: boolean;
   readonly processedBars: number;
@@ -822,7 +819,6 @@ function* runBacktestSteps(
     trades,
     fills,
     monthlyReturns: computeMonthlyReturns(equityPoints, input.initialCash),
-    symbolMetrics: computeSymbolMetrics(trades),
     warnings,
     cancelled,
     processedBars,

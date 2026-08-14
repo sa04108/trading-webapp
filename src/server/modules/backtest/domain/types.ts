@@ -137,13 +137,6 @@ export interface MonthlyReturn {
   readonly returnPct: number;
 }
 
-export interface SymbolMetrics {
-  readonly symbol: string;
-  readonly tradeCount: number;
-  readonly netPnl: number;
-  readonly winRate: number | null;
-}
-
 /** 스펙 §9.6 필수 지표 */
 export interface BacktestMetrics {
   readonly initialCash: number;

@@ -4,7 +4,6 @@ import type {
   EquityPoint,
   Fill,
   MonthlyReturn,
-  SymbolMetrics,
   Trade,
 } from './types.js';
 
@@ -100,26 +99,6 @@ export function computeMonthlyReturns(
     previous = entry.equity;
   }
   return result;
-}
-
-export function computeSymbolMetrics(trades: readonly Trade[]): SymbolMetrics[] {
-  const bySymbol = new Map<string, Trade[]>();
-  for (const trade of trades) {
-    const list = bySymbol.get(trade.symbol) ?? [];
-    list.push(trade);
-    bySymbol.set(trade.symbol, list);
-  }
-  return [...bySymbol.entries()]
-    .sort(([a], [b]) => (a < b ? -1 : 1))
-    .map(([symbol, symbolTrades]) => {
-      const wins = symbolTrades.filter((t) => t.netPnl > 0).length;
-      return {
-        symbol,
-        tradeCount: symbolTrades.length,
-        netPnl: symbolTrades.reduce((sum, t) => sum + t.netPnl, 0),
-        winRate: symbolTrades.length > 0 ? (wins / symbolTrades.length) * 100 : null,
-      };
-    });
 }
 
 export function computeMetrics(

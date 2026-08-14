@@ -15,7 +15,6 @@ import {
   backtestMetrics,
   backtestMonthlyReturns,
   backtestRuns,
-  backtestSymbolMetrics,
   backtestTrades,
   symbolMasterStorageState,
   symbolMasterTradingDays,
@@ -573,19 +572,6 @@ async function main(): Promise<void> {
       if (result.monthlyReturns.length > 0) {
         db.insert(backtestMonthlyReturns)
           .values(result.monthlyReturns.map((m) => ({ jobId, ...m })))
-          .run();
-      }
-      if (result.symbolMetrics.length > 0) {
-        db.insert(backtestSymbolMetrics)
-          .values(
-            result.symbolMetrics.map((s) => ({
-              jobId,
-              symbol: s.symbol,
-              tradeCount: s.tradeCount,
-              netPnl: s.netPnl,
-              winRate: s.winRate,
-            })),
-          )
           .run();
       }
     });

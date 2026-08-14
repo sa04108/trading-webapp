@@ -12,7 +12,6 @@ import {
   backtestMetrics,
   backtestMonthlyReturns,
   backtestRuns,
-  backtestSymbolMetrics,
   backtestTrades,
 } from '../../../shared/db/schema.js';
 import { downsampleLttb } from './downsample.js';
@@ -88,16 +87,12 @@ export class ResultsService {
       .all()
       .map((row) => ({ year: row.year, month: row.month, returnPct: row.returnPct }));
     const symbols = this.db
-      .select()
-      .from(backtestSymbolMetrics)
-      .where(eq(backtestSymbolMetrics.jobId, jobId))
+      .selectDistinct({ symbol: backtestTrades.symbol })
+      .from(backtestTrades)
+      .where(eq(backtestTrades.jobId, jobId))
+      .orderBy(asc(backtestTrades.symbol))
       .all()
-      .map((row) => ({
-        symbol: row.symbol,
-        tradeCount: row.tradeCount,
-        netPnl: row.netPnl,
-        winRate: row.winRate,
-      }));
+      .map((row) => row.symbol);
 
     return {
       equity: downsampleLttb(equity, CHART_MAX_POINTS),

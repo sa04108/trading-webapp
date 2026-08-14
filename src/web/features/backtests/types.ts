@@ -111,7 +111,7 @@ export interface SeriesResponse {
   equity: SeriesPoint[];
   drawdown: SeriesPoint[];
   monthly: Array<{ year: number; month: number; returnPct: number }>;
-  symbols: Array<{ symbol: string; tradeCount: number; netPnl: number; winRate: number | null }>;
+  symbols: string[];
   totalEquityPoints: number;
 }
 

@@ -230,6 +230,7 @@ describe('runBacktest 이벤트 순서 (스펙 §9.1, §9.2)', () => {
     expect(trade.netPnl).toBeCloseTo(200 - 4.6);
     // 최종 equity = 초기 + netPnl
     expect(result.metrics.finalEquity).toBeCloseTo(10_000 + 200 - 4.6);
+    expect(result).not.toHaveProperty('symbolMetrics');
   });
 
   it('reports open positions at period end with mark-to-market PnL', () => {

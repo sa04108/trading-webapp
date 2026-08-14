@@ -780,7 +780,6 @@ backtest_equity_points
 backtest_drawdown_points
 backtest_trades
 backtest_monthly_returns
-backtest_symbol_metrics
 
 audit_logs
 __drizzle_migrations

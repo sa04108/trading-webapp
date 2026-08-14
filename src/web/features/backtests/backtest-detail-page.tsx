@@ -598,10 +598,7 @@ export function BacktestDetailPage() {
   const { data: series } = useBacktestSeries(id, completed === true);
 
   // `series.symbols` 는 거래 내역에 종목 이름을 붙일 목록이다 — 거래가 0건인 종목은 빠진다.
-  const resolvedSymbols = useMemo(
-    () => series?.symbols.map((s) => s.symbol) ?? [],
-    [series],
-  );
+  const resolvedSymbols = useMemo(() => series?.symbols ?? [], [series]);
   // 거래 내역에 이름을 붙이기 위해 전 종목을 한 번에 조회한다.
   const stockNames = useStockNames(resolvedSymbols);
   const nameOf = (symbol: string): string | null => stockNames.get(symbol)?.name ?? null;

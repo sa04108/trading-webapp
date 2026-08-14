@@ -451,21 +451,6 @@ export const backtestMonthlyReturns = sqliteTable(
   (table) => [index('idx_backtest_monthly_job').on(table.jobId)],
 );
 
-export const backtestSymbolMetrics = sqliteTable(
-  'backtest_symbol_metrics',
-  {
-    id: integer('id').primaryKey({ autoIncrement: true }),
-    jobId: text('job_id')
-      .notNull()
-      .references(() => backtestJobs.id, { onDelete: 'cascade' }),
-    symbol: text('symbol').notNull(),
-    tradeCount: integer('trade_count').notNull(),
-    netPnl: real('net_pnl').notNull(),
-    winRate: real('win_rate'),
-  },
-  (table) => [index('idx_backtest_symbol_job').on(table.jobId)],
-);
-
 // ── 종목 마스터 (설계 2026-08-05-symbol-master) ──────────────────────
 
 /**
