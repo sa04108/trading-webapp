@@ -10,7 +10,7 @@ const BASE_REQUEST = {
   parameters: {},
   universeRule: {
     markets: ['KOSPI'],
-    stages: [{ criterion: 'MARKET_CAP', limit: 20 }],
+    stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 20 }],
     rebalanceInterval: { unit: 'MONTH', value: 1 },
   },
   timeframe: '1d',
@@ -113,7 +113,7 @@ describe('buildBacktestPreparationPlan', () => {
         ...BASE_REQUEST,
         universeRule: {
           ...BASE_REQUEST.universeRule,
-          stages: [{ criterion: 'PER', limit: 20 }],
+          stages: [{ criterion: 'PER', direction: 'LOW', limit: 20 }],
         },
       },
       resolutionNeeds: { ...EMPTY_NEEDS, factSymbols: ['005930', '000660'] },
@@ -190,7 +190,7 @@ describe('buildBacktestPreparationPlan', () => {
         ...BASE_REQUEST,
         universeRule: {
           ...BASE_REQUEST.universeRule,
-          stages: [{ criterion: 'DECLINE', limit: 10, lookbackTradingDays: 20 }],
+          stages: [{ criterion: 'DECLINE', direction: 'LOW', limit: 10, lookbackTradingDays: 20 }],
         },
       },
       resolutionNeeds: {
@@ -261,7 +261,7 @@ describe('buildBacktestPreparationPlan', () => {
         ...BASE_REQUEST,
         universeRule: {
           ...BASE_REQUEST.universeRule,
-          stages: [{ criterion: 'MARKET_CAP', limit: 19 }],
+          stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 19 }],
         },
       }),
       hash({ ...BASE_REQUEST, strategyId: 'another-strategy' }),

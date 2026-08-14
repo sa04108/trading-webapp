@@ -1,4 +1,8 @@
-import type { UniverseCriterion, UniverseStage } from '../../../shared/schemas/universe-rule.js';
+import {
+  PREFERRED_STAGE_DIRECTION,
+  type UniverseCriterion,
+  type UniverseStage,
+} from '../../../shared/schemas/universe-rule.js';
 
 /** 첫 단계만 이 값까지 허용한다 — 뒤 단계는 항상 직전 단계 값이 상한이다 (스키마와 같은 값) */
 export const FIRST_STAGE_LIMIT_MAX = 200;
@@ -47,8 +51,13 @@ export function addStage(
   const limit = previous ? previous.limit : FIRST_STAGE_LIMIT_MAX;
   const newStage: UniverseStage =
     criterion === 'DECLINE'
-      ? { criterion, limit, lookbackTradingDays: DEFAULT_DECLINE_LOOKBACK_TRADING_DAYS }
-      : { criterion, limit };
+      ? {
+          criterion,
+          direction: PREFERRED_STAGE_DIRECTION[criterion],
+          limit,
+          lookbackTradingDays: DEFAULT_DECLINE_LOOKBACK_TRADING_DAYS,
+        }
+      : { criterion, direction: PREFERRED_STAGE_DIRECTION[criterion], limit };
   return cascadeLimits([...stages, newStage]);
 }
 

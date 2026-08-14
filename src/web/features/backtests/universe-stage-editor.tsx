@@ -3,7 +3,11 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
-import type { UniverseCriterion, UniverseStage } from '../../../shared/schemas/universe-rule.js';
+import {
+  PREFERRED_STAGE_DIRECTION,
+  type UniverseCriterion,
+  type UniverseStage,
+} from '../../../shared/schemas/universe-rule.js';
 import {
   addStage,
   changeStageLimit,
@@ -134,8 +138,13 @@ export function UniverseStageEditor({ stages, onChange }: UniverseStageEditorPro
     const next = stages.map((stage, i): UniverseStage => {
       if (i !== index) return stage;
       return criterion === 'DECLINE'
-        ? { criterion, limit: stage.limit, lookbackTradingDays: DEFAULT_DECLINE_LOOKBACK_TRADING_DAYS }
-        : { criterion, limit: stage.limit };
+        ? {
+            criterion,
+            direction: PREFERRED_STAGE_DIRECTION[criterion],
+            limit: stage.limit,
+            lookbackTradingDays: DEFAULT_DECLINE_LOOKBACK_TRADING_DAYS,
+          }
+        : { criterion, direction: PREFERRED_STAGE_DIRECTION[criterion], limit: stage.limit };
     });
     onChange(next);
   };

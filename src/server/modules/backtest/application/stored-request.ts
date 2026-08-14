@@ -2,6 +2,7 @@ import {
   backtestRequestSchema,
   type BacktestRequest,
 } from '../../../../shared/schemas/backtest-request.js';
+import { PREFERRED_STAGE_DIRECTION } from '../../../../shared/schemas/universe-rule.js';
 
 export type StoredRequestRebase =
   | { readonly ok: true; readonly request: BacktestRequest; readonly warnings: readonly string[] }
@@ -37,7 +38,7 @@ function rebaseUniverseRule(draft: Record<string, unknown>, warnings: string[]):
 
   draft.universeRule = {
     markets: rule.markets,
-    stages: [{ criterion: 'MARKET_CAP', limit: rule.topN }],
+    stages: [{ criterion: 'MARKET_CAP', direction: PREFERRED_STAGE_DIRECTION.MARKET_CAP, limit: rule.topN }],
     rebalanceInterval: { value: months, unit: 'MONTH' },
   };
 }

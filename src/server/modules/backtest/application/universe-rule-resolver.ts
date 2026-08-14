@@ -120,12 +120,6 @@ export function sumExcludedNonTrading(schedule: readonly LegacyUniverseScheduleE
   return schedule.reduce((sum, entry) => sum + entry.excludedNonTradingCount, 0);
 }
 
-/** 시총 내림차순 비교 — BigInt 차이를 Number 로 좁히면 큰 시총에서 오버플로가 나므로 부호만 본다 */
-function compareMarketCapDesc(a: bigint, b: bigint): number {
-  if (a === b) return 0;
-  return a > b ? -1 : 1;
-}
-
 export class UniverseRuleResolver {
   constructor(private readonly deps: UniverseRuleResolverDeps) {}
 
@@ -222,7 +216,12 @@ export class UniverseRuleResolver {
         if (marketCapKrw === undefined) continue; // 시총 없는 종목은 순위에 넣지 않는다
         ranked.push({ entry, marketCap: BigInt(marketCapKrw) });
       }
-      ranked.sort((a, b) => compareMarketCapDesc(a.marketCap, b.marketCap));
+      const direction = rule.stages[0]!.direction;
+      ranked.sort((a, b) => {
+        const valueOrder = a.marketCap === b.marketCap ? 0 : a.marketCap < b.marketCap ? -1 : 1;
+        if (valueOrder !== 0) return direction === 'LOW' ? valueOrder : -valueOrder;
+        return compareShortCodes(a.entry.shortCode, b.entry.shortCode);
+      });
 
       // 이 메서드는 MARKET_CAP 첫 단계만 본다(위 docblock 참고) — stages[1..] 는
       // 여기서 소비하지 않는다.
@@ -651,4 +650,3 @@ async function loadCandleHistories(
   for (const list of histories.values()) list.sort((a, b) => a.tsMs - b.tsMs);
   return histories;
 }
-

@@ -85,7 +85,7 @@ describe('backtest preparation HTTP/SSE', () => {
     expect(ready.json()).toMatchObject({
       schedule: [{ members: [{ symbol: '005930' }] }],
       unionSymbols: ['005930'],
-      stages: [{ criterion: 'MARKET_CAP', limit: 1 }],
+      stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 }],
     });
   });
 
@@ -385,7 +385,7 @@ describe('backtest preparation HTTP/SSE', () => {
     const input = previewInput();
     const universeRule = {
       ...input.universeRule,
-      stages: [{ criterion: 'TRADING_VALUE' as const, limit: 1 }],
+      stages: [{ criterion: 'TRADING_VALUE' as const, direction: 'HIGH', limit: 1 }],
     };
     const initial = await ctx.container.universeRuleResolver.resolveOrDescribeNeeds(
       universeRule,
@@ -443,8 +443,8 @@ describe('backtest preparation HTTP/SSE', () => {
       universeRule: {
         ...input.universeRule,
         stages: [
-          { criterion: 'TRADING_VALUE' as const, limit: 1 },
-          { criterion: 'MARKET_CAP' as const, limit: 1 },
+          { criterion: 'TRADING_VALUE' as const, direction: 'HIGH', limit: 1 },
+          { criterion: 'MARKET_CAP' as const, direction: 'HIGH', limit: 1 },
         ],
       },
     };
@@ -473,8 +473,8 @@ describe('backtest preparation HTTP/SSE', () => {
       universeRule: {
         ...input.universeRule,
         stages: [
-          { criterion: 'PER' as const, limit: 1 },
-          { criterion: 'MARKET_CAP' as const, limit: 1 },
+          { criterion: 'PER' as const, direction: 'LOW', limit: 1 },
+          { criterion: 'MARKET_CAP' as const, direction: 'HIGH', limit: 1 },
         ],
       },
     };

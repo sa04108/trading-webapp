@@ -7,7 +7,7 @@ const request: BacktestRequestBody = {
   parameters: { lookbackBars: 10, atrPeriod: 5 },
   universeRule: {
     markets: ['KOSPI'],
-    stages: [{ criterion: 'MARKET_CAP', limit: 200 }],
+    stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 200 }],
     rebalanceInterval: { value: 1, unit: 'MONTH' },
   },
   period: { from: '2025-07-27', to: '2026-07-24' },
@@ -33,7 +33,7 @@ describe('requestToFormState', () => {
     expect(state.parameters).toEqual({ lookbackBars: '10', atrPeriod: '5' });
     expect(state.universeRule).toEqual({
       markets: ['KOSPI'],
-      stages: [{ criterion: 'MARKET_CAP', limit: 200 }],
+      stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 200 }],
       rebalanceInterval: { value: 1, unit: 'MONTH' },
     });
     expect(state.from).toBe('2025-07-27');
@@ -68,9 +68,9 @@ describe('requestToFormState', () => {
       universeRule: {
         markets: ['KOSDAQ'],
         stages: [
-          { criterion: 'MARKET_CAP', limit: 200 },
-          { criterion: 'PER', limit: 80 },
-          { criterion: 'DECLINE', limit: 40, lookbackTradingDays: 60 },
+          { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 200 },
+          { criterion: 'PER', direction: 'LOW', limit: 80 },
+          { criterion: 'DECLINE', direction: 'LOW', limit: 40, lookbackTradingDays: 60 },
         ],
         rebalanceInterval: { value: 2, unit: 'WEEK' },
       },

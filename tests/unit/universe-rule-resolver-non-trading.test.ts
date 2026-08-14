@@ -32,7 +32,7 @@ describe('UniverseRuleResolver 거래불가 제외', () => {
     const resolved = await resolver.resolve(
       {
         markets: ['KOSDAQ'],
-        stages: [{ criterion: 'MARKET_CAP', limit: 1 }],
+        stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 }],
         rebalanceInterval: { value: 1, unit: 'MONTH' },
       },
       ['2022-02-15'],
@@ -65,7 +65,7 @@ describe('UniverseRuleResolver 거래불가 제외', () => {
     await resolver.resolve(
       {
         markets: ['KOSDAQ'],
-        stages: [{ criterion: 'MARKET_CAP', limit: 1 }],
+        stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 }],
         rebalanceInterval: { value: 1, unit: 'MONTH' },
       },
       ['2022-02-15', '2022-03-15'],

@@ -9,8 +9,8 @@ import { rebalanceIntervalFitsPeriod } from '@shared/schemas/rebalance-interval'
 import type { UniverseStage } from '@shared/schemas/universe-rule';
 
 const declineStages: UniverseStage[] = [
-  { criterion: 'MARKET_CAP', limit: 200 },
-  { criterion: 'DECLINE', limit: 150, lookbackTradingDays: 20 },
+  { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 200 },
+  { criterion: 'DECLINE', direction: 'LOW', limit: 150, lookbackTradingDays: 20 },
 ];
 
 function renderEditor(stages: readonly UniverseStage[]): string {
@@ -40,7 +40,7 @@ describe('신규 진입 기본값', () => {
   it('KOSPI / 시가총액 200 / 1개월 / maxPositions 40 이다', () => {
     expect(DEFAULT_UNIVERSE_RULE).toEqual({
       markets: ['KOSPI'],
-      stages: [{ criterion: 'MARKET_CAP', limit: 200 }],
+      stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 200 }],
       rebalanceInterval: { value: 1, unit: 'MONTH' },
     });
     expect(DEFAULT_MAX_POSITIONS).toBe('40');
@@ -50,7 +50,7 @@ describe('신규 진입 기본값', () => {
 describe('단계 추가', () => {
   it('PER 단계를 추가하면 N 은 200으로 복사되고 입력 max 도 200이다', () => {
     const update = addStage(DEFAULT_UNIVERSE_RULE.stages, 'PER');
-    expect(update.stages[1]).toEqual({ criterion: 'PER', limit: 200 });
+    expect(update.stages[1]).toEqual({ criterion: 'PER', direction: 'LOW', limit: 200 });
 
     const html = renderEditor(update.stages);
     expect(html).toContain('id="stage-limit-1"');
@@ -61,8 +61,8 @@ describe('단계 추가', () => {
     const withPer = addStage(DEFAULT_UNIVERSE_RULE.stages, 'PER');
     const update = changeStageLimit(withPer.stages, 0, 100);
     expect(update.stages).toEqual([
-      { criterion: 'MARKET_CAP', limit: 100 },
-      { criterion: 'PER', limit: 100 },
+      { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 100 },
+      { criterion: 'PER', direction: 'LOW', limit: 100 },
     ]);
     expect(update.changedIndices).toEqual([1]);
   });

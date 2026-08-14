@@ -26,7 +26,7 @@ const marketCapRule = (
   rebalanceInterval: { unit: 'DAY' | 'WEEK' | 'MONTH' | 'YEAR'; value: number } = { unit: 'DAY', value: 1 },
 ) => ({
   markets,
-  stages: [{ criterion: 'MARKET_CAP', limit: 10 }],
+  stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 10 }],
   rebalanceInterval,
 });
 
@@ -137,7 +137,7 @@ describe('POST /backtests/universe-preview', () => {
       payload: {
         universeRule: {
           markets: ['KOSPI'],
-          stages: [{ criterion: 'MARKET_CAP', limit: 10 }],
+          stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 10 }],
           // 이 test는 하루짜리 period 하나만 본다 — 리밸런스 간격 자체는 무관하다.
           rebalanceInterval: { unit: 'DAY', value: 1 },
         },
@@ -170,7 +170,7 @@ describe('POST /backtests/universe-preview', () => {
           excludedMissingCount: 0,
         }],
       }],
-      stages: [{ criterion: 'MARKET_CAP', limit: 10 }],
+      stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 10 }],
     });
   });
 
@@ -196,7 +196,7 @@ describe('POST /backtests/universe-preview', () => {
       payload: {
         universeRule: {
           markets: ['KOSPI'],
-          stages: [{ criterion: 'PER', limit: 10 }],
+          stages: [{ criterion: 'PER', direction: 'LOW', limit: 10 }],
           // 이 test는 하루짜리 period 하나만 본다 — 리밸런스 간격 자체는 무관하다.
           rebalanceInterval: { unit: 'DAY', value: 1 },
         },
@@ -545,7 +545,7 @@ describe('POST /backtests/universe-preview', () => {
       payload: {
         universeRule: {
           markets: ['KOSPI'],
-          stages: [{ criterion: 'MARKET_CAP', limit: 10 }],
+          stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 10 }],
           rebalanceInterval: { unit: 'MONTH', value: 2 },
         },
         period: { from: '2026-01-05', to: '2026-01-06' },
@@ -651,7 +651,7 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
       payload: {
         universeRule: {
           markets: ['KOSPI'],
-          stages: [{ criterion: 'VOLUME', limit: 1 }],
+          stages: [{ criterion: 'VOLUME', direction: 'HIGH', limit: 1 }],
           // 이 test는 하루짜리 period 하나만 본다 — 리밸런스 간격 자체는 무관하다.
           rebalanceInterval: { unit: 'DAY', value: 1 },
         },
@@ -988,9 +988,9 @@ describe('POST /backtests/universe-preview — 3단계 파이프라인 진단 (T
         universeRule: {
           markets: ['KOSPI'],
           stages: [
-            { criterion: 'MARKET_CAP', limit: 3 },
-            { criterion: 'PER', limit: 2 },
-            { criterion: 'DECLINE', limit: 1, lookbackTradingDays: 5 },
+            { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 3 },
+            { criterion: 'PER', direction: 'LOW', limit: 2 },
+            { criterion: 'DECLINE', direction: 'LOW', limit: 1, lookbackTradingDays: 5 },
           ],
           // 이 test는 하루짜리 period 하나만 본다 — 리밸런스 간격 자체는 무관하다.
           rebalanceInterval: { unit: 'DAY', value: 1 },
@@ -1024,9 +1024,9 @@ describe('POST /backtests/universe-preview — 3단계 파이프라인 진단 (T
       rebalanceDate: EFFECTIVE_DATE,
       effectiveDate: EFFECTIVE_DATE,
       stages: [
-        { criterion: 'MARKET_CAP', inputCount: 3, eligibleCount: 3, selectedCount: 3, excludedMissingCount: 0 },
-        { criterion: 'PER', inputCount: 3, eligibleCount: 2, selectedCount: 2, excludedMissingCount: 1 },
-        { criterion: 'DECLINE', inputCount: 2, eligibleCount: 2, selectedCount: 1, excludedMissingCount: 0 },
+        { criterion: 'MARKET_CAP', direction: 'HIGH', inputCount: 3, eligibleCount: 3, selectedCount: 3, excludedMissingCount: 0 },
+        { criterion: 'PER', direction: 'LOW', inputCount: 3, eligibleCount: 2, selectedCount: 2, excludedMissingCount: 1 },
+        { criterion: 'DECLINE', direction: 'LOW', inputCount: 2, eligibleCount: 2, selectedCount: 1, excludedMissingCount: 0 },
       ],
     });
   });

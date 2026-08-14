@@ -7,9 +7,9 @@ describe('formatUniverseRuleSummary', () => {
     const rule: UniverseRule = {
       markets: ['KOSPI'],
       stages: [
-        { criterion: 'MARKET_CAP', limit: 200 },
-        { criterion: 'PER', limit: 80 },
-        { criterion: 'DECLINE', limit: 40, lookbackTradingDays: 20 },
+        { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 200 },
+        { criterion: 'PER', direction: 'LOW', limit: 80 },
+        { criterion: 'DECLINE', direction: 'LOW', limit: 40, lookbackTradingDays: 20 },
       ],
       rebalanceInterval: { unit: 'MONTH', value: 1 },
     };
@@ -21,7 +21,7 @@ describe('formatUniverseRuleSummary', () => {
   it('단계가 하나뿐이면 화살표 없이 그 단계만 적는다', () => {
     const rule: UniverseRule = {
       markets: ['KOSDAQ'],
-      stages: [{ criterion: 'VOLUME', limit: 100 }],
+      stages: [{ criterion: 'VOLUME', direction: 'HIGH', limit: 100 }],
       rebalanceInterval: { unit: 'WEEK', value: 2 },
     };
     expect(formatUniverseRuleSummary(rule)).toBe('KOSDAQ · 거래량 100 · 2주마다');
@@ -30,7 +30,7 @@ describe('formatUniverseRuleSummary', () => {
   it('주기 value 가 1이면 매일/매주/매월/매년으로 적는다', () => {
     const base: UniverseRule = {
       markets: ['KOSPI'],
-      stages: [{ criterion: 'TRADING_VALUE', limit: 50 }],
+      stages: [{ criterion: 'TRADING_VALUE', direction: 'HIGH', limit: 50 }],
       rebalanceInterval: { unit: 'DAY', value: 1 },
     };
     expect(formatUniverseRuleSummary(base)).toBe('KOSPI · 거래대금 50 · 매일');
@@ -48,7 +48,7 @@ describe('formatUniverseRuleSummary', () => {
   it('주기 value 가 1이 아니면 N일마다/N주마다/N개월마다로 적는다', () => {
     const base: UniverseRule = {
       markets: ['KOSPI'],
-      stages: [{ criterion: 'TRADING_VALUE', limit: 50 }],
+      stages: [{ criterion: 'TRADING_VALUE', direction: 'HIGH', limit: 50 }],
       rebalanceInterval: { unit: 'DAY', value: 1 },
     };
     expect(

@@ -73,7 +73,7 @@ const MASTER_DATES = ['2025-07-27', '2025-08-01', '2025-09-01', '2025-10-01'];
 function universeRule(topN: number): BacktestRequest['universeRule'] {
   return {
     markets: ['KOSPI'],
-    stages: [{ criterion: 'MARKET_CAP', limit: topN }],
+    stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: topN }],
     rebalanceInterval: { value: 1, unit: 'MONTH' },
   };
 }
@@ -1230,9 +1230,9 @@ describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepar
   const THREE_STAGE_RULE: BacktestRequest['universeRule'] = {
     markets: ['KOSPI'],
     stages: [
-      { criterion: 'MARKET_CAP', limit: 5 },
-      { criterion: 'PER', limit: 3 },
-      { criterion: 'DECLINE', limit: 2, lookbackTradingDays: 20 },
+      { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 5 },
+      { criterion: 'PER', direction: 'LOW', limit: 3 },
+      { criterion: 'DECLINE', direction: 'LOW', limit: 2, lookbackTradingDays: 20 },
     ],
     rebalanceInterval: { unit: 'MONTH', value: 1 },
   };
@@ -1490,9 +1490,9 @@ describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepar
       expect(preview.unionSymbols.slice().sort()).toEqual(['A', 'B', 'C']);
       for (const entry of preview.diagnostics) {
         const [marketCap, per, decline] = entry.stages;
-        expect(marketCap).toMatchObject({ criterion: 'MARKET_CAP', inputCount: 7, selectedCount: 5, excludedMissingCount: 0 });
-        expect(per).toMatchObject({ criterion: 'PER', inputCount: 5, eligibleCount: 3, selectedCount: 3, excludedMissingCount: 2 });
-        expect(decline).toMatchObject({ criterion: 'DECLINE', inputCount: 3, selectedCount: 2 });
+        expect(marketCap).toMatchObject({ criterion: 'MARKET_CAP', direction: 'HIGH', inputCount: 7, selectedCount: 5, excludedMissingCount: 0 });
+        expect(per).toMatchObject({ criterion: 'PER', direction: 'LOW', inputCount: 5, eligibleCount: 3, selectedCount: 3, excludedMissingCount: 2 });
+        expect(decline).toMatchObject({ criterion: 'DECLINE', direction: 'LOW', inputCount: 3, selectedCount: 2 });
       }
 
       // 6. 백테스트 제출·worker 실행 후 schedule hash와 provenance를 확인한다

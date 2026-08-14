@@ -103,9 +103,12 @@ async function ingestFixtureUniverse(ctx: Ctx): Promise<void> {
 }
 
 describe('UniverseRuleResolver.resolve', () => {
-  const marketCapRule = (limit: number): UniverseRule => ({
+  const marketCapRule = (
+    limit: number,
+    direction: 'HIGH' | 'LOW' = 'HIGH',
+  ): UniverseRule => ({
     markets: ['KOSPI'],
-    stages: [{ criterion: 'MARKET_CAP', limit }],
+    stages: [{ criterion: 'MARKET_CAP', direction, limit }],
     rebalanceInterval: { value: 1, unit: 'MONTH' },
   });
 
@@ -143,6 +146,17 @@ describe('UniverseRuleResolver.resolve', () => {
     const expectedHash = createHash('sha256').update(JSON.stringify(result.schedule)).digest('hex');
     expect(result.scheduleHash).toBe(expectedHash);
 
+    await teardown(ctx);
+  });
+
+  it('시가총액 LOW는 작은 시가총액부터 N개를 고른다', async () => {
+    const ctx = await setup();
+    await ingestFixtureUniverse(ctx);
+
+    const result = await ctx.resolver.resolve(marketCapRule(2, 'LOW'), ['2023-01-02']);
+
+    expect(result.schedule[0]?.symbols).toEqual(['000030', '000020']);
+    expect(result.unionSymbols).toEqual(['000020', '000030']);
     await teardown(ctx);
   });
 
@@ -386,7 +400,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     const resolver = makePipelineResolver({ masterCovered: false });
 
     const result = await resolver.resolveOrDescribeNeeds(
-      pipelineRule([{ criterion: 'MARKET_CAP', limit: 1 }]),
+      pipelineRule([{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 }]),
       period,
     );
 
@@ -401,12 +415,12 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
   it('stage 순서를 그대로 적용해 MARKET_CAP→PER와 PER→MARKET_CAP 결과가 달라진다', async () => {
     const resolver = makePipelineResolver();
     const capThenPer = await resolver.resolveOrDescribeNeeds(pipelineRule([
-      { criterion: 'MARKET_CAP', limit: 2 },
-      { criterion: 'PER', limit: 1 },
+      { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 2 },
+      { criterion: 'PER', direction: 'LOW', limit: 1 },
     ]), period);
     const perThenCap = await resolver.resolveOrDescribeNeeds(pipelineRule([
-      { criterion: 'PER', limit: 1 },
-      { criterion: 'MARKET_CAP', limit: 1 },
+      { criterion: 'PER', direction: 'LOW', limit: 1 },
+      { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 },
     ]), period);
 
     expect(capThenPer.kind).toBe('READY');
@@ -428,8 +442,8 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     const metricReads: string[][] = [];
     const resolver = makePipelineResolver({ metricReads });
     const result = await resolver.resolveOrDescribeNeeds(pipelineRule([
-      { criterion: 'MARKET_CAP', limit: 2 },
-      { criterion: 'PER', limit: 1 },
+      { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 2 },
+      { criterion: 'PER', direction: 'LOW', limit: 1 },
     ]), period);
 
     expect(result.kind).toBe('READY');
@@ -456,7 +470,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     });
 
     const result = await resolver.resolveOrDescribeNeeds(
-      pipelineRule([{ criterion: 'PER', limit: 3 }]),
+      pipelineRule([{ criterion: 'PER', direction: 'LOW', limit: 3 }]),
       period,
     );
     expect(result.kind).toBe('READY');
@@ -480,9 +494,9 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
       actionCoverage: new Map(),
     });
     const result = await resolver.resolveOrDescribeNeeds(pipelineRule([
-      { criterion: 'TRADING_VALUE', limit: 3 },
-      { criterion: 'PER', limit: 2 },
-      { criterion: 'DECLINE', limit: 1, lookbackTradingDays: 3 },
+      { criterion: 'TRADING_VALUE', direction: 'HIGH', limit: 3 },
+      { criterion: 'PER', direction: 'LOW', limit: 2 },
+      { criterion: 'DECLINE', direction: 'LOW', limit: 1, lookbackTradingDays: 3 },
     ]), period);
 
     expect(result).toMatchObject({
@@ -503,8 +517,8 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     const resolver = makePipelineResolver({ missingTradingValueDates: [PIPELINE_DATE] });
 
     const result = await resolver.resolveOrDescribeNeeds(pipelineRule([
-      { criterion: 'TRADING_VALUE', limit: 1 },
-      { criterion: 'MARKET_CAP', limit: 1 },
+      { criterion: 'TRADING_VALUE', direction: 'HIGH', limit: 1 },
+      { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 },
     ]), period);
 
     expect(result.kind).toBe('NEEDS_DATA');
@@ -522,7 +536,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     });
 
     const result = await resolver.resolveOrDescribeNeeds(
-      pipelineRule([{ criterion: 'VOLUME', limit: 2 }]),
+      pipelineRule([{ criterion: 'VOLUME', direction: 'HIGH', limit: 2 }]),
       period,
     );
 
@@ -538,7 +552,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     const resolver = makePipelineResolver({ metrics, missingTradingValueDates: [] });
 
     const result = await resolver.resolveOrDescribeNeeds(
-      pipelineRule([{ criterion: 'VOLUME', limit: 3 }]),
+      pipelineRule([{ criterion: 'VOLUME', direction: 'HIGH', limit: 3 }]),
       period,
     );
 
@@ -562,7 +576,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     });
 
     const result = await resolver.resolveOrDescribeNeeds(
-      pipelineRule([{ criterion: 'PER', limit: 2 }]),
+      pipelineRule([{ criterion: 'PER', direction: 'LOW', limit: 2 }]),
       period,
     );
 
@@ -582,7 +596,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     });
 
     const result = await resolver.resolveOrDescribeNeeds(
-      pipelineRule([{ criterion: 'PER', limit: 2 }]),
+      pipelineRule([{ criterion: 'PER', direction: 'LOW', limit: 2 }]),
       period,
     );
 
@@ -598,8 +612,8 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     });
 
     const result = await resolver.resolveOrDescribeNeeds(pipelineRule([
-      { criterion: 'PER', limit: 1 },
-      { criterion: 'MARKET_CAP', limit: 1 },
+      { criterion: 'PER', direction: 'LOW', limit: 1 },
+      { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 },
     ]), period);
 
     expect(result.kind).toBe('READY');
@@ -625,8 +639,8 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
 
     const result = await resolver.resolveOrDescribeNeeds(
       pipelineRule([
-        { criterion: 'PER', limit: 1 },
-        { criterion: 'MARKET_CAP', limit: 1 },
+        { criterion: 'PER', direction: 'LOW', limit: 1 },
+        { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 },
       ]),
       { from: PIPELINE_DATE, to: secondDate },
     );
@@ -656,7 +670,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     });
 
     const result = await resolver.resolveOrDescribeNeeds(
-      pipelineRule([{ criterion: 'DECLINE', limit: 1, lookbackTradingDays: 3 }]),
+      pipelineRule([{ criterion: 'DECLINE', direction: 'LOW', limit: 1, lookbackTradingDays: 3 }]),
       period,
     );
     expect(result.kind).toBe('READY');
@@ -693,7 +707,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     });
 
     const result = await resolver.resolveOrDescribeNeeds(
-      pipelineRule([{ criterion: 'DECLINE', limit: 1, lookbackTradingDays: 2 }]),
+      pipelineRule([{ criterion: 'DECLINE', direction: 'LOW', limit: 1, lookbackTradingDays: 2 }]),
       period,
     );
 
@@ -728,7 +742,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     const resolver = makePipelineResolver({ candles });
 
     const result = await resolver.resolveOrDescribeNeeds(
-      pipelineRule([{ criterion: 'DECLINE', limit: 1, lookbackTradingDays: 100 }]),
+      pipelineRule([{ criterion: 'DECLINE', direction: 'LOW', limit: 1, lookbackTradingDays: 100 }]),
       period,
     );
     expect(result.kind).toBe('READY');
@@ -745,7 +759,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     });
 
     const result = await resolver.resolveOrDescribeNeeds(
-      pipelineRule([{ criterion: 'DECLINE', limit: 1, lookbackTradingDays: 3 }]),
+      pipelineRule([{ criterion: 'DECLINE', direction: 'LOW', limit: 1, lookbackTradingDays: 3 }]),
       period,
     );
     expect(result.kind).toBe('NEEDS_DATA');
@@ -768,7 +782,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     });
 
     const result = await resolver.resolveOrDescribeNeeds(
-      pipelineRule([{ criterion: 'DECLINE', limit: 1, lookbackTradingDays: 3 }]),
+      pipelineRule([{ criterion: 'DECLINE', direction: 'LOW', limit: 1, lookbackTradingDays: 3 }]),
       period,
     );
 
@@ -803,7 +817,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     });
 
     const result = await resolver.resolveOrDescribeNeeds(
-      pipelineRule([{ criterion: 'DECLINE', limit: 3, lookbackTradingDays: 3 }]),
+      pipelineRule([{ criterion: 'DECLINE', direction: 'LOW', limit: 3, lookbackTradingDays: 3 }]),
       period,
     );
 
@@ -833,7 +847,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     });
 
     const result = await resolver.resolveOrDescribeNeeds(
-      pipelineRule([{ criterion: 'DECLINE', limit: 3, lookbackTradingDays: 3 }]),
+      pipelineRule([{ criterion: 'DECLINE', direction: 'LOW', limit: 3, lookbackTradingDays: 3 }]),
       period,
     );
 
@@ -847,7 +861,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     const resolver = makePipelineResolver({ priceRangeCovered: false });
 
     const result = await resolver.resolveOrDescribeNeeds(
-      pipelineRule([{ criterion: 'DECLINE', limit: 1, lookbackTradingDays: 3 }]),
+      pipelineRule([{ criterion: 'DECLINE', direction: 'LOW', limit: 1, lookbackTradingDays: 3 }]),
       period,
     );
 
@@ -867,7 +881,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     });
 
     const result = await resolver.resolveOrDescribeNeeds(
-      pipelineRule([{ criterion: 'DECLINE', limit: 3, lookbackTradingDays: 3 }]),
+      pipelineRule([{ criterion: 'DECLINE', direction: 'LOW', limit: 3, lookbackTradingDays: 3 }]),
       period,
     );
 

@@ -86,7 +86,7 @@ test('재설정 및 복제의 전략 단계는 종목과 비용 프로필을 미
           },
           universeRule: {
             markets: ['KOSPI'],
-            stages: [{ criterion: 'MARKET_CAP', limit: 1 }],
+            stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 }],
             rebalanceInterval: { value: 1, unit: 'MONTH' },
           },
           timeframe: '1d',

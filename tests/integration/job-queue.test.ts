@@ -49,7 +49,7 @@ const ACTION_COVERAGE_YEARS = yearRange(2020, 2046);
 function universeRule(topN = 1): BacktestRequest['universeRule'] {
   return {
     markets: ['KOSPI'],
-    stages: [{ criterion: 'MARKET_CAP', limit: topN }],
+    stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: topN }],
     rebalanceInterval: { value: 1, unit: 'MONTH' },
   };
 }
@@ -411,7 +411,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
         period: { from: MAIN_DATE, to: '2026-01-07' },
         universeRule: {
           markets: ['KOSPI'],
-          stages: [{ criterion: 'MARKET_CAP', limit: 1 }],
+          stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 }],
           rebalanceInterval: { value: 1, unit: 'DAY' },
         },
       },
@@ -686,7 +686,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const request = JSON.parse(clonedJob.requestJson) as BacktestRequest;
     expect(request.universeRule).toEqual({
       markets: ['KOSPI'],
-      stages: [{ criterion: 'MARKET_CAP', limit: 200 }],
+      stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 200 }],
       rebalanceInterval: { value: 3, unit: 'MONTH' },
     });
     expect(request.parameters).not.toHaveProperty('rebalanceMonths');
@@ -842,6 +842,30 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(draft.json()).toEqual({ request, warnings: [], blockers: [] });
   });
 
+  it('초안은 방향 없는 기존 가격 변동 단계를 과거 LOW 방향으로 복원한다', async () => {
+    const current = buildRequest();
+    const job = ctx.container.jobQueue.enqueue({
+      ...current,
+      universeRule: {
+        markets: ['KOSPI'],
+        stages: [{ criterion: 'DECLINE', limit: 20, lookbackTradingDays: 20 }],
+        rebalanceInterval: { value: 1, unit: 'MONTH' },
+      },
+    } as never);
+
+    const draft = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${job.id}/clone-draft`,
+      cookies: { qp_session: cookie },
+    });
+
+    expect(draft.statusCode).toBe(200);
+    const body = draft.json() as { request: BacktestRequest };
+    expect(body.request.universeRule.stages).toEqual([
+      { criterion: 'DECLINE', direction: 'LOW', limit: 20, lookbackTradingDays: 20 },
+    ]);
+  });
+
   it('재무가 필요한 원본도 유니버스 단계 전에는 blockers 없이 연다', async () => {
     const request: BacktestRequest = {
       ...buildRequest(),
@@ -867,8 +891,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       universeRule: {
         markets: ['KOSPI'],
         stages: [
-          { criterion: 'PER', limit: 5 },
-          { criterion: 'MARKET_CAP', limit: 1 },
+          { criterion: 'PER', direction: 'LOW', limit: 5 },
+          { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 },
         ],
         rebalanceInterval: { value: 1, unit: 'MONTH' },
       },
