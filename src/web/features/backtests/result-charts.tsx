@@ -7,6 +7,7 @@ import {
   Cell,
   Line,
   LineChart,
+  Legend,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -81,6 +82,69 @@ export function EquityChart({ points, summary }: { points: SeriesPoint[]; summar
                 dot={false}
                 isAnimationActive={false}
               />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+export function BenchmarkComparisonChart({
+  strategy,
+  benchmark,
+  initialCash,
+  benchmarkName,
+  summary,
+}: {
+  strategy: SeriesPoint[];
+  benchmark: SeriesPoint[];
+  initialCash: number;
+  benchmarkName: string;
+  summary: string;
+}) {
+  const merged = new Map<number, { tsMs: number; strategy?: number; benchmark?: number }>();
+  for (const point of strategy) {
+    merged.set(point.tsMs, { tsMs: point.tsMs, strategy: point.value / initialCash * 100 });
+  }
+  for (const point of benchmark) {
+    const row = merged.get(point.tsMs) ?? { tsMs: point.tsMs };
+    row.benchmark = point.value;
+    merged.set(point.tsMs, row);
+  }
+  const data = [...merged.values()].sort((a, b) => a.tsMs - b.tsMs);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">벤치마크 비교</CardTitle>
+        <CardDescription>{summary}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="h-60 w-full" role="img" aria-label={`벤치마크 비교 차트. ${summary}`}>
+          <ResponsiveContainer>
+            <LineChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 4 }}>
+              <CartesianGrid stroke={GRID} strokeDasharray="2 4" vertical={false} />
+              <XAxis
+                dataKey="tsMs"
+                type="number"
+                scale="time"
+                domain={['dataMin', 'dataMax']}
+                tickFormatter={(ts: number) => formatDate(ts).slice(2)}
+                tick={AXIS_TICK}
+                tickLine={false}
+                axisLine={{ stroke: GRID }}
+                minTickGap={48}
+              />
+              <YAxis tick={AXIS_TICK} tickLine={false} axisLine={false} width={44} domain={['auto', 'auto']} />
+              <Tooltip
+                contentStyle={tooltipContentStyle}
+                labelFormatter={(ts) => formatDate(Number(ts))}
+                formatter={(value, name) => [Number(value).toFixed(2), String(name)]}
+              />
+              <Legend />
+              <Line type="monotone" dataKey="strategy" name="전략" stroke="var(--primary)" strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+              <Line type="monotone" dataKey="benchmark" name={benchmarkName} stroke={INK} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
             </LineChart>
           </ResponsiveContainer>
         </div>

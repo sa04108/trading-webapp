@@ -9,6 +9,7 @@ import { DataPage, DatasetsIndexRedirect } from '../features/datasets/data-page'
 import { NotificationsPage } from '../features/notifications/notifications-page';
 import { SettingsPage } from '../features/settings/settings-page';
 import { SymbolMasterPanel } from '../features/symbol-master/symbol-master-panel';
+import { BenchmarkPanel } from '../features/datasets/benchmark-panel';
 import { RequireAuth } from './require-auth';
 import { AppShell } from './shell';
 
@@ -32,6 +33,7 @@ export const router = createBrowserRouter([
             children: [
               { index: true, element: <DatasetsIndexRedirect /> },
               { path: 'master', element: <SymbolMasterPanel /> },
+              { path: 'benchmarks', element: <BenchmarkPanel /> },
               // 모르는 하위 경로(옛 tab 값을 경로로 손입력한 /datasets/prices 같은 것)도
               // 기본 구획으로 잇는다. 이 자식이 없으면 매칭 실패가 앱 셸을 통째로 라우터
               // 오류 화면으로 바꿔, 사용자가 nav 를 잃고 URL 을 다시 쳐야 한다.

@@ -250,6 +250,19 @@ describe('KRX 과거 유니버스 어댑터', () => {
     });
   });
 
+  it('대표지수 경로에서 KOSPI 종가를 읽는다', async () => {
+    const { fetchImpl, calls } = createFetch(() =>
+      krxJsonResponse(krxEnvelope([
+        { IDX_NM: '코스피 100', CLSPRC_IDX: '2,500.10' },
+        { IDX_NM: '코스피', CLSPRC_IDX: '2,789.42' },
+      ])),
+    );
+    const source = createConfiguredSource({ fetchImpl });
+
+    await expect(source.fetchBenchmarkClose?.('KOSPI', '2026-08-01')).resolves.toBe(2789.42);
+    expect(calls[0]?.url).toBe(`${BASE_URL}/svc/apis/idx/kospi_dd_trd?basDd=20260801`);
+  });
+
   it.each([
     ['OutBlock_1 누락', { resultCode: 'SUCCESS' }],
     ['OutBlock_1 형식 오류', { OutBlock_1: {} }],

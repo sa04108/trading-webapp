@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import { benchmarkIdSchema } from '../../../../shared/schemas/benchmark.js';
 import type {
   SymbolMasterCoverageDto,
   SymbolMasterEntryDto,
@@ -8,7 +9,13 @@ import type {
   SymbolMasterUniverseDto,
 } from '../../../../shared/schemas/symbol-master.js';
 import type { SymbolMasterEntry } from '../domain/symbol-master.js';
-import { KrxNotConfiguredError, KrxQuotaError } from '../application/ports.js';
+import {
+  KrxApprovalExpiredError,
+  KrxContractError,
+  KrxNotConfiguredError,
+  KrxQuotaError,
+} from '../application/ports.js';
+import type { BenchmarkService } from '../application/benchmark-service.js';
 import type { SymbolMasterBackfill } from '../application/symbol-master-backfill.js';
 import {
   SymbolMasterNotCoveredError,
@@ -27,6 +34,12 @@ const universeQuerySchema = z.object({ date: dateSchema });
 const eventsQuerySchema = z.object({ from: dateSchema, to: dateSchema });
 const syncBodySchema = z.object({ date: dateSchema });
 const backfillBodySchema = z.object({ fromDate: dateSchema, toDate: dateSchema.optional() });
+const benchmarkQuerySchema = z.object({
+  benchmarkId: benchmarkIdSchema,
+  from: dateSchema,
+  to: dateSchema,
+});
+const benchmarkBackfillBodySchema = z.object({ from: dateSchema, to: dateSchema });
 
 function entryDto(entry: SymbolMasterEntry): SymbolMasterEntryDto {
   return {
@@ -54,7 +67,11 @@ function eventDto(row: SymbolMasterEventRow): SymbolMasterEventDto {
 
 export function registerSymbolMasterRoutes(
   app: FastifyInstance,
-  deps: { service: SymbolMasterService; backfill: SymbolMasterBackfill },
+  deps: {
+    service: SymbolMasterService;
+    backfill: SymbolMasterBackfill;
+    benchmarks: BenchmarkService;
+  },
   requireAuth: PreHandler,
 ): void {
   app.get('/symbol-master/universe', { preHandler: requireAuth }, async (request, reply) => {
@@ -157,5 +174,42 @@ export function registerSymbolMasterRoutes(
     // 백테스트 기간 전체(fromDate~toDate)만 수집하려 할 때 이 인자로 범위를 좁힌다.
     deps.backfill.start(parsed.data.fromDate, parsed.data.toDate);
     return reply.code(202).send(deps.backfill.status());
+  });
+
+  app.get('/benchmarks', { preHandler: requireAuth }, async (request, reply) => {
+    const parsed = benchmarkQuerySchema.safeParse(request.query);
+    if (!parsed.success || parsed.data.from > parsed.data.to) {
+      return reply.code(400).send({ error: 'benchmarkId와 올바른 from/to 날짜가 필요합니다' });
+    }
+    const { benchmarkId, from, to } = parsed.data;
+    return {
+      benchmarkId,
+      ...deps.benchmarks.status(benchmarkId, from, to),
+      backfill: deps.benchmarks.backfillStatus(),
+    };
+  });
+
+  app.post('/benchmarks/sync', { preHandler: requireAuth }, async (request, reply) => {
+    const parsed = syncBodySchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'date(YYYY-MM-DD) 필드가 필요합니다' });
+    try {
+      await deps.benchmarks.syncDate(parsed.data.date);
+      return { date: parsed.data.date };
+    } catch (error) {
+      if (error instanceof KrxQuotaError) return reply.code(429).send({ error: error.message });
+      if (error instanceof KrxNotConfiguredError || error instanceof KrxApprovalExpiredError) {
+        return reply.code(503).send({ error: error.message });
+      }
+      if (error instanceof KrxContractError) return reply.code(502).send({ error: error.message });
+      throw error;
+    }
+  });
+
+  app.post('/benchmarks/backfill', { preHandler: requireAuth }, async (request, reply) => {
+    const parsed = benchmarkBackfillBodySchema.safeParse(request.body);
+    if (!parsed.success || parsed.data.from > parsed.data.to) {
+      return reply.code(400).send({ error: '올바른 from/to 날짜가 필요합니다' });
+    }
+    return reply.code(202).send(deps.benchmarks.startBackfill(parsed.data.from, parsed.data.to));
   });
 }

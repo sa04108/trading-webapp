@@ -66,7 +66,12 @@ import {
   pnlClass,
   timeframeLabel,
 } from '@/lib/format';
-import { DrawdownChart, EquityChart, MonthlyReturnsChart } from './result-charts';
+import {
+  BenchmarkComparisonChart,
+  DrawdownChart,
+  EquityChart,
+  MonthlyReturnsChart,
+} from './result-charts';
 import { resolveJobTimeframe } from './job-timeframe';
 import { StatusBadge } from './status-badge';
 import {
@@ -84,6 +89,7 @@ import { formatUniverseRuleSummary } from './universe-summary';
 import {
   isTerminal,
   type BacktestMetrics,
+  type BenchmarkResult,
   type JobSummary,
   type RunMetadata,
 } from './types';
@@ -97,9 +103,15 @@ import type { UniverseRebalancingEntryDto } from '../../../shared/schemas/univer
 
 const RESULT_PAGE_SIZE = 10;
 
-function MetricCards({ metrics }: { metrics: BacktestMetrics }) {
+function MetricCards({ metrics, benchmark }: { metrics: BacktestMetrics; benchmark: BenchmarkResult | null }) {
   const cost = costSummary(metrics);
-  const cards = [
+  const cards: Array<{
+    label: string;
+    value: string;
+    className: string;
+    detail?: string;
+    cardClassName?: string;
+  }> = [
     {
       label: '누적 수익률',
       value: formatSignedPct(metrics.totalReturnPct),
@@ -126,6 +138,20 @@ function MetricCards({ metrics }: { metrics: BacktestMetrics }) {
       cardClassName: 'col-span-full',
     },
   ];
+  if (benchmark?.available && benchmark.totalReturnPct !== null && benchmark.excessReturnPct !== null) {
+    cards.splice(1, 0,
+      {
+        label: `${benchmark.name} 수익률`,
+        value: formatSignedPct(benchmark.totalReturnPct),
+        className: pnlClass(benchmark.totalReturnPct),
+      },
+      {
+        label: '초과 수익률',
+        value: formatSignedPct(benchmark.excessReturnPct),
+        className: pnlClass(benchmark.excessReturnPct),
+      },
+    );
+  }
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
       {cards.map((card) => (
@@ -593,7 +619,17 @@ export function BacktestDetailPage() {
   const queryClient = useQueryClient();
   const [deleteOpen, setDeleteOpen] = useState(false);
 
-  const { job, run, metrics, provenancePin, universeRebalancing, isLoading, isError, error } = useBacktestLive(id);
+  const {
+    job,
+    run,
+    metrics,
+    benchmark,
+    provenancePin,
+    universeRebalancing,
+    isLoading,
+    isError,
+    error,
+  } = useBacktestLive(id);
   const completed = job?.status === 'COMPLETED';
   const { data: series } = useBacktestSeries(id, completed === true);
 
@@ -785,7 +821,14 @@ export function BacktestDetailPage() {
 
       {completed && metrics ? (
         <>
-          <MetricCards metrics={metrics} />
+          <MetricCards metrics={metrics} benchmark={benchmark} />
+
+          {benchmark && !benchmark.available ? (
+            <Alert>
+              <AlertTitle>{benchmark.name} 비교 사용 불가</AlertTitle>
+              <AlertDescription>{benchmark.unavailableReason}</AlertDescription>
+            </Alert>
+          ) : null}
 
           {series ? (
             <div className="space-y-4">
@@ -799,6 +842,15 @@ export function BacktestDetailPage() {
                     : ''
                 }`}
               />
+              {benchmark?.available && benchmark.totalReturnPct !== null && benchmark.excessReturnPct !== null ? (
+                <BenchmarkComparisonChart
+                  strategy={series.equity}
+                  benchmark={series.benchmark}
+                  initialCash={metrics.initialCash}
+                  benchmarkName={benchmark.name}
+                  summary={`${benchmark.name} ${formatSignedPct(benchmark.totalReturnPct)} · 초과 수익률 ${formatSignedPct(benchmark.excessReturnPct)} · 시작값 100 기준`}
+                />
+              ) : null}
               <DrawdownChart
                 points={series.drawdown}
                 summary={`최대 낙폭 ${formatSignedPct(metrics.maxDrawdownPct)} · 낙폭 기간 ${formatDuration(

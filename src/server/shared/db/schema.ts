@@ -340,6 +340,9 @@ export const backtestJobs = sqliteTable(
      */
     universeJson: text('universe_json'),
     universeHash: text('universe_hash'),
+    /** 제출 시점의 벤치마크 종가와 그 해시. 데이터가 부족해도 부분 pin은 남긴다. */
+    benchmarkJson: text('benchmark_json'),
+    benchmarkHash: text('benchmark_hash'),
     progressBars: integer('progress_bars'),
     totalBars: integer('total_bars'),
     // 진행 위치 표시용 텍스트 (엔진이 시간 우선이라 날짜가 들어간다) — "심볼" 이 아니다
@@ -687,5 +690,20 @@ export const krxDailyBars = sqliteTable(
     primaryKey({ columns: [table.shortCode, table.date] }),
     // 날짜 단위 삭제·점검용 인덱스
     index('idx_krx_daily_bars_date').on(table.date),
+  ],
+);
+
+/** KRX 대표지수 일별 종가. 소수 지수값이므로 종목 원화 봉과 분리한다. */
+export const benchmarkDailyValues = sqliteTable(
+  'benchmark_daily_values',
+  {
+    benchmarkId: text('benchmark_id').notNull(),
+    date: text('date').notNull(),
+    close: real('close').notNull(),
+    syncedAtMs: integer('synced_at_ms').notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.benchmarkId, table.date] }),
+    index('idx_benchmark_daily_values_date').on(table.date),
   ],
 );

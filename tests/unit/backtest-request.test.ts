@@ -34,6 +34,14 @@ function baseRequest(): Record<string, unknown> {
   };
 }
 
+describe('benchmarkId', () => {
+  it('KRX 대표지수만 허용하고 옛 요청의 생략은 유지한다', () => {
+    expect(backtestRequestSchema.safeParse({ ...baseRequest(), benchmarkId: 'KOSDAQ' }).success).toBe(true);
+    expect(backtestRequestSchema.safeParse({ ...baseRequest(), benchmarkId: 'S&P500' }).success).toBe(false);
+    expect(backtestRequestSchema.safeParse(baseRequest()).success).toBe(true);
+  });
+});
+
 /**
  * 단계형 유니버스 규칙은 1~5개의 기준을 순서대로 적용한다. 이후 단계는 앞 단계가
  * 남긴 후보 수를 늘릴 수 없고 같은 기준을 반복할 수 없다.

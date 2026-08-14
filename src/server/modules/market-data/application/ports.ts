@@ -4,6 +4,7 @@ import type {
   KrxIssueBaseInfoRow,
   KrxMarket,
 } from '../domain/krx-universe-types.js';
+import type { BenchmarkId } from '../../../../shared/schemas/benchmark.js';
 
 export type {
   KrxDailyTradeRow,
@@ -34,6 +35,8 @@ export interface CandleRepository {
 export interface KrxHistoricalUniverseSource {
   fetchIssueBaseInfo(market: KrxMarket, isoDate: string): Promise<readonly KrxIssueBaseInfoRow[]>;
   fetchDailyTrades(market: KrxMarket, isoDate: string): Promise<readonly KrxDailyTradeRow[]>;
+  /** 해당 날짜의 대표지수 종가. 휴장일은 null이다. 테스트용 옛 소스는 생략할 수 있다. */
+  fetchBenchmarkClose?(benchmarkId: BenchmarkId, isoDate: string): Promise<number | null>;
   /**
    * 오늘(KST) 가장 많이 부른 엔드포인트의 호출 수. KRX 한도가 엔드포인트마다 따로 걸려 있어
    * 총합으로 재면 남은 여력을 실제보다 적게 본다.

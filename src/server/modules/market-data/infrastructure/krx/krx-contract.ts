@@ -35,6 +35,11 @@ const dailyRowSchema = z.object({
   ACC_TRDVAL: z.string().nullable().optional(),
 }).loose();
 
+const indexRowSchema = z.object({
+  IDX_NM: z.string(),
+  CLSPRC_IDX: z.string().nullable().optional(),
+}).loose();
+
 /** KRX 가 새 필드를 더해도 필수 응답 필드는 계약대로 검증한다. */
 function contractErrorFromZod(context: string, error: z.ZodError): KrxContractError {
   const issue = error.issues[0];
@@ -134,4 +139,24 @@ export function parseDailyRows(rows: readonly Record<string, unknown>[]): KrxDai
       volume: parseNullableIntNumber(row.ACC_TRDVOL, 'ACC_TRDVOL'),
     };
   });
+}
+
+/** 대표지수 이름과 종가만 좁힌다. */
+export function parseIndexClose(
+  rows: readonly Record<string, unknown>[],
+  expectedName: string,
+): number | null {
+  if (rows.length === 0) return null;
+  for (const rawRow of rows) {
+    const parsed = indexRowSchema.safeParse(rawRow);
+    if (!parsed.success) throw contractErrorFromZod('지수 일별 행', parsed.error);
+    if (parsed.data.IDX_NM !== expectedName) continue;
+    const raw = (parsed.data.CLSPRC_IDX ?? '').replaceAll(',', '').trim();
+    const close = Number(raw);
+    if (raw === '' || !Number.isFinite(close) || close <= 0) {
+      throw new KrxContractError(`CLSPRC_IDX 가 양수 형식이 아닙니다: ${raw.slice(0, 30)}`);
+    }
+    return close;
+  }
+  throw new KrxContractError(`대표지수 ${expectedName} 행이 없습니다.`);
 }

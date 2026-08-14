@@ -134,6 +134,13 @@
       "when": 1786697665228,
       "tag": "0018_uneven_raza",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1786705195067,
+      "tag": "0019_hard_madrox",
+      "breakpoints": true
     }
   ]
 }

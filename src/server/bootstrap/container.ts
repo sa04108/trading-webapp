@@ -54,6 +54,7 @@ import { SymbolMasterScheduler } from '../modules/market-data/application/symbol
 import { SelectionMetricRepository } from '../modules/market-data/application/selection-metric-repository.js';
 import { UniverseRuleResolver } from '../modules/backtest/application/universe-rule-resolver.js';
 import { BacktestPreparationOrchestrator } from '../modules/backtest/application/backtest-preparation-orchestrator.js';
+import { BenchmarkService } from '../modules/market-data/application/benchmark-service.js';
 
 export interface SystemStatusProviders {
   queueLength: () => number;
@@ -84,6 +85,7 @@ export interface Container {
   readonly jobQueue: JobQueue;
   readonly jobOrchestrator: JobOrchestrator;
   readonly resultsService: ResultsService;
+  readonly benchmarkService: BenchmarkService;
   readonly factRepository: FactRepository;
   readonly factSyncService: FactSyncService;
   readonly symbolMasterService: SymbolMasterService;
@@ -246,6 +248,13 @@ export function createContainer(config: AppConfig): Container {
     logger,
   );
 
+  const benchmarkService = new BenchmarkService({
+    db: database.db,
+    source: krxSource,
+    clock,
+    logger,
+  });
+
   // 종목 마스터 (설계 2026-08-05-symbol-master-core).
   const symbolMasterService = new SymbolMasterService({
     db: database.db,
@@ -337,6 +346,7 @@ export function createContainer(config: AppConfig): Container {
     jobQueue,
     jobOrchestrator,
     resultsService,
+    benchmarkService,
     factRepository,
     factCoverageStore,
     factSyncService,

@@ -1,5 +1,6 @@
 import type { Clock } from '../../../../shared/clock.js';
 import type { Logger } from '../../../../shared/logger.js';
+import { BENCHMARK_NAMES, type BenchmarkId } from '../../../../../shared/schemas/benchmark.js';
 import { RestClient } from '../../../../shared/rest-client.js';
 import {
   KrxApprovalExpiredError,
@@ -13,7 +14,7 @@ import type {
   KrxIssueBaseInfoRow,
   KrxMarket,
 } from '../../domain/krx-universe-types.js';
-import { parseBaseInfoRows, parseDailyRows, parseKrxEnvelope } from './krx-contract.js';
+import { parseBaseInfoRows, parseDailyRows, parseIndexClose, parseKrxEnvelope } from './krx-contract.js';
 
 export interface KrxConfig {
   readonly baseUrl: string;
@@ -30,6 +31,11 @@ const PATHS: Record<KrxMarket, { readonly base: string; readonly daily: string }
     base: '/svc/apis/sto/ksq_isu_base_info',
     daily: '/svc/apis/sto/ksq_bydd_trd',
   },
+};
+
+const BENCHMARK_PATHS: Record<BenchmarkId, string> = {
+  KOSPI: '/svc/apis/idx/kospi_dd_trd',
+  KOSDAQ: '/svc/apis/idx/kosdaq_dd_trd',
 };
 
 const SAFE_REQUEST_ERROR_MESSAGE = 'KRX Open API 요청에 실패했습니다.';
@@ -49,6 +55,9 @@ function notConfiguredSource(): KrxHistoricalUniverseSource {
       throw new KrxNotConfiguredError();
     },
     fetchDailyTrades: async () => {
+      throw new KrxNotConfiguredError();
+    },
+    fetchBenchmarkClose: async () => {
       throw new KrxNotConfiguredError();
     },
     todayMaxEndpointCallCount: () => 0,
@@ -168,6 +177,15 @@ export function createKrxHistoricalUniverseSource(
       isoDate: string,
     ): Promise<readonly KrxDailyTradeRow[]> =>
       fetchRows(market, isoDate, PATHS[market].daily, parseDailyRows),
+    fetchBenchmarkClose: async (benchmarkId: BenchmarkId, isoDate: string): Promise<number | null> => {
+      const rows = await fetchRows(
+        benchmarkId,
+        isoDate,
+        BENCHMARK_PATHS[benchmarkId],
+        (rawRows) => [...rawRows],
+      );
+      return parseIndexClose(rows, BENCHMARK_NAMES[benchmarkId]);
+    },
     todayMaxEndpointCallCount,
   };
 }

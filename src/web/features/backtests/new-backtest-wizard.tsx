@@ -42,6 +42,11 @@ import {
   type UniversePreviewResponseDto,
 } from './universe-rule-step';
 import type { UniverseRule } from '../../../shared/schemas/universe-rule.js';
+import {
+  BENCHMARK_IDS,
+  BENCHMARK_NAMES,
+  type BenchmarkId,
+} from '../../../shared/schemas/benchmark.js';
 import type { BacktestRequestBody } from './types';
 import {
   navigableStepLimit,
@@ -137,6 +142,7 @@ export function NewBacktestWizard() {
    * 서버가 리밸런스 날짜별로 재구성한다 (`UniverseRuleResolver`).
    */
   const [universeRule, setUniverseRule] = useState<UniverseRule>(DEFAULT_UNIVERSE_RULE);
+  const [benchmarkId, setBenchmarkId] = useState<BenchmarkId>('KOSPI');
   /**
    * `UniverseRuleStep` 이 마지막으로 성공시킨 미리보기 원재료(그때 쓴 params·결과) —
    * **판정 결과가 아니라 원재료만** 저장한다(리뷰 fix). `universePreviewOk`·
@@ -265,6 +271,7 @@ export function NewBacktestWizard() {
     // 원본 timeframe 은 옮기지 않는다 — 위저드가 만들 수 있는 값은 이제 '1d' 하나뿐이라
     // 옛 잡의 값('1m'·'1h')을 그대로 두면 고칠 UI 도 없이 제출이 막힌다.
     setUniverseRule(state.universeRule);
+    setBenchmarkId(state.benchmarkId);
     // 원본의 유니버스 규칙만 옮긴다 — 실제 종목 구성은 이 화면에서 다시 미리보기해야
     // 얻는다(제출 시점에 서버가 새로 재구성하므로 옛 목록은 의미가 없다). lastPreview 를
     // 비워 두면 universePreviewOk 는 그 사실만으로 자연히 false 다(derive 위 참고).
@@ -288,6 +295,14 @@ export function NewBacktestWizard() {
     setParameters({}); // 스키마가 도착하면 위 effect 가 기본값을 심는다
     seededFor.current = null;
     setStepError(null);
+  };
+
+  const changeUniverseRule = (next: UniverseRule): void => {
+    const previousMarket = universeRule.markets.length === 1 ? universeRule.markets[0] : null;
+    setUniverseRule(next);
+    if (previousMarket === benchmarkId && next.markets.length === 1) {
+      setBenchmarkId(next.markets[0]!);
+    }
   };
 
   const paramValue = (spec: NumberParamSpec): string => parameters[spec.key] ?? '';
@@ -321,6 +336,7 @@ export function NewBacktestWizard() {
       strategyId: selectedStrategy.id,
       parameters: parsedParameters,
       universeRule,
+      benchmarkId,
       // 항상 명시해 보낸다 — 결과·복제가 "무슨 봉으로 돌렸는지" 를 들고 다니게 (§9.5).
       // KRX 일봉이 유일한 출처라 고를 것 없이 이 값 하나로 고정한다.
       timeframe: wizardTimeframes[0],
@@ -706,6 +722,19 @@ export function NewBacktestWizard() {
                 onChange={(e) => setTo(e.target.value)}
               />
             </div>
+            <div className="space-y-1 sm:col-span-2">
+              <Label htmlFor="benchmark">벤치마크</Label>
+              <Select value={benchmarkId} onValueChange={(value) => setBenchmarkId(value as BenchmarkId)}>
+                <SelectTrigger id="benchmark" className="h-11 w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {BENCHMARK_IDS.map((id) => (
+                    <SelectItem key={id} value={id}>{BENCHMARK_NAMES[id]}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </CardContent>
         </Card>
       ) : null}
@@ -714,7 +743,7 @@ export function NewBacktestWizard() {
         <div className="space-y-3">
           <UniverseRuleStep
             value={universeRule}
-            onChange={setUniverseRule}
+            onChange={changeUniverseRule}
             period={{ from, to }}
             strategyId={strategyId}
             parameters={parsedParameters}
@@ -875,6 +904,11 @@ export function NewBacktestWizard() {
                 <span>
                   {request.period.from} ~ {request.period.to}
                 </span>
+              </div>
+              <Separator />
+              <div className="flex justify-between gap-3">
+                <span className="shrink-0 text-muted-foreground">벤치마크</span>
+                <span>{BENCHMARK_NAMES[request.benchmarkId ?? 'KOSPI']}</span>
               </div>
               <Separator />
               <div className="flex justify-between gap-3">

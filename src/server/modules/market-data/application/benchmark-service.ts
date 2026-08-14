@@ -1,0 +1,148 @@
+import { createHash } from 'node:crypto';
+import { and, asc, eq, gte, lte } from 'drizzle-orm';
+import {
+  BENCHMARK_NAMES,
+  type BenchmarkId,
+  type BenchmarkPin,
+} from '../../../../shared/schemas/benchmark.js';
+import type { AppDatabase } from '../../../shared/db/database.js';
+import {
+  benchmarkDailyValues,
+  symbolMasterCoverage,
+  symbolMasterTradingDays,
+} from '../../../shared/db/schema.js';
+import type { Clock } from '../../../shared/clock.js';
+import type { Logger } from '../../../shared/logger.js';
+import { addCalendarDays } from '../domain/kst-date.js';
+import { KrxNotConfiguredError, type KrxHistoricalUniverseSource } from './ports.js';
+
+export type BenchmarkBackfillState = 'IDLE' | 'RUNNING' | 'FAILED';
+
+export interface BenchmarkBackfillStatus {
+  state: BenchmarkBackfillState;
+  cursorDate: string | null;
+  from: string | null;
+  to: string | null;
+  error: string | null;
+}
+
+export class BenchmarkService {
+  private backfill: BenchmarkBackfillStatus = {
+    state: 'IDLE', cursorDate: null, from: null, to: null, error: null,
+  };
+
+  constructor(private readonly deps: {
+    db: AppDatabase;
+    source: KrxHistoricalUniverseSource;
+    clock: Clock;
+    logger: Logger;
+  }) {}
+
+  list(benchmarkId: BenchmarkId, from: string, to: string) {
+    return this.deps.db
+      .select({ date: benchmarkDailyValues.date, close: benchmarkDailyValues.close })
+      .from(benchmarkDailyValues)
+      .where(and(
+        eq(benchmarkDailyValues.benchmarkId, benchmarkId),
+        gte(benchmarkDailyValues.date, from),
+        lte(benchmarkDailyValues.date, to),
+      ))
+      .orderBy(asc(benchmarkDailyValues.date))
+      .all();
+  }
+
+  status(benchmarkId: BenchmarkId, from: string, to: string) {
+    const points = this.list(benchmarkId, from, to);
+    const tradingDays = this.deps.db
+      .select({ date: symbolMasterTradingDays.date })
+      .from(symbolMasterTradingDays)
+      .where(and(gte(symbolMasterTradingDays.date, from), lte(symbolMasterTradingDays.date, to)))
+      .orderBy(asc(symbolMasterTradingDays.date))
+      .all();
+    const dates = new Set(points.map((point) => point.date));
+    const missingTradingDays = tradingDays.filter(({ date }) => !dates.has(date)).length;
+    const masterCovered = this.deps.db
+      .select({ startDate: symbolMasterCoverage.startDate })
+      .from(symbolMasterCoverage)
+      .where(and(
+        lte(symbolMasterCoverage.startDate, from),
+        gte(symbolMasterCoverage.endDate, to),
+      ))
+      .get() !== undefined;
+    return {
+      points,
+      covered: masterCovered && tradingDays.length >= 2 && missingTradingDays === 0,
+      missingTradingDays,
+      tradingDays: tradingDays.length,
+    };
+  }
+
+  async syncDate(date: string): Promise<void> {
+    const fetchClose = this.deps.source.fetchBenchmarkClose;
+    if (!fetchClose) throw new KrxNotConfiguredError();
+    for (const benchmarkId of ['KOSPI', 'KOSDAQ'] as const) {
+      const close = await fetchClose(benchmarkId, date);
+      if (close === null) continue;
+      this.deps.db.insert(benchmarkDailyValues).values({
+        benchmarkId,
+        date,
+        close,
+        syncedAtMs: this.deps.clock.now(),
+      }).onConflictDoUpdate({
+        target: [benchmarkDailyValues.benchmarkId, benchmarkDailyValues.date],
+        set: { close, syncedAtMs: this.deps.clock.now() },
+      }).run();
+    }
+  }
+
+  startBackfill(from: string, to: string): BenchmarkBackfillStatus {
+    if (this.backfill.state === 'RUNNING') return this.backfill;
+    this.backfill = { state: 'RUNNING', cursorDate: from, from, to, error: null };
+    void this.runBackfill(from, to);
+    return this.backfill;
+  }
+
+  backfillStatus(): BenchmarkBackfillStatus {
+    return this.backfill;
+  }
+
+  private async runBackfill(from: string, to: string): Promise<void> {
+    try {
+      for (let date = from; date <= to; date = addCalendarDays(date, 1)) {
+        this.backfill.cursorDate = date;
+        const day = new Date(`${date}T00:00:00Z`).getUTCDay();
+        if (day === 0 || day === 6) continue;
+        await this.syncDate(date);
+      }
+      this.backfill = { state: 'IDLE', cursorDate: null, from, to, error: null };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.backfill = { state: 'FAILED', cursorDate: this.backfill.cursorDate, from, to, error: message };
+      this.deps.logger.error(
+        { module: 'market-data', event: 'benchmark.backfill-failed', date: this.backfill.cursorDate, error: message },
+        '벤치마크 백필이 날짜 처리 중 실패했다',
+      );
+    }
+  }
+
+  pin(benchmarkId: BenchmarkId, period: { from: string; to: string }): {
+    pin: BenchmarkPin;
+    hash: string;
+  } {
+    const status = this.status(benchmarkId, period.from, period.to);
+    const pin: BenchmarkPin = {
+      benchmarkId,
+      name: BENCHMARK_NAMES[benchmarkId],
+      source: 'KRX_OPEN_API',
+      sourceVersion: 'v1',
+      period,
+      points: status.points,
+      covered: status.covered,
+      missingTradingDays: status.missingTradingDays,
+    };
+    return {
+      pin,
+      hash: createHash('sha256').update(JSON.stringify(pin)).digest('hex'),
+    };
+  }
+}

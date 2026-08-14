@@ -88,6 +88,7 @@ export async function buildServer(container: Container): Promise<FastifyInstance
           dataRoot: container.config.dataRoot,
           maxQueuedBacktests: container.config.maxQueuedBacktests,
           clock: container.clock,
+          benchmarks: container.benchmarkService,
         },
         requireAuth,
       );
@@ -103,7 +104,11 @@ export async function buildServer(container: Container): Promise<FastifyInstance
       registerNotificationRoutes(api, container.notificationService, requireAuth);
       registerSymbolMasterRoutes(
         api,
-        { service: container.symbolMasterService, backfill: container.symbolMasterBackfill },
+        {
+          service: container.symbolMasterService,
+          backfill: container.symbolMasterBackfill,
+          benchmarks: container.benchmarkService,
+        },
         requireAuth,
       );
     },

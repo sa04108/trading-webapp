@@ -1,4 +1,5 @@
 import type { UniverseRule } from '../../../shared/schemas/universe-rule.js';
+import type { BenchmarkId } from '../../../shared/schemas/benchmark.js';
 
 export type BacktestStatus =
   | 'QUEUED'
@@ -24,6 +25,7 @@ export interface BacktestRequestBody {
   /** 전략 버전은 보내지 않는다 (D-029) — 서버가 실행 시점의 등록 버전을 기록한다 */
   parameters: Record<string, unknown>;
   universeRule: UniverseRule;
+  benchmarkId?: BenchmarkId;
   /** 소비 봉 주기 — 미지정은 유니버스가 가진 슬라이스로 유일하게 정해지는 값 */
   timeframe?: '1m' | '1h' | '1d';
   period: { from: string; to: string };
@@ -109,10 +111,22 @@ export interface SeriesPoint {
 
 export interface SeriesResponse {
   equity: SeriesPoint[];
+  /** 100 기준으로 정규화한 제출 시점 벤치마크 */
+  benchmark: SeriesPoint[];
   drawdown: SeriesPoint[];
   monthly: Array<{ year: number; month: number; returnPct: number }>;
   symbols: string[];
   totalEquityPoints: number;
+}
+
+export interface BenchmarkResult {
+  benchmarkId: BenchmarkId;
+  name: string;
+  available: boolean;
+  unavailableReason: string | null;
+  totalReturnPct: number | null;
+  excessReturnPct: number | null;
+  dataHash: string | null;
 }
 
 export interface TradeRow {

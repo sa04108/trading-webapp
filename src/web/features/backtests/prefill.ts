@@ -4,6 +4,7 @@
 // 모듈은 계속 DOM 을 쓰지 않고 별칭(@/) import 도 쓰지 않아야 한다.
 import type { UniverseRule } from '../../../shared/schemas/universe-rule.js';
 import type { BacktestRequestBody } from './types.js';
+import type { BenchmarkId } from '../../../shared/schemas/benchmark.js';
 
 /** 위저드 입력 상태 — 폼이므로 전부 문자열로 보관한다 (universeRule 은 예외다, 아래 참고) */
 export interface WizardFormState {
@@ -17,6 +18,7 @@ export interface WizardFormState {
    * 풀었다 파싱하면 그 유효성 보장이 두 곳에서 따로 반복된다.
    */
   universeRule: UniverseRule;
+  benchmarkId: BenchmarkId;
   from: string;
   to: string;
   initialCash: string;
@@ -64,6 +66,7 @@ export function requestToFormState(
         : {},
       timeframe: request.timeframe ?? '',
       universeRule: request.universeRule,
+      benchmarkId: request.benchmarkId ?? 'KOSPI',
       from: request.period.from,
       to: request.period.to,
       initialCash: String(request.capital.initialCash),

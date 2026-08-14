@@ -28,6 +28,7 @@ import type {
   CandleCoverageService,
 } from '../../market-data/application/candle-coverage-service.js';
 import type { StrategyRegistry } from '../../strategy/application/strategy-registry.js';
+import type { BenchmarkService } from '../../market-data/application/benchmark-service.js';
 import { estimateBars, MAX_BACKTEST_BARS } from '../domain/bar-estimate.js';
 import {
   getCostProfile,
@@ -64,6 +65,7 @@ export interface BacktestRouteDeps {
   readonly dataRoot: string;
   readonly maxQueuedBacktests: number;
   readonly clock: Clock;
+  readonly benchmarks: BenchmarkService;
 }
 
 const MIN_FREE_DISK_BYTES = 500 * 1024 * 1024;
@@ -211,6 +213,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     audit,
     factCoverage,
     clock,
+    benchmarks,
   } = deps;
 
   /**
@@ -612,18 +615,23 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     // 해소한 소비 봉을 요청에 박아 저장한다 — 워커가 다시 추론하면 두 곳의 규칙이
     // 갈라질 수 있고, 실행 기록도 "무엇을 소비했나" 에 답하지 못한다.
     // provenancePin 은 여기서 조립한 것 그대로 저장한다 — 클라이언트가 준 값이 아니다.
+    const benchmarkId = body.benchmarkId ?? 'KOSPI';
+    const benchmark = benchmarks.pin(benchmarkId, body.period);
     const job = queue.enqueue(
-      { ...body, timeframe: validated.timeframe },
+      { ...body, benchmarkId, timeframe: validated.timeframe },
       validated.resolved.schedule,
       validated.universe,
       validated.provenancePin,
       validated.warnings,
+      benchmark,
     );
     audit.record(request.authUser?.username ?? 'admin', 'backtest.created', {
       jobId: job.id,
       strategyId: body.strategyId,
       universeRule: body.universeRule,
       scheduleHash: validated.provenancePin.scheduleHash,
+      benchmarkId,
+      benchmarkHash: benchmark.hash,
     });
     return reply.code(201).send({ job: serializeJob(job), warnings: validated.warnings });
   });
@@ -656,6 +664,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       job: serializeJob(job),
       run: results.getRun(id),
       metrics: results.getMetrics(id),
+      benchmark: results.getBenchmark(id),
       // job 이 제출 시점부터 갖고 있다 — run 완료를 기다릴 필요가 없다 (Task 12).
       // 완료 후에는 backtestRuns.provenancePinJson 에 같은 값이 복사돼 있다.
       provenancePin: parseProvenancePin(job.provenancePinJson, id, request.log),
@@ -726,13 +735,16 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (resourceError) return reply.code(507).send({ error: resourceError });
 
     // 응답과 저장이 같은 합집합을 써야 한다 — 한쪽만 고치면 화면과 기록이 갈라진다
+    const benchmarkId = cloneRequest.benchmarkId ?? 'KOSPI';
+    const benchmark = benchmarks.pin(benchmarkId, cloneRequest.period);
     const cloneWarnings = [...rebased.warnings, ...validated.warnings];
     const cloned = queue.enqueue(
-      { ...cloneRequest, timeframe: validated.timeframe },
+      { ...cloneRequest, benchmarkId, timeframe: validated.timeframe },
       validated.resolved.schedule,
       validated.universe,
       validated.provenancePin,
       cloneWarnings,
+      benchmark,
     );
     audit.record(request.authUser?.username ?? 'admin', 'backtest.cloned', {
       sourceJobId: id,

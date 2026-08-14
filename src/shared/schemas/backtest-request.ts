@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { benchmarkIdSchema } from './benchmark.js';
 import { universeRuleSchema } from './universe-rule.js';
 import { isCalendarDate, rebalanceIntervalFitsPeriod } from './rebalance-interval.js';
 
@@ -39,6 +40,8 @@ export const backtestRequestSchema = z.object({
   strategyId: z.string().min(1),
   parameters: z.record(z.string(), z.unknown()),
   universeRule: universeRuleSchema,
+  /** 비교 기준. 미지정 옛 요청은 제출 경계에서 KOSPI로 재기준한다. */
+  benchmarkId: benchmarkIdSchema.optional(),
   /** 소비 봉 주기. KRX 일봉이 유일한 출처라 일봉뿐이다 (설계 2026-08-07-price-data-removal). */
   timeframe: z.literal('1d').optional(),
   period: z.object({
