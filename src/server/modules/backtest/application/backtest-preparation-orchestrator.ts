@@ -245,14 +245,14 @@ export class BacktestPreparationOrchestrator {
       let resolutionNeeds = attempt.needs;
       if (!attempt.candidateScopeKnown) {
         candidateSymbols.push(UNKNOWN_CANDIDATE_PROBE);
-        // 후보 scope 미상이면 resolver 는 PER 재무·DECLINE 자본변동 후보를 아직
+        // 후보 scope 미상이면 resolver 는 PER·ROE 재무·DECLINE 자본변동 후보를 아직
         // 못 채웠다. plan 은 stage 요구를 resolutionNeeds 로만 받으므로, probe 를
-        // 여기에도 넣어야 price-only 전략 + PER/DECLINE stage 요청이 DART-key
+        // 여기에도 넣어야 price-only 전략 + PER/ROE/DECLINE stage 요청이 DART-key
         // 게이트를 그냥 통과해 뒤늦게 raw 설정 오류로 죽지 않는다.
         const stages = input.universeRule.stages;
         resolutionNeeds = {
           ...resolutionNeeds,
-          factSymbols: stages.some((stage) => stage.criterion === 'PER')
+          factSymbols: stages.some((stage) => stage.criterion === 'PER' || stage.criterion === 'ROE')
             ? [...resolutionNeeds.factSymbols, UNKNOWN_CANDIDATE_PROBE]
             : resolutionNeeds.factSymbols,
           actionSymbols: stages.some((stage) => stage.criterion === 'DECLINE')

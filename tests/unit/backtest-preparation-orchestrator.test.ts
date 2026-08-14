@@ -196,6 +196,7 @@ describe('BacktestPreparationOrchestrator NEEDS_DATA DART gate', () => {
 
   it.each([
     { criterion: 'PER' as const, stage: { criterion: 'PER' as const, direction: 'LOW' as const, limit: 1 } },
+    { criterion: 'ROE' as const, stage: { criterion: 'ROE' as const, direction: 'HIGH' as const, limit: 1 } },
     {
       criterion: 'DECLINE' as const,
       stage: { criterion: 'DECLINE' as const, direction: 'LOW' as const, limit: 1, lookbackTradingDays: 20 },
