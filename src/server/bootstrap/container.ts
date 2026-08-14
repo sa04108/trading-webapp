@@ -48,6 +48,7 @@ import { FactSyncService } from '../modules/facts/application/fact-sync-service.
 import { createDartFactSource } from '../modules/facts/infrastructure/dart/dart-fact-source.js';
 import { SqliteFactRepository } from '../modules/facts/infrastructure/sqlite-fact-repository.js';
 import { createKrxHistoricalUniverseSource } from '../modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
+import { createFredBenchmarkSource } from '../modules/market-data/infrastructure/fred/fred-benchmark-source.js';
 import { SymbolMasterService } from '../modules/market-data/application/symbol-master-service.js';
 import { SymbolMasterBackfill } from '../modules/market-data/application/symbol-master-backfill.js';
 import { SymbolMasterScheduler } from '../modules/market-data/application/symbol-master-scheduler.js';
@@ -247,10 +248,15 @@ export function createContainer(config: AppConfig): Container {
     clock,
     logger,
   );
+  const fredSource = createFredBenchmarkSource(
+    config.fredApiKey ? { baseUrl: config.fredBaseUrl, apiKey: config.fredApiKey } : null,
+    logger,
+  );
 
   const benchmarkService = new BenchmarkService({
     db: database.db,
-    source: krxSource,
+    krxSource,
+    fredSource,
     clock,
     logger,
   });

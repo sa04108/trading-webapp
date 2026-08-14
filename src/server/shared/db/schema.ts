@@ -693,7 +693,7 @@ export const krxDailyBars = sqliteTable(
   ],
 );
 
-/** KRX 대표지수 일별 종가. 소수 지수값이므로 종목 원화 봉과 분리한다. */
+/** 벤치마크 지수 일별 종가. 소수 지수값이므로 종목 원화 봉과 분리한다. */
 export const benchmarkDailyValues = sqliteTable(
   'benchmark_daily_values',
   {
@@ -706,4 +706,16 @@ export const benchmarkDailyValues = sqliteTable(
     primaryKey({ columns: [table.benchmarkId, table.date] }),
     index('idx_benchmark_daily_values_date').on(table.date),
   ],
+);
+
+/** FRED API가 성공적으로 반환한 달력일 범위. 행 존재만으로 내부 관측값을 추정하지 않는다. */
+export const fredBenchmarkCoverage = sqliteTable(
+  'fred_benchmark_coverage',
+  {
+    benchmarkId: text('benchmark_id').notNull(),
+    startDate: text('start_date').notNull(),
+    endDate: text('end_date').notNull(),
+    syncedAtMs: integer('synced_at_ms').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.benchmarkId, table.startDate, table.endDate] })],
 );

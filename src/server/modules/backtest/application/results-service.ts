@@ -118,9 +118,7 @@ export class ResultsService {
       return unavailable(`${pin.name} 수익률 계산에 필요한 거래일 데이터가 2개 미만입니다.`);
     }
     if (!pin.covered) {
-      return unavailable(
-        `${pin.name} 데이터가 백테스트 기간을 완전히 커버하지 않습니다 (${pin.missingTradingDays}거래일 누락).`,
-      );
+      return unavailable(`${pin.name} 데이터가 백테스트 기간을 완전히 커버하지 않습니다.`);
     }
     const metrics = this.getMetrics(jobId) as { totalReturnPct?: unknown } | null;
     const strategyReturn = typeof metrics?.totalReturnPct === 'number' ? metrics.totalReturnPct : null;

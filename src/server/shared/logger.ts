@@ -19,6 +19,9 @@ const REDACT_PATHS = [
   'AUTH_KEY',
   'auth_key',
   'apiKey',
+  'api_key',
+  'fredApiKey',
+  'FRED_API_KEY',
   'req.headers.authorization',
   'req.headers.cookie',
   'res.headers["set-cookie"]',
@@ -35,6 +38,9 @@ const REDACT_PATHS = [
   '*.AUTH_KEY',
   '*.auth_key',
   '*.apiKey',
+  '*.api_key',
+  '*.fredApiKey',
+  '*.FRED_API_KEY',
 ];
 
 /** Fastify 내장 로거와 애플리케이션 로거가 공유하는 pino 옵션 */

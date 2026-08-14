@@ -4,7 +4,11 @@ import type {
   KrxIssueBaseInfoRow,
   KrxMarket,
 } from '../domain/krx-universe-types.js';
-import type { BenchmarkId } from '../../../../shared/schemas/benchmark.js';
+import type {
+  BenchmarkPoint,
+  FredBenchmarkId,
+  KrxBenchmarkId,
+} from '../../../../shared/schemas/benchmark.js';
 
 export type {
   KrxDailyTradeRow,
@@ -36,12 +40,20 @@ export interface KrxHistoricalUniverseSource {
   fetchIssueBaseInfo(market: KrxMarket, isoDate: string): Promise<readonly KrxIssueBaseInfoRow[]>;
   fetchDailyTrades(market: KrxMarket, isoDate: string): Promise<readonly KrxDailyTradeRow[]>;
   /** 해당 날짜의 대표지수 종가. 휴장일은 null이다. 테스트용 옛 소스는 생략할 수 있다. */
-  fetchBenchmarkClose?(benchmarkId: BenchmarkId, isoDate: string): Promise<number | null>;
+  fetchBenchmarkClose?(benchmarkId: KrxBenchmarkId, isoDate: string): Promise<number | null>;
   /**
    * 오늘(KST) 가장 많이 부른 엔드포인트의 호출 수. KRX 한도가 엔드포인트마다 따로 걸려 있어
    * 총합으로 재면 남은 여력을 실제보다 적게 본다.
    */
   todayMaxEndpointCallCount(): number;
+}
+
+export interface FredBenchmarkSource {
+  fetchBenchmarkRange(
+    benchmarkId: FredBenchmarkId,
+    from: string,
+    to: string,
+  ): Promise<readonly BenchmarkPoint[]>;
 }
 
 /** 종목 참조 정보 (코드 → 이름). 이름 검색(이름 → 코드)은 소스가 제공하지 않는다. */
@@ -89,6 +101,20 @@ export class KrxNotConfiguredError extends Error {
   constructor() {
     super('KRX Open API 키와 API별 승인이 필요합니다. 키를 설정하고 필요한 API 사용 승인을 받으세요.');
     this.name = 'KrxNotConfiguredError';
+  }
+}
+
+export class FredNotConfiguredError extends Error {
+  constructor() {
+    super('FRED API 키가 설정되지 않았습니다. FRED_API_KEY를 설정하세요.');
+    this.name = 'FredNotConfiguredError';
+  }
+}
+
+export class FredContractError extends Error {
+  constructor(message = 'FRED 응답이 예상한 계약과 다릅니다.') {
+    super(message);
+    this.name = 'FredContractError';
   }
 }
 

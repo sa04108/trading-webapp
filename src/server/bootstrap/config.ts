@@ -36,6 +36,9 @@ const envSchema = z.object({
   /** DART OpenAPI (전자공시). 미설정이면 재무 수집이 비활성 — 봉 데이터는 영향 없다 */
   DART_BASE_URL: z.string().url().default('https://opendart.fss.or.kr'),
   DART_API_KEY: z.string().min(1).optional(),
+  /** FRED API. 미설정이면 미국 벤치마크 수집만 비활성 */
+  FRED_BASE_URL: z.string().url().default('https://api.stlouisfed.org'),
+  FRED_API_KEY: z.string().min(1).optional(),
   /** KRX Open API (정보데이터시스템). 미설정이면 과거 유니버스 모드가 비활성 — 다른 데이터 경로는 영향 없다 */
   KRX_BASE_URL: z.string().url().default('https://data-dbg.krx.co.kr'),
   KRX_API_KEY: z.string().min(1).optional(),
@@ -75,6 +78,8 @@ export interface AppConfig {
   readonly tossClientSecret: string | null;
   readonly dartBaseUrl: string;
   readonly dartApiKey: string | null;
+  readonly fredBaseUrl: string;
+  readonly fredApiKey: string | null;
   readonly krxBaseUrl: string;
   readonly krxApiKey: string | null;
   readonly krxApprovalExpiry: string | null;
@@ -138,6 +143,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     tossClientSecret: raw.TOSS_CLIENT_SECRET ?? null,
     dartBaseUrl: raw.DART_BASE_URL,
     dartApiKey: raw.DART_API_KEY ?? null,
+    fredBaseUrl: raw.FRED_BASE_URL,
+    fredApiKey: raw.FRED_API_KEY ?? null,
     krxBaseUrl: raw.KRX_BASE_URL,
     krxApiKey: raw.KRX_API_KEY ?? null,
     krxApprovalExpiry: raw.KRX_APPROVAL_EXPIRY ?? null,

@@ -87,4 +87,17 @@ describe('loadConfig', () => {
       expect(() => loadConfig({ KRX_APPROVAL_EXPIRY: '2027-08-03' })).toThrow(ConfigError);
     });
   });
+
+  describe('FRED 설정', () => {
+    it('미설정이면 null이고 키를 주면 기본 API 호스트와 함께 읽는다', () => {
+      const empty = loadConfig({});
+      expect(empty.fredApiKey).toBeNull();
+      expect(empty.fredBaseUrl).toBe('https://api.stlouisfed.org');
+      expect(loadConfig({ FRED_API_KEY: 'fred-key' }).fredApiKey).toBe('fred-key');
+    });
+
+    it('빈 FRED_API_KEY는 거부한다', () => {
+      expect(() => loadConfig({ FRED_API_KEY: '' })).toThrow(/FRED_API_KEY/);
+    });
+  });
 });

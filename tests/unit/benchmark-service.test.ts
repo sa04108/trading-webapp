@@ -1,6 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { BenchmarkService } from '../../src/server/modules/market-data/application/benchmark-service.js';
-import type { KrxHistoricalUniverseSource } from '../../src/server/modules/market-data/application/ports.js';
+import type {
+  FredBenchmarkSource,
+  KrxHistoricalUniverseSource,
+} from '../../src/server/modules/market-data/application/ports.js';
 import { ResultsService } from '../../src/server/modules/backtest/application/results-service.js';
 import { openDatabase } from '../../src/server/shared/db/database.js';
 import {
@@ -25,15 +28,19 @@ describe('벤치마크 저장과 결과 비교', () => {
         ['KOSPI:2026-01-05', 110],
         ['KOSDAQ:2026-01-05', 820],
       ]);
+      const fetchBenchmarkClose = vi.fn(
+        async (id: 'KOSPI' | 'KOSDAQ', date: string) => closes.get(`${id}:${date}`) ?? null,
+      );
       const source: KrxHistoricalUniverseSource = {
         fetchIssueBaseInfo: async () => [],
         fetchDailyTrades: async () => [],
-        fetchBenchmarkClose: async (id, date) => closes.get(`${id}:${date}`) ?? null,
+        fetchBenchmarkClose,
         todayMaxEndpointCallCount: () => 0,
       };
       const service = new BenchmarkService({
         db: database.db,
-        source,
+        krxSource: source,
+        fredSource: { fetchBenchmarkRange: async () => [] },
         clock: { now: () => 123 },
         logger,
       });
@@ -46,11 +53,11 @@ describe('벤치마크 저장과 결과 비교', () => {
         endDate: '2026-01-05',
         syncedAtMs: 1,
       }).run();
-      await service.syncDate('2026-01-02');
-      await service.syncDate('2026-01-05');
+      await service.syncDate('KOSPI', '2026-01-02');
+      await service.syncDate('KOSPI', '2026-01-05');
 
       const benchmark = service.pin('KOSPI', { from: '2026-01-02', to: '2026-01-05' });
-      expect(benchmark.pin).toMatchObject({ covered: true, missingTradingDays: 0 });
+      expect(benchmark.pin).toMatchObject({ covered: true });
       expect(benchmark.hash).toMatch(/^[a-f0-9]{64}$/);
 
       database.db.insert(backtestJobs).values({
@@ -90,7 +97,101 @@ describe('벤치마크 저장과 결과 비교', () => {
       ]);
       expect(chart[0]?.value).toBe(100);
       expect(chart[1]?.value).toBeCloseTo(110);
+
+      fetchBenchmarkClose.mockClear();
+      service.startBackfill('KOSPI', '2026-01-02', '2026-01-06');
+      await vi.waitFor(() => expect(service.backfillStatus().state).toBe('IDLE'));
+      expect(fetchBenchmarkClose).toHaveBeenCalledOnce();
+      expect(fetchBenchmarkClose).toHaveBeenCalledWith('KOSPI', '2026-01-06');
     } finally {
+      database.close();
+    }
+  });
+
+  it('FRED 기간을 한 번에 수집하고 미국 거래일로 pin한다', async () => {
+    const database = openDatabase(':memory:');
+    try {
+      const fetchBenchmarkRange = vi.fn<FredBenchmarkSource['fetchBenchmarkRange']>(
+        async (_benchmarkId, from, to) => from === to
+          ? [{ date: from, close: 6_000 }]
+          : [
+              { date: '2026-01-02', close: 6_000 },
+              { date: '2026-01-05', close: 6_060 },
+            ],
+      );
+      const service = new BenchmarkService({
+        db: database.db,
+        krxSource: {
+          fetchIssueBaseInfo: async () => [],
+          fetchDailyTrades: async () => [],
+          todayMaxEndpointCallCount: () => 0,
+        },
+        fredSource: { fetchBenchmarkRange },
+        clock: { now: () => 456 },
+        logger,
+      });
+
+      await service.syncDate('SP500', '2026-01-01');
+      await service.syncDate('SP500', '2026-01-05');
+      expect(service.pin('SP500', { from: '2026-01-01', to: '2026-01-05' }).pin.covered).toBe(false);
+
+      service.startBackfill('SP500', '2026-01-01', '2026-01-05');
+      expect(service.backfillStatus().benchmarkId).toBe('SP500');
+      await vi.waitFor(() => expect(service.backfillStatus().state).toBe('IDLE'));
+
+      expect(fetchBenchmarkRange).toHaveBeenCalledTimes(3);
+      expect(fetchBenchmarkRange).toHaveBeenLastCalledWith('SP500', '2026-01-01', '2026-01-05');
+      expect(service.pin('SP500', { from: '2026-01-01', to: '2026-01-05' }).pin).toMatchObject({
+        name: 'S&P 500',
+        source: 'FRED_API',
+        covered: true,
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  it('진행 중인 백필은 다른 지수 시작 요청에도 최초 지수를 유지한다', async () => {
+    const database = openDatabase(':memory:');
+    let releaseKrx!: () => void;
+    const krxBlocked = new Promise<void>((resolve) => { releaseKrx = resolve; });
+    const fetchBenchmarkClose = vi.fn(async () => {
+      await krxBlocked;
+      return 100;
+    });
+    const fetchBenchmarkRange = vi.fn<FredBenchmarkSource['fetchBenchmarkRange']>(async () => []);
+    const service = new BenchmarkService({
+      db: database.db,
+      krxSource: {
+        fetchIssueBaseInfo: async () => [],
+        fetchDailyTrades: async () => [],
+        fetchBenchmarkClose,
+        todayMaxEndpointCallCount: () => 0,
+      },
+      fredSource: { fetchBenchmarkRange },
+      clock: { now: () => 789 },
+      logger,
+    });
+
+    try {
+      service.startBackfill('KOSPI', '2026-01-02', '2026-01-02');
+      expect(service.startBackfill('SP500', '2020-01-01', '2026-01-01')).toMatchObject({
+        benchmarkId: 'KOSPI',
+        from: '2026-01-02',
+        to: '2026-01-02',
+        state: 'RUNNING',
+      });
+      expect(fetchBenchmarkRange).not.toHaveBeenCalled();
+
+      releaseKrx();
+      await vi.waitFor(() => expect(service.backfillStatus()).toMatchObject({
+        benchmarkId: 'KOSPI',
+        state: 'IDLE',
+      }));
+      expect(fetchBenchmarkClose).toHaveBeenCalledWith('KOSPI', '2026-01-02');
+    } finally {
+      releaseKrx();
+      await vi.waitFor(() => expect(service.backfillStatus().state).not.toBe('RUNNING'));
       database.close();
     }
   });
