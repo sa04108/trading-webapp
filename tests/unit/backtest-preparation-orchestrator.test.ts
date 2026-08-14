@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
+import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { openDatabase } from '../../src/server/shared/db/database.js';
 import { backtestPreparationJobs } from '../../src/server/shared/db/schema.js';
@@ -413,6 +414,65 @@ describe('BacktestPreparationOrchestrator single-flight와 직렬 실행', () =>
 });
 
 describe('BacktestPreparationOrchestrator recovery와 취소', () => {
+  it.each([
+    { criterion: 'PER', stage: { criterion: 'PER', limit: 1 } },
+    { criterion: 'DECLINE', stage: { criterion: 'DECLINE', limit: 1, lookbackTradingDays: 20 } },
+  ] as const)('방향 없는 legacy $criterion 준비 작업을 LOW 방향과 canonical hash로 복구한다', async ({ stage }) => {
+    const receivedRules: PreparationInput['universeRule'][] = [];
+    const ctx = makeDeps({
+      resolver: {
+        resolveOrDescribeNeeds: async (rule: PreparationInput['universeRule']) => {
+          receivedRules.push(rule);
+          return ready();
+        },
+        isPeriodCovered: () => true,
+      },
+    });
+    const legacyInput = {
+      ...INPUT,
+      universeRule: { ...INPUT.universeRule, stages: [stage] },
+    };
+    const canonicalInput: PreparationInput = {
+      ...INPUT,
+      universeRule: {
+        ...INPUT.universeRule,
+        stages: [{ ...stage, direction: 'LOW' }],
+      },
+    };
+    const expectedHash = backtestPreparationRequestHash(canonicalInput, { version: '1.0.0' });
+    ctx.handle.db.insert(backtestPreparationJobs).values({
+      id: `prep_legacy_${stage.criterion}`,
+      requestHash: 'legacy-directionless-hash',
+      requestJson: JSON.stringify(legacyInput),
+      status: 'RUNNING',
+      phase: 'MARKET_DATA',
+      doneSymbols: 0,
+      totalSymbols: 0,
+      savedFacts: 0,
+      gapCount: 0,
+      dartCallsUsed: 0,
+      cancelRequested: false,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+    }).run();
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    orchestrator.recoverOrphaned();
+
+    await waitFor(() => orchestrator.get(`prep_legacy_${stage.criterion}`)?.status === 'COMPLETED');
+    expect(receivedRules).not.toHaveLength(0);
+    for (const rule of receivedRules) {
+      expect(rule.stages[0]?.direction).toBe('LOW');
+    }
+    const row = ctx.handle.db.select().from(backtestPreparationJobs)
+      .where(eq(backtestPreparationJobs.id, `prep_legacy_${stage.criterion}`))
+      .get();
+    expect(row?.requestHash).toBe(expectedHash);
+
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
   it('stop은 진행 중인 DART symbol 저장 경계까지 기다리고 RUNNING 복구점을 남긴다', async () => {
     const symbolStarted = deferred<void>();
     const finishSymbol = deferred<void>();

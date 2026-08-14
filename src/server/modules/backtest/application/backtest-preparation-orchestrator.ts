@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto';
 import { asc, desc, eq, sql } from 'drizzle-orm';
-import type { BacktestRequest, BacktestPeriod } from '../../../../shared/schemas/backtest-request.js';
+import type { BacktestRequest } from '../../../../shared/schemas/backtest-request.js';
 import type { UniverseRule } from '../../../../shared/schemas/universe-rule.js';
+import {
+  preparationInputSchema,
+  type PreparationInput as SharedPreparationInput,
+} from '../../../../shared/schemas/backtest-preparation.js';
 import type { Clock } from '../../../shared/clock.js';
 import type { DatabaseHandle } from '../../../shared/db/database.js';
 import { backtestPreparationJobs } from '../../../shared/db/schema.js';
@@ -42,12 +46,7 @@ export type PreparationPhase =
   | 'SYNCING_FACTS'
   | 'FINALIZING';
 
-export interface PreparationInput {
-  readonly universeRule: UniverseRule;
-  readonly period: BacktestPeriod;
-  readonly strategyId: string;
-  readonly parameters: Record<string, unknown>;
-}
+export type PreparationInput = SharedPreparationInput;
 
 export interface BacktestPreparationJobDto {
   readonly id: string;
@@ -300,11 +299,14 @@ export class BacktestPreparationOrchestrator {
   recoverOrphaned(): void {
     const rows = this.deps.database.db.select().from(backtestPreparationJobs).all();
     for (const row of rows) {
-      if (row.status === 'RUNNING') {
+      const status = row.status as PreparationStatus;
+      if (!ACTIVE_STATUSES.includes(status)) continue;
+      this.normalizeRecoveredRequest(row);
+      if (status === 'RUNNING') {
         // 복구 전이는 정상 실행 전이표의 유일한 예외다. 죽은 runner를 다시 큐에
         // 올려야 이미 저장된 symbol-year를 INCREMENTAL로 이어받을 수 있다.
         this.persistAndEmit(row.id, { status: 'QUEUED' }, ['RUNNING'], true);
-      } else if (row.status === 'WAITING_DAILY_QUOTA') {
+      } else if (status === 'WAITING_DAILY_QUOTA') {
         if (row.nextResumeAtMs !== null && row.nextResumeAtMs <= this.deps.clock.now()) {
           this.persistAndEmit(
             row.id,
@@ -392,7 +394,7 @@ export class BacktestPreparationOrchestrator {
     try {
       const row = this.getRow(jobId);
       if (!row) return;
-      const input = JSON.parse(row.requestJson) as PreparationInput;
+      const input = parseStoredPreparationInput(row.requestJson);
       const strategy = this.requireStrategy(input);
       if (this.finishCancelledIfRequested(jobId)) return;
 
@@ -786,6 +788,26 @@ export class BacktestPreparationOrchestrator {
     return strategy;
   }
 
+  private normalizeRecoveredRequest(row: PreparationJobRow): void {
+    try {
+      const input = parseStoredPreparationInput(row.requestJson);
+      const strategy = this.requireStrategy(input);
+      const requestJson = JSON.stringify(input);
+      const requestHash = backtestPreparationRequestHash(input, strategy);
+      if (row.requestJson === requestJson && row.requestHash === requestHash) return;
+      this.persistAndEmit(
+        row.id,
+        { requestJson, requestHash },
+        [row.status as PreparationStatus],
+      );
+    } catch (error) {
+      this.deps.logger.warn(
+        { module: 'backtest', event: 'preparation.recovery.request-invalid', jobId: row.id, err: error },
+        'recovered preparation request is invalid and will fail when resumed',
+      );
+    }
+  }
+
   private getRow(jobId: string): PreparationJobRow | null {
     return this.deps.database.db
       .select()
@@ -855,6 +877,22 @@ function preparationRequest(input: PreparationInput): BacktestRequest {
   // Planner는 이 네 필드만 읽는다. 전체 제출 요청의 자본·체결·risk는 준비 hash와
   // 데이터 범위에 의도적으로 포함되지 않는다(Task 5 contract).
   return input as BacktestRequest;
+}
+
+function parseStoredPreparationInput(requestJson: string): PreparationInput {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(requestJson);
+  } catch {
+    throw new PreparationInputError('저장된 준비 작업 요청 JSON을 해석할 수 없습니다.');
+  }
+  const parsed = preparationInputSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new PreparationInputError(
+      parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; '),
+    );
+  }
+  return parsed.data;
 }
 
 function unionSymbols(schedule: readonly UniverseScheduleEntry[]): string[] {
