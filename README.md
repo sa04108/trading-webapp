@@ -50,8 +50,8 @@ IP 를 등록제로 운영하기 때문이다. 프로비저닝이 아웃바운�
 시도한다(특정 업체에 묶지 않기 위해서다) — 다른 엔드포인트를 쓰려면
 `OUTBOUND_IP_URL` 로 지정한다.
 
-1GB 호스트의 운영 제약: 동시 백테스트 1개, DuckDB 1 thread·메모리 상한 384MB,
-시간봉 사전 집계, 대규모 파라미터 sweep 금지.
+1GB 호스트의 운영 제약: 동시 백테스트 1개, 봉 수 상한 200만, 대규모 파라미터
+sweep 금지. DuckDB의 1 thread·384MB 상한은 legacy Parquet fact 이관에만 적용된다.
 
 Tailscale 에서 퍼블릭 + Caddy 로 옮긴 이유와 트레이드오프는
 [docs/DECISIONS.md](docs/DECISIONS.md) 의 D-017 에 있다.
@@ -121,7 +121,7 @@ passphrase 가 있으면 `ssh-add` 로 agent 에 먼저 올린다 — 접속 확
 `infra/provision.sh` 는 멱등한 단일 실행이다:
 
 - apt 갱신·업그레이드, 빌드 도구 (`build-essential`·`python3`·`pkg-config` —
-  better-sqlite3·argon2·DuckDB 가 네이티브 모듈이라 서버에서 컴파일된다),
+  better-sqlite3·argon2와 이관용 DuckDB가 네이티브 모듈이라 서버에서 컴파일된다),
   `sqlite3` CLI, `jq`·`openssl`·`ufw`·`unattended-upgrades`
 - 서버 시간대 UTC 고정, `quant` 시스템 유저(nologin), 디렉터리 트리
 - Node.js 24 (nodejs.org 타르볼, SHA256 검증, `/opt/node` 심링크)

@@ -69,7 +69,7 @@ export function registerBacktestPreparationRoutes(
         // `/symbols`의 hasFacts는 자본변동만 있어도 true고, 재무 coverage는 DART
         // 무자료 수집에도 생기므로 둘 다 재무 보유 근거가 될 수 없다.
         // FactRepository의 빈 keys는 "필터 없음"(전체 스코프)을 뜻한다. 빈 유니버스는
-        // 저장소를 건너뛰어 전체 Parquet 파티션을 읽는 역방향 병목을 만들지 않는다.
+        // 저장소를 건너뛰어 전체 fact를 읽는 역방향 병목을 만들지 않는다.
         const storedFacts = preview.unionSymbols.length === 0
           ? []
           : await deps.facts.getFacts({

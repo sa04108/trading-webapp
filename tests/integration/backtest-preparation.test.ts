@@ -496,8 +496,6 @@ describe('backtest preparation HTTP/SSE', () => {
   it('재무 coverage가 있어도 value 전략의 독립된 action coverage가 비면 DART 503이다', async () => {
     await seedReadyUniverse(undefined, false);
     registerSymbols(ctx.container, 'KR', ['005930']);
-    // coverage 는 parquet 실체와 교차 확인해서만 읽힌다 — 시도의 실체를 먼저 남긴다.
-    await ctx.container.factRepository.ensurePartition('SYMBOL', '005930');
     ctx.container.database.db.insert(symbolFactsState).values({
       code: '005930',
       coveredYearsJson: JSON.stringify([2025, 2026]),

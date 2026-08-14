@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import type { AppConfig } from './config.js';
 import { readGitCommitSha } from '../shared/build-info.js';
 import { createLogger, type Logger } from '../shared/logger.js';
@@ -30,7 +31,6 @@ import { SymbolService } from '../modules/market-data/application/symbol-service
 import { CandleCoverageService } from '../modules/market-data/application/candle-coverage-service.js';
 import type { CandleRepository } from '../modules/market-data/application/ports.js';
 import { createTossStockInfoSource } from '../modules/broker/infrastructure/toss/toss-stock-info-source.js';
-import { DuckDbService } from '../modules/market-data/infrastructure/duckdb-service.js';
 import { KrxDailyCandleRepository } from '../modules/market-data/infrastructure/krx-daily-candle-repository.js';
 import { StrategyRegistry } from '../modules/strategy/application/strategy-registry.js';
 import { JobOrchestrator } from '../modules/backtest/application/job-orchestrator.js';
@@ -45,13 +45,10 @@ import {
   SqliteFactCoverageStore,
   type FactCoverageStore,
 } from '../modules/facts/application/fact-coverage-store.js';
-import {
-  ParquetConsistentActionCoverageStore,
-  ParquetConsistentFactCoverageStore,
-} from '../modules/facts/application/parquet-consistent-coverage.js';
 import { FactSyncService } from '../modules/facts/application/fact-sync-service.js';
 import { createDartFactSource } from '../modules/facts/infrastructure/dart/dart-fact-source.js';
-import { ParquetFactRepository } from '../modules/facts/infrastructure/parquet-fact-repository.js';
+import { SqliteFactRepository } from '../modules/facts/infrastructure/sqlite-fact-repository.js';
+import { factStorageState } from '../shared/db/schema.js';
 import { createKrxHistoricalUniverseSource } from '../modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
 import { SymbolMasterService } from '../modules/market-data/application/symbol-master-service.js';
 import { SymbolMasterBackfill } from '../modules/market-data/application/symbol-master-backfill.js';
@@ -81,7 +78,6 @@ export interface Container {
   readonly passwordHasher: PasswordHasher;
   readonly totpService: TotpService;
   readonly authService: AuthService;
-  readonly duckdb: DuckDbService;
   readonly candleRepository: CandleRepository;
   readonly candleCoverageService: CandleCoverageService;
   readonly symbolService: SymbolService;
@@ -103,7 +99,7 @@ export interface Container {
    * 없앴다.
    */
   readonly actionCoverageStore: CorporateActionCoverageStore;
-  /** 재무 수집 coverage — parquet 정합성 게이트를 거친 인스턴스만 노출한다. */
+  /** 재무 수집 coverage. 팩트와 같은 SQLite 파일에 있어 별도 실체 검사가 필요 없다. */
   readonly factCoverageStore: FactCoverageStore;
   readonly backtestPreparationOrchestrator: BacktestPreparationOrchestrator;
   close(): Promise<void>;
@@ -130,6 +126,11 @@ export function createContainer(config: AppConfig): Container {
   }
 
   const database = openDatabase(config.databasePath);
+  const factState = database.db.select().from(factStorageState).get();
+  if (factState?.phase !== 'ACTIVE' && fs.existsSync(path.join(config.dataRoot, 'facts'))) {
+    database.close();
+    throw new Error('기존 Parquet 팩트가 남아 있습니다. 먼저 `cli db:prepare`를 실행하세요.');
+  }
   const clock = systemClock;
 
   // 무한 증가 방지: 만료 세션·오래된 로그인 시도·보존 기간 지난 감사 로그 정리.
@@ -190,10 +191,6 @@ export function createContainer(config: AppConfig): Container {
     absoluteTimeoutMs: config.sessionAbsoluteTimeoutSeconds * 1000,
   });
 
-  const duckdb = new DuckDbService({
-    threads: config.duckdbThreads,
-    memoryLimit: config.duckdbMemoryLimit,
-  });
   // 봉은 KRX 일봉 하나뿐이다 — 쓰기는 SymbolMasterService.ingestDate 가 종목 마스터
   // 이벤트와 같은 트랜잭션에서 직접 한다.
   const candleRepository = new KrxDailyCandleRepository(database.db);
@@ -204,9 +201,7 @@ export function createContainer(config: AppConfig): Container {
   // 2026-08-07-price-data-removal)이 걷어냈다. 그래서 이제 봉 저장소를 주입받지 않는다.
   const symbolService = new SymbolService(database.db, clock, auditLog);
 
-  // duckdb 는 위에서 만든 인스턴스를 재사용한다 — 새로 만들면 DuckDB 메모리 상한이
-  // 두 배로 잡힌다
-  const factRepository = new ParquetFactRepository(config.dataRoot, duckdb);
+  const factRepository = new SqliteFactRepository(database.db);
   const factSource = createDartFactSource(
     config.dartApiKey ? { baseUrl: config.dartBaseUrl, apiKey: config.dartApiKey } : null,
     logger,
@@ -215,19 +210,11 @@ export function createContainer(config: AppConfig): Container {
   );
   // 팩트도 백테스트 입력이다 — 캔들과 같은 버전 체인에 올린다 (§9.5).
   // SymbolService 를 통째로 넘기지 않고 좁은 포트(SymbolVersionBumper)로 받는다.
-  // coverage 는 parquet 실체와 교차 확인해서만 읽는다 (parquet-consistent-coverage.ts,
-  // 운영 장애 2026-08-10) — DB 만 남고 파티션이 사라진 종목을 "받았다" 로 두면
-  // INCREMENTAL sync 가 영원히 건너뛰어 재무가 복구되지 않는다.
-  const factCoverageStore = new ParquetConsistentFactCoverageStore(
-    new SqliteFactCoverageStore(database.db),
-    factRepository,
-  );
+  // 팩트와 coverage가 같은 SQLite 백업·트랜잭션 경계에 있으므로 파일 교차 검사는 없다.
+  const factCoverageStore = new SqliteFactCoverageStore(database.db);
   // 자본변동 전용 수집(Task 5)이 갱신하는 별도 커버리지 — 재무 커버리지와 컬럼이
   // 다르다 (corporate-action-coverage.ts 헤더 참고).
-  const actionCoverageStore = new ParquetConsistentActionCoverageStore(
-    new SqliteCorporateActionCoverageStore(database.db),
-    factRepository,
-  );
+  const actionCoverageStore = new SqliteCorporateActionCoverageStore(database.db);
   const factSyncService = new FactSyncService(
     factSource,
     factRepository,
@@ -349,7 +336,6 @@ export function createContainer(config: AppConfig): Container {
     passwordHasher: argon2PasswordHasher,
     totpService: otpauthTotpService,
     authService,
-    duckdb,
     candleRepository,
     candleCoverageService,
     symbolService,
@@ -373,9 +359,8 @@ export function createContainer(config: AppConfig): Container {
         clearInterval(pruneTimer);
         jobOrchestrator.stop();
         // FactSync는 symbol 단위 저장이 끝난 뒤 멈춘다. 이 경계를 기다리기 전에
-        // DuckDB/SQLite를 닫으면 저장 callback이 닫힌 자원을 다시 건드린다.
+        // SQLite를 닫으면 저장 callback이 닫힌 자원을 다시 건드린다.
         await backtestPreparationOrchestrator.stop();
-        duckdb.close();
         database.close();
       })();
       return closing;

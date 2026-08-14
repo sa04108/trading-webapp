@@ -12,7 +12,26 @@ function deferred() {
 }
 
 describe('Container lifecycle', () => {
-  it('preparation stop이 symbol 경계에서 끝난 뒤에만 DuckDB와 SQLite를 닫는다', async () => {
+  it('legacy Parquet이 남아 있으면 db:prepare 전에 부팅하지 않는다', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qp-container-legacy-'));
+    const dataRoot = path.join(dir, 'market-data');
+    fs.mkdirSync(path.join(dataRoot, 'facts'), { recursive: true });
+    const config = loadConfig({
+      NODE_ENV: 'test',
+      DATABASE_PATH: path.join(dir, 'app.sqlite'),
+      DATA_ROOT: dataRoot,
+      IMPORT_ROOT: path.join(dir, 'imports'),
+      EXPORT_ROOT: path.join(dir, 'exports'),
+      TEMP_ROOT: path.join(dir, 'temp'),
+      SESSION_SECRET: 's'.repeat(48),
+      LOG_LEVEL: 'error',
+    });
+
+    expect(() => createContainer(config)).toThrow(/db:prepare/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('preparation stop이 symbol 경계에서 끝난 뒤에만 SQLite를 닫는다', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qp-container-close-'));
     const config = loadConfig({
       NODE_ENV: 'test',
@@ -27,13 +46,8 @@ describe('Container lifecycle', () => {
     const container = createContainer(config);
     const stopGate = deferred();
     container.backtestPreparationOrchestrator.stop = (() => stopGate.promise) as never;
-    const originalDuckClose = container.duckdb.close.bind(container.duckdb);
     const originalDatabaseClose = container.database.close.bind(container.database);
     const events: string[] = [];
-    container.duckdb.close = (() => {
-      events.push('duckdb-closed');
-      originalDuckClose();
-    }) as never;
     container.database.close = (() => {
       events.push('sqlite-closed');
       originalDatabaseClose();
@@ -46,7 +60,7 @@ describe('Container lifecycle', () => {
     await closing;
 
     expect(beforeStopBoundary).toEqual([]);
-    expect(events).toEqual(['duckdb-closed', 'sqlite-closed']);
+    expect(events).toEqual(['sqlite-closed']);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

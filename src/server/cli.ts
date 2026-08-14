@@ -9,7 +9,9 @@ import { randomBytes } from 'node:crypto';
 import { Writable } from 'node:stream';
 import { loadConfig } from './bootstrap/config.js';
 import { createContainer } from './bootstrap/container.js';
+import { openDatabase } from './shared/db/database.js';
 import { newId } from './shared/ids.js';
+import { migrateParquetFacts } from './modules/facts/infrastructure/parquet-fact-migration.js';
 
 function ask(question: string, hidden = false): Promise<string> {
   const muted = new Writable({
@@ -40,7 +42,8 @@ function ask(question: string, hidden = false): Promise<string> {
  * `openDatabase` 가, 데이터 마이그레이션은 각 서비스 생성자가 이미 돌린다
  * (`SymbolMasterService` 의 SCD 이행 등). 컨테이너 조립이 그 둘을 모두 태우므로
  * 마이그레이션 목록을 여기에 따로 두지 않는다. 앞으로 같은 패턴의 데이터
- * 마이그레이션이 늘어도 이 명령은 손대지 않아도 된다.
+ * 종목별 Parquet fact를 SQLite로 옮기는 일회성 이관은 컨테이너 생성 전에
+ * 명시적으로 실행한다. 나머지 서비스 데이터 이관은 컨테이너 조립 경로를 탄다.
  *
  * 배포가 서비스를 멈춘 창에서 이걸 먼저 부른다. 그러지 않으면 부팅 안에서
  * 마이그레이션이 돌아 포트가 늦게 열리고, 무거운 데이터 마이그레이션 한 번에
@@ -50,6 +53,19 @@ function ask(question: string, hidden = false): Promise<string> {
 async function dbPrepare(): Promise<void> {
   const config = loadConfig();
   const startedAtMs = Date.now();
+  const migrationDatabase = openDatabase(config.databasePath);
+  try {
+    const result = await migrateParquetFacts(
+      migrationDatabase.db,
+      config.dataRoot,
+      { threads: config.duckdbThreads, memoryLimit: config.duckdbMemoryLimit },
+    );
+    if (result.migrated && result.rows > 0) {
+      console.log(`Parquet 팩트 이관 완료: ${result.symbols}종목, ${result.rows}행`);
+    }
+  } finally {
+    migrationDatabase.close();
+  }
   const container = createContainer(config);
   try {
     console.log(`DB 준비 완료 (${Date.now() - startedAtMs}ms): ${config.databasePath}`);

@@ -59,7 +59,7 @@ export interface BacktestRouteDeps {
   readonly candleCoverage: CandleCoverageService;
   readonly preparation: BacktestPreparationOrchestrator;
   readonly audit: AuditLogService;
-  /** 재무 요구 검사(422)가 보는 coverage — parquet 정합성 게이트를 거친 store 다. */
+  /** 재무 요구 검사(422)가 보는 SQLite coverage store. */
   readonly factCoverage: FactCoverageStore;
   readonly dataRoot: string;
   readonly maxQueuedBacktests: number;
@@ -230,7 +230,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     );
 
   /**
-   * 기간 × 커버리지 검사 (D-025). 커버리지는 메타데이터라 Parquet 을 읽지 않는다.
+   * 기간 × 커버리지 검사 (D-025). 커버리지는 메타데이터라 fact 행을 읽지 않는다.
    * 요청한 종목 **전부** 가 구간 밖일 때만 거부한다 — 신규 상장처럼 이력이 짧은 종목
    * 하나 때문에 유니버스 전체를 막지 않는다. 일부만 비는 경우는 실행 경고로 남는다.
    *
@@ -483,8 +483,8 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
      * `checkPeriodCoverage` 와 같은 원칙이고(D-025), 빠진 종목은 워커가 실행 경고에
      * **이름으로** 남긴다. 여기서 전부 422 로 바꾸면 그 경고 경로가 죽는다.
      *
-     * 판정은 파일 존재(hasFacts)가 아니라 재무 coverage 로 한다 — 자본변동만 받은
-     * 종목도 parquet 파일은 있어서 파일 존재는 재무 있음을 증명하지 못한다
+     * 판정은 fact 행 존재(hasFacts)가 아니라 재무 coverage 로 한다 — 자본변동만 받은
+     * 종목도 fact 행은 있어서 행 존재는 재무 있음을 증명하지 못한다
      * (fact-coverage-store.ts 주석, resolver 의 PER 결측 판정과 같은 이유).
      */
     const covered = factCoverage.getCoveredYears(unionSymbols);

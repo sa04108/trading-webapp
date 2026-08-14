@@ -28,7 +28,7 @@ describe('거래불가 일봉 정리 migration', () => {
 
     const journalPath = path.join(migrationsFolder, 'meta', '_journal.json');
     const fullJournal = JSON.parse(fs.readFileSync(journalPath, 'utf8')) as MigrationJournal;
-    expect(fullJournal.entries.at(-1)).toMatchObject({
+    expect(fullJournal.entries.find((entry) => entry.idx === 16)).toMatchObject({
       idx: 16,
       tag: '0016_cleanup_non_trading_bars',
     });

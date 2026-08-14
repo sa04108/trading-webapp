@@ -171,10 +171,7 @@ export class JobOrchestrator {
     const env: Record<string, string> = {
       NODE_ENV: this.config.nodeEnv,
       DATABASE_PATH: this.config.databasePath,
-      DATA_ROOT: this.config.dataRoot,
       BACKTEST_JOB_ID: job.id,
-      DUCKDB_THREADS: String(this.config.duckdbThreads),
-      DUCKDB_MEMORY_LIMIT: this.config.duckdbMemoryLimit,
     };
     if (process.platform === 'win32') {
       // Windows 에서 프로세스 기동에 필요한 비밀 아닌 시스템 변수

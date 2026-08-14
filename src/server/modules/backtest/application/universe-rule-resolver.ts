@@ -341,8 +341,8 @@ export class UniverseRuleResolver {
             stageReady = false;
           }
         } else if (stage.criterion === 'PER' || stage.criterion === 'ROE') {
-          // 재무 결측은 parquet 파일 존재(hasFacts)가 아니라 financial coverage 연도로
-          // 판정한다. 자본변동 전용 수집도 같은 파일에 fact 를 남기므로 파일 존재는
+          // 재무 결측은 fact 행 존재(hasFacts)가 아니라 financial coverage 연도로
+          // 판정한다. 자본변동 전용 수집도 fact 행을 남기므로 행 존재는
           // 재무 있음을 증명하지 못한다 (fact-coverage-store.ts 주석). coverage 는
           // 공시가 없던 연도도 시도 후 기록되므로 이 판정은 sync 한 번이면 수렴한다.
           const requiredYears = financialStageRequiredFactYears(effectiveDate, period);

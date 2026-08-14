@@ -1129,9 +1129,6 @@ describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepar
             });
           }
         }
-        // 실제 FactSyncService 처럼 팩트 0건이어도 시도의 실체(빈 파티션)를 남긴다 —
-        // coverage 는 parquet 존재와 교차 확인해서만 읽힌다(parquet-consistent-coverage.ts).
-        await ctx.container.factRepository.ensurePartition('SYMBOL', symbol);
         const nowMs = ctx.container.clock.now();
         const existing = ctx.container.database.db
           .select()

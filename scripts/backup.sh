@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# 스펙 §31 — SQLite + export 백업. 비밀값은 백업하지 않는다.
-# 캔들 Parquet 은 전 timeframe 백업 제외 (D-019) — 1m/1d 는 증권사 재수집,
-# 1h 는 1분봉 집계로 재생성한다. 재생성 불가 위험은 D-019 가 기록한다.
+# 스펙 §31 — 일봉·재무 fact를 포함한 SQLite + export 백업. 비밀값은 백업하지 않는다.
 # 서버에서 실행. S3 사용 시 별도 제한 IAM 사용자로만 업로드한다.
 set -euo pipefail
 

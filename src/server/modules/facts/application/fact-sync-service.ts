@@ -354,10 +354,6 @@ export class FactSyncService {
           // 연도는 증분 재실행에서 건너뛸 수 있다.
           const fingerprintBefore = await this.storedFactsFingerprint(symbol);
           await this.repository.saveFacts(facts);
-          // 팩트 0건이어도 시도의 실체(빈 파티션)를 남긴다 — coverage 는 parquet
-          // 존재와 교차 확인해서만 읽히므로(parquet-consistent-coverage.ts), 파일이
-          // 없으면 아래 recordCoverage 가 다음 조회에서 없던 일이 된다.
-          await this.repository.ensurePartition('SYMBOL', symbol);
 
           // 저장 성공이 리포트의 확정 경계다. 뒤의 coverage나 버전 갱신이 실패해도
           // repository에는 이미 팩트가 남았으므로, 이 수치를 먼저 반영해야 보고서가
@@ -542,13 +538,21 @@ export class FactSyncService {
   }
 }
 
-/** (key, field, periodKey, asOfTsMs, value) 튜플의 정렬 해시 — 저장 내용의 지문 */
+/** 전체 Fact 튜플의 정렬 해시 — 저장 내용의 지문 */
 export function factsFingerprint(facts: readonly Fact[]): string {
   // 구성요소 사이에 구분자가 없으면 경계가 다른 두 조합이 같은 문자열로 충돌한다
-  // (parquet-fact-repository 의 병합 키와 같은 이유) — JSON.stringify 로 이스케이프한다.
+  // 저장소의 복합키와 같은 이유다 — JSON.stringify 로 이스케이프한다.
   const rows = facts
     .map((fact) =>
-      JSON.stringify([fact.key, fact.field, fact.periodKey, fact.asOfTsMs, fact.value]),
+      JSON.stringify([
+        fact.scope,
+        fact.key,
+        fact.field,
+        fact.periodKey,
+        fact.asOfTsMs,
+        fact.value,
+        fact.unit,
+      ]),
     )
     .sort();
   return createHash('sha256').update(rows.join('\n')).digest('hex');

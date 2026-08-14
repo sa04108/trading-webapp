@@ -1231,3 +1231,15 @@
 - **결정 — 여섯 단계를 허용한다:** 기준은 시가총액·거래량·거래대금·PER·ROE·가격
   변동의 여섯 개이며, 같은 기준은 한 번만 쓴다. 단계 상한은 기존 5개에서 6개로
   올린다.
+
+## D-054: 재무 팩트를 Parquet에서 SQLite PIT 테이블로 옮긴다
+
+- **결정:** `facts`는 `(scope, key, field, period_key, as_of_ts_ms)` 복합 PK의
+  long-format SQLite 테이블이다. `period_key`는 재무 기간, `as_of_ts_ms`는 공시 시점이며
+  정정 공시는 별도 행으로 보존한다. 빈 수집 결과는 `symbol_facts_state`가 나타낸다.
+- **이관:** 배포 전 `db:prepare`가 종목별 Parquet을 읽어 SQLite에 UPSERT한 뒤 행 수와
+  전체 튜플 hash를 검증한다. 전부 성공해야 `fact_storage_state=ACTIVE`가 된다. 재실행은
+  멱등이며 원본 Parquet은 삭제하지 않는다.
+- **런타임:** 서버와 백테스트 자식 프로세스는 SQLite만 읽고 쓴다. DuckDB와 legacy
+  Parquet repository는 이관 및 한 배포 동안의 롤백 호환에만 남긴다. 운영 배포와
+  롤백을 확인한 다음 별도 변경에서 제거한다.

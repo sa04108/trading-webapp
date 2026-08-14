@@ -6,7 +6,7 @@
 |---|---|---|
 | 0 | 기반 (스캐폴딩, config, health, 경계 검사) | 완료 |
 | 1 | 인증·UI shell (Argon2id, 세션, 감사 로그, 내비게이션) | 완료 |
-| 2 | 데이터 (Candle, Parquet/DuckDB, CSV import, coverage, 집계) | 완료 |
+| 2 | 데이터 (SQLite 일봉·PIT 재무 fact·coverage) | 완료 |
 | 3 | 엔진 (체결, 비용, 이벤트 루프, 지표, 결정성, look-ahead) | 완료 |
 | 4 | 작업 큐 (SQLite 큐, 자식 프로세스, IPC, 취소, 복구) | 완료 |
 | 5 | 결과 UI (지표 카드, 차트, 거래 테이블, 위저드, SSE) + E2E | 완료 |
@@ -26,7 +26,7 @@
 
 ## 알려진 제약
 
-- 키움 REST 어댑터는 App Key 발급 전까지 비활성 — CSV/Parquet import 가 데이터 경로 (D-002)
+- 키움 REST 어댑터는 사용하지 않으며 KRX 일별매매와 DART가 데이터 경로다 (D-041)
 - 토스증권 동기화 파이프라인 구현·와이어링 완료 (D-018·D-020·D-021) — 웹 데이터셋 페이지에서 생성·동기화·심볼 편집·삭제 가능. TOSS_CLIENT_ID/SECRET 설정과 허용 IP 등록만 남음. 1h 봉 미제공(1분봉 집계로 생성), 증분 자동 스케줄러는 미구현(수동 sync 트리거)
 - KR 공휴일 캘린더 미반영 — coverage 가 공휴일을 누락으로 표시할 수 있음, UI 에 명시 (D-006)
 - 개발 머신 Node 22 / 운영 Node 24 (D-001), TypeScript 5.9 고정 (D-007), better-sqlite3 v12 (D-008)

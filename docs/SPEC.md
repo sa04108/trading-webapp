@@ -157,7 +157,7 @@ SSH CLI는 제어 평면이다. 다음은 CLI로만 한다.
 - 진행률·취소
 - 재시작 후 작업 상태 복구
 - SQLite 일봉 저장 (KRX 일별매매 수집)
-- DuckDB 조회·분석 (재무 팩트 전용, D-041)
+- SQLite 재무 팩트 조회·분석 (D-054)
 - SQLite 메타데이터
 - 자산 곡선·낙폭·월별 수익률
 - 거래 내역·비용 내역
@@ -198,7 +198,7 @@ SSH CLI는 제어 평면이다. 다음은 CLI로만 한다.
 | Metadata DB | SQLite |
 | SQLite | better-sqlite3 |
 | Migration | Drizzle ORM |
-| Analytical engine | DuckDB Node Neo (재무 팩트 전용, D-041) |
+| Fact storage | SQLite (PIT long format, D-054) |
 | Market data | SQLite (KRX 일별매매, D-041) |
 | Password hashing | Argon2id |
 | Test | Vitest |
@@ -208,7 +208,8 @@ SSH CLI는 제어 평면이다. 다음은 CLI로만 한다.
 
 2026-07-25 기준 Node.js 24는 LTS이고 Node.js 26은 Current다. 운영에는 Node.js 24 LTS 최신 패치를 사용한다.
 
-DuckDB는 deprecated Node 클라이언트가 아니라 다음 패키지를 사용한다.
+DuckDB는 기존 Parquet fact를 SQLite로 이관하는 `db:prepare`에서만 사용한다. 이관
+호환 기간에는 deprecated Node 클라이언트가 아니라 다음 패키지를 유지한다.
 
 ```text
 @duckdb/node-api
@@ -248,7 +249,7 @@ quant-platform.service
    └─ child_process.fork()
       └─ Backtest Child Process
          ├─ SQLite 일봉 조회 (KRX 일별매매, D-041)
-         ├─ DuckDB + Parquet (재무 팩트 전용)
+         ├─ SQLite 재무 팩트 조회
          ├─ Strategy engine
          ├─ Simulated execution
          └─ Result writer
@@ -263,10 +264,7 @@ fork(workerPath, [jobId], {
   env: {
     NODE_ENV: config.nodeEnv,
     DATABASE_PATH: config.databasePath,
-    DATA_ROOT: config.dataRoot,
     BACKTEST_JOB_ID: jobId,
-    DUCKDB_THREADS: "1",
-    DUCKDB_MEMORY_LIMIT: "384MB",
   },
   stdio: ["ignore", "pipe", "pipe", "ipc"],
 });
@@ -710,16 +708,13 @@ COMMIT;
 # 11. 데이터 저장
 
 봉은 `app.sqlite` 의 `krx_daily_bars` 테이블에 있다 — 종목이 저장 단위이고 데이터셋은
-참조만 갖는다 (D-034). `market-data/` 디렉터리는 재무 팩트 전용으로 좁혀졌다: 증권사
-캔들 수집·CSV/Parquet 가져오기가 사라지며(D-041) 봉 parquet 파티션도 함께 없어졌다.
+참조만 갖는다 (D-034). 재무 팩트도 `facts` long-format 테이블에 PIT 이력을 보존한다
+(D-054). 기존 `market-data/facts/`는 이관 검증과 롤백을 위해 이번 호환 기간에만 남긴다.
 
 ```text
 /var/lib/quant-platform/
-├─ app.sqlite                       # krx_daily_bars 테이블에 일봉 저장 (D-041)
-├─ market-data/                     # 재무 팩트 전용 (D-041) — 종목이 저장 단위 (D-034)
-│  └─ facts/
-│     ├─ scope=SYMBOL/symbol=005930/data.parquet
-│     └─ scope=MACRO/data.parquet
+├─ app.sqlite                       # 일봉·재무 fact·coverage·메타데이터
+├─ market-data/facts/               # 이관 완료 후에도 한 배포 동안 보존하는 legacy Parquet
 ├─ imports/                         # 미사용 — CSV 가져오기가 D-041 로 사라졌다
 ├─ exports/
 ├─ temp/
@@ -735,9 +730,10 @@ COMMIT;
 - 중복 수집 idempotent
 - 실행부가 전체 봉을 메모리에 올리므로 봉 수 상한(200만)을 둔다 — 유일한 timeframe 인
   일봉만 소비한다 (D-041)
-- 너무 작은 Parquet 조각 방지 (재무 팩트 파티션)
+- 재무 fact 복합 PK: `(scope, key, field, period_key, as_of_ts_ms)`
+- 공시 정정은 다른 `as_of_ts_ms` 행으로 보존
 
-DuckDB 기본 제한 (재무 팩트 조회 전용, D-041):
+legacy Parquet 이관기의 DuckDB 제한:
 
 ```sql
 SET threads = 1;
@@ -1324,8 +1320,8 @@ Accordion
 제약:
 
 - 동시 백테스트 1개
-- DuckDB 1 thread
-- 메모리 제한 384MB
+- 백테스트 자식 프로세스 동시 실행 1개
+- legacy 이관 DuckDB만 1 thread / 384MB
 - 봉 수 상한 200만 (§11) — 일봉만 소비하므로 사전 집계가 필요 없다 (D-041)
 - 대규모 sweep 금지
 
@@ -1973,8 +1969,7 @@ RSI 과매도에 사서 RSI 회복에 판다. 스톱은 고정(추적 아님) �
 - job claim
 - cancel
 - 프로세스 중단 복구
-- Parquet
-- DuckDB
+- SQLite fact repository와 Parquet→SQLite 이관
 - 로그인·세션 만료
 - SSE
 
@@ -2118,7 +2113,7 @@ quant-platform-live.service
 
 - Candle domain
 - SQLite 일봉 (KRX 일별매매 수집, D-041)
-- DuckDB (재무 팩트 전용, D-041)
+- SQLite 재무 팩트 (D-054)
 - coverage
 - 누락 탐지
 - 증권사 REST 어댑터 (종목 이름 조회, D-041)
@@ -2220,7 +2215,7 @@ Claude가 임의로 변경하면 안 되는 결정:
 - 클라우드 awareness는 infra only
 - 증권사 awareness는 infra only, 접근은 REST 전용
 - 평면 분리 — 웹에 제어 평면 엔드포인트 금지 (§2.6)
-- SQLite + Parquet + DuckDB
+- SQLite 일봉 + PIT 재무 팩트
 - concurrency 1
 - arbitrary strategy code 금지
 - live trading disabled
@@ -2342,7 +2337,7 @@ Market data
 └─ SQLite, KRX 일별매매 하나가 유일한 출처 (D-041)
 
 Analytics
-└─ DuckDB Node Neo, 재무 팩트 조회 전용 (D-041)
+└─ SQLite PIT 재무 팩트 (D-054)
 
 Backtest isolation
 └─ Child process from same artifact

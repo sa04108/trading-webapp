@@ -191,6 +191,44 @@ export const symbolFactsState = sqliteTable('symbol_facts_state', {
 });
 
 /**
+ * point-in-time 팩트. periodKey는 재무 기준 기간이고 asOfTsMs는 시장에 알려진 시각이다.
+ * 같은 기간의 정정공시는 asOfTsMs가 다른 새 행으로 남는다.
+ */
+export const facts = sqliteTable(
+  'facts',
+  {
+    scope: text('scope').notNull(),
+    key: text('key').notNull(),
+    field: text('field').notNull(),
+    periodKey: text('period_key').notNull(),
+    asOfTsMs: integer('as_of_ts_ms').notNull(),
+    value: real('value').notNull(),
+    unit: text('unit').notNull(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.scope, table.key, table.field, table.periodKey, table.asOfTsMs],
+    }),
+    index('idx_facts_pit').on(table.scope, table.key, table.field, table.asOfTsMs),
+    check('chk_facts_scope', sql`${table.scope} IN ('SYMBOL', 'MACRO')`),
+  ],
+);
+
+/** 기존 Parquet 팩트를 SQLite로 한 번만 이관했는지 기록한다. */
+export const factStorageState = sqliteTable(
+  'fact_storage_state',
+  {
+    singleton: integer('singleton').primaryKey(),
+    phase: text('phase').notNull(), // PENDING | ACTIVE
+    migratedAtMs: integer('migrated_at_ms'),
+  },
+  (table) => [
+    check('chk_fact_storage_singleton', sql`${table.singleton} = 1`),
+    check('chk_fact_storage_phase', sql`${table.phase} IN ('PENDING', 'ACTIVE')`),
+  ],
+);
+
+/**
  * 슬라이스별 데이터 버전 (구 dataset_versions) — §9.5 재현성의 앵커.
  *
  * 종목 데이터를 데이터셋들이 공유하므로 "데이터셋 버전" 으로는 실행 입력을 고정할 수

@@ -17,6 +17,7 @@ const envSchema = z.object({
   MAX_CONCURRENT_BACKTESTS: z.coerce.number().int().min(1).max(4).default(1),
   /** 대기(QUEUED) 백테스트 상한 — 연타로 대기열이 무한히 쌓이는 것을 막는다 (D-025) */
   MAX_QUEUED_BACKTESTS: z.coerce.number().int().min(1).max(200).default(20),
+  /** D-054 기존 Parquet fact 일회 이관기에서만 쓴다. */
   DUCKDB_THREADS: z.coerce.number().int().min(1).max(8).default(1),
   DUCKDB_MEMORY_LIMIT: z
     .string()
@@ -34,7 +35,7 @@ const envSchema = z.object({
     .default('info'),
   TRUST_PROXY_LOOPBACK: booleanString.default(true),
   LIVE_TRADING_ENABLED: booleanString.default(false),
-  /** 토스증권 Open API (D-018). 미설정이면 어댑터는 비활성 — CSV/Parquet 이 데이터 경로 */
+  /** 토스증권 Open API (D-018). 미설정이면 종목 이름 조회 어댑터는 비활성 */
   TOSS_BASE_URL: z.string().url().default('https://openapi.tossinvest.com'),
   TOSS_CLIENT_ID: z.string().min(1).optional(),
   TOSS_CLIENT_SECRET: z.string().min(1).optional(),

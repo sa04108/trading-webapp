@@ -34,8 +34,7 @@
 |---|---|---|
 | 런타임 | Node 24 (운영) / 22 (개발 허용, D-001) | 단일 서버, 단일 아티팩트 |
 | 서버 | Fastify 5 + Zod 4 + Pino | 가볍고 스키마 검증·구조화 로그가 기본 |
-| 메타데이터 DB | SQLite (better-sqlite3 v12 + Drizzle ORM) | 단일 사용자에겐 파일 DB로 충분. WAL 모드 |
-| 시장 데이터 | Parquet 파일 + DuckDB | 봉(candle) 수백만 행을 SQLite에 넣지 않는다 — 컬럼 저장이 조회·용량에 유리 |
+| 데이터 DB | SQLite (better-sqlite3 v12 + Drizzle ORM) | 일봉·PIT 재무 fact·메타데이터를 한 DB에서 원자적으로 관리. WAL 모드 |
 | 웹 | React 19 + Vite + shadcn/ui + Tailwind 4 | 모바일 우선, TanStack Query/Table, Recharts |
 | 인증 | Argon2id + 서버 세션 + TOTP(otpauth) | §7 보안 모델 참고 |
 | 테스트 | Vitest (unit/integration) + Playwright (E2E) | |
@@ -56,8 +55,7 @@ better-sqlite3는 v12 고정(D-008, Node 22 prebuild). 올리고 싶으면 해�
 ```
 브라우저 (React) ── HTTPS ──> Caddy ──> Fastify (127.0.0.1:3000)
                                           ├─ /api/v1 (REST + SSE 진행률)
-                                          ├─ SQLite  (사용자·세션·작업·결과 메타)
-                                          ├─ Parquet + DuckDB (시장 데이터 봉)
+                                          ├─ SQLite  (일봉·재무 fact·작업·결과 메타)
                                           └─ fork ──> backtest-child (엔진 실행)
 ```
 
@@ -99,7 +97,7 @@ src/server/bootstrap/     config(Zod 검증) → container(수동 DI) → server
 src/server/modules/
   auth/                   로그인·세션·TOTP (§7)
   audit/                  감사 로그 (누가 뭘 했나 — audit_logs 테이블)
-  market-data/            Candle, CSV import, Parquet 저장, coverage, 시간봉 집계
+  market-data/            KRX 일봉, coverage, 종목 마스터
   backtest/               엔진(domain), 작업 큐·오케스트레이터(application), 라우트
   strategy/               전략 레지스트리 + strategies/ (코드 등록식 — 아래 참고)
   broker/                 증권사 REST 어댑터 (kiwoom — App Key 발급 전까지 비활성, D-002)
@@ -249,7 +247,7 @@ CSV 형식: `timestamp,open,high,low,close,volume` (ISO 8601 UTC 또는 epoch ms
 | 웹에 제어 기능 추가 | 스펙 §2.6 위반 — "헌법 개정" 없이는 금지 |
 | 새 비밀 필드 로깅 | redaction 목록(logger.ts + 스펙 §16) 갱신 누락 |
 | 서버 app.env | `SESSION_SECRET` 이 든 파일 — 절대 덮어쓰지 않는다 (세션 전체 무효화) |
-| DuckDB 메모리 | threads 1 / 384MB 상한 — 1GB 서버에서 앱과 공존해야 한다 |
+| legacy DuckDB | `db:prepare`의 Parquet fact 이관에서만 threads 1 / 384MB 상한 |
 | 셸 스크립트 CRLF | Windows 에디터로 저장 시 주의 — `.gitattributes` 가 LF 강제하지만 도구 우회 금지 |
 
 ---

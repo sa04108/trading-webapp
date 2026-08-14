@@ -958,9 +958,7 @@ describe('POST /backtests/universe-preview — 3단계 파이프라인 진단 (T
         })
         .run();
     }
-    // Z 는 "시도했지만 공시 0건" 상태다 — 시도의 실체(빈 파티션)가 있어야 coverage
-    // 정합성 게이트(parquet-consistent-coverage.ts)가 위 coverage 를 인정한다.
-    await ctx.container.factRepository.ensurePartition('SYMBOL', 'Z');
+    // Z 는 coverage만 있고 fact 행은 없는 "시도했지만 공시 0건" 상태다.
     const netIncomeFacts: Fact[] = ['X', 'Y'].flatMap((symbol) =>
       [40, 30, 20, 10].map((value, offset) => ({
         scope: 'SYMBOL' as const,

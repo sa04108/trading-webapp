@@ -52,8 +52,7 @@ describe('ParquetFactRepository', () => {
   });
 
   it('ensurePartition 은 빈 파티션을 만들고 조회·병합 읽기를 깨뜨리지 않는다', async () => {
-    // 팩트 0건 수집 시도의 실체 — coverage 정합성 게이트(parquet-consistent-coverage.ts)
-    // 가 "시도했지만 공시 없음" 을 "파일이 지워짐" 과 가르는 근거다.
+    // legacy Parquet이 팩트 0건 수집 시도를 표현하던 빈 파티션도 이관기가 읽을 수 있어야 한다.
     await repository.ensurePartition('SYMBOL', '005930');
     expect(repository.hasFacts('SYMBOL', '005930')).toBe(true);
     expect(await repository.getFacts({ scope: 'SYMBOL', keys: ['005930'] })).toEqual([]);

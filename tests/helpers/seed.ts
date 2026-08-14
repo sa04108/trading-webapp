@@ -45,9 +45,8 @@ export function seedDailyBars(db: AppDatabase, candles: readonly Candle[]): void
 }
 
 /**
- * 종목의 parquet fact 파티션을 만든다 — coverage 는 parquet 실체와 교차 확인해서만
- * 읽히므로(parquet-consistent-coverage.ts, 운영 장애 2026-08-10) coverage 픽스처는
- * 파티션도 함께 있어야 "받았다" 로 인정된다.
+ * 종목의 중립 fact 행을 만든다. 재무와 자본변동 픽스처가 실제 운영 상태처럼
+ * fact 행과 coverage를 같이 갖도록 할 때 쓴다.
  *
  * 내용물은 중립이다: ratio 1 짜리 1970 년 SPLIT_RATIO 는 가격 보정(×1)도 수량
  * 변화(×1)도 만들지 않고 어떤 백테스트 기간보다도 앞이라 경고도 만들지 않는다.
@@ -87,8 +86,8 @@ export function seedFinancialCoverage(
 /**
  * 자본변동 수집 커버리지를 심는다 — 제출 게이트(Task 6)가 이 표시를 보고
  * 종목별 자본변동 이력을 실제로 수집했는지 판단한다.
- * 실제 DART 동기화 없이 그 결과 상태만 재현한다. coverage 정합성 게이트를
- * 통과하도록 parquet 파티션도 함께 만든다.
+ * 실제 DART 동기화 없이 그 결과 상태만 재현한다. 운영처럼 중립 fact 행도
+ * 함께 만들어 자본변동만 있는 종목 상태를 보존한다.
  */
 export async function seedCorporateActionCoverage(
   container: Container,

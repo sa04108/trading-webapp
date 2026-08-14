@@ -1,6 +1,6 @@
 /**
  * 백테스트 자식 프로세스 (스펙 §5):
- * 부모의 HTTP 이벤트 루프·메모리와 격리되어 DuckDB 로드 → 엔진 실행 → 결과 저장을 수행한다.
+ * 부모의 HTTP 이벤트 루프·메모리와 격리되어 입력 로드 → 엔진 실행 → 결과 저장을 수행한다.
  * 환경변수는 §5 화이트리스트만 받는다. 종료 전 최종 상태를 DB 에 직접 기록한다.
  */
 import { and, desc, eq, inArray, lt, notInArray } from 'drizzle-orm';
@@ -34,12 +34,11 @@ import {
   getCostProfile,
   getSlippageProfile,
 } from '../server/modules/backtest/domain/cost-profiles.js';
-import { ParquetFactRepository } from '../server/modules/facts/infrastructure/parquet-fact-repository.js';
+import { SqliteFactRepository } from '../server/modules/facts/infrastructure/sqlite-fact-repository.js';
 import { CORPORATE_ACTION_FIELD, type Fact } from '../server/modules/facts/domain/fact.js';
 import { alignCorporateActionEffectiveDates } from '../server/modules/facts/domain/corporate-action-effective-date.js';
 import type { Candle, Market, Timeframe } from '../server/modules/market-data/domain/candle.js';
 import { addCalendarDays } from '../server/modules/market-data/domain/kst-date.js';
-import { DuckDbService } from '../server/modules/market-data/infrastructure/duckdb-service.js';
 import { KrxDailyCandleRepository } from '../server/modules/market-data/infrastructure/krx-daily-candle-repository.js';
 import type { KrxHistoricalUniverseSource } from '../server/modules/market-data/application/ports.js';
 import { SymbolMasterService } from '../server/modules/market-data/application/symbol-master-service.js';
@@ -58,17 +57,12 @@ function send(message: unknown): void {
 async function main(): Promise<void> {
   const jobId = process.env.BACKTEST_JOB_ID ?? process.argv[2];
   const databasePath = process.env.DATABASE_PATH;
-  const dataRoot = process.env.DATA_ROOT;
-  if (!jobId || !databasePath || !dataRoot) {
-    throw new Error('BACKTEST_JOB_ID / DATABASE_PATH / DATA_ROOT 환경변수가 필요합니다');
+  if (!jobId || !databasePath) {
+    throw new Error('BACKTEST_JOB_ID / DATABASE_PATH 환경변수가 필요합니다');
   }
 
   const handle = openDatabase(databasePath);
   const db = handle.db;
-  const duckdb = new DuckDbService({
-    threads: Number(process.env.DUCKDB_THREADS ?? '1'),
-    memoryLimit: process.env.DUCKDB_MEMORY_LIMIT ?? '384MB',
-  });
 
   const finish = (status: 'COMPLETED' | 'FAILED' | 'CANCELLED', error?: string): void => {
     // 부모와의 경합에서 이미 확정된 종료 상태를 되돌리지 않는다
@@ -238,7 +232,7 @@ async function main(): Promise<void> {
     const datasetMarket = universeMarkets[0] as Market;
 
     // 제출 시점에 고정된 종목 버전 스냅샷을 사용한다 (스펙 §9.5). 실행 시점의 latest 가
-    // 다르면 대기 중 동기화가 데이터를 바꿨다는 뜻 — Parquet 은 파티션 재작성 방식이라
+    // 다르면 대기 중 동기화가 데이터를 바꿨다는 뜻이다. 현재 데이터를 실행하는 구조라
     // 물리적 스냅샷 격리가 없으므로 경고로 명시한다. 종목 데이터가 데이터셋 간에
     // 공유되므로 "다른 사람이 이 종목을 동기화했다" 도 같은 경로로 잡힌다.
     const pinnedEntries: Array<{ code: string; slice: string; version: number; contentHash: string }> =
@@ -367,7 +361,7 @@ async function main(): Promise<void> {
     // 이유가 바로 그 시나리오이므로, 여기서 잘라버리면 그 게이트가 프로덕션에 닿지 않는다.
     //
     // 봉 시점별 컷오프는 두 경우 모두 엔진의 PitFactView 가 담당한다.
-    const factRepository = new ParquetFactRepository(dataRoot, duckdb);
+    const factRepository = new SqliteFactRepository(db);
     const financialFacts: Fact[] = (
       await factRepository.getFacts({
         scope: 'SYMBOL',
@@ -592,7 +586,6 @@ async function main(): Promise<void> {
     finish(cancellation.isRequested() ? 'CANCELLED' : 'FAILED', cancellation.isRequested() ? undefined : reason);
     process.exitCode = cancellation.isRequested() ? 0 : 1;
   } finally {
-    duckdb.close();
     handle.close();
   }
 }
