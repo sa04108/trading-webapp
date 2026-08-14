@@ -183,7 +183,7 @@ pnpm dev                     # Fastify — http://127.0.0.1:3000
 pnpm dev:web                 # Vite dev 서버 (API 프록시) — 웹 작업 시
 ```
 
-재무전략(`value-quality-rank` 등)이나 PER 유니버스 단계를 만지려면 `DART_API_KEY` 를
+재무전략(`value-quality-rank` 등)이나 PER·ROE 유니버스 단계를 만지려면 `DART_API_KEY` 를
 `.env` 에 넣는다. 수집은 CLI 명령이 아니라 백테스트 준비(preparation)가 요청 기간과
 최소 warm-up 만큼만 자동으로 한다 — 연도·종목을 지정해 미리 돌리는 절차는 없다. 키가
 없으면 그 준비가 막힌다 (실행 후 "거래 0건" 으로 끝나 원인을 못 찾는 상태를 막는다).
