@@ -161,10 +161,11 @@ export class BenchmarkService {
         return;
       }
 
+      const existingDates = new Set(this.list(benchmarkId, from, to).map(({ date }) => date));
       for (let date = from; date <= to; date = addCalendarDays(date, 1)) {
         this.backfill.cursorDate = date;
         const day = new Date(`${date}T00:00:00Z`).getUTCDay();
-        if (day === 0 || day === 6) continue;
+        if (day === 0 || day === 6 || existingDates.has(date)) continue;
         await this.syncDate(benchmarkId, date);
       }
       this.backfill = { benchmarkId, state: 'IDLE', cursorDate: null, from, to, error: null };

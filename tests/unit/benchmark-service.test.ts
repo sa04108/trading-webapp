@@ -28,10 +28,13 @@ describe('벤치마크 저장과 결과 비교', () => {
         ['KOSPI:2026-01-05', 110],
         ['KOSDAQ:2026-01-05', 820],
       ]);
+      const fetchBenchmarkClose = vi.fn(
+        async (id: 'KOSPI' | 'KOSDAQ', date: string) => closes.get(`${id}:${date}`) ?? null,
+      );
       const source: KrxHistoricalUniverseSource = {
         fetchIssueBaseInfo: async () => [],
         fetchDailyTrades: async () => [],
-        fetchBenchmarkClose: async (id, date) => closes.get(`${id}:${date}`) ?? null,
+        fetchBenchmarkClose,
         todayMaxEndpointCallCount: () => 0,
       };
       const service = new BenchmarkService({
@@ -94,6 +97,12 @@ describe('벤치마크 저장과 결과 비교', () => {
       ]);
       expect(chart[0]?.value).toBe(100);
       expect(chart[1]?.value).toBeCloseTo(110);
+
+      fetchBenchmarkClose.mockClear();
+      service.startBackfill('KOSPI', '2026-01-02', '2026-01-06');
+      await vi.waitFor(() => expect(service.backfillStatus().state).toBe('IDLE'));
+      expect(fetchBenchmarkClose).toHaveBeenCalledOnce();
+      expect(fetchBenchmarkClose).toHaveBeenCalledWith('KOSPI', '2026-01-06');
     } finally {
       database.close();
     }
