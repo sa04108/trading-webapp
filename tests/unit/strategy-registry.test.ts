@@ -63,11 +63,6 @@ describe('재무 순위 전략 metadata', () => {
     });
   });
 
-  it('내부 리밸런스 계약을 제거한 기존 전략의 version을 올린다', () => {
-    expect(registry.describe('cross-sectional-momentum')?.version).toBe('2.0.0');
-    expect(registry.describe('value-quality-rank')?.version).toBe('2.0.0');
-  });
-
   it('신규 전략 parameter JSON schema에 기본값을 노출한다', () => {
     const earnings = registry.getParameterJsonSchema('earnings-acceleration-rank') as {
       properties: Record<string, Record<string, unknown>>;

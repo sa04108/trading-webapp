@@ -51,7 +51,7 @@ describe('shouldCloseStream', () => {
  * 무관한 낡은 요청이라 버튼을 잠글 이유가 없다 — 잠그면 브리프의 "새 hash로
  * 다시 미리보기를 누르면 새 job 또는 queue를 받는다" 를 어긴다.
  */
-describe('isPreparingCurrentParams (finding 1 회귀 방지 — 리뷰 2026-08-10)', () => {
+describe('isPreparingCurrentParams', () => {
   const paramsA = { rule: 'A' };
   const paramsB = { rule: 'B' };
   const paramsEqual = (a: typeof paramsA, b: typeof paramsA): boolean => a.rule === b.rule;

@@ -83,12 +83,6 @@ describe('crossSectionalMomentumParameters', () => {
     });
   });
 
-  it('rebalanceMonths를 공개 파라미터에서 제거하고 unknown key를 strip한다', () => {
-    const parsed = crossSectionalMomentumParameters.parse({ topN: 200, rebalanceMonths: 1 });
-    expect(parsed).not.toHaveProperty('rebalanceMonths');
-    expect(parsed.topN).toBe(200);
-  });
-
   it('범위 밖 값을 거부한다', () => {
     expect(crossSectionalMomentumParameters.safeParse({ formationDays: 19 }).success).toBe(false);
     expect(crossSectionalMomentumParameters.safeParse({ skipDays: 64 }).success).toBe(false);

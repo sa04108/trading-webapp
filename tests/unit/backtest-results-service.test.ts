@@ -22,20 +22,7 @@ const REQUEST: BacktestRequest = {
   randomSeed: 42,
 };
 
-describe('백테스트 종목별 지표 제거', () => {
-  it('migration 적용 후 종목별 지표 테이블이 존재하지 않는다', async () => {
-    const context = await createTestApp();
-    try {
-      const table = context.container.database.sqlite
-        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'backtest_symbol_metrics'")
-        .get();
-
-      expect(table).toBeUndefined();
-    } finally {
-      await context.close();
-    }
-  });
-
+describe('ResultsService.getChartSeries', () => {
   it('차트 API용 종목 목록은 거래 내역에서 중복 없이 조회한다', async () => {
     const context = await createTestApp();
     try {

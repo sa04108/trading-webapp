@@ -6,7 +6,7 @@ describe('api client (웹 공용 fetch 래퍼)', () => {
     vi.unstubAllGlobals();
   });
 
-  it('returns undefined for 204 No Content instead of failing JSON parse (Codex 리뷰)', async () => {
+  it('returns undefined for 204 No Content', async () => {
     // DELETE /backtests/:id 는 204 무본문 — json() 파싱하면 SyntaxError 로 실패 처리된다
     vi.stubGlobal(
       'fetch',
@@ -56,7 +56,7 @@ describe('api client (웹 공용 fetch 래퍼)', () => {
   });
 });
 
-describe('postJsonWithStatus (200 READY vs 202 PREPARING 구분용, Task 10)', () => {
+describe('postJsonWithStatus', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });

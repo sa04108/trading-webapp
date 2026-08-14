@@ -14,7 +14,7 @@ describe('hasMarketSession', () => {
   });
 });
 
-describe('getSessionForMarket 회귀 (맵 기반으로 바꾼 뒤)', () => {
+describe('getSessionForMarket', () => {
   it('KR 은 KR_SESSION 을 돌려준다', () => {
     expect(getSessionForMarket('KR')).toBe(KR_SESSION);
   });

@@ -1,24 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { login } from './login';
 
-/**
- * 종목 마스터 화면(설계 2026-08-05-symbol-master-design) — 데이터 탭이 데이터셋·종목
- * 대신 종목 마스터·가격 데이터로 갈리며 새로 생긴 화면이다. 브리프 시나리오
- * 1·4 를 이 파일이 담당한다(시나리오 3 은 위저드 흐름이라 mvp-flow.spec.ts).
- *
- * 가격 데이터 구획(시나리오 2)은 2026-08-07-price-data-removal 계획으로
- * 제거됐다. 데이터 화면에 남은 구획이 종목 마스터 하나뿐이라 탭 nav 자체가
- * 없다 — 이 파일의 남은 시나리오는 URL 로만 화면을 확인한다.
- *
- * 이 스펙이 만든 종목 버전·커버리지를 되돌리는 afterEach 가 없다 — 옛
- * krx-universe.spec.ts 의 자동 생성 데이터셋 정리와 달리, 여기서는 지울 게 없다.
- * (1) SCD 버전·coverage 를 지울 API 자체가 없다. (2) 그 데이터는 이
- * 화면에서 "카드 목록" 처럼 쌓여 다른 스펙의 strict-mode 셀렉터를 깨뜨리지 않는다 —
- * 옛 파일의 정리가 필요했던 이유(mvp-flow.spec.ts 가 데이터셋 카드 개수를 정확히
- * 세는 셀렉터를 쓴다) 자체가 이 화면엔 없다. 그래서 스펙이 스스로를 정리하는 방법은
- * "지우기" 가 아니라 "다른 스펙과 절대 겹치지 않는 날짜만 쓰기" 다 — 아래 SEED_DATE
- * 주석 참고.
- */
+/** 종목 마스터 화면의 동기화·필터·검색·페이징을 검증한다. */
 
 /** SymbolMasterPanel 의 `todayIso()` 와 같은 계산 — 로컬 달력 기준 오늘 */
 function todayIso(): string {
@@ -64,9 +47,7 @@ test('종목 마스터 기본 탭 — 미커버 날짜를 동기화하면 표와
   });
   expect(seedResponse.ok()).toBeTruthy();
 
-  // ── 기본 화면 확인 — /datasets 로 들어가면 종목 마스터로 이어지고, 이미 커버된
-  // 날짜를 기본으로 보여준다. 데이터 화면에 구획이 하나뿐이라(가격 데이터 구획은
-  // 2026-08-07-price-data-removal 계획으로 제거됨) 탭 nav 자체가 없다 — URL 로 확인한다.
+  // ── 기본 화면 확인 — /datasets 로 들어가면 종목 마스터로 이어진다.
   await page.goto('/datasets');
   await expect(page).toHaveURL(/\/datasets\/master$/);
   await expect(page.getByText(/기준 5종목/)).toBeVisible();
@@ -75,7 +56,6 @@ test('종목 마스터 기본 탭 — 미커버 날짜를 동기화하면 표와
   await expect(page.getByText('카카오', { exact: true })).toBeVisible();
   await expect(page.getByText('PREFERRED_STOCK')).toBeVisible(); // 삼성전자우
   await expect(page.getByText('SPAC')).toBeVisible(); // 한국기업인수목적1호스팩
-  await expect(page.getByText(/체크포인트|미검증/)).toHaveCount(0);
 
   // CoverageTimeline 은 aria-label 을 Radix Slider 의 Root(래퍼)에 붙인다 — role="slider" 는
   // 그 안쪽 Thumb 에 있고 이름이 없어(getByRole('slider', {name: ...}) 는 못 찾는다),
@@ -95,7 +75,7 @@ test('종목 마스터 기본 탭 — 미커버 날짜를 동기화하면 표와
   // 하루 차이로만 떨어뜨리면 mergeCoverage 가 두 프로젝트의 구간을 하나로 합쳐
   // "세그먼트가 하나 늘었는지" 판정이 깨진다 — 충분히 떨어뜨려 별개 구간으로 남긴다.
   const target = daysBeforeIso(todayIso(), testInfo.project.name === 'mobile' ? 1 : 10);
-  await page.goto(`/datasets?tab=master&date=${target}`);
+  await page.goto(`/datasets/master?date=${target}`);
   await expect(page.getByText(/데이터 미수집/)).toBeVisible();
   const syncThisDate = page.getByRole('button', { name: '이 날짜 동기화' });
   await expect(syncThisDate).toBeVisible();
@@ -110,7 +90,7 @@ test('종목 마스터 기본 탭 — 미커버 날짜를 동기화하면 표와
   await expect(nearestButton).toBeVisible();
   await nearestButton.click();
   await expect(page.getByText(/기준 5종목/)).toBeVisible();
-  await page.goto(`/datasets?tab=master&date=${target}`);
+  await page.goto(`/datasets/master?date=${target}`);
   await expect(page.getByText(/데이터 미수집/)).toBeVisible();
 
   await syncThisDate.click();

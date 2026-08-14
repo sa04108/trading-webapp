@@ -261,7 +261,7 @@ describe('runBacktest — 멤버십 일정 기반 거래 대상 제한 (스펙 2
     expect(bWarnings).toHaveLength(1);
   });
 
-  it('일정이 미지정이면 tradableSymbols 는 null 이고 기존 동작(제한 없음)과 동일하다', () => {
+  it('일정이 미지정이면 tradableSymbols 는 null 이고 종목을 제한하지 않는다', () => {
     const candles = [
       bar(0, 100),
       bar(1, 100),
@@ -602,7 +602,7 @@ describe('runBacktest — 멤버십 일정 기반 거래 대상 제한 (스펙 2
   it('schedule이 없으면 warm-up 뒤 첫 거래 봉만 isRebalanceBar=true다', () => {
     const seen: Array<{ tsMs: number; isRebalanceBar: boolean; tradable: ReadonlySet<string> | null }> = [];
     const strategy: TradingStrategy<unknown, null> = {
-      id: 'legacy-no-schedule', version: '1', name: 'legacy', description: 'legacy',
+      id: 'no-schedule', version: '1', name: 'no schedule', description: 'no schedule',
       parameterSchema: z.unknown(), initialize: () => null,
       onBars(context) {
         seen.push({ tsMs: context.tsMs, isRebalanceBar: context.isRebalanceBar, tradable: context.tradableSymbols });

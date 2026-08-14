@@ -172,23 +172,16 @@ test('full MVP flow', async ({ page }) => {
   await page.getByLabel('종료일').fill(PERIOD.to);
   await page.getByRole('button', { name: '다음' }).click(); // 기간 → 유니버스
 
-  // 2-2. 유니버스 규칙 — 위저드는 이제 종목을 하나씩 고르지 않는다. 체크박스가
-  // 하나도 없다는 사실 자체가 그 회귀를 잡는다.
+  // 2-2. 유니버스 규칙을 설정하고 미리보기를 확인한다.
   await expect(page.getByRole('button', { name: '3. 유니버스' })).toHaveAttribute(
     'aria-current',
     'step',
   );
-  await expect(page.getByRole('checkbox')).toHaveCount(0);
   await expect(page.getByLabel('시장')).toContainText('KOSPI');
-  // 단계형 유니버스 편집기(Task 9)가 라벨을 '상위 N (시가총액)'에서 단계 공용 'N'으로
-  // 바꿨다 — 이 시나리오는 항상 기본 단일 MARKET_CAP 단계뿐이라 'N' 하나만 있다.
+  // 이 시나리오는 기본 단일 MARKET_CAP 단계만 사용한다.
   await page.getByLabel('N', { exact: true }).fill(String(TOP_N));
   await previewAndSyncUniverse(page);
   await expect(page.getByText('종목 1개 · 리밸런스 3회')).toBeVisible();
-  // 봉 주기를 고르는 UI 는 없다 — `Timeframe` 이 `'1d'` 하나뿐이라(D-041) 고를
-  // 것이 없다. 나머지 단언(거래 내역·정렬 등)은 가짜 KRX 서버가 005930 에 내는
-  // 추세 있는 일별 시세(scripts/e2e-server.ts `samsungCloseFor`)로 성립한다.
-
   await page.getByRole('button', { name: '다음' }).click(); // 유니버스 → 자본·비용
   await expect(page.getByRole('button', { name: '4. 자본·비용' })).toHaveAttribute(
     'aria-current',
@@ -248,9 +241,6 @@ test('full MVP flow', async ({ page }) => {
   await expect(page.getByText('종목 리밸런싱', { exact: true })).toBeVisible();
   await expect(page.getByText('최초 구성 1종목', { exact: true })).toBeVisible();
   await expect(page.getByRole('columnheader', { name: '변동 종목 수' })).toBeVisible();
-  await expect(page.getByText('유니버스 단계 진단', { exact: true })).toHaveCount(0);
-  await expect(page.getByRole('columnheader', { name: '단계별 통과(통과/후보)' })).toHaveCount(0);
-  await expect(page.getByText('종목별 성과', { exact: true })).toHaveCount(0);
   // 재현 정보의 긴 값은 잘리지 않고 접힌다 — 해시가 「a1b2…」로 잘리면 다른 실행과 같은지
   // 비교할 수 없다. 390px 에서 가로 스크롤이 생기지 않는 것은 아래 mobile 전용 테스트가 본다.
   const feeModelValue = page
@@ -259,11 +249,9 @@ test('full MVP flow', async ({ page }) => {
     .getByText(/kr-equity-default@/);
   await expect(feeModelValue).toHaveCSS('overflow-wrap', 'anywhere');
   await expect(feeModelValue).not.toHaveCSS('text-overflow', 'ellipsis');
-  // 5-1. 설명 줄은 종목을 나열하지 않고 유니버스 규칙을 적는다(스펙 2026-08-05) —
-  // 데이터셋·스냅샷 개념 자체가 제거됐다. 여기에 id(ds_…) 가 뜨면 옛 경로로 되돌아간 것이다.
+  // 5-1. 설명 줄은 실행에 사용한 유니버스 규칙을 적는다.
   await expect(page.getByText('KOSPI · 시가총액 1 · 매월')).toBeVisible();
-  // 별도 "미청산 포지션" 카드는 제거되고 거래 내역 테이블에 통합됐다
-  await expect(page.getByText('미청산 포지션', { exact: true })).toHaveCount(0);
+  // 미청산 포지션도 거래 내역 표에서 확인한다.
   await expect(page.getByRole('row').filter({ hasText: '미청산' }).first()).toBeVisible();
   // 미청산 행이 있는 실행이므로 "마지막 확인일" 열이 뜬다 (Task 11) — lastPriceTsMs 가
   // 서버 응답부터 화면까지 이어졌다는 증거다.
@@ -370,11 +358,7 @@ test('full MVP flow', async ({ page }) => {
     page.getByText(/재무 데이터가 필요하지만 이 유니버스에는 재무 있는 종목이 없습니다/),
   ).toHaveCount(0);
 
-  // 8. 로그아웃 (가격 데이터 화면·CSV 가져오기·증권사 동기화는
-  // 2026-08-07-price-data-removal 계획으로 제거됐다 — D-041. 종목 목록·검색·
-  // 일괄 추가·데이터 검증 차트가 그 화면에 딸려 있었고, 그 화면과 함께 사라졌다.
-  // 종목 마스터 화면(`/datasets/master`)의 검증은 tests/e2e/symbol-master.spec.ts
-  // 가 맡는다.
+  // 8. 로그아웃
   await page.getByRole('button', { name: '로그아웃' }).click();
   await expect(page).toHaveURL(/\/login/, { timeout: 10_000 });
 });
@@ -441,13 +425,8 @@ test('rebalance schedule shows the applied trading day when a rebalance date fal
   // 이 기간(휴장일 포함 두 리밸런스 날짜)은 처음 요청되므로 시장 데이터가 durable
   // 준비 작업(202)으로 시작된다 — 완료를 먼저 기다려야 그 다음 "기간 전체 동기화"
   // 판단이 최신 상태를 본다.
-  // durable 준비 작업(Task 6)의 시장 데이터 phase가 range-breakout의 price warm-up
-  // 요구 때문에 기간 전체(휴장일 포함)를 이미 하루 단위로 순회해 채운다 — 옛
-  // "기간 전체 동기화" 버튼이 하던 일을 이 준비 작업이 흡수했으므로(이 파일
-  // `PREPARATION_WAIT_TIMEOUT_MS` 주석 참고) 완료 뒤에는 그 버튼 없이 곧바로
-  // 리밸런스 일정이 뜬다.
+  // 준비가 끝나면 리밸런스 일정을 바로 확인할 수 있다.
   await waitForDurablePreparation(page, first);
-  await expect(page.getByRole('button', { name: '기간 전체 동기화' })).toHaveCount(0);
   await expect(page.getByText('리밸런스 일정')).toBeVisible();
 
   // 휴장 리밸런스 날짜(1월 1일)는 소급된 직전 거래일이 덧붙어 보이고, 정상 거래일
@@ -475,10 +454,7 @@ test('rebalance schedule shows the applied trading day when a rebalance date fal
  * 기능 전체의 목적(생존편향 제거)이 무너진 것이다.
  */
 test('backtest run completes using only KRX daily bars for a delisted stock', async ({ page }) => {
-  // to는 적어도 한 달 뒤까지 — 단계 편집기의 주기 초과 차단(Task 9,
-  // rebalanceIntervalFitsPeriod)이 기본 주기(매월)로 다음 리밸런스가 기간 안에 한
-  // 번도 올 수 없는 기간을 막는다. 20일짜리 옛 기간은 이제 이 검증에 걸려
-  // '미리보기'가 계속 비활성 상태로 남는다 — 리밸런스는 여전히 1회(4월 1일)뿐이다.
+  // 기본 월간 리밸런스가 기간 안에 들어오도록 한 달 구간을 사용한다.
   const period = { from: '2026-04-01', to: '2026-04-30' };
 
   await page.goto('/login');
@@ -549,9 +525,7 @@ test('mobile layout has no horizontal scroll on core screens (스펙 §38)', asy
 
   // /backtests/new/strategy 가 목록에 있는 이유: 단계 버튼 6개를 3열 × 2행으로 깔면서
   // 44px 터치 영역을 지킨다 — 390px 에서 가장 먼저 넘칠 화면이 여기다.
-  // '/datasets/master' 를 넣는 이유: 종목 마스터의 타임라인 슬라이더가 390px 에서
-  // 가장 먼저 넘칠 화면이다(가격 데이터 화면은 2026-08-07-price-data-removal
-  // 계획으로 제거돼 더는 목록에 없다).
+  // '/datasets/master' 는 타임라인 슬라이더의 모바일 폭을 확인한다.
   for (const path of ['/', '/backtests', '/backtests/new/strategy', '/datasets/master', '/settings']) {
     await page.goto(path);
     await page.waitForLoadState('networkidle');

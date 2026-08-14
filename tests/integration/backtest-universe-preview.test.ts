@@ -753,14 +753,14 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
     expect(body.unionSymbols).toEqual(['900010']);
     expect(body.missingCandleSymbols).toEqual([]);
 
-    // 가격 데이터 탭이 읽는 커버리지도 같은 `krx_daily_bars` 집계다 — 실제로 "봉 있음" 으로 보인다.
+    // 커버리지 집계에도 같은 KRX 일봉이 반영된다.
     const coverage = ctx.container.candleCoverageService.getCoverage(['900010'])[0]!;
     expect(coverage.barCount).toBe(1);
   });
 });
 
-/** staged READY 뒤에는 legacy 시총 resolver를 다시 실행하지 않는다. */
-describe('POST /backtests/universe-preview — staged READY 재조회 방지', () => {
+/** 준비된 선정 지표는 같은 요청에서 재사용한다. */
+describe('POST /backtests/universe-preview — 준비 결과 재사용', () => {
   let ctx: TestApp;
   let fake: KrxFakeServer;
   let cookie: string;
@@ -783,12 +783,11 @@ describe('POST /backtests/universe-preview — staged READY 재조회 방지', (
     await fake.close();
   });
 
-  it('선정 지표가 준비됐으면 legacy 시총 캐시가 비어 있어도 KRX를 부르지 않고 200이다', async () => {
+  it('선정 지표가 준비됐으면 KRX를 다시 부르지 않고 200이다', async () => {
     const date = '2026-01-05';
     const basDd = date.replaceAll('-', '');
 
-    // 리밸런스 날짜와 staged 선정 지표는 준비하되 legacy 시총 캐시는 비워 둔다.
-    // 옛 preview는 READY 뒤 resolve()를 한 번 더 호출해 아래 fake 429를 그대로 받았다.
+    // 리밸런스 날짜와 선정 지표를 준비하고 추가 KRX 호출은 실패하도록 둔다.
     ctx.container.database.db.insert(symbolMasterVersions).values({
       standardCode: 'KR7005930003',
       validFromDate: date,

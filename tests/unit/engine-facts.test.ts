@@ -83,7 +83,7 @@ describe('엔진 PIT 배선', () => {
     expect(seen.slice(3)).toEqual([100, 100]);
   });
 
-  it('facts 를 넘기지 않으면 fundamentals 는 항상 null (기존 전략 호환)', () => {
+  it('facts 를 넘기지 않으면 fundamentals 는 항상 null', () => {
     const { strategy, seen } = observingStrategy();
     runBacktest(strategy, {
       candles: [bar(0), bar(1)],
@@ -214,14 +214,9 @@ describe('엔진 PIT 배선', () => {
     });
     const splitWarning = result.warnings.find((warning) => warning.includes('액면분할'));
     expect(splitWarning).toBeDefined();
-    // 엔진이 포지션 수량·평균단가를 조정한 뒤부터(Task 2)는 이 문구가 사실이다 —
     // 조정되지 않는 건 이미 체결된 거래의 체결가뿐이다.
     expect(splitWarning).toContain('보유 수량·평균단가·대기 주문·전략 가격 상태');
-    // 모멘텀 전략의 신호 계산 보정(adjusted-price.ts 의 splitAdjustedClose, 전략
-    // description 에 명시된 사실)은 포지션·주문 상태 조정과는 별개의 참인 사실이다.
-    // 이 절은 이미 두 번 빠졌다 — 한 번은 과거 재작성에서, 한 번은 "생존 편향" 단일
-    // 문장을 항목별 경고로 재작성하면서. 이 단언이 없으면 이 문구가 다시 조용히
-    // 빠져도 아무 테스트도 잡지 못한다.
+    // 모멘텀 전략의 신호 계산 보정도 포지션·주문 상태 조정과 별도로 안내한다.
     expect(splitWarning).toContain('신호 계산');
     expect(splitWarning).toContain('체결가는 조정하지 않습니다');
     // 미보정 케이스의 문구가 섞여 나오면 안 일어난 미보정을 보정으로 잘못 말한 것이다

@@ -514,8 +514,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
   });
 
   it('ingest 안 된 날짜의 VOLUME 결측은 제외 대신 metric 수집을 요구한다', async () => {
-    // 0014 migration 직후: 시총만 복사돼 volume/거래대금이 비어 있다. 한 번의 KRX
-    // ingest 로 채워질 결측이므로 eligible 0 실패가 아니라 NEEDS_DATA 여야 한다.
+    // 수집할 수 있는 결측은 eligible 0 실패가 아니라 NEEDS_DATA 로 돌려준다.
     const resolver = makePipelineResolver({
       metrics: pipelineMetrics.map((row) => ({ ...row, volume: null, tradingValueKrw: null })),
       missingTradingValueDates: [PIPELINE_DATE],

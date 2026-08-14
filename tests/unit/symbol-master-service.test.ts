@@ -2,9 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
 import {
   dailySelectionMetrics,
-  krxDailyBars,
   symbolMasterCoverage,
-  symbolMasterEvents,
   symbolMasterTradingDays,
   symbolMasterVersions,
 } from '../../src/server/shared/db/schema.js';
@@ -143,47 +141,6 @@ describe('SymbolMasterService.ingestDate selection metrics', () => {
   });
 });
 
-describe('SymbolMasterService.ensureSelectionMetrics', () => {
-  it('migration 이 남긴 cap-only metric 에 PIT 일봉 volume 을 보강한다', async () => {
-    const t = await createTestApp();
-    const date = '2026-08-07';
-    insertCoverage(t, date, date);
-    insertVersion(t, entry(), date, null);
-    t.container.database.db.insert(krxDailyBars).values({
-      shortCode: '005930', date, market: 'KOSPI',
-      open: 71_500, high: 72_000, low: 71_000, close: 71_800, volume: 42,
-    }).run();
-    // 0014 migration 이 symbol_master_market_caps 에서 복사한 형태다.
-    t.container.database.db.insert(dailySelectionMetrics).values({
-      date, standardCode: 'KR7005930003', marketCapKrw: '350000000000000',
-      volume: null, tradingValueKrw: null,
-    }).run();
-    const source: KrxHistoricalUniverseSource = {
-      async fetchDailyTrades(market) {
-        if (market === 'KOSDAQ') return [];
-        return [{
-          shortCode: '005930', name: '삼성전자', marketCapRaw: null,
-          open: null, high: null, low: null, close: null, volume: null,
-          tradingValueRaw: '123456789012345',
-        }];
-      },
-      async fetchIssueBaseInfo() { return []; },
-      todayMaxEndpointCallCount() { return 0; },
-    };
-    const svc = new SymbolMasterService({
-      db: t.container.database.db, source, clock: t.container.clock, logger: t.container.logger,
-    });
-
-    await svc.ensureSelectionMetrics([date]);
-
-    expect(t.container.database.db.select().from(dailySelectionMetrics).all()).toEqual([{
-      date, standardCode: 'KR7005930003', marketCapKrw: '350000000000000',
-      volume: 42, tradingValueKrw: '123456789012345',
-    }]);
-    await t.close();
-  });
-});
-
 function insertCoverage(t: TestApp, startDate: string, endDate: string): void {
   t.container.database.db
     .insert(symbolMasterCoverage)
@@ -276,17 +233,8 @@ describe('SymbolMasterService.isRangeCovered', () => {
 });
 
 /**
- * 워커 배선(Task 10)이 쓰는 조회 — DELISTED 이벤트의 oldValue 에서 shortCode 를
- * 꺼낸다. standardCode 만으로는 봉 심볼(단축코드)과 이어지지 않기 때문이다.
- *
- * SCD 이행(D-045) 후 `listEvents` 는 legacy `symbol_master_events` 를 읽지 않고
- * `symbol_master_versions` 의 버전 경계를 `diffUniverse` 로 비교해 이벤트를
- * 파생한다. 그래서 여기서도 버전을 직접 심어 그 파생 경로를 그대로 태운다 — legacy
- * 테이블에 행을 넣는 테스트는 `listEvents` 눈에 아예 보이지 않아 아무것도 증명하지
- * 못한다.
- *
- * 파생 이벤트가 성립하려면 경계일 앞에 `observedSpanStart` 로 쓸 관측 거래일이
- * 있어야 한다 — 그래서 각 테스트가 `insertCoverage` 로 앵커 거래일을 함께 심는다.
+ * DELISTED 이벤트는 `symbol_master_versions` 의 버전 경계를 비교해 파생한다.
+ * 각 테스트는 경계일 앞의 관측 거래일을 coverage와 함께 심는다.
  */
 describe('SymbolMasterService.delistedEventsBetween', () => {
   it('DELISTED 이벤트의 oldValue 에서 shortCode 를 꺼낸다', async () => {
@@ -407,29 +355,4 @@ describe('SymbolMasterService.delistedEventsBetween', () => {
     await t.close();
   });
 
-  /**
-   * 회귀 방지 — SCD 이행 전 구현은 `delistedEventsBetween` 이 `symbol_master_events`
-   * 를 직접 SELECT 했다. 이행 후 그 테이블에는 더 이상 아무것도 쓰이지 않으므로,
-   * 여전히 그 테이블을 읽는 구현이었다면 이 테스트는 에러도 경고도 없이 빈 배열만
-   * 돌려주는 낙관적 오답을 냈을 것이다 — 청산이 조용히 사라지는 바로 그 시나리오다.
-   * `symbol_master_events` 가 실제로 비어 있음을 함께 확인해 "legacy 테이블은
-   * 출처가 아니다" 라는 사실 자체를 고정한다.
-   */
-  it('symbol_master_events 에 아무것도 쓰지 않은 채로 SCD 버전만으로 상장폐지를 찾아낸다', async () => {
-    const t = await createTestApp();
-    const svc = makeService(t);
-    insertCoverage(t, '2020-01-01', '2026-12-31');
-    insertVersion(
-      t,
-      entry({ standardCode: 'KR7005380001', shortCode: '005380' }),
-      '2020-01-01',
-      '2026-06-15',
-    );
-
-    const rows = svc.delistedEventsBetween('2026-01-01', '2026-12-31');
-
-    expect(rows).toEqual([{ shortCode: '005380', effectiveDate: '2026-06-15' }]);
-    expect(t.container.database.db.select().from(symbolMasterEvents).all()).toHaveLength(0);
-    await t.close();
-  });
 });

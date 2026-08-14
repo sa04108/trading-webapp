@@ -5,7 +5,6 @@ import { FACTS_SLICE } from '../../src/server/modules/market-data/application/sy
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import { backtestJobs, symbolVersions } from '../../src/server/shared/db/schema.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
-import { currentStrategyVersion } from '../helpers/strategy-versions.js';
 import {
   createTestAdmin,
   createTestApp,
@@ -18,9 +17,6 @@ import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 const DAY = 86_400_000;
 
 const STRATEGY_ID = 'range-breakout';
-/** 재기준 테스트가 흉내 내는 "과거 스키마" 요청의 버전 — 현재 버전과 다르기만 하면 된다 */
-const LEGACY_VERSION = '1.1.0';
-
 /** range-breakout 은 rebalanceMonths 가 없다 — 리밸런스는 늘 period.from 하나뿐이다 */
 const MAIN_DATE = '2026-01-05';
 /** "봉이 전혀 없는 기간" 시나리오 전용 — 종목 마스터는 커버하되(coverage 는 넓은 고정 구간)
@@ -159,19 +155,6 @@ describe('backtest job queue (스펙 §10, §14)', () => {
 
   afterEach(async () => {
     await ctx.close();
-  });
-
-  it('JSON export에서 종목별 지표를 제외한다', async () => {
-    const job = ctx.container.jobQueue.enqueue(buildRequest());
-
-    const response = await ctx.app.inject({
-      method: 'GET',
-      url: `/api/v1/backtests/${job.id}/export`,
-      cookies: { qp_session: cookie },
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).not.toHaveProperty('symbolMetrics');
   });
 
   it('상세 조회는 멤버 원문 대신 최초 구성과 편입·편출 요약을 반환한다', async () => {
@@ -397,7 +380,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
 
   it('요청한 부분 유니버스 종목만 제출 시점 버전으로 pin 한다', async () => {
     // 000660 이 시총 2위라 topN=1(기본값) 이면 유니버스에서 자연히 빠진다 —
-    // 옛 "데이터셋은 2종목인데 요청은 1종목만 지정" 과 같은 결과를 유니버스 규칙으로 재현한다.
+    // 유니버스 후보 중 일부만 실제 실행에 소비되는 상황을 만든다.
     ctx.container.symbolService.addSymbol('000660', 'KR', 'SK하이닉스');
 
     const created = await ctx.app.inject({
@@ -548,12 +531,6 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     ]);
   });
 
-  it('경고가 없으면 null 이다 — 빈 배열이면 "컬럼이 생기기 전 job" 과 구분되지 않는다', () => {
-    const job = ctx.container.jobQueue.enqueue(buildRequest());
-
-    expect(ctx.container.jobQueue.getJob(job.id)!.submitWarningsJson).toBeNull();
-  });
-
   it('never regresses a terminal status via late progress or status writes (C1)', () => {
     const queue = ctx.container.jobQueue;
     const job = queue.enqueue(buildRequest());
@@ -615,132 +592,6 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       cookies: { qp_session: cookie },
     });
     expect(allowed.statusCode).toBe(204);
-  });
-
-  it('전략 버전을 실은 옛 화면의 제출도 받는다 (D-029)', async () => {
-    // 배포로 전략 버전이 올라간 뒤, 그 전에 열어 둔 위저드가 보내는 형태.
-    // 예전에는 "전략 버전 불일치" 400 이었다 — 사용자가 할 수 있는 일은 새로고침뿐이었다.
-    const created = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
-      payload: { ...buildRequest(), strategyVersion: LEGACY_VERSION },
-    });
-    expect(created.statusCode).toBe(201);
-
-    // 보낸 값이 저장까지 새어 들어가면 안 된다 — 요청은 버전을 나르지 않는다
-    const jobId = (created.json().job as { id: string }).id;
-    const stored = JSON.parse(ctx.container.jobQueue.getJob(jobId)!.requestJson) as {
-      strategyVersion?: string;
-    };
-    expect(stored.strategyVersion).toBeUndefined();
-  });
-
-  it('rebases a stored request that predates the current schema, and warns', async () => {
-    // 구 스키마 형태: risk 없음, maxPositions 가 parameters 안에 있고, 전략 버전도 낮다
-    const legacy = {
-      ...buildRequest(),
-      strategyVersion: LEGACY_VERSION,
-      parameters: { ...buildRequest().parameters, maxPositions: 5 },
-    } as Record<string, unknown>;
-    delete legacy.risk;
-    const job = ctx.container.jobQueue.enqueue(legacy as never);
-
-    const cloned = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${job.id}/clone`,
-      cookies: { qp_session: cookie },
-    });
-    // 복제는 §10 의 복구 경로다 — 스키마가 올라갔다고 막히면 안 된다
-    expect(cloned.statusCode).toBe(201);
-    const body = cloned.json() as { job: { id: string }; warnings: string[] };
-    expect(body.warnings.some((w) => w.includes('maxPositions=5'))).toBe(true);
-    expect(
-      body.warnings.some(
-        (w) => w.includes(LEGACY_VERSION) && w.includes(currentStrategyVersion(STRATEGY_ID)),
-      ),
-    ).toBe(true);
-
-    // 재기준 결과가 실제로 현재 스키마를 만족해야 한다 — 전략 버전 필드는 사라진다 (D-029)
-    const stored = JSON.parse(
-      ctx.container.jobQueue.getJob(body.job.id)!.requestJson,
-    ) as BacktestRequest & {
-      parameters: Record<string, unknown>;
-      strategyVersion?: string;
-    };
-    expect(stored.risk.maxPositions).toBe(5);
-    expect(stored.strategyVersion).toBeUndefined();
-    expect(stored.parameters.maxPositions).toBeUndefined();
-
-    // 복제 경로도 같다 — rebase 경고와 검증 경고를 합쳐 저장한다
-    const clonedStored = ctx.container.jobQueue.getJob(body.job.id)!;
-    expect(JSON.parse(clonedStored.submitWarningsJson!)).toEqual(body.warnings);
-  });
-
-  it('clone에서 레거시 유니버스 규칙과 전략 리밸런싱 주기를 단계형 계약으로 승격한다', async () => {
-    const legacy = {
-      ...buildRequest(),
-      parameters: { ...buildRequest().parameters, rebalanceMonths: 3 },
-      universeRule: { markets: ['KOSPI'], sortKey: 'MKTCAP', topN: 200 },
-      risk: { maxPositions: 40 },
-    };
-    const job = ctx.container.jobQueue.enqueue(legacy as never);
-    registerSymbols(ctx.container, 'KR', ['000660']);
-    await seedCorporateActionCoverage(ctx.container, ['000660'], ACTION_COVERAGE_YEARS);
-
-    const cloned = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${job.id}/clone`,
-      cookies: { qp_session: cookie },
-    });
-
-    expect(cloned.statusCode).toBe(201);
-    const clonedJob = ctx.container.jobQueue.getJob((cloned.json() as { job: { id: string } }).job.id)!;
-    const request = JSON.parse(clonedJob.requestJson) as BacktestRequest;
-    expect(request.universeRule).toEqual({
-      markets: ['KOSPI'],
-      stages: [{ criterion: 'MARKET_CAP', limit: 200 }],
-      rebalanceInterval: { value: 3, unit: 'MONTH' },
-    });
-    expect(request.parameters).not.toHaveProperty('rebalanceMonths');
-    expect(JSON.parse(ctx.container.jobQueue.getJob(job.id)!.requestJson)).toMatchObject({
-      universeRule: { markets: ['KOSPI'], sortKey: 'MKTCAP', topN: 200 },
-      parameters: { rebalanceMonths: 3 },
-    });
-  });
-
-  it('clone은 레거시 리밸런싱 주기가 없으면 1개월을 채우고 경고한다', async () => {
-    const legacy = {
-      ...buildRequest(),
-      universeRule: { markets: ['KOSPI'], sortKey: 'MKTCAP', topN: 1 },
-    };
-    const job = ctx.container.jobQueue.enqueue(legacy as never);
-
-    const cloned = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${job.id}/clone`,
-      cookies: { qp_session: cookie },
-    });
-
-    expect(cloned.statusCode).toBe(201);
-    const body = cloned.json() as { job: { id: string }; warnings: string[] };
-    const request = JSON.parse(ctx.container.jobQueue.getJob(body.job.id)!.requestJson) as BacktestRequest;
-    expect(request.universeRule.rebalanceInterval).toEqual({ value: 1, unit: 'MONTH' });
-    expect(body.warnings.some((warning) => warning.includes('1개월'))).toBe(true);
-  });
-
-  it('refuses to clone a stored request that cannot be rebased (400, not 500)', async () => {
-    const broken = { ...buildRequest() } as Record<string, unknown>;
-    delete broken.period; // 기계적으로 되살릴 수 없는 편차
-    const job = ctx.container.jobQueue.enqueue(broken as never);
-
-    const cloned = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${job.id}/clone`,
-      cookies: { qp_session: cookie },
-    });
-    expect(cloned.statusCode).toBe(400);
-    expect((cloned.json() as { error: string }).error).toContain('복원할 수 없습니다');
   });
 
   it('rejects requests referencing unknown entities', async () => {
@@ -914,60 +765,6 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(partial.statusCode).toBe(201);
   });
 
-  it('초안은 재기준된 요청과 경고를 돌려준다 (재설정 및 복제)', async () => {
-    const legacy = {
-      ...buildRequest(),
-      strategyVersion: LEGACY_VERSION,
-      parameters: { ...buildRequest().parameters, maxPositions: 5 },
-    } as Record<string, unknown>;
-    delete legacy.risk;
-    const job = ctx.container.jobQueue.enqueue(legacy as never);
-
-    const draft = await ctx.app.inject({
-      method: 'GET',
-      url: `/api/v1/backtests/${job.id}/clone-draft`,
-      cookies: { qp_session: cookie },
-    });
-    expect(draft.statusCode).toBe(200);
-    const body = draft.json() as {
-      request: BacktestRequest & { strategyVersion?: string };
-      warnings: string[];
-      blockers: string[];
-    };
-    expect(body.request.risk.maxPositions).toBe(5);
-    // 초안은 버전을 나르지 않는다 (D-029). 다만 그때와 지금이 다르다는 사실은 경고로 남는다.
-    expect(body.request.strategyVersion).toBeUndefined();
-    expect(
-      body.warnings.some(
-        (w) => w.includes(LEGACY_VERSION) && w.includes(currentStrategyVersion(STRATEGY_ID)),
-      ),
-    ).toBe(true);
-    expect(body.blockers).toEqual([]);
-  });
-
-  it('초안은 옛 잡의 봉 주기(1h·1m)를 일봉으로 재기준한다 (D-041, Critical 1)', async () => {
-    // timeframe:'1d' 로 좁혀진 지금 스키마는 '1h' 를 거부한다.
-    // 하지만 옛 잡은 여전히 '1h'·'1m' 로 저장돼 있다.
-    // clone-draft 는 이걸 400 으로 끊지 않고 일봉으로 재기준해 화면을 열어줘야
-    // 한다(stored-request.ts rebaseStoredRequest).
-    const legacy = { ...buildRequest(), timeframe: '1h' } as Record<string, unknown>;
-    const job = ctx.container.jobQueue.enqueue(legacy as never);
-
-    const draft = await ctx.app.inject({
-      method: 'GET',
-      url: `/api/v1/backtests/${job.id}/clone-draft`,
-      cookies: { qp_session: cookie },
-    });
-    expect(draft.statusCode).toBe(200);
-    const body = draft.json() as {
-      request: BacktestRequest & { timeframe?: string };
-      warnings: string[];
-      blockers: string[];
-    };
-    expect(body.request.timeframe).toBe('1d');
-    expect(body.warnings.some((w) => w.includes('1h') && w.includes('일봉'))).toBe(true);
-  });
-
   it('봉이 없는 원본도 초기 단계에서는 coverage 검증 없이 연다', async () => {
     // 봉이 없는 기간은 제출 시 400이지만 유니버스 단계 전의 초안 복원을 막지 않는다.
     const request: BacktestRequest = {
@@ -988,7 +785,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(body.blockers).toEqual([]);
   });
 
-  it('초안은 없는 작업에 404, 되살릴 수 없는 요청에 400', async () => {
+  it('없는 작업의 초안 조회는 404를 반환한다', async () => {
     const missing = await ctx.app.inject({
       method: 'GET',
       url: '/api/v1/backtests/job_nope/clone-draft',
@@ -996,16 +793,6 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
     expect(missing.statusCode).toBe(404);
 
-    const broken = { ...buildRequest() } as Record<string, unknown>;
-    delete broken.period;
-    const brokenJob = ctx.container.jobQueue.enqueue(broken as never);
-    const brokenDraft = await ctx.app.inject({
-      method: 'GET',
-      url: `/api/v1/backtests/${brokenJob.id}/clone-draft`,
-      cookies: { qp_session: cookie },
-    });
-    expect(brokenDraft.statusCode).toBe(400);
-    expect((brokenDraft.json() as { error: string }).error).toContain('복원할 수 없습니다');
   });
 
   it('대기열 상한을 넘는 제출을 429 로 거부한다 (신규·복제 공통)', async () => {

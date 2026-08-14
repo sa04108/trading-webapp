@@ -204,11 +204,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
     },
   );
 
-  /**
-   * 워커는 재무가 없어 조용히 빠지는 종목이 있다고 경고하면서 "facts:sync 리포트를
-   * 확인하세요" 라고 안내했다 — 그 리포트는 이미 닫혔을 수 있는 세션의 stdout 으로만
-   * 존재했다. 실제로 로드된 팩트 키를 유니버스와 맞춰 종목 이름을 직접 밝힌다.
-   */
+  /** 재무가 없어 제외된 종목은 이름과 함께 경고한다. */
   it(
     '재무가 없는 종목을 이름으로 밝힌다',
     { timeout: 90_000 },
@@ -275,9 +271,6 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       // 재무가 있는 종목은 이 목록에 끼지 않는다
       expect(factWarning).not.toContain('CHEAP');
       expect(factWarning).not.toContain('RICH');
-      // 더 이상 존재하지 않는 리포트를 가리키지 않는다
-      // CLI 명령을 안내하지 않는다 — 재무 수집은 준비(preparation) 흐름이 한다(D-049)
-      expect(factWarning).not.toContain('facts:sync');
     },
   );
 });

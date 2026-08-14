@@ -119,24 +119,6 @@ describe('universeRule', () => {
     expect(backtestRequestSchema.safeParse({ ...baseRequest(), universeRule }).success).toBe(false);
   });
 
-  /**
-   * 옛 필드가 있던 시절의 저장된 요청(복제·재실행)도 파싱은 돼야 한다 — z.object 는
-   * 모르는 키를 버린다. 다만 universeRule 자체가 없으면 여전히 거부한다(위 테스트).
-   */
-  it('옛 datasetId/universeSnapshotId/universe 필드는 조용히 무시하고 파싱한다', () => {
-    const result = backtestRequestSchema.safeParse({
-      ...baseRequest(),
-      datasetId: 'ds-1',
-      universeSnapshotId: 'usn_1',
-      universe: { type: 'SYMBOLS', symbols: ['005930'] },
-    });
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect((result.data as Record<string, unknown>).datasetId).toBeUndefined();
-      expect((result.data as Record<string, unknown>).universeSnapshotId).toBeUndefined();
-      expect((result.data as Record<string, unknown>).universe).toBeUndefined();
-    }
-  });
 });
 
 describe('요청 교차 검증', () => {

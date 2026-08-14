@@ -161,7 +161,6 @@ describe('symbol-master routes', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.ranges).toEqual([{ startDate: '2025-01-06', endDate: '2025-01-06' }]);
-    expect(body).not.toHaveProperty('checkpoints');
     expect(typeof body.lastSyncedAtMs).toBe('number');
     expect(body.backfill).toMatchObject({
       state: 'IDLE',

@@ -63,7 +63,7 @@ function versionsOf(ctx: Ctx) {
     .all();
 }
 
-describe('SymbolMasterService — SCD 버전 저장 회귀', () => {
+describe('SymbolMasterService — SCD 버전 저장', () => {
   let ctx: Ctx;
 
   beforeEach(async () => {

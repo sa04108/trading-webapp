@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
 
-describe('응답 압축 (D-016 — Caddy encode 대체)', () => {
+describe('응답 압축', () => {
   let testApp: TestApp;
 
   afterEach(async () => {

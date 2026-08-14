@@ -264,7 +264,7 @@ describe('ParquetFactRepository', () => {
     expect(rows.map((row) => row.periodKey).sort()).toEqual(['2025Q1', '2025Q2']);
   });
 
-  it('부적절한 datasetId 로 hasFacts 를 호출하면 false 를 반환한다', () => {
+  it('부적절한 key 로 hasFacts 를 호출하면 false 를 반환한다', () => {
     expect(repository.hasFacts('SYMBOL', '../escape')).toBe(false);
   });
 });

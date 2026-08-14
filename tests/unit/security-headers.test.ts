@@ -1,14 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
 
-describe('보안 헤더 (스펙 §16 + D-016 HSTS)', () => {
+describe('보안 헤더', () => {
   let testApp: TestApp;
 
   afterEach(async () => {
     await testApp.close();
   });
 
-  it('모든 응답에 보안 헤더를 설정한다 — Caddy 제거 후에도 앱이 보장', async () => {
+  it('모든 응답에 보안 헤더를 설정한다', async () => {
     testApp = await createTestApp();
     const res = await testApp.app.inject({ method: 'GET', url: '/api/v1/health/live' });
 

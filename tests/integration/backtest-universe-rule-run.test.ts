@@ -10,7 +10,6 @@ import {
   krxNonTradingCoverage,
   krxNonTradingDays,
   symbolFactsState,
-  symbolMasterStorageState,
   symbolMasterVersions,
 } from '../../src/server/shared/db/schema.js';
 import {
@@ -413,28 +412,6 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     expect(response.statusCode).toBe(201);
   });
 
-  it('현재 공유 스키마로 복원할 수 없는 구 요청의 clone-draft 는 400 이다', async () => {
-    // 게이트가 생기기 전에 제출된 잡을 재현한다 — 큐에 직접 넣어 제출 검증을 우회한다
-    const job = ctx.container.jobQueue.enqueue(momentumPayload(20, 10) as never, [], { entries: [], hash: 'seed' });
-
-    const draft = await ctx.app.inject({
-      method: 'GET',
-      url: `/api/v1/backtests/${job.id}/clone-draft`,
-      cookies: { qp_session: cookie },
-    });
-    expect(draft.statusCode).toBe(400);
-    expect(draft.json().error).toContain('현재 스키마로 복원할 수 없습니다');
-
-    // 현재 공유 요청 스키마로 복원할 수 없는 구 요청이라 실제 복제도 400으로 막힌다.
-    const cloned = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${job.id}/clone`,
-      cookies: { qp_session: cookie },
-    });
-    expect(cloned.statusCode).toBe(400);
-    expect(cloned.json().error).toContain('현재 스키마로 복원할 수 없습니다');
-  });
-
   it('봉만 쓰는 전략은 재무 없이도 제출된다', async () => {
     const response = await ctx.app.inject({
       method: 'POST',
@@ -472,9 +449,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
  * 자식 프로세스를 fork 한다. 자식이 부모와 별도로 `krx_daily_bars` 를 읽어 백테스트를
  * 완주하는지는 이 테스트만 검증한다 — 부모 프로세스 안에서 도는 단위 테스트는 이
  * 경계를 볼 수 없다.
- *
- * `CompositeCandleRepository`·`ParquetCandleRepository` 는 이제 없다(Task 5,
- * 2026-08-07-price-data-removal). `krx_daily_bars` 가 유일한 봉 원천이다.
+ * `krx_daily_bars` 를 봉 원천으로 사용한다.
  */
 describe('KRX 전용 일봉으로 백테스트 실행 (워커의 부모-자식 경계)', () => {
   const KRX_ONLY_CODE = '900001'; // 상장폐지 종목을 흉내낸 임의 코드
@@ -698,17 +673,13 @@ describe('POST /backtests/:id/clone — 유니버스 자동 등록 (미리보기
 });
 
 /**
- * 리뷰 finding(2026-08-08): `checkPeriodCoverage`/`resolveConsumedUniverse` 가
- * `candleCoverage`(원시 `krx_daily_bars`)만 보고 `symbolService.exists` 를 보지
- * 않으면, 유니버스 전체가 미등록이어도 봉만 있으면 제출이 통과해 버린다. 그러면
- * 큐 슬롯을 먹은 뒤 `backtest-child.ts` 가 "유니버스 종목이 등록돼 있지 않습니다"
- * 로 늦게 죽는다 — 제출 시점에 빨리 거부하는 옛 동작(캐시가 등록 종목만 채워졌던
- * 시절의 부작용)을 명시적인 검사로 되살렸는지 이 테스트가 지킨다.
+ * `checkPeriodCoverage`/`resolveConsumedUniverse` 는 봉 커버리지뿐 아니라 종목 등록도
+ * 확인해, 미등록 유니버스가 큐에 들어가기 전에 거부한다.
  *
  * `registerSymbols` 를 의도적으로 부르지 않는다 — `krx_daily_bars` 는 백필이 이미
  * 채워 뒀다고 가정하지만 `symbols` 등록은 한 번도 거치지 않은 상태를 재현한다.
  */
-describe('POST /backtests — 미등록 유니버스는 제출 시점에 거부된다 (리뷰 finding, 2026-08-08)', () => {
+describe('POST /backtests — 미등록 유니버스 검증', () => {
   const date = '2026-01-05';
   const UNREGISTERED_CODE = '900099';
 
@@ -775,106 +746,6 @@ describe('POST /backtests — 미등록 유니버스는 제출 시점에 거부�
 });
 
 /**
- * 자본변동 수집 게이트(Task 6)는 Task 10에서 제거했다. 제출은 이제 같은
- * requestHash의 COMPLETED 준비(`preparation.getReadyPreview`)를 전제하고, 그
- * 준비(`buildBacktestPreparationPlan`)가 전략의 `dataRequirements.
- * requiresCorporateActions`·DECLINE stage 후보에 따라 최종 유니버스의 자본변동을
- * 이미 동기화해 둔다. 실전에 등록된 전략은 전부 이 조건을 충족한다
- * (tests/unit/backtest-preparation-plan.test.ts 전략별 표 참고) — 제출 시점에
- * 커버리지를 다시 대조해도 잡을 수 있는 결측이 남지 않는다.
- *
- * 이 묶음은 "게이트가 막던 자리" 가 이제 막지 않는지를 확인한다 — 옛 게이트
- * 테스트가 세웠던 픽스처(코드·연도)는 그대로 두고 기대값만 뒤집었다.
- */
-describe('POST /backtests — 준비 완료 뒤 제출 (자본변동 게이트 제거, Task 10)', () => {
-  const date = '2026-01-05';
-  const CODE = '900050';
-
-  let ctx: TestApp;
-  let cookie: string;
-
-  beforeEach(async () => {
-    ctx = await createTestApp();
-    const { username, password } = await createTestAdmin(ctx.container);
-    const login = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/auth/login',
-      payload: { username, password },
-    });
-    cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
-    installPreparedSubmissionFixture(ctx);
-
-    // 봉·등록·종목 마스터는 모두 갖춘다. 자본변동 커버리지는 더 이상 제출을
-    // 막는 변수가 아니므로 기본으로는 심지 않는다 — 아래 각 테스트가 필요하면 심는다.
-    // 이름까지 등록해야 오류·경고 문구가 종목을 이름으로 밝히는지 확인할 수 있다.
-    ctx.container.symbolService.addSymbol(CODE, 'KR', '게이트테스트');
-    seedSymbolMasterUniverse(ctx.container, [date], [
-      {
-        standardCode: 'KR7900050006',
-        shortCode: CODE,
-        name: '게이트테스트',
-        market: 'KOSPI',
-        marketCapKrw: '500000000000000',
-      },
-    ]);
-    seedDailyBars(ctx.container.database.db, [
-      {
-        symbol: CODE,
-        market: 'KR',
-        timeframe: '1d',
-        tsMs: Date.UTC(2026, 0, 5),
-        open: 1_000,
-        high: 1_100,
-        low: 900,
-        close: 1_050,
-        volume: 12_345,
-      },
-    ]);
-  });
-
-  afterEach(async () => {
-    await ctx.close();
-  });
-
-  const submit = (): Promise<{ statusCode: number; json: () => Record<string, unknown> }> =>
-    ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
-      payload: singleDayRequest(1, date),
-    });
-
-  it('자본변동 커버리지를 전혀 수집하지 않아도 준비가 끝났으면 201이다', async () => {
-    // 커버리지 저장소에 아무것도 심지 않는다 — 옛 게이트라면 400으로 막던 상태다.
-    // installPreparedSubmissionFixture가 첫 409 PREPARATION_REQUIRED를 새 준비
-    // 요청으로 이어받아 COMPLETED까지 기다린 뒤 재제출하므로, 그 뒤에는 커버리지와
-    // 무관하게 통과해야 한다.
-    const created = await submit();
-
-    expect(created.statusCode).toBe(201);
-    const body = created.json() as { corporateActionGate?: unknown };
-    // 필드 자체가 더 이상 없다 — 남아 있으면 제거가 불완전하다는 뜻이다.
-    expect(body.corporateActionGate).toBeUndefined();
-    // 제출 시점에 막히지 않고 큐까지 들어간다(옛 게이트 테스트는 여기서 0을 기대했다).
-    expect(ctx.container.jobQueue.countByStatus(['QUEUED'])).toBe(1);
-  });
-
-  it('자본변동 gap 이 있어도 더 이상 제출 경고를 만들지 않는다', async () => {
-    // 커버리지도 있고 gap 도 있다 — 옛 게이트라면 "수집했는데 DART 가 응답하지
-    // 못했다" 로 읽어 경고에 이름을 남겼다. 게이트를 통째로 없앤 지금은 그 경고
-    // 자체가 나올 곳이 없다.
-    await seedCorporateActionCoverage(ctx.container, [CODE], [2026]);
-    ctx.container.actionCoverageStore.addGapYears(CODE, [2026], ctx.container.clock.now());
-
-    const created = await submit();
-
-    expect(created.statusCode).toBe(201);
-    const warnings = (created.json() as { warnings: string[] }).warnings;
-    expect(warnings.some((w) => w.includes(CODE))).toBe(false);
-  });
-});
-
-/**
  * 워커 배선(Task 10) — 데이터 계층·유니버스·엔진(Task 4·6·7·8·9)은 이미 준비됐지만
  * 아무도 그 정보를 엔진에 넘기지 않으면 실제 백테스트에서는 아무 것도 바뀌지 않는다.
  * 이 테스트가 `backtest-child.ts` 가 실제로 그 배선을 잇는지 end-to-end 로 확인하는
@@ -920,12 +791,9 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
       ]);
       await seedCorporateActionCoverage(ctx.container, ['005930', '000660'], yearRange(2025, 2026));
 
-      // 마지막 봉 다음 날을 폐지 효력일로 둔다 — 워커가 listEvents 로 이 경계를 읽어
-      // 엔진에 넘긴다. SCD 이행(D-045) 후 delistedEventsBetween 은 legacy
-      // symbol_master_events 를 더 이상 읽지 않고 symbol_master_versions 의 버전
-      // 경계를 diffUniverse 로 비교해 이벤트를 파생한다 — 그래서 여기서도 legacy
-      // 테이블에 행을 심는 대신 000660 의 실제 유효 구간을 이 날짜에서 닫아야
-      // listEvents 가 DELISTED 경계를 본다. observedSpanStart 앵커(경계 이전 관측
+      // 마지막 봉 다음 날을 폐지 효력일로 둔다. delistedEventsBetween 은
+      // symbol_master_versions 의 버전 경계로 이벤트를 파생하므로 000660 의 실제
+      // 유효 구간을 이 날짜에서 닫는다. observedSpanStart 앵커(경계 이전 관측
       // 거래일)는 seedSymbolMasterUniverse 가 MASTER_DATES 를 이미 거래일로 심어
       // 뒀으므로 따로 채울 필요가 없다.
       const delistedDate = new Date(lastDoomed.tsMs + DAY).toISOString().slice(0, 10);
@@ -1075,64 +943,6 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
       const warnings = JSON.parse(run.warningsJson ?? '[]') as string[];
       expect(warnings.some((w) => w.includes('거래불가일 정보가 없습니다'))).toBe(false);
       expect(warnings.some((w) => w.includes('거래불가일 정보는'))).toBe(false);
-    },
-  );
-
-  it(
-    '종목 마스터가 SCD 이행 전이면 워커는 이행하지 않고 바로 실패한다',
-    { timeout: 90_000 },
-    async () => {
-      // 워커가 SymbolMasterService 를 만들면 생성자가 ensureScdStorageReady 를 부른다 —
-      // 백테스트 잡 하나가 트랜잭션을 열어 버전 테이블을 다시 쓰고 legacy 테이블을
-      // 비우는 이행을 수행하게 된다. 워커는 절대 이행하지 않고, 운영자에게 서버를
-      // 먼저 띄우라고 말하고 죽어야 한다.
-      const alive = buildDailyCandles('005930');
-      registerSymbols(ctx.container, 'KR', ['005930']);
-      seedDailyBars(ctx.container.database.db, alive);
-      seedSymbolMasterUniverse(ctx.container, MASTER_DATES, [
-        { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '900' },
-      ]);
-      await seedCorporateActionCoverage(ctx.container, ['005930'], yearRange(2025, 2026));
-
-      // 제출은 이행이 끝난 서버가 받는다. 워커가 열 때만 PENDING 이다 —
-      // 서버 배포와 워커 실행 사이에 DB 가 교체된 상황이 이 모양이다.
-      const created = await ctx.app.inject({
-        method: 'POST',
-        url: '/api/v1/backtests',
-        cookies: { qp_session: cookie },
-        payload: buildRequest(1),
-      });
-      expect(created.statusCode).toBe(201);
-      const jobId = (created.json().job as { id: string }).id;
-
-      ctx.container.database.db
-        .update(symbolMasterStorageState)
-        .set({ phase: 'PENDING', migratedAtMs: null })
-        .where(eq(symbolMasterStorageState.singleton, 1))
-        .run();
-      const versionsBefore = ctx.container.database.db.select().from(symbolMasterVersions).all();
-
-      ctx.container.jobOrchestrator.tick();
-      await waitFor(() => {
-        const job = ctx.container.jobQueue.getJob(jobId);
-        return job !== null && ctx.container.jobQueue.isTerminal(job.status);
-      }, 60_000);
-
-      const job = ctx.container.jobQueue.getJob(jobId)!;
-      expect(job.status).toBe('FAILED');
-      // 이행을 시도하다 죽은 것이 아니라, 시도 전에 멈춰 운영자에게 할 일을 알린다
-      expect(job.error).toContain('서버를 먼저');
-      expect(job.error).not.toContain('SCD 이행 실패');
-
-      // 이행 흔적이 없어야 한다 — 상태도 버전 행도 그대로다
-      const state = ctx.container.database.db
-        .select()
-        .from(symbolMasterStorageState)
-        .where(eq(symbolMasterStorageState.singleton, 1))
-        .get();
-      expect(state?.phase).toBe('PENDING');
-      expect(ctx.container.database.db.select().from(symbolMasterVersions).all())
-        .toHaveLength(versionsBefore.length);
     },
   );
 
@@ -1525,9 +1335,9 @@ describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepar
       expect(persistedPin.scheduleHash).toBe(
         createHash('sha256').update(JSON.stringify(pinnedSchedule)).digest('hex'),
       );
-      // preview와 실행이 같은 UniverseRuleResolver를 쓴다는 증거 — pin된 스키마는
-      // legacy(symbols) 모양으로 재구성되고 preview는 staged(members) 모양을 그대로
-      // 보존해 해시 namespace 자체는 다르지만(backtest-routes.ts
+      // preview와 실행이 같은 UniverseRuleResolver를 쓴다는 증거다. 저장 일정은
+      // symbols 모양이고 preview는 members 모양을 보존해 해시 namespace 자체는
+      // 다르지만(backtest-routes.ts
       // preparedPreviewToResolved 주석 참고), 멤버십(리밸런스 날짜별 종목 집합)은
       // 정확히 같아야 한다.
       expect(pinnedSchedule.map((entry: { symbols: string[] }) => entry.symbols)).toEqual(

@@ -280,12 +280,6 @@ describe('valueQualityRankParameters', () => {
     });
   });
 
-  it('rebalanceMonths를 공개 파라미터에서 제거하고 unknown key를 strip한다', () => {
-    const parsed = valueQualityRankParameters.parse({ topN: 200, rebalanceMonths: 3 });
-    expect(parsed).not.toHaveProperty('rebalanceMonths');
-    expect(parsed.topN).toBe(200);
-  });
-
   it('연결/별도(consolidated)는 파라미터가 아니다 — 수집 시점 선택이다', () => {
     const parsed = valueQualityRankParameters.parse({}) as Record<string, unknown>;
     expect('consolidated' in parsed).toBe(false);

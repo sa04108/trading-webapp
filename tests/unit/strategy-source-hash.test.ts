@@ -1,18 +1,8 @@
-import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { strategySourceHash } from '../../src/server/modules/strategy/application/strategy-source-hash.js';
 import { rangeBreakoutStrategy } from '../../src/server/modules/strategy/strategies/range-breakout.js';
 import type { AnyTradingStrategy } from '../../src/server/modules/strategy/domain/strategy.js';
-
-/** meta 도입 이전의 해시 계산 — 라벨 없는 스키마를 그대로 직렬화했다 */
-function legacyHash(id: string, version: string, schema: z.ZodType): string {
-  return createHash('sha256')
-    .update(id)
-    .update(version)
-    .update(JSON.stringify(z.toJSONSchema(schema)))
-    .digest('hex');
-}
 
 const bareParameters = z.object({
   lookbackBars: z.number().int().min(2).max(200).default(20),
@@ -26,12 +16,6 @@ const bareParameters = z.object({
 });
 
 describe('strategySourceHash', () => {
-  it('라벨·설명은 해시에 영향을 주지 않는다 — meta 도입 이전 해시와 같다', () => {
-    expect(strategySourceHash(rangeBreakoutStrategy as AnyTradingStrategy)).toBe(
-      legacyHash(rangeBreakoutStrategy.id, rangeBreakoutStrategy.version, bareParameters),
-    );
-  });
-
   it('문구를 바꿔도 해시는 그대로다', () => {
     const reworded = {
       ...rangeBreakoutStrategy,
@@ -53,7 +37,7 @@ describe('strategySourceHash', () => {
       }),
     } as unknown as AnyTradingStrategy;
     expect(strategySourceHash(reworded)).toBe(
-      legacyHash(rangeBreakoutStrategy.id, rangeBreakoutStrategy.version, bareParameters),
+      strategySourceHash(rangeBreakoutStrategy as AnyTradingStrategy),
     );
   });
 

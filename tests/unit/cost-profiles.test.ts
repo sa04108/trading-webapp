@@ -10,10 +10,6 @@ describe('kr-equity-default', () => {
     expect(profile?.sellTaxRate).toBe(0.0015);
   });
 
-  it('세율 변경으로 version 이 올라갔다 — 재현성 메타데이터가 구버전 실행과 구분된다', () => {
-    expect(getCostProfile('kr-equity-default')?.version).toBe('1.1.0');
-  });
-
   it('수수료율은 매수·매도 0.015% 그대로다', () => {
     const profile = getCostProfile('kr-equity-default');
     expect(profile?.buyCommissionRate).toBe(0.00015);

@@ -71,7 +71,6 @@ describe('auth flow (스펙 §14, §16)', () => {
     expect(meAfter.statusCode).toBe(401);
   });
 
-  // TOTP 제거(D-014) 후에도 세션 고정 방어는 로그인마다의 새 세션 ID 발급이 담당한다
   it('issues a fresh session id on every login', async () => {
     const { username, password } = await createTestAdmin(ctx.container);
 
