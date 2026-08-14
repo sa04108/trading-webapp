@@ -165,11 +165,6 @@ export class ResultsService {
         .from(backtestMonthlyReturns)
         .where(eq(backtestMonthlyReturns.jobId, jobId))
         .all(),
-      symbolMetrics: this.db
-        .select()
-        .from(backtestSymbolMetrics)
-        .where(eq(backtestSymbolMetrics.jobId, jobId))
-        .all(),
     };
   }
 }

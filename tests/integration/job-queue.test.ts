@@ -161,6 +161,19 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     await ctx.close();
   });
 
+  it('JSON export에서 종목별 지표를 제외한다', async () => {
+    const job = ctx.container.jobQueue.enqueue(buildRequest());
+
+    const response = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${job.id}/export`,
+      cookies: { qp_session: cookie },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).not.toHaveProperty('symbolMetrics');
+  });
+
   it('상세 조회는 멤버 원문 대신 최초 구성과 편입·편출 요약을 반환한다', async () => {
     const job = ctx.container.jobQueue.enqueue(buildRequest(), [
       {
