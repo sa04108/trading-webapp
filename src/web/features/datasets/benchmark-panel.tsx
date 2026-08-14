@@ -30,17 +30,20 @@ import {
   type BenchmarkId,
 } from '../../../shared/schemas/benchmark.js';
 
+interface BenchmarkBackfillStatus {
+  benchmarkId: BenchmarkId | null;
+  state: 'IDLE' | 'RUNNING' | 'FAILED';
+  cursorDate: string | null;
+  error: string | null;
+}
+
 interface BenchmarkResponse {
   benchmarkId: BenchmarkId;
   points: Array<{ date: string; close: number }>;
   covered: boolean;
   missingTradingDays: number;
   tradingDays: number;
-  backfill: {
-    state: 'IDLE' | 'RUNNING' | 'FAILED';
-    cursorDate: string | null;
-    error: string | null;
-  };
+  backfill: BenchmarkBackfillStatus;
 }
 
 function todayIso(): string {
@@ -66,8 +69,12 @@ export function BenchmarkPanel() {
     enabled: validPeriod,
     refetchInterval: (current) => current.state.data?.backfill.state === 'RUNNING' ? 1_000 : false,
   });
-  const backfill = useMutation({
-    mutationFn: () => postJson('/benchmarks/backfill', { benchmarkId, from, to }),
+  const backfill = useMutation<
+    BenchmarkBackfillStatus,
+    Error,
+    { benchmarkId: BenchmarkId; from: string; to: string }
+  >({
+    mutationFn: (request) => postJson('/benchmarks/backfill', request),
     onSuccess: () => {
       toast.success('벤치마크 기간 수집을 시작했습니다');
       void queryClient.invalidateQueries({ queryKey: ['benchmarks'] });
@@ -76,6 +83,9 @@ export function BenchmarkPanel() {
   });
 
   const points = query.data?.points ?? [];
+  const backfillStatus = query.isFetching && backfill.data?.state === 'RUNNING'
+    ? backfill.data
+    : (query.data?.backfill ?? backfill.data);
   const first = points[0];
   const last = points.at(-1);
   const returnPct = first && last ? (last.close / first.close - 1) * 100 : null;
@@ -105,8 +115,8 @@ export function BenchmarkPanel() {
           <div className="sm:col-span-3">
             <Button
               type="button"
-              disabled={!validPeriod || backfill.isPending || query.data?.backfill.state === 'RUNNING'}
-              onClick={() => backfill.mutate()}
+              disabled={!validPeriod || backfill.isPending || backfillStatus?.state === 'RUNNING'}
+              onClick={() => backfill.mutate({ benchmarkId, from, to })}
             >
               기간 수집
             </Button>
@@ -120,11 +130,16 @@ export function BenchmarkPanel() {
         </CardContent>
       </Card>
 
-      {query.data?.backfill.state === 'RUNNING' ? (
-        <Alert><AlertDescription>수집 중 — {query.data.backfill.cursorDate ?? '준비 중'}</AlertDescription></Alert>
+      {backfillStatus?.state === 'RUNNING' ? (
+        <Alert>
+          <AlertDescription>
+            {backfillStatus.benchmarkId === null ? '벤치마크' : BENCHMARK_NAMES[backfillStatus.benchmarkId]}
+            {' '}수집 중 — {backfillStatus.cursorDate ?? '준비 중'}
+          </AlertDescription>
+        </Alert>
       ) : null}
-      {query.data?.backfill.state === 'FAILED' ? (
-        <Alert variant="destructive"><AlertDescription>수집 실패 — {query.data.backfill.error}</AlertDescription></Alert>
+      {backfillStatus?.state === 'FAILED' ? (
+        <Alert variant="destructive"><AlertDescription>수집 실패 — {backfillStatus.error}</AlertDescription></Alert>
       ) : null}
       {query.isError ? (
         <Alert variant="destructive">

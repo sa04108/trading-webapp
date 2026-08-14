@@ -26,6 +26,7 @@ import {
 export type BenchmarkBackfillState = 'IDLE' | 'RUNNING' | 'FAILED';
 
 export interface BenchmarkBackfillStatus {
+  benchmarkId: BenchmarkId | null;
   state: BenchmarkBackfillState;
   cursorDate: string | null;
   from: string | null;
@@ -39,7 +40,7 @@ function isFredBenchmarkId(benchmarkId: BenchmarkId): benchmarkId is FredBenchma
 
 export class BenchmarkService {
   private backfill: BenchmarkBackfillStatus = {
-    state: 'IDLE', cursorDate: null, from: null, to: null, error: null,
+    benchmarkId: null, state: 'IDLE', cursorDate: null, from: null, to: null, error: null,
   };
 
   constructor(private readonly deps: {
@@ -140,7 +141,7 @@ export class BenchmarkService {
 
   startBackfill(benchmarkId: BenchmarkId, from: string, to: string): BenchmarkBackfillStatus {
     if (this.backfill.state === 'RUNNING') return this.backfill;
-    this.backfill = { state: 'RUNNING', cursorDate: from, from, to, error: null };
+    this.backfill = { benchmarkId, state: 'RUNNING', cursorDate: from, from, to, error: null };
     void this.runBackfill(benchmarkId, from, to);
     return this.backfill;
   }
@@ -156,7 +157,7 @@ export class BenchmarkService {
           benchmarkId,
           await this.deps.fredSource.fetchBenchmarkRange(benchmarkId, from, to),
         );
-        this.backfill = { state: 'IDLE', cursorDate: null, from, to, error: null };
+        this.backfill = { benchmarkId, state: 'IDLE', cursorDate: null, from, to, error: null };
         return;
       }
 
@@ -166,10 +167,12 @@ export class BenchmarkService {
         if (day === 0 || day === 6) continue;
         await this.syncDate(benchmarkId, date);
       }
-      this.backfill = { state: 'IDLE', cursorDate: null, from, to, error: null };
+      this.backfill = { benchmarkId, state: 'IDLE', cursorDate: null, from, to, error: null };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.backfill = { state: 'FAILED', cursorDate: this.backfill.cursorDate, from, to, error: message };
+      this.backfill = {
+        benchmarkId, state: 'FAILED', cursorDate: this.backfill.cursorDate, from, to, error: message,
+      };
       this.deps.logger.error(
         { module: 'market-data', event: 'benchmark.backfill-failed', date: this.backfill.cursorDate, error: message },
         '벤치마크 백필이 날짜 처리 중 실패했다',

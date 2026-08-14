@@ -119,6 +119,7 @@ describe('벤치마크 저장과 결과 비교', () => {
       });
 
       service.startBackfill('SP500', '2026-01-01', '2026-01-05');
+      expect(service.backfillStatus().benchmarkId).toBe('SP500');
       await vi.waitFor(() => expect(service.backfillStatus().state).toBe('IDLE'));
 
       expect(fetchBenchmarkRange).toHaveBeenCalledOnce();
@@ -130,6 +131,51 @@ describe('벤치마크 저장과 결과 비교', () => {
         missingTradingDays: 0,
       });
     } finally {
+      database.close();
+    }
+  });
+
+  it('진행 중인 백필은 다른 지수 시작 요청에도 최초 지수를 유지한다', async () => {
+    const database = openDatabase(':memory:');
+    let releaseKrx!: () => void;
+    const krxBlocked = new Promise<void>((resolve) => { releaseKrx = resolve; });
+    const fetchBenchmarkClose = vi.fn(async () => {
+      await krxBlocked;
+      return 100;
+    });
+    const fetchBenchmarkRange = vi.fn<FredBenchmarkSource['fetchBenchmarkRange']>(async () => []);
+    const service = new BenchmarkService({
+      db: database.db,
+      krxSource: {
+        fetchIssueBaseInfo: async () => [],
+        fetchDailyTrades: async () => [],
+        fetchBenchmarkClose,
+        todayMaxEndpointCallCount: () => 0,
+      },
+      fredSource: { fetchBenchmarkRange },
+      clock: { now: () => 789 },
+      logger,
+    });
+
+    try {
+      service.startBackfill('KOSPI', '2026-01-02', '2026-01-02');
+      expect(service.startBackfill('SP500', '2020-01-01', '2026-01-01')).toMatchObject({
+        benchmarkId: 'KOSPI',
+        from: '2026-01-02',
+        to: '2026-01-02',
+        state: 'RUNNING',
+      });
+      expect(fetchBenchmarkRange).not.toHaveBeenCalled();
+
+      releaseKrx();
+      await vi.waitFor(() => expect(service.backfillStatus()).toMatchObject({
+        benchmarkId: 'KOSPI',
+        state: 'IDLE',
+      }));
+      expect(fetchBenchmarkClose).toHaveBeenCalledWith('KOSPI', '2026-01-02');
+    } finally {
+      releaseKrx();
+      await vi.waitFor(() => expect(service.backfillStatus().state).not.toBe('RUNNING'));
       database.close();
     }
   });
