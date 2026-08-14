@@ -1,6 +1,6 @@
 import type { Clock } from '../../../../shared/clock.js';
 import type { Logger } from '../../../../shared/logger.js';
-import { BENCHMARK_NAMES, type BenchmarkId } from '../../../../../shared/schemas/benchmark.js';
+import { BENCHMARK_NAMES, type KrxBenchmarkId } from '../../../../../shared/schemas/benchmark.js';
 import { RestClient } from '../../../../shared/rest-client.js';
 import {
   KrxApprovalExpiredError,
@@ -33,7 +33,7 @@ const PATHS: Record<KrxMarket, { readonly base: string; readonly daily: string }
   },
 };
 
-const BENCHMARK_PATHS: Record<BenchmarkId, string> = {
+const BENCHMARK_PATHS: Record<KrxBenchmarkId, string> = {
   KOSPI: '/svc/apis/idx/kospi_dd_trd',
   KOSDAQ: '/svc/apis/idx/kosdaq_dd_trd',
 };
@@ -177,7 +177,7 @@ export function createKrxHistoricalUniverseSource(
       isoDate: string,
     ): Promise<readonly KrxDailyTradeRow[]> =>
       fetchRows(market, isoDate, PATHS[market].daily, parseDailyRows),
-    fetchBenchmarkClose: async (benchmarkId: BenchmarkId, isoDate: string): Promise<number | null> => {
+    fetchBenchmarkClose: async (benchmarkId: KrxBenchmarkId, isoDate: string): Promise<number | null> => {
       const rows = await fetchRows(
         benchmarkId,
         isoDate,

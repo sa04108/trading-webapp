@@ -2,8 +2,11 @@ import { createHash } from 'node:crypto';
 import { and, asc, eq, gte, lte } from 'drizzle-orm';
 import {
   BENCHMARK_NAMES,
+  BENCHMARK_SOURCES,
+  type BenchmarkPoint,
   type BenchmarkId,
   type BenchmarkPin,
+  type FredBenchmarkId,
 } from '../../../../shared/schemas/benchmark.js';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import {
@@ -14,7 +17,11 @@ import {
 import type { Clock } from '../../../shared/clock.js';
 import type { Logger } from '../../../shared/logger.js';
 import { addCalendarDays } from '../domain/kst-date.js';
-import { KrxNotConfiguredError, type KrxHistoricalUniverseSource } from './ports.js';
+import {
+  KrxNotConfiguredError,
+  type FredBenchmarkSource,
+  type KrxHistoricalUniverseSource,
+} from './ports.js';
 
 export type BenchmarkBackfillState = 'IDLE' | 'RUNNING' | 'FAILED';
 
@@ -26,6 +33,10 @@ export interface BenchmarkBackfillStatus {
   error: string | null;
 }
 
+function isFredBenchmarkId(benchmarkId: BenchmarkId): benchmarkId is FredBenchmarkId {
+  return BENCHMARK_SOURCES[benchmarkId] === 'FRED_API';
+}
+
 export class BenchmarkService {
   private backfill: BenchmarkBackfillStatus = {
     state: 'IDLE', cursorDate: null, from: null, to: null, error: null,
@@ -33,7 +44,8 @@ export class BenchmarkService {
 
   constructor(private readonly deps: {
     db: AppDatabase;
-    source: KrxHistoricalUniverseSource;
+    krxSource: KrxHistoricalUniverseSource;
+    fredSource: FredBenchmarkSource;
     clock: Clock;
     logger: Logger;
   }) {}
@@ -53,6 +65,22 @@ export class BenchmarkService {
 
   status(benchmarkId: BenchmarkId, from: string, to: string) {
     const points = this.list(benchmarkId, from, to);
+    if (isFredBenchmarkId(benchmarkId)) {
+      const firstDate = points[0]?.date;
+      const lastDate = points.at(-1)?.date;
+      // ponytail: FRED 기간 조회는 완결된 시계열을 주므로 경계 7일만 확인한다.
+      // 중간 누락 감시가 필요해지면 공급자별 거래일 coverage를 저장한다.
+      const missingTradingDays =
+        Number(firstDate === undefined || firstDate > addCalendarDays(from, 7))
+        + Number(lastDate === undefined || lastDate < addCalendarDays(to, -7));
+      return {
+        points,
+        covered: points.length >= 2 && missingTradingDays === 0,
+        missingTradingDays,
+        tradingDays: points.length,
+      };
+    }
+
     const tradingDays = this.deps.db
       .select({ date: symbolMasterTradingDays.date })
       .from(symbolMasterTradingDays)
@@ -77,28 +105,43 @@ export class BenchmarkService {
     };
   }
 
-  async syncDate(date: string): Promise<void> {
-    const fetchClose = this.deps.source.fetchBenchmarkClose;
-    if (!fetchClose) throw new KrxNotConfiguredError();
-    for (const benchmarkId of ['KOSPI', 'KOSDAQ'] as const) {
-      const close = await fetchClose(benchmarkId, date);
-      if (close === null) continue;
-      this.deps.db.insert(benchmarkDailyValues).values({
-        benchmarkId,
-        date,
-        close,
-        syncedAtMs: this.deps.clock.now(),
-      }).onConflictDoUpdate({
-        target: [benchmarkDailyValues.benchmarkId, benchmarkDailyValues.date],
-        set: { close, syncedAtMs: this.deps.clock.now() },
-      }).run();
-    }
+  private savePoints(benchmarkId: BenchmarkId, points: readonly BenchmarkPoint[]): void {
+    if (points.length === 0) return;
+    const syncedAtMs = this.deps.clock.now();
+    this.deps.db.transaction((tx) => {
+      for (const { date, close } of points) {
+        tx.insert(benchmarkDailyValues).values({
+          benchmarkId,
+          date,
+          close,
+          syncedAtMs,
+        }).onConflictDoUpdate({
+          target: [benchmarkDailyValues.benchmarkId, benchmarkDailyValues.date],
+          set: { close, syncedAtMs },
+        }).run();
+      }
+    });
   }
 
-  startBackfill(from: string, to: string): BenchmarkBackfillStatus {
+  async syncDate(benchmarkId: BenchmarkId, date: string): Promise<void> {
+    if (isFredBenchmarkId(benchmarkId)) {
+      this.savePoints(
+        benchmarkId,
+        await this.deps.fredSource.fetchBenchmarkRange(benchmarkId, date, date),
+      );
+      return;
+    }
+
+    const fetchClose = this.deps.krxSource.fetchBenchmarkClose;
+    if (!fetchClose) throw new KrxNotConfiguredError();
+    const close = await fetchClose(benchmarkId, date);
+    if (close !== null) this.savePoints(benchmarkId, [{ date, close }]);
+  }
+
+  startBackfill(benchmarkId: BenchmarkId, from: string, to: string): BenchmarkBackfillStatus {
     if (this.backfill.state === 'RUNNING') return this.backfill;
     this.backfill = { state: 'RUNNING', cursorDate: from, from, to, error: null };
-    void this.runBackfill(from, to);
+    void this.runBackfill(benchmarkId, from, to);
     return this.backfill;
   }
 
@@ -106,13 +149,22 @@ export class BenchmarkService {
     return this.backfill;
   }
 
-  private async runBackfill(from: string, to: string): Promise<void> {
+  private async runBackfill(benchmarkId: BenchmarkId, from: string, to: string): Promise<void> {
     try {
+      if (isFredBenchmarkId(benchmarkId)) {
+        this.savePoints(
+          benchmarkId,
+          await this.deps.fredSource.fetchBenchmarkRange(benchmarkId, from, to),
+        );
+        this.backfill = { state: 'IDLE', cursorDate: null, from, to, error: null };
+        return;
+      }
+
       for (let date = from; date <= to; date = addCalendarDays(date, 1)) {
         this.backfill.cursorDate = date;
         const day = new Date(`${date}T00:00:00Z`).getUTCDay();
         if (day === 0 || day === 6) continue;
-        await this.syncDate(date);
+        await this.syncDate(benchmarkId, date);
       }
       this.backfill = { state: 'IDLE', cursorDate: null, from, to, error: null };
     } catch (error) {
@@ -133,7 +185,7 @@ export class BenchmarkService {
     const pin: BenchmarkPin = {
       benchmarkId,
       name: BENCHMARK_NAMES[benchmarkId],
-      source: 'KRX_OPEN_API',
+      source: BENCHMARK_SOURCES[benchmarkId],
       sourceVersion: 'v1',
       period,
       points: status.points,

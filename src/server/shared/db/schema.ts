@@ -693,7 +693,7 @@ export const krxDailyBars = sqliteTable(
   ],
 );
 
-/** KRX 대표지수 일별 종가. 소수 지수값이므로 종목 원화 봉과 분리한다. */
+/** 벤치마크 지수 일별 종가. 소수 지수값이므로 종목 원화 봉과 분리한다. */
 export const benchmarkDailyValues = sqliteTable(
   'benchmark_daily_values',
   {

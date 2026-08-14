@@ -26,6 +26,7 @@ import { api, postJson } from '@/lib/api-client';
 import {
   BENCHMARK_IDS,
   BENCHMARK_NAMES,
+  BENCHMARK_SOURCES,
   type BenchmarkId,
 } from '../../../shared/schemas/benchmark.js';
 
@@ -66,7 +67,7 @@ export function BenchmarkPanel() {
     refetchInterval: (current) => current.state.data?.backfill.state === 'RUNNING' ? 1_000 : false,
   });
   const backfill = useMutation({
-    mutationFn: () => postJson('/benchmarks/backfill', { from, to }),
+    mutationFn: () => postJson('/benchmarks/backfill', { benchmarkId, from, to }),
     onSuccess: () => {
       toast.success('벤치마크 기간 수집을 시작했습니다');
       void queryClient.invalidateQueries({ queryKey: ['benchmarks'] });
@@ -82,7 +83,7 @@ export function BenchmarkPanel() {
   return (
     <div className="space-y-4">
       <Card>
-        <CardHeader><CardTitle className="text-base">KRX 벤치마크</CardTitle></CardHeader>
+        <CardHeader><CardTitle className="text-base">벤치마크</CardTitle></CardHeader>
         <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div className="space-y-1">
             <Label htmlFor="benchmark-id">지수</Label>
@@ -110,6 +111,12 @@ export function BenchmarkPanel() {
               기간 수집
             </Button>
           </div>
+          {BENCHMARK_SOURCES[benchmarkId] === 'FRED_API' ? (
+            <p className="text-xs text-muted-foreground sm:col-span-3">
+              This product uses the FRED® API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.
+              {' '}<a className="underline" href="https://fred.stlouisfed.org/docs/api/terms_of_use.html" target="_blank" rel="noreferrer">FRED® API Terms of Use</a>
+            </p>
+          ) : null}
         </CardContent>
       </Card>
 
@@ -128,7 +135,7 @@ export function BenchmarkPanel() {
         <Alert>
           <AlertDescription>
             {query.data.tradingDays === 0
-              ? '종목 마스터 거래일 데이터가 없어 기간 커버 여부를 판단할 수 없습니다.'
+              ? '벤치마크 데이터가 없어 기간 커버 여부를 판단할 수 없습니다.'
               : `${query.data.missingTradingDays}거래일의 벤치마크 데이터가 부족합니다.`}
           </AlertDescription>
         </Alert>
