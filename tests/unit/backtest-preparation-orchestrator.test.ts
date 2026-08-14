@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
+import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { openDatabase } from '../../src/server/shared/db/database.js';
 import { backtestPreparationJobs } from '../../src/server/shared/db/schema.js';
@@ -18,7 +19,7 @@ const LOGGER = { debug() {}, info() {}, warn() {}, error() {} } as never;
 const INPUT: PreparationInput = {
   universeRule: {
     markets: ['KOSPI'],
-    stages: [{ criterion: 'MARKET_CAP', limit: 1 }],
+    stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 }],
     rebalanceInterval: { unit: 'MONTH', value: 1 },
   },
   period: { from: '2026-01-05', to: '2026-01-05' },
@@ -195,10 +196,11 @@ describe('BacktestPreparationOrchestrator NEEDS_DATA DART gate', () => {
   });
 
   it.each([
-    { criterion: 'PER' as const, stage: { criterion: 'PER' as const, limit: 1 } },
+    { criterion: 'PER' as const, stage: { criterion: 'PER' as const, direction: 'LOW' as const, limit: 1 } },
+    { criterion: 'ROE' as const, stage: { criterion: 'ROE' as const, direction: 'HIGH' as const, limit: 1 } },
     {
       criterion: 'DECLINE' as const,
-      stage: { criterion: 'DECLINE' as const, limit: 1, lookbackTradingDays: 20 },
+      stage: { criterion: 'DECLINE' as const, direction: 'LOW' as const, limit: 1, lookbackTradingDays: 20 },
     },
   ])('후보 scope 미상이면 price-only 전략이어도 $criterion stage 가 DART 를 예고한다', async ({ stage }) => {
     // 전략 metadata 가 아니라 유니버스 stage 가 DART 를 요구하는 경우 —
@@ -412,6 +414,65 @@ describe('BacktestPreparationOrchestrator single-flight와 직렬 실행', () =>
 });
 
 describe('BacktestPreparationOrchestrator recovery와 취소', () => {
+  it.each([
+    { criterion: 'PER', stage: { criterion: 'PER', limit: 1 } },
+    { criterion: 'DECLINE', stage: { criterion: 'DECLINE', limit: 1, lookbackTradingDays: 20 } },
+  ] as const)('방향 없는 legacy $criterion 준비 작업을 LOW 방향과 canonical hash로 복구한다', async ({ stage }) => {
+    const receivedRules: PreparationInput['universeRule'][] = [];
+    const ctx = makeDeps({
+      resolver: {
+        resolveOrDescribeNeeds: async (rule: PreparationInput['universeRule']) => {
+          receivedRules.push(rule);
+          return ready();
+        },
+        isPeriodCovered: () => true,
+      },
+    });
+    const legacyInput = {
+      ...INPUT,
+      universeRule: { ...INPUT.universeRule, stages: [stage] },
+    };
+    const canonicalInput: PreparationInput = {
+      ...INPUT,
+      universeRule: {
+        ...INPUT.universeRule,
+        stages: [{ ...stage, direction: 'LOW' }],
+      },
+    };
+    const expectedHash = backtestPreparationRequestHash(canonicalInput, { version: '1.0.0' });
+    ctx.handle.db.insert(backtestPreparationJobs).values({
+      id: `prep_legacy_${stage.criterion}`,
+      requestHash: 'legacy-directionless-hash',
+      requestJson: JSON.stringify(legacyInput),
+      status: 'RUNNING',
+      phase: 'MARKET_DATA',
+      doneSymbols: 0,
+      totalSymbols: 0,
+      savedFacts: 0,
+      gapCount: 0,
+      dartCallsUsed: 0,
+      cancelRequested: false,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+    }).run();
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    orchestrator.recoverOrphaned();
+
+    await waitFor(() => orchestrator.get(`prep_legacy_${stage.criterion}`)?.status === 'COMPLETED');
+    expect(receivedRules).not.toHaveLength(0);
+    for (const rule of receivedRules) {
+      expect(rule.stages[0]?.direction).toBe('LOW');
+    }
+    const row = ctx.handle.db.select().from(backtestPreparationJobs)
+      .where(eq(backtestPreparationJobs.id, `prep_legacy_${stage.criterion}`))
+      .get();
+    expect(row?.requestHash).toBe(expectedHash);
+
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
   it('stop은 진행 중인 DART symbol 저장 경계까지 기다리고 RUNNING 복구점을 남긴다', async () => {
     const symbolStarted = deferred<void>();
     const finishSymbol = deferred<void>();

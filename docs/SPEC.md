@@ -990,7 +990,7 @@ GET /api/v1/system/info
   },
   "universeRule": {
     "markets": ["KOSPI"],
-    "stages": [{ "criterion": "MARKET_CAP", "limit": 10 }],
+    "stages": [{ "criterion": "MARKET_CAP", "direction": "HIGH", "limit": 10 }],
     "rebalanceInterval": { "unit": "MONTH", "value": 1 }
   },
   "timeframe": "1d",
@@ -1018,9 +1018,14 @@ GET /api/v1/system/info
 리스크 제약(§9.2-6)이지 전략 로직의 입력이 아니기 때문이다 (D-012).
 
 `universeRule` 은 개별 종목을 직접 고르지 않는다. 시장(`markets`)·정렬 단계
-(`stages`, 최대 5단계 — 시가총액·거래량·거래대금·PER·급하락을 순서대로 적용해
+(`stages`, 최대 6단계 — 시가총액·거래량·거래대금·PER·ROE·가격 변동을 순서대로 적용해
 좁힌다)·리밸런스 주기(`rebalanceInterval`)를 규칙으로 받는다(스펙 2026-08-09,
 순서형 유니버스 파이프라인).
+
+각 단계는 기준(`criterion`), 방향(`direction`: `HIGH` 또는 `LOW`), 선별 수(`limit`)를
+저장한다. 화면은 기준에 맞는 방향 문구를 표시한다. 시가총액·거래량·거래대금은 상위/하위,
+PER는 낮음/높음, ROE는 높음/낮음, 가격 변동은 급상승/급하락으로 표시한다. 가격 변동의
+내부 기준 식별자는 기존 `DECLINE`을 유지한다.
 
 `datasetId`·`universe` 필드를 대신하는 이유는 §9.5 를 본다.
 
@@ -1686,11 +1691,11 @@ sudo systemd-run --uid=quant --gid=quant --pty --wait \
 
 ## 28.3 재무·자본변동 자동 수집
 
-DART 재무·자본변동 수집은 CLI 명령이 아니다(D-049). 재무전략이나 PER 유니버스
+DART 재무·자본변동 수집은 CLI 명령이 아니다(D-049). 재무전략이나 PER·ROE 유니버스
 단계를 쓰는 백테스트를 준비(preparation)할 때 서버가 필요한 만큼만 자동으로
 수집한다.
 
-- `DART_API_KEY` 는 재무전략 또는 PER 단계의 preview 를 준비할 때만 필요하다.
+- `DART_API_KEY` 는 재무전략 또는 PER·ROE 단계의 preview 를 준비할 때만 필요하다.
 - 수집 범위는 요청한 기간과 최소 warm-up 뿐이다 — 연도·종목을 지정해 미리 돌리는
   절차는 없다.
 - 일일 호출 한도(40,000건, rate limiter 120ms 간격)에 닿아 대기하는 것은 실패가

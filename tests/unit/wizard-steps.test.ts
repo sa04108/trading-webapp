@@ -173,7 +173,7 @@ describe('유니버스 규칙 topN 상한 — 요청 스키마 경계', () => {
         ...request,
         universeRule: {
           markets: ['KOSPI'],
-          stages: [{ criterion: 'MARKET_CAP', limit: topN }],
+          stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: topN }],
           rebalanceInterval: { value: 1, unit: 'MONTH' },
         },
       }).success;

@@ -9,8 +9,8 @@ import { rebalanceIntervalFitsPeriod } from '@shared/schemas/rebalance-interval'
 import type { UniverseStage } from '@shared/schemas/universe-rule';
 
 const declineStages: UniverseStage[] = [
-  { criterion: 'MARKET_CAP', limit: 200 },
-  { criterion: 'DECLINE', limit: 150, lookbackTradingDays: 20 },
+  { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 200 },
+  { criterion: 'DECLINE', direction: 'LOW', limit: 150, lookbackTradingDays: 20 },
 ];
 
 function renderEditor(stages: readonly UniverseStage[]): string {
@@ -40,7 +40,7 @@ describe('신규 진입 기본값', () => {
   it('KOSPI / 시가총액 200 / 1개월 / maxPositions 40 이다', () => {
     expect(DEFAULT_UNIVERSE_RULE).toEqual({
       markets: ['KOSPI'],
-      stages: [{ criterion: 'MARKET_CAP', limit: 200 }],
+      stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 200 }],
       rebalanceInterval: { value: 1, unit: 'MONTH' },
     });
     expect(DEFAULT_MAX_POSITIONS).toBe('40');
@@ -50,7 +50,7 @@ describe('신규 진입 기본값', () => {
 describe('단계 추가', () => {
   it('PER 단계를 추가하면 N 은 200으로 복사되고 입력 max 도 200이다', () => {
     const update = addStage(DEFAULT_UNIVERSE_RULE.stages, 'PER');
-    expect(update.stages[1]).toEqual({ criterion: 'PER', limit: 200 });
+    expect(update.stages[1]).toEqual({ criterion: 'PER', direction: 'LOW', limit: 200 });
 
     const html = renderEditor(update.stages);
     expect(html).toContain('id="stage-limit-1"');
@@ -61,8 +61,8 @@ describe('단계 추가', () => {
     const withPer = addStage(DEFAULT_UNIVERSE_RULE.stages, 'PER');
     const update = changeStageLimit(withPer.stages, 0, 100);
     expect(update.stages).toEqual([
-      { criterion: 'MARKET_CAP', limit: 100 },
-      { criterion: 'PER', limit: 100 },
+      { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 100 },
+      { criterion: 'PER', direction: 'LOW', limit: 100 },
     ]);
     expect(update.changedIndices).toEqual([1]);
   });
@@ -72,6 +72,33 @@ describe('단계 추가', () => {
     const html = renderEditor(update.stages);
     expect(html).toContain('name="lookbackTradingDays"');
     expect(html).toContain('value="20"');
+  });
+
+  it('서로 다른 여섯 기준을 모두 쓰면 여섯 행을 그리고 추가 버튼을 숨긴다', () => {
+    const html = renderEditor([
+      { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 100 },
+      { criterion: 'VOLUME', direction: 'HIGH', limit: 90 },
+      { criterion: 'TRADING_VALUE', direction: 'HIGH', limit: 80 },
+      { criterion: 'PER', direction: 'LOW', limit: 70 },
+      { criterion: 'ROE', direction: 'HIGH', limit: 60 },
+      { criterion: 'DECLINE', direction: 'LOW', limit: 50, lookbackTradingDays: 20 },
+    ]);
+    expect(html.match(/name="criterion"/g)).toHaveLength(6);
+    expect(html).not.toContain('단계 추가');
+  });
+});
+
+describe('방향 선택', () => {
+  it('기준마다 사람이 읽는 두 방향을 유리한 순서로 보여준다', () => {
+    const html = renderEditor([
+      { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 200 },
+      { criterion: 'PER', direction: 'LOW', limit: 100 },
+      { criterion: 'DECLINE', direction: 'HIGH', limit: 50, lookbackTradingDays: 20 },
+    ]);
+    expect(html).toContain('id="stage-direction-0"');
+    expect(html).toContain('<option value="HIGH" selected="">상위</option><option value="LOW">하위</option>');
+    expect(html).toContain('<option value="LOW" selected="">낮음</option><option value="HIGH">높음</option>');
+    expect(html).toContain('<option value="HIGH" selected="">급상승</option><option value="LOW">급하락</option>');
   });
 });
 

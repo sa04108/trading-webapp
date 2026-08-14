@@ -1,4 +1,9 @@
-import type { UniverseCriterion, UniverseStage } from '../../../shared/schemas/universe-rule.js';
+import {
+  PREFERRED_STAGE_DIRECTION,
+  type UniverseCriterion,
+  type UniverseDirection,
+  type UniverseStage,
+} from '../../../shared/schemas/universe-rule.js';
 
 /** 첫 단계만 이 값까지 허용한다 — 뒤 단계는 항상 직전 단계 값이 상한이다 (스키마와 같은 값) */
 export const FIRST_STAGE_LIMIT_MAX = 200;
@@ -6,7 +11,7 @@ export const FIRST_STAGE_LIMIT_MAX = 200;
 /** 급하락 단계를 새로 추가할 때 붙이는 기본 조회기간 — 편집기가 곧바로 유효한 값을 보여주기 위함 */
 export const DEFAULT_DECLINE_LOOKBACK_TRADING_DAYS = 20;
 
-const MAX_STAGE_COUNT = 5;
+const MAX_STAGE_COUNT = 6;
 
 export interface PipelineUpdate {
   stages: UniverseStage[];
@@ -47,8 +52,13 @@ export function addStage(
   const limit = previous ? previous.limit : FIRST_STAGE_LIMIT_MAX;
   const newStage: UniverseStage =
     criterion === 'DECLINE'
-      ? { criterion, limit, lookbackTradingDays: DEFAULT_DECLINE_LOOKBACK_TRADING_DAYS }
-      : { criterion, limit };
+      ? {
+          criterion,
+          direction: PREFERRED_STAGE_DIRECTION[criterion],
+          limit,
+          lookbackTradingDays: DEFAULT_DECLINE_LOOKBACK_TRADING_DAYS,
+        }
+      : { criterion, direction: PREFERRED_STAGE_DIRECTION[criterion], limit };
   return cascadeLimits([...stages, newStage]);
 }
 
@@ -81,6 +91,38 @@ export function changeStageLimit(
 ): PipelineUpdate {
   const next = stages.map((stage, i) => (i === index ? { ...stage, limit } : stage));
   return cascadeLimits(next);
+}
+
+export function changeStageCriterion(
+  stages: readonly UniverseStage[],
+  index: number,
+  criterion: UniverseCriterion,
+): PipelineUpdate {
+  return {
+    stages: stages.map((stage, i): UniverseStage => {
+      if (i !== index) return stage;
+      return criterion === 'DECLINE'
+        ? {
+            criterion,
+            direction: PREFERRED_STAGE_DIRECTION[criterion],
+            limit: stage.limit,
+            lookbackTradingDays: DEFAULT_DECLINE_LOOKBACK_TRADING_DAYS,
+          }
+        : { criterion, direction: PREFERRED_STAGE_DIRECTION[criterion], limit: stage.limit };
+    }),
+    changedIndices: [],
+  };
+}
+
+export function changeStageDirection(
+  stages: readonly UniverseStage[],
+  index: number,
+  direction: UniverseDirection,
+): PipelineUpdate {
+  return {
+    stages: stages.map((stage, i) => (i === index ? { ...stage, direction } : stage)),
+    changedIndices: [],
+  };
 }
 
 /**

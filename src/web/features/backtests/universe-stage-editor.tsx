@@ -3,11 +3,16 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
-import type { UniverseCriterion, UniverseStage } from '../../../shared/schemas/universe-rule.js';
+import {
+  type UniverseCriterion,
+  type UniverseDirection,
+  type UniverseStage,
+} from '../../../shared/schemas/universe-rule.js';
 import {
   addStage,
+  changeStageCriterion,
+  changeStageDirection,
   changeStageLimit,
-  DEFAULT_DECLINE_LOOKBACK_TRADING_DAYS,
   FIRST_STAGE_LIMIT_MAX,
   moveStage,
   normalizeStageLimitInput,
@@ -21,6 +26,7 @@ const ALL_CRITERIA: readonly UniverseCriterion[] = [
   'VOLUME',
   'TRADING_VALUE',
   'PER',
+  'ROE',
   'DECLINE',
 ];
 
@@ -30,12 +36,25 @@ const CRITERION_LABEL: Record<UniverseCriterion, string> = {
   VOLUME: '거래량',
   TRADING_VALUE: '거래대금',
   PER: 'PER',
-  DECLINE: '급하락',
+  ROE: 'ROE',
+  DECLINE: '가격 변동',
+};
+
+const DIRECTION_OPTIONS: Record<UniverseCriterion, readonly [
+  { value: UniverseDirection; label: string },
+  { value: UniverseDirection; label: string },
+]> = {
+  MARKET_CAP: [{ value: 'HIGH', label: '상위' }, { value: 'LOW', label: '하위' }],
+  VOLUME: [{ value: 'HIGH', label: '상위' }, { value: 'LOW', label: '하위' }],
+  TRADING_VALUE: [{ value: 'HIGH', label: '상위' }, { value: 'LOW', label: '하위' }],
+  PER: [{ value: 'LOW', label: '낮음' }, { value: 'HIGH', label: '높음' }],
+  ROE: [{ value: 'HIGH', label: '높음' }, { value: 'LOW', label: '낮음' }],
+  DECLINE: [{ value: 'HIGH', label: '급상승' }, { value: 'LOW', label: '급하락' }],
 };
 
 const DECLINE_LOOKBACK_MIN = 1;
 const DECLINE_LOOKBACK_MAX = 252;
-const MAX_STAGE_COUNT = 5;
+const MAX_STAGE_COUNT = 6;
 
 /** cascade 강조를 지우는 시간 — 브리프가 지정한 2초 */
 const HIGHLIGHT_DURATION_MS = 2000;
@@ -90,7 +109,7 @@ function StageLimitInput({
 }
 
 /**
- * 유니버스 단계(최대 5단계) 편집기 — 시가총액·거래량·거래대금·PER·급하락 순서를
+ * 유니버스 단계(최대 6단계) 편집기 — 시가총액·거래량·거래대금·PER·ROE·가격 변동 순서를
  * 사용자가 직접 쌓고 재배열한다.
  *
  * 상태 전이(add·remove·move·changeLimit) 자체는 `universe-pipeline.ts` 의 순수
@@ -127,18 +146,6 @@ export function UniverseStageEditor({ stages, onChange }: UniverseStageEditorPro
 
   const usedCriteria = new Set(stages.map((stage) => stage.criterion));
   const availableCriteria = ALL_CRITERIA.filter((criterion) => !usedCriteria.has(criterion));
-
-  const changeCriterion = (index: number, criterion: UniverseCriterion): void => {
-    const current = stages[index];
-    if (!current || current.criterion === criterion) return;
-    const next = stages.map((stage, i): UniverseStage => {
-      if (i !== index) return stage;
-      return criterion === 'DECLINE'
-        ? { criterion, limit: stage.limit, lookbackTradingDays: DEFAULT_DECLINE_LOOKBACK_TRADING_DAYS }
-        : { criterion, limit: stage.limit };
-    });
-    onChange(next);
-  };
 
   return (
     <div className="space-y-2">
@@ -181,7 +188,11 @@ export function UniverseStageEditor({ stages, onChange }: UniverseStageEditorPro
                 className="h-8 rounded-lg border border-input bg-transparent px-2 text-sm"
                 value={stage.criterion}
                 onChange={(event) =>
-                  changeCriterion(index, event.target.value as UniverseCriterion)
+                  applyUpdate(changeStageCriterion(
+                    stages,
+                    index,
+                    event.target.value as UniverseCriterion,
+                  ))
                 }
               >
                 {ALL_CRITERIA.map((criterion) => (
@@ -192,6 +203,25 @@ export function UniverseStageEditor({ stages, onChange }: UniverseStageEditorPro
                   >
                     {CRITERION_LABEL[criterion]}
                   </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-1">
+              <Label htmlFor={`stage-direction-${index}`}>방향</Label>
+              <select
+                id={`stage-direction-${index}`}
+                name="direction"
+                className="h-8 rounded-lg border border-input bg-transparent px-2 text-sm"
+                value={stage.direction}
+                onChange={(event) => applyUpdate(changeStageDirection(
+                  stages,
+                  index,
+                  event.target.value as UniverseDirection,
+                ))}
+              >
+                {DIRECTION_OPTIONS[stage.criterion].map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
                 ))}
               </select>
             </div>

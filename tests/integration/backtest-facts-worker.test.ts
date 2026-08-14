@@ -98,7 +98,7 @@ const FACTS_MASTER_DATE = '2025-01-02';
 function factsUniverseRule(topN: number): BacktestRequest['universeRule'] {
   return {
     markets: ['KOSPI'],
-    stages: [{ criterion: 'MARKET_CAP', limit: topN }],
+    stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: topN }],
     rebalanceInterval: { value: 1, unit: 'MONTH' },
   };
 }
@@ -386,7 +386,7 @@ describe('워커의 자본변동 팩트 배선 — 접수일이 기간 종료 �
         },
         universeRule: {
           markets: ['KOSPI'],
-          stages: [{ criterion: 'MARKET_CAP', limit: 2 }],
+          stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 2 }],
           rebalanceInterval: { value: 1, unit: 'MONTH' },
         },
         timeframe: '1d',

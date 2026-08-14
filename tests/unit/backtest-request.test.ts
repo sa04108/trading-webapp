@@ -20,7 +20,7 @@ function baseRequest(): Record<string, unknown> {
     parameters: {},
     universeRule: {
       markets: ['KOSPI'],
-      stages: [{ criterion: 'MARKET_CAP', limit: 50 }],
+      stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 50 }],
       rebalanceInterval: { value: 1, unit: 'MONTH' },
     },
     period: { from: '2020-01-01', to: '2025-12-31' },
@@ -42,8 +42,8 @@ describe('universeRule', () => {
   const validRule = {
     markets: ['KOSPI'] as const,
     stages: [
-      { criterion: 'MARKET_CAP' as const, limit: 100 },
-      { criterion: 'PER' as const, limit: 40 },
+      { criterion: 'MARKET_CAP' as const, direction: 'HIGH', limit: 100 },
+      { criterion: 'PER' as const, direction: 'LOW', limit: 40 },
     ],
     rebalanceInterval: { value: 1, unit: 'MONTH' as const },
   };
@@ -77,10 +77,89 @@ describe('universeRule', () => {
     }
   });
 
+  it.each([
+    ['MARKET_CAP', 'HIGH'],
+    ['VOLUME', 'HIGH'],
+    ['TRADING_VALUE', 'HIGH'],
+    ['PER', 'LOW'],
+    ['DECLINE', 'LOW'],
+  ] as const)('방향 없는 기존 %s 단계는 %s로 보정한다', (criterion, direction) => {
+    const stage = criterion === 'DECLINE'
+      ? { criterion, limit: 20, lookbackTradingDays: 20 }
+      : { criterion, limit: 20 };
+    const parsed = backtestRequestSchema.safeParse({
+      ...baseRequest(),
+      universeRule: {
+        markets: ['KOSPI'],
+        stages: [stage],
+        rebalanceInterval: { value: 1, unit: 'MONTH' },
+      },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.universeRule.stages[0]?.direction).toBe(direction);
+  });
+
+  it('명시한 반대 방향은 legacy 기본값으로 덮어쓰지 않는다', () => {
+    const parsed = backtestRequestSchema.safeParse({
+      ...baseRequest(),
+      universeRule: {
+        markets: ['KOSPI'],
+        stages: [{ criterion: 'PER', direction: 'HIGH', limit: 20 }],
+        rebalanceInterval: { value: 1, unit: 'MONTH' },
+      },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.universeRule.stages[0]?.direction).toBe('HIGH');
+  });
+
+  it('ROE 양방향과 서로 다른 여섯 단계를 허용한다', () => {
+    const parsed = backtestRequestSchema.safeParse({
+      ...baseRequest(),
+      universeRule: {
+        markets: ['KOSPI'],
+        stages: [
+          { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 100 },
+          { criterion: 'VOLUME', direction: 'HIGH', limit: 90 },
+          { criterion: 'TRADING_VALUE', direction: 'HIGH', limit: 80 },
+          { criterion: 'PER', direction: 'LOW', limit: 70 },
+          { criterion: 'ROE', direction: 'HIGH', limit: 60 },
+          { criterion: 'DECLINE', direction: 'LOW', limit: 50, lookbackTradingDays: 20 },
+        ],
+        rebalanceInterval: { value: 1, unit: 'MONTH' },
+      },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('일곱 단계는 거부한다', () => {
+    const stages = Array.from({ length: 7 }, (_, index) => ({
+      criterion: ['MARKET_CAP', 'VOLUME', 'TRADING_VALUE', 'PER', 'ROE', 'DECLINE', 'ROE'][index],
+      direction: 'HIGH',
+      limit: 10,
+      ...(index === 5 ? { lookbackTradingDays: 20 } : {}),
+    }));
+    expect(backtestRequestSchema.safeParse({
+      ...baseRequest(),
+      universeRule: { markets: ['KOSPI'], stages, rebalanceInterval: { value: 1, unit: 'MONTH' } },
+    }).success).toBe(false);
+  });
+
+  it('알 수 없는 방향은 거부한다', () => {
+    const parsed = backtestRequestSchema.safeParse({
+      ...baseRequest(),
+      universeRule: {
+        markets: ['KOSPI'],
+        stages: [{ criterion: 'MARKET_CAP', direction: 'SIDEWAYS', limit: 20 }],
+        rebalanceInterval: { value: 1, unit: 'MONTH' },
+      },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
   it('DECLINE 단계는 1~252 거래일 lookback을 명시해야 한다', () => {
     const withLookback = {
       ...validRule,
-      stages: [{ criterion: 'DECLINE', limit: 40, lookbackTradingDays: 20 }],
+      stages: [{ criterion: 'DECLINE', direction: 'LOW', limit: 40, lookbackTradingDays: 20 }],
     };
     const parsed = backtestRequestSchema.safeParse({ ...baseRequest(), universeRule: withLookback });
     expect(parsed.success).toBe(true);
@@ -91,7 +170,7 @@ describe('universeRule', () => {
         ...baseRequest(),
         universeRule: {
           ...validRule,
-          stages: [{ criterion: 'DECLINE', limit: 40, lookbackTradingDays }],
+          stages: [{ criterion: 'DECLINE', direction: 'LOW', limit: 40, lookbackTradingDays }],
         },
       }).success).toBe(false);
     }
@@ -102,19 +181,19 @@ describe('universeRule', () => {
       ...baseRequest(),
       universeRule: {
         ...validRule,
-        stages: [{ criterion: 'MARKET_CAP', limit: 40, lookbackTradingDays: 20 }],
+        stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 40, lookbackTradingDays: 20 }],
       },
     });
     expect(parsed.success).toBe(true);
     if (parsed.success) {
-      expect(parsed.data.universeRule.stages).toEqual([{ criterion: 'MARKET_CAP', limit: 40 }]);
+      expect(parsed.data.universeRule.stages).toEqual([{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 40 }]);
     }
   });
 
   it.each([
-    ['중복 기준', { ...validRule, stages: [{ criterion: 'PER', limit: 100 }, { criterion: 'PER', limit: 40 }] }],
-    ['증가하는 N', { ...validRule, stages: [{ criterion: 'MARKET_CAP', limit: 40 }, { criterion: 'PER', limit: 41 }] }],
-    ['6개 단계', { ...validRule, stages: Array.from({ length: 6 }, (_, i) => ({ criterion: ['MARKET_CAP', 'VOLUME', 'TRADING_VALUE', 'PER', 'DECLINE'][i % 5], limit: 10 })) }],
+    ['중복 기준', { ...validRule, stages: [{ criterion: 'PER', direction: 'LOW', limit: 100 }, { criterion: 'PER', direction: 'LOW', limit: 40 }] }],
+    ['증가하는 N', { ...validRule, stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 40 }, { criterion: 'PER', direction: 'LOW', limit: 41 }] }],
+    ['7개 단계', { ...validRule, stages: Array.from({ length: 7 }, (_, i) => ({ criterion: ['MARKET_CAP', 'VOLUME', 'TRADING_VALUE', 'PER', 'DECLINE'][i % 5], limit: 10 })) }],
   ])('%s 규칙을 거부한다', (_name, universeRule) => {
     expect(backtestRequestSchema.safeParse({ ...baseRequest(), universeRule }).success).toBe(false);
   });
@@ -139,7 +218,7 @@ describe('요청 교차 검증', () => {
       period: { from: '2025-01-01', to: '2025-01-31' },
       universeRule: {
         markets: ['KOSPI'],
-        stages: [{ criterion: 'MARKET_CAP', limit: 50 }],
+        stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 50 }],
         rebalanceInterval: { value: 2, unit: 'MONTH' },
       },
     }).success).toBe(false);
@@ -169,7 +248,7 @@ describe('요청 교차 검증', () => {
       parameters: { topN: 41 },
       universeRule: {
         markets: ['KOSPI'],
-        stages: [{ criterion: 'MARKET_CAP', limit: 40 }],
+        stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 40 }],
         rebalanceInterval: { value: 1, unit: 'MONTH' },
       },
       risk: { maxPositions: 40 },

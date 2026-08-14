@@ -175,7 +175,7 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
       },
       universeRule: {
         markets: ['KOSPI'],
-        stages: [{ criterion: 'MARKET_CAP', limit: 1 }],
+        stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 }],
         rebalanceInterval: { value: 1, unit: 'MONTH' },
       },
       timeframe: '1d',

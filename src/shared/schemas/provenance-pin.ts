@@ -1,4 +1,4 @@
-import type { UniverseCriterion, UniverseRule } from './universe-rule.js';
+import type { UniverseCriterion, UniverseDirection, UniverseRule } from './universe-rule.js';
 
 /**
  * 백테스트 실행의 유니버스 출처 pin (Task 12, REVIEW §9.2).
@@ -26,6 +26,7 @@ import type { UniverseCriterion, UniverseRule } from './universe-rule.js';
  */
 export interface UniverseStageDiagnosticSnapshot {
   readonly criterion: UniverseCriterion;
+  readonly direction: UniverseDirection;
   readonly inputCount: number;
   readonly eligibleCount: number;
   readonly selectedCount: number;
