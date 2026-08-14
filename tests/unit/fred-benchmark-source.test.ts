@@ -77,4 +77,24 @@ describe('FRED 벤치마크 어댑터', () => {
     expect(message).not.toContain(API_KEY);
     expect(message).toContain('[REDACTED]');
   });
+
+  it('API 키를 가린 뒤 원본 Error를 그대로 던진다', async () => {
+    const original = new Error(`request failed: ${API_KEY}`);
+    const source = createFredBenchmarkSource(
+      { baseUrl: BASE_URL, apiKey: API_KEY },
+      logger,
+      { fetchImpl: (async () => { throw original; }) as typeof fetch },
+    );
+
+    let rejection: unknown;
+    try {
+      await source.fetchBenchmarkRange('DJIA', '2026-01-01', '2026-01-02');
+    } catch (error) {
+      rejection = error;
+    }
+
+    expect(rejection).toBe(original);
+    expect(original.message).toBe('request failed: [REDACTED]');
+    expect(original.stack).not.toContain(API_KEY);
+  });
 });

@@ -51,8 +51,13 @@ export function createFredBenchmarkSource(
       try {
         payload = await client.request('default', `/fred/series/observations?${query}`);
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'FRED API 요청에 실패했습니다.';
-        throw new Error(message.replaceAll(config.apiKey, '[REDACTED]'));
+        const safeError =
+          error instanceof Error ? error : new Error('FRED API 요청에 실패했습니다.');
+        safeError.message = safeError.message.replaceAll(config.apiKey, '[REDACTED]');
+        if (safeError.stack !== undefined) {
+          safeError.stack = safeError.stack.replaceAll(config.apiKey, '[REDACTED]');
+        }
+        throw safeError;
       }
 
       const parsed = responseSchema.safeParse(payload);
