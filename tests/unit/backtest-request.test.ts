@@ -232,6 +232,18 @@ describe('요청 교차 검증', () => {
     }).success).toBe(false);
   });
 
+  it('리밸런싱하지 않는 요청을 허용한다', () => {
+    expect(backtestRequestSchema.safeParse({
+      ...baseRequest(),
+      period: { from: '2025-01-01', to: '2025-01-01' },
+      universeRule: {
+        markets: ['KOSPI'],
+        stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 50 }],
+        rebalanceInterval: { value: 1, unit: 'NONE' },
+      },
+    }).success).toBe(true);
+  });
+
   it('존재하지 않는 날짜(2026-13-45)는 형식 검사를 통과해도 거부한다', () => {
     // 정규식만으로는 자릿수만 보고 통과시킨다 — 그러면 리밸런스 날짜 계산이
     // 나중에 RangeError 를 던져 500 이 된다(리뷰 finding, 2026-08-09).

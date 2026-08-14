@@ -70,6 +70,7 @@ export interface BacktestUniversePreview {
   readonly uncoveredDates: readonly string[];
   readonly periodCovered: boolean;
   readonly missingCandleSymbols: readonly string[];
+  readonly warnings: readonly string[];
 }
 
 type PreparationJobRow = typeof backtestPreparationJobs.$inferSelect;
@@ -117,7 +118,12 @@ export interface BacktestPreparationOrchestratorDeps {
   >;
   readonly symbolMaster: Pick<
     SymbolMasterService,
-    'ensureTradingDay' | 'ensureSelectionMetrics' | 'ingestDate' | 'isRangeCovered'
+    | 'ensureTradingDay'
+    | 'ensureSelectionMetrics'
+    | 'ingestDate'
+    | 'isRangeCovered'
+    | 'nonTradingDaysBetween'
+    | 'delistedEventsBetween'
   >;
   readonly strategies: Pick<StrategyRegistry, 'get'>;
   readonly symbolService: Pick<SymbolService, 'exists' | 'addSymbol'>;
@@ -764,6 +770,38 @@ export class BacktestPreparationOrchestrator {
     const missingCandleSymbols = this.deps.candleCoverage
       ? symbols.filter((symbol) => !this.deps.symbolService.exists(symbol) || !withBars.has(symbol))
       : [];
+    const warnings: string[] = [];
+    if (input.universeRule.rebalanceInterval.unit === 'NONE') {
+      const selected = new Set(symbols);
+      const nonTradingBySymbol = new Map<string, string[]>();
+      for (const row of this.deps.symbolMaster.nonTradingDaysBetween(input.period.from, input.period.to)) {
+        if (!selected.has(row.shortCode)) continue;
+        const dates = nonTradingBySymbol.get(row.shortCode) ?? [];
+        dates.push(row.date);
+        nonTradingBySymbol.set(row.shortCode, dates);
+      }
+      const delistedBySymbol = new Map(
+        this.deps.symbolMaster.delistedEventsBetween(input.period.from, input.period.to)
+          .filter((event) => selected.has(event.shortCode))
+          .map((event) => [event.shortCode, event.effectiveDate] as const),
+      );
+      for (const symbol of symbols) {
+        const entry = attempt.unionEntries.get(symbol);
+        const label = entry ? `${entry.name} (${symbol})` : symbol;
+        const dates = nonTradingBySymbol.get(symbol) ?? [];
+        if (dates.length === 1) {
+          warnings.push(`${label}: ${dates[0]}에 거래정지·무거래 기록이 있습니다.`);
+        } else if (dates.length > 1) {
+          warnings.push(
+            `${label}: ${dates[0]}~${dates[dates.length - 1]} 기간 중 거래정지·무거래 기록이 ${dates.length}일 있습니다.`,
+          );
+        }
+        const delistedDate = delistedBySymbol.get(symbol);
+        if (delistedDate !== undefined) {
+          warnings.push(`${label}: ${delistedDate}에 상장폐지됐습니다.`);
+        }
+      }
+    }
     return {
       schedule: attempt.schedule,
       diagnostics: attempt.diagnostics,
@@ -773,6 +811,7 @@ export class BacktestPreparationOrchestrator {
       uncoveredDates: [],
       periodCovered: this.deps.resolver.isPeriodCovered(input.period),
       missingCandleSymbols,
+      warnings,
     };
   }
 

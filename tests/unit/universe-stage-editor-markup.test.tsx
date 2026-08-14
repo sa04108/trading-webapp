@@ -6,7 +6,7 @@ import { UniverseStageEditor } from '@/features/backtests/universe-stage-editor'
 import { UniverseRuleStep } from '@/features/backtests/universe-rule-step';
 import { DEFAULT_MAX_POSITIONS, DEFAULT_UNIVERSE_RULE } from '@/features/backtests/new-backtest-wizard';
 import { rebalanceIntervalFitsPeriod } from '@shared/schemas/rebalance-interval';
-import type { UniverseStage } from '@shared/schemas/universe-rule';
+import type { UniverseRule, UniverseStage } from '@shared/schemas/universe-rule';
 
 const declineStages: UniverseStage[] = [
   { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 200 },
@@ -19,12 +19,15 @@ function renderEditor(stages: readonly UniverseStage[]): string {
   );
 }
 
-function renderRuleStep(period: { from: string; to: string }): string {
+function renderRuleStep(
+  period: { from: string; to: string },
+  value: UniverseRule = DEFAULT_UNIVERSE_RULE,
+): string {
   const client = new QueryClient();
   return renderToStaticMarkup(
     <QueryClientProvider client={client}>
       <UniverseRuleStep
-        value={DEFAULT_UNIVERSE_RULE}
+        value={value}
         onChange={() => undefined}
         period={period}
         strategyId="dummy-strategy"
@@ -113,6 +116,15 @@ describe('접근성', () => {
 });
 
 describe('리밸런스 주기와 기간 정합성', () => {
+  it('리밸런싱 안 함을 선택할 수 있다', () => {
+    const html = renderRuleStep(
+      { from: '2026-01-01', to: '2026-12-31' },
+      { ...DEFAULT_UNIVERSE_RULE, rebalanceInterval: { unit: 'NONE', value: 1 } },
+    );
+    expect(html).toContain('백테스트 시작에 아래 단계를 한 번 적용하고 종목을 유지');
+    expect(html).toContain('max="1" disabled="" name="rebalanceIntervalValue"');
+  });
+
   it('10일짜리 기간에 1개월 주기를 넣으면 rebalanceIntervalFitsPeriod 가 false 다', () => {
     expect(
       rebalanceIntervalFitsPeriod(

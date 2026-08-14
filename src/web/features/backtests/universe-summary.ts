@@ -45,6 +45,7 @@ function stageLabel(stage: UniverseStage): string {
 }
 
 const UNIT_SUFFIX: Record<RebalanceInterval['unit'], string> = {
+  NONE: '',
   DAY: '일',
   WEEK: '주',
   MONTH: '개월',
@@ -52,6 +53,7 @@ const UNIT_SUFFIX: Record<RebalanceInterval['unit'], string> = {
 };
 
 const EVERY_LABEL: Record<RebalanceInterval['unit'], string> = {
+  NONE: '리밸런싱 안 함',
   DAY: '매일',
   WEEK: '매주',
   MONTH: '매월',

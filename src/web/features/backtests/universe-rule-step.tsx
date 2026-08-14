@@ -28,6 +28,7 @@ import { UniverseStageEditor } from './universe-stage-editor';
 
 /** 주기 unit 마다 허용하는 최댓값 — 스키마(universe-rule.ts rebalanceIntervalSchema)와 같은 값 */
 const REBALANCE_UNIT_MAX: Record<RebalanceInterval['unit'], number> = {
+  NONE: 1,
   DAY: 365,
   WEEK: 52,
   MONTH: 12,
@@ -37,6 +38,8 @@ const REBALANCE_UNIT_MAX: Record<RebalanceInterval['unit'], number> = {
 /** unit 마다 필드 모양이 다른 discriminated union 이라 값을 조립하는 지점을 한 곳에 모은다 */
 function buildRebalanceInterval(unit: RebalanceInterval['unit'], value: number): RebalanceInterval {
   switch (unit) {
+    case 'NONE':
+      return { unit, value: 1 };
     case 'DAY':
       return { unit, value };
     case 'WEEK':
@@ -70,6 +73,7 @@ export interface UniversePreviewResponseDto {
    */
   readonly periodCovered: boolean;
   readonly missingCandleSymbols: readonly string[];
+  readonly warnings: readonly string[];
 }
 
 export interface PreviewParams {
@@ -459,7 +463,9 @@ export function UniverseRuleStep({
         <CardHeader>
           <CardTitle className="text-base">유니버스 규칙</CardTitle>
           <CardDescription>
-            리밸런스 날짜마다 아래 단계를 순서대로 적용해 유니버스를 다시 구성
+            {value.rebalanceInterval.unit === 'NONE'
+              ? '백테스트 시작에 아래 단계를 한 번 적용하고 종목을 유지'
+              : '리밸런스 날짜마다 아래 단계를 순서대로 적용해 유니버스를 다시 구성'}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -497,7 +503,7 @@ export function UniverseRuleStep({
                 className="h-11 w-24"
                 min={1}
                 max={REBALANCE_UNIT_MAX[value.rebalanceInterval.unit]}
-                disabled={value.rebalanceInterval.unit === 'YEAR'}
+                disabled={value.rebalanceInterval.unit === 'NONE' || value.rebalanceInterval.unit === 'YEAR'}
                 value={rebalanceIntervalText}
                 onChange={(e) => {
                   const text = e.target.value;
@@ -545,7 +551,9 @@ export function UniverseRuleStep({
                 onValueChange={(next) => {
                   const unit = next as RebalanceInterval['unit'];
                   const max = REBALANCE_UNIT_MAX[unit];
-                  const clamped = unit === 'YEAR' ? 1 : Math.min(value.rebalanceInterval.value, max);
+                  const clamped = unit === 'NONE' || unit === 'YEAR'
+                    ? 1
+                    : Math.min(value.rebalanceInterval.value, max);
                   onChange({ ...value, rebalanceInterval: buildRebalanceInterval(unit, clamped) });
                 }}
               >
@@ -553,6 +561,7 @@ export function UniverseRuleStep({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="NONE">안 함</SelectItem>
                   <SelectItem value="DAY">일</SelectItem>
                   <SelectItem value="WEEK">주</SelectItem>
                   <SelectItem value="MONTH">개월</SelectItem>
@@ -629,7 +638,9 @@ export function UniverseRuleStep({
             <CardDescription>
               {stale
                 ? '규칙이나 기간이 바뀌었습니다 — 다시 미리보기하세요.'
-                : `종목 ${preview.unionSymbols.length}개 · 리밸런스 ${preview.schedule.length}회`}
+                : value.rebalanceInterval.unit === 'NONE'
+                  ? `종목 ${preview.unionSymbols.length}개 · 최초 선정 후 유지`
+                  : `종목 ${preview.unionSymbols.length}개 · 리밸런스 ${preview.schedule.length}회`}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -665,6 +676,18 @@ export function UniverseRuleStep({
             </div>
           </CardContent>
         </Card>
+      ) : null}
+
+      {preview && !stale && preview.warnings.length > 0 ? (
+        <Alert role="alert">
+          <AlertDescription className="space-y-2">
+            <p>리밸런싱하지 않는 동안 다음 종목은 거래할 수 없는 시점이 있습니다.</p>
+            <ul className="list-disc space-y-1 pl-5">
+              {preview.warnings.map((warning) => <li key={warning}>{warning}</li>)}
+            </ul>
+            <p className="text-xs">경고를 확인한 뒤 그대로 진행할 수 있습니다.</p>
+          </AlertDescription>
+        </Alert>
       ) : null}
 
       {preview && fullSyncNeeded ? (

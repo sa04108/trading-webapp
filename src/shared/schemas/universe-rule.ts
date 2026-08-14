@@ -50,6 +50,7 @@ export type UniverseStageInput = z.input<typeof universeStageSchema>;
 export type UniverseStage = z.output<typeof universeStageSchema>;
 
 export const rebalanceIntervalSchema = z.discriminatedUnion('unit', [
+  z.object({ unit: z.literal('NONE'), value: z.literal(1) }),
   z.object({ unit: z.literal('DAY'), value: z.number().int().min(1).max(365) }),
   z.object({ unit: z.literal('WEEK'), value: z.number().int().min(1).max(52) }),
   z.object({ unit: z.literal('MONTH'), value: z.number().int().min(1).max(12) }),

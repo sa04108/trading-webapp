@@ -69,6 +69,9 @@ describe('formatUniverseRuleSummary', () => {
     expect(
       formatUniverseRuleSummary({ ...base, rebalanceInterval: { unit: 'YEAR', value: 1 } }),
     ).toBe('KOSPI · 거래대금 상위 50 · 매년');
+    expect(
+      formatUniverseRuleSummary({ ...base, rebalanceInterval: { unit: 'NONE', value: 1 } }),
+    ).toBe('KOSPI · 거래대금 상위 50 · 리밸런싱 안 함');
   });
 
   it('주기 value 가 1이 아니면 N일마다/N주마다/N개월마다로 적는다', () => {

@@ -5,6 +5,7 @@ import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
 import {
   dailySelectionMetrics,
   krxDailyBars,
+  krxNonTradingDays,
   symbolFactsState,
   symbolMasterCoverage,
   symbolMasterMarketCaps,
@@ -23,7 +24,7 @@ import { startKrxFakeServer, type KrxFakeServer } from '../helpers/krx-fixtures.
 // 리밸런스가 실제로 필요한 호출만 MONTH 등으로 명시한다.
 const marketCapRule = (
   markets: readonly string[] = ['KOSPI'],
-  rebalanceInterval: { unit: 'DAY' | 'WEEK' | 'MONTH' | 'YEAR'; value: number } = { unit: 'DAY', value: 1 },
+  rebalanceInterval: { unit: 'NONE' | 'DAY' | 'WEEK' | 'MONTH' | 'YEAR'; value: number } = { unit: 'DAY', value: 1 },
 ) => ({
   markets,
   stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 10 }],
@@ -469,6 +470,57 @@ describe('POST /backtests/universe-preview', () => {
     expect(body.schedule).toHaveLength(3);
     // 그 사이(1/6~2/4, 2/6~3/4) 평일은 여전히 비어 있다 — periodCovered 가 이를 잡아야 한다.
     expect(body.periodCovered).toBe(false);
+  });
+
+  it('리밸런싱하지 않으면 최초 선정 종목의 기간 내 거래불가와 상장폐지를 경고한다', async () => {
+    seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
+      {
+        standardCode: 'KR7900010009',
+        shortCode: '900010',
+        name: '상장폐지예정1호',
+        market: 'KOSPI',
+        marketCapKrw: '500000000000000',
+      },
+    ]);
+    ctx.container.database.db.update(symbolMasterVersions)
+      .set({ validToDate: '2026-01-20' })
+      .where(eq(symbolMasterVersions.standardCode, 'KR7900010009'))
+      .run();
+    ctx.container.database.db.insert(krxNonTradingDays).values({
+      date: '2026-01-15',
+      shortCode: '900010',
+      market: 'KOSPI',
+      lastClose: 1_000,
+    }).run();
+    ctx.container.database.db.insert(krxDailyBars).values({
+      shortCode: '900010',
+      date: '2026-01-05',
+      market: 'KOSPI',
+      open: 1_000,
+      high: 1_000,
+      low: 1_000,
+      close: 1_000,
+      volume: 1_000,
+    }).run();
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: marketCapRule(['KOSPI'], { unit: 'NONE', value: 1 }),
+        period: { from: '2026-01-05', to: '2026-01-31' },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      schedule: [{ rebalanceDate: '2026-01-05' }],
+      warnings: [
+        '상장폐지예정1호 (900010): 2026-01-15에 거래정지·무거래 기록이 있습니다.',
+        '상장폐지예정1호 (900010): 2026-01-20에 상장폐지됐습니다.',
+      ],
+    });
   });
 
   it('종목 마스터에는 있지만 캔들이 없는 종목을 missingCandleSymbols 로 밝힌다', async () => {

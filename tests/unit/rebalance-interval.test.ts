@@ -29,6 +29,13 @@ describe('computeRebalanceDates', () => {
       { value: 1, unit: 'WEEK' },
     )).toEqual(['2025-01-01', '2025-01-08', '2025-01-15']);
   });
+
+  it('리밸런싱하지 않으면 최초 선정일만 만든다', () => {
+    expect(computeRebalanceDates(
+      { from: '2025-01-01', to: '2025-12-31' },
+      { value: 1, unit: 'NONE' },
+    )).toEqual(['2025-01-01']);
+  });
 });
 
 describe('rebalanceIntervalFitsPeriod', () => {
@@ -44,5 +51,12 @@ describe('rebalanceIntervalFitsPeriod', () => {
       { from: '2025-01-01', to: '2025-01-31' },
       { value: 2, unit: 'MONTH' },
     )).toBe(false);
+  });
+
+  it('리밸런싱하지 않는 선택은 기간 길이와 무관하게 허용한다', () => {
+    expect(rebalanceIntervalFitsPeriod(
+      { from: '2025-01-01', to: '2025-01-01' },
+      { value: 1, unit: 'NONE' },
+    )).toBe(true);
   });
 });
