@@ -116,8 +116,9 @@ export interface BacktestRunResult {
  *
  * 1.7.0: warm-up 결과 경계를 분리하고 공유 리밸런스 신호·유니버스 이탈 청산·
  * sell-before-buy 대기열을 적용한다.
+ * 1.8.0: 거래정지된 이탈 종목의 첫 청산 시도 뒤에는 신규 매수 대기열을 해제한다.
  */
-export const ENGINE_VERSION = '1.7.0';
+export const ENGINE_VERSION = '1.8.0';
 
 const PROGRESS_INTERVAL_BARS = 500;
 
@@ -224,6 +225,9 @@ function* runBacktestSteps(
   let pendingOrders: OrderIntent[] = [];
   let deferredRebalanceBuys: OrderIntent[] = [];
   const unresolvedForcedExitSymbols = new Set<string>();
+  // 새 이탈 청산이 다음 거래일에 한 번 체결을 시도할 때까지만 신규 매수보다 우선한다.
+  // 거래정지로 매도가 오래 남아도 이 장벽까지 계속 유지하면 포트폴리오 전체가 잠긴다.
+  let buysAwaitingForcedExitAttempt = false;
   let processedBars = 0;
   let visitedBars = 0;
   let maxConcurrentPositions = 0;
@@ -465,6 +469,7 @@ function* runBacktestSteps(
       );
       for (const [symbol, position] of positions) {
         if (membershipSymbols.has(symbol) || position.quantity <= 0) continue;
+        const isNewForcedExit = !unresolvedForcedExitSymbols.has(symbol);
         // 이전 전략 SELL이나 지연된 forced SELL을 전량 engine order 한 건으로 교체한다.
         pendingOrders = pendingOrders.filter(
           (order) => !(order.symbol === symbol && order.side === 'SELL'),
@@ -478,6 +483,7 @@ function* runBacktestSteps(
         if (sellEligibleNow.has(symbol)) pendingOrders.push(forcedExit);
         else forcedExitsForNextOpen.push(forcedExit);
         unresolvedForcedExitSymbols.add(symbol);
+        if (isNewForcedExit) buysAwaitingForcedExitAttempt = true;
         if (!quantityBasisTsMsBySymbol.has(symbol)) quantityBasisTsMsBySymbol.set(symbol, tsMs);
       }
 
@@ -494,7 +500,7 @@ function* runBacktestSteps(
         } else if (!membershipSymbols.has(order.symbol)) {
           // stale membership에서는 유효했던 주문이므로 전략 버그 warning은 남기지 않는다.
           continue;
-        } else if (unresolvedForcedExitSymbols.size > 0) {
+        } else if (buysAwaitingForcedExitAttempt) {
           deferBuy(order);
         } else {
           reconciledPending.push(order);
@@ -506,7 +512,7 @@ function* runBacktestSteps(
     // 2~3. 대기 주문 체결 + 현금·포지션 갱신
     const stillPending: OrderIntent[] = [];
     for (const order of pendingOrders) {
-      if (order.side === 'BUY' && unresolvedForcedExitSymbols.size > 0) {
+      if (order.side === 'BUY' && buysAwaitingForcedExitAttempt) {
         deferBuy(order);
         continue;
       }
@@ -528,6 +534,12 @@ function* runBacktestSteps(
     pendingOrders = stillPending;
     pendingOrders.push(...forcedExitsForNextOpen);
 
+    // 오늘 처음 만든 D1 청산은 아직 시도하지 않았으므로 장벽을 유지한다. 그 밖의 경우는
+    // 체결 여부와 무관하게 첫 시도를 마쳤다. 미체결 SELL만 다음 거래 가능 봉까지 남긴다.
+    if (buysAwaitingForcedExitAttempt && forcedExitsForNextOpen.length === 0) {
+      buysAwaitingForcedExitAttempt = false;
+    }
+
     // 역분할 단주 현금화 등으로 주문 체결 전에 포지션이 사라진 경우도 대기 상태를
     // 영원히 붙들지 않는다. 멤버십 이탈로 전략 보유 상태를 지워야 하므로 훅은 부른다.
     for (const symbol of [...unresolvedForcedExitSymbols]) {
@@ -536,7 +548,7 @@ function* runBacktestSteps(
 
     // 청산을 방금 모두 마쳤다면 미뤄 둔 매수는 **이번** 체결 루프로 되돌리지 않고
     // 다음 봉 대기열에 둔다. 이 줄이 D1 sell → D2 buy 간격을 만든다.
-    if (isTradeBar && unresolvedForcedExitSymbols.size === 0 && deferredRebalanceBuys.length > 0) {
+    if (isTradeBar && !buysAwaitingForcedExitAttempt && deferredRebalanceBuys.length > 0) {
       promoteDeferredBuys(promotedBuySymbolsThisBar);
     }
 
@@ -640,7 +652,7 @@ function* runBacktestSteps(
         continue; // 엔진의 전량 REBALANCE_EXIT 한 건이 같은 symbol 전략 SELL을 대체한다
       }
       const shouldDeferBuy = order.side === 'BUY'
-        && (isRebalanceBar || unresolvedForcedExitSymbols.size > 0);
+        && (isRebalanceBar || buysAwaitingForcedExitAttempt);
       const validated = validateOrder(order, shouldDeferBuy);
       if (!validated) continue;
       if (shouldDeferBuy) {
@@ -669,7 +681,7 @@ function* runBacktestSteps(
 
     // 이 리밸런스에 청산할 이탈 보유분이 없었다면 일반 NEXT_BAR_OPEN과 같은 D1에
     // 매수한다. 이탈 보유분이 있었던 경우에는 위 체결 단계에서 해소되는 D1까지 남는다.
-    if (unresolvedForcedExitSymbols.size === 0 && deferredRebalanceBuys.length > 0) {
+    if (!buysAwaitingForcedExitAttempt && deferredRebalanceBuys.length > 0) {
       promoteDeferredBuys(promotedBuySymbolsThisBar);
     }
 
@@ -689,7 +701,10 @@ function* runBacktestSteps(
   if (unresolvedForcedExitSymbols.size > 0) {
     warnings.push(
       `리밸런스 유니버스 이탈 청산 ${unresolvedForcedExitSymbols.size}건이 기간 종료까지 체결되지 않아 `
-        + `후속 매수 주문 ${deferredRebalanceBuys.length}건을 실행하지 않았습니다.`,
+        + '미청산 포지션으로 남았습니다.'
+        + (deferredRebalanceBuys.length > 0
+          ? ` 청산 우선권 때문에 후속 매수 주문 ${deferredRebalanceBuys.length}건도 체결되지 않았습니다.`
+          : ''),
     );
   }
   if (pendingOrders.length > 0 || deferredRebalanceBuys.length > 0) {

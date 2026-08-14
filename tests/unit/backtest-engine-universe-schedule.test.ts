@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { runBacktest } from '../../src/server/modules/backtest/domain/engine.js';
+import { ENGINE_VERSION, runBacktest } from '../../src/server/modules/backtest/domain/engine.js';
 import type { ExecutionProfile, OrderIntent } from '../../src/server/modules/backtest/domain/types.js';
 import { CORPORATE_ACTION_FIELD, type Fact } from '../../src/server/modules/facts/domain/fact.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
@@ -72,6 +72,10 @@ function alwaysBuyBothStrategy(): TradingStrategy<unknown, null> {
 }
 
 describe('runBacktest — 멤버십 일정 기반 거래 대상 제한 (스펙 2026-08-05, §9.5)', () => {
+  it('장기 미체결 이탈 청산 정책 변경을 엔진 버전에 반영한다', () => {
+    expect(ENGINE_VERSION).toBe('1.8.0');
+  });
+
   it('1구간에서는 일정에 포함된 A 만 매수되고 B 는 거부된다', () => {
     const candles = [
       bar(0, 100),
@@ -497,14 +501,14 @@ describe('runBacktest — 멤버십 일정 기반 거래 대상 제한 (스펙 2
     expect(forced).toEqual([]);
   });
 
-  it('이탈 종목의 다음 거래 가능 봉이 끝까지 없으면 신규 매수를 실행하지 않고 경고한다', () => {
+  it('이탈 청산을 한 번 시도한 뒤에는 봉이 없어도 신규 매수를 재개한다', () => {
     const strategy: TradingStrategy<unknown, { step: number }> = {
       id: 'unfilled-exit', version: '1', name: 'unfilled', description: 'unfilled',
       parameterSchema: z.unknown(), initialize: () => ({ step: 0 }),
       onBars(context, state) {
         const orders: OrderIntent[] = [];
         if (state.step === 0) orders.push({ symbol: 'A', side: 'BUY', quantity: 1 });
-        if (context.isRebalanceBar && state.step > 0) {
+        if (context.isRebalanceBar && state.step === 2) {
           orders.push({ symbol: 'B', side: 'BUY', quantity: 1 });
         }
         state.step += 1;
@@ -521,10 +525,54 @@ describe('runBacktest — 멤버십 일정 기반 거래 대상 제한 (스펙 2
       universeSchedule: [
         { fromTsMs: START, members: [member('A')] },
         { fromTsMs: START + 2 * HOUR, members: [member('B')] },
+        // 같은 미체결 이탈 종목 때문에 다음 리밸런스가 매수 보류를 다시 시작하면 안 된다.
+        { fromTsMs: START + 3 * HOUR, members: [member('B')] },
       ],
     });
-    expect(result.fills.some((fill) => fill.symbol === 'B' && fill.side === 'BUY')).toBe(false);
-    expect(result.warnings.some((warning) => warning.includes('리밸런스') && warning.includes('체결'))).toBe(true);
+    expect(result.fills.find((fill) => fill.symbol === 'B' && fill.side === 'BUY')?.tsMs)
+      .toBe(START + 4 * HOUR);
+    expect(result.openPositions.find((position) => position.symbol === 'A')?.quantity).toBe(1);
+    expect(result.warnings.some((warning) => warning.includes('리밸런스') && warning.includes('미청산')))
+      .toBe(true);
+    expect(result.warnings.some((warning) => warning.includes('후속 매수 주문'))).toBe(false);
+  });
+
+  it('다른 보유 종목이 새로 이탈하면 청산 우선권을 한 거래일 다시 적용한다', () => {
+    const strategy: TradingStrategy<unknown, { step: number }> = {
+      id: 'second-forced-exit', version: '1', name: 'second exit', description: 'second exit',
+      parameterSchema: z.unknown(), initialize: () => ({ step: 0 }),
+      onBars(_context, state) {
+        const orders: OrderIntent[] = [];
+        if (state.step === 0) {
+          orders.push({ symbol: 'A', side: 'BUY', quantity: 1 });
+          orders.push({ symbol: 'C', side: 'BUY', quantity: 1 });
+        }
+        if (state.step === 2) orders.push({ symbol: 'B', side: 'BUY', quantity: 1 });
+        if (state.step === 5) orders.push({ symbol: 'D', side: 'BUY', quantity: 1 });
+        state.step += 1;
+        return { orders };
+      },
+    };
+    const result = runBacktest(strategy as never, {
+      candles: [
+        ...[0, 1].map((index) => bar(index, 100, { symbol: 'A' })),
+        ...[0, 1, 2, 3, 4, 5].map((index) => bar(index, 150, { symbol: 'C' })),
+        ...[0, 1, 2, 3, 4, 5, 6, 7, 8].map((index) => bar(index, 200, { symbol: 'B' })),
+        ...[0, 1, 2, 3, 4, 5, 6, 7, 8].map((index) => bar(index, 250, { symbol: 'D' })),
+      ],
+      initialCash: 10_000, execution: ZERO_COST, parameters: {}, randomSeed: 42, maxPositions: 5,
+      universeSchedule: [
+        { fromTsMs: START, members: [member('A'), member('C')] },
+        { fromTsMs: START + 2 * HOUR, members: [member('B'), member('C')] },
+        { fromTsMs: START + 3 * HOUR, members: [member('B'), member('C')] },
+        { fromTsMs: START + 5 * HOUR, members: [member('B'), member('D')] },
+      ],
+    });
+
+    expect(result.fills.find((fill) => fill.symbol === 'B' && fill.side === 'BUY')?.tsMs)
+      .toBe(START + 4 * HOUR);
+    expect(result.fills.find((fill) => fill.symbol === 'D' && fill.side === 'BUY')?.tsMs)
+      .toBe(START + 7 * HOUR);
   });
 
   it('지연된 REBALANCE_EXIT 체결 전 재편입되면 청산을 취소하고 deferred BUY를 해제한다', () => {
@@ -564,7 +612,7 @@ describe('runBacktest — 멤버십 일정 기반 거래 대상 제한 (스펙 2
       .toBe(false);
   });
 
-  it('지연된 이탈 청산 체결 봉에서 전략이 같은 BUY를 다시 내도 다음 open에 한 건만 체결한다', () => {
+  it('첫 이탈 청산 시도가 미체결이면 다음 open에 BUY를 한 건만 체결한다', () => {
     const strategy: TradingStrategy<unknown, { step: number; rebalanceSeen: boolean }> = {
       id: 'repeat-deferred-buy', version: '1', name: 'repeat', description: 'repeat',
       parameterSchema: z.unknown(), initialize: () => ({ step: 0, rebalanceSeen: false }),
@@ -596,7 +644,7 @@ describe('runBacktest — 멤버십 일정 기반 거래 대상 제한 (스펙 2
 
     const bBuys = result.fills.filter((fill) => fill.symbol === 'B' && fill.side === 'BUY');
     expect(bBuys).toHaveLength(1);
-    expect(bBuys[0]?.tsMs).toBe(START + 5 * HOUR);
+    expect(bBuys[0]?.tsMs).toBe(START + 4 * HOUR);
   });
 
   it('schedule이 없으면 warm-up 뒤 첫 거래 봉만 isRebalanceBar=true다', () => {

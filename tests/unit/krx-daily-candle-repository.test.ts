@@ -117,4 +117,33 @@ describe('KrxDailyCandleRepository', () => {
       midnight('2026-08-07'),
     ]);
   });
+
+  it('거래불가 형태로 잘못 남은 행은 봉과 시각에서 모두 제외한다', async () => {
+    db.insert(krxDailyBars)
+      .values({
+        shortCode: '005930',
+        date: '2026-08-08',
+        market: 'KOSPI',
+        open: 0,
+        high: 0,
+        low: 0,
+        close: 115,
+        volume: 0,
+      })
+      .run();
+
+    const candles = await collect({ market: 'KR', timeframe: '1d', symbols: ['005930'] });
+    const timestamps = await repository.getTimestamps('KR', '1d', '005930');
+
+    expect(candles.map((candle) => candle.tsMs)).toEqual([
+      midnight('2026-08-05'),
+      midnight('2026-08-06'),
+      midnight('2026-08-07'),
+    ]);
+    expect(timestamps).toEqual([
+      midnight('2026-08-05'),
+      midnight('2026-08-06'),
+      midnight('2026-08-07'),
+    ]);
+  });
 });

@@ -1,7 +1,7 @@
 import { and, asc, eq, gte, lte } from 'drizzle-orm';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import { krxDailyBars } from '../../../shared/db/schema.js';
-import type { Candle, Market, Timeframe } from '../domain/candle.js';
+import { isValidCandle, type Candle, type Market, type Timeframe } from '../domain/candle.js';
 import type { CandleQuery, CandleRepository } from '../application/ports.js';
 
 const MS_PER_DAY = 86_400_000;
@@ -16,6 +16,25 @@ function dateToTsMs(date: string): number {
 
 function tsMsToDate(tsMs: number): string {
   return new Date(tsMs).toISOString().slice(0, 10);
+}
+
+function toCandle(
+  row: typeof krxDailyBars.$inferSelect,
+  symbol: string,
+  market: Market,
+  timeframe: Timeframe,
+): Candle {
+  return {
+    symbol,
+    market,
+    timeframe,
+    tsMs: dateToTsMs(row.date),
+    open: row.open,
+    high: row.high,
+    low: row.low,
+    close: row.close,
+    volume: row.volume,
+  };
 }
 
 /**
@@ -72,23 +91,17 @@ export class KrxDailyCandleRepository implements CandleRepository {
 
     for (const symbol of query.symbols) {
       for (const row of this.rows(symbol, query.fromTsMs, query.toTsMs)) {
-        yield {
-          symbol,
-          market: query.market,
-          timeframe: query.timeframe,
-          tsMs: dateToTsMs(row.date),
-          open: row.open,
-          high: row.high,
-          low: row.low,
-          close: row.close,
-          volume: row.volume,
-        };
+        const candle = toCandle(row, symbol, query.market, query.timeframe);
+        if (isValidCandle(candle)) yield candle;
       }
     }
   }
 
   async getTimestamps(market: Market, _timeframe: Timeframe, symbol: string): Promise<number[]> {
     if (!this.supports(market)) return [];
-    return this.rows(symbol).map((row) => dateToTsMs(row.date));
+    return this.rows(symbol)
+      .map((row) => toCandle(row, symbol, market, _timeframe))
+      .filter(isValidCandle)
+      .map((candle) => candle.tsMs);
   }
 }
