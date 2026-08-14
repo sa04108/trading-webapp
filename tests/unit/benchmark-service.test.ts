@@ -57,7 +57,7 @@ describe('벤치마크 저장과 결과 비교', () => {
       await service.syncDate('KOSPI', '2026-01-05');
 
       const benchmark = service.pin('KOSPI', { from: '2026-01-02', to: '2026-01-05' });
-      expect(benchmark.pin).toMatchObject({ covered: true, missingTradingDays: 0 });
+      expect(benchmark.pin).toMatchObject({ covered: true });
       expect(benchmark.hash).toMatch(/^[a-f0-9]{64}$/);
 
       database.db.insert(backtestJobs).values({
@@ -111,10 +111,14 @@ describe('벤치마크 저장과 결과 비교', () => {
   it('FRED 기간을 한 번에 수집하고 미국 거래일로 pin한다', async () => {
     const database = openDatabase(':memory:');
     try {
-      const fetchBenchmarkRange = vi.fn<FredBenchmarkSource['fetchBenchmarkRange']>(async () => [
-        { date: '2026-01-02', close: 6_000 },
-        { date: '2026-01-05', close: 6_060 },
-      ]);
+      const fetchBenchmarkRange = vi.fn<FredBenchmarkSource['fetchBenchmarkRange']>(
+        async (_benchmarkId, from, to) => from === to
+          ? [{ date: from, close: 6_000 }]
+          : [
+              { date: '2026-01-02', close: 6_000 },
+              { date: '2026-01-05', close: 6_060 },
+            ],
+      );
       const service = new BenchmarkService({
         db: database.db,
         krxSource: {
@@ -127,17 +131,20 @@ describe('벤치마크 저장과 결과 비교', () => {
         logger,
       });
 
+      await service.syncDate('SP500', '2026-01-01');
+      await service.syncDate('SP500', '2026-01-05');
+      expect(service.pin('SP500', { from: '2026-01-01', to: '2026-01-05' }).pin.covered).toBe(false);
+
       service.startBackfill('SP500', '2026-01-01', '2026-01-05');
       expect(service.backfillStatus().benchmarkId).toBe('SP500');
       await vi.waitFor(() => expect(service.backfillStatus().state).toBe('IDLE'));
 
-      expect(fetchBenchmarkRange).toHaveBeenCalledOnce();
-      expect(fetchBenchmarkRange).toHaveBeenCalledWith('SP500', '2026-01-01', '2026-01-05');
+      expect(fetchBenchmarkRange).toHaveBeenCalledTimes(3);
+      expect(fetchBenchmarkRange).toHaveBeenLastCalledWith('SP500', '2026-01-01', '2026-01-05');
       expect(service.pin('SP500', { from: '2026-01-01', to: '2026-01-05' }).pin).toMatchObject({
         name: 'S&P 500',
         source: 'FRED_API',
         covered: true,
-        missingTradingDays: 0,
       });
     } finally {
       database.close();

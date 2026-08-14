@@ -78,8 +78,12 @@ describe('FRED 벤치마크 어댑터', () => {
     expect(message).toContain('[REDACTED]');
   });
 
-  it('API 키를 가린 뒤 원본 Error를 그대로 던진다', async () => {
-    const original = new Error(`request failed: ${API_KEY}`);
+  it('API 키가 든 원본 Error 메타데이터를 분리한다', async () => {
+    const original = Object.assign(
+      new Error(`request failed: ${API_KEY}`, { cause: new Error(`api_key=${API_KEY}`) }),
+      { requestUrl: `${BASE_URL}?api_key=${API_KEY}` },
+    );
+    original.name = `RemoteError:${API_KEY}`;
     const source = createFredBenchmarkSource(
       { baseUrl: BASE_URL, apiKey: API_KEY },
       logger,
@@ -93,8 +97,13 @@ describe('FRED 벤치마크 어댑터', () => {
       rejection = error;
     }
 
-    expect(rejection).toBe(original);
-    expect(original.message).toBe('request failed: [REDACTED]');
-    expect(original.stack).not.toContain(API_KEY);
+    expect(rejection).toBeInstanceOf(Error);
+    expect(rejection).not.toBe(original);
+    const safeError = rejection as Error & { requestUrl?: string };
+    expect(safeError.name).toBe('Error');
+    expect(safeError.message).toBe('request failed: [REDACTED]');
+    expect(safeError.stack).not.toContain(API_KEY);
+    expect(safeError.cause).toBeUndefined();
+    expect(safeError.requestUrl).toBeUndefined();
   });
 });

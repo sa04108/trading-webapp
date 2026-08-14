@@ -40,7 +40,6 @@ export const benchmarkPinSchema = z.object({
   period: z.object({ from: z.string(), to: z.string() }),
   points: z.array(benchmarkPointSchema),
   covered: z.boolean(),
-  missingTradingDays: z.number().int().nonnegative(),
 });
 
 export type BenchmarkPin = z.infer<typeof benchmarkPinSchema>;

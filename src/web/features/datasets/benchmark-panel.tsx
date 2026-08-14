@@ -38,11 +38,8 @@ interface BenchmarkBackfillStatus {
 }
 
 interface BenchmarkResponse {
-  benchmarkId: BenchmarkId;
   points: Array<{ date: string; close: number }>;
   covered: boolean;
-  missingTradingDays: number;
-  tradingDays: number;
   backfill: BenchmarkBackfillStatus;
 }
 
@@ -146,14 +143,8 @@ export function BenchmarkPanel() {
           <AlertDescription>{query.error instanceof Error ? query.error.message : '조회에 실패했습니다.'}</AlertDescription>
         </Alert>
       ) : null}
-      {query.data && (query.data.tradingDays === 0 || query.data.missingTradingDays > 0) ? (
-        <Alert>
-          <AlertDescription>
-            {query.data.tradingDays === 0
-              ? '벤치마크 데이터가 없어 기간 커버 여부를 판단할 수 없습니다.'
-              : `${query.data.missingTradingDays}거래일의 벤치마크 데이터가 부족합니다.`}
-          </AlertDescription>
-        </Alert>
+      {query.data && !query.data.covered ? (
+        <Alert><AlertDescription>벤치마크 데이터가 부족합니다.</AlertDescription></Alert>
       ) : null}
 
       <Card>

@@ -51,13 +51,13 @@ export function createFredBenchmarkSource(
       try {
         payload = await client.request('default', `/fred/series/observations?${query}`);
       } catch (error) {
-        const safeError =
-          error instanceof Error ? error : new Error('FRED API 요청에 실패했습니다.');
-        safeError.message = safeError.message.replaceAll(config.apiKey, '[REDACTED]');
-        if (safeError.stack !== undefined) {
-          safeError.stack = safeError.stack.replaceAll(config.apiKey, '[REDACTED]');
-        }
-        throw safeError;
+        const message = error instanceof Error ? error.message : 'FRED API 요청에 실패했습니다.';
+        const sanitizedMessage = config.apiKey === ''
+          ? message
+          : message.replaceAll(config.apiKey, '[REDACTED]');
+        // 원본 cause·name·custom field에 요청 URL과 API 키가 있을 수 있어 연결하지 않는다.
+        // eslint-disable-next-line preserve-caught-error
+        throw new Error(sanitizedMessage);
       }
 
       const parsed = responseSchema.safeParse(payload);

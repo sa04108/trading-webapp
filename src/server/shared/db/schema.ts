@@ -707,3 +707,15 @@ export const benchmarkDailyValues = sqliteTable(
     index('idx_benchmark_daily_values_date').on(table.date),
   ],
 );
+
+/** FRED API가 성공적으로 반환한 달력일 범위. 행 존재만으로 내부 관측값을 추정하지 않는다. */
+export const fredBenchmarkCoverage = sqliteTable(
+  'fred_benchmark_coverage',
+  {
+    benchmarkId: text('benchmark_id').notNull(),
+    startDate: text('start_date').notNull(),
+    endDate: text('end_date').notNull(),
+    syncedAtMs: integer('synced_at_ms').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.benchmarkId, table.startDate, table.endDate] })],
+);

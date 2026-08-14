@@ -11,6 +11,7 @@ import {
 import type { AppDatabase } from '../../../shared/db/database.js';
 import {
   benchmarkDailyValues,
+  fredBenchmarkCoverage,
   symbolMasterCoverage,
   symbolMasterTradingDays,
 } from '../../../shared/db/schema.js';
@@ -67,18 +68,9 @@ export class BenchmarkService {
   status(benchmarkId: BenchmarkId, from: string, to: string) {
     const points = this.list(benchmarkId, from, to);
     if (isFredBenchmarkId(benchmarkId)) {
-      const firstDate = points[0]?.date;
-      const lastDate = points.at(-1)?.date;
-      // ponytail: FRED 기간 조회는 완결된 시계열을 주므로 경계 7일만 확인한다.
-      // 중간 누락 감시가 필요해지면 공급자별 거래일 coverage를 저장한다.
-      const missingTradingDays =
-        Number(firstDate === undefined || firstDate > addCalendarDays(from, 7))
-        + Number(lastDate === undefined || lastDate < addCalendarDays(to, -7));
       return {
         points,
-        covered: points.length >= 2 && missingTradingDays === 0,
-        missingTradingDays,
-        tradingDays: points.length,
+        covered: points.length >= 2 && this.isFredRangeCovered(benchmarkId, from, to),
       };
     }
 
@@ -101,9 +93,44 @@ export class BenchmarkService {
     return {
       points,
       covered: masterCovered && tradingDays.length >= 2 && missingTradingDays === 0,
-      missingTradingDays,
-      tradingDays: tradingDays.length,
     };
+  }
+
+  private isFredRangeCovered(benchmarkId: FredBenchmarkId, from: string, to: string): boolean {
+    const ranges = this.deps.db
+      .select({ startDate: fredBenchmarkCoverage.startDate, endDate: fredBenchmarkCoverage.endDate })
+      .from(fredBenchmarkCoverage)
+      .where(and(
+        eq(fredBenchmarkCoverage.benchmarkId, benchmarkId),
+        lte(fredBenchmarkCoverage.startDate, to),
+        gte(fredBenchmarkCoverage.endDate, from),
+      ))
+      .orderBy(asc(fredBenchmarkCoverage.startDate))
+      .all();
+    let cursor = from;
+    for (const range of ranges) {
+      if (range.startDate > cursor) return false;
+      if (range.endDate >= to) return true;
+      if (range.endDate >= cursor) cursor = addCalendarDays(range.endDate, 1);
+    }
+    return false;
+  }
+
+  private saveFredCoverage(benchmarkId: FredBenchmarkId, from: string, to: string): void {
+    const syncedAtMs = this.deps.clock.now();
+    this.deps.db.insert(fredBenchmarkCoverage).values({
+      benchmarkId,
+      startDate: from,
+      endDate: to,
+      syncedAtMs,
+    }).onConflictDoUpdate({
+      target: [
+        fredBenchmarkCoverage.benchmarkId,
+        fredBenchmarkCoverage.startDate,
+        fredBenchmarkCoverage.endDate,
+      ],
+      set: { syncedAtMs },
+    }).run();
   }
 
   private savePoints(benchmarkId: BenchmarkId, points: readonly BenchmarkPoint[]): void {
@@ -126,10 +153,9 @@ export class BenchmarkService {
 
   async syncDate(benchmarkId: BenchmarkId, date: string): Promise<void> {
     if (isFredBenchmarkId(benchmarkId)) {
-      this.savePoints(
-        benchmarkId,
-        await this.deps.fredSource.fetchBenchmarkRange(benchmarkId, date, date),
-      );
+      const points = await this.deps.fredSource.fetchBenchmarkRange(benchmarkId, date, date);
+      this.savePoints(benchmarkId, points);
+      this.saveFredCoverage(benchmarkId, date, date);
       return;
     }
 
@@ -153,10 +179,9 @@ export class BenchmarkService {
   private async runBackfill(benchmarkId: BenchmarkId, from: string, to: string): Promise<void> {
     try {
       if (isFredBenchmarkId(benchmarkId)) {
-        this.savePoints(
-          benchmarkId,
-          await this.deps.fredSource.fetchBenchmarkRange(benchmarkId, from, to),
-        );
+        const points = await this.deps.fredSource.fetchBenchmarkRange(benchmarkId, from, to);
+        this.savePoints(benchmarkId, points);
+        this.saveFredCoverage(benchmarkId, from, to);
         this.backfill = { benchmarkId, state: 'IDLE', cursorDate: null, from, to, error: null };
         return;
       }
@@ -194,7 +219,6 @@ export class BenchmarkService {
       period,
       points: status.points,
       covered: status.covered,
-      missingTradingDays: status.missingTradingDays,
     };
     return {
       pin,

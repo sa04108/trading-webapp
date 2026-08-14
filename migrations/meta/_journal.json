@@ -141,6 +141,13 @@
       "when": 1786705195067,
       "tag": "0019_hard_madrox",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1786722391609,
+      "tag": "0020_broad_marten_broadcloak",
+      "breakpoints": true
     }
   ]
 }
