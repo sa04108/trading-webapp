@@ -148,7 +148,7 @@ function fakeSource(
 
 /**
  * 인메모리 저장소. `getFacts` 가 늘 빈 배열을 주는 스텁으로는 "저장된 내용이 실제로
- * 바뀌었는가" 를 판정하는 버전 승격 경로를 검증할 수 없으므로, ParquetFactRepository 와
+ * 바뀌었는가" 를 판정하는 버전 승격 경로를 검증할 수 없으므로, SQLite repository와
  * 같은 병합 키((key, field, periodKey, asOf) 가 같으면 뒤에 온 것이 이긴다)로 실제
  * 상태를 들고 있는 가짜를 쓴다.
  */
@@ -853,8 +853,8 @@ describe('FactSyncService — 증분과 취소', () => {
       getFacts: async () => [],
       saveFacts: async () => {
         saveCalls += 1;
-        // 두 번째 종목에서 디스크 쓰기가 터진다 (parquet 저장은 실패할 수 있다)
-        if (saveCalls === 2) throw new Error('parquet 쓰기 실패');
+        // 두 번째 종목에서 DB 쓰기가 실패한다.
+        if (saveCalls === 2) throw new Error('fact 쓰기 실패');
       },
       hasFacts: () => false,
       symbolsWithFacts: () => new Set(),
@@ -879,7 +879,7 @@ describe('FactSyncService — 증분과 취소', () => {
 
     expect(report.stopReason).toBe('ERROR');
     expect(report.stoppedAtSymbol).toBe('000660');
-    expect(report.failureMessage).toContain('parquet 쓰기 실패');
+    expect(report.failureMessage).toContain('fact 쓰기 실패');
     // 저장이 성공한 종목만 이력에 남는다 — 이력 기록이 저장보다 앞서면 여기에
     // '000660' 이 섞이고, 다음 증분 실행이 그 종목의 2022 를 건너뛴다
     expect(coverage.added.map((entry) => entry.symbol)).toEqual(['005930']);

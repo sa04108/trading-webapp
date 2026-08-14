@@ -130,7 +130,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
     // 자본변동 게이트(Task 6) — 이 파일의 제출 기간(2025-01-02~2025-03-01)이 걸치는 연도
     await seedCorporateActionCoverage(ctx.container, ['CHEAP', 'RICH'], yearRange(2025, 2025));
 
-    // 컨테이너가 조립한 factRepository 로 저장한다 — 워커가 같은 dataRoot 를 통해
+    // 컨테이너가 조립한 factRepository로 저장한다 — 워커가 같은 SQLite DB에서
     // 이 팩트를 다시 읽어야 하므로, 테스트 전용 repository 를 새로 만들지 않는다.
     await ctx.container.factRepository.saveFacts([
       ...factsFor('CHEAP', 50_000),
@@ -281,7 +281,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
  *
  * 기존 자본변동 테스트는 전부 `runBacktest` 나 `PitFactView` 에 팩트를 직접 넣어
  * 저장소 질의를 건너뛰므로 이 결함을 구조적으로 볼 수 없다. 그래서 실제 HTTP 제출 →
- * 큐 → 자식 프로세스 → Parquet 질의 경로로만 검증한다.
+ * 큐 → 자식 프로세스 → SQLite 질의 경로로만 검증한다.
  *
  * 시나리오: 2025-03-14 기준 2:1 분할이 2026-03-31 접수 사업보고서로 들어온다.
  * 백테스트 기간은 2025-04-30 에 끝나므로 접수일 컷오프를 걸면 그 행이 SQL 에서 사라진다.

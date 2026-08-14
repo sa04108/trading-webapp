@@ -32,10 +32,10 @@ module.exports = {
     {
       name: 'domain-no-frameworks',
       severity: 'error',
-      comment: 'domain 은 Fastify/React/SQLite/DuckDB/Drizzle/Pino 를 모른다 (§7)',
+      comment: 'domain 은 Fastify/React/SQLite/Drizzle/Pino 를 모른다 (§7)',
       from: { path: '/domain/' },
       to: {
-        path: 'node_modules/(fastify|@fastify|react|react-dom|better-sqlite3|@duckdb|drizzle-orm|pino)',
+        path: 'node_modules/(fastify|@fastify|react|react-dom|better-sqlite3|drizzle-orm|pino)',
       },
     },
     {

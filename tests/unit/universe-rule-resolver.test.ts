@@ -609,9 +609,9 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     });
   });
 
-  it('자본변동만 받은 종목은 parquet 이 있어도 재무 coverage 가 없으면 NEEDS_DATA 로 요구한다', async () => {
-    // hasFacts(파일 존재)로 판정하던 회귀: SPLIT_RATIO 만 저장된 종목이 재무 있음으로
-    // 오인돼 PER 결측 제외됐다. factsPresent 는 세 종목 모두 파일이 있다고 답한다.
+  it('자본변동 fact만 있어도 재무 coverage가 없으면 NEEDS_DATA로 요구한다', async () => {
+    // hasFacts로 판정하던 회귀: SPLIT_RATIO만 저장된 종목이 재무 있음으로
+    // 오인돼 PER 결측 제외됐다. factsPresent는 세 종목 모두 fact가 있다고 답한다.
     const resolver = makePipelineResolver({
       financialCoverage: new Map([
         ['000001', [2024, 2025]],

@@ -1,5 +1,4 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import type { AppConfig } from './config.js';
 import { readGitCommitSha } from '../shared/build-info.js';
 import { createLogger, type Logger } from '../shared/logger.js';
@@ -48,7 +47,6 @@ import {
 import { FactSyncService } from '../modules/facts/application/fact-sync-service.js';
 import { createDartFactSource } from '../modules/facts/infrastructure/dart/dart-fact-source.js';
 import { SqliteFactRepository } from '../modules/facts/infrastructure/sqlite-fact-repository.js';
-import { factStorageState } from '../shared/db/schema.js';
 import { createKrxHistoricalUniverseSource } from '../modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
 import { SymbolMasterService } from '../modules/market-data/application/symbol-master-service.js';
 import { SymbolMasterBackfill } from '../modules/market-data/application/symbol-master-backfill.js';
@@ -126,11 +124,6 @@ export function createContainer(config: AppConfig): Container {
   }
 
   const database = openDatabase(config.databasePath);
-  const factState = database.db.select().from(factStorageState).get();
-  if (factState?.phase !== 'ACTIVE' && fs.existsSync(path.join(config.dataRoot, 'facts'))) {
-    database.close();
-    throw new Error('기존 Parquet 팩트가 남아 있습니다. 먼저 `cli db:prepare`를 실행하세요.');
-  }
   const clock = systemClock;
 
   // 무한 증가 방지: 만료 세션·오래된 로그인 시도·보존 기간 지난 감사 로그 정리.

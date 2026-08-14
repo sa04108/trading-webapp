@@ -17,12 +17,6 @@ const envSchema = z.object({
   MAX_CONCURRENT_BACKTESTS: z.coerce.number().int().min(1).max(4).default(1),
   /** 대기(QUEUED) 백테스트 상한 — 연타로 대기열이 무한히 쌓이는 것을 막는다 (D-025) */
   MAX_QUEUED_BACKTESTS: z.coerce.number().int().min(1).max(200).default(20),
-  /** D-054 기존 Parquet fact 일회 이관기에서만 쓴다. */
-  DUCKDB_THREADS: z.coerce.number().int().min(1).max(8).default(1),
-  DUCKDB_MEMORY_LIMIT: z
-    .string()
-    .regex(/^\d+(MB|GB)$/, 'ex) 384MB')
-    .default('384MB'),
   SESSION_SECRET: z.string().min(32).optional(),
   SESSION_IDLE_TIMEOUT_SECONDS: z.coerce.number().int().min(60).default(43200),
   SESSION_ABSOLUTE_TIMEOUT_SECONDS: z.coerce.number().int().min(60).default(604800),
@@ -68,8 +62,6 @@ export interface AppConfig {
   readonly tempRoot: string;
   readonly maxConcurrentBacktests: number;
   readonly maxQueuedBacktests: number;
-  readonly duckdbThreads: number;
-  readonly duckdbMemoryLimit: string;
   readonly sessionSecret: string;
   readonly sessionIdleTimeoutSeconds: number;
   readonly sessionAbsoluteTimeoutSeconds: number;
@@ -133,8 +125,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     tempRoot: raw.TEMP_ROOT,
     maxConcurrentBacktests: raw.MAX_CONCURRENT_BACKTESTS,
     maxQueuedBacktests: raw.MAX_QUEUED_BACKTESTS,
-    duckdbThreads: raw.DUCKDB_THREADS,
-    duckdbMemoryLimit: raw.DUCKDB_MEMORY_LIMIT,
     sessionSecret: raw.SESSION_SECRET ?? randomBytes(48).toString('base64'),
     sessionIdleTimeoutSeconds: raw.SESSION_IDLE_TIMEOUT_SECONDS,
     sessionAbsoluteTimeoutSeconds: raw.SESSION_ABSOLUTE_TIMEOUT_SECONDS,

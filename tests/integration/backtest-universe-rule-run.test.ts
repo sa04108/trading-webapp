@@ -490,7 +490,7 @@ describe('KRX 전용 일봉으로 백테스트 실행 (워커의 부모-자식 �
     await ctx.close();
   });
 
-  it('parquet 에 없고 KRX 일봉만 있는 종목도 워커에서 체결까지 완주한다', { timeout: 90_000 }, async () => {
+  it('재무 fact가 없고 KRX 일봉만 있는 종목도 워커에서 체결까지 완주한다', { timeout: 90_000 }, async () => {
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
@@ -507,7 +507,7 @@ describe('KRX 전용 일봉으로 백테스트 실행 (워커의 부모-자식 �
     }, 60_000);
 
     const job = ctx.container.jobQueue.getJob(jobId)!;
-    // 회귀 지점: 워커가 여전히 parquet 만 보면 여기서 '데이터가 없습니다' 로 실패한다
+    // 회귀 지점: 워커가 KRX 일봉을 읽지 않으면 여기서 '데이터가 없습니다'로 실패한다.
     expect(job.error).toBeNull();
     expect(job.status).toBe('COMPLETED');
     expect(job.totalBars).toBe(krxOnlyCandles.length);

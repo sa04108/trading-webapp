@@ -214,20 +214,6 @@ export const facts = sqliteTable(
   ],
 );
 
-/** 기존 Parquet 팩트를 SQLite로 한 번만 이관했는지 기록한다. */
-export const factStorageState = sqliteTable(
-  'fact_storage_state',
-  {
-    singleton: integer('singleton').primaryKey(),
-    phase: text('phase').notNull(), // PENDING | ACTIVE
-    migratedAtMs: integer('migrated_at_ms'),
-  },
-  (table) => [
-    check('chk_fact_storage_singleton', sql`${table.singleton} = 1`),
-    check('chk_fact_storage_phase', sql`${table.phase} IN ('PENDING', 'ACTIVE')`),
-  ],
-);
-
 /**
  * 슬라이스별 데이터 버전 (구 dataset_versions) — §9.5 재현성의 앵커.
  *

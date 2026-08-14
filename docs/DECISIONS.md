@@ -1243,3 +1243,12 @@
 - **런타임:** 서버와 백테스트 자식 프로세스는 SQLite만 읽고 쓴다. DuckDB와 legacy
   Parquet repository는 이관 및 한 배포 동안의 롤백 호환에만 남긴다. 운영 배포와
   롤백을 확인한 다음 별도 변경에서 제거한다.
+
+## D-055: 재무 팩트 이관 호환층을 제거한다
+
+- **근거:** 운영 `db:prepare`가 638종목 63,527행을 검증해 SQLite로 옮기고 정상
+  배포됐다.
+- **결정:** 일회성 이관기, Parquet repository, DuckDB 서비스·패키지·설정을 제거한다.
+  임시 `fact_storage_state` 테이블도 후속 schema migration으로 삭제한다.
+- **불변 이력:** 운영에 이미 적용된 `0017` SQL과 migration journal은 수정하거나
+  지우지 않는다. 새 DB와 기존 DB가 같은 최종 스키마에 도달하려면 이 이력이 필요하다.

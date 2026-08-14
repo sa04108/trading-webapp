@@ -366,7 +366,7 @@ describe('POST /backtests/universe-preview', () => {
         missingCandleSymbols: [],
       });
 
-    // ParquetFactRepository에서 keys: []는 전체 스코프 조회다. 빈 유니버스라면 저장소를
+    // FactRepository에서 keys: []는 전체 스코프 조회다. 빈 유니버스라면 저장소를
     // 호출하지 않아야 하므로, 호출되는 순간 실패하도록 고정한다.
     const getFacts = vi.spyOn(ctx.container.factRepository, 'getFacts')
       .mockRejectedValue(new Error('빈 유니버스에서 전체 fact를 조회하면 안 된다'));

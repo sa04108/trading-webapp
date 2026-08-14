@@ -13,8 +13,8 @@ const dateToTsMs = (date: string): number => Date.parse(`${date}T00:00:00Z`);
 
 /**
  * 종목별 일봉 보유 구간. 캐시 테이블을 두지 않는 이유: `(short_code, date)` PK 가
- * 있어 집계가 인덱스 스캔 하나로 끝난다. 캐시가 필요했던 건 parquet 조회가 비쌌기
- * 때문이고, 그 비용이 사라지면 캐시는 어긋날 수 있는 사본일 뿐이다.
+ * 있어 집계가 인덱스 스캔 하나로 끝난다. 조회가 충분히 저렴하고 캐시는 어긋날 수
+ * 있는 사본일 뿐이다.
  */
 export class CandleCoverageService {
   constructor(private readonly db: AppDatabase) {}

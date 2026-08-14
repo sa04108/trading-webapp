@@ -208,13 +208,6 @@ SSH CLI는 제어 평면이다. 다음은 CLI로만 한다.
 
 2026-07-25 기준 Node.js 24는 LTS이고 Node.js 26은 Current다. 운영에는 Node.js 24 LTS 최신 패치를 사용한다.
 
-DuckDB는 기존 Parquet fact를 SQLite로 이관하는 `db:prepare`에서만 사용한다. 이관
-호환 기간에는 deprecated Node 클라이언트가 아니라 다음 패키지를 유지한다.
-
-```text
-@duckdb/node-api
-```
-
 ## 프론트엔드
 
 | 구분 | 선택 |
@@ -379,7 +372,6 @@ bootstrap composition root
 - Fastify
 - React
 - SQLite
-- DuckDB
 - HTTP
 - 파일 시스템
 - `process.env`
@@ -709,12 +701,12 @@ COMMIT;
 
 봉은 `app.sqlite` 의 `krx_daily_bars` 테이블에 있다 — 종목이 저장 단위이고 데이터셋은
 참조만 갖는다 (D-034). 재무 팩트도 `facts` long-format 테이블에 PIT 이력을 보존한다
-(D-054). 기존 `market-data/facts/`는 이관 검증과 롤백을 위해 이번 호환 기간에만 남긴다.
+(D-054).
 
 ```text
 /var/lib/quant-platform/
 ├─ app.sqlite                       # 일봉·재무 fact·coverage·메타데이터
-├─ market-data/facts/               # 이관 완료 후에도 한 배포 동안 보존하는 legacy Parquet
+├─ market-data/                     # 쓰기 가능 여부·디스크 여유 확인 기준 디렉터리
 ├─ imports/                         # 미사용 — CSV 가져오기가 D-041 로 사라졌다
 ├─ exports/
 ├─ temp/
@@ -732,13 +724,6 @@ COMMIT;
   일봉만 소비한다 (D-041)
 - 재무 fact 복합 PK: `(scope, key, field, period_key, as_of_ts_ms)`
 - 공시 정정은 다른 `as_of_ts_ms` 행으로 보존
-
-legacy Parquet 이관기의 DuckDB 제한:
-
-```sql
-SET threads = 1;
-SET memory_limit = '384MB';
-```
 
 ---
 
@@ -1319,9 +1304,7 @@ Accordion
 
 제약:
 
-- 동시 백테스트 1개
 - 백테스트 자식 프로세스 동시 실행 1개
-- legacy 이관 DuckDB만 1 thread / 384MB
 - 봉 수 상한 200만 (§11) — 일봉만 소비하므로 사전 집계가 필요 없다 (D-041)
 - 대규모 sweep 금지
 
@@ -1600,9 +1583,6 @@ EXPORT_ROOT=/var/lib/quant-platform/exports
 TEMP_ROOT=/var/lib/quant-platform/temp
 
 MAX_CONCURRENT_BACKTESTS=1
-DUCKDB_THREADS=1
-DUCKDB_MEMORY_LIMIT=384MB
-
 SESSION_SECRET=<48_BYTE_RANDOM_VALUE>
 SESSION_IDLE_TIMEOUT_SECONDS=43200
 SESSION_ABSOLUTE_TIMEOUT_SECONDS=604800
@@ -1969,7 +1949,7 @@ RSI 과매도에 사서 RSI 회복에 판다. 스톱은 고정(추적 아님) �
 - job claim
 - cancel
 - 프로세스 중단 복구
-- SQLite fact repository와 Parquet→SQLite 이관
+- SQLite fact repository
 - 로그인·세션 만료
 - SSE
 
@@ -2295,7 +2275,6 @@ sudo ufw status verbose
 - [Caddy Installation](https://caddyserver.com/docs/install)
 - [Caddy TLS](https://caddyserver.com/docs/caddyfile/directives/tls)
 - [Node.js Releases](https://nodejs.org/en/about/previous-releases)
-- [DuckDB Node Neo](https://duckdb.org/docs/current/clients/node_neo/overview)
 - [Fastify TypeScript](https://fastify.dev/docs/latest/Reference/TypeScript/)
 - [shadcn/ui Vite](https://ui.shadcn.com/docs/installation/vite)
 - [키움 REST API](https://openapi.kiwoom.com/)

@@ -5,10 +5,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runBacktest } from '../../src/server/modules/backtest/domain/engine.js';
 import type { ExecutionProfile } from '../../src/server/modules/backtest/domain/types.js';
 import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
-import { ParquetFactRepository } from '../../src/server/modules/facts/infrastructure/parquet-fact-repository.js';
-import { DuckDbService } from '../../src/server/modules/market-data/infrastructure/duckdb-service.js';
+import { SqliteFactRepository } from '../../src/server/modules/facts/infrastructure/sqlite-fact-repository.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import { valueQualityRankStrategy } from '../../src/server/modules/strategy/strategies/value-quality-rank.js';
+import { openDatabase, type DatabaseHandle } from '../../src/server/shared/db/database.js';
 
 const DAY = 86_400_000;
 const START = Date.UTC(2025, 0, 2);
@@ -19,19 +19,19 @@ const ZERO_COST: ExecutionProfile = {
   rules: { tickSize: 0, minOrderQty: 1 },
 };
 
-let dataRoot: string;
-let duckdb: DuckDbService;
-let repository: ParquetFactRepository;
+let root: string;
+let database: DatabaseHandle;
+let repository: SqliteFactRepository;
 
 beforeEach(() => {
-  dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'bt-facts-'));
-  duckdb = new DuckDbService({ threads: 1, memoryLimit: '256MB' });
-  repository = new ParquetFactRepository(dataRoot, duckdb);
+  root = fs.mkdtempSync(path.join(os.tmpdir(), 'bt-facts-'));
+  database = openDatabase(path.join(root, 'app.sqlite'));
+  repository = new SqliteFactRepository(database.db);
 });
 
 afterEach(() => {
-  duckdb.close();
-  fs.rmSync(dataRoot, { recursive: true, force: true });
+  database.close();
+  fs.rmSync(root, { recursive: true, force: true });
 });
 
 describe('저장소 → 엔진 왕복', () => {

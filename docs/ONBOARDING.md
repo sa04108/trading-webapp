@@ -71,12 +71,12 @@ better-sqlite3는 v12 고정(D-008, Node 22 prebuild). 올리고 싶으면 해�
 ```
 domain/          순수 로직. 외부 세계를 전혀 모른다
 application/     유스케이스 + "port"(인터페이스) 정의
-infrastructure/  port 의 구현체 (SQLite, DuckDB, REST, otpauth …)
+infrastructure/  port 의 구현체 (SQLite, REST, otpauth …)
 presentation/    Fastify 라우트
 ```
 
 의존 방향은 **presentation/infrastructure → application → domain** 단방향이다.
-`domain/` 안에서는 Fastify·React·SQLite·DuckDB·HTTP·fs·`process.env`·증권사 DTO를
+`domain/` 안에서는 Fastify·React·SQLite·HTTP·fs·`process.env`·증권사 DTO를
 import 하는 것이 **금지**다. 이 규칙은 매너가 아니라 기계로 강제된다 —
 dependency-cruiser 가 테스트(`tests/architecture/`)로 돌면서 어기면 게이트가
 깨진다.
@@ -247,7 +247,6 @@ CSV 형식: `timestamp,open,high,low,close,volume` (ISO 8601 UTC 또는 epoch ms
 | 웹에 제어 기능 추가 | 스펙 §2.6 위반 — "헌법 개정" 없이는 금지 |
 | 새 비밀 필드 로깅 | redaction 목록(logger.ts + 스펙 §16) 갱신 누락 |
 | 서버 app.env | `SESSION_SECRET` 이 든 파일 — 절대 덮어쓰지 않는다 (세션 전체 무효화) |
-| legacy DuckDB | `db:prepare`의 Parquet fact 이관에서만 threads 1 / 384MB 상한 |
 | 셸 스크립트 CRLF | Windows 에디터로 저장 시 주의 — `.gitattributes` 가 LF 강제하지만 도구 우회 금지 |
 
 ---

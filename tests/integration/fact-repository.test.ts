@@ -3,12 +3,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
-import { ParquetFactRepository } from '../../src/server/modules/facts/infrastructure/parquet-fact-repository.js';
-import { DuckDbService } from '../../src/server/modules/market-data/infrastructure/duckdb-service.js';
+import { SqliteFactRepository } from '../../src/server/modules/facts/infrastructure/sqlite-fact-repository.js';
+import { openDatabase, type DatabaseHandle } from '../../src/server/shared/db/database.js';
+import { symbolFactsState, symbols } from '../../src/server/shared/db/schema.js';
 
-let dataRoot: string;
-let duckdb: DuckDbService;
-let repository: ParquetFactRepository;
+let root: string;
+let database: DatabaseHandle;
+let repository: SqliteFactRepository;
 
 function fact(overrides: Partial<Fact> = {}): Fact {
   return {
@@ -24,17 +25,17 @@ function fact(overrides: Partial<Fact> = {}): Fact {
 }
 
 beforeEach(() => {
-  dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'facts-'));
-  duckdb = new DuckDbService({ threads: 1, memoryLimit: '256MB' });
-  repository = new ParquetFactRepository(dataRoot, duckdb);
+  root = fs.mkdtempSync(path.join(os.tmpdir(), 'facts-'));
+  database = openDatabase(path.join(root, 'app.sqlite'));
+  repository = new SqliteFactRepository(database.db);
 });
 
 afterEach(() => {
-  duckdb.close();
-  fs.rmSync(dataRoot, { recursive: true, force: true });
+  database.close();
+  fs.rmSync(root, { recursive: true, force: true });
 });
 
-describe('ParquetFactRepository', () => {
+describe('SqliteFactRepository', () => {
   it('저장한 팩트를 그대로 읽는다', async () => {
     await repository.saveFacts([fact()]);
     const rows = await repository.getFacts({ scope: 'SYMBOL' });
@@ -51,30 +52,27 @@ describe('ParquetFactRepository', () => {
     expect(repository.hasFacts('SYMBOL', 'nope!')).toBe(false);
   });
 
-  it('ensurePartition 은 빈 파티션을 만들고 조회·병합 읽기를 깨뜨리지 않는다', async () => {
-    // legacy Parquet이 팩트 0건 수집 시도를 표현하던 빈 파티션도 이관기가 읽을 수 있어야 한다.
-    await repository.ensurePartition('SYMBOL', '005930');
+  it('팩트가 0건이어도 수집 coverage가 있으면 수집된 종목으로 센다', () => {
+    database.db.insert(symbols).values({
+      code: '005930',
+      market: 'KR',
+      createdAtMs: 1,
+    }).run();
+    database.db.insert(symbolFactsState).values({
+      code: '005930',
+      coveredYearsJson: '[2025]',
+      actionCoveredYearsJson: '[]',
+      actionGapYearsJson: '[]',
+      updatedAtMs: 1,
+    }).run();
+
     expect(repository.hasFacts('SYMBOL', '005930')).toBe(true);
-    expect(await repository.getFacts({ scope: 'SYMBOL', keys: ['005930'] })).toEqual([]);
-
-    // 빈 파티션이 여러 파일 read_parquet 목록에 섞여도 스키마가 맞아 던지지 않는다.
-    await repository.saveFacts([fact({ key: '000660' })]);
-    expect(await repository.getFacts({ scope: 'SYMBOL' })).toEqual([fact({ key: '000660' })]);
-
-    // 이미 팩트가 있는 파티션에는 아무 일도 하지 않는다 — 내용이 지워지면 안 된다.
-    await repository.ensurePartition('SYMBOL', '000660');
-    expect(await repository.getFacts({ scope: 'SYMBOL', keys: ['000660'] })).toEqual([
-      fact({ key: '000660' }),
-    ]);
+    expect(repository.symbolsWithFacts()).toEqual(new Set(['005930']));
   });
 
-  /**
-   * 목록 화면은 종목마다 묻지 않고 집합을 한 번 받는다 — 1,000종목에서 stat 1,000회를
-   * 5초마다 반복하지 않기 위해서다. `hasFacts` 와 **같은 판정**을 내야 한다: 갈라지면
-   * 배지(집합)와 제출 게이트(단건)가 서로 다른 답을 준다 (D-033).
-   */
+  /** 목록 화면은 종목마다 묻지 않고 집합을 한 번 받는다. */
   describe('symbolsWithFacts', () => {
-    it('수집 전에는 빈 집합이다 — 디렉터리가 아예 없어도 던지지 않는다', () => {
+    it('수집 전에는 빈 집합이다', () => {
       expect(repository.symbolsWithFacts()).toEqual(new Set());
     });
 
@@ -90,29 +88,6 @@ describe('ParquetFactRepository', () => {
     it('MACRO 팩트는 종목 집합에 섞이지 않는다 — key 가 종목이 아니라 지표 계열명이다', async () => {
       await repository.saveFacts([fact({ scope: 'MACRO', key: 'KOSPI' })]);
       expect(repository.symbolsWithFacts()).toEqual(new Set());
-    });
-
-    it('파티션 디렉터리만 있고 파일이 없으면 세지 않는다 — 쓰기가 중간에 죽은 상태다', async () => {
-      await repository.saveFacts([fact({ key: '005930' })]);
-      fs.mkdirSync(path.join(dataRoot, 'facts', 'scope=SYMBOL', 'symbol=000660'), {
-        recursive: true,
-      });
-      expect(repository.symbolsWithFacts()).toEqual(new Set(['005930']));
-    });
-
-    /**
-     * 종목 코드 패턴(`[A-Za-z0-9._-]{1,20}`)을 어기는 디렉터리는 세지 않는다. 여기서
-     * 고른 두 이름은 실제로 패턴을 벗어난다 — `@` 는 허용 문자가 아니고, 21자는 상한을
-     * 넘는다. (`..escape` 같은 이름은 패턴상 **유효하다**: 점은 BRK.B 같은 티커에 쓰인다.)
-     */
-    it('종목 코드 패턴을 어기는 디렉터리 이름은 무시한다', async () => {
-      await repository.saveFacts([fact({ key: '005930' })]);
-      for (const name of ['symbol=b@d', `symbol=${'A'.repeat(21)}`, 'symbol=']) {
-        const dir = path.join(dataRoot, 'facts', 'scope=SYMBOL', name);
-        fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(path.join(dir, 'data.parquet'), 'not really parquet');
-      }
-      expect(repository.symbolsWithFacts()).toEqual(new Set(['005930']));
     });
   });
 
@@ -168,38 +143,23 @@ describe('ParquetFactRepository', () => {
     expect(rows.map((row) => row.periodKey).sort()).toEqual(['2025Q1', '2025Q2']);
   });
 
-  /**
-   * 종목끼리 격리된다 — 데이터셋 격리는 없어졌다 (설계 2026-07-31-symbol-as-first-class).
-   * 데이터가 데이터셋 간에 공유되는 것이 이 변경의 목적이므로, 남은 격리 축은 종목이다.
-   */
-  it('종목끼리 격리된다 — 한 종목의 재작성이 다른 종목을 건드리지 않는다', async () => {
+  it('종목끼리 격리된다', async () => {
     await repository.saveFacts([fact({ key: '005930', value: 1 })]);
     await repository.saveFacts([fact({ key: '000660', value: 2 })]);
 
     expect((await repository.getFacts({ scope: 'SYMBOL', keys: ['005930'] })).map((r) => r.value)).toEqual([1]);
     expect((await repository.getFacts({ scope: 'SYMBOL', keys: ['000660'] })).map((r) => r.value)).toEqual([2]);
-    // keys 없이 읽으면 두 파티션이 합쳐진다
+    // keys 없이 읽으면 두 종목이 합쳐진다.
     expect((await repository.getFacts({ scope: 'SYMBOL' })).map((r) => r.value).sort()).toEqual([1, 2]);
   });
-
-
-  it('SYMBOL 과 MACRO 는 다른 파티션이다', async () => {
+  it('SYMBOL과 MACRO는 다른 스코프다', async () => {
     await repository.saveFacts([
       fact(),
       { scope: 'MACRO', key: 'KR_BASE_RATE', field: 'RATE', periodKey: '2025-03-01', asOfTsMs: 1_000, value: 3.5, unit: 'PERCENT' },
     ]);
     expect(await repository.getFacts({ scope: 'MACRO' })).toHaveLength(1);
     expect(await repository.getFacts({ scope: 'SYMBOL' })).toHaveLength(1);
-    expect(repository.hasFacts('MACRO', 'KOSPI')).toBe(true);
-  });
-
-  it('종목 파티션 아래에 저장한다 — 종목 단위 재작성과 삭제가 가능한 이유다', async () => {
-    await repository.saveFacts([fact({ key: '005930' })]);
-    const partition = path.join(dataRoot, 'facts', 'scope=SYMBOL', 'symbol=005930');
-    expect(fs.existsSync(path.join(partition, 'data.parquet'))).toBe(true);
-
-    fs.rmSync(partition, { recursive: true, force: true });
-    expect(await repository.getFacts({ scope: 'SYMBOL' })).toEqual([]);
+    expect(repository.hasFacts('MACRO', 'KR_BASE_RATE')).toBe(true);
   });
 
   it('부적절한 종목 키는 거부한다 (경로 조작 방지)', async () => {
@@ -252,9 +212,7 @@ describe('ParquetFactRepository', () => {
     expect(rows.map((row) => `${row.key}/${row.field}`).sort()).toEqual(['AB/CD', 'ABC/D']);
   });
 
-  it('같은 파티션에 동시에 저장해도 둘 다 남는다 (파티션 락)', async () => {
-    // await 로 순서를 기다리지 않고 동시에 발사한다 — 락이 없으면 두 쓰기 모두
-    // 저장 전 상태를 read 해서 나중에 rename 하는 쪽이 앞선 쓰기를 지운다.
+  it('동시에 저장해도 둘 다 남는다', async () => {
     await Promise.all([
       repository.saveFacts([fact({ periodKey: '2025Q1', value: 1 })]),
       repository.saveFacts([fact({ periodKey: '2025Q2', value: 2 })]),

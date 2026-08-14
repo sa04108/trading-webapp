@@ -334,7 +334,7 @@ KEEP_SNAPSHOTS=5
 sudo sh -c "ls -1t /var/lib/quant-platform/backups/pre-deploy-*.sqlite 2>/dev/null | tail -n +\$((KEEP_SNAPSHOTS + 1)) | xargs -r rm -f" || true
 
 # 릴리스 디렉터리도 같이 회전시킨다. 각 릴리스는 서버에서 설치한 node_modules 를 통째로
-# 들고 있어(duckdb·better-sqlite3·argon2 네이티브 바이너리 포함) 수백 MB 이고, 여기를
+# 들고 있어(better-sqlite3·argon2 네이티브 바이너리 포함) 수백 MB 이고, 여기를
 # 정리하지 않으면 40GB 디스크가 배포 횟수에 비례해 줄어든다 — 시장 데이터보다 이쪽이
 # 먼저 디스크를 먹는다.
 #
