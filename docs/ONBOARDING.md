@@ -48,15 +48,17 @@ better-sqlite3는 v12 고정(D-008, Node 22 prebuild). 올리고 싶으면 해�
 
 **모듈러 모놀리스, 배포 아티팩트 1개.** Fastify 서버 하나가 React 정적 파일과
 `/api/v1` REST를 함께 서빙한다. 백테스트는 무겁기 때문에 서버 프로세스 안에서
-돌리지 않는다 — SQLite 작업 큐에 쌓고, 같은 아티팩트의 **자식 프로세스**
-(`src/workers/backtest-child.ts`)를 fork 해서 실행하고, IPC로 진행률을 받는다.
-동시 실행은 1개다 (1GB 서버 제약).
+돌리지 않는다. 기본 local 모드는 같은 아티팩트의 child를 fork하고 동시 실행 1개를
+유지한다. 선택적 remote 모드는 별도 PC의 supervisor가 HTTPS lease를 받아 같은 child를
+실행하고, 입력·결과를 job 전용 SQLite 파일로 교환한다. 메타데이터와 최종 결과의 기준
+DB는 계속 서버 하나뿐이다.
 
 ```
 브라우저 (React) ── HTTPS ──> Caddy ──> Fastify (127.0.0.1:3000)
                                           ├─ /api/v1 (REST + SSE 진행률)
                                           ├─ SQLite  (일봉·재무 fact·작업·결과 메타)
-                                          └─ fork ──> backtest-child (엔진 실행)
+                                          ├─ local: fork ──> backtest-child
+                                          └─ remote: HTTPS <── supervisor ──> backtest-child
 ```
 
 **애플리케이션은 인프라를 모른다** (스펙 §2.1). 코드 어디에도 Caddy, UFW, AWS,
@@ -105,7 +107,7 @@ src/server/modules/
 src/server/shared/        db(스키마·마이그레이션 러너·정리 작업), logger, 보안 헤더, ids
 src/shared/schemas/       웹·서버가 공유하는 Zod 스키마 (백테스트 요청 등)
 src/web/features/         화면 단위 (auth, backtests, dashboard, datasets, settings)
-src/workers/              backtest-child.ts (백테스트 자식 프로세스)
+src/workers/              backtest-child.ts + remote-backtest-supervisor.ts
 migrations/               Drizzle 마이그레이션 — 0000 하나뿐인 이유는 §9
 infra/, scripts/          서버 프로비저닝·배포·백업 (§10)
 tests/                    unit / integration / e2e / architecture

@@ -76,7 +76,17 @@ export class JobOrchestrator {
   ) {}
 
   start(): void {
-    const recovered = this.queue.recoverInterrupted(isPidAlive);
+    this.recoverOrphaned(true);
+    this.timer = setInterval(() => this.tick(), POLL_INTERVAL_MS);
+    this.timer.unref();
+  }
+
+  /** 모드별 실행기를 시작하기 전, 이전 모드에서 남은 활성 행을 정리한다. */
+  recoverOrphaned(interruptRemoteLeases = false): void {
+    const recovered = [
+      ...this.queue.recoverInterrupted(isPidAlive),
+      ...(interruptRemoteLeases ? this.queue.interruptActiveRemoteLeases() : []),
+    ];
     if (recovered.length > 0) {
       this.logger.warn(
         { module: 'backtest', event: 'jobs.recovered', jobIds: recovered },
@@ -88,8 +98,6 @@ export class JobOrchestrator {
         this.events.emit('job', { jobId, kind: 'status' } satisfies JobEvent);
       }
     }
-    this.timer = setInterval(() => this.tick(), POLL_INTERVAL_MS);
-    this.timer.unref();
   }
 
   stop(): void {
@@ -123,6 +131,21 @@ export class JobOrchestrator {
     }
 
     const child = this.children.get(jobId);
+    if (
+      (job.status === 'RUNNING' || job.status === 'STARTING')
+      && child === undefined
+      && job.workerId?.startsWith('remote:') === true
+    ) {
+      if (!this.queue.setStatus(jobId, 'CANCELLING', {}, ['RUNNING', 'STARTING'])) {
+        return 'NOT_CANCELLABLE';
+      }
+      this.audit.record('admin', 'backtest.cancel-requested', {
+        jobId,
+        executionMode: 'remote',
+      });
+      this.events.emit('job', { jobId, kind: 'status' } satisfies JobEvent);
+      return 'CANCELLING';
+    }
     if ((job.status === 'RUNNING' || job.status === 'STARTING') && child) {
       // 취소 시퀀스 (스펙 §10): CANCELLING → IPC → SIGTERM → SIGKILL
       this.queue.setStatus(jobId, 'CANCELLING', {}, ['RUNNING', 'STARTING']);

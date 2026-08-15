@@ -16,6 +16,7 @@ describe('JobOrchestrator.start() — 재시작 복구 알림 (리뷰 지적: IN
     // 도는 setInterval 뒤에 있고, 테스트는 그 전에 stop() 한다
     const stubQueue = {
       recoverInterrupted: () => ['bt_orphan_1', 'bt_orphan_2'],
+      interruptActiveRemoteLeases: () => [],
     } as unknown as JobQueue;
 
     const orchestrator = new JobOrchestrator(stubQueue, config, logger, noopAudit, clock);
@@ -32,7 +33,10 @@ describe('JobOrchestrator.start() — 재시작 복구 알림 (리뷰 지적: IN
   });
 
   it('복구된 잡이 없으면 이벤트를 emit 하지 않는다', () => {
-    const stubQueue = { recoverInterrupted: () => [] } as unknown as JobQueue;
+    const stubQueue = {
+      recoverInterrupted: () => [],
+      interruptActiveRemoteLeases: () => [],
+    } as unknown as JobQueue;
     const orchestrator = new JobOrchestrator(stubQueue, config, logger, noopAudit, clock);
     const received: JobEvent[] = [];
     orchestrator.events.on('job', (event: JobEvent) => received.push(event));

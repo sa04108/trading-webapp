@@ -21,6 +21,7 @@ import { registerBacktestRoutes } from '../modules/backtest/presentation/backtes
 import { registerBacktestPreparationRoutes } from '../modules/backtest/presentation/backtest-preparation-routes.js';
 import { registerNotificationRoutes } from '../modules/notification/presentation/notification-routes.js';
 import { registerSymbolMasterRoutes } from '../modules/market-data/presentation/symbol-master-routes.js';
+import { registerRemoteWorkerRoutes } from '../modules/backtest/presentation/remote-worker-routes.js';
 
 function resolvePublicDir(): string | null {
   // 빌드 후: dist/server/bootstrap → dist/public.
@@ -115,6 +116,18 @@ export async function buildServer(container: Container): Promise<FastifyInstance
     },
     { prefix: '/api/v1' },
   );
+
+  if (config.backtestExecutionMode === 'remote' && config.backtestWorkerToken !== null) {
+    await app.register(
+      async (workerApi) => registerRemoteWorkerRoutes(workerApi, {
+        service: container.remoteWorkerService,
+        inputBundles: container.remoteInputBundleManager,
+        resultUploads: container.remoteResultUploadManager,
+        workerToken: config.backtestWorkerToken!,
+      }),
+      { prefix: '/api/internal/workers' },
+    );
+  }
 
   // 종목 마스터 일일 동기화 스케줄러 — JobOrchestrator 와 달리 이 타이머는 여기 server.ts
   // 에서 직접 잡는다(스케줄러 자체는 내부 타이머를 두지 않는다). unref() 로 테스트·CLI

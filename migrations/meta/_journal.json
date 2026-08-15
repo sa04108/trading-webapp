@@ -155,6 +155,13 @@
       "when": 1786777288337,
       "tag": "0021_greedy_hex",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1786791956553,
+      "tag": "0022_keen_firebrand",
+      "breakpoints": true
     }
   ]
 }

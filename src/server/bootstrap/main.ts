@@ -7,6 +7,15 @@ async function main(): Promise<void> {
   configureZodLocale();
   const config = loadConfig();
   const container = createContainer(config);
+  if (
+    config.nodeEnv === 'production'
+    && config.backtestExecutionMode === 'remote'
+    && container.gitCommitSha === 'unknown'
+  ) {
+    await container.close();
+    throw new Error('remote 실행에는 dist/build-info.json의 Git SHA가 필요합니다');
+  }
+  await container.remoteResultUploadManager.cleanupOrphanedUploads();
   const app = await buildServer(container);
 
   // 부팅 복구는 포트를 열기 **전에** 끝낸다.
@@ -15,7 +24,13 @@ async function main(): Promise<void> {
   //
   // CLI 서브커맨드도 같은 컨테이너를 만들지만 이 두 메서드는 부르지 않는다.
   // 서버 부팅 경로에서만 불러야 하는 근거는 `recoverOrphaned` 의 주석을 참고한다.
-  container.jobOrchestrator.start();
+  if (config.backtestExecutionMode === 'local') container.jobOrchestrator.start();
+  else {
+    // 이전 local 모드에서 서버와 함께 종료된 child 행만 INTERRUPTED로 정리한다.
+    // remote lease는 서버 재시작 뒤에도 worker가 heartbeat를 이어 갈 수 있으므로 보존한다.
+    container.jobOrchestrator.recoverOrphaned(false);
+    container.remoteWorkerService.start();
+  }
   container.seedCloneBatchService.recover();
   container.backtestPreparationOrchestrator.recoverOrphaned();
 

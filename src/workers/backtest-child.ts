@@ -47,6 +47,7 @@ import { SymbolMasterService } from '../server/modules/market-data/application/s
 import { StrategyRegistry } from '../server/modules/strategy/application/strategy-registry.js';
 import { strategySourceHash } from '../server/modules/strategy/application/strategy-source-hash.js';
 import { SqliteBacktestResultWriter } from '../server/modules/backtest/infrastructure/sqlite-backtest-result-writer.js';
+import { SqliteBacktestResultArtifactWriter } from '../server/modules/backtest/infrastructure/sqlite-backtest-result-artifact-writer.js';
 import { backtestRequestSchema, periodToTsRange } from '../shared/schemas/backtest-request.js';
 import type { ProvenancePin } from '../shared/schemas/provenance-pin.js';
 import { installCancellationHandlers } from './cancellation.js';
@@ -505,7 +506,9 @@ async function main(): Promise<void> {
 
     // 재현성 메타데이터 (스펙 §9.5) — 해시 규칙은 strategySourceHash 주석 참고
     const sourceHash = strategySourceHash(strategy);
-    const resultWriter = new SqliteBacktestResultWriter(handle);
+    const resultWriter = process.env.BACKTEST_RESULT_PATH
+      ? new SqliteBacktestResultArtifactWriter(process.env.BACKTEST_RESULT_PATH)
+      : new SqliteBacktestResultWriter(handle);
     resultWriter.write({
       jobId,
       strategyId: strategy.id,

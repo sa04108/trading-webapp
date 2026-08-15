@@ -85,7 +85,10 @@ Cloud Firewall (현재: Lightsail)
 - 메타데이터 DB 하나
 - 내부 역할과 의존 방향은 엄격히 분리
 
-마이크로서비스로 쪼개지 않는다. 다만 백테스트 계산은 HTTP 이벤트 루프와 메모리 장애를 분리하기 위해 **동일 아티팩트의 자식 프로세스**에서 실행한다.
+마이크로서비스로 쪼개지 않는다. 다만 백테스트 계산은 HTTP 이벤트 루프와 메모리 장애를
+분리하기 위해 **동일 아티팩트의 자식 프로세스**에서 실행한다. 기본 local 모드는 서버
+호스트에서 fork하고, 선택적 remote 모드는 별도 PC의 supervisor가 HTTPS lease를 받아
+같은 child를 실행한다. 원격 worker도 별도 제품·DB가 아니라 같은 릴리스의 계산 배치다.
 
 ## 2.4 애플리케이션은 특정 증권사를 모른다
 
@@ -651,8 +654,23 @@ type BacktestJobStatus =
 ## 동시 실행
 
 ```dotenv
+BACKTEST_EXECUTION_MODE=local
 MAX_CONCURRENT_BACKTESTS=1
 ```
+
+현 $7 Lightsail은 local 1을 유지한다. `BACKTEST_EXECUTION_MODE=remote`에서는 서버가
+계산 child를 만들지 않고 인증된 worker의 long-poll claim만 받는다. 이때 실제 병렬도는
+각 worker의 `BACKTEST_WORKER_CONCURRENCY` 합이며 `MAX_CONCURRENT_BACKTESTS`는 적용되지
+않는다. Worker는 서버와 정확히 같은 Git SHA만 claim할 수 있다.
+
+원격 claim은 원자적으로 attempt를 올리고 임대 token의 SHA-256과 만료 시각만 DB에 남긴다.
+Worker는 heartbeat로 임대를 연장하고 진행률·취소 요청을 교환한다. 만료된 lease는 설정된
+최대 attempt까지 `QUEUED`로 돌아가며, 마지막 만료는 `FAILED`가 된다. 늦게 온 이전
+attempt의 heartbeat·결과는 모두 거부한다. 입력은 해당 job과 유니버스 종목에 필요한
+행만 담은 SQLite snapshot이며 인증·세션·감사·다른 job은 포함하지 않는다. 결과 artifact는
+크기·checksum·SQLite integrity·schema·행 타입을 검증하고 결과 import와 `COMPLETED`
+전이를 한 server SQLite transaction으로 처리한다. 검증과 대량 행 import는 별도 server-side
+child에서 직렬 실행해 Fastify 이벤트 루프를 막지 않는다.
 
 ## SQLite 작업 확보
 
@@ -693,7 +711,10 @@ COMMIT;
 
 ## 재시작 복구
 
-서버 시작 시 `STARTING`, `RUNNING`, `CANCELLING` 작업을 검사한다. 대응 OS 프로세스가 없으면 `INTERRUPTED`로 바꾼다. 자동 재실행은 하지 않고 사용자가 복제·재실행한다.
+서버 시작 시 local 작업의 `STARTING`, `RUNNING`, `CANCELLING`을 검사한다. 대응 OS
+프로세스가 없으면 `INTERRUPTED`로 바꾸고 자동 재실행하지 않는다. Remote lease는 server
+재시작 뒤 worker가 heartbeat를 이어 갈 수 있으므로 만료 전에는 보존한다. remote에서
+local 모드로 바꾸면 더는 갱신할 endpoint가 없는 활성 remote lease를 `INTERRUPTED`로 닫는다.
 
 ---
 
@@ -1623,6 +1644,7 @@ EXPORT_ROOT=/var/lib/quant-platform/exports
 TEMP_ROOT=/var/lib/quant-platform/temp
 
 MAX_CONCURRENT_BACKTESTS=1
+BACKTEST_EXECUTION_MODE=local
 SESSION_SECRET=<48_BYTE_RANDOM_VALUE>
 SESSION_IDLE_TIMEOUT_SECONDS=43200
 SESSION_ABSOLUTE_TIMEOUT_SECONDS=604800
@@ -1644,6 +1666,9 @@ provision.sh 가 이 파일을 생성하며 `SESSION_SECRET` 은 서버에서 �
 전부 무효화된다.
 
 전체 항목은 `infra/app.env.example` 이 기준이다 (증권사·DART 자격 증명 포함).
+별도 worker 설정은 `infra/worker.env.example`, systemd unit은
+`infra/systemd/quant-backtest-worker.service`가 기준이다. server와 worker는 같은
+`BACKTEST_WORKER_TOKEN`과 동일한 릴리스 SHA를 사용한다.
 
 ## 28.1 값을 바꾼 뒤
 
@@ -2064,9 +2089,10 @@ Playwright viewport:
 - 입력 봉·팩트·종목 수
 - 결과 테이블 행 수와 SQLite page/index overhead를 제외한 논리 payload 근사치
 
-계측을 위해 결과 전체를 추가로 직렬화하지 않는다. 운영 호스트는 1GB RAM이고 웹과 child가
-같은 640MB systemd cgroup을 공유하므로, `MAX_CONCURRENT_BACKTESTS=1`은 별도 Worker로
-계산을 옮기기 전까지 유지한다(D-059).
+계측을 위해 결과 전체를 추가로 직렬화하지 않는다. local 모드의 운영 호스트는 1GB RAM이고
+웹과 child가 같은 640MB systemd cgroup을 공유하므로 `MAX_CONCURRENT_BACKTESTS=1`을
+유지한다. remote 모드의 전용 worker 병렬도는 그 호스트의 telemetry와 메모리 예산으로
+별도로 정한다(D-059, D-060).
 
 용량 산정은 `backtest:telemetry-report`로 한다. 최소 완료 표본 10개, 입력 규모 3종,
 최소·최대 입력 행 수 4배 차이가 필요하다. 최소 구성은 작은 부하·평소 부하·허용 상한에

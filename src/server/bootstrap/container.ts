@@ -35,7 +35,7 @@ import type { CandleRepository } from '../modules/market-data/application/ports.
 import { createTossStockInfoSource } from '../modules/broker/infrastructure/toss/toss-stock-info-source.js';
 import { KrxDailyCandleRepository } from '../modules/market-data/infrastructure/krx-daily-candle-repository.js';
 import { StrategyRegistry } from '../modules/strategy/application/strategy-registry.js';
-import { JobOrchestrator } from '../modules/backtest/application/job-orchestrator.js';
+import { JobOrchestrator, type JobEvent } from '../modules/backtest/application/job-orchestrator.js';
 import { JobQueue } from '../modules/backtest/application/job-queue.js';
 import { ResultsService } from '../modules/backtest/application/results-service.js';
 import {
@@ -63,6 +63,10 @@ import { SelectionMetricRepository } from '../modules/market-data/application/se
 import { UniverseRuleResolver } from '../modules/backtest/application/universe-rule-resolver.js';
 import { BacktestPreparationOrchestrator } from '../modules/backtest/application/backtest-preparation-orchestrator.js';
 import { BenchmarkService } from '../modules/market-data/application/benchmark-service.js';
+import { RemoteWorkerService } from '../modules/backtest/application/remote-worker-service.js';
+import { RemoteInputBundleManager } from '../modules/backtest/infrastructure/remote-input-bundle-manager.js';
+import { RemoteResultUploadManager } from '../modules/backtest/infrastructure/remote-result-upload-manager.js';
+import { ForkedRemoteResultCompleter } from '../modules/backtest/infrastructure/forked-remote-result-completer.js';
 
 export interface SystemStatusProviders {
   queueLength: () => number;
@@ -92,6 +96,9 @@ export interface Container {
   readonly strategyRegistry: StrategyRegistry;
   readonly jobQueue: JobQueue;
   readonly jobOrchestrator: JobOrchestrator;
+  readonly remoteWorkerService: RemoteWorkerService;
+  readonly remoteInputBundleManager: RemoteInputBundleManager;
+  readonly remoteResultUploadManager: RemoteResultUploadManager;
   readonly resultsService: ResultsService;
   readonly seedCloneBatchService: SeedCloneBatchService;
   readonly benchmarkService: BenchmarkService;
@@ -319,23 +326,51 @@ export function createContainer(config: AppConfig): Container {
 
   const jobQueue = new JobQueue(database, clock);
   const jobOrchestrator = new JobOrchestrator(jobQueue, config, logger, auditLog, clock);
+  const remoteResultCompleter = new ForkedRemoteResultCompleter(config.databasePath);
+  const remoteWorkerService = new RemoteWorkerService(
+    jobQueue,
+    config,
+    readGitCommitSha(),
+    clock,
+    auditLog,
+    logger,
+    remoteResultCompleter,
+  );
+  const remoteInputBundleManager = new RemoteInputBundleManager(config.databasePath, config.tempRoot);
+  const remoteResultUploadManager = new RemoteResultUploadManager(config.tempRoot);
   const seedCloneBatchService = new SeedCloneBatchService(
     database,
     jobQueue,
     config.maxQueuedBacktests,
     clock,
   );
-  jobOrchestrator.events.on(
-    'job',
-    createBacktestNotificationListener({
-      queue: jobQueue,
-      strategyName: (strategyId) => strategyRegistry.describe(strategyId)?.name ?? null,
-      totalReturnPct: (jobId) => resultsService.getTotalReturnPct(jobId),
-      notify: safeNotify,
-      logger,
-    }),
-  );
-  jobOrchestrator.events.on('job', createSeedCloneBatchJobListener(seedCloneBatchService));
+  const backtestNotificationListener = createBacktestNotificationListener({
+    queue: jobQueue,
+    strategyName: (strategyId) => strategyRegistry.describe(strategyId)?.name ?? null,
+    totalReturnPct: (jobId) => resultsService.getTotalReturnPct(jobId),
+    notify: safeNotify,
+    logger,
+  });
+  const seedBatchJobListener = createSeedCloneBatchJobListener(seedCloneBatchService);
+  const cleanupRemoteInput = (event: JobEvent): void => {
+    if (event.kind !== 'status') return;
+    const job = jobQueue.getJob(event.jobId);
+    if (
+      job?.workerId?.startsWith('remote:') !== true
+      || !['CANCELLED', 'COMPLETED', 'FAILED', 'INTERRUPTED'].includes(job.status)
+    ) return;
+    void remoteInputBundleManager.removeJob(event.jobId).catch((error) => {
+      logger.warn(
+        { module: 'backtest', event: 'backtest.remote-input-cleanup-failed', jobId: event.jobId, err: error },
+        'remote input bundle cleanup failed',
+      );
+    });
+  };
+  for (const source of [jobOrchestrator.events, remoteWorkerService.events]) {
+    source.on('job', backtestNotificationListener);
+    source.on('job', seedBatchJobListener);
+    source.on('job', cleanupRemoteInput);
+  }
   seedCloneBatchService.events.on(
     'batch',
     createSeedCloneBatchNotificationListener({
@@ -375,6 +410,9 @@ export function createContainer(config: AppConfig): Container {
     strategyRegistry,
     jobQueue,
     jobOrchestrator,
+    remoteWorkerService,
+    remoteInputBundleManager,
+    remoteResultUploadManager,
     resultsService,
     seedCloneBatchService,
     benchmarkService,
@@ -392,6 +430,7 @@ export function createContainer(config: AppConfig): Container {
       closing = (async () => {
         clearInterval(pruneTimer);
         jobOrchestrator.stop();
+        remoteWorkerService.stop();
         // FactSync는 symbol 단위 저장이 끝난 뒤 멈춘다. 이 경계를 기다리기 전에
         // SQLite를 닫으면 저장 callback이 닫힌 자원을 다시 건드린다.
         await backtestPreparationOrchestrator.stop();

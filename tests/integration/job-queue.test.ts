@@ -625,6 +625,27 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(queue.getJob(job.id)!.error).toContain('복제');
   });
 
+  it('preserves live remote leases on remote restart and interrupts them on local mode switch', () => {
+    const queue = ctx.container.jobQueue;
+    const job = queue.enqueue(buildRequest());
+    queue.claimNextRemote({
+      workerId: 'remote:worker-a',
+      leaseTokenHash: 'a'.repeat(64),
+      leaseExpiresAtMs: Date.now() + 60_000,
+      runnerVersion: 'release-a',
+      maxAttempts: 3,
+    });
+
+    expect(queue.recoverInterrupted(() => false)).not.toContain(job.id);
+    expect(queue.getJob(job.id)?.status).toBe('STARTING');
+    expect(queue.interruptActiveRemoteLeases()).toContain(job.id);
+    expect(queue.getJob(job.id)).toMatchObject({
+      status: 'INTERRUPTED',
+      leaseTokenHash: null,
+      leaseExpiresAtMs: null,
+    });
+  });
+
   it('refuses to delete non-terminal jobs', async () => {
     const queue = ctx.container.jobQueue;
     const job = queue.enqueue(buildRequest());

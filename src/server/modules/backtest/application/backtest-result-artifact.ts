@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer';
+import { z } from 'zod';
 import type { BacktestRunResult } from '../domain/engine.js';
 
 /**
@@ -38,6 +39,106 @@ export interface BacktestResultWriteContext {
   readonly provenancePinJson: string | null;
   readonly startedAtMs: number;
   readonly completedAtMs: number;
+}
+
+const finiteNumber = z.number().finite();
+const nonNegativeInteger = z.number().int().nonnegative();
+
+export const backtestResultWriteContextSchema: z.ZodType<BacktestResultWriteContext> = z.object({
+  jobId: z.string().min(1).max(128),
+  strategyId: z.string().min(1).max(128),
+  strategyVersion: z.string().min(1).max(128),
+  strategySourceHash: z.string().min(1).max(256),
+  parameterJson: z.string().max(10 * 1024 * 1024),
+  universeRuleJson: z.string().max(10 * 1024 * 1024),
+  scheduleHash: z.string().min(1).max(256),
+  universeJson: z.string().max(10 * 1024 * 1024),
+  universeHash: z.string().min(1).max(256),
+  engineVersion: z.string().min(1).max(128),
+  feeModelVersion: z.string().min(1).max(128),
+  slippageModelVersion: z.string().min(1).max(128),
+  randomSeed: nonNegativeInteger,
+  gitCommitSha: z.string().min(1).max(128),
+  provenancePinJson: z.string().max(10 * 1024 * 1024).nullable(),
+  startedAtMs: nonNegativeInteger,
+  completedAtMs: nonNegativeInteger,
+});
+
+export const backtestResultSummarySchema = z.object({
+  metrics: z.object({
+    initialCash: finiteNumber,
+    finalEquity: finiteNumber,
+    totalReturnPct: finiteNumber,
+    cagrPct: finiteNumber.nullable(),
+    maxDrawdownPct: finiteNumber,
+    maxDrawdownDurationMs: nonNegativeInteger,
+    volatilityPct: finiteNumber.nullable(),
+    sharpe: finiteNumber.nullable(),
+    sortino: finiteNumber.nullable(),
+    calmar: finiteNumber.nullable(),
+    winRate: finiteNumber.nullable(),
+    profitFactor: finiteNumber.nullable(),
+    avgWin: finiteNumber.nullable(),
+    avgLoss: finiteNumber.nullable(),
+    maxConsecutiveWins: nonNegativeInteger,
+    maxConsecutiveLosses: nonNegativeInteger,
+    tradeCount: nonNegativeInteger,
+    avgHoldingTimeMs: finiteNumber.nonnegative().nullable(),
+    maxConcurrentPositions: nonNegativeInteger,
+    totalCommission: finiteNumber.nonnegative(),
+    totalTax: finiteNumber.nonnegative(),
+    totalSlippage: finiteNumber.nonnegative(),
+  }),
+  openPositions: z.array(z.object({
+    symbol: z.string().min(1).max(32),
+    quantity: finiteNumber,
+    avgEntryPrice: finiteNumber,
+    entryTsMs: nonNegativeInteger,
+    lastPrice: finiteNumber,
+    lastPriceTsMs: nonNegativeInteger,
+    unrealizedPnl: finiteNumber,
+    returnPct: finiteNumber,
+  })).max(1_000),
+  warnings: z.array(z.string().max(4_000)).max(1_000),
+  processedBars: nonNegativeInteger,
+});
+
+export type BacktestResultSummary = z.infer<typeof backtestResultSummarySchema>;
+
+export interface ValidatedBacktestResultArtifact {
+  readonly path: string;
+  readonly context: BacktestResultWriteContext;
+  readonly summary: BacktestResultSummary;
+  readonly schemaVersion: number;
+  readonly rowCount: number;
+}
+
+export interface BacktestResultArtifactImporter {
+  validate(artifactPath: string, expectedJobId: string): ValidatedBacktestResultArtifact;
+  /** 호출자가 연 영속 transaction 안에서 실행한다. */
+  write(artifact: ValidatedBacktestResultArtifact): void;
+}
+
+export interface RemoteResultCompletionInput {
+  readonly jobId: string;
+  readonly attempt: number;
+  readonly leaseTokenHash: string;
+  readonly artifactPath: string;
+  readonly checksum: string;
+  readonly expectedRunnerVersion: string;
+}
+
+export interface RemoteResultCompletionOutput {
+  readonly status: 'ACCEPTED' | 'IDEMPOTENT' | 'STALE_LEASE';
+  readonly schemaVersion: number;
+  readonly rowCount: number;
+  readonly processedBars: number;
+  readonly completedAtMs: number;
+}
+
+/** 무거운 artifact 검증·중앙 DB import를 HTTP 이벤트 루프 밖에서 수행하는 port. */
+export interface RemoteResultCompleter {
+  complete(input: RemoteResultCompletionInput): Promise<RemoteResultCompletionOutput>;
 }
 
 /** 저장 구현을 로컬 SQLite에서 artifact importer로 교체할 때 지켜야 할 port. */

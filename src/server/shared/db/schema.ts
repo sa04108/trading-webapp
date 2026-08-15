@@ -359,6 +359,15 @@ export const backtestJobs = sqliteTable(
     submitWarningsJson: text('submit_warnings_json'),
     workerId: text('worker_id'),
     pid: integer('pid'),
+    /** 원격 worker lease attempt. 새 claim마다 증가해 이전 worker의 늦은 완료를 거부한다. */
+    attempt: integer('attempt').notNull().default(0),
+    /** lease 원문은 저장하지 않고 SHA-256만 저장한다. */
+    leaseTokenHash: text('lease_token_hash'),
+    leaseExpiresAtMs: integer('lease_expires_at_ms'),
+    /** 서버와 worker가 같은 계산 코드를 실행하는지 확인하는 git SHA. */
+    runnerVersion: text('runner_version'),
+    resultSchemaVersion: integer('result_schema_version'),
+    resultChecksum: text('result_checksum'),
     createdAtMs: integer('created_at_ms').notNull(),
     startedAtMs: integer('started_at_ms'),
     completedAtMs: integer('completed_at_ms'),
