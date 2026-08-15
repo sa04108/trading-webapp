@@ -330,7 +330,7 @@ export function createContainer(config: AppConfig): Container {
   const remoteWorkerService = new RemoteWorkerService(
     jobQueue,
     config,
-    readGitCommitSha(),
+    readGitCommitSha(config.nodeEnv),
     clock,
     auditLog,
     logger,
@@ -351,20 +351,38 @@ export function createContainer(config: AppConfig): Container {
     notify: safeNotify,
     logger,
   });
-  const seedBatchJobListener = createSeedCloneBatchJobListener(seedCloneBatchService);
+  const rawSeedBatchJobListener = createSeedCloneBatchJobListener(seedCloneBatchService);
+  const seedBatchJobListener = (event: JobEvent): void => {
+    try {
+      rawSeedBatchJobListener(event);
+    } catch (error) {
+      logger.warn(
+        { module: 'backtest', event: 'backtest.seed-batch-listener-failed', jobId: event.jobId, err: error },
+        'seed batch job listener failed',
+      );
+    }
+  };
   const cleanupRemoteInput = (event: JobEvent): void => {
     if (event.kind !== 'status') return;
-    const job = jobQueue.getJob(event.jobId);
-    if (
-      job?.workerId?.startsWith('remote:') !== true
-      || !['CANCELLED', 'COMPLETED', 'FAILED', 'INTERRUPTED'].includes(job.status)
-    ) return;
-    void remoteInputBundleManager.removeJob(event.jobId).catch((error) => {
+    try {
+      const job = jobQueue.getJob(event.jobId);
+      if (
+        job === null
+        || job.attempt === 0
+        || !['CANCELLED', 'COMPLETED', 'FAILED', 'INTERRUPTED'].includes(job.status)
+      ) return;
+      void remoteInputBundleManager.removeJob(event.jobId).catch((error) => {
+        logger.warn(
+          { module: 'backtest', event: 'backtest.remote-input-cleanup-failed', jobId: event.jobId, err: error },
+          'remote input bundle cleanup failed',
+        );
+      });
+    } catch (error) {
       logger.warn(
         { module: 'backtest', event: 'backtest.remote-input-cleanup-failed', jobId: event.jobId, err: error },
         'remote input bundle cleanup failed',
       );
-    });
+    }
   };
   for (const source of [jobOrchestrator.events, remoteWorkerService.events]) {
     source.on('job', backtestNotificationListener);
@@ -393,7 +411,7 @@ export function createContainer(config: AppConfig): Container {
     database,
     clock,
     appVersion: readAppVersion(),
-    gitCommitSha: readGitCommitSha(),
+    gitCommitSha: readGitCommitSha(config.nodeEnv),
     systemStatus,
     auditLog,
     notificationService,

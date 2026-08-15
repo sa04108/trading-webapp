@@ -48,6 +48,23 @@ export class RemoteInputBundleManager {
     await fs.rm(this.jobRoot(jobId), { recursive: true, force: true });
   }
 
+  /** 서버 재시작 전 요청에 속해 더는 전송을 재개할 수 없는 입력 snapshot을 정리한다. */
+  async cleanupOrphanedBundles(): Promise<void> {
+    const root = path.join(this.tempRoot, 'remote-backtests');
+    let entries: string[];
+    try {
+      entries = await fs.readdir(root);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
+    }
+    // uploads는 RemoteResultUploadManager가 별도로 정리한다. 책임을 섞으면 한쪽 cleanup을
+    // 단독 호출한 테스트나 운영 도구가 진행 중인 업로드까지 지울 수 있다.
+    await Promise.all(entries
+      .filter((entry) => entry !== 'uploads')
+      .map((entry) => fs.rm(path.join(root, entry), { recursive: true, force: true })));
+  }
+
   private async prepareOnce(jobId: string, attempt: number): Promise<RemoteInputBundle> {
     const jobRoot = this.jobRoot(jobId);
     const directory = path.join(jobRoot, String(attempt));

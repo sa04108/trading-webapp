@@ -42,6 +42,8 @@ export interface BacktestResultWriteContext {
 }
 
 const finiteNumber = z.number().finite();
+const positiveNumber = finiteNumber.positive();
+const nonNegativeNumber = finiteNumber.nonnegative();
 const nonNegativeInteger = z.number().int().nonnegative();
 
 export const backtestResultWriteContextSchema: z.ZodType<BacktestResultWriteContext> = z.object({
@@ -66,18 +68,18 @@ export const backtestResultWriteContextSchema: z.ZodType<BacktestResultWriteCont
 
 export const backtestResultSummarySchema = z.object({
   metrics: z.object({
-    initialCash: finiteNumber,
-    finalEquity: finiteNumber,
-    totalReturnPct: finiteNumber,
+    initialCash: positiveNumber,
+    finalEquity: nonNegativeNumber,
+    totalReturnPct: finiteNumber.min(-100),
     cagrPct: finiteNumber.nullable(),
-    maxDrawdownPct: finiteNumber,
+    maxDrawdownPct: finiteNumber.min(-100).max(0),
     maxDrawdownDurationMs: nonNegativeInteger,
-    volatilityPct: finiteNumber.nullable(),
+    volatilityPct: nonNegativeNumber.nullable(),
     sharpe: finiteNumber.nullable(),
     sortino: finiteNumber.nullable(),
     calmar: finiteNumber.nullable(),
-    winRate: finiteNumber.nullable(),
-    profitFactor: finiteNumber.nullable(),
+    winRate: finiteNumber.min(0).max(100).nullable(),
+    profitFactor: nonNegativeNumber.nullable(),
     avgWin: finiteNumber.nullable(),
     avgLoss: finiteNumber.nullable(),
     maxConsecutiveWins: nonNegativeInteger,
@@ -91,13 +93,15 @@ export const backtestResultSummarySchema = z.object({
   }),
   openPositions: z.array(z.object({
     symbol: z.string().min(1).max(32),
-    quantity: finiteNumber,
-    avgEntryPrice: finiteNumber,
+    quantity: positiveNumber,
+    avgEntryPrice: positiveNumber,
     entryTsMs: nonNegativeInteger,
-    lastPrice: finiteNumber,
+    lastPrice: positiveNumber,
     lastPriceTsMs: nonNegativeInteger,
     unrealizedPnl: finiteNumber,
     returnPct: finiteNumber,
+  }).refine((position) => position.lastPriceTsMs >= position.entryTsMs, {
+    message: 'lastPriceTsMs는 entryTsMs보다 빠를 수 없습니다',
   })).max(1_000),
   warnings: z.array(z.string().max(4_000)).max(1_000),
   processedBars: nonNegativeInteger,

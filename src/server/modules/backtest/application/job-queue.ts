@@ -143,7 +143,10 @@ export class JobQueue {
            lease_token_hash = ?,
            lease_expires_at_ms = ?,
            runner_version = ?,
-           error = NULL
+           error = NULL,
+           progress_bars = NULL,
+           total_bars = NULL,
+           progress_label = NULL
        WHERE id = (
          SELECT id FROM backtest_jobs
          WHERE status = 'QUEUED' AND attempt < ?
@@ -202,17 +205,20 @@ export class JobQueue {
     readonly nowMs: number;
     readonly status: 'FAILED' | 'CANCELLED';
     readonly error?: string;
-  }): boolean {
-    const result = this.handle.sqlite.prepare(
+  }): 'FAILED' | 'CANCELLED' | null {
+    const row = this.handle.sqlite.prepare(
       `UPDATE backtest_jobs
-       SET status = ?, error = ?, completed_at_ms = ?,
+       SET status = CASE WHEN status = 'CANCELLING' THEN 'CANCELLED' ELSE ? END,
+           error = CASE WHEN status = 'CANCELLING' THEN NULL ELSE ? END,
+           completed_at_ms = ?,
            lease_token_hash = NULL, lease_expires_at_ms = NULL
        WHERE id = ?
          AND attempt = ?
          AND lease_token_hash = ?
          AND lease_expires_at_ms >= ?
-         AND status IN ('STARTING', 'RUNNING', 'CANCELLING')`,
-    ).run(
+         AND status IN ('STARTING', 'RUNNING', 'CANCELLING')
+       RETURNING status`,
+    ).get(
       input.status,
       input.error ?? null,
       input.nowMs,
@@ -220,8 +226,8 @@ export class JobQueue {
       input.attempt,
       input.leaseTokenHash,
       input.nowMs,
-    );
-    return result.changes > 0;
+    ) as { status: 'FAILED' | 'CANCELLED' } | undefined;
+    return row?.status ?? null;
   }
 
   /** 결과 import와 COMPLETED 전이를 같은 SQLite transaction으로 묶는다. */
@@ -288,6 +294,16 @@ export class JobQueue {
   /** 만료 lease는 재시도하고, 취소 중이거나 attempt를 소진한 작업만 terminal로 보낸다. */
   recoverExpiredRemoteLeases(maxAttempts: number): ExpiredRemoteLease[] {
     const nowMs = this.clock.now();
+    // 운영 중 maxAttempts를 낮추면 이미 그 횟수만큼 시도한 QUEUED 행은 claim 조건에서
+    // 영원히 제외된다. attempt>0은 한 번이라도 remote claim됐다는 표식이다.
+    const exhaustedQueued = this.handle.sqlite.prepare(
+      `SELECT id, attempt
+       FROM backtest_jobs
+       WHERE status = 'QUEUED'
+         AND attempt > 0
+         AND attempt >= ?
+       ORDER BY created_at_ms ASC`,
+    ).all(maxAttempts) as Array<{ id: string; attempt: number }>;
     const expired = this.handle.sqlite.prepare(
       `SELECT id, status, attempt
        FROM backtest_jobs
@@ -296,44 +312,67 @@ export class JobQueue {
          AND lease_expires_at_ms < ?
        ORDER BY created_at_ms ASC`,
     ).all(nowMs) as Array<{ id: string; status: BacktestJobStatus; attempt: number }>;
-    if (expired.length === 0) return [];
+    if (expired.length === 0 && exhaustedQueued.length === 0) return [];
 
-    const recover = this.handle.sqlite.transaction(() => expired.flatMap((job) => {
-      const status: ExpiredRemoteLease['status'] = job.status === 'CANCELLING'
-        ? 'CANCELLED'
-        : job.attempt >= maxAttempts
-          ? 'FAILED'
-          : 'QUEUED';
-      const result = this.handle.sqlite.prepare(
-        `UPDATE backtest_jobs
-         SET status = ?,
-             worker_id = CASE WHEN ? = 'QUEUED' THEN NULL ELSE worker_id END,
-             pid = NULL,
-             lease_token_hash = NULL,
-             lease_expires_at_ms = NULL,
-             runner_version = CASE WHEN ? = 'QUEUED' THEN NULL ELSE runner_version END,
-             error = ?,
-             completed_at_ms = ?
-         WHERE id = ?
-           AND attempt = ?
-           AND lease_expires_at_ms < ?
-           AND status IN ('STARTING', 'RUNNING', 'CANCELLING')`,
-      ).run(
-        status,
-        status,
-        status,
-        status === 'FAILED'
-          ? `원격 worker lease가 ${job.attempt}회 만료되어 재시도를 중단했습니다.`
-          : status === 'QUEUED'
-            ? `원격 worker lease가 만료되어 ${job.attempt + 1}번째 시도를 대기합니다.`
-            : null,
-        status === 'QUEUED' ? null : nowMs,
-        job.id,
-        job.attempt,
-        nowMs,
-      );
-      return result.changes > 0 ? [{ jobId: job.id, status, attempt: job.attempt }] : [];
-    }));
+    const recover = this.handle.sqlite.transaction(() => {
+      const recovered: ExpiredRemoteLease[] = [];
+      for (const job of exhaustedQueued) {
+        const result = this.handle.sqlite.prepare(
+          `UPDATE backtest_jobs
+           SET status = 'FAILED',
+               error = ?,
+               completed_at_ms = ?
+           WHERE id = ?
+             AND attempt = ?
+             AND status = 'QUEUED'`,
+        ).run(
+          `원격 worker 최대 시도 횟수가 ${maxAttempts}회로 설정되어 재시도를 중단했습니다.`,
+          nowMs,
+          job.id,
+          job.attempt,
+        );
+        if (result.changes > 0) {
+          recovered.push({ jobId: job.id, status: 'FAILED', attempt: job.attempt });
+        }
+      }
+      for (const job of expired) {
+        const status: ExpiredRemoteLease['status'] = job.status === 'CANCELLING'
+          ? 'CANCELLED'
+          : job.attempt >= maxAttempts
+            ? 'FAILED'
+            : 'QUEUED';
+        const result = this.handle.sqlite.prepare(
+          `UPDATE backtest_jobs
+           SET status = ?,
+               worker_id = CASE WHEN ? = 'QUEUED' THEN NULL ELSE worker_id END,
+               pid = NULL,
+               lease_token_hash = NULL,
+               lease_expires_at_ms = NULL,
+               runner_version = CASE WHEN ? = 'QUEUED' THEN NULL ELSE runner_version END,
+               error = ?,
+               completed_at_ms = ?
+           WHERE id = ?
+             AND attempt = ?
+             AND lease_expires_at_ms < ?
+             AND status IN ('STARTING', 'RUNNING', 'CANCELLING')`,
+        ).run(
+          status,
+          status,
+          status,
+          status === 'FAILED'
+            ? `원격 worker lease가 ${job.attempt}회 만료되어 재시도를 중단했습니다.`
+            : status === 'QUEUED'
+              ? `원격 worker lease가 만료되어 ${job.attempt + 1}번째 시도를 대기합니다.`
+              : null,
+          status === 'QUEUED' ? null : nowMs,
+          job.id,
+          job.attempt,
+          nowMs,
+        );
+        if (result.changes > 0) recovered.push({ jobId: job.id, status, attempt: job.attempt });
+      }
+      return recovered;
+    });
     return recover.immediate();
   }
 

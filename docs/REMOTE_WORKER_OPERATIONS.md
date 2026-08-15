@@ -24,6 +24,7 @@ dependency를 `/opt/quant-platform/releases/<release>`에 설치한다. Server �
 권장한다. 별도로 빌드해야 한다면 정확히 같은 commit에서 `pnpm build:server`를 실행하고,
 `scripts/deploy.sh`와 같은 방식으로 그 commit SHA를 `dist/build-info.json`에 기록해야 한다.
 이 파일이 없거나 `unknown`이면 production remote worker와 remote server는 기동을 거부한다.
+`deploy.sh`는 같은 SHA에 서로 다른 dirty build가 생기지 않도록 깨끗한 작업 트리만 허용한다.
 
 ```bash
 sudo useradd --system --home /nonexistent --shell /usr/sbin/nologin quant-worker
@@ -33,6 +34,10 @@ sudo install -o root -g root -m 600 infra/worker.env.example /etc/quant-platform
 sudo install -o root -g root -m 644 infra/systemd/quant-backtest-worker.service \
   /etc/systemd/system/quant-backtest-worker.service
 ```
+
+`BACKTEST_WORK_ROOT`는 worker 전용 디렉터리여야 한다. Worker는 소유권 marker를 만들고,
+marker가 없는데 `jobs` 외의 파일이 있거나 파일시스템 루트가 지정되면 정리 대신 기동을
+거부한다.
 
 `worker.env`의 URL·token·ID를 실제 값으로 바꾼다. Production URL은 HTTPS만 허용한다.
 서버 app.env에는 아직 `BACKTEST_EXECUTION_MODE=local`을 유지한다.
@@ -94,6 +99,7 @@ worker 전용 메모리 예산을 잡는다.
 
 Server input snapshot과 upload 임시 파일은 `TEMP_ROOT/remote-backtests` 아래에만 생긴다.
 정상 완료·실패·취소에서 지우며, 재시도 claim 시 이전 attempt snapshot도 정리한다. Worker
-job 디렉터리도 attempt 종료 시 지운다. Server의 snapshot 생성과 결과 import는 각각 한
-번에 하나만 별도 child에서 처리해 여러 worker slot이 Lightsail 웹 이벤트 루프를 동시에
-압박하지 않게 한다.
+job 디렉터리도 attempt 종료 시 지운다. 전원 장애나 강제 종료로 정리가 실행되지 않은
+조각은 server와 worker가 다음에 시작할 때 제거한다. Server의 snapshot 생성과 결과
+import는 각각 한 번에 하나만 별도 child에서 처리해 여러 worker slot이 Lightsail 웹 이벤트
+루프를 동시에 압박하지 않게 한다.

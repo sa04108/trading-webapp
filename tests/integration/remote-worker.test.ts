@@ -9,9 +9,19 @@ import { backtestJobs, symbols } from '../../src/server/shared/db/schema.js';
 import { eq } from 'drizzle-orm';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
 import type { BacktestResultArtifact } from '../../src/server/modules/backtest/application/backtest-result-artifact.js';
+import type { BacktestResultWriteContext } from '../../src/server/modules/backtest/application/backtest-result-artifact.js';
 import { SqliteBacktestResultArtifactWriter } from '../../src/server/modules/backtest/infrastructure/sqlite-backtest-result-artifact-writer.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import { registerSymbols, seedDailyBars } from '../helpers/seed.js';
+import { backtestRequestSchema } from '../../src/shared/schemas/backtest-request.js';
+import type { ProvenancePin } from '../../src/shared/schemas/provenance-pin.js';
+import { StrategyRegistry } from '../../src/server/modules/strategy/application/strategy-registry.js';
+import { strategySourceHash } from '../../src/server/modules/strategy/application/strategy-source-hash.js';
+import { ENGINE_VERSION } from '../../src/server/modules/backtest/domain/engine.js';
+import {
+  getCostProfile,
+  getSlippageProfile,
+} from '../../src/server/modules/backtest/domain/cost-profiles.js';
 
 const WORKER_TOKEN = 'remote-worker-token-for-tests-1234567890';
 const DAY_MS = 86_400_000;
@@ -117,8 +127,8 @@ describe('remote backtest worker lease API', () => {
     return {
       schemaVersion: 1,
       metrics: {
-        initialCash: 1_000,
-        finalEquity: 1_100,
+        initialCash: 10_000_000,
+        finalEquity: 11_000_000,
         totalReturnPct: 10,
         cagrPct: 10,
         maxDrawdownPct: -5,
@@ -163,25 +173,48 @@ describe('remote backtest worker lease API', () => {
     };
   }
 
-  function writeResultArtifact(job: ReturnType<typeof enqueue>, artifactPath: string): void {
-    new SqliteBacktestResultArtifactWriter(artifactPath).write({
+  function resultContext(job: ReturnType<typeof enqueue>): BacktestResultWriteContext {
+    const parsedRequest = backtestRequestSchema.parse(JSON.parse(job.requestJson));
+    const registry = new StrategyRegistry();
+    const strategy = registry.get(parsedRequest.strategyId);
+    const parameters = registry.validateParameters(parsedRequest.strategyId, parsedRequest.parameters);
+    const costProfile = getCostProfile(parsedRequest.execution.commissionProfileId);
+    const slippageProfile = getSlippageProfile(parsedRequest.execution.slippageProfileId);
+    if (strategy === null || !parameters.ok || costProfile === null || slippageProfile === null) {
+      throw new Error('test request registry mismatch');
+    }
+    const pin = job.provenancePinJson === null
+      ? null
+      : JSON.parse(job.provenancePinJson) as ProvenancePin;
+    return {
       jobId: job.id,
-      strategyId: 'range-breakout',
-      strategyVersion: '1.0.0',
-      strategySourceHash: 'source-hash',
-      parameterJson: job.requestJson,
+      strategyId: strategy.id,
+      strategyVersion: strategy.version,
+      strategySourceHash: strategySourceHash(strategy),
+      parameterJson: JSON.stringify(parameters.value),
       universeRuleJson: job.universeRuleJson,
-      scheduleHash: 'schedule-hash',
+      scheduleHash: pin?.scheduleHash ?? 'unknown',
       universeJson: job.universeJson ?? '[]',
       universeHash: job.universeHash ?? 'unknown',
-      engineVersion: '1.9.0',
-      feeModelVersion: 'fee@1',
-      slippageModelVersion: 'slippage@1',
-      randomSeed: 42,
+      engineVersion: ENGINE_VERSION,
+      feeModelVersion: `${costProfile.id}@${costProfile.version}`,
+      slippageModelVersion: `${slippageProfile.id}@${slippageProfile.version}`,
+      randomSeed: parsedRequest.randomSeed,
       gitCommitSha: ctx.container.gitCommitSha,
       provenancePinJson: job.provenancePinJson,
       startedAtMs: Date.now() - 100,
       completedAtMs: Date.now(),
+    };
+  }
+
+  function writeResultArtifact(
+    job: ReturnType<typeof enqueue>,
+    artifactPath: string,
+    contextPatch: Partial<BacktestResultWriteContext> = {},
+  ): void {
+    new SqliteBacktestResultArtifactWriter(artifactPath).write({
+      ...resultContext(job),
+      ...contextPatch,
     }, resultArtifact());
   }
 
@@ -257,6 +290,19 @@ describe('remote backtest worker lease API', () => {
     });
     expect(wrongHeartbeat.statusCode).toBe(409);
 
+    const inconsistentProgress = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/internal/workers/jobs/${job.id}/heartbeat`,
+      headers: { authorization: `Bearer ${WORKER_TOKEN}` },
+      payload: {
+        attempt: lease.attempt,
+        leaseToken: lease.leaseToken,
+        processedBars: 101,
+        totalBars: 100,
+      },
+    });
+    expect(inconsistentProgress.statusCode).toBe(400);
+
     const heartbeat = await ctx.app.inject({
       method: 'POST',
       url: `/api/internal/workers/jobs/${job.id}/heartbeat`,
@@ -315,7 +361,12 @@ describe('remote backtest worker lease API', () => {
     expect(first.attempt).toBe(1);
 
     ctx.container.database.db.update(backtestJobs)
-      .set({ leaseExpiresAtMs: Date.now() - 1 })
+      .set({
+        leaseExpiresAtMs: Date.now() - 1,
+        progressBars: 10,
+        totalBars: 100,
+        progressLabel: '2026-01-15',
+      })
       .where(eq(backtestJobs.id, job.id))
       .run();
     ctx.container.remoteWorkerService.sweepExpiredLeases();
@@ -327,6 +378,12 @@ describe('remote backtest worker lease API', () => {
 
     const second = (await claim()).json() as { attempt: number };
     expect(second.attempt).toBe(2);
+    expect(ctx.container.jobQueue.getJob(job.id)).toMatchObject({
+      status: 'STARTING',
+      progressBars: null,
+      totalBars: null,
+      progressLabel: null,
+    });
     ctx.container.database.db.update(backtestJobs)
       .set({ leaseExpiresAtMs: Date.now() - 1 })
       .where(eq(backtestJobs.id, job.id))
@@ -336,6 +393,67 @@ describe('remote backtest worker lease API', () => {
       status: 'FAILED',
       attempt: 2,
       workerId: 'remote:worker-a',
+    });
+  });
+
+  it('keeps a user cancellation terminal when a worker races with a failed finish', async () => {
+    const job = enqueue();
+    const lease = (await claim()).json() as { attempt: number; leaseToken: string };
+    expect(ctx.container.jobOrchestrator.cancel(job.id)).toBe('CANCELLING');
+
+    const finished = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/internal/workers/jobs/${job.id}/finish`,
+      headers: { authorization: `Bearer ${WORKER_TOKEN}` },
+      payload: {
+        attempt: lease.attempt,
+        leaseToken: lease.leaseToken,
+        outcome: 'FAILED',
+        error: 'child exited during cancellation',
+        telemetry: {
+          schemaVersion: 1,
+          outcome: 'FAILED',
+          failedStage: 'RUN',
+          durationsMs: { load: 1, run: 1, persist: 0, total: 2 },
+          peakRssBytes: 1,
+          input: null,
+          output: null,
+        },
+      },
+    });
+
+    expect(finished.statusCode).toBe(200);
+    expect(ctx.container.jobQueue.getJob(job.id)).toMatchObject({
+      status: 'CANCELLED',
+      error: null,
+    });
+    const audit = ctx.container.database.sqlite.prepare(
+      "SELECT detail_json AS detailJson FROM audit_logs WHERE event = 'backtest.finished' ORDER BY id DESC LIMIT 1",
+    ).get() as { detailJson: string };
+    expect(JSON.parse(audit.detailJson)).toMatchObject({
+      jobId: job.id,
+      status: 'CANCELLED',
+    });
+    expect(JSON.parse(audit.detailJson)).not.toHaveProperty('executionTelemetry');
+  });
+
+  it('fails a queued retry that became exhausted after lowering max attempts', async () => {
+    const job = enqueue();
+    await claim();
+    ctx.container.database.db.update(backtestJobs)
+      .set({ leaseExpiresAtMs: Date.now() - 1 })
+      .where(eq(backtestJobs.id, job.id))
+      .run();
+    ctx.container.remoteWorkerService.sweepExpiredLeases();
+    expect(ctx.container.jobQueue.getJob(job.id)?.status).toBe('QUEUED');
+
+    const recovered = ctx.container.jobQueue.recoverExpiredRemoteLeases(1);
+
+    expect(recovered).toEqual([{ jobId: job.id, status: 'FAILED', attempt: 1 }]);
+    expect(ctx.container.jobQueue.getJob(job.id)).toMatchObject({
+      status: 'FAILED',
+      attempt: 1,
+      completedAtMs: expect.any(Number),
     });
   });
 
@@ -413,6 +531,87 @@ describe('remote backtest worker lease API', () => {
     ).get(job.id)).toEqual({ count: 0 });
   });
 
+  it('rejects result metadata that does not match the server-owned execution pins', async () => {
+    const job = enqueue();
+    const lease = (await claim()).json() as { attempt: number; leaseToken: string };
+    const artifactPath = path.join(ctx.dir, 'wrong-context-result.sqlite');
+    writeResultArtifact(job, artifactPath, { parameterJson: '{}' });
+    const payload = fs.readFileSync(artifactPath);
+    const checksum = createHash('sha256').update(payload).digest('hex');
+
+    const response = await ctx.app.inject({
+      method: 'PUT',
+      url: `/api/internal/workers/jobs/${job.id}/result?attempt=${lease.attempt}`,
+      headers: {
+        authorization: `Bearer ${WORKER_TOKEN}`,
+        'content-type': 'application/vnd.quant-platform.backtest-result+sqlite',
+        'x-lease-token': lease.leaseToken,
+        'x-content-sha256': checksum,
+      },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(ctx.container.jobQueue.getJob(job.id)?.status).toBe('RUNNING');
+    expect(ctx.container.database.sqlite.prepare(
+      'SELECT count(*) AS count FROM backtest_runs WHERE job_id = ?',
+    ).get(job.id)).toEqual({ count: 0 });
+  });
+
+  it('rejects extra SQLite schema objects in an uploaded result', async () => {
+    const job = enqueue();
+    const lease = (await claim()).json() as { attempt: number; leaseToken: string };
+    const artifactPath = path.join(ctx.dir, 'extra-schema-result.sqlite');
+    writeResultArtifact(job, artifactPath);
+    const artifact = new Database(artifactPath);
+    artifact.exec('CREATE TABLE unexpected (value TEXT) STRICT');
+    artifact.close();
+    const payload = fs.readFileSync(artifactPath);
+    const checksum = createHash('sha256').update(payload).digest('hex');
+
+    const response = await ctx.app.inject({
+      method: 'PUT',
+      url: `/api/internal/workers/jobs/${job.id}/result?attempt=${lease.attempt}`,
+      headers: {
+        authorization: `Bearer ${WORKER_TOKEN}`,
+        'content-type': 'application/vnd.quant-platform.backtest-result+sqlite',
+        'x-lease-token': lease.leaseToken,
+        'x-content-sha256': checksum,
+      },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(ctx.container.jobQueue.getJob(job.id)?.status).toBe('RUNNING');
+  });
+
+  it('keeps lease sweep storage contention from escaping the timer boundary', () => {
+    const original = ctx.container.jobQueue.recoverExpiredRemoteLeases.bind(ctx.container.jobQueue);
+    ctx.container.jobQueue.recoverExpiredRemoteLeases = () => {
+      throw new Error('database is locked');
+    };
+    try {
+      expect(() => ctx.container.remoteWorkerService.sweepExpiredLeases()).not.toThrow();
+    } finally {
+      ctx.container.jobQueue.recoverExpiredRemoteLeases = original;
+    }
+  });
+
+  it('removes orphaned server input bundles without crossing into upload cleanup', async () => {
+    const remoteRoot = path.join(ctx.dir, 'temp', 'remote-backtests');
+    const inputFragment = path.join(remoteRoot, 'bt_orphan', '1', 'input.sqlite.partial');
+    const uploadFragment = path.join(remoteRoot, 'uploads', 'in-flight', 'result.sqlite');
+    fs.mkdirSync(path.dirname(inputFragment), { recursive: true });
+    fs.mkdirSync(path.dirname(uploadFragment), { recursive: true });
+    fs.writeFileSync(inputFragment, 'input');
+    fs.writeFileSync(uploadFragment, 'result');
+
+    await ctx.container.remoteInputBundleManager.cleanupOrphanedBundles();
+
+    expect(fs.existsSync(path.join(remoteRoot, 'bt_orphan'))).toBe(false);
+    expect(fs.existsSync(uploadFragment)).toBe(true);
+  });
+
   it('runs the real remote supervisor and child process end to end', async () => {
     registerSymbols(ctx.container, 'KR', ['005930']);
     const candles: Candle[] = [];
@@ -440,6 +639,10 @@ describe('remote backtest worker lease API', () => {
       excludedNonTradingCount: 0,
     }]);
     const serverUrl = await ctx.app.listen({ host: '127.0.0.1', port: 0 });
+    const workerRoot = path.join(ctx.dir, 'worker');
+    const staleWorkerFragment = path.join(workerRoot, 'jobs', 'bt_stale', '1', 'result.sqlite');
+    fs.mkdirSync(path.dirname(staleWorkerFragment), { recursive: true });
+    fs.writeFileSync(staleWorkerFragment, 'stale');
     const supervisor = spawn(
       process.execPath,
       ['--import', 'tsx', path.resolve('src/workers/remote-backtest-supervisor.ts')],
@@ -452,7 +655,7 @@ describe('remote backtest worker lease API', () => {
           BACKTEST_WORKER_TOKEN: WORKER_TOKEN,
           BACKTEST_WORKER_ID: 'integration-worker',
           BACKTEST_WORKER_CONCURRENCY: '1',
-          BACKTEST_WORK_ROOT: path.join(ctx.dir, 'worker'),
+          BACKTEST_WORK_ROOT: workerRoot,
           BACKTEST_CLAIM_WAIT_SECONDS: '1',
           BACKTEST_HEARTBEAT_SECONDS: '2',
           LOG_LEVEL: 'error',
@@ -474,6 +677,7 @@ describe('remote backtest worker lease API', () => {
         resultSchemaVersion: 1,
       });
       expect(ctx.container.resultsService.getTotalReturnPct(job.id)).not.toBeNull();
+      expect(fs.existsSync(staleWorkerFragment)).toBe(false);
       const jobDirectory = path.join(ctx.dir, 'worker', 'jobs', job.id, '1');
       const cleanupStartedAt = Date.now();
       while (fs.existsSync(jobDirectory) && Date.now() - cleanupStartedAt < 2_000) {

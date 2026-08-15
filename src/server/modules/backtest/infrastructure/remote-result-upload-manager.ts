@@ -32,6 +32,9 @@ export class RemoteResultUploadManager {
   }
 
   async receive(source: Readable, jobId: string, attempt: number): Promise<ReceivedResultArtifact> {
+    if (!/^[a-zA-Z0-9_-]{3,128}$/.test(jobId) || !Number.isSafeInteger(attempt) || attempt <= 0) {
+      throw new ResultArtifactUploadError('결과 artifact 경로 식별자가 올바르지 않습니다', 400);
+    }
     const directory = path.join(
       this.tempRoot,
       'remote-backtests',

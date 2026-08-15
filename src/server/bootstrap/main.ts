@@ -2,19 +2,20 @@ import { configureZodLocale } from '../shared/zod-locale.js';
 import { loadConfig } from './config.js';
 import { createContainer } from './container.js';
 import { buildServer } from './server.js';
+import { readGitCommitSha } from '../shared/build-info.js';
 
 async function main(): Promise<void> {
   configureZodLocale();
   const config = loadConfig();
-  const container = createContainer(config);
   if (
     config.nodeEnv === 'production'
     && config.backtestExecutionMode === 'remote'
-    && container.gitCommitSha === 'unknown'
+    && readGitCommitSha(config.nodeEnv) === 'unknown'
   ) {
-    await container.close();
     throw new Error('remote 실행에는 dist/build-info.json의 Git SHA가 필요합니다');
   }
+  const container = createContainer(config);
+  await container.remoteInputBundleManager.cleanupOrphanedBundles();
   await container.remoteResultUploadManager.cleanupOrphanedUploads();
   const app = await buildServer(container);
 

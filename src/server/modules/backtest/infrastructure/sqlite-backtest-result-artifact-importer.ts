@@ -14,29 +14,33 @@ import { BACKTEST_RESULT_ARTIFACT_SCHEMA_VERSION } from './sqlite-backtest-resul
 export const MAX_BACKTEST_RESULT_ARTIFACT_BYTES = 256 * 1024 * 1024;
 const MAX_BACKTEST_RESULT_ROWS = 5_000_000;
 const finiteNumber = z.number().finite();
+const positiveNumber = finiteNumber.positive();
+const nonNegativeNumber = finiteNumber.nonnegative();
 const nonNegativeInteger = z.number().int().nonnegative();
 
 const equityRowSchema = z.object({
   tsMs: nonNegativeInteger,
-  equity: finiteNumber,
+  equity: nonNegativeNumber,
 });
 const drawdownRowSchema = z.object({
   tsMs: nonNegativeInteger,
-  drawdown: finiteNumber,
+  drawdown: finiteNumber.min(-1).max(0),
 });
 const tradeRowSchema = z.object({
   symbol: z.string().min(1).max(32),
-  quantity: finiteNumber,
+  quantity: positiveNumber,
   entryTsMs: nonNegativeInteger,
   exitTsMs: nonNegativeInteger,
-  entryPrice: finiteNumber,
-  exitPrice: finiteNumber,
+  entryPrice: positiveNumber,
+  exitPrice: positiveNumber,
   grossPnl: finiteNumber,
-  costs: finiteNumber,
+  costs: nonNegativeNumber,
   netPnl: finiteNumber,
   returnPct: finiteNumber,
   holdingTimeMs: nonNegativeInteger,
   exitReason: z.string().max(1_000).nullable(),
+}).refine((row) => row.exitTsMs >= row.entryTsMs, {
+  message: 'exitTsMs는 entryTsMs보다 빠를 수 없습니다',
 });
 const monthlyRowSchema = z.object({
   year: z.number().int().min(1900).max(9999),
@@ -83,6 +87,21 @@ export class SqliteBacktestResultArtifactImporter implements BacktestResultArtif
       if (schemaVersion !== BACKTEST_RESULT_ARTIFACT_SCHEMA_VERSION) {
         throw new InvalidBacktestResultArtifactError(`지원하지 않는 결과 schema: ${schemaVersion}`);
       }
+      const expectedSchemaObjects = [
+        'table:artifact_manifest',
+        'table:drawdown_points',
+        'table:equity_points',
+        'table:monthly_returns',
+        'table:trades',
+      ];
+      const schemaObjects = (sqlite.prepare(
+        `SELECT type, name FROM sqlite_schema
+         WHERE name NOT LIKE 'sqlite_%'
+         ORDER BY type, name`,
+      ).all() as Array<{ type: string; name: string }>).map(({ type, name }) => `${type}:${name}`);
+      if (JSON.stringify(schemaObjects) !== JSON.stringify(expectedSchemaObjects)) {
+        throw new InvalidBacktestResultArtifactError('결과 artifact schema에 허용되지 않은 객체가 있습니다');
+      }
       const tableList = sqlite.pragma('table_list') as Array<{
         name: string;
         type: string;
@@ -120,6 +139,38 @@ export class SqliteBacktestResultArtifactImporter implements BacktestResultArtif
       }
       if (counts.equityCount !== counts.drawdownCount || counts.tradeCount !== summary.metrics.tradeCount) {
         throw new InvalidBacktestResultArtifactError('결과 행 수와 summary 지표가 일치하지 않습니다');
+      }
+      const seriesMismatch = sqlite.prepare(
+        `SELECT count(*) AS count
+         FROM equity_points AS equity
+         LEFT JOIN drawdown_points AS drawdown ON drawdown.sequence = equity.sequence
+         WHERE drawdown.sequence IS NULL OR drawdown.ts_ms != equity.ts_ms`,
+      ).get() as { count: number };
+      const sequenceBounds = sqlite.prepare(
+        `SELECT
+           (SELECT min(sequence) FROM equity_points) AS equityMin,
+           (SELECT max(sequence) FROM equity_points) AS equityMax,
+           (SELECT min(sequence) FROM drawdown_points) AS drawdownMin,
+           (SELECT max(sequence) FROM drawdown_points) AS drawdownMax`,
+      ).get() as {
+        equityMin: number | null;
+        equityMax: number | null;
+        drawdownMin: number | null;
+        drawdownMax: number | null;
+      };
+      const contiguousSeries = counts.equityCount === 0
+        ? Object.values(sequenceBounds).every((value) => value === null)
+        : sequenceBounds.equityMin === 0
+          && sequenceBounds.drawdownMin === 0
+          && sequenceBounds.equityMax === counts.equityCount - 1
+          && sequenceBounds.drawdownMax === counts.drawdownCount - 1;
+      const duplicateMonth = sqlite.prepare(
+        `SELECT 1 FROM monthly_returns
+         GROUP BY year, month HAVING count(*) > 1
+         LIMIT 1`,
+      ).get();
+      if (seriesMismatch.count !== 0 || !contiguousSeries || duplicateMonth !== undefined) {
+        throw new InvalidBacktestResultArtifactError('결과 시계열 순서나 월별 키가 올바르지 않습니다');
       }
       return { path: artifactPath, context, summary, schemaVersion, rowCount };
     } catch (error) {

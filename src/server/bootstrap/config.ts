@@ -16,7 +16,7 @@ const envSchema = z.object({
   TEMP_ROOT: z.string().default('./data/temp'),
   MAX_CONCURRENT_BACKTESTS: z.coerce.number().int().min(1).max(4).default(1),
   BACKTEST_EXECUTION_MODE: z.enum(['local', 'remote']).default('local'),
-  BACKTEST_WORKER_TOKEN: z.string().min(32).optional(),
+  BACKTEST_WORKER_TOKEN: z.string().min(32).max(256).optional(),
   REMOTE_BACKTEST_LEASE_SECONDS: z.coerce.number().int().min(15).max(300).default(60),
   REMOTE_BACKTEST_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
   /** 대기(QUEUED) 백테스트 상한 — 연타로 대기열이 무한히 쌓이는 것을 막는다 (D-025) */

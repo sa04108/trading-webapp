@@ -83,14 +83,14 @@ export class RemoteWorkerService {
     });
     if (job === null) return { status: 'EMPTY' };
 
-    this.audit.record('system', 'backtest.remote-leased', {
+    this.recordAudit('backtest.remote-leased', {
       jobId: job.id,
       workerId: remoteWorkerId,
       attempt: job.attempt,
       leaseExpiresAtMs,
       runnerVersion,
     });
-    this.events.emit('job', { jobId: job.id, kind: 'status' } satisfies JobEvent);
+    this.emitJob({ jobId: job.id, kind: 'status' });
     return {
       status: 'CLAIMED',
       lease: {
@@ -124,10 +124,10 @@ export class RemoteWorkerService {
       progressLabel: input.progressLabel ?? null,
     });
     if (status === null) return { status: 'STALE_LEASE' };
-    this.events.emit(
-      'job',
-      { jobId: input.jobId, kind: input.processedBars === undefined ? 'status' : 'progress' } satisfies JobEvent,
-    );
+    this.emitJob({
+      jobId: input.jobId,
+      kind: input.processedBars === undefined ? 'status' : 'progress',
+    });
     return {
       status: 'ACCEPTED',
       cancelRequested: status === 'CANCELLING',
@@ -187,7 +187,7 @@ export class RemoteWorkerService {
   }): RemoteFinishResult {
     const job = this.queue.getJob(input.jobId);
     const finishedAtMs = this.clock.now();
-    const accepted = this.queue.finishRemote({
+    const outcome = this.queue.finishRemote({
       jobId: input.jobId,
       attempt: input.attempt,
       leaseTokenHash: tokenHash(input.leaseToken),
@@ -195,17 +195,19 @@ export class RemoteWorkerService {
       status: input.outcome,
       ...(input.error === undefined ? {} : { error: input.error }),
     });
-    if (!accepted) return 'STALE_LEASE';
+    if (outcome === null) return 'STALE_LEASE';
 
-    this.audit.record('system', 'backtest.finished', {
+    this.recordAudit('backtest.finished', {
       jobId: input.jobId,
-      status: input.outcome,
+      status: outcome,
       durationMs: finishedAtMs - (job?.startedAtMs ?? job?.createdAtMs ?? finishedAtMs),
       executionMode: 'remote',
       attempt: input.attempt,
-      ...(input.telemetry === undefined ? {} : { executionTelemetry: input.telemetry }),
+      // CANCELLING과 worker FAILED 보고가 경합하면 DB의 실제 결과는 CANCELLED다.
+      // 그때 FAILED telemetry를 CANCELLED 감사 행에 붙이지 않는다.
+      ...(input.telemetry?.outcome === outcome ? { executionTelemetry: input.telemetry } : {}),
     });
-    this.events.emit('job', { jobId: input.jobId, kind: 'status' } satisfies JobEvent);
+    this.emitJob({ jobId: input.jobId, kind: 'status' });
     return 'ACCEPTED';
   }
 
@@ -228,7 +230,7 @@ export class RemoteWorkerService {
     });
     if (completed.status !== 'ACCEPTED') return completed.status;
 
-    this.audit.record('system', 'backtest.finished', {
+    this.recordAudit('backtest.finished', {
       jobId: input.jobId,
       status: 'COMPLETED',
       durationMs: completed.completedAtMs
@@ -240,12 +242,24 @@ export class RemoteWorkerService {
       resultRowCount: completed.rowCount,
       ...(input.telemetry === undefined ? {} : { executionTelemetry: input.telemetry }),
     });
-    this.events.emit('job', { jobId: input.jobId, kind: 'status' } satisfies JobEvent);
+    this.emitJob({ jobId: input.jobId, kind: 'status' });
     return 'ACCEPTED';
   }
 
   sweepExpiredLeases(): void {
-    const recovered = this.queue.recoverExpiredRemoteLeases(this.config.remoteBacktestMaxAttempts);
+    let recovered: ReturnType<JobQueue['recoverExpiredRemoteLeases']>;
+    try {
+      recovered = this.queue.recoverExpiredRemoteLeases(this.config.remoteBacktestMaxAttempts);
+    } catch (error) {
+      // 결과 import처럼 별도 프로세스가 긴 SQLite write transaction을 잡는 동안에는
+      // busy_timeout을 넘길 수 있다. 주기 timer의 예외를 밖으로 던지면 Node의
+      // uncaughtException이 되어 웹/control plane 전체가 종료되므로 다음 sweep에서 재시도한다.
+      this.logger.warn(
+        { module: 'backtest', event: 'backtest.remote-lease-sweep-failed', err: error },
+        'remote lease sweep failed — retrying next cycle',
+      );
+      return;
+    }
     for (const item of recovered) {
       this.logger.warn(
         {
@@ -257,8 +271,33 @@ export class RemoteWorkerService {
         },
         'remote backtest lease expired',
       );
-      this.audit.record('system', 'backtest.remote-lease-expired', { ...item });
-      this.events.emit('job', { jobId: item.jobId, kind: 'status' } satisfies JobEvent);
+      this.recordAudit('backtest.remote-lease-expired', { ...item });
+      this.emitJob({ jobId: item.jobId, kind: 'status' });
+    }
+  }
+
+  private recordAudit(event: string, detail: Record<string, unknown>): void {
+    try {
+      this.audit.record('system', event, detail);
+    } catch (error) {
+      // lease/status는 이미 중앙 DB에 확정됐다. 부가 감사 기록 실패 때문에 worker에 5xx를
+      // 돌려 같은 계산을 재시도시키지 않고 구조화 로그를 남긴다.
+      this.logger.warn(
+        { module: 'backtest', event: 'backtest.remote-audit-failed', auditEvent: event, err: error },
+        'remote backtest audit write failed',
+      );
+    }
+  }
+
+  private emitJob(event: JobEvent): void {
+    try {
+      this.events.emit('job', event);
+    } catch (error) {
+      // 알림·seed batch 승격 같은 후속 listener가 핵심 lease 응답을 실패로 바꾸지 않게 한다.
+      this.logger.warn(
+        { module: 'backtest', event: 'backtest.remote-listener-failed', jobId: event.jobId, err: error },
+        'remote backtest event listener failed',
+      );
     }
   }
 
