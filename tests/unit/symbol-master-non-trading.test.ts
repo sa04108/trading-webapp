@@ -53,8 +53,7 @@ async function teardown(ctx: Ctx): Promise<void> {
 }
 
 /**
- * 실측(2026-08-08, `docs/superpowers/specs/2026-08-08-delisting-and-non-trading-days-design.md`
- * "KRX 실응답 실측")에서 받은 두 행을 그대로 쓴다 —
+ * 2026-08-08 KRX 실응답에서 받은 두 행을 그대로 쓴다 —
  * 신라젠(정지)과 오스템임플란트(정상). 한 응답에 섞여 있을 때 봉과 거래불가일로
  * 정확히 갈리는지가 이 테스트의 전부다.
  */

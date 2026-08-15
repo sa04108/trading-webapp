@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # 서버 부트스트랩 — 새 호스트를 배포 가능 상태로 만든다
-# (설계: docs/superpowers/specs/2026-07-27-platform-readonly-constitution-design.md §4).
 #
 # 사용법: ./scripts/bootstrap.sh
 #         서버 주소와 도메인을 순서대로 물어본다. 비대화형으로 돌리려면

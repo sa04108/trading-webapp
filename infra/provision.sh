@@ -1,5 +1,4 @@
 #!/bin/sh
-# 서버 프로비저닝 (설계: docs/superpowers/specs/2026-07-27-platform-readonly-constitution-design.md).
 # scripts/bootstrap.sh 가 업로드·실행한다. 직접 실행 시:
 #   sudo sh provision.sh <도메인>
 #

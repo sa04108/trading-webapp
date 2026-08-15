@@ -18,8 +18,7 @@ function row(partial: Partial<KrxDailyTradeRow>): KrxDailyTradeRow {
 }
 
 describe('isNonTradingRow', () => {
-  // 실측(2026-08-08, docs/superpowers/specs/2026-08-08-delisting-and-non-trading-days-design.md
-  // "KRX 실응답 실측"): 정지 종목은 시·고·저가 0, 종가는 직전가, 거래량 0으로 온다
+  // 2026-08-08 KRX 실응답: 정지 종목은 시·고·저가 0, 종가는 직전가, 거래량 0으로 온다
   it('신라젠 2021-06-15 정지 행을 거래불가로 본다', () => {
     expect(isNonTradingRow(row({ open: 0, high: 0, low: 0, close: 12_100, volume: 0 }))).toBe(true);
   });

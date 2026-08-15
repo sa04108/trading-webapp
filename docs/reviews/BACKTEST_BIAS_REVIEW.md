@@ -233,9 +233,6 @@ B-007의 상장일·폐지일은 당시 존재했던 종목을 가리는 데 필
   `'SYMBOLS'`로 고정돼 있고 종목 배열의 최대 크기는 200이다.
 - `src/server/shared/db/schema.ts:61-73` — `datasets.symbolsJson`은 시점 정보가
   없는 고정 종목 그룹이다.
-- `docs/superpowers/specs/2026-07-29-quant-strategies-and-fact-store-design.md`
-  — 요청의 `symbols` 목록을 그대로 사용하며, 시점별 지수 구성 스냅샷과 생존자
-  편향 제거는 이번 범위에서 제외한다고 명시한다.
 - `src/server/modules/backtest/domain/engine.ts:239-244` — 생존자 편향 등을
   보정하지 않는다는 실행 경고를 추가한다.
 
@@ -403,8 +400,6 @@ B-007의 상장일·폐지일은 당시 존재했던 종목을 가리는 데 필
 <details>
 <summary><strong>개발자용 근거</strong></summary>
 
-- `docs/superpowers/specs/2026-07-28-backtest-clone-split-design.md` — 「재설정 및
-  복제」의 목적에 "파라미터 하나만 바꿔 비교하고 싶을 때"가 명시돼 있다.
 - `src/server/shared/db/schema.ts:235-258` — `backtest_runs`에는
   `parameterJson`, `strategyId`, `strategyVersion`, `strategySourceHash`,
   `datasetId`, `datasetHash`, `randomSeed`, `gitCommitSha` 등이 저장된다.
@@ -926,10 +921,6 @@ B-007과 P-001·P-002가 필요하다.
 
 - [제품 스펙](../SPEC.md) — §9.1 기본 체결 규칙, §9.2 이벤트 순서,
   §9.4 편향·데이터 문제, §9.5 재현성, §35 향후 OOS·워크포워드 단계
-- [퀀트 전략·팩트 저장소 설계](../superpowers/specs/2026-07-29-quant-strategies-and-fact-store-design.md)
-  — §7 남은 한계, 시점별 지수 구성과 생존자 편향 제거의 범위 결정
-- [백테스트 재설정·복제 설계](../superpowers/specs/2026-07-28-backtest-clone-split-design.md)
-  — 파라미터를 바꿔 비교하는 복제 흐름
 - [구현 상태](../IMPLEMENTATION_STATUS.md) — 배당·생존자 편향 미보정 등 알려진 제약
 
 ### 정책 검토에 사용한 공식·외부 자료

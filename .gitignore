@@ -112,6 +112,3 @@ test-results/
 playwright-report/
 .claude
 .worktrees/
-
-# superpowers 스킬 스크래치 (브레인스토밍·SDD 레저)
-.superpowers/
