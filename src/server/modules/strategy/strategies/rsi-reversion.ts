@@ -22,6 +22,7 @@ import {
   newCorrelationGroupingState,
   recordCorrelationClose,
   scaleCorrelationGrouping,
+  selectSeededGroupEntries,
   updateCorrelationGrouping,
   type CorrelationGroupingState,
 } from './shared/pair-groups.js';
@@ -114,7 +115,7 @@ function getSymbolState(state: RsiReversionState, symbol: string): SymbolState {
 
 export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiReversionState> = {
   id: 'rsi-reversion',
-  version: '1.0.2',
+  version: '1.1.0',
   name: 'RSI 되돌림',
   description:
     'RSI 과매도 종목을 사서 RSI 가 회복하면 팝니다. 반대로 움직이는 종목(예: 레버리지·인버스 쌍)을 ' +
@@ -218,6 +219,12 @@ export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiRe
         }
       }
 
+      const candidates: Array<{
+        symbol: string;
+        group: string;
+        quantity: number;
+        entryAtr: number;
+      }> = [];
       for (const symbol of barSymbols) {
         const symbolState = getSymbolState(state, symbol);
         if (context.tradableSymbols !== null && !context.tradableSymbols.has(symbol)) {
@@ -248,11 +255,21 @@ export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiRe
         );
         if (quantity < 1) continue;
 
+        candidates.push({
+          symbol,
+          group,
+          quantity,
+          entryAtr: symbolState.atr.atr,
+        });
+      }
+
+      for (const candidate of selectSeededGroupEntries(candidates, context.rng)) {
+        const { symbol, quantity, entryAtr } = candidate;
+        const symbolState = getSymbolState(state, symbol);
         orders.push({ symbol, side: 'BUY', quantity, reason: 'REVERSION' });
         symbolState.holding = newHolding();
         symbolState.holding.pendingEntry = true;
-        symbolState.holding.entryAtr = symbolState.atr.atr;
-        claimed.add(group);
+        symbolState.holding.entryAtr = entryAtr;
       }
     }
 

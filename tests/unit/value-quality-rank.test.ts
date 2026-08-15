@@ -299,6 +299,7 @@ describe('레지스트리 등록', () => {
     const properties = (schema as { properties: Record<string, Record<string, unknown>> }).properties;
     expect(properties.topN?.title).toBe('보유 종목 수');
     expect(properties.staleQuarters?.default).toBe(2);
+    expect(valueQualityRankStrategy.version).toBe('2.1.0');
   });
 });
 
@@ -541,7 +542,7 @@ describe('밸류·퀄리티 랭킹 실행', () => {
       expect(bought).toEqual(new Set(['BBB']));
     });
 
-    it('상위 2종목도 합산 순위대로 나온다 (AAA·CCC 동점은 심볼 순으로 깬다)', () => {
+    it('상위 2종목도 합산 순위대로 나온다 (AAA·CCC 동점은 seed로 깬다)', () => {
       const result = runBacktest(valueQualityRankStrategy, {
         candles: opposedCandles(40),
         initialCash: 10_000_000,
@@ -555,7 +556,7 @@ describe('밸류·퀄리티 랭킹 실행', () => {
       const bought = new Set(
         result.fills.filter((fill) => fill.side === 'BUY').map((fill) => fill.symbol),
       );
-      // 합: BBB 4 < AAA 5 = CCC 5 < DDD 6 — 2위는 동점이라 심볼 오름차순으로 AAA
+      // 합: BBB 4 < AAA 5 = CCC 5 < DDD 6 — seed 1은 2위 동점에서 AAA를 고른다.
       expect(bought).toEqual(new Set(['AAA', 'BBB']));
     });
   });

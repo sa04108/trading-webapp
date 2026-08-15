@@ -79,7 +79,7 @@ describe('레지스트리 등록', () => {
     const properties = (schema as { properties: Record<string, Record<string, unknown>> })
       .properties;
     expect(properties.entryRsi?.title).toBe('진입 RSI');
-    expect(rsiReversionStrategy.version).toBe('1.0.2');
+    expect(rsiReversionStrategy.version).toBe('1.1.0');
   });
 });
 
@@ -100,6 +100,30 @@ describe('실행 동작', () => {
     expect(sells.length).toBeGreaterThan(0);
     expect(sells[0]?.reason).toBe('RSI_EXIT');
     expect(result.warnings.join('\n')).not.toContain('상관 그룹 워밍업 부족');
+  });
+
+  it('같은 상관 그룹에서 동시에 과매도면 seed가 선점 종목을 결정한다', () => {
+    const candles: Candle[] = [];
+    for (let index = 0; index < 45; index += 1) {
+      const aaa = index < 20
+        ? 1_000 + (index % 2 === 0 ? 10 : -10)
+        : 1_000 - (index - 19) * 20;
+      const bbb = index < 20
+        ? 1_000_000 / aaa
+        : 1_000 - (index - 19) * 20;
+      candles.push(candle('AAA', index, aaa), candle('BBB', index, bbb));
+    }
+    const winner = (randomSeed: number) => runBacktest(rsiReversionStrategy, {
+      candles,
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: { ...FAST_PARAMS, stopAtrMultiplier: 20 },
+      randomSeed,
+      maxPositions: 5,
+    }).fills.find((fill) => fill.side === 'BUY')?.symbol;
+
+    expect(winner(42)).toBe(winner(42));
+    expect(new Set(Array.from({ length: 8 }, (_, seed) => winner(seed))).size).toBeGreaterThan(1);
   });
 
   it('편출로 취소된 진입 예약이 봉 없는 재편입 뒤 같은 그룹 종목을 막지 않는다', () => {

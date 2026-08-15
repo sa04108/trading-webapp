@@ -131,6 +131,7 @@ describe('rankLowPerHighRoe', () => {
 
 describe('저PER·고ROE 전략', () => {
   it('스키마와 준비 데이터 요구가 정확하다', () => {
+    expect(lowPerHighRoeRankStrategy.version).toBe('1.1.0');
     expect(lowPerHighRoeRankParameters.parse({})).toEqual({ topN: 40, staleQuarters: 2 });
     expect(lowPerHighRoeRankParameters.safeParse({ topN: 200, staleQuarters: 0 }).success).toBe(true);
     expect(lowPerHighRoeRankParameters.safeParse({ topN: 201 }).success).toBe(false);
@@ -141,7 +142,7 @@ describe('저PER·고ROE 전략', () => {
     });
   });
 
-  it('실제 두 단계 리밸런스도 PER·ROE 순위 합과 코드 동점을 쓰고 unsafe cap을 제외한다', () => {
+  it('실제 두 단계 리밸런스도 PER·ROE 순위 합과 seeded 동점을 쓰고 unsafe cap을 제외한다', () => {
     const candidates = {
       AAA: { marketCapKrw: '1000', netIncomeTtm: 100, totalEquity: 500 },
       BBB: { marketCapKrw: '2000', netIncomeTtm: 100, totalEquity: 250 },
@@ -169,7 +170,7 @@ describe('저PER·고ROE 전략', () => {
       state,
       parameters,
     );
-    // 합: BBB 4 < AAA 5 = CCC 5 < DDD 6 — 2위 동점은 코드가 앞선 AAA다.
+    // 합: BBB 4 < AAA 5 = CCC 5 < DDD 6 — seed 1은 2위 동점에서 AAA를 고른다.
     expect(buyDecision.orders.map((order) => order.symbol)).toEqual(['AAA', 'BBB']);
     expect(buyDecision.orders[0]).toMatchObject({ side: 'BUY', quantity: 50 });
   });

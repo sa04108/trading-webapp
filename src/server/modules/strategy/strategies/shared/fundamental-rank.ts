@@ -1,5 +1,6 @@
 import { quarterOrdinal } from '../../../facts/domain/pit-fact-view.js';
 import { KR_SESSION, toLocalTime } from '../../../market-data/domain/exchange-session.js';
+import { shuffleInPlace, type Rng } from '../../../backtest/domain/seeded-rng.js';
 
 export interface EarningsAccelerationInput {
   q0: number;
@@ -57,11 +58,33 @@ function compareCodes(left: string, right: string): number {
   return left < right ? -1 : 1;
 }
 
+function shuffleEqualRanges<T>(
+  sorted: T[],
+  equal: (left: T, right: T) => boolean,
+  rng: Rng | undefined,
+): void {
+  if (rng === undefined) return;
+  for (let start = 0; start < sorted.length;) {
+    let end = start + 1;
+    while (
+      end < sorted.length
+      && equal(sorted[start] as T, sorted[end] as T)
+    ) end += 1;
+    if (end - start > 1) {
+      const tied = sorted.slice(start, end);
+      shuffleInPlace(tied, rng);
+      sorted.splice(start, tied.length, ...tied);
+    }
+    start = end;
+  }
+}
+
 export function ordinalRank<T>(
   rows: readonly T[],
   value: (row: T) => number,
   direction: 'ASC' | 'DESC',
   code: (row: T) => string,
+  rng?: Rng,
 ): Map<T, number> {
   const sorted = [...rows].sort((left, right) => {
     const leftValue = value(left);
@@ -74,6 +97,16 @@ export function ordinalRank<T>(
     }
     return direction === 'ASC' ? leftValue - rightValue : rightValue - leftValue;
   });
+  shuffleEqualRanges(
+    sorted,
+    (left, right) => {
+      const leftValue = value(left);
+      const rightValue = value(right);
+      return leftValue === rightValue
+        || (!Number.isFinite(leftValue) && !Number.isFinite(rightValue));
+    },
+    rng,
+  );
   return new Map(sorted.map((row, index) => [row, index + 1]));
 }
 
@@ -81,14 +114,21 @@ export function combineRanks<T>(
   rows: readonly T[],
   ranks: readonly ReadonlyMap<T, number>[],
   code: (row: T) => string,
+  rng?: Rng,
 ): T[] {
-  return [...rows].sort((left, right) => {
-    const leftSum = ranks.reduce((sum, rank) => sum + (rank.get(left) ?? Number.POSITIVE_INFINITY), 0);
-    const rightSum = ranks.reduce((sum, rank) => sum + (rank.get(right) ?? Number.POSITIVE_INFINITY), 0);
-    return leftSum === rightSum
-      ? compareCodes(code(left), code(right))
-      : leftSum - rightSum;
-  });
+  const scored = rows.map((row) => ({
+    row,
+    rankSum: ranks.reduce(
+      (sum, rank) => sum + (rank.get(row) ?? Number.POSITIVE_INFINITY),
+      0,
+    ),
+  })).sort((left, right) => (
+    left.rankSum === right.rankSum
+      ? compareCodes(code(left.row), code(right.row))
+      : left.rankSum - right.rankSum
+  ));
+  shuffleEqualRanges(scored, (left, right) => left.rankSum === right.rankSum, rng);
+  return scored.map(({ row }) => row);
 }
 
 export function scoreEarningsAcceleration(
@@ -153,14 +193,27 @@ export function scoreLowPerHighRoe(
 
 export function rankLowPerHighRoe(
   rows: readonly LowPerHighRoeCandidate[],
+  rng?: Rng,
 ): LowPerHighRoeCandidate[] {
   const scored = rows.flatMap((row) => {
     const metrics = scoreLowPerHighRoe(row);
     return metrics === null ? [] : [{ row, ...metrics }];
   });
-  const perRanks = ordinalRank(scored, (entry) => entry.per, 'ASC', (entry) => entry.row.symbol);
-  const roeRanks = ordinalRank(scored, (entry) => entry.roe, 'DESC', (entry) => entry.row.symbol);
-  return combineRanks(scored, [perRanks, roeRanks], (entry) => entry.row.symbol).map(
+  const perRanks = ordinalRank(
+    scored,
+    (entry) => entry.per,
+    'ASC',
+    (entry) => entry.row.symbol,
+    rng,
+  );
+  const roeRanks = ordinalRank(
+    scored,
+    (entry) => entry.roe,
+    'DESC',
+    (entry) => entry.row.symbol,
+    rng,
+  );
+  return combineRanks(scored, [perRanks, roeRanks], (entry) => entry.row.symbol, rng).map(
     (entry) => entry.row,
   );
 }

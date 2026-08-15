@@ -35,7 +35,7 @@ export const lowPerHighRoeRankStrategy: TradingStrategy<
   LowPerHighRoeRankState
 > = {
   id: 'low-per-high-roe-rank',
-  version: '1.0.0',
+  version: '1.1.0',
   name: '저PER·고ROE 순위',
   requiresFundamentals: true,
   description: 'PIT TTM 순이익 기준 저PER과 고ROE를 결합하는 동일가중 연구 전략',
@@ -93,7 +93,7 @@ export const lowPerHighRoeRankStrategy: TradingStrategy<
       candidates.push({ symbol, marketCapKrw: metric.marketCapKrw, netIncomeTtm, totalEquity });
     }
 
-    const targets = rankLowPerHighRoe(candidates)
+    const targets = rankLowPerHighRoe(candidates, context.rng)
       .slice(0, parameters.topN)
       .map((candidate) => candidate.symbol);
     const sells = planSellPhase({ targets, positions: context.portfolio.positions });

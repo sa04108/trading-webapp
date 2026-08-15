@@ -87,7 +87,7 @@ export const crossSectionalMomentumStrategy: TradingStrategy<
   CrossSectionalMomentumState
 > = {
   id: 'cross-sectional-momentum',
-  version: '2.0.0',
+  version: '2.1.0',
   name: '횡단면 모멘텀',
   description:
     // "보정합니다" 로 단정하면 안 된다 — 분할 이력이 수집되지 않은 데이터셋에서는
@@ -157,7 +157,7 @@ export const crossSectionalMomentumStrategy: TradingStrategy<
       scored.push({ symbol, score });
     }
 
-    const ranks = rankDescending(scored);
+    const ranks = rankDescending(scored, context.rng);
     const targets = [...ranks.entries()]
       .filter(([, rank]) => rank <= parameters.topN)
       .map(([symbol]) => symbol)

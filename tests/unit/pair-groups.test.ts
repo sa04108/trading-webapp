@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createRng } from '../../src/server/modules/backtest/domain/seeded-rng.js';
 import {
   buildCorrelationGroups,
   newCorrelationGroupingState,
@@ -8,6 +9,7 @@ import {
   recordClose,
   recordCorrelationClose,
   scaleWarmupCloses,
+  selectSeededGroupEntries,
   tryBuildGroups,
   updateCorrelationGrouping,
 } from '../../src/server/modules/strategy/strategies/shared/pair-groups.js';
@@ -82,6 +84,28 @@ describe('buildCorrelationGroups', () => {
       0.5,
     );
     expect([...forward.entries()].sort()).toEqual([...reversed.entries()].sort());
+  });
+});
+
+describe('selectSeededGroupEntries', () => {
+  const candidates = [
+    { symbol: 'A', group: 'PAIR' },
+    { symbol: 'B', group: 'PAIR' },
+    { symbol: 'C', group: 'PAIR' },
+    { symbol: 'ONLY', group: 'SINGLE' },
+  ];
+  const selected = (seed: number, rows = candidates) =>
+    selectSeededGroupEntries(rows, createRng(seed)).map((row) => row.symbol);
+
+  it('같은 seed는 같은 그룹 선점 종목을 고르고 입력 순서에 무관하다', () => {
+    expect(selected(42)).toEqual(selected(42));
+    expect(selected(42)).toEqual(selected(42, [...candidates].reverse()));
+    expect(selected(42)).toContain('ONLY');
+  });
+
+  it('seed를 바꾸면 경쟁 그룹의 선점 종목이 달라진다', () => {
+    const pairWinners = Array.from({ length: 8 }, (_, seed) => selected(seed)[0]);
+    expect(new Set(pairWinners).size).toBeGreaterThan(1);
   });
 });
 

@@ -1,3 +1,5 @@
+import type { Rng } from '../../../backtest/domain/seeded-rng.js';
+
 /**
  * 역상관 종목 그룹핑 — "같은 기초자산의 레버리지·인버스" 를 상품 메타데이터 없이
  * 가격 움직임만으로 찾는다. 그룹당 1종목 보유 제한의 근거가 되는 유일한 계산.
@@ -96,6 +98,39 @@ function buildGroups(
   }
 
   return new Map(sorted.map((symbol) => [symbol, find(symbol)]));
+}
+
+export interface GroupEntryCandidate {
+  readonly symbol: string;
+  readonly group: string;
+}
+
+/**
+ * 같은 빈 상관 그룹에서 한 봉에 진입 자격을 얻은 후보 중 하나만 seed로 고른다.
+ * 후보와 그룹을 먼저 정렬하므로 호출부의 Map·봉 삽입 순서에는 의존하지 않는다.
+ * 후보가 하나인 그룹은 RNG를 소비하지 않는다 — 경쟁이 없는 평소 경로의 난수열을
+ * 불필요하게 밀지 않기 위해서다.
+ */
+export function selectSeededGroupEntries<T extends GroupEntryCandidate>(
+  candidates: readonly T[],
+  rng: Rng,
+): T[] {
+  const byGroup = new Map<string, T[]>();
+  for (const candidate of [...candidates].sort((left, right) => (
+    left.symbol < right.symbol ? -1 : left.symbol > right.symbol ? 1 : 0
+  ))) {
+    const group = byGroup.get(candidate.group) ?? [];
+    group.push(candidate);
+    byGroup.set(candidate.group, group);
+  }
+
+  const selected: T[] = [];
+  for (const group of [...byGroup.keys()].sort()) {
+    const entries = byGroup.get(group) as T[];
+    const index = entries.length === 1 ? 0 : Math.floor(rng() * entries.length);
+    selected.push(entries[index] as T);
+  }
+  return selected;
 }
 
 /**

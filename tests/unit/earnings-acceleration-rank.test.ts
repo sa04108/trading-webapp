@@ -208,6 +208,7 @@ describe('ordinal rank 결합', () => {
 
 describe('이익 가속 전략', () => {
   it('스키마와 준비 데이터 요구가 정확하다', () => {
+    expect(earningsAccelerationRankStrategy.version).toBe('1.1.0');
     expect(earningsAccelerationRankParameters.parse({})).toEqual({
       topN: 40,
       priceMomentumDays: 126,
@@ -265,7 +266,7 @@ describe('이익 가속 전략', () => {
     expect(buyDecision.orders[0]).toMatchObject({ side: 'BUY', quantity: 76 });
   });
 
-  it('실제 후보 선택도 성장률과 가격 모멘텀 ordinal 합을 쓰고 최종 동점은 코드 순이다', () => {
+  it('실제 후보 선택도 성장률과 가격 모멘텀 ordinal 합을 쓰고 최종 동점은 시드 순이다', () => {
     const inputAtGrowth = (growth: number): EarningsAccelerationInput => ({
       ...BASE,
       q0: 20 + 80 * growth,
@@ -301,7 +302,7 @@ describe('이익 가속 전략', () => {
       state,
       parameters,
     );
-    // 합: BBB 4 < AAA 5 = CCC 5 < DDD 6 — 2위 동점은 코드가 앞선 AAA다.
+    // 합: BBB 4 < AAA 5 = CCC 5 < DDD 6 — seed=1에서는 2위로 AAA가 선택된다.
     expect(buy.orders.map((order) => order.symbol)).toEqual(['AAA', 'BBB']);
   });
 
