@@ -1705,6 +1705,23 @@ sudo systemd-run --uid=quant --gid=quant --pty --wait \
 `app.env` 는 `chmod 600 root:root` 라서 quant 는 읽을 수도 없다 — 파일 경로만 넘기고
 실제로 여는 것은 PID 1 이라는 점이 systemd-run 을 쓰는 이유다.
 
+백테스트 실행비용 보고서는 대화형 secret을 출력하지 않으므로 `--pty` 대신 `--pipe`로
+현재 터미널에 받는다. 서비스가 실행 중이어도 SQLite를 읽기 전용으로 열며 DB를 변경하지
+않는다.
+
+```bash
+sudo systemd-run --uid=quant --gid=quant --pipe --wait --collect \
+  --working-directory=/opt/quant-platform/current \
+  --property=EnvironmentFile=/etc/quant-platform/app.env \
+  /usr/local/bin/node /opt/quant-platform/current/dist/server/cli.js \
+  backtest:telemetry-report --since-days 30
+```
+
+전용 worker 후보를 검토할 때만 OS·controller 몫을 이미 제외한 worker 전용 예산을
+`--worker-budget-mib <MiB>`로 넣는다. 현 Lightsail의 640MiB `MemoryMax`를 그대로 넣으면
+웹 부모 프로세스 몫을 두 번 쓸 수 있으므로 금지한다. 자동 처리용 원문은
+`--format json`, 감사 이벤트가 1,000건보다 많으면 `--limit`을 늘린다.
+
 ## 28.3 재무·자본변동 자동 수집
 
 DART 재무·자본변동 수집은 CLI 명령이 아니다(D-049). 재무전략이나 PER·ROE 유니버스
@@ -2050,6 +2067,15 @@ Playwright viewport:
 계측을 위해 결과 전체를 추가로 직렬화하지 않는다. 운영 호스트는 1GB RAM이고 웹과 child가
 같은 640MB systemd cgroup을 공유하므로, `MAX_CONCURRENT_BACKTESTS=1`은 별도 Worker로
 계산을 옮기기 전까지 유지한다(D-059).
+
+용량 산정은 `backtest:telemetry-report`로 한다. 최소 완료 표본 10개, 입력 규모 3종,
+최소·최대 입력 행 수 4배 차이가 필요하다. 최소 구성은 작은 부하·평소 부하·허용 상한에
+가까운 부하를 각각 여러 seed로 실행하는 것이다. 표본 gate를 통과해도 현 Lightsail
+동시성은 1이다. 보고서의 worker 계획 메모리는 완료 실행의 p95 peak RSS에 25% 여유를
+더한 값이다. 전용 worker 병렬도는 worker 전용 메모리 예산으로 계산한 상한과 CPU 슬롯 중
+작은 값으로 결정한다. seed shard
+표시는 p95 실행시간으로 순차 15분 이내(최대 25개)를 맞춘 계획 후보일 뿐, 원격 재시도
+정책을 구현할 때 최종 확정한다.
 
 대시보드 상태:
 
