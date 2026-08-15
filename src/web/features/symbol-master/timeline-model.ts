@@ -145,3 +145,49 @@ export function findNearestCoveredDate(
 
   return best === null ? null : utcMsToDate(best.candidateMs);
 }
+
+/** 실제 거래일 목록에서 date와 가장 가까운 날을 찾는다. 동률이면 과거를 택한다. */
+export function findNearestTradingDate(
+  tradingDates: readonly string[],
+  date: string,
+): string | null {
+  if (tradingDates.length === 0) return null;
+
+  const targetMs = dateToUtcMs(date);
+  let best: { date: string; dateMs: number; distance: number } | null = null;
+  for (const candidate of tradingDates) {
+    const candidateMs = dateToUtcMs(candidate);
+    const distance = Math.abs(candidateMs - targetMs);
+    if (
+      best === null
+      || distance < best.distance
+      || (distance === best.distance && candidateMs < best.dateMs)
+    ) {
+      best = { date: candidate, dateMs: candidateMs, distance };
+    }
+  }
+  return best?.date ?? null;
+}
+
+/** ISO 달력일이 토·일요일인지 본다. */
+export function isWeekendDate(date: string): boolean {
+  const day = new Date(`${date}T00:00:00Z`).getUTCDay();
+  return day === 0 || day === 6;
+}
+
+/**
+ * [min, max] 안에서 date와 가장 가까운 평일을 찾는다. 같은 거리면 과거를 택한다.
+ * 거래소 휴일은 별도 거래일 정보 없이는 추측하지 않고, 확실한 주말만 건너뛴다.
+ */
+export function findNearestWeekday(date: string, min: string, max: string): string | null {
+  if (min > max) return null;
+  const bounded = date < min ? min : date > max ? max : date;
+  const maxDistance = Math.ceil((dateToUtcMs(max) - dateToUtcMs(min)) / MS_PER_DAY);
+  for (let distance = 0; distance <= maxDistance; distance += 1) {
+    const before = addDays(bounded, -distance);
+    if (before >= min && !isWeekendDate(before)) return before;
+    const after = addDays(bounded, distance);
+    if (after <= max && !isWeekendDate(after)) return after;
+  }
+  return null;
+}

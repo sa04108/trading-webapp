@@ -115,6 +115,7 @@ export function registerSymbolMasterRoutes(
 
     const dto: SymbolMasterCoverageDto = {
       ranges: ranges.map(({ startDate, endDate }) => ({ startDate, endDate })),
+      tradingDates: deps.service.tradingDates(),
       lastSyncedAtMs,
       backfill: {
         state: backfillStatus.state,

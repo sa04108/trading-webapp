@@ -34,7 +34,7 @@ import type { Logger } from '../../../shared/logger.js';
 import type { Candle } from '../domain/candle.js';
 import { isValidCandle } from '../domain/candle.js';
 import { classifyKrxIssue } from '../domain/krx-filter-policy.js';
-import { addCalendarDays } from '../domain/kst-date.js';
+import { addCalendarDays, isWeekendDate } from '../domain/kst-date.js';
 import { isNonTradingRow } from '../domain/non-trading-day.js';
 import type {
   KrxDailyTradeRow,
@@ -900,6 +900,23 @@ export class SymbolMasterService {
       .from(symbolMasterCoverage)
       .orderBy(asc(symbolMasterCoverage.startDate))
       .all();
+  }
+
+  /**
+   * 거래일로 기록된 날짜 목록 — 화면의 날짜 표시와 "가장 가까운 수집일"의 정본이다.
+   *
+   * 0005 이행 때 legacy 이벤트 경계일을 최선 추정 거래일로 넣었기 때문에 과거 행에는
+   * 휴장일이 섞일 수 있다. 적어도 주말은 달력만으로 확정할 수 있으므로 API로 내보내기
+   * 전에 제외한다. 이행 이후 ingestDate가 기록한 행은 실제 KRX 응답으로 검증된 날이다.
+   */
+  tradingDates(): string[] {
+    return this.deps.db
+      .select({ date: symbolMasterTradingDays.date })
+      .from(symbolMasterTradingDays)
+      .orderBy(asc(symbolMasterTradingDays.date))
+      .all()
+      .map((row) => row.date)
+      .filter((date) => !isWeekendDate(date));
   }
 
   /**

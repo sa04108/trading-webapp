@@ -28,6 +28,7 @@ export function Calendar({
   max,
   onSelect,
   isMarked,
+  isDateDisabled,
   className,
 }: {
   /** 선택된 날짜 'YYYY-MM-DD' */
@@ -39,6 +40,8 @@ export function Calendar({
   onSelect: (date: string) => void;
   /** 칸 아래 점을 찍을 날짜 판정 — 종목 마스터에서는 커버된 날을 표시한다 */
   isMarked?: (date: string) => boolean;
+  /** 경계 안이더라도 선택할 수 없는 날짜 판정 */
+  isDateDisabled?: (date: string) => boolean;
   className?: string;
 }) {
   const [month, setMonth] = useState<string>(() => monthOf(value));
@@ -131,7 +134,7 @@ export function Calendar({
           </div>
         ))}
         {cells.map((cell) => {
-          const disabled = cell.date < min || cell.date > max;
+          const disabled = cell.date < min || cell.date > max || isDateDisabled?.(cell.date) === true;
           const selected = cell.date === value;
           return (
             <button

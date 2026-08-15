@@ -108,6 +108,49 @@ describe('벤치마크 저장과 결과 비교', () => {
     }
   });
 
+  it('마지막 거래일 값이 있으면 그날과 직후 주말 종료 요청을 모두 커버한다', async () => {
+    const database = openDatabase(':memory:');
+    try {
+      const closes = new Map([
+        ['2026-08-13', 3_200],
+        ['2026-08-14', 3_240],
+      ]);
+      const service = new BenchmarkService({
+        db: database.db,
+        krxSource: {
+          fetchIssueBaseInfo: async () => [],
+          fetchDailyTrades: async () => [],
+          fetchBenchmarkClose: async (_id, date) => closes.get(date) ?? null,
+          todayMaxEndpointCallCount: () => 0,
+        },
+        fredSource: { fetchBenchmarkRange: async () => [] },
+        clock: { now: () => 123 },
+        logger,
+      });
+      // 마스터 수집은 13일까지지만 벤치마크 자체는 14일 값을 확보한 운영 상태를 재현한다.
+      database.db.insert(symbolMasterCoverage).values({
+        startDate: '2026-08-13',
+        endDate: '2026-08-13',
+        syncedAtMs: 1,
+      }).run();
+      database.db.insert(symbolMasterTradingDays).values([
+        { date: '2026-08-13' },
+        { date: '2026-08-14' },
+        // legacy 이벤트 이행에서 들어올 수 있는 잘못된 주말 거래일도 무시해야 한다.
+        { date: '2026-08-16' },
+      ]).run();
+      await service.syncDate('KOSPI', '2026-08-13');
+      await service.syncDate('KOSPI', '2026-08-14');
+
+      expect(service.status('KOSPI', '2026-08-13', '2026-08-14').covered).toBe(true);
+      expect(service.status('KOSPI', '2026-08-13', '2026-08-16').covered).toBe(true);
+      // 확인되지 않은 다음 평일까지 휴장이라고 추측해서는 안 된다.
+      expect(service.status('KOSPI', '2026-08-13', '2026-08-17').covered).toBe(false);
+    } finally {
+      database.close();
+    }
+  });
+
   it('FRED 기간을 한 번에 수집하고 미국 거래일로 pin한다', async () => {
     const database = openDatabase(':memory:');
     try {
@@ -146,6 +189,40 @@ describe('벤치마크 저장과 결과 비교', () => {
         source: 'FRED_API',
         covered: true,
       });
+    } finally {
+      database.close();
+    }
+  });
+
+  it('FRED 마지막 거래일 값으로 그날과 직후 주말 종료 요청을 커버한다', async () => {
+    const database = openDatabase(':memory:');
+    try {
+      const closes = new Map([
+        ['2026-08-13', 6_800],
+        ['2026-08-14', 6_850],
+      ]);
+      const service = new BenchmarkService({
+        db: database.db,
+        krxSource: {
+          fetchIssueBaseInfo: async () => [],
+          fetchDailyTrades: async () => [],
+          todayMaxEndpointCallCount: () => 0,
+        },
+        fredSource: {
+          fetchBenchmarkRange: async (_id, from, to) => from === to && closes.has(from)
+            ? [{ date: from, close: closes.get(from)! }]
+            : [],
+        },
+        clock: { now: () => 456 },
+        logger,
+      });
+      await service.syncDate('SP500', '2026-08-13');
+      await service.syncDate('SP500', '2026-08-14');
+
+      expect(service.status('SP500', '2026-08-13', '2026-08-14').covered).toBe(true);
+      expect(service.status('SP500', '2026-08-13', '2026-08-16').covered).toBe(true);
+      // 미국 시장도 확인되지 않은 다음 평일을 휴장으로 추측하지 않는다.
+      expect(service.status('SP500', '2026-08-13', '2026-08-17').covered).toBe(false);
     } finally {
       database.close();
     }

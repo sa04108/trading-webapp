@@ -9,7 +9,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { CoverageTimeline } from './coverage-timeline';
 import { EventsSidebar } from './events-sidebar';
-import { addDays } from './timeline-model';
+import { addDays, findNearestWeekday, isWeekendDate } from './timeline-model';
 import { UniverseTable } from './universe-table';
 import {
   useSymbolMasterCoverage,
@@ -74,25 +74,44 @@ export function SymbolMasterPanel() {
     () => [...(coverage?.ranges ?? [])].sort((a, b) => a.startDate.localeCompare(b.startDate)),
     [coverage],
   );
-  const hasCoverage = sortedRanges.length > 0;
-  const rangeStart = hasCoverage ? sortedRanges[0]!.startDate : today;
+  const sortedTradingDates = useMemo(
+    () => [...(coverage?.tradingDates ?? [])].sort(),
+    [coverage],
+  );
+  const tradingDateSet = useMemo(() => new Set(sortedTradingDates), [sortedTradingDates]);
+  const firstCoverageDate = sortedRanges[0]?.startDate ?? null;
+  const firstDisplayDate = firstCoverageDate === null
+    ? null
+    : findNearestWeekday(firstCoverageDate, firstCoverageDate, today);
+  const hasCoverage = firstDisplayDate !== null;
+  const rangeStart = firstDisplayDate ?? today;
   const rangeEnd = today;
+  const lastCoverageDate = sortedRanges.reduce(
+    (max, range) => range.endDate > max ? range.endDate : max,
+    sortedRanges[0]?.endDate ?? rangeStart,
+  );
   const lastCoveredDate = hasCoverage
-    ? sortedRanges.reduce((max, range) => (range.endDate > max ? range.endDate : max), sortedRanges[0]!.endDate)
+    ? findNearestWeekday(lastCoverageDate, rangeStart, lastCoverageDate)
     : null;
+
+  const normalizeDate = (date: string): string => {
+    if (!isWeekendDate(date)) return date;
+    return findNearestWeekday(date, rangeStart, rangeEnd) ?? date;
+  };
 
   const dateParam = params.get('date');
   const requestedDate = dateParam ?? lastCoveredDate ?? today;
   // URL 에 낀 날짜가 현재 타임라인 범위 밖일 수 있다(coverage 가 바뀌었거나 손으로 편집) — 안으로 붙인다
-  const committedDate =
+  const clampedDate =
     requestedDate < rangeStart ? rangeStart : requestedDate > rangeEnd ? rangeEnd : requestedDate;
+  const committedDate = normalizeDate(clampedDate);
 
   const [previewDate, setPreviewDate] = useState<string | null>(null);
   const displayDate = previewDate ?? committedDate;
 
   const setDate = (next: string): void => {
     const nextParams = new URLSearchParams(params);
-    nextParams.set('date', next);
+    nextParams.set('date', normalizeDate(next));
     setParams(nextParams, { replace: true });
   };
 
@@ -149,17 +168,25 @@ export function SymbolMasterPanel() {
     );
   };
 
-  const prevDisabled = coverageLoading || !hasCoverage || committedDate <= rangeStart;
-  const nextDisabled = coverageLoading || !hasCoverage || committedDate >= rangeEnd;
+  const adjacentSelectableDate = (direction: -1 | 1): string | null => {
+    for (
+      let candidate = addDays(committedDate, direction);
+      rangeStart <= candidate && candidate <= rangeEnd;
+      candidate = addDays(candidate, direction)
+    ) {
+      if (!isWeekendDate(candidate)) return candidate;
+    }
+    return null;
+  };
+  const previousDate = adjacentSelectableDate(-1);
+  const nextDate = adjacentSelectableDate(1);
+  const prevDisabled = coverageLoading || !hasCoverage || previousDate === null;
+  const nextDisabled = coverageLoading || !hasCoverage || nextDate === null;
 
   const [calendarOpen, setCalendarOpen] = useState(false);
   // 달력 칸에 커버 여부 점을 찍는다 — 어느 날에 데이터가 있는지 슬라이더 막대에만
   // 있던 정보를 달력에서도 잃지 않게 한다. ISO 문자열은 사전순 비교가 곧 날짜 비교다.
-  const isCovered = useMemo(
-    () => (date: string) =>
-      sortedRanges.some((range) => range.startDate <= date && date <= range.endDate),
-    [sortedRanges],
-  );
+  const isCovered = (date: string): boolean => tradingDateSet.has(date);
 
   const backfill = coverage?.backfill ?? null;
 
@@ -193,8 +220,7 @@ export function SymbolMasterPanel() {
             aria-label="이전 날짜"
             disabled={prevDisabled}
             onClick={() => {
-              const next = addDays(committedDate, -1);
-              setDate(next < rangeStart ? rangeStart : next);
+              if (previousDate !== null) setDate(previousDate);
             }}
           >
             <ChevronLeft aria-hidden />
@@ -219,6 +245,7 @@ export function SymbolMasterPanel() {
                 min={rangeStart}
                 max={rangeEnd}
                 isMarked={isCovered}
+                isDateDisabled={isWeekendDate}
                 onSelect={(next) => {
                   setPreviewDate(null);
                   setDate(next);
@@ -234,8 +261,7 @@ export function SymbolMasterPanel() {
             aria-label="다음 날짜"
             disabled={nextDisabled}
             onClick={() => {
-              const next = addDays(committedDate, 1);
-              setDate(next > rangeEnd ? rangeEnd : next);
+              if (nextDate !== null) setDate(nextDate);
             }}
           >
             <ChevronRight aria-hidden />
@@ -248,10 +274,10 @@ export function SymbolMasterPanel() {
           committedDate={committedDate}
           coverage={coverage}
           disabled={coverageLoading || !hasCoverage}
-          onPreview={setPreviewDate}
+          onPreview={(next) => setPreviewDate(normalizeDate(next))}
           onCommit={(next) => {
             setPreviewDate(null);
-            setDate(next);
+            setDate(normalizeDate(next));
           }}
         />
 

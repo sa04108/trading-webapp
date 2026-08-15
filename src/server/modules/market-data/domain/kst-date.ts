@@ -16,6 +16,12 @@ export function addCalendarDays(isoDate: string, days: number): string {
   return new Date(Date.parse(`${isoDate}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
 }
 
+/** ISO 달력일이 토·일요일인지 본다. KRX 거래일 후보를 거를 때 사용한다. */
+export function isWeekendDate(isoDate: string): boolean {
+  const day = new Date(`${isoDate}T00:00:00Z`).getUTCDay();
+  return day === 0 || day === 6;
+}
+
 export function isoToBasDd(isoDate: string): string {
   return isoDate.replaceAll('-', '');
 }
