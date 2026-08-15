@@ -144,6 +144,48 @@ describe('runBacktest 이벤트 순서 (스펙 §9.1, §9.2)', () => {
     expect(result.warnings.some((w) => w.includes('현금 부족'))).toBe(true);
   });
 
+  it('동시 매수 신호의 현금 배정 순서는 같은 seed에서 재현되고 seed를 바꾸면 달라진다', () => {
+    const strategy: TradingStrategy<unknown, { fired: boolean }> = {
+      id: 'simultaneous-cash-limited-buys',
+      version: '1.0.0',
+      name: 'simultaneous cash-limited buys',
+      description: 'simultaneous cash-limited buys',
+      parameterSchema: z.unknown(),
+      initialize: () => ({ fired: false }),
+      onBars(_context, state) {
+        if (state.fired) return { orders: [] };
+        state.fired = true;
+        return {
+          orders: ['A', 'B', 'C'].map((symbol) => ({
+            symbol,
+            side: 'BUY' as const,
+            quantity: 10,
+          })),
+        };
+      },
+    };
+    const candles = ['A', 'B', 'C'].flatMap((symbol) => [
+      bar(0, 100, { symbol }),
+      bar(1, 100, { symbol }),
+    ]);
+    const winner = (randomSeed: number) => {
+      const result = runBacktest(strategy as never, {
+        candles,
+        initialCash: 1_000, // 첫 10주 매수가 현금을 모두 소진한다
+        execution: ZERO_COST,
+        parameters: {},
+        randomSeed,
+        maxPositions: 5,
+      });
+      const buys = result.fills.filter((fill) => fill.side === 'BUY');
+      expect(buys).toHaveLength(1);
+      return buys[0]?.symbol;
+    };
+
+    expect(winner(42)).toBe(winner(42));
+    expect(new Set(Array.from({ length: 8 }, (_, seed) => winner(seed))).size).toBeGreaterThan(1);
+  });
+
   it('never exposes future bars to the strategy (look-ahead 방지)', () => {
     const candles = Array.from({ length: 20 }, (_, i) => bar(i, 100 + i));
     let violations = 0;
@@ -331,7 +373,10 @@ describe('runBacktest 이벤트 순서 (스펙 §9.1, §9.2)', () => {
     // 남는데 자산 곡선은 정상처럼 보인다. 어느 종목이 몇 건 폐기됐는지 밝힌다.
     const capWarning = result.warnings.find((warning) => warning.includes('동시 보유 종목 상한'));
     expect(capWarning).toBeDefined();
-    expect(capWarning).toContain('B'); // A 가 슬롯을 먼저 잡으므로 B 가 폐기된다
+    const filledSymbol = result.fills[0]?.symbol;
+    const droppedSymbol = filledSymbol === 'A' ? 'B' : 'A';
+    expect(capWarning).toContain(droppedSymbol);
+    expect(capWarning).not.toContain(`: ${filledSymbol}`);
     expect(capWarning).toContain('매수 주문 1건');
   });
 

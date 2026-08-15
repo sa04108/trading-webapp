@@ -117,10 +117,13 @@ export interface BacktestRunResult {
  * 1.7.0: warm-up 결과 경계를 분리하고 공유 리밸런스 신호·유니버스 이탈 청산·
  * sell-before-buy 대기열을 적용한다.
  * 1.8.0: 거래정지된 이탈 종목의 첫 청산 시도 뒤에는 신규 매수 대기열을 해제한다.
+ * 1.9.0: 동시 매수 신호의 현금·포지션 슬롯 배정 순서를 seed 기반으로 무작위화한다.
  */
-export const ENGINE_VERSION = '1.8.0';
+export const ENGINE_VERSION = '1.9.0';
 
 const PROGRESS_INTERVAL_BARS = 500;
+/** 전략에 노출된 RNG 흐름과 매수 우선순위 RNG 흐름을 분리하는 32-bit salt. */
+const BUY_PRIORITY_SEED_SALT = 0x9e3779b9;
 
 /**
  * 취소 확인 간격(봉 수). `runBacktestCancellable` 만 쓴다.
@@ -217,6 +220,9 @@ function* runBacktestSteps(
   }
 
   const rng = createRng(input.randomSeed);
+  // 매수 경쟁이 전략의 RNG 호출 횟수를 바꾸거나, 전략의 난수 사용량이
+  // 체결 우선순위를 바꾸지 않도록 같은 seed의 별도 스트림을 쓴다.
+  const buyPriorityRng = createRng(input.randomSeed ^ BUY_PRIORITY_SEED_SALT);
   const historyBySymbol = new Map<string, Candle[]>(symbols.map((s) => [s, []]));
   const lastCloseBySymbol = new Map<string, number>();
   const positions = new Map<string, Position>();
@@ -644,7 +650,12 @@ function* runBacktestSteps(
     const decision = strategy.onBars(context, state, input.parameters);
 
     // 7~8. 리스크 검증 후 다음 봉 대기열 등록
-    for (const order of decision.orders) {
+    //
+    // 전략은 동시 신호의 우선순위를 별도 필드로 표현하지 않는다. 반환 배열 순서를
+    // 그대로 쓰면 현금이나 maxPositions 슬롯이 부족할 때 종목코드순 같은 구현 상세가
+    // 수익률을 결정한다. SELL의 상대 위치는 보존하고, 같은 onBars 호출에서 발행된
+    // BUY 슬롯만 seeded Fisher–Yates로 섞어 같은 seed는 재현하고 seed별 실험을 가능하게 한다.
+    for (const order of randomizeSimultaneousBuyPriority(decision.orders)) {
       if (
         order.side === 'SELL'
         && unresolvedForcedExitSymbols.has(order.symbol)
@@ -841,6 +852,23 @@ function* runBacktestSteps(
   };
 
   // ── 내부 helpers ─────────────────────────────────────────────
+
+  function randomizeSimultaneousBuyPriority(orders: readonly OrderIntent[]): OrderIntent[] {
+    const buys = orders.filter((order) => order.side === 'BUY');
+    if (buys.length < 2) return [...orders];
+
+    for (let index = buys.length - 1; index > 0; index -= 1) {
+      const swapIndex = Math.floor(buyPriorityRng() * (index + 1));
+      const current = buys[index] as OrderIntent;
+      buys[index] = buys[swapIndex] as OrderIntent;
+      buys[swapIndex] = current;
+    }
+
+    let buyIndex = 0;
+    return orders.map((order) => (
+      order.side === 'BUY' ? (buys[buyIndex++] as OrderIntent) : order
+    ));
+  }
 
   function deferBuy(order: OrderIntent): void {
     // 같은 이탈 청산을 기다리는 동안 전략이 매 봉 같은 후보를 다시 내도 한 건만 둔다.
