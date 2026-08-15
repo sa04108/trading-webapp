@@ -2039,6 +2039,18 @@ Playwright viewport:
 - 향후 실거래 arm·disarm
 - 향후 주문
 
+백테스트 종료 감사 기록(`backtest.finished`)에는 child가 측정한 실행 telemetry를 포함한다.
+
+- 결과: `COMPLETED | FAILED | CANCELLED`, 실패한 단계 `LOAD | RUN | PERSIST`
+- 단계별·전체 소요 시간
+- child 프로세스 peak RSS(bytes)
+- 입력 봉·팩트·종목 수
+- 결과 테이블 행 수와 SQLite page/index overhead를 제외한 논리 payload 근사치
+
+계측을 위해 결과 전체를 추가로 직렬화하지 않는다. 운영 호스트는 1GB RAM이고 웹과 child가
+같은 640MB systemd cgroup을 공유하므로, `MAX_CONCURRENT_BACKTESTS=1`은 별도 Worker로
+계산을 옮기기 전까지 유지한다(D-059).
+
 대시보드 상태:
 
 - 앱 버전

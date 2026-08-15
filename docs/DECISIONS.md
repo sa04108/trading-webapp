@@ -1330,3 +1330,21 @@
 - **실패 상태를 UX 추론에 쓰지 않는다:** 현행 `FAILED`는 워커의 모든 예외와 비정상
   프로세스 종료를 함께 담고 구조화된 실패 원인이 없다. 따라서 실패 여부로 복제 버튼의
   순서나 권장 행동을 바꾸지 않고 모든 종료 상태에서 같은 복제 버튼 그룹을 쓴다.
+
+## D-059: 병렬화 전에 계산 결과 계약과 저장 책임을 분리하고 실행 비용을 계측한다
+
+- **운영 전제:** $7 Lightsail은 1GB RAM이고 systemd가 앱 전체(웹+자식)에
+  `MemoryMax=640M`을 적용한다. 이 호스트의 `MAX_CONCURRENT_BACKTESTS=1`은 유지한다.
+  프로세스 수만 늘리면 각 child가 같은 봉·팩트를 JS 객체로 다시 올려 웹 가용성과 SSH
+  관리 경로까지 위협한다. 실제 병렬 실행은 추후 별도 Worker 자원에서 활성화한다.
+- **실행 경계:** 준비된 `BacktestRunInput`을 받는 `BacktestRunner`는 DB·IPC를 모르고
+  버전된 `BacktestResultArtifact`를 반환한다. 결과 저장은 `BacktestResultWriter` port와
+  로컬 `SqliteBacktestResultWriter` adapter가 맡는다. 현행 child 실행과 결과 조회 스키마는
+  유지하되, 이후 파일 artifact importer나 원격 Worker upload로 저장 구현을 교체할 수 있다.
+- **계측:** child는 `LOAD`, `RUN`, `PERSIST` 단계 시간, 전체 시간, peak RSS, 입력
+  봉·팩트·종목 수, 결과 행 수와 논리 payload 근사치를 종료 전에 IPC로 보낸다. 부모는 이를
+  `backtest.finished` 감사 로그에 포함한다. 결과 전체를 계측용으로 다시 직렬화하지 않는다 —
+  1GB 호스트에서 관측성 때문에 메모리 복제를 하나 더 만드는 것은 허용하지 않는다.
+- **다음 결정의 근거:** 전용 Worker 병렬도와 seed shard 크기는 고정 숫자로 먼저 정하지
+  않는다. 대표 부하의 peak RSS와 단계별 시간, SQLite 저장 시간을 이 계측으로 수집한 뒤
+  CPU 슬롯과 메모리 예산을 함께 적용한다.
