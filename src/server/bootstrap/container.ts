@@ -9,7 +9,10 @@ import { configureZodLocale } from '../shared/zod-locale.js';
 import { createAuditLogService, type AuditLogService } from '../modules/audit/audit-service.js';
 import { NotificationService } from '../modules/notification/application/notification-service.js';
 import type { NotificationInput } from '../modules/notification/application/notification-service.js';
-import { createBacktestNotificationListener } from './notification-wiring.js';
+import {
+  createBacktestNotificationListener,
+  createSeedCloneBatchNotificationListener,
+} from './notification-wiring.js';
 import { AuthService } from '../modules/auth/application/auth-service.js';
 import type {
   LoginAttemptRepository,
@@ -35,7 +38,10 @@ import { StrategyRegistry } from '../modules/strategy/application/strategy-regis
 import { JobOrchestrator } from '../modules/backtest/application/job-orchestrator.js';
 import { JobQueue } from '../modules/backtest/application/job-queue.js';
 import { ResultsService } from '../modules/backtest/application/results-service.js';
-import { SeedCloneBatchService } from '../modules/backtest/application/seed-clone-batch-service.js';
+import {
+  createSeedCloneBatchJobListener,
+  SeedCloneBatchService,
+} from '../modules/backtest/application/seed-clone-batch-service.js';
 import type { FactRepository } from '../modules/facts/application/ports.js';
 import {
   SqliteCorporateActionCoverageStore,
@@ -329,7 +335,16 @@ export function createContainer(config: AppConfig): Container {
       logger,
     }),
   );
-  jobOrchestrator.events.on('job', () => seedCloneBatchService.onJobStatusChanged());
+  jobOrchestrator.events.on('job', createSeedCloneBatchJobListener(seedCloneBatchService));
+  seedCloneBatchService.events.on(
+    'batch',
+    createSeedCloneBatchNotificationListener({
+      getBatch: (batchId) => seedCloneBatchService.get(batchId),
+      strategyName: (strategyId) => strategyRegistry.describe(strategyId)?.name ?? null,
+      notify: safeNotify,
+      logger,
+    }),
+  );
 
   const systemStatus: SystemStatusProviders = {
     queueLength: () => jobQueue.countByStatus(['QUEUED']),

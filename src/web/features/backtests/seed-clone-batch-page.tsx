@@ -92,7 +92,15 @@ export function SeedCloneBatchPage() {
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="text-lg font-semibold">새 난수 시드 실험</h2>
         <Badge variant={batch.status === 'FAILED' ? 'destructive' : batch.status === 'COMPLETED' ? 'default' : batch.status === 'CANCELLED' ? 'outline' : 'secondary'}>
-          {batch.status === 'ACTIVE' ? '진행 중' : batch.status === 'COMPLETED' ? '완료' : batch.status === 'CANCELLED' ? '취소됨' : '실패'}
+          {batch.status === 'ACTIVE'
+            ? '진행 중'
+            : batch.status === 'CANCELLING'
+              ? '취소 중'
+              : batch.status === 'COMPLETED'
+                ? '완료'
+                : batch.status === 'CANCELLED'
+                  ? '취소됨'
+                  : '실패'}
         </Badge>
         <div className="ml-auto flex items-center gap-2">
           <span className="text-xs text-muted-foreground">{formatDateTime(batch.createdAtMs)}</span>

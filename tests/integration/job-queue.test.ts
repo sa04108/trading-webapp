@@ -780,6 +780,50 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(changedPeriod.json().error).toBe('PREVIEW_REQUIRED');
   });
 
+  it('원본 재현성 pin이 없거나 손상되면 미리보기와 새 난수 복제를 강제한다', async () => {
+    const pinPatches: Array<Partial<typeof backtestJobs.$inferInsert>> = [
+      { universeJson: null, universeHash: null },
+      { provenancePinJson: '{손상된 JSON' },
+      { benchmarkJson: '{}', benchmarkHash: '손상된 해시' },
+    ];
+
+    for (const patch of pinPatches) {
+      const created = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/backtests',
+        cookies: { qp_session: cookie },
+        payload: buildRequest(),
+      });
+      expect(created.statusCode).toBe(201);
+      const sourceId = created.json().job.id as string;
+      expect(ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
+      ctx.container.database.db
+        .update(backtestJobs)
+        .set(patch)
+        .where(eq(backtestJobs.id, sourceId))
+        .run();
+
+      const draft = await ctx.app.inject({
+        method: 'GET',
+        url: `/api/v1/backtests/${sourceId}/clone-draft`,
+        cookies: { qp_session: cookie },
+      });
+      expect(draft.statusCode).toBe(200);
+      expect(draft.json().reusablePreview).toBeNull();
+
+      const randomSeeds = await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
+        cookies: { qp_session: cookie },
+        payload: { count: 2 },
+      });
+      expect(randomSeeds.statusCode).toBe(409);
+      expect(randomSeeds.json().error).toBe('PREVIEW_REQUIRED');
+    }
+
+    expect(ctx.container.seedCloneBatchService.list()).toEqual([]);
+  });
+
   it('새 난수 100개는 중복 없이 저장하고 기존 QUEUED 상한만큼 순차 투입한다', async () => {
     const created = await ctx.app.inject({
       method: 'POST',
@@ -887,6 +931,50 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       queuedCount: 0,
     });
     expect(ctx.container.jobQueue.countByStatus(['QUEUED'])).toBe(0);
+  });
+
+  it('난수 시드 실험 취소는 실행 중 자식이 끝날 때까지 CANCELLING을 유지한다', async () => {
+    const created = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: buildRequest(),
+    });
+    const sourceId = created.json().job.id as string;
+    ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED']);
+    const batchResponse = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
+      cookies: { qp_session: cookie },
+      payload: { count: 3 },
+    });
+    const batchId = batchResponse.json().batch.id as string;
+    const beforeCancel = ctx.container.seedCloneBatchService.get(batchId)!;
+    const runningJob = beforeCancel.items[0]!.job!;
+    expect(
+      ctx.container.jobQueue.setStatus(runningJob.id, 'RUNNING', {}, ['QUEUED']),
+    ).toBe(true);
+
+    const cancelling = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtest-clone-batches/${batchId}/cancel`,
+      cookies: { qp_session: cookie },
+    });
+    expect(cancelling.statusCode).toBe(200);
+    expect(cancelling.json().batch).toMatchObject({
+      status: 'CANCELLING',
+      runningCount: 1,
+      queuedCount: 0,
+      pendingCount: 0,
+      cancelledCount: 2,
+      completedAtMs: null,
+    });
+
+    expect(
+      ctx.container.jobQueue.setStatus(runningJob.id, 'CANCELLED', {}, ['RUNNING']),
+    ).toBe(true);
+    ctx.container.seedCloneBatchService.onJobStatusChanged();
+
+    const cancelled = ctx.container.seedCloneBatchService.get(batchId)!;
+    expect(cancelled.batch.status).toBe('CANCELLED');
+    expect(cancelled.batch.completedAtMs).not.toBeNull();
   });
 
   it('초안은 방향 없는 기존 가격 변동 단계를 과거 LOW 방향으로 복원한다', async () => {

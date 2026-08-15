@@ -22,7 +22,7 @@ import { formatKrw, timeframeLabel } from '@/lib/format';
 import { wizardTimeframes } from '@/features/datasets/dataset-slices';
 import { costProfileLabel, slippageProfileLabel } from './profile-labels';
 import { useStockNames } from '@/lib/use-stock-names';
-import { requestToFormState } from './prefill';
+import { isCloneStrategySchemaPending, requestToFormState } from './prefill';
 import { ParamHint } from './param-hint';
 import { extractNumberParams, paramLabel, type NumberParamSpec } from './param-specs';
 import { StrategyDataBadge } from './strategy-data-badge';
@@ -500,13 +500,29 @@ export function NewBacktestWizard() {
   const reviewRestCount = reviewSymbols.length - reviewShownSymbols.length;
   const symbolsFullText = reviewSymbols.map(symbolLabel).join(', ');
 
-  // 초안뿐 아니라 전략 카탈로그가 실패해도 프리필 effect 는 영영 끝나지 않는다 —
-  // 그대로 두면 스켈레톤에 갇힌다. 둘 중 하나라도 실패하면 프리필을 포기하고 폼을 보여준다.
-  const prefillError = sourceJobId !== null && (draft.isError || strategies.isError);
+  // 초안·전략 카탈로그·원본 전략 스키마 중 하나라도 실패하면 프리필 effect 는 영영
+  // 끝나지 않는다. 오류를 드러내고 폼으로 돌아가 사용자가 직접 복구할 수 있게 한다.
+  const prefillError =
+    sourceJobId !== null &&
+    (draft.isError ||
+      strategies.isError ||
+      (prefilledFrom.current === sourceJobId && strategyId !== null && schema.isError));
+
+  // 초안이 먼저 들어오고 전략 스키마가 늦게 오는 경우도 프리필 중이다. 스키마 없이
+  // 원본 파라미터를 파싱하면 {}가 되어 원본 미리보기 재사용과 검토 단계가 잘못 닫힌다.
+  const cloneSchemaPending = isCloneStrategySchemaPending({
+    sourceJobId,
+    prefilledSourceJobId: prefilledFrom.current,
+    strategyId,
+    schemaReady: schema.data !== undefined,
+    schemaFailed: schema.isError,
+  });
 
   // 프리필 중에는 폼을 감춘다 — 입력하던 값이 프리필에 덮이는 경합을 없앤다
   const prefilling =
-    sourceJobId !== null && prefilledFrom.current !== sourceJobId && !prefillError;
+    sourceJobId !== null &&
+    (prefilledFrom.current !== sourceJobId || cloneSchemaPending) &&
+    !prefillError;
 
   /**
    * URL 표기를 지금 그리고 있는 단계에 맞춘다. 좁히는 판단은 위 `step` 이 이미 했고,
@@ -551,7 +567,9 @@ export function NewBacktestWizard() {
               ? draft.error instanceof ApiError
                 ? draft.error.message
                 : '원본 설정을 불러올 수 없습니다'
-              : '전략 목록을 불러올 수 없어 원본 설정을 채우지 못했습니다 — 처음부터 선택하세요.'}
+              : strategies.isError
+                ? '전략 목록을 불러올 수 없어 원본 설정을 채우지 못했습니다 — 처음부터 선택하세요.'
+                : '원본 전략의 파라미터 스키마를 불러올 수 없습니다 — 전략을 다시 선택하세요.'}
           </AlertDescription>
         </Alert>
       ) : null}

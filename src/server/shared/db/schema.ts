@@ -379,7 +379,7 @@ export const backtestCloneBatches = sqliteTable(
     id: text('id').primaryKey(),
     sourceJobId: text('source_job_id').notNull(),
     strategyId: text('strategy_id').notNull(),
-    status: text('status').notNull(), // ACTIVE | COMPLETED | FAILED | CANCELLED
+    status: text('status').notNull(), // ACTIVE | CANCELLING | COMPLETED | FAILED | CANCELLED
     totalCount: integer('total_count').notNull(),
     requestJson: text('request_json').notNull(),
     universeScheduleJson: text('universe_schedule_json').notNull(),

@@ -33,6 +33,29 @@ export interface PrefillCatalog {
   strategyIds: readonly string[];
 }
 
+export interface CloneSchemaPrefillState {
+  sourceJobId: string | null;
+  prefilledSourceJobId: string | null;
+  strategyId: string | null;
+  schemaReady: boolean;
+  schemaFailed: boolean;
+}
+
+/**
+ * 복제 초안이 폼에 들어간 뒤에도 원본 전략 스키마가 도착할 때까지 프리필을 끝내지 않는다.
+ * 스키마 없이 원본 파라미터를 파싱하면 빈 객체가 되어, 재사용 가능한 원본 미리보기를
+ * 다른 설정으로 오판하고 URL 단계까지 앞쪽으로 접는 경합이 생긴다.
+ */
+export function isCloneStrategySchemaPending(state: CloneSchemaPrefillState): boolean {
+  return (
+    state.sourceJobId !== null &&
+    state.prefilledSourceJobId === state.sourceJobId &&
+    state.strategyId !== null &&
+    !state.schemaReady &&
+    !state.schemaFailed
+  );
+}
+
 /**
  * 저장된 요청을 위저드 폼 상태로 옮긴다 (D-025).
  *

@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { createBacktestNotificationListener } from '../../src/server/bootstrap/notification-wiring.js';
+import {
+  createBacktestNotificationListener,
+  createSeedCloneBatchNotificationListener,
+} from '../../src/server/bootstrap/notification-wiring.js';
 import type { NotificationInput } from '../../src/server/modules/notification/application/notification-service.js';
 import type { BacktestJobRow } from '../../src/server/modules/backtest/application/job-queue.js';
+import type { SeedCloneBatchDetail } from '../../src/server/modules/backtest/application/seed-clone-batch-service.js';
 import { createLogger } from '../../src/server/shared/logger.js';
 import { loadConfig } from '../../src/server/bootstrap/config.js';
 
@@ -142,6 +146,15 @@ describe('createBacktestNotificationListener', () => {
     expect(gone.created).toEqual([]);
   });
 
+  it('난수 시드 실험 자식은 개별 종료 알림을 만들지 않는다', () => {
+    const { created, listener } = harness(
+      fakeJob({ status: 'COMPLETED', cloneBatchId: 'btb_1' }),
+    );
+    listener({ jobId: 'bt_1', kind: 'status' });
+
+    expect(created).toEqual([]);
+  });
+
   it('수익률 조회가 던져도 orchestrator 로 새지 않는다', () => {
     const { listener } = harness(fakeJob({ status: 'COMPLETED' }), {
       totalReturnPct: () => {
@@ -162,5 +175,42 @@ describe('createBacktestNotificationListener', () => {
       logger,
     });
     expect(() => listener({ jobId: 'bt_1', kind: 'status' })).not.toThrow();
+  });
+});
+
+describe('createSeedCloneBatchNotificationListener', () => {
+  it('자식 상태를 집계한 배치 종료 알림을 한 건 만든다', () => {
+    const created: NotificationInput[] = [];
+    const detail = {
+      batch: {
+        id: 'btb_1',
+        strategyId: 'cross-sectional-momentum',
+        totalCount: 5,
+      },
+      items: [
+        { item: { state: 'DISPATCHED' }, job: { status: 'COMPLETED' } },
+        { item: { state: 'DISPATCHED' }, job: { status: 'COMPLETED' } },
+        { item: { state: 'DISPATCHED' }, job: { status: 'FAILED' } },
+        { item: { state: 'CANCELLED' }, job: null },
+        { item: { state: 'DISPATCHED' }, job: { status: 'INTERRUPTED' } },
+      ],
+    } as unknown as SeedCloneBatchDetail;
+    const listener = createSeedCloneBatchNotificationListener({
+      getBatch: () => detail,
+      strategyName: () => '횡단면 모멘텀',
+      notify: (input) => created.push(input),
+      logger,
+    });
+
+    listener({ batchId: 'btb_1', status: 'COMPLETED' });
+
+    expect(created).toEqual([
+      expect.objectContaining({
+        severity: 'error',
+        title: '난수 시드 실험이 완료되었습니다',
+        body: '횡단면 모멘텀 · 총 5개\n완료 2 · 실패 1 · 취소 1 · 중단 1 · 미실행 0 · 삭제 0',
+        link: '/backtests/batches/btb_1',
+      }),
+    ]);
   });
 });

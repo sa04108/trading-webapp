@@ -62,7 +62,10 @@ export function useSeedCloneBatch(batchId: string) {
   return useQuery({
     queryKey: ['backtest-clone-batches', batchId],
     queryFn: () => api<{ batch: SeedCloneBatchDetail }>(`/backtest-clone-batches/${batchId}`),
-    refetchInterval: (query) => query.state.data?.batch.status === 'ACTIVE' ? 2_000 : false,
+    refetchInterval: (query) => {
+      const status = query.state.data?.batch.status;
+      return status === 'ACTIVE' || status === 'CANCELLING' ? 2_000 : false;
+    },
   });
 }
 

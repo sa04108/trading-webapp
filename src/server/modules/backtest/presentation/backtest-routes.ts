@@ -9,6 +9,11 @@ import {
   type BacktestRequest,
 } from '../../../../shared/schemas/backtest-request.js';
 import type { ProvenancePin } from '../../../../shared/schemas/provenance-pin.js';
+import {
+  universeCriterionSchema,
+  universeDirectionSchema,
+  universeRuleSchema,
+} from '../../../../shared/schemas/universe-rule.js';
 import type { UniverseRebalancingEntryDto } from '../../../../shared/schemas/universe-rebalancing.js';
 import {
   DEFAULT_TRADE_SORT_DIRECTION,
@@ -142,6 +147,37 @@ function preparationInputOf(body: BacktestRequest): PreparationInput {
 function scheduleHash(schedule: readonly LegacyUniverseScheduleEntry[]): string {
   return createHash('sha256').update(JSON.stringify(schedule)).digest('hex');
 }
+
+const consumedVersionSnapshotSchema = z.object({
+  entries: z.array(z.object({
+    code: z.string(),
+    slice: z.string(),
+    version: z.number().int().nonnegative(),
+    contentHash: z.string(),
+  })),
+  hash: z.string(),
+});
+
+const orderedProvenancePinSchema = z.object({
+  sourceKind: z.literal('SYMBOL_MASTER'),
+  filterPolicyVersion: z.string().nullable(),
+  selectionMethod: z.literal('ORDERED_UNIVERSE_PIPELINE'),
+  universeRule: universeRuleSchema,
+  scheduleHash: z.string(),
+  diagnostics: z.array(z.object({
+    rebalanceDate: z.string(),
+    effectiveDate: z.string(),
+    stages: z.array(z.object({
+      criterion: universeCriterionSchema,
+      direction: universeDirectionSchema,
+      inputCount: z.number().int().nonnegative(),
+      eligibleCount: z.number().int().nonnegative(),
+      selectedCount: z.number().int().nonnegative(),
+      excludedMissingCount: z.number().int().nonnegative(),
+    })),
+  })),
+  preparedAtMs: z.number().int().nonnegative(),
+});
 
 function parseStoredSchedule(job: BacktestJobRow): LegacyUniverseScheduleEntry[] | null {
   try {
@@ -616,6 +652,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
   ): {
     preview: BacktestUniversePreview;
     schedule: LegacyUniverseScheduleEntry[];
+    universe: ConsumedVersionSnapshot;
+    provenancePin: ProvenancePin;
+    benchmark: { pin: ReturnType<typeof benchmarkPinSchema.parse>; hash: string };
     response: BacktestUniversePreview & { fundamentalSymbols: string[] };
   } | null => {
     const preview = preparation.getCachedPreview(preparationInputOf(sourceRequest));
@@ -624,10 +663,66 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const resolved = preparedPreviewToResolved(preview);
     if (scheduleHash(schedule) !== resolved.scheduleHash) return null;
 
+    if (job.universeJson === null || job.universeHash === null) return null;
+    let universe: ConsumedVersionSnapshot;
+    try {
+      const parsed = consumedVersionSnapshotSchema.safeParse({
+        entries: JSON.parse(job.universeJson) as unknown,
+        hash: job.universeHash,
+      });
+      if (!parsed.success) return null;
+      const actualHash = createHash('sha256')
+        .update(
+          parsed.data.entries
+            .map((entry) => `${entry.code}:${entry.slice}:${entry.version}:${entry.contentHash}`)
+            .join('|'),
+        )
+        .digest('hex');
+      if (actualHash !== parsed.data.hash) return null;
+      universe = parsed.data;
+    } catch {
+      return null;
+    }
+
+    if (job.provenancePinJson === null) return null;
+    let provenancePin: ProvenancePin;
+    try {
+      const parsed = orderedProvenancePinSchema.safeParse(JSON.parse(job.provenancePinJson));
+      if (!parsed.success || parsed.data.scheduleHash !== resolved.scheduleHash) return null;
+      provenancePin = parsed.data;
+    } catch {
+      return null;
+    }
+
+    if (job.benchmarkJson === null || job.benchmarkHash === null) return null;
+    let benchmark: { pin: ReturnType<typeof benchmarkPinSchema.parse>; hash: string };
+    try {
+      const parsed = benchmarkPinSchema.safeParse(JSON.parse(job.benchmarkJson));
+      const requestedBenchmarkId = sourceRequest.benchmarkId ?? 'KOSPI';
+      if (
+        !parsed.success ||
+        parsed.data.benchmarkId !== requestedBenchmarkId ||
+        parsed.data.period.from !== sourceRequest.period.from ||
+        parsed.data.period.to !== sourceRequest.period.to
+      ) {
+        return null;
+      }
+      const actualHash = createHash('sha256')
+        .update(JSON.stringify(parsed.data))
+        .digest('hex');
+      if (actualHash !== job.benchmarkHash) return null;
+      benchmark = { pin: parsed.data, hash: job.benchmarkHash };
+    } catch {
+      return null;
+    }
+
     const covered = factCoverage.getCoveredYears(resolved.unionSymbols);
     return {
       preview,
       schedule,
+      universe,
+      provenancePin,
+      benchmark,
       response: {
         ...preview,
         fundamentalSymbols: resolved.unionSymbols.filter(
@@ -635,41 +730,6 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
         ),
       },
     };
-  };
-
-  const sourceUniverseOr = (
-    job: BacktestJobRow,
-    fallback: ConsumedVersionSnapshot,
-  ): ConsumedVersionSnapshot => {
-    if (job.universeJson === null || job.universeHash === null) return fallback;
-    try {
-      const entries: unknown = JSON.parse(job.universeJson);
-      return Array.isArray(entries) ? { entries, hash: job.universeHash } as ConsumedVersionSnapshot : fallback;
-    } catch {
-      return fallback;
-    }
-  };
-
-  const sourceBenchmarkOr = (
-    job: BacktestJobRow,
-    body: BacktestRequest,
-  ): { pin: ReturnType<typeof benchmarkPinSchema.parse>; hash: string } => {
-    const requestedBenchmarkId = body.benchmarkId ?? 'KOSPI';
-    try {
-      const source = backtestRequestSchema.safeParse(JSON.parse(job.requestJson));
-      const sourceBenchmarkId = source.success ? source.data.benchmarkId ?? 'KOSPI' : null;
-      if (
-        sourceBenchmarkId === requestedBenchmarkId &&
-        job.benchmarkJson !== null &&
-        job.benchmarkHash !== null
-      ) {
-        const parsed = benchmarkPinSchema.safeParse(JSON.parse(job.benchmarkJson));
-        if (parsed.success) return { pin: parsed.data, hash: job.benchmarkHash };
-      }
-    } catch {
-      // 손상된 원본 pin은 아래 현재 벤치마크 재고정으로 복구한다.
-    }
-    return benchmarks.pin(requestedBenchmarkId, body.period);
   };
 
   /**
@@ -882,12 +942,10 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const cloned = queue.enqueue(
       { ...cloneRequest, benchmarkId, timeframe: validated.timeframe },
       reusable?.schedule ?? validated.resolved.schedule,
-      reusable ? sourceUniverseOr(job, validated.universe) : validated.universe,
-      reusable
-        ? parseProvenancePin(job.provenancePinJson, id, request.log) ?? validated.provenancePin
-        : validated.provenancePin,
+      reusable?.universe ?? validated.universe,
+      reusable?.provenancePin ?? validated.provenancePin,
       cloneWarnings,
-      reusable ? sourceBenchmarkOr(job, cloneRequest) : benchmark,
+      reusable?.benchmark ?? benchmark,
       { cloneSourceJobId: id },
     );
     audit.record(request.authUser?.username ?? 'admin', 'backtest.cloned', {
@@ -965,14 +1023,19 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (resourceError) return reply.code(507).send({ error: resourceError });
 
     const benchmarkId = body.benchmarkId ?? 'KOSPI';
+    const sourceBenchmarkId = rebased.request.benchmarkId ?? 'KOSPI';
+    const benchmark =
+      benchmarkId === sourceBenchmarkId
+        ? reusable.benchmark
+        : benchmarks.pin(benchmarkId, body.period);
     const cloneWarnings = [...rebased.warnings, ...validated.warnings];
     const cloned = queue.enqueue(
       { ...body, benchmarkId, timeframe: validated.timeframe },
       reusable.schedule,
-      sourceUniverseOr(sourceJob, validated.universe),
-      parseProvenancePin(sourceJob.provenancePinJson, id, request.log) ?? validated.provenancePin,
+      reusable.universe,
+      reusable.provenancePin,
       cloneWarnings,
-      sourceBenchmarkOr(sourceJob, body),
+      benchmark,
       { cloneSourceJobId: id },
     );
     audit.record(request.authUser?.username ?? 'admin', 'backtest.cloned-configured', {
@@ -1024,10 +1087,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const batch = seedCloneBatches.create(id, countBody.data.count, {
       request: { ...body, benchmarkId, timeframe: validated.timeframe },
       schedule: reusable.schedule,
-      universe: sourceUniverseOr(sourceJob, validated.universe),
-      provenancePin:
-        parseProvenancePin(sourceJob.provenancePinJson, id, request.log) ?? validated.provenancePin,
-      benchmark: sourceBenchmarkOr(sourceJob, body),
+      universe: reusable.universe,
+      provenancePin: reusable.provenancePin,
+      benchmark: reusable.benchmark,
       warnings,
     });
     audit.record(request.authUser?.username ?? 'admin', 'backtest.seed-clone-batch.created', {

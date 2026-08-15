@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { requestToFormState } from '../../src/web/features/backtests/prefill.js';
+import {
+  isCloneStrategySchemaPending,
+  requestToFormState,
+} from '../../src/web/features/backtests/prefill.js';
 import type { BacktestRequestBody } from '../../src/web/features/backtests/types.js';
 
 const request: BacktestRequestBody = {
@@ -77,5 +80,33 @@ describe('requestToFormState', () => {
     };
     const { state } = requestToFormState(multiStageRequest, catalog);
     expect(state.universeRule).toEqual(multiStageRequest.universeRule);
+  });
+});
+
+describe('isCloneStrategySchemaPending', () => {
+  const base = {
+    sourceJobId: 'bt-source',
+    prefilledSourceJobId: 'bt-source',
+    strategyId: 'range-breakout',
+    schemaReady: false,
+    schemaFailed: false,
+  };
+
+  it('원본 폼을 채운 뒤 전략 스키마가 아직 없으면 프리필을 유지한다', () => {
+    expect(isCloneStrategySchemaPending(base)).toBe(true);
+  });
+
+  it('전략 스키마가 도착하면 프리필을 끝낸다', () => {
+    expect(isCloneStrategySchemaPending({ ...base, schemaReady: true })).toBe(false);
+  });
+
+  it('전략 스키마 로딩이 실패하면 오류 화면으로 넘기도록 대기를 끝낸다', () => {
+    expect(isCloneStrategySchemaPending({ ...base, schemaFailed: true })).toBe(false);
+  });
+
+  it('초안 자체가 아직 폼에 반영되지 않은 상태는 기본 프리필 조건에 맡긴다', () => {
+    expect(
+      isCloneStrategySchemaPending({ ...base, prefilledSourceJobId: null }),
+    ).toBe(false);
   });
 });

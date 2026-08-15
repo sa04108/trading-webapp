@@ -1,5 +1,6 @@
 import { randomInt } from 'node:crypto';
-import { asc, desc, eq } from 'drizzle-orm';
+import { EventEmitter } from 'node:events';
+import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 import { benchmarkPinSchema, type BenchmarkPin } from '../../../../shared/schemas/benchmark.js';
 import {
   backtestRequestSchema,
@@ -16,6 +17,7 @@ import {
 import { newId } from '../../../shared/ids.js';
 import type { ConsumedVersionSnapshot } from '../../market-data/application/symbol-service.js';
 import type { LegacyUniverseScheduleEntry } from './universe-rule-resolver.js';
+import type { JobEvent } from './job-orchestrator.js';
 import type { BacktestJobRow, JobQueue } from './job-queue.js';
 
 export type SeedCloneBatchRow = typeof backtestCloneBatches.$inferSelect;
@@ -38,12 +40,30 @@ export interface SeedCloneBatchDetail {
   }>;
 }
 
+export type SeedCloneBatchTerminalStatus = 'COMPLETED' | 'FAILED' | 'CANCELLED';
+
+export interface SeedCloneBatchEvent {
+  readonly batchId: string;
+  readonly status: SeedCloneBatchTerminalStatus;
+}
+
+/** 진행률 이벤트는 큐 슬롯이나 종료 여부를 바꾸지 않으므로 배치 DB를 다시 읽지 않는다. */
+export function createSeedCloneBatchJobListener(
+  service: Pick<SeedCloneBatchService, 'onJobStatusChanged'>,
+): (event: JobEvent) => void {
+  return (event) => {
+    if (event.kind === 'status') service.onJobStatusChanged();
+  };
+}
+
 /**
  * 1~100개 난수 시드 복제를 기존 QUEUED 상한 안에서 순차 승격하는 영속 서비스.
  * PENDING item은 가벼운 SQLite 행이라 100개를 미리 저장해도 워커 큐와 리소스 가드를
  * 우회하지 않는다. 실제 backtest_jobs는 빈 QUEUED 슬롯 수만큼만 생성한다.
  */
 export class SeedCloneBatchService {
+  readonly events = new EventEmitter();
+
   constructor(
     private readonly database: DatabaseHandle,
     private readonly queue: JobQueue,
@@ -103,11 +123,12 @@ export class SeedCloneBatchService {
       try {
         snapshot = parseSnapshot(batch);
       } catch (error) {
-        this.database.db.update(backtestCloneBatches).set({
-          status: 'FAILED',
-          error: error instanceof Error ? error.message : String(error),
-          completedAtMs: this.clock.now(),
-        }).where(eq(backtestCloneBatches.id, batch.id)).run();
+        this.markTerminal(
+          batch.id,
+          'FAILED',
+          ['ACTIVE'],
+          error instanceof Error ? error.message : String(error),
+        );
         continue;
       }
 
@@ -154,36 +175,42 @@ export class SeedCloneBatchService {
     for (const batch of this.database.db
       .select()
       .from(backtestCloneBatches)
-      .where(eq(backtestCloneBatches.status, 'ACTIVE'))
+      .where(inArray(backtestCloneBatches.status, ['ACTIVE', 'CANCELLING']))
       .all()) {
       const detail = this.get(batch.id);
       if (!detail) continue;
-      const allDispatched = detail.items.every(({ item }) => item.state === 'DISPATCHED');
-      const allTerminal = detail.items.every(
-        ({ item, job }) => item.state === 'DISPATCHED' && (job === null || this.queue.isTerminal(job.status)),
-      );
-      if (allDispatched && allTerminal) {
-        this.database.db.update(backtestCloneBatches).set({
-          status: 'COMPLETED',
-          completedAtMs: this.clock.now(),
-        }).where(eq(backtestCloneBatches.id, batch.id)).run();
+      if (batch.status === 'ACTIVE') {
+        const allTerminal = detail.items.every(
+          ({ item, job }) =>
+            item.state === 'DISPATCHED' &&
+            (job === null || this.queue.isTerminal(job.status)),
+        );
+        if (allTerminal) this.markTerminal(batch.id, 'COMPLETED', ['ACTIVE']);
+        continue;
       }
+
+      const allCancelledOrTerminal = detail.items.every(
+        ({ item, job }) =>
+          item.state === 'CANCELLED' ||
+          (item.state === 'DISPATCHED' &&
+            (job === null || this.queue.isTerminal(job.status))),
+      );
+      if (allCancelledOrTerminal) this.markTerminal(batch.id, 'CANCELLED', ['CANCELLING']);
     }
   }
 
   recover(): void {
-    this.pump();
     this.onJobStatusChanged();
   }
 
-  /** 새 item 승격을 먼저 막는다. 호출자는 반환된 기존 job만 일반 취소 시퀀스로 보낸다. */
+  /** 새 item 승격을 먼저 막고, 실행 중 자식이 모두 끝날 때까지 CANCELLING을 유지한다. */
   cancel(batchId: string): SeedCloneBatchDetail | null {
     const existing = this.get(batchId);
     if (!existing || existing.batch.status !== 'ACTIVE') return existing;
     this.database.db.transaction((tx) => {
       tx.update(backtestCloneBatches).set({
-        status: 'CANCELLED',
-        completedAtMs: this.clock.now(),
+        status: 'CANCELLING',
+        completedAtMs: null,
       }).where(eq(backtestCloneBatches.id, batchId)).run();
       for (const { item } of existing.items) {
         if (item.state !== 'PENDING') continue;
@@ -191,7 +218,28 @@ export class SeedCloneBatchService {
           .where(eq(backtestCloneBatchItems.id, item.id)).run();
       }
     });
+    // 실제 job이 하나도 없고 전부 묶음 대기였다면 이 자리에서 곧바로 최종 취소된다.
+    this.onJobStatusChanged();
     return this.get(batchId);
+  }
+
+  private markTerminal(
+    batchId: string,
+    status: SeedCloneBatchTerminalStatus,
+    expectedStatuses: readonly string[],
+    error?: string,
+  ): void {
+    const result = this.database.db.update(backtestCloneBatches).set({
+      status,
+      completedAtMs: this.clock.now(),
+      ...(error === undefined ? {} : { error }),
+    }).where(and(
+      eq(backtestCloneBatches.id, batchId),
+      inArray(backtestCloneBatches.status, [...expectedStatuses]),
+    )).run();
+    if (result.changes > 0) {
+      this.events.emit('batch', { batchId, status } satisfies SeedCloneBatchEvent);
+    }
   }
 
   get(batchId: string): SeedCloneBatchDetail | null {

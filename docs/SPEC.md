@@ -950,13 +950,19 @@ GET    /api/v1/backtests/:id/events
 진행률은 SSE를 기본으로 한다. 연결이 끊기면 polling으로 fallback한다.
 
 `clone-draft`는 현재 전략 버전의 완료된 준비 결과와 원본 job의 고정 리밸런스 일정
-hash가 같으면 `reusablePreview`를 반환한다. `clone-configured`는 기간·유니버스 규칙·
-전략·전략 파라미터가 그대로일 때 이 일정을 재사용한다. 자본·비용·벤치마크·보유 상한·
-난수 시드 변경은 유니버스 미리보기를 무효화하지 않지만 요청 자체의 정적 검증은 계속한다.
+hash가 같고 원본 유니버스·출처·벤치마크 pin이 모두 파싱·hash 검증을 통과하면
+`reusablePreview`를 반환한다. `clone-configured`는 기간·유니버스 규칙·전략·전략
+파라미터가 그대로일 때 이 일정과 pin을 재사용한다. 원본 pin이 없거나 손상됐으면 현재
+데이터로 조용히 대체하지 않고 `PREVIEW_REQUIRED`로 새 미리보기를 강제한다. 자본·비용·
+벤치마크·보유 상한·난수 시드 변경은 유니버스 미리보기를 무효화하지 않지만 요청 자체의
+정적 검증은 계속한다.
 
 `clone-random-seeds`는 `{ "count": 1..100 }`을 받아 서로 다른 uint32 시드를 가진 묶음을
 만든다. 묶음 item은 먼저 영속화하고 실제 백테스트 job은 `MAX_QUEUED_BACKTESTS`의 빈
 슬롯만큼만 순차 생성한다. 따라서 100개 실험도 일반 대기열 상한을 우회하지 않는다.
+취소하면 묶음은 먼저 `CANCELLING`이 되어 새 승격을 막고, 실행 중인 자식이 모두 종료된
+뒤에만 `CANCELLED`와 완료 시각을 확정한다. 자식별 종료 알림은 만들지 않고 묶음이
+`COMPLETED`·`FAILED`·`CANCELLED`로 확정될 때 결과 수를 집계한 알림 한 건만 만든다.
 
 ## 상태
 

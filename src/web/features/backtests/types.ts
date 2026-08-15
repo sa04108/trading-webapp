@@ -62,7 +62,7 @@ export interface JobSummary {
   metrics?: BacktestMetrics | null;
 }
 
-export type SeedCloneBatchStatus = 'ACTIVE' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+export type SeedCloneBatchStatus = 'ACTIVE' | 'CANCELLING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
 export type SeedCloneItemStatus = 'PENDING' | 'DELETED' | BacktestStatus;
 
 export interface SeedCloneBatchSummary {
