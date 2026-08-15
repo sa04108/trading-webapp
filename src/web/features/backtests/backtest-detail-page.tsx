@@ -697,9 +697,10 @@ export function BacktestDetailPage() {
     onSuccess: () => {
       toast.success('삭제되었습니다');
       void queryClient.invalidateQueries({ queryKey: ['backtests'] });
+      void queryClient.invalidateQueries({ queryKey: ['backtest-clone-batches'] });
       void navigate('/backtests');
     },
-    onError: () => toast.error('실행 중인 작업은 삭제할 수 없습니다'),
+    onError: (error) => toast.error(error.message),
   });
 
   const strategies = useStrategies();
@@ -925,7 +926,8 @@ export function BacktestDetailPage() {
           <DialogHeader>
             <DialogTitle>백테스트 삭제</DialogTitle>
             <DialogDescription>
-              이 작업의 결과·거래 내역이 모두 삭제됩니다. 되돌릴 수 없습니다.
+              이 작업의 결과·거래 내역과 이 작업에서 만든 난수 시드 실험이 모두
+              삭제됩니다. 되돌릴 수 없습니다.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

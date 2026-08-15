@@ -1,10 +1,19 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Link, useParams } from 'react-router';
+import { useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router';
 import { toast } from 'sonner';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Progress } from '@/components/ui/progress';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -33,7 +42,9 @@ function formatPctMagnitude(value: number | null): string {
 
 export function SeedCloneBatchPage() {
   const { id = '' } = useParams();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const query = useSeedCloneBatch(id);
   const strategies = useStrategies();
   const cancel = useMutation({
@@ -41,6 +52,17 @@ export function SeedCloneBatchPage() {
     onSuccess: () => {
       toast.info('남은 난수 시드 실행을 취소했습니다');
       void queryClient.invalidateQueries({ queryKey: ['backtest-clone-batches'] });
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const remove = useMutation({
+    mutationFn: () => api(`/backtest-clone-batches/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      setDeleteOpen(false);
+      toast.success('난수 시드 실험을 삭제했습니다');
+      void queryClient.invalidateQueries({ queryKey: ['backtests'] });
+      void queryClient.invalidateQueries({ queryKey: ['backtest-clone-batches'] });
+      void navigate('/backtests');
     },
     onError: (error) => toast.error(error.message),
   });
@@ -64,7 +86,7 @@ export function SeedCloneBatchPage() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
-        <h2 className="text-lg font-semibold">새 난수 시드 실험</h2>
+        <h2 className="text-lg font-semibold">난수 시드 실험</h2>
         <Badge variant={batch.status === 'FAILED' ? 'destructive' : batch.status === 'COMPLETED' ? 'default' : batch.status === 'CANCELLED' ? 'outline' : 'secondary'}>
           {batch.status === 'ACTIVE'
             ? '진행 중'
@@ -81,6 +103,11 @@ export function SeedCloneBatchPage() {
           {batch.status === 'ACTIVE' ? (
             <Button variant="outline" size="sm" disabled={cancel.isPending} onClick={() => cancel.mutate()}>
               남은 실행 취소
+            </Button>
+          ) : null}
+          {batch.status !== 'ACTIVE' && batch.status !== 'CANCELLING' ? (
+            <Button variant="destructive" size="sm" onClick={() => setDeleteOpen(true)}>
+              실험 삭제
             </Button>
           ) : null}
         </div>
@@ -158,6 +185,24 @@ export function SeedCloneBatchPage() {
           </div>
         </CardContent>
       </Card>
+
+      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>난수 시드 실험을 삭제할까요?</DialogTitle>
+            <DialogDescription>
+              이 실험에 포함된 모든 seed 백테스트와 결과가 함께 삭제됩니다. 원본
+              백테스트는 유지됩니다.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteOpen(false)}>취소</Button>
+            <Button variant="destructive" disabled={remove.isPending} onClick={() => remove.mutate()}>
+              삭제
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

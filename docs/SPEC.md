@@ -940,6 +940,7 @@ GET    /api/v1/backtests/:id/clone-draft
 GET    /api/v1/backtest-clone-batches
 GET    /api/v1/backtest-clone-batches/:id
 POST   /api/v1/backtest-clone-batches/:id/cancel
+DELETE /api/v1/backtest-clone-batches/:id
 DELETE /api/v1/backtests/:id
 GET    /api/v1/backtests/:id/trades
 GET    /api/v1/backtests/:id/series
@@ -967,6 +968,11 @@ hash가 같고 원본 유니버스·출처·벤치마크 pin이 모두 파싱·h
 수익률과 Sharpe의 표본 표준편차를 `n-1`로 계산한다. Sharpe가 `null`인 실행은 Sharpe
 분포에서만 제외하며, 이 편차는 가격 경로의 Monte Carlo가 아니라 동률·동시 주문의 seed
 순서 민감성을 뜻한다.
+목록에서는 난수 실험을 별도 종류로 분리하지 않고 `sourceJobId`가 가리키는 원본
+백테스트 카드 아래에 들여써서 표시한다. 종료된 실험은 단독 삭제할 수 있고, 원본
+백테스트를 삭제하면 그 원본에서 만든 모든 난수 실험과 자식 job·결과도 같은 트랜잭션에서
+삭제한다. 실행 중인 실험이나 자식 job이 하나라도 있으면 삭제를 거부하고 취소 완료를
+먼저 요구한다.
 
 ## 상태
 

@@ -11,6 +11,7 @@ import type { ProvenancePin } from '../../../../shared/schemas/provenance-pin.js
 import type { Clock } from '../../../shared/clock.js';
 import type { DatabaseHandle } from '../../../shared/db/database.js';
 import {
+  backtestJobs,
   backtestCloneBatchItems,
   backtestCloneBatches,
 } from '../../../shared/db/schema.js';
@@ -41,6 +42,7 @@ export interface SeedCloneBatchDetail {
 }
 
 export type SeedCloneBatchTerminalStatus = 'COMPLETED' | 'FAILED' | 'CANCELLED';
+export type SeedCloneDeleteResult = 'DELETED' | 'NOT_FOUND' | 'NOT_DELETABLE';
 
 export interface SeedCloneBatchEvent {
   readonly batchId: string;
@@ -221,6 +223,69 @@ export class SeedCloneBatchService {
     // 실제 job이 하나도 없고 전부 묶음 대기였다면 이 자리에서 곧바로 최종 취소된다.
     this.onJobStatusChanged();
     return this.get(batchId);
+  }
+
+  /**
+   * 종료된 난수 실험과 그 자식 job·결과를 한 트랜잭션에서 지운다.
+   * 실행 중인 자식을 DB에서 먼저 지우면 워커가 고아 결과를 쓰게 되므로 거부한다.
+   */
+  delete(batchId: string): SeedCloneDeleteResult {
+    return this.database.sqlite.transaction(() => {
+      const detail = this.get(batchId);
+      if (!detail) return 'NOT_FOUND';
+      if (!this.isDeletable(detail)) return 'NOT_DELETABLE';
+      this.deleteBatchesAndChildren([batchId]);
+      return 'DELETED';
+    }).immediate();
+  }
+
+  /** 원본 백테스트와 그 원본에서 만든 모든 난수 실험·자식 결과를 원자적으로 지운다. */
+  deleteSourceJob(sourceJobId: string): SeedCloneDeleteResult {
+    return this.database.sqlite.transaction(() => {
+      const source = this.queue.getJob(sourceJobId);
+      if (!source) return 'NOT_FOUND';
+      if (!this.queue.isTerminal(source.status)) return 'NOT_DELETABLE';
+
+      const batches = this.database.db
+        .select({ id: backtestCloneBatches.id })
+        .from(backtestCloneBatches)
+        .where(eq(backtestCloneBatches.sourceJobId, sourceJobId))
+        .all();
+      for (const batch of batches) {
+        const detail = this.get(batch.id);
+        if (!detail || !this.isDeletable(detail)) return 'NOT_DELETABLE';
+      }
+
+      this.deleteBatchesAndChildren(batches.map((batch) => batch.id));
+      this.database.db.delete(backtestJobs).where(eq(backtestJobs.id, sourceJobId)).run();
+      return 'DELETED';
+    }).immediate();
+  }
+
+  private isDeletable(detail: SeedCloneBatchDetail): boolean {
+    const terminalBatch = detail.batch.status === 'COMPLETED'
+      || detail.batch.status === 'FAILED'
+      || detail.batch.status === 'CANCELLED';
+    return terminalBatch && detail.items.every(
+      ({ job }) => job === null || this.queue.isTerminal(job.status),
+    );
+  }
+
+  private deleteBatchesAndChildren(batchIds: readonly string[]): void {
+    if (batchIds.length === 0) return;
+    const items = this.database.db
+      .select({ jobId: backtestCloneBatchItems.jobId })
+      .from(backtestCloneBatchItems)
+      .where(inArray(backtestCloneBatchItems.batchId, [...batchIds]))
+      .all();
+    const jobIds = items.flatMap(({ jobId }) => jobId === null ? [] : [jobId]);
+    if (jobIds.length > 0) {
+      this.database.db.delete(backtestJobs).where(inArray(backtestJobs.id, jobIds)).run();
+    }
+    this.database.db
+      .delete(backtestCloneBatches)
+      .where(inArray(backtestCloneBatches.id, [...batchIds]))
+      .run();
   }
 
   private markTerminal(

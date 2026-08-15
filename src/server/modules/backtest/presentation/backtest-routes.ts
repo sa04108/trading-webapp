@@ -1150,11 +1150,31 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     return { batch: serializeBatch(seedCloneBatches.get(id)!, false) };
   });
 
+  app.delete('/backtest-clone-batches/:id', { preHandler: requireAuth }, (request, reply) => {
+    const { id } = request.params as { id: string };
+    const result = seedCloneBatches.delete(id);
+    if (result === 'NOT_FOUND') {
+      return reply.code(404).send({ error: '난수 시드 실험을 찾을 수 없습니다' });
+    }
+    if (result === 'NOT_DELETABLE') {
+      return reply.code(409).send({ error: '실행 중인 난수 시드 실험은 취소 완료 후 삭제할 수 있습니다' });
+    }
+    audit.record(request.authUser?.username ?? 'admin', 'backtest.seed-clone-batch.deleted', {
+      batchId: id,
+    });
+    return reply.code(204).send();
+  });
+
   app.delete('/backtests/:id', { preHandler: requireAuth }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const deleted = queue.deleteJob(id);
-    if (!deleted) {
-      return reply.code(409).send({ error: '실행 중이거나 존재하지 않는 작업은 삭제할 수 없습니다' });
+    const result = seedCloneBatches.deleteSourceJob(id);
+    if (result === 'NOT_FOUND') {
+      return reply.code(404).send({ error: '백테스트를 찾을 수 없습니다' });
+    }
+    if (result === 'NOT_DELETABLE') {
+      return reply.code(409).send({
+        error: '실행 중인 백테스트나 난수 시드 실험은 취소 완료 후 삭제할 수 있습니다',
+      });
     }
     audit.record(request.authUser?.username ?? 'admin', 'backtest.deleted', { jobId: id });
     return reply.code(204).send();

@@ -977,6 +977,96 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(cancelled.batch.completedAtMs).not.toBeNull();
   });
 
+  it('실행 중인 난수 실험 삭제는 막고 취소 완료 뒤에는 원본을 남긴 채 단독 삭제한다', async () => {
+    const created = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: buildRequest(),
+    });
+    const sourceId = created.json().job.id as string;
+    ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED']);
+    const batchResponse = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
+      cookies: { qp_session: cookie },
+      payload: { count: 2 },
+    });
+    const batchId = batchResponse.json().batch.id as string;
+    const childIds = ctx.container.seedCloneBatchService.get(batchId)!.items
+      .flatMap(({ job }) => job === null ? [] : [job.id]);
+
+    const activeBatchDelete = await ctx.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/backtest-clone-batches/${batchId}`,
+      cookies: { qp_session: cookie },
+    });
+    expect(activeBatchDelete.statusCode).toBe(409);
+
+    const activeSourceDelete = await ctx.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/backtests/${sourceId}`,
+      cookies: { qp_session: cookie },
+    });
+    expect(activeSourceDelete.statusCode).toBe(409);
+
+    const cancelled = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtest-clone-batches/${batchId}/cancel`,
+      cookies: { qp_session: cookie },
+    });
+    expect(cancelled.statusCode).toBe(200);
+    expect(cancelled.json().batch.status).toBe('CANCELLED');
+
+    const deleted = await ctx.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/backtest-clone-batches/${batchId}`,
+      cookies: { qp_session: cookie },
+    });
+    expect(deleted.statusCode).toBe(204);
+    expect(ctx.container.seedCloneBatchService.get(batchId)).toBeNull();
+    expect(ctx.container.jobQueue.getJob(sourceId)).not.toBeNull();
+    expect(childIds.every((id) => ctx.container.jobQueue.getJob(id) === null)).toBe(true);
+  });
+
+  it('원본 삭제는 종료된 난수 실험 묶음과 모든 자식 백테스트를 함께 삭제한다', async () => {
+    const created = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: buildRequest(),
+    });
+    const sourceId = created.json().job.id as string;
+    ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED']);
+
+    const batchIds: string[] = [];
+    for (const count of [2, 3]) {
+      const response = await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
+        cookies: { qp_session: cookie },
+        payload: { count },
+      });
+      expect(response.statusCode).toBe(201);
+      batchIds.push(response.json().batch.id as string);
+    }
+
+    const childIds = batchIds.flatMap((batchId) =>
+      ctx.container.seedCloneBatchService.get(batchId)!.items
+        .flatMap(({ job }) => job === null ? [] : [job.id]));
+    for (const childId of childIds) {
+      expect(ctx.container.jobQueue.setStatus(childId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
+    }
+    ctx.container.seedCloneBatchService.onJobStatusChanged();
+    expect(batchIds.every(
+      (batchId) => ctx.container.seedCloneBatchService.get(batchId)?.batch.status === 'COMPLETED',
+    )).toBe(true);
+
+    const deleted = await ctx.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/backtests/${sourceId}`,
+      cookies: { qp_session: cookie },
+    });
+    expect(deleted.statusCode).toBe(204);
+    expect(ctx.container.jobQueue.getJob(sourceId)).toBeNull();
+    expect(batchIds.every((batchId) => ctx.container.seedCloneBatchService.get(batchId) === null)).toBe(true);
+    expect(childIds.every((childId) => ctx.container.jobQueue.getJob(childId) === null)).toBe(true);
+  });
+
   it('초안은 방향 없는 기존 가격 변동 단계를 과거 LOW 방향으로 복원한다', async () => {
     const current = buildRequest();
     const job = ctx.container.jobQueue.enqueue({
