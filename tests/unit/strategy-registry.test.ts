@@ -49,14 +49,14 @@ describe('재무 순위 전략 metadata', () => {
   it('신규 ID, version, 이름, 설명을 정확히 등록한다', () => {
     expect(registry.describe('earnings-acceleration-rank')).toEqual({
       id: 'earnings-acceleration-rank',
-      version: '1.0.0',
+      version: '1.1.0',
       name: '이익 가속·가격 확인 순위',
       requiresFundamentals: true,
       description: 'PIT 영업이익 가속과 양의 가격 모멘텀을 함께 순위화하는 동일가중 연구 전략',
     });
     expect(registry.describe('low-per-high-roe-rank')).toEqual({
       id: 'low-per-high-roe-rank',
-      version: '1.0.0',
+      version: '1.1.0',
       name: '저PER·고ROE 순위',
       requiresFundamentals: true,
       description: 'PIT TTM 순이익 기준 저PER과 고ROE를 결합하는 동일가중 연구 전략',

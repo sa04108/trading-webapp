@@ -88,7 +88,7 @@ export const earningsAccelerationRankStrategy: TradingStrategy<
   EarningsAccelerationRankState
 > = {
   id: 'earnings-acceleration-rank',
-  version: '1.0.0',
+  version: '1.1.0',
   name: '이익 가속·가격 확인 순위',
   requiresFundamentals: true,
   description: 'PIT 영업이익 가속과 양의 가격 모멘텀을 함께 순위화하는 동일가중 연구 전략',
@@ -153,17 +153,20 @@ export const earningsAccelerationRankStrategy: TradingStrategy<
       (candidate) => candidate.ttmGrowth,
       'DESC',
       (candidate) => candidate.symbol,
+      context.rng,
     );
     const momentumRanks = ordinalRank(
       candidates,
       (candidate) => candidate.priceMomentum,
       'DESC',
       (candidate) => candidate.symbol,
+      context.rng,
     );
     const targets = combineRanks(
       candidates,
       [growthRanks, momentumRanks],
       (candidate) => candidate.symbol,
+      context.rng,
     )
       .slice(0, parameters.topN)
       .map((candidate) => candidate.symbol);

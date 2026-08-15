@@ -151,7 +151,7 @@ export const valueQualityRankStrategy: TradingStrategy<
   ValueQualityRankState
 > = {
   id: 'value-quality-rank',
-  version: '2.0.0',
+  version: '2.1.0',
   name: '밸류·퀄리티 랭킹',
   description:
     '이익수익률(EBIT/EV)과 자본수익률(EBIT/투입자본) 순위를 합산해 상위 N 을 동일가중 보유합니다. 상장시점 재무제표가 수집된 데이터셋에서만 동작합니다.',
@@ -213,15 +213,15 @@ export const valueQualityRankStrategy: TradingStrategy<
     // 유지한다. 데이터 없음과 전 종목 자격 미달을 구분할 근거가 없으므로 같은 경로다.
     if (earningsYield.length === 0) return { orders: [] };
 
-    const yieldRanks = rankDescending(earningsYield);
-    const capitalRanks = rankDescending(returnOnCapital);
+    const yieldRanks = rankDescending(earningsYield, context.rng);
+    const capitalRanks = rankDescending(returnOnCapital, context.rng);
     const combined: Scored[] = earningsYield.map(({ symbol }) => ({
       symbol,
       // 순위 합이 작을수록 좋다 — rankDescending 은 큰 값을 1위로 두므로 부호를 뒤집는다
       score: -((yieldRanks.get(symbol) ?? 0) + (capitalRanks.get(symbol) ?? 0)),
     }));
 
-    const finalRanks = rankDescending(combined);
+    const finalRanks = rankDescending(combined, context.rng);
     const targets = [...finalRanks.entries()]
       .filter(([, rank]) => rank <= parameters.topN)
       .map(([symbol]) => symbol)

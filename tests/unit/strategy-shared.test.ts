@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createRng } from '../../src/server/modules/backtest/domain/seeded-rng.js';
 import type { Position } from '../../src/server/modules/backtest/domain/types.js';
 import type { CorporateAction } from '../../src/server/modules/facts/domain/fact.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
@@ -54,6 +55,26 @@ describe('rankDescending', () => {
     expect(ranks.get('B')).toBe(2);
   });
 
+  it('등록 전략용 RNG를 넘기면 동점 순위는 같은 seed에서 재현되고 seed별로 달라진다', () => {
+    const items = [
+      { symbol: 'A', score: 1 },
+      { symbol: 'B', score: 1 },
+      { symbol: 'C', score: 1 },
+    ];
+    const winner = (seed: number) => {
+      const ranks = rankDescending(items, createRng(seed));
+      return [...ranks.entries()].find(([, rank]) => rank === 1)?.[0];
+    };
+
+    expect(winner(42)).toBe(winner(42));
+    expect(new Set(Array.from({ length: 8 }, (_, seed) => winner(seed))).size).toBeGreaterThan(1);
+    expect(
+      [...rankDescending(items, createRng(7)).entries()].sort(),
+    ).toEqual(
+      [...rankDescending([...items].reverse(), createRng(7)).entries()].sort(),
+    );
+  });
+
   it('입력 순서가 달라도 같은 결과가 나온다', () => {
     const forward = rankDescending([
       { symbol: 'A', score: 1 },
@@ -94,6 +115,18 @@ describe('fundamental ordinal rank', () => {
       'B',
       'C',
     ]);
+  });
+
+  it('지표·종합 순위의 동점도 RNG를 넘기면 seed로 해소한다', () => {
+    const rows = ['A', 'B', 'C'].map((code) => ({ code, value: 1 }));
+    const winner = (seed: number) => {
+      const rng = createRng(seed);
+      const rank = ordinalRank(rows, (row) => row.value, 'DESC', (row) => row.code, rng);
+      return combineRanks(rows, [rank], (row) => row.code, rng)[0]?.code;
+    };
+
+    expect(winner(42)).toBe(winner(42));
+    expect(new Set(Array.from({ length: 8 }, (_, seed) => winner(seed))).size).toBeGreaterThan(1);
   });
 });
 

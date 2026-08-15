@@ -85,7 +85,7 @@ describe('레지스트리 등록', () => {
       .properties;
     expect(properties.fastEmaBars?.title).toBe('단기 이동평균 봉 수');
     expect(properties.fastEmaBars?.default).toBe(12);
-    expect(emaTrendSwitchStrategy.version).toBe('1.0.2');
+    expect(emaTrendSwitchStrategy.version).toBe('1.1.0');
   });
 });
 
@@ -103,6 +103,30 @@ describe('실행 동작', () => {
     expect(buys.length).toBeGreaterThan(0);
     expect(new Set(buys.map((fill) => fill.symbol))).toEqual(new Set(['LEV']));
     expect(result.warnings.join('\n')).not.toContain('상관 그룹 워밍업 부족');
+  });
+
+  it('같은 상관 그룹에서 동시에 진입 조건을 만족하면 seed가 선점 종목을 결정한다', () => {
+    const candles: Candle[] = [];
+    for (let index = 0; index < 45; index += 1) {
+      const aaa = index < 20
+        ? 1_000 + (index % 2 === 0 ? 10 : -10)
+        : 1_000 + (index - 19) * 20;
+      const bbb = index < 20
+        ? 1_000_000 / aaa
+        : 1_000 + (index - 19) * 20;
+      candles.push(candle('AAA', index, aaa), candle('BBB', index, bbb));
+    }
+    const winner = (randomSeed: number) => runBacktest(emaTrendSwitchStrategy, {
+      candles,
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: FAST_PARAMS,
+      randomSeed,
+      maxPositions: 5,
+    }).fills.find((fill) => fill.side === 'BUY')?.symbol;
+
+    expect(winner(42)).toBe(winner(42));
+    expect(new Set(Array.from({ length: 8 }, (_, seed) => winner(seed))).size).toBeGreaterThan(1);
   });
 
   it('상관 워밍업이 차기 전에는 진입하지 않는다', () => {

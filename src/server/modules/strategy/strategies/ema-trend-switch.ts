@@ -21,6 +21,7 @@ import {
   newCorrelationGroupingState,
   recordCorrelationClose,
   scaleCorrelationGrouping,
+  selectSeededGroupEntries,
   updateCorrelationGrouping,
   type CorrelationGroupingState,
 } from './shared/pair-groups.js';
@@ -141,7 +142,7 @@ export const emaTrendSwitchStrategy: TradingStrategy<
   EmaTrendSwitchState
 > = {
   id: 'ema-trend-switch',
-  version: '1.0.2',
+  version: '1.1.0',
   name: 'EMA 추세 스위치',
   description:
     '단기·장기 이동평균 간격이 벌어진 종목에 올라타고, 고점에서 변동성 폭만큼 내려오면 팝니다. ' +
@@ -244,8 +245,8 @@ export const emaTrendSwitchStrategy: TradingStrategy<
     // 4) 진입 — 그룹 확정 전에는 진입하지 않는다
     if (state.groupOf !== null) {
       const groupOf = state.groupOf;
-      // 보유·진입 대기 중인 그룹 선점 — 같은 봉에서 역상관 짝이 둘 다 신호를 내도
-      // 사전순 첫 종목만 통과한다
+      // 보유·진입 대기 중인 그룹은 계속 잠근다. 빈 그룹의 동시 적격 후보만
+      // 아래에서 seed로 한 종목을 고른다.
       const claimed = new Set<string>();
       for (const symbol of currentSymbols) {
         const position = context.portfolio.positions.get(symbol);
@@ -255,6 +256,12 @@ export const emaTrendSwitchStrategy: TradingStrategy<
         }
       }
 
+      const candidates: Array<{
+        symbol: string;
+        group: string;
+        quantity: number;
+        entryAtr: number;
+      }> = [];
       for (const symbol of barSymbols) {
         const symbolState = getSymbolState(state, symbol);
         if (context.tradableSymbols !== null && !context.tradableSymbols.has(symbol)) {
@@ -286,11 +293,21 @@ export const emaTrendSwitchStrategy: TradingStrategy<
         );
         if (quantity < 1) continue;
 
+        candidates.push({
+          symbol,
+          group,
+          quantity,
+          entryAtr: symbolState.atr.atr,
+        });
+      }
+
+      for (const candidate of selectSeededGroupEntries(candidates, context.rng)) {
+        const { symbol, quantity, entryAtr } = candidate;
+        const symbolState = getSymbolState(state, symbol);
         orders.push({ symbol, side: 'BUY', quantity, reason: 'TREND' });
         symbolState.holding = newHolding();
         symbolState.holding.pendingEntry = true;
-        symbolState.holding.entryAtr = symbolState.atr.atr;
-        claimed.add(group);
+        symbolState.holding.entryAtr = entryAtr;
       }
     }
 

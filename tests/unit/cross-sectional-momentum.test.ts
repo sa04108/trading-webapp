@@ -100,6 +100,7 @@ describe('레지스트리 등록', () => {
     const description =
       registry.list().find((s) => s.id === 'cross-sectional-momentum')?.description ?? '';
     expect(description).toContain('분할 이력이 수집된 데이터셋에서만');
+    expect(crossSectionalMomentumStrategy.version).toBe('2.1.0');
   });
 
   it('JSON 스키마에 한국어 라벨과 기본값이 실린다', () => {
@@ -175,6 +176,26 @@ describe('2단계 리밸런스 실행', () => {
     expect(buys.length).toBeGreaterThan(0);
     // 오르는 종목만 산다 — 절대 모멘텀 필터가 BBB 를 걸러낸다
     expect(new Set(buys.map((fill) => fill.symbol))).toEqual(new Set(['AAA']));
+  });
+
+  it('topN 경계의 동일 모멘텀은 같은 seed에서 재현되고 seed별로 다른 종목을 편입한다', () => {
+    const tiedCandles = Array.from({ length: 25 }, (_, index) => [
+      candle('AAA', index, 1_000 + index * 10),
+      candle('BBB', index, 1_000 + index * 10),
+      candle('CCC', index, 1_000 + index * 10),
+    ]).flat();
+    const winner = (randomSeed: number) => runBacktest(crossSectionalMomentumStrategy, {
+      candles: tiedCandles,
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters,
+      randomSeed,
+      maxPositions: 1,
+      tradeFromTsMs: START + 20 * DAY,
+    }).fills.find((fill) => fill.side === 'BUY')?.symbol;
+
+    expect(winner(42)).toBe(winner(42));
+    expect(new Set(Array.from({ length: 8 }, (_, seed) => winner(seed))).size).toBeGreaterThan(1);
   });
 
 

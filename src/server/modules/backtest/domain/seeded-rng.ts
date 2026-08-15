@@ -14,3 +14,13 @@ export function createRng(seed: number): Rng {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+
+/** 같은 RNG 상태는 같은 순열을 내는 in-place Fisher–Yates shuffle. */
+export function shuffleInPlace<T>(items: T[], rng: Rng): void {
+  for (let index = items.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(rng() * (index + 1));
+    const current = items[index] as T;
+    items[index] = items[swapIndex] as T;
+    items[swapIndex] = current;
+  }
+}
