@@ -940,6 +940,7 @@ GET    /api/v1/backtests/:id/clone-draft
 GET    /api/v1/backtest-clone-batches
 GET    /api/v1/backtest-clone-batches/:id
 POST   /api/v1/backtest-clone-batches/:id/cancel
+DELETE /api/v1/backtest-clone-batches/:id
 DELETE /api/v1/backtests/:id
 GET    /api/v1/backtests/:id/trades
 GET    /api/v1/backtests/:id/series
@@ -960,9 +961,25 @@ hash가 같고 원본 유니버스·출처·벤치마크 pin이 모두 파싱·h
 `clone-random-seeds`는 `{ "count": 1..100 }`을 받아 서로 다른 uint32 시드를 가진 묶음을
 만든다. 묶음 item은 먼저 영속화하고 실제 백테스트 job은 `MAX_QUEUED_BACKTESTS`의 빈
 슬롯만큼만 순차 생성한다. 따라서 100개 실험도 일반 대기열 상한을 우회하지 않는다.
+seed 묶음의 자식 job에서는 다시 `clone-random-seeds`를 호출할 수 없고 원본 백테스트로
+돌아가야 한다. 중첩 묶음은 같은 설정의 seed 표본을 다시 감싸 계보와 삭제 수명만
+복잡하게 만들기 때문이다.
 취소하면 묶음은 먼저 `CANCELLING`이 되어 새 승격을 막고, 실행 중인 자식이 모두 종료된
 뒤에만 `CANCELLED`와 완료 시각을 확정한다. 자식별 종료 알림은 만들지 않고 묶음이
 `COMPLETED`·`FAILED`·`CANCELLED`로 확정될 때 결과 수를 집계한 알림 한 건만 만든다.
+상세 화면은 완료된 실행만 대상으로 평균·중앙·최고·최저 수익률과 평균 MDD를 집계하고,
+수익률과 Sharpe의 표본 표준편차를 `n-1`로 계산한다. Sharpe가 `null`인 실행은 Sharpe
+분포에서만 제외하며, 이 편차는 가격 경로의 Monte Carlo가 아니라 동률·동시 주문의 seed
+순서 민감성을 뜻한다.
+목록에서는 난수 실험을 별도 종류로 분리하지 않고 `sourceJobId`가 가리키는 원본
+백테스트 카드 아래에 들여써서 표시한다. 종료된 실험은 단독 삭제할 수 있고, 원본
+백테스트를 삭제하면 그 원본에서 만든 모든 난수 실험과 자식 job·결과도 같은 트랜잭션에서
+삭제한다. 실행 중인 실험이나 자식 job이 하나라도 있으면 삭제를 거부하고 취소 완료를
+먼저 요구한다.
+`GET /backtest-clone-batches`는 기본 50개 백테스트 페이지 밖 원본도 표시할 수 있도록
+응답의 `sourceJobs`에 현재 묶음들이 참조하는 원본 job 요약을 중복 없이 함께 반환한다.
+과거 버전에서 이미 중첩 묶음이 생겼다면 삭제 시 후손 묶음을 재귀적으로 포함하며, 활성
+후손이 하나라도 있으면 전체 삭제를 거부한다.
 
 ## 상태
 

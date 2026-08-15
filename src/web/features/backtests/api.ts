@@ -53,7 +53,10 @@ export function useBacktests(refetchIntervalMs?: number) {
 export function useSeedCloneBatches(refetchIntervalMs?: number) {
   return useQuery({
     queryKey: ['backtest-clone-batches'],
-    queryFn: () => api<{ batches: SeedCloneBatchSummary[] }>('/backtest-clone-batches'),
+    queryFn: () => api<{
+      batches: SeedCloneBatchSummary[];
+      sourceJobs: JobSummary[];
+    }>('/backtest-clone-batches'),
     refetchInterval: refetchIntervalMs ?? false,
   });
 }

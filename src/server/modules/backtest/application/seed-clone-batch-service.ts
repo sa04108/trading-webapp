@@ -11,6 +11,7 @@ import type { ProvenancePin } from '../../../../shared/schemas/provenance-pin.js
 import type { Clock } from '../../../shared/clock.js';
 import type { DatabaseHandle } from '../../../shared/db/database.js';
 import {
+  backtestJobs,
   backtestCloneBatchItems,
   backtestCloneBatches,
 } from '../../../shared/db/schema.js';
@@ -41,6 +42,12 @@ export interface SeedCloneBatchDetail {
 }
 
 export type SeedCloneBatchTerminalStatus = 'COMPLETED' | 'FAILED' | 'CANCELLED';
+export type SeedCloneDeleteResult = 'DELETED' | 'NOT_FOUND' | 'NOT_DELETABLE';
+
+interface SeedCloneDeletionPlan {
+  readonly batchIds: readonly string[];
+  readonly jobIds: readonly string[];
+}
 
 export interface SeedCloneBatchEvent {
   readonly batchId: string;
@@ -221,6 +228,91 @@ export class SeedCloneBatchService {
     // 실제 job이 하나도 없고 전부 묶음 대기였다면 이 자리에서 곧바로 최종 취소된다.
     this.onJobStatusChanged();
     return this.get(batchId);
+  }
+
+  /**
+   * 종료된 난수 실험과 그 자식 job·결과를 한 트랜잭션에서 지운다.
+   * 실행 중인 자식을 DB에서 먼저 지우면 워커가 고아 결과를 쓰게 되므로 거부한다.
+   */
+  delete(batchId: string): SeedCloneDeleteResult {
+    return this.database.sqlite.transaction(() => {
+      const detail = this.get(batchId);
+      if (!detail) return 'NOT_FOUND';
+      const plan = this.collectDeletionPlan([batchId]);
+      if (!plan) return 'NOT_DELETABLE';
+      this.executeDeletionPlan(plan);
+      return 'DELETED';
+    }).immediate();
+  }
+
+  /** 원본 백테스트와 그 원본에서 만든 모든 난수 실험·자식 결과를 원자적으로 지운다. */
+  deleteSourceJob(sourceJobId: string): SeedCloneDeleteResult {
+    return this.database.sqlite.transaction(() => {
+      const source = this.queue.getJob(sourceJobId);
+      if (!source) return 'NOT_FOUND';
+      if (!this.queue.isTerminal(source.status)) return 'NOT_DELETABLE';
+
+      const batches = this.database.db
+        .select({ id: backtestCloneBatches.id })
+        .from(backtestCloneBatches)
+        .where(eq(backtestCloneBatches.sourceJobId, sourceJobId))
+        .all();
+      const plan = this.collectDeletionPlan(batches.map((batch) => batch.id));
+      if (!plan) return 'NOT_DELETABLE';
+      this.executeDeletionPlan(plan);
+      this.database.db.delete(backtestJobs).where(eq(backtestJobs.id, sourceJobId)).run();
+      return 'DELETED';
+    }).immediate();
+  }
+
+  private isDeletable(detail: SeedCloneBatchDetail): boolean {
+    const terminalBatch = detail.batch.status === 'COMPLETED'
+      || detail.batch.status === 'FAILED'
+      || detail.batch.status === 'CANCELLED';
+    return terminalBatch && detail.items.every(
+      ({ job }) => job === null || this.queue.isTerminal(job.status),
+    );
+  }
+
+  /**
+   * 옛 데이터에는 seed 자식 job을 다시 원본으로 삼은 중첩 묶음이 있을 수 있다.
+   * 삭제 전에 전체 후손을 따라가 하나라도 실행 중이면 아무 행도 지우지 않는다.
+   */
+  private collectDeletionPlan(rootBatchIds: readonly string[]): SeedCloneDeletionPlan | null {
+    const pending = [...rootBatchIds];
+    const batchIds = new Set<string>();
+    const jobIds = new Set<string>();
+    while (pending.length > 0) {
+      const batchId = pending.shift()!;
+      if (batchIds.has(batchId)) continue;
+      const detail = this.get(batchId);
+      if (!detail || !this.isDeletable(detail)) return null;
+      batchIds.add(batchId);
+
+      for (const { job } of detail.items) {
+        if (!job) continue;
+        jobIds.add(job.id);
+        const descendants = this.database.db
+          .select({ id: backtestCloneBatches.id })
+          .from(backtestCloneBatches)
+          .where(eq(backtestCloneBatches.sourceJobId, job.id))
+          .all();
+        for (const descendant of descendants) pending.push(descendant.id);
+      }
+    }
+
+    return { batchIds: [...batchIds], jobIds: [...jobIds] };
+  }
+
+  private executeDeletionPlan(plan: SeedCloneDeletionPlan): void {
+    if (plan.jobIds.length > 0) {
+      this.database.db.delete(backtestJobs).where(inArray(backtestJobs.id, [...plan.jobIds])).run();
+    }
+    if (plan.batchIds.length === 0) return;
+    this.database.db
+      .delete(backtestCloneBatches)
+      .where(inArray(backtestCloneBatches.id, [...plan.batchIds]))
+      .run();
   }
 
   private markTerminal(

@@ -697,9 +697,10 @@ export function BacktestDetailPage() {
     onSuccess: () => {
       toast.success('삭제되었습니다');
       void queryClient.invalidateQueries({ queryKey: ['backtests'] });
+      void queryClient.invalidateQueries({ queryKey: ['backtest-clone-batches'] });
       void navigate('/backtests');
     },
-    onError: () => toast.error('실행 중인 작업은 삭제할 수 없습니다'),
+    onError: (error) => toast.error(error.message),
   });
 
   const strategies = useStrategies();
@@ -770,14 +771,16 @@ export function BacktestDetailPage() {
                   <Copy data-icon="inline-start" />
                   그대로 복제
                 </Button>
-                <Button
-                  variant="outline"
-                  className="h-11 rounded-none border-l-0"
-                  onClick={() => setSeedCloneOpen(true)}
-                >
-                  <Dices data-icon="inline-start" />
-                  새 난수로 복제
-                </Button>
+                {job.cloneBatchId === null ? (
+                  <Button
+                    variant="outline"
+                    className="h-11 rounded-none border-l-0"
+                    onClick={() => setSeedCloneOpen(true)}
+                  >
+                    <Dices data-icon="inline-start" />
+                    새 난수로 복제
+                  </Button>
+                ) : null}
                 <Button variant="outline" className="h-11 rounded-l-none border-l-0" asChild>
                   <Link to={`/backtests/new?from=${id}`}>
                     <SlidersHorizontal data-icon="inline-start" />
@@ -925,7 +928,8 @@ export function BacktestDetailPage() {
           <DialogHeader>
             <DialogTitle>백테스트 삭제</DialogTitle>
             <DialogDescription>
-              이 작업의 결과·거래 내역이 모두 삭제됩니다. 되돌릴 수 없습니다.
+              이 작업의 결과·거래 내역과 이 작업에서 만든 난수 시드 실험이 모두
+              삭제됩니다. 되돌릴 수 없습니다.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

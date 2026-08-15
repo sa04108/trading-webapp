@@ -277,6 +277,11 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     seedCloneBatches,
   } = deps;
 
+  const serializeJobSummary = (job: BacktestJobRow) => ({
+    ...serializeJob(job),
+    metrics: job.status === 'COMPLETED' ? results.getMetrics(job.id) : null,
+  });
+
   const serializeBatch = (detail: SeedCloneBatchDetail, includeItems: boolean) => {
     const statuses = detail.items.map(({ item, job }) => {
       if (item.state === 'PENDING') return 'PENDING';
@@ -848,10 +853,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const query = parsedQuery.data;
     const jobs = queue.listTopLevelJobs(query.limit, query.offset);
     return {
-      jobs: jobs.map((job) => ({
-        ...serializeJob(job),
-        metrics: job.status === 'COMPLETED' ? results.getMetrics(job.id) : null,
-      })),
+      jobs: jobs.map(serializeJobSummary),
     };
   });
 
@@ -1051,6 +1053,11 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const { id } = request.params as { id: string };
     const sourceJob = queue.getJob(id);
     if (!sourceJob) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
+    if (sourceJob.cloneBatchId !== null) {
+      return reply.code(409).send({
+        error: '난수 시드 실험의 자식 실행에서는 새 난수 실험을 만들 수 없습니다. 원본 백테스트에서 시작하세요.',
+      });
+    }
     const countBody = z.object({ count: z.number().int().min(1).max(100) }).safeParse(request.body);
     if (!countBody.success) {
       return reply.code(400).send({ error: '실행 개수는 1~100 사이의 정수여야 합니다.' });
@@ -1126,9 +1133,18 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     };
   });
 
-  app.get('/backtest-clone-batches', { preHandler: requireAuth }, () => ({
-    batches: seedCloneBatches.list().map((batch) => serializeBatch(batch, false)),
-  }));
+  app.get('/backtest-clone-batches', { preHandler: requireAuth }, () => {
+    const batches = seedCloneBatches.list();
+    const sourceJobIds = new Set(batches.map(({ batch }) => batch.sourceJobId));
+    const sourceJobs = [...sourceJobIds].flatMap((sourceJobId) => {
+      const source = queue.getJob(sourceJobId);
+      return source ? [serializeJobSummary(source)] : [];
+    });
+    return {
+      batches: batches.map((batch) => serializeBatch(batch, false)),
+      sourceJobs,
+    };
+  });
 
   app.get('/backtest-clone-batches/:id', { preHandler: requireAuth }, (request, reply) => {
     const { id } = request.params as { id: string };
@@ -1150,11 +1166,31 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     return { batch: serializeBatch(seedCloneBatches.get(id)!, false) };
   });
 
+  app.delete('/backtest-clone-batches/:id', { preHandler: requireAuth }, (request, reply) => {
+    const { id } = request.params as { id: string };
+    const result = seedCloneBatches.delete(id);
+    if (result === 'NOT_FOUND') {
+      return reply.code(404).send({ error: '난수 시드 실험을 찾을 수 없습니다' });
+    }
+    if (result === 'NOT_DELETABLE') {
+      return reply.code(409).send({ error: '실행 중인 난수 시드 실험은 취소 완료 후 삭제할 수 있습니다' });
+    }
+    audit.record(request.authUser?.username ?? 'admin', 'backtest.seed-clone-batch.deleted', {
+      batchId: id,
+    });
+    return reply.code(204).send();
+  });
+
   app.delete('/backtests/:id', { preHandler: requireAuth }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const deleted = queue.deleteJob(id);
-    if (!deleted) {
-      return reply.code(409).send({ error: '실행 중이거나 존재하지 않는 작업은 삭제할 수 없습니다' });
+    const result = seedCloneBatches.deleteSourceJob(id);
+    if (result === 'NOT_FOUND') {
+      return reply.code(404).send({ error: '백테스트를 찾을 수 없습니다' });
+    }
+    if (result === 'NOT_DELETABLE') {
+      return reply.code(409).send({
+        error: '실행 중인 백테스트나 난수 시드 실험은 취소 완료 후 삭제할 수 있습니다',
+      });
     }
     audit.record(request.authUser?.username ?? 'admin', 'backtest.deleted', { jobId: id });
     return reply.code(204).send();

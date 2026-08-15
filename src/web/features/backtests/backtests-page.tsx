@@ -22,6 +22,34 @@ export function deletableBacktestIds(jobs: readonly JobSummary[]): string[] {
   return jobs.filter((job) => isTerminal(job.status)).map((job) => job.id);
 }
 
+export function groupSeedBatchesBySource(
+  batches: readonly SeedCloneBatchSummary[],
+): ReadonlyMap<string, readonly SeedCloneBatchSummary[]> {
+  const grouped = new Map<string, SeedCloneBatchSummary[]>();
+  for (const batch of batches) {
+    const sourceBatches = grouped.get(batch.sourceJobId) ?? [];
+    sourceBatches.push(batch);
+    grouped.set(batch.sourceJobId, sourceBatches);
+  }
+  return grouped;
+}
+
+export function hasActiveSeedBatch(batches: readonly SeedCloneBatchSummary[]): boolean {
+  return batches.some((batch) => batch.status === 'ACTIVE' || batch.status === 'CANCELLING');
+}
+
+/** 기본 50개 목록 밖 원본도 배치 API가 돌려준 요약으로 복원한다. */
+export function mergeBacktestSources(
+  listedJobs: readonly JobSummary[],
+  batchSourceJobs: readonly JobSummary[],
+): JobSummary[] {
+  const merged = new Map(listedJobs.map((job) => [job.id, job]));
+  for (const source of batchSourceJobs) {
+    if (!merged.has(source.id)) merged.set(source.id, source);
+  }
+  return [...merged.values()];
+}
+
 export function toggleAllBacktests(
   selected: ReadonlySet<string>,
   deletableIds: readonly string[],
@@ -35,12 +63,14 @@ export function BacktestJobCard({
   timeframe,
   editing,
   selected,
+  deletable,
   onToggle,
 }: {
   job: JobSummary;
   timeframe: string | null;
   editing: boolean;
   selected: boolean;
+  deletable?: boolean;
   onToggle: () => void;
 }) {
   const running = !isTerminal(job.status);
@@ -96,7 +126,7 @@ export function BacktestJobCard({
     );
   }
 
-  if (!isTerminal(job.status)) {
+  if (!(deletable ?? isTerminal(job.status))) {
     return (
       <div className="flex items-start gap-3">
         <span className="mt-5 size-4 shrink-0" aria-hidden="true" />
@@ -122,27 +152,53 @@ export function BacktestJobCard({
   );
 }
 
-export function SeedCloneBatchCard({ batch }: { batch: SeedCloneBatchSummary }) {
+export function SeedCloneBatchCard({
+  batch,
+  editing = false,
+  removing = false,
+  onRemove,
+}: {
+  batch: SeedCloneBatchSummary;
+  editing?: boolean;
+  removing?: boolean;
+  onRemove?: () => void;
+}) {
   const terminal = batch.completedCount + batch.failedCount + batch.cancelledCount
     + batch.interruptedCount + batch.deletedCount;
   const progress = Math.round((terminal / batch.totalCount) * 100);
+  const card = (
+    <Card className="transition-colors hover:bg-muted/40">
+      <CardContent className="space-y-2 py-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Dices className="size-4" />
+          <span className="font-medium">난수 시드 {batch.totalCount}개</span>
+          <span className="ml-auto text-xs text-muted-foreground">{formatDateTime(batch.createdAtMs)}</span>
+        </div>
+        <Progress value={progress} aria-label={`난수 시드 실험 진행률 ${progress}%`} />
+        <p className="text-xs text-muted-foreground">
+          완료 {batch.completedCount} · 실행 {batch.runningCount} · 실행 대기 {batch.queuedCount}
+          {' · '}묶음 대기 {batch.pendingCount} · 실패 {batch.failedCount}
+        </p>
+      </CardContent>
+    </Card>
+  );
+  if (!editing) {
+    return <Link to={`/backtests/batches/${batch.id}`} className="block">{card}</Link>;
+  }
+  const active = batch.status === 'ACTIVE' || batch.status === 'CANCELLING';
   return (
-    <Link to={`/backtests/batches/${batch.id}`} className="block">
-      <Card className="transition-colors hover:bg-muted/40">
-        <CardContent className="space-y-2 py-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <Dices className="size-4" />
-            <span className="font-medium">새 난수 시드 {batch.totalCount}개</span>
-            <span className="ml-auto text-xs text-muted-foreground">{formatDateTime(batch.createdAtMs)}</span>
-          </div>
-          <Progress value={progress} aria-label={`난수 시드 실험 진행률 ${progress}%`} />
-          <p className="text-xs text-muted-foreground">
-            완료 {batch.completedCount} · 실행 {batch.runningCount} · 실행 대기 {batch.queuedCount}
-            {' · '}묶음 대기 {batch.pendingCount} · 실패 {batch.failedCount}
-          </p>
-        </CardContent>
-      </Card>
-    </Link>
+    <div className="flex items-center gap-2">
+      <div className="min-w-0 flex-1">{card}</div>
+      <Button
+        variant="destructive"
+        size="sm"
+        disabled={active || removing}
+        title={active ? '실행 중인 실험은 취소 완료 후 삭제할 수 있습니다' : undefined}
+        onClick={onRemove}
+      >
+        실험 삭제
+      </Button>
+    </div>
   );
 }
 
@@ -152,9 +208,15 @@ export function BacktestsPage() {
   const batchesQuery = useSeedCloneBatches(5_000);
   const strategies = useStrategies();
   const strategyById = new Map((strategies.data?.strategies ?? []).map((s) => [s.id, s]));
-  const jobs = (data?.jobs ?? []).filter((job) => !job.cloneBatchId);
+  const jobs = mergeBacktestSources(
+    (data?.jobs ?? []).filter((job) => !job.cloneBatchId),
+    batchesQuery.data?.sourceJobs ?? [],
+  );
   const batches = batchesQuery.data?.batches ?? [];
-  const deletableIds = deletableBacktestIds(jobs);
+  const batchesBySource = groupSeedBatchesBySource(batches);
+  const deletableIds = deletableBacktestIds(jobs).filter(
+    (id) => !hasActiveSeedBatch(batchesBySource.get(id) ?? []),
+  );
   const [editing, setEditing] = useState(false);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const selectedIds = deletableIds.filter((id) => selected.has(id));
@@ -169,7 +231,20 @@ export function BacktestsPage() {
       setEditing(false);
     },
     onError: (error) => toast.error(error.message),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ['backtests'] }),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['backtests'] });
+      void queryClient.invalidateQueries({ queryKey: ['backtest-clone-batches'] });
+    },
+  });
+
+  const removeBatch = useMutation({
+    mutationFn: (id: string) => api(`/backtest-clone-batches/${id}`, { method: 'DELETE' }),
+    onSuccess: () => toast.success('난수 시드 실험을 삭제했습니다'),
+    onError: (error) => toast.error(error.message),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['backtests'] });
+      void queryClient.invalidateQueries({ queryKey: ['backtest-clone-batches'] });
+    },
   });
 
   const toggleOne = (id: string) =>
@@ -238,14 +313,8 @@ export function BacktestsPage() {
           <Skeleton className="h-24 w-full" />
           <Skeleton className="h-24 w-full" />
         </div>
-      ) : jobs.length > 0 || batches.length > 0 ? (
+      ) : jobs.length > 0 ? (
         <div className="space-y-6">
-          {batches.length > 0 ? (
-            <section className="space-y-3">
-              <h3 className="text-sm font-semibold">난수 시드 실험</h3>
-              {batches.map((batch) => <SeedCloneBatchCard key={batch.id} batch={batch} />)}
-            </section>
-          ) : null}
           {groupJobsByStrategy(jobs).map((group) => {
             const strategy = strategyById.get(group.strategyId);
             return (
@@ -258,16 +327,34 @@ export function BacktestsPage() {
                     </InfoHint>
                   ) : null}
                 </div>
-                {group.jobs.map((job) => (
-                  <BacktestJobCard
-                    key={job.id}
-                    job={job}
-                    timeframe={resolveJobTimeframe(job)}
-                    editing={editing}
-                    selected={selected.has(job.id)}
-                    onToggle={() => toggleOne(job.id)}
-                  />
-                ))}
+                {group.jobs.map((job) => {
+                  const sourceBatches = batchesBySource.get(job.id) ?? [];
+                  return (
+                    <div key={job.id} className="space-y-2">
+                      <BacktestJobCard
+                        job={job}
+                        timeframe={resolveJobTimeframe(job)}
+                        editing={editing}
+                        selected={selected.has(job.id)}
+                        deletable={deletableIds.includes(job.id)}
+                        onToggle={() => toggleOne(job.id)}
+                      />
+                      {sourceBatches.length > 0 ? (
+                        <div className="ml-4 space-y-2 border-l-2 border-muted pl-4 sm:ml-7">
+                          {sourceBatches.map((batch) => (
+                            <SeedCloneBatchCard
+                              key={batch.id}
+                              batch={batch}
+                              editing={editing}
+                              removing={removeBatch.isPending && removeBatch.variables === batch.id}
+                              onRemove={() => removeBatch.mutate(batch.id)}
+                            />
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
               </section>
             );
           })}
