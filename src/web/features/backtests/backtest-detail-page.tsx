@@ -771,14 +771,16 @@ export function BacktestDetailPage() {
                   <Copy data-icon="inline-start" />
                   그대로 복제
                 </Button>
-                <Button
-                  variant="outline"
-                  className="h-11 rounded-none border-l-0"
-                  onClick={() => setSeedCloneOpen(true)}
-                >
-                  <Dices data-icon="inline-start" />
-                  새 난수로 복제
-                </Button>
+                {job.cloneBatchId === null ? (
+                  <Button
+                    variant="outline"
+                    className="h-11 rounded-none border-l-0"
+                    onClick={() => setSeedCloneOpen(true)}
+                  >
+                    <Dices data-icon="inline-start" />
+                    새 난수로 복제
+                  </Button>
+                ) : null}
                 <Button variant="outline" className="h-11 rounded-l-none border-l-0" asChild>
                   <Link to={`/backtests/new?from=${id}`}>
                     <SlidersHorizontal data-icon="inline-start" />

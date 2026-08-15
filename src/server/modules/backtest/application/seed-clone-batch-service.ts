@@ -44,6 +44,11 @@ export interface SeedCloneBatchDetail {
 export type SeedCloneBatchTerminalStatus = 'COMPLETED' | 'FAILED' | 'CANCELLED';
 export type SeedCloneDeleteResult = 'DELETED' | 'NOT_FOUND' | 'NOT_DELETABLE';
 
+interface SeedCloneDeletionPlan {
+  readonly batchIds: readonly string[];
+  readonly jobIds: readonly string[];
+}
+
 export interface SeedCloneBatchEvent {
   readonly batchId: string;
   readonly status: SeedCloneBatchTerminalStatus;
@@ -233,8 +238,9 @@ export class SeedCloneBatchService {
     return this.database.sqlite.transaction(() => {
       const detail = this.get(batchId);
       if (!detail) return 'NOT_FOUND';
-      if (!this.isDeletable(detail)) return 'NOT_DELETABLE';
-      this.deleteBatchesAndChildren([batchId]);
+      const plan = this.collectDeletionPlan([batchId]);
+      if (!plan) return 'NOT_DELETABLE';
+      this.executeDeletionPlan(plan);
       return 'DELETED';
     }).immediate();
   }
@@ -251,12 +257,9 @@ export class SeedCloneBatchService {
         .from(backtestCloneBatches)
         .where(eq(backtestCloneBatches.sourceJobId, sourceJobId))
         .all();
-      for (const batch of batches) {
-        const detail = this.get(batch.id);
-        if (!detail || !this.isDeletable(detail)) return 'NOT_DELETABLE';
-      }
-
-      this.deleteBatchesAndChildren(batches.map((batch) => batch.id));
+      const plan = this.collectDeletionPlan(batches.map((batch) => batch.id));
+      if (!plan) return 'NOT_DELETABLE';
+      this.executeDeletionPlan(plan);
       this.database.db.delete(backtestJobs).where(eq(backtestJobs.id, sourceJobId)).run();
       return 'DELETED';
     }).immediate();
@@ -271,20 +274,44 @@ export class SeedCloneBatchService {
     );
   }
 
-  private deleteBatchesAndChildren(batchIds: readonly string[]): void {
-    if (batchIds.length === 0) return;
-    const items = this.database.db
-      .select({ jobId: backtestCloneBatchItems.jobId })
-      .from(backtestCloneBatchItems)
-      .where(inArray(backtestCloneBatchItems.batchId, [...batchIds]))
-      .all();
-    const jobIds = items.flatMap(({ jobId }) => jobId === null ? [] : [jobId]);
-    if (jobIds.length > 0) {
-      this.database.db.delete(backtestJobs).where(inArray(backtestJobs.id, jobIds)).run();
+  /**
+   * 옛 데이터에는 seed 자식 job을 다시 원본으로 삼은 중첩 묶음이 있을 수 있다.
+   * 삭제 전에 전체 후손을 따라가 하나라도 실행 중이면 아무 행도 지우지 않는다.
+   */
+  private collectDeletionPlan(rootBatchIds: readonly string[]): SeedCloneDeletionPlan | null {
+    const pending = [...rootBatchIds];
+    const batchIds = new Set<string>();
+    const jobIds = new Set<string>();
+    while (pending.length > 0) {
+      const batchId = pending.shift()!;
+      if (batchIds.has(batchId)) continue;
+      const detail = this.get(batchId);
+      if (!detail || !this.isDeletable(detail)) return null;
+      batchIds.add(batchId);
+
+      for (const { job } of detail.items) {
+        if (!job) continue;
+        jobIds.add(job.id);
+        const descendants = this.database.db
+          .select({ id: backtestCloneBatches.id })
+          .from(backtestCloneBatches)
+          .where(eq(backtestCloneBatches.sourceJobId, job.id))
+          .all();
+        for (const descendant of descendants) pending.push(descendant.id);
+      }
     }
+
+    return { batchIds: [...batchIds], jobIds: [...jobIds] };
+  }
+
+  private executeDeletionPlan(plan: SeedCloneDeletionPlan): void {
+    if (plan.jobIds.length > 0) {
+      this.database.db.delete(backtestJobs).where(inArray(backtestJobs.id, [...plan.jobIds])).run();
+    }
+    if (plan.batchIds.length === 0) return;
     this.database.db
       .delete(backtestCloneBatches)
-      .where(inArray(backtestCloneBatches.id, [...batchIds]))
+      .where(inArray(backtestCloneBatches.id, [...plan.batchIds]))
       .run();
   }
 

@@ -168,8 +168,11 @@ describe('백테스트 목록', () => {
     const source = job('source', 'COMPLETED');
     const childBatch = batch('seed-batch', source.id);
     const client = new QueryClient();
-    client.setQueryData(['backtests'], { jobs: [source] });
-    client.setQueryData(['backtest-clone-batches'], { batches: [childBatch] });
+    client.setQueryData(['backtests'], { jobs: [] });
+    client.setQueryData(['backtest-clone-batches'], {
+      batches: [childBatch],
+      sourceJobs: [source],
+    });
     client.setQueryData(['strategies'], {
       strategies: [{
         id: source.strategyId,

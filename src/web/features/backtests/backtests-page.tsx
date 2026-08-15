@@ -38,6 +38,18 @@ export function hasActiveSeedBatch(batches: readonly SeedCloneBatchSummary[]): b
   return batches.some((batch) => batch.status === 'ACTIVE' || batch.status === 'CANCELLING');
 }
 
+/** 기본 50개 목록 밖 원본도 배치 API가 돌려준 요약으로 복원한다. */
+export function mergeBacktestSources(
+  listedJobs: readonly JobSummary[],
+  batchSourceJobs: readonly JobSummary[],
+): JobSummary[] {
+  const merged = new Map(listedJobs.map((job) => [job.id, job]));
+  for (const source of batchSourceJobs) {
+    if (!merged.has(source.id)) merged.set(source.id, source);
+  }
+  return [...merged.values()];
+}
+
 export function toggleAllBacktests(
   selected: ReadonlySet<string>,
   deletableIds: readonly string[],
@@ -196,7 +208,10 @@ export function BacktestsPage() {
   const batchesQuery = useSeedCloneBatches(5_000);
   const strategies = useStrategies();
   const strategyById = new Map((strategies.data?.strategies ?? []).map((s) => [s.id, s]));
-  const jobs = (data?.jobs ?? []).filter((job) => !job.cloneBatchId);
+  const jobs = mergeBacktestSources(
+    (data?.jobs ?? []).filter((job) => !job.cloneBatchId),
+    batchesQuery.data?.sourceJobs ?? [],
+  );
   const batches = batchesQuery.data?.batches ?? [];
   const batchesBySource = groupSeedBatchesBySource(batches);
   const deletableIds = deletableBacktestIds(jobs).filter(
