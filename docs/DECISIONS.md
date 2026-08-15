@@ -97,8 +97,6 @@
 - **세션 고정:** 회전 시점이 TOTP 검증에서 로그인 성공으로 옮겨갔을 뿐, 로그인마다 새 세션 ID 를 발급하는 것은 그대로다. 서버가 발급하지 않은 쿠키 값은 어느 시점에도 인증된 세션이 되지 않는다.
 - **D-010 예외:** D-010 은 파괴적 스키마 변경을 코드가 참조를 끊은 *다음* 릴리스에 싣는 expand-contract 원칙을 세웠다. 이 변경은 코드 제거와 DROP COLUMN 을 한 릴리스에 함께 실었다 — 운영 서버가 아직 구축되지 않아 보호할 데이터가 없고 되돌릴 이전 릴리스도 배포된 적이 없다. 원칙 자체는 유효하며, 운영 시작 후에는 지킨다.
 - **되돌리기 비용:** 실거래 단계에서 2단계 인증 요구가 생기면 재구현이 필요하다 — 의존성 추가, 컬럼 복원 마이그레이션, 2단계 로그인 흐름 복원. 그 시점의 요구(TOTP 인지 passkey 인지)에 맞춰 새로 설계하는 편이 지금 쓰지 않는 경로를 유지하는 것보다 낫다고 판단했다.
-- **설계 문서:** `docs/superpowers/specs/2026-07-26-totp-removal-design.md`
-
 ## D-015: 배포 전 마이그레이션 스쿼시 — 이력은 0000 하나로
 
 - **변경 내용:** 마이그레이션 0000~0007 과 대응 스냅샷을 모두 지우고 현재 스키마 기준의 단일 마이그레이션(`0000_ambiguous_bedlam.sql`)으로 다시 생성했다. `migrations/` 는 297KB → 42KB 가 됐다 (스냅샷 8개가 272KB 를 차지했다).
@@ -146,8 +144,6 @@
   `*.sh text eol=lf` 를 추가했다. scripts/bootstrap.sh 가 infra/provision.sh 를 scp 로
   서버에 전달하는데, 개발 PC 가 core.autocrlf=true 이고 CRLF 로 체크아웃되면 Ubuntu 에서
   shebang 이 `#!/bin/sh\r` 이 되어 프로비저닝이 실패한다.
-- **설계 문서:** `docs/superpowers/specs/2026-07-26-tailscale-provisioning-design.md`
-
 ## D-017: 평면 분리 헌법 — 플랫폼 read-only, TOTP 복원(D-014 부분 폐기), Tailscale 제거(D-016 폐기)
 
 - **변경 내용:** 보안 모델의 전제를 "플랫폼 전체를 사설망 뒤에 숨긴다"에서 "플랫폼의
@@ -175,8 +171,6 @@
 - **스펙 관계:** §2.2·§2.6·§16 은 본문을 개정했다. §23(WireGuard)·§24(퍼블릭 방화벽
   마감)·§25(UFW 원문)·§27(Caddy 내부 TLS)은 이 결정으로 대체된다 — 현행 규칙은
   스펙 §2.2 다이어그램과 infra/provision.sh 가 정의한다.
-- **설계 문서:** `docs/superpowers/specs/2026-07-27-platform-readonly-constitution-design.md`
-
 ## D-018: 토스증권 Open API 어댑터 — 승인 완료로 2차 어댑터 추가 (D-002 예정 이행)
 
 - **변경 내용:** `createTossMarketDataSource` 를 broker infrastructure 에 추가했다
@@ -243,8 +237,6 @@
   sync 는 데이터셋당 1개 실행 가드(409)와 부팅 시 고아 잡 정리로 충분하다 (D-009).
 - **범위 밖:** 증분 자동 스케줄러(백업 자동화와 함께 나중에), 1m S3 아카이브(D-019,
   보관 깊이 실측 후), 종목 마스터 API, 헬스 대시보드 디스크 지표.
-- **설계 문서:** `docs/superpowers/specs/2026-07-28-broker-sync-design.md`
-
 ## D-021: 데이터셋 CRUD 완성 — 유니버스 밸브의 실체화
 
 - **변경 내용:** `PATCH /datasets/:id`(심볼 추가/제거)와 `DELETE /datasets/:id` 를 추가하고
@@ -666,8 +658,6 @@
 
 ## D-038: 종목 정렬(시가총액·거래대금·거래량)과 데이터셋 → 유니버스 도출
 
-설계: `docs/superpowers/specs/2026-08-01-symbol-sort-design.md`
-
 - **변경 내용:** (1) 종목 탭과 데이터셋 「종목 편집」에 정렬(시가총액순·거래대금순·
   거래량순·가나다순)을 넣었다. (2) `GET /symbols/metrics` 가 등록 종목 전체의 지표를
   답한다. (3) 백테스트 위저드에서 **종목 개별 선택 UI 를 없애고**, 데이터셋 카드의
@@ -1005,8 +995,7 @@
 ## D-046: 상장폐지는 마지막 거래 가능 봉 종가로 청산하고, 거래불가일은 별도 테이블에 기록한다
 
 - **증상 — `isValidCandle` 이 거래불가일을 파싱 버그로 오분류하고 있었다:**
-  KRX 실응답을 실측하니(`docs/superpowers/specs/2026-08-08-delisting-and-non-trading-days-design.md`
-  "KRX 실응답 실측") 거래불가 행의 시·고·저는 `null` 이 아니라 문자열 `"0"`
+  2026-08-08 KRX 실응답을 확인하니 거래불가 행의 시·고·저는 `null` 이 아니라 문자열 `"0"`
   이었다. 종가는 직전 종가를 그대로 유지하고 거래량도 0 이다.
   `writeDailyBars` 의 null 분기는 타지 않고 `isValidCandle` 의 `value <= 0`
   검사에 걸려 `invalidCount` 로 버려지고 있었다. 그 통은 원래 `high < low`

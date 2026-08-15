@@ -565,8 +565,7 @@ completedAt
 `scheduleHash` 에 남긴다.
 
 이 설계는 데이터셋을 종목의 참조 집합으로 좁힌 D-034 위에, 유니버스 규칙을 얹은
-후속 작업이다. DECISIONS.md 에 번호는 없다 — 근거는
-`docs/superpowers/plans/2026-08-05-symbol-master-backtest.md` 다.
+후속 작업이다.
 
 같은 입력·버전·seed는 같은 결과를 만들어야 한다.
 
@@ -793,8 +792,7 @@ DART 가 답하지 못해 gap 이 난 연도이고 위저드 경고가 읽는다
 종목 마스터는 날짜별 full universe를 입력으로 받되 `symbol_master_versions`에
 종목 상태가 바뀐 관측일만 SCD Type 2 반개구간으로 저장한다. coverage·시총·거래일도
 같은 수집 경로가 채운다. 기존 체크포인트·이벤트 테이블은 0012 이행 후 빈 legacy
-구조로만 남고 신규 쓰기·조회에는 쓰이지 않는다. 설계 문서는
-`docs/superpowers/specs/2026-08-05-symbol-master-design.md` 다.
+구조로만 남고 신규 쓰기·조회에는 쓰이지 않는다.
 
 `universe_snapshots`·`universe_snapshot_symbols`는 스키마에 없다.
 
@@ -802,15 +800,11 @@ D-040 이 설계한 저장 방식은 유니버스 규칙(`universeRule`, §9.5·
 대체됐다. 스냅샷을 저장하는 대신 제출 시점에 `UniverseRuleResolver` 가
 종목 마스터에서 매번 다시 구성한다.
 
-이 대체는 DECISIONS.md 에 번호가 없다. 근거는
-`docs/superpowers/plans/2026-08-05-symbol-master-backtest.md` Task 7 이다.
-
 `symbols.standard_code`는 KRX 표준코드(ISIN)를 보존해 단축코드 재사용과 종목
 변경을 구분한다.
 
 `notifications`는 백테스트·데이터 동기화 알림을 전역으로 담는다 — 사용자가
-한 명이라 사용자별로 나누지 않는다. 설계 문서는
-`docs/superpowers/specs/2026-08-03-notification-center-design.md` 다.
+한 명이라 사용자별로 나누지 않는다.
 
 SQLite 설정:
 
@@ -900,8 +894,7 @@ POST /api/v1/symbol-master/backfill
 ```
 
 라우트가 `datasets` 가 아니라 `symbols`·`symbol-master` 인 이유는 종목을 1급
-객체로 바꾼 D-034 다. 설계 문서는
-`docs/superpowers/specs/2026-07-31-symbol-as-first-class-design.md` 다.
+객체로 바꾼 D-034 다.
 
 `import`·`sync`·`data-jobs` 엔드포인트는 그 뒤 D-041 로 사라졌다 — CSV 가져오기·
 증권사 봉 동기화 자체가 없어졌다. 봉 수집은 이제 KRX 동기화(`symbol-master/sync`·

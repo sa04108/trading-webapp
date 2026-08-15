@@ -25,7 +25,6 @@
 | `docs/DECISIONS.md` | 스펙 밖 선택·스펙 편차의 기록 (D-001 ~ D-017). "왜 이렇게 했지?"의 1차 답변처 |
 | `docs/PLAN.md` | MVP 구현 계획 (Phase 0~5) |
 | `docs/IMPLEMENTATION_STATUS.md` | 무엇이 되어 있고 무엇이 안 되어 있는지 |
-| `docs/superpowers/specs/`, `plans/` | 개별 기능의 설계 문서와 구현 계획 (날짜별) |
 | `README.md` | 개발 시작·검증 게이트·배포 절차 요약 |
 
 ## 3. 기술 스택과 선택 이유
@@ -252,5 +251,5 @@ CSV 형식: `timestamp,open,high,low,close,volume` (ISO 8601 UTC 또는 epoch ms
 ---
 
 막히면: ① 스펙에서 해당 § 찾기 → ② DECISIONS.md 에서 관련 D 찾기 →
-③ `docs/superpowers/specs/` 의 설계 문서 → ④ git log 에서 해당 파일의 커밋 메시지.
+③ git log 에서 해당 파일의 커밋 메시지.
 이 순서면 대부분의 "왜?"가 풀린다.
