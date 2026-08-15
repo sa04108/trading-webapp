@@ -63,6 +63,8 @@ function job(id: string, status: JobSummary['status']): JobSummary {
     createdAtMs: Date.UTC(2026, 0, 2),
     startedAtMs: null,
     completedAtMs: status === 'COMPLETED' ? Date.UTC(2026, 0, 2) : null,
+    cloneBatchId: null,
+    cloneSourceJobId: null,
     metrics: status === 'COMPLETED' ? metrics : null,
   };
 }

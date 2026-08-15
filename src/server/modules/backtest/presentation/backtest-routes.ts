@@ -29,6 +29,7 @@ import type {
 } from '../../market-data/application/candle-coverage-service.js';
 import type { StrategyRegistry } from '../../strategy/application/strategy-registry.js';
 import type { BenchmarkService } from '../../market-data/application/benchmark-service.js';
+import { benchmarkPinSchema } from '../../../../shared/schemas/benchmark.js';
 import { estimateBars, MAX_BACKTEST_BARS } from '../domain/bar-estimate.js';
 import {
   getCostProfile,
@@ -47,6 +48,11 @@ import type {
   BacktestUniversePreview,
   PreparationInput,
 } from '../application/backtest-preparation-orchestrator.js';
+import { backtestPreparationRequestHash } from '../application/backtest-preparation-plan.js';
+import type {
+  SeedCloneBatchDetail,
+  SeedCloneBatchService,
+} from '../application/seed-clone-batch-service.js';
 
 type PreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -66,6 +72,7 @@ export interface BacktestRouteDeps {
   readonly maxQueuedBacktests: number;
   readonly clock: Clock;
   readonly benchmarks: BenchmarkService;
+  readonly seedCloneBatches: SeedCloneBatchService;
 }
 
 const MIN_FREE_DISK_BYTES = 500 * 1024 * 1024;
@@ -118,6 +125,8 @@ function serializeJob(job: BacktestJobRow) {
     createdAtMs: job.createdAtMs,
     startedAtMs: job.startedAtMs,
     completedAtMs: job.completedAtMs,
+    cloneBatchId: job.cloneBatchId,
+    cloneSourceJobId: job.cloneSourceJobId,
   };
 }
 
@@ -128,6 +137,21 @@ function preparationInputOf(body: BacktestRequest): PreparationInput {
     strategyId: body.strategyId,
     parameters: body.parameters,
   };
+}
+
+function scheduleHash(schedule: readonly LegacyUniverseScheduleEntry[]): string {
+  return createHash('sha256').update(JSON.stringify(schedule)).digest('hex');
+}
+
+function parseStoredSchedule(job: BacktestJobRow): LegacyUniverseScheduleEntry[] | null {
+  try {
+    const parsed: unknown = JSON.parse(job.universeScheduleJson);
+    return Array.isArray(parsed) && parsed.length > 0
+      ? (parsed as LegacyUniverseScheduleEntry[])
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 /** 준비 job의 staged schedule을 기존 worker가 소비하는 pin 모양으로 좁힌다. */
@@ -214,7 +238,54 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     factCoverage,
     clock,
     benchmarks,
+    seedCloneBatches,
   } = deps;
+
+  const serializeBatch = (detail: SeedCloneBatchDetail, includeItems: boolean) => {
+    const statuses = detail.items.map(({ item, job }) => {
+      if (item.state === 'PENDING') return 'PENDING';
+      if (item.state === 'CANCELLED') return 'CANCELLED';
+      return job?.status ?? 'DELETED';
+    });
+    const count = (status: string) => statuses.filter((value) => value === status).length;
+    const runningCount = statuses.filter((status) =>
+      status === 'STARTING' || status === 'RUNNING' || status === 'CANCELLING',
+    ).length;
+    const response = {
+      id: detail.batch.id,
+      sourceJobId: detail.batch.sourceJobId,
+      strategyId: detail.batch.strategyId,
+      status: detail.batch.status,
+      totalCount: detail.batch.totalCount,
+      pendingCount: count('PENDING'),
+      queuedCount: count('QUEUED'),
+      runningCount,
+      completedCount: count('COMPLETED'),
+      failedCount: count('FAILED'),
+      cancelledCount: count('CANCELLED'),
+      interruptedCount: count('INTERRUPTED'),
+      deletedCount: count('DELETED'),
+      request: JSON.parse(detail.batch.requestJson) as unknown,
+      error: detail.batch.error,
+      createdAtMs: detail.batch.createdAtMs,
+      completedAtMs: detail.batch.completedAtMs,
+    };
+    if (!includeItems) return response;
+    return {
+      ...response,
+      items: detail.items.map(({ item, job }) => ({
+        ordinal: item.ordinal,
+        randomSeed: item.randomSeed,
+        jobId: job?.id ?? null,
+        status: item.state === 'PENDING'
+          ? 'PENDING'
+          : item.state === 'CANCELLED'
+            ? 'CANCELLED'
+            : job?.status ?? 'DELETED',
+        metrics: job ? results.getMetrics(job.id) : null,
+      })),
+    };
+  };
 
   /**
    * 등록되지 않은 종목은 봉이 있어도 없는 것으로 취급한다(리뷰 finding, 2026-08-08).
@@ -534,6 +605,74 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
   };
 
   /**
+   * 원본 job의 고정 일정과 같은 준비 결과가 현재 전략 버전 hash에도 남아 있을 때만
+   * 미리보기 재사용을 허용한다. DB 조회와 hash 비교뿐이라 종목 마스터를 다시 해소하지
+   * 않는다. 전략 버전·전략 파라미터·기간·규칙 중 하나라도 달라지면 준비 hash가 달라져
+   * 자연스럽게 null이다.
+   */
+  const reusablePreviewFor = (
+    job: BacktestJobRow,
+    sourceRequest: BacktestRequest,
+  ): {
+    preview: BacktestUniversePreview;
+    schedule: LegacyUniverseScheduleEntry[];
+    response: BacktestUniversePreview & { fundamentalSymbols: string[] };
+  } | null => {
+    const preview = preparation.getCachedPreview(preparationInputOf(sourceRequest));
+    const schedule = parseStoredSchedule(job);
+    if (!preview || !schedule) return null;
+    const resolved = preparedPreviewToResolved(preview);
+    if (scheduleHash(schedule) !== resolved.scheduleHash) return null;
+
+    const covered = factCoverage.getCoveredYears(resolved.unionSymbols);
+    return {
+      preview,
+      schedule,
+      response: {
+        ...preview,
+        fundamentalSymbols: resolved.unionSymbols.filter(
+          (code) => (covered.get(code)?.length ?? 0) > 0,
+        ),
+      },
+    };
+  };
+
+  const sourceUniverseOr = (
+    job: BacktestJobRow,
+    fallback: ConsumedVersionSnapshot,
+  ): ConsumedVersionSnapshot => {
+    if (job.universeJson === null || job.universeHash === null) return fallback;
+    try {
+      const entries: unknown = JSON.parse(job.universeJson);
+      return Array.isArray(entries) ? { entries, hash: job.universeHash } as ConsumedVersionSnapshot : fallback;
+    } catch {
+      return fallback;
+    }
+  };
+
+  const sourceBenchmarkOr = (
+    job: BacktestJobRow,
+    body: BacktestRequest,
+  ): { pin: ReturnType<typeof benchmarkPinSchema.parse>; hash: string } => {
+    const requestedBenchmarkId = body.benchmarkId ?? 'KOSPI';
+    try {
+      const source = backtestRequestSchema.safeParse(JSON.parse(job.requestJson));
+      const sourceBenchmarkId = source.success ? source.data.benchmarkId ?? 'KOSPI' : null;
+      if (
+        sourceBenchmarkId === requestedBenchmarkId &&
+        job.benchmarkJson !== null &&
+        job.benchmarkHash !== null
+      ) {
+        const parsed = benchmarkPinSchema.safeParse(JSON.parse(job.benchmarkJson));
+        if (parsed.success) return { pin: parsed.data, hash: job.benchmarkHash };
+      }
+    } catch {
+      // 손상된 원본 pin은 아래 현재 벤치마크 재고정으로 복구한다.
+    }
+    return benchmarks.pin(requestedBenchmarkId, body.period);
+  };
+
+  /**
    * 대기열 깊이 상한 (D-025). QUEUED 만 센다 — 실행 중은 동시 실행 상한이 이미 묶고 있다.
    * 429 는 507(호스트 자원 부족)과 구분한다: 사용자가 할 일이 다르다(기다리거나 취소).
    */
@@ -647,7 +786,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       return reply.code(400).send({ error: '쿼리 파라미터가 올바르지 않습니다 (limit/offset)' });
     }
     const query = parsedQuery.data;
-    const jobs = queue.listJobs(query.limit, query.offset);
+    const jobs = queue.listTopLevelJobs(query.limit, query.offset);
     return {
       jobs: jobs.map((job) => ({
         ...serializeJob(job),
@@ -693,7 +832,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     );
     if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
     const cloneRequest = rebased.request;
-    const prepared = await preparation.getReadyPreview(preparationInputOf(cloneRequest));
+    const reusable = reusablePreviewFor(job, cloneRequest);
+    const prepared = reusable?.preview
+      ?? await preparation.getReadyPreview(preparationInputOf(cloneRequest));
     if (!prepared) {
       return reply.code(409).send({
         error: 'PREPARATION_REQUIRED',
@@ -740,11 +881,14 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const cloneWarnings = [...rebased.warnings, ...validated.warnings];
     const cloned = queue.enqueue(
       { ...cloneRequest, benchmarkId, timeframe: validated.timeframe },
-      validated.resolved.schedule,
-      validated.universe,
-      validated.provenancePin,
+      reusable?.schedule ?? validated.resolved.schedule,
+      reusable ? sourceUniverseOr(job, validated.universe) : validated.universe,
+      reusable
+        ? parseProvenancePin(job.provenancePinJson, id, request.log) ?? validated.provenancePin
+        : validated.provenancePin,
       cloneWarnings,
-      benchmark,
+      reusable ? sourceBenchmarkOr(job, cloneRequest) : benchmark,
+      { cloneSourceJobId: id },
     );
     audit.record(request.authUser?.username ?? 'admin', 'backtest.cloned', {
       sourceJobId: id,
@@ -754,6 +898,144 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     return reply
       .code(201)
       .send({ job: serializeJob(cloned), warnings: cloneWarnings });
+  });
+
+  /**
+   * 재설정 위저드가 원본 준비 결과를 재사용해 제출하는 경로. 클라이언트의 "미리보기
+   * 유효" 판정을 신뢰하지 않고 현재 전략 버전을 포함한 준비 hash와 원본 고정 일정을
+   * 서버에서 다시 대조한다. 자본·비용·벤치마크·보유 상한·시드만 바뀐 경우에는 이
+   * hash가 그대로라 전체 유니버스 해소 없이 검증 단계에서 바로 복제할 수 있다.
+   */
+  app.post('/backtests/:id/clone-configured', { preHandler: requireAuth }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const sourceJob = queue.getJob(id);
+    if (!sourceJob) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
+
+    const parsed = backtestRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; '),
+      });
+    }
+    const body = parsed.data;
+    const staticErrors = validateStaticSubmission(body);
+    if (staticErrors.length > 0) return reply.code(400).send({ error: staticErrors[0] });
+
+    const rebased = rebaseStoredRequest(
+      sourceJob.requestJson,
+      strategies.get(sourceJob.strategyId)?.version ?? null,
+    );
+    if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
+    const strategy = strategies.get(body.strategyId);
+    if (!strategy) return reply.code(400).send({ error: `알 수 없는 전략: ${body.strategyId}` });
+    const sourceStrategy = strategies.get(rebased.request.strategyId);
+    if (
+      !sourceStrategy ||
+      backtestPreparationRequestHash(body, strategy) !==
+        backtestPreparationRequestHash(rebased.request, sourceStrategy)
+    ) {
+      return reply.code(409).send({
+        error: 'PREVIEW_REQUIRED',
+        message: '유니버스 준비에 영향을 주는 설정이 바뀌었습니다. 미리보기를 다시 실행하세요.',
+      });
+    }
+
+    const reusable = reusablePreviewFor(sourceJob, rebased.request);
+    if (!reusable) {
+      return reply.code(409).send({
+        error: 'PREVIEW_REQUIRED',
+        message: '원본의 준비 결과를 안전하게 재사용할 수 없습니다. 미리보기를 다시 실행하세요.',
+      });
+    }
+
+    const validated = await validateSubmission(body, reusable.preview);
+    if (!validated.ok) {
+      return reply.code(validated.status).send({
+        error: validated.errors[0] ?? '제출을 검증할 수 없습니다',
+        ...('uncoveredDates' in validated ? { uncoveredDates: validated.uncoveredDates } : {}),
+      });
+    }
+    const fundamentalsError = checkFundamentalsRequirement(body, validated.resolved.unionSymbols);
+    if (fundamentalsError) return reply.code(422).send({ error: fundamentalsError });
+    const capacityError = checkPositionCapacity(body);
+    if (capacityError) return reply.code(422).send({ error: capacityError });
+    const queueError = queueDepthError();
+    if (queueError) return reply.code(429).send({ error: queueError });
+    const resourceError = await checkResources(deps.dataRoot);
+    if (resourceError) return reply.code(507).send({ error: resourceError });
+
+    const benchmarkId = body.benchmarkId ?? 'KOSPI';
+    const cloneWarnings = [...rebased.warnings, ...validated.warnings];
+    const cloned = queue.enqueue(
+      { ...body, benchmarkId, timeframe: validated.timeframe },
+      reusable.schedule,
+      sourceUniverseOr(sourceJob, validated.universe),
+      parseProvenancePin(sourceJob.provenancePinJson, id, request.log) ?? validated.provenancePin,
+      cloneWarnings,
+      sourceBenchmarkOr(sourceJob, body),
+      { cloneSourceJobId: id },
+    );
+    audit.record(request.authUser?.username ?? 'admin', 'backtest.cloned-configured', {
+      sourceJobId: id,
+      jobId: cloned.id,
+      reusedUniverse: true,
+      ...(rebased.warnings.length > 0 ? { rebaseWarnings: rebased.warnings } : {}),
+    });
+    return reply.code(201).send({ job: serializeJob(cloned), warnings: cloneWarnings });
+  });
+
+  app.post('/backtests/:id/clone-random-seeds', { preHandler: requireAuth }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const sourceJob = queue.getJob(id);
+    if (!sourceJob) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
+    const countBody = z.object({ count: z.number().int().min(1).max(100) }).safeParse(request.body);
+    if (!countBody.success) {
+      return reply.code(400).send({ error: '실행 개수는 1~100 사이의 정수여야 합니다.' });
+    }
+
+    const rebased = rebaseStoredRequest(
+      sourceJob.requestJson,
+      strategies.get(sourceJob.strategyId)?.version ?? null,
+    );
+    if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
+    const body = rebased.request;
+    const staticErrors = validateStaticSubmission(body);
+    if (staticErrors.length > 0) return reply.code(400).send({ error: staticErrors[0] });
+    const reusable = reusablePreviewFor(sourceJob, body);
+    if (!reusable) {
+      return reply.code(409).send({
+        error: 'PREVIEW_REQUIRED',
+        message: '원본의 준비 결과를 안전하게 재사용할 수 없습니다. 재설정 및 복제에서 미리보기를 완료하세요.',
+      });
+    }
+    const validated = await validateSubmission(body, reusable.preview);
+    if (!validated.ok) {
+      return reply.code(validated.status).send({ error: validated.errors[0] });
+    }
+    const fundamentalsError = checkFundamentalsRequirement(body, validated.resolved.unionSymbols);
+    if (fundamentalsError) return reply.code(422).send({ error: fundamentalsError });
+    const capacityError = checkPositionCapacity(body);
+    if (capacityError) return reply.code(422).send({ error: capacityError });
+    const resourceError = await checkResources(deps.dataRoot);
+    if (resourceError) return reply.code(507).send({ error: resourceError });
+
+    const benchmarkId = body.benchmarkId ?? 'KOSPI';
+    const warnings = [...rebased.warnings, ...validated.warnings];
+    const batch = seedCloneBatches.create(id, countBody.data.count, {
+      request: { ...body, benchmarkId, timeframe: validated.timeframe },
+      schedule: reusable.schedule,
+      universe: sourceUniverseOr(sourceJob, validated.universe),
+      provenancePin:
+        parseProvenancePin(sourceJob.provenancePinJson, id, request.log) ?? validated.provenancePin,
+      benchmark: sourceBenchmarkOr(sourceJob, body),
+      warnings,
+    });
+    audit.record(request.authUser?.username ?? 'admin', 'backtest.seed-clone-batch.created', {
+      sourceJobId: id,
+      batchId: batch.batch.id,
+      count: countBody.data.count,
+    });
+    return reply.code(201).send({ batch: serializeBatch(batch, false), warnings });
   });
 
   /**
@@ -773,11 +1055,37 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     );
     if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
 
+    const reusable = reusablePreviewFor(job, rebased.request);
     return {
       request: rebased.request,
       warnings: rebased.warnings,
       blockers: [],
+      reusablePreview: reusable?.response ?? null,
     };
+  });
+
+  app.get('/backtest-clone-batches', { preHandler: requireAuth }, () => ({
+    batches: seedCloneBatches.list().map((batch) => serializeBatch(batch, false)),
+  }));
+
+  app.get('/backtest-clone-batches/:id', { preHandler: requireAuth }, (request, reply) => {
+    const { id } = request.params as { id: string };
+    const batch = seedCloneBatches.get(id);
+    if (!batch) return reply.code(404).send({ error: '난수 시드 실험을 찾을 수 없습니다' });
+    return { batch: serializeBatch(batch, true) };
+  });
+
+  app.post('/backtest-clone-batches/:id/cancel', { preHandler: requireAuth }, (request, reply) => {
+    const { id } = request.params as { id: string };
+    const batch = seedCloneBatches.cancel(id);
+    if (!batch) return reply.code(404).send({ error: '난수 시드 실험을 찾을 수 없습니다' });
+    for (const { job } of batch.items) {
+      if (job && !queue.isTerminal(job.status)) orchestrator.cancel(job.id);
+    }
+    audit.record(request.authUser?.username ?? 'admin', 'backtest.seed-clone-batch.cancelled', {
+      batchId: id,
+    });
+    return { batch: serializeBatch(seedCloneBatches.get(id)!, false) };
   });
 
   app.delete('/backtests/:id', { preHandler: requireAuth }, async (request, reply) => {

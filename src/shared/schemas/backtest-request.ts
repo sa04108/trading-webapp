@@ -18,6 +18,9 @@ export const isoDateSchema = z
   .regex(/^\d{4}-\d{2}-\d{2}$/, '날짜 형식이 올바르지 않습니다 (YYYY-MM-DD)')
   .refine(isCalendarDate, { message: '존재하지 않는 날짜입니다' });
 
+/** 엔진 RNG가 `>>> 0`으로 소비하는 실제 32비트 시드 범위. */
+export const MAX_RANDOM_SEED = 0xffff_ffff;
+
 /**
  * 백테스트 요청 (스펙 §15) — 웹과 서버가 공유하는 계약.
  *
@@ -61,7 +64,7 @@ export const backtestRequestSchema = z.object({
   risk: z.object({
     maxPositions: z.number().int().min(1).max(200).default(40),
   }).default({ maxPositions: 40 }),
-  randomSeed: z.number().int().nonnegative().default(42),
+  randomSeed: z.number().int().min(0).max(MAX_RANDOM_SEED).default(42),
 }).superRefine((request, ctx) => {
   const issue = (message: string): void => {
     ctx.addIssue({ code: 'custom', message });

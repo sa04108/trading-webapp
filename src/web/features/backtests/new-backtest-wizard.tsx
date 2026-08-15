@@ -42,6 +42,7 @@ import {
   type UniversePreviewResponseDto,
 } from './universe-rule-step';
 import type { UniverseRule } from '../../../shared/schemas/universe-rule.js';
+import { MAX_RANDOM_SEED } from '../../../shared/schemas/backtest-request.js';
 import {
   BENCHMARK_IDS,
   BENCHMARK_NAMES,
@@ -172,6 +173,7 @@ export function NewBacktestWizard() {
    * 의미가 없고 "이전보다 커졌다" 만 신호다.
    */
   const [previewRetryToken, setPreviewRetryToken] = useState(0);
+  const [sourceReuseRejected, setSourceReuseRejected] = useState(false);
 
   const strategies = useStrategies();
   const schema = useQuery({
@@ -186,7 +188,12 @@ export function NewBacktestWizard() {
   const draft = useQuery({
     queryKey: ['backtests', sourceJobId, 'clone-draft'],
     queryFn: () =>
-      api<{ request: BacktestRequestBody; warnings: string[]; blockers: string[] }>(
+      api<{
+        request: BacktestRequestBody;
+        warnings: string[];
+        blockers: string[];
+        reusablePreview: UniversePreviewResponseDto | null;
+      }>(
         `/backtests/${sourceJobId}/clone-draft`,
       ),
     enabled: sourceJobId !== null,
@@ -220,11 +227,30 @@ export function NewBacktestWizard() {
     strategyId: strategyId ?? '',
     parameters: typeof parsedParameters === 'string' ? {} : parsedParameters,
   };
-  // 지금 값과 일치하는 미리보기 결과 — 일치하지 않으면(규칙·기간이 바뀌었으면) null.
-  const currentPreviewResult =
-    lastPreview !== null && sameUniverseParams(lastPreview.params, currentUniverseParams)
-      ? lastPreview.result
+  const sourcePreview =
+    !sourceReuseRejected && draft.data?.reusablePreview
+      ? {
+          params: {
+            universeRule: draft.data.request.universeRule,
+            period: draft.data.request.period,
+            strategyId: draft.data.request.strategyId,
+            parameters: draft.data.request.parameters,
+          } satisfies PreviewParams,
+          result: draft.data.reusablePreview,
+        }
       : null;
+  const freshPreviewMatches =
+    lastPreview !== null && sameUniverseParams(lastPreview.params, currentUniverseParams);
+  const sourcePreviewMatches =
+    sourcePreview !== null && sameUniverseParams(sourcePreview.params, currentUniverseParams);
+  // 새 미리보기를 우선하고, 없으면 서버가 검증한 원본 결과를 쓴다. 관련 설정을 바꿨다가
+  // 원본 값으로 되돌리면 sourcePreviewMatches가 다시 true가 되어 즉시 복원된다.
+  const currentPreviewResult = freshPreviewMatches
+    ? lastPreview.result
+    : sourcePreviewMatches
+      ? sourcePreview.result
+      : null;
+  const reusingSourcePreview = !freshPreviewMatches && sourcePreviewMatches;
   const universePreviewOk =
     currentPreviewResult !== null &&
     currentPreviewResult.uncoveredDates.length === 0 &&
@@ -331,6 +357,10 @@ export function NewBacktestWizard() {
     }
 
     if (typeof parsedParameters === 'string') return parsedParameters;
+    const seed = Number(randomSeed);
+    if (!Number.isInteger(seed) || seed < 0 || seed > MAX_RANDOM_SEED) {
+      return `난수 시드는 0~${MAX_RANDOM_SEED.toLocaleString()} 사이의 정수여야 합니다`;
+    }
 
     return {
       strategyId: selectedStrategy.id,
@@ -344,16 +374,18 @@ export function NewBacktestWizard() {
       capital: { initialCash: cash, currency: 'KRW' },
       execution: { fillTiming: 'NEXT_BAR_OPEN', commissionProfileId, slippageProfileId },
       risk: { maxPositions: positions },
-      randomSeed: (() => {
-        const seed = Number(randomSeed);
-        return Number.isInteger(seed) && seed >= 0 ? seed : 42;
-      })(),
+      randomSeed: seed,
     };
   };
 
   const submitMutation = useMutation({
-    mutationFn: (body: BacktestRequestBody) =>
-      postJson<{ job: { id: string }; warnings?: string[] }>('/backtests', body),
+    mutationFn: ({ body, reuseSource }: { body: BacktestRequestBody; reuseSource: boolean }) =>
+      postJson<{ job: { id: string }; warnings?: string[] }>(
+        reuseSource && sourceJobId !== null
+          ? `/backtests/${sourceJobId}/clone-configured`
+          : '/backtests',
+        body,
+      ),
     onSuccess: (data) => {
       toast.success('백테스트가 대기열에 추가되었습니다');
       // 201 이 실어 보낸 경고를 버리지 않는다 — 복제 경로(`backtest-detail-page.tsx`)와 같다.
@@ -371,9 +403,10 @@ export function NewBacktestWizard() {
       if (
         error instanceof ApiError &&
         error.status === 409 &&
-        error.message === 'PREPARATION_REQUIRED'
+        (error.message === 'PREPARATION_REQUIRED' || error.message === 'PREVIEW_REQUIRED')
       ) {
         setLastPreview(null);
+        if (error.message === 'PREVIEW_REQUIRED') setSourceReuseRejected(true);
         setPreviewRetryToken((token) => token + 1);
         goToSlug(recordTraversal(2));
         return;
@@ -747,9 +780,25 @@ export function NewBacktestWizard() {
             period={{ from, to }}
             strategyId={strategyId}
             parameters={parsedParameters}
+            initialResolved={sourcePreview}
             previewRetryToken={previewRetryToken}
             onPreviewResolved={handlePreviewResolved}
           />
+
+          {reusingSourcePreview ? (
+            <Alert role="status">
+              <AlertDescription>
+                원본 백테스트에 고정된 유니버스 구성을 재사용합니다. 기간·유니버스·전략
+                또는 전략 파라미터를 바꾸면 새 미리보기가 필요합니다.
+              </AlertDescription>
+            </Alert>
+          ) : sourcePreview !== null && !sourcePreviewMatches ? (
+            <Alert variant="destructive" role="alert">
+              <AlertDescription>
+                유니버스 준비에 영향을 주는 설정이 변경되었습니다. 미리보기를 다시 실행하세요.
+              </AlertDescription>
+            </Alert>
+          ) : null}
 
           {/* 게이트 문장은 「다음」을 눌러야 오류 영역에 뜬다 — 재무 조합처럼 미리보기가
               성공한 뒤에만 드러나는 어긋남은 여기서 바로 보여야 왕복이 없다 (D-027 과 같은
@@ -823,12 +872,14 @@ export function NewBacktestWizard() {
               />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="seed">Random seed</Label>
+              <Label htmlFor="seed">난수 시드</Label>
               <Input
                 id="seed"
                 type="number"
                 inputMode="numeric"
                 className="h-11"
+                min={0}
+                max={MAX_RANDOM_SEED}
                 value={randomSeed}
                 onChange={(e) => setRandomSeed(e.target.value)}
               />
@@ -838,7 +889,15 @@ export function NewBacktestWizard() {
       ) : null}
 
       {!prefilling && step >= REVIEW_STEP ? (
-        typeof request === 'string' ? (
+        <div className="space-y-3">
+          {reusingSourcePreview ? (
+            <Alert role="status">
+              <AlertDescription>
+                원본 백테스트에 고정된 유니버스 구성을 재사용합니다.
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          {typeof request === 'string' ? (
           <Alert variant="destructive">
             <AlertDescription>{request}</AlertDescription>
           </Alert>
@@ -933,7 +992,8 @@ export function NewBacktestWizard() {
               </div>
             </CardContent>
           </Card>
-        ) : null
+        ) : null}
+        </div>
       ) : null}
 
       {prefilling ? null : (
@@ -955,7 +1015,9 @@ export function NewBacktestWizard() {
               className="h-11"
               disabled={typeof request === 'string' || submitMutation.isPending}
               onClick={() => {
-                if (request && typeof request !== 'string') submitMutation.mutate(request);
+                if (request && typeof request !== 'string') {
+                  submitMutation.mutate({ body: request, reuseSource: reusingSourcePreview });
+                }
               }}
             >
               {submitMutation.isPending ? '제출 중…' : '백테스트 실행'}

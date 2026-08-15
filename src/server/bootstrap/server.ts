@@ -89,6 +89,7 @@ export async function buildServer(container: Container): Promise<FastifyInstance
           maxQueuedBacktests: container.config.maxQueuedBacktests,
           clock: container.clock,
           benchmarks: container.benchmarkService,
+          seedCloneBatches: container.seedCloneBatchService,
         },
         requireAuth,
       );

@@ -4,6 +4,7 @@ import { BacktestDetailPage } from '../features/backtests/backtest-detail-page';
 import { BacktestsPage } from '../features/backtests/backtests-page';
 import { NewBacktestEntry } from '../features/backtests/new-backtest-entry';
 import { NewBacktestWizard } from '../features/backtests/new-backtest-wizard';
+import { SeedCloneBatchPage } from '../features/backtests/seed-clone-batch-page';
 import { DashboardPage } from '../features/dashboard/dashboard-page';
 import { DataPage, DatasetsIndexRedirect } from '../features/datasets/data-page';
 import { NotificationsPage } from '../features/notifications/notifications-page';
@@ -26,6 +27,7 @@ export const router = createBrowserRouter([
           { path: 'backtests', element: <BacktestsPage /> },
           { path: 'backtests/new', element: <NewBacktestEntry /> },
           { path: 'backtests/new/:step', element: <NewBacktestWizard /> },
+          { path: 'backtests/batches/:id', element: <SeedCloneBatchPage /> },
           { path: 'backtests/:id', element: <BacktestDetailPage /> },
           {
             path: 'datasets',

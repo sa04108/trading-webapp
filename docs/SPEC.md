@@ -934,7 +934,12 @@ GET    /api/v1/backtests
 GET    /api/v1/backtests/:id
 POST   /api/v1/backtests/:id/cancel
 POST   /api/v1/backtests/:id/clone
+POST   /api/v1/backtests/:id/clone-configured
+POST   /api/v1/backtests/:id/clone-random-seeds
 GET    /api/v1/backtests/:id/clone-draft
+GET    /api/v1/backtest-clone-batches
+GET    /api/v1/backtest-clone-batches/:id
+POST   /api/v1/backtest-clone-batches/:id/cancel
 DELETE /api/v1/backtests/:id
 GET    /api/v1/backtests/:id/trades
 GET    /api/v1/backtests/:id/series
@@ -943,6 +948,15 @@ GET    /api/v1/backtests/:id/events
 ```
 
 진행률은 SSE를 기본으로 한다. 연결이 끊기면 polling으로 fallback한다.
+
+`clone-draft`는 현재 전략 버전의 완료된 준비 결과와 원본 job의 고정 리밸런스 일정
+hash가 같으면 `reusablePreview`를 반환한다. `clone-configured`는 기간·유니버스 규칙·
+전략·전략 파라미터가 그대로일 때 이 일정을 재사용한다. 자본·비용·벤치마크·보유 상한·
+난수 시드 변경은 유니버스 미리보기를 무효화하지 않지만 요청 자체의 정적 검증은 계속한다.
+
+`clone-random-seeds`는 `{ "count": 1..100 }`을 받아 서로 다른 uint32 시드를 가진 묶음을
+만든다. 묶음 item은 먼저 영속화하고 실제 백테스트 job은 `MAX_QUEUED_BACKTESTS`의 빈
+슬롯만큼만 순차 생성한다. 따라서 100개 실험도 일반 대기열 상한을 우회하지 않는다.
 
 ## 상태
 
@@ -994,6 +1008,9 @@ GET /api/v1/system/info
   "randomSeed": 42
 }
 ```
+
+`randomSeed`는 엔진이 실제 소비하는 unsigned 32-bit 정수 범위
+`0..4,294,967,295`만 허용한다.
 
 포지션 상한은 전략 파라미터가 아니라 요청의 `risk.maxPositions` 다 — 엔진의
 리스크 제약(§9.2-6)이지 전략 로직의 입력이 아니기 때문이다 (D-012).

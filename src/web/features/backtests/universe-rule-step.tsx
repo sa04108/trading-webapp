@@ -104,12 +104,27 @@ export interface PreviewParams {
  */
 export function sameUniverseParams(a: PreviewParams, b: PreviewParams): boolean {
   return (
-    JSON.stringify(a.universeRule) === JSON.stringify(b.universeRule) &&
+    canonicalJson(a.universeRule) === canonicalJson(b.universeRule) &&
     a.period.from === b.period.from &&
     a.period.to === b.period.to &&
     a.strategyId === b.strategyId &&
-    JSON.stringify(a.parameters) === JSON.stringify(b.parameters)
+    canonicalJson(a.parameters) === canonicalJson(b.parameters)
   );
+}
+
+function canonicalJson(value: unknown): string {
+  const canonicalize = (entry: unknown): unknown => {
+    if (Array.isArray(entry)) return entry.map(canonicalize);
+    if (entry !== null && typeof entry === 'object') {
+      return Object.fromEntries(
+        Object.entries(entry)
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([key, nested]) => [key, canonicalize(nested)]),
+      );
+    }
+    return entry;
+  };
+  return JSON.stringify(canonicalize(value));
 }
 
 /**
@@ -133,6 +148,8 @@ export interface UniverseRuleStepProps {
    * (검토 단계의 `buildRequest` 와 같은 검증을 두 곳에 두지 않는다).
    */
   parameters: Record<string, number> | string;
+  /** 재설정 복제가 서버에서 검증해 가져온 원본 미리보기. */
+  initialResolved?: { readonly params: PreviewParams; readonly result: UniversePreviewResponseDto } | null;
   /**
    * 제출이 409 PREPARATION_REQUIRED 로 거절되면 부모가 이 값을 올려 새 준비 요청을
    * 시작하라고 신호한다(Task 10, 브리프 5번). 값 자체(증가하는 정수)는 의미가 없다 —
@@ -180,6 +197,7 @@ export function UniverseRuleStep({
   period,
   strategyId,
   parameters,
+  initialResolved = null,
   previewRetryToken,
   onPreviewResolved,
 }: UniverseRuleStepProps) {
@@ -204,8 +222,11 @@ export function UniverseRuleStep({
   // READY/PREPARING 두 모양을 다 담는 discriminated union 이라, 화면에 그릴 "완성된
   // 미리보기" 는 이 state 로 따로 붙잡아 둔다.
   const [resolved, setResolved] = useState<{ params: PreviewParams; result: UniversePreviewResponseDto } | null>(
-    null,
+    initialResolved,
   );
+  useEffect(() => {
+    if (resolved === null && initialResolved !== null) setResolved(initialResolved);
+  }, [initialResolved, resolved]);
   // 준비 작업(job)이 도는 동안만 채워진다 — 완료·취소·실패로 끝나면 비운다.
   const [preparingJobId, setPreparingJobId] = useState<string | null>(null);
   // 그 job 을 시작시킨 params — COMPLETED 가 왔을 때 "지금 값과 여전히 같은가" 를

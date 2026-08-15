@@ -4,6 +4,7 @@ import {
   ArrowUp,
   ChevronsUpDown,
   Copy,
+  Dices,
   Download,
   SlidersHorizontal,
   Trash2,
@@ -27,6 +28,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Progress } from '@/components/ui/progress';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
   Select,
   SelectContent,
@@ -618,6 +621,8 @@ export function BacktestDetailPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [seedCloneOpen, setSeedCloneOpen] = useState(false);
+  const [seedCloneCount, setSeedCloneCount] = useState('10');
 
   const {
     job,
@@ -662,6 +667,29 @@ export function BacktestDetailPage() {
     },
     onError: (error: unknown) =>
       toast.error(error instanceof ApiError ? error.message : '복제에 실패했습니다'),
+  });
+
+  const seedCloneMutation = useMutation({
+    mutationFn: (count: number) =>
+      api<{ batch: { id: string }; warnings?: string[] }>(
+        `/backtests/${id}/clone-random-seeds`,
+        { method: 'POST', body: JSON.stringify({ count }) },
+      ),
+    onSuccess: (data) => {
+      setSeedCloneOpen(false);
+      toast.success('새 난수 시드 실험을 시작했습니다');
+      for (const warning of data.warnings ?? []) toast.warning(warning, { duration: 10_000 });
+      void queryClient.invalidateQueries({ queryKey: ['backtests'] });
+      void queryClient.invalidateQueries({ queryKey: ['backtest-clone-batches'] });
+      void navigate(`/backtests/batches/${data.batch.id}`);
+    },
+    onError: (error: unknown) => {
+      if (error instanceof ApiError && error.message === 'PREVIEW_REQUIRED') {
+        toast.error('원본 유니버스를 재사용할 수 없습니다. 재설정 및 복제에서 미리보기를 완료하세요.');
+        return;
+      }
+      toast.error(error instanceof ApiError ? error.message : '새 난수 복제에 실패했습니다');
+    },
   });
 
   const deleteMutation = useMutation({
@@ -733,43 +761,30 @@ export function BacktestDetailPage() {
             </Button>
           ) : (
             <>
-              {/* 실패한 작업은 같은 조건 재실행이 대개 같은 결과다 — 재설정을 앞세운다 */}
-              {job.status === 'FAILED' ? (
-                <>
-                  <Button className="h-11" asChild>
-                    <Link to={`/backtests/new?from=${id}`}>
-                      <SlidersHorizontal data-icon="inline-start" />
-                      재설정 및 복제
-                    </Link>
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="h-11"
-                    onClick={() => cloneMutation.mutate()}
-                    disabled={cloneMutation.isPending}
-                  >
-                    <Copy data-icon="inline-start" />
-                    복제
-                  </Button>
-                </>
-              ) : (
-                <>
-                  <Button
-                    className="h-11"
-                    onClick={() => cloneMutation.mutate()}
-                    disabled={cloneMutation.isPending}
-                  >
-                    <Copy data-icon="inline-start" />
-                    복제
-                  </Button>
-                  <Button variant="outline" className="h-11" asChild>
-                    <Link to={`/backtests/new?from=${id}`}>
-                      <SlidersHorizontal data-icon="inline-start" />
-                      재설정 및 복제
-                    </Link>
-                  </Button>
-                </>
-              )}
+              <div className="inline-flex flex-wrap" role="group" aria-label="백테스트 복제">
+                <Button
+                  className="h-11 rounded-r-none"
+                  onClick={() => cloneMutation.mutate()}
+                  disabled={cloneMutation.isPending}
+                >
+                  <Copy data-icon="inline-start" />
+                  그대로 복제
+                </Button>
+                <Button
+                  variant="outline"
+                  className="h-11 rounded-none border-l-0"
+                  onClick={() => setSeedCloneOpen(true)}
+                >
+                  <Dices data-icon="inline-start" />
+                  새 난수로 복제
+                </Button>
+                <Button variant="outline" className="h-11 rounded-l-none border-l-0" asChild>
+                  <Link to={`/backtests/new?from=${id}`}>
+                    <SlidersHorizontal data-icon="inline-start" />
+                    재설정 및 복제
+                  </Link>
+                </Button>
+              </div>
               {completed ? (
                 <Button variant="outline" className="h-11" asChild>
                   <a href={`/api/v1/backtests/${id}/export`} download>
@@ -925,6 +940,48 @@ export function BacktestDetailPage() {
               }}
             >
               삭제
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={seedCloneOpen} onOpenChange={setSeedCloneOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>새 난수로 일괄 복제</DialogTitle>
+            <DialogDescription>
+              다른 설정과 원본 유니버스는 그대로 유지하고 각 실행에 서로 다른 32비트
+              난수 시드를 부여합니다. 시드가 달라도 난수가 쓰이는 상황이 없으면 결과가
+              같을 수 있습니다.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1">
+            <Label htmlFor="seed-clone-count">실행 개수</Label>
+            <Input
+              id="seed-clone-count"
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={100}
+              value={seedCloneCount}
+              onChange={(event) => setSeedCloneCount(event.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              최대 100개이며 기존 대기열에 여유가 생길 때마다 순차 실행됩니다.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSeedCloneOpen(false)}>취소</Button>
+            <Button
+              disabled={
+                seedCloneMutation.isPending ||
+                !Number.isInteger(Number(seedCloneCount)) ||
+                Number(seedCloneCount) < 1 ||
+                Number(seedCloneCount) > 100
+              }
+              onClick={() => seedCloneMutation.mutate(Number(seedCloneCount))}
+            >
+              {seedCloneMutation.isPending ? '생성 중…' : `${seedCloneCount || '0'}개 생성 및 실행`}
             </Button>
           </DialogFooter>
         </DialogContent>

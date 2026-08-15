@@ -35,6 +35,7 @@ import { StrategyRegistry } from '../modules/strategy/application/strategy-regis
 import { JobOrchestrator } from '../modules/backtest/application/job-orchestrator.js';
 import { JobQueue } from '../modules/backtest/application/job-queue.js';
 import { ResultsService } from '../modules/backtest/application/results-service.js';
+import { SeedCloneBatchService } from '../modules/backtest/application/seed-clone-batch-service.js';
 import type { FactRepository } from '../modules/facts/application/ports.js';
 import {
   SqliteCorporateActionCoverageStore,
@@ -86,6 +87,7 @@ export interface Container {
   readonly jobQueue: JobQueue;
   readonly jobOrchestrator: JobOrchestrator;
   readonly resultsService: ResultsService;
+  readonly seedCloneBatchService: SeedCloneBatchService;
   readonly benchmarkService: BenchmarkService;
   readonly factRepository: FactRepository;
   readonly factSyncService: FactSyncService;
@@ -311,6 +313,12 @@ export function createContainer(config: AppConfig): Container {
 
   const jobQueue = new JobQueue(database, clock);
   const jobOrchestrator = new JobOrchestrator(jobQueue, config, logger, auditLog, clock);
+  const seedCloneBatchService = new SeedCloneBatchService(
+    database,
+    jobQueue,
+    config.maxQueuedBacktests,
+    clock,
+  );
   jobOrchestrator.events.on(
     'job',
     createBacktestNotificationListener({
@@ -321,6 +329,7 @@ export function createContainer(config: AppConfig): Container {
       logger,
     }),
   );
+  jobOrchestrator.events.on('job', () => seedCloneBatchService.onJobStatusChanged());
 
   const systemStatus: SystemStatusProviders = {
     queueLength: () => jobQueue.countByStatus(['QUEUED']),
@@ -352,6 +361,7 @@ export function createContainer(config: AppConfig): Container {
     jobQueue,
     jobOrchestrator,
     resultsService,
+    seedCloneBatchService,
     benchmarkService,
     factRepository,
     factCoverageStore,

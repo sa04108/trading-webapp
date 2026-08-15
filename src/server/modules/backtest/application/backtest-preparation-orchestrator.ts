@@ -213,6 +213,27 @@ export class BacktestPreparationOrchestrator {
     }
   }
 
+  /**
+   * 같은 준비 hash로 이미 완료한 미리보기를 DB에서만 읽는다.
+   *
+   * `getReadyPreview`와 달리 현재 종목 마스터를 다시 해소하지 않는다. 재설정 복제가
+   * 원본 job에 고정된 일정과 이 결과의 schedule hash를 대조한 뒤 원본 일정을 그대로
+   * 재사용할 때만 쓴다. 호출자가 그 대조 없이 신규 제출에 사용하면 stale 유니버스를
+   * 승인하게 되므로 일반 제출 경로는 계속 `getReadyPreview`를 써야 한다.
+   */
+  getCachedPreview(input: PreparationInput): BacktestUniversePreview | null {
+    const strategy = this.requireStrategy(input);
+    const hash = backtestPreparationRequestHash(input, strategy);
+    const completed = this.deps.database.db
+      .select()
+      .from(backtestPreparationJobs)
+      .where(eq(backtestPreparationJobs.requestHash, hash))
+      .orderBy(desc(backtestPreparationJobs.createdAtMs))
+      .all()
+      .find((row) => row.status === 'COMPLETED' && row.previewJson !== null);
+    return completed ? this.getPreview(completed.id) : null;
+  }
+
   /** 같은 요청 hash의 완료 결과를 현재 resolver로 다시 확인해 stale preview를 거른다. */
   async getReadyPreview(input: PreparationInput): Promise<BacktestUniversePreview | null> {
     const strategy = this.requireStrategy(input);

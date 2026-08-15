@@ -13,5 +13,11 @@ import { stepSlug } from './wizard-steps';
  */
 export function NewBacktestEntry() {
   const { search } = useLocation();
-  return <Navigate to={{ pathname: `/backtests/new/${stepSlug(0)}`, search }} replace />;
+  const sourceJobId = new URLSearchParams(search).get('from');
+  return (
+    <Navigate
+      to={{ pathname: `/backtests/new/${stepSlug(sourceJobId ? 4 : 0)}`, search }}
+      replace
+    />
+  );
 }

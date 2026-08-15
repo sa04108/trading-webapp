@@ -343,6 +343,9 @@ export const backtestJobs = sqliteTable(
     /** 제출 시점의 벤치마크 종가와 그 해시. 데이터가 부족해도 부분 pin은 남긴다. */
     benchmarkJson: text('benchmark_json'),
     benchmarkHash: text('benchmark_hash'),
+    /** 난수 시드 일괄 복제 묶음과 원본 계보. 일반 제출은 둘 다 null이다. */
+    cloneBatchId: text('clone_batch_id'),
+    cloneSourceJobId: text('clone_source_job_id'),
     progressBars: integer('progress_bars'),
     totalBars: integer('total_bars'),
     // 진행 위치 표시용 텍스트 (엔진이 시간 우선이라 날짜가 들어간다) — "심볼" 이 아니다
@@ -363,6 +366,56 @@ export const backtestJobs = sqliteTable(
   (table) => [
     index('idx_backtest_jobs_status').on(table.status, table.createdAtMs),
     index('idx_backtest_jobs_created').on(table.createdAtMs),
+  ],
+);
+
+/**
+ * 난수 시드 일괄 복제의 영속 원본. 자식 100개를 기존 QUEUED 상한 밖에 전부 쌓지 않고
+ * item을 PENDING으로 보관했다가 빈 슬롯만큼 실제 backtest_jobs로 승격한다.
+ */
+export const backtestCloneBatches = sqliteTable(
+  'backtest_clone_batches',
+  {
+    id: text('id').primaryKey(),
+    sourceJobId: text('source_job_id').notNull(),
+    strategyId: text('strategy_id').notNull(),
+    status: text('status').notNull(), // ACTIVE | COMPLETED | FAILED | CANCELLED
+    totalCount: integer('total_count').notNull(),
+    requestJson: text('request_json').notNull(),
+    universeScheduleJson: text('universe_schedule_json').notNull(),
+    provenancePinJson: text('provenance_pin_json'),
+    universeJson: text('universe_json'),
+    universeHash: text('universe_hash'),
+    benchmarkJson: text('benchmark_json'),
+    benchmarkHash: text('benchmark_hash'),
+    submitWarningsJson: text('submit_warnings_json'),
+    error: text('error'),
+    createdAtMs: integer('created_at_ms').notNull(),
+    completedAtMs: integer('completed_at_ms'),
+  },
+  (table) => [
+    index('idx_backtest_clone_batches_created').on(table.createdAtMs),
+    index('idx_backtest_clone_batches_status').on(table.status, table.createdAtMs),
+  ],
+);
+
+export const backtestCloneBatchItems = sqliteTable(
+  'backtest_clone_batch_items',
+  {
+    id: text('id').primaryKey(),
+    batchId: text('batch_id')
+      .notNull()
+      .references(() => backtestCloneBatches.id, { onDelete: 'cascade' }),
+    ordinal: integer('ordinal').notNull(),
+    randomSeed: integer('random_seed').notNull(),
+    state: text('state').notNull(), // PENDING | DISPATCHED | CANCELLED
+    jobId: text('job_id').references(() => backtestJobs.id, { onDelete: 'set null' }),
+  },
+  (table) => [
+    uniqueIndex('uq_backtest_clone_batch_item_ordinal').on(table.batchId, table.ordinal),
+    uniqueIndex('uq_backtest_clone_batch_item_seed').on(table.batchId, table.randomSeed),
+    uniqueIndex('uq_backtest_clone_batch_item_job').on(table.jobId),
+    index('idx_backtest_clone_batch_items_pending').on(table.batchId, table.state),
   ],
 );
 

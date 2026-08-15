@@ -1,4 +1,4 @@
-import { and, count, desc, eq, inArray } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, isNull } from 'drizzle-orm';
 import type { AppDatabase, DatabaseHandle } from '../../../shared/db/database.js';
 import { backtestJobs } from '../../../shared/db/schema.js';
 import type { Clock } from '../../../shared/clock.js';
@@ -19,6 +19,11 @@ export type BacktestJobStatus =
   | 'INTERRUPTED';
 
 export type BacktestJobRow = typeof backtestJobs.$inferSelect;
+
+export interface EnqueueMetadata {
+  readonly cloneBatchId?: string | null;
+  readonly cloneSourceJobId?: string | null;
+}
 
 const ACTIVE_STATUSES: BacktestJobStatus[] = ['STARTING', 'RUNNING', 'CANCELLING'];
 export const TERMINAL_STATUSES: BacktestJobStatus[] = [
@@ -57,6 +62,7 @@ export class JobQueue {
      */
     submitWarnings: readonly string[] = [],
     benchmark?: { pin: BenchmarkPin; hash: string },
+    metadata: EnqueueMetadata = {},
   ): BacktestJobRow {
     const row: typeof backtestJobs.$inferInsert = {
       id: newId('bt'),
@@ -70,6 +76,8 @@ export class JobQueue {
       universeHash: pinnedUniverse?.hash ?? null,
       benchmarkJson: benchmark ? JSON.stringify(benchmark.pin) : null,
       benchmarkHash: benchmark?.hash ?? null,
+      cloneBatchId: metadata.cloneBatchId ?? null,
+      cloneSourceJobId: metadata.cloneSourceJobId ?? null,
       submitWarningsJson: submitWarnings.length > 0 ? JSON.stringify(submitWarnings) : null,
       createdAtMs: this.clock.now(),
     };
@@ -106,6 +114,21 @@ export class JobQueue {
     return this.db
       .select()
       .from(backtestJobs)
+      .orderBy(desc(backtestJobs.createdAtMs))
+      .limit(limit)
+      .offset(offset)
+      .all();
+  }
+
+  /**
+   * 일반 백테스트 목록용 최상위 작업. 난수 시드 배치 자식은 부모 묶음 화면에서만
+   * 노출해야 100개 자식이 페이지 한도를 차지해 기존 작업을 밀어내지 않는다.
+   */
+  listTopLevelJobs(limit = 50, offset = 0): BacktestJobRow[] {
+    return this.db
+      .select()
+      .from(backtestJobs)
+      .where(isNull(backtestJobs.cloneBatchId))
       .orderBy(desc(backtestJobs.createdAtMs))
       .limit(limit)
       .offset(offset)

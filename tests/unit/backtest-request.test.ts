@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   backtestRequestSchema,
+  MAX_RANDOM_SEED,
   periodToTsRange,
 } from '../../src/shared/schemas/backtest-request.js';
 
@@ -41,6 +42,15 @@ describe('benchmarkId', () => {
     }
     expect(backtestRequestSchema.safeParse({ ...baseRequest(), benchmarkId: 'RUSSELL2000' }).success).toBe(false);
     expect(backtestRequestSchema.safeParse(baseRequest()).success).toBe(true);
+  });
+});
+
+describe('randomSeed', () => {
+  it('엔진이 실제 소비하는 uint32 범위만 허용한다', () => {
+    expect(backtestRequestSchema.safeParse({ ...baseRequest(), randomSeed: 0 }).success).toBe(true);
+    expect(backtestRequestSchema.safeParse({ ...baseRequest(), randomSeed: MAX_RANDOM_SEED }).success).toBe(true);
+    expect(backtestRequestSchema.safeParse({ ...baseRequest(), randomSeed: -1 }).success).toBe(false);
+    expect(backtestRequestSchema.safeParse({ ...baseRequest(), randomSeed: MAX_RANDOM_SEED + 1 }).success).toBe(false);
   });
 });
 

@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus } from 'lucide-react';
+import { Dices, Plus } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router';
 import { toast } from 'sonner';
@@ -10,13 +10,13 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Progress } from '@/components/ui/progress';
 import { Skeleton } from '@/components/ui/skeleton';
 import { api } from '@/lib/api-client';
-import { useBacktests, useStrategies } from './api';
+import { useBacktests, useSeedCloneBatches, useStrategies } from './api';
 import { formatDateTime, formatSignedPct, pnlClass, timeframeLabel } from '@/lib/format';
 import { groupJobsByStrategy } from './job-groups';
 import { resolveJobTimeframe } from './job-timeframe';
 import { StatusBadge } from './status-badge';
 import { formatUniverseRuleSummary } from './universe-summary';
-import { isTerminal, type JobSummary } from './types';
+import { isTerminal, type JobSummary, type SeedCloneBatchSummary } from './types';
 
 export function deletableBacktestIds(jobs: readonly JobSummary[]): string[] {
   return jobs.filter((job) => isTerminal(job.status)).map((job) => job.id);
@@ -122,12 +122,38 @@ export function BacktestJobCard({
   );
 }
 
+export function SeedCloneBatchCard({ batch }: { batch: SeedCloneBatchSummary }) {
+  const terminal = batch.completedCount + batch.failedCount + batch.cancelledCount
+    + batch.interruptedCount + batch.deletedCount;
+  const progress = Math.round((terminal / batch.totalCount) * 100);
+  return (
+    <Link to={`/backtests/batches/${batch.id}`} className="block">
+      <Card className="transition-colors hover:bg-muted/40">
+        <CardContent className="space-y-2 py-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <Dices className="size-4" />
+            <span className="font-medium">새 난수 시드 {batch.totalCount}개</span>
+            <span className="ml-auto text-xs text-muted-foreground">{formatDateTime(batch.createdAtMs)}</span>
+          </div>
+          <Progress value={progress} aria-label={`난수 시드 실험 진행률 ${progress}%`} />
+          <p className="text-xs text-muted-foreground">
+            완료 {batch.completedCount} · 실행 {batch.runningCount} · 실행 대기 {batch.queuedCount}
+            {' · '}묶음 대기 {batch.pendingCount} · 실패 {batch.failedCount}
+          </p>
+        </CardContent>
+      </Card>
+    </Link>
+  );
+}
+
 export function BacktestsPage() {
   const queryClient = useQueryClient();
   const { data, isLoading } = useBacktests(5_000);
+  const batchesQuery = useSeedCloneBatches(5_000);
   const strategies = useStrategies();
   const strategyById = new Map((strategies.data?.strategies ?? []).map((s) => [s.id, s]));
-  const jobs = data?.jobs ?? [];
+  const jobs = (data?.jobs ?? []).filter((job) => !job.cloneBatchId);
+  const batches = batchesQuery.data?.batches ?? [];
   const deletableIds = deletableBacktestIds(jobs);
   const [editing, setEditing] = useState(false);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
@@ -207,13 +233,19 @@ export function BacktestsPage() {
         </div>
       </div>
 
-      {isLoading ? (
+      {isLoading || batchesQuery.isLoading ? (
         <div className="space-y-3">
           <Skeleton className="h-24 w-full" />
           <Skeleton className="h-24 w-full" />
         </div>
-      ) : jobs.length > 0 ? (
+      ) : jobs.length > 0 || batches.length > 0 ? (
         <div className="space-y-6">
+          {batches.length > 0 ? (
+            <section className="space-y-3">
+              <h3 className="text-sm font-semibold">난수 시드 실험</h3>
+              {batches.map((batch) => <SeedCloneBatchCard key={batch.id} batch={batch} />)}
+            </section>
+          ) : null}
           {groupJobsByStrategy(jobs).map((group) => {
             const strategy = strategyById.get(group.strategyId);
             return (

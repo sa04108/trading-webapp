@@ -703,7 +703,190 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
 
     expect(draft.statusCode).toBe(200);
-    expect(draft.json()).toEqual({ request, warnings: [], blockers: [] });
+    expect(draft.json()).toEqual({
+      request,
+      warnings: [],
+      blockers: [],
+      reusablePreview: null,
+    });
+  });
+
+  it('제출된 원본은 저장 일정과 일치하는 준비 미리보기를 초안에서 재사용한다', async () => {
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: buildRequest(),
+    });
+    expect(created.statusCode).toBe(201);
+    const sourceId = created.json().job.id as string;
+
+    const draft = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${sourceId}/clone-draft`,
+      cookies: { qp_session: cookie },
+    });
+    expect(draft.statusCode).toBe(200);
+    const preview = draft.json().reusablePreview as {
+      unionSymbols: string[];
+      missingCandleSymbols: string[];
+      uncoveredDates: string[];
+    } | null;
+    expect(preview).not.toBeNull();
+    expect(preview?.unionSymbols).toEqual(['005930']);
+    expect(preview?.missingCandleSymbols).toEqual([]);
+    expect(preview?.uncoveredDates).toEqual([]);
+  });
+
+  it('재설정 복제는 준비 비영향 설정만 바뀌면 원본 유니버스를 재사용한다', async () => {
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: buildRequest(),
+    });
+    const sourceId = created.json().job.id as string;
+    const source = ctx.container.jobQueue.getJob(sourceId)!;
+    const request = {
+      ...buildRequest(),
+      capital: { initialCash: 20_000_000, currency: 'KRW' as const },
+      risk: { maxPositions: 10 },
+      randomSeed: 777,
+    };
+
+    const cloned = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${sourceId}/clone-configured`,
+      cookies: { qp_session: cookie },
+      payload: request,
+    });
+    expect(cloned.statusCode).toBe(201);
+    const clonedRow = ctx.container.jobQueue.getJob(cloned.json().job.id as string)!;
+    expect(JSON.parse(clonedRow.requestJson)).toMatchObject({
+      capital: request.capital,
+      risk: request.risk,
+      randomSeed: 777,
+    });
+    expect(clonedRow.universeScheduleJson).toBe(source.universeScheduleJson);
+    expect(clonedRow.universeJson).toBe(source.universeJson);
+
+    const changedPeriod = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${sourceId}/clone-configured`,
+      cookies: { qp_session: cookie },
+      payload: { ...request, period: { ...request.period, to: '2026-05-31' } },
+    });
+    expect(changedPeriod.statusCode).toBe(409);
+    expect(changedPeriod.json().error).toBe('PREVIEW_REQUIRED');
+  });
+
+  it('새 난수 100개는 중복 없이 저장하고 기존 QUEUED 상한만큼 순차 투입한다', async () => {
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: buildRequest(),
+    });
+    expect(created.statusCode).toBe(201);
+    const sourceId = created.json().job.id as string;
+    expect(ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
+
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
+      cookies: { qp_session: cookie },
+      payload: { count: 100 },
+    });
+    expect(response.statusCode).toBe(201);
+    const batchId = response.json().batch.id as string;
+    expect(response.json().batch).toMatchObject({
+      totalCount: 100,
+      queuedCount: 20,
+      pendingCount: 80,
+    });
+    expect(ctx.container.jobQueue.countByStatus(['QUEUED'])).toBe(20);
+
+    const topLevel = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/v1/backtests?limit=200',
+      cookies: { qp_session: cookie },
+    });
+    expect(topLevel.statusCode).toBe(200);
+    expect(topLevel.json().jobs).toHaveLength(1);
+    expect(topLevel.json().jobs[0]).toMatchObject({ id: sourceId, cloneBatchId: null });
+
+    const detail = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtest-clone-batches/${batchId}`,
+      cookies: { qp_session: cookie },
+    });
+    expect(detail.statusCode).toBe(200);
+    const items = detail.json().batch.items as Array<{
+      randomSeed: number;
+      jobId: string | null;
+      status: string;
+    }>;
+    expect(items).toHaveLength(100);
+    expect(new Set(items.map((item) => item.randomSeed)).size).toBe(100);
+    expect(items.some((item) => item.randomSeed === buildRequest().randomSeed)).toBe(false);
+
+    const firstQueued = items.find((item) => item.status === 'QUEUED')!;
+    expect(ctx.container.jobQueue.setStatus(firstQueued.jobId!, 'STARTING', {}, ['QUEUED'])).toBe(true);
+    ctx.container.seedCloneBatchService.onJobStatusChanged();
+    const afterSlot = ctx.container.seedCloneBatchService.get(batchId)!;
+    expect(afterSlot.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(79);
+    expect(ctx.container.jobQueue.countByStatus(['QUEUED'])).toBe(20);
+
+    const child = afterSlot.items.find(({ job }) => job?.cloneBatchId === batchId)?.job;
+    expect(child?.cloneSourceJobId).toBe(sourceId);
+    const childRequest = JSON.parse(child!.requestJson) as BacktestRequest;
+    const { randomSeed: _sourceSeed, ...sourceSettings } = buildRequest();
+    const { randomSeed: _childSeed, ...childSettings } = childRequest;
+    expect(childSettings).toEqual({ ...sourceSettings, benchmarkId: 'KOSPI', timeframe: '1d' });
+
+    for (let round = 0; round < 6; round += 1) {
+      const current = ctx.container.seedCloneBatchService.get(batchId)!;
+      for (const { job } of current.items) {
+        if (job && !ctx.container.jobQueue.isTerminal(job.status)) {
+          ctx.container.jobQueue.setStatus(job.id, 'COMPLETED', {}, [
+            'QUEUED', 'STARTING', 'RUNNING', 'CANCELLING',
+          ]);
+        }
+      }
+      ctx.container.seedCloneBatchService.onJobStatusChanged();
+    }
+    const completed = ctx.container.seedCloneBatchService.get(batchId)!;
+    expect(completed.batch.status).toBe('COMPLETED');
+    expect(completed.items.every(({ item }) => item.state === 'DISPATCHED')).toBe(true);
+  });
+
+  it('난수 시드 실험 취소는 새 승격을 막고 대기 중인 자식도 취소한다', async () => {
+    const created = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: buildRequest(),
+    });
+    const sourceId = created.json().job.id as string;
+    ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED']);
+    const batchResponse = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
+      cookies: { qp_session: cookie },
+      payload: { count: 100 },
+    });
+    const batchId = batchResponse.json().batch.id as string;
+
+    const cancelled = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtest-clone-batches/${batchId}/cancel`,
+      cookies: { qp_session: cookie },
+    });
+    expect(cancelled.statusCode).toBe(200);
+    expect(cancelled.json().batch).toMatchObject({
+      status: 'CANCELLED',
+      cancelledCount: 100,
+      pendingCount: 0,
+      queuedCount: 0,
+    });
+    expect(ctx.container.jobQueue.countByStatus(['QUEUED'])).toBe(0);
   });
 
   it('초안은 방향 없는 기존 가격 변동 단계를 과거 LOW 방향으로 복원한다', async () => {
