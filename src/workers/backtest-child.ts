@@ -9,13 +9,7 @@ import { readGitCommitSha } from '../server/shared/build-info.js';
 import { systemClock } from '../server/shared/clock.js';
 import { openDatabase } from '../server/shared/db/database.js';
 import {
-  backtestDrawdownPoints,
-  backtestEquityPoints,
   backtestJobs,
-  backtestMetrics,
-  backtestMonthlyReturns,
-  backtestRuns,
-  backtestTrades,
   symbolMasterStorageState,
   symbolMasterTradingDays,
   symbolVersions,
@@ -25,10 +19,18 @@ import {
   sumExcludedNonTrading,
   type LegacyUniverseScheduleEntry,
 } from '../server/modules/backtest/application/universe-rule-resolver.js';
-import { newId } from '../server/shared/ids.js';
+import type {
+  BacktestExecutionOutcome,
+  BacktestExecutionStage,
+} from '../server/modules/backtest/application/backtest-execution-telemetry.js';
+import {
+  measureBacktestArtifact,
+  type BacktestArtifactSize,
+} from '../server/modules/backtest/application/backtest-result-artifact.js';
+import { BacktestRunner } from '../server/modules/backtest/application/backtest-runner.js';
 import { TERMINAL_STATUSES } from '../server/modules/backtest/application/job-queue.js';
 import { MAX_BACKTEST_BARS } from '../server/modules/backtest/domain/bar-estimate.js';
-import { ENGINE_VERSION, runBacktestCancellable } from '../server/modules/backtest/domain/engine.js';
+import { ENGINE_VERSION } from '../server/modules/backtest/domain/engine.js';
 import {
   DEFAULT_EXECUTION_RULES,
   getCostProfile,
@@ -44,6 +46,8 @@ import type { KrxHistoricalUniverseSource } from '../server/modules/market-data/
 import { SymbolMasterService } from '../server/modules/market-data/application/symbol-master-service.js';
 import { StrategyRegistry } from '../server/modules/strategy/application/strategy-registry.js';
 import { strategySourceHash } from '../server/modules/strategy/application/strategy-source-hash.js';
+import { SqliteBacktestResultWriter } from '../server/modules/backtest/infrastructure/sqlite-backtest-result-writer.js';
+import { SqliteBacktestResultArtifactWriter } from '../server/modules/backtest/infrastructure/sqlite-backtest-result-artifact-writer.js';
 import { backtestRequestSchema, periodToTsRange } from '../shared/schemas/backtest-request.js';
 import type { ProvenancePin } from '../shared/schemas/provenance-pin.js';
 import { installCancellationHandlers } from './cancellation.js';
@@ -55,6 +59,15 @@ function send(message: unknown): void {
 }
 
 async function main(): Promise<void> {
+  const workerStartedAtMs = Date.now();
+  let loadCompletedAtMs: number | null = null;
+  let runCompletedAtMs: number | null = null;
+  let persistCompletedAtMs: number | null = null;
+  let activeStage: BacktestExecutionStage | null = 'LOAD';
+  let outcome: BacktestExecutionOutcome = 'FAILED';
+  let inputSize: { candleCount: number; factCount: number; symbolCount: number } | null = null;
+  let outputSize: BacktestArtifactSize | null = null;
+
   const jobId = process.env.BACKTEST_JOB_ID ?? process.argv[2];
   const databasePath = process.env.DATABASE_PATH;
   if (!jobId || !databasePath) {
@@ -438,12 +451,20 @@ async function main(): Promise<void> {
       );
     }
 
+    inputSize = {
+      candleCount: candles.length,
+      factCount: facts.length,
+      symbolCount: unionSymbols.length,
+    };
+    loadCompletedAtMs = Date.now();
+    activeStage = 'RUN';
     const startedAtMs = Date.now();
     let lastProgressSentAt = 0;
 
     // 우아한 취소를 위해 주기적으로 이벤트 루프에 양보하는 버전을 쓴다 —
     // 근거는 engine.ts 의 CANCEL_YIELD_INTERVAL_BARS 주석 참고.
-    const result = await runBacktestCancellable(strategy, {
+    const runner = new BacktestRunner();
+    const runOutcome = await runner.run(strategy, {
       candles,
       initialCash: request.capital.initialCash,
       execution: {
@@ -470,122 +491,90 @@ async function main(): Promise<void> {
         const progressLabel = new Date(currentTsMs).toISOString().slice(0, 10);
         send({ type: 'progress', processedBars, totalBars, progressLabel });
       },
-    });
+    }, datasetWarnings);
+    runCompletedAtMs = Date.now();
 
-    if (result.cancelled) {
+    if (runOutcome.status === 'CANCELLED') {
+      activeStage = null;
+      outcome = 'CANCELLED';
       finish('CANCELLED');
       return;
     }
+    const artifact = runOutcome.artifact;
+    activeStage = 'PERSIST';
+    outputSize = measureBacktestArtifact(artifact);
 
     // 재현성 메타데이터 (스펙 §9.5) — 해시 규칙은 strategySourceHash 주석 참고
     const sourceHash = strategySourceHash(strategy);
-
-    const insertResults = handle.sqlite.transaction(() => {
-      db.insert(backtestRuns)
-        .values({
-          id: newId('run'),
-          jobId,
-          strategyId: strategy.id,
-          strategyVersion: strategy.version,
-          strategySourceHash: sourceHash,
-          parameterJson: JSON.stringify(parameters),
-          universeRuleJson: job.universeRuleJson,
-          // pin 이 scheduleHash 를 들고 있다 — validateSubmission 이 조립한 그대로다.
-          // pin 이 없을 리 없지만(항상 SYMBOL_MASTER 로 채워 저장한다), 손상된 행 방어로 폴백한다.
-          scheduleHash: pin?.scheduleHash ?? 'unknown',
-          universeJson: pinnedUniverseJson,
-          universeHash: pinnedUniverseHash,
-          engineVersion: ENGINE_VERSION,
-          feeModelVersion: `${costProfile.id}@${costProfile.version}`,
-          slippageModelVersion: `${slippageProfile.id}@${slippageProfile.version}`,
-          randomSeed: request.randomSeed,
-          gitCommitSha: readGitCommitSha(),
-          // run 은 pin 원문을 그대로 복사한다 — job 이 사라져도(보존 정책 등) 실행
-          // 기록 자체가 provenance 를 답할 수 있어야 한다.
-          provenancePinJson: job.provenancePinJson,
-          warningsJson: JSON.stringify([...datasetWarnings, ...result.warnings]),
-          openPositionsJson: JSON.stringify(result.openPositions),
-          startedAtMs,
-          completedAtMs: Date.now(),
-        })
-        .run();
-
-      db.insert(backtestMetrics)
-        .values({
-          jobId,
-          totalReturnPct: result.metrics.totalReturnPct,
-          cagrPct: result.metrics.cagrPct,
-          maxDrawdownPct: result.metrics.maxDrawdownPct,
-          sharpe: result.metrics.sharpe,
-          winRate: result.metrics.winRate,
-          tradeCount: result.metrics.tradeCount,
-          metricsJson: JSON.stringify(result.metrics),
-        })
-        .run();
-
-      const chunkInsert = <T>(rows: readonly T[], insert: (chunk: T[]) => void): void => {
-        for (let i = 0; i < rows.length; i += 500) {
-          insert(rows.slice(i, i + 500) as T[]);
-        }
-      };
-
-      chunkInsert(result.equityPoints, (chunk) =>
-        db
-          .insert(backtestEquityPoints)
-          .values(chunk.map((p) => ({ jobId, tsMs: p.tsMs, equity: p.equity })))
-          .run(),
-      );
-      chunkInsert(result.drawdownPoints, (chunk) =>
-        db
-          .insert(backtestDrawdownPoints)
-          .values(chunk.map((p) => ({ jobId, tsMs: p.tsMs, drawdown: p.drawdown })))
-          .run(),
-      );
-      chunkInsert(result.trades, (chunk) =>
-        db
-          .insert(backtestTrades)
-          .values(
-            chunk.map((t) => ({
-              jobId,
-              symbol: t.symbol,
-              quantity: t.quantity,
-              entryTsMs: t.entryTsMs,
-              exitTsMs: t.exitTsMs,
-              entryPrice: t.entryPrice,
-              exitPrice: t.exitPrice,
-              grossPnl: t.grossPnl,
-              costs: t.costs,
-              netPnl: t.netPnl,
-              returnPct: t.returnPct,
-              holdingTimeMs: t.holdingTimeMs,
-              exitReason: t.exitReason ?? null,
-            })),
-          )
-          .run(),
-      );
-      if (result.monthlyReturns.length > 0) {
-        db.insert(backtestMonthlyReturns)
-          .values(result.monthlyReturns.map((m) => ({ jobId, ...m })))
-          .run();
-      }
-    });
-    insertResults();
+    const resultWriter = process.env.BACKTEST_RESULT_PATH
+      ? new SqliteBacktestResultArtifactWriter(process.env.BACKTEST_RESULT_PATH)
+      : new SqliteBacktestResultWriter(handle);
+    resultWriter.write({
+      jobId,
+      strategyId: strategy.id,
+      strategyVersion: strategy.version,
+      strategySourceHash: sourceHash,
+      parameterJson: JSON.stringify(parameters),
+      universeRuleJson: job.universeRuleJson,
+      // pin 이 scheduleHash 를 들고 있다 — validateSubmission 이 조립한 그대로다.
+      // pin 이 없을 리 없지만(항상 SYMBOL_MASTER 로 채워 저장한다), 손상된 행 방어로 폴백한다.
+      scheduleHash: pin?.scheduleHash ?? 'unknown',
+      universeJson: pinnedUniverseJson,
+      universeHash: pinnedUniverseHash,
+      engineVersion: ENGINE_VERSION,
+      feeModelVersion: `${costProfile.id}@${costProfile.version}`,
+      slippageModelVersion: `${slippageProfile.id}@${slippageProfile.version}`,
+      randomSeed: request.randomSeed,
+      gitCommitSha: readGitCommitSha(),
+      // run 은 pin 원문을 그대로 복사한다 — job 이 사라져도(보존 정책 등) 실행
+      // 기록 자체가 provenance 를 답할 수 있어야 한다.
+      provenancePinJson: job.provenancePinJson,
+      startedAtMs,
+      completedAtMs: Date.now(),
+    }, artifact);
+    persistCompletedAtMs = Date.now();
 
     db.update(backtestJobs)
       .set({
-        progressBars: result.processedBars,
-        totalBars: result.processedBars,
+        progressBars: artifact.processedBars,
+        totalBars: artifact.processedBars,
       })
       .where(eq(backtestJobs.id, jobId))
       .run();
 
     // 종료 상태는 DB 가 유일한 진실이다 — 부모는 exit 이벤트에서 DB 를 읽는다
+    outcome = 'COMPLETED';
     finish('COMPLETED');
+    activeStage = null;
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    finish(cancellation.isRequested() ? 'CANCELLED' : 'FAILED', cancellation.isRequested() ? undefined : reason);
-    process.exitCode = cancellation.isRequested() ? 0 : 1;
+    const cancelled = cancellation.isRequested();
+    outcome = cancelled ? 'CANCELLED' : 'FAILED';
+    finish(cancelled ? 'CANCELLED' : 'FAILED', cancelled ? undefined : reason);
+    process.exitCode = cancelled ? 0 : 1;
   } finally {
+    const finishedAtMs = Date.now();
+    const loadEnd = loadCompletedAtMs ?? finishedAtMs;
+    const runEnd = runCompletedAtMs ?? finishedAtMs;
+    const persistEnd = persistCompletedAtMs
+      ?? (outcome === 'FAILED' && runCompletedAtMs !== null ? finishedAtMs : runEnd);
+    send({
+      type: 'telemetry',
+      telemetry: {
+        schemaVersion: 1,
+        outcome,
+        failedStage: outcome === 'FAILED' ? activeStage : null,
+        durationsMs: {
+          load: Math.max(0, loadEnd - workerStartedAtMs),
+          run: loadCompletedAtMs === null ? 0 : Math.max(0, runEnd - loadCompletedAtMs),
+          persist: runCompletedAtMs === null ? 0 : Math.max(0, persistEnd - runCompletedAtMs),
+          total: Math.max(0, finishedAtMs - workerStartedAtMs),
+        },
+        peakRssBytes: process.resourceUsage().maxRSS * 1024,
+        input: inputSize,
+        output: outputSize,
+      },
+    });
     handle.close();
   }
 }

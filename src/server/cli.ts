@@ -7,8 +7,14 @@
 import readline from 'node:readline';
 import { randomBytes } from 'node:crypto';
 import { Writable } from 'node:stream';
+import Database from 'better-sqlite3';
 import { loadConfig } from './bootstrap/config.js';
 import { createContainer } from './bootstrap/container.js';
+import {
+  buildBacktestTelemetryReport,
+  type BacktestFinishedAuditRow,
+  type NumericDistribution,
+} from './modules/backtest/application/backtest-telemetry-report.js';
 import { newId } from './shared/ids.js';
 
 function ask(question: string, hidden = false): Promise<string> {
@@ -200,6 +206,155 @@ async function krxBackfillNonTrading(argv: readonly string[]): Promise<void> {
   }
 }
 
+interface TelemetryReportCliOptions {
+  readonly sinceDays: number;
+  readonly limit: number;
+  readonly format: 'text' | 'json';
+  readonly workerBudgetBytes?: number;
+}
+
+function parsePositiveNumber(flag: string, raw: string | undefined): number {
+  const value = Number(raw);
+  if (raw === undefined || !Number.isFinite(value) || value <= 0) {
+    throw new Error(`${flag}에는 0보다 큰 숫자가 필요합니다.`);
+  }
+  return value;
+}
+
+function parseTelemetryReportOptions(argv: readonly string[]): TelemetryReportCliOptions {
+  let sinceDays = 30;
+  let limit = 1_000;
+  let format: 'text' | 'json' = 'text';
+  let workerBudgetBytes: number | undefined;
+
+  for (let index = 0; index < argv.length; index += 2) {
+    const flag = argv[index];
+    const value = argv[index + 1];
+    switch (flag) {
+      case '--since-days':
+        sinceDays = parsePositiveNumber(flag, value);
+        break;
+      case '--limit':
+        limit = parsePositiveNumber(flag, value);
+        if (!Number.isInteger(limit)) throw new Error('--limit에는 정수가 필요합니다.');
+        break;
+      case '--format':
+        if (value !== 'text' && value !== 'json') {
+          throw new Error('--format은 text 또는 json이어야 합니다.');
+        }
+        format = value;
+        break;
+      case '--worker-budget-mib':
+        workerBudgetBytes = parsePositiveNumber(flag, value) * 1024 ** 2;
+        break;
+      default:
+        throw new Error(`지원하지 않는 옵션입니다: ${flag ?? '(없음)'}`);
+    }
+  }
+  if (argv.length % 2 !== 0) throw new Error(`${argv[argv.length - 1]} 옵션의 값이 없습니다.`);
+
+  return {
+    sinceDays,
+    limit,
+    format,
+    ...(workerBudgetBytes === undefined ? {} : { workerBudgetBytes }),
+  };
+}
+
+function formatBytes(bytes: number): string {
+  return `${(bytes / 1024 ** 2).toFixed(1)} MiB`;
+}
+
+function formatDuration(durationMs: number): string {
+  if (durationMs < 1_000) return `${durationMs}ms`;
+  return `${(durationMs / 1_000).toFixed(1)}s`;
+}
+
+function formatDistribution(
+  distribution: NumericDistribution | null,
+  formatValue: (value: number) => string = (value) => Math.round(value).toLocaleString('en-US'),
+): string {
+  if (distribution === null) return '-';
+  return `p50 ${formatValue(distribution.p50)} / p95 ${formatValue(distribution.p95)} / max ${formatValue(distribution.max)}`;
+}
+
+/** 서비스가 실행 중이어도 WAL을 포함한 일관된 읽기 스냅샷만 사용하며 DB를 수정하지 않는다. */
+function backtestTelemetryReport(argv: readonly string[]): void {
+  const options = parseTelemetryReportOptions(argv);
+  const config = loadConfig();
+  const untilMs = Date.now();
+  const sinceMs = untilMs - options.sinceDays * 86_400_000;
+  const sqlite = new Database(config.databasePath, { readonly: true, fileMustExist: true });
+  try {
+    sqlite.pragma('query_only = ON');
+    const available = sqlite.prepare(
+      `SELECT count(*) AS count
+       FROM audit_logs
+       WHERE event = 'backtest.finished' AND created_at_ms BETWEEN ? AND ?`,
+    ).get(sinceMs, untilMs) as { count: number };
+    const rows = sqlite.prepare(
+      `SELECT created_at_ms AS createdAtMs, detail_json AS detailJson
+       FROM audit_logs
+       WHERE event = 'backtest.finished' AND created_at_ms BETWEEN ? AND ?
+       ORDER BY created_at_ms DESC
+       LIMIT ?`,
+    ).all(sinceMs, untilMs, options.limit) as BacktestFinishedAuditRow[];
+    const report = buildBacktestTelemetryReport({
+      rows,
+      availableEventCount: available.count,
+      sinceMs,
+      untilMs,
+      ...(options.workerBudgetBytes === undefined
+        ? {}
+        : { workerBudgetBytes: options.workerBudgetBytes }),
+    });
+
+    if (options.format === 'json') {
+      console.log(JSON.stringify(report, null, 2));
+      return;
+    }
+
+    console.log(`백테스트 telemetry 보고서 (${new Date(sinceMs).toISOString()} ~ ${new Date(untilMs).toISOString()})`);
+    console.log(
+      `표본: 완료 ${report.samples.completed}, 실패 ${report.samples.failed}, 취소 ${report.samples.cancelled}`
+      + ` / 입력 규모 ${report.samples.distinctInputShapes}종`
+      + ` / 입력 폭 ${report.samples.inputScaleRatio?.toFixed(1) ?? '-'}배`,
+    );
+    console.log(
+      `감사 이벤트: ${report.events.scanned}/${report.events.available}건 조회`
+      + ` (telemetry 없음 ${report.events.withoutTelemetry}, 손상 ${report.events.invalidTelemetry})`,
+    );
+    if (report.events.truncated) console.log(`주의: 최신 ${report.events.scanned}건만 집계했습니다. --limit을 늘리세요.`);
+    console.log(`peak RSS: ${formatDistribution(report.distributions.peakRssBytes, formatBytes)}`);
+    console.log(`전체 시간: ${formatDistribution(report.distributions.durationsMs.total, formatDuration)}`);
+    console.log(`  LOAD: ${formatDistribution(report.distributions.durationsMs.load, formatDuration)}`);
+    console.log(`  RUN: ${formatDistribution(report.distributions.durationsMs.run, formatDuration)}`);
+    console.log(`  PERSIST: ${formatDistribution(report.distributions.durationsMs.persist, formatDuration)}`);
+    console.log(`입력 봉: ${formatDistribution(report.distributions.input.candles)}`);
+    console.log(`입력 종목: ${formatDistribution(report.distributions.input.symbols)}`);
+    console.log(`결과 행: ${formatDistribution(report.distributions.output.rows)}`);
+    console.log(
+      `결과 payload: ${formatDistribution(report.distributions.output.estimatedPayloadBytes, formatBytes)}`,
+    );
+    console.log('현 $7 Lightsail 동시성: 1 유지 (웹과 child가 같은 640MiB cgroup을 공유)');
+
+    if (!report.readiness.readyForSizing) {
+      console.log('용량 산정: 표본 부족');
+      for (const reason of report.readiness.reasons) console.log(`  - ${reason}`);
+      return;
+    }
+    console.log(`worker 계획 메모리(p95 + 25%): ${formatBytes(report.sizing.plannedBytesPerWorker!)}`);
+    if (report.sizing.memoryConcurrencyCap === null) {
+      console.log('전용 worker 메모리 상한: --worker-budget-mib를 지정하면 계산합니다.');
+    } else {
+      console.log(`전용 worker 메모리 기준 동시성 상한: ${report.sizing.memoryConcurrencyCap}`);
+    }
+    console.log(`15분 순차 seed shard 후보: ${report.sizing.sequentialSeedsPerShardCandidate}개`);
+  } finally {
+    sqlite.close();
+  }
+}
+
 async function main(): Promise<void> {
   const command = process.argv[2];
   switch (command) {
@@ -215,6 +370,9 @@ async function main(): Promise<void> {
     case 'krx:backfill-non-trading':
       await krxBackfillNonTrading(process.argv.slice(3));
       break;
+    case 'backtest:telemetry-report':
+      backtestTelemetryReport(process.argv.slice(3));
+      break;
     default:
       // 재무·자본변동 수집은 더 이상 CLI 명령이 아니다 — 백테스트 준비(preparation)가
       // 필요한 구간만 자동으로 수집한다(스펙 2026-08-09, D-049). 여기서 옛 `facts:sync`
@@ -229,6 +387,7 @@ async function main(): Promise<void> {
       console.log('  admin:create   관리자 계정 생성');
       console.log('  totp:enroll    TOTP 2단계 인증 등록·재발급 (CLI 전용)');
       console.log('  krx:backfill-non-trading  이미 수집한 구간의 거래불가일 채우기 (--from <날짜> --to <날짜>)');
+      console.log('  backtest:telemetry-report  최근 실행 비용 보고서 (--since-days 30 [--worker-budget-mib N])');
       process.exitCode = command ? 1 : 0;
   }
 }

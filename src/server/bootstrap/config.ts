@@ -15,6 +15,10 @@ const envSchema = z.object({
   EXPORT_ROOT: z.string().default('./data/exports'),
   TEMP_ROOT: z.string().default('./data/temp'),
   MAX_CONCURRENT_BACKTESTS: z.coerce.number().int().min(1).max(4).default(1),
+  BACKTEST_EXECUTION_MODE: z.enum(['local', 'remote']).default('local'),
+  BACKTEST_WORKER_TOKEN: z.string().min(32).max(256).optional(),
+  REMOTE_BACKTEST_LEASE_SECONDS: z.coerce.number().int().min(15).max(300).default(60),
+  REMOTE_BACKTEST_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
   /** 대기(QUEUED) 백테스트 상한 — 연타로 대기열이 무한히 쌓이는 것을 막는다 (D-025) */
   MAX_QUEUED_BACKTESTS: z.coerce.number().int().min(1).max(200).default(20),
   SESSION_SECRET: z.string().min(32).optional(),
@@ -64,6 +68,10 @@ export interface AppConfig {
   readonly exportRoot: string;
   readonly tempRoot: string;
   readonly maxConcurrentBacktests: number;
+  readonly backtestExecutionMode: 'local' | 'remote';
+  readonly backtestWorkerToken: string | null;
+  readonly remoteBacktestLeaseSeconds: number;
+  readonly remoteBacktestMaxAttempts: number;
   readonly maxQueuedBacktests: number;
   readonly sessionSecret: string;
   readonly sessionIdleTimeoutSeconds: number;
@@ -119,6 +127,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     throw new ConfigError('KRX_APPROVAL_EXPIRY 는 KRX_API_KEY 와 함께 설정해야 합니다');
   }
 
+  if (raw.BACKTEST_EXECUTION_MODE === 'remote' && !raw.BACKTEST_WORKER_TOKEN) {
+    throw new ConfigError('BACKTEST_EXECUTION_MODE=remote 이면 BACKTEST_WORKER_TOKEN 이 필요합니다');
+  }
+
   return {
     nodeEnv: raw.NODE_ENV,
     bindAddress: raw.APP_BIND_ADDRESS,
@@ -129,6 +141,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     exportRoot: raw.EXPORT_ROOT,
     tempRoot: raw.TEMP_ROOT,
     maxConcurrentBacktests: raw.MAX_CONCURRENT_BACKTESTS,
+    backtestExecutionMode: raw.BACKTEST_EXECUTION_MODE,
+    backtestWorkerToken: raw.BACKTEST_WORKER_TOKEN ?? null,
+    remoteBacktestLeaseSeconds: raw.REMOTE_BACKTEST_LEASE_SECONDS,
+    remoteBacktestMaxAttempts: raw.REMOTE_BACKTEST_MAX_ATTEMPTS,
     maxQueuedBacktests: raw.MAX_QUEUED_BACKTESTS,
     sessionSecret: raw.SESSION_SECRET ?? randomBytes(48).toString('base64'),
     sessionIdleTimeoutSeconds: raw.SESSION_IDLE_TIMEOUT_SECONDS,

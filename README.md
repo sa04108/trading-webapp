@@ -53,6 +53,27 @@ IP 를 등록제로 운영하기 때문이다. 프로비저닝이 아웃바운�
 1GB 호스트의 운영 제약: 동시 백테스트 1개, 봉 수 상한 200만, 대규모 파라미터
 sweep 금지.
 
+배포 후 실행비용 표본은 `backtest:telemetry-report` CLI로 확인한다. 완료 10개, 입력
+규모 3종, 최소·최대 4배 차이가 모이기 전에는 병렬도 추천을 내지 않으며, 표본이 충분해도
+이 1GB 호스트의 동시성은 1로 유지한다. 운영용 `systemd-run` 전체 명령은 명세 §28.2에
+있다.
+
+### 별도 PC 원격 백테스트 worker
+
+기본값은 그대로 `BACKTEST_EXECUTION_MODE=local`, `MAX_CONCURRENT_BACKTESTS=1`이다.
+Lightsail에서 계산을 빼려면 서버를 `remote`로 바꾸고, 같은 릴리스 아티팩트를 별도 PC에
+배포해 `quant-backtest-worker.service`를 실행한다. Worker는 인바운드 포트를 열지 않고
+서버 HTTPS로 작업을 long-poll한 뒤, job 전용 SQLite 입력을 받아 계산하고 결과 SQLite를
+streaming 업로드한다. 서버와 worker의 Git SHA가 다르면 claim 자체가 거부된다.
+
+설정 예시는 `infra/app.env.example`, `infra/worker.env.example`, 서비스 unit은
+`infra/systemd/quant-backtest-worker.service`에 있다. 개발 PC에서는 worker env를 넣고
+`pnpm worker:remote`로 실행할 수 있다. 실제 원격 동시 실행 수는 worker별
+`BACKTEST_WORKER_CONCURRENCY`로 조절하며 여러 worker PC도 같은 큐를 공유할 수 있다.
+처음에는 1로 시작하고 `backtest:telemetry-report`의 메모리·시간 표본을 근거로 올린다.
+remote 모드에서는 서버의 `MAX_CONCURRENT_BACKTESTS`는 사용되지 않는다.
+배포·전환·장애 복구 순서는 [원격 worker 운영 문서](docs/REMOTE_WORKER_OPERATIONS.md)를 따른다.
+
 Tailscale 에서 퍼블릭 + Caddy 로 옮긴 이유와 트레이드오프는
 [docs/DECISIONS.md](docs/DECISIONS.md) 의 D-017 에 있다.
 
@@ -166,7 +187,8 @@ TOTP 등록·재발급은 CLI 에서만 할 수 있다 — 웹 세션이 탈취�
 
 ```
 src/server/modules/{auth,strategy,market-data,backtest,broker,audit,system}
-src/workers/backtest-child.ts   # 백테스트 자식 프로세스
+src/workers/backtest-child.ts              # 실제 백테스트 계산 자식 프로세스
+src/workers/remote-backtest-supervisor.ts  # 원격 lease/heartbeat/업로드 supervisor
 src/web                          # React + shadcn/ui (모바일 우선)
 src/shared                       # 웹·서버 공유 스키마
 ```

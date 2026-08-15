@@ -243,6 +243,57 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(job.error).toBeNull();
     expect(job.status).toBe('COMPLETED');
 
+    // 실행 단계 계측은 child IPC를 거쳐 부모의 종료 감사 기록에 합쳐진다. 작업 상태가
+    // 먼저 COMPLETED가 될 수 있으므로 audit 행이 생길 때까지 별도로 기다린다.
+    const finishedDetail = (): {
+      executionTelemetry?: {
+        outcome: string;
+        failedStage: string | null;
+        peakRssBytes: number;
+        durationsMs: { load: number; run: number; persist: number; total: number };
+        input: { candleCount: number; factCount: number; symbolCount: number } | null;
+        output: { rowCount: number; tradeCount: number } | null;
+      };
+    } | undefined => (
+      ctx.container.database.sqlite
+        .prepare("SELECT detail_json FROM audit_logs WHERE event = 'backtest.finished'")
+        .all() as Array<{ detail_json: string }>
+    )
+      .map((row) => JSON.parse(row.detail_json) as {
+        jobId: string;
+        executionTelemetry?: {
+          outcome: string;
+          failedStage: string | null;
+          peakRssBytes: number;
+          durationsMs: { load: number; run: number; persist: number; total: number };
+          input: { candleCount: number; factCount: number; symbolCount: number } | null;
+          output: { rowCount: number; tradeCount: number } | null;
+        };
+      })
+      .find((detail) => detail.jobId === jobId);
+    await waitFor(() => finishedDetail()?.executionTelemetry !== undefined, 15_000);
+    expect(finishedDetail()?.executionTelemetry).toMatchObject({
+      outcome: 'COMPLETED',
+      failedStage: null,
+      peakRssBytes: expect.any(Number),
+      durationsMs: {
+        load: expect.any(Number),
+        run: expect.any(Number),
+        persist: expect.any(Number),
+        total: expect.any(Number),
+      },
+      input: {
+        candleCount: dailyCandles.length,
+        symbolCount: 1,
+      },
+      output: {
+        tradeCount: expect.any(Number),
+        rowCount: expect.any(Number),
+      },
+    });
+    expect(finishedDetail()!.executionTelemetry!.peakRssBytes).toBeGreaterThan(0);
+    expect(finishedDetail()!.executionTelemetry!.output!.rowCount).toBeGreaterThan(0);
+
     // 상세 조회: 재현성 메타데이터 + 지표 (스펙 §9.5, §9.6)
     const detail = await ctx.app.inject({
       method: 'GET',
@@ -572,6 +623,27 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(recovered).toContain(job.id);
     expect(queue.getJob(job.id)!.status).toBe('INTERRUPTED');
     expect(queue.getJob(job.id)!.error).toContain('복제');
+  });
+
+  it('preserves live remote leases on remote restart and interrupts them on local mode switch', () => {
+    const queue = ctx.container.jobQueue;
+    const job = queue.enqueue(buildRequest());
+    queue.claimNextRemote({
+      workerId: 'remote:worker-a',
+      leaseTokenHash: 'a'.repeat(64),
+      leaseExpiresAtMs: Date.now() + 60_000,
+      runnerVersion: 'release-a',
+      maxAttempts: 3,
+    });
+
+    expect(queue.recoverInterrupted(() => false)).not.toContain(job.id);
+    expect(queue.getJob(job.id)?.status).toBe('STARTING');
+    expect(queue.interruptActiveRemoteLeases()).toContain(job.id);
+    expect(queue.getJob(job.id)).toMatchObject({
+      status: 'INTERRUPTED',
+      leaseTokenHash: null,
+      leaseExpiresAtMs: null,
+    });
   });
 
   it('refuses to delete non-terminal jobs', async () => {

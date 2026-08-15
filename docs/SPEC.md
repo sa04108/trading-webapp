@@ -85,7 +85,10 @@ Cloud Firewall (현재: Lightsail)
 - 메타데이터 DB 하나
 - 내부 역할과 의존 방향은 엄격히 분리
 
-마이크로서비스로 쪼개지 않는다. 다만 백테스트 계산은 HTTP 이벤트 루프와 메모리 장애를 분리하기 위해 **동일 아티팩트의 자식 프로세스**에서 실행한다.
+마이크로서비스로 쪼개지 않는다. 다만 백테스트 계산은 HTTP 이벤트 루프와 메모리 장애를
+분리하기 위해 **동일 아티팩트의 자식 프로세스**에서 실행한다. 기본 local 모드는 서버
+호스트에서 fork하고, 선택적 remote 모드는 별도 PC의 supervisor가 HTTPS lease를 받아
+같은 child를 실행한다. 원격 worker도 별도 제품·DB가 아니라 같은 릴리스의 계산 배치다.
 
 ## 2.4 애플리케이션은 특정 증권사를 모른다
 
@@ -650,8 +653,23 @@ type BacktestJobStatus =
 ## 동시 실행
 
 ```dotenv
+BACKTEST_EXECUTION_MODE=local
 MAX_CONCURRENT_BACKTESTS=1
 ```
+
+현 $7 Lightsail은 local 1을 유지한다. `BACKTEST_EXECUTION_MODE=remote`에서는 서버가
+계산 child를 만들지 않고 인증된 worker의 long-poll claim만 받는다. 이때 실제 병렬도는
+각 worker의 `BACKTEST_WORKER_CONCURRENCY` 합이며 `MAX_CONCURRENT_BACKTESTS`는 적용되지
+않는다. Worker는 서버와 정확히 같은 Git SHA만 claim할 수 있다.
+
+원격 claim은 원자적으로 attempt를 올리고 임대 token의 SHA-256과 만료 시각만 DB에 남긴다.
+Worker는 heartbeat로 임대를 연장하고 진행률·취소 요청을 교환한다. 만료된 lease는 설정된
+최대 attempt까지 `QUEUED`로 돌아가며, 마지막 만료는 `FAILED`가 된다. 늦게 온 이전
+attempt의 heartbeat·결과는 모두 거부한다. 입력은 해당 job과 유니버스 종목에 필요한
+행만 담은 SQLite snapshot이며 인증·세션·감사·다른 job은 포함하지 않는다. 결과 artifact는
+크기·checksum·SQLite integrity·schema·행 타입을 검증하고 결과 import와 `COMPLETED`
+전이를 한 server SQLite transaction으로 처리한다. 검증과 대량 행 import는 별도 server-side
+child에서 직렬 실행해 Fastify 이벤트 루프를 막지 않는다.
 
 ## SQLite 작업 확보
 
@@ -692,7 +710,10 @@ COMMIT;
 
 ## 재시작 복구
 
-서버 시작 시 `STARTING`, `RUNNING`, `CANCELLING` 작업을 검사한다. 대응 OS 프로세스가 없으면 `INTERRUPTED`로 바꾼다. 자동 재실행은 하지 않고 사용자가 복제·재실행한다.
+서버 시작 시 local 작업의 `STARTING`, `RUNNING`, `CANCELLING`을 검사한다. 대응 OS
+프로세스가 없으면 `INTERRUPTED`로 바꾸고 자동 재실행하지 않는다. Remote lease는 server
+재시작 뒤 worker가 heartbeat를 이어 갈 수 있으므로 만료 전에는 보존한다. remote에서
+local 모드로 바꾸면 더는 갱신할 endpoint가 없는 활성 remote lease를 `INTERRUPTED`로 닫는다.
 
 ---
 
@@ -1616,6 +1637,7 @@ EXPORT_ROOT=/var/lib/quant-platform/exports
 TEMP_ROOT=/var/lib/quant-platform/temp
 
 MAX_CONCURRENT_BACKTESTS=1
+BACKTEST_EXECUTION_MODE=local
 SESSION_SECRET=<48_BYTE_RANDOM_VALUE>
 SESSION_IDLE_TIMEOUT_SECONDS=43200
 SESSION_ABSOLUTE_TIMEOUT_SECONDS=604800
@@ -1637,6 +1659,9 @@ provision.sh 가 이 파일을 생성하며 `SESSION_SECRET` 은 서버에서 �
 전부 무효화된다.
 
 전체 항목은 `infra/app.env.example` 이 기준이다 (증권사·DART 자격 증명 포함).
+별도 worker 설정은 `infra/worker.env.example`, systemd unit은
+`infra/systemd/quant-backtest-worker.service`가 기준이다. server와 worker는 같은
+`BACKTEST_WORKER_TOKEN`과 동일한 릴리스 SHA를 사용한다.
 
 ## 28.1 값을 바꾼 뒤
 
@@ -1697,6 +1722,23 @@ sudo systemd-run --uid=quant --gid=quant --pty --wait \
 `app.env` 를 셸에서 export 해 넘기는 방식은 키가 `ps` 에 잠깐 노출되므로 쓰지 않는다.
 `app.env` 는 `chmod 600 root:root` 라서 quant 는 읽을 수도 없다 — 파일 경로만 넘기고
 실제로 여는 것은 PID 1 이라는 점이 systemd-run 을 쓰는 이유다.
+
+백테스트 실행비용 보고서는 대화형 secret을 출력하지 않으므로 `--pty` 대신 `--pipe`로
+현재 터미널에 받는다. 서비스가 실행 중이어도 SQLite를 읽기 전용으로 열며 DB를 변경하지
+않는다.
+
+```bash
+sudo systemd-run --uid=quant --gid=quant --pipe --wait --collect \
+  --working-directory=/opt/quant-platform/current \
+  --property=EnvironmentFile=/etc/quant-platform/app.env \
+  /usr/local/bin/node /opt/quant-platform/current/dist/server/cli.js \
+  backtest:telemetry-report --since-days 30
+```
+
+전용 worker 후보를 검토할 때만 OS·controller 몫을 이미 제외한 worker 전용 예산을
+`--worker-budget-mib <MiB>`로 넣는다. 현 Lightsail의 640MiB `MemoryMax`를 그대로 넣으면
+웹 부모 프로세스 몫을 두 번 쓸 수 있으므로 금지한다. 자동 처리용 원문은
+`--format json`, 감사 이벤트가 1,000건보다 많으면 `--limit`을 늘린다.
 
 ## 28.3 재무·자본변동 자동 수집
 
@@ -2031,6 +2073,28 @@ Playwright viewport:
 - 설정 변경
 - 향후 실거래 arm·disarm
 - 향후 주문
+
+백테스트 종료 감사 기록(`backtest.finished`)에는 child가 측정한 실행 telemetry를 포함한다.
+
+- 결과: `COMPLETED | FAILED | CANCELLED`, 실패한 단계 `LOAD | RUN | PERSIST`
+- 단계별·전체 소요 시간
+- child 프로세스 peak RSS(bytes)
+- 입력 봉·팩트·종목 수
+- 결과 테이블 행 수와 SQLite page/index overhead를 제외한 논리 payload 근사치
+
+계측을 위해 결과 전체를 추가로 직렬화하지 않는다. local 모드의 운영 호스트는 1GB RAM이고
+웹과 child가 같은 640MB systemd cgroup을 공유하므로 `MAX_CONCURRENT_BACKTESTS=1`을
+유지한다. remote 모드의 전용 worker 병렬도는 그 호스트의 telemetry와 메모리 예산으로
+별도로 정한다(D-059, D-060).
+
+용량 산정은 `backtest:telemetry-report`로 한다. 최소 완료 표본 10개, 입력 규모 3종,
+최소·최대 입력 행 수 4배 차이가 필요하다. 최소 구성은 작은 부하·평소 부하·허용 상한에
+가까운 부하를 각각 여러 seed로 실행하는 것이다. 표본 gate를 통과해도 현 Lightsail
+동시성은 1이다. 보고서의 worker 계획 메모리는 완료 실행의 p95 peak RSS에 25% 여유를
+더한 값이다. 전용 worker 병렬도는 worker 전용 메모리 예산으로 계산한 상한과 CPU 슬롯 중
+작은 값으로 결정한다. seed shard
+표시는 p95 실행시간으로 순차 15분 이내(최대 25개)를 맞춘 계획 후보일 뿐, 원격 재시도
+정책을 구현할 때 최종 확정한다.
 
 대시보드 상태:
 

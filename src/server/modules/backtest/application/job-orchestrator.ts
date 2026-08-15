@@ -5,15 +5,18 @@ import type { AppConfig } from '../../../bootstrap/config.js';
 import type { Clock } from '../../../shared/clock.js';
 import type { Logger } from '../../../shared/logger.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
+import type { BacktestExecutionTelemetry } from './backtest-execution-telemetry.js';
 import type { BacktestJobRow, JobQueue } from './job-queue.js';
 
 /** 자식 → 부모 IPC 메시지. 종료 상태는 IPC 가 아니라 DB 에 기록된다 (exit 시 부모가 읽음). */
-export type ChildMessage = {
-  type: 'progress';
-  processedBars: number;
-  totalBars: number;
-  progressLabel: string | null;
-};
+export type ChildMessage =
+  | {
+      type: 'progress';
+      processedBars: number;
+      totalBars: number;
+      progressLabel: string | null;
+    }
+  | { type: 'telemetry'; telemetry: BacktestExecutionTelemetry };
 
 export interface JobEvent {
   jobId: string;
@@ -59,6 +62,7 @@ export class JobOrchestrator {
   readonly events = new EventEmitter();
   private readonly children = new Map<string, ChildProcess>();
   private readonly cancelEscalations = new Map<string, CancelEscalation>();
+  private readonly executionTelemetry = new Map<string, BacktestExecutionTelemetry>();
   private timer: NodeJS.Timeout | null = null;
   private stopped = false;
   private readonly workerId = `worker-${process.pid}`;
@@ -72,7 +76,17 @@ export class JobOrchestrator {
   ) {}
 
   start(): void {
-    const recovered = this.queue.recoverInterrupted(isPidAlive);
+    this.recoverOrphaned(true);
+    this.timer = setInterval(() => this.tick(), POLL_INTERVAL_MS);
+    this.timer.unref();
+  }
+
+  /** 모드별 실행기를 시작하기 전, 이전 모드에서 남은 활성 행을 정리한다. */
+  recoverOrphaned(interruptRemoteLeases = false): void {
+    const recovered = [
+      ...this.queue.recoverInterrupted(isPidAlive),
+      ...(interruptRemoteLeases ? this.queue.interruptActiveRemoteLeases() : []),
+    ];
     if (recovered.length > 0) {
       this.logger.warn(
         { module: 'backtest', event: 'jobs.recovered', jobIds: recovered },
@@ -84,8 +98,6 @@ export class JobOrchestrator {
         this.events.emit('job', { jobId, kind: 'status' } satisfies JobEvent);
       }
     }
-    this.timer = setInterval(() => this.tick(), POLL_INTERVAL_MS);
-    this.timer.unref();
   }
 
   stop(): void {
@@ -119,6 +131,21 @@ export class JobOrchestrator {
     }
 
     const child = this.children.get(jobId);
+    if (
+      (job.status === 'RUNNING' || job.status === 'STARTING')
+      && child === undefined
+      && job.workerId?.startsWith('remote:') === true
+    ) {
+      if (!this.queue.setStatus(jobId, 'CANCELLING', {}, ['RUNNING', 'STARTING'])) {
+        return 'NOT_CANCELLABLE';
+      }
+      this.audit.record('admin', 'backtest.cancel-requested', {
+        jobId,
+        executionMode: 'remote',
+      });
+      this.events.emit('job', { jobId, kind: 'status' } satisfies JobEvent);
+      return 'CANCELLING';
+    }
     if ((job.status === 'RUNNING' || job.status === 'STARTING') && child) {
       // 취소 시퀀스 (스펙 §10): CANCELLING → IPC → SIGTERM → SIGKILL
       this.queue.setStatus(jobId, 'CANCELLING', {}, ['RUNNING', 'STARTING']);
@@ -199,7 +226,15 @@ export class JobOrchestrator {
 
     let markedRunning = false;
     child.on('message', (message: ChildMessage) => {
-      if (this.stopped || message.type !== 'progress') return;
+      if (this.stopped) return;
+      if (message.type === 'telemetry') {
+        this.executionTelemetry.set(job.id, message.telemetry);
+        this.logger.info(
+          { module: 'backtest', event: 'backtest.telemetry', jobId: job.id, ...message.telemetry },
+          'backtest execution telemetry',
+        );
+        return;
+      }
       try {
         // STARTING → RUNNING 은 여기서만 일어나는 명시적 1회 전이다.
         // 진행률 갱신은 상태를 건드리지 않는다 — 종료 상태를 되돌릴 수 없다.
@@ -221,6 +256,8 @@ export class JobOrchestrator {
 
     child.on('exit', (code, signal) => {
       this.children.delete(job.id);
+      const telemetry = this.executionTelemetry.get(job.id);
+      this.executionTelemetry.delete(job.id);
       // 남은 폴백 타이머를 끈다 — 종료한 자식에게 신호를 쏘지 않고, 늦게 발사된
       // 타이머가 이미 끝난 취소의 단계를 덧칠하지도 않게 한다.
       const escalation = this.cancelEscalations.get(job.id);
@@ -253,6 +290,7 @@ export class JobOrchestrator {
           jobId: job.id,
           status: this.queue.getJob(job.id)?.status,
           durationMs: this.clock.now() - (current.startedAtMs ?? current.createdAtMs),
+          ...(telemetry ? { executionTelemetry: telemetry } : {}),
           // 취소로 끝난 작업만 갖는 값 — 어느 단계가 실제로 프로세스를 끝냈는지
           ...(escalation ? { cancelPath: escalation.path } : {}),
         });

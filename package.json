@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "tsx watch src/server/bootstrap/main.ts",
     "dev:web": "vite",
+    "worker:remote": "tsx src/workers/remote-backtest-supervisor.ts",
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "test": "vitest run",

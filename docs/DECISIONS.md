@@ -1319,3 +1319,50 @@
 - **실패 상태를 UX 추론에 쓰지 않는다:** 현행 `FAILED`는 워커의 모든 예외와 비정상
   프로세스 종료를 함께 담고 구조화된 실패 원인이 없다. 따라서 실패 여부로 복제 버튼의
   순서나 권장 행동을 바꾸지 않고 모든 종료 상태에서 같은 복제 버튼 그룹을 쓴다.
+
+## D-059: 병렬화 전에 계산 결과 계약과 저장 책임을 분리하고 실행 비용을 계측한다
+
+- **운영 전제:** $7 Lightsail은 1GB RAM이고 systemd가 앱 전체(웹+자식)에
+  `MemoryMax=640M`을 적용한다. 이 호스트의 `MAX_CONCURRENT_BACKTESTS=1`은 유지한다.
+  프로세스 수만 늘리면 각 child가 같은 봉·팩트를 JS 객체로 다시 올려 웹 가용성과 SSH
+  관리 경로까지 위협한다. 실제 병렬 실행은 추후 별도 Worker 자원에서 활성화한다.
+- **실행 경계:** 준비된 `BacktestRunInput`을 받는 `BacktestRunner`는 DB·IPC를 모르고
+  버전된 `BacktestResultArtifact`를 반환한다. 결과 저장은 `BacktestResultWriter` port와
+  로컬 `SqliteBacktestResultWriter` adapter가 맡는다. 현행 child 실행과 결과 조회 스키마는
+  유지하되, 이후 파일 artifact importer나 원격 Worker upload로 저장 구현을 교체할 수 있다.
+- **계측:** child는 `LOAD`, `RUN`, `PERSIST` 단계 시간, 전체 시간, peak RSS, 입력
+  봉·팩트·종목 수, 결과 행 수와 논리 payload 근사치를 종료 전에 IPC로 보낸다. 부모는 이를
+  `backtest.finished` 감사 로그에 포함한다. 결과 전체를 계측용으로 다시 직렬화하지 않는다 —
+  1GB 호스트에서 관측성 때문에 메모리 복제를 하나 더 만드는 것은 허용하지 않는다.
+- **다음 결정의 근거:** 전용 Worker 병렬도와 seed shard 크기는 고정 숫자로 먼저 정하지
+  않는다. 대표 부하의 peak RSS와 단계별 시간, SQLite 저장 시간을 이 계측으로 수집한 뒤
+  CPU 슬롯과 메모리 예산을 함께 적용한다.
+- **집계와 표본 gate:** `backtest:telemetry-report`는 최근 `backtest.finished`를 읽기
+  전용으로 집계한다. 완료 표본 10개, 서로 다른 입력 크기(봉·팩트·종목 수 조합) 3종,
+  최소·최대 입력 행 수 4배 차이가 모두 모이기 전에는 용량 추천을 만들지 않는다. 완료
+  실행의 nearest-rank p95 RSS에 25% 여유를 더해 전용 worker 1개 계획값을 잡고,
+  명시적으로 입력한 worker 전용 메모리 예산에 대해서만 메모리 병렬 상한을 계산한다.
+  실제 병렬도는 CPU 슬롯과 이 상한 중 작은 값이다.
+  seed shard 후보는 p95 실행시간 기준 순차 15분 이내, 최대 25개로 표시하되 재시도 비용을
+  확인한 뒤 확정한다. 이 보고서가 현 Lightsail의 동시성 1 정책을 자동으로 바꾸지는 않는다.
+
+## D-060: $7 Lightsail은 control plane으로 남기고 계산은 lease 기반 원격 worker로 선택 분리한다
+
+- **기본값과 비용 경계:** 기본은 계속 `local`이며 Lightsail의 동시성은 1이다. 원격 실행은
+  `BACKTEST_EXECUTION_MODE=remote`를 명시했을 때만 켜진다. 메시지 브로커·컨테이너
+  오케스트레이터를 추가하지 않고 server SQLite 큐를 단일 기준으로 유지한다.
+- **연결 방향과 인증:** 별도 PC supervisor가 서버 HTTPS를 outbound long-poll한다. Worker
+  인바운드 포트와 DB 직접 접속은 없다. 공유 bearer token은 환경 파일에만 두고 로그에서
+  가리며, claim 뒤 임대 token은 원문 대신 SHA-256만 서버 DB에 저장한다. server와 worker의
+  Git SHA가 다르면 실행을 시작하지 않는다.
+- **임대와 재시도:** claim은 attempt 증가와 `STARTING` 전이를 원자적으로 한다. heartbeat가
+  진행률·취소·임대 연장을 맡는다. 만료 attempt의 늦은 쓰기는 거부하고, 설정 상한까지
+  재queue한 뒤 최종 실패한다. server 재시작은 아직 유효한 remote lease를 보존한다.
+- **데이터 계약:** server가 job 유니버스에 필요한 행만 새 SQLite input snapshot으로 만들고
+  child는 독립 SQLite result artifact를 쓴다. 업로드는 streaming과 SHA-256으로 검증한다.
+  server는 크기·integrity·schema·행 타입·release를 검증하고 결과 import와 job 완료를 같은
+  transaction으로 묶는다. 대량 import는 server-side child에서 한 번에 하나씩 실행해 웹
+  이벤트 루프를 막지 않는다. 인증·세션·감사·다른 job은 worker 입력에 복사하지 않는다.
+- **병렬도:** `MAX_CONCURRENT_BACKTESTS`는 local 전용이다. remote의 실제 동시 실행 수는
+  worker별 `BACKTEST_WORKER_CONCURRENCY` 합이다. 전용 PC도 처음에는 1로 시작하고 D-059
+  telemetry의 p95 RSS와 CPU 슬롯 중 더 작은 상한을 적용한다.

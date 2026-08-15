@@ -109,6 +109,14 @@ handle_deploy_failure() {
   return 1
 }
 
+require_clean_worktree() {
+  if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
+    echo "작업 트리가 깨끗하지 않아 릴리스를 만들 수 없습니다. 변경을 커밋하거나 제거하세요." >&2
+    git status --short >&2
+    return 1
+  fi
+}
+
 if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
   return 0
 fi
@@ -168,6 +176,11 @@ on_exit() {
 trap on_exit EXIT
 
 echo "로그: ${LOG}"
+
+# build-info의 Git SHA가 실제 바이트를 식별하려면 tracked 수정뿐 아니라 untracked 소스도
+# 없어야 한다. dirty tree에서 만든 server와 별도 PC에서 같은 commit을 빌드한 worker는
+# SHA가 같아도 코드가 달라질 수 있으므로 배포 전에 닫는다.
+require_clean_worktree
 
 # ── 접속 옵션을 환경변수에서 만든다 (bootstrap.sh 와 같은 규칙) ───────────────
 # 포트와 점프 호스트를 -p / -J 가 아니라 -o 로 넘기는 이유: 같은 배열을 ssh 와 scp 에
@@ -244,6 +257,8 @@ pnpm lint
 pnpm typecheck
 pnpm test
 pnpm build
+# install/build script가 tracked 또는 새 소스 파일을 만들었어도 같은 SHA로 포장하지 않는다.
+require_clean_worktree
 
 # 릴리스 SHA 를 산출물에 포함 — 런타임(서버·백테스트 워커)이 읽어 §9.5 메타데이터에 기록한다
 printf '{"gitSha":"%s","builtAt":"%s"}\n' "${GIT_SHA}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > dist/build-info.json

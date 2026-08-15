@@ -1,0 +1,45 @@
+[Unit]
+Description=Quant Platform Remote Backtest Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=quant-worker
+Group=quant-worker
+WorkingDirectory=/opt/quant-platform/current
+EnvironmentFile=/etc/quant-platform/worker.env
+ExecStart=/usr/local/bin/node /opt/quant-platform/current/dist/workers/remote-backtest-supervisor.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillMode=control-group
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/quant-backtest-worker
+ReadOnlyPaths=/opt/quant-platform/current
+
+LimitNOFILE=65536
+TasksMax=512
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=quant-backtest-worker
+
+[Install]
+WantedBy=multi-user.target
