@@ -1659,9 +1659,10 @@ provision.sh 가 이 파일을 생성하며 `SESSION_SECRET` 은 서버에서 �
 전부 무효화된다.
 
 전체 항목은 `infra/app.env.example` 이 기준이다 (증권사·DART 자격 증명 포함).
-별도 worker 설정은 `infra/worker.env.example`, systemd unit은
-`infra/systemd/quant-backtest-worker.service`가 기준이다. server와 worker는 같은
-`BACKTEST_WORKER_TOKEN`과 동일한 릴리스 SHA를 사용한다.
+별도 worker 설정은 `infra/worker.env.example`, 실행 경계는
+`infra/docker/compose.worker.yaml`과 `infra/docker/backtest-worker.Dockerfile`이 기준이다.
+Worker는 Docker Compose 전용이며 애플리케이션 systemd fallback은 없다. server와 worker는
+같은 `BACKTEST_WORKER_TOKEN`과 한 번 만든 공통 archive의 동일한 릴리스 SHA를 사용한다.
 
 ## 28.1 값을 바꾼 뒤
 

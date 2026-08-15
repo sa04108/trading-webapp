@@ -1,0 +1,29 @@
+name: quant-backtest-worker
+
+services:
+  worker:
+    image: ${QP_WORKER_IMAGE:?QP_WORKER_IMAGE must identify a loaded worker image}
+    container_name: quant-backtest-worker
+    init: true
+    restart: unless-stopped
+    env_file:
+      - /etc/quant-platform/worker.env
+    user: "10001:10001"
+    read_only: true
+    volumes:
+      - type: bind
+        source: /var/lib/quant-backtest-worker
+        target: /var/lib/quant-backtest-worker
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"

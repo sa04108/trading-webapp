@@ -1,72 +1,76 @@
-# 원격 백테스트 Worker 부트스트랩·배포 설계
+# 원격 백테스트 Worker Docker 부트스트랩·배포 설계
 
-> 기준일: 2026-08-15
+> 기준일: 2026-08-16
 >
-> 상태: 구현 전 설계안
+> 상태: 구현 완료
 >
-> 대상: AWS Lightsail $7 요금제급의 단일 원격 백테스트 Worker와 이후 다중 호스트 확장
+> 대상: Ubuntu/Debian amd64 Worker 호스트 한 대씩 배포
 >
-> 관련 문서: [원격 백테스트 Worker 분리 검토](./REMOTE_BACKTEST_ARCHITECTURE_REVIEW.md), [원격 Worker 운영 가이드](../REMOTE_WORKER_OPERATIONS.md)
+> 운영 절차: [원격 Worker 운영 가이드](../REMOTE_WORKER_OPERATIONS.md)
 
-## 1. 목적
+## 1. 결정
 
-현재 원격 백테스트 Worker 실행 코드와 systemd unit은 존재하지만, 새 서버를 준비하고 정확한 애플리케이션 릴리스를 배포하는 과정은 수동이다. 이 문서는 다음 작업을 반복 가능하고 검증 가능한 스크립트로 만드는 방안을 정의한다.
+원격 백테스트 Worker는 **Docker Compose로만** 배포한다. 애플리케이션 전용 systemd
+unit과 fallback 경로는 두지 않는다. 호스트의 Docker daemon은 OS 서비스 관리자가
+관리하지만 Worker 수명주기, 재시작, 로그 회전과 격리는 Compose가 담당한다.
 
-1. 빈 Worker 서버를 백테스트 전용 호스트로 초기화한다.
-2. 웹 서버와 동일한 Git SHA의 릴리스 산출물을 Worker에 배포한다.
-3. 토큰과 환경 파일을 로그나 명령행에 노출하지 않는다.
-4. 시작 실패나 서버·Worker 버전 불일치 시 직전 릴리스로 복구한다.
-5. 현재의 저사양 단일 호스트 운영을 단순하게 유지하면서, 이후 서버 수평 확장이 가능하도록 한다.
+웹/API 서버는 기존 systemd 배포를 유지한다. 두 실행 환경의 차이 때문에 소스나
+TypeScript를 각각 빌드하지는 않는다. `scripts/build-release.sh`가 검증한 공통 release
+archive를 한 번 만들고, 웹 서버는 archive를 직접 설치하며 Worker는 같은 archive를
+Docker image에 포장한다.
 
-이 설계에서 Worker는 여전히 **백테스트 잡 전용 프로세스**다. 향후 자동매매 실행기를 추가할 때는 인증, lease, heartbeat 개념을 재사용할 수 있지만, 주문 권한과 장애 격리가 필요한 자동매매를 동일 프로세스에 합치지는 않는다.
+Worker는 백테스트 전용이다. 자동매매 실행기는 주문 권한과 장애 격리가 필요하므로 같은
+image나 Compose service에 합치지 않는다.
 
-## 2. 설계 원칙
-
-- 웹 서버와 Worker의 부트스트랩·배포 진입점은 분리한다.
-- SSH 연결, 릴리스 빌드처럼 동일한 부분만 작은 공통 모듈로 추출한다.
-- 웹 서버와 Worker에는 한 번 빌드한 동일 산출물을 배포한다.
-- Worker 서버에는 Caddy, 애플리케이션 DB, DB 마이그레이션 및 백업 작업을 설치하지 않는다.
-- bootstrap 재실행은 기존 `/etc/quant-platform/worker.env`를 덮어쓰지 않는다.
-- 배포 성공은 단순한 프로세스 실행 여부가 아니라 인증과 릴리스 호환성 확인까지 포함한다.
-- Lightsail $7 요금제에서는 `BACKTEST_WORKER_CONCURRENCY=1`을 기본값으로 한다. 서버 사양을 올리기 전에는 Worker 한 대 안의 동시성을 높이기보다 Worker 호스트를 추가하는 방식을 우선한다.
-- v1은 Ubuntu/Debian 계열 x86_64 호스트 한 대씩 배포하는 범위로 제한한다.
-
-## 3. 목표 구조
+## 2. 구성
 
 ```text
 개발 PC
-├── scripts/build-release.sh
-│   └── 릴리스 archive + SHA-256 checksum
-├── scripts/deploy.sh
-│   └── 웹/API 서버 배포
-└── scripts/deploy-worker.sh
-    └── 백테스트 Worker 배포
+├── scripts/build-release.sh          검증 → 공통 archive + SHA-256
+├── scripts/deploy.sh                 공통 archive → 웹/API 서버
+├── scripts/build-worker-image.sh     공통 archive → linux/amd64 image tar
+├── scripts/bootstrap-worker.sh       Worker 호스트 1회 준비
+└── scripts/deploy-worker.sh          image load → Compose 전환 → probe/rollback
 
-새 Worker 서버
-└── scripts/bootstrap-worker.sh
-    └── infra/provision-worker.sh
-        ├── Node.js 및 systemd 준비
-        ├── quant-worker 계정과 전용 경로 생성
-        └── worker.env 안전 설치
+Worker 호스트
+├── Docker Engine + Compose plugin
+├── /opt/quant-backtest-worker/
+│   ├── compose.yaml
+│   └── compose.env                   현재 immutable release image 참조
+├── /etc/quant-platform/worker.env    root:root 0600
+└── /var/lib/quant-backtest-worker    uid:gid 10001:10001, 0700
 ```
 
-서비스별 서버 경로도 분리한다.
+Worker에는 Node.js, Caddy, 애플리케이션 DB, migration/backup 작업, 애플리케이션
+systemd unit을 설치하지 않는다. 인바운드 애플리케이션 포트도 열지 않는다.
 
-| 용도 | 경로 |
-| --- | --- |
-| Worker 릴리스 | `/opt/quant-backtest-worker/releases/<release>` |
-| 현재 Worker 릴리스 | `/opt/quant-backtest-worker/current` |
-| Worker 환경 파일 | `/etc/quant-platform/worker.env` |
-| 잡 작업 디렉터리 | `/var/lib/quant-backtest-worker` |
-| systemd unit | `/etc/systemd/system/quant-backtest-worker.service` |
+## 3. 공통 release와 Worker image
 
-웹 서버의 `/opt/quant-platform` 경로와 분리하면 같은 PC에서 두 서비스를 실행하더라도 릴리스 전환과 정리 작업이 서로 영향을 주지 않는다.
+`scripts/build-release.sh`는 다음을 수행한다.
 
-## 4. 부트스트랩 설계
+1. tracked/untracked 변경이 없는 작업 트리인지 확인한다.
+2. frozen install, lint, typecheck, test, build를 모두 통과시킨다.
+3. 전체 Git SHA와 빌드 시각을 `dist/build-info.json`에 기록한다.
+4. `dist`, `migrations`, package/lock/workspace 파일을 하나의 archive로 만든다.
+5. archive의 SHA-256 checksum을 만든다.
 
-### 4.1 실행 인터페이스
+`scripts/deploy.sh`와 `scripts/deploy-worker.sh`는 `QP_RELEASE_ARCHIVE`와
+`QP_RELEASE_CHECKSUM`으로 기존 산출물을 받을 수 있다. 입력하지 않으면 각각 builder를
+호출한다. 웹과 Worker에 정확히 같은 빌드 바이트를 배포하려면 builder를 한 번 실행하고
+그 두 값을 양쪽 deploy에 전달한다.
 
-비대화형 실행 예시는 다음과 같다.
+`scripts/build-worker-image.sh`는 archive를 별도로 다시 컴파일하지 않는다. Docker build
+단계에서는 production dependency만 target Linux ABI로 설치하고 공통 `dist`를 그대로
+복사한다. Node build/runtime base image는 version과 multi-platform digest를 함께 고정한다.
+image에는 Git SHA, 빌드 시각, release 이름을 OCI label로 기록한다. v1 배포물은
+`linux/amd64` 하나다.
+
+registry는 요구하지 않는다. 로컬에서 만든 content-addressed image를 `docker save`로
+내보내고 tar checksum과 함께 SSH로 전송한 뒤 원격에서 `docker load`한다.
+
+## 4. Worker 호스트 부트스트랩
+
+환경 파일은 저장소 밖에 두고 mode 600 또는 400으로 제한한다.
 
 ```bash
 QP_WORKER_HOST=ubuntu@203.0.113.20 \
@@ -75,105 +79,96 @@ QP_WORKER_ENV_FILE="$HOME/.config/quant-platform/worker-1.env" \
 ./scripts/bootstrap-worker.sh
 ```
 
-환경 파일은 저장소 밖에 두며 최소한 다음 값을 포함한다.
+필수 Worker 환경은 다음과 같다.
 
 ```dotenv
 NODE_ENV=production
-BACKTEST_SERVER_URL=https://example.com
-BACKTEST_WORKER_TOKEN=<server와 같은 token>
-BACKTEST_WORKER_ID=lightsail-worker-1
+BACKTEST_SERVER_URL=https://quant.example.com
+BACKTEST_WORKER_TOKEN=<server와 같은 32자 이상 token>
+BACKTEST_WORKER_ID=worker-pc-1
 BACKTEST_WORKER_CONCURRENCY=1
 BACKTEST_WORK_ROOT=/var/lib/quant-backtest-worker
-BACKTEST_CLAIM_WAIT_MS=1000
-BACKTEST_HEARTBEAT_MS=15000
+BACKTEST_CLAIM_WAIT_SECONDS=25
+BACKTEST_HEARTBEAT_SECONDS=5
 LOG_LEVEL=info
 ```
 
-`REMOTE_BACKTEST_LEASE_SECONDS`와 `REMOTE_BACKTEST_MAX_ATTEMPTS`는 Worker가 아니라 잡을 소유하고 재할당하는 웹/API 서버 설정이므로 `app.env`에 유지한다.
+bootstrap은 SSH와 비대화형 sudo를 확인하고 provision/Compose/env 파일을 임시 원격
+디렉터리에 올린다. 성공·실패와 관계없이 임시 디렉터리를 제거한다. 토큰 값은 명령행이나
+로그에 출력하지 않는다.
 
-### 4.2 로컬 bootstrap의 책임
+`infra/provision-worker.sh`는 지원 OS/amd64를 확인하고 Docker 공식 apt repository에서
+Engine, Buildx, Compose plugin을 설치한다. 전용 경로와 권한을 만든 뒤 Compose와 env를
+설치하지만 image가 없으므로 서비스를 시작하지 않는다. 기존 env가 같으면 멱등하게
+통과하고 다르면 보존한 채 실패한다. 명시적으로 교체할 때만 다음을 사용하며 기존 파일은
+시각이 붙은 `.bak`으로 남긴다.
 
-`scripts/bootstrap-worker.sh`는 다음 순서로 동작한다.
+```bash
+QP_REPLACE_WORKER_ENV=1 ... ./scripts/bootstrap-worker.sh
+```
 
-1. `QP_WORKER_HOST`, SSH 키, 로컬 환경 파일의 존재와 권한을 검사한다.
-2. 대상 호스트에 SSH 연결과 비대화형 `sudo`가 가능한지 확인한다.
-3. provision 스크립트, systemd unit, 임시 환경 파일을 업로드한다.
-4. 원격 `infra/provision-worker.sh`를 실행한다.
-5. systemd unit이 설치되고 환경 파일 권한이 `root:root 0600`인지 검증한다.
-6. 릴리스가 아직 없다면 서비스를 enable만 하고 시작하지 않는다.
-7. 임시 로컬·원격 환경 파일을 성공 여부와 관계없이 제거한다.
+## 5. Compose 실행 경계
 
-토큰은 명령행 인수로 전달하거나 로그에 출력하지 않는다. 로컬 임시 파일은 `mktemp`로 만들고 `0600` 권한을 적용한 뒤 `scp`와 원격 `install`을 사용한다.
+Compose service는 다음을 강제한다.
 
-### 4.3 원격 provision의 책임
+- 고정 container name과 replica 1
+- `restart: unless-stopped`
+- uid/gid 10001 non-root 실행
+- read-only root filesystem, `/tmp` 제한 tmpfs
+- work-root 하나만 writable bind mount
+- 모든 Linux capability 제거와 `no-new-privileges`
+- PID 상한 512, 로그 파일 10MB × 5 회전
+- 인바운드 port mapping 없음
+- `init: true`로 고아 child 회수
+- `stop_grace_period: 30s`
 
-`infra/provision-worker.sh`는 기존 웹 서버 provision과 분리하고 다음 작업만 수행한다.
+30초 종료 유예는 supervisor가 child에 취소 IPC를 보낸 뒤 5초 SIGTERM, 10초 SIGKILL로
+단계적으로 정리할 시간을 보장한다. 기본 10초를 사용하면 마지막 정리와 Docker의 강제
+종료가 경합한다.
 
-- 지원 OS와 CPU 아키텍처 검사
-- 필수 패키지 및 고정 버전 Node.js 설치와 checksum 검증
-- 로그인할 수 없는 `quant-worker` 시스템 계정 생성
-- Worker 전용 release, current, work-root 경로 생성
-- work-root를 `quant-worker:quant-worker 0700`으로 설정
-- systemd unit 설치 및 daemon reload
-- 신규 환경 파일을 `root:root 0600`으로 설치
-- 이미 환경 파일이 있으면 보존하고 명시적인 교체 옵션 없이는 실패 처리
-- 필요 시 방화벽의 인바운드를 SSH로 제한하되, HTTPS 아웃바운드는 허용
+CPU·메모리 hard limit은 호스트마다 telemetry 근거가 달라 공통 Compose에 임의의 숫자로
+고정하지 않는다. 기본 동시성은 1이다. 필요하면 대표 입력의 p95 RSS와 CPU slot을 확인해
+호스트별 override로 제한하고 동시성을 올린다.
 
-다음 작업은 하지 않는다.
+## 6. work-root 잠금과 정리
 
-- Caddy 설치 또는 인증서 설정
-- SQLite DB 생성, snapshot 또는 migration
-- 웹 서비스 포트 개방
-- 애플리케이션 릴리스 빌드
-- Worker 토큰 자동 생성
+`/var/lib/quant-backtest-worker`는 임시 입력/결과를 담지만 디스크 용량 때문에 tmpfs로
+두지 않는다. 컨테이너 entrypoint는 `.supervisor.lock` file descriptor에 non-blocking
+`flock`을 잡은 뒤 Node를 `exec`한다. 같은 work-root를 두 supervisor가 공유하면 두 번째는
+즉시 실패한다.
 
-## 5. 릴리스 산출물 설계
+PID 파일은 사용하지 않는다. 서로 다른 PID namespace의 프로세스가 모두 PID 1일 수 있고,
+SIGKILL 뒤 남은 PID 값은 새 컨테이너의 PID와 충돌할 수 있기 때문이다. `flock`은 프로세스가
+어떤 방식으로 종료돼도 커널이 열린 descriptor와 함께 해제한다.
 
-`scripts/build-release.sh`가 웹 서버와 Worker의 공통 산출물을 한 번 생성한다.
+애플리케이션의 `.quant-backtest-worker-root` marker는 별도 목적이다. 지정 경로가 Worker
+소유임을 확인한 뒤에만 시작 시 남은 `jobs/`를 재귀 삭제하게 해 잘못된 경로 설정을 막는다.
 
-1. tracked 및 untracked 소스 변경이 없는지 확인한다.
-2. `pnpm install --frozen-lockfile`과 lint, typecheck, test, build 검증을 실행한다.
-3. 현재 Git SHA와 빌드 시각을 `dist/build-info.json`에 기록한다.
-4. `dist`, `migrations`, `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`을 archive로 만든다.
-5. archive의 SHA-256 checksum을 함께 출력한다.
+## 7. 배포, readiness, rollback
 
-Worker가 `public`이나 DB migration을 사용하지 않더라도, v1에서는 서비스별 산출물을 따로 만드는 대신 동일 archive를 사용한다. 이 방식은 서버와 Worker의 코드 SHA가 달라지는 실수를 줄이고 빌드 경로를 단순하게 한다. 산출물 크기가 실제 운영 병목이 되는 경우에만 Worker 전용 archive를 후속 검토한다.
+```bash
+QP_WORKER_HOST=ubuntu@203.0.113.20 \
+SSH_KEY="$HOME/.ssh/worker.pem" \
+./scripts/deploy-worker.sh
+```
 
-`scripts/deploy.sh`와 `scripts/deploy-worker.sh`는 다음 입력을 지원한다.
+배포 순서는 다음과 같다.
 
-- 직접 전달된 기존 archive와 checksum
-- 입력이 없을 때 `scripts/build-release.sh`가 새로 만든 archive와 checksum
+1. SSH/sudo, Docker/Compose, env/Compose 설치 상태를 확인한다.
+2. 실행 중 Worker가 같은 Git SHA이면 인증된 one-shot probe까지 통과한 경우 no-op한다.
+3. 공통 archive를 만들거나 전달받고 로컬 checksum을 검증한다.
+4. `linux/amd64` Worker image를 만들고 image tar/checksum을 업로드한다.
+5. 원격 checksum을 검증한 뒤에만 `docker load`한다.
+6. image OCI revision label과 release Git SHA가 같은지 확인한다.
+7. 이전 Compose와 image 참조를 보관하고 새 image로 container를 재생성한다.
+8. 실행 중 container 안에서 supervisor `--check`를 최대 5회 실행한다.
+9. 실패하면 이전 Compose/image로 재생성하고 이전 probe도 확인한다.
+10. 성공하면 이 저장소의 Worker release tag만 최근 3개 보존한다.
 
-## 6. Worker 배포 설계
+강제 재배포는 `QP_FORCE_WORKER_DEPLOY=1`로만 허용한다. 정리 과정은 다른 repository의
+image나 Docker build cache에 손대지 않는다.
 
-### 6.1 배포 순서
-
-`scripts/deploy-worker.sh`는 v1에서 한 번에 호스트 한 대를 처리한다.
-
-1. SSH, `sudo`, 환경 파일, systemd unit을 사전 검사한다.
-2. 대상 호스트의 현재 `dist/build-info.json`을 읽는다.
-3. 동일 Git SHA가 이미 실행 중이면 기본적으로 no-op 처리한다. 재배포는 명시적인 force 옵션으로만 허용한다.
-4. archive와 checksum을 업로드하고 원격에서 checksum을 검증한다.
-5. `/opt/quant-backtest-worker/releases/<release>`에 압축을 해제한다.
-6. production dependency를 frozen lockfile로 설치한다.
-7. 현재 symlink 대상을 이전 릴리스로 기록한다.
-8. Worker를 중지하고 `current` symlink를 원자적으로 새 릴리스로 전환한다.
-9. Worker를 시작한 뒤 systemd 상태와 원격 연결 probe를 확인한다.
-10. 실패하면 이전 symlink로 되돌리고 서비스를 재시작한다.
-11. 성공하면 최근 3개 릴리스만 보존하고 업로드 archive를 제거한다.
-
-웹 서버 배포와 달리 DB snapshot, migration, Caddy 상태 확인은 실행하지 않는다.
-
-### 6.2 readiness와 버전 확인
-
-`systemctl is-active`만으로는 정상 배포를 판정할 수 없다. 현재 supervisor는 다음 오류가 있어도 프로세스를 종료하지 않고 재시도할 수 있기 때문이다.
-
-- 잘못된 `BACKTEST_WORKER_TOKEN`
-- 서버와 Worker의 Git SHA 불일치
-- protocol version 불일치
-- 잘못된 서버 URL
-
-따라서 웹/API 서버에 잡을 claim하지 않는 인증된 probe를 추가한다.
+readiness endpoint는 잡을 claim하지 않는다.
 
 ```http
 POST /api/internal/workers/probe
@@ -181,123 +176,34 @@ Authorization: Bearer <BACKTEST_WORKER_TOKEN>
 Content-Type: application/json
 
 {
-  "workerId": "lightsail-worker-1",
-  "runnerVersion": "<git-sha>",
+  "workerId": "worker-pc-1",
+  "runnerVersion": "<full-git-sha>",
   "protocolVersion": 1
 }
 ```
 
-probe는 토큰, 원격 Worker 모드, 서버가 기대하는 Git SHA 및 protocol version을 확인한다. 배포 스크립트는 systemd의 환경 파일을 읽는 Worker supervisor의 one-shot `--check` 모드를 실행해 이 endpoint를 호출한다. 토큰을 curl 인수나 배포 로그에 노출하지 않는다.
+token, runner SHA, protocol이 모두 맞고 서버가 remote면 `READY`, local이면 `STANDBY`다.
+local에서 probe를 사용하려면 server `app.env`에 같은 token을 미리 설정하고 서버를
+재시작해야 한다. local 모드에서는 probe 외 claim/heartbeat/artifact route는 등록하지
+않는다. 401/403, SHA/protocol mismatch, timeout은 배포 실패다.
 
-판정 기준은 다음과 같다.
+## 8. 실행 중 잡과 후속 범위
 
-| 결과 | 배포 판정 |
-| --- | --- |
-| 인증·SHA·protocol 일치 | 성공 |
-| 서버가 local 모드 | `STANDBY`로 보고하고 배포 성공, Worker 서비스는 대기 상태 유지 |
-| HTTP 401/403 | 실패 및 롤백 |
-| SHA 또는 protocol 불일치 | 실패 및 롤백 |
-| 연결 시간 초과 | 제한 횟수 재시도 후 실패 및 롤백 |
+v1에는 drain protocol이 없다. 배포로 container가 종료되면 실행 중 계산은 유실되고 서버가
+lease 만료 뒤 같은 잡을 기존 정책대로 재할당한다. 결과 정확성은 유지되지만 계산량은
+낭비될 수 있으므로 배포 전 실행 중 잡 여부를 운영자가 확인한다.
 
-### 6.3 실행 중인 잡 처리
+다중 호스트 inventory, fleet 순차 배포, `DRAINING`/graceful drain, 자동 확장은 후속 범위다.
+Docker 외 실행 방식과 systemd Worker fallback은 후속 범위가 아니라 의도적으로 제거한
+경로다.
 
-v1에서는 배포 전에 새 claim을 차단하는 drain protocol을 추가하지 않는다. 서비스가 종료되면 실행 중 잡은 heartbeat가 멈추고 lease 만료 뒤 기존 재시도 정책에 따라 다시 배정된다. 결과 유실은 막지만 진행 중 계산량은 낭비될 수 있으므로 배포 스크립트가 실행 중 잡 가능성을 경고하고 로그에 남긴다.
+## 9. 검증
 
-다음 단계에서는 `DRAINING` 상태, 현재 실행 수 확인, grace timeout을 protocol에 추가한다. 서버가 여러 대가 되기 전에는 강제 종료의 운영 복잡도보다 현재 lease 복구 방식을 우선한다.
-
-## 7. 보안 및 장애 대응
-
-- `/etc/quant-platform/worker.env`는 `root:root 0600`으로 유지한다.
-- bootstrap과 deploy는 `set -x`를 사용하지 않으며 토큰 값 자체를 출력하지 않는다.
-- Worker는 외부 인바운드 애플리케이션 포트를 열지 않고 웹/API 서버로 HTTPS outbound 연결만 한다.
-- archive는 전송 후 원격 SHA-256 검증을 통과해야만 압축을 해제한다.
-- 새 릴리스 probe가 실패하면 이전 릴리스 symlink와 서비스를 자동 복구한다.
-- bootstrap 재실행 시 기존 환경 파일을 보존한다. 토큰 교체는 명시적인 replace 옵션과 별도 백업을 거친다.
-- systemd sandboxing의 쓰기 허용 경로는 `/var/lib/quant-backtest-worker`로 한정한다.
-- Worker 호스트 장애 시 웹/API 서버가 lease 만료 후 잡을 재시도하며, 자동 local fallback은 이 배포 설계에 포함하지 않는다.
-
-## 8. 파일 변경 계획
-
-아래 표는 **이번 문서 추가**와 **후속 구현 시 필요한 코드 변경**을 함께 나타낸다. 구현 단계에서는 각 항목을 다시 코드 흐름과 대조하며, 불필요해진 파일은 만들지 않는다.
-
-### 8.1 추가
-
-| 파일 | 시점 | 목적 |
-| --- | --- | --- |
-| `docs/reviews/REMOTE_BACKTEST_WORKER_DEPLOYMENT_DESIGN.md` | 이번 작업 | 본 부트스트랩·배포 설계 기록 |
-| `scripts/bootstrap-worker.sh` | 후속 구현 | 로컬에서 신규 Worker 호스트 초기화 orchestration |
-| `infra/provision-worker.sh` | 후속 구현 | Worker 전용 OS 패키지, 계정, 경로, systemd 준비 |
-| `scripts/deploy-worker.sh` | 후속 구현 | Worker release 전환, probe, rollback, 정리 |
-| `scripts/build-release.sh` | 후속 구현 | 웹/API 서버와 Worker가 공유하는 검증된 release archive 생성 |
-| `scripts/lib/remote-host.sh` | 후속 구현 | SSH 옵션, 연결 확인, 업로드 등 공통 shell 함수 |
-| `tests/unit/worker-bootstrap-script.test.ts` | 후속 구현 | bootstrap 멱등성, 환경 파일 보존, 비밀값 비노출 검증 |
-| `tests/unit/worker-deploy-script.test.ts` | 후속 구현 | checksum, no-op, 전환, probe 실패 rollback 검증 |
-| `tests/unit/release-artifact-script.test.ts` | 후속 구현 | clean tree, build-info, archive 및 checksum 검증 |
-
-### 8.2 변경
-
-| 파일 | 변경 내용 |
-| --- | --- |
-| `scripts/bootstrap.sh` | 중복 SSH 처리를 공통 helper로 이동하되 기존 웹 서버 bootstrap 동작은 유지 |
-| `scripts/deploy.sh` | 빌드·archive 생성을 공통 스크립트로 이동하고 기존 DB migration·rollback 흐름은 유지 |
-| `infra/systemd/quant-backtest-worker.service` | 실행 및 읽기 전용 경로를 `/opt/quant-backtest-worker/current`로 분리 |
-| `infra/worker.env.example` | 자동 bootstrap 사용법, 저장소 밖 원본 환경 파일, 기본 동시성 1을 명시 |
-| `src/server/modules/backtest/presentation/remote-worker-routes.ts` | claim 없는 인증·릴리스 호환성 probe endpoint 추가 |
-| `src/workers/remote-backtest-supervisor.ts` | systemd 환경을 사용하는 one-shot `--check` 모드 추가 |
-| `tests/integration/remote-worker.test.ts` | probe 인증, 모드, SHA 및 protocol 판정 통합 테스트 추가 |
-| `tests/unit/deploy-script.test.ts` | 공통 release builder 추출 뒤 기존 웹 배포 회귀 테스트 보강 |
-| `docs/REMOTE_WORKER_OPERATIONS.md` | 수동 설치 절차를 bootstrap/deploy 중심 운영 절차로 교체하고 복구법 기록 |
-| `README.md` | Worker 서버 초기화·배포 명령과 관련 운영 문서 링크 추가 |
-| `docs/IMPLEMENTATION_STATUS.md` | 구현 완료 시 자동화 범위와 남은 drain/fleet 과제를 갱신 |
-
-### 8.3 삭제
-
-| 파일 | 사유 |
-| --- | --- |
-| 없음 | 기존 수동 운영 문서는 삭제하지 않고 자동화된 절차와 장애 복구 가이드로 갱신한다. |
-
-## 9. 검증 계획
-
-### 9.1 정적 검증
-
-- `bash -n scripts/bootstrap-worker.sh scripts/deploy-worker.sh scripts/build-release.sh`
-- `sh -n infra/provision-worker.sh`
-- shellcheck 적용이 가능한 환경에서는 신규 shell 파일 전체 검사
-- `pnpm lint`, `pnpm typecheck`
-
-### 9.2 자동 테스트
-
-기존 `tests/unit/deploy-script.test.ts`처럼 외부 명령을 mock해 다음을 검증한다.
-
-- 기존 환경 파일이 bootstrap 재실행으로 변경되지 않는다.
-- 임시 환경 파일이 성공·실패 경로 모두에서 제거된다.
-- 로그와 오류 메시지에 `BACKTEST_WORKER_TOKEN` 값이 포함되지 않는다.
-- checksum 불일치 archive는 release 디렉터리에 설치되지 않는다.
-- 동일 Git SHA는 no-op이고 force 옵션에서만 재배포된다.
-- 새 릴리스 시작 또는 probe 실패 시 이전 symlink가 복구된다.
-- 성공 후 최근 3개 릴리스만 유지한다.
-- probe가 잘못된 토큰, SHA, protocol을 거부하고 local 모드는 `STANDBY`로 반환한다.
-- 웹 서버 deploy의 DB snapshot, migration, rollback 동작이 공통 코드 추출 뒤에도 유지된다.
-
-### 9.3 실제 호스트 수용 기준
-
-- 깨끗한 Ubuntu/Debian x86_64 호스트에서 bootstrap을 두 번 실행해도 결과가 동일하다.
-- `/etc/quant-platform/worker.env`가 `root:root 0600`이고 두 번째 실행에서 덮어써지지 않는다.
-- 배포된 `dist/build-info.json`의 Git SHA가 웹/API 서버와 같다.
-- 전송 archive checksum이 로컬과 원격에서 같다.
-- `quant-backtest-worker.service`가 active이고 인증된 probe가 성공한다.
-- 의도적으로 잘못된 release를 배포하면 직전 release로 자동 복구된다.
-- Worker 호스트에 Caddy, 애플리케이션 DB, migration 작업이 추가되지 않는다.
-- 기본 동시성이 1이며 CPU·메모리 압박 없이 난수 실험 잡을 순차 claim한다.
-
-## 10. 단계별 구현 순서
-
-1. 공통 release builder와 회귀 테스트를 추가한다.
-2. Worker 전용 provision 및 bootstrap과 테스트를 추가한다.
-3. systemd 경로를 Worker 전용 release 경로로 전환한다.
-4. 서버 probe와 supervisor `--check` 모드 및 통합 테스트를 추가한다.
-5. Worker deploy, checksum, rollback 테스트를 추가한다.
-6. 실제 Lightsail 테스트 호스트에서 수용 기준을 검증한다.
-7. 운영 문서와 README를 자동화된 명령 기준으로 갱신한다.
-
-v1 완료 뒤에만 다중 호스트 inventory, 순차/병렬 fleet 배포, drain protocol, 자동 확장 및 이미지 기반 프로비저닝을 후속 설계한다.
+- shell syntax: 신규 Bash/POSIX sh 전체
+- release builder: clean identity, 모든 gate, build-info, archive checksum
+- bootstrap: env mode/필수값, token 비노출, Docker-only 파일 업로드
+- entrypoint: 동시 실행 거부와 SIGKILL 뒤 kernel lock 회수
+- probe: 인증, local standby, remote ready, SHA/protocol mismatch, no-claim
+- deploy: checksum-before-load, 동일 SHA no-op, probe, rollback, 보존 범위
+- Docker: 실제 image build, non-root/read-only 실행, `--check`, signal 종료
+- 전체 lint, typecheck, unit/integration test, production build

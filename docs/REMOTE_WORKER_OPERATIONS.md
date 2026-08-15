@@ -1,54 +1,98 @@
-# 원격 백테스트 worker 운영
+# 원격 백테스트 Docker Worker 운영
 
-이 기능은 $7 Lightsail을 웹/API·큐·최종 DB의 control plane으로 남기고, CPU·메모리를 많이
-쓰는 계산만 별도 Linux PC로 보낸다. 기본 설정은 계속 local 1개이므로 이 문서의 전환을
-하지 않으면 현재 배포 동작은 바뀌지 않는다.
+웹/API·큐·최종 DB는 Lightsail control plane에 남기고 계산만 별도 Linux PC의 Docker
+container로 보낸다. 기본값은 계속 local 동시성 1이다. 아래 전환을 하지 않으면 기존
+배포 동작은 바뀌지 않는다.
 
 ## 실행 계약
 
-- Server와 worker에는 반드시 같은 Git SHA의 릴리스 아티팩트를 배포한다.
-- Worker는 인바운드 포트나 server DB 접근 권한이 필요 없다. Server HTTPS 443 outbound만
-  가능하면 된다.
-- 공유 worker token은 server `/etc/quant-platform/app.env`와 worker
-  `/etc/quant-platform/worker.env`에만 둔다. 두 파일 모두 `root:root`, mode `600`이다.
-- `MAX_CONCURRENT_BACKTESTS`는 local 모드 전용이다. Remote 실제 동시 실행 수는 모든
-  worker의 `BACKTEST_WORKER_CONCURRENCY` 합이다.
-- Worker PC도 먼저 concurrency 1로 시작한다. 대표 입력 표본을 모은 뒤
-  `backtest:telemetry-report`의 p95 RSS와 CPU 슬롯을 기준으로 올린다.
+- Worker 운영 경로는 Docker Compose 하나다. 애플리케이션 systemd unit은 없다.
+- Server와 Worker에는 한 번 만든 같은 release archive의 `dist`를 배포한다.
+- Worker는 인바운드 port와 server DB 권한이 필요 없다. Server HTTPS outbound만 쓴다.
+- 공유 token은 server `/etc/quant-platform/app.env`와 worker
+  `/etc/quant-platform/worker.env`에만 두며 두 파일 모두 `root:root 0600`이다.
+- Remote 병렬도는 모든 Worker의 `BACKTEST_WORKER_CONCURRENCY` 합이다. 처음에는 호스트당
+  1로 시작한다.
+- Worker host v1은 Ubuntu/Debian amd64다. 개발 PC에는 linux/amd64 image를 만들 수 있는
+  Docker Engine/Buildx가 필요하다.
 
-## 1. Worker 호스트 준비
+## 1. Worker 환경 파일 준비
 
-Node 24와 동일 릴리스의 `dist/`, `migrations/`, `package.json`, lockfile 및 production
-dependency를 `/opt/quant-platform/releases/<release>`에 설치한다. Server 배포물과 별도로
-빌드하면 SHA가 엇갈릴 수 있으므로 server에 올린 배포 archive를 worker에도 복사하는 방식을
-권장한다. 별도로 빌드해야 한다면 정확히 같은 commit에서 `pnpm build:server`를 실행하고,
-`scripts/deploy.sh`와 같은 방식으로 그 commit SHA를 `dist/build-info.json`에 기록해야 한다.
-이 파일이 없거나 `unknown`이면 production remote worker와 remote server는 기동을 거부한다.
-`deploy.sh`는 같은 SHA에 서로 다른 dirty build가 생기지 않도록 깨끗한 작업 트리만 허용한다.
+저장소 밖에 다음 파일을 만들고 `chmod 600`을 적용한다.
 
-```bash
-sudo useradd --system --home /nonexistent --shell /usr/sbin/nologin quant-worker
-sudo install -d -o quant-worker -g quant-worker -m 700 /var/lib/quant-backtest-worker
-sudo install -d -o root -g root -m 755 /etc/quant-platform
-sudo install -o root -g root -m 600 infra/worker.env.example /etc/quant-platform/worker.env
-sudo install -o root -g root -m 644 infra/systemd/quant-backtest-worker.service \
-  /etc/systemd/system/quant-backtest-worker.service
+```dotenv
+NODE_ENV=production
+BACKTEST_SERVER_URL=https://quant.example.com
+BACKTEST_WORKER_TOKEN=<server app.env와 같은 32자 이상 난수>
+BACKTEST_WORKER_ID=worker-pc-1
+BACKTEST_WORKER_CONCURRENCY=1
+BACKTEST_WORK_ROOT=/var/lib/quant-backtest-worker
+BACKTEST_CLAIM_WAIT_SECONDS=25
+BACKTEST_HEARTBEAT_SECONDS=5
+LOG_LEVEL=info
 ```
 
-`BACKTEST_WORK_ROOT`는 worker 전용 디렉터리여야 한다. Worker는 소유권 marker를 만들고,
-marker가 없는데 `jobs` 외의 파일이 있거나 파일시스템 루트가 지정되면 정리 대신 기동을
-거부한다.
+server가 아직 local이어도 배포 probe를 받으려면 server `app.env`에 같은
+`BACKTEST_WORKER_TOKEN`을 넣고 server를 재시작한다. local에서는 probe만 `STANDBY`로
+응답하며 Worker가 잡을 가져가는 API는 열리지 않는다.
 
-`worker.env`의 URL·token·ID를 실제 값으로 바꾼다. Production URL은 HTTPS만 허용한다.
-서버 app.env에는 아직 `BACKTEST_EXECUTION_MODE=local`을 유지한다.
+## 2. Worker 호스트 부트스트랩
 
-## 2. 배포와 무중단에 가까운 전환
+```bash
+QP_WORKER_HOST=ubuntu@203.0.113.20 \
+SSH_KEY="$HOME/.ssh/worker.pem" \
+QP_WORKER_ENV_FILE="$HOME/.config/quant-platform/worker-1.env" \
+./scripts/bootstrap-worker.sh
+```
 
-1. 실행 중인 local 백테스트가 모두 끝난 것을 확인한다.
-2. 동일 릴리스를 server와 worker에 배포한다.
-3. Worker service를 먼저 enable해도 된다. Server가 아직 local이면 내부 worker endpoint가
-   404라서 작업을 가져가지 못하고 재시도한다.
-4. Server app.env에 같은 token과 다음 값을 넣고 server를 재시작한다.
+이 명령은 Docker Engine과 Compose plugin, 전용 경로, Compose 파일, env를 설치한다.
+Node.js·Caddy·DB·Worker systemd unit은 호스트에 설치하지 않으며 첫 image 배포 전에는
+container를 시작하지 않는다.
+
+기존 env와 내용이 다르면 bootstrap은 덮어쓰지 않고 실패한다. 의도한 교체만 다음처럼
+허용하며 이전 파일은 `/etc/quant-platform/worker.env.<시각>-<pid>.bak`으로 남는다.
+
+```bash
+QP_REPLACE_WORKER_ENV=1 \
+QP_WORKER_HOST=ubuntu@203.0.113.20 \
+QP_WORKER_ENV_FILE="$HOME/.config/quant-platform/worker-1.env" \
+./scripts/bootstrap-worker.sh
+```
+
+## 3. 동일 release를 server와 Worker에 배포
+
+한 번만 검증·빌드한 archive를 양쪽 deploy에 전달한다.
+
+```bash
+artifact_dir="$(mktemp -d)"
+source scripts/build-release.sh
+build_release "$artifact_dir"
+
+QP_HOST=ubuntu@server.example.com \
+QP_RELEASE_ARCHIVE="$RELEASE_ARCHIVE" \
+QP_RELEASE_CHECKSUM="$RELEASE_CHECKSUM" \
+./scripts/deploy.sh
+
+QP_WORKER_HOST=ubuntu@203.0.113.20 \
+QP_RELEASE_ARCHIVE="$RELEASE_ARCHIVE" \
+QP_RELEASE_CHECKSUM="$RELEASE_CHECKSUM" \
+./scripts/deploy-worker.sh
+```
+
+각 deploy를 따로 실행해도 입력이 없으면 builder를 호출하지만, 같은 archive를 명시해야
+빌드 바이트까지 하나임이 보장된다. Worker deploy는 로컬에서 linux/amd64 image를 만든
+뒤 tar/checksum으로 전송한다. registry 계정은 필요 없다.
+
+같은 Git SHA가 이미 실행 중이고 probe도 성공하면 no-op한다. 같은 SHA를 명시적으로 다시
+배포할 때만 `QP_FORCE_WORKER_DEPLOY=1`을 쓴다.
+
+새 container 시작 또는 인증·SHA·protocol probe가 실패하면 이전 image와 Compose 설정으로
+자동 롤백한다. 실행 중 잡은 drain하지 않으므로 가능하면 배포 전에 완료를 기다린다. 중간에
+종료된 잡은 heartbeat lease 만료 뒤 서버가 재시도한다.
+
+## 4. remote 모드 전환과 확인
+
+server `app.env`를 다음처럼 바꾸고 server를 재시작한다.
 
 ```dotenv
 BACKTEST_EXECUTION_MODE=remote
@@ -58,48 +102,52 @@ REMOTE_BACKTEST_MAX_ATTEMPTS=3
 ```
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now quant-backtest-worker
 sudo systemctl restart quant-platform
+sudo docker ps --filter name=quant-backtest-worker
+sudo docker logs --tail 100 quant-backtest-worker
 ```
 
-Worker journal에서 `remote-worker.started`, server journal에서 claim/완료 감사 기록을 확인한다.
+Worker 로그의 `remote-worker.started`와 server journal의 claim/완료 감사 기록을 확인한다.
+Worker container에는 port mapping이 없어 `docker ps`의 PORTS가 비어 있어야 한다.
+
+## 5. 병렬도·token·URL 변경
+
+저장소 밖 원본 `worker.env`를 수정하고 `QP_REPLACE_WORKER_ENV=1`로 bootstrap을 다시 실행한
+뒤 container를 **재생성**한다. 단순 `docker restart`는 바뀐 env file을 다시 주입하지 않는다.
 
 ```bash
-sudo systemctl status quant-backtest-worker --no-pager
-sudo journalctl -u quant-backtest-worker -n 100 --no-pager
-sudo journalctl -u quant-platform -n 100 --no-pager
+sudo docker compose \
+  --project-directory /opt/quant-backtest-worker \
+  --env-file /opt/quant-backtest-worker/compose.env \
+  --file /opt/quant-backtest-worker/compose.yaml \
+  up -d --no-build --force-recreate worker
 ```
 
-## 3. 병렬도 변경
+병렬도 2는 계산 child 두 개를 뜻한다. 대표 입력의 telemetry p95 RSS에 25% 여유를 더한
+메모리와 CPU slot을 확인하기 전에는 1을 유지한다. token 회전은 server와 모든 Worker
+env를 함께 갱신하며 전환 중 값이 다른 Worker는 401로 claim하지 못한다.
 
-Worker PC의 `/etc/quant-platform/worker.env`에서 아래 값만 바꾸고 worker를 재시작한다.
+## 6. 장애와 수동 롤백
 
-```dotenv
-BACKTEST_WORKER_CONCURRENCY=2
+- Worker나 네트워크가 끊기면 lease 만료 뒤 같은 잡이 attempt 상한까지 재시도된다.
+- 늦게 도착한 이전 attempt 결과는 서버가 거부한다.
+- server만 재시작해도 유효한 remote lease는 보존된다.
+- local로 돌아갈 때는 server를 local로 바꾸기 전에 Worker container를 중지한다. 활성 remote
+  lease는 `INTERRUPTED`가 되며 필요한 잡은 UI에서 복제한다.
+
+보존된 image는 다음으로 확인한다.
+
+```bash
+sudo docker image ls quant-platform-backtest-worker
 ```
 
-각 slot은 계산 child 하나를 만든다. 값 2는 worker 한 대에서 두 job을 동시에 실행한다는
-뜻이다. 난수 실험 batch도 기존 queue 승격 규칙을 거친 뒤 빈 slot들이 병렬로 가져간다.
-메모리 여유 없이 값을 올리면 OS 전체가 불안정해질 수 있으므로 server의 1GB 제약과 별개로
-worker 전용 메모리 예산을 잡는다.
+수동 롤백은 원하는 tag를 `/opt/quant-backtest-worker/compose.env`의
+`QP_WORKER_IMAGE=`에 기록하고 위 Compose 재생성 명령을 실행한 뒤 probe한다.
 
-## 4. 장애·업데이트·되돌리기
+```bash
+sudo docker exec quant-backtest-worker \
+  node /app/dist/workers/remote-backtest-supervisor.js --check
+```
 
-- Worker가 죽거나 네트워크가 끊기면 lease 만료 뒤 같은 job이 최대 attempt까지 재시도된다.
-  이전 attempt가 늦게 결과를 보내도 server가 거부한다.
-- Server만 재시작하면 아직 유효한 remote lease는 보존되고 worker heartbeat가 이어받는다.
-- 릴리스 업데이트는 worker를 먼저 멈추고 server·worker에 같은 아티팩트를 배포한 뒤 둘을
-  시작한다. SHA가 다른 동안에는 claim이 409로 거부되므로 다른 엔진 결과가 섞이지 않는다.
-- Local로 되돌리려면 worker를 멈춘 뒤 server app.env를 `local`로 바꾸고 재시작한다. 그때
-  남아 있던 활성 remote lease는 `INTERRUPTED`가 되며 자동 재실행하지 않는다. 필요한 job은
-  UI에서 복제한다.
-- Token을 바꾸려면 server와 모든 worker env에 새 값을 배포하고 재시작한다. 전환 중 token이
-  다른 worker는 401을 받고 작업을 확보하지 못한다.
-
-Server input snapshot과 upload 임시 파일은 `TEMP_ROOT/remote-backtests` 아래에만 생긴다.
-정상 완료·실패·취소에서 지우며, 재시도 claim 시 이전 attempt snapshot도 정리한다. Worker
-job 디렉터리도 attempt 종료 시 지운다. 전원 장애나 강제 종료로 정리가 실행되지 않은
-조각은 server와 worker가 다음에 시작할 때 제거한다. Server의 snapshot 생성과 결과
-import는 각각 한 번에 하나만 별도 child에서 처리해 여러 worker slot이 Lightsail 웹 이벤트
-루프를 동시에 압박하지 않게 한다.
+`READY` 또는 local 전환 중 `STANDBY`가 성공이다. image 정리는 이 repository의 timestamp
+release tag 최근 3개만 대상으로 하며 다른 image와 build cache는 건드리지 않는다.

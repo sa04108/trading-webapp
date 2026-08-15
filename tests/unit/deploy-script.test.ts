@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
@@ -54,5 +55,13 @@ describe('deploy script failure workflow', () => {
     expect(output).toContain('rolled back to');
     expect(output).toContain('status=1 attempts=2');
     expect(output).not.toContain('curl unavailable');
+  });
+
+  it('verifies a shared release checksum before creating its server release directory', () => {
+    const deploy = readFileSync('scripts/deploy.sh', 'utf8');
+    expect(deploy).toContain('source "${REPO_ROOT}/scripts/build-release.sh"');
+    expect(deploy.indexOf('release archive checksum 불일치')).toBeLessThan(
+      deploy.indexOf('sudo mkdir -p "/opt/quant-platform/releases/${RELEASE}"'),
+    );
   });
 });

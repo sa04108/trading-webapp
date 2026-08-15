@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { backtestExecutionTelemetrySchema } from '../application/backtest-execution-telemetry.js';
+import { REMOTE_WORKER_PROTOCOL_VERSION } from '../application/remote-worker-protocol.js';
 import type { RemoteWorkerService } from '../application/remote-worker-service.js';
 import type { RemoteInputBundleManager } from '../infrastructure/remote-input-bundle-manager.js';
 import { createReadStream } from 'node:fs';
@@ -12,6 +13,11 @@ import { MAX_BACKTEST_RESULT_ARTIFACT_BYTES } from '../infrastructure/sqlite-bac
 const workerIdSchema = z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/);
 const runnerVersionSchema = z.string().min(1).max(128);
 const leaseTokenSchema = z.string().min(32).max(256);
+const probeBodySchema = z.object({
+  workerId: workerIdSchema,
+  runnerVersion: runnerVersionSchema,
+  protocolVersion: z.number().int().positive(),
+});
 
 const claimBodySchema = z.object({
   workerId: workerIdSchema,
@@ -140,12 +146,43 @@ export function registerRemoteWorkerRoutes(
     readonly inputBundles: RemoteInputBundleManager;
     readonly resultUploads: RemoteResultUploadManager;
     readonly workerToken: string;
+    readonly executionMode: 'local' | 'remote';
+    readonly expectedRunnerVersion: string;
   },
 ): void {
   const requireWorker = createRequireWorkerToken(deps.workerToken);
   app.addContentTypeParser(RESULT_CONTENT_TYPE, (_request, payload, done) => {
     done(null, payload);
   });
+
+  // 배포 readiness는 잡 claim과 분리한다. 잘못된 token·release·protocol이어도
+  // supervisor 자체는 재시도하며 살아 있으므로 단순한 프로세스 상태로는 판정할 수 없다.
+  app.post('/probe', { onRequest: requireWorker }, async (request, reply) => {
+    const body = probeBodySchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.code(400).send({ error: 'workerId, runnerVersion, protocolVersion을 확인하세요' });
+    }
+    if (body.data.protocolVersion !== REMOTE_WORKER_PROTOCOL_VERSION) {
+      return reply.code(409).send({
+        error: 'PROTOCOL_VERSION_MISMATCH',
+        expectedProtocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
+      });
+    }
+    if (body.data.runnerVersion !== deps.expectedRunnerVersion) {
+      return reply.code(409).send({
+        error: 'RUNNER_VERSION_MISMATCH',
+        expectedRunnerVersion: deps.expectedRunnerVersion,
+      });
+    }
+    return reply.header('cache-control', 'no-store').send({
+      status: deps.executionMode === 'remote' ? 'READY' : 'STANDBY',
+      runnerVersion: deps.expectedRunnerVersion,
+      protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
+    });
+  });
+
+  // local 모드에서는 배포 probe만 열고 claim/heartbeat/artifact API는 노출하지 않는다.
+  if (deps.executionMode === 'local') return;
 
   app.post('/jobs/claim', { onRequest: requireWorker }, async (request, reply) => {
     const body = claimBodySchema.safeParse(request.body);

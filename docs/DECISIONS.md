@@ -1366,3 +1366,26 @@
 - **병렬도:** `MAX_CONCURRENT_BACKTESTS`는 local 전용이다. remote의 실제 동시 실행 수는
   worker별 `BACKTEST_WORKER_CONCURRENCY` 합이다. 전용 PC도 처음에는 1로 시작하고 D-059
   telemetry의 p95 RSS와 CPU 슬롯 중 더 작은 상한을 적용한다.
+
+## D-061: 원격 Worker 배포는 Docker Compose 단일 경로로 고정한다
+
+- **결정:** Worker 호스트에 Node.js와 `quant-backtest-worker.service`를 설치하는 경로를
+  제거하고 Docker Engine + Compose만 설치한다. systemd fallback은 두지 않는다. 웹/API
+  서버의 기존 systemd 경로는 유지한다.
+- **산출물 동일성:** `build-release.sh`가 lint·typecheck·test·build를 통과한 archive를 한
+  번 만들고 웹 deploy와 Worker image build가 함께 소비한다. Worker image 안에서 소스를
+  다시 컴파일하지 않는다. base image는 Node patch와 digest를 함께 고정하고 Git SHA를 OCI
+  label과 `dist/build-info.json` 양쪽에서 검증한다.
+- **배포·복구:** registry 없이 image tar와 SHA-256을 SSH 전송한다. Compose 재생성 뒤 token,
+  Git SHA, protocol을 확인하는 no-claim probe가 `READY` 또는 local 준비 상태 `STANDBY`여야
+  성공이다. 실패하면 이전 Compose/image로 자동 복구하고 이 repository의 최근 release
+  image 3개만 보존한다.
+- **격리:** non-root, read-only rootfs, writable work-root 하나, capability 전체 제거,
+  no-new-privileges, PID 상한, 로그 회전, 인바운드 port 없음, 30초 stop grace를 기본으로 한다.
+  CPU·메모리 숫자는 임의로 고정하지 않고 D-059 telemetry와 호스트별 예산으로 정한다.
+- **잠금:** PID namespace에서 PID 파일은 소유자를 식별하지 못하므로 제거한다. container
+  entrypoint가 work-root의 `flock`을 열린 descriptor로 보유하고 Node를 exec한다. SIGKILL에도
+  커널이 잠금을 회수한다. marker는 잠금과 별개로 재귀 정리 대상 경로의 소유권을 증명한다.
+- **비용:** Worker 호스트에는 Docker daemon과 image 저장공간이 추가된다. 대신 Node/native
+  dependency·릴리스 symlink·app unit을 호스트에서 제거하고 배포와 rollback 단위를 불변
+  image로 통일한다. v1은 Ubuntu/Debian amd64 한 대씩이며 drain/fleet 배포는 후속이다.

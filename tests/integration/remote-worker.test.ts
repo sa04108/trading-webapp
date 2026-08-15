@@ -22,6 +22,7 @@ import {
   getCostProfile,
   getSlippageProfile,
 } from '../../src/server/modules/backtest/domain/cost-profiles.js';
+import { REMOTE_WORKER_PROTOCOL_VERSION } from '../../src/server/modules/backtest/application/remote-worker-protocol.js';
 
 const WORKER_TOKEN = 'remote-worker-token-for-tests-1234567890';
 const DAY_MS = 86_400_000;
@@ -104,6 +105,23 @@ describe('remote backtest worker lease API', () => {
       url: '/api/internal/workers/jobs/claim?waitSeconds=0',
       headers: { authorization: `Bearer ${WORKER_TOKEN}` },
       payload: { workerId: 'worker-a', runnerVersion },
+    });
+  }
+
+  function probe(payload: {
+    workerId?: string;
+    runnerVersion?: string;
+    protocolVersion?: number;
+  } = {}) {
+    return ctx.app.inject({
+      method: 'POST',
+      url: '/api/internal/workers/probe',
+      headers: { authorization: `Bearer ${WORKER_TOKEN}` },
+      payload: {
+        workerId: payload.workerId ?? 'worker-a',
+        runnerVersion: payload.runnerVersion ?? ctx.container.gitCommitSha,
+        protocolVersion: payload.protocolVersion ?? REMOTE_WORKER_PROTOCOL_VERSION,
+      },
     });
   }
 
@@ -353,6 +371,76 @@ describe('remote backtest worker lease API', () => {
       payload: { attempt: lease.attempt, leaseToken: lease.leaseToken, outcome: 'CANCELLED' },
     });
     expect(replay.statusCode).toBe(409);
+  });
+
+  it('probes authentication, runner release, and protocol without claiming a job', async () => {
+    const unauthenticated = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/internal/workers/probe',
+      payload: {
+        workerId: 'worker-a',
+        runnerVersion: ctx.container.gitCommitSha,
+        protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
+      },
+    });
+    expect(unauthenticated.statusCode).toBe(401);
+
+    const releaseMismatch = await probe({ runnerVersion: 'different-release' });
+    expect(releaseMismatch.statusCode).toBe(409);
+    expect(releaseMismatch.json()).toMatchObject({
+      error: 'RUNNER_VERSION_MISMATCH',
+      expectedRunnerVersion: ctx.container.gitCommitSha,
+    });
+
+    const protocolMismatch = await probe({
+      protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION + 1,
+    });
+    expect(protocolMismatch.statusCode).toBe(409);
+    expect(protocolMismatch.json()).toEqual({
+      error: 'PROTOCOL_VERSION_MISMATCH',
+      expectedProtocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
+    });
+
+    const ready = await probe();
+    expect(ready.statusCode).toBe(200);
+    expect(ready.json()).toEqual({
+      status: 'READY',
+      runnerVersion: ctx.container.gitCommitSha,
+      protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
+    });
+    expect(ctx.container.jobQueue.countByStatus(['STARTING', 'RUNNING'])).toBe(0);
+  });
+
+  it('runs the supervisor one-shot compatibility check without claiming a job', async () => {
+    const serverUrl = await ctx.app.listen({ host: '127.0.0.1', port: 0 });
+    const checked = spawn(process.execPath, [
+      '--import',
+      'tsx',
+      path.resolve('src/workers/remote-backtest-supervisor.ts'),
+      '--check',
+    ], {
+      cwd: path.resolve('.'),
+      env: {
+        ...process.env,
+        NODE_ENV: 'test',
+        BUILD_GIT_SHA: ctx.container.gitCommitSha,
+        BACKTEST_SERVER_URL: serverUrl,
+        BACKTEST_WORKER_TOKEN: WORKER_TOKEN,
+        BACKTEST_WORKER_ID: 'check-worker',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    checked.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+    checked.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+    const exit = await new Promise<number | null>((resolve, reject) => {
+      checked.once('error', reject);
+      checked.once('exit', (code) => resolve(code));
+    });
+    expect(exit, stderr).toBe(0);
+    expect(stdout).toBe('READY\n');
+    expect(ctx.container.jobQueue.countByStatus(['STARTING', 'RUNNING'])).toBe(0);
   });
 
   it('requeues one expired lease and fails after the configured attempt limit', async () => {
@@ -688,4 +776,37 @@ describe('remote backtest worker lease API', () => {
       await stopProcess(supervisor);
     }
   }, 40_000);
+});
+
+describe('remote backtest worker deployment probe in local mode', () => {
+  it('reports standby without exposing the claim API', async () => {
+    const local = await createTestApp({
+      BACKTEST_EXECUTION_MODE: 'local',
+      BACKTEST_WORKER_TOKEN: WORKER_TOKEN,
+    });
+    try {
+      const response = await local.app.inject({
+        method: 'POST',
+        url: '/api/internal/workers/probe',
+        headers: { authorization: `Bearer ${WORKER_TOKEN}` },
+        payload: {
+          workerId: 'worker-a',
+          runnerVersion: local.container.gitCommitSha,
+          protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
+        },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ status: 'STANDBY' });
+
+      const claim = await local.app.inject({
+        method: 'POST',
+        url: '/api/internal/workers/jobs/claim?waitSeconds=0',
+        headers: { authorization: `Bearer ${WORKER_TOKEN}` },
+        payload: { workerId: 'worker-a', runnerVersion: local.container.gitCommitSha },
+      });
+      expect(claim.statusCode).toBe(404);
+    } finally {
+      await local.close();
+    }
+  });
 });
