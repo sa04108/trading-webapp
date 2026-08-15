@@ -194,6 +194,40 @@ describe('벤치마크 저장과 결과 비교', () => {
     }
   });
 
+  it('FRED 마지막 거래일 값으로 그날과 직후 주말 종료 요청을 커버한다', async () => {
+    const database = openDatabase(':memory:');
+    try {
+      const closes = new Map([
+        ['2026-08-13', 6_800],
+        ['2026-08-14', 6_850],
+      ]);
+      const service = new BenchmarkService({
+        db: database.db,
+        krxSource: {
+          fetchIssueBaseInfo: async () => [],
+          fetchDailyTrades: async () => [],
+          todayMaxEndpointCallCount: () => 0,
+        },
+        fredSource: {
+          fetchBenchmarkRange: async (_id, from, to) => from === to && closes.has(from)
+            ? [{ date: from, close: closes.get(from)! }]
+            : [],
+        },
+        clock: { now: () => 456 },
+        logger,
+      });
+      await service.syncDate('SP500', '2026-08-13');
+      await service.syncDate('SP500', '2026-08-14');
+
+      expect(service.status('SP500', '2026-08-13', '2026-08-14').covered).toBe(true);
+      expect(service.status('SP500', '2026-08-13', '2026-08-16').covered).toBe(true);
+      // 미국 시장도 확인되지 않은 다음 평일을 휴장으로 추측하지 않는다.
+      expect(service.status('SP500', '2026-08-13', '2026-08-17').covered).toBe(false);
+    } finally {
+      database.close();
+    }
+  });
+
   it('진행 중인 백필은 다른 지수 시작 요청에도 최초 지수를 유지한다', async () => {
     const database = openDatabase(':memory:');
     let releaseKrx!: () => void;

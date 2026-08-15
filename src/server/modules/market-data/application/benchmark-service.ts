@@ -39,6 +39,31 @@ function isFredBenchmarkId(benchmarkId: BenchmarkId): benchmarkId is FredBenchma
   return BENCHMARK_SOURCES[benchmarkId] === 'FRED_API';
 }
 
+interface DateRange {
+  readonly startDate: string;
+  readonly endDate: string;
+}
+
+/**
+ * 구간의 모든 달력일이 값·수집 coverage·주말 중 하나로 설명되는지 본다.
+ * 평일 휴장일은 성공한 source coverage가 있을 때만 인정해 시장별 휴일을 추측하지 않는다.
+ */
+function isCalendarRangeAccountedFor(
+  from: string,
+  to: string,
+  pointDates: ReadonlySet<string>,
+  coverage: readonly DateRange[],
+): boolean {
+  for (let date = from; date <= to; date = addCalendarDays(date, 1)) {
+    if (isWeekendDate(date) || pointDates.has(date)) continue;
+    const attempted = coverage.some(
+      (range) => range.startDate <= date && date <= range.endDate,
+    );
+    if (!attempted) return false;
+  }
+  return true;
+}
+
 export class BenchmarkService {
   private backfill: BenchmarkBackfillStatus = {
     benchmarkId: null, state: 'IDLE', cursorDate: null, from: null, to: null, error: null,
@@ -68,9 +93,17 @@ export class BenchmarkService {
   status(benchmarkId: BenchmarkId, from: string, to: string) {
     const points = this.list(benchmarkId, from, to);
     if (isFredBenchmarkId(benchmarkId)) {
+      const dates = new Set(points.map((point) => point.date));
       return {
         points,
-        covered: points.length >= 2 && this.isFredRangeCovered(benchmarkId, from, to),
+        covered:
+          points.length >= 2
+          && isCalendarRangeAccountedFor(
+            from,
+            to,
+            dates,
+            this.fredCoverageRanges(benchmarkId, from, to),
+          ),
       };
     }
 
@@ -104,25 +137,21 @@ export class BenchmarkService {
     // - 주말은 별도 API 조회 없이 확정할 수 있다.
     // 이 판정은 요청 종료일 자체에 행을 강제하지 않아 금요일 데이터로 그 직후 주말까지
     // 자연스럽게 커버하면서도, 아직 확인하지 않은 평일을 휴장으로 추측하지 않는다.
-    let allDatesAccountedFor = true;
-    for (let date = from; date <= to; date = addCalendarDays(date, 1)) {
-      if (isWeekendDate(date) || dates.has(date)) continue;
-      const masterAttempted = masterCoverage.some(
-        (range) => range.startDate <= date && date <= range.endDate,
-      );
-      if (!masterAttempted) {
-        allDatesAccountedFor = false;
-        break;
-      }
-    }
     return {
       points,
-      covered: points.length >= 2 && missingTradingDays === 0 && allDatesAccountedFor,
+      covered:
+        points.length >= 2
+        && missingTradingDays === 0
+        && isCalendarRangeAccountedFor(from, to, dates, masterCoverage),
     };
   }
 
-  private isFredRangeCovered(benchmarkId: FredBenchmarkId, from: string, to: string): boolean {
-    const ranges = this.deps.db
+  private fredCoverageRanges(
+    benchmarkId: FredBenchmarkId,
+    from: string,
+    to: string,
+  ): DateRange[] {
+    return this.deps.db
       .select({ startDate: fredBenchmarkCoverage.startDate, endDate: fredBenchmarkCoverage.endDate })
       .from(fredBenchmarkCoverage)
       .where(and(
@@ -132,13 +161,6 @@ export class BenchmarkService {
       ))
       .orderBy(asc(fredBenchmarkCoverage.startDate))
       .all();
-    let cursor = from;
-    for (const range of ranges) {
-      if (range.startDate > cursor) return false;
-      if (range.endDate >= to) return true;
-      if (range.endDate >= cursor) cursor = addCalendarDays(range.endDate, 1);
-    }
-    return false;
   }
 
   private saveFredCoverage(benchmarkId: FredBenchmarkId, from: string, to: string): void {
