@@ -5,6 +5,7 @@ import {
   type SymbolMasterServiceDeps,
 } from '../../src/server/modules/market-data/application/symbol-master-service.js';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
+import { symbolMasterTradingDays } from '../../src/server/shared/db/schema.js';
 import {
   baseInfoFixture,
   dailyFixture,
@@ -90,6 +91,17 @@ describe('SymbolMasterService.effectiveTradingDate', () => {
     await ctx.svc.ingestDate('2023-01-02');
 
     expect(ctx.svc.effectiveTradingDate('2023-01-01')).toBeUndefined();
+    await teardown(ctx);
+  });
+
+  it('legacy 이행에서 섞인 주말은 화면용 실제 거래일 목록에서 제외한다', async () => {
+    const ctx = await setup();
+    ctx.t.container.database.db.insert(symbolMasterTradingDays).values([
+      { date: '2016-03-20' },
+      { date: '2016-03-21' },
+    ]).run();
+
+    expect(ctx.svc.tradingDates()).toEqual(['2016-03-21']);
     await teardown(ctx);
   });
 });

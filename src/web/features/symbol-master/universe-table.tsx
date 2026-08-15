@@ -28,7 +28,7 @@ import type {
   SymbolMasterEntryDto,
   SymbolMasterUniverseDto,
 } from '../../../shared/schemas/symbol-master.js';
-import { findNearestCoveredDate } from './timeline-model';
+import { findNearestTradingDate } from './timeline-model';
 
 type MarketFilter = 'ALL' | 'KOSPI' | 'KOSDAQ';
 type TypeFilter = 'ALL' | 'COMMON_STOCK' | 'OTHER';
@@ -112,7 +112,7 @@ export function UniverseTable({
       );
     }
 
-    const nearest = findNearestCoveredDate(coverage?.ranges ?? [], date);
+    const nearest = findNearestTradingDate(coverage?.tradingDates ?? [], date);
     return (
       <Alert>
         <AlertDescription className="space-y-2">

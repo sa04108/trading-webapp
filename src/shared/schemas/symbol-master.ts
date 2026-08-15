@@ -28,6 +28,8 @@ export type SymbolMasterUniverseDto = z.infer<typeof symbolMasterUniverseDtoSche
 
 export const symbolMasterCoverageDtoSchema = z.object({
   ranges: z.array(z.object({ startDate: z.string(), endDate: z.string() })),
+  /** 서버가 거래일로 기록한 날짜. ranges는 휴장일을 포함한 수집 시도 범위다. */
+  tradingDates: z.array(z.string()),
   lastSyncedAtMs: z.number().nullable(),
   backfill: z.object({
     state: z.enum(['IDLE', 'RUNNING', 'BUDGET_EXHAUSTED', 'FAILED']),

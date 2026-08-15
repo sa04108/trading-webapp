@@ -17,7 +17,7 @@ import {
 } from '../../../shared/db/schema.js';
 import type { Clock } from '../../../shared/clock.js';
 import type { Logger } from '../../../shared/logger.js';
-import { addCalendarDays } from '../domain/kst-date.js';
+import { addCalendarDays, isWeekendDate } from '../domain/kst-date.js';
 import {
   KrxNotConfiguredError,
   type FredBenchmarkSource,
@@ -79,20 +79,45 @@ export class BenchmarkService {
       .from(symbolMasterTradingDays)
       .where(and(gte(symbolMasterTradingDays.date, from), lte(symbolMasterTradingDays.date, to)))
       .orderBy(asc(symbolMasterTradingDays.date))
-      .all();
+      .all()
+      // 0005 legacy 이행은 이벤트 경계일도 최선 추정 거래일로 넣었다. 주말은 확실히
+      // 잘못된 추정이므로 벤치마크 누락 거래일로 세지 않는다.
+      .filter(({ date }) => !isWeekendDate(date));
     const dates = new Set(points.map((point) => point.date));
     const missingTradingDays = tradingDays.filter(({ date }) => !dates.has(date)).length;
-    const masterCovered = this.deps.db
-      .select({ startDate: symbolMasterCoverage.startDate })
+    const masterCoverage = this.deps.db
+      .select({
+        startDate: symbolMasterCoverage.startDate,
+        endDate: symbolMasterCoverage.endDate,
+      })
       .from(symbolMasterCoverage)
       .where(and(
-        lte(symbolMasterCoverage.startDate, from),
-        gte(symbolMasterCoverage.endDate, to),
+        lte(symbolMasterCoverage.startDate, to),
+        gte(symbolMasterCoverage.endDate, from),
       ))
-      .get() !== undefined;
+      .orderBy(asc(symbolMasterCoverage.startDate))
+      .all();
+
+    // 달력일마다 "왜 벤치마크 행이 없을 수 있는지"를 설명할 수 있어야 한다.
+    // - 벤치마크 값 자체가 있으면 종목 마스터 coverage가 하루 늦어도 충분한 증거다.
+    // - 종목 마스터가 조회한 날인데 trading_days에 없으면 확인된 휴장일이다.
+    // - 주말은 별도 API 조회 없이 확정할 수 있다.
+    // 이 판정은 요청 종료일 자체에 행을 강제하지 않아 금요일 데이터로 그 직후 주말까지
+    // 자연스럽게 커버하면서도, 아직 확인하지 않은 평일을 휴장으로 추측하지 않는다.
+    let allDatesAccountedFor = true;
+    for (let date = from; date <= to; date = addCalendarDays(date, 1)) {
+      if (isWeekendDate(date) || dates.has(date)) continue;
+      const masterAttempted = masterCoverage.some(
+        (range) => range.startDate <= date && date <= range.endDate,
+      );
+      if (!masterAttempted) {
+        allDatesAccountedFor = false;
+        break;
+      }
+    }
     return {
       points,
-      covered: masterCovered && tradingDays.length >= 2 && missingTradingDays === 0,
+      covered: points.length >= 2 && missingTradingDays === 0 && allDatesAccountedFor,
     };
   }
 
@@ -189,8 +214,7 @@ export class BenchmarkService {
       const existingDates = new Set(this.list(benchmarkId, from, to).map(({ date }) => date));
       for (let date = from; date <= to; date = addCalendarDays(date, 1)) {
         this.backfill.cursorDate = date;
-        const day = new Date(`${date}T00:00:00Z`).getUTCDay();
-        if (day === 0 || day === 6 || existingDates.has(date)) continue;
+        if (isWeekendDate(date) || existingDates.has(date)) continue;
         await this.syncDate(benchmarkId, date);
       }
       this.backfill = { benchmarkId, state: 'IDLE', cursorDate: null, from, to, error: null };

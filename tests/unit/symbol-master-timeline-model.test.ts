@@ -4,6 +4,9 @@ import {
   buildTimelineSegments,
   dateToPct,
   findNearestCoveredDate,
+  findNearestTradingDate,
+  findNearestWeekday,
+  isWeekendDate,
   pctToDate,
 } from '../../src/web/features/symbol-master/timeline-model.js';
 
@@ -142,5 +145,31 @@ describe('findNearestCoveredDate', () => {
     // 동률을 만들려면 가운데(01-14)가 아니라 정확히 중간인 날짜를 골라야 한다.
     // 01-08 과 01-20 사이 정가운데는 01-14 인데 08 까지 6일, 20 까지 6일로 동률이다.
     expect(findNearestCoveredDate(ranges, '2024-01-14')).toBe('2024-01-08');
+  });
+});
+
+describe('실제 거래일 선택', () => {
+  const tradingDates = ['2016-03-21', '2016-03-22', '2016-03-24'];
+
+  it('첫 수집 시도일이 일요일이어도 가장 가까운 실제 거래일을 돌려준다', () => {
+    expect(findNearestTradingDate(tradingDates, '2016-03-20')).toBe('2016-03-21');
+  });
+
+  it('거래일 사이 동률이면 과거 날짜를 택한다', () => {
+    expect(findNearestTradingDate(['2026-08-14', '2026-08-18'], '2026-08-16')).toBe('2026-08-14');
+  });
+
+  it('주말을 UTC 달력일 기준으로 판정한다', () => {
+    expect(isWeekendDate('2026-08-14')).toBe(false);
+    expect(isWeekendDate('2026-08-15')).toBe(true);
+    expect(isWeekendDate('2026-08-16')).toBe(true);
+  });
+
+  it('수집 범위가 일요일에 시작하면 첫 표시일을 다음 월요일로 옮긴다', () => {
+    expect(findNearestWeekday('2016-03-20', '2016-03-20', '2016-03-31')).toBe('2016-03-21');
+  });
+
+  it('종료 범위 뒤의 평일은 고를 수 없으면 직전 금요일로 옮긴다', () => {
+    expect(findNearestWeekday('2026-08-16', '2026-08-01', '2026-08-16')).toBe('2026-08-14');
   });
 });
