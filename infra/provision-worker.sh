@@ -57,7 +57,22 @@ install_worker_env() {
     rm -f "${env_tmp}"
     return 1
   fi
-  mv "${env_tmp}" /etc/quant-platform/worker.env
+  if ! mv "${env_tmp}" /etc/quant-platform/worker.env; then
+    rm -f "${env_tmp}"
+    return 1
+  fi
+}
+
+backup_worker_env() {
+  backup_tmp="$(mktemp /etc/quant-platform/worker.env.bak.XXXXXX)"
+  if ! install -m 0600 -o root -g root /etc/quant-platform/worker.env "${backup_tmp}"; then
+    rm -f "${backup_tmp}"
+    return 1
+  fi
+  if ! mv "${backup_tmp}" /etc/quant-platform/worker.env.bak; then
+    rm -f "${backup_tmp}"
+    return 1
+  fi
 }
 
 if [ -f /etc/quant-platform/worker.env ]; then
@@ -66,10 +81,10 @@ if [ -f /etc/quant-platform/worker.env ]; then
     chmod 0600 /etc/quant-platform/worker.env
     echo "worker.env 변경 없음"
   elif [ "${REPLACE_ENV}" = 1 ]; then
-    backup="/etc/quant-platform/worker.env.$(date -u +%Y%m%d-%H%M%S)-$$.bak"
-    cp -p /etc/quant-platform/worker.env "${backup}"
+    backup_worker_env
+    find /etc/quant-platform -maxdepth 1 -type f -name 'worker.env.*.bak' -delete
     install_worker_env
-    echo "기존 worker.env 백업: ${backup}"
+    echo "기존 worker.env 백업: /etc/quant-platform/worker.env.bak"
   else
     echo "기존 /etc/quant-platform/worker.env가 달라 보존했습니다." >&2
     echo "교체하려면 QP_REPLACE_WORKER_ENV=1로 bootstrap을 다시 실행하세요." >&2

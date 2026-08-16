@@ -101,7 +101,8 @@ bootstrap은 SSH와 비대화형 sudo를 확인하고 provision/Compose/env 파�
 Engine, Buildx, Compose plugin을 설치한다. 전용 경로와 권한을 만든 뒤 Compose와 env를
 설치하지만 image가 없으므로 서비스를 시작하지 않는다. 기존 env가 같으면 멱등하게
 통과하고 다르면 보존한 채 실패한다. 명시적으로 교체할 때만 다음을 사용하며 기존 파일은
-시각이 붙은 `.bak`으로 남긴다.
+`/etc/quant-platform/worker.env.bak` 하나로 원자적으로 갱신한다. 처음 교체할 때 기존
+타임스탬프 형식의 백업도 제거한다.
 
 ```bash
 QP_REPLACE_WORKER_ENV=1 ... ./scripts/bootstrap-worker.sh

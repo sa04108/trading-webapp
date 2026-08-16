@@ -50,7 +50,8 @@ Node.js·Caddy·DB·Worker systemd unit은 호스트에 설치하지 않으며 �
 container를 시작하지 않는다.
 
 기존 env와 내용이 다르면 bootstrap은 덮어쓰지 않고 실패한다. 의도한 교체만 다음처럼
-허용하며 이전 파일은 `/etc/quant-platform/worker.env.<시각>-<pid>.bak`으로 남는다.
+허용한다. 이전 파일은 `/etc/quant-platform/worker.env.bak` 하나로 원자적으로 갱신하며,
+처음 교체할 때 기존 타임스탬프 형식의 백업도 제거한다.
 
 ```bash
 QP_REPLACE_WORKER_ENV=1 \

@@ -91,6 +91,10 @@ printf 'scp:%s\n' "$*" >> "$COMMAND_LOG"
     expect(provision).toContain('docker-compose-plugin');
     expect(provision).toContain('install_worker_env');
     expect(provision).toContain('mv "${env_tmp}" /etc/quant-platform/worker.env');
+    expect(provision).toContain('backup_worker_env');
+    expect(provision).toContain('mv "${backup_tmp}" /etc/quant-platform/worker.env.bak');
+    expect(provision).toContain("-name 'worker.env.*.bak' -delete");
+    expect(provision).not.toContain('date -u +%Y%m%d-%H%M%S');
     expect(provision).toContain('QP_REPLACE_WORKER_ENV=1');
     expect(provision).not.toContain('quant-backtest-worker.service');
     expect(provision).not.toContain('nodejs.org');
