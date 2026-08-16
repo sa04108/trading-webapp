@@ -14,15 +14,28 @@ TARGET="${QP_WORKER_HOST:-}"
 if [ -z "${TARGET}" ]; then read -rp "Worker 주소 [user@]host: " TARGET || true; fi
 [ -n "${TARGET}" ] || { echo "QP_WORKER_HOST가 필요합니다" >&2; exit 1; }
 case "${QP_FORCE_WORKER_DEPLOY:-0}" in 0|1) FORCE="${QP_FORCE_WORKER_DEPLOY:-0}" ;; *) echo "QP_FORCE_WORKER_DEPLOY는 0 또는 1이어야 합니다" >&2; exit 1 ;; esac
+WORKER_MANIFEST="${REPO_ROOT}/infra/worker-host-manifest.json"
+[ -f "${WORKER_MANIFEST}" ] || { echo "Worker 관리 manifest가 없습니다: ${WORKER_MANIFEST}" >&2; exit 1; }
+WORKER_MANIFEST_SHA="$(sha256sum "${WORKER_MANIFEST}" | awk '{ print $1 }')"
 
 remote_host_configure "${TARGET}"
 remote_host_preflight
-ssh "${REMOTE_SSH_OPTS[@]}" "${REMOTE_TARGET}" sh -s <<'EOF'
+ssh "${REMOTE_SSH_OPTS[@]}" "${REMOTE_TARGET}" sh -s -- "${WORKER_MANIFEST_SHA}" <<'EOF'
 set -eu
+EXPECTED_MANIFEST_SHA="$1"
 sudo docker version >/dev/null
 sudo docker compose version >/dev/null
 sudo test -f /etc/quant-platform/worker.env
 sudo test -f /opt/quant-backtest-worker/compose.yaml
+sudo test -f /opt/quant-backtest-worker/managed-paths.json || {
+  echo 'Worker 관리 manifest가 없습니다. bootstrap-worker.sh를 다시 실행하세요.' >&2
+  exit 1
+}
+ACTUAL_MANIFEST_SHA="$(sudo sha256sum /opt/quant-backtest-worker/managed-paths.json | awk '{ print $1 }')"
+[ "${ACTUAL_MANIFEST_SHA}" = "${EXPECTED_MANIFEST_SHA}" ] || {
+  echo 'Worker 관리 manifest가 현재 저장소와 다릅니다. bootstrap-worker.sh를 다시 실행하세요.' >&2
+  exit 1
+}
 EOF
 
 ARTIFACT_DIR=""

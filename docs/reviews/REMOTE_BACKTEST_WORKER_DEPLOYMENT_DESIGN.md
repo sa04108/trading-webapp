@@ -36,7 +36,8 @@ Worker 호스트
 ├── Docker Engine + Compose plugin
 ├── /opt/quant-backtest-worker/
 │   ├── compose.yaml
-│   └── compose.env                   현재 immutable release image 참조
+│   ├── compose.env                   현재 immutable release image 참조
+│   └── managed-paths.json            호스트 경로·수명주기 manifest
 ├── /etc/quant-platform/worker.env    root:root 0600
 └── /var/lib/quant-backtest-worker    uid:gid 10001:10001, 0700
 ```
@@ -95,7 +96,9 @@ LOG_LEVEL=info
 
 bootstrap은 SSH와 비대화형 sudo를 확인하고 provision/Compose/env 파일을 임시 원격
 디렉터리에 올린다. 성공·실패와 관계없이 임시 디렉터리를 제거한다. 토큰 값은 명령행이나
-로그에 출력하지 않는다.
+로그에 출력하지 않는다. `infra/worker-host-manifest.json`도 함께 올려 root 소유 0644로
+설치한다. manifest는 Worker 소유 영구 경로, 비정상 종료 때 남을 수 있는 임시 경로,
+이전 형식의 경로 패턴, 공유 Docker 패키지·APT 설정을 서로 다른 수명주기로 기록한다.
 
 `infra/provision-worker.sh`는 지원 OS/amd64를 확인하고 Docker 공식 apt repository에서
 Engine, Buildx, Compose plugin을 설치한다. 전용 경로와 권한을 만든 뒤 Compose와 env를

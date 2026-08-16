@@ -47,7 +47,21 @@ QP_WORKER_ENV_FILE="$HOME/.config/quant-platform/worker-1.env" \
 
 이 명령은 Docker Engine과 Compose plugin, 전용 경로, Compose 파일, env를 설치한다.
 Node.js·Caddy·DB·Worker systemd unit은 호스트에 설치하지 않으며 첫 image 배포 전에는
-container를 시작하지 않는다.
+container를 시작하지 않는다. 설치가 관리하는 영구·일시 경로와 공유 Docker 의존성은
+`/opt/quant-backtest-worker/managed-paths.json`에 기록한다.
+
+```bash
+sudo cat /opt/quant-backtest-worker/managed-paths.json
+```
+
+`managedPaths`는 정리 정책까지 포함한 Worker 소유 경로다. `transientPathPatterns`는 정상
+종료 시 제거하지만 비정상 종료 때 남을 수 있는 임시 경로이고, `legacyPathPatterns`는 다음
+명시적 환경 교체 때 정리할 이전 형식이다. `hostDependencies`는 Docker를 사용하는 다른
+workload와 공유할 수 있어 Worker 정리 대상으로 간주하지 않는 패키지와 APT 설정이다.
+`/var/lib/quant-backtest-worker`는 작업 데이터를 포함하므로
+`confirm-purge-data`로 분류해 명시적 데이터 폐기 없이는 제거하지 않는다. Worker 배포는
+호스트 manifest의 SHA-256이 현재 저장소의 manifest와 같은지도 확인하며, 다르면 bootstrap을
+다시 실행하기 전에는 진행하지 않는다.
 
 기존 env와 내용이 다르면 bootstrap은 덮어쓰지 않고 실패한다. 의도한 교체만 다음처럼
 허용한다. 이전 파일은 `/etc/quant-platform/worker.env.bak` 하나로 원자적으로 갱신하며,

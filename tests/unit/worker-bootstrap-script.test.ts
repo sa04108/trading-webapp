@@ -62,6 +62,7 @@ printf 'scp:%s\n' "$*" >> "$COMMAND_LOG"
     expect(output).not.toContain(token);
     const commands = fs.readFileSync(commandLog, 'utf8');
     expect(commands).toContain('provision-worker.sh');
+    expect(commands).toContain('worker-host-manifest.json');
     expect(commands).toContain('compose.worker.yaml');
     expect(commands).not.toContain('quant-backtest-worker.service');
   });
@@ -90,6 +91,7 @@ printf 'scp:%s\n' "$*" >> "$COMMAND_LOG"
     expect(provision).toContain('docker-ce docker-ce-cli containerd.io');
     expect(provision).toContain('docker-compose-plugin');
     expect(provision).toContain('install_worker_env');
+    expect(provision).toContain('install_worker_manifest');
     expect(provision).toContain('mv "${env_tmp}" /etc/quant-platform/worker.env');
     expect(provision).toContain('backup_worker_env');
     expect(provision).toContain('mv "${backup_tmp}" /etc/quant-platform/worker.env.bak');
@@ -99,5 +101,55 @@ printf 'scp:%s\n' "$*" >> "$COMMAND_LOG"
     expect(provision).not.toContain('quant-backtest-worker.service');
     expect(provision).not.toContain('nodejs.org');
     expect(provision).not.toContain(' caddy');
+  });
+
+  it('tracks persistent, transient, and shared dependency paths in the host manifest', () => {
+    const manifest = JSON.parse(fs.readFileSync('infra/worker-host-manifest.json', 'utf8')) as {
+      schemaVersion: number;
+      manifestPath: string;
+      managedPaths: Array<{ path: string; cleanupPolicy: string }>;
+      transientPathPatterns: string[];
+      legacyPathPatterns: string[];
+      hostDependencies: { paths: string[]; packages: string[]; cleanupPolicy: string };
+    };
+    expect(manifest.schemaVersion).toBe(1);
+    expect(manifest.manifestPath).toBe('/opt/quant-backtest-worker/managed-paths.json');
+    const managed = new Map(manifest.managedPaths.map((entry) => [entry.path, entry.cleanupPolicy]));
+    expect([...managed.keys()].sort()).toEqual([
+      '/etc/quant-platform',
+      '/etc/quant-platform/worker.env',
+      '/etc/quant-platform/worker.env.bak',
+      '/opt/quant-backtest-worker',
+      '/opt/quant-backtest-worker/compose.env',
+      '/opt/quant-backtest-worker/compose.yaml',
+      '/opt/quant-backtest-worker/managed-paths.json',
+      '/var/lib/quant-backtest-worker',
+    ].sort());
+    expect(Object.fromEntries(managed)).toMatchObject({
+      '/opt/quant-backtest-worker/compose.yaml': 'remove',
+      '/opt/quant-backtest-worker/compose.env': 'remove',
+      '/etc/quant-platform/worker.env': 'purge-config',
+      '/etc/quant-platform/worker.env.bak': 'purge-config',
+      '/var/lib/quant-backtest-worker': 'confirm-purge-data',
+      '/opt/quant-backtest-worker/managed-paths.json': 'remove-last',
+    });
+    expect(manifest.transientPathPatterns).toEqual(expect.arrayContaining([
+      '/etc/quant-platform/worker.env.XXXXXX',
+      '/opt/quant-backtest-worker/compose.env.XXXXXX',
+      '/opt/quant-backtest-worker/managed-paths.json.XXXXXX',
+      '/tmp/quant-worker-docker-key.XXXXXX',
+      '/tmp/quant-worker-docker-source.XXXXXX',
+      '/tmp/quant-worker-bootstrap.XXXXXX',
+      '/tmp/quant-worker-deploy.XXXXXX',
+      '/tmp/quant-worker-rollback.XXXXXX',
+    ]));
+    expect(manifest.legacyPathPatterns).toEqual(['/etc/quant-platform/worker.env.*.bak']);
+    expect(manifest.hostDependencies.paths).toEqual(expect.arrayContaining([
+      '/etc/apt/keyrings',
+      '/etc/apt/keyrings/docker.asc',
+      '/etc/apt/sources.list.d/docker.sources',
+    ]));
+    expect(manifest.hostDependencies.packages).toContain('docker-compose-plugin');
+    expect(manifest.hostDependencies.cleanupPolicy).toBe('retain-shared');
   });
 });

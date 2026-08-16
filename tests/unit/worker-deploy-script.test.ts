@@ -51,6 +51,9 @@ describe('Docker worker deployment', () => {
     expect(deploy).toContain('remote-backtest-supervisor.js --check');
     expect(deploy).toContain('rollback()');
     expect(deploy).toContain('compose up -d --no-build --force-recreate worker');
+    expect(deploy).toContain('/opt/quant-backtest-worker/managed-paths.json');
+    expect(deploy).toContain('ACTUAL_MANIFEST_SHA');
+    expect(deploy).toContain('bootstrap-worker.sh를 다시 실행하세요');
     expect(deploy).not.toContain('systemctl');
   });
 

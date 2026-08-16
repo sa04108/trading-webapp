@@ -82,6 +82,7 @@ trap cleanup_remote EXIT
 echo "==> Worker provision 파일 업로드"
 scp "${REMOTE_SSH_OPTS[@]}" \
   "${REPO_ROOT}/infra/provision-worker.sh" \
+  "${REPO_ROOT}/infra/worker-host-manifest.json" \
   "${REPO_ROOT}/infra/docker/compose.worker.yaml" \
   "${REMOTE_TARGET}:${REMOTE_DIR}/"
 scp "${REMOTE_SSH_OPTS[@]}" "${ENV_FILE}" "${REMOTE_TARGET}:${REMOTE_DIR}/worker.env.upload"
@@ -97,6 +98,7 @@ sudo docker version >/dev/null
 sudo docker compose version >/dev/null
 [ "$(sudo stat -c '%U:%G %a' /etc/quant-platform/worker.env)" = 'root:root 600' ]
 [ "$(sudo stat -c '%u:%g %a' /var/lib/quant-backtest-worker)" = '10001:10001 700' ]
+[ "$(sudo stat -c '%U:%G %a' /opt/quant-backtest-worker/managed-paths.json)" = 'root:root 644' ]
 sudo test -f /opt/quant-backtest-worker/compose.yaml
 EOF
 

@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "component": "quant-backtest-worker-host",
+  "manifestPath": "/opt/quant-backtest-worker/managed-paths.json",
+  "managedPaths": [
+    {
+      "path": "/opt/quant-backtest-worker/compose.yaml",
+      "type": "file",
+      "purpose": "compose-definition",
+      "cleanupPolicy": "remove"
+    },
+    {
+      "path": "/opt/quant-backtest-worker/compose.env",
+      "type": "file",
+      "purpose": "active-image-reference",
+      "cleanupPolicy": "remove"
+    },
+    {
+      "path": "/etc/quant-platform/worker.env",
+      "type": "file",
+      "purpose": "secret-configuration",
+      "cleanupPolicy": "purge-config"
+    },
+    {
+      "path": "/etc/quant-platform/worker.env.bak",
+      "type": "file",
+      "purpose": "previous-secret-configuration",
+      "cleanupPolicy": "purge-config"
+    },
+    {
+      "path": "/var/lib/quant-backtest-worker",
+      "type": "directory",
+      "purpose": "worker-job-data",
+      "cleanupPolicy": "confirm-purge-data"
+    },
+    {
+      "path": "/etc/quant-platform",
+      "type": "directory",
+      "purpose": "shared-configuration-parent",
+      "cleanupPolicy": "retain-shared"
+    },
+    {
+      "path": "/opt/quant-backtest-worker/managed-paths.json",
+      "type": "file",
+      "purpose": "installation-manifest",
+      "cleanupPolicy": "remove-last"
+    },
+    {
+      "path": "/opt/quant-backtest-worker",
+      "type": "directory",
+      "purpose": "compose-project",
+      "cleanupPolicy": "remove-last"
+    }
+  ],
+  "transientPathPatterns": [
+    "/etc/quant-platform/worker.env.XXXXXX",
+    "/etc/quant-platform/worker.env.bak.XXXXXX",
+    "/opt/quant-backtest-worker/compose.env.XXXXXX",
+    "/opt/quant-backtest-worker/managed-paths.json.XXXXXX",
+    "/tmp/quant-worker-docker-key.XXXXXX",
+    "/tmp/quant-worker-docker-source.XXXXXX",
+    "/tmp/quant-worker-bootstrap.XXXXXX",
+    "/tmp/quant-worker-deploy.XXXXXX",
+    "/tmp/quant-worker-rollback.XXXXXX"
+  ],
+  "legacyPathPatterns": [
+    "/etc/quant-platform/worker.env.*.bak"
+  ],
+  "hostDependencies": {
+    "ownership": "shared-host-dependency",
+    "paths": [
+      "/etc/apt/keyrings",
+      "/etc/apt/keyrings/docker.asc",
+      "/etc/apt/sources.list.d/docker.sources"
+    ],
+    "packages": [
+      "ca-certificates",
+      "curl",
+      "gnupg",
+      "docker-ce",
+      "docker-ce-cli",
+      "containerd.io",
+      "docker-buildx-plugin",
+      "docker-compose-plugin"
+    ],
+    "services": [
+      "docker.service"
+    ],
+    "cleanupPolicy": "retain-shared"
+  }
+}
