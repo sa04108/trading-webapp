@@ -1,7 +1,6 @@
 import { fork, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream, promises as fs } from 'node:fs';
-import type { FileHandle } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
@@ -11,6 +10,7 @@ import { pino } from 'pino';
 import { z } from 'zod';
 import { readGitCommitSha } from '../server/shared/build-info.js';
 import type { BacktestExecutionTelemetry } from '../server/modules/backtest/application/backtest-execution-telemetry.js';
+import { REMOTE_WORKER_PROTOCOL_VERSION } from '../server/modules/backtest/application/remote-worker-protocol.js';
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('production'),
@@ -64,10 +64,14 @@ const resultResponseSchema = z.object({
   status: z.enum(['ACCEPTED', 'IDEMPOTENT']),
 });
 const finishResponseSchema = z.object({ status: z.literal('ACCEPTED') });
+const probeResponseSchema = z.object({
+  status: z.enum(['READY', 'STANDBY']),
+  runnerVersion: z.string(),
+  protocolVersion: z.number().int().positive(),
+});
 const WORK_ROOT_MARKER = '.quant-backtest-worker-root';
 const WORK_ROOT_MARKER_CONTENT = 'quant-platform remote backtest worker\n';
 const WORK_ROOT_LOCK = '.supervisor.lock';
-const INCOMPLETE_LOCK_STALE_MS = 30_000;
 
 type ChildMessage =
   | { readonly type: 'progress'; readonly processedBars: number; readonly totalBars: number; readonly progressLabel: string | null }
@@ -127,7 +131,6 @@ class RemoteBacktestSupervisor {
   private readonly stopController = new AbortController();
   private readonly activeChildren = new Set<ChildProcess>();
   private readonly requestControllers = new Set<AbortController>();
-  private workRootLock: FileHandle | null = null;
 
   constructor(private readonly config: SupervisorConfig) {
     this.runnerVersion = readGitCommitSha(config.nodeEnv);
@@ -145,19 +148,15 @@ class RemoteBacktestSupervisor {
       throw new Error('remote worker 실행에는 dist/build-info.json의 Git SHA가 필요합니다');
     }
     await this.prepareWorkRoot();
-    try {
-      this.logger.info({
-        event: 'remote-worker.started',
-        workerId: this.config.workerId,
-        concurrency: this.config.concurrency,
-        runnerVersion: this.runnerVersion,
-      }, 'remote backtest worker started');
-      await Promise.all(
-        Array.from({ length: this.config.concurrency }, (_, slot) => this.slotLoop(slot + 1)),
-      );
-    } finally {
-      await this.releaseWorkRootLock();
-    }
+    this.logger.info({
+      event: 'remote-worker.started',
+      workerId: this.config.workerId,
+      concurrency: this.config.concurrency,
+      runnerVersion: this.runnerVersion,
+    }, 'remote backtest worker started');
+    await Promise.all(
+      Array.from({ length: this.config.concurrency }, (_, slot) => this.slotLoop(slot + 1)),
+    );
   }
 
   stop(signal: string): void {
@@ -552,7 +551,7 @@ class RemoteBacktestSupervisor {
       // 기존 릴리스가 만든 work root에는 marker가 없고 jobs 디렉터리만 있을 수 있다.
       // 그 외 파일이 있으면 잘못 지정한 일반 디렉터리일 수 있으므로 재귀 삭제 전에 멈춘다.
       const entries = await fs.readdir(this.config.workRoot);
-      const unexpected = entries.filter((entry) => entry !== 'jobs');
+      const unexpected = entries.filter((entry) => entry !== 'jobs' && entry !== WORK_ROOT_LOCK);
       if (unexpected.length > 0) {
         throw new Error(
           `BACKTEST_WORK_ROOT에 worker 소유가 아닌 항목이 있습니다: ${unexpected.join(', ')}`,
@@ -565,68 +564,54 @@ class RemoteBacktestSupervisor {
       throw new Error(`BACKTEST_WORK_ROOT marker가 올바르지 않습니다: ${markerPath}`);
     }
 
+    // Docker entrypoint가 이 경로의 advisory flock을 보유한 상태에서만 production
+    // supervisor를 시작한다. PID namespace를 넘지 못하는 PID 파일 잠금은 사용하지 않는다.
     // Supervisor는 중단된 attempt를 로컬에서 재개하지 않는다. 전원 장애·SIGKILL 뒤 남은
     // 입력 DB와 결과 DB를 보존하면 민감한 입력과 디스크 사용량이 무기한 쌓이므로 시작할
     // 때 모두 지운다. marker로 소유권을 확인한 뒤에만 재귀 삭제한다.
-    await this.acquireWorkRootLock();
     await fs.rm(path.join(this.config.workRoot, 'jobs'), { recursive: true, force: true });
     await fs.mkdir(path.join(this.config.workRoot, 'jobs'), { recursive: true, mode: 0o700 });
   }
+}
 
-  private async acquireWorkRootLock(): Promise<void> {
-    const lockPath = path.join(this.config.workRoot, WORK_ROOT_LOCK);
-    try {
-      this.workRootLock = await fs.open(lockPath, 'wx', 0o600);
-      await this.workRootLock.writeFile(`${process.pid}\n`);
-      return;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-    }
-
-    let ownerPid: number | null = null;
-    try {
-      const raw = (await fs.readFile(lockPath, 'utf8')).trim();
-      const parsed = Number(raw);
-      if (Number.isSafeInteger(parsed) && parsed > 0) ownerPid = parsed;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
-    if (ownerPid !== null && this.isProcessAlive(ownerPid)) {
-      throw new Error(`같은 BACKTEST_WORK_ROOT를 쓰는 supervisor가 이미 실행 중입니다 (pid=${ownerPid})`);
-    }
-    if (ownerPid === null) {
-      const stat = await fs.stat(lockPath).catch(() => null);
-      if (stat !== null && Date.now() - stat.mtimeMs < INCOMPLETE_LOCK_STALE_MS) {
-        throw new Error('BACKTEST_WORK_ROOT lock이 생성 중이거나 손상되었습니다');
-      }
-    }
-    await fs.rm(lockPath, { force: true });
-    this.workRootLock = await fs.open(lockPath, 'wx', 0o600);
-    await this.workRootLock.writeFile(`${process.pid}\n`);
+async function checkCompatibility(config: SupervisorConfig): Promise<'READY' | 'STANDBY'> {
+  const runnerVersion = readGitCommitSha(config.nodeEnv);
+  if (config.nodeEnv === 'production' && runnerVersion === 'unknown') {
+    throw new Error('remote worker 검사에는 dist/build-info.json의 Git SHA가 필요합니다');
   }
-
-  private async releaseWorkRootLock(): Promise<void> {
-    const lock = this.workRootLock;
-    this.workRootLock = null;
-    if (lock === null) return;
-    await lock.close();
-    const lockPath = path.join(this.config.workRoot, WORK_ROOT_LOCK);
-    const owner = await fs.readFile(lockPath, 'utf8').catch(() => '');
-    if (owner.trim() === String(process.pid)) await fs.rm(lockPath, { force: true });
+  const response = await fetch(new URL('/api/internal/workers/probe', config.serverUrl), {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${config.workerToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      workerId: config.workerId,
+      runnerVersion,
+      protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
+    }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`worker 호환성 검사 실패: HTTP ${response.status} ${detail.slice(0, 500)}`);
   }
-
-  private isProcessAlive(pid: number): boolean {
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch (error) {
-      return (error as NodeJS.ErrnoException).code !== 'ESRCH';
-    }
-  }
+  const body = probeResponseSchema.parse(await response.json());
+  if (
+    body.runnerVersion !== runnerVersion
+    || body.protocolVersion !== REMOTE_WORKER_PROTOCOL_VERSION
+  ) throw new Error('worker 호환성 검사 응답이 요청한 release/protocol과 일치하지 않습니다');
+  return body.status;
 }
 
 async function main(): Promise<void> {
-  const supervisor = new RemoteBacktestSupervisor(loadSupervisorConfig());
+  const config = loadSupervisorConfig();
+  if (process.argv.slice(2).includes('--check')) {
+    const status = await checkCompatibility(config);
+    process.stdout.write(`${status}\n`);
+    return;
+  }
+  const supervisor = new RemoteBacktestSupervisor(config);
   process.on('SIGINT', () => supervisor.stop('SIGINT'));
   process.on('SIGTERM', () => supervisor.stop('SIGTERM'));
   await supervisor.run();

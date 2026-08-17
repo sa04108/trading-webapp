@@ -117,13 +117,17 @@ export async function buildServer(container: Container): Promise<FastifyInstance
     { prefix: '/api/v1' },
   );
 
-  if (config.backtestExecutionMode === 'remote' && config.backtestWorkerToken !== null) {
+  // local 모드에서도 token을 미리 설정하면 Worker 배포 probe가 STANDBY를 반환한다.
+  // 실제 job API는 registerRemoteWorkerRoutes가 remote 모드에서만 등록한다.
+  if (config.backtestWorkerToken !== null) {
     await app.register(
       async (workerApi) => registerRemoteWorkerRoutes(workerApi, {
         service: container.remoteWorkerService,
         inputBundles: container.remoteInputBundleManager,
         resultUploads: container.remoteResultUploadManager,
         workerToken: config.backtestWorkerToken!,
+        executionMode: config.backtestExecutionMode,
+        expectedRunnerVersion: container.gitCommitSha,
       }),
       { prefix: '/api/internal/workers' },
     );

@@ -62,13 +62,17 @@ sweep 금지.
 
 기본값은 그대로 `BACKTEST_EXECUTION_MODE=local`, `MAX_CONCURRENT_BACKTESTS=1`이다.
 Lightsail에서 계산을 빼려면 서버를 `remote`로 바꾸고, 같은 릴리스 아티팩트를 별도 PC에
-배포해 `quant-backtest-worker.service`를 실행한다. Worker는 인바운드 포트를 열지 않고
+서 Docker Compose Worker image로 실행한다. Worker는 인바운드 포트를 열지 않고
 서버 HTTPS로 작업을 long-poll한 뒤, job 전용 SQLite 입력을 받아 계산하고 결과 SQLite를
 streaming 업로드한다. 서버와 worker의 Git SHA가 다르면 claim 자체가 거부된다.
 
-설정 예시는 `infra/app.env.example`, `infra/worker.env.example`, 서비스 unit은
-`infra/systemd/quant-backtest-worker.service`에 있다. 개발 PC에서는 worker env를 넣고
-`pnpm worker:remote`로 실행할 수 있다. 실제 원격 동시 실행 수는 worker별
+설정 예시는 `infra/app.env.example`, `infra/worker.env.example`에 있다. Worker 호스트는
+`scripts/bootstrap-worker.sh`로 Docker와 전용 경로만 준비하고 `scripts/deploy-worker.sh`로
+checksum 검증, container 전환, 인증·SHA·protocol probe와 실패 rollback까지 수행한다.
+호스트에 생성하는 경로와 보존 정책은
+`/opt/quant-backtest-worker/managed-paths.json` manifest로 추적한다.
+애플리케이션 systemd unit이나 fallback은 없다. 개발 PC에서는 worker env를 넣고
+`pnpm worker:remote`로 직접 실행할 수 있다. 실제 원격 동시 실행 수는 worker별
 `BACKTEST_WORKER_CONCURRENCY`로 조절하며 여러 worker PC도 같은 큐를 공유할 수 있다.
 처음에는 1로 시작하고 `backtest:telemetry-report`의 메모리·시간 표본을 근거로 올린다.
 remote 모드에서는 서버의 `MAX_CONCURRENT_BACKTESTS`는 사용되지 않는다.

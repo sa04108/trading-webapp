@@ -1,0 +1,1 @@
+export const REMOTE_WORKER_PROTOCOL_VERSION = 1;

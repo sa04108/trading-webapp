@@ -24,6 +24,10 @@
 # 비밀값을 command line argument 로 넘기지 않는다.
 set -euo pipefail
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/build-release.sh
+source "${REPO_ROOT}/scripts/build-release.sh"
+
 # 기본 창은 60회 × 2초 = 2분이다. 옛 값(10회 = 18초)은 부팅이 마이그레이션까지
 # 떠안던 시절에도 빠듯했고, 2026-08-09 배포가 그 창을 2초 차이로 넘겨 롤백됐다.
 # 지금은 마이그레이션이 기동 전으로 빠져 부팅이 다시 짧지만, 창을 넓게 두는 값은
@@ -109,19 +113,9 @@ handle_deploy_failure() {
   return 1
 }
 
-require_clean_worktree() {
-  if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
-    echo "작업 트리가 깨끗하지 않아 릴리스를 만들 수 없습니다. 변경을 커밋하거나 제거하세요." >&2
-    git status --short >&2
-    return 1
-  fi
-}
-
 if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
   return 0
 fi
-
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # 주소를 먼저 받는다 — 아래 검증 게이트가 몇 분 걸리므로 그 뒤에 묻지 않는다.
 # 아래 로그 리다이렉트보다 앞에 두는 이유는 bootstrap.sh 와 같다: tee 를 거치면
@@ -163,7 +157,7 @@ TEE_PID=$!
 # check 어디서 죽어도 걸린다.
 on_exit() {
   status=$?
-  if [ -n "${ARCHIVE:-}" ]; then rm -f "${ARCHIVE}"; fi
+  if [ -n "${ARTIFACT_DIR:-}" ]; then rm -rf "${ARTIFACT_DIR}"; fi
   if [ "${status}" -ne 0 ]; then
     echo
     echo "실패 (exit ${status}). 로그: ${LOG}"
@@ -176,11 +170,6 @@ on_exit() {
 trap on_exit EXIT
 
 echo "로그: ${LOG}"
-
-# build-info의 Git SHA가 실제 바이트를 식별하려면 tracked 수정뿐 아니라 untracked 소스도
-# 없어야 한다. dirty tree에서 만든 server와 별도 PC에서 같은 commit을 빌드한 worker는
-# SHA가 같아도 코드가 달라질 수 있으므로 배포 전에 닫는다.
-require_clean_worktree
 
 # ── 접속 옵션을 환경변수에서 만든다 (bootstrap.sh 와 같은 규칙) ───────────────
 # 포트와 점프 호스트를 -p / -J 가 아니라 -o 로 넘기는 이유: 같은 배열을 ssh 와 scp 에
@@ -244,30 +233,35 @@ if ! SSH_ERR="$(ssh "${SSH_OPTS[@]}" -o ConnectTimeout=15 -o BatchMode=yes "${TA
   exit 1
 fi
 
-RELEASE="$(date -u +%Y%m%d-%H%M%S)-$(git rev-parse --short HEAD)"
-GIT_SHA="$(git rev-parse HEAD)"
-# 배포가 어디서 실패하든 (검증 게이트, 업로드, health check 롤백) 아카이브는 남기지 않는다.
-# 정리는 맨 위의 on_exit 가 맡는다 — 여기서 trap 을 다시 걸면 on_exit 를 덮어써
-# 실패 시 멈춤이 사라진다.
-ARCHIVE="quant-platform-${RELEASE}.tar.gz"
-
-echo "==> 검증 게이트"
-pnpm install --frozen-lockfile
-pnpm lint
-pnpm typecheck
-pnpm test
-pnpm build
-# install/build script가 tracked 또는 새 소스 파일을 만들었어도 같은 SHA로 포장하지 않는다.
-require_clean_worktree
-
-# 릴리스 SHA 를 산출물에 포함 — 런타임(서버·백테스트 워커)이 읽어 §9.5 메타데이터에 기록한다
-printf '{"gitSha":"%s","builtAt":"%s"}\n' "${GIT_SHA}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > dist/build-info.json
-
-echo "==> 아티팩트 생성: ${ARCHIVE}"
-tar -czf "${ARCHIVE}" dist migrations package.json pnpm-lock.yaml pnpm-workspace.yaml
+ARTIFACT_DIR=""
+if [ -n "${QP_RELEASE_ARCHIVE:-}" ] || [ -n "${QP_RELEASE_CHECKSUM:-}" ]; then
+  [ -n "${QP_RELEASE_ARCHIVE:-}" ] && [ -n "${QP_RELEASE_CHECKSUM:-}" ] || {
+    echo "QP_RELEASE_ARCHIVE와 QP_RELEASE_CHECKSUM은 함께 지정해야 합니다" >&2
+    exit 1
+  }
+  ARCHIVE="$(cd "$(dirname "${QP_RELEASE_ARCHIVE}")" && pwd)/$(basename "${QP_RELEASE_ARCHIVE}")"
+  CHECKSUM="$(cd "$(dirname "${QP_RELEASE_CHECKSUM}")" && pwd)/$(basename "${QP_RELEASE_CHECKSUM}")"
+  verify_release_checksum "${ARCHIVE}" "${CHECKSUM}"
+  read_release_metadata "${ARCHIVE}"
+  archive_name="$(basename "${ARCHIVE}")"
+  case "${archive_name}" in
+    quant-platform-*.tar.gz) RELEASE="${archive_name#quant-platform-}"; RELEASE="${RELEASE%.tar.gz}" ;;
+    *) echo "release archive 이름은 quant-platform-<release>.tar.gz 형식이어야 합니다" >&2; exit 1 ;;
+  esac
+else
+  ARTIFACT_DIR="$(mktemp -d)"
+  build_release "${ARTIFACT_DIR}"
+  ARCHIVE="${RELEASE_ARCHIVE}"
+  CHECKSUM="${RELEASE_CHECKSUM}"
+  RELEASE="${RELEASE_NAME}"
+fi
+case "${RELEASE}" in ''|*[!a-zA-Z0-9._-]*) echo "release 이름이 올바르지 않습니다: ${RELEASE}" >&2; exit 1 ;; esac
 
 echo "==> 업로드 및 릴리스 전환"
-scp "${SSH_OPTS[@]}" "${ARCHIVE}" "${TARGET}:/tmp/"
+REMOTE_ARCHIVE="quant-platform-${RELEASE}.tar.gz"
+REMOTE_CHECKSUM="${REMOTE_ARCHIVE}.sha256"
+scp "${SSH_OPTS[@]}" "${ARCHIVE}" "${TARGET}:/tmp/${REMOTE_ARCHIVE}"
+scp "${SSH_OPTS[@]}" "${CHECKSUM}" "${TARGET}:/tmp/${REMOTE_CHECKSUM}"
 REMOTE_SERVICE_HELPERS="$(
   declare -f wait_for_ready
   declare -f print_service_diagnostics
@@ -276,11 +270,17 @@ REMOTE_SERVICE_HELPERS="$(
 )"
 ssh "${SSH_OPTS[@]}" "${TARGET}" bash -s <<EOF
 set -euo pipefail
+trap 'rm -f "/tmp/${REMOTE_ARCHIVE}" "/tmp/${REMOTE_CHECKSUM}"' EXIT
 ${REMOTE_SERVICE_HELPERS}
+EXPECTED_SHA="\$(awk 'NR == 1 { print \$1 }' "/tmp/${REMOTE_CHECKSUM}")"
+case "\${EXPECTED_SHA}" in ''|*[!a-f0-9]*) echo 'release checksum 형식 오류' >&2; exit 1 ;; esac
+[ "\${#EXPECTED_SHA}" -eq 64 ] || { echo 'release checksum 길이 오류' >&2; exit 1; }
+ACTUAL_SHA="\$(sha256sum "/tmp/${REMOTE_ARCHIVE}" | awk '{ print \$1 }')"
+[ "\${ACTUAL_SHA}" = "\${EXPECTED_SHA}" ] || { echo 'release archive checksum 불일치' >&2; exit 1; }
 sudo mkdir -p "/opt/quant-platform/releases/${RELEASE}"
-sudo tar -xzf "/tmp/${ARCHIVE}" -C "/opt/quant-platform/releases/${RELEASE}"
+sudo tar -xzf "/tmp/${REMOTE_ARCHIVE}" -C "/opt/quant-platform/releases/${RELEASE}"
 # 업로드본은 풀고 나면 쓸모없다 — 40GB 디스크에 배포마다 쌓이지 않게 즉시 지운다
-rm -f "/tmp/${ARCHIVE}"
+rm -f "/tmp/${REMOTE_ARCHIVE}" "/tmp/${REMOTE_CHECKSUM}"
 cd "/opt/quant-platform/releases/${RELEASE}"
 sudo corepack pnpm install --prod --frozen-lockfile
 
