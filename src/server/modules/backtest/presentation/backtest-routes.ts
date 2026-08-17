@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { EventEmitter } from 'node:events';
 import os from 'node:os';
 import fs from 'node:fs';
 import type { FastifyBaseLogger, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -64,6 +65,8 @@ type PreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void
 export interface BacktestRouteDeps {
   readonly queue: JobQueue;
   readonly orchestrator: JobOrchestrator;
+  /** local child와 remote worker가 발행하는 모든 job 상태/진행 이벤트. */
+  readonly jobEvents: readonly EventEmitter[];
   readonly results: ResultsService;
   readonly strategies: StrategyRegistry;
   readonly symbolService: SymbolService;
@@ -265,6 +268,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
   const {
     queue,
     orchestrator,
+    jobEvents,
     results,
     strategies,
     symbolService,
@@ -1280,14 +1284,14 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
 
     const cleanup = (): void => {
       clearInterval(heartbeat);
-      orchestrator.events.off('job', listener);
+      for (const source of jobEvents) source.off('job', listener);
       reply.raw.end();
     };
 
-    orchestrator.events.on('job', listener);
+    for (const source of jobEvents) source.on('job', listener);
     request.raw.on('close', () => {
       clearInterval(heartbeat);
-      orchestrator.events.off('job', listener);
+      for (const source of jobEvents) source.off('job', listener);
     });
   });
 }

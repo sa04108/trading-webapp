@@ -4,10 +4,11 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import { createHash } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { get as httpGet, type IncomingMessage } from 'node:http';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { backtestJobs, symbols } from '../../src/server/shared/db/schema.js';
 import { eq } from 'drizzle-orm';
-import { createTestApp, type TestApp } from '../helpers/test-app.js';
+import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
 import type { BacktestResultArtifact } from '../../src/server/modules/backtest/application/backtest-result-artifact.js';
 import type { BacktestResultWriteContext } from '../../src/server/modules/backtest/application/backtest-result-artifact.js';
 import { SqliteBacktestResultArtifactWriter } from '../../src/server/modules/backtest/infrastructure/sqlite-backtest-result-artifact-writer.js';
@@ -54,6 +55,20 @@ async function stopProcess(child: ChildProcess): Promise<void> {
       timer.unref();
     }),
   ]);
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 function request(): BacktestRequest {
@@ -585,6 +600,61 @@ describe('remote backtest worker lease API', () => {
     expect(ctx.container.database.sqlite.prepare(
       'SELECT count(*) AS count FROM backtest_runs WHERE job_id = ?',
     ).get(job.id)).toEqual({ count: 1 });
+  });
+
+  it('streams remote completion to an already connected backtest SSE client', async () => {
+    const job = enqueue();
+    const lease = (await claim()).json() as { attempt: number; leaseToken: string };
+    const artifactPath = path.join(ctx.dir, 'sse-result.sqlite');
+    writeResultArtifact(job, artifactPath);
+    const payload = fs.readFileSync(artifactPath);
+    const checksum = createHash('sha256').update(payload).digest('hex');
+    const credentials = await createTestAdmin(ctx.container);
+    const login = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: credentials,
+    });
+    const cookie = login.cookies.find((item) => item.name === 'qp_session')!.value;
+    const address = await ctx.app.listen({ host: '127.0.0.1', port: 0 });
+    const response = await new Promise<IncomingMessage>((resolve, reject) => {
+      const request = httpGet(`${address}/api/v1/backtests/${job.id}/events`, {
+        headers: { cookie: `qp_session=${cookie}` },
+      }, resolve);
+      request.once('error', reject);
+    });
+    let resolveInitial!: () => void;
+    const initialSnapshot = new Promise<void>((resolve) => { resolveInitial = resolve; });
+    let streamBody = '';
+    const streamEnded = (async () => {
+      for await (const chunk of response) {
+        streamBody += String(chunk);
+        if (streamBody.includes('"status":"STARTING"')) resolveInitial();
+      }
+    })();
+
+    try {
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['content-type']).toContain('text/event-stream');
+      await withTimeout(initialSnapshot, 2_000, 'SSE initial snapshot timeout');
+
+      const completed = await ctx.app.inject({
+        method: 'PUT',
+        url: `/api/internal/workers/jobs/${job.id}/result?attempt=${lease.attempt}`,
+        headers: {
+          authorization: `Bearer ${WORKER_TOKEN}`,
+          'content-type': 'application/vnd.quant-platform.backtest-result+sqlite',
+          'x-lease-token': lease.leaseToken,
+          'x-content-sha256': checksum,
+        },
+        payload,
+      });
+      expect(completed.statusCode).toBe(200);
+      await withTimeout(streamEnded, 5_000, 'remote completion SSE timeout');
+      expect(streamBody).toContain('"status":"COMPLETED"');
+    } finally {
+      response.destroy();
+    }
   });
 
   it('rejects a malformed artifact without partially importing result rows', async () => {
