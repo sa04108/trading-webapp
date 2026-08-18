@@ -62,6 +62,15 @@ interface DartFilingRow {
   readonly rcept_dt?: string;
 }
 
+function issuanceKey(row: DartIssuanceRow): string {
+  return [
+    row.isu_dcrs_de,
+    row.isu_dcrs_stle,
+    row.isu_dcrs_stock_knd ?? '',
+    row.isu_dcrs_qy,
+  ].join('|');
+}
+
 /** 공시검색 봉투 — 목록 API 만 페이지 정보를 함께 준다 */
 interface DartListEnvelope {
   readonly status: string;
@@ -331,6 +340,7 @@ export function createDartFactSource(
 
       /** 'YYYY-MM-DD' → 그 시점의 발행주식수. DART 표가 명시한 기준일을 쓴다. */
       const sharesByPeriod: Array<{ dateKey: string; shares: number }> = [];
+      const filedReports = new Set<string>();
 
       // 앵커 때문에 shareYears 를 돈다 — 대상 연도만 읽으면 그 연도 연초 이벤트의
       // 직전 발행주식수가 없어 비율이 gap 이 되고, 불연속 구간의 앵커가 빠지면 구멍
@@ -338,6 +348,7 @@ export function createDartFactSource(
       for (const year of request.shareYears) {
         for (const reportCode of filableReports(year)) {
           const shareRows = await fetchShareRows(corpCode, year, reportCode);
+          if (shareRows.length > 0) filedReports.add(`${year}:${reportCode}`);
           const common = findCommonShareRow(shareRows);
           if (!common) continue;
           const shares = readShareAmount(common);
@@ -355,10 +366,11 @@ export function createDartFactSource(
       }
       sharesByPeriod.sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1));
 
-      // irdsSttus도 분기·반기보고서마다 누적 이력을 준다. 보고서가 제출된 즉시 당해
-      // 연도 이벤트를 잡고, 같은 이벤트는 최초로 포함된 보고서의 접수번호를 남긴다.
-      const issuanceByKey = new Map<string, DartIssuanceRow>();
-      for (const year of request.years) {
+      // irdsSttus는 누적 스냅샷이다. 최신 제출 보고서가 이전 행을 정정·삭제할 수 있으므로
+      // 행을 합치지 않고 전체 집합을 교체한다. 그대로 남은 이벤트만 최초 접수번호를 쓴다.
+      const firstReceiptByKey = new Map<string, string>();
+      let latestIssuanceRows: readonly DartIssuanceRow[] = [];
+      for (const year of [...new Set(request.years)].sort((a, b) => a - b)) {
         for (const reportCode of filableReports(year)) {
           const rows = await call<DartIssuanceRow>('/api/irdsSttus.json', {
             corp_code: corpCode,
@@ -366,18 +378,23 @@ export function createDartFactSource(
             reprt_code: reportCode,
           });
           for (const row of rows) {
-            const key = [
-              row.isu_dcrs_de,
-              row.isu_dcrs_stle,
-              row.isu_dcrs_stock_knd ?? '',
-              row.isu_dcrs_qy,
-            ].join('|');
-            const existing = issuanceByKey.get(key);
-            if (!existing || row.rcept_no < existing.rcept_no) issuanceByKey.set(key, row);
+            const key = issuanceKey(row);
+            const firstReceipt = firstReceiptByKey.get(key);
+            if (firstReceipt === undefined || row.rcept_no < firstReceipt) {
+              firstReceiptByKey.set(key, row.rcept_no);
+            }
+          }
+          // 013(아직 미제출)은 빈 배열이지만, 같은 보고서의 주식총수가 있으면 실제로
+          // 제출된 빈 자본변동 스냅샷이므로 이전 집합을 비운다.
+          if (rows.length > 0 || filedReports.has(`${year}:${reportCode}`)) {
+            latestIssuanceRows = rows;
           }
         }
       }
-      const issuanceRows = [...issuanceByKey.values()];
+      const issuanceRows = latestIssuanceRows.map((row) => ({
+        ...row,
+        rcept_no: firstReceiptByKey.get(issuanceKey(row)) ?? row.rcept_no,
+      }));
       const issuedShareChanges = issuanceRows
         .map(issuedShareChange)
         .filter((change): change is NonNullable<typeof change> => change !== null)

@@ -853,7 +853,7 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
     expect(actions[0]?.asOfTsMs).toBe(receiptDateToAsOfTsMs('20200620000001'));
   });
 
-  it('같은 기준일의 공시가 비율에 합의하지 않으면 gap 이고 중복 팩트가 남지 않는다', async () => {
+  it('최신 누적 스냅샷의 정정값을 쓰고 이전 값은 버린다', async () => {
     const fetchImpl = (async (url: string) => {
       const target = String(url);
       if (target.includes('stockTotqySttus') && target.includes('reprt_code=11013') && target.includes('bsns_year=2020')) {
@@ -904,10 +904,10 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
 
     const actions = result.facts.filter((fact) => fact.field === 'SPLIT_RATIO');
     expect(actions).toHaveLength(1);
-    expect(actions[0]?.value).toBe(2); // 먼저 들어온 값이 남는다 — 나중 값으로 덮어쓰지 않는다
+    expect(actions[0]?.value).toBe(3);
     expect(
       result.gaps.some((gap) => gap.reason.includes('자본변동 비율이 공시마다 다릅니다')),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it('공시 접수일이 아니라 분기 기준일로 감자 직전 주식수를 고른다', async () => {
@@ -982,7 +982,7 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
     expect(result.gaps.some((gap) => gap.reason.includes('비율이 유효하지 않습니다'))).toBe(false);
   });
 
-  it('같은 분기의 유상 발행·전환권 행사를 재생해 뒤따르는 감자 분모를 만든다', async () => {
+  it('최신 누적 스냅샷만 재생하고 남은 이벤트의 최초 접수일은 보존한다', async () => {
     const fetchImpl = (async (url: string) => {
       const target = String(url);
       if (target.includes('stockTotqySttus') && target.includes('reprt_code=11013')) {
@@ -997,38 +997,77 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
           }],
         });
       }
-      if (target.includes('irdsSttus') && target.includes('reprt_code=11012')) {
+      if (target.includes('stockTotqySttus') && target.includes('reprt_code=11014')) {
+        return jsonResponse({
+          status: '000',
+          message: '정상',
+          list: [{
+            rcept_no: '20251114000001',
+            se: '보통주',
+            istc_totqy: '650,000',
+            stlm_dt: '2025-09-30',
+          }],
+        });
+      }
+      if (target.includes('stockTotqySttus') && target.includes('reprt_code=11011')) {
+        return jsonResponse({
+          status: '000',
+          message: '정상',
+          list: [{
+            rcept_no: '20260331000001',
+            se: '보통주',
+            istc_totqy: '650,000',
+            stlm_dt: '2025-12-31',
+          }],
+        });
+      }
+      if (target.includes('irdsSttus') && target.includes('reprt_code=11014')) {
         return jsonResponse({
           status: '000',
           message: '정상',
           list: [
             {
-              isu_dcrs_de: '2025-04-15',
+              isu_dcrs_de: '2025-07-15',
               isu_dcrs_stle: '유상증자(제3자배정)',
               isu_dcrs_stock_knd: '보통주',
-              isu_dcrs_qy: '200,000',
-              rcept_no: '20250813000001',
+              isu_dcrs_qy: '100,000',
+              rcept_no: '20251114000001',
             },
             {
-              isu_dcrs_de: '2025-05-02',
+              isu_dcrs_de: '2025-07-20',
+              isu_dcrs_stle: '전환권행사',
+              isu_dcrs_stock_knd: '보통주',
+              isu_dcrs_qy: '200,000',
+              rcept_no: '20251114000001',
+            },
+            {
+              isu_dcrs_de: '2025-09-01',
+              isu_dcrs_stle: '무상감자',
+              isu_dcrs_stock_knd: '보통주',
+              isu_dcrs_qy: '650,000',
+              rcept_no: '20251114000001',
+            },
+          ],
+        });
+      }
+      if (target.includes('irdsSttus') && target.includes('reprt_code=11011')) {
+        return jsonResponse({
+          status: '000',
+          message: '정상',
+          list: [
+            {
+              isu_dcrs_de: '2025-07-20',
               isu_dcrs_stle: '전환권행사',
               isu_dcrs_stock_knd: '보통주',
               isu_dcrs_qy: '300,000',
-              rcept_no: '20250813000001',
+              rcept_no: '20260331000001',
             },
             {
-              isu_dcrs_de: '2025-05-15',
-              isu_dcrs_stle: '유상증자(제3자배정)',
-              isu_dcrs_stock_knd: '우선주',
-              isu_dcrs_qy: '100,000',
-              rcept_no: '20250813000001',
-            },
-            {
-              isu_dcrs_de: '2025-06-15',
+              isu_dcrs_de: '2025-09-01',
               isu_dcrs_stle: '무상감자',
               isu_dcrs_stock_knd: '보통주',
-              isu_dcrs_qy: '750,000',
-              rcept_no: '20250813000001',
+              isu_dcrs_qy: '650,000',
+              rcept_no: '20260331000001',
             },
           ],
         });
@@ -1051,6 +1090,7 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
     const actions = result.facts.filter((fact) => fact.field === 'SPLIT_RATIO');
     expect(actions).toHaveLength(1);
     expect(actions[0]?.value).toBeCloseTo(0.5);
+    expect(actions[0]?.asOfTsMs).toBe(receiptDateToAsOfTsMs('20251114000001'));
     expect(result.gaps).toEqual([]);
   });
 
