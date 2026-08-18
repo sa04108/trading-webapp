@@ -54,6 +54,9 @@ describe('Docker worker deployment', () => {
     expect(deploy).toContain('/opt/quant-backtest-worker/managed-paths.json');
     expect(deploy).toContain('ACTUAL_MANIFEST_SHA');
     expect(deploy).toContain('bootstrap-worker.sh를 다시 실행하세요');
+    expect(deploy).toContain('QP_DEPLOY_PREFLIGHT_ONLY');
+    expect(deploy).toContain('QP_WORKER_IMAGE_ARCHIVE');
+    expect(deploy).toContain('QP_WORKER_IMAGE_CHECKSUM');
     expect(deploy).not.toContain('systemctl');
   });
 

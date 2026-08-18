@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # 스펙 §30 — 릴리스 배포. 개발 PC 에서 빌드·검증 후 서버로 배포한다.
 #
-# 사용법: ./scripts/deploy.sh
+# 사용법: ./scripts/deploy-server.sh
 #         실행 후 서버 주소를 물어본다. 비대화형으로 돌리려면 환경변수를 미리 설정한다 —
 #         ssh config 는 필요하지 않다:
 #
 #         SSH_KEY=~/.ssh/your-key QP_SSH_USER=ubuntu QP_HOST=203.0.113.10 \
-#           ./scripts/deploy.sh
+#           ./scripts/deploy-server.sh
 #
 #   QP_HOST          서버 주소, `[user@]host` 형식. 미설정이면 첫 단계에서 물어본다
 #   QP_SSH_USER      로그인 사용자명. QP_HOST 에 `user@` 가 없을 때만 쓴다
@@ -16,7 +16,7 @@
 #   QP_SSH_HOST_KEY  호스트키 확인: accept-new(기본) | yes | no
 #   QP_SSH_OPTS      그 밖의 ssh 옵션을 그대로 (예: "-o ServerAliveInterval=30")
 #
-# 접속 파라미터의 이름과 의미는 bootstrap.sh 와 같다 — 부트스트랩이 성공한 조합을
+# 접속 파라미터의 이름과 의미는 bootstrap-server.sh 와 같다 — 부트스트랩이 성공한 조합을
 # 그대로 배포에 쓸 수 있어야 한다 (부트스트랩 마지막 출력이 그 명령을 찍어 준다).
 #
 # 로그인 사용자명을 가정하지 않는다 — 클라우드 이미지마다 다르고(ubuntu / admin /
@@ -118,7 +118,7 @@ if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
 fi
 
 # 주소를 먼저 받는다 — 아래 검증 게이트가 몇 분 걸리므로 그 뒤에 묻지 않는다.
-# 아래 로그 리다이렉트보다 앞에 두는 이유는 bootstrap.sh 와 같다: tee 를 거치면
+# 아래 로그 리다이렉트보다 앞에 두는 이유는 bootstrap-server.sh 와 같다: tee 를 거치면
 # 프롬프트가 버퍼링에 걸려 화면에 안 나타날 수 있다.
 # read 뒤의 `|| true`: 비대화형 실행에서 read 는 EOF 로 비영점 종료하고, set -e 가
 # 바로 아래 안내에 도달하기 전에 스크립트를 죽인다. 판단은 다음 줄에 맡긴다.
@@ -130,7 +130,7 @@ fi
   echo "서버 주소가 필요합니다 — 비대화형이면 QP_HOST 로 지정하세요" >&2
   exit 1
 }
-# 사용자명은 주소에 붙여도 되고 QP_SSH_USER 로 따로 줘도 된다 (bootstrap.sh 와 같은 규칙).
+# 사용자명은 주소에 붙여도 되고 QP_SSH_USER 로 따로 줘도 된다 (bootstrap-server.sh 와 같은 규칙).
 if [ -n "${QP_SSH_USER:-}" ]; then
   case "${TARGET}" in
     *@*) echo "QP_SSH_USER 는 무시합니다 — 주소에 이미 사용자명이 있습니다: ${TARGET}" >&2 ;;
@@ -171,7 +171,7 @@ trap on_exit EXIT
 
 echo "로그: ${LOG}"
 
-# ── 접속 옵션을 환경변수에서 만든다 (bootstrap.sh 와 같은 규칙) ───────────────
+# ── 접속 옵션을 환경변수에서 만든다 (bootstrap-server.sh 와 같은 규칙) ────────
 # 포트와 점프 호스트를 -p / -J 가 아니라 -o 로 넘기는 이유: 같은 배열을 ssh 와 scp 에
 # 함께 쓰기 때문이다 — scp 의 포트 플래그는 -P 라서 -p 를 받지 못한다.
 SSH_OPTS=()
@@ -208,7 +208,7 @@ if [ -n "${QP_SSH_JUMP:-}" ]; then
   SSH_FLAGS="${SSH_FLAGS}-J ${QP_SSH_JUMP} "
 fi
 
-# accept-new 기본값의 이유는 bootstrap.sh 에 적어 뒀다 — 접속 확인이 BatchMode 라
+# accept-new 기본값의 이유는 bootstrap-server.sh 에 적어 뒀다 — 접속 확인이 BatchMode 라
 # ssh 기본값(ask)은 처음 보는 호스트에서 물어볼 TTY 가 없어 그냥 실패한다.
 case "${QP_SSH_HOST_KEY:=accept-new}" in
   accept-new | yes | no) SSH_OPTS+=(-o "StrictHostKeyChecking=${QP_SSH_HOST_KEY}") ;;
@@ -216,7 +216,7 @@ case "${QP_SSH_HOST_KEY:=accept-new}" in
 esac
 
 # 업로드 전에 접속을 확인한다 — 검증 게이트(수 분)를 다 돌린 뒤 SSH 로 실패하면
-# 그 시간이 통째로 버려진다. bootstrap.sh 와 같은 이유의 preflight 다.
+# 그 시간이 통째로 버려진다. bootstrap-server.sh 와 같은 이유의 preflight 다.
 echo "==> SSH 접속 확인: ${TARGET}"
 # stderr 를 버리지 않는다 — 원인별 처방이 전혀 다르므로 ssh 가 한 말을 그대로 보여준다.
 if ! SSH_ERR="$(ssh "${SSH_OPTS[@]}" -o ConnectTimeout=15 -o BatchMode=yes "${TARGET}" true 2>&1)"; then
@@ -231,6 +231,11 @@ if ! SSH_ERR="$(ssh "${SSH_OPTS[@]}" -o ConnectTimeout=15 -o BatchMode=yes "${TA
     echo "원인 가르기: ssh -v ${SSH_FLAGS}${TARGET} true"
   } >&2
   exit 1
+fi
+
+if [ "${QP_DEPLOY_PREFLIGHT_ONLY:-0}" = 1 ]; then
+  echo "==> 서버 배포 preflight 완료"
+  exit 0
 fi
 
 ARTIFACT_DIR=""

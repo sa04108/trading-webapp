@@ -27,7 +27,7 @@ image나 Compose service에 합치지 않는다.
 ```text
 개발 PC
 ├── scripts/build-release.sh          검증 → 공통 archive + SHA-256
-├── scripts/deploy.sh                 공통 archive → 웹/API 서버
+├── scripts/deploy-server.sh          공통 archive → 웹/API 서버
 ├── scripts/build-worker-image.sh     공통 archive → linux/amd64 image tar
 ├── scripts/bootstrap-worker.sh       Worker 호스트 1회 준비
 └── scripts/deploy-worker.sh          image load → Compose 전환 → probe/rollback
@@ -55,7 +55,7 @@ systemd unit을 설치하지 않는다. 인바운드 애플리케이션 포트�
 4. `dist`, `migrations`, package/lock/workspace 파일을 하나의 archive로 만든다.
 5. archive의 SHA-256 checksum을 만든다.
 
-`scripts/deploy.sh`와 `scripts/deploy-worker.sh`는 `QP_RELEASE_ARCHIVE`와
+`scripts/deploy-server.sh`와 `scripts/deploy-worker.sh`는 `QP_RELEASE_ARCHIVE`와
 `QP_RELEASE_CHECKSUM`으로 기존 산출물을 받을 수 있다. 입력하지 않으면 각각 builder를
 호출한다. 웹과 Worker에 정확히 같은 빌드 바이트를 배포하려면 builder를 한 번 실행하고
 그 두 값을 양쪽 deploy에 전달한다.

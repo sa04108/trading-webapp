@@ -105,6 +105,6 @@ EOF
 cat <<MSG
 
 Docker Worker 부트스트랩 완료: ${REMOTE_TARGET}
-첫 배포:
-  ${REMOTE_ENV_HINT}QP_WORKER_HOST=${REMOTE_TARGET} ./scripts/deploy-worker.sh
+deploy.env에서 Worker 배포를 활성화한 뒤 프로젝트 루트에서 실행:
+  pnpm run deploy
 MSG

@@ -1,6 +1,6 @@
 #!/bin/sh
-# scripts/bootstrap.sh 가 업로드·실행한다. 직접 실행 시:
-#   sudo sh provision.sh <도메인>
+# scripts/bootstrap-server.sh 가 업로드·실행한다. 직접 실행 시:
+#   sudo sh provision-server.sh <도메인>
 #
 # 도메인의 A 레코드가 이 서버의 고정 공인 IP 를 가리켜야 한다 — Caddy 가 그 이름으로
 # Let's Encrypt 인증서를 받는다. 도메인은 비밀값이 아니므로 argv 로 받는다.
@@ -29,7 +29,7 @@ NODE_VERSION=v24.18.0
   exit 1
 }
 # 이 값은 아래에서 Caddyfile heredoc 으로 들어간다 — 호스트명 문법을 벗어난 입력이
-# 두 번째 사이트 블록이나 임의 지시자로 해석되지 않게 여기서 막는다. bootstrap.sh 도
+# 두 번째 사이트 블록이나 임의 지시자로 해석되지 않게 여기서 막는다. bootstrap-server.sh 도
 # 같은 검사를 하지만 이 파일은 직접 실행이 문서화돼 있으므로 스스로도 강제한다.
 case "${DOMAIN}" in
   *[!a-zA-Z0-9.-]* | -* | .* | *. | *..*)
@@ -231,7 +231,7 @@ fi
 echo "==> 인증서 발급 확인 (최대 90초)"
 # 앱 배포 전이므로 502 가 정상이다 — TLS 응답이 온다는 것 자체가 발급 성공이다.
 # 자기 자신의 공인 IP 로의 hairpin 접속이 막히는 호스트가 있어 실패해도 죽이지 않는다.
-# 확정 판정은 bootstrap.sh 가 개발 PC(외부 시점)에서 한다.
+# 확정 판정은 bootstrap-server.sh 가 개발 PC(외부 시점)에서 한다.
 CODE=000
 i=0
 while [ "${i}" -lt 18 ]; do
@@ -287,7 +287,7 @@ echo "==> systemd 유닛"
 install -m 644 -o root -g root "${SELF_DIR}/quant-platform.service" \
   /etc/systemd/system/quant-platform.service
 systemctl daemon-reload
-# start 는 하지 않는다 — dist 가 아직 없다. 첫 기동은 deploy.sh 가 한다.
+# start 는 하지 않는다 — dist 가 아직 없다. 첫 기동은 deploy-server.sh 가 한다.
 systemctl enable quant-platform
 
 echo ""

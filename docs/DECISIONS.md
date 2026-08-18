@@ -62,10 +62,10 @@
 
 ## D-010: 파괴적 마이그레이션과 자동 롤백의 짝 맞춤
 
-- **변경 내용:** deploy.sh 는 서비스 재시작(=마이그레이션 적용) 직전에 SQLite 스냅샷을 만들고, health check 실패로 롤백할 때 스냅샷을 함께 복원한다 — 이전 릴리스 코드가 새 스키마(예: 삭제된 컬럼)를 만나 `no such column` 으로 죽는 "명목상 롤백"을 막는다.
+- **변경 내용:** deploy-server.sh 는 서비스 재시작(=마이그레이션 적용) 직전에 SQLite 스냅샷을 만들고, health check 실패로 롤백할 때 스냅샷을 함께 복원한다 — 이전 릴리스 코드가 새 스키마(예: 삭제된 컬럼)를 만나 `no such column` 으로 죽는 "명목상 롤백"을 막는다.
 - **운영 규칙:** 컬럼·테이블 삭제 같은 파괴적 스키마 변경은 코드가 해당 참조를 중단한 **다음** 릴리스에 싣는 것을 원칙으로 한다 (expand-contract). 스냅샷 복원은 이 규칙이 지켜지지 않았을 때의 안전망이다.
-- **보존:** 스냅샷은 성공 배포 후에도 최근 5개를 남긴다. health check 는 통과했지만 그 뒤에 문제가 드러나 **수동** 롤백(§30 10단계, §35 runbook)을 하는 경우에도 짝이 맞는 스키마로 되돌아가야 하기 때문이다. backup.sh 의 30일 정리 규칙은 `backup-*` 디렉터리만 훑으므로 deploy.sh 가 직접 회전시킨다.
-- **영향:** 스냅샷~롤백 사이의 쓰기는 유실된다. 단일 운영자가 배포 중인 수 초의 창이라 실질 위험은 없다. 수동 롤백 절차는 배포 성공 시 deploy.sh 가 그대로 출력한다.
+- **보존:** 스냅샷은 성공 배포 후에도 최근 5개를 남긴다. health check 는 통과했지만 그 뒤에 문제가 드러나 **수동** 롤백(§30 10단계, §35 runbook)을 하는 경우에도 짝이 맞는 스키마로 되돌아가야 하기 때문이다. backup.sh 의 30일 정리 규칙은 `backup-*` 디렉터리만 훑으므로 deploy-server.sh 가 직접 회전시킨다.
+- **영향:** 스냅샷~롤백 사이의 쓰기는 유실된다. 단일 운영자가 배포 중인 수 초의 창이라 실질 위험은 없다. 수동 롤백 절차는 배포 성공 시 deploy-server.sh 가 그대로 출력한다.
 
 ## D-011: 감사 로그 보존 기간은 정책이므로 설정으로 노출한다
 
@@ -109,8 +109,8 @@
 ## D-016: WireGuard·Caddy → Tailscale — 스펙 §23~§27 편차
 
 - **변경 내용:** 사설망을 순수 WireGuard 에서 Tailscale 로, TLS 종단을 Caddy 에서
-  `tailscale serve` 로 교체했다. `infra/provision.sh`(서버, 멱등) +
-  `scripts/bootstrap.sh`(개발 PC) 가 §21~§29 를 단일 명령으로 수행한다. Caddy 가 주던
+  `tailscale serve` 로 교체했다. `infra/provision-server.sh`(서버, 멱등) +
+  `scripts/bootstrap-server.sh`(개발 PC) 가 §21~§29 를 단일 명령으로 수행한다. Caddy 가 주던
   것 중 앱에 없던 HSTS 는 `SECURITY_HEADERS` 에, 압축은 `@fastify/compress` 로 옮겼다.
 - **이유:** 순수 WireGuard 는 단일 명령 프로비저닝이 원리적으로 불가능하다 — Lightsail
   공개키를 기존 WG 서버(리포 밖 머신)에 peer 로 등록해야 터널이 서고, 그 전에는
@@ -121,7 +121,7 @@
 - **새 의존:** Tailscale control plane. 다운 시 기존 연결은 유지되나 신규 조인·재인증이
   실패한다. 노드 키 만료는 `tag:server` 로 면제한다 — 태그 없이 조인하면 헤드리스
   서버가 몇 달 뒤 조용히 떨어진다.
-- **락아웃 가드:** provision.sh 를 기본/`--harden` 2 단계로 나누고, bootstrap.sh 가
+- **락아웃 가드:** provision-server.sh 를 기본/`--harden` 2 단계로 나누고, bootstrap-server.sh 가
   tailnet 경유 SSH 를 실제로 시도해 성공했을 때만 하드닝을 실행한다. 스펙 §25 의
   "검증 전 차단 금지" 가 제어 흐름으로 강제된다. `--harden` 게이트는 `BackendState`
   뿐 아니라 `tag:server` 소유도 확인한다 — Running 이어도 태그 없이 조인했으면
@@ -129,7 +129,7 @@
   시점(약 180일 뒤)에 조용히 락아웃으로 이어지는데, 그 확인을 되돌릴 수 없는 UFW
   적용 직전으로 옮겨 무경고 실패를 막았다.
 - **고정 아웃바운드 IP:** §18/§23 요구사항은 그대로 유지된다 — 증권사 API 트래픽은
-  Lightsail Static IP 로 나가야 한다. provision.sh 기본 모드가 `checkip.amazonaws.com`
+  Lightsail Static IP 로 나가야 한다. provision-server.sh 기본 모드가 `checkip.amazonaws.com`
   확인을 정보성으로 출력한다. Tailscale 은 WireGuard 에 없던 새 우회 경로가 있다 —
   이 노드에 `tailscale set --exit-node=...` 를 걸지 않는다(걸면 아웃바운드가 조용히
   우회된다).
@@ -138,10 +138,10 @@
   성질이지만, 이름이 tailnet 안에서만 해석되고 퍼블릭에 아무것도 듣지 않으므로 무해하다.
 - **스펙 관계:** §23(WireGuard)·§24(퍼블릭 방화벽 마감, 선택으로 강등)·§25(UFW 규칙,
   tailscale0 으로)·§27(Caddy, 제거) 편차. §18 의 호스트 요구사항과 §30 배포 절차는
-  그대로다. deploy.sh 는 동작을 바꾸지 않았다 — 최종 리뷰에서 usage 문자열·주석의
+  그대로다. deploy-server.sh 는 동작을 바꾸지 않았다 — 최종 리뷰에서 usage 문자열·주석의
   `<wireguard-host>` 예시만 tailnet FQDN 으로 교체했다(사용자 승인 예외).
 - **Git 설정:** 셸 스크립트를 Windows 개발 머신에서도 LF 로 체크아웃하도록 `.gitattributes` 에
-  `*.sh text eol=lf` 를 추가했다. scripts/bootstrap.sh 가 infra/provision.sh 를 scp 로
+  `*.sh text eol=lf` 를 추가했다. scripts/bootstrap-server.sh 가 infra/provision-server.sh 를 scp 로
   서버에 전달하는데, 개발 PC 가 core.autocrlf=true 이고 CRLF 로 체크아웃되면 Ubuntu 에서
   shebang 이 `#!/bin/sh\r` 이 되어 프로비저닝이 실패한다.
 ## D-017: 평면 분리 헌법 — 플랫폼 read-only, TOTP 복원(D-014 부분 폐기), Tailscale 제거(D-016 폐기)
@@ -159,7 +159,7 @@
 - **D-016 폐기:** 망 경계 요구가 없어졌으므로 Tailscale·`tag:server`·노드 키 관리
   의존을 제거했다. 퍼블릭 22 는 닫지 않는다 — 클라우드 브라우저 SSH 콘솔(키 인증)이
   out-of-band 복구 경로가 되므로, D-016 의 락아웃 가드 체계(tailnet SSH 실증,
-  `--harden` 2단계) 전체가 불필요해져 provision.sh 는 단일 실행으로 돌아왔다.
+  `--harden` 2단계) 전체가 불필요해져 provision-server.sh 는 단일 실행으로 돌아왔다.
   sshd 하드닝(키 전용 인증)은 유지한다 — 하드닝의 대상은 접속 클라이언트가 아니라
   "열린 포트가 인터넷으로부터 무엇을 받아주느냐"이고, 브라우저 SSH 는 키 인증이라
   영향이 없다.
@@ -170,7 +170,7 @@
   무해하다.
 - **스펙 관계:** §2.2·§2.6·§16 은 본문을 개정했다. §23(WireGuard)·§24(퍼블릭 방화벽
   마감)·§25(UFW 원문)·§27(Caddy 내부 TLS)은 이 결정으로 대체된다 — 현행 규칙은
-  스펙 §2.2 다이어그램과 infra/provision.sh 가 정의한다.
+  스펙 §2.2 다이어그램과 infra/provision-server.sh 가 정의한다.
 ## D-018: 토스증권 Open API 어댑터 — 승인 완료로 2차 어댑터 추가 (D-002 예정 이행)
 
 - **변경 내용:** `createTossMarketDataSource` 를 broker infrastructure 에 추가했다
@@ -287,7 +287,7 @@
   1. 근본 — pullRange 저장 배칭: 페이지마다 저장하지 않고 1만 봉씩 모아 저장
      (파티션 재작성 월당 ~1회). 에러·취소로 빠져나갈 때도 finally 에서 flush 해
      페이지 수준 이어받기 보존을 유지한다. 워터마크는 여전히 저장 이후에만 넓힌다.
-  2. 인프라 — provision.sh 에 스왑 2GB (마비를 "느려짐"으로 강등), 유닛에
+  2. 인프라 — provision-server.sh 에 스왑 2GB (마비를 "느려짐"으로 강등), 유닛에
      MemoryHigh=512M(조기 회수 압박) + MemoryMax 768→640M (시스템 몫 확보).
   3. 운영 즉시 조치 — 서버에 스왑·systemd override 를 수동 적용 완료 (재프로비저닝
      시 리포 버전으로 수렴).
@@ -406,8 +406,8 @@
 - **그 외에 systemd 가 주는 것:** (1) 재부팅 생존 — 클라우드 인스턴스는 호스트 유지보수로 예고 없이 재부팅된다. (2) `Restart=on-failure`+`RestartSec=5` — 위의 OOM kill 을 자동 복구로 강등한다. (3) 샌드박싱을 앱 코드 밖에서(`ProtectSystem=strict`·`CapabilityBoundingSet=` 등) — 스펙 §2.1 "애플리케이션은 인프라를 모른다" 와 같은 방향이다. (4) `EnvironmentFile` 로 600 root:root 비밀을 `ps` 노출 없이 주입, 그리고 그 덕에 CLI 를 같은 컨텍스트로 재현하는 `systemd-run` 이 공짜로 따라온다(§28.2). (5) `systemctl restart` + `is-active` 라는 판정 가능한 단일 상태 — D-010 의 "코드+DB 스냅샷 동반 롤백" 이 이것 없이는 조립되지 않는다. (6) `StandardOutput=journal` — 앱에 로그 파일 회전 코드가 한 줄도 없는 이유.
 - **대안(Docker):** 버렸다. 여유가 ~270MB 뿐인 박스에서 컨테이너 런타임 상주 메모리가 그 여유를 잠식한다. 게다가 컨테이너의 주 가치(cgroup 제한·네임스페이스 격리·재시작 정책·로그 수집)를 systemd 가 이미 전부 주므로 겹치고, 단일 아티팩트·단일 프로세스에는 오케스트레이션할 대상이 없다. 네이티브 모듈(better-sqlite3·argon2·@duckdb/node-api, `onlyBuiltDependencies`)의 빌드 무게는 **반-Docker 논거이지 친-systemd 논거가 아니다** — 모듈이 순수 JS 였어도 프로세스 슈퍼바이저는 여전히 필요하다.
 - **대안(nohup·tmux·PM2):** 버렸다. 재부팅에서 사라지고, cgroup 예산이 없어 위 장애를 그대로 재현한다. PM2 는 감시 프로세스가 하나 더 상주해 예산을 또 먹으면서도 네임스페이스 격리는 주지 않는다.
-- **왜 코드가 home 이 아니라 `/opt` 인가:** (1) 유닛의 `ProtectHome=true` 가 `/home`·`/root` 를 이 프로세스에게 **비어 있게** 만든다 — 코드를 home 에 두려면 이걸 끄는 거래를 해야 하고, 그러면 임의 파일 읽기 버그 하나가 `~/.ssh/id_ed25519`(=배포 전권)에 닿는다. 읽기 전용(`ProtectSystem=strict`)으로는 부족하다 — 훔치는 데는 읽기만 필요하다. (2) 로그인 계정명을 가정할 수 없다 — 클라우드 이미지마다 ubuntu/admin/ec2-user 로 다르고 `scripts/bootstrap.sh` 는 의도적으로 가정하지 않는다(§2.1). home 경로는 그 관례를 유닛 파일에 박아버린다. (3) `quant` 는 `--system --home /var/lib/quant-platform --shell nologin` 이라 애초에 home 이 없다. (4) `/opt` 가 root 소유 + `ReadOnlyPaths` 라 **앱이 자기 실행 코드를 고칠 수 없다** — RCE 가 재시작 후에도 살아남는 지속성을 못 얻는다. (5) 릴리스 회전(`deploy.sh` 의 `KEEP_RELEASES` 초과분 삭제)이 데이터를 먹지 않는 경계가 필요하다 — 코드는 버려도 되는 것, 상태는 백업 대상이라는 분리가 `/opt` vs `/var/lib` 다.
-- **비용:** 배포가 `sudo` 를 요구한다. `systemctl restart`·UFW·Caddy 에 어차피 root 가 필요하고 passwordless sudo 는 `bootstrap.sh` 가 `sudo -n true` 로 먼저 검증하는 전제이므로 추가 비용은 없다.
+- **왜 코드가 home 이 아니라 `/opt` 인가:** (1) 유닛의 `ProtectHome=true` 가 `/home`·`/root` 를 이 프로세스에게 **비어 있게** 만든다 — 코드를 home 에 두려면 이걸 끄는 거래를 해야 하고, 그러면 임의 파일 읽기 버그 하나가 `~/.ssh/id_ed25519`(=배포 전권)에 닿는다. 읽기 전용(`ProtectSystem=strict`)으로는 부족하다 — 훔치는 데는 읽기만 필요하다. (2) 로그인 계정명을 가정할 수 없다 — 클라우드 이미지마다 ubuntu/admin/ec2-user 로 다르고 `scripts/bootstrap-server.sh` 는 의도적으로 가정하지 않는다(§2.1). home 경로는 그 관례를 유닛 파일에 박아버린다. (3) `quant` 는 `--system --home /var/lib/quant-platform --shell nologin` 이라 애초에 home 이 없다. (4) `/opt` 가 root 소유 + `ReadOnlyPaths` 라 **앱이 자기 실행 코드를 고칠 수 없다** — RCE 가 재시작 후에도 살아남는 지속성을 못 얻는다. (5) 릴리스 회전(`deploy-server.sh` 의 `KEEP_RELEASES` 초과분 삭제)이 데이터를 먹지 않는 경계가 필요하다 — 코드는 버려도 되는 것, 상태는 백업 대상이라는 분리가 `/opt` vs `/var/lib` 다.
+- **비용:** 배포가 `sudo` 를 요구한다. `systemctl restart`·UFW·Caddy 에 어차피 root 가 필요하고 passwordless sudo 는 `bootstrap-server.sh` 가 `sudo -n true` 로 먼저 검증하는 전제이므로 추가 비용은 없다.
 - **뒤집히는 조건:** 근거 서열이 **메모리 제약 → cgroup·샌드박스 필요 → systemd** 이므로, 박스가 충분히 커지면(예: 8GB) 런타임 상주 메모리가 무시할 수준이 되어 "systemd vs Docker" 는 팀 취향 문제로 내려간다. 지금 결론이 명확한 것은 여유가 ~270MB 라는 실측 때문이다. `/opt` 쪽 근거 (2)(4)(5)는 박스 크기와 무관하게 남는다.
 
 ## D-031: 미통합 복원 스크립트 제거 — 재해복구는 Phase 7 runbook 에서 설계한다
@@ -419,7 +419,7 @@
   경로를 하드코딩해 월별 복원 테스트에 사용하면 실제 DB 를 바로 덮어썼다. 복원 전
   스냅샷·SQLite 무결성 검사·실패 시 서비스 재기동 또는 원복도 없어, 존재 자체가 검증된
   재해복구 수단이라는 잘못된 인상을 줬다.
-- **배포 롤백과 무관:** deploy.sh 의 실패 롤백은 재시작 직전 SQLite 스냅샷을 만들고
+- **배포 롤백과 무관:** deploy-server.sh 의 실패 롤백은 재시작 직전 SQLite 스냅샷을 만들고
   코드와 DB 를 함께 되돌리는 독립 경로(D-010)라 영향을 받지 않는다.
 - **후속:** Phase 7 disaster runbook 은 SQLite 와 exports 를 함께 복구하고, 무결성 검사와
   실패 원복을 포함한 절차를 먼저 정의한다. 운영 데이터가 아닌 격리 환경에서 실제 백업으로
@@ -1389,3 +1389,23 @@
 - **비용:** Worker 호스트에는 Docker daemon과 image 저장공간이 추가된다. 대신 Node/native
   dependency·릴리스 symlink·app unit을 호스트에서 제거하고 배포와 rollback 단위를 불변
   image로 통일한다. v1은 Ubuntu/Debian amd64 한 대씩이며 drain/fleet 배포는 후속이다.
+
+## D-062: 배포는 Linux 단일 진입점에서 서버와 선택적 Worker를 같은 release로 조정한다
+
+- **공식 진입점:** 프로젝트 루트의 `deploy.env`를 읽는 `pnpm run deploy`만 일반 배포
+  경로로 둔다. `deploy-server.sh`와 `deploy-worker.sh`는 부분 재실행·장애 대응용 저수준
+  명령으로 유지한다. 서버 대상 bootstrap·provision·deploy에는 모두 `-server` 접미사를
+  붙여 Worker 스크립트와 대칭으로 만든다.
+- **Worker 선택성:** `QP_DEPLOY_WORKER=0`이면 서버만 배포하며 Worker 접속값과 로컬 Docker를
+  요구하지 않는다. `1`이면 서버·Worker preflight를 모두 먼저 통과시키고 공통 release와
+  linux/amd64 Worker image를 서버 전환 전에 한 번씩 만든다.
+- **동일성:** 검증 게이트와 공통 archive 생성은 배포 전체에서 한 번만 실행한다. Worker
+  image는 그 archive를 입력으로 만들며 서버와 Worker 저수준 deploy에는 생성된 archive와
+  checksum을 명시적으로 전달한다.
+- **설정 경계:** `deploy.env.example`은 호스트별 SSH와 Worker 포함 여부만 설명한다.
+  `deploy.env`는 Git에서 제외한다. app/Worker token 같은 runtime 비밀값은 기존처럼 원격
+  root 전용 `app.env`·`worker.env`에만 두고 배포 설정에 복사하지 않는다.
+- **부분 실패:** Worker 전환 자체는 이전 image로 rollback한다. 이미 health check를 통과한
+  서버까지 Worker 실패만으로 자동 rollback하면 그 사이의 운영 DB 쓰기를 잃을 수 있으므로
+  서버는 새 release로 유지하고 같은 artifact의 Worker 배포 재시도를 요구한다. SHA가 다른
+  구 Worker는 claim이 거부되므로 잘못된 계산을 시작하지 않는다.

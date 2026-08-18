@@ -6,7 +6,7 @@ const FULL_GIT_SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 
 /**
  * 배포 산출물의 git 커밋 SHA (재현성 §9.5).
- * deploy.sh 가 빌드 후 dist/build-info.json 에 기록하고 런타임에 읽는다 —
+ * build-release.sh가 빌드 후 dist/build-info.json에 기록하고 런타임에 읽는다 —
  * env 는 개발 환경 fallback 이다.
  */
 export function readGitCommitSha(nodeEnv: string | undefined = process.env.NODE_ENV): string {

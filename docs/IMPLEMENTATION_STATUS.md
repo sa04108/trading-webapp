@@ -23,7 +23,7 @@
 - ✅ 랭킹 `topN` 경계의 정확한 동점과 EMA·RSI 상관 그룹의 동시 진입 경쟁도 `randomSeed`로 재현 가능하게 해소한다 (D-057)
 - ✅ 모바일: 390px 가로 스크롤 없음(E2E 검증), 휴대폰 전 과정 가능(위저드), 진행률·취소, 차트 툴팁
 - ✅ 보안(앱 계층): 127.0.0.1 bind, 로그인(비밀번호 + TOTP 2단계 — D-017), 세션 회전·만료, 안전한 쿠키, redaction, 임의 코드 실행 없음, 도메인 계층 인프라 비인지(dependency-cruiser 강제)
-- ⬜ 보안(인프라): UFW 22/80/443·sshd 키 전용·Caddy TLS 는 서버 구축 시 검증 (infra/provision.sh 준비됨, D-017)
+- ⬜ 보안(인프라): UFW 22/80/443·sshd 키 전용·Caddy TLS 는 서버 구축 시 검증 (infra/provision-server.sh 준비됨, D-017)
 - ⬜ 운영: 웹 systemd·Worker Docker 자동 시작, 백업 생성·재해복구 절차 검증은 실호스트 구축 시
 
 ## 알려진 제약

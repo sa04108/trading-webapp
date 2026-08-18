@@ -328,12 +328,13 @@ quant-platform/
 │  ├─ architecture/
 │  └─ e2e/
 ├─ infra/
-│  ├─ provision.sh           # 서버 프로비저닝 (§21~29 자동화, 멱등)
+│  ├─ provision-server.sh    # 서버 프로비저닝 (§21~29 자동화, 멱등)
 │  ├─ app.env.example
 │  └─ systemd/
 ├─ scripts/
-│  ├─ bootstrap.sh           # 개발 PC 에서 새 서버 셋업 (provision.sh 업로드·실행)
-│  ├─ deploy.sh
+│  ├─ bootstrap-server.sh    # 개발 PC 에서 새 서버 셋업 (provision-server.sh 업로드·실행)
+│  ├─ deploy.mjs             # deploy.env 기반 서버 + 선택적 Worker 통합 배포
+│  ├─ deploy-server.sh
 │  └─ backup.sh
 ├─ docs/
 │  ├─ SPEC.md                # 이 문서
@@ -1415,8 +1416,8 @@ Static IP 용도:
 
 # 21. 초기 Ubuntu 설정
 
-> §21~29 는 `infra/provision.sh` 가 단일 명령으로 자동화한다 (멱등 — 몇 번을
-> 실행해도 결과가 같다). 개발 PC 에서는 `scripts/bootstrap.sh` 가 이 파일을
+> §21~29 는 `infra/provision-server.sh` 가 단일 명령으로 자동화한다 (멱등 — 몇 번을
+> 실행해도 결과가 같다). 개발 PC 에서는 `scripts/bootstrap-server.sh` 가 이 파일을
 > 업로드·실행한다. 아래는 그 스크립트가 하는 일의 명세다.
 
 ```bash
@@ -1525,13 +1526,13 @@ node --version
 
 전제:
 
-- 서비스 도메인의 A 레코드가 이 서버의 고정 공인 IP 를 가리킨다. provision.sh 가
+- 서비스 도메인의 A 레코드가 이 서버의 고정 공인 IP 를 가리킨다. provision-server.sh 가
   프로비저닝 시작 시 해석을 확인하고, 아니면 중단한다.
 - TLS 는 Caddy 가 Let's Encrypt 로 자동 발급·갱신한다 (§27). 도메인은 CT 로그에
   공개된다 — 퍼블릭 서비스 전제이므로 무해하다.
 
 **고정 아웃바운드 IP**: 증권사 API 요청은 서버의 고정 공인 IP 로 나가야 한다
-(허용 IP 등록제 대응). provision.sh 가 아웃바운드 IP 를 조회해 정보성으로
+(허용 IP 등록제 대응). provision-server.sh 가 아웃바운드 IP 를 조회해 정보성으로
 출력한다 — 증권사에 등록한 IP 와 일치해야 한다.
 
 검증:
@@ -1654,7 +1655,7 @@ sudo chown root:root /etc/quant-platform/app.env
 sudo chmod 600 /etc/quant-platform/app.env
 ```
 
-provision.sh 가 이 파일을 생성하며 `SESSION_SECRET` 은 서버에서 만든다.
+provision-server.sh 가 이 파일을 생성하며 `SESSION_SECRET` 은 서버에서 만든다.
 **파일이 이미 있으면 절대 덮지 않는다** — SESSION_SECRET 이 바뀌면 기존 세션이
 전부 무효화된다.
 
@@ -1760,7 +1761,7 @@ DART 재무·자본변동 수집은 CLI 명령이 아니다(D-049). 재무전략
 # 29. systemd
 
 `/etc/systemd/system/quant-platform.service` — 실물은 `infra/systemd/quant-platform.service`
-가 기준이다 (provision.sh 가 그 파일을 설치한다). 아래는 사본이므로 값을 바꿀 때는
+가 기준이다 (provision-server.sh 가 그 파일을 설치한다). 아래는 사본이므로 값을 바꿀 때는
 리포의 유닛 파일을 먼저 고칠 것:
 
 ```ini
@@ -1855,7 +1856,7 @@ dist/
 └─ current -> releases/20260726-090000-bcdefa2
 ```
 
-배포 순서 (`scripts/deploy.sh` 가 자동화):
+서버 전환 순서 (`scripts/deploy-server.sh`가 수행하며 `pnpm run deploy`가 통합 조정):
 
 1. 개발 PC에서 lint·typecheck·test·build
 2. tar 생성
@@ -2237,7 +2238,7 @@ quant-platform-live.service
 - UFW (22 rate-limit / 80 / 443)
 - sshd 하드닝 (키 전용)
 - systemd
-- deploy/rollback (bootstrap.sh · provision.sh · deploy.sh)
+- deploy/rollback (bootstrap-server.sh · provision-server.sh · deploy-server.sh)
 
 ## Phase 7 — 운영
 

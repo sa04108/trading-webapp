@@ -206,27 +206,26 @@ CSV 형식: `timestamp,open,high,low,close,volume` (ISO 8601 UTC 또는 epoch ms
 ## 11. 배포 개요 (요약 — 원문은 README 배포 절)
 
 ```
-./scripts/bootstrap.sh   # 새 서버 1회: 주소·도메인 입력 → provision.sh 업로드·실행
-./scripts/deploy.sh      # 릴리스: 게이트 → 빌드 → 전환 → health check → 실패 시 자동 롤백
+./scripts/bootstrap-server.sh # 새 서버 1회: 주소·도메인 입력 → provision-server.sh 실행
 ./scripts/bootstrap-worker.sh # 새 계산 PC 1회: Docker·Compose·env·work-root 준비
-./scripts/deploy-worker.sh    # 공통 release → image → probe → 실패 시 image rollback
+pnpm run deploy               # 서버 + 선택적 Worker 통합 배포 (deploy.env)
 ./scripts/backup.sh      # SQLite·exports 백업 (용량 상한 회전, D-013·D-019)
 ```
 
-- `infra/provision.sh` 는 **멱등한 단일 실행**이다: 패키지·Node·UFW(22 rate-limit,
+- `infra/provision-server.sh` 는 **멱등한 단일 실행**이다: 패키지·Node·UFW(22 rate-limit,
   80, 443)·sshd 하드닝(키 전용)·Caddy(도메인 → 127.0.0.1:3000)·app.env·systemd.
 - 두 스크립트의 SSH 접속 파라미터는 전부 환경변수다 (`QP_HOST`·`QP_SSH_USER`·
   `QP_SSH_PORT`·`SSH_KEY`·`QP_SSH_JUMP`·`QP_SSH_HOST_KEY`·`QP_SSH_OPTS`) —
   `~/.ssh/config` 를 만들지 않아도 한 줄로 실행된다. 이름·의미는 두 스크립트가 같다.
-- deploy.sh 는 재시작 직전 SQLite 스냅샷을 뜨고, health check 실패 시 코드와 DB 를
+- deploy-server.sh 는 재시작 직전 SQLite 스냅샷을 뜨고, health check 실패 시 코드와 DB 를
   함께 롤백한다 (D-010).
 - Worker는 Docker Compose 전용이며 app systemd fallback이 없다. 웹과 같은
   `build-release.sh` archive를 image에 넣고 content checksum과 인증·SHA·protocol probe를
   통과해야 전환한다 (D-061).
 - 독립 복원 스크립트는 제공하지 않는다. 백업 복구 절차와 격리 복구 검증은 Phase 7
   disaster runbook 에서 함께 설계한다 (D-031).
-- 주의: `provision.sh` 는 **POSIX sh** 다 — bash 문법(배열, `[[ ]]`, pipefail) 금지.
-  `bootstrap.sh`/`deploy.sh`와 Worker 스크립트는 bash. `provision-worker.sh`와 container
+- 주의: `provision-server.sh` 는 **POSIX sh** 다 — bash 문법(배열, `[[ ]]`, pipefail) 금지.
+  `bootstrap-server.sh`/`deploy-server.sh`와 Worker 스크립트는 bash. `provision-worker.sh`와 container
   entrypoint는 POSIX sh다. 셸 스크립트는 전부 LF (`.gitattributes` 강제).
 
 ## 12. 작업 관례
@@ -239,7 +238,7 @@ CSV 형식: `timestamp,open,high,low,close,volume` (ISO 8601 UTC 또는 epoch ms
 - 커밋 메시지는 한국어 + conventional prefix (`feat:`, `fix:`, `docs:`,
   `refactor:` …). 본문에 "왜"를 적는다. 관련 D 번호가 있으면 언급한다.
 - 비밀값(키·토큰·비밀번호)은 argv 로 넘기지 않는다 — ps·셸 히스토리에 남는다.
-  stdin 이나 root 전용 파일로 전달한다 (deploy.sh·provision.sh 가 예시).
+  stdin 이나 root 전용 파일로 전달한다 (deploy-server.sh·provision-server.sh 가 예시).
 - 테스트는 실동작을 검증한다 — 모킹으로 초록불만 만드는 테스트는 리뷰에서 걸린다.
 
 ## 13. 자주 밟는 함정

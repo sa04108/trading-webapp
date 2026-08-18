@@ -7,7 +7,7 @@ const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' 
 describe('deploy script failure workflow', () => {
   it('prints the failed release journal before rollback and verifies restored readiness quietly', () => {
     const shell = String.raw`
-      source scripts/deploy.sh
+      source scripts/deploy-server.sh
       attempts=0
       curl() {
         attempts=$((attempts + 1))
@@ -58,8 +58,12 @@ describe('deploy script failure workflow', () => {
   });
 
   it('verifies a shared release checksum before creating its server release directory', () => {
-    const deploy = readFileSync('scripts/deploy.sh', 'utf8');
+    const deploy = readFileSync('scripts/deploy-server.sh', 'utf8');
     expect(deploy).toContain('source "${REPO_ROOT}/scripts/build-release.sh"');
+    expect(deploy).toContain('QP_DEPLOY_PREFLIGHT_ONLY');
+    expect(deploy.indexOf('서버 배포 preflight 완료')).toBeLessThan(
+      deploy.indexOf('build_release "${ARTIFACT_DIR}"'),
+    );
     expect(deploy.indexOf('release archive checksum 불일치')).toBeLessThan(
       deploy.indexOf('sudo mkdir -p "/opt/quant-platform/releases/${RELEASE}"'),
     );

@@ -76,27 +76,24 @@ QP_WORKER_ENV_FILE="$HOME/.config/quant-platform/worker-1.env" \
 
 ## 3. 동일 release를 server와 Worker에 배포
 
-한 번만 검증·빌드한 archive를 양쪽 deploy에 전달한다.
+프로젝트 루트에서 `deploy.env.example`을 `deploy.env`로 복사하고 서버·Worker 접속 정보를
+채운 뒤 Worker 배포를 활성화한다.
 
-```bash
-artifact_dir="$(mktemp -d)"
-source scripts/build-release.sh
-build_release "$artifact_dir"
-
-QP_HOST=ubuntu@server.example.com \
-QP_RELEASE_ARCHIVE="$RELEASE_ARCHIVE" \
-QP_RELEASE_CHECKSUM="$RELEASE_CHECKSUM" \
-./scripts/deploy.sh
-
-QP_WORKER_HOST=ubuntu@203.0.113.20 \
-QP_RELEASE_ARCHIVE="$RELEASE_ARCHIVE" \
-QP_RELEASE_CHECKSUM="$RELEASE_CHECKSUM" \
-./scripts/deploy-worker.sh
+```dotenv
+QP_DEPLOY_WORKER=1
+QP_SERVER_HOST=ubuntu@server.example.com
+QP_SERVER_SSH_KEY=~/.ssh/server.pem
+QP_WORKER_HOST=ubuntu@203.0.113.20
+QP_WORKER_SSH_KEY=~/.ssh/worker.pem
 ```
 
-각 deploy를 따로 실행해도 입력이 없으면 builder를 호출하지만, 같은 archive를 명시해야
-빌드 바이트까지 하나임이 보장된다. Worker deploy는 로컬에서 linux/amd64 image를 만든
-뒤 tar/checksum으로 전송한다. registry 계정은 필요 없다.
+```bash
+pnpm run deploy
+```
+
+이 명령은 양쪽 preflight 뒤 공통 archive를 한 번만 검증·빌드하고 Worker image도 서버
+전환 전에 만든다. 같은 archive가 server와 Worker image에 사용되므로 빌드 바이트까지
+같음이 보장된다. image는 tar/checksum으로 전송하며 registry 계정은 필요 없다.
 
 같은 Git SHA가 이미 실행 중이고 probe도 성공하면 no-op한다. 같은 SHA를 명시적으로 다시
 배포할 때만 `QP_FORCE_WORKER_DEPLOY=1`을 쓴다.

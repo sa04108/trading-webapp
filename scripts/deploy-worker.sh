@@ -38,6 +38,11 @@ ACTUAL_MANIFEST_SHA="$(sudo sha256sum /opt/quant-backtest-worker/managed-paths.j
 }
 EOF
 
+if [ "${QP_DEPLOY_PREFLIGHT_ONLY:-0}" = 1 ]; then
+  echo "==> Worker 배포 preflight 완료"
+  exit 0
+fi
+
 ARTIFACT_DIR=""
 cleanup() {
   if [ -n "${REMOTE_DIR:-}" ]; then
@@ -84,12 +89,26 @@ fi
 if [ -z "${RELEASE_NAME}" ]; then
   ARTIFACT_DIR="$(mktemp -d)"
   build_release "${ARTIFACT_DIR}"
-else
-  ARTIFACT_DIR="$(mktemp -d)"
 fi
 
-build_worker_image \
-  "${RELEASE_ARCHIVE}" "${RELEASE_CHECKSUM}" "${RELEASE_NAME}" "${ARTIFACT_DIR}"
+if [ -n "${QP_WORKER_IMAGE_ARCHIVE:-}" ] || [ -n "${QP_WORKER_IMAGE_CHECKSUM:-}" ]; then
+  [ -n "${QP_WORKER_IMAGE_ARCHIVE:-}" ] && [ -n "${QP_WORKER_IMAGE_CHECKSUM:-}" ] || {
+    echo "QP_WORKER_IMAGE_ARCHIVE와 QP_WORKER_IMAGE_CHECKSUM은 함께 지정해야 합니다" >&2
+    exit 1
+  }
+  WORKER_IMAGE_ARCHIVE="$(cd "$(dirname "${QP_WORKER_IMAGE_ARCHIVE}")" && pwd)/$(basename "${QP_WORKER_IMAGE_ARCHIVE}")"
+  WORKER_IMAGE_CHECKSUM="$(cd "$(dirname "${QP_WORKER_IMAGE_CHECKSUM}")" && pwd)/$(basename "${QP_WORKER_IMAGE_CHECKSUM}")"
+  expected_image_name="quant-platform-backtest-worker-${RELEASE_NAME}.tar"
+  [ "$(basename "${WORKER_IMAGE_ARCHIVE}")" = "${expected_image_name}" ] || {
+    echo "Worker image archive 이름은 ${expected_image_name}이어야 합니다" >&2
+    exit 1
+  }
+  WORKER_IMAGE_REF="quant-platform-backtest-worker:${RELEASE_NAME}"
+else
+  [ -n "${ARTIFACT_DIR}" ] || ARTIFACT_DIR="$(mktemp -d)"
+  build_worker_image \
+    "${RELEASE_ARCHIVE}" "${RELEASE_CHECKSUM}" "${RELEASE_NAME}" "${ARTIFACT_DIR}"
+fi
 verify_release_checksum "${WORKER_IMAGE_ARCHIVE}" "${WORKER_IMAGE_CHECKSUM}"
 
 remote_dir_candidate="$(ssh "${REMOTE_SSH_OPTS[@]}" "${REMOTE_TARGET}" mktemp -d /tmp/quant-worker-deploy.XXXXXX)"

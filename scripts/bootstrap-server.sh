@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # 서버 부트스트랩 — 새 호스트를 배포 가능 상태로 만든다
 #
-# 사용법: ./scripts/bootstrap.sh
+# 사용법: ./scripts/bootstrap-server.sh
 #         서버 주소와 도메인을 순서대로 물어본다. 비대화형으로 돌리려면
 #         환경변수를 미리 설정한다 — ssh config 는 필요하지 않다:
 #
 #         SSH_KEY=~/.ssh/your-key QP_SSH_USER=ubuntu QP_HOST=203.0.113.10 \
-#           QP_DOMAIN=quant.example.com ./scripts/bootstrap.sh
+#           QP_DOMAIN=quant.example.com ./scripts/bootstrap-server.sh
 #
 #   QP_DOMAIN        서비스 도메인 (예: quant.example.com). A 레코드가 서버의 고정 공인
 #                    IP 를 가리키고 있어야 한다 — Caddy 가 이 이름으로 인증서를 받는다.
@@ -25,7 +25,7 @@
 # (ubuntu / admin / ec2-user), 자체 설치 호스트는 임의다. 스펙 §2.1 의 "애플리케이션과
 # 도구는 특정 클라우드를 모른다" 를 따른다.
 #
-# 인증은 공개키만 지원한다. 비밀번호 인증을 넣지 않는 이유는 provision.sh 가
+# 인증은 공개키만 지원한다. 비밀번호 인증을 넣지 않는 이유는 provision-server.sh 가
 # PasswordAuthentication no 를 쓰기 때문이다 (스펙 §16·D-017) — 어떤 호스트에서든
 # 프로비저닝이 끝나면 비밀번호로는 다시 들어올 수 없다. 한 실행에 ssh/scp 가 5회
 # 호출되므로 매번 프롬프트가 뜨는 문제도 있고, sudo 확인은 어차피 passwordless
@@ -74,7 +74,7 @@ fi
   echo "도메인이 필요합니다 — 비대화형이면 QP_DOMAIN 으로 지정하세요" >&2
   exit 1
 }
-# 이 값은 아래에서 원격 root 셸의 명령줄에 들어가고, provision.sh 안에서는 Caddyfile
+# 이 값은 아래에서 원격 root 셸의 명령줄에 들어가고, provision-server.sh 안에서는 Caddyfile
 # heredoc 으로 흘러간다. 호스트명 문법을 여기서 강제해 `;`·백틱·`$(...)`·공백이
 # 명령이나 Caddy 지시자로 해석될 여지를 없앤다 (원격 실행 전에 막는 게 요점).
 case "${DOMAIN}" in
@@ -207,7 +207,7 @@ if ! SSH_ERR="$(ssh "${SSH_OPTS[@]}" -o ConnectTimeout=15 -o BatchMode=yes "${TA
             echo
             echo "찾은 키 후보 — 하나를 골라 다시 실행하면 된다:"
             while IFS= read -r k; do
-              [ -n "${k}" ] && echo "  SSH_KEY=${k} QP_HOST=${TARGET} ./scripts/bootstrap.sh"
+              [ -n "${k}" ] && echo "  SSH_KEY=${k} QP_HOST=${TARGET} ./scripts/bootstrap-server.sh"
             done <<< "${CANDIDATES}"
           else
             echo
@@ -235,13 +235,13 @@ fi
 echo "==> 프로비저닝 파일 업로드"
 ssh "${SSH_OPTS[@]}" "${TARGET}" "mkdir -p ${REMOTE_DIR}" \
   || { echo "원격 디렉터리 생성 실패: ${REMOTE_DIR}" >&2; exit 1; }
-scp "${SSH_OPTS[@]}" "${REPO_ROOT}/infra/provision.sh" \
+scp "${SSH_OPTS[@]}" "${REPO_ROOT}/infra/provision-server.sh" \
     "${REPO_ROOT}/infra/systemd/quant-platform.service" \
     "${REPO_ROOT}/infra/app.env.example" \
     "${TARGET}:${REMOTE_DIR}/" \
   || { echo "파일 업로드 실패 — ${REPO_ROOT}/infra 아래 3개 파일과 원격 디스크 여유를 확인하세요" >&2; exit 1; }
 
-# provision.sh 는 root 로 돌아야 하고, TTY 없이 붙는다. sudo 가 비밀번호를 물으면
+# provision-server.sh 는 root 로 돌아야 하고, TTY 없이 붙는다. sudo 가 비밀번호를 물으면
 # 답할 방법이 없으므로 여기서 먼저 분명하게 실패시킨다. passwordless sudo 는 이
 # 도구의 전제다 (클라우드 이미지는 보통 그렇게 오지만, 자체 설치 호스트라면 직접
 # 설정해야 한다).
@@ -250,9 +250,9 @@ ssh "${SSH_OPTS[@]}" "${TARGET}" "sudo -n true" \
 
 echo "==> 프로비저닝 (패키지·Node·UFW·sshd·Caddy·app.env·systemd)"
 # 원격 셸이 한 번 더 파싱하므로 인용한다 — 위 검증과 이중 방어다
-ssh "${SSH_OPTS[@]}" "${TARGET}" "sudo sh ${REMOTE_DIR}/provision.sh '${DOMAIN}'"
+ssh "${SSH_OPTS[@]}" "${TARGET}" "sudo sh ${REMOTE_DIR}/provision-server.sh '${DOMAIN}'"
 
-# provision.sh 가 sshd 를 재시작했다 — 새 연결로 즉시 재검증해 하드닝이 SSH 를
+# provision-server.sh 가 sshd 를 재시작했다 — 새 연결로 즉시 재검증해 하드닝이 SSH 를
 # 깨뜨렸다면 지금 크게 알린다 (퍼블릭 22 는 열려 있으므로 락아웃은 아니고,
 # 최악의 경우에도 클라우드 브라우저 SSH 콘솔이 남는다).
 echo "==> 프로비저닝 후 SSH 재검증"
@@ -279,7 +279,7 @@ cat <<MSG
 부트스트랩 완료: https://${DOMAIN}
 
 다음 단계:
-  1) 첫 배포:      ${ENV_HINT}QP_HOST=${TARGET} ./scripts/deploy.sh
+  1) deploy.env 작성 후 첫 배포: pnpm run deploy
   2) 관리자 생성 + TOTP 등록 (서버에서, 순서대로):
      ssh ${SSH_FLAGS}${TARGET}
      sudo systemd-run --pty --uid=quant --gid=quant \\

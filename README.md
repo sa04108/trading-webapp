@@ -67,8 +67,9 @@ Lightsail에서 계산을 빼려면 서버를 `remote`로 바꾸고, 같은 릴�
 streaming 업로드한다. 서버와 worker의 Git SHA가 다르면 claim 자체가 거부된다.
 
 설정 예시는 `infra/app.env.example`, `infra/worker.env.example`에 있다. Worker 호스트는
-`scripts/bootstrap-worker.sh`로 Docker와 전용 경로만 준비하고 `scripts/deploy-worker.sh`로
-checksum 검증, container 전환, 인증·SHA·protocol probe와 실패 rollback까지 수행한다.
+`scripts/bootstrap-worker.sh`로 Docker와 전용 경로만 준비한다. 이후 `pnpm run deploy`가
+운영 서버와 선택된 Worker에 같은 release를 배포하고 checksum 검증, container 전환,
+인증·SHA·protocol probe와 실패 rollback까지 수행한다.
 호스트에 생성하는 경로와 보존 정책은
 `/opt/quant-backtest-worker/managed-paths.json` manifest로 추적한다.
 애플리케이션 systemd unit이나 fallback은 없다. 개발 PC에서는 worker env를 넣고
@@ -96,7 +97,7 @@ Tailscale 에서 퍼블릭 + Caddy 로 옮긴 이유와 트레이드오프는
 ### 서버 구축 (인스턴스마다)
 
 ```bash
-./scripts/bootstrap.sh
+./scripts/bootstrap-server.sh
 ```
 
 서버 주소(`[user@]host`)와 도메인을 순서대로 물어본다. 비대화형은 환경변수로 지정한다 —
@@ -104,10 +105,11 @@ Tailscale 에서 퍼블릭 + Caddy 로 옮긴 이유와 트레이드오프는
 
 ```bash
 SSH_KEY=~/.ssh/your-key QP_SSH_USER=ubuntu QP_HOST=203.0.113.10 \
-  QP_DOMAIN=quant.example.com ./scripts/bootstrap.sh
+  QP_DOMAIN=quant.example.com ./scripts/bootstrap-server.sh
 ```
 
-`bootstrap.sh`·`deploy.sh` 가 인식하는 접속 관련 환경변수 (이름·의미가 서로 같다):
+`bootstrap-server.sh`·`deploy-server.sh` 가 인식하는 저수준 접속 환경변수
+(이름·의미가 서로 같다):
 
 | 변수 | 뜻 |
 | --- | --- |
@@ -140,10 +142,10 @@ passphrase 가 있으면 `ssh-add` 로 agent 에 먼저 올린다 — 접속 확
 `~/.ssh/config` 에 `Host` 항목을 만들어 써도 된다 — 만들지 **않아도** 된다는 것이
 요점이다. 한 번 쓰고 버리는 인스턴스마다 로컬 설정 파일을 고치지 않아도 된다.
 
-**`sudo` 는 비밀번호 없이 되어야 한다** — `provision.sh` 가 root 로 돌아야 하고
+**`sudo` 는 비밀번호 없이 되어야 한다** — `provision-server.sh` 가 root 로 돌아야 하고
 프롬프트에 답할 TTY 가 없다.
 
-`infra/provision.sh` 는 멱등한 단일 실행이다:
+`infra/provision-server.sh` 는 멱등한 단일 실행이다:
 
 - apt 갱신·업그레이드, 빌드 도구 (`build-essential`·`python3`·`pkg-config` —
   better-sqlite3·argon2가 네이티브 모듈이라 서버에서 컴파일된다),
@@ -158,21 +160,25 @@ passphrase 가 있으면 `ssh-add` 로 agent 에 먼저 올린다 — 접속 확
   Encrypt 발급·갱신 자동. 보안 헤더·압축은 앱이 담당하므로 Caddy 는 프록시만 한다
 - `/etc/quant-platform/app.env` 생성 — `SESSION_SECRET` 은 서버에서 만든다.
   **파일이 이미 있으면 절대 덮지 않는다** (덮으면 기존 세션이 전부 무효화된다)
-- systemd 유닛 설치 후 `enable` — `start` 는 하지 않는다 (첫 기동은 `deploy.sh`)
+- systemd 유닛 설치 후 `enable` — `start` 는 하지 않는다 (첫 기동은 통합 배포)
 
 마지막에 bootstrap 이 개발 PC 시점에서 `https://<도메인>` 의 TLS 응답을 확인한다 —
 앱 배포 전에는 502 가 정상이다.
 
 ### 첫 배포와 계정
 
+프로젝트 루트의 예제를 복사해 서버와 선택적 Worker 접속 정보를 채운다. `deploy.env`는
+Git에서 제외되며 애플리케이션 runtime 비밀값은 넣지 않는다.
+
 ```bash
-./scripts/deploy.sh   # 검증 게이트 → 릴리스 전환 → health check → 실패 시 자동 롤백
+cp deploy.env.example deploy.env
+pnpm run deploy
 ```
 
-`bootstrap.sh` 와 같은 방식이다 — 서버 주소를 첫 단계에서 물어보고, 위 접속 환경변수를
-전부 동일하게 인식한다. 검증 게이트가 몇 분 걸리므로 주소 입력과 SSH 접속 확인을 그
-전에 끝낸다. 부트스트랩이 성공하면 마지막 출력에 이번 실행에 쓴 접속 환경변수가 붙은
-`deploy.sh` 명령을 그대로 찍어 준다 — 복사해서 쓰면 된다.
+기본 `QP_DEPLOY_WORKER=0`은 운영 서버만 배포한다. `1`이면 양쪽 SSH·Docker preflight를
+먼저 통과한 뒤 공통 release를 한 번만 검증·생성하고, 그 release에서 만든 Worker image와
+운영 서버를 함께 배포한다. 다른 설정 파일은
+`pnpm run deploy -- --env-file=/secure/path/production.deploy.env`로 지정한다.
 
 배포 후 서버에서 관리자 생성과 TOTP 등록을 순서대로 한다 (정확한 명령은 bootstrap
 출력에 나온다):
