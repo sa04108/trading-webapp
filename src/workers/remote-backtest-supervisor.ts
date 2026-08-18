@@ -19,7 +19,7 @@ const envSchema = z.object({
   BACKTEST_WORKER_ID: z.string().regex(/^[a-zA-Z0-9._-]{1,48}$/).optional(),
   BACKTEST_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(1),
   BACKTEST_WORK_ROOT: z.string().default('./data/remote-worker'),
-  BACKTEST_CLAIM_WAIT_SECONDS: z.coerce.number().int().min(0).max(25).default(25),
+  BACKTEST_CLAIM_WAIT_SECONDS: z.coerce.number().int().min(1).max(25).default(25),
   BACKTEST_HEARTBEAT_SECONDS: z.coerce.number().int().min(2).max(20).default(5),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 });
@@ -178,9 +178,21 @@ class RemoteBacktestSupervisor {
     let retryMs = 1_000;
     while (!this.stopped) {
       try {
+        const claimStartedAtMs = Date.now();
         const job = await this.claim(slot);
         retryMs = 1_000;
-        if (job === null) continue;
+        if (job === null) {
+          // 서버·프록시 회귀로 빈 204가 너무 일찍 와도 설정된 long-poll 한 주기보다
+          // 빠르게 다시 요청하지 않는다. 정상 25초 응답에는 추가 지연이 생기지 않는다.
+          const remainingClaimCycleMs = this.config.claimWaitSeconds * 1_000
+            - (Date.now() - claimStartedAtMs);
+          if (remainingClaimCycleMs > 0) {
+            // 최초 연결 수립 시간이 다음 요청보다 길어도 서버 도착 간격이 1초 아래로
+            // 좁아지지 않도록, 조기 응답 뒤에는 최소 1초를 쉰다.
+            await delay(Math.max(1_000, remainingClaimCycleMs), this.stopController.signal);
+          }
+          continue;
+        }
         await this.execute(job, slot);
       } catch (error) {
         if (this.stopped) return;

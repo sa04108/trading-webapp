@@ -24,7 +24,8 @@ const claimBodySchema = z.object({
   runnerVersion: runnerVersionSchema,
 });
 const claimQuerySchema = z.object({
-  waitSeconds: z.coerce.number().int().min(0).max(25).default(25),
+  // 0을 허용하면 빈 큐에서 worker가 지연 없이 204를 재요청해 tight polling이 된다.
+  waitSeconds: z.coerce.number().int().min(1).max(25).default(25),
 });
 const leaseParamsSchema = z.object({
   jobId: z.string().regex(/^[a-zA-Z0-9_-]{3,128}$/),
@@ -193,6 +194,13 @@ export function registerRemoteWorkerRoutes(
 
     const deadlineMs = Date.now() + query.data.waitSeconds * 1_000;
     for (;;) {
+      // IncomingMessage는 본문을 다 읽은 뒤 연결이 살아 있어도 destroyed=true가 될 수 있다.
+      // 그 값을 연결 종료로 오인하면 첫 큐 확인 직후 204를 반환하고 worker가 tight loop에
+      // 빠진다. keep-alive 여부가 아니라 실제 TCP 연결 상태를 확인한다.
+      if (request.raw.socket.destroyed || reply.raw.destroyed) {
+        // 이미 닫힌 연결이라 실제 전송은 없지만 reply를 종결해 Fastify handler가 남지 않게 한다.
+        return reply.code(204).send();
+      }
       const result = deps.service.claim(body.data.workerId, body.data.runnerVersion);
       if (result.status === 'VERSION_MISMATCH') {
         return reply.code(409).send({
@@ -215,7 +223,7 @@ export function registerRemoteWorkerRoutes(
           });
       }
       const remainingMs = deadlineMs - Date.now();
-      if (remainingMs <= 0 || request.raw.destroyed) return reply.code(204).send();
+      if (remainingMs <= 0) return reply.code(204).send();
       await wait(Math.min(500, remainingMs));
     }
   });

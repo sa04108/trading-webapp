@@ -4,7 +4,12 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import { createHash } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { get as httpGet, type IncomingMessage } from 'node:http';
+import {
+  createServer,
+  get as httpGet,
+  request as httpRequest,
+  type IncomingMessage,
+} from 'node:http';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { backtestJobs, symbols } from '../../src/server/shared/db/schema.js';
 import { eq } from 'drizzle-orm';
@@ -117,7 +122,7 @@ describe('remote backtest worker lease API', () => {
   async function claim(runnerVersion = ctx.container.gitCommitSha) {
     return ctx.app.inject({
       method: 'POST',
-      url: '/api/internal/workers/jobs/claim?waitSeconds=0',
+      url: '/api/internal/workers/jobs/claim?waitSeconds=1',
       headers: { authorization: `Bearer ${WORKER_TOKEN}` },
       payload: { workerId: 'worker-a', runnerVersion },
     });
@@ -256,7 +261,7 @@ describe('remote backtest worker lease API', () => {
 
     const unauthenticated = await ctx.app.inject({
       method: 'POST',
-      url: '/api/internal/workers/jobs/claim?waitSeconds=0',
+      url: '/api/internal/workers/jobs/claim?waitSeconds=1',
       payload: { workerId: 'worker-a', runnerVersion: ctx.container.gitCommitSha },
     });
     expect(unauthenticated.statusCode).toBe(401);
@@ -424,6 +429,126 @@ describe('remote backtest worker lease API', () => {
       protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
     });
     expect(ctx.container.jobQueue.countByStatus(['STARTING', 'RUNNING'])).toBe(0);
+  });
+
+  it('holds an empty claim until its long-poll deadline', async () => {
+    const serverUrl = await ctx.app.listen({ host: '127.0.0.1', port: 0 });
+    const startedAtMs = Date.now();
+    const response = await fetch(`${serverUrl}/api/internal/workers/jobs/claim?waitSeconds=1`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${WORKER_TOKEN}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        workerId: 'long-poll-worker',
+        runnerVersion: ctx.container.gitCommitSha,
+      }),
+    });
+    const elapsedMs = Date.now() - startedAtMs;
+
+    expect(response.status).toBe(204);
+    expect(elapsedMs).toBeGreaterThanOrEqual(900);
+    expect(elapsedMs).toBeLessThan(3_000);
+  });
+
+  it('stops checking the queue after a long-poll client disconnects', async () => {
+    const serverUrl = await ctx.app.listen({ host: '127.0.0.1', port: 0 });
+    const service = ctx.container.remoteWorkerService;
+    const originalClaim = service.claim.bind(service);
+    let claimCalls = 0;
+    service.claim = (...args: Parameters<typeof service.claim>) => {
+      claimCalls += 1;
+      return originalClaim(...args);
+    };
+    const request = httpRequest(`${serverUrl}/api/internal/workers/jobs/claim?waitSeconds=5`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${WORKER_TOKEN}`,
+        'content-type': 'application/json',
+      },
+    });
+    request.on('error', () => undefined);
+    request.end(JSON.stringify({
+      workerId: 'disconnecting-worker',
+      runnerVersion: ctx.container.gitCommitSha,
+    }));
+
+    try {
+      await withTimeout((async () => {
+        while (claimCalls === 0) await new Promise((resolve) => setTimeout(resolve, 10));
+      })(), 1_000, 'long-poll did not start');
+      const callsBeforeDisconnect = claimCalls;
+      request.destroy();
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      expect(claimCalls).toBe(callsBeforeDisconnect);
+      const callsAfterDisconnect = claimCalls;
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      expect(claimCalls).toBe(callsAfterDisconnect);
+    } finally {
+      request.destroy();
+      service.claim = originalClaim;
+    }
+  });
+
+  it('rejects zero-wait claims that could create tight polling', async () => {
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/internal/workers/jobs/claim?waitSeconds=0',
+      headers: { authorization: `Bearer ${WORKER_TOKEN}` },
+      payload: { workerId: 'worker-a', runnerVersion: ctx.container.gitCommitSha },
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('paces empty claims when a server returns 204 before the requested deadline', async () => {
+    const claimTimes: number[] = [];
+    const earlyResponseServer = createServer((request, response) => {
+      request.resume();
+      claimTimes.push(Date.now());
+      response.writeHead(204).end();
+    });
+    await new Promise<void>((resolve, reject) => {
+      earlyResponseServer.once('error', reject);
+      earlyResponseServer.listen(0, '127.0.0.1', resolve);
+    });
+    const address = earlyResponseServer.address();
+    if (address === null || typeof address === 'string') throw new Error('test server address unavailable');
+    const supervisor = spawn(
+      process.execPath,
+      ['--import', 'tsx', path.resolve('src/workers/remote-backtest-supervisor.ts')],
+      {
+        cwd: path.resolve('.'),
+        env: {
+          ...process.env,
+          NODE_ENV: 'test',
+          BACKTEST_SERVER_URL: `http://127.0.0.1:${address.port}`,
+          BACKTEST_WORKER_TOKEN: WORKER_TOKEN,
+          BACKTEST_WORKER_ID: 'paced-worker',
+          BACKTEST_WORKER_CONCURRENCY: '1',
+          BACKTEST_WORK_ROOT: path.join(ctx.dir, 'paced-worker'),
+          BACKTEST_CLAIM_WAIT_SECONDS: '1',
+          LOG_LEVEL: 'error',
+        },
+        stdio: ['ignore', 'ignore', 'pipe'],
+      },
+    );
+    let stderr = '';
+    supervisor.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+
+    try {
+      await withTimeout((async () => {
+        while (claimTimes.length < 3) await new Promise((resolve) => setTimeout(resolve, 25));
+      })(), 5_000, `paced claim timeout: ${stderr}`);
+      expect(claimTimes[1]! - claimTimes[0]!).toBeGreaterThanOrEqual(900);
+      expect(claimTimes[2]! - claimTimes[1]!).toBeGreaterThanOrEqual(900);
+    } finally {
+      await stopProcess(supervisor);
+      await new Promise<void>((resolve, reject) => {
+        earlyResponseServer.close((error) => error === undefined ? resolve() : reject(error));
+      });
+    }
   });
 
   it('runs the supervisor one-shot compatibility check without claiming a job', async () => {
@@ -870,7 +995,7 @@ describe('remote backtest worker deployment probe in local mode', () => {
 
       const claim = await local.app.inject({
         method: 'POST',
-        url: '/api/internal/workers/jobs/claim?waitSeconds=0',
+        url: '/api/internal/workers/jobs/claim?waitSeconds=1',
         headers: { authorization: `Bearer ${WORKER_TOKEN}` },
         payload: { workerId: 'worker-a', runnerVersion: local.container.gitCommitSha },
       });

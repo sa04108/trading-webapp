@@ -56,8 +56,8 @@ heartbeat="$(sed -n 's/^BACKTEST_HEARTBEAT_SECONDS=//p' "${ENV_FILE}")"
   echo "BACKTEST_WORKER_CONCURRENCY는 1~32 정수여야 합니다" >&2
   exit 1
 }
-[[ "${claim_wait}" =~ ^[0-9]+$ ]] && ((claim_wait >= 0 && claim_wait <= 25)) || {
-  echo "BACKTEST_CLAIM_WAIT_SECONDS는 0~25 정수여야 합니다" >&2
+[[ "${claim_wait}" =~ ^[0-9]+$ ]] && ((claim_wait >= 1 && claim_wait <= 25)) || {
+  echo "BACKTEST_CLAIM_WAIT_SECONDS는 1~25 정수여야 합니다" >&2
   exit 1
 }
 [[ "${heartbeat}" =~ ^[0-9]+$ ]] && ((heartbeat >= 2 && heartbeat <= 20)) || {

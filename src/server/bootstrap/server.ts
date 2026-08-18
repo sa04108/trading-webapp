@@ -1,7 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
+import Fastify, {
+  LogController,
+  type FastifyError,
+  type FastifyInstance,
+  type FastifyReply,
+  type FastifyRequest,
+} from 'fastify';
 import fastifyCompress from '@fastify/compress';
 import fastifyCookie from '@fastify/cookie';
 import fastifyMultipart from '@fastify/multipart';
@@ -23,6 +29,45 @@ import { registerNotificationRoutes } from '../modules/notification/presentation
 import { registerSymbolMasterRoutes } from '../modules/market-data/presentation/symbol-master-routes.js';
 import { registerRemoteWorkerRoutes } from '../modules/backtest/presentation/remote-worker-routes.js';
 
+const REMOTE_WORKER_CLAIM_PATH = '/api/internal/workers/jobs/claim';
+
+function isRemoteWorkerClaim(request: FastifyRequest): boolean {
+  return request.method === 'POST'
+    && (request.url === REMOTE_WORKER_CLAIM_PATH
+      || request.url.startsWith(`${REMOTE_WORKER_CLAIM_PATH}?`));
+}
+
+/** 정상 long-poll access log는 debug로 낮추고 인증·버전·서버 오류는 기존 레벨로 남긴다. */
+class AppLogController extends LogController {
+  override incomingRequest(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    metadata?: Record<string, unknown>,
+  ): void {
+    if (isRemoteWorkerClaim(request)) {
+      request.log.debug({ req: request }, 'incoming request');
+      return;
+    }
+    super.incomingRequest(request, reply, metadata);
+  }
+
+  override requestCompleted(
+    error: Error | null,
+    request: FastifyRequest,
+    reply: FastifyReply,
+    metadata?: Record<string, unknown>,
+  ): void {
+    const isSuccessfulClaim = error === null
+      && isRemoteWorkerClaim(request)
+      && (reply.statusCode === 200 || reply.statusCode === 204);
+    if (isSuccessfulClaim) {
+      reply.log.debug({ res: reply, responseTime: reply.elapsedTime }, 'request completed');
+      return;
+    }
+    super.requestCompleted(error, request, reply, metadata);
+  }
+}
+
 function resolvePublicDir(): string | null {
   // 빌드 후: dist/server/bootstrap → dist/public.
   // 소스 트리(tsx)에서 실행 중이면 cwd 의 dist/public 로 폴백 (E2E 서버 등).
@@ -41,6 +86,7 @@ export async function buildServer(container: Container): Promise<FastifyInstance
 
   const app = Fastify({
     logger: buildPinoOptions(config),
+    logController: new AppLogController(),
     trustProxy: config.trustProxyLoopback ? '127.0.0.1' : false,
     bodyLimit: 10 * 1024 * 1024,
   });

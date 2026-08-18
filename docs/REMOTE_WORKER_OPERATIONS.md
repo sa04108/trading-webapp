@@ -27,6 +27,7 @@ BACKTEST_WORKER_TOKEN=<server app.env와 같은 32자 이상 난수>
 BACKTEST_WORKER_ID=worker-pc-1
 BACKTEST_WORKER_CONCURRENCY=1
 BACKTEST_WORK_ROOT=/var/lib/quant-backtest-worker
+# 1~25초. 0은 빈 큐 tight polling을 만들므로 금지한다.
 BACKTEST_CLAIM_WAIT_SECONDS=25
 BACKTEST_HEARTBEAT_SECONDS=5
 LOG_LEVEL=info

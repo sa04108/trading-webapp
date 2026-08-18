@@ -86,6 +86,36 @@ printf 'scp:%s\n' "$*" >> "$COMMAND_LOG"
     expect(`${result.stdout}${result.stderr}`).toContain('권한은 600 또는 400');
   });
 
+  it('rejects a zero claim wait before connecting', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-bootstrap-claim-wait-'));
+    roots.push(root);
+    const envFile = path.join(root, 'worker.env');
+    fs.writeFileSync(envFile, [
+      'NODE_ENV=production',
+      'BACKTEST_SERVER_URL=https://quant.example.com',
+      'BACKTEST_WORKER_TOKEN=worker-token-long-enough-for-validation',
+      'BACKTEST_WORKER_ID=worker-pc-1',
+      'BACKTEST_WORKER_CONCURRENCY=1',
+      'BACKTEST_WORK_ROOT=/var/lib/quant-backtest-worker',
+      'BACKTEST_CLAIM_WAIT_SECONDS=0',
+      'BACKTEST_HEARTBEAT_SECONDS=5',
+      'LOG_LEVEL=info',
+      '',
+    ].join('\n'), { mode: 0o600 });
+    const result = spawnSync(bash, ['scripts/bootstrap-worker.sh'], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        QP_WORKER_HOST: 'worker.example.com',
+        QP_WORKER_ENV_FILE: envFile,
+      },
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain('1~25 정수');
+  });
+
   it('provisions Docker and atomically preserves worker env without installing Node or an app unit', () => {
     const provision = fs.readFileSync('infra/provision-worker.sh', 'utf8');
     expect(provision).toContain('docker-ce docker-ce-cli containerd.io');
