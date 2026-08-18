@@ -162,6 +162,13 @@
       "when": 1786791956553,
       "tag": "0022_keen_firebrand",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1787029088394,
+      "tag": "0023_corporate_action_period_end",
+      "breakpoints": true
     }
   ]
 }

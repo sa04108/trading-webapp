@@ -15,6 +15,7 @@ import {
   DART_MIN_INTERVAL_MS,
   filableReportCount,
   irdsReportAvailable,
+  QUARTER_END_MONTH_DAYS,
 } from '../../domain/sync-plan.js';
 import {
   createDartCorpCodeCache,
@@ -326,7 +327,7 @@ export function createDartFactSource(
       // 불가능하게 만든다.
       const actionByKey = new Map<string, Fact>();
 
-      /** 'YYYY-MM-DD' → 그 시점 직전 발행주식수. 분기 공시값 중 이벤트 이전 최신값 */
+      /** 'YYYY-MM-DD' → 그 시점 직전 발행주식수. 분기 기준일 중 이벤트 이전 최신값 */
       const sharesByPeriod: Array<{ dateKey: string; shares: number }> = [];
 
       // 앵커 때문에 shareYears 를 돈다 — 대상 연도만 읽으면 그 연도 연초 이벤트의
@@ -338,9 +339,12 @@ export function createDartFactSource(
           const common = findCommonShareRow(shareRows);
           if (!common) continue;
           const shares = readShareAmount(common);
-          const asOf = receiptDateToAsOfTsMs(common.rcept_no);
-          if (shares === null || shares <= 0 || asOf === null) continue;
-          sharesByPeriod.push({ dateKey: new Date(asOf).toISOString().slice(0, 10), shares });
+          if (shares === null || shares <= 0) continue;
+          const quarter = REPORT_CODE_TO_QUARTER[reportCode];
+          sharesByPeriod.push({
+            dateKey: `${year}-${QUARTER_END_MONTH_DAYS[quarter - 1]}`,
+            shares,
+          });
         }
       }
       sharesByPeriod.sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1));

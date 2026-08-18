@@ -45,7 +45,7 @@ export const DART_CORPORATE_ACTION_CALLS_PER_YEAR = 1;
 export type FactSyncMode = 'FULL' | 'INCREMENTAL';
 
 /** 분기 누적 보고서의 대상 기간 말일 (1Q·반기·3Q·사업보고서 순). */
-const QUARTER_END_MONTH_DAYS = ['03-31', '06-30', '09-30', '12-31'] as const;
+export const QUARTER_END_MONTH_DAYS = ['03-31', '06-30', '09-30', '12-31'] as const;
 
 /**
  * 오늘(KST) 기준으로 존재할 수 있는 `year` 사업연도 정기보고서 수 (0~4).

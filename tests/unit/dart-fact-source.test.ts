@@ -894,26 +894,13 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
     ).toBe(true);
   });
 
-  /**
-   * `sharesBefore` 는 모든 분할 비율의 분모다 — 여기가 틀리면 비율이, 따라서 보정된
-   * 과거 가격 전체가 틀린다. 기존 픽스처는 전부 주식총수 공시를 **하나만** 만들어서
-   * 두 가지 변이가 살아남았다:
-   *   1. 최신값-우선 → 최초값-우선 (이벤트 이전 공시가 여러 개일 때만 갈린다)
-   *   2. `entry.dateKey >= dateKey` → `> dateKey` (이벤트 당일 공시, 즉 분할 **후**
-   *      주식수를 분모로 써 비율이 뒤집힌다)
-   *
-   * 이벤트일(2020-06-15)을 앞뒤로 걸치는 세 공시로 둘을 동시에 죽인다:
-   *   05-15  1,000,000  (이전, 더 오래됨)
-   *   06-01  1,500,000  (이전, 최신 → 올바른 분모)
-   *   06-15  3,000,000  (이벤트 당일 = 분할 후 주식수)
-   * 분할 수량 1,500,000 → 올바른 비율 = (1,500,000+1,500,000)/1,500,000 = 2.
-   * 변이 1 은 2.5, 변이 2 는 1.5 를 낸다.
-   */
-  it('이벤트일을 앞뒤로 걸친 주식총수 공시 중 직전 최신값을 분모로 쓴다', async () => {
+  it('공시 접수일이 아니라 분기 기준일로 감자 직전 주식수를 고른다', async () => {
     const sharesByReport: Record<string, { rcept_no: string; istc_totqy: string }> = {
-      '11013': { rcept_no: '20200515000001', istc_totqy: '1,000,000' }, // 2020-05-15
-      '11012': { rcept_no: '20200601000001', istc_totqy: '1,500,000' }, // 2020-06-01
-      '11014': { rcept_no: '20200615000001', istc_totqy: '3,000,000' }, // 2020-06-15 (이벤트 당일)
+      // 미래산업(025560) 실제 값. Q2 보고서는 감자 뒤인 8월에 접수됐지만 기준일은
+      // 감자 직전인 6월 30일이므로 7월 1일 감자의 분모가 되어야 한다.
+      '11013': { rcept_no: '20250514000001', istc_totqy: '59,566,032' },
+      '11012': { rcept_no: '20250813000001', istc_totqy: '71,722,474' },
+      '11014': { rcept_no: '20251114000001', istc_totqy: '4,482,654' },
     };
 
     const fetchImpl = (async (url: string) => {
@@ -935,10 +922,10 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
           message: '정상',
           list: [
             {
-              isu_dcrs_de: '2020-06-15',
-              isu_dcrs_stle: '주식분할',
-              isu_dcrs_qy: '1,500,000',
-              rcept_no: '20200620000001',
+              isu_dcrs_de: '2025-07-01',
+              isu_dcrs_stle: '무상감자',
+              isu_dcrs_qy: '67,239,820',
+              rcept_no: '20260331000001',
             },
           ],
         });
@@ -952,15 +939,16 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
       { fetchImpl, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER },
     );
     const result = await source.fetchCorporateActions({
-      symbols: ['005930'],
-      years: [2020],
-      shareYears: [2019, 2020],
+      symbols: ['025560'],
+      years: [2025],
+      shareYears: [2024, 2025],
       consolidated: true,
     });
 
     const actions = result.facts.filter((fact) => fact.field === 'SPLIT_RATIO');
     expect(actions).toHaveLength(1);
-    expect(actions[0]?.value).toBe(2);
+    expect(actions[0]?.value).toBeCloseTo(4_482_654 / 71_722_474);
+    expect(result.gaps.some((gap) => gap.reason.includes('비율이 유효하지 않습니다'))).toBe(false);
   });
 
   it('두 종목의 자본변동 접기 키가 서로 새지 않는다', async () => {
