@@ -171,7 +171,7 @@ function main() {
       ]);
       workerImageArchive = path.join(
         artifactDirectory,
-        `quant-platform-backtest-worker-${releaseName}.tar`,
+        `quant-backtest-worker-${releaseName}.tar`,
       );
       workerImageChecksum = `${workerImageArchive}.sha256`;
       if (!existsSync(workerImageArchive) || !existsSync(workerImageChecksum)) {

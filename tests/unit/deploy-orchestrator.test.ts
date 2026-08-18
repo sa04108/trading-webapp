@@ -60,8 +60,8 @@ case "$script_name" in
   build-worker-image.sh)
     output_dir="$5"
     release_name="$4"
-    : > "$output_dir/quant-platform-backtest-worker-$release_name.tar"
-    : > "$output_dir/quant-platform-backtest-worker-$release_name.tar.sha256"
+    : > "$output_dir/quant-backtest-worker-$release_name.tar"
+    : > "$output_dir/quant-backtest-worker-$release_name.tar.sha256"
     printf 'build-worker-image:%s\n' "$release_name" >> "$COMMAND_LOG"
     ;;
   *)

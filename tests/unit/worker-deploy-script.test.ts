@@ -47,6 +47,8 @@ describe('Docker worker deployment', () => {
 
   it('keeps checksum verification, authenticated probe, and rollback in the remote transition', () => {
     const deploy = fs.readFileSync('scripts/deploy-worker.sh', 'utf8');
+    const builder = fs.readFileSync('scripts/build-worker-image.sh', 'utf8');
+    const orchestrator = fs.readFileSync('scripts/deploy.mjs', 'utf8');
     expect(deploy.indexOf('checksum 불일치')).toBeLessThan(deploy.indexOf('docker image load'));
     expect(deploy).toContain('remote-backtest-supervisor.js --check');
     expect(deploy).toContain('rollback()');
@@ -57,6 +59,9 @@ describe('Docker worker deployment', () => {
     expect(deploy).toContain('QP_DEPLOY_PREFLIGHT_ONLY');
     expect(deploy).toContain('QP_WORKER_IMAGE_ARCHIVE');
     expect(deploy).toContain('QP_WORKER_IMAGE_CHECKSUM');
+    expect(builder).toContain('quant-backtest-worker-${release_name}.tar');
+    expect(deploy).toContain('quant-backtest-worker-${RELEASE_NAME}.tar');
+    expect(orchestrator).toContain('quant-backtest-worker-${releaseName}.tar');
     expect(deploy).not.toContain('systemctl');
   });
 

@@ -98,7 +98,7 @@ if [ -n "${QP_WORKER_IMAGE_ARCHIVE:-}" ] || [ -n "${QP_WORKER_IMAGE_CHECKSUM:-}"
   }
   WORKER_IMAGE_ARCHIVE="$(cd "$(dirname "${QP_WORKER_IMAGE_ARCHIVE}")" && pwd)/$(basename "${QP_WORKER_IMAGE_ARCHIVE}")"
   WORKER_IMAGE_CHECKSUM="$(cd "$(dirname "${QP_WORKER_IMAGE_CHECKSUM}")" && pwd)/$(basename "${QP_WORKER_IMAGE_CHECKSUM}")"
-  expected_image_name="quant-platform-backtest-worker-${RELEASE_NAME}.tar"
+  expected_image_name="quant-backtest-worker-${RELEASE_NAME}.tar"
   [ "$(basename "${WORKER_IMAGE_ARCHIVE}")" = "${expected_image_name}" ] || {
     echo "Worker image archive 이름은 ${expected_image_name}이어야 합니다" >&2
     exit 1
