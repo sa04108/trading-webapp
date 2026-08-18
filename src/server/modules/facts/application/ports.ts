@@ -83,7 +83,7 @@ export interface FactSource {
   /**
    * 구간 내 정기공시(사업·반기·분기보고서, 정정 포함) 목록. 증분 sync 가 "이미 covered
    * 인 연도 중 무엇이 다시 공시됐는가" 를 종목별 재수집 없이 한 번에 알아내는 데 쓴다 —
-   * 유니버스 전체 × 연도당 최대 9회를 새 공시가 있는 종목만으로 줄인다.
+   * 유니버스 전체 × 연도당 최대 12회를 새 공시가 있는 종목만으로 줄인다.
    */
   listRecentPeriodicFilings(fromDate: string, toDate: string): Promise<readonly PeriodicFiling[]>;
 }

@@ -41,6 +41,8 @@ export interface DartIssuanceRow {
   readonly isu_dcrs_de: string;
   /** 발행·감소 형태. '주식분할' / '무상증자' / '유상증자(주주배정)' / '주식병합' 등 */
   readonly isu_dcrs_stle: string;
+  /** 발행·감소 주식 종류. 예전 픽스처·일부 구형 응답에는 없을 수 있다. */
+  readonly isu_dcrs_stock_knd?: string;
   readonly isu_dcrs_qy: string;
   readonly rcept_no: string;
 }
@@ -120,7 +122,7 @@ export function receiptDateToAsOfTsMs(rceptNo: string): number | null {
 }
 
 /** '2025년 03월 14일' / '2025-03-14' / '2025.03.14' → 'YYYY-MM-DD' */
-function normalizeDateKey(raw: string): string | null {
+export function normalizeDateKey(raw: string): string | null {
   const match = /(\d{4})\D+(\d{1,2})\D+(\d{1,2})/.exec(raw.trim());
   if (!match) return null;
   const [, year, month, day] = match as unknown as [string, string, string, string];
@@ -398,7 +400,25 @@ export function parseFinancialRows(
   return { facts, gaps };
 }
 
-type CapitalChangeDirection = 'INCREASE' | 'DECREASE' | 'SKIP_PAID';
+type CapitalChangeDirection = 'INCREASE' | 'DECREASE' | 'SKIP';
+
+const NON_HOLDER_INCREASE = [
+  '유상증자',
+  '전환권행사',
+  '신주인수권행사',
+  '주식매수선택권행사',
+  '합병',
+];
+const NON_HOLDER_DECREASE = ['소각', '상환'];
+
+function normalizedStyle(row: DartIssuanceRow): string | null {
+  return readString(row, 'isu_dcrs_stle')?.replace(/\s/g, '') ?? null;
+}
+
+function isCommonIssuanceRow(row: DartIssuanceRow): boolean {
+  const kind = readString(row, 'isu_dcrs_stock_knd');
+  return kind === null || kind.replace(/\s/g, '').includes('보통');
+}
 
 /**
  * 발행형태 문자열을 분류한다. 분할·무상증자·주식배당은 주주가 낸 돈 없이 주식수만
@@ -411,10 +431,40 @@ type CapitalChangeDirection = 'INCREASE' | 'DECREASE' | 'SKIP_PAID';
  * 버리면 앞으로 추가되거나 이름이 바뀐 발행형태가 가격 보정 없이 새어나간다.
  */
 function classifyCapitalChange(style: string): CapitalChangeDirection | null {
-  if (style.includes('유상')) return 'SKIP_PAID';
+  if (style.includes('유상')) return 'SKIP';
   if (style.includes('병합') || style.includes('감자')) return 'DECREASE';
   if (style.includes('분할') || style.includes('무상') || style.includes('주식배당')) return 'INCREASE';
+  if (NON_HOLDER_INCREASE.some((token) => style.includes(token))) return 'SKIP';
+  if (NON_HOLDER_DECREASE.some((token) => style.includes(token))) return 'SKIP';
   return null;
+}
+
+export interface IssuedShareChange {
+  readonly dateKey: string;
+  /** null이면 날짜는 알지만 발행주식수 증감을 재생할 수 없는 행이다. */
+  readonly delta: number | null;
+}
+
+/** 분기 스냅샷 이후의 모든 보통주 발행·감소를 다음 이벤트의 분모에 재생한다. */
+export function issuedShareChange(row: DartIssuanceRow): IssuedShareChange | null {
+  if (!isCommonIssuanceRow(row)) return null;
+  const rawDate = readString(row, 'isu_dcrs_de');
+  if (rawDate === null) return null;
+  const dateKey = normalizeDateKey(rawDate);
+  if (dateKey === null) return null;
+
+  const style = normalizedStyle(row);
+  const rawQuantity = readString(row, 'isu_dcrs_qy');
+  const quantity = rawQuantity === null ? null : parseAmount(rawQuantity);
+  if (style === null || classifyCapitalChange(style) === null || quantity === null || quantity <= 0) {
+    return { dateKey, delta: null };
+  }
+  const decrease =
+    style.includes('병합') ||
+    style.includes('감자') ||
+    style.includes('소각') ||
+    style.includes('상환');
+  return { dateKey, delta: decrease ? -quantity : quantity };
 }
 
 /**
@@ -426,8 +476,8 @@ function classifyCapitalChange(style: string): CapitalChangeDirection | null {
  * 유입, 감자는 유출) 가격 보정 대상이 아니다. 분류할 수 없는 발행형태는 조용히
  * 버리지 않고 gap 으로 남긴다.
  *
- * `sharesBefore` 는 이벤트 직전 발행주식수를 준다. 분기 공시값을 쓰므로 같은 분기에
- * 여러 이벤트가 있으면 근사가 된다 — 이 한계는 결과 화면 경고에 남는다.
+ * `sharesBefore` 는 분기 기준일 이후의 중간 발행·감소까지 재생한 이벤트 직전
+ * 발행주식수를 준다.
  */
 export function parseIssuanceRows(
   symbol: string,
@@ -438,6 +488,7 @@ export function parseIssuanceRows(
   const gaps: FactIngestionGap[] = [];
 
   for (const row of rows) {
+    if (!isCommonIssuanceRow(row)) continue;
     // 필드 이름이 어긋난 첫 실행에서 bare TypeError 로 수집 전체가 죽지 않게 한다
     // (readString 주석 참고). 날짜부터 읽는 이유: gap 의 periodKey 에 쓰인다.
     const rawDate = readString(row, 'isu_dcrs_de');
@@ -464,7 +515,7 @@ export function parseIssuanceRows(
       continue;
     }
     // 유상증자·유상감자는 현금이 오간 것이라 의도된 제외다 — gap 을 남기지 않는다
-    if (direction === 'SKIP_PAID') continue;
+    if (direction === 'SKIP') continue;
 
     if (rawDate === null) {
       gaps.push({

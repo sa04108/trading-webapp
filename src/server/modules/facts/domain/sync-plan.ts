@@ -6,8 +6,8 @@
  * 숫자만 조용히 틀려진다 — 틀렸다는 사실도 드러나지 않는다.
  */
 
-/** 종목·연도당 호출: fnlttSinglAcntAll 4 + stockTotqySttus 4 + irdsSttus 1 */
-export const DART_CALLS_PER_SYMBOL_YEAR = 9;
+/** 종목·연도당 최대 호출: fnlttSinglAcntAll 4 + stockTotqySttus 4 + irdsSttus 4 */
+export const DART_CALLS_PER_SYMBOL_YEAR = 12;
 
 /**
  * 앵커 연도 하나당 추가 호출 (4개 보고서).
@@ -35,17 +35,17 @@ export const DART_MIN_INTERVAL_MS = 120;
 export const DART_DAILY_CALL_LIMIT = 40_000;
 
 /**
- * 자본변동 전용 종목·연도당 호출: `irdsSttus` 1회다.
+ * 자본변동 전용 종목·연도당 최대 호출: `irdsSttus` 보고서 4종이다.
  * `syncCorporateActions` 는 `fetchFinancials` 를 부르지 않는다.
  * 그래서 `fnlttSinglAcntAll` 4회가 빠진다(`fact-sync-service.ts` 참고).
  * `DART_CALLS_PER_SYMBOL_YEAR` 는 재무까지 포함한 값이라 이 경로에는 못 쓴다.
  */
-export const DART_CORPORATE_ACTION_CALLS_PER_YEAR = 1;
+export const DART_CORPORATE_ACTION_CALLS_PER_YEAR = 4;
 
 export type FactSyncMode = 'FULL' | 'INCREMENTAL';
 
 /** 분기 누적 보고서의 대상 기간 말일 (1Q·반기·3Q·사업보고서 순). */
-export const QUARTER_END_MONTH_DAYS = ['03-31', '06-30', '09-30', '12-31'] as const;
+const QUARTER_END_MONTH_DAYS = ['03-31', '06-30', '09-30', '12-31'] as const;
 
 /**
  * 오늘(KST) 기준으로 존재할 수 있는 `year` 사업연도 정기보고서 수 (0~4).
@@ -67,14 +67,6 @@ export function filableReportCount(year: number, todayKstDate: string): number {
   return count;
 }
 
-/**
- * `irdsSttus`(자본변동)가 조회 가능한지 — 사업보고서 기준 누적 제공이므로 사업연도가
- * 끝나야 데이터가 존재할 수 있다.
- */
-export function irdsReportAvailable(year: number, todayKstDate: string): boolean {
-  return filableReportCount(year, todayKstDate) === 4;
-}
-
 /** DART 외부 호출을 시작하기 전에 quota를 확인하는 최소 중단 단위. */
 export interface FactSyncWorkUnit {
   readonly symbol: string;
@@ -87,7 +79,7 @@ export interface FactSyncWorkUnit {
 /**
  * 재무 + 자본변동 work unit의 실제 DART 호출 수를 계산한다.
  *
- * 한 사업연도는 최대 재무보고서 4회 + 자본변동 1회지만, 아직 기간이 끝나지 않은
+ * 한 사업연도는 최대 재무보고서 4회 + 자본변동 보고서 4회지만, 아직 기간이 끝나지 않은
  * 보고서는 존재할 수 없으므로 세지 않는다 (`filableReportCount`). 주식총수는 연도당
  * 최대 4회지만 `dart-fact-source`가 같은 종목·연도·보고서 응답을 캐시하므로, 앞
  * work unit에서 이미 읽은 share year는 다시 세지 않는다. 이 함수가 `planFactSync`와
@@ -99,9 +91,7 @@ export function estimateDartCalls(
   requestedShareYears: ReadonlySet<number> = new Set(),
   includeFinancials = true,
 ): number {
-  const irdsCalls = irdsReportAvailable(work.year, todayKstDate)
-    ? DART_CORPORATE_ACTION_CALLS_PER_YEAR
-    : 0;
+  const irdsCalls = filableReportCount(work.year, todayKstDate);
   const yearCalls = includeFinancials
     ? filableReportCount(work.year, todayKstDate) + irdsCalls
     : irdsCalls;
@@ -134,7 +124,7 @@ export interface PlanFactSyncArgs {
   /**
    * 공시 갱신이 확인된 종목의 연도 — INCREMENTAL 에서 covered 여도 다시 계획한다.
    * 예전의 "현재 연도는 항상 다시 받는다"(refreshCurrentYear)를 대체한다: 공시가
-   * 없는 종목까지 매번 다시 받으면 유니버스 전체 × 연도당 최대 9회가 그대로
+   * 없는 종목까지 매번 다시 받으면 유니버스 전체 × 연도당 최대 12회가 그대로
    * 낭비된다. 공시검색(list.json) 결과에서 만든다 (fact-sync-service 참고).
    */
   readonly forcedYearsBySymbol?: ReadonlyMap<string, readonly number[]>;
@@ -212,7 +202,7 @@ export interface CorporateActionSyncEstimate {
  * "예상 호출·예상 시간" 이 여기서 나온다.
  *
  * `plan.calls` 를 그대로 쓰지 않는다.
- * 그 값은 재무까지 포함한 종목당 9회 공식이다.
+ * 그 값은 재무까지 포함한 종목당 12회 공식이다.
  * `syncCorporateActions` 는 `fetchFinancials` 를 건너뛴다.
  * 그래서 그 값은 실제보다 연도당 4회씩 많게 잡힌다.
  *
@@ -220,7 +210,7 @@ export interface CorporateActionSyncEstimate {
  * 증분·앵커 연도 선택 규칙은 자본변동 전용이라도 달라지지 않는다.
  * 여기서 다시 계산하면 두 계획이 갈라질 여지만 생긴다.
  * 승수만 실제 호출 횟수에 맞춰 다시 곱한다.
- * 연도당 `irdsSttus` 1회, `shareYear` 당 `stockTotqySttus` 4회다
+ * 연도당 `irdsSttus` 최대 4회, `shareYear` 당 `stockTotqySttus` 최대 4회다
  * (`dart-fact-source.ts` 의 `fetchCorporateActions` 참고).
  */
 export function estimateCorporateActionSyncCost(plan: FactSyncPlan): CorporateActionSyncEstimate {
