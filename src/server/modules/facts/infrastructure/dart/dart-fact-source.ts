@@ -14,7 +14,6 @@ import type { Fact } from '../../domain/fact.js';
 import {
   DART_MIN_INTERVAL_MS,
   filableReportCount,
-  irdsReportAvailable,
 } from '../../domain/sync-plan.js';
 import {
   createDartCorpCodeCache,
@@ -25,6 +24,8 @@ import {
   parseFinancialRows,
   parseIssuanceRows,
   receiptDateToAsOfTsMs,
+  issuedShareChange,
+  normalizeDateKey,
   REPORT_CODE_TO_QUARTER,
   REPORT_ORDER,
   type DartFinancialRow,
@@ -50,6 +51,8 @@ interface DartShareRow {
   readonly se: string;
   /** 발행한 주식의 총수 */
   readonly istc_totqy: string;
+  /** 해당 정기보고서 표의 기준일 */
+  readonly stlm_dt: string;
 }
 
 /** 공시검색(list.json) 응답 한 건 — 이 어댑터가 소비하는 필드만 */
@@ -57,6 +60,15 @@ interface DartFilingRow {
   readonly stock_code?: string;
   readonly report_nm?: string;
   readonly rcept_dt?: string;
+}
+
+function issuanceKey(row: DartIssuanceRow): string {
+  return [
+    row.isu_dcrs_de,
+    row.isu_dcrs_stle,
+    row.isu_dcrs_stock_knd ?? '',
+    row.isu_dcrs_qy,
+  ].join('|');
 }
 
 /** 공시검색 봉투 — 목록 API 만 페이지 정보를 함께 준다 */
@@ -326,8 +338,9 @@ export function createDartFactSource(
       // 불가능하게 만든다.
       const actionByKey = new Map<string, Fact>();
 
-      /** 'YYYY-MM-DD' → 그 시점 직전 발행주식수. 분기 공시값 중 이벤트 이전 최신값 */
+      /** 'YYYY-MM-DD' → 그 시점의 발행주식수. DART 표가 명시한 기준일을 쓴다. */
       const sharesByPeriod: Array<{ dateKey: string; shares: number }> = [];
+      const filedReports = new Set<string>();
 
       // 앵커 때문에 shareYears 를 돈다 — 대상 연도만 읽으면 그 연도 연초 이벤트의
       // 직전 발행주식수가 없어 비율이 gap 이 되고, 불연속 구간의 앵커가 빠지면 구멍
@@ -335,35 +348,78 @@ export function createDartFactSource(
       for (const year of request.shareYears) {
         for (const reportCode of filableReports(year)) {
           const shareRows = await fetchShareRows(corpCode, year, reportCode);
+          if (shareRows.length > 0) filedReports.add(`${year}:${reportCode}`);
           const common = findCommonShareRow(shareRows);
           if (!common) continue;
           const shares = readShareAmount(common);
-          const asOf = receiptDateToAsOfTsMs(common.rcept_no);
-          if (shares === null || shares <= 0 || asOf === null) continue;
-          sharesByPeriod.push({ dateKey: new Date(asOf).toISOString().slice(0, 10), shares });
+          const dateKey = typeof common.stlm_dt === 'string' ? normalizeDateKey(common.stlm_dt) : null;
+          if (shares === null || shares <= 0 || dateKey === null) {
+            gaps.push({
+              symbol,
+              periodKey: `${year}Q${REPORT_CODE_TO_QUARTER[reportCode]}`,
+              reason: `발행주식수 기준일을 읽을 수 없습니다: ${String(common.stlm_dt)}`,
+            });
+            continue;
+          }
+          sharesByPeriod.push({ dateKey, shares });
         }
       }
       sharesByPeriod.sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1));
 
+      // irdsSttus는 누적 스냅샷이다. 최신 제출 보고서가 이전 행을 정정·삭제할 수 있으므로
+      // 행을 합치지 않고 전체 집합을 교체한다. 그대로 남은 이벤트만 최초 접수번호를 쓴다.
+      const firstReceiptByKey = new Map<string, string>();
+      let latestIssuanceRows: readonly DartIssuanceRow[] = [];
+      for (const year of [...new Set(request.years)].sort((a, b) => a - b)) {
+        for (const reportCode of filableReports(year)) {
+          const rows = await call<DartIssuanceRow>('/api/irdsSttus.json', {
+            corp_code: corpCode,
+            bsns_year: String(year),
+            reprt_code: reportCode,
+          });
+          for (const row of rows) {
+            const key = issuanceKey(row);
+            const firstReceipt = firstReceiptByKey.get(key);
+            if (firstReceipt === undefined || row.rcept_no < firstReceipt) {
+              firstReceiptByKey.set(key, row.rcept_no);
+            }
+          }
+          // 013(아직 미제출)은 빈 배열이지만, 같은 보고서의 주식총수가 있으면 실제로
+          // 제출된 빈 자본변동 스냅샷이므로 이전 집합을 비운다.
+          if (rows.length > 0 || filedReports.has(`${year}:${reportCode}`)) {
+            latestIssuanceRows = rows;
+          }
+        }
+      }
+      const issuanceRows = latestIssuanceRows.map((row) => ({
+        ...row,
+        rcept_no: firstReceiptByKey.get(issuanceKey(row)) ?? row.rcept_no,
+      }));
+      const issuedShareChanges = issuanceRows
+        .map(issuedShareChange)
+        .filter((change): change is NonNullable<typeof change> => change !== null)
+        .sort((a, b) => a.dateKey.localeCompare(b.dateKey));
+
       const sharesBefore = (dateKey: string): number | null => {
-        let found: number | null = null;
+        let anchor: { dateKey: string; shares: number } | null = null;
         for (const entry of sharesByPeriod) {
           if (entry.dateKey >= dateKey) break;
-          found = entry.shares;
+          anchor = entry;
         }
-        return found;
+        if (anchor === null) return null;
+        let shares = anchor.shares;
+        for (const change of issuedShareChanges) {
+          if (change.dateKey <= anchor.dateKey) continue;
+          if (change.dateKey >= dateKey) break;
+          if (change.delta === null) return null;
+          shares += change.delta;
+          if (shares <= 0) return null;
+        }
+        return shares;
       };
 
-      for (const year of request.years) {
-        // 사업보고서 기준 누적 제공 — 사업연도가 끝나지 않은 해는 존재할 수 없다
-        if (!irdsReportAvailable(year, kstDateOf(clock.now()))) continue;
-        const rows = await call<DartIssuanceRow>('/api/irdsSttus.json', {
-          corp_code: corpCode,
-          bsns_year: String(year),
-          reprt_code: '11011', // 자본변동 이력은 사업보고서 기준으로 누적 제공된다
-        });
-        if (rows.length === 0) continue;
-        const parsed = parseIssuanceRows(symbol, rows, sharesBefore);
+      if (issuanceRows.length > 0) {
+        const parsed = parseIssuanceRows(symbol, issuanceRows, sharesBefore);
         for (const fact of parsed.facts) {
           // irdsSttus 는 자본변동 이력을 연도별로 누적 제공한다 — 같은 분할이 해마다
           // 다른 rcept_no 로 반복되고, asOfTsMs 가 다르면 저장소 dedupe 를 통과한다.

@@ -350,8 +350,8 @@ describe('FactSyncService', () => {
 });
 
 /**
- * 200종목 × 12년 백필은 종목·연도당 9회 + 앵커 4회 ≈ 22,400 호출(일 한도 40,000)에
- * rate limiter 로 최소 45분이다. 전 종목을 모아 마지막에 한 번 저장하면 180번째 종목의
+ * 200종목 × 12년 백필은 종목·연도당 12회 + 앵커 4회 ≈ 29,600 호출(일 한도 40,000)에
+ * rate limiter 로 최소 59분이다. 전 종목을 모아 마지막에 한 번 저장하면 180번째 종목의
  * 오류 하나가 앞선 179종목을 통째로 버린다. 아래 테스트가 그 경로를 막는다.
  */
 describe('FactSyncService — 종목 단위 저장과 부분 실패 (긴 백필 생존)', () => {
@@ -756,10 +756,10 @@ describe('FactSyncService — 증분과 취소', () => {
     );
 
     expect(seenWork).toEqual([
-      { year: 2024, shareYears: [2023, 2024], calls: 13 },
-      // 2025-06-01 기준 2025년은 1Q 보고서만 존재할 수 있다 — fnltt 1 + irds 0
-      // + 주식총수 2025 의 1Q 1회 (2024 는 앞 unit 에서 읽음) = 2
-      { year: 2025, shareYears: [2024, 2025], calls: 2 },
+      { year: 2024, shareYears: [2023, 2024], calls: 16 },
+      // 2025-06-01 기준 2025년은 1Q 보고서만 존재할 수 있다 — fnltt·irds·주식총수
+      // 각 1회 (2024 주식총수는 앞 unit 에서 읽음) = 3
+      { year: 2025, shareYears: [2024, 2025], calls: 3 },
     ]);
     expect(report).toMatchObject({
       savedFacts: 2,

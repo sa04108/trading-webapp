@@ -96,7 +96,8 @@ describe('createDartFactSource — 연도 목록 포트', () => {
     const issuanceYears = calls
       .filter((url) => url.includes('irdsSttus'))
       .map((url) => new URL(url).searchParams.get('bsns_year'));
-    expect(issuanceYears).toEqual(['2024']);
+    expect([...new Set(issuanceYears)]).toEqual(['2024']);
+    expect(issuanceYears).toHaveLength(4);
 
     const shareYears = calls
       .filter((url) => url.includes('stockTotqySttus'))
@@ -108,10 +109,10 @@ describe('createDartFactSource — 연도 목록 포트', () => {
 describe('createDartFactSource — 미래 보고서 생략', () => {
   /**
    * 기간이 끝나지 않은 보고서 조회는 항상 013 이다 (2026-08-11 운영 DART 검증).
-   * 그 호출을 생략해야 현재 연도 work unit 이 (최대 9회 대신) 실제로 존재할 수
+   * 그 호출을 생략해야 현재 연도 work unit 이 최대 12회를 무조건 쓰지 않고 실제로 존재할 수
    * 있는 보고서만 요청한다 — sync-plan 의 estimateDartCalls 와 같은 판정을 쓴다.
    */
-  it('현재 연도는 분기말이 지난 보고서만 조회하고 irdsSttus 를 건너뛴다', async () => {
+  it('현재 연도는 분기말이 지난 재무·주식총수·자본변동 보고서만 조회한다', async () => {
     const calls: string[] = [];
     const options = {
       fetchImpl: (async (url: string | URL) => {
@@ -155,8 +156,7 @@ describe('createDartFactSource — 미래 보고서 생략', () => {
       shareYears: [2025, 2026],
       consolidated: true,
     });
-    // 자본변동은 사업보고서 기준 누적 제공 — 2026 사업연도가 끝나지 않아 존재할 수 없다
-    expect(calls.filter((url) => url.includes('irdsSttus'))).toEqual([]);
+    expect(reportsByEndpoint('irdsSttus', '2026')).toEqual(['11012', '11013']);
     expect(reportsByEndpoint('stockTotqySttus', '2026')).toEqual(['11012', '11013']);
   });
 });
@@ -372,6 +372,7 @@ describe('createDartFactSource — 요청 구성', () => {
               rcept_no: '20250515000001',
               se: '보통주',
               istc_totqy: '1,000,000',
+              stlm_dt: '2025-03-31',
             },
           ],
         });
@@ -413,9 +414,9 @@ describe('createDartFactSource — 요청 구성', () => {
           status: '000',
           message: '정상',
           list: [
-            { rcept_no: '20250515000001', se: '보통주', istc_totqy: '1,000,000' },
-            { rcept_no: '20250515000001', se: '우선주', istc_totqy: '200,000' },
-            { rcept_no: '20250515000001', se: '합계', istc_totqy: '1,200,000' },
+            { rcept_no: '20250515000001', se: '보통주', istc_totqy: '1,000,000', stlm_dt: '2025-03-31' },
+            { rcept_no: '20250515000001', se: '우선주', istc_totqy: '200,000', stlm_dt: '2025-03-31' },
+            { rcept_no: '20250515000001', se: '합계', istc_totqy: '1,200,000', stlm_dt: '2025-03-31' },
           ],
         });
       }
@@ -459,7 +460,17 @@ describe('createDartFactSource — 요청 구성', () => {
             return jsonResponse({
               status: '000',
               message: '정상',
-              list: [{ rcept_no: '20250515000001', se: '보통주', istc_totqy: quantity }],
+              list: [{
+                rcept_no: '20250515000001',
+                se: '보통주',
+                istc_totqy: quantity,
+                stlm_dt: {
+                  '11013': '2025-03-31',
+                  '11012': '2025-06-30',
+                  '11014': '2025-09-30',
+                  '11011': '2025-12-31',
+                }[reportCode],
+              }],
             });
           }
         }
@@ -778,7 +789,12 @@ describe('createDartFactSource — 종목별 호출에서도 캐시가 공유된
 });
 
 describe('createDartFactSource — fetchCorporateActions 자본변동 접기', () => {
-  const SHARE_BASELINE = [{ rcept_no: '20200515000001', se: '보통주', istc_totqy: '1,000,000' }];
+  const SHARE_BASELINE = [{
+    rcept_no: '20200515000001',
+    se: '보통주',
+    istc_totqy: '1,000,000',
+    stlm_dt: '2020-03-31',
+  }];
 
   it('같은 분할 이벤트가 해마다 반복되면 가장 이른 공시 하나만 남는다', async () => {
     const fetchImpl = (async (url: string) => {
@@ -837,7 +853,7 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
     expect(actions[0]?.asOfTsMs).toBe(receiptDateToAsOfTsMs('20200620000001'));
   });
 
-  it('같은 기준일의 공시가 비율에 합의하지 않으면 gap 이고 중복 팩트가 남지 않는다', async () => {
+  it('최신 누적 스냅샷의 정정값을 쓰고 이전 값은 버린다', async () => {
     const fetchImpl = (async (url: string) => {
       const target = String(url);
       if (target.includes('stockTotqySttus') && target.includes('reprt_code=11013') && target.includes('bsns_year=2020')) {
@@ -888,32 +904,19 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
 
     const actions = result.facts.filter((fact) => fact.field === 'SPLIT_RATIO');
     expect(actions).toHaveLength(1);
-    expect(actions[0]?.value).toBe(2); // 먼저 들어온 값이 남는다 — 나중 값으로 덮어쓰지 않는다
+    expect(actions[0]?.value).toBe(3);
     expect(
       result.gaps.some((gap) => gap.reason.includes('자본변동 비율이 공시마다 다릅니다')),
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  /**
-   * `sharesBefore` 는 모든 분할 비율의 분모다 — 여기가 틀리면 비율이, 따라서 보정된
-   * 과거 가격 전체가 틀린다. 기존 픽스처는 전부 주식총수 공시를 **하나만** 만들어서
-   * 두 가지 변이가 살아남았다:
-   *   1. 최신값-우선 → 최초값-우선 (이벤트 이전 공시가 여러 개일 때만 갈린다)
-   *   2. `entry.dateKey >= dateKey` → `> dateKey` (이벤트 당일 공시, 즉 분할 **후**
-   *      주식수를 분모로 써 비율이 뒤집힌다)
-   *
-   * 이벤트일(2020-06-15)을 앞뒤로 걸치는 세 공시로 둘을 동시에 죽인다:
-   *   05-15  1,000,000  (이전, 더 오래됨)
-   *   06-01  1,500,000  (이전, 최신 → 올바른 분모)
-   *   06-15  3,000,000  (이벤트 당일 = 분할 후 주식수)
-   * 분할 수량 1,500,000 → 올바른 비율 = (1,500,000+1,500,000)/1,500,000 = 2.
-   * 변이 1 은 2.5, 변이 2 는 1.5 를 낸다.
-   */
-  it('이벤트일을 앞뒤로 걸친 주식총수 공시 중 직전 최신값을 분모로 쓴다', async () => {
-    const sharesByReport: Record<string, { rcept_no: string; istc_totqy: string }> = {
-      '11013': { rcept_no: '20200515000001', istc_totqy: '1,000,000' }, // 2020-05-15
-      '11012': { rcept_no: '20200601000001', istc_totqy: '1,500,000' }, // 2020-06-01
-      '11014': { rcept_no: '20200615000001', istc_totqy: '3,000,000' }, // 2020-06-15 (이벤트 당일)
+  it('공시 접수일이 아니라 분기 기준일로 감자 직전 주식수를 고른다', async () => {
+    const sharesByReport: Record<string, { rcept_no: string; istc_totqy: string; stlm_dt: string }> = {
+      // 미래산업(025560) 실제 값. Q2 보고서는 감자 뒤인 8월에 접수됐지만 기준일은
+      // 감자 직전인 6월 30일이므로 7월 1일 감자의 분모가 되어야 한다.
+      '11013': { rcept_no: '20250514000001', istc_totqy: '59,566,032', stlm_dt: '2025-03-31' },
+      '11012': { rcept_no: '20250813000001', istc_totqy: '71,722,474', stlm_dt: '2025-06-30' },
+      '11014': { rcept_no: '20251114000001', istc_totqy: '4,482,654', stlm_dt: '2025-09-30' },
     };
 
     const fetchImpl = (async (url: string) => {
@@ -929,16 +932,142 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
           }
         }
       }
-      if (target.includes('irdsSttus')) {
+      if (target.includes('irdsSttus') && target.includes('reprt_code=11014')) {
         return jsonResponse({
           status: '000',
           message: '정상',
           list: [
             {
-              isu_dcrs_de: '2020-06-15',
-              isu_dcrs_stle: '주식분할',
-              isu_dcrs_qy: '1,500,000',
-              rcept_no: '20200620000001',
+              isu_dcrs_de: '2025-07-01',
+              isu_dcrs_stle: '무상감자',
+              isu_dcrs_stock_knd: '보통주',
+              isu_dcrs_qy: '67,239,820',
+              rcept_no: '20251112000133',
+            },
+          ],
+        });
+      }
+      if (target.includes('irdsSttus') && target.includes('reprt_code=11011')) {
+        return jsonResponse({
+          status: '000',
+          message: '정상',
+          list: [{
+            isu_dcrs_de: '2025-07-01',
+            isu_dcrs_stle: '무상감자',
+            isu_dcrs_stock_knd: '보통주',
+            isu_dcrs_qy: '67,239,820',
+            rcept_no: '20260319001166',
+          }],
+        });
+      }
+      return jsonResponse({ status: '013', message: 'no data' });
+    }) as unknown as typeof fetch;
+
+    const source = createDartFactSource(
+      { baseUrl: 'https://opendart.fss.or.kr', apiKey: 'K' },
+      LOGGER,
+      { fetchImpl, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER },
+    );
+    const result = await source.fetchCorporateActions({
+      symbols: ['025560'],
+      years: [2025],
+      shareYears: [2024, 2025],
+      consolidated: true,
+    });
+
+    const actions = result.facts.filter((fact) => fact.field === 'SPLIT_RATIO');
+    expect(actions).toHaveLength(1);
+    expect(actions[0]?.value).toBeCloseTo(4_482_654 / 71_722_474);
+    expect(actions[0]?.asOfTsMs).toBe(receiptDateToAsOfTsMs('20251112000133'));
+    expect(result.gaps.some((gap) => gap.reason.includes('비율이 유효하지 않습니다'))).toBe(false);
+  });
+
+  it('최신 누적 스냅샷만 재생하고 남은 이벤트의 최초 접수일은 보존한다', async () => {
+    const fetchImpl = (async (url: string) => {
+      const target = String(url);
+      if (target.includes('stockTotqySttus') && target.includes('reprt_code=11013')) {
+        return jsonResponse({
+          status: '000',
+          message: '정상',
+          list: [{
+            rcept_no: '20250514000001',
+            se: '보통주',
+            istc_totqy: '1,000,000',
+            stlm_dt: '2025-03-31',
+          }],
+        });
+      }
+      if (target.includes('stockTotqySttus') && target.includes('reprt_code=11014')) {
+        return jsonResponse({
+          status: '000',
+          message: '정상',
+          list: [{
+            rcept_no: '20251114000001',
+            se: '보통주',
+            istc_totqy: '650,000',
+            stlm_dt: '2025-09-30',
+          }],
+        });
+      }
+      if (target.includes('stockTotqySttus') && target.includes('reprt_code=11011')) {
+        return jsonResponse({
+          status: '000',
+          message: '정상',
+          list: [{
+            rcept_no: '20260331000001',
+            se: '보통주',
+            istc_totqy: '650,000',
+            stlm_dt: '2025-12-31',
+          }],
+        });
+      }
+      if (target.includes('irdsSttus') && target.includes('reprt_code=11014')) {
+        return jsonResponse({
+          status: '000',
+          message: '정상',
+          list: [
+            {
+              isu_dcrs_de: '2025-07-15',
+              isu_dcrs_stle: '유상증자(제3자배정)',
+              isu_dcrs_stock_knd: '보통주',
+              isu_dcrs_qy: '100,000',
+              rcept_no: '20251114000001',
+            },
+            {
+              isu_dcrs_de: '2025-07-20',
+              isu_dcrs_stle: '전환권행사',
+              isu_dcrs_stock_knd: '보통주',
+              isu_dcrs_qy: '200,000',
+              rcept_no: '20251114000001',
+            },
+            {
+              isu_dcrs_de: '2025-09-01',
+              isu_dcrs_stle: '무상감자',
+              isu_dcrs_stock_knd: '보통주',
+              isu_dcrs_qy: '650,000',
+              rcept_no: '20251114000001',
+            },
+          ],
+        });
+      }
+      if (target.includes('irdsSttus') && target.includes('reprt_code=11011')) {
+        return jsonResponse({
+          status: '000',
+          message: '정상',
+          list: [
+            {
+              isu_dcrs_de: '2025-07-20',
+              isu_dcrs_stle: '전환권행사',
+              isu_dcrs_stock_knd: '보통주',
+              isu_dcrs_qy: '300,000',
+              rcept_no: '20260331000001',
+            },
+            {
+              isu_dcrs_de: '2025-09-01',
+              isu_dcrs_stle: '무상감자',
+              isu_dcrs_stock_knd: '보통주',
+              isu_dcrs_qy: '650,000',
+              rcept_no: '20260331000001',
             },
           ],
         });
@@ -953,14 +1082,64 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
     );
     const result = await source.fetchCorporateActions({
       symbols: ['005930'],
-      years: [2020],
-      shareYears: [2019, 2020],
+      years: [2025],
+      shareYears: [2024, 2025],
       consolidated: true,
     });
 
     const actions = result.facts.filter((fact) => fact.field === 'SPLIT_RATIO');
     expect(actions).toHaveLength(1);
-    expect(actions[0]?.value).toBe(2);
+    expect(actions[0]?.value).toBeCloseTo(0.5);
+    expect(actions[0]?.asOfTsMs).toBe(receiptDateToAsOfTsMs('20251114000001'));
+    expect(result.gaps).toEqual([]);
+  });
+
+  it('하드코딩한 달력이 아니라 stlm_dt를 기준일로 쓴다', async () => {
+    const fetchImpl = (async (url: string) => {
+      const target = String(url);
+      if (target.includes('stockTotqySttus') && target.includes('bsns_year=2024') && target.includes('reprt_code=11011')) {
+        return jsonResponse({
+          status: '000',
+          message: '정상',
+          list: [{ rcept_no: '20250601000001', se: '보통주', istc_totqy: '800,000', stlm_dt: '2025-03-31' }],
+        });
+      }
+      if (target.includes('stockTotqySttus') && target.includes('bsns_year=2025') && target.includes('reprt_code=11013')) {
+        return jsonResponse({
+          status: '000',
+          message: '정상',
+          list: [{ rcept_no: '20250901000001', se: '보통주', istc_totqy: '1,000,000', stlm_dt: '2025-06-30' }],
+        });
+      }
+      if (target.includes('irdsSttus') && target.includes('reprt_code=11013')) {
+        return jsonResponse({
+          status: '000',
+          message: '정상',
+          list: [{
+            isu_dcrs_de: '2025-05-01',
+            isu_dcrs_stle: '무상감자',
+            isu_dcrs_stock_knd: '보통주',
+            isu_dcrs_qy: '400,000',
+            rcept_no: '20250901000001',
+          }],
+        });
+      }
+      return jsonResponse({ status: '013', message: 'no data' });
+    }) as unknown as typeof fetch;
+
+    const source = createDartFactSource(
+      { baseUrl: 'https://opendart.fss.or.kr', apiKey: 'K' },
+      LOGGER,
+      { fetchImpl, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER },
+    );
+    const result = await source.fetchCorporateActions({
+      symbols: ['005930'],
+      years: [2025],
+      shareYears: [2024, 2025],
+      consolidated: true,
+    });
+
+    expect(result.facts.filter((fact) => fact.field === 'SPLIT_RATIO')[0]?.value).toBeCloseTo(0.5);
   });
 
   it('두 종목의 자본변동 접기 키가 서로 새지 않는다', async () => {

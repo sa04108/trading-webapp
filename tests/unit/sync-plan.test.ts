@@ -8,7 +8,7 @@ import {
 } from '../../src/server/modules/facts/domain/sync-plan.js';
 
 // 모든 대상 연도(~2022)가 끝난 뒤다 — 보고서 4종이 전부 존재할 수 있어
-// 기존 호출 수 공식(연도당 9회)이 그대로 성립하는 대조군 날짜.
+// 최대 호출 수 공식(연도당 12회)이 그대로 성립하는 대조군 날짜.
 const AFTER_ALL_YEARS = '2023-06-01';
 
 const BASE = {
@@ -38,13 +38,13 @@ describe('planFactSync', () => {
       year: 2025,
       shareYears: [2024, 2025],
       estimatedDartCalls: 0,
-    }, '2026-06-01')).toBe(13);
+    }, '2026-06-01')).toBe(16);
     expect(estimateDartCalls({
       symbol: '005930',
       year: 2026,
       shareYears: [2025, 2026],
       estimatedDartCalls: 0,
-    }, '2027-06-01', new Set([2024, 2025]))).toBe(9);
+    }, '2027-06-01', new Set([2024, 2025]))).toBe(12);
   });
 
   /**
@@ -54,21 +54,20 @@ describe('planFactSync', () => {
    * 화면 추정치가 거짓말하지 않는다.
    */
   it('연도 work unit 비용은 미래 보고서를 세지 않는다', () => {
-    // 2026-08-11 기준 2026년: fnltt 2(1Q·반기) + irds 0(사업보고서 없음)
-    // + 주식총수 2025년 4 + 2026년 2 = 8
+    // 2026-08-11 기준 2026년: fnltt 2 + irds 2 + 주식총수 2025년 4 + 2026년 2 = 10
     expect(estimateDartCalls({
       symbol: '005930',
       year: 2026,
       shareYears: [2025, 2026],
       estimatedDartCalls: 0,
-    }, '2026-08-11')).toBe(8);
-    // 자본변동 전용: 연도가 끝나지 않아 irds 0 + 주식총수 2 (2025 앵커는 이미 읽음)
+    }, '2026-08-11')).toBe(10);
+    // 자본변동 전용: irds 2 + 주식총수 2 (2025 앵커는 이미 읽음)
     expect(estimateDartCalls({
       symbol: '005930',
       year: 2026,
       shareYears: [2025, 2026],
       estimatedDartCalls: 0,
-    }, '2026-08-11', new Set([2025]), false)).toBe(2);
+    }, '2026-08-11', new Set([2025]), false)).toBe(4);
   });
 
   it('INCREMENTAL 은 covered 연도를 forced 로 지정해야만 다시 계획한다', () => {
@@ -169,10 +168,10 @@ describe('planFactSync', () => {
 
   it('불연속이면 앵커 호출도 구간 수만큼 늘어난다', () => {
     const plan = planFactSync(SPARSE);
-    // 3년 × 9 + 앵커 2구간 × 4 = 27 + 8 = 35. 이 수가 어댑터가 실제로 쏘는 호출 수와
+    // 3년 × 12 + 앵커 2구간 × 4 = 36 + 8 = 44.
     // 같아야 화면 추정치가 거짓말하지 않는다.
-    expect(plan.calls).toBe(35);
-    expect(plan.estimatedMs).toBe(35 * 120);
+    expect(plan.calls).toBe(44);
+    expect(plan.estimatedMs).toBe(44 * 120);
     // 앵커 수는 곧 shareYears 가 years 보다 몇 개 많은지다
     const years = plan.yearsBySymbol.get('005930') ?? [];
     const shareYears = plan.shareYearsBySymbol.get('005930') ?? [];
@@ -194,11 +193,11 @@ describe('planFactSync', () => {
     expect(plan.estimatedMs).toBe(0);
   });
 
-  it('호출 수는 종목당 (연도 × 9 + 앵커 4) 이고 예상 시간은 × 120ms 다', () => {
+  it('호출 수는 종목당 (연도 × 12 + 앵커 4) 이고 예상 시간은 × 120ms 다', () => {
     const plan = planFactSync({ ...BASE, mode: 'FULL' });
-    // 종목 2개 × (3년 × 9 + 4) = 2 × 31 = 62
-    expect(plan.calls).toBe(62);
-    expect(plan.estimatedMs).toBe(62 * 120);
+    // 종목 2개 × (3년 × 12 + 4) = 80
+    expect(plan.calls).toBe(80);
+    expect(plan.estimatedMs).toBe(80 * 120);
     expect(plan.overDailyLimit).toBe(false);
   });
 
@@ -212,8 +211,8 @@ describe('planFactSync', () => {
       coveredBySymbol: new Map(),
       mode: 'FULL',
     });
-    // 200 × (26년 × 9 + 4) = 200 × 238 = 47,600
-    expect(plan.calls).toBe(47_600);
+    // 200 × (26년 × 12 + 4) = 63,200
+    expect(plan.calls).toBe(63_200);
     expect(plan.calls).toBeGreaterThan(DART_DAILY_CALL_LIMIT);
     expect(plan.overDailyLimit).toBe(true);
   });
@@ -228,7 +227,7 @@ describe('planFactSync', () => {
       mode: 'FULL',
     });
     expect(plan.yearsBySymbol.size).toBe(1);
-    expect(plan.calls).toBe(13);
+    expect(plan.calls).toBe(16);
   });
 });
 
@@ -238,14 +237,14 @@ describe('planFactSync', () => {
  * 화면은 이 함수의 값을 써야 실행과 추정이 갈리지 않는다(브리프의 함정 1번).
  */
 describe('estimateCorporateActionSyncCost', () => {
-  it('종목당 (연도 × 1 + shareYears × 4) 다 — 재무 호출을 세지 않는다', () => {
+  it('종목당 (연도 × 4 + shareYears × 4) 다 — 재무 호출을 세지 않는다', () => {
     const plan = planFactSync({ ...BASE, mode: 'FULL' });
     // 종목 2개, 각 3년(2020~2022) + 앵커 1(2019) = shareYears 4개
-    // 종목당 3×1 + 4×4 = 19, 2종목이면 38
-    expect(plan.calls).toBe(62); // planFactSync 의 값(재무 포함)과는 다르다는 대조군
+    // 종목당 3×4 + 4×4 = 28, 2종목이면 56
+    expect(plan.calls).toBe(80); // planFactSync 의 값(재무 포함)과는 다르다는 대조군
     const estimate = estimateCorporateActionSyncCost(plan);
-    expect(estimate.calls).toBe(38);
-    expect(estimate.estimatedMs).toBe(38 * 120);
+    expect(estimate.calls).toBe(56);
+    expect(estimate.estimatedMs).toBe(56 * 120);
     expect(estimate.overDailyLimit).toBe(false);
   });
 
@@ -259,10 +258,10 @@ describe('estimateCorporateActionSyncCost', () => {
       mode: 'INCREMENTAL',
     });
     // years=[2019,2020,2026](3) shareYears=[2018,2019,2020,2025,2026](5)
-    // 3×1 + 5×4 = 23
+    // 3×4 + 5×4 = 32
     const estimate = estimateCorporateActionSyncCost(plan);
-    expect(estimate.calls).toBe(23);
-    expect(estimate.estimatedMs).toBe(23 * 120);
+    expect(estimate.calls).toBe(32);
+    expect(estimate.estimatedMs).toBe(32 * 120);
   });
 
   it('수집할 것이 없으면 비용도 없다', () => {
