@@ -11,6 +11,7 @@ import type {
   FactRepository,
   FactSource,
   FetchFinancialsRequest,
+  PeriodicFiling,
 } from '../../src/server/modules/facts/application/ports.js';
 import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
 
@@ -21,7 +22,10 @@ const CLOCK = { now: () => 1_700_000_000_000 };
 function fakeCoverage(
   initial: ReadonlyMap<string, readonly number[]> = new Map(),
   initialUpdatedAtMs: ReadonlyMap<string, number> = new Map(),
-): FactCoverageStore & { added: Array<{ symbol: string; years: readonly number[] }> } {
+): FactCoverageStore & {
+  added: Array<{ symbol: string; years: readonly number[] }>;
+  processedReceiptNos: Set<string>;
+} {
   const store = new Map<string, number[]>(
     [...initial].map(([symbol, years]) => [symbol, [...years]]),
   );
@@ -31,11 +35,18 @@ function fakeCoverage(
     if (!updatedAt.has(symbol)) updatedAt.set(symbol, 0);
   }
   const added: Array<{ symbol: string; years: readonly number[] }> = [];
+  const processedReceiptNos = new Set<string>();
   return {
     added,
+    processedReceiptNos,
     getCoveredYears: () => new Map([...store].map(([symbol, years]) => [symbol, [...years]])),
     getUpdatedAtMs: (codes) =>
       new Map([...updatedAt].filter(([symbol]) => codes.includes(symbol))),
+    getProcessedFilingReceiptNos: (receiptNos) =>
+      new Set(receiptNos.filter((receiptNo) => processedReceiptNos.has(receiptNo))),
+    addProcessedFilings: (filings) => {
+      for (const filing of filings) processedReceiptNos.add(filing.receiptNo);
+    },
     addCoveredYears: (symbol, years, nowMs) => {
       if (years.length === 0) return;
       added.push({ symbol, years: [...years] });
@@ -962,7 +973,7 @@ describe('FactSyncService — 공시 기반 강제 재수집 (INCREMENTAL)', () 
   const CLOCK_2026 = { now: () => NOW };
 
   function filingSource(
-    filings: readonly { stockCode: string; businessYear: number | null; receiptDate: string }[],
+    filings: readonly PeriodicFiling[],
   ): FactSource & { requests: FetchFinancialsRequest[]; listCalls: Array<[string, string]> } {
     const requests: FetchFinancialsRequest[] = [];
     const listCalls: Array<[string, string]> = [];
@@ -1020,7 +1031,12 @@ describe('FactSyncService — 공시 기반 강제 재수집 (INCREMENTAL)', () 
 
   it('정기공시가 접수된 종목만 그 사업연도를 다시 받는다', async () => {
     const source = filingSource([
-      { stockCode: '005930', businessYear: 2025, receiptDate: '2026-08-10' },
+      {
+        receiptNo: '20260810000001',
+        stockCode: '005930',
+        businessYear: 2025,
+        receiptDate: '2026-08-10',
+      },
     ]);
     const coverage = fakeCoverage(
       new Map([['005930', [2024, 2025]], ['000660', [2024, 2025]]]),
@@ -1032,9 +1048,104 @@ describe('FactSyncService — 공시 기반 강제 재수집 (INCREMENTAL)', () 
     expect(source.requests.map((r) => [r.symbols[0], ...r.years])).toEqual([['005930', 2025]]);
   });
 
+  it('watermark 당일의 같은 접수번호는 성공 후 다시 수집하지 않는다', async () => {
+    const source = filingSource([
+      {
+        receiptNo: '20260811000001',
+        stockCode: '005930',
+        businessYear: 2025,
+        receiptDate: '2026-08-11',
+      },
+    ]);
+    const coverage = fakeCoverage(
+      new Map([['005930', [2024, 2025]]]),
+      new Map([['005930', NOW]]),
+    );
+    const sync = service(source, coverage);
+
+    await sync.sync(request);
+    await sync.sync(request);
+
+    expect(source.requests.map((item) => item.years)).toEqual([[2025]]);
+    expect(coverage.processedReceiptNos).toEqual(new Set(['20260811000001']));
+    // 날짜 경계는 계속 포함하지만, 두 번째 실행은 영속 접수번호로 걸러진다.
+    expect(source.listCalls).toEqual([
+      ['2026-08-11', '2026-08-11'],
+      ['2026-08-11', '2026-08-11'],
+    ]);
+  });
+
+  it('같은 날 새 접수번호가 생기면 해당 사업연도를 한 번 더 수집한다', async () => {
+    const filings: PeriodicFiling[] = [
+      {
+        receiptNo: '20260811000001',
+        stockCode: '005930',
+        businessYear: 2025,
+        receiptDate: '2026-08-11',
+      },
+    ];
+    const source = filingSource(filings);
+    const coverage = fakeCoverage(
+      new Map([['005930', [2024, 2025]]]),
+      new Map([['005930', NOW]]),
+    );
+    const sync = service(source, coverage);
+
+    await sync.sync(request);
+    filings.push({
+      receiptNo: '20260811000002',
+      stockCode: '005930',
+      businessYear: 2025,
+      receiptDate: '2026-08-11',
+    });
+    await sync.sync(request);
+
+    expect(source.requests.map((item) => item.years)).toEqual([[2025], [2025]]);
+    expect(coverage.processedReceiptNos).toEqual(
+      new Set(['20260811000001', '20260811000002']),
+    );
+  });
+
+  it('재무 수집이 실패한 접수번호는 기록하지 않고 다음 실행에서 재시도한다', async () => {
+    const source = filingSource([
+      {
+        receiptNo: '20260811000001',
+        stockCode: '005930',
+        businessYear: 2025,
+        receiptDate: '2026-08-11',
+      },
+    ]);
+    let attempts = 0;
+    source.fetchFinancials = async (fetchRequest) => {
+      source.requests.push(fetchRequest);
+      attempts += 1;
+      if (attempts === 1) throw new Error('일시적인 DART 오류');
+      return { facts: [], gaps: [] };
+    };
+    const coverage = fakeCoverage(
+      new Map([['005930', [2024, 2025]]]),
+      new Map([['005930', NOW]]),
+    );
+    const sync = service(source, coverage);
+
+    const failed = await sync.sync(request);
+    expect(failed.stopReason).toBe('ERROR');
+    expect(coverage.processedReceiptNos).toEqual(new Set());
+
+    const retried = await sync.sync(request);
+    expect(retried.stopReason).toBeNull();
+    expect(attempts).toBe(2);
+    expect(coverage.processedReceiptNos).toEqual(new Set(['20260811000001']));
+  });
+
   it('watermark 이전에 접수된 공시는 이미 반영된 것으로 보고 무시한다', async () => {
     const source = filingSource([
-      { stockCode: '005930', businessYear: 2025, receiptDate: '2026-08-01' },
+      {
+        receiptNo: '20260801000001',
+        stockCode: '005930',
+        businessYear: 2025,
+        receiptDate: '2026-08-01',
+      },
     ]);
     const coverage = fakeCoverage(
       new Map([['005930', [2024, 2025]]]),

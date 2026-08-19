@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { SqliteFactCoverageStore } from '../../src/server/modules/facts/application/fact-coverage-store.js';
 import { openDatabase } from '../../src/server/shared/db/database.js';
-import { symbolFactsState, symbols as symbolsTable } from '../../src/server/shared/db/schema.js';
+import {
+  dartFinancialFilingReceipts,
+  symbolFactsState,
+  symbols as symbolsTable,
+} from '../../src/server/shared/db/schema.js';
 
 function setup() {
   const database = openDatabase(':memory:');
@@ -57,6 +61,33 @@ describe('SqliteFactCoverageStore', () => {
     expect(updated.get('000660')).toBe(300);
     // 기록이 없는 종목은 키 자체가 없다 — 0 을 돌려주면 "1970년 이후 전부" 로 오해된다
     expect(updated.has('999999')).toBe(false);
+    database.close();
+  });
+
+  it('처리한 DART 접수번호를 영속적으로 조회하고 중복 기록은 접는다', () => {
+    const { store, database } = setup();
+    const filing = {
+      receiptNo: '20260811000001',
+      symbol: '005930',
+      businessYear: 2025,
+      receiptDate: '2026-08-11',
+    };
+
+    store.addProcessedFilings([filing, filing], 500);
+    store.addProcessedFilings([filing], 600);
+
+    expect(
+      [...store.getProcessedFilingReceiptNos(['20260811000001', '20260811000002'])],
+    ).toEqual(['20260811000001']);
+    expect(database.db.select().from(dartFinancialFilingReceipts).all()).toEqual([
+      {
+        receiptNo: '20260811000001',
+        code: '005930',
+        businessYear: 2025,
+        receiptDate: '2026-08-11',
+        processedAtMs: 500,
+      },
+    ]);
     database.close();
   });
 

@@ -64,6 +64,8 @@ export interface FetchFinancialsRequest {
 
 /** 공시검색(list.json)이 돌려주는 정기공시 한 건 */
 export interface PeriodicFiling {
+  /** DART 접수번호. 정정공시는 원공시와 다른 접수번호를 가진다 */
+  readonly receiptNo: string;
   /** 6자리 종목코드. 비상장 제출자의 공시는 어댑터가 걸러 여기 오지 않는다 */
   readonly stockCode: string;
   /**

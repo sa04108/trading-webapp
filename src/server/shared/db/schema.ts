@@ -191,6 +191,30 @@ export const symbolFactsState = sqliteTable('symbol_facts_state', {
 });
 
 /**
+ * 재무 증분 수집까지 반영한 DART 정기공시 접수번호.
+ *
+ * `symbol_facts_state.updated_at_ms` 는 날짜보다 정밀하지만 공시검색 API는 접수일만
+ * 돌려준다. watermark 당일을 다시 조회하면서도 같은 공시를 매 실행마다 재수집하지
+ * 않으려면 접수번호를 별도로 기억해야 한다. 행은 팩트 저장과 버전 반영이 성공한 뒤에만
+ * 추가한다 — 실패한 공시는 다음 실행에서 다시 시도한다.
+ */
+export const dartFinancialFilingReceipts = sqliteTable(
+  'dart_financial_filing_receipts',
+  {
+    receiptNo: text('receipt_no').primaryKey(),
+    code: text('code')
+      .notNull()
+      .references(() => symbols.code, { onDelete: 'cascade' }),
+    businessYear: integer('business_year').notNull(),
+    receiptDate: text('receipt_date').notNull(),
+    processedAtMs: integer('processed_at_ms').notNull(),
+  },
+  (table) => [
+    index('idx_dart_financial_filing_receipts_code_year').on(table.code, table.businessYear),
+  ],
+);
+
+/**
  * point-in-time 팩트. periodKey는 재무 기준 기간이고 asOfTsMs는 시장에 알려진 시각이다.
  * 같은 기간의 정정공시는 asOfTsMs가 다른 새 행으로 남는다.
  */

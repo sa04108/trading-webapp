@@ -199,10 +199,15 @@ describe('createDartFactSource — 정기공시 목록 (list.json)', () => {
                   filing({
                     report_nm: '[기재정정]사업보고서 (2025.12)',
                     stock_code: '000660',
+                    rcept_no: '20260601000002',
                     rcept_dt: '20260601',
                   }),
                   // 사업연도 표기가 예상과 다르면 null 로 넘긴다
-                  filing({ report_nm: '분기보고서', stock_code: '000100' }),
+                  filing({
+                    report_nm: '분기보고서',
+                    stock_code: '000100',
+                    rcept_no: '20260515000003',
+                  }),
                 ],
           });
         },
@@ -214,9 +219,24 @@ describe('createDartFactSource — 정기공시 목록 (list.json)', () => {
     const filings = await source.listRecentPeriodicFilings('2026-05-01', '2026-06-02');
 
     expect(filings).toEqual([
-      { stockCode: '005930', businessYear: 2026, receiptDate: '2026-05-15' },
-      { stockCode: '000660', businessYear: 2025, receiptDate: '2026-06-01' },
-      { stockCode: '000100', businessYear: null, receiptDate: '2026-05-15' },
+      {
+        receiptNo: '20260515000001',
+        stockCode: '005930',
+        businessYear: 2026,
+        receiptDate: '2026-05-15',
+      },
+      {
+        receiptNo: '20260601000002',
+        stockCode: '000660',
+        businessYear: 2025,
+        receiptDate: '2026-06-01',
+      },
+      {
+        receiptNo: '20260515000003',
+        stockCode: '000100',
+        businessYear: null,
+        receiptDate: '2026-05-15',
+      },
     ]);
 
     // 정기공시만, 요청 구간 그대로, 페이지 2개
@@ -239,6 +259,26 @@ describe('createDartFactSource — 정기공시 목록 (list.json)', () => {
       },
     );
     expect(await source.listRecentPeriodicFilings('2026-05-01', '2026-05-02')).toEqual([]);
+  });
+
+  it('상장사 공시에 접수번호가 없으면 중복 판정을 계속하지 않는다', async () => {
+    const source = createDartFactSource(
+      { baseUrl: 'https://dart.test', apiKey: 'k' },
+      LOGGER,
+      {
+        fetchImpl: async () => jsonResponse({
+          status: '000',
+          message: '정상',
+          total_page: 1,
+          list: [filing({ rcept_no: '' })],
+        }),
+        sleep: async () => {},
+        corpCodeResolver: STUB_RESOLVER,
+      },
+    );
+
+    await expect(source.listRecentPeriodicFilings('2026-05-01', '2026-05-02'))
+      .rejects.toThrow('접수번호가 올바르지 않습니다');
   });
 });
 

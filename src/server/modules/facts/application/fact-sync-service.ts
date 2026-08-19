@@ -15,7 +15,10 @@ import {
 // 손으로 맞추던 중복 상수를 없앴다(리뷰 finding, 2026-08-08).
 import { FACTS_SLICE } from '../../market-data/application/symbol-service.js';
 import type { CorporateActionCoverageStore } from './corporate-action-coverage.js';
-import type { FactCoverageStore } from './fact-coverage-store.js';
+import type {
+  FactCoverageStore,
+  FinancialFilingCheckpoint,
+} from './fact-coverage-store.js';
 import type {
   FactIngestionGap,
   FactRepository,
@@ -100,13 +103,25 @@ interface SyncStrategy {
     gaps: readonly FactIngestionGap[];
     actionGaps: readonly FactIngestionGap[];
   }>;
-  /** 저장 성공 직후에만 부른다 — 저장 전에 부르면 실패한 연도를 수집했다고 기록한다. */
+  /** 팩트 저장·버전·공시 체크포인트 성공 뒤에만 수집 완료 연도를 기록한다. */
   recordCoverage(
     symbol: string,
     years: readonly number[],
     actionGapYears: readonly number[],
     nowMs: number,
   ): void;
+}
+
+/**
+ * 공시검색으로 강제할 연도와, 그 연도를 성공적으로 받은 뒤 닫을 접수번호 체크포인트.
+ * 자본변동 전용 경로는 기존 날짜 기반 판정을 유지하므로 pending map이 비어 있다.
+ */
+interface RedisclosureDetection {
+  readonly forcedYearsBySymbol: ReadonlyMap<string, readonly number[]>;
+  readonly pendingFinancialFilings: ReadonlyMap<
+    string,
+    ReadonlyMap<number, readonly FinancialFilingCheckpoint[]>
+  >;
 }
 
 /**
@@ -284,6 +299,11 @@ export class FactSyncService {
 
     // 계획은 추정 경로와 같은 함수로 만든다 — 화면의 "약 30분" 과 실제 호출이 갈리지
     // 않게 한다 (domain/sync-plan.ts 헤더 참고)
+    const redisclosures =
+      request.mode === 'INCREMENTAL'
+        ? await this.detectRedisclosedYears(symbols, strategy.includeFinancials)
+        : undefined;
+
     const plan = planFactSync({
       symbols,
       fromYear: request.fromYear,
@@ -291,8 +311,7 @@ export class FactSyncService {
       todayKstDate,
       coveredBySymbol: strategy.getCoveredYears(symbols),
       mode: request.mode,
-      forcedYearsBySymbol:
-        request.mode === 'INCREMENTAL' ? await this.detectRedisclosedYears(symbols) : undefined,
+      forcedYearsBySymbol: redisclosures?.forcedYearsBySymbol,
     });
 
     for (const [index, symbol] of symbols.entries()) {
@@ -369,8 +388,18 @@ export class FactSyncService {
           // 해당 연도 자체 수집이 성공했어도 gap 이 남고 어떤 sync 도 지우지 못해
           // (covered 연도는 증분 계획에서 제외) 준비 작업이 무한 반복하다 실패한다.
           const gapYears = uniqueYearsFromGaps(actionGaps).filter((gapYear) => gapYear === year);
-          strategy.recordCoverage(symbol, [year], gapYears, this.clock.now());
           await this.bumpVersionIfChanged(symbol, fingerprintBefore);
+
+          const completedAtMs = this.clock.now();
+          if (strategy.includeFinancials) {
+            // 접수번호를 먼저 닫는다. 여기서 실패했는데 coverage watermark부터 전진하면
+            // 다음 날 조회 하한 밖으로 밀려 실패한 체크포인트를 다시 볼 수 없다.
+            this.coverage.addProcessedFilings(
+              redisclosures?.pendingFinancialFilings.get(symbol)?.get(year) ?? [],
+              completedAtMs,
+            );
+          }
+          strategy.recordCoverage(symbol, [year], gapYears, completedAtMs);
 
           for (const shareYear of shareYears) requestedShareYears.add(shareYear);
         }
@@ -450,6 +479,7 @@ export class FactSyncService {
    * 예전의 "현재 연도는 항상 다시 받는다" 는 유니버스 전체 × 연도당 최대 12회를
    * 공시가 없어도 태웠다. 여기서는 종목별 coverage 기록 시각(watermark) 이후 접수된
    * 정기공시가 있는 종목·사업연도만 돌려준다 — 공시 없는 종목은 0 호출이다.
+   * 재무 경로에서는 처리한 접수번호를 제외해 같은 날 같은 공시를 다시 받지 않는다.
    *
    * watermark 가 조회 하한보다 오래된 종목은 공시 목록으로 판정할 수 없으므로
    * 옛 blanket 규칙(현재 연도 강제)으로 되돌린다. 목록 조회 실패는 강제 재수집만
@@ -457,7 +487,8 @@ export class FactSyncService {
    */
   private async detectRedisclosedYears(
     symbols: readonly string[],
-  ): Promise<ReadonlyMap<string, readonly number[]> | undefined> {
+    trackFinancialReceipts: boolean,
+  ): Promise<RedisclosureDetection | undefined> {
     const watermarks = this.coverage.getUpdatedAtMs(symbols);
     if (watermarks.size === 0) return undefined; // 수집 이력이 없다 — 증분 계획이 전부 받는다
 
@@ -466,10 +497,20 @@ export class FactSyncService {
     const lookbackFloor = addCalendarDays(today, -FILING_LOOKBACK_MAX_DAYS);
 
     const forced = new Map<string, number[]>();
+    const pending = new Map<string, Map<number, FinancialFilingCheckpoint[]>>();
     const addForced = (symbol: string, year: number): void => {
       const years = forced.get(symbol) ?? [];
       if (!years.includes(year)) years.push(year);
       forced.set(symbol, years);
+    };
+    const addPending = (checkpoint: FinancialFilingCheckpoint): void => {
+      const byYear = pending.get(checkpoint.symbol) ?? new Map<number, FinancialFilingCheckpoint[]>();
+      const filings = byYear.get(checkpoint.businessYear) ?? [];
+      if (!filings.some((filing) => filing.receiptNo === checkpoint.receiptNo)) {
+        filings.push(checkpoint);
+      }
+      byYear.set(checkpoint.businessYear, filings);
+      pending.set(checkpoint.symbol, byYear);
     };
 
     const watermarkDates = new Map<string, string>();
@@ -485,25 +526,49 @@ export class FactSyncService {
     }
 
     if (fromDate !== null) {
-      try {
-        const filings = await this.source.listRecentPeriodicFilings(fromDate, today);
-        for (const filing of filings) {
-          const watermarkDate = watermarkDates.get(filing.stockCode);
-          if (watermarkDate === undefined) continue; // 이번 요청 밖 종목이거나 blanket 처리됨
-          // 같은 날 접수는 포함한다 — watermark 는 시각, 접수일은 날짜라 경계에서
-          // 놓치는 쪽보다 한 번 더 받는 쪽이 싸다 (내용이 같으면 버전도 안 오른다)
-          if (filing.receiptDate < watermarkDate) continue;
-          addForced(filing.stockCode, filing.businessYear ?? currentYear);
-        }
-      } catch (error) {
+      const filings = await this.source.listRecentPeriodicFilings(fromDate, today).catch((error) => {
         this.logger.warn(
           { module: 'facts', event: 'facts.filings.lookup-failed', err: error },
           '정기공시 목록 조회에 실패해 재공시 재수집을 건너뛴다 — 미수집 연도 수집은 계속한다',
         );
+        return null;
+      });
+
+      if (filings !== null) {
+        const candidates = filings.flatMap((filing) => {
+          const watermarkDate = watermarkDates.get(filing.stockCode);
+          if (watermarkDate === undefined) return []; // 이번 요청 밖 종목이거나 blanket 처리됨
+          // 접수일만 주는 API라 watermark 당일은 반드시 포함한다. 재무 경로의 중복은
+          // 날짜 경계를 버리는 대신 아래의 영속 접수번호 체크포인트로 제거한다.
+          if (filing.receiptDate < watermarkDate) return [];
+          return [{ filing, businessYear: filing.businessYear ?? currentYear }];
+        });
+        const processedReceiptNos = trackFinancialReceipts
+          ? this.coverage.getProcessedFilingReceiptNos(
+              candidates.map(({ filing }) => filing.receiptNo),
+            )
+          : new Set<string>();
+        const seenReceiptNos = new Set<string>();
+
+        for (const { filing, businessYear } of candidates) {
+          if (seenReceiptNos.has(filing.receiptNo)) continue;
+          seenReceiptNos.add(filing.receiptNo);
+          if (processedReceiptNos.has(filing.receiptNo)) continue;
+
+          addForced(filing.stockCode, businessYear);
+          if (trackFinancialReceipts) {
+            addPending({
+              receiptNo: filing.receiptNo,
+              symbol: filing.stockCode,
+              businessYear,
+              receiptDate: filing.receiptDate,
+            });
+          }
+        }
       }
     }
 
-    return forced;
+    return { forcedYearsBySymbol: forced, pendingFinancialFilings: pending };
   }
 
   /**

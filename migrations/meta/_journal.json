@@ -169,6 +169,13 @@
       "when": 1787029088394,
       "tag": "0023_corporate_action_period_end",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1787148317471,
+      "tag": "0024_rich_shinko_yamashiro",
+      "breakpoints": true
     }
   ]
 }

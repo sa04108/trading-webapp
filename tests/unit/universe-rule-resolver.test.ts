@@ -384,6 +384,8 @@ function makePipelineResolver(options: {
         ? financialCoverage
         : new Map([...financialCoverage].filter(([code]) => codes.includes(code))),
       getUpdatedAtMs: () => new Map<string, number>(),
+      getProcessedFilingReceiptNos: () => new Set<string>(),
+      addProcessedFilings: () => undefined,
       addCoveredYears: () => undefined,
     },
     candles: {

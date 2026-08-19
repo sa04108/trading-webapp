@@ -59,6 +59,7 @@ interface DartShareRow {
 interface DartFilingRow {
   readonly stock_code?: string;
   readonly report_nm?: string;
+  readonly rcept_no?: string;
   readonly rcept_dt?: string;
 }
 
@@ -478,8 +479,15 @@ export function createDartFactSource(
         if (!/^\d{6}$/.test(stockCode)) continue;
         const rawDate = row.rcept_dt ?? '';
         if (!/^\d{8}$/.test(rawDate)) continue;
+        const receiptNo = row.rcept_no?.trim() ?? '';
+        if (!/^\d{14}$/.test(receiptNo)) {
+          throw new Error(
+            `DART 정기공시 목록의 접수번호가 올바르지 않습니다: ${receiptNo || '(없음)'}`,
+          );
+        }
         const yearMatch = REPORT_NAME_YEAR_PATTERN.exec(row.report_nm ?? '');
         filings.push({
+          receiptNo,
           stockCode,
           businessYear: yearMatch ? Number(yearMatch[1]) : null,
           receiptDate: `${rawDate.slice(0, 4)}-${rawDate.slice(4, 6)}-${rawDate.slice(6, 8)}`,

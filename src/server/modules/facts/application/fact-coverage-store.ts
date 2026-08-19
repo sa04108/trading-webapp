@@ -1,6 +1,17 @@
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import type { AppDatabase } from '../../../shared/db/database.js';
-import { symbolFactsState } from '../../../shared/db/schema.js';
+import {
+  dartFinancialFilingReceipts,
+  symbolFactsState,
+} from '../../../shared/db/schema.js';
+
+/** 재무 수집으로 반영을 끝낸 정기공시 한 건의 체크포인트 */
+export interface FinancialFilingCheckpoint {
+  readonly receiptNo: string;
+  readonly symbol: string;
+  readonly businessYear: number;
+  readonly receiptDate: string;
+}
 
 /**
  * 종목별 재무 수집 완료 연도. 증분 수집이 "무엇이 아직 없는지" 를 알기 위한 유일한
@@ -25,6 +36,13 @@ export interface FactCoverageStore {
    * 종목은 키를 만들지 않는다 (0 을 주면 "1970년 이후 전부 재공시" 로 읽힌다).
    */
   getUpdatedAtMs(codes: readonly string[]): ReadonlyMap<string, number>;
+  /** 후보 중 이미 재무 수집에 반영한 DART 접수번호 */
+  getProcessedFilingReceiptNos(receiptNos: readonly string[]): ReadonlySet<string>;
+  /** 팩트 저장과 버전 반영에 성공한 공시만 멱등하게 기록한다 */
+  addProcessedFilings(
+    filings: readonly FinancialFilingCheckpoint[],
+    processedAtMs: number,
+  ): void;
 }
 
 export class SqliteFactCoverageStore implements FactCoverageStore {
@@ -47,6 +65,47 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
       if (codes.includes(row.code)) result.set(row.code, row.updatedAtMs);
     }
     return result;
+  }
+
+  getProcessedFilingReceiptNos(receiptNos: readonly string[]): ReadonlySet<string> {
+    const result = new Set<string>();
+    // SQLite 빌드별 바인드 변수 상한보다 충분히 작게 나눠 조회한다.
+    for (let offset = 0; offset < receiptNos.length; offset += 500) {
+      const chunk = receiptNos.slice(offset, offset + 500);
+      if (chunk.length === 0) continue;
+      const rows = this.db
+        .select({ receiptNo: dartFinancialFilingReceipts.receiptNo })
+        .from(dartFinancialFilingReceipts)
+        .where(inArray(dartFinancialFilingReceipts.receiptNo, chunk))
+        .all();
+      for (const row of rows) result.add(row.receiptNo);
+    }
+    return result;
+  }
+
+  addProcessedFilings(
+    filings: readonly FinancialFilingCheckpoint[],
+    processedAtMs: number,
+  ): void {
+    const unique = [...new Map(filings.map((filing) => [filing.receiptNo, filing])).values()];
+    // 한 행이 바인드 변수 5개를 쓰므로 100건씩 넣어 구형 SQLite의 상한도 넘지 않는다.
+    for (let offset = 0; offset < unique.length; offset += 100) {
+      const chunk = unique.slice(offset, offset + 100);
+      if (chunk.length === 0) continue;
+      this.db
+        .insert(dartFinancialFilingReceipts)
+        .values(
+          chunk.map((filing) => ({
+            receiptNo: filing.receiptNo,
+            code: filing.symbol,
+            businessYear: filing.businessYear,
+            receiptDate: filing.receiptDate,
+            processedAtMs,
+          })),
+        )
+        .onConflictDoNothing()
+        .run();
+    }
   }
 
   addCoveredYears(symbol: string, years: readonly number[], nowMs: number): void {
