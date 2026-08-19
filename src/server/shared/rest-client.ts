@@ -32,6 +32,11 @@ export interface RestClientOptions {
   readonly clock?: () => number;
 }
 
+/** 물리적인 HTTP attempt마다 실행되는 hook. 재시도도 각각 한 번씩 호출한다. */
+export interface RestRequestHooks {
+  beforeAttempt?(): void;
+}
+
 const DEFAULT_MIN_INTERVAL_MS = 250;
 const TOKEN_REFRESH_MARGIN_MS = 60_000;
 
@@ -77,12 +82,14 @@ export class RestClient {
     group: string,
     path: string,
     init: { method?: string; body?: unknown; headers?: Record<string, string> } = {},
+    hooks: RestRequestHooks = {},
   ): Promise<T> {
     let attempt = 0;
 
     for (;;) {
       await this.respectRateLimit(group);
       const token = await this.getToken();
+      hooks.beforeAttempt?.();
 
       const response = await this.fetchImpl(`${this.options.baseUrl}${path}`, {
         method: init.method ?? 'GET',

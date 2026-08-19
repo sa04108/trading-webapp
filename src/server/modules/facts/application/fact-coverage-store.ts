@@ -31,9 +31,8 @@ export interface FactCoverageStore {
   /** 종목 하나의 완료 연도를 합집합으로 더한다. 팩트 저장 직후에 부른다. */
   addCoveredYears(symbol: string, years: readonly number[], nowMs: number): void;
   /**
-   * 종목 → 마지막 coverage 기록 시각. 공시검색 재수집 판정의 watermark 다 — 이 시각
-   * 이후 접수된 정기공시가 있으면 그 종목만 covered 연도를 다시 받는다. 기록이 없는
-   * 종목은 키를 만들지 않는다 (0 을 주면 "1970년 이후 전부 재공시" 로 읽힌다).
+   * 종목 → 마지막 재무 coverage 기록 시각. 재무 공시검색만의 watermark 다.
+   * 기록이 없는 종목은 키를 만들지 않는다.
    */
   getUpdatedAtMs(codes: readonly string[]): ReadonlyMap<string, number>;
   /** 후보 중 이미 재무 수집에 반영한 DART 접수번호 */
@@ -59,10 +58,13 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
   }
 
   getUpdatedAtMs(codes: readonly string[]): ReadonlyMap<string, number> {
-    const rows = this.db.select().from(symbolFactsState).all();
+    const rows = this.db
+      .select({ code: symbolFactsState.code, updatedAtMs: symbolFactsState.financialUpdatedAtMs })
+      .from(symbolFactsState)
+      .all();
     const result = new Map<string, number>();
     for (const row of rows) {
-      if (codes.includes(row.code)) result.set(row.code, row.updatedAtMs);
+      if (codes.includes(row.code) && row.updatedAtMs !== null) result.set(row.code, row.updatedAtMs);
     }
     return result;
   }
@@ -127,14 +129,14 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
     if (existing) {
       this.db
         .update(symbolFactsState)
-        .set({ coveredYearsJson, updatedAtMs: nowMs })
+        .set({ coveredYearsJson, updatedAtMs: nowMs, financialUpdatedAtMs: nowMs })
         .where(eq(symbolFactsState.code, symbol))
         .run();
       return;
     }
     this.db
       .insert(symbolFactsState)
-      .values({ code: symbol, coveredYearsJson, updatedAtMs: nowMs })
+      .values({ code: symbol, coveredYearsJson, updatedAtMs: nowMs, financialUpdatedAtMs: nowMs })
       .run();
   }
 }

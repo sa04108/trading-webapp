@@ -67,7 +67,9 @@ export function filableReportCount(year: number, todayKstDate: string): number {
   return count;
 }
 
-/** DART 외부 호출을 시작하기 전에 quota를 확인하는 최소 중단 단위. */
+/**
+ * 화면·계획의 DART 비용 추정 단위. 실행 quota는 실제 HTTP attempt hook에서 차감한다.
+ */
 export interface FactSyncWorkUnit {
   readonly symbol: string;
   readonly year: number;
@@ -77,13 +79,15 @@ export interface FactSyncWorkUnit {
 }
 
 /**
- * 재무 + 자본변동 work unit의 실제 DART 호출 수를 계산한다.
+ * 재무 + 자본변동 work unit의 예상 DART 호출 수를 계산한다.
  *
  * 한 사업연도는 최대 재무보고서 4회 + 자본변동 보고서 4회지만, 아직 기간이 끝나지 않은
  * 보고서는 존재할 수 없으므로 세지 않는다 (`filableReportCount`). 주식총수는 연도당
  * 최대 4회지만 `dart-fact-source`가 같은 종목·연도·보고서 응답을 캐시하므로, 앞
- * work unit에서 이미 읽은 share year는 다시 세지 않는다. 이 함수가 `planFactSync`와
- * 실행 hook 양쪽의 숫자를 만든다.
+ * work unit에서 이미 읽은 share year는 다시 세지 않는다.
+ *
+ * 목록 페이지·corpCode.xml·HTTP 재시도는 여기 없으므로 실행 quota 차감에는 쓰지 않는다.
+ * 실행 경로는 `FactSourceRequestHooks.beforeRequest`로 물리적인 요청을 직접 센다.
  */
 export function estimateDartCalls(
   work: Omit<FactSyncWorkUnit, 'estimatedDartCalls'> | FactSyncWorkUnit,

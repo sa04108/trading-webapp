@@ -187,7 +187,12 @@ export const symbolFactsState = sqliteTable('symbol_facts_state', {
   actionCoveredYearsJson: text('action_covered_years_json'),
   /** 자본변동 수집에서 gap 이 난 연도 (number[] 오름차순 JSON). 경고가 읽는다 */
   actionGapYearsJson: text('action_gap_years_json'),
+  /** 과거 마이그레이션 호환용 최종 갱신 시각. 새 watermark 판정에는 쓰지 않는다 */
   updatedAtMs: integer('updated_at_ms').notNull(),
+  /** 재무 수집만 전진시키는 공시검색 watermark */
+  financialUpdatedAtMs: integer('financial_updated_at_ms'),
+  /** 자본변동 수집만 전진시키는 공시검색 watermark */
+  actionUpdatedAtMs: integer('action_updated_at_ms'),
 });
 
 /**

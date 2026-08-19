@@ -5,13 +5,14 @@ import {
   FactSyncService,
   type FactSyncRequest,
 } from '../../src/server/modules/facts/application/fact-sync-service.js';
-import type {
-  SymbolVersionBumper,
-  FactIngestionResult,
-  FactRepository,
-  FactSource,
-  FetchFinancialsRequest,
-  PeriodicFiling,
+import {
+  FactSourceNotConfiguredError,
+  type SymbolVersionBumper,
+  type FactIngestionResult,
+  type FactRepository,
+  type FactSource,
+  type FetchFinancialsRequest,
+  type PeriodicFiling,
 } from '../../src/server/modules/facts/application/ports.js';
 import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
 
@@ -59,11 +60,11 @@ function fakeCoverage(
   };
 }
 
-/** 자본변동 커버리지 기록을 메모리에 쌓는 가짜 저장소. `codes` 필터는 이 테스트들이
- *  쓰지 않으므로 구현하지 않는다 — 항상 전체를 돌려준다. */
+/** 자본변동 커버리지와 독립 watermark를 메모리에 쌓는 가짜 저장소. */
 function fakeActionCoverage(): CorporateActionCoverageStore {
   const covered = new Map<string, number[]>();
   const gaps = new Map<string, number[]>();
+  const updatedAt = new Map<string, number>();
   const merge = (store: Map<string, number[]>, symbol: string, years: readonly number[]): void => {
     if (years.length === 0) return;
     store.set(
@@ -71,11 +72,22 @@ function fakeActionCoverage(): CorporateActionCoverageStore {
       [...new Set([...(store.get(symbol) ?? []), ...years])].sort((a, b) => a - b),
     );
   };
+  const add = (
+    store: Map<string, number[]>,
+    symbol: string,
+    years: readonly number[],
+    nowMs: number,
+  ): void => {
+    merge(store, symbol, years);
+    if (years.length > 0) updatedAt.set(symbol, nowMs);
+  };
   return {
     getCoveredYears: () => new Map([...covered].map(([symbol, years]) => [symbol, [...years]])),
     getGapYears: () => new Map([...gaps].map(([symbol, years]) => [symbol, [...years]])),
-    addCoveredYears: (symbol, years) => merge(covered, symbol, years),
-    addGapYears: (symbol, years) => merge(gaps, symbol, years),
+    getUpdatedAtMs: (codes) =>
+      new Map([...updatedAt].filter(([symbol]) => codes.includes(symbol))),
+    addCoveredYears: (symbol, years, nowMs) => add(covered, symbol, years, nowMs),
+    addGapYears: (symbol, years, nowMs) => add(gaps, symbol, years, nowMs),
   };
 }
 
@@ -721,19 +733,27 @@ describe('FactSyncService — 증분과 취소', () => {
     ]);
   });
 
-  it('다음 종목·연도 work unit 전에 quota로 멈추고 저장·이력을 보존한다', async () => {
+  it('세 번째 실제 DART 요청 직전에 quota로 멈추고 완료 연도의 저장·이력을 보존한다', async () => {
     const coverage = fakeCoverage();
     const repository = fakeRepository();
-    const seenWork: Array<{ year: number; shareYears: readonly number[]; calls: number }> = [];
+    const sentRequests: string[] = [];
     const source: FactSource = {
-      fetchFinancials: async (request) => ({
-        facts: [
-          { ...fact('CURRENT_ASSETS', request.years[0]!), periodKey: `${request.years[0]}Q1` },
-          { ...fact('CURRENT_LIABILITIES', request.years[0]!), periodKey: `${request.years[0]}Q1` },
-        ],
-        gaps: [],
-      }),
-      fetchCorporateActions: async () => ({ facts: [], gaps: [] }),
+      fetchFinancials: async (request, hooks) => {
+        hooks?.beforeRequest?.();
+        sentRequests.push(`financial:${request.years[0]}`);
+        return {
+          facts: [
+            { ...fact('CURRENT_ASSETS', request.years[0]!), periodKey: `${request.years[0]}Q1` },
+            { ...fact('CURRENT_LIABILITIES', request.years[0]!), periodKey: `${request.years[0]}Q1` },
+          ],
+          gaps: [],
+        };
+      },
+      fetchCorporateActions: async (request, hooks) => {
+        hooks?.beforeRequest?.();
+        sentRequests.push(`actions:${request.years[0]}`);
+        return { facts: [], gaps: [] };
+      },
       listRecentPeriodicFilings: async () => [],
     };
     const service = new FactSyncService(
@@ -741,10 +761,11 @@ describe('FactSyncService — 증분과 취소', () => {
       repository,
       LOGGER,
       fakeVersions(),
-      { now: () => Date.UTC(2025, 5, 1) },
+      CLOCK,
       coverage,
       fakeActionCoverage(),
     );
+    let reservedRequests = 0;
 
     const report = await service.sync(
       {
@@ -755,23 +776,16 @@ describe('FactSyncService — 증분과 취소', () => {
         mode: 'FULL',
       },
       {
-        beforeWorkUnit: (work) => {
-          seenWork.push({
-            year: work.year,
-            shareYears: work.shareYears,
-            calls: work.estimatedDartCalls,
-          });
-          return work.year === 2025 ? 'PAUSE_DAILY_QUOTA' : 'CONTINUE';
+        beforeDartRequest: () => {
+          if (reservedRequests >= 2) return 'PAUSE_DAILY_QUOTA';
+          reservedRequests += 1;
+          return 'CONTINUE';
         },
       },
     );
 
-    expect(seenWork).toEqual([
-      { year: 2024, shareYears: [2023, 2024], calls: 16 },
-      // 2025-06-01 기준 2025년은 1Q 보고서만 존재할 수 있다 — fnltt·irds·주식총수
-      // 각 1회 (2024 주식총수는 앞 unit 에서 읽음) = 3
-      { year: 2025, shareYears: [2024, 2025], calls: 3 },
-    ]);
+    expect(sentRequests).toEqual(['financial:2024', 'actions:2024']);
+    expect(reservedRequests).toBe(2);
     expect(report).toMatchObject({
       savedFacts: 2,
       stoppedAtSymbol: '005930',
@@ -1171,10 +1185,10 @@ describe('FactSyncService — 공시 기반 강제 재수집 (INCREMENTAL)', () 
     expect(source.listCalls).toEqual([]);
   });
 
-  it('공시 목록 조회가 실패해도 미수집 연도 수집은 계속된다', async () => {
+  it('공시 목록 조회가 실패하면 최신 여부를 숨기지 않고 ERROR로 중단한다', async () => {
     const source = filingSource([]);
     source.listRecentPeriodicFilings = async () => {
-      throw new Error('DART 응답 오류 020: 요청 제한을 초과하였습니다.');
+      throw new Error('일시적인 DART 목록 오류');
     };
     const coverage = fakeCoverage(
       new Map([['005930', [2025]]]),
@@ -1183,9 +1197,58 @@ describe('FactSyncService — 공시 기반 강제 재수집 (INCREMENTAL)', () 
 
     const report = await service(source, coverage).sync(request);
 
-    // 강제 재수집만 포기하고, 미수집 2024 는 그대로 받는다
-    expect(source.requests.map((r) => r.years)).toEqual([[2024]]);
-    expect(report.stopReason).toBeNull();
+    expect(source.requests).toEqual([]);
+    expect(report).toMatchObject({
+      savedFacts: 0,
+      stoppedAtSymbol: '005930',
+      stopReason: 'ERROR',
+    });
+    expect(report.failureMessage).toContain('정기공시 목록 또는 워터마크 조회에 실패');
+    expect(report.failureMessage).toContain('일시적인 DART 목록 오류');
+  });
+
+  it('DART를 의도적으로 설정하지 않았고 연도가 모두 covered면 기존 데이터를 사용한다', async () => {
+    const source = filingSource([]);
+    source.listRecentPeriodicFilings = async () => {
+      throw new FactSourceNotConfiguredError();
+    };
+    const coverage = fakeCoverage(
+      new Map([['005930', [2024, 2025]]]),
+      new Map([['005930', NOW - 5 * DAY_MS]]),
+    );
+
+    const report = await service(source, coverage).sync(request);
+
+    expect(source.requests).toEqual([]);
+    expect(report).toMatchObject({
+      savedFacts: 0,
+      stoppedAtSymbol: null,
+      stopReason: null,
+      failureMessage: null,
+    });
+  });
+
+  it('공시 목록의 실제 HTTP 요청 전에도 일일 quota를 적용한다', async () => {
+    const source = filingSource([]);
+    let sentRequests = 0;
+    source.listRecentPeriodicFilings = async (_fromDate, _toDate, hooks) => {
+      hooks?.beforeRequest?.();
+      sentRequests += 1;
+      return [];
+    };
+    const coverage = fakeCoverage(
+      new Map([['005930', [2025]]]),
+      new Map([['005930', NOW - 5 * DAY_MS]]),
+    );
+
+    const report = await service(source, coverage).sync(request, {
+      beforeDartRequest: () => 'PAUSE_DAILY_QUOTA',
+    });
+
+    expect(sentRequests).toBe(0);
+    expect(source.requests).toEqual([]);
+    expect(report.stopReason).toBe('DAILY_QUOTA');
+    expect(report.failureMessage).toContain('한도 초과 요청은 보내지 않았습니다');
   });
 });
 
@@ -1230,6 +1293,52 @@ describe('FactSyncService — 자본변동 전용 수집', () => {
     // 자본변동 커버리지는 비어 있으므로 2020 을 다시 요청해야 한다. 재무 커버리지를
     // 잘못 봤다면 이미 커버됐다는 이유로 요청 자체가 나가지 않는다.
     expect(source.requests[0]?.years).toEqual([2020]);
+  });
+
+  it('자본변동 공시 조회 하한에는 재무가 아닌 자본변동 watermark를 쓴다', async () => {
+    const now = Date.UTC(2026, 7, 11);
+    const dayMs = 86_400_000;
+    const listCalls: Array<[string, string]> = [];
+    let actionCalls = 0;
+    const source: FactSource = {
+      fetchFinancials: async () => ({ facts: [], gaps: [] }),
+      fetchCorporateActions: async () => {
+        actionCalls += 1;
+        return { facts: [], gaps: [] };
+      },
+      listRecentPeriodicFilings: async (fromDate, toDate) => {
+        listCalls.push([fromDate, toDate]);
+        return [];
+      },
+    };
+    const financialCoverage = fakeCoverage(
+      new Map([['005930', [2025]]]),
+      new Map([['005930', now - dayMs]]),
+    );
+    const actionCoverage = fakeActionCoverage();
+    actionCoverage.addCoveredYears('005930', [2025], now - 5 * dayMs);
+    const service = new FactSyncService(
+      source,
+      fakeRepository(),
+      LOGGER,
+      fakeVersions(),
+      { now: () => now },
+      financialCoverage,
+      actionCoverage,
+    );
+
+    const report = await service.syncCorporateActions({
+      symbols: ['005930'],
+      fromYear: 2025,
+      toYear: 2025,
+      consolidated: true,
+      mode: 'INCREMENTAL',
+    });
+
+    // 재무 watermark(8/10)가 아니라 자본변동 watermark(8/6)부터 조회한다.
+    expect(listCalls).toEqual([['2026-08-06', '2026-08-11']]);
+    expect(actionCalls).toBe(0);
+    expect(report.stopReason).toBeNull();
   });
 
   it('재무를 부르지 않는다', async () => {

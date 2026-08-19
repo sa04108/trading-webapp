@@ -7,6 +7,7 @@ import {
   type FactIngestionGap,
   type FactIngestionResult,
   type FactSource,
+  type FactSourceRequestHooks,
   type FetchFinancialsRequest,
   type PeriodicFiling,
 } from '../../application/ports.js';
@@ -129,7 +130,8 @@ export function createDartFactSource(
   const dartConfig: DartConfig = config;
   const clock: Clock = options.clock ?? { now: () => Date.now() };
   // 기간이 끝나지 않은 보고서는 존재할 수 없어 조회가 항상 013 이다 — 호출을 생략한다.
-  // 판정은 sync-plan 의 estimateDartCalls 와 같은 함수를 쓴다 (추정=실행 계약).
+  // 화면 추정치도 같은 filableReportCount를 쓰되, 실행 quota는 이 추정에 의존하지 않고
+  // 아래의 실제 HTTP attempt hook에서 직접 센다.
   const filableReports = (year: number): readonly DartReportCode[] =>
     REPORT_ORDER.filter(
       (code) => REPORT_CODE_TO_QUARTER[code] <= filableReportCount(year, kstDateOf(clock.now())),
@@ -148,9 +150,15 @@ export function createDartFactSource(
   async function call<T>(
     path: string,
     params: Record<string, string>,
+    hooks: FactSourceRequestHooks = {},
   ): Promise<readonly T[]> {
     const query = new URLSearchParams({ crtfc_key: dartConfig.apiKey, ...params });
-    const envelope = await client.request<DartEnvelope<T>>('default', `${path}?${query.toString()}`);
+    const envelope = await client.request<DartEnvelope<T>>(
+      'default',
+      `${path}?${query.toString()}`,
+      {},
+      { beforeAttempt: hooks.beforeRequest },
+    );
     if (envelope.status === NO_DATA_STATUS) return [];
     if (envelope.status !== OK_STATUS) {
       // 인증 실패·한도 초과를 빈 결과로 흡수하면 "수집했는데 0건" 으로 오해된다
@@ -181,14 +189,23 @@ export function createDartFactSource(
     corpCode: string,
     year: number,
     reportCode: DartReportCode,
+    hooks: FactSourceRequestHooks,
   ): Promise<readonly DartShareRow[]> {
     const cacheKey = `${corpCode}:${year}:${reportCode}`;
     const cached = shareRowsCache.get(cacheKey);
     if (cached) return cached;
-    const promise = call<DartShareRow>('/api/stockTotqySttus.json', {
-      corp_code: corpCode,
-      bsns_year: String(year),
-      reprt_code: reportCode,
+    const promise = call<DartShareRow>(
+      '/api/stockTotqySttus.json',
+      {
+        corp_code: corpCode,
+        bsns_year: String(year),
+        reprt_code: reportCode,
+      },
+      hooks,
+    ).catch((error: unknown) => {
+      // quota 중단·네트워크 오류를 영구 캐시하면 다음 실행도 실제 요청 없이 계속 실패한다.
+      shareRowsCache.delete(cacheKey);
+      throw error;
     });
     shareRowsCache.set(cacheKey, promise);
     return promise;
@@ -208,13 +225,16 @@ export function createDartFactSource(
     return typeof row.istc_totqy === 'string' ? parseAmount(row.istc_totqy) : null;
   }
 
-  async function fetchFinancials(request: FetchFinancialsRequest): Promise<FactIngestionResult> {
+  async function fetchFinancials(
+    request: FetchFinancialsRequest,
+    hooks: FactSourceRequestHooks = {},
+  ): Promise<FactIngestionResult> {
     const facts: Fact[] = [];
     const gaps: FactIngestionGap[] = [];
     const fsDiv = request.consolidated ? 'CFS' : 'OFS';
 
     for (const symbol of request.symbols) {
-      const corpCode = await corpCodes.resolve(symbol);
+      const corpCode = await corpCodes.resolve(symbol, hooks.beforeRequest);
       if (corpCode === null) {
         // 조용히 건너뛰면 "수집했는데 이 종목만 0건" 이 되고 원인을 알 수 없다
         gaps.push({ symbol, periodKey: '-', reason: 'DART corp_code 매핑에 없는 종목코드입니다' });
@@ -230,7 +250,7 @@ export function createDartFactSource(
             bsns_year: String(year),
             reprt_code: reportCode,
             fs_div: fsDiv,
-          });
+          }, hooks);
           // 손익·재무상태표만 쓴다 — 현금흐름표·자본변동표는 이 전략들이 보지 않는다.
           // 파서가 소비하지 않는 통계(sj_div)를 애초에 걸러 넘겨야 '매핑되지 않은
           // 계정' gap 이 CF·SCE 행 수백 개로 부풀지 않는다.
@@ -280,7 +300,7 @@ export function createDartFactSource(
       // 재무 루프 안에 두면 연도가 어긋나므로 별도 루프로 돈다.
       for (const year of request.shareYears) {
         for (const reportCode of filableReports(year)) {
-          const shareRows = await fetchShareRows(corpCode, year, reportCode);
+          const shareRows = await fetchShareRows(corpCode, year, reportCode, hooks);
           // 보통주만 쓴다 — 시가총액은 봉 종가(보통주 가격) × 보통주 수다.
           // '합계' 행을 쓰면 우선주가 섞여 시가총액이 과대계상된다.
           const common = findCommonShareRow(shareRows);
@@ -320,12 +340,13 @@ export function createDartFactSource(
 
   async function fetchCorporateActions(
     request: FetchFinancialsRequest,
+    hooks: FactSourceRequestHooks = {},
   ): Promise<FactIngestionResult> {
     const facts: Fact[] = [];
     const gaps: FactIngestionGap[] = [];
 
     for (const symbol of request.symbols) {
-      const corpCode = await corpCodes.resolve(symbol);
+      const corpCode = await corpCodes.resolve(symbol, hooks.beforeRequest);
       if (corpCode === null) {
         gaps.push({ symbol, periodKey: '-', reason: 'DART corp_code 매핑에 없는 종목코드입니다' });
         continue;
@@ -348,7 +369,7 @@ export function createDartFactSource(
       // 건너편의 낡은 공시가 분모로 잡혀 gap 도 없이 틀린다 (domain/sync-plan.ts 참고)
       for (const year of request.shareYears) {
         for (const reportCode of filableReports(year)) {
-          const shareRows = await fetchShareRows(corpCode, year, reportCode);
+          const shareRows = await fetchShareRows(corpCode, year, reportCode, hooks);
           if (shareRows.length > 0) filedReports.add(`${year}:${reportCode}`);
           const common = findCommonShareRow(shareRows);
           if (!common) continue;
@@ -377,7 +398,7 @@ export function createDartFactSource(
             corp_code: corpCode,
             bsns_year: String(year),
             reprt_code: reportCode,
-          });
+          }, hooks);
           for (const row of rows) {
             const key = issuanceKey(row);
             const firstReceipt = firstReceiptByKey.get(key);
@@ -454,6 +475,7 @@ export function createDartFactSource(
   async function listRecentPeriodicFilings(
     fromDate: string,
     toDate: string,
+    hooks: FactSourceRequestHooks = {},
   ): Promise<readonly PeriodicFiling[]> {
     const filings: PeriodicFiling[] = [];
     for (let pageNo = 1; pageNo <= FILING_LIST_MAX_PAGES; pageNo += 1) {
@@ -468,6 +490,8 @@ export function createDartFactSource(
       const envelope = await client.request<DartListEnvelope>(
         'default',
         `/api/list.json?${query.toString()}`,
+        {},
+        { beforeAttempt: hooks.beforeRequest },
       );
       if (envelope.status === NO_DATA_STATUS) return filings;
       if (envelope.status !== OK_STATUS) {

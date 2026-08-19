@@ -176,6 +176,13 @@
       "when": 1787148317471,
       "tag": "0024_rich_shinko_yamashiro",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1787149982749,
+      "tag": "0025_late_quicksilver",
+      "breakpoints": true
     }
   ]
 }

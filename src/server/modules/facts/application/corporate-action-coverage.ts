@@ -19,6 +19,8 @@ export interface CorporateActionCoverageStore {
   getCoveredYears(codes?: readonly string[]): ReadonlyMap<string, readonly number[]>;
   /** 종목 → 자본변동 수집이 실패한 연도 (오름차순). 인자를 주면 그 종목만 */
   getGapYears(codes?: readonly string[]): ReadonlyMap<string, readonly number[]>;
+  /** 종목 → 마지막 자본변동 coverage 기록 시각. 재무 watermark와 독립적이다. */
+  getUpdatedAtMs(codes: readonly string[]): ReadonlyMap<string, number>;
   /** 종목 하나의 완료 연도를 합집합으로 더한다. */
   addCoveredYears(symbol: string, years: readonly number[], nowMs: number): void;
   /** 종목 하나의 gap 연도를 합집합으로 더한다. */
@@ -34,6 +36,18 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
 
   getGapYears(codes?: readonly string[]): ReadonlyMap<string, readonly number[]> {
     return this.readYears('actionGapYearsJson', codes);
+  }
+
+  getUpdatedAtMs(codes: readonly string[]): ReadonlyMap<string, number> {
+    const rows = this.db
+      .select({ code: symbolFactsState.code, updatedAtMs: symbolFactsState.actionUpdatedAtMs })
+      .from(symbolFactsState)
+      .all();
+    const result = new Map<string, number>();
+    for (const row of rows) {
+      if (codes.includes(row.code) && row.updatedAtMs !== null) result.set(row.code, row.updatedAtMs);
+    }
+    return result;
   }
 
   addCoveredYears(symbol: string, years: readonly number[], nowMs: number): void {
@@ -83,7 +97,7 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
     if (existing) {
       this.db
         .update(symbolFactsState)
-        .set({ [column]: json, updatedAtMs: nowMs })
+        .set({ [column]: json, updatedAtMs: nowMs, actionUpdatedAtMs: nowMs })
         .where(eq(symbolFactsState.code, symbol))
         .run();
       return;
@@ -94,7 +108,13 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
     // SqliteFactCoverageStore.addCoveredYears 가 그 값을 갱신한다.
     this.db
       .insert(symbolFactsState)
-      .values({ code: symbol, coveredYearsJson: '[]', [column]: json, updatedAtMs: nowMs })
+      .values({
+        code: symbol,
+        coveredYearsJson: '[]',
+        [column]: json,
+        updatedAtMs: nowMs,
+        actionUpdatedAtMs: nowMs,
+      })
       .run();
   }
 }

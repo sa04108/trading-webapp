@@ -60,6 +60,40 @@ describe('RestClient (스펙 §13 공통 REST 클라이언트)', () => {
     expect(sleeps).toContain(2000); // Retry-After: 2s 우선
   });
 
+  it('물리적인 HTTP 재시도마다 beforeAttempt를 한 번씩 호출한다', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(500, { error: 'temporary' }))
+      .mockResolvedValueOnce(jsonResponse(200, { ok: true }));
+    const { client } = buildClient(fetchImpl as unknown as typeof fetch);
+    const beforeAttempt = vi.fn();
+
+    await client.request(
+      'default',
+      '/retry-once',
+      {},
+      { beforeAttempt },
+    );
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(beforeAttempt).toHaveBeenCalledTimes(2);
+  });
+
+  it('beforeAttempt가 거절하면 HTTP 요청을 보내지 않는다', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, { ok: true }));
+    const { client } = buildClient(fetchImpl as unknown as typeof fetch);
+
+    await expect(
+      client.request(
+        'default',
+        '/blocked',
+        {},
+        { beforeAttempt: () => { throw new Error('quota blocked'); } },
+      ),
+    ).rejects.toThrow('quota blocked');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('retries 5xx with exponential backoff and eventually fails', async () => {
     const fetchImpl = vi.fn(async () => jsonResponse(500, { error: 'boom' }));
     const { client } = buildClient(fetchImpl as unknown as typeof fetch);

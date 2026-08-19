@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
 import { SqliteCorporateActionCoverageStore } from '../../src/server/modules/facts/application/corporate-action-coverage.js';
+import { SqliteFactCoverageStore } from '../../src/server/modules/facts/application/fact-coverage-store.js';
 import { symbolFactsState, symbols as symbolsTable } from '../../src/server/shared/db/schema.js';
 
 let t: TestApp;
@@ -64,5 +65,24 @@ describe('SqliteCorporateActionCoverageStore', () => {
     const { store } = await setup();
     store.addCoveredYears('005930', [2026, 2020, 2023], 100);
     expect(store.getCoveredYears().get('005930')).toEqual([2020, 2023, 2026]);
+  });
+
+  it('재무와 자본변동 watermark를 서로 덮어쓰지 않는다', async () => {
+    const { db, store: actionStore } = await setup();
+    const financialStore = new SqliteFactCoverageStore(db);
+
+    financialStore.addCoveredYears('005930', [2024], 100);
+    actionStore.addCoveredYears('005930', [2024], 200);
+
+    expect(financialStore.getUpdatedAtMs(['005930']).get('005930')).toBe(100);
+    expect(actionStore.getUpdatedAtMs(['005930']).get('005930')).toBe(200);
+
+    financialStore.addCoveredYears('005930', [2025], 300);
+    expect(financialStore.getUpdatedAtMs(['005930']).get('005930')).toBe(300);
+    expect(actionStore.getUpdatedAtMs(['005930']).get('005930')).toBe(200);
+
+    actionStore.addGapYears('005930', [2025], 400);
+    expect(financialStore.getUpdatedAtMs(['005930']).get('005930')).toBe(300);
+    expect(actionStore.getUpdatedAtMs(['005930']).get('005930')).toBe(400);
   });
 });

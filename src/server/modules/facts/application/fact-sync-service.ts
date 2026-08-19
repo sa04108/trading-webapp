@@ -4,11 +4,9 @@ import type { Logger } from '../../../shared/logger.js';
 import { addCalendarDays, kstDateOf } from '../../market-data/domain/kst-date.js';
 import type { Fact } from '../domain/fact.js';
 import {
-  estimateDartCalls,
   planFactSync,
   type FactSyncMode,
   type FactSyncPlan,
-  type FactSyncWorkUnit,
 } from '../domain/sync-plan.js';
 // 원천은 market-data(symbol-service.ts) 쪽이다 — market-data 는 facts 를 몰라도
 // 되지만(§7) facts 는 이미 market-data 를 안다(예: exchange-session.js 사용).
@@ -19,10 +17,12 @@ import type {
   FactCoverageStore,
   FinancialFilingCheckpoint,
 } from './fact-coverage-store.js';
+import { FactSourceNotConfiguredError } from './ports.js';
 import type {
   FactIngestionGap,
   FactRepository,
   FactSource,
+  FactSourceRequestHooks,
   FetchFinancialsRequest,
   SymbolVersionBumper,
 } from './ports.js';
@@ -47,6 +47,14 @@ export interface FactSyncRequest {
  */
 const FILING_LOOKBACK_MAX_DAYS = 90;
 
+/** 실제 DART 요청 직전 quota 예약이 거절됐음을 내부 흐름에 전달한다. */
+class DartDailyQuotaReachedError extends Error {
+  constructor() {
+    super('DART 일일 호출 한도에 도달했습니다.');
+    this.name = 'DartDailyQuotaReachedError';
+  }
+}
+
 /** 종목 하나가 끝날 때마다 호출된다 — 45분짜리 실행이 조용하지 않게 한다 */
 export interface FactSyncProgress {
   readonly symbol: string;
@@ -66,8 +74,10 @@ export interface FactSyncHooks {
    * 입자다 — 저장이 종목 단위이므로 여기서 멈추면 저장분과 이력이 정합하게 남는다.
    */
   shouldStop?(): boolean;
-  /** 다음 종목·연도 외부 호출 전에 일일 quota를 예약한다. */
-  beforeWorkUnit?(work: FactSyncWorkUnit): 'CONTINUE' | 'PAUSE_DAILY_QUOTA';
+  /**
+   * 실제 DART HTTP attempt 직전에 1건을 예약한다. 목록 페이지와 재시도도 각각 호출된다.
+   */
+  beforeDartRequest?(): 'CONTINUE' | 'PAUSE_DAILY_QUOTA';
 }
 
 export interface FactSyncReport {
@@ -90,15 +100,20 @@ export interface FactSyncReport {
  * `FactSyncService.runSync` 하나가 공유한다.
  */
 interface SyncStrategy {
-  /** 재무까지 받는 경로인지, 자본변동만 받는 경로인지 quota 비용 계산에 쓴다. */
+  /** 재무 접수번호 체크포인트까지 기록하는 경로인지 구분한다. */
   readonly includeFinancials: boolean;
   /** 증분 계획이 기준으로 삼을 커버리지. 경로마다 다른 저장소를 본다. */
   getCoveredYears(symbols: readonly string[]): ReadonlyMap<string, readonly number[]>;
+  /** 공시검색 하한. 재무와 자본변동이 각자의 watermark를 제공한다. */
+  getUpdatedAtMs(symbols: readonly string[]): ReadonlyMap<string, number>;
   /**
    * 종목 하나를 수집한다. `actionGaps` 는 저장·리포트용 `gaps` 와 별도로 돌려준다 —
    * 자본변동 커버리지의 gap 연도는 자본변동 자신의 gap 에서만 뽑아야 하기 때문이다.
    */
-  fetch(scoped: FetchFinancialsRequest): Promise<{
+  fetch(
+    scoped: FetchFinancialsRequest,
+    sourceHooks: FactSourceRequestHooks,
+  ): Promise<{
     facts: readonly Fact[];
     gaps: readonly FactIngestionGap[];
     actionGaps: readonly FactIngestionGap[];
@@ -177,12 +192,13 @@ export class FactSyncService {
     return this.runSync(request, hooks, {
       includeFinancials: true,
       getCoveredYears: (symbols) => this.coverage.getCoveredYears(symbols),
-      fetch: async (scoped) => {
+      getUpdatedAtMs: (symbols) => this.coverage.getUpdatedAtMs(symbols),
+      fetch: async (scoped, sourceHooks) => {
         // 종목별 호출이지만 corp_code 매핑과 주식총수(stockTotqySttus) 응답 캐시는 소스
         // 인스턴스 클로저 안에 살아 있다 — 종목마다 다시 내려받지 않는다
         // (dart-fact-source.ts 의 corpCodes·shareRowsCache 참고).
-        const financials = await this.source.fetchFinancials(scoped);
-        const actions = await this.source.fetchCorporateActions(scoped);
+        const financials = await this.source.fetchFinancials(scoped, sourceHooks);
+        const actions = await this.source.fetchCorporateActions(scoped, sourceHooks);
         return {
           facts: [...financials.facts, ...actions.facts],
           gaps: [...financials.gaps, ...actions.gaps],
@@ -260,8 +276,9 @@ export class FactSyncService {
     return this.runSync(request, hooks, {
       includeFinancials: false,
       getCoveredYears: (symbols) => this.actionCoverage.getCoveredYears(symbols),
-      fetch: async (scoped) => {
-        const actions = await this.source.fetchCorporateActions(scoped);
+      getUpdatedAtMs: (symbols) => this.actionCoverage.getUpdatedAtMs(symbols),
+      fetch: async (scoped, sourceHooks) => {
+        const actions = await this.source.fetchCorporateActions(scoped, sourceHooks);
         return { facts: actions.facts, gaps: actions.gaps, actionGaps: actions.gaps };
       },
       recordCoverage: (symbol, years, actionGapYears, nowMs) => {
@@ -296,13 +313,45 @@ export class FactSyncService {
     let stoppedAtSymbol: string | null = null;
     let stopReason: 'ERROR' | 'CANCELLED' | 'DAILY_QUOTA' | null = null;
     let failureReason: string | null = null;
+    const sourceHooks: FactSourceRequestHooks =
+      hooks.beforeDartRequest === undefined
+        ? {}
+        : {
+            beforeRequest: () => {
+              if (hooks.beforeDartRequest?.() === 'PAUSE_DAILY_QUOTA') {
+                throw new DartDailyQuotaReachedError();
+              }
+            },
+          };
 
-    // 계획은 추정 경로와 같은 함수로 만든다 — 화면의 "약 30분" 과 실제 호출이 갈리지
-    // 않게 한다 (domain/sync-plan.ts 헤더 참고)
-    const redisclosures =
-      request.mode === 'INCREMENTAL'
-        ? await this.detectRedisclosedYears(symbols, strategy.includeFinancials)
-        : undefined;
+    // 증분 계획에 필요한 공시 목록부터 실제 요청 단위 quota를 적용한다. 목록 오류는
+    // 최신 여부를 증명할 수 없으므로 명시적으로 중단한다. 단, 키 자체를 의도적으로
+    // 설정하지 않은 환경은 이미 커버된 데이터 사용을 허용하는 기존 계약을 유지한다.
+    let redisclosures: RedisclosureDetection | undefined;
+    try {
+      redisclosures =
+        request.mode === 'INCREMENTAL'
+          ? await this.detectRedisclosedYears(
+              symbols,
+              strategy.getUpdatedAtMs(symbols),
+              strategy.includeFinancials,
+              sourceHooks,
+            )
+          : undefined;
+    } catch (error) {
+      if (error instanceof FactSourceNotConfiguredError) {
+        this.logger.warn(
+          {
+            module: 'facts',
+            event: 'facts.filings.lookup-skipped-unconfigured',
+          },
+          'DART is not configured — skipping filing freshness lookup for already covered data',
+        );
+        redisclosures = undefined;
+      } else {
+        return this.reportPlanningFailure(symbols, error);
+      }
+    }
 
     const plan = planFactSync({
       symbols,
@@ -339,36 +388,18 @@ export class FactSyncService {
 
       let symbolSavedFacts = 0;
       let symbolGapCount = 0;
-      const requestedShareYears = new Set<number>();
       try {
         for (const year of years) {
-          // 단일 연도라도 연초 자본변동의 직전 주식총수 앵커가 필요하다. 소스 캐시가
-          // 이전 unit의 응답을 재사용하므로 요청에는 둘 다 넣되 quota에는 새 연도만 센다.
+          // 직전 연도의 주식총수 앵커도 요청하되, 소스 캐시는 이미 받은 응답을 재사용한다.
+          // quota는 캐시 miss를 포함한 실제 HTTP 시도마다 sourceHooks가 정확히 예약한다.
           const shareYears = [year - 1, year];
-          const work: FactSyncWorkUnit = {
-            symbol,
-            year,
-            shareYears,
-            estimatedDartCalls: estimateDartCalls(
-              { symbol, year, shareYears },
-              todayKstDate,
-              requestedShareYears,
-              strategy.includeFinancials,
-            ),
-          };
-          if (hooks.beforeWorkUnit?.(work) === 'PAUSE_DAILY_QUOTA') {
-            stoppedAtSymbol = symbol;
-            stopReason = 'DAILY_QUOTA';
-            break;
-          }
-
           const scoped = {
             symbols: [symbol],
             years: [year],
             shareYears,
             consolidated: request.consolidated,
           };
-          const { facts, gaps: workGaps, actionGaps } = await strategy.fetch(scoped);
+          const { facts, gaps: workGaps, actionGaps } = await strategy.fetch(scoped, sourceHooks);
 
           // work unit마다 저장·커버리지를 닫는다 — 다음 연도 전에 quota로 멈춰도 이
           // 연도는 증분 재실행에서 건너뛸 수 있다.
@@ -400,11 +431,8 @@ export class FactSyncService {
             );
           }
           strategy.recordCoverage(symbol, [year], gapYears, completedAtMs);
-
-          for (const shareYear of shareYears) requestedShareYears.add(shareYear);
         }
 
-        if (stopReason === 'DAILY_QUOTA') break;
         doneSymbols += 1;
         hooks.onSymbolDone?.({
           symbol,
@@ -414,6 +442,21 @@ export class FactSyncService {
           gapCount: symbolGapCount,
         });
       } catch (error) {
+        if (error instanceof DartDailyQuotaReachedError) {
+          stoppedAtSymbol = symbol;
+          stopReason = 'DAILY_QUOTA';
+          this.logger.info(
+            {
+              module: 'facts',
+              event: 'facts.sync.daily-quota-reached',
+              symbol,
+              savedFacts,
+            },
+            'fact sync paused before exceeding the DART daily quota',
+          );
+          break;
+        }
+
         // 그대로 던지면 지금까지 저장한 것을 알려줄 자리가 없다 — 리포트로 되돌려
         // CLI 가 어디까지 갔는지, 어떻게 이어받는지 말하게 한다.
         stoppedAtSymbol = symbol;
@@ -473,6 +516,54 @@ export class FactSyncService {
     };
   }
 
+  /** 증분 계획 단계의 실패도 성공 보고서로 위장하지 않고 호출부에 명확히 전달한다. */
+  private reportPlanningFailure(
+    symbols: readonly string[],
+    error: unknown,
+  ): FactSyncReport {
+    const stoppedAtSymbol = symbols[0] ?? null;
+    if (error instanceof DartDailyQuotaReachedError) {
+      this.logger.info(
+        {
+          module: 'facts',
+          event: 'facts.sync.daily-quota-reached',
+          stage: 'planning',
+          stoppedAtSymbol,
+        },
+        'fact sync planning paused before exceeding the DART daily quota',
+      );
+      return {
+        savedFacts: 0,
+        gaps: [],
+        stoppedAtSymbol,
+        stopReason: 'DAILY_QUOTA',
+        failureMessage:
+          'DART 일일 호출 한도에 도달해 증분 수집 계획 생성을 멈췄습니다. ' +
+          '한도 초과 요청은 보내지 않았습니다 — 다음 실행에서 공시 목록 조회부터 다시 시작합니다.',
+      };
+    }
+
+    const reason = error instanceof Error ? error.message : String(error);
+    this.logger.error(
+      {
+        module: 'facts',
+        event: 'facts.sync.planning-failed',
+        stoppedAtSymbol,
+        err: error,
+      },
+      'fact sync planning failed — fact collection was not started',
+    );
+    return {
+      savedFacts: 0,
+      gaps: [],
+      stoppedAtSymbol,
+      stopReason: 'ERROR',
+      failureMessage:
+        '증분 수집 계획 생성 중 정기공시 목록 또는 워터마크 조회에 실패했습니다. ' +
+        `사유: ${reason}. 팩트 수집은 시작하지 않았습니다 — 원인을 해결한 뒤 다시 실행하세요.`,
+    };
+  }
+
   /**
    * 이미 covered 인 연도 중 다시 받아야 할 것을 공시검색으로 알아낸다.
    *
@@ -481,15 +572,16 @@ export class FactSyncService {
    * 정기공시가 있는 종목·사업연도만 돌려준다 — 공시 없는 종목은 0 호출이다.
    * 재무 경로에서는 처리한 접수번호를 제외해 같은 날 같은 공시를 다시 받지 않는다.
    *
-   * watermark 가 조회 하한보다 오래된 종목은 공시 목록으로 판정할 수 없으므로
-   * 옛 blanket 규칙(현재 연도 강제)으로 되돌린다. 목록 조회 실패는 강제 재수집만
-   * 포기하고 던지지 않는다 — 신선도 최적화가 미수집 연도 수집까지 막으면 안 된다.
+   * watermark가 조회 하한보다 오래된 종목은 공시 목록으로 판정할 수 없으므로 옛
+   * blanket 규칙(현재 연도 강제)으로 되돌린다. 반대로 목록 조회 자체가 실패하면 최신
+   * 여부를 확인할 수 없으므로 실패를 호출부까지 전파한다.
    */
   private async detectRedisclosedYears(
     symbols: readonly string[],
+    watermarks: ReadonlyMap<string, number>,
     trackFinancialReceipts: boolean,
+    sourceHooks: FactSourceRequestHooks,
   ): Promise<RedisclosureDetection | undefined> {
-    const watermarks = this.coverage.getUpdatedAtMs(symbols);
     if (watermarks.size === 0) return undefined; // 수집 이력이 없다 — 증분 계획이 전부 받는다
 
     const today = kstDateOf(this.clock.now());
@@ -526,44 +618,35 @@ export class FactSyncService {
     }
 
     if (fromDate !== null) {
-      const filings = await this.source.listRecentPeriodicFilings(fromDate, today).catch((error) => {
-        this.logger.warn(
-          { module: 'facts', event: 'facts.filings.lookup-failed', err: error },
-          '정기공시 목록 조회에 실패해 재공시 재수집을 건너뛴다 — 미수집 연도 수집은 계속한다',
-        );
-        return null;
+      const filings = await this.source.listRecentPeriodicFilings(fromDate, today, sourceHooks);
+      const candidates = filings.flatMap((filing) => {
+        const watermarkDate = watermarkDates.get(filing.stockCode);
+        if (watermarkDate === undefined) return []; // 이번 요청 밖 종목이거나 blanket 처리됨
+        // 접수일만 주는 API라 watermark 당일은 반드시 포함한다. 재무 경로의 중복은
+        // 날짜 경계를 버리는 대신 아래의 영속 접수번호 체크포인트로 제거한다.
+        if (filing.receiptDate < watermarkDate) return [];
+        return [{ filing, businessYear: filing.businessYear ?? currentYear }];
       });
+      const processedReceiptNos = trackFinancialReceipts
+        ? this.coverage.getProcessedFilingReceiptNos(
+            candidates.map(({ filing }) => filing.receiptNo),
+          )
+        : new Set<string>();
+      const seenReceiptNos = new Set<string>();
 
-      if (filings !== null) {
-        const candidates = filings.flatMap((filing) => {
-          const watermarkDate = watermarkDates.get(filing.stockCode);
-          if (watermarkDate === undefined) return []; // 이번 요청 밖 종목이거나 blanket 처리됨
-          // 접수일만 주는 API라 watermark 당일은 반드시 포함한다. 재무 경로의 중복은
-          // 날짜 경계를 버리는 대신 아래의 영속 접수번호 체크포인트로 제거한다.
-          if (filing.receiptDate < watermarkDate) return [];
-          return [{ filing, businessYear: filing.businessYear ?? currentYear }];
-        });
-        const processedReceiptNos = trackFinancialReceipts
-          ? this.coverage.getProcessedFilingReceiptNos(
-              candidates.map(({ filing }) => filing.receiptNo),
-            )
-          : new Set<string>();
-        const seenReceiptNos = new Set<string>();
+      for (const { filing, businessYear } of candidates) {
+        if (seenReceiptNos.has(filing.receiptNo)) continue;
+        seenReceiptNos.add(filing.receiptNo);
+        if (processedReceiptNos.has(filing.receiptNo)) continue;
 
-        for (const { filing, businessYear } of candidates) {
-          if (seenReceiptNos.has(filing.receiptNo)) continue;
-          seenReceiptNos.add(filing.receiptNo);
-          if (processedReceiptNos.has(filing.receiptNo)) continue;
-
-          addForced(filing.stockCode, businessYear);
-          if (trackFinancialReceipts) {
-            addPending({
-              receiptNo: filing.receiptNo,
-              symbol: filing.stockCode,
-              businessYear,
-              receiptDate: filing.receiptDate,
-            });
-          }
+        addForced(filing.stockCode, businessYear);
+        if (trackFinancialReceipts) {
+          addPending({
+            receiptNo: filing.receiptNo,
+            symbol: filing.stockCode,
+            businessYear,
+            receiptDate: filing.receiptDate,
+          });
         }
       }
     }

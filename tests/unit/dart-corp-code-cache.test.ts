@@ -102,6 +102,35 @@ describe('createDartCorpCodeCache', () => {
     expect(fetchZip).toHaveBeenCalledTimes(1);
   });
 
+  it('cache miss의 실제 다운로드에만 beforeRequest를 한 번 호출한다', async () => {
+    const fetchZip = vi.fn(async () => makeZip('CORPCODE.xml', XML));
+    const cache = createDartCorpCodeCache(fetchZip);
+    const beforeRequest = vi.fn();
+
+    expect(await cache.resolve('005930', beforeRequest)).toBe('00126380');
+    expect(await cache.resolve('000660', beforeRequest)).toBe('00164779');
+
+    expect(beforeRequest).toHaveBeenCalledTimes(1);
+    expect(fetchZip).toHaveBeenCalledTimes(1);
+  });
+
+  it('beforeRequest가 거절한 다운로드는 캐시하지 않고 다음 호출에서 다시 예약한다', async () => {
+    const fetchZip = vi.fn(async () => makeZip('CORPCODE.xml', XML));
+    const cache = createDartCorpCodeCache(fetchZip);
+    let reservations = 0;
+    const beforeRequest = (): void => {
+      reservations += 1;
+      if (reservations === 1) throw new Error('quota blocked');
+    };
+
+    await expect(cache.resolve('005930', beforeRequest)).rejects.toThrow('quota blocked');
+    expect(fetchZip).not.toHaveBeenCalled();
+
+    expect(await cache.resolve('005930', beforeRequest)).toBe('00126380');
+    expect(reservations).toBe(2);
+    expect(fetchZip).toHaveBeenCalledTimes(1);
+  });
+
   it('동시 호출도 한 번만 내려받는다', async () => {
     const fetchZip = vi.fn(async () => makeZip('CORPCODE.xml', XML));
     const cache = createDartCorpCodeCache(fetchZip);

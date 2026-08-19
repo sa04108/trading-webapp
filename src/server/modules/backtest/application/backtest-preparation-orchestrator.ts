@@ -12,7 +12,7 @@ import { backtestPreparationJobs } from '../../../shared/db/schema.js';
 import { newId } from '../../../shared/ids.js';
 import type { Logger } from '../../../shared/logger.js';
 import type { FactSyncService, FactSyncReport } from '../../facts/application/fact-sync-service.js';
-import { DART_DAILY_CALL_LIMIT, type FactSyncWorkUnit } from '../../facts/domain/sync-plan.js';
+import { DART_DAILY_CALL_LIMIT } from '../../facts/domain/sync-plan.js';
 import type { CandleCoverageService } from '../../market-data/application/candle-coverage-service.js';
 import type { SymbolMasterService } from '../../market-data/application/symbol-master-service.js';
 import { addCalendarDays, kstDateOf } from '../../market-data/domain/kst-date.js';
@@ -615,8 +615,8 @@ export class BacktestPreparationOrchestrator {
         }, ['RUNNING']);
       },
       shouldStop: (): boolean => this.cancelOrStopRequested(jobId),
-      beforeWorkUnit: (work: FactSyncWorkUnit): 'CONTINUE' | 'PAUSE_DAILY_QUOTA' =>
-        this.reserveDartCalls(jobId, work.estimatedDartCalls),
+      beforeDartRequest: (): 'CONTINUE' | 'PAUSE_DAILY_QUOTA' =>
+        this.reserveDartCall(jobId),
     };
     // 최신화는 sync 내부의 공시검색 판정이 맡는다 — coverage watermark 이후 정기공시가
     // 접수된 종목·연도만 다시 받으므로 quota/재시작 복구가 닫힌 symbol-year 를
@@ -656,10 +656,7 @@ export class BacktestPreparationOrchestrator {
     return true;
   }
 
-  private reserveDartCalls(
-    jobId: string,
-    estimatedCalls: number,
-  ): 'CONTINUE' | 'PAUSE_DAILY_QUOTA' {
+  private reserveDartCall(jobId: string): 'CONTINUE' | 'PAUSE_DAILY_QUOTA' {
     const now = this.deps.clock.now();
     const quotaDate = kstDateOf(now);
     const snapshot = this.persistAndEmit(
@@ -670,7 +667,7 @@ export class BacktestPreparationOrchestrator {
           .from(backtestPreparationJobs)
           .where(eq(backtestPreparationJobs.dartQuotaDateKst, quotaDate))
           .get()?.value ?? 0;
-        if (total + estimatedCalls > this.dailyLimit) {
+        if (total + 1 > this.dailyLimit) {
           return {
             status: 'WAITING_DAILY_QUOTA',
             nextResumeAtMs: nextKstMidnightMs(now),
@@ -680,7 +677,7 @@ export class BacktestPreparationOrchestrator {
         }
         return {
           dartQuotaDateKst: quotaDate,
-          dartCallsUsed: (row.dartQuotaDateKst === quotaDate ? row.dartCallsUsed : 0) + estimatedCalls,
+          dartCallsUsed: (row.dartQuotaDateKst === quotaDate ? row.dartCallsUsed : 0) + 1,
         };
       },
       ['RUNNING'],

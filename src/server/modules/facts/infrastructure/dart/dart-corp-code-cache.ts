@@ -2,7 +2,7 @@ import { inflateRawSync } from 'node:zlib';
 
 export interface CorpCodeResolver {
   /** 종목코드 → DART corp_code. 매핑에 없으면 null */
-  resolve(symbol: string): Promise<string | null>;
+  resolve(symbol: string, beforeRequest?: () => void): Promise<string | null>;
 }
 
 const LOCAL_FILE_HEADER_SIGNATURE = 0x04034b50;
@@ -84,20 +84,22 @@ export function createDartCorpCodeCache(
 ): CorpCodeResolver {
   let pending: Promise<Map<string, string>> | null = null;
 
-  const load = (): Promise<Map<string, string>> => {
+  const load = (beforeRequest?: () => void): Promise<Map<string, string>> => {
     if (pending) return pending;
-    pending = (async () => parseCorpCodeXml(extractSingleFileFromZip(await fetchXmlZip()).toString('utf8')))().catch(
-      (error: unknown) => {
-        pending = null; // 실패는 캐시하지 않는다
-        throw error;
-      },
-    );
+    pending = (async () => {
+      // 캐시 miss에서만 실제 다운로드가 생긴다. quota도 이 경계에서 한 번만 차감한다.
+      beforeRequest?.();
+      return parseCorpCodeXml(extractSingleFileFromZip(await fetchXmlZip()).toString('utf8'));
+    })().catch((error: unknown) => {
+      pending = null; // 실패는 캐시하지 않는다
+      throw error;
+    });
     return pending;
   };
 
   return {
-    async resolve(symbol: string): Promise<string | null> {
-      return (await load()).get(symbol) ?? null;
+    async resolve(symbol: string, beforeRequest?: () => void): Promise<string | null> {
+      return (await load(beforeRequest)).get(symbol) ?? null;
     },
   };
 }

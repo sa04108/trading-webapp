@@ -403,6 +403,7 @@ function makePipelineResolver(options: {
     actionCoverage: {
       getCoveredYears: () => actionCoverage,
       getGapYears: () => actionGaps,
+      getUpdatedAtMs: () => new Map<string, number>(),
       addCoveredYears: () => undefined,
       addGapYears: () => undefined,
     },

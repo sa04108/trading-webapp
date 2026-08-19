@@ -624,7 +624,7 @@ describe('BacktestPreparationOrchestrator quota resume와 terminal 결과', () =
         sync: async (
           request: { symbols: readonly string[]; mode: string },
           hooks: {
-            beforeWorkUnit?: (work: unknown) => string;
+            beforeDartRequest?: () => string;
             onSymbolDone?: (progress: { index: number; total: number }) => void;
           },
         ) => {
@@ -636,7 +636,7 @@ describe('BacktestPreparationOrchestrator quota resume와 terminal 결과', () =
               hooks.onSymbolDone?.({ index: index + 1, total: request.symbols.length });
               continue;
             }
-            const decision = hooks.beforeWorkUnit?.({ symbol, year: 2026, shareYears: [2025, 2026], estimatedDartCalls: 1 });
+            const decision = hooks.beforeDartRequest?.();
             if (decision === 'PAUSE_DAILY_QUOTA') {
               return { savedFacts: 0, gaps: [], stoppedAtSymbol: symbol, stopReason: 'DAILY_QUOTA', failureMessage: 'quota' };
             }
@@ -668,12 +668,50 @@ describe('BacktestPreparationOrchestrator quota resume와 terminal 결과', () =
 
   it('모든 rebalance entry가 비면 한국어 원인으로 FAILED에 수렴한다', async () => {
     const ctx = makeDeps({ resolver: { resolveOrDescribeNeeds: async () => ready([]), isPeriodCovered: () => true } });
+
     const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
     const job = orchestrator.start(INPUT);
 
     await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
 
     expect(orchestrator.get(job.id)?.error).toMatch(/선정된 종목|유니버스/);
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
+  it('공시 목록 실패로 FactSync가 ERROR를 반환하면 준비 잡도 FAILED가 된다', async () => {
+    const ctx = makeDeps({
+      resolver: {
+        resolveOrDescribeNeeds: async () => ({
+          kind: 'NEEDS_DATA',
+          candidateScopeKnown: true,
+          unionEntries: candidateEntries(['005930']),
+          needs: {
+            factSymbols: ['005930'],
+            actionSymbols: [],
+            priceSymbols: [],
+            selectionMetricDates: [],
+            priceRange: null,
+          },
+        }),
+        isPeriodCovered: () => true,
+      },
+      factSync: {
+        sync: async () => ({
+          savedFacts: 0,
+          gaps: [],
+          stoppedAtSymbol: '005930',
+          stopReason: 'ERROR',
+          failureMessage: '정기공시 목록 조회 실패',
+        }),
+        syncCorporateActions: async () => ({ savedFacts: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const job = orchestrator.start(INPUT);
+
+    await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
+    expect(orchestrator.get(job.id)?.error).toContain('정기공시 목록 조회 실패');
     await orchestrator.stop();
     ctx.handle.close();
   });

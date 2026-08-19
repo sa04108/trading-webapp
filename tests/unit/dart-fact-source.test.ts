@@ -177,6 +177,7 @@ describe('createDartFactSource — 정기공시 목록 (list.json)', () => {
 
   it('페이지를 모두 읽고 종목코드·사업연도·접수일로 매핑한다', async () => {
     const urls: string[] = [];
+    let reservedRequests = 0;
     const source = createDartFactSource(
       { baseUrl: 'https://dart.test', apiKey: 'k' },
       LOGGER,
@@ -216,7 +217,11 @@ describe('createDartFactSource — 정기공시 목록 (list.json)', () => {
       },
     );
 
-    const filings = await source.listRecentPeriodicFilings('2026-05-01', '2026-06-02');
+    const filings = await source.listRecentPeriodicFilings(
+      '2026-05-01',
+      '2026-06-02',
+      { beforeRequest: () => { reservedRequests += 1; } },
+    );
 
     expect(filings).toEqual([
       {
@@ -246,6 +251,7 @@ describe('createDartFactSource — 정기공시 목록 (list.json)', () => {
     expect(first.searchParams.get('bgn_de')).toBe('20260501');
     expect(first.searchParams.get('end_de')).toBe('20260602');
     expect(urls).toHaveLength(2);
+    expect(reservedRequests).toBe(2);
   });
 
   it('조회 없음(013)은 빈 목록이다', async () => {
@@ -766,6 +772,8 @@ describe('createDartFactSource — 종목별 호출에서도 캐시가 공유된
 
   it('종목마다 따로 호출해도 corpCode.xml 은 한 번만 내려받는다', async () => {
     const urls: string[] = [];
+    let reservedRequests = 0;
+    const hooks = { beforeRequest: () => { reservedRequests += 1; } };
     const fetchImpl = (async (url: string) => {
       const target = String(url);
       urls.push(target);
@@ -790,11 +798,12 @@ describe('createDartFactSource — 종목별 호출에서도 캐시가 공유된
         shareYears: [2024, 2025],
         consolidated: true,
       };
-      await source.fetchFinancials(scoped);
-      await source.fetchCorporateActions(scoped);
+      await source.fetchFinancials(scoped, hooks);
+      await source.fetchCorporateActions(scoped, hooks);
     }
 
     expect(urls.filter((url) => url.includes('/api/corpCode.xml'))).toHaveLength(1);
+    expect(reservedRequests).toBe(urls.length);
     // 매핑이 실제로 쓰였음도 확인한다 — 그렇지 않으면 위 단정이 "아무도 안 불렀다" 와 같다
     expect(urls.some((url) => url.includes('corp_code=00126380'))).toBe(true);
     expect(urls.some((url) => url.includes('corp_code=00164779'))).toBe(true);
@@ -825,6 +834,40 @@ describe('createDartFactSource — 종목별 호출에서도 캐시가 공유된
     // 보고서 4종 × 주식총수 연도 2년(대상 연도 + 앵커 1년) = 8회. 두 fetch 가 각각
     // 부르면 16회가 된다 — 캐시 키에 연도가 들어 있어야 이 수가 맞는다.
     expect(urls.filter((url) => url.includes('stockTotqySttus'))).toHaveLength(8);
+  });
+
+  it('quota로 거절된 주식총수 요청 Promise는 캐시하지 않아 다음 실행이 재시도한다', async () => {
+    const urls: string[] = [];
+    const fetchImpl = (async (url: string) => {
+      urls.push(String(url));
+      return jsonResponse({ status: '013', message: 'no data' });
+    }) as unknown as typeof fetch;
+    const source = createDartFactSource(
+      { baseUrl: 'https://opendart.fss.or.kr', apiKey: 'K' },
+      LOGGER,
+      { fetchImpl, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER },
+    );
+    const scoped = {
+      symbols: ['005930'],
+      years: [2025],
+      shareYears: [2024, 2025],
+      consolidated: true,
+    };
+
+    await expect(
+      source.fetchCorporateActions(scoped, {
+        beforeRequest: () => {
+          throw new Error('quota blocked');
+        },
+      }),
+    ).rejects.toThrow('quota blocked');
+    expect(urls).toEqual([]);
+
+    await expect(source.fetchCorporateActions(scoped)).resolves.toMatchObject({
+      facts: [],
+      gaps: [],
+    });
+    expect(urls.length).toBeGreaterThan(0);
   });
 });
 
