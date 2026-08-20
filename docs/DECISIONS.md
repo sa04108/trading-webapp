@@ -65,9 +65,9 @@
 - **변경 내용:** deploy-server.sh 는 서비스 재시작(=마이그레이션 적용) 직전에 SQLite 스냅샷을 만들고, health check 실패로 롤백할 때 스냅샷을 함께 복원한다 — 이전 릴리스 코드가 새 스키마(예: 삭제된 컬럼)를 만나 `no such column` 으로 죽는 "명목상 롤백"을 막는다.
 - **운영 규칙:** 컬럼·테이블 삭제 같은 파괴적 스키마 변경은 코드가 해당 참조를 중단한 **다음** 릴리스에 싣는 것을 원칙으로 한다 (expand-contract). 스냅샷 복원은 이 규칙이 지켜지지 않았을 때의 안전망이다.
 - **실패 산출물:** 압축 해제·dependency 설치는 `.incomplete-<release>`, DB 백업은 `.pre-deploy-<release>.sqlite.incomplete`에 만든 뒤 완성된 것만 최종 경로로 옮긴다. 새 산출물에는 먼저 `.deploy-in-progress`를 남기고, health check 성공 시 제거하며 rollback 검증 실패 시 `.deploy-failed`로 바꾼다. 서비스 전환 전 일반 오류는 이 배포 시도가 소유한 임시·최종 산출물을 즉시 지운다. 전환 후 실패하면 이전 코드와 DB를 복원하고 readiness까지 통과한 경우에만 실패 release와 snapshot을 지운다. 롤백 검증이 실패하거나 이전 release가 없으면 수동 복구 근거가 사라지지 않도록 둘 다 보존한다.
-- **보존:** 상태 마커가 없는 기존 release와 snapshot을 정상 이력으로 보고 최근 5개만 유지하는 종전 회전 정책을 그대로 적용한다. `in-progress`/`failed` 예외만 보존 개수에서 제외하므로 과거 산출물을 성공 마커로 일괄 변환하지 않고, 롤백 실패 증거도 정상 이력을 밀어내지 않는다. 성공 배포의 snapshot은 health check 뒤에 발견된 문제를 **수동** 롤백(§30, §35 runbook)할 수 있도록 남긴다. backup.sh의 30일 정리 규칙은 `backup-*` 디렉터리만 훑으므로 deploy-server.sh가 직접 회전시킨다.
+- **보존:** 상태 마커가 없는 기존 release와 snapshot을 정상 이력으로 본다. 정상 이력은 `QP_DEPLOY_KEEP_RELEASES`와 `QP_DEPLOY_KEEP_DB_SNAPSHOTS`로 각각 회전시키며 기본값은 둘 다 `0`이다. 따라서 기본 정책은 health check 성공 뒤 현재 release만 남기고 과거 정상 release와 정상 snapshot을 모두 지운다. 필요할 때만 양수로 설정해 과거 release(current 제외)와 snapshot을 지정한 개수만큼 보존한다. `in-progress`/`failed` 예외는 보존 개수에서 제외하므로 롤백 실패 증거가 정상 이력에 밀려 삭제되지 않는다. backup.sh의 정리 규칙은 `backup-*` 디렉터리만 훑으므로 deploy-server.sh가 직접 회전시킨다.
 - **동시성:** checksum 검증부터 보존 회전까지 `/run/lock/quant-platform-deploy.lock`의 non-blocking `flock`을 보유한다. 다른 배포가 잡고 있으면 기다리지 않고 종료 코드 75로 실패한다. 업로드 임시파일은 배포 시도마다 고유 이름을 사용하므로 lock 획득 전의 scp도 서로 덮어쓰지 않는다. lock 파일은 삭제하지 않으며 프로세스 종료·오류·SIGKILL 시 커널이 descriptor를 닫아 자동 해제한다.
-- **영향:** 스냅샷~롤백 사이의 쓰기는 유실된다. 롤백 검증 실패로 보존된 failed 산출물은 자동 회전 대상이 아니므로 원인을 확인한 뒤 수동으로 정리해야 한다. 수동 롤백 절차는 배포 성공 시 deploy-server.sh가 그대로 출력한다.
+- **영향:** 스냅샷~롤백 사이의 쓰기는 유실된다. 기본 보존 개수 `0`에서는 배포 스크립트가 실행되는 동안의 자동 롤백만 보장하며, 성공 종료 뒤 발견한 문제를 이전 코드·DB 쌍으로 수동 롤백하려면 배포 전에 두 보존 개수를 양수로 설정해야 한다. 롤백 검증 실패로 보존된 failed 산출물은 자동 회전 대상이 아니므로 원인을 확인한 뒤 수동으로 정리해야 한다.
 
 ## D-011: 감사 로그 보존 기간은 정책이므로 설정으로 노출한다
 
@@ -1404,7 +1404,8 @@
 - **동일성:** 검증 게이트와 공통 archive 생성은 배포 전체에서 한 번만 실행한다. Worker
   image는 그 archive를 입력으로 만들며 서버와 Worker 저수준 deploy에는 생성된 archive와
   checksum을 명시적으로 전달한다.
-- **설정 경계:** `deploy.env.example`은 호스트별 SSH와 Worker 포함 여부만 설명한다.
+- **설정 경계:** `deploy.env.example`은 호스트별 SSH, Worker 포함 여부, 정상 배포 산출물
+  보존 개수만 설명한다.
   `deploy.env`는 Git에서 제외한다. app/Worker token 같은 runtime 비밀값은 기존처럼 원격
   root 전용 `app.env`·`worker.env`에만 두고 배포 설정에 복사하지 않는다.
 - **부분 실패:** Worker 전환 자체는 이전 image로 rollback한다. 이미 health check를 통과한

@@ -15,6 +15,10 @@
 #   QP_SSH_JUMP      점프 호스트, `[user@]host[:port]` (ssh 의 ProxyJump)
 #   QP_SSH_HOST_KEY  호스트키 확인: accept-new(기본) | yes | no
 #   QP_SSH_OPTS      그 밖의 ssh 옵션을 그대로 (예: "-o ServerAliveInterval=30")
+#   QP_DEPLOY_KEEP_RELEASES
+#                    성공 뒤 남길 과거 정상 release 개수 (기본 0, current 제외)
+#   QP_DEPLOY_KEEP_DB_SNAPSHOTS
+#                    성공 뒤 남길 정상 pre-deploy DB snapshot 개수 (기본 0)
 #
 # 접속 파라미터의 이름과 의미는 bootstrap-server.sh 와 같다 — 부트스트랩이 성공한 조합을
 # 그대로 배포에 쓸 수 있어야 한다 (부트스트랩 마지막 출력이 그 명령을 찍어 준다).
@@ -345,6 +349,21 @@ case "${TARGET}" in
     ;;
 esac
 
+KEEP_RELEASES="${QP_DEPLOY_KEEP_RELEASES:-0}"
+KEEP_DB_SNAPSHOTS="${QP_DEPLOY_KEEP_DB_SNAPSHOTS:-0}"
+case "${KEEP_RELEASES}" in
+  '' | *[!0-9]*)
+    echo "QP_DEPLOY_KEEP_RELEASES 는 0 이상의 정수여야 합니다: ${KEEP_RELEASES}" >&2
+    exit 1
+    ;;
+esac
+case "${KEEP_DB_SNAPSHOTS}" in
+  '' | *[!0-9]*)
+    echo "QP_DEPLOY_KEEP_DB_SNAPSHOTS 는 0 이상의 정수여야 합니다: ${KEEP_DB_SNAPSHOTS}" >&2
+    exit 1
+    ;;
+esac
+
 # ── 여기서부터 모든 출력을 로그 파일에도 남긴다 ───────────────────────────────
 # 배포는 검증 게이트(lint·typecheck·test·build)에서 출력이 많다. 화면에 의존하지 않는
 # 것이 요점이다 — 터미널 종류·스크롤백 한도와 무관하게 실행 기록이 남아야 한다.
@@ -501,6 +520,8 @@ RELEASE_STAGING="/opt/quant-platform/releases/.incomplete-${RELEASE}"
 DB_PATH="/var/lib/quant-platform/app.sqlite"
 DB_SNAPSHOT="/var/lib/quant-platform/backups/pre-deploy-${RELEASE}.sqlite"
 DB_SNAPSHOT_INCOMPLETE="/var/lib/quant-platform/backups/.pre-deploy-${RELEASE}.sqlite.incomplete"
+KEEP_RELEASES=${KEEP_RELEASES}
+KEEP_DB_SNAPSHOTS=${KEEP_DB_SNAPSHOTS}
 DEPLOY_DB_SNAPSHOT=""
 DEPLOY_PHASE=pre-switch
 RELEASE_STAGING_CREATED=0
@@ -608,11 +629,9 @@ if [ "\${DEPLOY_FAILED}" -ne 0 ]; then
     "\${DB_PATH}" || exit 1
 fi
 DEPLOY_PHASE=success
-# 성공한 배포의 스냅샷도 즉시 지우지 않는다 (D-010): health check 통과 뒤에 발견된 문제는
-# 수동 롤백으로 되돌리는데, 짝이 맞는 스냅샷이 없으면 이전 코드가 새 스키마를 만나 죽는다.
-# 기존 정책대로 정상 snapshot 최근 KEEP_SNAPSHOTS 개만 남긴다. 정상 상태는 별도
-# 성공 마커가 없는 기본 상태다. in-progress/failed 예외만 회전에서 제외한다.
-KEEP_SNAPSHOTS=5
+# 성공한 정상 snapshot은 기본적으로 보유하지 않는다. 양수로 명시한 경우에만 최근
+# KEEP_DB_SNAPSHOTS 개를 남긴다. in-progress/failed 예외는 수동 복구 근거이므로 정상
+# 보존 개수와 무관하게 회전에서 제외한다.
 sudo find /var/lib/quant-platform/backups -mindepth 1 -maxdepth 1 -type f \
   -name 'pre-deploy-*.sqlite' -printf '%T@ %p\n' 2>/dev/null \
   | sort -nr \
@@ -623,7 +642,7 @@ sudo find /var/lib/quant-platform/backups -mindepth 1 -maxdepth 1 -type f \
         printf '%s\n' "\${snapshot}"
       fi
     done \
-  | tail -n +\$((KEEP_SNAPSHOTS + 1)) \
+  | tail -n +\$((KEEP_DB_SNAPSHOTS + 1)) \
   | while IFS= read -r snapshot; do
       if validate_deploy_snapshot "\${snapshot}"; then
         sudo rm -f -- "\${snapshot}" "\${snapshot}-journal" "\${snapshot}-wal" \
@@ -636,9 +655,8 @@ sudo find /var/lib/quant-platform/backups -mindepth 1 -maxdepth 1 -type f \
 # 정리하지 않으면 40GB 디스크가 배포 횟수에 비례해 줄어든다 — 시장 데이터보다 이쪽이
 # 먼저 디스크를 먹는다.
 #
-# 개수는 스냅샷과 같아야 한다. 릴리스를 더 적게 남기면 짝이 맞는 코드가 없는 스냅샷이
-# 생겨 위 D-010 의 "코드와 스키마를 짝으로 되돌린다" 가 성립하지 않는다.
-KEEP_RELEASES=\${KEEP_SNAPSHOTS}
+# current는 서비스 실행에 필요하므로 보존 개수에서 제외한다. 기본값 0이면 성공 확인 뒤
+# 과거 정상 release를 전부 지우며, 양수로 명시한 경우에만 그 개수만큼 남긴다.
 CURRENT_TARGET="\$(readlink -f /opt/quant-platform/current || true)"
 # 기존 release는 상태 마커가 없으므로 그대로 정상 이력으로 채택한다. 새 배포 중이거나
 # rollback이 실패한 release만 제외하며, current는 안전을 위해 다시 한 번 제외한다.
@@ -646,7 +664,8 @@ sudo find /opt/quant-platform/releases -mindepth 1 -maxdepth 1 -type d \
   ! -name '.incomplete-*' -printf '%p\n' 2>/dev/null \
   | sort -r \
   | while IFS= read -r release_dir; do
-      if validate_release_directory "\${release_dir}" && \
+      if [ "\${release_dir}" != "\${CURRENT_TARGET}" ] && \
+        validate_release_directory "\${release_dir}" && \
         ! sudo test -e "\${release_dir}/.deploy-in-progress" && \
         ! sudo test -e "\${release_dir}/.deploy-failed"; then
         printf '%s\n' "\${release_dir}"

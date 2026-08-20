@@ -121,6 +121,16 @@ SSH_KEY=~/.ssh/your-key QP_SSH_USER=ubuntu QP_HOST=203.0.113.10 \
 | `QP_SSH_HOST_KEY` | 호스트키 확인: `accept-new`(기본) \| `yes` \| `no` |
 | `QP_SSH_OPTS` | 그 밖의 ssh 옵션 그대로 (예: `-o ServerAliveInterval=30`). 맨 앞에 붙으므로 위 기본값을 덮는다 |
 
+`deploy-server.sh`의 정상 배포 산출물 보존 개수도 환경변수로 조정할 수 있다. 둘 다 기본값은
+`0`이며, 이 경우 readiness 성공 뒤 현재 실행 중인 release만 남기고 과거 정상 release와
+정상 pre-deploy DB snapshot은 모두 정리한다. 배포 실패 후 자동 롤백까지 실패한 산출물은
+수동 복구 근거이므로 이 개수와 무관하게 보존한다.
+
+| 변수 | 뜻 |
+| --- | --- |
+| `QP_DEPLOY_KEEP_RELEASES` | 성공 뒤 남길 과거 정상 release 개수 (기본 `0`, current 제외) |
+| `QP_DEPLOY_KEEP_DB_SNAPSHOTS` | 성공 뒤 남길 정상 pre-deploy DB snapshot 개수 (기본 `0`) |
+
 포트·점프는 `-p`/`-J` 가 아니라 `-o Port=`·`-o ProxyJump=` 로 넘어간다 — 같은 옵션
 배열을 `scp` 에도 쓰기 때문이다 (`scp` 의 포트 플래그는 `-P` 다).
 

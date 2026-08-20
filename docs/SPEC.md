@@ -1881,8 +1881,10 @@ dist/
 - 서비스 전환 전 실패 산출물은 즉시 지운다. 전환 후에는 rollback readiness가
   성공한 경우에만 실패 release와 snapshot을 지우며, rollback 실패 시 수동 복구를
   위해 보존한다
-- 마커가 없는 기존·성공 스냅샷과 release 중 최근 5개를 보존한다. `in-progress`와
-  `failed` 산출물은 정상 보존 개수에서 제외한다
+- 마커가 없는 기존·성공 산출물은 기본적으로 보존하지 않는다.
+  `QP_DEPLOY_KEEP_RELEASES`와 `QP_DEPLOY_KEEP_DB_SNAPSHOTS`(각 기본 `0`)를 양수로
+  지정한 경우에만 과거 정상 release(current 제외)와 정상 snapshot을 각각 그 개수만큼
+  남긴다. `in-progress`와 `failed` 산출물은 정상 보존 개수에서 제외한다
 - 원격 배포 전체는 non-blocking `flock`으로 직렬화하고, 동시 실행은 즉시 실패시킨다
 
 ---

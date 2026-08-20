@@ -317,6 +317,35 @@ describe('deploy script failure workflow', () => {
     expect(result.status, result.stderr).toBe(0);
   });
 
+  it('defaults successful release and DB snapshot retention to zero', () => {
+    const deploy = readFileSync('scripts/deploy-server.sh', 'utf8');
+
+    expect(deploy).toContain('KEEP_RELEASES="${QP_DEPLOY_KEEP_RELEASES:-0}"');
+    expect(deploy).toContain('KEEP_DB_SNAPSHOTS="${QP_DEPLOY_KEEP_DB_SNAPSHOTS:-0}"');
+    expect(deploy).toContain('KEEP_RELEASES=${KEEP_RELEASES}');
+    expect(deploy).toContain('KEEP_DB_SNAPSHOTS=${KEEP_DB_SNAPSHOTS}');
+    expect(deploy).toContain('tail -n +\\$((KEEP_DB_SNAPSHOTS + 1))');
+    expect(deploy).toContain('tail -n +\\$((KEEP_RELEASES + 1))');
+    expect(deploy).not.toContain('KEEP_SNAPSHOTS=5');
+  });
+
+  it('rejects invalid deployment retention counts before connecting to the server', () => {
+    const result = spawnSync(bash, ['scripts/deploy-server.sh'], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        QP_HOST: 'deploy.invalid',
+        QP_DEPLOY_KEEP_RELEASES: '-1',
+      },
+    });
+    const output = `${result.stdout}${result.stderr}`;
+
+    expect(result.status).toBe(1);
+    expect(output).toContain('QP_DEPLOY_KEEP_RELEASES 는 0 이상의 정수여야 합니다: -1');
+    expect(output).not.toContain('SSH 접속 확인');
+  });
+
   it('treats legacy unmarked artifacts as successful and excludes exceptional states', () => {
     const deploy = readFileSync('scripts/deploy-server.sh', 'utf8');
 
