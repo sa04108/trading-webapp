@@ -105,6 +105,6 @@ EOF
 cat <<MSG
 
 Docker Worker 부트스트랩 완료: ${REMOTE_TARGET}
-deploy.env에서 Worker 배포를 활성화한 뒤 프로젝트 루트에서 실행:
-  pnpm run deploy
+deploy.env에 worker 접속 정보를 작성한 뒤 프로젝트 루트에서 실행:
+  pnpm run deploy --target worker
 MSG

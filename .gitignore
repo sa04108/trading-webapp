@@ -1,6 +1,7 @@
 ### Node
 # Dependencies
 node_modules/
+/.venv-ansible/
 
 # Logs
 *.log

@@ -1,0 +1,84 @@
+---
+- name: Validate worker deployment mode
+  ansible.builtin.assert:
+    that:
+      - deploy_mode in ['preflight', 'apply']
+    fail_msg: "지원하지 않는 deploy_mode입니다: {{ deploy_mode }}"
+
+- name: Check worker node prerequisites
+  ansible.builtin.shell: |
+    set -eu
+    command -v bash >/dev/null
+    command -v flock >/dev/null
+    command -v docker >/dev/null
+    sudo -n docker version >/dev/null
+    sudo -n docker compose version >/dev/null
+    sudo -n test -f /etc/quant-platform/worker.env
+    sudo -n test -f /opt/quant-backtest-worker/compose.yaml
+    sudo -n test -f /opt/quant-backtest-worker/managed-paths.json
+  args:
+    executable: /bin/bash
+  changed_when: false
+  when: deploy_mode == 'preflight'
+
+- name: Apply worker release transaction
+  when: deploy_mode == 'apply'
+  block:
+    - name: Validate worker artifact variables
+      ansible.builtin.assert:
+        that:
+          - worker_image_archive is file
+          - worker_image_checksum is file
+          - worker_compose_file is file
+          - deploy_release_name is match('^[a-zA-Z0-9._-]+$')
+          - deploy_git_sha is match('^(?:[a-f0-9]{40}|[a-f0-9]{64})$')
+          - worker_manifest_sha is match('^[a-f0-9]{64}$')
+        fail_msg: worker release artifact 변수가 올바르지 않습니다
+      delegate_to: localhost
+
+    - name: Create worker upload directory
+      ansible.builtin.tempfile:
+        state: directory
+        path: /tmp
+        prefix: quant-worker-deploy.
+      register: worker_upload
+
+    - name: Upload worker release files
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ worker_upload.path }}/{{ item.dest }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - src: "{{ worker_image_archive }}"
+          dest: "{{ worker_image_archive | basename }}"
+          mode: "0600"
+        - src: "{{ worker_image_checksum }}"
+          dest: "{{ worker_image_checksum | basename }}"
+          mode: "0600"
+        - src: "{{ worker_compose_file }}"
+          dest: compose.worker.yaml
+          mode: "0600"
+        - src: "{{ playbook_dir }}/../scripts/deploy-worker.sh"
+          dest: deploy-worker.sh
+          mode: "0700"
+
+    - name: Run worker release transaction
+      become: true
+      ansible.builtin.command:
+        argv:
+          - /bin/bash
+          - "{{ worker_upload.path }}/deploy-worker.sh"
+          - "{{ worker_upload.path }}/{{ worker_image_archive | basename }}"
+          - "{{ worker_upload.path }}/{{ worker_image_checksum | basename }}"
+          - "{{ worker_upload.path }}/compose.worker.yaml"
+          - "quant-platform-backtest-worker:{{ deploy_release_name }}"
+          - "{{ deploy_git_sha }}"
+          - "{{ worker_force_deploy | ternary('1', '0') }}"
+          - "{{ worker_manifest_sha }}"
+      changed_when: true
+  always:
+    - name: Remove worker upload directory
+      ansible.builtin.file:
+        path: "{{ worker_upload.path }}"
+        state: absent
+      when: worker_upload is defined and worker_upload.path is defined

@@ -7,7 +7,7 @@ const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' 
 describe('deploy script failure workflow', () => {
   it('cleans the failed release and snapshot only after rollback readiness succeeds', () => {
     const shell = String.raw`
-      source scripts/deploy-server.sh
+      source scripts/deploy-app.sh
       attempts=0
       mock_current_target='/opt/quant-platform/releases/new-release'
       curl() {
@@ -73,7 +73,7 @@ describe('deploy script failure workflow', () => {
 
   it('preserves recovery artifacts when rollback readiness fails', () => {
     const shell = String.raw`
-      source scripts/deploy-server.sh
+      source scripts/deploy-app.sh
       mock_current_target='/opt/quant-platform/releases/new-release'
       curl() { return 1; }
       sleep() { :; }
@@ -131,7 +131,7 @@ describe('deploy script failure workflow', () => {
 
   it('refuses to delete a release that is still the current target', () => {
     const shell = String.raw`
-      source scripts/deploy-server.sh
+      source scripts/deploy-app.sh
       readlink() { echo '/opt/quant-platform/releases/new-release'; }
       sudo() { printf 'sudo:%s\n' "$*" >&2; }
       status=0
@@ -155,7 +155,7 @@ describe('deploy script failure workflow', () => {
 
   it('fails closed when the current release symlink cannot be resolved', () => {
     const shell = String.raw`
-      source scripts/deploy-server.sh
+      source scripts/deploy-app.sh
       link_root="$(mktemp -d)"
       ln -s "$link_root/missing/release" "$link_root/current"
       status=0
@@ -178,7 +178,7 @@ describe('deploy script failure workflow', () => {
 
   it('does not report cleanup success or delete the release when snapshot deletion fails', () => {
     const shell = String.raw`
-      source scripts/deploy-server.sh
+      source scripts/deploy-app.sh
       readlink() { echo '/opt/quant-platform/releases/old-release'; }
       sudo() {
         printf 'sudo:%s\n' "$*" >&2
@@ -206,7 +206,7 @@ describe('deploy script failure workflow', () => {
 
   it('cleans attempt-owned staging and incomplete snapshot files before service switch', () => {
     const shell = String.raw`
-      source scripts/deploy-server.sh
+      source scripts/deploy-app.sh
       readlink() { echo '/opt/quant-platform/releases/old-release'; }
       sudo() { printf 'sudo:%s\n' "$*" >&2; return 0; }
 
@@ -249,7 +249,7 @@ describe('deploy script failure workflow', () => {
 
   it('treats a missing expected DB snapshot as rollback failure', () => {
     const shell = String.raw`
-      source scripts/deploy-server.sh
+      source scripts/deploy-app.sh
       curl() { return 0; }
       readlink() { echo '/opt/quant-platform/releases/new-release'; }
       sudo() {
@@ -285,7 +285,7 @@ describe('deploy script failure workflow', () => {
 
   it('holds a non-blocking kernel lock for the whole remote deployment shell', () => {
     const shell = String.raw`
-      source scripts/deploy-server.sh
+      source scripts/deploy-app.sh
       sudo() { "$@"; }
       lock_root="$(mktemp -d)"
       lock_file="$lock_root/deploy.lock"
@@ -324,66 +324,46 @@ describe('deploy script failure workflow', () => {
     const output = `${result.stdout}${result.stderr}`;
 
     expect(result.status, output).toBe(0);
-    expect(output).toContain('다른 서버 배포가 진행 중입니다');
+    expect(output).toContain('다른 app 배포가 진행 중입니다');
     expect(output).toContain('blocked=75 recovered=0');
   });
 
   it('publishes a fully installed staging release only after checksum verification', () => {
-    const deploy = readFileSync('scripts/deploy-server.sh', 'utf8');
-    expect(deploy).toContain('source "${REPO_ROOT}/scripts/build-release.sh"');
-    expect(deploy).toContain('QP_DEPLOY_PREFLIGHT_ONLY');
-    expect(deploy.indexOf('서버 배포 preflight 완료')).toBeLessThan(
-      deploy.indexOf('build_release "${ARTIFACT_DIR}"'),
-    );
+    const deploy = readFileSync('scripts/deploy-app.sh', 'utf8');
+    const role = readFileSync('ansible/roles/app/tasks/main.yml', 'utf8');
+
     expect(deploy.indexOf('release archive checksum 불일치')).toBeLessThan(
-      deploy.indexOf('sudo mkdir "\\${RELEASE_STAGING}"'),
+      deploy.indexOf('sudo mkdir "${RELEASE_STAGING}"'),
     );
     expect(deploy.indexOf('sudo corepack pnpm install --prod --frozen-lockfile')).toBeLessThan(
-      deploy.indexOf('sudo mv "\\${RELEASE_STAGING}" "\\${RELEASE_DIR}"'),
+      deploy.indexOf('sudo mv "${RELEASE_STAGING}" "${RELEASE_DIR}"'),
     );
     expect(deploy).toContain('trap cleanup_remote_deploy EXIT');
-    expect(deploy).toContain(
-      'trap cleanup_remote_deploy EXIT\nacquire_deploy_lock\nEXPECTED_SHA=',
-    );
+    expect(deploy).toContain('trap cleanup_remote_deploy EXIT\nacquire_deploy_lock\n');
     expect(deploy).toContain('DB_SNAPSHOT_INCOMPLETE=');
-    expect(deploy).toContain('REMOTE_UPLOADS_OWNED=1');
-    expect(deploy).toContain('REMOTE_UPLOAD_ID=');
-    expect(deploy).toContain('quant-platform-upload-${RELEASE}-${REMOTE_UPLOAD_ID}.tar.gz');
-    expect(deploy).toContain('sudo touch "\\${RELEASE_STAGING}/.deploy-in-progress"');
-    expect(deploy).toContain('SWITCHED_RELEASE="\\$(resolve_current_release)"');
-    expect(deploy).toContain('[ "\\${SWITCHED_RELEASE}" = "\\${RELEASE_DIR}" ]');
+    expect(deploy).toContain('sudo touch "${RELEASE_STAGING}/.deploy-in-progress"');
+    expect(deploy).toContain('SWITCHED_RELEASE="$(resolve_current_release)"');
+    expect(deploy).toContain('[ "${SWITCHED_RELEASE}" = "${RELEASE_DIR}" ]');
+    expect(deploy).toContain('PREVIOUS_RELEASE="$(resolve_current_release)"');
+    expect(deploy).not.toContain('ssh ');
+    expect(role).toContain('prefix: quant-app-deploy.');
+    expect(role).toContain('deploy-app.sh');
   });
 
-  it('renders a syntactically valid remote deployment script', () => {
-    const deploy = readFileSync('scripts/deploy-server.sh', 'utf8');
-    const heredocMarker = 'ssh "${SSH_OPTS[@]}" "${TARGET}" bash -s <<EOF\n';
-    const heredocStart = deploy.indexOf(heredocMarker);
-    const heredocEnd = deploy.indexOf('\nEOF', heredocStart + heredocMarker.length);
-
-    expect(heredocStart).toBeGreaterThanOrEqual(0);
-    expect(heredocEnd).toBeGreaterThan(heredocStart);
-
-    const rendered = deploy
-      .slice(heredocStart + heredocMarker.length, heredocEnd)
-      .replace('${REMOTE_SERVICE_HELPERS}', '')
-      .replaceAll('${REMOTE_ARCHIVE}', 'quant-platform-test-release.tar.gz')
-      .replaceAll('${REMOTE_CHECKSUM}', 'quant-platform-test-release.tar.gz.sha256')
-      .replaceAll('${RELEASE}', 'test-release')
-      .replaceAll('\\$', '$');
-    const result = spawnSync(bash, ['-n'], {
-      input: rendered,
+  it('is a syntactically valid node-local transaction script', () => {
+    const result = spawnSync(bash, ['-n', 'scripts/deploy-app.sh'], {
+      cwd: process.cwd(),
       encoding: 'utf8',
     });
-
     expect(result.status, result.stderr).toBe(0);
   });
 
   it('hard-codes one shared successful release and DB snapshot retention count to zero', () => {
-    const deploy = readFileSync('scripts/deploy-server.sh', 'utf8');
+    const deploy = readFileSync('scripts/deploy-app.sh', 'utf8');
     const deployEnv = readFileSync('deploy.env.example', 'utf8');
 
     expect(deploy).toContain('KEEP_SUCCESSFUL_DEPLOYS=0');
-    expect(deploy.match(/awk -v keep="\\\$\{KEEP_SUCCESSFUL_DEPLOYS\}" 'NR > keep'/g)).toHaveLength(2);
+    expect(deploy.match(/awk -v keep="\$\{KEEP_SUCCESSFUL_DEPLOYS\}" 'NR > keep'/g)).toHaveLength(2);
     expect(deploy).not.toContain('QP_DEPLOY_KEEP_RELEASES');
     expect(deploy).not.toContain('QP_DEPLOY_KEEP_DB_SNAPSHOTS');
     expect(deployEnv).not.toContain('QP_DEPLOY_KEEP_RELEASES');
@@ -394,7 +374,7 @@ describe('deploy script failure workflow', () => {
   });
 
   it('treats legacy unmarked artifacts as successful and excludes exceptional states', () => {
-    const deploy = readFileSync('scripts/deploy-server.sh', 'utf8');
+    const deploy = readFileSync('scripts/deploy-app.sh', 'utf8');
 
     expect(deploy).toContain("-name 'pre-deploy-*.sqlite' -printf '%T@ %p\\n'");
     expect(deploy).toContain("! -name '.incomplete-*' -printf '%T@ %p\\n'");

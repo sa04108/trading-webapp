@@ -67,9 +67,9 @@ Lightsail에서 계산을 빼려면 서버를 `remote`로 바꾸고, 같은 릴�
 streaming 업로드한다. 서버와 worker의 Git SHA가 다르면 claim 자체가 거부된다.
 
 설정 예시는 `infra/app.env.example`, `infra/worker.env.example`에 있다. Worker 호스트는
-`scripts/bootstrap-worker.sh`로 Docker와 전용 경로만 준비한다. 이후 `pnpm run deploy`가
-운영 서버와 선택된 Worker에 같은 release를 배포하고 checksum 검증, container 전환,
-인증·SHA·protocol probe와 실패 rollback까지 수행한다.
+`scripts/bootstrap-worker.sh`로 Docker와 전용 경로만 준비한다. 이후 수동
+`pnpm run deploy --target all`이 app과 worker에 같은 release를 배포하고 checksum 검증,
+container 전환, 인증·SHA·protocol probe와 실패 rollback까지 수행한다.
 호스트에 생성하는 경로와 보존 정책은
 `/opt/quant-backtest-worker/managed-paths.json` manifest로 추적한다.
 애플리케이션 systemd unit이나 fallback은 없다. 개발 PC에서는 worker env를 넣고
@@ -108,8 +108,7 @@ SSH_KEY=~/.ssh/your-key QP_SSH_USER=ubuntu QP_HOST=203.0.113.10 \
   QP_DOMAIN=quant.example.com ./scripts/bootstrap-server.sh
 ```
 
-`bootstrap-server.sh`·`deploy-server.sh` 가 인식하는 저수준 접속 환경변수
-(이름·의미가 서로 같다):
+아래 저수준 접속 환경변수는 `bootstrap-server.sh`가 인식한다:
 
 | 변수 | 뜻 |
 | --- | --- |
@@ -172,13 +171,29 @@ Git에서 제외되며 애플리케이션 runtime 비밀값은 넣지 않는다.
 
 ```bash
 cp deploy.env.example deploy.env
-pnpm run deploy
+python3 -m venv .venv-ansible
+.venv-ansible/bin/pip install -r ansible/requirements.txt
+export PATH="$(pwd)/.venv-ansible/bin:${PATH}"
 ```
 
-기본 `QP_DEPLOY_WORKER=0`은 운영 서버만 배포한다. `1`이면 양쪽 SSH·Docker preflight를
-먼저 통과한 뒤 공통 release를 한 번만 검증·생성하고, 그 release에서 만든 Worker image와
-운영 서버를 함께 배포한다. 다른 설정 파일은
-`pnpm run deploy -- --env-file=/secure/path/production.deploy.env`로 지정한다.
+배포는 자동으로 시작되지 않는다. 사람이 대상을 골라 실행한다. `all`은 양쪽 preflight를
+먼저 통과한 뒤 공통 release를 한 번만 생성하고 app을 먼저, worker를 다음에 배포한다.
+
+```bash
+pnpm run deploy --target app
+pnpm run deploy --target worker
+pnpm run deploy --target all
+```
+
+`app`과 `worker`는 서비스 대상 이름이고 기본값은 `app`이다. 프로젝트 CLI의 `--target`은
+내부에서 Ansible inventory group과 `--limit`으로 변환된다. 다른 설정 파일은 다음처럼 지정한다.
+
+```bash
+pnpm run deploy --target app --env-file=/secure/path/production.deploy.env
+```
+
+Ansible은 이 격리된 로컬 venv에서만 실행되고 노드에는 상주 agent를 설치하지 않는다.
+버전은 `ansible/requirements.txt`에 고정한다.
 
 배포 후 서버에서 관리자 생성과 TOTP 등록을 순서대로 한다 (정확한 명령은 bootstrap
 출력에 나온다):

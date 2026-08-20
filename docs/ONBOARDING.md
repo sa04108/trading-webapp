@@ -166,10 +166,10 @@ CSRF 는 Origin==Host 검사, 비밀값은 Pino redaction 목록으로 로그에
 - 스키마 정의: `src/server/shared/db/schema.ts` (Drizzle). 부팅 시 마이그레이션이
   자동 적용된다.
 - 스키마를 바꾸면 `pnpm db:generate` 로 마이그레이션을 생성한다.
-- 마이그레이션이 `0000` 하나뿐인 이유: 아직 운영 배포 전이라 이력을 스쿼시했다
-  (D-015). **첫 운영 배포 이후에는 스쿼시 금지** — 그때부터는 새 마이그레이션을
-  추가하고, 파괴적 변경(컬럼 삭제 등)은 코드가 참조를 끊은 *다음* 릴리스에 싣는다
-  (expand-contract, D-010).
+- 마이그레이션 이력은 첫 운영 배포 이후 스쿼시하지 않고 새 파일을 추가한다 (D-015).
+  현재 제품 단계에서는 파괴적 변경도 허용하되 app 배포가 서비스 중지 후 DB snapshot을 만들고
+  코드·DB를 함께 롤백한다. expand-contract는 스키마와 디스크 사용량이 안정된 뒤 재검토한다
+  (D-010, D-063).
 - 로컬 DB 는 `./data/app.sqlite`. 꼬였으면 지우고 `pnpm cli admin:create` 부터
   다시 하면 된다 (개발 데이터는 버려도 되는 것만 둔다).
 
@@ -205,27 +205,29 @@ CSV 형식: `timestamp,open,high,low,close,volume` (ISO 8601 UTC 또는 epoch ms
 
 ## 11. 배포 개요 (요약 — 원문은 README 배포 절)
 
-```
-./scripts/bootstrap-server.sh # 새 서버 1회: 주소·도메인 입력 → provision-server.sh 실행
-./scripts/bootstrap-worker.sh # 새 계산 PC 1회: Docker·Compose·env·work-root 준비
-pnpm run deploy               # 서버 + 선택적 Worker 통합 배포 (deploy.env)
-./scripts/backup.sh      # SQLite·exports 백업 (용량 상한 회전, D-013·D-019)
+```bash
+./scripts/bootstrap-server.sh          # app 노드 1회 준비
+./scripts/bootstrap-worker.sh          # worker 노드 1회 준비
+pnpm run deploy --target app          # 수동 app 배포
+pnpm run deploy --target worker       # 수동 worker 배포
+pnpm run deploy --target all          # 같은 release로 app 후 worker 순차 배포
+./scripts/backup.sh                    # SQLite·exports 백업
 ```
 
-- `infra/provision-server.sh` 는 **멱등한 단일 실행**이다: 패키지·Node·UFW(22 rate-limit,
-  80, 443)·sshd 하드닝(키 전용)·Caddy(도메인 → 127.0.0.1:3000)·app.env·systemd.
-- 두 스크립트의 SSH 접속 파라미터는 전부 환경변수다 (`QP_HOST`·`QP_SSH_USER`·
-  `QP_SSH_PORT`·`SSH_KEY`·`QP_SSH_JUMP`·`QP_SSH_HOST_KEY`·`QP_SSH_OPTS`) —
-  `~/.ssh/config` 를 만들지 않아도 한 줄로 실행된다. 이름·의미는 두 스크립트가 같다.
-- deploy-server.sh 는 재시작 직전 SQLite 스냅샷을 뜨고, health check 실패 시 코드와 DB 를
-  함께 롤백한다. 정상 성공 뒤 과거 release와 snapshot은 남기지 않는다 (D-010).
-- Worker는 Docker Compose 전용이며 app systemd fallback이 없다. 웹과 같은
+- bootstrap 스크립트는 기존 저수준 SSH 환경변수를 사용하고, 배포는 `deploy.env`의
+  `QP_APP_*`·`QP_WORKER_*`를 임시 Ansible inventory로 변환한다.
+- Ansible은 로컬에서 수동 실행하며 `forks=1`, `gather_facts=false`로 app과 worker를 순차
+  처리한다. 노드에는 상주 agent를 설치하지 않는다.
+- deploy-app.sh는 app 노드에서 실행되는 transaction이다. 재시작 직전 SQLite snapshot을
+  만들고 실패 시 코드·DB를 함께 롤백한다. 성공 뒤 과거 release와 snapshot은 남기지 않는다.
+- deploy-worker.sh는 worker 노드의 Docker image transaction이다. 성공하면 현재 image만,
+  rollback 성공 시 이전 image만 남긴다. rollback 검증 실패 시에는 양쪽을 보존한다.
   `build-release.sh` archive를 image에 넣고 content checksum과 인증·SHA·protocol probe를
   통과해야 전환한다 (D-061).
 - 독립 복원 스크립트는 제공하지 않는다. 백업 복구 절차와 격리 복구 검증은 Phase 7
   disaster runbook 에서 함께 설계한다 (D-031).
 - 주의: `provision-server.sh` 는 **POSIX sh** 다 — bash 문법(배열, `[[ ]]`, pipefail) 금지.
-  `bootstrap-server.sh`/`deploy-server.sh`와 Worker 스크립트는 bash. `provision-worker.sh`와 container
+  `bootstrap-server.sh`/`deploy-app.sh`와 Worker 스크립트는 bash. `provision-worker.sh`와 container
   entrypoint는 POSIX sh다. 셸 스크립트는 전부 LF (`.gitattributes` 강제).
 
 ## 12. 작업 관례
@@ -238,7 +240,7 @@ pnpm run deploy               # 서버 + 선택적 Worker 통합 배포 (deploy.
 - 커밋 메시지는 한국어 + conventional prefix (`feat:`, `fix:`, `docs:`,
   `refactor:` …). 본문에 "왜"를 적는다. 관련 D 번호가 있으면 언급한다.
 - 비밀값(키·토큰·비밀번호)은 argv 로 넘기지 않는다 — ps·셸 히스토리에 남는다.
-  stdin 이나 root 전용 파일로 전달한다 (deploy-server.sh·provision-server.sh 가 예시).
+  stdin 이나 root 전용 파일로 전달한다 (deploy-app.sh·provision-server.sh 가 예시).
 - 테스트는 실동작을 검증한다 — 모킹으로 초록불만 만드는 테스트는 리뷰에서 걸린다.
 
 ## 13. 자주 밟는 함정

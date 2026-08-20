@@ -287,7 +287,7 @@ echo "==> systemd 유닛"
 install -m 644 -o root -g root "${SELF_DIR}/quant-platform.service" \
   /etc/systemd/system/quant-platform.service
 systemctl daemon-reload
-# start 는 하지 않는다 — dist 가 아직 없다. 첫 기동은 deploy-server.sh 가 한다.
+# start 는 하지 않는다 — dist 가 아직 없다. 첫 기동은 deploy-app.sh 가 한다.
 systemctl enable quant-platform
 
 echo ""

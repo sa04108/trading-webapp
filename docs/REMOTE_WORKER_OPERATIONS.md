@@ -75,26 +75,25 @@ QP_WORKER_ENV_FILE="$HOME/.config/quant-platform/worker-1.env" \
 ./scripts/bootstrap-worker.sh
 ```
 
-## 3. 동일 release를 server와 Worker에 배포
+## 3. 동일 release를 app과 worker에 배포
 
-프로젝트 루트에서 `deploy.env.example`을 `deploy.env`로 복사하고 서버·Worker 접속 정보를
-채운 뒤 Worker 배포를 활성화한다.
+프로젝트 루트에서 `deploy.env.example`을 `deploy.env`로 복사하고 app·worker 접속 정보를
+채운다. 대상 선택은 환경변수가 아니라 명령의 `--target`으로 한다.
 
 ```dotenv
-QP_DEPLOY_WORKER=1
-QP_SERVER_HOST=ubuntu@server.example.com
-QP_SERVER_SSH_KEY=~/.ssh/server.pem
+QP_APP_HOST=ubuntu@app.example.com
+QP_APP_SSH_KEY=~/.ssh/app.pem
 QP_WORKER_HOST=ubuntu@203.0.113.20
 QP_WORKER_SSH_KEY=~/.ssh/worker.pem
 ```
 
 ```bash
-pnpm run deploy
+pnpm run deploy --target all
 ```
 
-이 명령은 양쪽 preflight 뒤 공통 archive를 한 번만 검증·빌드하고 Worker image도 서버
-전환 전에 만든다. 같은 archive가 server와 Worker image에 사용되므로 빌드 바이트까지
-같음이 보장된다. image는 tar/checksum으로 전송하며 registry 계정은 필요 없다.
+이 명령은 Ansible로 양쪽 preflight를 먼저 수행한 뒤 공통 archive를 한 번만 검증·빌드하고
+worker image도 app 전환 전에 만든다. 같은 archive가 app과 worker image에 사용되므로
+빌드 바이트까지 같음이 보장된다. image는 tar/checksum으로 전송하며 registry는 필요 없다.
 
 같은 Git SHA가 이미 실행 중이고 probe도 성공하면 no-op한다. 같은 SHA를 명시적으로 다시
 배포할 때만 `QP_FORCE_WORKER_DEPLOY=1`을 쓴다.
@@ -154,13 +153,15 @@ env를 함께 갱신하며 전환 중 값이 다른 Worker는 401로 claim하지
 sudo docker image ls quant-platform-backtest-worker
 ```
 
-수동 롤백은 원하는 tag를 `/opt/quant-backtest-worker/compose.env`의
-`QP_WORKER_IMAGE=`에 기록하고 위 Compose 재생성 명령을 실행한 뒤 probe한다.
+정상 배포가 끝나면 현재 tag만 남기므로 성공 종료 뒤 과거 정상 image를 이용한 수동 롤백은
+지원하지 않는다. 배포 실패 후 이전 image의 probe까지 성공하면 실패 candidate를 제거하고,
+rollback 검증 자체가 실패한 경우에만 원인 조사와 수동 복구를 위해 이전·신규 image를 모두
+보존한다. 보존된 이전 tag를 쓸 때는 `/opt/quant-backtest-worker/compose.env`를 갱신한다.
 
 ```bash
 sudo docker exec quant-backtest-worker \
   node /app/dist/workers/remote-backtest-supervisor.js --check
 ```
 
-`READY` 또는 local 전환 중 `STANDBY`가 성공이다. image 정리는 이 repository의 timestamp
-release tag 최근 3개만 대상으로 하며 다른 image와 build cache는 건드리지 않는다.
+`READY` 또는 local 전환 중 `STANDBY`가 성공이다. 정리는 이 repository의 timestamp release
+tag만 대상으로 하며 현재 image, rollback 실패 증거, 다른 image와 build cache는 건드리지 않는다.
