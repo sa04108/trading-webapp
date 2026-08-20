@@ -1861,23 +1861,26 @@ dist/
 1. 개발 PC에서 lint·typecheck·test·build
 2. tar 생성
 3. 서버로 scp
-4. 새 release 디렉터리에 압축 해제
-5. production dependency 설치
-6. **SQLite 스냅샷 생성** — 재시작(=마이그레이션 적용) 직전 (D-010)
-7. migration
-8. `current` symlink 원자적 교체
-9. systemd restart
+4. checksum 검증 후 `.incomplete-<release>` staging 디렉터리에 압축 해제
+5. staging에서 production dependency 설치
+6. **SQLite 스냅샷 생성** — incomplete 파일에 완성한 뒤 최종 이름으로 교체 (D-010)
+7. staging을 release 최종 경로로 옮기고 `current` symlink 원자적 교체
+8. systemd stop 후 `db:prepare` migration
+9. systemd start
 10. health check
-11. 실패 시 이전 release 와 **DB 스냅샷을 함께** rollback (D-010 — 코드만
-    되돌리면 이전 코드가 새 스키마를 만나 죽는 "명목상 롤백"이 된다)
+11. 실패 시 이전 release와 **DB 스냅샷을 함께** rollback하고 readiness 재검증
+    (D-010 — 코드만 되돌리면 이전 코드가 새 스키마를 만나 죽는 "명목상 롤백"이 된다)
 
 추가 규칙:
 
 - 배포 스크립트는 비밀값을 command line argument 로 노출하지 않는다
 - 파괴적 스키마 변경(컬럼·테이블 삭제)은 코드가 참조를 끊은 **다음** 릴리스에
   싣는다 (expand-contract, D-010)
-- 스냅샷은 성공 배포 후에도 최근 5개를 보존하고, release 디렉터리는 회전시켜
-  디스크를 묶는다
+- 서비스 전환 전 실패 산출물은 즉시 지운다. 전환 후에는 rollback readiness가
+  성공한 경우에만 실패 release와 snapshot을 지우며, rollback 실패 시 수동 복구를
+  위해 보존한다
+- 성공 마커가 있는 스냅샷과 release만 최근 5개 보존 개수에 포함한다. rollback
+  실패로 보존한 unmarked 산출물은 이 개수에서 제외한다
 
 ---
 
