@@ -749,7 +749,12 @@ export function BacktestDetailPage() {
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="text-lg font-semibold">{strategyName ?? job.strategyId}</h2>
         <StatusBadge status={job.status} />
-        <div className="ml-auto flex flex-wrap items-center gap-2">
+        <div
+          className={cn(
+            'flex flex-wrap items-center gap-2',
+            running ? 'ml-auto' : 'w-full justify-end sm:ml-auto sm:w-auto',
+          )}
+        >
           {running ? (
             <Button
               variant="destructive"
@@ -762,9 +767,13 @@ export function BacktestDetailPage() {
             </Button>
           ) : (
             <>
-              <div className="inline-flex flex-wrap" role="group" aria-label="백테스트 복제">
+              <div
+                className="grid w-full grid-cols-2 overflow-hidden rounded-lg border border-input sm:w-auto sm:auto-cols-max sm:grid-flow-col sm:grid-cols-none"
+                role="group"
+                aria-label="백테스트 복제"
+              >
                 <Button
-                  className="h-11 rounded-r-none"
+                  className="h-11 min-w-0 rounded-none border-0 focus-visible:z-10 focus-visible:ring-inset"
                   onClick={() => cloneMutation.mutate()}
                   disabled={cloneMutation.isPending}
                 >
@@ -774,14 +783,23 @@ export function BacktestDetailPage() {
                 {job.cloneBatchId === null ? (
                   <Button
                     variant="outline"
-                    className="h-11 rounded-none border-l-0"
+                    className="h-11 min-w-0 rounded-none border-0 border-l border-input focus-visible:z-10 focus-visible:ring-inset"
                     onClick={() => setSeedCloneOpen(true)}
                   >
                     <Dices data-icon="inline-start" />
                     새 난수로 복제
                   </Button>
                 ) : null}
-                <Button variant="outline" className="h-11 rounded-l-none border-l-0" asChild>
+                <Button
+                  variant="outline"
+                  className={cn(
+                    'h-11 min-w-0 rounded-none border-0 border-input focus-visible:z-10 focus-visible:ring-inset',
+                    job.cloneBatchId === null
+                      ? 'col-span-2 border-t sm:col-span-1 sm:border-l sm:border-t-0'
+                      : 'border-l',
+                  )}
+                  asChild
+                >
                   <Link to={`/backtests/new?from=${id}`}>
                     <SlidersHorizontal data-icon="inline-start" />
                     재설정 및 복제

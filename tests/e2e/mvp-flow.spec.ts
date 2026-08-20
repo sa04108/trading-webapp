@@ -316,7 +316,7 @@ test('full MVP flow', async ({ page }) => {
 
   // 7. clone → 새 작업 페이지
   const originalUrl = page.url();
-  await page.getByRole('button', { name: '복제', exact: true }).click();
+  await page.getByRole('button', { name: '그대로 복제', exact: true }).click();
   await expect(page).toHaveURL(/\/backtests\/bt_/);
   await expect
     .poll(() => page.url(), { timeout: 10_000 })
