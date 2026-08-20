@@ -49,7 +49,7 @@ APT="apt-get -o DPkg::Lock::Timeout=600 -y"
 $APT update
 $APT full-upgrade
 $APT install ca-certificates curl git jq openssl unzip xz-utils build-essential \
-             python3 pkg-config sqlite3 ufw unattended-upgrades gnupg
+             python3 pkg-config sqlite3 util-linux ufw unattended-upgrades gnupg
 
 timedatectl set-timezone UTC
 

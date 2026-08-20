@@ -108,6 +108,7 @@ validate_deploy_snapshot() {
 cleanup_incomplete_snapshot() {
   local snapshot="$1"
   local release_name
+  local final_snapshot
 
   case "${snapshot}" in
     /var/lib/quant-platform/backups/.pre-deploy-*.sqlite.incomplete) ;;
@@ -124,7 +125,9 @@ cleanup_incomplete_snapshot() {
       return 1
       ;;
   esac
-  sudo rm -f -- "${snapshot}" "${snapshot}-journal" "${snapshot}-wal" "${snapshot}-shm"
+  final_snapshot="/var/lib/quant-platform/backups/pre-deploy-${release_name}.sqlite"
+  sudo rm -f -- "${snapshot}" "${snapshot}-journal" "${snapshot}-wal" "${snapshot}-shm" \
+    "${final_snapshot}.deploy-in-progress" "${final_snapshot}.deploy-failed"
 }
 
 cleanup_failed_deploy_artifacts() {
@@ -145,55 +148,70 @@ cleanup_failed_deploy_artifacts() {
   fi
 
   if [ -n "${db_snapshot}" ]; then
-    sudo rm -f -- "${db_snapshot}" "${db_snapshot}-journal" "${db_snapshot}-wal" "${db_snapshot}-shm" "${db_snapshot}.deploy-succeeded"
+    sudo rm -f -- "${db_snapshot}" "${db_snapshot}-journal" "${db_snapshot}-wal" \
+      "${db_snapshot}-shm" "${db_snapshot}.deploy-in-progress" \
+      "${db_snapshot}.deploy-failed" "${db_snapshot}.deploy-succeeded"
   fi
   if [ -n "${failed_release}" ]; then
     sudo rm -rf -- "${failed_release}"
   fi
 }
 
-initialize_deploy_success_markers() {
-  sudo mkdir -p /opt/quant-platform/releases /var/lib/quant-platform/backups
-  # 이 정책을 처음 적용하는 서버의 기존 산출물은 성공/실패를 사후 판별할 수 없다.
-  # 기존 보존 이력을 잃지 않도록 한 번만 성공으로 채택하고, 이후 릴리스부터 정확히 표시한다.
-  sudo sh -ceu '
-    release_root=/opt/quant-platform/releases
-    release_policy=${release_root}/.deploy-success-markers-v1
-    if [ ! -f "${release_policy}" ]; then
-      for release_dir in "${release_root}"/*; do
-        [ -d "${release_dir}" ] || continue
-        touch "${release_dir}/.deploy-succeeded"
-      done
-      touch "${release_policy}"
-    fi
+acquire_deploy_lock() {
+  local lock_file="${1:-/run/lock/quant-platform-deploy.lock}"
+  local lock_owner
 
-    backup_root=/var/lib/quant-platform/backups
-    backup_policy=${backup_root}/.deploy-success-markers-v1
-    if [ ! -f "${backup_policy}" ]; then
-      for snapshot in "${backup_root}"/pre-deploy-*.sqlite; do
-        [ -f "${snapshot}" ] || continue
-        touch "${snapshot}.deploy-succeeded"
-      done
-      touch "${backup_policy}"
-    fi
-  '
+  command -v flock >/dev/null 2>&1 || {
+    echo 'flock 명령이 없어 서버 배포 잠금을 잡을 수 없습니다' >&2
+    return 1
+  }
+  lock_owner="$(id -u):$(id -g)"
+  sudo touch "${lock_file}"
+  sudo chown "${lock_owner}" "${lock_file}"
+  sudo chmod 0600 "${lock_file}"
+  exec {DEPLOY_LOCK_FD}>"${lock_file}"
+  if ! flock -n "${DEPLOY_LOCK_FD}"; then
+    echo '다른 서버 배포가 진행 중입니다 — 완료 후 다시 시도하세요' >&2
+    return 75
+  fi
 }
 
 mark_deploy_succeeded() {
   local release_directory="$1"
   local db_snapshot="$2"
-  local release_marker="${release_directory}/.deploy-succeeded"
 
   validate_release_directory "${release_directory}" || return 1
   if [ -n "${db_snapshot}" ]; then
     validate_deploy_snapshot "${db_snapshot}" || return 1
-    sudo touch "${db_snapshot}.deploy-succeeded" || return 1
   fi
-  if ! sudo touch "${release_marker}"; then
+  if [ -n "${db_snapshot}" ]; then
+    sudo rm -f -- "${db_snapshot}.deploy-in-progress" \
+      "${db_snapshot}.deploy-failed" || return 1
+  fi
+  if ! sudo rm -f -- "${release_directory}/.deploy-in-progress" \
+    "${release_directory}/.deploy-failed"; then
     if [ -n "${db_snapshot}" ]; then
-      sudo rm -f -- "${db_snapshot}.deploy-succeeded" || true
+      sudo touch "${db_snapshot}.deploy-in-progress" || true
     fi
     return 1
+  fi
+}
+
+mark_deploy_failed() {
+  local release_directory="$1"
+  local db_snapshot="$2"
+
+  validate_release_directory "${release_directory}" || return 1
+  if [ -n "${db_snapshot}" ]; then
+    validate_deploy_snapshot "${db_snapshot}" || return 1
+  fi
+  if sudo test -e "${release_directory}/.deploy-in-progress"; then
+    sudo mv "${release_directory}/.deploy-in-progress" \
+      "${release_directory}/.deploy-failed" || return 1
+  fi
+  if [ -n "${db_snapshot}" ] && sudo test -e "${db_snapshot}.deploy-in-progress"; then
+    sudo mv "${db_snapshot}.deploy-in-progress" \
+      "${db_snapshot}.deploy-failed" || return 1
   fi
 }
 
@@ -284,9 +302,13 @@ handle_deploy_failure() {
         echo '자동 롤백은 성공했지만 실패 산출물 정리는 완료하지 못했습니다' >&2
       fi
     else
+      mark_deploy_failed "${failed_release}" "${db_snapshot}" || \
+        echo '실패 산출물의 상태 마커를 갱신하지 못했습니다' >&2
       echo '자동 롤백 검증에 실패해 release와 DB snapshot을 보존합니다' >&2
     fi
   else
+    mark_deploy_failed "${failed_release}" "${db_snapshot}" || \
+      echo '실패 산출물의 상태 마커를 갱신하지 못했습니다' >&2
     echo '롤백할 이전 release가 없습니다 — 서비스 상태를 직접 확인하세요' >&2
   fi
   return 1
@@ -404,7 +426,8 @@ esac
 # 그 시간이 통째로 버려진다. bootstrap-server.sh 와 같은 이유의 preflight 다.
 echo "==> SSH 접속 확인: ${TARGET}"
 # stderr 를 버리지 않는다 — 원인별 처방이 전혀 다르므로 ssh 가 한 말을 그대로 보여준다.
-if ! SSH_ERR="$(ssh "${SSH_OPTS[@]}" -o ConnectTimeout=15 -o BatchMode=yes "${TARGET}" true 2>&1)"; then
+if ! SSH_ERR="$(ssh "${SSH_OPTS[@]}" -o ConnectTimeout=15 -o BatchMode=yes "${TARGET}" \
+  'command -v flock >/dev/null 2>&1 || { echo "flock 명령이 없습니다 — 서버를 다시 provision 하세요" >&2; exit 1; }' 2>&1)"; then
   {
     echo "SSH 접속 실패: ${TARGET}"
     echo
@@ -448,7 +471,8 @@ fi
 case "${RELEASE}" in ''|*[!a-zA-Z0-9._-]*) echo "release 이름이 올바르지 않습니다: ${RELEASE}" >&2; exit 1 ;; esac
 
 echo "==> 업로드 및 릴리스 전환"
-REMOTE_ARCHIVE="quant-platform-${RELEASE}.tar.gz"
+REMOTE_UPLOAD_ID="$(date -u +%Y%m%d-%H%M%S)-$$-${RANDOM}"
+REMOTE_ARCHIVE="quant-platform-upload-${RELEASE}-${REMOTE_UPLOAD_ID}.tar.gz"
 REMOTE_CHECKSUM="${REMOTE_ARCHIVE}.sha256"
 REMOTE_UPLOADS_OWNED=1
 scp "${SSH_OPTS[@]}" "${ARCHIVE}" "${TARGET}:/tmp/${REMOTE_ARCHIVE}"
@@ -460,8 +484,9 @@ REMOTE_SERVICE_HELPERS="$(
   declare -f validate_deploy_snapshot
   declare -f cleanup_incomplete_snapshot
   declare -f cleanup_failed_deploy_artifacts
-  declare -f initialize_deploy_success_markers
+  declare -f acquire_deploy_lock
   declare -f mark_deploy_succeeded
+  declare -f mark_deploy_failed
   declare -f cleanup_remote_deploy
   declare -f rollback_release
   declare -f handle_deploy_failure
@@ -483,18 +508,20 @@ RELEASE_PUBLISHED=0
 SNAPSHOT_INCOMPLETE_OWNED=0
 SNAPSHOT_CREATED=0
 trap cleanup_remote_deploy EXIT
+acquire_deploy_lock
 EXPECTED_SHA="\$(awk 'NR == 1 { print \$1 }' "/tmp/${REMOTE_CHECKSUM}")"
 case "\${EXPECTED_SHA}" in ''|*[!a-f0-9]*) echo 'release checksum 형식 오류' >&2; exit 1 ;; esac
 [ "\${#EXPECTED_SHA}" -eq 64 ] || { echo 'release checksum 길이 오류' >&2; exit 1; }
 ACTUAL_SHA="\$(sha256sum "/tmp/${REMOTE_ARCHIVE}" | awk '{ print \$1 }')"
 [ "\${ACTUAL_SHA}" = "\${EXPECTED_SHA}" ] || { echo 'release archive checksum 불일치' >&2; exit 1; }
-initialize_deploy_success_markers
+sudo mkdir -p /opt/quant-platform/releases /var/lib/quant-platform/backups
 if sudo test -e "\${RELEASE_DIR}" || sudo test -e "\${RELEASE_STAGING}"; then
   echo "release 또는 staging 경로가 이미 존재합니다: \${RELEASE_DIR}" >&2
   exit 1
 fi
 sudo mkdir "\${RELEASE_STAGING}"
 RELEASE_STAGING_CREATED=1
+sudo touch "\${RELEASE_STAGING}/.deploy-in-progress"
 sudo tar -xzf "/tmp/${REMOTE_ARCHIVE}" -C "\${RELEASE_STAGING}"
 # 업로드본은 풀고 나면 쓸모없다 — 40GB 디스크에 배포마다 쌓이지 않게 즉시 지운다
 rm -f "/tmp/${REMOTE_ARCHIVE}" "/tmp/${REMOTE_CHECKSUM}"
@@ -512,9 +539,10 @@ if sudo test -f "\${DB_PATH}"; then
     echo "DB snapshot 경로가 이미 존재합니다: \${DB_SNAPSHOT}" >&2
     exit 1
   fi
+  sudo touch "\${DB_SNAPSHOT}.deploy-in-progress"
+  SNAPSHOT_CREATED=1
   SNAPSHOT_INCOMPLETE_OWNED=1
   sudo sqlite3 "\${DB_PATH}" ".backup '\${DB_SNAPSHOT_INCOMPLETE}'"
-  SNAPSHOT_CREATED=1
   sudo mv "\${DB_SNAPSHOT_INCOMPLETE}" "\${DB_SNAPSHOT}"
   SNAPSHOT_INCOMPLETE_OWNED=0
   DEPLOY_DB_SNAPSHOT="\${DB_SNAPSHOT}"
@@ -582,17 +610,24 @@ fi
 DEPLOY_PHASE=success
 # 성공한 배포의 스냅샷도 즉시 지우지 않는다 (D-010): health check 통과 뒤에 발견된 문제는
 # 수동 롤백으로 되돌리는데, 짝이 맞는 스냅샷이 없으면 이전 코드가 새 스키마를 만나 죽는다.
-# 성공 마커가 있는 최근 KEEP_SNAPSHOTS 개만 남긴다. 롤백 자체가 실패한 배포의
-# 산출물은 수동 복구를 위해 보존하되 성공 이력의 개수에서는 제외한다.
+# 기존 정책대로 정상 snapshot 최근 KEEP_SNAPSHOTS 개만 남긴다. 정상 상태는 별도
+# 성공 마커가 없는 기본 상태다. in-progress/failed 예외만 회전에서 제외한다.
 KEEP_SNAPSHOTS=5
 sudo find /var/lib/quant-platform/backups -mindepth 1 -maxdepth 1 -type f \
-  -name 'pre-deploy-*.sqlite.deploy-succeeded' -printf '%p\n' 2>/dev/null \
-  | sort -r | tail -n +\$((KEEP_SNAPSHOTS + 1)) \
-  | while IFS= read -r snapshot_marker; do
-      snapshot="\${snapshot_marker%.deploy-succeeded}"
+  -name 'pre-deploy-*.sqlite' -printf '%T@ %p\n' 2>/dev/null \
+  | sort -nr \
+  | while read -r _ snapshot; do
+      if validate_deploy_snapshot "\${snapshot}" && \
+        ! sudo test -e "\${snapshot}.deploy-in-progress" && \
+        ! sudo test -e "\${snapshot}.deploy-failed"; then
+        printf '%s\n' "\${snapshot}"
+      fi
+    done \
+  | tail -n +\$((KEEP_SNAPSHOTS + 1)) \
+  | while IFS= read -r snapshot; do
       if validate_deploy_snapshot "\${snapshot}"; then
         sudo rm -f -- "\${snapshot}" "\${snapshot}-journal" "\${snapshot}-wal" \
-          "\${snapshot}-shm" "\${snapshot_marker}"
+          "\${snapshot}-shm" "\${snapshot}.deploy-succeeded"
       fi
     done || true
 
@@ -605,11 +640,19 @@ sudo find /var/lib/quant-platform/backups -mindepth 1 -maxdepth 1 -type f \
 # 생겨 위 D-010 의 "코드와 스키마를 짝으로 되돌린다" 가 성립하지 않는다.
 KEEP_RELEASES=\${KEEP_SNAPSHOTS}
 CURRENT_TARGET="\$(readlink -f /opt/quant-platform/current || true)"
-# 성공 마커가 있는 디렉터리만 센다. 롤백 실패로 보존한 unmarked release가 정상
-# rollback 이력을 밀어내지 않으며, current는 안전을 위해 다시 한 번 제외한다.
-sudo find /opt/quant-platform/releases -mindepth 2 -maxdepth 2 -type f \
-  -name '.deploy-succeeded' -printf '%h\n' 2>/dev/null \
-  | sort -r | tail -n +\$((KEEP_RELEASES + 1)) \
+# 기존 release는 상태 마커가 없으므로 그대로 정상 이력으로 채택한다. 새 배포 중이거나
+# rollback이 실패한 release만 제외하며, current는 안전을 위해 다시 한 번 제외한다.
+sudo find /opt/quant-platform/releases -mindepth 1 -maxdepth 1 -type d \
+  ! -name '.incomplete-*' -printf '%p\n' 2>/dev/null \
+  | sort -r \
+  | while IFS= read -r release_dir; do
+      if validate_release_directory "\${release_dir}" && \
+        ! sudo test -e "\${release_dir}/.deploy-in-progress" && \
+        ! sudo test -e "\${release_dir}/.deploy-failed"; then
+        printf '%s\n' "\${release_dir}"
+      fi
+    done \
+  | tail -n +\$((KEEP_RELEASES + 1)) \
   | while IFS= read -r release_dir; do
       if [ "\${release_dir}" != "\${CURRENT_TARGET}" ] && \
         validate_release_directory "\${release_dir}"; then

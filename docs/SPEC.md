@@ -1436,6 +1436,7 @@ sudo apt install -y \
   python3 \
   pkg-config \
   sqlite3 \
+  util-linux \
   ufw \
   unattended-upgrades \
   gnupg
@@ -1861,14 +1862,15 @@ dist/
 1. 개발 PC에서 lint·typecheck·test·build
 2. tar 생성
 3. 서버로 scp
-4. checksum 검증 후 `.incomplete-<release>` staging 디렉터리에 압축 해제
-5. staging에서 production dependency 설치
-6. **SQLite 스냅샷 생성** — incomplete 파일에 완성한 뒤 최종 이름으로 교체 (D-010)
-7. staging을 release 최종 경로로 옮기고 `current` symlink 원자적 교체
-8. systemd stop 후 `db:prepare` migration
-9. systemd start
-10. health check
-11. 실패 시 이전 release와 **DB 스냅샷을 함께** rollback하고 readiness 재검증
+4. 서버 배포 전역 `flock` 획득 후 checksum 검증
+5. `.incomplete-<release>` staging 디렉터리에 상태 마커를 만들고 압축 해제
+6. staging에서 production dependency 설치
+7. **SQLite 스냅샷 생성** — incomplete 파일에 완성한 뒤 최종 이름으로 교체 (D-010)
+8. staging을 release 최종 경로로 옮기고 `current` symlink 원자적 교체
+9. systemd stop 후 `db:prepare` migration
+10. systemd start
+11. health check
+12. 실패 시 이전 release와 **DB 스냅샷을 함께** rollback하고 readiness 재검증
     (D-010 — 코드만 되돌리면 이전 코드가 새 스키마를 만나 죽는 "명목상 롤백"이 된다)
 
 추가 규칙:
@@ -1879,8 +1881,9 @@ dist/
 - 서비스 전환 전 실패 산출물은 즉시 지운다. 전환 후에는 rollback readiness가
   성공한 경우에만 실패 release와 snapshot을 지우며, rollback 실패 시 수동 복구를
   위해 보존한다
-- 성공 마커가 있는 스냅샷과 release만 최근 5개 보존 개수에 포함한다. rollback
-  실패로 보존한 unmarked 산출물은 이 개수에서 제외한다
+- 마커가 없는 기존·성공 스냅샷과 release 중 최근 5개를 보존한다. `in-progress`와
+  `failed` 산출물은 정상 보존 개수에서 제외한다
+- 원격 배포 전체는 non-blocking `flock`으로 직렬화하고, 동시 실행은 즉시 실패시킨다
 
 ---
 

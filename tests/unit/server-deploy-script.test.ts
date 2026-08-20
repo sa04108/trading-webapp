@@ -109,6 +109,12 @@ describe('deploy script failure workflow', () => {
     expect(result.status).toBe(0);
     expect(output).toContain('rollback failed for');
     expect(output).toContain('자동 롤백 검증에 실패해 release와 DB snapshot을 보존합니다');
+    expect(output).toContain(
+      'sudo:mv /opt/quant-platform/releases/new-release/.deploy-in-progress /opt/quant-platform/releases/new-release/.deploy-failed',
+    );
+    expect(output).toContain(
+      'sudo:mv /var/lib/quant-platform/backups/pre-deploy-new-release.sqlite.deploy-in-progress /var/lib/quant-platform/backups/pre-deploy-new-release.sqlite.deploy-failed',
+    );
     expect(output).not.toContain('sudo:rm -rf -- /opt/quant-platform/releases/new-release');
     expect(output).not.toContain(
       'sudo:rm -f -- /var/lib/quant-platform/backups/pre-deploy-new-release.sqlite',
@@ -218,6 +224,51 @@ describe('deploy script failure workflow', () => {
     expect(output).toContain('status=1');
   });
 
+  it('holds a non-blocking kernel lock for the whole remote deployment shell', () => {
+    const shell = String.raw`
+      source scripts/deploy-server.sh
+      sudo() { "$@"; }
+      lock_root="$(mktemp -d)"
+      lock_file="$lock_root/deploy.lock"
+      ready_file="$lock_root/ready"
+
+      touch "$lock_file"
+      flock -n -F "$lock_file" bash -c 'touch "$1"; exec sleep 30' _ "$ready_file" &
+      holder_pid=$!
+      for ((attempt = 0; attempt < 100; attempt += 1)); do
+        [ -f "$ready_file" ] && break
+        sleep 0.01
+      done
+      [ -f "$ready_file" ]
+
+      set +e
+      (
+        acquire_deploy_lock "$lock_file"
+      )
+      blocked_status=$?
+      kill -KILL "$holder_pid"
+      wait "$holder_pid" 2>/dev/null
+      (
+        acquire_deploy_lock "$lock_file"
+      )
+      recovered_status=$?
+      set -e
+      printf 'blocked=%s recovered=%s\n' "$blocked_status" "$recovered_status"
+      rm -rf "$lock_root"
+      [ "$blocked_status" -eq 75 ] && [ "$recovered_status" -eq 0 ]
+    `;
+
+    const result = spawnSync(bash, ['-c', shell], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+    });
+    const output = `${result.stdout}${result.stderr}`;
+
+    expect(result.status, output).toBe(0);
+    expect(output).toContain('다른 서버 배포가 진행 중입니다');
+    expect(output).toContain('blocked=75 recovered=0');
+  });
+
   it('publishes a fully installed staging release only after checksum verification', () => {
     const deploy = readFileSync('scripts/deploy-server.sh', 'utf8');
     expect(deploy).toContain('source "${REPO_ROOT}/scripts/build-release.sh"');
@@ -232,8 +283,14 @@ describe('deploy script failure workflow', () => {
       deploy.indexOf('sudo mv "\\${RELEASE_STAGING}" "\\${RELEASE_DIR}"'),
     );
     expect(deploy).toContain('trap cleanup_remote_deploy EXIT');
+    expect(deploy).toContain(
+      'trap cleanup_remote_deploy EXIT\nacquire_deploy_lock\nEXPECTED_SHA=',
+    );
     expect(deploy).toContain('DB_SNAPSHOT_INCOMPLETE=');
     expect(deploy).toContain('REMOTE_UPLOADS_OWNED=1');
+    expect(deploy).toContain('REMOTE_UPLOAD_ID=');
+    expect(deploy).toContain('quant-platform-upload-${RELEASE}-${REMOTE_UPLOAD_ID}.tar.gz');
+    expect(deploy).toContain('sudo touch "\\${RELEASE_STAGING}/.deploy-in-progress"');
   });
 
   it('renders a syntactically valid remote deployment script', () => {
@@ -260,13 +317,14 @@ describe('deploy script failure workflow', () => {
     expect(result.status, result.stderr).toBe(0);
   });
 
-  it('counts only successful release and snapshot markers during retention', () => {
+  it('treats legacy unmarked artifacts as successful and excludes exceptional states', () => {
     const deploy = readFileSync('scripts/deploy-server.sh', 'utf8');
 
-    expect(deploy).toContain("-name '.deploy-succeeded' -printf '%h\\n'");
-    expect(deploy).toContain(
-      "-name 'pre-deploy-*.sqlite.deploy-succeeded' -printf '%p\\n'",
-    );
+    expect(deploy).toContain("-name 'pre-deploy-*.sqlite' -printf '%T@ %p\\n'");
+    expect(deploy).toContain('.deploy-in-progress');
+    expect(deploy).toContain('.deploy-failed');
+    expect(deploy).not.toContain('.deploy-success-markers-v1');
+    expect(deploy).not.toContain("-name '.deploy-succeeded'");
     expect(deploy).not.toContain(
       'sudo ls -1 /opt/quant-platform/releases 2>/dev/null | sort -r',
     );
