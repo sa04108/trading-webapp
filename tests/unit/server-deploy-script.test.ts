@@ -9,14 +9,14 @@ describe('deploy script failure workflow', () => {
     const shell = String.raw`
       source scripts/deploy-server.sh
       attempts=0
-      current_release='/opt/quant-platform/releases/new-release'
+      mock_current_target='/opt/quant-platform/releases/new-release'
       curl() {
         attempts=$((attempts + 1))
         echo 'curl unavailable' >&2
         [ "$attempts" -ge 2 ]
       }
       sleep() { :; }
-      readlink() { printf '%s\n' "$current_release"; }
+      readlink() { printf '%s\n' "$mock_current_target"; }
       sudo() {
         printf 'sudo:%s\n' "$*" >&2
         if [ "$1" = 'journalctl' ]; then
@@ -26,7 +26,7 @@ describe('deploy script failure workflow', () => {
           return 0
         fi
         if [ "$1" = 'ln' ] && [ "$2" = '-sfn' ]; then
-          current_release="$3"
+          mock_current_target='/opt/quant-platform/releases/old-release'
         fi
         return 0
       }
@@ -56,7 +56,9 @@ describe('deploy script failure workflow', () => {
       output.indexOf('sudo:systemctl stop quant-platform'),
     );
     expect(output).toMatch(/sudo:cp .*pre-deploy-new-release\.sqlite .*app\.sqlite/);
-    expect(output).toMatch(/sudo:rm -f .*app\.sqlite-wal .*app\.sqlite-shm/);
+    expect(output).toMatch(
+      /sudo:rm -f .*app\.sqlite-journal .*app\.sqlite-wal .*app\.sqlite-shm/,
+    );
     expect(output).toContain('rolled back to');
     expect(output).toContain(
       'sudo:rm -f -- /var/lib/quant-platform/backups/pre-deploy-new-release.sqlite',
@@ -72,17 +74,17 @@ describe('deploy script failure workflow', () => {
   it('preserves recovery artifacts when rollback readiness fails', () => {
     const shell = String.raw`
       source scripts/deploy-server.sh
-      current_release='/opt/quant-platform/releases/new-release'
+      mock_current_target='/opt/quant-platform/releases/new-release'
       curl() { return 1; }
       sleep() { :; }
-      readlink() { printf '%s\n' "$current_release"; }
+      readlink() { printf '%s\n' "$mock_current_target"; }
       sudo() {
         printf 'sudo:%s\n' "$*" >&2
         if [ "$1" = 'test' ] && [ "$2" = '-f' ]; then
           return 0
         fi
         if [ "$1" = 'ln' ] && [ "$2" = '-sfn' ]; then
-          current_release="$3"
+          mock_current_target='/opt/quant-platform/releases/old-release'
         fi
         return 0
       }
@@ -110,14 +112,20 @@ describe('deploy script failure workflow', () => {
     expect(output).toContain('rollback failed for');
     expect(output).toContain('자동 롤백 검증에 실패해 release와 DB snapshot을 보존합니다');
     expect(output).toContain(
-      'sudo:mv /opt/quant-platform/releases/new-release/.deploy-in-progress /opt/quant-platform/releases/new-release/.deploy-failed',
+      'sudo:touch /opt/quant-platform/releases/new-release/.deploy-failed',
     );
     expect(output).toContain(
-      'sudo:mv /var/lib/quant-platform/backups/pre-deploy-new-release.sqlite.deploy-in-progress /var/lib/quant-platform/backups/pre-deploy-new-release.sqlite.deploy-failed',
+      'sudo:rm -f -- /opt/quant-platform/releases/new-release/.deploy-in-progress',
+    );
+    expect(output).toContain(
+      'sudo:touch /var/lib/quant-platform/backups/pre-deploy-new-release.sqlite.deploy-failed',
+    );
+    expect(output).toContain(
+      'sudo:rm -f -- /var/lib/quant-platform/backups/pre-deploy-new-release.sqlite.deploy-in-progress',
     );
     expect(output).not.toContain('sudo:rm -rf -- /opt/quant-platform/releases/new-release');
     expect(output).not.toContain(
-      'sudo:rm -f -- /var/lib/quant-platform/backups/pre-deploy-new-release.sqlite',
+      'sudo:rm -f -- /var/lib/quant-platform/backups/pre-deploy-new-release.sqlite /var/lib/quant-platform/backups/pre-deploy-new-release.sqlite-journal',
     );
   });
 
@@ -143,6 +151,57 @@ describe('deploy script failure workflow', () => {
     expect(result.status).toBe(0);
     expect(output).toContain('현재 release는 실패 산출물로 삭제하지 않습니다');
     expect(output).not.toContain('sudo:rm');
+  });
+
+  it('fails closed when the current release symlink cannot be resolved', () => {
+    const shell = String.raw`
+      source scripts/deploy-server.sh
+      link_root="$(mktemp -d)"
+      ln -s "$link_root/missing/release" "$link_root/current"
+      status=0
+      resolved="$(resolve_current_release "$link_root/current")" || status=$?
+      printf 'status=%s resolved=%s\n' "$status" "$resolved"
+      rm -rf "$link_root"
+      [ "$status" -eq 1 ] && [ -z "$resolved" ]
+    `;
+
+    const result = spawnSync(bash, ['-c', shell], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+    });
+    const output = `${result.stdout}${result.stderr}`;
+
+    expect(result.status, output).toBe(0);
+    expect(output).toContain('current release 경로를 안전하게 해석할 수 없습니다');
+    expect(output).toContain('status=1 resolved=');
+  });
+
+  it('does not report cleanup success or delete the release when snapshot deletion fails', () => {
+    const shell = String.raw`
+      source scripts/deploy-server.sh
+      readlink() { echo '/opt/quant-platform/releases/old-release'; }
+      sudo() {
+        printf 'sudo:%s\n' "$*" >&2
+        if [ "$1" = 'rm' ] && [ "$2" = '-f' ]; then return 1; fi
+        return 0
+      }
+      status=0
+      cleanup_failed_deploy_artifacts \
+        '/opt/quant-platform/releases/new-release' \
+        '/var/lib/quant-platform/backups/pre-deploy-new-release.sqlite' || status=$?
+      printf 'status=%s\n' "$status"
+      [ "$status" -eq 1 ]
+    `;
+
+    const result = spawnSync(bash, ['-c', shell], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+    });
+    const output = `${result.stdout}${result.stderr}`;
+
+    expect(result.status, output).toBe(0);
+    expect(output).toContain('status=1');
+    expect(output).not.toContain('sudo:rm -rf -- /opt/quant-platform/releases/new-release');
   });
 
   it('cleans attempt-owned staging and incomplete snapshot files before service switch', () => {
@@ -291,6 +350,8 @@ describe('deploy script failure workflow', () => {
     expect(deploy).toContain('REMOTE_UPLOAD_ID=');
     expect(deploy).toContain('quant-platform-upload-${RELEASE}-${REMOTE_UPLOAD_ID}.tar.gz');
     expect(deploy).toContain('sudo touch "\\${RELEASE_STAGING}/.deploy-in-progress"');
+    expect(deploy).toContain('SWITCHED_RELEASE="\\$(resolve_current_release)"');
+    expect(deploy).toContain('[ "\\${SWITCHED_RELEASE}" = "\\${RELEASE_DIR}" ]');
   });
 
   it('renders a syntactically valid remote deployment script', () => {
@@ -317,41 +378,29 @@ describe('deploy script failure workflow', () => {
     expect(result.status, result.stderr).toBe(0);
   });
 
-  it('defaults successful release and DB snapshot retention to zero', () => {
+  it('hard-codes one shared successful release and DB snapshot retention count to zero', () => {
     const deploy = readFileSync('scripts/deploy-server.sh', 'utf8');
+    const deployEnv = readFileSync('deploy.env.example', 'utf8');
 
-    expect(deploy).toContain('KEEP_RELEASES="${QP_DEPLOY_KEEP_RELEASES:-0}"');
-    expect(deploy).toContain('KEEP_DB_SNAPSHOTS="${QP_DEPLOY_KEEP_DB_SNAPSHOTS:-0}"');
-    expect(deploy).toContain('KEEP_RELEASES=${KEEP_RELEASES}');
-    expect(deploy).toContain('KEEP_DB_SNAPSHOTS=${KEEP_DB_SNAPSHOTS}');
-    expect(deploy).toContain('tail -n +\\$((KEEP_DB_SNAPSHOTS + 1))');
-    expect(deploy).toContain('tail -n +\\$((KEEP_RELEASES + 1))');
+    expect(deploy).toContain('KEEP_SUCCESSFUL_DEPLOYS=0');
+    expect(deploy.match(/awk -v keep="\\\$\{KEEP_SUCCESSFUL_DEPLOYS\}" 'NR > keep'/g)).toHaveLength(2);
+    expect(deploy).not.toContain('QP_DEPLOY_KEEP_RELEASES');
+    expect(deploy).not.toContain('QP_DEPLOY_KEEP_DB_SNAPSHOTS');
+    expect(deployEnv).not.toContain('QP_DEPLOY_KEEP_RELEASES');
+    expect(deployEnv).not.toContain('QP_DEPLOY_KEEP_DB_SNAPSHOTS');
+    expect(deploy).not.toContain('KEEP_RELEASES=');
+    expect(deploy).not.toContain('KEEP_DB_SNAPSHOTS=');
     expect(deploy).not.toContain('KEEP_SNAPSHOTS=5');
-  });
-
-  it('rejects invalid deployment retention counts before connecting to the server', () => {
-    const result = spawnSync(bash, ['scripts/deploy-server.sh'], {
-      cwd: process.cwd(),
-      encoding: 'utf8',
-      env: {
-        ...process.env,
-        QP_HOST: 'deploy.invalid',
-        QP_DEPLOY_KEEP_RELEASES: '-1',
-      },
-    });
-    const output = `${result.stdout}${result.stderr}`;
-
-    expect(result.status).toBe(1);
-    expect(output).toContain('QP_DEPLOY_KEEP_RELEASES 는 0 이상의 정수여야 합니다: -1');
-    expect(output).not.toContain('SSH 접속 확인');
   });
 
   it('treats legacy unmarked artifacts as successful and excludes exceptional states', () => {
     const deploy = readFileSync('scripts/deploy-server.sh', 'utf8');
 
     expect(deploy).toContain("-name 'pre-deploy-*.sqlite' -printf '%T@ %p\\n'");
+    expect(deploy).toContain("! -name '.incomplete-*' -printf '%T@ %p\\n'");
     expect(deploy).toContain('.deploy-in-progress');
     expect(deploy).toContain('.deploy-failed');
+    expect(deploy).toContain('sudo test ! -e "${in_progress_marker}"');
     expect(deploy).not.toContain('.deploy-success-markers-v1');
     expect(deploy).not.toContain("-name '.deploy-succeeded'");
     expect(deploy).not.toContain(

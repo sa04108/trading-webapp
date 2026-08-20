@@ -218,9 +218,7 @@ pnpm run deploy               # 서버 + 선택적 Worker 통합 배포 (deploy.
   `QP_SSH_PORT`·`SSH_KEY`·`QP_SSH_JUMP`·`QP_SSH_HOST_KEY`·`QP_SSH_OPTS`) —
   `~/.ssh/config` 를 만들지 않아도 한 줄로 실행된다. 이름·의미는 두 스크립트가 같다.
 - deploy-server.sh 는 재시작 직전 SQLite 스냅샷을 뜨고, health check 실패 시 코드와 DB 를
-  함께 롤백한다. 정상 성공 뒤 과거 release와 snapshot은 기본적으로 남기지 않으며,
-  필요할 때만 `QP_DEPLOY_KEEP_RELEASES`·`QP_DEPLOY_KEEP_DB_SNAPSHOTS`를 양수로 둔다
-  (D-010).
+  함께 롤백한다. 정상 성공 뒤 과거 release와 snapshot은 남기지 않는다 (D-010).
 - Worker는 Docker Compose 전용이며 app systemd fallback이 없다. 웹과 같은
   `build-release.sh` archive를 image에 넣고 content checksum과 인증·SHA·protocol probe를
   통과해야 전환한다 (D-061).

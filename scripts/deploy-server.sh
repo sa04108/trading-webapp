@@ -15,10 +15,6 @@
 #   QP_SSH_JUMP      점프 호스트, `[user@]host[:port]` (ssh 의 ProxyJump)
 #   QP_SSH_HOST_KEY  호스트키 확인: accept-new(기본) | yes | no
 #   QP_SSH_OPTS      그 밖의 ssh 옵션을 그대로 (예: "-o ServerAliveInterval=30")
-#   QP_DEPLOY_KEEP_RELEASES
-#                    성공 뒤 남길 과거 정상 release 개수 (기본 0, current 제외)
-#   QP_DEPLOY_KEEP_DB_SNAPSHOTS
-#                    성공 뒤 남길 정상 pre-deploy DB snapshot 개수 (기본 0)
 #
 # 접속 파라미터의 이름과 의미는 bootstrap-server.sh 와 같다 — 부트스트랩이 성공한 조합을
 # 그대로 배포에 쓸 수 있어야 한다 (부트스트랩 마지막 출력이 그 명령을 찍어 준다).
@@ -88,6 +84,31 @@ validate_release_directory() {
   esac
 }
 
+resolve_current_release() {
+  local current_link="${1:-/opt/quant-platform/current}"
+  local current_release=""
+
+  if current_release="$(readlink -e "${current_link}" 2>/dev/null)" &&
+    [ -n "${current_release}" ]; then
+    validate_release_directory "${current_release}" || return 1
+    printf '%s\n' "${current_release}"
+    return 0
+  fi
+  if [ -e "${current_link}" ] || [ -L "${current_link}" ]; then
+    echo "current release 경로를 안전하게 해석할 수 없습니다: ${current_link}" >&2
+    return 1
+  fi
+}
+
+is_normal_deploy_artifact() {
+  local in_progress_marker="$1"
+  local failed_marker="$2"
+
+  # 두 검사가 모두 성공해 마커가 없다고 확인된 경우에만 정상 회전 대상으로 본다.
+  # sudo 자체가 실패하면 복구 산출물을 정상으로 오인해 삭제하지 않도록 false가 된다.
+  sudo test ! -e "${in_progress_marker}" && sudo test ! -e "${failed_marker}"
+}
+
 validate_deploy_snapshot() {
   local snapshot="$1"
   local release_name
@@ -141,7 +162,7 @@ cleanup_failed_deploy_artifacts() {
 
   if [ -n "${failed_release}" ]; then
     validate_release_directory "${failed_release}" || return 1
-    current_release="$(readlink -f /opt/quant-platform/current 2>/dev/null || true)"
+    current_release="$(resolve_current_release)" || return 1
     if [ "${failed_release}" = "${current_release}" ]; then
       echo "현재 release는 실패 산출물로 삭제하지 않습니다: ${failed_release}" >&2
       return 1
@@ -154,10 +175,10 @@ cleanup_failed_deploy_artifacts() {
   if [ -n "${db_snapshot}" ]; then
     sudo rm -f -- "${db_snapshot}" "${db_snapshot}-journal" "${db_snapshot}-wal" \
       "${db_snapshot}-shm" "${db_snapshot}.deploy-in-progress" \
-      "${db_snapshot}.deploy-failed" "${db_snapshot}.deploy-succeeded"
+      "${db_snapshot}.deploy-failed" "${db_snapshot}.deploy-succeeded" || return 1
   fi
   if [ -n "${failed_release}" ]; then
-    sudo rm -rf -- "${failed_release}"
+    sudo rm -rf -- "${failed_release}" || return 1
   fi
 }
 
@@ -204,19 +225,25 @@ mark_deploy_succeeded() {
 mark_deploy_failed() {
   local release_directory="$1"
   local db_snapshot="$2"
+  local mark_status=0
 
   validate_release_directory "${release_directory}" || return 1
   if [ -n "${db_snapshot}" ]; then
     validate_deploy_snapshot "${db_snapshot}" || return 1
   fi
-  if sudo test -e "${release_directory}/.deploy-in-progress"; then
-    sudo mv "${release_directory}/.deploy-in-progress" \
-      "${release_directory}/.deploy-failed" || return 1
+  if sudo touch "${release_directory}/.deploy-failed"; then
+    sudo rm -f -- "${release_directory}/.deploy-in-progress" || mark_status=1
+  else
+    mark_status=1
   fi
-  if [ -n "${db_snapshot}" ] && sudo test -e "${db_snapshot}.deploy-in-progress"; then
-    sudo mv "${db_snapshot}.deploy-in-progress" \
-      "${db_snapshot}.deploy-failed" || return 1
+  if [ -n "${db_snapshot}" ]; then
+    if sudo touch "${db_snapshot}.deploy-failed"; then
+      sudo rm -f -- "${db_snapshot}.deploy-in-progress" || mark_status=1
+    else
+      mark_status=1
+    fi
   fi
+  return "${mark_status}"
 }
 
 cleanup_remote_deploy() {
@@ -262,7 +289,7 @@ rollback_release() {
   if [ "${rollback_ok}" -eq 1 ] && [ -n "${db_snapshot}" ]; then
     if sudo test -f "${db_snapshot}"; then
       if sudo cp "${db_snapshot}" "${db_path}" &&
-        sudo rm -f "${db_path}-wal" "${db_path}-shm"; then
+        sudo rm -f "${db_path}-journal" "${db_path}-wal" "${db_path}-shm"; then
         echo 'DB를 배포 전 스냅샷으로 복원했습니다' >&2
       else
         rollback_ok=0
@@ -345,21 +372,6 @@ fi
 case "${TARGET}" in
   -* | *[[:space:]]*)
     echo "서버 주소 형식이 올바르지 않습니다: ${TARGET}" >&2
-    exit 1
-    ;;
-esac
-
-KEEP_RELEASES="${QP_DEPLOY_KEEP_RELEASES:-0}"
-KEEP_DB_SNAPSHOTS="${QP_DEPLOY_KEEP_DB_SNAPSHOTS:-0}"
-case "${KEEP_RELEASES}" in
-  '' | *[!0-9]*)
-    echo "QP_DEPLOY_KEEP_RELEASES 는 0 이상의 정수여야 합니다: ${KEEP_RELEASES}" >&2
-    exit 1
-    ;;
-esac
-case "${KEEP_DB_SNAPSHOTS}" in
-  '' | *[!0-9]*)
-    echo "QP_DEPLOY_KEEP_DB_SNAPSHOTS 는 0 이상의 정수여야 합니다: ${KEEP_DB_SNAPSHOTS}" >&2
     exit 1
     ;;
 esac
@@ -500,6 +512,8 @@ REMOTE_SERVICE_HELPERS="$(
   declare -f wait_for_ready
   declare -f print_service_diagnostics
   declare -f validate_release_directory
+  declare -f resolve_current_release
+  declare -f is_normal_deploy_artifact
   declare -f validate_deploy_snapshot
   declare -f cleanup_incomplete_snapshot
   declare -f cleanup_failed_deploy_artifacts
@@ -520,8 +534,9 @@ RELEASE_STAGING="/opt/quant-platform/releases/.incomplete-${RELEASE}"
 DB_PATH="/var/lib/quant-platform/app.sqlite"
 DB_SNAPSHOT="/var/lib/quant-platform/backups/pre-deploy-${RELEASE}.sqlite"
 DB_SNAPSHOT_INCOMPLETE="/var/lib/quant-platform/backups/.pre-deploy-${RELEASE}.sqlite.incomplete"
-KEEP_RELEASES=${KEEP_RELEASES}
-KEEP_DB_SNAPSHOTS=${KEEP_DB_SNAPSHOTS}
+# 정상 배포 이력은 보유하지 않는다. current와 in-progress/failed 복구 산출물은 제외한다.
+# release와 DB snapshot은 항상 같은 개수로 회전시켜 코드·스키마 짝이 어긋나지 않게 한다.
+KEEP_SUCCESSFUL_DEPLOYS=0
 DEPLOY_DB_SNAPSHOT=""
 DEPLOY_PHASE=pre-switch
 RELEASE_STAGING_CREATED=0
@@ -573,9 +588,12 @@ RELEASE_PUBLISHED=1
 sudo mv "\${RELEASE_STAGING}" "\${RELEASE_DIR}"
 RELEASE_STAGING_CREATED=0
 cd "\${RELEASE_DIR}"
-if sudo ln -sfn "\${RELEASE_DIR}" /opt/quant-platform/current; then
+if sudo ln -sfn "\${RELEASE_DIR}" /opt/quant-platform/current && \
+  SWITCHED_RELEASE="\$(resolve_current_release)" && \
+  [ "\${SWITCHED_RELEASE}" = "\${RELEASE_DIR}" ]; then
   DEPLOY_PHASE=switched
 else
+  echo "current release 전환을 검증하지 못했습니다: \${RELEASE_DIR}" >&2
   exit 1
 fi
 
@@ -629,62 +647,71 @@ if [ "\${DEPLOY_FAILED}" -ne 0 ]; then
     "\${DB_PATH}" || exit 1
 fi
 DEPLOY_PHASE=success
-# 성공한 정상 snapshot은 기본적으로 보유하지 않는다. 양수로 명시한 경우에만 최근
-# KEEP_DB_SNAPSHOTS 개를 남긴다. in-progress/failed 예외는 수동 복구 근거이므로 정상
-# 보존 개수와 무관하게 회전에서 제외한다.
-sudo find /var/lib/quant-platform/backups -mindepth 1 -maxdepth 1 -type f \
-  -name 'pre-deploy-*.sqlite' -printf '%T@ %p\n' 2>/dev/null \
-  | sort -nr \
-  | while read -r _ snapshot; do
-      if validate_deploy_snapshot "\${snapshot}" && \
-        ! sudo test -e "\${snapshot}.deploy-in-progress" && \
-        ! sudo test -e "\${snapshot}.deploy-failed"; then
-        printf '%s\n' "\${snapshot}"
-      fi
-    done \
-  | tail -n +\$((KEEP_DB_SNAPSHOTS + 1)) \
-  | while IFS= read -r snapshot; do
-      if validate_deploy_snapshot "\${snapshot}"; then
-        sudo rm -f -- "\${snapshot}" "\${snapshot}-journal" "\${snapshot}-wal" \
-          "\${snapshot}-shm" "\${snapshot}.deploy-succeeded"
-      fi
-    done || true
+# 정상 성공 이력은 release와 snapshot 모두 KEEP_SUCCESSFUL_DEPLOYS 개만 남긴다.
+# in-progress/failed 예외는 수동 복구 근거이므로 정상 보존 개수와 무관하게 제외한다.
+CURRENT_TARGET=""
+if CURRENT_TARGET="\$(resolve_current_release)" && \
+  [ "\${CURRENT_TARGET}" = "\${RELEASE_DIR}" ]; then
+  SNAPSHOT_CLEANUP_OK=1
+  if ! sudo find /var/lib/quant-platform/backups -mindepth 1 -maxdepth 1 -type f \
+    -name 'pre-deploy-*.sqlite' -printf '%T@ %p\n' 2>/dev/null \
+    | sort -nr \
+    | while read -r _ snapshot; do
+        if validate_deploy_snapshot "\${snapshot}" && \
+          is_normal_deploy_artifact \
+            "\${snapshot}.deploy-in-progress" "\${snapshot}.deploy-failed"; then
+          printf '%s\n' "\${snapshot}"
+        fi
+      done \
+    | awk -v keep="\${KEEP_SUCCESSFUL_DEPLOYS}" 'NR > keep' \
+    | while IFS= read -r snapshot; do
+        if validate_deploy_snapshot "\${snapshot}"; then
+          sudo rm -f -- "\${snapshot}" "\${snapshot}-journal" "\${snapshot}-wal" \
+            "\${snapshot}-shm" "\${snapshot}.deploy-succeeded" || exit 1
+        fi
+      done; then
+    SNAPSHOT_CLEANUP_OK=0
+    echo '경고: 정상 DB snapshot 정리를 완료하지 못했습니다' >&2
+  fi
 
-# 릴리스 디렉터리도 같이 회전시킨다. 각 릴리스는 서버에서 설치한 node_modules 를 통째로
-# 들고 있어(better-sqlite3·argon2 네이티브 바이너리 포함) 수백 MB 이고, 여기를
-# 정리하지 않으면 40GB 디스크가 배포 횟수에 비례해 줄어든다 — 시장 데이터보다 이쪽이
-# 먼저 디스크를 먹는다.
-#
-# current는 서비스 실행에 필요하므로 보존 개수에서 제외한다. 기본값 0이면 성공 확인 뒤
-# 과거 정상 release를 전부 지우며, 양수로 명시한 경우에만 그 개수만큼 남긴다.
-CURRENT_TARGET="\$(readlink -f /opt/quant-platform/current || true)"
-# 기존 release는 상태 마커가 없으므로 그대로 정상 이력으로 채택한다. 새 배포 중이거나
-# rollback이 실패한 release만 제외하며, current는 안전을 위해 다시 한 번 제외한다.
-sudo find /opt/quant-platform/releases -mindepth 1 -maxdepth 1 -type d \
-  ! -name '.incomplete-*' -printf '%p\n' 2>/dev/null \
-  | sort -r \
-  | while IFS= read -r release_dir; do
-      if [ "\${release_dir}" != "\${CURRENT_TARGET}" ] && \
-        validate_release_directory "\${release_dir}" && \
-        ! sudo test -e "\${release_dir}/.deploy-in-progress" && \
-        ! sudo test -e "\${release_dir}/.deploy-failed"; then
-        printf '%s\n' "\${release_dir}"
-      fi
-    done \
-  | tail -n +\$((KEEP_RELEASES + 1)) \
-  | while IFS= read -r release_dir; do
-      if [ "\${release_dir}" != "\${CURRENT_TARGET}" ] && \
-        validate_release_directory "\${release_dir}"; then
-        sudo rm -rf -- "\${release_dir}"
-      fi
-    done || true
+  # 릴리스 디렉터리는 production node_modules까지 포함해 크므로 snapshot과 같은 개수로
+  # 회전시킨다. snapshot 정리가 실패하면 코드·스키마 짝을 더 어긋나게 만들지 않도록
+  # release 정리도 건너뛴다. current와 복구 상태 release는 언제나 제외한다.
+  if [ "\${SNAPSHOT_CLEANUP_OK}" -eq 1 ]; then
+    if ! sudo find /opt/quant-platform/releases -mindepth 1 -maxdepth 1 -type d \
+      ! -name '.incomplete-*' -printf '%T@ %p\n' 2>/dev/null \
+      | sort -nr \
+      | while read -r _ release_dir; do
+          if [ "\${release_dir}" != "\${CURRENT_TARGET}" ] && \
+            validate_release_directory "\${release_dir}" && \
+            is_normal_deploy_artifact \
+              "\${release_dir}/.deploy-in-progress" "\${release_dir}/.deploy-failed"; then
+            printf '%s\n' "\${release_dir}"
+          fi
+        done \
+      | awk -v keep="\${KEEP_SUCCESSFUL_DEPLOYS}" 'NR > keep' \
+      | while IFS= read -r release_dir; do
+          if [ "\${release_dir}" != "\${CURRENT_TARGET}" ] && \
+            validate_release_directory "\${release_dir}"; then
+            sudo rm -rf -- "\${release_dir}" || exit 1
+          fi
+        done; then
+      echo '경고: 과거 정상 release 정리를 완료하지 못했습니다' >&2
+    fi
+  else
+    echo '경고: DB snapshot 정리 실패로 과거 release 정리도 건너뜁니다' >&2
+  fi
+else
+  echo '경고: current release를 검증하지 못해 정상 snapshot/release 정리를 건너뜁니다' >&2
+fi
 
 echo "release ${RELEASE} live"
-if sudo test -f "\${DB_SNAPSHOT}"; then
+if [ -n "\${PREVIOUS_RELEASE}" ] && sudo test -d "\${PREVIOUS_RELEASE}" && \
+  sudo test -f "\${DB_SNAPSHOT}"; then
   echo "수동 롤백 시 코드와 스키마를 짝으로 되돌린다 (D-010):"
   echo "  sudo systemctl stop quant-platform"
-  echo "  sudo ln -sfn <이전 release 경로> /opt/quant-platform/current"
-  echo "  sudo cp \${DB_SNAPSHOT} \${DB_PATH} && sudo rm -f \${DB_PATH}-wal \${DB_PATH}-shm"
+  echo "  sudo ln -sfn \${PREVIOUS_RELEASE} /opt/quant-platform/current"
+  echo "  sudo cp \${DB_SNAPSHOT} \${DB_PATH} && sudo rm -f \${DB_PATH}-journal \${DB_PATH}-wal \${DB_PATH}-shm"
   echo "  sudo systemctl start quant-platform"
 fi
 EOF
