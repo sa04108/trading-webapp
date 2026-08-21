@@ -106,6 +106,19 @@ describe('alignCorporateActionEffectiveDates', () => {
     expect(unaligned).toHaveLength(1);
   });
 
+  it('같은 분할의 재공시는 접은 뒤 변경상장일로 옮긴다', () => {
+    const first = splitFact();
+    const repeated = splitFact({ asOfTsMs: Date.parse('2026-03-20T09:00:00Z') });
+
+    const { facts, unaligned } = alignCorporateActionEffectiveDates(
+      [repeated, first],
+      [sharesChange()],
+    );
+
+    expect(facts).toEqual([{ ...first, periodKey: '2024-10-08' }]);
+    expect(unaligned).toEqual([]);
+  });
+
   it('옮긴 결과가 다른 자본변동의 기준일과 겹치면 옮기지 않는다 — 뷰가 둘을 한 칸으로 접는다', () => {
     const moved = splitFact({ periodKey: '2024-09-27' });
     const parked = splitFact({ periodKey: '2024-10-08', value: 2 });

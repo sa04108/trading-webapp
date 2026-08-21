@@ -73,8 +73,24 @@ export function alignCorporateActionEffectiveDates(
   facts: readonly Fact[],
   sharesChanges: readonly SharesChange[],
 ): { facts: Fact[]; unaligned: UnalignedAction[] } {
-  const actions = facts.filter((fact) => fact.field === CORPORATE_ACTION_FIELD);
+  // 같은 이벤트의 재공시를 정렬 전에 접는다. 하나만 변경상장일로 옮기면 나머지는
+  // DART 기준일에 남아 PitFactView 에서 서로 다른 두 분할로 보인다.
+  const actionsByPeriod = new Map<string, Fact>();
+  for (const fact of facts) {
+    if (fact.field !== CORPORATE_ACTION_FIELD) continue;
+    const key = `${fact.scope}|${fact.key}|${fact.periodKey}`;
+    const existing = actionsByPeriod.get(key);
+    if (
+      existing === undefined
+      || fact.asOfTsMs < existing.asOfTsMs
+      || (fact.asOfTsMs === existing.asOfTsMs && fact.value < existing.value)
+    ) {
+      actionsByPeriod.set(key, fact);
+    }
+  }
+  const actions = [...actionsByPeriod.values()];
   if (actions.length === 0) return { facts: [...facts], unaligned: [] };
+  const retainedActions = new Set(actions);
 
   const changesBySymbol = new Map<string, SharesChange[]>();
   for (const change of sharesChanges) {
@@ -124,9 +140,10 @@ export function alignCorporateActionEffectiveDates(
     .map((fact) => ({ symbol: fact.key, periodKey: fact.periodKey, ratio: fact.value }));
 
   return {
-    facts: facts.map((fact) => {
+    facts: facts.flatMap((fact) => {
+      if (fact.field === CORPORATE_ACTION_FIELD && !retainedActions.has(fact)) return [];
       const moved = movedTo.get(fact);
-      return moved === undefined ? fact : { ...fact, periodKey: moved };
+      return [moved === undefined ? fact : { ...fact, periodKey: moved }];
     }),
     unaligned,
   };
