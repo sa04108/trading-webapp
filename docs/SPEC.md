@@ -333,8 +333,8 @@ quant-platform/
 │  └─ systemd/
 ├─ scripts/
 │  ├─ bootstrap-server.sh    # 개발 PC 에서 새 서버 셋업 (provision-server.sh 업로드·실행)
-│  ├─ deploy.mjs             # deploy.env 기반 서버 + 선택적 Worker 통합 배포
-│  ├─ deploy-server.sh
+│  ├─ deploy.mjs             # Ansible inventory 기반 app/worker target 조정
+│  ├─ deploy-app.sh
 │  └─ backup.sh
 ├─ docs/
 │  ├─ SPEC.md                # 이 문서
@@ -1436,6 +1436,7 @@ sudo apt install -y \
   python3 \
   pkg-config \
   sqlite3 \
+  util-linux \
   ufw \
   unattended-upgrades \
   gnupg
@@ -1856,28 +1857,35 @@ dist/
 └─ current -> releases/20260726-090000-bcdefa2
 ```
 
-서버 전환 순서 (`scripts/deploy-server.sh`가 수행하며 `pnpm run deploy`가 통합 조정):
+app 전환 순서 (Ansible app role과 `scripts/deploy-app.sh`가 수행):
 
 1. 개발 PC에서 lint·typecheck·test·build
 2. tar 생성
-3. 서버로 scp
-4. 새 release 디렉터리에 압축 해제
-5. production dependency 설치
-6. **SQLite 스냅샷 생성** — 재시작(=마이그레이션 적용) 직전 (D-010)
-7. migration
-8. `current` symlink 원자적 교체
-9. systemd restart
-10. health check
-11. 실패 시 이전 release 와 **DB 스냅샷을 함께** rollback (D-010 — 코드만
-    되돌리면 이전 코드가 새 스키마를 만나 죽는 "명목상 롤백"이 된다)
+3. Ansible이 app 노드의 시도별 임시 디렉터리로 archive와 checksum을 업로드
+4. app 배포 전역 `flock` 획득 후 checksum 검증
+5. `.incomplete-<release>` staging 디렉터리에 상태 마커를 만들고 압축 해제
+6. staging에서 production dependency 설치
+7. **SQLite 스냅샷 생성** — incomplete 파일에 완성한 뒤 최종 이름으로 교체 (D-010)
+8. staging을 release 최종 경로로 옮기고 `current` symlink 원자적 교체
+9. systemd stop 후 `db:prepare` migration
+10. systemd start
+11. health check
+12. 실패 시 이전 release와 **DB 스냅샷을 함께** rollback하고 readiness 재검증
+    (D-010 — 코드만 되돌리면 이전 코드가 새 스키마를 만나 죽는 "명목상 롤백"이 된다)
 
 추가 규칙:
 
 - 배포 스크립트는 비밀값을 command line argument 로 노출하지 않는다
-- 파괴적 스키마 변경(컬럼·테이블 삭제)은 코드가 참조를 끊은 **다음** 릴리스에
-  싣는다 (expand-contract, D-010)
-- 스냅샷은 성공 배포 후에도 최근 5개를 보존하고, release 디렉터리는 회전시켜
-  디스크를 묶는다
+- 현재 제품 단계에서는 파괴적 스키마 변경도 허용하고 배포 전 snapshot으로 코드·DB를
+  함께 롤백한다. expand-contract는 스키마 안정화와 디스크 여유 확보 뒤 재검토한다
+  (D-010, D-063)
+- 서비스 전환 전 실패 산출물은 즉시 지운다. 전환 후에는 rollback readiness가
+  성공한 경우에만 실패 release와 snapshot을 지우며, rollback 실패 시 수동 복구를
+  위해 보존한다
+- 마커가 없는 기존·성공 산출물은 보존하지 않는다(보존 개수 `0` 하드코딩).
+  과거 정상 release(current 제외)와 정상 snapshot은 항상 같은 개수로 회전시키며,
+  `in-progress`와 `failed` 산출물은 정상 보존 개수에서 제외한다
+- 각 노드의 전환 transaction은 non-blocking `flock`으로 직렬화하고 동시 실행을 즉시 실패시킨다
 
 ---
 
@@ -2238,7 +2246,7 @@ quant-platform-live.service
 - UFW (22 rate-limit / 80 / 443)
 - sshd 하드닝 (키 전용)
 - systemd
-- deploy/rollback (bootstrap-server.sh · provision-server.sh · deploy-server.sh)
+- deploy/rollback (bootstrap-server.sh · provision-server.sh · deploy-app.sh)
 
 ## Phase 7 — 운영
 

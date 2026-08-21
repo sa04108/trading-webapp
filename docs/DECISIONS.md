@@ -62,10 +62,12 @@
 
 ## D-010: 파괴적 마이그레이션과 자동 롤백의 짝 맞춤
 
-- **변경 내용:** deploy-server.sh 는 서비스 재시작(=마이그레이션 적용) 직전에 SQLite 스냅샷을 만들고, health check 실패로 롤백할 때 스냅샷을 함께 복원한다 — 이전 릴리스 코드가 새 스키마(예: 삭제된 컬럼)를 만나 `no such column` 으로 죽는 "명목상 롤백"을 막는다.
-- **운영 규칙:** 컬럼·테이블 삭제 같은 파괴적 스키마 변경은 코드가 해당 참조를 중단한 **다음** 릴리스에 싣는 것을 원칙으로 한다 (expand-contract). 스냅샷 복원은 이 규칙이 지켜지지 않았을 때의 안전망이다.
-- **보존:** 스냅샷은 성공 배포 후에도 최근 5개를 남긴다. health check 는 통과했지만 그 뒤에 문제가 드러나 **수동** 롤백(§30 10단계, §35 runbook)을 하는 경우에도 짝이 맞는 스키마로 되돌아가야 하기 때문이다. backup.sh 의 30일 정리 규칙은 `backup-*` 디렉터리만 훑으므로 deploy-server.sh 가 직접 회전시킨다.
-- **영향:** 스냅샷~롤백 사이의 쓰기는 유실된다. 단일 운영자가 배포 중인 수 초의 창이라 실질 위험은 없다. 수동 롤백 절차는 배포 성공 시 deploy-server.sh 가 그대로 출력한다.
+- **변경 내용:** deploy-app.sh 는 서비스 재시작(=마이그레이션 적용) 직전에 SQLite 스냅샷을 만들고, health check 실패로 롤백할 때 스냅샷을 함께 복원한다 — 이전 릴리스 코드가 새 스키마(예: 삭제된 컬럼)를 만나 `no such column` 으로 죽는 "명목상 롤백"을 막는다.
+- **운영 규칙:** 현재 제품 단계에서는 파괴적 변경도 한 릴리스에 허용하고 배포 전 스냅샷으로 코드·DB를 함께 롤백한다. 두 스키마를 병행하는 expand-contract는 스키마가 안정되고 디스크 여유가 확보된 뒤 재검토한다 (D-063).
+- **실패 산출물:** 압축 해제·dependency 설치는 `.incomplete-<release>`, DB 백업은 `.pre-deploy-<release>.sqlite.incomplete`에 만든 뒤 완성된 것만 최종 경로로 옮긴다. 새 산출물에는 먼저 `.deploy-in-progress`를 남기고, health check 성공 시 제거하며 rollback 검증 실패 시 `.deploy-failed`로 바꾼다. 서비스 전환 전 일반 오류는 이 배포 시도가 소유한 임시·최종 산출물을 즉시 지운다. 전환 후 실패하면 이전 코드와 DB를 복원하고 readiness까지 통과한 경우에만 실패 release와 snapshot을 지운다. 롤백 검증이 실패하거나 이전 release가 없으면 수동 복구 근거가 사라지지 않도록 둘 다 보존한다.
+- **보존:** 상태 마커가 없는 기존 release와 snapshot을 정상 이력으로 본다. 정상 이력 보존 개수는 코드에 `0`으로 고정하고 release와 snapshot에 동일하게 적용한다. 따라서 health check 성공 뒤 현재 release만 남기고 과거 정상 release와 정상 snapshot을 모두 지운다. `in-progress`/`failed` 예외는 보존 개수에서 제외하므로 롤백 실패 증거가 정상 이력에 밀려 삭제되지 않는다. backup.sh의 정리 규칙은 `backup-*` 디렉터리만 훑으므로 deploy-app.sh가 직접 회전시킨다.
+- **동시성:** checksum 검증부터 보존 회전까지 `/run/lock/quant-platform-deploy.lock`의 non-blocking `flock`을 보유한다. 다른 배포가 잡고 있으면 기다리지 않고 종료 코드 75로 실패한다. 업로드 임시파일은 배포 시도마다 고유 이름을 사용하므로 lock 획득 전의 scp도 서로 덮어쓰지 않는다. lock 파일은 삭제하지 않으며 프로세스 종료·오류·SIGKILL 시 커널이 descriptor를 닫아 자동 해제한다.
+- **영향:** 스냅샷~롤백 사이의 쓰기는 유실된다. 보존 개수 `0`이므로 배포 스크립트가 실행되는 동안의 자동 롤백만 보장하고, 성공 종료 뒤 정상 산출물을 이용한 수동 롤백은 지원하지 않는다. 롤백 검증 실패로 보존된 failed 산출물은 자동 회전 대상이 아니므로 원인을 확인한 뒤 수동으로 정리해야 한다.
 
 ## D-011: 감사 로그 보존 기간은 정책이므로 설정으로 노출한다
 
@@ -95,7 +97,7 @@
 - **기능 플래그가 아니라 제거인 이유:** `totpEnabled` 를 끄는 선택지도 있었지만, 아무도 켜지 않는 경로를 남기면 검증되지 않은 채 굳는다 (D-009 와 같은 이유). 쓰지 않을 코드는 남기지 않는다.
 - **남는 방어:** Argon2id 해시, 비밀번호 14자 이상 강제(CLI), 로그인 실패 5회/15분 잠금, 사용자 부재 시 타이밍 균등화, 세션 유휴 12시간·절대 7일 만료, httpOnly·Secure·SameSite=Strict·signed 쿠키, Origin==Host CSRF 검사, 127.0.0.1 bind + VPN 경계. 비밀번호 최소 길이 14자는 이제 유일한 비밀 값의 강도를 결정하므로 낮추지 않는다.
 - **세션 고정:** 회전 시점이 TOTP 검증에서 로그인 성공으로 옮겨갔을 뿐, 로그인마다 새 세션 ID 를 발급하는 것은 그대로다. 서버가 발급하지 않은 쿠키 값은 어느 시점에도 인증된 세션이 되지 않는다.
-- **D-010 예외:** D-010 은 파괴적 스키마 변경을 코드가 참조를 끊은 *다음* 릴리스에 싣는 expand-contract 원칙을 세웠다. 이 변경은 코드 제거와 DROP COLUMN 을 한 릴리스에 함께 실었다 — 운영 서버가 아직 구축되지 않아 보호할 데이터가 없고 되돌릴 이전 릴리스도 배포된 적이 없다. 원칙 자체는 유효하며, 운영 시작 후에는 지킨다.
+- **당시 D-010 예외:** 이 변경은 코드 제거와 DROP COLUMN을 한 릴리스에 함께 실었다. 이후 현재 제품 단계의 기본 정책도 파괴적 변경 허용으로 바뀌었으며 expand-contract는 D-063에 따라 보류했다.
 - **되돌리기 비용:** 실거래 단계에서 2단계 인증 요구가 생기면 재구현이 필요하다 — 의존성 추가, 컬럼 복원 마이그레이션, 2단계 로그인 흐름 복원. 그 시점의 요구(TOTP 인지 passkey 인지)에 맞춰 새로 설계하는 편이 지금 쓰지 않는 경로를 유지하는 것보다 낫다고 판단했다.
 ## D-015: 배포 전 마이그레이션 스쿼시 — 이력은 0000 하나로
 
@@ -138,7 +140,7 @@
   성질이지만, 이름이 tailnet 안에서만 해석되고 퍼블릭에 아무것도 듣지 않으므로 무해하다.
 - **스펙 관계:** §23(WireGuard)·§24(퍼블릭 방화벽 마감, 선택으로 강등)·§25(UFW 규칙,
   tailscale0 으로)·§27(Caddy, 제거) 편차. §18 의 호스트 요구사항과 §30 배포 절차는
-  그대로다. deploy-server.sh 는 동작을 바꾸지 않았다 — 최종 리뷰에서 usage 문자열·주석의
+  그대로다. deploy-app.sh 는 동작을 바꾸지 않았다 — 최종 리뷰에서 usage 문자열·주석의
   `<wireguard-host>` 예시만 tailnet FQDN 으로 교체했다(사용자 승인 예외).
 - **Git 설정:** 셸 스크립트를 Windows 개발 머신에서도 LF 로 체크아웃하도록 `.gitattributes` 에
   `*.sh text eol=lf` 를 추가했다. scripts/bootstrap-server.sh 가 infra/provision-server.sh 를 scp 로
@@ -406,7 +408,7 @@
 - **그 외에 systemd 가 주는 것:** (1) 재부팅 생존 — 클라우드 인스턴스는 호스트 유지보수로 예고 없이 재부팅된다. (2) `Restart=on-failure`+`RestartSec=5` — 위의 OOM kill 을 자동 복구로 강등한다. (3) 샌드박싱을 앱 코드 밖에서(`ProtectSystem=strict`·`CapabilityBoundingSet=` 등) — 스펙 §2.1 "애플리케이션은 인프라를 모른다" 와 같은 방향이다. (4) `EnvironmentFile` 로 600 root:root 비밀을 `ps` 노출 없이 주입, 그리고 그 덕에 CLI 를 같은 컨텍스트로 재현하는 `systemd-run` 이 공짜로 따라온다(§28.2). (5) `systemctl restart` + `is-active` 라는 판정 가능한 단일 상태 — D-010 의 "코드+DB 스냅샷 동반 롤백" 이 이것 없이는 조립되지 않는다. (6) `StandardOutput=journal` — 앱에 로그 파일 회전 코드가 한 줄도 없는 이유.
 - **대안(Docker):** 버렸다. 여유가 ~270MB 뿐인 박스에서 컨테이너 런타임 상주 메모리가 그 여유를 잠식한다. 게다가 컨테이너의 주 가치(cgroup 제한·네임스페이스 격리·재시작 정책·로그 수집)를 systemd 가 이미 전부 주므로 겹치고, 단일 아티팩트·단일 프로세스에는 오케스트레이션할 대상이 없다. 네이티브 모듈(better-sqlite3·argon2·@duckdb/node-api, `onlyBuiltDependencies`)의 빌드 무게는 **반-Docker 논거이지 친-systemd 논거가 아니다** — 모듈이 순수 JS 였어도 프로세스 슈퍼바이저는 여전히 필요하다.
 - **대안(nohup·tmux·PM2):** 버렸다. 재부팅에서 사라지고, cgroup 예산이 없어 위 장애를 그대로 재현한다. PM2 는 감시 프로세스가 하나 더 상주해 예산을 또 먹으면서도 네임스페이스 격리는 주지 않는다.
-- **왜 코드가 home 이 아니라 `/opt` 인가:** (1) 유닛의 `ProtectHome=true` 가 `/home`·`/root` 를 이 프로세스에게 **비어 있게** 만든다 — 코드를 home 에 두려면 이걸 끄는 거래를 해야 하고, 그러면 임의 파일 읽기 버그 하나가 `~/.ssh/id_ed25519`(=배포 전권)에 닿는다. 읽기 전용(`ProtectSystem=strict`)으로는 부족하다 — 훔치는 데는 읽기만 필요하다. (2) 로그인 계정명을 가정할 수 없다 — 클라우드 이미지마다 ubuntu/admin/ec2-user 로 다르고 `scripts/bootstrap-server.sh` 는 의도적으로 가정하지 않는다(§2.1). home 경로는 그 관례를 유닛 파일에 박아버린다. (3) `quant` 는 `--system --home /var/lib/quant-platform --shell nologin` 이라 애초에 home 이 없다. (4) `/opt` 가 root 소유 + `ReadOnlyPaths` 라 **앱이 자기 실행 코드를 고칠 수 없다** — RCE 가 재시작 후에도 살아남는 지속성을 못 얻는다. (5) 릴리스 회전(`deploy-server.sh` 의 `KEEP_RELEASES` 초과분 삭제)이 데이터를 먹지 않는 경계가 필요하다 — 코드는 버려도 되는 것, 상태는 백업 대상이라는 분리가 `/opt` vs `/var/lib` 다.
+- **왜 코드가 home 이 아니라 `/opt` 인가:** (1) 유닛의 `ProtectHome=true` 가 `/home`·`/root` 를 이 프로세스에게 **비어 있게** 만든다 — 코드를 home 에 두려면 이걸 끄는 거래를 해야 하고, 그러면 임의 파일 읽기 버그 하나가 `~/.ssh/id_ed25519`(=배포 전권)에 닿는다. 읽기 전용(`ProtectSystem=strict`)으로는 부족하다 — 훔치는 데는 읽기만 필요하다. (2) 로그인 계정명을 가정할 수 없다 — 클라우드 이미지마다 ubuntu/admin/ec2-user 로 다르고 `scripts/bootstrap-server.sh` 는 의도적으로 가정하지 않는다(§2.1). home 경로는 그 관례를 유닛 파일에 박아버린다. (3) `quant` 는 `--system --home /var/lib/quant-platform --shell nologin` 이라 애초에 home 이 없다. (4) `/opt` 가 root 소유 + `ReadOnlyPaths` 라 **앱이 자기 실행 코드를 고칠 수 없다** — RCE 가 재시작 후에도 살아남는 지속성을 못 얻는다. (5) deploy-app.sh 의 릴리스 회전이 데이터를 먹지 않는 경계가 필요하다 — 코드는 버려도 되는 것, 상태는 백업 대상이라는 분리가 `/opt` vs `/var/lib` 다.
 - **비용:** 배포가 `sudo` 를 요구한다. `systemctl restart`·UFW·Caddy 에 어차피 root 가 필요하고 passwordless sudo 는 `bootstrap-server.sh` 가 `sudo -n true` 로 먼저 검증하는 전제이므로 추가 비용은 없다.
 - **뒤집히는 조건:** 근거 서열이 **메모리 제약 → cgroup·샌드박스 필요 → systemd** 이므로, 박스가 충분히 커지면(예: 8GB) 런타임 상주 메모리가 무시할 수준이 되어 "systemd vs Docker" 는 팀 취향 문제로 내려간다. 지금 결론이 명확한 것은 여유가 ~270MB 라는 실측 때문이다. `/opt` 쪽 근거 (2)(4)(5)는 박스 크기와 무관하게 남는다.
 
@@ -419,7 +421,7 @@
   경로를 하드코딩해 월별 복원 테스트에 사용하면 실제 DB 를 바로 덮어썼다. 복원 전
   스냅샷·SQLite 무결성 검사·실패 시 서비스 재기동 또는 원복도 없어, 존재 자체가 검증된
   재해복구 수단이라는 잘못된 인상을 줬다.
-- **배포 롤백과 무관:** deploy-server.sh 의 실패 롤백은 재시작 직전 SQLite 스냅샷을 만들고
+- **배포 롤백과 무관:** deploy-app.sh 의 실패 롤백은 재시작 직전 SQLite 스냅샷을 만들고
   코드와 DB 를 함께 되돌리는 독립 경로(D-010)라 영향을 받지 않는다.
 - **후속:** Phase 7 disaster runbook 은 SQLite 와 exports 를 함께 복구하고, 무결성 검사와
   실패 원복을 포함한 절차를 먼저 정의한다. 운영 데이터가 아닌 격리 환경에서 실제 백업으로
@@ -1376,10 +1378,10 @@
   번 만들고 웹 deploy와 Worker image build가 함께 소비한다. Worker image 안에서 소스를
   다시 컴파일하지 않는다. base image는 Node patch와 digest를 함께 고정하고 Git SHA를 OCI
   label과 `dist/build-info.json` 양쪽에서 검증한다.
-- **배포·복구:** registry 없이 image tar와 SHA-256을 SSH 전송한다. Compose 재생성 뒤 token,
+- **배포·복구:** registry 없이 image tar와 SHA-256을 Ansible로 전송한다. Compose 재생성 뒤 token,
   Git SHA, protocol을 확인하는 no-claim probe가 `READY` 또는 local 준비 상태 `STANDBY`여야
-  성공이다. 실패하면 이전 Compose/image로 자동 복구하고 이 repository의 최근 release
-  image 3개만 보존한다.
+  성공이다. 성공하면 현재 image만 남기고, 실패하면 이전 Compose/image로 자동 복구한 뒤
+  실패 candidate를 지운다. rollback 검증이 실패한 경우에만 양쪽 image를 보존한다.
 - **격리:** non-root, read-only rootfs, writable work-root 하나, capability 전체 제거,
   no-new-privileges, PID 상한, 로그 회전, 인바운드 port 없음, 30초 stop grace를 기본으로 한다.
   CPU·메모리 숫자는 임의로 고정하지 않고 D-059 telemetry와 호스트별 예산으로 정한다.
@@ -1390,22 +1392,42 @@
   dependency·릴리스 symlink·app unit을 호스트에서 제거하고 배포와 rollback 단위를 불변
   image로 통일한다. v1은 Ubuntu/Debian amd64 한 대씩이며 drain/fleet 배포는 후속이다.
 
-## D-062: 배포는 Linux 단일 진입점에서 서버와 선택적 Worker를 같은 release로 조정한다
+## D-062: 배포는 Linux 단일 진입점에서 app과 worker를 같은 release로 조정한다
 
-- **공식 진입점:** 프로젝트 루트의 `deploy.env`를 읽는 `pnpm run deploy`만 일반 배포
-  경로로 둔다. `deploy-server.sh`와 `deploy-worker.sh`는 부분 재실행·장애 대응용 저수준
-  명령으로 유지한다. 서버 대상 bootstrap·provision·deploy에는 모두 `-server` 접미사를
-  붙여 Worker 스크립트와 대칭으로 만든다.
-- **Worker 선택성:** `QP_DEPLOY_WORKER=0`이면 서버만 배포하며 Worker 접속값과 로컬 Docker를
-  요구하지 않는다. `1`이면 서버·Worker preflight를 모두 먼저 통과시키고 공통 release와
-  linux/amd64 Worker image를 서버 전환 전에 한 번씩 만든다.
-- **동일성:** 검증 게이트와 공통 archive 생성은 배포 전체에서 한 번만 실행한다. Worker
-  image는 그 archive를 입력으로 만들며 서버와 Worker 저수준 deploy에는 생성된 archive와
-  checksum을 명시적으로 전달한다.
-- **설정 경계:** `deploy.env.example`은 호스트별 SSH와 Worker 포함 여부만 설명한다.
-  `deploy.env`는 Git에서 제외한다. app/Worker token 같은 runtime 비밀값은 기존처럼 원격
-  root 전용 `app.env`·`worker.env`에만 두고 배포 설정에 복사하지 않는다.
-- **부분 실패:** Worker 전환 자체는 이전 image로 rollback한다. 이미 health check를 통과한
-  서버까지 Worker 실패만으로 자동 rollback하면 그 사이의 운영 DB 쓰기를 잃을 수 있으므로
-  서버는 새 release로 유지하고 같은 artifact의 Worker 배포 재시도를 요구한다. SHA가 다른
-  구 Worker는 claim이 거부되므로 잘못된 계산을 시작하지 않는다.
+- **공식 진입점:** 표준 Ansible inventory를 읽는 `pnpm run deploy`와 명시적
+  `--target app|worker|all`만 일반 배포 경로로 둔다. 무인자 실행은 `worker` 그룹에
+  호스트가 있으면 `all`, 없으면 `app`으로 해석한다. 명시적 `all`은 양쪽 호스트가 필수다.
+  `deploy-app.sh`와 `deploy-worker.sh`는 role이 노드에서 호출하는 내부 transaction이다.
+- **대상 이름:** 운영 서비스와 inventory group은 `app`, 계산 서비스와 group은 `worker`로
+  고정한다. 프로젝트 CLI는 component 선택이므로 `--target`을 쓰고, `--limit`은 Ansible의
+  host/group 제한 옵션으로 내부에서만 사용한다.
+- **동일성:** 검증 gate와 공통 archive 생성은 배포 전체에서 한 번만 실행한다. worker
+  image는 그 archive를 입력으로 만들며 두 role에는 생성된 archive와 checksum을 전달한다.
+  `all`은 두 preflight를 먼저 통과한 뒤 app, worker 순서로 적용한다. worker가 선택되면
+  같은 Git SHA도 항상 재배포하고 SHA는 app/worker 호환성 검증에만 사용한다.
+- **설정 경계:** 기본 `ansible/inventory.yml`은 Git에서 제외하고
+  `ANSIBLE_INVENTORY`로 외부 inventory를 지정할 수 있다. SSH config는 선택 사항이며
+  호스트·사용자·키 경로를 inventory에 직접 둘 수 있다. runtime 비밀값은 원격 root 전용
+  `app.env`·`worker.env`에만 둔다.
+- **부분 실패:** worker 전환 자체는 이전 image로 rollback한다. 이미 readiness를 통과한
+  app까지 worker 실패만으로 되돌리면 그 사이 운영 DB 쓰기를 잃을 수 있으므로 app은 새
+  release로 유지하고 같은 commit에서 `--target worker` 재시도를 요구한다. SHA가 다른
+  구 worker는 claim이 거부된다.
+
+## D-063: 수동 배포의 전송·대상 선택은 Ansible, 전환은 노드 로컬 transaction이 맡는다
+
+- **역할:** 배포 trigger는 계속 사람이 실행하는 pnpm 명령이다. Ansible은 로컬에서만 실행하는
+  agentless 전송·실행 도구이며 AWX, schedule, CI 자동 배포를 추가하지 않는다. `ansible-core`는
+  격리 venv에 버전을 고정한다.
+- **트랜잭션 경계:** app/worker role은 시도별 원격 임시 디렉터리에 검증 대상을 올리고 노드
+  로컬 스크립트를 실행한 뒤 임시 디렉터리를 항상 지운다. 각 스크립트가 non-blocking `flock`,
+  전환, readiness, rollback, 산출물 정리를 한 잠금 범위에서 수행한다.
+- **산출물 수명:** 정상 성공 후 app은 현재 release만, worker는 현재 image만 남긴다. 검증된
+  rollback 뒤에는 이전 정상 산출물만 남긴다. rollback 검증 실패 때만 이전·신규 산출물을
+  모두 보존해 수동 복구 근거가 사라지지 않게 한다.
+- **동시성·자원:** `forks=1`, `serial=1`, facts 수집 비활성으로 노드를 순차 처리한다. Ansible은
+  배포 중에만 존재하는 control process이고 노드 메모리를 상시 점유하지 않는다. 노드별 lock이
+  별도 실행까지 막으므로 CLI 중복 실행도 같은 target에서 즉시 실패한다.
+- **마이그레이션:** 제품과 schema가 아직 빠르게 바뀌고 디스크가 작으므로 expand-contract를
+  의무화하지 않는다. 현재는 파괴적 migration도 허용하고 app snapshot으로 코드·DB를 함께
+  rollback한다. 이 패턴은 schema 안정화와 디스크 여유 확보 뒤 재검토한다.

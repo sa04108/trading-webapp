@@ -1,0 +1,75 @@
+---
+- name: Validate app deployment mode
+  ansible.builtin.assert:
+    that:
+      - deploy_mode in ['preflight', 'apply']
+    fail_msg: "지원하지 않는 deploy_mode입니다: {{ deploy_mode }}"
+
+- name: Check app node prerequisites
+  ansible.builtin.shell: |
+    set -eu
+    command -v bash >/dev/null
+    command -v flock >/dev/null
+    command -v sqlite3 >/dev/null
+    command -v corepack >/dev/null
+    command -v systemctl >/dev/null
+    command -v systemd-run >/dev/null
+    command -v curl >/dev/null
+    sudo -n true
+    sudo test -f /etc/quant-platform/app.env
+    sudo test -f /etc/systemd/system/quant-platform.service
+  args:
+    executable: /bin/bash
+  changed_when: false
+  when: deploy_mode == 'preflight'
+
+- name: Apply app release transaction
+  when: deploy_mode == 'apply'
+  block:
+    - name: Validate app artifact variables
+      ansible.builtin.assert:
+        that:
+          - app_release_archive is file
+          - app_release_checksum is file
+          - deploy_release_name is match('^[a-zA-Z0-9._-]+$')
+        fail_msg: app release artifact 변수가 올바르지 않습니다
+      delegate_to: localhost
+
+    - name: Create app upload directory
+      ansible.builtin.tempfile:
+        state: directory
+        path: /tmp
+        prefix: quant-app-deploy.
+      register: app_upload
+
+    - name: Upload app release files
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ app_upload.path }}/{{ item.dest }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - src: "{{ app_release_archive }}"
+          dest: "{{ app_release_archive | basename }}"
+          mode: "0600"
+        - src: "{{ app_release_checksum }}"
+          dest: "{{ app_release_checksum | basename }}"
+          mode: "0600"
+        - src: "{{ playbook_dir }}/../scripts/deploy-app.sh"
+          dest: deploy-app.sh
+          mode: "0700"
+
+    - name: Run app release transaction
+      ansible.builtin.command:
+        argv:
+          - /bin/bash
+          - "{{ app_upload.path }}/deploy-app.sh"
+          - "{{ app_upload.path }}/{{ app_release_archive | basename }}"
+          - "{{ app_upload.path }}/{{ app_release_checksum | basename }}"
+          - "{{ deploy_release_name }}"
+      changed_when: true
+  always:
+    - name: Remove app upload directory
+      ansible.builtin.file:
+        path: "{{ app_upload.path }}"
+        state: absent
+      when: app_upload is defined and app_upload.path is defined
