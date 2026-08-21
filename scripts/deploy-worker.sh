@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Ansible worker role이 Worker 노드에서 실행하는 Docker image transaction.
-# 사용법: deploy-worker.sh <image-archive> <checksum-file> <compose-file> <image-ref> <git-sha> <force> <manifest-sha>
+# 사용법: deploy-worker.sh <image-archive> <checksum-file> <compose-file> <image-ref> <git-sha> <manifest-sha>
 set -euo pipefail
 
-if [ "$#" -ne 7 ]; then
-  echo '사용법: deploy-worker.sh <image-archive> <checksum-file> <compose-file> <image-ref> <git-sha> <force> <manifest-sha>' >&2
+if [ "$#" -ne 6 ]; then
+  echo '사용법: deploy-worker.sh <image-archive> <checksum-file> <compose-file> <image-ref> <git-sha> <manifest-sha>' >&2
   exit 64
 fi
 
@@ -13,8 +13,7 @@ CHECKSUM_FILE="$2"
 NEW_COMPOSE="$3"
 NEW_IMAGE="$4"
 EXPECTED_SHA="$5"
-FORCE="$6"
-EXPECTED_MANIFEST_SHA="$7"
+EXPECTED_MANIFEST_SHA="$6"
 PROJECT_DIR=/opt/quant-backtest-worker
 COMPOSE_FILE="${PROJECT_DIR}/compose.yaml"
 COMPOSE_ENV="${PROJECT_DIR}/compose.env"
@@ -61,7 +60,6 @@ case "${EXPECTED_SHA}" in ''|*[!a-f0-9]*) echo 'Worker Git SHA 형식 오류' >&
 }
 case "${EXPECTED_MANIFEST_SHA}" in ''|*[!a-f0-9]*) echo 'Worker manifest checksum 형식 오류' >&2; exit 64 ;; esac
 [ "${#EXPECTED_MANIFEST_SHA}" -eq 64 ] || { echo 'Worker manifest checksum 길이 오류' >&2; exit 64; }
-case "${FORCE}" in 0|1) ;; *) echo 'force는 0 또는 1이어야 합니다' >&2; exit 64 ;; esac
 [ "$(basename "${IMAGE_ARCHIVE}")" = "quant-backtest-worker-${NEW_IMAGE_TAG}.tar" ] || {
   echo "Worker image archive 이름이 release와 일치하지 않습니다: ${IMAGE_ARCHIVE}" >&2
   exit 64
@@ -143,18 +141,6 @@ cleanup_old_images() {
 }
 
 CURRENT_IMAGE="$(docker inspect --format='{{.Config.Image}}' quant-backtest-worker 2>/dev/null || true)"
-CURRENT_SHA="$(docker inspect --format='{{ index .Config.Labels "org.opencontainers.image.revision" }}' quant-backtest-worker 2>/dev/null || true)"
-if [ "${FORCE}" = 0 ] && [ "${CURRENT_SHA}" = "${EXPECTED_SHA}" ]; then
-  if probe_worker; then
-    cleanup_old_images "${CURRENT_IMAGE}" || \
-      echo '경고: 과거 Worker image 정리를 완료하지 못했습니다' >&2
-    echo "Worker가 이미 ${EXPECTED_SHA} release로 정상 실행 중입니다 — no-op"
-    exit 0
-  fi
-  echo '동일 SHA Worker의 probe가 실패했습니다. 환경 파일과 서버 모드를 먼저 확인하세요.' >&2
-  exit 1
-fi
-
 expected="$(awk 'NR == 1 { print $1 }' "${CHECKSUM_FILE}")"
 case "${expected}" in ''|*[!a-f0-9]*) echo 'Worker image checksum 형식 오류' >&2; exit 1 ;; esac
 [ "${#expected}" -eq 64 ] || { echo 'Worker image checksum 길이 오류' >&2; exit 1; }

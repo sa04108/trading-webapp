@@ -1394,18 +1394,21 @@
 
 ## D-062: 배포는 Linux 단일 진입점에서 app과 worker를 같은 release로 조정한다
 
-- **공식 진입점:** 프로젝트 루트의 `deploy.env`를 읽는
-  `pnpm run deploy --target app|worker|all`만 일반 배포 경로로 둔다. target 기본값은 `app`이다.
-  `deploy-app.sh`와 `deploy-worker.sh`는 Ansible role이 노드에서 호출하는 내부 transaction이다.
+- **공식 진입점:** 표준 Ansible inventory를 읽는 `pnpm run deploy`와 명시적
+  `--target app|worker|all`만 일반 배포 경로로 둔다. 무인자 실행은 `worker` 그룹에
+  호스트가 있으면 `all`, 없으면 `app`으로 해석한다. 명시적 `all`은 양쪽 호스트가 필수다.
+  `deploy-app.sh`와 `deploy-worker.sh`는 role이 노드에서 호출하는 내부 transaction이다.
 - **대상 이름:** 운영 서비스와 inventory group은 `app`, 계산 서비스와 group은 `worker`로
   고정한다. 프로젝트 CLI는 component 선택이므로 `--target`을 쓰고, `--limit`은 Ansible의
   host/group 제한 옵션으로 내부에서만 사용한다.
 - **동일성:** 검증 gate와 공통 archive 생성은 배포 전체에서 한 번만 실행한다. worker
   image는 그 archive를 입력으로 만들며 두 role에는 생성된 archive와 checksum을 전달한다.
-  `all`은 두 preflight를 먼저 통과한 뒤 app, worker 순서로 적용한다.
-- **설정 경계:** `deploy.env.example`은 `QP_APP_*`와 `QP_WORKER_*` 접속 정보만 설명한다.
-  `deploy.env`는 Git에서 제외한다. app/worker token 같은 runtime 비밀값은 원격 root 전용
-  `app.env`·`worker.env`에만 두고 배포 설정에 복사하지 않는다.
+  `all`은 두 preflight를 먼저 통과한 뒤 app, worker 순서로 적용한다. worker가 선택되면
+  같은 Git SHA도 항상 재배포하고 SHA는 app/worker 호환성 검증에만 사용한다.
+- **설정 경계:** 기본 `ansible/inventory.yml`은 Git에서 제외하고
+  `ANSIBLE_INVENTORY`로 외부 inventory를 지정할 수 있다. SSH config는 선택 사항이며
+  호스트·사용자·키 경로를 inventory에 직접 둘 수 있다. runtime 비밀값은 원격 root 전용
+  `app.env`·`worker.env`에만 둔다.
 - **부분 실패:** worker 전환 자체는 이전 image로 rollback한다. 이미 readiness를 통과한
   app까지 worker 실패만으로 되돌리면 그 사이 운영 DB 쓰기를 잃을 수 있으므로 app은 새
   release로 유지하고 같은 commit에서 `--target worker` 재시도를 요구한다. SHA가 다른

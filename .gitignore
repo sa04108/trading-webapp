@@ -33,7 +33,7 @@ out/
 .env
 .env.local
 .env.*.local
-/deploy.env
+/ansible/inventory.yml
 
 # npm cache directory
 .npm

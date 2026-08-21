@@ -333,7 +333,7 @@ quant-platform/
 │  └─ systemd/
 ├─ scripts/
 │  ├─ bootstrap-server.sh    # 개발 PC 에서 새 서버 셋업 (provision-server.sh 업로드·실행)
-│  ├─ deploy.mjs             # deploy.env 기반 Ansible app/worker target 조정
+│  ├─ deploy.mjs             # Ansible inventory 기반 app/worker target 조정
 │  ├─ deploy-app.sh
 │  └─ backup.sh
 ├─ docs/

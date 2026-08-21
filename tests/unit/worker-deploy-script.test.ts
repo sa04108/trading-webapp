@@ -54,7 +54,9 @@ describe('Docker worker deployment', () => {
     expect(deploy.indexOf('Worker image checksum 불일치')).toBeLessThan(
       deploy.indexOf('docker image load'),
     );
-    expect(deploy.indexOf('CURRENT_SHA=')).toBeLessThan(deploy.indexOf('docker image load'));
+    expect(deploy).not.toContain('CURRENT_SHA=');
+    expect(deploy).not.toContain('FORCE=');
+    expect(deploy).not.toContain('no-op');
     expect(deploy).toContain('remote-backtest-supervisor.js --check');
     expect(deploy).toContain('rollback()');
     expect(deploy).toContain('flock -n "${DEPLOY_LOCK_FD}"');
@@ -68,6 +70,7 @@ describe('Docker worker deployment', () => {
     expect(role).toContain('become: true');
     expect(role).toContain('deploy-worker.sh');
     expect(role).toContain('prefix: quant-worker-deploy.');
+    expect(role).not.toContain('worker_force_deploy');
     expect(builder).toContain('quant-backtest-worker-${release_name}.tar');
     expect(orchestrator).toContain('quant-backtest-worker-${releaseName}.tar');
     expect(deploy).not.toContain('systemctl');

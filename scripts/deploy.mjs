@@ -12,9 +12,9 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
-import process, { loadEnvFile } from 'node:process';
+import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -31,121 +31,30 @@ class DeployError extends Error {
 }
 
 function parseArguments(argv) {
-  let envFile = path.join(REPO_ROOT, 'deploy.env');
-  let target = 'app';
+  let target = null;
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
-    if (argument === '--env-file' || argument === '--target') {
+    if (argument === '--target') {
       const value = argv[index + 1];
-      if (!value) throw new DeployError(`${argument} 뒤에 값이 필요합니다`);
-      if (argument === '--env-file') envFile = value;
-      else target = value;
+      if (!value) throw new DeployError(argument + ' 뒤에 값이 필요합니다');
+      target = value;
       index += 1;
-      continue;
-    }
-    if (argument.startsWith('--env-file=')) {
-      envFile = argument.slice('--env-file='.length);
-      if (!envFile) throw new DeployError('--env-file에 파일 경로가 필요합니다');
       continue;
     }
     if (argument.startsWith('--target=')) {
       target = argument.slice('--target='.length);
       continue;
     }
-    throw new DeployError(`알 수 없는 배포 인자입니다: ${argument}`);
+    throw new DeployError('알 수 없는 배포 인자입니다: ' + argument);
   }
-  if (!DEPLOY_TARGETS.has(target)) {
-    throw new DeployError(`--target은 app | worker | all 중 하나여야 합니다: ${target}`);
+  if (target !== null && !DEPLOY_TARGETS.has(target)) {
+    throw new DeployError('--target은 app | worker | all 중 하나여야 합니다: ' + target);
   }
-  return {
-    envFile: path.resolve(process.cwd(), envFile),
-    target,
-    targets: target === 'all' ? ['app', 'worker'] : [target],
-  };
-}
-
-function required(name) {
-  const value = process.env[name]?.trim();
-  if (!value) throw new DeployError(`${name}이 필요합니다`);
-  return value;
-}
-
-function readToggle(name, fallback) {
-  const value = process.env[name] ?? fallback;
-  if (value !== '0' && value !== '1') {
-    throw new DeployError(`${name}은 0 또는 1이어야 합니다`);
-  }
-  return value === '1';
-}
-
-function expandHome(value) {
-  return value.startsWith('~/') ? path.join(homedir(), value.slice(2)) : value;
-}
-
-function hostVariables(target) {
-  const prefix = target === 'app' ? 'QP_APP' : 'QP_WORKER';
-  const rawHost = required(`${prefix}_HOST`);
-  const at = rawHost.lastIndexOf('@');
-  const embeddedUser = at > 0 ? rawHost.slice(0, at) : '';
-  const host = at > 0 ? rawHost.slice(at + 1) : rawHost;
-  const configuredUser = process.env[`${prefix}_SSH_USER`]?.trim() ?? '';
-  if (!host || /\s/.test(host) || host.startsWith('-')) {
-    throw new DeployError(`${prefix}_HOST 형식이 올바르지 않습니다: ${rawHost}`);
-  }
-  if (embeddedUser && configuredUser && embeddedUser !== configuredUser) {
-    throw new DeployError(`${prefix}_HOST 사용자와 ${prefix}_SSH_USER가 다릅니다`);
-  }
-
-  const variables = { ansible_host: host };
-  const user = embeddedUser || configuredUser;
-  if (user) variables.ansible_user = user;
-
-  const port = process.env[`${prefix}_SSH_PORT`]?.trim();
-  if (port) {
-    if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) {
-      throw new DeployError(`${prefix}_SSH_PORT가 올바르지 않습니다: ${port}`);
-    }
-    variables.ansible_port = Number(port);
-  }
-
-  const key = process.env[`${prefix}_SSH_KEY`]?.trim();
-  if (key) {
-    const expandedKey = expandHome(key);
-    if (!existsSync(expandedKey)) throw new DeployError(`${prefix}_SSH_KEY 파일이 없습니다: ${expandedKey}`);
-    variables.ansible_ssh_private_key_file = expandedKey;
-  }
-
-  const hostKey = process.env[`${prefix}_SSH_HOST_KEY`]?.trim() || 'accept-new';
-  if (!['accept-new', 'yes', 'no'].includes(hostKey)) {
-    throw new DeployError(`${prefix}_SSH_HOST_KEY는 accept-new | yes | no 중 하나여야 합니다`);
-  }
-  const sshArgs = [`-o StrictHostKeyChecking=${hostKey}`];
-  if (key) sshArgs.push('-o IdentitiesOnly=yes');
-  const jump = process.env[`${prefix}_SSH_JUMP`]?.trim();
-  if (jump) sshArgs.push(`-o ProxyJump=${jump}`);
-  const extra = process.env[`${prefix}_SSH_OPTS`]?.trim();
-  if (extra) sshArgs.push(extra);
-  variables.ansible_ssh_common_args = sshArgs.join(' ');
-  return variables;
+  return target;
 }
 
 function writeJson(file, value) {
   writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-}
-
-function createInventory(targets, destination) {
-  const inventory = {
-    all: {
-      children: {
-        app: { hosts: {} },
-        worker: { hosts: {} },
-      },
-    },
-  };
-  for (const target of targets) {
-    inventory.all.children[target].hosts[target] = hostVariables(target);
-  }
-  writeJson(destination, inventory);
 }
 
 function run(command, args, environment = process.env, options = {}) {
@@ -161,10 +70,10 @@ function run(command, args, environment = process.env, options = {}) {
   }
 }
 
-function capture(command, args) {
+function capture(command, args, environment = process.env) {
   const result = spawnSync(command, args, {
     cwd: REPO_ROOT,
-    env: process.env,
+    env: environment,
     encoding: 'utf8',
   });
   if (result.error) throw new DeployError(`${command} 실행 실패: ${result.error.message}`);
@@ -172,6 +81,66 @@ function capture(command, args) {
     throw new DeployError(`${command}가 종료 코드 ${result.status ?? 1}로 실패했습니다`, result.status ?? 1);
   }
   return result.stdout.trim();
+}
+
+function ansibleEnvironment() {
+  return {
+    ...process.env,
+    ANSIBLE_CONFIG: path.join(ANSIBLE_DIR, 'ansible.cfg'),
+    ANSIBLE_INVENTORY: process.env.ANSIBLE_INVENTORY?.trim()
+      || path.join(ANSIBLE_DIR, 'inventory.yml'),
+  };
+}
+
+function readInventory(environment) {
+  const output = capture('ansible-inventory', ['--list'], environment);
+  try {
+    const inventory = JSON.parse(output);
+    if (inventory === null || typeof inventory !== 'object' || Array.isArray(inventory)) {
+      throw new Error('inventory root가 object가 아닙니다');
+    }
+    return inventory;
+  } catch (error) {
+    throw new DeployError('Ansible inventory JSON을 읽을 수 없습니다: ' + error.message);
+  }
+}
+
+function groupHosts(inventory, groupName, visiting = new Set()) {
+  if (visiting.has(groupName)) return [];
+  const group = inventory[groupName];
+  if (group === null || typeof group !== 'object' || Array.isArray(group)) return [];
+
+  visiting.add(groupName);
+  const hosts = new Set(Array.isArray(group.hosts) ? group.hosts : []);
+  const children = Array.isArray(group.children) ? group.children : [];
+  for (const child of children) {
+    for (const host of groupHosts(inventory, child, visiting)) hosts.add(host);
+  }
+  visiting.delete(groupName);
+  return [...hosts];
+}
+
+function resolveTargets(requestedTarget, inventory) {
+  const appHosts = groupHosts(inventory, 'app');
+  const workerHosts = groupHosts(inventory, 'worker');
+
+  if (requestedTarget === null) {
+    if (appHosts.length === 0) {
+      throw new DeployError('Ansible inventory의 app 그룹에 호스트가 없습니다');
+    }
+    return workerHosts.length > 0
+      ? { target: 'all', targets: ['app', 'worker'] }
+      : { target: 'app', targets: ['app'] };
+  }
+
+  const targets = requestedTarget === 'all' ? ['app', 'worker'] : [requestedTarget];
+  for (const target of targets) {
+    const hosts = target === 'app' ? appHosts : workerHosts;
+    if (hosts.length === 0) {
+      throw new DeployError('Ansible inventory의 ' + target + ' 그룹에 호스트가 없습니다');
+    }
+  }
+  return { target: requestedTarget, targets };
 }
 
 function onlyFile(directory, matcher, description) {
@@ -186,15 +155,10 @@ function sha256File(file) {
   return createHash('sha256').update(readFileSync(file)).digest('hex');
 }
 
-function runAnsible(target, mode, inventory, variables, artifactDirectory) {
+function runAnsible(target, mode, variables, artifactDirectory, environment) {
   const variablesFile = path.join(artifactDirectory, `vars-${target}-${mode}.json`);
   writeJson(variablesFile, { deploy_mode: mode, ...variables });
-  const environment = {
-    ...process.env,
-    ANSIBLE_CONFIG: path.join(ANSIBLE_DIR, 'ansible.cfg'),
-  };
   run('ansible-playbook', [
-    '--inventory', inventory,
     '--limit', target,
     '--extra-vars', `@${variablesFile}`,
     DEPLOY_PLAYBOOK,
@@ -205,14 +169,11 @@ function main() {
   if (process.platform !== 'linux') {
     throw new DeployError(`통합 배포는 Linux에서만 지원합니다: ${process.platform}`);
   }
-  const { envFile, target, targets } = parseArguments(process.argv.slice(2));
-  if (!existsSync(envFile)) {
-    throw new DeployError(
-      `배포 환경 파일이 없습니다: ${envFile}\n` +
-      '프로젝트 루트에서 cp deploy.env.example deploy.env 후 값을 채우세요.',
-    );
-  }
-  loadEnvFile(envFile);
+  const requestedTarget = parseArguments(process.argv.slice(2));
+  const environment = ansibleEnvironment();
+  run('ansible-playbook', ['--version'], environment, { quiet: true });
+  const inventory = readInventory(environment);
+  const { target, targets } = resolveTargets(requestedTarget, inventory);
 
   let workerSettings = null;
   if (targets.includes('worker')) {
@@ -227,28 +188,21 @@ function main() {
     workerSettings = {
       composeFile,
       manifestSha: sha256File(manifestFile),
-      forceDeploy: readToggle('QP_FORCE_WORKER_DEPLOY', '0'),
     };
   }
 
   const artifactDirectory = mkdtempSync(path.join(tmpdir(), 'quant-deploy-'));
-  const inventory = path.join(artifactDirectory, 'inventory.json');
   let appIsLive = false;
   try {
-    createInventory(targets, inventory);
-    log(`==> 배포 설정: ${envFile}`);
+    log(`==> Ansible inventory: ${environment.ANSIBLE_INVENTORY}`);
     log(`==> 배포 대상: ${target}`);
 
-    run('ansible-playbook', ['--version'], {
-      ...process.env,
-      ANSIBLE_CONFIG: path.join(ANSIBLE_DIR, 'ansible.cfg'),
-    }, { quiet: true });
     for (const selectedTarget of targets) {
       log(`==> ${selectedTarget} preflight`);
       const preflightVariables = selectedTarget === 'worker'
         ? { worker_manifest_sha: workerSettings.manifestSha }
         : {};
-      runAnsible(selectedTarget, 'preflight', inventory, preflightVariables, artifactDirectory);
+      runAnsible(selectedTarget, 'preflight', preflightVariables, artifactDirectory, environment);
     }
     if (targets.includes('worker')) {
       run('docker', ['info'], process.env, { quiet: true });
@@ -294,24 +248,23 @@ function main() {
     };
     if (targets.includes('app')) {
       log('==> app 배포');
-      runAnsible('app', 'apply', inventory, {
+      runAnsible('app', 'apply', {
         ...sharedVariables,
         app_release_archive: releaseArchive,
         app_release_checksum: releaseChecksum,
-      }, artifactDirectory);
+      }, artifactDirectory, environment);
       appIsLive = true;
     }
 
     if (targets.includes('worker')) {
       log('==> worker 배포');
-      runAnsible('worker', 'apply', inventory, {
+      runAnsible('worker', 'apply', {
         ...sharedVariables,
         worker_image_archive: workerImageArchive,
         worker_image_checksum: workerImageChecksum,
         worker_compose_file: workerSettings.composeFile,
         worker_manifest_sha: workerSettings.manifestSha,
-        worker_force_deploy: workerSettings.forceDeploy,
-      }, artifactDirectory);
+      }, artifactDirectory, environment);
     }
 
     log(`==> ${target} 배포 완료: ${releaseName}`);

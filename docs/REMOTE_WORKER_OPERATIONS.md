@@ -77,26 +77,38 @@ QP_WORKER_ENV_FILE="$HOME/.config/quant-platform/worker-1.env" \
 
 ## 3. 동일 release를 app과 worker에 배포
 
-프로젝트 루트에서 `deploy.env.example`을 `deploy.env`로 복사하고 app·worker 접속 정보를
-채운다. 대상 선택은 환경변수가 아니라 명령의 `--target`으로 한다.
+프로젝트 루트에서 Ansible inventory 예제를 복사하고 app·worker 호스트를 채운다.
+SSH config는 선택 사항이며 아래처럼 inventory에 접속 정보를 직접 둘 수 있다.
 
-```dotenv
-QP_APP_HOST=ubuntu@app.example.com
-QP_APP_SSH_KEY=~/.ssh/app.pem
-QP_WORKER_HOST=ubuntu@203.0.113.20
-QP_WORKER_SSH_KEY=~/.ssh/worker.pem
+```yaml
+all:
+  children:
+    app:
+      hosts:
+        app-node:
+          ansible_host: app.example.com
+          ansible_user: ubuntu
+          ansible_ssh_private_key_file: /absolute/path/to/app.pem
+    worker:
+      hosts:
+        worker-node:
+          ansible_host: worker.example.com
+          ansible_user: ubuntu
+          ansible_ssh_private_key_file: /absolute/path/to/worker.pem
 ```
 
 ```bash
-pnpm run deploy --target all
+cp ansible/inventory.example.yml ansible/inventory.yml
+pnpm run deploy
 ```
 
-이 명령은 Ansible로 양쪽 preflight를 먼저 수행한 뒤 공통 archive를 한 번만 검증·빌드하고
-worker image도 app 전환 전에 만든다. 같은 archive가 app과 worker image에 사용되므로
-빌드 바이트까지 같음이 보장된다. image는 tar/checksum으로 전송하며 registry는 필요 없다.
+무인자 실행은 worker 호스트가 있으므로 app과 worker를 선택한다. 명시적으로
+`--target all`을 사용해도 되며, 이 경우 양쪽 그룹 중 하나라도 비어 있으면 실패한다.
+Ansible은 양쪽 preflight를 먼저 수행한 뒤 공통 archive를 한 번만 검증·빌드하고
+worker image도 app 전환 전에 만든다.
 
-같은 Git SHA가 이미 실행 중이고 probe도 성공하면 no-op한다. 같은 SHA를 명시적으로 다시
-배포할 때만 `QP_FORCE_WORKER_DEPLOY=1`을 쓴다.
+worker가 선택되면 같은 Git SHA가 실행 중이어도 image checksum을 검증하고 container를
+항상 재생성한다. Git SHA는 app과 worker의 호환성 검사에만 사용한다.
 
 새 container 시작 또는 인증·SHA·protocol probe가 실패하면 이전 image와 Compose 설정으로
 자동 롤백한다. 실행 중 잡은 drain하지 않으므로 가능하면 배포 전에 완료를 기다린다. 중간에

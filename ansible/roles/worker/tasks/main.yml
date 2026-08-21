@@ -93,7 +93,6 @@
           - "{{ worker_upload.path }}/compose.worker.yaml"
           - "quant-platform-backtest-worker:{{ deploy_release_name }}"
           - "{{ deploy_git_sha }}"
-          - "{{ worker_force_deploy | ternary('1', '0') }}"
           - "{{ worker_manifest_sha }}"
       changed_when: true
   always:

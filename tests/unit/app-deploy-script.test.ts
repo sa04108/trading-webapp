@@ -360,14 +360,10 @@ describe('deploy script failure workflow', () => {
 
   it('hard-codes one shared successful release and DB snapshot retention count to zero', () => {
     const deploy = readFileSync('scripts/deploy-app.sh', 'utf8');
-    const deployEnv = readFileSync('deploy.env.example', 'utf8');
-
     expect(deploy).toContain('KEEP_SUCCESSFUL_DEPLOYS=0');
     expect(deploy.match(/awk -v keep="\$\{KEEP_SUCCESSFUL_DEPLOYS\}" 'NR > keep'/g)).toHaveLength(2);
     expect(deploy).not.toContain('QP_DEPLOY_KEEP_RELEASES');
     expect(deploy).not.toContain('QP_DEPLOY_KEEP_DB_SNAPSHOTS');
-    expect(deployEnv).not.toContain('QP_DEPLOY_KEEP_RELEASES');
-    expect(deployEnv).not.toContain('QP_DEPLOY_KEEP_DB_SNAPSHOTS');
     expect(deploy).not.toContain('KEEP_RELEASES=');
     expect(deploy).not.toContain('KEEP_DB_SNAPSHOTS=');
     expect(deploy).not.toContain('KEEP_SNAPSHOTS=5');

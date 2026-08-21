@@ -17,45 +17,46 @@ function prepareHarness(configuredTargets: Array<'app' | 'worker'>) {
   const bin = path.join(root, 'bin');
   fs.mkdirSync(bin);
   const commandLog = path.join(root, 'commands.log');
-  const envFile = path.join(root, 'deploy.env');
-  const appKey = path.join(root, 'app.pem');
-  const workerKey = path.join(root, 'worker.pem');
-  fs.writeFileSync(appKey, 'app-key');
-  fs.writeFileSync(workerKey, 'worker-key');
+  const inventoryFile = path.join(root, 'inventory.json');
+  const hostvars: Record<string, Record<string, string | number>> = {};
+  const inventory: Record<string, unknown> = {
+    _meta: { hostvars },
+    all: { children: configuredTargets },
+  };
 
-  const settings: string[] = [];
   if (configuredTargets.includes('app')) {
-    settings.push(
-      'QP_APP_HOST=app.example.com',
-      'QP_APP_SSH_USER=app-user',
-      `QP_APP_SSH_KEY=${appKey}`,
-      'QP_APP_SSH_PORT=2222',
-      'QP_APP_SSH_HOST_KEY=yes',
-    );
+    inventory.app = { hosts: ['app-node'] };
+    hostvars['app-node'] = {
+      ansible_host: 'app.example.com',
+      ansible_user: 'app-user',
+      ansible_port: 2222,
+      ansible_ssh_common_args: '-o StrictHostKeyChecking=yes -o IdentitiesOnly=yes',
+    };
   }
   if (configuredTargets.includes('worker')) {
-    settings.push(
-      'QP_WORKER_HOST=worker.example.com',
-      'QP_WORKER_SSH_USER=worker-user',
-      `QP_WORKER_SSH_KEY=${workerKey}`,
-      'QP_WORKER_SSH_PORT=2200',
-      'QP_WORKER_SSH_HOST_KEY=accept-new',
-      'QP_FORCE_WORKER_DEPLOY=0',
-    );
+    inventory.worker = { hosts: ['worker-node'] };
+    hostvars['worker-node'] = {
+      ansible_host: 'worker.example.com',
+      ansible_user: 'worker-user',
+      ansible_port: 2200,
+      ansible_ssh_common_args: '-o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes',
+    };
   }
-  fs.writeFileSync(envFile, `${settings.join('\n')}\n`);
+  fs.writeFileSync(inventoryFile, JSON.stringify(inventory));
 
+  fs.writeFileSync(path.join(bin, 'ansible-inventory'), String.raw`#!/bin/sh
+printf 'ansible-inventory\n' >> "$COMMAND_LOG"
+cat "$ANSIBLE_INVENTORY"
+`);
   fs.writeFileSync(path.join(bin, 'ansible-playbook'), String.raw`#!/bin/sh
 if [ "$1" = "--version" ]; then
   printf 'ansible-version\n' >> "$COMMAND_LOG"
   exit 0
 fi
-inventory=''
 limit=''
 variables=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --inventory) inventory="$2"; shift 2 ;;
     --limit) limit="$2"; shift 2 ;;
     --extra-vars) variables="$2"; shift 2 ;;
     *) shift ;;
@@ -63,10 +64,11 @@ while [ "$#" -gt 0 ]; do
 done
 "$REAL_NODE" -e '
   const fs = require("node:fs");
-  const [inventoryFile, target, variablesFile, logFile] = process.argv.slice(1);
-  const inventory = JSON.parse(fs.readFileSync(inventoryFile, "utf8"));
+  const [target, variablesFile, logFile] = process.argv.slice(1);
+  const inventory = JSON.parse(fs.readFileSync(process.env.ANSIBLE_INVENTORY, "utf8"));
   const variables = JSON.parse(fs.readFileSync(variablesFile.replace(/^@/, ""), "utf8"));
-  const host = inventory.all.children[target].hosts[target];
+  const hostName = inventory[target].hosts[0];
+  const host = inventory._meta.hostvars[hostName];
   if (!host.ansible_ssh_common_args.includes("IdentitiesOnly=yes")) {
     process.stderr.write("missing IdentitiesOnly=yes\n");
     process.exit(91);
@@ -81,7 +83,8 @@ done
     host.ansible_user ?? "", String(host.ansible_port ?? ""),
     variables.deploy_release_name ?? "",
   ].join(":") + "\n");
-' "$inventory" "$limit" "$variables" "$COMMAND_LOG"
+  if ("worker_force_deploy" in variables) process.exit(93);
+' "$limit" "$variables" "$COMMAND_LOG"
 `);
   fs.writeFileSync(path.join(bin, 'bash'), String.raw`#!/bin/sh
 script_name="$(basename "$1")"
@@ -109,30 +112,27 @@ esac
   fs.writeFileSync(path.join(bin, 'docker'), String.raw`#!/bin/sh
 printf 'docker:%s\n' "$*" >> "$COMMAND_LOG"
 `);
-  for (const command of ['ansible-playbook', 'bash', 'docker']) {
+  for (const command of ['ansible-inventory', 'ansible-playbook', 'bash', 'docker']) {
     fs.chmodSync(path.join(bin, command), 0o755);
   }
 
   const environment = { ...process.env };
   for (const name of Object.keys(environment)) {
-    if (name.startsWith('QP_') || name === 'ANSIBLE_CONFIG') delete environment[name];
+    if (name.startsWith('QP_') || name.startsWith('ANSIBLE_')) delete environment[name];
   }
   Object.assign(environment, {
     PATH: `${bin}:${process.env.PATH}`,
     COMMAND_LOG: commandLog,
     REAL_NODE: process.execPath,
+    ANSIBLE_INVENTORY: inventoryFile,
   });
-  return { commandLog, envFile, environment };
+  return { commandLog, inventoryFile, environment };
 }
 
-function execute(harness: ReturnType<typeof prepareHarness>, target: string) {
-  return spawnSync(process.execPath, [
-    'scripts/deploy.mjs',
-    '--env-file',
-    harness.envFile,
-    '--target',
-    target,
-  ], {
+function execute(harness: ReturnType<typeof prepareHarness>, target?: string) {
+  const args = ['scripts/deploy.mjs'];
+  if (target !== undefined) args.push('--target', target);
+  return spawnSync(process.execPath, args, {
     cwd: process.cwd(),
     encoding: 'utf8',
     env: harness.environment,
@@ -140,13 +140,14 @@ function execute(harness: ReturnType<typeof prepareHarness>, target: string) {
 }
 
 describe('Ansible deployment orchestrator', () => {
-  it('deploys app and worker sequentially from one shared release for target all', () => {
+  it('defaults to app and worker when inventory contains both groups', () => {
     const harness = prepareHarness(['app', 'worker']);
-    const result = execute(harness, 'all');
+    const result = execute(harness);
     const output = `${result.stdout}${result.stderr}`;
     expect(result.status, output).toBe(0);
     expect(fs.readFileSync(harness.commandLog, 'utf8').trim().split('\n')).toEqual([
       'ansible-version',
+      'ansible-inventory',
       'ansible:app:preflight:app.example.com:app-user:2222:',
       'ansible:worker:preflight:worker.example.com:worker-user:2200:',
       'docker:info',
@@ -158,13 +159,14 @@ describe('Ansible deployment orchestrator', () => {
     ]);
   });
 
-  it('requires only app configuration and no Docker for target app', () => {
+  it('defaults to app only when inventory has no worker host', () => {
     const harness = prepareHarness(['app']);
-    const result = execute(harness, 'app');
+    const result = execute(harness);
     const output = `${result.stdout}${result.stderr}`;
     expect(result.status, output).toBe(0);
     expect(fs.readFileSync(harness.commandLog, 'utf8').trim().split('\n')).toEqual([
       'ansible-version',
+      'ansible-inventory',
       'ansible:app:preflight:app.example.com:app-user:2222:',
       'build-release',
       'ansible:app:apply:app.example.com:app-user:2222:20260818-120000-abcdef1',
@@ -179,6 +181,7 @@ describe('Ansible deployment orchestrator', () => {
     expect(result.status, output).toBe(0);
     expect(fs.readFileSync(harness.commandLog, 'utf8').trim().split('\n')).toEqual([
       'ansible-version',
+      'ansible-inventory',
       'ansible:worker:preflight:worker.example.com:worker-user:2200:',
       'docker:info',
       'docker:buildx version',
@@ -188,17 +191,16 @@ describe('Ansible deployment orchestrator', () => {
     ]);
   });
 
-  it('rejects invalid worker settings before preflight or app deployment', () => {
-    const harness = prepareHarness(['app', 'worker']);
-    const settings = fs.readFileSync(harness.envFile, 'utf8')
-      .replace('QP_FORCE_WORKER_DEPLOY=0', 'QP_FORCE_WORKER_DEPLOY=invalid');
-    fs.writeFileSync(harness.envFile, settings);
-
+  it('requires a worker host when target all is explicit', () => {
+    const harness = prepareHarness(['app']);
     const result = execute(harness, 'all');
-    const output = `${result.stdout}${result.stderr}`;
+    const output = String(result.stdout) + String(result.stderr);
     expect(result.status).not.toBe(0);
-    expect(output).toContain('QP_FORCE_WORKER_DEPLOY은 0 또는 1이어야 합니다');
-    expect(existsSyncOrFalse(harness.commandLog)).toBe(false);
+    expect(output).toContain('Ansible inventory의 worker 그룹에 호스트가 없습니다');
+    expect(fs.readFileSync(harness.commandLog, 'utf8').trim().split('\n')).toEqual([
+      'ansible-version',
+      'ansible-inventory',
+    ]);
   });
 
   it('rejects infrastructure-oriented and unknown target names', () => {

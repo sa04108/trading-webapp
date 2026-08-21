@@ -208,14 +208,16 @@ CSV 형식: `timestamp,open,high,low,close,volume` (ISO 8601 UTC 또는 epoch ms
 ```bash
 ./scripts/bootstrap-server.sh          # app 노드 1회 준비
 ./scripts/bootstrap-worker.sh          # worker 노드 1회 준비
-pnpm run deploy --target app          # 수동 app 배포
-pnpm run deploy --target worker       # 수동 worker 배포
-pnpm run deploy --target all          # 같은 release로 app 후 worker 순차 배포
+cp ansible/inventory.example.yml ansible/inventory.yml
+pnpm run deploy                       # inventory에 worker가 있으면 app+worker
+pnpm run deploy --target app          # 명시적 app 전용 배포
+pnpm run deploy --target worker       # 명시적 worker 전용 배포
+pnpm run deploy --target all          # 양쪽 호스트가 필수인 통합 배포
 ./scripts/backup.sh                    # SQLite·exports 백업
 ```
 
-- bootstrap 스크립트는 기존 저수준 SSH 환경변수를 사용하고, 배포는 `deploy.env`의
-  `QP_APP_*`·`QP_WORKER_*`를 임시 Ansible inventory로 변환한다.
+- bootstrap 스크립트의 저수준 SSH 환경변수는 최초 준비에만 사용한다. 일반 배포는
+  `ansible/inventory.yml` 또는 `ANSIBLE_INVENTORY`가 지정한 표준 inventory를 사용한다.
 - Ansible은 로컬에서 수동 실행하며 `forks=1`, `gather_facts=false`로 app과 worker를 순차
   처리한다. 노드에는 상주 agent를 설치하지 않는다.
 - deploy-app.sh는 app 노드에서 실행되는 transaction이다. 재시작 직전 SQLite snapshot을

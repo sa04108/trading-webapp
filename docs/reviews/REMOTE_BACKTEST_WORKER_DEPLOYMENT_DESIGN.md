@@ -158,19 +158,18 @@ pnpm run deploy --target worker
 배포 순서는 다음과 같다.
 
 1. Ansible preflight로 SSH/sudo, Docker/Compose, env/Compose 설치 상태를 확인한다.
-2. 실행 중 Worker가 같은 Git SHA이면 인증된 one-shot probe까지 통과한 경우 no-op한다.
-3. 공통 archive를 만들고 로컬 checksum을 검증한다.
-4. `linux/amd64` worker image를 만들고 Ansible로 image tar/checksum을 업로드한다.
-5. 원격 checksum을 검증한 뒤에만 `docker load`한다.
-6. image OCI revision label과 release Git SHA가 같은지 확인한다.
-7. 이전 Compose와 image 참조를 보관하고 새 image로 container를 재생성한다.
-8. 실행 중 container 안에서 supervisor `--check`를 최대 5회 실행한다.
-9. 실패하면 이전 Compose/image로 재생성하고 이전 probe도 확인한다. rollback 검증 실패 시
+2. 공통 archive를 만들고 로컬 checksum을 검증한다.
+3. `linux/amd64` worker image를 만들고 Ansible로 image tar/checksum을 업로드한다.
+4. 원격 checksum을 검증한 뒤에만 `docker load`한다.
+5. image OCI revision label과 release Git SHA가 같은지 확인한다.
+6. 이전 Compose와 image 참조를 보관하고 새 image로 container를 재생성한다.
+7. 실행 중 container 안에서 supervisor `--check`를 최대 5회 실행한다.
+8. 실패하면 이전 Compose/image로 재생성하고 이전 probe도 확인한다. rollback 검증 실패 시
    이전·신규 image를 모두 보존한다.
-10. 성공하면 현재 worker image만 남긴다.
+9. 성공하면 현재 worker image만 남긴다.
 
-강제 재배포는 `QP_FORCE_WORKER_DEPLOY=1`로만 허용한다. 정리 과정은 다른 repository의
-image나 Docker build cache에 손대지 않는다.
+worker target이 선택되면 기존 Git SHA와 관계없이 항상 배포한다. Git SHA는 app과 worker
+호환성 검증에만 사용하며 정리 과정은 다른 repository의 image나 build cache에 손대지 않는다.
 
 readiness endpoint는 잡을 claim하지 않는다.
 
@@ -208,6 +207,6 @@ Docker 외 실행 방식과 systemd Worker fallback은 후속 범위가 아니�
 - bootstrap: env mode/필수값, token 비노출, Docker-only 파일 업로드
 - entrypoint: 동시 실행 거부와 SIGKILL 뒤 kernel lock 회수
 - probe: 인증, local standby, remote ready, SHA/protocol mismatch, no-claim
-- deploy: checksum-before-load, 동일 SHA no-op, probe, rollback, 보존 범위
+- deploy: checksum-before-load, 선택 시 항상 재생성, probe, rollback, 보존 범위
 - Docker: 실제 image build, non-root/read-only 실행, `--check`, signal 종료
 - 전체 lint, typecheck, unit/integration test, production build
