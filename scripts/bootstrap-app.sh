@@ -279,7 +279,7 @@ cat <<MSG
 부트스트랩 완료: https://${DOMAIN}
 
 다음 단계:
-  1) deploy.env 작성 후 첫 app 배포: pnpm run deploy --target app
+  1) worker 노드도 bootstrap하고 deploy.env 작성 후 첫 통합 배포: pnpm run deploy
   2) 관리자 생성 + TOTP 등록 (app 노드에서, 순서대로):
      ssh ${SSH_FLAGS}${TARGET}
      sudo systemd-run --pty --uid=quant --gid=quant \\

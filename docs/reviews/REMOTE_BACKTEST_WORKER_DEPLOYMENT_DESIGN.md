@@ -58,7 +58,7 @@ systemd unit을 설치하지 않는다. 인바운드 애플리케이션 포트�
 6. release 이름과 위 Git SHA를 로컬 metadata로 내보낸다. `deploy.mjs`는 archive 이름을
    다시 검색하거나 현재 HEAD를 다시 읽지 않고 이 metadata만 배포 identity로 사용한다.
 
-`pnpm run deploy --target app|worker|all`이 공통 builder를 한 번 호출한다. 생성된 archive와
+유일한 진입점인 `pnpm run deploy`가 공통 builder를 한 번 호출한다. 생성된 archive와
 checksum은 `deploy.mjs`가 노드별 임시 디렉터리에 SCP로 업로드한 뒤 `deploy-app.sh` 또는
 `deploy-worker.sh` transaction에 전달한다. 두 저수준 스크립트는 SSH나 build를 담당하지
 않으며, 노드 안에서 lock·전환·rollback·정리만 한 단위로 수행한다.
@@ -154,7 +154,7 @@ SIGKILL 뒤 남은 PID 값은 새 컨테이너의 PID와 충돌할 수 있기 �
 ## 7. 배포, readiness, rollback
 
 ```bash
-pnpm run deploy --target worker
+pnpm run deploy
 ```
 
 배포 순서는 다음과 같다.
@@ -164,13 +164,14 @@ pnpm run deploy --target worker
 3. `linux/amd64` worker image를 만들고 SCP로 image tar/checksum을 업로드한다.
 4. 원격 checksum을 검증한 뒤에만 `docker load`한다.
 5. image OCI revision label과 release Git SHA가 같은지 확인한다.
-6. 이전 Compose와 image 참조를 보관하고 새 image로 container를 재생성한다.
-7. 실행 중 container 안에서 supervisor `--check`를 최대 5회 실행한다.
-8. 실패하면 이전 Compose/image로 재생성하고 이전 probe도 확인한다. rollback 검증 실패 시
-   이전·신규 image를 모두 보존한다.
-9. 성공하면 현재 worker image만 남긴다.
+6. app의 이전 release와 DB snapshot, worker의 이전 Compose와 image 참조를 transaction
+   상태로 보관하고 새 app과 container를 준비한다.
+7. app readiness와 container supervisor `--check`를 확인한 뒤 양쪽을 다시 검증한다.
+8. 어느 단계든 실패하면 worker, app 역순으로 Compose/image와 release/DB를 함께 복원하고
+   이전 readiness도 확인한다. rollback 검증 실패 시 이전·신규 산출물을 모두 보존한다.
+9. 양쪽 최종 검증 뒤 비파괴 commit을 모두 확인하고, finalize에서 현재 release/image만 남긴다.
 
-worker target이 선택되면 기존 Git SHA와 관계없이 항상 배포한다. Git SHA는 app과 worker
+worker는 기존 Git SHA와 관계없이 매번 배포한다. Git SHA는 app과 worker
 호환성 검증에만 사용하며 정리 과정은 다른 repository의 image나 build cache에 손대지 않는다.
 
 readiness endpoint는 잡을 claim하지 않는다.

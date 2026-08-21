@@ -209,20 +209,19 @@ CSV 형식: `timestamp,open,high,low,close,volume` (ISO 8601 UTC 또는 epoch ms
 ./scripts/bootstrap-app.sh             # app 노드 1회 준비
 ./scripts/bootstrap-worker.sh          # worker 노드 1회 준비
 cp deploy.env.example deploy.env
-pnpm run deploy                       # QP_WORKER_HOST가 있으면 app+worker
-pnpm run deploy --target app          # 명시적 app 전용 배포
-pnpm run deploy --target worker       # 명시적 worker 전용 배포
-pnpm run deploy --target all          # 양쪽 호스트가 필수인 통합 배포
+pnpm run deploy                       # app과 worker를 순서대로 통합 배포
 ./scripts/backup.sh                    # SQLite·exports 백업
 ```
 
-- `deploy.env`는 app/worker별 SSH 호스트·사용자·키·포트·점프 호스트와 추가 옵션만 담는다.
+- `deploy.env`는 app/worker별 SSH 호스트·사용자·키·포트·점프 호스트와 추가 옵션만 담으며,
+  두 호스트가 모두 필요하다.
   runtime 비밀값은 원격 `app.env`·`worker.env`에만 둔다.
-- `deploy.mjs`는 로컬 OpenSSH로 app과 worker를 순차 처리한다. 노드에는 상주 agent를
-  설치하지 않는다.
+- `deploy.mjs`는 로컬 OpenSSH로 app과 worker를 순차 준비하고 양쪽 readiness를 확인한다.
+  한쪽이라도 실패하면 worker, app 역순으로 양쪽을 롤백한다. 노드에는 상주 agent를 설치하지
+  않는다.
 - deploy-app.sh는 app 노드에서 실행되는 transaction이다. 재시작 직전 SQLite snapshot을
   만들고 실패 시 코드·DB를 함께 롤백한다. 성공 뒤 과거 release와 snapshot은 남기지 않는다.
-- deploy-worker.sh는 worker 노드의 Docker image transaction이다. 성공하면 현재 image만,
+- deploy-worker.sh는 worker 노드의 Docker image transaction이다. 양쪽 성공 확정 뒤 현재 image만,
   rollback 성공 시 이전 image만 남긴다. rollback 검증 실패 시에는 양쪽을 보존한다.
   `build-release.sh` archive를 image에 넣고 content checksum과 인증·SHA·protocol probe를
   통과해야 전환한다 (D-061).

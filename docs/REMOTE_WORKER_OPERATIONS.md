@@ -94,17 +94,17 @@ cp deploy.env.example deploy.env
 pnpm run deploy
 ```
 
-무인자 실행은 worker 호스트가 있으므로 app과 worker를 선택한다. 명시적으로
-`--target all`을 사용해도 되며, 이 경우 양쪽 HOST 중 하나라도 비어 있으면 실패한다.
+공식 배포 명령은 `pnpm run deploy` 하나이며 app과 worker 양쪽 HOST가 모두 필요하다.
 deploy.mjs는 양쪽 SSH preflight를 먼저 수행한 뒤 공통 archive를 한 번만 검증·빌드하고
 worker image도 app 전환 전에 만든다.
 
-worker가 선택되면 같은 Git SHA가 실행 중이어도 image checksum을 검증하고 container를
+매 배포마다 같은 Git SHA가 실행 중이어도 worker image checksum을 검증하고 container를
 항상 재생성한다. Git SHA는 app과 worker의 호환성 검사에만 사용한다.
 
-새 container 시작 또는 인증·SHA·protocol probe가 실패하면 이전 image와 Compose 설정으로
-자동 롤백한다. 실행 중 잡은 drain하지 않으므로 가능하면 배포 전에 완료를 기다린다. 중간에
-종료된 잡은 heartbeat lease 만료 뒤 app이 재시도한다.
+app과 worker는 이전 상태를 보존한 채 새 버전 readiness를 확인한다. 새 app 또는 container의
+기동, 인증·SHA·protocol probe 중 하나라도 실패하면 worker Compose/image와 app release/DB를
+배포 전 상태로 함께 롤백한다. 실행 중 잡은 drain하지 않으므로 가능하면 배포 전에 완료를
+기다린다. 중간에 종료된 잡은 heartbeat lease 만료 뒤 app이 재시도한다.
 
 ## 4. remote 모드 전환과 확인
 

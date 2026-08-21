@@ -5,22 +5,18 @@ import { describe, expect, it } from 'vitest';
 const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
 
 describe('deploy script failure workflow', () => {
-  it('cleans the failed release and snapshot only after rollback readiness succeeds', () => {
+  it('restores app release and DB, then cleans transaction artifacts after rollback readiness', () => {
     const shell = String.raw`
       source scripts/deploy-app.sh
-      attempts=0
       mock_current_target='/opt/quant-platform/releases/new-release'
-      curl() {
-        attempts=$((attempts + 1))
-        echo 'curl unavailable' >&2
-        [ "$attempts" -ge 2 ]
-      }
+      curl() { return 0; }
       sleep() { :; }
       readlink() { printf '%s\n' "$mock_current_target"; }
       sudo() {
         printf 'sudo:%s\n' "$*" >&2
-        if [ "$1" = 'journalctl' ]; then
-          echo 'audit_logs already exists' >&2
+        if [ "$1" = 'cat' ] && [ "$2" = '/var/lib/quant-platform/deploy-transactions/new-release.state' ]; then
+          printf '/opt/quant-platform/releases/old-release\n/var/lib/quant-platform/backups/pre-deploy-new-release.sqlite\n1\n'
+          return 0
         fi
         if [ "$1" = 'test' ] && [ "$2" = '-f' ]; then
           return 0
@@ -31,17 +27,10 @@ describe('deploy script failure workflow', () => {
         return 0
       }
 
-      previous_release="$(mktemp -d)"
       status=0
-      handle_deploy_failure \
-        '2026-08-01T00:00:00+00:00' \
-        "$previous_release" \
-        '/opt/quant-platform/releases/new-release' \
-        '/var/lib/quant-platform/backups/pre-deploy-new-release.sqlite' \
-        '/var/lib/quant-platform/app.sqlite' || status=$?
-      printf 'status=%s attempts=%s\n' "$status" "$attempts"
-      rm -rf "$previous_release"
-      [ "$status" -eq 1 ]
+      rollback_app_transaction new-release || status=$?
+      printf 'status=%s\n' "$status"
+      [ "$status" -eq 0 ]
     `;
 
     const result = spawnSync(bash, ['-c', shell], {
@@ -51,24 +40,21 @@ describe('deploy script failure workflow', () => {
     const output = `${result.stdout}${result.stderr}`;
 
     expect(result.status).toBe(0);
-    expect(output).toContain('audit_logs already exists');
-    expect(output.indexOf('audit_logs already exists')).toBeLessThan(
-      output.indexOf('sudo:systemctl stop quant-platform'),
-    );
     expect(output).toMatch(/sudo:cp .*pre-deploy-new-release\.sqlite .*app\.sqlite/);
     expect(output).toMatch(
       /sudo:rm -f .*app\.sqlite-journal .*app\.sqlite-wal .*app\.sqlite-shm/,
     );
-    expect(output).toContain('rolled back to');
+    expect(output).toContain('sudo:ln -sfn /opt/quant-platform/releases/old-release');
+    expect(output).toContain('sudo:systemctl restart quant-platform');
     expect(output).toContain(
       'sudo:rm -f -- /var/lib/quant-platform/backups/pre-deploy-new-release.sqlite',
     );
     expect(output).toContain(
       'sudo:rm -rf -- /opt/quant-platform/releases/new-release',
     );
-    expect(output).toContain('자동 롤백 검증 후 실패한 release와 DB snapshot을 정리했습니다');
-    expect(output).toContain('status=1 attempts=2');
-    expect(output).not.toContain('curl unavailable');
+    expect(output).toContain('sudo:rm -f -- /var/lib/quant-platform/deploy-transactions/new-release.state');
+    expect(output).toContain('app rollback completed for new-release');
+    expect(output).toContain('status=0');
   });
 
   it('preserves recovery artifacts when rollback readiness fails', () => {
@@ -80,6 +66,10 @@ describe('deploy script failure workflow', () => {
       readlink() { printf '%s\n' "$mock_current_target"; }
       sudo() {
         printf 'sudo:%s\n' "$*" >&2
+        if [ "$1" = 'cat' ] && [ "$2" = '/var/lib/quant-platform/deploy-transactions/new-release.state' ]; then
+          printf '/opt/quant-platform/releases/old-release\n/var/lib/quant-platform/backups/pre-deploy-new-release.sqlite\n1\n'
+          return 0
+        fi
         if [ "$1" = 'test' ] && [ "$2" = '-f' ]; then
           return 0
         fi
@@ -89,16 +79,9 @@ describe('deploy script failure workflow', () => {
         return 0
       }
 
-      previous_release="$(mktemp -d)"
       status=0
-      handle_deploy_failure \
-        '2026-08-01T00:00:00+00:00' \
-        "$previous_release" \
-        '/opt/quant-platform/releases/new-release' \
-        '/var/lib/quant-platform/backups/pre-deploy-new-release.sqlite' \
-        '/var/lib/quant-platform/app.sqlite' || status=$?
+      rollback_app_transaction new-release || status=$?
       printf 'status=%s\n' "$status"
-      rm -rf "$previous_release"
       [ "$status" -eq 1 ]
     `;
 
@@ -109,8 +92,7 @@ describe('deploy script failure workflow', () => {
     const output = `${result.stdout}${result.stderr}`;
 
     expect(result.status).toBe(0);
-    expect(output).toContain('rollback failed for');
-    expect(output).toContain('자동 롤백 검증에 실패해 release와 DB snapshot을 보존합니다');
+    expect(output).toContain('app rollback failed for new-release');
     expect(output).toContain(
       'sudo:touch /opt/quant-platform/releases/new-release/.deploy-failed',
     );
@@ -247,27 +229,28 @@ describe('deploy script failure workflow', () => {
     expect(output).toContain('status=1');
   });
 
-  it('treats a missing expected DB snapshot as rollback failure', () => {
+  it('treats a missing transaction DB snapshot as rollback failure', () => {
     const shell = String.raw`
       source scripts/deploy-app.sh
       curl() { return 0; }
-      readlink() { echo '/opt/quant-platform/releases/new-release'; }
+      mock_current_target='/opt/quant-platform/releases/new-release'
+      readlink() { echo "$mock_current_target"; }
       sudo() {
         printf 'sudo:%s\n' "$*" >&2
+        if [ "$1" = 'cat' ] && [ "$2" = '/var/lib/quant-platform/deploy-transactions/new-release.state' ]; then
+          printf '/opt/quant-platform/releases/old-release\n/var/lib/quant-platform/backups/pre-deploy-new-release.sqlite\n1\n'
+          return 0
+        fi
         if [ "$1" = 'test' ] && [ "$2" = '-f' ]; then
+          [ "$3" = '/var/lib/quant-platform/deploy-transactions/new-release.state' ] && return 0
           return 1
         fi
         return 0
       }
 
-      previous_release="$(mktemp -d)"
       status=0
-      rollback_release \
-        "$previous_release" \
-        '/var/lib/quant-platform/backups/pre-deploy-new-release.sqlite' \
-        '/var/lib/quant-platform/app.sqlite' || status=$?
+      rollback_app_transaction new-release || status=$?
       printf 'status=%s\n' "$status"
-      rm -rf "$previous_release"
       [ "$status" -eq 1 ]
     `;
 
@@ -278,8 +261,8 @@ describe('deploy script failure workflow', () => {
     const output = `${result.stdout}${result.stderr}`;
 
     expect(result.status).toBe(0);
-    expect(output).toContain('롤백에 필요한 DB snapshot이 없습니다');
     expect(output).not.toContain('sudo:ln -sfn');
+    expect(output).toContain('app rollback failed for new-release');
     expect(output).toContain('status=1');
   });
 
@@ -339,7 +322,7 @@ describe('deploy script failure workflow', () => {
       deploy.indexOf('sudo mv "${RELEASE_STAGING}" "${RELEASE_DIR}"'),
     );
     expect(deploy).toContain('trap cleanup_remote_deploy EXIT');
-    expect(deploy).toContain('trap cleanup_remote_deploy EXIT\nacquire_deploy_lock\n');
+    expect(deploy).toMatch(/trap cleanup_remote_deploy EXIT\s+acquire_deploy_lock/);
     expect(deploy).toContain('DB_SNAPSHOT_INCOMPLETE=');
     expect(deploy).toContain('sudo touch "${RELEASE_STAGING}/.deploy-in-progress"');
     expect(deploy).toContain('SWITCHED_RELEASE="$(resolve_current_release)"');
@@ -348,7 +331,15 @@ describe('deploy script failure workflow', () => {
     expect(deploy).not.toContain('ssh ');
     expect(orchestrator).toContain("'/tmp/quant-app-deploy.XXXXXX'");
     expect(orchestrator).toContain("path.join(SCRIPT_DIR, 'deploy-app.sh')");
-    expect(orchestrator).toContain('deployApp(');
+    expect(deploy).toContain('write_transaction_state');
+    expect(deploy).toContain('verify_prepared_app');
+    expect(deploy).toContain('rollback_app_transaction');
+    expect(orchestrator).toContain('stageAppDeployment(');
+    expect(orchestrator).toContain("runAppPhase(appDeployment, 'prepare')");
+    expect(orchestrator).toContain("runAppPhase(appDeployment, 'verify')");
+    expect(orchestrator).toContain("runAppPhase(appDeployment, 'commit')");
+    expect(orchestrator).toContain("runAppPhase(appDeployment, 'finalize')");
+    expect(orchestrator).toContain("runAppPhase(appDeployment, 'rollback')");
   });
 
   it('is a syntactically valid node-local transaction script', () => {

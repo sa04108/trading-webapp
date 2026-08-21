@@ -68,7 +68,7 @@ streaming 업로드한다. app과 worker의 Git SHA가 다르면 claim 자체가
 
 설정 예시는 `infra/app.env.example`, `infra/worker.env.example`에 있다. Worker 호스트는
 `scripts/bootstrap-worker.sh`로 Docker와 전용 경로만 준비한다. 이후 수동
-`pnpm run deploy --target all`이 app과 worker에 같은 release를 배포하고 checksum 검증,
+`pnpm run deploy`가 app과 worker에 같은 release를 배포하고 checksum 검증,
 container 전환, 인증·SHA·protocol probe와 실패 rollback까지 수행한다.
 호스트에 생성하는 경로와 보존 정책은
 `/opt/quant-backtest-worker/managed-paths.json` manifest로 추적한다.
@@ -166,7 +166,7 @@ passphrase 가 있으면 `ssh-add` 로 agent 에 먼저 올린다 — 접속 확
 
 ### 첫 배포와 계정
 
-프로젝트 루트의 배포 설정 예제를 복사해 app과 선택적 worker 접속 정보를 채운다.
+프로젝트 루트의 배포 설정 예제를 복사해 app과 worker 접속 정보를 채운다.
 실제 `deploy.env`는 Git에서 제외되며 runtime 비밀값은 넣지 않는다. SSH config를
 사용한다면 `QP_APP_HOST`·`QP_WORKER_HOST`에 Host alias를 쓰고 나머지 접속 값은 비워도 된다.
 
@@ -174,15 +174,12 @@ passphrase 가 있으면 `ssh-add` 로 agent 에 먼저 올린다 — 접속 확
 cp deploy.env.example deploy.env
 ```
 
-배포는 자동으로 시작되지 않는다. 무인자 실행은 `QP_WORKER_HOST`가 있으면 app과 worker를,
-없으면 app만 선택한다. 명시적 `all`은 `QP_APP_HOST`와 `QP_WORKER_HOST`가 모두 있어야 하며
-두 SSH preflight를 먼저 통과한 뒤 공통 release를 한 번만 생성한다.
+배포는 자동으로 시작되지 않는다. 공식 명령은 `pnpm run deploy` 하나이며
+`QP_APP_HOST`와 `QP_WORKER_HOST`가 모두 있어야 한다. 두 SSH preflight를 먼저 통과한 뒤
+공통 release를 한 번만 생성하고 app, worker 순서로 준비한다.
 
 ```bash
 pnpm run deploy
-pnpm run deploy --target app
-pnpm run deploy --target worker
-pnpm run deploy --target all
 ```
 
 `deploy.env`는 app/worker별로 `HOST`, `SSH_USER`, `SSH_KEY`, `SSH_PORT`, `SSH_JUMP`,
@@ -191,8 +188,12 @@ app과 worker에 서로 다른 키·포트·점프 호스트를 지정할 수 �
 
 `app`과 `worker`는 배포 component 이름으로 고정한다. `deploy.mjs`가 SSH/SCP로 시도별
 원격 임시 디렉터리에 파일을 전송하고 node-local transaction을 실행한 뒤 그 디렉터리를
-정리한다. worker가 선택되면 실행 중 image의 Git SHA와 관계없이 새 image를 검증하고
+정리한다. 매 배포마다 실행 중 image의 Git SHA와 관계없이 새 worker image를 검증하고
 container를 재생성한다.
+
+app과 worker는 이전 release·DB snapshot·Compose·image를 보존한 채 새 버전의 readiness를
+각각 통과한다. 둘 중 하나라도 실패하면 worker, app 역순으로 양쪽을 배포 전 상태로
+롤백한다. 두 readiness가 모두 확인된 뒤에만 성공으로 확정하고 과거 정상 산출물을 정리한다.
 
 배포 후 app 노드에서 관리자 생성과 TOTP 등록을 순서대로 한다 (정확한 명령은 bootstrap
 출력에 나온다):

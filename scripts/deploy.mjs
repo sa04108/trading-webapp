@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, '..');
 const DEPLOY_ENV_FILE = path.join(REPO_ROOT, 'deploy.env');
-const DEPLOY_TARGETS = new Set(['app', 'worker', 'all']);
+const DEPLOY_COMPONENTS = ['app', 'worker'];
 const APP_PREFLIGHT = [
   'set -eu',
   'for command_name in bash flock sqlite3 corepack systemctl systemd-run curl; do',
@@ -55,29 +55,6 @@ class DeployError extends Error {
   }
 }
 
-function parseArguments(argv) {
-  let target = null;
-  for (let index = 0; index < argv.length; index += 1) {
-    const argument = argv[index];
-    if (argument === '--target') {
-      const value = argv[index + 1];
-      if (!value) throw new DeployError(argument + ' 뒤에 값이 필요합니다');
-      target = value;
-      index += 1;
-      continue;
-    }
-    if (argument.startsWith('--target=')) {
-      target = argument.slice('--target='.length);
-      continue;
-    }
-    throw new DeployError('알 수 없는 배포 인자입니다: ' + argument);
-  }
-  if (target !== null && !DEPLOY_TARGETS.has(target)) {
-    throw new DeployError('--target은 app | worker | all 중 하나여야 합니다: ' + target);
-  }
-  return target;
-}
-
 function readDeploySettings() {
   if (!existsSync(DEPLOY_ENV_FILE)) {
     throw new DeployError(
@@ -97,32 +74,8 @@ function setting(settings, name) {
   return settings[name]?.trim() ?? '';
 }
 
-function targetPrefix(target) {
-  return target === 'app' ? 'QP_APP' : 'QP_WORKER';
-}
-
-function hasTarget(settings, target) {
-  return setting(settings, `${targetPrefix(target)}_HOST`) !== '';
-}
-
-function resolveTargets(requestedTarget, settings) {
-  const appConfigured = hasTarget(settings, 'app');
-  const workerConfigured = hasTarget(settings, 'worker');
-
-  if (requestedTarget === null) {
-    if (!appConfigured) throw new DeployError('deploy.env의 QP_APP_HOST가 필요합니다');
-    return workerConfigured
-      ? { target: 'all', targets: ['app', 'worker'] }
-      : { target: 'app', targets: ['app'] };
-  }
-
-  const targets = requestedTarget === 'all' ? ['app', 'worker'] : [requestedTarget];
-  for (const target of targets) {
-    if (!hasTarget(settings, target)) {
-      throw new DeployError(`deploy.env의 ${targetPrefix(target)}_HOST가 필요합니다`);
-    }
-  }
-  return { target: requestedTarget, targets };
+function componentPrefix(component) {
+  return component === 'app' ? 'QP_APP' : 'QP_WORKER';
 }
 
 function expandHome(value) {
@@ -185,10 +138,13 @@ function splitSshOptions(value, variableName) {
   return options;
 }
 
-function readConnection(target, settings) {
-  const prefix = targetPrefix(target);
+function readConnection(component, settings) {
+  const prefix = componentPrefix(component);
   const rawHost = setting(settings, `${prefix}_HOST`);
-  if (!rawHost || rawHost.startsWith('-') || /\s/.test(rawHost)) {
+  if (!rawHost) {
+    throw new DeployError(`deploy.env의 ${prefix}_HOST가 필요합니다`);
+  }
+  if (rawHost.startsWith('-') || /\s/.test(rawHost)) {
     throw new DeployError(`${prefix}_HOST 형식이 올바르지 않습니다: ${rawHost}`);
   }
 
@@ -244,7 +200,7 @@ function readConnection(target, settings) {
   }
   sshOptions.push('-o', `StrictHostKeyChecking=${hostKey}`);
 
-  return { target, remoteTarget, sshOptions };
+  return { component, remoteTarget, sshOptions };
 }
 
 function commandFailure(command, result) {
@@ -303,7 +259,7 @@ function runRemoteBash(connection, script, args = [], options = {}) {
 }
 
 function preflight(connection, workerManifestSha) {
-  if (connection.target === 'app') {
+  if (connection.component === 'app') {
     runRemoteBash(connection, APP_PREFLIGHT, [], { batch: true, quiet: true });
     return;
   }
@@ -315,62 +271,33 @@ function preflight(connection, workerManifestSha) {
   );
 }
 
-function validateRemoteDirectory(remoteDirectory, target) {
-  const pattern = target === 'app'
+function validateRemoteDirectory(remoteDirectory, component) {
+  const pattern = component === 'app'
     ? /^\/tmp\/quant-app-deploy\.[a-zA-Z0-9]+$/
     : /^\/tmp\/quant-worker-deploy\.[a-zA-Z0-9]+$/;
   if (!pattern.test(remoteDirectory)) {
-    throw new DeployError(`${target} 원격 임시 경로가 올바르지 않습니다: ${remoteDirectory}`);
+    throw new DeployError(`${component} 원격 임시 경로가 올바르지 않습니다: ${remoteDirectory}`);
   }
 }
 
 function createRemoteDirectory(connection) {
-  const template = connection.target === 'app'
+  const template = connection.component === 'app'
     ? '/tmp/quant-app-deploy.XXXXXX'
     : '/tmp/quant-worker-deploy.XXXXXX';
   const remoteDirectory = capture('ssh', [
     ...sshArguments(connection),
     `mktemp -d ${template}`,
   ]);
-  validateRemoteDirectory(remoteDirectory, connection.target);
+  validateRemoteDirectory(remoteDirectory, connection.component);
   return remoteDirectory;
 }
 
 function removeRemoteDirectory(connection, remoteDirectory) {
-  validateRemoteDirectory(remoteDirectory, connection.target);
+  validateRemoteDirectory(remoteDirectory, connection.component);
   run('ssh', [
     ...sshArguments(connection),
     `/bin/rm -rf -- ${shellQuote(remoteDirectory)}`,
   ], { quiet: true });
-}
-
-function withRemoteDirectory(connection, action) {
-  let remoteDirectory = '';
-  let actionError = null;
-  try {
-    remoteDirectory = createRemoteDirectory(connection);
-    action(remoteDirectory);
-  } catch (error) {
-    actionError = error;
-  }
-
-  let cleanupError = null;
-  if (remoteDirectory) {
-    try {
-      removeRemoteDirectory(connection, remoteDirectory);
-    } catch (error) {
-      cleanupError = error;
-    }
-  }
-
-  if (actionError) {
-    if (cleanupError) {
-      const message = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
-      logError(`${connection.target} 원격 임시 디렉터리 정리도 실패했습니다: ${message}`);
-    }
-    throw actionError;
-  }
-  if (cleanupError) throw cleanupError;
 }
 
 function upload(connection, files, remoteDirectory) {
@@ -381,28 +308,39 @@ function upload(connection, files, remoteDirectory) {
   ]);
 }
 
-function deployApp(connection, releaseArchive, releaseChecksum, releaseName) {
-  withRemoteDirectory(connection, (remoteDirectory) => {
-    upload(connection, [
-      releaseArchive,
-      releaseChecksum,
-      path.join(SCRIPT_DIR, 'deploy-app.sh'),
-    ], remoteDirectory);
-    const remoteArchive = path.posix.join(remoteDirectory, path.basename(releaseArchive));
-    const remoteChecksum = path.posix.join(remoteDirectory, path.basename(releaseChecksum));
-    const remoteScript = path.posix.join(remoteDirectory, 'deploy-app.sh');
-    const command = [
-      '/bin/bash',
-      shellQuote(remoteScript),
-      shellQuote(remoteArchive),
-      shellQuote(remoteChecksum),
-      shellQuote(releaseName),
-    ].join(' ');
-    run('ssh', [...sshArguments(connection), command]);
-  });
+function stageFiles(connection, files) {
+  const remoteDirectory = createRemoteDirectory(connection);
+  try {
+    upload(connection, files, remoteDirectory);
+  } catch (error) {
+    try {
+      removeRemoteDirectory(connection, remoteDirectory);
+    } catch (cleanupError) {
+      const message = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+      logError(`${connection.component} 업로드 실패 후 임시 디렉터리 정리도 실패했습니다: ${message}`);
+    }
+    throw error;
+  }
+  return remoteDirectory;
 }
 
-function deployWorker(
+function stageAppDeployment(connection, releaseArchive, releaseChecksum, releaseName) {
+  const remoteDirectory = stageFiles(connection, [
+    releaseArchive,
+    releaseChecksum,
+    path.join(SCRIPT_DIR, 'deploy-app.sh'),
+  ]);
+  return {
+    connection,
+    releaseName,
+    remoteDirectory,
+    remoteArchive: path.posix.join(remoteDirectory, path.basename(releaseArchive)),
+    remoteChecksum: path.posix.join(remoteDirectory, path.basename(releaseChecksum)),
+    remoteScript: path.posix.join(remoteDirectory, 'deploy-app.sh'),
+  };
+}
+
+function stageWorkerDeployment(
   connection,
   imageArchive,
   imageChecksum,
@@ -411,31 +349,62 @@ function deployWorker(
   releaseGitSha,
   manifestSha,
 ) {
-  withRemoteDirectory(connection, (remoteDirectory) => {
-    upload(connection, [
-      imageArchive,
-      imageChecksum,
-      composeFile,
-      path.join(SCRIPT_DIR, 'deploy-worker.sh'),
-    ], remoteDirectory);
-    const remoteArchive = path.posix.join(remoteDirectory, path.basename(imageArchive));
-    const remoteChecksum = path.posix.join(remoteDirectory, path.basename(imageChecksum));
-    const remoteCompose = path.posix.join(remoteDirectory, 'compose.worker.yaml');
-    const remoteScript = path.posix.join(remoteDirectory, 'deploy-worker.sh');
-    const command = [
-      'sudo',
-      '-n',
-      '/bin/bash',
-      shellQuote(remoteScript),
-      shellQuote(remoteArchive),
-      shellQuote(remoteChecksum),
-      shellQuote(remoteCompose),
-      shellQuote(`quant-platform-backtest-worker:${releaseName}`),
-      shellQuote(releaseGitSha),
-      shellQuote(manifestSha),
-    ].join(' ');
-    run('ssh', [...sshArguments(connection), command]);
-  });
+  const remoteDirectory = stageFiles(connection, [
+    imageArchive,
+    imageChecksum,
+    composeFile,
+    path.join(SCRIPT_DIR, 'deploy-worker.sh'),
+  ]);
+  return {
+    connection,
+    releaseName,
+    releaseGitSha,
+    manifestSha,
+    remoteDirectory,
+    remoteArchive: path.posix.join(remoteDirectory, path.basename(imageArchive)),
+    remoteChecksum: path.posix.join(remoteDirectory, path.basename(imageChecksum)),
+    remoteCompose: path.posix.join(remoteDirectory, 'compose.worker.yaml'),
+    remoteScript: path.posix.join(remoteDirectory, 'deploy-worker.sh'),
+  };
+}
+
+function runAppPhase(deployment, phase) {
+  const args = phase === 'prepare'
+    ? [
+        phase,
+        deployment.remoteArchive,
+        deployment.remoteChecksum,
+        deployment.releaseName,
+      ]
+    : [phase, deployment.releaseName];
+  const command = [
+    '/bin/bash',
+    shellQuote(deployment.remoteScript),
+    ...args.map(shellQuote),
+  ].join(' ');
+  run('ssh', [...sshArguments(deployment.connection), command]);
+}
+
+function runWorkerPhase(deployment, phase) {
+  const args = phase === 'prepare'
+    ? [
+        phase,
+        deployment.remoteArchive,
+        deployment.remoteChecksum,
+        deployment.remoteCompose,
+        `quant-platform-backtest-worker:${deployment.releaseName}`,
+        deployment.releaseGitSha,
+        deployment.manifestSha,
+      ]
+    : [phase, deployment.releaseName];
+  const command = [
+    'sudo',
+    '-n',
+    '/bin/bash',
+    shellQuote(deployment.remoteScript),
+    ...args.map(shellQuote),
+  ].join(' ');
+  run('ssh', [...sshArguments(deployment.connection), command]);
 }
 
 function sha256File(file) {
@@ -472,49 +441,44 @@ function main() {
   if (process.platform !== 'linux') {
     throw new DeployError(`통합 배포는 Linux에서만 지원합니다: ${process.platform}`);
   }
-  const requestedTarget = parseArguments(process.argv.slice(2));
   const settings = readDeploySettings();
-  const { target, targets } = resolveTargets(requestedTarget, settings);
-  const connections = new Map(targets.map((selectedTarget) => [
-    selectedTarget,
-    readConnection(selectedTarget, settings),
+  const connections = new Map(DEPLOY_COMPONENTS.map((component) => [
+    component,
+    readConnection(component, settings),
   ]));
 
-  const deploysApp = targets.includes('app');
-  const deploysWorker = targets.includes('worker');
-  let workerSettings = null;
-  if (deploysWorker) {
-    const composeFile = path.join(REPO_ROOT, 'infra', 'docker', 'compose.worker.yaml');
-    const manifestFile = path.join(REPO_ROOT, 'infra', 'worker-host-manifest.json');
-    if (!existsSync(composeFile)) {
-      throw new DeployError(`worker Compose 파일이 없습니다: ${composeFile}`);
-    }
-    if (!existsSync(manifestFile)) {
-      throw new DeployError(`worker manifest 파일이 없습니다: ${manifestFile}`);
-    }
-    workerSettings = {
-      composeFile,
-      manifestSha: sha256File(manifestFile),
-    };
+  const composeFile = path.join(REPO_ROOT, 'infra', 'docker', 'compose.worker.yaml');
+  const manifestFile = path.join(REPO_ROOT, 'infra', 'worker-host-manifest.json');
+  if (!existsSync(composeFile)) {
+    throw new DeployError(`worker Compose 파일이 없습니다: ${composeFile}`);
   }
+  if (!existsSync(manifestFile)) {
+    throw new DeployError(`worker manifest 파일이 없습니다: ${manifestFile}`);
+  }
+  const workerSettings = {
+    composeFile,
+    manifestSha: sha256File(manifestFile),
+  };
 
   const artifactDirectory = mkdtempSync(path.join(tmpdir(), 'quant-deploy-'));
-  let appIsLive = false;
+  let appDeployment = null;
+  let workerDeployment = null;
+  let appAttempted = false;
+  let workerAttempted = false;
+  let transactionCommitted = false;
   try {
     log(`==> 배포 설정: ${DEPLOY_ENV_FILE}`);
-    log(`==> 배포 대상: ${target}`);
+    log('==> 배포 순서: app -> worker');
 
-    for (const selectedTarget of targets) {
-      log(`==> ${selectedTarget} preflight`);
+    for (const component of DEPLOY_COMPONENTS) {
+      log(`==> ${component} preflight`);
       preflight(
-        connections.get(selectedTarget),
-        selectedTarget === 'worker' ? workerSettings.manifestSha : '',
+        connections.get(component),
+        component === 'worker' ? workerSettings.manifestSha : '',
       );
     }
-    if (deploysWorker) {
-      run('docker', ['info'], { quiet: true });
-      run('docker', ['buildx', 'version'], { quiet: true });
-    }
+    run('docker', ['info'], { quiet: true });
+    run('docker', ['buildx', 'version'], { quiet: true });
 
     log('==> 공통 release 검증·생성');
     const releaseMetadataFile = path.join(artifactDirectory, 'release-metadata.json');
@@ -530,55 +494,99 @@ function main() {
       gitSha: releaseGitSha,
     } = readReleaseMetadata(releaseMetadataFile, artifactDirectory);
 
-    let workerImageArchive;
-    let workerImageChecksum;
-    if (deploysWorker) {
-      log('==> worker image 사전 생성');
-      run('bash', [
-        path.join(SCRIPT_DIR, 'build-worker-image.sh'),
-        releaseArchive,
-        releaseChecksum,
-        releaseName,
-        artifactDirectory,
-      ]);
-      workerImageArchive = path.join(artifactDirectory, `quant-backtest-worker-${releaseName}.tar`);
-      workerImageChecksum = `${workerImageArchive}.sha256`;
-      if (!existsSync(workerImageArchive) || !existsSync(workerImageChecksum)) {
-        throw new DeployError('worker image archive 또는 checksum이 생성되지 않았습니다');
-      }
+    log('==> worker image 사전 생성');
+    run('bash', [
+      path.join(SCRIPT_DIR, 'build-worker-image.sh'),
+      releaseArchive,
+      releaseChecksum,
+      releaseName,
+      artifactDirectory,
+    ]);
+    const workerImageArchive = path.join(artifactDirectory, `quant-backtest-worker-${releaseName}.tar`);
+    const workerImageChecksum = `${workerImageArchive}.sha256`;
+    if (!existsSync(workerImageArchive) || !existsSync(workerImageChecksum)) {
+      throw new DeployError('worker image archive 또는 checksum이 생성되지 않았습니다');
     }
 
-    if (deploysApp) {
-      log('==> app 배포');
-      deployApp(
-        connections.get('app'),
-        releaseArchive,
-        releaseChecksum,
-        releaseName,
-      );
-      appIsLive = true;
-    }
+    log('==> app 배포 파일 업로드');
+    appDeployment = stageAppDeployment(
+      connections.get('app'),
+      releaseArchive,
+      releaseChecksum,
+      releaseName,
+    );
+    log('==> worker 배포 파일 업로드');
+    workerDeployment = stageWorkerDeployment(
+      connections.get('worker'),
+      workerImageArchive,
+      workerImageChecksum,
+      workerSettings.composeFile,
+      releaseName,
+      releaseGitSha,
+      workerSettings.manifestSha,
+    );
 
-    if (deploysWorker) {
-      log('==> worker 배포');
-      deployWorker(
-        connections.get('worker'),
-        workerImageArchive,
-        workerImageChecksum,
-        workerSettings.composeFile,
-        releaseName,
-        releaseGitSha,
-        workerSettings.manifestSha,
-      );
-    }
+    log('==> app 준비·readiness');
+    appAttempted = true;
+    runAppPhase(appDeployment, 'prepare');
 
-    log(`==> ${target} 배포 완료: ${releaseName}`);
+    log('==> worker 준비·readiness');
+    workerAttempted = true;
+    runWorkerPhase(workerDeployment, 'prepare');
+
+    log('==> app·worker commit 전 최종 readiness');
+    runAppPhase(appDeployment, 'verify');
+    runWorkerPhase(workerDeployment, 'verify');
+
+    log('==> app·worker 배포 commit');
+    runAppPhase(appDeployment, 'commit');
+    runWorkerPhase(workerDeployment, 'commit');
+    transactionCommitted = true;
+
+    log('==> app·worker 이전 배포 산출물 정리');
+    runAppPhase(appDeployment, 'finalize');
+    runWorkerPhase(workerDeployment, 'finalize');
+
+    log(`==> app, worker 배포 완료: ${releaseName}`);
   } catch (error) {
-    if (appIsLive && deploysWorker) {
-      logError('app 배포는 완료됐지만 worker 배포가 실패했습니다. 같은 commit에서 --target worker로 다시 실행하세요.');
+    if (!transactionCommitted) {
+      const rollbackErrors = [];
+      if (workerAttempted && workerDeployment) {
+        try {
+          logError('==> worker 통합 롤백');
+          runWorkerPhase(workerDeployment, 'rollback');
+        } catch (rollbackError) {
+          rollbackErrors.push(`worker: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
+        }
+      }
+      if (appAttempted && appDeployment) {
+        try {
+          logError('==> app 통합 롤백');
+          runAppPhase(appDeployment, 'rollback');
+        } catch (rollbackError) {
+          rollbackErrors.push(`app: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
+        }
+      }
+      if (rollbackErrors.length > 0) {
+        const originalMessage = error instanceof Error ? error.message : String(error);
+        const exitCode = error instanceof DeployError ? error.exitCode : 1;
+        throw new DeployError(
+          `${originalMessage}\n통합 롤백 실패:\n${rollbackErrors.join('\n')}`,
+          exitCode,
+        );
+      }
     }
     throw error;
   } finally {
+    for (const deployment of [workerDeployment, appDeployment]) {
+      if (!deployment) continue;
+      try {
+        removeRemoteDirectory(deployment.connection, deployment.remoteDirectory);
+      } catch (cleanupError) {
+        const message = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+        logError(`${deployment.connection.component} 원격 임시 디렉터리 정리 실패: ${message}`);
+      }
+    }
     rmSync(artifactDirectory, { recursive: true, force: true });
   }
 }

@@ -64,9 +64,9 @@
 
 - **변경 내용:** deploy-app.sh 는 서비스 재시작(=마이그레이션 적용) 직전에 SQLite 스냅샷을 만들고, health check 실패로 롤백할 때 스냅샷을 함께 복원한다 — 이전 릴리스 코드가 새 스키마(예: 삭제된 컬럼)를 만나 `no such column` 으로 죽는 "명목상 롤백"을 막는다.
 - **운영 규칙:** 현재 제품 단계에서는 파괴적 변경도 한 릴리스에 허용하고 배포 전 스냅샷으로 코드·DB를 함께 롤백한다. 두 스키마를 병행하는 expand-contract는 스키마가 안정되고 디스크 여유가 확보된 뒤 재검토한다 (D-063).
-- **실패 산출물:** 압축 해제·dependency 설치는 `.incomplete-<release>`, DB 백업은 `.pre-deploy-<release>.sqlite.incomplete`에 만든 뒤 완성된 것만 최종 경로로 옮긴다. 새 산출물에는 먼저 `.deploy-in-progress`를 남기고, health check 성공 시 제거하며 rollback 검증 실패 시 `.deploy-failed`로 바꾼다. 서비스 전환 전 일반 오류는 이 배포 시도가 소유한 임시·최종 산출물을 즉시 지운다. 전환 후 실패하면 이전 코드와 DB를 복원하고 readiness까지 통과한 경우에만 실패 release와 snapshot을 지운다. 롤백 검증이 실패하거나 이전 release가 없으면 수동 복구 근거가 사라지지 않도록 둘 다 보존한다.
-- **보존:** 상태 마커가 없는 기존 release와 snapshot을 정상 이력으로 본다. 정상 이력 보존 개수는 코드에 `0`으로 고정하고 release와 snapshot에 동일하게 적용한다. 따라서 health check 성공 뒤 현재 release만 남기고 과거 정상 release와 정상 snapshot을 모두 지운다. `in-progress`/`failed` 예외는 보존 개수에서 제외하므로 롤백 실패 증거가 정상 이력에 밀려 삭제되지 않는다. backup.sh의 정리 규칙은 `backup-*` 디렉터리만 훑으므로 deploy-app.sh가 직접 회전시킨다.
-- **동시성:** checksum 검증부터 보존 회전까지 `/run/lock/quant-platform-deploy.lock`의 non-blocking `flock`을 보유한다. 다른 배포가 잡고 있으면 기다리지 않고 종료 코드 75로 실패한다. 업로드 임시파일은 배포 시도마다 고유 이름을 사용하므로 lock 획득 전의 scp도 서로 덮어쓰지 않는다. lock 파일은 삭제하지 않으며 프로세스 종료·오류·SIGKILL 시 커널이 descriptor를 닫아 자동 해제한다.
+- **실패 산출물:** 압축 해제·dependency 설치는 `.incomplete-<release>`, DB 백업은 `.pre-deploy-<release>.sqlite.incomplete`에 만든 뒤 완성된 것만 최종 경로로 옮긴다. 새 산출물에는 먼저 `.deploy-in-progress`를 남기고, app과 worker의 최종 readiness가 모두 성공할 때 제거하며 rollback 검증 실패 시 `.deploy-failed`로 바꾼다. 서비스 전환 전 일반 오류는 이 배포 시도가 소유한 임시·최종 산출물을 즉시 지운다. 전환 후 실패하면 이전 코드와 DB를 복원하고 readiness까지 통과한 경우에만 실패 release와 snapshot을 지운다. 롤백 검증이 실패하면 수동 복구 근거가 사라지지 않도록 둘 다 보존한다.
+- **보존:** 상태 마커가 없는 기존 release와 snapshot을 정상 이력으로 본다. 정상 이력 보존 개수는 코드에 `0`으로 고정하고 release와 snapshot에 동일하게 적용한다. 따라서 통합 배포 성공 확정 뒤 현재 release만 남기고 과거 정상 release와 정상 snapshot을 모두 지운다. `in-progress`/`failed` 예외는 보존 개수에서 제외하므로 롤백 실패 증거가 정상 이력에 밀려 삭제되지 않는다. backup.sh의 정리 규칙은 `backup-*` 디렉터리만 훑으므로 deploy-app.sh가 직접 회전시킨다.
+- **동시성:** prepare·verify·finalize·rollback 각 단계는 `/run/lock/quant-platform-deploy.lock`의 non-blocking `flock`을 보유한다. 단계 사이에는 root 전용 transaction 상태 파일이 다른 배포의 prepare를 막는다. 다른 실행과 겹치면 기다리지 않고 종료 코드 75로 실패한다. 업로드 임시파일은 배포 시도마다 고유 이름을 사용하므로 lock 획득 전의 scp도 서로 덮어쓰지 않는다. lock 파일은 삭제하지 않으며 프로세스 종료·오류·SIGKILL 시 커널이 descriptor를 닫아 자동 해제한다.
 - **영향:** 스냅샷~롤백 사이의 쓰기는 유실된다. 보존 개수 `0`이므로 배포 스크립트가 실행되는 동안의 자동 롤백만 보장하고, 성공 종료 뒤 정상 산출물을 이용한 수동 롤백은 지원하지 않는다. 롤백 검증 실패로 보존된 failed 산출물은 자동 회전 대상이 아니므로 원인을 확인한 뒤 수동으로 정리해야 한다.
 
 ## D-011: 감사 로그 보존 기간은 정책이므로 설정으로 노출한다
@@ -1394,40 +1394,42 @@
 
 ## D-062: 배포는 Linux 단일 진입점에서 app과 worker를 같은 release로 조정한다
 
-- **공식 진입점:** 프로젝트 루트의 고정 `deploy.env`를 읽는 `pnpm run deploy`와 명시적
-  `--target app|worker|all`만 일반 배포 경로로 둔다. 무인자 실행은 `QP_WORKER_HOST`가
-  있으면 `all`, 없으면 `app`으로 해석한다. 명시적 `all`은 양쪽 호스트가 필수다.
+- **공식 진입점:** 프로젝트 루트의 고정 `deploy.env`를 읽는, 인자 없는 `pnpm run deploy`만
+  일반 배포 경로로 둔다. `QP_APP_HOST`와 `QP_WORKER_HOST`는 모두 필수이며 app, worker를
+  항상 같은 release로 순차 배포한다.
   `deploy-app.sh`와 `deploy-worker.sh`는 `deploy.mjs`가 노드에서 호출하는 내부 transaction이다.
-- **대상 이름:** 운영 서비스는 `app`, 계산 서비스는 `worker`로 고정한다. 프로젝트 CLI는
-  component 선택이므로 `--target`을 사용한다.
+- **대상 이름:** 운영 서비스는 `app`, 계산 서비스는 `worker`로 고정한다. 프로젝트 CLI에는
+  component 선택 인자를 제공하지 않는다.
 - **동일성:** 검증 gate와 공통 archive 생성은 배포 전체에서 한 번만 실행한다. worker
   image는 그 archive를 입력으로 만들며 두 node-local transaction에는 생성된 archive와
   checksum을 전달한다.
-  `all`은 두 preflight를 먼저 통과한 뒤 app, worker 순서로 적용한다. worker가 선택되면
-  같은 Git SHA도 항상 재배포하고 SHA는 app/worker 호환성 검증에만 사용한다.
+  매 배포는 두 preflight를 먼저 통과한 뒤 app, worker 순서로 적용한다. worker는 같은 Git
+  SHA도 항상 재배포하고 SHA는 app/worker 호환성 검증에만 사용한다.
 - **설정 경계:** `deploy.env`는 Git에서 제외하고 app/worker별 호스트·사용자·키·포트·점프
   호스트와 SSH 옵션만 둔다. 다른 설정 파일을 고르는 인자는 제공하지 않는다. SSH config는
   선택 사항이며 Host alias를 쓸 수 있다. runtime 비밀값은 원격 root 전용
   `app.env`·`worker.env`에만 둔다.
-- **부분 실패:** worker 전환 자체는 이전 image로 rollback한다. 이미 readiness를 통과한
-  app까지 worker 실패만으로 되돌리면 그 사이 운영 DB 쓰기를 잃을 수 있으므로 app은 새
-  release로 유지하고 같은 commit에서 `--target worker` 재시도를 요구한다. SHA가 다른
-  구 worker는 claim이 거부된다.
+- **통합 실패:** app과 worker는 이전 상태를 지우지 않은 채 prepare와 readiness를 수행한다.
+  두 최종 readiness가 모두 성공하기 전 어느 한쪽이라도 실패하면 worker, app 역순으로
+  Compose/image와 release/DB snapshot을 함께 롤백한다. app 전환 뒤 들어온 DB 쓰기는 snapshot
+  복원으로 유실될 수 있지만, 두 component가 서로 다른 release로 남는 것보다 통합 원자성을
+  우선한다. rollback 검증 실패 시 복구 증거는 보존한다.
 
-## D-063: 수동 배포의 전송·대상 선택은 deploy.mjs, 전환은 노드 로컬 transaction이 맡는다
+## D-063: 수동 배포의 전송·통합 조정은 deploy.mjs, 전환은 노드 로컬 transaction이 맡는다
 
 - **역할:** 배포 trigger는 계속 사람이 실행하는 pnpm 명령이다. `deploy.mjs`가 로컬 OpenSSH의
   `ssh`·`scp`를 직접 호출하며 별도 배포 framework나 원격 agent, schedule, CI 자동 배포를
   추가하지 않는다.
-- **트랜잭션 경계:** `deploy.mjs`는 시도별 원격 임시 디렉터리에 검증 대상을 올리고 노드 로컬
-  스크립트를 실행한 뒤 임시 디렉터리를 항상 지운다. 각 스크립트가 non-blocking `flock`, 전환,
-  readiness, rollback, 산출물 정리를 한 잠금 범위에서 수행한다.
+- **트랜잭션 경계:** `deploy.mjs`는 시도별 원격 임시 디렉터리에 검증 대상을 올리고 각 노드의
+  prepare → verify → commit → finalize 단계를 조정한다. prepare는 rollback 상태를 디스크에
+  남기고, 양쪽 commit 완료 전 실패는 worker → app 순서로 보상 rollback한다. commit은 rollback
+  자료를 지우지 않으며 양쪽 commit이 확인된 뒤 finalize만 이전 산출물을 정리한다. 각 단계는
+  non-blocking `flock`을 잡고 단계 사이에는 미완료 transaction 상태가 다른 배포의 진입을 막는다.
 - **산출물 수명:** 정상 성공 후 app은 현재 release만, worker는 현재 image만 남긴다. 검증된
   rollback 뒤에는 이전 정상 산출물만 남긴다. rollback 검증 실패 때만 이전·신규 산출물을
   모두 보존해 수동 복구 근거가 사라지지 않게 한다.
 - **동시성·자원:** app과 worker preflight 및 적용은 항상 순차 처리한다. 원격 상주 control
-  process는 없으며 노드별 lock이 별도 실행까지 막으므로 CLI 중복 실행도 같은 target에서
-  즉시 실패한다.
+  process는 없으며 노드별 lock과 미완료 transaction 상태가 CLI 중복 실행을 즉시 실패시킨다.
 - **마이그레이션:** 제품과 schema가 아직 빠르게 바뀌고 디스크가 작으므로 expand-contract를
   의무화하지 않는다. 현재는 파괴적 migration도 허용하고 app snapshot으로 코드·DB를 함께
   rollback한다. 이 패턴은 schema 안정화와 디스크 여유 확보 뒤 재검토한다.

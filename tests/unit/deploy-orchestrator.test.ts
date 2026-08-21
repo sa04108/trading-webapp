@@ -111,11 +111,17 @@ if (command.includes('/etc/quant-platform/app.env')) {
 } else if (command.includes('mktemp -d /tmp/quant-worker-deploy.')) {
   event = 'ssh:worker:mktemp';
 } else if (command.includes('/deploy-app.sh')) {
-  event = 'ssh:app:apply';
+  for (const phase of ['prepare', 'verify', 'commit', 'finalize', 'rollback']) {
+    if (command.includes("'" + phase + "'")) event = 'ssh:app:' + phase;
+  }
+  if (!event) process.exit(99);
 } else if (command.includes('/deploy-worker.sh')) {
-  event = 'ssh:worker:apply';
+  for (const phase of ['prepare', 'verify', 'commit', 'finalize', 'rollback']) {
+    if (command.includes("'" + phase + "'")) event = 'ssh:worker:' + phase;
+  }
+  if (!event) process.exit(99);
   if (!command.includes('sudo -n /bin/bash')) process.exit(94);
-  if (!command.includes(process.env.RELEASE_GIT_SHA)) process.exit(98);
+  if (event === 'ssh:worker:prepare' && !command.includes(process.env.RELEASE_GIT_SHA)) process.exit(98);
 } else if (command.includes('/bin/rm -rf --')) {
   event = 'ssh:' + component + ':cleanup';
 } else {
@@ -125,7 +131,8 @@ if (command.includes('/etc/quant-platform/app.env')) {
 fs.appendFileSync(process.env.COMMAND_LOG, event + '\\n');
 if (event === 'ssh:app:mktemp') process.stdout.write('/tmp/quant-app-deploy.fakeapp\\n');
 if (event === 'ssh:worker:mktemp') process.stdout.write('/tmp/quant-worker-deploy.fakeworker\\n');
-if (event === process.env.FAIL_EVENT) process.exit(42);
+const failEvents = (process.env.FAIL_EVENTS ?? '').split(',').filter(Boolean);
+if (failEvents.includes(event)) process.exit(42);
 `);
   writeExecutable(path.join(bin, 'scp'), `${nodeShebang}
 const fs = require('node:fs');
@@ -202,12 +209,9 @@ fs.appendFileSync(process.env.COMMAND_LOG, 'docker:' + process.argv.slice(2).joi
 
 function execute(
   harness: ReturnType<typeof prepareHarness>,
-  target?: string,
   environmentOverrides: Record<string, string> = {},
 ) {
-  const args = [path.join(harness.root, 'scripts', 'deploy.mjs')];
-  if (target !== undefined) args.push('--target', target);
-  return spawnSync(process.execPath, args, {
+  return spawnSync(process.execPath, [path.join(harness.root, 'scripts', 'deploy.mjs')], {
     cwd: harness.root,
     encoding: 'utf8',
     env: { ...harness.environment, ...environmentOverrides },
@@ -220,7 +224,7 @@ function readCommands(harness: ReturnType<typeof prepareHarness>) {
 }
 
 describe('direct SSH deployment orchestrator', () => {
-  it('defaults to app and worker when deploy.env configures both targets', () => {
+  it('deploys app and worker together with the only supported command', () => {
     const harness = prepareHarness(['app', 'worker']);
     const result = execute(harness);
     const output = `${result.stdout}${result.stderr}`;
@@ -234,97 +238,94 @@ describe('direct SSH deployment orchestrator', () => {
       'build-worker-image:20260818-120000-abcdef1',
       'ssh:app:mktemp',
       'scp:app:quant-platform-20260818-120000-abcdef1.tar.gz,quant-platform-20260818-120000-abcdef1.tar.gz.sha256,deploy-app.sh',
-      'ssh:app:apply',
-      'ssh:app:cleanup',
       'ssh:worker:mktemp',
       'scp:worker:quant-backtest-worker-20260818-120000-abcdef1.tar,quant-backtest-worker-20260818-120000-abcdef1.tar.sha256,compose.worker.yaml,deploy-worker.sh',
-      'ssh:worker:apply',
+      'ssh:app:prepare',
+      'ssh:worker:prepare',
+      'ssh:app:verify',
+      'ssh:worker:verify',
+      'ssh:app:commit',
+      'ssh:worker:commit',
+      'ssh:app:finalize',
+      'ssh:worker:finalize',
       'ssh:worker:cleanup',
-    ]);
-    expect(output).toContain('배포 대상: all');
-  });
-
-  it('defaults to app only when QP_WORKER_HOST is absent', () => {
-    const harness = prepareHarness(['app']);
-    const result = execute(harness);
-    const output = `${result.stdout}${result.stderr}`;
-    expect(result.status, output).toBe(0);
-    expect(readCommands(harness)).toEqual([
-      'ssh:app:preflight',
-      'build-release',
-      'ssh:app:mktemp',
-      'scp:app:quant-platform-20260818-120000-abcdef1.tar.gz,quant-platform-20260818-120000-abcdef1.tar.gz.sha256,deploy-app.sh',
-      'ssh:app:apply',
       'ssh:app:cleanup',
     ]);
-    expect(output).toContain('배포 대상: app');
+    expect(output).toContain('배포 순서: app -> worker');
   });
 
-  it('requires only worker configuration for an explicit worker target', () => {
-    const harness = prepareHarness(['worker']);
-    const result = execute(harness, 'worker');
-    const output = `${result.stdout}${result.stderr}`;
-    expect(result.status, output).toBe(0);
-    expect(readCommands(harness)).toEqual([
-      'ssh:worker:preflight',
-      'docker:info',
-      'docker:buildx version',
-      'build-release',
-      'build-worker-image:20260818-120000-abcdef1',
-      'ssh:worker:mktemp',
-      'scp:worker:quant-backtest-worker-20260818-120000-abcdef1.tar,quant-backtest-worker-20260818-120000-abcdef1.tar.sha256,compose.worker.yaml,deploy-worker.sh',
-      'ssh:worker:apply',
-      'ssh:worker:cleanup',
-    ]);
+  it('requires both app and worker hosts', () => {
+    for (const [configuredTargets, missingHost] of [
+      [['app'] as DeployTarget[], 'QP_WORKER_HOST'],
+      [['worker'] as DeployTarget[], 'QP_APP_HOST'],
+    ] as const) {
+      const harness = prepareHarness(configuredTargets);
+      const result = execute(harness);
+      const output = `${result.stdout}${result.stderr}`;
+      expect(result.status).not.toBe(0);
+      expect(output).toContain(`deploy.env의 ${missingHost}가 필요합니다`);
+      expect(readCommands(harness)).toEqual([]);
+    }
   });
 
-  it('requires both target hosts when all is explicit', () => {
-    const harness = prepareHarness(['app']);
-    const result = execute(harness, 'all');
-    const output = `${result.stdout}${result.stderr}`;
-    expect(result.status).not.toBe(0);
-    expect(output).toContain('deploy.env의 QP_WORKER_HOST가 필요합니다');
-    expect(readCommands(harness)).toEqual([]);
-  });
-
-  it('rejects --env-file and unknown target names before running commands', () => {
-    const harness = prepareHarness(['app']);
-    const envFileResult = spawnSync(process.execPath, [
-      path.join(harness.root, 'scripts', 'deploy.mjs'),
-      `--env-file=${path.join(harness.root, 'deploy.env')}`,
-    ], {
-      cwd: harness.root,
-      encoding: 'utf8',
-      env: harness.environment,
-    });
-    expect(envFileResult.status).not.toBe(0);
-    expect(`${envFileResult.stdout}${envFileResult.stderr}`).toContain('알 수 없는 배포 인자');
-
-    const targetResult = execute(harness, 'server');
-    expect(targetResult.status).not.toBe(0);
-    expect(`${targetResult.stdout}${targetResult.stderr}`).toContain(
-      '--target은 app | worker | all 중 하나여야 합니다',
-    );
-    expect(readCommands(harness)).toEqual([]);
-  });
-
-  it('always removes the remote upload directory and reports a partial all deployment', () => {
+  it('rolls app back without touching worker when app preparation fails', () => {
     const harness = prepareHarness(['app', 'worker']);
-    const result = execute(harness, undefined, { FAIL_EVENT: 'ssh:worker:apply' });
+    const result = execute(harness, { FAIL_EVENTS: 'ssh:app:prepare' });
+    expect(result.status).toBe(42);
+    expect(readCommands(harness)).toContain('ssh:app:rollback');
+    expect(readCommands(harness)).not.toContain('ssh:worker:prepare');
+    expect(readCommands(harness)).not.toContain('ssh:worker:rollback');
+  });
+
+  it('rolls worker and app back when worker preparation fails', () => {
+    const harness = prepareHarness(['app', 'worker']);
+    const result = execute(harness, { FAIL_EVENTS: 'ssh:worker:prepare' });
     const output = `${result.stdout}${result.stderr}`;
     expect(result.status).toBe(42);
-    expect(readCommands(harness).slice(-2)).toEqual([
-      'ssh:worker:apply',
+    expect(readCommands(harness).slice(-5)).toEqual([
+      'ssh:worker:prepare',
+      'ssh:worker:rollback',
+      'ssh:app:rollback',
       'ssh:worker:cleanup',
+      'ssh:app:cleanup',
     ]);
-    expect(output).toContain(
-      'app 배포는 완료됐지만 worker 배포가 실패했습니다. 같은 commit에서 --target worker로 다시 실행하세요.',
-    );
+    expect(output).toContain('worker 통합 롤백');
+    expect(output).toContain('app 통합 롤백');
+  });
+
+  it('rolls both prepared components back when final readiness fails', () => {
+    const harness = prepareHarness(['app', 'worker']);
+    const result = execute(harness, { FAIL_EVENTS: 'ssh:worker:verify' });
+    expect(result.status).toBe(42);
+    expect(readCommands(harness)).toContain('ssh:worker:rollback');
+    expect(readCommands(harness)).toContain('ssh:app:rollback');
+    expect(readCommands(harness)).not.toContain('ssh:app:finalize');
+  });
+
+  it('rolls both components back when either commit fails', () => {
+    const harness = prepareHarness(['app', 'worker']);
+    const result = execute(harness, { FAIL_EVENTS: 'ssh:worker:commit' });
+    expect(result.status).toBe(42);
+    expect(readCommands(harness)).toContain('ssh:app:commit');
+    expect(readCommands(harness)).toContain('ssh:worker:rollback');
+    expect(readCommands(harness)).toContain('ssh:app:rollback');
+    expect(readCommands(harness)).not.toContain('ssh:app:finalize');
+  });
+
+  it('reports rollback failure together with the deployment failure', () => {
+    const harness = prepareHarness(['app', 'worker']);
+    const result = execute(harness, {
+      FAIL_EVENTS: 'ssh:worker:prepare,ssh:app:rollback',
+    });
+    const output = `${result.stdout}${result.stderr}`;
+    expect(result.status).toBe(42);
+    expect(output).toContain('통합 롤백 실패');
+    expect(output).toContain('app: ssh가 종료 코드 42로 실패했습니다');
   });
 
   it('rejects invalid builder metadata before uploading artifacts', () => {
-    const harness = prepareHarness(['app']);
-    const result = execute(harness, undefined, {
+    const harness = prepareHarness(['app', 'worker']);
+    const result = execute(harness, {
       RELEASE_METADATA: JSON.stringify({
         releaseName: '../outside',
         gitSha: releaseGitSha,
@@ -335,12 +336,15 @@ describe('direct SSH deployment orchestrator', () => {
     expect(output).toContain('release metadata의 releaseName이 올바르지 않습니다');
     expect(readCommands(harness)).toEqual([
       'ssh:app:preflight',
+      'ssh:worker:preflight',
+      'docker:info',
+      'docker:buildx version',
       'build-release',
     ]);
   });
 
   it('requires the fixed project-root deploy.env', () => {
-    const harness = prepareHarness(['app']);
+    const harness = prepareHarness(['app', 'worker']);
     fs.rmSync(path.join(harness.root, 'deploy.env'));
     const result = execute(harness);
     const output = `${result.stdout}${result.stderr}`;
