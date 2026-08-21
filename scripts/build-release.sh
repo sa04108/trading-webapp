@@ -32,6 +32,7 @@ verify_release_checksum() {
 
 read_release_metadata() {
   local archive="$1"
+  local metadata
   local scratch
   scratch="$(mktemp)"
   if ! tar -xOzf "${archive}" dist/build-info.json > "${scratch}"; then
@@ -39,13 +40,18 @@ read_release_metadata() {
     echo "release archive에 dist/build-info.json이 없습니다" >&2
     return 1
   fi
-  if ! RELEASE_GIT_SHA="$(node -e "const p=JSON.parse(require('node:fs').readFileSync(process.argv[1],'utf8')); process.stdout.write(String(p.gitSha??''))" "${scratch}")" \
-    || ! RELEASE_BUILT_AT="$(node -e "const p=JSON.parse(require('node:fs').readFileSync(process.argv[1],'utf8')); process.stdout.write(String(p.builtAt??''))" "${scratch}")"; then
+  if ! metadata="$(node -e "const p=JSON.parse(require('node:fs').readFileSync(process.argv[1],'utf8')); process.stdout.write(String(p.gitSha??'')+'\\n'+String(p.builtAt??''))" "${scratch}")"; then
     rm -f "${scratch}"
     echo "release build-info.json을 읽을 수 없습니다" >&2
     return 1
   fi
   rm -f "${scratch}"
+  if [[ "${metadata}" != *$'\n'* ]]; then
+    echo "release build-info.json에 gitSha와 builtAt이 모두 필요합니다" >&2
+    return 1
+  fi
+  RELEASE_GIT_SHA="${metadata%%$'\n'*}"
+  RELEASE_BUILT_AT="${metadata#*$'\n'}"
   case "${RELEASE_GIT_SHA}" in
     *[!a-f0-9]*|'') echo "build-info.json의 gitSha가 올바르지 않습니다" >&2; return 1 ;;
   esac
@@ -61,15 +67,25 @@ read_release_metadata() {
 
 build_release() {
   local output_dir="${1:-${REPO_ROOT}}"
+  local metadata_file="${2:-}"
   local release
+  local release_archive
+  local release_checksum
+  local verified_git_sha
   require_clean_worktree
   mkdir -p "${output_dir}"
   output_dir="$(cd "${output_dir}" && pwd)"
   RELEASE_GIT_SHA="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
-  release="$(date -u +%Y%m%d-%H%M%S)-$(git -C "${REPO_ROOT}" rev-parse --short HEAD)"
-  RELEASE_NAME="${release}"
-  RELEASE_ARCHIVE="${output_dir}/quant-platform-${release}.tar.gz"
-  RELEASE_CHECKSUM="${RELEASE_ARCHIVE}.sha256"
+  case "${RELEASE_GIT_SHA}" in
+    ''|*[!a-f0-9]*) echo "배포 Git SHA가 올바르지 않습니다" >&2; return 1 ;;
+  esac
+  [ "${#RELEASE_GIT_SHA}" -eq 40 ] || [ "${#RELEASE_GIT_SHA}" -eq 64 ] || {
+    echo "배포 Git SHA 길이가 올바르지 않습니다" >&2
+    return 1
+  }
+  release="$(date -u +%Y%m%d-%H%M%S)-${RELEASE_GIT_SHA:0:7}"
+  release_archive="${output_dir}/quant-platform-${release}.tar.gz"
+  release_checksum="${release_archive}.sha256"
 
   echo "==> 검증 게이트"
   (
@@ -81,21 +97,33 @@ build_release() {
     pnpm build
   )
   require_clean_worktree
+  verified_git_sha="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
+  [ "${verified_git_sha}" = "${RELEASE_GIT_SHA}" ] || {
+    echo "검증 중 HEAD가 바뀌어 릴리스를 만들 수 없습니다" >&2
+    return 1
+  }
 
   RELEASE_BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   printf '{"gitSha":"%s","builtAt":"%s"}\n' \
     "${RELEASE_GIT_SHA}" "${RELEASE_BUILT_AT}" > "${REPO_ROOT}/dist/build-info.json"
 
-  echo "==> 공통 release archive 생성: ${RELEASE_ARCHIVE}"
-  tar -C "${REPO_ROOT}" -czf "${RELEASE_ARCHIVE}" \
+  echo "==> 공통 release archive 생성: ${release_archive}"
+  tar -C "${REPO_ROOT}" -czf "${release_archive}" \
     dist migrations package.json pnpm-lock.yaml pnpm-workspace.yaml
-  printf '%s  %s\n' "$(sha256sum "${RELEASE_ARCHIVE}" | awk '{ print $1 }')" \
-    "$(basename "${RELEASE_ARCHIVE}")" > "${RELEASE_CHECKSUM}"
+  printf '%s  %s\n' "$(sha256sum "${release_archive}" | awk '{ print $1 }')" \
+    "$(basename "${release_archive}")" > "${release_checksum}"
+  if [ -n "${metadata_file}" ]; then
+    printf '{"releaseName":"%s","gitSha":"%s"}\n' \
+      "${release}" "${RELEASE_GIT_SHA}" > "${metadata_file}"
+  fi
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  [ "$#" -le 2 ] || {
+    echo "사용법: $0 [output-dir] [metadata-file]" >&2
+    exit 64
+  }
   output_dir="${1:-${REPO_ROOT}}"
-  build_release "${output_dir}"
-  printf 'RELEASE_NAME=%q\nRELEASE_GIT_SHA=%q\nRELEASE_ARCHIVE=%q\nRELEASE_CHECKSUM=%q\n' \
-    "${RELEASE_NAME}" "${RELEASE_GIT_SHA}" "${RELEASE_ARCHIVE}" "${RELEASE_CHECKSUM}"
+  metadata_file="${2:-}"
+  build_release "${output_dir}" "${metadata_file}"
 fi

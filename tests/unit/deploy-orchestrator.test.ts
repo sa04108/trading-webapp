@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 type DeployTarget = 'app' | 'worker';
 
 const roots: string[] = [];
-const deployGitSha = 'a'.repeat(40);
+const releaseGitSha = 'a'.repeat(40);
 
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
@@ -115,6 +115,7 @@ if (command.includes('/etc/quant-platform/app.env')) {
 } else if (command.includes('/deploy-worker.sh')) {
   event = 'ssh:worker:apply';
   if (!command.includes('sudo -n /bin/bash')) process.exit(94);
+  if (!command.includes(process.env.RELEASE_GIT_SHA)) process.exit(98);
 } else if (command.includes('/bin/rm -rf --')) {
   event = 'ssh:' + component + ':cleanup';
 } else {
@@ -164,9 +165,14 @@ const args = process.argv.slice(2);
 const script = path.basename(args[0]);
 if (script === 'build-release.sh') {
   const output = args[1];
+  const metadataFile = args[2];
   fs.mkdirSync(output, { recursive: true });
   fs.writeFileSync(path.join(output, 'quant-platform-20260818-120000-abcdef1.tar.gz'), 'release');
   fs.writeFileSync(path.join(output, 'quant-platform-20260818-120000-abcdef1.tar.gz.sha256'), 'checksum');
+  fs.writeFileSync(metadataFile, process.env.RELEASE_METADATA ?? JSON.stringify({
+    releaseName: '20260818-120000-abcdef1',
+    gitSha: process.env.RELEASE_GIT_SHA,
+  }));
   fs.appendFileSync(process.env.COMMAND_LOG, 'build-release\\n');
 } else if (script === 'build-worker-image.sh') {
   const releaseName = args[3];
@@ -182,19 +188,13 @@ if (script === 'build-release.sh') {
 const fs = require('node:fs');
 fs.appendFileSync(process.env.COMMAND_LOG, 'docker:' + process.argv.slice(2).join(' ') + '\\n');
 `);
-  writeExecutable(path.join(bin, 'git'), `${nodeShebang}
-const fs = require('node:fs');
-fs.appendFileSync(process.env.COMMAND_LOG, 'git:' + process.argv.slice(2).join(' ') + '\\n');
-process.stdout.write(process.env.DEPLOY_GIT_SHA + '\\n');
-`);
-
   const environment = {
     ...process.env,
     PATH: `${bin}:${process.env.PATH}`,
     APP_KEY: appKey,
     WORKER_KEY: workerKey,
     COMMAND_LOG: commandLog,
-    DEPLOY_GIT_SHA: deployGitSha,
+    RELEASE_GIT_SHA: releaseGitSha,
     MANIFEST_SHA: createHash('sha256').update(manifest).digest('hex'),
   };
   return { commandLog, environment, root };
@@ -231,7 +231,6 @@ describe('direct SSH deployment orchestrator', () => {
       'docker:info',
       'docker:buildx version',
       'build-release',
-      'git:rev-parse HEAD',
       'build-worker-image:20260818-120000-abcdef1',
       'ssh:app:mktemp',
       'scp:app:quant-platform-20260818-120000-abcdef1.tar.gz,quant-platform-20260818-120000-abcdef1.tar.gz.sha256,deploy-app.sh',
@@ -253,7 +252,6 @@ describe('direct SSH deployment orchestrator', () => {
     expect(readCommands(harness)).toEqual([
       'ssh:app:preflight',
       'build-release',
-      'git:rev-parse HEAD',
       'ssh:app:mktemp',
       'scp:app:quant-platform-20260818-120000-abcdef1.tar.gz,quant-platform-20260818-120000-abcdef1.tar.gz.sha256,deploy-app.sh',
       'ssh:app:apply',
@@ -272,7 +270,6 @@ describe('direct SSH deployment orchestrator', () => {
       'docker:info',
       'docker:buildx version',
       'build-release',
-      'git:rev-parse HEAD',
       'build-worker-image:20260818-120000-abcdef1',
       'ssh:worker:mktemp',
       'scp:worker:quant-backtest-worker-20260818-120000-abcdef1.tar,quant-backtest-worker-20260818-120000-abcdef1.tar.sha256,compose.worker.yaml,deploy-worker.sh',
@@ -323,6 +320,23 @@ describe('direct SSH deployment orchestrator', () => {
     expect(output).toContain(
       'app 배포는 완료됐지만 worker 배포가 실패했습니다. 같은 commit에서 --target worker로 다시 실행하세요.',
     );
+  });
+
+  it('rejects invalid builder metadata before uploading artifacts', () => {
+    const harness = prepareHarness(['app']);
+    const result = execute(harness, undefined, {
+      RELEASE_METADATA: JSON.stringify({
+        releaseName: '../outside',
+        gitSha: releaseGitSha,
+      }),
+    });
+    const output = `${result.stdout}${result.stderr}`;
+    expect(result.status).not.toBe(0);
+    expect(output).toContain('release metadata의 releaseName이 올바르지 않습니다');
+    expect(readCommands(harness)).toEqual([
+      'ssh:app:preflight',
+      'build-release',
+    ]);
   });
 
   it('requires the fixed project-root deploy.env', () => {

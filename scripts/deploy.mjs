@@ -8,7 +8,6 @@ import {
   existsSync,
   mkdtempSync,
   readFileSync,
-  readdirSync,
   rmSync,
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -53,17 +52,6 @@ class DeployError extends Error {
   constructor(message, exitCode = 1) {
     super(message);
     this.exitCode = exitCode;
-  }
-}
-
-function rejectNodeEnvFileArguments() {
-  const argument = process.execArgv.find((value) =>
-    value === '--env-file' ||
-    value.startsWith('--env-file=') ||
-    value === '--env-file-if-exists' ||
-    value.startsWith('--env-file-if-exists='));
-  if (argument) {
-    throw new DeployError(`--env-file은 지원하지 않습니다. 프로젝트 루트의 deploy.env를 사용하세요: ${argument}`);
   }
 }
 
@@ -266,10 +254,10 @@ function commandFailure(command, result) {
     (stderr ? `\n${stderr}` : '');
 }
 
-function run(command, args, environment = process.env, options = {}) {
+function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: REPO_ROOT,
-    env: environment,
+    env: process.env,
     stdio: options.quiet ? ['ignore', 'ignore', 'inherit'] : 'inherit',
   });
   if (result.error) throw new DeployError(`${command} 실행 실패: ${result.error.message}`);
@@ -278,10 +266,10 @@ function run(command, args, environment = process.env, options = {}) {
   }
 }
 
-function capture(command, args, environment = process.env) {
+function capture(command, args) {
   const result = spawnSync(command, args, {
     cwd: REPO_ROOT,
-    env: environment,
+    env: process.env,
     encoding: 'utf8',
   });
   if (result.error) throw new DeployError(`${command} 실행 실패: ${result.error.message}`);
@@ -311,7 +299,7 @@ function runRemoteBash(connection, script, args = [], options = {}) {
     'deploy-remote',
     ...args.map(shellQuote),
   ].join(' ');
-  run('ssh', [...sshArguments(connection, options), remoteCommand], process.env, options);
+  run('ssh', [...sshArguments(connection, options), remoteCommand], options);
 }
 
 function preflight(connection, workerManifestSha) {
@@ -353,16 +341,15 @@ function removeRemoteDirectory(connection, remoteDirectory) {
   run('ssh', [
     ...sshArguments(connection),
     `/bin/rm -rf -- ${shellQuote(remoteDirectory)}`,
-  ], process.env, { quiet: true });
+  ], { quiet: true });
 }
 
 function withRemoteDirectory(connection, action) {
   let remoteDirectory = '';
   let actionError = null;
-  let actionResult;
   try {
     remoteDirectory = createRemoteDirectory(connection);
-    actionResult = action(remoteDirectory);
+    action(remoteDirectory);
   } catch (error) {
     actionError = error;
   }
@@ -384,7 +371,6 @@ function withRemoteDirectory(connection, action) {
     throw actionError;
   }
   if (cleanupError) throw cleanupError;
-  return actionResult;
 }
 
 function upload(connection, files, remoteDirectory) {
@@ -395,7 +381,7 @@ function upload(connection, files, remoteDirectory) {
   ]);
 }
 
-function deployApp(connection, releaseArchive, releaseChecksum, releaseName, onLive) {
+function deployApp(connection, releaseArchive, releaseChecksum, releaseName) {
   withRemoteDirectory(connection, (remoteDirectory) => {
     upload(connection, [
       releaseArchive,
@@ -413,7 +399,6 @@ function deployApp(connection, releaseArchive, releaseChecksum, releaseName, onL
       shellQuote(releaseName),
     ].join(' ');
     run('ssh', [...sshArguments(connection), command]);
-    onLive();
   });
 }
 
@@ -423,7 +408,7 @@ function deployWorker(
   imageChecksum,
   composeFile,
   releaseName,
-  deployGitSha,
+  releaseGitSha,
   manifestSha,
 ) {
   withRemoteDirectory(connection, (remoteDirectory) => {
@@ -446,30 +431,47 @@ function deployWorker(
       shellQuote(remoteChecksum),
       shellQuote(remoteCompose),
       shellQuote(`quant-platform-backtest-worker:${releaseName}`),
-      shellQuote(deployGitSha),
+      shellQuote(releaseGitSha),
       shellQuote(manifestSha),
     ].join(' ');
     run('ssh', [...sshArguments(connection), command]);
   });
 }
 
-function onlyFile(directory, matcher, description) {
-  const files = readdirSync(directory).filter((file) => matcher.test(file));
-  if (files.length !== 1) {
-    throw new DeployError(`${description}를 하나만 찾을 수 있어야 합니다: ${directory}`);
-  }
-  return path.join(directory, files[0]);
-}
-
 function sha256File(file) {
   return createHash('sha256').update(readFileSync(file)).digest('hex');
+}
+
+function readReleaseMetadata(metadataFile, artifactDirectory) {
+  let metadata;
+  try {
+    metadata = JSON.parse(readFileSync(metadataFile, 'utf8'));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DeployError(`release metadata를 읽을 수 없습니다: ${message}`);
+  }
+  if (metadata === null || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    throw new DeployError('release metadata 형식이 올바르지 않습니다');
+  }
+  const { releaseName, gitSha } = metadata;
+  if (typeof releaseName !== 'string' || !/^\d{8}-\d{6}-[a-f0-9]{7}$/.test(releaseName)) {
+    throw new DeployError('release metadata의 releaseName이 올바르지 않습니다');
+  }
+  if (typeof gitSha !== 'string' || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(gitSha)) {
+    throw new DeployError('release metadata의 gitSha가 올바르지 않습니다');
+  }
+  const releaseArchive = path.join(artifactDirectory, `quant-platform-${releaseName}.tar.gz`);
+  const releaseChecksum = `${releaseArchive}.sha256`;
+  if (!existsSync(releaseArchive) || !existsSync(releaseChecksum)) {
+    throw new DeployError('release metadata가 가리키는 archive 또는 checksum이 없습니다');
+  }
+  return { releaseArchive, releaseChecksum, releaseName, gitSha };
 }
 
 function main() {
   if (process.platform !== 'linux') {
     throw new DeployError(`통합 배포는 Linux에서만 지원합니다: ${process.platform}`);
   }
-  rejectNodeEnvFileArguments();
   const requestedTarget = parseArguments(process.argv.slice(2));
   const settings = readDeploySettings();
   const { target, targets } = resolveTargets(requestedTarget, settings);
@@ -478,8 +480,10 @@ function main() {
     readConnection(selectedTarget, settings),
   ]));
 
+  const deploysApp = targets.includes('app');
+  const deploysWorker = targets.includes('worker');
   let workerSettings = null;
-  if (targets.includes('worker')) {
+  if (deploysWorker) {
     const composeFile = path.join(REPO_ROOT, 'infra', 'docker', 'compose.worker.yaml');
     const manifestFile = path.join(REPO_ROOT, 'infra', 'worker-host-manifest.json');
     if (!existsSync(composeFile)) {
@@ -507,31 +511,28 @@ function main() {
         selectedTarget === 'worker' ? workerSettings.manifestSha : '',
       );
     }
-    if (targets.includes('worker')) {
-      run('docker', ['info'], process.env, { quiet: true });
-      run('docker', ['buildx', 'version'], process.env, { quiet: true });
+    if (deploysWorker) {
+      run('docker', ['info'], { quiet: true });
+      run('docker', ['buildx', 'version'], { quiet: true });
     }
 
     log('==> 공통 release 검증·생성');
-    run('bash', [path.join(SCRIPT_DIR, 'build-release.sh'), artifactDirectory]);
-    const releaseArchive = onlyFile(
+    const releaseMetadataFile = path.join(artifactDirectory, 'release-metadata.json');
+    run('bash', [
+      path.join(SCRIPT_DIR, 'build-release.sh'),
       artifactDirectory,
-      /^quant-platform-[a-zA-Z0-9._-]+\.tar\.gz$/,
-      'release archive',
-    );
-    const releaseChecksum = `${releaseArchive}.sha256`;
-    if (!existsSync(releaseChecksum)) {
-      throw new DeployError(`release checksum이 없습니다: ${releaseChecksum}`);
-    }
-    const releaseName = path.basename(releaseArchive).slice('quant-platform-'.length, -'.tar.gz'.length);
-    const deployGitSha = capture('git', ['rev-parse', 'HEAD']);
-    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(deployGitSha)) {
-      throw new DeployError('배포 Git SHA가 올바르지 않습니다');
-    }
+      releaseMetadataFile,
+    ]);
+    const {
+      releaseArchive,
+      releaseChecksum,
+      releaseName,
+      gitSha: releaseGitSha,
+    } = readReleaseMetadata(releaseMetadataFile, artifactDirectory);
 
     let workerImageArchive;
     let workerImageChecksum;
-    if (targets.includes('worker')) {
+    if (deploysWorker) {
       log('==> worker image 사전 생성');
       run('bash', [
         path.join(SCRIPT_DIR, 'build-worker-image.sh'),
@@ -547,20 +548,18 @@ function main() {
       }
     }
 
-    if (targets.includes('app')) {
+    if (deploysApp) {
       log('==> app 배포');
       deployApp(
         connections.get('app'),
         releaseArchive,
         releaseChecksum,
         releaseName,
-        () => {
-          appIsLive = true;
-        },
       );
+      appIsLive = true;
     }
 
-    if (targets.includes('worker')) {
+    if (deploysWorker) {
       log('==> worker 배포');
       deployWorker(
         connections.get('worker'),
@@ -568,14 +567,14 @@ function main() {
         workerImageChecksum,
         workerSettings.composeFile,
         releaseName,
-        deployGitSha,
+        releaseGitSha,
         workerSettings.manifestSha,
       );
     }
 
     log(`==> ${target} 배포 완료: ${releaseName}`);
   } catch (error) {
-    if (appIsLive && targets.includes('worker')) {
+    if (appIsLive && deploysWorker) {
       logError('app 배포는 완료됐지만 worker 배포가 실패했습니다. 같은 commit에서 --target worker로 다시 실행하세요.');
     }
     throw error;

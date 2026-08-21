@@ -29,8 +29,17 @@ describe('shared release artifact builder', () => {
     fs.writeFileSync(path.join(bin, 'git'), String.raw`#!/bin/sh
 case "$*" in
   *'status --porcelain'*) exit 0 ;;
-  *'rev-parse --short HEAD'*) echo 0123456 ;;
-  *'rev-parse HEAD'*) echo 0123456789abcdef0123456789abcdef01234567 ;;
+  *'rev-parse --short HEAD'*) exit 98 ;;
+  *'rev-parse HEAD'*)
+    count=0
+    [ ! -f "$HEAD_CHECK_LOG" ] || count="$(wc -l < "$HEAD_CHECK_LOG")"
+    printf 'head\n' >> "$HEAD_CHECK_LOG"
+    if [ "$CHANGE_HEAD_AFTER_BUILD" = 1 ] && [ "$count" -gt 0 ]; then
+      echo fedcba9876543210fedcba9876543210fedcba98
+    else
+      echo 0123456789abcdef0123456789abcdef01234567
+    fi
+    ;;
 esac
 `);
     fs.writeFileSync(path.join(bin, 'pnpm'), String.raw`#!/bin/sh
@@ -43,11 +52,22 @@ fi
     fs.chmodSync(path.join(bin, 'git'), 0o755);
     fs.chmodSync(path.join(bin, 'pnpm'), 0o755);
     const gateLog = path.join(root, 'gates.log');
+    const headCheckLog = path.join(root, 'head-checks.log');
+    const metadataFile = path.join(out, 'release-metadata.json');
 
-    const result = spawnSync(bash, [path.join(repo, 'scripts/build-release.sh'), out], {
+    const result = spawnSync(bash, [
+      path.join(repo, 'scripts/build-release.sh'),
+      out,
+      metadataFile,
+    ], {
       cwd: repo,
       encoding: 'utf8',
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GATE_LOG: gateLog },
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
+        GATE_LOG: gateLog,
+        HEAD_CHECK_LOG: headCheckLog,
+      },
     });
     expect(`${result.stdout}${result.stderr}`).toContain('공통 release archive 생성');
     expect(result.status).toBe(0);
@@ -58,6 +78,11 @@ fi
       'test',
       'build',
     ]);
+    expect(fs.readFileSync(headCheckLog, 'utf8').trim().split('\n')).toHaveLength(2);
+    expect(JSON.parse(fs.readFileSync(metadataFile, 'utf8'))).toEqual({
+      releaseName: expect.stringMatching(/^\d{8}-\d{6}-0123456$/),
+      gitSha: '0123456789abcdef0123456789abcdef01234567',
+    });
     const archive = fs.readdirSync(out).find((file) => file.endsWith('.tar.gz'))!;
     const checksum = fs.readFileSync(path.join(out, `${archive}.sha256`), 'utf8');
     expect(checksum).toMatch(/^[a-f0-9]{64} {2}quant-platform-/);
@@ -82,5 +107,23 @@ fi
     ], { encoding: 'utf8' });
     expect(rejected.status).not.toBe(0);
     expect(rejected.stderr).toContain('checksum이 일치하지 않습니다');
+
+    fs.writeFileSync(headCheckLog, '');
+    const changedHead = spawnSync(bash, [
+      path.join(repo, 'scripts/build-release.sh'),
+      path.join(root, 'changed-head-output'),
+    ], {
+      cwd: repo,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
+        GATE_LOG: gateLog,
+        HEAD_CHECK_LOG: headCheckLog,
+        CHANGE_HEAD_AFTER_BUILD: '1',
+      },
+    });
+    expect(changedHead.status).not.toBe(0);
+    expect(changedHead.stderr).toContain('검증 중 HEAD가 바뀌어');
   });
 });

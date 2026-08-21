@@ -65,6 +65,8 @@ describe('Docker worker deployment', () => {
     expect(deploy).toContain('bootstrap-worker.sh를 다시 실행하세요');
     expect(deploy).toContain('UPLOAD_INPUTS_VALIDATED=1');
     expect(deploy).toContain('rm -f -- "${IMAGE_ARCHIVE}" "${CHECKSUM_FILE}" "${NEW_COMPOSE}"');
+    expect(deploy).toContain('cp -p "${COMPOSE_FILE}" "${PREVIOUS_DIR}/compose.yaml"');
+    expect(deploy).not.toContain('[ ! -f "${COMPOSE_FILE}" ] || cp');
     expect(deploy).toContain('quant-backtest-worker-${NEW_IMAGE_TAG}.tar.sha256');
     expect(orchestrator).toContain("'/tmp/quant-worker-deploy.XXXXXX'");
     expect(orchestrator).toContain("path.join(SCRIPT_DIR, 'deploy-worker.sh')");

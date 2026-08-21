@@ -147,7 +147,7 @@ case "${expected}" in ''|*[!a-f0-9]*) echo 'Worker image checksum 형식 오류'
 actual="$(sha256sum "${IMAGE_ARCHIVE}" | awk '{ print $1 }')"
 [ "${actual}" = "${expected}" ] || { echo 'Worker image checksum 불일치' >&2; exit 1; }
 
-[ ! -f "${COMPOSE_FILE}" ] || cp -p "${COMPOSE_FILE}" "${PREVIOUS_DIR}/compose.yaml"
+cp -p "${COMPOSE_FILE}" "${PREVIOUS_DIR}/compose.yaml"
 [ ! -f "${COMPOSE_ENV}" ] || cp -p "${COMPOSE_ENV}" "${PREVIOUS_DIR}/compose.env"
 
 docker image load --input "${IMAGE_ARCHIVE}"

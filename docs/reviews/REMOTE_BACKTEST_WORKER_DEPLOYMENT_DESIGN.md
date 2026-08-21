@@ -55,6 +55,8 @@ systemd unit을 설치하지 않는다. 인바운드 애플리케이션 포트�
 3. 전체 Git SHA와 빌드 시각을 `dist/build-info.json`에 기록한다.
 4. `dist`, `migrations`, package/lock/workspace 파일을 하나의 archive로 만든다.
 5. archive의 SHA-256 checksum을 만든다.
+6. release 이름과 위 Git SHA를 로컬 metadata로 내보낸다. `deploy.mjs`는 archive 이름을
+   다시 검색하거나 현재 HEAD를 다시 읽지 않고 이 metadata만 배포 identity로 사용한다.
 
 `pnpm run deploy --target app|worker|all`이 공통 builder를 한 번 호출한다. 생성된 archive와
 checksum은 `deploy.mjs`가 노드별 임시 디렉터리에 SCP로 업로드한 뒤 `deploy-app.sh` 또는
