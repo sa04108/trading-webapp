@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # deploy.mjs가 app 노드에서 실행하는 release transaction.
 #
-# deploy.mjs가 prepare/verify/finalize/rollback 단계를 호출한다.
+# deploy.mjs가 prepare/verify/commit/finalize/rollback 단계를 호출한다.
 # 이 스크립트는 잠금, app·DB 전환, readiness, rollback과 산출물 정리를 담당한다.
 # source하면 테스트 가능한 함수만 정의한다.
 set -euo pipefail
@@ -411,19 +411,24 @@ rollback_app_transaction() {
   echo "app rollback completed for ${release}" >&2
 }
 
-verify_prepared_app() {
+verify_current_app_release() {
   local release="$1"
   local release_dir="/opt/quant-platform/releases/${release}"
   local current_release
-  read_transaction_state "${release}" || {
-    echo "app 배포 transaction이 없습니다: ${release}" >&2
-    return 1
-  }
   current_release="$(resolve_current_release)" || return 1
   [ "${current_release}" = "${release_dir}" ] || {
     echo "현재 app release가 준비된 release와 다릅니다: ${current_release}" >&2
     return 1
   }
+}
+
+verify_prepared_app() {
+  local release="$1"
+  read_transaction_state "${release}" || {
+    echo "app 배포 transaction이 없습니다: ${release}" >&2
+    return 1
+  }
+  verify_current_app_release "${release}" || return 1
   wait_for_ready
 }
 
@@ -431,55 +436,57 @@ cleanup_successful_app_artifacts() {
   local release_dir="$1"
   local current_target=""
   local snapshot_cleanup_ok=1
-  if current_target="$(resolve_current_release)" && [ "${current_target}" = "${release_dir}" ]; then
-    if ! sudo find /var/lib/quant-platform/backups -mindepth 1 -maxdepth 1 -type f \
-      -name 'pre-deploy-*.sqlite' -printf '%T@ %p\n' 2>/dev/null \
+  current_target="$(resolve_current_release)" || return 1
+  if [ "${current_target}" != "${release_dir}" ]; then
+    echo "current release가 commit된 release와 다릅니다: ${current_target}" >&2
+    return 1
+  fi
+
+  if ! sudo find /var/lib/quant-platform/backups -mindepth 1 -maxdepth 1 -type f \
+    -name 'pre-deploy-*.sqlite' -printf '%T@ %p\n' 2>/dev/null \
+    | sort -nr \
+    | while read -r _ snapshot; do
+        if validate_deploy_snapshot "${snapshot}" && \
+          is_normal_deploy_artifact \
+            "${snapshot}.deploy-in-progress" "${snapshot}.deploy-failed"; then
+          printf '%s\n' "${snapshot}"
+        fi
+      done \
+    | awk -v keep="${KEEP_SUCCESSFUL_DEPLOYS}" 'NR > keep' \
+    | while IFS= read -r snapshot; do
+        if validate_deploy_snapshot "${snapshot}"; then
+          sudo rm -f -- "${snapshot}" "${snapshot}-journal" "${snapshot}-wal" \
+            "${snapshot}-shm" "${snapshot}.deploy-succeeded" || exit 1
+        fi
+      done; then
+    snapshot_cleanup_ok=0
+    echo '경고: 정상 DB snapshot 정리를 완료하지 못했습니다' >&2
+  fi
+
+  if [ "${snapshot_cleanup_ok}" -eq 1 ]; then
+    if ! sudo find /opt/quant-platform/releases -mindepth 1 -maxdepth 1 -type d \
+      ! -name '.incomplete-*' -printf '%T@ %p\n' 2>/dev/null \
       | sort -nr \
-      | while read -r _ snapshot; do
-          if validate_deploy_snapshot "${snapshot}" && \
+      | while read -r _ old_release_dir; do
+          if [ "${old_release_dir}" != "${current_target}" ] && \
+            validate_release_directory "${old_release_dir}" && \
             is_normal_deploy_artifact \
-              "${snapshot}.deploy-in-progress" "${snapshot}.deploy-failed"; then
-            printf '%s\n' "${snapshot}"
+              "${old_release_dir}/.deploy-in-progress" \
+              "${old_release_dir}/.deploy-failed"; then
+            printf '%s\n' "${old_release_dir}"
           fi
         done \
       | awk -v keep="${KEEP_SUCCESSFUL_DEPLOYS}" 'NR > keep' \
-      | while IFS= read -r snapshot; do
-          if validate_deploy_snapshot "${snapshot}"; then
-            sudo rm -f -- "${snapshot}" "${snapshot}-journal" "${snapshot}-wal" \
-              "${snapshot}-shm" "${snapshot}.deploy-succeeded" || exit 1
+      | while IFS= read -r old_release_dir; do
+          if [ "${old_release_dir}" != "${current_target}" ] && \
+            validate_release_directory "${old_release_dir}"; then
+            sudo rm -rf -- "${old_release_dir}" || exit 1
           fi
         done; then
-      snapshot_cleanup_ok=0
-      echo '경고: 정상 DB snapshot 정리를 완료하지 못했습니다' >&2
-    fi
-
-    if [ "${snapshot_cleanup_ok}" -eq 1 ]; then
-      if ! sudo find /opt/quant-platform/releases -mindepth 1 -maxdepth 1 -type d \
-        ! -name '.incomplete-*' -printf '%T@ %p\n' 2>/dev/null \
-        | sort -nr \
-        | while read -r _ old_release_dir; do
-            if [ "${old_release_dir}" != "${current_target}" ] && \
-              validate_release_directory "${old_release_dir}" && \
-              is_normal_deploy_artifact \
-                "${old_release_dir}/.deploy-in-progress" \
-                "${old_release_dir}/.deploy-failed"; then
-              printf '%s\n' "${old_release_dir}"
-            fi
-          done \
-        | awk -v keep="${KEEP_SUCCESSFUL_DEPLOYS}" 'NR > keep' \
-        | while IFS= read -r old_release_dir; do
-            if [ "${old_release_dir}" != "${current_target}" ] && \
-              validate_release_directory "${old_release_dir}"; then
-              sudo rm -rf -- "${old_release_dir}" || exit 1
-            fi
-          done; then
-        echo '경고: 과거 정상 release 정리를 완료하지 못했습니다' >&2
-      fi
-    else
-      echo '경고: DB snapshot 정리 실패로 과거 release 정리도 건너뜁니다' >&2
+      echo '경고: 과거 정상 release 정리를 완료하지 못했습니다' >&2
     fi
   else
-    echo '경고: current release를 검증하지 못해 정상 snapshot/release 정리를 건너뜁니다' >&2
+    echo '경고: DB snapshot 정리 실패로 과거 release 정리도 건너뜁니다' >&2
   fi
 }
 
@@ -671,6 +678,7 @@ case "${PHASE}" in
           echo "app 배포가 commit되지 않았습니다: ${RELEASE}" >&2
           exit 1
         }
+        verify_current_app_release "${RELEASE}"
         RELEASE_DIR="/opt/quant-platform/releases/${RELEASE}"
         cleanup_successful_app_artifacts "${RELEASE_DIR}"
         validate_transaction_state_file "${TRANSACTION_STATE_FILE}"

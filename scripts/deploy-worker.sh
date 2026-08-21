@@ -155,21 +155,26 @@ rollback_transaction() {
   return 1
 }
 
-verify_prepared_worker() {
+verify_current_worker_image() {
   local release="$1"
-  local transaction_dir
   local expected_image="quant-platform-backtest-worker:${release}"
   local live_image
-  transaction_dir="$(transaction_directory "${release}")" || return 1
-  [ -d "${transaction_dir}" ] || {
-    echo "Worker 배포 transaction이 없습니다: ${release}" >&2
-    return 1
-  }
   live_image="$(docker inspect --format='{{.Config.Image}}' quant-backtest-worker 2>/dev/null || true)"
   [ "${live_image}" = "${expected_image}" ] || {
     echo "실행 중 Worker image가 준비된 release와 다릅니다: ${live_image}" >&2
     return 1
   }
+}
+
+verify_prepared_worker() {
+  local release="$1"
+  local transaction_dir
+  transaction_dir="$(transaction_directory "${release}")" || return 1
+  [ -d "${transaction_dir}" ] || {
+    echo "Worker 배포 transaction이 없습니다: ${release}" >&2
+    return 1
+  }
+  verify_current_worker_image "${release}" || return 1
   probe_worker
 }
 
@@ -228,17 +233,22 @@ prepare_worker() {
   actual="$(sha256sum "${IMAGE_ARCHIVE}" | awk '{ print $1 }')"
   [ "${actual}" = "${expected}" ] || { echo 'Worker image checksum 불일치' >&2; return 1; }
 
+  current_image="$(docker inspect --format='{{.Config.Image}}' quant-backtest-worker 2>/dev/null || true)"
   if ! docker image load --input "${IMAGE_ARCHIVE}"; then
+    remove_candidate_image "${NEW_IMAGE}" "${current_image}" || true
     return 1
   fi
-  actual_sha="$(docker image inspect --format='{{ index .Config.Labels "org.opencontainers.image.revision" }}' "${NEW_IMAGE}")"
+  if ! actual_sha="$(docker image inspect --format='{{ index .Config.Labels "org.opencontainers.image.revision" }}' "${NEW_IMAGE}")"; then
+    echo "Worker image label을 읽을 수 없습니다: ${NEW_IMAGE}" >&2
+    remove_candidate_image "${NEW_IMAGE}" "${current_image}" || true
+    return 1
+  fi
   if [ "${actual_sha}" != "${EXPECTED_SHA}" ]; then
     echo "Worker image label SHA 불일치: ${actual_sha}" >&2
-    docker image rm "${NEW_IMAGE}" >/dev/null 2>&1 || true
+    remove_candidate_image "${NEW_IMAGE}" "${current_image}" || true
     return 1
   fi
 
-  current_image="$(docker inspect --format='{{.Config.Image}}' quant-backtest-worker 2>/dev/null || true)"
   if ! mkdir "${transaction_dir}" ||
     ! printf '%s\n' "${current_image}" > "${transaction_dir}/previous-image" ||
     ! cp -p "${COMPOSE_FILE}" "${transaction_dir}/compose.yaml" ||
@@ -301,6 +311,8 @@ case "${PHASE}" in
     for required_command in flock docker; do
       command -v "${required_command}" >/dev/null 2>&1 || { echo "필수 명령이 없습니다: ${required_command}" >&2; exit 69; }
     done
+    docker version >/dev/null
+    docker compose version >/dev/null
     acquire_deploy_lock
     case "${PHASE}" in
       verify)
@@ -321,6 +333,7 @@ case "${PHASE}" in
           echo "Worker 배포가 commit되지 않았습니다: ${RELEASE}" >&2
           exit 1
         }
+        verify_current_worker_image "${RELEASE}"
         cleanup_old_images "quant-platform-backtest-worker:${RELEASE}" || \
           echo '경고: 과거 Worker image 정리를 완료하지 못했습니다' >&2
         rm -rf -- "${transaction_dir}"

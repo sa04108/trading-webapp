@@ -323,6 +323,20 @@ describe('direct SSH deployment orchestrator', () => {
     expect(output).toContain('app: ssh가 종료 코드 42로 실패했습니다');
   });
 
+  it('attempts both finalizers after commit even when app cleanup fails', () => {
+    const harness = prepareHarness(['app', 'worker']);
+    const result = execute(harness, { FAIL_EVENTS: 'ssh:app:finalize' });
+    const output = `${result.stdout}${result.stderr}`;
+    const commands = readCommands(harness);
+    expect(result.status).toBe(42);
+    expect(commands).toContain('ssh:app:finalize');
+    expect(commands).toContain('ssh:worker:finalize');
+    expect(commands).not.toContain('ssh:worker:rollback');
+    expect(commands).not.toContain('ssh:app:rollback');
+    expect(output).toContain('app·worker commit 완료 후 정리 실패');
+    expect(output).toContain('app: ssh가 종료 코드 42로 실패했습니다');
+  });
+
   it('rejects invalid builder metadata before uploading artifacts', () => {
     const harness = prepareHarness(['app', 'worker']);
     const result = execute(harness, {

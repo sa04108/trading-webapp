@@ -407,6 +407,34 @@ function runWorkerPhase(deployment, phase) {
   run('ssh', [...sshArguments(deployment.connection), command]);
 }
 
+function finalizeDeployments(appDeployment, workerDeployment) {
+  const finalizationErrors = [];
+  let exitCode = 1;
+  const finalizers = [
+    ['app', () => runAppPhase(appDeployment, 'finalize')],
+    ['worker', () => runWorkerPhase(workerDeployment, 'finalize')],
+  ];
+
+  for (const [component, finalize] of finalizers) {
+    try {
+      finalize();
+    } catch (error) {
+      if (finalizationErrors.length === 0 && error instanceof DeployError) {
+        exitCode = error.exitCode;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      finalizationErrors.push(`${component}: ${message}`);
+    }
+  }
+
+  if (finalizationErrors.length > 0) {
+    throw new DeployError(
+      `app·worker commit 완료 후 정리 실패:\n${finalizationErrors.join('\n')}`,
+      exitCode,
+    );
+  }
+}
+
 function sha256File(file) {
   return createHash('sha256').update(readFileSync(file)).digest('hex');
 }
@@ -544,8 +572,7 @@ function main() {
     transactionCommitted = true;
 
     log('==> app·worker 이전 배포 산출물 정리');
-    runAppPhase(appDeployment, 'finalize');
-    runWorkerPhase(workerDeployment, 'finalize');
+    finalizeDeployments(appDeployment, workerDeployment);
 
     log(`==> app, worker 배포 완료: ${releaseName}`);
   } catch (error) {

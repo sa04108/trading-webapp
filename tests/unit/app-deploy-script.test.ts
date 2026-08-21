@@ -186,6 +186,32 @@ describe('deploy script failure workflow', () => {
     expect(output).not.toContain('sudo:rm -rf -- /opt/quant-platform/releases/new-release');
   });
 
+  it('refuses successful cleanup when current no longer points to the committed release', () => {
+    const shell = String.raw`
+      source scripts/deploy-app.sh
+      readlink() { echo '/opt/quant-platform/releases/other-release'; }
+      sudo() { printf 'sudo:%s\n' "$*" >&2; return 0; }
+      KEEP_SUCCESSFUL_DEPLOYS=0
+      status=0
+      cleanup_successful_app_artifacts \
+        '/opt/quant-platform/releases/new-release' || status=$?
+      printf 'status=%s\n' "$status"
+      [ "$status" -eq 1 ]
+    `;
+
+    const result = spawnSync(bash, ['-c', shell], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+    });
+    const output = `${result.stdout}${result.stderr}`;
+
+    expect(result.status, output).toBe(0);
+    expect(output).toContain('current release가 commit된 release와 다릅니다');
+    expect(output).toContain('status=1');
+    expect(output).not.toContain('sudo:find');
+    expect(output).not.toContain('sudo:rm');
+  });
+
   it('cleans attempt-owned staging and incomplete snapshot files before service switch', () => {
     const shell = String.raw`
       source scripts/deploy-app.sh
@@ -334,6 +360,7 @@ describe('deploy script failure workflow', () => {
     expect(deploy).toContain('write_transaction_state');
     expect(deploy).toContain('verify_prepared_app');
     expect(deploy).toContain('rollback_app_transaction');
+    expect(deploy).toMatch(/finalize\)\s+read_transaction_state[\s\S]*verify_current_app_release/);
     expect(orchestrator).toContain('stageAppDeployment(');
     expect(orchestrator).toContain("runAppPhase(appDeployment, 'prepare')");
     expect(orchestrator).toContain("runAppPhase(appDeployment, 'verify')");

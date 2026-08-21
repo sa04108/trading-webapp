@@ -1425,6 +1425,10 @@
   남기고, 양쪽 commit 완료 전 실패는 worker → app 순서로 보상 rollback한다. commit은 rollback
   자료를 지우지 않으며 양쪽 commit이 확인된 뒤 finalize만 이전 산출물을 정리한다. 각 단계는
   non-blocking `flock`을 잡고 단계 사이에는 미완료 transaction 상태가 다른 배포의 진입을 막는다.
+- **commit 이후 정리 실패:** 양쪽 commit이 모두 완료된 뒤의 finalize 실패는 서비스를
+  rollback하지 않는다. orchestrator는 한 노드의 finalize가 실패해도 나머지 노드의
+  finalize를 시도하고 실패를 모아 보고한다. 각 노드는 삭제 전에 commit된 release·image가
+  여전히 현재 대상인지 확인하며, 다르면 rollback 자료와 transaction 상태를 보존한다.
 - **산출물 수명:** 정상 성공 후 app은 현재 release만, worker는 현재 image만 남긴다. 검증된
   rollback 뒤에는 이전 정상 산출물만 남긴다. rollback 검증 실패 때만 이전·신규 산출물을
   모두 보존해 수동 복구 근거가 사라지지 않게 한다.

@@ -70,6 +70,17 @@ describe('Docker worker deployment', () => {
     expect(deploy).toContain('cp -p "${COMPOSE_FILE}" "${transaction_dir}/compose.yaml"');
     expect(deploy).not.toContain('[ ! -f "${COMPOSE_FILE}" ] || cp');
     expect(deploy).toContain('quant-backtest-worker-${RELEASE}.tar.sha256');
+    const prepareWorker = deploy.slice(
+      deploy.indexOf('prepare_worker()'),
+      deploy.indexOf('if [[ "${BASH_SOURCE[0]}"'),
+    );
+    expect(prepareWorker.indexOf('current_image="$(docker inspect')).toBeLessThan(
+      prepareWorker.indexOf('docker image load --input'),
+    );
+    expect(prepareWorker).toMatch(
+      /if ! docker image load[\s\S]*remove_candidate_image "\$\{NEW_IMAGE\}" "\$\{current_image\}"/,
+    );
+    expect(prepareWorker).toContain('Worker image label을 읽을 수 없습니다');
     expect(orchestrator).toContain("'/tmp/quant-worker-deploy.XXXXXX'");
     expect(orchestrator).toContain("path.join(SCRIPT_DIR, 'deploy-worker.sh')");
     expect(orchestrator).toMatch(/'sudo',\s+'-n',\s+'\/bin\/bash'/);
@@ -95,6 +106,7 @@ describe('Docker worker deployment', () => {
       "echo 'Worker 롤백 검증에 실패해 이전 image와 신규 image를 모두 보존합니다'",
     );
     expect(deploy).toContain('cleanup_old_images "quant-platform-backtest-worker:${RELEASE}"');
+    expect(deploy).toMatch(/finalize\)\s+transaction_dir=[\s\S]*verify_current_worker_image/);
     expect(deploy).not.toContain('tail -n +4');
     expect(deploy).not.toContain('docker system prune');
   });
