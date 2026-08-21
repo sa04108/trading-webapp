@@ -21,6 +21,26 @@
   changed_when: false
   when: deploy_mode == 'preflight'
 
+- name: Read worker manifest checksum
+  become: true
+  ansible.builtin.stat:
+    path: /opt/quant-backtest-worker/managed-paths.json
+    checksum_algorithm: sha256
+  register: worker_manifest
+  when: deploy_mode == 'preflight'
+
+- name: Validate worker manifest checksum
+  ansible.builtin.assert:
+    that:
+      - worker_manifest_sha is match('^[a-f0-9]{64}$')
+      - worker_manifest.stat.exists
+      - worker_manifest.stat.isreg
+      - (worker_manifest.stat.checksum | default('')) == worker_manifest_sha
+    fail_msg: >-
+      Worker 관리 manifest가 현재 저장소와 다릅니다.
+      bootstrap-worker.sh를 다시 실행하세요.
+  when: deploy_mode == 'preflight'
+
 - name: Apply worker release transaction
   when: deploy_mode == 'apply'
   block:

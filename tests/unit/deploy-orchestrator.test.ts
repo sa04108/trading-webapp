@@ -71,6 +71,11 @@ done
     process.stderr.write("missing IdentitiesOnly=yes\n");
     process.exit(91);
   }
+  if (target === "worker" && variables.deploy_mode === "preflight" &&
+      !/^[a-f0-9]{64}$/.test(variables.worker_manifest_sha ?? "")) {
+    process.stderr.write("missing worker manifest checksum\n");
+    process.exit(92);
+  }
   fs.appendFileSync(logFile, [
     "ansible", target, variables.deploy_mode, host.ansible_host,
     host.ansible_user ?? "", String(host.ansible_port ?? ""),
@@ -181,6 +186,19 @@ describe('Ansible deployment orchestrator', () => {
       'build-worker-image:20260818-120000-abcdef1',
       'ansible:worker:apply:worker.example.com:worker-user:2200:20260818-120000-abcdef1',
     ]);
+  });
+
+  it('rejects invalid worker settings before preflight or app deployment', () => {
+    const harness = prepareHarness(['app', 'worker']);
+    const settings = fs.readFileSync(harness.envFile, 'utf8')
+      .replace('QP_FORCE_WORKER_DEPLOY=0', 'QP_FORCE_WORKER_DEPLOY=invalid');
+    fs.writeFileSync(harness.envFile, settings);
+
+    const result = execute(harness, 'all');
+    const output = `${result.stdout}${result.stderr}`;
+    expect(result.status).not.toBe(0);
+    expect(output).toContain('QP_FORCE_WORKER_DEPLOY은 0 또는 1이어야 합니다');
+    expect(existsSyncOrFalse(harness.commandLog)).toBe(false);
   });
 
   it('rejects infrastructure-oriented and unknown target names', () => {

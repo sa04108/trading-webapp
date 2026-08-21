@@ -214,6 +214,23 @@ function main() {
   }
   loadEnvFile(envFile);
 
+  let workerSettings = null;
+  if (targets.includes('worker')) {
+    const composeFile = path.join(REPO_ROOT, 'infra', 'docker', 'compose.worker.yaml');
+    const manifestFile = path.join(REPO_ROOT, 'infra', 'worker-host-manifest.json');
+    if (!existsSync(composeFile)) {
+      throw new DeployError(`worker Compose 파일이 없습니다: ${composeFile}`);
+    }
+    if (!existsSync(manifestFile)) {
+      throw new DeployError(`worker manifest 파일이 없습니다: ${manifestFile}`);
+    }
+    workerSettings = {
+      composeFile,
+      manifestSha: sha256File(manifestFile),
+      forceDeploy: readToggle('QP_FORCE_WORKER_DEPLOY', '0'),
+    };
+  }
+
   const artifactDirectory = mkdtempSync(path.join(tmpdir(), 'quant-deploy-'));
   const inventory = path.join(artifactDirectory, 'inventory.json');
   let appIsLive = false;
@@ -228,7 +245,10 @@ function main() {
     }, { quiet: true });
     for (const selectedTarget of targets) {
       log(`==> ${selectedTarget} preflight`);
-      runAnsible(selectedTarget, 'preflight', inventory, {}, artifactDirectory);
+      const preflightVariables = selectedTarget === 'worker'
+        ? { worker_manifest_sha: workerSettings.manifestSha }
+        : {};
+      runAnsible(selectedTarget, 'preflight', inventory, preflightVariables, artifactDirectory);
     }
     if (targets.includes('worker')) {
       run('docker', ['info'], process.env, { quiet: true });
@@ -288,9 +308,9 @@ function main() {
         ...sharedVariables,
         worker_image_archive: workerImageArchive,
         worker_image_checksum: workerImageChecksum,
-        worker_compose_file: path.join(REPO_ROOT, 'infra', 'docker', 'compose.worker.yaml'),
-        worker_manifest_sha: sha256File(path.join(REPO_ROOT, 'infra', 'worker-host-manifest.json')),
-        worker_force_deploy: readToggle('QP_FORCE_WORKER_DEPLOY', '0'),
+        worker_compose_file: workerSettings.composeFile,
+        worker_manifest_sha: workerSettings.manifestSha,
+        worker_force_deploy: workerSettings.forceDeploy,
       }, artifactDirectory);
     }
 
