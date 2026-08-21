@@ -432,9 +432,9 @@ describe('remote backtest worker lease API', () => {
   });
 
   it('holds an empty claim until its long-poll deadline', async () => {
-    const serverUrl = await ctx.app.listen({ host: '127.0.0.1', port: 0 });
+    const appUrl = await ctx.app.listen({ host: '127.0.0.1', port: 0 });
     const startedAtMs = Date.now();
-    const response = await fetch(`${serverUrl}/api/internal/workers/jobs/claim?waitSeconds=1`, {
+    const response = await fetch(`${appUrl}/api/internal/workers/jobs/claim?waitSeconds=1`, {
       method: 'POST',
       headers: {
         authorization: `Bearer ${WORKER_TOKEN}`,
@@ -453,7 +453,7 @@ describe('remote backtest worker lease API', () => {
   });
 
   it('stops checking the queue after a long-poll client disconnects', async () => {
-    const serverUrl = await ctx.app.listen({ host: '127.0.0.1', port: 0 });
+    const appUrl = await ctx.app.listen({ host: '127.0.0.1', port: 0 });
     const service = ctx.container.remoteWorkerService;
     const originalClaim = service.claim.bind(service);
     let claimCalls = 0;
@@ -461,7 +461,7 @@ describe('remote backtest worker lease API', () => {
       claimCalls += 1;
       return originalClaim(...args);
     };
-    const request = httpRequest(`${serverUrl}/api/internal/workers/jobs/claim?waitSeconds=5`, {
+    const request = httpRequest(`${appUrl}/api/internal/workers/jobs/claim?waitSeconds=5`, {
       method: 'POST',
       headers: {
         authorization: `Bearer ${WORKER_TOKEN}`,
@@ -523,7 +523,7 @@ describe('remote backtest worker lease API', () => {
         env: {
           ...process.env,
           NODE_ENV: 'test',
-          BACKTEST_SERVER_URL: `http://127.0.0.1:${address.port}`,
+          BACKTEST_APP_URL: `http://127.0.0.1:${address.port}`,
           BACKTEST_WORKER_TOKEN: WORKER_TOKEN,
           BACKTEST_WORKER_ID: 'paced-worker',
           BACKTEST_WORKER_CONCURRENCY: '1',
@@ -552,7 +552,7 @@ describe('remote backtest worker lease API', () => {
   });
 
   it('runs the supervisor one-shot compatibility check without claiming a job', async () => {
-    const serverUrl = await ctx.app.listen({ host: '127.0.0.1', port: 0 });
+    const appUrl = await ctx.app.listen({ host: '127.0.0.1', port: 0 });
     const checked = spawn(process.execPath, [
       '--import',
       'tsx',
@@ -564,7 +564,7 @@ describe('remote backtest worker lease API', () => {
         ...process.env,
         NODE_ENV: 'test',
         BUILD_GIT_SHA: ctx.container.gitCommitSha,
-        BACKTEST_SERVER_URL: serverUrl,
+        BACKTEST_APP_URL: appUrl,
         BACKTEST_WORKER_TOKEN: WORKER_TOKEN,
         BACKTEST_WORKER_ID: 'check-worker',
       },
@@ -814,7 +814,7 @@ describe('remote backtest worker lease API', () => {
     ).get(job.id)).toEqual({ count: 0 });
   });
 
-  it('rejects result metadata that does not match the server-owned execution pins', async () => {
+  it('rejects result metadata that does not match the app-owned execution pins', async () => {
     const job = enqueue();
     const lease = (await claim()).json() as { attempt: number; leaseToken: string };
     const artifactPath = path.join(ctx.dir, 'wrong-context-result.sqlite');
@@ -880,7 +880,7 @@ describe('remote backtest worker lease API', () => {
     }
   });
 
-  it('removes orphaned server input bundles without crossing into upload cleanup', async () => {
+  it('removes orphaned app input bundles without crossing into upload cleanup', async () => {
     const remoteRoot = path.join(ctx.dir, 'temp', 'remote-backtests');
     const inputFragment = path.join(remoteRoot, 'bt_orphan', '1', 'input.sqlite.partial');
     const uploadFragment = path.join(remoteRoot, 'uploads', 'in-flight', 'result.sqlite');
@@ -921,7 +921,7 @@ describe('remote backtest worker lease API', () => {
       symbols: ['005930'],
       excludedNonTradingCount: 0,
     }]);
-    const serverUrl = await ctx.app.listen({ host: '127.0.0.1', port: 0 });
+    const appUrl = await ctx.app.listen({ host: '127.0.0.1', port: 0 });
     const workerRoot = path.join(ctx.dir, 'worker');
     const staleWorkerFragment = path.join(workerRoot, 'jobs', 'bt_stale', '1', 'result.sqlite');
     fs.mkdirSync(path.dirname(staleWorkerFragment), { recursive: true });
@@ -934,7 +934,7 @@ describe('remote backtest worker lease API', () => {
         env: {
           ...process.env,
           NODE_ENV: 'test',
-          BACKTEST_SERVER_URL: serverUrl,
+          BACKTEST_APP_URL: appUrl,
           BACKTEST_WORKER_TOKEN: WORKER_TOKEN,
           BACKTEST_WORKER_ID: 'integration-worker',
           BACKTEST_WORKER_CONCURRENCY: '1',

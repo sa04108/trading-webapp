@@ -49,14 +49,14 @@ function main(): void {
     const registry = new StrategyRegistry();
     const strategy = registry.get(request.strategyId);
     if (strategy === null || job.strategyId !== request.strategyId) {
-      throw new Error('server job의 전략 pin이 올바르지 않습니다');
+      throw new Error('app job의 전략 pin이 올바르지 않습니다');
     }
     const validatedParameters = registry.validateParameters(request.strategyId, request.parameters);
-    if (!validatedParameters.ok) throw new Error(`server job 파라미터가 올바르지 않습니다: ${validatedParameters.error}`);
+    if (!validatedParameters.ok) throw new Error(`app job 파라미터가 올바르지 않습니다: ${validatedParameters.error}`);
     const costProfile = getCostProfile(request.execution.commissionProfileId);
     const slippageProfile = getSlippageProfile(request.execution.slippageProfileId);
     if (costProfile === null || slippageProfile === null) {
-      throw new Error('server job의 비용·슬리피지 pin이 올바르지 않습니다');
+      throw new Error('app job의 비용·슬리피지 pin이 올바르지 않습니다');
     }
     const provenancePin = job.provenancePinJson === null
       ? null
@@ -82,7 +82,7 @@ function main(): void {
       && artifact.context.randomSeed === request.randomSeed
       && artifact.summary.metrics.initialCash === request.capital.initialCash
       && artifact.context.startedAtMs <= artifact.context.completedAtMs;
-    if (!contextMatchesJob) throw new Error('artifact 실행 context가 server job pin과 일치하지 않습니다');
+    if (!contextMatchesJob) throw new Error('artifact 실행 context가 app job pin과 일치하지 않습니다');
     const status = queue.completeRemote({
       jobId,
       attempt,

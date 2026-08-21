@@ -14,7 +14,7 @@ import { REMOTE_WORKER_PROTOCOL_VERSION } from '../server/modules/backtest/appli
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('production'),
-  BACKTEST_SERVER_URL: z.string().url(),
+  BACKTEST_APP_URL: z.string().url(),
   BACKTEST_WORKER_TOKEN: z.string().min(32).max(256),
   BACKTEST_WORKER_ID: z.string().regex(/^[a-zA-Z0-9._-]{1,48}$/).optional(),
   BACKTEST_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(1),
@@ -26,7 +26,7 @@ const envSchema = z.object({
 
 interface SupervisorConfig {
   readonly nodeEnv: 'development' | 'test' | 'production';
-  readonly serverUrl: URL;
+  readonly appUrl: URL;
   readonly workerToken: string;
   readonly workerId: string;
   readonly concurrency: number;
@@ -79,21 +79,21 @@ type ChildMessage =
 
 function loadSupervisorConfig(env: NodeJS.ProcessEnv = process.env): SupervisorConfig {
   const parsed = envSchema.parse(env);
-  const serverUrl = new URL(parsed.BACKTEST_SERVER_URL);
-  const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(serverUrl.hostname);
-  if (serverUrl.protocol !== 'https:' && !(parsed.NODE_ENV !== 'production' && loopback)) {
-    throw new Error('BACKTEST_SERVER_URL은 HTTPS여야 합니다 (개발 loopback만 HTTP 허용)');
+  const appUrl = new URL(parsed.BACKTEST_APP_URL);
+  const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(appUrl.hostname);
+  if (appUrl.protocol !== 'https:' && !(parsed.NODE_ENV !== 'production' && loopback)) {
+    throw new Error('BACKTEST_APP_URL은 HTTPS여야 합니다 (개발 loopback만 HTTP 허용)');
   }
-  if (serverUrl.username !== '' || serverUrl.password !== '') {
-    throw new Error('BACKTEST_SERVER_URL에 사용자명이나 비밀번호를 넣을 수 없습니다');
+  if (appUrl.username !== '' || appUrl.password !== '') {
+    throw new Error('BACKTEST_APP_URL에 사용자명이나 비밀번호를 넣을 수 없습니다');
   }
-  if (serverUrl.pathname !== '/' || serverUrl.search !== '' || serverUrl.hash !== '') {
-    throw new Error('BACKTEST_SERVER_URL에는 origin만 지정해야 합니다 (path/query/hash 금지)');
+  if (appUrl.pathname !== '/' || appUrl.search !== '' || appUrl.hash !== '') {
+    throw new Error('BACKTEST_APP_URL에는 origin만 지정해야 합니다 (path/query/hash 금지)');
   }
   const fallbackId = os.hostname().replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 48) || 'worker';
   return {
     nodeEnv: parsed.NODE_ENV,
-    serverUrl,
+    appUrl,
     workerToken: parsed.BACKTEST_WORKER_TOKEN,
     workerId: parsed.BACKTEST_WORKER_ID ?? fallbackId,
     concurrency: parsed.BACKTEST_WORKER_CONCURRENCY,
@@ -205,7 +205,7 @@ class RemoteBacktestSupervisor {
 
   private async claim(slot: number): Promise<ClaimedJob | null> {
     return this.requestWithTimeout(
-      this.serverEndpoint(`/api/internal/workers/jobs/claim?waitSeconds=${this.config.claimWaitSeconds}`),
+      this.appEndpoint(`/api/internal/workers/jobs/claim?waitSeconds=${this.config.claimWaitSeconds}`),
       {
         method: 'POST',
         headers: this.jsonHeaders(),
@@ -219,7 +219,7 @@ class RemoteBacktestSupervisor {
         if (response.status === 204) return null;
         if (response.status === 409) {
           const detail = await response.text();
-          throw new Error(`server/worker release 불일치: ${detail.slice(0, 500)}`);
+          throw new Error(`app/worker release 불일치: ${detail.slice(0, 500)}`);
         }
         if (!response.ok) {
           await response.body?.cancel();
@@ -284,9 +284,9 @@ class RemoteBacktestSupervisor {
   }
 
   private async downloadInput(job: ClaimedJob, destinationPath: string): Promise<void> {
-    const inputUrl = new URL(job.inputUrl, this.config.serverUrl);
-    if (inputUrl.origin !== this.config.serverUrl.origin) {
-      throw new Error('서버가 다른 origin의 input URL을 반환했습니다');
+    const inputUrl = new URL(job.inputUrl, this.config.appUrl);
+    if (inputUrl.origin !== this.config.appUrl.origin) {
+      throw new Error('app이 다른 origin의 input URL을 반환했습니다');
     }
     const expectedHash = await this.withRequestTimeout(10 * 60_000, async (signal) => {
       const response = await fetch(inputUrl, {
@@ -370,7 +370,7 @@ class RemoteBacktestSupervisor {
     };
     const heartbeat = async (): Promise<void> => {
       await this.requestWithTimeout(
-        this.serverEndpoint(`/api/internal/workers/jobs/${job.jobId}/heartbeat`), {
+        this.appEndpoint(`/api/internal/workers/jobs/${job.jobId}/heartbeat`), {
         method: 'POST',
         headers: this.jsonHeaders(),
         body: JSON.stringify({
@@ -439,7 +439,7 @@ class RemoteBacktestSupervisor {
     const checksum = await sha256File(resultPath);
     const stat = await fs.stat(resultPath);
     await this.requestWithTimeout(
-      this.serverEndpoint(`/api/internal/workers/jobs/${job.jobId}/result?attempt=${job.attempt}`),
+      this.appEndpoint(`/api/internal/workers/jobs/${job.jobId}/result?attempt=${job.attempt}`),
       {
         method: 'PUT',
         headers: {
@@ -475,7 +475,7 @@ class RemoteBacktestSupervisor {
     telemetry?: BacktestExecutionTelemetry,
   ): Promise<void> {
     await this.requestWithTimeout(
-      this.serverEndpoint(`/api/internal/workers/jobs/${job.jobId}/finish`), {
+      this.appEndpoint(`/api/internal/workers/jobs/${job.jobId}/finish`), {
         method: 'POST',
         headers: this.jsonHeaders(),
         body: JSON.stringify({
@@ -510,8 +510,8 @@ class RemoteBacktestSupervisor {
     };
   }
 
-  private serverEndpoint(relativePath: string): URL {
-    return new URL(relativePath, this.config.serverUrl);
+  private appEndpoint(relativePath: string): URL {
+    return new URL(relativePath, this.config.appUrl);
   }
 
   private async requestWithTimeout<T>(
@@ -591,7 +591,7 @@ async function checkCompatibility(config: SupervisorConfig): Promise<'READY' | '
   if (config.nodeEnv === 'production' && runnerVersion === 'unknown') {
     throw new Error('remote worker 검사에는 dist/build-info.json의 Git SHA가 필요합니다');
   }
-  const response = await fetch(new URL('/api/internal/workers/probe', config.serverUrl), {
+  const response = await fetch(new URL('/api/internal/workers/probe', config.appUrl), {
     method: 'POST',
     headers: {
       authorization: `Bearer ${config.workerToken}`,

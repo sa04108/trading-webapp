@@ -23,7 +23,7 @@ export class ResultArtifactUploadError extends Error {
 export class RemoteResultUploadManager {
   constructor(private readonly tempRoot: string) {}
 
-  /** server 부팅 전, 재시작으로 끊겨 재개할 수 없는 upload 조각만 정리한다. */
+  /** app 부팅 전, 재시작으로 끊겨 재개할 수 없는 upload 조각만 정리한다. */
   cleanupOrphanedUploads(): Promise<void> {
     return fs.rm(path.join(this.tempRoot, 'remote-backtests', 'uploads'), {
       recursive: true,

@@ -108,7 +108,7 @@ src/shared/schemas/       웹·서버가 공유하는 Zod 스키마 (백테스�
 src/web/features/         화면 단위 (auth, backtests, dashboard, datasets, settings)
 src/workers/              backtest-child.ts + remote-backtest-supervisor.ts
 migrations/               Drizzle 마이그레이션 — 0000 하나뿐인 이유는 §9
-infra/, scripts/          서버 프로비저닝·배포·백업 (§10)
+infra/, scripts/          app 노드 프로비저닝·배포·백업 (§10)
 tests/                    unit / integration / e2e / architecture
 ```
 
@@ -206,7 +206,7 @@ CSV 형식: `timestamp,open,high,low,close,volume` (ISO 8601 UTC 또는 epoch ms
 ## 11. 배포 개요 (요약 — 원문은 README 배포 절)
 
 ```bash
-./scripts/bootstrap-server.sh          # app 노드 1회 준비
+./scripts/bootstrap-app.sh             # app 노드 1회 준비
 ./scripts/bootstrap-worker.sh          # worker 노드 1회 준비
 cp deploy.env.example deploy.env
 pnpm run deploy                       # QP_WORKER_HOST가 있으면 app+worker
@@ -228,8 +228,8 @@ pnpm run deploy --target all          # 양쪽 호스트가 필수인 통합 배
   통과해야 전환한다 (D-061).
 - 독립 복원 스크립트는 제공하지 않는다. 백업 복구 절차와 격리 복구 검증은 Phase 7
   disaster runbook 에서 함께 설계한다 (D-031).
-- 주의: `provision-server.sh` 는 **POSIX sh** 다 — bash 문법(배열, `[[ ]]`, pipefail) 금지.
-  `bootstrap-server.sh`/`deploy-app.sh`와 Worker 스크립트는 bash. `provision-worker.sh`와 container
+- 주의: `provision-app.sh` 는 **POSIX sh** 다 — bash 문법(배열, `[[ ]]`, pipefail) 금지.
+  `bootstrap-app.sh`/`deploy-app.sh`와 Worker 스크립트는 bash. `provision-worker.sh`와 container
   entrypoint는 POSIX sh다. 셸 스크립트는 전부 LF (`.gitattributes` 강제).
 
 ## 12. 작업 관례
@@ -242,7 +242,7 @@ pnpm run deploy --target all          # 양쪽 호스트가 필수인 통합 배
 - 커밋 메시지는 한국어 + conventional prefix (`feat:`, `fix:`, `docs:`,
   `refactor:` …). 본문에 "왜"를 적는다. 관련 D 번호가 있으면 언급한다.
 - 비밀값(키·토큰·비밀번호)은 argv 로 넘기지 않는다 — ps·셸 히스토리에 남는다.
-  stdin 이나 root 전용 파일로 전달한다 (deploy-app.sh·provision-server.sh 가 예시).
+  stdin 이나 root 전용 파일로 전달한다 (deploy-app.sh·provision-app.sh 가 예시).
 - 테스트는 실동작을 검증한다 — 모킹으로 초록불만 만드는 테스트는 리뷰에서 걸린다.
 
 ## 13. 자주 밟는 함정
@@ -256,7 +256,7 @@ pnpm run deploy --target all          # 양쪽 호스트가 필수인 통합 배
 | domain 에서 import | fs·env·프레임워크·DB — dependency-cruiser 가 잡는다. 설계를 다시 보라는 신호 |
 | 웹에 제어 기능 추가 | 스펙 §2.6 위반 — "헌법 개정" 없이는 금지 |
 | 새 비밀 필드 로깅 | redaction 목록(logger.ts + 스펙 §16) 갱신 누락 |
-| 서버 app.env | `SESSION_SECRET` 이 든 파일 — 절대 덮어쓰지 않는다 (세션 전체 무효화) |
+| app의 app.env | `SESSION_SECRET` 이 든 파일 — 절대 덮어쓰지 않는다 (세션 전체 무효화) |
 | 셸 스크립트 CRLF | Windows 에디터로 저장 시 주의 — `.gitattributes` 가 LF 강제하지만 도구 우회 금지 |
 
 ---

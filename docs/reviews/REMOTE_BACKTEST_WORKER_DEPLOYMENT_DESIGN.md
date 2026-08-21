@@ -14,9 +14,9 @@
 unit과 fallback 경로는 두지 않는다. 호스트의 Docker daemon은 OS 서비스 관리자가
 관리하지만 Worker 수명주기, 재시작, 로그 회전과 격리는 Compose가 담당한다.
 
-웹/API 서버는 기존 systemd 배포를 유지한다. 두 실행 환경의 차이 때문에 소스나
+app은 기존 systemd 배포를 유지한다. 두 실행 환경의 차이 때문에 소스나
 TypeScript를 각각 빌드하지는 않는다. `scripts/build-release.sh`가 검증한 공통 release
-archive를 한 번 만들고, 웹 서버는 archive를 직접 설치하며 Worker는 같은 archive를
+archive를 한 번 만들고, app은 archive를 직접 설치하며 Worker는 같은 archive를
 Docker image에 포장한다.
 
 Worker는 백테스트 전용이다. 자동매매 실행기는 주문 권한과 장애 격리가 필요하므로 같은
@@ -28,7 +28,7 @@ image나 Compose service에 합치지 않는다.
 개발 PC
 ├── scripts/deploy.mjs                app/worker 선택 → SSH/SCP 전송·실행
 ├── scripts/build-release.sh          검증 → 공통 archive + SHA-256
-├── scripts/deploy-app.sh             공통 archive → 웹/API 서버
+├── scripts/deploy-app.sh             공통 archive → app
 ├── scripts/build-worker-image.sh     공통 archive → linux/amd64 image tar
 ├── scripts/bootstrap-worker.sh       Worker 호스트 1회 준비
 └── scripts/deploy-worker.sh          image load → Compose 전환 → probe/rollback
@@ -85,8 +85,8 @@ QP_WORKER_ENV_FILE="$HOME/.config/quant-platform/worker-1.env" \
 
 ```dotenv
 NODE_ENV=production
-BACKTEST_SERVER_URL=https://quant.example.com
-BACKTEST_WORKER_TOKEN=<server와 같은 32자 이상 token>
+BACKTEST_APP_URL=https://quant.example.com
+BACKTEST_WORKER_TOKEN=<app과 같은 32자 이상 token>
 BACKTEST_WORKER_ID=worker-pc-1
 BACKTEST_WORKER_CONCURRENCY=1
 BACKTEST_WORK_ROOT=/var/lib/quant-backtest-worker
@@ -185,14 +185,14 @@ Content-Type: application/json
 }
 ```
 
-token, runner SHA, protocol이 모두 맞고 서버가 remote면 `READY`, local이면 `STANDBY`다.
-local에서 probe를 사용하려면 server `app.env`에 같은 token을 미리 설정하고 서버를
+token, runner SHA, protocol이 모두 맞고 app이 remote면 `READY`, local이면 `STANDBY`다.
+local에서 probe를 사용하려면 app `app.env`에 같은 token을 미리 설정하고 app을
 재시작해야 한다. local 모드에서는 probe 외 claim/heartbeat/artifact route는 등록하지
 않는다. 401/403, SHA/protocol mismatch, timeout은 배포 실패다.
 
 ## 8. 실행 중 잡과 후속 범위
 
-v1에는 drain protocol이 없다. 배포로 container가 종료되면 실행 중 계산은 유실되고 서버가
+v1에는 drain protocol이 없다. 배포로 container가 종료되면 실행 중 계산은 유실되고 app이
 lease 만료 뒤 같은 잡을 기존 정책대로 재할당한다. 결과 정확성은 유지되지만 계산량은
 낭비될 수 있으므로 배포 전 실행 중 잡 여부를 운영자가 확인한다.
 

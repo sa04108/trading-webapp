@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 웹/API 서버와 Docker Worker가 공유하는 검증된 release archive를 한 번 만든다.
+# app과 Docker Worker가 공유하는 검증된 release archive를 한 번 만든다.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

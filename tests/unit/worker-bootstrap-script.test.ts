@@ -34,7 +34,7 @@ printf 'scp:%s\n' "$*" >> "$COMMAND_LOG"
     const envFile = path.join(root, 'worker.env');
     fs.writeFileSync(envFile, [
       'NODE_ENV=production',
-      'BACKTEST_SERVER_URL=https://quant.example.com',
+      'BACKTEST_APP_URL=https://quant.example.com',
       `BACKTEST_WORKER_TOKEN=${token}`,
       'BACKTEST_WORKER_ID=worker-pc-1',
       'BACKTEST_WORKER_CONCURRENCY=1',
@@ -92,7 +92,7 @@ printf 'scp:%s\n' "$*" >> "$COMMAND_LOG"
     const envFile = path.join(root, 'worker.env');
     fs.writeFileSync(envFile, [
       'NODE_ENV=production',
-      'BACKTEST_SERVER_URL=https://quant.example.com',
+      'BACKTEST_APP_URL=https://quant.example.com',
       'BACKTEST_WORKER_TOKEN=worker-token-long-enough-for-validation',
       'BACKTEST_WORKER_ID=worker-pc-1',
       'BACKTEST_WORKER_CONCURRENCY=1',
