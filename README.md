@@ -166,20 +166,17 @@ passphrase 가 있으면 `ssh-add` 로 agent 에 먼저 올린다 — 접속 확
 
 ### 첫 배포와 계정
 
-프로젝트 루트의 Ansible inventory 예제를 복사해 app과 선택적 worker 접속 정보를 채운다.
-실제 inventory는 Git에서 제외되며 SSH config는 선택 사항이다. inventory의
-`ansible_host`·`ansible_user`·`ansible_ssh_private_key_file`을 직접 사용할 수 있다.
+프로젝트 루트의 배포 설정 예제를 복사해 app과 선택적 worker 접속 정보를 채운다.
+실제 `deploy.env`는 Git에서 제외되며 runtime 비밀값은 넣지 않는다. SSH config를
+사용한다면 `QP_APP_HOST`·`QP_WORKER_HOST`에 Host alias를 쓰고 나머지 접속 값은 비워도 된다.
 
 ```bash
-cp ansible/inventory.example.yml ansible/inventory.yml
-python3 -m venv .venv-ansible
-.venv-ansible/bin/pip install -r ansible/requirements.txt
-export PATH="$(pwd)/.venv-ansible/bin:$PATH"
+cp deploy.env.example deploy.env
 ```
 
-배포는 자동으로 시작되지 않는다. 무인자 실행은 inventory의 `worker` 그룹에 호스트가
-있으면 app과 worker를, 없으면 app만 선택한다. 명시적 `all`은 양쪽 호스트가 모두 있어야
-하며 두 preflight를 먼저 통과한 뒤 공통 release를 한 번만 생성한다.
+배포는 자동으로 시작되지 않는다. 무인자 실행은 `QP_WORKER_HOST`가 있으면 app과 worker를,
+없으면 app만 선택한다. 명시적 `all`은 `QP_APP_HOST`와 `QP_WORKER_HOST`가 모두 있어야 하며
+두 SSH preflight를 먼저 통과한 뒤 공통 release를 한 번만 생성한다.
 
 ```bash
 pnpm run deploy
@@ -188,18 +185,14 @@ pnpm run deploy --target worker
 pnpm run deploy --target all
 ```
 
-다른 inventory는 Ansible 표준 환경변수로 지정한다.
+`deploy.env`는 app/worker별로 `HOST`, `SSH_USER`, `SSH_KEY`, `SSH_PORT`, `SSH_JUMP`,
+`SSH_HOST_KEY`, `SSH_OPTS`를 지원한다. 별도 설정 파일을 선택하는 CLI 인자는 없다.
+app과 worker에 서로 다른 키·포트·점프 호스트를 지정할 수 있다.
 
-```bash
-ANSIBLE_INVENTORY=/secure/production.yml pnpm run deploy
-```
-
-`app`과 `worker`는 inventory group 이름으로 고정한다. 프로젝트 CLI의 `--target`은
-배포 component를 명시적으로 제한하고 내부에서 Ansible `--limit`으로 변환된다. worker가
-선택되면 실행 중 image의 Git SHA와 관계없이 새 image를 검증하고 container를 재생성한다.
-
-Ansible은 격리된 로컬 venv에서만 실행되고 노드에는 상주 agent를 설치하지 않는다.
-버전은 `ansible/requirements.txt`에 고정한다.
+`app`과 `worker`는 배포 component 이름으로 고정한다. `deploy.mjs`가 SSH/SCP로 시도별
+원격 임시 디렉터리에 파일을 전송하고 node-local transaction을 실행한 뒤 그 디렉터리를
+정리한다. worker가 선택되면 실행 중 image의 Git SHA와 관계없이 새 image를 검증하고
+container를 재생성한다.
 
 배포 후 서버에서 관리자 생성과 TOTP 등록을 순서대로 한다 (정확한 명령은 bootstrap
 출력에 나온다):

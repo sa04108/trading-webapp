@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Ansible app role이 운영 노드에서 실행하는 release transaction.
+# deploy.mjs가 app 노드에서 실행하는 release transaction.
 #
 # 사용법: deploy-app.sh <release-archive> <checksum-file> <release-name>
-# SSH·업로드·대상 선택은 Ansible이 담당하고, 이 스크립트는 잠금 이후의 원자적 전환과
+# SSH·업로드·대상 선택은 deploy.mjs가 담당하고, 이 스크립트는 잠금 이후의 원자적 전환과
 # 성공/실패 산출물 정리만 담당한다. source하면 테스트 가능한 함수만 정의한다.
 set -euo pipefail
 

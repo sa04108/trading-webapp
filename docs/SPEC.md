@@ -333,7 +333,7 @@ quant-platform/
 │  └─ systemd/
 ├─ scripts/
 │  ├─ bootstrap-server.sh    # 개발 PC 에서 새 서버 셋업 (provision-server.sh 업로드·실행)
-│  ├─ deploy.mjs             # Ansible inventory 기반 app/worker target 조정
+│  ├─ deploy.mjs             # deploy.env 기반 app/worker SSH/SCP 배포 조정
 │  ├─ deploy-app.sh
 │  └─ backup.sh
 ├─ docs/
@@ -1857,11 +1857,11 @@ dist/
 └─ current -> releases/20260726-090000-bcdefa2
 ```
 
-app 전환 순서 (Ansible app role과 `scripts/deploy-app.sh`가 수행):
+app 전환 순서 (`scripts/deploy.mjs`와 `scripts/deploy-app.sh`가 수행):
 
 1. 개발 PC에서 lint·typecheck·test·build
 2. tar 생성
-3. Ansible이 app 노드의 시도별 임시 디렉터리로 archive와 checksum을 업로드
+3. deploy.mjs가 app 노드의 시도별 임시 디렉터리로 archive와 checksum을 SCP 업로드
 4. app 배포 전역 `flock` 획득 후 checksum 검증
 5. `.incomplete-<release>` staging 디렉터리에 상태 마커를 만들고 압축 해제
 6. staging에서 production dependency 설치

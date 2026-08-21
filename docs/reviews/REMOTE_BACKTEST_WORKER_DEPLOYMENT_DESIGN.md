@@ -26,8 +26,9 @@ image나 Compose service에 합치지 않는다.
 
 ```text
 개발 PC
+├── scripts/deploy.mjs                app/worker 선택 → SSH/SCP 전송·실행
 ├── scripts/build-release.sh          검증 → 공통 archive + SHA-256
-├── scripts/deploy-app.sh          공통 archive → 웹/API 서버
+├── scripts/deploy-app.sh             공통 archive → 웹/API 서버
 ├── scripts/build-worker-image.sh     공통 archive → linux/amd64 image tar
 ├── scripts/bootstrap-worker.sh       Worker 호스트 1회 준비
 └── scripts/deploy-worker.sh          image load → Compose 전환 → probe/rollback
@@ -56,10 +57,9 @@ systemd unit을 설치하지 않는다. 인바운드 애플리케이션 포트�
 5. archive의 SHA-256 checksum을 만든다.
 
 `pnpm run deploy --target app|worker|all`이 공통 builder를 한 번 호출한다. 생성된 archive와
-checksum은 임시 Ansible extra vars로 각 role에 전달되고, role은 노드별 임시 디렉터리에
-업로드한 뒤 `deploy-app.sh` 또는 `deploy-worker.sh` transaction을 실행한다. 두 저수준
-스크립트는 SSH나 build를 담당하지 않으며, 노드 안에서 lock·전환·rollback·정리만 한 단위로
-수행한다.
+checksum은 `deploy.mjs`가 노드별 임시 디렉터리에 SCP로 업로드한 뒤 `deploy-app.sh` 또는
+`deploy-worker.sh` transaction에 전달한다. 두 저수준 스크립트는 SSH나 build를 담당하지
+않으며, 노드 안에서 lock·전환·rollback·정리만 한 단위로 수행한다.
 
 `scripts/build-worker-image.sh`는 archive를 별도로 다시 컴파일하지 않는다. Docker build
 단계에서는 production dependency만 target Linux ABI로 설치하고 공통 `dist`를 그대로
@@ -157,9 +157,9 @@ pnpm run deploy --target worker
 
 배포 순서는 다음과 같다.
 
-1. Ansible preflight로 SSH/sudo, Docker/Compose, env/Compose 설치 상태를 확인한다.
+1. deploy.mjs의 SSH preflight로 sudo, Docker/Compose, env/Compose 설치 상태를 확인한다.
 2. 공통 archive를 만들고 로컬 checksum을 검증한다.
-3. `linux/amd64` worker image를 만들고 Ansible로 image tar/checksum을 업로드한다.
+3. `linux/amd64` worker image를 만들고 SCP로 image tar/checksum을 업로드한다.
 4. 원격 checksum을 검증한 뒤에만 `docker load`한다.
 5. image OCI revision label과 release Git SHA가 같은지 확인한다.
 6. 이전 Compose와 image 참조를 보관하고 새 image로 container를 재생성한다.
@@ -196,7 +196,7 @@ v1에는 drain protocol이 없다. 배포로 container가 종료되면 실행 �
 lease 만료 뒤 같은 잡을 기존 정책대로 재할당한다. 결과 정확성은 유지되지만 계산량은
 낭비될 수 있으므로 배포 전 실행 중 잡 여부를 운영자가 확인한다.
 
-다중 호스트 inventory, fleet 순차 배포, `DRAINING`/graceful drain, 자동 확장은 후속 범위다.
+다중 worker 호스트, fleet 순차 배포, `DRAINING`/graceful drain, 자동 확장은 후속 범위다.
 Docker 외 실행 방식과 systemd Worker fallback은 후속 범위가 아니라 의도적으로 제거한
 경로다.
 

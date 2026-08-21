@@ -1378,7 +1378,7 @@
   번 만들고 웹 deploy와 Worker image build가 함께 소비한다. Worker image 안에서 소스를
   다시 컴파일하지 않는다. base image는 Node patch와 digest를 함께 고정하고 Git SHA를 OCI
   label과 `dist/build-info.json` 양쪽에서 검증한다.
-- **배포·복구:** registry 없이 image tar와 SHA-256을 Ansible로 전송한다. Compose 재생성 뒤 token,
+- **배포·복구:** registry 없이 image tar와 SHA-256을 SCP로 전송한다. Compose 재생성 뒤 token,
   Git SHA, protocol을 확인하는 no-claim probe가 `READY` 또는 local 준비 상태 `STANDBY`여야
   성공이다. 성공하면 현재 image만 남기고, 실패하면 이전 Compose/image로 자동 복구한 뒤
   실패 candidate를 지운다. rollback 검증이 실패한 경우에만 양쪽 image를 보존한다.
@@ -1394,40 +1394,40 @@
 
 ## D-062: 배포는 Linux 단일 진입점에서 app과 worker를 같은 release로 조정한다
 
-- **공식 진입점:** 표준 Ansible inventory를 읽는 `pnpm run deploy`와 명시적
-  `--target app|worker|all`만 일반 배포 경로로 둔다. 무인자 실행은 `worker` 그룹에
-  호스트가 있으면 `all`, 없으면 `app`으로 해석한다. 명시적 `all`은 양쪽 호스트가 필수다.
-  `deploy-app.sh`와 `deploy-worker.sh`는 role이 노드에서 호출하는 내부 transaction이다.
-- **대상 이름:** 운영 서비스와 inventory group은 `app`, 계산 서비스와 group은 `worker`로
-  고정한다. 프로젝트 CLI는 component 선택이므로 `--target`을 쓰고, `--limit`은 Ansible의
-  host/group 제한 옵션으로 내부에서만 사용한다.
+- **공식 진입점:** 프로젝트 루트의 고정 `deploy.env`를 읽는 `pnpm run deploy`와 명시적
+  `--target app|worker|all`만 일반 배포 경로로 둔다. 무인자 실행은 `QP_WORKER_HOST`가
+  있으면 `all`, 없으면 `app`으로 해석한다. 명시적 `all`은 양쪽 호스트가 필수다.
+  `deploy-app.sh`와 `deploy-worker.sh`는 `deploy.mjs`가 노드에서 호출하는 내부 transaction이다.
+- **대상 이름:** 운영 서비스는 `app`, 계산 서비스는 `worker`로 고정한다. 프로젝트 CLI는
+  component 선택이므로 `--target`을 사용한다.
 - **동일성:** 검증 gate와 공통 archive 생성은 배포 전체에서 한 번만 실행한다. worker
-  image는 그 archive를 입력으로 만들며 두 role에는 생성된 archive와 checksum을 전달한다.
+  image는 그 archive를 입력으로 만들며 두 node-local transaction에는 생성된 archive와
+  checksum을 전달한다.
   `all`은 두 preflight를 먼저 통과한 뒤 app, worker 순서로 적용한다. worker가 선택되면
   같은 Git SHA도 항상 재배포하고 SHA는 app/worker 호환성 검증에만 사용한다.
-- **설정 경계:** 기본 `ansible/inventory.yml`은 Git에서 제외하고
-  `ANSIBLE_INVENTORY`로 외부 inventory를 지정할 수 있다. SSH config는 선택 사항이며
-  호스트·사용자·키 경로를 inventory에 직접 둘 수 있다. runtime 비밀값은 원격 root 전용
+- **설정 경계:** `deploy.env`는 Git에서 제외하고 app/worker별 호스트·사용자·키·포트·점프
+  호스트와 SSH 옵션만 둔다. 다른 설정 파일을 고르는 인자는 제공하지 않는다. SSH config는
+  선택 사항이며 Host alias를 쓸 수 있다. runtime 비밀값은 원격 root 전용
   `app.env`·`worker.env`에만 둔다.
 - **부분 실패:** worker 전환 자체는 이전 image로 rollback한다. 이미 readiness를 통과한
   app까지 worker 실패만으로 되돌리면 그 사이 운영 DB 쓰기를 잃을 수 있으므로 app은 새
   release로 유지하고 같은 commit에서 `--target worker` 재시도를 요구한다. SHA가 다른
   구 worker는 claim이 거부된다.
 
-## D-063: 수동 배포의 전송·대상 선택은 Ansible, 전환은 노드 로컬 transaction이 맡는다
+## D-063: 수동 배포의 전송·대상 선택은 deploy.mjs, 전환은 노드 로컬 transaction이 맡는다
 
-- **역할:** 배포 trigger는 계속 사람이 실행하는 pnpm 명령이다. Ansible은 로컬에서만 실행하는
-  agentless 전송·실행 도구이며 AWX, schedule, CI 자동 배포를 추가하지 않는다. `ansible-core`는
-  격리 venv에 버전을 고정한다.
-- **트랜잭션 경계:** app/worker role은 시도별 원격 임시 디렉터리에 검증 대상을 올리고 노드
-  로컬 스크립트를 실행한 뒤 임시 디렉터리를 항상 지운다. 각 스크립트가 non-blocking `flock`,
-  전환, readiness, rollback, 산출물 정리를 한 잠금 범위에서 수행한다.
+- **역할:** 배포 trigger는 계속 사람이 실행하는 pnpm 명령이다. `deploy.mjs`가 로컬 OpenSSH의
+  `ssh`·`scp`를 직접 호출하며 별도 배포 framework나 원격 agent, schedule, CI 자동 배포를
+  추가하지 않는다.
+- **트랜잭션 경계:** `deploy.mjs`는 시도별 원격 임시 디렉터리에 검증 대상을 올리고 노드 로컬
+  스크립트를 실행한 뒤 임시 디렉터리를 항상 지운다. 각 스크립트가 non-blocking `flock`, 전환,
+  readiness, rollback, 산출물 정리를 한 잠금 범위에서 수행한다.
 - **산출물 수명:** 정상 성공 후 app은 현재 release만, worker는 현재 image만 남긴다. 검증된
   rollback 뒤에는 이전 정상 산출물만 남긴다. rollback 검증 실패 때만 이전·신규 산출물을
   모두 보존해 수동 복구 근거가 사라지지 않게 한다.
-- **동시성·자원:** `forks=1`, `serial=1`, facts 수집 비활성으로 노드를 순차 처리한다. Ansible은
-  배포 중에만 존재하는 control process이고 노드 메모리를 상시 점유하지 않는다. 노드별 lock이
-  별도 실행까지 막으므로 CLI 중복 실행도 같은 target에서 즉시 실패한다.
+- **동시성·자원:** app과 worker preflight 및 적용은 항상 순차 처리한다. 원격 상주 control
+  process는 없으며 노드별 lock이 별도 실행까지 막으므로 CLI 중복 실행도 같은 target에서
+  즉시 실패한다.
 - **마이그레이션:** 제품과 schema가 아직 빠르게 바뀌고 디스크가 작으므로 expand-contract를
   의무화하지 않는다. 현재는 파괴적 migration도 허용하고 app snapshot으로 코드·DB를 함께
   rollback한다. 이 패턴은 schema 안정화와 디스크 여유 확보 뒤 재검토한다.

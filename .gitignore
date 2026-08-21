@@ -1,7 +1,6 @@
 ### Node
 # Dependencies
 node_modules/
-/.venv-ansible/
 
 # Logs
 *.log
@@ -33,7 +32,7 @@ out/
 .env
 .env.local
 .env.*.local
-/ansible/inventory.yml
+/deploy.env
 
 # npm cache directory
 .npm

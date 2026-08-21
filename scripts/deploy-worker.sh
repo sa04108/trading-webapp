@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Ansible worker role이 Worker 노드에서 실행하는 Docker image transaction.
+# deploy.mjs가 worker 노드에서 실행하는 Docker image transaction.
 # 사용법: deploy-worker.sh <image-archive> <checksum-file> <compose-file> <image-ref> <git-sha> <manifest-sha>
 set -euo pipefail
 

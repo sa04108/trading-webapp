@@ -77,34 +77,26 @@ QP_WORKER_ENV_FILE="$HOME/.config/quant-platform/worker-1.env" \
 
 ## 3. 동일 release를 app과 worker에 배포
 
-프로젝트 루트에서 Ansible inventory 예제를 복사하고 app·worker 호스트를 채운다.
-SSH config는 선택 사항이며 아래처럼 inventory에 접속 정보를 직접 둘 수 있다.
+프로젝트 루트에서 배포 설정 예제를 복사하고 app·worker SSH 접속 정보를 채운다.
+SSH config는 선택 사항이며 Host alias를 쓴다면 키·사용자·포트는 비워 둘 수 있다.
 
-```yaml
-all:
-  children:
-    app:
-      hosts:
-        app-node:
-          ansible_host: app.example.com
-          ansible_user: ubuntu
-          ansible_ssh_private_key_file: /absolute/path/to/app.pem
-    worker:
-      hosts:
-        worker-node:
-          ansible_host: worker.example.com
-          ansible_user: ubuntu
-          ansible_ssh_private_key_file: /absolute/path/to/worker.pem
+```dotenv
+QP_APP_HOST=app.example.com
+QP_APP_SSH_USER=ubuntu
+QP_APP_SSH_KEY=/absolute/path/to/app.pem
+QP_WORKER_HOST=worker.example.com
+QP_WORKER_SSH_USER=ubuntu
+QP_WORKER_SSH_KEY=/absolute/path/to/worker.pem
 ```
 
 ```bash
-cp ansible/inventory.example.yml ansible/inventory.yml
+cp deploy.env.example deploy.env
 pnpm run deploy
 ```
 
 무인자 실행은 worker 호스트가 있으므로 app과 worker를 선택한다. 명시적으로
-`--target all`을 사용해도 되며, 이 경우 양쪽 그룹 중 하나라도 비어 있으면 실패한다.
-Ansible은 양쪽 preflight를 먼저 수행한 뒤 공통 archive를 한 번만 검증·빌드하고
+`--target all`을 사용해도 되며, 이 경우 양쪽 HOST 중 하나라도 비어 있으면 실패한다.
+deploy.mjs는 양쪽 SSH preflight를 먼저 수행한 뒤 공통 archive를 한 번만 검증·빌드하고
 worker image도 app 전환 전에 만든다.
 
 worker가 선택되면 같은 Git SHA가 실행 중이어도 image checksum을 검증하고 container를

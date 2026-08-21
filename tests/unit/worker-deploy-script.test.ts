@@ -47,7 +47,6 @@ describe('Docker worker deployment', () => {
 
   it('keeps checksum, manifest, probe, lock, and rollback inside one remote transaction', () => {
     const deploy = fs.readFileSync('scripts/deploy-worker.sh', 'utf8');
-    const role = fs.readFileSync('ansible/roles/worker/tasks/main.yml', 'utf8');
     const builder = fs.readFileSync('scripts/build-worker-image.sh', 'utf8');
     const orchestrator = fs.readFileSync('scripts/deploy.mjs', 'utf8');
 
@@ -67,10 +66,10 @@ describe('Docker worker deployment', () => {
     expect(deploy).toContain('UPLOAD_INPUTS_VALIDATED=1');
     expect(deploy).toContain('rm -f -- "${IMAGE_ARCHIVE}" "${CHECKSUM_FILE}" "${NEW_COMPOSE}"');
     expect(deploy).toContain('quant-backtest-worker-${NEW_IMAGE_TAG}.tar.sha256');
-    expect(role).toContain('become: true');
-    expect(role).toContain('deploy-worker.sh');
-    expect(role).toContain('prefix: quant-worker-deploy.');
-    expect(role).not.toContain('worker_force_deploy');
+    expect(orchestrator).toContain("'/tmp/quant-worker-deploy.XXXXXX'");
+    expect(orchestrator).toContain("path.join(SCRIPT_DIR, 'deploy-worker.sh')");
+    expect(orchestrator).toContain("'sudo',\n      '-n',\n      '/bin/bash'");
+    expect(orchestrator).not.toContain('worker_force_deploy');
     expect(builder).toContain('quant-backtest-worker-${release_name}.tar');
     expect(orchestrator).toContain('quant-backtest-worker-${releaseName}.tar');
     expect(deploy).not.toContain('systemctl');
