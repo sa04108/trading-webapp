@@ -7,9 +7,9 @@ container로 보낸다. 기본값은 계속 local 동시성 1이다. 아래 전�
 ## 실행 계약
 
 - Worker 운영 경로는 Docker Compose 하나다. 애플리케이션 systemd unit은 없다.
-- Server와 Worker에는 한 번 만든 같은 release archive의 `dist`를 배포한다.
-- Worker는 인바운드 port와 server DB 권한이 필요 없다. Server HTTPS outbound만 쓴다.
-- 공유 token은 server `/etc/quant-platform/app.env`와 worker
+- app과 Worker에는 한 번 만든 같은 release archive의 `dist`를 배포한다.
+- Worker는 인바운드 port와 app DB 권한이 필요 없다. app HTTPS outbound만 쓴다.
+- 공유 token은 app `/etc/quant-platform/app.env`와 worker
   `/etc/quant-platform/worker.env`에만 두며 두 파일 모두 `root:root 0600`이다.
 - Remote 병렬도는 모든 Worker의 `BACKTEST_WORKER_CONCURRENCY` 합이다. 처음에는 호스트당
   1로 시작한다.
@@ -22,8 +22,8 @@ container로 보낸다. 기본값은 계속 local 동시성 1이다. 아래 전�
 
 ```dotenv
 NODE_ENV=production
-BACKTEST_SERVER_URL=https://quant.example.com
-BACKTEST_WORKER_TOKEN=<server app.env와 같은 32자 이상 난수>
+BACKTEST_APP_URL=https://quant.example.com
+BACKTEST_WORKER_TOKEN=<app.env와 같은 32자 이상 난수>
 BACKTEST_WORKER_ID=worker-pc-1
 BACKTEST_WORKER_CONCURRENCY=1
 BACKTEST_WORK_ROOT=/var/lib/quant-backtest-worker
@@ -33,8 +33,8 @@ BACKTEST_HEARTBEAT_SECONDS=5
 LOG_LEVEL=info
 ```
 
-server가 아직 local이어도 배포 probe를 받으려면 server `app.env`에 같은
-`BACKTEST_WORKER_TOKEN`을 넣고 server를 재시작한다. local에서는 probe만 `STANDBY`로
+app이 아직 local이어도 배포 probe를 받으려면 app `app.env`에 같은
+`BACKTEST_WORKER_TOKEN`을 넣고 app을 재시작한다. local에서는 probe만 `STANDBY`로
 응답하며 Worker가 잡을 가져가는 API는 열리지 않는다.
 
 ## 2. Worker 호스트 부트스트랩
@@ -77,34 +77,26 @@ QP_WORKER_ENV_FILE="$HOME/.config/quant-platform/worker-1.env" \
 
 ## 3. 동일 release를 app과 worker에 배포
 
-프로젝트 루트에서 Ansible inventory 예제를 복사하고 app·worker 호스트를 채운다.
-SSH config는 선택 사항이며 아래처럼 inventory에 접속 정보를 직접 둘 수 있다.
+프로젝트 루트에서 배포 설정 예제를 복사하고 app·worker SSH 접속 정보를 채운다.
+SSH config는 선택 사항이며 Host alias를 쓴다면 키·사용자·포트는 비워 둘 수 있다.
 
-```yaml
-all:
-  children:
-    app:
-      hosts:
-        app-node:
-          ansible_host: app.example.com
-          ansible_user: ubuntu
-          ansible_ssh_private_key_file: /absolute/path/to/app.pem
-    worker:
-      hosts:
-        worker-node:
-          ansible_host: worker.example.com
-          ansible_user: ubuntu
-          ansible_ssh_private_key_file: /absolute/path/to/worker.pem
+```dotenv
+QP_APP_HOST=app.example.com
+QP_APP_SSH_USER=ubuntu
+QP_APP_SSH_KEY=/absolute/path/to/app.pem
+QP_WORKER_HOST=worker.example.com
+QP_WORKER_SSH_USER=ubuntu
+QP_WORKER_SSH_KEY=/absolute/path/to/worker.pem
 ```
 
 ```bash
-cp ansible/inventory.example.yml ansible/inventory.yml
+cp deploy.env.example deploy.env
 pnpm run deploy
 ```
 
 무인자 실행은 worker 호스트가 있으므로 app과 worker를 선택한다. 명시적으로
-`--target all`을 사용해도 되며, 이 경우 양쪽 그룹 중 하나라도 비어 있으면 실패한다.
-Ansible은 양쪽 preflight를 먼저 수행한 뒤 공통 archive를 한 번만 검증·빌드하고
+`--target all`을 사용해도 되며, 이 경우 양쪽 HOST 중 하나라도 비어 있으면 실패한다.
+deploy.mjs는 양쪽 SSH preflight를 먼저 수행한 뒤 공통 archive를 한 번만 검증·빌드하고
 worker image도 app 전환 전에 만든다.
 
 worker가 선택되면 같은 Git SHA가 실행 중이어도 image checksum을 검증하고 container를
@@ -112,11 +104,11 @@ worker가 선택되면 같은 Git SHA가 실행 중이어도 image checksum을 �
 
 새 container 시작 또는 인증·SHA·protocol probe가 실패하면 이전 image와 Compose 설정으로
 자동 롤백한다. 실행 중 잡은 drain하지 않으므로 가능하면 배포 전에 완료를 기다린다. 중간에
-종료된 잡은 heartbeat lease 만료 뒤 서버가 재시도한다.
+종료된 잡은 heartbeat lease 만료 뒤 app이 재시도한다.
 
 ## 4. remote 모드 전환과 확인
 
-server `app.env`를 다음처럼 바꾸고 server를 재시작한다.
+app `app.env`를 다음처럼 바꾸고 app을 재시작한다.
 
 ```dotenv
 BACKTEST_EXECUTION_MODE=remote
@@ -131,7 +123,7 @@ sudo docker ps --filter name=quant-backtest-worker
 sudo docker logs --tail 100 quant-backtest-worker
 ```
 
-Worker 로그의 `remote-worker.started`와 server journal의 claim/완료 감사 기록을 확인한다.
+Worker 로그의 `remote-worker.started`와 app journal의 claim/완료 감사 기록을 확인한다.
 Worker container에는 port mapping이 없어 `docker ps`의 PORTS가 비어 있어야 한다.
 
 ## 5. 병렬도·token·URL 변경
@@ -148,15 +140,15 @@ sudo docker compose \
 ```
 
 병렬도 2는 계산 child 두 개를 뜻한다. 대표 입력의 telemetry p95 RSS에 25% 여유를 더한
-메모리와 CPU slot을 확인하기 전에는 1을 유지한다. token 회전은 server와 모든 Worker
+메모리와 CPU slot을 확인하기 전에는 1을 유지한다. token 회전은 app과 모든 Worker
 env를 함께 갱신하며 전환 중 값이 다른 Worker는 401로 claim하지 못한다.
 
 ## 6. 장애와 수동 롤백
 
 - Worker나 네트워크가 끊기면 lease 만료 뒤 같은 잡이 attempt 상한까지 재시도된다.
-- 늦게 도착한 이전 attempt 결과는 서버가 거부한다.
-- server만 재시작해도 유효한 remote lease는 보존된다.
-- local로 돌아갈 때는 server를 local로 바꾸기 전에 Worker container를 중지한다. 활성 remote
+- 늦게 도착한 이전 attempt 결과는 app이 거부한다.
+- app만 재시작해도 유효한 remote lease는 보존된다.
+- local로 돌아갈 때는 app을 local로 바꾸기 전에 Worker container를 중지한다. 활성 remote
   lease는 `INTERRUPTED`가 되며 필요한 잡은 UI에서 복제한다.
 
 보존된 image는 다음으로 확인한다.

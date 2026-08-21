@@ -11,7 +11,7 @@ build_worker_image() {
   local checksum_file="$2"
   local release_name="$3"
   local output_dir="$4"
-  local context image_ref
+  local context image_ref worker_image_archive worker_image_checksum
 
   case "${release_name}" in
     ''|*[!a-zA-Z0-9._-]*) echo "Worker release 이름이 올바르지 않습니다: ${release_name}" >&2; return 1 ;;
@@ -46,15 +46,14 @@ build_worker_image() {
   fi
   rm -rf "${context}"
 
-  WORKER_IMAGE_REF="${image_ref}"
-  WORKER_IMAGE_ARCHIVE="${output_dir}/quant-backtest-worker-${release_name}.tar"
-  WORKER_IMAGE_CHECKSUM="${WORKER_IMAGE_ARCHIVE}.sha256"
-  if ! docker image save --output "${WORKER_IMAGE_ARCHIVE}" "${image_ref}"; then
-    rm -f "${WORKER_IMAGE_ARCHIVE}"
+  worker_image_archive="${output_dir}/quant-backtest-worker-${release_name}.tar"
+  worker_image_checksum="${worker_image_archive}.sha256"
+  if ! docker image save --output "${worker_image_archive}" "${image_ref}"; then
+    rm -f "${worker_image_archive}"
     return 1
   fi
-  printf '%s  %s\n' "$(sha256sum "${WORKER_IMAGE_ARCHIVE}" | awk '{ print $1 }')" \
-    "$(basename "${WORKER_IMAGE_ARCHIVE}")" > "${WORKER_IMAGE_CHECKSUM}"
+  printf '%s  %s\n' "$(sha256sum "${worker_image_archive}" | awk '{ print $1 }')" \
+    "$(basename "${worker_image_archive}")" > "${worker_image_checksum}"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
@@ -63,6 +62,4 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     exit 1
   }
   build_worker_image "$1" "$2" "$3" "$4"
-  printf 'WORKER_IMAGE_REF=%q\nWORKER_IMAGE_ARCHIVE=%q\nWORKER_IMAGE_CHECKSUM=%q\n' \
-    "${WORKER_IMAGE_REF}" "${WORKER_IMAGE_ARCHIVE}" "${WORKER_IMAGE_CHECKSUM}"
 fi

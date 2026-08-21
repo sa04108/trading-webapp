@@ -330,7 +330,7 @@ describe('deploy script failure workflow', () => {
 
   it('publishes a fully installed staging release only after checksum verification', () => {
     const deploy = readFileSync('scripts/deploy-app.sh', 'utf8');
-    const role = readFileSync('ansible/roles/app/tasks/main.yml', 'utf8');
+    const orchestrator = readFileSync('scripts/deploy.mjs', 'utf8');
 
     expect(deploy.indexOf('release archive checksum 불일치')).toBeLessThan(
       deploy.indexOf('sudo mkdir "${RELEASE_STAGING}"'),
@@ -346,8 +346,9 @@ describe('deploy script failure workflow', () => {
     expect(deploy).toContain('[ "${SWITCHED_RELEASE}" = "${RELEASE_DIR}" ]');
     expect(deploy).toContain('PREVIOUS_RELEASE="$(resolve_current_release)"');
     expect(deploy).not.toContain('ssh ');
-    expect(role).toContain('prefix: quant-app-deploy.');
-    expect(role).toContain('deploy-app.sh');
+    expect(orchestrator).toContain("'/tmp/quant-app-deploy.XXXXXX'");
+    expect(orchestrator).toContain("path.join(SCRIPT_DIR, 'deploy-app.sh')");
+    expect(orchestrator).toContain('deployApp(');
   });
 
   it('is a syntactically valid node-local transaction script', () => {

@@ -61,10 +61,10 @@ sweep 금지.
 ### 별도 PC 원격 백테스트 worker
 
 기본값은 그대로 `BACKTEST_EXECUTION_MODE=local`, `MAX_CONCURRENT_BACKTESTS=1`이다.
-Lightsail에서 계산을 빼려면 서버를 `remote`로 바꾸고, 같은 릴리스 아티팩트를 별도 PC에
+Lightsail에서 계산을 빼려면 app을 `remote`로 바꾸고, 같은 릴리스 아티팩트를 별도 PC에
 서 Docker Compose Worker image로 실행한다. Worker는 인바운드 포트를 열지 않고
-서버 HTTPS로 작업을 long-poll한 뒤, job 전용 SQLite 입력을 받아 계산하고 결과 SQLite를
-streaming 업로드한다. 서버와 worker의 Git SHA가 다르면 claim 자체가 거부된다.
+app HTTPS로 작업을 long-poll한 뒤, job 전용 SQLite 입력을 받아 계산하고 결과 SQLite를
+streaming 업로드한다. app과 worker의 Git SHA가 다르면 claim 자체가 거부된다.
 
 설정 예시는 `infra/app.env.example`, `infra/worker.env.example`에 있다. Worker 호스트는
 `scripts/bootstrap-worker.sh`로 Docker와 전용 경로만 준비한다. 이후 수동
@@ -76,7 +76,7 @@ container 전환, 인증·SHA·protocol probe와 실패 rollback까지 수행한
 `pnpm worker:remote`로 직접 실행할 수 있다. 실제 원격 동시 실행 수는 worker별
 `BACKTEST_WORKER_CONCURRENCY`로 조절하며 여러 worker PC도 같은 큐를 공유할 수 있다.
 처음에는 1로 시작하고 `backtest:telemetry-report`의 메모리·시간 표본을 근거로 올린다.
-remote 모드에서는 서버의 `MAX_CONCURRENT_BACKTESTS`는 사용되지 않는다.
+remote 모드에서는 app의 `MAX_CONCURRENT_BACKTESTS`는 사용되지 않는다.
 배포·전환·장애 복구 순서는 [원격 worker 운영 문서](docs/REMOTE_WORKER_OPERATIONS.md)를 따른다.
 
 Tailscale 에서 퍼블릭 + Caddy 로 옮긴 이유와 트레이드오프는
@@ -84,7 +84,7 @@ Tailscale 에서 퍼블릭 + Caddy 로 옮긴 이유와 트레이드오프는
 
 ### 사전 준비 (1회)
 
-1. 도메인 확보 — 서버의 고정 공인 IP 를 가리키는 A 레코드를 만든다.
+1. 도메인 확보 — app 노드의 고정 공인 IP 를 가리키는 A 레코드를 만든다.
 2. 호스트 준비 — Ubuntu 24.04 LTS, 고정 공인 IP 연결, SSH 공개키 등록,
    passwordless sudo.
 
@@ -94,26 +94,26 @@ Tailscale 에서 퍼블릭 + Caddy 로 옮긴 이유와 트레이드오프는
    퍼블릭 22 는 의도적으로 열어 둔다 — 클라우드 브라우저 SSH 콘솔이 out-of-band
    복구 경로다. UFW 의 `limit` 와 sshd 키 전용 인증이 브루트포스를 막는다.
 
-### 서버 구축 (인스턴스마다)
+### app 노드 구축 (인스턴스마다)
 
 ```bash
-./scripts/bootstrap-server.sh
+./scripts/bootstrap-app.sh
 ```
 
-서버 주소(`[user@]host`)와 도메인을 순서대로 물어본다. 비대화형은 환경변수로 지정한다 —
+app 노드 주소(`[user@]host`)와 도메인을 순서대로 물어본다. 비대화형은 환경변수로 지정한다 —
 **`~/.ssh/config` 를 만들지 않아도 한 줄로 끝난다:**
 
 ```bash
-SSH_KEY=~/.ssh/your-key QP_SSH_USER=ubuntu QP_HOST=203.0.113.10 \
-  QP_DOMAIN=quant.example.com ./scripts/bootstrap-server.sh
+SSH_KEY=~/.ssh/your-key QP_SSH_USER=ubuntu QP_APP_HOST=203.0.113.10 \
+  QP_DOMAIN=quant.example.com ./scripts/bootstrap-app.sh
 ```
 
-아래 저수준 접속 환경변수는 `bootstrap-server.sh`가 인식한다:
+아래 저수준 접속 환경변수는 `bootstrap-app.sh`가 인식한다:
 
 | 변수 | 뜻 |
 | --- | --- |
-| `QP_HOST` | 서버 주소, `[user@]host` |
-| `QP_SSH_USER` | 로그인 사용자명 — `QP_HOST` 에 `user@` 가 없을 때만 쓴다 |
+| `QP_APP_HOST` | app 노드 주소, `[user@]host` |
+| `QP_SSH_USER` | 로그인 사용자명 — `QP_APP_HOST` 에 `user@` 가 없을 때만 쓴다 |
 | `QP_SSH_PORT` | SSH 포트 (미지정이면 22) |
 | `SSH_KEY` | 개인키 경로. `~/` 로 시작하면 스크립트가 펼친다 |
 | `QP_SSH_JUMP` | 점프 호스트, `[user@]host[:port]` (ProxyJump) |
@@ -129,7 +129,7 @@ SSH_KEY=~/.ssh/your-key QP_SSH_USER=ubuntu QP_HOST=203.0.113.10 \
 수락(TOFU)과 같고, **바뀐** 호스트키는 여전히 거부한다. 지문을 미리 아는 환경이라면
 `QP_SSH_HOST_KEY=yes` 로 조이고 `ssh-keyscan` 으로 `known_hosts` 에 넣는다.
 
-**서버 주소는 `[user@]host` 형식이다.** 로그인 사용자명은 호스트마다 다르므로
+**app 노드 주소는 `[user@]host` 형식이다.** 로그인 사용자명은 호스트마다 다르므로
 (클라우드 이미지 관례가 `ubuntu`·`admin`·`ec2-user` 등으로 갈리고 자체 설치는 임의)
 스크립트가 가정하지 않는다. 둘 다 생략하면 로컬 사용자명이 쓰인다.
 
@@ -141,15 +141,15 @@ passphrase 가 있으면 `ssh-add` 로 agent 에 먼저 올린다 — 접속 확
 `~/.ssh/config` 에 `Host` 항목을 만들어 써도 된다 — 만들지 **않아도** 된다는 것이
 요점이다. 한 번 쓰고 버리는 인스턴스마다 로컬 설정 파일을 고치지 않아도 된다.
 
-**`sudo` 는 비밀번호 없이 되어야 한다** — `provision-server.sh` 가 root 로 돌아야 하고
+**`sudo` 는 비밀번호 없이 되어야 한다** — `provision-app.sh` 가 root 로 돌아야 하고
 프롬프트에 답할 TTY 가 없다.
 
-`infra/provision-server.sh` 는 멱등한 단일 실행이다:
+`infra/provision-app.sh` 는 멱등한 단일 실행이다:
 
 - apt 갱신·업그레이드, 빌드 도구 (`build-essential`·`python3`·`pkg-config` —
-  better-sqlite3·argon2가 네이티브 모듈이라 서버에서 컴파일된다),
+  better-sqlite3·argon2가 네이티브 모듈이라 app 노드에서 컴파일된다),
   `sqlite3` CLI, `jq`·`openssl`·`ufw`·`unattended-upgrades`
-- 서버 시간대 UTC 고정, `quant` 시스템 유저(nologin), 디렉터리 트리
+- app 노드 시간대 UTC 고정, `quant` 시스템 유저(nologin), 디렉터리 트리
 - Node.js 24 (nodejs.org 타르볼, SHA256 검증, `/opt/node` 심링크)
 - UFW: 인바운드 기본 거부 + 22(rate-limit)·80·443 허용
 - sshd 하드닝: `PermitRootLogin no`, `PasswordAuthentication no`,
@@ -157,7 +157,7 @@ passphrase 가 있으면 `ssh-add` 로 agent 에 먼저 올린다 — 접속 확
   `X11Forwarding no`
 - Caddy (공식 apt repo): `<도메인> → 127.0.0.1:3000` 리버스 프록시, Let's
   Encrypt 발급·갱신 자동. 보안 헤더·압축은 앱이 담당하므로 Caddy 는 프록시만 한다
-- `/etc/quant-platform/app.env` 생성 — `SESSION_SECRET` 은 서버에서 만든다.
+- `/etc/quant-platform/app.env` 생성 — `SESSION_SECRET` 은 app 노드에서 만든다.
   **파일이 이미 있으면 절대 덮지 않는다** (덮으면 기존 세션이 전부 무효화된다)
 - systemd 유닛 설치 후 `enable` — `start` 는 하지 않는다 (첫 기동은 통합 배포)
 
@@ -166,20 +166,17 @@ passphrase 가 있으면 `ssh-add` 로 agent 에 먼저 올린다 — 접속 확
 
 ### 첫 배포와 계정
 
-프로젝트 루트의 Ansible inventory 예제를 복사해 app과 선택적 worker 접속 정보를 채운다.
-실제 inventory는 Git에서 제외되며 SSH config는 선택 사항이다. inventory의
-`ansible_host`·`ansible_user`·`ansible_ssh_private_key_file`을 직접 사용할 수 있다.
+프로젝트 루트의 배포 설정 예제를 복사해 app과 선택적 worker 접속 정보를 채운다.
+실제 `deploy.env`는 Git에서 제외되며 runtime 비밀값은 넣지 않는다. SSH config를
+사용한다면 `QP_APP_HOST`·`QP_WORKER_HOST`에 Host alias를 쓰고 나머지 접속 값은 비워도 된다.
 
 ```bash
-cp ansible/inventory.example.yml ansible/inventory.yml
-python3 -m venv .venv-ansible
-.venv-ansible/bin/pip install -r ansible/requirements.txt
-export PATH="$(pwd)/.venv-ansible/bin:$PATH"
+cp deploy.env.example deploy.env
 ```
 
-배포는 자동으로 시작되지 않는다. 무인자 실행은 inventory의 `worker` 그룹에 호스트가
-있으면 app과 worker를, 없으면 app만 선택한다. 명시적 `all`은 양쪽 호스트가 모두 있어야
-하며 두 preflight를 먼저 통과한 뒤 공통 release를 한 번만 생성한다.
+배포는 자동으로 시작되지 않는다. 무인자 실행은 `QP_WORKER_HOST`가 있으면 app과 worker를,
+없으면 app만 선택한다. 명시적 `all`은 `QP_APP_HOST`와 `QP_WORKER_HOST`가 모두 있어야 하며
+두 SSH preflight를 먼저 통과한 뒤 공통 release를 한 번만 생성한다.
 
 ```bash
 pnpm run deploy
@@ -188,20 +185,16 @@ pnpm run deploy --target worker
 pnpm run deploy --target all
 ```
 
-다른 inventory는 Ansible 표준 환경변수로 지정한다.
+`deploy.env`는 app/worker별로 `HOST`, `SSH_USER`, `SSH_KEY`, `SSH_PORT`, `SSH_JUMP`,
+`SSH_HOST_KEY`, `SSH_OPTS`를 지원한다. 별도 설정 파일을 선택하는 CLI 인자는 없다.
+app과 worker에 서로 다른 키·포트·점프 호스트를 지정할 수 있다.
 
-```bash
-ANSIBLE_INVENTORY=/secure/production.yml pnpm run deploy
-```
+`app`과 `worker`는 배포 component 이름으로 고정한다. `deploy.mjs`가 SSH/SCP로 시도별
+원격 임시 디렉터리에 파일을 전송하고 node-local transaction을 실행한 뒤 그 디렉터리를
+정리한다. worker가 선택되면 실행 중 image의 Git SHA와 관계없이 새 image를 검증하고
+container를 재생성한다.
 
-`app`과 `worker`는 inventory group 이름으로 고정한다. 프로젝트 CLI의 `--target`은
-배포 component를 명시적으로 제한하고 내부에서 Ansible `--limit`으로 변환된다. worker가
-선택되면 실행 중 image의 Git SHA와 관계없이 새 image를 검증하고 container를 재생성한다.
-
-Ansible은 격리된 로컬 venv에서만 실행되고 노드에는 상주 agent를 설치하지 않는다.
-버전은 `ansible/requirements.txt`에 고정한다.
-
-배포 후 서버에서 관리자 생성과 TOTP 등록을 순서대로 한다 (정확한 명령은 bootstrap
+배포 후 app 노드에서 관리자 생성과 TOTP 등록을 순서대로 한다 (정확한 명령은 bootstrap
 출력에 나온다):
 
 ```bash

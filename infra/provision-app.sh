@@ -1,8 +1,8 @@
 #!/bin/sh
-# scripts/bootstrap-server.sh 가 업로드·실행한다. 직접 실행 시:
-#   sudo sh provision-server.sh <도메인>
+# scripts/bootstrap-app.sh 가 업로드·실행한다. 직접 실행 시:
+#   sudo sh provision-app.sh <도메인>
 #
-# 도메인의 A 레코드가 이 서버의 고정 공인 IP 를 가리켜야 한다 — Caddy 가 그 이름으로
+# 도메인의 A 레코드가 이 app 노드의 고정 공인 IP 를 가리켜야 한다 — Caddy 가 그 이름으로
 # Let's Encrypt 인증서를 받는다. 도메인은 비밀값이 아니므로 argv 로 받는다.
 #
 # POSIX sh 로만 쓴다 — bashism 금지. 클라우드의 first-boot 스크립트가 dash 로 실행되어
@@ -25,11 +25,11 @@ NODE_VERSION=v24.18.0
 [ "$(id -u)" -eq 0 ] || { echo "root 로 실행해야 합니다 (sudo sh $0 <도메인>)" >&2; exit 1; }
 [ -n "${DOMAIN}" ] || {
   echo "사용법: sudo sh $0 <도메인>" >&2
-  echo "도메인의 A 레코드가 이 서버의 고정 공인 IP 를 가리키고 있어야 합니다." >&2
+  echo "도메인의 A 레코드가 이 app 노드의 고정 공인 IP 를 가리키고 있어야 합니다." >&2
   exit 1
 }
 # 이 값은 아래에서 Caddyfile heredoc 으로 들어간다 — 호스트명 문법을 벗어난 입력이
-# 두 번째 사이트 블록이나 임의 지시자로 해석되지 않게 여기서 막는다. bootstrap-server.sh 도
+# 두 번째 사이트 블록이나 임의 지시자로 해석되지 않게 여기서 막는다. bootstrap-app.sh 도
 # 같은 검사를 하지만 이 파일은 직접 실행이 문서화돼 있으므로 스스로도 강제한다.
 case "${DOMAIN}" in
   *[!a-zA-Z0-9.-]* | -* | .* | *. | *..*)
@@ -231,7 +231,7 @@ fi
 echo "==> 인증서 발급 확인 (최대 90초)"
 # 앱 배포 전이므로 502 가 정상이다 — TLS 응답이 온다는 것 자체가 발급 성공이다.
 # 자기 자신의 공인 IP 로의 hairpin 접속이 막히는 호스트가 있어 실패해도 죽이지 않는다.
-# 확정 판정은 bootstrap-server.sh 가 개발 PC(외부 시점)에서 한다.
+# 확정 판정은 bootstrap-app.sh 가 개발 PC(외부 시점)에서 한다.
 CODE=000
 i=0
 while [ "${i}" -lt 18 ]; do
@@ -244,7 +244,7 @@ while [ "${i}" -lt 18 ]; do
   sleep 5
 done
 if [ -z "${CODE}" ] || [ "${CODE}" = "000" ]; then
-  echo "경고: https://${DOMAIN} 의 TLS 응답을 서버 안에서 확인하지 못했다." >&2
+  echo "경고: https://${DOMAIN} 의 TLS 응답을 app 노드 안에서 확인하지 못했다." >&2
   echo "hairpin NAT 제약일 수 있다 — 외부에서 접속해 보고, 안 되면: journalctl -u caddy" >&2
 else
   echo "TLS 응답 확인 (HTTP ${CODE} — 앱 배포 전에는 502 가 정상)"

@@ -11,7 +11,7 @@ const FULL_GIT_SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
  */
 export function readGitCommitSha(nodeEnv: string | undefined = process.env.NODE_ENV): string {
   // 테스트·소스 실행만 env fallback을 허용한다. production에서 env가 파일보다 먼저면
-  // 실제 배포 바이트와 무관한 SHA를 주입해 server/worker release gate를 우회할 수 있다.
+  // 실제 배포 바이트와 무관한 SHA를 주입해 app/worker release gate를 우회할 수 있다.
   if (nodeEnv !== 'production' && process.env.BUILD_GIT_SHA) {
     return process.env.BUILD_GIT_SHA;
   }

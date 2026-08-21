@@ -39,7 +39,7 @@
 애플리케이션의 도메인·애플리케이션 로직에는 다음 개념이 등장하면 안 된다.
 
 - 특정 클라우드 벤더 (AWS, Lightsail 등)
-- 서버 공인 IP
+- app 노드 공인 IP
 - 서비스 도메인
 - Caddy
 - UFW
@@ -81,7 +81,7 @@ Cloud Firewall (현재: Lightsail)
 - 제품 하나
 - 릴리스 버전 하나
 - 배포 아티팩트 하나
-- 운영 서버 하나
+- 운영 app 노드 하나
 - 메타데이터 DB 하나
 - 내부 역할과 의존 방향은 엄격히 분리
 
@@ -328,12 +328,12 @@ quant-platform/
 │  ├─ architecture/
 │  └─ e2e/
 ├─ infra/
-│  ├─ provision-server.sh    # 서버 프로비저닝 (§21~29 자동화, 멱등)
+│  ├─ provision-app.sh       # app 노드 프로비저닝 (§21~29 자동화, 멱등)
 │  ├─ app.env.example
 │  └─ systemd/
 ├─ scripts/
-│  ├─ bootstrap-server.sh    # 개발 PC 에서 새 서버 셋업 (provision-server.sh 업로드·실행)
-│  ├─ deploy.mjs             # Ansible inventory 기반 app/worker target 조정
+│  ├─ bootstrap-app.sh       # 개발 PC 에서 새 app 노드 셋업 (provision-app.sh 업로드·실행)
+│  ├─ deploy.mjs             # deploy.env 기반 app/worker SSH/SCP 배포 조정
 │  ├─ deploy-app.sh
 │  └─ backup.sh
 ├─ docs/
@@ -658,10 +658,10 @@ BACKTEST_EXECUTION_MODE=local
 MAX_CONCURRENT_BACKTESTS=1
 ```
 
-현 $7 Lightsail은 local 1을 유지한다. `BACKTEST_EXECUTION_MODE=remote`에서는 서버가
+현 $7 Lightsail은 local 1을 유지한다. `BACKTEST_EXECUTION_MODE=remote`에서는 app이
 계산 child를 만들지 않고 인증된 worker의 long-poll claim만 받는다. 이때 실제 병렬도는
 각 worker의 `BACKTEST_WORKER_CONCURRENCY` 합이며 `MAX_CONCURRENT_BACKTESTS`는 적용되지
-않는다. Worker는 서버와 정확히 같은 Git SHA만 claim할 수 있다.
+않는다. Worker는 app과 정확히 같은 Git SHA만 claim할 수 있다.
 
 원격 claim은 원자적으로 attempt를 올리고 임대 token의 SHA-256과 만료 시각만 DB에 남긴다.
 Worker는 heartbeat로 임대를 연장하고 진행률·취소 요청을 교환한다. 만료된 lease는 설정된
@@ -669,7 +669,7 @@ Worker는 heartbeat로 임대를 연장하고 진행률·취소 요청을 교환
 attempt의 heartbeat·결과는 모두 거부한다. 입력은 해당 job과 유니버스 종목에 필요한
 행만 담은 SQLite snapshot이며 인증·세션·감사·다른 job은 포함하지 않는다. 결과 artifact는
 크기·checksum·SQLite integrity·schema·행 타입을 검증하고 결과 import와 `COMPLETED`
-전이를 한 server SQLite transaction으로 처리한다. 검증과 대량 행 import는 별도 server-side
+전이를 한 app SQLite transaction으로 처리한다. 검증과 대량 행 import는 별도 app-side
 child에서 직렬 실행해 Fastify 이벤트 루프를 막지 않는다.
 
 ## SQLite 작업 확보
@@ -711,8 +711,8 @@ COMMIT;
 
 ## 재시작 복구
 
-서버 시작 시 local 작업의 `STARTING`, `RUNNING`, `CANCELLING`을 검사한다. 대응 OS
-프로세스가 없으면 `INTERRUPTED`로 바꾸고 자동 재실행하지 않는다. Remote lease는 server
+app 시작 시 local 작업의 `STARTING`, `RUNNING`, `CANCELLING`을 검사한다. 대응 OS
+프로세스가 없으면 `INTERRUPTED`로 바꾸고 자동 재실행하지 않는다. Remote lease는 app
 재시작 뒤 worker가 heartbeat를 이어 갈 수 있으므로 만료 전에는 보존한다. remote에서
 local 모드로 바꾸면 더는 갱신할 endpoint가 없는 활성 remote lease를 `INTERRUPTED`로 닫는다.
 
@@ -852,7 +852,7 @@ PRAGMA busy_timeout = 5000;
 - 토큰 기반 인증 (발급·캐싱·만료 전 재발급)
 - 종목 이름 조회 — 백테스트 위저드·상세 화면의 표시용으로 남은 유일한 소비자다 (D-041)
 - 주문·계좌 기능 (실거래 단계)
-- 허용 IP 등록제 증권사 대응 — 서버의 고정 공인 IP 사용
+- 허용 IP 등록제 증권사 대응 — app 노드의 고정 공인 IP 사용
 
 현재 구현은 토스증권 Open API 하나다 (`toss-stock-info-source.ts`). 어댑터 구현 순서는
 외부 사정에 따른 인프라 결정이며 코어에 영향을 주지 않는다.
@@ -1345,7 +1345,7 @@ Accordion
 
 이 요구사항을 만족하면 어떤 클라우드·VPS로도 교체할 수 있으며, 교체 시 인프라 장(§18~31)과 배포 스크립트만 수정한다.
 
-추가 전제: 서비스 도메인 1개 — A 레코드가 서버의 고정 공인 IP 를 가리켜야 한다 (§23).
+추가 전제: 서비스 도메인 1개 — A 레코드가 app 노드의 고정 공인 IP 를 가리켜야 한다 (§23).
 
 현재 선택은 AWS Lightsail 서울이다. 2026-07 기준 공식 Lightsail Linux public IPv4 플랜:
 
@@ -1408,7 +1408,7 @@ Lightsail
 Static IP 용도:
 
 - 증권사 API 허용 출발 IP (허용 IP 등록제 대응)
-- 안정적인 서버 식별
+- 안정적인 app 노드 식별
 
 웹 포트를 여는 용도가 아니다.
 
@@ -1416,8 +1416,8 @@ Static IP 용도:
 
 # 21. 초기 Ubuntu 설정
 
-> §21~29 는 `infra/provision-server.sh` 가 단일 명령으로 자동화한다 (멱등 — 몇 번을
-> 실행해도 결과가 같다). 개발 PC 에서는 `scripts/bootstrap-server.sh` 가 이 파일을
+> §21~29 는 `infra/provision-app.sh` 가 단일 명령으로 자동화한다 (멱등 — 몇 번을
+> 실행해도 결과가 같다). 개발 PC 에서는 `scripts/bootstrap-app.sh` 가 이 파일을
 > 업로드·실행한다. 아래는 그 스크립트가 하는 일의 명세다.
 
 ```bash
@@ -1442,7 +1442,7 @@ sudo apt install -y \
   gnupg
 ```
 
-서버 시간대:
+app 노드 시간대:
 
 ```bash
 sudo timedatectl set-timezone UTC
@@ -1527,13 +1527,13 @@ node --version
 
 전제:
 
-- 서비스 도메인의 A 레코드가 이 서버의 고정 공인 IP 를 가리킨다. provision-server.sh 가
+- 서비스 도메인의 A 레코드가 app 노드의 고정 공인 IP 를 가리킨다. provision-app.sh 가
   프로비저닝 시작 시 해석을 확인하고, 아니면 중단한다.
 - TLS 는 Caddy 가 Let's Encrypt 로 자동 발급·갱신한다 (§27). 도메인은 CT 로그에
   공개된다 — 퍼블릭 서비스 전제이므로 무해하다.
 
-**고정 아웃바운드 IP**: 증권사 API 요청은 서버의 고정 공인 IP 로 나가야 한다
-(허용 IP 등록제 대응). provision-server.sh 가 아웃바운드 IP 를 조회해 정보성으로
+**고정 아웃바운드 IP**: 증권사 API 요청은 app 노드의 고정 공인 IP 로 나가야 한다
+(허용 IP 등록제 대응). provision-app.sh 가 아웃바운드 IP 를 조회해 정보성으로
 출력한다 — 증권사에 등록한 IP 와 일치해야 한다.
 
 검증:
@@ -1656,14 +1656,14 @@ sudo chown root:root /etc/quant-platform/app.env
 sudo chmod 600 /etc/quant-platform/app.env
 ```
 
-provision-server.sh 가 이 파일을 생성하며 `SESSION_SECRET` 은 서버에서 만든다.
+provision-app.sh 가 이 파일을 생성하며 `SESSION_SECRET` 은 app 노드에서 만든다.
 **파일이 이미 있으면 절대 덮지 않는다** — SESSION_SECRET 이 바뀌면 기존 세션이
 전부 무효화된다.
 
 전체 항목은 `infra/app.env.example` 이 기준이다 (증권사·DART 자격 증명 포함).
 별도 worker 설정은 `infra/worker.env.example`, 실행 경계는
 `infra/docker/compose.worker.yaml`과 `infra/docker/backtest-worker.Dockerfile`이 기준이다.
-Worker는 Docker Compose 전용이며 애플리케이션 systemd fallback은 없다. server와 worker는
+Worker는 Docker Compose 전용이며 애플리케이션 systemd fallback은 없다. app과 worker는
 같은 `BACKTEST_WORKER_TOKEN`과 한 번 만든 공통 archive의 동일한 릴리스 SHA를 사용한다.
 
 ## 28.1 값을 바꾼 뒤
@@ -1762,7 +1762,7 @@ DART 재무·자본변동 수집은 CLI 명령이 아니다(D-049). 재무전략
 # 29. systemd
 
 `/etc/systemd/system/quant-platform.service` — 실물은 `infra/systemd/quant-platform.service`
-가 기준이다 (provision-server.sh 가 그 파일을 설치한다). 아래는 사본이므로 값을 바꿀 때는
+가 기준이다 (provision-app.sh 가 그 파일을 설치한다). 아래는 사본이므로 값을 바꿀 때는
 리포의 유닛 파일을 먼저 고칠 것:
 
 ```ini
@@ -1857,11 +1857,11 @@ dist/
 └─ current -> releases/20260726-090000-bcdefa2
 ```
 
-app 전환 순서 (Ansible app role과 `scripts/deploy-app.sh`가 수행):
+app 전환 순서 (`scripts/deploy.mjs`와 `scripts/deploy-app.sh`가 수행):
 
 1. 개발 PC에서 lint·typecheck·test·build
 2. tar 생성
-3. Ansible이 app 노드의 시도별 임시 디렉터리로 archive와 checksum을 업로드
+3. deploy.mjs가 app 노드의 시도별 임시 디렉터리로 archive와 checksum을 SCP 업로드
 4. app 배포 전역 `flock` 획득 후 checksum 검증
 5. `.incomplete-<release>` staging 디렉터리에 상태 마커를 만들고 압축 해제
 6. staging에서 production dependency 설치
@@ -2246,7 +2246,7 @@ quant-platform-live.service
 - UFW (22 rate-limit / 80 / 443)
 - sshd 하드닝 (키 전용)
 - systemd
-- deploy/rollback (bootstrap-server.sh · provision-server.sh · deploy-app.sh)
+- deploy/rollback (bootstrap-app.sh · provision-app.sh · deploy-app.sh)
 
 ## Phase 7 — 운영
 

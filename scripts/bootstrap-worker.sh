@@ -16,7 +16,7 @@ ENV_FILE="${QP_WORKER_ENV_FILE:-}"
 ENV_MODE="$(stat -c '%a' "${ENV_FILE}" 2>/dev/null || true)"
 case "${ENV_MODE}" in 600|400) : ;; *) echo "Worker 환경 파일 권한은 600 또는 400이어야 합니다: ${ENV_MODE:-unknown}" >&2; exit 1 ;; esac
 grep -q $'\r' "${ENV_FILE}" && { echo "Worker 환경 파일은 LF 줄바꿈이어야 합니다" >&2; exit 1; }
-for required in NODE_ENV BACKTEST_SERVER_URL BACKTEST_WORKER_TOKEN BACKTEST_WORKER_ID \
+for required in NODE_ENV BACKTEST_APP_URL BACKTEST_WORKER_TOKEN BACKTEST_WORKER_ID \
   BACKTEST_WORKER_CONCURRENCY BACKTEST_WORK_ROOT BACKTEST_CLAIM_WAIT_SECONDS \
   BACKTEST_HEARTBEAT_SECONDS LOG_LEVEL; do
   [ "$(grep -c "^${required}=" "${ENV_FILE}" || true)" -eq 1 ] || {
@@ -36,13 +36,13 @@ grep -qx 'BACKTEST_WORK_ROOT=/var/lib/quant-backtest-worker' "${ENV_FILE}" || {
   echo "컨테이너 Worker의 BACKTEST_WORK_ROOT는 /var/lib/quant-backtest-worker여야 합니다" >&2
   exit 1
 }
-server_url="$(sed -n 's/^BACKTEST_SERVER_URL=//p' "${ENV_FILE}")"
-case "${server_url}" in https://*/*|https://*\?*|https://*\#*|*@*|*[[:space:]]*)
-  echo "BACKTEST_SERVER_URL은 path/query/userinfo 없는 HTTPS origin이어야 합니다" >&2
+app_url="$(sed -n 's/^BACKTEST_APP_URL=//p' "${ENV_FILE}")"
+case "${app_url}" in https://*/*|https://*\?*|https://*\#*|*@*|*[[:space:]]*)
+  echo "BACKTEST_APP_URL은 path/query/userinfo 없는 HTTPS origin이어야 합니다" >&2
   exit 1
   ;;
   https://?*) : ;;
-  *) echo "BACKTEST_SERVER_URL은 HTTPS여야 합니다" >&2; exit 1 ;;
+  *) echo "BACKTEST_APP_URL은 HTTPS여야 합니다" >&2; exit 1 ;;
 esac
 worker_id="$(sed -n 's/^BACKTEST_WORKER_ID=//p' "${ENV_FILE}")"
 [[ "${worker_id}" =~ ^[a-zA-Z0-9._-]{1,48}$ ]] || {
@@ -105,6 +105,6 @@ EOF
 cat <<MSG
 
 Docker Worker 부트스트랩 완료: ${REMOTE_TARGET}
-Ansible inventory에 worker 접속 정보를 작성한 뒤 프로젝트 루트에서 실행:
+deploy.env에 worker 접속 정보를 작성한 뒤 프로젝트 루트에서 실행:
   pnpm run deploy --target worker
 MSG

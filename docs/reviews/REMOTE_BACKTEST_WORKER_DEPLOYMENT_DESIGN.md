@@ -14,9 +14,9 @@
 unit과 fallback 경로는 두지 않는다. 호스트의 Docker daemon은 OS 서비스 관리자가
 관리하지만 Worker 수명주기, 재시작, 로그 회전과 격리는 Compose가 담당한다.
 
-웹/API 서버는 기존 systemd 배포를 유지한다. 두 실행 환경의 차이 때문에 소스나
+app은 기존 systemd 배포를 유지한다. 두 실행 환경의 차이 때문에 소스나
 TypeScript를 각각 빌드하지는 않는다. `scripts/build-release.sh`가 검증한 공통 release
-archive를 한 번 만들고, 웹 서버는 archive를 직접 설치하며 Worker는 같은 archive를
+archive를 한 번 만들고, app은 archive를 직접 설치하며 Worker는 같은 archive를
 Docker image에 포장한다.
 
 Worker는 백테스트 전용이다. 자동매매 실행기는 주문 권한과 장애 격리가 필요하므로 같은
@@ -26,8 +26,9 @@ image나 Compose service에 합치지 않는다.
 
 ```text
 개발 PC
+├── scripts/deploy.mjs                app/worker 선택 → SSH/SCP 전송·실행
 ├── scripts/build-release.sh          검증 → 공통 archive + SHA-256
-├── scripts/deploy-app.sh          공통 archive → 웹/API 서버
+├── scripts/deploy-app.sh             공통 archive → app
 ├── scripts/build-worker-image.sh     공통 archive → linux/amd64 image tar
 ├── scripts/bootstrap-worker.sh       Worker 호스트 1회 준비
 └── scripts/deploy-worker.sh          image load → Compose 전환 → probe/rollback
@@ -54,12 +55,13 @@ systemd unit을 설치하지 않는다. 인바운드 애플리케이션 포트�
 3. 전체 Git SHA와 빌드 시각을 `dist/build-info.json`에 기록한다.
 4. `dist`, `migrations`, package/lock/workspace 파일을 하나의 archive로 만든다.
 5. archive의 SHA-256 checksum을 만든다.
+6. release 이름과 위 Git SHA를 로컬 metadata로 내보낸다. `deploy.mjs`는 archive 이름을
+   다시 검색하거나 현재 HEAD를 다시 읽지 않고 이 metadata만 배포 identity로 사용한다.
 
 `pnpm run deploy --target app|worker|all`이 공통 builder를 한 번 호출한다. 생성된 archive와
-checksum은 임시 Ansible extra vars로 각 role에 전달되고, role은 노드별 임시 디렉터리에
-업로드한 뒤 `deploy-app.sh` 또는 `deploy-worker.sh` transaction을 실행한다. 두 저수준
-스크립트는 SSH나 build를 담당하지 않으며, 노드 안에서 lock·전환·rollback·정리만 한 단위로
-수행한다.
+checksum은 `deploy.mjs`가 노드별 임시 디렉터리에 SCP로 업로드한 뒤 `deploy-app.sh` 또는
+`deploy-worker.sh` transaction에 전달한다. 두 저수준 스크립트는 SSH나 build를 담당하지
+않으며, 노드 안에서 lock·전환·rollback·정리만 한 단위로 수행한다.
 
 `scripts/build-worker-image.sh`는 archive를 별도로 다시 컴파일하지 않는다. Docker build
 단계에서는 production dependency만 target Linux ABI로 설치하고 공통 `dist`를 그대로
@@ -85,8 +87,8 @@ QP_WORKER_ENV_FILE="$HOME/.config/quant-platform/worker-1.env" \
 
 ```dotenv
 NODE_ENV=production
-BACKTEST_SERVER_URL=https://quant.example.com
-BACKTEST_WORKER_TOKEN=<server와 같은 32자 이상 token>
+BACKTEST_APP_URL=https://quant.example.com
+BACKTEST_WORKER_TOKEN=<app과 같은 32자 이상 token>
 BACKTEST_WORKER_ID=worker-pc-1
 BACKTEST_WORKER_CONCURRENCY=1
 BACKTEST_WORK_ROOT=/var/lib/quant-backtest-worker
@@ -157,9 +159,9 @@ pnpm run deploy --target worker
 
 배포 순서는 다음과 같다.
 
-1. Ansible preflight로 SSH/sudo, Docker/Compose, env/Compose 설치 상태를 확인한다.
+1. deploy.mjs의 SSH preflight로 sudo, Docker/Compose, env/Compose 설치 상태를 확인한다.
 2. 공통 archive를 만들고 로컬 checksum을 검증한다.
-3. `linux/amd64` worker image를 만들고 Ansible로 image tar/checksum을 업로드한다.
+3. `linux/amd64` worker image를 만들고 SCP로 image tar/checksum을 업로드한다.
 4. 원격 checksum을 검증한 뒤에만 `docker load`한다.
 5. image OCI revision label과 release Git SHA가 같은지 확인한다.
 6. 이전 Compose와 image 참조를 보관하고 새 image로 container를 재생성한다.
@@ -185,18 +187,18 @@ Content-Type: application/json
 }
 ```
 
-token, runner SHA, protocol이 모두 맞고 서버가 remote면 `READY`, local이면 `STANDBY`다.
-local에서 probe를 사용하려면 server `app.env`에 같은 token을 미리 설정하고 서버를
+token, runner SHA, protocol이 모두 맞고 app이 remote면 `READY`, local이면 `STANDBY`다.
+local에서 probe를 사용하려면 app `app.env`에 같은 token을 미리 설정하고 app을
 재시작해야 한다. local 모드에서는 probe 외 claim/heartbeat/artifact route는 등록하지
 않는다. 401/403, SHA/protocol mismatch, timeout은 배포 실패다.
 
 ## 8. 실행 중 잡과 후속 범위
 
-v1에는 drain protocol이 없다. 배포로 container가 종료되면 실행 중 계산은 유실되고 서버가
+v1에는 drain protocol이 없다. 배포로 container가 종료되면 실행 중 계산은 유실되고 app이
 lease 만료 뒤 같은 잡을 기존 정책대로 재할당한다. 결과 정확성은 유지되지만 계산량은
 낭비될 수 있으므로 배포 전 실행 중 잡 여부를 운영자가 확인한다.
 
-다중 호스트 inventory, fleet 순차 배포, `DRAINING`/graceful drain, 자동 확장은 후속 범위다.
+다중 worker 호스트, fleet 순차 배포, `DRAINING`/graceful drain, 자동 확장은 후속 범위다.
 Docker 외 실행 방식과 systemd Worker fallback은 후속 범위가 아니라 의도적으로 제거한
 경로다.
 

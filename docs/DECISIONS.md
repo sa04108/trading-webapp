@@ -111,8 +111,8 @@
 ## D-016: WireGuard·Caddy → Tailscale — 스펙 §23~§27 편차
 
 - **변경 내용:** 사설망을 순수 WireGuard 에서 Tailscale 로, TLS 종단을 Caddy 에서
-  `tailscale serve` 로 교체했다. `infra/provision-server.sh`(서버, 멱등) +
-  `scripts/bootstrap-server.sh`(개발 PC) 가 §21~§29 를 단일 명령으로 수행한다. Caddy 가 주던
+  `tailscale serve` 로 교체했다. `infra/provision-app.sh`(app 노드, 멱등) +
+  `scripts/bootstrap-app.sh`(개발 PC) 가 §21~§29 를 단일 명령으로 수행한다. Caddy 가 주던
   것 중 앱에 없던 HSTS 는 `SECURITY_HEADERS` 에, 압축은 `@fastify/compress` 로 옮겼다.
 - **이유:** 순수 WireGuard 는 단일 명령 프로비저닝이 원리적으로 불가능하다 — Lightsail
   공개키를 기존 WG 서버(리포 밖 머신)에 peer 로 등록해야 터널이 서고, 그 전에는
@@ -123,7 +123,7 @@
 - **새 의존:** Tailscale control plane. 다운 시 기존 연결은 유지되나 신규 조인·재인증이
   실패한다. 노드 키 만료는 `tag:server` 로 면제한다 — 태그 없이 조인하면 헤드리스
   서버가 몇 달 뒤 조용히 떨어진다.
-- **락아웃 가드:** provision-server.sh 를 기본/`--harden` 2 단계로 나누고, bootstrap-server.sh 가
+- **락아웃 가드:** provision-app.sh 를 기본/`--harden` 2 단계로 나누고, bootstrap-app.sh 가
   tailnet 경유 SSH 를 실제로 시도해 성공했을 때만 하드닝을 실행한다. 스펙 §25 의
   "검증 전 차단 금지" 가 제어 흐름으로 강제된다. `--harden` 게이트는 `BackendState`
   뿐 아니라 `tag:server` 소유도 확인한다 — Running 이어도 태그 없이 조인했으면
@@ -131,7 +131,7 @@
   시점(약 180일 뒤)에 조용히 락아웃으로 이어지는데, 그 확인을 되돌릴 수 없는 UFW
   적용 직전으로 옮겨 무경고 실패를 막았다.
 - **고정 아웃바운드 IP:** §18/§23 요구사항은 그대로 유지된다 — 증권사 API 트래픽은
-  Lightsail Static IP 로 나가야 한다. provision-server.sh 기본 모드가 `checkip.amazonaws.com`
+  Lightsail Static IP 로 나가야 한다. provision-app.sh 기본 모드가 `checkip.amazonaws.com`
   확인을 정보성으로 출력한다. Tailscale 은 WireGuard 에 없던 새 우회 경로가 있다 —
   이 노드에 `tailscale set --exit-node=...` 를 걸지 않는다(걸면 아웃바운드가 조용히
   우회된다).
@@ -143,8 +143,8 @@
   그대로다. deploy-app.sh 는 동작을 바꾸지 않았다 — 최종 리뷰에서 usage 문자열·주석의
   `<wireguard-host>` 예시만 tailnet FQDN 으로 교체했다(사용자 승인 예외).
 - **Git 설정:** 셸 스크립트를 Windows 개발 머신에서도 LF 로 체크아웃하도록 `.gitattributes` 에
-  `*.sh text eol=lf` 를 추가했다. scripts/bootstrap-server.sh 가 infra/provision-server.sh 를 scp 로
-  서버에 전달하는데, 개발 PC 가 core.autocrlf=true 이고 CRLF 로 체크아웃되면 Ubuntu 에서
+  `*.sh text eol=lf` 를 추가했다. scripts/bootstrap-app.sh 가 infra/provision-app.sh 를 scp 로
+  app 노드에 전달하는데, 개발 PC 가 core.autocrlf=true 이고 CRLF 로 체크아웃되면 Ubuntu 에서
   shebang 이 `#!/bin/sh\r` 이 되어 프로비저닝이 실패한다.
 ## D-017: 평면 분리 헌법 — 플랫폼 read-only, TOTP 복원(D-014 부분 폐기), Tailscale 제거(D-016 폐기)
 
@@ -161,7 +161,7 @@
 - **D-016 폐기:** 망 경계 요구가 없어졌으므로 Tailscale·`tag:server`·노드 키 관리
   의존을 제거했다. 퍼블릭 22 는 닫지 않는다 — 클라우드 브라우저 SSH 콘솔(키 인증)이
   out-of-band 복구 경로가 되므로, D-016 의 락아웃 가드 체계(tailnet SSH 실증,
-  `--harden` 2단계) 전체가 불필요해져 provision-server.sh 는 단일 실행으로 돌아왔다.
+  `--harden` 2단계) 전체가 불필요해져 provision-app.sh 는 단일 실행으로 돌아왔다.
   sshd 하드닝(키 전용 인증)은 유지한다 — 하드닝의 대상은 접속 클라이언트가 아니라
   "열린 포트가 인터넷으로부터 무엇을 받아주느냐"이고, 브라우저 SSH 는 키 인증이라
   영향이 없다.
@@ -172,7 +172,7 @@
   무해하다.
 - **스펙 관계:** §2.2·§2.6·§16 은 본문을 개정했다. §23(WireGuard)·§24(퍼블릭 방화벽
   마감)·§25(UFW 원문)·§27(Caddy 내부 TLS)은 이 결정으로 대체된다 — 현행 규칙은
-  스펙 §2.2 다이어그램과 infra/provision-server.sh 가 정의한다.
+  스펙 §2.2 다이어그램과 infra/provision-app.sh 가 정의한다.
 ## D-018: 토스증권 Open API 어댑터 — 승인 완료로 2차 어댑터 추가 (D-002 예정 이행)
 
 - **변경 내용:** `createTossMarketDataSource` 를 broker infrastructure 에 추가했다
@@ -289,7 +289,7 @@
   1. 근본 — pullRange 저장 배칭: 페이지마다 저장하지 않고 1만 봉씩 모아 저장
      (파티션 재작성 월당 ~1회). 에러·취소로 빠져나갈 때도 finally 에서 flush 해
      페이지 수준 이어받기 보존을 유지한다. 워터마크는 여전히 저장 이후에만 넓힌다.
-  2. 인프라 — provision-server.sh 에 스왑 2GB (마비를 "느려짐"으로 강등), 유닛에
+  2. 인프라 — provision-app.sh 에 스왑 2GB (마비를 "느려짐"으로 강등), 유닛에
      MemoryHigh=512M(조기 회수 압박) + MemoryMax 768→640M (시스템 몫 확보).
   3. 운영 즉시 조치 — 서버에 스왑·systemd override 를 수동 적용 완료 (재프로비저닝
      시 리포 버전으로 수렴).
@@ -408,8 +408,8 @@
 - **그 외에 systemd 가 주는 것:** (1) 재부팅 생존 — 클라우드 인스턴스는 호스트 유지보수로 예고 없이 재부팅된다. (2) `Restart=on-failure`+`RestartSec=5` — 위의 OOM kill 을 자동 복구로 강등한다. (3) 샌드박싱을 앱 코드 밖에서(`ProtectSystem=strict`·`CapabilityBoundingSet=` 등) — 스펙 §2.1 "애플리케이션은 인프라를 모른다" 와 같은 방향이다. (4) `EnvironmentFile` 로 600 root:root 비밀을 `ps` 노출 없이 주입, 그리고 그 덕에 CLI 를 같은 컨텍스트로 재현하는 `systemd-run` 이 공짜로 따라온다(§28.2). (5) `systemctl restart` + `is-active` 라는 판정 가능한 단일 상태 — D-010 의 "코드+DB 스냅샷 동반 롤백" 이 이것 없이는 조립되지 않는다. (6) `StandardOutput=journal` — 앱에 로그 파일 회전 코드가 한 줄도 없는 이유.
 - **대안(Docker):** 버렸다. 여유가 ~270MB 뿐인 박스에서 컨테이너 런타임 상주 메모리가 그 여유를 잠식한다. 게다가 컨테이너의 주 가치(cgroup 제한·네임스페이스 격리·재시작 정책·로그 수집)를 systemd 가 이미 전부 주므로 겹치고, 단일 아티팩트·단일 프로세스에는 오케스트레이션할 대상이 없다. 네이티브 모듈(better-sqlite3·argon2·@duckdb/node-api, `onlyBuiltDependencies`)의 빌드 무게는 **반-Docker 논거이지 친-systemd 논거가 아니다** — 모듈이 순수 JS 였어도 프로세스 슈퍼바이저는 여전히 필요하다.
 - **대안(nohup·tmux·PM2):** 버렸다. 재부팅에서 사라지고, cgroup 예산이 없어 위 장애를 그대로 재현한다. PM2 는 감시 프로세스가 하나 더 상주해 예산을 또 먹으면서도 네임스페이스 격리는 주지 않는다.
-- **왜 코드가 home 이 아니라 `/opt` 인가:** (1) 유닛의 `ProtectHome=true` 가 `/home`·`/root` 를 이 프로세스에게 **비어 있게** 만든다 — 코드를 home 에 두려면 이걸 끄는 거래를 해야 하고, 그러면 임의 파일 읽기 버그 하나가 `~/.ssh/id_ed25519`(=배포 전권)에 닿는다. 읽기 전용(`ProtectSystem=strict`)으로는 부족하다 — 훔치는 데는 읽기만 필요하다. (2) 로그인 계정명을 가정할 수 없다 — 클라우드 이미지마다 ubuntu/admin/ec2-user 로 다르고 `scripts/bootstrap-server.sh` 는 의도적으로 가정하지 않는다(§2.1). home 경로는 그 관례를 유닛 파일에 박아버린다. (3) `quant` 는 `--system --home /var/lib/quant-platform --shell nologin` 이라 애초에 home 이 없다. (4) `/opt` 가 root 소유 + `ReadOnlyPaths` 라 **앱이 자기 실행 코드를 고칠 수 없다** — RCE 가 재시작 후에도 살아남는 지속성을 못 얻는다. (5) deploy-app.sh 의 릴리스 회전이 데이터를 먹지 않는 경계가 필요하다 — 코드는 버려도 되는 것, 상태는 백업 대상이라는 분리가 `/opt` vs `/var/lib` 다.
-- **비용:** 배포가 `sudo` 를 요구한다. `systemctl restart`·UFW·Caddy 에 어차피 root 가 필요하고 passwordless sudo 는 `bootstrap-server.sh` 가 `sudo -n true` 로 먼저 검증하는 전제이므로 추가 비용은 없다.
+- **왜 코드가 home 이 아니라 `/opt` 인가:** (1) 유닛의 `ProtectHome=true` 가 `/home`·`/root` 를 이 프로세스에게 **비어 있게** 만든다 — 코드를 home 에 두려면 이걸 끄는 거래를 해야 하고, 그러면 임의 파일 읽기 버그 하나가 `~/.ssh/id_ed25519`(=배포 전권)에 닿는다. 읽기 전용(`ProtectSystem=strict`)으로는 부족하다 — 훔치는 데는 읽기만 필요하다. (2) 로그인 계정명을 가정할 수 없다 — 클라우드 이미지마다 ubuntu/admin/ec2-user 로 다르고 `scripts/bootstrap-app.sh` 는 의도적으로 가정하지 않는다(§2.1). home 경로는 그 관례를 유닛 파일에 박아버린다. (3) `quant` 는 `--system --home /var/lib/quant-platform --shell nologin` 이라 애초에 home 이 없다. (4) `/opt` 가 root 소유 + `ReadOnlyPaths` 라 **앱이 자기 실행 코드를 고칠 수 없다** — RCE 가 재시작 후에도 살아남는 지속성을 못 얻는다. (5) deploy-app.sh 의 릴리스 회전이 데이터를 먹지 않는 경계가 필요하다 — 코드는 버려도 되는 것, 상태는 백업 대상이라는 분리가 `/opt` vs `/var/lib` 다.
+- **비용:** 배포가 `sudo` 를 요구한다. `systemctl restart`·UFW·Caddy 에 어차피 root 가 필요하고 passwordless sudo 는 `bootstrap-app.sh` 가 `sudo -n true` 로 먼저 검증하는 전제이므로 추가 비용은 없다.
 - **뒤집히는 조건:** 근거 서열이 **메모리 제약 → cgroup·샌드박스 필요 → systemd** 이므로, 박스가 충분히 커지면(예: 8GB) 런타임 상주 메모리가 무시할 수준이 되어 "systemd vs Docker" 는 팀 취향 문제로 내려간다. 지금 결론이 명확한 것은 여유가 ~270MB 라는 실측 때문이다. `/opt` 쪽 근거 (2)(4)(5)는 박스 크기와 무관하게 남는다.
 
 ## D-031: 미통합 복원 스크립트 제거 — 재해복구는 Phase 7 runbook 에서 설계한다
@@ -1352,18 +1352,18 @@
 
 - **기본값과 비용 경계:** 기본은 계속 `local`이며 Lightsail의 동시성은 1이다. 원격 실행은
   `BACKTEST_EXECUTION_MODE=remote`를 명시했을 때만 켜진다. 메시지 브로커·컨테이너
-  오케스트레이터를 추가하지 않고 server SQLite 큐를 단일 기준으로 유지한다.
-- **연결 방향과 인증:** 별도 PC supervisor가 서버 HTTPS를 outbound long-poll한다. Worker
+  오케스트레이터를 추가하지 않고 app SQLite 큐를 단일 기준으로 유지한다.
+- **연결 방향과 인증:** 별도 PC supervisor가 app HTTPS를 outbound long-poll한다. Worker
   인바운드 포트와 DB 직접 접속은 없다. 공유 bearer token은 환경 파일에만 두고 로그에서
-  가리며, claim 뒤 임대 token은 원문 대신 SHA-256만 서버 DB에 저장한다. server와 worker의
+  가리며, claim 뒤 임대 token은 원문 대신 SHA-256만 app DB에 저장한다. app과 worker의
   Git SHA가 다르면 실행을 시작하지 않는다.
 - **임대와 재시도:** claim은 attempt 증가와 `STARTING` 전이를 원자적으로 한다. heartbeat가
   진행률·취소·임대 연장을 맡는다. 만료 attempt의 늦은 쓰기는 거부하고, 설정 상한까지
-  재queue한 뒤 최종 실패한다. server 재시작은 아직 유효한 remote lease를 보존한다.
-- **데이터 계약:** server가 job 유니버스에 필요한 행만 새 SQLite input snapshot으로 만들고
+  재queue한 뒤 최종 실패한다. app 재시작은 아직 유효한 remote lease를 보존한다.
+- **데이터 계약:** app이 job 유니버스에 필요한 행만 새 SQLite input snapshot으로 만들고
   child는 독립 SQLite result artifact를 쓴다. 업로드는 streaming과 SHA-256으로 검증한다.
-  server는 크기·integrity·schema·행 타입·release를 검증하고 결과 import와 job 완료를 같은
-  transaction으로 묶는다. 대량 import는 server-side child에서 한 번에 하나씩 실행해 웹
+  app은 크기·integrity·schema·행 타입·release를 검증하고 결과 import와 job 완료를 같은
+  transaction으로 묶는다. 대량 import는 app-side child에서 한 번에 하나씩 실행해 웹
   이벤트 루프를 막지 않는다. 인증·세션·감사·다른 job은 worker 입력에 복사하지 않는다.
 - **병렬도:** `MAX_CONCURRENT_BACKTESTS`는 local 전용이다. remote의 실제 동시 실행 수는
   worker별 `BACKTEST_WORKER_CONCURRENCY` 합이다. 전용 PC도 처음에는 1로 시작하고 D-059
@@ -1378,7 +1378,7 @@
   번 만들고 웹 deploy와 Worker image build가 함께 소비한다. Worker image 안에서 소스를
   다시 컴파일하지 않는다. base image는 Node patch와 digest를 함께 고정하고 Git SHA를 OCI
   label과 `dist/build-info.json` 양쪽에서 검증한다.
-- **배포·복구:** registry 없이 image tar와 SHA-256을 Ansible로 전송한다. Compose 재생성 뒤 token,
+- **배포·복구:** registry 없이 image tar와 SHA-256을 SCP로 전송한다. Compose 재생성 뒤 token,
   Git SHA, protocol을 확인하는 no-claim probe가 `READY` 또는 local 준비 상태 `STANDBY`여야
   성공이다. 성공하면 현재 image만 남기고, 실패하면 이전 Compose/image로 자동 복구한 뒤
   실패 candidate를 지운다. rollback 검증이 실패한 경우에만 양쪽 image를 보존한다.
@@ -1394,40 +1394,40 @@
 
 ## D-062: 배포는 Linux 단일 진입점에서 app과 worker를 같은 release로 조정한다
 
-- **공식 진입점:** 표준 Ansible inventory를 읽는 `pnpm run deploy`와 명시적
-  `--target app|worker|all`만 일반 배포 경로로 둔다. 무인자 실행은 `worker` 그룹에
-  호스트가 있으면 `all`, 없으면 `app`으로 해석한다. 명시적 `all`은 양쪽 호스트가 필수다.
-  `deploy-app.sh`와 `deploy-worker.sh`는 role이 노드에서 호출하는 내부 transaction이다.
-- **대상 이름:** 운영 서비스와 inventory group은 `app`, 계산 서비스와 group은 `worker`로
-  고정한다. 프로젝트 CLI는 component 선택이므로 `--target`을 쓰고, `--limit`은 Ansible의
-  host/group 제한 옵션으로 내부에서만 사용한다.
+- **공식 진입점:** 프로젝트 루트의 고정 `deploy.env`를 읽는 `pnpm run deploy`와 명시적
+  `--target app|worker|all`만 일반 배포 경로로 둔다. 무인자 실행은 `QP_WORKER_HOST`가
+  있으면 `all`, 없으면 `app`으로 해석한다. 명시적 `all`은 양쪽 호스트가 필수다.
+  `deploy-app.sh`와 `deploy-worker.sh`는 `deploy.mjs`가 노드에서 호출하는 내부 transaction이다.
+- **대상 이름:** 운영 서비스는 `app`, 계산 서비스는 `worker`로 고정한다. 프로젝트 CLI는
+  component 선택이므로 `--target`을 사용한다.
 - **동일성:** 검증 gate와 공통 archive 생성은 배포 전체에서 한 번만 실행한다. worker
-  image는 그 archive를 입력으로 만들며 두 role에는 생성된 archive와 checksum을 전달한다.
+  image는 그 archive를 입력으로 만들며 두 node-local transaction에는 생성된 archive와
+  checksum을 전달한다.
   `all`은 두 preflight를 먼저 통과한 뒤 app, worker 순서로 적용한다. worker가 선택되면
   같은 Git SHA도 항상 재배포하고 SHA는 app/worker 호환성 검증에만 사용한다.
-- **설정 경계:** 기본 `ansible/inventory.yml`은 Git에서 제외하고
-  `ANSIBLE_INVENTORY`로 외부 inventory를 지정할 수 있다. SSH config는 선택 사항이며
-  호스트·사용자·키 경로를 inventory에 직접 둘 수 있다. runtime 비밀값은 원격 root 전용
+- **설정 경계:** `deploy.env`는 Git에서 제외하고 app/worker별 호스트·사용자·키·포트·점프
+  호스트와 SSH 옵션만 둔다. 다른 설정 파일을 고르는 인자는 제공하지 않는다. SSH config는
+  선택 사항이며 Host alias를 쓸 수 있다. runtime 비밀값은 원격 root 전용
   `app.env`·`worker.env`에만 둔다.
 - **부분 실패:** worker 전환 자체는 이전 image로 rollback한다. 이미 readiness를 통과한
   app까지 worker 실패만으로 되돌리면 그 사이 운영 DB 쓰기를 잃을 수 있으므로 app은 새
   release로 유지하고 같은 commit에서 `--target worker` 재시도를 요구한다. SHA가 다른
   구 worker는 claim이 거부된다.
 
-## D-063: 수동 배포의 전송·대상 선택은 Ansible, 전환은 노드 로컬 transaction이 맡는다
+## D-063: 수동 배포의 전송·대상 선택은 deploy.mjs, 전환은 노드 로컬 transaction이 맡는다
 
-- **역할:** 배포 trigger는 계속 사람이 실행하는 pnpm 명령이다. Ansible은 로컬에서만 실행하는
-  agentless 전송·실행 도구이며 AWX, schedule, CI 자동 배포를 추가하지 않는다. `ansible-core`는
-  격리 venv에 버전을 고정한다.
-- **트랜잭션 경계:** app/worker role은 시도별 원격 임시 디렉터리에 검증 대상을 올리고 노드
-  로컬 스크립트를 실행한 뒤 임시 디렉터리를 항상 지운다. 각 스크립트가 non-blocking `flock`,
-  전환, readiness, rollback, 산출물 정리를 한 잠금 범위에서 수행한다.
+- **역할:** 배포 trigger는 계속 사람이 실행하는 pnpm 명령이다. `deploy.mjs`가 로컬 OpenSSH의
+  `ssh`·`scp`를 직접 호출하며 별도 배포 framework나 원격 agent, schedule, CI 자동 배포를
+  추가하지 않는다.
+- **트랜잭션 경계:** `deploy.mjs`는 시도별 원격 임시 디렉터리에 검증 대상을 올리고 노드 로컬
+  스크립트를 실행한 뒤 임시 디렉터리를 항상 지운다. 각 스크립트가 non-blocking `flock`, 전환,
+  readiness, rollback, 산출물 정리를 한 잠금 범위에서 수행한다.
 - **산출물 수명:** 정상 성공 후 app은 현재 release만, worker는 현재 image만 남긴다. 검증된
   rollback 뒤에는 이전 정상 산출물만 남긴다. rollback 검증 실패 때만 이전·신규 산출물을
   모두 보존해 수동 복구 근거가 사라지지 않게 한다.
-- **동시성·자원:** `forks=1`, `serial=1`, facts 수집 비활성으로 노드를 순차 처리한다. Ansible은
-  배포 중에만 존재하는 control process이고 노드 메모리를 상시 점유하지 않는다. 노드별 lock이
-  별도 실행까지 막으므로 CLI 중복 실행도 같은 target에서 즉시 실패한다.
+- **동시성·자원:** app과 worker preflight 및 적용은 항상 순차 처리한다. 원격 상주 control
+  process는 없으며 노드별 lock이 별도 실행까지 막으므로 CLI 중복 실행도 같은 target에서
+  즉시 실패한다.
 - **마이그레이션:** 제품과 schema가 아직 빠르게 바뀌고 디스크가 작으므로 expand-contract를
   의무화하지 않는다. 현재는 파괴적 migration도 허용하고 app snapshot으로 코드·DB를 함께
   rollback한다. 이 패턴은 schema 안정화와 디스크 여유 확보 뒤 재검토한다.

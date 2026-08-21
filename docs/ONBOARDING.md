@@ -108,7 +108,7 @@ src/shared/schemas/       웹·서버가 공유하는 Zod 스키마 (백테스�
 src/web/features/         화면 단위 (auth, backtests, dashboard, datasets, settings)
 src/workers/              backtest-child.ts + remote-backtest-supervisor.ts
 migrations/               Drizzle 마이그레이션 — 0000 하나뿐인 이유는 §9
-infra/, scripts/          서버 프로비저닝·배포·백업 (§10)
+infra/, scripts/          app 노드 프로비저닝·배포·백업 (§10)
 tests/                    unit / integration / e2e / architecture
 ```
 
@@ -206,20 +206,20 @@ CSV 형식: `timestamp,open,high,low,close,volume` (ISO 8601 UTC 또는 epoch ms
 ## 11. 배포 개요 (요약 — 원문은 README 배포 절)
 
 ```bash
-./scripts/bootstrap-server.sh          # app 노드 1회 준비
+./scripts/bootstrap-app.sh             # app 노드 1회 준비
 ./scripts/bootstrap-worker.sh          # worker 노드 1회 준비
-cp ansible/inventory.example.yml ansible/inventory.yml
-pnpm run deploy                       # inventory에 worker가 있으면 app+worker
+cp deploy.env.example deploy.env
+pnpm run deploy                       # QP_WORKER_HOST가 있으면 app+worker
 pnpm run deploy --target app          # 명시적 app 전용 배포
 pnpm run deploy --target worker       # 명시적 worker 전용 배포
 pnpm run deploy --target all          # 양쪽 호스트가 필수인 통합 배포
 ./scripts/backup.sh                    # SQLite·exports 백업
 ```
 
-- bootstrap 스크립트의 저수준 SSH 환경변수는 최초 준비에만 사용한다. 일반 배포는
-  `ansible/inventory.yml` 또는 `ANSIBLE_INVENTORY`가 지정한 표준 inventory를 사용한다.
-- Ansible은 로컬에서 수동 실행하며 `forks=1`, `gather_facts=false`로 app과 worker를 순차
-  처리한다. 노드에는 상주 agent를 설치하지 않는다.
+- `deploy.env`는 app/worker별 SSH 호스트·사용자·키·포트·점프 호스트와 추가 옵션만 담는다.
+  runtime 비밀값은 원격 `app.env`·`worker.env`에만 둔다.
+- `deploy.mjs`는 로컬 OpenSSH로 app과 worker를 순차 처리한다. 노드에는 상주 agent를
+  설치하지 않는다.
 - deploy-app.sh는 app 노드에서 실행되는 transaction이다. 재시작 직전 SQLite snapshot을
   만들고 실패 시 코드·DB를 함께 롤백한다. 성공 뒤 과거 release와 snapshot은 남기지 않는다.
 - deploy-worker.sh는 worker 노드의 Docker image transaction이다. 성공하면 현재 image만,
@@ -228,8 +228,8 @@ pnpm run deploy --target all          # 양쪽 호스트가 필수인 통합 배
   통과해야 전환한다 (D-061).
 - 독립 복원 스크립트는 제공하지 않는다. 백업 복구 절차와 격리 복구 검증은 Phase 7
   disaster runbook 에서 함께 설계한다 (D-031).
-- 주의: `provision-server.sh` 는 **POSIX sh** 다 — bash 문법(배열, `[[ ]]`, pipefail) 금지.
-  `bootstrap-server.sh`/`deploy-app.sh`와 Worker 스크립트는 bash. `provision-worker.sh`와 container
+- 주의: `provision-app.sh` 는 **POSIX sh** 다 — bash 문법(배열, `[[ ]]`, pipefail) 금지.
+  `bootstrap-app.sh`/`deploy-app.sh`와 Worker 스크립트는 bash. `provision-worker.sh`와 container
   entrypoint는 POSIX sh다. 셸 스크립트는 전부 LF (`.gitattributes` 강제).
 
 ## 12. 작업 관례
@@ -242,7 +242,7 @@ pnpm run deploy --target all          # 양쪽 호스트가 필수인 통합 배
 - 커밋 메시지는 한국어 + conventional prefix (`feat:`, `fix:`, `docs:`,
   `refactor:` …). 본문에 "왜"를 적는다. 관련 D 번호가 있으면 언급한다.
 - 비밀값(키·토큰·비밀번호)은 argv 로 넘기지 않는다 — ps·셸 히스토리에 남는다.
-  stdin 이나 root 전용 파일로 전달한다 (deploy-app.sh·provision-server.sh 가 예시).
+  stdin 이나 root 전용 파일로 전달한다 (deploy-app.sh·provision-app.sh 가 예시).
 - 테스트는 실동작을 검증한다 — 모킹으로 초록불만 만드는 테스트는 리뷰에서 걸린다.
 
 ## 13. 자주 밟는 함정
@@ -256,7 +256,7 @@ pnpm run deploy --target all          # 양쪽 호스트가 필수인 통합 배
 | domain 에서 import | fs·env·프레임워크·DB — dependency-cruiser 가 잡는다. 설계를 다시 보라는 신호 |
 | 웹에 제어 기능 추가 | 스펙 §2.6 위반 — "헌법 개정" 없이는 금지 |
 | 새 비밀 필드 로깅 | redaction 목록(logger.ts + 스펙 §16) 갱신 누락 |
-| 서버 app.env | `SESSION_SECRET` 이 든 파일 — 절대 덮어쓰지 않는다 (세션 전체 무효화) |
+| app의 app.env | `SESSION_SECRET` 이 든 파일 — 절대 덮어쓰지 않는다 (세션 전체 무효화) |
 | 셸 스크립트 CRLF | Windows 에디터로 저장 시 주의 — `.gitattributes` 가 LF 강제하지만 도구 우회 금지 |
 
 ---

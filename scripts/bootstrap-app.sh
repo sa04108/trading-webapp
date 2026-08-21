@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# 서버 부트스트랩 — 새 호스트를 배포 가능 상태로 만든다
+# app 노드 부트스트랩 — 새 호스트를 배포 가능 상태로 만든다
 #
-# 사용법: ./scripts/bootstrap-server.sh
-#         서버 주소와 도메인을 순서대로 물어본다. 비대화형으로 돌리려면
+# 사용법: ./scripts/bootstrap-app.sh
+#         app 노드 주소와 도메인을 순서대로 물어본다. 비대화형으로 돌리려면
 #         환경변수를 미리 설정한다 — ssh config 는 필요하지 않다:
 #
-#         SSH_KEY=~/.ssh/your-key QP_SSH_USER=ubuntu QP_HOST=203.0.113.10 \
-#           QP_DOMAIN=quant.example.com ./scripts/bootstrap-server.sh
+#         SSH_KEY=~/.ssh/your-key QP_SSH_USER=ubuntu QP_APP_HOST=203.0.113.10 \
+#           QP_DOMAIN=quant.example.com ./scripts/bootstrap-app.sh
 #
-#   QP_DOMAIN        서비스 도메인 (예: quant.example.com). A 레코드가 서버의 고정 공인
+#   QP_DOMAIN        서비스 도메인 (예: quant.example.com). A 레코드가 app 노드의 고정 공인
 #                    IP 를 가리키고 있어야 한다 — Caddy 가 이 이름으로 인증서를 받는다.
-#   QP_HOST          서버 주소, `[user@]host` 형식
-#   QP_SSH_USER      로그인 사용자명. QP_HOST 에 `user@` 가 없을 때만 쓴다
+#   QP_APP_HOST      app 노드 주소, `[user@]host` 형식
+#   QP_SSH_USER      로그인 사용자명. QP_APP_HOST 에 `user@` 가 없을 때만 쓴다
 #   QP_SSH_PORT      SSH 포트 (미지정이면 22)
 #   SSH_KEY          개인키 경로. `~/` 로 시작하면 아래에서 $HOME 으로 펼친다
 #   QP_SSH_JUMP      점프 호스트, `[user@]host[:port]` (ssh 의 ProxyJump)
@@ -25,7 +25,7 @@
 # (ubuntu / admin / ec2-user), 자체 설치 호스트는 임의다. 스펙 §2.1 의 "애플리케이션과
 # 도구는 특정 클라우드를 모른다" 를 따른다.
 #
-# 인증은 공개키만 지원한다. 비밀번호 인증을 넣지 않는 이유는 provision-server.sh 가
+# 인증은 공개키만 지원한다. 비밀번호 인증을 넣지 않는 이유는 provision-app.sh 가
 # PasswordAuthentication no 를 쓰기 때문이다 (스펙 §16·D-017) — 어떤 호스트에서든
 # 프로비저닝이 끝나면 비밀번호로는 다시 들어올 수 없다. 한 실행에 ssh/scp 가 5회
 # 호출되므로 매번 프롬프트가 뜨는 문제도 있고, sudo 확인은 어차피 passwordless
@@ -34,7 +34,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REMOTE_DIR=/tmp/quant-provision
+REMOTE_DIR=/tmp/quant-app-provision
 
 # ── 입력은 로그 리다이렉트보다 먼저 받는다 ────────────────────────────────────
 # tee 를 거치면 프롬프트가 버퍼링에 걸려 화면에 안 나타날 수 있다. 입력을 다 받은
@@ -42,16 +42,16 @@ REMOTE_DIR=/tmp/quant-provision
 # read 뒤의 `|| true`: 비대화형 실행(stdin 이 /dev/null·닫힘)에서 read 는 EOF 로
 # 비영점 종료한다. 그러면 set -e 가 여기서 스크립트를 죽여, 바로 아래의 사람이 읽을
 # 안내가 실행되지 못하고 설명 없는 exit 1 만 남는다. 값의 유무 판단은 다음 줄에 맡긴다.
-TARGET="${QP_HOST:-}"
+TARGET="${QP_APP_HOST:-}"
 if [ -z "${TARGET}" ]; then
-  read -rp "서버 주소 입력(user@host): " TARGET || true
+  read -rp "app 노드 주소 입력(user@host): " TARGET || true
 fi
 [ -n "${TARGET}" ] || {
-  echo "서버 주소가 필요합니다 — 비대화형이면 QP_HOST 로 지정하세요" >&2
+  echo "app 노드 주소가 필요합니다 — 비대화형이면 QP_APP_HOST 로 지정하세요" >&2
   exit 1
 }
 # 사용자명은 주소에 붙여도 되고 따로 줘도 된다 — 주소가 IP 뿐인 CI·스크립트에서
-# QP_HOST 를 조립하지 않아도 되게 한다. 둘 다 있으면 주소에 붙은 쪽이 이긴다.
+# QP_APP_HOST 를 조립하지 않아도 되게 한다. 둘 다 있으면 주소에 붙은 쪽이 이긴다.
 if [ -n "${QP_SSH_USER:-}" ]; then
   case "${TARGET}" in
     *@*) echo "QP_SSH_USER 는 무시합니다 — 주소에 이미 사용자명이 있습니다: ${TARGET}" >&2 ;;
@@ -61,7 +61,7 @@ fi
 # ssh 는 `--` 를 받지 않으므로 `-` 로 시작하는 주소는 옵션으로 먹힌다 — 여기서 끊는다.
 case "${TARGET}" in
   -* | *[[:space:]]*)
-    echo "서버 주소 형식이 올바르지 않습니다: ${TARGET}" >&2
+    echo "app 노드 주소 형식이 올바르지 않습니다: ${TARGET}" >&2
     exit 1
     ;;
 esac
@@ -74,7 +74,7 @@ fi
   echo "도메인이 필요합니다 — 비대화형이면 QP_DOMAIN 으로 지정하세요" >&2
   exit 1
 }
-# 이 값은 아래에서 원격 root 셸의 명령줄에 들어가고, provision-server.sh 안에서는 Caddyfile
+# 이 값은 아래에서 원격 root 셸의 명령줄에 들어가고, provision-app.sh 안에서는 Caddyfile
 # heredoc 으로 흘러간다. 호스트명 문법을 여기서 강제해 `;`·백틱·`$(...)`·공백이
 # 명령이나 Caddy 지시자로 해석될 여지를 없앤다 (원격 실행 전에 막는 게 요점).
 case "${DOMAIN}" in
@@ -94,7 +94,7 @@ esac
 # 화면에 의존하지 않는 것이 요점이다 — 터미널 종류·스크롤백 한도·창 크기와 무관하게
 # 실행 기록이 남아야 한다.
 # 파일명은 *.log 로 .gitignore 에 이미 걸려 있다. QP_LOG 로 경로를 바꿀 수 있다.
-LOG="${QP_LOG:-${REPO_ROOT}/.logs/bootstrap-$(date -u +%Y%m%d-%H%M%S).log}"
+LOG="${QP_LOG:-${REPO_ROOT}/.logs/bootstrap-app-$(date -u +%Y%m%d-%H%M%S).log}"
 mkdir -p "$(dirname "${LOG}")"
 exec > >(tee "${LOG}") 2>&1
 TEE_PID=$!
@@ -138,7 +138,7 @@ if [ -n "${SSH_KEY:-}" ]; then
   esac
   [ -f "${SSH_KEY}" ] || { echo "SSH_KEY 파일이 없습니다: ${SSH_KEY}" >&2; exit 1; }
   # IdentitiesOnly 를 함께 켜는 이유는 하드닝이 MaxAuthTries 3 을 걸기 때문이다 —
-  # agent 에 등록된 키까지 순서대로 제시되면 맞는 키가 4번째가 되어 서버가 먼저 끊는다.
+  # agent 에 등록된 키까지 순서대로 제시되면 맞는 키가 4번째가 되어 app 노드가 먼저 끊는다.
   SSH_OPTS+=(-i "${SSH_KEY}" -o IdentitiesOnly=yes)
   ENV_HINT="${ENV_HINT}SSH_KEY=${SSH_KEY} "
   SSH_FLAGS="${SSH_FLAGS}-i ${SSH_KEY} "
@@ -207,7 +207,7 @@ if ! SSH_ERR="$(ssh "${SSH_OPTS[@]}" -o ConnectTimeout=15 -o BatchMode=yes "${TA
             echo
             echo "찾은 키 후보 — 하나를 골라 다시 실행하면 된다:"
             while IFS= read -r k; do
-              [ -n "${k}" ] && echo "  SSH_KEY=${k} QP_HOST=${TARGET} ./scripts/bootstrap-server.sh"
+              [ -n "${k}" ] && echo "  SSH_KEY=${k} QP_APP_HOST=${TARGET} ./scripts/bootstrap-app.sh"
             done <<< "${CANDIDATES}"
           else
             echo
@@ -235,13 +235,13 @@ fi
 echo "==> 프로비저닝 파일 업로드"
 ssh "${SSH_OPTS[@]}" "${TARGET}" "mkdir -p ${REMOTE_DIR}" \
   || { echo "원격 디렉터리 생성 실패: ${REMOTE_DIR}" >&2; exit 1; }
-scp "${SSH_OPTS[@]}" "${REPO_ROOT}/infra/provision-server.sh" \
+scp "${SSH_OPTS[@]}" "${REPO_ROOT}/infra/provision-app.sh" \
     "${REPO_ROOT}/infra/systemd/quant-platform.service" \
     "${REPO_ROOT}/infra/app.env.example" \
     "${TARGET}:${REMOTE_DIR}/" \
   || { echo "파일 업로드 실패 — ${REPO_ROOT}/infra 아래 3개 파일과 원격 디스크 여유를 확인하세요" >&2; exit 1; }
 
-# provision-server.sh 는 root 로 돌아야 하고, TTY 없이 붙는다. sudo 가 비밀번호를 물으면
+# provision-app.sh 는 root 로 돌아야 하고, TTY 없이 붙는다. sudo 가 비밀번호를 물으면
 # 답할 방법이 없으므로 여기서 먼저 분명하게 실패시킨다. passwordless sudo 는 이
 # 도구의 전제다 (클라우드 이미지는 보통 그렇게 오지만, 자체 설치 호스트라면 직접
 # 설정해야 한다).
@@ -250,16 +250,16 @@ ssh "${SSH_OPTS[@]}" "${TARGET}" "sudo -n true" \
 
 echo "==> 프로비저닝 (패키지·Node·UFW·sshd·Caddy·app.env·systemd)"
 # 원격 셸이 한 번 더 파싱하므로 인용한다 — 위 검증과 이중 방어다
-ssh "${SSH_OPTS[@]}" "${TARGET}" "sudo sh ${REMOTE_DIR}/provision-server.sh '${DOMAIN}'"
+ssh "${SSH_OPTS[@]}" "${TARGET}" "sudo sh ${REMOTE_DIR}/provision-app.sh '${DOMAIN}'"
 
-# provision-server.sh 가 sshd 를 재시작했다 — 새 연결로 즉시 재검증해 하드닝이 SSH 를
+# provision-app.sh 가 sshd 를 재시작했다 — 새 연결로 즉시 재검증해 하드닝이 SSH 를
 # 깨뜨렸다면 지금 크게 알린다 (퍼블릭 22 는 열려 있으므로 락아웃은 아니고,
 # 최악의 경우에도 클라우드 브라우저 SSH 콘솔이 남는다).
 echo "==> 프로비저닝 후 SSH 재검증"
 ssh "${SSH_OPTS[@]}" -o ConnectTimeout=15 -o BatchMode=yes "${TARGET}" true \
   || { echo "프로비저닝 후 SSH 재접속 실패 — 클라우드 브라우저 SSH 콘솔로 확인하세요" >&2; exit 1; }
 
-# 인증서의 확정 판정은 여기다 — 서버 안(hairpin 제약 가능)이 아니라 외부 시점.
+# 인증서의 확정 판정은 여기다 — app 노드 안(hairpin 제약 가능)이 아니라 외부 시점.
 echo "==> HTTPS 검증: https://${DOMAIN}"
 # `|| echo 000` 을 쓰지 않는다 — 실패해도 curl 이 -w 로 이미 "000" 을 찍으므로
 # 두 값이 이어붙어 "000000" 이 되고, 그러면 아래 비교가 영영 거짓이라 이 게이트가
@@ -267,9 +267,9 @@ echo "==> HTTPS 검증: https://${DOMAIN}"
 CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "https://${DOMAIN}/" || true)"
 if [ "${CODE}" = "000" ] || [ -z "${CODE}" ]; then
   echo "https://${DOMAIN} 에 TLS 로 접속하지 못했습니다." >&2
-  echo "  - A 레코드가 서버 고정 IP 를 가리키는지, DNS 전파가 끝났는지 확인" >&2
+  echo "  - A 레코드가 app 노드 고정 IP 를 가리키는지, DNS 전파가 끝났는지 확인" >&2
   echo "  - 클라우드 방화벽에서 TCP 80·443 이 열려 있는지 확인" >&2
-  echo "  - 서버에서: journalctl -u caddy --no-pager -n 50" >&2
+  echo "  - app 노드에서: journalctl -u caddy --no-pager -n 50" >&2
   exit 1
 fi
 echo "TLS 응답 확인 (HTTP ${CODE} — 앱 배포 전에는 502 가 정상)"
@@ -279,8 +279,8 @@ cat <<MSG
 부트스트랩 완료: https://${DOMAIN}
 
 다음 단계:
-  1) Ansible inventory 작성 후 첫 app 배포: pnpm run deploy --target app
-  2) 관리자 생성 + TOTP 등록 (서버에서, 순서대로):
+  1) deploy.env 작성 후 첫 app 배포: pnpm run deploy --target app
+  2) 관리자 생성 + TOTP 등록 (app 노드에서, 순서대로):
      ssh ${SSH_FLAGS}${TARGET}
      sudo systemd-run --pty --uid=quant --gid=quant \\
        --property=EnvironmentFile=/etc/quant-platform/app.env \\
@@ -290,6 +290,6 @@ cat <<MSG
        --property=EnvironmentFile=/etc/quant-platform/app.env \\
        --working-directory=/opt/quant-platform/current \\
        /usr/local/bin/node /opt/quant-platform/current/dist/server/cli.js totp:enroll
-     TOTP 등록은 퍼블릭 노출 전 필수다 (D-017) — 미등록이면 서버가 부팅 경고를 남긴다.
+     TOTP 등록은 퍼블릭 노출 전 필수다 (D-017) — 미등록이면 app이 부팅 경고를 남긴다.
   3) 클라우드 방화벽은 TCP 22·80·443 만 허용한다 (IPv4·IPv6 각각 확인)
 MSG
