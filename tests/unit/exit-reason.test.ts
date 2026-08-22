@@ -11,6 +11,7 @@ describe('exitReasonLabel', () => {
     expect(exitReasonLabel('RSI_EXIT')).toBe('RSI 회복');
     expect(exitReasonLabel('DELISTED')).toBe('상장폐지');
     expect(exitReasonLabel('REBALANCE_EXIT')).toBe('리밸런스 유니버스 이탈');
+    expect(exitReasonLabel('REBALANCE_TRIM')).toBe('리밸런스 비중 축소');
   });
 
   it('사유가 없으면 - 를 보여준다', () => {

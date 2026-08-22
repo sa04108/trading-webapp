@@ -43,7 +43,7 @@ export type ValueQualityRankParameters = z.infer<typeof valueQualityRankParamete
 
 export interface ValueQualityRankState {
   readonly symbols: readonly string[];
-  pendingBuys: readonly string[] | null;
+  pendingTargets: readonly string[] | null;
 }
 
 export interface ValueQualityMetrics {
@@ -151,7 +151,7 @@ export const valueQualityRankStrategy: TradingStrategy<
   ValueQualityRankState
 > = {
   id: 'value-quality-rank',
-  version: '2.1.0',
+  version: '2.2.0',
   name: '밸류·퀄리티 랭킹',
   description:
     '이익수익률(EBIT/EV)과 자본수익률(EBIT/투입자본) 순위를 합산해 상위 N 을 동일가중 보유합니다. 상장시점 재무제표가 수집된 데이터셋에서만 동작합니다.',
@@ -164,7 +164,7 @@ export const valueQualityRankStrategy: TradingStrategy<
   },
 
   initialize(context: StrategyInitializeContext): ValueQualityRankState {
-    return { symbols: [...context.symbols], pendingBuys: null };
+    return { symbols: [...context.symbols], pendingTargets: null };
   },
 
   onBars(
@@ -172,15 +172,15 @@ export const valueQualityRankStrategy: TradingStrategy<
     state: ValueQualityRankState,
     parameters: ValueQualityRankParameters,
   ): StrategyDecision {
-    if (state.pendingBuys !== null) {
-      const buys = planBuyPhase(state.pendingBuys, {
+    if (state.pendingTargets !== null) {
+      const buys = planBuyPhase(state.pendingTargets, {
         positions: context.portfolio.positions,
         bars: context.bars,
         equity: context.portfolio.equity,
         topN: parameters.topN,
         tradableSymbols: context.tradableSymbols,
       });
-      state.pendingBuys = null;
+      state.pendingTargets = null;
       return { orders: buys };
     }
 
@@ -227,11 +227,14 @@ export const valueQualityRankStrategy: TradingStrategy<
       .map(([symbol]) => symbol)
       .sort();
 
-    const sells = planSellPhase({ targets, positions: context.portfolio.positions });
-    const newEntries = targets.filter(
-      (symbol) => (context.portfolio.positions.get(symbol)?.quantity ?? 0) <= 0,
-    );
-    state.pendingBuys = newEntries.length > 0 ? newEntries : null;
+    const sells = planSellPhase({
+      targets,
+      positions: context.portfolio.positions,
+      bars: context.bars,
+      equity: context.portfolio.equity,
+      topN: parameters.topN,
+    });
+    state.pendingTargets = targets.length > 0 ? targets : null;
 
     return { orders: sells };
   },

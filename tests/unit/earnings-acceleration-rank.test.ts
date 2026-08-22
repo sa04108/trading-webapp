@@ -208,7 +208,7 @@ describe('ordinal rank 결합', () => {
 
 describe('이익 가속 전략', () => {
   it('스키마와 준비 데이터 요구가 정확하다', () => {
-    expect(earningsAccelerationRankStrategy.version).toBe('1.1.0');
+    expect(earningsAccelerationRankStrategy.version).toBe('1.2.0');
     expect(earningsAccelerationRankParameters.parse({})).toEqual({
       topN: 40,
       priceMomentumDays: 126,
@@ -327,7 +327,7 @@ describe('이익 가속 전략', () => {
         { topN: 1, priceMomentumDays: 60, staleQuarters: 2 },
       ).orders,
     ).toEqual([]);
-    expect(state.pendingBuys).toBeNull();
+    expect(state.pendingTargets).toBeNull();
   });
 
   it('아무도 점수를 못 내면 기존 보유를 청산하지 않고 유지한다 (판단 근거가 없으면 보유 유지)', () => {
@@ -356,7 +356,7 @@ describe('이익 가속 전략', () => {
       { topN: 1, priceMomentumDays: 60, staleQuarters: 2 },
     );
     expect(decision.orders).toEqual([]);
-    expect(state.pendingBuys).toBeNull();
+    expect(state.pendingTargets).toBeNull();
   });
 
   it('리밸런스 봉이 아니고 대기 매수도 없으면 주문을 내지 않는다', () => {

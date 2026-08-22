@@ -620,7 +620,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    *
    * 두 값이 어긋나면 결과가 조용히 틀린다: 매수 단계는 topN 건의 주문을 각각
    * `equity / topN` 으로 내는데, 엔진의 리스크 검증은 상한을 넘는 주문을 `null` 로
-   * 떨어뜨린다. 초과분은 폐기되고 `pendingBuys` 는 이미 비워졌으므로 다음 리밸런스까지
+   * 떨어뜨린다. 초과분은 폐기되고 `pendingTargets` 는 이미 비워졌으므로 다음 리밸런스까지
    * 재시도되지 않는다 — 자본의 (topN-maxPositions)/topN 이 영구히 현금으로 남는데
    * 자산 곡선은 정상적으로 보인다. 기본값 조합(value-quality-rank topN=20, 웹 마법사
    * maxPositions=10)이 정확히 이 상태다.

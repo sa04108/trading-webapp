@@ -172,14 +172,30 @@ describe('splitAdjustedClose', () => {
 });
 
 describe('planSellPhase', () => {
-  it('목표에 없는 보유 종목만 전량 매도한다', () => {
+  const bars = new Map<string, Candle>([
+    ['A', candle(0, 1_000, 'A')],
+    ['B', candle(0, 500, 'B')],
+  ]);
+
+  it('목표에 없는 종목은 전량, 목표보다 비중이 큰 보유 종목은 초과 수량만 매도한다', () => {
     const positions = new Map<string, Position>([
       ['A', position('A', 10)],
       ['B', position('B', 5)],
     ]);
-    expect(planSellPhase({ targets: ['A', 'C'], positions })).toEqual([
+    // 종목당 목표 예산 10,000/2 = 5,000 → A 목표 5주
+    expect(
+      planSellPhase({ targets: ['A', 'C'], positions, bars, equity: 10_000, topN: 2 }),
+    ).toEqual([
+      { symbol: 'A', side: 'SELL', quantity: 5, reason: 'REBALANCE_TRIM' },
       { symbol: 'B', side: 'SELL', quantity: 5, reason: 'REBALANCE_EXIT' },
     ]);
+  });
+
+  it('목표 수량 이하인 보유 종목은 매도하지 않는다', () => {
+    const positions = new Map<string, Position>([['A', position('A', 5)]]);
+    expect(
+      planSellPhase({ targets: ['A'], positions, bars, equity: 10_000, topN: 2 }),
+    ).toEqual([]);
   });
 
   it('전량 회전이면 보유 전부를 매도한다', () => {
@@ -187,15 +203,16 @@ describe('planSellPhase', () => {
       ['A', position('A', 10)],
       ['B', position('B', 5)],
     ]);
-    expect(planSellPhase({ targets: ['C', 'D'], positions }).map((o) => o.symbol)).toEqual([
-      'A',
-      'B',
-    ]);
+    expect(
+      planSellPhase({ targets: ['C', 'D'], positions, bars, equity: 10_000, topN: 2 }).map(
+        (o) => o.symbol,
+      ),
+    ).toEqual(['A', 'B']);
   });
 
   it('수량 0 포지션은 주문을 내지 않는다', () => {
     const positions = new Map<string, Position>([['A', position('A', 0)]]);
-    expect(planSellPhase({ targets: [], positions })).toEqual([]);
+    expect(planSellPhase({ targets: [], positions, bars, equity: 10_000, topN: 2 })).toEqual([]);
   });
 
   it('주문 순서는 심볼 코드 순으로 결정적이다', () => {
@@ -204,7 +221,11 @@ describe('planSellPhase', () => {
       ['A', position('A', 1)],
       ['B', position('B', 1)],
     ]);
-    expect(planSellPhase({ targets: [], positions }).map((o) => o.symbol)).toEqual(['A', 'B', 'C']);
+    expect(
+      planSellPhase({ targets: [], positions, bars, equity: 10_000, topN: 2 }).map(
+        (o) => o.symbol,
+      ),
+    ).toEqual(['A', 'B', 'C']);
   });
 });
 
@@ -224,14 +245,27 @@ describe('planBuyPhase', () => {
     );
   });
 
-  it('이미 보유 중인 종목은 매수하지 않는다', () => {
+  it('목표보다 적게 보유한 종목은 부족한 수량만 추가 매수한다', () => {
     const orders = planBuyPhase(['A', 'B'], {
       positions: new Map([['A', position('A', 3)]]),
       bars,
       equity: 10_000,
       topN: 2,
     });
-    expect(orders.map((o) => o.symbol)).toEqual(['B']);
+    expect(orders).toEqual([
+      { symbol: 'A', side: 'BUY', quantity: 2, reason: 'REBALANCE_ENTRY' },
+      { symbol: 'B', side: 'BUY', quantity: 10, reason: 'REBALANCE_ENTRY' },
+    ]);
+  });
+
+  it('목표 수량 이상을 이미 보유한 종목은 추가 매수하지 않는다', () => {
+    const orders = planBuyPhase(['A'], {
+      positions: new Map([['A', position('A', 5)]]),
+      bars,
+      equity: 10_000,
+      topN: 2,
+    });
+    expect(orders).toEqual([]);
   });
 
   it('이번 봉에 봉이 없는 종목은 건너뛴다 (거래정지 등)', () => {
