@@ -82,8 +82,9 @@ describe('isPreparingCurrentParams', () => {
     expect(isPreparingCurrentParams(paramsA, paramsA, 'CANCELLED', paramsEqual)).toBe(false);
   });
 
-  it('job 상태를 아직 모르면(null) false', () => {
-    expect(isPreparingCurrentParams(paramsA, paramsA, null, paramsEqual)).toBe(false);
+  it('202 직후 job 상태를 아직 불러오는 중이면 같은 파라미터의 버튼을 계속 잠근다', () => {
+    expect(isPreparingCurrentParams(paramsA, paramsA, null, paramsEqual)).toBe(true);
+    expect(isPreparingCurrentParams(paramsA, paramsB, null, paramsEqual)).toBe(false);
   });
 });
 

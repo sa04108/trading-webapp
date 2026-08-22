@@ -10,21 +10,23 @@ import {
 } from './preparation-live';
 
 const PHASE_LABELS: Record<PreparationPhase, string> = {
-  MARKET_DATA: '시장 데이터 수집',
-  RESOLVING_STAGES: '유니버스 단계 확인',
-  SYNCING_FACTS: '재무·자본변동 동기화',
-  FINALIZING: '마무리',
+  MARKET_DATA: 'KRX 시장 데이터 수집',
+  RESOLVING_STAGES: 'SQLite 저장 데이터 확인',
+  SYNCING_FACTS: 'DART 재무·자본변동 수집',
+  FINALIZING: '미리보기 결과 저장',
 };
 
-function statusDescription(job: BacktestPreparationJob): string {
+/** 버튼 옆 상태와 준비 카드가 같은 용어로 실제 작업 위치를 설명하게 한다. */
+export function preparationStatusDescription(job: BacktestPreparationJob): string {
   switch (job.status) {
     case 'QUEUED':
       return '데이터 준비 대기 중';
     case 'RUNNING':
-    case 'WAITING_DAILY_QUOTA':
       return PHASE_LABELS[job.phase];
+    case 'WAITING_DAILY_QUOTA':
+      return 'DART 일일 호출 한도 해제 대기';
     case 'COMPLETED':
-      return '준비 완료';
+      return '데이터 준비 완료 · 미리보기 결과 확인 중';
     case 'FAILED':
       return '준비 실패';
     case 'CANCELLED':
@@ -59,7 +61,7 @@ export function PreparationProgress({ job, onCancel, onRestart }: PreparationPro
     <Card>
       <CardHeader>
         <CardTitle className="text-base">데이터 준비</CardTitle>
-        <CardDescription>{statusDescription(job)}</CardDescription>
+        <CardDescription>{preparationStatusDescription(job)}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
         {job.status === 'RUNNING' || job.status === 'WAITING_DAILY_QUOTA' ? (

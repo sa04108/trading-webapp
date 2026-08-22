@@ -81,6 +81,12 @@ export function pollInterval(
  * terminal 상태는 이미 잠글 이유가 없다 — 진행 중이 아니므로 `shouldCloseStream`
  * 으로 판정한다. `trackedParams` 가 없으면(추적 중인 job 자체가 없으면) 당연히
  * false 다.
+ *
+ * status=null 은 "진행 중이 아님"이 아니라, preview POST가 202와 job을 반환한 뒤
+ * job 상세 GET/SSE의 첫 값이 아직 도착하지 않은 짧은 연결 구간이다. 이때 버튼을
+ * 풀면 사용자가 같은 요청을 다시 시작할 수 있고, 실제로는 준비 중인데도 버튼이
+ * 순간적으로 "미리보기"로 돌아오는 깜빡임이 생긴다. trackedParams가 현재 값과
+ * 같다면 이 구간도 준비 중으로 본다.
  */
 export function isPreparingCurrentParams<TParams>(
   trackedParams: TParams | null,
@@ -88,9 +94,8 @@ export function isPreparingCurrentParams<TParams>(
   status: PreparationStatus | null,
   paramsEqual: (a: TParams, b: TParams) => boolean,
 ): boolean {
-  if (trackedParams === null || status === null) return false;
-  if (shouldCloseStream(status)) return false;
-  return paramsEqual(trackedParams, currentParams);
+  if (trackedParams === null || !paramsEqual(trackedParams, currentParams)) return false;
+  return status === null || !shouldCloseStream(status);
 }
 
 const KST_RESUME_FORMATTER = new Intl.DateTimeFormat('ko-KR', {

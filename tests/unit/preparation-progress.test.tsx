@@ -46,6 +46,18 @@ describe('PreparationProgress', () => {
     expect(html).toContain('브라우저를 닫아도 계속됩니다');
   });
 
+  it.each([
+    ['RESOLVING_STAGES', 'SQLite 저장 데이터 확인'],
+    ['MARKET_DATA', 'KRX 시장 데이터 수집'],
+    ['SYNCING_FACTS', 'DART 재무·자본변동 수집'],
+    ['FINALIZING', '미리보기 결과 저장'],
+  ] as const)('%s 단계의 실제 데이터 출처와 작업을 표시한다', (phase, label) => {
+    const html = renderToStaticMarkup(
+      <PreparationProgress job={job({ status: 'RUNNING', phase })} onCancel={() => undefined} />,
+    );
+    expect(html).toContain(label);
+  });
+
   it('WAITING_DAILY_QUOTA 는 일일 호출 한도와 다음 KST 재개 시각, 취소 버튼을 보여준다', () => {
     const waitingJob = job({
       status: 'WAITING_DAILY_QUOTA',
@@ -56,6 +68,7 @@ describe('PreparationProgress', () => {
       <PreparationProgress job={waitingJob} onCancel={() => undefined} />,
     );
     expect(html).toContain('일일 호출 한도');
+    expect(html).toContain('DART 일일 호출 한도 해제 대기');
     expect(html).toContain(formatPreparationResumeTime(waitingJob.nextResumeAtMs));
     expect(html).toContain('취소');
   });
@@ -64,6 +77,7 @@ describe('PreparationProgress', () => {
     const html = renderToStaticMarkup(
       <PreparationProgress job={job({ status: 'COMPLETED' })} onCancel={() => undefined} />,
     );
+    expect(html).toContain('미리보기 결과 확인 중');
     expect(html).not.toContain('취소');
     expect(html).not.toContain('재시도');
     expect(html).not.toContain('다시 준비');
