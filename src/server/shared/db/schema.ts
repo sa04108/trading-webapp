@@ -799,7 +799,13 @@ export const benchmarkDailyValues = sqliteTable(
   ],
 );
 
-/** FRED API가 성공적으로 반환한 달력일 범위. 행 존재만으로 내부 관측값을 추정하지 않는다. */
+/**
+ * 벤치마크 소스가 성공적으로 확인한 달력일 범위.
+ *
+ * 테이블 이름은 FRED 전용이던 초기 스키마와의 호환 때문에 유지한다. KRX도 빈 응답을
+ * 휴장일의 근거로 남겨야 종목 마스터를 아직 수집하지 않은 새 백테스트 기간을 독립적으로
+ * 판정할 수 있다. 행 존재만으로 내부 관측값을 추정하지는 않는다.
+ */
 export const fredBenchmarkCoverage = sqliteTable(
   'fred_benchmark_coverage',
   {

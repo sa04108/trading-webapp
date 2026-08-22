@@ -67,6 +67,11 @@ export const RUN_STEP = WIZARD_STEPS.length - 1;
  */
 export type StepGateState = Pick<WizardFormState, 'strategyId' | 'from' | 'to' | 'initialCash'> & {
   /**
+   * 현재 벤치마크·기간의 커버리지를 서버에서 확인했는지. 기간 입력만으로 상단 단계
+   * 버튼이나 브라우저 앞으로가기가 비동기 확인을 건너뛰지 못하게 공통 게이트가 본다.
+   */
+  benchmarkCoverageOk: boolean;
+  /**
    * 유니버스 규칙 미리보기가 **지금 값 기준으로** 성공했고, 그 결과에 uncoveredDates·
    * missingCandleSymbols 가 하나도 없는지 (스펙 2026-08-05). 종목 수 상한(200)은 이제
    * `universeRuleSchema` 의 `topN` 자체가 막으므로 이 게이트가 따로 세지 않는다 —
@@ -106,6 +111,7 @@ export function stepBlocker(index: number, state: StepGateState): string | null 
     case 1:
       if (!state.from || !state.to) return '시작일과 종료일을 입력하세요';
       if (state.from > state.to) return '시작일이 종료일보다 늦습니다';
+      if (!state.benchmarkCoverageOk) return '벤치마크 기간을 확인하세요';
       return null;
     case 2:
       if (!state.universePreviewOk) {

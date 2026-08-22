@@ -81,6 +81,8 @@ interface BenchmarkBackfillStatus {
   benchmarkId: BenchmarkId | null;
   state: 'IDLE' | 'RUNNING' | 'FAILED';
   cursorDate: string | null;
+  from: string | null;
+  to: string | null;
   error: string | null;
 }
 
@@ -181,8 +183,12 @@ export function NewBacktestWizard() {
   const [randomSeed, setRandomSeed] = useState('42');
   const [stepError, setStepError] = useState<string | null>(null);
   // `다음`을 눌러 부족함을 확인한 현재 벤치마크/기간만 동기화 대상으로 표시한다.
-  // 입력을 바꾸면 key가 달라져 이전 판정이 새 입력의 버튼을 바꾸지 않는다.
+  // 입력 변경 시 두 상태를 함께 비워 이전 판정이 새 입력의 버튼·단계 잠금을 바꾸지 않는다.
   const [benchmarkSyncRequiredFor, setBenchmarkSyncRequiredFor] = useState<string | null>(null);
+  const [benchmarkCoverageVerifiedFor, setBenchmarkCoverageVerifiedFor] = useState<string | null>(
+    null,
+  );
+  const benchmarkCheckId = useRef(0);
   /**
    * 제출이 409 PREPARATION_REQUIRED 로 거절되면(Task 10, 브리프 5번) 이 값을 올려
    * `UniverseRuleStep` 에게 새 준비 요청을 다시 시작하라고 신호한다 — 값 자체는
@@ -342,8 +348,14 @@ export function NewBacktestWizard() {
   const changeUniverseRule = (next: UniverseRule): void => {
     const previousMarket = universeRule.markets.length === 1 ? universeRule.markets[0] : null;
     setUniverseRule(next);
-    if (previousMarket === benchmarkId && next.markets.length === 1) {
-      setBenchmarkId(next.markets[0]!);
+    const nextBenchmark = next.markets.length === 1 ? next.markets[0]! : null;
+    if (previousMarket === benchmarkId && nextBenchmark !== null && nextBenchmark !== benchmarkId) {
+      benchmarkCheckId.current += 1;
+      setBenchmarkCoverageVerifiedFor(null);
+      setBenchmarkSyncRequiredFor(null);
+      setTraversed((prev) => Math.min(prev, 1));
+      setStepError(null);
+      setBenchmarkId(nextBenchmark);
     }
   };
 
@@ -435,10 +447,12 @@ export function NewBacktestWizard() {
   // preview가 확정한 종목만 서버의 실제 재무 행으로 판정한다. 구 서버가 이 필드를
   // 내리지 않으면 undefined로 남겨 근거 없이 "재무 없음"으로 단정하지 않는다.
   const symbolsWithFacts = currentPreviewResult?.fundamentalSymbols;
+  const benchmarkPeriodKey = `${benchmarkId}:${from}:${to}`;
   const gate: StepGateState = {
     strategyId,
     from,
     to,
+    benchmarkCoverageOk: benchmarkCoverageVerifiedFor === benchmarkPeriodKey,
     initialCash,
     universePreviewOk,
     requiresFundamentals: selectedStrategy?.requiresFundamentals,
@@ -457,7 +471,11 @@ export function NewBacktestWizard() {
   const step = urlStep === null ? 0 : Math.min(urlStep, reachable);
   const navLimit = navigableStepLimit(step, gate);
 
-  const benchmarkPeriodKey = `${benchmarkId}:${from}:${to}`;
+  // fetchQuery 응답이 돌아오기 전에 사용자가 기간·벤치마크·단계를 바꿀 수 있다. 응답이
+  // 확인한 입력과 지금 화면 입력이 같은지 완료 시점에 다시 비교해 낡은 성공으로 다음
+  // 단계를 여는 경합을 막는다. 같은 입력의 연속 클릭도 마지막 확인 하나만 유효하다.
+  const benchmarkCheckContext = useRef({ periodKey: benchmarkPeriodKey, step });
+  benchmarkCheckContext.current = { periodKey: benchmarkPeriodKey, step };
   const benchmarkCoverage = useQuery({
     queryKey: ['benchmarks', benchmarkId, from, to],
     queryFn: () => api<BenchmarkCoverageResponse>(
@@ -472,22 +490,43 @@ export function NewBacktestWizard() {
     { benchmarkId: BenchmarkId; from: string; to: string }
   >({
     mutationFn: (body) => postJson('/benchmarks/backfill', body),
-    onSuccess: (status) => {
+    onSuccess: (status, variables) => {
+      const queryKey = ['benchmarks', variables.benchmarkId, variables.from, variables.to] as const;
       queryClient.setQueryData<BenchmarkCoverageResponse>(
-        ['benchmarks', benchmarkId, from, to],
+        queryKey,
         (current) => current ? { ...current, backfill: status } : current,
       );
-      void queryClient.invalidateQueries({ queryKey: ['benchmarks', benchmarkId, from, to] });
+      void queryClient.invalidateQueries({ queryKey });
     },
-    onError: (error) => setStepError(error.message || '벤치마크 동기화를 시작하지 못했습니다'),
+    onError: (error, variables) => {
+      const failedPeriodKey = `${variables.benchmarkId}:${variables.from}:${variables.to}`;
+      if (
+        benchmarkCheckContext.current.step !== 1
+        || benchmarkCheckContext.current.periodKey !== failedPeriodKey
+      ) return;
+      setStepError(error.message || '벤치마크 동기화를 시작하지 못했습니다');
+    },
   });
   const benchmarkNeedsSync =
     step === 1
     && benchmarkSyncRequiredFor === benchmarkPeriodKey
+    && !benchmarkCoverage.isError
     && benchmarkCoverage.data?.covered === false;
   const benchmarkSyncing =
     step === 1
-    && (benchmarkBackfill.isPending || benchmarkCoverage.data?.backfill.state === 'RUNNING');
+    && (
+      benchmarkBackfill.isPending
+      || (!benchmarkCoverage.isError && benchmarkCoverage.data?.backfill.state === 'RUNNING')
+    );
+  const benchmarkCoverageFailed =
+    step === 1
+    && benchmarkSyncRequiredFor === benchmarkPeriodKey
+    && benchmarkCoverage.isError;
+  const benchmarkBackfillFailed =
+    benchmarkCoverage.data?.backfill.state === 'FAILED'
+    && benchmarkCoverage.data.backfill.benchmarkId === benchmarkId
+    && benchmarkCoverage.data.backfill.from === from
+    && benchmarkCoverage.data.backfill.to === to;
 
   useEffect(() => {
     if (
@@ -531,13 +570,30 @@ export function NewBacktestWizard() {
     return target;
   };
 
+  const resetBenchmarkCoverageCheck = (): void => {
+    benchmarkCheckId.current += 1;
+    setBenchmarkCoverageVerifiedFor(null);
+    setBenchmarkSyncRequiredFor(null);
+    // 이 기간 확인을 근거로 열었던 이후 단계도 함께 닫는다. 그렇지 않으면 브라우저
+    // 앞으로가기나 상단 단계 버튼이 새 기간의 확인을 건너뛸 수 있다.
+    setTraversed((prev) => Math.min(prev, 1));
+    setStepError(null);
+  };
+
   const goNext = async (): Promise<void> => {
-    const error = stepBlocker(step, gate);
+    // 기간 단계의 동기 커버리지 blocker는 바로 아래 비동기 조회가 해소한다. 날짜 형식과
+    // 순서 등 나머지 기간 규칙은 같은 stepBlocker를 그대로 사용한다.
+    const error = stepBlocker(
+      step,
+      step === 1 ? { ...gate, benchmarkCoverageOk: true } : gate,
+    );
     if (error) {
       setStepError(error);
       return;
     }
     if (step === 1) {
+      const checkId = ++benchmarkCheckId.current;
+      const checkedPeriodKey = benchmarkPeriodKey;
       try {
         const coverage = await queryClient.fetchQuery({
           queryKey: ['benchmarks', benchmarkId, from, to],
@@ -545,12 +601,24 @@ export function NewBacktestWizard() {
             `/benchmarks?${new URLSearchParams({ benchmarkId, from, to })}`,
           ),
         });
+        if (
+          benchmarkCheckId.current !== checkId
+          || benchmarkCheckContext.current.step !== 1
+          || benchmarkCheckContext.current.periodKey !== checkedPeriodKey
+        ) return;
         if (!coverage.covered) {
+          setBenchmarkCoverageVerifiedFor(null);
           setBenchmarkSyncRequiredFor(benchmarkPeriodKey);
           setStepError('벤치마크 기간 데이터가 부족합니다. 동기화한 뒤 다음 단계로 진행하세요.');
           return;
         }
+        setBenchmarkCoverageVerifiedFor(checkedPeriodKey);
       } catch (coverageError) {
+        if (
+          benchmarkCheckId.current !== checkId
+          || benchmarkCheckContext.current.step !== 1
+          || benchmarkCheckContext.current.periodKey !== checkedPeriodKey
+        ) return;
         setStepError(
           coverageError instanceof ApiError
             ? coverageError.message
@@ -840,7 +908,10 @@ export function NewBacktestWizard() {
                   type="date"
                   className="h-11"
                   value={from}
-                  onChange={(e) => setFrom(e.target.value)}
+                  onChange={(e) => {
+                    resetBenchmarkCoverageCheck();
+                    setFrom(e.target.value);
+                  }}
                 />
               </div>
               <div className="space-y-1">
@@ -850,12 +921,21 @@ export function NewBacktestWizard() {
                   type="date"
                   className="h-11"
                   value={to}
-                  onChange={(e) => setTo(e.target.value)}
+                  onChange={(e) => {
+                    resetBenchmarkCoverageCheck();
+                    setTo(e.target.value);
+                  }}
                 />
               </div>
               <div className="space-y-1 sm:col-span-2">
                 <Label htmlFor="benchmark">벤치마크</Label>
-                <Select value={benchmarkId} onValueChange={(value) => setBenchmarkId(value as BenchmarkId)}>
+                <Select
+                  value={benchmarkId}
+                  onValueChange={(value) => {
+                    resetBenchmarkCoverageCheck();
+                    setBenchmarkId(value as BenchmarkId);
+                  }}
+                >
                   <SelectTrigger id="benchmark" className="h-11 w-full">
                     <SelectValue />
                   </SelectTrigger>
@@ -868,10 +948,20 @@ export function NewBacktestWizard() {
               </div>
             </CardContent>
           </Card>
-          {benchmarkCoverage.data?.backfill.state === 'FAILED' ? (
+          {benchmarkBackfillFailed ? (
             <Alert variant="destructive" role="alert">
               <AlertDescription>
-                벤치마크 동기화에 실패했습니다 — {benchmarkCoverage.data.backfill.error}
+                벤치마크 동기화에 실패했습니다 —{' '}
+                {benchmarkCoverage.data?.backfill.error ?? '알 수 없는 오류'}
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          {benchmarkCoverageFailed ? (
+            <Alert variant="destructive" role="alert">
+              <AlertDescription>
+                {benchmarkCoverage.error instanceof Error
+                  ? benchmarkCoverage.error.message
+                  : '벤치마크 기간을 다시 확인하지 못했습니다'}
               </AlertDescription>
             </Alert>
           ) : null}
@@ -1129,6 +1219,8 @@ export function NewBacktestWizard() {
                 ? '동기화 중…'
                 : benchmarkNeedsSync
                   ? '동기화'
+                  : benchmarkCoverageFailed
+                    ? '다시 확인'
                   : step === 1 && benchmarkCoverage.isFetching
                     ? '확인 중…'
                     : '다음'}
