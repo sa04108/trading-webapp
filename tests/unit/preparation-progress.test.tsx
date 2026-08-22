@@ -77,7 +77,7 @@ describe('PreparationProgress', () => {
     const html = renderToStaticMarkup(
       <PreparationProgress job={job({ status: 'COMPLETED' })} onCancel={() => undefined} />,
     );
-    expect(html).toContain('미리보기 결과 확인 중');
+    expect(html).toContain('준비 완료');
     expect(html).not.toContain('취소');
     expect(html).not.toContain('재시도');
     expect(html).not.toContain('다시 준비');

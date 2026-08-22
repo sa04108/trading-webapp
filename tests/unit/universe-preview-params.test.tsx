@@ -54,8 +54,8 @@ describe('previewRequestStatusMessage', () => {
     expect(previewRequestStatusMessage(true, false, null)).toContain('SQLite');
   });
 
-  it('202 직후 상세 상태가 오기 전에는 준비 작업 연결 상태를 표시한다', () => {
-    expect(previewRequestStatusMessage(false, true, null)).toContain('상태를 불러오고');
+  it('상세 상태가 없으면 조회 실패일 수 있으므로 진행 상태를 표시하지 않는다', () => {
+    expect(previewRequestStatusMessage(false, true, null)).toBeNull();
   });
 
   it('준비 작업을 받으면 현재 데이터 출처와 phase를 표시한다', () => {

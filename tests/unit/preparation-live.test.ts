@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { QueryClient } from '@tanstack/react-query';
 import {
   formatPreparationResumeTime,
   isPreparingCurrentParams,
   pollInterval,
+  preparationJobQueryKey,
+  seedPreparationJob,
   shouldCloseStream,
+  type BacktestPreparationJob,
 } from '../../src/web/features/backtests/preparation-live.js';
 
 describe('pollInterval (SSE 실패 시 폴백 규칙 — useBacktestLive 와 같다)', () => {
@@ -82,9 +86,30 @@ describe('isPreparingCurrentParams', () => {
     expect(isPreparingCurrentParams(paramsA, paramsA, 'CANCELLED', paramsEqual)).toBe(false);
   });
 
-  it('202 직후 job 상태를 아직 불러오는 중이면 같은 파라미터의 버튼을 계속 잠근다', () => {
-    expect(isPreparingCurrentParams(paramsA, paramsA, null, paramsEqual)).toBe(true);
-    expect(isPreparingCurrentParams(paramsA, paramsB, null, paramsEqual)).toBe(false);
+  it('job 상태를 모르면 조회 실패일 수 있으므로 버튼을 잠그지 않는다', () => {
+    expect(isPreparingCurrentParams(paramsA, paramsA, null, paramsEqual)).toBe(false);
+  });
+});
+
+describe('seedPreparationJob', () => {
+  it('202 응답의 job을 상세 조회 전 같은 query key에서 읽을 수 있게 한다', () => {
+    const client = new QueryClient();
+    const job: BacktestPreparationJob = {
+      id: 'prep_1',
+      requestHash: 'hash_1',
+      status: 'QUEUED',
+      phase: 'MARKET_DATA',
+      doneSymbols: 0,
+      totalSymbols: 0,
+      savedFacts: 0,
+      gapCount: 0,
+      nextResumeAtMs: null,
+      error: null,
+    };
+
+    seedPreparationJob(client, job);
+
+    expect(client.getQueryData(preparationJobQueryKey(job.id))).toEqual({ job });
   });
 });
 

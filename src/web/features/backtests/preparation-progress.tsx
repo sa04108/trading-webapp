@@ -26,7 +26,7 @@ export function preparationStatusDescription(job: BacktestPreparationJob): strin
     case 'WAITING_DAILY_QUOTA':
       return 'DART 일일 호출 한도 해제 대기';
     case 'COMPLETED':
-      return '데이터 준비 완료 · 미리보기 결과 확인 중';
+      return '준비 완료';
     case 'FAILED':
       return '준비 실패';
     case 'CANCELLED':

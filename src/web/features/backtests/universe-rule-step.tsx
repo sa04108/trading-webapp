@@ -21,6 +21,7 @@ import type { SymbolMasterCoverageDto } from '../../../shared/schemas/symbol-mas
 import { PreparationProgress, preparationStatusDescription } from './preparation-progress';
 import {
   isPreparingCurrentParams,
+  seedPreparationJob,
   usePreparationLive,
   type BacktestPreparationJob,
 } from './preparation-live';
@@ -148,8 +149,10 @@ export function previewRequestStatusMessage(
   if (requestPending) {
     return 'SQLite에 저장된 미리보기와 시장·재무 데이터 상태를 확인하고 있습니다.';
   }
-  if (!preparingCurrentParams) return null;
-  if (liveJob === null) return '데이터 준비 작업을 시작하고 현재 상태를 불러오고 있습니다.';
+  if (!preparingCurrentParams || liveJob === null) return null;
+  if (liveJob.status === 'COMPLETED') {
+    return '데이터 준비 완료 · 미리보기 결과 확인 중';
+  }
   return preparationStatusDescription(liveJob);
 }
 
@@ -272,6 +275,7 @@ export function UniverseRuleStep({
     onSuccess: (startResponse, params) => {
       if (startResponse.kind === 'PREPARING') {
         preparingParamsRef.current = params;
+        seedPreparationJob(queryClient, startResponse.job);
         setPreparingJobId(startResponse.job.id);
         return;
       }
