@@ -1,5 +1,6 @@
 import type { Clock } from '../../../../shared/clock.js';
 import type { Logger } from '../../../../shared/logger.js';
+import type { ExternalApiUsage } from '../../../../shared/db/external-api-usage.js';
 import { BENCHMARK_NAMES, type KrxBenchmarkId } from '../../../../../shared/schemas/benchmark.js';
 import { RestClient } from '../../../../shared/rest-client.js';
 import {
@@ -68,7 +69,11 @@ export function createKrxHistoricalUniverseSource(
   config: KrxConfig | null,
   clock: Clock,
   logger: Logger,
-  options: { fetchImpl?: typeof fetch; sleep?: (ms: number) => Promise<void> } = {},
+  options: {
+    fetchImpl?: typeof fetch;
+    sleep?: (ms: number) => Promise<void>;
+    usage?: ExternalApiUsage;
+  } = {},
 ): KrxHistoricalUniverseSource {
   if (config === null) return notConfiguredSource();
   const configured = config;
@@ -81,7 +86,8 @@ export function createKrxHistoricalUniverseSource(
     clock: () => clock.now(),
     groupMinIntervalMs: { default: 250 },
   });
-  // KRX 한도는 엔드포인트마다 따로 걸리므로 경로별로 나눠 센다 — 키는 `${KST 날짜}|${경로}`다.
+  // 테스트·독립 스크립트는 DB 원장을 주입하지 않을 수 있어 메모리 fallback을 유지한다.
+  // 앱 container는 반드시 SQLite 원장을 넣으므로 운영 호출 수는 재부팅 뒤에도 이어진다.
   const callCounts = new Map<string, number>();
 
   function currentDate(): string {
@@ -100,6 +106,7 @@ export function createKrxHistoricalUniverseSource(
   }
 
   function todayMaxEndpointCallCount(): number {
+    if (options.usage) return options.usage.maxCallsUsed('KRX');
     const today = currentDate();
     removeStaleCounts(today);
     let max = 0;
@@ -107,6 +114,23 @@ export function createKrxHistoricalUniverseSource(
       if (count > max) max = count;
     }
     return max;
+  }
+
+  function quotaWasExceeded(path: string): boolean {
+    return options.usage?.quotaExceeded('KRX', path) ?? false;
+  }
+
+  function recordCall(today: string, path: string): number {
+    if (options.usage) return options.usage.recordCall('KRX', path);
+    removeStaleCounts(today);
+    const key = countKey(today, path);
+    const callsToday = (callCounts.get(key) ?? 0) + 1;
+    callCounts.set(key, callsToday);
+    return callsToday;
+  }
+
+  function reportQuotaExceeded(path: string, error: KrxQuotaError): void {
+    options.usage?.reportQuotaExceeded('KRX', path, error.message);
   }
 
   function ensureApprovalIsValid(today: string): void {
@@ -123,24 +147,30 @@ export function createKrxHistoricalUniverseSource(
   ): Promise<readonly T[]> {
     const today = currentDate();
     ensureApprovalIsValid(today);
-    removeStaleCounts(today);
-    const key = countKey(today, path);
-    const callsToday = (callCounts.get(key) ?? 0) + 1;
-    callCounts.set(key, callsToday);
+    if (quotaWasExceeded(path)) throw new KrxQuotaError();
 
     const basDd = isoToBasDd(isoDate);
+    let callsToday = options.usage?.callsUsed('KRX', path) ?? 0;
     let payload: unknown;
     try {
       payload = await client.request<unknown>('default', `${path}?basDd=${basDd}`, {
         method: 'GET',
         headers: { AUTH_KEY: configured.apiKey },
+      }, {
+        // 재시도도 공급자 입장에서는 별도 HTTP 요청이다. 실제 attempt 직전에 기록해야
+        // 429/5xx 재시도가 오늘 예산에서 사라지지 않는다.
+        beforeAttempt: () => {
+          callsToday = recordCall(today, path);
+        },
       });
     } catch (error) {
       const message = readCaughtErrorMessage(error);
 
       // RestClient가 구조화된 HTTP 오류를 아직 제공하지 않아 상태 코드를 메시지로 구분한다.
       if (message?.startsWith('REST 요청 실패: 429')) {
-        throw new KrxQuotaError();
+        const quotaError = new KrxQuotaError();
+        reportQuotaExceeded(path, quotaError);
+        throw quotaError;
       }
       if (message !== null) {
         // 실패 본문과 외부 오류 메타데이터에 인증키가 있을 수 있어 안전한 메시지만 새 오류로 옮긴다.

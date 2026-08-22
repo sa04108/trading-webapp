@@ -34,6 +34,24 @@ describe('NotificationService', () => {
     expect(service.unreadCount()).toBe(1);
   });
 
+  it('API 한도 초과는 같은 KST 날짜와 scope에 한 건의 영속 오류 알림을 만든다', () => {
+    const usage = ctx.container.externalApiUsage;
+    usage.recordCall('DART', 'daily');
+
+    expect(usage.reportQuotaExceeded('DART', 'daily', 'DART 한도 초과')).toBe(true);
+    expect(usage.reportQuotaExceeded('DART', 'daily', '중복 한도 초과')).toBe(false);
+
+    const [notification] = ctx.container.notificationService.list();
+    expect(notification).toMatchObject({
+      type: 'data-sync',
+      severity: 'error',
+      title: 'DART API 호출 한도 초과',
+      read: false,
+    });
+    expect(notification?.body).toContain('DART 한도 초과');
+    expect(notification?.body).toContain('기록 호출 수: 1회');
+  });
+
   it('lists newest first with a 200-row cap', () => {
     const db = ctx.container.database.db;
     const base = Date.now();

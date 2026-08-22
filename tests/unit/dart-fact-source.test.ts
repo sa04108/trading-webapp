@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { FactSourceNotConfiguredError } from '../../src/server/modules/facts/application/ports.js';
+import {
+  DartQuotaError,
+  FactSourceNotConfiguredError,
+} from '../../src/server/modules/facts/application/ports.js';
 import type { CorpCodeResolver } from '../../src/server/modules/facts/infrastructure/dart/dart-corp-code-cache.js';
 import { createDartFactSource } from '../../src/server/modules/facts/infrastructure/dart/dart-fact-source.js';
 import { receiptDateToAsOfTsMs } from '../../src/server/modules/facts/infrastructure/dart/dart-report-parser.js';
@@ -376,17 +379,36 @@ describe('createDartFactSource — 요청 구성', () => {
     expect(result.facts).toEqual([]);
   });
 
-  it('인증 실패(status 020)는 던진다 — 조용히 빈 결과로 만들지 않는다', async () => {
+  it('한도 초과(status 020)는 명시적인 quota 오류로 던진다', async () => {
+    let callsUsed = 0;
+    const reports: string[] = [];
     const fetchImpl = (async () =>
       jsonResponse({ status: '020', message: '요청 제한을 초과하였습니다.' })) as unknown as typeof fetch;
     const source = createDartFactSource(
       { baseUrl: 'https://opendart.fss.or.kr', apiKey: 'K' },
       LOGGER,
-      { fetchImpl, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER },
+      {
+        fetchImpl,
+        sleep: async () => undefined,
+        corpCodeResolver: STUB_RESOLVER,
+        usage: {
+          recordCall: () => ++callsUsed,
+          callsUsed: () => callsUsed,
+          maxCallsUsed: () => callsUsed,
+          quotaExceeded: () => false,
+          reportQuotaExceeded: (_api, _scope, message) => {
+            reports.push(message);
+            return true;
+          },
+        },
+      },
     );
     await expect(
       source.fetchFinancials({ symbols: ['005930'], years: [2025], shareYears: [2024, 2025], consolidated: true }),
-    ).rejects.toThrow(/020/);
+    ).rejects.toBeInstanceOf(DartQuotaError);
+    expect(callsUsed).toBe(1);
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toContain('요청 제한');
   });
 
   it('재무 응답을 팩트로 바꾼다', async () => {
@@ -712,7 +734,7 @@ describe('createDartFactSource — corpCode.xml 다운로드 (기본 resolver)',
     }
   });
 
-  it('ZIP 이 아닌 본문(인증 실패 응답)도 키를 노출하지 않고 실패한다', async () => {
+  it('corpCode.xml 대신 온 020 XML도 quota 오류로 분류하고 키를 노출하지 않는다', async () => {
     const { logger, lines } = createCapturingLogger();
     const fetchImpl = (async () =>
       new Response('<result><status>020</status></result>', { status: 200 })) as unknown as typeof fetch;
@@ -734,8 +756,8 @@ describe('createDartFactSource — corpCode.xml 다운로드 (기본 resolver)',
     } catch (error) {
       rejection = error;
     }
-    expect(rejection).toBeInstanceOf(Error);
-    expect((rejection as Error).message).toContain('ZIP 형식이 아닙니다');
+    expect(rejection).toBeInstanceOf(DartQuotaError);
+    expect((rejection as Error).message).toContain('일일 호출 한도');
     expect((rejection as Error).message).not.toContain(SECRET);
     for (const line of lines) {
       expect(line).not.toContain(SECRET);

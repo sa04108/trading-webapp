@@ -605,6 +605,59 @@ describe('BacktestPreparationOrchestrator recovery와 취소', () => {
 });
 
 describe('BacktestPreparationOrchestrator quota resume와 terminal 결과', () => {
+  it('DART 공급자가 먼저 한도 초과를 반환해도 WAITING 상태와 영속 알림 신호를 남긴다', async () => {
+    const quotaReports: string[] = [];
+    const ctx = makeDeps({
+      resolver: {
+        resolveOrDescribeNeeds: async () => ({
+          kind: 'NEEDS_DATA',
+          candidateScopeKnown: true,
+          unionEntries: candidateEntries(['005930']),
+          needs: {
+            factSymbols: ['005930'],
+            actionSymbols: [],
+            priceSymbols: [],
+            selectionMetricDates: [],
+            priceRange: null,
+          },
+        }),
+        isPeriodCovered: () => true,
+      },
+      factSync: {
+        sync: async () => ({
+          savedFacts: 3,
+          gaps: [],
+          stoppedAtSymbol: '005930',
+          stopReason: 'DAILY_QUOTA',
+          failureMessage: 'DART 실제 응답으로 호출 한도를 확인했습니다.',
+        }),
+        syncCorporateActions: async () => ({ savedFacts: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
+      },
+      externalApiUsage: {
+        recordCall: () => 0,
+        callsUsed: () => 0,
+        maxCallsUsed: () => 0,
+        quotaExceeded: () => false,
+        reportQuotaExceeded: (_api: string, _scope: string, message: string) => {
+          quotaReports.push(message);
+          return true;
+        },
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const job = orchestrator.start(INPUT);
+
+    await waitFor(() => orchestrator.get(job.id)?.status === 'WAITING_DAILY_QUOTA');
+    const waiting = orchestrator.get(job.id);
+    expect(waiting?.error).toContain('실제 응답');
+    expect(waiting?.savedFacts).toBe(3);
+    expect(waiting?.nextResumeAtMs).toBe(Date.parse('2026-01-05T15:00:00.000Z'));
+    expect(quotaReports).toEqual(['DART 실제 응답으로 호출 한도를 확인했습니다.']);
+
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
   it('KST 다음 자정까지 기다렸다가 INCREMENTAL로 완료된 현재연도 symbol-year를 반복하지 않는다', async () => {
     const completedSymbols = new Set<string>();
     const requestedSymbols: string[] = [];

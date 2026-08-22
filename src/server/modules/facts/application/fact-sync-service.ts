@@ -17,7 +17,7 @@ import type {
   FactCoverageStore,
   FinancialFilingCheckpoint,
 } from './fact-coverage-store.js';
-import { FactSourceNotConfiguredError } from './ports.js';
+import { DartQuotaError, FactSourceNotConfiguredError } from './ports.js';
 import type {
   FactIngestionGap,
   FactRepository,
@@ -53,6 +53,10 @@ class DartDailyQuotaReachedError extends Error {
     super('DART 일일 호출 한도에 도달했습니다.');
     this.name = 'DartDailyQuotaReachedError';
   }
+}
+
+function isDartDailyQuotaError(error: unknown): boolean {
+  return error instanceof DartDailyQuotaReachedError || error instanceof DartQuotaError;
 }
 
 /** 종목 하나가 끝날 때마다 호출된다 — 45분짜리 실행이 조용하지 않게 한다 */
@@ -442,7 +446,7 @@ export class FactSyncService {
           gapCount: symbolGapCount,
         });
       } catch (error) {
-        if (error instanceof DartDailyQuotaReachedError) {
+        if (isDartDailyQuotaError(error)) {
           stoppedAtSymbol = symbol;
           stopReason = 'DAILY_QUOTA';
           this.logger.info(
@@ -522,7 +526,7 @@ export class FactSyncService {
     error: unknown,
   ): FactSyncReport {
     const stoppedAtSymbol = symbols[0] ?? null;
-    if (error instanceof DartDailyQuotaReachedError) {
+    if (isDartDailyQuotaError(error)) {
       this.logger.info(
         {
           module: 'facts',

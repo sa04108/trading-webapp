@@ -8,6 +8,7 @@ import {
 import { createKrxHistoricalUniverseSource } from '../../src/server/modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
 import type { Clock } from '../../src/server/shared/clock.js';
 import type { Logger } from '../../src/server/shared/logger.js';
+import type { ExternalApiUsage } from '../../src/server/shared/db/external-api-usage.js';
 import {
   baseInfoFixture,
   dailyFixture,
@@ -78,6 +79,7 @@ function createConfiguredSource(options: {
   readonly approvalExpiry?: string | null;
   readonly fetchImpl: typeof fetch;
   readonly logger?: Logger;
+  readonly usage?: ExternalApiUsage;
 }) {
   return createKrxHistoricalUniverseSource(
     {
@@ -87,7 +89,11 @@ function createConfiguredSource(options: {
     },
     options.clock ?? fixedClock(),
     options.logger ?? createCapturingLogger().logger,
-    { fetchImpl: options.fetchImpl, sleep: NOOP_SLEEP },
+    {
+      fetchImpl: options.fetchImpl,
+      sleep: NOOP_SLEEP,
+      ...(options.usage ? { usage: options.usage } : {}),
+    },
   );
 }
 
@@ -287,12 +293,26 @@ describe('KRX 과거 유니버스 어댑터', () => {
     );
   });
 
-  it('429 재시도를 모두 소진하면 quota 오류로 바꾸고 논리 호출은 한 번만 센다', async () => {
+  it('429 재시도를 모두 소진하면 quota 오류로 바꾸고 물리 요청을 모두 센다', async () => {
     const captured = createCapturingLogger();
+    let callsUsed = 0;
+    const reports: string[] = [];
+    let exhausted = false;
+    const usage: ExternalApiUsage = {
+      recordCall: () => ++callsUsed,
+      callsUsed: () => callsUsed,
+      maxCallsUsed: () => callsUsed,
+      quotaExceeded: () => exhausted,
+      reportQuotaExceeded: (_api, _scope, message) => {
+        exhausted = true;
+        reports.push(message);
+        return true;
+      },
+    };
     const { fetchImpl, calls } = createFetch(() =>
       krxJsonResponse({ message: `server did not echo ${API_KEY}` }, 429),
     );
-    const source = createConfiguredSource({ fetchImpl, logger: captured.logger });
+    const source = createConfiguredSource({ fetchImpl, logger: captured.logger, usage });
 
     let rejection: unknown;
     try {
@@ -304,7 +324,9 @@ describe('KRX 과거 유니버스 어댑터', () => {
     expect(rejection).toBeInstanceOf(KrxQuotaError);
     expect((rejection as Error).message).not.toContain(API_KEY);
     expect(calls).toHaveLength(5);
-    expect(source.todayMaxEndpointCallCount()).toBe(1);
+    expect(source.todayMaxEndpointCallCount()).toBe(5);
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toContain('호출 한도');
     expect(captured.lines.join('\n')).not.toContain(API_KEY);
   });
 

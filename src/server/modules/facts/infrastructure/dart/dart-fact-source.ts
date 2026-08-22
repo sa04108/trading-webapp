@@ -1,8 +1,10 @@
 import type { Clock } from '../../../../shared/clock.js';
 import type { Logger } from '../../../../shared/logger.js';
+import type { ExternalApiUsage } from '../../../../shared/db/external-api-usage.js';
 import { RestClient } from '../../../../shared/rest-client.js';
 import { kstDateOf } from '../../../market-data/domain/kst-date.js';
 import {
+  DartQuotaError,
   FactSourceNotConfiguredError,
   type FactIngestionGap,
   type FactIngestionResult,
@@ -95,6 +97,8 @@ const FILING_LIST_MAX_PAGES = 200;
 /** 조회 결과 없음 — 에러가 아니다 (신규 상장·미제출 분기) */
 const NO_DATA_STATUS = '013';
 const OK_STATUS = '000';
+const DAILY_QUOTA_STATUS = '020';
+const DART_QUOTA_SCOPE = 'daily';
 
 /**
  * DART OpenAPI 어댑터.
@@ -116,6 +120,8 @@ export function createDartFactSource(
     corpCodeResolver?: CorpCodeResolver;
     /** 미래 보고서 생략 판정(filableReportCount)의 기준 시각. 기본은 실제 시각 */
     clock?: Clock;
+    /** 앱 SQLite에 실제 HTTP attempt와 한도 확인을 남기는 영속 원장 */
+    usage?: ExternalApiUsage;
   } = {},
 ): FactSource {
   if (!config) {
@@ -147,19 +153,47 @@ export function createDartFactSource(
     groupMinIntervalMs: { default: DART_MIN_INTERVAL_MS },
   });
 
+  function reportQuotaExceeded(message?: string): never {
+    const error = new DartQuotaError(message);
+    options.usage?.reportQuotaExceeded('DART', DART_QUOTA_SCOPE, error.message);
+    throw error;
+  }
+
+  function beforePhysicalRequest(beforeRequest?: () => void): void {
+    // 공급자가 이미 오늘 한도 소진을 확인해 준 뒤에는 재시도 자체를 보내지 않는다.
+    if (options.usage?.quotaExceeded('DART', DART_QUOTA_SCOPE)) {
+      throw new DartQuotaError();
+    }
+    // 준비 orchestrator의 로컬 예산 판정이 먼저다. 거절된 요청은 물리 호출 수가 아니다.
+    beforeRequest?.();
+    options.usage?.recordCall('DART', DART_QUOTA_SCOPE);
+  }
+
   async function call<T>(
     path: string,
     params: Record<string, string>,
     hooks: FactSourceRequestHooks = {},
   ): Promise<readonly T[]> {
     const query = new URLSearchParams({ crtfc_key: dartConfig.apiKey, ...params });
-    const envelope = await client.request<DartEnvelope<T>>(
-      'default',
-      `${path}?${query.toString()}`,
-      {},
-      { beforeAttempt: hooks.beforeRequest },
-    );
+    let envelope: DartEnvelope<T>;
+    try {
+      envelope = await client.request<DartEnvelope<T>>(
+        'default',
+        `${path}?${query.toString()}`,
+        {},
+        { beforeAttempt: () => beforePhysicalRequest(hooks.beforeRequest) },
+      );
+    } catch (error) {
+      if (error instanceof DartQuotaError) throw error;
+      if (error instanceof Error && error.message.startsWith('REST 요청 실패: 429')) {
+        reportQuotaExceeded();
+      }
+      throw error;
+    }
     if (envelope.status === NO_DATA_STATUS) return [];
+    if (envelope.status === DAILY_QUOTA_STATUS) {
+      reportQuotaExceeded(`DART 일일 호출 한도를 초과했습니다: ${envelope.message}`);
+    }
     if (envelope.status !== OK_STATUS) {
       // 인증 실패·한도 초과를 빈 결과로 흡수하면 "수집했는데 0건" 으로 오해된다
       throw new Error(`DART 응답 오류 ${envelope.status}: ${envelope.message}`);
@@ -175,10 +209,16 @@ export function createDartFactSource(
       const response = await (options.fetchImpl ?? fetch)(
         `${dartConfig.baseUrl}/api/corpCode.xml?${query.toString()}`,
       );
+      if (response.status === 429) reportQuotaExceeded();
       if (!response.ok) {
         throw new Error(`DART 종목 코드 목록을 내려받지 못했습니다 (HTTP ${response.status})`);
       }
-      return Buffer.from(await response.arrayBuffer());
+      const body = Buffer.from(await response.arrayBuffer());
+      // corpCode.xml은 정상일 때 ZIP이지만 오류일 때 HTTP 200 XML 봉투를 돌려줄 수 있다.
+      // ZIP 파서 오류로 바뀌기 전에 020을 명시적인 quota 오류로 보존한다.
+      const errorEnvelope = body.subarray(0, 512).toString('utf8');
+      if (/<status>\s*020\s*<\/status>/.test(errorEnvelope)) reportQuotaExceeded();
+      return body;
     });
 
   // stockTotqySttus(주식의 총수 현황)는 fetchFinancials 와 fetchCorporateActions 양쪽에서
@@ -234,7 +274,10 @@ export function createDartFactSource(
     const fsDiv = request.consolidated ? 'CFS' : 'OFS';
 
     for (const symbol of request.symbols) {
-      const corpCode = await corpCodes.resolve(symbol, hooks.beforeRequest);
+      const corpCode = await corpCodes.resolve(
+        symbol,
+        () => beforePhysicalRequest(hooks.beforeRequest),
+      );
       if (corpCode === null) {
         // 조용히 건너뛰면 "수집했는데 이 종목만 0건" 이 되고 원인을 알 수 없다
         gaps.push({ symbol, periodKey: '-', reason: 'DART corp_code 매핑에 없는 종목코드입니다' });

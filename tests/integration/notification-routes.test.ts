@@ -61,6 +61,25 @@ describe('notification routes', () => {
     expect(countRes.json()).toEqual({ count: 1 });
   });
 
+  it('SSE 연결 직후 최초 REST 조회와의 경합을 닫는 sync 이벤트를 보낸다', async () => {
+    const address = await ctx.app.listen({ host: '127.0.0.1', port: 0 });
+    const controller = new AbortController();
+    const response = await fetch(`${address}/api/v1/notifications/events`, {
+      headers: { cookie: `qp_session=${cookie}` },
+      signal: controller.signal,
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('text/event-stream');
+    const reader = response.body!.getReader();
+    const first = new TextDecoder().decode((await reader.read()).value);
+    expect(first).toContain('event: sync');
+    expect(first).toContain('data: {}');
+
+    await reader.cancel();
+    controller.abort();
+  });
+
   it('marks all read', async () => {
     ctx.container.notificationService.create({ type: 'backtest', severity: 'info', title: 'x' });
 

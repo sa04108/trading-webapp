@@ -53,16 +53,18 @@ export function registerNotificationRoutes(
       connection: 'keep-alive',
       'x-accel-buffering': 'no',
     });
-    // 첫 바이트를 즉시 보낸다 — 프록시·브라우저가 연결 수립을 확인할 수 있게
-    reply.raw.write(':connected\n\n');
-
     const listener = (row: NotificationRow): void => {
       reply.raw.write(`data: ${JSON.stringify(row)}\n\n`);
     };
+    // 리스너를 먼저 붙이고 sync 이벤트를 보낸다. 화면의 최초 unread-count 조회와
+    // SSE 구독 사이에 알림이 생겨도 sync 뒤 재조회 또는 listener 중 하나가 반드시
+    // 잡는다. 예전 ':connected' 주석 heartbeat는 이 짧은 구간을 메우지 못했다.
+    service.events.on('notification', listener);
+    reply.raw.write('event: sync\ndata: {}\n\n');
+
     const heartbeat = setInterval(() => reply.raw.write(':heartbeat\n\n'), 15_000);
     heartbeat.unref();
 
-    service.events.on('notification', listener);
     request.raw.on('close', () => {
       clearInterval(heartbeat);
       service.events.off('notification', listener);

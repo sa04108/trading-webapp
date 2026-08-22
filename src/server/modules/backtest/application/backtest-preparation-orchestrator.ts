@@ -11,6 +11,7 @@ import type { DatabaseHandle } from '../../../shared/db/database.js';
 import { backtestPreparationJobs } from '../../../shared/db/schema.js';
 import { newId } from '../../../shared/ids.js';
 import type { Logger } from '../../../shared/logger.js';
+import type { ExternalApiUsage } from '../../../shared/db/external-api-usage.js';
 import type { FactSyncService, FactSyncReport } from '../../facts/application/fact-sync-service.js';
 import { DART_DAILY_CALL_LIMIT } from '../../facts/domain/sync-plan.js';
 import type { CandleCoverageService } from '../../market-data/application/candle-coverage-service.js';
@@ -131,6 +132,8 @@ export interface BacktestPreparationOrchestratorDeps {
   readonly clock: Clock;
   readonly logger: Logger;
   readonly dartDailyCallLimit?: number;
+  /** 모든 DART 경로가 공유하는 영속 일일 호출 원장. */
+  readonly externalApiUsage?: ExternalApiUsage;
 }
 
 /**
@@ -632,12 +635,38 @@ export class BacktestPreparationOrchestrator {
   }
 
   private consumeFactReport(jobId: string, report: FactSyncReport): boolean {
+    if (report.stopReason === 'DAILY_QUOTA') {
+      const now = this.deps.clock.now();
+      const current = this.getRow(jobId);
+      const snapshot = current?.status === 'WAITING_DAILY_QUOTA'
+        ? this.persistAndEmit(jobId, (row) => ({
+            savedFacts: row.savedFacts + report.savedFacts,
+            gapCount: row.gapCount + report.gaps.length,
+            ...(report.failureMessage ? { error: report.failureMessage } : {}),
+          }), ['WAITING_DAILY_QUOTA'])
+        : this.persistAndEmit(jobId, (row) => ({
+            status: 'WAITING_DAILY_QUOTA',
+            nextResumeAtMs: nextKstMidnightMs(now),
+            savedFacts: row.savedFacts + report.savedFacts,
+            gapCount: row.gapCount + report.gaps.length,
+            ...(report.failureMessage ? { error: report.failureMessage } : {}),
+          }), ['RUNNING']);
+      this.deps.externalApiUsage?.reportQuotaExceeded(
+        'DART',
+        'daily',
+        report.failureMessage ?? 'DART 일일 호출 한도에 도달했습니다.',
+      );
+      if (snapshot?.nextResumeAtMs !== null && snapshot?.nextResumeAtMs !== undefined) {
+        this.scheduleResume(jobId, snapshot.nextResumeAtMs);
+      }
+      return false;
+    }
+
     this.persistAndEmit(jobId, (row) => ({
       savedFacts: row.savedFacts + report.savedFacts,
       gapCount: row.gapCount + report.gaps.length,
       ...(report.failureMessage ? { error: report.failureMessage } : {}),
     }));
-    if (report.stopReason === 'DAILY_QUOTA') return false;
     if (report.stopReason === 'CANCELLED') {
       // 프로세스 종료는 사용자 취소가 아니다. 현재 symbol 저장 결과까지만 반영하고
       // RUNNING 복구점을 남기면 다음 부팅의 recoverOrphaned가 QUEUED로 이어받는다.
@@ -662,12 +691,18 @@ export class BacktestPreparationOrchestrator {
     const snapshot = this.persistAndEmit(
       jobId,
       (row) => {
-        const total = this.deps.database.db
-          .select({ value: sql<number>`coalesce(sum(${backtestPreparationJobs.dartCallsUsed}), 0)` })
-          .from(backtestPreparationJobs)
-          .where(eq(backtestPreparationJobs.dartQuotaDateKst, quotaDate))
-          .get()?.value ?? 0;
-        if (total + 1 > this.dailyLimit) {
+        // 운영에서는 모든 실제 DART attempt가 공유하는 원장을 본다. 원장을 주입하지
+        // 않는 단위 테스트·옛 조립부만 준비 job 합계를 fallback으로 사용한다.
+        const total = this.deps.externalApiUsage?.callsUsed('DART', 'daily')
+          ?? this.deps.database.db
+            .select({ value: sql<number>`coalesce(sum(${backtestPreparationJobs.dartCallsUsed}), 0)` })
+            .from(backtestPreparationJobs)
+            .where(eq(backtestPreparationJobs.dartQuotaDateKst, quotaDate))
+            .get()?.value
+          ?? 0;
+        const providerAlreadyExhausted =
+          this.deps.externalApiUsage?.quotaExceeded('DART', 'daily') ?? false;
+        if (providerAlreadyExhausted || total + 1 > this.dailyLimit) {
           return {
             status: 'WAITING_DAILY_QUOTA',
             nextResumeAtMs: nextKstMidnightMs(now),
@@ -683,6 +718,11 @@ export class BacktestPreparationOrchestrator {
       ['RUNNING'],
     );
     if (snapshot?.status === 'WAITING_DAILY_QUOTA') {
+      this.deps.externalApiUsage?.reportQuotaExceeded(
+        'DART',
+        'daily',
+        'DART 일일 호출 한도에 도달해 다음 KST 날짜까지 준비 작업을 멈췄습니다.',
+      );
       this.scheduleResume(jobId, snapshot.nextResumeAtMs as number);
       return 'PAUSE_DAILY_QUOTA';
     }

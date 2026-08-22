@@ -32,10 +32,14 @@ export function useNotificationStream(): boolean {
     if (sourceRef.current || sseFailed) return;
     const source = new EventSource('/api/v1/notifications/events');
     sourceRef.current = source;
-    source.onmessage = () => {
+    const refreshNotifications = () => {
       // 내용은 쓰지 않는다 — 목록·카운트 쿼리를 무효화하면 화면이 알아서 당겨 온다
       void queryClient.invalidateQueries({ queryKey: ['notifications'] });
     };
+    source.onmessage = refreshNotifications;
+    // 서버가 listener를 붙인 직후 보내는 재동기화 신호. 최초 REST 조회와 SSE 구독
+    // 사이에 생긴 알림도 이 재조회로 회수한다.
+    source.addEventListener('sync', refreshNotifications);
     source.onerror = () => {
       source.close();
       sourceRef.current = null;

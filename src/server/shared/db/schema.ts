@@ -87,6 +87,30 @@ export const notifications = sqliteTable(
   (table) => [index('idx_notifications_created').on(table.createdAtMs)],
 );
 
+/**
+ * 외부 API 일일 호출 원장.
+ *
+ * 프로세스 메모리가 아니라 앱 SQLite에 기록해 같은 KST 날짜에 서버가 재시작돼도
+ * 호출 예산이 이어진다. quotaScope는 공급자의 실제 한도 단위다 — DART는 키 전체
+ * (`daily`), KRX는 엔드포인트별 경로를 쓴다.
+ */
+export const externalApiDailyUsage = sqliteTable(
+  'external_api_daily_usage',
+  {
+    api: text('api').notNull(),
+    quotaScope: text('quota_scope').notNull(),
+    usageDateKst: text('usage_date_kst').notNull(),
+    callsUsed: integer('calls_used').notNull().default(0),
+    /** 공급자 응답 또는 로컬 예산 판정으로 그날 한도 소진을 확인한 최초 시각 */
+    quotaExceededAtMs: integer('quota_exceeded_at_ms'),
+    updatedAtMs: integer('updated_at_ms').notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.api, table.quotaScope, table.usageDateKst] }),
+    index('idx_external_api_daily_usage_date').on(table.usageDateKst),
+  ],
+);
+
 // ── 데이터 (스펙 §12) ──────────────────────────────────────────────
 
 /**

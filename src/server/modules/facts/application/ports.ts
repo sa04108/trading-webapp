@@ -128,3 +128,11 @@ export class FactSourceNotConfiguredError extends Error {
     this.name = 'FactSourceNotConfiguredError';
   }
 }
+
+/** DART가 실제 응답으로 알리거나 영속 원장에 이미 기록된 일일 호출 한도 소진. */
+export class DartQuotaError extends Error {
+  constructor(message = 'DART 일일 호출 한도를 초과했습니다. 다음 KST 날짜에 다시 시도합니다.') {
+    super(message);
+    this.name = 'DartQuotaError';
+  }
+}

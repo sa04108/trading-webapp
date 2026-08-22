@@ -3,6 +3,7 @@ import type { AppConfig } from './config.js';
 import { readGitCommitSha } from '../shared/build-info.js';
 import { createLogger, type Logger } from '../shared/logger.js';
 import { openDatabase, type DatabaseHandle } from '../shared/db/database.js';
+import { SqliteExternalApiUsage, type ExternalApiUsage } from '../shared/db/external-api-usage.js';
 import { pruneExpiredRows } from '../shared/db/maintenance.js';
 import { systemClock, type Clock } from '../shared/clock.js';
 import { configureZodLocale } from '../shared/zod-locale.js';
@@ -67,6 +68,7 @@ import { RemoteWorkerService } from '../modules/backtest/application/remote-work
 import { RemoteInputBundleManager } from '../modules/backtest/infrastructure/remote-input-bundle-manager.js';
 import { RemoteResultUploadManager } from '../modules/backtest/infrastructure/remote-result-upload-manager.js';
 import { ForkedRemoteResultCompleter } from '../modules/backtest/infrastructure/forked-remote-result-completer.js';
+import { kstDateOf } from '../modules/market-data/domain/kst-date.js';
 
 export interface SystemStatusProviders {
   queueLength: () => number;
@@ -83,6 +85,7 @@ export interface Container {
   readonly systemStatus: SystemStatusProviders;
   readonly auditLog: AuditLogService;
   readonly notificationService: NotificationService;
+  readonly externalApiUsage: ExternalApiUsage;
   readonly userRepository: UserRepository;
   readonly sessionRepository: SessionRepository;
   readonly loginAttemptRepository: LoginAttemptRepository;
@@ -186,6 +189,22 @@ export function createContainer(config: AppConfig): Container {
       );
     }
   };
+  const externalApiUsage = new SqliteExternalApiUsage({
+    database,
+    clock,
+    currentDateKst: kstDateOf,
+    onQuotaExceeded: (event) => {
+      safeNotify({
+        type: 'data-sync',
+        severity: 'error',
+        title: `${event.api} API 호출 한도 초과`,
+        body:
+          `${event.message}\n` +
+          `${event.usageDateKst} (KST) 기록 호출 수: ${event.callsUsed.toLocaleString('ko-KR')}회`,
+        link: event.api === 'KRX' ? '/datasets/master' : null,
+      });
+    },
+  });
   const userRepository = createSqliteUserRepository(database.db, logger);
   const sessionRepository = createSqliteSessionRepository(database.db);
   const loginAttemptRepository = createSqliteLoginAttemptRepository(database.db);
@@ -217,7 +236,7 @@ export function createContainer(config: AppConfig): Container {
     config.dartApiKey ? { baseUrl: config.dartBaseUrl, apiKey: config.dartApiKey } : null,
     logger,
     // 미래 보고서 생략(filableReportCount)이 sync 계획과 같은 시각을 봐야 한다
-    { clock },
+    { clock, usage: externalApiUsage },
   );
   // 팩트도 백테스트 입력이다 — 캔들과 같은 버전 체인에 올린다 (§9.5).
   // SymbolService 를 통째로 넘기지 않고 좁은 포트(SymbolVersionBumper)로 받는다.
@@ -262,6 +281,7 @@ export function createContainer(config: AppConfig): Container {
       : null,
     clock,
     logger,
+    { usage: externalApiUsage },
   );
   const fredSource = createFredBenchmarkSource(
     config.fredApiKey ? { baseUrl: config.fredBaseUrl, apiKey: config.fredApiKey } : null,
@@ -321,6 +341,7 @@ export function createContainer(config: AppConfig): Container {
     candleCoverage: candleCoverageService,
     clock,
     logger,
+    externalApiUsage,
   });
   const resultsService = new ResultsService(database.db);
 
@@ -415,6 +436,7 @@ export function createContainer(config: AppConfig): Container {
     systemStatus,
     auditLog,
     notificationService,
+    externalApiUsage,
     userRepository,
     sessionRepository,
     loginAttemptRepository,

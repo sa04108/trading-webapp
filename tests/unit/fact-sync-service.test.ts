@@ -6,6 +6,7 @@ import {
   type FactSyncRequest,
 } from '../../src/server/modules/facts/application/fact-sync-service.js';
 import {
+  DartQuotaError,
   FactSourceNotConfiguredError,
   type SymbolVersionBumper,
   type FactIngestionResult,
@@ -862,6 +863,34 @@ describe('FactSyncService — 증분과 취소', () => {
     expect(report.stoppedAtSymbol).toBe('000660');
     expect(report.failureMessage).toContain('DART 응답 오류 020');
     expect(coverage.added.map((entry) => entry.symbol)).toEqual(['005930']);
+  });
+
+  it('DART의 실제 한도 응답은 일반 실패가 아니라 DAILY_QUOTA 중단으로 보고한다', async () => {
+    const source: FactSource = {
+      fetchFinancials: async () => { throw new DartQuotaError(); },
+      fetchCorporateActions: async () => ({ facts: [], gaps: [] }),
+      listRecentPeriodicFilings: async () => [],
+    };
+    const service = new FactSyncService(
+      source,
+      fakeRepository(),
+      LOGGER,
+      fakeVersions(),
+      { now: () => Date.UTC(2022, 5, 1) },
+      fakeCoverage(),
+      fakeActionCoverage(),
+    );
+
+    const report = await service.sync({
+      symbols: ['005930'],
+      fromYear: 2022,
+      toYear: 2022,
+      consolidated: true,
+      mode: 'INCREMENTAL',
+    });
+
+    expect(report.stopReason).toBe('DAILY_QUOTA');
+    expect(report.failureMessage).toContain('일일 호출 한도');
   });
 
   /**
