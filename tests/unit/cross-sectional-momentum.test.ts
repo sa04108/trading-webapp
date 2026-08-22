@@ -100,7 +100,7 @@ describe('레지스트리 등록', () => {
     const description =
       registry.list().find((s) => s.id === 'cross-sectional-momentum')?.description ?? '';
     expect(description).toContain('분할 이력이 수집된 데이터셋에서만');
-    expect(crossSectionalMomentumStrategy.version).toBe('2.1.0');
+    expect(crossSectionalMomentumStrategy.version).toBe('2.2.0');
   });
 
   it('JSON 스키마에 한국어 라벨과 기본값이 실린다', () => {
@@ -241,6 +241,41 @@ describe('2단계 리밸런스 실행', () => {
     expect(result.metrics.maxConcurrentPositions).toBeLessThanOrEqual(1);
   });
 
+  it('선정 종목이 같아도 리밸런싱 주기마다 동일가중으로 다시 맞춘다', () => {
+    const candles: Candle[] = [];
+    for (let index = 0; index < 35; index += 1) {
+      candles.push(candle('AAA', index, index >= 23 ? 200 : 100));
+      candles.push(candle('BBB', index, 100));
+    }
+
+    const result = runBacktest(crossSectionalMomentumStrategy, {
+      candles,
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: { ...parameters, topN: 2, absoluteMomentumFilter: false },
+      randomSeed: 1,
+      maxPositions: 2,
+      universeSchedule: [
+        { fromTsMs: START + 20 * DAY, symbols: ['AAA', 'BBB'] },
+        { fromTsMs: START + 30 * DAY, symbols: ['AAA', 'BBB'] },
+      ],
+    });
+
+    const trim = result.fills.find(
+      (fill) => fill.symbol === 'AAA' && fill.side === 'SELL' && fill.reason === 'REBALANCE_TRIM',
+    );
+    expect(trim?.quantity).toBe(12_500);
+
+    const bbbBuys = result.fills.filter((fill) => fill.symbol === 'BBB' && fill.side === 'BUY');
+    expect(bbbBuys).toHaveLength(2);
+    expect(bbbBuys[1]?.quantity).toBe(25_000);
+
+    const values = result.openPositions
+      .map((position) => position.quantity * position.lastPrice)
+      .sort((a, b) => a - b);
+    expect(values).toEqual([7_500_000, 7_500_000]);
+  });
+
   it('절대 모멘텀 필터가 모두 걸러내면 현금으로 남는다 (리밸런스 경계 전까지는 재평가하지 않는다)', () => {
     // AAA 는 index 18 까지 하락하다 급반등한다. 첫 리밸런스 판정 봉(index 20)의 창[0,20]은
     // 아직 마이너스라 AAA·BBB 둘 다 걸러져 후보가 없다. 하지만 index 21 부터는 롤링 창이
@@ -358,7 +393,11 @@ describe('멤버십 일정 반영 랭킹 (리뷰 fix — 2026-08-05)', () => {
     // 2구간 전환(index30) 이후 — A 는 원 모멘텀만 보면 1위이지만 일정에서 빠져
     // 랭킹 후보에도 들지 못한다: A 매수 시도도, 그로 인한 C 매도도 일어나지 않는다.
     expect(result.fills.some((f) => f.symbol === 'A')).toBe(false);
-    expect(result.fills.filter((f) => f.symbol === 'C' && f.side === 'SELL')).toHaveLength(0);
+    expect(
+      result.fills.some(
+        (f) => f.symbol === 'C' && f.side === 'SELL' && f.reason === 'REBALANCE_EXIT',
+      ),
+    ).toBe(false);
     expect(result.warnings.some((w) => w.includes('A') && w.includes('멤버십 일정'))).toBe(false);
 
     // topN(=2) 슬롯이 그대로 유지된다 — 필터링하지 않으면 C 가 팔리고 A 매수가

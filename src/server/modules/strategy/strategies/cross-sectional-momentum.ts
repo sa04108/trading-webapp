@@ -56,8 +56,8 @@ export type CrossSectionalMomentumParameters = z.infer<typeof crossSectionalMome
 export interface CrossSectionalMomentumState {
   /** 유니버스 — 이번 봉에 거래가 없는 종목도 후보에서 빠지지 않게 초기화 시점에 고정한다 */
   readonly symbols: readonly string[];
-  /** 다음 봉에서 매수할 편입 종목. null 이면 매수 단계가 아니다 */
-  pendingBuys: readonly string[] | null;
+  /** 다음 봉에서 동일가중까지 채울 목표 종목. null 이면 매수 단계가 아니다 */
+  pendingTargets: readonly string[] | null;
 }
 
 /**
@@ -87,7 +87,7 @@ export const crossSectionalMomentumStrategy: TradingStrategy<
   CrossSectionalMomentumState
 > = {
   id: 'cross-sectional-momentum',
-  version: '2.1.0',
+  version: '2.2.0',
   name: '횡단면 모멘텀',
   description:
     // "보정합니다" 로 단정하면 안 된다 — 분할 이력이 수집되지 않은 데이터셋에서는
@@ -106,7 +106,7 @@ export const crossSectionalMomentumStrategy: TradingStrategy<
   initialize(context: StrategyInitializeContext): CrossSectionalMomentumState {
     return {
       symbols: [...context.symbols],
-      pendingBuys: null,
+      pendingTargets: null,
     };
   },
 
@@ -115,17 +115,18 @@ export const crossSectionalMomentumStrategy: TradingStrategy<
     state: CrossSectionalMomentumState,
     parameters: CrossSectionalMomentumParameters,
   ): StrategyDecision {
-    // 2단계 — 이전 봉에서 넘어온 편입 종목을 매수한다. 이번 봉에 매도가 이미
-    // 체결되어 현금이 들어온 상태다 (엔진 §9.2 순서: 체결 → 평가 → 전략).
-    if (state.pendingBuys !== null) {
-      const buys = planBuyPhase(state.pendingBuys, {
+    // 2단계 — 이전 봉에서 넘어온 목표 종목을 동일가중까지 채운다. 이번 봉에
+    // 초과 비중·탈락 종목 매도가 이미 체결되어 현금이 들어온 상태다
+    // (엔진 §9.2 순서: 체결 → 평가 → 전략).
+    if (state.pendingTargets !== null) {
+      const buys = planBuyPhase(state.pendingTargets, {
         positions: context.portfolio.positions,
         bars: context.bars,
         equity: context.portfolio.equity,
         topN: parameters.topN,
         tradableSymbols: context.tradableSymbols,
       });
-      state.pendingBuys = null;
+      state.pendingTargets = null;
       return { orders: buys };
     }
 
@@ -163,11 +164,14 @@ export const crossSectionalMomentumStrategy: TradingStrategy<
       .map(([symbol]) => symbol)
       .sort();
 
-    const sells = planSellPhase({ targets, positions: context.portfolio.positions });
-    const newEntries = targets.filter(
-      (symbol) => (context.portfolio.positions.get(symbol)?.quantity ?? 0) <= 0,
-    );
-    state.pendingBuys = newEntries.length > 0 ? newEntries : null;
+    const sells = planSellPhase({
+      targets,
+      positions: context.portfolio.positions,
+      bars: context.bars,
+      equity: context.portfolio.equity,
+      topN: parameters.topN,
+    });
+    state.pendingTargets = targets.length > 0 ? targets : null;
 
     return { orders: sells };
   },

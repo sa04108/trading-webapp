@@ -36,7 +36,7 @@ export type EarningsAccelerationRankParameters = z.infer<typeof earningsAccelera
 
 export interface EarningsAccelerationRankState {
   readonly symbols: readonly string[];
-  pendingBuys: readonly string[] | null;
+  pendingTargets: readonly string[] | null;
 }
 
 interface ScoredCandidate {
@@ -88,7 +88,7 @@ export const earningsAccelerationRankStrategy: TradingStrategy<
   EarningsAccelerationRankState
 > = {
   id: 'earnings-acceleration-rank',
-  version: '1.1.0',
+  version: '1.2.0',
   name: '이익 가속·가격 확인 순위',
   requiresFundamentals: true,
   description: 'PIT 영업이익 가속과 양의 가격 모멘텀을 함께 순위화하는 동일가중 연구 전략',
@@ -100,7 +100,7 @@ export const earningsAccelerationRankStrategy: TradingStrategy<
   },
 
   initialize(context: StrategyInitializeContext): EarningsAccelerationRankState {
-    return { symbols: [...context.symbols], pendingBuys: null };
+    return { symbols: [...context.symbols], pendingTargets: null };
   },
 
   onBars(
@@ -108,15 +108,15 @@ export const earningsAccelerationRankStrategy: TradingStrategy<
     state: EarningsAccelerationRankState,
     parameters: EarningsAccelerationRankParameters,
   ): StrategyDecision {
-    if (state.pendingBuys !== null) {
-      const orders = planBuyPhase(state.pendingBuys, {
+    if (state.pendingTargets !== null) {
+      const orders = planBuyPhase(state.pendingTargets, {
         positions: context.portfolio.positions,
         bars: context.bars,
         equity: context.portfolio.equity,
         topN: parameters.topN,
         tradableSymbols: context.tradableSymbols,
       });
-      state.pendingBuys = null;
+      state.pendingTargets = null;
       return { orders };
     }
     if (!context.isRebalanceBar) return { orders: [] };
@@ -171,11 +171,14 @@ export const earningsAccelerationRankStrategy: TradingStrategy<
       .slice(0, parameters.topN)
       .map((candidate) => candidate.symbol);
 
-    const sells = planSellPhase({ targets, positions: context.portfolio.positions });
-    const newEntries = targets.filter(
-      (symbol) => (context.portfolio.positions.get(symbol)?.quantity ?? 0) <= 0,
-    );
-    state.pendingBuys = newEntries.length > 0 ? newEntries : null;
+    const sells = planSellPhase({
+      targets,
+      positions: context.portfolio.positions,
+      bars: context.bars,
+      equity: context.portfolio.equity,
+      topN: parameters.topN,
+    });
+    state.pendingTargets = targets.length > 0 ? targets : null;
     return { orders: sells };
   },
 };
