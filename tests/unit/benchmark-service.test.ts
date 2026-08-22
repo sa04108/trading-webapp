@@ -151,6 +151,70 @@ describe('벤치마크 저장과 결과 비교', () => {
     }
   });
 
+  it('종목 마스터를 먼저 수집하지 않아도 KRX 백필의 평일 휴장일을 커버한다', async () => {
+    const database = openDatabase(':memory:');
+    const closes = new Map([
+      ['2026-01-02', 3_100],
+      ['2026-01-06', 3_120],
+    ]);
+    const service = new BenchmarkService({
+      db: database.db,
+      krxSource: {
+        fetchIssueBaseInfo: async () => [],
+        fetchDailyTrades: async () => [],
+        // 1월 5일은 평일 휴장일인 상황을 재현한다. 성공한 빈 응답을 coverage로
+        // 남기지 않으면 기간 단계가 유니버스 수집 전에 영구히 막힌다.
+        fetchBenchmarkClose: async (_id, date) => closes.get(date) ?? null,
+        todayMaxEndpointCallCount: () => 0,
+      },
+      fredSource: { fetchBenchmarkRange: async () => [] },
+      clock: { now: () => 456 },
+      logger,
+    });
+
+    try {
+      service.startBackfill('KOSPI', '2026-01-02', '2026-01-06');
+      await vi.waitFor(() => expect(service.backfillStatus().state).toBe('IDLE'));
+
+      expect(service.status('KOSPI', '2026-01-02', '2026-01-06')).toMatchObject({
+        covered: true,
+        points: [
+          { date: '2026-01-02', close: 3_100 },
+          { date: '2026-01-06', close: 3_120 },
+        ],
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  it('하루짜리 기간은 한 점만 있어도 커버하며 수익률 가용성은 결과 계층에 맡긴다', async () => {
+    const database = openDatabase(':memory:');
+    const service = new BenchmarkService({
+      db: database.db,
+      krxSource: {
+        fetchIssueBaseInfo: async () => [],
+        fetchDailyTrades: async () => [],
+        fetchBenchmarkClose: async () => 3_100,
+        todayMaxEndpointCallCount: () => 0,
+      },
+      fredSource: { fetchBenchmarkRange: async () => [] },
+      clock: { now: () => 789 },
+      logger,
+    });
+
+    try {
+      expect(service.status('KOSPI', '2026-03-31', '2026-03-31').covered).toBe(false);
+      await service.syncDate('KOSPI', '2026-03-31');
+      expect(service.status('KOSPI', '2026-03-31', '2026-03-31')).toMatchObject({
+        covered: true,
+        points: [{ date: '2026-03-31', close: 3_100 }],
+      });
+    } finally {
+      database.close();
+    }
+  });
+
   it('FRED 기간을 한 번에 수집하고 미국 거래일로 pin한다', async () => {
     const database = openDatabase(':memory:');
     try {

@@ -96,14 +96,12 @@ export class BenchmarkService {
       const dates = new Set(points.map((point) => point.date));
       return {
         points,
-        covered:
-          points.length >= 2
-          && isCalendarRangeAccountedFor(
-            from,
-            to,
-            dates,
-            this.fredCoverageRanges(benchmarkId, from, to),
-          ),
+        covered: isCalendarRangeAccountedFor(
+          from,
+          to,
+          dates,
+          this.benchmarkCoverageRanges(benchmarkId, from, to),
+        ),
       };
     }
 
@@ -130,6 +128,7 @@ export class BenchmarkService {
       ))
       .orderBy(asc(symbolMasterCoverage.startDate))
       .all();
+    const benchmarkCoverage = this.benchmarkCoverageRanges(benchmarkId, from, to);
 
     // 달력일마다 "왜 벤치마크 행이 없을 수 있는지"를 설명할 수 있어야 한다.
     // - 벤치마크 값 자체가 있으면 종목 마스터 coverage가 하루 늦어도 충분한 증거다.
@@ -140,14 +139,18 @@ export class BenchmarkService {
     return {
       points,
       covered:
-        points.length >= 2
-        && missingTradingDays === 0
-        && isCalendarRangeAccountedFor(from, to, dates, masterCoverage),
+        missingTradingDays === 0
+        && isCalendarRangeAccountedFor(
+          from,
+          to,
+          dates,
+          [...masterCoverage, ...benchmarkCoverage],
+        ),
     };
   }
 
-  private fredCoverageRanges(
-    benchmarkId: FredBenchmarkId,
+  private benchmarkCoverageRanges(
+    benchmarkId: BenchmarkId,
     from: string,
     to: string,
   ): DateRange[] {
@@ -163,7 +166,7 @@ export class BenchmarkService {
       .all();
   }
 
-  private saveFredCoverage(benchmarkId: FredBenchmarkId, from: string, to: string): void {
+  private saveBenchmarkCoverage(benchmarkId: BenchmarkId, from: string, to: string): void {
     const syncedAtMs = this.deps.clock.now();
     this.deps.db.insert(fredBenchmarkCoverage).values({
       benchmarkId,
@@ -202,7 +205,7 @@ export class BenchmarkService {
     if (isFredBenchmarkId(benchmarkId)) {
       const points = await this.deps.fredSource.fetchBenchmarkRange(benchmarkId, date, date);
       this.savePoints(benchmarkId, points);
-      this.saveFredCoverage(benchmarkId, date, date);
+      this.saveBenchmarkCoverage(benchmarkId, date, date);
       return;
     }
 
@@ -210,6 +213,9 @@ export class BenchmarkService {
     if (!fetchClose) throw new KrxNotConfiguredError();
     const close = await fetchClose(benchmarkId, date);
     if (close !== null) this.savePoints(benchmarkId, [{ date, close }]);
+    // 빈 성공 응답도 이 날짜를 확인했다는 증거다. 이를 남기지 않으면 종목 마스터보다
+    // 먼저 실행되는 백테스트 기간 게이트가 평일 휴장일에서 영구히 막힌다.
+    this.saveBenchmarkCoverage(benchmarkId, date, date);
   }
 
   startBackfill(benchmarkId: BenchmarkId, from: string, to: string): BenchmarkBackfillStatus {
@@ -228,7 +234,7 @@ export class BenchmarkService {
       if (isFredBenchmarkId(benchmarkId)) {
         const points = await this.deps.fredSource.fetchBenchmarkRange(benchmarkId, from, to);
         this.savePoints(benchmarkId, points);
-        this.saveFredCoverage(benchmarkId, from, to);
+        this.saveBenchmarkCoverage(benchmarkId, from, to);
         this.backfill = { benchmarkId, state: 'IDLE', cursorDate: null, from, to, error: null };
         return;
       }

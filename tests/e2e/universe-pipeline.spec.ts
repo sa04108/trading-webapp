@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 // 자격 증명은 한 곳에서만 — mvp-flow.spec.ts 와 같은 관례(그 파일 헤더 참고)
 import { PASSWORD, USERNAME } from './login';
+import { advanceFromPeriod } from './backtest-wizard';
 
 /**
  * Task 12 — 단계형 유니버스 편집기(Task 9)와 신규 재무전략 두 개(Task 8)의 위저드
@@ -74,7 +75,7 @@ test('리밸런스 주기 입력은 편집 중 임시값을 허용하고 blur에
 
   await page.getByLabel('시작일').fill('2026-01-01');
   await page.getByLabel('종료일').fill('2026-12-31');
-  await page.getByRole('button', { name: '다음' }).click();
+  await advanceFromPeriod(page);
 
   const interval = page.getByLabel('리밸런스 주기', { exact: true });
   await expect(interval).toHaveValue('1');
@@ -111,7 +112,7 @@ test('단계별 N 입력은 편집 중 임시값을 허용하고 blur에서 복�
   await page.getByRole('button', { name: '다음' }).click();
   await page.getByLabel('시작일').fill('2026-01-01');
   await page.getByLabel('종료일').fill('2026-12-31');
-  await page.getByRole('button', { name: '다음' }).click();
+  await advanceFromPeriod(page);
 
   const first = page.locator('#stage-limit-0');
   await expect(first).toHaveValue('200');
@@ -155,7 +156,7 @@ test('유니버스 정렬 방향을 기준별 문구로 명시해 고른다', as
   await page.getByRole('button', { name: '다음' }).click();
   await page.getByLabel('시작일').fill('2026-01-01');
   await page.getByLabel('종료일').fill('2026-12-31');
-  await page.getByRole('button', { name: '다음' }).click();
+  await advanceFromPeriod(page);
 
   await expect(page.locator('#stage-direction-0')).toHaveValue('HIGH');
   await expect(page.locator('#stage-direction-0 option')).toHaveText(['상위', '하위']);
@@ -193,7 +194,7 @@ test('단계 추가·N 기본 복사·cascade 안내·순서 변경·주기 초�
 
   await page.getByLabel('시작일').fill(period.from);
   await page.getByLabel('종료일').fill(period.to);
-  await page.getByRole('button', { name: '다음' }).click(); // 기간 → 유니버스
+  await advanceFromPeriod(page); // 기간 → 벤치마크 동기화(필요 시) → 유니버스
 
   // 1. 시가총액 단계 뒤 PER와 가격 변동을 추가한다.
   await page.locator('#stage-limit-0').fill('50');

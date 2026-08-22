@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 // 자격 증명은 한 곳에서만 — 시드 운영자가 바뀔 때 일부 스펙만 고쳐지는 일을 막는다
 import { PASSWORD, USERNAME } from './login';
+import { advanceFromPeriod } from './backtest-wizard';
 
 /**
  * 위저드가 실제로 실행하는 기간 — 가짜 KRX 서버가 005930 에 내는 추세
@@ -170,7 +171,7 @@ test('full MVP flow', async ({ page }) => {
   // 2-1. 기간 — 유니버스 미리보기가 리밸런스 날짜 계산에 이 값을 쓰므로 유니버스보다 앞이다
   await page.getByLabel('시작일').fill(PERIOD.from);
   await page.getByLabel('종료일').fill(PERIOD.to);
-  await page.getByRole('button', { name: '다음' }).click(); // 기간 → 유니버스
+  await advanceFromPeriod(page); // 기간 → 벤치마크 동기화(필요 시) → 유니버스
 
   // 2-2. 유니버스 규칙을 설정하고 미리보기를 확인한다.
   await expect(page.getByRole('button', { name: '3. 유니버스' })).toHaveAttribute(
@@ -330,7 +331,7 @@ test('full MVP flow', async ({ page }) => {
   await page.getByRole('button', { name: '다음' }).click(); // 전략 → 기간
   await page.getByLabel('시작일').fill(PERIOD.from);
   await page.getByLabel('종료일').fill(PERIOD.to);
-  await page.getByRole('button', { name: '다음' }).click(); // 기간 → 유니버스
+  await advanceFromPeriod(page); // 기간 → 벤치마크 동기화(필요 시) → 유니버스
   await page.getByLabel('N', { exact: true }).fill(String(TOP_N));
   // 이 전략은 리밸런스 주기 기본값이 3개월이라 이 기간엔 리밸런스 날짜가 하나뿐이고
   // (PERIOD.from), 위 시나리오가 이미 그 날짜를 동기화해 둬서 곧바로 통과한다.
@@ -412,7 +413,7 @@ test('rebalance schedule shows the applied trading day when a rebalance date fal
 
   await page.getByLabel('시작일').fill(period.from);
   await page.getByLabel('종료일').fill(period.to);
-  await page.getByRole('button', { name: '다음' }).click(); // 기간 → 유니버스
+  await advanceFromPeriod(page); // 기간 → 벤치마크 동기화(필요 시) → 유니버스
 
   await page.getByLabel('N', { exact: true }).fill(String(TOP_N));
 
@@ -471,7 +472,7 @@ test('backtest run completes using only KRX daily bars for a delisted stock', as
 
   await page.getByLabel('시작일').fill(period.from);
   await page.getByLabel('종료일').fill(period.to);
-  await page.getByRole('button', { name: '다음' }).click(); // 기간 → 유니버스
+  await advanceFromPeriod(page); // 기간 → 벤치마크 동기화(필요 시) → 유니버스
 
   await page.getByLabel('N', { exact: true }).fill('2');
   await previewAndSyncUniverse(page);

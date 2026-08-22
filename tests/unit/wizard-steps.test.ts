@@ -21,6 +21,7 @@ const complete: StepGateState = {
   strategyId: 'range-breakout',
   from: '2026-01-05',
   to: '2026-03-31',
+  benchmarkCoverageOk: true,
   initialCash: '10000000',
   universePreviewOk: true,
   unionSymbols: ['005930'],
@@ -30,6 +31,7 @@ const empty: StepGateState = {
   strategyId: null,
   from: '',
   to: '',
+  benchmarkCoverageOk: false,
   initialCash: '10000000',
   universePreviewOk: false,
   unionSymbols: [],
@@ -56,6 +58,9 @@ describe('stepBlocker', () => {
     );
     // 같은 날 하루짜리 기간은 허용한다
     expect(stepBlocker(1, { ...complete, from: '2026-03-31' })).toBeNull();
+    expect(stepBlocker(1, { ...complete, benchmarkCoverageOk: false })).toBe(
+      '벤치마크 기간을 확인하세요',
+    );
   });
 
   it('유니버스 규칙 미리보기가 성공해야 통과한다', () => {
@@ -99,6 +104,7 @@ describe('navigableStepLimit', () => {
   it('첫 미완료 단계가 앞으로의 상한이다', () => {
     // 전략만 고른 상태 — 기간까지는 갈 수 있고 그 뒤는 못 간다
     expect(navigableStepLimit(0, { ...empty, strategyId: 'x' })).toBe(1);
+    expect(navigableStepLimit(1, { ...complete, benchmarkCoverageOk: false })).toBe(1);
     expect(navigableStepLimit(0, empty)).toBe(0);
   });
 
@@ -128,6 +134,9 @@ describe('stepJumpBlockReason', () => {
   it('앞 단계가 비면 어느 단계를 먼저 마쳐야 하는지 알린다', () => {
     expect(stepJumpBlockReason(REVIEW_STEP, 0, { ...empty, strategyId: 'x' })).toBe(
       "'기간' 단계를 먼저 마치세요 — 시작일과 종료일을 입력하세요",
+    );
+    expect(stepJumpBlockReason(2, 1, { ...complete, benchmarkCoverageOk: false })).toBe(
+      "'기간' 단계를 먼저 마치세요 — 벤치마크 기간을 확인하세요",
     );
   });
 
@@ -305,6 +314,10 @@ describe('reachableStepFromUrl', () => {
 
   it('빈 폼으로는 첫 단계까지만 — 딥링크는 현재 단계를 근거로 삼지 못한다', () => {
     expect(reachableStepFromUrl(empty, fresh)).toBe(0);
+  });
+
+  it('벤치마크 기간을 확인하기 전에는 유니버스 딥링크를 열지 않는다', () => {
+    expect(reachableStepFromUrl({ ...complete, benchmarkCoverageOk: false }, fresh)).toBe(1);
   });
 
   it('전 단계를 통과해도 검토를 지나지 않았으면 검토가 상한이다', () => {

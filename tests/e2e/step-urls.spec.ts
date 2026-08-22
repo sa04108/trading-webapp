@@ -34,6 +34,147 @@ test('위저드 단계마다 URL 이 있고 뒤로가기가 직전 단계로 돌
   await expect(page).toHaveURL(/\/backtests\/new\/period$/);
 });
 
+test('기간의 벤치마크가 부족하면 동기화 완료 전까지 유니버스 단계를 열지 않는다', async ({
+  page,
+}) => {
+  await login(page);
+
+  let backfillStarted = false;
+  let backfillCompleted = false;
+  await page.route('**/api/v1/benchmarks**', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (request.method() === 'POST' && url.pathname.endsWith('/benchmarks/backfill')) {
+      backfillStarted = true;
+      await route.fulfill({
+        status: 202,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          benchmarkId: 'KOSPI',
+          state: 'RUNNING',
+          cursorDate: '2026-01-05',
+          from: '2026-01-05',
+          to: '2026-01-09',
+          error: null,
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        benchmarkId: 'KOSPI',
+        points: backfillCompleted
+          ? [
+              { date: '2026-01-05', close: 2_500 },
+              { date: '2026-01-09', close: 2_510 },
+            ]
+          : [],
+        covered: backfillCompleted,
+        backfill: {
+          benchmarkId: backfillStarted ? 'KOSPI' : null,
+          state: backfillStarted && !backfillCompleted ? 'RUNNING' : 'IDLE',
+          cursorDate: backfillStarted && !backfillCompleted ? '2026-01-05' : null,
+          from: backfillStarted ? '2026-01-05' : null,
+          to: backfillStarted ? '2026-01-09' : null,
+          error: null,
+        },
+      }),
+    });
+  });
+
+  await page.goto('/backtests/new');
+  await page.getByRole('button', { name: /전고점 돌파/ }).click();
+  await page.getByRole('button', { name: '다음' }).click();
+  await page.getByLabel('시작일').fill('2026-01-05');
+  await page.getByLabel('종료일').fill('2026-01-09');
+  const universeStep = page.getByRole('button', { name: '3. 유니버스' });
+  await expect(universeStep).toHaveAttribute('aria-disabled', 'true');
+  // Playwright는 aria-disabled도 실제 disabled처럼 취급한다. 브라우저 이벤트를 강제로
+  // 보내 화면이 잠금 이유를 설명하는 기존 접근성 계약까지 확인한다.
+  await universeStep.click({ force: true });
+  await expect(page).toHaveURL(/\/backtests\/new\/period$/);
+  await expect(page.getByText(/벤치마크 기간을 확인하세요/)).toBeVisible();
+  await page.getByRole('button', { name: '다음' }).click();
+
+  await expect(page).toHaveURL(/\/backtests\/new\/period$/);
+  await expect(page.getByText(/벤치마크 기간 데이터가 부족합니다/)).toBeVisible();
+  const sync = page.getByRole('button', { name: '동기화', exact: true });
+  await expect(sync).toBeVisible();
+  await sync.click();
+  await expect(page.getByRole('button', { name: '동기화 중…', exact: true })).toBeDisabled();
+
+  backfillCompleted = true;
+  const next = page.getByRole('button', { name: '다음', exact: true });
+  await expect(next).toBeEnabled({ timeout: 5_000 });
+  await next.click();
+  await expect(page).toHaveURL(/\/backtests\/new\/universe$/);
+
+  // 유니버스 시장을 바꾸면 기본 벤치마크도 따라 바뀐다. 이전 KOSPI 확인을 KOSDAQ에
+  // 재사용하지 않고 기간 단계로 되돌려 새 벤치마크를 확인해야 한다.
+  await page.getByLabel('시장').click();
+  await page.getByRole('option', { name: 'KOSDAQ' }).click();
+  await expect(page).toHaveURL(/\/backtests\/new\/period$/);
+  await expect(page.getByLabel('벤치마크')).toContainText('코스닥');
+  await expect(page.getByRole('button', { name: '3. 유니버스' })).toHaveAttribute(
+    'aria-disabled',
+    'true',
+  );
+});
+
+test('기간 확인 중 입력이 바뀌면 이전 응답으로 다음 단계를 열지 않는다', async ({ page }) => {
+  await login(page);
+
+  let releaseFirst!: () => void;
+  let markFirstRequested!: () => void;
+  const firstRequested = new Promise<void>((resolve) => { markFirstRequested = resolve; });
+  const firstReleased = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  let requestCount = 0;
+  await page.route('**/api/v1/benchmarks?**', async (route) => {
+    requestCount += 1;
+    if (requestCount === 1) {
+      markFirstRequested();
+      await firstReleased;
+    }
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        benchmarkId: 'KOSPI',
+        points: [
+          { date: '2026-01-05', close: 2_500 },
+          { date: '2026-01-09', close: 2_510 },
+        ],
+        covered: true,
+        backfill: {
+          benchmarkId: null,
+          state: 'IDLE',
+          cursorDate: null,
+          from: null,
+          to: null,
+          error: null,
+        },
+      }),
+    });
+  });
+
+  await page.goto('/backtests/new');
+  await page.getByRole('button', { name: /전고점 돌파/ }).click();
+  await page.getByRole('button', { name: '다음' }).click();
+  await page.getByLabel('시작일').fill('2026-01-05');
+  await page.getByLabel('종료일').fill('2026-01-09');
+  await page.getByRole('button', { name: '다음' }).click();
+  await firstRequested;
+
+  await page.getByLabel('종료일').fill('2026-01-12');
+  releaseFirst();
+  await page.waitForTimeout(100);
+  await expect(page).toHaveURL(/\/backtests\/new\/period$/);
+
+  await page.getByRole('button', { name: '다음' }).click();
+  await expect(page).toHaveURL(/\/backtests\/new\/universe$/);
+  expect(requestCount).toBe(2);
+});
+
 test('갈 수 없는 단계 URL 은 갈 수 있는 마지막 단계로 되돌린다', async ({ page }) => {
   await login(page);
 

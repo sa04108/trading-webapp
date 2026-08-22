@@ -162,6 +162,18 @@ function samsungCloseFor(basDd: string): number {
   return 70_000 + elapsedDays * TREND_DAILY_DRIFT + ripple;
 }
 
+/** 날짜마다 완만히 움직이는 가짜 대표지수 종가 — 결과 pin에도 두 개 이상의 점을 남긴다. */
+function benchmarkCloseFor(basDd: string, base: number): string {
+  const year = Number(basDd.slice(0, 4));
+  const month = Number(basDd.slice(4, 6));
+  const day = Number(basDd.slice(6, 8));
+  const elapsedDays = Math.max(
+    0,
+    Math.floor((Date.UTC(year, month - 1, day) - TREND_ANCHOR_MS) / DAY),
+  );
+  return (base + elapsedDays * 0.75).toFixed(2);
+}
+
 /** 005930 일별시세 행 — 종가는 추세를 따르고 시가총액은 날짜와 무관하게 고정한다 */
 function samsungDailyRow(basDd: string): Record<string, unknown> {
   const close = samsungCloseFor(basDd);
@@ -302,6 +314,22 @@ async function startFakeKrxServer(): Promise<void> {
   app.get('/svc/apis/sto/ksq_bydd_trd', async (request) => {
     const { basDd } = request.query as { basDd?: string };
     return krxEnvelope(isHolidayBasDd(basDd) ? [] : KOSDAQ_DAILY_ROWS);
+  });
+  app.get('/svc/apis/idx/kospi_dd_trd', async (request) => {
+    const { basDd } = request.query as { basDd?: string };
+    if (isHolidayBasDd(basDd)) return krxEnvelope([]);
+    return krxEnvelope([{
+      IDX_NM: '코스피',
+      CLSPRC_IDX: benchmarkCloseFor(basDd ?? '20260105', 2_500),
+    }]);
+  });
+  app.get('/svc/apis/idx/kosdaq_dd_trd', async (request) => {
+    const { basDd } = request.query as { basDd?: string };
+    if (isHolidayBasDd(basDd)) return krxEnvelope([]);
+    return krxEnvelope([{
+      IDX_NM: '코스닥',
+      CLSPRC_IDX: benchmarkCloseFor(basDd ?? '20260105', 850),
+    }]);
   });
 
   /**
