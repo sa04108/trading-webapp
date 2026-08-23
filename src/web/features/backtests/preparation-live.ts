@@ -2,7 +2,7 @@
 // `tests/unit/preparation-live.test.ts` 가 이 모듈을 가져오는데, 그 테스트는
 // `tsconfig.server.json` 의 NodeNext 프로그램에 편입된다 — `@/` alias 는 vite·
 // tsconfig.web.json 에만 있어 그 프로그램에서는 풀리지 않는다.
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../../lib/api-client.js';
 
@@ -39,6 +39,17 @@ export interface PreparationLiveResult {
   readonly isLoading: boolean;
   readonly error: Error | null;
   readonly sseFailed: boolean;
+}
+
+export const preparationJobQueryKey = (jobId: string | null) =>
+  ['preparation-jobs', jobId] as const;
+
+/** 202 응답에 이미 들어 있는 job을 상세 GET보다 먼저 화면에 반영한다. */
+export function seedPreparationJob(
+  queryClient: Pick<QueryClient, 'setQueryData'>,
+  job: BacktestPreparationJob,
+): void {
+  queryClient.setQueryData(preparationJobQueryKey(job.id), { job });
 }
 
 const TERMINAL_STATUSES: readonly PreparationStatus[] = ['COMPLETED', 'FAILED', 'CANCELLED'];
@@ -81,6 +92,10 @@ export function pollInterval(
  * terminal 상태는 이미 잠글 이유가 없다 — 진행 중이 아니므로 `shouldCloseStream`
  * 으로 판정한다. `trackedParams` 가 없으면(추적 중인 job 자체가 없으면) 당연히
  * false 다.
+ *
+ * 202 응답의 job은 seedPreparationJob이 상세 GET보다 먼저 캐시에 넣는다. 따라서
+ * status=null은 정상 연결 구간이 아니라 아직 추적할 상태가 없거나 상세 조회가
+ * 실패한 경우다. 이 값을 진행 중으로 취급하면 조회 실패 때 버튼이 영구 잠길 수 있다.
  */
 export function isPreparingCurrentParams<TParams>(
   trackedParams: TParams | null,
@@ -133,7 +148,7 @@ export function usePreparationLive(jobId: string | null): PreparationLiveResult 
   }, [jobId]);
 
   const detail = useQuery({
-    queryKey: ['preparation-jobs', jobId],
+    queryKey: preparationJobQueryKey(jobId),
     queryFn: () => api<{ job: BacktestPreparationJob }>(`/backtests/preparation-jobs/${jobId}`),
     enabled: jobId !== null,
     refetchInterval: (query) => pollInterval(query.state.data?.job.status ?? null, sseFailed),

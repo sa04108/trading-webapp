@@ -18,9 +18,10 @@ import { api, ApiError, postJson, postJsonWithStatus } from '@/lib/api-client';
 import { rebalanceIntervalFitsPeriod } from '../../../shared/schemas/rebalance-interval.js';
 import type { RebalanceInterval, UniverseRule } from '../../../shared/schemas/universe-rule.js';
 import type { SymbolMasterCoverageDto } from '../../../shared/schemas/symbol-master.js';
-import { PreparationProgress } from './preparation-progress';
+import { PreparationProgress, preparationStatusDescription } from './preparation-progress';
 import {
   isPreparingCurrentParams,
+  seedPreparationJob,
   usePreparationLive,
   type BacktestPreparationJob,
 } from './preparation-live';
@@ -134,6 +135,26 @@ function canonicalJson(value: unknown): string {
 export type UniversePreviewStartResponse =
   | { readonly kind: 'READY'; readonly preview: UniversePreviewResponseDto }
   | { readonly kind: 'PREPARING'; readonly job: BacktestPreparationJob };
+
+/**
+ * 미리보기 버튼 아래에 표시할 현재 작업. 첫 POST는 외부 API를 바로 부르는 요청이
+ * 아니라, 완료된 준비 결과와 현재 시장·재무 coverage를 SQLite에서 먼저 확인한다.
+ * 202 이후에는 durable job의 실제 phase를 표시한다.
+ */
+export function previewRequestStatusMessage(
+  requestPending: boolean,
+  preparingCurrentParams: boolean,
+  liveJob: BacktestPreparationJob | null,
+): string | null {
+  if (requestPending) {
+    return 'SQLite에 저장된 미리보기와 시장·재무 데이터 상태를 확인하고 있습니다.';
+  }
+  if (!preparingCurrentParams || liveJob === null) return null;
+  if (liveJob.status === 'COMPLETED') {
+    return '데이터 준비 완료 · 미리보기 결과 확인 중';
+  }
+  return preparationStatusDescription(liveJob);
+}
 
 export interface UniverseRuleStepProps {
   value: UniverseRule;
@@ -254,6 +275,7 @@ export function UniverseRuleStep({
     onSuccess: (startResponse, params) => {
       if (startResponse.kind === 'PREPARING') {
         preparingParamsRef.current = params;
+        seedPreparationJob(queryClient, startResponse.job);
         setPreparingJobId(startResponse.job.id);
         return;
       }
@@ -335,6 +357,18 @@ export function UniverseRuleStep({
     currentParams,
     liveJob?.status ?? null,
     sameUniverseParams,
+  );
+  // COMPLETED를 받은 렌더와 위 effect가 최종 200 preview를 다시 요청하는 렌더
+  // 사이에도 버튼을 풀지 않는다. 준비가 매우 빨리 끝나면 이 한 프레임도 사용자가
+  // 제보한 "조회 중 → 미리보기" 깜빡임으로 보일 수 있다.
+  const completingPreview = liveJob?.status === 'COMPLETED'
+    && preparingParamsRef.current !== null
+    && sameUniverseParams(preparingParamsRef.current, currentParams);
+  const previewBusy = previewMutation.isPending || preparing || completingPreview;
+  const previewStatus = previewRequestStatusMessage(
+    previewMutation.isPending,
+    preparing || completingPreview,
+    liveJob,
   );
 
   /**
@@ -592,15 +626,26 @@ export function UniverseRuleStep({
             </div>
             <Button
               className="h-11"
-              disabled={!canPreview || previewMutation.isPending || preparing}
+              disabled={!canPreview || previewBusy}
               onClick={() => runPreview(currentParams)}
             >
-              {previewMutation.isPending || preparing ? '조회 중…' : '미리보기'}
+              {previewMutation.isPending
+                ? '저장 데이터 확인 중…'
+                : preparing
+                  ? '데이터 준비 중…'
+                  : completingPreview
+                    ? '결과 확인 중…'
+                    : '미리보기'}
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
             기간 {period.from || '?'} ~ {period.to || '?'}
           </p>
+          {previewStatus !== null ? (
+            <p className="text-sm text-muted-foreground" role="status" aria-live="polite">
+              {previewStatus}
+            </p>
+          ) : null}
           {!periodReady ? (
             <Alert variant="destructive" role="alert">
               <AlertDescription>먼저 '기간' 단계에서 기간을 입력하세요</AlertDescription>
