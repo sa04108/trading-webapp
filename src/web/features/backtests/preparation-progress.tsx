@@ -24,7 +24,7 @@ export function preparationStatusDescription(job: BacktestPreparationJob): strin
     case 'RUNNING':
       return PHASE_LABELS[job.phase];
     case 'WAITING_DAILY_QUOTA':
-      return 'DART 일일 호출 한도 해제 대기';
+      return `${quotaProvider(job)} 일일 호출 한도 해제 대기`;
     case 'COMPLETED':
       return '준비 완료';
     case 'FAILED':
@@ -32,6 +32,10 @@ export function preparationStatusDescription(job: BacktestPreparationJob): strin
     case 'CANCELLED':
       return '취소됨';
   }
+}
+
+function quotaProvider(job: BacktestPreparationJob): 'KRX' | 'DART' {
+  return job.phase === 'MARKET_DATA' ? 'KRX' : 'DART';
 }
 
 /** 0~100 정수. 분모가 0 이면(아직 계획을 못 받은 순간) 0 으로 둔다 */
@@ -82,8 +86,8 @@ export function PreparationProgress({ job, onCancel, onRestart }: PreparationPro
         {job.status === 'WAITING_DAILY_QUOTA' ? (
           <Alert role="alert">
             <AlertDescription>
-              DART 일일 호출 한도에 도달했습니다 — {formatPreparationResumeTime(job.nextResumeAtMs)}에
-              자동으로 이어서 준비합니다.
+              {quotaProvider(job)} 일일 호출 한도에 도달했습니다 —{' '}
+              {formatPreparationResumeTime(job.nextResumeAtMs)}에 자동으로 이어서 준비합니다.
             </AlertDescription>
           </Alert>
         ) : null}

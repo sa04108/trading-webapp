@@ -15,6 +15,7 @@ import type { ExternalApiUsage } from '../../../shared/db/external-api-usage.js'
 import type { FactSyncService, FactSyncReport } from '../../facts/application/fact-sync-service.js';
 import { DART_DAILY_CALL_LIMIT } from '../../facts/domain/sync-plan.js';
 import type { CandleCoverageService } from '../../market-data/application/candle-coverage-service.js';
+import { KrxQuotaError } from '../../market-data/application/ports.js';
 import type { SymbolMasterService } from '../../market-data/application/symbol-master-service.js';
 import { addCalendarDays, kstDateOf } from '../../market-data/domain/kst-date.js';
 import type { SymbolService } from '../../market-data/application/symbol-service.js';
@@ -524,6 +525,10 @@ export class BacktestPreparationOrchestrator {
       if (this.stopping) return;
       const current = this.getRow(jobId);
       if (!current || current.status !== 'RUNNING') return;
+      if (error instanceof KrxQuotaError) {
+        this.waitForKrxDailyQuota(jobId, error.message);
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
       this.deps.logger.error(
         { module: 'backtest', event: 'preparation.failed', jobId, err: error },
@@ -683,6 +688,34 @@ export class BacktestPreparationOrchestrator {
       return false;
     }
     return true;
+  }
+
+  /**
+   * KRX 일별 데이터는 수집 날짜가 지나도 바뀌지 않는다. 성공한 날짜는 symbol master
+   * coverage에 즉시 남으므로 다음 KST 날짜에 job 전체를 다시 계획해도 ingestDate가 그
+   * 날짜를 API 호출 없이 건너뛴다. DART처럼 새 공시 여부를 확인하거나 covered 날짜를
+   * 강제로 다시 여는 단계는 두지 않는다.
+   */
+  private waitForKrxDailyQuota(jobId: string, message: string): void {
+    const now = this.deps.clock.now();
+    const snapshot = this.persistAndEmit(
+      jobId,
+      (row) => row.cancelRequested
+        ? { status: 'CANCELLED', error: '사용자가 준비 작업을 취소했습니다.' }
+        : {
+            status: 'WAITING_DAILY_QUOTA',
+            phase: 'MARKET_DATA',
+            nextResumeAtMs: nextKstMidnightMs(now),
+            error: message,
+          },
+      ['RUNNING'],
+    );
+    if (
+      snapshot?.status === 'WAITING_DAILY_QUOTA'
+      && snapshot.nextResumeAtMs !== null
+    ) {
+      this.scheduleResume(jobId, snapshot.nextResumeAtMs);
+    }
   }
 
   private reserveDartCall(jobId: string): 'CONTINUE' | 'PAUSE_DAILY_QUOTA' {

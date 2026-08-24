@@ -12,6 +12,7 @@ import {
 } from '../../src/server/modules/backtest/application/backtest-preparation-orchestrator.js';
 import { backtestPreparationRequestHash } from '../../src/server/modules/backtest/application/backtest-preparation-plan.js';
 import { StrategyRegistry } from '../../src/server/modules/strategy/application/strategy-registry.js';
+import { KrxQuotaError } from '../../src/server/modules/market-data/application/ports.js';
 import type { SymbolMasterEntry } from '../../src/server/modules/market-data/domain/symbol-master.js';
 
 const LOGGER = { debug() {}, info() {}, warn() {}, error() {} } as never;
@@ -605,6 +606,104 @@ describe('BacktestPreparationOrchestrator recovery와 취소', () => {
 });
 
 describe('BacktestPreparationOrchestrator quota resume와 terminal 결과', () => {
+  it('KRX 한도 다음 날 완료 날짜는 재요청하지 않고 실패한 날짜부터 자동 재개한다', async () => {
+    const coveredDates = new Set<string>();
+    const physicalRequests: string[] = [];
+    let quotaReached = false;
+    const marketNeeds = {
+      kind: 'NEEDS_DATA' as const,
+      candidateScopeKnown: true,
+      unionEntries: candidateEntries(['005930']),
+      needs: {
+        factSymbols: [],
+        actionSymbols: [],
+        priceSymbols: [],
+        selectionMetricDates: ['2026-01-05', '2026-01-06'],
+        priceRange: null,
+      },
+    };
+    const ctx = makeDeps({
+      resolver: {
+        resolveOrDescribeNeeds: async () => coveredDates.size === 2 ? ready() : marketNeeds,
+        isPeriodCovered: () => coveredDates.size === 2,
+      },
+      symbolMaster: {
+        ensureTradingDay: async (date: string) => {
+          // 실물 SymbolMasterService.ingestDate와 같은 coverage gate: 재개 시 orchestrator가
+          // 날짜를 다시 순회해도 이미 닫힌 날짜에는 물리 KRX 요청이 나가지 않는다.
+          if (coveredDates.has(date)) {
+            return { effectiveTradingDate: date, ingestedDates: [] };
+          }
+          physicalRequests.push(date);
+          if (date === '2026-01-06' && !quotaReached) {
+            quotaReached = true;
+            throw new KrxQuotaError();
+          }
+          coveredDates.add(date);
+          return { effectiveTradingDate: date, ingestedDates: [date] };
+        },
+        ensureSelectionMetrics: async () => undefined,
+        ingestDate: async () => ({ kind: 'ALREADY_COVERED' as const }),
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const job = orchestrator.start(INPUT);
+
+    await waitFor(() => orchestrator.get(job.id)?.status === 'WAITING_DAILY_QUOTA');
+    expect(orchestrator.get(job.id)).toMatchObject({
+      phase: 'MARKET_DATA',
+      doneSymbols: 1,
+      totalSymbols: 2,
+      nextResumeAtMs: Date.parse('2026-01-05T15:00:00.000Z'),
+    });
+    expect(physicalRequests).toEqual(['2026-01-05', '2026-01-06']);
+
+    ctx.setNow(Date.parse('2026-01-05T15:00:00.000Z'));
+    orchestrator.recoverOrphaned();
+    await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
+
+    // 01-05는 coverage로 건너뛰고, quota 응답 때문에 완료되지 않은 01-06만 재요청한다.
+    expect(physicalRequests).toEqual(['2026-01-05', '2026-01-06', '2026-01-06']);
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
+  it('진행 중인 KRX 요청에서 한도 오류가 나도 먼저 요청된 취소를 대기로 덮지 않는다', async () => {
+    const requestStarted = deferred<void>();
+    const finishRequest = deferred<void>();
+    const ctx = makeDeps({
+      resolver: {
+        resolveOrDescribeNeeds: async () => MARKET_ONLY_NEEDS,
+        isPeriodCovered: () => false,
+      },
+      symbolMaster: {
+        ensureTradingDay: async () => {
+          requestStarted.resolve();
+          await finishRequest.promise;
+          throw new KrxQuotaError();
+        },
+        ensureSelectionMetrics: async () => undefined,
+        ingestDate: async () => ({ kind: 'ALREADY_COVERED' as const }),
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const job = orchestrator.start(INPUT);
+    await requestStarted.promise;
+
+    expect(orchestrator.cancel(job.id)).toBe(true);
+    expect(orchestrator.get(job.id)?.status).toBe('RUNNING');
+    finishRequest.resolve();
+    await waitFor(() => orchestrator.get(job.id)?.status === 'CANCELLED');
+
+    expect(orchestrator.get(job.id)).toMatchObject({
+      status: 'CANCELLED',
+      nextResumeAtMs: null,
+      error: '사용자가 준비 작업을 취소했습니다.',
+    });
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
   it('DART 공급자가 먼저 한도 초과를 반환해도 WAITING 상태와 영속 알림 신호를 남긴다', async () => {
     const quotaReports: string[] = [];
     const ctx = makeDeps({

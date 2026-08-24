@@ -58,7 +58,7 @@ describe('PreparationProgress', () => {
     expect(html).toContain(label);
   });
 
-  it('WAITING_DAILY_QUOTA 는 일일 호출 한도와 다음 KST 재개 시각, 취소 버튼을 보여준다', () => {
+  it('DART quota 대기는 공급자와 다음 KST 재개 시각, 취소 버튼을 보여준다', () => {
     const waitingJob = job({
       status: 'WAITING_DAILY_QUOTA',
       phase: 'SYNCING_FACTS',
@@ -71,6 +71,20 @@ describe('PreparationProgress', () => {
     expect(html).toContain('DART 일일 호출 한도 해제 대기');
     expect(html).toContain(formatPreparationResumeTime(waitingJob.nextResumeAtMs));
     expect(html).toContain('취소');
+  });
+
+  it('MARKET_DATA 중 quota 대기는 KRX 공급자를 표시한다', () => {
+    const waitingJob = job({
+      status: 'WAITING_DAILY_QUOTA',
+      phase: 'MARKET_DATA',
+      nextResumeAtMs: Date.UTC(2026, 7, 10, 15, 0, 0),
+    });
+    const html = renderToStaticMarkup(
+      <PreparationProgress job={waitingJob} onCancel={() => undefined} />,
+    );
+    expect(html).toContain('KRX 일일 호출 한도 해제 대기');
+    expect(html).toContain('KRX 일일 호출 한도에 도달했습니다');
+    expect(html).toContain(formatPreparationResumeTime(waitingJob.nextResumeAtMs));
   });
 
   it('COMPLETED 는 취소·재시도 버튼 없이 완료를 알린다', () => {
