@@ -70,17 +70,17 @@ describe('simulateFill (스펙 §9.1 next-bar-open + §9.3 비용 모델)', () =
     const beforeCut = simulateFill(
       { symbol: 'A', side: 'SELL', quantity: 1 },
       10_000,
-      Date.parse('2024-12-31T00:00:00Z'),
+      Date.parse('2024-12-26T00:00:00Z'),
       historical,
     );
     const afterCut = simulateFill(
       { symbol: 'A', side: 'SELL', quantity: 1 },
       10_000,
-      Date.parse('2025-01-02T00:00:00Z'),
+      Date.parse('2024-12-27T00:00:00Z'),
       historical,
     );
-    expect(beforeCut.tax).toBeCloseTo(beforeCut.grossAmount * 0.0018);
-    expect(afterCut.tax).toBeCloseTo(afterCut.grossAmount * 0.0015);
+    expect(beforeCut.tax).toBe(Math.floor(beforeCut.grossAmount * 0.0018));
+    expect(afterCut.tax).toBe(Math.floor(afterCut.grossAmount * 0.0015));
   });
 
   it('rounds with the historical KRX market-specific tick size', () => {

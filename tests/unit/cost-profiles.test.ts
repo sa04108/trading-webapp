@@ -3,19 +3,20 @@ import {
   getCostProfile,
   getKrxExecutionRules,
   getSlippageProfile,
+  sellTaxAmount,
   sellTaxRateAt,
   tickSizeAt,
 } from '../../src/server/modules/backtest/domain/cost-profiles.js';
 
 describe('kr-equity-default', () => {
   it.each([
-    ['2019-06-02', 0.003],
-    ['2019-06-03', 0.0025],
-    ['2021-01-01', 0.0023],
-    ['2023-01-01', 0.002],
-    ['2024-01-01', 0.0018],
-    ['2025-01-01', 0.0015],
-    ['2026-01-01', 0.002],
+    ['2019-05-29', 0.003],
+    ['2019-05-30', 0.0025],
+    ['2020-12-29', 0.0023],
+    ['2022-12-28', 0.002],
+    ['2023-12-27', 0.0018],
+    ['2024-12-27', 0.0015],
+    ['2025-12-29', 0.002],
   ])('%s 체결일의 매도세율을 적용한다', (date, expected) => {
     const profile = getCostProfile('kr-equity-default')!;
     expect(sellTaxRateAt(profile, Date.parse(`${date}T00:00:00Z`))).toBe(expected);
@@ -25,6 +26,13 @@ describe('kr-equity-default', () => {
     const profile = getCostProfile('kr-equity-default');
     expect(profile?.buyCommissionRate).toBe(0.00015);
     expect(profile?.sellCommissionRate).toBe(0.00015);
+  });
+
+  it('KOSPI는 증권거래세와 농특세를 각각 원 미만 절사한다', () => {
+    const profile = getCostProfile('kr-equity-default')!;
+    const at = Date.parse('2026-01-02T00:00:00Z');
+    expect(sellTaxAmount(profile, 1_999, at, 'KOSPI')).toBe(2);
+    expect(sellTaxAmount(profile, 1_999, at, 'KOSDAQ')).toBe(3);
   });
 });
 

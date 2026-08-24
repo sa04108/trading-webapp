@@ -13,6 +13,9 @@ export interface CostProfile {
   readonly sellTaxRateSchedule?: readonly {
     readonly fromTsMs: number;
     readonly rate: number;
+    /** KOSPI는 증권거래세와 농특세를 체결건별로 각각 원 미만 절사한다. */
+    readonly kospiSecuritiesTaxRate?: number;
+    readonly kospiRuralTaxRate?: number;
   }[];
 }
 

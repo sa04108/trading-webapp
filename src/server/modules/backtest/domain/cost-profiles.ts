@@ -11,19 +11,19 @@ const COST_PROFILES: Record<string, CostProfile> = {
     // 2.0.0: KRX 공식 데이터 시작일(2010-01-04) 이후의 증권거래세와
     // 코스피 농어촌특별세를 합친 실제 매도세를 체결일별로 적용한다.
     // 이 기간에는 코스피·코스닥 합계 세율이 같다.
-    version: '2.0.0',
+    version: '2.1.0',
     buyCommissionRate: 0.00015,
     sellCommissionRate: 0.00015,
     // 일정 밖 직접 엔진 호출의 fallback 겸 현재(2026년) 세율이다.
     sellTaxRate: 0.002,
     sellTaxRateSchedule: [
-      { fromTsMs: Date.parse('2010-01-04T00:00:00Z'), rate: 0.003 },
-      { fromTsMs: Date.parse('2019-06-03T00:00:00Z'), rate: 0.0025 },
-      { fromTsMs: Date.parse('2021-01-01T00:00:00Z'), rate: 0.0023 },
-      { fromTsMs: Date.parse('2023-01-01T00:00:00Z'), rate: 0.002 },
-      { fromTsMs: Date.parse('2024-01-01T00:00:00Z'), rate: 0.0018 },
-      { fromTsMs: Date.parse('2025-01-01T00:00:00Z'), rate: 0.0015 },
-      { fromTsMs: Date.parse('2026-01-01T00:00:00Z'), rate: 0.002 },
+      taxScheduleEntry('2010-01-04', 0.003, 0.0015),
+      taxScheduleEntry('2019-05-30', 0.0025, 0.001),
+      taxScheduleEntry('2020-12-29', 0.0023, 0.0008),
+      taxScheduleEntry('2022-12-28', 0.002, 0.0005),
+      taxScheduleEntry('2023-12-27', 0.0018, 0.0003),
+      taxScheduleEntry('2024-12-27', 0.0015, 0),
+      taxScheduleEntry('2025-12-29', 0.002, 0.0005),
     ],
   },
   'zero-cost': {
@@ -34,6 +34,19 @@ const COST_PROFILES: Record<string, CostProfile> = {
     sellTaxRate: 0,
   },
 };
+
+function taxScheduleEntry(
+  tradeDate: string,
+  totalRate: number,
+  kospiSecuritiesTaxRate: number,
+): NonNullable<CostProfile['sellTaxRateSchedule']>[number] {
+  return {
+    fromTsMs: Date.parse(`${tradeDate}T00:00:00Z`),
+    rate: totalRate,
+    kospiSecuritiesTaxRate,
+    kospiRuralTaxRate: 0.0015,
+  };
+}
 
 const SLIPPAGE_PROFILES: Record<string, SlippageProfile> = {
   'fixed-5bps': { id: 'fixed-5bps', version: '1.0.0', bps: 5, fixed: 0 },
@@ -82,6 +95,34 @@ export function sellTaxRateAt(profile: CostProfile, tsMs: number): number {
     rate = entry.rate;
   }
   return rate;
+}
+
+/**
+ * 매도 체결건의 세액. KRX 일정은 실제 매매일 경계이며 원 미만을 절사한다.
+ * 일정이 없는 사용자 정의 프로파일은 기존 고정 소수율 동작을 보존한다.
+ */
+export function sellTaxAmount(
+  profile: CostProfile,
+  grossAmount: number,
+  tsMs: number,
+  venue?: 'KOSPI' | 'KOSDAQ',
+): number {
+  let active: NonNullable<CostProfile['sellTaxRateSchedule']>[number] | undefined;
+  for (const entry of profile.sellTaxRateSchedule ?? []) {
+    if (entry.fromTsMs > tsMs) break;
+    active = entry;
+  }
+  if (active === undefined) return grossAmount * profile.sellTaxRate;
+
+  if (
+    venue === 'KOSPI'
+    && active.kospiSecuritiesTaxRate !== undefined
+    && active.kospiRuralTaxRate !== undefined
+  ) {
+    return Math.floor(grossAmount * active.kospiSecuritiesTaxRate)
+      + Math.floor(grossAmount * active.kospiRuralTaxRate);
+  }
+  return Math.floor(grossAmount * active.rate);
 }
 
 const KRX_UNIFIED_TICK_FROM_TS_MS = Date.parse('2023-01-25T00:00:00Z');
