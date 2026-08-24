@@ -306,7 +306,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     };
     expect(body.run.engineVersion).toBe(ENGINE_VERSION);
     expect(body.run.strategyId).toBe('range-breakout');
-    expect(body.run.feeModelVersion).toBe('kr-equity-default@1.1.0');
+    expect(body.run.feeModelVersion).toBe('kr-equity-default@2.1.0');
     expect(body.run.randomSeed).toBe(42);
     expect(body.run.universeHash).not.toBe('unknown');
     // 제출 시점에 고정된 종목 버전 스냅샷이 그대로 기록돼야 한다 (재현성 §9.5).
