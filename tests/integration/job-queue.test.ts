@@ -476,6 +476,36 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     ]);
   });
 
+  it('2봉 랭킹 전략은 연속 실제 거래 봉 리밸런스를 enqueue 전에 거부한다', async () => {
+    const before = ctx.container.jobQueue.countByStatus([
+      'QUEUED', 'STARTING', 'RUNNING', 'CANCELLING', 'COMPLETED', 'FAILED', 'CANCELLED',
+    ]);
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: {
+        ...buildRequest(),
+        strategyId: 'value-quality-rank',
+        parameters: { topN: 1, staleQuarters: 2 },
+        period: { from: MAIN_DATE, to: '2026-01-07' },
+        universeRule: {
+          markets: ['KOSPI'],
+          stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 }],
+          rebalanceInterval: { value: 1, unit: 'DAY' },
+        },
+      },
+    });
+
+    expect(created.statusCode).toBe(422);
+    expect((created.json() as { error: string }).error).toMatch(
+      /밸류·퀄리티 랭킹.*연속 리밸런스.*2026-01-05.*2026-01-06.*최소 1개 필요/,
+    );
+    expect(ctx.container.jobQueue.countByStatus([
+      'QUEUED', 'STARTING', 'RUNNING', 'CANCELLING', 'COMPLETED', 'FAILED', 'CANCELLED',
+    ])).toBe(before);
+  });
+
   it('claims jobs atomically in FIFO order', () => {
     const queue = ctx.container.jobQueue;
     const first = queue.enqueue(buildRequest());

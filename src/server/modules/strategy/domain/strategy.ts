@@ -71,6 +71,14 @@ export interface TradingStrategy<TParameters, TState> {
     readonly priceWarmupBars?: (parameters: TParameters) => number;
     readonly requiresCorporateActions?: boolean;
   };
+  /**
+   * 한 리밸런스 신호 뒤 다음 신호 전까지 필요한 비리밸런스 실제 거래 봉 수.
+   *
+   * 매도와 매수를 서로 다른 봉에서 계획하는 전략은 중간 봉을 매수 단계로 소비한다.
+   * 이 제약을 만족하지 않는 일정을 허용하면 다음 리밸런스 신호가 조용히 유실되므로,
+   * 제출 검증과 엔진이 같은 값으로 fail-fast한다.
+   */
+  readonly requiredRebalanceGapBars?: number;
   readonly parameterSchema: z.ZodType<TParameters>;
 
   initialize(context: StrategyInitializeContext): TState;

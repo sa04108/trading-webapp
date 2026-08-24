@@ -35,11 +35,12 @@ export const lowPerHighRoeRankStrategy: TradingStrategy<
   LowPerHighRoeRankState
 > = {
   id: 'low-per-high-roe-rank',
-  version: '1.2.1',
+  version: '1.2.2',
   name: '저PER·고ROE 순위',
   requiresFundamentals: true,
   description: 'PIT TTM 순이익 기준 저PER과 고ROE를 결합하는 동일가중 연구 전략',
   parameterSchema: lowPerHighRoeRankParameters,
+  requiredRebalanceGapBars: 1,
   dataRequirements: {
     fundamentalLookbackQuarters: 4,
     requiresCorporateActions: true,

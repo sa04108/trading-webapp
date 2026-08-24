@@ -88,11 +88,12 @@ export const earningsAccelerationRankStrategy: TradingStrategy<
   EarningsAccelerationRankState
 > = {
   id: 'earnings-acceleration-rank',
-  version: '1.2.1',
+  version: '1.2.2',
   name: '이익 가속·가격 확인 순위',
   requiresFundamentals: true,
   description: 'PIT 영업이익 가속과 양의 가격 모멘텀을 함께 순위화하는 동일가중 연구 전략',
   parameterSchema: earningsAccelerationRankParameters,
+  requiredRebalanceGapBars: 1,
   dataRequirements: {
     fundamentalLookbackQuarters: 8,
     priceWarmupBars: (parameters) => parameters.priceMomentumDays,

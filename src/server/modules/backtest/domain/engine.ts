@@ -14,6 +14,10 @@ import {
   computeMonthlyReturns,
 } from './metrics.js';
 import { createRng } from './seeded-rng.js';
+import {
+  findRebalanceSpacingViolation,
+  rebalanceSpacingViolationMessage,
+} from './rebalance-spacing.js';
 import type {
   BacktestMetrics,
   BacktestUniverseScheduleEntry,
@@ -121,8 +125,9 @@ export interface BacktestRunResult {
  * 2.0.0: 미청산 진입비용과 체결일별 세금·KRX 호가단위를 반영한다.
  * 2.1.0: 직전 거래 봉 거래량 기준 participation 한도를 적용한다.
  * 2.2.0: Sortino 하방편차를 전체 관측일 기준으로 계산한다.
+ * 2.3.0: 2봉 리밸런스 전략에서 다음 리밸런스 신호가 유실되는 일정을 fail-fast한다.
  */
-export const ENGINE_VERSION = '2.2.0';
+export const ENGINE_VERSION = '2.3.0';
 
 const PROGRESS_INTERVAL_BARS = 500;
 /** 전략에 노출된 RNG 흐름과 매수 우선순위 RNG 흐름을 분리하는 32-bit salt. */
@@ -185,6 +190,22 @@ function* runBacktestSteps(
   const totalBars = sorted.filter(
     (candle) => input.tradeFromTsMs === undefined || candle.tsMs >= input.tradeFromTsMs,
   ).length;
+
+  const requiredRebalanceGapBars = strategy.requiredRebalanceGapBars ?? 0;
+  if (!Number.isInteger(requiredRebalanceGapBars) || requiredRebalanceGapBars < 0) {
+    throw new Error(`${strategy.id} requiredRebalanceGapBars는 0 이상의 정수여야 합니다`);
+  }
+  const spacingViolation = findRebalanceSpacingViolation(
+    timeline,
+    input.universeSchedule ?? [],
+    requiredRebalanceGapBars,
+    input.tradeFromTsMs,
+  );
+  if (spacingViolation !== null) {
+    throw new Error(
+      rebalanceSpacingViolationMessage(strategy.name, requiredRebalanceGapBars, spacingViolation),
+    );
+  }
 
   // 미청산 포지션 스냅샷이 "마지막으로 확인된 가격이 언제 것인지" 를 적는 데 쓴다.
   const lastBarTsMsBySymbol = new Map<string, number>();

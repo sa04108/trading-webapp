@@ -131,7 +131,7 @@ describe('rankLowPerHighRoe', () => {
 
 describe('저PER·고ROE 전략', () => {
   it('스키마와 준비 데이터 요구가 정확하다', () => {
-    expect(lowPerHighRoeRankStrategy.version).toBe('1.2.1');
+    expect(lowPerHighRoeRankStrategy.version).toBe('1.2.2');
     expect(lowPerHighRoeRankParameters.parse({})).toEqual({ topN: 40, staleQuarters: 2 });
     expect(lowPerHighRoeRankParameters.safeParse({ topN: 200, staleQuarters: 1 }).success).toBe(true);
     expect(lowPerHighRoeRankParameters.safeParse({ staleQuarters: 0 }).success).toBe(false);

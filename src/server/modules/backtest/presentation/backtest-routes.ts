@@ -43,6 +43,10 @@ import {
   listCostProfiles,
   listSlippageProfiles,
 } from '../domain/cost-profiles.js';
+import {
+  findRebalanceSpacingViolation,
+  rebalanceSpacingViolationMessage,
+} from '../domain/rebalance-spacing.js';
 import type { JobOrchestrator, JobEvent } from '../application/job-orchestrator.js';
 import type { BacktestJobRow, JobQueue } from '../application/job-queue.js';
 import type { ResultsService } from '../application/results-service.js';
@@ -453,7 +457,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
         readonly warnings: readonly string[];
       }
     | { readonly ok: false; readonly status: 400; readonly errors: string[] }
-    | { readonly ok: false; readonly status: 422; readonly errors: string[]; readonly uncoveredDates: readonly string[] };
+    | { readonly ok: false; readonly status: 422; readonly errors: string[]; readonly uncoveredDates?: readonly string[] };
 
   /** 준비 hash를 조회하기 전에 끝낼 수 있는 요청 자체의 검증. */
   const validateStaticSubmission = (body: BacktestRequest): string[] => {
@@ -546,6 +550,35 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
         ok: false,
         status: 400,
         errors: universeErrors.length > 0 ? universeErrors : ['제출을 검증할 수 없습니다'],
+      };
+    }
+
+    // 2봉(매도 → 다음 봉 매수) 리밸런스 전략은 연속 실제 거래 봉에서 두 번째
+    // isRebalanceBar를 매수 단계가 소비해 버린다. 달력 DAY 값만 보고 막으면 휴일을
+    // 잘못 해석하고 정상적인 긴 주기까지 과잉 차단하므로, 확정 유니버스의 DISTINCT
+    // 일봉 타임라인과 엔진의 schedule 활성화 규칙을 그대로 사용한다.
+    const strategy = strategies.get(body.strategyId);
+    const requiredRebalanceGapBars = strategy?.requiredRebalanceGapBars ?? 0;
+    const { fromTsMs, toTsMs } = periodToTsRange(body.period);
+    const spacingViolation = findRebalanceSpacingViolation(
+      candleCoverage.getTimeline(resolved.unionSymbols, fromTsMs, toTsMs),
+      resolved.schedule.map((entry) => ({
+        fromTsMs: Date.parse(`${entry.rebalanceDate}T00:00:00Z`),
+      })),
+      requiredRebalanceGapBars,
+      fromTsMs,
+    );
+    if (strategy && spacingViolation !== null) {
+      return {
+        ok: false,
+        status: 422,
+        errors: [
+          rebalanceSpacingViolationMessage(
+            strategy.name,
+            requiredRebalanceGapBars,
+            spacingViolation,
+          ),
+        ],
       };
     }
 

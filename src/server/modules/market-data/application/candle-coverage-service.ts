@@ -1,4 +1,4 @@
-import { count, inArray, max, min } from 'drizzle-orm';
+import { and, asc, count, gt, gte, inArray, lte, max, min } from 'drizzle-orm';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import { krxDailyBars } from '../../../shared/db/schema.js';
 
@@ -49,5 +49,39 @@ export class CandleCoverageService {
         barCount: row.barCount,
       };
     });
+  }
+
+  /**
+   * 선택 종목 중 하나라도 유효한 일봉 행이 있는 실제 날짜 타임라인.
+   * 리밸런스 간격 검증은 종목별 OHLCV 전체를 다시 읽을 필요가 없어 날짜만 DISTINCT한다.
+   */
+  getTimeline(codes: readonly string[], fromTsMs: number, toTsMs: number): number[] {
+    if (codes.length === 0) return [];
+    const from = new Date(fromTsMs).toISOString().slice(0, 10);
+    const to = new Date(toTsMs).toISOString().slice(0, 10);
+    return this.db
+      .select({ date: krxDailyBars.date })
+      .from(krxDailyBars)
+      .where(and(
+        inArray(krxDailyBars.shortCode, [...codes]),
+        gte(krxDailyBars.date, from),
+        lte(krxDailyBars.date, to),
+        inArray(krxDailyBars.market, ['KOSPI', 'KOSDAQ']),
+        gt(krxDailyBars.open, 0),
+        gt(krxDailyBars.high, 0),
+        gt(krxDailyBars.low, 0),
+        gt(krxDailyBars.close, 0),
+        gte(krxDailyBars.volume, 0),
+        gte(krxDailyBars.high, krxDailyBars.low),
+        gte(krxDailyBars.high, krxDailyBars.open),
+        gte(krxDailyBars.high, krxDailyBars.close),
+        lte(krxDailyBars.low, krxDailyBars.open),
+        lte(krxDailyBars.low, krxDailyBars.close),
+      ))
+      .groupBy(krxDailyBars.date)
+      .orderBy(asc(krxDailyBars.date))
+      .all()
+      .map((row) => dateToTsMs(row.date))
+      .filter((tsMs) => Number.isFinite(tsMs) && tsMs > 0);
   }
 }
