@@ -277,6 +277,7 @@ export function NewBacktestWizard() {
   const universePreviewOk =
     currentPreviewResult !== null &&
     currentPreviewResult.uncoveredDates.length === 0 &&
+    currentPreviewResult.periodCovered &&
     currentPreviewResult.missingCandleSymbols.length === 0;
   /** 그 미리보기가 확정한 종목 목록 — 위저드 나머지 단계(재무 게이트·검토)가 본다 */
   const unionSymbols = currentPreviewResult !== null && universePreviewOk ? currentPreviewResult.unionSymbols : [];

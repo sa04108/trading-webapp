@@ -6,6 +6,7 @@ import { FACTS_SLICE } from '../../src/server/modules/market-data/application/sy
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import {
   backtestJobs,
+  symbolMasterCoverage,
   symbolMasterVersions,
   symbols,
   symbolVersions,
@@ -948,6 +949,75 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(message).toContain('2026-01-05');
   });
 
+  it('리밸런스 날짜만 커버된 준비 결과는 기간 중 상장 상태를 모르므로 제출을 거부한다', async () => {
+    const request = buildRequest();
+    const preparation = ctx.container.backtestPreparationOrchestrator.start({
+      universeRule: request.universeRule,
+      period: request.period,
+      strategyId: request.strategyId,
+      parameters: request.parameters,
+    });
+    await waitFor(() => {
+      const status = ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status;
+      return status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED';
+    }, 5_000);
+    expect(ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status).toBe('COMPLETED');
+
+    // 준비 뒤 전체 coverage를 리밸런스 날짜별 고립된 섬으로 바꾼다. getReadyPreview는
+    // 같은 완료 행을 읽더라도 resolver를 다시 실행하므로 periodCovered=false를 돌려준다.
+    ctx.container.database.db.delete(symbolMasterCoverage).run();
+    ctx.container.database.db.insert(symbolMasterCoverage).values(
+      ['2026-01-05', '2026-02-05', '2026-03-05', '2026-04-05', '2026-05-05', '2026-06-05']
+        .map((date) => ({
+          startDate: date,
+          endDate: date,
+          syncedAtMs: ctx.container.clock.now(),
+        })),
+    ).run();
+
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: request,
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect((response.json() as { error: string }).error).toContain('기간 전체');
+  });
+
+  it('제출 뒤 종목 마스터 기간 coverage가 사라져도 worker가 실행 전에 중단한다', async () => {
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: buildRequest(),
+    });
+    expect(created.statusCode).toBe(201);
+    const jobId = (created.json().job as { id: string }).id;
+
+    ctx.container.database.db.delete(symbolMasterCoverage).run();
+    ctx.container.database.db.insert(symbolMasterCoverage).values(
+      ['2026-01-05', '2026-02-05', '2026-03-05', '2026-04-05', '2026-05-05', '2026-06-05']
+        .map((date) => ({
+          startDate: date,
+          endDate: date,
+          syncedAtMs: ctx.container.clock.now(),
+        })),
+    ).run();
+
+    ctx.container.jobOrchestrator.tick();
+    await waitFor(() => {
+      const job = ctx.container.jobQueue.getJob(jobId);
+      return job !== null && ctx.container.jobQueue.isTerminal(job.status);
+    }, 60_000);
+
+    const job = ctx.container.jobQueue.getJob(jobId)!;
+    expect(job.status).toBe('FAILED');
+    expect(job.error).toContain('기간 전체');
+    expect(ctx.container.resultsService.getRun(jobId)).toBeNull();
+  });
+
   it('복제도 같은 제출 검증을 거친다 — 봉 없는 기간은 거부한다 (D-025)', async () => {
     const job = ctx.container.jobQueue.enqueue({
       ...buildRequest(),
@@ -1029,6 +1099,39 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(preview?.unionSymbols).toEqual(['005930']);
     expect(preview?.missingCandleSymbols).toEqual([]);
     expect(preview?.uncoveredDates).toEqual([]);
+  });
+
+  it('복제 초안은 cached preview의 기간 coverage를 현재 상태로 다시 판정한다', async () => {
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: buildRequest(),
+    });
+    expect(created.statusCode).toBe(201);
+    const sourceId = created.json().job.id as string;
+
+    ctx.container.database.db.delete(symbolMasterCoverage).run();
+    ctx.container.database.db.insert(symbolMasterCoverage).values(
+      ['2026-01-05', '2026-02-05', '2026-03-05', '2026-04-05', '2026-05-05', '2026-06-05']
+        .map((date) => ({
+          startDate: date,
+          endDate: date,
+          syncedAtMs: ctx.container.clock.now(),
+        })),
+    ).run();
+
+    const draft = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${sourceId}/clone-draft`,
+      cookies: { qp_session: cookie },
+    });
+
+    expect(draft.statusCode).toBe(200);
+    expect(draft.json().reusablePreview).toMatchObject({
+      periodCovered: false,
+      uncoveredDates: [],
+    });
   });
 
   it('재설정 복제는 준비 비영향 설정만 바뀌면 원본 유니버스를 재사용한다', async () => {
@@ -1240,6 +1343,50 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const failed = ctx.container.seedCloneBatchService.get(batchId)!;
     expect(failed.batch.status).toBe('FAILED');
     expect(failed.batch.error).toMatch(/단축코드 005930.*여러 표준코드/);
+    expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
+    expect(ctx.container.jobQueue.listJobs(500, 0)).toHaveLength(beforeJobCount);
+  });
+
+  it('난수 복제 대기 중 기간 coverage가 사라지면 다음 자식 승격 전에 묶음을 실패시킨다', async () => {
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: buildRequest(),
+    });
+    expect(created.statusCode).toBe(201);
+    const sourceId = created.json().job.id as string;
+    expect(ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
+
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
+      cookies: { qp_session: cookie },
+      payload: { count: 100 },
+    });
+    expect(response.statusCode).toBe(201);
+    const batchId = response.json().batch.id as string;
+    const before = ctx.container.seedCloneBatchService.get(batchId)!;
+    expect(before.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
+    const child = before.items.find(({ item }) => item.state === 'DISPATCHED')!.job!;
+    const beforeJobCount = ctx.container.jobQueue.listJobs(500, 0).length;
+
+    ctx.container.database.db.delete(symbolMasterCoverage).run();
+    ctx.container.database.db.insert(symbolMasterCoverage).values(
+      ['2026-01-05', '2026-02-05', '2026-03-05', '2026-04-05', '2026-05-05', '2026-06-05']
+        .map((date) => ({
+          startDate: date,
+          endDate: date,
+          syncedAtMs: ctx.container.clock.now(),
+        })),
+    ).run();
+    expect(ctx.container.jobQueue.setStatus(child.id, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
+
+    ctx.container.seedCloneBatchService.pump();
+
+    const failed = ctx.container.seedCloneBatchService.get(batchId)!;
+    expect(failed.batch.status).toBe('FAILED');
+    expect(failed.batch.error).toContain('기간 전체');
     expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
     expect(ctx.container.jobQueue.listJobs(500, 0)).toHaveLength(beforeJobCount);
   });

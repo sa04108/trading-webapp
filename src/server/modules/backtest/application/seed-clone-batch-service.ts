@@ -54,8 +54,9 @@ export interface SeedCloneBatchEvent {
   readonly status: SeedCloneBatchTerminalStatus;
 }
 
-export type SeedCloneScheduleIdentityValidator = (
+export type SeedCloneSnapshotValidator = (
   schedule: readonly LegacyUniverseScheduleEntry[],
+  period: BacktestRequest['period'],
 ) => void;
 
 /** 진행률 이벤트는 큐 슬롯이나 종료 여부를 바꾸지 않으므로 배치 DB를 다시 읽지 않는다. */
@@ -80,7 +81,7 @@ export class SeedCloneBatchService {
     private readonly queue: JobQueue,
     private readonly maxQueuedBacktests: number,
     private readonly clock: Clock,
-    private readonly validateScheduleIdentities: SeedCloneScheduleIdentityValidator,
+    private readonly validateSnapshot: SeedCloneSnapshotValidator,
   ) {}
 
   create(sourceJobId: string, count: number, snapshot: SeedCloneBatchSnapshot): SeedCloneBatchDetail {
@@ -148,9 +149,10 @@ export class SeedCloneBatchService {
       let snapshot: SeedCloneBatchSnapshot;
       try {
         snapshot = parseSnapshot(batch);
-        // create 시점과 실제 PENDING item 승격 사이에 SCD/등록 identity가 바뀔 수 있다.
-        // 매 pump의 enqueue 직전에 다시 검사해 이후 자식 생성을 멈춘다.
-        this.validateScheduleIdentities(snapshot.schedule);
+        // create 시점과 실제 PENDING item 승격 사이에 SCD/등록 identity나 기간
+        // coverage가 바뀔 수 있다. 매 pump의 enqueue 직전에 다시 검사해 이후 자식
+        // 생성을 멈춘다.
+        this.validateSnapshot(snapshot.schedule, snapshot.request.period);
       } catch (error) {
         this.markTerminal(
           batch.id,

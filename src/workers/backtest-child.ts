@@ -222,6 +222,15 @@ async function main(): Promise<void> {
       assertPinnedScheduleHash(schedule, pin?.scheduleHash);
     }
     assertSafePinnedScheduleIdentities(schedule, { symbolMaster });
+    // 제출 이후 coverage가 지워진 로컬 job, 배포 전에 대기 중이던 job, HTTP 제출을
+    // 거치지 않은 직접 enqueue와 원격 bundle을 같은 최종 경계에서 막는다. 리밸런스
+    // 날짜만 안다고 기간 사이의 상장폐지·거래정지·코드 변경까지 안다고 볼 수 없다.
+    if (!symbolMaster.isRangeCovered(request.period.from, request.period.to)) {
+      throw new Error(
+        '종목 마스터가 백테스트 기간 전체를 커버하지 않습니다 — '
+          + '기간 전체 KRX 데이터를 동기화한 뒤 다시 실행하세요.',
+      );
+    }
 
     // 거래불가일 — 봉 tsMs 로 접어 엔진에 넘긴다. Candle.tsMs 규약은 거래일의 UTC 자정이다
     // (krx-daily-candle-repository.ts). 여기서 같은 규칙을 쓰지 않으면 하루 어긋난다(D-024 류).

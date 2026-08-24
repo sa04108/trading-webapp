@@ -72,8 +72,9 @@ export type StepGateState = Pick<WizardFormState, 'strategyId' | 'from' | 'to' |
    */
   benchmarkCoverageOk: boolean;
   /**
-   * 유니버스 규칙 미리보기가 **지금 값 기준으로** 성공했고, 그 결과에 uncoveredDates·
-   * missingCandleSymbols 가 하나도 없는지 (스펙 2026-08-05). 종목 수 상한(200)은 이제
+   * 유니버스 규칙 미리보기가 **지금 값 기준으로** 성공했고, 기간 전체가 커버되며
+   * uncoveredDates·missingCandleSymbols 가 하나도 없는지 (스펙 2026-08-05).
+   * 종목 수 상한(200)은 이제
    * `universeRuleSchema` 의 `topN` 자체가 막으므로 이 게이트가 따로 세지 않는다 —
    * `UniverseRuleStep` 의 입력이 애초에 그 범위를 벗어나지 못한다.
    *

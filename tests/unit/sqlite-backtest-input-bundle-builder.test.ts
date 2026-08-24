@@ -4,7 +4,12 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { SqliteBacktestInputBundleBuilder } from '../../src/server/modules/backtest/infrastructure/sqlite-backtest-input-bundle-builder.js';
 import { openDatabase } from '../../src/server/shared/db/database.js';
-import { backtestJobs, symbolFactsState, symbols } from '../../src/server/shared/db/schema.js';
+import {
+  backtestJobs,
+  symbolFactsState,
+  symbolMasterCoverage,
+  symbols,
+} from '../../src/server/shared/db/schema.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -15,7 +20,7 @@ afterEach(() => {
 });
 
 describe('SqliteBacktestInputBundleBuilder', () => {
-  it('선택 종목의 자본변동 coverage와 gap만 원격 worker bundle에 복사한다', () => {
+  it('선택 종목의 자본변동 상태와 전역 종목 마스터 coverage를 원격 bundle에 복사한다', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'qp-input-bundle-'));
     temporaryDirectories.push(directory);
     const sourcePath = path.join(directory, 'source.sqlite');
@@ -44,6 +49,10 @@ describe('SqliteBacktestInputBundleBuilder', () => {
         updatedAtMs: 20,
         actionUpdatedAtMs: 20,
       },
+    ]).run();
+    source.db.insert(symbolMasterCoverage).values([
+      { startDate: '2025-01-01', endDate: '2025-12-31', syncedAtMs: 30 },
+      { startDate: '2026-01-01', endDate: '2026-12-31', syncedAtMs: 40 },
     ]).run();
     source.db.insert(backtestJobs).values({
       id: 'job_bundle_gap',
@@ -75,6 +84,10 @@ describe('SqliteBacktestInputBundleBuilder', () => {
       actionGapYearsJson: '[2025]',
       actionCoverageProtocolJson: '{"version":2,"years":[2025]}',
     });
+    expect(destination.db.select().from(symbolMasterCoverage).all()).toMatchObject([
+      { startDate: '2025-01-01', endDate: '2025-12-31', syncedAtMs: 30 },
+      { startDate: '2026-01-01', endDate: '2026-12-31', syncedAtMs: 40 },
+    ]);
     destination.close();
   });
 });

@@ -13,6 +13,7 @@ import {
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import {
   backtestJobs,
+  symbolMasterCoverage,
   symbolMasterVersions,
   symbols,
 } from '../../src/server/shared/db/schema.js';
@@ -1470,6 +1471,11 @@ describe('remote backtest worker lease API', () => {
 
   it('runs the real remote supervisor and child process end to end', async () => {
     seedCurrentIdentity();
+    ctx.container.database.db.insert(symbolMasterCoverage).values({
+      startDate: '2026-01-05',
+      endDate: '2026-02-05',
+      syncedAtMs: Date.now(),
+    }).run();
     await seedCorporateActionCoverage(ctx.container, ['005930'], yearRange(2025, 2026));
     const candles: Candle[] = [];
     for (let tsMs = Date.UTC(2026, 0, 5); tsMs <= Date.UTC(2026, 1, 5); tsMs += DAY_MS) {

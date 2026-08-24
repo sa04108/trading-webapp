@@ -368,9 +368,17 @@ export function createContainer(config: AppConfig): Container {
     jobQueue,
     config.maxQueuedBacktests,
     clock,
-    (schedule) => assertSafePinnedScheduleIdentities(schedule, {
-      symbolMaster: symbolMasterService,
-    }),
+    (schedule, period) => {
+      assertSafePinnedScheduleIdentities(schedule, {
+        symbolMaster: symbolMasterService,
+      });
+      if (!symbolMasterService.isRangeCovered(period.from, period.to)) {
+        throw new Error(
+          '종목 마스터가 백테스트 기간 전체를 커버하지 않습니다 — '
+            + '기간 전체 KRX 데이터를 동기화한 뒤 난수 시드 실험을 다시 시작하세요.',
+        );
+      }
+    },
   );
   const backtestNotificationListener = createBacktestNotificationListener({
     queue: jobQueue,

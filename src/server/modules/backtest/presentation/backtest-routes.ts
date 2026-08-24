@@ -556,6 +556,24 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       };
     }
 
+    // 리밸런스 날짜만 각각 수집된 coverage 섬이면 schedule 자체는 해소되지만,
+    // 그 사이에 생긴 상장폐지·거래정지·종목 변경을 알 수 없다. 이 상태를 경고로만
+    // 통과시키면 이미 없어진 종목을 계속 거래하는 낙관 편향이 생길 수 있으므로,
+    // 기간 전체 KRX 마스터가 이어질 때까지 실행 생성 경로를 모두 막는다.
+    // cached clone preview는 resolver를 다시 돌리지 않으므로 저장된 boolean을 신뢰하지
+    // 않고 현재 coverage를 직접 확인한다. 그 사이 백필이 끝난 경우도 낡은 false로
+    // 오거부하지 않는다.
+    if (!symbolMaster.isRangeCovered(body.period.from, body.period.to)) {
+      return {
+        ok: false,
+        status: 422,
+        errors: [
+          '종목 마스터가 백테스트 기간 전체를 커버하지 않습니다 — '
+            + '유니버스 미리보기에서 기간 전체 동기화를 완료한 뒤 다시 제출하세요.',
+        ],
+      };
+    }
+
     // 완료된 preparation 뒤 등록 행이 바뀌거나, clone 계열이 resolver 재실행 없이
     // cached preview를 재사용해도 shortCode 기반 봉·팩트를 다른 증권과 합치지 않는다.
     // schedule 원문을 보므로 unionEntries의 shortCode first-wins에도 의존하지 않는다.
@@ -1214,11 +1232,22 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const identityBlocker = reusable === null
       ? null
       : pinnedScheduleIdentityError(reusable.schedule, symbolMaster);
+    const reusablePreview = identityBlocker === null && reusable !== null
+      ? {
+          ...reusable.response,
+          // cached preview는 resolver를 다시 실행하지 않는다. 전체 KRX coverage만은
+          // 현재 상태로 덮어 위저드가 낡은 true를 믿고 동기화 단계를 건너뛰지 않게 한다.
+          periodCovered: symbolMaster.isRangeCovered(
+            rebased.request.period.from,
+            rebased.request.period.to,
+          ),
+        }
+      : null;
     return {
       request: rebased.request,
       warnings: rebased.warnings,
       blockers: identityBlocker === null ? [] : [identityBlocker],
-      reusablePreview: identityBlocker === null ? reusable?.response ?? null : null,
+      reusablePreview,
     };
   });
 

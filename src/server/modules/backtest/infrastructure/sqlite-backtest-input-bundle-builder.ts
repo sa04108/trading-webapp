@@ -92,6 +92,11 @@ export class SqliteBacktestInputBundleBuilder {
             INSERT INTO main.symbol_master_storage_state
             SELECT * FROM source.symbol_master_storage_state;
 
+            -- child가 기간 중 상장폐지·종목 변경 누락을 fail-closed로 확인한다.
+            -- coverage는 전역 날짜 수집 상태라 선택 종목으로 좁힐 축이 없다.
+            INSERT INTO main.symbol_master_coverage
+            SELECT * FROM source.symbol_master_coverage;
+
             INSERT INTO main.symbol_master_trading_days
             SELECT * FROM source.symbol_master_trading_days;
 
