@@ -85,7 +85,7 @@ describe('레지스트리 등록', () => {
       .properties;
     expect(properties.fastEmaBars?.title).toBe('단기 이동평균 봉 수');
     expect(properties.fastEmaBars?.default).toBe(12);
-    expect(emaTrendSwitchStrategy.version).toBe('1.1.1');
+    expect(emaTrendSwitchStrategy.version).toBe('1.1.2');
   });
 });
 

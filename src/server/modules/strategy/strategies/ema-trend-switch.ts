@@ -142,7 +142,7 @@ export const emaTrendSwitchStrategy: TradingStrategy<
   EmaTrendSwitchState
 > = {
   id: 'ema-trend-switch',
-  version: '1.1.1',
+  version: '1.1.2',
   name: 'EMA 추세 스위치',
   description:
     '단기·장기 이동평균 간격이 벌어진 종목에 올라타고, 고점에서 변동성 폭만큼 내려오면 팝니다. ' +
@@ -182,7 +182,13 @@ export const emaTrendSwitchStrategy: TradingStrategy<
       updateEma(symbolState.fast, bar.close, parameters.fastEmaBars);
       updateEma(symbolState.slow, bar.close, parameters.slowEmaBars);
       updateAtr(symbolState.atr, bar, parameters.atrPeriod);
-      recordCorrelationClose(state, symbol, bar.tsMs, bar.close);
+      recordCorrelationClose(
+        state,
+        symbol,
+        bar.tsMs,
+        bar.close,
+        parameters.correlationBars * 2 + 14,
+      );
     }
 
     // 2) 현재 활성 멤버십의 그룹 확정. 새 종목이 충분한 이력을 채우거나 멤버십이

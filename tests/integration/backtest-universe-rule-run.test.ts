@@ -797,6 +797,7 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
       // 거래일)는 seedSymbolMasterUniverse 가 MASTER_DATES 를 이미 거래일로 심어
       // 뒀으므로 따로 채울 필요가 없다.
       const delistedDate = new Date(lastDoomed.tsMs + DAY).toISOString().slice(0, 10);
+      const delistedTsMs = Date.parse(`${delistedDate}T00:00:00Z`);
       ctx.container.database.db
         .update(symbolMasterVersions)
         .set({ validToDate: delistedDate })
@@ -847,18 +848,18 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
       const expectedFromClose = simulateFill(
         { symbol: '000660', side: 'SELL', quantity: 1, reason: 'DELISTED' },
         lastDoomed.close,
-        lastDoomed.tsMs,
+        delistedTsMs,
         executionProfile,
       );
       const expectedFromOpen = simulateFill(
         { symbol: '000660', side: 'SELL', quantity: 1, reason: 'DELISTED' },
         lastDoomed.open,
-        lastDoomed.tsMs,
+        delistedTsMs,
         executionProfile,
       );
       expect(delistingTrade?.exitPrice).toBe(expectedFromClose.price);
       expect(delistingTrade?.exitPrice).not.toBe(expectedFromOpen.price);
-      expect(delistingTrade?.exitTsMs).toBe(lastDoomed.tsMs);
+      expect(delistingTrade?.exitTsMs).toBe(delistedTsMs);
 
       // 청산했으므로 기간 종료 시점 미청산 포지션으로 남지 않는다
       const run = ctx.container.resultsService.getRun(jobId)!;

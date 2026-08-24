@@ -36,13 +36,14 @@ export interface StrategyBarContext {
   corporateActions(symbol: string): readonly CorporateAction[];
   /**
    * 멤버십 일정(스펙 2026-08-05, §9.5)의 현재 시점 활성 유니버스 — 전략이 매수 후보를
-   * 스스로 걸러낼 수 있게 노출한다. null 이면 일정이 지정되지 않아 제한이 없다는 뜻이다
-   * (엔진의 리스크 검증도 이때는 항상 통과시킨다).
+   * 스스로 걸러낼 수 있게 노출한다. null 이면 일정도 영구 거래 제외도 없어 제한이 없다는
+   * 뜻이다. 일정이 없어도 상장폐지 경계를 지난 단축코드가 있으면 나머지 집합으로 구체화된다.
    */
   readonly tradableSymbols: ReadonlySet<string> | null;
   /**
-   * 현재 schedule의 활성 멤버십. 거래정지·무거래 종목도 포함한다. 그룹·보유 제약처럼
-   * "유니버스에 속하는가"를 판단할 때 쓰고, 실제 신규 매수 가능 여부는 tradableSymbols를 쓴다.
+   * 현재 schedule의 활성 멤버십. 거래정지·무거래 종목도 포함하지만, 발행사를 구분할 수
+   * 없는 상장폐지 단축코드는 제외한다. 그룹·보유 제약처럼 "유니버스에 속하는가"를 판단할
+   * 때 쓰고, 실제 신규 매수 가능 여부는 tradableSymbols를 쓴다.
    */
   readonly activeUniverseSymbols: ReadonlySet<string> | null;
   /** 현재 활성 schedule member에 제출 시점에 pin된 선정 지표 */

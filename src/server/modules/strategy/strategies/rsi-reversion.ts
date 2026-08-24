@@ -115,7 +115,7 @@ function getSymbolState(state: RsiReversionState, symbol: string): SymbolState {
 
 export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiReversionState> = {
   id: 'rsi-reversion',
-  version: '1.1.1',
+  version: '1.1.2',
   name: 'RSI 되돌림',
   description:
     'RSI 과매도 종목을 사서 RSI 가 회복하면 팝니다. 반대로 움직이는 종목(예: 레버리지·인버스 쌍)을 ' +
@@ -153,7 +153,13 @@ export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiRe
       const symbolState = getSymbolState(state, symbol);
       updateRsi(symbolState.rsi, bar.close, parameters.rsiPeriod);
       updateAtr(symbolState.atr, bar, parameters.atrPeriod);
-      recordCorrelationClose(state, symbol, bar.tsMs, bar.close);
+      recordCorrelationClose(
+        state,
+        symbol,
+        bar.tsMs,
+        bar.close,
+        parameters.correlationBars * 2 + 14,
+      );
     }
 
     // 2) 현재 활성 멤버십의 그룹 확정 (ema-trend-switch 와 같은 규칙).

@@ -56,7 +56,8 @@ export interface BacktestRunInput {
    * 첫 entry 의 `fromTsMs` 보다 이른 시점도 첫 entry 를 그대로 적용한다 — period.from 이
    * 곧 첫 리밸런스 날짜라 실질적으로 그 이전 봉이 없고, 굳이 "제한 없음"으로 예외를 두면
    * 그 짧은 구간에서만 안전망이 꺼지는 방어 구멍이 된다.
-   * 미지정이거나 빈 배열이면 tradableSymbols 는 항상 null(제한 없음) — 기존 전략 동작 불변.
+   * 미지정이거나 빈 배열이면 보통 tradableSymbols 는 null(제한 없음)이다. 다만 실행 중
+   * 상장폐지 경계를 지난 단축코드가 생기면 그 코드만 제외한 집합으로 구체화한다.
    */
   readonly universeSchedule?: readonly BacktestUniverseScheduleEntry[];
   /**
@@ -68,10 +69,10 @@ export interface BacktestRunInput {
   /**
    * 상장폐지 효력 시각 (심볼 → tsMs 목록). 기간 안에 폐지된 종목만 담는다.
    *
-   * 값이 목록인 이유는 KRX 가 폐지된 여섯 자리 단축코드를 나중에 다른 회사에 다시
-   * 주기 때문이다. 한 코드가 실행 기간 안에서 두 번 폐지될 수 있고, 앞 폐지가 먼저
-   * 산 포지션이 실제로 맞는 폐지다. 코드당 하나만 담으면 그 포지션이 몇 년 뒤
-   * 다른 회사의 종가로 나간다. 순서는 상관없다 — 엔진이 폐지마다 따로 접는다.
+   * KRX 가 폐지된 여섯 자리 단축코드를 나중에 다른 회사에 다시 줄 수 있다. 현재
+   * Candle·주문에는 발행사 식별자가 없으므로, 가장 이른 폐지 경계까지만 해당 코드를
+   * 사용하고 이후 봉·신규 주문은 실행 끝까지 fail-closed한다. 새 발행사를 다시
+   * 거래하려면 Candle부터 주문까지 issuer epoch를 전달하는 별도 모델이 필요하다.
    *
    * 이 맵은 엔진만 본다. `StrategyBarContext` 에 노출하지 않는다 —
    * 전략이 "이 종목이 곧 폐지된다" 를 미리 알 경로를 만들지 않기 위해서다.
@@ -126,8 +127,9 @@ export interface BacktestRunResult {
  * 2.1.0: 직전 거래 봉 거래량 기준 participation 한도를 적용한다.
  * 2.2.0: Sortino 하방편차를 전체 관측일 기준으로 계산한다.
  * 2.3.0: 2봉 리밸런스 전략에서 다음 리밸런스 신호가 유실되는 일정을 fail-fast한다.
+ * 2.4.0: 상장폐지 경계를 지난 주문이 재사용된 단축코드의 새 종목에 체결되지 않게 한다.
  */
-export const ENGINE_VERSION = '2.3.0';
+export const ENGINE_VERSION = '2.4.0';
 
 const PROGRESS_INTERVAL_BARS = 500;
 /** 전략에 노출된 RNG 흐름과 매수 우선순위 RNG 흐름을 분리하는 32-bit salt. */
@@ -174,29 +176,78 @@ function* runBacktestSteps(
   input: BacktestRunInput,
   hooks: EngineHooks = {},
 ): Generator<void, BacktestRunResult, void> {
-  const sorted = [...input.candles].sort((a, b) =>
+  // 같은 여섯 자리 단축코드의 새 발행사 봉을 구분할 식별자가 아직 없다. 가장 이른
+  // 폐지 효력 시각 이후의 봉을 먼저 제거해야 그 봉이 전략 history·후보 선정·RNG 호출·
+  // 자산곡선 시점까지 오염시키지 않는다. 정확한 재진입 지원 전까지의 보수적 안전선이다.
+  const firstDelistedTsMsBySymbol = new Map<string, number>();
+  for (const [symbol, delistedTsMsList] of input.delistedTsMsBySymbol ?? []) {
+    for (const delistedTsMs of delistedTsMsList) {
+      const previous = firstDelistedTsMsBySymbol.get(symbol);
+      if (previous === undefined || delistedTsMs < previous) {
+        firstDelistedTsMsBySymbol.set(symbol, delistedTsMs);
+      }
+    }
+  }
+  const allSorted = [...input.candles].sort((a, b) =>
     a.tsMs === b.tsMs ? (a.symbol < b.symbol ? -1 : 1) : a.tsMs - b.tsMs,
   );
+  const ignoredPostDelistingCandleSymbols = new Set<string>();
+  const sorted = allSorted
+    .filter((candle) => {
+      const delistedTsMs = firstDelistedTsMsBySymbol.get(candle.symbol);
+      if (delistedTsMs === undefined || candle.tsMs < delistedTsMs) return true;
+      ignoredPostDelistingCandleSymbols.add(candle.symbol);
+      return false;
+    });
 
-  // 타임라인 구성
+  // 실제 가격·전략 입력과 결과 시간축을 분리한다. 폐지 뒤 재사용 코드의 봉은 전략에서
+  // 제거하지만, 그 봉이 실행 후반부의 유일한 시장 시계였더라도 CAGR 기간을 줄이면 안 된다.
+  // raw 쪽에는 시각별 개수만 둔다. 가격 Map까지 한 벌 더 만들면 재사용 코드가 한 종목만
+  // 섞여도 거의 모든 timestamp bucket을 복제해 대형 실행의 RSS가 크게 늘어난다.
+  const allBarCountByTs = new Map<number, number>();
+  for (const candle of allSorted) {
+    allBarCountByTs.set(candle.tsMs, (allBarCountByTs.get(candle.tsMs) ?? 0) + 1);
+  }
   const barsByTs = new Map<number, Map<string, Candle>>();
   for (const candle of sorted) {
     const bucket = barsByTs.get(candle.tsMs) ?? new Map<string, Candle>();
     bucket.set(candle.symbol, candle);
     barsByTs.set(candle.tsMs, bucket);
   }
-  const timeline = [...barsByTs.keys()].sort((a, b) => a - b);
+  const timeline = [...new Set([
+    ...allBarCountByTs.keys(),
+    ...firstDelistedTsMsBySymbol.values(),
+  ])].sort((a, b) => a - b);
   const symbols = [...new Set(sorted.map((c) => c.symbol))].sort();
-  const totalBars = sorted.filter(
+  const totalBars = allSorted.filter(
     (candle) => input.tradeFromTsMs === undefined || candle.tsMs >= input.tradeFromTsMs,
   ).length;
 
+  // 미청산 포지션 스냅샷이 "마지막으로 확인된 가격이 언제 것인지" 를 적는 데 쓴다.
+  const lastBarTsMsBySymbol = new Map<string, number>();
+  const lastBarBySymbol = new Map<string, Candle>();
+  for (const candle of sorted) {
+    lastBarTsMsBySymbol.set(candle.symbol, candle.tsMs);
+    lastBarBySymbol.set(candle.symbol, candle);
+  }
+
+  // 가격은 효력 시각 전 마지막 봉의 종가를 쓰되, 포지션·현금을 그 마지막 거래일에
+  // 미리 정리하지 않는다. 장기 거래정지 뒤 폐지되는 종목에서 현금을 수주~수개월 먼저
+  // 재투자하는 낙관 편향을 막기 위해 실제 retirement/정산은 효력 시각에 처리한다.
+  const delistingEvents = [...firstDelistedTsMsBySymbol].map(([symbol, tsMs]) => ({ symbol, tsMs }));
+  delistingEvents.sort((a, b) => (
+    a.tsMs === b.tsMs ? a.symbol.localeCompare(b.symbol) : a.tsMs - b.tsMs
+  ));
+  let delistingEventCursor = 0;
+
+  // 폐지 직전 마지막 봉은 기존 발행사의 유효한 확정 가격이므로 전략 시간축에 남긴다.
+  const strategyTimeline = [...barsByTs.keys()].sort((a, b) => a - b);
   const requiredRebalanceGapBars = strategy.requiredRebalanceGapBars ?? 0;
   if (!Number.isInteger(requiredRebalanceGapBars) || requiredRebalanceGapBars < 0) {
     throw new Error(`${strategy.id} requiredRebalanceGapBars는 0 이상의 정수여야 합니다`);
   }
   const spacingViolation = findRebalanceSpacingViolation(
-    timeline,
+    strategyTimeline,
     input.universeSchedule ?? [],
     requiredRebalanceGapBars,
     input.tradeFromTsMs,
@@ -207,42 +258,6 @@ function* runBacktestSteps(
     );
   }
 
-  // 미청산 포지션 스냅샷이 "마지막으로 확인된 가격이 언제 것인지" 를 적는 데 쓴다.
-  const lastBarTsMsBySymbol = new Map<string, number>();
-  for (const candle of sorted) lastBarTsMsBySymbol.set(candle.symbol, candle.tsMs);
-
-  // 폐지 청산 시점 — 폐지 하나하나마다 그 효력 시각보다 **앞선** 마지막 봉이다.
-  // 실행 전체의 마지막 봉으로 잡으면 안 된다. KRX 는 폐지된 여섯 자리 단축코드를
-  // 나중에 다른 회사에 다시 주므로, 같은 코드의 뒷날 봉이 실행 기간에 들어오면
-  // 몇 년 뒤 남의 회사 종가로 청산하게 된다. 같은 이유로 폐지를 코드당 하나로
-  // 접어서도 안 된다 — 재사용된 코드가 기간 안에서 두 번 폐지되면 먼저 산 포지션은
-  // 앞 폐지에서 나가야 한다. 봉은 전부 미리 들어와 있어 여기서 한 번에 접는다.
-  const liquidationBarTsMsBySymbol = new Map<string, Set<number>>();
-  if (input.delistedTsMsBySymbol !== undefined) {
-    // 폐지 대상 종목의 봉 시각만 모은다 — sorted 가 오름차순이라 이 목록도 오름차순이다
-    const barTsMsBySymbol = new Map<string, number[]>();
-    for (const candle of sorted) {
-      if (!input.delistedTsMsBySymbol.has(candle.symbol)) continue;
-      const list = barTsMsBySymbol.get(candle.symbol) ?? [];
-      list.push(candle.tsMs);
-      barTsMsBySymbol.set(candle.symbol, list);
-    }
-    for (const [symbol, delistedTsMsList] of input.delistedTsMsBySymbol) {
-      const barTsMsList = barTsMsBySymbol.get(symbol) ?? [];
-      const liquidationTsMsSet = new Set<number>();
-      for (const delistedTsMs of delistedTsMsList) {
-        let lastBefore: number | undefined;
-        for (const barTsMs of barTsMsList) {
-          if (barTsMs >= delistedTsMs) break;
-          lastBefore = barTsMs;
-        }
-        // 폐지 시각 이전 봉이 하나도 없으면 청산할 자리가 없다
-        if (lastBefore !== undefined) liquidationTsMsSet.add(lastBefore);
-      }
-      if (liquidationTsMsSet.size > 0) liquidationBarTsMsBySymbol.set(symbol, liquidationTsMsSet);
-    }
-  }
-
   const rng = createRng(input.randomSeed);
   // 매수 경쟁이 전략의 RNG 호출 횟수를 바꾸거나, 전략의 난수 사용량이
   // 체결 우선순위를 바꾸지 않도록 같은 seed의 별도 스트림을 쓴다.
@@ -250,6 +265,10 @@ function* runBacktestSteps(
   const historyBySymbol = new Map<string, Candle[]>(symbols.map((s) => [s, []]));
   const lastCloseBySymbol = new Map<string, number>();
   const positions = new Map<string, Position>();
+  // Candle과 주문은 단축코드만 가지므로, 한 번 폐지 경계를 지난 코드를 새 발행사와
+  // 안전하게 구분할 수 없다. 해당 실행의 남은 기간에는 신규 주문을 fail-closed한다.
+  const retiredSymbols = new Set<string>();
+  const retiredOrderRejectedSymbols = new Set<string>();
 
   let cash = input.initialCash;
   let pendingOrders: OrderIntent[] = [];
@@ -349,13 +368,55 @@ function* runBacktestSteps(
     return value;
   };
 
+  const recordProgress = (tsMs: number, barCount: number): void => {
+    processedBars += barCount;
+    if (
+      hooks.onProgress
+      && (
+        processedBars % PROGRESS_INTERVAL_BARS < barCount
+        || tsMs === timeline[timeline.length - 1]
+      )
+    ) {
+      hooks.onProgress({ processedBars, totalBars, currentTsMs: tsMs });
+    }
+  };
+
   for (const tsMs of timeline) {
     if (hooks.shouldCancel?.()) {
       cancelled = true;
       break;
     }
 
-    const bars = barsByTs.get(tsMs) as Map<string, Candle>;
+    const allBarCount = allBarCountByTs.get(tsMs) ?? 0;
+    const bars = barsByTs.get(tsMs) ?? new Map<string, Candle>();
+    const delistingSymbolsThisBar = new Set<string>();
+    while (
+      delistingEventCursor < delistingEvents.length
+      && (delistingEvents[delistingEventCursor] as { tsMs: number }).tsMs <= tsMs
+    ) {
+      const event = delistingEvents[delistingEventCursor] as {
+        symbol: string;
+        tsMs: number;
+      };
+      delistingSymbolsThisBar.add(event.symbol);
+      delistingEventCursor += 1;
+    }
+
+    const isTradeBar = input.tradeFromTsMs === undefined || tsMs >= input.tradeFromTsMs;
+    visitedBars += allBarCount;
+
+    // 폐지 뒤 재사용된 코드의 raw 봉은 결과 기간·진행률 시계에만 남긴다. 그 시각에
+    // 실제 폐지 이벤트도 없다면 전략·일정·주문 상태를 전진시키지 않는다.
+    if (bars.size === 0 && delistingSymbolsThisBar.size === 0) {
+      if (isTradeBar) {
+        equityPoints.push({ tsMs, equity: markToMarket() });
+        maxConcurrentPositions = Math.max(maxConcurrentPositions, positions.size);
+        recordProgress(tsMs, allBarCount);
+      }
+      if (visitedBars % CANCEL_YIELD_INTERVAL_BARS < allBarCount) yield;
+      continue;
+    }
+
     priorVolumeBySymbolThisBar = new Map(
       [...bars.keys()].map((symbol) => [
         symbol,
@@ -364,9 +425,76 @@ function* runBacktestSteps(
     );
     volumeUnitRatioBySymbolThisBar = new Map();
     filledQuantityBySymbolThisBar = new Map();
-    const isTradeBar = input.tradeFromTsMs === undefined || tsMs >= input.tradeFromTsMs;
     const promotedBuySymbolsThisBar = new Set<string>();
-    visitedBars += bars.size;
+    let delistingLiquidationOccurred = false;
+
+    // 상장폐지 효력 시각에 먼저 코드를 retirement하고, 효력 직전 마지막 실거래
+    // 종가로 포지션을 정산한다. 마지막 거래일에 미리 현금을 풀지 않으면서도 효력일
+    // 시가 체결 전에 포지션이 닫혀, 같은 단축코드의 새 발행사 주문으로 넘어가지 않는다.
+    // DELISTED 정산은 주문장 체결이 아니어서 participation 한도는 적용하지 않는다.
+    if (delistingSymbolsThisBar.size > 0) {
+      retireSymbols(delistingSymbolsThisBar);
+      for (const symbol of delistingSymbolsThisBar) {
+        const position = positions.get(symbol);
+        const liquidationBar = lastBarBySymbol.get(symbol);
+        if (position === undefined || position.quantity <= 0) {
+          if (unresolvedForcedExitSymbols.has(symbol)) resolveForcedExit(symbol, true);
+          continue;
+        }
+        if (liquidationBar === undefined) {
+          continue;
+        }
+
+        const before = trades.length;
+        const fill = executeOrder(
+          { symbol, side: 'SELL', quantity: position.quantity, reason: 'DELISTED' },
+          liquidationBar,
+          tsMs,
+          liquidationBar.close,
+        );
+        if (fill) {
+          fills.push(fill);
+          delistingLiquidationOccurred = true;
+        }
+        const trade = trades[before];
+        if (trade !== undefined) {
+          delistingLiquidations.push({ symbol, tsMs, netPnl: trade.netPnl });
+        }
+        if (!positions.has(symbol)) {
+          strategy.onForcedExit?.(symbol, state);
+          if (unresolvedForcedExitSymbols.has(symbol)) resolveForcedExit(symbol, false);
+        }
+      }
+      if (buysAwaitingForcedExitAttempt && unresolvedForcedExitSymbols.size === 0) {
+        buysAwaitingForcedExitAttempt = false;
+      }
+    }
+
+    const deferredBuysWereReadyBeforeOpen = !buysAwaitingForcedExitAttempt
+      && deferredRebalanceBuys.length > 0;
+
+    // 휴일 폐지처럼 유효 가격 봉이 없는 이벤트 시각은 retirement·정산만 수행한다.
+    // unrelated forced-exit의 "첫 거래 가능 봉 시도"를 소비하거나 일정/RNG를 전진시키면
+    // 실제 다음 open보다 한 봉 일찍 대체 BUY가 풀린다. 방금 장벽이 해제된 deferred BUY도
+    // 여기서 승격하지 않는다. 다음 실제 봉에서 최신 schedule을 먼저 반영한 뒤 pre-open에
+    // 승격해야 곧 편출될 주문이 포지션 cap 슬롯을 빼앗지 않는다.
+    if (bars.size === 0) {
+      if (isTradeBar) {
+        // 미보유 종목의 합성 이벤트만으로 일간 수익률 관측수를 늘리지 않는다. 실제
+        // 정산이 있었거나 raw 시장 봉이 있던 시각만 결과 시간축에 남긴다.
+        if (delistingLiquidationOccurred || allBarCount > 0) {
+          equityPoints.push({ tsMs, equity: markToMarket() });
+          maxConcurrentPositions = Math.max(maxConcurrentPositions, positions.size);
+        }
+        recordProgress(tsMs, allBarCount);
+      }
+      if (visitedBars % CANCEL_YIELD_INTERVAL_BARS < allBarCount) yield;
+      continue;
+    }
+
+    // 효력일 전에는 폐지 정보를 노출하지 않는다. 효력 시각부터는 위에서 retirement한
+    // 코드를 전략 bars/history/facts/universe에서 일관되게 감춘다.
+    const contextRetiredSymbols = new Set(retiredSymbols);
 
     // 일정이 없는 실행에서 이전 시점의 거래불가 필터가 남지 않게 매 시점 초기화한다
     if (sortedSchedule.length === 0) {
@@ -395,7 +523,7 @@ function* runBacktestSteps(
     // schedule entry의 달력 날짜가 휴일이면 이 조건은 다음 실제 봉에서 처음 참이 된다.
     // warm-up 봉은 멤버십과 지표만 갱신하고 activation을 소비하지 않는다.
     let isRebalanceBar = false;
-    if (isTradeBar) {
+    if (isTradeBar && bars.size > 0) {
       if (sortedSchedule.length === 0) {
         isRebalanceBar = !schedulelessRebalanceEmitted;
         schedulelessRebalanceEmitted = true;
@@ -450,6 +578,7 @@ function* runBacktestSteps(
       [...pendingOrders, ...deferredRebalanceBuys].map((order) => order.symbol),
     );
     for (const [symbol, bar] of bars) {
+      if (retiredSymbols.has(symbol)) continue;
       const basisTsMs = quantityBasisTsMsBySymbol.get(symbol) ?? -1;
       quantityBasisTsMsBySymbol.set(symbol, tsMs);
       const due = factView
@@ -523,7 +652,11 @@ function* runBacktestSteps(
         pendingOrders.filter((order) => order.side === 'SELL').map((order) => order.symbol),
       );
       for (const [symbol, position] of positions) {
-        if (membershipSymbols.has(symbol) || position.quantity <= 0) continue;
+        if (
+          retiredSymbols.has(symbol)
+          || membershipSymbols.has(symbol)
+          || position.quantity <= 0
+        ) continue;
         const isNewForcedExit = !unresolvedForcedExitSymbols.has(symbol);
         // 이전 전략 SELL이나 지연된 forced SELL을 전량 engine order 한 건으로 교체한다.
         pendingOrders = pendingOrders.filter(
@@ -564,11 +697,24 @@ function* runBacktestSteps(
       pendingOrders = reconciledPending;
     }
 
+    // 이전 시각에 이미 청산 장벽이 해제된 deferred BUY는 이번 실제 open에 체결할 수
+    // 있다. 현재 리밸런스가 새 forced exit를 만들었다면 장벽이 다시 생겨 그대로 둔다.
+    if (deferredBuysWereReadyBeforeOpen && !buysAwaitingForcedExitAttempt) {
+      promoteDeferredBuys(promotedBuySymbolsThisBar);
+    }
+
     // 2~3. 대기 주문 체결 + 현금·포지션 갱신
     const stillPending: OrderIntent[] = [];
     for (const order of pendingOrders) {
       if (order.side === 'BUY' && buysAwaitingForcedExitAttempt) {
         deferBuy(order);
+        continue;
+      }
+      if (order.side === 'BUY' && nonTradingNow?.has(order.symbol) === true) {
+        // 발행 뒤 거래정지된 BUY도 다음 거래 가능 봉까지 보존한다. deferred 승격은
+        // 이미 현재 시가가 지난 뒤 일어나므로, 이 방어가 있어야 다음 정지 봉에도
+        // 잘못 체결되지 않으면서 주문 자체는 재개일까지 살아 있다.
+        stillPending.push(order);
         continue;
       }
       const bar = bars.get(order.symbol);
@@ -615,79 +761,62 @@ function* runBacktestSteps(
       if (!positions.has(symbol)) resolveForcedExit(symbol, true);
     }
 
-    // 청산을 방금 모두 마쳤다면 미뤄 둔 매수는 **이번** 체결 루프로 되돌리지 않고
-    // 다음 봉 대기열에 둔다. 이 줄이 D1 sell → D2 buy 간격을 만든다.
-    if (isTradeBar && !buysAwaitingForcedExitAttempt && deferredRebalanceBuys.length > 0) {
-      promoteDeferredBuys(promotedBuySymbolsThisBar);
-    }
-
     // 봉 이력·마지막 종가 갱신
     for (const [symbol, bar] of bars) {
+      if (contextRetiredSymbols.has(symbol)) continue;
       (historyBySymbol.get(symbol) as Candle[]).push(bar);
       lastCloseBySymbol.set(symbol, bar.close);
     }
+
+    // 폐지된 코드는 새 발행사와 구분할 수 없으므로 전략 입력에서도 완전히 감춘다.
+    // 주문 검증에서만 막으면 rank/top-N 후보 슬롯과 동시 BUY RNG 순서가 다른 종목의
+    // 결과까지 바꾼다.
+    const strategyBars = withoutRetiredMapEntries(bars, contextRetiredSymbols);
+    const strategyTradableSymbols = withoutRetiredSet(
+      tradableSymbols,
+      contextRetiredSymbols,
+      symbols,
+    );
+    const strategyActiveUniverseSymbols = withoutRetiredSet(
+      activeMembershipSymbols,
+      contextRetiredSymbols,
+      symbols,
+    );
 
     if (!isTradeBar) {
       const warmupContext: StrategyBarContext = {
         tsMs,
         isRebalanceBar: false,
-        bars,
-        getHistory: (symbol) => historyBySymbol.get(symbol) ?? [],
+        bars: strategyBars,
+        getHistory: (symbol) => contextRetiredSymbols.has(symbol)
+          ? []
+          : historyBySymbol.get(symbol) ?? [],
         portfolio: { cash, equity: markToMarket(), positions },
         rng,
-        fundamentals: (symbol) => factView.fundamentals(symbol),
-        corporateActions: (symbol) => factView.corporateActions(symbol, tsMs),
-        tradableSymbols,
-        activeUniverseSymbols: activeMembershipSymbols,
-        selectionMetric: (symbol) => activeSelectionMetrics?.get(symbol) ?? null,
+        fundamentals: (symbol) => contextRetiredSymbols.has(symbol)
+          ? null
+          : factView.fundamentals(symbol),
+        corporateActions: (symbol) => contextRetiredSymbols.has(symbol)
+          ? []
+          : factView.corporateActions(symbol, tsMs),
+        tradableSymbols: strategyTradableSymbols,
+        activeUniverseSymbols: strategyActiveUniverseSymbols,
+        selectionMetric: (symbol) => contextRetiredSymbols.has(symbol)
+          ? null
+          : activeSelectionMetrics?.get(symbol) ?? null,
       };
       // warm-up은 전략 지표/커서 상태만 전진시킨다. 반환 주문은 의도적으로 버린다.
-      strategy.onBars(warmupContext, state, input.parameters);
-      if (visitedBars % CANCEL_YIELD_INTERVAL_BARS < bars.size) yield;
+      // event-only 시각은 strategyTimeline의 실제 봉이 아니므로 RNG·2단계 신호 상태도
+      // 소비하지 않는다.
+      if (strategyBars.size > 0) strategy.onBars(warmupContext, state, input.parameters);
+      if (visitedBars % CANCEL_YIELD_INTERVAL_BARS < allBarCount) yield;
       continue;
     }
 
-    // 상장폐지 청산 — 폐지 효력 시각 직전 마지막 봉에서 종가로 전량 정산한다.
-    // 주문장 체결 모델이 아니므로 participation 한도는 적용하지 않는다.
-    //
-    // 평가금액 갱신보다 먼저다. 이 시점 자산곡선이 청산 대금을 이미 반영해야
-    // 폐지 손실이 곡선에 남는다.
-    //
-    // 체결가는 이 봉의 종가다. `krx_non_trading_days.lastClose` 는 쓰지 않는다 —
-    // 정지 중 가격은 팔 수 있는 가격이 아니다. 정지 상태로 폐지된 종목은
-    // 정지 직전 실거래가로 나간다.
-    //
-    // 정리매매 종가를 따로 추정하지 않는다. KRX 일봉에 정리매매 기간 봉이 들어 있어
-    // 폐지 직전 마지막 봉이 곧 정리매매 최종가다. 시장이 매긴 회수가치를 그대로 쓴다.
-    if (liquidationBarTsMsBySymbol.size > 0) {
-      for (const [symbol, bar] of bars) {
-        if (liquidationBarTsMsBySymbol.get(symbol)?.has(tsMs) !== true) continue;
-
-        // D0에 방금 만든 REBALANCE_EXIT가 pendingOrders에 있을 수 있다.
-        // 이 폐지 청산이 선행하면 아래 resolveForcedExit가 그 주문도 같이 제거한다.
-        // 전략이 이 마지막 봉에서 새로 내는 주문은 이 블록 뒤(전략 호출)에 등록되므로
-        // 여기서 손댈 수 없고, 체결될 봉이 다시 오지 않아 기간 종료 폐기 경고로 드러난다.
-
-        const position = positions.get(symbol);
-        if (position === undefined || position.quantity <= 0) continue;
-
-        const before = trades.length;
-        const fill = executeOrder(
-          { symbol, side: 'SELL', quantity: position.quantity, reason: 'DELISTED' },
-          bar,
-          tsMs,
-          bar.close,
-        );
-        if (fill) fills.push(fill);
-        const trade = trades[before];
-        if (trade !== undefined) {
-          delistingLiquidations.push({ symbol, tsMs, netPnl: trade.netPnl });
-        }
-        if (!positions.has(symbol)) {
-          strategy.onForcedExit?.(symbol, state);
-          if (unresolvedForcedExitSymbols.has(symbol)) resolveForcedExit(symbol, false);
-        }
-      }
+    // 폐지·유니버스 이탈 청산을 모두 마쳤다면 미뤄 둔 매수는 **이번** 체결 루프로
+    // 되돌리지 않고 다음 봉 대기열에 둔다. 그래야 이미 지난 현재 시가에 소급 체결되지 않는다.
+    if (!buysAwaitingForcedExitAttempt && deferredRebalanceBuys.length > 0) {
+      promoteDeferredBuys(promotedBuySymbolsThisBar);
     }
 
     // 4. 평가금액 갱신
@@ -703,15 +832,23 @@ function* runBacktestSteps(
     const context: StrategyBarContext = {
       tsMs,
       isRebalanceBar,
-      bars,
-      getHistory: (symbol) => historyBySymbol.get(symbol) ?? [],
+      bars: strategyBars,
+      getHistory: (symbol) => contextRetiredSymbols.has(symbol)
+        ? []
+        : historyBySymbol.get(symbol) ?? [],
       portfolio: portfolioView,
       rng,
-      fundamentals: (symbol) => factView.fundamentals(symbol),
-      corporateActions: (symbol) => factView.corporateActions(symbol, tsMs),
-      tradableSymbols,
-      activeUniverseSymbols: activeMembershipSymbols,
-      selectionMetric: (symbol) => activeSelectionMetrics?.get(symbol) ?? null,
+      fundamentals: (symbol) => contextRetiredSymbols.has(symbol)
+        ? null
+        : factView.fundamentals(symbol),
+      corporateActions: (symbol) => contextRetiredSymbols.has(symbol)
+        ? []
+        : factView.corporateActions(symbol, tsMs),
+      tradableSymbols: strategyTradableSymbols,
+      activeUniverseSymbols: strategyActiveUniverseSymbols,
+      selectionMetric: (symbol) => contextRetiredSymbols.has(symbol)
+        ? null
+        : activeSelectionMetrics?.get(symbol) ?? null,
     };
     const decision = strategy.onBars(context, state, input.parameters);
 
@@ -721,7 +858,12 @@ function* runBacktestSteps(
     // 그대로 쓰면 현금이나 maxPositions 슬롯이 부족할 때 종목코드순 같은 구현 상세가
     // 수익률을 결정한다. SELL의 상대 위치는 보존하고, 같은 onBars 호출에서 발행된
     // BUY 슬롯만 seeded Fisher–Yates로 섞어 같은 seed는 재현하고 seed별 실험을 가능하게 한다.
-    for (const order of randomizeSimultaneousBuyPriority(decision.orders)) {
+    const eligibleOrders = decision.orders.filter((order) => {
+      if (order.side !== 'BUY' || !retiredSymbols.has(order.symbol)) return true;
+      warnRetiredOrder(order.symbol);
+      return false;
+    });
+    for (const order of randomizeSimultaneousBuyPriority(eligibleOrders)) {
       if (
         order.side === 'SELL'
         && unresolvedForcedExitSymbols.has(order.symbol)
@@ -730,18 +872,19 @@ function* runBacktestSteps(
       }
       const shouldDeferBuy = order.side === 'BUY'
         && (isRebalanceBar || buysAwaitingForcedExitAttempt);
-      const validated = validateOrder(order, shouldDeferBuy);
+      const validated = validateOrder(order, { ignorePositionCap: shouldDeferBuy });
       if (!validated) continue;
+      if (order.side === 'BUY' && promotedBuySymbolsThisBar.has(order.symbol)) {
+        // 청산 직후 승격된 BUY를 전략이 같은 봉에서 다시 계산하면 최신 수량 한 건으로
+        // 바꾼다. 리밸런스 봉이라 최신 주문이 다시 deferred되는 경우에도 먼저 승격본을
+        // 빼야, 봉 끝 승격 뒤 다음 open에 두 건이 함께 체결되지 않는다.
+        pendingOrders = pendingOrders.filter(
+          (pending) => !(pending.side === 'BUY' && pending.symbol === order.symbol),
+        );
+      }
       if (shouldDeferBuy) {
         deferBuy(validated);
       } else {
-        if (order.side === 'BUY' && promotedBuySymbolsThisBar.has(order.symbol)) {
-          // 청산 체결 직후 승격된 BUY를 전략이 같은 봉에서 다시 계산하면 최신 수량 한
-          // 건으로 바꾼다. 둘 다 남기면 다음 open에 같은 종목을 두 번 산다.
-          pendingOrders = pendingOrders.filter(
-            (pending) => !(pending.side === 'BUY' && pending.symbol === order.symbol),
-          );
-        }
         pendingOrders.push(validated);
       }
       // 이 종목의 봉을 한 번도 본 적이 없을 때만 기준 시각을 지금으로 놓는다.
@@ -763,14 +906,11 @@ function* runBacktestSteps(
     }
 
     // 9. 진행률
-    processedBars += bars.size;
-    if (hooks.onProgress && (processedBars % PROGRESS_INTERVAL_BARS < bars.size || tsMs === timeline[timeline.length - 1])) {
-      hooks.onProgress({ processedBars, totalBars, currentTsMs: tsMs });
-    }
+    recordProgress(tsMs, allBarCount);
 
     // 취소 확인 창. `runBacktest`(동기 드라이버)는 이 yield 를 그냥 흘려보낸다.
     // `runBacktestCancellable` 만 여기서 실제로 이벤트 루프에 양보한다.
-    if (visitedBars % CANCEL_YIELD_INTERVAL_BARS < bars.size) {
+    if (visitedBars % CANCEL_YIELD_INTERVAL_BARS < allBarCount) {
       yield;
     }
   }
@@ -843,7 +983,7 @@ function* runBacktestSteps(
   // "거래불가일 정보가 없습니다" 를 함께 내보낸다 — 경고가 다시 거짓말을 하는 자리다
   // (D-046, 설계 §4). 판정 규칙은 액면분할(hasCorporateActionFacts)과 같다.
   const correctedItems: string[] = [];
-  // 일정이 비면 엔진은 tradableSymbols 를 계속 null(제한 없음)로 두므로 유니버스 선정이 없다
+  // 일정이 비면 폐지 뒤 안전 필터가 생겨도 시점별 **선정**을 한 것은 아니다.
   if ((input.universeSchedule?.length ?? 0) > 0) correctedItems.push('시점별 유니버스 선정');
   if (input.delistedTsMsBySymbol !== undefined) correctedItems.push('상장폐지 청산');
   // 커버 구간으로만 가른다. 행이 몇 건 있어도 구간이 안 덮였으면 "모르는 날" 이 섞여 있다
@@ -879,6 +1019,16 @@ function* runBacktestSteps(
         // 같은 실행의 warningsJson 이 달라진다 (재현성 §9.5).
         + `. 손익 합계 ${Math.round(netPnl).toLocaleString('ko-KR')}원. `
         + '체결가는 그 종목의 마지막 거래 가능 봉 종가이며, 정리매매가 있었다면 그 가격이 반영됩니다.',
+    );
+  }
+  if (ignoredPostDelistingCandleSymbols.size > 0) {
+    const ignoredSymbols = [...ignoredPostDelistingCandleSymbols].sort();
+    const shown = ignoredSymbols.slice(0, 10).join(', ');
+    warnings.push(
+      `단축코드 재사용을 발행사별로 구분할 수 없어 첫 상장폐지 이후 가격 봉을 제외한 종목 `
+        + `${ignoredSymbols.length}건: ${shown}`
+        + (ignoredSymbols.length > 10 ? ` 외 ${ignoredSymbols.length - 10}종목` : '')
+        + '. 새 발행사의 수익 기회가 반영되지 않아 결과가 보수적일 수 있습니다.',
     );
   }
 
@@ -958,6 +1108,44 @@ function* runBacktestSteps(
     ));
   }
 
+  function retireSymbols(retiringSymbols: ReadonlySet<string>): void {
+    const purgedBuySymbols = new Set<string>();
+    for (const order of [...pendingOrders, ...deferredRebalanceBuys]) {
+      if (order.side === 'BUY' && retiringSymbols.has(order.symbol)) {
+        purgedBuySymbols.add(order.symbol);
+      }
+    }
+    for (const symbol of retiringSymbols) retiredSymbols.add(symbol);
+    pendingOrders = pendingOrders.filter((order) => !retiringSymbols.has(order.symbol));
+    deferredRebalanceBuys = deferredRebalanceBuys.filter(
+      (order) => !retiringSymbols.has(order.symbol),
+    );
+    for (const symbol of purgedBuySymbols) warnRetiredOrder(symbol);
+  }
+
+  function withoutRetiredMapEntries<T>(
+    source: ReadonlyMap<string, T>,
+    excludedSymbols: ReadonlySet<string>,
+  ): ReadonlyMap<string, T> {
+    if (excludedSymbols.size === 0) return source;
+    return new Map(
+      [...source].filter(([symbol]) => !excludedSymbols.has(symbol)),
+    );
+  }
+
+  function withoutRetiredSet(
+    source: ReadonlySet<string> | null,
+    excludedSymbols: ReadonlySet<string>,
+    unrestrictedSymbols?: readonly string[],
+  ): ReadonlySet<string> | null {
+    if (source === null && unrestrictedSymbols === undefined) return null;
+    if (excludedSymbols.size === 0) return source;
+    return new Set(
+      [...(source ?? unrestrictedSymbols ?? [])]
+        .filter((symbol) => !excludedSymbols.has(symbol)),
+    );
+  }
+
   function deferBuy(order: OrderIntent): void {
     // 같은 이탈 청산을 기다리는 동안 전략이 매 봉 같은 후보를 다시 내도 한 건만 둔다.
     deferredRebalanceBuys = deferredRebalanceBuys.filter(
@@ -970,7 +1158,9 @@ function* runBacktestSteps(
     const deferred = deferredRebalanceBuys;
     deferredRebalanceBuys = [];
     for (const order of deferred) {
-      const validated = validateOrder(order);
+      // 승격은 이미 지난 시가 뒤이거나, 앞선 event-only 시각에서 다음 시가를 기다리는
+      // 주문이다. 당일 거래정지를 이유로 폐기하지 않고 pending에 보존한다.
+      const validated = validateOrder(order, { ignoreNonTrading: true });
       if (validated) {
         pendingOrders.push(validated);
         promotedSymbols.add(validated.symbol);
@@ -986,7 +1176,13 @@ function* runBacktestSteps(
     if (notifyStrategy) strategy.onForcedExit?.(symbol, state);
   }
 
-  function validateOrder(order: OrderIntent, ignorePositionCap = false): OrderIntent | null {
+  function validateOrder(
+    order: OrderIntent,
+    options: {
+      readonly ignorePositionCap?: boolean;
+      readonly ignoreNonTrading?: boolean;
+    } = {},
+  ): OrderIntent | null {
     if (!Number.isFinite(order.quantity) || order.quantity < input.execution.rules.minOrderQty) {
       return null;
     }
@@ -998,11 +1194,16 @@ function* runBacktestSteps(
       return { ...order, quantity: Math.min(quantity, position.quantity) };
     }
 
+    if (retiredSymbols.has(order.symbol)) {
+      warnRetiredOrder(order.symbol);
+      return null;
+    }
+
     // BUY: 그날 거래정지·무거래인 종목은 여기서 먼저 가른다. 거래불가 필터가 이미
     // tradableSymbols 에서 그 종목을 빼 놓기 때문에, 순서를 바꾸면 아래 멤버십 안전망
     // 문구가 나가 멀쩡한 전략을 버그라고 말하게 된다. 보유분 청산(SELL)은 위에서 이미
     // 갈라져 이 검증을 타지 않는다 — 정지 종목이라도 청산은 막지 않는다.
-    if (nonTradingNow?.has(order.symbol) === true) {
+    if (!options.ignoreNonTrading && nonTradingNow?.has(order.symbol) === true) {
       if (!nonTradingRejectedSymbols.has(order.symbol)) {
         nonTradingRejectedSymbols.add(order.symbol);
         warnings.push(
@@ -1015,7 +1216,10 @@ function* runBacktestSteps(
     // BUY: 활성 멤버십 일정 밖 심볼은 거부한다 — 전략이 유니버스를 스스로 걸러내지
     // 않는 버그를 잡는 안전망이다(§9.5). 보유분 청산(SELL)은 위에서 이미 갈라져
     // 이 검증을 타지 않는다 — 유니버스에서 빠진 종목도 항상 청산할 수 있어야 한다.
-    if (tradableSymbols !== null && !tradableSymbols.has(order.symbol)) {
+    const membershipForValidation = options.ignoreNonTrading
+      ? activeMembershipSymbols
+      : tradableSymbols;
+    if (membershipForValidation !== null && !membershipForValidation.has(order.symbol)) {
       if (!universeRejectedSymbols.has(order.symbol)) {
         universeRejectedSymbols.add(order.symbol);
         warnings.push(
@@ -1028,7 +1232,7 @@ function* runBacktestSteps(
     // BUY: 신규 심볼이면 동시 포지션 상한 확인.
     // 대기 중인 신규 매수도 슬롯을 소비한다 — 같은 봉에서 여러 심볼이 동시에
     // 신호를 내면 보유 수만으로는 상한이 뚫린다.
-    if (!ignorePositionCap && !positions.has(order.symbol)) {
+    if (!options.ignorePositionCap && !positions.has(order.symbol)) {
       const pendingNewBuySymbols = new Set(
         pendingOrders
           .filter((o) => o.side === 'BUY' && !positions.has(o.symbol))
@@ -1044,6 +1248,14 @@ function* runBacktestSteps(
       }
     }
     return { ...order, quantity };
+  }
+
+  function warnRetiredOrder(symbol: string): void {
+    if (retiredOrderRejectedSymbols.has(symbol)) return;
+    retiredOrderRejectedSymbols.add(symbol);
+    warnings.push(
+      `${symbol} 주문 거부/폐기: 상장폐지 경계를 넘어 재사용된 단축코드의 후속 봉에 체결할 수 없습니다.`,
+    );
   }
 
   function executeOrder(
@@ -1106,6 +1318,9 @@ function* runBacktestSteps(
           entryTsMs: tsMs,
         });
       }
+      // 같은 봉 종가의 DELISTED 강제청산처럼 스냅샷 전에 곧바로 닫혀도, 실제로
+      // 보유했던 순간의 동시 포지션 수를 놓치지 않는다.
+      maxConcurrentPositions = Math.max(maxConcurrentPositions, positions.size);
       return fill;
     }
 
