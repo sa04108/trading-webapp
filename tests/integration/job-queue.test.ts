@@ -4,7 +4,12 @@ import { ENGINE_VERSION } from '../../src/server/modules/backtest/domain/engine.
 import { UnsafeBacktestSymbolIdentityError } from '../../src/server/modules/backtest/application/backtest-preparation-orchestrator.js';
 import { FACTS_SLICE } from '../../src/server/modules/market-data/application/symbol-service.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
-import { backtestJobs, symbols, symbolVersions } from '../../src/server/shared/db/schema.js';
+import {
+  backtestJobs,
+  symbolMasterVersions,
+  symbols,
+  symbolVersions,
+} from '../../src/server/shared/db/schema.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import {
   createTestAdmin,
@@ -430,6 +435,44 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(cloned.json().job.status).toBe('QUEUED');
   });
 
+  it('제출 뒤 SCD identity가 바뀐 QUEUED 작업은 child가 결과 생성 전에 실패시킨다', {
+    timeout: 30_000,
+  }, async () => {
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: buildRequest(),
+    });
+    expect(created.statusCode).toBe(201);
+    const jobId = created.json().job.id as string;
+
+    ctx.container.database.db.insert(symbolMasterVersions).values({
+      standardCode: 'KR7999999999',
+      shortCode: '005930',
+      validFromDate: '1990-01-01',
+      validToDate: '2000-01-01',
+      name: '과거 발행사',
+      market: 'KOSPI',
+      sharesOutstanding: '1',
+      instrumentType: 'COMMON_STOCK',
+      listedDate: '1990-01-01',
+      recordedAtMs: ctx.container.clock.now(),
+    }).run();
+
+    ctx.container.jobOrchestrator.tick();
+    await waitFor(() => {
+      const job = ctx.container.jobQueue.getJob(jobId);
+      return job !== null && ctx.container.jobQueue.isTerminal(job.status);
+    }, 20_000);
+
+    expect(ctx.container.jobQueue.getJob(jobId)).toMatchObject({
+      status: 'FAILED',
+      error: expect.stringMatching(/단축코드 005930.*여러 표준코드/),
+    });
+    expect(ctx.container.resultsService.getTotalReturnPct(jobId)).toBeNull();
+  });
+
   it('요청한 부분 유니버스 종목만 제출 시점 버전으로 pin 한다', async () => {
     // 000660 이 시총 2위라 topN=1(기본값) 이면 유니버스에서 자연히 빠진다 —
     // 유니버스 후보 중 일부만 실제 실행에 소비되는 상황을 만든다.
@@ -801,6 +844,77 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     }
   });
 
+  it('전체 SCD에서 단축코드 재사용이 발견되면 캐시·복제 실행 경로를 모두 차단한다', async () => {
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: buildRequest(),
+    });
+    expect(created.statusCode).toBe(201);
+    const sourceId = created.json().job.id as string;
+
+    // 현재 일정과 겹치지 않는 과거 행이어도 shortCode 기반 봉·팩트에는 발행사 구분이
+    // 없으므로 전체 생애 충돌이다.
+    ctx.container.database.db.insert(symbolMasterVersions).values({
+      standardCode: 'KR7999999999',
+      shortCode: '005930',
+      validFromDate: '1990-01-01',
+      validToDate: '2000-01-01',
+      name: '과거 발행사',
+      market: 'KOSPI',
+      sharesOutstanding: '1',
+      instrumentType: 'COMMON_STOCK',
+      listedDate: '1990-01-01',
+      recordedAtMs: ctx.container.clock.now(),
+    }).run();
+
+    const beforeJobs = ctx.container.jobQueue.listJobs(500, 0).length;
+    const beforeBatches = ctx.container.seedCloneBatchService.list().length;
+    const attempts = [
+      await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/backtests',
+        cookies: { qp_session: cookie },
+        payload: buildRequest(),
+      }),
+      await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/backtests/${sourceId}/clone`,
+        cookies: { qp_session: cookie },
+      }),
+      await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/backtests/${sourceId}/clone-configured`,
+        cookies: { qp_session: cookie },
+        payload: buildRequest(),
+      }),
+      await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
+        cookies: { qp_session: cookie },
+        payload: { count: 2 },
+      }),
+    ];
+
+    for (const response of attempts) {
+      expect(response.statusCode).toBe(422);
+      expect((response.json() as { error: string }).error)
+        .toMatch(/단축코드 005930.*여러 표준코드/);
+    }
+    expect(ctx.container.jobQueue.listJobs(500, 0)).toHaveLength(beforeJobs);
+    expect(ctx.container.seedCloneBatchService.list()).toHaveLength(beforeBatches);
+
+    const draft = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${sourceId}/clone-draft`,
+      cookies: { qp_session: cookie },
+    });
+    expect(draft.statusCode).toBe(200);
+    expect(draft.json().reusablePreview).toBeNull();
+    expect(draft.json().blockers[0]).toMatch(/단축코드 005930.*여러 표준코드/);
+  });
+
   it('reports schema violations in Korean, not raw Zod English (M9 마무리)', async () => {
     const badBody = await ctx.app.inject({
       method: 'POST',
@@ -1077,6 +1191,53 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const completed = ctx.container.seedCloneBatchService.get(batchId)!;
     expect(completed.batch.status).toBe('COMPLETED');
     expect(completed.items.every(({ item }) => item.state === 'DISPATCHED')).toBe(true);
+  });
+
+  it('난수 복제 대기 중 identity 이력이 바뀌면 다음 자식 승격 전에 묶음을 실패시킨다', async () => {
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: buildRequest(),
+    });
+    expect(created.statusCode).toBe(201);
+    const sourceId = created.json().job.id as string;
+    expect(ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
+
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
+      cookies: { qp_session: cookie },
+      payload: { count: 100 },
+    });
+    expect(response.statusCode).toBe(201);
+    const batchId = response.json().batch.id as string;
+    const before = ctx.container.seedCloneBatchService.get(batchId)!;
+    expect(before.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
+    const child = before.items.find(({ item }) => item.state === 'DISPATCHED')!.job!;
+    const beforeJobCount = ctx.container.jobQueue.listJobs(500, 0).length;
+
+    ctx.container.database.db.insert(symbolMasterVersions).values({
+      standardCode: 'KR7999999999',
+      shortCode: '005930',
+      validFromDate: '1990-01-01',
+      validToDate: '2000-01-01',
+      name: '과거 발행사',
+      market: 'KOSPI',
+      sharesOutstanding: '1',
+      instrumentType: 'COMMON_STOCK',
+      listedDate: '1990-01-01',
+      recordedAtMs: ctx.container.clock.now(),
+    }).run();
+    expect(ctx.container.jobQueue.setStatus(child.id, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
+
+    ctx.container.seedCloneBatchService.pump();
+
+    const failed = ctx.container.seedCloneBatchService.get(batchId)!;
+    expect(failed.batch.status).toBe('FAILED');
+    expect(failed.batch.error).toMatch(/단축코드 005930.*여러 표준코드/);
+    expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
+    expect(ctx.container.jobQueue.listJobs(500, 0)).toHaveLength(beforeJobCount);
   });
 
   it('난수 시드 실험 취소는 새 승격을 막고 대기 중인 자식도 취소한다', async () => {

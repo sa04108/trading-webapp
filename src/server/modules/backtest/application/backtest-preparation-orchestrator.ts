@@ -22,6 +22,7 @@ import type { SymbolService } from '../../market-data/application/symbol-service
 import type { SymbolMasterEntry } from '../../market-data/domain/symbol-master.js';
 import type { StrategyRegistry } from '../../strategy/application/strategy-registry.js';
 import type { AnyTradingStrategy } from '../../strategy/domain/strategy.js';
+import { UnsafeBacktestSymbolIdentityError } from './backtest-symbol-identity.js';
 import {
   backtestPreparationRequestHash,
   buildBacktestPreparationPlan,
@@ -110,12 +111,7 @@ export class PreparationInputError extends Error {
 }
 
 /** 현재 shortCode 기반 저장 구조로 안전하게 분리할 수 없는 종목 identity 조합. */
-export class UnsafeBacktestSymbolIdentityError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'UnsafeBacktestSymbolIdentityError';
-  }
-}
+export { UnsafeBacktestSymbolIdentityError } from './backtest-symbol-identity.js';
 
 /** needsDart 계획에만 쓰고 저장·sync하지 않는 미상 future candidate probe. */
 const UNKNOWN_CANDIDATE_PROBE = '__UNKNOWN_FUTURE_UNIVERSE_CANDIDATE__';
@@ -461,10 +457,6 @@ export class BacktestPreparationOrchestrator {
           resolutionNeeds: attempt.needs,
           strategy,
         });
-        this.registerNeededSymbols(attempt, [
-          ...plan.financial.symbols,
-          ...plan.actions.symbols,
-        ]);
         const hasMarketWork = attempt.needs.selectionMetricDates.length > 0
           || (plan.price.symbols.length > 0 && attempt.needs.priceRange !== null);
         const hasDartWork = plan.financial.symbols.length > 0 || plan.actions.symbols.length > 0;
@@ -483,6 +475,12 @@ export class BacktestPreparationOrchestrator {
           continue;
         }
         if (hasDartWork) {
+          // 시장 지표가 미해소인 iteration에서는 후보가 아직 전체 시장 상한일 수 있다.
+          // 위 market 우선 분기에서 재해소한 뒤, 실제 DART 호출 직전에만 검증·등록한다.
+          this.registerNeededSymbols(attempt, [
+            ...plan.financial.symbols,
+            ...plan.actions.symbols,
+          ]);
           const continued = await this.syncFacts(jobId, plan);
           if (!continued) return;
         }

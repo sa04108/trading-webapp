@@ -133,11 +133,35 @@ export interface RemoteResultCompletionInput {
 }
 
 export interface RemoteResultCompletionOutput {
-  readonly status: 'ACCEPTED' | 'IDEMPOTENT' | 'STALE_LEASE';
+  readonly status: 'ACCEPTED' | 'IDEMPOTENT' | 'IDENTITY_REJECTED' | 'STALE_LEASE';
   readonly schemaVersion: number;
   readonly rowCount: number;
   readonly processedBars: number;
   readonly completedAtMs: number;
+}
+
+/** 중앙 결과의 lease 확인·identity 검증·영속화를 일시적인 DB/IO 문제로 완료하지 못한 경우. */
+export class RemoteResultPersistenceUnavailableError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'RemoteResultPersistenceUnavailableError';
+  }
+}
+
+/** worker가 만든 artifact 자체가 계약을 위반해 같은 파일을 다시 보내도 수락할 수 없는 경우. */
+export class RemoteResultArtifactRejectedError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'RemoteResultArtifactRejectedError';
+  }
+}
+
+/** artifact 문제가 아니라 중앙 job/pin 또는 import 프로세스의 내부 결함인 경우. */
+export class RemoteResultImportInternalError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'RemoteResultImportInternalError';
+  }
 }
 
 /** 무거운 artifact 검증·중앙 DB import를 HTTP 이벤트 루프 밖에서 수행하는 port. */

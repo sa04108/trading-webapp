@@ -132,6 +132,7 @@ export async function buildServer(container: Container): Promise<FastifyInstance
           results: container.resultsService,
           strategies: container.strategyRegistry,
           symbolService: container.symbolService,
+          symbolMaster: container.symbolMasterService,
           candleCoverage: container.candleCoverageService,
           preparation: container.backtestPreparationOrchestrator,
           audit: container.auditLog,

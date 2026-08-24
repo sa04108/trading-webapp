@@ -29,6 +29,9 @@ export class SqliteBacktestInputBundleBuilder {
     }
 
     const symbols = [...new Set(schedule.flatMap((entry) => entry.symbols))].sort();
+    const pinnedStandardCodes = [...new Set(schedule.flatMap((entry) =>
+      entry.members?.map((member) => member.standardCode) ?? [],
+    ))].sort();
     if (symbols.length === 0) throw new Error(`job에 실행할 종목이 없습니다: ${jobId}`);
 
     const destination = openDatabase(destinationPath);
@@ -39,8 +42,22 @@ export class SqliteBacktestInputBundleBuilder {
       try {
         const copy = sqlite.transaction(() => {
           sqlite.exec('CREATE TEMP TABLE bundle_symbols (code TEXT PRIMARY KEY NOT NULL)');
+          sqlite.exec('CREATE TEMP TABLE bundle_standard_codes (code TEXT PRIMARY KEY NOT NULL)');
           const insertSymbol = sqlite.prepare('INSERT INTO bundle_symbols (code) VALUES (?)');
           for (const symbol of symbols) insertSymbol.run(symbol);
+          const insertStandard = sqlite.prepare(
+            'INSERT INTO bundle_standard_codes (code) VALUES (?) ON CONFLICT DO NOTHING',
+          );
+          for (const standardCode of pinnedStandardCodes) insertStandard.run(standardCode);
+          // legacy schedule 추론과 short 재사용 검증에 필요한 선택 short의 모든
+          // standard를 포함한다. 아래 master 복사는 이 표준코드의 다른 short alias도
+          // 가져오므로 원격 child가 역방향 충돌을 잃지 않는다.
+          sqlite.exec(`
+            INSERT OR IGNORE INTO bundle_standard_codes (code)
+            SELECT DISTINCT value.standard_code
+            FROM source.symbol_master_versions AS value
+            JOIN bundle_symbols AS wanted ON wanted.code = value.short_code;
+          `);
 
           // 스키마는 같은 release가 만들고 소비하므로 컬럼 순서도 같다. job은 정확히 한 행만 복사한다.
           sqlite.prepare(
@@ -49,7 +66,8 @@ export class SqliteBacktestInputBundleBuilder {
           sqlite.exec(`
             INSERT INTO main.symbols
             SELECT value.* FROM source.symbols AS value
-            JOIN bundle_symbols AS wanted ON wanted.code = value.code;
+            WHERE value.code IN (SELECT code FROM bundle_symbols)
+               OR value.standard_code IN (SELECT code FROM bundle_standard_codes);
 
             INSERT INTO main.symbol_versions
             SELECT value.* FROM source.symbol_versions AS value
@@ -73,7 +91,8 @@ export class SqliteBacktestInputBundleBuilder {
 
             INSERT INTO main.symbol_master_versions
             SELECT value.* FROM source.symbol_master_versions AS value
-            JOIN bundle_symbols AS wanted ON wanted.code = value.short_code
+            WHERE value.short_code IN (SELECT code FROM bundle_symbols)
+               OR value.standard_code IN (SELECT code FROM bundle_standard_codes)
             ORDER BY value.standard_code, value.valid_from_date;
 
             INSERT INTO main.krx_non_trading_days

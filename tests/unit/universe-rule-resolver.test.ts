@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createKrxHistoricalUniverseSource } from '../../src/server/modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
 import {
   SymbolMasterService,
+  type KnownRegisteredSymbolIdentity,
   type SymbolMasterServiceDeps,
 } from '../../src/server/modules/market-data/application/symbol-master-service.js';
 import { UniverseRuleResolver } from '../../src/server/modules/backtest/application/universe-rule-resolver.js';
@@ -10,6 +11,11 @@ import type { UniverseRule } from '../../src/shared/schemas/universe-rule.js';
 import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import type { DailySelectionMetric } from '../../src/server/modules/market-data/application/selection-metric-repository.js';
+import type {
+  KnownSymbolIdentityVersion,
+  SymbolIdentitySelection,
+  SymbolIdentityValidationResult,
+} from '../../src/server/modules/market-data/domain/symbol-identity-lifetime.js';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
 import {
   baseInfoFixture,
@@ -332,6 +338,17 @@ function makePipelineResolver(options: {
   masterCovered?: boolean;
   effectiveTradingDate?: (rebalanceDate: string) => string | undefined;
   metricReads?: string[][];
+  identityReads?: SymbolIdentitySelection[][];
+  factReads?: string[][];
+  financialCoverageReads?: string[][];
+  candleReads?: string[][];
+  actionCoverageReads?: string[][];
+  validateIdentity?: (
+    selections: readonly SymbolIdentitySelection[],
+  ) => SymbolIdentityValidationResult;
+  identityRegistrations?: readonly KnownRegisteredSymbolIdentity[];
+  unregisteredFactShortCodes?: readonly string[];
+  uncoveredBarShortCodes?: readonly string[];
 } = {}): UniverseRuleResolver {
   const metrics = options.metrics ?? pipelineMetrics;
   const facts = options.facts ?? [
@@ -363,6 +380,69 @@ function makePipelineResolver(options: {
         row.marketCapKrw === null ? [] : [[row.standardCode, row.marketCapKrw.toString()]],
       )),
       nonTradingDaysBetween: () => [],
+      readIdentitySnapshot: (shortCodes: readonly string[], standardCodes: readonly string[]) => {
+        const selectionsByPair = new Map<string, SymbolIdentitySelection>();
+        for (let index = 0; index < shortCodes.length; index += 1) {
+          const shortCode = shortCodes[index]!;
+          const standardCode = standardCodes[index]
+            ?? PIPELINE_ENTRIES.find((entry) => entry.shortCode === shortCode)?.standardCode
+            ?? `UNKNOWN-${shortCode}`;
+          selectionsByPair.set(`${shortCode}\0${standardCode}`, {
+            shortCode,
+            standardCode,
+            effectiveDate: PIPELINE_DATE,
+          });
+        }
+        const selections = [...selectionsByPair.values()];
+        options.identityReads?.push([...selections]);
+        const requested = options.validateIdentity?.(selections) ?? { safe: true, conflicts: [] };
+        const versionsByPair = new Map<string, KnownSymbolIdentityVersion>();
+        const remember = (version: KnownSymbolIdentityVersion): void => {
+          versionsByPair.set(`${version.shortCode}\0${version.standardCode}`, version);
+        };
+        for (const selection of selections) {
+          remember({
+            shortCode: selection.shortCode,
+            standardCode: selection.standardCode,
+            validFromDate: '2000-01-01',
+            validToDate: null,
+          });
+        }
+        for (const conflict of requested.conflicts) {
+          if (conflict.kind === 'SHORT_CODE_REUSED') {
+            for (const standardCode of conflict.standardCodes) {
+              remember({
+                shortCode: conflict.shortCode,
+                standardCode,
+                validFromDate: standardCode === selections[0]?.standardCode
+                  ? '2000-01-01'
+                  : '1990-01-01',
+                validToDate: standardCode === selections[0]?.standardCode ? null : '2000-01-01',
+              });
+            }
+          } else if (conflict.kind === 'STANDARD_CODE_REASSIGNED') {
+            for (const shortCode of conflict.shortCodes) {
+              remember({
+                shortCode,
+                standardCode: conflict.standardCode,
+                validFromDate: shortCode === selections[0]?.shortCode
+                  ? '2000-01-01'
+                  : '1990-01-01',
+                validToDate: shortCode === selections[0]?.shortCode ? null : '2000-01-01',
+              });
+            }
+          }
+        }
+        return {
+          versions: [...versionsByPair.values()],
+          registrations: options.identityRegistrations ?? selections.map((selection) => ({
+            code: selection.shortCode,
+            standardCode: selection.standardCode,
+          })),
+          unregisteredFactShortCodes: options.unregisteredFactShortCodes ?? [],
+          uncoveredBarShortCodes: options.uncoveredBarShortCodes ?? [],
+        };
+      },
     } as never,
     selectionMetrics: {
       getAt: (date: string, standardCodes: readonly string[]) => {
@@ -374,15 +454,21 @@ function makePipelineResolver(options: {
       findMissingTradingValueDates: () => [...(options.missingTradingValueDates ?? [])],
     } as never,
     facts: {
-      getFacts: async ({ keys }: { keys?: readonly string[] }) => facts.filter((fact) => keys?.includes(fact.key) ?? true),
+      getFacts: async ({ keys }: { keys?: readonly string[] }) => {
+        if (keys !== undefined) options.factReads?.push([...keys]);
+        return facts.filter((fact) => keys?.includes(fact.key) ?? true);
+      },
       hasFacts: (_scope: 'SYMBOL' | 'MACRO', key: string) => factsPresent.has(key),
       symbolsWithFacts: () => factsPresent,
       saveFacts: async () => undefined,
     },
     factCoverage: {
-      getCoveredYears: (codes?: readonly string[]) => codes === undefined
-        ? financialCoverage
-        : new Map([...financialCoverage].filter(([code]) => codes.includes(code))),
+      getCoveredYears: (codes?: readonly string[]) => {
+        if (codes !== undefined) options.financialCoverageReads?.push([...codes]);
+        return codes === undefined
+          ? financialCoverage
+          : new Map([...financialCoverage].filter(([code]) => codes.includes(code)));
+      },
       getUpdatedAtMs: () => new Map<string, number>(),
       getProcessedFilingReceiptNos: () => new Set<string>(),
       addProcessedFilings: () => undefined,
@@ -390,6 +476,7 @@ function makePipelineResolver(options: {
     },
     candles: {
       async *getCandles(query: { symbols: readonly string[]; fromTsMs?: number; toTsMs?: number }) {
+        options.candleReads?.push([...query.symbols]);
         for (const candle of candles) {
           if (
             query.symbols.includes(candle.symbol)
@@ -401,7 +488,10 @@ function makePipelineResolver(options: {
       getTimestamps: async () => [],
     },
     actionCoverage: {
-      getCoveredYears: () => actionCoverage,
+      getCoveredYears: (codes: readonly string[]) => {
+        options.actionCoverageReads?.push([...codes]);
+        return actionCoverage;
+      },
       getGapYears: () => actionGaps,
       getUpdatedAtMs: () => new Map<string, number>(),
       addCoveredYears: () => undefined,
@@ -413,6 +503,185 @@ function makePipelineResolver(options: {
 
 describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
   const period = { from: PIPELINE_DATE, to: PIPELINE_DATE };
+
+  it('PER 후보 identity가 모호하면 coverage와 fact를 읽기 전에 실패한다', async () => {
+    const identityReads: SymbolIdentitySelection[][] = [];
+    const financialCoverageReads: string[][] = [];
+    const factReads: string[][] = [];
+    const resolver = makePipelineResolver({
+      identityReads,
+      financialCoverageReads,
+      factReads,
+      validateIdentity: () => ({
+        safe: false,
+        conflicts: [{
+          kind: 'SHORT_CODE_REUSED',
+          shortCode: '000001',
+          standardCodes: ['KR7000001001', 'KR7999999999'],
+        }],
+      }),
+    });
+
+    await expect(resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'PER', direction: 'LOW', limit: 1 }]),
+      period,
+    )).rejects.toThrow(/단축코드 000001.*여러 표준코드/);
+    expect(identityReads).toHaveLength(1);
+    expect(financialCoverageReads).toEqual([]);
+    expect(factReads).toEqual([]);
+  });
+
+  it('DECLINE 후보 identity가 모호하면 봉·action·fact를 읽기 전에 실패한다', async () => {
+    const candleReads: string[][] = [];
+    const actionCoverageReads: string[][] = [];
+    const factReads: string[][] = [];
+    const resolver = makePipelineResolver({
+      candleReads,
+      actionCoverageReads,
+      factReads,
+      validateIdentity: () => ({
+        safe: false,
+        conflicts: [{
+          kind: 'STANDARD_CODE_REASSIGNED',
+          standardCode: 'KR7000001001',
+          shortCodes: ['000001', '999999'],
+        }],
+      }),
+    });
+
+    await expect(resolver.resolveOrDescribeNeeds(
+      pipelineRule([{
+        criterion: 'DECLINE', direction: 'LOW', limit: 1, lookbackTradingDays: 3,
+      }]),
+      period,
+    )).rejects.toThrow(/여러 단축코드.*코드 변경 전후/);
+    expect(candleReads).toEqual([]);
+    expect(actionCoverageReads).toEqual([]);
+    expect(factReads).toEqual([]);
+  });
+
+  it('등록 shortCode가 다른 표준코드 owner이면 fact coverage보다 먼저 실패한다', async () => {
+    const financialCoverageReads: string[][] = [];
+    const factReads: string[][] = [];
+    const resolver = makePipelineResolver({
+      financialCoverageReads,
+      factReads,
+      identityRegistrations: [{ code: '000001', standardCode: 'KR7999999999' }],
+    });
+
+    await expect(resolver.resolveOrDescribeNeeds(
+      pipelineRule([
+        { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 },
+        { criterion: 'PER', direction: 'LOW', limit: 1 },
+      ]),
+      period,
+    )).rejects.toThrow(/기존 표준코드.*선택된 종목의 표준코드.*다릅니다/);
+    expect(financialCoverageReads).toEqual([]);
+    expect(factReads).toEqual([]);
+  });
+
+  it('미등록 shortCode에 orphan fact가 남아 있으면 신규 등록 전에 실패한다', async () => {
+    const financialCoverageReads: string[][] = [];
+    const factReads: string[][] = [];
+    const resolver = makePipelineResolver({
+      financialCoverageReads,
+      factReads,
+      identityRegistrations: [],
+      unregisteredFactShortCodes: ['000001'],
+    });
+
+    await expect(resolver.resolveOrDescribeNeeds(
+      pipelineRule([
+        { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 },
+        { criterion: 'PER', direction: 'LOW', limit: 1 },
+      ]),
+      period,
+    )).rejects.toThrow(/미등록.*기존 단축코드 팩트.*격리·이관/);
+    expect(financialCoverageReads).toEqual([]);
+    expect(factReads).toEqual([]);
+  });
+
+  it('standardCode 단계에서 탈락한 ambiguous 후보는 short-keyed 검사를 과잉 차단하지 않는다', async () => {
+    const identityReads: SymbolIdentitySelection[][] = [];
+    const resolver = makePipelineResolver({
+      identityReads,
+      validateIdentity: (selections) => selections.some((selection) => selection.shortCode === '000003')
+        ? {
+            safe: false,
+            conflicts: [{
+              kind: 'SHORT_CODE_REUSED',
+              shortCode: '000003',
+              standardCodes: ['KR7000003003', 'KR7999999999'],
+            }],
+          }
+        : { safe: true, conflicts: [] },
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(pipelineRule([
+      { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 },
+      { criterion: 'PER', direction: 'LOW', limit: 1 },
+    ]), period);
+
+    expect(result.kind).toBe('READY');
+    expect(identityReads.map((read) => read.map((selection) => selection.shortCode)))
+      .toEqual([['000001'], ['000001']]);
+  });
+
+  it('short-keyed 조회 중 SCD가 바뀌면 READY 반환 직전 fresh 검증에서 차단한다', async () => {
+    const identityReads: SymbolIdentitySelection[][] = [];
+    let validationCount = 0;
+    const resolver = makePipelineResolver({
+      identityReads,
+      validateIdentity: () => {
+        validationCount += 1;
+        return validationCount === 1
+          ? { safe: true, conflicts: [] }
+          : {
+              safe: false,
+              conflicts: [{
+                kind: 'SHORT_CODE_REUSED',
+                shortCode: '000001',
+                standardCodes: ['KR7000001001', 'KR7999999999'],
+              }],
+            };
+      },
+    });
+
+    await expect(resolver.resolveOrDescribeNeeds(
+      pipelineRule([
+        { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 },
+        { criterion: 'PER', direction: 'LOW', limit: 1 },
+      ]),
+      period,
+    )).rejects.toThrow(/단축코드 000001.*여러 표준코드/);
+    expect(identityReads).toHaveLength(2);
+  });
+
+  it('market-only 최종 일정도 strategy/engine 진입 전에 identity를 검사한다', async () => {
+    const identityReads: SymbolIdentitySelection[][] = [];
+    const result = await makePipelineResolver({ identityReads }).resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 }]),
+      period,
+    );
+
+    expect(result.kind).toBe('READY');
+    expect(identityReads.map((read) => read.map((selection) => selection.shortCode)))
+      .toEqual([['000001']]);
+  });
+
+  it('같은 lifetime pair가 여러 일정에 반복돼도 identity DB 검사는 한 번만 한다', async () => {
+    const identityReads: SymbolIdentitySelection[][] = [];
+    const result = await makePipelineResolver({ identityReads }).resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 }]),
+      { from: '2025-05-15', to: '2025-08-15' },
+    );
+
+    expect(result.kind).toBe('READY');
+    if (result.kind !== 'READY') throw new Error('fixture는 READY여야 합니다.');
+    expect(result.schedule.length).toBeGreaterThan(1);
+    expect(identityReads).toHaveLength(1);
+    expect(identityReads[0]?.map((selection) => selection.shortCode)).toEqual(['000001']);
+  });
 
   it('ROE는 PIT 양수 재무 안에서 HIGH와 LOW를 반대로 고른다', async () => {
     const facts = [
@@ -534,12 +803,18 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     });
   });
 
-  it('모든 날짜와 아직 좁힐 수 없는 후속 단계의 데이터 필요량을 합집합으로 반환한다', async () => {
+  it('선정 지표가 미해소면 short-keyed 후속 데이터 요구를 시장 데이터 뒤로 미룬다', async () => {
+    const identityReads: SymbolIdentitySelection[][] = [];
+    const factReads: string[][] = [];
+    const candleReads: string[][] = [];
     const resolver = makePipelineResolver({
       missingTradingValueDates: [PIPELINE_DATE],
       factsPresent: [],
       candles: [],
       actionCoverage: new Map(),
+      identityReads,
+      factReads,
+      candleReads,
     });
     const result = await resolver.resolveOrDescribeNeeds(pipelineRule([
       { criterion: 'TRADING_VALUE', direction: 'HIGH', limit: 3 },
@@ -551,14 +826,17 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
       kind: 'NEEDS_DATA',
       candidateScopeKnown: true,
       needs: {
-        factSymbols: ['000001', '000002', '000003'],
-        actionSymbols: ['000001', '000002', '000003'],
+        factSymbols: [],
+        actionSymbols: [],
         selectionMetricDates: [PIPELINE_DATE],
       },
     });
     if (result.kind !== 'NEEDS_DATA') throw new Error('fixture는 데이터 부족이어야 합니다.');
     expect([...result.unionEntries.keys()]).toEqual(['000001', '000002', '000003']);
-    expect(result.needs.priceRange).not.toBeNull();
+    expect(result.needs.priceRange).toBeNull();
+    expect(identityReads).toEqual([]);
+    expect(factReads).toEqual([]);
+    expect(candleReads).toEqual([]);
   });
 
   it('첫 unresolved stage의 후보 상한을 후속 ready stage의 non-empty 선택으로 좁히지 않는다', async () => {

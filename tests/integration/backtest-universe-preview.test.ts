@@ -745,17 +745,51 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
         period: { from: '2026-01-05', to: '2026-01-05' },
       },
     });
-    expect(res.statusCode).toBe(202);
-    const jobId = (res.json() as { job: { id: string } }).job.id;
-    expect(ctx.container.backtestPreparationOrchestrator.get(jobId)).toMatchObject({
-      status: 'FAILED',
-      error: expect.stringMatching(/표준코드가 없는 기존 등록.*정체성을 검증·이관/),
-    });
+    // short-keyed 데이터 접근 전 identity guard가 확인하므로 비동기 preparation job을
+    // 만들었다가 실패시키지 않고 요청 경계에서 즉시 거부한다.
+    expect(res.statusCode).toBe(422);
+    expect((res.json() as { error: string }).error)
+      .toMatch(/표준코드가 없는 기존 등록.*검증·이관/);
 
     // 실패해도 기존 값은 몰래 백필하지 않는다 — 검증 없는 덮어쓰기는 단축코드가
     // 재사용된 경우 다른 증권의 데이터를 합치는 근거가 된다.
     expect(readStandardCode('005930')).toBeNull();
     expect(ctx.container.symbolService.getSymbol('005930')?.name).toBeNull();
+  });
+
+  it('미등록 단축코드에 orphan fact가 남아 있으면 새 identity로 자동 등록하지 않는다', async () => {
+    seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [{
+      standardCode: 'KR7005930003',
+      shortCode: '005930',
+      name: '신규 발행사',
+      market: 'KOSPI',
+      marketCapKrw: '500000000000000',
+    }]);
+    // symbols 삭제는 FK가 없는 facts를 지우지 않는다. 과거 issuer의 잔존 데이터를
+    // 신규 SCD pair가 재사용하면 새 회사 재무로 오인할 수 있는 상태를 직접 만든다.
+    await ctx.container.factRepository.saveFacts([{
+      scope: 'SYMBOL',
+      key: '005930',
+      field: 'NET_INCOME',
+      periodKey: '2019-Q4',
+      asOfTsMs: Date.parse('2020-03-01T00:00:00Z'),
+      value: 1,
+      unit: 'KRW',
+    }]);
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: marketCapRule(),
+        period: { from: '2026-01-05', to: '2026-01-05' },
+      },
+    });
+
+    expect(res.statusCode).toBe(422);
+    expect((res.json() as { error: string }).error).toMatch(/기존 단축코드 팩트.*격리·이관/);
+    expect(ctx.container.symbolService.exists('005930')).toBe(false);
   });
 
   /**

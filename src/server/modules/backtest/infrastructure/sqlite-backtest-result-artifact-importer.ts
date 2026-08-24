@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import Database from 'better-sqlite3';
 import { z } from 'zod';
 import type { DatabaseHandle } from '../../../shared/db/database.js';
+import { isRetryableSqliteError } from '../../../shared/db/sqlite-errors.js';
 import { newId } from '../../../shared/ids.js';
 import {
   backtestResultSummarySchema,
@@ -55,6 +56,14 @@ export class InvalidBacktestResultArtifactError extends Error {
   }
 }
 
+/** 검증된 artifact를 중앙 결과 DB에 쓰는 단계에서 발생한 저장소 실패. */
+export class BacktestResultPersistenceError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'BacktestResultPersistenceError';
+  }
+}
+
 function parseJson<T>(raw: string, schema: z.ZodType<T>, label: string): T {
   try {
     return schema.parse(JSON.parse(raw));
@@ -70,6 +79,17 @@ function openArtifact(artifactPath: string): Database.Database {
   return sqlite;
 }
 
+function isMalformedArtifactDatabase(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const code = (error as { readonly code?: unknown }).code;
+  const message = (error as { readonly message?: unknown }).message;
+  return (
+    typeof code === 'string'
+    && ['SQLITE_NOTADB', 'SQLITE_CORRUPT', 'SQLITE_ERROR'].some((base) =>
+      code === base || code.startsWith(`${base}_`))
+  ) || (typeof message === 'string' && /file is not a database/i.test(message));
+}
+
 /** 신뢰하지 않는 Worker SQLite artifact를 검증하고 현재 결과 테이블로 복사한다. */
 export class SqliteBacktestResultArtifactImporter implements BacktestResultArtifactImporter {
   constructor(private readonly destination: DatabaseHandle) {}
@@ -79,7 +99,19 @@ export class SqliteBacktestResultArtifactImporter implements BacktestResultArtif
     if (!stat.isFile() || stat.size <= 0 || stat.size > MAX_BACKTEST_RESULT_ARTIFACT_BYTES) {
       throw new InvalidBacktestResultArtifactError('결과 artifact 파일 크기가 허용 범위를 벗어납니다');
     }
-    const sqlite = openArtifact(artifactPath);
+    let sqlite: Database.Database;
+    try {
+      sqlite = openArtifact(artifactPath);
+    } catch (error) {
+      if (isMalformedArtifactDatabase(error)) {
+        throw new InvalidBacktestResultArtifactError(
+          '결과 artifact가 올바른 SQLite 파일이 아닙니다',
+          { cause: error },
+        );
+      }
+      // 업로드 임시 파일 소실·권한·I/O 같은 서버측 접근 실패는 worker payload 400이 아니다.
+      throw error;
+    }
     try {
       const integrity = sqlite.pragma('integrity_check', { simple: true });
       if (integrity !== 'ok') throw new InvalidBacktestResultArtifactError('SQLite integrity check 실패');
@@ -175,6 +207,7 @@ export class SqliteBacktestResultArtifactImporter implements BacktestResultArtif
       return { path: artifactPath, context, summary, schemaVersion, rowCount };
     } catch (error) {
       if (error instanceof InvalidBacktestResultArtifactError) throw error;
+      if (isRetryableSqliteError(error)) throw error;
       throw new InvalidBacktestResultArtifactError('결과 artifact 구조를 읽을 수 없습니다', { cause: error });
     } finally {
       sqlite.close();
@@ -294,7 +327,17 @@ export class SqliteBacktestResultArtifactImporter implements BacktestResultArtif
       }
     } catch (error) {
       if (error instanceof InvalidBacktestResultArtifactError) throw error;
-      throw new InvalidBacktestResultArtifactError('결과 행 import에 실패했습니다', { cause: error });
+      // source 행 값이 계약을 어긴 경우에만 worker artifact 오류다. INSERT/target DB
+      // 오류까지 같은 타입으로 감싸면 SQLITE_FULL·READONLY 같은 중앙 장애를 400으로
+      // 오인해 정상 계산 artifact를 버리게 된다.
+      if (error instanceof z.ZodError) {
+        throw new InvalidBacktestResultArtifactError('결과 artifact 행 값이 올바르지 않습니다', {
+          cause: error,
+        });
+      }
+      throw new BacktestResultPersistenceError('중앙 결과 저장소에 artifact를 쓸 수 없습니다', {
+        cause: error,
+      });
     } finally {
       source.close();
     }

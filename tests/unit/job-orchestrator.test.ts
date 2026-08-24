@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { JobOrchestrator, type JobEvent } from '../../src/server/modules/backtest/application/job-orchestrator.js';
 import type { JobQueue } from '../../src/server/modules/backtest/application/job-queue.js';
 import type { AuditLogService } from '../../src/server/modules/audit/audit-service.js';
@@ -45,5 +45,34 @@ describe('JobOrchestrator.start() — 재시작 복구 알림 (리뷰 지적: IN
     orchestrator.stop();
 
     expect(received).toEqual([]);
+  });
+});
+
+describe('JobOrchestrator.cancel() — 완료 전이와의 경쟁', () => {
+  it('CANCELLING CAS가 실패하면 완료한 child에 IPC를 보내지 않는다', () => {
+    const jobId = 'bt_completed_during_cancel';
+    const setStatus = vi.fn(() => false);
+    const stubQueue = {
+      getJob: () => ({ id: jobId, status: 'RUNNING', workerId: `worker-${process.pid}` }),
+      setStatus,
+    } as unknown as JobQueue;
+    const audit = { record: vi.fn() } as unknown as AuditLogService;
+    const orchestrator = new JobOrchestrator(stubQueue, config, logger, audit, clock);
+    const send = vi.fn();
+    (orchestrator as unknown as { children: Map<string, unknown> })
+      .children.set(jobId, { send });
+    const events: JobEvent[] = [];
+    orchestrator.events.on('job', (event: JobEvent) => events.push(event));
+
+    expect(orchestrator.cancel(jobId)).toBe('NOT_CANCELLABLE');
+    expect(setStatus).toHaveBeenCalledWith(
+      jobId,
+      'CANCELLING',
+      {},
+      ['RUNNING', 'STARTING'],
+    );
+    expect(send).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+    expect(events).toEqual([]);
   });
 });

@@ -11,12 +11,21 @@ import {
   type IncomingMessage,
 } from 'node:http';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
-import { backtestJobs, symbols } from '../../src/server/shared/db/schema.js';
+import {
+  backtestJobs,
+  symbolMasterVersions,
+  symbols,
+} from '../../src/server/shared/db/schema.js';
 import { eq } from 'drizzle-orm';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
-import type { BacktestResultArtifact } from '../../src/server/modules/backtest/application/backtest-result-artifact.js';
-import type { BacktestResultWriteContext } from '../../src/server/modules/backtest/application/backtest-result-artifact.js';
+import {
+  RemoteResultArtifactRejectedError,
+  RemoteResultPersistenceUnavailableError,
+  type BacktestResultArtifact,
+  type BacktestResultWriteContext,
+} from '../../src/server/modules/backtest/application/backtest-result-artifact.js';
 import { SqliteBacktestResultArtifactWriter } from '../../src/server/modules/backtest/infrastructure/sqlite-backtest-result-artifact-writer.js';
+import { MAX_BACKTEST_RESULT_ARTIFACT_BYTES } from '../../src/server/modules/backtest/infrastructure/sqlite-backtest-result-artifact-importer.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import { registerSymbols, seedDailyBars } from '../helpers/seed.js';
 import { backtestRequestSchema } from '../../src/shared/schemas/backtest-request.js';
@@ -145,18 +154,39 @@ describe('remote backtest worker lease API', () => {
     });
   }
 
-  function enqueue() {
-    ctx.container.database.db.insert(symbols).values({
-      code: '005930',
-      market: 'KR',
-      name: '삼성전자',
+  function seedCurrentIdentity(): void {
+    ctx.container.database.db.insert(symbolMasterVersions).values({
       standardCode: 'KR7005930003',
-      createdAtMs: Date.now(),
-    }).run();
+      shortCode: '005930',
+      validFromDate: '2000-01-01',
+      validToDate: null,
+      name: '삼성전자',
+      market: 'KOSPI',
+      sharesOutstanding: '1000000',
+      instrumentType: 'COMMON_STOCK',
+      listedDate: '1975-06-11',
+      recordedAtMs: Date.now(),
+    }).onConflictDoNothing().run();
+    registerSymbols(ctx.container, 'KR', ['005930']);
+    ctx.container.database.db.update(symbols)
+      .set({ standardCode: 'KR7005930003' })
+      .where(eq(symbols.code, '005930'))
+      .run();
+  }
+
+  function enqueue() {
+    seedCurrentIdentity();
     return ctx.container.jobQueue.enqueue(request(), [{
       rebalanceDate: '2026-01-05',
       effectiveTradingDate: '2026-01-05',
       symbols: ['005930'],
+      members: [{
+        symbol: '005930',
+        standardCode: 'KR7005930003',
+        marketCapKrw: null,
+        volume: null,
+        tradingValueKrw: null,
+      }],
       excludedNonTradingCount: 0,
     }]);
   }
@@ -221,9 +251,6 @@ describe('remote backtest worker lease API', () => {
     if (strategy === null || !parameters.ok || costProfile === null || slippageProfile === null) {
       throw new Error('test request registry mismatch');
     }
-    const pin = job.provenancePinJson === null
-      ? null
-      : JSON.parse(job.provenancePinJson) as ProvenancePin;
     return {
       jobId: job.id,
       strategyId: strategy.id,
@@ -231,7 +258,7 @@ describe('remote backtest worker lease API', () => {
       strategySourceHash: strategySourceHash(strategy),
       parameterJson: JSON.stringify(parameters.value),
       universeRuleJson: job.universeRuleJson,
-      scheduleHash: pin?.scheduleHash ?? 'unknown',
+      scheduleHash: createHash('sha256').update(job.universeScheduleJson).digest('hex'),
       universeJson: job.universeJson ?? '[]',
       universeHash: job.universeHash ?? 'unknown',
       engineVersion: ENGINE_VERSION,
@@ -429,6 +456,86 @@ describe('remote backtest worker lease API', () => {
       protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
     });
     expect(ctx.container.jobQueue.countByStatus(['STARTING', 'RUNNING'])).toBe(0);
+  });
+
+  it('bundle은 역방향 identity 증거만 확대하고 alias의 봉·팩트는 복사하지 않는다', async () => {
+    const job = enqueue();
+    ctx.container.database.db.update(symbols)
+      .set({ standardCode: null })
+      .where(eq(symbols.code, '005930'))
+      .run();
+    ctx.container.database.db.insert(symbols).values({
+      code: '009999',
+      market: 'KR',
+      name: '과거 코드 소유자',
+      standardCode: 'KR7005930003',
+      createdAtMs: Date.now(),
+    }).run();
+    ctx.container.database.db.insert(symbolMasterVersions).values({
+      standardCode: 'KR7005930003',
+      shortCode: '009999',
+      validFromDate: '1990-01-01',
+      validToDate: '2000-01-01',
+      name: '과거 코드 소유자',
+      market: 'KOSPI',
+      sharesOutstanding: '1',
+      instrumentType: 'COMMON_STOCK',
+      listedDate: '1990-01-01',
+      recordedAtMs: Date.now(),
+    }).run();
+    seedDailyBars(ctx.container.database.db, [
+      {
+        symbol: '005930', market: 'KR', timeframe: '1d', tsMs: Date.UTC(2026, 0, 5),
+        open: 100, high: 101, low: 99, close: 100, volume: 1_000,
+      },
+      {
+        symbol: '009999', market: 'KR', timeframe: '1d', tsMs: Date.UTC(1999, 0, 4),
+        open: 10, high: 11, low: 9, close: 10, volume: 100,
+      },
+    ]);
+    await ctx.container.factRepository.saveFacts([
+      {
+        scope: 'SYMBOL', key: '005930', field: 'PER', periodKey: '2025',
+        asOfTsMs: 1, value: 10, unit: 'RATIO',
+      },
+      {
+        scope: 'SYMBOL', key: '009999', field: 'PER', periodKey: '1999',
+        asOfTsMs: 1, value: 1, unit: 'RATIO',
+      },
+    ]);
+
+    const lease = (await claim()).json() as { attempt: number; leaseToken: string };
+    const input = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/internal/workers/jobs/${job.id}/input?attempt=${lease.attempt}`,
+      headers: {
+        authorization: `Bearer ${WORKER_TOKEN}`,
+        'x-lease-token': lease.leaseToken,
+      },
+    });
+    expect(input.statusCode).toBe(200);
+    const downloadedPath = path.join(ctx.dir, 'identity-input.sqlite');
+    fs.writeFileSync(downloadedPath, input.rawPayload);
+    const downloaded = new Database(downloadedPath, { readonly: true });
+    try {
+      expect(downloaded.prepare(
+        'SELECT code, standard_code AS standardCode FROM symbols ORDER BY code',
+      ).all()).toEqual([
+        { code: '005930', standardCode: null },
+        { code: '009999', standardCode: 'KR7005930003' },
+      ]);
+      expect(downloaded.prepare(
+        'SELECT short_code AS shortCode FROM symbol_master_versions ORDER BY short_code',
+      ).all()).toEqual([{ shortCode: '005930' }, { shortCode: '009999' }]);
+      expect(downloaded.prepare(
+        'SELECT DISTINCT short_code AS shortCode FROM krx_daily_bars ORDER BY short_code',
+      ).all()).toEqual([{ shortCode: '005930' }]);
+      expect(downloaded.prepare(
+        "SELECT DISTINCT key FROM facts WHERE scope = 'SYMBOL' ORDER BY key",
+      ).all()).toEqual([{ key: '005930' }]);
+    } finally {
+      downloaded.close();
+    }
   });
 
   it('holds an empty claim until its long-poll deadline', async () => {
@@ -719,12 +826,421 @@ describe('remote backtest worker lease API', () => {
     });
     expect(ctx.container.resultsService.getTotalReturnPct(job.id)).toBe(10);
 
-    const replay = await upload();
-    expect(replay.statusCode).toBe(200);
-    expect(replay.json()).toEqual({ status: 'IDEMPOTENT' });
+    const resultUploads = ctx.container.remoteResultUploadManager;
+    const originalReceive = resultUploads.receive;
+    let replayReceiveCalls = 0;
+    resultUploads.receive = async () => {
+      replayReceiveCalls += 1;
+      throw Object.assign(new Error('replay must not touch upload storage'), { code: 'ENOSPC' });
+    };
+    try {
+      const replay = await upload();
+      expect(replay.statusCode).toBe(200);
+      expect(replay.json()).toEqual({ status: 'IDEMPOTENT' });
+      expect(replayReceiveCalls).toBe(0);
+
+      const appUrl = await ctx.app.listen({ host: '127.0.0.1', port: 0 });
+      const rawReplay = (
+        headers: Record<string, string>,
+        body: Buffer | null,
+      ): Promise<{ statusCode: number; body: string }> => withTimeout(new Promise((resolve, reject) => {
+        const replayRequest = httpRequest(
+          `${appUrl}/api/internal/workers/jobs/${job.id}/result?attempt=${lease.attempt}`,
+          { method: 'PUT', headers: { authorization: `Bearer ${WORKER_TOKEN}`, ...headers } },
+          (response) => {
+            let responseBody = '';
+            response.on('data', (chunk: Buffer) => { responseBody += chunk.toString(); });
+            response.once('end', () => resolve({
+              statusCode: response.statusCode ?? 0,
+              body: responseBody,
+            }));
+          },
+        );
+        replayRequest.once('error', reject);
+        if (body !== null) replayRequest.write(body);
+        replayRequest.end();
+      }), 5_000, 'bounded replay response timeout');
+      const commonHeaders = {
+        'content-type': 'application/vnd.quant-platform.backtest-result+sqlite',
+        'x-lease-token': lease.leaseToken,
+        'x-content-sha256': checksum,
+      };
+      const oversized = await rawReplay({
+        ...commonHeaders,
+        'content-length': String(MAX_BACKTEST_RESULT_ARTIFACT_BYTES + 1),
+      }, null);
+      expect(oversized.statusCode).toBe(413);
+      expect(JSON.parse(oversized.body)).toEqual({ error: 'RESULT_ARTIFACT_TOO_LARGE' });
+
+      const chunked = await rawReplay({
+        ...commonHeaders,
+        'transfer-encoding': 'chunked',
+      }, Buffer.from('chunked replay'));
+      expect(chunked.statusCode).toBe(411);
+      expect(JSON.parse(chunked.body)).toEqual({ error: 'RESULT_CONTENT_LENGTH_REQUIRED' });
+      expect(replayReceiveCalls).toBe(0);
+    } finally {
+      resultUploads.receive = originalReceive;
+    }
     expect(ctx.container.database.sqlite.prepare(
       'SELECT count(*) AS count FROM backtest_runs WHERE job_id = ?',
     ).get(job.id)).toEqual({ count: 1 });
+  });
+
+  it('원격 계산 중 발견된 identity 충돌은 중앙 결과 수락 직전에 작업을 실패시킨다', async () => {
+    const job = enqueue();
+    const lease = (await claim()).json() as {
+      attempt: number;
+      leaseToken: string;
+    };
+    const artifactPath = path.join(ctx.dir, 'identity-drift-result.sqlite');
+    writeResultArtifact(job, artifactPath);
+    const payload = fs.readFileSync(artifactPath);
+    const checksum = createHash('sha256').update(payload).digest('hex');
+
+    // bundle 생성과 원격 계산 뒤 중앙 ingest가 과거 발행사를 발견한 상황이다. 실제
+    // 안전 경계는 completeRemote의 IMMEDIATE transaction 안에서 검사해야 한다.
+    ctx.container.database.db.insert(symbolMasterVersions).values({
+      standardCode: 'KR7999999999',
+      shortCode: '005930',
+      validFromDate: '1990-01-01',
+      validToDate: '2000-01-01',
+      name: '과거 발행사',
+      market: 'KOSPI',
+      sharesOutstanding: '1',
+      instrumentType: 'COMMON_STOCK',
+      listedDate: '1990-01-01',
+      recordedAtMs: Date.now(),
+    }).run();
+
+    const response = await ctx.app.inject({
+      method: 'PUT',
+      url: `/api/internal/workers/jobs/${job.id}/result?attempt=${lease.attempt}`,
+      headers: {
+        authorization: `Bearer ${WORKER_TOKEN}`,
+        'content-type': 'application/vnd.quant-platform.backtest-result+sqlite',
+        'x-lease-token': lease.leaseToken,
+        'x-content-sha256': checksum,
+      },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toEqual({ error: 'UNSAFE_SYMBOL_IDENTITY' });
+    expect(ctx.container.jobQueue.getJob(job.id)).toMatchObject({
+      status: 'FAILED',
+      error: expect.stringMatching(/결과 저장 직전.*단축코드 005930.*여러 표준코드/),
+    });
+    expect(ctx.container.resultsService.getTotalReturnPct(job.id)).toBeNull();
+    expect(ctx.container.database.sqlite.prepare(
+      'SELECT count(*) AS count FROM backtest_runs WHERE job_id = ?',
+    ).get(job.id)).toEqual({ count: 0 });
+  });
+
+  it('중앙 identity schema 손상은 일시적 저장 장애로 오인하지 않는다', async () => {
+    const job = enqueue();
+    const lease = (await claim()).json() as {
+      attempt: number;
+      leaseToken: string;
+    };
+    const artifactPath = path.join(ctx.dir, 'identity-unavailable-result.sqlite');
+    writeResultArtifact(job, artifactPath);
+    const payload = fs.readFileSync(artifactPath);
+    const checksum = createHash('sha256').update(payload).digest('hex');
+    // import child 안의 authoritative identity SELECT만 실패하게 해 IPC 오류 분류와
+    // transaction rollback을 함께 검증한다. 테스트마다 별도 임시 DB를 사용한다.
+    ctx.container.database.sqlite.exec('DROP TABLE symbol_master_versions');
+
+    const response = await ctx.app.inject({
+      method: 'PUT',
+      url: `/api/internal/workers/jobs/${job.id}/result?attempt=${lease.attempt}`,
+      headers: {
+        authorization: `Bearer ${WORKER_TOKEN}`,
+        'content-type': 'application/vnd.quant-platform.backtest-result+sqlite',
+        'x-lease-token': lease.leaseToken,
+        'x-content-sha256': checksum,
+      },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({ error: 'RESULT_IMPORT_FAILED' });
+    expect(ctx.container.jobQueue.getJob(job.id)).toMatchObject({
+      status: 'RUNNING',
+      error: null,
+    });
+    expect(ctx.container.resultsService.getTotalReturnPct(job.id)).toBeNull();
+  });
+
+  it('정상 artifact의 중앙 target 저장 실패는 artifact 오류가 아니라 503으로 분류한다', async () => {
+    const job = enqueue();
+    const lease = (await claim()).json() as { attempt: number; leaseToken: string };
+    const artifactPath = path.join(ctx.dir, 'target-storage-failure-result.sqlite');
+    writeResultArtifact(job, artifactPath);
+    const payload = fs.readFileSync(artifactPath);
+    const checksum = createHash('sha256').update(payload).digest('hex');
+    ctx.container.database.sqlite.exec(
+      `CREATE TRIGGER fail_central_result_persist
+       BEFORE INSERT ON backtest_runs
+       BEGIN
+         SELECT RAISE(ABORT, 'database or disk is full');
+       END`,
+    );
+
+    const response = await ctx.app.inject({
+      method: 'PUT',
+      url: `/api/internal/workers/jobs/${job.id}/result?attempt=${lease.attempt}`,
+      headers: {
+        authorization: `Bearer ${WORKER_TOKEN}`,
+        'content-type': 'application/vnd.quant-platform.backtest-result+sqlite',
+        'x-lease-token': lease.leaseToken,
+        'x-content-sha256': checksum,
+      },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ error: 'RESULT_PERSISTENCE_UNAVAILABLE' });
+    expect(Number(response.headers['x-backtest-lease-expires-at-ms'])).toBeGreaterThan(Date.now());
+    expect(ctx.container.jobQueue.getJob(job.id)).toMatchObject({ status: 'RUNNING', error: null });
+    expect(ctx.container.database.sqlite.prepare(
+      'SELECT count(*) AS count FROM backtest_runs WHERE job_id = ?',
+    ).get(job.id)).toEqual({ count: 0 });
+    expect(ctx.container.database.sqlite.prepare(
+      'SELECT count(*) AS count FROM backtest_metrics WHERE job_id = ?',
+    ).get(job.id)).toEqual({ count: 0 });
+  });
+
+  it('중앙 job 손상은 worker artifact 400이 아니라 내부 import 500으로 분류한다', async () => {
+    const job = enqueue();
+    const lease = (await claim()).json() as { attempt: number; leaseToken: string };
+    const artifactPath = path.join(ctx.dir, 'central-job-corruption-result.sqlite');
+    writeResultArtifact(job, artifactPath);
+    const payload = fs.readFileSync(artifactPath);
+    const checksum = createHash('sha256').update(payload).digest('hex');
+    ctx.container.database.db.update(backtestJobs)
+      .set({ requestJson: '{' })
+      .where(eq(backtestJobs.id, job.id))
+      .run();
+
+    const response = await ctx.app.inject({
+      method: 'PUT',
+      url: `/api/internal/workers/jobs/${job.id}/result?attempt=${lease.attempt}`,
+      headers: {
+        authorization: `Bearer ${WORKER_TOKEN}`,
+        'content-type': 'application/vnd.quant-platform.backtest-result+sqlite',
+        'x-lease-token': lease.leaseToken,
+        'x-content-sha256': checksum,
+      },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({ error: 'RESULT_IMPORT_FAILED' });
+    expect(ctx.container.jobQueue.getJob(job.id)?.status).toBe('RUNNING');
+    expect(ctx.container.resultsService.getTotalReturnPct(job.id)).toBeNull();
+  });
+
+  it('업로드 전에 중앙 schedule JSON이 계산 artifact와 달라지면 수락하지 않는다', async () => {
+    const originalJob = enqueue();
+    const scheduleHash = createHash('sha256')
+      .update(originalJob.universeScheduleJson)
+      .digest('hex');
+    const pin: ProvenancePin = {
+      sourceKind: 'SYMBOL_MASTER',
+      filterPolicyVersion: null,
+      selectionMethod: 'ORDERED_UNIVERSE_PIPELINE',
+      universeRule: request().universeRule,
+      scheduleHash,
+      diagnostics: [],
+      preparedAtMs: Date.now(),
+    };
+    ctx.container.database.db.update(backtestJobs)
+      .set({ provenancePinJson: JSON.stringify(pin) })
+      .where(eq(backtestJobs.id, originalJob.id))
+      .run();
+    const job = ctx.container.jobQueue.getJob(originalJob.id)!;
+    const lease = (await claim()).json() as { attempt: number; leaseToken: string };
+    const artifactPath = path.join(ctx.dir, 'schedule-hash-drift-result.sqlite');
+    writeResultArtifact(job, artifactPath);
+    const payload = fs.readFileSync(artifactPath);
+    const checksum = createHash('sha256').update(payload).digest('hex');
+    const changedSchedule = JSON.parse(job.universeScheduleJson) as Array<Record<string, unknown>>;
+    changedSchedule[0] = { ...changedSchedule[0], rebalanceDate: '2026-01-06' };
+    ctx.container.database.db.update(backtestJobs)
+      .set({ universeScheduleJson: JSON.stringify(changedSchedule) })
+      .where(eq(backtestJobs.id, job.id))
+      .run();
+
+    const response = await ctx.app.inject({
+      method: 'PUT',
+      url: `/api/internal/workers/jobs/${job.id}/result?attempt=${lease.attempt}`,
+      headers: {
+        authorization: `Bearer ${WORKER_TOKEN}`,
+        'content-type': 'application/vnd.quant-platform.backtest-result+sqlite',
+        'x-lease-token': lease.leaseToken,
+        'x-content-sha256': checksum,
+      },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: 'INVALID_RESULT_ARTIFACT' });
+    expect(ctx.container.jobQueue.getJob(job.id)).toMatchObject({ status: 'RUNNING', error: null });
+    expect(ctx.container.resultsService.getTotalReturnPct(job.id)).toBeNull();
+  });
+
+  it('손상된 중앙 schedule JSON은 최종 transaction에서 작업을 실패시킨다', async () => {
+    const job = enqueue();
+    const lease = (await claim()).json() as { attempt: number; leaseToken: string };
+    const artifactPath = path.join(ctx.dir, 'malformed-central-schedule-result.sqlite');
+    writeResultArtifact(job, artifactPath);
+    const payload = fs.readFileSync(artifactPath);
+    const checksum = createHash('sha256').update(payload).digest('hex');
+    ctx.container.database.db.update(backtestJobs)
+      .set({ universeScheduleJson: '{' })
+      .where(eq(backtestJobs.id, job.id))
+      .run();
+
+    const response = await ctx.app.inject({
+      method: 'PUT',
+      url: `/api/internal/workers/jobs/${job.id}/result?attempt=${lease.attempt}`,
+      headers: {
+        authorization: `Bearer ${WORKER_TOKEN}`,
+        'content-type': 'application/vnd.quant-platform.backtest-result+sqlite',
+        'x-lease-token': lease.leaseToken,
+        'x-content-sha256': checksum,
+      },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toEqual({ error: 'UNSAFE_SYMBOL_IDENTITY' });
+    expect(ctx.container.jobQueue.getJob(job.id)).toMatchObject({
+      status: 'FAILED',
+      error: expect.stringMatching(/일정 JSON이 손상/),
+    });
+    expect(ctx.container.resultsService.getTotalReturnPct(job.id)).toBeNull();
+  });
+
+  it('손상된 중앙 provenance pin도 artifact 400이 아니라 최종 실패로 확정한다', async () => {
+    const job = enqueue();
+    const lease = (await claim()).json() as { attempt: number; leaseToken: string };
+    const artifactPath = path.join(ctx.dir, 'malformed-central-pin-result.sqlite');
+    writeResultArtifact(job, artifactPath);
+    const payload = fs.readFileSync(artifactPath);
+    const checksum = createHash('sha256').update(payload).digest('hex');
+    ctx.container.database.db.update(backtestJobs)
+      .set({ provenancePinJson: '{}' })
+      .where(eq(backtestJobs.id, job.id))
+      .run();
+
+    const response = await ctx.app.inject({
+      method: 'PUT',
+      url: `/api/internal/workers/jobs/${job.id}/result?attempt=${lease.attempt}`,
+      headers: {
+        authorization: `Bearer ${WORKER_TOKEN}`,
+        'content-type': 'application/vnd.quant-platform.backtest-result+sqlite',
+        'x-lease-token': lease.leaseToken,
+        'x-content-sha256': checksum,
+      },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toEqual({ error: 'UNSAFE_SYMBOL_IDENTITY' });
+    expect(ctx.container.jobQueue.getJob(job.id)).toMatchObject({
+      status: 'FAILED',
+      error: expect.stringMatching(/실행 pin이 변경/),
+    });
+    expect(ctx.container.resultsService.getTotalReturnPct(job.id)).toBeNull();
+  });
+
+  it('결과 업로드의 조기 503 전에 요청 body를 끝까지 정리한다', async () => {
+    const job = enqueue();
+    const lease = (await claim()).json() as {
+      attempt: number;
+      leaseToken: string;
+    };
+    const artifactPath = path.join(ctx.dir, 'preflight-busy-result.sqlite');
+    writeResultArtifact(job, artifactPath);
+    const payload = fs.readFileSync(artifactPath);
+    const checksum = createHash('sha256').update(payload).digest('hex');
+    const service = ctx.container.remoteWorkerService;
+    const originalReserve = service.reserveResultTransfer;
+    const uploadManager = ctx.container.remoteResultUploadManager;
+    const originalReceive = uploadManager.receive;
+    service.reserveResultTransfer = () => {
+      throw Object.assign(new Error('database or disk is full'), { code: 'SQLITE_FULL' });
+    };
+
+    try {
+      const appUrl = await ctx.app.listen({ host: '127.0.0.1', port: 0 });
+      const slowUpload = (label: string): Promise<{
+        statusCode: number;
+        body: string;
+        finalChunkSubmittedAtResponse: boolean;
+      }> => withTimeout(new Promise((resolve, reject) => {
+        let finalChunkSubmitted = false;
+        const upload = httpRequest(
+          `${appUrl}/api/internal/workers/jobs/${job.id}/result?attempt=${lease.attempt}`,
+          {
+            method: 'PUT',
+            headers: {
+              authorization: `Bearer ${WORKER_TOKEN}`,
+              'content-type': 'application/vnd.quant-platform.backtest-result+sqlite',
+              'content-length': String(payload.length),
+              'x-lease-token': lease.leaseToken,
+              'x-content-sha256': checksum,
+            },
+          },
+          (incoming) => {
+            const observedFinalChunk = finalChunkSubmitted;
+            let body = '';
+            incoming.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+            incoming.once('end', () => resolve({
+              statusCode: incoming.statusCode ?? 0,
+              body,
+              finalChunkSubmittedAtResponse: observedFinalChunk,
+            }));
+          },
+        );
+        upload.once('error', reject);
+        const splitAt = Math.max(1, Math.floor(payload.length / 2));
+        upload.write(payload.subarray(0, splitAt));
+        setTimeout(() => {
+          finalChunkSubmitted = true;
+          upload.end(payload.subarray(splitAt));
+        }, 100);
+      }), 5_000, `${label} body drain timeout`);
+
+      const response = await slowUpload('preflight');
+
+      expect(response.statusCode).toBe(503);
+      expect(JSON.parse(response.body)).toEqual({ error: 'RESULT_PERSISTENCE_UNAVAILABLE' });
+      expect(response.finalChunkSubmittedAtResponse).toBe(true);
+      expect(ctx.container.jobQueue.getJob(job.id)).toMatchObject({
+        status: 'STARTING',
+        error: null,
+      });
+
+      service.reserveResultTransfer = originalReserve;
+      uploadManager.receive = async () => {
+        throw Object.assign(new Error('upload directory unavailable'), { code: 'EACCES' });
+      };
+      const receiveFailure = await slowUpload('receive failure');
+      expect(receiveFailure.statusCode).toBe(503);
+      expect(JSON.parse(receiveFailure.body)).toEqual({ error: 'RESULT_PERSISTENCE_UNAVAILABLE' });
+      expect(receiveFailure.finalChunkSubmittedAtResponse).toBe(true);
+      expect(ctx.container.jobQueue.getJob(job.id)).toMatchObject({
+        status: 'RUNNING',
+        error: null,
+      });
+      expect(ctx.container.resultsService.getTotalReturnPct(job.id)).toBeNull();
+    } finally {
+      service.reserveResultTransfer = originalReserve;
+      uploadManager.receive = originalReceive;
+    }
   });
 
   it('streams remote completion to an already connected backtest SSE client', async () => {
@@ -895,8 +1411,60 @@ describe('remote backtest worker lease API', () => {
     expect(fs.existsSync(uploadFragment)).toBe(true);
   });
 
+  it('remote child도 bundle의 SCD 충돌을 첫 시도에서 구체적인 오류로 종료한다', async () => {
+    const job = enqueue();
+    ctx.container.database.db.insert(symbolMasterVersions).values({
+      standardCode: 'KR7999999999',
+      shortCode: '005930',
+      validFromDate: '1990-01-01',
+      validToDate: '2000-01-01',
+      name: '과거 발행사',
+      market: 'KOSPI',
+      sharesOutstanding: '1',
+      instrumentType: 'COMMON_STOCK',
+      listedDate: '1990-01-01',
+      recordedAtMs: Date.now(),
+    }).run();
+    const appUrl = await ctx.app.listen({ host: '127.0.0.1', port: 0 });
+    const supervisor = spawn(
+      process.execPath,
+      ['--import', 'tsx', path.resolve('src/workers/remote-backtest-supervisor.ts')],
+      {
+        cwd: path.resolve('.'),
+        env: {
+          ...process.env,
+          NODE_ENV: 'test',
+          BACKTEST_APP_URL: appUrl,
+          BACKTEST_WORKER_TOKEN: WORKER_TOKEN,
+          BACKTEST_WORKER_ID: 'identity-worker',
+          BACKTEST_WORKER_CONCURRENCY: '1',
+          BACKTEST_WORK_ROOT: path.join(ctx.dir, 'identity-worker'),
+          BACKTEST_CLAIM_WAIT_SECONDS: '1',
+          BACKTEST_HEARTBEAT_SECONDS: '2',
+          LOG_LEVEL: 'error',
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    let output = '';
+    supervisor.stdout?.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+    supervisor.stderr?.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+
+    try {
+      await waitForTerminalJob(ctx, job.id);
+      expect(ctx.container.jobQueue.getJob(job.id), output).toMatchObject({
+        status: 'FAILED',
+        attempt: 1,
+        error: expect.stringMatching(/단축코드 005930.*여러 표준코드/),
+      });
+      expect(ctx.container.resultsService.getTotalReturnPct(job.id)).toBeNull();
+    } finally {
+      await stopProcess(supervisor);
+    }
+  }, 40_000);
+
   it('runs the real remote supervisor and child process end to end', async () => {
-    registerSymbols(ctx.container, 'KR', ['005930']);
+    seedCurrentIdentity();
     const candles: Candle[] = [];
     for (let tsMs = Date.UTC(2026, 0, 5); tsMs <= Date.UTC(2026, 1, 5); tsMs += DAY_MS) {
       const day = new Date(tsMs).getUTCDay();
@@ -915,17 +1483,99 @@ describe('remote backtest worker lease API', () => {
       });
     }
     seedDailyBars(ctx.container.database.db, candles);
-    const job = ctx.container.jobQueue.enqueue(request(), [{
+    const schedule = [{
       rebalanceDate: '2026-01-05',
       effectiveTradingDate: '2026-01-05',
       symbols: ['005930'],
+      members: [{
+        symbol: '005930',
+        standardCode: 'KR7005930003',
+        marketCapKrw: null,
+        volume: null,
+        tradingValueKrw: null,
+      }],
       excludedNonTradingCount: 0,
-    }]);
+    }];
+    const job = ctx.container.jobQueue.enqueue(request(), schedule);
     const appUrl = await ctx.app.listen({ host: '127.0.0.1', port: 0 });
+    let resultPutCalls = 0;
+    let maskedCompletedResponses = 0;
+    const resultRequestChecksums: string[] = [];
+    const uploadProxy = createServer((request, response) => {
+      const requestUrl = request.url ?? '/';
+      const isResultUpload = request.method === 'PUT'
+        && /^\/api\/internal\/workers\/jobs\/[^/]+\/result(?:\?|$)/.test(requestUrl);
+      if (isResultUpload) {
+        resultPutCalls += 1;
+        const checksum = request.headers['x-content-sha256'];
+        if (typeof checksum === 'string') resultRequestChecksums.push(checksum);
+        if (resultPutCalls === 1) {
+          request.resume();
+          response.writeHead(502).end('injected proxy outage');
+          return;
+        }
+      }
+
+      const target = new URL(requestUrl, appUrl);
+      const upstream = httpRequest(target, {
+        method: request.method,
+        headers: { ...request.headers, host: target.host },
+      }, (upstreamResponse) => {
+        if (
+          isResultUpload
+          && upstreamResponse.statusCode === 200
+          && maskedCompletedResponses === 0
+        ) {
+          maskedCompletedResponses += 1;
+          upstreamResponse.resume();
+          response.writeHead(502).end('injected lost completion response');
+          return;
+        }
+        response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
+        upstreamResponse.pipe(response);
+      });
+      upstream.once('error', (error) => {
+        if (!response.headersSent) response.writeHead(502);
+        response.end(String(error));
+      });
+      request.pipe(upstream);
+    });
+    await new Promise<void>((resolve, reject) => {
+      uploadProxy.once('error', reject);
+      uploadProxy.listen(0, '127.0.0.1', resolve);
+    });
+    const proxyAddress = uploadProxy.address();
+    if (proxyAddress === null || typeof proxyAddress === 'string') {
+      throw new Error('upload proxy address unavailable');
+    }
+    const proxyUrl = `http://127.0.0.1:${proxyAddress.port}`;
     const workerRoot = path.join(ctx.dir, 'worker');
     const staleWorkerFragment = path.join(workerRoot, 'jobs', 'bt_stale', '1', 'result.sqlite');
     fs.mkdirSync(path.dirname(staleWorkerFragment), { recursive: true });
     fs.writeFileSync(staleWorkerFragment, 'stale');
+    const service = ctx.container.remoteWorkerService;
+    const uploadManager = ctx.container.remoteResultUploadManager;
+    const originalComplete = service.complete.bind(service);
+    const originalReceive = uploadManager.receive.bind(uploadManager);
+    let completeCalls = 0;
+    let receiveCalls = 0;
+    const receivedChecksums: string[] = [];
+    service.complete = async (input) => {
+      completeCalls += 1;
+      if (completeCalls <= 4) {
+        throw new RemoteResultPersistenceUnavailableError('injected central persistence outage');
+      }
+      return originalComplete(input);
+    };
+    uploadManager.receive = async (...args) => {
+      receiveCalls += 1;
+      if (receiveCalls === 1) {
+        throw Object.assign(new Error('temporary upload permission failure'), { code: 'EACCES' });
+      }
+      const received = await originalReceive(...args);
+      receivedChecksums.push(received.sha256);
+      return received;
+    };
     const supervisor = spawn(
       process.execPath,
       ['--import', 'tsx', path.resolve('src/workers/remote-backtest-supervisor.ts')],
@@ -934,7 +1584,7 @@ describe('remote backtest worker lease API', () => {
         env: {
           ...process.env,
           NODE_ENV: 'test',
-          BACKTEST_APP_URL: appUrl,
+          BACKTEST_APP_URL: proxyUrl,
           BACKTEST_WORKER_TOKEN: WORKER_TOKEN,
           BACKTEST_WORKER_ID: 'integration-worker',
           BACKTEST_WORKER_CONCURRENCY: '1',
@@ -951,7 +1601,12 @@ describe('remote backtest worker lease API', () => {
     supervisor.stderr?.on('data', (chunk: Buffer) => { output += chunk.toString(); });
 
     try {
-      await waitForTerminalJob(ctx, job.id);
+      await waitForTerminalJob(ctx, job.id, 50_000);
+      await withTimeout((async () => {
+        while (maskedCompletedResponses === 0 || resultPutCalls < 8) {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+      })(), 15_000, `result replay timeout: ${output}`);
       const completed = ctx.container.jobQueue.getJob(job.id)!;
       expect(completed, output).toMatchObject({
         status: 'COMPLETED',
@@ -959,6 +1614,14 @@ describe('remote backtest worker lease API', () => {
         runnerVersion: ctx.container.gitCommitSha,
         resultSchemaVersion: 1,
       });
+      expect(completeCalls).toBe(5);
+      expect(receiveCalls).toBe(6);
+      expect(receivedChecksums).toHaveLength(5);
+      expect(new Set(receivedChecksums)).toEqual(new Set([completed.resultChecksum]));
+      expect(maskedCompletedResponses).toBe(1);
+      expect(resultPutCalls).toBe(8);
+      expect(resultRequestChecksums).toHaveLength(8);
+      expect(new Set(resultRequestChecksums)).toEqual(new Set([completed.resultChecksum]));
       expect(ctx.container.resultsService.getTotalReturnPct(job.id)).not.toBeNull();
       expect(fs.existsSync(staleWorkerFragment)).toBe(false);
       const jobDirectory = path.join(ctx.dir, 'worker', 'jobs', job.id, '1');
@@ -967,10 +1630,28 @@ describe('remote backtest worker lease API', () => {
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
       expect(fs.existsSync(jobDirectory)).toBe(false);
+
+      service.complete = async () => {
+        throw new RemoteResultArtifactRejectedError('injected invalid result artifact');
+      };
+      const rejectedJob = ctx.container.jobQueue.enqueue(request(), schedule);
+      await waitForTerminalJob(ctx, rejectedJob.id, 30_000);
+      expect(ctx.container.jobQueue.getJob(rejectedJob.id), output).toMatchObject({
+        status: 'FAILED',
+        attempt: 1,
+        error: expect.stringMatching(/결과 업로드 실패: HTTP 400/),
+      });
+      expect(ctx.container.resultsService.getTotalReturnPct(rejectedJob.id)).toBeNull();
+      expect(resultPutCalls).toBe(9);
     } finally {
       await stopProcess(supervisor);
+      await new Promise<void>((resolve, reject) => {
+        uploadProxy.close((error) => error === undefined ? resolve() : reject(error));
+      });
+      service.complete = originalComplete;
+      uploadManager.receive = originalReceive;
     }
-  }, 40_000);
+  }, 75_000);
 });
 
 describe('remote backtest worker deployment probe in local mode', () => {

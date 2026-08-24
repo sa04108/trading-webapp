@@ -54,6 +54,10 @@ export interface SeedCloneBatchEvent {
   readonly status: SeedCloneBatchTerminalStatus;
 }
 
+export type SeedCloneScheduleIdentityValidator = (
+  schedule: readonly LegacyUniverseScheduleEntry[],
+) => void;
+
 /** 진행률 이벤트는 큐 슬롯이나 종료 여부를 바꾸지 않으므로 배치 DB를 다시 읽지 않는다. */
 export function createSeedCloneBatchJobListener(
   service: Pick<SeedCloneBatchService, 'onJobStatusChanged'>,
@@ -76,6 +80,7 @@ export class SeedCloneBatchService {
     private readonly queue: JobQueue,
     private readonly maxQueuedBacktests: number,
     private readonly clock: Clock,
+    private readonly validateScheduleIdentities: SeedCloneScheduleIdentityValidator,
   ) {}
 
   create(sourceJobId: string, count: number, snapshot: SeedCloneBatchSnapshot): SeedCloneBatchDetail {
@@ -126,9 +131,26 @@ export class SeedCloneBatchService {
 
     for (const batch of batches) {
       if (available <= 0) break;
+      const pending = this.database.db
+        .select()
+        .from(backtestCloneBatchItems)
+        .where(and(
+          eq(backtestCloneBatchItems.batchId, batch.id),
+          eq(backtestCloneBatchItems.state, 'PENDING'),
+        ))
+        .orderBy(asc(backtestCloneBatchItems.ordinal))
+        .limit(available)
+        .all();
+      // 모든 item이 이미 승격됐다면 자식 상태 이벤트마다 긴 schedule을 다시 검사할
+      // 이유가 없다. 이미 만들어진 자식의 drift는 child 최종 guard가 맡는다.
+      if (pending.length === 0) continue;
+
       let snapshot: SeedCloneBatchSnapshot;
       try {
         snapshot = parseSnapshot(batch);
+        // create 시점과 실제 PENDING item 승격 사이에 SCD/등록 identity가 바뀔 수 있다.
+        // 매 pump의 enqueue 직전에 다시 검사해 이후 자식 생성을 멈춘다.
+        this.validateScheduleIdentities(snapshot.schedule);
       } catch (error) {
         this.markTerminal(
           batch.id,
@@ -138,15 +160,6 @@ export class SeedCloneBatchService {
         );
         continue;
       }
-
-      const pending = this.database.db
-        .select()
-        .from(backtestCloneBatchItems)
-        .where(eq(backtestCloneBatchItems.batchId, batch.id))
-        .orderBy(asc(backtestCloneBatchItems.ordinal))
-        .all()
-        .filter((item) => item.state === 'PENDING')
-        .slice(0, available);
 
       for (const item of pending) {
         this.database.sqlite.transaction(() => {

@@ -148,7 +148,12 @@ export class JobOrchestrator {
     }
     if ((job.status === 'RUNNING' || job.status === 'STARTING') && child) {
       // 취소 시퀀스 (스펙 §10): CANCELLING → IPC → SIGTERM → SIGKILL
-      this.queue.setStatus(jobId, 'CANCELLING', {}, ['RUNNING', 'STARTING']);
+      // getJob 뒤 결과 저장 transaction이 먼저 COMPLETED를 확정할 수 있다. CAS가
+      // 실패했는데도 IPC/신호를 보내면 이미 정상 완료한 child를 뒤늦게 죽이고 API에는
+      // CANCELLING이라고 거짓 응답하게 된다.
+      if (!this.queue.setStatus(jobId, 'CANCELLING', {}, ['RUNNING', 'STARTING'])) {
+        return 'NOT_CANCELLABLE';
+      }
       this.events.emit('job', { jobId, kind: 'status' } satisfies JobEvent);
       child.send({ type: 'cancel' });
 

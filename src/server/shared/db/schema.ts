@@ -621,6 +621,7 @@ export const symbolMasterVersions = sqliteTable(
     uniqueIndex('idx_smv_open_code')
       .on(table.standardCode)
       .where(sql`${table.validToDate} IS NULL`),
+    index('idx_smv_short_code').on(table.shortCode),
     index('idx_smv_asof').on(table.validFromDate, table.validToDate),
     index('idx_smv_valid_to').on(table.validToDate),
     check(

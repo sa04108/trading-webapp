@@ -63,6 +63,9 @@ import { SymbolMasterScheduler } from '../modules/market-data/application/symbol
 import { SelectionMetricRepository } from '../modules/market-data/application/selection-metric-repository.js';
 import { UniverseRuleResolver } from '../modules/backtest/application/universe-rule-resolver.js';
 import { BacktestPreparationOrchestrator } from '../modules/backtest/application/backtest-preparation-orchestrator.js';
+import {
+  assertSafePinnedScheduleIdentities,
+} from '../modules/backtest/application/backtest-symbol-identity.js';
 import { BenchmarkService } from '../modules/market-data/application/benchmark-service.js';
 import { RemoteWorkerService } from '../modules/backtest/application/remote-worker-service.js';
 import { RemoteInputBundleManager } from '../modules/backtest/infrastructure/remote-input-bundle-manager.js';
@@ -364,6 +367,9 @@ export function createContainer(config: AppConfig): Container {
     jobQueue,
     config.maxQueuedBacktests,
     clock,
+    (schedule) => assertSafePinnedScheduleIdentities(schedule, {
+      symbolMaster: symbolMasterService,
+    }),
   );
   const backtestNotificationListener = createBacktestNotificationListener({
     queue: jobQueue,

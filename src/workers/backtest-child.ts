@@ -3,7 +3,7 @@
  * 부모의 HTTP 이벤트 루프·메모리와 격리되어 입력 로드 → 엔진 실행 → 결과 저장을 수행한다.
  * 환경변수는 §5 화이트리스트만 받는다. 종료 전 최종 상태를 DB 에 직접 기록한다.
  */
-import { and, desc, eq, inArray, lt, notInArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, lt } from 'drizzle-orm';
 import { pino } from 'pino';
 import { readGitCommitSha } from '../server/shared/build-info.js';
 import { systemClock } from '../server/shared/clock.js';
@@ -28,7 +28,13 @@ import {
   type BacktestArtifactSize,
 } from '../server/modules/backtest/application/backtest-result-artifact.js';
 import { BacktestRunner } from '../server/modules/backtest/application/backtest-runner.js';
-import { TERMINAL_STATUSES } from '../server/modules/backtest/application/job-queue.js';
+import {
+  assertPinnedScheduleHash,
+  assertPinnedScheduleExecutionDates,
+  assertSafePinnedScheduleIdentities,
+  calculatePinnedScheduleHash,
+  UnsafeBacktestSymbolIdentityError,
+} from '../server/modules/backtest/application/backtest-symbol-identity.js';
 import { MAX_BACKTEST_BARS } from '../server/modules/backtest/domain/bar-estimate.js';
 import { ENGINE_VERSION } from '../server/modules/backtest/domain/engine.js';
 import {
@@ -77,12 +83,37 @@ async function main(): Promise<void> {
   const handle = openDatabase(databasePath);
   const db = handle.db;
 
-  const finish = (status: 'COMPLETED' | 'FAILED' | 'CANCELLED', error?: string): void => {
-    // 부모와의 경합에서 이미 확정된 종료 상태를 되돌리지 않는다
-    db.update(backtestJobs)
-      .set({ status, error: error ?? null, completedAtMs: Date.now() })
-      .where(and(eq(backtestJobs.id, jobId), notInArray(backtestJobs.status, TERMINAL_STATUSES)))
-      .run();
+  const finish = (
+    requestedStatus: 'COMPLETED' | 'FAILED' | 'CANCELLED',
+    error?: string,
+  ): 'COMPLETED' | 'FAILED' | 'CANCELLED' | null => {
+    // 취소 요청과 오류 처리를 한 UPDATE에서 판정한다. 상태를 SELECT한 뒤 FAILED를
+    // 쓰는 두 단계라면 그 사이 부모가 CANCELLING으로 바꿔도 실패가 취소를 덮어쓴다.
+    const updated = handle.sqlite.prepare(
+      `UPDATE backtest_jobs
+       SET status = CASE WHEN status = 'CANCELLING' THEN 'CANCELLED' ELSE ? END,
+           error = CASE WHEN status = 'CANCELLING' THEN NULL ELSE ? END,
+           completed_at_ms = ?
+       WHERE id = ?
+         AND status NOT IN ('CANCELLED', 'COMPLETED', 'FAILED', 'INTERRUPTED')
+       RETURNING status`,
+    ).get(
+      requestedStatus,
+      error ?? null,
+      Date.now(),
+      jobId,
+    ) as { status: 'COMPLETED' | 'FAILED' | 'CANCELLED' } | undefined;
+    if (updated !== undefined) return updated.status;
+
+    // 부모 exit handler가 아주 먼저 terminal로 확정한 경우에도 telemetry/exit code가
+    // 실제 상태를 따르도록 이미 저장된 결론을 읽는다.
+    const existing = db.select({ status: backtestJobs.status })
+      .from(backtestJobs)
+      .where(eq(backtestJobs.id, jobId))
+      .get()?.status;
+    return existing === 'COMPLETED' || existing === 'FAILED' || existing === 'CANCELLED'
+      ? existing
+      : null;
   };
 
   try {
@@ -114,6 +145,10 @@ async function main(): Promise<void> {
     // 여기 job.universeScheduleJson 에 이미 확정돼 있다. 워커가 규칙을 다시 해석하면
     // 대기 중 종목 마스터가 갱신됐을 때 제출 시점과 다른 유니버스로 돌게 된다.
     const schedule = JSON.parse(job.universeScheduleJson) as LegacyUniverseScheduleEntry[];
+    // Date.parse 결과가 NaN인 일정을 엔진에 넘기면 리밸런스가 영원히 실행되지 않은 채
+    // 0-trade 결과가 정상 완료될 수 있으므로 flatMap/map보다 먼저 막는다.
+    assertPinnedScheduleExecutionDates(schedule);
+    const loadedScheduleHash = calculatePinnedScheduleHash(schedule);
     const unionSymbols = [...new Set(schedule.flatMap((entry) => entry.symbols))].sort();
     // 엔진에 넘길 멤버십 일정 — rebalanceDate 를 periodToTsRange 와 같은 자정 규칙으로
     // ms 로 바꾼다. 두 곳이 각자 계산하면 제출·미리보기는 맞는데 실행부만 하루 어긋나는
@@ -170,6 +205,18 @@ async function main(): Promise<void> {
       clock: systemClock,
       logger: pino({ level: 'warn' }),
     });
+    // HTTP 제출을 거치지 않은 직접 enqueue, 배포 전 QUEUED, 지연 seed 승격과
+    // 원격 bundle 모두 이 최종 경계를 지난다. standardCode가 엔진 입력에서 사라지기
+    // 전에 전체 SCD 생애와 현재 등록 행을 함께 확인한다.
+    const pin: ProvenancePin | null = job.provenancePinJson
+      ? (JSON.parse(job.provenancePinJson) as ProvenancePin)
+      : null;
+    if (job.provenancePinJson !== null) {
+      // provenance 행이 있으면 hash는 필수다. `{}`/null hash 손상을 legacy 무-pin
+      // 작업처럼 허용하면 결과에 `unknown`을 남기고 재현성 검증을 우회한다.
+      assertPinnedScheduleHash(schedule, pin?.scheduleHash);
+    }
+    assertSafePinnedScheduleIdentities(schedule, { symbolMaster });
 
     // 거래불가일 — 봉 tsMs 로 접어 엔진에 넘긴다. Candle.tsMs 규약은 거래일의 UTC 자정이다
     // (krx-daily-candle-repository.ts). 여기서 같은 규칙을 쓰지 않으면 하루 어긋난다(D-024 류).
@@ -288,11 +335,8 @@ async function main(): Promise<void> {
           + '첫 리밸런스에서 지표가 준비되지 않아 주문이 나가지 않을 수 있습니다.',
       );
     }
-    // 서버가 제출 시점에 조립한 pin(Task 12) — scheduleHash 를 재현성 기록에 쓴다.
+    // 서버가 제출 시점에 조립한 pin(Task 12)은 위에서 일정 원문과 대조했다.
     // run 에는 원문 그대로 복사한다(아래 provenancePinJson).
-    const pin: ProvenancePin | null = job.provenancePinJson
-      ? (JSON.parse(job.provenancePinJson) as ProvenancePin)
-      : null;
     const drifted = pinnedEntries.filter((entry) => {
       const current = currentVersions.get(`${entry.code}:${entry.slice}`);
       return (current?.version ?? 0) !== entry.version;
@@ -451,6 +495,10 @@ async function main(): Promise<void> {
       );
     }
 
+    // 로컬 서버가 입력을 읽는 동안 master/등록 행이 갱신된 TOCTOU도 결과 생성 전에
+    // 닫는다. 원격 bundle은 불변이지만 같은 실행 코드를 유지한다.
+    assertSafePinnedScheduleIdentities(schedule, { symbolMaster });
+
     inputSize = {
       candleCount: candles.length,
       factCount: facts.length,
@@ -504,11 +552,62 @@ async function main(): Promise<void> {
     activeStage = 'PERSIST';
     outputSize = measureBacktestArtifact(artifact);
 
+    // 계산이 오래 걸리는 동안 중앙 종목 마스터 수집이 과거 alias를 새로 발견할 수
+    // 있다. 시작 직전 검사만으로는 그 결과를 정상 완료로 저장하므로, short-key 입력을
+    // 소비한 결과가 DB/artifact에 닿기 직전에 최신 snapshot으로 한 번 더 막는다.
+    assertSafePinnedScheduleIdentities(schedule, { symbolMaster });
+
     // 재현성 메타데이터 (스펙 §9.5) — 해시 규칙은 strategySourceHash 주석 참고
     const sourceHash = strategySourceHash(strategy);
-    const resultWriter = process.env.BACKTEST_RESULT_PATH
-      ? new SqliteBacktestResultArtifactWriter(process.env.BACKTEST_RESULT_PATH)
-      : new SqliteBacktestResultWriter(handle);
+    const resultPath = process.env.BACKTEST_RESULT_PATH;
+    const resultCompletedAtMs = Date.now();
+    const assertCurrentExecutionIdentity = (): void => {
+      const current = db.select({
+        requestJson: backtestJobs.requestJson,
+        strategyId: backtestJobs.strategyId,
+        universeRuleJson: backtestJobs.universeRuleJson,
+        universeScheduleJson: backtestJobs.universeScheduleJson,
+        provenancePinJson: backtestJobs.provenancePinJson,
+        universeJson: backtestJobs.universeJson,
+        universeHash: backtestJobs.universeHash,
+      }).from(backtestJobs).where(eq(backtestJobs.id, jobId)).get();
+      if (
+        current === undefined
+        || current.requestJson !== job.requestJson
+        || current.strategyId !== job.strategyId
+        || current.universeRuleJson !== job.universeRuleJson
+        || current.universeScheduleJson !== job.universeScheduleJson
+        || current.provenancePinJson !== job.provenancePinJson
+        || current.universeJson !== job.universeJson
+        || current.universeHash !== job.universeHash
+      ) {
+        throw new UnsafeBacktestSymbolIdentityError(
+          '결과 저장 전에 백테스트 실행 pin이 변경됐습니다.',
+        );
+      }
+      // 이 callback은 local writer의 IMMEDIATE transaction 안에서 실행된다.
+      // 따라서 row와 SCD를 확인한 뒤 결과/COMPLETED까지 다른 writer가 끼어들 수 없다.
+      assertSafePinnedScheduleIdentities(schedule, { symbolMaster });
+    };
+    const resultWriter = resultPath
+      ? new SqliteBacktestResultArtifactWriter(resultPath)
+      : new SqliteBacktestResultWriter(
+          handle,
+          assertCurrentExecutionIdentity,
+          () => db.update(backtestJobs)
+            .set({
+              status: 'COMPLETED',
+              error: null,
+              progressBars: artifact.processedBars,
+              totalBars: artifact.processedBars,
+              completedAtMs: resultCompletedAtMs,
+            })
+            .where(and(
+              eq(backtestJobs.id, jobId),
+              inArray(backtestJobs.status, ['STARTING', 'RUNNING']),
+            ))
+            .run().changes === 1,
+        );
     resultWriter.write({
       jobId,
       strategyId: strategy.id,
@@ -516,9 +615,8 @@ async function main(): Promise<void> {
       strategySourceHash: sourceHash,
       parameterJson: JSON.stringify(parameters),
       universeRuleJson: job.universeRuleJson,
-      // pin 이 scheduleHash 를 들고 있다 — validateSubmission 이 조립한 그대로다.
-      // pin 이 없을 리 없지만(항상 SYMBOL_MASTER 로 채워 저장한다), 손상된 행 방어로 폴백한다.
-      scheduleHash: pin?.scheduleHash ?? 'unknown',
+      // provenance pin이 없는 legacy/direct job도 실제 소비 schedule hash는 반드시 남긴다.
+      scheduleHash: loadedScheduleHash,
       universeJson: pinnedUniverseJson,
       universeHash: pinnedUniverseHash,
       engineVersion: ENGINE_VERSION,
@@ -530,28 +628,37 @@ async function main(): Promise<void> {
       // 기록 자체가 provenance 를 답할 수 있어야 한다.
       provenancePinJson: job.provenancePinJson,
       startedAtMs,
-      completedAtMs: Date.now(),
+      completedAtMs: resultCompletedAtMs,
     }, artifact);
     persistCompletedAtMs = Date.now();
 
-    db.update(backtestJobs)
-      .set({
-        progressBars: artifact.processedBars,
-        totalBars: artifact.processedBars,
-      })
-      .where(eq(backtestJobs.id, jobId))
-      .run();
-
-    // 종료 상태는 DB 가 유일한 진실이다 — 부모는 exit 이벤트에서 DB 를 읽는다
+    // 로컬 DB writer는 결과와 COMPLETED를 같은 transaction에서 확정했다. 원격
+    // artifact 모드는 bundle 안의 상태를 부모 supervisor가 읽으므로 여기서 끝낸다.
     outcome = 'COMPLETED';
-    finish('COMPLETED');
+    if (resultPath) {
+      db.update(backtestJobs)
+        .set({
+          progressBars: artifact.processedBars,
+          totalBars: artifact.processedBars,
+        })
+        .where(eq(backtestJobs.id, jobId))
+        .run();
+      finish('COMPLETED');
+    }
     activeStage = null;
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    const cancelled = cancellation.isRequested();
-    outcome = cancelled ? 'CANCELLED' : 'FAILED';
-    finish(cancelled ? 'CANCELLED' : 'FAILED', cancelled ? undefined : reason);
-    process.exitCode = cancelled ? 0 : 1;
+    const cancellationRequested = cancellation.isRequested();
+    const finalStatus = finish(
+      cancellationRequested ? 'CANCELLED' : 'FAILED',
+      cancellationRequested ? undefined : reason,
+    );
+    const cancelled = finalStatus === 'CANCELLED';
+    outcome = finalStatus === 'COMPLETED' ? 'COMPLETED' : cancelled ? 'CANCELLED' : 'FAILED';
+    // 원격 supervisor는 input.sqlite의 FAILED 행을 볼 수 없고 stderr를 중앙 finish
+    // 사유로 전달한다. 자체 메시지만 쓰고 수신 측이 2KB로 자른다.
+    if (outcome === 'FAILED') process.stderr.write(`${reason}\n`);
+    process.exitCode = outcome === 'FAILED' ? 1 : 0;
   } finally {
     const finishedAtMs = Date.now();
     const loadEnd = loadCompletedAtMs ?? finishedAtMs;

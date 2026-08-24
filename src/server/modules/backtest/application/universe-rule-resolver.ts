@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Logger } from '../../../shared/logger.js';
 import type { SymbolMasterEntry } from '../../market-data/domain/symbol-master.js';
+import type { SymbolIdentitySelection } from '../../market-data/domain/symbol-identity-lifetime.js';
 import type { SymbolMasterService } from '../../market-data/application/symbol-master-service.js';
 import type { UniverseRule } from '../../../../shared/schemas/universe-rule.js';
 import type { BacktestPeriod } from '../../../../shared/schemas/backtest-request.js';
@@ -14,6 +15,7 @@ import type { CorporateActionCoverageStore } from '../../facts/application/corpo
 import { derivePreparationFactYearRange } from '../../market-data/domain/fact-year-range.js';
 import { PitFactView } from '../../facts/domain/pit-fact-view.js';
 import { splitAdjustedClose } from '../../strategy/strategies/shared/adjusted-price.js';
+import { assertSafeIdentitySelections } from './backtest-symbol-identity.js';
 import {
   compareShortCodes,
   rankUniverseStage,
@@ -259,6 +261,61 @@ export class UniverseRuleResolver {
     const diagnostics: RebalanceDiagnostic[] = [];
     const unionEntries = new Map<string, SymbolMasterEntry>();
     let candidateScopeKnown = true;
+    // getUniverseAsOf가 각 effectiveDate에 실제 유효한 pair만 돌려주므로, 한 resolve
+    // 안에서는 pair의 전체 생애 1:1 검증을 한 번만 하면 된다. 날짜까지 cache key에
+    // 넣으면 DAY 일정에서 같은 200종목을 수천 번 DB 조회하게 된다. 호출 수명 캐시라
+    // 다음 resolve/ingest의 변경은 숨기지 않는다.
+    const validatedIdentityPairs = new Set<string>();
+    const observedIdentitySelections = new Map<string, SymbolIdentitySelection>();
+
+    const assertFreshIdentitySelections = (
+      candidates: readonly SymbolIdentitySelection[],
+    ): void => {
+      const uniqueByDateAndPair = new Map<string, SymbolIdentitySelection>();
+      for (const selection of candidates) {
+        const key = `${selection.effectiveDate}\0${selection.shortCode}\0${selection.standardCode}`;
+        if (!uniqueByDateAndPair.has(key)) uniqueByDateAndPair.set(key, selection);
+      }
+      if (uniqueByDateAndPair.size > 0) {
+        assertSafeIdentitySelections(this.deps.symbolMaster, [...uniqueByDateAndPair.values()]);
+      }
+    };
+
+    const validateIdentitySelections = (
+      candidates: readonly SymbolIdentitySelection[],
+    ): void => {
+      for (const selection of candidates) {
+        observedIdentitySelections.set(
+          `${selection.effectiveDate}\0${selection.shortCode}\0${selection.standardCode}`,
+          selection,
+        );
+      }
+      const pendingByPair = new Map<string, SymbolIdentitySelection>();
+      for (const selection of candidates) {
+        const key = `${selection.shortCode}\0${selection.standardCode}`;
+        if (!validatedIdentityPairs.has(key) && !pendingByPair.has(key)) {
+          pendingByPair.set(key, selection);
+        }
+      }
+      const pending = [...pendingByPair.values()];
+      if (pending.length === 0) return;
+      assertSafeIdentitySelections(this.deps.symbolMaster, pending);
+      for (const selection of pending) {
+        const key = `${selection.shortCode}\0${selection.standardCode}`;
+        validatedIdentityPairs.add(key);
+      }
+    };
+
+    const validateCandidateIdentities = (
+      entries: readonly Pick<SymbolMasterEntry, 'shortCode' | 'standardCode'>[],
+      effectiveDate: string,
+    ): void => {
+      validateIdentitySelections(entries.map((entry) => ({
+        shortCode: entry.shortCode,
+        standardCode: entry.standardCode,
+        effectiveDate,
+      })));
+    };
 
     const widenPriceRange = (from: string, to: string): void => {
       priceRange = priceRange === null
@@ -341,6 +398,9 @@ export class UniverseRuleResolver {
             stageReady = false;
           }
         } else if (stage.criterion === 'PER' || stage.criterion === 'ROE') {
+          // coverage·facts가 shortCode 키라, issuer가 다른 전 생애 데이터를 읽기 전에
+          // 현재 후보의 양방향 identity가 전체 SCD에서 1:1인지 먼저 확인한다.
+          validateCandidateIdentities(candidates, effectiveDate);
           // 재무 결측은 fact 행 존재(hasFacts)가 아니라 financial coverage 연도로
           // 판정한다. 자본변동 전용 수집도 fact 행을 남기므로 행 존재는
           // 재무 있음을 증명하지 못한다 (fact-coverage-store.ts 주석). coverage 는
@@ -390,6 +450,9 @@ export class UniverseRuleResolver {
             });
           }
         } else {
+          // DECLINE은 일봉·자본변동을 shortCode로 읽는다. 과거 issuer의 봉이나 공시가
+          // 섞인 뒤 순위를 계산하지 않도록 첫 저장소 접근보다 먼저 검사한다.
+          validateCandidateIdentities(candidates, effectiveDate);
           const codes = candidates.map((entry) => entry.shortCode);
           // 조회 하한 없이 부르면 후보 × 리밸런스 날짜마다 전체 일봉 이력을 읽는다.
           // 보수 범위(requiredFrom)만 있으면 N봉 판정과 수익률 계산에 충분하다.
@@ -494,6 +557,19 @@ export class UniverseRuleResolver {
             return entry === undefined ? [] : [entry];
           });
         }
+
+        // standardCode 기반 선정 지표가 아직 없으면 현재 candidates는 후속 stage의
+        // 실제 입력이 아니라 보수적 상한이다. 여기서 PER/ROE/DECLINE을 읽으면 이후
+        // 시총·거래대금에서 탈락할 ambiguous shortCode 때문에 과잉 차단되므로, 시장
+        // 데이터를 먼저 준비하고 다음 resolve에서 좁혀진 후보로 재개한다.
+        if (
+          !stageReady
+          && (
+            stage.criterion === 'MARKET_CAP'
+            || stage.criterion === 'VOLUME'
+            || stage.criterion === 'TRADING_VALUE'
+          )
+        ) break;
       }
 
       // 이 날짜의 완전한 후보 상한이 비었다면 앞 unresolved stage가
@@ -540,6 +616,11 @@ export class UniverseRuleResolver {
       || selectionMetricDates.size > 0
       || priceRange !== null
     ) {
+      // short-keyed 저장소를 읽는 동안 await 경계에서 SCD가 바뀌었을 수 있다.
+      // stage cache를 우회해 반환 직전에 한 번 더 확인해야 준비 작업이 stale pair로
+      // DART 등록·저장을 진행하지 않는다. 시장 지표만 미해소인 broad 후보는 이 Map에
+      // 들어오지 않으므로 과잉 차단도 없다.
+      assertFreshIdentitySelections([...observedIdentitySelections.values()]);
       return {
         kind: 'NEEDS_DATA',
         candidateScopeKnown,
@@ -553,6 +634,19 @@ export class UniverseRuleResolver {
         },
       };
     }
+    // market-only 규칙도 최종 schedule에서 shortCode 기반 전략·엔진으로 넘어간다.
+    // members 원문 전체를 한 batch로 검사해 unionEntries의 shortCode first-wins를
+    // 신뢰하지 않으면서 DAY 일정의 날짜별 DB 왕복도 피한다.
+    assertFreshIdentitySelections([
+      ...observedIdentitySelections.values(),
+      ...schedule.flatMap((entry) =>
+        entry.members.map((member) => ({
+          shortCode: member.symbol,
+          standardCode: member.standardCode,
+          effectiveDate: entry.effectiveDate,
+        })),
+      ),
+    ]);
     return { kind: 'READY', schedule, diagnostics, unionEntries };
   }
 

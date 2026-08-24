@@ -27,6 +27,7 @@ import type { Clock } from '../../../shared/clock.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
 import type { FactCoverageStore } from '../../facts/application/fact-coverage-store.js';
 import type { ConsumedVersionSnapshot, SymbolService } from '../../market-data/application/symbol-service.js';
+import type { SymbolMasterService } from '../../market-data/application/symbol-master-service.js';
 import { sendIfKrxError, sendIfNotCovered } from './krx-error-mapping.js';
 import { KRX_FILTER_POLICY_VERSION } from '../../market-data/domain/krx-filter-policy.js';
 import type {
@@ -61,6 +62,7 @@ import {
   type PreparationInput,
 } from '../application/backtest-preparation-orchestrator.js';
 import { backtestPreparationRequestHash } from '../application/backtest-preparation-plan.js';
+import { assertSafePinnedScheduleIdentities } from '../application/backtest-symbol-identity.js';
 import type {
   SeedCloneBatchDetail,
   SeedCloneBatchService,
@@ -76,6 +78,7 @@ export interface BacktestRouteDeps {
   readonly results: ResultsService;
   readonly strategies: StrategyRegistry;
   readonly symbolService: SymbolService;
+  readonly symbolMaster: SymbolMasterService;
   /** 종목별 일봉 보유 구간 — `krx_daily_bars` 를 직접 집계한다(Task 6) */
   readonly candleCoverage: CandleCoverageService;
   readonly preparation: BacktestPreparationOrchestrator;
@@ -157,63 +160,17 @@ function scheduleHash(schedule: readonly LegacyUniverseScheduleEntry[]): string 
   return createHash('sha256').update(JSON.stringify(schedule)).digest('hex');
 }
 
-function registeredScheduleIdentityError(
-  preview: BacktestUniversePreview,
-  symbols: Pick<
-    SymbolService,
-    'getRegisteredIdentity' | 'getRegisteredIdentityByStandardCode'
-  >,
+function pinnedScheduleIdentityError(
+  schedule: readonly LegacyUniverseScheduleEntry[],
+  symbolMaster: SymbolMasterService,
 ): string | null {
-  const standardsByShort = new Map<string, Set<string>>();
-  const shortsByStandard = new Map<string, Set<string>>();
-  for (const entry of preview.schedule) {
-    for (const member of entry.members) {
-      const standards = standardsByShort.get(member.symbol) ?? new Set<string>();
-      standards.add(member.standardCode);
-      standardsByShort.set(member.symbol, standards);
-      const shorts = shortsByStandard.get(member.standardCode) ?? new Set<string>();
-      shorts.add(member.symbol);
-      shortsByStandard.set(member.standardCode, shorts);
-    }
+  try {
+    assertSafePinnedScheduleIdentities(schedule, { symbolMaster });
+    return null;
+  } catch (error) {
+    if (error instanceof UnsafeBacktestSymbolIdentityError) return error.message;
+    throw error;
   }
-
-  for (const [shortCode, standards] of standardsByShort) {
-    if (standards.size > 1) {
-      return `단축코드 ${shortCode}이 준비 일정에서 여러 표준코드(`
-        + `${[...standards].sort().join(', ')})에 연결됐습니다. `
-        + '단축코드 재사용 가능성이 있어 실행을 차단했습니다.';
-    }
-  }
-  for (const [standardCode, shortCodes] of shortsByStandard) {
-    if (shortCodes.size > 1) {
-      return `KRX 표준코드 ${standardCode}가 준비 일정에서 여러 단축코드(`
-        + `${[...shortCodes].sort().join(', ')})에 연결됐습니다. `
-        + '코드 변경 전후 데이터를 현재 저장 구조로 분리할 수 없어 실행을 차단했습니다.';
-    }
-  }
-
-  for (const [shortCode, standards] of standardsByShort) {
-    const standardCode = [...standards][0] as string;
-    const registered = symbols.getRegisteredIdentity(shortCode);
-    if (registered === null) {
-      return `${shortCode} 종목이 현재 종목 저장소에 등록되지 않아 identity를 확인할 수 없습니다. `
-        + '미리보기를 다시 실행해 종목 등록을 완료하세요.';
-    }
-    if (registered.standardCode === null) {
-      return `${shortCode} 종목은 KRX 표준코드가 없는 기존 등록이라 종목 identity를 확인할 수 없습니다. `
-        + '기존 데이터를 검증·이관한 뒤 미리보기를 다시 실행하세요.';
-    }
-    if (registered.standardCode !== standardCode) {
-      return `${shortCode}의 기존 표준코드(${registered.standardCode})가 선택된 종목의 `
-        + `표준코드(${standardCode})와 다릅니다. 단축코드 재사용 가능성이 있어 실행을 차단했습니다.`;
-    }
-    const standardOwner = symbols.getRegisteredIdentityByStandardCode(standardCode);
-    if (standardOwner === null || standardOwner.code !== shortCode) {
-      return `KRX 표준코드 ${standardCode}의 기존 단축코드가 선택된 종목(${shortCode})과 다릅니다. `
-        + '코드 변경 전후 데이터를 현재 저장 구조로 분리할 수 없어 실행을 차단했습니다.';
-    }
-  }
-  return null;
 }
 
 const consumedVersionSnapshotSchema = z.object({
@@ -337,6 +294,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     results,
     strategies,
     symbolService,
+    symbolMaster,
     candleCoverage,
     preparation,
     audit,
@@ -601,7 +559,10 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     // 완료된 preparation 뒤 등록 행이 바뀌거나, clone 계열이 resolver 재실행 없이
     // cached preview를 재사용해도 shortCode 기반 봉·팩트를 다른 증권과 합치지 않는다.
     // schedule 원문을 보므로 unionEntries의 shortCode first-wins에도 의존하지 않는다.
-    const identityError = registeredScheduleIdentityError(preparedPreview, symbolService);
+    const identityError = pinnedScheduleIdentityError(
+      resolved.schedule,
+      symbolMaster,
+    );
     if (identityError !== null) {
       return { ok: false, status: 422, errors: [identityError] };
     }
@@ -1250,11 +1211,14 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
 
     const reusable = reusablePreviewFor(job, rebased.request);
+    const identityBlocker = reusable === null
+      ? null
+      : pinnedScheduleIdentityError(reusable.schedule, symbolMaster);
     return {
       request: rebased.request,
       warnings: rebased.warnings,
-      blockers: [],
-      reusablePreview: reusable?.response ?? null,
+      blockers: identityBlocker === null ? [] : [identityBlocker],
+      reusablePreview: identityBlocker === null ? reusable?.response ?? null : null,
     };
   });
 

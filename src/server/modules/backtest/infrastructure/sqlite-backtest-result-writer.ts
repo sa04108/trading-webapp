@@ -16,11 +16,19 @@ import type {
 
 /** 결과 artifact를 현재 조회 스키마에 원자적으로 import하는 로컬 adapter. */
 export class SqliteBacktestResultWriter implements BacktestResultWriter {
-  constructor(private readonly handle: DatabaseHandle) {}
+  constructor(
+    private readonly handle: DatabaseHandle,
+    private readonly beforePersist: () => void = () => undefined,
+    private readonly completePersist: () => boolean = () => true,
+  ) {}
 
   write(context: BacktestResultWriteContext, artifact: BacktestResultArtifact): void {
     const db = this.handle.db;
     const insertResults = this.handle.sqlite.transaction(() => {
+      // identity guard 같은 최종 precondition을 결과 행과 같은 write transaction에서
+      // 검사한다. IMMEDIATE lock을 먼저 잡아 검사와 persist 사이에 다른 연결의 SCD
+      // 변경이 끼어들지 못하게 한다.
+      this.beforePersist();
       db.insert(backtestRuns)
         .values({
           id: newId('run'),
@@ -113,7 +121,10 @@ export class SqliteBacktestResultWriter implements BacktestResultWriter {
           })))
           .run();
       }
+      if (!this.completePersist()) {
+        throw new Error('결과 저장과 job 완료 전이를 같은 transaction에서 확정하지 못했습니다');
+      }
     });
-    insertResults();
+    insertResults.immediate();
   }
 }
