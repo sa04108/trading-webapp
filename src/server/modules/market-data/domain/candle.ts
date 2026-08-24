@@ -1,3 +1,5 @@
+import type { KrxMarket } from './krx-universe-types.js';
+
 export type Market = 'KR' | 'US';
 /** 선언된 시장 전체. 타입과 값 목록이 떨어져 있으면 시장을 추가할 때 한쪽만 고쳐진다. */
 export const ALL_MARKETS: readonly Market[] = ['KR', 'US'];
@@ -8,6 +10,8 @@ export type Timeframe = '1d';
 export interface Candle {
   readonly symbol: string;
   readonly market: Market;
+  /** 국내 일봉의 실제 거래시장. 해외·레거시 봉에는 없을 수 있다. */
+  readonly venue?: KrxMarket;
   readonly timeframe: Timeframe;
   readonly tsMs: number;
   readonly open: number;
@@ -27,6 +31,7 @@ export function isValidCandle(candle: Candle): boolean {
     if (!Number.isFinite(value) || value <= 0) return false;
   }
   if (!Number.isFinite(volume) || volume < 0) return false;
+  if (candle.venue !== undefined && candle.venue !== 'KOSPI' && candle.venue !== 'KOSDAQ') return false;
   if (high < low) return false;
   if (high < open || high < close) return false;
   if (low > open || low > close) return false;

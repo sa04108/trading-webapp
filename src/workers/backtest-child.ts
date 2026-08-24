@@ -32,8 +32,8 @@ import { TERMINAL_STATUSES } from '../server/modules/backtest/application/job-qu
 import { MAX_BACKTEST_BARS } from '../server/modules/backtest/domain/bar-estimate.js';
 import { ENGINE_VERSION } from '../server/modules/backtest/domain/engine.js';
 import {
-  DEFAULT_EXECUTION_RULES,
   getCostProfile,
+  getKrxExecutionRules,
   getSlippageProfile,
 } from '../server/modules/backtest/domain/cost-profiles.js';
 import { SqliteFactRepository } from '../server/modules/facts/infrastructure/sqlite-fact-repository.js';
@@ -470,7 +470,7 @@ async function main(): Promise<void> {
       execution: {
         cost: costProfile,
         slippage: slippageProfile,
-        rules: DEFAULT_EXECUTION_RULES,
+        rules: getKrxExecutionRules(request.universeRule.markets[0]!),
       },
       parameters,
       randomSeed: request.randomSeed,

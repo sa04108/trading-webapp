@@ -2,6 +2,7 @@ import { and, asc, eq, gte, lte } from 'drizzle-orm';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import { krxDailyBars } from '../../../shared/db/schema.js';
 import { isValidCandle, type Candle, type Market, type Timeframe } from '../domain/candle.js';
+import type { KrxMarket } from '../domain/krx-universe-types.js';
 import type { CandleQuery, CandleRepository } from '../application/ports.js';
 
 const MS_PER_DAY = 86_400_000;
@@ -27,6 +28,7 @@ function toCandle(
   return {
     symbol,
     market,
+    venue: row.market as KrxMarket,
     timeframe,
     tsMs: dateToTsMs(row.date),
     open: row.open,

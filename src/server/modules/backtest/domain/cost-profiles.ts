@@ -45,6 +45,19 @@ export const DEFAULT_EXECUTION_RULES: ExecutionRules = {
   minOrderQty: 1,
 };
 
+/**
+ * KRX 보통주 호가단위. 2023-01-25 전에는 고가 구간이 시장별로 달랐고 이후 통합됐다.
+ * universeRule의 단일 요청 시장을 fallback으로 고정하고, 실제 봉의 venue가 있으면
+ * 체결부가 그 값을 우선한다.
+ */
+export function getKrxExecutionRules(market: 'KOSPI' | 'KOSDAQ'): ExecutionRules {
+  return {
+    tickSize: 0,
+    tickSizeProfile: { id: 'krx-equity', version: '1.0.0', market },
+    minOrderQty: 1,
+  };
+}
+
 export function getCostProfile(id: string): CostProfile | null {
   return COST_PROFILES[id] ?? null;
 }
@@ -69,4 +82,36 @@ export function sellTaxRateAt(profile: CostProfile, tsMs: number): number {
     rate = entry.rate;
   }
   return rate;
+}
+
+const KRX_UNIFIED_TICK_FROM_TS_MS = Date.parse('2023-01-25T00:00:00Z');
+
+/** 주문 가격대에 맞는 KRX 보통주 호가단위. */
+export function tickSizeAt(
+  rules: ExecutionRules,
+  price: number,
+  tsMs: number,
+  venue?: 'KOSPI' | 'KOSDAQ',
+): number {
+  const profile = rules.tickSizeProfile;
+  if (profile === undefined) return rules.tickSize;
+  const market = venue ?? profile.market;
+
+  if (tsMs >= KRX_UNIFIED_TICK_FROM_TS_MS) {
+    if (price < 2_000) return 1;
+    if (price < 5_000) return 5;
+    if (price < 20_000) return 10;
+    if (price < 50_000) return 50;
+    if (price < 200_000) return 100;
+    if (price < 500_000) return 500;
+    return 1_000;
+  }
+
+  if (price < 1_000) return 1;
+  if (price < 5_000) return 5;
+  if (price < 10_000) return 10;
+  if (price < 50_000) return 50;
+  if (price < 100_000 || market === 'KOSDAQ') return 100;
+  if (price < 500_000) return 500;
+  return 1_000;
 }

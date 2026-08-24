@@ -1,5 +1,5 @@
 import type { ExecutionProfile, Fill, OrderIntent } from './types.js';
-import { sellTaxRateAt } from './cost-profiles.js';
+import { sellTaxRateAt, tickSizeAt } from './cost-profiles.js';
 
 /**
  * 다음 봉 시가 체결 (스펙 §9.1):
@@ -11,15 +11,18 @@ export function simulateFill(
   nextBarOpen: number,
   tsMs: number,
   profile: ExecutionProfile,
+  venue?: 'KOSPI' | 'KOSDAQ',
 ): Fill {
   const { cost, slippage, rules } = profile;
   const slip = nextBarOpen * (slippage.bps / 10_000) + slippage.fixed;
+  const slippedPrice = intent.side === 'BUY' ? nextBarOpen + slip : nextBarOpen - slip;
+  const tickSize = tickSizeAt(rules, slippedPrice, tsMs, venue);
 
   let price: number;
   if (intent.side === 'BUY') {
-    price = roundToTick(nextBarOpen + slip, rules.tickSize, 'up');
+    price = roundToTick(slippedPrice, tickSize, 'up');
   } else {
-    price = roundToTick(Math.max(nextBarOpen - slip, rules.tickSize || 0.0001), rules.tickSize, 'down');
+    price = roundToTick(Math.max(slippedPrice, tickSize || 0.0001), tickSize, 'down');
   }
 
   const grossAmount = price * intent.quantity;

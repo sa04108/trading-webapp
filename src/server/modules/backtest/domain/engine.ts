@@ -119,7 +119,7 @@ export interface BacktestRunResult {
  * 1.8.0: 거래정지된 이탈 종목의 첫 청산 시도 뒤에는 신규 매수 대기열을 해제한다.
  * 1.9.0: 동시 매수 신호의 현금·포지션 슬롯 배정 순서를 seed 기반으로 무작위화한다.
  */
-export const ENGINE_VERSION = '1.9.0';
+export const ENGINE_VERSION = '2.0.0';
 
 const PROGRESS_INTERVAL_BARS = 500;
 /** 전략에 노출된 RNG 흐름과 매수 우선순위 RNG 흐름을 분리하는 32-bit salt. */
@@ -969,7 +969,7 @@ function* runBacktestSteps(
     basePrice: number = bar.open,
   ): Fill | null {
     if (order.side === 'BUY') {
-      let fill = simulateFill(order, basePrice, tsMs, input.execution);
+      let fill = simulateFill(order, basePrice, tsMs, input.execution, bar.venue);
       if (requiredCashForBuy(fill) > cash) {
         // 현금 부족: 감당 가능한 수량으로 축소, 최소 수량 미만이면 거부
         // fill.price 는 이미 체결가라 basePrice 와 다르다 — 그대로 쓴다
@@ -980,7 +980,13 @@ function* runBacktestSteps(
           warnings.push(`${order.symbol} 매수 거부: 현금 부족 (${new Date(tsMs).toISOString()})`);
           return null;
         }
-        fill = simulateFill({ ...order, quantity: affordable }, basePrice, tsMs, input.execution);
+        fill = simulateFill(
+          { ...order, quantity: affordable },
+          basePrice,
+          tsMs,
+          input.execution,
+          bar.venue,
+        );
       }
 
       cash -= requiredCashForBuy(fill);
@@ -1007,7 +1013,13 @@ function* runBacktestSteps(
     const position = positions.get(order.symbol);
     if (!position || position.quantity <= 0) return null;
     const sellQty = Math.min(order.quantity, position.quantity);
-    const fill = simulateFill({ ...order, quantity: sellQty }, basePrice, tsMs, input.execution);
+    const fill = simulateFill(
+      { ...order, quantity: sellQty },
+      basePrice,
+      tsMs,
+      input.execution,
+      bar.venue,
+    );
 
     cash += proceedsFromSell(fill);
 

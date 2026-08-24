@@ -73,7 +73,7 @@ function alwaysBuyBothStrategy(): TradingStrategy<unknown, null> {
 
 describe('runBacktest — 멤버십 일정 기반 거래 대상 제한 (스펙 2026-08-05, §9.5)', () => {
   it('동시 매수 우선순위 정책 변경을 엔진 버전에 반영한다', () => {
-    expect(ENGINE_VERSION).toBe('1.9.0');
+    expect(ENGINE_VERSION).toBe('2.0.0');
   });
 
   it('1구간에서는 일정에 포함된 A 만 매수되고 B 는 거부된다', () => {

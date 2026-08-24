@@ -26,8 +26,14 @@ export interface SlippageProfile {
 }
 
 export interface ExecutionRules {
-  /** 최소 호가 단위. 0 이면 반올림 없음 */
+  /** 고정 최소 호가 단위. 동적 프로파일이 없고 0 이면 반올림 없음 */
   readonly tickSize: number;
+  /** KRX 보통주 체결일·시장·가격대별 호가단위 프로파일 */
+  readonly tickSizeProfile?: {
+    readonly id: 'krx-equity';
+    readonly version: string;
+    readonly market: 'KOSPI' | 'KOSDAQ';
+  };
   /** 최소 주문 수량 */
   readonly minOrderQty: number;
 }

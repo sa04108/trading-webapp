@@ -5,7 +5,10 @@ import {
   roundToTick,
   simulateFill,
 } from '../../src/server/modules/backtest/domain/execution.js';
-import { getCostProfile } from '../../src/server/modules/backtest/domain/cost-profiles.js';
+import {
+  getCostProfile,
+  getKrxExecutionRules,
+} from '../../src/server/modules/backtest/domain/cost-profiles.js';
 import type { ExecutionProfile } from '../../src/server/modules/backtest/domain/types.js';
 
 const PROFILE: ExecutionProfile = {
@@ -78,6 +81,36 @@ describe('simulateFill (스펙 §9.1 next-bar-open + §9.3 비용 모델)', () =
     );
     expect(beforeCut.tax).toBeCloseTo(beforeCut.grossAmount * 0.0018);
     expect(afterCut.tax).toBeCloseTo(afterCut.grossAmount * 0.0015);
+  });
+
+  it('rounds with the historical KRX market-specific tick size', () => {
+    const beforeChange = Date.parse('2023-01-24T00:00:00Z');
+    const kospi = simulateFill(
+      { symbol: 'A', side: 'BUY', quantity: 1 },
+      150_001,
+      beforeChange,
+      { ...PROFILE, slippage: { ...PROFILE.slippage, bps: 0 }, rules: getKrxExecutionRules('KOSPI') },
+    );
+    const kosdaq = simulateFill(
+      { symbol: 'A', side: 'BUY', quantity: 1 },
+      150_001,
+      beforeChange,
+      { ...PROFILE, slippage: { ...PROFILE.slippage, bps: 0 }, rules: getKrxExecutionRules('KOSDAQ') },
+    );
+    expect(kospi.price).toBe(150_500);
+    expect(kosdaq.price).toBe(150_100);
+  });
+
+  it('prefers the fill candle venue over the request-market fallback', () => {
+    const beforeChange = Date.parse('2023-01-24T00:00:00Z');
+    const fill = simulateFill(
+      { symbol: 'A', side: 'BUY', quantity: 1 },
+      150_001,
+      beforeChange,
+      { ...PROFILE, slippage: { ...PROFILE.slippage, bps: 0 }, rules: getKrxExecutionRules('KOSPI') },
+      'KOSDAQ',
+    );
+    expect(fill.price).toBe(150_100);
   });
 });
 

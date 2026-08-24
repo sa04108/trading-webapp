@@ -13,8 +13,8 @@ import {
   symbolMasterVersions,
 } from '../../src/server/shared/db/schema.js';
 import {
-  DEFAULT_EXECUTION_RULES,
   getCostProfile,
+  getKrxExecutionRules,
   getSlippageProfile,
 } from '../../src/server/modules/backtest/domain/cost-profiles.js';
 import { simulateFill } from '../../src/server/modules/backtest/domain/execution.js';
@@ -842,7 +842,7 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
       const executionProfile = {
         cost: getCostProfile('kr-equity-default')!,
         slippage: getSlippageProfile('fixed-5bps')!,
-        rules: DEFAULT_EXECUTION_RULES,
+        rules: getKrxExecutionRules('KOSPI'),
       };
       const expectedFromClose = simulateFill(
         { symbol: '000660', side: 'SELL', quantity: 1, reason: 'DELISTED' },
