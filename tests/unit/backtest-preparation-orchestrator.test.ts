@@ -668,6 +668,42 @@ describe('BacktestPreparationOrchestrator quota resume와 terminal 결과', () =
     ctx.handle.close();
   });
 
+  it('진행 중인 KRX 요청에서 한도 오류가 나도 먼저 요청된 취소를 대기로 덮지 않는다', async () => {
+    const requestStarted = deferred<void>();
+    const finishRequest = deferred<void>();
+    const ctx = makeDeps({
+      resolver: {
+        resolveOrDescribeNeeds: async () => MARKET_ONLY_NEEDS,
+        isPeriodCovered: () => false,
+      },
+      symbolMaster: {
+        ensureTradingDay: async () => {
+          requestStarted.resolve();
+          await finishRequest.promise;
+          throw new KrxQuotaError();
+        },
+        ensureSelectionMetrics: async () => undefined,
+        ingestDate: async () => ({ kind: 'ALREADY_COVERED' as const }),
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const job = orchestrator.start(INPUT);
+    await requestStarted.promise;
+
+    expect(orchestrator.cancel(job.id)).toBe(true);
+    expect(orchestrator.get(job.id)?.status).toBe('RUNNING');
+    finishRequest.resolve();
+    await waitFor(() => orchestrator.get(job.id)?.status === 'CANCELLED');
+
+    expect(orchestrator.get(job.id)).toMatchObject({
+      status: 'CANCELLED',
+      nextResumeAtMs: null,
+      error: '사용자가 준비 작업을 취소했습니다.',
+    });
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
   it('DART 공급자가 먼저 한도 초과를 반환해도 WAITING 상태와 영속 알림 신호를 남긴다', async () => {
     const quotaReports: string[] = [];
     const ctx = makeDeps({

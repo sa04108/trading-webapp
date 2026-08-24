@@ -700,15 +700,20 @@ export class BacktestPreparationOrchestrator {
     const now = this.deps.clock.now();
     const snapshot = this.persistAndEmit(
       jobId,
-      {
-        status: 'WAITING_DAILY_QUOTA',
-        phase: 'MARKET_DATA',
-        nextResumeAtMs: nextKstMidnightMs(now),
-        error: message,
-      },
+      (row) => row.cancelRequested
+        ? { status: 'CANCELLED', error: '사용자가 준비 작업을 취소했습니다.' }
+        : {
+            status: 'WAITING_DAILY_QUOTA',
+            phase: 'MARKET_DATA',
+            nextResumeAtMs: nextKstMidnightMs(now),
+            error: message,
+          },
       ['RUNNING'],
     );
-    if (snapshot?.nextResumeAtMs !== null && snapshot?.nextResumeAtMs !== undefined) {
+    if (
+      snapshot?.status === 'WAITING_DAILY_QUOTA'
+      && snapshot.nextResumeAtMs !== null
+    ) {
       this.scheduleResume(jobId, snapshot.nextResumeAtMs);
     }
   }
