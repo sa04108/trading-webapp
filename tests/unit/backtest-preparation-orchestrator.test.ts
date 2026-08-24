@@ -105,6 +105,8 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
     },
     symbolService: {
       exists: () => true,
+      getRegisteredIdentity: (code: string) => ({ code, standardCode: ENTRY.standardCode }),
+      getRegisteredIdentityByStandardCode: () => null,
       addSymbol: () => undefined,
     },
     factSync: {
@@ -409,6 +411,115 @@ describe('BacktestPreparationOrchestrator single-flight와 직렬 실행', () =>
       'QUEUED', 'RUNNING', 'COMPLETED',
     ]);
     unsubscribe();
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+});
+
+describe('BacktestPreparationOrchestrator 기존 종목 정체성 검증', () => {
+  it('표준코드가 없는 기존 단축코드를 자동 병합하지 않는다', async () => {
+    let addCalls = 0;
+    const ctx = makeDeps({
+      symbolService: {
+        exists: () => true,
+        getRegisteredIdentity: () => ({ code: ENTRY.shortCode, standardCode: null }),
+        getRegisteredIdentityByStandardCode: () => null,
+        addSymbol: () => { addCalls += 1; },
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const job = orchestrator.start(INPUT);
+    await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
+
+    expect(orchestrator.get(job.id)?.error).toMatch(/표준코드가 없는 기존 등록.*자동|정체성을 검증·이관/);
+    expect(addCalls).toBe(0);
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
+  it('같은 단축코드의 기존 표준코드가 다르면 코드 재사용으로 보고 거부한다', async () => {
+    const ctx = makeDeps({
+      symbolService: {
+        exists: () => true,
+        getRegisteredIdentity: () => ({ code: ENTRY.shortCode, standardCode: 'KR7000000000' }),
+        getRegisteredIdentityByStandardCode: () => null,
+        addSymbol: () => undefined,
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const job = orchestrator.start(INPUT);
+    await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
+
+    expect(orchestrator.get(job.id)?.error).toMatch(
+      /KR7000000000.*KR7005930003.*다른 증권에 재사용/,
+    );
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
+  it('등록된 표준코드가 KRX entry와 같으면 기존 행을 재사용한다', async () => {
+    let addCalls = 0;
+    const ctx = makeDeps({
+      symbolService: {
+        exists: () => true,
+        getRegisteredIdentity: () => ({ code: ENTRY.shortCode, standardCode: ENTRY.standardCode }),
+        getRegisteredIdentityByStandardCode: () => ({
+          code: ENTRY.shortCode,
+          standardCode: ENTRY.standardCode,
+        }),
+        addSymbol: () => { addCalls += 1; },
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const job = orchestrator.start(INPUT);
+    await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
+
+    expect(addCalls).toBe(0);
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
+  it('같은 표준코드가 다른 단축코드에 등록돼 있으면 raw unique 오류 대신 안전하게 거부한다', async () => {
+    let addCalls = 0;
+    const ctx = makeDeps({
+      symbolService: {
+        exists: () => false,
+        getRegisteredIdentity: () => null,
+        getRegisteredIdentityByStandardCode: () => ({
+          code: '000001',
+          standardCode: ENTRY.standardCode,
+        }),
+        addSymbol: () => { addCalls += 1; },
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const job = orchestrator.start(INPUT);
+    await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
+
+    expect(orchestrator.get(job.id)?.error).toMatch(/기존 단축코드\(000001\).*005930.*실행을 차단/);
+    expect(addCalls).toBe(0);
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
+  it('READY 일정 멤버의 identity 원본이 누락되면 조용히 등록을 건너뛰지 않는다', async () => {
+    const malformed = { ...ready(), unionEntries: new Map<string, SymbolMasterEntry>() };
+    const ctx = makeDeps({
+      resolver: {
+        resolveOrDescribeNeeds: async () => malformed,
+        isPeriodCovered: () => true,
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const job = orchestrator.start(INPUT);
+    await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
+
+    expect(orchestrator.get(job.id)?.error).toMatch(/identity 원본.*누락.*실행을 차단/);
     await orchestrator.stop();
     ctx.handle.close();
   });

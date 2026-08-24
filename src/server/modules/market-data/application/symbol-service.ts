@@ -15,6 +15,12 @@ export interface SymbolSummary {
   readonly name: string | null;
 }
 
+/** 단축코드 등록 행의 정체성 확인용 최소 투영. null standardCode도 중요한 상태다. */
+export interface RegisteredSymbolIdentity {
+  readonly code: string;
+  readonly standardCode: string | null;
+}
+
 /**
  * 재무 버전 체인의 슬라이스 자리. `facts` 모듈(`fact-sync-service.ts`)이 이 값을
  * import 해서 쓴다.
@@ -78,6 +84,29 @@ export class SymbolService {
   getSymbol(code: string): SymbolSummary | null {
     const row = this.db.select().from(symbolsTable).where(eq(symbolsTable.code, code)).get();
     return row ? this.toSummary(row) : null;
+  }
+
+  /**
+   * KRX 스냅샷 자동 등록이 기존 단축코드를 같은 증권으로 간주해도 되는지 확인한다.
+   * 표시용 `SymbolSummary`에 standardCode를 섞지 않고 준비 경계에만 좁게 노출한다.
+   */
+  getRegisteredIdentity(code: string): RegisteredSymbolIdentity | null {
+    const row = this.db
+      .select({ code: symbolsTable.code, standardCode: symbolsTable.standardCode })
+      .from(symbolsTable)
+      .where(eq(symbolsTable.code, code))
+      .get();
+    return row ?? null;
+  }
+
+  /** 표준코드가 이미 다른 단축코드에 등록됐는지 자동 등록 전에 확인한다. */
+  getRegisteredIdentityByStandardCode(standardCode: string): RegisteredSymbolIdentity | null {
+    const row = this.db
+      .select({ code: symbolsTable.code, standardCode: symbolsTable.standardCode })
+      .from(symbolsTable)
+      .where(eq(symbolsTable.standardCode, standardCode))
+      .get();
+    return row ?? null;
   }
 
   /** 행 → 화면이 읽는 요약. 목록과 단건이 같은 모양을 내도록 한 곳에 둔다 */

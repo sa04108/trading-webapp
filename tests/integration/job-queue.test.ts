@@ -1,9 +1,10 @@
 import { and, desc, eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ENGINE_VERSION } from '../../src/server/modules/backtest/domain/engine.js';
+import { UnsafeBacktestSymbolIdentityError } from '../../src/server/modules/backtest/application/backtest-preparation-orchestrator.js';
 import { FACTS_SLICE } from '../../src/server/modules/market-data/application/symbol-service.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
-import { backtestJobs, symbolVersions } from '../../src/server/shared/db/schema.js';
+import { backtestJobs, symbols, symbolVersions } from '../../src/server/shared/db/schema.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import {
   createTestAdmin,
@@ -728,6 +729,78 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(badParams.statusCode).toBe(400);
   });
 
+  it('준비 완료 뒤 발견된 종목 identity 오류를 신규 제출과 복제에서 422로 반환한다', async () => {
+    const source = ctx.container.jobQueue.enqueue(buildRequest());
+    ctx.container.backtestPreparationOrchestrator.getReadyPreview = async () => {
+      throw new UnsafeBacktestSymbolIdentityError('기존 등록 종목의 표준코드가 선택된 증권과 다릅니다.');
+    };
+
+    const submitted = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: buildRequest(),
+    });
+    expect(submitted.statusCode).toBe(422);
+    expect((submitted.json() as { error: string }).error).toContain('표준코드');
+
+    const cloned = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${source.id}/clone`,
+      cookies: { qp_session: cookie },
+    });
+    expect(cloned.statusCode).toBe(422);
+    expect((cloned.json() as { error: string }).error).toContain('표준코드');
+  });
+
+  it('준비 완료 뒤 등록 identity가 사라지면 모든 실행 생성 경로를 422로 차단한다', async () => {
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: buildRequest(),
+    });
+    expect(created.statusCode).toBe(201);
+    const sourceId = created.json().job.id as string;
+
+    ctx.container.database.db
+      .update(symbols)
+      .set({ standardCode: null })
+      .where(eq(symbols.code, '005930'))
+      .run();
+
+    const attempts = [
+      await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/backtests',
+        cookies: { qp_session: cookie },
+        payload: buildRequest(),
+      }),
+      await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/backtests/${sourceId}/clone`,
+        cookies: { qp_session: cookie },
+      }),
+      await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/backtests/${sourceId}/clone-configured`,
+        cookies: { qp_session: cookie },
+        payload: buildRequest(),
+      }),
+      await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
+        cookies: { qp_session: cookie },
+        payload: { count: 2 },
+      }),
+    ];
+
+    for (const response of attempts) {
+      expect(response.statusCode).toBe(422);
+      expect((response.json() as { error: string }).error).toContain('표준코드');
+    }
+  });
+
   it('reports schema violations in Korean, not raw Zod English (M9 마무리)', async () => {
     const badBody = await ctx.app.inject({
       method: 'POST',
@@ -1360,7 +1433,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
   it('일부 종목만 봉이 없으면 거부하지 않는다 (신규 상장 등 정상)', async () => {
     // 종목을 하나 더 등록하고 topN 을 2로 올려 유니버스에 넣되 봉은 넣지 않는다 —
     // 커버리지 행이 없는 종목이 섞여도 제출은 통과해야 한다 (D-025)
-    ctx.container.symbolService.addSymbol('000660', 'KR');
+    ctx.container.symbolService.addSymbol('000660', 'KR', null, 'KR7000660001');
     // 000660 도 unionSymbols 에 들어오므로 자본변동 게이트도 통과해 둬야 한다
     await seedCorporateActionCoverage(ctx.container, ['000660'], ACTION_COVERAGE_YEARS);
 

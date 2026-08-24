@@ -19,6 +19,7 @@ import { KrxQuotaError } from '../../market-data/application/ports.js';
 import type { SymbolMasterService } from '../../market-data/application/symbol-master-service.js';
 import { addCalendarDays, kstDateOf } from '../../market-data/domain/kst-date.js';
 import type { SymbolService } from '../../market-data/application/symbol-service.js';
+import type { SymbolMasterEntry } from '../../market-data/domain/symbol-master.js';
 import type { StrategyRegistry } from '../../strategy/application/strategy-registry.js';
 import type { AnyTradingStrategy } from '../../strategy/domain/strategy.js';
 import {
@@ -108,6 +109,14 @@ export class PreparationInputError extends Error {
   }
 }
 
+/** 현재 shortCode 기반 저장 구조로 안전하게 분리할 수 없는 종목 identity 조합. */
+export class UnsafeBacktestSymbolIdentityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UnsafeBacktestSymbolIdentityError';
+  }
+}
+
 /** needsDart 계획에만 쓰고 저장·sync하지 않는 미상 future candidate probe. */
 const UNKNOWN_CANDIDATE_PROBE = '__UNKNOWN_FUTURE_UNIVERSE_CANDIDATE__';
 
@@ -128,7 +137,10 @@ export interface BacktestPreparationOrchestratorDeps {
     | 'delistedEventsBetween'
   >;
   readonly strategies: Pick<StrategyRegistry, 'get'>;
-  readonly symbolService: Pick<SymbolService, 'exists' | 'addSymbol'>;
+  readonly symbolService: Pick<
+    SymbolService,
+    'exists' | 'addSymbol' | 'getRegisteredIdentity' | 'getRegisteredIdentityByStandardCode'
+  >;
   readonly candleCoverage?: Pick<CandleCoverageService, 'getCoverage'>;
   readonly clock: Clock;
   readonly logger: Logger;
@@ -833,10 +845,27 @@ export class BacktestPreparationOrchestrator {
   }
 
   private registerUniverse(attempt: Extract<UniverseResolveAttempt, { kind: 'READY' }>): void {
-    for (const symbol of unionSymbols(attempt.schedule)) {
-      if (this.deps.symbolService.exists(symbol)) continue;
-      const entry = attempt.unionEntries.get(symbol);
-      if (entry) this.deps.symbolService.addSymbol(symbol, 'KR', entry.name, entry.standardCode);
+    const checked = new Set<string>();
+    for (const scheduleEntry of attempt.schedule) {
+      for (const member of scheduleEntry.members) {
+        const entry = attempt.unionEntries.get(member.symbol);
+        if (!entry) {
+          throw new UnsafeBacktestSymbolIdentityError(
+            `${member.symbol} 종목의 KRX identity 원본이 준비 결과에서 누락됐습니다. 실행을 차단했습니다.`,
+          );
+        }
+        if (entry.standardCode !== member.standardCode) {
+          throw new UnsafeBacktestSymbolIdentityError(
+            `단축코드 ${member.symbol}이 준비 일정에서 여러 표준코드(`
+            + `${entry.standardCode}, ${member.standardCode})에 연결됐습니다. `
+            + '단축코드 재사용 가능성이 있어 실행을 차단했습니다.',
+          );
+        }
+        const identityKey = `${member.symbol}\0${member.standardCode}`;
+        if (checked.has(identityKey)) continue;
+        checked.add(identityKey);
+        this.registerOrVerifySymbol(entry);
+      }
     }
   }
 
@@ -845,9 +874,53 @@ export class BacktestPreparationOrchestrator {
     symbols: readonly string[],
   ): void {
     for (const symbol of new Set(symbols)) {
-      if (this.deps.symbolService.exists(symbol)) continue;
       const entry = attempt.unionEntries.get(symbol);
-      if (entry) this.deps.symbolService.addSymbol(symbol, 'KR', entry.name, entry.standardCode);
+      if (!entry) {
+        throw new UnsafeBacktestSymbolIdentityError(
+          `${symbol} 종목의 KRX identity 원본이 데이터 준비 후보에서 누락됐습니다. `
+          + '외부 데이터를 요청하지 않고 준비를 중단했습니다.',
+        );
+      }
+      this.registerOrVerifySymbol(entry);
+    }
+  }
+
+  /**
+   * 단축코드가 같다는 이유만으로 기존 종목을 과거 KRX 증권과 자동 병합하지 않는다.
+   * 봉·팩트가 아직 단축코드 키라 잘못 병합하면 다른 회사의 데이터가 한 상태로 이어진다.
+   */
+  private registerOrVerifySymbol(entry: SymbolMasterEntry): void {
+    const registered = this.deps.symbolService.getRegisteredIdentity(entry.shortCode);
+    const standardOwner = this.deps.symbolService
+      .getRegisteredIdentityByStandardCode(entry.standardCode);
+    if (standardOwner !== null && standardOwner.code !== entry.shortCode) {
+      throw new UnsafeBacktestSymbolIdentityError(
+        `KRX 표준코드 ${entry.standardCode}가 기존 단축코드(${standardOwner.code})와 `
+        + `준비 후보 단축코드(${entry.shortCode})에 함께 연결됐습니다. `
+        + '코드 변경 전후 데이터를 현재 저장 구조로 분리할 수 없어 실행을 차단했습니다.',
+      );
+    }
+    if (registered === null) {
+      this.deps.symbolService.addSymbol(
+        entry.shortCode,
+        'KR',
+        entry.name,
+        entry.standardCode,
+      );
+      return;
+    }
+    if (registered.standardCode === null) {
+      throw new UnsafeBacktestSymbolIdentityError(
+        `${entry.shortCode} 종목은 KRX 표준코드가 없는 기존 등록이라 같은 증권인지 확인할 수 없습니다. `
+        + '기존 데이터의 종목 정체성을 검증·이관한 뒤 표준코드를 등록하세요.',
+      );
+    }
+    if (registered.standardCode !== entry.standardCode) {
+      throw new UnsafeBacktestSymbolIdentityError(
+        `${entry.shortCode} 종목의 기존 KRX 표준코드(${registered.standardCode})가 `
+        + `준비 유니버스의 표준코드(${entry.standardCode})와 다릅니다. `
+        + '단축코드가 다른 증권에 재사용됐을 수 있어 자동 병합하지 않습니다.',
+      );
     }
   }
 

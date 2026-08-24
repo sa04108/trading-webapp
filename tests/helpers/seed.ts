@@ -1,7 +1,8 @@
+import { eq } from 'drizzle-orm';
 import type { Container } from '../../src/server/bootstrap/container.js';
 import type { AppDatabase } from '../../src/server/shared/db/database.js';
 import type { Candle, Market } from '../../src/server/modules/market-data/domain/candle.js';
-import { krxDailyBars } from '../../src/server/shared/db/schema.js';
+import { krxDailyBars, symbolMasterVersions } from '../../src/server/shared/db/schema.js';
 
 /**
  * 종목 등록 — 테스트에서 종목을 먼저 만들고 사용하는 헬퍼.
@@ -14,7 +15,19 @@ export function registerSymbols(
   codes: readonly string[],
 ): void {
   for (const code of codes) {
-    if (!container.symbolService.exists(code)) container.symbolService.addSymbol(code, market);
+    if (container.symbolService.exists(code)) continue;
+    const identities = container.database.db
+      .select({ standardCode: symbolMasterVersions.standardCode })
+      .from(symbolMasterVersions)
+      .where(eq(symbolMasterVersions.shortCode, code))
+      .all();
+    const standardCodes = [...new Set(identities.map((row) => row.standardCode))];
+    container.symbolService.addSymbol(
+      code,
+      market,
+      null,
+      standardCodes.length === 1 ? standardCodes[0] as string : null,
+    );
   }
 }
 

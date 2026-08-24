@@ -53,10 +53,12 @@ import type { ResultsService } from '../application/results-service.js';
 import { rebaseStoredRequest } from '../application/stored-request.js';
 import { summarizeUniverseRebalancing } from '../application/universe-rebalancing.js';
 import type { LegacyUniverseScheduleEntry, ResolvedUniverse } from '../application/universe-rule-resolver.js';
-import type {
-  BacktestPreparationOrchestrator,
-  BacktestUniversePreview,
-  PreparationInput,
+import {
+  PreparationInputError,
+  UnsafeBacktestSymbolIdentityError,
+  type BacktestPreparationOrchestrator,
+  type BacktestUniversePreview,
+  type PreparationInput,
 } from '../application/backtest-preparation-orchestrator.js';
 import { backtestPreparationRequestHash } from '../application/backtest-preparation-plan.js';
 import type {
@@ -153,6 +155,65 @@ function preparationInputOf(body: BacktestRequest): PreparationInput {
 
 function scheduleHash(schedule: readonly LegacyUniverseScheduleEntry[]): string {
   return createHash('sha256').update(JSON.stringify(schedule)).digest('hex');
+}
+
+function registeredScheduleIdentityError(
+  preview: BacktestUniversePreview,
+  symbols: Pick<
+    SymbolService,
+    'getRegisteredIdentity' | 'getRegisteredIdentityByStandardCode'
+  >,
+): string | null {
+  const standardsByShort = new Map<string, Set<string>>();
+  const shortsByStandard = new Map<string, Set<string>>();
+  for (const entry of preview.schedule) {
+    for (const member of entry.members) {
+      const standards = standardsByShort.get(member.symbol) ?? new Set<string>();
+      standards.add(member.standardCode);
+      standardsByShort.set(member.symbol, standards);
+      const shorts = shortsByStandard.get(member.standardCode) ?? new Set<string>();
+      shorts.add(member.symbol);
+      shortsByStandard.set(member.standardCode, shorts);
+    }
+  }
+
+  for (const [shortCode, standards] of standardsByShort) {
+    if (standards.size > 1) {
+      return `단축코드 ${shortCode}이 준비 일정에서 여러 표준코드(`
+        + `${[...standards].sort().join(', ')})에 연결됐습니다. `
+        + '단축코드 재사용 가능성이 있어 실행을 차단했습니다.';
+    }
+  }
+  for (const [standardCode, shortCodes] of shortsByStandard) {
+    if (shortCodes.size > 1) {
+      return `KRX 표준코드 ${standardCode}가 준비 일정에서 여러 단축코드(`
+        + `${[...shortCodes].sort().join(', ')})에 연결됐습니다. `
+        + '코드 변경 전후 데이터를 현재 저장 구조로 분리할 수 없어 실행을 차단했습니다.';
+    }
+  }
+
+  for (const [shortCode, standards] of standardsByShort) {
+    const standardCode = [...standards][0] as string;
+    const registered = symbols.getRegisteredIdentity(shortCode);
+    if (registered === null) {
+      return `${shortCode} 종목이 현재 종목 저장소에 등록되지 않아 identity를 확인할 수 없습니다. `
+        + '미리보기를 다시 실행해 종목 등록을 완료하세요.';
+    }
+    if (registered.standardCode === null) {
+      return `${shortCode} 종목은 KRX 표준코드가 없는 기존 등록이라 종목 identity를 확인할 수 없습니다. `
+        + '기존 데이터를 검증·이관한 뒤 미리보기를 다시 실행하세요.';
+    }
+    if (registered.standardCode !== standardCode) {
+      return `${shortCode}의 기존 표준코드(${registered.standardCode})가 선택된 종목의 `
+        + `표준코드(${standardCode})와 다릅니다. 단축코드 재사용 가능성이 있어 실행을 차단했습니다.`;
+    }
+    const standardOwner = symbols.getRegisteredIdentityByStandardCode(standardCode);
+    if (standardOwner === null || standardOwner.code !== shortCode) {
+      return `KRX 표준코드 ${standardCode}의 기존 단축코드가 선택된 종목(${shortCode})과 다릅니다. `
+        + '코드 변경 전후 데이터를 현재 저장 구조로 분리할 수 없어 실행을 차단했습니다.';
+    }
+  }
+  return null;
 }
 
 const consumedVersionSnapshotSchema = z.object({
@@ -537,6 +598,14 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       };
     }
 
+    // 완료된 preparation 뒤 등록 행이 바뀌거나, clone 계열이 resolver 재실행 없이
+    // cached preview를 재사용해도 shortCode 기반 봉·팩트를 다른 증권과 합치지 않는다.
+    // schedule 원문을 보므로 unionEntries의 shortCode first-wins에도 의존하지 않는다.
+    const identityError = registeredScheduleIdentityError(preparedPreview, symbolService);
+    if (identityError !== null) {
+      return { ok: false, status: 422, errors: [identityError] };
+    }
+
     // ② unionSymbols 캔들 존재 검증 — 옛 데이터셋 분기의 관용(D-025)을 그대로 재사용한다.
     const universeErrors: string[] = [];
     const resolvedConsumption = resolveConsumedUniverse(
@@ -813,6 +882,12 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     } catch (error) {
       if (sendIfKrxError(reply, error)) return reply;
       if (sendIfNotCovered(reply, error)) return reply;
+      if (error instanceof UnsafeBacktestSymbolIdentityError) {
+        return reply.code(422).send({ error: error.message });
+      }
+      if (error instanceof PreparationInputError) {
+        return reply.code(400).send({ error: error.message });
+      }
       throw error;
     }
     if (!prepared) {
@@ -932,8 +1007,21 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
     const cloneRequest = rebased.request;
     const reusable = reusablePreviewFor(job, cloneRequest);
-    const prepared = reusable?.preview
-      ?? await preparation.getReadyPreview(preparationInputOf(cloneRequest));
+    let prepared: Awaited<ReturnType<typeof preparation.getReadyPreview>>;
+    try {
+      prepared = reusable?.preview
+        ?? await preparation.getReadyPreview(preparationInputOf(cloneRequest));
+    } catch (error) {
+      if (sendIfKrxError(reply, error)) return reply;
+      if (sendIfNotCovered(reply, error)) return reply;
+      if (error instanceof UnsafeBacktestSymbolIdentityError) {
+        return reply.code(422).send({ error: error.message });
+      }
+      if (error instanceof PreparationInputError) {
+        return reply.code(400).send({ error: error.message });
+      }
+      throw error;
+    }
     if (!prepared) {
       return reply.code(409).send({
         error: 'PREPARATION_REQUIRED',

@@ -6,6 +6,7 @@ import { rebalanceIntervalFitsPeriod } from '../../../../shared/schemas/rebalanc
 import { SECURITY_HEADERS } from '../../../shared/security.js';
 import {
   PreparationInputError,
+  UnsafeBacktestSymbolIdentityError,
   type BacktestPreparationOrchestrator,
   type PreparationInput,
 } from '../application/backtest-preparation-orchestrator.js';
@@ -98,6 +99,9 @@ export function registerBacktestPreparationRoutes(
       // 알려진 사용자 오류(미지 전략 등)만 400, 나머지는 500 처리기로 던진다.
       if (sendIfKrxError(reply, error)) return reply;
       if (sendIfNotCovered(reply, error)) return reply;
+      if (error instanceof UnsafeBacktestSymbolIdentityError) {
+        return reply.code(422).send({ error: error.message });
+      }
       if (error instanceof PreparationInputError) {
         return reply.code(400).send({ error: error.message });
       }

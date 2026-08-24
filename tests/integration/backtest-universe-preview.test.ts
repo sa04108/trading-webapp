@@ -728,7 +728,7 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
     expect(readStandardCode('000002')).toBe('KR7000002002');
   });
 
-  it('이미 등록된 종목은 다시 미리보기해도 실패하지 않고 표준코드를 덮어쓰지 않는다', async () => {
+  it('표준코드 없는 기존 등록은 자동 병합하지 않고 준비를 실패시킨다', async () => {
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
       { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
     ]);
@@ -736,21 +736,24 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
     ctx.container.symbolService.addSymbol('005930', 'KR');
     expect(readStandardCode('005930')).toBeNull();
 
-    for (let i = 0; i < 2; i += 1) {
-      const res = await ctx.app.inject({
-        method: 'POST',
-        url: '/api/v1/backtests/universe-preview',
-        cookies: { qp_session: cookie },
-        payload: {
-          universeRule: marketCapRule(),
-          period: { from: '2026-01-05', to: '2026-01-05' },
-        },
-      });
-      expect(res.statusCode).toBe(200);
-    }
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: marketCapRule(),
+        period: { from: '2026-01-05', to: '2026-01-05' },
+      },
+    });
+    expect(res.statusCode).toBe(202);
+    const jobId = (res.json() as { job: { id: string } }).job.id;
+    expect(ctx.container.backtestPreparationOrchestrator.get(jobId)).toMatchObject({
+      status: 'FAILED',
+      error: expect.stringMatching(/표준코드가 없는 기존 등록.*정체성을 검증·이관/),
+    });
 
-    // 재등록 시도가 있었어도 기존 값(표준코드 없음)을 덮어쓰지 않는다 —
-    // 단축코드 재사용 판별의 유일한 열쇠라 새 조회로 갈아치우면 안 된다.
+    // 실패해도 기존 값은 몰래 백필하지 않는다 — 검증 없는 덮어쓰기는 단축코드가
+    // 재사용된 경우 다른 증권의 데이터를 합치는 근거가 된다.
     expect(readStandardCode('005930')).toBeNull();
     expect(ctx.container.symbolService.getSymbol('005930')?.name).toBeNull();
   });
