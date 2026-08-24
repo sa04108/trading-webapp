@@ -24,6 +24,7 @@ import type {
   FactSource,
   FactSourceRequestHooks,
   FetchFinancialsRequest,
+  PeriodicFiling,
   SymbolVersionBumper,
 } from './ports.js';
 
@@ -42,8 +43,8 @@ export interface FactSyncRequest {
 
 /**
  * 공시검색(watermark 기반 재수집 판정)의 최대 되짚기 일수. 이보다 오래된 watermark 는
- * 목록 조회 구간이 커져 페이지 상한을 넘을 수 있으므로, 그 종목은 옛 blanket 규칙
- * (현재 연도 강제 재수집)으로 되돌린다.
+ * 목록 조회 구간이 커져 페이지 상한을 넘을 수 있으므로, 그 종목의 covered 연도를
+ * 모두 다시 받는 보수적 규칙으로 되돌린다.
  */
 const FILING_LOOKBACK_MAX_DAYS = 90;
 
@@ -331,13 +332,16 @@ export class FactSyncService {
     // 증분 계획에 필요한 공시 목록부터 실제 요청 단위 quota를 적용한다. 목록 오류는
     // 최신 여부를 증명할 수 없으므로 명시적으로 중단한다. 단, 키 자체를 의도적으로
     // 설정하지 않은 환경은 이미 커버된 데이터 사용을 허용하는 기존 계약을 유지한다.
+    const coveredBySymbol = strategy.getCoveredYears(symbols);
+    const coverageWatermarks = strategy.getUpdatedAtMs(symbols);
     let redisclosures: RedisclosureDetection | undefined;
     try {
       redisclosures =
         request.mode === 'INCREMENTAL'
           ? await this.detectRedisclosedYears(
               symbols,
-              strategy.getUpdatedAtMs(symbols),
+              coveredBySymbol,
+              coverageWatermarks,
               strategy.includeFinancials,
               sourceHooks,
             )
@@ -362,7 +366,7 @@ export class FactSyncService {
       fromYear: request.fromYear,
       toYear: request.toYear,
       todayKstDate,
-      coveredBySymbol: strategy.getCoveredYears(symbols),
+      coveredBySymbol,
       mode: request.mode,
       forcedYearsBySymbol: redisclosures?.forcedYearsBySymbol,
     });
@@ -393,7 +397,7 @@ export class FactSyncService {
       let symbolSavedFacts = 0;
       let symbolGapCount = 0;
       try {
-        for (const year of years) {
+        for (const [yearIndex, year] of years.entries()) {
           // 직전 연도의 주식총수 앵커도 요청하되, 소스 캐시는 이미 받은 응답을 재사용한다.
           // quota는 캐시 miss를 포함한 실제 HTTP 시도마다 sourceHooks가 정확히 예약한다.
           const shareYears = [year - 1, year];
@@ -434,7 +438,13 @@ export class FactSyncService {
               completedAtMs,
             );
           }
-          strategy.recordCoverage(symbol, [year], gapYears, completedAtMs);
+          // 연도 coverage는 work unit마다 닫되 종목 단일 watermark는 이 종목의 계획을
+          // 모두 마친 마지막 연도에서만 전진시킨다. 중간에 quota/오류가 나면 아직
+          // 처리하지 못한 새 공시를 watermark가 앞질러 영구히 숨길 수 있기 때문이다.
+          const coverageTimestamp = yearIndex === years.length - 1
+            ? completedAtMs
+            : (coverageWatermarks.get(symbol) ?? 0);
+          strategy.recordCoverage(symbol, [year], gapYears, coverageTimestamp);
         }
 
         doneSymbols += 1;
@@ -576,12 +586,15 @@ export class FactSyncService {
    * 정기공시가 있는 종목·사업연도만 돌려준다 — 공시 없는 종목은 0 호출이다.
    * 재무 경로에서는 처리한 접수번호를 제외해 같은 날 같은 공시를 다시 받지 않는다.
    *
-   * watermark가 조회 하한보다 오래된 종목은 공시 목록으로 판정할 수 없으므로 옛
-   * blanket 규칙(현재 연도 강제)으로 되돌린다. 반대로 목록 조회 자체가 실패하면 최신
-   * 여부를 확인할 수 없으므로 실패를 호출부까지 전파한다.
+   * watermark가 조회 하한보다 오래된 종목은 공시 목록으로 판정할 수 없으므로 그
+   * 종목의 covered 연도를 모두 다시 받는다. 수집 당시 진행 중이던 해를 연도 전체
+   * covered로 닫은 뒤 90일이 지나도, 나중에 제출된 분기·사업보고서를 놓치지 않는다.
+   * 반대로 목록 조회 자체가 실패하면 최신 여부를 확인할 수 없으므로 실패를 호출부까지
+   * 전파한다.
    */
   private async detectRedisclosedYears(
     symbols: readonly string[],
+    coveredBySymbol: ReadonlyMap<string, readonly number[]>,
     watermarks: ReadonlyMap<string, number>,
     trackFinancialReceipts: boolean,
     sourceHooks: FactSourceRequestHooks,
@@ -589,7 +602,6 @@ export class FactSyncService {
     if (watermarks.size === 0) return undefined; // 수집 이력이 없다 — 증분 계획이 전부 받는다
 
     const today = kstDateOf(this.clock.now());
-    const currentYear = Number(today.slice(0, 4));
     const lookbackFloor = addCalendarDays(today, -FILING_LOOKBACK_MAX_DAYS);
 
     const forced = new Map<string, number[]>();
@@ -614,7 +626,12 @@ export class FactSyncService {
     for (const [symbol, updatedAtMs] of watermarks) {
       const date = kstDateOf(updatedAtMs);
       if (date < lookbackFloor) {
-        addForced(symbol, currentYear);
+        // 어느 covered 연도에 후속 공시가 생겼는지 목록으로 판별할 수 없다. 일부만
+        // 갱신한 뒤 종목 watermark를 오늘로 옮기면 나머지 연도의 과거 공시가 영구히
+        // 숨으므로, 이 종목의 covered 연도를 모두 한 번 다시 닫는다.
+        for (const year of coveredBySymbol.get(symbol) ?? []) {
+          addForced(symbol, year);
+        }
         continue;
       }
       watermarkDates.set(symbol, date);
@@ -622,14 +639,32 @@ export class FactSyncService {
     }
 
     if (fromDate !== null) {
-      const filings = await this.source.listRecentPeriodicFilings(fromDate, today, sourceHooks);
+      let filings: readonly PeriodicFiling[];
+      try {
+        filings = await this.source.listRecentPeriodicFilings(fromDate, today, sourceHooks);
+      } catch (error) {
+        // 일부 종목은 stale이고 일부는 fresh인 혼합 요청에서 DART 미설정 오류를 바깥
+        // catch로 보내면, 이미 계산한 stale 강제 연도까지 통째로 사라진다. fresh 종목은
+        // 기존 캐시를 쓸 수 있어도 stale 종목은 후속 보고서 누락 여부를 증명할 수 없으므로
+        // forced 계획을 보존해 실제 fetch 단계에서 명시적으로 실패하게 한다.
+        if (error instanceof FactSourceNotConfiguredError && forced.size > 0) {
+          return { forcedYearsBySymbol: forced, pendingFinancialFilings: pending };
+        }
+        throw error;
+      }
       const candidates = filings.flatMap((filing) => {
         const watermarkDate = watermarkDates.get(filing.stockCode);
         if (watermarkDate === undefined) return []; // 이번 요청 밖 종목이거나 blanket 처리됨
         // 접수일만 주는 API라 watermark 당일은 반드시 포함한다. 재무 경로의 중복은
         // 날짜 경계를 버리는 대신 아래의 영속 접수번호 체크포인트로 제거한다.
         if (filing.receiptDate < watermarkDate) return [];
-        return [{ filing, businessYear: filing.businessYear ?? currentYear }];
+        if (filing.businessYear === null) {
+          throw new Error(
+            `DART 정기공시 ${filing.receiptNo}의 사업연도를 보고서명에서 확인할 수 없습니다. `
+              + '어느 covered 연도를 다시 받아야 하는지 추정하지 않고 팩트 준비를 중단합니다.',
+          );
+        }
+        return [{ filing, businessYear: filing.businessYear }];
       });
       const processedReceiptNos = trackFinancialReceipts
         ? this.coverage.getProcessedFilingReceiptNos(

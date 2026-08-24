@@ -15,7 +15,7 @@ import {
   type FetchFinancialsRequest,
   type PeriodicFiling,
 } from '../../src/server/modules/facts/application/ports.js';
-import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
+import { CORPORATE_ACTION_FIELD, type Fact } from '../../src/server/modules/facts/domain/fact.js';
 
 const LOGGER = { debug() {}, info() {}, warn() {}, error() {} } as never;
 const CLOCK = { now: () => 1_700_000_000_000 };
@@ -629,15 +629,19 @@ describe('FactSyncService — 데이터셋 버전 승격 (재현성 §9.5)', () 
 });
 
 describe('FactSyncService — 증분과 취소', () => {
-  it('INCREMENTAL 은 미수집 연도 + 현재 연도만 요청한다', async () => {
+  it('INCREMENTAL 은 fresh coverage를 건너뛰고 미수집 연도만 요청한다', async () => {
     const source = recordingSource();
-    const coverage = fakeCoverage(new Map([['005930', [2020, 2021]]]));
+    const now = Date.UTC(2022, 5, 1);
+    const coverage = fakeCoverage(
+      new Map([['005930', [2020, 2021]]]),
+      new Map([['005930', now - 60_000]]),
+    );
     const service = new FactSyncService(
       source,
       fakeRepository(),
       LOGGER,
       fakeVersions(),
-      { now: () => Date.UTC(2022, 5, 1) },
+      { now: () => now },
       coverage,
       fakeActionCoverage(),
     );
@@ -983,13 +987,17 @@ describe('FactSyncService — 증분과 취소', () => {
 
   it('수집할 연도가 없는 종목은 소스를 부르지 않는다', async () => {
     const source = recordingSource();
+    const now = Date.UTC(2030, 0, 1);
     const service = new FactSyncService(
       source,
       fakeRepository(),
       LOGGER,
       fakeVersions(),
-      { now: () => Date.UTC(2030, 0, 1) },
-      fakeCoverage(new Map([['005930', [2021, 2022]]])),
+      { now: () => now },
+      fakeCoverage(
+        new Map([['005930', [2021, 2022]]]),
+        new Map([['005930', now - 60_000]]),
+      ),
       fakeActionCoverage(),
     );
 
@@ -1200,17 +1208,39 @@ describe('FactSyncService — 공시 기반 강제 재수집 (INCREMENTAL)', () 
     expect(source.requests).toEqual([]);
   });
 
-  it('watermark 가 조회 하한(90일)보다 오래되면 현재 연도를 강제로 다시 받는다', async () => {
+  it('새 공시의 사업연도를 해석할 수 없으면 현재 연도로 추정하지 않고 중단한다', async () => {
+    const source = filingSource([{
+      receiptNo: '20260810000009',
+      stockCode: '005930',
+      businessYear: null,
+      receiptDate: '2026-08-10',
+    }]);
+    const watermark = NOW - 5 * DAY_MS;
+    const coverage = fakeCoverage(
+      new Map([['005930', [2024, 2025]]]),
+      new Map([['005930', watermark]]),
+    );
+
+    const report = await service(source, coverage).sync(request);
+
+    expect(source.requests).toEqual([]);
+    expect(report.stopReason).toBe('ERROR');
+    expect(report.failureMessage).toContain('사업연도를 보고서명에서 확인할 수 없습니다');
+    expect(coverage.getUpdatedAtMs(['005930']).get('005930')).toBe(watermark);
+  });
+
+  it('stale watermark는 좁은 요청이어도 종목의 covered 연도를 모두 다시 받는다', async () => {
     const source = filingSource([]);
     const coverage = fakeCoverage(
       new Map([['005930', [2025, 2026]]]),
       new Map([['005930', NOW - 100 * DAY_MS]]),
     );
 
-    await service(source, coverage).sync({ ...request, fromYear: 2025, toYear: 2026 });
+    await service(source, coverage).sync({ ...request, fromYear: 2025, toYear: 2025 });
 
-    // 공시 목록으로 판정할 수 없어 옛 blanket 규칙으로 되돌린다. 목록 조회도 없다.
-    expect(source.requests.map((r) => r.years)).toEqual([[2026]]);
+    // 목록 조회 범위 밖에 생긴 후속 공시의 연도를 알 수 없어 이 종목의 기존 coverage를
+    // 전부 보수적으로 갱신한다. 목록 조회 자체는 하지 않는다.
+    expect(source.requests.map((r) => r.years)).toEqual([[2025], [2026]]);
     expect(source.listCalls).toEqual([]);
   });
 
@@ -1368,6 +1398,193 @@ describe('FactSyncService — 자본변동 전용 수집', () => {
     expect(listCalls).toEqual([['2026-08-06', '2026-08-11']]);
     expect(actionCalls).toBe(0);
     expect(report.stopReason).toBeNull();
+  });
+
+  it('진행 중 연도를 covered한 뒤 90일 넘어 제출된 자본변동도 다시 수집한다', async () => {
+    let now = Date.UTC(2026, 7, 11);
+    let actionCalls = 0;
+    const requestedYears: number[] = [];
+    const lateAction: Fact = {
+      scope: 'SYMBOL',
+      key: '005930',
+      field: CORPORATE_ACTION_FIELD,
+      periodKey: '2026-12-15',
+      asOfTsMs: Date.UTC(2027, 1, 20),
+      value: 2,
+      unit: 'RATIO',
+    };
+    const source: FactSource = {
+      fetchFinancials: async () => {
+        throw new Error('자본변동 전용 수집이 재무를 호출했습니다.');
+      },
+      fetchCorporateActions: async (fetchRequest) => {
+        actionCalls += 1;
+        requestedYears.push(...fetchRequest.years);
+        return { facts: actionCalls === 1 ? [] : [lateAction], gaps: [] };
+      },
+      listRecentPeriodicFilings: async () => [],
+    };
+    const repository = fakeRepository();
+    const actionCoverage = fakeActionCoverage();
+    const service = new FactSyncService(
+      source,
+      repository,
+      LOGGER,
+      fakeVersions(),
+      { now: () => now },
+      fakeCoverage(),
+      actionCoverage,
+    );
+    const incremental2026: FactSyncRequest = {
+      symbols: ['005930'],
+      fromYear: 2026,
+      toYear: 2026,
+      consolidated: true,
+      mode: 'INCREMENTAL',
+    };
+
+    // 8월에는 아직 존재하지 않는 Q3·사업보고서까지 포함해 2026년을 covered로 닫는다.
+    await service.syncCorporateActions(incremental2026);
+    now = Date.UTC(2027, 1, 20);
+    await service.syncCorporateActions(incremental2026);
+
+    expect(requestedYears).toEqual([2026, 2026]);
+    expect(await repository.getFacts({ scope: 'SYMBOL', keys: ['005930'] })).toContainEqual(
+      lateAction,
+    );
+  });
+
+  it('stale·fresh 혼합 요청에서 DART 미설정이어도 stale 강제 계획을 버리지 않는다', async () => {
+    const now = Date.UTC(2026, 7, 11);
+    const fetchAttempts: string[] = [];
+    const source: FactSource = {
+      fetchFinancials: async () => ({ facts: [], gaps: [] }),
+      fetchCorporateActions: async (fetchRequest) => {
+        fetchAttempts.push(fetchRequest.symbols[0]!);
+        throw new FactSourceNotConfiguredError();
+      },
+      listRecentPeriodicFilings: async () => {
+        throw new FactSourceNotConfiguredError();
+      },
+    };
+    const actionCoverage = fakeActionCoverage();
+    actionCoverage.addCoveredYears('005930', [2025], now - 100 * 86_400_000);
+    actionCoverage.addCoveredYears('000660', [2025], now - 5 * 86_400_000);
+    const service = new FactSyncService(
+      source,
+      fakeRepository(),
+      LOGGER,
+      fakeVersions(),
+      { now: () => now },
+      fakeCoverage(),
+      actionCoverage,
+    );
+
+    const report = await service.syncCorporateActions({
+      symbols: ['000660', '005930'],
+      fromYear: 2025,
+      toYear: 2025,
+      consolidated: true,
+      mode: 'INCREMENTAL',
+    });
+
+    expect(fetchAttempts).toEqual(['005930']);
+    expect(report.stopReason).toBe('ERROR');
+    expect(report.stoppedAtSymbol).toBe('005930');
+    expect(report.failureMessage).toContain('DART');
+  });
+
+  it('여러 강제 연도 중간 실패가 남은 연도보다 watermark를 먼저 전진시키지 않는다', async () => {
+    const now = Date.UTC(2027, 1, 20);
+    const oldWatermark = Date.UTC(2026, 7, 11);
+    const attempts: number[] = [];
+    let injectedFailure = false;
+    const source: FactSource = {
+      fetchFinancials: async () => ({ facts: [], gaps: [] }),
+      fetchCorporateActions: async (fetchRequest) => {
+        const year = fetchRequest.years[0]!;
+        attempts.push(year);
+        if (year === 2026 && !injectedFailure) {
+          injectedFailure = true;
+          throw new Error('injected year failure');
+        }
+        return { facts: [], gaps: [] };
+      },
+      listRecentPeriodicFilings: async () => [],
+    };
+    const actionCoverage = fakeActionCoverage();
+    actionCoverage.addCoveredYears('005930', [2025, 2026], oldWatermark);
+    const service = new FactSyncService(
+      source,
+      fakeRepository(),
+      LOGGER,
+      fakeVersions(),
+      { now: () => now },
+      fakeCoverage(),
+      actionCoverage,
+    );
+    const narrowRequest: FactSyncRequest = {
+      symbols: ['005930'],
+      fromYear: 2025,
+      toYear: 2025,
+      consolidated: true,
+      mode: 'INCREMENTAL',
+    };
+
+    const failed = await service.syncCorporateActions(narrowRequest);
+    expect(failed.stopReason).toBe('ERROR');
+    expect(actionCoverage.getUpdatedAtMs(['005930']).get('005930')).toBe(oldWatermark);
+
+    const retried = await service.syncCorporateActions(narrowRequest);
+    expect(retried.stopReason).toBeNull();
+    expect(attempts).toEqual([2025, 2026, 2025, 2026]);
+    expect(actionCoverage.getUpdatedAtMs(['005930']).get('005930')).toBe(now);
+  });
+
+  it('요청 밖에서 발견한 새 공시도 다른 연도 sync가 watermark를 앞지르기 전에 받는다', async () => {
+    const now = Date.UTC(2026, 11, 1);
+    const requestedYears: number[] = [];
+    const source: FactSource = {
+      fetchFinancials: async () => ({ facts: [], gaps: [] }),
+      fetchCorporateActions: async (fetchRequest) => {
+        requestedYears.push(...fetchRequest.years);
+        return { facts: [], gaps: [] };
+      },
+      listRecentPeriodicFilings: async () => [{
+        receiptNo: '20261120000001',
+        stockCode: '005930',
+        businessYear: 2026,
+        receiptDate: '2026-11-20',
+      }],
+    };
+    const actionCoverage = fakeActionCoverage();
+    actionCoverage.addCoveredYears('005930', [2026], Date.UTC(2026, 10, 1));
+    const service = new FactSyncService(
+      source,
+      fakeRepository(),
+      LOGGER,
+      fakeVersions(),
+      { now: () => now },
+      fakeCoverage(),
+      actionCoverage,
+    );
+
+    await service.syncCorporateActions({
+      symbols: ['005930'],
+      fromYear: 2025,
+      toYear: 2025,
+      consolidated: true,
+      mode: 'INCREMENTAL',
+    });
+    await service.syncCorporateActions({
+      symbols: ['005930'],
+      fromYear: 2026,
+      toYear: 2026,
+      consolidated: true,
+      mode: 'INCREMENTAL',
+    });
+
+    expect(requestedYears).toEqual([2025, 2026]);
   });
 
   it('재무를 부르지 않는다', async () => {

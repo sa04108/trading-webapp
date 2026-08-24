@@ -81,17 +81,19 @@ describe('planFactSync', () => {
     expect(plan.yearsBySymbol.get('005930')).toEqual([2022]);
   });
 
-  it('forced 연도도 대상 구간 밖이면 계획하지 않는다', () => {
+  it('발견한 forced 연도는 대상 구간 밖이어도 watermark가 앞지르기 전에 계획한다', () => {
     const plan = planFactSync({
       ...BASE,
       symbols: ['005930'],
       coveredBySymbol: new Map([['005930', [2020, 2021, 2022]]]),
-      // 2019 는 fromYear(2020) 앞이다 — 구간 밖 공시 갱신이 계획을 부풀리면 안 된다
+      // 2019 공시를 이미 발견했으므로 다른 연도 coverage가 symbol watermark를
+      // 앞당기기 전에 이 실행에서 함께 닫아야 한다.
       forcedYearsBySymbol: new Map([['005930', [2019]]]),
       mode: 'INCREMENTAL',
     });
-    expect(plan.yearsBySymbol.get('005930')).toEqual([]);
-    expect(plan.calls).toBe(0);
+    expect(plan.yearsBySymbol.get('005930')).toEqual([2019]);
+    expect(plan.shareYearsBySymbol.get('005930')).toEqual([2018, 2019]);
+    expect(plan.calls).toBeGreaterThan(0);
   });
 
   it('FULL 은 수집 이력을 무시하고 전 구간을 계획한다', () => {

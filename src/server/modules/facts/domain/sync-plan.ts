@@ -130,6 +130,8 @@ export interface PlanFactSyncArgs {
    * 예전의 "현재 연도는 항상 다시 받는다"(refreshCurrentYear)를 대체한다: 공시가
    * 없는 종목까지 매번 다시 받으면 유니버스 전체 × 연도당 최대 12회가 그대로
    * 낭비된다. 공시검색(list.json) 결과에서 만든다 (fact-sync-service 참고).
+   * 요청 범위 밖 연도라도 이미 새 공시를 발견했다면 포함한다. 종목 단일 watermark를
+   * 다른 연도 수집이 앞질러, 그 공시를 다음 실행에서 영구히 놓치는 일을 막기 위해서다.
    */
   readonly forcedYearsBySymbol?: ReadonlyMap<string, readonly number[]>;
 }
@@ -144,13 +146,17 @@ export function planFactSync(args: PlanFactSyncArgs): FactSyncPlan {
 
   // 같은 종목이 두 번 들어와도 한 번만 계획한다 — 호출 수가 부풀면 예상 시간도 부푼다
   for (const symbol of new Set(args.symbols)) {
+    const forced = new Set(args.forcedYearsBySymbol?.get(symbol) ?? []);
+    const symbolTarget = args.mode === 'INCREMENTAL'
+      ? [...new Set([...target, ...forced])].sort((left, right) => left - right)
+      : target;
     const years =
       args.mode === 'FULL'
         ? target
         : incrementalYears(
-            target,
+            symbolTarget,
             args.coveredBySymbol.get(symbol) ?? [],
-            new Set(args.forcedYearsBySymbol?.get(symbol) ?? []),
+            forced,
           );
     yearsBySymbol.set(symbol, years);
 
