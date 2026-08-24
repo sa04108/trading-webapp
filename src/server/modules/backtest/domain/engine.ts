@@ -818,12 +818,16 @@ function* runBacktestSteps(
   );
 
   // 미청산 포지션 스냅샷 — 수익률·자산 곡선에는 평가금액으로 반영되지만 거래내역에는
-  // 없는 돈이 어디 있는지를 명시적으로 보여준다 (매도 비용 미반영 평가치)
+  // 없는 돈이 어디 있는지를 명시적으로 보여준다. 이미 낸 매수 수수료는 평가손익에
+  // 포함하고, 아직 발생하지 않은 매도 수수료·세금은 반영하지 않는다.
   const openPositions: OpenPositionSnapshot[] = [...positions.values()]
     .filter((position) => position.quantity > 0)
     .map((position) => {
       const lastPrice = lastCloseBySymbol.get(position.symbol) ?? position.avgEntryPrice;
       const lastPriceTsMs = lastBarTsMsBySymbol.get(position.symbol) ?? position.entryTsMs;
+      const costBasis = position.quantity * position.avgEntryPrice;
+      const unrealizedPnl = position.quantity * (lastPrice - position.avgEntryPrice)
+        - position.entryCosts;
       return {
         symbol: position.symbol,
         quantity: position.quantity,
@@ -831,8 +835,8 @@ function* runBacktestSteps(
         entryTsMs: position.entryTsMs,
         lastPrice,
         lastPriceTsMs,
-        unrealizedPnl: position.quantity * (lastPrice - position.avgEntryPrice),
-        returnPct: ((lastPrice - position.avgEntryPrice) / position.avgEntryPrice) * 100,
+        unrealizedPnl,
+        returnPct: costBasis > 0 ? (unrealizedPnl / costBasis) * 100 : 0,
       };
     })
     .sort((a, b) => (a.symbol < b.symbol ? -1 : 1));

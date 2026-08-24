@@ -299,6 +299,35 @@ describe('runBacktest 이벤트 순서 (스펙 §9.1, §9.2)', () => {
     });
   });
 
+  it('includes paid entry commission in open-position PnL', () => {
+    const withEntryCommission: ExecutionProfile = {
+      cost: {
+        id: 'entry-commission',
+        version: '1',
+        buyCommissionRate: 0.001,
+        sellCommissionRate: 0.001,
+        sellTaxRate: 0.002,
+      },
+      slippage: { id: 'zero', version: '1', bps: 0, fixed: 0 },
+      rules: { tickSize: 0, minOrderQty: 1 },
+    };
+    const result = runBacktest(buyAtBarStrategy(0, 5) as never, {
+      candles: [bar(0, 100), bar(1, 110), bar(2, 130)],
+      initialCash: 10_000,
+      execution: withEntryCommission,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+    });
+
+    const open = result.openPositions[0]!;
+    const costBasis = 5 * 110;
+    const entryCommission = costBasis * 0.001;
+    expect(open.unrealizedPnl).toBeCloseTo(5 * (130 - 110) - entryCommission);
+    expect(open.returnPct).toBeCloseTo((open.unrealizedPnl / costBasis) * 100);
+    expect(result.metrics.finalEquity).toBeCloseTo(10_000 + open.unrealizedPnl);
+  });
+
   it('reports no open positions when everything was closed', () => {
     const candles = [bar(0, 100), bar(1, 110), bar(2, 120)];
     const strategy: TradingStrategy<unknown, { step: number }> = {
