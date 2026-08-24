@@ -87,4 +87,19 @@ describe('computeMetrics', () => {
     const metrics = computeMetrics(points, [], [], 100, 0);
     expect(metrics.cagrPct).toBeCloseTo(21, 0);
   });
+
+  it('하락일이 한 번이어도 전체 관측일 기준 Sortino 하방편차를 계산한다', () => {
+    const metrics = computeMetrics(equitySeries([110, 104.5, 104.5]), [], [], 100, 0);
+    expect(metrics.sortino).toBeCloseTo(9.1651513899, 10);
+  });
+
+  it('같은 하락률이 반복돼도 Sortino 위험을 0으로 보지 않는다', () => {
+    const metrics = computeMetrics(equitySeries([95, 90.25]), [], [], 100, 0);
+    expect(metrics.sortino).toBeCloseTo(-Math.sqrt(252), 10);
+  });
+
+  it('하락일이 없으면 Sortino를 null로 두어 무한대로 표시하지 않는다', () => {
+    const metrics = computeMetrics(equitySeries([110, 121]), [], [], 100, 0);
+    expect(metrics.sortino).toBeNull();
+  });
 });

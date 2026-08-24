@@ -128,11 +128,15 @@ export function computeMetrics(
     daily.length >= 2 && dailyStd > 0
       ? (mean(daily) / dailyStd) * Math.sqrt(TRADING_DAYS_PER_YEAR)
       : null;
-  const downside = daily.filter((r) => r < 0);
-  const downsideStd = std(downside);
+  // Sortino의 downside deviation은 음수 표본끼리의 표준편차가 아니라,
+  // 전체 관측일에서 목표수익률(0)을 밑돈 편차의 제곱평균제곱근이다.
+  // 하락일이 한 번뿐이거나 같은 하락률이 반복돼도 위험이 0이 되지 않는다.
+  const downsideDeviation = daily.length > 0
+    ? Math.sqrt(mean(daily.map((value) => Math.min(value, 0) ** 2)))
+    : 0;
   const sortino =
-    daily.length >= 2 && downsideStd > 0
-      ? (mean(daily) / downsideStd) * Math.sqrt(TRADING_DAYS_PER_YEAR)
+    daily.length >= 2 && downsideDeviation > 0
+      ? (mean(daily) / downsideDeviation) * Math.sqrt(TRADING_DAYS_PER_YEAR)
       : null;
   const calmar =
     cagrPct !== null && maxDrawdownPct < 0 ? cagrPct / Math.abs(maxDrawdownPct) : null;

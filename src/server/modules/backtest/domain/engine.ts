@@ -120,8 +120,9 @@ export interface BacktestRunResult {
  * 1.9.0: 동시 매수 신호의 현금·포지션 슬롯 배정 순서를 seed 기반으로 무작위화한다.
  * 2.0.0: 미청산 진입비용과 체결일별 세금·KRX 호가단위를 반영한다.
  * 2.1.0: 직전 거래 봉 거래량 기준 participation 한도를 적용한다.
+ * 2.2.0: Sortino 하방편차를 전체 관측일 기준으로 계산한다.
  */
-export const ENGINE_VERSION = '2.1.0';
+export const ENGINE_VERSION = '2.2.0';
 
 const PROGRESS_INTERVAL_BARS = 500;
 /** 전략에 노출된 RNG 흐름과 매수 우선순위 RNG 흐름을 분리하는 32-bit salt. */
