@@ -41,10 +41,31 @@ describe('computeDrawdownStats (스펙 §9.6 MDD)', () => {
   it('reports zero drawdown for monotonic growth', () => {
     const stats = computeDrawdownStats(equitySeries([100, 110, 120]));
     expect(stats.maxDrawdownPct).toBe(0);
+    expect(stats.maxDrawdownDurationMs).toBe(0);
+  });
+
+  it('reports zero duration when equal requested-period anchors never go underwater', () => {
+    const stats = computeDrawdownStats(equitySeries([100, 100, 100]));
+    expect(stats).toEqual({ maxDrawdownPct: 0, maxDrawdownDurationMs: 0 });
+  });
+
+  it('extends an unrecovered drawdown through a distant requested-period end anchor', () => {
+    const startTsMs = Date.UTC(2026, 0, 1);
+    const stats = computeDrawdownStats([
+      { tsMs: startTsMs, equity: 100 },
+      { tsMs: startTsMs + DAY, equity: 90 },
+      { tsMs: startTsMs + 100 * DAY, equity: 90 },
+    ]);
+    expect(stats.maxDrawdownPct).toBeCloseTo(-10);
+    expect(stats.maxDrawdownDurationMs).toBe(100 * DAY);
   });
 });
 
 describe('computeMonthlyReturns', () => {
+  it('returns no rows when there are no equity points or requested-period anchors', () => {
+    expect(computeMonthlyReturns([], 100)).toEqual([]);
+  });
+
   it('computes month-over-month returns from equity', () => {
     const jan = Date.UTC(2026, 0, 31);
     const feb = Date.UTC(2026, 1, 28);
@@ -60,6 +81,45 @@ describe('computeMonthlyReturns', () => {
     expect(result[0]!.returnPct).toBeCloseTo(10);
     expect(result[1]).toMatchObject({ year: 2026, month: 2 });
     expect(result[1]!.returnPct).toBeCloseTo(-10);
+  });
+
+  it('carries the last equity through months with no market observations', () => {
+    const result = computeMonthlyReturns(
+      [
+        { tsMs: Date.UTC(2026, 0, 31), equity: 110 },
+        { tsMs: Date.UTC(2026, 3, 30), equity: 110 },
+      ],
+      100,
+    );
+
+    expect(result.map(({ year, month }) => `${year}-${month}`)).toEqual([
+      '2026-1',
+      '2026-2',
+      '2026-3',
+      '2026-4',
+    ]);
+    expect(result[0]?.returnPct).toBeCloseTo(10);
+    expect(result.slice(1).map((entry) => entry.returnPct)).toEqual([0, 0, 0]);
+  });
+
+  it('rolls missing months across a year and keeps the latest point from unordered input', () => {
+    const result = computeMonthlyReturns(
+      [
+        { tsMs: Date.UTC(2027, 1, 15), equity: 121 },
+        { tsMs: Date.UTC(2026, 11, 31), equity: 110 },
+        { tsMs: Date.UTC(2026, 11, 1), equity: 105 },
+      ],
+      100,
+    );
+
+    expect(result.map(({ year, month }) => `${year}-${month}`)).toEqual([
+      '2026-12',
+      '2027-1',
+      '2027-2',
+    ]);
+    expect(result[0]?.returnPct).toBeCloseTo(10);
+    expect(result[1]?.returnPct).toBe(0);
+    expect(result[2]?.returnPct).toBeCloseTo(10);
   });
 });
 

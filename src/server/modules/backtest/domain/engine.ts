@@ -46,6 +46,15 @@ export interface BacktestRunInput {
   /** 이 시각 전 봉은 전략 warm-up에만 쓰고 주문·체결·결과 스냅샷을 만들지 않는다. */
   readonly tradeFromTsMs?: number;
   /**
+   * 사용자가 요청한 성과 기간의 UTC 날짜 경계. 체결 대상 필터가 아니라 결과 지표의
+   * 시간 분모이며, `fromTsMs`와 `toTsMs`는 일봉과 같은 UTC 자정 시각이다.
+   *
+   * 실제 첫·마지막 봉을 결과 경계로 쓰면 선택 종목의 봉이 늦게 시작하거나 일찍 끊긴
+   * 실행에서 짧아진 기간으로 CAGR을 연환산해 수익률을 과대평가한다. 이 필드가 있으면
+   * 정상 완료 뒤 시작은 초기 현금, 종료는 마지막 확인 가격의 평가액으로 고정한다.
+   */
+  readonly resultPeriod?: { readonly fromTsMs: number; readonly toTsMs: number };
+  /**
    * 상장시점 팩트. 미지정이면 전략의 fundamentals/corporateActions 가 항상 비어 있다 —
    * 재무를 쓰지 않는 전략(range-breakout 등)은 넘길 필요가 없다.
    */
@@ -128,10 +137,15 @@ export interface BacktestRunResult {
  * 2.2.0: Sortino 하방편차를 전체 관측일 기준으로 계산한다.
  * 2.3.0: 2봉 리밸런스 전략에서 다음 리밸런스 신호가 유실되는 일정을 fail-fast한다.
  * 2.4.0: 상장폐지 경계를 지난 주문이 재사용된 단축코드의 새 종목에 체결되지 않게 한다.
+ * 2.5.0: 요청 시작·종료 경계를 자산곡선에 고정해 데이터 단절이 CAGR 기간을 줄이지
+ * 않게 하고, 실제 고점 아래 구간만 drawdown duration으로 센다.
  */
-export const ENGINE_VERSION = '2.4.0';
+export const ENGINE_VERSION = '2.5.0';
 
 const PROGRESS_INTERVAL_BARS = 500;
+const MS_PER_DAY = 86_400_000;
+/** ECMAScript Date가 표현할 수 있는 양의 최대 epoch millisecond. */
+const MAX_DATE_TS_MS = 8_640_000_000_000_000;
 /** 전략에 노출된 RNG 흐름과 매수 우선순위 RNG 흐름을 분리하는 32-bit salt. */
 const BUY_PRIORITY_SEED_SALT = 0x9e3779b9;
 
@@ -176,6 +190,37 @@ function* runBacktestSteps(
   input: BacktestRunInput,
   hooks: EngineHooks = {},
 ): Generator<void, BacktestRunResult, void> {
+  if (
+    input.tradeFromTsMs !== undefined
+    && (!Number.isFinite(input.tradeFromTsMs) || !Number.isInteger(input.tradeFromTsMs))
+  ) {
+    throw new Error('tradeFromTsMs는 유한한 정수 시각이어야 합니다');
+  }
+  if (input.resultPeriod !== undefined) {
+    const { fromTsMs, toTsMs } = input.resultPeriod;
+    if (
+      !Number.isSafeInteger(fromTsMs)
+      || !Number.isSafeInteger(toTsMs)
+      || fromTsMs < 0
+      || toTsMs < 0
+      || fromTsMs > MAX_DATE_TS_MS
+      || toTsMs > MAX_DATE_TS_MS
+      || fromTsMs % MS_PER_DAY !== 0
+      || toTsMs % MS_PER_DAY !== 0
+      || fromTsMs > toTsMs
+    ) {
+      throw new Error(
+        'resultPeriod는 Date 범위 안에서 순서가 올바른 UTC 자정 정수 시각이어야 합니다',
+      );
+    }
+    if (
+      input.tradeFromTsMs !== undefined
+      && (input.tradeFromTsMs < fromTsMs || input.tradeFromTsMs > toTsMs)
+    ) {
+      throw new Error('tradeFromTsMs는 resultPeriod 안에 있어야 합니다');
+    }
+  }
+
   // 같은 여섯 자리 단축코드의 새 발행사 봉을 구분할 식별자가 아직 없다. 가장 이른
   // 폐지 효력 시각 이후의 봉을 먼저 제거해야 그 봉이 전략 history·후보 선정·RNG 호출·
   // 자산곡선 시점까지 오염시키지 않는다. 정확한 재진입 지원 전까지의 보수적 안전선이다.
@@ -915,6 +960,34 @@ function* runBacktestSteps(
     }
   }
 
+  // 기간 anchor는 CAGR·MDD·차트용이다. 위험지표의 일별 표본에는 실제 시장 시점만
+  // 들어가야 하므로 합성 point를 넣기 전에 별도로 보존한다(metrics.ts 참고).
+  const dailyReturnEquityPoints = equityPoints.slice();
+  if (!cancelled) {
+    // 사용자가 요청한 기간 자체가 성과의 시간 분모다. 선택 종목의 첫 봉이 늦거나
+    // 마지막 봉이 일찍 끊겼다는 이유로 CAGR 기간까지 짧아지면 안 된다. 시작 전에는
+    // warm-up 주문을 버리므로 포트폴리오는 반드시 초기 현금이고, 종료 anchor는 마지막
+    // 확인 가격으로 평가한 현재 포트폴리오다. 같은 시각의 실제 point가 있으면 중복하지 않는다.
+    if (input.resultPeriod !== undefined) {
+      const { fromTsMs, toTsMs } = input.resultPeriod;
+      const firstEquityPoint = equityPoints[0];
+      if (firstEquityPoint !== undefined && firstEquityPoint.tsMs < fromTsMs) {
+        throw new Error('결과 자산곡선이 resultPeriod 시작보다 먼저 시작했습니다');
+      }
+      if (firstEquityPoint === undefined || firstEquityPoint.tsMs > fromTsMs) {
+        equityPoints.unshift({ tsMs: fromTsMs, equity: input.initialCash });
+      }
+
+      const lastEquityPoint = equityPoints[equityPoints.length - 1];
+      if (lastEquityPoint !== undefined && lastEquityPoint.tsMs > toTsMs) {
+        throw new Error('결과 자산곡선이 resultPeriod 종료보다 늦게 끝났습니다');
+      }
+      if (lastEquityPoint === undefined || lastEquityPoint.tsMs < toTsMs) {
+        equityPoints.push({ tsMs: toTsMs, equity: markToMarket() });
+      }
+    }
+  }
+
   if (unresolvedForcedExitSymbols.size > 0) {
     warnings.push(
       `리밸런스 유니버스 이탈 청산 ${unresolvedForcedExitSymbols.size}건이 기간 종료까지 체결되지 않아 `
@@ -1049,6 +1122,7 @@ function* runBacktestSteps(
     fills,
     input.initialCash,
     maxConcurrentPositions,
+    dailyReturnEquityPoints,
   );
 
   // 미청산 포지션 스냅샷 — 수익률·자산 곡선에는 평가금액으로 반영되지만 거래내역에는

@@ -299,6 +299,108 @@ describe('runBacktest 이벤트 순서 (스펙 §9.1, §9.2)', () => {
     });
   });
 
+  it('anchors CAGR to the requested period when selected-symbol candles start late or end early', () => {
+    const resultFromTsMs = START - DAY;
+    const resultToTsMs = START + 99 * DAY;
+    const input = {
+      candles: [
+        dailyBar(0, 100),
+        dailyBar(1, 100),
+        dailyBar(2, 99),
+        dailyBar(3, 101),
+      ],
+      initialCash: 10_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+      tradeFromTsMs: START,
+    } as const;
+    const actualPointsResult = runBacktest(buyAtBarStrategy(0, 100) as never, input);
+    const result = runBacktest(buyAtBarStrategy(0, 100) as never, {
+      ...input,
+      resultPeriod: { fromTsMs: resultFromTsMs, toTsMs: resultToTsMs },
+    });
+
+    expect(result.equityPoints[0]).toEqual({ tsMs: resultFromTsMs, equity: 10_000 });
+    expect(result.equityPoints.at(-1)).toEqual({ tsMs: resultToTsMs, equity: 10_100 });
+    const elapsedDays = (resultToTsMs - resultFromTsMs) / DAY;
+    expect(result.metrics.cagrPct).toBeCloseTo(
+      ((10_100 / 10_000) ** (365 / elapsedDays) - 1) * 100,
+    );
+    expect(result.metrics.cagrPct).toBeLessThan(4);
+    expect(result.openPositions[0]?.lastPriceTsMs).toBe(START + 3 * DAY);
+    expect(result.metrics.volatilityPct).toBe(actualPointsResult.metrics.volatilityPct);
+    expect(result.metrics.sharpe).toBe(actualPointsResult.metrics.sharpe);
+    expect(result.metrics.sortino).not.toBeNull();
+    expect(result.metrics.sortino).toBe(actualPointsResult.metrics.sortino);
+    expect(result.fills).toEqual(actualPointsResult.fills);
+    expect(result.processedBars).toBe(actualPointsResult.processedBars);
+  });
+
+  it('reuses real boundary points instead of duplicating requested-period anchors', () => {
+    const result = runBacktest(buyAtBarStrategy(-1) as never, {
+      candles: [dailyBar(0, 100), dailyBar(1, 100)],
+      initialCash: 10_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+      tradeFromTsMs: START,
+      resultPeriod: { fromTsMs: START, toTsMs: START + DAY },
+    });
+
+    expect(result.equityPoints.map((point) => point.tsMs)).toEqual([START, START + DAY]);
+  });
+
+  it('fills every requested month with zero returns when there are no market observations', () => {
+    const fromTsMs = Date.UTC(2026, 0, 1);
+    const toTsMs = Date.UTC(2026, 3, 1);
+    const result = runBacktest(buyAtBarStrategy(-1) as never, {
+      candles: [],
+      initialCash: 10_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+      resultPeriod: { fromTsMs, toTsMs },
+    });
+
+    expect(result.equityPoints).toEqual([
+      { tsMs: fromTsMs, equity: 10_000 },
+      { tsMs: toTsMs, equity: 10_000 },
+    ]);
+    expect(result.monthlyReturns).toEqual([
+      { year: 2026, month: 1, returnPct: 0 },
+      { year: 2026, month: 2, returnPct: 0 },
+      { year: 2026, month: 3, returnPct: 0 },
+      { year: 2026, month: 4, returnPct: 0 },
+    ]);
+  });
+
+  it('rejects result-period timestamps that are not valid UTC date boundaries', () => {
+    const baseInput = {
+      candles: [],
+      initialCash: 10_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+    } as const;
+
+    expect(() => runBacktest(buyAtBarStrategy(-1) as never, {
+      ...baseInput,
+      resultPeriod: { fromTsMs: START + 1, toTsMs: START + DAY },
+    })).toThrow('UTC 자정');
+    expect(() => runBacktest(buyAtBarStrategy(-1) as never, {
+      ...baseInput,
+      resultPeriod: {
+        fromTsMs: START,
+        toTsMs: 8_640_000_000_000_000 + DAY,
+      },
+    })).toThrow('Date 범위');
+  });
+
   it('includes paid entry commission in open-position PnL', () => {
     const withEntryCommission: ExecutionProfile = {
       cost: {
@@ -571,6 +673,7 @@ describe('취소 (D-042) — runBacktestCancellable', () => {
   it('실행 도중 취소 요청이 들어오면 중단한다 — 동기 드라이버는 같은 신호를 볼 틈이 없다', async () => {
     // CANCEL_YIELD_INTERVAL_BARS(200) 보다 훨씬 많은 봉이 있어야 양보 창이 여러 번 열린다.
     const manyBars = Array.from({ length: 1_000 }, (_, i) => bar(i, 100));
+    const resultToTsMs = START + 100 * DAY;
     const input = {
       candles: manyBars,
       initialCash: 10_000,
@@ -578,6 +681,8 @@ describe('취소 (D-042) — runBacktestCancellable', () => {
       parameters: {},
       randomSeed: 42,
       maxPositions: 5,
+      tradeFromTsMs: START,
+      resultPeriod: { fromTsMs: START, toTsMs: resultToTsMs },
     };
 
     // 마이크로태스크로 뒤집는다 — setTimeout 등 실제 타이머 해상도에 기대면 CI 에서
@@ -592,6 +697,7 @@ describe('취소 (D-042) — runBacktestCancellable', () => {
     });
     expect(asyncResult.cancelled).toBe(true);
     expect(asyncResult.processedBars).toBeLessThan(manyBars.length);
+    expect(asyncResult.equityPoints.at(-1)?.tsMs).not.toBe(resultToTsMs);
 
     // 같은 신호원(마이크로태스크)을 동기 드라이버에 걸어도 뒤집히지 않는다.
     // `runBacktest` 는 제너레이터를 한 호흡에 끝까지 비운다.
@@ -607,6 +713,7 @@ describe('취소 (D-042) — runBacktestCancellable', () => {
     });
     expect(syncResult.cancelled).toBe(false);
     expect(syncResult.processedBars).toBe(manyBars.length);
+    expect(syncResult.equityPoints.at(-1)?.tsMs).toBe(resultToTsMs);
   });
 });
 

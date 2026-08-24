@@ -403,7 +403,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     };
     expect(seriesBody.equity.length).toBeGreaterThan(0);
     expect(seriesBody.equity.length).toBeLessThanOrEqual(1_000);
-    expect(seriesBody.totalEquityPoints).toBe(dailyCandles.length);
+    // 마지막 실제 봉 뒤에도 요청 종료일까지 현금/미청산 평가액을 유지하는 terminal
+    // anchor 한 점이 있다. 선택 종목 데이터 단절이 CAGR 기간을 줄이면 안 된다.
+    expect(seriesBody.totalEquityPoints).toBe(dailyCandles.length + 1);
 
     // SSE: 종료 상태 작업은 스냅샷 1건 후 종료
     const events = await ctx.app.inject({
@@ -421,9 +423,11 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       cookies: { qp_session: cookie },
     });
     expect(exported.headers['content-disposition']).toContain('attachment');
-    expect((exported.json() as { equityPoints: unknown[] }).equityPoints).toHaveLength(
-      dailyCandles.length,
-    );
+    const exportedEquity = (exported.json() as {
+      equityPoints: Array<{ tsMs: number }>;
+    }).equityPoints;
+    expect(exportedEquity).toHaveLength(dailyCandles.length + 1);
+    expect(exportedEquity.at(-1)?.tsMs).toBe(Date.parse('2026-06-30T00:00:00Z'));
 
     // clone → 새 QUEUED 작업
     const cloned = await ctx.app.inject({

@@ -525,6 +525,12 @@ async function main(): Promise<void> {
       maxPositions: request.risk.maxPositions,
       facts,
       tradeFromTsMs,
+      // 조회 구간의 toTsMs는 23:59:59.999라 일봉 날짜와 중복된다. 성과 기간은
+      // Candle.tsMs와 같은 UTC 자정 날짜로 넘겨 실제 point가 경계에 있으면 재사용한다.
+      resultPeriod: {
+        fromTsMs,
+        toTsMs: Date.parse(`${request.period.to}T00:00:00Z`),
+      },
       universeSchedule,
       nonTradingSymbolsByTsMs,
       nonTradingCoveredPeriod,

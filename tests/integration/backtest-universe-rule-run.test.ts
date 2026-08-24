@@ -235,10 +235,28 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     expect(job.totalBars).toBe(dailyCandles.length);
 
     // 알림 설명이 읽는 값 — getMetrics 의 metricsJson 파싱 결과와 같아야 한다
-    const metrics = ctx.container.resultsService.getMetrics(jobId) as { totalReturnPct: number };
+    const metrics = ctx.container.resultsService.getMetrics(jobId) as {
+      initialCash: number;
+      finalEquity: number;
+      totalReturnPct: number;
+      cagrPct: number | null;
+    };
     expect(ctx.container.resultsService.getTotalReturnPct(jobId)).toBe(metrics.totalReturnPct);
     // 결과가 없는 잡은 null 이다 — 0 으로 떨어지면 "수익 0%" 로 읽힌다
     expect(ctx.container.resultsService.getTotalReturnPct('bt_없는잡')).toBeNull();
+
+    // 요청 시작일은 일요일이라 첫 실제 봉보다 하루 이르다. Worker가 첫 봉부터만
+    // CAGR을 재면 기간이 짧아지므로 요청 날짜 anchor와 같은 분모인지 함께 검증한다.
+    const full = ctx.container.resultsService.getFullExport(jobId);
+    const requestedFromTsMs = Date.parse('2025-07-27T00:00:00Z');
+    const requestedToTsMs = Date.parse('2026-07-24T00:00:00Z');
+    expect(full.equityPoints[0]?.tsMs).toBe(requestedFromTsMs);
+    expect(full.equityPoints.at(-1)?.tsMs).toBe(requestedToTsMs);
+    expect(metrics.cagrPct).toBeCloseTo(
+      ((metrics.finalEquity / metrics.initialCash) ** (
+        365 / ((requestedToTsMs - requestedFromTsMs) / DAY)
+      ) - 1) * 100,
+    );
 
     // 배선 전체가 이어졌는지 — 리스너가 레지스트리 이름과 수익률을 함께 담는다.
     // 상태를 기다린 것만으로는 부족하다: 자식이 종료 전에 COMPLETED 를 DB 에 쓰고
