@@ -117,7 +117,7 @@ const KST_RESUME_FORMATTER = new Intl.DateTimeFormat('ko-KR', {
   hour12: false,
 });
 
-/** "8월 11일 00:00 (KST)" — DART 일일 호출 한도로 멈췄을 때 다음 재개 시각을 알린다 */
+/** "8월 11일 00:00 (KST)" — 외부 API 일일 호출 한도로 멈췄을 때 다음 재개 시각을 알린다 */
 export function formatPreparationResumeTime(tsMs: number | null): string {
   if (tsMs === null) return '알 수 없음';
   return `${KST_RESUME_FORMATTER.format(tsMs)} (KST)`;
