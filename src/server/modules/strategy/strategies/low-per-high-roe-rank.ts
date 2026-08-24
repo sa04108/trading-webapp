@@ -17,7 +17,7 @@ export const lowPerHighRoeRankParameters = z.object({
     title: '보유 종목 수',
     description: 'PER과 ROE 순위 합이 작은 상위 몇 종목을 동일가중으로 보유할지 정합니다.',
   }),
-  staleQuarters: z.number().int().min(0).max(8).default(2).meta({
+  staleQuarters: z.number().int().min(1).max(8).default(2).meta({
     title: '허용 공시 지연 (분기)',
     description: '순이익과 자본총계 공시가 뒤처져도 허용할 최대 분기 수입니다.',
   }),
@@ -35,7 +35,7 @@ export const lowPerHighRoeRankStrategy: TradingStrategy<
   LowPerHighRoeRankState
 > = {
   id: 'low-per-high-roe-rank',
-  version: '1.2.0',
+  version: '1.2.1',
   name: '저PER·고ROE 순위',
   requiresFundamentals: true,
   description: 'PIT TTM 순이익 기준 저PER과 고ROE를 결합하는 동일가중 연구 전략',
@@ -92,6 +92,10 @@ export const lowPerHighRoeRankStrategy: TradingStrategy<
       if (netIncomeTtm === null || totalEquity === null) continue;
       candidates.push({ symbol, marketCapKrw: metric.marketCapKrw, netIncomeTtm, totalEquity });
     }
+
+    // 선정지표는 있어도 필수 재무 팩트가 전부 누락·stale이면 새 목표를
+    // 정할 근거가 없다. 빈 목표로 기존 보유를 전량 매도하지 않고 이번 리밸런스를 건너뛴다.
+    if (candidates.length === 0) return { orders: [] };
 
     const targets = rankLowPerHighRoe(candidates, context.rng)
       .slice(0, parameters.topN)

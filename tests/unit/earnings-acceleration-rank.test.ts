@@ -208,13 +208,14 @@ describe('ordinal rank 결합', () => {
 
 describe('이익 가속 전략', () => {
   it('스키마와 준비 데이터 요구가 정확하다', () => {
-    expect(earningsAccelerationRankStrategy.version).toBe('1.2.0');
+    expect(earningsAccelerationRankStrategy.version).toBe('1.2.1');
     expect(earningsAccelerationRankParameters.parse({})).toEqual({
       topN: 40,
       priceMomentumDays: 126,
       staleQuarters: 2,
     });
-    expect(earningsAccelerationRankParameters.safeParse({ topN: 200, staleQuarters: 0 }).success).toBe(true);
+    expect(earningsAccelerationRankParameters.safeParse({ topN: 200, staleQuarters: 1 }).success).toBe(true);
+    expect(earningsAccelerationRankParameters.safeParse({ staleQuarters: 0 }).success).toBe(false);
     expect(earningsAccelerationRankParameters.safeParse({ topN: 201 }).success).toBe(false);
     expect(earningsAccelerationRankParameters.safeParse({ priceMomentumDays: 59 }).success).toBe(false);
     expect(earningsAccelerationRankParameters.safeParse({ priceMomentumDays: 253 }).success).toBe(false);

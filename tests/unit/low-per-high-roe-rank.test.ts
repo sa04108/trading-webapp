@@ -131,9 +131,10 @@ describe('rankLowPerHighRoe', () => {
 
 describe('저PER·고ROE 전략', () => {
   it('스키마와 준비 데이터 요구가 정확하다', () => {
-    expect(lowPerHighRoeRankStrategy.version).toBe('1.2.0');
+    expect(lowPerHighRoeRankStrategy.version).toBe('1.2.1');
     expect(lowPerHighRoeRankParameters.parse({})).toEqual({ topN: 40, staleQuarters: 2 });
-    expect(lowPerHighRoeRankParameters.safeParse({ topN: 200, staleQuarters: 0 }).success).toBe(true);
+    expect(lowPerHighRoeRankParameters.safeParse({ topN: 200, staleQuarters: 1 }).success).toBe(true);
+    expect(lowPerHighRoeRankParameters.safeParse({ staleQuarters: 0 }).success).toBe(false);
     expect(lowPerHighRoeRankParameters.safeParse({ topN: 201 }).success).toBe(false);
     expect(lowPerHighRoeRankParameters.safeParse({ staleQuarters: 9 }).success).toBe(false);
     expect(lowPerHighRoeRankStrategy.dataRequirements).toEqual({
@@ -204,6 +205,59 @@ describe('저PER·고ROE 전략', () => {
       parameters,
     );
     expect(buy.orders.map((order) => order.symbol)).toEqual(['FRESH']);
+  });
+
+  it('재무 후보가 전부 stale이면 기존 보유를 전량 매도하지 않는다', () => {
+    const candidates = {
+      STALE: {
+        marketCapKrw: '1000',
+        netIncomeTtm: 100,
+        totalEquity: 500,
+        netPeriod: '2024Q1',
+        equityPeriod: '2024Q1',
+      },
+    };
+    const state = lowPerHighRoeRankStrategy.initialize({
+      symbols: ['STALE'],
+      initialCash: 10_000,
+      rng: createRng(1),
+    });
+    const positions = new Map<string, Position>([
+      ['STALE', {
+        symbol: 'STALE', quantity: 10, avgEntryPrice: 100, entryCosts: 0, entryTsMs: AT,
+      }],
+    ]);
+    const decision = lowPerHighRoeRankStrategy.onBars(
+      context({ candidates, isRebalanceBar: true, positions }),
+      state,
+      { topN: 1, staleQuarters: 2 },
+    );
+    expect(decision.orders).toEqual([]);
+    expect(state.pendingTargets).toBeNull();
+  });
+
+  it('재무가 있지만 적자라 유효하게 순위 탈락한 보유분은 매도한다', () => {
+    const candidates = {
+      LOSS: { marketCapKrw: '1000', netIncomeTtm: -100, totalEquity: 500 },
+    };
+    const state = lowPerHighRoeRankStrategy.initialize({
+      symbols: ['LOSS'],
+      initialCash: 10_000,
+      rng: createRng(1),
+    });
+    const positions = new Map<string, Position>([
+      ['LOSS', {
+        symbol: 'LOSS', quantity: 10, avgEntryPrice: 100, entryCosts: 0, entryTsMs: AT,
+      }],
+    ]);
+    const decision = lowPerHighRoeRankStrategy.onBars(
+      context({ candidates, isRebalanceBar: true, positions }),
+      state,
+      { topN: 1, staleQuarters: 2 },
+    );
+    expect(decision.orders).toEqual([
+      { symbol: 'LOSS', side: 'SELL', quantity: 10, reason: 'REBALANCE_EXIT' },
+    ]);
   });
 
   it('리밸런스 봉이 아니고 대기 매수도 없으면 주문을 내지 않는다', () => {
