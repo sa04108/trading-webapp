@@ -37,6 +37,10 @@ describe('kr-equity-default', () => {
 });
 
 describe('KRX 보통주 호가단위', () => {
+  it('실전 체결 규칙은 직전 거래 봉 거래량의 10%로 체결을 제한한다', () => {
+    expect(getKrxExecutionRules('KOSPI').maxVolumeParticipationRate).toBe(0.1);
+  });
+
   it.each([
     [1_999, 1],
     [2_000, 5],

@@ -37,6 +37,8 @@ export interface ExecutionRules {
     readonly version: string;
     readonly market: 'KOSPI' | 'KOSDAQ';
   };
+  /** 직전 거래 봉 거래량 중 한 봉에서 체결할 수 있는 최대 비율. 미지정이면 제한 없음 */
+  readonly maxVolumeParticipationRate?: number;
   /** 최소 주문 수량 */
   readonly minOrderQty: number;
 }

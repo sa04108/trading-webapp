@@ -1092,6 +1092,46 @@ describe('분할을 걸친 보유 포지션 조정', () => {
     expect(result.openPositions[0]!.avgEntryPrice).toBe(20_000);
   });
 
+  it('정지 중 분할을 거친 재개 봉에서 직전 거래량도 새 주식 단위로 한 번만 보정한다', () => {
+    const candles = [
+      dailyBar(1, 100_000),
+      { ...dailyBar(2, 100_000), symbol: 'B' },
+      { ...dailyBar(3, 100_000), symbol: 'B' },
+      dailyBar(4, 20_000),
+      dailyBar(5, 20_000),
+    ];
+    const strategy: TradingStrategy<unknown, { step: number }> = {
+      id: 'split-volume-unit',
+      version: '1.0.0',
+      name: 't',
+      description: 't',
+      parameterSchema: z.unknown(),
+      initialize: () => ({ step: 0 }),
+      onBars(_context, state) {
+        const orders: OrderIntent[] = state.step === 0 || state.step === 3
+          ? [{ symbol: 'A', side: 'BUY', quantity: 10 }]
+          : [];
+        state.step += 1;
+        return { orders };
+      },
+    };
+    const result = runBacktest(strategy as never, {
+      candles,
+      initialCash: 10_000_000,
+      execution: {
+        ...ZERO_COST,
+        rules: { ...ZERO_COST.rules, maxVolumeParticipationRate: 0.1 },
+      },
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+      facts: [splitFact('A', SPLIT_PERIOD_KEY, 5)],
+    });
+
+    expect(result.fills.filter((fill) => fill.side === 'BUY').map((fill) => fill.quantity))
+      .toEqual([50, 10]);
+  });
+
   it('포지션도 대기 주문도 없어도 봉이 있으면 훅을 부른다', () => {
     // 훅 호출을 기록하는 가짜 전략. 실제 스톱 조정 로직은 전략 층 테스트가 맡고,
     // 여기서는 엔진이 훅을 정확한 시점·인자로 부르는지만 본다.

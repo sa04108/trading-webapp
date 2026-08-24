@@ -118,8 +118,10 @@ export interface BacktestRunResult {
  * sell-before-buy 대기열을 적용한다.
  * 1.8.0: 거래정지된 이탈 종목의 첫 청산 시도 뒤에는 신규 매수 대기열을 해제한다.
  * 1.9.0: 동시 매수 신호의 현금·포지션 슬롯 배정 순서를 seed 기반으로 무작위화한다.
+ * 2.0.0: 미청산 진입비용과 체결일별 세금·KRX 호가단위를 반영한다.
+ * 2.1.0: 직전 거래 봉 거래량 기준 participation 한도를 적용한다.
  */
-export const ENGINE_VERSION = '2.0.0';
+export const ENGINE_VERSION = '2.1.0';
 
 const PROGRESS_INTERVAL_BARS = 500;
 /** 전략에 노출된 RNG 흐름과 매수 우선순위 RNG 흐름을 분리하는 32-bit salt. */
@@ -250,6 +252,22 @@ function* runBacktestSteps(
    * warningsJson 을 부풀리고 정작 다른 경고를 묻어버린다.
    */
   const buysDroppedByCap = new Map<string, number>();
+  const liquidityLimitedOrders = new Map<string, number>();
+  const liquidityRejectedOrders = new Map<string, number>();
+
+  const maxVolumeParticipationRate = input.execution.rules.maxVolumeParticipationRate;
+  if (
+    maxVolumeParticipationRate !== undefined
+    && (!Number.isFinite(maxVolumeParticipationRate)
+      || maxVolumeParticipationRate <= 0
+      || maxVolumeParticipationRate > 1)
+  ) {
+    throw new Error('maxVolumeParticipationRate는 0 초과 1 이하여야 합니다');
+  }
+
+  let priorVolumeBySymbolThisBar = new Map<string, number>();
+  let volumeUnitRatioBySymbolThisBar = new Map<string, number>();
+  let filledQuantityBySymbolThisBar = new Map<string, number>();
 
   // 멤버십 일정 — fromTsMs 오름차순으로 정렬해두고 타임라인을 정방향으로 훑으며
   // 활성 구간 index 만 전진시킨다(타임라인도 오름차순이라 되돌아갈 일이 없다).
@@ -316,6 +334,14 @@ function* runBacktestSteps(
     }
 
     const bars = barsByTs.get(tsMs) as Map<string, Candle>;
+    priorVolumeBySymbolThisBar = new Map(
+      [...bars.keys()].map((symbol) => [
+        symbol,
+        historyBySymbol.get(symbol)?.at(-1)?.volume ?? 0,
+      ]),
+    );
+    volumeUnitRatioBySymbolThisBar = new Map();
+    filledQuantityBySymbolThisBar = new Map();
     const isTradeBar = input.tradeFromTsMs === undefined || tsMs >= input.tradeFromTsMs;
     const promotedBuySymbolsThisBar = new Set<string>();
     visitedBars += bars.size;
@@ -413,6 +439,7 @@ function* runBacktestSteps(
       // 역분할이 정지 구간에 겹쳐 쌓일 때만 닿는 구석이라 지금은 그대로 둔다.
       const ratio = due.reduce((acc, action) => acc * action.ratio, 1);
       if (ratio === 1) continue;
+      volumeUnitRatioBySymbolThisBar.set(symbol, ratio);
       // 전략이 봉 사이에 들고 다니는 가격 상태(지표 누적·스톱 레벨)를 같은 자리에서 고친다.
       // 대기 주문 체결보다 먼저 불러야 이번 봉의 스톱 판정이 조정된 값으로 난다.
       // `context.corporateActions()` 는 시점까지 전체 이력을 주지만
@@ -529,6 +556,20 @@ function* runBacktestSteps(
       }
       const executed = executeOrder(order, bar, tsMs);
       if (executed) fills.push(executed);
+      if (order.side === 'SELL' && positions.has(order.symbol)) {
+        const remainingQuantity = order.reason === 'REBALANCE_EXIT'
+          ? positions.get(order.symbol)!.quantity
+          : Math.min(
+            positions.get(order.symbol)!.quantity,
+            order.quantity - (executed?.quantity ?? 0),
+          );
+        if (remainingQuantity >= input.execution.rules.minOrderQty) {
+          stillPending.push({
+            ...order,
+            quantity: remainingQuantity,
+          });
+        }
+      }
       if (
         order.reason === 'REBALANCE_EXIT'
         && unresolvedForcedExitSymbols.has(order.symbol)
@@ -584,7 +625,8 @@ function* runBacktestSteps(
       continue;
     }
 
-    // 상장폐지 청산 — 폐지 효력 시각 직전 마지막 봉에서 종가로 전량 나간다.
+    // 상장폐지 청산 — 폐지 효력 시각 직전 마지막 봉에서 종가로 전량 정산한다.
+    // 주문장 체결 모델이 아니므로 participation 한도는 적용하지 않는다.
     //
     // 평가금액 갱신보다 먼저다. 이 시점 자산곡선이 청산 대금을 이미 반영해야
     // 폐지 손실이 곡선에 남는다.
@@ -619,8 +661,10 @@ function* runBacktestSteps(
         if (trade !== undefined) {
           delistingLiquidations.push({ symbol, tsMs, netPnl: trade.netPnl });
         }
-        strategy.onForcedExit?.(symbol, state);
-        if (unresolvedForcedExitSymbols.has(symbol)) resolveForcedExit(symbol, false);
+        if (!positions.has(symbol)) {
+          strategy.onForcedExit?.(symbol, state);
+          if (unresolvedForcedExitSymbols.has(symbol)) resolveForcedExit(symbol, false);
+        }
       }
     }
 
@@ -740,6 +784,24 @@ function* runBacktestSteps(
         `— 대상 ${symbols.length}종목: ${shown}` +
         (symbols.length > 10 ? ` 외 ${symbols.length - 10}종목` : '') +
         '. 그만큼 자본이 현금으로 남았습니다. 전략의 보유 종목 수를 상한 이하로 줄이거나 상한을 올리세요.',
+    );
+  }
+  if (maxVolumeParticipationRate !== undefined) {
+    const limited = [...liquidityLimitedOrders.values()].reduce((sum, count) => sum + count, 0);
+    const rejected = [...liquidityRejectedOrders.values()].reduce((sum, count) => sum + count, 0);
+    const symbols = [...new Set([
+      ...liquidityLimitedOrders.keys(),
+      ...liquidityRejectedOrders.keys(),
+    ])].sort();
+    warnings.push(
+      `유동성 체결 한도: 직전 거래 봉 거래량의 ${maxVolumeParticipationRate * 100}%까지 체결합니다. `
+        + '매수 잔량은 폐기하고 매도 잔량은 다음 거래 봉에서 재시도합니다. '
+        + '상장폐지 강제정산은 마지막 거래 종가 전량 정산 모델을 유지해 이 한도에서 제외합니다.'
+        + (limited + rejected > 0
+          ? ` 한도로 축소된 체결 시도 ${limited}건, 거부된 체결 시도 ${rejected}건 — 대상 ${symbols.length}종목: ${symbols.slice(0, 10).join(', ')}`
+            + (symbols.length > 10 ? ` 외 ${symbols.length - 10}종목` : '')
+            + '.'
+          : ''),
     );
   }
   warnings.push(...(strategy.completionWarnings?.(state, input.parameters) ?? []));
@@ -968,8 +1030,23 @@ function* runBacktestSteps(
     tsMs: number,
     basePrice: number = bar.open,
   ): Fill | null {
-    if (order.side === 'BUY') {
-      let fill = simulateFill(order, basePrice, tsMs, input.execution, bar.venue);
+    // 이미 닫힌 포지션의 중복 SELL은 유동성 거부 시도로 세지 않는다.
+    // 한도 적용 전 현재 보유 수량으로 먼저 잘라 oversell 요청도 정확히 기록한다.
+    let executableOrder = order;
+    if (order.side === 'SELL') {
+      const position = positions.get(order.symbol);
+      if (!position || position.quantity <= 0) return null;
+      executableOrder = {
+        ...order,
+        quantity: Math.min(order.quantity, position.quantity),
+      };
+    }
+
+    const volumeLimitedOrder = applyVolumeLimit(executableOrder);
+    if (volumeLimitedOrder === null) return null;
+
+    if (volumeLimitedOrder.side === 'BUY') {
+      let fill = simulateFill(volumeLimitedOrder, basePrice, tsMs, input.execution, bar.venue);
       if (requiredCashForBuy(fill) > cash) {
         // 현금 부족: 감당 가능한 수량으로 축소, 최소 수량 미만이면 거부
         // fill.price 는 이미 체결가라 basePrice 와 다르다 — 그대로 쓴다
@@ -981,7 +1058,7 @@ function* runBacktestSteps(
           return null;
         }
         fill = simulateFill(
-          { ...order, quantity: affordable },
+          { ...volumeLimitedOrder, quantity: affordable },
           basePrice,
           tsMs,
           input.execution,
@@ -990,7 +1067,8 @@ function* runBacktestSteps(
       }
 
       cash -= requiredCashForBuy(fill);
-      const existing = positions.get(order.symbol);
+      recordFilledQuantity(fill);
+      const existing = positions.get(volumeLimitedOrder.symbol);
       if (existing) {
         const totalQty = existing.quantity + fill.quantity;
         existing.avgEntryPrice =
@@ -998,8 +1076,8 @@ function* runBacktestSteps(
         existing.quantity = totalQty;
         existing.entryCosts += fill.commission;
       } else {
-        positions.set(order.symbol, {
-          symbol: order.symbol,
+        positions.set(volumeLimitedOrder.symbol, {
+          symbol: volumeLimitedOrder.symbol,
           quantity: fill.quantity,
           avgEntryPrice: fill.price,
           entryCosts: fill.commission,
@@ -1010,11 +1088,10 @@ function* runBacktestSteps(
     }
 
     // SELL
-    const position = positions.get(order.symbol);
-    if (!position || position.quantity <= 0) return null;
-    const sellQty = Math.min(order.quantity, position.quantity);
+    const position = positions.get(volumeLimitedOrder.symbol)!;
+    const sellQty = volumeLimitedOrder.quantity;
     const fill = simulateFill(
-      { ...order, quantity: sellQty },
+      { ...volumeLimitedOrder, quantity: sellQty },
       basePrice,
       tsMs,
       input.execution,
@@ -1022,6 +1099,7 @@ function* runBacktestSteps(
     );
 
     cash += proceedsFromSell(fill);
+    recordFilledQuantity(fill);
 
     // 슬리피지는 체결가(entry/exit price)에 이미 반영되어 grossPnl 에 포함된다.
     // 추가로 차감할 비용은 수수료·세금뿐이다 (이중 계산 금지).
@@ -1033,7 +1111,7 @@ function* runBacktestSteps(
     const costBasis = position.avgEntryPrice * sellQty;
 
     trades.push({
-      symbol: order.symbol,
+      symbol: volumeLimitedOrder.symbol,
       quantity: sellQty,
       entryTsMs: position.entryTsMs,
       exitTsMs: tsMs,
@@ -1044,14 +1122,51 @@ function* runBacktestSteps(
       netPnl,
       returnPct: costBasis > 0 ? (netPnl / costBasis) * 100 : 0,
       holdingTimeMs: tsMs - position.entryTsMs,
-      ...(order.reason !== undefined ? { exitReason: order.reason } : {}),
+      ...(volumeLimitedOrder.reason !== undefined ? { exitReason: volumeLimitedOrder.reason } : {}),
     });
 
     position.quantity -= sellQty;
     position.entryCosts -= entryCostsShare;
-    if (position.quantity <= 0) positions.delete(order.symbol);
+    if (position.quantity <= 0) positions.delete(volumeLimitedOrder.symbol);
 
     return fill;
+  }
+
+  function applyVolumeLimit(order: OrderIntent): OrderIntent | null {
+    // DELISTED 는 주문장 체결이 아니라 마지막 거래 종가로 전량을
+    // 강제정산하는 현재 모델이다. 마지막 봉에서 일부만 체결하면 재시도할
+    // 봉이 없어 남은 주식을 낡은 종가로 평가하게 되므로 participation 한도에서 제외한다.
+    if (maxVolumeParticipationRate === undefined || order.reason === 'DELISTED') return order;
+
+    const priorVolume = priorVolumeBySymbolThisBar.get(order.symbol) ?? 0;
+    const unitRatio = volumeUnitRatioBySymbolThisBar.get(order.symbol) ?? 1;
+    const capacity = Math.floor(priorVolume * unitRatio * maxVolumeParticipationRate);
+    const used = filledQuantityBySymbolThisBar.get(order.symbol) ?? 0;
+    const remaining = Math.max(0, capacity - used);
+    const requested = Math.floor(order.quantity);
+    const quantity = Math.min(requested, remaining);
+
+    if (quantity < input.execution.rules.minOrderQty) {
+      liquidityRejectedOrders.set(
+        order.symbol,
+        (liquidityRejectedOrders.get(order.symbol) ?? 0) + 1,
+      );
+      return null;
+    }
+    if (quantity < requested) {
+      liquidityLimitedOrders.set(
+        order.symbol,
+        (liquidityLimitedOrders.get(order.symbol) ?? 0) + 1,
+      );
+    }
+    return { ...order, quantity };
+  }
+
+  function recordFilledQuantity(fill: Fill): void {
+    filledQuantityBySymbolThisBar.set(
+      fill.symbol,
+      (filledQuantityBySymbolThisBar.get(fill.symbol) ?? 0) + fill.quantity,
+    );
   }
 }
 

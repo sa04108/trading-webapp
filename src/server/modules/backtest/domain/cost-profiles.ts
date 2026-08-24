@@ -67,6 +67,7 @@ export function getKrxExecutionRules(market: 'KOSPI' | 'KOSDAQ'): ExecutionRules
   return {
     tickSize: 0,
     tickSizeProfile: { id: 'krx-equity', version: '1.0.0', market },
+    maxVolumeParticipationRate: 0.1,
     minOrderQty: 1,
   };
 }
