@@ -1239,6 +1239,32 @@ describe('분할을 걸친 보유 포지션 조정', () => {
       .toEqual([50, 10]);
   });
 
+  it('분할 재개 봉의 현재 거래량은 분할 비율을 다시 곱하지 않고 절대 상한으로 쓴다', () => {
+    const candles = [
+      dailyBar(1, 100_000),
+      { ...dailyBar(2, 100_000), symbol: 'B' },
+      { ...dailyBar(3, 100_000), symbol: 'B' },
+      { ...dailyBar(4, 20_000), volume: 30 },
+    ];
+    const result = runBacktest(buyAtBarStrategy(0, 10) as never, {
+      candles,
+      initialCash: 10_000_000,
+      execution: {
+        ...ZERO_COST,
+        rules: { ...ZERO_COST.rules, maxVolumeParticipationRate: 0.1 },
+      },
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+      facts: [splitFact('A', SPLIT_PERIOD_KEY, 5)],
+    });
+
+    // 직전 100주 × 분할 5 × participation 10% = 50주지만,
+    // 현재 봉은 새 주식 단위로 30주만 거래됐으므로 30주가 최종 상한이다.
+    expect(result.fills.filter((fill) => fill.side === 'BUY').map((fill) => fill.quantity))
+      .toEqual([30]);
+  });
+
   it('포지션도 대기 주문도 없어도 봉이 있으면 훅을 부른다', () => {
     // 훅 호출을 기록하는 가짜 전략. 실제 스톱 조정 로직은 전략 층 테스트가 맡고,
     // 여기서는 엔진이 훅을 정확한 시점·인자로 부르는지만 본다.

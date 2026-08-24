@@ -46,7 +46,7 @@ function run(decisions: readonly (readonly OrderIntent[])[], volumes = [100, 100
   });
 }
 
-describe('직전 거래 봉 거래량 participation 체결 한도', () => {
+describe('직전 거래 봉 participation + 현재 봉 총거래량 체결 한도', () => {
   it('한도까지만 체결하고 매수 잔량을 폐기한다', () => {
     const result = run([[{ symbol: 'A', side: 'BUY', quantity: 50 }]]);
     expect(result.fills.map((fill) => fill.quantity)).toEqual([10]);
@@ -70,6 +70,33 @@ describe('직전 거래 봉 거래량 participation 체결 한도', () => {
     const result = run([[{ symbol: 'A', side: 'BUY', quantity: 1 }]], [0, 100, 100]);
     expect(result.fills).toEqual([]);
     expect(result.warnings.some((warning) => warning.includes('거부된 체결 시도 1건'))).toBe(true);
+  });
+
+  it('현재 체결 봉 거래량이 0이면 직전 봉 거래량이 많아도 매수하지 않는다', () => {
+    const result = run([[{ symbol: 'A', side: 'BUY', quantity: 50 }]], [1_000, 0, 100]);
+    expect(result.fills).toEqual([]);
+    expect(result.warnings.some((warning) => warning.includes('거부된 체결 시도 1건'))).toBe(true);
+  });
+
+  it('같은 봉의 누적 체결량은 현재 봉 총거래량도 넘지 않는다', () => {
+    const result = run([
+      [
+        { symbol: 'A', side: 'BUY', quantity: 8 },
+        { symbol: 'A', side: 'BUY', quantity: 8 },
+      ],
+    ], [1_000, 1, 100]);
+    expect(result.fills.map((fill) => fill.quantity)).toEqual([1]);
+    expect(result.openPositions[0]?.quantity).toBe(1);
+  });
+
+  it('전략 주문이 DELISTED 사유를 위장해도 거래량 한도를 우회하지 못한다', () => {
+    const result = run([
+      [{ symbol: 'A', side: 'BUY', quantity: 50, reason: 'DELISTED' }],
+    ], [1_000, 1, 100]);
+    expect(result.fills.map((fill) => [fill.side, fill.quantity, fill.reason])).toEqual([
+      ['BUY', 1, 'DELISTED'],
+    ]);
+    expect(result.openPositions[0]?.quantity).toBe(1);
   });
 
   it('청산 주문도 한도까지만 체결한다', () => {
@@ -112,11 +139,11 @@ describe('직전 거래 봉 거래량 participation 체결 한도', () => {
     expect(result.metrics.tradeCount).toBe(3);
   });
 
-  it('거래량 0으로 거부된 매도를 다음 체결 가능 봉에서 재시도한다', () => {
+  it('현재 거래량 0으로 거부된 매도를 participation이 회복된 다음 봉에서 재시도한다', () => {
     const result = run([
       [{ symbol: 'A', side: 'BUY', quantity: 50 }],
       [{ symbol: 'A', side: 'SELL', quantity: 50, reason: 'EXIT' }],
-    ], [1_000, 0, 100, 100]);
+    ], [1_000, 100, 0, 100, 100]);
     expect(result.fills.map((fill) => [fill.side, fill.quantity])).toEqual([
       ['BUY', 50],
       ['SELL', 10],

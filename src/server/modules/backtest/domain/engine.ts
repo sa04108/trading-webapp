@@ -139,8 +139,9 @@ export interface BacktestRunResult {
  * 2.4.0: 상장폐지 경계를 지난 주문이 재사용된 단축코드의 새 종목에 체결되지 않게 한다.
  * 2.5.0: 요청 시작·종료 경계를 자산곡선에 고정해 데이터 단절이 CAGR 기간을 줄이지
  * 않게 하고, 실제 고점 아래 구간만 drawdown duration으로 센다.
+ * 2.6.0: 직전 봉 participation 한도와 함께 현재 체결 봉의 총거래량을 물리적 상한으로 쓴다.
  */
-export const ENGINE_VERSION = '2.5.0';
+export const ENGINE_VERSION = '2.6.0';
 
 const PROGRESS_INTERVAL_BARS = 500;
 const MS_PER_DAY = 86_400_000;
@@ -496,6 +497,7 @@ function* runBacktestSteps(
           liquidationBar,
           tsMs,
           liquidationBar.close,
+          { bypassVolumeLimit: true },
         );
         if (fill) {
           fills.push(fill);
@@ -1029,7 +1031,8 @@ function* runBacktestSteps(
       ...liquidityRejectedOrders.keys(),
     ])].sort();
     warnings.push(
-      `유동성 체결 한도: 직전 거래 봉 거래량의 ${maxVolumeParticipationRate * 100}%까지 체결합니다. `
+      `유동성 체결 한도: 직전 거래 봉 거래량의 ${maxVolumeParticipationRate * 100}%와 `
+        + '현재 체결 봉 총거래량 중 작은 수량까지 체결합니다. '
         + '매수 잔량은 폐기하고 매도 잔량은 다음 거래 봉에서 재시도합니다. '
         + '상장폐지 강제정산은 마지막 거래 종가 전량 정산 모델을 유지해 이 한도에서 제외합니다.'
         + (limited + rejected > 0
@@ -1337,6 +1340,7 @@ function* runBacktestSteps(
     bar: Candle,
     tsMs: number,
     basePrice: number = bar.open,
+    options: { readonly bypassVolumeLimit?: boolean } = {},
   ): Fill | null {
     // 이미 닫힌 포지션의 중복 SELL은 유동성 거부 시도로 세지 않는다.
     // 한도 적용 전 현재 보유 수량으로 먼저 잘라 oversell 요청도 정확히 기록한다.
@@ -1350,7 +1354,11 @@ function* runBacktestSteps(
       };
     }
 
-    const volumeLimitedOrder = applyVolumeLimit(executableOrder);
+    const volumeLimitedOrder = applyVolumeLimit(
+      executableOrder,
+      bar.volume,
+      options.bypassVolumeLimit === true,
+    );
     if (volumeLimitedOrder === null) return null;
 
     if (volumeLimitedOrder.side === 'BUY') {
@@ -1443,15 +1451,25 @@ function* runBacktestSteps(
     return fill;
   }
 
-  function applyVolumeLimit(order: OrderIntent): OrderIntent | null {
-    // DELISTED 는 주문장 체결이 아니라 마지막 거래 종가로 전량을
-    // 강제정산하는 현재 모델이다. 마지막 봉에서 일부만 체결하면 재시도할
-    // 봉이 없어 남은 주식을 낡은 종가로 평가하게 되므로 participation 한도에서 제외한다.
-    if (maxVolumeParticipationRate === undefined || order.reason === 'DELISTED') return order;
+  function applyVolumeLimit(
+    order: OrderIntent,
+    currentVolume: number,
+    bypassVolumeLimit: boolean,
+  ): OrderIntent | null {
+    // 상장폐지 정산처럼 엔진이 명시한 내부 실행만 한도를 건너뛴다. 전략이 제공하는
+    // 공개 reason 문자열을 권한처럼 신뢰하면 일반 주문도 DELISTED로 위장할 수 있다.
+    if (maxVolumeParticipationRate === undefined || bypassVolumeLimit) return order;
 
     const priorVolume = priorVolumeBySymbolThisBar.get(order.symbol) ?? 0;
     const unitRatio = volumeUnitRatioBySymbolThisBar.get(order.symbol) ?? 1;
-    const capacity = Math.floor(priorVolume * unitRatio * maxVolumeParticipationRate);
+    // 주문을 낼 때 알 수 있는 직전 봉 participation을 기본 용량으로 쓰되, 백테스트가
+    // 사후에 확인한 현재 일봉 총거래량보다 많이 체결됐다고 만들 수는 없다. 현재 거래량은
+    // 전략 입력이나 주문 수량 산정에는 쓰지 않고 불가능 체결을 줄이는 물리적 상한으로만 쓴다.
+    // 분할 봉의 currentVolume은 이미 새 주식 단위이고, priorVolume만 unitRatio로 맞춘다.
+    const priorParticipationCapacity = Math.floor(
+      priorVolume * unitRatio * maxVolumeParticipationRate,
+    );
+    const capacity = Math.min(priorParticipationCapacity, Math.floor(currentVolume));
     const used = filledQuantityBySymbolThisBar.get(order.symbol) ?? 0;
     const remaining = Math.max(0, capacity - used);
     const requested = Math.floor(order.quantity);
