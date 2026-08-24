@@ -534,13 +534,18 @@ describe('POST /backtests/universe-preview', () => {
     });
   });
 
-  it('종목 마스터에는 있지만 캔들이 없는 종목을 missingCandleSymbols 로 밝힌다', async () => {
+  it('종목 마스터와 기간 밖 옛 봉만 있는 종목을 missingCandleSymbols 로 밝힌다', async () => {
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
       { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
     ]);
+    seedDailyBars(ctx.container.database.db, [{
+      symbol: '005930', market: 'KR', timeframe: '1d',
+      tsMs: Date.parse('2025-12-31T00:00:00Z'),
+      open: 1_000, high: 1_100, low: 900, close: 1_050, volume: 1_000,
+    }]);
     // 로컬 종목은 미리 등록해 두지 않는다 — 이 미리보기 응답 자체가 unionSymbols 를
     // 자동 등록하므로(Task 4, 아래 describe 참고), 여기서는 등록 여부와 무관하게
-    // 봉이 없다는 사실만 검증한다.
+    // 요청 기간 안의 봉이 없다는 사실만 검증한다. 기간 밖 옛 봉으로 통과하면 안 된다.
 
     const res = await ctx.app.inject({
       method: 'POST',

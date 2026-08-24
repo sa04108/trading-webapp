@@ -404,8 +404,8 @@ async function main(): Promise<void> {
       );
     }
 
-    // 일부 종목만 구간에 봉이 없는 경우 — 제출 검증은 통과시킨다(신규 상장 등 정상).
-    // 조용히 빠지면 결과를 오해하므로 실측 기준으로 경고를 남긴다 (D-025).
+    // 일정에 선정됐는데 기간 내 봉이 하나도 없는 종목만 빼고 실행하면 유니버스가
+    // 달라진다. 급락 종목이 누락된 경우 특히 낙관 편향이므로 전체 실행을 중단한다.
     const symbolsWithBars = new Set(
       candles
         .filter((candle) => candle.tsMs >= fromTsMs && candle.tsMs <= toTsMs)
@@ -413,8 +413,9 @@ async function main(): Promise<void> {
     );
     const emptySymbols = unionSymbols.filter((s) => !symbolsWithBars.has(s));
     if (emptySymbols.length > 0) {
-      datasetWarnings.push(
-        `선택한 기간에 ${timeframe} 봉이 없어 제외된 종목: ${emptySymbols.join(', ')}`,
+      throw new Error(
+        `선택한 기간에 ${timeframe} 봉이 없는 유니버스 종목이 있어 백테스트를 중단했습니다: `
+          + `${emptySymbols.join(', ')}. 기간 전체 KRX 데이터를 동기화하거나 유니버스를 조정하세요.`,
       );
     }
 

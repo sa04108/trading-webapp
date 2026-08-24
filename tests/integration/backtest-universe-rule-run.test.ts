@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, gte, isNull, lte } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
@@ -291,17 +291,8 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
   });
 
   it('worker가 period 이전 KRX warm-up을 전략에 공급하되 결과는 period 첫 봉부터 기록한다', { timeout: 90_000 }, async () => {
-    // 000660은 warm-up 봉만 있다. period 실측 누락 경고가 전체 로드 집합이 아니라
-    // 거래 결과 구간만 보도록 topN=2 schedule에 함께 넣는다.
-    seedDailyBars(ctx.container.database.db, [
-      {
-        symbol: '000660', market: 'KR', timeframe: '1d',
-        tsMs: Date.parse('2025-08-29T00:00:00Z'),
-        open: 50_000, high: 50_500, low: 49_500, close: 50_200, volume: 1_000,
-      },
-    ]);
     const request = {
-      ...buildRequest(2),
+      ...buildRequest(1),
       period: { from: '2025-09-01', to: '2025-10-31' },
     };
     const created = await ctx.app.inject({
@@ -337,22 +328,46 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     // NEXT_BAR_OPEN 진입은 Sep 3이다. warm-up 자체가 없으면 lookback을 다시 채우느라
     // 이 날짜보다 늦어진다.
     expect(full.trades[0]?.entryTsMs).toBe(Date.parse('2025-09-03T00:00:00Z'));
-    const warnings = JSON.parse(full.run?.warningsJson ?? '[]') as string[];
-    expect(warnings.some((warning) => warning.includes('000660') && warning.includes('봉이 없어'))).toBe(true);
   });
 
-  it('봉이 없는 종목을 실행 경고로 남긴다', { timeout: 90_000 }, async () => {
+  it('확정 유니버스 중 기간 내 0봉 종목이 있으면 제출을 거부한다', async () => {
     // topN=2 로 올리면 시총 2위(000660, 봉 없음)도 유니버스에 들어온다 —
-    // 제출 검증은 통과하고(005930 이 겹치므로 D-025 관용) 실행에서 그 종목만 빠진다
+    // 그 종목만 제외해 schedule을 바꾸지 않고 제출 전에 중단한다.
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
       payload: buildRequest(2),
     });
+    expect(created.statusCode).toBe(400);
+    expect((created.json() as { error: string }).error).toContain('000660');
+  });
+
+  it('제출 뒤 선정 종목의 기간 봉이 사라져도 worker가 결과 생성 전에 중단한다', { timeout: 90_000 }, async () => {
+    // 7~8월 봉은 worker의 warm-up 구간에 실제로 로드되고, 요청 기간인
+    // 9~10월 봉만 삭제한다. worker가 warm-up 봉을 기간 봉으로 잘못 세어도
+    // 통과하는 회귀를 막는 픽스처다.
+    const request = {
+      ...buildRequest(2),
+      period: { from: '2025-09-01', to: '2025-10-31' },
+    };
+    seedDailyBars(ctx.container.database.db, buildDailyCandles('000660'));
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: request,
+    });
     expect(created.statusCode).toBe(201);
     const jobId = (created.json().job as { id: string }).id;
 
+    ctx.container.database.db.delete(krxDailyBars)
+      .where(and(
+        eq(krxDailyBars.shortCode, '000660'),
+        gte(krxDailyBars.date, request.period.from),
+        lte(krxDailyBars.date, request.period.to),
+      ))
+      .run();
     ctx.container.jobOrchestrator.tick();
     await waitFor(() => {
       const job = ctx.container.jobQueue.getJob(jobId);
@@ -360,12 +375,9 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     }, 60_000);
 
     const job = ctx.container.jobQueue.getJob(jobId)!;
-    expect(job.error).toBeNull();
-    expect(job.status).toBe('COMPLETED');
-
-    const run = ctx.container.resultsService.getRun(jobId)!;
-    const warnings = JSON.parse(run.warningsJson ?? '[]') as string[];
-    expect(warnings.some((w) => w.includes('000660'))).toBe(true);
+    expect(job.status).toBe('FAILED');
+    expect(job.error).toContain('000660');
+    expect(ctx.container.resultsService.getRun(jobId)).toBeNull();
   });
 
   it('재무가 없는 데이터셋에 밸류 전략을 제출하면 422 로 거부한다', async () => {
@@ -442,7 +454,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
-      payload: momentumPayload(10, 10),
+      payload: momentumPayload(1, 1),
     });
     expect(response.statusCode).toBe(201);
   });
@@ -565,15 +577,15 @@ describe('KRX 전용 일봉으로 백테스트 실행 (워커의 부모-자식 �
  * 위저드 화면은 제출 전 항상 미리보기를 거치므로 이 등록이 이미 끝나 있다.
  * 복제는 미리보기 화면 자체를 거치지 않는다. 리밸런스 시점 시총이 바뀌어 새로
  * topN 에 든 종목처럼, 미리보기에서 한 번도 보지 못한 종목이 있으면 문제가 된다.
- * `checkPeriodCoverage` 는 유니버스 중 일부만 데이터가 있어도 통과시키므로(D-025)
- * 실행 자체는 되지만, 가격 데이터 탭에는 그 종목이 보이지 않는 불일치가 남는다.
+ * `checkPeriodCoverage` 는 미등록 종목을 0봉으로 취급해 엄격히 거부하므로,
+ * 복제 경로도 검증 전에 확정 유니버스를 등록해야 한다.
  *
  * 이 테스트는 미리보기를 거치지 않고(검증을 우회해 큐에 직접 넣어) 만든 잡을
  * 복제한다. 이미 등록된 종목(005930) 옆에 미등록 종목 900010(KRX 일봉만 있음)을
  * 둔다. 900010 은 로컬 등록이 없다.
  *
- * 등록은 `checkPeriodCoverage` 의 D-025 관용과 무관하게 clone 핸들러가 검증보다
- * 먼저 실행한다 — 그래서 900010 은 항상 등록된다.
+ * 등록은 clone 핸들러가 기간별 일봉 검증보다 먼저 실행한다 —
+ * 그래서 KRX 일봉이 있는 900010은 검증과 로컬 종목 목록 모두에서 정상 종목이다.
  * 수정 전에는 clone 이 201 로 성공하면서도 900010 을 등록하지 않아 등록 단언이
  * 실패했다 — 지금은 그 등록이 준비 완료 시점에 실제로 일어나는지를 지킨다.
  *
@@ -995,9 +1007,8 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
       ]);
       await seedCorporateActionCoverage(ctx.container, ['005930', '000660'], yearRange(2025, 2026));
 
-      // 이 파일의 유일한 리밸런스 날짜는 period.from(2025-07-27) 이다 — range-breakout 은
-      // rebalanceMonths 파라미터가 없어 제출 경로가 단일 리밸런스로 접는다
-      // (backtest-routes.ts resolveUniverse). 그 날짜에 000660 을 거래정지로 심으면
+      // 이 테스트는 리밸런싱 없음(NONE)으로 period.from(2025-07-27) 한 번만 고른다.
+      // 그 날짜에 000660 을 거래정지로 심으면
       // UniverseRuleResolver.resolve() 가 후보에서 빼고 excludedNonTradingCount 를 센다 —
       // 000660 은 봉이 없어도 상관없다(유니버스에 아예 들어오지 못하므로).
       ctx.container.database.db
@@ -1009,7 +1020,13 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
         method: 'POST',
         url: '/api/v1/backtests',
         cookies: { qp_session: cookie },
-        payload: buildRequest(2),
+        payload: {
+          ...buildRequest(2),
+          universeRule: {
+            ...buildRequest(2).universeRule,
+            rebalanceInterval: { unit: 'NONE', value: 1 },
+          },
+        },
       });
       expect(created.statusCode).toBe(201);
       const jobId = (created.json().job as { id: string }).id;

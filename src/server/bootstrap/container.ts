@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { periodToTsRange } from '../../shared/schemas/backtest-request.js';
 import type { AppConfig } from './config.js';
 import { readGitCommitSha } from '../shared/build-info.js';
 import { createLogger, type Logger } from '../shared/logger.js';
@@ -376,6 +377,18 @@ export function createContainer(config: AppConfig): Container {
         throw new Error(
           '종목 마스터가 백테스트 기간 전체를 커버하지 않습니다 — '
             + '기간 전체 KRX 데이터를 동기화한 뒤 난수 시드 실험을 다시 시작하세요.',
+        );
+      }
+      const symbols = [...new Set(schedule.flatMap((entry) => entry.symbols))].sort();
+      const { fromTsMs, toTsMs } = periodToTsRange(period);
+      const missingSymbols = candleCoverageService
+        .getCoverageBetween(symbols, fromTsMs, toTsMs)
+        .filter((row) => row.barCount === 0)
+        .map((row) => row.code);
+      if (missingSymbols.length > 0) {
+        throw new Error(
+          `선택한 기간에 일봉이 없는 유니버스 종목이 있습니다: ${missingSymbols.join(', ')} — `
+            + '일봉을 동기화한 뒤 난수 시드 실험을 다시 시작하세요.',
         );
       }
     },

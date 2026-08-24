@@ -47,6 +47,28 @@ describe('CandleCoverageService', () => {
     expect(service.getCoverage([])).toEqual([]);
   });
 
+  it('요청 기간 밖의 옛 봉은 기간 coverage로 세지 않고 유효한 행만 센다', () => {
+    app.container.database.db.insert(krxDailyBars).values([
+      { shortCode: '000660', date: '2026-08-06', market: 'KOSPI', open: 100, high: 90, low: 80, close: 85, volume: 100 },
+      { shortCode: '035420', date: '2026-08-06', market: 'KOSDAQ', open: 100, high: 110, low: 90, close: 105, volume: 100 },
+    ]).run();
+
+    expect(service.getCoverageBetween(
+      ['005930', '000660', '035420'],
+      midnight('2026-08-06'),
+      midnight('2026-08-06'),
+    )).toEqual([
+      { code: '005930', firstTsMs: null, lastTsMs: null, barCount: 0 },
+      { code: '000660', firstTsMs: null, lastTsMs: null, barCount: 0 },
+      {
+        code: '035420',
+        firstTsMs: midnight('2026-08-06'),
+        lastTsMs: midnight('2026-08-06'),
+        barCount: 1,
+      },
+    ]);
+  });
+
   it('기간 경계를 포함해 여러 종목의 날짜를 DISTINCT 타임라인으로 준다', () => {
     app.container.database.db.insert(krxDailyBars).values([
       { shortCode: '000660', date: '2026-08-05', market: 'KOSPI', open: 200, high: 210, low: 190, close: 205, volume: 500 },

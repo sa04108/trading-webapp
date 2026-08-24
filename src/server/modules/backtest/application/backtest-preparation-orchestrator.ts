@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
 import { asc, desc, eq, sql } from 'drizzle-orm';
-import type { BacktestRequest } from '../../../../shared/schemas/backtest-request.js';
+import {
+  periodToTsRange,
+  type BacktestRequest,
+} from '../../../../shared/schemas/backtest-request.js';
 import type { UniverseRule } from '../../../../shared/schemas/universe-rule.js';
 import {
   preparationInputSchema,
@@ -143,7 +146,7 @@ export interface BacktestPreparationOrchestratorDeps {
     SymbolService,
     'exists' | 'addSymbol' | 'getRegisteredIdentity' | 'getRegisteredIdentityByStandardCode'
   >;
-  readonly candleCoverage?: Pick<CandleCoverageService, 'getCoverage'>;
+  readonly candleCoverage?: Pick<CandleCoverageService, 'getCoverageBetween'>;
   readonly clock: Clock;
   readonly logger: Logger;
   readonly dartDailyCallLimit?: number;
@@ -986,7 +989,12 @@ export class BacktestPreparationOrchestrator {
     attempt: Extract<UniverseResolveAttempt, { kind: 'READY' }>,
   ): BacktestUniversePreview {
     const symbols = unionSymbols(attempt.schedule);
-    const coverage = this.deps.candleCoverage?.getCoverage(symbols) ?? [];
+    const period = periodToTsRange(input.period);
+    const coverage = this.deps.candleCoverage?.getCoverageBetween(
+      symbols,
+      period.fromTsMs,
+      period.toTsMs,
+    ) ?? [];
     const withBars = new Set(coverage.filter((row) => row.barCount > 0).map((row) => row.code));
     const missingCandleSymbols = this.deps.candleCoverage
       ? symbols.filter((symbol) => !this.deps.symbolService.exists(symbol) || !withBars.has(symbol))

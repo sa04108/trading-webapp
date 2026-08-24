@@ -372,42 +372,50 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     );
 
   /**
-   * 기간 × 커버리지 검사 (D-025). 커버리지는 메타데이터라 fact 행을 읽지 않는다.
-   * 요청한 종목 **전부** 가 구간 밖일 때만 거부한다 — 신규 상장처럼 이력이 짧은 종목
-   * 하나 때문에 유니버스 전체를 막지 않는다. 일부만 비는 경우는 실행 경고로 남는다.
-   *
-   * 옛 데이터셋 경로가 쓰던 관용 그대로다(스펙 2026-08-05) — 유니버스 규칙으로
-   * 재구성한 멤버십도 "지금 이 종목들로 이 기간에 얼마나 소비하나" 는 같은 질문이고,
-   * 신규 상장 등으로 일부 종목만 이력이 짧은 상황이 흔하다. `codes` 는 이제
-   * `body.universe.symbols` 가 아니라 리밸런스 일정의 합집합(unionSymbols)이다.
+   * 기간 × 종목별 커버리지 검사. 전체 이력 min/max가 아니라 요청 기간 안에서 worker와
+   * 같은 유효성 규칙을 통과한 일봉을 센다. 확정 schedule의 종목 하나를 0봉이라는
+   * 이유로 제외하면 실제 실행 유니버스가 달라지므로 일부 결측도 모두 거부한다.
+   * `codes`는 리밸런스 일정의 합집합(unionSymbols)이다.
    */
   const checkPeriodCoverage = (
     codes: readonly string[],
     period: { from: string; to: string },
   ): string | null => {
     const { fromTsMs, toTsMs } = periodToTsRange(period);
-    const bySymbol = new Map(registeredCoverage(codes).map((row) => [row.code, row]));
+    const inPeriod = new Map(
+      candleCoverage.getCoverageBetween(codes, fromTsMs, toTsMs)
+        .map((row) => [
+          row.code,
+          symbolService.exists(row.code)
+            ? row
+            : { code: row.code, firstTsMs: null, lastTsMs: null, barCount: 0 },
+        ] as const),
+    );
+    const allHistory = new Map(registeredCoverage(codes).map((row) => [row.code, row]));
 
     const ranges: string[] = [];
     for (const symbol of codes) {
-      const row = bySymbol.get(symbol);
-      if (!row || row.barCount === 0 || row.firstTsMs === null || row.lastTsMs === null) {
-        ranges.push(`${symbol}: 수집된 데이터 없음`);
-        continue;
-      }
-      // 하나라도 겹치면 통과 — 나머지는 실행 경고가 알린다
-      if (row.lastTsMs >= fromTsMs && row.firstTsMs <= toTsMs) return null;
-      ranges.push(`${symbol}: ${isoDate(row.firstTsMs)} ~ ${isoDate(row.lastTsMs)}`);
+      const current = inPeriod.get(symbol);
+      if (current && current.barCount > 0) continue;
+      const full = allHistory.get(symbol);
+      ranges.push(
+        !full || full.barCount === 0 || full.firstTsMs === null || full.lastTsMs === null
+          ? `${symbol}: 수집된 데이터 없음`
+          : `${symbol}: ${isoDate(full.firstTsMs)} ~ ${isoDate(full.lastTsMs)}`,
+      );
     }
 
-    return `선택한 기간에 데이터가 있는 종목이 없습니다. 보유 범위 — ${ranges.join(', ')}`;
+    return ranges.length === 0
+      ? null
+      : `선택한 기간에 일봉이 없는 유니버스 종목이 있습니다. 보유 범위 — ${ranges.join(', ')}`;
   };
 
   /**
    * 커버리지 확인 + 봉 수 상한 검사. 데이터셋·스냅샷 경로가 공유한다 — 유니버스가
    * 어디서 왔든 "이 종목 집합으로 이 기간에 얼마나 소비하나" 는 같은 질문이다.
    * 두 경로가 갈리는 지점은 기간 커버리지 판정 방식뿐이라 `coverageCheck` 로
-   * 주입한다 (D-025 관용 vs REVIEW §9.1 엄격 차단).
+   * 주입한다. 확정 유니버스의 종목을 일부만 빼고 실행하지 않도록 현재 경로도
+   * 요청 기간 내 유효 일봉을 종목별로 엄격히 확인한다.
    *
    * 소비 timeframe 을 고르는 절차는 없다 — `Timeframe` 이 '1d' 하나뿐이라(Task 4)
    * 예전처럼 슬라이스별 가용성을 견줘 고를 것이 없다.
@@ -585,7 +593,8 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       return { ok: false, status: 422, errors: [identityError] };
     }
 
-    // ② unionSymbols 캔들 존재 검증 — 옛 데이터셋 분기의 관용(D-025)을 그대로 재사용한다.
+    // ② unionSymbols 캔들 존재 검증 — 하나라도 0봉이면 확정 schedule과 실제 실행
+    // 유니버스가 달라지므로 종목별로 엄격히 확인한다.
     const universeErrors: string[] = [];
     const resolvedConsumption = resolveConsumedUniverse(
       body,
@@ -678,10 +687,10 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
   ): string | null => {
     if (!strategies.requiresFundamentals(body.strategyId)) return null;
     /**
-     * **전 종목이 비었을 때만** 막는다. 일부 종목만 재무가 없는 경우는 거부 사유가
-     * 아니다 — 신규 상장처럼 이력이 짧은 종목 하나 때문에 유니버스 전체를 막지 않는
-     * `checkPeriodCoverage` 와 같은 원칙이고(D-025), 빠진 종목은 워커가 실행 경고에
-     * **이름으로** 남긴다. 여기서 전부 422 로 바꾸면 그 경고 경로가 죽는다.
+     * **전 종목이 비었을 때만** 막는다. 일부 종목만 재무가 없는 경우는 현재
+     * 워커가 해당 종목을 실행 경고에 **이름으로** 남기고 순위에서 제외한다.
+     * 일봉 결측은 확정 schedule과 실행 유니버스가 달라져 일부도 엄격히 막지만,
+     * 재무 결측은 아래 coverage 정책에 따라 경고로 남는 별도 정책이다.
      *
      * 판정은 fact 행 존재(hasFacts)가 아니라 재무 coverage 로 한다 — 자본변동만 받은
      * 종목도 fact 행은 있어서 행 존재는 재무 있음을 증명하지 못한다
@@ -1232,15 +1241,33 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const identityBlocker = reusable === null
       ? null
       : pinnedScheduleIdentityError(reusable.schedule, symbolMaster);
+    const currentMissingCandleSymbols = reusable === null
+      ? []
+      : (() => {
+          const symbols = [...new Set(
+            reusable.schedule.flatMap((entry) => entry.symbols),
+          )].sort();
+          const { fromTsMs, toTsMs } = periodToTsRange(rebased.request.period);
+          const withBars = new Set(
+            candleCoverage.getCoverageBetween(symbols, fromTsMs, toTsMs)
+              .filter((row) => row.barCount > 0)
+              .map((row) => row.code),
+          );
+          return symbols.filter(
+            (symbol) => !symbolService.exists(symbol) || !withBars.has(symbol),
+          );
+        })();
     const reusablePreview = identityBlocker === null && reusable !== null
       ? {
           ...reusable.response,
-          // cached preview는 resolver를 다시 실행하지 않는다. 전체 KRX coverage만은
-          // 현재 상태로 덮어 위저드가 낡은 true를 믿고 동기화 단계를 건너뛰지 않게 한다.
+          // cached preview는 resolver를 다시 실행하지 않는다. 전체 KRX coverage와
+          // 현재 일봉 보유 상태를 모두 덮어 위저드가 낡은 성공 판정을 믿고
+          // 동기화 단계를 건너뛰지 않게 한다.
           periodCovered: symbolMaster.isRangeCovered(
             rebased.request.period.from,
             rebased.request.period.to,
           ),
+          missingCandleSymbols: currentMissingCandleSymbols,
         }
       : null;
     return {
