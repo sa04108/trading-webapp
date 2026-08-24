@@ -338,6 +338,7 @@ export function createContainer(config: AppConfig): Container {
     database,
     resolver: universeRuleResolver,
     factSync: factSyncService,
+    actionCoverage: actionCoverageStore,
     symbolMaster: symbolMasterService,
     strategies: strategyRegistry,
     symbolService,

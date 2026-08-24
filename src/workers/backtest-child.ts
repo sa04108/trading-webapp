@@ -43,8 +43,13 @@ import {
   getSlippageProfile,
 } from '../server/modules/backtest/domain/cost-profiles.js';
 import { SqliteFactRepository } from '../server/modules/facts/infrastructure/sqlite-fact-repository.js';
+import { SqliteCorporateActionCoverageStore } from '../server/modules/facts/application/corporate-action-coverage.js';
 import { CORPORATE_ACTION_FIELD, type Fact } from '../server/modules/facts/domain/fact.js';
-import { alignCorporateActionEffectiveDates } from '../server/modules/facts/domain/corporate-action-effective-date.js';
+import {
+  alignCorporateActionEffectiveDates,
+  CORPORATE_ACTION_ALIGNMENT_WINDOW,
+  corporateActionRawDateRange,
+} from '../server/modules/facts/domain/corporate-action-effective-date.js';
 import type { Candle, Market, Timeframe } from '../server/modules/market-data/domain/candle.js';
 import { addCalendarDays } from '../server/modules/market-data/domain/kst-date.js';
 import { KrxDailyCandleRepository } from '../server/modules/market-data/infrastructure/krx-daily-candle-repository.js';
@@ -439,33 +444,101 @@ async function main(): Promise<void> {
     // 단가는 분할 전 값을 쓰므로 평가금액이 비율 배로 뛰었다가 재개 봉에서 되돌아온다
     // — 자산곡선에 없던 봉우리가 서고 MDD·변동성이 그 봉우리에서 계산된다.
     //
-    // 창을 실행 기간 ±120일로 잡는다. 기간 밖에서 효력이 난 자본변동은 이 실행의
-    // 평가금액을 흔들 수 없고(포지션이 없거나 봉이 없다), alignment 창이 최대 +90일이라
-    // 기간 밖 기준일이 기간 안 날짜로 옮겨질 여지도 이 범위 안에 다 들어온다.
-    const sharesChanges = symbolMaster.sharesChangesBetween(
-      addCalendarDays(warmupFromDate, -120),
-      addCalendarDays(request.period.to, 120),
-    );
+    // resolver와 같은 전체 raw fact/change 그래프를 정렬해야 주변 사건이 같은 change를
+    // 요구해도 schedule 계산과 실제 실행에서 효력일 배정이 갈리지 않는다.
+    const rawActionRange = corporateActionRawDateRange(rawCorporateActionFacts);
+    const sharesChanges = rawActionRange === null
+      ? []
+      : symbolMaster.sharesChangesBetween(
+          addCalendarDays(
+            rawActionRange.from,
+            -CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays,
+          ),
+          addCalendarDays(
+            rawActionRange.to,
+            CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays,
+          ),
+        );
     const aligned = alignCorporateActionEffectiveDates(rawCorporateActionFacts, sharesChanges);
-    const corporateActionFacts = aligned.facts;
 
-    // 짝을 못 찾은 자본변동만 밝힌다 — 실행 기간 안에 효력이 나는 것으로 좁힌다.
-    // 기간 밖 자본변동까지 세면 10년치 분할 목록이 경고 한 줄에 쏟아진다.
-    const unalignedInPeriod = aligned.unaligned.filter(
-      (action) => action.periodKey >= request.period.from && action.periodKey <= request.period.to,
+    // 실제 효력일을 확인하지 못한 자본변동은 원래 DART 기준일로 실행하지 않는다.
+    // 기준일에는 분할 전 가격인데 수량만 늘어 자산·수익률이 비율 배로 튈 수 있기 때문이다.
+    //
+    // raw 기준일 자체가 warm-up~종료 밖이어도 정렬 후보는 기준일 -30~+90일에 있다.
+    // 따라서 실제 변경일이 엔진 입력 구간에 들어올 수 있는 역방향 범위까지 막는다.
+    // 이보다 오래된 미정렬 이력은 첫 warm-up 봉보다도 먼저 끝났고, 훨씬 뒤 이력은
+    // 결과 종료 뒤라 이번 실행의 가격·전략 상태·포지션 수량을 바꿀 수 없다.
+    // 달력 warm-up 하한에 실제 봉이 없을 수 있다(상장 전, 장기 정지, 불완전한 옛
+    // 거래일 캘린더). 자본변동이 신호/보유에 영향을 줄 수 있는 시작은 실제로 로드한
+    // 첫 봉이다. 빈 수년을 기준으로 coverage를 요구하면 준비 plan보다 과도한 옛 연도를
+    // 막으면서도 결과 정확도는 늘지 않는다.
+    const firstLoadedCandleDate = new Date(
+      candles.reduce((minimum, candle) => Math.min(minimum, candle.tsMs), Number.POSITIVE_INFINITY),
+    ).toISOString().slice(0, 10);
+    const potentiallyRelevantFrom = addCalendarDays(
+      firstLoadedCandleDate,
+      -CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays,
     );
-    if (unalignedInPeriod.length > 0) {
-      const unalignedSymbols = [...new Set(unalignedInPeriod.map((action) => action.symbol))].sort();
+    const potentiallyRelevantTo = addCalendarDays(
+      request.period.to,
+      CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays,
+    );
+    // 파서가 자본변동 행을 보았지만 비율을 만들지 못하면 raw fact 자체가 없다.
+    // aligner만 보면 "사건 없음"과 구분할 수 없으므로 coverage의 gap 연도를 마지막
+    // 실행 경계에서도 확인한다. 연도 단위 기록이라 관련 역투영 범위와 겹치면 보수적으로
+    // 전체 실행을 막는다 — 종목만 빼면 유니버스와 성과가 낙관적으로 바뀔 수 있다.
+    const relevantActionFromYear = Number(potentiallyRelevantFrom.slice(0, 4));
+    const relevantActionToYear = Number(potentiallyRelevantTo.slice(0, 4));
+    const requiredActionYears: number[] = [];
+    for (let year = relevantActionFromYear; year <= relevantActionToYear; year += 1) {
+      requiredActionYears.push(year);
+    }
+    const actionCoverage = new SqliteCorporateActionCoverageStore(db);
+    const coveredActionYears = actionCoverage.getCoveredYears(unionSymbols);
+    const actionCoverageMissingSymbols = unionSymbols.filter((symbol) => {
+      const covered = new Set(coveredActionYears.get(symbol) ?? []);
+      return requiredActionYears.some((year) => !covered.has(year));
+    }).sort();
+    if (actionCoverageMissingSymbols.length > 0) {
+      throw new Error(
+        '자본변동 coverage가 부족해 백테스트를 중단했습니다 — '
+          + `대상 ${actionCoverageMissingSymbols.length}종목: `
+          + `${actionCoverageMissingSymbols.join(', ')}. 필요한 연도 데이터를 다시 준비하세요.`,
+      );
+    }
+    const actionGapSymbols = [
+      ...actionCoverage.getGapYears(unionSymbols),
+    ].flatMap(([symbol, years]) => years.some(
+      (year) => year >= relevantActionFromYear && year <= relevantActionToYear,
+    ) ? [symbol] : []).sort();
+    if (actionGapSymbols.length > 0) {
+      throw new Error(
+        '자본변동 보정 비율을 만들 수 없는 연도가 있어 백테스트를 중단했습니다 — '
+          + `대상 ${actionGapSymbols.length}종목: ${actionGapSymbols.join(', ')}. `
+          + 'DART gap을 해소하고 자본변동 데이터를 다시 준비하세요.',
+      );
+    }
+    const unalignedForExecution = aligned.unaligned.filter(
+      (action) => (
+        action.periodKey >= potentiallyRelevantFrom
+        && action.periodKey <= potentiallyRelevantTo
+      ),
+    );
+    if (unalignedForExecution.length > 0) {
+      const unalignedSymbols = [
+        ...new Set(unalignedForExecution.map((action) => action.symbol)),
+      ].sort();
       const shown = unalignedSymbols.slice(0, 10).join(', ');
-      datasetWarnings.push(
-        `자본변동 ${unalignedInPeriod.length}건은 KRX 상장주식수 변경과 짝지어지지 않아 DART 기준일을 그대로 씁니다 `
-          + `— 대상 ${unalignedSymbols.length}종목: ${shown}`
+      throw new Error(
+        `자본변동 ${unalignedForExecution.length}건의 실제 효력일을 KRX 상장주식수 변경과 정렬할 수 없어 `
+          + `백테스트를 중단했습니다 — 대상 ${unalignedSymbols.length}종목: ${shown}`
           + (unalignedSymbols.length > 10 ? ` 외 ${unalignedSymbols.length - 10}종목` : '')
-          + '. 기준일과 변경상장일이 다르면 그 사이 구간의 평가금액이 실제와 어긋납니다. '
-          + '종목 마스터를 그 구간까지 수집하면 짝을 찾습니다.',
+          + '. DART 기준일로 그대로 실행하면 수량과 가격 단위가 어긋나 수익이 왜곡됩니다. '
+          + '종목 마스터를 기준일 전후 구간까지 수집한 뒤 다시 실행하세요.',
       );
     }
 
+    const corporateActionFacts = aligned.facts;
     const facts: Fact[] = [...financialFacts, ...corporateActionFacts];
     // 아래 두 검사는 **재무** 팩트만 본다 — 분할만 기록된 종목은 재무가 없는 종목이다
     if (strategy.requiresFundamentals === true && financialFacts.length === 0) {

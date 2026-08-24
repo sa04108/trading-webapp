@@ -113,6 +113,10 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
       sync: async () => ({ savedFacts: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
       syncCorporateActions: async () => ({ savedFacts: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
     },
+    actionCoverage: {
+      getCoveredYears: () => new Map<string, readonly number[]>(),
+      getGapYears: () => new Map<string, readonly number[]>(),
+    },
     dartDailyCallLimit: 40_000,
     ...overrides,
   };
@@ -299,6 +303,126 @@ describe('BacktestPreparationOrchestrator MARKET_DATA 진행 표시', () => {
     // 날짜마다 갱신 — 시작 0 과 완료 5 사이의 중간 값이 실제로 흐른다.
     expect(active.some((entry) => entry.done > 0 && entry.done < 5)).toBe(true);
 
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+});
+
+describe('BacktestPreparationOrchestrator 자본변동 gap 차단', () => {
+  it('최종 유니버스의 관련 연도에 보정 불가 gap이 있으면 COMPLETED preview를 만들지 않는다', async () => {
+    let resolveCalls = 0;
+    const ctx = makeDeps({
+      resolver: {
+        // 첫 READY 뒤 final sync가 입력을 바꿔 멤버가 교체되는 경계. gap 검사가 첫
+        // 005930만 보면 새 최종 멤버 000660의 결측을 놓친다.
+        resolveOrDescribeNeeds: async () => resolveCalls++ === 0
+          ? ready(['005930'])
+          : ready(['000660']),
+        isPeriodCovered: () => true,
+      },
+      strategies: {
+        get: (id: string) => id === INPUT.strategyId ? {
+          id,
+          version: '1.0.0',
+          name: id,
+          description: id,
+          parameterSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+          dataRequirements: { requiresCorporateActions: true },
+          initialize: () => ({}),
+          onBars: () => ({ orders: [] }),
+        } : null,
+      },
+      actionCoverage: {
+        // 실행구간 2026-01-05의 정렬 역투영 범위는 2025년까지 걸친다.
+        getCoveredYears: () => new Map([['000660', [2025, 2026]]]),
+        getGapYears: () => new Map([['000660', [2025]]]),
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const job = orchestrator.start(INPUT);
+    await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
+
+    expect(orchestrator.get(job.id)?.error).toMatch(/보정 비율을 만들 수 없는 연도.*000660/);
+    expect(orchestrator.getPreview(job.id)).toBeNull();
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
+  it('final sync 뒤 A에서 B로 바뀌면 B 데이터까지 준비하고 일정이 안정된 뒤 완료한다', async () => {
+    let resolveCalls = 0;
+    const covered = new Map<string, number[]>();
+    const syncedSymbols: string[][] = [];
+    const ctx = makeDeps({
+      resolver: {
+        resolveOrDescribeNeeds: async () => resolveCalls++ === 0
+          ? ready(['005930'])
+          : ready(['000660']),
+        isPeriodCovered: () => true,
+      },
+      strategies: {
+        get: (id: string) => id === INPUT.strategyId ? {
+          id,
+          version: '1.0.0',
+          name: id,
+          description: id,
+          parameterSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+          dataRequirements: { requiresCorporateActions: true },
+          initialize: () => ({}),
+          onBars: () => ({ orders: [] }),
+        } : null,
+      },
+      factSync: {
+        sync: async () => ({ savedFacts: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
+        syncCorporateActions: async (request: {
+          symbols: readonly string[];
+          fromYear: number;
+          toYear: number;
+        }) => {
+          syncedSymbols.push([...request.symbols]);
+          for (const symbol of request.symbols) {
+            const years: number[] = [];
+            for (let year = request.fromYear; year <= request.toYear; year += 1) years.push(year);
+            covered.set(symbol, years);
+          }
+          return { savedFacts: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null };
+        },
+      },
+      actionCoverage: {
+        getCoveredYears: (symbols: readonly string[]) => new Map(
+          [...covered].filter(([symbol]) => symbols.includes(symbol)),
+        ),
+        getGapYears: () => new Map(),
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const job = orchestrator.start(INPUT);
+    await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
+
+    expect(syncedSymbols).toEqual([['005930'], ['000660']]);
+    expect(orchestrator.getPreview(job.id)?.unionSymbols).toEqual(['000660']);
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
+  it('final schedule이 계속 진동하면 제한 없이 sync하지 않고 명시적으로 실패한다', async () => {
+    let resolveCalls = 0;
+    const ctx = makeDeps({
+      resolver: {
+        resolveOrDescribeNeeds: async () => ready([
+          resolveCalls++ % 2 === 0 ? '005930' : '000660',
+        ]),
+        isPeriodCovered: () => true,
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const job = orchestrator.start(INPUT);
+    await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
+
+    expect(orchestrator.get(job.id)?.error).toMatch(/8회 안에 안정되지 않았습니다/);
+    expect(resolveCalls).toBe(9);
     await orchestrator.stop();
     ctx.handle.close();
   });

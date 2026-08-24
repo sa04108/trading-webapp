@@ -148,18 +148,23 @@ interface RedisclosureDetection {
  * gap 목록에서 연도만 뽑는다. periodKey 형식이 경로마다 다르다 — 재무는 'YYYYQ1',
  * 자본변동은 'YYYY-MM-DD', corp_code 매핑 실패는 '-' 다. 형식을 다 알 필요 없이
  * 맨 앞 네 자리 숫자를 연도로 본다 — 세 형식 모두 연도가 맨 앞에 온다.
- * '-' 처럼 숫자가 없으면 연도를 알 수 없으므로 그 gap 은 건너뛴다. 건너뛴 gap 도
- * `report.gaps` 에는 그대로 남으므로 사용자에게 감춰지지 않는다.
+ * '-' 처럼 숫자가 없으면 그 gap을 발견한 현재 fetch work-unit 연도로 귀속한다.
+ * 종목코드 매핑 실패나 날짜 필드 파손을 건너뛰면 coverage만 닫혀 이후 준비·worker가
+ * "자본변동 없음"으로 오인하기 때문이다.
  *
  * 이 결과가 이번에 요청한 연도의 부분집합이라고 가정하면 안 된다.
  * `irdsSttus` 는 자본변동 이력을 보고서 연도 기준으로 누적 반환하므로(dart-fact-source.ts
  * 참고), gap 의 periodKey(이벤트 날짜)가 이번 요청 연도 밖을 가리킬 수 있다.
  */
-function uniqueYearsFromGaps(gaps: readonly FactIngestionGap[]): number[] {
+function uniqueYearsFromGaps(
+  gaps: readonly FactIngestionGap[],
+  fallbackYear?: number,
+): number[] {
   const years = new Set<number>();
   for (const gap of gaps) {
     const match = /^(\d{4})/.exec(gap.periodKey);
     if (match) years.add(Number(match[1]));
+    else if (fallbackYear !== undefined) years.add(fallbackYear);
   }
   return [...years].sort((a, b) => a - b);
 }
@@ -211,9 +216,12 @@ export class FactSyncService {
         };
       },
       recordCoverage: (symbol, years, actionGapYears, nowMs) => {
+        // action 결과를 먼저 원자적으로 남긴다. 반대 순서에서 action write가 실패하면
+        // 재무 coverage가 이 work-unit을 완료로 만들어 다음 incremental retry가
+        // gap 기록 없이 통째로 건너뛴다. 재무 write가 뒤에서 실패하는 경우에는 재무
+        // coverage가 열려 있어 안전하게 전체 fetch를 다시 시도한다.
+        this.actionCoverage.addCoverageResult(symbol, years, actionGapYears, nowMs);
         this.coverage.addCoveredYears(symbol, years, nowMs);
-        this.actionCoverage.addCoveredYears(symbol, years, nowMs);
-        this.actionCoverage.addGapYears(symbol, actionGapYears, nowMs);
       },
     });
   }
@@ -287,8 +295,7 @@ export class FactSyncService {
         return { facts: actions.facts, gaps: actions.gaps, actionGaps: actions.gaps };
       },
       recordCoverage: (symbol, years, actionGapYears, nowMs) => {
-        this.actionCoverage.addCoveredYears(symbol, years, nowMs);
-        this.actionCoverage.addGapYears(symbol, actionGapYears, nowMs);
+        this.actionCoverage.addCoverageResult(symbol, years, actionGapYears, nowMs);
       },
     });
   }
@@ -426,7 +433,8 @@ export class FactSyncService {
           // 요청 밖 연도의 이벤트 gap(앵커 부재 등)이 딸려 오는데, 그 연도를 적으면
           // 해당 연도 자체 수집이 성공했어도 gap 이 남고 어떤 sync 도 지우지 못해
           // (covered 연도는 증분 계획에서 제외) 준비 작업이 무한 반복하다 실패한다.
-          const gapYears = uniqueYearsFromGaps(actionGaps).filter((gapYear) => gapYear === year);
+          const gapYears = uniqueYearsFromGaps(actionGaps, year)
+            .filter((gapYear) => gapYear === year);
           await this.bumpVersionIfChanged(symbol, fingerprintBefore);
 
           const completedAtMs = this.clock.now();

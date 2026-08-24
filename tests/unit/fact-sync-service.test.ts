@@ -89,6 +89,11 @@ function fakeActionCoverage(): CorporateActionCoverageStore {
       new Map([...updatedAt].filter(([symbol]) => codes.includes(symbol))),
     addCoveredYears: (symbol, years, nowMs) => add(covered, symbol, years, nowMs),
     addGapYears: (symbol, years, nowMs) => add(gaps, symbol, years, nowMs),
+    addCoverageResult: (symbol, coveredYears, gapYears, nowMs) => {
+      merge(covered, symbol, coveredYears);
+      merge(gaps, symbol, gapYears);
+      if (coveredYears.length > 0) updatedAt.set(symbol, nowMs);
+    },
   };
 }
 
@@ -1649,6 +1654,88 @@ describe('FactSyncService — 자본변동 전용 수집', () => {
 
     await service.syncCorporateActions(request);
 
+    expect(actionCoverage.getGapYears().get('005930')).toEqual([2025]);
+  });
+
+  it('날짜를 읽지 못해 periodKey가 없는 gap도 현재 fetch 연도에 기록한다', async () => {
+    const source: FactSource = {
+      fetchFinancials: () => Promise.resolve({ facts: [], gaps: [] }),
+      fetchCorporateActions: () => Promise.resolve({
+        facts: [],
+        gaps: [{
+          symbol: '005930',
+          periodKey: '-',
+          reason: 'DART corp_code 매핑에 없는 종목코드입니다',
+        }],
+      }),
+      listRecentPeriodicFilings: async () => [],
+    };
+    const actionCoverage = fakeActionCoverage();
+    const service = new FactSyncService(
+      source,
+      fakeRepository(),
+      LOGGER,
+      fakeVersions(),
+      CLOCK,
+      fakeCoverage(),
+      actionCoverage,
+    );
+
+    await service.syncCorporateActions(request);
+
+    expect(actionCoverage.getCoveredYears().get('005930')).toEqual([2025]);
+    expect(actionCoverage.getGapYears().get('005930')).toEqual([2025]);
+  });
+
+  it('coverage+gap 원자 write가 실패하면 covered-only로 닫지 않고 다음 incremental에서 재시도한다', async () => {
+    let covered = false;
+    let atomicAttempts = 0;
+    let fetchCalls = 0;
+    const gapYears = new Set<number>();
+    const actionCoverage: CorporateActionCoverageStore = {
+      getCoveredYears: () => covered ? new Map([['005930', [2025]]]) : new Map(),
+      getGapYears: () => gapYears.size > 0
+        ? new Map([['005930', [...gapYears]]])
+        : new Map(),
+      getUpdatedAtMs: () => new Map(),
+      // 회귀 전 두-write 경로라면 첫 메서드가 covered만 남기고 두 번째가 실패한다.
+      addCoveredYears: () => { covered = true; },
+      addGapYears: () => { throw new Error('injected split write failure'); },
+      addCoverageResult: (_symbol, years, gaps) => {
+        atomicAttempts += 1;
+        if (atomicAttempts === 1) throw new Error('injected atomic write failure');
+        covered = years.includes(2025);
+        for (const year of gaps) gapYears.add(year);
+      },
+    };
+    const source: FactSource = {
+      fetchFinancials: () => Promise.resolve({ facts: [], gaps: [] }),
+      fetchCorporateActions: () => {
+        fetchCalls += 1;
+        return Promise.resolve({
+          facts: [],
+          gaps: [{ symbol: '005930', periodKey: '-', reason: '날짜 필드 누락' }],
+        });
+      },
+      listRecentPeriodicFilings: async () => [],
+    };
+    const service = new FactSyncService(
+      source,
+      fakeRepository(),
+      LOGGER,
+      fakeVersions(),
+      CLOCK,
+      fakeCoverage(),
+      actionCoverage,
+    );
+    const incremental = { ...request, mode: 'INCREMENTAL' as const };
+
+    const failed = await service.syncCorporateActions(incremental);
+    const retried = await service.syncCorporateActions(incremental);
+
+    expect(failed.stopReason).toBe('ERROR');
+    expect(retried.stopReason).toBeNull();
+    expect(fetchCalls).toBe(2);
     expect(actionCoverage.getGapYears().get('005930')).toEqual([2025]);
   });
 

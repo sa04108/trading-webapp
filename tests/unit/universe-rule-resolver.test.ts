@@ -9,6 +9,7 @@ import {
 import { UniverseRuleResolver } from '../../src/server/modules/backtest/application/universe-rule-resolver.js';
 import type { UniverseRule } from '../../src/shared/schemas/universe-rule.js';
 import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
+import type { SharesChange } from '../../src/server/modules/facts/domain/corporate-action-effective-date.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import type { DailySelectionMetric } from '../../src/server/modules/market-data/application/selection-metric-repository.js';
 import type {
@@ -334,6 +335,7 @@ function makePipelineResolver(options: {
   candles?: readonly Candle[];
   actionCoverage?: ReadonlyMap<string, readonly number[]>;
   actionGaps?: ReadonlyMap<string, readonly number[]>;
+  sharesChanges?: readonly SharesChange[];
   priceRangeCovered?: boolean;
   masterCovered?: boolean;
   effectiveTradingDate?: (rebalanceDate: string) => string | undefined;
@@ -357,6 +359,11 @@ function makePipelineResolver(options: {
     ...netIncomeFacts('000003', [5, 5, 5, 5]),
   ];
   const factsPresent = new Set(options.factsPresent ?? PIPELINE_ENTRIES.map((entry) => entry.shortCode));
+  const sharesChanges = options.sharesChanges ?? facts.flatMap((fact): SharesChange[] => (
+    fact.field === 'SPLIT_RATIO'
+      ? [{ shortCode: fact.key, effectiveDate: fact.periodKey, ratio: fact.value }]
+      : []
+  ));
   // PER 결측 판정은 financial coverage 연도를 본다 — factsPresent 종목은 PIPELINE_DATE
   // (2025) 기준 필요 연도 [2024, 2025]를 모두 덮은 것으로 둔다.
   const financialCoverage = options.financialCoverage ?? new Map(
@@ -380,6 +387,9 @@ function makePipelineResolver(options: {
         row.marketCapKrw === null ? [] : [[row.standardCode, row.marketCapKrw.toString()]],
       )),
       nonTradingDaysBetween: () => [],
+      sharesChangesBetween: (from: string, to: string) => sharesChanges.filter(
+        (change) => change.effectiveDate >= from && change.effectiveDate <= to,
+      ),
       readIdentitySnapshot: (shortCodes: readonly string[], standardCodes: readonly string[]) => {
         const selectionsByPair = new Map<string, SymbolIdentitySelection>();
         for (let index = 0; index < shortCodes.length; index += 1) {
@@ -496,6 +506,7 @@ function makePipelineResolver(options: {
       getUpdatedAtMs: () => new Map<string, number>(),
       addCoveredYears: () => undefined,
       addGapYears: () => undefined,
+      addCoverageResult: () => undefined,
     },
     logger: { warn: () => {}, info: () => {}, error: () => {}, debug: () => {} } as never,
   });
@@ -1010,6 +1021,106 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     });
   });
 
+  it('급하락 순위도 DART 기준일이 아니라 KRX 실제 변경일로 분할보정한다', async () => {
+    const day = (offset: number) => PIPELINE_TS - offset * 86_400_000;
+    const candle = (symbol: string, offset: number, close: number): Candle => ({
+      symbol, market: 'KR', timeframe: '1d', tsMs: day(offset),
+      open: close, high: close, low: close, close, volume: 1,
+    });
+    const split: Fact = {
+      scope: 'SYMBOL', key: '000001', field: 'SPLIT_RATIO', periodKey: '2025-05-13',
+      asOfTsMs: PIPELINE_TS + 365 * 86_400_000, value: 5, unit: 'ratio',
+    };
+    const resolver = makePipelineResolver({
+      candles: [
+        candle('000001', 2, 50_000), candle('000001', 1, 50_000), candle('000001', 0, 10_000),
+        candle('000002', 2, 100), candle('000002', 1, 90), candle('000002', 0, 80),
+        candle('000003', 2, 100), candle('000003', 1, 100), candle('000003', 0, 100),
+      ],
+      facts: [split],
+      sharesChanges: [{ shortCode: '000001', effectiveDate: '2025-05-15', ratio: 5 }],
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'DECLINE', direction: 'LOW', limit: 1, lookbackTradingDays: 3 }]),
+      period,
+    );
+
+    expect(result.kind).toBe('READY');
+    if (result.kind !== 'READY') throw new Error('fixture coverage가 완전해야 합니다.');
+    // raw 기준일(첫 봉)에 적용하면 000001이 -80%로 잘못 뽑힌다. 실제 변경일(마지막
+    // 봉)로 옮기면 분할보정 수익률은 0%라 진짜 -20%인 000002가 선정된다.
+    expect(result.schedule[0]?.members.map((member) => member.symbol)).toEqual(['000002']);
+  });
+
+  it('급하락은 현재 lookback 밖 자본변동까지 포함한 worker와 같은 전체 매칭 그래프를 쓴다', async () => {
+    const candle = (symbol: string, date: string, close: number): Candle => ({
+      symbol, market: 'KR', timeframe: '1d', tsMs: Date.parse(`${date}T00:00:00Z`),
+      open: close, high: close, low: close, close, volume: 1,
+    });
+    const action = (periodKey: string): Fact => ({
+      scope: 'SYMBOL', key: '000001', field: 'SPLIT_RATIO', periodKey,
+      asOfTsMs: PIPELINE_TS + 365 * 86_400_000, value: 2, unit: 'ratio',
+    });
+    const resolver = makePipelineResolver({
+      candles: [
+        candle('000001', '2025-05-05', 100),
+        candle('000001', '2025-05-10', 100),
+        candle('000001', '2025-05-15', 100),
+        candle('000002', '2025-05-05', 100),
+        candle('000002', '2025-05-10', 105),
+        candle('000002', '2025-05-15', 110),
+        candle('000003', '2025-05-05', 100),
+        candle('000003', '2025-05-10', 110),
+        candle('000003', '2025-05-15', 120),
+      ],
+      // 06-16 공시는 현재 lookback의 raw 관련 상한(05-15 + 30일 = 06-14) 밖이다.
+      // 그래도 worker는 종목의 전체 공시를 읽으므로 resolver도 이를 매칭 그래프에서
+      // 빼면 안 된다. 06-16은 05-17만 쓸 수 있고(정확히 -30일), 최대 매칭은
+      // 05-14 공시를 05-06으로 보내야 두 사건을 모두 정렬한다.
+      facts: [action('2025-05-14'), action('2025-06-16')],
+      sharesChanges: [
+        { shortCode: '000001', effectiveDate: '2025-05-06', ratio: 2 },
+        { shortCode: '000001', effectiveDate: '2025-05-17', ratio: 2 },
+      ],
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'DECLINE', direction: 'LOW', limit: 1, lookbackTradingDays: 3 }]),
+      period,
+    );
+
+    expect(result.kind).toBe('READY');
+    if (result.kind !== 'READY') throw new Error('fixture coverage가 완전해야 합니다.');
+    // 전체 그래프: 000001은 05-06 분할을 반영해 +100%, 따라서 +10%인 000002가 LOW다.
+    // 관련 공시만 잘라 매칭하면 05-14가 더 가까운 05-17로 가서 000001이 0%로 잘못 뽑힌다.
+    expect(result.schedule[0]?.members.map((member) => member.symbol)).toEqual(['000002']);
+  });
+
+  it('급하락 구간의 자본변동 실제 변경일을 확인할 수 없으면 READY 일정을 만들지 않는다', async () => {
+    const candle = (symbol: string, offset: number, close: number): Candle => ({
+      symbol, market: 'KR', timeframe: '1d', tsMs: PIPELINE_TS - offset * 86_400_000,
+      open: close, high: close, low: close, close, volume: 1,
+    });
+    const resolver = makePipelineResolver({
+      candles: PIPELINE_ENTRIES.flatMap((entry) => [
+        candle(entry.shortCode, 2, 100),
+        candle(entry.shortCode, 1, 90),
+        candle(entry.shortCode, 0, 80),
+      ]),
+      facts: [{
+        scope: 'SYMBOL', key: '000001', field: 'SPLIT_RATIO', periodKey: '2025-05-13',
+        asOfTsMs: PIPELINE_TS + 365 * 86_400_000, value: 5, unit: 'ratio',
+      }],
+      sharesChanges: [],
+    });
+
+    await expect(resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'DECLINE', direction: 'LOW', limit: 1, lookbackTradingDays: 3 }]),
+      period,
+    )).rejects.toThrow(/급하락 유니버스의 자본변동.*정렬할 수 없습니다/);
+  });
+
   it('급하락은 effective KST date 다음 날의 자본변동을 분할보정에서 제외한다', async () => {
     const candle = (symbol: string, tsMs: number, close: number): Candle => ({
       symbol, market: 'KR', timeframe: '1d', tsMs,
@@ -1047,7 +1158,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     });
   });
 
-  it('급하락 자본변동 coverage는 추정 달력 범위가 아니라 실제 N개 봉 범위만 요구한다', async () => {
+  it('급하락 자본변동 coverage는 실제 N개 봉에 정렬될 수 있는 인접 연도까지 요구한다', async () => {
     const candles = PIPELINE_ENTRIES.flatMap((entry) =>
       Array.from({ length: 100 }, (_, index): Candle => {
         const tsMs = PIPELINE_TS - (99 - index) * 86_400_000;
@@ -1064,13 +1175,22 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
         };
       }),
     );
-    const resolver = makePipelineResolver({ candles });
-
-    const result = await resolver.resolveOrDescribeNeeds(
+    const missing = await makePipelineResolver({ candles }).resolveOrDescribeNeeds(
       pipelineRule([{ criterion: 'DECLINE', direction: 'LOW', limit: 1, lookbackTradingDays: 100 }]),
       period,
     );
-    expect(result.kind).toBe('READY');
+    expect(missing.kind).toBe('NEEDS_DATA');
+    if (missing.kind !== 'NEEDS_DATA') throw new Error('인접 2024 coverage가 부족해야 합니다.');
+    expect(missing.needs.actionSymbols).toEqual(['000001', '000002', '000003']);
+
+    const actionCoverage = new Map(
+      PIPELINE_ENTRIES.map((entry) => [entry.shortCode, [2024, 2025] as const]),
+    );
+    const ready = await makePipelineResolver({ candles, actionCoverage }).resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'DECLINE', direction: 'LOW', limit: 1, lookbackTradingDays: 100 }]),
+      period,
+    );
+    expect(ready.kind).toBe('READY');
   });
 
   it('급하락 warm-up 또는 자본변동 coverage가 부족하면 부분 schedule 없이 NEEDS_DATA다', async () => {
@@ -1118,15 +1238,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     expect(result.needs.priceRange).not.toBeNull();
   });
 
-  /**
-   * gap 연도는 "수집을 시도했지만 DART 가 비율을 주지 못했다"는 영구 상태다
-   * (예: 발행형태 '-' 인 인적분할 — 운영 장애 2026-08-11). 이를 sync 재요구로
-   * 돌려주면 증분 계획이 covered 연도를 건너뛰어 어떤 sync 도 해소하지 못하고,
-   * 준비 작업이 같은 needs 를 반복하다 실패한다. 대신 그 연도가 lookback 윈도우에
-   * 걸리는 날짜에서만 해당 종목을 결측으로 제외한다 — 비율 미상인 가격 시계열로
-   * 급하락을 랭킹하면 인적분할이 -60% 급락으로 잘못 뽑힌다.
-   */
-  it('급하락 자본변동이 covered+gap 연도면 재수집 대신 그 날짜 랭킹에서 제외한다', async () => {
+  it('급하락 후보에 covered+gap 연도가 있으면 종목 제외로 순위를 바꾸지 않고 실패한다', async () => {
     const candle = (symbol: string, offset: number, close: number): Candle => ({
       symbol, market: 'KR', timeframe: '1d', tsMs: PIPELINE_TS - offset * 86_400_000,
       open: close, high: close, low: close, close, volume: 1,
@@ -1141,19 +1253,38 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
       actionGaps: new Map([['000002', [2025]]]),
     });
 
-    const result = await resolver.resolveOrDescribeNeeds(
+    await expect(resolver.resolveOrDescribeNeeds(
       pipelineRule([{ criterion: 'DECLINE', direction: 'LOW', limit: 3, lookbackTradingDays: 3 }]),
+      period,
+    )).rejects.toThrow(/보정 비율을 만들 수 없는 연도.*000002/);
+  });
+
+  it('앞 stage 후보가 아직 미확정이면 자본변동 gap보다 해소 가능한 needs를 먼저 반환한다', async () => {
+    const candle = (symbol: string, offset: number): Candle => ({
+      symbol, market: 'KR', timeframe: '1d', tsMs: PIPELINE_TS - offset * 86_400_000,
+      open: 100, high: 100, low: 100, close: 100, volume: 1,
+    });
+    const resolver = makePipelineResolver({
+      factsPresent: [],
+      candles: PIPELINE_ENTRIES.flatMap((entry) => [
+        candle(entry.shortCode, 2),
+        candle(entry.shortCode, 1),
+        candle(entry.shortCode, 0),
+      ]),
+      actionGaps: new Map([['000002', [2025]]]),
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([
+        { criterion: 'PER', direction: 'LOW', limit: 1 },
+        { criterion: 'DECLINE', direction: 'LOW', limit: 1, lookbackTradingDays: 3 },
+      ]),
       period,
     );
 
-    expect(result.kind).toBe('READY');
-    if (result.kind !== 'READY') throw new Error('covered+gap 은 재수집 요구 없이 해소돼야 합니다.');
-    expect(result.schedule[0]?.members.map((member) => member.symbol)).toEqual(['000001', '000003']);
-    expect(result.diagnostics[0]?.stages[0]).toMatchObject({
-      inputCount: 3,
-      eligibleCount: 2,
-      excludedMissingCount: 1,
-    });
+    expect(result.kind).toBe('NEEDS_DATA');
+    if (result.kind !== 'NEEDS_DATA') throw new Error('앞 PER stage 데이터가 부족해야 합니다.');
+    expect(result.needs.factSymbols).toEqual(['000001', '000002', '000003']);
   });
 
   it('급하락 gap 연도가 lookback 윈도우 밖이면 후보를 제외하지 않는다', async () => {

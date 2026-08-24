@@ -53,13 +53,24 @@ function installPreparedPreviewFixture(ctx: TestApp): void {
     overDailyLimit: false,
   });
   ctx.container.factSyncService.planCorporateActionSync = noActionWork;
-  const noActionSync: typeof ctx.container.factSyncService.syncCorporateActions = async () => ({
-    savedFacts: 0,
-    gaps: [],
-    stoppedAtSymbol: null,
-    stopReason: null,
-    failureMessage: null,
-  });
+  const noActionSync: typeof ctx.container.factSyncService.syncCorporateActions = async (request) => {
+    const years = yearRange(request.fromYear, request.toYear);
+    for (const symbol of request.symbols) {
+      ctx.container.actionCoverageStore.addCoverageResult(
+        symbol,
+        years,
+        [],
+        ctx.container.clock.now(),
+      );
+    }
+    return {
+      savedFacts: 0,
+      gaps: [],
+      stoppedAtSymbol: null,
+      stopReason: null,
+      failureMessage: null,
+    };
+  };
   ctx.container.factSyncService.syncCorporateActions = noActionSync;
   const noMarketSync: typeof ctx.container.symbolMasterService.ingestDate = async () => ({
     kind: 'ALREADY_COVERED',

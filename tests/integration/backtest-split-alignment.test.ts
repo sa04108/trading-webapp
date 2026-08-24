@@ -117,7 +117,7 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
       }],
     );
     seedDailyBars(ctx.container.database.db, candles());
-    await seedCorporateActionCoverage(ctx.container, [SYMBOL], yearRange(2025, 2025));
+    await seedCorporateActionCoverage(ctx.container, [SYMBOL], yearRange(2024, 2025));
     await ctx.container.factRepository.saveFacts([splitFact()]);
   });
 
@@ -157,11 +157,9 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
     ]).run();
   }
 
-  async function runBacktest(): Promise<{
-    equity: number[];
-    warnings: string[];
-    openSymbols: string[];
-  }> {
+  async function submitBacktest(
+    afterCreate?: (jobId: string) => void | Promise<void>,
+  ): Promise<string> {
     const payload: BacktestRequest = {
       strategyId: 'range-breakout',
       // 손절·익절·보유 상한을 사실상 끄고 분할 구간까지 들고 가게 한다
@@ -199,11 +197,22 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
     expect(created.statusCode).toBe(201);
     const jobId = (created.json().job as { id: string }).id;
 
+    await afterCreate?.(jobId);
     ctx.container.jobOrchestrator.tick();
     await waitFor(() => {
       const job = ctx.container.jobQueue.getJob(jobId);
       return job !== null && ctx.container.jobQueue.isTerminal(job.status);
     }, 60_000);
+
+    return jobId;
+  }
+
+  async function runBacktest(): Promise<{
+    equity: number[];
+    warnings: string[];
+    openSymbols: string[];
+  }> {
+    const jobId = await submitBacktest();
 
     const job = ctx.container.jobQueue.getJob(jobId)!;
     expect(job.error).toBeNull();
@@ -247,13 +256,71 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
   );
 
   it(
-    '짝이 될 상장주식수 변경이 없으면 그 사실을 경고로 밝힌다',
+    '짝이 될 상장주식수 변경이 없으면 왜곡된 결과를 만들지 않고 실패한다',
     { timeout: 90_000 },
     async () => {
-      const { warnings } = await runBacktest();
+      const jobId = await submitBacktest();
+      const job = ctx.container.jobQueue.getJob(jobId)!;
 
-      const notice = warnings.find((w) => w.includes('짝지어지지 않아'));
-      expect(notice).toContain(SYMBOL);
+      expect(job.status).toBe('FAILED');
+      expect(job.error).toContain('실제 효력일을 KRX 상장주식수 변경과 정렬할 수 없어');
+      expect(job.error).toContain(SYMBOL);
+      const full = ctx.container.resultsService.getFullExport(jobId);
+      expect(full.run).toBeNull();
+      expect(full.metrics).toBeNull();
+      expect(full.equityPoints).toEqual([]);
+      expect(full.trades).toEqual([]);
+      expect(full.monthlyReturns).toEqual([]);
+      expect(ctx.container.resultsService.getChartSeries(jobId).drawdown).toEqual([]);
+    },
+  );
+
+  it(
+    '같은 기준일의 상충 비율 공시가 있으면 KRX와 한쪽이 맞아도 실패한다',
+    { timeout: 90_000 },
+    async () => {
+      seedSharesChange();
+      await ctx.container.factRepository.saveFacts([{
+        ...splitFact(),
+        asOfTsMs: Date.parse('2026-04-20T09:00:00Z'),
+        value: 2,
+      }]);
+
+      const jobId = await submitBacktest();
+      const job = ctx.container.jobQueue.getJob(jobId)!;
+
+      expect(job.status).toBe('FAILED');
+      expect(job.error).toContain('실제 효력일을 KRX 상장주식수 변경과 정렬할 수 없어');
+      expect(job.error).toContain(SYMBOL);
+      expect(ctx.container.resultsService.getFullExport(jobId).run).toBeNull();
+    },
+  );
+
+  it(
+    'DART가 자본변동 행을 보았지만 비율을 만들지 못한 gap이면 raw fact가 없어도 실패한다',
+    { timeout: 90_000 },
+    async () => {
+      // 파서가 fact를 만들지 못한 실제 경로를 재현한다. 기존 정상 fact는 지우지 않아도
+      // gap 자체가 다른 미표현 사건일 수 있으므로 worker는 결과 생성을 막아야 한다.
+      seedSharesChange();
+
+      const jobId = await submitBacktest(() => {
+        // preparation 완료 뒤 worker 시작 전에 gap이 새로 생기는 drift/원격 bundle
+        // 경로를 재현해 마지막 실행 경계가 독립적으로 막는지 검증한다.
+        ctx.container.actionCoverageStore.addGapYears(SYMBOL, [2025], ctx.container.clock.now());
+      });
+      const job = ctx.container.jobQueue.getJob(jobId)!;
+
+      expect(job.status).toBe('FAILED');
+      expect(job.error).toContain('자본변동 보정 비율을 만들 수 없는 연도');
+      expect(job.error).toContain(SYMBOL);
+      const full = ctx.container.resultsService.getFullExport(jobId);
+      expect(full.run).toBeNull();
+      expect(full.metrics).toBeNull();
+      expect(full.equityPoints).toEqual([]);
+      expect(full.trades).toEqual([]);
+      expect(full.monthlyReturns).toEqual([]);
+      expect(ctx.container.resultsService.getChartSeries(jobId).drawdown).toEqual([]);
     },
   );
 });

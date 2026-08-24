@@ -144,7 +144,24 @@ function installPreparedSubmissionFixture(ctx: TestApp): void {
     failureMessage: null,
   });
   ctx.container.factSyncService.sync = noWorkReport;
-  ctx.container.factSyncService.syncCorporateActions = noWorkReport;
+  ctx.container.factSyncService.syncCorporateActions = async (request) => {
+    const years = yearRange(request.fromYear, request.toYear);
+    for (const symbol of request.symbols) {
+      ctx.container.actionCoverageStore.addCoverageResult(
+        symbol,
+        years,
+        [],
+        ctx.container.clock.now(),
+      );
+    }
+    return {
+      savedFacts: 0,
+      gaps: [],
+      stoppedAtSymbol: null,
+      stopReason: null,
+      failureMessage: null,
+    };
+  };
   const rawInject = ctx.app.inject.bind(ctx.app);
   ctx.app.inject = (async (options: unknown) => {
     const request = options as { method?: string; url?: string; payload?: BacktestRequest };

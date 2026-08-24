@@ -13,6 +13,12 @@ import type { FactRepository } from '../../facts/application/ports.js';
 import type { FactCoverageStore } from '../../facts/application/fact-coverage-store.js';
 import type { CorporateActionCoverageStore } from '../../facts/application/corporate-action-coverage.js';
 import { derivePreparationFactYearRange } from '../../market-data/domain/fact-year-range.js';
+import {
+  alignCorporateActionEffectiveDates,
+  CORPORATE_ACTION_ALIGNMENT_WINDOW,
+  corporateActionRawDateRange,
+} from '../../facts/domain/corporate-action-effective-date.js';
+import { CORPORATE_ACTION_FIELD } from '../../facts/domain/fact.js';
 import { PitFactView } from '../../facts/domain/pit-fact-view.js';
 import { splitAdjustedClose } from '../../strategy/strategies/shared/adjusted-price.js';
 import { assertSafeIdentitySelections } from './backtest-symbol-identity.js';
@@ -461,8 +467,14 @@ export class UniverseRuleResolver {
             -(stage.lookbackTradingDays * 2 + 14),
           );
           const histories = await loadCandleHistories(candles, codes, requiredFrom, effectiveDate);
+          const lookbackHistories = new Map(
+            codes.map((code) => [
+              code,
+              (histories.get(code) ?? []).slice(-stage.lookbackTradingDays),
+            ]),
+          );
           const priceMissingCodes = codes.filter(
-            (code) => (histories.get(code)?.length ?? 0) < stage.lookbackTradingDays,
+            (code) => (lookbackHistories.get(code)?.length ?? 0) < stage.lookbackTradingDays,
           );
           const warmupMissing = priceMissingCodes.length > 0;
           // symbol_master_coverage 는 해당 날짜의 두 KRX 시장 응답을 실제로 받아
@@ -485,7 +497,7 @@ export class UniverseRuleResolver {
 
           let actualFrom = effectiveDate;
           for (const code of codes) {
-            const history = (histories.get(code) ?? []).slice(-stage.lookbackTradingDays);
+            const history = lookbackHistories.get(code) ?? [];
             const first = history[0];
             if (first !== undefined) {
               const firstDate = new Date(first.tsMs).toISOString().slice(0, 10);
@@ -498,16 +510,26 @@ export class UniverseRuleResolver {
           const actionCandidateCodes = priceFetchRequired
             ? codes
             : codes.filter((code) => !priceMissingCodes.includes(code));
-          const requiredYears = yearsBetween(priceFetchRequired ? requiredFrom : actualFrom, effectiveDate);
+          const actionExecutionFrom = priceFetchRequired ? requiredFrom : actualFrom;
+          // DECLINE 수익률에 영향을 줄 실제 변경일 E는 첫 봉 다음 날~마지막 봉이다.
+          // DART 기준일 R은 E보다 최대 90일 앞, 30일 뒤일 수 있으므로 인접 연도까지
+          // coverage가 닫히기 전에는 raw fact가 없다는 이유로 READY를 만들지 않는다.
+          const relevantRawFrom = addCalendarDays(
+            actionExecutionFrom,
+            1 - CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays,
+          );
+          const relevantRawTo = addCalendarDays(
+            effectiveDate,
+            CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays,
+          );
+          const requiredYears = yearsBetween(relevantRawFrom, relevantRawTo);
           const coveredBySymbol = actionCoverage.getCoveredYears(actionCandidateCodes);
           const gapsBySymbol = actionCoverage.getGapYears(actionCandidateCodes);
-          // covered+gap 연도는 "시도했지만 DART 가 비율을 주지 못한" 영구 상태다
-          // (예: 발행형태 '-' 인 인적분할). 재수집을 요구하면 증분 계획이 covered
-          // 연도를 건너뛰어 어떤 sync 도 해소하지 못하고 준비 작업이 같은 needs 를
-          // 반복하다 실패한다. 대신 그 연도가 윈도우에 걸리는 날짜에서만 후보를
-          // 결측으로 제외한다 — 비율 미상 시계열로 랭킹하면 인적분할이 급락으로
-          // 잘못 뽑힌다 (조용히 틀리는 쪽이 아니라 빠지는 쪽을 고른다).
-          const gapExcludedCodes = new Set<string>();
+          // covered+gap 연도는 "수집했지만 DART 행을 보정 비율로 만들지 못한" 상태다
+          // (예: 발행형태/일자/직전 주식수 파싱 실패). 후보 하나만 결측 제외하면 그
+          // 종목이 원래 탈락시켰을 다른 종목이 대신 뽑혀 결과가 낙관적으로 바뀔 수 있다.
+          // 앞 stage가 확정된 뒤 실제 DECLINE 후보에 하나라도 걸리면 전체 준비를 막는다.
+          const gapAffectedCodes = new Set<string>();
           for (const code of actionCandidateCodes) {
             const covered = new Set(coveredBySymbol.get(code) ?? []);
             if (requiredYears.some((year) => !covered.has(year))) {
@@ -516,17 +538,76 @@ export class UniverseRuleResolver {
               continue;
             }
             const gaps = new Set(gapsBySymbol.get(code) ?? []);
-            if (requiredYears.some((year) => gaps.has(year))) gapExcludedCodes.add(code);
+            if (requiredYears.some((year) => gaps.has(year))) gapAffectedCodes.add(code);
+          }
+          if (gapAffectedCodes.size > 0) {
+            if (stageReady && !hasUnresolvedStage) {
+              throw new Error(
+                '급하락 유니버스의 자본변동 보정 비율을 만들 수 없는 연도가 있습니다 — '
+                  + `대상: ${[...gapAffectedCodes].sort().join(', ')}. `
+                  + '해당 종목을 임의로 제외해 순위를 바꾸지 않고 준비를 중단했습니다.',
+              );
+            }
+            // 앞 stage나 가격/action coverage가 아직 미해소면 그 데이터를 먼저 채워
+            // 실제 DECLINE 입력 후보를 좁힌 뒤 다시 판정한다.
+            stageReady = false;
           }
 
           const loaded = await facts.getFacts({ scope: 'SYMBOL', keys: codes });
-          const view = new PitFactView(loaded);
+          const rankableCodes = new Set(codes.filter((code) => (
+            (lookbackHistories.get(code)?.length ?? 0) === stage.lookbackTradingDays
+          )));
+          const rawActionFacts = loaded.filter((fact) => fact.field === CORPORATE_ACTION_FIELD);
+          const rawActionRange = corporateActionRawDateRange(rawActionFacts);
+          const sharesChanges = rawActionRange === null
+            ? []
+            : this.deps.symbolMaster.sharesChangesBetween(
+                addCalendarDays(
+                  rawActionRange.from,
+                  -CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays,
+                ),
+                addCalendarDays(
+                  rawActionRange.to,
+                  CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays,
+                ),
+              );
+          // worker와 동일한 전체 fact/change 그래프를 먼저 정렬한다. 관련 fact만 잘라
+          // 매칭하면 범위 밖 사건이 같은 change를 요구할 때 resolver와 worker가 한
+          // 사건을 서로 다른 날짜로 옮길 수 있다.
+          const aligned = alignCorporateActionEffectiveDates(rawActionFacts, sharesChanges);
+          const relevantUnaligned = aligned.unaligned.filter((action) => {
+            if (!rankableCodes.has(action.symbol)) return false;
+            const history = lookbackHistories.get(action.symbol) ?? [];
+            const first = history[0];
+            const last = history[history.length - 1];
+            if (first === undefined || last === undefined) return false;
+            const firstDate = new Date(first.tsMs).toISOString().slice(0, 10);
+            const lastDate = new Date(last.tsMs).toISOString().slice(0, 10);
+            return action.periodKey >= addCalendarDays(
+              firstDate,
+              1 - CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays,
+            ) && action.periodKey <= addCalendarDays(
+              lastDate,
+              CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays,
+            );
+          });
+          if (relevantUnaligned.length > 0) {
+            if (stageReady && !hasUnresolvedStage) {
+              const symbols = [...new Set(relevantUnaligned.map((action) => action.symbol))].sort();
+              throw new Error(
+                `급하락 유니버스의 자본변동 ${relevantUnaligned.length}건을 KRX 상장주식수 변경일과 `
+                  + `정렬할 수 없습니다 — 대상: ${symbols.join(', ')}. `
+                  + '잘못된 급락률로 종목을 선정하지 않도록 준비를 중단했습니다.',
+              );
+            }
+            // 앞 stage 또는 이 stage의 데이터가 아직 미해소면 그 needs를 먼저 채운 뒤
+            // 실제 후보로 다시 판정한다. raw 날짜로 계산한 임시 순위는 확정하지 않는다.
+            stageReady = false;
+          }
+          const view = new PitFactView(aligned.facts);
           rows = candidates.map((entry) => {
-            const history = (histories.get(entry.shortCode) ?? []).slice(-stage.lookbackTradingDays);
-            if (
-              history.length !== stage.lookbackTradingDays
-              || gapExcludedCodes.has(entry.shortCode)
-            ) {
+            const history = lookbackHistories.get(entry.shortCode) ?? [];
+            if (history.length !== stage.lookbackTradingDays) {
               return { standardCode: entry.standardCode, shortCode: entry.shortCode, value: null };
             }
             const actions = view.corporateActions(entry.shortCode, kstEndOfDayMs(effectiveDate));

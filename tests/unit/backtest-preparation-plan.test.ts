@@ -70,7 +70,7 @@ describe('buildBacktestPreparationPlan', () => {
     {
       strategyId: 'value-quality-rank',
       financial: { symbols: ['000660', '005930'], fromYear: 2025, toYear: 2026 },
-      actions: { symbols: ['000660', '005930'], fromYear: 2026, toYear: 2026 },
+      actions: { symbols: ['000660', '005930'], fromYear: 2025, toYear: 2026 },
       price: { symbols: [], from: '2026-01-02', to: '2026-03-31' },
     },
     {
@@ -166,10 +166,33 @@ describe('buildBacktestPreparationPlan', () => {
     });
     expect(plan.actions).toEqual({
       symbols: ['000660', '005930'],
-      fromYear: 2026,
+      fromYear: 2025,
       toYear: 2026,
     });
     expect(plan.price.symbols).toEqual([]);
+  });
+
+  it.each([
+    {
+      period: { from: '2026-01-02', to: '2026-01-31' },
+      expected: { fromYear: 2025, toYear: 2026 },
+    },
+    {
+      period: { from: '2026-12-01', to: '2026-12-20' },
+      expected: { fromYear: 2026, toYear: 2027 },
+    },
+  ])('정렬 후보가 기간 경계를 넘을 수 있어 $period 인접 DART 연도도 준비한다', ({
+    period,
+    expected,
+  }) => {
+    const plan = buildBacktestPreparationPlan({
+      request: { ...BASE_REQUEST, period },
+      resolutionNeeds: EMPTY_NEEDS,
+      finalUniverseSymbols: ['005930'],
+      strategy: strategy('action-boundary', { requiresCorporateActions: true }),
+    });
+
+    expect(plan.actions).toEqual({ symbols: ['005930'], ...expected });
   });
 
   it('이익 가속은 8분기 재무와 가격 momentum, 최종 유니버스 자본변동을 준비한다', () => {
@@ -227,6 +250,28 @@ describe('buildBacktestPreparationPlan', () => {
       symbols: ['005930', '035720'],
       from: '2025-11-09',
       to: '2026-01-02',
+    });
+  });
+
+  it('최종 DECLINE 유니버스의 worker 워밍업까지 정렬 가능한 자본변동 연도를 준비한다', () => {
+    const plan = buildBacktestPreparationPlan({
+      request: {
+        ...BASE_REQUEST,
+        universeRule: {
+          ...BASE_REQUEST.universeRule,
+          stages: [{ criterion: 'DECLINE', direction: 'LOW', limit: 10, lookbackTradingDays: 200 }],
+        },
+      },
+      resolutionNeeds: EMPTY_NEEDS,
+      finalUniverseSymbols: ['005930'],
+      strategy: strategy('action-only', { requiresCorporateActions: true }),
+    });
+
+    expect(plan.price).toEqual({ symbols: [], ...BASE_REQUEST.period });
+    expect(plan.actions).toEqual({
+      symbols: ['005930'],
+      fromYear: 2024,
+      toYear: 2026,
     });
   });
 

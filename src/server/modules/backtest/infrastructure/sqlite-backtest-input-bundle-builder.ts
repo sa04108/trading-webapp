@@ -82,6 +82,12 @@ export class SqliteBacktestInputBundleBuilder {
             JOIN bundle_symbols AS wanted ON wanted.code = value.key
             WHERE value.scope = 'SYMBOL';
 
+            -- worker의 자본변동 fail-closed 검사는 raw fact가 없는 parser gap도 알아야
+            -- 한다. 선택 종목의 coverage/gap 상태만 복사하고 다른 종목 상태는 제외한다.
+            INSERT INTO main.symbol_facts_state
+            SELECT value.* FROM source.symbol_facts_state AS value
+            JOIN bundle_symbols AS wanted ON wanted.code = value.code;
+
             DELETE FROM main.symbol_master_storage_state;
             INSERT INTO main.symbol_master_storage_state
             SELECT * FROM source.symbol_master_storage_state;

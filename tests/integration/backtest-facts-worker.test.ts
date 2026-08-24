@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { eq } from 'drizzle-orm';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
+import { symbolMasterVersions } from '../../src/server/shared/db/schema.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import {
   createTestAdmin,
@@ -127,8 +129,8 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       { standardCode: 'KR7000003000', shortCode: 'NOFACTS', name: 'NOFACTS', market: 'KOSPI', marketCapKrw: '100000000000' },
     ]);
     seedDailyBars(ctx.container.database.db, candles(40));
-    // 자본변동 게이트(Task 6) — 이 파일의 제출 기간(2025-01-02~2025-03-01)이 걸치는 연도
-    await seedCorporateActionCoverage(ctx.container, ['CHEAP', 'RICH'], yearRange(2025, 2025));
+    // 실제 변경일 역투영 창이 기간 시작보다 90일 앞까지 보므로 인접 2024년도 닫는다.
+    await seedCorporateActionCoverage(ctx.container, ['CHEAP', 'RICH'], yearRange(2024, 2025));
 
     // 컨테이너가 조립한 factRepository로 저장한다 — 워커가 같은 SQLite DB에서
     // 이 팩트를 다시 읽어야 하므로, 테스트 전용 repository 를 새로 만들지 않는다.
@@ -213,7 +215,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       // 마스터에 미리 둔 NOFACTS 도 유니버스에 들어오게 한다
       registerSymbols(ctx.container, 'KR', ['NOFACTS']);
       // NOFACTS 도 unionSymbols 에 들어오므로 자본변동 게이트도 통과해 둬야 한다
-      await seedCorporateActionCoverage(ctx.container, ['NOFACTS'], yearRange(2025, 2025));
+      await seedCorporateActionCoverage(ctx.container, ['NOFACTS'], yearRange(2024, 2025));
       const extra: Candle[] = [];
       for (let index = 0; index < 40; index += 1) {
         extra.push({
@@ -329,6 +331,39 @@ function splitScenarioCandles(bars: number): Candle[] {
   return out;
 }
 
+function seedSameDaySplitSharesChange(ctx: TestApp): void {
+  const db = ctx.container.database.db;
+  db.delete(symbolMasterVersions)
+    .where(eq(symbolMasterVersions.standardCode, 'KR7000004000'))
+    .run();
+  db.insert(symbolMasterVersions).values([
+    {
+      standardCode: 'KR7000004000',
+      validFromDate: '2000-01-01',
+      validToDate: '2025-03-14',
+      shortCode: 'SPLIT',
+      name: 'SPLIT',
+      market: 'KOSPI',
+      sharesOutstanding: '1000000',
+      instrumentType: 'COMMON_STOCK',
+      listedDate: null,
+      recordedAtMs: ctx.container.clock.now(),
+    },
+    {
+      standardCode: 'KR7000004000',
+      validFromDate: '2025-03-14',
+      validToDate: null,
+      shortCode: 'SPLIT',
+      name: 'SPLIT',
+      market: 'KOSPI',
+      sharesOutstanding: '2000000',
+      instrumentType: 'COMMON_STOCK',
+      listedDate: null,
+      recordedAtMs: ctx.container.clock.now(),
+    },
+  ]).run();
+}
+
 describe('워커의 자본변동 팩트 배선 — 접수일이 기간 종료 이후인 분할', () => {
   let ctx: TestApp;
   let cookie: string;
@@ -349,10 +384,13 @@ describe('워커의 자본변동 팩트 배선 — 접수일이 기간 종료 �
       { standardCode: 'KR7000004000', shortCode: 'SPLIT', name: 'SPLIT', market: 'KOSPI', marketCapKrw: '300000000000' },
       { standardCode: 'KR7000005000', shortCode: 'FLAT', name: 'FLAT', market: 'KOSPI', marketCapKrw: '200000000000' },
     ]);
+    // 이 시나리오는 DART 기준일과 실제 KRX 변경일이 같은 정상 사건이다.
+    // fail-closed 정렬 검증이 테스트 픽스처 누락을 실제 결측으로 판단하지 않게 pin한다.
+    seedSameDaySplitSharesChange(ctx);
     // 2025-01-02 ~ 2025-04-30 = 119봉
     seedDailyBars(ctx.container.database.db, splitScenarioCandles(119));
-    // 자본변동 게이트(Task 6) — 이 파일의 제출 기간(2025-01-02~2025-04-30)이 걸치는 연도
-    await seedCorporateActionCoverage(ctx.container, ['SPLIT', 'FLAT'], yearRange(2025, 2025));
+    // 실제 변경일 역투영 창이 기간 시작보다 90일 앞까지 보므로 인접 2024년도 닫는다.
+    await seedCorporateActionCoverage(ctx.container, ['SPLIT', 'FLAT'], yearRange(2024, 2025));
 
     await ctx.container.factRepository.saveFacts([
       {

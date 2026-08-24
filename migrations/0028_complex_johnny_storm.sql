@@ -1,0 +1,1 @@
+ALTER TABLE `symbol_facts_state` ADD `action_coverage_protocol_json` text;

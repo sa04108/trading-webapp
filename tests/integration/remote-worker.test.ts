@@ -27,7 +27,12 @@ import {
 import { SqliteBacktestResultArtifactWriter } from '../../src/server/modules/backtest/infrastructure/sqlite-backtest-result-artifact-writer.js';
 import { MAX_BACKTEST_RESULT_ARTIFACT_BYTES } from '../../src/server/modules/backtest/infrastructure/sqlite-backtest-result-artifact-importer.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
-import { registerSymbols, seedDailyBars } from '../helpers/seed.js';
+import {
+  registerSymbols,
+  seedCorporateActionCoverage,
+  seedDailyBars,
+  yearRange,
+} from '../helpers/seed.js';
 import { backtestRequestSchema } from '../../src/shared/schemas/backtest-request.js';
 import type { ProvenancePin } from '../../src/shared/schemas/provenance-pin.js';
 import { StrategyRegistry } from '../../src/server/modules/strategy/application/strategy-registry.js';
@@ -1465,6 +1470,7 @@ describe('remote backtest worker lease API', () => {
 
   it('runs the real remote supervisor and child process end to end', async () => {
     seedCurrentIdentity();
+    await seedCorporateActionCoverage(ctx.container, ['005930'], yearRange(2025, 2026));
     const candles: Candle[] = [];
     for (let tsMs = Date.UTC(2026, 0, 5); tsMs <= Date.UTC(2026, 1, 5); tsMs += DAY_MS) {
       const day = new Date(tsMs).getUTCDay();

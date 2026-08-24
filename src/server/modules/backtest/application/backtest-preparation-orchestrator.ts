@@ -12,6 +12,7 @@ import { backtestPreparationJobs } from '../../../shared/db/schema.js';
 import { newId } from '../../../shared/ids.js';
 import type { Logger } from '../../../shared/logger.js';
 import type { ExternalApiUsage } from '../../../shared/db/external-api-usage.js';
+import type { CorporateActionCoverageStore } from '../../facts/application/corporate-action-coverage.js';
 import type { FactSyncService, FactSyncReport } from '../../facts/application/fact-sync-service.js';
 import { DART_DAILY_CALL_LIMIT } from '../../facts/domain/sync-plan.js';
 import type { CandleCoverageService } from '../../market-data/application/candle-coverage-service.js';
@@ -84,6 +85,7 @@ const ACTIVE_STATUSES: readonly PreparationStatus[] = [
   'QUEUED', 'RUNNING', 'WAITING_DAILY_QUOTA',
 ];
 const TERMINAL_STATUSES: readonly PreparationStatus[] = ['COMPLETED', 'FAILED', 'CANCELLED'];
+const MAX_FINAL_STABILIZATION_PASSES = 8;
 
 const ALLOWED_TRANSITIONS: Readonly<Record<PreparationStatus, readonly PreparationStatus[]>> = {
   QUEUED: ['RUNNING'],
@@ -122,6 +124,10 @@ export interface BacktestPreparationOrchestratorDeps {
   readonly factSync: Pick<
     FactSyncService,
     'sync' | 'syncCorporateActions' | 'planFinancialSync' | 'planCorporateActionSync'
+  >;
+  readonly actionCoverage: Pick<
+    CorporateActionCoverageStore,
+    'getCoveredYears' | 'getGapYears'
   >;
   readonly symbolMaster: Pick<
     SymbolMasterService,
@@ -437,88 +443,61 @@ export class BacktestPreparationOrchestrator {
       const strategy = this.requireStrategy(input);
       if (this.finishCancelledIfRequested(jobId)) return;
 
-      let attempt = await this.resolve(jobId, input);
-      const seenNeeds = new Set<string>();
-      for (;;) {
-        if (this.finishCancelledIfRequested(jobId)) return;
-        if (attempt.kind === 'READY') break;
-        const signature = JSON.stringify(attempt.needs);
-        if (seenNeeds.has(signature)) {
-          this.fail(
-            jobId,
-            '필요 데이터를 모두 조회했지만 유니버스 선정 조건을 해소하지 못했습니다. 데이터 공백과 DART 응답 누락을 확인하세요.',
-          );
+      let finalAttempt = await this.resolveUntilReady(
+        jobId,
+        input,
+        strategy,
+        await this.resolve(jobId, input),
+      );
+      if (finalAttempt === null) return;
+
+      // 최종 전략 데이터 sync 자체가 팩트/봉을 추가해 순위와 멤버십을 바꿀 수 있다.
+      // A만 준비한 뒤 B로 바뀐 결과를 바로 완료하면 B의 자본변동·warm-up이 비어도
+      // 실행된다. 같은 schedule이 연속으로 확인될 때까지 새 멤버의 plan을 반복하고,
+      // 데이터 이상으로 계속 진동하면 무한 외부 호출 대신 상한에서 명시적으로 실패한다.
+      let stabilized = false;
+      for (let pass = 0; pass < MAX_FINAL_STABILIZATION_PASSES; pass += 1) {
+        if (isEmptySchedule(finalAttempt.schedule)) {
+          this.fail(jobId, '모든 리밸런싱 날짜에서 선정된 종목이 없어 유니버스를 만들 수 없습니다. 조건이나 데이터 이력을 확인하세요.');
           return;
         }
-        seenNeeds.add(signature);
-
-        const plan = buildBacktestPreparationPlan({
+        const beforeSignature = JSON.stringify(finalAttempt.schedule);
+        this.registerUniverse(finalAttempt);
+        const finalPlan = buildBacktestPreparationPlan({
           request: preparationRequest(input),
-          resolutionNeeds: attempt.needs,
+          resolutionNeeds: EMPTY_NEEDS,
+          finalUniverseSymbols: unionSymbols(finalAttempt.schedule),
           strategy,
         });
-        const hasMarketWork = attempt.needs.selectionMetricDates.length > 0
-          || (plan.price.symbols.length > 0 && attempt.needs.priceRange !== null);
-        const hasDartWork = plan.financial.symbols.length > 0 || plan.actions.symbols.length > 0;
-        if (!hasMarketWork && !hasDartWork) {
-          this.fail(jobId, '준비할 수 있는 데이터 작업이 없어 유니버스 조건을 해소하지 못했습니다.');
-          return;
-        }
-        if (hasMarketWork) {
-          await this.syncMarketData(jobId, attempt.needs.selectionMetricDates, plan.price);
+        if (finalPlan.price.symbols.length > 0) {
+          await this.syncMarketData(jobId, [], finalPlan.price);
           if (this.shouldReturnFromRun(jobId)) return;
-          // 시장 데이터가 아직 없는 iteration 의 DART 요구는 좁혀지지 않은 상한
-          // (예: PER 앞 stage 가 미해소면 전체 시장)이다. 값싼 시장 데이터를 먼저
-          // 채우고 다시 resolve 해 후보가 줄어든 뒤에만 DART 를 부른다 — 그대로
-          // 진행하면 수천 종목 × 연도 호출로 일일 quota 를 통째로 태울 수 있다.
-          attempt = await this.resolve(jobId, input);
-          continue;
         }
-        if (hasDartWork) {
-          // 시장 지표가 미해소인 iteration에서는 후보가 아직 전체 시장 상한일 수 있다.
-          // 위 market 우선 분기에서 재해소한 뒤, 실제 DART 호출 직전에만 검증·등록한다.
-          this.registerNeededSymbols(attempt, [
-            ...plan.financial.symbols,
-            ...plan.actions.symbols,
-          ]);
-          const continued = await this.syncFacts(jobId, plan);
+        if (finalPlan.financial.symbols.length > 0 || finalPlan.actions.symbols.length > 0) {
+          const continued = await this.syncFacts(jobId, finalPlan);
           if (!continued) return;
         }
-        attempt = await this.resolve(jobId, input);
-      }
 
-      let finalAttempt: UniverseResolveAttempt = attempt;
-      if (isEmptySchedule(finalAttempt.schedule)) {
-        this.fail(jobId, '모든 리밸런싱 날짜에서 선정된 종목이 없어 유니버스를 만들 수 없습니다. 조건이나 데이터 이력을 확인하세요.');
-        return;
-      }
+        const resolved = await this.resolveUntilReady(
+          jobId,
+          input,
+          strategy,
+          await this.resolve(jobId, input),
+        );
+        if (resolved === null) return;
+        finalAttempt = resolved;
+        if (JSON.stringify(finalAttempt.schedule) !== beforeSignature) continue;
 
-      const finalSymbols = unionSymbols(finalAttempt.schedule);
-      // coverage와 fact 버전은 symbols FK를 쓴다. 최종 sync보다 먼저 실제 master
-      // entry로 등록해야 새로 선정된 종목의 첫 준비도 저장 경계에서 실패하지 않는다.
-      this.registerUniverse(finalAttempt);
-      const finalPlan = buildBacktestPreparationPlan({
-        request: preparationRequest(input),
-        resolutionNeeds: EMPTY_NEEDS,
-        finalUniverseSymbols: finalSymbols,
-        strategy,
-      });
-      if (finalPlan.price.symbols.length > 0) {
-        await this.syncMarketData(jobId, [], finalPlan.price);
-        if (this.shouldReturnFromRun(jobId)) return;
+        this.assertCorporateActionCoverage(finalPlan.actions);
+        stabilized = true;
+        break;
       }
-      if (finalPlan.financial.symbols.length > 0 || finalPlan.actions.symbols.length > 0) {
-        const continued = await this.syncFacts(jobId, finalPlan);
-        if (!continued) return;
-      }
-
-      finalAttempt = await this.resolve(jobId, input);
-      if (finalAttempt.kind !== 'READY') {
-        this.fail(jobId, '최종 데이터 준비 뒤에도 유니버스 조건이 해소되지 않았습니다. 데이터 공백을 확인하세요.');
-        return;
-      }
-      if (isEmptySchedule(finalAttempt.schedule)) {
-        this.fail(jobId, '모든 리밸런싱 날짜에서 선정된 종목이 없어 유니버스를 만들 수 없습니다. 조건이나 데이터 이력을 확인하세요.');
+      if (!stabilized) {
+        this.fail(
+          jobId,
+          `최종 데이터 준비 후 유니버스가 ${MAX_FINAL_STABILIZATION_PASSES}회 안에 안정되지 않았습니다. `
+            + '순위 입력의 반복 변경이나 데이터 충돌을 확인하세요.',
+        );
         return;
       }
       if (this.finishCancelledIfRequested(jobId)) return;
@@ -551,6 +530,59 @@ export class BacktestPreparationOrchestrator {
   private async resolve(jobId: string, input: PreparationInput): Promise<UniverseResolveAttempt> {
     this.persistAndEmit(jobId, { phase: 'RESOLVING_STAGES' }, ['RUNNING']);
     return this.deps.resolver.resolveOrDescribeNeeds(input.universeRule, input.period);
+  }
+
+  private async resolveUntilReady(
+    jobId: string,
+    input: PreparationInput,
+    strategy: AnyTradingStrategy,
+    initialAttempt: UniverseResolveAttempt,
+  ): Promise<Extract<UniverseResolveAttempt, { kind: 'READY' }> | null> {
+    let attempt = initialAttempt;
+    const seenNeeds = new Set<string>();
+    for (;;) {
+      if (this.finishCancelledIfRequested(jobId)) return null;
+      if (attempt.kind === 'READY') return attempt;
+      const signature = JSON.stringify(attempt.needs);
+      if (seenNeeds.has(signature)) {
+        this.fail(
+          jobId,
+          '필요 데이터를 모두 조회했지만 유니버스 선정 조건을 해소하지 못했습니다. 데이터 공백과 DART 응답 누락을 확인하세요.',
+        );
+        return null;
+      }
+      seenNeeds.add(signature);
+
+      const plan = buildBacktestPreparationPlan({
+        request: preparationRequest(input),
+        resolutionNeeds: attempt.needs,
+        strategy,
+      });
+      const hasMarketWork = attempt.needs.selectionMetricDates.length > 0
+        || (plan.price.symbols.length > 0 && attempt.needs.priceRange !== null);
+      const hasDartWork = plan.financial.symbols.length > 0 || plan.actions.symbols.length > 0;
+      if (!hasMarketWork && !hasDartWork) {
+        this.fail(jobId, '준비할 수 있는 데이터 작업이 없어 유니버스 조건을 해소하지 못했습니다.');
+        return null;
+      }
+      if (hasMarketWork) {
+        await this.syncMarketData(jobId, attempt.needs.selectionMetricDates, plan.price);
+        if (this.shouldReturnFromRun(jobId)) return null;
+        // 시장 데이터가 아직 없는 iteration 의 DART 요구는 좁혀지지 않은 상한이다.
+        // 시장 데이터를 먼저 채우고 재해소한 뒤 실제 후보에만 DART quota를 쓴다.
+        attempt = await this.resolve(jobId, input);
+        continue;
+      }
+      if (hasDartWork) {
+        this.registerNeededSymbols(attempt, [
+          ...plan.financial.symbols,
+          ...plan.actions.symbols,
+        ]);
+        const continued = await this.syncFacts(jobId, plan);
+        if (!continued) return null;
+      }
+      attempt = await this.resolve(jobId, input);
+    }
   }
 
   private async syncMarketData(
@@ -614,6 +646,33 @@ export class BacktestPreparationOrchestrator {
       if (!this.consumeFactReport(jobId, report)) return false;
     }
     return !this.shouldReturnFromRun(jobId);
+  }
+
+  private assertCorporateActionCoverage(actions: BacktestPreparationPlan['actions']): void {
+    if (actions.symbols.length === 0) return;
+    const requiredYears = new Set<number>();
+    for (let year = actions.fromYear; year <= actions.toYear; year += 1) requiredYears.add(year);
+    const coveredBySymbol = this.deps.actionCoverage.getCoveredYears(actions.symbols);
+    const missing = actions.symbols.filter((symbol) => {
+      const covered = new Set(coveredBySymbol.get(symbol) ?? []);
+      return [...requiredYears].some((year) => !covered.has(year));
+    });
+    if (missing.length > 0) {
+      throw new Error(
+        '최종 유니버스의 자본변동 coverage가 부족해 백테스트 준비를 중단했습니다 — '
+          + `대상: ${missing.join(', ')}. 필요한 연도 데이터를 다시 준비하세요.`,
+      );
+    }
+    const affected = [...this.deps.actionCoverage.getGapYears(actions.symbols)]
+      .flatMap(([symbol, years]) => years.some(
+        (year) => year >= actions.fromYear && year <= actions.toYear,
+      ) ? [symbol] : [])
+      .sort();
+    if (affected.length === 0) return;
+    throw new Error(
+      `자본변동 보정 비율을 만들 수 없는 연도가 있어 백테스트 준비를 중단했습니다 — 대상: `
+        + `${affected.join(', ')}. DART gap을 해소한 뒤 다시 준비하세요.`,
+    );
   }
 
   private runFactRequest(
