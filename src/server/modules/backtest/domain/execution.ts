@@ -1,4 +1,5 @@
 import type { ExecutionProfile, Fill, OrderIntent } from './types.js';
+import { sellTaxRateAt } from './cost-profiles.js';
 
 /**
  * 다음 봉 시가 체결 (스펙 §9.1):
@@ -24,7 +25,7 @@ export function simulateFill(
   const grossAmount = price * intent.quantity;
   const commission =
     grossAmount * (intent.side === 'BUY' ? cost.buyCommissionRate : cost.sellCommissionRate);
-  const tax = intent.side === 'SELL' ? grossAmount * cost.sellTaxRate : 0;
+  const tax = intent.side === 'SELL' ? grossAmount * sellTaxRateAt(cost, tsMs) : 0;
   const slippageCost = Math.abs(price - nextBarOpen) * intent.quantity;
 
   return {

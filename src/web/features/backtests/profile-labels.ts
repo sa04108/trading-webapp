@@ -11,12 +11,20 @@ export function costProfileLabel(profile: {
   buyCommissionRate: number;
   sellCommissionRate: number;
   sellTaxRate: number;
+  sellTaxRateSchedule?: readonly { rate: number }[];
 }): string {
   const { buyCommissionRate: buy, sellCommissionRate: sell, sellTaxRate: tax } = profile;
-  if (buy === 0 && sell === 0 && tax === 0) return '무비용';
+  const scheduledTaxRates = profile.sellTaxRateSchedule?.map((entry) => entry.rate) ?? [];
+  const taxRates = scheduledTaxRates.length > 0 ? scheduledTaxRates : [tax];
+  const minTax = Math.min(...taxRates);
+  const maxTax = Math.max(...taxRates);
+  if (buy === 0 && sell === 0 && maxTax === 0) return '무비용';
   const commission =
     buy === sell ? `수수료 ${percent(buy)}` : `수수료 매수 ${percent(buy)} · 매도 ${percent(sell)}`;
-  return `${commission} · 매도세 ${percent(tax)}`;
+  const taxLabel = minTax === maxTax
+    ? `매도세 ${percent(minTax)}`
+    : `매도세 기간별 ${percent(minTax)}~${percent(maxTax)}`;
+  return `${commission} · ${taxLabel}`;
 }
 
 export function slippageProfileLabel(profile: { bps: number; fixed: number }): string {

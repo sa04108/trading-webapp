@@ -68,6 +68,7 @@ interface CommissionProfileSummary {
   buyCommissionRate: number;
   sellCommissionRate: number;
   sellTaxRate: number;
+  sellTaxRateSchedule?: Array<{ fromTsMs: number; rate: number }>;
 }
 
 interface SlippageProfileSummary {

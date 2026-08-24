@@ -528,6 +528,7 @@ function RunMetadataCard({
           buyCommissionRate: number;
           sellCommissionRate: number;
           sellTaxRate: number;
+          sellTaxRateSchedule?: Array<{ fromTsMs: number; rate: number }>;
         }>;
         slippageProfiles: Array<{ id: string; version: string; bps: number; fixed: number }>;
       }>('/backtests/profiles'),

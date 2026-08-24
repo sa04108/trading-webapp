@@ -8,12 +8,23 @@ import type { CostProfile, ExecutionRules, SlippageProfile } from './types.js';
 const COST_PROFILES: Record<string, CostProfile> = {
   'kr-equity-default': {
     id: 'kr-equity-default',
-    // 1.1.0: 증권거래세 0.18% → 0.15% (2025년부터 코스피·코스닥 공통).
-    // 구버전 실행은 재현성 메타데이터의 kr-equity-default@1.0.0 으로 구분된다.
-    version: '1.1.0',
+    // 2.0.0: KRX 공식 데이터 시작일(2010-01-04) 이후의 증권거래세와
+    // 코스피 농어촌특별세를 합친 실제 매도세를 체결일별로 적용한다.
+    // 이 기간에는 코스피·코스닥 합계 세율이 같다.
+    version: '2.0.0',
     buyCommissionRate: 0.00015,
     sellCommissionRate: 0.00015,
-    sellTaxRate: 0.0015,
+    // 일정 밖 직접 엔진 호출의 fallback 겸 현재(2026년) 세율이다.
+    sellTaxRate: 0.002,
+    sellTaxRateSchedule: [
+      { fromTsMs: Date.parse('2010-01-04T00:00:00Z'), rate: 0.003 },
+      { fromTsMs: Date.parse('2019-06-03T00:00:00Z'), rate: 0.0025 },
+      { fromTsMs: Date.parse('2021-01-01T00:00:00Z'), rate: 0.0023 },
+      { fromTsMs: Date.parse('2023-01-01T00:00:00Z'), rate: 0.002 },
+      { fromTsMs: Date.parse('2024-01-01T00:00:00Z'), rate: 0.0018 },
+      { fromTsMs: Date.parse('2025-01-01T00:00:00Z'), rate: 0.0015 },
+      { fromTsMs: Date.parse('2026-01-01T00:00:00Z'), rate: 0.002 },
+    ],
   },
   'zero-cost': {
     id: 'zero-cost',
@@ -48,4 +59,14 @@ export function listCostProfiles(): CostProfile[] {
 
 export function listSlippageProfiles(): SlippageProfile[] {
   return Object.values(SLIPPAGE_PROFILES);
+}
+
+/** 체결 시각에 유효한 매도세율. 일정이 없는 사용자 정의 프로파일은 고정 세율을 쓴다. */
+export function sellTaxRateAt(profile: CostProfile, tsMs: number): number {
+  let rate = profile.sellTaxRate;
+  for (const entry of profile.sellTaxRateSchedule ?? []) {
+    if (entry.fromTsMs > tsMs) break;
+    rate = entry.rate;
+  }
+  return rate;
 }

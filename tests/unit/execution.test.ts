@@ -5,6 +5,7 @@ import {
   roundToTick,
   simulateFill,
 } from '../../src/server/modules/backtest/domain/execution.js';
+import { getCostProfile } from '../../src/server/modules/backtest/domain/cost-profiles.js';
 import type { ExecutionProfile } from '../../src/server/modules/backtest/domain/types.js';
 
 const PROFILE: ExecutionProfile = {
@@ -56,6 +57,27 @@ describe('simulateFill (스펙 §9.1 next-bar-open + §9.3 비용 모델)', () =
     };
     const fill = simulateFill({ symbol: 'A', side: 'BUY', quantity: 1 }, 1_000, 1, fixedSlip);
     expect(fill.price).toBe(1_005);
+  });
+
+  it('charges the historical sell tax rate at the fill timestamp', () => {
+    const historical: ExecutionProfile = {
+      ...PROFILE,
+      cost: getCostProfile('kr-equity-default')!,
+    };
+    const beforeCut = simulateFill(
+      { symbol: 'A', side: 'SELL', quantity: 1 },
+      10_000,
+      Date.parse('2024-12-31T00:00:00Z'),
+      historical,
+    );
+    const afterCut = simulateFill(
+      { symbol: 'A', side: 'SELL', quantity: 1 },
+      10_000,
+      Date.parse('2025-01-02T00:00:00Z'),
+      historical,
+    );
+    expect(beforeCut.tax).toBeCloseTo(beforeCut.grossAmount * 0.0018);
+    expect(afterCut.tax).toBeCloseTo(afterCut.grossAmount * 0.0015);
   });
 });
 

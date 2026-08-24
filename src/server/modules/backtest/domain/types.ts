@@ -7,8 +7,13 @@ export interface CostProfile {
   readonly buyCommissionRate: number;
   /** 매도 수수료율 */
   readonly sellCommissionRate: number;
-  /** 매도 관련 세금율 */
+  /** 일정이 없거나 일정 시작 전인 체결에 적용할 매도 관련 세율 */
   readonly sellTaxRate: number;
+  /** 체결 시각별 매도 관련 세율. fromTsMs 오름차순이며 마지막 유효 항목을 쓴다. */
+  readonly sellTaxRateSchedule?: readonly {
+    readonly fromTsMs: number;
+    readonly rate: number;
+  }[];
 }
 
 export interface SlippageProfile {
