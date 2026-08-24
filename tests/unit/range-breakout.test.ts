@@ -11,6 +11,10 @@ import {
 import { StrategyRegistry } from '../../src/server/modules/strategy/application/strategy-registry.js';
 
 describe('range-breakout parameters (스펙 §32)', () => {
+  it('공유 ATR 계산 방식을 전략 버전에 반영한다', () => {
+    expect(rangeBreakoutStrategy.version).toBe('2.0.2');
+  });
+
   it('생략된 파라미터는 기본값으로 채운다 — 추적 손절과 비중 상한이 기본 동작이다', () => {
     const result = rangeBreakoutParameters.parse({});
     expect(result.trailAtrMultiplier).toBe(2);
@@ -204,6 +208,21 @@ describe('range-breakout 종목당 비중 상한', () => {
 });
 
 describe('range-breakout 워밍업', () => {
+  it('ATR period번째 봉에 시드가 완성되면 그 봉의 적법한 신호를 버리지 않는다', () => {
+    const result = run([
+      candle(0, { open: 100, high: 101, low: 99, close: 100 }),
+      candle(1, { open: 100, high: 101, low: 99, close: 100 }),
+      candle(2, { open: 100, high: 106, low: 100, close: 105 }),
+      candle(3, { open: 105, high: 106, low: 104, close: 105 }),
+    ], {
+      ...BASE,
+      lookbackBars: 2,
+      atrPeriod: 3,
+    });
+    expect(result.fills.some((fill) => fill.side === 'BUY' && fill.tsMs === START + 3 * HOUR))
+      .toBe(true);
+  });
+
   it('돌파 기준선 창이 lookbackBars 개로 차기 전에는 진입하지 않는다', () => {
     // 창을 채우려면 30봉이 필요한데 21봉만 준다 — 돌파해도 기준선이 없다
     const result = run([...flatWarmup(), SIGNAL_BAR], { ...BASE, lookbackBars: 30 });

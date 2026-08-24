@@ -122,7 +122,7 @@ function getSymbolState(state: RangeBreakoutState, symbol: string): SymbolState 
 
 export const rangeBreakoutStrategy: TradingStrategy<RangeBreakoutParameters, RangeBreakoutState> = {
   id: 'range-breakout',
-  version: '2.0.1',
+  version: '2.0.2',
   name: '전고점 돌파',
   description:
     '직전 N개 봉의 최고가를 종가가 넘어서면 사고, 고점을 따라 올라가는 손절선에 걸리면 팝니다. ' +
@@ -131,7 +131,7 @@ export const rangeBreakoutStrategy: TradingStrategy<RangeBreakoutParameters, Ran
   dataRequirements: {
     priceWarmupBars: (parameters) => Math.max(
       parameters.lookbackBars,
-      parameters.atrPeriod + 1,
+      parameters.atrPeriod,
     ),
     requiresCorporateActions: true,
   },
@@ -221,7 +221,7 @@ export const rangeBreakoutStrategy: TradingStrategy<RangeBreakoutParameters, Ran
         continue;
       }
 
-      if (symbolState.atr.atr === null || symbolState.atr.barsSeen <= parameters.atrPeriod) {
+      if (symbolState.atr.atr === null) {
         continue;
       }
       const channelHigh = channelHighBySymbol.get(symbol) ?? null;

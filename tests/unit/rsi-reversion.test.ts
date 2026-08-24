@@ -79,7 +79,7 @@ describe('레지스트리 등록', () => {
     const properties = (schema as { properties: Record<string, Record<string, unknown>> })
       .properties;
     expect(properties.entryRsi?.title).toBe('진입 RSI');
-    expect(rsiReversionStrategy.version).toBe('1.1.0');
+    expect(rsiReversionStrategy.version).toBe('1.1.1');
   });
 });
 
