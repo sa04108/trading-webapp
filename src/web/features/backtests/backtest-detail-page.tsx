@@ -128,11 +128,11 @@ function MetricCards({ metrics, benchmark }: { metrics: BacktestMetrics; benchma
     },
     { label: 'Sharpe', value: formatNumber(metrics.sharpe), className: '' },
     {
-      label: '승률 (청산 기준)',
+      label: '승률 (매도 체결 기준)',
       value: metrics.winRate === null ? '-' : `${metrics.winRate.toFixed(1)}%`,
       className: '',
     },
-    { label: '청산 거래 수', value: `${metrics.tradeCount}건`, className: '' },
+    { label: '매도 체결 수 (부분청산 포함)', value: `${metrics.tradeCount}건`, className: '' },
     {
       label: '총 비용',
       value: cost.totalText,
@@ -327,7 +327,7 @@ function TradesSection({
                     align="right"
                   />
                   <SortableHead sortKey="HOLDING_TIME" sort={sort} onSort={changeSort} />
-                  {/* 미청산 행에만 값이 있다 — 청산된 거래는 이미 청산일이 있어 별도로
+                  {/* 미청산 행에만 값이 있다 — 매도 체결 행은 이미 매도일이 있어 별도로
                       "확인일" 을 말할 필요가 없다. 정렬 축으로 두지 않는 이유는 사유와 같다 */}
                   <TableHead>마지막 확인일</TableHead>
                   <TableHead>사유</TableHead>
@@ -402,7 +402,7 @@ function TradesSection({
                     <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
                       {formatDuration(trade.holdingTimeMs)}
                     </TableCell>
-                    {/* 이미 청산된 거래에는 "마지막 확인일" 개념이 없다 — 청산일이 그 역할이다 */}
+                    {/* 매도 체결 행에는 "마지막 확인일" 개념이 없다 — 매도일이 그 역할이다 */}
                     <TableCell className="text-xs text-muted-foreground">-</TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {exitReasonLabel(trade.exitReason)}
@@ -417,14 +417,20 @@ function TradesSection({
           <p className="mt-2 text-xs text-muted-foreground">
             {tradeSortSummary(sort)}으로 정렬했습니다.
             {openRows.length > 0
-              ? ' 미청산 행은 첫 페이지 맨 위에 고정되고 같은 축으로 함께 정렬됩니다 — 청산 거래와 한 줄로 섞이지는 않습니다.'
+              ? ' 미청산 행은 첫 페이지 맨 위에 고정되고 같은 축으로 함께 정렬됩니다 — 매도 체결 행과 한 줄로 섞이지는 않습니다.'
               : ''}
+          </p>
+        ) : null}
+        {trades.length > 0 ? (
+          <p className="mt-1 text-xs text-muted-foreground">
+            매도 체결 행은 부분청산도 각각 한 건으로 집계합니다. 진입일·보유기간은
+            해당 포지션의 최초 진입 기준이고, 진입가는 매도 직전의 이동평균 매수가입니다.
           </p>
         ) : null}
         {openRows.length > 0 ? (
           <p className="mt-1 text-xs text-muted-foreground">
             미청산 행의 손익은 기간 종료 시점 종가 기준 평가치입니다 (매도 비용 미반영). 누적
-            수익률·자산 곡선에는 포함되지만 승률·profit factor·거래 수에는 포함되지 않습니다.
+            수익률·자산 곡선에는 포함되지만 승률·profit factor·매도 체결 수에는 포함되지 않습니다.
           </p>
         ) : null}
         <Pagination

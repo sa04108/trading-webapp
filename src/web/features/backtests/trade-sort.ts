@@ -23,12 +23,12 @@ export const DEFAULT_TRADE_SORT: TradeSort = {
 
 /** 열 머리글에 적히는 이름. 테이블 폭을 아끼려고 짧게 쓴다 */
 export const TRADE_SORT_LABELS: Record<TradeSortKey, string> = {
-  EXIT_TS: '청산',
-  ENTRY_TS: '진입',
+  EXIT_TS: '매도',
+  ENTRY_TS: '최초 진입',
   QUANTITY: '수량',
   NET_PNL: '순손익',
   RETURN_PCT: '수익률',
-  HOLDING_TIME: '보유',
+  HOLDING_TIME: '보유기간',
 };
 
 /**
@@ -103,7 +103,7 @@ function openRowValue(row: OpenPositionRow, key: TradeSortKey): number | null {
       return row.returnPct;
     case 'HOLDING_TIME':
       return row.holdingTimeMs;
-    // 청산 시각이 없다. 「미청산」끼리는 이 축에서 전부 동률이라 심볼 순으로 떨어진다
+    // 매도 체결 시각이 없다. 「미청산」끼리는 이 축에서 전부 동률이라 심볼 순으로 떨어진다
     case 'EXIT_TS':
       return null;
   }
@@ -113,7 +113,7 @@ function openRowValue(row: OpenPositionRow, key: TradeSortKey): number | null {
  * 미청산 행 정렬.
  *
  * 이 행들은 서버 페이징 밖이다 (재현 정보의 스냅샷에서 나오고 첫 페이지 위에 고정된다).
- * 청산 거래만 서버가 정렬하고 여기를 그대로 두면 「순손익 높은 순」을 골랐는데 맨 위
+ * 매도 체결 행만 서버가 정렬하고 여기를 그대로 두면 「순손익 높은 순」을 골랐는데 맨 위
  * 몇 줄만 아무 순서인 표가 된다 — 같은 축으로 함께 정렬한다.
  *
  * 동률과 값 없는 축은 심볼 순으로 떨어뜨린다. 순서가 매 렌더 흔들리면 목록이 아니라

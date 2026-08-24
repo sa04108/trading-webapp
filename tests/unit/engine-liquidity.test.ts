@@ -109,6 +109,7 @@ describe('직전 거래 봉 거래량 participation 체결 한도', () => {
       ['SELL', 5],
     ]);
     expect(result.openPositions[0]?.quantity).toBe(25);
+    expect(result.metrics.tradeCount).toBe(3);
   });
 
   it('거래량 0으로 거부된 매도를 다음 체결 가능 봉에서 재시도한다', () => {

@@ -120,18 +120,24 @@ export interface OpenPositionSnapshot {
   readonly returnPct: number;
 }
 
-/** 완결(청산) 거래 */
+/**
+ * 매도 체결 레그. 부분 청산은 체결마다 한 건이며,
+ * 같은 포지션의 매수→전량 매도 왕복을 묶은 개념이 아니다.
+ */
 export interface Trade {
   readonly symbol: string;
   readonly quantity: number;
+  /** 해당 매도 직전 포지션의 최초 진입 시각. 추가매수는 이 시각을 바꾸지 않는다 */
   readonly entryTsMs: number;
   readonly exitTsMs: number;
+  /** 해당 매도 직전 포지션의 이동평균 매수 체결가 */
   readonly entryPrice: number;
   readonly exitPrice: number;
   readonly grossPnl: number;
   readonly costs: number;
   readonly netPnl: number;
   readonly returnPct: number;
+  /** `entryTsMs`부터 해당 매도까지의 기간 */
   readonly holdingTimeMs: number;
   readonly exitReason?: string;
 }
@@ -165,13 +171,21 @@ export interface BacktestMetrics {
   readonly sharpe: number | null;
   readonly sortino: number | null;
   readonly calmar: number | null;
+  /** 부분 청산을 포함한 매도 체결 레그 기준 */
   readonly winRate: number | null;
+  /** 부분 청산을 포함한 매도 체결 레그 기준 */
   readonly profitFactor: number | null;
+  /** 이익이 난 매도 체결 레그 기준 */
   readonly avgWin: number | null;
+  /** 손실이 난 매도 체결 레그 기준 */
   readonly avgLoss: number | null;
+  /** 매도 체결 레그 순서 기준 */
   readonly maxConsecutiveWins: number;
+  /** 매도 체결 레그 순서 기준 */
   readonly maxConsecutiveLosses: number;
+  /** 부분 청산을 포함한 매도 체결 레그 수 */
   readonly tradeCount: number;
+  /** 매도 체결 레그별 최초 진입 이후 보유기간 평균 */
   readonly avgHoldingTimeMs: number | null;
   readonly maxConcurrentPositions: number;
   readonly totalCommission: number;

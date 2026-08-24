@@ -340,7 +340,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect((trades.json().trades as unknown[]).length).toBeGreaterThan(0);
     // 페이지네이션 UI 가 {현재}/{전체} 페이지를 계산하려면 필터 기준 총 건수가 필요하다
     expect(trades.json().total).toBe(body.metrics.tradeCount);
-    // 정렬 파라미터가 없으면 청산 시각 오름차순이다 — 예전 순서가 그대로여야 한다
+    // 정렬 파라미터가 없으면 매도 체결 시각 오름차순이다 — 예전 순서가 그대로여야 한다
     const defaultOrder = trades.json().trades as Array<{ exitTsMs: number }>;
     expect(defaultOrder.map((t) => t.exitTsMs)).toEqual(
       [...defaultOrder.map((t) => t.exitTsMs)].sort((a, b) => a - b),

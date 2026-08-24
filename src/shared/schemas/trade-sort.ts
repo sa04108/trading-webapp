@@ -25,7 +25,7 @@ export const SORT_DIRECTIONS = ['ASC', 'DESC'] as const;
 export type SortDirection = (typeof SORT_DIRECTIONS)[number];
 
 /**
- * 기본 정렬 — 청산 시각 오름차순.
+ * 기본 정렬 — 매도 체결 시각 오름차순.
  *
  * 정렬 파라미터가 없던 시절의 순서 그대로다. 기본값을 바꾸면 저장된 링크와 export 가
  * 가리키는 순서가 달라지고, 그 차이는 어디에도 적혀 있지 않다.
