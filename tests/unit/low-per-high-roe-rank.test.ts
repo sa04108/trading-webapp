@@ -131,7 +131,7 @@ describe('rankLowPerHighRoe', () => {
 
 describe('저PER·고ROE 전략', () => {
   it('스키마와 준비 데이터 요구가 정확하다', () => {
-    expect(lowPerHighRoeRankStrategy.version).toBe('1.2.2');
+    expect(lowPerHighRoeRankStrategy.version).toBe('1.3.0');
     expect(lowPerHighRoeRankParameters.parse({})).toEqual({ topN: 40, staleQuarters: 2 });
     expect(lowPerHighRoeRankParameters.safeParse({ topN: 200, staleQuarters: 1 }).success).toBe(true);
     expect(lowPerHighRoeRankParameters.safeParse({ staleQuarters: 0 }).success).toBe(false);
@@ -143,14 +143,12 @@ describe('저PER·고ROE 전략', () => {
     });
   });
 
-  it('실제 두 단계 리밸런스도 PER·ROE 순위 합과 seeded 동점을 쓰고 unsafe cap을 제외한다', () => {
+  it('실제 두 단계 리밸런스도 PER·ROE 순위 합과 seeded 동점을 쓴다', () => {
     const candidates = {
       AAA: { marketCapKrw: '1000', netIncomeTtm: 100, totalEquity: 500 },
       BBB: { marketCapKrw: '2000', netIncomeTtm: 100, totalEquity: 250 },
       CCC: { marketCapKrw: '4000', netIncomeTtm: 100, totalEquity: 200 },
       DDD: { marketCapKrw: '3000', netIncomeTtm: 100, totalEquity: 100 / 0.3 },
-      // Number('1e1')로 바로 바꾸면 PER·ROE 모두 1위가 되지만 bigint text 계약에는 위반이다.
-      UNSAFE: { marketCapKrw: '1e1', netIncomeTtm: 100, totalEquity: 100 },
     };
     const state = lowPerHighRoeRankStrategy.initialize({
       symbols: Object.keys(candidates),
@@ -174,6 +172,59 @@ describe('저PER·고ROE 전략', () => {
     // 합: BBB 4 < AAA 5 = CCC 5 < DDD 6 — seed 1은 2위 동점에서 AAA를 고른다.
     expect(buyDecision.orders.map((order) => order.symbol)).toEqual(['AAA', 'BBB']);
     expect(buyDecision.orders[0]).toMatchObject({ side: 'BUY', quantity: 50 });
+  });
+
+  it('생산 일정의 KRX 시가총액이 없거나 유효하지 않으면 부분 랭킹 대신 실패한다', () => {
+    for (const marketCapKrw of [null, '1e1']) {
+      const candidates = {
+        VALID: { marketCapKrw: '1000', netIncomeTtm: 100, totalEquity: 500 },
+        BROKEN: { marketCapKrw: marketCapKrw ?? '1000', netIncomeTtm: 100, totalEquity: 100 },
+      };
+      const state = lowPerHighRoeRankStrategy.initialize({
+        symbols: Object.keys(candidates),
+        initialCash: 10_000,
+        rng: createRng(1),
+      });
+      const executionContext = context({ candidates, isRebalanceBar: true });
+      const brokenContext: StrategyBarContext = {
+        ...executionContext,
+        selectionMetric: (symbol) => (
+          symbol === 'BROKEN'
+            ? { marketCapKrw, volume: null, tradingValueKrw: null }
+            : executionContext.selectionMetric(symbol)
+        ),
+      };
+
+      expect(() => lowPerHighRoeRankStrategy.onBars(
+        brokenContext,
+        state,
+        { topN: 1, staleQuarters: 2 },
+      )).toThrow('저PER·고ROE 랭킹에 필요한 유효한 KRX 시가총액이 없습니다: BROKEN');
+    }
+  });
+
+  it('일정 없는 독립 엔진 호출은 선정 지표가 없으면 기존 보유를 유지한다', () => {
+    const candidates = {
+      A: { marketCapKrw: '1000', netIncomeTtm: 100, totalEquity: 500 },
+    };
+    const state = lowPerHighRoeRankStrategy.initialize({
+      symbols: ['A'],
+      initialCash: 10_000,
+      rng: createRng(1),
+    });
+    const scheduledContext = context({ candidates, isRebalanceBar: true });
+    const schedulelessContext: StrategyBarContext = {
+      ...scheduledContext,
+      activeUniverseSymbols: null,
+      selectionMetric: () => null,
+    };
+
+    expect(lowPerHighRoeRankStrategy.onBars(
+      schedulelessContext,
+      state,
+      { topN: 1, staleQuarters: 2 },
+    ).orders).toEqual([]);
+    expect(state.pendingTargets).toBeNull();
   });
 
   it('순이익이나 자본총계 공시가 stale이면 후보에서 제외한다', () => {
