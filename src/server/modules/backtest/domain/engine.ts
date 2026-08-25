@@ -151,8 +151,9 @@ export interface BacktestRunResult {
  * 2.8.0: 확정 유니버스 후보의 원인 불명 가격 봉 누락도 전략 실행 전에 실패시킨다.
  * 2.9.0: 거래 시작을 첫 발견 봉이 아닌 요청 시작일로 고정해 앞쪽 가격 공백도 실패시킨다.
  * 2.10.0: legacy 주말 경계를 거래일에서 제외해 리밸런스·warm-up 시계를 바로잡는다.
+ * 2.11.0: 단주 현금정산 뒤 남은 포지션에 매수수수료 원가를 비례 배분한다.
  */
-export const ENGINE_VERSION = '2.10.0';
+export const ENGINE_VERSION = '2.11.0';
 
 const PROGRESS_INTERVAL_BARS = 500;
 const MS_PER_DAY = 86_400_000;
@@ -775,12 +776,20 @@ function* runBacktestSteps(
 
       const position = positions.get(symbol);
       if (!position) continue; // 대기 주문만 있었다 — 주문은 이미 위에서 스케일했다
+      const rawAdjustedQuantity = position.quantity * ratio;
       const adjusted = adjustForRatio(position.quantity, position.avgEntryPrice, ratio, bar.open);
       cash += adjusted.cashFromFraction;
       if (adjusted.closed) {
         positions.delete(symbol);
         continue;
       }
+      // 단주가 현금으로 빠졌다면 그 몫의 매수수수료도 남은 주식 원가에서 떼어낸다.
+      // 그렇지 않으면 이후 매도 레그와 미청산 평가손익에 원래 수수료 전액이 붙어
+      // 손실이 과대계상된다. 단주 정산은 주문 체결이 아니므로 Trade/Fill로 만들지 않는다.
+      const retainedEntryCostRatio = rawAdjustedQuantity > 0
+        ? Math.max(0, Math.min(1, adjusted.quantity / rawAdjustedQuantity))
+        : 0;
+      position.entryCosts *= retainedEntryCostRatio;
       position.quantity = adjusted.quantity;
       position.avgEntryPrice = adjusted.avgEntryPrice;
     }

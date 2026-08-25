@@ -756,6 +756,94 @@ describe('분할을 걸친 보유 포지션 조정', () => {
     expect(result.equityPoints[1]!.equity).toBe(result.equityPoints[2]!.equity);
   });
 
+  it('역분할 단주 현금정산 뒤 남은 포지션에는 해당 몫의 매수수수료만 남긴다', () => {
+    const buyCommissionOnly: ExecutionProfile = {
+      cost: {
+        id: 'buy-commission-only',
+        version: '1',
+        buyCommissionRate: 0.01,
+        sellCommissionRate: 0,
+        sellTaxRate: 0,
+      },
+      slippage: ZERO_COST.slippage,
+      rules: ZERO_COST.rules,
+    };
+    const result = runBacktest(buyAtBarStrategy(0, 12) as never, {
+      candles: [
+        dailyBar(0, 10_000),
+        dailyBar(1, 10_000),
+        dailyBar(2, 50_000),
+        dailyBar(3, 50_000),
+      ],
+      initialCash: 1_000_000,
+      execution: buyCommissionOnly,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+      // 12주 × 0.2 = 2.4주: 2주는 남고 0.4주는 현금으로 정산된다.
+      facts: [splitFact('A', SPLIT_PERIOD_KEY, 0.2)],
+    });
+
+    expect(result.openPositions).toHaveLength(1);
+    expect(result.openPositions[0]).toMatchObject({
+      quantity: 2,
+      avgEntryPrice: 50_000,
+    });
+    // 매수수수료 1,200원 중 남은 2/2.4 몫인 1,000원만 미실현손익에 남는다.
+    // 종전에는 단주 몫 200원까지 전부 붙어 -1,200원으로 과소계상했다.
+    expect(result.openPositions[0]!.unrealizedPnl).toBeCloseTo(-1_000);
+  });
+
+  it('역분할 단주 정산 뒤 실제 매도 레그에도 남은 몫의 매수수수료만 배분한다', () => {
+    const strategy: TradingStrategy<unknown, { step: number }> = {
+      id: 'reverse-split-sell',
+      version: '1.0.0',
+      name: 't',
+      description: 't',
+      parameterSchema: z.unknown(),
+      initialize: () => ({ step: 0 }),
+      onBars(_context, state) {
+        const orders: OrderIntent[] = state.step === 0
+          ? [{ symbol: 'A', side: 'BUY', quantity: 12 }]
+          : state.step === 2
+            ? [{ symbol: 'A', side: 'SELL', quantity: 999 }]
+            : [];
+        state.step += 1;
+        return { orders };
+      },
+    };
+    const result = runBacktest(strategy as never, {
+      candles: [
+        dailyBar(0, 10_000),
+        dailyBar(1, 10_000),
+        dailyBar(2, 50_000),
+        dailyBar(3, 50_000),
+      ],
+      initialCash: 1_000_000,
+      execution: {
+        cost: {
+          id: 'buy-commission-only',
+          version: '1',
+          buyCommissionRate: 0.01,
+          sellCommissionRate: 0,
+          sellTaxRate: 0,
+        },
+        slippage: ZERO_COST.slippage,
+        rules: ZERO_COST.rules,
+      },
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+      facts: [splitFact('A', SPLIT_PERIOD_KEY, 0.2)],
+    });
+
+    expect(result.openPositions).toHaveLength(0);
+    expect(result.trades).toHaveLength(1);
+    expect(result.trades[0]!.quantity).toBe(2);
+    expect(result.trades[0]!.costs).toBeCloseTo(1_000);
+    expect(result.trades[0]!.netPnl).toBeCloseTo(-1_000);
+  });
+
   it('분할일 매도는 조정된 수량으로 체결된다', () => {
     const strategy: TradingStrategy<unknown, { step: number }> = {
       id: 'split-sell',
