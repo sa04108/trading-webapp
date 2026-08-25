@@ -161,7 +161,7 @@ export function scoreEarningsAcceleration(
   return { ttmGrowth, priceMomentum: input.priceMomentum };
 }
 
-function safePositiveMarketCap(value: string): number | null {
+export function safePositiveMarketCap(value: string): number | null {
   if (!/^\d+$/.test(value)) return null;
   try {
     const parsed = BigInt(value);
