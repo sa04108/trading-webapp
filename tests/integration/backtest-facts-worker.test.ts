@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { and, eq, gt, inArray } from 'drizzle-orm';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
+import {
+  facts as factRows,
+  krxDailyBars,
+  symbolFactsState,
+  symbolMasterVersions,
+} from '../../src/server/shared/db/schema.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import {
   createTestAdmin,
@@ -127,8 +134,8 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       { standardCode: 'KR7000003000', shortCode: 'NOFACTS', name: 'NOFACTS', market: 'KOSPI', marketCapKrw: '100000000000' },
     ]);
     seedDailyBars(ctx.container.database.db, candles(40));
-    // 자본변동 게이트(Task 6) — 이 파일의 제출 기간(2025-01-02~2025-03-01)이 걸치는 연도
-    await seedCorporateActionCoverage(ctx.container, ['CHEAP', 'RICH'], yearRange(2025, 2025));
+    // 실제 변경일 역투영 창이 기간 시작보다 90일 앞까지 보므로 인접 2024년도 닫는다.
+    await seedCorporateActionCoverage(ctx.container, ['CHEAP', 'RICH'], yearRange(2024, 2025));
 
     // 컨테이너가 조립한 factRepository로 저장한다 — 워커가 같은 SQLite DB에서
     // 이 팩트를 다시 읽어야 하므로, 테스트 전용 repository 를 새로 만들지 않는다.
@@ -138,7 +145,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
     ]);
     // 재무 요구 검사(422)는 파일 존재가 아니라 재무 coverage 를 본다 — 운영에서는
     // FactSyncService 가 저장과 동시에 남기는 기록이므로 픽스처도 함께 심는다.
-    seedFinancialCoverage(ctx.container, ['CHEAP', 'RICH'], yearRange(2025, 2025));
+    seedFinancialCoverage(ctx.container, ['CHEAP', 'RICH'], yearRange(2024, 2025));
   });
 
   afterEach(async () => {
@@ -204,6 +211,170 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
     },
   );
 
+  it(
+    '제출 뒤 한 종목의 필수 연도 coverage가 사라지면 worker가 결과 생성 전에 중단한다',
+    { timeout: 90_000 },
+    async () => {
+      const payload: BacktestRequest = {
+        strategyId: 'value-quality-rank',
+        parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+        universeRule: factsUniverseRule(2),
+        timeframe: '1d',
+        period: { from: '2025-01-02', to: '2025-03-01' },
+        capital: { initialCash: 10_000_000, currency: 'KRW' },
+        execution: {
+          fillTiming: 'NEXT_BAR_OPEN',
+          commissionProfileId: 'zero-cost',
+          slippageProfileId: 'zero-slippage',
+        },
+        risk: { maxPositions: 1 },
+        randomSeed: 2,
+      };
+      const created = await ctx.app.inject({
+        method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload,
+      });
+      expect(created.statusCode).toBe(201);
+      const jobId = (created.json().job as { id: string }).id;
+
+      ctx.container.database.db.update(symbolFactsState)
+        .set({ coveredYearsJson: JSON.stringify([2025]) })
+        .where(eq(symbolFactsState.code, 'RICH'))
+        .run();
+      ctx.container.jobOrchestrator.tick();
+      await waitFor(() => {
+        const job = ctx.container.jobQueue.getJob(jobId);
+        return job !== null && ctx.container.jobQueue.isTerminal(job.status);
+      }, 60_000);
+
+      const job = ctx.container.jobQueue.getJob(jobId)!;
+      expect(job.status).toBe('FAILED');
+      expect(job.error).toMatch(/coverage.*2024~2025년.*RICH/);
+      expect(ctx.container.resultsService.getRun(jobId)).toBeNull();
+    },
+  );
+
+  it(
+    '다른 종목의 늦은 봉이 있어도 해당 종목 마지막 봉 뒤 공시만으로 worker 재무 게이트를 통과하지 않는다',
+    { timeout: 90_000 },
+    async () => {
+      const payload: BacktestRequest = {
+        strategyId: 'value-quality-rank',
+        parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+        universeRule: factsUniverseRule(2),
+        timeframe: '1d',
+        period: { from: '2025-01-02', to: '2025-03-01' },
+        capital: { initialCash: 10_000_000, currency: 'KRW' },
+        execution: {
+          fillTiming: 'NEXT_BAR_OPEN',
+          commissionProfileId: 'zero-cost',
+          slippageProfileId: 'zero-slippage',
+        },
+        risk: { maxPositions: 1 },
+        randomSeed: 3,
+      };
+      const created = await ctx.app.inject({
+        method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload,
+      });
+      expect(created.statusCode).toBe(201);
+      const jobId = (created.json().job as { id: string }).id;
+
+      // 제출 뒤 CHEAP은 일찍 거래가 끝나고 RICH만 더 늦게 봉이 남는 상태를 만든다.
+      // CHEAP의 뒤늦은 공시는 union 전체 max 봉보다 이르지만 CHEAP 자신의 마지막
+      // 실행 봉보다 늦으므로, 실제 엔진에서 CHEAP을 평가할 때 쓸 수 없다.
+      ctx.container.database.db.delete(factRows)
+        .where(and(
+          eq(factRows.scope, 'SYMBOL'),
+          inArray(factRows.key, ['CHEAP', 'RICH']),
+        ))
+        .run();
+      ctx.container.database.db.delete(krxDailyBars)
+        .where(and(
+          eq(krxDailyBars.shortCode, 'CHEAP'),
+          gt(krxDailyBars.date, '2025-01-11'),
+        ))
+        .run();
+      await ctx.container.factRepository.saveFacts([{
+        scope: 'SYMBOL', key: 'CHEAP', field: 'NET_INCOME', periodKey: '2024Q4',
+        asOfTsMs: Date.parse('2025-01-22T00:00:00Z'), value: 1, unit: 'KRW',
+      }]);
+      // snapshot 자체는 검증된 수집 결과로 다시 닫아, 이 테스트가 manifest 훼손이
+      // 아니라 종목별 마지막 실행 봉 PIT 관문을 검증하게 한다.
+      seedFinancialCoverage(ctx.container, ['CHEAP', 'RICH'], yearRange(2024, 2025));
+
+      ctx.container.jobOrchestrator.tick();
+      await waitFor(() => {
+        const job = ctx.container.jobQueue.getJob(jobId);
+        return job !== null && ctx.container.jobQueue.isTerminal(job.status);
+      }, 60_000);
+
+      const job = ctx.container.jobQueue.getJob(jobId)!;
+      expect(job.status).toBe('FAILED');
+      expect(job.error).toMatch(/마지막 실행 봉.*재무 데이터/);
+      expect(ctx.container.resultsService.getRun(jobId)).toBeNull();
+    },
+  );
+
+  it(
+    '동적 유니버스 편출 뒤의 고아 봉·공시만으로 worker 재무 게이트를 통과하지 않는다',
+    { timeout: 90_000 },
+    async () => {
+      const payload: BacktestRequest = {
+        strategyId: 'value-quality-rank',
+        parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+        universeRule: factsUniverseRule(1),
+        timeframe: '1d',
+        period: { from: '2025-01-02', to: '2025-03-01' },
+        capital: { initialCash: 10_000_000, currency: 'KRW' },
+        execution: {
+          fillTiming: 'NEXT_BAR_OPEN',
+          commissionProfileId: 'zero-cost',
+          slippageProfileId: 'zero-slippage',
+        },
+        risk: { maxPositions: 1 },
+        randomSeed: 4,
+      };
+      const queued = ctx.container.jobQueue.enqueue(payload, [
+        {
+          rebalanceDate: '2025-01-02',
+          effectiveTradingDate: '2025-01-02',
+          symbols: ['CHEAP'],
+          excludedNonTradingCount: 0,
+        },
+        {
+          rebalanceDate: '2025-01-20',
+          effectiveTradingDate: '2025-01-20',
+          symbols: ['RICH'],
+          excludedNonTradingCount: 0,
+        },
+      ]);
+
+      // CHEAP은 편출 뒤에도 raw 봉이 계속 남아 있다. 그 뒤 공시만 남기면 종목별 raw
+      // 마지막 봉 기준 구현은 통과하지만, 실제 엔진은 CHEAP을 다시 평가하지 않는다.
+      ctx.container.database.db.delete(factRows)
+        .where(and(
+          eq(factRows.scope, 'SYMBOL'),
+          inArray(factRows.key, ['CHEAP', 'RICH']),
+        ))
+        .run();
+      await ctx.container.factRepository.saveFacts([{
+        scope: 'SYMBOL', key: 'CHEAP', field: 'NET_INCOME', periodKey: '2024Q4',
+        asOfTsMs: Date.parse('2025-01-22T00:00:00Z'), value: 1, unit: 'KRW',
+      }]);
+      seedFinancialCoverage(ctx.container, ['CHEAP', 'RICH'], yearRange(2024, 2025));
+
+      ctx.container.jobOrchestrator.tick();
+      await waitFor(() => {
+        const job = ctx.container.jobQueue.getJob(queued.id);
+        return job !== null && ctx.container.jobQueue.isTerminal(job.status);
+      }, 60_000);
+
+      const job = ctx.container.jobQueue.getJob(queued.id)!;
+      expect(job.status).toBe('FAILED');
+      expect(job.error).toMatch(/마지막 실행 봉.*재무 데이터/);
+      expect(ctx.container.resultsService.getRun(queued.id)).toBeNull();
+    },
+  );
+
   /** 재무가 없어 제외된 종목은 이름과 함께 경고한다. */
   it(
     '재무가 없는 종목을 이름으로 밝힌다',
@@ -213,7 +384,10 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       // 마스터에 미리 둔 NOFACTS 도 유니버스에 들어오게 한다
       registerSymbols(ctx.container, 'KR', ['NOFACTS']);
       // NOFACTS 도 unionSymbols 에 들어오므로 자본변동 게이트도 통과해 둬야 한다
-      await seedCorporateActionCoverage(ctx.container, ['NOFACTS'], yearRange(2025, 2025));
+      await seedCorporateActionCoverage(ctx.container, ['NOFACTS'], yearRange(2024, 2025));
+      // DART가 필수 연도를 모두 조회했지만 공시 행이 0건인 정상 상태다. 미수집
+      // coverage 결측과 달리 실행을 허용하고 해당 종목만 랭킹에서 제외해야 한다.
+      seedFinancialCoverage(ctx.container, ['NOFACTS'], yearRange(2024, 2025));
       const extra: Candle[] = [];
       for (let index = 0; index < 40; index += 1) {
         extra.push({
@@ -329,6 +503,39 @@ function splitScenarioCandles(bars: number): Candle[] {
   return out;
 }
 
+function seedSameDaySplitSharesChange(ctx: TestApp): void {
+  const db = ctx.container.database.db;
+  db.delete(symbolMasterVersions)
+    .where(eq(symbolMasterVersions.standardCode, 'KR7000004000'))
+    .run();
+  db.insert(symbolMasterVersions).values([
+    {
+      standardCode: 'KR7000004000',
+      validFromDate: '2000-01-01',
+      validToDate: '2025-03-14',
+      shortCode: 'SPLIT',
+      name: 'SPLIT',
+      market: 'KOSPI',
+      sharesOutstanding: '1000000',
+      instrumentType: 'COMMON_STOCK',
+      listedDate: null,
+      recordedAtMs: ctx.container.clock.now(),
+    },
+    {
+      standardCode: 'KR7000004000',
+      validFromDate: '2025-03-14',
+      validToDate: null,
+      shortCode: 'SPLIT',
+      name: 'SPLIT',
+      market: 'KOSPI',
+      sharesOutstanding: '2000000',
+      instrumentType: 'COMMON_STOCK',
+      listedDate: null,
+      recordedAtMs: ctx.container.clock.now(),
+    },
+  ]).run();
+}
+
 describe('워커의 자본변동 팩트 배선 — 접수일이 기간 종료 이후인 분할', () => {
   let ctx: TestApp;
   let cookie: string;
@@ -349,10 +556,13 @@ describe('워커의 자본변동 팩트 배선 — 접수일이 기간 종료 �
       { standardCode: 'KR7000004000', shortCode: 'SPLIT', name: 'SPLIT', market: 'KOSPI', marketCapKrw: '300000000000' },
       { standardCode: 'KR7000005000', shortCode: 'FLAT', name: 'FLAT', market: 'KOSPI', marketCapKrw: '200000000000' },
     ]);
+    // 이 시나리오는 DART 기준일과 실제 KRX 변경일이 같은 정상 사건이다.
+    // fail-closed 정렬 검증이 테스트 픽스처 누락을 실제 결측으로 판단하지 않게 pin한다.
+    seedSameDaySplitSharesChange(ctx);
     // 2025-01-02 ~ 2025-04-30 = 119봉
     seedDailyBars(ctx.container.database.db, splitScenarioCandles(119));
-    // 자본변동 게이트(Task 6) — 이 파일의 제출 기간(2025-01-02~2025-04-30)이 걸치는 연도
-    await seedCorporateActionCoverage(ctx.container, ['SPLIT', 'FLAT'], yearRange(2025, 2025));
+    // 실제 변경일 역투영 창이 기간 시작보다 90일 앞까지 보므로 인접 2024년도 닫는다.
+    await seedCorporateActionCoverage(ctx.container, ['SPLIT', 'FLAT'], yearRange(2024, 2025));
 
     await ctx.container.factRepository.saveFacts([
       {

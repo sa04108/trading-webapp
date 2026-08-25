@@ -6,7 +6,6 @@ import {
   dailySelectionMetrics,
   krxDailyBars,
   krxNonTradingDays,
-  symbolFactsState,
   symbolMasterCoverage,
   symbolMasterMarketCaps,
   symbolMasterTradingDays,
@@ -14,7 +13,13 @@ import {
   symbols as symbolsTable,
 } from '../../src/server/shared/db/schema.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
-import { registerSymbols, seedCorporateActionCoverage, seedDailyBars, yearRange } from '../helpers/seed.js';
+import {
+  registerSymbols,
+  seedCorporateActionCoverage,
+  seedDailyBars,
+  seedFinancialCoverage,
+  yearRange,
+} from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 import { startKrxFakeServer, type KrxFakeServer } from '../helpers/krx-fixtures.js';
 
@@ -53,13 +58,24 @@ function installPreparedPreviewFixture(ctx: TestApp): void {
     overDailyLimit: false,
   });
   ctx.container.factSyncService.planCorporateActionSync = noActionWork;
-  const noActionSync: typeof ctx.container.factSyncService.syncCorporateActions = async () => ({
-    savedFacts: 0,
-    gaps: [],
-    stoppedAtSymbol: null,
-    stopReason: null,
-    failureMessage: null,
-  });
+  const noActionSync: typeof ctx.container.factSyncService.syncCorporateActions = async (request) => {
+    const years = yearRange(request.fromYear, request.toYear);
+    for (const symbol of request.symbols) {
+      ctx.container.actionCoverageStore.addCoverageResult(
+        symbol,
+        years,
+        [],
+        ctx.container.clock.now(),
+      );
+    }
+    return {
+      savedFacts: 0,
+      gaps: [],
+      stoppedAtSymbol: null,
+      stopReason: null,
+      failureMessage: null,
+    };
+  };
   ctx.container.factSyncService.syncCorporateActions = noActionSync;
   const noMarketSync: typeof ctx.container.symbolMasterService.ingestDate = async () => ({
     kind: 'ALREADY_COVERED',
@@ -326,6 +342,145 @@ describe('POST /backtests/universe-preview', () => {
     expect((res.json() as { fundamentalSymbols: string[] }).fundamentalSymbols).toEqual(['005930']);
   });
 
+  it('마지막 실행 봉 뒤 공시된 재무 행은 같은 종료일이어도 fundamentalSymbols에서 제외한다', async () => {
+    seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
+      { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
+    ]);
+    registerSymbols(ctx.container, 'KR', ['005930']);
+    seedDailyBars(ctx.container.database.db, [{
+      symbol: '005930', market: 'KR', timeframe: '1d', tsMs: Date.UTC(2026, 0, 5),
+      open: 1_000, high: 1_000, low: 1_000, close: 1_000, volume: 1_000,
+    }]);
+    await ctx.container.factRepository.saveFacts([{
+      scope: 'SYMBOL',
+      key: '005930',
+      field: 'NET_INCOME',
+      periodKey: '2025Q4',
+      value: 1_000,
+      asOfTsMs: Date.parse('2026-01-05T01:00:00Z'),
+      unit: 'KRW',
+    }]);
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: marketCapRule(),
+        period: { from: '2026-01-05', to: '2026-01-05' },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { fundamentalSymbols: string[] }).fundamentalSymbols).toEqual([]);
+  });
+
+  it('다른 종목의 더 늦은 봉이 있어도 개별 종목 마지막 봉 뒤 공시를 재무 보유로 세지 않는다', async () => {
+    const entries = [
+      { standardCode: 'KR7000010000', shortCode: 'EARLY_STOP', name: 'EARLY_STOP', market: 'KOSPI' as const, marketCapKrw: '200000000000' },
+      { standardCode: 'KR7000020000', shortCode: 'LATE_BAR', name: 'LATE_BAR', market: 'KOSPI' as const, marketCapKrw: '100000000000' },
+    ];
+    seedSymbolMasterUniverse(ctx.container, ['2026-01-05', '2026-01-06'], entries);
+    registerSymbols(ctx.container, 'KR', ['EARLY_STOP', 'LATE_BAR']);
+    seedDailyBars(ctx.container.database.db, [
+      {
+        symbol: 'EARLY_STOP', market: 'KR', timeframe: '1d', tsMs: Date.UTC(2026, 0, 5),
+        open: 1_000, high: 1_000, low: 1_000, close: 1_000, volume: 1_000,
+      },
+      {
+        symbol: 'LATE_BAR', market: 'KR', timeframe: '1d', tsMs: Date.UTC(2026, 0, 5),
+        open: 1_000, high: 1_000, low: 1_000, close: 1_000, volume: 1_000,
+      },
+      {
+        symbol: 'LATE_BAR', market: 'KR', timeframe: '1d', tsMs: Date.UTC(2026, 0, 6),
+        open: 1_000, high: 1_000, low: 1_000, close: 1_000, volume: 1_000,
+      },
+    ]);
+    await ctx.container.factRepository.saveFacts([{
+      scope: 'SYMBOL', key: 'EARLY_STOP', field: 'NET_INCOME', periodKey: '2025Q4',
+      value: 1_000, asOfTsMs: Date.parse('2026-01-05T01:00:00Z'), unit: 'KRW',
+    }]);
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: marketCapRule(),
+        period: { from: '2026-01-05', to: '2026-01-06' },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { fundamentalSymbols: string[] }).fundamentalSymbols).toEqual([]);
+  });
+
+  it('동적 유니버스 편출 뒤의 고아 봉·공시는 fundamentalSymbols로 세지 않는다', async () => {
+    registerSymbols(ctx.container, 'KR', ['EXITED', 'ACTIVE']);
+    seedDailyBars(ctx.container.database.db, [
+      {
+        symbol: 'EXITED', market: 'KR', timeframe: '1d', tsMs: Date.parse('2026-01-05T00:00:00Z'),
+        open: 1_000, high: 1_000, low: 1_000, close: 1_000, volume: 1_000,
+      },
+      {
+        // 1월 8일 편출 뒤에도 raw 테이블에는 봉이 남아 있는 상황이다.
+        symbol: 'EXITED', market: 'KR', timeframe: '1d', tsMs: Date.parse('2026-01-10T00:00:00Z'),
+        open: 1_000, high: 1_000, low: 1_000, close: 1_000, volume: 1_000,
+      },
+      {
+        symbol: 'ACTIVE', market: 'KR', timeframe: '1d', tsMs: Date.parse('2026-01-08T00:00:00Z'),
+        open: 1_000, high: 1_000, low: 1_000, close: 1_000, volume: 1_000,
+      },
+    ]);
+    await ctx.container.factRepository.saveFacts([{
+      scope: 'SYMBOL', key: 'EXITED', field: 'NET_INCOME', periodKey: '2025Q4',
+      value: 1_000, asOfTsMs: Date.parse('2026-01-09T00:00:00Z'), unit: 'KRW',
+    }]);
+    const member = (symbol: string, standardCode: string) => ({
+      symbol,
+      standardCode,
+      marketCapKrw: '100000000000',
+      volume: 1_000,
+      tradingValueKrw: '1000000000',
+    });
+    vi.spyOn(ctx.container.backtestPreparationOrchestrator, 'getReadyPreview')
+      .mockResolvedValue({
+        schedule: [
+          {
+            rebalanceDate: '2026-01-05', effectiveDate: '2026-01-05',
+            fromTsMs: Date.parse('2026-01-05T00:00:00Z'),
+            members: [member('EXITED', 'KR7000010000')], excludedNonTradingCount: 0,
+          },
+          {
+            rebalanceDate: '2026-01-08', effectiveDate: '2026-01-08',
+            fromTsMs: Date.parse('2026-01-08T00:00:00Z'),
+            members: [member('ACTIVE', 'KR7000020000')], excludedNonTradingCount: 0,
+          },
+        ],
+        diagnostics: [],
+        stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 10 }],
+        unionSymbols: ['EXITED', 'ACTIVE'],
+        scheduleHash: 'dynamic-test',
+        uncoveredDates: [],
+        periodCovered: true,
+        missingCandleSymbols: [],
+        warnings: [],
+      });
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: marketCapRule(['KOSPI'], { unit: 'DAY', value: 1 }),
+        period: { from: '2026-01-05', to: '2026-01-10' },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { fundamentalSymbols: string[] }).fundamentalSymbols).toEqual([]);
+  });
+
   it('빈 유니버스는 전체 재무 저장소를 조회하지 않는다', async () => {
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
       { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
@@ -367,10 +522,10 @@ describe('POST /backtests/universe-preview', () => {
         missingCandleSymbols: [],
       });
 
-    // FactRepository에서 keys: []는 전체 스코프 조회다. 빈 유니버스라면 저장소를
-    // 호출하지 않아야 하므로, 호출되는 순간 실패하도록 고정한다.
-    const getFacts = vi.spyOn(ctx.container.factRepository, 'getFacts')
-      .mockRejectedValue(new Error('빈 유니버스에서 전체 fact를 조회하면 안 된다'));
+    const availability = vi.spyOn(
+      ctx.container.financialFactAvailabilityService,
+      'symbolsWithFinancialFacts',
+    );
     const res = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
@@ -380,7 +535,7 @@ describe('POST /backtests/universe-preview', () => {
 
     expect(res.statusCode).toBe(200);
     expect((res.json() as { fundamentalSymbols: string[] }).fundamentalSymbols).toEqual([]);
-    expect(getFacts).not.toHaveBeenCalled();
+    expect(availability).toHaveBeenCalledWith(new Map());
   });
 
   it('종목 마스터가 커버하지 않는 날짜는 durable preparation job을 시작한다', async () => {
@@ -523,13 +678,18 @@ describe('POST /backtests/universe-preview', () => {
     });
   });
 
-  it('종목 마스터에는 있지만 캔들이 없는 종목을 missingCandleSymbols 로 밝힌다', async () => {
+  it('종목 마스터와 기간 밖 옛 봉만 있는 종목을 missingCandleSymbols 로 밝힌다', async () => {
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
       { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
     ]);
+    seedDailyBars(ctx.container.database.db, [{
+      symbol: '005930', market: 'KR', timeframe: '1d',
+      tsMs: Date.parse('2025-12-31T00:00:00Z'),
+      open: 1_000, high: 1_100, low: 900, close: 1_050, volume: 1_000,
+    }]);
     // 로컬 종목은 미리 등록해 두지 않는다 — 이 미리보기 응답 자체가 unionSymbols 를
     // 자동 등록하므로(Task 4, 아래 describe 참고), 여기서는 등록 여부와 무관하게
-    // 봉이 없다는 사실만 검증한다.
+    // 요청 기간 안의 봉이 없다는 사실만 검증한다. 기간 밖 옛 봉으로 통과하면 안 된다.
 
     const res = await ctx.app.inject({
       method: 'POST',
@@ -728,7 +888,7 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
     expect(readStandardCode('000002')).toBe('KR7000002002');
   });
 
-  it('이미 등록된 종목은 다시 미리보기해도 실패하지 않고 표준코드를 덮어쓰지 않는다', async () => {
+  it('표준코드 없는 기존 등록은 자동 병합하지 않고 준비를 실패시킨다', async () => {
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
       { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
     ]);
@@ -736,37 +896,68 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
     ctx.container.symbolService.addSymbol('005930', 'KR');
     expect(readStandardCode('005930')).toBeNull();
 
-    for (let i = 0; i < 2; i += 1) {
-      const res = await ctx.app.inject({
-        method: 'POST',
-        url: '/api/v1/backtests/universe-preview',
-        cookies: { qp_session: cookie },
-        payload: {
-          universeRule: marketCapRule(),
-          period: { from: '2026-01-05', to: '2026-01-05' },
-        },
-      });
-      expect(res.statusCode).toBe(200);
-    }
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: marketCapRule(),
+        period: { from: '2026-01-05', to: '2026-01-05' },
+      },
+    });
+    // short-keyed 데이터 접근 전 identity guard가 확인하므로 비동기 preparation job을
+    // 만들었다가 실패시키지 않고 요청 경계에서 즉시 거부한다.
+    expect(res.statusCode).toBe(422);
+    expect((res.json() as { error: string }).error)
+      .toMatch(/표준코드가 없는 기존 등록.*검증·이관/);
 
-    // 재등록 시도가 있었어도 기존 값(표준코드 없음)을 덮어쓰지 않는다 —
-    // 단축코드 재사용 판별의 유일한 열쇠라 새 조회로 갈아치우면 안 된다.
+    // 실패해도 기존 값은 몰래 백필하지 않는다 — 검증 없는 덮어쓰기는 단축코드가
+    // 재사용된 경우 다른 증권의 데이터를 합치는 근거가 된다.
     expect(readStandardCode('005930')).toBeNull();
     expect(ctx.container.symbolService.getSymbol('005930')?.name).toBeNull();
   });
 
+  it('미등록 단축코드에 orphan fact가 남아 있으면 새 identity로 자동 등록하지 않는다', async () => {
+    seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [{
+      standardCode: 'KR7005930003',
+      shortCode: '005930',
+      name: '신규 발행사',
+      market: 'KOSPI',
+      marketCapKrw: '500000000000000',
+    }]);
+    // symbols 삭제는 FK가 없는 facts를 지우지 않는다. 과거 issuer의 잔존 데이터를
+    // 신규 SCD pair가 재사용하면 새 회사 재무로 오인할 수 있는 상태를 직접 만든다.
+    await ctx.container.factRepository.saveFacts([{
+      scope: 'SYMBOL',
+      key: '005930',
+      field: 'NET_INCOME',
+      periodKey: '2019-Q4',
+      asOfTsMs: Date.parse('2020-03-01T00:00:00Z'),
+      value: 1,
+      unit: 'KRW',
+    }]);
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: marketCapRule(),
+        period: { from: '2026-01-05', to: '2026-01-05' },
+      },
+    });
+
+    expect(res.statusCode).toBe(422);
+    expect((res.json() as { error: string }).error).toMatch(/기존 단축코드 팩트.*격리·이관/);
+    expect(ctx.container.symbolService.exists('005930')).toBe(false);
+  });
+
   /**
-   * 회귀(스펙 2026-08-06 Task 5 리뷰 발견) — `addSymbol` 은 `symbolCoverage` 캐시를
-   * 채우지 않는다. 그 캐시는 오직 증권사 동기화·CSV 가져오기가 끝난 뒤에만
-   * `refreshCoverage` 로 채워지는데, 상장폐지 종목은 둘 중 어느 것도 겪지 않는다
-   * (증권사는 상장폐지 종목의 봉을 안 주고, CSV 가져오기는 수동이다). `backfill`
-   * 이 이미 `krx_daily_bars` 를 채워 뒀어도 이 갱신이 없으면 `missingCandleSymbols`
-   * 와 가격 데이터 탭 모두 "봉 없음" 으로 남아, Task 4 가 적은 "자동 등록하면
-   * 가격 데이터 탭에서 상장폐지 종목도 보인다" 는 전제가 깨진다 — 이 테스트는
-   * `refreshCoverage` 를 직접 부르지 않고 `krx_daily_bars` 만 미리 심어 둔 채
-   * 미리보기 한 번으로 그 전제가 실제로 성립하는지 확인한다.
+   * 상장폐지 종목은 증권사가 과거 봉을 주지 않으므로 symbol 등록 여부가 아니라
+   * `krx_daily_bars` 를 직접 집계해야 한다. 백필된 KRX 일봉만 있는 자동 등록 종목도
+   * 실행 가능한 가격 데이터로 판정하는지 확인한다.
    */
-  it('krx_daily_bars 만 있고 캐시를 갱신한 적 없는 종목도 missingCandleSymbols 에서 빠진다', async () => {
+  it('krx_daily_bars 가 있는 자동 등록 종목은 missingCandleSymbols 에서 빠진다', async () => {
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
       {
         standardCode: 'KR7900010009',
@@ -776,8 +967,7 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
         marketCapKrw: '500000000000000',
       },
     ]);
-    // 백필이 이미 이 종목의 KRX 일봉을 채워 뒀다고 가정한다 — refreshCoverage 는
-    // 일부러 부르지 않는다. 이 값 자체를 미리보기가 대신 갱신해야 한다.
+    // 백필이 이미 이 종목의 KRX 일봉을 채워 뒀다고 가정한다.
     ctx.container.database.db
       .insert(krxDailyBars)
       .values({
@@ -997,19 +1187,6 @@ describe('POST /backtests/universe-preview — 3단계 파이프라인 진단 (T
     await seedCorporateActionCoverage(ctx.container, ['X', 'Y'], yearRange(2024, 2025));
 
     // PER stage: X·Y는 순이익이 있어 통과하고, Z는 재무가 전혀 없어 missing 제외된다.
-    // coverage는 세 종목 모두 "시도했다" 로 직접 심어 DART 호출 없이 즉시 해소되게 한다.
-    for (const code of ['X', 'Y', 'Z']) {
-      // X·Y는 위 seedCorporateActionCoverage가 이미 symbol_facts_state 행을 만들어 뒀다
-      // (actionCoveredYearsJson만 채운 채) — 같은 행에 재무 coveredYearsJson만 덧붙인다.
-      ctx.container.database.db
-        .insert(symbolFactsState)
-        .values({ code, coveredYearsJson: JSON.stringify([2024, 2025]), updatedAtMs: ctx.container.clock.now() })
-        .onConflictDoUpdate({
-          target: symbolFactsState.code,
-          set: { coveredYearsJson: JSON.stringify([2024, 2025]), updatedAtMs: ctx.container.clock.now() },
-        })
-        .run();
-    }
     // Z 는 coverage만 있고 fact 행은 없는 "시도했지만 공시 0건" 상태다.
     const netIncomeFacts: Fact[] = ['X', 'Y'].flatMap((symbol) =>
       [40, 30, 20, 10].map((value, offset) => ({
@@ -1027,6 +1204,9 @@ describe('POST /backtests/universe-preview — 3단계 파이프라인 진단 (T
       { scope: 'SYMBOL', key: 'Y', field: 'TOTAL_EQUITY', periodKey: '2025Q1', asOfTsMs: Date.parse('2025-01-01T00:00:00Z'), value: 400, unit: 'KRW' },
     ];
     await ctx.container.factRepository.saveFacts([...netIncomeFacts, ...equityFacts]);
+    // manifest는 저장된 snapshot으로 만들어야 한다. coverage부터 심고 뒤에서 fact를
+    // 넣는 순서는 운영에서는 불가능하며 새 무결성 검사가 정확히 stale로 판정한다.
+    seedFinancialCoverage(ctx.container, ['X', 'Y', 'Z'], [2024, 2025]);
   });
 
   afterEach(async () => {

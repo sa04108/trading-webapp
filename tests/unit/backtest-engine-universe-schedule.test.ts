@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { ENGINE_VERSION, runBacktest } from '../../src/server/modules/backtest/domain/engine.js';
+import { runBacktest } from '../../src/server/modules/backtest/domain/engine.js';
 import type { ExecutionProfile, OrderIntent } from '../../src/server/modules/backtest/domain/types.js';
 import { CORPORATE_ACTION_FIELD, type Fact } from '../../src/server/modules/facts/domain/fact.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
@@ -72,8 +72,47 @@ function alwaysBuyBothStrategy(): TradingStrategy<unknown, null> {
 }
 
 describe('runBacktest — 멤버십 일정 기반 거래 대상 제한 (스펙 2026-08-05, §9.5)', () => {
-  it('동시 매수 우선순위 정책 변경을 엔진 버전에 반영한다', () => {
-    expect(ENGINE_VERSION).toBe('1.9.0');
+  it('2봉 리밸런스 전략은 연속 실제 거래 봉 일정을 실행 전에 거부한다', () => {
+    const strategy: TradingStrategy<unknown, null> = {
+      ...alwaysBuyBothStrategy(),
+      id: 'two-bar-rebalance',
+      name: '2봉 테스트',
+      requiredRebalanceGapBars: 1,
+    };
+
+    expect(() => runBacktest(strategy as never, {
+      candles: [bar(0, 100), bar(1, 100), bar(2, 100)],
+      initialCash: 10_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 1,
+      maxPositions: 2,
+      universeSchedule: [
+        { fromTsMs: START, symbols: ['A'] },
+        { fromTsMs: START + HOUR, symbols: ['A'] },
+      ],
+    })).toThrow(/연속 리밸런스.*2026-07-06.*최소 1개 필요/);
+  });
+
+  it('2봉 리밸런스 전략도 신호 사이에 실제 거래 봉 하나가 있으면 실행한다', () => {
+    const strategy: TradingStrategy<unknown, null> = {
+      ...alwaysBuyBothStrategy(),
+      id: 'two-bar-rebalance',
+      requiredRebalanceGapBars: 1,
+    };
+
+    expect(() => runBacktest(strategy as never, {
+      candles: [bar(0, 100), bar(1, 100), bar(2, 100)],
+      initialCash: 10_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 1,
+      maxPositions: 2,
+      universeSchedule: [
+        { fromTsMs: START, symbols: ['A'] },
+        { fromTsMs: START + 2 * HOUR, symbols: ['A'] },
+      ],
+    })).not.toThrow();
   });
 
   it('1구간에서는 일정에 포함된 A 만 매수되고 B 는 거부된다', () => {

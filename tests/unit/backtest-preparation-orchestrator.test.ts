@@ -105,11 +105,26 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
     },
     symbolService: {
       exists: () => true,
+      getRegisteredIdentity: (code: string) => ({ code, standardCode: ENTRY.standardCode }),
+      getRegisteredIdentityByStandardCode: () => null,
       addSymbol: () => undefined,
     },
     factSync: {
       sync: async () => ({ savedFacts: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
       syncCorporateActions: async () => ({ savedFacts: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
+    },
+    actionCoverage: {
+      getCoveredYears: () => new Map<string, readonly number[]>(),
+      getGapYears: () => new Map<string, readonly number[]>(),
+    },
+    factCoverage: {
+      getCoverageState: (codes: readonly string[] = []) => new Map(
+        codes.map((code) => [code, {
+          verifiedYears: [2020, 2021, 2022, 2023, 2024, 2025, 2026],
+          blockingGapYears: [],
+          blockingGapDetails: [],
+        }]),
+      ),
     },
     dartDailyCallLimit: 40_000,
     ...overrides,
@@ -302,6 +317,192 @@ describe('BacktestPreparationOrchestrator MARKET_DATA 진행 표시', () => {
   });
 });
 
+describe('BacktestPreparationOrchestrator 자본변동 gap 차단', () => {
+  it('최종 유니버스의 관련 연도에 보정 불가 gap이 있으면 COMPLETED preview를 만들지 않는다', async () => {
+    let resolveCalls = 0;
+    const ctx = makeDeps({
+      resolver: {
+        // 첫 READY 뒤 final sync가 입력을 바꿔 멤버가 교체되는 경계. gap 검사가 첫
+        // 005930만 보면 새 최종 멤버 000660의 결측을 놓친다.
+        resolveOrDescribeNeeds: async () => resolveCalls++ === 0
+          ? ready(['005930'])
+          : ready(['000660']),
+        isPeriodCovered: () => true,
+      },
+      strategies: {
+        get: (id: string) => id === INPUT.strategyId ? {
+          id,
+          version: '1.0.0',
+          name: id,
+          description: id,
+          parameterSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+          dataRequirements: { requiresCorporateActions: true },
+          initialize: () => ({}),
+          onBars: () => ({ orders: [] }),
+        } : null,
+      },
+      actionCoverage: {
+        // 실행구간 2026-01-05의 정렬 역투영 범위는 2025년까지 걸친다.
+        getCoveredYears: () => new Map([['000660', [2025, 2026]]]),
+        getGapYears: () => new Map([['000660', [2025]]]),
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const job = orchestrator.start(INPUT);
+    await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
+
+    expect(orchestrator.get(job.id)?.error).toMatch(/보정 비율을 만들 수 없는 연도.*000660/);
+    expect(orchestrator.getPreview(job.id)).toBeNull();
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
+  it('final sync 뒤 A에서 B로 바뀌면 B 데이터까지 준비하고 일정이 안정된 뒤 완료한다', async () => {
+    let resolveCalls = 0;
+    const covered = new Map<string, number[]>();
+    const syncedSymbols: string[][] = [];
+    const ctx = makeDeps({
+      resolver: {
+        resolveOrDescribeNeeds: async () => resolveCalls++ === 0
+          ? ready(['005930'])
+          : ready(['000660']),
+        isPeriodCovered: () => true,
+      },
+      strategies: {
+        get: (id: string) => id === INPUT.strategyId ? {
+          id,
+          version: '1.0.0',
+          name: id,
+          description: id,
+          parameterSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+          dataRequirements: { requiresCorporateActions: true },
+          initialize: () => ({}),
+          onBars: () => ({ orders: [] }),
+        } : null,
+      },
+      factSync: {
+        sync: async () => ({ savedFacts: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
+        syncCorporateActions: async (request: {
+          symbols: readonly string[];
+          fromYear: number;
+          toYear: number;
+        }) => {
+          syncedSymbols.push([...request.symbols]);
+          for (const symbol of request.symbols) {
+            const years: number[] = [];
+            for (let year = request.fromYear; year <= request.toYear; year += 1) years.push(year);
+            covered.set(symbol, years);
+          }
+          return { savedFacts: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null };
+        },
+      },
+      actionCoverage: {
+        getCoveredYears: (symbols: readonly string[]) => new Map(
+          [...covered].filter(([symbol]) => symbols.includes(symbol)),
+        ),
+        getGapYears: () => new Map(),
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const job = orchestrator.start(INPUT);
+    await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
+
+    expect(syncedSymbols).toEqual([['005930'], ['000660']]);
+    expect(orchestrator.getPreview(job.id)?.unionSymbols).toEqual(['000660']);
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
+  it('final schedule이 계속 진동하면 제한 없이 sync하지 않고 명시적으로 실패한다', async () => {
+    let resolveCalls = 0;
+    const ctx = makeDeps({
+      resolver: {
+        resolveOrDescribeNeeds: async () => ready([
+          resolveCalls++ % 2 === 0 ? '005930' : '000660',
+        ]),
+        isPeriodCovered: () => true,
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const job = orchestrator.start(INPUT);
+    await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
+
+    expect(orchestrator.get(job.id)?.error).toMatch(/8회 안에 안정되지 않았습니다/);
+    expect(resolveCalls).toBe(9);
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+});
+
+describe('BacktestPreparationOrchestrator 재무 coverage 불변식', () => {
+  const valueInput: PreparationInput = {
+    ...INPUT,
+    strategyId: 'value-quality-rank',
+    parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+  };
+
+  const completeActionCoverage = {
+    getCoveredYears: (symbols: readonly string[]) => new Map(
+      symbols.map((symbol) => [symbol, [2025, 2026]]),
+    ),
+    getGapYears: () => new Map<string, readonly number[]>(),
+  };
+
+  it('최종 종목의 필수 연도가 일부 빠지면 COMPLETED preview를 만들지 않는다', async () => {
+    const ctx = makeDeps({
+      strategies: new StrategyRegistry(),
+      actionCoverage: completeActionCoverage,
+      factCoverage: {
+        getCoverageState: () => new Map([['005930', {
+          verifiedYears: [2026], blockingGapYears: [], blockingGapDetails: [],
+        }]]),
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const job = orchestrator.start(valueInput);
+    await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
+
+    expect(orchestrator.get(job.id)?.error).toMatch(/coverage.*2025~2026년.*005930/);
+    expect(orchestrator.getPreview(job.id)).toBeNull();
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
+  it('완료 뒤 coverage가 사라지면 ready/cached preview를 재사용하지 않는다', async () => {
+    const covered = new Map<string, readonly number[]>([['005930', [2025, 2026]]]);
+    const ctx = makeDeps({
+      strategies: new StrategyRegistry(),
+      actionCoverage: completeActionCoverage,
+      factCoverage: {
+        getCoverageState: (symbols: readonly string[]) => new Map(
+          [...covered]
+            .filter(([symbol]) => symbols.includes(symbol))
+            .map(([symbol, years]) => [symbol, {
+              verifiedYears: years, blockingGapYears: [], blockingGapDetails: [],
+            }]),
+        ),
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const job = orchestrator.start(valueInput);
+    await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
+    expect(await orchestrator.getReadyPreview(valueInput)).not.toBeNull();
+    expect(orchestrator.getCachedPreview(valueInput)).not.toBeNull();
+
+    covered.set('005930', [2026]);
+    expect(await orchestrator.getReadyPreview(valueInput)).toBeNull();
+    expect(orchestrator.getCachedPreview(valueInput)).toBeNull();
+
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+});
+
 describe('BacktestPreparationOrchestrator single-flight와 직렬 실행', () => {
   it('공유 DB의 경쟁 write가 먼저 commit돼도 두 orchestrator는 같은 active id를 반환한다', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qp-prep-race-'));
@@ -409,6 +610,115 @@ describe('BacktestPreparationOrchestrator single-flight와 직렬 실행', () =>
       'QUEUED', 'RUNNING', 'COMPLETED',
     ]);
     unsubscribe();
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+});
+
+describe('BacktestPreparationOrchestrator 기존 종목 정체성 검증', () => {
+  it('표준코드가 없는 기존 단축코드를 자동 병합하지 않는다', async () => {
+    let addCalls = 0;
+    const ctx = makeDeps({
+      symbolService: {
+        exists: () => true,
+        getRegisteredIdentity: () => ({ code: ENTRY.shortCode, standardCode: null }),
+        getRegisteredIdentityByStandardCode: () => null,
+        addSymbol: () => { addCalls += 1; },
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const job = orchestrator.start(INPUT);
+    await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
+
+    expect(orchestrator.get(job.id)?.error).toMatch(/표준코드가 없는 기존 등록.*자동|정체성을 검증·이관/);
+    expect(addCalls).toBe(0);
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
+  it('같은 단축코드의 기존 표준코드가 다르면 코드 재사용으로 보고 거부한다', async () => {
+    const ctx = makeDeps({
+      symbolService: {
+        exists: () => true,
+        getRegisteredIdentity: () => ({ code: ENTRY.shortCode, standardCode: 'KR7000000000' }),
+        getRegisteredIdentityByStandardCode: () => null,
+        addSymbol: () => undefined,
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const job = orchestrator.start(INPUT);
+    await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
+
+    expect(orchestrator.get(job.id)?.error).toMatch(
+      /KR7000000000.*KR7005930003.*다른 증권에 재사용/,
+    );
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
+  it('등록된 표준코드가 KRX entry와 같으면 기존 행을 재사용한다', async () => {
+    let addCalls = 0;
+    const ctx = makeDeps({
+      symbolService: {
+        exists: () => true,
+        getRegisteredIdentity: () => ({ code: ENTRY.shortCode, standardCode: ENTRY.standardCode }),
+        getRegisteredIdentityByStandardCode: () => ({
+          code: ENTRY.shortCode,
+          standardCode: ENTRY.standardCode,
+        }),
+        addSymbol: () => { addCalls += 1; },
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const job = orchestrator.start(INPUT);
+    await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
+
+    expect(addCalls).toBe(0);
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
+  it('같은 표준코드가 다른 단축코드에 등록돼 있으면 raw unique 오류 대신 안전하게 거부한다', async () => {
+    let addCalls = 0;
+    const ctx = makeDeps({
+      symbolService: {
+        exists: () => false,
+        getRegisteredIdentity: () => null,
+        getRegisteredIdentityByStandardCode: () => ({
+          code: '000001',
+          standardCode: ENTRY.standardCode,
+        }),
+        addSymbol: () => { addCalls += 1; },
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const job = orchestrator.start(INPUT);
+    await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
+
+    expect(orchestrator.get(job.id)?.error).toMatch(/기존 단축코드\(000001\).*005930.*실행을 차단/);
+    expect(addCalls).toBe(0);
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
+  it('READY 일정 멤버의 identity 원본이 누락되면 조용히 등록을 건너뛰지 않는다', async () => {
+    const malformed = { ...ready(), unionEntries: new Map<string, SymbolMasterEntry>() };
+    const ctx = makeDeps({
+      resolver: {
+        resolveOrDescribeNeeds: async () => malformed,
+        isPeriodCovered: () => true,
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const job = orchestrator.start(INPUT);
+    await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
+
+    expect(orchestrator.get(job.id)?.error).toMatch(/identity 원본.*누락.*실행을 차단/);
     await orchestrator.stop();
     ctx.handle.close();
   });

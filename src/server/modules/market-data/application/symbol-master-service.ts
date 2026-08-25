@@ -18,6 +18,7 @@ import type { Clock } from '../../../shared/clock.js';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import {
   dailySelectionMetrics,
+  facts,
   krxDailyBars,
   krxNonTradingDays,
   krxNonTradingCoverage,
@@ -29,6 +30,7 @@ import {
   symbolMasterStorageState,
   symbolMasterTradingDays,
   symbolMasterVersions,
+  symbols as registeredSymbols,
 } from '../../../shared/db/schema.js';
 import type { Logger } from '../../../shared/logger.js';
 import type { Candle } from '../domain/candle.js';
@@ -36,6 +38,14 @@ import { isValidCandle } from '../domain/candle.js';
 import { classifyKrxIssue } from '../domain/krx-filter-policy.js';
 import { addCalendarDays, isWeekendDate } from '../domain/kst-date.js';
 import { isNonTradingRow } from '../domain/non-trading-day.js';
+import {
+  inferUniqueSymbolIdentities,
+  validateSymbolIdentityLifetime,
+  type KnownSymbolIdentityVersion,
+  type SymbolIdentityInferenceResult,
+  type SymbolIdentitySelection,
+  type SymbolIdentityValidationResult,
+} from '../domain/symbol-identity-lifetime.js';
 import type {
   KrxDailyTradeRow,
   KrxIssueBaseInfoRow,
@@ -58,6 +68,11 @@ import {
 import { SelectionMetricRepository } from './selection-metric-repository.js';
 import type { KrxHistoricalUniverseSource } from './ports.js';
 
+/** 0005 legacy 이행이 거래일 테이블에 남긴 주말 경계를 실제 거래일에서 제외한다. */
+function storedTradingDateIsWeekday() {
+  return sql`strftime('%w', ${symbolMasterTradingDays.date}) NOT IN ('0', '6')`;
+}
+
 export interface SymbolMasterEventRow extends SymbolMasterEventDraft {
   readonly id: string;
 }
@@ -71,6 +86,20 @@ export interface SymbolMasterServiceDeps {
   readonly source: KrxHistoricalUniverseSource;
   readonly clock: Clock;
   readonly logger: Logger;
+}
+
+export interface KnownRegisteredSymbolIdentity {
+  readonly code: string;
+  readonly standardCode: string | null;
+}
+
+export interface SymbolIdentitySnapshot {
+  readonly versions: readonly KnownSymbolIdentityVersion[];
+  readonly registrations: readonly KnownRegisteredSymbolIdentity[];
+  /** 현재 미등록 shortCode에 남아 있는 issuer 미확정 point-in-time fact. */
+  readonly unregisteredFactShortCodes: readonly string[];
+  /** 어떤 알려진 SCD identity 구간에도 속하지 않는 가격 봉을 가진 shortCode. */
+  readonly uncoveredBarShortCodes: readonly string[];
 }
 
 /** 요청한 날짜가 수집 완료 구간에 없을 때 던진다. */
@@ -458,6 +487,7 @@ export class SymbolMasterService {
         and(
           gte(symbolMasterTradingDays.date, covering.startDate),
           lte(symbolMasterTradingDays.date, date),
+          storedTradingDateIsWeekday(),
         ),
       )
       .orderBy(desc(symbolMasterTradingDays.date))
@@ -650,7 +680,10 @@ export class SymbolMasterService {
     return db
       .select({ date: symbolMasterTradingDays.date })
       .from(symbolMasterTradingDays)
-      .where(gt(symbolMasterTradingDays.date, date))
+      .where(and(
+        gt(symbolMasterTradingDays.date, date),
+        storedTradingDateIsWeekday(),
+      ))
       .orderBy(asc(symbolMasterTradingDays.date))
       .limit(1)
       .get()?.date;
@@ -714,6 +747,236 @@ export class SymbolMasterService {
   /** date 를 포함한 연속 coverage 안에 실제 거래일 anchor 가 있어 유니버스를 읽을 수 있는지 본다. */
   canResolveUniverseAsOf(date: string): boolean {
     return this.effectiveTradingDateWithinCoverage(date) !== undefined;
+  }
+
+  /**
+   * 선택된 (단축코드, 표준코드)를 알려진 SCD 전체 생애와 대조한다.
+   *
+   * 단축코드와 표준코드 양쪽으로 연관 행을 batch 조회한다. 어느 한쪽만 조회하면
+   * 단축코드 재사용 또는 표준코드의 단축코드 변경 중 한 방향을 놓치므로 둘 다 읽고,
+   * 겹쳐 읽은 행은 id로 제거한 뒤 공통 도메인 validator에 넘긴다.
+   */
+  validateIdentityLifetime(
+    selections: readonly SymbolIdentitySelection[],
+  ): SymbolIdentityValidationResult {
+    if (selections.length === 0) return { safe: true, conflicts: [] };
+    const snapshot = this.readIdentitySnapshot(
+      selections.map((selection) => selection.shortCode),
+      selections.map((selection) => selection.standardCode),
+      false,
+    );
+    return validateSymbolIdentityLifetime(selections, snapshot.versions);
+  }
+
+  /**
+   * 표준코드가 없는 legacy schedule의 단축코드를 전체 SCD 생애에서 보수적으로 추론한다.
+   * short→standard를 먼저 읽은 뒤, 발견한 모든 standard의 전체 버전을 다시 읽어
+   * 반대 방향도 1:1임을 확인한다. unknown/ambiguous 코드는 identity를 돌려주지 않는다.
+   */
+  inferUniqueLifetimeIdentities(
+    shortCodes: readonly string[],
+  ): SymbolIdentityInferenceResult {
+    if (shortCodes.length === 0) return { safe: true, identities: [], conflicts: [] };
+    const requested = [...new Set(shortCodes)];
+    const snapshot = this.readIdentitySnapshot(requested, [], false);
+    return inferUniqueSymbolIdentities(requested, snapshot.versions);
+  }
+
+  /**
+   * SCD 양방향 이력과 현재 등록 identity를 하나의 SQLite read snapshot으로 읽는다.
+   * legacy short→standard→short 추론, modern pair 검증, 등록 owner 확인이 서로 다른
+   * commit을 섞으면 순간적으로 false-safe가 될 수 있으므로 모든 batch SELECT를 한
+   * transaction에 둔다. includeRegistrations=false는 resolver의 후보 조기 검사용이다.
+   */
+  readIdentitySnapshot(
+    shortCodes: readonly string[],
+    standardCodes: readonly string[],
+    includeRegistrations = true,
+  ): SymbolIdentitySnapshot {
+    return SymbolMasterService.readIdentitySnapshotFromDatabase(
+      this.deps.db,
+      shortCodes,
+      standardCodes,
+      includeRegistrations,
+    );
+  }
+
+  /** 별도 결과-import 프로세스도 같은 SQLite transaction에서 identity를 검증하게 한다. */
+  static readIdentitySnapshotFromDatabase(
+    db: AppDatabase,
+    shortCodes: readonly string[],
+    standardCodes: readonly string[],
+    includeRegistrations = true,
+  ): SymbolIdentitySnapshot {
+    const requestedShorts = [...new Set(shortCodes)].sort();
+    const requestedStandards = [...new Set(standardCodes)].sort();
+
+    return db.transaction((tx) => {
+      const versionsById = new Map<number, KnownSymbolIdentityVersion>();
+      const rememberVersions = (
+        rows: readonly (KnownSymbolIdentityVersion & { readonly id: number })[],
+      ): void => {
+        for (const { id, ...row } of rows) versionsById.set(id, row);
+      };
+      const readVersionsByShort = (codes: readonly string[]): void => {
+        for (let i = 0; i < codes.length; i += 500) {
+          rememberVersions(tx
+            .select({
+              id: symbolMasterVersions.id,
+              shortCode: symbolMasterVersions.shortCode,
+              standardCode: symbolMasterVersions.standardCode,
+              validFromDate: symbolMasterVersions.validFromDate,
+              validToDate: symbolMasterVersions.validToDate,
+            })
+            .from(symbolMasterVersions)
+            .where(inArray(symbolMasterVersions.shortCode, codes.slice(i, i + 500)))
+            .all());
+        }
+      };
+      const readVersionsByStandard = (codes: readonly string[]): void => {
+        for (let i = 0; i < codes.length; i += 500) {
+          rememberVersions(tx
+            .select({
+              id: symbolMasterVersions.id,
+              shortCode: symbolMasterVersions.shortCode,
+              standardCode: symbolMasterVersions.standardCode,
+              validFromDate: symbolMasterVersions.validFromDate,
+              validToDate: symbolMasterVersions.validToDate,
+            })
+            .from(symbolMasterVersions)
+            .where(inArray(symbolMasterVersions.standardCode, codes.slice(i, i + 500)))
+            .all());
+        }
+      };
+
+      readVersionsByShort(requestedShorts);
+      const connectedStandards = [...new Set([
+        ...requestedStandards,
+        ...[...versionsById.values()].map((version) => version.standardCode),
+      ])].sort();
+      readVersionsByStandard(connectedStandards);
+
+      const registrationsByCode = new Map<string, KnownRegisteredSymbolIdentity>();
+      const rememberRegistrations = (rows: readonly KnownRegisteredSymbolIdentity[]): void => {
+        for (const row of rows) registrationsByCode.set(row.code, row);
+      };
+      if (includeRegistrations) {
+        for (let i = 0; i < requestedShorts.length; i += 500) {
+          rememberRegistrations(tx
+            .select({
+              code: registeredSymbols.code,
+              standardCode: registeredSymbols.standardCode,
+            })
+            .from(registeredSymbols)
+            .where(inArray(registeredSymbols.code, requestedShorts.slice(i, i + 500)))
+            .all());
+        }
+        for (let i = 0; i < connectedStandards.length; i += 500) {
+          rememberRegistrations(tx
+            .select({
+              code: registeredSymbols.code,
+              standardCode: registeredSymbols.standardCode,
+            })
+            .from(registeredSymbols)
+            .where(inArray(
+              registeredSymbols.standardCode,
+              connectedStandards.slice(i, i + 500),
+            ))
+            .all());
+        }
+      }
+
+      const unregisteredShorts = includeRegistrations
+        ? requestedShorts.filter((shortCode) => !registrationsByCode.has(shortCode))
+        : [];
+      const unregisteredFactShortCodes = new Set<string>();
+      const uncoveredBarShortCodes = new Set<string>();
+      for (let i = 0; i < unregisteredShorts.length; i += 500) {
+        const chunk = unregisteredShorts.slice(i, i + 500);
+        for (const row of tx
+          .select({ shortCode: facts.key })
+          .from(facts)
+          .where(and(eq(facts.scope, 'SYMBOL'), inArray(facts.key, chunk)))
+          .groupBy(facts.key)
+          .all()) {
+          unregisteredFactShortCodes.add(row.shortCode);
+        }
+      }
+      const residueShorts = includeRegistrations ? requestedShorts : [];
+      for (let i = 0; i < residueShorts.length; i += 500) {
+        const chunk = residueShorts.slice(i, i + 500);
+        // 신규 master 수집이 symbols 등록보다 먼저 당일 봉을 저장하는 것은 정상이다.
+        // 따라서 봉 존재 자체가 아니라, 그 날짜를 덮는 알려진 SCD 구간이 없는 경우만
+        // 과거 issuer의 orphan 입력으로 본다. 이미 등록된 shortCode도 이전 버전의 준비
+        // 경로가 SCD 검증 없이 등록했을 수 있으므로 빠뜨리지 않는다.
+        for (const row of tx
+          .select({ shortCode: krxDailyBars.shortCode })
+          .from(krxDailyBars)
+          .where(and(
+            inArray(krxDailyBars.shortCode, chunk),
+            sql`NOT EXISTS (
+              SELECT 1
+              FROM symbol_master_versions AS identity_version
+              WHERE identity_version.short_code = ${krxDailyBars.shortCode}
+                AND identity_version.valid_from_date <= ${krxDailyBars.date}
+                AND (
+                  identity_version.valid_to_date IS NULL
+                  OR identity_version.valid_to_date > ${krxDailyBars.date}
+                )
+            )`,
+            // 같은 standard/short pair가 gap 양쪽에서 다시 이어지면 기존 코드도
+            // 폐지가 아니라 KRX base-info의 일시 결측으로 취급한다. 첫 관측 전이나
+            // 최종 종료 뒤의 외측 orphan, 다른 pair 사이의 gap은 계속 차단한다.
+            sql`NOT EXISTS (
+              SELECT 1
+              FROM symbol_master_versions AS prior_identity
+              WHERE prior_identity.id = (
+                SELECT nearest_prior.id
+                FROM symbol_master_versions AS nearest_prior
+                WHERE nearest_prior.short_code = ${krxDailyBars.shortCode}
+                  AND nearest_prior.valid_to_date IS NOT NULL
+                  AND nearest_prior.valid_to_date <= ${krxDailyBars.date}
+                ORDER BY nearest_prior.valid_to_date DESC, nearest_prior.valid_from_date DESC,
+                         nearest_prior.id DESC
+                LIMIT 1
+              )
+                AND EXISTS (
+                  SELECT 1
+                  FROM symbol_master_versions AS later_identity
+                  WHERE later_identity.id = (
+                    SELECT nearest_later.id
+                    FROM symbol_master_versions AS nearest_later
+                    WHERE nearest_later.short_code = ${krxDailyBars.shortCode}
+                      AND nearest_later.valid_from_date > ${krxDailyBars.date}
+                    ORDER BY nearest_later.valid_from_date ASC, nearest_later.id ASC
+                    LIMIT 1
+                  )
+                    AND later_identity.short_code = prior_identity.short_code
+                    AND later_identity.standard_code = prior_identity.standard_code
+                )
+            )`,
+          ))
+          .groupBy(krxDailyBars.shortCode)
+          .all()) {
+          uncoveredBarShortCodes.add(row.shortCode);
+        }
+      }
+
+      const versions = [...versionsById.values()].sort(
+        (left, right) => left.standardCode.localeCompare(right.standardCode)
+          || left.validFromDate.localeCompare(right.validFromDate)
+          || left.shortCode.localeCompare(right.shortCode),
+      );
+      const registrations = [...registrationsByCode.values()].sort(
+        (left, right) => left.code.localeCompare(right.code),
+      );
+      return {
+        versions,
+        registrations,
+        unregisteredFactShortCodes: [...unregisteredFactShortCodes].sort(),
+        uncoveredBarShortCodes: [...uncoveredBarShortCodes].sort(),
+      };
+    });
   }
 
   /**
@@ -937,7 +1200,10 @@ export class SymbolMasterService {
     const row = this.deps.db
       .select({ date: symbolMasterTradingDays.date })
       .from(symbolMasterTradingDays)
-      .where(lte(symbolMasterTradingDays.date, date))
+      .where(and(
+        lte(symbolMasterTradingDays.date, date),
+        storedTradingDateIsWeekday(),
+      ))
       .orderBy(desc(symbolMasterTradingDays.date))
       .limit(1)
       .get();
@@ -1313,7 +1579,10 @@ export class SymbolMasterService {
     const observedDates = this.deps.db
       .select({ date: symbolMasterTradingDays.date })
       .from(symbolMasterTradingDays)
-      .where(lt(symbolMasterTradingDays.date, to))
+      .where(and(
+        lt(symbolMasterTradingDays.date, to),
+        storedTradingDateIsWeekday(),
+      ))
       .orderBy(asc(symbolMasterTradingDays.date))
       .all()
       .map((row) => row.date);

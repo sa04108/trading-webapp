@@ -168,6 +168,7 @@ export class ResultsService {
       .select()
       .from(backtestMonthlyReturns)
       .where(eq(backtestMonthlyReturns.jobId, jobId))
+      .orderBy(asc(backtestMonthlyReturns.year), asc(backtestMonthlyReturns.month))
       .all()
       .map((row) => ({ year: row.year, month: row.month, returnPct: row.returnPct }));
     const symbols = this.db
@@ -247,6 +248,7 @@ export class ResultsService {
         .select()
         .from(backtestMonthlyReturns)
         .where(eq(backtestMonthlyReturns.jobId, jobId))
+        .orderBy(asc(backtestMonthlyReturns.year), asc(backtestMonthlyReturns.month))
         .all(),
       benchmark: this.getBenchmark(jobId),
     };

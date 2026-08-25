@@ -110,7 +110,7 @@ export function BacktestJobCard({
             <span className="text-muted-foreground">
               MDD {formatSignedPct(job.metrics.maxDrawdownPct)}
             </span>
-            <span className="text-muted-foreground">거래 {job.metrics.tradeCount}건</span>
+            <span className="text-muted-foreground">매도 체결 {job.metrics.tradeCount}건</span>
           </div>
         ) : null}
         {job.error ? <p className="text-xs text-destructive">{job.error}</p> : null}

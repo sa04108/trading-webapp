@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { periodToTsRange } from '../../shared/schemas/backtest-request.js';
 import type { AppConfig } from './config.js';
 import { readGitCommitSha } from '../shared/build-info.js';
 import { createLogger, type Logger } from '../shared/logger.js';
@@ -36,6 +37,7 @@ import type { CandleRepository } from '../modules/market-data/application/ports.
 import { createTossStockInfoSource } from '../modules/broker/infrastructure/toss/toss-stock-info-source.js';
 import { KrxDailyCandleRepository } from '../modules/market-data/infrastructure/krx-daily-candle-repository.js';
 import { StrategyRegistry } from '../modules/strategy/application/strategy-registry.js';
+import { strategyRequiresFinancialData } from '../modules/strategy/domain/strategy.js';
 import { JobOrchestrator, type JobEvent } from '../modules/backtest/application/job-orchestrator.js';
 import { JobQueue } from '../modules/backtest/application/job-queue.js';
 import { ResultsService } from '../modules/backtest/application/results-service.js';
@@ -53,6 +55,7 @@ import {
   type FactCoverageStore,
 } from '../modules/facts/application/fact-coverage-store.js';
 import { FactSyncService } from '../modules/facts/application/fact-sync-service.js';
+import { FinancialFactAvailabilityService } from '../modules/facts/application/financial-fact-availability.js';
 import { createDartFactSource } from '../modules/facts/infrastructure/dart/dart-fact-source.js';
 import { SqliteFactRepository } from '../modules/facts/infrastructure/sqlite-fact-repository.js';
 import { createKrxHistoricalUniverseSource } from '../modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
@@ -63,6 +66,17 @@ import { SymbolMasterScheduler } from '../modules/market-data/application/symbol
 import { SelectionMetricRepository } from '../modules/market-data/application/selection-metric-repository.js';
 import { UniverseRuleResolver } from '../modules/backtest/application/universe-rule-resolver.js';
 import { BacktestPreparationOrchestrator } from '../modules/backtest/application/backtest-preparation-orchestrator.js';
+import {
+  assertSafePinnedScheduleIdentities,
+} from '../modules/backtest/application/backtest-symbol-identity.js';
+import {
+  financialCoverageGapMessage,
+  findFinancialCoverageGap,
+} from '../modules/backtest/application/backtest-financial-coverage.js';
+import {
+  delistedEventsToTsMsBySymbol,
+  financialFactCutoffsFromCoverage,
+} from '../modules/backtest/application/backtest-financial-execution-window.js';
 import { BenchmarkService } from '../modules/market-data/application/benchmark-service.js';
 import { RemoteWorkerService } from '../modules/backtest/application/remote-worker-service.js';
 import { RemoteInputBundleManager } from '../modules/backtest/infrastructure/remote-input-bundle-manager.js';
@@ -106,6 +120,7 @@ export interface Container {
   readonly seedCloneBatchService: SeedCloneBatchService;
   readonly benchmarkService: BenchmarkService;
   readonly factRepository: FactRepository;
+  readonly financialFactAvailabilityService: FinancialFactAvailabilityService;
   readonly factSyncService: FactSyncService;
   readonly symbolMasterService: SymbolMasterService;
   readonly symbolMasterBackfill: SymbolMasterBackfill;
@@ -118,7 +133,7 @@ export interface Container {
    * 없앴다.
    */
   readonly actionCoverageStore: CorporateActionCoverageStore;
-  /** 재무 수집 coverage. 팩트와 같은 SQLite 파일에 있어 별도 실체 검사가 필요 없다. */
+  /** 재무 수집 coverage. 실제 PIT 재무 행 존재 여부와는 별도 상태다. */
   readonly factCoverageStore: FactCoverageStore;
   readonly backtestPreparationOrchestrator: BacktestPreparationOrchestrator;
   close(): Promise<void>;
@@ -232,6 +247,7 @@ export function createContainer(config: AppConfig): Container {
   const symbolService = new SymbolService(database.db, clock, auditLog);
 
   const factRepository = new SqliteFactRepository(database.db);
+  const financialFactAvailabilityService = new FinancialFactAvailabilityService(database.db);
   const factSource = createDartFactSource(
     config.dartApiKey ? { baseUrl: config.dartBaseUrl, apiKey: config.dartApiKey } : null,
     logger,
@@ -335,6 +351,8 @@ export function createContainer(config: AppConfig): Container {
     database,
     resolver: universeRuleResolver,
     factSync: factSyncService,
+    factCoverage: factCoverageStore,
+    actionCoverage: actionCoverageStore,
     symbolMaster: symbolMasterService,
     strategies: strategyRegistry,
     symbolService,
@@ -364,6 +382,66 @@ export function createContainer(config: AppConfig): Container {
     jobQueue,
     config.maxQueuedBacktests,
     clock,
+    (schedule, request) => {
+      assertSafePinnedScheduleIdentities(schedule, {
+        symbolMaster: symbolMasterService,
+      });
+      if (!symbolMasterService.isRangeCovered(request.period.from, request.period.to)) {
+        throw new Error(
+          '종목 마스터가 백테스트 기간 전체를 커버하지 않습니다 — '
+            + '기간 전체 KRX 데이터를 동기화한 뒤 난수 시드 실험을 다시 시작하세요.',
+        );
+      }
+      const symbols = [...new Set(schedule.flatMap((entry) => entry.symbols))].sort();
+      const { fromTsMs, toTsMs } = periodToTsRange(request.period);
+      const periodCoverage = candleCoverageService
+        .getCoverageBetween(symbols, fromTsMs, toTsMs);
+      const missingSymbols = periodCoverage
+        .filter((row) => row.barCount === 0)
+        .map((row) => row.code);
+      if (missingSymbols.length > 0) {
+        throw new Error(
+          `선택한 기간에 일봉이 없는 유니버스 종목이 있습니다: ${missingSymbols.join(', ')} — `
+            + '일봉을 동기화한 뒤 난수 시드 실험을 다시 시작하세요.',
+        );
+      }
+      const strategy = strategyRegistry.get(request.strategyId);
+      if (strategy === null) {
+        throw new Error(`알 수 없는 전략입니다: ${request.strategyId}`);
+      }
+      const financialCoverageGap = findFinancialCoverageGap({
+        request,
+        strategy,
+        symbols,
+        coverage: factCoverageStore,
+      });
+      if (financialCoverageGap !== null) {
+        throw new Error(financialCoverageGapMessage(financialCoverageGap));
+      }
+      if (!strategyRequiresFinancialData(strategy)) return;
+      const financialCutoffs = financialFactCutoffsFromCoverage({
+        period: request.period,
+        schedule,
+        delistedTsMsBySymbol: delistedEventsToTsMsBySymbol(
+          symbolMasterService.delistedEventsBetween(request.period.from, request.period.to),
+        ),
+        candles: candleCoverageService,
+      });
+      const missingCutoffs = symbols.filter((symbol) => !financialCutoffs.has(symbol));
+      if (missingCutoffs.length > 0) {
+        throw new Error(
+          `실제 편입 기간·상장폐지 이전에 실행 가능한 일봉이 없는 종목이 있습니다: ${missingCutoffs.join(', ')} — `
+          + '일봉과 유니버스 데이터를 다시 준비한 뒤 난수 시드 실험을 다시 시작하세요.',
+        );
+      }
+      if (financialFactAvailabilityService.symbolsWithFinancialFacts(financialCutoffs).size === 0) {
+        throw new Error(
+          '재무 coverage 기록은 있지만 마지막 실행 봉까지 사용 가능한 재무 데이터가 '
+            + `유니버스 전체에 없습니다: ${symbols.join(', ')} — `
+            + '기간 종료일·유니버스·전략을 조정한 뒤 난수 시드 실험을 다시 시작하세요.',
+        );
+      }
+    },
   );
   const backtestNotificationListener = createBacktestNotificationListener({
     queue: jobQueue,
@@ -457,6 +535,7 @@ export function createContainer(config: AppConfig): Container {
     seedCloneBatchService,
     benchmarkService,
     factRepository,
+    financialFactAvailabilityService,
     factCoverageStore,
     factSyncService,
     symbolMasterService,

@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { backtestTrades } from '../../src/server/shared/db/schema.js';
+import {
+  backtestMonthlyReturns,
+  backtestTrades,
+} from '../../src/server/shared/db/schema.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { createTestApp } from '../helpers/test-app.js';
 
@@ -37,6 +40,34 @@ describe('ResultsService.getChartSeries', () => {
         '000660',
         '005930',
       ]);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it('월별 결과는 삽입 순서와 무관하게 차트와 export에서 연월순으로 조회한다', async () => {
+    const context = await createTestApp();
+    try {
+      const job = context.container.jobQueue.enqueue(REQUEST);
+      context.container.database.db.insert(backtestMonthlyReturns).values([
+        { jobId: job.id, year: 2026, month: 2, returnPct: 2 },
+        { jobId: job.id, year: 2025, month: 12, returnPct: 12 },
+        { jobId: job.id, year: 2026, month: 1, returnPct: 1 },
+      ]).run();
+
+      const expected = [
+        { year: 2025, month: 12 },
+        { year: 2026, month: 1 },
+        { year: 2026, month: 2 },
+      ];
+      expect(
+        context.container.resultsService.getChartSeries(job.id).monthly
+          .map(({ year, month }) => ({ year, month })),
+      ).toEqual(expected);
+      expect(
+        context.container.resultsService.getFullExport(job.id).monthlyReturns
+          .map(({ year, month }) => ({ year, month })),
+      ).toEqual(expected);
     } finally {
       await context.close();
     }

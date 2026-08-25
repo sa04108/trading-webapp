@@ -1,10 +1,17 @@
 import { createHash } from 'node:crypto';
 import type { BacktestRequest } from '../../../../shared/schemas/backtest-request.js';
 import { computeRebalanceDates } from '../../../../shared/schemas/rebalance-interval.js';
+import { CORPORATE_ACTION_ALIGNMENT_WINDOW } from '../../facts/domain/corporate-action-effective-date.js';
 import { derivePreparationFactYearRange } from '../../market-data/domain/fact-year-range.js';
 import { addCalendarDays } from '../../market-data/domain/kst-date.js';
-import type { AnyTradingStrategy } from '../../strategy/domain/strategy.js';
+import {
+  strategyRequiresFinancialData,
+  type AnyTradingStrategy,
+} from '../../strategy/domain/strategy.js';
 import type { UniverseDataNeed } from './universe-rule-resolver.js';
+
+/** 데이터 필요 범위의 의미가 바뀌면 완료된 이전 preparation을 재사용하지 않는다. */
+export const BACKTEST_PREPARATION_PLAN_VERSION = '4.0.0';
 
 export interface BacktestPreparationPlan {
   readonly requestHash: string;
@@ -43,7 +50,11 @@ export function buildBacktestPreparationPlan(input: {
   const fundamentalLookbackQuarters = Math.max(universeLookback, strategyLookback);
 
   const financialSymbols = new Set(resolutionNeeds.factSymbols);
-  if (strategyLookback > 0) for (const symbol of finalSymbols) financialSymbols.add(symbol);
+  // requiresFundamentals 전략은 lookback을 생략해도 기간 안 재무가 필요하다는 계약이다.
+  // 수집 조건과 제출/worker 검증 조건을 같은 boolean에 묶어 영구 재준비 루프를 막는다.
+  if (strategyRequiresFinancialData(strategy)) {
+    for (const symbol of finalSymbols) financialSymbols.add(symbol);
+  }
   const financialRange = derivePreparationFactYearRange(
     request.period,
     fundamentalLookbackQuarters,
@@ -63,6 +74,12 @@ export function buildBacktestPreparationPlan(input: {
     );
   }
   const priceWarmupBars = strategy.dataRequirements?.priceWarmupBars?.(parsedParameters.data) ?? 0;
+  const declineWarmupBars = request.universeRule.stages.reduce(
+    (maximum, stage) => stage.criterion === 'DECLINE'
+      ? Math.max(maximum, stage.lookbackTradingDays)
+      : maximum,
+    0,
+  );
   if (priceWarmupBars > 0) {
     for (const symbol of finalSymbols) priceSymbols.add(symbol);
     const strategyRange = {
@@ -76,8 +93,29 @@ export function buildBacktestPreparationPlan(input: {
   if (strategy.dataRequirements?.requiresCorporateActions === true) {
     for (const symbol of finalSymbols) actionSymbols.add(symbol);
   }
-  const actionFrom = priceRange?.from ?? request.period.from;
-  const actionTo = priceRange?.to ?? request.period.to;
+  // Worker는 전략 워밍업뿐 아니라 DECLINE stage의 최대 lookback만큼 실제 거래일을
+  // 거슬러 올라가 그 봉들에도 자본변동을 적용한다. final preparation에서는 아직
+  // 정확한 거래일 달력을 알 수 없으므로 기존 가격 계획과 같은 보수적 달력 범위를 쓴다.
+  const executionWarmupBars = Math.ceil(Math.max(0, priceWarmupBars, declineWarmupBars));
+  const conservativeExecutionFrom = executionWarmupBars === 0
+    ? request.period.from
+    : addCalendarDays(request.period.from, -(executionWarmupBars * 2 + 14));
+  const plannedExecutionFrom = priceRange?.from ?? request.period.from;
+  const actionExecutionFrom = plannedExecutionFrom < conservativeExecutionFrom
+    ? plannedExecutionFrom
+    : conservativeExecutionFrom;
+  const actionExecutionTo = priceRange?.to ?? request.period.to;
+  // 실제 변경일 E가 엔진 입력 구간에 들어오려면 DART 기준일 R은
+  // E-90일~E+30일일 수 있다. 이 인접 연도를 준비하지 않으면 raw action 자체가 없어
+  // worker의 미정렬 fail-closed도 작동할 수 없다.
+  const actionFrom = addCalendarDays(
+    actionExecutionFrom,
+    -CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays,
+  );
+  const actionTo = addCalendarDays(
+    actionExecutionTo,
+    CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays,
+  );
 
   return {
     requestHash: backtestPreparationRequestHash(request, strategy),
@@ -104,6 +142,7 @@ export function backtestPreparationRequestHash(
   strategy: Pick<AnyTradingStrategy, 'version'>,
 ): string {
   const canonicalInput = {
+    preparationPlanVersion: BACKTEST_PREPARATION_PLAN_VERSION,
     period: request.period,
     universeRule: request.universeRule,
     strategyId: request.strategyId,

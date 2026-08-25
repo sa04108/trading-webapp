@@ -22,6 +22,15 @@ describe('costProfileLabel', () => {
       costProfileLabel({ buyCommissionRate: 0, sellCommissionRate: 0, sellTaxRate: 0 }),
     ).toBe('무비용');
   });
+
+  it('기간별 세율 일정은 범위로 표기한다', () => {
+    expect(costProfileLabel({
+      buyCommissionRate: 0.00015,
+      sellCommissionRate: 0.00015,
+      sellTaxRate: 0.002,
+      sellTaxRateSchedule: [{ rate: 0.003 }, { rate: 0.0015 }, { rate: 0.002 }],
+    })).toBe('수수료 0.015% · 매도세 기간별 0.15%~0.3%');
+  });
 });
 
 describe('slippageProfileLabel', () => {

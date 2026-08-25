@@ -79,12 +79,11 @@ test('종목 마스터 기본 탭 — 미커버 날짜를 동기화하면 표와
   await expect(page.getByText(/데이터 미수집/)).toBeVisible();
   const syncThisDate = page.getByRole('button', { name: '이 날짜 동기화' });
   await expect(syncThisDate).toBeVisible();
-  // 이미 커버해 둔 날짜가 있으니(coverage.ranges 가 비어 있지 않다) "가장 가까운
-  // 수집일로 이동" 도 함께 뜬다 — findNearestCoveredDate 는 ranges 가 아예 없을 때만
-  // null 이지, 한 구간뿐이어도 그 구간의 경계를 후보로 낸다. 어느 날짜가 뜨는지는
-  // SEED_DATE 라고 단정하지 않는다 — 다른 스펙(mvp-flow.spec.ts)이 이미 만든 구간이
-  // target(오늘)에 더 가까울 수 있어(그쪽이 이기면 그 날짜가 뜬다) 정확한 날짜 대신
-  // 버튼이 뜨는 사실과 형태만 본다. 눌러서 실제로 어떤 커버된 날짜로든 점프하는지
+  // 이미 커버해 둔 실제 거래일이 있으니 "가장 가까운 수집일로 이동" 도 함께 뜬다.
+  // findNearestTradingDate 는 tradingDates 가 비어 있을 때만 null 이다. 어느 날짜가
+  // 뜨는지는 SEED_DATE 라고 단정하지 않는다 — 다른 스펙(mvp-flow.spec.ts)이 이미 만든
+  // 구간이 target(오늘)에 더 가까울 수 있어(그쪽이 이기면 그 날짜가 뜬다) 정확한 날짜
+  // 대신 버튼이 뜨는 사실과 형태만 본다. 눌러서 실제로 어떤 커버된 날짜로든 점프하는지
   // 확인한 뒤, 미커버 시나리오를 이어가려고 타깃 날짜로 되돌아온다.
   const nearestButton = page.getByRole('button', { name: /가장 가까운 수집일\(\d{4}-\d{2}-\d{2}\)로 이동/ });
   await expect(nearestButton).toBeVisible();

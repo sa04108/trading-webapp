@@ -119,6 +119,7 @@ describe('백테스트 목록', () => {
     );
 
     expect(html).toContain('CAGR +12.34%');
+    expect(html).toContain('매도 체결 3건');
   });
 
   it('편집 시 종료된 항목만 전체 선택하고, 다시 누르면 선택을 해제한다', () => {

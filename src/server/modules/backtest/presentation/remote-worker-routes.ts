@@ -4,11 +4,21 @@ import { z } from 'zod';
 import { backtestExecutionTelemetrySchema } from '../application/backtest-execution-telemetry.js';
 import { REMOTE_WORKER_PROTOCOL_VERSION } from '../application/remote-worker-protocol.js';
 import type { RemoteWorkerService } from '../application/remote-worker-service.js';
+import {
+  RemoteResultArtifactRejectedError,
+  RemoteResultImportInternalError,
+  RemoteResultPersistenceUnavailableError,
+} from '../application/backtest-result-artifact.js';
 import type { RemoteInputBundleManager } from '../infrastructure/remote-input-bundle-manager.js';
 import { createReadStream } from 'node:fs';
-import type { RemoteResultUploadManager } from '../infrastructure/remote-result-upload-manager.js';
-import type { Readable } from 'node:stream';
+import {
+  ResultArtifactUploadError,
+  type RemoteResultUploadManager,
+} from '../infrastructure/remote-result-upload-manager.js';
+import { Readable } from 'node:stream';
+import { finished } from 'node:stream/promises';
 import { MAX_BACKTEST_RESULT_ARTIFACT_BYTES } from '../infrastructure/sqlite-backtest-result-artifact-importer.js';
+import { isPersistenceUnavailableError } from '../../../shared/db/sqlite-errors.js';
 
 const workerIdSchema = z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/);
 const runnerVersionSchema = z.string().min(1).max(128);
@@ -61,6 +71,7 @@ const finishBodySchema = z.object({
 const inputQuerySchema = z.object({ attempt: z.coerce.number().int().positive() });
 const RESULT_CONTENT_TYPE = 'application/vnd.quant-platform.backtest-result+sqlite';
 const ARTIFACT_LEASE_RENEW_INTERVAL_MS = 60_000;
+const LEASE_EXPIRES_HEADER = 'x-backtest-lease-expires-at-ms';
 
 function sameSecret(actual: string, expected: string): boolean {
   const actualBytes = Buffer.from(actual);
@@ -118,11 +129,12 @@ function restoreNormalLease(
   service: RemoteWorkerService,
   lease: { readonly jobId: string; readonly attempt: number; readonly leaseToken: string },
   onError: (error: unknown) => void,
-): void {
+): ReturnType<RemoteWorkerService['heartbeat']> | null {
   try {
-    service.heartbeat(lease);
+    return service.heartbeat(lease);
   } catch (error) {
     onError(error);
+    return null;
   }
 }
 
@@ -137,6 +149,19 @@ async function removeInputBundleSafely(
     // job terminal 전이는 이미 중앙 DB에 확정됐다. 임시 파일 정리 실패로 worker에게
     // 실패 응답을 보내 계산을 다시 시키지 않고, 부팅 cleanup이 한 번 더 회수한다.
     onError(error);
+  }
+}
+
+async function discardResultBody(body: unknown): Promise<void> {
+  if (!(body instanceof Readable)) return;
+  // Content-Length를 먼저 강제·상한 검사하므로 이 drain은 유한하다. 끝까지 기다려
+  // retry가 이전 request body와 겹치거나 완료 뒤 열린 socket이 남지 않게 한다.
+  body.resume();
+  try {
+    await finished(body);
+  } catch {
+    // client가 먼저 끊은 경우 원래 preflight 상태를 응답할 연결도 사라졌으므로
+    // 별도 서버 오류로 승격하지 않는다.
   }
 }
 
@@ -335,6 +360,18 @@ export function registerRemoteWorkerRoutes(
     const leaseToken = request.headers['x-lease-token'];
     const expectedChecksum = request.headers['x-content-sha256'];
     const rawTelemetry = request.headers['x-execution-telemetry'];
+    const rawContentLength = request.headers['content-length'];
+    const contentLength = typeof rawContentLength === 'string' && /^\d+$/.test(rawContentLength)
+      ? Number(rawContentLength)
+      : Number.NaN;
+    // 이 내부 protocol의 supervisor는 항상 정확한 파일 크기를 보낸다. stream parser에는
+    // Fastify bodyLimit이 적용되지 않으므로 chunked/미지정 길이는 연결을 닫아 거부한다.
+    if (!Number.isSafeInteger(contentLength) || contentLength <= 0) {
+      return reply.header('connection', 'close').code(411).send({ error: 'RESULT_CONTENT_LENGTH_REQUIRED' });
+    }
+    if (contentLength > MAX_BACKTEST_RESULT_ARTIFACT_BYTES) {
+      return reply.header('connection', 'close').code(413).send({ error: 'RESULT_ARTIFACT_TOO_LARGE' });
+    }
     if (
       !params.success
       || !query.success
@@ -344,16 +381,21 @@ export function registerRemoteWorkerRoutes(
       || !/^[a-f0-9]{64}$/.test(expectedChecksum)
       || (rawTelemetry !== undefined && typeof rawTelemetry !== 'string')
     ) {
+      await discardResultBody(request.body);
       return reply.code(400).send({ error: '결과 업로드 헤더가 올바르지 않습니다' });
     }
     let telemetry: z.infer<typeof backtestExecutionTelemetrySchema> | undefined;
     if (rawTelemetry !== undefined) {
-      if (rawTelemetry.length > 16_000) return reply.code(400).send({ error: 'telemetry 헤더가 너무 큽니다' });
+      if (rawTelemetry.length > 16_000) {
+        await discardResultBody(request.body);
+        return reply.code(400).send({ error: 'telemetry 헤더가 너무 큽니다' });
+      }
       try {
         telemetry = backtestExecutionTelemetrySchema.parse(
           JSON.parse(Buffer.from(rawTelemetry, 'base64url').toString('utf8')),
         );
       } catch {
+        await discardResultBody(request.body);
         return reply.code(400).send({ error: 'telemetry 헤더가 올바르지 않습니다' });
       }
     }
@@ -361,12 +403,41 @@ export function registerRemoteWorkerRoutes(
     // child 종료 뒤에는 주기 heartbeat가 멈춘다. 큰 결과를 streaming하는 동안 lease가
     // 만료돼 다른 worker가 같은 job을 다시 잡지 않도록 업로드 전에 전송 창을 예약한다.
     const lease = { jobId: params.data.jobId, attempt: query.data.attempt, leaseToken };
-    const reserved = deps.service.reserveResultTransfer({
-      ...lease,
-      checksum: expectedChecksum,
-    });
-    if (reserved.status === 'STALE_LEASE') return reply.code(409).send({ error: 'STALE_LEASE' });
+    let reserved: ReturnType<RemoteWorkerService['reserveResultTransfer']>;
+    try {
+      reserved = deps.service.reserveResultTransfer({
+        ...lease,
+        checksum: expectedChecksum,
+      });
+    } catch (error) {
+      await discardResultBody(request.body);
+      if (isPersistenceUnavailableError(error)) {
+        request.log.error(
+          { module: 'backtest', event: 'backtest.remote-result-preflight-unavailable', err: error },
+          'remote result preflight unavailable',
+        );
+        return reply.code(503).send({ error: 'RESULT_PERSISTENCE_UNAVAILABLE' });
+      }
+      throw error;
+    }
+    if (reserved.status === 'STALE_LEASE') {
+      await discardResultBody(request.body);
+      return reply.code(409).send({ error: 'STALE_LEASE' });
+    }
+    if (reserved.status === 'IDEMPOTENT') {
+      // 완료 응답이 유실된 재전송은 header checksum만으로 이미 확정할 수 있다.
+      // 본문을 임시 파일에 다시 쓰지 않되 연결이 정상 종료되도록 흘려보낸다.
+      await discardResultBody(request.body);
+      await removeInputBundleSafely(deps.inputBundles, params.data.jobId, (error) => {
+        request.log.warn(
+          { module: 'backtest', event: 'backtest.remote-input-cleanup-failed', jobId: params.data.jobId, err: error },
+          'remote input bundle cleanup failed',
+        );
+      });
+      return reply.send({ status: 'IDEMPOTENT' });
+    }
     if (reserved.status === 'ACCEPTED' && reserved.cancelRequested) {
+      await discardResultBody(request.body);
       restoreNormalLease(deps.service, lease, (error) => {
         request.log.warn(
           { module: 'backtest', event: 'backtest.remote-artifact-lease-restore-failed', err: error },
@@ -383,23 +454,40 @@ export function registerRemoteWorkerRoutes(
       );
     });
     let upload: Awaited<ReturnType<RemoteResultUploadManager['receive']>> | null = null;
+    let leaseRestoredBeforeResponse = false;
     try {
-      upload = await deps.resultUploads.receive(
-        request.body as Readable,
-        params.data.jobId,
-        query.data.attempt,
-      );
+      try {
+        upload = await deps.resultUploads.receive(
+          request.body as Readable,
+          params.data.jobId,
+          query.data.attempt,
+        );
+      } catch (error) {
+        if (error instanceof ResultArtifactUploadError) {
+          return reply.code(error.statusCode).send({ error: error.message });
+        }
+        if (isPersistenceUnavailableError(error)) {
+          await discardResultBody(request.body);
+          request.log.error(
+            { module: 'backtest', event: 'backtest.remote-result-upload-storage-unavailable', err: error },
+            'remote result upload storage unavailable',
+          );
+          const restored = restoreNormalLease(deps.service, lease, (restoreError) => {
+            request.log.warn(
+              { module: 'backtest', event: 'backtest.remote-artifact-lease-restore-failed', err: restoreError },
+              'remote artifact lease restore failed',
+            );
+          });
+          leaseRestoredBeforeResponse = restored !== null;
+          if (restored?.status === 'ACCEPTED') {
+            reply.header(LEASE_EXPIRES_HEADER, String(restored.leaseExpiresAtMs));
+          }
+          return reply.code(503).send({ error: 'RESULT_PERSISTENCE_UNAVAILABLE' });
+        }
+        throw error;
+      }
       if (upload.sha256 !== expectedChecksum) {
         return reply.code(400).send({ error: 'RESULT_CHECKSUM_MISMATCH' });
-      }
-      if (reserved.status === 'IDEMPOTENT') {
-        await removeInputBundleSafely(deps.inputBundles, params.data.jobId, (error) => {
-          request.log.warn(
-            { module: 'backtest', event: 'backtest.remote-input-cleanup-failed', jobId: params.data.jobId, err: error },
-            'remote input bundle cleanup failed',
-          );
-        });
-        return reply.send({ status: 'IDEMPOTENT' });
       }
       try {
         const result = await deps.service.complete({
@@ -417,13 +505,45 @@ export function registerRemoteWorkerRoutes(
             'remote input bundle cleanup failed',
           );
         });
+        if (result === 'IDENTITY_REJECTED') {
+          return reply.code(422).send({ error: 'UNSAFE_SYMBOL_IDENTITY' });
+        }
         return reply.send({ status: result });
       } catch (error) {
-        request.log.warn(
-          { module: 'backtest', event: 'backtest.remote-result-rejected', err: error },
-          'remote result artifact rejected',
+        if (
+          error instanceof RemoteResultPersistenceUnavailableError
+          || isPersistenceUnavailableError(error)
+        ) {
+          request.log.error(
+            { module: 'backtest', event: 'backtest.remote-result-persistence-unavailable', err: error },
+            'remote result persistence unavailable',
+          );
+          const restored = restoreNormalLease(deps.service, lease, (restoreError) => {
+            request.log.warn(
+              { module: 'backtest', event: 'backtest.remote-artifact-lease-restore-failed', err: restoreError },
+              'remote artifact lease restore failed',
+            );
+          });
+          leaseRestoredBeforeResponse = restored !== null;
+          if (restored?.status === 'ACCEPTED') {
+            reply.header(LEASE_EXPIRES_HEADER, String(restored.leaseExpiresAtMs));
+          }
+          return reply.code(503).send({ error: 'RESULT_PERSISTENCE_UNAVAILABLE' });
+        }
+        if (error instanceof RemoteResultArtifactRejectedError) {
+          request.log.warn(
+            { module: 'backtest', event: 'backtest.remote-result-rejected', err: error },
+            'remote result artifact rejected',
+          );
+          return reply.code(400).send({ error: 'INVALID_RESULT_ARTIFACT' });
+        }
+        request.log.error(
+          { module: 'backtest', event: 'backtest.remote-result-import-failed', err: error },
+          error instanceof RemoteResultImportInternalError
+            ? 'remote result import failed internally'
+            : 'remote result import failed unexpectedly',
         );
-        return reply.code(400).send({ error: 'INVALID_RESULT_ARTIFACT' });
+        return reply.code(500).send({ error: 'RESULT_IMPORT_FAILED' });
       }
     } finally {
       stopRenewal();
@@ -439,12 +559,14 @@ export function registerRemoteWorkerRoutes(
       }
       // 완료 job은 STALE_LEASE가 되어 no-op이다. checksum/구조 오류나 취소 경합으로
       // 활성 상태가 남았다면 15분 전송 창을 정상 lease 길이로 되돌려 빠르게 재시도한다.
-      restoreNormalLease(deps.service, lease, (error) => {
-        request.log.warn(
-          { module: 'backtest', event: 'backtest.remote-artifact-lease-restore-failed', err: error },
-          'remote artifact lease restore failed',
-        );
-      });
+      if (!leaseRestoredBeforeResponse) {
+        restoreNormalLease(deps.service, lease, (error) => {
+          request.log.warn(
+            { module: 'backtest', event: 'backtest.remote-artifact-lease-restore-failed', err: error },
+            'remote artifact lease restore failed',
+          );
+        });
+      }
     }
   });
 }

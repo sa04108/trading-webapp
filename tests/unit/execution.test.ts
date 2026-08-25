@@ -5,6 +5,10 @@ import {
   roundToTick,
   simulateFill,
 } from '../../src/server/modules/backtest/domain/execution.js';
+import {
+  getCostProfile,
+  getKrxExecutionRules,
+} from '../../src/server/modules/backtest/domain/cost-profiles.js';
 import type { ExecutionProfile } from '../../src/server/modules/backtest/domain/types.js';
 
 const PROFILE: ExecutionProfile = {
@@ -56,6 +60,57 @@ describe('simulateFill (스펙 §9.1 next-bar-open + §9.3 비용 모델)', () =
     };
     const fill = simulateFill({ symbol: 'A', side: 'BUY', quantity: 1 }, 1_000, 1, fixedSlip);
     expect(fill.price).toBe(1_005);
+  });
+
+  it('charges the historical sell tax rate at the fill timestamp', () => {
+    const historical: ExecutionProfile = {
+      ...PROFILE,
+      cost: getCostProfile('kr-equity-default')!,
+    };
+    const beforeCut = simulateFill(
+      { symbol: 'A', side: 'SELL', quantity: 1 },
+      10_000,
+      Date.parse('2024-12-26T00:00:00Z'),
+      historical,
+    );
+    const afterCut = simulateFill(
+      { symbol: 'A', side: 'SELL', quantity: 1 },
+      10_000,
+      Date.parse('2024-12-27T00:00:00Z'),
+      historical,
+    );
+    expect(beforeCut.tax).toBe(Math.floor(beforeCut.grossAmount * 0.0018));
+    expect(afterCut.tax).toBe(Math.floor(afterCut.grossAmount * 0.0015));
+  });
+
+  it('rounds with the historical KRX market-specific tick size', () => {
+    const beforeChange = Date.parse('2023-01-24T00:00:00Z');
+    const kospi = simulateFill(
+      { symbol: 'A', side: 'BUY', quantity: 1 },
+      150_001,
+      beforeChange,
+      { ...PROFILE, slippage: { ...PROFILE.slippage, bps: 0 }, rules: getKrxExecutionRules('KOSPI') },
+    );
+    const kosdaq = simulateFill(
+      { symbol: 'A', side: 'BUY', quantity: 1 },
+      150_001,
+      beforeChange,
+      { ...PROFILE, slippage: { ...PROFILE.slippage, bps: 0 }, rules: getKrxExecutionRules('KOSDAQ') },
+    );
+    expect(kospi.price).toBe(150_500);
+    expect(kosdaq.price).toBe(150_100);
+  });
+
+  it('prefers the fill candle venue over the request-market fallback', () => {
+    const beforeChange = Date.parse('2023-01-24T00:00:00Z');
+    const fill = simulateFill(
+      { symbol: 'A', side: 'BUY', quantity: 1 },
+      150_001,
+      beforeChange,
+      { ...PROFILE, slippage: { ...PROFILE.slippage, bps: 0 }, rules: getKrxExecutionRules('KOSPI') },
+      'KOSDAQ',
+    );
+    expect(fill.price).toBe(150_100);
   });
 });
 

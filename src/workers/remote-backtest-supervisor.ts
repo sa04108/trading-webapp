@@ -72,6 +72,54 @@ const probeResponseSchema = z.object({
 const WORK_ROOT_MARKER = '.quant-backtest-worker-root';
 const WORK_ROOT_MARKER_CONTENT = 'quant-platform remote backtest worker\n';
 const WORK_ROOT_LOCK = '.supervisor.lock';
+const RESULT_UPLOAD_INITIAL_RETRY_DELAY_MS = 250;
+const RESULT_UPLOAD_MAX_RETRY_DELAY_MS = 5_000;
+const RESULT_UPLOAD_REQUEST_TIMEOUT_MS = 10 * 60_000;
+// 중앙의 artifact transfer lease(15분)보다 먼저 slot을 해제하는 절대 안전 상한이다.
+const RESULT_UPLOAD_RETRY_HARD_LIMIT_MS = 14 * 60_000;
+const LEASE_EXPIRES_HEADER = 'x-backtest-lease-expires-at-ms';
+
+class NonRetryableResultUploadError extends Error {
+  constructor(
+    readonly statusCode: number,
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = 'NonRetryableResultUploadError';
+  }
+}
+
+function isRetryableUploadTransportError(error: unknown): boolean {
+  const retryableCodes = new Set([
+    'ECONNRESET',
+    'ETIMEDOUT',
+    'EPIPE',
+    'ECONNREFUSED',
+    'ENETUNREACH',
+    'EHOSTUNREACH',
+    'UND_ERR_CONNECT_TIMEOUT',
+    'UND_ERR_HEADERS_TIMEOUT',
+    'UND_ERR_SOCKET',
+  ]);
+  const seen = new Set<unknown>();
+  let current = error;
+  for (let depth = 0; depth < 10 && current !== null && current !== undefined; depth += 1) {
+    if (seen.has(current)) return false;
+    seen.add(current);
+    if (typeof current !== 'object') return false;
+    const value = current as {
+      readonly name?: unknown;
+      readonly code?: unknown;
+      readonly cause?: unknown;
+    };
+    if (value.name === 'AbortError' || value.name === 'TimeoutError') return true;
+    if (typeof value.code === 'string' && retryableCodes.has(value.code)) return true;
+    current = value.cause;
+  }
+  // Node fetch는 일부 연결 실패를 원인 코드 없는 TypeError로만 내보낸다.
+  return error instanceof TypeError;
+}
 
 type ChildMessage =
   | { readonly type: 'progress'; readonly processedBars: number; readonly totalBars: number; readonly progressLabel: string | null }
@@ -261,7 +309,22 @@ class RemoteBacktestSupervisor {
         );
         return;
       }
-      await this.uploadResult(job, resultPath, execution.telemetry);
+      try {
+        await this.uploadResult(
+          { ...job, leaseExpiresAtMs: execution.leaseExpiresAtMs },
+          resultPath,
+          execution.telemetry,
+        );
+      } catch (error) {
+        if (!(error instanceof NonRetryableResultUploadError)) throw error;
+        // 409는 lease를 이미 잃은 상태이고 422는 중앙 transaction이 FAILED를
+        // 확정한 상태다. 그 외 영구 거부/내부 오류는 활성 job을 lease 만료 뒤 다시
+        // 계산하게 두지 말고 명시적으로 실패를 보고한다.
+        if (error.statusCode !== 409 && error.statusCode !== 422) {
+          await this.finish(job, 'FAILED', error.message, execution.telemetry);
+        }
+        return;
+      }
       this.logger.info(
         { event: 'remote-worker.job-completed', jobId: job.jobId, attempt: job.attempt, slot },
         'remote job completed',
@@ -328,6 +391,7 @@ class RemoteBacktestSupervisor {
     readonly telemetry?: BacktestExecutionTelemetry;
     readonly cancelRequested: boolean;
     readonly staleLease: boolean;
+    readonly leaseExpiresAtMs: number;
   }> {
     const isTsRuntime = import.meta.url.endsWith('.ts');
     const childUrl = new URL(`./backtest-child.${isTsRuntime ? 'ts' : 'js'}`, import.meta.url);
@@ -347,6 +411,7 @@ class RemoteBacktestSupervisor {
     let progress: { processedBars: number; totalBars: number; progressLabel: string | null } | undefined;
     let cancelRequested = false;
     let staleLease = false;
+    let leaseExpiresAtMs = job.leaseExpiresAtMs;
     let heartbeatInFlight: Promise<void> | null = null;
     let cancelTimers: NodeJS.Timeout[] = [];
 
@@ -390,6 +455,7 @@ class RemoteBacktestSupervisor {
           throw new Error(`heartbeat 실패: HTTP ${response.status}`);
         }
         const body = heartbeatResponseSchema.parse(await response.json());
+        leaseExpiresAtMs = Math.max(leaseExpiresAtMs, body.leaseExpiresAtMs);
         if (body.cancelRequested) requestCancel();
       });
     };
@@ -408,16 +474,10 @@ class RemoteBacktestSupervisor {
         .finally(() => { heartbeatInFlight = null; });
     }, heartbeatMs);
     heartbeatTimer.unref();
+    let exit: { code: number | null; signal: NodeJS.Signals | null };
     try {
       await heartbeat();
-      const exit = await exitPromise;
-      return {
-        ...exit,
-        stderr: stderr.trim().slice(0, 2_000),
-        ...(telemetry === undefined ? {} : { telemetry }),
-        cancelRequested,
-        staleLease,
-      };
+      exit = await exitPromise;
     } catch (error) {
       // 초기 heartbeat나 spawn 자체가 실패해도 계산 child를 고아 프로세스로 남기지 않는다.
       requestCancel();
@@ -429,6 +489,14 @@ class RemoteBacktestSupervisor {
       if (heartbeatInFlight !== null) await heartbeatInFlight;
       this.activeChildren.delete(child);
     }
+    return {
+      ...exit,
+      stderr: stderr.trim().slice(0, 2_000),
+      ...(telemetry === undefined ? {} : { telemetry }),
+      cancelRequested,
+      staleLease,
+      leaseExpiresAtMs,
+    };
   }
 
   private async uploadResult(
@@ -438,34 +506,106 @@ class RemoteBacktestSupervisor {
   ): Promise<void> {
     const checksum = await sha256File(resultPath);
     const stat = await fs.stat(resultPath);
-    await this.requestWithTimeout(
-      this.appEndpoint(`/api/internal/workers/jobs/${job.jobId}/result?attempt=${job.attempt}`),
-      {
-        method: 'PUT',
-        headers: {
-          authorization: `Bearer ${this.config.workerToken}`,
-          'content-type': 'application/vnd.quant-platform.backtest-result+sqlite',
-          'content-length': String(stat.size),
-          'x-lease-token': job.leaseToken,
-          'x-content-sha256': checksum,
-          'x-execution-telemetry': Buffer.from(JSON.stringify(telemetry)).toString('base64url'),
-        },
-        body: createReadStream(resultPath),
-        duplex: 'half',
-      } as RequestInit & { duplex: 'half' },
-      10 * 60_000,
-      async (response) => {
-        const detail = await response.text();
-        if (!response.ok) {
-          throw new Error(`결과 업로드 실패: HTTP ${response.status} ${detail.slice(0, 500)}`);
-        }
-        try {
-          resultResponseSchema.parse(JSON.parse(detail));
-        } catch (error) {
-          throw new Error('결과 업로드 응답이 protocol과 일치하지 않습니다', { cause: error });
-        }
-      },
-    );
+    let retryDelayMs = RESULT_UPLOAD_INITIAL_RETRY_DELAY_MS;
+    let knownLeaseExpiresAtMs = job.leaseExpiresAtMs;
+    const hardRetryDeadlineMs = Date.now() + RESULT_UPLOAD_RETRY_HARD_LIMIT_MS;
+    for (;;) {
+      if (Date.now() >= Math.min(knownLeaseExpiresAtMs, hardRetryDeadlineMs)) {
+        throw new NonRetryableResultUploadError(
+          409,
+          '결과 업로드 재시도 중 lease 안전 창이 만료됐습니다',
+        );
+      }
+      let outcome: {
+        readonly status: 'ACCEPTED' | 'RETRY_PERSISTENCE';
+        readonly leaseExpiresAtMs?: number;
+      };
+      try {
+        const requestTimeoutMs = Math.max(
+          1,
+          Math.min(RESULT_UPLOAD_REQUEST_TIMEOUT_MS, hardRetryDeadlineMs - Date.now()),
+        );
+        outcome = await this.requestWithTimeout(
+          this.appEndpoint(`/api/internal/workers/jobs/${job.jobId}/result?attempt=${job.attempt}`),
+          {
+            method: 'PUT',
+            headers: {
+              authorization: `Bearer ${this.config.workerToken}`,
+              'content-type': 'application/vnd.quant-platform.backtest-result+sqlite',
+              'content-length': String(stat.size),
+              'x-lease-token': job.leaseToken,
+              'x-content-sha256': checksum,
+              'x-execution-telemetry': Buffer.from(JSON.stringify(telemetry)).toString('base64url'),
+            },
+            // fetch body는 한 번 소비되므로 재시도마다 새 stream을 연다.
+            body: createReadStream(resultPath),
+            duplex: 'half',
+          } as RequestInit & { duplex: 'half' },
+          requestTimeoutMs,
+          async (response): Promise<{
+            readonly status: 'ACCEPTED' | 'RETRY_PERSISTENCE';
+            readonly leaseExpiresAtMs?: number;
+          }> => {
+            const detail = await response.text();
+            if ([408, 429, 502, 503, 504].includes(response.status)) {
+              const rawLeaseExpiresAtMs = response.headers.get(LEASE_EXPIRES_HEADER);
+              const leaseExpiresAtMs = rawLeaseExpiresAtMs === null
+                ? Number.NaN
+                : Number(rawLeaseExpiresAtMs);
+              return {
+                status: 'RETRY_PERSISTENCE',
+                ...(Number.isSafeInteger(leaseExpiresAtMs) && leaseExpiresAtMs > Date.now()
+                  ? { leaseExpiresAtMs }
+                  : {}),
+              };
+            }
+            if (!response.ok) {
+              throw new NonRetryableResultUploadError(
+                response.status,
+                `결과 업로드 실패: HTTP ${response.status} ${detail.slice(0, 500)}`,
+              );
+            }
+            try {
+              resultResponseSchema.parse(JSON.parse(detail));
+            } catch (error) {
+              throw new NonRetryableResultUploadError(
+                response.status,
+                '결과 업로드 응답이 protocol과 일치하지 않습니다',
+                { cause: error },
+              );
+            }
+            return { status: 'ACCEPTED' };
+          },
+        );
+      } catch (error) {
+        if (
+          this.stopped
+          || error instanceof NonRetryableResultUploadError
+          || !isRetryableUploadTransportError(error)
+        ) throw error;
+        this.logger.warn(
+          { event: 'remote-worker.result-upload-transport-retry', jobId: job.jobId, err: error },
+          'result upload transport failed — retrying same artifact',
+        );
+        outcome = { status: 'RETRY_PERSISTENCE' };
+      }
+      if (outcome.status === 'ACCEPTED') return;
+      if (outcome.leaseExpiresAtMs !== undefined) {
+        knownLeaseExpiresAtMs = Math.max(knownLeaseExpiresAtMs, outcome.leaseExpiresAtMs);
+      }
+      // 서버가 응답 헤더로 확인해 준 transfer lease와 절대 상한 안에서만 같은
+      // checksum/파일을 재전송한다. 종료 신호는 delay와 fetch를 모두 중단한다.
+      const remainingRetryMs = Math.min(knownLeaseExpiresAtMs, hardRetryDeadlineMs) - Date.now();
+      if (remainingRetryMs <= 0) {
+        throw new NonRetryableResultUploadError(
+          409,
+          '결과 업로드 재시도 중 lease 안전 창이 만료됐습니다',
+        );
+      }
+      await delay(Math.min(retryDelayMs, remainingRetryMs), this.stopController.signal);
+      if (this.stopped) throw new Error('worker 종료로 결과 업로드 재시도를 중단했습니다');
+      retryDelayMs = Math.min(RESULT_UPLOAD_MAX_RETRY_DELAY_MS, retryDelayMs * 2);
+    }
   }
 
   private async finish(

@@ -3,11 +3,16 @@ import { EventEmitter } from 'node:events';
 import type { AppConfig } from '../../../bootstrap/config.js';
 import type { Clock } from '../../../shared/clock.js';
 import type { Logger } from '../../../shared/logger.js';
+import { isPersistenceUnavailableError } from '../../../shared/db/sqlite-errors.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
 import type { BacktestExecutionTelemetry } from './backtest-execution-telemetry.js';
 import type { BacktestJobRow, JobQueue } from './job-queue.js';
 import type { JobEvent } from './job-orchestrator.js';
-import type { RemoteResultCompleter } from './backtest-result-artifact.js';
+import {
+  RemoteResultImportInternalError,
+  RemoteResultPersistenceUnavailableError,
+  type RemoteResultCompleter,
+} from './backtest-result-artifact.js';
 
 export interface RemoteJobLease {
   readonly job: BacktestJobRow;
@@ -28,7 +33,11 @@ export type RemoteHeartbeatResult =
 export type RemoteResultTransferResult = RemoteHeartbeatResult | { readonly status: 'IDEMPOTENT' };
 
 export type RemoteFinishResult = 'ACCEPTED' | 'STALE_LEASE';
-export type RemoteCompleteResult = 'ACCEPTED' | 'IDEMPOTENT' | 'STALE_LEASE';
+export type RemoteCompleteResult =
+  | 'ACCEPTED'
+  | 'IDEMPOTENT'
+  | 'IDENTITY_REJECTED'
+  | 'STALE_LEASE';
 const ARTIFACT_TRANSFER_LEASE_MS = 15 * 60_000;
 
 function tokenHash(token: string): string {
@@ -219,7 +228,21 @@ export class RemoteWorkerService {
     readonly checksum: string;
     readonly telemetry?: BacktestExecutionTelemetry;
   }): Promise<RemoteCompleteResult> {
-    const job = this.queue.getJob(input.jobId);
+    let job: BacktestJobRow | null;
+    try {
+      job = this.queue.getJob(input.jobId);
+    } catch (error) {
+      if (isPersistenceUnavailableError(error)) {
+        throw new RemoteResultPersistenceUnavailableError(
+          '결과 저장 직전 중앙 작업 정보를 일시적으로 읽을 수 없습니다.',
+          { cause: error },
+        );
+      }
+      throw new RemoteResultImportInternalError(
+        '결과 저장 직전 중앙 작업 정보를 읽는 데 실패했습니다.',
+        { cause: error },
+      );
+    }
     const completed = await this.resultCompleter.complete({
       jobId: input.jobId,
       attempt: input.attempt,
@@ -228,6 +251,18 @@ export class RemoteWorkerService {
       checksum: input.checksum,
       expectedRunnerVersion: this.expectedRunnerVersion,
     });
+    if (completed.status === 'IDENTITY_REJECTED') {
+      this.recordAudit('backtest.finished', {
+        jobId: input.jobId,
+        status: 'FAILED',
+        durationMs: completed.completedAtMs
+          - (job?.startedAtMs ?? job?.createdAtMs ?? completed.completedAtMs),
+        executionMode: 'remote',
+        attempt: input.attempt,
+      });
+      this.emitJob({ jobId: input.jobId, kind: 'status' });
+      return 'IDENTITY_REJECTED';
+    }
     if (completed.status !== 'ACCEPTED') return completed.status;
 
     this.recordAudit('backtest.finished', {

@@ -209,6 +209,7 @@ export function parseFinancialRows(
           symbol,
           periodKey,
           reason: `보고서 코드가 일치하지 않습니다: ${row.reprt_code} (기대값 ${report})`,
+          severity: 'BLOCKING',
         });
         continue;
       }
@@ -220,6 +221,7 @@ export function parseFinancialRows(
           symbol,
           periodKey,
           reason: `행의 사업연도가 버킷 기준 연도와 다릅니다: ${row.bsns_year} vs ${year}, ${readString(row, 'account_nm') ?? '계정명 없음'}`,
+          severity: 'BLOCKING',
         });
         continue;
       }
@@ -233,12 +235,22 @@ export function parseFinancialRows(
       // 있어 rows[0] 하나만 대표로 쓰면 다른 행의 asOf 를 잘못 물려받는다
       const rceptNo = readString(row, 'rcept_no');
       if (rceptNo === null) {
-        gaps.push({ symbol, periodKey, reason: '응답 필드를 읽을 수 없습니다: rcept_no' });
+        gaps.push({
+          symbol,
+          periodKey,
+          reason: '응답 필드를 읽을 수 없습니다: rcept_no',
+          severity: 'BLOCKING',
+        });
         continue;
       }
       const asOf = receiptDateToAsOfTsMs(rceptNo);
       if (asOf === null) {
-        gaps.push({ symbol, periodKey, reason: `접수번호를 읽을 수 없습니다: ${rceptNo}` });
+        gaps.push({
+          symbol,
+          periodKey,
+          reason: `접수번호를 읽을 수 없습니다: ${rceptNo}`,
+          severity: 'BLOCKING',
+        });
         continue;
       }
 
@@ -251,6 +263,7 @@ export function parseFinancialRows(
           symbol,
           periodKey,
           reason: `응답 필드를 읽을 수 없습니다: ${accountId === null ? 'account_id' : 'account_nm'}`,
+          severity: 'BLOCKING',
         });
         continue;
       }
@@ -261,6 +274,7 @@ export function parseFinancialRows(
           symbol,
           periodKey,
           reason: `매핑되지 않은 계정: ${accountName} (${accountId})`,
+          severity: 'INFORMATIONAL',
         });
         continue;
       }
@@ -272,6 +286,7 @@ export function parseFinancialRows(
           symbol,
           periodKey,
           reason: `계정 유형이 일치하지 않습니다: ${accountName} (sj_div=${row.sj_div}, 기대값=${rule.statement})`,
+          severity: 'BLOCKING',
         });
         continue;
       }
@@ -284,6 +299,7 @@ export function parseFinancialRows(
             symbol,
             periodKey,
             reason: `금액을 읽을 수 없습니다: ${accountName}` + (rawAmount === null ? ' (thstrm_amount 필드 확인)' : ''),
+            severity: 'BLOCKING',
           });
           continue;
         }
@@ -294,6 +310,7 @@ export function parseFinancialRows(
               symbol,
               periodKey,
               reason: `같은 보고서 안에서 ${rule.field} 값이 서로 다릅니다 (${previouslySeen} vs ${amount})`,
+              severity: 'BLOCKING',
             });
           }
           continue;
@@ -321,6 +338,7 @@ export function parseFinancialRows(
           symbol,
           periodKey,
           reason: `금액을 읽을 수 없습니다: ${accountName}` + (cumulativeRaw === null ? ' (thstrm_amount 필드 확인)' : ''),
+          severity: 'BLOCKING',
         });
         continue;
       }
@@ -332,6 +350,7 @@ export function parseFinancialRows(
             symbol,
             periodKey,
             reason: `같은 보고서 안에서 ${rule.field} 누적값이 서로 다릅니다 (${existing.value} vs ${amount})`,
+            severity: 'BLOCKING',
           });
         }
         continue;
@@ -369,6 +388,7 @@ export function parseFinancialRows(
           symbol,
           periodKey,
           reason: `직전 분기 누적값이 없어 ${field} 단독값을 만들 수 없습니다`,
+          severity: 'BLOCKING',
         });
         continue;
       }
@@ -381,6 +401,7 @@ export function parseFinancialRows(
           symbol,
           periodKey,
           reason: `직전 분기가 다른 사업연도입니다 (${previousYear ?? '알수없음'} → ${year}) — ${field} 단독값을 만들 수 없습니다`,
+          severity: 'BLOCKING',
         });
         continue;
       }
@@ -500,6 +521,7 @@ export function parseIssuanceRows(
         symbol,
         periodKey: gapPeriodKey,
         reason: '응답 필드를 읽을 수 없습니다: isu_dcrs_stle (발행형태)',
+        severity: 'BLOCKING',
       });
       continue;
     }
@@ -511,6 +533,7 @@ export function parseIssuanceRows(
         symbol,
         periodKey: gapPeriodKey,
         reason: `분류할 수 없는 발행형태: ${rawStyle}`,
+        severity: 'BLOCKING',
       });
       continue;
     }
@@ -522,6 +545,7 @@ export function parseIssuanceRows(
         symbol,
         periodKey: gapPeriodKey,
         reason: '응답 필드를 읽을 수 없습니다: isu_dcrs_de (자본변동 일자)',
+        severity: 'BLOCKING',
       });
       continue;
     }
@@ -531,6 +555,7 @@ export function parseIssuanceRows(
         symbol,
         periodKey: rawDate,
         reason: `자본변동 일자를 읽을 수 없습니다: ${rawDate}`,
+        severity: 'BLOCKING',
       });
       continue;
     }
@@ -541,12 +566,18 @@ export function parseIssuanceRows(
         symbol,
         periodKey: dateKey,
         reason: '응답 필드를 읽을 수 없습니다: isu_dcrs_qy (변동 수량)',
+        severity: 'BLOCKING',
       });
       continue;
     }
     const quantity = parseAmount(rawQuantity);
     if (quantity === null || quantity <= 0) {
-      gaps.push({ symbol, periodKey: dateKey, reason: `변동 수량을 읽을 수 없습니다: ${rawQuantity}` });
+      gaps.push({
+        symbol,
+        periodKey: dateKey,
+        reason: `변동 수량을 읽을 수 없습니다: ${rawQuantity}`,
+        severity: 'BLOCKING',
+      });
       continue;
     }
 
@@ -556,13 +587,19 @@ export function parseIssuanceRows(
         symbol,
         periodKey: dateKey,
         reason: '이벤트 직전 발행주식수를 알 수 없어 보정 비율을 만들 수 없습니다',
+        severity: 'BLOCKING',
       });
       continue;
     }
 
     const ratio = direction === 'DECREASE' ? (prior - quantity) / prior : (prior + quantity) / prior;
     if (!Number.isFinite(ratio) || ratio <= 0) {
-      gaps.push({ symbol, periodKey: dateKey, reason: `보정 비율이 유효하지 않습니다: ${ratio}` });
+      gaps.push({
+        symbol,
+        periodKey: dateKey,
+        reason: `보정 비율이 유효하지 않습니다: ${ratio}`,
+        severity: 'BLOCKING',
+      });
       continue;
     }
 
@@ -572,12 +609,18 @@ export function parseIssuanceRows(
         symbol,
         periodKey: dateKey,
         reason: '응답 필드를 읽을 수 없습니다: rcept_no (접수번호)',
+        severity: 'BLOCKING',
       });
       continue;
     }
     const asOf = receiptDateToAsOfTsMs(rceptNo);
     if (asOf === null) {
-      gaps.push({ symbol, periodKey: dateKey, reason: `접수번호를 읽을 수 없습니다: ${rceptNo}` });
+      gaps.push({
+        symbol,
+        periodKey: dateKey,
+        reason: `접수번호를 읽을 수 없습니다: ${rceptNo}`,
+        severity: 'BLOCKING',
+      });
       continue;
     }
 

@@ -72,14 +72,12 @@ describe('rsiReversionParameters', () => {
 });
 
 describe('레지스트리 등록', () => {
-  it('목록에 노출되고 JSON 스키마에 한국어 라벨이 실린다', () => {
+  it('JSON 스키마에 한국어 라벨이 실린다', () => {
     const registry = new StrategyRegistry();
-    expect(registry.list().map((s) => s.id)).toContain('rsi-reversion');
     const schema = registry.getParameterJsonSchema('rsi-reversion');
     const properties = (schema as { properties: Record<string, Record<string, unknown>> })
       .properties;
     expect(properties.entryRsi?.title).toBe('진입 RSI');
-    expect(rsiReversionStrategy.version).toBe('1.1.0');
   });
 });
 

@@ -3,6 +3,29 @@ import type { AppDatabase } from '../../../shared/db/database.js';
 import { symbolFactsState } from '../../../shared/db/schema.js';
 import { parseYears } from './fact-coverage-store.js';
 
+export const CORPORATE_ACTION_COVERAGE_PROTOCOL_VERSION = 2;
+
+interface ActionCoverageProtocol {
+  readonly version: number;
+  readonly years: readonly number[];
+}
+
+function parseProtocolYears(raw: string | null): number[] {
+  if (raw === null) return [];
+  try {
+    const parsed = JSON.parse(raw) as Partial<ActionCoverageProtocol>;
+    if (
+      parsed.version !== CORPORATE_ACTION_COVERAGE_PROTOCOL_VERSION
+      || !Array.isArray(parsed.years)
+    ) return [];
+    return [...new Set(parsed.years.filter(
+      (year): year is number => Number.isInteger(year) && year >= 1900 && year <= 2200,
+    ))].sort((left, right) => left - right);
+  } catch {
+    return [];
+  }
+}
+
 /**
  * 종목별 자본변동 수집 커버리지다. `symbolFactsState.coveredYearsJson`(재무용)과는
  * 다른 컬럼 두 개를 쓴다.
@@ -25,13 +48,28 @@ export interface CorporateActionCoverageStore {
   addCoveredYears(symbol: string, years: readonly number[], nowMs: number): void;
   /** 종목 하나의 gap 연도를 합집합으로 더한다. */
   addGapYears(symbol: string, years: readonly number[], nowMs: number): void;
+  /** 완료 coverage와 발견한 gap을 한 SQLite write로 함께 합집합 기록한다. */
+  addCoverageResult(
+    symbol: string,
+    coveredYears: readonly number[],
+    gapYears: readonly number[],
+    nowMs: number,
+  ): void;
 }
 
 export class SqliteCorporateActionCoverageStore implements CorporateActionCoverageStore {
   constructor(private readonly db: AppDatabase) {}
 
   getCoveredYears(codes?: readonly string[]): ReadonlyMap<string, readonly number[]> {
-    return this.readYears('actionCoveredYearsJson', codes);
+    const rows = this.db.select().from(symbolFactsState).all();
+    const result = new Map<string, readonly number[]>();
+    for (const row of rows) {
+      if (codes !== undefined && !codes.includes(row.code)) continue;
+      // 구버전은 periodKey='-' gap을 버리고도 legacy coverage를 닫았다. 현재 프로토콜로
+      // 실제 재수집한 연도만 신뢰해, 선택 유니버스의 필요한 연도만 on-demand로 연다.
+      result.set(row.code, parseProtocolYears(row.actionCoverageProtocolJson));
+    }
+    return result;
   }
 
   getGapYears(codes?: readonly string[]): ReadonlyMap<string, readonly number[]> {
@@ -51,11 +89,67 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
   }
 
   addCoveredYears(symbol: string, years: readonly number[], nowMs: number): void {
-    this.addYears('actionCoveredYearsJson', symbol, years, nowMs);
+    this.addCoverageResult(symbol, years, [], nowMs);
   }
 
   addGapYears(symbol: string, years: readonly number[], nowMs: number): void {
     this.addYears('actionGapYearsJson', symbol, years, nowMs);
+  }
+
+  addCoverageResult(
+    symbol: string,
+    coveredYears: readonly number[],
+    gapYears: readonly number[],
+    nowMs: number,
+  ): void {
+    if (coveredYears.length === 0) return;
+    const completed = new Set(coveredYears);
+    if (gapYears.some((year) => !completed.has(year))) {
+      throw new Error('자본변동 gap 연도는 이번에 완료한 coverage 연도 안에 있어야 합니다.');
+    }
+    const existing = this.db
+      .select()
+      .from(symbolFactsState)
+      .where(eq(symbolFactsState.code, symbol))
+      .get();
+    const mergedCovered = [...new Set([
+      ...(existing ? parseYears(existing.actionCoveredYearsJson) : []),
+      ...coveredYears,
+    ])].sort((a, b) => a - b);
+    const verifiedYears = [...new Set([
+      ...(existing ? parseProtocolYears(existing.actionCoverageProtocolJson) : []),
+      ...coveredYears,
+    ])].sort((a, b) => a - b);
+    // gap은 일부러 지우지 않는다. DART 누적 snapshot에서 사라진 사건의 옛 fact도
+    // repository에 남아 있으므로, snapshot 교체 없이 gap만 지우면 stale fact가 다시
+    // 실행될 수 있다. 해소 프로토콜은 별도 정합성 작업이다.
+    const mergedGaps = [...new Set([
+      ...(existing ? parseYears(existing.actionGapYearsJson) : []),
+      ...gapYears,
+    ])].sort((a, b) => a - b);
+    const values = {
+      actionCoveredYearsJson: JSON.stringify(mergedCovered),
+      actionGapYearsJson: JSON.stringify(mergedGaps),
+      actionCoverageProtocolJson: JSON.stringify({
+        version: CORPORATE_ACTION_COVERAGE_PROTOCOL_VERSION,
+        years: verifiedYears,
+      }),
+      updatedAtMs: nowMs,
+      actionUpdatedAtMs: nowMs,
+    };
+
+    if (existing) {
+      this.db
+        .update(symbolFactsState)
+        .set(values)
+        .where(eq(symbolFactsState.code, symbol))
+        .run();
+      return;
+    }
+    this.db
+      .insert(symbolFactsState)
+      .values({ code: symbol, coveredYearsJson: '[]', ...values })
+      .run();
   }
 
   private readYears(

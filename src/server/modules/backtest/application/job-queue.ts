@@ -42,7 +42,11 @@ export interface ExpiredRemoteLease {
   readonly attempt: number;
 }
 
-export type CompleteRemoteResult = 'ACCEPTED' | 'IDEMPOTENT' | 'STALE_LEASE';
+export type CompleteRemoteResult =
+  | 'ACCEPTED'
+  | 'IDEMPOTENT'
+  | 'IDENTITY_REJECTED'
+  | 'STALE_LEASE';
 
 const ACTIVE_STATUSES: BacktestJobStatus[] = ['STARTING', 'RUNNING', 'CANCELLING'];
 export const TERMINAL_STATUSES: BacktestJobStatus[] = [
@@ -239,6 +243,8 @@ export class JobQueue {
     readonly resultSchemaVersion: number;
     readonly resultChecksum: string;
     readonly processedBars: number;
+    /** 같은 IMMEDIATE transaction에서 결과 import 직전 재검증한다. 오류 문자열이면 FAILED. */
+    readonly validate: (current: BacktestJobRow) => string | null;
     readonly persist: () => void;
   }): CompleteRemoteResult {
     const complete = this.handle.sqlite.transaction((): CompleteRemoteResult => {
@@ -257,6 +263,30 @@ export class JobQueue {
         || current.leaseExpiresAtMs === null
         || current.leaseExpiresAtMs < input.nowMs
       ) return 'STALE_LEASE';
+
+      const validationError = input.validate(current);
+      if (validationError !== null) {
+        const completedAtMs = this.clock.now();
+        const rejected = this.handle.sqlite.prepare(
+          `UPDATE backtest_jobs
+           SET status = 'FAILED', error = ?, completed_at_ms = ?,
+               lease_token_hash = NULL, lease_expires_at_ms = NULL
+           WHERE id = ?
+             AND attempt = ?
+             AND lease_token_hash = ?
+             AND status IN ('STARTING', 'RUNNING')`,
+        ).run(
+          validationError,
+          completedAtMs,
+          input.jobId,
+          input.attempt,
+          input.leaseTokenHash,
+        );
+        if (rejected.changes !== 1) {
+          throw new Error('종목 identity 거부 후 job 실패 전이에 실패했습니다');
+        }
+        return 'IDENTITY_REJECTED';
+      }
 
       input.persist();
       const completedAtMs = this.clock.now();

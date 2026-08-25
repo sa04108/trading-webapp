@@ -26,7 +26,7 @@ export const earningsAccelerationRankParameters = z.object({
     title: '가격 모멘텀 기간 (봉 수)',
     description: '재무 성장 신호를 확인할 분할보정 가격 수익률 기간입니다.',
   }),
-  staleQuarters: z.number().int().min(0).max(8).default(2).meta({
+  staleQuarters: z.number().int().min(1).max(8).default(2).meta({
     title: '허용 공시 지연 (분기)',
     description: '영업이익 최신 분기가 현재 분기보다 뒤처져도 허용할 최대 분기 수입니다.',
   }),
@@ -88,11 +88,12 @@ export const earningsAccelerationRankStrategy: TradingStrategy<
   EarningsAccelerationRankState
 > = {
   id: 'earnings-acceleration-rank',
-  version: '1.2.0',
+  version: '1.2.2',
   name: '이익 가속·가격 확인 순위',
   requiresFundamentals: true,
   description: 'PIT 영업이익 가속과 양의 가격 모멘텀을 함께 순위화하는 동일가중 연구 전략',
   parameterSchema: earningsAccelerationRankParameters,
+  requiredRebalanceGapBars: 1,
   dataRequirements: {
     fundamentalLookbackQuarters: 8,
     priceWarmupBars: (parameters) => parameters.priceMomentumDays,

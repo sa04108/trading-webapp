@@ -49,18 +49,29 @@ describe('재무 순위 전략 metadata', () => {
   it('신규 ID, version, 이름, 설명을 정확히 등록한다', () => {
     expect(registry.describe('earnings-acceleration-rank')).toEqual({
       id: 'earnings-acceleration-rank',
-      version: '1.2.0',
+      version: '1.2.2',
       name: '이익 가속·가격 확인 순위',
       requiresFundamentals: true,
       description: 'PIT 영업이익 가속과 양의 가격 모멘텀을 함께 순위화하는 동일가중 연구 전략',
     });
     expect(registry.describe('low-per-high-roe-rank')).toEqual({
       id: 'low-per-high-roe-rank',
-      version: '1.2.0',
+      version: '1.3.0',
       name: '저PER·고ROE 순위',
       requiresFundamentals: true,
       description: 'PIT TTM 순이익 기준 저PER과 고ROE를 결합하는 동일가중 연구 전략',
     });
+  });
+
+  it('2봉 리밸런스 전략 네 개는 중간 실제 거래 봉을 하나 요구한다', () => {
+    for (const id of [
+      'cross-sectional-momentum',
+      'value-quality-rank',
+      'earnings-acceleration-rank',
+      'low-per-high-roe-rank',
+    ]) {
+      expect(registry.get(id)?.requiredRebalanceGapBars, id).toBe(1);
+    }
   });
 
   it('신규 전략 parameter JSON schema에 기본값을 노출한다', () => {
@@ -107,5 +118,15 @@ describe('requiresFundamentals 가 명시적으로 false 인 전략', () => {
 
   it('false 로 그대로 내려간다', () => {
     expect(new StrategyRegistry([explicitFalse]).list()[0]?.requiresFundamentals).toBe(false);
+  });
+
+  it('lookback을 선언하면 수집·실행 계약과 같이 true 로 정규화한다', () => {
+    const lookbackOnly = {
+      ...explicitFalse,
+      dataRequirements: { fundamentalLookbackQuarters: 4 },
+    } as AnyTradingStrategy;
+    const custom = new StrategyRegistry([lookbackOnly]);
+    expect(custom.list()[0]?.requiresFundamentals).toBe(true);
+    expect(custom.requiresFundamentals('x')).toBe(true);
   });
 });

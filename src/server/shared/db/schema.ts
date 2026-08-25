@@ -197,7 +197,7 @@ export const symbolCoverage = sqliteTable(
  * 이제 데이터셋 축이 없다 — 같은 종목을 두 데이터셋에서 각각 받던 중복이 사라진다.
  *
  * **행 존재를 "재무를 수집했다" 신호로 쓰면 안 된다.** 자본변동 전용 수집 경로가
- * 재무보다 먼저 행을 만들 수 있다(`SqliteCorporateActionCoverageStore.addYears`).
+ * 재무보다 먼저 행을 만들 수 있다(`SqliteCorporateActionCoverageStore.addCoverageResult`).
  * 그 행의 `coveredYearsJson` 은 빈 배열이다. 재무 수집 여부는 반드시
  * `coveredYearsJson` 의 배열 내용으로 판정해야 한다.
  */
@@ -207,10 +207,14 @@ export const symbolFactsState = sqliteTable('symbol_facts_state', {
     .references(() => symbols.code, { onDelete: 'cascade' }),
   /** number[] 오름차순 JSON */
   coveredYearsJson: text('covered_years_json').notNull(),
+  /** 현재 재무 parser·gap·fact manifest 프로토콜로 검증한 종목/연도 상태 JSON */
+  financialCoverageProtocolJson: text('financial_coverage_protocol_json'),
   /** 자본변동을 수집한 연도 (number[] 오름차순 JSON). 제출 게이트가 읽는다 */
   actionCoveredYearsJson: text('action_covered_years_json'),
   /** 자본변동 수집에서 gap 이 난 연도 (number[] 오름차순 JSON). 경고가 읽는다 */
   actionGapYearsJson: text('action_gap_years_json'),
+  /** 현재 gap/정렬 해석 프로토콜로 다시 검증한 연도와 버전 JSON */
+  actionCoverageProtocolJson: text('action_coverage_protocol_json'),
   /** 과거 마이그레이션 호환용 최종 갱신 시각. 새 watermark 판정에는 쓰지 않는다 */
   updatedAtMs: integer('updated_at_ms').notNull(),
   /** 재무 수집만 전진시키는 공시검색 watermark */
@@ -621,6 +625,7 @@ export const symbolMasterVersions = sqliteTable(
     uniqueIndex('idx_smv_open_code')
       .on(table.standardCode)
       .where(sql`${table.validToDate} IS NULL`),
+    index('idx_smv_short_code').on(table.shortCode),
     index('idx_smv_asof').on(table.validFromDate, table.validToDate),
     index('idx_smv_valid_to').on(table.validToDate),
     check(

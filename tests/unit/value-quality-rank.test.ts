@@ -102,6 +102,31 @@ describe('computeValueQualityMetrics', () => {
     expect(metrics?.returnOnCapital).toBeCloseTo(120_000 / 700_000);
   });
 
+  it('분할 뒤 낡은 공시 주식수 대신 리밸런스 시점 KRX 시가총액을 쓴다', () => {
+    const metrics = computeValueQualityMetrics(
+      // 공시 주식수는 분할 전 1,000주에 머물렀고 현재 종가는 1/5인 상황이다.
+      snapshot(HEALTHY, { ttmOperatingIncome: 120_000 }),
+      200,
+      Q2_2025,
+      2,
+      '1000000',
+    );
+    // 종가×낡은 주식수(200,000)가 아니라 KRX 시총 1,000,000을 써야 한다.
+    expect(metrics?.earningsYield).toBeCloseTo(120_000 / 1_050_000);
+  });
+
+  it('KRX 시가총액이 있으면 공시 발행주식수가 없어도 계산한다', () => {
+    const { SHARES_OUTSTANDING: _omitted, ...withoutShares } = HEALTHY;
+    const metrics = computeValueQualityMetrics(
+      snapshot(withoutShares, { ttmOperatingIncome: 120_000 }),
+      1_000,
+      Q2_2025,
+      2,
+      '1000000',
+    );
+    expect(metrics?.earningsYield).toBeCloseTo(120_000 / 1_050_000);
+  });
+
   it('TTM 영업이익이 없으면 null', () => {
     expect(
       computeValueQualityMetrics(snapshot(HEALTHY, { ttmOperatingIncome: null }), 1_000, Q2_2025, 2),
@@ -117,7 +142,7 @@ describe('computeValueQualityMetrics', () => {
     ).toBeNull();
   });
 
-  it('발행주식수가 없으면 null — 시가총액을 만들 수 없다', () => {
+  it('일정 없는 호환 경로에서 발행주식수가 없으면 null', () => {
     const { SHARES_OUTSTANDING: _omitted, ...withoutShares } = HEALTHY;
     expect(
       computeValueQualityMetrics(
@@ -299,7 +324,6 @@ describe('레지스트리 등록', () => {
     const properties = (schema as { properties: Record<string, Record<string, unknown>> }).properties;
     expect(properties.topN?.title).toBe('보유 종목 수');
     expect(properties.staleQuarters?.default).toBe(2);
-    expect(valueQualityRankStrategy.version).toBe('2.2.0');
   });
 });
 
@@ -419,6 +443,15 @@ describe('밸류·퀄리티 랭킹 실행', () => {
       maxPositions: 1,
       facts,
       tradeFromTsMs: disclosed,
+      universeSchedule: [{
+        fromTsMs: disclosed,
+        members: ['CHEAP', 'RICH'].map((symbol) => ({
+          symbol,
+          marketCapKrw: '1000000',
+          volume: 1_000,
+          tradingValueKrw: '1000000',
+        })),
+      }],
     });
     const buys = result.fills.filter((fill) => fill.side === 'BUY');
     expect(buys.length).toBeGreaterThan(0);
@@ -582,15 +615,10 @@ describe('멤버십 일정 반영 랭킹 (리뷰 fix — 2026-08-05)', () => {
   /**
    * A·B·C 세 종목, topN=2. 재무(EBIT·유형자산 등)는 시간이 지나도 바뀌지 않으므로
    * 자본수익률 순위는 항상 C > B > A 로 고정해둔다(유형자산을 벌려 투입자본을 다르게
-   * 만든다). 이익수익률은 종가에 반사적이라 A 의 종가만 리밸런스 사이에 바꿔
-   * 순위를 뒤집는다 — 1구간(reb1, day5)에는 A 종가를 비싸게(5,000) 둬서 이익수익률이
-   * 바닥이라 순위 합에서 밀려나고, 2구간(reb2, Feb1=index30)에는 A 종가를 폭락(10)
-   * 시켜 이익수익률이 치솟게 한다. 그런데 A 는 2구간부터 일정에서 빠진다.
+   * 만든다). 1구간 선정 지표의 KRX 시가총액도 A > C > B 로 고정해 A가 순위 합에서
+   * 밀려나게 한다. 2구간(reb2, Feb1=index30)부터는 A가 일정에서 빠진다.
    *
-   * 필터링하지 않으면(구 코드): reb2 에서 A 가 원 지표만으로 순위 합 동점 1위가 돼
-   * targets=[A, B] 가 된다 — 보유 중이던 C 가 팔리고 A 매수는 엔진이 거부해 그 몫의
-   * 예산이 그대로 현금으로 논다(topN=2 인데 실보유는 B 하나로 줄어든다).
-   * 필터링하면 후보가 {B, C} 뿐이라 이미 topN(=2) 을 정확히 채우고 있어 아무 것도
+   * 필터링하면 2구간 후보가 {B, C} 뿐이라 이미 topN(=2)을 정확히 채우고 있어 아무 것도
    * 바뀌지 않는다 — 이 테스트가 검증하는 동작(cross-sectional-momentum.test.ts 의
    * 같은 이름 describe 와 같은 취지, 후보 생성 로직이 달라 별도로 검증한다).
    */
@@ -613,8 +641,8 @@ describe('멤버십 일정 반영 랭킹 (리뷰 fix — 2026-08-05)', () => {
     ...quarterlyFacts('C', disclosedForMembership, 25_000, membershipBalance(100_000)),
   ];
 
-  // A 종가만 구간 전환에 맞춰 바뀐다 — index 30(2구간 시작) 부터 폭락시켜 이익수익률을
-  // 뒤집는다. B·C 는 끝까지 그대로다.
+  // 가격 경로는 기존 회귀 픽스처를 유지한다. 랭킹은 종가를 다시 계산하지 않고
+  // 각 구간의 일정에 고정된 KRX 시가총액을 사용한다.
   function membershipCandles(bars: number): Candle[] {
     const out: Candle[] = [];
     for (let index = 0; index < bars; index += 1) {
@@ -635,8 +663,21 @@ describe('멤버십 일정 반영 랭킹 (리뷰 fix — 2026-08-05)', () => {
       maxPositions: 2,
       facts: membershipFacts,
       universeSchedule: [
-        { fromTsMs: disclosedForMembership, symbols: ['A', 'B', 'C'] },
-        { fromTsMs: START + 30 * DAY, symbols: ['B', 'C'] },
+        {
+          fromTsMs: disclosedForMembership,
+          members: [
+            { symbol: 'A', marketCapKrw: '5000000', volume: 1_000, tradingValueKrw: '5000000' },
+            { symbol: 'B', marketCapKrw: '100000', volume: 1_000, tradingValueKrw: '100000' },
+            { symbol: 'C', marketCapKrw: '200000', volume: 1_000, tradingValueKrw: '200000' },
+          ],
+        },
+        {
+          fromTsMs: START + 30 * DAY,
+          members: [
+            { symbol: 'B', marketCapKrw: '100000', volume: 1_000, tradingValueKrw: '100000' },
+            { symbol: 'C', marketCapKrw: '200000', volume: 1_000, tradingValueKrw: '200000' },
+          ],
+        },
       ],
     });
 
@@ -645,8 +686,7 @@ describe('멤버십 일정 반영 랭킹 (리뷰 fix — 2026-08-05)', () => {
     const buys = result.fills.filter((fill) => fill.side === 'BUY');
     expect(new Set(buys.map((fill) => fill.symbol))).toEqual(new Set(['B', 'C']));
 
-    // 2구간 전환(index30) 이후 — A 는 원 지표만 보면 순위 합 동점 1위이지만 일정에서
-    // 빠져 랭킹 후보에도 들지 못한다: A 매수 시도도, 그로 인한 C 매도도 일어나지 않는다.
+    // 2구간 전환(index30) 이후 A는 일정에서 빠져 랭킹 후보에도 들지 못한다.
     expect(result.fills.some((fill) => fill.symbol === 'A')).toBe(false);
     expect(result.fills.filter((fill) => fill.symbol === 'C' && fill.side === 'SELL')).toHaveLength(0);
     expect(
@@ -659,5 +699,27 @@ describe('멤버십 일정 반영 랭킹 (리뷰 fix — 2026-08-05)', () => {
     expect(new Set(result.openPositions.map((position) => position.symbol))).toEqual(
       new Set(['B', 'C']),
     );
+  });
+
+  it('시점별 일정에 KRX 시가총액이 빠지면 공시 주식수로 추정하지 않고 실패한다', () => {
+    expect(() => runBacktest(valueQualityRankStrategy, {
+      candles: membershipCandles(10),
+      initialCash: 10_000_000,
+      execution: ZERO_COST,
+      parameters: { topN: 1, staleQuarters: 2 },
+      randomSeed: 1,
+      maxPositions: 1,
+      facts: membershipFacts,
+      tradeFromTsMs: disclosedForMembership,
+      universeSchedule: [{
+        fromTsMs: disclosedForMembership,
+        members: [{
+          symbol: 'A',
+          marketCapKrw: null,
+          volume: 1_000,
+          tradingValueKrw: '1000000',
+        }],
+      }],
+    })).toThrow('밸류·퀄리티 랭킹에 필요한 유효한 KRX 시가총액이 없습니다: A');
   });
 });

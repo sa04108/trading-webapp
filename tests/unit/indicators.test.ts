@@ -30,14 +30,17 @@ describe('updateEma', () => {
 });
 
 describe('updateAtr (Wilder)', () => {
-  it('첫 봉은 high−low, 이후 (prev×(n−1)+TR)/n', () => {
+  it('첫 period개 TR의 단순평균으로 시드한 뒤 Wilder 평활한다', () => {
     const state = newAtr();
-    updateAtr(state, { high: 12, low: 8, close: 10 }, 2);
-    expect(state.atr).toBe(4); // 12−8
-    // TR = max(14−9, |14−10|, |9−10|) = 5 → (4×1+5)/2 = 4.5
-    updateAtr(state, { high: 14, low: 9, close: 13 }, 2);
-    expect(state.atr).toBeCloseTo(4.5);
-    expect(state.barsSeen).toBe(2);
+    updateAtr(state, { high: 2, low: 0, close: 1 }, 3); // TR 2
+    expect(state.atr).toBeNull();
+    updateAtr(state, { high: 5, low: 1, close: 3 }, 3); // TR 4
+    expect(state.atr).toBeNull();
+    updateAtr(state, { high: 11, low: 3, close: 7 }, 3); // TR 8
+    expect(state.atr).toBeCloseTo(14 / 3);
+    updateAtr(state, { high: 12, low: 7, close: 10 }, 3); // TR 5
+    expect(state.atr).toBeCloseTo((14 / 3 * 2 + 5) / 3);
+    expect(state.barsSeen).toBe(4);
   });
 });
 
@@ -152,6 +155,24 @@ describe('scaleAtr — 진폭과 기준 종가를 함께 내린다', () => {
 
     expect(before.atr).toBeCloseTo(after.atr as number, 9);
     expect(before.prevClose).toBeCloseTo(after.prevClose as number, 9);
+  });
+
+  it('시드 중 분할이 있어도 true range 합을 같은 단위로 보정한다', () => {
+    const before = newAtr();
+    const after = newAtr();
+    for (const bar of bars.slice(0, 2)) {
+      updateAtr(before, bar, 3);
+      updateAtr(after, { high: bar.high / 5, low: bar.low / 5, close: bar.close / 5 }, 3);
+    }
+
+    scaleAtr(before, 5);
+    expect(before.atr).toBeNull();
+    expect(before.seedTrueRangeSum).toBeCloseTo(after.seedTrueRangeSum, 9);
+
+    const third = bars[2]!;
+    updateAtr(before, { high: third.high / 5, low: third.low / 5, close: third.close / 5 }, 3);
+    updateAtr(after, { high: third.high / 5, low: third.low / 5, close: third.close / 5 }, 3);
+    expect(before.atr).toBeCloseTo(after.atr as number, 9);
   });
 
   it('prevClose 를 내리지 않으면 다음 봉의 진폭이 분할 낙폭 전체가 된다', () => {

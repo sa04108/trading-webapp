@@ -299,6 +299,137 @@ describe('runBacktest 이벤트 순서 (스펙 §9.1, §9.2)', () => {
     });
   });
 
+  it('anchors CAGR to the requested period when selected-symbol candles start late or end early', () => {
+    const resultFromTsMs = START - DAY;
+    const resultToTsMs = START + 99 * DAY;
+    const input = {
+      candles: [
+        dailyBar(0, 100),
+        dailyBar(1, 100),
+        dailyBar(2, 99),
+        dailyBar(3, 101),
+      ],
+      initialCash: 10_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+      tradeFromTsMs: START,
+    } as const;
+    const actualPointsResult = runBacktest(buyAtBarStrategy(0, 100) as never, input);
+    const result = runBacktest(buyAtBarStrategy(0, 100) as never, {
+      ...input,
+      resultPeriod: { fromTsMs: resultFromTsMs, toTsMs: resultToTsMs },
+    });
+
+    expect(result.equityPoints[0]).toEqual({ tsMs: resultFromTsMs, equity: 10_000 });
+    expect(result.equityPoints.at(-1)).toEqual({ tsMs: resultToTsMs, equity: 10_100 });
+    const elapsedDays = (resultToTsMs - resultFromTsMs) / DAY;
+    expect(result.metrics.cagrPct).toBeCloseTo(
+      ((10_100 / 10_000) ** (365 / elapsedDays) - 1) * 100,
+    );
+    expect(result.metrics.cagrPct).toBeLessThan(4);
+    expect(result.openPositions[0]?.lastPriceTsMs).toBe(START + 3 * DAY);
+    expect(result.metrics.volatilityPct).toBe(actualPointsResult.metrics.volatilityPct);
+    expect(result.metrics.sharpe).toBe(actualPointsResult.metrics.sharpe);
+    expect(result.metrics.sortino).not.toBeNull();
+    expect(result.metrics.sortino).toBe(actualPointsResult.metrics.sortino);
+    expect(result.fills).toEqual(actualPointsResult.fills);
+    expect(result.processedBars).toBe(actualPointsResult.processedBars);
+  });
+
+  it('reuses real boundary points instead of duplicating requested-period anchors', () => {
+    const result = runBacktest(buyAtBarStrategy(-1) as never, {
+      candles: [dailyBar(0, 100), dailyBar(1, 100)],
+      initialCash: 10_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+      tradeFromTsMs: START,
+      resultPeriod: { fromTsMs: START, toTsMs: START + DAY },
+    });
+
+    expect(result.equityPoints.map((point) => point.tsMs)).toEqual([START, START + DAY]);
+  });
+
+  it('fills every requested month with zero returns when there are no market observations', () => {
+    const fromTsMs = Date.UTC(2026, 0, 1);
+    const toTsMs = Date.UTC(2026, 3, 1);
+    const result = runBacktest(buyAtBarStrategy(-1) as never, {
+      candles: [],
+      initialCash: 10_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+      resultPeriod: { fromTsMs, toTsMs },
+    });
+
+    expect(result.equityPoints).toEqual([
+      { tsMs: fromTsMs, equity: 10_000 },
+      { tsMs: toTsMs, equity: 10_000 },
+    ]);
+    expect(result.monthlyReturns).toEqual([
+      { year: 2026, month: 1, returnPct: 0 },
+      { year: 2026, month: 2, returnPct: 0 },
+      { year: 2026, month: 3, returnPct: 0 },
+      { year: 2026, month: 4, returnPct: 0 },
+    ]);
+  });
+
+  it('rejects result-period timestamps that are not valid UTC date boundaries', () => {
+    const baseInput = {
+      candles: [],
+      initialCash: 10_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+    } as const;
+
+    expect(() => runBacktest(buyAtBarStrategy(-1) as never, {
+      ...baseInput,
+      resultPeriod: { fromTsMs: START + 1, toTsMs: START + DAY },
+    })).toThrow('UTC 자정');
+    expect(() => runBacktest(buyAtBarStrategy(-1) as never, {
+      ...baseInput,
+      resultPeriod: {
+        fromTsMs: START,
+        toTsMs: 8_640_000_000_000_000 + DAY,
+      },
+    })).toThrow('Date 범위');
+  });
+
+  it('includes paid entry commission in open-position PnL', () => {
+    const withEntryCommission: ExecutionProfile = {
+      cost: {
+        id: 'entry-commission',
+        version: '1',
+        buyCommissionRate: 0.001,
+        sellCommissionRate: 0.001,
+        sellTaxRate: 0.002,
+      },
+      slippage: { id: 'zero', version: '1', bps: 0, fixed: 0 },
+      rules: { tickSize: 0, minOrderQty: 1 },
+    };
+    const result = runBacktest(buyAtBarStrategy(0, 5) as never, {
+      candles: [bar(0, 100), bar(1, 110), bar(2, 130)],
+      initialCash: 10_000,
+      execution: withEntryCommission,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+    });
+
+    const open = result.openPositions[0]!;
+    const costBasis = 5 * 110;
+    const entryCommission = costBasis * 0.001;
+    expect(open.unrealizedPnl).toBeCloseTo(5 * (130 - 110) - entryCommission);
+    expect(open.returnPct).toBeCloseTo((open.unrealizedPnl / costBasis) * 100);
+    expect(result.metrics.finalEquity).toBeCloseTo(10_000 + open.unrealizedPnl);
+  });
+
   it('reports no open positions when everything was closed', () => {
     const candles = [bar(0, 100), bar(1, 110), bar(2, 120)];
     const strategy: TradingStrategy<unknown, { step: number }> = {
@@ -542,6 +673,7 @@ describe('취소 (D-042) — runBacktestCancellable', () => {
   it('실행 도중 취소 요청이 들어오면 중단한다 — 동기 드라이버는 같은 신호를 볼 틈이 없다', async () => {
     // CANCEL_YIELD_INTERVAL_BARS(200) 보다 훨씬 많은 봉이 있어야 양보 창이 여러 번 열린다.
     const manyBars = Array.from({ length: 1_000 }, (_, i) => bar(i, 100));
+    const resultToTsMs = START + 100 * DAY;
     const input = {
       candles: manyBars,
       initialCash: 10_000,
@@ -549,6 +681,8 @@ describe('취소 (D-042) — runBacktestCancellable', () => {
       parameters: {},
       randomSeed: 42,
       maxPositions: 5,
+      tradeFromTsMs: START,
+      resultPeriod: { fromTsMs: START, toTsMs: resultToTsMs },
     };
 
     // 마이크로태스크로 뒤집는다 — setTimeout 등 실제 타이머 해상도에 기대면 CI 에서
@@ -563,6 +697,7 @@ describe('취소 (D-042) — runBacktestCancellable', () => {
     });
     expect(asyncResult.cancelled).toBe(true);
     expect(asyncResult.processedBars).toBeLessThan(manyBars.length);
+    expect(asyncResult.equityPoints.at(-1)?.tsMs).not.toBe(resultToTsMs);
 
     // 같은 신호원(마이크로태스크)을 동기 드라이버에 걸어도 뒤집히지 않는다.
     // `runBacktest` 는 제너레이터를 한 호흡에 끝까지 비운다.
@@ -578,6 +713,7 @@ describe('취소 (D-042) — runBacktestCancellable', () => {
     });
     expect(syncResult.cancelled).toBe(false);
     expect(syncResult.processedBars).toBe(manyBars.length);
+    expect(syncResult.equityPoints.at(-1)?.tsMs).toBe(resultToTsMs);
   });
 });
 
@@ -618,6 +754,94 @@ describe('분할을 걸친 보유 포지션 조정', () => {
     // 분할 직전(봉1)과 직후(봉2) 종가 기준 평가금액이 같아야 한다.
     // 5:1 분할로 종가가 1/5 이 됐지만 보유 수량도 5배가 됐으니 상쇄된다.
     expect(result.equityPoints[1]!.equity).toBe(result.equityPoints[2]!.equity);
+  });
+
+  it('역분할 단주 현금정산 뒤 남은 포지션에는 해당 몫의 매수수수료만 남긴다', () => {
+    const buyCommissionOnly: ExecutionProfile = {
+      cost: {
+        id: 'buy-commission-only',
+        version: '1',
+        buyCommissionRate: 0.01,
+        sellCommissionRate: 0,
+        sellTaxRate: 0,
+      },
+      slippage: ZERO_COST.slippage,
+      rules: ZERO_COST.rules,
+    };
+    const result = runBacktest(buyAtBarStrategy(0, 12) as never, {
+      candles: [
+        dailyBar(0, 10_000),
+        dailyBar(1, 10_000),
+        dailyBar(2, 50_000),
+        dailyBar(3, 50_000),
+      ],
+      initialCash: 1_000_000,
+      execution: buyCommissionOnly,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+      // 12주 × 0.2 = 2.4주: 2주는 남고 0.4주는 현금으로 정산된다.
+      facts: [splitFact('A', SPLIT_PERIOD_KEY, 0.2)],
+    });
+
+    expect(result.openPositions).toHaveLength(1);
+    expect(result.openPositions[0]).toMatchObject({
+      quantity: 2,
+      avgEntryPrice: 50_000,
+    });
+    // 매수수수료 1,200원 중 남은 2/2.4 몫인 1,000원만 미실현손익에 남는다.
+    // 종전에는 단주 몫 200원까지 전부 붙어 -1,200원으로 과소계상했다.
+    expect(result.openPositions[0]!.unrealizedPnl).toBeCloseTo(-1_000);
+  });
+
+  it('역분할 단주 정산 뒤 실제 매도 레그에도 남은 몫의 매수수수료만 배분한다', () => {
+    const strategy: TradingStrategy<unknown, { step: number }> = {
+      id: 'reverse-split-sell',
+      version: '1.0.0',
+      name: 't',
+      description: 't',
+      parameterSchema: z.unknown(),
+      initialize: () => ({ step: 0 }),
+      onBars(_context, state) {
+        const orders: OrderIntent[] = state.step === 0
+          ? [{ symbol: 'A', side: 'BUY', quantity: 12 }]
+          : state.step === 2
+            ? [{ symbol: 'A', side: 'SELL', quantity: 999 }]
+            : [];
+        state.step += 1;
+        return { orders };
+      },
+    };
+    const result = runBacktest(strategy as never, {
+      candles: [
+        dailyBar(0, 10_000),
+        dailyBar(1, 10_000),
+        dailyBar(2, 50_000),
+        dailyBar(3, 50_000),
+      ],
+      initialCash: 1_000_000,
+      execution: {
+        cost: {
+          id: 'buy-commission-only',
+          version: '1',
+          buyCommissionRate: 0.01,
+          sellCommissionRate: 0,
+          sellTaxRate: 0,
+        },
+        slippage: ZERO_COST.slippage,
+        rules: ZERO_COST.rules,
+      },
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+      facts: [splitFact('A', SPLIT_PERIOD_KEY, 0.2)],
+    });
+
+    expect(result.openPositions).toHaveLength(0);
+    expect(result.trades).toHaveLength(1);
+    expect(result.trades[0]!.quantity).toBe(2);
+    expect(result.trades[0]!.costs).toBeCloseTo(1_000);
+    expect(result.trades[0]!.netPnl).toBeCloseTo(-1_000);
   });
 
   it('분할일 매도는 조정된 수량으로 체결된다', () => {
@@ -1061,6 +1285,72 @@ describe('분할을 걸친 보유 포지션 조정', () => {
     expect(result.openPositions).toHaveLength(1);
     expect(result.openPositions[0]!.quantity).toBe(100);
     expect(result.openPositions[0]!.avgEntryPrice).toBe(20_000);
+  });
+
+  it('정지 중 분할을 거친 재개 봉에서 직전 거래량도 새 주식 단위로 한 번만 보정한다', () => {
+    const candles = [
+      dailyBar(1, 100_000),
+      { ...dailyBar(2, 100_000), symbol: 'B' },
+      { ...dailyBar(3, 100_000), symbol: 'B' },
+      dailyBar(4, 20_000),
+      dailyBar(5, 20_000),
+    ];
+    const strategy: TradingStrategy<unknown, { step: number }> = {
+      id: 'split-volume-unit',
+      version: '1.0.0',
+      name: 't',
+      description: 't',
+      parameterSchema: z.unknown(),
+      initialize: () => ({ step: 0 }),
+      onBars(_context, state) {
+        const orders: OrderIntent[] = state.step === 0 || state.step === 3
+          ? [{ symbol: 'A', side: 'BUY', quantity: 10 }]
+          : [];
+        state.step += 1;
+        return { orders };
+      },
+    };
+    const result = runBacktest(strategy as never, {
+      candles,
+      initialCash: 10_000_000,
+      execution: {
+        ...ZERO_COST,
+        rules: { ...ZERO_COST.rules, maxVolumeParticipationRate: 0.1 },
+      },
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+      facts: [splitFact('A', SPLIT_PERIOD_KEY, 5)],
+    });
+
+    expect(result.fills.filter((fill) => fill.side === 'BUY').map((fill) => fill.quantity))
+      .toEqual([50, 10]);
+  });
+
+  it('분할 재개 봉의 현재 거래량은 분할 비율을 다시 곱하지 않고 절대 상한으로 쓴다', () => {
+    const candles = [
+      dailyBar(1, 100_000),
+      { ...dailyBar(2, 100_000), symbol: 'B' },
+      { ...dailyBar(3, 100_000), symbol: 'B' },
+      { ...dailyBar(4, 20_000), volume: 30 },
+    ];
+    const result = runBacktest(buyAtBarStrategy(0, 10) as never, {
+      candles,
+      initialCash: 10_000_000,
+      execution: {
+        ...ZERO_COST,
+        rules: { ...ZERO_COST.rules, maxVolumeParticipationRate: 0.1 },
+      },
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+      facts: [splitFact('A', SPLIT_PERIOD_KEY, 5)],
+    });
+
+    // 직전 100주 × 분할 5 × participation 10% = 50주지만,
+    // 현재 봉은 새 주식 단위로 30주만 거래됐으므로 30주가 최종 상한이다.
+    expect(result.fills.filter((fill) => fill.side === 'BUY').map((fill) => fill.quantity))
+      .toEqual([30]);
   });
 
   it('포지션도 대기 주문도 없어도 봉이 있으면 훅을 부른다', () => {

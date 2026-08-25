@@ -49,13 +49,15 @@ export interface AtrState {
   atr: number | null;
   prevClose: number | null;
   barsSeen: number;
+  /** 최초 `period`개 true range의 단순평균을 만들기 위한 합 */
+  seedTrueRangeSum: number;
 }
 
 export function newAtr(): AtrState {
-  return { atr: null, prevClose: null, barsSeen: 0 };
+  return { atr: null, prevClose: null, barsSeen: 0, seedTrueRangeSum: 0 };
 }
 
-/** Wilder ATR — 첫 봉은 high−low, 이후 (prev×(n−1)+TR)/n */
+/** Wilder ATR — 첫 period개 TR의 단순평균으로 시드한 뒤 (prev×(n−1)+TR)/n */
 export function updateAtr(
   state: AtrState,
   bar: { high: number; low: number; close: number },
@@ -69,15 +71,21 @@ export function updateAtr(
           Math.abs(bar.high - state.prevClose),
           Math.abs(bar.low - state.prevClose),
         );
-  state.atr = state.atr === null ? trueRange : (state.atr * (period - 1) + trueRange) / period;
   state.prevClose = bar.close;
   state.barsSeen += 1;
+  if (state.atr === null) {
+    state.seedTrueRangeSum += trueRange;
+    if (state.barsSeen === period) state.atr = state.seedTrueRangeSum / period;
+    return;
+  }
+  state.atr = (state.atr * (period - 1) + trueRange) / period;
 }
 
 /**
  * 자본변동 비율만큼 누적값을 내린다.
  *
  * `atr` 은 가격의 차이라 가격과 같은 단위다. 그래서 비율만큼 나눈다.
+ * 시드 중인 true range 합도 가격 단위이므로 같이 나눈다.
  * `prevClose` 는 다음 봉의 진폭을 재는 기준 가격이라 함께 나눈다.
  * 특히 `prevClose` 를 두면 분할 봉의 진폭이 분할 낙폭 전체가 된다.
  * 그러면 `atr` 이 크게 튄다.
@@ -87,6 +95,7 @@ export function updateAtr(
  */
 export function scaleAtr(state: AtrState, ratio: number): void {
   if (state.atr !== null) state.atr /= ratio;
+  state.seedTrueRangeSum /= ratio;
   if (state.prevClose !== null) state.prevClose /= ratio;
 }
 

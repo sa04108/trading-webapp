@@ -67,15 +67,48 @@ export function installPreparedSubmissionFixture(ctx: TestApp): void {
   const planCorporateActionSync: typeof ctx.container.factSyncService.planCorporateActionSync = () => noWorkPlan;
   ctx.container.factSyncService.planFinancialSync = planFinancialSync;
   ctx.container.factSyncService.planCorporateActionSync = planCorporateActionSync;
-  const noWorkReport: typeof ctx.container.factSyncService.sync = async () => ({
-    savedFacts: 0,
-    gaps: [],
-    stoppedAtSymbol: null,
-    stopReason: null,
-    failureMessage: null,
-  });
-  ctx.container.factSyncService.sync = noWorkReport;
-  ctx.container.factSyncService.syncCorporateActions = noWorkReport;
+  ctx.container.factSyncService.sync = async (request) => {
+    // DART가 공시 0건을 정상 반환해도 요청한 연도는 완전히 조회한 상태다. 준비 완료
+    // 불변식을 실제 서비스와 같게 만들되, 외부 호출과 fact 행 생성만 생략한다.
+    const years: number[] = [];
+    for (let year = request.fromYear; year <= request.toYear; year += 1) years.push(year);
+    for (const symbol of request.symbols) {
+      ctx.container.factCoverageStore.addCoveredYears(
+        symbol,
+        years,
+        ctx.container.clock.now(),
+      );
+    }
+    return {
+      savedFacts: 0,
+      gaps: [],
+      stoppedAtSymbol: null,
+      stopReason: null,
+      failureMessage: null,
+    };
+  };
+  ctx.container.factSyncService.syncCorporateActions = async (request) => {
+    // 외부 DART만 no-op으로 격리하되, 성공한 준비가 남겨야 할 현재 protocol coverage는
+    // 실제 서비스와 동일하게 기록한다. 그렇지 않으면 worker의 최종 fail-closed가
+    // 테스트 fixture 자체를 구버전/미수집 데이터로 올바르게 거부한다.
+    const years: number[] = [];
+    for (let year = request.fromYear; year <= request.toYear; year += 1) years.push(year);
+    for (const symbol of request.symbols) {
+      ctx.container.actionCoverageStore.addCoverageResult(
+        symbol,
+        years,
+        [],
+        ctx.container.clock.now(),
+      );
+    }
+    return {
+      savedFacts: 0,
+      gaps: [],
+      stoppedAtSymbol: null,
+      stopReason: null,
+      failureMessage: null,
+    };
+  };
 
   const waitForPreparation = async (jobId: string): Promise<boolean> => {
     const started = Date.now();

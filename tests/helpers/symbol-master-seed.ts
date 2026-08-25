@@ -1,3 +1,4 @@
+import { and, eq, isNull } from 'drizzle-orm';
 import type { Container } from '../../src/server/bootstrap/container.js';
 import {
   dailySelectionMetrics,
@@ -5,6 +6,7 @@ import {
   symbolMasterMarketCaps,
   symbolMasterTradingDays,
   symbolMasterVersions,
+  symbols,
 } from '../../src/server/shared/db/schema.js';
 
 /** `UniverseRuleResolver` 테스트 픽스처 — 실제 KRX 마스터가 갖는 필드의 최소 부분집합 */
@@ -45,6 +47,16 @@ export function seedSymbolMasterUniverse(
         recordedAtMs: container.clock.now(),
       })),
     ).run();
+    // 이 helper는 권위 있는 master fixture를 만드는 경계다. 그보다 먼저 만든 등록 행도
+    // 운영의 검증 완료 상태처럼 같은 표준코드로 묶어, 일반 통합 테스트가 의도치 않게
+    // "미검증 legacy 등록" 시나리오가 되지 않게 한다. null 차단은 전용 테스트가 맡는다.
+    for (const entry of entries) {
+      container.database.db
+        .update(symbols)
+        .set({ standardCode: entry.standardCode })
+        .where(and(eq(symbols.code, entry.shortCode), isNull(symbols.standardCode)))
+        .run();
+    }
   }
 
   container.database.db

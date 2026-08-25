@@ -7,7 +7,10 @@ import type {
   StrategyInitializeContext,
   TradingStrategy,
 } from '../domain/strategy.js';
-import { currentQuarterOrdinal } from './shared/fundamental-rank.js';
+import {
+  currentQuarterOrdinal,
+  safePositiveMarketCap,
+} from './shared/fundamental-rank.js';
 import { rankDescending, type Scored } from './shared/rank.js';
 import { planBuyPhase, planSellPhase } from './shared/two-phase-rebalance.js';
 
@@ -17,8 +20,8 @@ import { planBuyPhase, planSellPhase } from './shared/two-phase-rebalance.js';
  * 이익수익률(TTM EBIT / EV) 과 자본수익률(TTM EBIT / 투입자본) 을 각각 순위 매겨
  * 합산하고, 합이 작은 상위 N 을 동일가중 보유한다.
  *
- * 비율을 팩트로 저장하지 않는 이유: 시가총액은 매 봉 종가에 따라 변한다. 원자료만
- * 저장하고 여기서 봉 시점 가격으로 계산한다.
+ * 비율을 팩트로 저장하지 않는 이유: 계산 입력은 리밸런스 시점에 따라 변한다.
+ * 원자료(KRX 시점 시가총액과 PIT 재무)만 저장하고 여기서 계산한다.
  *
  * 연결(CFS)/별도(OFS) 는 파라미터가 아니라 **수집 시점 선택**이다 — Fact 스키마에
  * 두 기준을 함께 담을 자리가 없다. 데이터셋 하나는 한 기준만 담는다.
@@ -63,14 +66,14 @@ const DEBT_FIELDS: readonly FundamentalField[] = [
 const CASH_FIELDS: readonly FundamentalField[] = ['CASH_AND_EQUIVALENTS', 'SHORT_TERM_INVESTMENTS'];
 
 /**
- * computeValueQualityMetrics 가 실제로 읽는 계정 전체 — 계정별 신선도 판정에 쓴다.
+ * 생산 경로의 computeValueQualityMetrics 가 실제로 읽는 계정 전체 — 계정별 신선도
+ * 판정에 쓴다. 일정 없는 호환 경로는 SHARES_OUTSTANDING을 동적으로 더한다.
  * 부채·현금 계정은 공시가 없으면(periodKeyOf 가 null) 자연히 판정에서 빠진다 —
  * "공시 안 됨" 을 "무한히 낡음" 으로 세지 않기 위해서다 (sumFields 가 같은 계정을
  * 0 으로 취급하는 것과 대응된다).
  */
 const CONSULTED_FIELDS: readonly FundamentalField[] = [
   'OPERATING_INCOME',
-  'SHARES_OUTSTANDING',
   'CURRENT_ASSETS',
   'CURRENT_LIABILITIES',
   'TANGIBLE_ASSETS',
@@ -99,9 +102,9 @@ export function computeValueQualityMetrics(
   close: number,
   currentQuarter: number,
   staleQuarters: number,
+  /** 리밸런스 시점 KRX 시가총액. 일정 없는 직접 호출만 종가×공시주식수로 대체한다. */
+  marketCapKrw?: string,
 ): ValueQualityMetrics | null {
-  if (!Number.isFinite(close) || close <= 0) return null;
-
   // 1차 관문 — 분기 키 형식 자체가 아니거나 공시가 아예 없으면 계정별 판정으로도
   // 넘어가지 않는다 (신고 자체가 끊긴 관리종목·상장폐지 직전 종목).
   if (snapshot.latestPeriodKey === null || quarterOrdinal(snapshot.latestPeriodKey) === null) {
@@ -111,8 +114,20 @@ export function computeValueQualityMetrics(
   const ebit = snapshot.ttm('OPERATING_INCOME');
   if (ebit === null || ebit <= 0) return null; // 원 규칙: 적자 기업 제외
 
-  const shares = snapshot.get('SHARES_OUTSTANDING');
-  if (shares === null || shares <= 0) return null;
+  let marketCap: number;
+  if (marketCapKrw !== undefined) {
+    const parsed = safePositiveMarketCap(marketCapKrw);
+    if (parsed === null) return null;
+    marketCap = parsed;
+  } else {
+    // 일정이 없는 순수 엔진 호출의 호환 경로다. 생산 실행은 KRX 시가총액을 넘겨
+    // 분할 뒤 종가와 아직 갱신되지 않은 분기 공시 주식수의 단위 불일치를 피한다.
+    if (!Number.isFinite(close) || close <= 0) return null;
+    const shares = snapshot.get('SHARES_OUTSTANDING');
+    if (shares === null || shares <= 0) return null;
+    marketCap = close * shares;
+    if (!Number.isFinite(marketCap) || marketCap <= 0) return null;
+  }
 
   const currentAssets = snapshot.get('CURRENT_ASSETS');
   const currentLiabilities = snapshot.get('CURRENT_LIABILITIES');
@@ -124,14 +139,16 @@ export function computeValueQualityMetrics(
   // 몇 년째 갱신되지 않은 회사가 통과해버리는 구멍이 있었다 — staleQuarters 라는
   // 이름·설명이 약속하는 것과 실제 동작이 달랐다. periodKeyOf 가 null 인 계정(공시
   // 자체가 없는 선택 계정)은 값을 낸 적이 없으므로 판정에서 자연히 빠진다.
-  const accountQuarters = CONSULTED_FIELDS.map((field) => snapshot.periodKeyOf(field))
+  const accountFields = marketCapKrw === undefined
+    ? [...CONSULTED_FIELDS, 'SHARES_OUTSTANDING' as const]
+    : CONSULTED_FIELDS;
+  const accountQuarters = accountFields.map((field) => snapshot.periodKeyOf(field))
     .map((periodKey) => (periodKey === null ? null : quarterOrdinal(periodKey)))
     .filter((ordinal): ordinal is number => ordinal !== null);
   if (accountQuarters.length === 0) return null; // 위에서 필수 계정을 이미 확인했으니 도달 불가 — 방어적 가드
   const oldestQuarter = Math.min(...accountQuarters);
   if (currentQuarter - oldestQuarter > staleQuarters) return null;
 
-  const marketCap = close * shares;
   const enterpriseValue = marketCap + sumFields(snapshot, DEBT_FIELDS) - sumFields(snapshot, CASH_FIELDS);
   if (enterpriseValue <= 0) return null; // 현금이 시총+차입금을 넘는 경우 — 비율이 무의미해진다
 
@@ -151,12 +168,13 @@ export const valueQualityRankStrategy: TradingStrategy<
   ValueQualityRankState
 > = {
   id: 'value-quality-rank',
-  version: '2.2.0',
+  version: '2.3.0',
   name: '밸류·퀄리티 랭킹',
   description:
     '이익수익률(EBIT/EV)과 자본수익률(EBIT/투입자본) 순위를 합산해 상위 N 을 동일가중 보유합니다. 상장시점 재무제표가 수집된 데이터셋에서만 동작합니다.',
   requiresFundamentals: true,
   parameterSchema: valueQualityRankParameters,
+  requiredRebalanceGapBars: 1,
   dataRequirements: {
     fundamentalLookbackQuarters: 4,
     // 엔진의 포지션 수량 보정도 최종 유니버스 자본변동 이력을 소비한다.
@@ -195,6 +213,18 @@ export const valueQualityRankStrategy: TradingStrategy<
       // 와 같은 이유(여기서 안 빼면 그 슬롯이 topN 을 차지한 채 매수 단계에서만
       // 걸러지고, 그만큼 예산이 그냥 현금으로 논다)
       if (context.tradableSymbols !== null && !context.tradableSymbols.has(symbol)) continue;
+      const marketCapKrw = context.selectionMetric(symbol)?.marketCapKrw ?? undefined;
+      // 생산 실행의 시점별 schedule은 activeUniverseSymbols를 항상 구체화한다.
+      // 그 일정에서 시총만 빠졌는지는 재무 스냅샷 유무와 무관하게 검증한다.
+      if (
+        context.activeUniverseSymbols !== null
+        && (marketCapKrw === undefined || safePositiveMarketCap(marketCapKrw) === null)
+      ) {
+        throw new Error(
+          `밸류·퀄리티 랭킹에 필요한 유효한 KRX 시가총액이 없습니다: ${symbol}. `
+            + '해당 리밸런스 날짜의 선정 지표를 다시 준비하세요.',
+        );
+      }
       const snapshot = context.fundamentals(symbol);
       const close = context.bars.get(symbol)?.close;
       if (!snapshot || close === undefined) continue;
@@ -203,6 +233,7 @@ export const valueQualityRankStrategy: TradingStrategy<
         close,
         currentQuarter,
         parameters.staleQuarters,
+        marketCapKrw,
       );
       if (!metrics) continue;
       earningsYield.push({ symbol, score: metrics.earningsYield });

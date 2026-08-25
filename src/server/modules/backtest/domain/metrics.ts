@@ -37,21 +37,28 @@ interface DrawdownStats {
 export function computeDrawdownStats(equityPoints: readonly EquityPoint[]): DrawdownStats {
   let peak = -Infinity;
   let peakTs = 0;
+  let drawdownStartTs: number | null = null;
   let maxDrawdown = 0;
   let maxDuration = 0;
 
   for (const point of equityPoints) {
     if (point.equity >= peak) {
-      if (peak > 0) maxDuration = Math.max(maxDuration, point.tsMs - peakTs);
+      if (drawdownStartTs !== null) {
+        maxDuration = Math.max(maxDuration, point.tsMs - drawdownStartTs);
+        drawdownStartTs = null;
+      }
       peak = point.equity;
       peakTs = point.tsMs;
     } else if (peak > 0) {
+      // 고점과 같거나 더 높은 point 사이의 평탄·상승 구간은 drawdown이 아니다.
+      // 실제로 고점 아래로 내려온 첫 순간에만 직전 고점부터 기간을 열어 둔다.
+      if (drawdownStartTs === null) drawdownStartTs = peakTs;
       maxDrawdown = Math.min(maxDrawdown, point.equity / peak - 1);
     }
   }
   const last = equityPoints[equityPoints.length - 1];
-  if (last && last.equity < peak) {
-    maxDuration = Math.max(maxDuration, last.tsMs - peakTs);
+  if (last && drawdownStartTs !== null) {
+    maxDuration = Math.max(maxDuration, last.tsMs - drawdownStartTs);
   }
 
   return { maxDrawdownPct: maxDrawdown * 100, maxDrawdownDurationMs: maxDuration };
@@ -78,25 +85,47 @@ export function computeMonthlyReturns(
   equityPoints: readonly EquityPoint[],
   initialCash: number,
 ): MonthlyReturn[] {
-  const lastByMonth = new Map<string, { year: number; month: number; equity: number }>();
+  const lastByMonth = new Map<
+    string,
+    { year: number; month: number; equity: number; tsMs: number }
+  >();
   for (const point of equityPoints) {
     const date = new Date(point.tsMs);
     const year = date.getUTCFullYear();
     const month = date.getUTCMonth() + 1;
-    lastByMonth.set(`${year}-${month}`, { year, month, equity: point.equity });
+    const key = `${year}-${month}`;
+    const previous = lastByMonth.get(key);
+    if (previous === undefined || point.tsMs >= previous.tsMs) {
+      lastByMonth.set(key, { year, month, equity: point.equity, tsMs: point.tsMs });
+    }
   }
   const months = [...lastByMonth.values()].sort((a, b) =>
     a.year === b.year ? a.month - b.month : a.year - b.year,
   );
+  const first = months[0];
+  const last = months[months.length - 1];
+  if (first === undefined || last === undefined) return [];
+
   const result: MonthlyReturn[] = [];
   let previous = initialCash;
-  for (const entry of months) {
+  let year = first.year;
+  let month = first.month;
+  while (year < last.year || (year === last.year && month <= last.month)) {
+    const entry = lastByMonth.get(`${year}-${month}`);
+    // 요청 기간 anchor 사이에 실제 관측점이 없는 달은 직전 월말 평가액을 이월한다.
+    // 행 자체를 빼면 범주형 월 차트에서 긴 데이터 공백이 정상적인 연속 월처럼 보인다.
+    const equity = entry?.equity ?? previous;
     result.push({
-      year: entry.year,
-      month: entry.month,
-      returnPct: previous > 0 ? (entry.equity / previous - 1) * 100 : 0,
+      year,
+      month,
+      returnPct: previous > 0 ? (equity / previous - 1) * 100 : 0,
     });
-    previous = entry.equity;
+    previous = equity;
+    month += 1;
+    if (month === 13) {
+      year += 1;
+      month = 1;
+    }
   }
   return result;
 }
@@ -107,6 +136,12 @@ export function computeMetrics(
   fills: readonly Fill[],
   initialCash: number,
   maxConcurrentPositions: number,
+  /**
+   * 변동성·Sharpe·Sortino를 계산할 실제 시장 관측점. 요청 기간 경계를 표현하려고
+   * 합성한 현금/평가 anchor는 CAGR·MDD에는 필요하지만, 이를 0% 거래일 표본으로
+   * 세면 긴 데이터 공백일수록 위험지표가 인위적으로 좋아진다.
+   */
+  dailyReturnEquityPoints: readonly EquityPoint[] = equityPoints,
 ): BacktestMetrics {
   const finalEquity = equityPoints[equityPoints.length - 1]?.equity ?? initialCash;
   const totalReturnPct = (finalEquity / initialCash - 1) * 100;
@@ -121,18 +156,22 @@ export function computeMetrics(
 
   const { maxDrawdownPct, maxDrawdownDurationMs } = computeDrawdownStats(equityPoints);
 
-  const daily = dailyReturns(equityPoints, initialCash);
+  const daily = dailyReturns(dailyReturnEquityPoints, initialCash);
   const dailyStd = std(daily);
   const volatilityPct = daily.length >= 2 ? dailyStd * Math.sqrt(TRADING_DAYS_PER_YEAR) * 100 : null;
   const sharpe =
     daily.length >= 2 && dailyStd > 0
       ? (mean(daily) / dailyStd) * Math.sqrt(TRADING_DAYS_PER_YEAR)
       : null;
-  const downside = daily.filter((r) => r < 0);
-  const downsideStd = std(downside);
+  // Sortino의 downside deviation은 음수 표본끼리의 표준편차가 아니라,
+  // 전체 관측일에서 목표수익률(0)을 밑돈 편차의 제곱평균제곱근이다.
+  // 하락일이 한 번뿐이거나 같은 하락률이 반복돼도 위험이 0이 되지 않는다.
+  const downsideDeviation = daily.length > 0
+    ? Math.sqrt(mean(daily.map((value) => Math.min(value, 0) ** 2)))
+    : 0;
   const sortino =
-    daily.length >= 2 && downsideStd > 0
-      ? (mean(daily) / downsideStd) * Math.sqrt(TRADING_DAYS_PER_YEAR)
+    daily.length >= 2 && downsideDeviation > 0
+      ? (mean(daily) / downsideDeviation) * Math.sqrt(TRADING_DAYS_PER_YEAR)
       : null;
   const calmar =
     cagrPct !== null && maxDrawdownPct < 0 ? cagrPct / Math.abs(maxDrawdownPct) : null;

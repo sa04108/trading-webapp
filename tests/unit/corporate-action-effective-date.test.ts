@@ -34,6 +34,14 @@ describe('alignCorporateActionEffectiveDates', () => {
     expect(facts[0]?.periodKey).toBe('2024-10-08');
   });
 
+  it('DART 기준일과 KRX 변경일이 같으면 자기 날짜 충돌로 오인하지 않는다', () => {
+    const fact = splitFact({ periodKey: '2024-10-08' });
+    const { facts, unaligned } = alignCorporateActionEffectiveDates([fact], [sharesChange()]);
+
+    expect(facts).toEqual([fact]);
+    expect(unaligned).toEqual([]);
+  });
+
   it('자본변동이 아닌 팩트는 건드리지 않는다', () => {
     const financial = splitFact({ field: 'OPERATING_INCOME', periodKey: '2024Q3' });
 
@@ -50,6 +58,41 @@ describe('alignCorporateActionEffectiveDates', () => {
 
     expect(facts[0]?.periodKey).toBe('2024-09-27');
     expect(unaligned).toEqual([{ symbol: '007340', periodKey: '2024-09-27', ratio: 5 }]);
+  });
+
+  it('작은 증감은 총 비율이 아니라 변화분의 크기로 짝을 판정한다', () => {
+    const fact = splitFact({ value: 1.02 });
+    const differentIncrease = alignCorporateActionEffectiveDates(
+      [fact],
+      [sharesChange({ ratio: 1.07 })],
+    );
+    const oppositeDirection = alignCorporateActionEffectiveDates(
+      [fact],
+      [sharesChange({ ratio: 0.98 })],
+    );
+    const matchingIncrease = alignCorporateActionEffectiveDates(
+      [fact],
+      [sharesChange({ ratio: 1.021 })],
+    );
+
+    expect(differentIncrease.unaligned).toHaveLength(1);
+    expect(oppositeDirection.unaligned).toHaveLength(1);
+    expect(matchingIncrease.unaligned).toEqual([]);
+  });
+
+  it('심한 병합은 변화분뿐 아니라 총 비율도 가까워야 같은 사건으로 본다', () => {
+    const fact = splitFact({ value: 0.05 });
+    const differentConsolidation = alignCorporateActionEffectiveDates(
+      [fact],
+      [sharesChange({ ratio: 0.01 })],
+    );
+    const matchingConsolidation = alignCorporateActionEffectiveDates(
+      [fact],
+      [sharesChange({ ratio: 0.051 })],
+    );
+
+    expect(differentConsolidation.unaligned).toHaveLength(1);
+    expect(matchingConsolidation.unaligned).toEqual([]);
   });
 
   it('짝이 될 주식수 변경이 없으면 DART 기준일을 그대로 둔다', () => {
@@ -95,6 +138,22 @@ describe('alignCorporateActionEffectiveDates', () => {
     expect(facts[0]?.periodKey).toBe('2024-10-08');
   });
 
+  it('정렬 건수와 총 날짜 거리가 같으면 비율 오차가 가장 작은 조합을 쓴다', () => {
+    const first = splitFact({ periodKey: '2024-06-01', value: 2.04 });
+    const second = splitFact({ periodKey: '2024-06-03', value: 2 });
+
+    const { facts, unaligned } = alignCorporateActionEffectiveDates(
+      [first, second],
+      [
+        sharesChange({ effectiveDate: '2024-06-10', ratio: 2 }),
+        sharesChange({ effectiveDate: '2024-06-12', ratio: 2.04 }),
+      ],
+    );
+
+    expect(facts.map((fact) => fact.periodKey)).toEqual(['2024-06-12', '2024-06-10']);
+    expect(unaligned).toEqual([]);
+  });
+
   it('같은 주식수 변경을 두 자본변동이 나눠 갖지 않는다', () => {
     const first = splitFact({ periodKey: '2024-09-27' });
     const second = splitFact({ periodKey: '2024-09-30' });
@@ -104,6 +163,69 @@ describe('alignCorporateActionEffectiveDates', () => {
     const moved = facts.filter((fact) => fact.periodKey === '2024-10-08');
     expect(moved).toHaveLength(1);
     expect(unaligned).toHaveLength(1);
+  });
+
+  it('탐욕 선택보다 정렬 건수가 많은 짝 조합을 우선한다', () => {
+    const earlier = splitFact({ periodKey: '2024-10-01', value: 2 });
+    const later = splitFact({ periodKey: '2024-10-21', value: 2 });
+
+    const { facts, unaligned } = alignCorporateActionEffectiveDates(
+      [later, earlier],
+      [
+        sharesChange({ effectiveDate: '2024-10-11', ratio: 2 }),
+        sharesChange({ effectiveDate: '2024-09-01', ratio: 2 }),
+      ],
+    );
+
+    expect(facts.map((fact) => fact.periodKey).sort()).toEqual(['2024-09-01', '2024-10-11']);
+    expect(unaligned).toEqual([]);
+  });
+
+  it('다른 사건의 원래 날짜는 그 사건이 함께 이동할 때만 연쇄적으로 쓴다', () => {
+    const first = splitFact({ periodKey: '2024-10-01', value: 2 });
+    const second = splitFact({ periodKey: '2024-10-11', value: 3 });
+
+    const { facts, unaligned } = alignCorporateActionEffectiveDates(
+      [first, second],
+      [
+        sharesChange({ effectiveDate: '2024-10-11', ratio: 2 }),
+        sharesChange({ effectiveDate: '2024-10-21', ratio: 3 }),
+      ],
+    );
+
+    expect(facts.map((fact) => fact.periodKey)).toEqual(['2024-10-11', '2024-10-21']);
+    expect(unaligned).toEqual([]);
+  });
+
+  it('변경 행이 여러 개여도 같은 최종 효력일에는 한 사건만 배정한다', () => {
+    const first = splitFact({ periodKey: '2024-10-01', value: 2 });
+    const second = splitFact({ periodKey: '2024-10-02', value: 2 });
+
+    const { facts, unaligned } = alignCorporateActionEffectiveDates(
+      [first, second],
+      [
+        sharesChange({ effectiveDate: '2024-10-11', ratio: 2 }),
+        sharesChange({ effectiveDate: '2024-10-11', ratio: 2 }),
+      ],
+    );
+
+    expect(facts.filter((fact) => fact.periodKey === '2024-10-11')).toHaveLength(1);
+    expect(unaligned).toHaveLength(1);
+  });
+
+  it('같은 KRX 변경일에 비율이 상충하면 맞아 보이는 한 행을 임의 채택하지 않는다', () => {
+    const fact = splitFact({ periodKey: '2024-10-01', value: 2 });
+
+    const { facts, unaligned } = alignCorporateActionEffectiveDates(
+      [fact],
+      [
+        sharesChange({ effectiveDate: '2024-10-11', ratio: 2 }),
+        sharesChange({ effectiveDate: '2024-10-11', ratio: 5 }),
+      ],
+    );
+
+    expect(facts).toEqual([fact]);
+    expect(unaligned).toEqual([{ symbol: '007340', periodKey: '2024-10-01', ratio: 2 }]);
   });
 
   it('같은 분할의 재공시는 접은 뒤 변경상장일로 옮긴다', () => {
@@ -117,6 +239,22 @@ describe('alignCorporateActionEffectiveDates', () => {
 
     expect(facts).toEqual([{ ...first, periodKey: '2024-10-08' }]);
     expect(unaligned).toEqual([]);
+  });
+
+  it('같은 기준일의 상충 비율 공시는 하나를 임의 채택하지 않고 미정렬로 막는다', () => {
+    const first = splitFact({ value: 5 });
+    const correction = splitFact({
+      asOfTsMs: Date.parse('2026-03-20T09:00:00Z'),
+      value: 2,
+    });
+
+    const { facts, unaligned } = alignCorporateActionEffectiveDates(
+      [correction, first],
+      [sharesChange({ ratio: 5 })],
+    );
+
+    expect(facts).toEqual([first]);
+    expect(unaligned).toEqual([{ symbol: '007340', periodKey: '2024-09-27', ratio: 5 }]);
   });
 
   it('옮긴 결과가 다른 자본변동의 기준일과 겹치면 옮기지 않는다 — 뷰가 둘을 한 칸으로 접는다', () => {

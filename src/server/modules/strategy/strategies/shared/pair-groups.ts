@@ -158,8 +158,8 @@ export interface CorrelationGroupingState {
    * 계산 때 교체하며, 이 중 하나가 준비되면 리밸런싱 없이 그룹을 다시 계산한다.
    */
   unmeasurablePairs: Map<string, Set<string>>;
-  /** 동적 유니버스에서는 제한된 크기로 유지하고, 정적 실행 완료 뒤 비운다. */
-  warmup: CorrelationWarmup | null;
+  /** 향후 멤버십 축소 때 그룹을 다시 계산할 수 있도록 제한된 크기로 계속 유지한다. */
+  warmup: CorrelationWarmup;
 }
 
 export function newCorrelationWarmup(): CorrelationWarmup {
@@ -195,8 +195,13 @@ export function recordCorrelationClose(
   symbol: string,
   tsMs: number,
   close: number,
+  maxEntriesPerSymbol: number,
 ): void {
-  if (state.warmup !== null) recordClose(state.warmup, symbol, tsMs, close);
+  recordClose(state.warmup, symbol, tsMs, close);
+  pruneSymbolCloses(
+    state.warmup.closesBySymbol.get(symbol) as Map<number, number>,
+    maxEntriesPerSymbol,
+  );
 }
 
 /**
@@ -224,20 +229,22 @@ export function scaleCorrelationGrouping(
   symbol: string,
   ratio: number,
 ): void {
-  if (state.warmup !== null) scaleWarmupCloses(state.warmup, symbol, ratio);
+  scaleWarmupCloses(state.warmup, symbol, ratio);
 }
 
-/** 동적 유니버스 재계산용 종가를 종목별 최근 N개로 제한한다. */
-export function pruneWarmupCloses(
-  warmup: CorrelationWarmup,
-  maxEntriesPerSymbol: number,
+/**
+ * 엔진은 봉을 시각 오름차순으로 공급하므로 Map 삽입 순서가 곧 오래된 순서다.
+ * 초과한 앞쪽 key만 지우면 매 봉마다 전 종목 timestamp를 정렬하지 않아도 된다.
+ */
+function pruneSymbolCloses(
+  closes: Map<number, number>,
+  maxEntries: number,
 ): void {
-  const limit = Math.max(0, Math.floor(maxEntriesPerSymbol));
-  for (const closes of warmup.closesBySymbol.values()) {
-    const excess = closes.size - limit;
-    if (excess <= 0) continue;
-    const oldest = [...closes.keys()].sort((a, b) => a - b).slice(0, excess);
-    for (const tsMs of oldest) closes.delete(tsMs);
+  const limit = Math.max(0, Math.floor(maxEntries));
+  while (closes.size > limit) {
+    const oldest = closes.keys().next().value as number | undefined;
+    if (oldest === undefined) break;
+    closes.delete(oldest);
   }
 }
 
@@ -364,9 +371,6 @@ export function updateCorrelationGrouping(
   input.state.groupedSymbols = symbols;
 
   const warmup = input.state.warmup;
-  if (warmup === null) return symbols;
-
-  pruneWarmupCloses(warmup, input.correlationBars * 2 + 14);
   const readyCount = symbols.filter(
     (symbol) => (warmup.closesBySymbol.get(symbol)?.size ?? 0) >= input.correlationBars,
   ).length;
@@ -385,13 +389,6 @@ export function updateCorrelationGrouping(
     input.state.groupOf = groupOf;
     input.state.groupReadyCount = readyCount;
     input.state.unmeasurablePairs = unmeasurablePairs(warmup, symbols, input.correlationBars);
-    if (
-      membership === null &&
-      readyCount === input.allSymbols.length &&
-      input.state.unmeasurablePairs.size === 0
-    ) {
-      input.state.warmup = null;
-    }
   } else if (membershipChanged) {
     input.state.groupOf = null;
     input.state.groupReadyCount = readyCount;
@@ -409,7 +406,7 @@ export function correlationWarmupWarnings(
   const maxBars = Math.max(
     0,
     ...state.groupedSymbols.map(
-      (symbol) => state.warmup?.closesBySymbol.get(symbol)?.size ?? 0,
+      (symbol) => state.warmup.closesBySymbol.get(symbol)?.size ?? 0,
     ),
   );
   return [

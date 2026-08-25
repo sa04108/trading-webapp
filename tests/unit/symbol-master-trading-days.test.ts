@@ -5,7 +5,10 @@ import {
   type SymbolMasterServiceDeps,
 } from '../../src/server/modules/market-data/application/symbol-master-service.js';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
-import { symbolMasterTradingDays } from '../../src/server/shared/db/schema.js';
+import {
+  symbolMasterCoverage,
+  symbolMasterTradingDays,
+} from '../../src/server/shared/db/schema.js';
 import {
   baseInfoFixture,
   dailyFixture,
@@ -91,6 +94,23 @@ describe('SymbolMasterService.effectiveTradingDate', () => {
     await ctx.svc.ingestDate('2023-01-02');
 
     expect(ctx.svc.effectiveTradingDate('2023-01-01')).toBeUndefined();
+    await teardown(ctx);
+  });
+
+  it('legacy 주말 경계를 적용 거래일로 사용하지 않는다', async () => {
+    const ctx = await setup();
+    ctx.t.container.database.db.insert(symbolMasterTradingDays).values([
+      { date: '2016-03-18' }, // 금요일
+      { date: '2016-03-20' }, // legacy 이벤트에서 유입된 일요일
+    ]).run();
+    ctx.t.container.database.db.insert(symbolMasterCoverage).values({
+      startDate: '2016-03-18',
+      endDate: '2016-03-20',
+      syncedAtMs: ctx.t.container.clock.now(),
+    }).run();
+
+    expect(ctx.svc.effectiveTradingDate('2016-03-20')).toBe('2016-03-18');
+    expect(ctx.svc.effectiveTradingDateWithinCoverage('2016-03-20')).toBe('2016-03-18');
     await teardown(ctx);
   });
 

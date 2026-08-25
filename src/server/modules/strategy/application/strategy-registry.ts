@@ -1,5 +1,8 @@
 import { z } from 'zod';
-import type { AnyTradingStrategy } from '../domain/strategy.js';
+import {
+  strategyRequiresFinancialData,
+  type AnyTradingStrategy,
+} from '../domain/strategy.js';
 import { crossSectionalMomentumStrategy } from '../strategies/cross-sectional-momentum.js';
 import { earningsAccelerationRankStrategy } from '../strategies/earnings-acceleration-rank.js';
 import { emaTrendSwitchStrategy } from '../strategies/ema-trend-switch.js';
@@ -42,7 +45,7 @@ function toSummary(strategy: AnyTradingStrategy): StrategySummary {
     version: strategy.version,
     name: strategy.name,
     description: strategy.description,
-    requiresFundamentals: strategy.requiresFundamentals === true,
+    requiresFundamentals: strategyRequiresFinancialData(strategy),
   };
 }
 
@@ -73,7 +76,8 @@ export class StrategyRegistry {
 
   /** 모르는 전략은 false — 여기서 던지면 "알 수 없는 전략" 검증보다 먼저 터진다 */
   requiresFundamentals(strategyId: string): boolean {
-    return this.get(strategyId)?.requiresFundamentals === true;
+    const strategy = this.get(strategyId);
+    return strategy !== null && strategyRequiresFinancialData(strategy);
   }
 
   /** JSON Schema 형태의 파라미터 스키마 (웹 폼 렌더링용) */

@@ -280,7 +280,12 @@ export function createDartFactSource(
       );
       if (corpCode === null) {
         // 조용히 건너뛰면 "수집했는데 이 종목만 0건" 이 되고 원인을 알 수 없다
-        gaps.push({ symbol, periodKey: '-', reason: 'DART corp_code 매핑에 없는 종목코드입니다' });
+        gaps.push({
+          symbol,
+          periodKey: '-',
+          reason: 'DART corp_code 매핑에 없는 종목코드입니다',
+          severity: 'BLOCKING',
+        });
         continue;
       }
 
@@ -324,6 +329,7 @@ export function createDartFactSource(
               // 첫 ':' 또는 '(' 앞까지를 버킷 라벨로 쓰므로, 앞부분에 값이 섞이면
               // 같은 실패 유형이 값마다 다른 버킷으로 쪼개져 리포트가 커진다.
               reason: `응답 행이 모두 필터에서 제외됐습니다 (sj_div/bsns_year 필드 확인, ${rows.length}행)`,
+              severity: 'BLOCKING',
             });
           }
         }
@@ -352,7 +358,12 @@ export function createDartFactSource(
             const value = readShareAmount(common);
             const asOf = receiptDateToAsOfTsMs(common.rcept_no);
             if (value === null || value <= 0 || asOf === null) {
-              gaps.push({ symbol, periodKey, reason: `발행주식수를 읽을 수 없습니다: ${common.istc_totqy}` });
+              gaps.push({
+                symbol,
+                periodKey,
+                reason: `발행주식수를 읽을 수 없습니다: ${common.istc_totqy}`,
+                severity: 'BLOCKING',
+              });
             } else {
               facts.push({
                 scope: 'SYMBOL',
@@ -372,6 +383,7 @@ export function createDartFactSource(
               symbol,
               periodKey,
               reason: `'보통주' 행을 찾을 수 없습니다 (se 값: ${shareRows.map((row) => row.se).join(', ')})`,
+              severity: 'BLOCKING',
             });
           }
         }
@@ -391,7 +403,12 @@ export function createDartFactSource(
     for (const symbol of request.symbols) {
       const corpCode = await corpCodes.resolve(symbol, hooks.beforeRequest);
       if (corpCode === null) {
-        gaps.push({ symbol, periodKey: '-', reason: 'DART corp_code 매핑에 없는 종목코드입니다' });
+        gaps.push({
+          symbol,
+          periodKey: '-',
+          reason: 'DART corp_code 매핑에 없는 종목코드입니다',
+          severity: 'BLOCKING',
+        });
         continue;
       }
 
@@ -423,6 +440,7 @@ export function createDartFactSource(
               symbol,
               periodKey: `${year}Q${REPORT_CODE_TO_QUARTER[reportCode]}`,
               reason: `발행주식수 기준일을 읽을 수 없습니다: ${String(common.stlm_dt)}`,
+              severity: 'BLOCKING',
             });
             continue;
           }
@@ -501,6 +519,7 @@ export function createDartFactSource(
               symbol,
               periodKey: fact.periodKey,
               reason: `같은 기준일의 자본변동 비율이 공시마다 다릅니다 (${existing.value} vs ${fact.value})`,
+              severity: 'BLOCKING',
             });
             continue;
           }

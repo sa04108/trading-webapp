@@ -108,13 +108,21 @@ export interface BacktestMetrics {
   sharpe: number | null;
   sortino: number | null;
   calmar: number | null;
+  /** 부분 청산을 포함한 매도 체결 레그 기준 */
   winRate: number | null;
+  /** 부분 청산을 포함한 매도 체결 레그 기준 */
   profitFactor: number | null;
+  /** 이익이 난 매도 체결 레그 기준 */
   avgWin: number | null;
+  /** 손실이 난 매도 체결 레그 기준 */
   avgLoss: number | null;
+  /** 매도 체결 레그 순서 기준 */
   maxConsecutiveWins: number;
+  /** 매도 체결 레그 순서 기준 */
   maxConsecutiveLosses: number;
+  /** 부분 청산을 포함한 매도 체결 레그 수 */
   tradeCount: number;
+  /** 매도 체결 레그별 최초 진입 이후 보유기간 평균 */
   avgHoldingTimeMs: number | null;
   maxConcurrentPositions: number;
   totalCommission: number;
@@ -170,14 +178,17 @@ export interface TradeRow {
   id: number;
   symbol: string;
   quantity: number;
+  /** 해당 매도 직전 포지션의 최초 진입 시각 */
   entryTsMs: number;
   exitTsMs: number;
+  /** 해당 매도 직전 포지션의 이동평균 매수 체결가 */
   entryPrice: number;
   exitPrice: number;
   grossPnl: number;
   costs: number;
   netPnl: number;
   returnPct: number;
+  /** 최초 진입부터 해당 매도까지의 기간 */
   holdingTimeMs: number;
   exitReason: string | null;
 }

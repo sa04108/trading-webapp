@@ -1,9 +1,19 @@
-import { and, desc, eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { and, desc, eq, gte, lte } from 'drizzle-orm';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ENGINE_VERSION } from '../../src/server/modules/backtest/domain/engine.js';
+import { UnsafeBacktestSymbolIdentityError } from '../../src/server/modules/backtest/application/backtest-preparation-orchestrator.js';
 import { FACTS_SLICE } from '../../src/server/modules/market-data/application/symbol-service.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
-import { backtestJobs, symbolVersions } from '../../src/server/shared/db/schema.js';
+import {
+  backtestJobs,
+  facts,
+  krxDailyBars,
+  symbolFactsState,
+  symbolMasterCoverage,
+  symbolMasterVersions,
+  symbols,
+  symbolVersions,
+} from '../../src/server/shared/db/schema.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import {
   createTestAdmin,
@@ -11,7 +21,13 @@ import {
   installPreparedSubmissionFixture,
   type TestApp,
 } from '../helpers/test-app.js';
-import { registerSymbols, seedCorporateActionCoverage, seedDailyBars, yearRange } from '../helpers/seed.js';
+import {
+  registerSymbols,
+  seedCorporateActionCoverage,
+  seedDailyBars,
+  seedFinancialCoverage,
+  yearRange,
+} from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 
 const DAY = 86_400_000;
@@ -218,6 +234,11 @@ describe('backtest job queue (스펙 §10, §14)', () => {
   });
 
   it('runs a backtest end-to-end in a child process', { timeout: 90_000 }, async () => {
+    // 성공 경로는 요청 종료일까지 가격 봉이 완전해야 한다. 이전 43봉 픽스처는
+    // 3월 초에 끝나면서도 6월 말 결과를 정상 완료해 B-001을 재현하고 있었다.
+    dailyCandles = buildTrendingDailyCandles('005930', 127);
+    seedDailyBars(ctx.container.database.db, dailyCandles);
+
     // 제출 시점 pin 이 실제 재무 버전 상태를 반영하는지 검증하려면 버전이 하나는
     // 있어야 한다 — facts 동기화가 실제로 한 번 있었다고 가정한다.
     ctx.container.symbolService.bumpVersion('005930', FACTS_SLICE, 'fact-sync:seed', Date.now());
@@ -306,7 +327,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     };
     expect(body.run.engineVersion).toBe(ENGINE_VERSION);
     expect(body.run.strategyId).toBe('range-breakout');
-    expect(body.run.feeModelVersion).toBe('kr-equity-default@1.1.0');
+    expect(body.run.feeModelVersion).toBe('kr-equity-default@2.1.0');
     expect(body.run.randomSeed).toBe(42);
     expect(body.run.universeHash).not.toBe('unknown');
     // 제출 시점에 고정된 종목 버전 스냅샷이 그대로 기록돼야 한다 (재현성 §9.5).
@@ -340,7 +361,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect((trades.json().trades as unknown[]).length).toBeGreaterThan(0);
     // 페이지네이션 UI 가 {현재}/{전체} 페이지를 계산하려면 필터 기준 총 건수가 필요하다
     expect(trades.json().total).toBe(body.metrics.tradeCount);
-    // 정렬 파라미터가 없으면 청산 시각 오름차순이다 — 예전 순서가 그대로여야 한다
+    // 정렬 파라미터가 없으면 매도 체결 시각 오름차순이다 — 예전 순서가 그대로여야 한다
     const defaultOrder = trades.json().trades as Array<{ exitTsMs: number }>;
     expect(defaultOrder.map((t) => t.exitTsMs)).toEqual(
       [...defaultOrder.map((t) => t.exitTsMs)].sort((a, b) => a - b),
@@ -397,6 +418,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     };
     expect(seriesBody.equity.length).toBeGreaterThan(0);
     expect(seriesBody.equity.length).toBeLessThanOrEqual(1_000);
+    // 완전한 성공 픽스처의 마지막 실제 봉이 요청 종료일이므로 terminal anchor는
+    // 같은 점을 재사용한다. 데이터가 일찍 끊긴 상태로 +1점을 만드는 경로가 아니다.
     expect(seriesBody.totalEquityPoints).toBe(dailyCandles.length);
 
     // SSE: 종료 상태 작업은 스냅샷 1건 후 종료
@@ -415,9 +438,11 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       cookies: { qp_session: cookie },
     });
     expect(exported.headers['content-disposition']).toContain('attachment');
-    expect((exported.json() as { equityPoints: unknown[] }).equityPoints).toHaveLength(
-      dailyCandles.length,
-    );
+    const exportedEquity = (exported.json() as {
+      equityPoints: Array<{ tsMs: number }>;
+    }).equityPoints;
+    expect(exportedEquity).toHaveLength(dailyCandles.length);
+    expect(exportedEquity.at(-1)?.tsMs).toBe(Date.parse('2026-06-30T00:00:00Z'));
 
     // clone → 새 QUEUED 작업
     const cloned = await ctx.app.inject({
@@ -427,6 +452,44 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
     expect(cloned.statusCode).toBe(201);
     expect(cloned.json().job.status).toBe('QUEUED');
+  });
+
+  it('제출 뒤 SCD identity가 바뀐 QUEUED 작업은 child가 결과 생성 전에 실패시킨다', {
+    timeout: 30_000,
+  }, async () => {
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: buildRequest(),
+    });
+    expect(created.statusCode).toBe(201);
+    const jobId = created.json().job.id as string;
+
+    ctx.container.database.db.insert(symbolMasterVersions).values({
+      standardCode: 'KR7999999999',
+      shortCode: '005930',
+      validFromDate: '1990-01-01',
+      validToDate: '2000-01-01',
+      name: '과거 발행사',
+      market: 'KOSPI',
+      sharesOutstanding: '1',
+      instrumentType: 'COMMON_STOCK',
+      listedDate: '1990-01-01',
+      recordedAtMs: ctx.container.clock.now(),
+    }).run();
+
+    ctx.container.jobOrchestrator.tick();
+    await waitFor(() => {
+      const job = ctx.container.jobQueue.getJob(jobId);
+      return job !== null && ctx.container.jobQueue.isTerminal(job.status);
+    }, 20_000);
+
+    expect(ctx.container.jobQueue.getJob(jobId)).toMatchObject({
+      status: 'FAILED',
+      error: expect.stringMatching(/단축코드 005930.*여러 표준코드/),
+    });
+    expect(ctx.container.resultsService.getTotalReturnPct(jobId)).toBeNull();
   });
 
   it('요청한 부분 유니버스 종목만 제출 시점 버전으로 pin 한다', async () => {
@@ -474,6 +537,36 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       '2026-01-06',
       '2026-01-07',
     ]);
+  });
+
+  it('2봉 랭킹 전략은 연속 실제 거래 봉 리밸런스를 enqueue 전에 거부한다', async () => {
+    const before = ctx.container.jobQueue.countByStatus([
+      'QUEUED', 'STARTING', 'RUNNING', 'CANCELLING', 'COMPLETED', 'FAILED', 'CANCELLED',
+    ]);
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: {
+        ...buildRequest(),
+        strategyId: 'value-quality-rank',
+        parameters: { topN: 1, staleQuarters: 2 },
+        period: { from: MAIN_DATE, to: '2026-01-07' },
+        universeRule: {
+          markets: ['KOSPI'],
+          stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 }],
+          rebalanceInterval: { value: 1, unit: 'DAY' },
+        },
+      },
+    });
+
+    expect(created.statusCode).toBe(422);
+    expect((created.json() as { error: string }).error).toMatch(
+      /밸류·퀄리티 랭킹.*연속 리밸런스.*2026-01-05.*2026-01-06.*최소 1개 필요/,
+    );
+    expect(ctx.container.jobQueue.countByStatus([
+      'QUEUED', 'STARTING', 'RUNNING', 'CANCELLING', 'COMPLETED', 'FAILED', 'CANCELLED',
+    ])).toBe(before);
   });
 
   it('claims jobs atomically in FIFO order', () => {
@@ -698,6 +791,149 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(badParams.statusCode).toBe(400);
   });
 
+  it('준비 완료 뒤 발견된 종목 identity 오류를 신규 제출과 복제에서 422로 반환한다', async () => {
+    const source = ctx.container.jobQueue.enqueue(buildRequest());
+    ctx.container.backtestPreparationOrchestrator.getReadyPreview = async () => {
+      throw new UnsafeBacktestSymbolIdentityError('기존 등록 종목의 표준코드가 선택된 증권과 다릅니다.');
+    };
+
+    const submitted = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: buildRequest(),
+    });
+    expect(submitted.statusCode).toBe(422);
+    expect((submitted.json() as { error: string }).error).toContain('표준코드');
+
+    const cloned = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${source.id}/clone`,
+      cookies: { qp_session: cookie },
+    });
+    expect(cloned.statusCode).toBe(422);
+    expect((cloned.json() as { error: string }).error).toContain('표준코드');
+  });
+
+  it('준비 완료 뒤 등록 identity가 사라지면 모든 실행 생성 경로를 422로 차단한다', async () => {
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: buildRequest(),
+    });
+    expect(created.statusCode).toBe(201);
+    const sourceId = created.json().job.id as string;
+
+    ctx.container.database.db
+      .update(symbols)
+      .set({ standardCode: null })
+      .where(eq(symbols.code, '005930'))
+      .run();
+
+    const attempts = [
+      await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/backtests',
+        cookies: { qp_session: cookie },
+        payload: buildRequest(),
+      }),
+      await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/backtests/${sourceId}/clone`,
+        cookies: { qp_session: cookie },
+      }),
+      await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/backtests/${sourceId}/clone-configured`,
+        cookies: { qp_session: cookie },
+        payload: buildRequest(),
+      }),
+      await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
+        cookies: { qp_session: cookie },
+        payload: { count: 2 },
+      }),
+    ];
+
+    for (const response of attempts) {
+      expect(response.statusCode).toBe(422);
+      expect((response.json() as { error: string }).error).toContain('표준코드');
+    }
+  });
+
+  it('전체 SCD에서 단축코드 재사용이 발견되면 캐시·복제 실행 경로를 모두 차단한다', async () => {
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: buildRequest(),
+    });
+    expect(created.statusCode).toBe(201);
+    const sourceId = created.json().job.id as string;
+
+    // 현재 일정과 겹치지 않는 과거 행이어도 shortCode 기반 봉·팩트에는 발행사 구분이
+    // 없으므로 전체 생애 충돌이다.
+    ctx.container.database.db.insert(symbolMasterVersions).values({
+      standardCode: 'KR7999999999',
+      shortCode: '005930',
+      validFromDate: '1990-01-01',
+      validToDate: '2000-01-01',
+      name: '과거 발행사',
+      market: 'KOSPI',
+      sharesOutstanding: '1',
+      instrumentType: 'COMMON_STOCK',
+      listedDate: '1990-01-01',
+      recordedAtMs: ctx.container.clock.now(),
+    }).run();
+
+    const beforeJobs = ctx.container.jobQueue.listJobs(500, 0).length;
+    const beforeBatches = ctx.container.seedCloneBatchService.list().length;
+    const attempts = [
+      await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/backtests',
+        cookies: { qp_session: cookie },
+        payload: buildRequest(),
+      }),
+      await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/backtests/${sourceId}/clone`,
+        cookies: { qp_session: cookie },
+      }),
+      await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/backtests/${sourceId}/clone-configured`,
+        cookies: { qp_session: cookie },
+        payload: buildRequest(),
+      }),
+      await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
+        cookies: { qp_session: cookie },
+        payload: { count: 2 },
+      }),
+    ];
+
+    for (const response of attempts) {
+      expect(response.statusCode).toBe(422);
+      expect((response.json() as { error: string }).error)
+        .toMatch(/단축코드 005930.*여러 표준코드/);
+    }
+    expect(ctx.container.jobQueue.listJobs(500, 0)).toHaveLength(beforeJobs);
+    expect(ctx.container.seedCloneBatchService.list()).toHaveLength(beforeBatches);
+
+    const draft = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${sourceId}/clone-draft`,
+      cookies: { qp_session: cookie },
+    });
+    expect(draft.statusCode).toBe(200);
+    expect(draft.json().reusablePreview).toBeNull();
+    expect(draft.json().blockers[0]).toMatch(/단축코드 005930.*여러 표준코드/);
+  });
+
   it('reports schema violations in Korean, not raw Zod English (M9 마무리)', async () => {
     const badBody = await ctx.app.inject({
       method: 'POST',
@@ -725,6 +961,82 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     // 진단이 커버리지로 이어지도록 보유 범위를 담는다
     expect(message).toContain('005930');
     expect(message).toContain('2026-01-05');
+  });
+
+  it('리밸런스 적용에 필요한 최소 구간만 커버되면 기간 중 상장 상태를 모르므로 제출을 거부한다', async () => {
+    const request = buildRequest();
+    const preparation = ctx.container.backtestPreparationOrchestrator.start({
+      universeRule: request.universeRule,
+      period: request.period,
+      strategyId: request.strategyId,
+      parameters: request.parameters,
+    });
+    await waitFor(() => {
+      const status = ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status;
+      return status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED';
+    }, 5_000);
+    expect(ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status).toBe('COMPLETED');
+
+    // 준비 뒤 전체 coverage를 리밸런스별 '적용 거래일~요청일' 섬으로 바꾼다.
+    // 휴일 리밸런스는 직전 거래일까지 같은 커버 구간에 있어야 resolver가 일정을
+    // 다시 만들 수 있다. 이 최소 섬들 사이 평일은 여전히 비므로 periodCovered=false다.
+    const rebalanceDates = [
+      '2026-01-05',
+      '2026-02-05',
+      '2026-03-05',
+      '2026-04-05',
+      '2026-05-05',
+      '2026-06-05',
+    ];
+    const isolatedCoverage = rebalanceDates.map((date) => ({
+      startDate: ctx.container.symbolMasterService.effectiveTradingDateWithinCoverage(date)!,
+      endDate: date,
+      syncedAtMs: ctx.container.clock.now(),
+    }));
+    ctx.container.database.db.delete(symbolMasterCoverage).run();
+    ctx.container.database.db.insert(symbolMasterCoverage).values(isolatedCoverage).run();
+
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: request,
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect((response.json() as { error: string }).error).toContain('기간 전체');
+  });
+
+  it('제출 뒤 종목 마스터 기간 coverage가 사라져도 worker가 실행 전에 중단한다', async () => {
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: buildRequest(),
+    });
+    expect(created.statusCode).toBe(201);
+    const jobId = (created.json().job as { id: string }).id;
+
+    ctx.container.database.db.delete(symbolMasterCoverage).run();
+    ctx.container.database.db.insert(symbolMasterCoverage).values(
+      ['2026-01-05', '2026-02-05', '2026-03-05', '2026-04-05', '2026-05-05', '2026-06-05']
+        .map((date) => ({
+          startDate: date,
+          endDate: date,
+          syncedAtMs: ctx.container.clock.now(),
+        })),
+    ).run();
+
+    ctx.container.jobOrchestrator.tick();
+    await waitFor(() => {
+      const job = ctx.container.jobQueue.getJob(jobId);
+      return job !== null && ctx.container.jobQueue.isTerminal(job.status);
+    }, 60_000);
+
+    const job = ctx.container.jobQueue.getJob(jobId)!;
+    expect(job.status).toBe('FAILED');
+    expect(job.error).toContain('기간 전체');
+    expect(ctx.container.resultsService.getRun(jobId)).toBeNull();
   });
 
   it('복제도 같은 제출 검증을 거친다 — 봉 없는 기간은 거부한다 (D-025)', async () => {
@@ -755,7 +1067,184 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       cookies: { qp_session: cookie },
     });
     expect(cloned.statusCode).toBe(422);
-    expect((cloned.json() as { error: string }).error).toContain('상장시점 재무 데이터가 필요');
+    expect((cloned.json() as { error: string }).error).toContain('coverage 기록은 있지만');
+  });
+
+  it.each([
+    'new',
+    'clone',
+    'clone-configured',
+    'clone-random-seeds',
+  ] as const)('$case 경로는 준비 확인 직후 재무 coverage가 사라져도 생성하지 않는다', async (route) => {
+    const valueRequest: BacktestRequest = {
+      ...buildRequest(),
+      strategyId: 'value-quality-rank',
+      parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+      risk: { maxPositions: 1 },
+    };
+    await ctx.container.factRepository.saveFacts([{
+      scope: 'SYMBOL', key: '005930', field: 'NET_INCOME', periodKey: '2025Q4',
+      asOfTsMs: Date.parse('2025-12-31T00:00:00Z'), value: 1, unit: 'KRW',
+    }]);
+    seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
+    const created = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: valueRequest,
+    });
+    expect(created.statusCode).toBe(201);
+    const sourceId = created.json().job.id as string;
+    expect(ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
+    const cached = ctx.container.backtestPreparationOrchestrator.getCachedPreview({
+      universeRule: valueRequest.universeRule,
+      period: valueRequest.period,
+      strategyId: valueRequest.strategyId,
+      parameters: valueRequest.parameters,
+    });
+    expect(cached).not.toBeNull();
+
+    ctx.container.database.db.update(symbolFactsState)
+      .set({ coveredYearsJson: JSON.stringify([2026]) })
+      .where(eq(symbolFactsState.code, '005930'))
+      .run();
+    // 완료 cache 검사와 각 생성 관문의 TOCTOU를 강제로 연다. enqueue 직전 공통
+    // predicate가 다시 잡아야 하며, job/batch 행은 하나도 늘면 안 된다.
+    if (route === 'new') {
+      ctx.container.backtestPreparationOrchestrator.getReadyPreview = async () => cached;
+    } else {
+      ctx.container.backtestPreparationOrchestrator.getCachedPreview = () => cached;
+    }
+    if (route === 'new' || route === 'clone') {
+      // 공용 테스트 fixture가 409를 받으면 preparation을 자동 실행한다. 이 race에서는
+      // 결측을 다시 채우지 않아 최초 409 응답 자체와 job 불변을 관찰한다.
+      ctx.container.factSyncService.sync = async () => ({
+        savedFacts: 0,
+        gaps: [],
+        stoppedAtSymbol: null,
+        stopReason: null,
+        failureMessage: null,
+      });
+    }
+    const beforeJobs = ctx.container.jobQueue.listJobs(500, 0).length;
+    const beforeBatches = ctx.container.seedCloneBatchService.list().length;
+    const url = route === 'new'
+      ? '/api/v1/backtests'
+      : `/api/v1/backtests/${sourceId}/${route}`;
+    const payload = route === 'new'
+      ? { ...valueRequest, randomSeed: 99 }
+      : route === 'clone-configured'
+        ? { ...valueRequest, randomSeed: 99 }
+        : route === 'clone-random-seeds'
+          ? { count: 2 }
+          : undefined;
+    const rejected = await ctx.app.inject({
+      method: 'POST',
+      url,
+      cookies: { qp_session: cookie },
+      ...(payload === undefined ? {} : { payload }),
+    });
+
+    expect(rejected.statusCode).toBe(409);
+    expect((rejected.json() as { error: string }).error).toBe('PREPARATION_REQUIRED');
+    expect((rejected.json() as { message: string }).message).toMatch(/coverage.*2025~2026년.*005930/);
+    expect(ctx.container.jobQueue.listJobs(500, 0)).toHaveLength(beforeJobs);
+    expect(ctx.container.seedCloneBatchService.list()).toHaveLength(beforeBatches);
+  });
+
+  it.each([
+    'new',
+    'clone',
+    'clone-configured',
+    'clone-random-seeds',
+  ] as const)('%s 경로는 검증 직후 실행 봉이 사라지면 500 대신 재준비 409를 반환한다', async (route) => {
+    const valueRequest: BacktestRequest = {
+      ...buildRequest(),
+      strategyId: 'value-quality-rank',
+      parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+      risk: { maxPositions: 1 },
+    };
+    await ctx.container.factRepository.saveFacts([{
+      scope: 'SYMBOL', key: '005930', field: 'NET_INCOME', periodKey: '2025Q4',
+      asOfTsMs: Date.parse('2025-12-31T00:00:00Z'), value: 1, unit: 'KRW',
+    }]);
+    seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
+    const created = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: valueRequest,
+    });
+    expect(created.statusCode).toBe(201);
+    const sourceId = created.json().job.id as string;
+    expect(ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
+
+    const cached = ctx.container.backtestPreparationOrchestrator.getCachedPreview({
+      universeRule: valueRequest.universeRule,
+      period: valueRequest.period,
+      strategyId: valueRequest.strategyId,
+      parameters: valueRequest.parameters,
+    });
+    expect(cached).not.toBeNull();
+    if (route === 'new' || route === 'clone') {
+      // 자동 준비 fixture가 첫 409를 숨겨 두 번째 요청의 400으로 바꾸지 않게 하고,
+      // 현재 preview 재계산보다 뒤인 validateSubmission 경계에서만 봉을 지운다.
+      vi.spyOn(ctx.container.backtestPreparationOrchestrator, 'getReadyPreview')
+        .mockResolvedValue(cached);
+      const failedPreparation = {
+        id: 'prep_forced_failed',
+        requestHash: 'forced',
+        status: 'FAILED' as const,
+        phase: 'MARKET_DATA' as const,
+        doneSymbols: 0,
+        totalSymbols: 0,
+        savedFacts: 0,
+        gapCount: 0,
+        nextResumeAtMs: null,
+        error: 'forced test failure',
+      };
+      vi.spyOn(ctx.container.backtestPreparationOrchestrator, 'start')
+        .mockReturnValue(failedPreparation);
+      const getPreparation = ctx.container.backtestPreparationOrchestrator.get
+        .bind(ctx.container.backtestPreparationOrchestrator);
+      vi.spyOn(ctx.container.backtestPreparationOrchestrator, 'get')
+        .mockImplementation((id) => id === failedPreparation.id
+          ? failedPreparation
+          : getPreparation(id));
+    }
+
+    const candleCoverage = ctx.container.candleCoverageService;
+    const getCoverageBetween = candleCoverage.getCoverageBetween.bind(candleCoverage);
+    vi.spyOn(candleCoverage, 'getCoverageBetween').mockImplementation((...args) => {
+      const rows = getCoverageBetween(...args);
+      ctx.container.database.db.delete(krxDailyBars)
+        .where(and(
+          eq(krxDailyBars.shortCode, '005930'),
+          gte(krxDailyBars.date, valueRequest.period.from),
+          lte(krxDailyBars.date, valueRequest.period.to),
+        ))
+        .run();
+      return rows;
+    });
+
+    const beforeJobs = ctx.container.jobQueue.listJobs(500, 0).length;
+    const beforeBatches = ctx.container.seedCloneBatchService.list().length;
+    const url = route === 'new'
+      ? '/api/v1/backtests'
+      : `/api/v1/backtests/${sourceId}/${route}`;
+    const payload = route === 'new'
+      ? { ...valueRequest, randomSeed: 99 }
+      : route === 'clone-configured'
+        ? { ...valueRequest, randomSeed: 99 }
+        : route === 'clone-random-seeds'
+          ? { count: 2 }
+          : undefined;
+    const rejected = await ctx.app.inject({
+      method: 'POST',
+      url,
+      cookies: { qp_session: cookie },
+      ...(payload === undefined ? {} : { payload }),
+    });
+
+    expect(rejected.statusCode).toBe(409);
+    expect(rejected.json()).toMatchObject({ error: 'PREPARATION_REQUIRED' });
+    expect((rejected.json() as { message: string }).message).toContain('005930');
+    expect(ctx.container.jobQueue.listJobs(500, 0)).toHaveLength(beforeJobs);
+    expect(ctx.container.seedCloneBatchService.list()).toHaveLength(beforeBatches);
   });
 
   it('재설정 및 복제 초안은 유니버스 준비와 무관하게 저장 요청을 복원한다', async () => {
@@ -808,6 +1297,151 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(preview?.unionSymbols).toEqual(['005930']);
     expect(preview?.missingCandleSymbols).toEqual([]);
     expect(preview?.uncoveredDates).toEqual([]);
+  });
+
+  it('복제 초안은 현재 PIT fact와 재무 coverage drift를 함께 반영한다', async () => {
+    const request: BacktestRequest = {
+      ...buildRequest(),
+      strategyId: 'value-quality-rank',
+      parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+      risk: { maxPositions: 1 },
+    };
+    await ctx.container.factRepository.saveFacts([{
+      scope: 'SYMBOL', key: '005930', field: 'NET_INCOME', periodKey: '2025Q4',
+      asOfTsMs: Date.parse('2025-12-31T00:00:00Z'), value: 1, unit: 'KRW',
+    }]);
+    seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
+
+    const created = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: request,
+    });
+    expect(created.statusCode).toBe(201);
+    const sourceId = created.json().job.id as string;
+
+    const before = await ctx.app.inject({
+      method: 'GET', url: `/api/v1/backtests/${sourceId}/clone-draft`, cookies: { qp_session: cookie },
+    });
+    expect(before.json().reusablePreview.fundamentalSymbols).toEqual(['005930']);
+
+    ctx.container.database.db.delete(facts)
+      .where(and(eq(facts.key, '005930'), eq(facts.field, 'NET_INCOME')))
+      .run();
+    await ctx.container.factRepository.saveFacts([{
+      scope: 'SYMBOL', key: '005930', field: 'NET_INCOME', periodKey: '2026Q4',
+      asOfTsMs: Date.parse('2027-01-01T00:00:00Z'), value: 2, unit: 'KRW',
+    }]);
+    seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
+    const after = await ctx.app.inject({
+      method: 'GET', url: `/api/v1/backtests/${sourceId}/clone-draft`, cookies: { qp_session: cookie },
+    });
+    expect(after.statusCode).toBe(200);
+    expect(after.json().reusablePreview.fundamentalSymbols).toEqual([]);
+
+    ctx.container.database.db.update(symbolFactsState)
+      .set({ coveredYearsJson: JSON.stringify([2026]) })
+      .where(eq(symbolFactsState.code, '005930'))
+      .run();
+    const stale = await ctx.app.inject({
+      method: 'GET', url: `/api/v1/backtests/${sourceId}/clone-draft`, cookies: { qp_session: cookie },
+    });
+    expect(stale.statusCode).toBe(200);
+    expect(stale.json().reusablePreview).toBeNull();
+  });
+
+  it('복제 초안은 cached preview의 기간 coverage를 현재 상태로 다시 판정한다', async () => {
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: buildRequest(),
+    });
+    expect(created.statusCode).toBe(201);
+    const sourceId = created.json().job.id as string;
+
+    ctx.container.database.db.delete(symbolMasterCoverage).run();
+    ctx.container.database.db.insert(symbolMasterCoverage).values(
+      ['2026-01-05', '2026-02-05', '2026-03-05', '2026-04-05', '2026-05-05', '2026-06-05']
+        .map((date) => ({
+          startDate: date,
+          endDate: date,
+          syncedAtMs: ctx.container.clock.now(),
+        })),
+    ).run();
+
+    const draft = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${sourceId}/clone-draft`,
+      cookies: { qp_session: cookie },
+    });
+
+    expect(draft.statusCode).toBe(200);
+    expect(draft.json().reusablePreview).toMatchObject({
+      periodCovered: false,
+      uncoveredDates: [],
+    });
+  });
+
+  it('복제 초안은 cached preview의 일봉 보유 상태를 현재 상태로 다시 판정한다', async () => {
+    registerSymbols(ctx.container, 'KR', ['000660']);
+    const periodCandles = buildTrendingDailyCandles('000660');
+    seedDailyBars(ctx.container.database.db, [
+      {
+        symbol: '000660',
+        market: 'KR',
+        timeframe: '1d',
+        tsMs: Date.parse('2025-12-31T00:00:00Z'),
+        open: 100,
+        high: 102,
+        low: 99,
+        close: 101,
+        volume: 1_000,
+      },
+      ...periodCandles,
+    ]);
+    await seedCorporateActionCoverage(ctx.container, ['000660'], ACTION_COVERAGE_YEARS);
+    const request = { ...buildRequest(), universeRule: universeRule(2) };
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: request,
+    });
+    expect(created.statusCode).toBe(201);
+    const sourceId = created.json().job.id as string;
+
+    ctx.container.database.db
+      .delete(krxDailyBars)
+      .where(and(
+        eq(krxDailyBars.shortCode, '000660'),
+        gte(krxDailyBars.date, request.period.from),
+        lte(krxDailyBars.date, request.period.to),
+      ))
+      .run();
+
+    const draft = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${sourceId}/clone-draft`,
+      cookies: { qp_session: cookie },
+    });
+
+    expect(draft.statusCode).toBe(200);
+    expect(draft.json().reusablePreview).toMatchObject({
+      periodCovered: true,
+      missingCandleSymbols: ['000660'],
+    });
+
+    // 같은 cached preview를 다시 읽더라도 현재 DB가 복구되면 결측도 사라져야 한다.
+    seedDailyBars(ctx.container.database.db, periodCandles);
+    const restoredDraft = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/backtests/${sourceId}/clone-draft`,
+      cookies: { qp_session: cookie },
+    });
+    expect(restoredDraft.statusCode).toBe(200);
+    expect(restoredDraft.json().reusablePreview).toMatchObject({
+      periodCovered: true,
+      missingCandleSymbols: [],
+    });
   });
 
   it('재설정 복제는 준비 비영향 설정만 바뀌면 원본 유니버스를 재사용한다', async () => {
@@ -974,6 +1608,249 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const completed = ctx.container.seedCloneBatchService.get(batchId)!;
     expect(completed.batch.status).toBe('COMPLETED');
     expect(completed.items.every(({ item }) => item.state === 'DISPATCHED')).toBe(true);
+  });
+
+  it('난수 복제 대기 중 identity 이력이 바뀌면 다음 자식 승격 전에 묶음을 실패시킨다', async () => {
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: buildRequest(),
+    });
+    expect(created.statusCode).toBe(201);
+    const sourceId = created.json().job.id as string;
+    expect(ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
+
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
+      cookies: { qp_session: cookie },
+      payload: { count: 100 },
+    });
+    expect(response.statusCode).toBe(201);
+    const batchId = response.json().batch.id as string;
+    const before = ctx.container.seedCloneBatchService.get(batchId)!;
+    expect(before.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
+    const child = before.items.find(({ item }) => item.state === 'DISPATCHED')!.job!;
+    const beforeJobCount = ctx.container.jobQueue.listJobs(500, 0).length;
+
+    ctx.container.database.db.insert(symbolMasterVersions).values({
+      standardCode: 'KR7999999999',
+      shortCode: '005930',
+      validFromDate: '1990-01-01',
+      validToDate: '2000-01-01',
+      name: '과거 발행사',
+      market: 'KOSPI',
+      sharesOutstanding: '1',
+      instrumentType: 'COMMON_STOCK',
+      listedDate: '1990-01-01',
+      recordedAtMs: ctx.container.clock.now(),
+    }).run();
+    expect(ctx.container.jobQueue.setStatus(child.id, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
+
+    ctx.container.seedCloneBatchService.pump();
+
+    const failed = ctx.container.seedCloneBatchService.get(batchId)!;
+    expect(failed.batch.status).toBe('FAILED');
+    expect(failed.batch.error).toMatch(/단축코드 005930.*여러 표준코드/);
+    expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
+    expect(ctx.container.jobQueue.listJobs(500, 0)).toHaveLength(beforeJobCount);
+  });
+
+  it('난수 복제 대기 중 기간 coverage가 사라지면 다음 자식 승격 전에 묶음을 실패시킨다', async () => {
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: buildRequest(),
+    });
+    expect(created.statusCode).toBe(201);
+    const sourceId = created.json().job.id as string;
+    expect(ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
+
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
+      cookies: { qp_session: cookie },
+      payload: { count: 100 },
+    });
+    expect(response.statusCode).toBe(201);
+    const batchId = response.json().batch.id as string;
+    const before = ctx.container.seedCloneBatchService.get(batchId)!;
+    expect(before.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
+    const child = before.items.find(({ item }) => item.state === 'DISPATCHED')!.job!;
+    const beforeJobCount = ctx.container.jobQueue.listJobs(500, 0).length;
+
+    ctx.container.database.db.delete(symbolMasterCoverage).run();
+    ctx.container.database.db.insert(symbolMasterCoverage).values(
+      ['2026-01-05', '2026-02-05', '2026-03-05', '2026-04-05', '2026-05-05', '2026-06-05']
+        .map((date) => ({
+          startDate: date,
+          endDate: date,
+          syncedAtMs: ctx.container.clock.now(),
+        })),
+    ).run();
+    expect(ctx.container.jobQueue.setStatus(child.id, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
+
+    ctx.container.seedCloneBatchService.pump();
+
+    const failed = ctx.container.seedCloneBatchService.get(batchId)!;
+    expect(failed.batch.status).toBe('FAILED');
+    expect(failed.batch.error).toContain('기간 전체');
+    expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
+    expect(ctx.container.jobQueue.listJobs(500, 0)).toHaveLength(beforeJobCount);
+  });
+
+  it('재무 전략 난수 복제 대기 중 필수 연도 coverage가 사라지면 추가 승격을 막는다', async () => {
+    const request: BacktestRequest = {
+      ...buildRequest(),
+      strategyId: 'value-quality-rank',
+      parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+      risk: { maxPositions: 1 },
+    };
+    await ctx.container.factRepository.saveFacts([{
+      scope: 'SYMBOL', key: '005930', field: 'NET_INCOME', periodKey: '2025Q4',
+      asOfTsMs: Date.parse('2025-12-31T00:00:00Z'), value: 1, unit: 'KRW',
+    }]);
+    seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
+    const created = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: request,
+    });
+    expect(created.statusCode).toBe(201);
+    const sourceId = created.json().job.id as string;
+    expect(ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
+
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
+      cookies: { qp_session: cookie },
+      payload: { count: 100 },
+    });
+    expect(response.statusCode).toBe(201);
+    const batchId = response.json().batch.id as string;
+    const before = ctx.container.seedCloneBatchService.get(batchId)!;
+    expect(before.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
+    const child = before.items.find(({ item }) => item.state === 'DISPATCHED')!.job!;
+    const beforeJobCount = ctx.container.jobQueue.listJobs(500, 0).length;
+
+    ctx.container.database.db.update(symbolFactsState)
+      .set({ coveredYearsJson: JSON.stringify([2026]) })
+      .where(eq(symbolFactsState.code, '005930'))
+      .run();
+    expect(ctx.container.jobQueue.setStatus(child.id, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
+    ctx.container.seedCloneBatchService.pump();
+
+    const failed = ctx.container.seedCloneBatchService.get(batchId)!;
+    expect(failed.batch.status).toBe('FAILED');
+    expect(failed.batch.error).toMatch(/coverage.*2025~2026년.*005930/);
+    expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
+    expect(ctx.container.jobQueue.listJobs(500, 0)).toHaveLength(beforeJobCount);
+  });
+
+  it('난수 복제 대기 중 기간 일봉이 사라지면 다음 자식 승격 전에 묶음을 실패시킨다', async () => {
+    registerSymbols(ctx.container, 'KR', ['000660']);
+    const request = { ...buildRequest(), universeRule: universeRule(2) };
+    seedDailyBars(ctx.container.database.db, [
+      {
+        symbol: '000660',
+        market: 'KR',
+        timeframe: '1d',
+        tsMs: Date.parse('2025-12-31T00:00:00Z'),
+        open: 100,
+        high: 102,
+        low: 99,
+        close: 101,
+        volume: 1_000,
+      },
+      ...buildTrendingDailyCandles('000660'),
+    ]);
+    await seedCorporateActionCoverage(ctx.container, ['000660'], ACTION_COVERAGE_YEARS);
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: request,
+    });
+    expect(created.statusCode).toBe(201);
+    const sourceId = created.json().job.id as string;
+    expect(ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
+
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
+      cookies: { qp_session: cookie },
+      payload: { count: 100 },
+    });
+    expect(response.statusCode).toBe(201);
+    const batchId = response.json().batch.id as string;
+    const before = ctx.container.seedCloneBatchService.get(batchId)!;
+    expect(before.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
+    const child = before.items.find(({ item }) => item.state === 'DISPATCHED')!.job!;
+    const beforeJobCount = ctx.container.jobQueue.listJobs(500, 0).length;
+
+    ctx.container.database.db
+      .delete(krxDailyBars)
+      .where(and(
+        eq(krxDailyBars.shortCode, '000660'),
+        gte(krxDailyBars.date, request.period.from),
+        lte(krxDailyBars.date, request.period.to),
+      ))
+      .run();
+    expect(ctx.container.jobQueue.setStatus(child.id, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
+
+    ctx.container.seedCloneBatchService.pump();
+
+    const failed = ctx.container.seedCloneBatchService.get(batchId)!;
+    expect(failed.batch.status).toBe('FAILED');
+    expect(failed.batch.error).toMatch(/000660.*일봉|일봉.*000660/);
+    expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
+    expect(ctx.container.jobQueue.listJobs(500, 0)).toHaveLength(beforeJobCount);
+  });
+
+  it('재무 전략 난수 복제 대기 중 마지막 PIT 재무 행이 사라지면 추가 승격을 막는다', async () => {
+    const request: BacktestRequest = {
+      ...buildRequest(),
+      strategyId: 'value-quality-rank',
+      parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+      risk: { maxPositions: 1 },
+    };
+    await ctx.container.factRepository.saveFacts([{
+      scope: 'SYMBOL', key: '005930', field: 'NET_INCOME', periodKey: '2025Q4',
+      asOfTsMs: Date.parse('2025-12-31T00:00:00Z'), value: 1, unit: 'KRW',
+    }]);
+    seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
+    const created = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: request,
+    });
+    expect(created.statusCode).toBe(201);
+    const sourceId = created.json().job.id as string;
+    expect(ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
+      cookies: { qp_session: cookie },
+      payload: { count: 100 },
+    });
+    expect(response.statusCode).toBe(201);
+    const batchId = response.json().batch.id as string;
+    const before = ctx.container.seedCloneBatchService.get(batchId)!;
+    const child = before.items.find(({ item }) => item.state === 'DISPATCHED')!.job!;
+    const beforeJobCount = ctx.container.jobQueue.listJobs(500, 0).length;
+
+    ctx.container.database.db.delete(facts)
+      .where(and(eq(facts.key, '005930'), eq(facts.field, 'NET_INCOME')))
+      .run();
+    // coverage 무결성 단계는 다시 닫아 두고, 그 다음의 실제 PIT fact 관문이 비어 있는
+    // snapshot을 막는지 확인한다.
+    seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
+    expect(ctx.container.jobQueue.setStatus(child.id, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
+    ctx.container.seedCloneBatchService.pump();
+
+    const failed = ctx.container.seedCloneBatchService.get(batchId)!;
+    expect(failed.batch.status).toBe('FAILED');
+    expect(failed.batch.error).toMatch(/coverage 기록은 있지만.*재무 데이터/);
+    expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
+    expect(ctx.container.jobQueue.listJobs(500, 0)).toHaveLength(beforeJobCount);
   });
 
   it('난수 시드 실험 취소는 새 승격을 막고 대기 중인 자식도 취소한다', async () => {
@@ -1327,10 +2204,10 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(body.blockers).toEqual([]);
   });
 
-  it('일부 종목만 봉이 없으면 거부하지 않는다 (신규 상장 등 정상)', async () => {
+  it('일부 종목만 봉이 없어도 확정 유니버스와 달라지므로 거부한다', async () => {
     // 종목을 하나 더 등록하고 topN 을 2로 올려 유니버스에 넣되 봉은 넣지 않는다 —
-    // 커버리지 행이 없는 종목이 섞여도 제출은 통과해야 한다 (D-025)
-    ctx.container.symbolService.addSymbol('000660', 'KR');
+    // 다른 종목에 봉이 있다는 이유로 이 종목만 제외해 실행하면 안 된다.
+    ctx.container.symbolService.addSymbol('000660', 'KR', null, 'KR7000660001');
     // 000660 도 unionSymbols 에 들어오므로 자본변동 게이트도 통과해 둬야 한다
     await seedCorporateActionCoverage(ctx.container, ['000660'], ACTION_COVERAGE_YEARS);
 
@@ -1340,7 +2217,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       cookies: { qp_session: cookie },
       payload: { ...buildRequest(), universeRule: universeRule(2) },
     });
-    expect(partial.statusCode).toBe(201);
+    expect(partial.statusCode).toBe(400);
+    expect((partial.json() as { error: string }).error).toContain('000660');
   });
 
   it('봉이 없는 원본도 초기 단계에서는 coverage 검증 없이 연다', async () => {

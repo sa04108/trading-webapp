@@ -279,6 +279,7 @@ describe('parseFinancialRows — 누적값 차분', () => {
     expect(facts).toEqual([]);
     expect(gaps).toHaveLength(1);
     expect(gaps[0]?.reason).toContain('알수없는계정');
+    expect(gaps[0]?.severity).toBe('INFORMATIONAL');
   });
 
   it('금액이 파싱되지 않으면 gap 으로 남긴다', () => {
@@ -288,6 +289,7 @@ describe('parseFinancialRows — 누적값 차분', () => {
     const { facts, gaps } = parseFinancialRows('005930', rows);
     expect(facts).toEqual([]);
     expect(gaps).toHaveLength(1);
+    expect(gaps[0]?.severity).toBe('BLOCKING');
   });
 
   it('손익 계정의 누적값이 파싱되지 않으면(IS 쪽도) gap 으로 남긴다', () => {
@@ -630,6 +632,7 @@ describe('parseIssuanceRows — 자본변동', () => {
     expect(facts).toEqual([]);
     expect(gaps).toHaveLength(1);
     expect(gaps[0]?.reason).toContain('발행주식수');
+    expect(gaps[0]?.severity).toBe('BLOCKING');
   });
 
   it('날짜를 읽을 수 없으면 gap 으로 남긴다', () => {

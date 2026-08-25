@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, gte, isNull, lte } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
@@ -10,11 +10,12 @@ import {
   krxNonTradingCoverage,
   krxNonTradingDays,
   symbolFactsState,
+  symbolMasterTradingDays,
   symbolMasterVersions,
 } from '../../src/server/shared/db/schema.js';
 import {
-  DEFAULT_EXECUTION_RULES,
   getCostProfile,
+  getKrxExecutionRules,
   getSlippageProfile,
 } from '../../src/server/modules/backtest/domain/cost-profiles.js';
 import { simulateFill } from '../../src/server/modules/backtest/domain/execution.js';
@@ -66,8 +67,8 @@ function buildDailyCandles(symbol = '005930'): Candle[] {
   return candles;
 }
 
-/** 이 파일의 테스트가 리밸런스 날짜로 쓰는 값 전부 — 종목 마스터 시총 캐시를 이 날짜들로 채운다 */
-const MASTER_DATES = ['2025-07-27', '2025-08-01', '2025-09-01', '2025-10-01'];
+/** 이 파일의 리밸런스에 필요한 실제 적용 거래일 전부 — 종목 마스터 시총 캐시를 이 날짜들로 채운다 */
+const MASTER_DATES = ['2025-07-25', '2025-08-01', '2025-09-01', '2025-10-01'];
 
 function universeRule(topN: number): BacktestRequest['universeRule'] {
   return {
@@ -136,15 +137,37 @@ function installPreparedSubmissionFixture(ctx: TestApp): void {
   const planCorporateActionSync: typeof ctx.container.factSyncService.planCorporateActionSync = () => noWorkPlan;
   ctx.container.factSyncService.planFinancialSync = planFinancialSync;
   ctx.container.factSyncService.planCorporateActionSync = planCorporateActionSync;
-  const noWorkReport: typeof ctx.container.factSyncService.sync = async () => ({
-    savedFacts: 0,
-    gaps: [],
-    stoppedAtSymbol: null,
-    stopReason: null,
-    failureMessage: null,
-  });
-  ctx.container.factSyncService.sync = noWorkReport;
-  ctx.container.factSyncService.syncCorporateActions = noWorkReport;
+  ctx.container.factSyncService.sync = async (request) => {
+    const years = yearRange(request.fromYear, request.toYear);
+    for (const symbol of request.symbols) {
+      ctx.container.factCoverageStore.addCoveredYears(symbol, years, ctx.container.clock.now());
+    }
+    return {
+      savedFacts: 0,
+      gaps: [],
+      stoppedAtSymbol: null,
+      stopReason: null,
+      failureMessage: null,
+    };
+  };
+  ctx.container.factSyncService.syncCorporateActions = async (request) => {
+    const years = yearRange(request.fromYear, request.toYear);
+    for (const symbol of request.symbols) {
+      ctx.container.actionCoverageStore.addCoverageResult(
+        symbol,
+        years,
+        [],
+        ctx.container.clock.now(),
+      );
+    }
+    return {
+      savedFacts: 0,
+      gaps: [],
+      stoppedAtSymbol: null,
+      stopReason: null,
+      failureMessage: null,
+    };
+  };
   const rawInject = ctx.app.inject.bind(ctx.app);
   ctx.app.inject = (async (options: unknown) => {
     const request = options as { method?: string; url?: string; payload?: BacktestRequest };
@@ -235,10 +258,28 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     expect(job.totalBars).toBe(dailyCandles.length);
 
     // 알림 설명이 읽는 값 — getMetrics 의 metricsJson 파싱 결과와 같아야 한다
-    const metrics = ctx.container.resultsService.getMetrics(jobId) as { totalReturnPct: number };
+    const metrics = ctx.container.resultsService.getMetrics(jobId) as {
+      initialCash: number;
+      finalEquity: number;
+      totalReturnPct: number;
+      cagrPct: number | null;
+    };
     expect(ctx.container.resultsService.getTotalReturnPct(jobId)).toBe(metrics.totalReturnPct);
     // 결과가 없는 잡은 null 이다 — 0 으로 떨어지면 "수익 0%" 로 읽힌다
     expect(ctx.container.resultsService.getTotalReturnPct('bt_없는잡')).toBeNull();
+
+    // 요청 시작일은 일요일이라 첫 실제 봉보다 하루 이르다. Worker가 첫 봉부터만
+    // CAGR을 재면 기간이 짧아지므로 요청 날짜 anchor와 같은 분모인지 함께 검증한다.
+    const full = ctx.container.resultsService.getFullExport(jobId);
+    const requestedFromTsMs = Date.parse('2025-07-27T00:00:00Z');
+    const requestedToTsMs = Date.parse('2026-07-24T00:00:00Z');
+    expect(full.equityPoints[0]?.tsMs).toBe(requestedFromTsMs);
+    expect(full.equityPoints.at(-1)?.tsMs).toBe(requestedToTsMs);
+    expect(metrics.cagrPct).toBeCloseTo(
+      ((metrics.finalEquity / metrics.initialCash) ** (
+        365 / ((requestedToTsMs - requestedFromTsMs) / DAY)
+      ) - 1) * 100,
+    );
 
     // 배선 전체가 이어졌는지 — 리스너가 레지스트리 이름과 수익률을 함께 담는다.
     // 상태를 기다린 것만으로는 부족하다: 자식이 종료 전에 COMPLETED 를 DB 에 쓰고
@@ -256,17 +297,24 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
   });
 
   it('worker가 period 이전 KRX warm-up을 전략에 공급하되 결과는 period 첫 봉부터 기록한다', { timeout: 90_000 }, async () => {
-    // 000660은 warm-up 봉만 있다. period 실측 누락 경고가 전체 로드 집합이 아니라
-    // 거래 결과 구간만 보도록 topN=2 schedule에 함께 넣는다.
-    seedDailyBars(ctx.container.database.db, [
-      {
-        symbol: '000660', market: 'KR', timeframe: '1d',
-        tsMs: Date.parse('2025-08-29T00:00:00Z'),
-        open: 50_000, high: 50_500, low: 49_500, close: 50_200, volume: 1_000,
-      },
-    ]);
+    // legacy 이행은 이벤트 경계인 주말을 trading_days에 넣을 수 있다.
+    // 가까운 10개 **행**을 가져오면 주말 4일이 자리를 차지해 실제 warm-up은
+    // 6거래일뿐이다. 거래일만 10일을 세어야 기존 첫 진입 시각이 보존된다.
+    const legacyCalendarRows: { date: string }[] = [];
+    for (
+      let cursor = Date.parse('2025-08-16T00:00:00Z');
+      cursor <= Date.parse('2025-08-31T00:00:00Z');
+      cursor += DAY
+    ) {
+      legacyCalendarRows.push({ date: new Date(cursor).toISOString().slice(0, 10) });
+    }
+    ctx.container.database.db.insert(symbolMasterTradingDays)
+      .values(legacyCalendarRows)
+      .onConflictDoNothing()
+      .run();
+
     const request = {
-      ...buildRequest(2),
+      ...buildRequest(1),
       period: { from: '2025-09-01', to: '2025-10-31' },
     };
     const created = await ctx.app.inject({
@@ -297,27 +345,47 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     expect(job.totalBars).toBe(expectedPeriodBars);
     expect(full.equityPoints[0]?.tsMs).toBe(periodFromTsMs);
     expect(full.equityPoints).toHaveLength(expectedPeriodBars);
-    // warm-up 마지막 상승 봉의 BUY는 결과 주문으로 만들지 않지만 전략의 pendingEntry
-    // state는 갱신된다. Sep 1에 그 상태를 해소하고 Sep 2에 다시 신호를 내므로 실제
-    // NEXT_BAR_OPEN 진입은 Sep 3이다. warm-up 자체가 없으면 lookback을 다시 채우느라
-    // 이 날짜보다 늦어진다.
-    expect(full.trades[0]?.entryTsMs).toBe(Date.parse('2025-09-03T00:00:00Z'));
-    const warnings = JSON.parse(full.run?.warningsJson ?? '[]') as string[];
-    expect(warnings.some((warning) => warning.includes('000660') && warning.includes('봉이 없어'))).toBe(true);
+    // 기간 전 10거래일로 lookback이 정확히 채워지므로 Sep 1 종가 신호가
+    // 나고 다음 봉 시가인 Sep 2에 진입한다. 주말 행 4개를 warm-up으로 잘못
+    // 세면 실제 이력이 6봉에 그쳐 진입이 적어도 4거래일 늦어진다.
+    expect(full.trades[0]?.entryTsMs).toBe(Date.parse('2025-09-02T00:00:00Z'));
   });
 
-  it('봉이 없는 종목을 실행 경고로 남긴다', { timeout: 90_000 }, async () => {
+  it('확정 유니버스 중 기간 내 0봉 종목이 있으면 제출을 거부한다', async () => {
     // topN=2 로 올리면 시총 2위(000660, 봉 없음)도 유니버스에 들어온다 —
-    // 제출 검증은 통과하고(005930 이 겹치므로 D-025 관용) 실행에서 그 종목만 빠진다
+    // 그 종목만 제외해 schedule을 바꾸지 않고 제출 전에 중단한다.
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
       payload: buildRequest(2),
     });
+    expect(created.statusCode).toBe(400);
+    expect((created.json() as { error: string }).error).toContain('000660');
+  });
+
+  it('제출 뒤 기간 첫 거래일 봉이 사라져도 요청 시작 경계에서 중단한다', { timeout: 90_000 }, async () => {
+    const request = {
+      ...buildRequest(1),
+      period: { from: '2025-08-01', to: '2025-10-31' },
+    };
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: request,
+    });
     expect(created.statusCode).toBe(201);
     const jobId = (created.json().job as { id: string }).id;
 
+    // worker가 최초로 발견한 8월 4일 봉을 거래 시작점으로 삼으면 8월 1일 결측은
+    // warm-up처럼 숨겨진다. 요청 시작일 자체가 검사 경계여야 이 결측을 잡는다.
+    ctx.container.database.db.delete(krxDailyBars)
+      .where(and(
+        eq(krxDailyBars.shortCode, '005930'),
+        eq(krxDailyBars.date, request.period.from),
+      ))
+      .run();
     ctx.container.jobOrchestrator.tick();
     await waitFor(() => {
       const job = ctx.container.jobQueue.getJob(jobId);
@@ -325,15 +393,53 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     }, 60_000);
 
     const job = ctx.container.jobQueue.getJob(jobId)!;
-    expect(job.error).toBeNull();
-    expect(job.status).toBe('COMPLETED');
-
-    const run = ctx.container.resultsService.getRun(jobId)!;
-    const warnings = JSON.parse(run.warningsJson ?? '[]') as string[];
-    expect(warnings.some((w) => w.includes('000660'))).toBe(true);
+    expect(job.status).toBe('FAILED');
+    expect(job.error).toContain('005930 (2025-08-01)');
+    expect(ctx.container.resultsService.getRun(jobId)).toBeNull();
   });
 
-  it('재무가 없는 데이터셋에 밸류 전략을 제출하면 422 로 거부한다', async () => {
+  it('제출 뒤 선정 종목의 기간 봉이 사라져도 worker가 결과 생성 전에 중단한다', { timeout: 90_000 }, async () => {
+    // 7~8월 봉은 worker의 warm-up 구간에 실제로 로드되고, 요청 기간인
+    // 9~10월 봉만 삭제한다. worker가 warm-up 봉을 기간 봉으로 잘못 세어도
+    // 통과하는 회귀를 막는 픽스처다.
+    const request = {
+      ...buildRequest(2),
+      period: { from: '2025-09-01', to: '2025-10-31' },
+    };
+    seedDailyBars(ctx.container.database.db, buildDailyCandles('000660'));
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: request,
+    });
+    expect(created.statusCode).toBe(201);
+    const jobId = (created.json().job as { id: string }).id;
+
+    ctx.container.database.db.delete(krxDailyBars)
+      .where(and(
+        eq(krxDailyBars.shortCode, '000660'),
+        gte(krxDailyBars.date, request.period.from),
+        lte(krxDailyBars.date, request.period.to),
+      ))
+      .run();
+    ctx.container.jobOrchestrator.tick();
+    await waitFor(() => {
+      const job = ctx.container.jobQueue.getJob(jobId);
+      return job !== null && ctx.container.jobQueue.isTerminal(job.status);
+    }, 60_000);
+
+    const job = ctx.container.jobQueue.getJob(jobId)!;
+    expect(job.status).toBe('FAILED');
+    expect(job.error).toContain('000660');
+    expect(ctx.container.resultsService.getRun(jobId)).toBeNull();
+  });
+
+  it('마지막 실행 봉 뒤 공시만 있는 데이터셋에 밸류 전략을 제출하면 422 로 거부한다', async () => {
+    await ctx.container.factRepository.saveFacts([{
+      scope: 'SYMBOL', key: '005930', field: 'NET_INCOME', periodKey: '2025Q3',
+      asOfTsMs: Date.parse('2025-10-31T01:00:00Z'), value: 1, unit: 'KRW',
+    }]);
     const response = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
@@ -356,7 +462,68 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     });
 
     expect(response.statusCode).toBe(422);
-    expect(response.json().error).toContain('상장시점 재무 데이터가 필요');
+    expect(response.json().error).toContain('coverage 기록은 있지만');
+    expect(response.json().error).toContain('기간 종료일·유니버스·전략');
+  });
+
+  it('준비 확인 직후 일부 종목의 필수 연도 coverage가 사라져도 enqueue하지 않는다', async () => {
+    seedDailyBars(ctx.container.database.db, buildDailyCandles('000660'));
+    await ctx.container.factRepository.saveFacts([{
+      scope: 'SYMBOL', key: '005930', field: 'NET_INCOME', periodKey: '2025Q1',
+      asOfTsMs: Date.parse('2025-07-31T00:00:00Z'), value: 1, unit: 'KRW',
+    }]);
+    const payload: BacktestRequest = {
+      strategyId: 'value-quality-rank',
+      parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+      universeRule: universeRule(2),
+      timeframe: '1d',
+      period: { from: '2025-08-01', to: '2025-10-31' },
+      capital: { initialCash: 10_000_000, currency: 'KRW' },
+      execution: {
+        fillTiming: 'NEXT_BAR_OPEN',
+        commissionProfileId: 'kr-equity-default',
+        slippageProfileId: 'fixed-5bps',
+      },
+      risk: { maxPositions: 1 },
+      randomSeed: 41,
+    };
+    const first = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload,
+    });
+    expect(first.statusCode).toBe(201);
+    const prepared = ctx.container.backtestPreparationOrchestrator.getCachedPreview({
+      universeRule: payload.universeRule,
+      period: payload.period,
+      strategyId: payload.strategyId,
+      parameters: payload.parameters,
+    });
+    expect(prepared).not.toBeNull();
+
+    ctx.container.database.db.update(symbolFactsState)
+      .set({ coveredYearsJson: JSON.stringify([2025]) })
+      .where(eq(symbolFactsState.code, '000660'))
+      .run();
+    // getReadyPreview의 현재성 확인과 실제 enqueue 사이 삭제 race를 직접 재현한다.
+    ctx.container.backtestPreparationOrchestrator.getReadyPreview = async () => prepared;
+    ctx.container.factSyncService.sync = async () => ({
+      savedFacts: 0,
+      gaps: [],
+      stoppedAtSymbol: null,
+      stopReason: null,
+      failureMessage: null,
+    });
+    const beforeCount = ctx.container.jobQueue.listJobs(100, 0).length;
+    const rejected = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: { ...payload, randomSeed: 42 },
+    });
+
+    expect(rejected.statusCode).toBe(409);
+    expect(rejected.json().error).toBe('PREPARATION_REQUIRED');
+    expect(rejected.json().message).toMatch(/coverage.*2024~2025년.*000660/);
+    expect(ctx.container.jobQueue.listJobs(100, 0)).toHaveLength(beforeCount);
   });
 
   /**
@@ -407,7 +574,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
-      payload: momentumPayload(10, 10),
+      payload: momentumPayload(1, 1),
     });
     expect(response.statusCode).toBe(201);
   });
@@ -530,15 +697,15 @@ describe('KRX 전용 일봉으로 백테스트 실행 (워커의 부모-자식 �
  * 위저드 화면은 제출 전 항상 미리보기를 거치므로 이 등록이 이미 끝나 있다.
  * 복제는 미리보기 화면 자체를 거치지 않는다. 리밸런스 시점 시총이 바뀌어 새로
  * topN 에 든 종목처럼, 미리보기에서 한 번도 보지 못한 종목이 있으면 문제가 된다.
- * `checkPeriodCoverage` 는 유니버스 중 일부만 데이터가 있어도 통과시키므로(D-025)
- * 실행 자체는 되지만, 가격 데이터 탭에는 그 종목이 보이지 않는 불일치가 남는다.
+ * `checkPeriodCoverage` 는 미등록 종목을 0봉으로 취급해 엄격히 거부하므로,
+ * 복제 경로도 검증 전에 확정 유니버스를 등록해야 한다.
  *
  * 이 테스트는 미리보기를 거치지 않고(검증을 우회해 큐에 직접 넣어) 만든 잡을
  * 복제한다. 이미 등록된 종목(005930) 옆에 미등록 종목 900010(KRX 일봉만 있음)을
  * 둔다. 900010 은 로컬 등록이 없다.
  *
- * 등록은 `checkPeriodCoverage` 의 D-025 관용과 무관하게 clone 핸들러가 검증보다
- * 먼저 실행한다 — 그래서 900010 은 항상 등록된다.
+ * 등록은 clone 핸들러가 기간별 일봉 검증보다 먼저 실행한다 —
+ * 그래서 KRX 일봉이 있는 900010은 검증과 로컬 종목 목록 모두에서 정상 종목이다.
  * 수정 전에는 clone 이 201 로 성공하면서도 900010 을 등록하지 않아 등록 단언이
  * 실패했다 — 지금은 그 등록이 준비 완료 시점에 실제로 일어나는지를 지킨다.
  *
@@ -772,6 +939,43 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
   });
 
   it(
+    '확정 유니버스 종목 봉이 원인 없이 끊기면 워커가 후보를 뺀 채 완료하지 않는다',
+    { timeout: 90_000 },
+    async () => {
+      const alive = buildDailyCandles('005930');
+      const incomplete = buildDailyCandles('000660').slice(0, Math.floor(alive.length / 2));
+
+      registerSymbols(ctx.container, 'KR', ['005930', '000660']);
+      seedDailyBars(ctx.container.database.db, [...alive, ...incomplete]);
+      seedSymbolMasterUniverse(ctx.container, MASTER_DATES, [
+        { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '900' },
+        { standardCode: 'KR7000660001', shortCode: '000660', name: 'SK하이닉스', market: 'KOSPI', marketCapKrw: '800' },
+      ]);
+      await seedCorporateActionCoverage(ctx.container, ['005930', '000660'], yearRange(2025, 2026));
+
+      const created = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/backtests',
+        cookies: { qp_session: cookie },
+        payload: buildRequest(2),
+      });
+      expect(created.statusCode).toBe(201);
+      const jobId = (created.json().job as { id: string }).id;
+
+      ctx.container.jobOrchestrator.tick();
+      await waitFor(() => {
+        const job = ctx.container.jobQueue.getJob(jobId);
+        return job !== null && ctx.container.jobQueue.isTerminal(job.status);
+      }, 60_000);
+
+      const job = ctx.container.jobQueue.getJob(jobId)!;
+      expect(job.status).toBe('FAILED');
+      expect(job.error).toContain('확정 유니버스 종목의 가격 봉이 거래일에 누락됐습니다: 000660');
+      expect(ctx.container.resultsService.getRun(jobId)).toBeNull();
+    },
+  );
+
+  it(
     '상장폐지 종목이 마지막 거래 가능 봉 종가로 청산된다',
     { timeout: 90_000 },
     async () => {
@@ -797,6 +1001,7 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
       // 거래일)는 seedSymbolMasterUniverse 가 MASTER_DATES 를 이미 거래일로 심어
       // 뒀으므로 따로 채울 필요가 없다.
       const delistedDate = new Date(lastDoomed.tsMs + DAY).toISOString().slice(0, 10);
+      const delistedTsMs = Date.parse(`${delistedDate}T00:00:00Z`);
       ctx.container.database.db
         .update(symbolMasterVersions)
         .set({ validToDate: delistedDate })
@@ -842,23 +1047,23 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
       const executionProfile = {
         cost: getCostProfile('kr-equity-default')!,
         slippage: getSlippageProfile('fixed-5bps')!,
-        rules: DEFAULT_EXECUTION_RULES,
+        rules: getKrxExecutionRules('KOSPI'),
       };
       const expectedFromClose = simulateFill(
         { symbol: '000660', side: 'SELL', quantity: 1, reason: 'DELISTED' },
         lastDoomed.close,
-        lastDoomed.tsMs,
+        delistedTsMs,
         executionProfile,
       );
       const expectedFromOpen = simulateFill(
         { symbol: '000660', side: 'SELL', quantity: 1, reason: 'DELISTED' },
         lastDoomed.open,
-        lastDoomed.tsMs,
+        delistedTsMs,
         executionProfile,
       );
       expect(delistingTrade?.exitPrice).toBe(expectedFromClose.price);
       expect(delistingTrade?.exitPrice).not.toBe(expectedFromOpen.price);
-      expect(delistingTrade?.exitTsMs).toBe(lastDoomed.tsMs);
+      expect(delistingTrade?.exitTsMs).toBe(delistedTsMs);
 
       // 청산했으므로 기간 종료 시점 미청산 포지션으로 남지 않는다
       const run = ctx.container.resultsService.getRun(jobId)!;
@@ -959,21 +1164,27 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
       ]);
       await seedCorporateActionCoverage(ctx.container, ['005930', '000660'], yearRange(2025, 2026));
 
-      // 이 파일의 유일한 리밸런스 날짜는 period.from(2025-07-27) 이다 — range-breakout 은
-      // rebalanceMonths 파라미터가 없어 제출 경로가 단일 리밸런스로 접는다
-      // (backtest-routes.ts resolveUniverse). 그 날짜에 000660 을 거래정지로 심으면
+      // 이 테스트는 리밸런싱 없음(NONE)으로 period.from(2025-07-27) 한 번만 고른다.
+      // 7월 27일은 일요일이므로 실제 선정 지표일은 직전 금요일인 7월 25일이다.
+      // 그 날에 000660 을 거래정지로 심으면
       // UniverseRuleResolver.resolve() 가 후보에서 빼고 excludedNonTradingCount 를 센다 —
       // 000660 은 봉이 없어도 상관없다(유니버스에 아예 들어오지 못하므로).
       ctx.container.database.db
         .insert(krxNonTradingDays)
-        .values({ date: '2025-07-27', shortCode: '000660', market: 'KOSPI', lastClose: 1 })
+        .values({ date: '2025-07-25', shortCode: '000660', market: 'KOSPI', lastClose: 1 })
         .run();
 
       const created = await ctx.app.inject({
         method: 'POST',
         url: '/api/v1/backtests',
         cookies: { qp_session: cookie },
-        payload: buildRequest(2),
+        payload: {
+          ...buildRequest(2),
+          universeRule: {
+            ...buildRequest(2).universeRule,
+            rebalanceInterval: { unit: 'NONE', value: 1 },
+          },
+        },
       });
       expect(created.statusCode).toBe(201);
       const jobId = (created.json().job as { id: string }).id;
@@ -1129,27 +1340,16 @@ describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepar
             });
           }
         }
-        const nowMs = ctx.container.clock.now();
-        const existing = ctx.container.database.db
-          .select()
-          .from(symbolFactsState)
-          .where(eq(symbolFactsState.code, symbol))
-          .get();
-        const coveredYearsJson = JSON.stringify([2024, 2025]);
-        if (existing) {
-          ctx.container.database.db
-            .update(symbolFactsState)
-            .set({ coveredYearsJson, updatedAtMs: nowMs })
-            .where(eq(symbolFactsState.code, symbol))
-            .run();
-        } else {
-          ctx.container.database.db
-            .insert(symbolFactsState)
-            .values({ code: symbol, coveredYearsJson, updatedAtMs: nowMs })
-            .run();
-        }
       }
       if (facts.length > 0) await ctx.container.factRepository.saveFacts(facts);
+      for (const symbol of request.symbols) {
+        ctx.container.factCoverageStore.addCoverageResult(
+          symbol,
+          [2024, 2025],
+          [],
+          ctx.container.clock.now(),
+        );
+      }
       return { savedFacts: facts.length, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null };
     }) as typeof ctx.container.factSyncService.sync;
   }
@@ -1292,7 +1492,8 @@ describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepar
       });
       expect(preview.schedule[1]).toMatchObject({
         rebalanceDate: STEP12_REBALANCE_2,
-        effectiveDate: STEP12_REBALANCE_2,
+        // 2월 2일은 일요일이므로 직전 KRX 거래일의 지표를 쓴다.
+        effectiveDate: '2025-01-31',
         members: [{ symbol: 'C' }, { symbol: 'B' }],
       });
       expect(preview.unionSymbols.slice().sort()).toEqual(['A', 'B', 'C']);

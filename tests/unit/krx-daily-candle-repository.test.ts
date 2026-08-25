@@ -41,6 +41,7 @@ describe('KrxDailyCandleRepository', () => {
         { shortCode: '005930', date: '2026-08-06', market: 'KOSPI', open: 105, high: 115, low: 95, close: 110, volume: 2000 },
         { shortCode: '005930', date: '2026-08-07', market: 'KOSPI', open: 110, high: 120, low: 100, close: 115, volume: 3000 },
         { shortCode: '000660', date: '2026-08-06', market: 'KOSPI', open: 200, high: 210, low: 190, close: 205, volume: 500 },
+        { shortCode: 'INVALID', date: '2026-08-06', market: 'UNKNOWN', open: 100, high: 110, low: 90, close: 105, volume: 100 },
       ])
       .run();
     repository = new KrxDailyCandleRepository(db);
@@ -68,6 +69,7 @@ describe('KrxDailyCandleRepository', () => {
     expect(candles).toHaveLength(1);
     expect(candles[0]?.tsMs).toBe(midnight('2026-08-06'));
     expect(candles[0]?.close).toBe(110);
+    expect(candles[0]?.venue).toBe('KOSPI');
   });
 
   it('경계가 자정이 아니면 그 날을 제외한다', async () => {
@@ -106,6 +108,11 @@ describe('KrxDailyCandleRepository', () => {
 
   it('KR 이 아닌 시장은 빈 결과를 낸다', async () => {
     const candles = await collect({ market: 'US', timeframe: '1d', symbols: ['005930'] });
+    expect(candles).toHaveLength(0);
+  });
+
+  it('알 수 없는 실제 거래시장의 봉은 내보내지 않는다', async () => {
+    const candles = await collect({ market: 'KR', timeframe: '1d', symbols: ['INVALID'] });
     expect(candles).toHaveLength(0);
   });
 

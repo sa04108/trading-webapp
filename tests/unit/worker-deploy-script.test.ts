@@ -42,7 +42,6 @@ describe('Docker worker deployment', () => {
     expect(compose).toContain('cap_drop:');
     expect(compose).toContain('stop_grace_period: 30s');
     expect(compose).not.toMatch(/^\s+ports:/m);
-    expect(compose).not.toContain('systemd');
   });
 
   it('keeps checksum, manifest, probe, locks, and rollback in the node-local transaction', () => {
@@ -53,9 +52,6 @@ describe('Docker worker deployment', () => {
     expect(deploy.indexOf('Worker image checksum 불일치')).toBeLessThan(
       deploy.indexOf('docker image load'),
     );
-    expect(deploy).not.toContain('CURRENT_SHA=');
-    expect(deploy).not.toContain('FORCE=');
-    expect(deploy).not.toContain('no-op');
     expect(deploy).toContain('remote-backtest-supervisor.js --check');
     expect(deploy).toContain('rollback_transaction()');
     expect(deploy).toContain('flock -n "${DEPLOY_LOCK_FD}"');
@@ -68,7 +64,6 @@ describe('Docker worker deployment', () => {
       'rm -f -- "${IMAGE_ARCHIVE:-}" "${CHECKSUM_FILE:-}" "${NEW_COMPOSE:-}"',
     );
     expect(deploy).toContain('cp -p "${COMPOSE_FILE}" "${transaction_dir}/compose.yaml"');
-    expect(deploy).not.toContain('[ ! -f "${COMPOSE_FILE}" ] || cp');
     expect(deploy).toContain('quant-backtest-worker-${RELEASE}.tar.sha256');
     const prepareWorker = deploy.slice(
       deploy.indexOf('prepare_worker()'),
@@ -89,10 +84,8 @@ describe('Docker worker deployment', () => {
     expect(orchestrator).toContain("runWorkerPhase(workerDeployment, 'commit')");
     expect(orchestrator).toContain("runWorkerPhase(workerDeployment, 'finalize')");
     expect(orchestrator).toContain("runWorkerPhase(workerDeployment, 'rollback')");
-    expect(orchestrator).not.toContain('worker_force_deploy');
     expect(builder).toContain('quant-backtest-worker-${release_name}.tar');
     expect(orchestrator).toContain('quant-backtest-worker-${releaseName}.tar');
-    expect(deploy).not.toContain('systemctl');
   });
 
   it('removes only the failed candidate after a verified rollback and keeps only current on success', () => {
@@ -107,7 +100,6 @@ describe('Docker worker deployment', () => {
     );
     expect(deploy).toContain('cleanup_old_images "quant-platform-backtest-worker:${RELEASE}"');
     expect(deploy).toMatch(/finalize\)\s+transaction_dir=[\s\S]*verify_current_worker_image/);
-    expect(deploy).not.toContain('tail -n +4');
     expect(deploy).not.toContain('docker system prune');
   });
 

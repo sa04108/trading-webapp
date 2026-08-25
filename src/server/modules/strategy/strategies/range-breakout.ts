@@ -122,7 +122,7 @@ function getSymbolState(state: RangeBreakoutState, symbol: string): SymbolState 
 
 export const rangeBreakoutStrategy: TradingStrategy<RangeBreakoutParameters, RangeBreakoutState> = {
   id: 'range-breakout',
-  version: '2.0.1',
+  version: '2.0.4',
   name: '전고점 돌파',
   description:
     '직전 N개 봉의 최고가를 종가가 넘어서면 사고, 고점을 따라 올라가는 손절선에 걸리면 팝니다. ' +
@@ -131,7 +131,7 @@ export const rangeBreakoutStrategy: TradingStrategy<RangeBreakoutParameters, Ran
   dataRequirements: {
     priceWarmupBars: (parameters) => Math.max(
       parameters.lookbackBars,
-      parameters.atrPeriod + 1,
+      parameters.atrPeriod,
     ),
     requiresCorporateActions: true,
   },
@@ -212,16 +212,24 @@ export const rangeBreakoutStrategy: TradingStrategy<RangeBreakoutParameters, Ran
     // 3) 진입
     for (const [symbol, bar] of sortedBars) {
       const symbolState = getSymbolState(state, symbol);
-      const position = context.portfolio.positions.get(symbol);
-      if (position && position.quantity > 0) continue;
-
-      // 미체결 진입 주문이 있었으면 이번 봉은 재평가만 — 중복 진입 금지
-      if (symbolState.holding.pendingEntry) {
+      if (context.tradableSymbols !== null && !context.tradableSymbols.has(symbol)) {
+        // 엔진 안전망이 BUY를 거부하더라도 전략 상태에 pendingEntry를 남기면,
+        // 다음 봉에 실제 편입·거래 재개된 종목의 첫 유효 신호까지 건너뛴다.
         symbolState.holding.pendingEntry = false;
         continue;
       }
+      const position = context.portfolio.positions.get(symbol);
+      if (position && position.quantity > 0) continue;
 
-      if (symbolState.atr.atr === null || symbolState.atr.barsSeen <= parameters.atrPeriod) {
+      // 직전 BUY가 체결됐다면 위 position 분기에서 끝난다. 포지션 없이 여기까지
+      // 왔으면 유동성·현금·상한 등으로 주문이 체결되지 않은 것이므로 pending만
+      // 해제하고 현재 봉의 돌파를 다시 평가한다. 여기서 한 봉을 더 건너뛰면
+      // 여전히 유효한 첫 진입 기회를 인위적으로 늦춘다.
+      if (symbolState.holding.pendingEntry) {
+        symbolState.holding.pendingEntry = false;
+      }
+
+      if (symbolState.atr.atr === null) {
         continue;
       }
       const channelHigh = channelHighBySymbol.get(symbol) ?? null;

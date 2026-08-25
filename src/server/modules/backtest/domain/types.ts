@@ -7,8 +7,16 @@ export interface CostProfile {
   readonly buyCommissionRate: number;
   /** 매도 수수료율 */
   readonly sellCommissionRate: number;
-  /** 매도 관련 세금율 */
+  /** 일정이 없거나 일정 시작 전인 체결에 적용할 매도 관련 세율 */
   readonly sellTaxRate: number;
+  /** 체결 시각별 매도 관련 세율. fromTsMs 오름차순이며 마지막 유효 항목을 쓴다. */
+  readonly sellTaxRateSchedule?: readonly {
+    readonly fromTsMs: number;
+    readonly rate: number;
+    /** KOSPI는 증권거래세와 농특세를 체결건별로 각각 원 미만 절사한다. */
+    readonly kospiSecuritiesTaxRate?: number;
+    readonly kospiRuralTaxRate?: number;
+  }[];
 }
 
 export interface SlippageProfile {
@@ -21,8 +29,16 @@ export interface SlippageProfile {
 }
 
 export interface ExecutionRules {
-  /** 최소 호가 단위. 0 이면 반올림 없음 */
+  /** 고정 최소 호가 단위. 동적 프로파일이 없고 0 이면 반올림 없음 */
   readonly tickSize: number;
+  /** KRX 보통주 체결일·시장·가격대별 호가단위 프로파일 */
+  readonly tickSizeProfile?: {
+    readonly id: 'krx-equity';
+    readonly version: string;
+    readonly market: 'KOSPI' | 'KOSDAQ';
+  };
+  /** 직전 거래 봉 거래량 중 한 봉에서 체결할 수 있는 최대 비율. 미지정이면 제한 없음 */
+  readonly maxVolumeParticipationRate?: number;
   /** 최소 주문 수량 */
   readonly minOrderQty: number;
 }
@@ -99,23 +115,29 @@ export interface OpenPositionSnapshot {
   readonly lastPrice: number;
   /** `lastPrice` 를 읽은 봉의 시각 — 기간 종료 시각과 벌어져 있으면 stale 이다 */
   readonly lastPriceTsMs: number;
-  /** 매도 비용 미반영 평가손익 — 실현 손익이 아니다 */
+  /** 매수 수수료 포함·매도 비용 미반영 평가손익 — 실현 손익이 아니다 */
   readonly unrealizedPnl: number;
   readonly returnPct: number;
 }
 
-/** 완결(청산) 거래 */
+/**
+ * 매도 체결 레그. 부분 청산은 체결마다 한 건이며,
+ * 같은 포지션의 매수→전량 매도 왕복을 묶은 개념이 아니다.
+ */
 export interface Trade {
   readonly symbol: string;
   readonly quantity: number;
+  /** 해당 매도 직전 포지션의 최초 진입 시각. 추가매수는 이 시각을 바꾸지 않는다 */
   readonly entryTsMs: number;
   readonly exitTsMs: number;
+  /** 해당 매도 직전 포지션의 이동평균 매수 체결가 */
   readonly entryPrice: number;
   readonly exitPrice: number;
   readonly grossPnl: number;
   readonly costs: number;
   readonly netPnl: number;
   readonly returnPct: number;
+  /** `entryTsMs`부터 해당 매도까지의 기간 */
   readonly holdingTimeMs: number;
   readonly exitReason?: string;
 }
@@ -149,13 +171,21 @@ export interface BacktestMetrics {
   readonly sharpe: number | null;
   readonly sortino: number | null;
   readonly calmar: number | null;
+  /** 부분 청산을 포함한 매도 체결 레그 기준 */
   readonly winRate: number | null;
+  /** 부분 청산을 포함한 매도 체결 레그 기준 */
   readonly profitFactor: number | null;
+  /** 이익이 난 매도 체결 레그 기준 */
   readonly avgWin: number | null;
+  /** 손실이 난 매도 체결 레그 기준 */
   readonly avgLoss: number | null;
+  /** 매도 체결 레그 순서 기준 */
   readonly maxConsecutiveWins: number;
+  /** 매도 체결 레그 순서 기준 */
   readonly maxConsecutiveLosses: number;
+  /** 부분 청산을 포함한 매도 체결 레그 수 */
   readonly tradeCount: number;
+  /** 매도 체결 레그별 최초 진입 이후 보유기간 평균 */
   readonly avgHoldingTimeMs: number | null;
   readonly maxConcurrentPositions: number;
   readonly totalCommission: number;

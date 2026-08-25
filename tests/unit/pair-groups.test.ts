@@ -5,7 +5,6 @@ import {
   newCorrelationGroupingState,
   newCorrelationWarmup,
   pearsonCorrelation,
-  pruneWarmupCloses,
   recordClose,
   recordCorrelationClose,
   scaleWarmupCloses,
@@ -212,12 +211,27 @@ describe('tryBuildGroups', () => {
 });
 
 describe('CorrelationGroupingState', () => {
+  it('종가를 기록할 때 해당 종목의 오래된 이력만 즉시 제거한다', () => {
+    const state = newCorrelationGroupingState();
+    for (let index = 0; index < 5; index += 1) {
+      recordCorrelationClose(state, 'A', T0 + index * DAY, 1_000 + index, 3);
+      recordCorrelationClose(state, 'B', T0 + index * DAY, 2_000 + index, 10);
+    }
+
+    expect([...(state.warmup.closesBySymbol.get('A')?.keys() ?? [])]).toEqual([
+      T0 + 2 * DAY,
+      T0 + 3 * DAY,
+      T0 + 4 * DAY,
+    ]);
+    expect(state.warmup.closesBySymbol.get('B')?.size).toBe(5);
+  });
+
   it('공용 수명주기가 종가를 누적해 준비된 역상관 그룹을 확정한다', () => {
     const state = newCorrelationGroupingState();
     const path = oscillate(20);
     path.forEach((close, index) => {
-      recordCorrelationClose(state, 'A', T0 + index * DAY, close);
-      recordCorrelationClose(state, 'B', T0 + index * DAY, 1_000_000 / close);
+      recordCorrelationClose(state, 'A', T0 + index * DAY, close, 1_000);
+      recordCorrelationClose(state, 'B', T0 + index * DAY, 1_000_000 / close, 1_000);
     });
     const symbols = updateCorrelationGrouping({
       state,
@@ -238,8 +252,14 @@ describe('CorrelationGroupingState', () => {
     const initialA = oscillate(20);
     const initialB = oscillate(20);
     initialA.forEach((close, index) => {
-      recordCorrelationClose(state, 'A', T0 + index * DAY, close);
-      recordCorrelationClose(state, 'B', T0 + (100 + index) * DAY, initialB[index] as number);
+      recordCorrelationClose(state, 'A', T0 + index * DAY, close, 1_000);
+      recordCorrelationClose(
+        state,
+        'B',
+        T0 + (100 + index) * DAY,
+        initialB[index] as number,
+        1_000,
+      );
     });
     const input = {
       state,
@@ -255,8 +275,14 @@ describe('CorrelationGroupingState', () => {
     expect(state.groupOf?.get('B')).toBe('B');
 
     oscillate(20).forEach((close, index) => {
-      recordCorrelationClose(state, 'A', T0 + (200 + index) * DAY, close);
-      recordCorrelationClose(state, 'B', T0 + (200 + index) * DAY, 1_000_000 / close);
+      recordCorrelationClose(state, 'A', T0 + (200 + index) * DAY, close, 1_000);
+      recordCorrelationClose(
+        state,
+        'B',
+        T0 + (200 + index) * DAY,
+        1_000_000 / close,
+        1_000,
+      );
     });
 
     updateCorrelationGrouping(input);
@@ -264,11 +290,17 @@ describe('CorrelationGroupingState', () => {
     expect(state.groupOf?.get('B')).toBe('A');
   });
 
-  it('정적 유니버스는 모든 활성 pair가 측정 가능해진 뒤에만 워밍업을 끝낸다', () => {
+  it('정적 유니버스도 향후 멤버십 축소 재계산을 위해 제한된 워밍업 이력을 유지한다', () => {
     const state = newCorrelationGroupingState();
     oscillate(20).forEach((close, index) => {
-      recordCorrelationClose(state, 'A', T0 + index * DAY, close);
-      recordCorrelationClose(state, 'B', T0 + (100 + index) * DAY, 1_000_000 / close);
+      recordCorrelationClose(state, 'A', T0 + index * DAY, close, 1_000);
+      recordCorrelationClose(
+        state,
+        'B',
+        T0 + (100 + index) * DAY,
+        1_000_000 / close,
+        1_000,
+      );
     });
     const input = {
       state,
@@ -283,14 +315,26 @@ describe('CorrelationGroupingState', () => {
     expect(state.warmup).not.toBeNull();
 
     oscillate(20).forEach((close, index) => {
-      recordCorrelationClose(state, 'A', T0 + (200 + index) * DAY, close);
-      recordCorrelationClose(state, 'B', T0 + (200 + index) * DAY, 1_000_000 / close);
+      recordCorrelationClose(state, 'A', T0 + (200 + index) * DAY, close, 1_000);
+      recordCorrelationClose(
+        state,
+        'B',
+        T0 + (200 + index) * DAY,
+        1_000_000 / close,
+        1_000,
+      );
     });
 
     updateCorrelationGrouping(input);
     expect(state.groupOf?.get('A')).toBe('A');
     expect(state.groupOf?.get('B')).toBe('A');
-    expect(state.warmup).toBeNull();
+    expect(state.warmup).not.toBeNull();
+
+    updateCorrelationGrouping({
+      ...input,
+      activeUniverseSymbols: new Set(['B']),
+    });
+    expect(state.groupOf).toEqual(new Map([['B', 'B']]));
   });
 });
 
@@ -345,26 +389,5 @@ describe('scaleWarmupCloses — 분할이 상관 계산을 오염시키지 않�
     // 조정하지 않으면 −80% 한 점이 상관을 끌고 가 묶음이 깨진다
     const unscaledGroups = tryBuildGroups(unscaled, ['A', 'B'], 21, 0.5) as Map<string, string>;
     expect(unscaledGroups.get('A')).not.toBe(unscaledGroups.get('B'));
-  });
-});
-
-describe('pruneWarmupCloses', () => {
-  it('종목별로 최근 N개 시각만 남긴다', () => {
-    const warmup = newCorrelationWarmup();
-    for (let index = 0; index < 5; index += 1) {
-      recordClose(warmup, 'A', T0 + index * DAY, 1_000 + index);
-      if (index >= 3) recordClose(warmup, 'B', T0 + index * DAY, 2_000 + index);
-    }
-    pruneWarmupCloses(warmup, 3);
-
-    expect([...(warmup.closesBySymbol.get('A')?.keys() ?? [])]).toEqual([
-      T0 + 2 * DAY,
-      T0 + 3 * DAY,
-      T0 + 4 * DAY,
-    ]);
-    expect([...(warmup.closesBySymbol.get('B')?.keys() ?? [])]).toEqual([
-      T0 + 3 * DAY,
-      T0 + 4 * DAY,
-    ]);
   });
 });

@@ -13,7 +13,7 @@ import {
 import { TRADE_SORT_KEYS } from '../../src/shared/schemas/trade-sort.js';
 
 describe('DEFAULT_TRADE_SORT', () => {
-  // 화면 기본값과 서버 기본값이 갈라지면 「청산 빠른 순」을 표시한 채 다른 순서를
+  // 화면 기본값과 서버 기본값이 갈라지면 「매도 빠른 순」을 표시한 채 다른 순서를
   // 보여 준다 — 리터럴로 고정해 어느 쪽이 바뀌어도 잡는다
   it('서버 기본 정렬과 같다', () => {
     expect(DEFAULT_TRADE_SORT).toEqual({ key: 'EXIT_TS', direction: 'ASC' });
@@ -23,6 +23,8 @@ describe('DEFAULT_TRADE_SORT', () => {
     for (const key of TRADE_SORT_KEYS) {
       expect(TRADE_SORT_LABELS[key]).toBeTruthy();
     }
+    expect(TRADE_SORT_LABELS.EXIT_TS).toBe('매도');
+    expect(TRADE_SORT_LABELS.ENTRY_TS).toBe('최초 진입');
   });
 });
 
@@ -65,19 +67,19 @@ describe('정렬 상태 표기', () => {
   });
 
   it('title 은 지금 상태가 아니라 누르면 될 상태를 적는다', () => {
-    // 「청산 빠른 순」인 상태에서 청산을 누르면 느린 순이 된다
+    // 「매도 빠른 순」인 상태에서 매도를 누르면 느린 순이 된다
     expect(tradeSortHint({ key: 'EXIT_TS', direction: 'ASC' }, 'EXIT_TS')).toBe(
-      '청산 느린 순으로 정렬',
+      '매도 느린 순으로 정렬',
     );
     // 아직 고르지 않은 축은 그 축의 첫 방향을 적는다
     expect(tradeSortHint({ key: 'EXIT_TS', direction: 'ASC' }, 'HOLDING_TIME')).toBe(
-      '보유 긴 순으로 정렬',
+      '보유기간 긴 순으로 정렬',
     );
   });
 
   it('요약은 축을 부르는 말로 방향을 적는다', () => {
     expect(tradeSortSummary({ key: 'QUANTITY', direction: 'ASC' })).toBe('수량 낮은 순');
-    expect(tradeSortSummary({ key: 'ENTRY_TS', direction: 'DESC' })).toBe('진입 느린 순');
+    expect(tradeSortSummary({ key: 'ENTRY_TS', direction: 'DESC' })).toBe('최초 진입 느린 순');
   });
 });
 
@@ -144,9 +146,9 @@ describe('sortOpenRows', () => {
     ]);
   });
 
-  it('청산 시각 축에서는 전부 동률이라 심볼 순으로 떨어진다', () => {
-    // 미청산 행에는 청산 시각이 없다. 방향을 바꿔도 순서가 흔들리지 않아야 한다 —
-    // 흔들리면 「청산 빠른 순 / 느린 순」을 번갈아 누를 때 고정 행이 춤춘다
+  it('매도 시각 축에서는 전부 동률이라 심볼 순으로 떨어진다', () => {
+    // 미청산 행에는 매도 시각이 없다. 방향을 바꿔도 순서가 흔들리지 않아야 한다 —
+    // 흔들리면 「매도 빠른 순 / 느린 순」을 번갈아 누를 때 고정 행이 춤춘다
     expect(codes(sortOpenRows(rows, { key: 'EXIT_TS', direction: 'ASC' }))).toEqual([
       '000660',
       '005930',

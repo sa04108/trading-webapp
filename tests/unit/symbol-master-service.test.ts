@@ -146,11 +146,18 @@ function insertCoverage(t: TestApp, startDate: string, endDate: string): void {
     .insert(symbolMasterCoverage)
     .values({ startDate, endDate, syncedAtMs: t.container.clock.now() })
     .run();
-  t.container.database.db
-    .insert(symbolMasterTradingDays)
-    .values({ date: startDate })
-    .onConflictDoNothing()
-    .run();
+  let firstWeekdayTsMs = Date.parse(`${startDate}T00:00:00Z`);
+  while ([0, 6].includes(new Date(firstWeekdayTsMs).getUTCDay())) {
+    firstWeekdayTsMs += 86_400_000;
+  }
+  const firstWeekday = new Date(firstWeekdayTsMs).toISOString().slice(0, 10);
+  if (firstWeekday <= endDate) {
+    t.container.database.db
+      .insert(symbolMasterTradingDays)
+      .values({ date: firstWeekday })
+      .onConflictDoNothing()
+      .run();
+  }
 }
 
 /**

@@ -44,11 +44,8 @@ describe('range-breakout parameters (스펙 §32)', () => {
 });
 
 describe('StrategyRegistry', () => {
-  it('lists registered strategies and validates parameters', () => {
+  it('validates parameters', () => {
     const registry = new StrategyRegistry();
-    const list = registry.list();
-    expect(list.map((s) => s.id)).toContain('range-breakout');
-
     const valid = registry.validateParameters('range-breakout', {
       lookbackBars: 20,
       atrPeriod: 14,
@@ -204,10 +201,76 @@ describe('range-breakout 종목당 비중 상한', () => {
 });
 
 describe('range-breakout 워밍업', () => {
+  it('ATR period번째 봉에 시드가 완성되면 그 봉의 적법한 신호를 버리지 않는다', () => {
+    const result = run([
+      candle(0, { open: 100, high: 101, low: 99, close: 100 }),
+      candle(1, { open: 100, high: 101, low: 99, close: 100 }),
+      candle(2, { open: 100, high: 106, low: 100, close: 105 }),
+      candle(3, { open: 105, high: 106, low: 104, close: 105 }),
+    ], {
+      ...BASE,
+      lookbackBars: 2,
+      atrPeriod: 3,
+    });
+    expect(result.fills.some((fill) => fill.side === 'BUY' && fill.tsMs === START + 3 * HOUR))
+      .toBe(true);
+  });
+
   it('돌파 기준선 창이 lookbackBars 개로 차기 전에는 진입하지 않는다', () => {
     // 창을 채우려면 30봉이 필요한데 21봉만 준다 — 돌파해도 기준선이 없다
     const result = run([...flatWarmup(), SIGNAL_BAR], { ...BASE, lookbackBars: 30 });
     expect(result.fills).toHaveLength(0);
+  });
+
+  it('유니버스 밖 거부 주문을 pending으로 남기지 않아 첫 편입 신호를 놓치지 않는다', () => {
+    const candles = [
+      ...flatWarmup(),
+      SIGNAL_BAR, // 아직 유니버스 밖이므로 신호 상태를 만들면 안 된다
+      candle(21, { open: 105, high: 108, low: 104, close: 107 }), // 편입 뒤 첫 유효 돌파
+      candle(22, { open: 108, high: 109, low: 107, close: 108 }), // 정상 체결 시점
+      candle(23, { open: 109, high: 110, low: 108, close: 109 }),
+    ];
+    const result = runBacktest(rangeBreakoutStrategy as never, {
+      candles,
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters: BASE,
+      randomSeed: 42,
+      maxPositions: 5,
+      universeSchedule: [
+        { fromTsMs: START, symbols: [] },
+        { fromTsMs: START + 21 * HOUR, symbols: ['A'] },
+      ],
+    });
+
+    expect(result.fills.filter((fill) => fill.side === 'BUY')).toHaveLength(1);
+    expect(result.fills.find((fill) => fill.side === 'BUY')?.tsMs).toBe(START + 22 * HOUR);
+    expect(result.warnings.some((warning) => warning.includes('활성 멤버십 일정'))).toBe(false);
+  });
+
+  it('유동성으로 거부된 진입 뒤 다음 봉의 유효한 돌파를 한 봉 더 건너뛰지 않는다', () => {
+    const candles = [
+      ...flatWarmup(),
+      { ...SIGNAL_BAR, volume: 0 }, // 이 봉이 낸 BUY는 다음 봉에서 직전 거래량 0으로 거부
+      { ...candle(21, { open: 105, high: 108, low: 104, close: 107 }), volume: 100 },
+      { ...candle(22, { open: 108, high: 109, low: 107, close: 108 }), volume: 100 },
+      { ...candle(23, { open: 109, high: 110, low: 108, close: 109 }), volume: 100 },
+    ];
+    const result = runBacktest(rangeBreakoutStrategy as never, {
+      candles,
+      initialCash: 1_000_000,
+      execution: {
+        ...ZERO_COST,
+        rules: { ...ZERO_COST.rules, maxVolumeParticipationRate: 1 },
+      },
+      parameters: BASE,
+      randomSeed: 42,
+      maxPositions: 5,
+    });
+
+    // index21에서 직전 주문 실패를 확인한 뒤 같은 봉의 지속 돌파를 다시 발행하므로
+    // index22 시가에 체결된다. 구 코드는 index21을 통째로 건너뛰어 index23에 체결했다.
+    expect(result.fills.find((fill) => fill.side === 'BUY')?.tsMs).toBe(START + 22 * HOUR);
   });
 });
 

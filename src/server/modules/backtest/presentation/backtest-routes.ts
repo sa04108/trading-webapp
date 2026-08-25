@@ -26,7 +26,9 @@ import { SECURITY_HEADERS } from '../../../shared/security.js';
 import type { Clock } from '../../../shared/clock.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
 import type { FactCoverageStore } from '../../facts/application/fact-coverage-store.js';
+import type { FinancialFactAvailabilityService } from '../../facts/application/financial-fact-availability.js';
 import type { ConsumedVersionSnapshot, SymbolService } from '../../market-data/application/symbol-service.js';
+import type { SymbolMasterService } from '../../market-data/application/symbol-master-service.js';
 import { sendIfKrxError, sendIfNotCovered } from './krx-error-mapping.js';
 import { KRX_FILTER_POLICY_VERSION } from '../../market-data/domain/krx-filter-policy.js';
 import type {
@@ -34,6 +36,7 @@ import type {
   CandleCoverageService,
 } from '../../market-data/application/candle-coverage-service.js';
 import type { StrategyRegistry } from '../../strategy/application/strategy-registry.js';
+import { strategyRequiresFinancialData } from '../../strategy/domain/strategy.js';
 import type { BenchmarkService } from '../../market-data/application/benchmark-service.js';
 import { benchmarkPinSchema } from '../../../../shared/schemas/benchmark.js';
 import { estimateBars, MAX_BACKTEST_BARS } from '../domain/bar-estimate.js';
@@ -43,24 +46,45 @@ import {
   listCostProfiles,
   listSlippageProfiles,
 } from '../domain/cost-profiles.js';
+import {
+  findRebalanceSpacingViolation,
+  rebalanceSpacingViolationMessage,
+} from '../domain/rebalance-spacing.js';
 import type { JobOrchestrator, JobEvent } from '../application/job-orchestrator.js';
 import type { BacktestJobRow, JobQueue } from '../application/job-queue.js';
 import type { ResultsService } from '../application/results-service.js';
 import { rebaseStoredRequest } from '../application/stored-request.js';
 import { summarizeUniverseRebalancing } from '../application/universe-rebalancing.js';
 import type { LegacyUniverseScheduleEntry, ResolvedUniverse } from '../application/universe-rule-resolver.js';
-import type {
-  BacktestPreparationOrchestrator,
-  BacktestUniversePreview,
-  PreparationInput,
+import {
+  PreparationInputError,
+  UnsafeBacktestSymbolIdentityError,
+  type BacktestPreparationOrchestrator,
+  type BacktestUniversePreview,
+  type PreparationInput,
 } from '../application/backtest-preparation-orchestrator.js';
 import { backtestPreparationRequestHash } from '../application/backtest-preparation-plan.js';
+import { assertSafePinnedScheduleIdentities } from '../application/backtest-symbol-identity.js';
+import {
+  financialCoverageGapMessage,
+  findFinancialCoverageGap,
+} from '../application/backtest-financial-coverage.js';
+import {
+  delistedEventsToTsMsBySymbol,
+  financialFactCutoffsFromCoverage,
+} from '../application/backtest-financial-execution-window.js';
 import type {
   SeedCloneBatchDetail,
   SeedCloneBatchService,
 } from '../application/seed-clone-batch-service.js';
 
 type PreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+
+type FundamentalsRequirementIssue =
+  | { readonly kind: 'COVERAGE_GAP'; readonly message: string }
+  | { readonly kind: 'INGESTION_GAP'; readonly message: string }
+  | { readonly kind: 'CANDLE_GAP'; readonly message: string }
+  | { readonly kind: 'NO_PIT_FACTS'; readonly message: string };
 
 export interface BacktestRouteDeps {
   readonly queue: JobQueue;
@@ -70,12 +94,15 @@ export interface BacktestRouteDeps {
   readonly results: ResultsService;
   readonly strategies: StrategyRegistry;
   readonly symbolService: SymbolService;
+  readonly symbolMaster: SymbolMasterService;
   /** 종목별 일봉 보유 구간 — `krx_daily_bars` 를 직접 집계한다(Task 6) */
   readonly candleCoverage: CandleCoverageService;
   readonly preparation: BacktestPreparationOrchestrator;
   readonly audit: AuditLogService;
   /** 재무 요구 검사(422)가 보는 SQLite coverage store. */
   readonly factCoverage: FactCoverageStore;
+  /** 자본변동을 제외한 실제 재무 fact가 종목별 PIT cutoff까지 존재하는 종목. */
+  readonly financialFacts: Pick<FinancialFactAvailabilityService, 'symbolsWithFinancialFacts'>;
   readonly dataRoot: string;
   readonly maxQueuedBacktests: number;
   readonly clock: Clock;
@@ -149,6 +176,19 @@ function preparationInputOf(body: BacktestRequest): PreparationInput {
 
 function scheduleHash(schedule: readonly LegacyUniverseScheduleEntry[]): string {
   return createHash('sha256').update(JSON.stringify(schedule)).digest('hex');
+}
+
+function pinnedScheduleIdentityError(
+  schedule: readonly LegacyUniverseScheduleEntry[],
+  symbolMaster: SymbolMasterService,
+): string | null {
+  try {
+    assertSafePinnedScheduleIdentities(schedule, { symbolMaster });
+    return null;
+  } catch (error) {
+    if (error instanceof UnsafeBacktestSymbolIdentityError) return error.message;
+    throw error;
+  }
 }
 
 const consumedVersionSnapshotSchema = z.object({
@@ -272,10 +312,12 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     results,
     strategies,
     symbolService,
+    symbolMaster,
     candleCoverage,
     preparation,
     audit,
     factCoverage,
+    financialFacts,
     clock,
     benchmarks,
     seedCloneBatches,
@@ -349,42 +391,50 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     );
 
   /**
-   * 기간 × 커버리지 검사 (D-025). 커버리지는 메타데이터라 fact 행을 읽지 않는다.
-   * 요청한 종목 **전부** 가 구간 밖일 때만 거부한다 — 신규 상장처럼 이력이 짧은 종목
-   * 하나 때문에 유니버스 전체를 막지 않는다. 일부만 비는 경우는 실행 경고로 남는다.
-   *
-   * 옛 데이터셋 경로가 쓰던 관용 그대로다(스펙 2026-08-05) — 유니버스 규칙으로
-   * 재구성한 멤버십도 "지금 이 종목들로 이 기간에 얼마나 소비하나" 는 같은 질문이고,
-   * 신규 상장 등으로 일부 종목만 이력이 짧은 상황이 흔하다. `codes` 는 이제
-   * `body.universe.symbols` 가 아니라 리밸런스 일정의 합집합(unionSymbols)이다.
+   * 기간 × 종목별 커버리지 검사. 전체 이력 min/max가 아니라 요청 기간 안에서 worker와
+   * 같은 유효성 규칙을 통과한 일봉을 센다. 확정 schedule의 종목 하나를 0봉이라는
+   * 이유로 제외하면 실제 실행 유니버스가 달라지므로 일부 결측도 모두 거부한다.
+   * `codes`는 리밸런스 일정의 합집합(unionSymbols)이다.
    */
   const checkPeriodCoverage = (
     codes: readonly string[],
     period: { from: string; to: string },
   ): string | null => {
     const { fromTsMs, toTsMs } = periodToTsRange(period);
-    const bySymbol = new Map(registeredCoverage(codes).map((row) => [row.code, row]));
+    const inPeriod = new Map(
+      candleCoverage.getCoverageBetween(codes, fromTsMs, toTsMs)
+        .map((row) => [
+          row.code,
+          symbolService.exists(row.code)
+            ? row
+            : { code: row.code, firstTsMs: null, lastTsMs: null, barCount: 0 },
+        ] as const),
+    );
+    const allHistory = new Map(registeredCoverage(codes).map((row) => [row.code, row]));
 
     const ranges: string[] = [];
     for (const symbol of codes) {
-      const row = bySymbol.get(symbol);
-      if (!row || row.barCount === 0 || row.firstTsMs === null || row.lastTsMs === null) {
-        ranges.push(`${symbol}: 수집된 데이터 없음`);
-        continue;
-      }
-      // 하나라도 겹치면 통과 — 나머지는 실행 경고가 알린다
-      if (row.lastTsMs >= fromTsMs && row.firstTsMs <= toTsMs) return null;
-      ranges.push(`${symbol}: ${isoDate(row.firstTsMs)} ~ ${isoDate(row.lastTsMs)}`);
+      const current = inPeriod.get(symbol);
+      if (current && current.barCount > 0) continue;
+      const full = allHistory.get(symbol);
+      ranges.push(
+        !full || full.barCount === 0 || full.firstTsMs === null || full.lastTsMs === null
+          ? `${symbol}: 수집된 데이터 없음`
+          : `${symbol}: ${isoDate(full.firstTsMs)} ~ ${isoDate(full.lastTsMs)}`,
+      );
     }
 
-    return `선택한 기간에 데이터가 있는 종목이 없습니다. 보유 범위 — ${ranges.join(', ')}`;
+    return ranges.length === 0
+      ? null
+      : `선택한 기간에 일봉이 없는 유니버스 종목이 있습니다. 보유 범위 — ${ranges.join(', ')}`;
   };
 
   /**
    * 커버리지 확인 + 봉 수 상한 검사. 데이터셋·스냅샷 경로가 공유한다 — 유니버스가
    * 어디서 왔든 "이 종목 집합으로 이 기간에 얼마나 소비하나" 는 같은 질문이다.
    * 두 경로가 갈리는 지점은 기간 커버리지 판정 방식뿐이라 `coverageCheck` 로
-   * 주입한다 (D-025 관용 vs REVIEW §9.1 엄격 차단).
+   * 주입한다. 확정 유니버스의 종목을 일부만 빼고 실행하지 않도록 현재 경로도
+   * 요청 기간 내 유효 일봉을 종목별로 엄격히 확인한다.
    *
    * 소비 timeframe 을 고르는 절차는 없다 — `Timeframe` 이 '1d' 하나뿐이라(Task 4)
    * 예전처럼 슬라이스별 가용성을 견줘 고를 것이 없다.
@@ -453,7 +503,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
         readonly warnings: readonly string[];
       }
     | { readonly ok: false; readonly status: 400; readonly errors: string[] }
-    | { readonly ok: false; readonly status: 422; readonly errors: string[]; readonly uncoveredDates: readonly string[] };
+    | { readonly ok: false; readonly status: 422; readonly errors: string[]; readonly uncoveredDates?: readonly string[] };
 
   /** 준비 hash를 조회하기 전에 끝낼 수 있는 요청 자체의 검증. */
   const validateStaticSubmission = (body: BacktestRequest): string[] => {
@@ -533,7 +583,37 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       };
     }
 
-    // ② unionSymbols 캔들 존재 검증 — 옛 데이터셋 분기의 관용(D-025)을 그대로 재사용한다.
+    // 리밸런스 날짜만 각각 수집된 coverage 섬이면 schedule 자체는 해소되지만,
+    // 그 사이에 생긴 상장폐지·거래정지·종목 변경을 알 수 없다. 이 상태를 경고로만
+    // 통과시키면 이미 없어진 종목을 계속 거래하는 낙관 편향이 생길 수 있으므로,
+    // 기간 전체 KRX 마스터가 이어질 때까지 실행 생성 경로를 모두 막는다.
+    // cached clone preview는 resolver를 다시 돌리지 않으므로 저장된 boolean을 신뢰하지
+    // 않고 현재 coverage를 직접 확인한다. 그 사이 백필이 끝난 경우도 낡은 false로
+    // 오거부하지 않는다.
+    if (!symbolMaster.isRangeCovered(body.period.from, body.period.to)) {
+      return {
+        ok: false,
+        status: 422,
+        errors: [
+          '종목 마스터가 백테스트 기간 전체를 커버하지 않습니다 — '
+            + '유니버스 미리보기에서 기간 전체 동기화를 완료한 뒤 다시 제출하세요.',
+        ],
+      };
+    }
+
+    // 완료된 preparation 뒤 등록 행이 바뀌거나, clone 계열이 resolver 재실행 없이
+    // cached preview를 재사용해도 shortCode 기반 봉·팩트를 다른 증권과 합치지 않는다.
+    // schedule 원문을 보므로 unionEntries의 shortCode first-wins에도 의존하지 않는다.
+    const identityError = pinnedScheduleIdentityError(
+      resolved.schedule,
+      symbolMaster,
+    );
+    if (identityError !== null) {
+      return { ok: false, status: 422, errors: [identityError] };
+    }
+
+    // ② unionSymbols 캔들 존재 검증 — 하나라도 0봉이면 확정 schedule과 실제 실행
+    // 유니버스가 달라지므로 종목별로 엄격히 확인한다.
     const universeErrors: string[] = [];
     const resolvedConsumption = resolveConsumedUniverse(
       body,
@@ -546,6 +626,35 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
         ok: false,
         status: 400,
         errors: universeErrors.length > 0 ? universeErrors : ['제출을 검증할 수 없습니다'],
+      };
+    }
+
+    // 2봉(매도 → 다음 봉 매수) 리밸런스 전략은 연속 실제 거래 봉에서 두 번째
+    // isRebalanceBar를 매수 단계가 소비해 버린다. 달력 DAY 값만 보고 막으면 휴일을
+    // 잘못 해석하고 정상적인 긴 주기까지 과잉 차단하므로, 확정 유니버스의 DISTINCT
+    // 일봉 타임라인과 엔진의 schedule 활성화 규칙을 그대로 사용한다.
+    const strategy = strategies.get(body.strategyId);
+    const requiredRebalanceGapBars = strategy?.requiredRebalanceGapBars ?? 0;
+    const { fromTsMs, toTsMs } = periodToTsRange(body.period);
+    const spacingViolation = findRebalanceSpacingViolation(
+      candleCoverage.getTimeline(resolved.unionSymbols, fromTsMs, toTsMs),
+      resolved.schedule.map((entry) => ({
+        fromTsMs: Date.parse(`${entry.rebalanceDate}T00:00:00Z`),
+      })),
+      requiredRebalanceGapBars,
+      fromTsMs,
+    );
+    if (strategy && spacingViolation !== null) {
+      return {
+        ok: false,
+        status: 422,
+        errors: [
+          rebalanceSpacingViolationMessage(
+            strategy.name,
+            requiredRebalanceGapBars,
+            spacingViolation,
+          ),
+        ],
       };
     }
 
@@ -587,33 +696,65 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    * 없다 (D-025 와 같은 원칙: 조용히 빠지지 않는다). `validateSubmission` 이 만드는
    * `errors` 배열에 합류시키지 않는 이유: 그 배열은 항상 400 으로 변환되는데, 이 조건은
    * 요청 형식·데이터셋 상태가 아니라 "전략과 유니버스의 조합" 문제라 422 여야 한다.
-   * POST 신규 제출과 즉시 clone이 같은 검사를 거친다 — 데이터가 제출 이후 지워진
-   * job을 clone하면 이 관문에서 다시 걸린다. 재설정용 초안은 D-050에 따라 유니버스
-   * 단계 전에는 이 검사를 미룬다.
+   * 신규 제출·즉시 clone·재설정 clone·난수 seed 생성이 같은 검사를 거친다. 완료된
+   * preparation의 coverage 현재성 검사를 통과한 직후 데이터가 지워지는 race도 이
+   * enqueue 직전 관문에서 다시 걸린다. 재설정용 초안은 D-050에 따라 검사를 미룬다.
    */
   const checkFundamentalsRequirement = (
     body: BacktestRequest,
     unionSymbols: readonly string[],
-  ): string | null => {
-    if (!strategies.requiresFundamentals(body.strategyId)) return null;
-    /**
-     * **전 종목이 비었을 때만** 막는다. 일부 종목만 재무가 없는 경우는 거부 사유가
-     * 아니다 — 신규 상장처럼 이력이 짧은 종목 하나 때문에 유니버스 전체를 막지 않는
-     * `checkPeriodCoverage` 와 같은 원칙이고(D-025), 빠진 종목은 워커가 실행 경고에
-     * **이름으로** 남긴다. 여기서 전부 422 로 바꾸면 그 경고 경로가 죽는다.
-     *
-     * 판정은 fact 행 존재(hasFacts)가 아니라 재무 coverage 로 한다 — 자본변동만 받은
-     * 종목도 fact 행은 있어서 행 존재는 재무 있음을 증명하지 못한다
-     * (fact-coverage-store.ts 주석, resolver 의 PER 결측 판정과 같은 이유).
-     */
-    const covered = factCoverage.getCoveredYears(unionSymbols);
-    if (unionSymbols.some((code) => (covered.get(code)?.length ?? 0) > 0)) return null;
-    return (
-      '이 전략은 상장시점 재무 데이터가 필요하지만 선택한 종목에는 아직 없습니다: ' +
-      `${unionSymbols.join(', ')} — 미리보기를 다시 실행해 데이터 준비를 완료하세요. ` +
-      'DART 일일 한도로 대기 중이면 다음 날 자동으로 재개됩니다.'
-    );
+    schedule: readonly LegacyUniverseScheduleEntry[],
+  ): FundamentalsRequirementIssue | null => {
+    const strategy = strategies.get(body.strategyId);
+    if (strategy === null || !strategyRequiresFinancialData(strategy)) return null;
+    // 일부 종목만 준비되지 않은 상태를 허용하면 그 종목이 랭킹 후보에서 조용히 빠져
+    // 성과가 낙관적으로 치우친다. 반면 필요한 연도를 모두 조회했지만 실제 공시가 0건인
+    // 종목은 정상적인 수집 결과이므로 coverage 결측과 구분해 허용하고 실행 경고를 남긴다.
+    const gap = findFinancialCoverageGap({
+      request: body,
+      strategy,
+      symbols: unionSymbols,
+      coverage: factCoverage,
+    });
+    if (gap !== null) {
+      return {
+        kind: gap.kind === 'BLOCKING_INGESTION_GAP' ? 'INGESTION_GAP' : 'COVERAGE_GAP',
+        message: financialCoverageGapMessage(gap),
+      };
+    }
+    const factCutoffs = financialFactCutoffsFromCoverage({
+      period: body.period,
+      schedule,
+      delistedTsMsBySymbol: delistedEventsToTsMsBySymbol(
+        symbolMaster.delistedEventsBetween(body.period.from, body.period.to),
+      ),
+      candles: candleCoverage,
+    });
+    const missingCutoffs = [...new Set(unionSymbols)].filter((symbol) => !factCutoffs.has(symbol));
+    if (missingCutoffs.length > 0) {
+      return {
+        kind: 'CANDLE_GAP',
+        message:
+          `실제 편입 기간·상장폐지 이전에 실행 가능한 일봉이 없는 종목이 있습니다: ${missingCutoffs.join(', ')} — `
+          + '일봉과 유니버스 데이터를 다시 준비하세요.',
+      };
+    }
+    if (financialFacts.symbolsWithFinancialFacts(factCutoffs).size > 0) return null;
+    return {
+      kind: 'NO_PIT_FACTS',
+      message:
+        '재무 coverage 기록은 있지만 마지막 실행 봉까지 사용 가능한 재무 데이터가 '
+        + `유니버스 전체에 없습니다: ${unionSymbols.join(', ')} — `
+        + '수집 gap을 확인하거나 기간 종료일·유니버스·전략을 조정하세요.',
+    };
   };
+
+  const sendFundamentalsIssue = (
+    reply: FastifyReply,
+    issue: FundamentalsRequirementIssue,
+  ): FastifyReply => issue.kind === 'COVERAGE_GAP' || issue.kind === 'CANDLE_GAP'
+    ? reply.code(409).send({ error: 'PREPARATION_REQUIRED', message: issue.message })
+    : reply.code(422).send({ error: issue.message });
 
   /**
    * 보유 종목 수(topN) × 동시 보유 상한(maxPositions) 정합성 검사.
@@ -627,8 +768,8 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    *
    * 전략 id 를 특별 취급하지 않고 **검증된 파라미터에 숫자 `topN` 이 있으면** 본다 —
    * range-breakout 처럼 이 파라미터가 없는 전략은 자연히 통과한다.
-   * `checkFundamentalsRequirement` 와 같은 이유로 400(요청 형식)이 아니라 422 다:
-   * 요청 자체는 유효하고 "전략 파라미터와 리스크 설정의 조합" 이 문제다.
+   * 400(요청 형식)이 아니라 422 다. 요청 자체는 유효하고
+   * "전략 파라미터와 리스크 설정의 조합" 이 문제다.
    */
   const checkPositionCapacity = (body: BacktestRequest): string | null => {
     const validated = strategies.validateParameters(
@@ -725,7 +866,15 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       return null;
     }
 
-    const covered = factCoverage.getCoveredYears(resolved.unionSymbols);
+    const factCutoffs = financialFactCutoffsFromCoverage({
+      period: sourceRequest.period,
+      schedule,
+      delistedTsMsBySymbol: delistedEventsToTsMsBySymbol(
+        symbolMaster.delistedEventsBetween(sourceRequest.period.from, sourceRequest.period.to),
+      ),
+      candles: candleCoverage,
+    });
+    const codesWithFundamentals = financialFacts.symbolsWithFinancialFacts(factCutoffs);
     return {
       preview,
       schedule,
@@ -735,7 +884,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       response: {
         ...preview,
         fundamentalSymbols: resolved.unionSymbols.filter(
-          (code) => (covered.get(code)?.length ?? 0) > 0,
+          (code) => codesWithFundamentals.has(code),
         ),
       },
     };
@@ -780,6 +929,12 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     } catch (error) {
       if (sendIfKrxError(reply, error)) return reply;
       if (sendIfNotCovered(reply, error)) return reply;
+      if (error instanceof UnsafeBacktestSymbolIdentityError) {
+        return reply.code(422).send({ error: error.message });
+      }
+      if (error instanceof PreparationInputError) {
+        return reply.code(400).send({ error: error.message });
+      }
       throw error;
     }
     if (!prepared) {
@@ -804,9 +959,13 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       });
     }
 
-    const fundamentalsError = checkFundamentalsRequirement(body, validated.resolved.unionSymbols);
-    if (fundamentalsError) {
-      return reply.code(422).send({ error: fundamentalsError });
+    const fundamentalsIssue = checkFundamentalsRequirement(
+      body,
+      validated.resolved.unionSymbols,
+      validated.resolved.schedule,
+    );
+    if (fundamentalsIssue) {
+      return sendFundamentalsIssue(reply, fundamentalsIssue);
     }
 
     const capacityError = checkPositionCapacity(body);
@@ -899,8 +1058,21 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
     const cloneRequest = rebased.request;
     const reusable = reusablePreviewFor(job, cloneRequest);
-    const prepared = reusable?.preview
-      ?? await preparation.getReadyPreview(preparationInputOf(cloneRequest));
+    let prepared: Awaited<ReturnType<typeof preparation.getReadyPreview>>;
+    try {
+      prepared = reusable?.preview
+        ?? await preparation.getReadyPreview(preparationInputOf(cloneRequest));
+    } catch (error) {
+      if (sendIfKrxError(reply, error)) return reply;
+      if (sendIfNotCovered(reply, error)) return reply;
+      if (error instanceof UnsafeBacktestSymbolIdentityError) {
+        return reply.code(422).send({ error: error.message });
+      }
+      if (error instanceof PreparationInputError) {
+        return reply.code(400).send({ error: error.message });
+      }
+      throw error;
+    }
     if (!prepared) {
       return reply.code(409).send({
         error: 'PREPARATION_REQUIRED',
@@ -924,9 +1096,13 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       });
     }
 
-    const fundamentalsError = checkFundamentalsRequirement(cloneRequest, validated.resolved.unionSymbols);
-    if (fundamentalsError) {
-      return reply.code(422).send({ error: fundamentalsError });
+    const fundamentalsIssue = checkFundamentalsRequirement(
+      cloneRequest,
+      validated.resolved.unionSymbols,
+      validated.resolved.schedule,
+    );
+    if (fundamentalsIssue) {
+      return sendFundamentalsIssue(reply, fundamentalsIssue);
     }
 
     const capacityError = checkPositionCapacity(cloneRequest);
@@ -1019,8 +1195,12 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
         ...('uncoveredDates' in validated ? { uncoveredDates: validated.uncoveredDates } : {}),
       });
     }
-    const fundamentalsError = checkFundamentalsRequirement(body, validated.resolved.unionSymbols);
-    if (fundamentalsError) return reply.code(422).send({ error: fundamentalsError });
+    const fundamentalsIssue = checkFundamentalsRequirement(
+      body,
+      validated.resolved.unionSymbols,
+      validated.resolved.schedule,
+    );
+    if (fundamentalsIssue) return sendFundamentalsIssue(reply, fundamentalsIssue);
     const capacityError = checkPositionCapacity(body);
     if (capacityError) return reply.code(422).send({ error: capacityError });
     const queueError = queueDepthError();
@@ -1086,8 +1266,12 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (!validated.ok) {
       return reply.code(validated.status).send({ error: validated.errors[0] });
     }
-    const fundamentalsError = checkFundamentalsRequirement(body, validated.resolved.unionSymbols);
-    if (fundamentalsError) return reply.code(422).send({ error: fundamentalsError });
+    const fundamentalsIssue = checkFundamentalsRequirement(
+      body,
+      validated.resolved.unionSymbols,
+      validated.resolved.schedule,
+    );
+    if (fundamentalsIssue) return sendFundamentalsIssue(reply, fundamentalsIssue);
     const capacityError = checkPositionCapacity(body);
     if (capacityError) return reply.code(422).send({ error: capacityError });
     const resourceError = await checkResources(deps.dataRoot);
@@ -1129,11 +1313,43 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
 
     const reusable = reusablePreviewFor(job, rebased.request);
+    const identityBlocker = reusable === null
+      ? null
+      : pinnedScheduleIdentityError(reusable.schedule, symbolMaster);
+    const currentMissingCandleSymbols = reusable === null
+      ? []
+      : (() => {
+          const symbols = [...new Set(
+            reusable.schedule.flatMap((entry) => entry.symbols),
+          )].sort();
+          const { fromTsMs, toTsMs } = periodToTsRange(rebased.request.period);
+          const withBars = new Set(
+            candleCoverage.getCoverageBetween(symbols, fromTsMs, toTsMs)
+              .filter((row) => row.barCount > 0)
+              .map((row) => row.code),
+          );
+          return symbols.filter(
+            (symbol) => !symbolService.exists(symbol) || !withBars.has(symbol),
+          );
+        })();
+    const reusablePreview = identityBlocker === null && reusable !== null
+      ? {
+          ...reusable.response,
+          // cached preview는 resolver를 다시 실행하지 않는다. 전체 KRX coverage와
+          // 현재 일봉 보유 상태를 모두 덮어 위저드가 낡은 성공 판정을 믿고
+          // 동기화 단계를 건너뛰지 않게 한다.
+          periodCovered: symbolMaster.isRangeCovered(
+            rebased.request.period.from,
+            rebased.request.period.to,
+          ),
+          missingCandleSymbols: currentMissingCandleSymbols,
+        }
+      : null;
     return {
       request: rebased.request,
       warnings: rebased.warnings,
-      blockers: [],
-      reusablePreview: reusable?.response ?? null,
+      blockers: identityBlocker === null ? [] : [identityBlocker],
+      reusablePreview,
     };
   });
 
