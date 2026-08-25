@@ -73,7 +73,7 @@ function alwaysBuyBothStrategy(): TradingStrategy<unknown, null> {
 
 describe('runBacktest — 멤버십 일정 기반 거래 대상 제한 (스펙 2026-08-05, §9.5)', () => {
   it('결과 의미 변경을 엔진 버전에 반영한다', () => {
-    expect(ENGINE_VERSION).toBe('2.6.0');
+    expect(ENGINE_VERSION).toBe('2.7.0');
   });
 
   it('2봉 리밸런스 전략은 연속 실제 거래 봉 일정을 실행 전에 거부한다', () => {

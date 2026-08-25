@@ -140,6 +140,71 @@ describe('엔진 거래불가일', () => {
     expect(result.fills).toHaveLength(1);
     expect(result.fills[0]?.tsMs).toBe(START + 2 * DAY);
   });
+
+  it('보유 종목의 봉이 원인 없이 끊기면 직전 가격 평가 대신 실패한다', () => {
+    const candles = [
+      bar('A', 0), bar('A', 1),
+      bar('B', 0), bar('B', 1), bar('B', 2),
+    ];
+
+    expect(() => runBacktest(buyOnceStrategy('A'), {
+      candles,
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 1,
+      maxPositions: 5,
+      marketTradingTsMs: [START, START + DAY, START + 2 * DAY],
+    })).toThrow(
+      '보유 종목의 가격 봉이 거래일 중간에 누락됐습니다: A (2025-05-14)',
+    );
+  });
+
+  it('보유 종목의 봉이 없어도 확인된 거래불가일이면 직전 가격으로 평가한다', () => {
+    const result = runBacktest(buyOnceStrategy('A'), {
+      candles: [
+        bar('A', 0), bar('A', 1),
+        bar('B', 0), bar('B', 1), bar('B', 2),
+      ],
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 1,
+      maxPositions: 5,
+      marketTradingTsMs: [START, START + DAY, START + 2 * DAY],
+      nonTradingSymbolsByTsMs: new Map([[START + 2 * DAY, new Set(['A'])]]),
+    });
+
+    expect(result.openPositions).toMatchObject([
+      { symbol: 'A', lastPrice: 1_000, lastPriceTsMs: START + DAY },
+    ]);
+  });
+
+  it('선택 종목 봉이 모두 일찍 끊겨도 시장 거래일력으로 누락을 발견한다', () => {
+    expect(() => runBacktest(buyOnceStrategy('A'), {
+      candles: [bar('A', 0), bar('A', 1)],
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 1,
+      maxPositions: 5,
+      marketTradingTsMs: [START, START + DAY, START + 2 * DAY],
+    })).toThrow(
+      '보유 종목의 가격 봉이 거래일 중간에 누락됐습니다: A (2025-05-14)',
+    );
+  });
+
+  it('시장 거래일력은 UTC 자정 정수 시각만 허용한다', () => {
+    expect(() => runBacktest(buyOnceStrategy('A'), {
+      candles: [bar('A', 0), bar('A', 1)],
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 1,
+      maxPositions: 5,
+      marketTradingTsMs: [START + 1],
+    })).toThrow('marketTradingTsMs는 Date 범위 안의 UTC 자정 정수 시각이어야 합니다');
+  });
 });
 
 describe('상장폐지 청산', () => {

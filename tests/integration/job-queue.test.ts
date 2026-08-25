@@ -234,6 +234,11 @@ describe('backtest job queue (스펙 §10, §14)', () => {
   });
 
   it('runs a backtest end-to-end in a child process', { timeout: 90_000 }, async () => {
+    // 성공 경로는 요청 종료일까지 가격 봉이 완전해야 한다. 이전 43봉 픽스처는
+    // 3월 초에 끝나면서도 6월 말 결과를 정상 완료해 B-001을 재현하고 있었다.
+    dailyCandles = buildTrendingDailyCandles('005930', 127);
+    seedDailyBars(ctx.container.database.db, dailyCandles);
+
     // 제출 시점 pin 이 실제 재무 버전 상태를 반영하는지 검증하려면 버전이 하나는
     // 있어야 한다 — facts 동기화가 실제로 한 번 있었다고 가정한다.
     ctx.container.symbolService.bumpVersion('005930', FACTS_SLICE, 'fact-sync:seed', Date.now());

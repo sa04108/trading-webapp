@@ -3,7 +3,7 @@
  * 부모의 HTTP 이벤트 루프·메모리와 격리되어 입력 로드 → 엔진 실행 → 결과 저장을 수행한다.
  * 환경변수는 §5 화이트리스트만 받는다. 종료 전 최종 상태를 DB 에 직접 기록한다.
  */
-import { and, desc, eq, inArray, lt } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, lt, lte } from 'drizzle-orm';
 import { pino } from 'pino';
 import { readGitCommitSha } from '../server/shared/build-info.js';
 import { systemClock } from '../server/shared/clock.js';
@@ -262,6 +262,16 @@ async function main(): Promise<void> {
           .all();
     const warmupFromDate = priorTradingDays[priorTradingDays.length - 1]?.date
       ?? request.period.from;
+    const marketTradingTsMs = db
+      .select({ date: symbolMasterTradingDays.date })
+      .from(symbolMasterTradingDays)
+      .where(and(
+        gte(symbolMasterTradingDays.date, warmupFromDate),
+        lte(symbolMasterTradingDays.date, request.period.to),
+      ))
+      .orderBy(asc(symbolMasterTradingDays.date))
+      .all()
+      .map((row) => Date.parse(`${row.date}T00:00:00Z`));
 
     for (const row of symbolMaster.nonTradingDaysBetween(warmupFromDate, request.period.to)) {
       if (!unionSymbolSet.has(row.shortCode)) continue;
@@ -654,6 +664,7 @@ async function main(): Promise<void> {
       },
       universeSchedule,
       nonTradingSymbolsByTsMs,
+      marketTradingTsMs,
       nonTradingCoveredPeriod,
       delistedTsMsBySymbol,
     }, {

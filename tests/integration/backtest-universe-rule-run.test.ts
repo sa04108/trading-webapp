@@ -889,6 +889,43 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
   });
 
   it(
+    '보유 종목 봉이 원인 없이 끊기면 워커가 마지막 가격 평가로 완료하지 않는다',
+    { timeout: 90_000 },
+    async () => {
+      const alive = buildDailyCandles('005930');
+      const incomplete = buildDailyCandles('000660').slice(0, Math.floor(alive.length / 2));
+
+      registerSymbols(ctx.container, 'KR', ['005930', '000660']);
+      seedDailyBars(ctx.container.database.db, [...alive, ...incomplete]);
+      seedSymbolMasterUniverse(ctx.container, MASTER_DATES, [
+        { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '900' },
+        { standardCode: 'KR7000660001', shortCode: '000660', name: 'SK하이닉스', market: 'KOSPI', marketCapKrw: '800' },
+      ]);
+      await seedCorporateActionCoverage(ctx.container, ['005930', '000660'], yearRange(2025, 2026));
+
+      const created = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/backtests',
+        cookies: { qp_session: cookie },
+        payload: buildRequest(2),
+      });
+      expect(created.statusCode).toBe(201);
+      const jobId = (created.json().job as { id: string }).id;
+
+      ctx.container.jobOrchestrator.tick();
+      await waitFor(() => {
+        const job = ctx.container.jobQueue.getJob(jobId);
+        return job !== null && ctx.container.jobQueue.isTerminal(job.status);
+      }, 60_000);
+
+      const job = ctx.container.jobQueue.getJob(jobId)!;
+      expect(job.status).toBe('FAILED');
+      expect(job.error).toContain('보유 종목의 가격 봉이 거래일 중간에 누락됐습니다: 000660');
+      expect(ctx.container.resultsService.getRun(jobId)).toBeNull();
+    },
+  );
+
+  it(
     '상장폐지 종목이 마지막 거래 가능 봉 종가로 청산된다',
     { timeout: 90_000 },
     async () => {

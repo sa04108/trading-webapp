@@ -76,6 +76,13 @@ export interface BacktestRunInput {
    */
   readonly nonTradingSymbolsByTsMs?: ReadonlyMap<number, ReadonlySet<string>>;
   /**
+   * 시장 전체의 실제 거래일(UTC 자정 epoch ms). 특정 종목 봉의 합집합만 시간축으로
+   * 쓰면 선택 종목 데이터가 모두 함께 일찍 끊긴 경우를 발견할 수 없다. 워커는 이미
+   * 수집한 KRX 거래일력을 넘기며, 엔진은 보유 종목의 봉이 거래불가·상장폐지 근거 없이
+   * 빠진 거래일을 마지막 종가로 평가하지 않고 실패시킨다.
+   */
+  readonly marketTradingTsMs?: readonly number[];
+  /**
    * 상장폐지 효력 시각 (심볼 → tsMs 목록). 기간 안에 폐지된 종목만 담는다.
    *
    * KRX 가 폐지된 여섯 자리 단축코드를 나중에 다른 회사에 다시 줄 수 있다. 현재
@@ -140,8 +147,9 @@ export interface BacktestRunResult {
  * 2.5.0: 요청 시작·종료 경계를 자산곡선에 고정해 데이터 단절이 CAGR 기간을 줄이지
  * 않게 하고, 실제 고점 아래 구간만 drawdown duration으로 센다.
  * 2.6.0: 직전 봉 participation 한도와 함께 현재 체결 봉의 총거래량을 물리적 상한으로 쓴다.
+ * 2.7.0: 시장 거래일에 보유 종목 봉이 원인 불명으로 빠지면 마지막 가격 평가 대신 실패한다.
  */
-export const ENGINE_VERSION = '2.6.0';
+export const ENGINE_VERSION = '2.7.0';
 
 const PROGRESS_INTERVAL_BARS = 500;
 const MS_PER_DAY = 86_400_000;
@@ -221,6 +229,19 @@ function* runBacktestSteps(
       throw new Error('tradeFromTsMs는 resultPeriod 안에 있어야 합니다');
     }
   }
+  for (const tsMs of input.marketTradingTsMs ?? []) {
+    if (
+      !Number.isSafeInteger(tsMs)
+      || tsMs < 0
+      || tsMs > MAX_DATE_TS_MS
+      || tsMs % MS_PER_DAY !== 0
+    ) {
+      throw new Error('marketTradingTsMs는 Date 범위 안의 UTC 자정 정수 시각이어야 합니다');
+    }
+  }
+  const marketTradingTsMs = input.marketTradingTsMs === undefined
+    ? undefined
+    : new Set(input.marketTradingTsMs);
 
   // 같은 여섯 자리 단축코드의 새 발행사 봉을 구분할 식별자가 아직 없다. 가장 이른
   // 폐지 효력 시각 이후의 봉을 먼저 제거해야 그 봉이 전략 history·후보 선정·RNG 호출·
@@ -263,6 +284,7 @@ function* runBacktestSteps(
   const timeline = [...new Set([
     ...allBarCountByTs.keys(),
     ...firstDelistedTsMsBySymbol.values(),
+    ...(marketTradingTsMs ?? []),
   ])].sort((a, b) => a - b);
   const symbols = [...new Set(sorted.map((c) => c.symbol))].sort();
   const totalBars = allSorted.filter(
@@ -427,6 +449,39 @@ function* runBacktestSteps(
     }
   };
 
+  const assertHeldPositionBarsAvailable = (
+    tsMs: number,
+    bars: ReadonlyMap<string, Candle>,
+    allBarCount: number,
+    isTradeBar: boolean,
+  ): void => {
+    // 시장 거래일력을 주지 않은 순수 엔진 호출은 일부 종목만 듬성듬성 넣은 합성
+    // 입력일 수 있어, 다른 종목의 봉만으로 이 날이 검사 가능한 시장 거래일이라고
+    // 단정하지 않는다. 생산 워커는 coverage가 확인된 거래일력을 항상 명시한다.
+    if (
+      !isTradeBar
+      || marketTradingTsMs === undefined
+      || positions.size === 0
+      // 휴일의 상장폐지 효력 이벤트처럼 시장 거래일도, 실제 봉 날짜도 아닌 합성
+      // 시각은 다른 보유 종목의 누락 검사일로 쓰지 않는다.
+      || (allBarCount === 0 && !marketTradingTsMs.has(tsMs))
+    ) return;
+    const missingSymbols = [...positions.keys()]
+      .filter((symbol) => (
+        !bars.has(symbol)
+        && !retiredSymbols.has(symbol)
+        && nonTradingNow?.has(symbol) !== true
+      ))
+      .sort();
+    if (missingSymbols.length === 0) return;
+    const date = new Date(tsMs).toISOString().slice(0, 10);
+    throw new Error(
+      `보유 종목의 가격 봉이 거래일 중간에 누락됐습니다: ${missingSymbols.join(', ')} (${date}). `
+        + '거래불가일·상장폐지로 확인되지 않아 마지막 가격 평가를 중단합니다. '
+        + '기간 전체 KRX 데이터를 다시 준비하세요.',
+    );
+  };
+
   for (const tsMs of timeline) {
     if (hooks.shouldCancel?.()) {
       cancelled = true;
@@ -435,6 +490,7 @@ function* runBacktestSteps(
 
     const allBarCount = allBarCountByTs.get(tsMs) ?? 0;
     const bars = barsByTs.get(tsMs) ?? new Map<string, Candle>();
+    nonTradingNow = input.nonTradingSymbolsByTsMs?.get(tsMs);
     const delistingSymbolsThisBar = new Set<string>();
     while (
       delistingEventCursor < delistingEvents.length
@@ -454,6 +510,7 @@ function* runBacktestSteps(
     // 폐지 뒤 재사용된 코드의 raw 봉은 결과 기간·진행률 시계에만 남긴다. 그 시각에
     // 실제 폐지 이벤트도 없다면 전략·일정·주문 상태를 전진시키지 않는다.
     if (bars.size === 0 && delistingSymbolsThisBar.size === 0) {
+      assertHeldPositionBarsAvailable(tsMs, bars, allBarCount, isTradeBar);
       if (isTradeBar) {
         equityPoints.push({ tsMs, equity: markToMarket() });
         maxConcurrentPositions = Math.max(maxConcurrentPositions, positions.size);
@@ -516,6 +573,11 @@ function* runBacktestSteps(
         buysAwaitingForcedExitAttempt = false;
       }
     }
+
+    // 폐지 효력일은 위에서 먼저 청산·retirement해야 정상 경로를 누락으로 오인하지
+    // 않는다. 그 밖의 보유 종목이 시장 거래일에 봉 없이 남아 있으면 직전 종가 평가로
+    // 결과가 부풀 수 있으므로, 주문·전략 실행 전에 fail-closed한다.
+    assertHeldPositionBarsAvailable(tsMs, bars, allBarCount, isTradeBar);
 
     const deferredBuysWereReadyBeforeOpen = !buysAwaitingForcedExitAttempt
       && deferredRebalanceBuys.length > 0;
@@ -585,7 +647,6 @@ function* runBacktestSteps(
 
     // 거래불가 종목을 매수 후보에서 뺀다. 멤버십 일정이 없어도(=제한 없음) 이날
     // 거래불가인 종목이 있으면 전체 심볼에서 그만큼 뺀 집합을 만든다.
-    nonTradingNow = input.nonTradingSymbolsByTsMs?.get(tsMs);
     if (nonTradingNow !== undefined && nonTradingNow.size > 0) {
       const base = tradableSymbols ?? new Set(symbols);
       const filtered = new Set<string>();
