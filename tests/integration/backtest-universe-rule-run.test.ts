@@ -136,14 +136,19 @@ function installPreparedSubmissionFixture(ctx: TestApp): void {
   const planCorporateActionSync: typeof ctx.container.factSyncService.planCorporateActionSync = () => noWorkPlan;
   ctx.container.factSyncService.planFinancialSync = planFinancialSync;
   ctx.container.factSyncService.planCorporateActionSync = planCorporateActionSync;
-  const noWorkReport: typeof ctx.container.factSyncService.sync = async () => ({
-    savedFacts: 0,
-    gaps: [],
-    stoppedAtSymbol: null,
-    stopReason: null,
-    failureMessage: null,
-  });
-  ctx.container.factSyncService.sync = noWorkReport;
+  ctx.container.factSyncService.sync = async (request) => {
+    const years = yearRange(request.fromYear, request.toYear);
+    for (const symbol of request.symbols) {
+      ctx.container.factCoverageStore.addCoveredYears(symbol, years, ctx.container.clock.now());
+    }
+    return {
+      savedFacts: 0,
+      gaps: [],
+      stoppedAtSymbol: null,
+      stopReason: null,
+      failureMessage: null,
+    };
+  };
   ctx.container.factSyncService.syncCorporateActions = async (request) => {
     const years = yearRange(request.fromYear, request.toYear);
     for (const symbol of request.symbols) {
@@ -380,7 +385,11 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     expect(ctx.container.resultsService.getRun(jobId)).toBeNull();
   });
 
-  it('재무가 없는 데이터셋에 밸류 전략을 제출하면 422 로 거부한다', async () => {
+  it('마지막 실행 봉 뒤 공시만 있는 데이터셋에 밸류 전략을 제출하면 422 로 거부한다', async () => {
+    await ctx.container.factRepository.saveFacts([{
+      scope: 'SYMBOL', key: '005930', field: 'NET_INCOME', periodKey: '2025Q3',
+      asOfTsMs: Date.parse('2025-10-31T01:00:00Z'), value: 1, unit: 'KRW',
+    }]);
     const response = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
@@ -403,7 +412,68 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     });
 
     expect(response.statusCode).toBe(422);
-    expect(response.json().error).toContain('상장시점 재무 데이터가 필요');
+    expect(response.json().error).toContain('coverage 기록은 있지만');
+    expect(response.json().error).toContain('기간 종료일·유니버스·전략');
+  });
+
+  it('준비 확인 직후 일부 종목의 필수 연도 coverage가 사라져도 enqueue하지 않는다', async () => {
+    seedDailyBars(ctx.container.database.db, buildDailyCandles('000660'));
+    await ctx.container.factRepository.saveFacts([{
+      scope: 'SYMBOL', key: '005930', field: 'NET_INCOME', periodKey: '2025Q1',
+      asOfTsMs: Date.parse('2025-07-31T00:00:00Z'), value: 1, unit: 'KRW',
+    }]);
+    const payload: BacktestRequest = {
+      strategyId: 'value-quality-rank',
+      parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+      universeRule: universeRule(2),
+      timeframe: '1d',
+      period: { from: '2025-08-01', to: '2025-10-31' },
+      capital: { initialCash: 10_000_000, currency: 'KRW' },
+      execution: {
+        fillTiming: 'NEXT_BAR_OPEN',
+        commissionProfileId: 'kr-equity-default',
+        slippageProfileId: 'fixed-5bps',
+      },
+      risk: { maxPositions: 1 },
+      randomSeed: 41,
+    };
+    const first = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload,
+    });
+    expect(first.statusCode).toBe(201);
+    const prepared = ctx.container.backtestPreparationOrchestrator.getCachedPreview({
+      universeRule: payload.universeRule,
+      period: payload.period,
+      strategyId: payload.strategyId,
+      parameters: payload.parameters,
+    });
+    expect(prepared).not.toBeNull();
+
+    ctx.container.database.db.update(symbolFactsState)
+      .set({ coveredYearsJson: JSON.stringify([2025]) })
+      .where(eq(symbolFactsState.code, '000660'))
+      .run();
+    // getReadyPreview의 현재성 확인과 실제 enqueue 사이 삭제 race를 직접 재현한다.
+    ctx.container.backtestPreparationOrchestrator.getReadyPreview = async () => prepared;
+    ctx.container.factSyncService.sync = async () => ({
+      savedFacts: 0,
+      gaps: [],
+      stoppedAtSymbol: null,
+      stopReason: null,
+      failureMessage: null,
+    });
+    const beforeCount = ctx.container.jobQueue.listJobs(100, 0).length;
+    const rejected = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: { ...payload, randomSeed: 42 },
+    });
+
+    expect(rejected.statusCode).toBe(409);
+    expect(rejected.json().error).toBe('PREPARATION_REQUIRED');
+    expect(rejected.json().message).toMatch(/coverage.*2024~2025년.*000660/);
+    expect(ctx.container.jobQueue.listJobs(100, 0)).toHaveLength(beforeCount);
   });
 
   /**

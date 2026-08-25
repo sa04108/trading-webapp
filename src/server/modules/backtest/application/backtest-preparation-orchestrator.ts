@@ -16,6 +16,7 @@ import { newId } from '../../../shared/ids.js';
 import type { Logger } from '../../../shared/logger.js';
 import type { ExternalApiUsage } from '../../../shared/db/external-api-usage.js';
 import type { CorporateActionCoverageStore } from '../../facts/application/corporate-action-coverage.js';
+import type { FactCoverageStore } from '../../facts/application/fact-coverage-store.js';
 import type { FactSyncService, FactSyncReport } from '../../facts/application/fact-sync-service.js';
 import { DART_DAILY_CALL_LIMIT } from '../../facts/domain/sync-plan.js';
 import type { CandleCoverageService } from '../../market-data/application/candle-coverage-service.js';
@@ -27,6 +28,10 @@ import type { SymbolMasterEntry } from '../../market-data/domain/symbol-master.j
 import type { StrategyRegistry } from '../../strategy/application/strategy-registry.js';
 import type { AnyTradingStrategy } from '../../strategy/domain/strategy.js';
 import { UnsafeBacktestSymbolIdentityError } from './backtest-symbol-identity.js';
+import {
+  financialCoverageGapMessage,
+  findFinancialCoverageGap,
+} from './backtest-financial-coverage.js';
 import {
   backtestPreparationRequestHash,
   buildBacktestPreparationPlan,
@@ -132,6 +137,7 @@ export interface BacktestPreparationOrchestratorDeps {
     CorporateActionCoverageStore,
     'getCoveredYears' | 'getGapYears'
   >;
+  readonly factCoverage: Pick<FactCoverageStore, 'getCoveredYears'>;
   readonly symbolMaster: Pick<
     SymbolMasterService,
     | 'ensureTradingDay'
@@ -252,7 +258,12 @@ export class BacktestPreparationOrchestrator {
       .orderBy(desc(backtestPreparationJobs.createdAtMs))
       .all()
       .find((row) => row.status === 'COMPLETED' && row.previewJson !== null);
-    return completed ? this.getPreview(completed.id) : null;
+    if (!completed) return null;
+    const preview = this.getPreview(completed.id);
+    if (!preview || this.financialCoverageGap(input, strategy, preview.unionSymbols) !== null) {
+      return null;
+    }
+    return preview;
   }
 
   /** 같은 요청 hash의 완료 결과를 현재 resolver로 다시 확인해 stale preview를 거른다. */
@@ -276,6 +287,9 @@ export class BacktestPreparationOrchestrator {
     // 수 있다. 이전 union에만 full facts/actions를 준비했으므로 다른 schedule을 완료
     // 결과처럼 돌려주지 않고 새 durable job을 시작하게 한다.
     if (!storedPreview || storedPreview.scheduleHash !== currentPreview.scheduleHash) return null;
+    // 완료 뒤 coverage가 삭제·손상됐으면 cached 200을 계속 돌려 재준비 진입을 막지
+    // 않는다. null을 돌려 라우트가 새 durable preparation을 시작하게 한다.
+    if (this.financialCoverageGap(input, strategy, currentPreview.unionSymbols) !== null) return null;
     this.registerUniverse(attempt);
     return currentPreview;
   }
@@ -492,6 +506,7 @@ export class BacktestPreparationOrchestrator {
         if (JSON.stringify(finalAttempt.schedule) !== beforeSignature) continue;
 
         this.assertCorporateActionCoverage(finalPlan.actions);
+        this.assertFinancialCoverage(input, strategy, unionSymbols(finalAttempt.schedule));
         stabilized = true;
         break;
       }
@@ -676,6 +691,28 @@ export class BacktestPreparationOrchestrator {
       `자본변동 보정 비율을 만들 수 없는 연도가 있어 백테스트 준비를 중단했습니다 — 대상: `
         + `${affected.join(', ')}. DART gap을 해소한 뒤 다시 준비하세요.`,
     );
+  }
+
+  private financialCoverageGap(
+    input: PreparationInput,
+    strategy: AnyTradingStrategy,
+    symbols: readonly string[],
+  ): ReturnType<typeof findFinancialCoverageGap> {
+    return findFinancialCoverageGap({
+      request: input,
+      strategy,
+      symbols,
+      coverage: this.deps.factCoverage,
+    });
+  }
+
+  private assertFinancialCoverage(
+    input: PreparationInput,
+    strategy: AnyTradingStrategy,
+    symbols: readonly string[],
+  ): void {
+    const gap = this.financialCoverageGap(input, strategy, symbols);
+    if (gap !== null) throw new Error(financialCoverageGapMessage(gap));
   }
 
   private runFactRequest(

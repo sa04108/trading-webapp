@@ -119,4 +119,14 @@ describe('requiresFundamentals 가 명시적으로 false 인 전략', () => {
   it('false 로 그대로 내려간다', () => {
     expect(new StrategyRegistry([explicitFalse]).list()[0]?.requiresFundamentals).toBe(false);
   });
+
+  it('lookback을 선언하면 수집·실행 계약과 같이 true 로 정규화한다', () => {
+    const lookbackOnly = {
+      ...explicitFalse,
+      dataRequirements: { fundamentalLookbackQuarters: 4 },
+    } as AnyTradingStrategy;
+    const custom = new StrategyRegistry([lookbackOnly]);
+    expect(custom.list()[0]?.requiresFundamentals).toBe(true);
+    expect(custom.requiresFundamentals('x')).toBe(true);
+  });
 });

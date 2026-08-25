@@ -337,6 +337,145 @@ describe('POST /backtests/universe-preview', () => {
     expect((res.json() as { fundamentalSymbols: string[] }).fundamentalSymbols).toEqual(['005930']);
   });
 
+  it('마지막 실행 봉 뒤 공시된 재무 행은 같은 종료일이어도 fundamentalSymbols에서 제외한다', async () => {
+    seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
+      { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
+    ]);
+    registerSymbols(ctx.container, 'KR', ['005930']);
+    seedDailyBars(ctx.container.database.db, [{
+      symbol: '005930', market: 'KR', timeframe: '1d', tsMs: Date.UTC(2026, 0, 5),
+      open: 1_000, high: 1_000, low: 1_000, close: 1_000, volume: 1_000,
+    }]);
+    await ctx.container.factRepository.saveFacts([{
+      scope: 'SYMBOL',
+      key: '005930',
+      field: 'NET_INCOME',
+      periodKey: '2025Q4',
+      value: 1_000,
+      asOfTsMs: Date.parse('2026-01-05T01:00:00Z'),
+      unit: 'KRW',
+    }]);
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: marketCapRule(),
+        period: { from: '2026-01-05', to: '2026-01-05' },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { fundamentalSymbols: string[] }).fundamentalSymbols).toEqual([]);
+  });
+
+  it('다른 종목의 더 늦은 봉이 있어도 개별 종목 마지막 봉 뒤 공시를 재무 보유로 세지 않는다', async () => {
+    const entries = [
+      { standardCode: 'KR7000010000', shortCode: 'EARLY_STOP', name: 'EARLY_STOP', market: 'KOSPI' as const, marketCapKrw: '200000000000' },
+      { standardCode: 'KR7000020000', shortCode: 'LATE_BAR', name: 'LATE_BAR', market: 'KOSPI' as const, marketCapKrw: '100000000000' },
+    ];
+    seedSymbolMasterUniverse(ctx.container, ['2026-01-05', '2026-01-06'], entries);
+    registerSymbols(ctx.container, 'KR', ['EARLY_STOP', 'LATE_BAR']);
+    seedDailyBars(ctx.container.database.db, [
+      {
+        symbol: 'EARLY_STOP', market: 'KR', timeframe: '1d', tsMs: Date.UTC(2026, 0, 5),
+        open: 1_000, high: 1_000, low: 1_000, close: 1_000, volume: 1_000,
+      },
+      {
+        symbol: 'LATE_BAR', market: 'KR', timeframe: '1d', tsMs: Date.UTC(2026, 0, 5),
+        open: 1_000, high: 1_000, low: 1_000, close: 1_000, volume: 1_000,
+      },
+      {
+        symbol: 'LATE_BAR', market: 'KR', timeframe: '1d', tsMs: Date.UTC(2026, 0, 6),
+        open: 1_000, high: 1_000, low: 1_000, close: 1_000, volume: 1_000,
+      },
+    ]);
+    await ctx.container.factRepository.saveFacts([{
+      scope: 'SYMBOL', key: 'EARLY_STOP', field: 'NET_INCOME', periodKey: '2025Q4',
+      value: 1_000, asOfTsMs: Date.parse('2026-01-05T01:00:00Z'), unit: 'KRW',
+    }]);
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: marketCapRule(),
+        period: { from: '2026-01-05', to: '2026-01-06' },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { fundamentalSymbols: string[] }).fundamentalSymbols).toEqual([]);
+  });
+
+  it('동적 유니버스 편출 뒤의 고아 봉·공시는 fundamentalSymbols로 세지 않는다', async () => {
+    registerSymbols(ctx.container, 'KR', ['EXITED', 'ACTIVE']);
+    seedDailyBars(ctx.container.database.db, [
+      {
+        symbol: 'EXITED', market: 'KR', timeframe: '1d', tsMs: Date.parse('2026-01-05T00:00:00Z'),
+        open: 1_000, high: 1_000, low: 1_000, close: 1_000, volume: 1_000,
+      },
+      {
+        // 1월 8일 편출 뒤에도 raw 테이블에는 봉이 남아 있는 상황이다.
+        symbol: 'EXITED', market: 'KR', timeframe: '1d', tsMs: Date.parse('2026-01-10T00:00:00Z'),
+        open: 1_000, high: 1_000, low: 1_000, close: 1_000, volume: 1_000,
+      },
+      {
+        symbol: 'ACTIVE', market: 'KR', timeframe: '1d', tsMs: Date.parse('2026-01-08T00:00:00Z'),
+        open: 1_000, high: 1_000, low: 1_000, close: 1_000, volume: 1_000,
+      },
+    ]);
+    await ctx.container.factRepository.saveFacts([{
+      scope: 'SYMBOL', key: 'EXITED', field: 'NET_INCOME', periodKey: '2025Q4',
+      value: 1_000, asOfTsMs: Date.parse('2026-01-09T00:00:00Z'), unit: 'KRW',
+    }]);
+    const member = (symbol: string, standardCode: string) => ({
+      symbol,
+      standardCode,
+      marketCapKrw: '100000000000',
+      volume: 1_000,
+      tradingValueKrw: '1000000000',
+    });
+    vi.spyOn(ctx.container.backtestPreparationOrchestrator, 'getReadyPreview')
+      .mockResolvedValue({
+        schedule: [
+          {
+            rebalanceDate: '2026-01-05', effectiveDate: '2026-01-05',
+            fromTsMs: Date.parse('2026-01-05T00:00:00Z'),
+            members: [member('EXITED', 'KR7000010000')], excludedNonTradingCount: 0,
+          },
+          {
+            rebalanceDate: '2026-01-08', effectiveDate: '2026-01-08',
+            fromTsMs: Date.parse('2026-01-08T00:00:00Z'),
+            members: [member('ACTIVE', 'KR7000020000')], excludedNonTradingCount: 0,
+          },
+        ],
+        diagnostics: [],
+        stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 10 }],
+        unionSymbols: ['EXITED', 'ACTIVE'],
+        scheduleHash: 'dynamic-test',
+        uncoveredDates: [],
+        periodCovered: true,
+        missingCandleSymbols: [],
+        warnings: [],
+      });
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: marketCapRule(['KOSPI'], { unit: 'DAY', value: 1 }),
+        period: { from: '2026-01-05', to: '2026-01-10' },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { fundamentalSymbols: string[] }).fundamentalSymbols).toEqual([]);
+  });
+
   it('빈 유니버스는 전체 재무 저장소를 조회하지 않는다', async () => {
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
       { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
@@ -378,10 +517,10 @@ describe('POST /backtests/universe-preview', () => {
         missingCandleSymbols: [],
       });
 
-    // FactRepository에서 keys: []는 전체 스코프 조회다. 빈 유니버스라면 저장소를
-    // 호출하지 않아야 하므로, 호출되는 순간 실패하도록 고정한다.
-    const getFacts = vi.spyOn(ctx.container.factRepository, 'getFacts')
-      .mockRejectedValue(new Error('빈 유니버스에서 전체 fact를 조회하면 안 된다'));
+    const availability = vi.spyOn(
+      ctx.container.financialFactAvailabilityService,
+      'symbolsWithFinancialFacts',
+    );
     const res = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
@@ -391,7 +530,7 @@ describe('POST /backtests/universe-preview', () => {
 
     expect(res.statusCode).toBe(200);
     expect((res.json() as { fundamentalSymbols: string[] }).fundamentalSymbols).toEqual([]);
-    expect(getFacts).not.toHaveBeenCalled();
+    expect(availability).toHaveBeenCalledWith(new Map());
   });
 
   it('종목 마스터가 커버하지 않는 날짜는 durable preparation job을 시작한다', async () => {

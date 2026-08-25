@@ -1,12 +1,14 @@
 import { and, desc, eq, gte, lte } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ENGINE_VERSION } from '../../src/server/modules/backtest/domain/engine.js';
 import { UnsafeBacktestSymbolIdentityError } from '../../src/server/modules/backtest/application/backtest-preparation-orchestrator.js';
 import { FACTS_SLICE } from '../../src/server/modules/market-data/application/symbol-service.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import {
   backtestJobs,
+  facts,
   krxDailyBars,
+  symbolFactsState,
   symbolMasterCoverage,
   symbolMasterVersions,
   symbols,
@@ -19,7 +21,13 @@ import {
   installPreparedSubmissionFixture,
   type TestApp,
 } from '../helpers/test-app.js';
-import { registerSymbols, seedCorporateActionCoverage, seedDailyBars, yearRange } from '../helpers/seed.js';
+import {
+  registerSymbols,
+  seedCorporateActionCoverage,
+  seedDailyBars,
+  seedFinancialCoverage,
+  yearRange,
+} from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 
 const DAY = 86_400_000;
@@ -1047,7 +1055,184 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       cookies: { qp_session: cookie },
     });
     expect(cloned.statusCode).toBe(422);
-    expect((cloned.json() as { error: string }).error).toContain('상장시점 재무 데이터가 필요');
+    expect((cloned.json() as { error: string }).error).toContain('coverage 기록은 있지만');
+  });
+
+  it.each([
+    'new',
+    'clone',
+    'clone-configured',
+    'clone-random-seeds',
+  ] as const)('$case 경로는 준비 확인 직후 재무 coverage가 사라져도 생성하지 않는다', async (route) => {
+    const valueRequest: BacktestRequest = {
+      ...buildRequest(),
+      strategyId: 'value-quality-rank',
+      parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+      risk: { maxPositions: 1 },
+    };
+    await ctx.container.factRepository.saveFacts([{
+      scope: 'SYMBOL', key: '005930', field: 'NET_INCOME', periodKey: '2025Q4',
+      asOfTsMs: Date.parse('2025-12-31T00:00:00Z'), value: 1, unit: 'KRW',
+    }]);
+    seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
+    const created = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: valueRequest,
+    });
+    expect(created.statusCode).toBe(201);
+    const sourceId = created.json().job.id as string;
+    expect(ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
+    const cached = ctx.container.backtestPreparationOrchestrator.getCachedPreview({
+      universeRule: valueRequest.universeRule,
+      period: valueRequest.period,
+      strategyId: valueRequest.strategyId,
+      parameters: valueRequest.parameters,
+    });
+    expect(cached).not.toBeNull();
+
+    ctx.container.database.db.update(symbolFactsState)
+      .set({ coveredYearsJson: JSON.stringify([2026]) })
+      .where(eq(symbolFactsState.code, '005930'))
+      .run();
+    // 완료 cache 검사와 각 생성 관문의 TOCTOU를 강제로 연다. enqueue 직전 공통
+    // predicate가 다시 잡아야 하며, job/batch 행은 하나도 늘면 안 된다.
+    if (route === 'new') {
+      ctx.container.backtestPreparationOrchestrator.getReadyPreview = async () => cached;
+    } else {
+      ctx.container.backtestPreparationOrchestrator.getCachedPreview = () => cached;
+    }
+    if (route === 'new' || route === 'clone') {
+      // 공용 테스트 fixture가 409를 받으면 preparation을 자동 실행한다. 이 race에서는
+      // 결측을 다시 채우지 않아 최초 409 응답 자체와 job 불변을 관찰한다.
+      ctx.container.factSyncService.sync = async () => ({
+        savedFacts: 0,
+        gaps: [],
+        stoppedAtSymbol: null,
+        stopReason: null,
+        failureMessage: null,
+      });
+    }
+    const beforeJobs = ctx.container.jobQueue.listJobs(500, 0).length;
+    const beforeBatches = ctx.container.seedCloneBatchService.list().length;
+    const url = route === 'new'
+      ? '/api/v1/backtests'
+      : `/api/v1/backtests/${sourceId}/${route}`;
+    const payload = route === 'new'
+      ? { ...valueRequest, randomSeed: 99 }
+      : route === 'clone-configured'
+        ? { ...valueRequest, randomSeed: 99 }
+        : route === 'clone-random-seeds'
+          ? { count: 2 }
+          : undefined;
+    const rejected = await ctx.app.inject({
+      method: 'POST',
+      url,
+      cookies: { qp_session: cookie },
+      ...(payload === undefined ? {} : { payload }),
+    });
+
+    expect(rejected.statusCode).toBe(409);
+    expect((rejected.json() as { error: string }).error).toBe('PREPARATION_REQUIRED');
+    expect((rejected.json() as { message: string }).message).toMatch(/coverage.*2025~2026년.*005930/);
+    expect(ctx.container.jobQueue.listJobs(500, 0)).toHaveLength(beforeJobs);
+    expect(ctx.container.seedCloneBatchService.list()).toHaveLength(beforeBatches);
+  });
+
+  it.each([
+    'new',
+    'clone',
+    'clone-configured',
+    'clone-random-seeds',
+  ] as const)('%s 경로는 검증 직후 실행 봉이 사라지면 500 대신 재준비 409를 반환한다', async (route) => {
+    const valueRequest: BacktestRequest = {
+      ...buildRequest(),
+      strategyId: 'value-quality-rank',
+      parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+      risk: { maxPositions: 1 },
+    };
+    await ctx.container.factRepository.saveFacts([{
+      scope: 'SYMBOL', key: '005930', field: 'NET_INCOME', periodKey: '2025Q4',
+      asOfTsMs: Date.parse('2025-12-31T00:00:00Z'), value: 1, unit: 'KRW',
+    }]);
+    seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
+    const created = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: valueRequest,
+    });
+    expect(created.statusCode).toBe(201);
+    const sourceId = created.json().job.id as string;
+    expect(ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
+
+    const cached = ctx.container.backtestPreparationOrchestrator.getCachedPreview({
+      universeRule: valueRequest.universeRule,
+      period: valueRequest.period,
+      strategyId: valueRequest.strategyId,
+      parameters: valueRequest.parameters,
+    });
+    expect(cached).not.toBeNull();
+    if (route === 'new' || route === 'clone') {
+      // 자동 준비 fixture가 첫 409를 숨겨 두 번째 요청의 400으로 바꾸지 않게 하고,
+      // 현재 preview 재계산보다 뒤인 validateSubmission 경계에서만 봉을 지운다.
+      vi.spyOn(ctx.container.backtestPreparationOrchestrator, 'getReadyPreview')
+        .mockResolvedValue(cached);
+      const failedPreparation = {
+        id: 'prep_forced_failed',
+        requestHash: 'forced',
+        status: 'FAILED' as const,
+        phase: 'MARKET_DATA' as const,
+        doneSymbols: 0,
+        totalSymbols: 0,
+        savedFacts: 0,
+        gapCount: 0,
+        nextResumeAtMs: null,
+        error: 'forced test failure',
+      };
+      vi.spyOn(ctx.container.backtestPreparationOrchestrator, 'start')
+        .mockReturnValue(failedPreparation);
+      const getPreparation = ctx.container.backtestPreparationOrchestrator.get
+        .bind(ctx.container.backtestPreparationOrchestrator);
+      vi.spyOn(ctx.container.backtestPreparationOrchestrator, 'get')
+        .mockImplementation((id) => id === failedPreparation.id
+          ? failedPreparation
+          : getPreparation(id));
+    }
+
+    const candleCoverage = ctx.container.candleCoverageService;
+    const getCoverageBetween = candleCoverage.getCoverageBetween.bind(candleCoverage);
+    vi.spyOn(candleCoverage, 'getCoverageBetween').mockImplementation((...args) => {
+      const rows = getCoverageBetween(...args);
+      ctx.container.database.db.delete(krxDailyBars)
+        .where(and(
+          eq(krxDailyBars.shortCode, '005930'),
+          gte(krxDailyBars.date, valueRequest.period.from),
+          lte(krxDailyBars.date, valueRequest.period.to),
+        ))
+        .run();
+      return rows;
+    });
+
+    const beforeJobs = ctx.container.jobQueue.listJobs(500, 0).length;
+    const beforeBatches = ctx.container.seedCloneBatchService.list().length;
+    const url = route === 'new'
+      ? '/api/v1/backtests'
+      : `/api/v1/backtests/${sourceId}/${route}`;
+    const payload = route === 'new'
+      ? { ...valueRequest, randomSeed: 99 }
+      : route === 'clone-configured'
+        ? { ...valueRequest, randomSeed: 99 }
+        : route === 'clone-random-seeds'
+          ? { count: 2 }
+          : undefined;
+    const rejected = await ctx.app.inject({
+      method: 'POST',
+      url,
+      cookies: { qp_session: cookie },
+      ...(payload === undefined ? {} : { payload }),
+    });
+
+    expect(rejected.statusCode).toBe(409);
+    expect(rejected.json()).toMatchObject({ error: 'PREPARATION_REQUIRED' });
+    expect((rejected.json() as { message: string }).message).toContain('005930');
+    expect(ctx.container.jobQueue.listJobs(500, 0)).toHaveLength(beforeJobs);
+    expect(ctx.container.seedCloneBatchService.list()).toHaveLength(beforeBatches);
   });
 
   it('재설정 및 복제 초안은 유니버스 준비와 무관하게 저장 요청을 복원한다', async () => {
@@ -1100,6 +1285,54 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(preview?.unionSymbols).toEqual(['005930']);
     expect(preview?.missingCandleSymbols).toEqual([]);
     expect(preview?.uncoveredDates).toEqual([]);
+  });
+
+  it('복제 초안은 현재 PIT fact와 재무 coverage drift를 함께 반영한다', async () => {
+    const request: BacktestRequest = {
+      ...buildRequest(),
+      strategyId: 'value-quality-rank',
+      parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+      risk: { maxPositions: 1 },
+    };
+    await ctx.container.factRepository.saveFacts([{
+      scope: 'SYMBOL', key: '005930', field: 'NET_INCOME', periodKey: '2025Q4',
+      asOfTsMs: Date.parse('2025-12-31T00:00:00Z'), value: 1, unit: 'KRW',
+    }]);
+    seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
+
+    const created = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: request,
+    });
+    expect(created.statusCode).toBe(201);
+    const sourceId = created.json().job.id as string;
+
+    const before = await ctx.app.inject({
+      method: 'GET', url: `/api/v1/backtests/${sourceId}/clone-draft`, cookies: { qp_session: cookie },
+    });
+    expect(before.json().reusablePreview.fundamentalSymbols).toEqual(['005930']);
+
+    ctx.container.database.db.delete(facts)
+      .where(and(eq(facts.key, '005930'), eq(facts.field, 'NET_INCOME')))
+      .run();
+    await ctx.container.factRepository.saveFacts([{
+      scope: 'SYMBOL', key: '005930', field: 'NET_INCOME', periodKey: '2026Q4',
+      asOfTsMs: Date.parse('2027-01-01T00:00:00Z'), value: 2, unit: 'KRW',
+    }]);
+    const after = await ctx.app.inject({
+      method: 'GET', url: `/api/v1/backtests/${sourceId}/clone-draft`, cookies: { qp_session: cookie },
+    });
+    expect(after.statusCode).toBe(200);
+    expect(after.json().reusablePreview.fundamentalSymbols).toEqual([]);
+
+    ctx.container.database.db.update(symbolFactsState)
+      .set({ coveredYearsJson: JSON.stringify([2026]) })
+      .where(eq(symbolFactsState.code, '005930'))
+      .run();
+    const stale = await ctx.app.inject({
+      method: 'GET', url: `/api/v1/backtests/${sourceId}/clone-draft`, cookies: { qp_session: cookie },
+    });
+    expect(stale.statusCode).toBe(200);
+    expect(stale.json().reusablePreview).toBeNull();
   });
 
   it('복제 초안은 cached preview의 기간 coverage를 현재 상태로 다시 판정한다', async () => {
@@ -1455,6 +1688,52 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(ctx.container.jobQueue.listJobs(500, 0)).toHaveLength(beforeJobCount);
   });
 
+  it('재무 전략 난수 복제 대기 중 필수 연도 coverage가 사라지면 추가 승격을 막는다', async () => {
+    const request: BacktestRequest = {
+      ...buildRequest(),
+      strategyId: 'value-quality-rank',
+      parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+      risk: { maxPositions: 1 },
+    };
+    await ctx.container.factRepository.saveFacts([{
+      scope: 'SYMBOL', key: '005930', field: 'NET_INCOME', periodKey: '2025Q4',
+      asOfTsMs: Date.parse('2025-12-31T00:00:00Z'), value: 1, unit: 'KRW',
+    }]);
+    seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
+    const created = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: request,
+    });
+    expect(created.statusCode).toBe(201);
+    const sourceId = created.json().job.id as string;
+    expect(ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
+
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
+      cookies: { qp_session: cookie },
+      payload: { count: 100 },
+    });
+    expect(response.statusCode).toBe(201);
+    const batchId = response.json().batch.id as string;
+    const before = ctx.container.seedCloneBatchService.get(batchId)!;
+    expect(before.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
+    const child = before.items.find(({ item }) => item.state === 'DISPATCHED')!.job!;
+    const beforeJobCount = ctx.container.jobQueue.listJobs(500, 0).length;
+
+    ctx.container.database.db.update(symbolFactsState)
+      .set({ coveredYearsJson: JSON.stringify([2026]) })
+      .where(eq(symbolFactsState.code, '005930'))
+      .run();
+    expect(ctx.container.jobQueue.setStatus(child.id, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
+    ctx.container.seedCloneBatchService.pump();
+
+    const failed = ctx.container.seedCloneBatchService.get(batchId)!;
+    expect(failed.batch.status).toBe('FAILED');
+    expect(failed.batch.error).toMatch(/coverage.*2025~2026년.*005930/);
+    expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
+    expect(ctx.container.jobQueue.listJobs(500, 0)).toHaveLength(beforeJobCount);
+  });
+
   it('난수 복제 대기 중 기간 일봉이 사라지면 다음 자식 승격 전에 묶음을 실패시킨다', async () => {
     registerSymbols(ctx.container, 'KR', ['000660']);
     const request = { ...buildRequest(), universeRule: universeRule(2) };
@@ -1511,6 +1790,49 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const failed = ctx.container.seedCloneBatchService.get(batchId)!;
     expect(failed.batch.status).toBe('FAILED');
     expect(failed.batch.error).toMatch(/000660.*일봉|일봉.*000660/);
+    expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
+    expect(ctx.container.jobQueue.listJobs(500, 0)).toHaveLength(beforeJobCount);
+  });
+
+  it('재무 전략 난수 복제 대기 중 마지막 PIT 재무 행이 사라지면 추가 승격을 막는다', async () => {
+    const request: BacktestRequest = {
+      ...buildRequest(),
+      strategyId: 'value-quality-rank',
+      parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+      risk: { maxPositions: 1 },
+    };
+    await ctx.container.factRepository.saveFacts([{
+      scope: 'SYMBOL', key: '005930', field: 'NET_INCOME', periodKey: '2025Q4',
+      asOfTsMs: Date.parse('2025-12-31T00:00:00Z'), value: 1, unit: 'KRW',
+    }]);
+    seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
+    const created = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: request,
+    });
+    expect(created.statusCode).toBe(201);
+    const sourceId = created.json().job.id as string;
+    expect(ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
+      cookies: { qp_session: cookie },
+      payload: { count: 100 },
+    });
+    expect(response.statusCode).toBe(201);
+    const batchId = response.json().batch.id as string;
+    const before = ctx.container.seedCloneBatchService.get(batchId)!;
+    const child = before.items.find(({ item }) => item.state === 'DISPATCHED')!.job!;
+    const beforeJobCount = ctx.container.jobQueue.listJobs(500, 0).length;
+
+    ctx.container.database.db.delete(facts)
+      .where(and(eq(facts.key, '005930'), eq(facts.field, 'NET_INCOME')))
+      .run();
+    expect(ctx.container.jobQueue.setStatus(child.id, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
+    ctx.container.seedCloneBatchService.pump();
+
+    const failed = ctx.container.seedCloneBatchService.get(batchId)!;
+    expect(failed.batch.status).toBe('FAILED');
+    expect(failed.batch.error).toMatch(/coverage 기록은 있지만.*재무 데이터/);
     expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
     expect(ctx.container.jobQueue.listJobs(500, 0)).toHaveLength(beforeJobCount);
   });

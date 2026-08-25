@@ -104,4 +104,26 @@ describe('CandleCoverageService', () => {
       midnight('2026-08-07'),
     )).toEqual([]);
   });
+
+  it('종목별 여러 실행 창 안의 마지막 유효 봉만 찾는다', () => {
+    app.container.database.db.insert(krxDailyBars).values([
+      { shortCode: '000660', date: '2026-08-06', market: 'KOSPI', open: 100, high: 90, low: 80, close: 85, volume: 100 },
+      { shortCode: '035420', date: '2026-08-06', market: 'KONEX', open: 100, high: 110, low: 90, close: 105, volume: 100 },
+    ]).run();
+
+    expect(service.getLastTsInWindows(new Map([
+      ['005930', [
+        { fromTsMs: midnight('2026-08-05'), toTsMs: midnight('2026-08-05') },
+        { fromTsMs: midnight('2026-08-08'), toTsMs: midnight('2026-08-09') },
+      ]],
+      ['000660', [{ fromTsMs: midnight('2026-08-06'), toTsMs: midnight('2026-08-06') }]],
+      ['035420', [{ fromTsMs: midnight('2026-08-06'), toTsMs: midnight('2026-08-06') }]],
+    ]))).toEqual(new Map([
+      ['005930', midnight('2026-08-05')],
+    ]));
+  });
+
+  it('빈 실행 창에는 DB를 조회하지 않고 빈 결과를 준다', () => {
+    expect(service.getLastTsInWindows(new Map())).toEqual(new Map());
+  });
 });

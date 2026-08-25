@@ -117,6 +117,11 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
       getCoveredYears: () => new Map<string, readonly number[]>(),
       getGapYears: () => new Map<string, readonly number[]>(),
     },
+    factCoverage: {
+      getCoveredYears: (codes: readonly string[] = []) => new Map(
+        codes.map((code) => [code, [2020, 2021, 2022, 2023, 2024, 2025, 2026]]),
+      ),
+    },
     dartDailyCallLimit: 40_000,
     ...overrides,
   };
@@ -423,6 +428,66 @@ describe('BacktestPreparationOrchestrator 자본변동 gap 차단', () => {
 
     expect(orchestrator.get(job.id)?.error).toMatch(/8회 안에 안정되지 않았습니다/);
     expect(resolveCalls).toBe(9);
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+});
+
+describe('BacktestPreparationOrchestrator 재무 coverage 불변식', () => {
+  const valueInput: PreparationInput = {
+    ...INPUT,
+    strategyId: 'value-quality-rank',
+    parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+  };
+
+  const completeActionCoverage = {
+    getCoveredYears: (symbols: readonly string[]) => new Map(
+      symbols.map((symbol) => [symbol, [2025, 2026]]),
+    ),
+    getGapYears: () => new Map<string, readonly number[]>(),
+  };
+
+  it('최종 종목의 필수 연도가 일부 빠지면 COMPLETED preview를 만들지 않는다', async () => {
+    const ctx = makeDeps({
+      strategies: new StrategyRegistry(),
+      actionCoverage: completeActionCoverage,
+      factCoverage: {
+        getCoveredYears: () => new Map([['005930', [2026]]]),
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const job = orchestrator.start(valueInput);
+    await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
+
+    expect(orchestrator.get(job.id)?.error).toMatch(/coverage.*2025~2026년.*005930/);
+    expect(orchestrator.getPreview(job.id)).toBeNull();
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
+  it('완료 뒤 coverage가 사라지면 ready/cached preview를 재사용하지 않는다', async () => {
+    const covered = new Map<string, readonly number[]>([['005930', [2025, 2026]]]);
+    const ctx = makeDeps({
+      strategies: new StrategyRegistry(),
+      actionCoverage: completeActionCoverage,
+      factCoverage: {
+        getCoveredYears: (symbols: readonly string[]) => new Map(
+          [...covered].filter(([symbol]) => symbols.includes(symbol)),
+        ),
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const job = orchestrator.start(valueInput);
+    await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
+    expect(await orchestrator.getReadyPreview(valueInput)).not.toBeNull();
+    expect(orchestrator.getCachedPreview(valueInput)).not.toBeNull();
+
+    covered.set('005930', [2026]);
+    expect(await orchestrator.getReadyPreview(valueInput)).toBeNull();
+    expect(orchestrator.getCachedPreview(valueInput)).toBeNull();
+
     await orchestrator.stop();
     ctx.handle.close();
   });

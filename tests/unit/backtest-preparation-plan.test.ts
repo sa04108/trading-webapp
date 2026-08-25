@@ -148,6 +148,24 @@ describe('buildBacktestPreparationPlan', () => {
     });
   });
 
+  it('requiresFundamentals가 true면 lookback을 생략해도 기간 연도 재무를 준비한다', () => {
+    const plan = buildBacktestPreparationPlan({
+      request: BASE_REQUEST,
+      resolutionNeeds: EMPTY_NEEDS,
+      finalUniverseSymbols: ['005930'],
+      strategy: {
+        ...strategy('fundamental-without-lookback'),
+        requiresFundamentals: true,
+      },
+    });
+
+    expect(plan.financial).toEqual({
+      symbols: ['005930'],
+      fromYear: 2026,
+      toYear: 2026,
+    });
+  });
+
   it('저PER·고ROE는 최종 유니버스의 4분기 재무와 자본변동을 준비한다', () => {
     const plan = buildBacktestPreparationPlan({
       request: BASE_REQUEST,

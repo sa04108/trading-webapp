@@ -194,8 +194,8 @@ describe('유니버스 규칙 topN 상한 — 요청 스키마 경계', () => {
 
 /**
  * 재무 필요 전략 + 재무 없는 유니버스 게이트 (D-034 후속).
- * **서버 422 와 같은 조건이어야 한다** — 전 종목이 비었을 때만 막고, 일부만 없으면
- * 통과시켜 워커 경고에 맡긴다 (D-025).
+ * 완료 preview의 PIT 실제 재무 기준으로 전 종목이 비었을 때만 막고, 일부만 없으면
+ * 통과시켜 worker 경고에 맡긴다. coverage 결측은 preview 완료 전에 막힌다(D-069).
  */
 describe('stepBlocker — 재무 조합 게이트 (단계 2)', () => {
   const base = {
@@ -206,10 +206,12 @@ describe('stepBlocker — 재무 조합 게이트 (단계 2)', () => {
 
   it('전 종목에 재무가 없으면 막는다', () => {
     const reason = stepBlocker(2, { ...base, symbolsWithFacts: [] });
-    expect(reason).toMatch(/재무 데이터가 필요하지만/);
+    expect(reason).toMatch(/coverage 기록은 있지만.*재무 데이터/);
+    expect(reason).toMatch(/기간 종료일·유니버스·전략/);
+    expect(reason).not.toContain('미리보기');
   });
 
-  it('한 종목이라도 재무가 있으면 통과한다 — 서버 422 와 같은 조건이다', () => {
+  it('한 종목이라도 실제 PIT 재무가 있으면 통과한다 — 서버 422 와 같은 조건이다', () => {
     // 일부만 없는 경우는 거부 사유가 아니다: 신규 상장처럼 이력이 짧은 종목 하나 때문에
     // 유니버스 전체를 막지 않는다. 빠진 종목은 워커가 실행 경고에 이름으로 남긴다.
     expect(stepBlocker(2, { ...base, symbolsWithFacts: ['005930'] })).toBeNull();
@@ -241,47 +243,6 @@ describe('stepBlocker — 재무 조합 게이트 (단계 2)', () => {
     expect(
       stepBlocker(2, { ...base, universePreviewOk: false, symbolsWithFacts: [] }),
     ).toBe('유니버스 규칙을 미리보기하고 경고를 모두 해결하세요');
-  });
-});
-
-/**
- * `hasFacts` 가 빠진 응답에서 게이트가 잠기지 않는지는 위저드가 `symbolsWithFacts` 를
- * 만드는 규칙이 지킨다 — 선택 종목 전부를 알 때만 배열을 만들고, 하나라도 모르면
- * undefined 다. 그 규칙을 여기서 계약으로 고정한다.
- */
-describe('symbolsWithFacts 계약 — 모르는 종목이 섞이면 undefined', () => {
-  /** new-backtest-wizard.tsx 의 파생 규칙과 같은 모양 */
-  function derive(
-    selected: readonly string[],
-    listed: ReadonlyArray<{ code: string; hasFacts?: boolean }> | undefined,
-  ): readonly string[] | undefined {
-    if (listed === undefined) return undefined;
-    const known = new Map(listed.map((s) => [s.code, s.hasFacts]));
-    if (selected.some((code) => known.get(code) === undefined)) return undefined;
-    return selected.filter((code) => known.get(code) === true);
-  }
-
-  const selected = ['005930', '000660'];
-
-  it('전부 알면 재무 가진 코드만 남는다', () => {
-    expect(
-      derive(selected, [
-        { code: '005930', hasFacts: true },
-        { code: '000660', hasFacts: false },
-      ]),
-    ).toEqual(['005930']);
-  });
-
-  it('hasFacts 가 빠진 응답은 undefined — 빈 배열로 접으면 게이트가 잠긴다', () => {
-    expect(derive(selected, [{ code: '005930' }, { code: '000660' }])).toBeUndefined();
-  });
-
-  it('목록에 없는 종목이 선택돼 있으면 undefined', () => {
-    expect(derive(selected, [{ code: '005930', hasFacts: true }])).toBeUndefined();
-  });
-
-  it('응답 자체가 없으면 undefined', () => {
-    expect(derive(selected, undefined)).toBeUndefined();
   });
 });
 

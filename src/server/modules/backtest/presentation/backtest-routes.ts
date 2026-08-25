@@ -26,6 +26,7 @@ import { SECURITY_HEADERS } from '../../../shared/security.js';
 import type { Clock } from '../../../shared/clock.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
 import type { FactCoverageStore } from '../../facts/application/fact-coverage-store.js';
+import type { FinancialFactAvailabilityService } from '../../facts/application/financial-fact-availability.js';
 import type { ConsumedVersionSnapshot, SymbolService } from '../../market-data/application/symbol-service.js';
 import type { SymbolMasterService } from '../../market-data/application/symbol-master-service.js';
 import { sendIfKrxError, sendIfNotCovered } from './krx-error-mapping.js';
@@ -35,6 +36,7 @@ import type {
   CandleCoverageService,
 } from '../../market-data/application/candle-coverage-service.js';
 import type { StrategyRegistry } from '../../strategy/application/strategy-registry.js';
+import { strategyRequiresFinancialData } from '../../strategy/domain/strategy.js';
 import type { BenchmarkService } from '../../market-data/application/benchmark-service.js';
 import { benchmarkPinSchema } from '../../../../shared/schemas/benchmark.js';
 import { estimateBars, MAX_BACKTEST_BARS } from '../domain/bar-estimate.js';
@@ -63,12 +65,25 @@ import {
 } from '../application/backtest-preparation-orchestrator.js';
 import { backtestPreparationRequestHash } from '../application/backtest-preparation-plan.js';
 import { assertSafePinnedScheduleIdentities } from '../application/backtest-symbol-identity.js';
+import {
+  financialCoverageGapMessage,
+  findFinancialCoverageGap,
+} from '../application/backtest-financial-coverage.js';
+import {
+  delistedEventsToTsMsBySymbol,
+  financialFactCutoffsFromCoverage,
+} from '../application/backtest-financial-execution-window.js';
 import type {
   SeedCloneBatchDetail,
   SeedCloneBatchService,
 } from '../application/seed-clone-batch-service.js';
 
 type PreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+
+type FundamentalsRequirementIssue =
+  | { readonly kind: 'COVERAGE_GAP'; readonly message: string }
+  | { readonly kind: 'CANDLE_GAP'; readonly message: string }
+  | { readonly kind: 'NO_PIT_FACTS'; readonly message: string };
 
 export interface BacktestRouteDeps {
   readonly queue: JobQueue;
@@ -85,6 +100,8 @@ export interface BacktestRouteDeps {
   readonly audit: AuditLogService;
   /** 재무 요구 검사(422)가 보는 SQLite coverage store. */
   readonly factCoverage: FactCoverageStore;
+  /** 자본변동을 제외한 실제 재무 fact가 종목별 PIT cutoff까지 존재하는 종목. */
+  readonly financialFacts: Pick<FinancialFactAvailabilityService, 'symbolsWithFinancialFacts'>;
   readonly dataRoot: string;
   readonly maxQueuedBacktests: number;
   readonly clock: Clock;
@@ -299,6 +316,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     preparation,
     audit,
     factCoverage,
+    financialFacts,
     clock,
     benchmarks,
     seedCloneBatches,
@@ -677,33 +695,62 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    * 없다 (D-025 와 같은 원칙: 조용히 빠지지 않는다). `validateSubmission` 이 만드는
    * `errors` 배열에 합류시키지 않는 이유: 그 배열은 항상 400 으로 변환되는데, 이 조건은
    * 요청 형식·데이터셋 상태가 아니라 "전략과 유니버스의 조합" 문제라 422 여야 한다.
-   * POST 신규 제출과 즉시 clone이 같은 검사를 거친다 — 데이터가 제출 이후 지워진
-   * job을 clone하면 이 관문에서 다시 걸린다. 재설정용 초안은 D-050에 따라 유니버스
-   * 단계 전에는 이 검사를 미룬다.
+   * 신규 제출·즉시 clone·재설정 clone·난수 seed 생성이 같은 검사를 거친다. 완료된
+   * preparation의 coverage 현재성 검사를 통과한 직후 데이터가 지워지는 race도 이
+   * enqueue 직전 관문에서 다시 걸린다. 재설정용 초안은 D-050에 따라 검사를 미룬다.
    */
   const checkFundamentalsRequirement = (
     body: BacktestRequest,
     unionSymbols: readonly string[],
-  ): string | null => {
-    if (!strategies.requiresFundamentals(body.strategyId)) return null;
-    /**
-     * **전 종목이 비었을 때만** 막는다. 일부 종목만 재무가 없는 경우는 현재
-     * 워커가 해당 종목을 실행 경고에 **이름으로** 남기고 순위에서 제외한다.
-     * 일봉 결측은 확정 schedule과 실행 유니버스가 달라져 일부도 엄격히 막지만,
-     * 재무 결측은 아래 coverage 정책에 따라 경고로 남는 별도 정책이다.
-     *
-     * 판정은 fact 행 존재(hasFacts)가 아니라 재무 coverage 로 한다 — 자본변동만 받은
-     * 종목도 fact 행은 있어서 행 존재는 재무 있음을 증명하지 못한다
-     * (fact-coverage-store.ts 주석, resolver 의 PER 결측 판정과 같은 이유).
-     */
-    const covered = factCoverage.getCoveredYears(unionSymbols);
-    if (unionSymbols.some((code) => (covered.get(code)?.length ?? 0) > 0)) return null;
-    return (
-      '이 전략은 상장시점 재무 데이터가 필요하지만 선택한 종목에는 아직 없습니다: ' +
-      `${unionSymbols.join(', ')} — 미리보기를 다시 실행해 데이터 준비를 완료하세요. ` +
-      'DART 일일 한도로 대기 중이면 다음 날 자동으로 재개됩니다.'
-    );
+    schedule: readonly LegacyUniverseScheduleEntry[],
+  ): FundamentalsRequirementIssue | null => {
+    const strategy = strategies.get(body.strategyId);
+    if (strategy === null || !strategyRequiresFinancialData(strategy)) return null;
+    // 일부 종목만 준비되지 않은 상태를 허용하면 그 종목이 랭킹 후보에서 조용히 빠져
+    // 성과가 낙관적으로 치우친다. 반면 필요한 연도를 모두 조회했지만 실제 공시가 0건인
+    // 종목은 정상적인 수집 결과이므로 coverage 결측과 구분해 허용하고 실행 경고를 남긴다.
+    const gap = findFinancialCoverageGap({
+      request: body,
+      strategy,
+      symbols: unionSymbols,
+      coverage: factCoverage,
+    });
+    if (gap !== null) {
+      return { kind: 'COVERAGE_GAP', message: financialCoverageGapMessage(gap) };
+    }
+    const factCutoffs = financialFactCutoffsFromCoverage({
+      period: body.period,
+      schedule,
+      delistedTsMsBySymbol: delistedEventsToTsMsBySymbol(
+        symbolMaster.delistedEventsBetween(body.period.from, body.period.to),
+      ),
+      candles: candleCoverage,
+    });
+    const missingCutoffs = [...new Set(unionSymbols)].filter((symbol) => !factCutoffs.has(symbol));
+    if (missingCutoffs.length > 0) {
+      return {
+        kind: 'CANDLE_GAP',
+        message:
+          `실제 편입 기간·상장폐지 이전에 실행 가능한 일봉이 없는 종목이 있습니다: ${missingCutoffs.join(', ')} — `
+          + '일봉과 유니버스 데이터를 다시 준비하세요.',
+      };
+    }
+    if (financialFacts.symbolsWithFinancialFacts(factCutoffs).size > 0) return null;
+    return {
+      kind: 'NO_PIT_FACTS',
+      message:
+        '재무 coverage 기록은 있지만 마지막 실행 봉까지 사용 가능한 재무 데이터가 '
+        + `유니버스 전체에 없습니다: ${unionSymbols.join(', ')} — `
+        + '수집 gap을 확인하거나 기간 종료일·유니버스·전략을 조정하세요.',
+    };
   };
+
+  const sendFundamentalsIssue = (
+    reply: FastifyReply,
+    issue: FundamentalsRequirementIssue,
+  ): FastifyReply => issue.kind === 'COVERAGE_GAP' || issue.kind === 'CANDLE_GAP'
+    ? reply.code(409).send({ error: 'PREPARATION_REQUIRED', message: issue.message })
+    : reply.code(422).send({ error: issue.message });
 
   /**
    * 보유 종목 수(topN) × 동시 보유 상한(maxPositions) 정합성 검사.
@@ -717,8 +764,8 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    *
    * 전략 id 를 특별 취급하지 않고 **검증된 파라미터에 숫자 `topN` 이 있으면** 본다 —
    * range-breakout 처럼 이 파라미터가 없는 전략은 자연히 통과한다.
-   * `checkFundamentalsRequirement` 와 같은 이유로 400(요청 형식)이 아니라 422 다:
-   * 요청 자체는 유효하고 "전략 파라미터와 리스크 설정의 조합" 이 문제다.
+   * 400(요청 형식)이 아니라 422 다. 요청 자체는 유효하고
+   * "전략 파라미터와 리스크 설정의 조합" 이 문제다.
    */
   const checkPositionCapacity = (body: BacktestRequest): string | null => {
     const validated = strategies.validateParameters(
@@ -815,7 +862,15 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       return null;
     }
 
-    const covered = factCoverage.getCoveredYears(resolved.unionSymbols);
+    const factCutoffs = financialFactCutoffsFromCoverage({
+      period: sourceRequest.period,
+      schedule,
+      delistedTsMsBySymbol: delistedEventsToTsMsBySymbol(
+        symbolMaster.delistedEventsBetween(sourceRequest.period.from, sourceRequest.period.to),
+      ),
+      candles: candleCoverage,
+    });
+    const codesWithFundamentals = financialFacts.symbolsWithFinancialFacts(factCutoffs);
     return {
       preview,
       schedule,
@@ -825,7 +880,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       response: {
         ...preview,
         fundamentalSymbols: resolved.unionSymbols.filter(
-          (code) => (covered.get(code)?.length ?? 0) > 0,
+          (code) => codesWithFundamentals.has(code),
         ),
       },
     };
@@ -900,9 +955,13 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       });
     }
 
-    const fundamentalsError = checkFundamentalsRequirement(body, validated.resolved.unionSymbols);
-    if (fundamentalsError) {
-      return reply.code(422).send({ error: fundamentalsError });
+    const fundamentalsIssue = checkFundamentalsRequirement(
+      body,
+      validated.resolved.unionSymbols,
+      validated.resolved.schedule,
+    );
+    if (fundamentalsIssue) {
+      return sendFundamentalsIssue(reply, fundamentalsIssue);
     }
 
     const capacityError = checkPositionCapacity(body);
@@ -1033,9 +1092,13 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       });
     }
 
-    const fundamentalsError = checkFundamentalsRequirement(cloneRequest, validated.resolved.unionSymbols);
-    if (fundamentalsError) {
-      return reply.code(422).send({ error: fundamentalsError });
+    const fundamentalsIssue = checkFundamentalsRequirement(
+      cloneRequest,
+      validated.resolved.unionSymbols,
+      validated.resolved.schedule,
+    );
+    if (fundamentalsIssue) {
+      return sendFundamentalsIssue(reply, fundamentalsIssue);
     }
 
     const capacityError = checkPositionCapacity(cloneRequest);
@@ -1128,8 +1191,12 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
         ...('uncoveredDates' in validated ? { uncoveredDates: validated.uncoveredDates } : {}),
       });
     }
-    const fundamentalsError = checkFundamentalsRequirement(body, validated.resolved.unionSymbols);
-    if (fundamentalsError) return reply.code(422).send({ error: fundamentalsError });
+    const fundamentalsIssue = checkFundamentalsRequirement(
+      body,
+      validated.resolved.unionSymbols,
+      validated.resolved.schedule,
+    );
+    if (fundamentalsIssue) return sendFundamentalsIssue(reply, fundamentalsIssue);
     const capacityError = checkPositionCapacity(body);
     if (capacityError) return reply.code(422).send({ error: capacityError });
     const queueError = queueDepthError();
@@ -1195,8 +1262,12 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (!validated.ok) {
       return reply.code(validated.status).send({ error: validated.errors[0] });
     }
-    const fundamentalsError = checkFundamentalsRequirement(body, validated.resolved.unionSymbols);
-    if (fundamentalsError) return reply.code(422).send({ error: fundamentalsError });
+    const fundamentalsIssue = checkFundamentalsRequirement(
+      body,
+      validated.resolved.unionSymbols,
+      validated.resolved.schedule,
+    );
+    if (fundamentalsIssue) return sendFundamentalsIssue(reply, fundamentalsIssue);
     const capacityError = checkPositionCapacity(body);
     if (capacityError) return reply.code(422).send({ error: capacityError });
     const resourceError = await checkResources(deps.dataRoot);

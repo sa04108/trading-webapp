@@ -12,8 +12,8 @@ export interface FactRepository {
   getFacts(query: FactQuery): Promise<Fact[]>;
   saveFacts(facts: readonly Fact[]): Promise<void>;
   /**
-   * 종목 하나의 팩트 또는 수집 coverage 보유 여부. 제출 검증과 종목 화면 배지가 같은
-   * 판정을 본다.
+   * 종목 하나의 팩트 또는 수집 coverage 보유 여부. 목록 화면의 거친 배지용이다.
+   * 제출 검증은 실제 PIT 재무 행과 필수 연도 coverage를 별도로 확인한다(D-069).
    */
   hasFacts(scope: FactScope, key: string): boolean;
   /**

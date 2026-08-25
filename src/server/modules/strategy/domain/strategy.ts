@@ -117,6 +117,17 @@ export interface TradingStrategy<TParameters, TState> {
   onForcedExit?(symbol: string, state: TState): void;
 }
 
+/** preparation·제출·worker·UI가 공유하는 전략 재무 필요 조건. */
+export function strategyRequiresFinancialData<TParameters, TState>(
+  strategy: Pick<
+    TradingStrategy<TParameters, TState>,
+    'requiresFundamentals' | 'dataRequirements'
+  >,
+): boolean {
+  return strategy.requiresFundamentals === true
+    || (strategy.dataRequirements?.fundamentalLookbackQuarters ?? 0) > 0;
+}
+
 /**
  * 레지스트리 저장용 — 파라미터·상태 타입을 지운 형태.
  *

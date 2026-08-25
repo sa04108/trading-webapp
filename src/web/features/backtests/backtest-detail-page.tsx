@@ -672,8 +672,16 @@ export function BacktestDetailPage() {
       void queryClient.invalidateQueries({ queryKey: ['backtests'] });
       void navigate(`/backtests/${data.job.id}`);
     },
-    onError: (error: unknown) =>
-      toast.error(error instanceof ApiError ? error.message : '복제에 실패했습니다'),
+    onError: (error: unknown) => {
+      if (
+        error instanceof ApiError
+        && (error.message === 'PREPARATION_REQUIRED' || error.message === 'PREVIEW_REQUIRED')
+      ) {
+        toast.error('현재 데이터를 다시 준비해야 합니다. 재설정 및 복제에서 미리보기를 완료하세요.');
+        return;
+      }
+      toast.error(error instanceof ApiError ? error.message : '복제에 실패했습니다');
+    },
   });
 
   const seedCloneMutation = useMutation({
@@ -691,8 +699,11 @@ export function BacktestDetailPage() {
       void navigate(`/backtests/batches/${data.batch.id}`);
     },
     onError: (error: unknown) => {
-      if (error instanceof ApiError && error.message === 'PREVIEW_REQUIRED') {
-        toast.error('원본 유니버스를 재사용할 수 없습니다. 재설정 및 복제에서 미리보기를 완료하세요.');
+      if (
+        error instanceof ApiError
+        && (error.message === 'PREPARATION_REQUIRED' || error.message === 'PREVIEW_REQUIRED')
+      ) {
+        toast.error('현재 데이터를 다시 준비해야 합니다. 재설정 및 복제에서 미리보기를 완료하세요.');
         return;
       }
       toast.error(error instanceof ApiError ? error.message : '새 난수 복제에 실패했습니다');

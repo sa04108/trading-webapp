@@ -103,6 +103,13 @@ export const DEFAULT_UNIVERSE_RULE: UniverseRule = {
 // 스키마 기본값(risk.maxPositions default 40, max 200 — backtest-request.ts)과 같은 값이다.
 export const DEFAULT_MAX_POSITIONS = '40';
 
+export function shouldRejectSourceReuse(
+  reuseSource: boolean,
+  preparationErrorCode: 'PREPARATION_REQUIRED' | 'PREVIEW_REQUIRED',
+): boolean {
+  return reuseSource || preparationErrorCode === 'PREVIEW_REQUIRED';
+}
+
 /**
  * 전략 파라미터 입력(문자열)을 서버가 받는 숫자로 파싱한다.
  *
@@ -424,7 +431,7 @@ export function NewBacktestWizard() {
       for (const warning of data.warnings ?? []) toast.warning(warning, { duration: 10_000 });
       void navigate(`/backtests/${data.job.id}`);
     },
-    onError: (error: unknown) => {
+    onError: (error: unknown, variables) => {
       // 준비된 데이터가 아직 없다는 뜻이다(Task 6) — 검토·실행 단계에 머물며 같은
       // 사유를 빨간 배너로 띄우면 사용자는 "왜 실패했는지" 를 알 방법이 없다. 대신
       // 미리보기 단계로 돌려보내고 새 준비 요청을 바로 시작시킨다(브리프 5번).
@@ -436,7 +443,12 @@ export function NewBacktestWizard() {
         (error.message === 'PREPARATION_REQUIRED' || error.message === 'PREVIEW_REQUIRED')
       ) {
         setLastPreview(null);
-        if (error.message === 'PREVIEW_REQUIRED') setSourceReuseRejected(true);
+        // 설정 복제는 원본 preview를 재사용하는 동안에도 enqueue 직전 데이터가 사라져
+        // PREPARATION_REQUIRED가 날 수 있다. 이 경우 원본을 다시 열면 같은 stale pin으로
+        // 즉시 되돌아가므로 두 409 코드 모두 source reuse를 끊는다.
+        if (shouldRejectSourceReuse(variables.reuseSource, error.message)) {
+          setSourceReuseRejected(true);
+        }
         setPreviewRetryToken((token) => token + 1);
         goToSlug(recordTraversal(2));
         return;

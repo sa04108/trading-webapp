@@ -20,7 +20,7 @@ afterEach(() => {
 });
 
 describe('SqliteBacktestInputBundleBuilder', () => {
-  it('선택 종목의 자본변동 상태와 전역 종목 마스터 coverage를 원격 bundle에 복사한다', () => {
+  it('선택 종목의 재무·자본변동 상태와 전역 종목 마스터 coverage를 원격 bundle에 복사한다', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'qp-input-bundle-'));
     temporaryDirectories.push(directory);
     const sourcePath = path.join(directory, 'source.sqlite');
@@ -33,7 +33,7 @@ describe('SqliteBacktestInputBundleBuilder', () => {
     source.db.insert(symbolFactsState).values([
       {
         code: 'SELECTED',
-        coveredYearsJson: '[]',
+        coveredYearsJson: '[2024,2025]',
         actionCoveredYearsJson: '[2025]',
         actionGapYearsJson: '[2025]',
         actionCoverageProtocolJson: '{"version":2,"years":[2025]}',
@@ -80,6 +80,7 @@ describe('SqliteBacktestInputBundleBuilder', () => {
     expect(states).toHaveLength(1);
     expect(states[0]).toMatchObject({
       code: 'SELECTED',
+      coveredYearsJson: '[2024,2025]',
       actionCoveredYearsJson: '[2025]',
       actionGapYearsJson: '[2025]',
       actionCoverageProtocolJson: '{"version":2,"years":[2025]}',

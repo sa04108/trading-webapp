@@ -44,6 +44,7 @@ import {
 } from '../server/modules/backtest/domain/cost-profiles.js';
 import { SqliteFactRepository } from '../server/modules/facts/infrastructure/sqlite-fact-repository.js';
 import { SqliteCorporateActionCoverageStore } from '../server/modules/facts/application/corporate-action-coverage.js';
+import { SqliteFactCoverageStore } from '../server/modules/facts/application/fact-coverage-store.js';
 import { CORPORATE_ACTION_FIELD, type Fact } from '../server/modules/facts/domain/fact.js';
 import {
   alignCorporateActionEffectiveDates,
@@ -56,12 +57,18 @@ import { KrxDailyCandleRepository } from '../server/modules/market-data/infrastr
 import type { KrxHistoricalUniverseSource } from '../server/modules/market-data/application/ports.js';
 import { SymbolMasterService } from '../server/modules/market-data/application/symbol-master-service.js';
 import { StrategyRegistry } from '../server/modules/strategy/application/strategy-registry.js';
+import { strategyRequiresFinancialData } from '../server/modules/strategy/domain/strategy.js';
 import { strategySourceHash } from '../server/modules/strategy/application/strategy-source-hash.js';
 import { SqliteBacktestResultWriter } from '../server/modules/backtest/infrastructure/sqlite-backtest-result-writer.js';
 import { SqliteBacktestResultArtifactWriter } from '../server/modules/backtest/infrastructure/sqlite-backtest-result-artifact-writer.js';
 import { backtestRequestSchema, periodToTsRange } from '../shared/schemas/backtest-request.js';
 import type { ProvenancePin } from '../shared/schemas/provenance-pin.js';
 import { installCancellationHandlers } from './cancellation.js';
+import {
+  financialCoverageGapMessage,
+  findFinancialCoverageGap,
+} from '../server/modules/backtest/application/backtest-financial-coverage.js';
+import { financialFactCutoffsFromCandles } from '../server/modules/backtest/application/backtest-financial-execution-window.js';
 
 const cancellation = installCancellationHandlers();
 
@@ -391,8 +398,9 @@ async function main(): Promise<void> {
         );
       }
     }
-    const tradeFromTsMs = candles
-      .filter((candle) => candle.tsMs >= fromTsMs && candle.tsMs <= toTsMs)
+    const tradeCandles = candles
+      .filter((candle) => candle.tsMs >= fromTsMs && candle.tsMs <= toTsMs);
+    const tradeFromTsMs = tradeCandles
       .reduce<number | undefined>(
         (minimum, candle) => minimum === undefined || candle.tsMs < minimum ? candle.tsMs : minimum,
         undefined,
@@ -407,9 +415,7 @@ async function main(): Promise<void> {
     // 일정에 선정됐는데 기간 내 봉이 하나도 없는 종목만 빼고 실행하면 유니버스가
     // 달라진다. 급락 종목이 누락된 경우 특히 낙관 편향이므로 전체 실행을 중단한다.
     const symbolsWithBars = new Set(
-      candles
-        .filter((candle) => candle.tsMs >= fromTsMs && candle.tsMs <= toTsMs)
-        .map((candle) => candle.symbol),
+      tradeCandles.map((candle) => candle.symbol),
     );
     const emptySymbols = unionSymbols.filter((s) => !symbolsWithBars.has(s));
     if (emptySymbols.length > 0) {
@@ -419,10 +425,22 @@ async function main(): Promise<void> {
       );
     }
 
+    // 제출 뒤 coverage가 지워진 대기 job, 직접 enqueue, 지연 seed 승격과 remote bundle도
+    // 같은 마지막 경계를 지난다. 일부 종목만 빠진 채 실행하면 랭킹 유니버스가 달라진다.
+    const financialCoverageGap = findFinancialCoverageGap({
+      request,
+      strategy,
+      symbols: unionSymbols,
+      coverage: new SqliteFactCoverageStore(db),
+    });
+    if (financialCoverageGap !== null) {
+      throw new Error(financialCoverageGapMessage(financialCoverageGap));
+    }
+
     // 상장시점 팩트 로드 — 질의를 **둘로** 나눈다. 둘의 노출 규칙이 다르기 때문이다.
     //
-    // 재무 팩트: 노출 시점 = 공시 접수일(asOf). 기간 종료 이후 접수분은 PitFactView 커서가
-    // 어차피 흡수하지 않으므로 SQL 에서 잘라 메모리를 아낀다.
+    // 재무 팩트: 노출 시점 = 공시 접수일(asOf). 종목별 마지막 실행 봉 뒤 접수분은 그
+    // 종목을 다시 평가할 봉이 없으므로 SQL 상한과 메모리 필터에서 잘라낸다.
     //
     // 자본변동(SPLIT_RATIO): 노출 시점 = **효력발생일**이다 (설계 §3.4, 스펙 §9.2). 그래서
     // 접수일로 자르면 안 된다. 분할 수량은 사업보고서의 증자·감자 현황에서 읽으므로 접수일이
@@ -434,13 +452,33 @@ async function main(): Promise<void> {
     //
     // 봉 시점별 컷오프는 두 경우 모두 엔진의 PitFactView 가 담당한다.
     const factRepository = new SqliteFactRepository(db);
+    const financialCutoffBySymbol = financialFactCutoffsFromCandles({
+      period: request.period,
+      schedule,
+      delistedTsMsBySymbol,
+      candles: tradeCandles,
+    });
+    const missingExecutionSymbols = unionSymbols.filter(
+      (symbol) => !financialCutoffBySymbol.has(symbol),
+    );
+    if (missingExecutionSymbols.length > 0) {
+      throw new Error(
+        '실제 편입 기간·상장폐지 이전에 실행 가능한 일봉이 없는 유니버스 종목이 있어 '
+        + `백테스트를 중단했습니다: ${missingExecutionSymbols.join(', ')}. `
+        + '일봉과 유니버스 데이터를 다시 준비하세요.',
+      );
+    }
+    const lastExecutionTsMs = Math.max(...financialCutoffBySymbol.values());
     const financialFacts: Fact[] = (
       await factRepository.getFacts({
         scope: 'SYMBOL',
         keys: unionSymbols,
-        asOfMaxTsMs: toTsMs,
+        asOfMaxTsMs: lastExecutionTsMs,
       })
-    ).filter((fact) => fact.field !== CORPORATE_ACTION_FIELD);
+    ).filter((fact) => (
+      fact.field !== CORPORATE_ACTION_FIELD
+      && fact.asOfTsMs <= (financialCutoffBySymbol.get(fact.key) ?? Number.NEGATIVE_INFINITY)
+    ));
     const rawCorporateActionFacts: Fact[] = await factRepository.getFacts({
       scope: 'SYMBOL',
       keys: unionSymbols,
@@ -551,13 +589,14 @@ async function main(): Promise<void> {
     const corporateActionFacts = aligned.facts;
     const facts: Fact[] = [...financialFacts, ...corporateActionFacts];
     // 아래 두 검사는 **재무** 팩트만 본다 — 분할만 기록된 종목은 재무가 없는 종목이다
-    if (strategy.requiresFundamentals === true && financialFacts.length === 0) {
+    if (strategyRequiresFinancialData(strategy) && financialFacts.length === 0) {
       // 제출 검증이 걸렀어야 하는 상태다. 실행 중 데이터가 지워진 경우의 뒤늦은 방어선.
       throw new Error(
-        '이 전략은 상장시점 재무 데이터가 필요합니다. 미리보기를 다시 실행해 데이터 준비를 완료한 뒤 다시 실행하세요.',
+        '재무 coverage 기록은 있지만 마지막 실행 봉까지 사용 가능한 재무 데이터가 '
+          + '유니버스 전체에 없습니다. 수집 gap을 확인하거나 기간·유니버스·전략을 조정하세요.',
       );
     }
-    if (strategy.requiresFundamentals === true) {
+    if (strategyRequiresFinancialData(strategy)) {
       // "facts:sync 리포트를 확인하세요" 는 지금 어디에도 없는 것을 가리킨다 — 그 리포트는
       // 이미 닫혔을 수 있는 세션의 stdout 으로만 존재했다. 대신 실제로 로드된 팩트 키를
       // 요청 유니버스와 맞춰 재무가 **하나도 없는** 종목을 직접 이름으로 밝힌다.
@@ -573,8 +612,7 @@ async function main(): Promise<void> {
             (withoutFacts.length > 10 ? ` 외 ${withoutFacts.length - 10}종목` : '') +
             '. '
           : '') +
-          '재무 데이터는 수집 시점 기준입니다. 계정이 일부만 누락된 종목도 랭킹에서 조용히 빠질 수 있습니다 ' +
-          '— 미리보기를 다시 실행해 데이터 준비를 완료하면 누락 건수를 확인할 수 있습니다.',
+          '재무 데이터는 공시 시점 기준입니다. 계정이 일부만 공시된 종목도 랭킹에서 빠질 수 있습니다.',
       );
     }
 

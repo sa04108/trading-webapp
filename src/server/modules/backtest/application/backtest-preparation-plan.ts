@@ -4,11 +4,14 @@ import { computeRebalanceDates } from '../../../../shared/schemas/rebalance-inte
 import { CORPORATE_ACTION_ALIGNMENT_WINDOW } from '../../facts/domain/corporate-action-effective-date.js';
 import { derivePreparationFactYearRange } from '../../market-data/domain/fact-year-range.js';
 import { addCalendarDays } from '../../market-data/domain/kst-date.js';
-import type { AnyTradingStrategy } from '../../strategy/domain/strategy.js';
+import {
+  strategyRequiresFinancialData,
+  type AnyTradingStrategy,
+} from '../../strategy/domain/strategy.js';
 import type { UniverseDataNeed } from './universe-rule-resolver.js';
 
 /** 데이터 필요 범위의 의미가 바뀌면 완료된 이전 preparation을 재사용하지 않는다. */
-export const BACKTEST_PREPARATION_PLAN_VERSION = '3.0.0';
+export const BACKTEST_PREPARATION_PLAN_VERSION = '4.0.0';
 
 export interface BacktestPreparationPlan {
   readonly requestHash: string;
@@ -47,7 +50,11 @@ export function buildBacktestPreparationPlan(input: {
   const fundamentalLookbackQuarters = Math.max(universeLookback, strategyLookback);
 
   const financialSymbols = new Set(resolutionNeeds.factSymbols);
-  if (strategyLookback > 0) for (const symbol of finalSymbols) financialSymbols.add(symbol);
+  // requiresFundamentals 전략은 lookback을 생략해도 기간 안 재무가 필요하다는 계약이다.
+  // 수집 조건과 제출/worker 검증 조건을 같은 boolean에 묶어 영구 재준비 루프를 막는다.
+  if (strategyRequiresFinancialData(strategy)) {
+    for (const symbol of finalSymbols) financialSymbols.add(symbol);
+  }
   const financialRange = derivePreparationFactYearRange(
     request.period,
     fundamentalLookbackQuarters,

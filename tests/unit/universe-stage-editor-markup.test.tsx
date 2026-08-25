@@ -4,7 +4,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { addStage, changeStageLimit } from '@/features/backtests/universe-pipeline';
 import { UniverseStageEditor } from '@/features/backtests/universe-stage-editor';
 import { UniverseRuleStep } from '@/features/backtests/universe-rule-step';
-import { DEFAULT_MAX_POSITIONS, DEFAULT_UNIVERSE_RULE } from '@/features/backtests/new-backtest-wizard';
+import {
+  DEFAULT_MAX_POSITIONS,
+  DEFAULT_UNIVERSE_RULE,
+  shouldRejectSourceReuse,
+} from '@/features/backtests/new-backtest-wizard';
 import { rebalanceIntervalFitsPeriod } from '@shared/schemas/rebalance-interval';
 import type { UniverseRule, UniverseStage } from '@shared/schemas/universe-rule';
 
@@ -47,6 +51,18 @@ describe('신규 진입 기본값', () => {
       rebalanceInterval: { value: 1, unit: 'MONTH' },
     });
     expect(DEFAULT_MAX_POSITIONS).toBe('40');
+  });
+});
+
+describe('복제 source preview 무효화', () => {
+  it('source 재사용 제출의 두 준비 409는 모두 stale source를 끊는다', () => {
+    expect(shouldRejectSourceReuse(true, 'PREPARATION_REQUIRED')).toBe(true);
+    expect(shouldRejectSourceReuse(true, 'PREVIEW_REQUIRED')).toBe(true);
+  });
+
+  it('일반 신규 제출의 PREPARATION_REQUIRED는 source 상태를 만들지 않는다', () => {
+    expect(shouldRejectSourceReuse(false, 'PREPARATION_REQUIRED')).toBe(false);
+    expect(shouldRejectSourceReuse(false, 'PREVIEW_REQUIRED')).toBe(true);
   });
 });
 

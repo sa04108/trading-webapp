@@ -1,4 +1,4 @@
-import { and, asc, count, gt, gte, inArray, lte, max, min } from 'drizzle-orm';
+import { and, asc, count, eq, gt, gte, inArray, lte, max, min, or } from 'drizzle-orm';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import { krxDailyBars } from '../../../shared/db/schema.js';
 
@@ -7,6 +7,11 @@ export interface CandleCoverageRow {
   readonly firstTsMs: number | null;
   readonly lastTsMs: number | null;
   readonly barCount: number;
+}
+
+export interface CandleTimeWindow {
+  readonly fromTsMs: number;
+  readonly toTsMs: number;
 }
 
 const dateToTsMs = (date: string): number => Date.parse(`${date}T00:00:00Z`);
@@ -103,6 +108,65 @@ export class CandleCoverageService {
         barCount: row.barCount,
       };
     });
+  }
+
+  /**
+   * 종목별 닫힌 실행 구간 안에서 worker가 읽을 수 있는 마지막 유효 일봉을 찾는다.
+   * 동적 유니버스에서 편출 뒤의 봉이나 상장폐지 뒤 재사용 코드의 봉을 재무 PIT 상한으로
+   * 쓰지 않기 위한 조회다. SQLite 변수 상한을 넘지 않도록 구간을 묶어 조회한다.
+   */
+  getLastTsInWindows(
+    windowsByCode: ReadonlyMap<string, readonly CandleTimeWindow[]>,
+  ): ReadonlyMap<string, number> {
+    const entries = [...windowsByCode].flatMap(([code, windows]) =>
+      windows.flatMap((window) => (
+        Number.isFinite(window.fromTsMs)
+        && Number.isFinite(window.toTsMs)
+        && window.fromTsMs <= window.toTsMs
+          ? [{ code, window }]
+          : []
+      )),
+    );
+    const result = new Map<string, number>();
+    const batchSize = 100;
+    for (let offset = 0; offset < entries.length; offset += batchSize) {
+      const batch = entries.slice(offset, offset + batchSize);
+      const windowClause = or(...batch.map(({ code, window }) => and(
+        eq(krxDailyBars.shortCode, code),
+        gte(krxDailyBars.date, new Date(window.fromTsMs).toISOString().slice(0, 10)),
+        lte(krxDailyBars.date, new Date(window.toTsMs).toISOString().slice(0, 10)),
+      )));
+      if (windowClause === undefined) continue;
+      const rows = this.db
+        .select({
+          code: krxDailyBars.shortCode,
+          lastDate: max(krxDailyBars.date),
+        })
+        .from(krxDailyBars)
+        .where(and(
+          windowClause,
+          inArray(krxDailyBars.market, ['KOSPI', 'KOSDAQ']),
+          gt(krxDailyBars.open, 0),
+          gt(krxDailyBars.high, 0),
+          gt(krxDailyBars.low, 0),
+          gt(krxDailyBars.close, 0),
+          gte(krxDailyBars.volume, 0),
+          gte(krxDailyBars.high, krxDailyBars.low),
+          gte(krxDailyBars.high, krxDailyBars.open),
+          gte(krxDailyBars.high, krxDailyBars.close),
+          lte(krxDailyBars.low, krxDailyBars.open),
+          lte(krxDailyBars.low, krxDailyBars.close),
+        ))
+        .groupBy(krxDailyBars.shortCode)
+        .all();
+      for (const row of rows) {
+        if (row.lastDate === null) continue;
+        const tsMs = dateToTsMs(row.lastDate);
+        const existing = result.get(row.code);
+        if (existing === undefined || tsMs > existing) result.set(row.code, tsMs);
+      }
+    }
+    return result;
   }
 
   /**

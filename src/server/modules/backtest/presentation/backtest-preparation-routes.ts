@@ -10,15 +10,22 @@ import {
   type BacktestPreparationOrchestrator,
   type PreparationInput,
 } from '../application/backtest-preparation-orchestrator.js';
-import type { FactRepository } from '../../facts/application/ports.js';
-import { CORPORATE_ACTION_FIELD } from '../../facts/domain/fact.js';
+import type { FinancialFactAvailabilityService } from '../../facts/application/financial-fact-availability.js';
+import type { CandleCoverageService } from '../../market-data/application/candle-coverage-service.js';
+import type { SymbolMasterService } from '../../market-data/application/symbol-master-service.js';
+import {
+  delistedEventsToTsMsBySymbol,
+  financialFactCutoffsFromCoverage,
+} from '../application/backtest-financial-execution-window.js';
 import { sendIfKrxError, sendIfNotCovered } from './krx-error-mapping.js';
 
 type PreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
 export interface BacktestPreparationRouteDeps {
   readonly orchestrator: BacktestPreparationOrchestrator;
-  readonly facts: Pick<FactRepository, 'getFacts'>;
+  readonly financialFacts: Pick<FinancialFactAvailabilityService, 'symbolsWithFinancialFacts'>;
+  readonly candles: Pick<CandleCoverageService, 'getLastTsInWindows'>;
+  readonly symbolMaster: Pick<SymbolMasterService, 'delistedEventsBetween'>;
   readonly dartApiKeyAvailable: boolean;
 }
 
@@ -69,19 +76,21 @@ export function registerBacktestPreparationRoutes(
         // 유니버스 단계의 재무 게이트는 확정된 종목의 실제 재무 행만 본다. 전체
         // `/symbols`의 hasFacts는 자본변동만 있어도 true고, 재무 coverage는 DART
         // 무자료 수집에도 생기므로 둘 다 재무 보유 근거가 될 수 없다.
-        // FactRepository의 빈 keys는 "필터 없음"(전체 스코프)을 뜻한다. 빈 유니버스는
-        // 저장소를 건너뛰어 전체 fact를 읽는 역방향 병목을 만들지 않는다.
-        const storedFacts = preview.unionSymbols.length === 0
-          ? []
-          : await deps.facts.getFacts({
-              scope: 'SYMBOL',
-              keys: preview.unionSymbols,
-            });
-        const codesWithFundamentals = new Set(
-          storedFacts
-            .filter((fact) => fact.field !== CORPORATE_ACTION_FIELD)
-            .map((fact) => fact.key),
-        );
+        // 각 종목의 마지막 실행 봉 뒤 접수된 공시는 이 백테스트에서 쓸 수 없으므로 UI의
+        // 보유 표시에도 포함하지 않는다. 전용 서비스는 빈 유니버스를 전체 조회로 해석하지 않는다.
+        const factCutoffs = financialFactCutoffsFromCoverage({
+          period: input.period,
+          schedule: preview.schedule.map((entry) => ({
+            rebalanceDate: entry.rebalanceDate,
+            symbols: entry.members.map((member) => member.symbol),
+          })),
+          delistedTsMsBySymbol: delistedEventsToTsMsBySymbol(
+            deps.symbolMaster.delistedEventsBetween(input.period.from, input.period.to),
+          ),
+          candles: deps.candles,
+        });
+        const codesWithFundamentals = deps.financialFacts
+          .symbolsWithFinancialFacts(factCutoffs);
         const fundamentalSymbols = preview.unionSymbols.filter((code) =>
           codesWithFundamentals.has(code),
         );

@@ -131,8 +131,9 @@ export function stepBlocker(index: number, state: StepGateState): string | null 
 /**
  * 재무 필요 전략 + 재무 없는 유니버스 조합을 제출 전에 막는다.
  *
- * 워커의 실행 조건과 같은 기준으로 unionSymbols 가 **전부** 비었을 때만 막는다. 일부만
- * 없는 경우는 거부 사유가 아니고 워커가 실행 경고에 이름으로 남긴다 (D-025).
+ * 완료된 preview가 돌려준 PIT 실제 재무 종목을 기준으로 unionSymbols가 **전부** 비었을
+ * 때만 막는다. 필수 연도 coverage 결측은 preview가 완료되기 전에 별도로 막힌다(D-069).
+ * 일부만 실제 공시가 없는 경우는 worker가 실행 경고에 이름으로 남긴다.
  *
  * 모르는 상태에서는 통과시킨다 — `requiresFundamentals`·`symbolsWithFacts` 가 undefined
  * 면 아직 응답이 없거나 낡은 서버다. 근거 없이 막으면 사용자가 열 수 없는 문이 된다.
@@ -143,8 +144,8 @@ function fundamentalsBlocker(state: StepGateState): string | null {
   if (state.symbolsWithFacts === undefined) return null;
   if (state.unionSymbols.some((code) => state.symbolsWithFacts!.includes(code))) return null;
   return (
-    '이 전략은 재무 데이터가 필요하지만 이 유니버스에는 재무 있는 종목이 없습니다 — ' +
-    '미리보기를 다시 실행해 데이터 준비를 완료하거나 봉만 쓰는 전략을 고르세요'
+    '재무 coverage 기록은 있지만 마지막 실행 봉까지 사용 가능한 재무 데이터가 ' +
+    '이 유니버스 전체에 없습니다 — 수집 gap을 확인하거나 기간 종료일·유니버스·전략을 조정하세요'
   );
 }
 

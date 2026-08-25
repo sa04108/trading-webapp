@@ -56,7 +56,7 @@ export interface SeedCloneBatchEvent {
 
 export type SeedCloneSnapshotValidator = (
   schedule: readonly LegacyUniverseScheduleEntry[],
-  period: BacktestRequest['period'],
+  request: BacktestRequest,
 ) => void;
 
 /** 진행률 이벤트는 큐 슬롯이나 종료 여부를 바꾸지 않으므로 배치 DB를 다시 읽지 않는다. */
@@ -152,7 +152,7 @@ export class SeedCloneBatchService {
         // create 시점과 실제 PENDING item 승격 사이에 SCD/등록 identity나 기간
         // coverage가 바뀔 수 있다. 매 pump의 enqueue 직전에 다시 검사해 이후 자식
         // 생성을 멈춘다.
-        this.validateSnapshot(snapshot.schedule, snapshot.request.period);
+        this.validateSnapshot(snapshot.schedule, snapshot.request);
       } catch (error) {
         this.markTerminal(
           batch.id,

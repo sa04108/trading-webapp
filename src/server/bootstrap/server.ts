@@ -137,6 +137,7 @@ export async function buildServer(container: Container): Promise<FastifyInstance
           preparation: container.backtestPreparationOrchestrator,
           audit: container.auditLog,
           factCoverage: container.factCoverageStore,
+          financialFacts: container.financialFactAvailabilityService,
           dataRoot: container.config.dataRoot,
           maxQueuedBacktests: container.config.maxQueuedBacktests,
           clock: container.clock,
@@ -149,7 +150,9 @@ export async function buildServer(container: Container): Promise<FastifyInstance
         api,
         {
           orchestrator: container.backtestPreparationOrchestrator,
-          facts: container.factRepository,
+          financialFacts: container.financialFactAvailabilityService,
+          candles: container.candleCoverageService,
+          symbolMaster: container.symbolMasterService,
           dartApiKeyAvailable: container.config.dartApiKey !== null,
         },
         requireAuth,
