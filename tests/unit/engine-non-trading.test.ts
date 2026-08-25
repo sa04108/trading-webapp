@@ -205,6 +205,98 @@ describe('엔진 거래불가일', () => {
       marketTradingTsMs: [START + 1],
     })).toThrow('marketTradingTsMs는 Date 범위 안의 UTC 자정 정수 시각이어야 합니다');
   });
+
+  it('미보유 확정 유니버스 종목의 봉 누락도 전략 실행 전에 차단한다', () => {
+    expect(() => runBacktest(buyOnceStrategy('A'), {
+      candles: [
+        bar('A', 0), bar('A', 1), bar('A', 2),
+        bar('B', 0), bar('B', 2),
+      ],
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 1,
+      maxPositions: 5,
+      marketTradingTsMs: [START, START + DAY, START + 2 * DAY],
+      universeSchedule: [{ fromTsMs: START, symbols: ['A', 'B'] }],
+    })).toThrow(
+      '확정 유니버스 종목의 가격 봉이 거래일에 누락됐습니다: B (2025-05-13)',
+    );
+  });
+
+  it('확정 유니버스 후보의 확인된 거래불가 공백은 허용한다', () => {
+    const result = runBacktest(buyOnceStrategy('A'), {
+      candles: [
+        bar('A', 0), bar('A', 1), bar('A', 2),
+        bar('B', 0), bar('B', 2),
+      ],
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 1,
+      maxPositions: 5,
+      marketTradingTsMs: [START, START + DAY, START + 2 * DAY],
+      universeSchedule: [{ fromTsMs: START, symbols: ['A', 'B'] }],
+      nonTradingSymbolsByTsMs: new Map([[START + DAY, new Set(['B'])]]),
+    });
+
+    expect(result.fills.some((fill) => fill.symbol === 'A')).toBe(true);
+  });
+
+  it('편출된 종목의 이후 봉 공백은 활성 유니버스 누락으로 보지 않는다', () => {
+    const result = runBacktest(buyOnceStrategy('A'), {
+      candles: [
+        bar('A', 0), bar('A', 1), bar('A', 2),
+        bar('B', 0),
+      ],
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 1,
+      maxPositions: 5,
+      marketTradingTsMs: [START, START + DAY, START + 2 * DAY],
+      universeSchedule: [
+        { fromTsMs: START, symbols: ['A', 'B'] },
+        { fromTsMs: START + DAY, symbols: ['A'] },
+      ],
+    });
+
+    expect(result.fills.some((fill) => fill.symbol === 'A')).toBe(true);
+  });
+
+  it('상장폐지 경계 뒤 봉 공백은 활성 유니버스 누락으로 보지 않는다', () => {
+    const result = runBacktest(buyOnceStrategy('A'), {
+      candles: [
+        bar('A', 0), bar('A', 1), bar('A', 2),
+        bar('B', 0),
+      ],
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 1,
+      maxPositions: 5,
+      marketTradingTsMs: [START, START + DAY, START + 2 * DAY],
+      universeSchedule: [{ fromTsMs: START, symbols: ['A', 'B'] }],
+      delistedTsMsBySymbol: new Map([['B', [START + DAY]]]),
+    });
+
+    expect(result.fills.some((fill) => fill.symbol === 'A')).toBe(true);
+  });
+
+  it('포지션이 없어도 선택 종목 봉이 모두 일찍 끝나면 시장 거래일력으로 차단한다', () => {
+    expect(() => runBacktest(buyOnceStrategy('A'), {
+      candles: [bar('A', 0), bar('B', 0)],
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 1,
+      maxPositions: 5,
+      marketTradingTsMs: [START, START + DAY],
+      universeSchedule: [{ fromTsMs: START, symbols: ['A', 'B'] }],
+    })).toThrow(
+      '확정 유니버스 종목의 가격 봉이 거래일에 누락됐습니다: A, B (2025-05-13)',
+    );
+  });
 });
 
 describe('상장폐지 청산', () => {

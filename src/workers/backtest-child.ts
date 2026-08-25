@@ -52,7 +52,7 @@ import {
   corporateActionRawDateRange,
 } from '../server/modules/facts/domain/corporate-action-effective-date.js';
 import type { Candle, Market, Timeframe } from '../server/modules/market-data/domain/candle.js';
-import { addCalendarDays } from '../server/modules/market-data/domain/kst-date.js';
+import { addCalendarDays, isWeekendDate } from '../server/modules/market-data/domain/kst-date.js';
 import { KrxDailyCandleRepository } from '../server/modules/market-data/infrastructure/krx-daily-candle-repository.js';
 import type { KrxHistoricalUniverseSource } from '../server/modules/market-data/application/ports.js';
 import { SymbolMasterService } from '../server/modules/market-data/application/symbol-master-service.js';
@@ -271,6 +271,9 @@ async function main(): Promise<void> {
       ))
       .orderBy(asc(symbolMasterTradingDays.date))
       .all()
+      // 0005 이행의 legacy 이벤트 경계에는 휴일이 섞일 수 있다. SymbolMasterService의
+      // 공개 거래일 경계와 같은 최소 보정으로 확정 가능한 주말만 제거한다.
+      .filter((row) => !isWeekendDate(row.date))
       .map((row) => Date.parse(`${row.date}T00:00:00Z`));
 
     for (const row of symbolMaster.nonTradingDaysBetween(warmupFromDate, request.period.to)) {

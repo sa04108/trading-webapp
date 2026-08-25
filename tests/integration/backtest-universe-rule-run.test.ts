@@ -889,7 +889,7 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
   });
 
   it(
-    '보유 종목 봉이 원인 없이 끊기면 워커가 마지막 가격 평가로 완료하지 않는다',
+    '확정 유니버스 종목 봉이 원인 없이 끊기면 워커가 후보를 뺀 채 완료하지 않는다',
     { timeout: 90_000 },
     async () => {
       const alive = buildDailyCandles('005930');
@@ -920,7 +920,7 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
 
       const job = ctx.container.jobQueue.getJob(jobId)!;
       expect(job.status).toBe('FAILED');
-      expect(job.error).toContain('보유 종목의 가격 봉이 거래일 중간에 누락됐습니다: 000660');
+      expect(job.error).toContain('확정 유니버스 종목의 가격 봉이 거래일에 누락됐습니다: 000660');
       expect(ctx.container.resultsService.getRun(jobId)).toBeNull();
     },
   );

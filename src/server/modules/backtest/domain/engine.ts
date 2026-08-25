@@ -148,8 +148,9 @@ export interface BacktestRunResult {
  * 않게 하고, 실제 고점 아래 구간만 drawdown duration으로 센다.
  * 2.6.0: 직전 봉 participation 한도와 함께 현재 체결 봉의 총거래량을 물리적 상한으로 쓴다.
  * 2.7.0: 시장 거래일에 보유 종목 봉이 원인 불명으로 빠지면 마지막 가격 평가 대신 실패한다.
+ * 2.8.0: 확정 유니버스 후보의 원인 불명 가격 봉 누락도 전략 실행 전에 실패시킨다.
  */
-export const ENGINE_VERSION = '2.7.0';
+export const ENGINE_VERSION = '2.8.0';
 
 const PROGRESS_INTERVAL_BARS = 500;
 const MS_PER_DAY = 86_400_000;
@@ -397,6 +398,48 @@ function* runBacktestSteps(
     return metrics;
   });
   const scheduleSets = scheduleMetricMaps.map((metrics) => new Set(metrics.keys()));
+
+  // 보유하기 전 후보의 봉이 빠져도 전략은 그 종목을 그날의 bars에서 보지 못한다.
+  // 손실 종목의 데이터 누락이면 해당 종목을 우연히 피한 낙관 결과가 되므로, 확정
+  // schedule과 시장 거래일력이 있는 생산 실행에서는 전략 초기화 전에 전체를 검사한다.
+  // 실제 거래불가일과 이미 폐지된 코드는 정상 공백이다.
+  if (marketTradingTsMs !== undefined && scheduleSets.length > 0) {
+    let coverageScheduleIndex = 0;
+    for (const tsMs of timeline) {
+      if (input.tradeFromTsMs !== undefined && tsMs < input.tradeFromTsMs) continue;
+      const allBarCount = allBarCountByTs.get(tsMs) ?? 0;
+      if (allBarCount === 0 && !marketTradingTsMs.has(tsMs)) continue;
+
+      while (
+        coverageScheduleIndex + 1 < sortedSchedule.length
+        && (sortedSchedule[coverageScheduleIndex + 1] as BacktestUniverseScheduleEntry).fromTsMs
+          <= tsMs
+      ) {
+        coverageScheduleIndex += 1;
+      }
+      const bars = barsByTs.get(tsMs);
+      const nonTrading = input.nonTradingSymbolsByTsMs?.get(tsMs);
+      const missingSymbols = [...(scheduleSets[coverageScheduleIndex] as ReadonlySet<string>)]
+        .filter((symbol) => (
+          bars?.has(symbol) !== true
+          && nonTrading?.has(symbol) !== true
+          && !(
+            firstDelistedTsMsBySymbol.has(symbol)
+            && (firstDelistedTsMsBySymbol.get(symbol) as number) <= tsMs
+          )
+        ))
+        .sort();
+      if (missingSymbols.length === 0) continue;
+
+      const date = new Date(tsMs).toISOString().slice(0, 10);
+      throw new Error(
+        `확정 유니버스 종목의 가격 봉이 거래일에 누락됐습니다: ${missingSymbols.join(', ')} (${date}). `
+          + '거래불가일·상장폐지로 확인되지 않아 후보 누락 상태의 실행을 중단합니다. '
+          + '기간 전체 KRX 데이터를 다시 준비하세요.',
+      );
+    }
+  }
+
   let scheduleIndex = 0;
   let activatedScheduleIndex = -1;
   let schedulelessRebalanceEmitted = false;
