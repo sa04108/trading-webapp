@@ -912,6 +912,41 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     });
   });
 
+  it.each(['MARKET_CAP', 'VOLUME', 'TRADING_VALUE', 'PER'] as const)(
+    'ingest 완료 날짜의 %s 후보 행 전체 누락은 부분 랭킹하지 않고 실패한다',
+    async (criterion) => {
+      const resolver = makePipelineResolver({
+        metrics: pipelineMetrics.slice(0, 2),
+        missingTradingValueDates: [],
+      });
+
+      await expect(resolver.resolveOrDescribeNeeds(
+        pipelineRule([{ criterion, direction: 'HIGH', limit: 3 }]),
+        period,
+      )).rejects.toThrow(
+        `KRX 선정 지표 수집이 완료된 날짜에 ${criterion} 후보 행이 누락됐습니다 `
+          + `(${PIPELINE_DATE}): 000003`,
+      );
+    },
+  );
+
+  it('PER 선정 지표 날짜가 아직 미수집이면 실패하지 않고 metric 수집을 요구한다', async () => {
+    const resolver = makePipelineResolver({
+      metrics: [],
+      missingTradingValueDates: [PIPELINE_DATE],
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'PER', direction: 'LOW', limit: 2 }]),
+      period,
+    );
+
+    expect(result).toMatchObject({
+      kind: 'NEEDS_DATA',
+      needs: { selectionMetricDates: [PIPELINE_DATE] },
+    });
+  });
+
   it('자본변동 fact만 있어도 재무 coverage가 없으면 NEEDS_DATA로 요구한다', async () => {
     // hasFacts로 판정하던 회귀: SPLIT_RATIO만 저장된 종목이 재무 있음으로
     // 오인돼 PER 결측 제외됐다. factsPresent는 세 종목 모두 fact가 있다고 답한다.

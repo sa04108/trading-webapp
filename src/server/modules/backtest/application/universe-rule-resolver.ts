@@ -7,7 +7,10 @@ import type { UniverseRule } from '../../../../shared/schemas/universe-rule.js';
 import type { BacktestPeriod } from '../../../../shared/schemas/backtest-request.js';
 import { computeRebalanceDates as computeSharedRebalanceDates } from '../../../../shared/schemas/rebalance-interval.js';
 import { addCalendarDays, kstEndOfDayMs } from '../../market-data/domain/kst-date.js';
-import type { SelectionMetricRepository } from '../../market-data/application/selection-metric-repository.js';
+import type {
+  DailySelectionMetric,
+  SelectionMetricRepository,
+} from '../../market-data/application/selection-metric-repository.js';
 import type { CandleRepository } from '../../market-data/application/ports.js';
 import type { FactRepository } from '../../facts/application/ports.js';
 import type { FactCoverageStore } from '../../facts/application/fact-coverage-store.js';
@@ -126,6 +129,24 @@ export type UniverseResolveAttempt =
  */
 export function sumExcludedNonTrading(schedule: readonly LegacyUniverseScheduleEntry[]): number {
   return schedule.reduce((sum, entry) => sum + entry.excludedNonTradingCount, 0);
+}
+
+function assertSelectionMetricRowsComplete(
+  effectiveDate: string,
+  criterion: 'MARKET_CAP' | 'VOLUME' | 'TRADING_VALUE' | 'PER',
+  candidates: readonly Pick<SymbolMasterEntry, 'shortCode' | 'standardCode'>[],
+  metrics: ReadonlyMap<string, DailySelectionMetric>,
+): void {
+  const missing = candidates
+    .filter((entry) => !metrics.has(entry.standardCode))
+    .map((entry) => entry.shortCode)
+    .sort();
+  if (missing.length === 0) return;
+  throw new Error(
+    `KRX 선정 지표 수집이 완료된 날짜에 ${criterion} 후보 행이 누락됐습니다 `
+      + `(${effectiveDate}): ${missing.join(', ')}. `
+      + '누락 종목만 제외해 순위를 바꾸지 않고 준비를 중단했습니다.',
+  );
 }
 
 export class UniverseRuleResolver {
@@ -370,9 +391,18 @@ export class UniverseRuleResolver {
             effectiveDate,
             candidates.map((entry) => entry.standardCode),
           );
-          if (selectionMetrics.findMissingTradingValueDates([effectiveDate]).length > 0) {
+          const metricDateMissing =
+            selectionMetrics.findMissingTradingValueDates([effectiveDate]).length > 0;
+          if (metricDateMissing) {
             dateSelectionMetricDates.add(effectiveDate);
             stageReady = false;
+          } else {
+            assertSelectionMetricRowsComplete(
+              effectiveDate,
+              stage.criterion,
+              candidates,
+              stageMetrics,
+            );
           }
           rows = candidates.map((entry) => ({
             standardCode: entry.standardCode,
@@ -384,6 +414,16 @@ export class UniverseRuleResolver {
             effectiveDate,
             candidates.map((entry) => entry.standardCode),
           );
+          const metricDateMissing =
+            selectionMetrics.findMissingTradingValueDates([effectiveDate]).length > 0;
+          if (!metricDateMissing) {
+            assertSelectionMetricRowsComplete(
+              effectiveDate,
+              stage.criterion,
+              candidates,
+              stageMetrics,
+            );
+          }
           rows = candidates.map((entry) => ({
             standardCode: entry.standardCode,
             shortCode: entry.shortCode,
@@ -398,7 +438,7 @@ export class UniverseRuleResolver {
           // null 은 구조적 결측이므로 그대로 제외한다.
           if (
             rows.some((row) => row.value === null)
-            && selectionMetrics.findMissingTradingValueDates([effectiveDate]).length > 0
+            && metricDateMissing
           ) {
             dateSelectionMetricDates.add(effectiveDate);
             stageReady = false;
@@ -433,6 +473,22 @@ export class UniverseRuleResolver {
               effectiveDate,
               candidates.map((entry) => entry.standardCode),
             );
+            const metricDateMissing =
+              selectionMetrics.findMissingTradingValueDates([effectiveDate]).length > 0;
+            const hasIncompleteMarketCaps = candidates.some((entry) => (
+              stageMetrics.get(entry.standardCode)?.marketCapKrw == null
+            ));
+            if (metricDateMissing && hasIncompleteMarketCaps) {
+              dateSelectionMetricDates.add(effectiveDate);
+              stageReady = false;
+            } else if (!metricDateMissing) {
+              assertSelectionMetricRowsComplete(
+                effectiveDate,
+                stage.criterion,
+                candidates,
+                stageMetrics,
+              );
+            }
             rows = exactRatioRankingRows(candidates, (entry) => {
               const cap = stageMetrics.get(entry.standardCode)?.marketCapKrw ?? null;
               const income = positiveNumberFraction(
