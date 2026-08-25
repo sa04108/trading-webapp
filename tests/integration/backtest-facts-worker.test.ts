@@ -297,6 +297,9 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
         scope: 'SYMBOL', key: 'CHEAP', field: 'NET_INCOME', periodKey: '2024Q4',
         asOfTsMs: Date.parse('2025-01-22T00:00:00Z'), value: 1, unit: 'KRW',
       }]);
+      // snapshot 자체는 검증된 수집 결과로 다시 닫아, 이 테스트가 manifest 훼손이
+      // 아니라 종목별 마지막 실행 봉 PIT 관문을 검증하게 한다.
+      seedFinancialCoverage(ctx.container, ['CHEAP', 'RICH'], yearRange(2024, 2025));
 
       ctx.container.jobOrchestrator.tick();
       await waitFor(() => {
@@ -357,6 +360,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
         scope: 'SYMBOL', key: 'CHEAP', field: 'NET_INCOME', periodKey: '2024Q4',
         asOfTsMs: Date.parse('2025-01-22T00:00:00Z'), value: 1, unit: 'KRW',
       }]);
+      seedFinancialCoverage(ctx.container, ['CHEAP', 'RICH'], yearRange(2024, 2025));
 
       ctx.container.jobOrchestrator.tick();
       await waitFor(() => {

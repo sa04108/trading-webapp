@@ -471,6 +471,7 @@ function makePipelineResolver(options: {
       hasFacts: (_scope: 'SYMBOL' | 'MACRO', key: string) => factsPresent.has(key),
       symbolsWithFacts: () => factsPresent,
       saveFacts: async () => undefined,
+      replaceSymbolFinancialFactsForYear: async () => undefined,
     },
     factCoverage: {
       getCoveredYears: (codes?: readonly string[]) => {
@@ -479,10 +480,20 @@ function makePipelineResolver(options: {
           ? financialCoverage
           : new Map([...financialCoverage].filter(([code]) => codes.includes(code)));
       },
+      getCoverageState: (codes?: readonly string[]) => new Map(
+        [...financialCoverage]
+          .filter(([code]) => codes === undefined || codes.includes(code))
+          .map(([code, years]) => [code, {
+            verifiedYears: years,
+            blockingGapYears: [],
+            blockingGapDetails: [],
+          }]),
+      ),
       getUpdatedAtMs: () => new Map<string, number>(),
       getProcessedFilingReceiptNos: () => new Set<string>(),
       addProcessedFilings: () => undefined,
       addCoveredYears: () => undefined,
+      addCoverageResult: () => undefined,
     },
     candles: {
       async *getCandles(query: { symbols: readonly string[]; fromTsMs?: number; toTsMs?: number }) {

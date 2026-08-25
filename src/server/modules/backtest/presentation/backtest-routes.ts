@@ -82,6 +82,7 @@ type PreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void
 
 type FundamentalsRequirementIssue =
   | { readonly kind: 'COVERAGE_GAP'; readonly message: string }
+  | { readonly kind: 'INGESTION_GAP'; readonly message: string }
   | { readonly kind: 'CANDLE_GAP'; readonly message: string }
   | { readonly kind: 'NO_PIT_FACTS'; readonly message: string };
 
@@ -716,7 +717,10 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       coverage: factCoverage,
     });
     if (gap !== null) {
-      return { kind: 'COVERAGE_GAP', message: financialCoverageGapMessage(gap) };
+      return {
+        kind: gap.kind === 'BLOCKING_INGESTION_GAP' ? 'INGESTION_GAP' : 'COVERAGE_GAP',
+        message: financialCoverageGapMessage(gap),
+      };
     }
     const factCutoffs = financialFactCutoffsFromCoverage({
       period: body.period,

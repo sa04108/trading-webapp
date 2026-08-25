@@ -3,9 +3,14 @@ import { get as httpGet, type IncomingMessage } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import type { PreparationInput } from '../../src/server/modules/backtest/application/backtest-preparation-orchestrator.js';
-import { dailySelectionMetrics, symbolFactsState } from '../../src/server/shared/db/schema.js';
+import { dailySelectionMetrics } from '../../src/server/shared/db/schema.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
-import { registerSymbols, seedCorporateActionCoverage, seedDailyBars } from '../helpers/seed.js';
+import {
+  registerSymbols,
+  seedCorporateActionCoverage,
+  seedDailyBars,
+  seedFinancialCoverage,
+} from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 
 // period 가 하루짜리라 rebalanceInterval 값 자체는 무관하다 — DAY 를 써서
@@ -427,19 +432,7 @@ describe('backtest preparation HTTP/SSE', () => {
     ], false);
     registerSymbols(ctx.container, 'KR', ['005930']);
     await seedCorporateActionCoverage(ctx.container, ['005930'], [2025, 2026]);
-    ctx.container.database.db.insert(symbolFactsState).values({
-      code: '005930',
-      coveredYearsJson: JSON.stringify([2025, 2026]),
-      actionCoveredYearsJson: JSON.stringify([2025, 2026]),
-      actionGapYearsJson: JSON.stringify([]),
-      updatedAtMs: ctx.container.clock.now(),
-    }).onConflictDoUpdate({
-      target: symbolFactsState.code,
-      set: {
-        coveredYearsJson: JSON.stringify([2025, 2026]),
-        actionCoveredYearsJson: JSON.stringify([2025, 2026]),
-      },
-    }).run();
+    seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
     const input = previewInput();
     const preparation = {
       ...input,
@@ -496,13 +489,7 @@ describe('backtest preparation HTTP/SSE', () => {
   it('재무 coverage가 있어도 value 전략의 독립된 action coverage가 비면 DART 503이다', async () => {
     await seedReadyUniverse(undefined, false);
     registerSymbols(ctx.container, 'KR', ['005930']);
-    ctx.container.database.db.insert(symbolFactsState).values({
-      code: '005930',
-      coveredYearsJson: JSON.stringify([2025, 2026]),
-      actionCoveredYearsJson: JSON.stringify([]),
-      actionGapYearsJson: JSON.stringify([]),
-      updatedAtMs: ctx.container.clock.now(),
-    }).run();
+    seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
 
     const response = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests/universe-preview',
@@ -519,19 +506,7 @@ describe('backtest preparation HTTP/SSE', () => {
       await seedReadyUniverse();
       registerSymbols(ctx.container, 'KR', ['005930']);
       await seedCorporateActionCoverage(ctx.container, ['005930'], [2025, 2026]);
-      ctx.container.database.db.insert(symbolFactsState).values({
-        code: '005930',
-        coveredYearsJson: JSON.stringify([2025, 2026]),
-        actionCoveredYearsJson: JSON.stringify([2025, 2026]),
-        actionGapYearsJson: JSON.stringify([]),
-        updatedAtMs: ctx.container.clock.now(),
-      }).onConflictDoUpdate({
-        target: symbolFactsState.code,
-        set: {
-          coveredYearsJson: JSON.stringify([2025, 2026]),
-          actionCoveredYearsJson: JSON.stringify([2025, 2026]),
-        },
-      }).run();
+      seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
 
       const response = await ctx.app.inject({
         method: 'POST', url: '/api/v1/backtests/universe-preview',

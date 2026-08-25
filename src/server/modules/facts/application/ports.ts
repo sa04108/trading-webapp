@@ -12,6 +12,16 @@ export interface FactRepository {
   getFacts(query: FactQuery): Promise<Fact[]>;
   saveFacts(facts: readonly Fact[]): Promise<void>;
   /**
+   * 종목·연도의 비자본변동 재무 snapshot을 원자적으로 교체한다. 증분 API 응답에서
+   * 사라진 정정 전 행이나 수동으로 끼어든 stale 행을 남긴 채 새 manifest로 승인하지
+   * 않기 위한 수집 전용 경계다.
+   */
+  replaceSymbolFinancialFactsForYear(
+    symbol: string,
+    year: number,
+    facts: readonly Fact[],
+  ): Promise<void>;
+  /**
    * 종목 하나의 팩트 또는 수집 coverage 보유 여부. 목록 화면의 거친 배지용이다.
    * 제출 검증은 실제 PIT 재무 행과 필수 연도 coverage를 별도로 확인한다(D-069).
    */
@@ -30,6 +40,8 @@ export interface FactIngestionGap {
   readonly symbol: string;
   readonly periodKey: string;
   readonly reason: string;
+  /** BLOCKING은 결과를 왜곡할 수 있어 실행을 막고, INFORMATIONAL은 미사용 계정 등이다. */
+  readonly severity: 'BLOCKING' | 'INFORMATIONAL';
 }
 
 export interface FactIngestionResult {

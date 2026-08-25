@@ -118,8 +118,12 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
       getGapYears: () => new Map<string, readonly number[]>(),
     },
     factCoverage: {
-      getCoveredYears: (codes: readonly string[] = []) => new Map(
-        codes.map((code) => [code, [2020, 2021, 2022, 2023, 2024, 2025, 2026]]),
+      getCoverageState: (codes: readonly string[] = []) => new Map(
+        codes.map((code) => [code, {
+          verifiedYears: [2020, 2021, 2022, 2023, 2024, 2025, 2026],
+          blockingGapYears: [],
+          blockingGapDetails: [],
+        }]),
       ),
     },
     dartDailyCallLimit: 40_000,
@@ -452,7 +456,9 @@ describe('BacktestPreparationOrchestrator 재무 coverage 불변식', () => {
       strategies: new StrategyRegistry(),
       actionCoverage: completeActionCoverage,
       factCoverage: {
-        getCoveredYears: () => new Map([['005930', [2026]]]),
+        getCoverageState: () => new Map([['005930', {
+          verifiedYears: [2026], blockingGapYears: [], blockingGapDetails: [],
+        }]]),
       },
     });
     const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
@@ -472,8 +478,12 @@ describe('BacktestPreparationOrchestrator 재무 coverage 불변식', () => {
       strategies: new StrategyRegistry(),
       actionCoverage: completeActionCoverage,
       factCoverage: {
-        getCoveredYears: (symbols: readonly string[]) => new Map(
-          [...covered].filter(([symbol]) => symbols.includes(symbol)),
+        getCoverageState: (symbols: readonly string[]) => new Map(
+          [...covered]
+            .filter(([symbol]) => symbols.includes(symbol))
+            .map(([symbol, years]) => [symbol, {
+              verifiedYears: years, blockingGapYears: [], blockingGapDetails: [],
+            }]),
         ),
       },
     });

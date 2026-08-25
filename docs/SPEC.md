@@ -626,10 +626,15 @@ coverage가 완전해도 실제 재무 행은 0건일 수 있다. 일부 종목�
 세지 않는다. 검증 직후 이 실행 봉이 사라지면 500으로 실패시키지 않고 409
 `PREPARATION_REQUIRED`로 준비 단계에 되돌린다.
 
-현재 coverage는 “요청 연도 처리를 마쳤다”는 기록이며 파서가 전략 필드를 완전하게 만든
-사실까지 증명하지 않는다. `corp_code` 매핑·재무 파싱 gap이 있어도 coverage가 닫힐 수
-있고, 사후 fact 삭제도 별도 manifest 없이는 탐지할 수 없다. 이 상태는 정상 무공시와
-구분할 수 없으므로 재무 gap protocol/readiness가 추가되기 전까지 부분 보정이다.
+재무 coverage는 versioned protocol로 종목·연도별 비자본변동 fact count/content hash와
+수집 gap을 함께 기록한다. 현재 DB가 manifest와 다르거나 protocol이 없는 구버전이면
+완료로 신뢰하지 않고 재수집한다. `corp_code`·응답 필드·금액·분기 차분 실패 같은
+blocking gap은 coverage 완료 여부와 별도로 실행을 막고, 전략이 소비하지 않는 미매핑
+계정만 informational로 남긴다. 재수집은 해당 연도 재무 snapshot을 원자 교체한다.
+
+이 protocol도 DART의 정상 무자료와 특정 전략 필수 계정의 의미적 누락을 항상 구분하지는
+못한다. 전략별 필수 계정과 연속 분기를 더 엄격히 보증하려면 별도의 required-fields
+readiness 정책이 필요하다.
 
 다른 하나는 자본변동 게이트다(D-043). 아래는 자본변동 게이트를 설명한다.
 

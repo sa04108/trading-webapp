@@ -6,7 +6,6 @@ import {
   dailySelectionMetrics,
   krxDailyBars,
   krxNonTradingDays,
-  symbolFactsState,
   symbolMasterCoverage,
   symbolMasterMarketCaps,
   symbolMasterTradingDays,
@@ -14,7 +13,13 @@ import {
   symbols as symbolsTable,
 } from '../../src/server/shared/db/schema.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
-import { registerSymbols, seedCorporateActionCoverage, seedDailyBars, yearRange } from '../helpers/seed.js';
+import {
+  registerSymbols,
+  seedCorporateActionCoverage,
+  seedDailyBars,
+  seedFinancialCoverage,
+  yearRange,
+} from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 import { startKrxFakeServer, type KrxFakeServer } from '../helpers/krx-fixtures.js';
 
@@ -1189,19 +1194,6 @@ describe('POST /backtests/universe-preview — 3단계 파이프라인 진단 (T
     await seedCorporateActionCoverage(ctx.container, ['X', 'Y'], yearRange(2024, 2025));
 
     // PER stage: X·Y는 순이익이 있어 통과하고, Z는 재무가 전혀 없어 missing 제외된다.
-    // coverage는 세 종목 모두 "시도했다" 로 직접 심어 DART 호출 없이 즉시 해소되게 한다.
-    for (const code of ['X', 'Y', 'Z']) {
-      // X·Y는 위 seedCorporateActionCoverage가 이미 symbol_facts_state 행을 만들어 뒀다
-      // (actionCoveredYearsJson만 채운 채) — 같은 행에 재무 coveredYearsJson만 덧붙인다.
-      ctx.container.database.db
-        .insert(symbolFactsState)
-        .values({ code, coveredYearsJson: JSON.stringify([2024, 2025]), updatedAtMs: ctx.container.clock.now() })
-        .onConflictDoUpdate({
-          target: symbolFactsState.code,
-          set: { coveredYearsJson: JSON.stringify([2024, 2025]), updatedAtMs: ctx.container.clock.now() },
-        })
-        .run();
-    }
     // Z 는 coverage만 있고 fact 행은 없는 "시도했지만 공시 0건" 상태다.
     const netIncomeFacts: Fact[] = ['X', 'Y'].flatMap((symbol) =>
       [40, 30, 20, 10].map((value, offset) => ({
@@ -1219,6 +1211,9 @@ describe('POST /backtests/universe-preview — 3단계 파이프라인 진단 (T
       { scope: 'SYMBOL', key: 'Y', field: 'TOTAL_EQUITY', periodKey: '2025Q1', asOfTsMs: Date.parse('2025-01-01T00:00:00Z'), value: 400, unit: 'KRW' },
     ];
     await ctx.container.factRepository.saveFacts([...netIncomeFacts, ...equityFacts]);
+    // manifest는 저장된 snapshot으로 만들어야 한다. coverage부터 심고 뒤에서 fact를
+    // 넣는 순서는 운영에서는 불가능하며 새 무결성 검사가 정확히 stale로 판정한다.
+    seedFinancialCoverage(ctx.container, ['X', 'Y', 'Z'], [2024, 2025]);
   });
 
   afterEach(async () => {

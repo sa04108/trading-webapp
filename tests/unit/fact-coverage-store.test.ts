@@ -3,6 +3,7 @@ import { SqliteFactCoverageStore } from '../../src/server/modules/facts/applicat
 import { openDatabase } from '../../src/server/shared/db/database.js';
 import {
   dartFinancialFilingReceipts,
+  facts,
   symbolFactsState,
   symbols as symbolsTable,
 } from '../../src/server/shared/db/schema.js';
@@ -126,6 +127,103 @@ describe('SqliteFactCoverageStore', () => {
       )
       .run('005930', '{not json', 1);
     expect(store.getCoveredYears().get('005930')).toEqual([]);
+    database.close();
+  });
+
+  it('legacy covered 연도는 manifest가 없어 검증 완료로 신뢰하지 않는다', () => {
+    const { store, database } = setup();
+    database.db.insert(symbolFactsState).values({
+      code: '005930',
+      coveredYearsJson: '[2024,2025]',
+      updatedAtMs: 1,
+      financialUpdatedAtMs: 1,
+    }).run();
+
+    expect(store.getCoveredYears().get('005930')).toEqual([]);
+    database.close();
+  });
+
+  it('기록 당시 재무 snapshot과 일치할 때만 연도를 검증 완료로 돌려준다', () => {
+    const { store, database } = setup();
+    database.db.insert(facts).values({
+      scope: 'SYMBOL',
+      key: '005930',
+      field: 'NET_INCOME',
+      periodKey: '2025Q1',
+      asOfTsMs: 10,
+      value: 100,
+      unit: 'KRW',
+    }).run();
+    store.addCoverageResult('005930', [2025], [], 100);
+    expect(store.getCoveredYears().get('005930')).toEqual([2025]);
+
+    database.sqlite.prepare(
+      "UPDATE facts SET value = 101 WHERE scope = 'SYMBOL' AND key = '005930' AND field = 'NET_INCOME'",
+    ).run();
+    expect(store.getCoveredYears().get('005930')).toEqual([]);
+    database.close();
+  });
+
+  it('재무 행 추가·삭제도 manifest 훼손으로 감지하고 자본변동 변경은 제외한다', () => {
+    const { store, database } = setup();
+    database.db.insert(facts).values({
+      scope: 'SYMBOL', key: '005930', field: 'NET_INCOME', periodKey: '2025Q1',
+      asOfTsMs: 10, value: 100, unit: 'KRW',
+    }).run();
+    store.addCoverageResult('005930', [2025], [], 100);
+
+    database.db.insert(facts).values({
+      scope: 'SYMBOL', key: '005930', field: 'CURRENT_ASSETS', periodKey: '2025Q1',
+      asOfTsMs: 10, value: 200, unit: 'KRW',
+    }).run();
+    expect(store.getCoveredYears().get('005930')).toEqual([]);
+
+    store.addCoverageResult('005930', [2025], [], 200);
+    database.sqlite.prepare(
+      "DELETE FROM facts WHERE scope = 'SYMBOL' AND key = '005930' AND field = 'CURRENT_ASSETS'",
+    ).run();
+    expect(store.getCoveredYears().get('005930')).toEqual([]);
+
+    store.addCoverageResult('005930', [2025], [], 300);
+    database.db.insert(facts).values({
+      scope: 'SYMBOL', key: '005930', field: 'SPLIT_RATIO',
+      periodKey: '2025-03-14', asOfTsMs: 11, value: 2, unit: 'RATIO',
+    }).run();
+    expect(store.getCoveredYears().get('005930')).toEqual([2025]);
+    database.close();
+  });
+
+  it('blocking gap은 검증 연도를 실행 불가로 표시하고 informational gap은 막지 않는다', () => {
+    const { store, database } = setup();
+    store.addCoverageResult('005930', [2024], [{
+      symbol: '005930', periodKey: '2024Q1', reason: '금액 파싱 실패', severity: 'BLOCKING',
+    }], 100);
+    store.addCoverageResult('005930', [2025], [{
+      symbol: '005930', periodKey: '2025Q1', reason: '매핑되지 않은 계정',
+      severity: 'INFORMATIONAL',
+    }], 200);
+
+    expect(store.getCoverageState(['005930']).get('005930')).toEqual({
+      verifiedYears: [2024, 2025],
+      blockingGapYears: [2024],
+      blockingGapDetails: [{ year: 2024, examples: ['2024Q1: 금액 파싱 실패'] }],
+    });
+    database.close();
+  });
+
+  it('다시 기록하면 현재 snapshot manifest를 만들고 해결된 gap을 지운다', () => {
+    const { store, database } = setup();
+    store.addCoverageResult('005930', [2025], [{
+      symbol: '005930', periodKey: '-', reason: 'corp_code 없음', severity: 'BLOCKING',
+    }], 100);
+    expect(store.getCoverageState().get('005930')?.blockingGapYears).toEqual([2025]);
+
+    store.addCoverageResult('005930', [2025], [], 200);
+    expect(store.getCoverageState().get('005930')).toEqual({
+      verifiedYears: [2025],
+      blockingGapYears: [],
+      blockingGapDetails: [],
+    });
     database.close();
   });
 });

@@ -15,10 +15,21 @@ const universeRule: BacktestRequest['universeRule'] = {
 const request: Pick<BacktestRequest, 'period' | 'universeRule'> = { period, universeRule };
 const registry = new StrategyRegistry();
 
-function coverage(entries: Readonly<Record<string, readonly number[]>>) {
+function coverage(
+  entries: Readonly<Record<string, readonly number[]>>,
+  blocking: Readonly<Record<string, readonly number[]>> = {},
+) {
   return {
-    getCoveredYears: (codes?: readonly string[]) => new Map(
-      Object.entries(entries).filter(([code]) => codes === undefined || codes.includes(code)),
+    getCoverageState: (codes?: readonly string[]) => new Map(
+      Object.entries(entries)
+        .filter(([code]) => codes === undefined || codes.includes(code))
+        .map(([code, years]) => [code, {
+          verifiedYears: years,
+          blockingGapYears: blocking[code] ?? [],
+          blockingGapDetails: (blocking[code] ?? []).map((year) => ({
+            year, examples: [`${year}Q1: 파서 실패`],
+          })),
+        }]),
     ),
   };
 }
@@ -37,6 +48,7 @@ describe('findFinancialCoverageGap', () => {
     });
 
     expect(gap).toEqual({
+      kind: 'MISSING_OR_CORRUPT',
       fromYear: 2024,
       toYear: 2025,
       missingSymbols: ['000660'],
@@ -74,6 +86,7 @@ describe('findFinancialCoverageGap', () => {
       symbols: ['005930'],
       coverage: coverage({ '005930': [2024] }),
     })).toEqual({
+      kind: 'MISSING_OR_CORRUPT',
       fromYear: 2025,
       toYear: 2025,
       missingSymbols: ['005930'],
@@ -94,6 +107,7 @@ describe('findFinancialCoverageGap', () => {
       symbols: ['005930'],
       coverage: coverage({ '005930': [2025] }),
     })).toEqual({
+      kind: 'MISSING_OR_CORRUPT',
       fromYear: 2024,
       toYear: 2025,
       missingSymbols: ['005930'],
@@ -114,9 +128,32 @@ describe('findFinancialCoverageGap', () => {
       symbols: ['005930'],
       coverage: coverage({ '005930': [2025] }),
     })).toEqual({
+      kind: 'MISSING_OR_CORRUPT',
       fromYear: 2024,
       toYear: 2025,
       missingSymbols: ['005930'],
     });
+  });
+
+  it('검증된 연도라도 blocking DART gap이 있으면 실행을 막는다', () => {
+    const gap = findFinancialCoverageGap({
+      request,
+      strategy: registry.get('value-quality-rank')!,
+      symbols: ['005930', '000660'],
+      coverage: coverage(
+        { '005930': [2024, 2025], '000660': [2024, 2025] },
+        { '000660': [2024] },
+      ),
+    });
+
+    expect(gap).toEqual({
+      kind: 'BLOCKING_INGESTION_GAP',
+      fromYear: 2024,
+      toYear: 2025,
+      affected: [{
+        symbol: '000660', years: [2024], examples: ['2024Q1: 파서 실패'],
+      }],
+    });
+    expect(financialCoverageGapMessage(gap!)).toContain('원천·파서 gap');
   });
 });

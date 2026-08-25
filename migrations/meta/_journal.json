@@ -204,6 +204,13 @@
       "when": 1787607282688,
       "tag": "0028_complex_johnny_storm",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "6",
+      "when": 1787622285173,
+      "tag": "0029_equal_hobgoblin",
+      "breakpoints": true
     }
   ]
 }

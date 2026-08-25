@@ -1,8 +1,8 @@
-import { and, asc, eq, inArray, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, like, lte, ne, sql } from 'drizzle-orm';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import { facts as factRows, symbolFactsState } from '../../../shared/db/schema.js';
 import { SYMBOL_PATTERN } from '../../market-data/domain/candle.js';
-import type { Fact } from '../domain/fact.js';
+import { CORPORATE_ACTION_FIELD, type Fact } from '../domain/fact.js';
 import type { FactQuery, FactRepository } from '../application/ports.js';
 
 // 7개 컬럼을 쓰므로 SQLite의 보수적인 999 bind 한도 아래에서 자른다.
@@ -15,23 +15,7 @@ export class SqliteFactRepository implements FactRepository {
 
   async saveFacts(facts: readonly Fact[]): Promise<void> {
     if (facts.length === 0) return;
-    for (const fact of facts) {
-      if (fact.scope === 'SYMBOL' && !SYMBOL_PATTERN.test(fact.key)) {
-        throw new Error(`invalid symbol key: ${fact.key}`);
-      }
-      if (!Number.isFinite(fact.value)) {
-        throw new Error(
-          `팩트 값이 유한하지 않습니다: key=${fact.key}, field=${fact.field}, `
-            + `periodKey=${fact.periodKey}, value=${fact.value}`,
-        );
-      }
-      if (!Number.isFinite(fact.asOfTsMs)) {
-        throw new Error(
-          `팩트 asOfTsMs가 유한하지 않습니다: key=${fact.key}, field=${fact.field}, `
-            + `periodKey=${fact.periodKey}, asOfTsMs=${fact.asOfTsMs}`,
-        );
-      }
-    }
+    validateFacts(facts);
 
     this.db.transaction((tx) => {
       for (let index = 0; index < facts.length; index += WRITE_BATCH_SIZE) {
@@ -48,6 +32,45 @@ export class SqliteFactRepository implements FactRepository {
             set: { value: sql`excluded.value`, unit: sql`excluded.unit` },
           })
           .run();
+      }
+    });
+  }
+
+  async replaceSymbolFinancialFactsForYear(
+    symbol: string,
+    year: number,
+    facts: readonly Fact[],
+  ): Promise<void> {
+    if (!SYMBOL_PATTERN.test(symbol)) throw new Error(`invalid symbol key: ${symbol}`);
+    if (!Number.isInteger(year) || year < 1900 || year > 2200) {
+      throw new Error(`invalid financial fact year: ${year}`);
+    }
+    validateFacts(facts);
+    const prefix = String(year);
+    for (const fact of facts) {
+      if (
+        fact.scope !== 'SYMBOL'
+        || fact.key !== symbol
+        || fact.field === CORPORATE_ACTION_FIELD
+        || !fact.periodKey.startsWith(prefix)
+      ) {
+        throw new Error(
+          `재무 snapshot 범위를 벗어난 팩트입니다: ${fact.scope}/${fact.key}/${fact.field}/${fact.periodKey}`,
+        );
+      }
+    }
+
+    this.db.transaction((tx) => {
+      tx.delete(factRows)
+        .where(and(
+          eq(factRows.scope, 'SYMBOL'),
+          eq(factRows.key, symbol),
+          ne(factRows.field, CORPORATE_ACTION_FIELD),
+          like(factRows.periodKey, `${year}%`),
+        ))
+        .run();
+      for (let index = 0; index < facts.length; index += WRITE_BATCH_SIZE) {
+        tx.insert(factRows).values(facts.slice(index, index + WRITE_BATCH_SIZE)).run();
       }
     });
   }
@@ -118,6 +141,26 @@ export class SqliteFactRepository implements FactRepository {
       codes.add(row.code);
     }
     return codes;
+  }
+}
+
+function validateFacts(facts: readonly Fact[]): void {
+  for (const fact of facts) {
+    if (fact.scope === 'SYMBOL' && !SYMBOL_PATTERN.test(fact.key)) {
+      throw new Error(`invalid symbol key: ${fact.key}`);
+    }
+    if (!Number.isFinite(fact.value)) {
+      throw new Error(
+        `팩트 값이 유한하지 않습니다: key=${fact.key}, field=${fact.field}, `
+          + `periodKey=${fact.periodKey}, value=${fact.value}`,
+      );
+    }
+    if (!Number.isFinite(fact.asOfTsMs)) {
+      throw new Error(
+        `팩트 asOfTsMs가 유한하지 않습니다: key=${fact.key}, field=${fact.field}, `
+          + `periodKey=${fact.periodKey}, asOfTsMs=${fact.asOfTsMs}`,
+      );
+    }
   }
 }
 

@@ -1541,11 +1541,16 @@
 - **버전:** 준비 의미가 바뀌어 plan 버전을 4.0.0으로 올리고 이전 완료 preview를 재사용하지
   않는다. 새 외부 API나 추가 원천 데이터는 쓰지 않고 기존 `symbol_facts_state`와 SQLite
   `facts`를 사용한다.
-- **상태 — 부분 수정:** 이 결정은 coverage metadata 자체가 빠진 종목·연도와 마지막 실행
-  봉 뒤 공시의 거짓 양성을 막는다. 그러나 현재 수집기는 `corp_code` 매핑·재무 파싱 gap이
-  있어도 연도 coverage를 닫을 수 있어, 그 상태와 정상 무공시를 기존 metadata만으로 구분할
-  수 없다. 또한 coverage를 남긴 뒤 fact 일부가 삭제된 손상도 탐지하지 못한다.
-- **남은 고난도 무결성 문제:** gap을 전략 영향 필드별 blocking/informational로 분류하고,
-  검증 protocol 버전·종목/연도별 gap 및 fact count/hash manifest를 저장해야 한다. 구버전
-  coverage는 검증되지 않은 것으로 취급해 DART 재수집/backfill해야 하므로 호출량이 클 수
-  있다. 전략 필수 계정과 연속 분기까지 보증하려면 required-fields/readiness 계약도 필요하다.
+- **수집 무결성 protocol:** 종목·연도별 비자본변동 fact count/content hash와 수집 gap을
+  `financial_coverage_protocol_json`에 기록한다. 실제 행과 manifest가 다르거나 protocol이
+  없는 구버전 coverage는 완료로 신뢰하지 않고 재수집한다. 수집은 현재 연도 재무 snapshot을
+  원자 교체해 정정 뒤 사라진 stale 행도 남기지 않는다. 원천·필드·금액·분기 차분 실패는
+  blocking, 전략이 소비하지 않는 미매핑 계정은 informational로 분류한다. blocking gap은
+  완료 여부와 별도로 모든 제출·worker에서 422로 차단한다.
+- **배포·복구 영향:** migration 직후 기존 coverage에는 protocol이 없어 해당 종목·연도가
+  한 번 다시 DART 수집 대상이 되므로 호출량이 클 수 있다. 지속적인 blocking gap은 같은
+  준비 실행에서 무한 재호출하지 않는다. 원천·파서를 고친 배포는 protocol version을 올려
+  해당 결과를 다시 검증해야 한다.
+- **남은 의미적 한계:** manifest는 “수집기가 저장한 snapshot과 현재 DB가 같은가”를
+  증명하지만, 정상 무공시와 특정 전략 필수 계정의 실제 누락을 완전히 구분하지는 못한다.
+  이를 더 엄격히 하려면 전략별 required-fields·연속 분기 readiness 정책이 필요하다.

@@ -1318,6 +1318,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       scope: 'SYMBOL', key: '005930', field: 'NET_INCOME', periodKey: '2026Q4',
       asOfTsMs: Date.parse('2027-01-01T00:00:00Z'), value: 2, unit: 'KRW',
     }]);
+    seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
     const after = await ctx.app.inject({
       method: 'GET', url: `/api/v1/backtests/${sourceId}/clone-draft`, cookies: { qp_session: cookie },
     });
@@ -1827,6 +1828,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     ctx.container.database.db.delete(facts)
       .where(and(eq(facts.key, '005930'), eq(facts.field, 'NET_INCOME')))
       .run();
+    // coverage 무결성 단계는 다시 닫아 두고, 그 다음의 실제 PIT fact 관문이 비어 있는
+    // snapshot을 막는지 확인한다.
+    seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
     expect(ctx.container.jobQueue.setStatus(child.id, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
     ctx.container.seedCloneBatchService.pump();
 

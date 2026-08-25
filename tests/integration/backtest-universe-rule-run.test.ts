@@ -1252,27 +1252,16 @@ describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepar
             });
           }
         }
-        const nowMs = ctx.container.clock.now();
-        const existing = ctx.container.database.db
-          .select()
-          .from(symbolFactsState)
-          .where(eq(symbolFactsState.code, symbol))
-          .get();
-        const coveredYearsJson = JSON.stringify([2024, 2025]);
-        if (existing) {
-          ctx.container.database.db
-            .update(symbolFactsState)
-            .set({ coveredYearsJson, updatedAtMs: nowMs })
-            .where(eq(symbolFactsState.code, symbol))
-            .run();
-        } else {
-          ctx.container.database.db
-            .insert(symbolFactsState)
-            .values({ code: symbol, coveredYearsJson, updatedAtMs: nowMs })
-            .run();
-        }
       }
       if (facts.length > 0) await ctx.container.factRepository.saveFacts(facts);
+      for (const symbol of request.symbols) {
+        ctx.container.factCoverageStore.addCoverageResult(
+          symbol,
+          [2024, 2025],
+          [],
+          ctx.container.clock.now(),
+        );
+      }
       return { savedFacts: facts.length, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null };
     }) as typeof ctx.container.factSyncService.sync;
   }

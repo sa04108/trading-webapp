@@ -26,6 +26,11 @@ function fakeCoverage(
   initialUpdatedAtMs: ReadonlyMap<string, number> = new Map(),
 ): FactCoverageStore & {
   added: Array<{ symbol: string; years: readonly number[] }>;
+  results: Array<{
+    symbol: string;
+    years: readonly number[];
+    gaps: readonly import('../../src/server/modules/facts/application/ports.js').FactIngestionGap[];
+  }>;
   processedReceiptNos: Set<string>;
 } {
   const store = new Map<string, number[]>(
@@ -37,11 +42,36 @@ function fakeCoverage(
     if (!updatedAt.has(symbol)) updatedAt.set(symbol, 0);
   }
   const added: Array<{ symbol: string; years: readonly number[] }> = [];
+  const results: Array<{
+    symbol: string;
+    years: readonly number[];
+    gaps: readonly import('../../src/server/modules/facts/application/ports.js').FactIngestionGap[];
+  }> = [];
   const processedReceiptNos = new Set<string>();
+  const add = (symbol: string, years: readonly number[], nowMs: number): void => {
+    if (years.length === 0) return;
+    added.push({ symbol, years: [...years] });
+    updatedAt.set(symbol, nowMs);
+    store.set(
+      symbol,
+      [...new Set([...(store.get(symbol) ?? []), ...years])].sort((a, b) => a - b),
+    );
+  };
   return {
     added,
+    results,
     processedReceiptNos,
     getCoveredYears: () => new Map([...store].map(([symbol, years]) => [symbol, [...years]])),
+    getCoverageState: () => new Map([...store].map(([symbol, years]) => [symbol, {
+      verifiedYears: [...years],
+      blockingGapYears: results
+        .filter((result) => result.symbol === symbol)
+        .flatMap((result) => result.years.filter((year) => result.gaps.some(
+          (gap) => gap.severity === 'BLOCKING'
+            && (!/^\d{4}/.test(gap.periodKey) || Number(gap.periodKey.slice(0, 4)) === year),
+        ))),
+      blockingGapDetails: [],
+    }])),
     getUpdatedAtMs: (codes) =>
       new Map([...updatedAt].filter(([symbol]) => codes.includes(symbol))),
     getProcessedFilingReceiptNos: (receiptNos) =>
@@ -49,14 +79,10 @@ function fakeCoverage(
     addProcessedFilings: (filings) => {
       for (const filing of filings) processedReceiptNos.add(filing.receiptNo);
     },
-    addCoveredYears: (symbol, years, nowMs) => {
-      if (years.length === 0) return;
-      added.push({ symbol, years: [...years] });
-      updatedAt.set(symbol, nowMs);
-      store.set(
-        symbol,
-        [...new Set([...(store.get(symbol) ?? []), ...years])].sort((a, b) => a - b),
-      );
+    addCoveredYears: add,
+    addCoverageResult: (symbol, years, gaps, nowMs) => {
+      results.push({ symbol, years: [...years], gaps: [...gaps] });
+      add(symbol, years, nowMs);
     },
   };
 }
@@ -200,6 +226,7 @@ function fakeRepository(): FactRepository & {
       return out;
     },
     saveFacts: async (facts) => {
+      if (facts.length === 0) return;
       saved.push({ facts });
       for (const fact of facts) {
         const partitionKey = `${fact.scope}:${fact.key}`;
@@ -211,7 +238,25 @@ function fakeRepository(): FactRepository & {
         store.set(partitionKey, partition);
       }
     },
-    hasFacts: (datasetId, scope) => (store.get(`${datasetId}:${scope}`)?.size ?? 0) > 0,
+    replaceSymbolFinancialFactsForYear: async (symbol, year, facts) => {
+      const partitionKey = `SYMBOL:${symbol}`;
+      const partition = store.get(partitionKey) ?? new Map<string, Fact>();
+      for (const [key, existing] of partition) {
+        if (
+          existing.field !== CORPORATE_ACTION_FIELD
+          && existing.periodKey.startsWith(String(year))
+        ) partition.delete(key);
+      }
+      saved.push({ facts });
+      for (const fact of facts) {
+        partition.set(
+          JSON.stringify([fact.key, fact.field, fact.periodKey, fact.asOfTsMs]),
+          fact,
+        );
+      }
+      store.set(partitionKey, partition);
+    },
+    hasFacts: (scope, key) => (store.get(`${scope}:${key}`)?.size ?? 0) > 0,
     // 같은 store 에서 답한다 — hasFacts 와 갈라지면 가짜가 실물과 다른 규칙을 갖는다
     symbolsWithFacts: () =>
       new Set(
@@ -226,11 +271,15 @@ describe('FactSyncService', () => {
   it('두 소스의 gap 합집합이 리포트에 도달한다', async () => {
     const financials: FactIngestionResult = {
       facts: [fact('CURRENT_ASSETS', 1)],
-      gaps: [{ symbol: '005930', periodKey: '2025Q1', reason: '재무 gap' }],
+      gaps: [{
+        symbol: '005930', periodKey: '2025Q1', reason: '재무 gap', severity: 'BLOCKING',
+      }],
     };
     const actions: FactIngestionResult = {
       facts: [fact('SPLIT_RATIO', 2)],
-      gaps: [{ symbol: '005930', periodKey: '2025-03-14', reason: '자본변동 gap' }],
+      gaps: [{
+        symbol: '005930', periodKey: '2025-03-14', reason: '자본변동 gap', severity: 'BLOCKING',
+      }],
     };
     const repository = fakeRepository();
     const service = new FactSyncService(
@@ -255,7 +304,7 @@ describe('FactSyncService', () => {
     expect(report.gaps.map((gap) => gap.reason).sort()).toEqual(['자본변동 gap', '재무 gap'].sort());
   });
 
-  it('saveFacts 는 두 소스의 팩트 합집합을 받는다', async () => {
+  it('재무 snapshot 교체와 자본변동 저장을 각 경계로 나눈다', async () => {
     const financials: FactIngestionResult = { facts: [fact('CURRENT_ASSETS', 1)], gaps: [] };
     const actions: FactIngestionResult = { facts: [fact('SPLIT_RATIO', 2)], gaps: [] };
     const repository = fakeRepository();
@@ -278,10 +327,11 @@ describe('FactSyncService', () => {
     });
 
     expect(report.savedFacts).toBe(2);
-    expect(repository.saved).toHaveLength(1);
-    expect(repository.saved[0]?.facts.map((f) => f.field).sort()).toEqual(
-      ['CURRENT_ASSETS', 'SPLIT_RATIO'].sort(),
-    );
+    expect(repository.saved).toHaveLength(2);
+    expect(repository.saved.map((entry) => entry.facts.map((fact) => fact.field))).toEqual([
+      ['CURRENT_ASSETS'],
+      ['SPLIT_RATIO'],
+    ]);
   });
 
   it('양쪽 소스 모두 비어 있으면 저장도 gap 도 0건이다', async () => {
@@ -349,11 +399,15 @@ describe('FactSyncService', () => {
   it('재무 gap 은 자본변동 커버리지에 섞이지 않는다', async () => {
     const financials: FactIngestionResult = {
       facts: [],
-      gaps: [{ symbol: '005930', periodKey: '2020Q1', reason: '재무 gap' }],
+      gaps: [{
+        symbol: '005930', periodKey: '2020Q1', reason: '재무 gap', severity: 'BLOCKING',
+      }],
     };
     const actions: FactIngestionResult = {
       facts: [],
-      gaps: [{ symbol: '005930', periodKey: '2025-03-14', reason: '자본변동 gap' }],
+      gaps: [{
+        symbol: '005930', periodKey: '2025-03-14', reason: '자본변동 gap', severity: 'BLOCKING',
+      }],
     };
     const actionCoverage = fakeActionCoverage();
     const service = new FactSyncService(
@@ -375,6 +429,124 @@ describe('FactSyncService', () => {
     });
 
     expect(actionCoverage.getGapYears().get('005930')).toEqual([2025]);
+  });
+
+  it('현재 연도 재무 snapshot만 교체하고 전년도 주식수 앵커는 저장하지 않는다', async () => {
+    const repository = fakeRepository();
+    await repository.saveFacts([
+      fact('CURRENT_ASSETS', 1),
+      { ...fact('SHARES_OUTSTANDING', 90), periodKey: '2024Q4', unit: 'SHARES' },
+    ]);
+    repository.saved.length = 0;
+    const financials: FactIngestionResult = {
+      facts: [
+        { ...fact('SHARES_OUTSTANDING', 100), periodKey: '2024Q4', unit: 'SHARES' },
+        fact('NET_INCOME', 10),
+      ],
+      gaps: [],
+    };
+    const service = new FactSyncService(
+      fakeSource(financials, { facts: [], gaps: [] }),
+      repository,
+      LOGGER,
+      fakeVersions(),
+      CLOCK,
+      fakeCoverage(),
+      fakeActionCoverage(),
+    );
+
+    const report = await service.sync({
+      symbols: ['005930'], fromYear: 2025, toYear: 2025, consolidated: true, mode: 'FULL',
+    });
+    const stored = await repository.getFacts({ scope: 'SYMBOL', keys: ['005930'] });
+
+    expect(report.savedFacts).toBe(1);
+    expect(stored.map((row) => `${row.field}:${row.periodKey}:${row.value}`).sort()).toEqual([
+      'NET_INCOME:2025Q1:10',
+      'SHARES_OUTSTANDING:2024Q4:90',
+    ]);
+  });
+
+  it('현재 연도의 재무 gap과 severity를 coverage manifest에 전달한다', async () => {
+    const coverage = fakeCoverage();
+    const financials: FactIngestionResult = {
+      facts: [],
+      gaps: [
+        { symbol: '005930', periodKey: '2024Q4', reason: '앵커 정보', severity: 'BLOCKING' },
+        { symbol: '005930', periodKey: '2025Q1', reason: '파서 실패', severity: 'BLOCKING' },
+        {
+          symbol: '005930', periodKey: '2025Q1', reason: '미사용 계정',
+          severity: 'INFORMATIONAL',
+        },
+      ],
+    };
+    const service = new FactSyncService(
+      fakeSource(financials, { facts: [], gaps: [] }),
+      fakeRepository(),
+      LOGGER,
+      fakeVersions(),
+      CLOCK,
+      coverage,
+      fakeActionCoverage(),
+    );
+
+    await service.sync({
+      symbols: ['005930'], fromYear: 2025, toYear: 2025, consolidated: true, mode: 'FULL',
+    });
+
+    expect(coverage.results[0]?.gaps.map((gap) => gap.reason)).toEqual([
+      '파서 실패', '미사용 계정',
+    ]);
+    expect(coverage.getCoverageState().get('005930')?.blockingGapYears).toEqual([2025]);
+  });
+
+  it('재무 소스가 요청·앵커 연도 밖 팩트를 반환하면 저장과 coverage를 모두 중단한다', async () => {
+    const repository = fakeRepository();
+    const coverage = fakeCoverage();
+    const service = new FactSyncService(
+      fakeSource(
+        { facts: [{ ...fact('NET_INCOME', 1), periodKey: '2023Q4' }], gaps: [] },
+        { facts: [], gaps: [] },
+      ),
+      repository,
+      LOGGER,
+      fakeVersions(),
+      CLOCK,
+      coverage,
+      fakeActionCoverage(),
+    );
+
+    const report = await service.sync({
+      symbols: ['005930'], fromYear: 2025, toYear: 2025, consolidated: true, mode: 'FULL',
+    });
+
+    expect(report.stopReason).toBe('ERROR');
+    expect(report.failureMessage).toContain('재무 응답이 요청 범위를 벗어났습니다');
+    expect(await repository.getFacts({ scope: 'SYMBOL' })).toEqual([]);
+    expect(coverage.getCoveredYears().size).toBe(0);
+  });
+
+  it('자본변동 소스가 일반 재무 팩트를 반환하면 저장과 coverage를 모두 중단한다', async () => {
+    const repository = fakeRepository();
+    const actionCoverage = fakeActionCoverage();
+    const service = new FactSyncService(
+      fakeSource({ facts: [], gaps: [] }, { facts: [fact('NET_INCOME', 1)], gaps: [] }),
+      repository,
+      LOGGER,
+      fakeVersions(),
+      CLOCK,
+      fakeCoverage(),
+      actionCoverage,
+    );
+
+    const report = await service.syncCorporateActions({
+      symbols: ['005930'], fromYear: 2025, toYear: 2025, consolidated: true, mode: 'FULL',
+    });
+
+    expect(report.stopReason).toBe('ERROR');
+    expect(report.failureMessage).toContain('자본변동 응답이 요청 범위를 벗어났습니다');
+    expect(await repository.getFacts({ scope: 'SYMBOL' })).toEqual([]);
+    expect(actionCoverage.getCoveredYears().size).toBe(0);
   });
 });
 
@@ -914,7 +1086,8 @@ describe('FactSyncService — 증분과 취소', () => {
     let saveCalls = 0;
     const repository: FactRepository = {
       getFacts: async () => [],
-      saveFacts: async () => {
+      saveFacts: async () => {},
+      replaceSymbolFinancialFactsForYear: async () => {
         saveCalls += 1;
         // 두 번째 종목에서 DB 쓰기가 실패한다.
         if (saveCalls === 2) throw new Error('fact 쓰기 실패');
@@ -950,11 +1123,13 @@ describe('FactSyncService — 증분과 취소', () => {
 
   it('저장 뒤 coverage 갱신이 실패해도 이미 저장된 팩트와 gap을 리포트에 센다', async () => {
     const repository = fakeRepository();
-    const gap = { symbol: '005930', periodKey: '2025Q1', reason: '계정 누락' };
+    const gap = {
+      symbol: '005930', periodKey: '2025Q1', reason: '계정 누락', severity: 'BLOCKING' as const,
+    };
     const baseCoverage = fakeCoverage();
     const failingCoverage: FactCoverageStore = {
       ...baseCoverage,
-      addCoveredYears: () => {
+      addCoverageResult: () => {
         throw new Error('coverage 쓰기 실패');
       },
     };
@@ -1637,7 +1812,12 @@ describe('FactSyncService — 자본변동 전용 수집', () => {
       fetchCorporateActions: () =>
         Promise.resolve({
           facts: [],
-          gaps: [{ symbol: '005930', periodKey: '2025-03-14', reason: '자본변동 gap' }],
+          gaps: [{
+            symbol: '005930',
+            periodKey: '2025-03-14',
+            reason: '자본변동 gap',
+            severity: 'BLOCKING',
+          }],
         }),
       listRecentPeriodicFilings: async () => [],
     };
@@ -1666,6 +1846,7 @@ describe('FactSyncService — 자본변동 전용 수집', () => {
           symbol: '005930',
           periodKey: '-',
           reason: 'DART corp_code 매핑에 없는 종목코드입니다',
+          severity: 'BLOCKING',
         }],
       }),
       listRecentPeriodicFilings: async () => [],
@@ -1714,7 +1895,9 @@ describe('FactSyncService — 자본변동 전용 수집', () => {
         fetchCalls += 1;
         return Promise.resolve({
           facts: [],
-          gaps: [{ symbol: '005930', periodKey: '-', reason: '날짜 필드 누락' }],
+          gaps: [{
+            symbol: '005930', periodKey: '-', reason: '날짜 필드 누락', severity: 'BLOCKING',
+          }],
         });
       },
       listRecentPeriodicFilings: async () => [],
@@ -1745,7 +1928,12 @@ describe('FactSyncService — 자본변동 전용 수집', () => {
       fetchCorporateActions: () =>
         Promise.resolve({
           facts: [],
-          gaps: [{ symbol: '005930', periodKey: '2025-03-14', reason: '자본변동 gap' }],
+          gaps: [{
+            symbol: '005930',
+            periodKey: '2025-03-14',
+            reason: '자본변동 gap',
+            severity: 'BLOCKING',
+          }],
         }),
       listRecentPeriodicFilings: async () => [],
     };
@@ -1781,8 +1969,18 @@ describe('FactSyncService — 자본변동 전용 수집', () => {
         Promise.resolve({
           facts: [],
           gaps: [
-            { symbol: '005930', periodKey: '2017-05-10', reason: '직전 발행주식수를 찾을 수 없습니다' },
-            { symbol: '005930', periodKey: '2025-03-14', reason: '자본변동 gap' },
+            {
+              symbol: '005930',
+              periodKey: '2017-05-10',
+              reason: '직전 발행주식수를 찾을 수 없습니다',
+              severity: 'BLOCKING',
+            },
+            {
+              symbol: '005930',
+              periodKey: '2025-03-14',
+              reason: '자본변동 gap',
+              severity: 'BLOCKING',
+            },
           ],
         }),
       listRecentPeriodicFilings: async () => [],

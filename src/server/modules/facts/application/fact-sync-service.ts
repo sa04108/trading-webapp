@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { Clock } from '../../../shared/clock.js';
 import type { Logger } from '../../../shared/logger.js';
 import { addCalendarDays, kstDateOf } from '../../market-data/domain/kst-date.js';
-import type { Fact } from '../domain/fact.js';
+import { CORPORATE_ACTION_FIELD, type Fact } from '../domain/fact.js';
 import {
   planFactSync,
   type FactSyncMode,
@@ -119,14 +119,17 @@ interface SyncStrategy {
     scoped: FetchFinancialsRequest,
     sourceHooks: FactSourceRequestHooks,
   ): Promise<{
-    facts: readonly Fact[];
+    financialFacts: readonly Fact[];
+    actionFacts: readonly Fact[];
     gaps: readonly FactIngestionGap[];
+    financialGaps: readonly FactIngestionGap[];
     actionGaps: readonly FactIngestionGap[];
   }>;
   /** 팩트 저장·버전·공시 체크포인트 성공 뒤에만 수집 완료 연도를 기록한다. */
   recordCoverage(
     symbol: string,
     years: readonly number[],
+    financialGaps: readonly FactIngestionGap[],
     actionGapYears: readonly number[],
     nowMs: number,
   ): void;
@@ -167,6 +170,49 @@ function uniqueYearsFromGaps(
     else if (fallbackYear !== undefined) years.add(fallbackYear);
   }
   return [...years].sort((a, b) => a - b);
+}
+
+function factPeriodYear(fact: Fact): number | null {
+  const match = /^(\d{4})/.exec(fact.periodKey);
+  if (!match) return null;
+  const year = Number(match[1]);
+  return Number.isInteger(year) ? year : null;
+}
+
+function assertFetchedFactScopes(
+  symbol: string,
+  shareYears: readonly number[],
+  financialFacts: readonly Fact[],
+  actionFacts: readonly Fact[],
+): void {
+  const allowedFinancialYears = new Set(shareYears);
+  for (const fact of financialFacts) {
+    const year = factPeriodYear(fact);
+    if (
+      fact.scope !== 'SYMBOL'
+      || fact.key !== symbol
+      || fact.field === CORPORATE_ACTION_FIELD
+      || year === null
+      || !allowedFinancialYears.has(year)
+    ) {
+      throw new Error(
+        `DART 재무 응답이 요청 범위를 벗어났습니다: `
+          + `${fact.scope}/${fact.key}/${fact.field}/${fact.periodKey}`,
+      );
+    }
+  }
+  for (const fact of actionFacts) {
+    if (
+      fact.scope !== 'SYMBOL'
+      || fact.key !== symbol
+      || fact.field !== CORPORATE_ACTION_FIELD
+    ) {
+      throw new Error(
+        `DART 자본변동 응답이 요청 범위를 벗어났습니다: `
+          + `${fact.scope}/${fact.key}/${fact.field}/${fact.periodKey}`,
+      );
+    }
+  }
 }
 
 /**
@@ -210,18 +256,20 @@ export class FactSyncService {
         const financials = await this.source.fetchFinancials(scoped, sourceHooks);
         const actions = await this.source.fetchCorporateActions(scoped, sourceHooks);
         return {
-          facts: [...financials.facts, ...actions.facts],
+          financialFacts: financials.facts,
+          actionFacts: actions.facts,
           gaps: [...financials.gaps, ...actions.gaps],
+          financialGaps: financials.gaps,
           actionGaps: actions.gaps,
         };
       },
-      recordCoverage: (symbol, years, actionGapYears, nowMs) => {
+      recordCoverage: (symbol, years, financialGaps, actionGapYears, nowMs) => {
         // action 결과를 먼저 원자적으로 남긴다. 반대 순서에서 action write가 실패하면
         // 재무 coverage가 이 work-unit을 완료로 만들어 다음 incremental retry가
         // gap 기록 없이 통째로 건너뛴다. 재무 write가 뒤에서 실패하는 경우에는 재무
         // coverage가 열려 있어 안전하게 전체 fetch를 다시 시도한다.
         this.actionCoverage.addCoverageResult(symbol, years, actionGapYears, nowMs);
-        this.coverage.addCoveredYears(symbol, years, nowMs);
+        this.coverage.addCoverageResult(symbol, years, financialGaps, nowMs);
       },
     });
   }
@@ -292,9 +340,15 @@ export class FactSyncService {
       getUpdatedAtMs: (symbols) => this.actionCoverage.getUpdatedAtMs(symbols),
       fetch: async (scoped, sourceHooks) => {
         const actions = await this.source.fetchCorporateActions(scoped, sourceHooks);
-        return { facts: actions.facts, gaps: actions.gaps, actionGaps: actions.gaps };
+        return {
+          financialFacts: [],
+          actionFacts: actions.facts,
+          gaps: actions.gaps,
+          financialGaps: [],
+          actionGaps: actions.gaps,
+        };
       },
-      recordCoverage: (symbol, years, actionGapYears, nowMs) => {
+      recordCoverage: (symbol, years, _financialGaps, actionGapYears, nowMs) => {
         this.actionCoverage.addCoverageResult(symbol, years, actionGapYears, nowMs);
       },
     });
@@ -414,18 +468,47 @@ export class FactSyncService {
             shareYears,
             consolidated: request.consolidated,
           };
-          const { facts, gaps: workGaps, actionGaps } = await strategy.fetch(scoped, sourceHooks);
+          const {
+            financialFacts,
+            actionFacts,
+            gaps: workGaps,
+            financialGaps,
+            actionGaps,
+          } = await strategy.fetch(scoped, sourceHooks);
+          assertFetchedFactScopes(symbol, shareYears, financialFacts, actionFacts);
+
+          // `fetchFinancials` 는 전년도 발행주식수 앵커도 함께 읽을 수 있다. 그 앵커를
+          // 이번 재무 연도의 결과처럼 저장하면 전년도 snapshot/manifest가 coverage를
+          // 닫지 않은 채 바뀐다. 비자본변동 재무는 정확히 현재 work-unit 연도만
+          // 원자적으로 교체하고, 자본변동은 누적 이벤트 저장 계약을 그대로 유지한다.
+          const financialSnapshot = financialFacts.filter(
+            (fact) => fact.field !== CORPORATE_ACTION_FIELD && factPeriodYear(fact) === year,
+          );
+          const currentFinancialGaps = financialGaps.filter((gap) => {
+            const gapYear = /^\d{4}/.test(gap.periodKey)
+              ? Number(gap.periodKey.slice(0, 4))
+              : null;
+            return gapYear === null || gapYear === year;
+          });
 
           // work unit마다 저장·커버리지를 닫는다 — 다음 연도 전에 quota로 멈춰도 이
           // 연도는 증분 재실행에서 건너뛸 수 있다.
           const fingerprintBefore = await this.storedFactsFingerprint(symbol);
-          await this.repository.saveFacts(facts);
+          if (strategy.includeFinancials) {
+            await this.repository.replaceSymbolFinancialFactsForYear(
+              symbol,
+              year,
+              financialSnapshot,
+            );
+          }
+          await this.repository.saveFacts(actionFacts);
 
           // 저장 성공이 리포트의 확정 경계다. 뒤의 coverage나 버전 갱신이 실패해도
           // repository에는 이미 팩트가 남았으므로, 이 수치를 먼저 반영해야 보고서가
           // 실제 영속 상태와 어긋나지 않는다.
-          savedFacts += facts.length;
-          symbolSavedFacts += facts.length;
+          const persistedFactCount = financialSnapshot.length + actionFacts.length;
+          savedFacts += persistedFactCount;
+          symbolSavedFacts += persistedFactCount;
           symbolGapCount += workGaps.length;
           gaps.push(...workGaps);
 
@@ -452,7 +535,13 @@ export class FactSyncService {
           const coverageTimestamp = yearIndex === years.length - 1
             ? completedAtMs
             : (coverageWatermarks.get(symbol) ?? 0);
-          strategy.recordCoverage(symbol, [year], gapYears, coverageTimestamp);
+          strategy.recordCoverage(
+            symbol,
+            [year],
+            currentFinancialGaps,
+            gapYears,
+            coverageTimestamp,
+          );
         }
 
         doneSymbols += 1;

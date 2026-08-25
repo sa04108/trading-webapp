@@ -137,7 +137,7 @@ export interface BacktestPreparationOrchestratorDeps {
     CorporateActionCoverageStore,
     'getCoveredYears' | 'getGapYears'
   >;
-  readonly factCoverage: Pick<FactCoverageStore, 'getCoveredYears'>;
+  readonly factCoverage: Pick<FactCoverageStore, 'getCoverageState'>;
   readonly symbolMaster: Pick<
     SymbolMasterService,
     | 'ensureTradingDay'
