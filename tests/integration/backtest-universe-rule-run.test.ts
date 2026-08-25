@@ -348,6 +348,40 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     expect((created.json() as { error: string }).error).toContain('000660');
   });
 
+  it('제출 뒤 기간 첫 거래일 봉이 사라져도 요청 시작 경계에서 중단한다', { timeout: 90_000 }, async () => {
+    const request = {
+      ...buildRequest(1),
+      period: { from: '2025-08-01', to: '2025-10-31' },
+    };
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests',
+      cookies: { qp_session: cookie },
+      payload: request,
+    });
+    expect(created.statusCode).toBe(201);
+    const jobId = (created.json().job as { id: string }).id;
+
+    // worker가 최초로 발견한 8월 4일 봉을 거래 시작점으로 삼으면 8월 1일 결측은
+    // warm-up처럼 숨겨진다. 요청 시작일 자체가 검사 경계여야 이 결측을 잡는다.
+    ctx.container.database.db.delete(krxDailyBars)
+      .where(and(
+        eq(krxDailyBars.shortCode, '005930'),
+        eq(krxDailyBars.date, request.period.from),
+      ))
+      .run();
+    ctx.container.jobOrchestrator.tick();
+    await waitFor(() => {
+      const job = ctx.container.jobQueue.getJob(jobId);
+      return job !== null && ctx.container.jobQueue.isTerminal(job.status);
+    }, 60_000);
+
+    const job = ctx.container.jobQueue.getJob(jobId)!;
+    expect(job.status).toBe('FAILED');
+    expect(job.error).toContain('005930 (2025-08-01)');
+    expect(ctx.container.resultsService.getRun(jobId)).toBeNull();
+  });
+
   it('제출 뒤 선정 종목의 기간 봉이 사라져도 worker가 결과 생성 전에 중단한다', { timeout: 90_000 }, async () => {
     // 7~8월 봉은 worker의 warm-up 구간에 실제로 로드되고, 요청 기간인
     // 9~10월 봉만 삭제한다. worker가 warm-up 봉을 기간 봉으로 잘못 세어도

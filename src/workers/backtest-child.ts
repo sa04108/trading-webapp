@@ -413,17 +413,16 @@ async function main(): Promise<void> {
     }
     const tradeCandles = candles
       .filter((candle) => candle.tsMs >= fromTsMs && candle.tsMs <= toTsMs);
-    const tradeFromTsMs = tradeCandles
-      .reduce<number | undefined>(
-        (minimum, candle) => minimum === undefined || candle.tsMs < minimum ? candle.tsMs : minimum,
-        undefined,
-      );
-    if (tradeFromTsMs === undefined) {
+    if (tradeCandles.length === 0) {
       // 어떤 timeframe 을 찾았는지 밝힌다 — 커버리지가 정상인데 실패하면 여기서 갈린다
       throw new Error(
         `선택한 기간·종목에 ${timeframe} 데이터가 없습니다. 데이터 커버리지를 확인하세요.`,
       );
     }
+    // 거래 시작 경계는 "처음 발견된 봉"이 아니라 사용자가 요청한 기간 시작이다.
+    // 모든 선택 종목의 앞쪽 봉이 함께 누락되면 최초 봉 기준은 그 결측 구간을 warm-up처럼
+    // 숨긴다. 휴일은 marketTradingTsMs에 없으므로 요청 경계를 써도 전략 호출이 생기지 않는다.
+    const tradeFromTsMs = fromTsMs;
 
     // 일정에 선정됐는데 기간 내 봉이 하나도 없는 종목만 빼고 실행하면 유니버스가
     // 달라진다. 급락 종목이 누락된 경우 특히 낙관 편향이므로 전체 실행을 중단한다.

@@ -149,8 +149,9 @@ export interface BacktestRunResult {
  * 2.6.0: 직전 봉 participation 한도와 함께 현재 체결 봉의 총거래량을 물리적 상한으로 쓴다.
  * 2.7.0: 시장 거래일에 보유 종목 봉이 원인 불명으로 빠지면 마지막 가격 평가 대신 실패한다.
  * 2.8.0: 확정 유니버스 후보의 원인 불명 가격 봉 누락도 전략 실행 전에 실패시킨다.
+ * 2.9.0: 거래 시작을 첫 발견 봉이 아닌 요청 시작일로 고정해 앞쪽 가격 공백도 실패시킨다.
  */
-export const ENGINE_VERSION = '2.8.0';
+export const ENGINE_VERSION = '2.9.0';
 
 const PROGRESS_INTERVAL_BARS = 500;
 const MS_PER_DAY = 86_400_000;
