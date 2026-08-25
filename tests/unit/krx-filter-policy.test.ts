@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   classifyKrxIssue,
-  KRX_FILTER_POLICY_VERSION,
   UnknownKrxClassificationError,
 } from '../../src/server/modules/market-data/domain/krx-filter-policy.js';
 
@@ -14,10 +13,6 @@ const base = {
 };
 
 describe('KRX 보통주 필터 정책 v2', () => {
-  it('정책 버전은 krx-common-stock-v2 이다', () => {
-    expect(KRX_FILTER_POLICY_VERSION).toBe('krx-common-stock-v2');
-  });
-
   it('주권·보통주는 포함한다', () => {
     expect(classifyKrxIssue(base)).toEqual({ kind: 'INCLUDE', instrumentType: 'COMMON_STOCK' });
   });

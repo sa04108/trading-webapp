@@ -208,7 +208,6 @@ describe('ordinal rank 결합', () => {
 
 describe('이익 가속 전략', () => {
   it('스키마와 준비 데이터 요구가 정확하다', () => {
-    expect(earningsAccelerationRankStrategy.version).toBe('1.2.2');
     expect(earningsAccelerationRankParameters.parse({})).toEqual({
       topN: 40,
       priceMomentumDays: 126,

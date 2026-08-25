@@ -5,7 +5,6 @@ import {
   newCorrelationGroupingState,
   newCorrelationWarmup,
   pearsonCorrelation,
-  pruneWarmupCloses,
   recordClose,
   recordCorrelationClose,
   scaleWarmupCloses,
@@ -390,26 +389,5 @@ describe('scaleWarmupCloses — 분할이 상관 계산을 오염시키지 않�
     // 조정하지 않으면 −80% 한 점이 상관을 끌고 가 묶음이 깨진다
     const unscaledGroups = tryBuildGroups(unscaled, ['A', 'B'], 21, 0.5) as Map<string, string>;
     expect(unscaledGroups.get('A')).not.toBe(unscaledGroups.get('B'));
-  });
-});
-
-describe('pruneWarmupCloses', () => {
-  it('종목별로 최근 N개 시각만 남긴다', () => {
-    const warmup = newCorrelationWarmup();
-    for (let index = 0; index < 5; index += 1) {
-      recordClose(warmup, 'A', T0 + index * DAY, 1_000 + index);
-      if (index >= 3) recordClose(warmup, 'B', T0 + index * DAY, 2_000 + index);
-    }
-    pruneWarmupCloses(warmup, 3);
-
-    expect([...(warmup.closesBySymbol.get('A')?.keys() ?? [])]).toEqual([
-      T0 + 2 * DAY,
-      T0 + 3 * DAY,
-      T0 + 4 * DAY,
-    ]);
-    expect([...(warmup.closesBySymbol.get('B')?.keys() ?? [])]).toEqual([
-      T0 + 3 * DAY,
-      T0 + 4 * DAY,
-    ]);
   });
 });

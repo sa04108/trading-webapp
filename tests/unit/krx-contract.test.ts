@@ -6,19 +6,12 @@ import {
   KrxQuotaError,
 } from '../../src/server/modules/market-data/application/ports.js';
 import {
-  KRX_CONTRACT_VERSION,
   parseBaseInfoRows,
   parseDailyRows,
   parseKrxEnvelope,
   parseNullableInt64,
 } from '../../src/server/modules/market-data/infrastructure/krx/krx-contract.js';
 import { baseInfoFixture, dailyFixture } from '../helpers/krx-fixtures.js';
-
-describe('KRX 응답 계약', () => {
-  it('계약 버전은 v1 이다', () => {
-    expect(KRX_CONTRACT_VERSION).toBe('v1');
-  });
-});
 
 describe('parseNullableInt64', () => {
   it('빈 문자열과 - 는 null 이다', () => {

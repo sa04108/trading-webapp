@@ -88,16 +88,6 @@ export function listSlippageProfiles(): SlippageProfile[] {
   return Object.values(SLIPPAGE_PROFILES);
 }
 
-/** 체결 시각에 유효한 매도세율. 일정이 없는 사용자 정의 프로파일은 고정 세율을 쓴다. */
-export function sellTaxRateAt(profile: CostProfile, tsMs: number): number {
-  let rate = profile.sellTaxRate;
-  for (const entry of profile.sellTaxRateSchedule ?? []) {
-    if (entry.fromTsMs > tsMs) break;
-    rate = entry.rate;
-  }
-  return rate;
-}
-
 /**
  * 매도 체결건의 세액. KRX 일정은 실제 매매일 경계이며 원 미만을 절사한다.
  * 일정이 없는 사용자 정의 프로파일은 기존 고정 소수율 동작을 보존한다.

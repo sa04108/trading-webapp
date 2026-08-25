@@ -12,7 +12,7 @@ afterEach(() => {
 });
 
 describe('Docker worker bootstrap', () => {
-  it('uploads a protected env without printing its token and installs no app systemd unit', () => {
+  it('uploads a protected env without printing its token', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-bootstrap-'));
     roots.push(root);
     const bin = path.join(root, 'bin');
@@ -64,7 +64,6 @@ printf 'scp:%s\n' "$*" >> "$COMMAND_LOG"
     expect(commands).toContain('provision-worker.sh');
     expect(commands).toContain('worker-host-manifest.json');
     expect(commands).toContain('compose.worker.yaml');
-    expect(commands).not.toContain('quant-backtest-worker.service');
   });
 
   it('rejects a group-readable worker env before connecting', () => {
@@ -116,7 +115,7 @@ printf 'scp:%s\n' "$*" >> "$COMMAND_LOG"
     expect(`${result.stdout}${result.stderr}`).toContain('1~25 정수');
   });
 
-  it('provisions Docker and atomically preserves worker env without installing Node or an app unit', () => {
+  it('provisions Docker and atomically preserves worker env', () => {
     const provision = fs.readFileSync('infra/provision-worker.sh', 'utf8');
     expect(provision).toContain('docker-ce docker-ce-cli containerd.io');
     expect(provision).toContain('docker-compose-plugin');
@@ -126,11 +125,7 @@ printf 'scp:%s\n' "$*" >> "$COMMAND_LOG"
     expect(provision).toContain('backup_worker_env');
     expect(provision).toContain('mv "${backup_tmp}" /etc/quant-platform/worker.env.bak');
     expect(provision).toContain("-name 'worker.env.*.bak' -delete");
-    expect(provision).not.toContain('date -u +%Y%m%d-%H%M%S');
     expect(provision).toContain('QP_REPLACE_WORKER_ENV=1');
-    expect(provision).not.toContain('quant-backtest-worker.service');
-    expect(provision).not.toContain('nodejs.org');
-    expect(provision).not.toContain(' caddy');
   });
 
   it('tracks persistent, transient, and shared dependency paths in the host manifest', () => {

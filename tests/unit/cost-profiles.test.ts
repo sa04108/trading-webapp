@@ -4,7 +4,6 @@ import {
   getKrxExecutionRules,
   getSlippageProfile,
   sellTaxAmount,
-  sellTaxRateAt,
   tickSizeAt,
 } from '../../src/server/modules/backtest/domain/cost-profiles.js';
 
@@ -19,7 +18,12 @@ describe('kr-equity-default', () => {
     ['2025-12-29', 0.002],
   ])('%s 체결일의 매도세율을 적용한다', (date, expected) => {
     const profile = getCostProfile('kr-equity-default')!;
-    expect(sellTaxRateAt(profile, Date.parse(`${date}T00:00:00Z`))).toBe(expected);
+    expect(sellTaxAmount(
+      profile,
+      100_000,
+      Date.parse(`${date}T00:00:00Z`),
+      'KOSDAQ',
+    )).toBe(expected * 100_000);
   });
 
   it('수수료율은 매수·매도 0.015% 그대로다', () => {

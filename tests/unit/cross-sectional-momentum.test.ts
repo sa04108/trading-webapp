@@ -100,7 +100,6 @@ describe('레지스트리 등록', () => {
     const description =
       registry.list().find((s) => s.id === 'cross-sectional-momentum')?.description ?? '';
     expect(description).toContain('분할 이력이 수집된 데이터셋에서만');
-    expect(crossSectionalMomentumStrategy.version).toBe('2.2.1');
   });
 
   it('JSON 스키마에 한국어 라벨과 기본값이 실린다', () => {

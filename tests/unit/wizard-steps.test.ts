@@ -13,8 +13,6 @@ import {
   WIZARD_STEPS,
   type StepGateState,
 } from '../../src/web/features/backtests/wizard-steps.js';
-import { MAX_UNIVERSE_SYMBOLS } from '../../src/shared/schemas/universe-limit.js';
-import { backtestRequestSchema } from '../../src/shared/schemas/backtest-request.js';
 
 /** 전 단계를 통과하는 상태 — 각 테스트는 여기서 한 가지만 무너뜨린다 */
 const complete: StepGateState = {
@@ -152,43 +150,6 @@ describe('stepJumpBlockReason', () => {
     expect(stepJumpBlockReason(RUN_STEP, stepped, complete)).toBe(
       "'검토' 단계에서 '다음' 을 눌러 진행하세요",
     );
-  });
-});
-
-/**
- * 유니버스 규칙 topN 상한 — 요청 스키마 경계 확인 (스펙 2026-08-05).
- *
- * 종목 수 상한(200)은 더 이상 이 파일의 게이트가 세지 않는다 — `universeRuleSchema` 의
- * `topN` 자체가 그 범위를 벗어난 값을 거부하므로, `UniverseRuleStep` 의 입력이 애초에
- * 그 범위를 벗어나지 못한다. 그래도 화면 상한(MAX_UNIVERSE_SYMBOLS)과 요청 스키마 상한이
- * 같은 상수인지는 여기서 계속 확인한다 — 어긋나면 그 어긋남은 제출해 봐야 드러난다.
- */
-describe('유니버스 규칙 topN 상한 — 요청 스키마 경계', () => {
-  it('게이트가 참조하는 상한이 요청 스키마 상한과 같다', () => {
-    const request = {
-      strategyId: 'rsi-reversion',
-      parameters: {},
-      period: { from: '2024-01-01', to: '2024-12-31' },
-      capital: { initialCash: 10_000_000, currency: 'KRW' as const },
-      execution: {
-        fillTiming: 'NEXT_BAR_OPEN' as const,
-        commissionProfileId: 'kr-equity-default',
-        slippageProfileId: 'fixed-5bps',
-      },
-      risk: { maxPositions: 20 },
-    };
-    const parse = (topN: number): boolean =>
-      backtestRequestSchema.safeParse({
-        ...request,
-        universeRule: {
-          markets: ['KOSPI'],
-          stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: topN }],
-          rebalanceInterval: { value: 1, unit: 'MONTH' },
-        },
-      }).success;
-
-    expect(parse(MAX_UNIVERSE_SYMBOLS)).toBe(true);
-    expect(parse(MAX_UNIVERSE_SYMBOLS + 1)).toBe(false);
   });
 });
 

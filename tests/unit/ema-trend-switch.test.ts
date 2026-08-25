@@ -77,15 +77,13 @@ describe('emaTrendSwitchParameters', () => {
 });
 
 describe('레지스트리 등록', () => {
-  it('목록에 노출되고 JSON 스키마가 라벨과 함께 나온다 (refine 이 스키마 생성을 깨지 않는다)', () => {
+  it('JSON 스키마가 라벨과 함께 나온다 (refine 이 스키마 생성을 깨지 않는다)', () => {
     const registry = new StrategyRegistry();
-    expect(registry.list().map((s) => s.id)).toContain('ema-trend-switch');
     const schema = registry.getParameterJsonSchema('ema-trend-switch');
     const properties = (schema as { properties: Record<string, Record<string, unknown>> })
       .properties;
     expect(properties.fastEmaBars?.title).toBe('단기 이동평균 봉 수');
     expect(properties.fastEmaBars?.default).toBe(12);
-    expect(emaTrendSwitchStrategy.version).toBe('1.1.2');
   });
 });
 

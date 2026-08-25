@@ -109,43 +109,6 @@ export function addDays(date: string, days: number): string {
   return utcMsToDate(dateToUtcMs(date) + days * MS_PER_DAY);
 }
 
-/**
- * coverage 구간들 가운데 date 와 가장 가까운 커버 날짜를 찾는다.
- *
- * date 가 어떤 구간 안에 있으면 그 자신을 돌려준다(거리 0). 구간 밖이면 그 구간의
- * 더 가까운 경계(시작 또는 끝)를 후보로 삼는다. 여러 구간에 걸쳐 거리가 같으면
- * 더 이른(과거) 날짜를 택한다 — 사용자가 미래를 가리키다 미수집 구간에 들어가면
- * 최근 과거 수집일로 보내는 편이 다음 이벤트를 살펴보기에 자연스럽다.
- *
- * ranges 가 비어 있으면 커버된 날짜가 아예 없다는 뜻이라 null 을 돌려준다.
- */
-export function findNearestCoveredDate(
-  ranges: readonly { startDate: string; endDate: string }[],
-  date: string,
-): string | null {
-  if (ranges.length === 0) return null;
-
-  const targetMs = dateToUtcMs(date);
-  let best: { candidateMs: number; distance: number } | null = null;
-
-  for (const range of ranges) {
-    const startMs = dateToUtcMs(range.startDate);
-    const endMs = dateToUtcMs(range.endDate);
-    const candidateMs = targetMs < startMs ? startMs : targetMs > endMs ? endMs : targetMs;
-    const distance = Math.abs(candidateMs - targetMs);
-
-    if (
-      best === null ||
-      distance < best.distance ||
-      (distance === best.distance && candidateMs < best.candidateMs)
-    ) {
-      best = { candidateMs, distance };
-    }
-  }
-
-  return best === null ? null : utcMsToDate(best.candidateMs);
-}
-
 /** 실제 거래일 목록에서 date와 가장 가까운 날을 찾는다. 동률이면 과거를 택한다. */
 export function findNearestTradingDate(
   tradingDates: readonly string[],

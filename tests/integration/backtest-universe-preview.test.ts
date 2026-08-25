@@ -953,17 +953,11 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
   });
 
   /**
-   * 회귀(스펙 2026-08-06 Task 5 리뷰 발견) — `addSymbol` 은 `symbolCoverage` 캐시를
-   * 채우지 않는다. 그 캐시는 오직 증권사 동기화·CSV 가져오기가 끝난 뒤에만
-   * `refreshCoverage` 로 채워지는데, 상장폐지 종목은 둘 중 어느 것도 겪지 않는다
-   * (증권사는 상장폐지 종목의 봉을 안 주고, CSV 가져오기는 수동이다). `backfill`
-   * 이 이미 `krx_daily_bars` 를 채워 뒀어도 이 갱신이 없으면 `missingCandleSymbols`
-   * 와 가격 데이터 탭 모두 "봉 없음" 으로 남아, Task 4 가 적은 "자동 등록하면
-   * 가격 데이터 탭에서 상장폐지 종목도 보인다" 는 전제가 깨진다 — 이 테스트는
-   * `refreshCoverage` 를 직접 부르지 않고 `krx_daily_bars` 만 미리 심어 둔 채
-   * 미리보기 한 번으로 그 전제가 실제로 성립하는지 확인한다.
+   * 상장폐지 종목은 증권사가 과거 봉을 주지 않으므로 symbol 등록 여부가 아니라
+   * `krx_daily_bars` 를 직접 집계해야 한다. 백필된 KRX 일봉만 있는 자동 등록 종목도
+   * 실행 가능한 가격 데이터로 판정하는지 확인한다.
    */
-  it('krx_daily_bars 만 있고 캐시를 갱신한 적 없는 종목도 missingCandleSymbols 에서 빠진다', async () => {
+  it('krx_daily_bars 가 있는 자동 등록 종목은 missingCandleSymbols 에서 빠진다', async () => {
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
       {
         standardCode: 'KR7900010009',
@@ -973,8 +967,7 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
         marketCapKrw: '500000000000000',
       },
     ]);
-    // 백필이 이미 이 종목의 KRX 일봉을 채워 뒀다고 가정한다 — refreshCoverage 는
-    // 일부러 부르지 않는다. 이 값 자체를 미리보기가 대신 갱신해야 한다.
+    // 백필이 이미 이 종목의 KRX 일봉을 채워 뒀다고 가정한다.
     ctx.container.database.db
       .insert(krxDailyBars)
       .values({

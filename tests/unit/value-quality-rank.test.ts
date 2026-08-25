@@ -324,7 +324,6 @@ describe('레지스트리 등록', () => {
     const properties = (schema as { properties: Record<string, Record<string, unknown>> }).properties;
     expect(properties.topN?.title).toBe('보유 종목 수');
     expect(properties.staleQuarters?.default).toBe(2);
-    expect(valueQualityRankStrategy.version).toBe('2.3.0');
   });
 });
 

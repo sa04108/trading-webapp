@@ -232,16 +232,6 @@ export function scaleCorrelationGrouping(
   scaleWarmupCloses(state.warmup, symbol, ratio);
 }
 
-/** 동적 유니버스 재계산용 종가를 종목별 최근 N개로 제한한다. */
-export function pruneWarmupCloses(
-  warmup: CorrelationWarmup,
-  maxEntriesPerSymbol: number,
-): void {
-  for (const closes of warmup.closesBySymbol.values()) {
-    pruneSymbolCloses(closes, maxEntriesPerSymbol);
-  }
-}
-
 /**
  * 엔진은 봉을 시각 오름차순으로 공급하므로 Map 삽입 순서가 곧 오래된 순서다.
  * 초과한 앞쪽 key만 지우면 매 봉마다 전 종목 timestamp를 정렬하지 않아도 된다.

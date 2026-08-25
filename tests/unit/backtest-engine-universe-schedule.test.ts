@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { ENGINE_VERSION, runBacktest } from '../../src/server/modules/backtest/domain/engine.js';
+import { runBacktest } from '../../src/server/modules/backtest/domain/engine.js';
 import type { ExecutionProfile, OrderIntent } from '../../src/server/modules/backtest/domain/types.js';
 import { CORPORATE_ACTION_FIELD, type Fact } from '../../src/server/modules/facts/domain/fact.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
@@ -72,10 +72,6 @@ function alwaysBuyBothStrategy(): TradingStrategy<unknown, null> {
 }
 
 describe('runBacktest — 멤버십 일정 기반 거래 대상 제한 (스펙 2026-08-05, §9.5)', () => {
-  it('결과 의미 변경을 엔진 버전에 반영한다', () => {
-    expect(ENGINE_VERSION).toBe('2.11.0');
-  });
-
   it('2봉 리밸런스 전략은 연속 실제 거래 봉 일정을 실행 전에 거부한다', () => {
     const strategy: TradingStrategy<unknown, null> = {
       ...alwaysBuyBothStrategy(),

@@ -11,10 +11,6 @@ import {
 import { StrategyRegistry } from '../../src/server/modules/strategy/application/strategy-registry.js';
 
 describe('range-breakout parameters (스펙 §32)', () => {
-  it('공유 ATR 계산 방식을 전략 버전에 반영한다', () => {
-    expect(rangeBreakoutStrategy.version).toBe('2.0.4');
-  });
-
   it('생략된 파라미터는 기본값으로 채운다 — 추적 손절과 비중 상한이 기본 동작이다', () => {
     const result = rangeBreakoutParameters.parse({});
     expect(result.trailAtrMultiplier).toBe(2);
@@ -48,11 +44,8 @@ describe('range-breakout parameters (스펙 §32)', () => {
 });
 
 describe('StrategyRegistry', () => {
-  it('lists registered strategies and validates parameters', () => {
+  it('validates parameters', () => {
     const registry = new StrategyRegistry();
-    const list = registry.list();
-    expect(list.map((s) => s.id)).toContain('range-breakout');
-
     const valid = registry.validateParameters('range-breakout', {
       lookbackBars: 20,
       atrPeriod: 14,

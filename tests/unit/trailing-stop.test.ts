@@ -37,11 +37,18 @@ describe('confirmEntry / updateTrail / holdLimitReached', () => {
     expect(holding.stopLevel).toBe(10_000);
   });
 
-  it('maxHoldBars 미지정이면 무제한이다', () => {
+  it('entryAtr 없이 진입을 확인하면 스톱을 만들지 않는다', () => {
     const holding = newHolding();
-    holding.barsHeld = 1_000_000;
+    confirmEntry(holding, 10_000, 2);
+    expect(holding.stopLevel).toBeNull();
+  });
+
+  it('maxHoldBars 미지정이면 무제한이고 지정값에 도달하면 제한한다', () => {
+    const holding = newHolding();
+    holding.barsHeld = 9_999;
     expect(holdLimitReached(holding, undefined)).toBe(false);
-    expect(holdLimitReached(holding, 10)).toBe(true);
+    expect(holdLimitReached(holding, 9_999)).toBe(true);
+    expect(holdLimitReached(holding, 10_000)).toBe(false);
   });
 });
 

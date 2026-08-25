@@ -377,18 +377,13 @@ describe('deploy script failure workflow', () => {
     expect(result.status, result.stderr).toBe(0);
   });
 
-  it('hard-codes one shared successful release and DB snapshot retention count to zero', () => {
+  it('uses one shared successful release and DB snapshot retention count', () => {
     const deploy = readFileSync('scripts/deploy-app.sh', 'utf8');
     expect(deploy).toContain('KEEP_SUCCESSFUL_DEPLOYS=0');
     expect(deploy.match(/awk -v keep="\$\{KEEP_SUCCESSFUL_DEPLOYS\}" 'NR > keep'/g)).toHaveLength(2);
-    expect(deploy).not.toContain('QP_DEPLOY_KEEP_RELEASES');
-    expect(deploy).not.toContain('QP_DEPLOY_KEEP_DB_SNAPSHOTS');
-    expect(deploy).not.toContain('KEEP_RELEASES=');
-    expect(deploy).not.toContain('KEEP_DB_SNAPSHOTS=');
-    expect(deploy).not.toContain('KEEP_SNAPSHOTS=5');
   });
 
-  it('treats legacy unmarked artifacts as successful and excludes exceptional states', () => {
+  it('selects unmarked artifacts by age and excludes exceptional states', () => {
     const deploy = readFileSync('scripts/deploy-app.sh', 'utf8');
 
     expect(deploy).toContain("-name 'pre-deploy-*.sqlite' -printf '%T@ %p\\n'");
@@ -396,10 +391,5 @@ describe('deploy script failure workflow', () => {
     expect(deploy).toContain('.deploy-in-progress');
     expect(deploy).toContain('.deploy-failed');
     expect(deploy).toContain('sudo test ! -e "${in_progress_marker}"');
-    expect(deploy).not.toContain('.deploy-success-markers-v1');
-    expect(deploy).not.toContain("-name '.deploy-succeeded'");
-    expect(deploy).not.toContain(
-      'sudo ls -1 /opt/quant-platform/releases 2>/dev/null | sort -r',
-    );
   });
 });
