@@ -12,7 +12,7 @@ import { StrategyRegistry } from '../../src/server/modules/strategy/application/
 
 describe('range-breakout parameters (스펙 §32)', () => {
   it('공유 ATR 계산 방식을 전략 버전에 반영한다', () => {
-    expect(rangeBreakoutStrategy.version).toBe('2.0.2');
+    expect(rangeBreakoutStrategy.version).toBe('2.0.3');
   });
 
   it('생략된 파라미터는 기본값으로 채운다 — 추적 손절과 비중 상한이 기본 동작이다', () => {
@@ -227,6 +227,32 @@ describe('range-breakout 워밍업', () => {
     // 창을 채우려면 30봉이 필요한데 21봉만 준다 — 돌파해도 기준선이 없다
     const result = run([...flatWarmup(), SIGNAL_BAR], { ...BASE, lookbackBars: 30 });
     expect(result.fills).toHaveLength(0);
+  });
+
+  it('유니버스 밖 거부 주문을 pending으로 남기지 않아 첫 편입 신호를 놓치지 않는다', () => {
+    const candles = [
+      ...flatWarmup(),
+      SIGNAL_BAR, // 아직 유니버스 밖이므로 신호 상태를 만들면 안 된다
+      candle(21, { open: 105, high: 108, low: 104, close: 107 }), // 편입 뒤 첫 유효 돌파
+      candle(22, { open: 108, high: 109, low: 107, close: 108 }), // 정상 체결 시점
+      candle(23, { open: 109, high: 110, low: 108, close: 109 }),
+    ];
+    const result = runBacktest(rangeBreakoutStrategy as never, {
+      candles,
+      initialCash: 1_000_000,
+      execution: ZERO_COST,
+      parameters: BASE,
+      randomSeed: 42,
+      maxPositions: 5,
+      universeSchedule: [
+        { fromTsMs: START, symbols: [] },
+        { fromTsMs: START + 21 * HOUR, symbols: ['A'] },
+      ],
+    });
+
+    expect(result.fills.filter((fill) => fill.side === 'BUY')).toHaveLength(1);
+    expect(result.fills.find((fill) => fill.side === 'BUY')?.tsMs).toBe(START + 22 * HOUR);
+    expect(result.warnings.some((warning) => warning.includes('활성 멤버십 일정'))).toBe(false);
   });
 });
 

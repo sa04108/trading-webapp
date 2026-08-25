@@ -122,7 +122,7 @@ function getSymbolState(state: RangeBreakoutState, symbol: string): SymbolState 
 
 export const rangeBreakoutStrategy: TradingStrategy<RangeBreakoutParameters, RangeBreakoutState> = {
   id: 'range-breakout',
-  version: '2.0.2',
+  version: '2.0.3',
   name: '전고점 돌파',
   description:
     '직전 N개 봉의 최고가를 종가가 넘어서면 사고, 고점을 따라 올라가는 손절선에 걸리면 팝니다. ' +
@@ -212,6 +212,12 @@ export const rangeBreakoutStrategy: TradingStrategy<RangeBreakoutParameters, Ran
     // 3) 진입
     for (const [symbol, bar] of sortedBars) {
       const symbolState = getSymbolState(state, symbol);
+      if (context.tradableSymbols !== null && !context.tradableSymbols.has(symbol)) {
+        // 엔진 안전망이 BUY를 거부하더라도 전략 상태에 pendingEntry를 남기면,
+        // 다음 봉에 실제 편입·거래 재개된 종목의 첫 유효 신호까지 건너뛴다.
+        symbolState.holding.pendingEntry = false;
+        continue;
+      }
       const position = context.portfolio.positions.get(symbol);
       if (position && position.quantity > 0) continue;
 
