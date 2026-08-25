@@ -963,7 +963,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(message).toContain('2026-01-05');
   });
 
-  it('리밸런스 날짜만 커버된 준비 결과는 기간 중 상장 상태를 모르므로 제출을 거부한다', async () => {
+  it('리밸런스 적용에 필요한 최소 구간만 커버되면 기간 중 상장 상태를 모르므로 제출을 거부한다', async () => {
     const request = buildRequest();
     const preparation = ctx.container.backtestPreparationOrchestrator.start({
       universeRule: request.universeRule,
@@ -977,17 +977,24 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     }, 5_000);
     expect(ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status).toBe('COMPLETED');
 
-    // 준비 뒤 전체 coverage를 리밸런스 날짜별 고립된 섬으로 바꾼다. getReadyPreview는
-    // 같은 완료 행을 읽더라도 resolver를 다시 실행하므로 periodCovered=false를 돌려준다.
+    // 준비 뒤 전체 coverage를 리밸런스별 '적용 거래일~요청일' 섬으로 바꾼다.
+    // 휴일 리밸런스는 직전 거래일까지 같은 커버 구간에 있어야 resolver가 일정을
+    // 다시 만들 수 있다. 이 최소 섬들 사이 평일은 여전히 비므로 periodCovered=false다.
+    const rebalanceDates = [
+      '2026-01-05',
+      '2026-02-05',
+      '2026-03-05',
+      '2026-04-05',
+      '2026-05-05',
+      '2026-06-05',
+    ];
+    const isolatedCoverage = rebalanceDates.map((date) => ({
+      startDate: ctx.container.symbolMasterService.effectiveTradingDateWithinCoverage(date)!,
+      endDate: date,
+      syncedAtMs: ctx.container.clock.now(),
+    }));
     ctx.container.database.db.delete(symbolMasterCoverage).run();
-    ctx.container.database.db.insert(symbolMasterCoverage).values(
-      ['2026-01-05', '2026-02-05', '2026-03-05', '2026-04-05', '2026-05-05', '2026-06-05']
-        .map((date) => ({
-          startDate: date,
-          endDate: date,
-          syncedAtMs: ctx.container.clock.now(),
-        })),
-    ).run();
+    ctx.container.database.db.insert(symbolMasterCoverage).values(isolatedCoverage).run();
 
     const response = await ctx.app.inject({
       method: 'POST',

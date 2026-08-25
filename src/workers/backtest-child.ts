@@ -3,7 +3,7 @@
  * 부모의 HTTP 이벤트 루프·메모리와 격리되어 입력 로드 → 엔진 실행 → 결과 저장을 수행한다.
  * 환경변수는 §5 화이트리스트만 받는다. 종료 전 최종 상태를 DB 에 직접 기록한다.
  */
-import { and, asc, desc, eq, gte, inArray, lt, lte } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, lt, lte, sql } from 'drizzle-orm';
 import { pino } from 'pino';
 import { readGitCommitSha } from '../server/shared/build-info.js';
 import { systemClock } from '../server/shared/clock.js';
@@ -52,7 +52,7 @@ import {
   corporateActionRawDateRange,
 } from '../server/modules/facts/domain/corporate-action-effective-date.js';
 import type { Candle, Market, Timeframe } from '../server/modules/market-data/domain/candle.js';
-import { addCalendarDays, isWeekendDate } from '../server/modules/market-data/domain/kst-date.js';
+import { addCalendarDays } from '../server/modules/market-data/domain/kst-date.js';
 import { KrxDailyCandleRepository } from '../server/modules/market-data/infrastructure/krx-daily-candle-repository.js';
 import type { KrxHistoricalUniverseSource } from '../server/modules/market-data/application/ports.js';
 import { SymbolMasterService } from '../server/modules/market-data/application/symbol-master-service.js';
@@ -256,7 +256,11 @@ async function main(): Promise<void> {
       : db
           .select({ date: symbolMasterTradingDays.date })
           .from(symbolMasterTradingDays)
-          .where(lt(symbolMasterTradingDays.date, request.period.from))
+          .where(and(
+            lt(symbolMasterTradingDays.date, request.period.from),
+            // 0005 legacy 이행의 주말 경계를 warm-up N일로 세지 않는다.
+            sql`strftime('%w', ${symbolMasterTradingDays.date}) NOT IN ('0', '6')`,
+          ))
           .orderBy(desc(symbolMasterTradingDays.date))
           .limit(warmupBars)
           .all();
@@ -268,12 +272,10 @@ async function main(): Promise<void> {
       .where(and(
         gte(symbolMasterTradingDays.date, warmupFromDate),
         lte(symbolMasterTradingDays.date, request.period.to),
+        sql`strftime('%w', ${symbolMasterTradingDays.date}) NOT IN ('0', '6')`,
       ))
       .orderBy(asc(symbolMasterTradingDays.date))
       .all()
-      // 0005 이행의 legacy 이벤트 경계에는 휴일이 섞일 수 있다. SymbolMasterService의
-      // 공개 거래일 경계와 같은 최소 보정으로 확정 가능한 주말만 제거한다.
-      .filter((row) => !isWeekendDate(row.date))
       .map((row) => Date.parse(`${row.date}T00:00:00Z`));
 
     for (const row of symbolMaster.nonTradingDaysBetween(warmupFromDate, request.period.to)) {

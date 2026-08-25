@@ -68,6 +68,11 @@ import {
 import { SelectionMetricRepository } from './selection-metric-repository.js';
 import type { KrxHistoricalUniverseSource } from './ports.js';
 
+/** 0005 legacy 이행이 거래일 테이블에 남긴 주말 경계를 실제 거래일에서 제외한다. */
+function storedTradingDateIsWeekday() {
+  return sql`strftime('%w', ${symbolMasterTradingDays.date}) NOT IN ('0', '6')`;
+}
+
 export interface SymbolMasterEventRow extends SymbolMasterEventDraft {
   readonly id: string;
 }
@@ -482,6 +487,7 @@ export class SymbolMasterService {
         and(
           gte(symbolMasterTradingDays.date, covering.startDate),
           lte(symbolMasterTradingDays.date, date),
+          storedTradingDateIsWeekday(),
         ),
       )
       .orderBy(desc(symbolMasterTradingDays.date))
@@ -674,7 +680,10 @@ export class SymbolMasterService {
     return db
       .select({ date: symbolMasterTradingDays.date })
       .from(symbolMasterTradingDays)
-      .where(gt(symbolMasterTradingDays.date, date))
+      .where(and(
+        gt(symbolMasterTradingDays.date, date),
+        storedTradingDateIsWeekday(),
+      ))
       .orderBy(asc(symbolMasterTradingDays.date))
       .limit(1)
       .get()?.date;
@@ -1191,7 +1200,10 @@ export class SymbolMasterService {
     const row = this.deps.db
       .select({ date: symbolMasterTradingDays.date })
       .from(symbolMasterTradingDays)
-      .where(lte(symbolMasterTradingDays.date, date))
+      .where(and(
+        lte(symbolMasterTradingDays.date, date),
+        storedTradingDateIsWeekday(),
+      ))
       .orderBy(desc(symbolMasterTradingDays.date))
       .limit(1)
       .get();
@@ -1567,7 +1579,10 @@ export class SymbolMasterService {
     const observedDates = this.deps.db
       .select({ date: symbolMasterTradingDays.date })
       .from(symbolMasterTradingDays)
-      .where(lt(symbolMasterTradingDays.date, to))
+      .where(and(
+        lt(symbolMasterTradingDays.date, to),
+        storedTradingDateIsWeekday(),
+      ))
       .orderBy(asc(symbolMasterTradingDays.date))
       .all()
       .map((row) => row.date);

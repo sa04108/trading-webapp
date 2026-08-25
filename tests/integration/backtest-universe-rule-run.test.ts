@@ -10,6 +10,7 @@ import {
   krxNonTradingCoverage,
   krxNonTradingDays,
   symbolFactsState,
+  symbolMasterTradingDays,
   symbolMasterVersions,
 } from '../../src/server/shared/db/schema.js';
 import {
@@ -66,8 +67,8 @@ function buildDailyCandles(symbol = '005930'): Candle[] {
   return candles;
 }
 
-/** 이 파일의 테스트가 리밸런스 날짜로 쓰는 값 전부 — 종목 마스터 시총 캐시를 이 날짜들로 채운다 */
-const MASTER_DATES = ['2025-07-27', '2025-08-01', '2025-09-01', '2025-10-01'];
+/** 이 파일의 리밸런스에 필요한 실제 적용 거래일 전부 — 종목 마스터 시총 캐시를 이 날짜들로 채운다 */
+const MASTER_DATES = ['2025-07-25', '2025-08-01', '2025-09-01', '2025-10-01'];
 
 function universeRule(topN: number): BacktestRequest['universeRule'] {
   return {
@@ -296,6 +297,22 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
   });
 
   it('worker가 period 이전 KRX warm-up을 전략에 공급하되 결과는 period 첫 봉부터 기록한다', { timeout: 90_000 }, async () => {
+    // legacy 이행은 이벤트 경계인 주말을 trading_days에 넣을 수 있다.
+    // 가까운 10개 **행**을 가져오면 주말 4일이 자리를 차지해 실제 warm-up은
+    // 6거래일뿐이다. 거래일만 10일을 세어야 기존 첫 진입 시각이 보존된다.
+    const legacyCalendarRows: { date: string }[] = [];
+    for (
+      let cursor = Date.parse('2025-08-16T00:00:00Z');
+      cursor <= Date.parse('2025-08-31T00:00:00Z');
+      cursor += DAY
+    ) {
+      legacyCalendarRows.push({ date: new Date(cursor).toISOString().slice(0, 10) });
+    }
+    ctx.container.database.db.insert(symbolMasterTradingDays)
+      .values(legacyCalendarRows)
+      .onConflictDoNothing()
+      .run();
+
     const request = {
       ...buildRequest(1),
       period: { from: '2025-09-01', to: '2025-10-31' },
@@ -328,11 +345,10 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     expect(job.totalBars).toBe(expectedPeriodBars);
     expect(full.equityPoints[0]?.tsMs).toBe(periodFromTsMs);
     expect(full.equityPoints).toHaveLength(expectedPeriodBars);
-    // warm-up 마지막 상승 봉의 BUY는 결과 주문으로 만들지 않지만 전략의 pendingEntry
-    // state는 갱신된다. Sep 1에 그 상태를 해소하고 Sep 2에 다시 신호를 내므로 실제
-    // NEXT_BAR_OPEN 진입은 Sep 3이다. warm-up 자체가 없으면 lookback을 다시 채우느라
-    // 이 날짜보다 늦어진다.
-    expect(full.trades[0]?.entryTsMs).toBe(Date.parse('2025-09-03T00:00:00Z'));
+    // 기간 전 10거래일로 lookback이 정확히 채워지므로 Sep 1 종가 신호가
+    // 나고 다음 봉 시가인 Sep 2에 진입한다. 주말 행 4개를 warm-up으로 잘못
+    // 세면 실제 이력이 6봉에 그쳐 진입이 적어도 4거래일 늦어진다.
+    expect(full.trades[0]?.entryTsMs).toBe(Date.parse('2025-09-02T00:00:00Z'));
   });
 
   it('확정 유니버스 중 기간 내 0봉 종목이 있으면 제출을 거부한다', async () => {
@@ -1149,12 +1165,13 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
       await seedCorporateActionCoverage(ctx.container, ['005930', '000660'], yearRange(2025, 2026));
 
       // 이 테스트는 리밸런싱 없음(NONE)으로 period.from(2025-07-27) 한 번만 고른다.
-      // 그 날짜에 000660 을 거래정지로 심으면
+      // 7월 27일은 일요일이므로 실제 선정 지표일은 직전 금요일인 7월 25일이다.
+      // 그 날에 000660 을 거래정지로 심으면
       // UniverseRuleResolver.resolve() 가 후보에서 빼고 excludedNonTradingCount 를 센다 —
       // 000660 은 봉이 없어도 상관없다(유니버스에 아예 들어오지 못하므로).
       ctx.container.database.db
         .insert(krxNonTradingDays)
-        .values({ date: '2025-07-27', shortCode: '000660', market: 'KOSPI', lastClose: 1 })
+        .values({ date: '2025-07-25', shortCode: '000660', market: 'KOSPI', lastClose: 1 })
         .run();
 
       const created = await ctx.app.inject({
@@ -1475,7 +1492,8 @@ describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepar
       });
       expect(preview.schedule[1]).toMatchObject({
         rebalanceDate: STEP12_REBALANCE_2,
-        effectiveDate: STEP12_REBALANCE_2,
+        // 2월 2일은 일요일이므로 직전 KRX 거래일의 지표를 쓴다.
+        effectiveDate: '2025-01-31',
         members: [{ symbol: 'C' }, { symbol: 'B' }],
       });
       expect(preview.unionSymbols.slice().sort()).toEqual(['A', 'B', 'C']);
