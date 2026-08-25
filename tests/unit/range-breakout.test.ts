@@ -12,7 +12,7 @@ import { StrategyRegistry } from '../../src/server/modules/strategy/application/
 
 describe('range-breakout parameters (스펙 §32)', () => {
   it('공유 ATR 계산 방식을 전략 버전에 반영한다', () => {
-    expect(rangeBreakoutStrategy.version).toBe('2.0.3');
+    expect(rangeBreakoutStrategy.version).toBe('2.0.4');
   });
 
   it('생략된 파라미터는 기본값으로 채운다 — 추적 손절과 비중 상한이 기본 동작이다', () => {
@@ -253,6 +253,31 @@ describe('range-breakout 워밍업', () => {
     expect(result.fills.filter((fill) => fill.side === 'BUY')).toHaveLength(1);
     expect(result.fills.find((fill) => fill.side === 'BUY')?.tsMs).toBe(START + 22 * HOUR);
     expect(result.warnings.some((warning) => warning.includes('활성 멤버십 일정'))).toBe(false);
+  });
+
+  it('유동성으로 거부된 진입 뒤 다음 봉의 유효한 돌파를 한 봉 더 건너뛰지 않는다', () => {
+    const candles = [
+      ...flatWarmup(),
+      { ...SIGNAL_BAR, volume: 0 }, // 이 봉이 낸 BUY는 다음 봉에서 직전 거래량 0으로 거부
+      { ...candle(21, { open: 105, high: 108, low: 104, close: 107 }), volume: 100 },
+      { ...candle(22, { open: 108, high: 109, low: 107, close: 108 }), volume: 100 },
+      { ...candle(23, { open: 109, high: 110, low: 108, close: 109 }), volume: 100 },
+    ];
+    const result = runBacktest(rangeBreakoutStrategy as never, {
+      candles,
+      initialCash: 1_000_000,
+      execution: {
+        ...ZERO_COST,
+        rules: { ...ZERO_COST.rules, maxVolumeParticipationRate: 1 },
+      },
+      parameters: BASE,
+      randomSeed: 42,
+      maxPositions: 5,
+    });
+
+    // index21에서 직전 주문 실패를 확인한 뒤 같은 봉의 지속 돌파를 다시 발행하므로
+    // index22 시가에 체결된다. 구 코드는 index21을 통째로 건너뛰어 index23에 체결했다.
+    expect(result.fills.find((fill) => fill.side === 'BUY')?.tsMs).toBe(START + 22 * HOUR);
   });
 });
 
