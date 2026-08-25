@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "4ed72188-24f3-4f05-8783-4a70298d6a12",
+  "id": "798ac009-6684-4afd-a7e7-c5ed1141e3ba",
   "prevId": "03400e58-91d8-40e3-8210-f83fd907329d",
   "tables": {
     "audit_logs": {
@@ -2246,6 +2246,13 @@
           "notNull": true,
           "autoincrement": false
         },
+        "financial_coverage_protocol_json": {
+          "name": "financial_coverage_protocol_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "action_covered_years_json": {
           "name": "action_covered_years_json",
           "type": "text",
@@ -2255,6 +2262,13 @@
         },
         "action_gap_years_json": {
           "name": "action_gap_years_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "action_coverage_protocol_json": {
+          "name": "action_coverage_protocol_json",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
