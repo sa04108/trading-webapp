@@ -98,12 +98,40 @@ describe('KrxDailyCandleRepository', () => {
       symbols: ['005930', '000660'],
     });
     expect(candles).toHaveLength(4);
+    expect(candles.map((candle) => candle.symbol)).toEqual([
+      '005930', '005930', '005930', '000660',
+    ]);
     const bySymbol = candles.filter((candle) => candle.symbol === '005930');
     expect(bySymbol.map((candle) => candle.tsMs)).toEqual([
       midnight('2026-08-05'),
       midnight('2026-08-06'),
       midnight('2026-08-07'),
     ]);
+  });
+
+  it('다종목 조회는 SQLite bind 한도 단위로 배치한다', async () => {
+    let selectCalls = 0;
+    const fakeDb = {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            orderBy: () => ({
+              all: () => {
+                selectCalls += 1;
+                return [];
+              },
+            }),
+          }),
+        }),
+      }),
+    };
+    const batchRepository = new KrxDailyCandleRepository(fakeDb as never);
+    const symbols = Array.from({ length: 501 }, (_, index) => String(index).padStart(6, '0'));
+    for await (const _candle of batchRepository.getCandles({
+      market: 'KR', timeframe: '1d', symbols,
+    })) { /* 빈 fake 결과를 끝까지 소비해 조회를 실행한다. */ }
+
+    expect(selectCalls).toBe(2);
   });
 
   it('KR 이 아닌 시장은 빈 결과를 낸다', async () => {

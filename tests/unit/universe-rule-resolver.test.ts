@@ -9,6 +9,7 @@ import {
 import { UniverseRuleResolver } from '../../src/server/modules/backtest/application/universe-rule-resolver.js';
 import type { UniverseRule } from '../../src/shared/schemas/universe-rule.js';
 import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
+import type { FactQuery } from '../../src/server/modules/facts/application/ports.js';
 import type { SharesChange } from '../../src/server/modules/facts/domain/corporate-action-effective-date.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import type { DailySelectionMetric } from '../../src/server/modules/market-data/application/selection-metric-repository.js';
@@ -342,6 +343,7 @@ function makePipelineResolver(options: {
   metricReads?: string[][];
   identityReads?: SymbolIdentitySelection[][];
   factReads?: string[][];
+  factQueries?: FactQuery[];
   financialCoverageReads?: string[][];
   candleReads?: string[][];
   actionCoverageReads?: string[][];
@@ -466,9 +468,14 @@ function makePipelineResolver(options: {
       findMissingTradingValueDates: () => [...(options.missingTradingValueDates ?? [])],
     } as never,
     facts: {
-      getFacts: async ({ keys }: { keys?: readonly string[] }) => {
-        if (keys !== undefined) options.factReads?.push([...keys]);
-        return facts.filter((fact) => keys?.includes(fact.key) ?? true);
+      getFacts: async (query: FactQuery) => {
+        if (query.keys !== undefined) options.factReads?.push([...query.keys]);
+        options.factQueries?.push(query);
+        return facts.filter((fact) => (
+          (query.keys?.includes(fact.key) ?? true)
+          && (query.fields?.includes(fact.field) ?? true)
+          && (query.asOfMaxTsMs === undefined || fact.asOfTsMs <= query.asOfMaxTsMs)
+        ));
       },
       saveFacts: async () => undefined,
       replaceSymbolFinancialFactsForYear: async () => undefined,
@@ -525,6 +532,35 @@ function makePipelineResolver(options: {
 
 describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
   const period = { from: PIPELINE_DATE, to: PIPELINE_DATE };
+  it('리밸런싱 날짜별 진행률을 시작 0부터 완료까지 보고한다', async () => {
+    const progress: Array<{ completedRebalanceDates: number; totalRebalanceDates: number }> = [];
+
+    const result = await makePipelineResolver().resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 }]),
+      period,
+      { onProgress: (value) => progress.push(value) },
+    );
+
+    expect(result.kind).toBe('READY');
+    expect(progress).toEqual([
+      { completedRebalanceDates: 0, totalRebalanceDates: 1 },
+      { completedRebalanceDates: 1, totalRebalanceDates: 1 },
+    ]);
+  });
+
+  it('날짜 사이 취소 요청은 다음 SQLite 조회 전에 resolver를 중단한다', async () => {
+    const metricReads: string[][] = [];
+
+    await expect(makePipelineResolver({ metricReads }).resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 }]),
+      period,
+      { shouldStop: () => true },
+    )).rejects.toMatchObject({
+      name: 'UniverseResolutionCancelledError',
+    });
+    expect(metricReads).toEqual([]);
+  });
+
 
   it('PER 후보 identity가 모호하면 coverage와 fact를 읽기 전에 실패한다', async () => {
     const identityReads: SymbolIdentitySelection[][] = [];
@@ -1039,6 +1075,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
       symbol, market: 'KR', timeframe: '1d', tsMs: day(offset),
       open: close, high: close, low: close, close, volume: 1,
     });
+    const factQueries: FactQuery[] = [];
     const resolver = makePipelineResolver({
       candles: [
         candle('000001', 2, 100), candle('000001', 1, 50), candle('000001', 0, 55),
@@ -1049,6 +1086,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
         scope: 'SYMBOL', key: '000001', field: 'SPLIT_RATIO', periodKey: '2025-05-14',
         asOfTsMs: PIPELINE_TS + 365 * 86_400_000, value: 2, unit: 'ratio',
       }],
+      factQueries,
     });
 
     const result = await resolver.resolveOrDescribeNeeds(
@@ -1064,6 +1102,9 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
       marketCapKrw: '200',
       volume: 2_000,
       tradingValueKrw: '20000',
+    });
+    expect(factQueries).toContainEqual({
+      scope: 'SYMBOL', keys: ['000001', '000002', '000003'], fields: ['SPLIT_RATIO'],
     });
   });
 

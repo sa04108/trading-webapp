@@ -108,6 +108,27 @@ describe('SymbolMasterService.validateIdentityLifetime', () => {
     await t.close();
   });
 
+  it('알려진 SCD version이 전혀 없는 shortCode의 봉도 orphan으로 찾는다', async () => {
+    const t = await createTestApp();
+    t.container.database.db.insert(symbols).values({
+      code: '000001', market: 'KR', name: '등록됐지만 이력 없음', standardCode: 'KR7000000001',
+      createdAtMs: t.container.clock.now(),
+    }).run();
+    t.container.database.db.insert(krxDailyBars).values({
+      shortCode: '000001', date: '2025-01-02', market: 'KOSPI',
+      open: 100, high: 101, low: 99, close: 100, volume: 1_000,
+    }).run();
+
+    const snapshot = t.container.symbolMasterService.readIdentitySnapshot(
+      ['000001'],
+      ['KR7000000001'],
+    );
+
+    expect(snapshot.versions).toEqual([]);
+    expect(snapshot.uncoveredBarShortCodes).toEqual(['000001']);
+    await t.close();
+  });
+
   it('이미 정확히 등록된 shortCode도 SCD 구간 밖의 과거 봉을 숨기지 않는다', async () => {
     const t = await createTestApp();
     insertVersion(t, {

@@ -37,6 +37,7 @@ import {
   buildBacktestPreparationPlan,
   type BacktestPreparationPlan,
 } from './backtest-preparation-plan.js';
+import { UniverseResolutionCancelledError } from './universe-rule-resolver.js';
 import type {
   RebalanceDiagnostic,
   UniverseDataNeed,
@@ -530,6 +531,9 @@ export class BacktestPreparationOrchestrator {
       );
     } catch (error) {
       if (this.stopping) return;
+      if (error instanceof UniverseResolutionCancelledError) {
+        if (this.finishCancelledIfRequested(jobId)) return;
+      }
       const current = this.getRow(jobId);
       if (!current || current.status !== 'RUNNING') return;
       if (error instanceof KrxQuotaError) {
@@ -546,8 +550,20 @@ export class BacktestPreparationOrchestrator {
   }
 
   private async resolve(jobId: string, input: PreparationInput): Promise<UniverseResolveAttempt> {
-    this.persistAndEmit(jobId, { phase: 'RESOLVING_STAGES' }, ['RUNNING']);
-    return this.deps.resolver.resolveOrDescribeNeeds(input.universeRule, input.period);
+    this.persistAndEmit(jobId, {
+      phase: 'RESOLVING_STAGES',
+      doneSymbols: 0,
+      totalSymbols: 0,
+    }, ['RUNNING']);
+    return this.deps.resolver.resolveOrDescribeNeeds(input.universeRule, input.period, {
+      onProgress: ({ completedRebalanceDates, totalRebalanceDates }) => {
+        this.persistAndEmit(jobId, {
+          doneSymbols: completedRebalanceDates,
+          totalSymbols: totalRebalanceDates,
+        }, ['RUNNING']);
+      },
+      shouldStop: () => this.cancelOrStopRequested(jobId),
+    });
   }
 
   private async resolveUntilReady(

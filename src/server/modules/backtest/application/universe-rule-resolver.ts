@@ -77,6 +77,23 @@ export interface UniverseDataNeed {
   readonly priceRange: { from: string; to: string } | null;
 }
 
+export interface UniverseResolveProgress {
+  readonly completedRebalanceDates: number;
+  readonly totalRebalanceDates: number;
+}
+
+export interface UniverseResolveHooks {
+  readonly onProgress?: (progress: UniverseResolveProgress) => void;
+  readonly shouldStop?: () => boolean;
+}
+
+export class UniverseResolutionCancelledError extends Error {
+  constructor() {
+    super('유니버스 해소가 취소되었습니다.');
+    this.name = 'UniverseResolutionCancelledError';
+  }
+}
+
 export interface UniverseScheduleMember {
   readonly symbol: string;
   readonly standardCode: string;
@@ -277,6 +294,7 @@ export class UniverseRuleResolver {
   async resolveOrDescribeNeeds(
     rule: UniverseRule,
     period: BacktestPeriod,
+    hooks: UniverseResolveHooks = {},
   ): Promise<UniverseResolveAttempt> {
     const { selectionMetrics, candles, facts, factCoverage, actionCoverage } = this.requirePipelineDeps();
     const factSymbols = new Set<string>();
@@ -293,6 +311,17 @@ export class UniverseRuleResolver {
     // 넣으면 DAY 일정에서 같은 200종목을 수천 번 DB 조회하게 된다. 호출 수명 캐시라
     // 다음 resolve/ingest의 변경은 숨기지 않는다.
     const validatedIdentityPairs = new Set<string>();
+    const rebalanceDates = computeSharedRebalanceDates(period, rule.rebalanceInterval);
+    let completedRebalanceDates = 0;
+    hooks.onProgress?.({ completedRebalanceDates, totalRebalanceDates: rebalanceDates.length });
+
+    const throwIfStopped = (): void => {
+      if (hooks.shouldStop?.() === true) throw new UniverseResolutionCancelledError();
+    };
+    const reportDateCompleted = (): void => {
+      completedRebalanceDates += 1;
+      hooks.onProgress?.({ completedRebalanceDates, totalRebalanceDates: rebalanceDates.length });
+    };
     const observedIdentitySelections = new Map<string, SymbolIdentitySelection>();
 
     const assertFreshIdentitySelections = (
@@ -353,11 +382,13 @@ export class UniverseRuleResolver {
           };
     };
 
-    for (const rebalanceDate of computeSharedRebalanceDates(period, rule.rebalanceInterval)) {
+    for (const rebalanceDate of rebalanceDates) {
+      throwIfStopped();
       const effectiveDate = this.deps.symbolMaster.effectiveTradingDateWithinCoverage(rebalanceDate);
       if (!this.deps.symbolMaster.isCovered(rebalanceDate) || effectiveDate === undefined) {
         candidateScopeKnown = false;
         selectionMetricDates.add(rebalanceDate);
+        reportDateCompleted();
         continue;
       }
 
@@ -383,6 +414,7 @@ export class UniverseRuleResolver {
       let hasUnresolvedStage = false;
 
       for (const stage of rule.stages) {
+        throwIfStopped();
         let stageReady = true;
         let rows: UniverseStageValue[];
 
@@ -609,7 +641,11 @@ export class UniverseRuleResolver {
             stageReady = false;
           }
 
-          const loaded = await facts.getFacts({ scope: 'SYMBOL', keys: codes });
+          const loaded = await facts.getFacts({
+            scope: 'SYMBOL',
+            keys: codes,
+            fields: [CORPORATE_ACTION_FIELD],
+          });
           const rankableCodes = new Set(codes.filter((code) => (
             (lookbackHistories.get(code)?.length ?? 0) === stage.lookbackTradingDays
           )));
@@ -744,6 +780,7 @@ export class UniverseRuleResolver {
           };
         }),
       });
+      reportDateCompleted();
     }
 
     if (

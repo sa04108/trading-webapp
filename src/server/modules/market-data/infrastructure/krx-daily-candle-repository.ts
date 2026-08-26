@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, lte } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, lte } from 'drizzle-orm';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import { krxDailyBars } from '../../../shared/db/schema.js';
 import { isValidCandle, type Candle, type Market, type Timeframe } from '../domain/candle.js';
@@ -6,6 +6,8 @@ import type { KrxMarket } from '../domain/krx-universe-types.js';
 import type { CandleQuery, CandleRepository } from '../application/ports.js';
 
 const MS_PER_DAY = 86_400_000;
+/** 날짜 경계 bind 두 개를 더해도 SQLite의 보수적인 999 bind 한도 아래다. */
+const READ_SYMBOL_BATCH_SIZE = 500;
 
 /**
  * 봉의 tsMs 규약은 "그 거래일의 UTC 자정"이다. `periodToTsRange` 가 만드는 조회
@@ -88,11 +90,45 @@ export class KrxDailyCandleRepository implements CandleRepository {
       .all();
   }
 
+  /**
+   * 다종목 조회를 종목별 SELECT로 풀면 유니버스 미리보기 한 번에
+   * `리밸런싱 날짜 수 × 후보 종목 수`만큼 SQLite 왕복이 생긴다. 종목을 bind 한도
+   * 안에서 묶어 읽고, 기존 포트 계약과 같은 입력 종목 순서로 내보낼 수 있게 Map으로
+   * 접는다.
+   */
+  private rowsBySymbol(
+    symbols: readonly string[],
+    fromTsMs?: number,
+    toTsMs?: number,
+  ): ReadonlyMap<string, typeof krxDailyBars.$inferSelect[]> {
+    const uniqueSymbols = [...new Set(symbols)];
+    const grouped = new Map<string, typeof krxDailyBars.$inferSelect[]>();
+    for (let index = 0; index < uniqueSymbols.length; index += READ_SYMBOL_BATCH_SIZE) {
+      const batch = uniqueSymbols.slice(index, index + READ_SYMBOL_BATCH_SIZE);
+      const conditions = [inArray(krxDailyBars.shortCode, batch)];
+      if (fromTsMs !== undefined) conditions.push(gte(krxDailyBars.date, ceilToDate(fromTsMs)));
+      if (toTsMs !== undefined) conditions.push(lte(krxDailyBars.date, floorToDate(toTsMs)));
+      const rows = this.db
+        .select()
+        .from(krxDailyBars)
+        .where(and(...conditions))
+        .orderBy(asc(krxDailyBars.shortCode), asc(krxDailyBars.date))
+        .all();
+      for (const row of rows) {
+        const values = grouped.get(row.shortCode) ?? [];
+        values.push(row);
+        grouped.set(row.shortCode, values);
+      }
+    }
+    return grouped;
+  }
+
   async *getCandles(query: CandleQuery): AsyncIterable<Candle> {
     if (!this.supports(query.market)) return;
 
+    const rowsBySymbol = this.rowsBySymbol(query.symbols, query.fromTsMs, query.toTsMs);
     for (const symbol of query.symbols) {
-      for (const row of this.rows(symbol, query.fromTsMs, query.toTsMs)) {
+      for (const row of rowsBySymbol.get(symbol) ?? []) {
         const candle = toCandle(row, symbol, query.market, query.timeframe);
         if (isValidCandle(candle)) yield candle;
       }
