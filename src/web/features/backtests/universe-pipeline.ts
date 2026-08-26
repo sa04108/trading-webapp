@@ -8,7 +8,7 @@ import {
 /** 첫 단계만 이 값까지 허용한다 — 뒤 단계는 항상 직전 단계 값이 상한이다 (스키마와 같은 값) */
 export const FIRST_STAGE_LIMIT_MAX = 200;
 
-/** 급하락 단계를 새로 추가할 때 붙이는 기본 조회기간 — 편집기가 곧바로 유효한 값을 보여주기 위함 */
+/** 가격 변동 단계를 새로 추가할 때 붙이는 기본 산정기간 — 편집기가 곧바로 유효한 값을 보여주기 위함 */
 export const DEFAULT_DECLINE_LOOKBACK_TRADING_DAYS = 20;
 
 const MAX_STAGE_COUNT = 6;
@@ -149,4 +149,13 @@ export function normalizeStageLimitInput(
   const n = Number(text);
   if (!Number.isInteger(n)) return fallback;
   return Math.min(maxLimit, Math.max(1, n));
+}
+
+/** 가격 변동 산정기간 원문을 입력 완료 시점에 1~252 거래일로 확정한다. */
+export function normalizePriceChangeLookbackInput(raw: string, fallback: number): number {
+  const text = raw.trim();
+  if (text === '') return fallback;
+  const n = Number(text);
+  if (!Number.isInteger(n)) return fallback;
+  return Math.min(252, Math.max(1, n));
 }

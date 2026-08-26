@@ -170,6 +170,22 @@ test('유니버스 정렬 방향을 기준별 문구로 명시해 고른다', as
   await page.getByRole('button', { name: '가격 변동 단계 추가' }).click();
   await expect(page.locator('#stage-direction-2')).toHaveValue('HIGH');
   await expect(page.locator('#stage-direction-2 option')).toHaveText(['급상승', '급하락']);
+  const priceChangeLookback = page.getByLabel('가격 변동 산정기간(거래일)', { exact: true });
+  await expect(priceChangeLookback).toHaveValue('20');
+
+  // 산정기간은 편집 중 원문을 유지하고 포커스를 벗어날 때만 범위를 검증한다.
+  await priceChangeLookback.fill('999');
+  await expect(priceChangeLookback).toHaveValue('999');
+  await priceChangeLookback.blur();
+  await expect(priceChangeLookback).toHaveValue('252');
+  await priceChangeLookback.fill('60');
+  await priceChangeLookback.blur();
+  await expect(priceChangeLookback).toHaveValue('60');
+  await priceChangeLookback.fill('');
+  await expect(priceChangeLookback).toHaveValue('');
+  await priceChangeLookback.blur();
+  await expect(priceChangeLookback).toHaveValue('60');
+
   await page.locator('#stage-direction-2').selectOption('LOW');
   await expect(page.locator('#stage-direction-2')).toHaveValue('LOW');
 

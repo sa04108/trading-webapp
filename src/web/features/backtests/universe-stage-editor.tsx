@@ -15,6 +15,7 @@ import {
   changeStageLimit,
   FIRST_STAGE_LIMIT_MAX,
   moveStage,
+  normalizePriceChangeLookbackInput,
   normalizeStageLimitInput,
   parseStageLimitInput,
   removeStage,
@@ -103,6 +104,41 @@ function StageLimitInput({
         const normalized = normalizeStageLimitInput(text, value, max);
         setText(String(normalized));
         if (normalized !== value) onValueChange(normalized);
+      }}
+    />
+  );
+}
+
+function PriceChangeLookbackInput({
+  index,
+  value,
+  onValueCommit,
+}: {
+  index: number;
+  value: number;
+  onValueCommit: (value: number) => void;
+}) {
+  const [text, setText] = useState(String(value));
+
+  useEffect(() => {
+    setText(String(value));
+  }, [value]);
+
+  return (
+    <Input
+      id={`stage-lookback-${index}`}
+      name="lookbackTradingDays"
+      type="number"
+      inputMode="numeric"
+      className="h-8 w-24"
+      min={DECLINE_LOOKBACK_MIN}
+      max={DECLINE_LOOKBACK_MAX}
+      value={text}
+      onChange={(event) => setText(event.target.value)}
+      onBlur={() => {
+        const normalized = normalizePriceChangeLookbackInput(text, value);
+        setText(String(normalized));
+        if (normalized !== value) onValueCommit(normalized);
       }}
     />
   );
@@ -241,29 +277,15 @@ export function UniverseStageEditor({ stages, onChange }: UniverseStageEditorPro
 
             {stage.criterion === 'DECLINE' ? (
               <div className="space-y-1">
-                <Label htmlFor={`stage-lookback-${index}`}>급락 조회기간(거래일)</Label>
-                <Input
-                  id={`stage-lookback-${index}`}
-                  name="lookbackTradingDays"
-                  type="number"
-                  inputMode="numeric"
-                  className="h-8 w-24"
-                  min={DECLINE_LOOKBACK_MIN}
-                  max={DECLINE_LOOKBACK_MAX}
+                <Label htmlFor={`stage-lookback-${index}`}>가격 변동 산정기간(거래일)</Label>
+                <PriceChangeLookbackInput
+                  index={index}
                   value={stage.lookbackTradingDays}
-                  onChange={(event) => {
-                    const n = Number(event.target.value);
-                    if (
-                      !Number.isInteger(n) ||
-                      n < DECLINE_LOOKBACK_MIN ||
-                      n > DECLINE_LOOKBACK_MAX
-                    ) {
-                      return;
-                    }
+                  onValueCommit={(lookbackTradingDays) => {
                     onChange(
                       stages.map((s, i) =>
                         i === index && s.criterion === 'DECLINE'
-                          ? { ...s, lookbackTradingDays: n }
+                          ? { ...s, lookbackTradingDays }
                           : s,
                       ),
                     );

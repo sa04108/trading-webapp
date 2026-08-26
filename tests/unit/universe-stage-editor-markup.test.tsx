@@ -86,9 +86,11 @@ describe('단계 추가', () => {
     expect(update.changedIndices).toEqual([1]);
   });
 
-  it('급하락을 추가하면 lookback input 기본값 20이 보인다', () => {
+  it('가격 변동을 추가하면 산정기간 input 기본값 20이 보인다', () => {
     const update = addStage(DEFAULT_UNIVERSE_RULE.stages, 'DECLINE');
     const html = renderEditor(update.stages);
+    expect(html).toContain('가격 변동 산정기간(거래일)');
+    expect(html).not.toContain('급락 조회기간');
     expect(html).toContain('name="lookbackTradingDays"');
     expect(html).toContain('value="20"');
   });

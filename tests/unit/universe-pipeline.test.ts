@@ -5,6 +5,7 @@ import {
   changeStageDirection,
   changeStageLimit,
   moveStage,
+  normalizePriceChangeLookbackInput,
   normalizeStageLimitInput,
   parseStageLimitInput,
   removeStage,
@@ -258,5 +259,22 @@ describe('normalizeStageLimitInput', () => {
 
   it('범위 안 정수는 그대로 확정한다', () => {
     expect(normalizeStageLimitInput('42', 37, 200)).toBe(42);
+  });
+});
+
+describe('normalizePriceChangeLookbackInput', () => {
+  it('빈 값과 정수가 아닌 값은 직전 유효값을 복구한다', () => {
+    expect(normalizePriceChangeLookbackInput('', 20)).toBe(20);
+    expect(normalizePriceChangeLookbackInput('1.5', 20)).toBe(20);
+  });
+
+  it('범위 밖 정수는 1~252 거래일로 보정한다', () => {
+    expect(normalizePriceChangeLookbackInput('0', 20)).toBe(1);
+    expect(normalizePriceChangeLookbackInput('-5', 20)).toBe(1);
+    expect(normalizePriceChangeLookbackInput('253', 20)).toBe(252);
+  });
+
+  it('범위 안 정수는 그대로 확정한다', () => {
+    expect(normalizePriceChangeLookbackInput('60', 20)).toBe(60);
   });
 });
