@@ -50,5 +50,6 @@ export function registerSystemRoutes(
     freeMemoryBytes: os.freemem(),
     queueLength: container.systemStatus.queueLength(),
     runningJobs: container.systemStatus.runningJobs(),
+    registeredSymbolCount: container.symbolService.countSymbols(),
   }));
 }

@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
 import { SqliteFactRepository } from '../../src/server/modules/facts/infrastructure/sqlite-fact-repository.js';
 import { openDatabase, type DatabaseHandle } from '../../src/server/shared/db/database.js';
-import { symbolFactsState, symbols } from '../../src/server/shared/db/schema.js';
 
 let root: string;
 let database: DatabaseHandle;
@@ -44,51 +43,7 @@ describe('SqliteFactRepository', () => {
 
   it('빈 배열 저장은 아무 일도 하지 않는다', async () => {
     await repository.saveFacts([]);
-    expect(repository.hasFacts('SYMBOL', '005930')).toBe(false);
-  });
-
-  it('수집되지 않은 데이터셋 조회는 빈 배열', async () => {
     expect(await repository.getFacts({ scope: 'SYMBOL' })).toEqual([]);
-    expect(repository.hasFacts('SYMBOL', 'nope!')).toBe(false);
-  });
-
-  it('팩트가 0건이어도 수집 coverage가 있으면 수집된 종목으로 센다', () => {
-    database.db.insert(symbols).values({
-      code: '005930',
-      market: 'KR',
-      createdAtMs: 1,
-    }).run();
-    database.db.insert(symbolFactsState).values({
-      code: '005930',
-      coveredYearsJson: '[2025]',
-      actionCoveredYearsJson: '[]',
-      actionGapYearsJson: '[]',
-      updatedAtMs: 1,
-    }).run();
-
-    expect(repository.hasFacts('SYMBOL', '005930')).toBe(true);
-    expect(repository.symbolsWithFacts()).toEqual(new Set(['005930']));
-  });
-
-  /** 목록 화면은 종목마다 묻지 않고 집합을 한 번 받는다. */
-  describe('symbolsWithFacts', () => {
-    it('수집 전에는 빈 집합이다', () => {
-      expect(repository.symbolsWithFacts()).toEqual(new Set());
-    });
-
-    it('저장한 종목만 담고 hasFacts 와 답이 같다', async () => {
-      await repository.saveFacts([fact({ key: '005930' }), fact({ key: '000660' })]);
-      const codes = repository.symbolsWithFacts();
-      expect(codes).toEqual(new Set(['005930', '000660']));
-      for (const code of ['005930', '000660', '035720']) {
-        expect(codes.has(code)).toBe(repository.hasFacts('SYMBOL', code));
-      }
-    });
-
-    it('MACRO 팩트는 종목 집합에 섞이지 않는다 — key 가 종목이 아니라 지표 계열명이다', async () => {
-      await repository.saveFacts([fact({ scope: 'MACRO', key: 'KOSPI' })]);
-      expect(repository.symbolsWithFacts()).toEqual(new Set());
-    });
   });
 
   it('asOfMaxTsMs 로 미래 공시를 잘라낸다', async () => {
@@ -211,7 +166,6 @@ describe('SqliteFactRepository', () => {
     ]);
     expect(await repository.getFacts({ scope: 'MACRO' })).toHaveLength(1);
     expect(await repository.getFacts({ scope: 'SYMBOL' })).toHaveLength(1);
-    expect(repository.hasFacts('MACRO', 'KR_BASE_RATE')).toBe(true);
   });
 
   it('부적절한 종목 키는 거부한다 (경로 조작 방지)', async () => {
@@ -271,9 +225,5 @@ describe('SqliteFactRepository', () => {
     ]);
     const rows = await repository.getFacts({ scope: 'SYMBOL' });
     expect(rows.map((row) => row.periodKey).sort()).toEqual(['2025Q1', '2025Q2']);
-  });
-
-  it('부적절한 key 로 hasFacts 를 호출하면 false 를 반환한다', () => {
-    expect(repository.hasFacts('SYMBOL', '../escape')).toBe(false);
   });
 });

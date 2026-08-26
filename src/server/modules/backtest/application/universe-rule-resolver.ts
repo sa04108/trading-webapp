@@ -447,8 +447,8 @@ export class UniverseRuleResolver {
           // coverage·facts가 shortCode 키라, issuer가 다른 전 생애 데이터를 읽기 전에
           // 현재 후보의 양방향 identity가 전체 SCD에서 1:1인지 먼저 확인한다.
           validateCandidateIdentities(candidates, effectiveDate);
-          // 재무 결측은 fact 행 존재(hasFacts)가 아니라 financial coverage 연도로
-          // 판정한다. 자본변동 전용 수집도 fact 행을 남기므로 행 존재는
+          // 재무 결측은 단순 fact 행 존재가 아니라 financial coverage 연도로 판정한다.
+          // 자본변동 전용 수집도 fact 행을 남기므로 행 존재는
           // 재무 있음을 증명하지 못한다 (fact-coverage-store.ts 주석). coverage 는
           // 공시가 없던 연도도 시도 후 기록되므로 이 판정은 sync 한 번이면 수렴한다.
           const requiredYears = financialStageRequiredFactYears(effectiveDate, period);

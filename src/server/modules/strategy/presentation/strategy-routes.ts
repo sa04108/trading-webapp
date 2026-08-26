@@ -12,13 +12,6 @@ export function registerStrategyRoutes(
     strategies: registry.list(),
   }));
 
-  app.get('/strategies/:strategyId', { preHandler: requireAuth }, async (request, reply) => {
-    const { strategyId } = request.params as { strategyId: string };
-    const summary = registry.describe(strategyId);
-    if (!summary) return reply.code(404).send({ error: '전략을 찾을 수 없습니다' });
-    return summary;
-  });
-
   app.get('/strategies/:strategyId/schema', { preHandler: requireAuth }, async (request, reply) => {
     const { strategyId } = request.params as { strategyId: string };
     const schema = registry.getParameterJsonSchema(strategyId);

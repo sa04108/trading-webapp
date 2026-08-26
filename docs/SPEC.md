@@ -917,11 +917,20 @@ POST /api/v1/auth/logout
 GET  /api/v1/auth/me
 ```
 
+## 알림
+
+```http
+GET    /api/v1/notifications
+GET    /api/v1/notifications/unread-count
+POST   /api/v1/notifications/read-all
+DELETE /api/v1/notifications
+GET    /api/v1/notifications/events
+```
+
 ## 전략
 
 ```http
 GET /api/v1/strategies
-GET /api/v1/strategies/:strategyId
 GET /api/v1/strategies/:strategyId/schema
 ```
 
@@ -929,47 +938,35 @@ GET /api/v1/strategies/:strategyId/schema
 
 ```http
 GET  /api/v1/markets
-GET  /api/v1/symbols
 GET  /api/v1/symbols/info
-POST /api/v1/symbols
-POST /api/v1/symbols/remove
 
 GET  /api/v1/symbol-master/universe
 GET  /api/v1/symbol-master/coverage
 GET  /api/v1/symbol-master/events
 POST /api/v1/symbol-master/sync
 POST /api/v1/symbol-master/backfill
+
+GET  /api/v1/benchmarks
+POST /api/v1/benchmarks/backfill
 ```
 
-라우트가 `datasets` 가 아니라 `symbols`·`symbol-master` 인 이유는 종목을 1급
-객체로 바꾼 D-034 다.
+종목 등록·삭제용 공개 API는 없다(D-080). 백테스트 준비가 KRX 종목 마스터에서 해소한
+표준코드와 단축코드를 함께 고정해 자동 등록한다. `symbols/info`는 표시명 조회만 맡는다.
 
 `import`·`sync`·`data-jobs` 엔드포인트는 그 뒤 D-041 로 사라졌다 — CSV 가져오기·
 증권사 봉 동기화 자체가 없어졌다. 봉 수집은 이제 KRX 동기화(`symbol-master/sync`·
 `symbol-master/backfill`)뿐이다.
-
-## 자본변동 수집
-
-```http
-POST /api/v1/facts/corporate-action-sync-plan
-POST /api/v1/facts/corporate-action-sync-jobs
-GET  /api/v1/facts/corporate-action-sync-jobs/:id
-POST /api/v1/facts/corporate-action-sync-jobs/:id/cancel
-GET  /api/v1/facts/corporate-action-sync-jobs/:id/events
-```
-
-§9.7 제출 게이트가 자본변동 커버리지 없는 종목을 막았을 때 위저드가 이
-경로로 일괄 수집을 건다(D-043). `sync-plan`은 잡을 만들지 않고 예상
-호출·시간만 미리 계산한다. `sync-jobs`는 실제 잡을 만들어 큐에 넣는다.
-진행률은 `events`가 SSE로 흘린다 — 백테스트 진행률(`/backtests/:id/events`)
-과 같은 골격이다. 재무는 이 경로로 받지 않는다. `FactSyncService`가
-`fetchFinancials`를 건너뛰고 자본변동만 받는 경로를 별도로 노출한다.
+재무·자본변동은 별도 `/facts/*` 공개 API가 아니라 백테스트 준비 작업이 필요한 기간을
+계산해 자동 수집한다(D-049).
 
 ## 백테스트
 
 ```http
 GET    /api/v1/backtests/profiles
 POST   /api/v1/backtests/universe-preview
+GET    /api/v1/backtests/preparation-jobs/:id
+POST   /api/v1/backtests/preparation-jobs/:id/cancel
+GET    /api/v1/backtests/preparation-jobs/:id/events
 POST   /api/v1/backtests
 GET    /api/v1/backtests
 GET    /api/v1/backtests/:id
@@ -1031,6 +1028,22 @@ GET /api/v1/system/info
 ```
 
 `system/info`에서 비밀값·민감 경로를 반환하지 않는다.
+
+## 원격 worker 내부 계약
+
+Prefix는 `/api/internal/workers`이며 worker token 인증을 요구한다.
+
+```http
+POST /api/internal/workers/probe
+POST /api/internal/workers/jobs/claim
+POST /api/internal/workers/jobs/:jobId/heartbeat
+GET  /api/internal/workers/jobs/:jobId/input
+PUT  /api/internal/workers/jobs/:jobId/result
+POST /api/internal/workers/jobs/:jobId/finish
+```
+
+`probe`는 local 모드에도 배포 검증용으로 열리지만 나머지 lease·artifact 경로는 remote
+모드에서만 등록한다(D-060~D-063).
 
 ---
 

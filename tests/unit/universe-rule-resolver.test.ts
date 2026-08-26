@@ -330,7 +330,7 @@ function makePipelineResolver(options: {
   metrics?: readonly DailySelectionMetric[];
   missingTradingValueDates?: readonly string[];
   facts?: readonly Fact[];
-  factsPresent?: readonly string[];
+  financiallyCoveredSymbols?: readonly string[];
   financialCoverage?: ReadonlyMap<string, readonly number[]>;
   candles?: readonly Candle[];
   actionCoverage?: ReadonlyMap<string, readonly number[]>;
@@ -358,16 +358,18 @@ function makePipelineResolver(options: {
     ...netIncomeFacts('000002', [5, 5, 5, 5]),
     ...netIncomeFacts('000003', [5, 5, 5, 5]),
   ];
-  const factsPresent = new Set(options.factsPresent ?? PIPELINE_ENTRIES.map((entry) => entry.shortCode));
+  const financiallyCoveredSymbols = new Set(
+    options.financiallyCoveredSymbols ?? PIPELINE_ENTRIES.map((entry) => entry.shortCode),
+  );
   const sharesChanges = options.sharesChanges ?? facts.flatMap((fact): SharesChange[] => (
     fact.field === 'SPLIT_RATIO'
       ? [{ shortCode: fact.key, effectiveDate: fact.periodKey, ratio: fact.value }]
       : []
   ));
-  // PER 결측 판정은 financial coverage 연도를 본다 — factsPresent 종목은 PIPELINE_DATE
-  // (2025) 기준 필요 연도 [2024, 2025]를 모두 덮은 것으로 둔다.
+  // PER 결측 판정은 financial coverage 연도를 본다 — 기본 종목은 PIPELINE_DATE(2025)
+  // 기준 필요 연도 [2024, 2025]를 모두 덮은 것으로 둔다.
   const financialCoverage = options.financialCoverage ?? new Map(
-    [...factsPresent].map((code) => [code, [2024, 2025] as readonly number[]]),
+    [...financiallyCoveredSymbols].map((code) => [code, [2024, 2025] as readonly number[]]),
   );
   const candles = options.candles ?? [];
   const actionCoverage = options.actionCoverage ?? new Map(
@@ -468,8 +470,6 @@ function makePipelineResolver(options: {
         if (keys !== undefined) options.factReads?.push([...keys]);
         return facts.filter((fact) => keys?.includes(fact.key) ?? true);
       },
-      hasFacts: (_scope: 'SYMBOL' | 'MACRO', key: string) => factsPresent.has(key),
-      symbolsWithFacts: () => factsPresent,
       saveFacts: async () => undefined,
       replaceSymbolFinancialFactsForYear: async () => undefined,
     },
@@ -831,7 +831,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     const candleReads: string[][] = [];
     const resolver = makePipelineResolver({
       missingTradingValueDates: [PIPELINE_DATE],
-      factsPresent: [],
+      financiallyCoveredSymbols: [],
       candles: [],
       actionCoverage: new Map(),
       identityReads,
@@ -948,8 +948,8 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
   });
 
   it('자본변동 fact만 있어도 재무 coverage가 없으면 NEEDS_DATA로 요구한다', async () => {
-    // hasFacts로 판정하던 회귀: SPLIT_RATIO만 저장된 종목이 재무 있음으로
-    // 오인돼 PER 결측 제외됐다. factsPresent는 세 종목 모두 fact가 있다고 답한다.
+    // 단순 fact 존재로 판정하던 회귀: 재무 coverage가 없는 000003도 재무 있음으로
+    // 오인돼 PER 결측에서 빠졌다. coverage를 일부러 두 종목에만 준다.
     const resolver = makePipelineResolver({
       financialCoverage: new Map([
         ['000001', [2024, 2025]],
@@ -989,7 +989,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
 
   it('후속 ready stage가 완전한 후보 상한의 eligible 0을 증명하면 이전 needs를 버린다', async () => {
     const resolver = makePipelineResolver({
-      factsPresent: [],
+      financiallyCoveredSymbols: [],
       metrics: pipelineMetrics.map((row) => ({ ...row, marketCapKrw: null })),
     });
 
@@ -1014,7 +1014,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
       tradingValueKrw: null,
     })));
     const resolver = makePipelineResolver({
-      factsPresent: [],
+      financiallyCoveredSymbols: [],
       metrics,
       effectiveTradingDate: (date) => date,
     });
@@ -1311,7 +1311,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
       open: 100, high: 100, low: 100, close: 100, volume: 1,
     });
     const resolver = makePipelineResolver({
-      factsPresent: [],
+      financiallyCoveredSymbols: [],
       candles: PIPELINE_ENTRIES.flatMap((entry) => [
         candle(entry.shortCode, 2),
         candle(entry.shortCode, 1),

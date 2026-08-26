@@ -114,9 +114,7 @@ export async function buildServer(container: Container): Promise<FastifyInstance
       registerAuthRoutes(api, authDeps);
       registerSymbolRoutes(
         api,
-        container.symbolService,
         container.symbolInfoService,
-        () => container.factRepository.symbolsWithFacts(),
         requireAuth,
       );
       registerStrategyRoutes(api, container.strategyRegistry, requireAuth);
