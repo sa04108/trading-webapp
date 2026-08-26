@@ -10,10 +10,6 @@ import type {
 } from '../../../../shared/schemas/symbol-master.js';
 import type { SymbolMasterEntry } from '../domain/symbol-master.js';
 import {
-  FredContractError,
-  FredNotConfiguredError,
-  KrxApprovalExpiredError,
-  KrxContractError,
   KrxNotConfiguredError,
   KrxQuotaError,
 } from '../application/ports.js';
@@ -41,7 +37,6 @@ const benchmarkQuerySchema = z.object({
   from: dateSchema,
   to: dateSchema,
 });
-const benchmarkSyncBodySchema = z.object({ benchmarkId: benchmarkIdSchema, date: dateSchema });
 const benchmarkBackfillBodySchema = z.object({
   benchmarkId: benchmarkIdSchema,
   from: dateSchema,
@@ -195,28 +190,6 @@ export function registerSymbolMasterRoutes(
       ...deps.benchmarks.status(benchmarkId, from, to),
       backfill: deps.benchmarks.backfillStatus(),
     };
-  });
-
-  app.post('/benchmarks/sync', { preHandler: requireAuth }, async (request, reply) => {
-    const parsed = benchmarkSyncBodySchema.safeParse(request.body);
-    if (!parsed.success) return reply.code(400).send({ error: 'benchmarkId와 date(YYYY-MM-DD) 필드가 필요합니다' });
-    try {
-      await deps.benchmarks.syncDate(parsed.data.benchmarkId, parsed.data.date);
-      return parsed.data;
-    } catch (error) {
-      if (error instanceof KrxQuotaError) return reply.code(429).send({ error: error.message });
-      if (
-        error instanceof KrxNotConfiguredError
-        || error instanceof KrxApprovalExpiredError
-        || error instanceof FredNotConfiguredError
-      ) {
-        return reply.code(503).send({ error: error.message });
-      }
-      if (error instanceof KrxContractError || error instanceof FredContractError) {
-        return reply.code(502).send({ error: error.message });
-      }
-      throw error;
-    }
   });
 
   app.post('/benchmarks/backfill', { preHandler: requireAuth }, async (request, reply) => {

@@ -506,13 +506,6 @@ test('backtest run completes using only KRX daily bars for a delisted stock', as
   await expect(completed).toContainText('전고점 돌파');
   await expect(completed).toContainText('수익률');
 
-  // 이 테스트가 미리보기로 자동 등록한 900010 을 되돌린다 — 상장폐지 종목이
-  // 다른 시나리오의 등록 종목 목록에 계속 남아 있을 이유가 없다. 두 프로젝트
-  // (mobile·desktop)가 같은 서버를 공유하므로(playwright.config workers:1),
-  // 여기서 지워도 이 시나리오가 이미 채운 krx_daily_bars 는 그대로 남아
-  // 재등록 시 다시 쓰인다(symbols 삭제는 KRX 일봉을 지우지 않는다 —
-  // symbol-service.ts removeSymbols 주석 참고).
-  await page.request.post('/api/v1/symbols/remove', { data: { codes: ['900010'] } });
 });
 
 test('mobile layout has no horizontal scroll on core screens (스펙 §38)', async ({ page }, testInfo) => {

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, count, desc, eq, inArray } from 'drizzle-orm';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import { symbolVersions, symbols as symbolsTable } from '../../../shared/db/schema.js';
 import type { Clock } from '../../../shared/clock.js';
@@ -8,7 +8,7 @@ import type { AuditLogService } from '../../audit/audit-service.js';
 import { SYMBOL_PATTERN, type Market } from '../domain/candle.js';
 import { getSessionForMarket } from '../domain/exchange-session.js';
 
-/** 종목 화면의 한 행 */
+/** 등록 직후 내부 호출부가 받는 종목 요약 */
 export interface SymbolSummary {
   readonly code: string;
   readonly market: Market;
@@ -67,20 +67,12 @@ export class SymbolService {
     private readonly audit: AuditLogService,
   ) {}
 
-  listSymbols(): SymbolSummary[] {
-    return this.db
-      .select()
-      .from(symbolsTable)
-      .all()
-      .map((row) => this.toSummary(row));
+  /** 대시보드 상태 카드용 집계. 전체 행을 API로 내리지 않고 DB에서 수만 센다. */
+  countSymbols(): number {
+    return this.db.select({ value: count() }).from(symbolsTable).get()?.value ?? 0;
   }
 
-  /**
-   * 종목 하나만 조회한다 — 목록 전체를 만들어 찾지 않는다.
-   *
-   * 이전에는 `listSymbols().find(...)` 였다. 등록이 반환값으로 이것을 부르므로 1,000종목
-   * 일괄 등록이 목록을 1,000번 재구성하는 O(n²) 가 됐다.
-   */
+  /** 종목 하나만 조회한다. 등록 결과 확인과 테스트 준비가 공유한다. */
   getSymbol(code: string): SymbolSummary | null {
     const row = this.db.select().from(symbolsTable).where(eq(symbolsTable.code, code)).get();
     return row ? this.toSummary(row) : null;
@@ -109,7 +101,7 @@ export class SymbolService {
     return row ?? null;
   }
 
-  /** 행 → 화면이 읽는 요약. 목록과 단건이 같은 모양을 내도록 한 곳에 둔다 */
+  /** 등록 결과와 내부 단건 조회가 공유하는 최소 요약 */
   private toSummary(row: typeof symbolsTable.$inferSelect): SymbolSummary {
     return { code: row.code, market: row.market as Market, name: row.name };
   }
@@ -119,13 +111,12 @@ export class SymbolService {
   }
 
   /**
-   * 종목 등록. 이름은 호출부(라우트)가 `SymbolInfoService` 로 먼저 해석해 넘긴다 —
-   * 애플리케이션 서비스가 외부 조회를 직접 하면 소스 미설정 환경에서 등록이 막힌다.
+   * 종목 등록. 운영 호출부는 KRX 유니버스 준비 과정에서 이름과 standardCode를 함께
+   * 넘긴다. 애플리케이션 서비스는 외부 조회를 직접 하지 않는다.
    *
-   * standardCode(KRX 표준코드/ISIN)는 종목 마스터에서 등록할 때만 채워진다(Task 4,
-   * 스펙 2026-08-06) — 단축코드 재사용을 구분하는 유일한 열쇠라고 스키마 주석에
-   * 적혀 있다. 이후에는 이 값을 덮어쓸 방법을 일부러 두지 않았다: 이미 정착된
-   * standardCode 를 새 조회로 갈아치우면 그 판별 근거 자체가 사라진다.
+   * standardCode(KRX 표준코드/ISIN)는 단축코드 재사용을 구분하는 유일한 열쇠다.
+   * 공개 수동 등록 API는 D-080에서 제거했고, 이후에도 정착된 standardCode를 새 조회로
+   * 덮어쓸 방법을 두지 않는다: 값을 갈아치우면 기존 정체성 판별 근거가 사라진다.
    */
   addSymbol(
     code: string,
@@ -170,26 +161,6 @@ export class SymbolService {
       if (row.name) result.set(row.code, { name: row.name, market: row.market as Market });
     }
     return result;
-  }
-
-  /**
-   * 종목 제거 — 목록에서만 뺀다.
-   *
-   * KRX 일봉은 지우지 않는다. 시장 전체가 공유하는 자산이라 종목을 목록에서 빼는
-   * 일과 함께 지우면, 그 종목을 참조하던 다른 백테스트·데이터셋의 봉까지 사라진다.
-   */
-  removeSymbols(codes: readonly string[]): void {
-    if (codes.length === 0) return;
-    // 예전에는 여기서 dataSyncJobs 에 QUEUED/RUNNING 잡이 있는지 확인해 동시 수집과
-    // 제거가 겹치지 않게 막았다. 동시 수집 잡 개념 자체가 D-041 로 사라져 그 조회는
-    // 항상 빈 결과였다(도달 불가) — 조회 자체를 지웠다.
-
-    for (const code of codes) {
-      const row = this.db.select().from(symbolsTable).where(eq(symbolsTable.code, code)).get();
-      if (!row) continue;
-      this.db.delete(symbolsTable).where(eq(symbolsTable.code, code)).run();
-      this.audit.record('system', 'symbol.removed', { code });
-    }
   }
 
   private getLatestVersion(

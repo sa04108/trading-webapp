@@ -931,6 +931,7 @@
   이 태스크(Task 10, 문서·주석 정리)의 범위 밖이라 코드는 고치지 않았다.
   후속 과제로 남긴다 — 후보는 재등록 시 커버리지 재확인을 강제하거나,
   `symbol_facts_state` 를 `symbols` 삭제와 독립된 생명주기로 바꾸는 것이다.
+  공개 종목 삭제 경로 자체는 이후 D-080에서 제거해 이 사용자 동선에서는 해소했다.
 - **알려진 한계 — e2e 는 이 게이트의 HTTP·화면 통합을 검증하지 않는다:**
   `scripts/e2e-server.ts` 의 `seedCorporateActionCoverageOnRegistration` 은
   등록되는 모든 종목에 커버리지를 무조건 심는다. `tests/e2e` 어디에도
@@ -1682,3 +1683,25 @@
   제외한다.
 - **범위:** 기존 날짜 수집 표식과 종목별 선정 지표 행을 대조하므로 새 API·schema·
   추가 데이터가 없다.
+
+## D-080: 공개 API 표면은 실제 제품·운영 소비자만 남긴다
+
+- **문제:** `POST /symbols`는 단축코드와 시장만 받아 KRX 표준코드가 없는 등록 행을
+  만들 수 있었다. 현재 화면에는 수동 등록 UI가 없었지만 과거 엔드포인트가 계속 열려
+  있어 종목 정체성 불변식을 우회했다. `POST /symbols/remove`도 E2E 뒷정리 외 소비자가
+  없었고, 실제 행 삭제와 cascade로 재무 coverage를 잃을 수 있었다.
+- **결정 — 종목 공개 CRUD와 목록을 제거한다:** `GET /symbols`, `POST /symbols`,
+  `POST /symbols/remove`를 제거한다. 종목은 백테스트 준비가 KRX 유니버스의 표준코드와
+  함께 자동 등록하며, 표시명 조회용 `GET /symbols/info`만 남긴다. 대시보드의 등록 수는
+  전체 행·재무 플래그를 내려받지 않고 `GET /system/info`의 `registeredSymbolCount`로 센다.
+- **결정 — 중복·무참조 경로를 제거한다:** 전략 요약 단건 조회는 `GET /strategies`와
+  같은 내용을 중복하므로 `GET /strategies/:strategyId`를 제거한다. 단일 날짜 벤치마크
+  동기화는 기간 백필에 포함되며 소비자가 없어 `POST /benchmarks/sync`를 제거하고
+  `GET /benchmarks`·`POST /benchmarks/backfill`만 남긴다.
+- **유지한 경로:** `POST /symbol-master/sync`는 종목 마스터 화면의 단일 날짜 동기화와
+  유니버스 준비의 휴장일 소급 보정에서 실제 사용한다. health는 배포 probe,
+  `/api/internal/workers/*`는 원격 worker 프로토콜이므로 웹 화면 참조 유무로 제거하지
+  않는다.
+- **호환성:** 이 서비스는 별도 공개 API 소비자를 지원하지 않는 단일 제품이며 제거한
+  경로는 현재 웹·worker·운영 스크립트에서 호출하지 않는다. 정체성 우회 경로를 유지하는
+  호환 shim은 두지 않는다.

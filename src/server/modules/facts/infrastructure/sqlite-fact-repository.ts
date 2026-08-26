@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray, like, lte, ne, sql } from 'drizzle-orm';
 import type { AppDatabase } from '../../../shared/db/database.js';
-import { facts as factRows, symbolFactsState } from '../../../shared/db/schema.js';
+import { facts as factRows } from '../../../shared/db/schema.js';
 import { SYMBOL_PATTERN } from '../../market-data/domain/candle.js';
 import { CORPORATE_ACTION_FIELD, type Fact } from '../domain/fact.js';
 import type { FactQuery, FactRepository } from '../application/ports.js';
@@ -110,38 +110,6 @@ export class SqliteFactRepository implements FactRepository {
     return rows.sort(compareFacts);
   }
 
-  hasFacts(scope: Fact['scope'], key: string): boolean {
-    if (scope === 'SYMBOL' && !SYMBOL_PATTERN.test(key)) return false;
-    const stored = this.db
-      .select({ key: factRows.key })
-      .from(factRows)
-      .where(and(eq(factRows.scope, scope), eq(factRows.key, key)))
-      .limit(1)
-      .get();
-    if (stored !== undefined) return true;
-
-    // 팩트가 0건이어도 coverage가 있으면 "수집했지만 공시 없음"이다.
-    return scope === 'SYMBOL' && this.db
-      .select({ code: symbolFactsState.code })
-      .from(symbolFactsState)
-      .where(eq(symbolFactsState.code, key))
-      .get() !== undefined;
-  }
-
-  symbolsWithFacts(): ReadonlySet<string> {
-    const codes = new Set(
-      this.db
-        .selectDistinct({ code: factRows.key })
-        .from(factRows)
-        .where(eq(factRows.scope, 'SYMBOL'))
-        .all()
-        .map((row) => row.code),
-    );
-    for (const row of this.db.select({ code: symbolFactsState.code }).from(symbolFactsState).all()) {
-      codes.add(row.code);
-    }
-    return codes;
-  }
 }
 
 function validateFacts(facts: readonly Fact[]): void {

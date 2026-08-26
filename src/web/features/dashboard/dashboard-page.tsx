@@ -21,6 +21,7 @@ interface SystemInfo {
   freeMemoryBytes: number;
   queueLength: number;
   runningJobs: number;
+  registeredSymbolCount: number;
 }
 
 function formatGb(bytes: number | null): string {
@@ -36,11 +37,6 @@ export function DashboardPage() {
     queryFn: () => api<SystemInfo>('/system/info'),
     refetchInterval: 30_000,
   });
-  const { data: symbolsResp } = useQuery({
-    queryKey: ['symbols', 'dashboard-count'],
-    queryFn: () => api<{ symbols: Array<{ code: string }> }>('/symbols'),
-  });
-
   const jobs = backtests?.jobs ?? [];
   const strategies = strategyList?.strategies;
   const active = jobs.filter((job) => !isTerminal(job.status));
@@ -128,10 +124,10 @@ export function DashboardPage() {
             <CardTitle className="text-base">데이터</CardTitle>
           </CardHeader>
           <CardContent className="text-sm">
-            {symbolsResp ? (
-              symbolsResp.symbols.length > 0 ? (
+            {info ? (
+              info.registeredSymbolCount > 0 ? (
                 <p>
-                  등록 종목 {symbolsResp.symbols.length}개 —{' '}
+                  등록 종목 {info.registeredSymbolCount}개 —{' '}
                   <Link to="/datasets/master" className="underline underline-offset-4">
                     종목 마스터 보기
                   </Link>

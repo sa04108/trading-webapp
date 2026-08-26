@@ -73,9 +73,9 @@ export function registerBacktestPreparationRoutes(
     try {
       const preview = await orchestrator.getReadyPreview(input);
       if (preview) {
-        // 유니버스 단계의 재무 게이트는 확정된 종목의 실제 재무 행만 본다. 전체
-        // `/symbols`의 hasFacts는 자본변동만 있어도 true고, 재무 coverage는 DART
-        // 무자료 수집에도 생기므로 둘 다 재무 보유 근거가 될 수 없다.
+        // 유니버스 단계의 재무 게이트는 확정된 종목의 실제 재무 행만 본다. 단순 fact
+        // 행 존재는 자본변동만 있어도 참이고, 재무 coverage는 DART 무자료 수집에도
+        // 생기므로 둘 다 재무 보유 근거가 될 수 없다.
         // 각 종목의 마지막 실행 봉 뒤 접수된 공시는 이 백테스트에서 쓸 수 없으므로 UI의
         // 보유 표시에도 포함하지 않는다. 전용 서비스는 빈 유니버스를 전체 조회로 해석하지 않는다.
         const factCutoffs = financialFactCutoffsFromCoverage({

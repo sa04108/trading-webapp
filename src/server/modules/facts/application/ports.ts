@@ -21,18 +21,6 @@ export interface FactRepository {
     year: number,
     facts: readonly Fact[],
   ): Promise<void>;
-  /**
-   * 종목 하나의 팩트 또는 수집 coverage 보유 여부. 목록 화면의 거친 배지용이다.
-   * 제출 검증은 실제 PIT 재무 행과 필수 연도 coverage를 별도로 확인한다(D-069).
-   */
-  hasFacts(scope: FactScope, key: string): boolean;
-  /**
-   * 재무를 가진 종목 코드 전체.
-   *
-   * 목록 화면용이다. 종목마다 `hasFacts`를 부르는 대신 한 번에 읽어 비용을
-   * **수집된 종목 수**에 묶는다 — 등록만 하고 수집하지 않은 종목은 0원이다.
-   */
-  symbolsWithFacts(): ReadonlySet<string>;
 }
 
 /** 수집이 채우지 못한 칸. 조용히 빠뜨리면 랭킹이 소리 없이 왜곡된다. */

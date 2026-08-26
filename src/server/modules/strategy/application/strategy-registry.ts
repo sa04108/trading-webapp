@@ -64,11 +64,7 @@ export class StrategyRegistry {
     return this.byId.get(strategyId) ?? null;
   }
 
-  /**
-   * 단건 조회용 요약 — 목록과 같은 `toSummary` 를 거친다. 라우트가 응답 객체를 직접
-   * 조립하면 필드를 더할 때 한쪽만 고쳐질 수 있는데, 이 필드는 한쪽만 낡으면
-   * 화면이 데이터 요구를 잘못 말한다.
-   */
+  /** 알림 등 내부 표시명이 필요한 호출부가 목록을 재구성하지 않도록 좁게 조회한다. */
   describe(strategyId: string): StrategySummary | null {
     const strategy = this.get(strategyId);
     return strategy === null ? null : toSummary(strategy);
