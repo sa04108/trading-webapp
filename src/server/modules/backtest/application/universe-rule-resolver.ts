@@ -415,6 +415,12 @@ export class UniverseRuleResolver {
 
       for (const stage of rule.stages) {
         throwIfStopped();
+        if (candidates.length === 0) {
+          // FactRepository의 keys=[]는 전체 key 조회다. 앞 단계가 후보 0을 확정했다면
+          // 후속 저장소를 읽지 않고도 빈 결과가 단조롭게 유지된다.
+          stageDiagnostics.push(rankUniverseStage(stage, []).diagnostic);
+          continue;
+        }
         let stageReady = true;
         let rows: UniverseStageValue[];
 
@@ -498,6 +504,7 @@ export class UniverseRuleResolver {
             scope: 'SYMBOL',
             keys: candidates.map((entry) => entry.shortCode),
           });
+          throwIfStopped();
           const view = new PitFactView(loaded);
           view.advanceTo(kstEndOfDayMs(effectiveDate));
           if (stage.criterion === 'PER') {
@@ -554,7 +561,29 @@ export class UniverseRuleResolver {
             effectiveDate,
             -(stage.lookbackTradingDays * 2 + 14),
           );
-          const histories = await loadCandleHistories(candles, codes, requiredFrom, effectiveDate);
+          // 정상 거래 종목은 N+14 달력일이면 N거래일을 채운다. 먼저 이 좁은 범위만
+          // 읽고 부족한 종목만 2N+14 보수 범위로 확장해 불필요한 row 변환을 줄인다.
+          // 확장 결과로 교체하므로 연휴·거래정지 경계의 선정 결과는 기존과 같다.
+          const optimisticFrom = addCalendarDays(
+            effectiveDate,
+            -(stage.lookbackTradingDays + 14),
+          );
+          const histories = await loadCandleHistories(
+            candles, codes, optimisticFrom, effectiveDate,
+          );
+          throwIfStopped();
+          const expandedCodes = codes.filter(
+            (code) => (histories.get(code)?.length ?? 0) < stage.lookbackTradingDays,
+          );
+          if (expandedCodes.length > 0) {
+            const expanded = await loadCandleHistories(
+              candles, expandedCodes, requiredFrom, effectiveDate,
+            );
+            throwIfStopped();
+            for (const code of expandedCodes) {
+              histories.set(code, expanded.get(code) ?? []);
+            }
+          }
           const lookbackHistories = new Map(
             codes.map((code) => [
               code,
@@ -646,6 +675,7 @@ export class UniverseRuleResolver {
             keys: codes,
             fields: [CORPORATE_ACTION_FIELD],
           });
+          throwIfStopped();
           const rankableCodes = new Set(codes.filter((code) => (
             (lookbackHistories.get(code)?.length ?? 0) === stage.lookbackTradingDays
           )));
@@ -794,6 +824,7 @@ export class UniverseRuleResolver {
       // stage cache를 우회해 반환 직전에 한 번 더 확인해야 준비 작업이 stale pair로
       // DART 등록·저장을 진행하지 않는다. 시장 지표만 미해소인 broad 후보는 이 Map에
       // 들어오지 않으므로 과잉 차단도 없다.
+      throwIfStopped();
       assertFreshIdentitySelections([...observedIdentitySelections.values()]);
       return {
         kind: 'NEEDS_DATA',
@@ -811,6 +842,7 @@ export class UniverseRuleResolver {
     // market-only 규칙도 최종 schedule에서 shortCode 기반 전략·엔진으로 넘어간다.
     // members 원문 전체를 한 batch로 검사해 unionEntries의 shortCode first-wins를
     // 신뢰하지 않으면서 DAY 일정의 날짜별 DB 왕복도 피한다.
+    throwIfStopped();
     assertFreshIdentitySelections([
       ...observedIdentitySelections.values(),
       ...schedule.flatMap((entry) =>
@@ -918,17 +950,23 @@ async function loadCandleHistories(
   effectiveDate: string,
 ): Promise<Map<string, import('../../market-data/domain/candle.js').Candle[]>> {
   const histories = new Map<string, import('../../market-data/domain/candle.js').Candle[]>();
-  for await (const candle of candles.getCandles({
+  const query = {
     market: 'KR',
     timeframe: '1d',
     symbols,
     // fromDate 의 KST 자정부터 — 직전 달력일의 끝 다음 ms 가 그 경계다.
     fromTsMs: kstEndOfDayMs(addCalendarDays(fromDate, -1)) + 1,
     toTsMs: kstEndOfDayMs(effectiveDate),
-  })) {
+  } as const;
+  const append = (candle: import('../../market-data/domain/candle.js').Candle): void => {
     const list = histories.get(candle.symbol) ?? [];
     list.push(candle);
     histories.set(candle.symbol, list);
+  };
+  if (candles.getCandlesArray !== undefined) {
+    for (const candle of await candles.getCandlesArray(query)) append(candle);
+  } else {
+    for await (const candle of candles.getCandles(query)) append(candle);
   }
   for (const list of histories.values()) list.sort((a, b) => a.tsMs - b.tsMs);
   return histories;

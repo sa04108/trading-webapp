@@ -109,6 +109,22 @@ describe('KrxDailyCandleRepository', () => {
     ]);
   });
 
+  it('bulk 조회도 streaming과 같은 순서·날짜 경계·검증 결과를 낸다', async () => {
+    const query = {
+      market: 'KR' as const,
+      timeframe: '1d' as const,
+      symbols: ['005930', '000660'],
+      fromTsMs: midnight('2026-08-06'),
+      toTsMs: Date.parse('2026-08-07T23:59:59.999Z'),
+    };
+
+    const streamed = await collect(query);
+    const bulk = await repository.getCandlesArray(query);
+
+    expect(bulk).toEqual(streamed);
+    expect(bulk.map((candle) => candle.symbol)).toEqual(['005930', '005930', '000660']);
+  });
+
   it('다종목 조회는 SQLite bind 한도 단위로 배치한다', async () => {
     let selectCalls = 0;
     const fakeDb = {
@@ -131,7 +147,44 @@ describe('KrxDailyCandleRepository', () => {
       market: 'KR', timeframe: '1d', symbols,
     })) { /* 빈 fake 결과를 끝까지 소비해 조회를 실행한다. */ }
 
-    expect(selectCalls).toBe(2);
+    expect(selectCalls).toBe(3);
+  });
+
+  it('첫 batch를 소비하는 동안 뒤 batch 결과를 미리 메모리에 올리지 않는다', async () => {
+    let selectCalls = 0;
+    const fakeDb = {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            orderBy: () => ({
+              all: () => {
+                selectCalls += 1;
+                return selectCalls === 1 ? [{
+                  shortCode: '000000',
+                  date: '2026-08-06',
+                  market: 'KOSPI',
+                  open: 100,
+                  high: 110,
+                  low: 90,
+                  close: 105,
+                  volume: 1_000,
+                }] : [];
+              },
+            }),
+          }),
+        }),
+      }),
+    };
+    const batchRepository = new KrxDailyCandleRepository(fakeDb as never);
+    const symbols = Array.from({ length: 501 }, (_, index) => String(index).padStart(6, '0'));
+    const iterator = batchRepository.getCandles({
+      market: 'KR', timeframe: '1d', symbols,
+    })[Symbol.asyncIterator]();
+
+    const first = await iterator.next();
+
+    expect(first.value?.symbol).toBe('000000');
+    expect(selectCalls).toBe(1);
   });
 
   it('KR 이 아닌 시장은 빈 결과를 낸다', async () => {

@@ -355,6 +355,54 @@ describe('BacktestPreparationOrchestrator RESOLVING_STAGES 진행 표시', () =>
     await orchestrator.stop();
     ctx.handle.close();
   });
+
+  it('긴 DAY 일정의 durable 진행률 쓰기를 resolve당 약 100회로 제한한다', async () => {
+    const ctx = makeDeps({
+      resolver: {
+        resolveOrDescribeNeeds: async (
+          _rule: unknown,
+          _period: unknown,
+          hooks?: {
+            onProgress?: (value: {
+              completedRebalanceDates: number;
+              totalRebalanceDates: number;
+            }) => void;
+          },
+        ) => {
+          for (let completed = 0; completed <= 1_000; completed += 1) {
+            hooks?.onProgress?.({
+              completedRebalanceDates: completed,
+              totalRebalanceDates: 1_000,
+            });
+          }
+          return ready();
+        },
+        isPeriodCovered: () => true,
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const progress: Array<{ done: number; total: number }> = [];
+
+    const job = orchestrator.start(INPUT);
+    const unsubscribe = orchestrator.subscribe(job.id, (snapshot) => {
+      if (
+        snapshot.status === 'RUNNING'
+        && snapshot.phase === 'RESOLVING_STAGES'
+        && snapshot.totalSymbols === 1_000
+      ) {
+        progress.push({ done: snapshot.doneSymbols, total: snapshot.totalSymbols });
+      }
+    });
+    await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
+    unsubscribe();
+
+    // 준비 흐름은 안정화 확인 때문에 resolver를 두 번 부른다. 각 호출은 0, 10, …,
+    // 1000의 최대 101개 durable update만 낸다.
+    expect(progress.length).toBeLessThanOrEqual(202);
+    expect(progress).toContainEqual({ done: 1_000, total: 1_000 });
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
 });
 
 

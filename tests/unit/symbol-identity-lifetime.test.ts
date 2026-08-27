@@ -156,6 +156,37 @@ describe('SymbolMasterService.validateIdentityLifetime', () => {
     await t.close();
   });
 
+  it('최종 폐지일은 SCD 유효구간 밖의 첫날로 정확히 차단한다', async () => {
+    const t = await createTestApp();
+    insertVersion(t, {
+      standardCode: 'KR7000000001', shortCode: '000001',
+      validFromDate: '2020-01-01', validToDate: '2025-01-02',
+    });
+    t.container.database.db.insert(symbols).values({
+      code: '000001', market: 'KR', name: '폐지 종목', standardCode: 'KR7000000001',
+      createdAtMs: t.container.clock.now(),
+    }).run();
+    t.container.database.db.insert(krxDailyBars).values({
+      shortCode: '000001', date: '2025-01-01', market: 'KOSPI',
+      open: 100, high: 101, low: 99, close: 100, volume: 1_000,
+    }).run();
+
+    expect(t.container.symbolMasterService.readIdentitySnapshot(
+      ['000001'],
+      ['KR7000000001'],
+    ).uncoveredBarShortCodes).toEqual([]);
+
+    t.container.database.db.insert(krxDailyBars).values({
+      shortCode: '000001', date: '2025-01-02', market: 'KOSPI',
+      open: 100, high: 101, low: 99, close: 100, volume: 1_000,
+    }).run();
+    expect(t.container.symbolMasterService.readIdentitySnapshot(
+      ['000001'],
+      ['KR7000000001'],
+    ).uncoveredBarShortCodes).toEqual(['000001']);
+    await t.close();
+  });
+
   it('같은 exact pair가 다시 열린 내부 SCD gap의 봉은 base-info 일시 결측으로 본다', async () => {
     const t = await createTestApp();
     insertVersion(t, {

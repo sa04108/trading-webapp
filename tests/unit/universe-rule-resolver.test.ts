@@ -12,6 +12,7 @@ import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
 import type { FactQuery } from '../../src/server/modules/facts/application/ports.js';
 import type { SharesChange } from '../../src/server/modules/facts/domain/corporate-action-effective-date.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
+import type { CandleQuery } from '../../src/server/modules/market-data/application/ports.js';
 import type { DailySelectionMetric } from '../../src/server/modules/market-data/application/selection-metric-repository.js';
 import type {
   KnownSymbolIdentityVersion,
@@ -346,6 +347,7 @@ function makePipelineResolver(options: {
   factQueries?: FactQuery[];
   financialCoverageReads?: string[][];
   candleReads?: string[][];
+  bulkCandleReads?: string[][];
   actionCoverageReads?: string[][];
   validateIdentity?: (
     selections: readonly SymbolIdentitySelection[],
@@ -513,6 +515,16 @@ function makePipelineResolver(options: {
           ) yield candle;
         }
       },
+      ...(options.bulkCandleReads === undefined ? {} : {
+        getCandlesArray: async (query: CandleQuery) => {
+          options.bulkCandleReads?.push([...query.symbols]);
+          return candles.filter((candle) => (
+            query.symbols.includes(candle.symbol)
+            && (query.fromTsMs === undefined || candle.tsMs >= query.fromTsMs)
+            && (query.toTsMs === undefined || candle.tsMs <= query.toTsMs)
+          ));
+        },
+      }),
       getTimestamps: async () => [],
     },
     actionCoverage: {
@@ -559,6 +571,51 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
       name: 'UniverseResolutionCancelledError',
     });
     expect(metricReads).toEqual([]);
+  });
+
+  it('마지막 날짜 완료 직후 취소되면 최종 identity 조회 전에 중단한다', async () => {
+    let stopped = false;
+    const identityReads: SymbolIdentitySelection[][] = [];
+
+    await expect(makePipelineResolver({ identityReads }).resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 }]),
+      period,
+      {
+        onProgress: ({ completedRebalanceDates, totalRebalanceDates }) => {
+          if (completedRebalanceDates === totalRebalanceDates) stopped = true;
+        },
+        shouldStop: () => stopped,
+      },
+    )).rejects.toMatchObject({ name: 'UniverseResolutionCancelledError' });
+    expect(identityReads).toEqual([]);
+  });
+
+  it('앞 단계가 후보 0을 확정하면 후속 short-keyed 저장소를 읽지 않는다', async () => {
+    const factQueries: FactQuery[] = [];
+    const candleReads: string[][] = [];
+    const actionCoverageReads: string[][] = [];
+    const identityReads: SymbolIdentitySelection[][] = [];
+    const metrics = pipelineMetrics.map((metric) => ({ ...metric, marketCapKrw: null }));
+
+    const result = await makePipelineResolver({
+      metrics,
+      factQueries,
+      candleReads,
+      actionCoverageReads,
+      identityReads,
+    }).resolveOrDescribeNeeds(pipelineRule([
+      { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 },
+      { criterion: 'PER', direction: 'LOW', limit: 1 },
+      { criterion: 'DECLINE', direction: 'LOW', limit: 1, lookbackTradingDays: 3 },
+    ]), period);
+
+    expect(result.kind).toBe('READY');
+    if (result.kind !== 'READY') throw new Error('빈 후보는 추가 데이터 없이 확정돼야 합니다.');
+    expect(result.schedule[0]?.members).toEqual([]);
+    expect(factQueries).toEqual([]);
+    expect(candleReads).toEqual([]);
+    expect(actionCoverageReads).toEqual([]);
+    expect(identityReads).toEqual([]);
   });
 
 
@@ -1076,6 +1133,8 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
       open: close, high: close, low: close, close, volume: 1,
     });
     const factQueries: FactQuery[] = [];
+    const candleReads: string[][] = [];
+    const bulkCandleReads: string[][] = [];
     const resolver = makePipelineResolver({
       candles: [
         candle('000001', 2, 100), candle('000001', 1, 50), candle('000001', 0, 55),
@@ -1087,6 +1146,8 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
         asOfTsMs: PIPELINE_TS + 365 * 86_400_000, value: 2, unit: 'ratio',
       }],
       factQueries,
+      candleReads,
+      bulkCandleReads,
     });
 
     const result = await resolver.resolveOrDescribeNeeds(
@@ -1106,6 +1167,51 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     expect(factQueries).toContainEqual({
       scope: 'SYMBOL', keys: ['000001', '000002', '000003'], fields: ['SPLIT_RATIO'],
     });
+    expect(bulkCandleReads).toEqual([['000001', '000002', '000003']]);
+    expect(candleReads).toEqual([]);
+  });
+
+  it('좁은 범위에서 N봉이 부족한 종목만 보수 범위로 확장 조회한다', async () => {
+    const candle = (symbol: string, date: string, close: number): Candle => ({
+      symbol,
+      market: 'KR',
+      timeframe: '1d',
+      tsMs: Date.parse(`${date}T00:00:00Z`),
+      open: close,
+      high: close,
+      low: close,
+      close,
+      volume: 1,
+    });
+    const bulkCandleReads: string[][] = [];
+    const resolver = makePipelineResolver({
+      candles: [
+        candle('000001', '2025-05-13', 100),
+        candle('000001', '2025-05-14', 100),
+        candle('000001', '2025-05-15', 100),
+        // 04-26은 N+14일 빠른 범위 밖, 2N+14일 보수 범위 안이다.
+        candle('000002', '2025-04-26', 100),
+        candle('000002', '2025-05-14', 90),
+        candle('000002', '2025-05-15', 80),
+        candle('000003', '2025-05-13', 100),
+        candle('000003', '2025-05-14', 100),
+        candle('000003', '2025-05-15', 100),
+      ],
+      bulkCandleReads,
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{
+        criterion: 'DECLINE', direction: 'LOW', limit: 1, lookbackTradingDays: 3,
+      }]),
+      period,
+    );
+
+    expect(result.kind).toBe('READY');
+    expect(bulkCandleReads).toEqual([
+      ['000001', '000002', '000003'],
+      ['000002'],
+    ]);
   });
 
   it('급하락 순위도 DART 기준일이 아니라 KRX 실제 변경일로 분할보정한다', async () => {
