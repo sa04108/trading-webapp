@@ -11,7 +11,7 @@ import type { Candle } from '../../../market-data/domain/candle.js';
  * 기준으로 끌어내려 과거·현재 가격을 직접 비교할 수 있게 만든다.
  */
 export function splitAdjustedClose(
-  history: readonly Candle[],
+  history: readonly Pick<Candle, 'tsMs' | 'close'>[],
   actions: readonly CorporateAction[],
   index: number,
 ): number | null {

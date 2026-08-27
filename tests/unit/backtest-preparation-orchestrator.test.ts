@@ -316,6 +316,95 @@ describe('BacktestPreparationOrchestrator MARKET_DATA 진행 표시', () => {
     ctx.handle.close();
   });
 });
+describe('BacktestPreparationOrchestrator RESOLVING_STAGES 진행 표시', () => {
+  it('resolver의 리밸런싱 날짜 진행률을 durable job과 구독자에게 전달한다', async () => {
+    const ctx = makeDeps({
+      resolver: {
+        resolveOrDescribeNeeds: async (
+          _rule: unknown,
+          _period: unknown,
+          hooks?: {
+            onProgress?: (value: {
+              completedRebalanceDates: number;
+              totalRebalanceDates: number;
+            }) => void;
+          },
+        ) => {
+          hooks?.onProgress?.({ completedRebalanceDates: 0, totalRebalanceDates: 2 });
+          hooks?.onProgress?.({ completedRebalanceDates: 1, totalRebalanceDates: 2 });
+          hooks?.onProgress?.({ completedRebalanceDates: 2, totalRebalanceDates: 2 });
+          return ready();
+        },
+        isPeriodCovered: () => true,
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const progress: Array<{ done: number; total: number }> = [];
+
+    const job = orchestrator.start(INPUT);
+    const unsubscribe = orchestrator.subscribe(job.id, (snapshot) => {
+      if (snapshot.status === 'RUNNING' && snapshot.phase === 'RESOLVING_STAGES') {
+        progress.push({ done: snapshot.doneSymbols, total: snapshot.totalSymbols });
+      }
+    });
+    await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
+    unsubscribe();
+
+    expect(progress).toContainEqual({ done: 1, total: 2 });
+    expect(progress).toContainEqual({ done: 2, total: 2 });
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
+  it('긴 DAY 일정의 durable 진행률 쓰기를 resolve당 약 100회로 제한한다', async () => {
+    const ctx = makeDeps({
+      resolver: {
+        resolveOrDescribeNeeds: async (
+          _rule: unknown,
+          _period: unknown,
+          hooks?: {
+            onProgress?: (value: {
+              completedRebalanceDates: number;
+              totalRebalanceDates: number;
+            }) => void;
+          },
+        ) => {
+          for (let completed = 0; completed <= 1_000; completed += 1) {
+            hooks?.onProgress?.({
+              completedRebalanceDates: completed,
+              totalRebalanceDates: 1_000,
+            });
+          }
+          return ready();
+        },
+        isPeriodCovered: () => true,
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const progress: Array<{ done: number; total: number }> = [];
+
+    const job = orchestrator.start(INPUT);
+    const unsubscribe = orchestrator.subscribe(job.id, (snapshot) => {
+      if (
+        snapshot.status === 'RUNNING'
+        && snapshot.phase === 'RESOLVING_STAGES'
+        && snapshot.totalSymbols === 1_000
+      ) {
+        progress.push({ done: snapshot.doneSymbols, total: snapshot.totalSymbols });
+      }
+    });
+    await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
+    unsubscribe();
+
+    // 준비 흐름은 안정화 확인 때문에 resolver를 두 번 부른다. 각 호출은 0, 10, …,
+    // 1000의 최대 101개 durable update만 낸다.
+    expect(progress.length).toBeLessThanOrEqual(202);
+    expect(progress).toContainEqual({ done: 1_000, total: 1_000 });
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+});
+
 
 describe('BacktestPreparationOrchestrator 자본변동 gap 차단', () => {
   it('최종 유니버스의 관련 연도에 보정 불가 gap이 있으면 COMPLETED preview를 만들지 않는다', async () => {

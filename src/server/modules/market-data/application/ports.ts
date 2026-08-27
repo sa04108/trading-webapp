@@ -30,8 +30,26 @@ export interface CandleQuery {
   readonly toTsMs?: number;
 }
 
+export interface ClosePricePoint {
+  readonly symbol: string;
+  readonly tsMs: number;
+  readonly close: number;
+}
+
 export interface CandleRepository {
   getCandles(query: CandleQuery): AsyncIterable<Candle>;
+  /**
+   * 짧은 범위의 bulk 소비자가 봉마다 async-generator Promise를 만들지 않게 한다.
+   * 장기간·대용량 호출자는 메모리 상한을 지키기 위해 getCandles를 사용한다.
+   */
+  getCandlesArray?(query: CandleQuery): Promise<readonly Candle[]>;
+  /**
+   * 유니버스 등락 순위처럼 종가만 쓰는 소비자를 위한 최소 projection이다.
+   * OHLCV Candle 객체를 전부 만들지 않으면서도 저장된 봉의 유효성 규칙은 보존한다.
+   */
+  getClosePricesBySymbol?(
+    query: CandleQuery,
+  ): Promise<ReadonlyMap<string, readonly ClosePricePoint[]>>;
   /** 저장된 봉의 시작 시각 목록 (coverage 계산용) */
   getTimestamps(market: Market, timeframe: Timeframe, symbol: string): Promise<number[]>;
 }

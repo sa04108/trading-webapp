@@ -106,6 +106,27 @@ describe('SelectionMetricRepository', () => {
     await t.close();
   });
 
+  it('큰 후보는 날짜 범위 한 번으로 읽되 요청하지 않은 metric은 반환하지 않는다', async () => {
+    const t = await createTestApp();
+    const repository = new SelectionMetricRepository(t.container.database.db);
+    repository.upsertMany([{
+      date: '2026-08-07', standardCode: 'KR7005930003',
+      marketCapKrw: 1n, volume: 2, tradingValueKrw: 3n,
+    }, {
+      date: '2026-08-07', standardCode: 'KR7000660001',
+      marketCapKrw: 4n, volume: 5, tradingValueKrw: 6n,
+    }]);
+    const requested = [
+      'KR7005930003',
+      ...Array.from({ length: 1_499 }, (_, index) => `REQUESTED-${index}`),
+    ];
+
+    const metrics = repository.getAt('2026-08-07', requested);
+
+    expect([...metrics.keys()]).toEqual(['KR7005930003']);
+    await t.close();
+  });
+
   it('날짜가 SQLite bind 한도를 넘어도 findMissingTradingValueDates 결과를 합친다', async () => {
     const t = await createTestApp();
     const repository = new SelectionMetricRepository(t.container.database.db);

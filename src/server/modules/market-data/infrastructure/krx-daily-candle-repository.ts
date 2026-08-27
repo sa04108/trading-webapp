@@ -1,11 +1,26 @@
-import { and, asc, eq, gte, lte } from 'drizzle-orm';
+import { and, asc, eq, gt, gte, inArray, lte } from 'drizzle-orm';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import { krxDailyBars } from '../../../shared/db/schema.js';
-import { isValidCandle, type Candle, type Market, type Timeframe } from '../domain/candle.js';
+import {
+  isValidCandle,
+  SYMBOL_PATTERN,
+  type Candle,
+  type Market,
+  type Timeframe,
+} from '../domain/candle.js';
 import type { KrxMarket } from '../domain/krx-universe-types.js';
-import type { CandleQuery, CandleRepository } from '../application/ports.js';
+import type {
+  CandleQuery,
+  CandleRepository,
+  ClosePricePoint,
+} from '../application/ports.js';
 
 const MS_PER_DAY = 86_400_000;
+/**
+ * 시총 상위 200 후보는 한 SELECT로 유지하되 장기간 worker가 동시에 잡는 raw row를
+ * 제한한다. 날짜 경계 bind 두 개를 더해도 SQLite의 보수적인 999 bind 한도 아래다.
+ */
+const READ_SYMBOL_BATCH_SIZE = 200;
 
 /**
  * 봉의 tsMs 규약은 "그 거래일의 UTC 자정"이다. `periodToTsRange` 가 만드는 조회
@@ -88,15 +103,114 @@ export class KrxDailyCandleRepository implements CandleRepository {
       .all();
   }
 
-  async *getCandles(query: CandleQuery): AsyncIterable<Candle> {
-    if (!this.supports(query.market)) return;
+  /**
+   * 다종목 조회를 종목별 SELECT로 풀면 유니버스 미리보기 한 번에
+   * `리밸런싱 날짜 수 × 후보 종목 수`만큼 SQLite 왕복이 생긴다. 종목을 bind 한도
+   * 안에서 묶어 읽고 입력 종목 순서로 내보낼 수 있게 Map으로 접는다. 호출 전체가
+   * 아니라 한 batch만 담아야 장기간 worker 조회도 첫 봉 전에 전부 메모리에 쌓지 않는다.
+   */
+  private rowsBySymbol(
+    symbols: readonly string[],
+    fromTsMs?: number,
+    toTsMs?: number,
+  ): ReadonlyMap<string, typeof krxDailyBars.$inferSelect[]> {
+    const uniqueSymbols = [...new Set(symbols)];
+    const grouped = new Map<string, typeof krxDailyBars.$inferSelect[]>();
+    if (uniqueSymbols.length === 0) return grouped;
+    const conditions = [inArray(krxDailyBars.shortCode, uniqueSymbols)];
+    if (fromTsMs !== undefined) conditions.push(gte(krxDailyBars.date, ceilToDate(fromTsMs)));
+    if (toTsMs !== undefined) conditions.push(lte(krxDailyBars.date, floorToDate(toTsMs)));
+    const rows = this.db
+      .select()
+      .from(krxDailyBars)
+      .where(and(...conditions))
+      .orderBy(asc(krxDailyBars.shortCode), asc(krxDailyBars.date))
+      .all();
+    for (const row of rows) {
+      const values = grouped.get(row.shortCode) ?? [];
+      values.push(row);
+      grouped.set(row.shortCode, values);
+    }
+    return grouped;
+  }
 
-    for (const symbol of query.symbols) {
-      for (const row of this.rows(symbol, query.fromTsMs, query.toTsMs)) {
+  private *candlesForSymbols(query: CandleQuery, symbols: readonly string[]): Iterable<Candle> {
+    const rowsBySymbol = this.rowsBySymbol(symbols, query.fromTsMs, query.toTsMs);
+    for (const symbol of symbols) {
+      for (const row of rowsBySymbol.get(symbol) ?? []) {
         const candle = toCandle(row, symbol, query.market, query.timeframe);
         if (isValidCandle(candle)) yield candle;
       }
     }
+  }
+
+  async *getCandles(query: CandleQuery): AsyncIterable<Candle> {
+    if (!this.supports(query.market)) return;
+
+    for (let index = 0; index < query.symbols.length; index += READ_SYMBOL_BATCH_SIZE) {
+      const symbols = query.symbols.slice(index, index + READ_SYMBOL_BATCH_SIZE);
+      yield* this.candlesForSymbols(query, symbols);
+    }
+  }
+
+  async getCandlesArray(query: CandleQuery): Promise<readonly Candle[]> {
+    if (!this.supports(query.market)) return [];
+    const candles: Candle[] = [];
+    for (let index = 0; index < query.symbols.length; index += READ_SYMBOL_BATCH_SIZE) {
+      const batch = query.symbols.slice(index, index + READ_SYMBOL_BATCH_SIZE);
+      for (const candle of this.candlesForSymbols(query, batch)) candles.push(candle);
+    }
+    return candles;
+  }
+
+  async getClosePricesBySymbol(
+    query: CandleQuery,
+  ): Promise<ReadonlyMap<string, readonly ClosePricePoint[]>> {
+    const grouped = new Map<string, ClosePricePoint[]>();
+    if (!this.supports(query.market)) return grouped;
+    const uniqueSymbols = [...new Set(query.symbols)];
+    for (let index = 0; index < uniqueSymbols.length; index += READ_SYMBOL_BATCH_SIZE) {
+      const symbols = uniqueSymbols.slice(index, index + READ_SYMBOL_BATCH_SIZE);
+      if (symbols.length === 0) continue;
+      const conditions = [
+        inArray(krxDailyBars.shortCode, symbols),
+        inArray(krxDailyBars.market, ['KOSPI', 'KOSDAQ']),
+        gt(krxDailyBars.open, 0),
+        gt(krxDailyBars.high, 0),
+        gt(krxDailyBars.low, 0),
+        gt(krxDailyBars.close, 0),
+        gte(krxDailyBars.volume, 0),
+        gte(krxDailyBars.high, krxDailyBars.low),
+        gte(krxDailyBars.high, krxDailyBars.open),
+        gte(krxDailyBars.high, krxDailyBars.close),
+        lte(krxDailyBars.low, krxDailyBars.open),
+        lte(krxDailyBars.low, krxDailyBars.close),
+      ];
+      if (query.fromTsMs !== undefined) {
+        conditions.push(gte(krxDailyBars.date, ceilToDate(query.fromTsMs)));
+      }
+      if (query.toTsMs !== undefined) {
+        conditions.push(lte(krxDailyBars.date, floorToDate(query.toTsMs)));
+      }
+      const rows = this.db
+        .select({
+          symbol: krxDailyBars.shortCode,
+          date: krxDailyBars.date,
+          close: krxDailyBars.close,
+        })
+        .from(krxDailyBars)
+        .where(and(...conditions))
+        .orderBy(asc(krxDailyBars.shortCode), asc(krxDailyBars.date))
+        .all();
+      for (const row of rows) {
+        const tsMs = dateToTsMs(row.date);
+        if (!SYMBOL_PATTERN.test(row.symbol) || !Number.isFinite(tsMs) || tsMs <= 0) continue;
+        const values = grouped.get(row.symbol) ?? [];
+        values.push({ symbol: row.symbol, tsMs, close: row.close });
+        grouped.set(row.symbol, values);
+      }
+    }
+    return grouped;
   }
 
   async getTimestamps(market: Market, _timeframe: Timeframe, symbol: string): Promise<number[]> {

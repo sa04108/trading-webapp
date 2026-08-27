@@ -37,6 +37,7 @@ import {
   buildBacktestPreparationPlan,
   type BacktestPreparationPlan,
 } from './backtest-preparation-plan.js';
+import { UniverseResolutionCancelledError } from './universe-rule-resolver.js';
 import type {
   RebalanceDiagnostic,
   UniverseDataNeed,
@@ -94,6 +95,7 @@ const ACTIVE_STATUSES: readonly PreparationStatus[] = [
 ];
 const TERMINAL_STATUSES: readonly PreparationStatus[] = ['COMPLETED', 'FAILED', 'CANCELLED'];
 const MAX_FINAL_STABILIZATION_PASSES = 8;
+const MAX_RESOLUTION_PROGRESS_UPDATES = 100;
 
 const ALLOWED_TRANSITIONS: Readonly<Record<PreparationStatus, readonly PreparationStatus[]>> = {
   QUEUED: ['RUNNING'],
@@ -530,6 +532,9 @@ export class BacktestPreparationOrchestrator {
       );
     } catch (error) {
       if (this.stopping) return;
+      if (error instanceof UniverseResolutionCancelledError) {
+        if (this.finishCancelledIfRequested(jobId)) return;
+      }
       const current = this.getRow(jobId);
       if (!current || current.status !== 'RUNNING') return;
       if (error instanceof KrxQuotaError) {
@@ -546,8 +551,33 @@ export class BacktestPreparationOrchestrator {
   }
 
   private async resolve(jobId: string, input: PreparationInput): Promise<UniverseResolveAttempt> {
-    this.persistAndEmit(jobId, { phase: 'RESOLVING_STAGES' }, ['RUNNING']);
-    return this.deps.resolver.resolveOrDescribeNeeds(input.universeRule, input.period);
+    this.persistAndEmit(jobId, {
+      phase: 'RESOLVING_STAGES',
+      doneSymbols: 0,
+      totalSymbols: 0,
+    }, ['RUNNING']);
+    let lastPersistedCompleted = -1;
+    return this.deps.resolver.resolveOrDescribeNeeds(input.universeRule, input.period, {
+      onProgress: ({ completedRebalanceDates, totalRebalanceDates }) => {
+        // DAY 10년이면 수천 날짜다. 계산보다 진행률 BEGIN IMMEDIATE/UPDATE/SSE가
+        // 더 비싸지지 않도록 시작·완료는 항상 남기고 중간 durable write만 샘플링한다.
+        const persistEvery = Math.max(
+          1,
+          Math.ceil(totalRebalanceDates / MAX_RESOLUTION_PROGRESS_UPDATES),
+        );
+        if (
+          completedRebalanceDates !== totalRebalanceDates
+          && lastPersistedCompleted >= 0
+          && completedRebalanceDates - lastPersistedCompleted < persistEvery
+        ) return;
+        lastPersistedCompleted = completedRebalanceDates;
+        this.persistAndEmit(jobId, {
+          doneSymbols: completedRebalanceDates,
+          totalSymbols: totalRebalanceDates,
+        }, ['RUNNING']);
+      },
+      shouldStop: () => this.cancelOrStopRequested(jobId),
+    });
   }
 
   private async resolveUntilReady(

@@ -80,6 +80,65 @@ type LegacySymbolMasterEventRow = typeof symbolMasterEvents.$inferSelect;
 type LegacySymbolMasterCheckpointRow = typeof symbolMasterCheckpoints.$inferSelect;
 type SymbolMasterCoverageRow = typeof symbolMasterCoverage.$inferSelect;
 type SymbolMasterVersionRow = typeof symbolMasterVersions.$inferSelect;
+type IdentityVersionWithId = KnownSymbolIdentityVersion & { readonly id: number };
+
+interface IdentityCoverageGap {
+  /** null은 알려진 첫 identity보다 앞선 외측 구간을 뜻한다. */
+  readonly from: string | null;
+  /** null은 알려진 마지막 identity보다 뒤인 외측 구간을 뜻한다. */
+  readonly to: string | null;
+}
+
+/**
+ * SCD 구간의 합집합 밖이면서 기존 fail-closed 규칙상 허용되지 않는 날짜 구간이다.
+ * 같은 exact pair가 gap 양쪽에서 다시 이어질 때만 KRX base-info 일시 결측으로 본다.
+ */
+function unsafeIdentityCoverageGaps(
+  versions: readonly IdentityVersionWithId[],
+): readonly IdentityCoverageGap[] {
+  if (versions.length === 0) return [{ from: null, to: null }];
+  const sorted = [...versions].sort(
+    (left, right) => left.validFromDate.localeCompare(right.validFromDate)
+      || left.id - right.id,
+  );
+  const first = sorted[0]!;
+  const gaps: IdentityCoverageGap[] = [{ from: null, to: first.validFromDate }];
+  let componentEnd = first.validToDate;
+  let endOwner = first;
+
+  for (const version of sorted.slice(1)) {
+    if (componentEnd === null) break;
+    if (version.validFromDate <= componentEnd) {
+      if (
+        version.validToDate === null
+        || version.validToDate > componentEnd
+        || (
+          version.validToDate === componentEnd
+          && (
+            version.validFromDate > endOwner.validFromDate
+            || (
+              version.validFromDate === endOwner.validFromDate
+              && version.id > endOwner.id
+            )
+          )
+        )
+      ) {
+        componentEnd = version.validToDate;
+        endOwner = version;
+      }
+      continue;
+    }
+
+    if (endOwner.standardCode !== version.standardCode) {
+      gaps.push({ from: componentEnd, to: version.validFromDate });
+    }
+    componentEnd = version.validToDate;
+    endOwner = version;
+  }
+
+  if (componentEnd !== null) gaps.push({ from: componentEnd, to: null });
+  return gaps;
+}
 
 export interface SymbolMasterServiceDeps {
   readonly db: AppDatabase;
@@ -812,11 +871,11 @@ export class SymbolMasterService {
     const requestedStandards = [...new Set(standardCodes)].sort();
 
     return db.transaction((tx) => {
-      const versionsById = new Map<number, KnownSymbolIdentityVersion>();
+      const versionsById = new Map<number, IdentityVersionWithId>();
       const rememberVersions = (
-        rows: readonly (KnownSymbolIdentityVersion & { readonly id: number })[],
+        rows: readonly IdentityVersionWithId[],
       ): void => {
-        for (const { id, ...row } of rows) versionsById.set(id, row);
+        for (const row of rows) versionsById.set(row.id, row);
       };
       const readVersionsByShort = (codes: readonly string[]): void => {
         for (let i = 0; i < codes.length; i += 500) {
@@ -903,66 +962,61 @@ export class SymbolMasterService {
         }
       }
       const residueShorts = includeRegistrations ? requestedShorts : [];
+      const versionsByShort = new Map<string, IdentityVersionWithId[]>();
+      for (const version of versionsById.values()) {
+        const values = versionsByShort.get(version.shortCode) ?? [];
+        values.push(version);
+        versionsByShort.set(version.shortCode, values);
+      }
       for (let i = 0; i < residueShorts.length; i += 500) {
         const chunk = residueShorts.slice(i, i + 500);
         // 신규 master 수집이 symbols 등록보다 먼저 당일 봉을 저장하는 것은 정상이다.
         // 따라서 봉 존재 자체가 아니라, 그 날짜를 덮는 알려진 SCD 구간이 없는 경우만
         // 과거 issuer의 orphan 입력으로 본다. 이미 등록된 shortCode도 이전 버전의 준비
         // 경로가 SCD 검증 없이 등록했을 수 있으므로 빠뜨리지 않는다.
-        for (const row of tx
-          .select({ shortCode: krxDailyBars.shortCode })
+        // 모든 봉마다 SCD 상관 subquery를 실행하지 않는다. PK(short_code, date)를 따라
+        // 종목별 경계만 한 번 집계하고, 위험한 내부 gap이 있을 때만 범위 probe한다.
+        const bounds = tx
+          .select({
+            shortCode: krxDailyBars.shortCode,
+            minDate: sql<string | null>`min(${krxDailyBars.date})`,
+            maxDate: sql<string | null>`max(${krxDailyBars.date})`,
+          })
           .from(krxDailyBars)
-          .where(and(
-            inArray(krxDailyBars.shortCode, chunk),
-            sql`NOT EXISTS (
-              SELECT 1
-              FROM symbol_master_versions AS identity_version
-              WHERE identity_version.short_code = ${krxDailyBars.shortCode}
-                AND identity_version.valid_from_date <= ${krxDailyBars.date}
-                AND (
-                  identity_version.valid_to_date IS NULL
-                  OR identity_version.valid_to_date > ${krxDailyBars.date}
-                )
-            )`,
-            // 같은 standard/short pair가 gap 양쪽에서 다시 이어지면 기존 코드도
-            // 폐지가 아니라 KRX base-info의 일시 결측으로 취급한다. 첫 관측 전이나
-            // 최종 종료 뒤의 외측 orphan, 다른 pair 사이의 gap은 계속 차단한다.
-            sql`NOT EXISTS (
-              SELECT 1
-              FROM symbol_master_versions AS prior_identity
-              WHERE prior_identity.id = (
-                SELECT nearest_prior.id
-                FROM symbol_master_versions AS nearest_prior
-                WHERE nearest_prior.short_code = ${krxDailyBars.shortCode}
-                  AND nearest_prior.valid_to_date IS NOT NULL
-                  AND nearest_prior.valid_to_date <= ${krxDailyBars.date}
-                ORDER BY nearest_prior.valid_to_date DESC, nearest_prior.valid_from_date DESC,
-                         nearest_prior.id DESC
-                LIMIT 1
-              )
-                AND EXISTS (
-                  SELECT 1
-                  FROM symbol_master_versions AS later_identity
-                  WHERE later_identity.id = (
-                    SELECT nearest_later.id
-                    FROM symbol_master_versions AS nearest_later
-                    WHERE nearest_later.short_code = ${krxDailyBars.shortCode}
-                      AND nearest_later.valid_from_date > ${krxDailyBars.date}
-                    ORDER BY nearest_later.valid_from_date ASC, nearest_later.id ASC
-                    LIMIT 1
-                  )
-                    AND later_identity.short_code = prior_identity.short_code
-                    AND later_identity.standard_code = prior_identity.standard_code
-                )
-            )`,
-          ))
+          .where(inArray(krxDailyBars.shortCode, chunk))
           .groupBy(krxDailyBars.shortCode)
-          .all()) {
-          uncoveredBarShortCodes.add(row.shortCode);
+          .all();
+        for (const bound of bounds) {
+          if (bound.minDate === null || bound.maxDate === null) continue;
+          const gaps = unsafeIdentityCoverageGaps(versionsByShort.get(bound.shortCode) ?? []);
+          for (const gap of gaps) {
+            if (
+              (gap.from === null && (gap.to === null || bound.minDate < gap.to))
+              || (gap.to === null && gap.from !== null && bound.maxDate >= gap.from)
+            ) {
+              uncoveredBarShortCodes.add(bound.shortCode);
+              break;
+            }
+            if (gap.from === null || gap.to === null) continue;
+            const uncovered = tx
+              .select({ date: krxDailyBars.date })
+              .from(krxDailyBars)
+              .where(and(
+                eq(krxDailyBars.shortCode, bound.shortCode),
+                gte(krxDailyBars.date, gap.from),
+                lt(krxDailyBars.date, gap.to),
+              ))
+              .limit(1)
+              .all();
+            if (uncovered.length > 0) {
+              uncoveredBarShortCodes.add(bound.shortCode);
+              break;
+            }
+          }
         }
       }
 
-      const versions = [...versionsById.values()].sort(
+      const versions = [...versionsById.values()].map(({ id: _id, ...version }) => version).sort(
         (left, right) => left.standardCode.localeCompare(right.standardCode)
           || left.validFromDate.localeCompare(right.validFromDate)
           || left.shortCode.localeCompare(right.shortCode),
