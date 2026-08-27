@@ -1,9 +1,19 @@
-import { and, asc, eq, gte, inArray, lte } from 'drizzle-orm';
+import { and, asc, eq, gt, gte, inArray, lte } from 'drizzle-orm';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import { krxDailyBars } from '../../../shared/db/schema.js';
-import { isValidCandle, type Candle, type Market, type Timeframe } from '../domain/candle.js';
+import {
+  isValidCandle,
+  SYMBOL_PATTERN,
+  type Candle,
+  type Market,
+  type Timeframe,
+} from '../domain/candle.js';
 import type { KrxMarket } from '../domain/krx-universe-types.js';
-import type { CandleQuery, CandleRepository } from '../application/ports.js';
+import type {
+  CandleQuery,
+  CandleRepository,
+  ClosePricePoint,
+} from '../application/ports.js';
 
 const MS_PER_DAY = 86_400_000;
 /**
@@ -151,6 +161,56 @@ export class KrxDailyCandleRepository implements CandleRepository {
       for (const candle of this.candlesForSymbols(query, batch)) candles.push(candle);
     }
     return candles;
+  }
+
+  async getClosePricesBySymbol(
+    query: CandleQuery,
+  ): Promise<ReadonlyMap<string, readonly ClosePricePoint[]>> {
+    const grouped = new Map<string, ClosePricePoint[]>();
+    if (!this.supports(query.market)) return grouped;
+    const uniqueSymbols = [...new Set(query.symbols)];
+    for (let index = 0; index < uniqueSymbols.length; index += READ_SYMBOL_BATCH_SIZE) {
+      const symbols = uniqueSymbols.slice(index, index + READ_SYMBOL_BATCH_SIZE);
+      if (symbols.length === 0) continue;
+      const conditions = [
+        inArray(krxDailyBars.shortCode, symbols),
+        inArray(krxDailyBars.market, ['KOSPI', 'KOSDAQ']),
+        gt(krxDailyBars.open, 0),
+        gt(krxDailyBars.high, 0),
+        gt(krxDailyBars.low, 0),
+        gt(krxDailyBars.close, 0),
+        gte(krxDailyBars.volume, 0),
+        gte(krxDailyBars.high, krxDailyBars.low),
+        gte(krxDailyBars.high, krxDailyBars.open),
+        gte(krxDailyBars.high, krxDailyBars.close),
+        lte(krxDailyBars.low, krxDailyBars.open),
+        lte(krxDailyBars.low, krxDailyBars.close),
+      ];
+      if (query.fromTsMs !== undefined) {
+        conditions.push(gte(krxDailyBars.date, ceilToDate(query.fromTsMs)));
+      }
+      if (query.toTsMs !== undefined) {
+        conditions.push(lte(krxDailyBars.date, floorToDate(query.toTsMs)));
+      }
+      const rows = this.db
+        .select({
+          symbol: krxDailyBars.shortCode,
+          date: krxDailyBars.date,
+          close: krxDailyBars.close,
+        })
+        .from(krxDailyBars)
+        .where(and(...conditions))
+        .orderBy(asc(krxDailyBars.shortCode), asc(krxDailyBars.date))
+        .all();
+      for (const row of rows) {
+        const tsMs = dateToTsMs(row.date);
+        if (!SYMBOL_PATTERN.test(row.symbol) || !Number.isFinite(tsMs) || tsMs <= 0) continue;
+        const values = grouped.get(row.symbol) ?? [];
+        values.push({ symbol: row.symbol, tsMs, close: row.close });
+        grouped.set(row.symbol, values);
+      }
+    }
+    return grouped;
   }
 
   async getTimestamps(market: Market, _timeframe: Timeframe, symbol: string): Promise<number[]> {

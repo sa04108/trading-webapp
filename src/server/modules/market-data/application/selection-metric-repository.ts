@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import { dailySelectionMetrics } from '../../../shared/db/schema.js';
 
@@ -22,6 +22,9 @@ function fromRow(row: typeof dailySelectionMetrics.$inferSelect): DailySelection
 
 /** portable SQLite 999-bind limit below; date 조건까지 고려해 여유를 둔다. */
 const READ_BATCH_SIZE = 500;
+// 날짜 PK 범위 한 번이 500-code IN 여러 번보다 싸지는 크기다. KOSDAQ 전체 후보처럼
+// 큰 입력은 그 날짜의 두 시장 metric을 한 번 읽고 요청 코드만 남긴다.
+const FULL_DATE_READ_THRESHOLD = 1_500;
 
 /** KRX 선정 지표의 bigint/text 변환을 이 저장소 경계에 가둔다. */
 export class SelectionMetricRepository {
@@ -54,6 +57,17 @@ export class SelectionMetricRepository {
   getAt(date: string, standardCodes: readonly string[]): ReadonlyMap<string, DailySelectionMetric> {
     const uniqueCodes = [...new Set(standardCodes)];
     const metrics = new Map<string, DailySelectionMetric>();
+    if (uniqueCodes.length >= FULL_DATE_READ_THRESHOLD) {
+      const requested = new Set(uniqueCodes);
+      const rows = this.db.select()
+        .from(dailySelectionMetrics)
+        .where(eq(dailySelectionMetrics.date, date))
+        .all();
+      for (const row of rows) {
+        if (requested.has(row.standardCode)) metrics.set(row.standardCode, fromRow(row));
+      }
+      return metrics;
+    }
     for (let index = 0; index < uniqueCodes.length; index += READ_BATCH_SIZE) {
       const rows = this.db.select()
         .from(dailySelectionMetrics)
@@ -80,14 +94,15 @@ export class SelectionMetricRepository {
     for (let index = 0; index < requestedDates.length; index += READ_BATCH_SIZE) {
       const rows = this.db.select({
         date: dailySelectionMetrics.date,
-        tradingValueKrw: dailySelectionMetrics.tradingValueKrw,
       })
         .from(dailySelectionMetrics)
-        .where(inArray(dailySelectionMetrics.date, requestedDates.slice(index, index + READ_BATCH_SIZE)))
+        .where(and(
+          inArray(dailySelectionMetrics.date, requestedDates.slice(index, index + READ_BATCH_SIZE)),
+          isNotNull(dailySelectionMetrics.tradingValueKrw),
+        ))
+        .groupBy(dailySelectionMetrics.date)
         .all();
-      for (const row of rows) {
-        if (row.tradingValueKrw !== null) ingested.add(row.date);
-      }
+      for (const row of rows) ingested.add(row.date);
     }
     return requestedDates.filter((date) => !ingested.has(date));
   }

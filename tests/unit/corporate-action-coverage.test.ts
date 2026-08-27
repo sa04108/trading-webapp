@@ -89,6 +89,19 @@ describe('SqliteCorporateActionCoverageStore', () => {
     expect(store.getGapYears().get('999999')).toBeUndefined();
   });
 
+  it('요청한 종목만 coverage·gap·watermark에서 반환하고 빈 입력은 전체 조회가 아니다', async () => {
+    const { store } = await setup();
+    store.addCoverageResult('005930', [2025], [2025], 100);
+    store.addCoverageResult('000660', [2026], [], 200);
+
+    expect([...store.getCoveredYears(['005930']).keys()]).toEqual(['005930']);
+    expect([...store.getGapYears(['005930']).keys()]).toEqual(['005930']);
+    expect([...store.getUpdatedAtMs(['005930']).keys()]).toEqual(['005930']);
+    expect(store.getCoveredYears([]).size).toBe(0);
+    expect(store.getGapYears([]).size).toBe(0);
+    expect(store.getUpdatedAtMs([]).size).toBe(0);
+  });
+
   it('연도를 오름차순으로 돌려준다', async () => {
     const { store } = await setup();
     store.addCoveredYears('005930', [2026, 2020, 2023], 100);

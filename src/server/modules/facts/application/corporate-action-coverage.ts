@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import { symbolFactsState } from '../../../shared/db/schema.js';
 import { parseYears } from './fact-coverage-store.js';
@@ -60,11 +60,26 @@ export interface CorporateActionCoverageStore {
 export class SqliteCorporateActionCoverageStore implements CorporateActionCoverageStore {
   constructor(private readonly db: AppDatabase) {}
 
+  private rowsForCodes(
+    codes?: readonly string[],
+  ): readonly (typeof symbolFactsState.$inferSelect)[] {
+    if (codes === undefined) return this.db.select().from(symbolFactsState).all();
+    const requested = [...new Set(codes)];
+    if (requested.length === 0) return [];
+    const rows: (typeof symbolFactsState.$inferSelect)[] = [];
+    for (let offset = 0; offset < requested.length; offset += 500) {
+      rows.push(...this.db
+        .select()
+        .from(symbolFactsState)
+        .where(inArray(symbolFactsState.code, requested.slice(offset, offset + 500)))
+        .all());
+    }
+    return rows;
+  }
+
   getCoveredYears(codes?: readonly string[]): ReadonlyMap<string, readonly number[]> {
-    const rows = this.db.select().from(symbolFactsState).all();
     const result = new Map<string, readonly number[]>();
-    for (const row of rows) {
-      if (codes !== undefined && !codes.includes(row.code)) continue;
+    for (const row of this.rowsForCodes(codes)) {
       // 구버전은 periodKey='-' gap을 버리고도 legacy coverage를 닫았다. 현재 프로토콜로
       // 실제 재수집한 연도만 신뢰해, 선택 유니버스의 필요한 연도만 on-demand로 연다.
       result.set(row.code, parseProtocolYears(row.actionCoverageProtocolJson));
@@ -77,13 +92,9 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
   }
 
   getUpdatedAtMs(codes: readonly string[]): ReadonlyMap<string, number> {
-    const rows = this.db
-      .select({ code: symbolFactsState.code, updatedAtMs: symbolFactsState.actionUpdatedAtMs })
-      .from(symbolFactsState)
-      .all();
     const result = new Map<string, number>();
-    for (const row of rows) {
-      if (codes.includes(row.code) && row.updatedAtMs !== null) result.set(row.code, row.updatedAtMs);
+    for (const row of this.rowsForCodes(codes)) {
+      if (row.actionUpdatedAtMs !== null) result.set(row.code, row.actionUpdatedAtMs);
     }
     return result;
   }
@@ -156,10 +167,8 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
     column: 'actionCoveredYearsJson' | 'actionGapYearsJson',
     codes?: readonly string[],
   ): ReadonlyMap<string, readonly number[]> {
-    const rows = this.db.select().from(symbolFactsState).all();
     const result = new Map<string, readonly number[]>();
-    for (const row of rows) {
-      if (codes !== undefined && !codes.includes(row.code)) continue;
+    for (const row of this.rowsForCodes(codes)) {
       result.set(row.code, parseYears(row[column]));
     }
     return result;

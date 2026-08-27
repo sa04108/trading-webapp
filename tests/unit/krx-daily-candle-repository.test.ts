@@ -42,6 +42,7 @@ describe('KrxDailyCandleRepository', () => {
         { shortCode: '005930', date: '2026-08-07', market: 'KOSPI', open: 110, high: 120, low: 100, close: 115, volume: 3000 },
         { shortCode: '000660', date: '2026-08-06', market: 'KOSPI', open: 200, high: 210, low: 190, close: 205, volume: 500 },
         { shortCode: 'INVALID', date: '2026-08-06', market: 'UNKNOWN', open: 100, high: 110, low: 90, close: 105, volume: 100 },
+        { shortCode: 'BADBAR', date: '2026-08-06', market: 'KOSDAQ', open: 100, high: 90, low: 80, close: 105, volume: 100 },
       ])
       .run();
     repository = new KrxDailyCandleRepository(db);
@@ -95,7 +96,7 @@ describe('KrxDailyCandleRepository', () => {
     const candles = await collect({
       market: 'KR',
       timeframe: '1d',
-      symbols: ['005930', '000660'],
+      symbols: ['005930', '000660', 'INVALID', 'BADBAR'],
     });
     expect(candles).toHaveLength(4);
     expect(candles.map((candle) => candle.symbol)).toEqual([
@@ -123,6 +124,28 @@ describe('KrxDailyCandleRepository', () => {
 
     expect(bulk).toEqual(streamed);
     expect(bulk.map((candle) => candle.symbol)).toEqual(['005930', '005930', '000660']);
+  });
+
+  it('종가 전용 bulk 조회는 유효 봉의 시간·종가만 종목별로 돌려준다', async () => {
+    const query = {
+      market: 'KR' as const,
+      timeframe: '1d' as const,
+      symbols: ['005930', '000660', 'INVALID', 'BADBAR'],
+      fromTsMs: midnight('2026-08-06'),
+      toTsMs: Date.parse('2026-08-07T23:59:59.999Z'),
+    };
+
+    const grouped = await repository.getClosePricesBySymbol(query);
+
+    expect(grouped.get('005930')).toEqual([
+      { symbol: '005930', tsMs: midnight('2026-08-06'), close: 110 },
+      { symbol: '005930', tsMs: midnight('2026-08-07'), close: 115 },
+    ]);
+    expect(grouped.get('000660')).toEqual([
+      { symbol: '000660', tsMs: midnight('2026-08-06'), close: 205 },
+    ]);
+    expect(grouped.has('INVALID')).toBe(false);
+    expect(grouped.has('BADBAR')).toBe(false);
   });
 
   it('다종목 조회는 SQLite bind 한도 단위로 배치한다', async () => {

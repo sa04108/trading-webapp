@@ -342,6 +342,7 @@ function makePipelineResolver(options: {
   masterCovered?: boolean;
   effectiveTradingDate?: (rebalanceDate: string) => string | undefined;
   metricReads?: string[][];
+  metricDateReads?: string[][];
   identityReads?: SymbolIdentitySelection[][];
   factReads?: string[][];
   factQueries?: FactQuery[];
@@ -467,7 +468,10 @@ function makePipelineResolver(options: {
           .filter((row) => row.date === date && standardCodes.includes(row.standardCode))
           .map((row) => [row.standardCode, row]));
       },
-      findMissingTradingValueDates: () => [...(options.missingTradingValueDates ?? [])],
+      findMissingTradingValueDates: (dates: readonly string[]) => {
+        options.metricDateReads?.push([...dates]);
+        return [...(options.missingTradingValueDates ?? [])];
+      },
     } as never,
     facts: {
       getFacts: async (query: FactQuery) => {
@@ -870,7 +874,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     });
   });
 
-  it('각 stage와 READY pin은 그 시점의 현재 후보만 선정 지표 저장소에서 읽는다', async () => {
+  it('한 날짜의 stage와 READY pin은 최초 후보 metric을 한 번만 읽어 재사용한다', async () => {
     const metricReads: string[][] = [];
     const resolver = makePipelineResolver({ metricReads });
     const result = await resolver.resolveOrDescribeNeeds(pipelineRule([
@@ -881,9 +885,54 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     expect(result.kind).toBe('READY');
     expect(metricReads).toEqual([
       ['KR7000001001', 'KR7000002002', 'KR7000003003'],
-      ['KR7000001001', 'KR7000002002'],
-      ['KR7000002002'],
     ]);
+  });
+
+  it('여러 리밸런스 날짜의 metric ingest 상태는 전체 날짜를 한 번에 조회한다', async () => {
+    const dates = ['2025-06-13', '2025-07-13', '2025-08-13'];
+    const metricDateReads: string[][] = [];
+    const metrics = dates.flatMap((date) => (
+      pipelineMetrics.map((metric) => ({ ...metric, date }))
+    ));
+    const resolver = makePipelineResolver({
+      metrics,
+      metricDateReads,
+      effectiveTradingDate: (rebalanceDate) => rebalanceDate,
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 }]),
+      { from: dates[0]!, to: dates[2]! },
+    );
+
+    expect(result.kind).toBe('READY');
+    expect(metricDateReads).toEqual([dates]);
+  });
+
+  it('여러 리밸런스 날짜의 동일 급하락 후보는 action coverage와 fact를 한 번만 읽는다', async () => {
+    const day = (offset: number) => PIPELINE_TS - offset * 86_400_000;
+    const candle = (symbol: string, offset: number): Candle => ({
+      symbol, market: 'KR', timeframe: '1d', tsMs: day(offset),
+      open: 100, high: 100, low: 100, close: 100, volume: 1,
+    });
+    const factReads: string[][] = [];
+    const actionCoverageReads: string[][] = [];
+    const resolver = makePipelineResolver({
+      candles: PIPELINE_ENTRIES.flatMap((entry) => [
+        candle(entry.shortCode, 2), candle(entry.shortCode, 1), candle(entry.shortCode, 0),
+      ]),
+      factReads,
+      actionCoverageReads,
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'DECLINE', direction: 'LOW', limit: 1, lookbackTradingDays: 3 }]),
+      { from: PIPELINE_DATE, to: '2025-06-15' },
+    );
+
+    expect(result.kind).toBe('READY');
+    expect(actionCoverageReads).toEqual([['000001', '000002', '000003']]);
+    expect(factReads).toEqual([['000001', '000002', '000003']]);
   });
 
   it('PER은 effective KST date가 끝난 뒤 다음 KST 날짜에 공시된 재집계를 제외한다', async () => {
