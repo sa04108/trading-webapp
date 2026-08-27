@@ -349,6 +349,7 @@ function makePipelineResolver(options: {
   financialCoverageReads?: string[][];
   candleReads?: string[][];
   bulkCandleReads?: string[][];
+  closePriceReads?: string[][];
   actionCoverageReads?: string[][];
   validateIdentity?: (
     selections: readonly SymbolIdentitySelection[],
@@ -527,6 +528,23 @@ function makePipelineResolver(options: {
             && (query.fromTsMs === undefined || candle.tsMs >= query.fromTsMs)
             && (query.toTsMs === undefined || candle.tsMs <= query.toTsMs)
           ));
+        },
+      }),
+      ...(options.closePriceReads === undefined ? {} : {
+        getClosePricesBySymbol: async (query: CandleQuery) => {
+          options.closePriceReads?.push([...query.symbols]);
+          const grouped = new Map<string, Candle[]>();
+          for (const candle of candles) {
+            if (
+              !query.symbols.includes(candle.symbol)
+              || (query.fromTsMs !== undefined && candle.tsMs < query.fromTsMs)
+              || (query.toTsMs !== undefined && candle.tsMs > query.toTsMs)
+            ) continue;
+            const values = grouped.get(candle.symbol) ?? [];
+            values.push(candle);
+            grouped.set(candle.symbol, values);
+          }
+          return grouped;
         },
       }),
       getTimestamps: async () => [],
@@ -1217,6 +1235,40 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
       scope: 'SYMBOL', keys: ['000001', '000002', '000003'], fields: ['SPLIT_RATIO'],
     });
     expect(bulkCandleReads).toEqual([['000001', '000002', '000003']]);
+    expect(candleReads).toEqual([]);
+  });
+
+  it('급하락은 종가 전용 bulk port를 전체 캔들 bulk보다 우선 사용한다', async () => {
+    const day = (offset: number) => PIPELINE_TS - offset * 86_400_000;
+    const candles = PIPELINE_ENTRIES.flatMap((entry) => [2, 1, 0].map((offset): Candle => ({
+      symbol: entry.shortCode,
+      market: 'KR',
+      timeframe: '1d',
+      tsMs: day(offset),
+      open: 100,
+      high: 100,
+      low: 100,
+      close: 100,
+      volume: 1,
+    })));
+    const closePriceReads: string[][] = [];
+    const bulkCandleReads: string[][] = [];
+    const candleReads: string[][] = [];
+    const resolver = makePipelineResolver({
+      candles,
+      closePriceReads,
+      bulkCandleReads,
+      candleReads,
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'DECLINE', direction: 'LOW', limit: 1, lookbackTradingDays: 3 }]),
+      period,
+    );
+
+    expect(result.kind).toBe('READY');
+    expect(closePriceReads).toEqual([['000001', '000002', '000003']]);
+    expect(bulkCandleReads).toEqual([]);
     expect(candleReads).toEqual([]);
   });
 
