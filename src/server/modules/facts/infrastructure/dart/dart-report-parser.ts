@@ -516,6 +516,10 @@ export function parseIssuanceRows(
     const gapPeriodKey = rawDate ?? '-';
 
     const rawStyle = readString(row, 'isu_dcrs_stle');
+    // DART가 누적 표의 첫 줄에 넣는 '-/-'는 상장 전·표 시작 시점의 기준 주식수다.
+    // 증감 사건이 아니므로 발행형태 미분류 gap으로 만들지 않는다.
+    if (rawDate?.trim() === '-' && rawStyle?.trim() === '-') continue;
+
     if (rawStyle === null) {
       gaps.push({
         symbol,

@@ -1,0 +1,1 @@
+ALTER TABLE `symbol_facts_state` ADD `action_gap_details_json` text;

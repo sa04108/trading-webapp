@@ -117,6 +117,10 @@ function fakeActionCoverage(): CorporateActionCoverageStore {
     addGapYears: (symbol, years, nowMs) => add(gaps, symbol, years, nowMs),
     addCoverageResult: (symbol, coveredYears, gapYears, nowMs) => {
       merge(covered, symbol, coveredYears);
+      const completed = new Set(coveredYears);
+      const retained = (gaps.get(symbol) ?? []).filter((year) => !completed.has(year));
+      if (retained.length > 0) gaps.set(symbol, retained);
+      else gaps.delete(symbol);
       merge(gaps, symbol, gapYears);
       if (coveredYears.length > 0) updatedAt.set(symbol, nowMs);
     },
@@ -256,6 +260,24 @@ function fakeRepository(): FactRepository & {
       }
       store.set(partitionKey, partition);
     },
+    replaceSymbolCorporateActionFactsForYear: async (symbol, year, facts) => {
+      const partitionKey = `SYMBOL:${symbol}`;
+      const partition = store.get(partitionKey) ?? new Map<string, Fact>();
+      for (const [key, existing] of partition) {
+        if (
+          existing.field === CORPORATE_ACTION_FIELD
+          && existing.periodKey.startsWith(String(year))
+        ) partition.delete(key);
+      }
+      saved.push({ facts });
+      for (const fact of facts) {
+        partition.set(
+          JSON.stringify([fact.key, fact.field, fact.periodKey, fact.asOfTsMs]),
+          fact,
+        );
+      }
+      store.set(partitionKey, partition);
+    },
   };
 }
 
@@ -349,8 +371,8 @@ describe('FactSyncService', () => {
 
     expect(report.savedFacts).toBe(0);
     expect(report.gaps).toHaveLength(0);
-    expect(repository.saved).toHaveLength(1);
-    expect(repository.saved[0]?.facts).toHaveLength(0);
+    expect(repository.saved).toHaveLength(2);
+    expect(repository.saved.every((entry) => entry.facts.length === 0)).toBe(true);
   });
 
   /**
@@ -598,11 +620,14 @@ describe('FactSyncService — 종목 단위 저장과 부분 실패 (긴 백필 
       fakeActionCoverage(),
     );
     await service.sync(request);
-    expect(repository.saved).toHaveLength(3);
+    expect(repository.saved).toHaveLength(6);
     expect(repository.saved.map((entry) => entry.facts[0]?.key)).toEqual([
       '005930',
+      undefined,
       '000660',
+      undefined,
       '035720',
+      undefined,
     ]);
   });
 
@@ -965,7 +990,7 @@ describe('FactSyncService — 증분과 취소', () => {
       stoppedAtSymbol: '005930',
       stopReason: 'DAILY_QUOTA',
     });
-    expect(repository.saved).toHaveLength(1);
+    expect(repository.saved).toHaveLength(2);
     expect(coverage.added).toEqual([{ symbol: '005930', years: [2024] }]);
   });
 
@@ -1084,6 +1109,7 @@ describe('FactSyncService — 증분과 취소', () => {
         // 두 번째 종목에서 DB 쓰기가 실패한다.
         if (saveCalls === 2) throw new Error('fact 쓰기 실패');
       },
+      replaceSymbolCorporateActionFactsForYear: async () => {},
     };
     const service = new FactSyncService(
       recordingSource(),

@@ -38,7 +38,7 @@ describe('SqliteCorporateActionCoverageStore', () => {
     expect(store.getGapYears().get('005930')).toEqual([2026]);
   });
 
-  it('coverage와 gap을 한 결과 write로 함께 합집합 기록한다', async () => {
+  it('다른 연도의 coverage와 gap은 보존한다', async () => {
     const { store } = await setup();
     store.addCoverageResult('005930', [2025], [2025], 100);
     store.addCoverageResult('005930', [2026], [], 200);
@@ -48,6 +48,28 @@ describe('SqliteCorporateActionCoverageStore', () => {
     expect(store.getUpdatedAtMs(['005930']).get('005930')).toBe(200);
   });
 
+  it('같은 연도를 재수집하면 옛 gap 상세를 최신 결과로 교체한다', async () => {
+    const { store } = await setup();
+    store.addCoverageResult('005930', [2025], [2025], 100, [{
+      year: 2025,
+      periodKey: '2025-05-01',
+      reason: '분류할 수 없는 발행형태: -',
+      severity: 'BLOCKING',
+    }]);
+
+    expect(store.getGapDetails(['005930']).get('005930')).toEqual([{
+      year: 2025,
+      periodKey: '2025-05-01',
+      reason: '분류할 수 없는 발행형태: -',
+      severity: 'BLOCKING',
+    }]);
+
+    store.addCoverageResult('005930', [2025], [], 200);
+
+    expect(store.getGapYears(['005930']).get('005930')).toEqual([]);
+    expect(store.getGapDetails(['005930']).get('005930')).toEqual([]);
+  });
+
   it('구버전 coverage는 신뢰하지 않고 필요한 연도를 현재 프로토콜로 재수집하게 연다', async () => {
     const { db, store } = await setup();
     db.insert(symbolFactsState).values({
@@ -55,7 +77,7 @@ describe('SqliteCorporateActionCoverageStore', () => {
       coveredYearsJson: '[]',
       actionCoveredYearsJson: '[2025]',
       actionGapYearsJson: null,
-      actionCoverageProtocolJson: null,
+      actionCoverageProtocolJson: '{"version":2,"years":[2025]}',
       updatedAtMs: 100,
       actionUpdatedAtMs: 100,
     }).run();

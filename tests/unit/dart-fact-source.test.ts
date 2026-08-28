@@ -891,6 +891,37 @@ describe('createDartFactSource — 종목별 호출에서도 캐시가 공유된
     });
     expect(urls.length).toBeGreaterThan(0);
   });
+
+  it('주식총수가 -여도 보정 대상 사건이 없으면 gap을 만들지 않는다', async () => {
+    const fetchImpl = (async (url: string) => {
+      const target = String(url);
+      if (target.includes('stockTotqySttus')) {
+        return jsonResponse({
+          status: '000',
+          message: '정상',
+          list: [{
+            rcept_no: '20250515000001',
+            se: '보통주',
+            istc_totqy: '-',
+            stlm_dt: '2025-03-31',
+          }],
+        });
+      }
+      return jsonResponse({ status: '013', message: 'no data' });
+    }) as unknown as typeof fetch;
+
+    const source = createDartFactSource(
+      { baseUrl: 'https://opendart.fss.or.kr', apiKey: 'K' },
+      LOGGER,
+      { fetchImpl, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER },
+    );
+    const result = await source.fetchCorporateActions({
+      symbols: ['005930'], years: [2025], shareYears: [2025], consolidated: true,
+    });
+
+    expect(result.facts).toEqual([]);
+    expect(result.gaps).toEqual([]);
+  });
 });
 
 describe('createDartFactSource — fetchCorporateActions 자본변동 접기', () => {

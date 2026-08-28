@@ -644,9 +644,7 @@ readiness 정책이 필요하다.
 
 - **커버리지 없음 → 400.** 우회 수단을 두지 않는다. 수집하거나 돌리지
   않거나 둘 중 하나다.
-- **gap 만 있음 → 통과, 이름으로 경고.** gap 은 수집은 했지만 DART 가
-  답하지 못한 연도다. DART 가 못 답하는 종목은 대체로 상장폐지 종목이라,
-  gap 까지 요구하면 생존편향 제거(D-041)와 충돌한다.
+- **gap 있음 → KRX 변경과 대조.** 실행 구간의 KRX 상장주식수 변경과 DART 기준일 정렬 창 안에서 연결되는 blocking gap만 상세 원인과 함께 차단한다. KRX 변경이 없는 사건 없는 연도·상장 전 기준값은 통과한다(D-081).
 - **팩트 0건, gap 없음, 커버리지 있음 → 통과, 경고 없음.** 분할이 없었던
   것으로 확정된 상태다.
 
@@ -828,10 +826,9 @@ __drizzle_migrations
 목록·연도 범위·완료 종목 수·전체 종목 수를 담아 SSE 진행률에 쓴다(§14).
 
 `symbol_facts_state`는 재무 커버리지(`coveredYearsJson`) 옆에 자본변동
-전용 컬럼 둘을 더 갖는다(D-043). `actionCoveredYearsJson`은 자본변동을
-수집한 연도이고 제출 게이트가 읽는다(§9.7). `actionGapYearsJson`은
-DART 가 답하지 못해 gap 이 난 연도이고 위저드 경고가 읽는다.
-두 컬럼은 `coveredYearsJson`과 분리돼 있다.
+전용 컬럼 셋을 더 갖는다(D-043, D-081). `actionCoveredYearsJson`은 자본변동을
+수집한 연도이고 제출 게이트가 읽는다(§9.7). `actionGapYearsJson`은 DART gap 연도이고, `actionGapDetailsJson`은 원문 기준일·사유·심각도를 담아 위저드와 worker가 읽는다.
+세 컬럼은 `coveredYearsJson`과 분리돼 있다.
 합쳐 두면 자본변동만 받은 종목을 재무 전략이 "데이터 있음"으로 오판한다.
 
 봉의 유일한 출처는 `krx_daily_bars` 다. `SymbolMasterService.ingestDate`가 종목

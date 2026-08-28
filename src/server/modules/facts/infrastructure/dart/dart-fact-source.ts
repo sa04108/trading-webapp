@@ -436,12 +436,8 @@ export function createDartFactSource(
           const shares = readShareAmount(common);
           const dateKey = typeof common.stlm_dt === 'string' ? normalizeDateKey(common.stlm_dt) : null;
           if (shares === null || shares <= 0 || dateKey === null) {
-            gaps.push({
-              symbol,
-              periodKey: `${year}Q${REPORT_CODE_TO_QUARTER[reportCode]}`,
-              reason: `발행주식수 기준일을 읽을 수 없습니다: ${String(common.stlm_dt)}`,
-              severity: 'BLOCKING',
-            });
+            // '-' 주식총수는 사건이 아니라 비율 계산용 앵커 부재다. 실제 보정 대상
+            // 사건이 이 앵커를 필요로 할 때 파서가 사건 날짜와 함께 gap을 남긴다.
             continue;
           }
           sharesByPeriod.push({ dateKey, shares });

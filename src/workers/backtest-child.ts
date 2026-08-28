@@ -35,6 +35,10 @@ import {
   calculatePinnedScheduleHash,
   UnsafeBacktestSymbolIdentityError,
 } from '../server/modules/backtest/application/backtest-symbol-identity.js';
+import {
+  findRelevantCorporateActionGaps,
+  readCorporateActionGapDetails,
+} from '../server/modules/backtest/application/backtest-corporate-action-gaps.js';
 import { MAX_BACKTEST_BARS } from '../server/modules/backtest/domain/bar-estimate.js';
 import { ENGINE_VERSION } from '../server/modules/backtest/domain/engine.js';
 import {
@@ -568,15 +572,36 @@ async function main(): Promise<void> {
           + `${actionCoverageMissingSymbols.join(', ')}. 필요한 연도 데이터를 다시 준비하세요.`,
       );
     }
-    const actionGapSymbols = [
-      ...actionCoverage.getGapYears(unionSymbols),
-    ].flatMap(([symbol, years]) => years.some(
-      (year) => year >= relevantActionFromYear && year <= relevantActionToYear,
-    ) ? [symbol] : []).sort();
-    if (actionGapSymbols.length > 0) {
+    const gapDetailsBySymbol = readCorporateActionGapDetails(
+      actionCoverage,
+      unionSymbols,
+    );
+    const gapExecutionFrom = addCalendarDays(firstLoadedCandleDate, 1);
+    const gapSharesChanges = gapExecutionFrom > request.period.to
+      ? []
+      : symbolMaster.sharesChangesBetween(
+          gapExecutionFrom,
+          request.period.to,
+        );
+    const relevantGaps = findRelevantCorporateActionGaps(
+      gapDetailsBySymbol,
+      gapSharesChanges,
+      {
+        executionFrom: gapExecutionFrom,
+        executionTo: request.period.to,
+        rawFrom: potentiallyRelevantFrom,
+        rawTo: potentiallyRelevantTo,
+      },
+    );
+    if (relevantGaps.length > 0) {
+      const actionGapSymbols = [...new Set(relevantGaps.map((gap) => gap.symbol))].sort();
+      const causes = relevantGaps.map((gap) => (
+        `${gap.symbol}(${gap.periodKey}: ${gap.reason})`
+      )).join('; ');
       throw new Error(
         '자본변동 보정 비율을 만들 수 없는 연도가 있어 백테스트를 중단했습니다 — '
           + `대상 ${actionGapSymbols.length}종목: ${actionGapSymbols.join(', ')}. `
+          + `확인된 원인: ${causes}. `
           + 'DART gap을 해소하고 자본변동 데이터를 다시 준비하세요.',
       );
     }

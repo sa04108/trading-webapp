@@ -149,6 +149,32 @@ describe('SqliteFactRepository', () => {
       fact({ periodKey: '2025Q1', value: 1 }),
     ]);
   });
+  it('자본변동 snapshot 교체는 stale 사건을 지우고 다른 연도·재무는 보존한다', async () => {
+    await repository.saveFacts([
+      fact({ field: 'SPLIT_RATIO', periodKey: '2025-03-14', value: 2, unit: 'RATIO' }),
+      fact({ field: 'SPLIT_RATIO', periodKey: '2025-06-01', value: 1.5, unit: 'RATIO' }),
+      fact({ field: 'SPLIT_RATIO', periodKey: '2024-04-01', value: 3, unit: 'RATIO' }),
+      fact({ field: 'NET_INCOME', periodKey: '2025Q1', value: 10 }),
+    ]);
+
+    await repository.replaceSymbolCorporateActionFactsForYear('005930', 2025, [
+      fact({ field: 'SPLIT_RATIO', periodKey: '2025-03-14', value: 2.5, unit: 'RATIO' }),
+    ]);
+
+    expect((await repository.getFacts({ scope: 'SYMBOL' })).map(
+      (row) => `${row.field}:${row.periodKey}:${row.value}`,
+    ).sort()).toEqual([
+      'NET_INCOME:2025Q1:10',
+      'SPLIT_RATIO:2024-04-01:3',
+      'SPLIT_RATIO:2025-03-14:2.5',
+    ]);
+
+    await repository.replaceSymbolCorporateActionFactsForYear('005930', 2025, []);
+    expect((await repository.getFacts({ scope: 'SYMBOL' })).map(
+      (row) => `${row.field}:${row.periodKey}`,
+    ).sort()).toEqual(['NET_INCOME:2025Q1', 'SPLIT_RATIO:2024-04-01']);
+  });
+
 
   it('종목끼리 격리된다', async () => {
     await repository.saveFacts([fact({ key: '005930', value: 1 })]);

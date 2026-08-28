@@ -486,6 +486,7 @@ function makePipelineResolver(options: {
       },
       saveFacts: async () => undefined,
       replaceSymbolFinancialFactsForYear: async () => undefined,
+      replaceSymbolCorporateActionFactsForYear: async () => undefined,
     },
     factCoverage: {
       getCoveredYears: (codes?: readonly string[]) => {
@@ -1545,6 +1546,9 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
       ]),
       // 세 후보 모두 2025 covered. 000002 만 2025 에 gap — 시도했지만 비율 미상.
       actionGaps: new Map([['000002', [2025]]]),
+      sharesChanges: [
+        { shortCode: '000002', effectiveDate: '2025-05-14', ratio: 2 },
+      ],
     });
 
     await expect(resolver.resolveOrDescribeNeeds(

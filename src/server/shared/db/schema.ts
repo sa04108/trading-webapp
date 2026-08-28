@@ -211,8 +211,10 @@ export const symbolFactsState = sqliteTable('symbol_facts_state', {
   financialCoverageProtocolJson: text('financial_coverage_protocol_json'),
   /** 자본변동을 수집한 연도 (number[] 오름차순 JSON). 제출 게이트가 읽는다 */
   actionCoveredYearsJson: text('action_covered_years_json'),
-  /** 자본변동 수집에서 gap 이 난 연도 (number[] 오름차순 JSON). 경고가 읽는다 */
+  /** 자본변동 수집에서 gap 이 난 연도 (number[] 오름차순 JSON). 상세 조회의 fallback */
   actionGapYearsJson: text('action_gap_years_json'),
+  /** 자본변동 gap의 원문 기준일·사유·심각도. 재수집한 연도 단위로 교체한다 */
+  actionGapDetailsJson: text('action_gap_details_json'),
   /** 현재 gap/정렬 해석 프로토콜로 다시 검증한 연도와 버전 JSON */
   actionCoverageProtocolJson: text('action_coverage_protocol_json'),
   /** 과거 마이그레이션 호환용 최종 갱신 시각. 새 watermark 판정에는 쓰지 않는다 */

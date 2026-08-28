@@ -29,6 +29,10 @@ import type { StrategyRegistry } from '../../strategy/application/strategy-regis
 import type { AnyTradingStrategy } from '../../strategy/domain/strategy.js';
 import { UnsafeBacktestSymbolIdentityError } from './backtest-symbol-identity.js';
 import {
+  findRelevantCorporateActionGaps,
+  readCorporateActionGapDetails,
+} from './backtest-corporate-action-gaps.js';
+import {
   financialCoverageGapMessage,
   findFinancialCoverageGap,
 } from './backtest-financial-coverage.js';
@@ -137,7 +141,7 @@ export interface BacktestPreparationOrchestratorDeps {
   >;
   readonly actionCoverage: Pick<
     CorporateActionCoverageStore,
-    'getCoveredYears' | 'getGapYears'
+    'getCoveredYears' | 'getGapYears' | 'getGapDetails'
   >;
   readonly factCoverage: Pick<FactCoverageStore, 'getCoverageState'>;
   readonly symbolMaster: Pick<
@@ -148,6 +152,7 @@ export interface BacktestPreparationOrchestratorDeps {
     | 'isRangeCovered'
     | 'nonTradingDaysBetween'
     | 'delistedEventsBetween'
+    | 'sharesChangesBetween'
   >;
   readonly strategies: Pick<StrategyRegistry, 'get'>;
   readonly symbolService: Pick<
@@ -711,15 +716,32 @@ export class BacktestPreparationOrchestrator {
           + `대상: ${missing.join(', ')}. 필요한 연도 데이터를 다시 준비하세요.`,
       );
     }
-    const affected = [...this.deps.actionCoverage.getGapYears(actions.symbols)]
-      .flatMap(([symbol, years]) => years.some(
-        (year) => year >= actions.fromYear && year <= actions.toYear,
-      ) ? [symbol] : [])
-      .sort();
-    if (affected.length === 0) return;
+    const detailsBySymbol = readCorporateActionGapDetails(
+      this.deps.actionCoverage,
+      actions.symbols,
+    );
+    if ([...detailsBySymbol.values()].every((details) => details.length === 0)) return;
+    const executionFrom = `${actions.fromYear}-01-01`;
+    const executionTo = `${actions.toYear}-12-31`;
+    const relevantGaps = findRelevantCorporateActionGaps(
+      detailsBySymbol,
+      this.deps.symbolMaster.sharesChangesBetween(executionFrom, executionTo),
+      {
+        executionFrom,
+        executionTo,
+        rawFrom: executionFrom,
+        rawTo: executionTo,
+      },
+    );
+    if (relevantGaps.length === 0) return;
+    const affected = [...new Set(relevantGaps.map((gap) => gap.symbol))].sort();
+    const causes = relevantGaps.map((gap) => (
+      `${gap.symbol}(${gap.periodKey}: ${gap.reason})`
+    )).join('; ');
     throw new Error(
       `자본변동 보정 비율을 만들 수 없는 연도가 있어 백테스트 준비를 중단했습니다 — 대상: `
-        + `${affected.join(', ')}. DART gap을 해소한 뒤 다시 준비하세요.`,
+        + `${affected.join(', ')}. 확인된 원인: ${causes}. `
+        + 'DART gap을 해소한 뒤 다시 준비하세요.',
     );
   }
 

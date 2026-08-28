@@ -102,6 +102,9 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
       ensureTradingDay: async () => ({ effectiveTradingDate: '2026-01-05', ingestedDates: [] }),
       ensureSelectionMetrics: async () => undefined,
       ingestDate: async () => ({ kind: 'ALREADY_COVERED' }),
+      sharesChangesBetween: (): Array<{
+        shortCode: string; effectiveDate: string; ratio: number;
+      }> => [],
     },
     symbolService: {
       exists: () => true,
@@ -436,6 +439,9 @@ describe('BacktestPreparationOrchestrator 자본변동 gap 차단', () => {
         getGapYears: () => new Map([['000660', [2025]]]),
       },
     });
+    ctx.deps.symbolMaster.sharesChangesBetween = () => [
+      { shortCode: '000660', effectiveDate: '2026-01-05', ratio: 2 },
+    ];
     const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
 
     const job = orchestrator.start(INPUT);

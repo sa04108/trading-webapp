@@ -17,7 +17,10 @@ import type {
 } from '../../market-data/application/ports.js';
 import type { FactRepository } from '../../facts/application/ports.js';
 import type { FactCoverageStore } from '../../facts/application/fact-coverage-store.js';
-import type { CorporateActionCoverageStore } from '../../facts/application/corporate-action-coverage.js';
+import type {
+  CorporateActionCoverageStore,
+  CorporateActionGapDetail,
+} from '../../facts/application/corporate-action-coverage.js';
 import { derivePreparationFactYearRange } from '../../market-data/domain/fact-year-range.js';
 import {
   alignCorporateActionEffectiveDates,
@@ -34,6 +37,10 @@ import {
   type UniverseStageDiagnostic,
   type UniverseStageValue,
 } from './universe-stage-ranking.js';
+import {
+  findRelevantCorporateActionGaps,
+  readCorporateActionGapDetails,
+} from './backtest-corporate-action-gaps.js';
 
 export interface LegacyUniverseScheduleEntry {
   readonly rebalanceDate: string; // ISO
@@ -350,7 +357,7 @@ export class UniverseRuleResolver {
     // 반복돼도 같은 shortCode를 다시 읽지 않고 일관된 스냅샷을 사용한다.
     // 다음 resolve는 새 Map을 만들어 그 사이 완료된 sync 결과를 본다.
     const actionCoveredYears = new Map<string, readonly number[]>();
-    const actionGapYears = new Map<string, readonly number[]>();
+    const actionGapDetails = new Map<string, readonly CorporateActionGapDetail[]>();
     const checkedActionCoverageSymbols = new Set<string>();
     const actionFactsBySymbol = new Map<string, Fact[]>();
     const checkedActionFactSymbols = new Set<string>();
@@ -359,21 +366,21 @@ export class UniverseRuleResolver {
       codes: readonly string[],
     ): {
       covered: ReadonlyMap<string, readonly number[]>;
-      gaps: ReadonlyMap<string, readonly number[]>;
+      details: ReadonlyMap<string, readonly CorporateActionGapDetail[]>;
     } => {
       const missing = [...new Set(codes)].filter((code) => !checkedActionCoverageSymbols.has(code));
       if (missing.length > 0) {
         const covered = actionCoverage.getCoveredYears(missing);
-        const gaps = actionCoverage.getGapYears(missing);
+        const details = readCorporateActionGapDetails(actionCoverage, missing);
         for (const code of missing) {
           checkedActionCoverageSymbols.add(code);
           const coveredYears = covered.get(code);
-          const gapYears = gaps.get(code);
+          const gapDetails = details.get(code);
           if (coveredYears !== undefined) actionCoveredYears.set(code, coveredYears);
-          if (gapYears !== undefined) actionGapYears.set(code, gapYears);
+          if (gapDetails !== undefined) actionGapDetails.set(code, gapDetails);
         }
       }
-      return { covered: actionCoveredYears, gaps: actionGapYears };
+      return { covered: actionCoveredYears, details: actionGapDetails };
     };
 
     const readActionFacts = async (codes: readonly string[]): Promise<Fact[]> => {
@@ -717,13 +724,12 @@ export class UniverseRuleResolver {
             CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays,
           );
           const requiredYears = yearsBetween(relevantRawFrom, relevantRawTo);
-          const { covered: coveredBySymbol, gaps: gapsBySymbol } =
+          const { covered: coveredBySymbol, details: gapDetailsBySymbol } =
             readActionCoverage(actionCandidateCodes);
           // covered+gap 연도는 "수집했지만 DART 행을 보정 비율로 만들지 못한" 상태다
           // (예: 발행형태/일자/직전 주식수 파싱 실패). 후보 하나만 결측 제외하면 그
           // 종목이 원래 탈락시켰을 다른 종목이 대신 뽑혀 결과가 낙관적으로 바뀔 수 있다.
           // 앞 stage가 확정된 뒤 실제 DECLINE 후보에 하나라도 걸리면 전체 준비를 막는다.
-          const gapAffectedCodes = new Set<string>();
           for (const code of actionCandidateCodes) {
             const covered = new Set(coveredBySymbol.get(code) ?? []);
             if (requiredYears.some((year) => !covered.has(year))) {
@@ -731,14 +737,37 @@ export class UniverseRuleResolver {
               stageReady = false;
               continue;
             }
-            const gaps = new Set(gapsBySymbol.get(code) ?? []);
-            if (requiredYears.some((year) => gaps.has(year))) gapAffectedCodes.add(code);
           }
+          const executionChangeFrom = addCalendarDays(actionExecutionFrom, 1);
+          const executionSharesChanges = executionChangeFrom > effectiveDate
+            ? []
+            : this.deps.symbolMaster.sharesChangesBetween(
+                executionChangeFrom,
+                effectiveDate,
+              );
+          const relevantGaps = findRelevantCorporateActionGaps(
+            new Map(actionCandidateCodes.map((code) => [
+              code,
+              gapDetailsBySymbol.get(code) ?? [],
+            ])),
+            executionSharesChanges,
+            {
+              executionFrom: executionChangeFrom,
+              executionTo: effectiveDate,
+              rawFrom: relevantRawFrom,
+              rawTo: relevantRawTo,
+            },
+          );
+          const gapAffectedCodes = new Set(relevantGaps.map((gap) => gap.symbol));
           if (gapAffectedCodes.size > 0) {
             if (stageReady && !hasUnresolvedStage) {
+              const causes = relevantGaps.map((gap) => (
+                `${gap.symbol}(${gap.periodKey}: ${gap.reason})`
+              )).join('; ');
               throw new Error(
                 '급하락 유니버스의 자본변동 보정 비율을 만들 수 없는 연도가 있습니다 — '
                   + `대상: ${[...gapAffectedCodes].sort().join(', ')}. `
+                  + `확인된 원인: ${causes}. `
                   + '해당 종목을 임의로 제외해 순위를 바꾸지 않고 준비를 중단했습니다.',
               );
             }

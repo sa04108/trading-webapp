@@ -21,6 +21,15 @@ export interface FactRepository {
     year: number,
     facts: readonly Fact[],
   ): Promise<void>;
+  /**
+   * 종목·연도의 자본변동 snapshot을 원자적으로 교체한다. DART의 `irdsSttus`는
+   * 누적 snapshot이라 정정공시에서 사라진 행을 단순 UPSERT로는 제거할 수 없다.
+   */
+  replaceSymbolCorporateActionFactsForYear(
+    symbol: string,
+    year: number,
+    facts: readonly Fact[],
+  ): Promise<void>;
 }
 
 /** 수집이 채우지 못한 칸. 조용히 빠뜨리면 랭킹이 소리 없이 왜곡된다. */

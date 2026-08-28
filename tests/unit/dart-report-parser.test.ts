@@ -569,6 +569,19 @@ describe('parseIssuanceRows — 필드 이름이 바뀐 응답 (bare TypeError �
 describe('parseIssuanceRows — 자본변동', () => {
   const priorShares = () => 1_000_000;
 
+  it('DART의 -/- 기준 주식수 행은 자본변동 사건이나 gap이 아니다', () => {
+    const rows: DartIssuanceRow[] = [{
+      isu_dcrs_de: '-',
+      isu_dcrs_stle: '-',
+      isu_dcrs_qy: '13,703,053',
+      rcept_no: '20250520000001',
+    }];
+
+    const result = parseIssuanceRows('005930', rows, priorShares);
+    expect(result.facts).toEqual([]);
+    expect(result.gaps).toEqual([]);
+  });
+
   it('무상증자·분할은 비율 팩트가 된다', () => {
     const rows: DartIssuanceRow[] = [
       {

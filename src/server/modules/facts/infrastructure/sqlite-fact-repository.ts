@@ -75,6 +75,46 @@ export class SqliteFactRepository implements FactRepository {
     });
   }
 
+  async replaceSymbolCorporateActionFactsForYear(
+    symbol: string,
+    year: number,
+    facts: readonly Fact[],
+  ): Promise<void> {
+    if (!SYMBOL_PATTERN.test(symbol)) throw new Error(`invalid symbol key: ${symbol}`);
+    if (!Number.isInteger(year) || year < 1900 || year > 2200) {
+      throw new Error(`invalid corporate action fact year: ${year}`);
+    }
+    validateFacts(facts);
+    const prefix = String(year);
+    for (const fact of facts) {
+      if (
+        fact.scope !== 'SYMBOL'
+        || fact.key !== symbol
+        || fact.field !== CORPORATE_ACTION_FIELD
+        || !fact.periodKey.startsWith(prefix)
+      ) {
+        throw new Error(
+          `자본변동 snapshot 범위를 벗어난 팩트입니다: `
+            + `${fact.scope}/${fact.key}/${fact.field}/${fact.periodKey}`,
+        );
+      }
+    }
+
+    this.db.transaction((tx) => {
+      tx.delete(factRows)
+        .where(and(
+          eq(factRows.scope, 'SYMBOL'),
+          eq(factRows.key, symbol),
+          eq(factRows.field, CORPORATE_ACTION_FIELD),
+          like(factRows.periodKey, `${year}%`),
+        ))
+        .run();
+      for (let index = 0; index < facts.length; index += WRITE_BATCH_SIZE) {
+        tx.insert(factRows).values(facts.slice(index, index + WRITE_BATCH_SIZE)).run();
+      }
+    });
+  }
+
   async getFacts(query: FactQuery): Promise<Fact[]> {
     const keys = query.keys && query.keys.length > 0 ? [...new Set(query.keys)] : null;
     const batches: Array<readonly string[] | null> = keys === null
