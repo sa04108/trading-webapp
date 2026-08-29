@@ -532,7 +532,7 @@ describe('BacktestPreparationOrchestrator 자본변동 gap 차단', () => {
   });
 });
 
-describe('BacktestPreparationOrchestrator 재무 coverage 불변식', () => {
+describe('BacktestPreparationOrchestrator 완료 preview coverage 불변식', () => {
   const valueInput: PreparationInput = {
     ...INPUT,
     strategyId: 'value-quality-rank',
@@ -590,6 +590,88 @@ describe('BacktestPreparationOrchestrator 재무 coverage 불변식', () => {
     expect(orchestrator.getCachedPreview(valueInput)).not.toBeNull();
 
     covered.set('005930', [2026]);
+    expect(await orchestrator.getReadyPreview(valueInput)).toBeNull();
+    expect(orchestrator.getCachedPreview(valueInput)).toBeNull();
+
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
+  it('완료 뒤 현재 protocol의 action coverage가 사라지면 ready/cached preview를 재사용하지 않는다', async () => {
+    const actionCovered = new Map<string, readonly number[]>([['005930', [2025, 2026]]]);
+    const ctx = makeDeps({
+      strategies: new StrategyRegistry(),
+      actionCoverage: {
+        getCoveredYears: (symbols: readonly string[]) => new Map<string, readonly number[]>(
+          symbols.map((symbol) => [symbol, actionCovered.get(symbol) ?? []]),
+        ),
+        getGapYears: () => new Map<string, readonly number[]>(),
+      },
+      factCoverage: {
+        getCoverageState: (symbols: readonly string[]) => new Map(
+          symbols.map((symbol) => [symbol, {
+            verifiedYears: [2025, 2026], blockingGapYears: [], blockingGapDetails: [],
+          }]),
+        ),
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const job = orchestrator.start(valueInput);
+    await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
+    expect(await orchestrator.getReadyPreview(valueInput)).not.toBeNull();
+    expect(orchestrator.getCachedPreview(valueInput)).not.toBeNull();
+
+    actionCovered.set('005930', [2026]);
+    expect(await orchestrator.getReadyPreview(valueInput)).toBeNull();
+    expect(orchestrator.getCachedPreview(valueInput)).toBeNull();
+
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
+  it('완료 뒤 관련 blocking action gap이 생기면 ready/cached preview를 재사용하지 않는다', async () => {
+    const gapDetails = new Map<string, readonly {
+      year: number;
+      periodKey: string;
+      reason: string;
+      severity: 'BLOCKING';
+    }[]>([['005930', []]]);
+    const ctx = makeDeps({
+      strategies: new StrategyRegistry(),
+      actionCoverage: {
+        getCoveredYears: (symbols: readonly string[]) => new Map(
+          symbols.map((symbol) => [symbol, [2025, 2026]]),
+        ),
+        getGapYears: () => new Map<string, readonly number[]>(),
+        getGapDetails: (symbols: readonly string[]) => new Map(
+          symbols.map((symbol) => [symbol, gapDetails.get(symbol) ?? []]),
+        ),
+      },
+      factCoverage: {
+        getCoverageState: (symbols: readonly string[]) => new Map(
+          symbols.map((symbol) => [symbol, {
+            verifiedYears: [2025, 2026], blockingGapYears: [], blockingGapDetails: [],
+          }]),
+        ),
+      },
+    });
+    ctx.deps.symbolMaster.sharesChangesBetween = () => [
+      { shortCode: '005930', effectiveDate: '2026-01-05', ratio: 2 },
+    ];
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const job = orchestrator.start(valueInput);
+    await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
+    expect(await orchestrator.getReadyPreview(valueInput)).not.toBeNull();
+    expect(orchestrator.getCachedPreview(valueInput)).not.toBeNull();
+
+    gapDetails.set('005930', [{
+      year: 2025,
+      periodKey: '2025-12-31',
+      reason: '비율을 계산할 수 없습니다.',
+      severity: 'BLOCKING',
+    }]);
     expect(await orchestrator.getReadyPreview(valueInput)).toBeNull();
     expect(orchestrator.getCachedPreview(valueInput)).toBeNull();
 

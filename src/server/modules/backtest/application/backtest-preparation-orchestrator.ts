@@ -267,7 +267,11 @@ export class BacktestPreparationOrchestrator {
       .find((row) => row.status === 'COMPLETED' && row.previewJson !== null);
     if (!completed) return null;
     const preview = this.getPreview(completed.id);
-    if (!preview || this.financialCoverageGap(input, strategy, preview.unionSymbols) !== null) {
+    if (
+      !preview
+      || this.financialCoverageGap(input, strategy, preview.unionSymbols) !== null
+      || this.corporateActionCoverageFailure(input, strategy, preview.unionSymbols) !== null
+    ) {
       return null;
     }
     return preview;
@@ -297,6 +301,9 @@ export class BacktestPreparationOrchestrator {
     // 완료 뒤 coverage가 삭제·손상됐으면 cached 200을 계속 돌려 재준비 진입을 막지
     // 않는다. null을 돌려 라우트가 새 durable preparation을 시작하게 한다.
     if (this.financialCoverageGap(input, strategy, currentPreview.unionSymbols) !== null) return null;
+    if (this.corporateActionCoverageFailure(input, strategy, currentPreview.unionSymbols) !== null) {
+      return null;
+    }
     this.registerUniverse(attempt);
     return currentPreview;
   }
@@ -701,26 +708,52 @@ export class BacktestPreparationOrchestrator {
     return !this.shouldReturnFromRun(jobId);
   }
 
-  private assertCorporateActionCoverage(actions: BacktestPreparationPlan['actions']): void {
-    if (actions.symbols.length === 0) return;
+  /** 완료 preview가 현재 action protocol coverage를 여전히 만족하는지 부작용 없이 확인한다. */
+  private corporateActionCoverageFailure(
+    input: PreparationInput,
+    strategy: AnyTradingStrategy,
+    symbols: readonly string[],
+  ): string | null {
+    const plan = buildBacktestPreparationPlan({
+      request: preparationRequest(input),
+      resolutionNeeds: EMPTY_NEEDS,
+      finalUniverseSymbols: symbols,
+      strategy,
+    });
+    return this.corporateActionCoverageFailureForPlan(plan.actions);
+  }
+
+  private missingCorporateActionCoverageSymbols(
+    actions: BacktestPreparationPlan['actions'],
+  ): string[] {
+    if (actions.symbols.length === 0) return [];
     const requiredYears = new Set<number>();
     for (let year = actions.fromYear; year <= actions.toYear; year += 1) requiredYears.add(year);
     const coveredBySymbol = this.deps.actionCoverage.getCoveredYears(actions.symbols);
-    const missing = actions.symbols.filter((symbol) => {
+    return actions.symbols.filter((symbol) => {
       const covered = new Set(coveredBySymbol.get(symbol) ?? []);
       return [...requiredYears].some((year) => !covered.has(year));
     });
+  }
+
+  private assertCorporateActionCoverage(actions: BacktestPreparationPlan['actions']): void {
+    const failure = this.corporateActionCoverageFailureForPlan(actions);
+    if (failure !== null) throw new Error(failure);
+  }
+
+  private corporateActionCoverageFailureForPlan(
+    actions: BacktestPreparationPlan['actions'],
+  ): string | null {
+    const missing = this.missingCorporateActionCoverageSymbols(actions);
     if (missing.length > 0) {
-      throw new Error(
-        '최종 유니버스의 자본변동 coverage가 부족해 백테스트 준비를 중단했습니다 — '
-          + `대상: ${missing.join(', ')}. 필요한 연도 데이터를 다시 준비하세요.`,
-      );
+      return '최종 유니버스의 자본변동 coverage가 부족해 백테스트 준비를 중단했습니다 — '
+        + `대상: ${missing.join(', ')}. 필요한 연도 데이터를 다시 준비하세요.`;
     }
     const detailsBySymbol = readCorporateActionGapDetails(
       this.deps.actionCoverage,
       actions.symbols,
     );
-    if ([...detailsBySymbol.values()].every((details) => details.length === 0)) return;
+    if ([...detailsBySymbol.values()].every((details) => details.length === 0)) return null;
     const executionFrom = `${actions.fromYear}-01-01`;
     const executionTo = `${actions.toYear}-12-31`;
     const relevantGaps = findRelevantCorporateActionGaps(
@@ -733,16 +766,14 @@ export class BacktestPreparationOrchestrator {
         rawTo: executionTo,
       },
     );
-    if (relevantGaps.length === 0) return;
+    if (relevantGaps.length === 0) return null;
     const affected = [...new Set(relevantGaps.map((gap) => gap.symbol))].sort();
     const causes = relevantGaps.map((gap) => (
       `${gap.symbol}(${gap.periodKey}: ${gap.reason})`
     )).join('; ');
-    throw new Error(
-      `자본변동 보정 비율을 만들 수 없는 연도가 있어 백테스트 준비를 중단했습니다 — 대상: `
-        + `${affected.join(', ')}. 확인된 원인: ${causes}. `
-        + 'DART gap을 해소한 뒤 다시 준비하세요.',
-    );
+    return `자본변동 보정 비율을 만들 수 없는 연도가 있어 백테스트 준비를 중단했습니다 — 대상: `
+      + `${affected.join(', ')}. 확인된 원인: ${causes}. `
+      + 'DART gap을 해소한 뒤 다시 준비하세요.';
   }
 
   private financialCoverageGap(

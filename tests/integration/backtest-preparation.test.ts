@@ -3,7 +3,7 @@ import { get as httpGet, type IncomingMessage } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import type { PreparationInput } from '../../src/server/modules/backtest/application/backtest-preparation-orchestrator.js';
-import { dailySelectionMetrics } from '../../src/server/shared/db/schema.js';
+import { dailySelectionMetrics, symbolFactsState } from '../../src/server/shared/db/schema.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
 import {
   registerSymbols,
@@ -96,6 +96,44 @@ describe('backtest preparation HTTP/SSE', () => {
       unionSymbols: ['005930'],
       stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 }],
     });
+  });
+
+  it('완료 preview는 action protocol이 구버전이면 캐시 대신 재준비를 요구한다', async () => {
+    await seedReadyUniverse();
+
+    const started = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie }, payload: previewInput(),
+    });
+    expect(started.statusCode).toBe(202);
+    const id = started.json<{ job: { id: string } }>().job.id;
+    await waitFor(
+      () => ctx.container.backtestPreparationOrchestrator.get(id),
+      (job) => job?.status === 'COMPLETED',
+    );
+
+    const ready = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie }, payload: previewInput(),
+    });
+    expect(ready.statusCode).toBe(200);
+
+    ctx.container.database.db.update(symbolFactsState)
+      .set({
+        actionCoverageProtocolJson: JSON.stringify({
+          version: 2,
+          years: [2024, 2025, 2026],
+        }),
+      })
+      .where(eq(symbolFactsState.code, '005930'))
+      .run();
+
+    const invalidated = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie }, payload: previewInput(),
+    });
+    expect(invalidated.statusCode).toBe(503);
+    expect(invalidated.json<{ error: string }>().error).toMatch(/DART/);
   });
 
   it('같은 request hash라도 resolver schedule이 달라졌으면 완료 결과를 재사용하지 않는다', async () => {
