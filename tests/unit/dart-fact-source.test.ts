@@ -932,6 +932,150 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
     stlm_dt: '2020-03-31',
   }];
 
+  it('같은 날짜의 유상증자를 뒤이은 무상증자의 직전 주식수에 먼저 반영한다', async () => {
+    const fetchImpl = (async (url: string) => {
+      const target = String(url);
+      if (target.includes('stockTotqySttus') && target.includes('reprt_code=11013')) {
+        return jsonResponse({
+          status: '000', message: '정상',
+          list: [{ rcept_no: '20160516000131', se: '보통주', istc_totqy: '21,678,954', stlm_dt: '2016-03-31' }],
+        });
+      }
+      if (target.includes('stockTotqySttus') && target.includes('reprt_code=11012')) {
+        return jsonResponse({
+          status: '000', message: '정상',
+          list: [{ rcept_no: '20160816000131', se: '보통주', istc_totqy: '42,418,431', stlm_dt: '2016-06-30' }],
+        });
+      }
+      if (target.includes('irdsSttus') && target.includes('reprt_code=11012')) {
+        return jsonResponse({
+          status: '000', message: '정상',
+          list: [
+            {
+              isu_dcrs_de: '2016-06-17', isu_dcrs_stle: '유상증자(주주우선공모)',
+              isu_dcrs_stock_knd: '보통주', isu_dcrs_qy: '6,600,000', rcept_no: '20160816000131',
+            },
+            {
+              isu_dcrs_de: '2016-06-17', isu_dcrs_stle: '무상증자',
+              isu_dcrs_stock_knd: '보통주', isu_dcrs_qy: '14,139,477', rcept_no: '20160816000131',
+            },
+          ],
+        });
+      }
+      return jsonResponse({ status: '013', message: 'no data' });
+    }) as unknown as typeof fetch;
+    const source = createDartFactSource(
+      { baseUrl: 'https://opendart.fss.or.kr', apiKey: 'K' }, LOGGER,
+      { fetchImpl, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER },
+    );
+
+    const result = await source.fetchCorporateActions({
+      symbols: ['064260'], years: [2016], shareYears: [2016], consolidated: true,
+    });
+
+    const action = result.facts.find((fact) => fact.field === 'SPLIT_RATIO');
+    expect(action?.value).toBeCloseTo(1.5);
+    expect(action).toMatchObject({
+      corporateActionBeforeShares: 28_278_954,
+      corporateActionAfterShares: 42_418_431,
+    });
+    expect(result.gaps).toEqual([]);
+  });
+
+  it('테스의 같은 날 유상·무상증자도 유상증자 후 주식수를 분모로 쓴다', async () => {
+    const fetchImpl = (async (url: string) => {
+      const target = String(url);
+      if (target.includes('stockTotqySttus') && target.includes('reprt_code=11013')) {
+        return jsonResponse({
+          status: '000', message: '정상',
+          list: [{ rcept_no: '20160516000573', se: '보통주', istc_totqy: '10,542,387', stlm_dt: '2016-03-31' }],
+        });
+      }
+      if (target.includes('stockTotqySttus') && target.includes('reprt_code=11012')) {
+        return jsonResponse({
+          status: '000', message: '정상',
+          list: [{ rcept_no: '20160816000573', se: '보통주', istc_totqy: '18,174,030', stlm_dt: '2016-06-30' }],
+        });
+      }
+      if (target.includes('irdsSttus') && target.includes('reprt_code=11012')) {
+        return jsonResponse({
+          status: '000', message: '정상',
+          list: [
+            {
+              isu_dcrs_de: '2016-04-15', isu_dcrs_stle: '유상증자(주주배정)',
+              isu_dcrs_stock_knd: '보통주', isu_dcrs_qy: '1,574,103', rcept_no: '20160816000573',
+            },
+            {
+              isu_dcrs_de: '2016-04-15', isu_dcrs_stle: '무상증자',
+              isu_dcrs_stock_knd: '보통주', isu_dcrs_qy: '6,057,540', rcept_no: '20160816000573',
+            },
+          ],
+        });
+      }
+      return jsonResponse({ status: '013', message: 'no data' });
+    }) as unknown as typeof fetch;
+    const source = createDartFactSource(
+      { baseUrl: 'https://opendart.fss.or.kr', apiKey: 'K' }, LOGGER,
+      { fetchImpl, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER },
+    );
+
+    const result = await source.fetchCorporateActions({
+      symbols: ['095610'], years: [2016], shareYears: [2016], consolidated: true,
+    });
+
+    const action = result.facts.find((fact) => fact.field === 'SPLIT_RATIO');
+    expect(action?.value).toBeCloseTo(18_174_030 / 12_116_490);
+    expect(action).toMatchObject({
+      corporateActionBeforeShares: 12_116_490,
+      corporateActionAfterShares: 18_174_030,
+    });
+    expect(result.gaps).toEqual([]);
+  });
+
+  it('분기 주식수가 감소를 입증하면 DART 주식분할을 회사분할 감소로 해석한다', async () => {
+    const fetchImpl = (async (url: string) => {
+      const target = String(url);
+      if (target.includes('stockTotqySttus') && target.includes('reprt_code=11013')) {
+        return jsonResponse({
+          status: '000', message: '정상',
+          list: [{ rcept_no: '20160516001638', se: '보통주', istc_totqy: '11,396,154', stlm_dt: '2016-03-31' }],
+        });
+      }
+      if (target.includes('stockTotqySttus') && target.includes('reprt_code=11012')) {
+        return jsonResponse({
+          status: '000', message: '정상',
+          list: [{ rcept_no: '20160816002304', se: '보통주', istc_totqy: '5,500,690', stlm_dt: '2016-06-30' }],
+        });
+      }
+      if (target.includes('irdsSttus') && target.includes('reprt_code=11012')) {
+        return jsonResponse({
+          status: '000', message: '정상',
+          list: [{
+            isu_dcrs_de: '2016-05-03', isu_dcrs_stle: '주식분할',
+            isu_dcrs_stock_knd: '보통주', isu_dcrs_qy: '5,895,464', rcept_no: '20160816002304',
+          }],
+        });
+      }
+      return jsonResponse({ status: '013', message: 'no data' });
+    }) as unknown as typeof fetch;
+    const source = createDartFactSource(
+      { baseUrl: 'https://opendart.fss.or.kr', apiKey: 'K' }, LOGGER,
+      { fetchImpl, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER },
+    );
+
+    const result = await source.fetchCorporateActions({
+      symbols: ['084110'], years: [2016], shareYears: [2016], consolidated: true,
+    });
+
+    const action = result.facts.find((fact) => fact.field === 'SPLIT_RATIO');
+    expect(action?.value).toBeCloseTo(5_500_690 / 11_396_154);
+    expect(action).toMatchObject({
+      corporateActionBeforeShares: 11_396_154,
+      corporateActionAfterShares: 5_500_690,
+    });
+    expect(result.gaps).toEqual([]);
+  });
+
   it('같은 분할 이벤트가 해마다 반복되면 가장 이른 공시 하나만 남는다', async () => {
     const fetchImpl = (async (url: string) => {
       const target = String(url);

@@ -846,6 +846,8 @@ export function factsFingerprint(facts: readonly Fact[]): string {
         fact.asOfTsMs,
         fact.value,
         fact.unit,
+        fact.corporateActionBeforeShares ?? null,
+        fact.corporateActionAfterShares ?? null,
       ]),
     )
     .sort();

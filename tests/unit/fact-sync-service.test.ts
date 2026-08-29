@@ -3,6 +3,7 @@ import type { CorporateActionCoverageStore } from '../../src/server/modules/fact
 import type { FactCoverageStore } from '../../src/server/modules/facts/application/fact-coverage-store.js';
 import {
   FactSyncService,
+  factsFingerprint,
   type FactSyncRequest,
 } from '../../src/server/modules/facts/application/fact-sync-service.js';
 import {
@@ -280,6 +281,19 @@ function fakeRepository(): FactRepository & {
     },
   };
 }
+
+describe('factsFingerprint', () => {
+  it('자본변동 절대 주식수가 바뀌면 데이터셋 버전 지문도 바뀐다', () => {
+    const base = {
+      ...fact('SPLIT_RATIO', 5),
+      corporateActionBeforeShares: 10,
+      corporateActionAfterShares: 50,
+    };
+    const changed = { ...base, corporateActionBeforeShares: 11 };
+
+    expect(factsFingerprint([base])).not.toBe(factsFingerprint([changed]));
+  });
+});
 
 describe('FactSyncService', () => {
   it('두 소스의 gap 합집합이 리포트에 도달한다', async () => {

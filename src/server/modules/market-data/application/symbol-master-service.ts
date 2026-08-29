@@ -1790,7 +1790,13 @@ export class SymbolMasterService {
   sharesChangesBetween(
     from: string,
     to: string,
-  ): readonly { shortCode: string; effectiveDate: string; ratio: number }[] {
+  ): readonly {
+    shortCode: string;
+    effectiveDate: string;
+    ratio: number;
+    beforeShares: number;
+    afterShares: number;
+  }[] {
     const events = this.listEvents(from, to).filter((event) => event.eventType === 'SHARES_CHANGED');
     if (events.length === 0) return [];
 
@@ -1813,7 +1819,13 @@ export class SymbolMasterService {
       );
     }
 
-    const result: { shortCode: string; effectiveDate: string; ratio: number }[] = [];
+    const result: {
+      shortCode: string;
+      effectiveDate: string;
+      ratio: number;
+      beforeShares: number;
+      afterShares: number;
+    }[] = [];
     for (const event of events) {
       const before = Number(JSON.parse(event.oldValue ?? 'null') as unknown);
       const after = Number(JSON.parse(event.newValue ?? 'null') as unknown);
@@ -1829,6 +1841,8 @@ export class SymbolMasterService {
         shortCode: version.shortCode,
         effectiveDate: event.effectiveDate,
         ratio: after / before,
+        beforeShares: before,
+        afterShares: after,
       });
     }
     return result.sort(

@@ -60,6 +60,62 @@ describe('alignCorporateActionEffectiveDates', () => {
     expect(unaligned).toEqual([{ symbol: '007340', periodKey: '2024-09-27', ratio: 5 }]);
   });
 
+  it('KRX 한 변경에 유상증자와 정수배 분할이 섞여도 DART 사건 직후 주식수로 정렬한다', () => {
+    const fact = splitFact({
+      periodKey: '2016-08-17',
+      value: 5,
+      corporateActionBeforeShares: 11_479_354,
+      corporateActionAfterShares: 57_396_770,
+    });
+    const compositeChange = sharesChange({
+      effectiveDate: '2016-09-07',
+      ratio: 57_396_770 / 10_607_380,
+      beforeShares: 10_607_380,
+      afterShares: 57_396_770,
+    });
+
+    const { facts, unaligned } = alignCorporateActionEffectiveDates([fact], [compositeChange]);
+
+    expect(facts[0]?.periodKey).toBe('2016-09-07');
+    expect(unaligned).toEqual([]);
+  });
+
+  it('절대 주식수 근거가 없으면 오차가 큰 복합 변경을 추측하지 않는다', () => {
+    const fact = splitFact({ periodKey: '2016-08-17', value: 5 });
+    const compositeChange = sharesChange({
+      effectiveDate: '2016-09-07',
+      ratio: 57_396_770 / 10_607_380,
+    });
+
+    const { facts, unaligned } = alignCorporateActionEffectiveDates([fact], [compositeChange]);
+
+    expect(facts).toEqual([fact]);
+    expect(unaligned).toHaveLength(1);
+  });
+
+  it('KRX 비율과 전후 주식수가 서로 모순이면 복합 변경으로 인정하지 않는다', () => {
+    const fact = splitFact({
+      periodKey: '2016-08-17',
+      value: 5,
+      corporateActionBeforeShares: 11_479_354,
+      corporateActionAfterShares: 57_396_770,
+    });
+    const inconsistentChange = sharesChange({
+      effectiveDate: '2016-09-07',
+      ratio: 5.3,
+      beforeShares: 10_607_380,
+      afterShares: 57_396_770,
+    });
+
+    const { facts, unaligned } = alignCorporateActionEffectiveDates(
+      [fact],
+      [inconsistentChange],
+    );
+
+    expect(facts).toEqual([fact]);
+    expect(unaligned).toHaveLength(1);
+  });
+
   it('작은 증감은 총 비율이 아니라 변화분의 크기로 짝을 판정한다', () => {
     const fact = splitFact({ value: 1.02 });
     const differentIncrease = alignCorporateActionEffectiveDates(
@@ -251,6 +307,28 @@ describe('alignCorporateActionEffectiveDates', () => {
     const { facts, unaligned } = alignCorporateActionEffectiveDates(
       [correction, first],
       [sharesChange({ ratio: 5 })],
+    );
+
+    expect(facts).toEqual([first]);
+    expect(unaligned).toEqual([{ symbol: '007340', periodKey: '2024-09-27', ratio: 5 }]);
+  });
+
+  it('같은 비율이어도 직전·직후 주식수가 상충하면 하나를 임의 채택하지 않는다', () => {
+    const first = splitFact({
+      value: 5,
+      corporateActionBeforeShares: 10,
+      corporateActionAfterShares: 50,
+    });
+    const correction = splitFact({
+      asOfTsMs: Date.parse('2026-03-20T09:00:00Z'),
+      value: 5,
+      corporateActionBeforeShares: 11,
+      corporateActionAfterShares: 55,
+    });
+
+    const { facts, unaligned } = alignCorporateActionEffectiveDates(
+      [correction, first],
+      [sharesChange({ ratio: 5, beforeShares: 10, afterShares: 50 })],
     );
 
     expect(facts).toEqual([first]);

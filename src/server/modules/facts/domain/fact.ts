@@ -15,6 +15,9 @@ export interface Fact {
   readonly asOfTsMs: number;
   readonly value: number;
   readonly unit: string;
+  /** 자본변동 사건 직전·직후의 DART 발행주식수. 일반 재무·거시 팩트는 null/미설정이다. */
+  readonly corporateActionBeforeShares?: number | null;
+  readonly corporateActionAfterShares?: number | null;
 }
 
 /** 전략이 참조하는 재무 계정. 문자열 리터럴 유니온이라 오타가 컴파일에서 잡힌다. */

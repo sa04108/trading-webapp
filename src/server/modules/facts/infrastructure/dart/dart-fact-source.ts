@@ -75,6 +75,62 @@ function issuanceKey(row: DartIssuanceRow): string {
   ].join('|');
 }
 
+interface SharesAtPeriod {
+  readonly dateKey: string;
+  readonly shares: number;
+}
+
+interface OrderedIssuedShareChange {
+  readonly row: DartIssuanceRow;
+  readonly order: number;
+  readonly dateKey: string;
+  readonly delta: number | null;
+}
+
+function isAmbiguousSplitRow(row: DartIssuanceRow): boolean {
+  if (typeof row.isu_dcrs_stle !== 'string') return false;
+  const style = row.isu_dcrs_stle.replace(/\s/g, '');
+  return style.includes('분할') && !style.includes('병합') && !style.includes('감자');
+}
+
+/**
+ * DART의 '주식분할'은 액면분할 증가뿐 아니라 회사분할 감소에도 쓰인다. 문자열만으로
+ * 부호를 정하지 않고, 바로 전·후 분기 주식수와 그 사이 irdsSttus 전체 증감을 재생했을
+ * 때 감소로 뒤집은 경우만 snapshot과 정확히 일치하면 회사분할로 확정한다.
+ */
+function inferredDecreasingSplitRows(
+  rows: readonly DartIssuanceRow[],
+  sharesByPeriod: readonly SharesAtPeriod[],
+): ReadonlySet<DartIssuanceRow> {
+  const changes = rows.flatMap((row, order): OrderedIssuedShareChange[] => {
+    const change = issuedShareChange(row);
+    return change === null ? [] : [{ row, order, ...change }];
+  });
+  const result = new Set<DartIssuanceRow>();
+
+  for (const target of changes) {
+    if (!isAmbiguousSplitRow(target.row) || target.delta === null || target.delta <= 0) continue;
+    let anchor: SharesAtPeriod | undefined;
+    let next: SharesAtPeriod | undefined;
+    for (const snapshot of sharesByPeriod) {
+      if (snapshot.dateKey < target.dateKey) anchor = snapshot;
+      else if (next === undefined) next = snapshot;
+    }
+    if (anchor === undefined || next === undefined) continue;
+    const interval = changes.filter((change) => (
+      change.dateKey > anchor.dateKey && change.dateKey <= next.dateKey
+    ));
+    if (interval.some((change) => change.delta === null)) continue;
+    const defaultAfter = anchor.shares + interval.reduce(
+      (sum, change) => sum + (change.delta ?? 0),
+      0,
+    );
+    const decreaseAfter = defaultAfter - 2 * target.delta;
+    if (defaultAfter !== next.shares && decreaseAfter === next.shares) result.add(target.row);
+  }
+  return result;
+}
+
 /** 공시검색 봉투 — 목록 API 만 페이지 정보를 함께 준다 */
 interface DartListEnvelope {
   readonly status: string;
@@ -421,7 +477,7 @@ export function createDartFactSource(
       const actionByKey = new Map<string, Fact>();
 
       /** 'YYYY-MM-DD' → 그 시점의 발행주식수. DART 표가 명시한 기준일을 쓴다. */
-      const sharesByPeriod: Array<{ dateKey: string; shares: number }> = [];
+      const sharesByPeriod: SharesAtPeriod[] = [];
       const filedReports = new Set<string>();
 
       // 앵커 때문에 shareYears 를 돈다 — 대상 연도만 읽으면 그 연도 연초 이벤트의
@@ -474,22 +530,36 @@ export function createDartFactSource(
         ...row,
         rcept_no: firstReceiptByKey.get(issuanceKey(row)) ?? row.rcept_no,
       }));
+      const decreasingSplitRows = inferredDecreasingSplitRows(issuanceRows, sharesByPeriod);
+      // DART 응답의 같은 날짜 행 순서가 사건 순서다. 유상증자 다음 무상증자처럼
+      // 날짜만으로는 분모를 복원할 수 없는 경우에도 target 행 앞까지만 정확히 재생한다.
       const issuedShareChanges = issuanceRows
-        .map(issuedShareChange)
-        .filter((change): change is NonNullable<typeof change> => change !== null)
-        .sort((a, b) => a.dateKey.localeCompare(b.dateKey));
+        .flatMap((row, order): OrderedIssuedShareChange[] => {
+          const change = issuedShareChange(
+            row,
+            decreasingSplitRows.has(row) ? 'DECREASE' : undefined,
+          );
+          return change === null ? [] : [{ row, order, ...change }];
+        })
+        .sort((a, b) => a.dateKey.localeCompare(b.dateKey) || a.order - b.order);
+      const rowOrder = new Map(issuanceRows.map((row, order) => [row, order]));
 
-      const sharesBefore = (dateKey: string): number | null => {
-        let anchor: { dateKey: string; shares: number } | null = null;
+      const sharesBefore = (dateKey: string, targetRow: DartIssuanceRow): number | null => {
+        let anchor: SharesAtPeriod | null = null;
         for (const entry of sharesByPeriod) {
           if (entry.dateKey >= dateKey) break;
           anchor = entry;
         }
         if (anchor === null) return null;
+        const targetOrder = rowOrder.get(targetRow);
+        if (targetOrder === undefined) return null;
         let shares = anchor.shares;
         for (const change of issuedShareChanges) {
           if (change.dateKey <= anchor.dateKey) continue;
-          if (change.dateKey >= dateKey) break;
+          if (
+            change.dateKey > dateKey
+            || (change.dateKey === dateKey && change.order >= targetOrder)
+          ) break;
           if (change.delta === null) return null;
           shares += change.delta;
           if (shares <= 0) return null;
@@ -498,7 +568,9 @@ export function createDartFactSource(
       };
 
       if (issuanceRows.length > 0) {
-        const parsed = parseIssuanceRows(symbol, issuanceRows, sharesBefore);
+        const parsed = parseIssuanceRows(symbol, issuanceRows, sharesBefore, {
+          directionForRow: (row) => decreasingSplitRows.has(row) ? 'DECREASE' : undefined,
+        });
         for (const fact of parsed.facts) {
           // irdsSttus 는 자본변동 이력을 연도별로 누적 제공한다 — 같은 분할이 해마다
           // 다른 rcept_no 로 반복되고, asOfTsMs 가 다르면 저장소 dedupe 를 통과한다.
@@ -510,11 +582,17 @@ export function createDartFactSource(
             actionByKey.set(key, fact);
             continue;
           }
-          if (existing.value !== fact.value) {
+          if (
+            existing.value !== fact.value
+            || (existing.corporateActionBeforeShares ?? null)
+              !== (fact.corporateActionBeforeShares ?? null)
+            || (existing.corporateActionAfterShares ?? null)
+              !== (fact.corporateActionAfterShares ?? null)
+          ) {
             gaps.push({
               symbol,
               periodKey: fact.periodKey,
-              reason: `같은 기준일의 자본변동 비율이 공시마다 다릅니다 (${existing.value} vs ${fact.value})`,
+              reason: `같은 기준일의 자본변동 수치가 공시마다 다릅니다 (${existing.value} vs ${fact.value})`,
               severity: 'BLOCKING',
             });
             continue;

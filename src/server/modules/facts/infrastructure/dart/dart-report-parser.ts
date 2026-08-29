@@ -422,6 +422,12 @@ export function parseFinancialRows(
 }
 
 type CapitalChangeDirection = 'INCREASE' | 'DECREASE' | 'SKIP';
+type PriceActionDirection = Exclude<CapitalChangeDirection, 'SKIP'>;
+
+export interface IssuanceParsingOptions {
+  /** 분기 주식수 snapshot이 DART의 모호한 '주식분할' 증감 방향을 입증한 경우만 덮는다. */
+  readonly directionForRow?: (row: DartIssuanceRow) => PriceActionDirection | undefined;
+}
 
 const NON_HOLDER_INCREASE = [
   '유상증자',
@@ -467,7 +473,10 @@ export interface IssuedShareChange {
 }
 
 /** 분기 스냅샷 이후의 모든 보통주 발행·감소를 다음 이벤트의 분모에 재생한다. */
-export function issuedShareChange(row: DartIssuanceRow): IssuedShareChange | null {
+export function issuedShareChange(
+  row: DartIssuanceRow,
+  directionOverride?: PriceActionDirection,
+): IssuedShareChange | null {
   if (!isCommonIssuanceRow(row)) return null;
   const rawDate = readString(row, 'isu_dcrs_de');
   if (rawDate === null) return null;
@@ -480,11 +489,14 @@ export function issuedShareChange(row: DartIssuanceRow): IssuedShareChange | nul
   if (style === null || classifyCapitalChange(style) === null || quantity === null || quantity <= 0) {
     return { dateKey, delta: null };
   }
-  const decrease =
-    style.includes('병합') ||
-    style.includes('감자') ||
-    style.includes('소각') ||
-    style.includes('상환');
+  const decrease = directionOverride === 'DECREASE' || (
+    directionOverride === undefined && (
+      style.includes('병합') ||
+      style.includes('감자') ||
+      style.includes('소각') ||
+      style.includes('상환')
+    )
+  );
   return { dateKey, delta: decrease ? -quantity : quantity };
 }
 
@@ -503,7 +515,8 @@ export function issuedShareChange(row: DartIssuanceRow): IssuedShareChange | nul
 export function parseIssuanceRows(
   symbol: string,
   rows: readonly DartIssuanceRow[],
-  sharesBefore: (dateKey: string) => number | null,
+  sharesBefore: (dateKey: string, row: DartIssuanceRow) => number | null,
+  options: IssuanceParsingOptions = {},
 ): ParsedFinancials {
   const facts: Fact[] = [];
   const gaps: FactIngestionGap[] = [];
@@ -530,7 +543,7 @@ export function parseIssuanceRows(
       continue;
     }
     const style = rawStyle.replace(/\s/g, '');
-    const direction = classifyCapitalChange(style);
+    const direction = options.directionForRow?.(row) ?? classifyCapitalChange(style);
 
     if (direction === null) {
       gaps.push({
@@ -585,7 +598,7 @@ export function parseIssuanceRows(
       continue;
     }
 
-    const prior = sharesBefore(dateKey);
+    const prior = sharesBefore(dateKey, row);
     if (prior === null || prior <= 0) {
       gaps.push({
         symbol,
@@ -596,7 +609,8 @@ export function parseIssuanceRows(
       continue;
     }
 
-    const ratio = direction === 'DECREASE' ? (prior - quantity) / prior : (prior + quantity) / prior;
+    const afterShares = direction === 'DECREASE' ? prior - quantity : prior + quantity;
+    const ratio = afterShares / prior;
     if (!Number.isFinite(ratio) || ratio <= 0) {
       gaps.push({
         symbol,
@@ -636,6 +650,8 @@ export function parseIssuanceRows(
       asOfTsMs: asOf,
       value: ratio,
       unit: 'RATIO',
+      corporateActionBeforeShares: prior,
+      corporateActionAfterShares: afterShares,
     });
   }
 

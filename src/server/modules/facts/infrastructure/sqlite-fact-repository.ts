@@ -5,7 +5,7 @@ import { SYMBOL_PATTERN } from '../../market-data/domain/candle.js';
 import { CORPORATE_ACTION_FIELD, type Fact } from '../domain/fact.js';
 import type { FactQuery, FactRepository } from '../application/ports.js';
 
-// 7개 컬럼을 쓰므로 SQLite의 보수적인 999 bind 한도 아래에서 자른다.
+// 최대 9개 컬럼을 쓰므로 100행(900 bind)씩 SQLite의 보수적인 999 bind 한도 아래에서 자른다.
 const WRITE_BATCH_SIZE = 100;
 const READ_KEY_BATCH_SIZE = 500;
 
@@ -29,7 +29,12 @@ export class SqliteFactRepository implements FactRepository {
               factRows.periodKey,
               factRows.asOfTsMs,
             ],
-            set: { value: sql`excluded.value`, unit: sql`excluded.unit` },
+            set: {
+              value: sql`excluded.value`,
+              unit: sql`excluded.unit`,
+              corporateActionBeforeShares: sql`excluded.corporate_action_before_shares`,
+              corporateActionAfterShares: sql`excluded.corporate_action_after_shares`,
+            },
           })
           .run();
       }
@@ -134,7 +139,7 @@ export class SqliteFactRepository implements FactRepository {
       if (query.asOfMaxTsMs !== undefined) {
         conditions.push(lte(factRows.asOfTsMs, query.asOfMaxTsMs));
       }
-      rows.push(...this.db
+      const selected = this.db
         .select()
         .from(factRows)
         .where(and(...conditions))
@@ -144,7 +149,17 @@ export class SqliteFactRepository implements FactRepository {
           asc(factRows.periodKey),
           asc(factRows.asOfTsMs),
         )
-        .all() as Fact[]);
+        .all();
+      for (const row of selected) {
+        const {
+          corporateActionBeforeShares,
+          corporateActionAfterShares,
+          ...base
+        } = row;
+        rows.push(corporateActionBeforeShares === null || corporateActionAfterShares === null
+          ? base as Fact
+          : { ...base, corporateActionBeforeShares, corporateActionAfterShares } as Fact);
+      }
     }
 
     return rows.sort(compareFacts);
@@ -168,6 +183,20 @@ function validateFacts(facts: readonly Fact[]): void {
         `팩트 asOfTsMs가 유한하지 않습니다: key=${fact.key}, field=${fact.field}, `
           + `periodKey=${fact.periodKey}, asOfTsMs=${fact.asOfTsMs}`,
       );
+    }
+    const actionBefore = fact.corporateActionBeforeShares ?? null;
+    const actionAfter = fact.corporateActionAfterShares ?? null;
+    if ((actionBefore === null) !== (actionAfter === null)) {
+      throw new Error('자본변동 직전·직후 주식수는 함께 저장해야 합니다.');
+    }
+    if (actionBefore !== null && actionAfter !== null && (
+      fact.field !== CORPORATE_ACTION_FIELD
+      || !Number.isSafeInteger(actionBefore)
+      || !Number.isSafeInteger(actionAfter)
+      || actionBefore <= 0
+      || actionAfter <= 0
+    )) {
+      throw new Error('자본변동 절대 주식수 메타데이터가 유효하지 않습니다.');
     }
   }
 }

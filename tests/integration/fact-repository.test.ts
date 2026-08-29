@@ -41,6 +41,42 @@ describe('SqliteFactRepository', () => {
     expect(rows).toEqual([fact()]);
   });
 
+  it('자본변동 사건 직전·직후 절대 주식수를 함께 저장하고 읽는다', async () => {
+    const action = fact({
+      field: 'SPLIT_RATIO',
+      periodKey: '2016-08-17',
+      value: 5,
+      unit: 'RATIO',
+      corporateActionBeforeShares: 11_479_354,
+      corporateActionAfterShares: 57_396_770,
+    });
+
+    await repository.saveFacts([action]);
+
+    expect(await repository.getFacts({ scope: 'SYMBOL' })).toEqual([action]);
+  });
+
+  it('같은 자본변동을 재수집하면 직전·직후 절대 주식수도 갱신한다', async () => {
+    const action = fact({
+      field: 'SPLIT_RATIO',
+      periodKey: '2016-08-17',
+      value: 5,
+      unit: 'RATIO',
+      corporateActionBeforeShares: 10,
+      corporateActionAfterShares: 50,
+    });
+    const corrected = {
+      ...action,
+      corporateActionBeforeShares: 11,
+      corporateActionAfterShares: 55,
+    };
+
+    await repository.saveFacts([action]);
+    await repository.saveFacts([corrected]);
+
+    expect(await repository.getFacts({ scope: 'SYMBOL' })).toEqual([corrected]);
+  });
+
   it('빈 배열 저장은 아무 일도 하지 않는다', async () => {
     await repository.saveFacts([]);
     expect(await repository.getFacts({ scope: 'SYMBOL' })).toEqual([]);

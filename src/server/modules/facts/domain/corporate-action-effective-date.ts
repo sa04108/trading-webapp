@@ -12,6 +12,9 @@ export interface SharesChange {
   readonly effectiveDate: string;
   /** 변경 후 주식수 / 변경 전 주식수 */
   readonly ratio: number;
+  /** 복합 변경에서 DART 사건의 절대 종점과 대조할 KRX 변경 전·후 주식수 */
+  readonly beforeShares?: number;
+  readonly afterShares?: number;
 }
 
 /** KRX 짝을 찾지 못했거나 상충 공시 때문에 안전하게 정렬할 수 없는 자본변동 */
@@ -64,7 +67,42 @@ function signedDayOffset(from: string, to: string): number {
   return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / MS_PER_DAY);
 }
 
-function ratioMatchError(factRatio: number, sharesRatio: number): number | null {
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+}
+
+function compositeEndpointMatchError(fact: Fact, change: SharesChange): number | null {
+  const factBefore = fact.corporateActionBeforeShares;
+  const factAfter = fact.corporateActionAfterShares;
+  const krxBefore = change.beforeShares;
+  const krxAfter = change.afterShares;
+  if (
+    !isPositiveSafeInteger(factBefore)
+    || !isPositiveSafeInteger(factAfter)
+    || !isPositiveSafeInteger(krxBefore)
+    || !isPositiveSafeInteger(krxAfter)
+    || factAfter !== krxAfter
+    || Math.abs(factAfter / factBefore - fact.value) > 1e-12
+    || Math.abs(krxAfter / krxBefore - change.ratio) > 1e-12
+  ) return null;
+
+  const direction = Math.sign(factAfter - factBefore);
+  if (direction === 0 || direction !== Math.sign(krxAfter - krxBefore)) return null;
+  // KRX 한 경계에 유상증자와 가격 보정 사건이 같은 방향으로 합쳐진 경우만 허용한다.
+  // 최종 주식수의 정확 일치만으로 멀리 떨어진 무관한 변경을 오짝하지 않게 사건 직전
+  // DART 주식수도 KRX 구간 내부에 있어야 한다.
+  const eventStartsInsideChange = direction > 0
+    ? krxBefore <= factBefore && factBefore < factAfter
+    : krxBefore >= factBefore && factBefore > factAfter;
+  if (!eventStartsInsideChange) return null;
+
+  // KRX 경계에 함께 반영된 비가격 증감 규모를 비용으로 쓰되 기존 비용 상한은 넘지 않는다.
+  return Math.min(2 * RATIO_TOLERANCE, Math.abs(factBefore / krxBefore - 1));
+}
+
+function ratioMatchError(fact: Fact, change: SharesChange): number | null {
+  const factRatio = fact.value;
+  const sharesRatio = change.ratio;
   if (
     !Number.isFinite(factRatio)
     || !Number.isFinite(sharesRatio)
@@ -78,15 +116,16 @@ function ratioMatchError(factRatio: number, sharesRatio: number): number | null 
   if (factChange === 0 || sharesChange === 0 || Math.sign(factChange) !== Math.sign(sharesChange)) {
     return null;
   }
-  // 작은 자본변동에서는 총 비율보다 변화분을 비교해야 한다. 1.02와 1.07은
-  // 총 비율로 4.9% 차이지만 실제 증감률은 2% 대 7%로 전혀 다른 사건이다.
+  // 작은 자본변동에서는 총 비율보다 변화분의 크기를 함께 비교한다.
   const tolerance = RATIO_TOLERANCE + Number.EPSILON;
-  // 심한 병합에서는 0.05(1-for-20)와 0.01(1-for-100)의 변화분이 각각 -95%,
-  // -99%라 서로 가까워 보인다. 총 비율도 함께 비교해야 다섯 배 차이를 거른다.
   const totalRatioError = Math.abs(sharesRatio / factRatio - 1);
   const changeMagnitudeError = Math.abs(sharesChange / factChange - 1);
-  if (totalRatioError > tolerance || changeMagnitudeError > tolerance) return null;
-  return totalRatioError + changeMagnitudeError;
+  if (totalRatioError <= tolerance && changeMagnitudeError <= tolerance) {
+    return totalRatioError + changeMagnitudeError;
+  }
+  // 유상증자와 분할이 KRX 한 날에 합쳐지면 총비율은 달라진다. 허용치를 넓히지 않고
+  // DART·KRX 절대 종점이 정확히 같을 때만 복합 변경으로 인정한다.
+  return compositeEndpointMatchError(fact, change);
 }
 
 interface FlowEdge {
@@ -148,8 +187,18 @@ function sendMinimumCostFlow(graph: FlowEdge[][], source: number, sink: number, 
 function compareFacts(left: Fact, right: Fact): number {
   return left.periodKey.localeCompare(right.periodKey)
     || left.value - right.value
+    || (left.corporateActionBeforeShares ?? 0) - (right.corporateActionBeforeShares ?? 0)
+    || (left.corporateActionAfterShares ?? 0) - (right.corporateActionAfterShares ?? 0)
     || left.asOfTsMs - right.asOfTsMs
     || left.scope.localeCompare(right.scope);
+}
+
+function hasSameActionMeasurement(left: Fact, right: Fact): boolean {
+  return left.value === right.value
+    && (left.corporateActionBeforeShares ?? null)
+      === (right.corporateActionBeforeShares ?? null)
+    && (left.corporateActionAfterShares ?? null)
+      === (right.corporateActionAfterShares ?? null);
 }
 
 /**
@@ -176,7 +225,11 @@ function matchSymbolActions(
   // 판정할 근거가 없다. fact와 맞는 행 하나만 골라 쓰면 다른 행이 진짜일 때 수량이
   // 크게 어긋나므로, 완전히 같은 비율의 중복만 허용하고 상충 날짜는 후보에서 뺀다.
   const orderedChangeDates = [...changesByDate]
-    .filter(([, changes]) => new Set(changes.map((change) => change.ratio)).size === 1)
+    .filter(([, changes]) => new Set(changes.map((change) => JSON.stringify([
+      change.ratio,
+      change.beforeShares ?? null,
+      change.afterShares ?? null,
+    ]))).size === 1)
     .map(([date]) => date)
     .sort();
   const candidatesByFact = new Map<Fact, Map<string, { distance: number; ratioError: number }>>();
@@ -194,7 +247,7 @@ function matchSymbolActions(
         || offset > CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays
       ) continue;
       const ratioErrors = (changesByDate.get(date) ?? []).flatMap((change) => {
-        const error = ratioMatchError(fact.value, change.ratio);
+        const error = ratioMatchError(fact, change);
         return error === null ? [] : [error];
       });
       if (ratioErrors.length === 0) continue;
@@ -298,7 +351,9 @@ export function alignCorporateActionEffectiveDates(
     if (fact.field !== CORPORATE_ACTION_FIELD) continue;
     const key = `${fact.scope}|${fact.key}|${fact.periodKey}`;
     const existing = actionsByPeriod.get(key);
-    if (existing !== undefined && existing.value !== fact.value) conflictingPeriodKeys.add(key);
+    if (existing !== undefined && !hasSameActionMeasurement(existing, fact)) {
+      conflictingPeriodKeys.add(key);
+    }
     if (
       existing === undefined
       || fact.asOfTsMs < existing.asOfTsMs

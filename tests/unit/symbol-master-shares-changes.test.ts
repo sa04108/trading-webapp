@@ -66,7 +66,13 @@ describe('SymbolMasterService.sharesChangesBetween', () => {
     await ctx.service.ingestDate('2024-10-08');
 
     expect(ctx.service.sharesChangesBetween('2024-09-01', '2024-10-31')).toEqual([
-      { shortCode: '005930', effectiveDate: '2024-10-08', ratio: 5 },
+      {
+        shortCode: '005930',
+        effectiveDate: '2024-10-08',
+        ratio: 5,
+        beforeShares: 1_000_000,
+        afterShares: 5_000_000,
+      },
     ]);
   });
 

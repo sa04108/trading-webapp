@@ -263,6 +263,9 @@ export const facts = sqliteTable(
     asOfTsMs: integer('as_of_ts_ms').notNull(),
     value: real('value').notNull(),
     unit: text('unit').notNull(),
+    /** 복합 KRX 변경에서도 DART 사건을 식별하는 절대 주식수 앵커 */
+    corporateActionBeforeShares: integer('corporate_action_before_shares'),
+    corporateActionAfterShares: integer('corporate_action_after_shares'),
   },
   (table) => [
     primaryKey({
