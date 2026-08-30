@@ -874,6 +874,100 @@ describe('FactSyncService — 증분과 취소', () => {
       fakeActionCoverage(),
     );
     expect(staleService.planFinancialSync(['005930'], 2025, 2025).calls).toBe(12);
+
+    const staleCoveredCoverage = fakeCoverage(
+      new Map([['005930', [2025]]]),
+      new Map([['005930', now - 100 * 86_400_000]]),
+    );
+    const staleCoveredService = new FactSyncService(
+      source,
+      fakeRepository(),
+      LOGGER,
+      fakeVersions(),
+      { now: () => now },
+      staleCoveredCoverage,
+      fakeActionCoverage(),
+    );
+    expect(staleCoveredService.planFinancialSync(['005930'], 2025, 2025).calls).toBe(12);
+
+    const neverCollectedService = new FactSyncService(
+      source,
+      fakeRepository(),
+      LOGGER,
+      fakeVersions(),
+      { now: () => now },
+      fakeCoverage(),
+      fakeActionCoverage(),
+    );
+    expect(neverCollectedService.planFinancialSync(['005930'], 2025, 2025).calls).toBe(12);
+
+    const watermarkOnlyService = new FactSyncService(
+      source,
+      fakeRepository(),
+      LOGGER,
+      fakeVersions(),
+      { now: () => now },
+      fakeCoverage(new Map(), new Map([['005930', now - 60_000]])),
+      fakeActionCoverage(),
+    );
+    expect(watermarkOnlyService.planFinancialSync(['005930'], 2025, 2025).calls).toBe(12);
+  });
+
+  it('같은 원문 계획의 여러 종목은 한 번의 bulk cache 조회로 묶는다', () => {
+    const source = recordingSource();
+    const countedRequests: FetchFinancialsRequest[] = [];
+    source.countRawSnapshotMisses = (request) => {
+      countedRequests.push(request);
+      return 0;
+    };
+    const now = Date.UTC(2026, 7, 11);
+    const coverage = fakeCoverage(
+      new Map(),
+      new Map([
+        ['005930', now - 60_000],
+        ['000660', now - 60_000],
+      ]),
+    );
+    coverage.getCollectedYears = () => new Map([
+      ['005930', [2025]],
+      ['000660', [2025]],
+    ]);
+    const service = new FactSyncService(
+      source,
+      fakeRepository(),
+      LOGGER,
+      fakeVersions(),
+      { now: () => now },
+      coverage,
+      fakeActionCoverage(),
+    );
+
+    expect(service.planFinancialSync(['005930', '000660'], 2025, 2025).calls).toBe(0);
+    expect(countedRequests).toHaveLength(1);
+    expect(countedRequests[0]?.symbols).toEqual(['005930', '000660']);
+  });
+
+  it('watermark 없는 최초 INCREMENTAL 수집은 원문 cache로 최신성을 추정하지 않는다', async () => {
+    const source = recordingSource();
+    const service = new FactSyncService(
+      source,
+      fakeRepository(),
+      LOGGER,
+      fakeVersions(),
+      CLOCK,
+      fakeCoverage(),
+      fakeActionCoverage(),
+    );
+
+    await service.sync({
+      symbols: ['005930'],
+      fromYear: 2025,
+      toYear: 2025,
+      consolidated: true,
+      mode: 'INCREMENTAL',
+    });
+
+    expect(source.requests[0]?.rawSnapshotPolicy).toBe('REFRESH');
   });
 
   it('INCREMENTAL 은 fresh coverage를 건너뛰고 미수집 연도만 요청한다', async () => {
@@ -936,6 +1030,84 @@ describe('FactSyncService — 증분과 취소', () => {
     expect(source.requests[0]?.rawSnapshotPolicy).toBe('REFRESH');
   });
 
+  it('API key 없이 원문만 재처리하면 검증하지 못한 freshness watermark를 보존한다', async () => {
+    const source = recordingSource();
+    source.listRecentPeriodicFilings = async () => {
+      throw new FactSourceNotConfiguredError();
+    };
+    const now = Date.UTC(2026, 7, 11);
+    const previousWatermark = now - 60_000;
+    const coverage = fakeCoverage(
+      new Map(),
+      new Map([['005930', previousWatermark]]),
+    );
+    coverage.getCollectedYears = () => new Map([['005930', [2025]]]);
+    const service = new FactSyncService(
+      source,
+      fakeRepository(),
+      LOGGER,
+      fakeVersions(),
+      { now: () => now },
+      coverage,
+      fakeActionCoverage(),
+    );
+
+    await service.sync({
+      symbols: ['005930'],
+      fromYear: 2025,
+      toYear: 2025,
+      consolidated: true,
+      mode: 'INCREMENTAL',
+    });
+
+    expect(coverage.getUpdatedAtMs(['005930']).get('005930')).toBe(previousWatermark);
+    expect(source.requests[0]?.rawSnapshotPolicy).toBe('PREFER_CACHE');
+  });
+
+  it('fresh·stale 혼합 요청은 미검증 종목만 watermark를 보존한다', async () => {
+    const source = recordingSource();
+    source.listRecentPeriodicFilings = async () => {
+      throw new FactSourceNotConfiguredError();
+    };
+    const now = Date.UTC(2026, 7, 11);
+    const freshWatermark = now - 60_000;
+    const staleWatermark = now - 100 * 86_400_000;
+    const coverage = fakeCoverage(
+      new Map(),
+      new Map([
+        ['005930', freshWatermark],
+        ['000660', staleWatermark],
+      ]),
+    );
+    coverage.getCollectedYears = () => new Map([
+      ['005930', [2025]],
+      ['000660', [2025]],
+    ]);
+    const service = new FactSyncService(
+      source,
+      fakeRepository(),
+      LOGGER,
+      fakeVersions(),
+      { now: () => now },
+      coverage,
+      fakeActionCoverage(),
+    );
+
+    await service.sync({
+      symbols: ['005930', '000660'],
+      fromYear: 2025,
+      toYear: 2025,
+      consolidated: true,
+      mode: 'INCREMENTAL',
+    });
+
+    const watermarks = coverage.getUpdatedAtMs(['005930', '000660']);
+    expect(watermarks.get('005930')).toBe(freshWatermark);
+    expect(watermarks.get('000660')).toBe(now);
+    expect(source.requests[0]?.rawSnapshotPolicy).toBe('PREFER_CACHE');
+    expect(source.requests[2]?.rawSnapshotPolicy).toBe('REFRESH');
+  });
+
   it('durable resume은 이미 커버한 현재연도 symbol-year도 다시 요청하지 않는다', async () => {
     const source = recordingSource();
     const now = Date.UTC(2022, 5, 1);
@@ -989,6 +1161,10 @@ describe('FactSyncService — 증분과 취소', () => {
     expect(source.requests.every(
       (fetchRequest) => fetchRequest.rawSnapshotPolicy === 'REFRESH',
     )).toBe(true);
+    expect(source.requests[0]?.rawSnapshotScope).toBeDefined();
+    expect(new Set(source.requests.map(
+      (fetchRequest) => fetchRequest.rawSnapshotScope,
+    )).size).toBe(1);
   });
 
   it('종목을 저장한 직후 그 종목의 연도를 이력에 남긴다', async () => {

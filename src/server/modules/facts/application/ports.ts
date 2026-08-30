@@ -70,6 +70,11 @@ export interface FetchFinancialsRequest {
   /** true = 연결(CFS), false = 별도(OFS). 데이터셋 하나는 한 기준만 담는다 */
   readonly consolidated: boolean;
   /**
+   * 한 sync 실행 안에서 인접 연도 work-unit이 이미 읽은 원문을 공유하는 불투명 scope.
+   * 호출자가 직접 해석하지 않고 같은 종목의 work-unit에 같은 객체만 전달한다.
+   */
+  readonly rawSnapshotScope?: object;
+  /**
    * PREFER_CACHE는 영속 원문 snapshot을 먼저 재생하고 없는 요청만 원천에서 채운다.
    * REFRESH는 정정공시·명시적 FULL 수집처럼 원천 최신성이 필요한 work unit이다.
    * 생략 시 직접 어댑터 호출의 기존 의미를 지키기 위해 REFRESH로 동작한다.

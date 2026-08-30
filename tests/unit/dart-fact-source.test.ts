@@ -11,7 +11,7 @@ import type {
   DartRawSnapshot,
   DartRawSnapshotKey,
   DartRawSnapshotStore,
-} from '../../src/server/modules/facts/infrastructure/dart/sqlite-dart-raw-snapshot-store.js';
+} from '../../src/server/modules/facts/infrastructure/dart/dart-raw-snapshot-store.js';
 
 const LOGGER = { debug() {}, info() {}, warn() {}, error() {} } as never;
 
@@ -41,8 +41,14 @@ class MemoryRawSnapshotStore implements DartRawSnapshotStore {
     return this.snapshots.get(this.key(key)) ?? null;
   }
 
-  getMany(keys: readonly DartRawSnapshotKey[]): readonly (DartRawSnapshot | null)[] {
-    return keys.map((key) => this.get(key));
+  countMissing(
+    keys: readonly DartRawSnapshotKey[],
+    isValidPayload: (payload: unknown) => boolean,
+  ): number {
+    return keys.filter((key) => {
+      const snapshot = this.get(key);
+      return snapshot === null || !isValidPayload(snapshot.payload);
+    }).length;
   }
 
   put(key: DartRawSnapshotKey, payload: unknown, fetchedAtMs: number): void {
@@ -171,7 +177,7 @@ describe('createDartFactSource — 영속 원문 snapshot 재처리', () => {
     expect(corpCodeResolutions).toBe(0);
   });
 
-  it('REFRESH는 기존 snapshot을 우회하고 새 원문으로 교체한다', async () => {
+  it('같은 scope의 REFRESH도 PREFER_CACHE 결과를 우회하고 새 원문으로 교체한다', async () => {
     const rawSnapshots = new MemoryRawSnapshotStore();
     rawSnapshots.put({
       symbol: '005930',
@@ -222,15 +228,28 @@ describe('createDartFactSource — 영속 원문 snapshot 재처리', () => {
       },
     );
 
+    const rawSnapshotScope = {};
+    const cached = await source.fetchFinancials({
+      symbols: ['005930'],
+      years: [2025],
+      shareYears: [],
+      consolidated: true,
+      rawSnapshotScope,
+      rawSnapshotPolicy: 'PREFER_CACHE',
+    });
+    expect(cached.facts.find((fact) => fact.field === 'CURRENT_ASSETS')?.value).toBe(1);
+    const callsBeforeRefresh = liveCalls;
+
     const result = await source.fetchFinancials({
       symbols: ['005930'],
       years: [2025],
       shareYears: [],
       consolidated: true,
+      rawSnapshotScope,
       rawSnapshotPolicy: 'REFRESH',
     });
 
-    expect(liveCalls).toBe(4);
+    expect(liveCalls - callsBeforeRefresh).toBe(4);
     expect(result.facts.find((fact) => fact.field === 'CURRENT_ASSETS')?.value).toBe(2);
     expect(rawSnapshots.get({
       symbol: '005930',
@@ -239,6 +258,109 @@ describe('createDartFactSource — 영속 원문 snapshot 재처리', () => {
       reportCode: '11013',
       fsDiv: 'CFS',
     })?.payload).toMatchObject({ message: '정정' });
+  });
+
+  it('list가 없는 깨진 000 snapshot은 cache miss로 보고 원천 응답으로 교체한다', async () => {
+    const rawSnapshots = new MemoryRawSnapshotStore();
+    const reports = ['11013', '11012', '11014', '11011'] as const;
+    for (const reportCode of reports) {
+      rawSnapshots.put({
+        symbol: '005930',
+        endpoint: 'FINANCIAL_STATEMENT',
+        businessYear: 2025,
+        reportCode,
+        fsDiv: 'CFS',
+      }, { status: '013', message: '없음' }, 1);
+    }
+    rawSnapshots.put({
+      symbol: '005930',
+      endpoint: 'FINANCIAL_STATEMENT',
+      businessYear: 2025,
+      reportCode: '11013',
+      fsDiv: 'CFS',
+    }, { status: '000', message: '깨진 봉투' }, 1);
+    let liveCalls = 0;
+    const source = createDartFactSource(
+      { baseUrl: 'https://dart.test', apiKey: 'k' },
+      LOGGER,
+      {
+        rawSnapshots,
+        sleep: async () => {},
+        corpCodeResolver: STUB_RESOLVER,
+        fetchImpl: (async () => {
+          liveCalls += 1;
+          return jsonResponse({
+            status: '000',
+            message: '복구',
+            list: [{
+              rcept_no: '20250515000001',
+              reprt_code: '11013',
+              bsns_year: '2025',
+              sj_div: 'BS',
+              account_id: 'ifrs-full_CurrentAssets',
+              account_nm: '유동자산',
+              thstrm_amount: '2',
+            }],
+          });
+        }) as typeof fetch,
+      },
+    );
+
+    const result = await source.fetchFinancials({
+      symbols: ['005930'],
+      years: [2025],
+      shareYears: [],
+      consolidated: true,
+      rawSnapshotPolicy: 'PREFER_CACHE',
+    });
+
+    expect(liveCalls).toBe(1);
+    expect(result.facts.find((fact) => fact.field === 'CURRENT_ASSETS')?.value).toBe(2);
+    expect(rawSnapshots.get({
+      symbol: '005930',
+      endpoint: 'FINANCIAL_STATEMENT',
+      businessYear: 2025,
+      reportCode: '11013',
+      fsDiv: 'CFS',
+    })?.payload).toMatchObject({ message: '복구' });
+  });
+
+  it('같은 sync scope의 연속 REFRESH는 인접 연도 주식수 앵커를 한 번만 호출한다', async () => {
+    const calls: string[] = [];
+    const source = createDartFactSource(
+      { baseUrl: 'https://dart.test', apiKey: 'k' },
+      LOGGER,
+      {
+        sleep: async () => {},
+        corpCodeResolver: STUB_RESOLVER,
+        fetchImpl: (async (url: string | URL) => {
+          calls.push(String(url));
+          return jsonResponse({ status: '013', message: '없음' });
+        }) as typeof fetch,
+      },
+    );
+    const rawSnapshotScope = {};
+
+    await source.fetchCorporateActions({
+      symbols: ['005930'],
+      years: [2024],
+      shareYears: [2023, 2024],
+      consolidated: true,
+      rawSnapshotScope,
+      rawSnapshotPolicy: 'REFRESH',
+    });
+    await source.fetchCorporateActions({
+      symbols: ['005930'],
+      years: [2025],
+      shareYears: [2024, 2025],
+      consolidated: true,
+      rawSnapshotScope,
+      rawSnapshotPolicy: 'REFRESH',
+    });
+
+    expect(calls.filter((url) => (
+      url.includes('stockTotqySttus') && url.includes('bsns_year=2024')
+    ))).toHaveLength(4);
   });
 });
 

@@ -38,8 +38,8 @@ import {
 import type {
   DartRawSnapshotKey,
   DartRawSnapshotStore,
-} from './sqlite-dart-raw-snapshot-store.js';
-import { dartRawSnapshotKeyId } from './sqlite-dart-raw-snapshot-store.js';
+} from './dart-raw-snapshot-store.js';
+import { dartRawSnapshotKeyId } from './dart-raw-snapshot-store.js';
 
 export interface DartConfig {
   /** 예: https://opendart.fss.or.kr */
@@ -265,7 +265,6 @@ export function createDartFactSource(
     const envelope = payload as Partial<DartEnvelope<T>>;
     if (envelope.status === NO_DATA_STATUS) return [];
     if (envelope.status !== OK_STATUS) return null;
-    if (envelope.list === undefined) return [];
     return Array.isArray(envelope.list) ? envelope.list : null;
   }
 
@@ -312,18 +311,25 @@ export function createDartFactSource(
       }
     }
     if (forceRefresh) return keys.length;
-    const snapshots = options.rawSnapshots?.getMany(keys) ?? keys.map(() => null);
-    return snapshots.filter(
-      (snapshot) => snapshot === null || rowsFromSnapshot(snapshot.payload) === null,
-    ).length;
+    return options.rawSnapshots?.countMissing(
+      keys,
+      (payload) => rowsFromSnapshot(payload) !== null,
+    ) ?? keys.length;
   }
 
-  // 같은 work-unit의 재무·자본변동 fetch가 같은 request 객체를 공유한다. 주식총수처럼
-  // 양쪽이 함께 쓰는 응답은 REFRESH여도 한 번만 원천에서 받고 두 번째 경로는 이 결과를
-  // 재사용한다. WeakMap이라 work-unit이 끝나면 오래된 최신화 결과가 다음 sync를 막지 않는다.
+  interface RequestRowsEntry {
+    readonly policy: 'PREFER_CACHE' | 'REFRESH';
+    readonly rows: Promise<readonly unknown[]>;
+    readonly token: object;
+  }
+
+  // 같은 sync scope의 재무·자본변동과 인접 연도 work-unit이 응답을 공유한다. REFRESH로
+  // 실제 갱신한 응답은 뒤의 REFRESH/PREFER_CACHE 모두 재사용하고, PREFER_CACHE로 읽은
+  // 낡을 수 있는 응답은 뒤의 REFRESH가 우회한다. WeakMap이라 sync가 끝나면 다음 실행의
+  // 최신화를 막는 전역 cache로 남지 않는다.
   const requestRows = new WeakMap<
-    FetchFinancialsRequest,
-    Map<string, Promise<readonly unknown[]>>
+    object,
+    Map<string, RequestRowsEntry>
   >();
 
   class CorpCodeMissingError extends Error {}
@@ -336,14 +342,19 @@ export function createDartFactSource(
     params: (corpCode: string) => Record<string, string>,
     hooks: FactSourceRequestHooks,
   ): Promise<readonly T[]> {
-    const requestCache = requestRows.get(request) ?? new Map<string, Promise<readonly unknown[]>>();
-    requestRows.set(request, requestCache);
+    const scope = request.rawSnapshotScope ?? request;
+    const policy = request.rawSnapshotPolicy ?? 'REFRESH';
+    const requestCache = requestRows.get(scope) ?? new Map<string, RequestRowsEntry>();
+    requestRows.set(scope, requestCache);
     const cacheKey = snapshotCacheKey(key);
     const pending = requestCache.get(cacheKey);
-    if (pending !== undefined) return pending as Promise<readonly T[]>;
+    if (
+      pending !== undefined
+      && (policy === 'PREFER_CACHE' || pending.policy === 'REFRESH')
+    ) return pending.rows as Promise<readonly T[]>;
 
-    const load = (async (): Promise<readonly T[]> => {
-      if ((request.rawSnapshotPolicy ?? 'REFRESH') === 'PREFER_CACHE') {
+    const load = async (): Promise<readonly T[]> => {
+      if (policy === 'PREFER_CACHE') {
         const snapshot = options.rawSnapshots?.get(key);
         if (snapshot !== null && snapshot !== undefined) {
           const cachedRows = rowsFromSnapshot<T>(snapshot.payload);
@@ -360,12 +371,17 @@ export function createDartFactSource(
       }
       options.rawSnapshots?.put(key, envelope, clock.now());
       return liveRows;
-    })().catch((error: unknown) => {
-      requestCache.delete(cacheKey);
+    };
+    const token = {};
+    const rows = load().catch((error: unknown) => {
+      // PREFER_CACHE가 진행 중인 동안 REFRESH가 같은 키를 교체할 수 있다. 먼저 시작한
+      // promise의 실패가 뒤의 유효한 entry까지 지우지 않도록 identity를 확인한다.
+      if (requestCache.get(cacheKey)?.token === token) requestCache.delete(cacheKey);
       throw error;
     });
-    requestCache.set(cacheKey, load as Promise<readonly unknown[]>);
-    return load;
+    const entry = { policy, rows, token };
+    requestCache.set(cacheKey, entry);
+    return rows as Promise<readonly T[]>;
   }
 
   // 종목코드 → DART corp_code. 주입되지 않으면 corpCode.xml 을 1회 내려받아 캐시한다.

@@ -152,6 +152,8 @@ interface RedisclosureDetection {
     string,
     ReadonlyMap<number, readonly FinancialFilingCheckpoint[]>
   >;
+  /** DART 미설정으로 최근 공시를 확인하지 못해 기존 watermark를 보존해야 하는 종목. */
+  readonly unverifiedFreshnessSymbols: ReadonlySet<string>;
 }
 
 function factPeriodYear(fact: Fact): number | null {
@@ -329,21 +331,50 @@ export class FactSyncService {
     const collectedBySymbol = coverage.getCollectedYears?.(symbols)
       ?? coverage.getCoveredYears(symbols);
     const updatedAtBySymbol = coverage.getUpdatedAtMs(symbols);
-    let calls = 0;
+    const groups = new Map<string, {
+      symbols: string[];
+      years: readonly number[];
+      shareYears: readonly number[];
+      policy: 'PREFER_CACHE' | 'REFRESH';
+    }>();
     for (const [symbol, years] of plan.yearsBySymbol) {
-      if (years.length === 0) continue;
       const collected = collectedBySymbol.get(symbol) ?? [];
       const updatedAtMs = updatedAtBySymbol.get(symbol);
       const staleWatermark = updatedAtMs !== undefined
         && kstDateOf(updatedAtMs)
           < addCalendarDays(kstDateOf(this.clock.now()), -FILING_LOOKBACK_MAX_DAYS)
-        && years.some((year) => collected.includes(year));
+        && collected.length > 0;
+      const forceRefresh = updatedAtMs === undefined || collected.length === 0 || staleWatermark;
+      // 실행의 stale 경로는 요청 범위와 무관하게 legacy 수집 연도를 모두 강제한다.
+      // plan이 이미 covered인 종목을 0회로 잘못 보고 DART-key 게이트를 통과시키지 않도록
+      // 같은 연도를 호출량에도 포함한다.
+      const requestedYears = staleWatermark
+        ? [...new Set([...years, ...collected])].sort((left, right) => left - right)
+        : years;
+      if (requestedYears.length === 0) continue;
+      const shareYears = staleWatermark
+        ? [...new Set(requestedYears.flatMap((year) => [year - 1, year]))]
+            .sort((left, right) => left - right)
+        : (plan.shareYearsBySymbol.get(symbol) ?? []);
+      const policy = forceRefresh ? 'REFRESH' as const : 'PREFER_CACHE' as const;
+      const groupKey = JSON.stringify([policy, requestedYears, shareYears]);
+      const group = groups.get(groupKey) ?? {
+        symbols: [],
+        years: requestedYears,
+        shareYears,
+        policy,
+      };
+      group.symbols.push(symbol);
+      groups.set(groupKey, group);
+    }
+    let calls = 0;
+    for (const group of groups.values()) {
       calls += this.source.countRawSnapshotMisses({
-        symbols: [symbol],
-        years,
-        shareYears: plan.shareYearsBySymbol.get(symbol) ?? [],
+        symbols: group.symbols,
+        years: group.years,
+        shareYears: group.shareYears,
         consolidated: true,
-        rawSnapshotPolicy: staleWatermark ? 'REFRESH' : 'PREFER_CACHE',
+        rawSnapshotPolicy: group.policy,
       }, includeFinancials);
     }
     return {
@@ -438,6 +469,7 @@ export class FactSyncService {
     const collectedBySymbol = strategy.getCollectedYears(symbols);
     const coverageWatermarks = strategy.getUpdatedAtMs(symbols);
     let redisclosures: RedisclosureDetection | undefined;
+    let unverifiedFreshnessSymbols: ReadonlySet<string>;
     try {
       redisclosures =
         request.mode === 'INCREMENTAL'
@@ -449,8 +481,10 @@ export class FactSyncService {
               sourceHooks,
             )
           : undefined;
+      unverifiedFreshnessSymbols = redisclosures?.unverifiedFreshnessSymbols ?? new Set();
     } catch (error) {
       if (error instanceof FactSourceNotConfiguredError) {
+        unverifiedFreshnessSymbols = new Set(symbols);
         this.logger.warn(
           {
             module: 'facts',
@@ -499,15 +533,18 @@ export class FactSyncService {
 
       let symbolSavedFacts = 0;
       let symbolGapCount = 0;
+      const rawSnapshotScope = {};
+      const hasCollectedHistory = coverageWatermarks.has(symbol)
+        && (collectedBySymbol.get(symbol)?.length ?? 0) > 0;
       try {
         for (const [yearIndex, year] of years.entries()) {
-          // protocol 불일치·신규 coverage는 원문 snapshot을 우선 재생한다. FULL 요청이나
-          // 공시검색이 새·정정공시를 찾아 강제한 연도만 DART 원천을 다시 읽는다.
+          // 검증 watermark가 있는 protocol 불일치는 원문 snapshot을 우선 재생한다.
+          // 최초 수집, FULL 요청, 새·정정공시가 확인된 연도는 DART 원천을 다시 읽는다.
           const redisclosed = redisclosures?.forcedYearsBySymbol
             .get(symbol)?.includes(year) === true;
-          const rawSnapshotPolicy = request.mode === 'FULL' || redisclosed
-            ? 'REFRESH' as const
-            : 'PREFER_CACHE' as const;
+          const rawSnapshotPolicy = (
+            request.mode === 'FULL' || redisclosed || !hasCollectedHistory
+          ) ? 'REFRESH' as const : 'PREFER_CACHE' as const;
           // 직전 연도의 주식총수 앵커도 요청한다. 같은 work-unit의 재무·자본변동은
           // source 내부 request cache로 응답을 공유하고, 영속 cache hit는 quota를 쓰지 않는다.
           const shareYears = [year - 1, year];
@@ -516,6 +553,7 @@ export class FactSyncService {
             years: [year],
             shareYears,
             consolidated: request.consolidated,
+            rawSnapshotScope,
             rawSnapshotPolicy,
           };
           const {
@@ -590,8 +628,13 @@ export class FactSyncService {
           // 연도 coverage는 work unit마다 닫되 종목 단일 watermark는 이 종목의 계획을
           // 모두 마친 마지막 연도에서만 전진시킨다. 중간에 quota/오류가 나면 아직
           // 처리하지 못한 새 공시를 watermark가 앞질러 영구히 숨길 수 있기 때문이다.
+          // API key가 없어 공시 목록을 확인하지 못한 로컬 재처리는 파서 coverage만
+          // 갱신한다. watermark까지 현재로 당기면 기존 watermark 이후 정정공시가 나중
+          // API 설정 시 조회 하한 밖으로 사라지므로 마지막으로 검증한 시각을 보존한다.
           const coverageTimestamp = yearIndex === years.length - 1
-            ? completedAtMs
+            ? (unverifiedFreshnessSymbols.has(symbol)
+                ? (coverageWatermarks.get(symbol) ?? 0)
+                : completedAtMs)
             : (coverageWatermarks.get(symbol) ?? 0);
           strategy.recordCoverage(
             symbol,
@@ -803,7 +846,11 @@ export class FactSyncService {
         // 기존 캐시를 쓸 수 있어도 stale 종목은 후속 보고서 누락 여부를 증명할 수 없으므로
         // forced 계획을 보존해 실제 fetch 단계에서 명시적으로 실패하게 한다.
         if (error instanceof FactSourceNotConfiguredError && forced.size > 0) {
-          return { forcedYearsBySymbol: forced, pendingFinancialFilings: pending };
+          return {
+            forcedYearsBySymbol: forced,
+            pendingFinancialFilings: pending,
+            unverifiedFreshnessSymbols: new Set(watermarkDates.keys()),
+          };
         }
         throw error;
       }
@@ -845,7 +892,11 @@ export class FactSyncService {
       }
     }
 
-    return { forcedYearsBySymbol: forced, pendingFinancialFilings: pending };
+    return {
+      forcedYearsBySymbol: forced,
+      pendingFinancialFilings: pending,
+      unverifiedFreshnessSymbols: new Set(),
+    };
   }
 
   /**

@@ -1,44 +1,15 @@
 import { createHash } from 'node:crypto';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, or, sql } from 'drizzle-orm';
 import type { AppDatabase } from '../../../../shared/db/database.js';
 import { dartRawApiSnapshots } from '../../../../shared/db/schema.js';
 import type { DartReportCode } from './dart-report-parser.js';
-
-export type DartRawSnapshotEndpoint =
-  | 'FINANCIAL_STATEMENT'
-  | 'SHARE_STATUS'
-  | 'ISSUANCE_STATUS';
-
-export interface DartRawSnapshotKey {
-  readonly symbol: string;
-  readonly endpoint: DartRawSnapshotEndpoint;
-  readonly businessYear: number;
-  readonly reportCode: DartReportCode;
-  readonly fsDiv: 'CFS' | 'OFS' | 'NONE';
-}
-
-export interface DartRawSnapshot {
-  readonly payload: unknown;
-  readonly fetchedAtMs: number;
-}
-
-/** DART 원문 snapshot의 좁은 포트. API 어댑터는 SQLite 구현을 알지 않는다. */
-export interface DartRawSnapshotStore {
-  get(key: DartRawSnapshotKey): DartRawSnapshot | null;
-  /** 입력 순서와 같은 위치에 snapshot/cache miss를 돌려준다. */
-  getMany(keys: readonly DartRawSnapshotKey[]): readonly (DartRawSnapshot | null)[];
-  put(key: DartRawSnapshotKey, payload: unknown, fetchedAtMs: number): void;
-}
-
-export function dartRawSnapshotKeyId(key: DartRawSnapshotKey): string {
-  return [
-    key.symbol,
-    key.endpoint,
-    key.businessYear,
-    key.reportCode,
-    key.fsDiv,
-  ].join(':');
-}
+import {
+  dartRawSnapshotKeyId,
+  type DartRawSnapshot,
+  type DartRawSnapshotEndpoint,
+  type DartRawSnapshotKey,
+  type DartRawSnapshotStore,
+} from './dart-raw-snapshot-store.js';
 
 /** 응답 JSON과 해시를 함께 저장해 손상된 cache를 원천 응답으로 오인하지 않게 한다. */
 export class SqliteDartRawSnapshotStore implements DartRawSnapshotStore {
@@ -58,25 +29,40 @@ export class SqliteDartRawSnapshotStore implements DartRawSnapshotStore {
       .get());
   }
 
-  getMany(keys: readonly DartRawSnapshotKey[]): readonly (DartRawSnapshot | null)[] {
-    if (keys.length === 0) return [];
-    const requestedCodes = [...new Set(keys.map((key) => key.symbol))];
-    const rows: Array<typeof dartRawApiSnapshots.$inferSelect> = [];
-    for (let offset = 0; offset < requestedCodes.length; offset += 500) {
-      rows.push(...this.db
+  countMissing(
+    keys: readonly DartRawSnapshotKey[],
+    isValidPayload: (payload: unknown) => boolean,
+  ): number {
+    let missing = 0;
+    // 복합 키 하나가 bind 5개를 사용한다. 50개씩 조회해 구형 SQLite 한도 안에 두고,
+    // 장기 원문 payload를 전부 메모리에 쌓지 않은 채 batch마다 즉시 검증·폐기한다.
+    for (let offset = 0; offset < keys.length; offset += 50) {
+      const batch = keys.slice(offset, offset + 50);
+      if (batch.length === 0) continue;
+      const rows = this.db
         .select()
         .from(dartRawApiSnapshots)
-        .where(inArray(dartRawApiSnapshots.code, requestedCodes.slice(offset, offset + 500)))
-        .all());
+        .where(or(...batch.map((key) => and(
+          eq(dartRawApiSnapshots.code, key.symbol),
+          eq(dartRawApiSnapshots.endpoint, key.endpoint),
+          eq(dartRawApiSnapshots.businessYear, key.businessYear),
+          eq(dartRawApiSnapshots.reportCode, key.reportCode),
+          eq(dartRawApiSnapshots.fsDiv, key.fsDiv),
+        ))))
+        .all();
+      const byKey = new Map(rows.map((row) => [dartRawSnapshotKeyId({
+        symbol: row.code,
+        endpoint: row.endpoint as DartRawSnapshotEndpoint,
+        businessYear: row.businessYear,
+        reportCode: row.reportCode as DartReportCode,
+        fsDiv: row.fsDiv as DartRawSnapshotKey['fsDiv'],
+      }), row]));
+      for (const key of batch) {
+        const snapshot = this.parseRow(byKey.get(dartRawSnapshotKeyId(key)));
+        if (snapshot === null || !isValidPayload(snapshot.payload)) missing += 1;
+      }
     }
-    const byKey = new Map(rows.map((row) => [dartRawSnapshotKeyId({
-      symbol: row.code,
-      endpoint: row.endpoint as DartRawSnapshotEndpoint,
-      businessYear: row.businessYear,
-      reportCode: row.reportCode as DartReportCode,
-      fsDiv: row.fsDiv as DartRawSnapshotKey['fsDiv'],
-    }), row]));
-    return keys.map((key) => this.parseRow(byKey.get(dartRawSnapshotKeyId(key))));
+    return missing;
   }
 
   private parseRow(
