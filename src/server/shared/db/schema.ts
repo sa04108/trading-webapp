@@ -250,6 +250,55 @@ export const dartFinancialFilingReceipts = sqliteTable(
 );
 
 /**
+ * DART 파서가 소비하기 전의 API 응답 snapshot.
+ *
+ * coverage protocol은 파서·정렬 의미가 바뀌면 올라가지만, 원천 응답까지 바뀌었다는
+ * 뜻은 아니다. 같은 원문을 다시 해석할 수 있도록 성공(000)과 무자료(013) 봉투를
+ * 행 순서와 미사용 필드까지 JSON 그대로 보존한다. API key와 corp_code는 재생 입력이
+ * 아니므로 저장하지 않는다.
+ */
+export const dartRawApiSnapshots = sqliteTable(
+  'dart_raw_api_snapshots',
+  {
+    code: text('code')
+      .notNull()
+      .references(() => symbols.code, { onDelete: 'cascade' }),
+    endpoint: text('endpoint').notNull(),
+    businessYear: integer('business_year').notNull(),
+    reportCode: text('report_code').notNull(),
+    /** 재무제표만 CFS/OFS, 나머지 엔드포인트는 NONE */
+    fsDiv: text('fs_div').notNull(),
+    payloadJson: text('payload_json').notNull(),
+    contentHash: text('content_hash').notNull(),
+    fetchedAtMs: integer('fetched_at_ms').notNull(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [
+        table.code,
+        table.endpoint,
+        table.businessYear,
+        table.reportCode,
+        table.fsDiv,
+      ],
+    }),
+    index('idx_dart_raw_api_snapshots_fetched_at').on(table.fetchedAtMs),
+    check(
+      'chk_dart_raw_api_snapshots_endpoint',
+      sql`${table.endpoint} IN ('FINANCIAL_STATEMENT', 'SHARE_STATUS', 'ISSUANCE_STATUS')`,
+    ),
+    check(
+      'chk_dart_raw_api_snapshots_report_code',
+      sql`${table.reportCode} IN ('11013', '11012', '11014', '11011')`,
+    ),
+    check(
+      'chk_dart_raw_api_snapshots_fs_div',
+      sql`${table.fsDiv} IN ('CFS', 'OFS', 'NONE')`,
+    ),
+  ],
+);
+
+/**
  * point-in-time 팩트. periodKey는 재무 기준 기간이고 asOfTsMs는 시장에 알려진 시각이다.
  * 같은 기간의 정정공시는 asOfTsMs가 다른 새 행으로 남는다.
  */

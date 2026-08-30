@@ -140,6 +140,7 @@ describe('SqliteFactCoverageStore', () => {
     }).run();
 
     expect(store.getCoveredYears().get('005930')).toEqual([]);
+    expect(store.getCollectedYears().get('005930')).toEqual([2024, 2025]);
     database.close();
   });
 

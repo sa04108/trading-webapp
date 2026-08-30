@@ -105,6 +105,8 @@ function legacyGapDetail(year: number): CorporateActionGapDetail {
 export interface CorporateActionCoverageStore {
   /** 종목 → 자본변동 수집 완료 연도 (오름차순). 인자를 주면 그 종목만 */
   getCoveredYears(codes?: readonly string[]): ReadonlyMap<string, readonly number[]>;
+  /** protocol 검증 전 legacy 수집 연도. freshness 판정 외에는 쓰지 않는다. */
+  getCollectedYears?(codes?: readonly string[]): ReadonlyMap<string, readonly number[]>;
   /** 종목 → 자본변동 수집이 실패한 연도 (오름차순). 인자를 주면 그 종목만 */
   getGapYears(codes?: readonly string[]): ReadonlyMap<string, readonly number[]>;
   /** 종목 → 자본변동 수집 실패 상세. 구버전 연도만 있으면 보수적인 상세를 합성한다. */
@@ -163,6 +165,10 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
       result.set(row.code, parseProtocolYears(row.protocol));
     }
     return result;
+  }
+
+  getCollectedYears(codes?: readonly string[]): ReadonlyMap<string, readonly number[]> {
+    return this.readYears('actionCoveredYearsJson', codes);
   }
 
   getGapYears(codes?: readonly string[]): ReadonlyMap<string, readonly number[]> {

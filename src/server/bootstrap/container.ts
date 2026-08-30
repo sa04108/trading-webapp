@@ -57,6 +57,7 @@ import {
 import { FactSyncService } from '../modules/facts/application/fact-sync-service.js';
 import { FinancialFactAvailabilityService } from '../modules/facts/application/financial-fact-availability.js';
 import { createDartFactSource } from '../modules/facts/infrastructure/dart/dart-fact-source.js';
+import { SqliteDartRawSnapshotStore } from '../modules/facts/infrastructure/dart/sqlite-dart-raw-snapshot-store.js';
 import { SqliteFactRepository } from '../modules/facts/infrastructure/sqlite-fact-repository.js';
 import { createKrxHistoricalUniverseSource } from '../modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
 import { createFredBenchmarkSource } from '../modules/market-data/infrastructure/fred/fred-benchmark-source.js';
@@ -248,11 +249,12 @@ export function createContainer(config: AppConfig): Container {
 
   const factRepository = new SqliteFactRepository(database.db);
   const financialFactAvailabilityService = new FinancialFactAvailabilityService(database.db);
+  const dartRawSnapshots = new SqliteDartRawSnapshotStore(database.db);
   const factSource = createDartFactSource(
     config.dartApiKey ? { baseUrl: config.dartBaseUrl, apiKey: config.dartApiKey } : null,
     logger,
     // 미래 보고서 생략(filableReportCount)이 sync 계획과 같은 시각을 봐야 한다
-    { clock, usage: externalApiUsage },
+    { clock, usage: externalApiUsage, rawSnapshots: dartRawSnapshots },
   );
   // 팩트도 백테스트 입력이다 — 캔들과 같은 버전 체인에 올린다 (§9.5).
   // SymbolService 를 통째로 넘기지 않고 좁은 포트(SymbolVersionBumper)로 받는다.

@@ -64,6 +64,11 @@ export interface FinancialFilingCheckpoint {
 export interface FactCoverageStore {
   /** 종목 → 수집 완료 연도 (오름차순). 인자를 주면 그 종목만 */
   getCoveredYears(codes?: readonly string[]): ReadonlyMap<string, readonly number[]>;
+  /**
+   * protocol 검증과 무관하게 과거에 원천 수집을 완료한 연도. 오래된 watermark의
+   * freshness를 판정할 때만 쓴다. 실행 가능 여부에는 반드시 getCoveredYears를 쓴다.
+   */
+  getCollectedYears?(codes?: readonly string[]): ReadonlyMap<string, readonly number[]>;
   /** manifest 무결성과 blocking ingestion gap을 한 번에 읽는다. */
   getCoverageState(codes?: readonly string[]): ReadonlyMap<string, FinancialCoverageState>;
   /** 종목 하나의 완료 연도를 합집합으로 더한다. 팩트 저장 직후에 부른다. */
@@ -95,6 +100,17 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
   getCoveredYears(codes?: readonly string[]): ReadonlyMap<string, readonly number[]> {
     return new Map(
       [...this.getCoverageState(codes)].map(([code, state]) => [code, state.verifiedYears]),
+    );
+  }
+
+  getCollectedYears(codes?: readonly string[]): ReadonlyMap<string, readonly number[]> {
+    const requested = codes === undefined ? null : new Set(codes);
+    return new Map(
+      this.db.select({ code: symbolFactsState.code, years: symbolFactsState.coveredYearsJson })
+        .from(symbolFactsState)
+        .all()
+        .filter((row) => requested === null || requested.has(row.code))
+        .map((row) => [row.code, parseYears(row.years)]),
     );
   }
 

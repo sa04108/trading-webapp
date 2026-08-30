@@ -4,6 +4,8 @@ import type { Logger } from '../../../shared/logger.js';
 import { addCalendarDays, kstDateOf } from '../../market-data/domain/kst-date.js';
 import { CORPORATE_ACTION_FIELD, type Fact } from '../domain/fact.js';
 import {
+  DART_DAILY_CALL_LIMIT,
+  DART_MIN_INTERVAL_MS,
   planFactSync,
   type FactSyncMode,
   type FactSyncPlan,
@@ -112,6 +114,8 @@ interface SyncStrategy {
   readonly includeFinancials: boolean;
   /** 증분 계획이 기준으로 삼을 커버리지. 경로마다 다른 저장소를 본다. */
   getCoveredYears(symbols: readonly string[]): ReadonlyMap<string, readonly number[]>;
+  /** current protocol과 무관한 실제 과거 수집 연도. freshness 확인에만 쓴다. */
+  getCollectedYears(symbols: readonly string[]): ReadonlyMap<string, readonly number[]>;
   /** 공시검색 하한. 재무와 자본변동이 각자의 watermark를 제공한다. */
   getUpdatedAtMs(symbols: readonly string[]): ReadonlyMap<string, number>;
   /**
@@ -237,11 +241,13 @@ export class FactSyncService {
     return this.runSync(request, hooks, {
       includeFinancials: true,
       getCoveredYears: (symbols) => this.coverage.getCoveredYears(symbols),
+      getCollectedYears: (symbols) =>
+        this.coverage.getCollectedYears?.(symbols) ?? this.coverage.getCoveredYears(symbols),
       getUpdatedAtMs: (symbols) => this.coverage.getUpdatedAtMs(symbols),
       fetch: async (scoped, sourceHooks) => {
-        // 종목별 호출이지만 corp_code 매핑과 주식총수(stockTotqySttus) 응답 캐시는 소스
-        // 인스턴스 클로저 안에 살아 있다 — 종목마다 다시 내려받지 않는다
-        // (dart-fact-source.ts 의 corpCodes·shareRowsCache 참고).
+        // 같은 work-unit의 두 fetch는 request 객체를 공유한다. source가 주식총수 응답을
+        // 한 번만 읽고, protocol 재처리에서는 세 DART 엔드포인트 원문도 영속 cache에서
+        // 재생한다(dart-fact-source.ts의 requestRows·rawSnapshots 참고).
         const financials = await this.source.fetchFinancials(scoped, sourceHooks);
         const actions = await this.source.fetchCorporateActions(scoped, sourceHooks);
         return {
@@ -283,14 +289,14 @@ export class FactSyncService {
     toYear: number,
   ): FactSyncPlan {
     const unique = [...new Set(symbols)];
-    return planFactSync({
+    return this.withRawSnapshotMisses(planFactSync({
       symbols: unique,
       fromYear,
       toYear,
       todayKstDate: kstDateOf(this.clock.now()),
       coveredBySymbol: this.coverage.getCoveredYears(unique),
       mode: 'INCREMENTAL',
-    });
+    }), true);
   }
 
   /**
@@ -306,21 +312,52 @@ export class FactSyncService {
     toYear: number,
   ): FactSyncPlan {
     const unique = [...new Set(symbols)];
-    return planFactSync({
+    return this.withRawSnapshotMisses(planFactSync({
       symbols: unique,
       fromYear,
       toYear,
       todayKstDate: kstDateOf(this.clock.now()),
       coveredBySymbol: this.actionCoverage.getCoveredYears(unique),
       mode: 'INCREMENTAL',
-    });
+    }), false);
+  }
+
+  private withRawSnapshotMisses(plan: FactSyncPlan, includeFinancials: boolean): FactSyncPlan {
+    if (this.source.countRawSnapshotMisses === undefined) return plan;
+    const symbols = [...plan.yearsBySymbol.keys()];
+    const coverage = includeFinancials ? this.coverage : this.actionCoverage;
+    const collectedBySymbol = coverage.getCollectedYears?.(symbols)
+      ?? coverage.getCoveredYears(symbols);
+    const updatedAtBySymbol = coverage.getUpdatedAtMs(symbols);
+    let calls = 0;
+    for (const [symbol, years] of plan.yearsBySymbol) {
+      if (years.length === 0) continue;
+      const collected = collectedBySymbol.get(symbol) ?? [];
+      const updatedAtMs = updatedAtBySymbol.get(symbol);
+      const staleWatermark = updatedAtMs !== undefined
+        && kstDateOf(updatedAtMs)
+          < addCalendarDays(kstDateOf(this.clock.now()), -FILING_LOOKBACK_MAX_DAYS)
+        && years.some((year) => collected.includes(year));
+      calls += this.source.countRawSnapshotMisses({
+        symbols: [symbol],
+        years,
+        shareYears: plan.shareYearsBySymbol.get(symbol) ?? [],
+        consolidated: true,
+        rawSnapshotPolicy: staleWatermark ? 'REFRESH' : 'PREFER_CACHE',
+      }, includeFinancials);
+    }
+    return {
+      ...plan,
+      calls,
+      estimatedMs: calls * DART_MIN_INTERVAL_MS,
+      overDailyLimit: calls > DART_DAILY_CALL_LIMIT,
+    };
   }
 
   /**
-   * 자본변동만 받는다 — 재무(`fnlttSinglAcntAll`·`irdsSttus`)는 부르지 않는다.
-   * 재무는 캐시가 없어 종목마다 그대로 다시 쏘지만, 자본변동이 쓰는 발행주식수
-   * (`stockTotqySttus`)는 `shareRowsCache` 로 캐시된다. 분할 보정만 필요한 전략에
-   * 재무 수집 비용을 물리지 않으려고 이 경로를 둔다.
+   * 자본변동만 받는다 — 재무제표(`fnlttSinglAcntAll`)는 부르지 않는다. 자본변동
+   * 원문(`irdsSttus`·`stockTotqySttus`)은 같은 work-unit과 이후 protocol 재처리에서
+   * cache를 재사용한다. 분할 보정만 필요한 전략에 재무제표 비용을 물리지 않는다.
    *
    * 증분 판단은 자본변동 자신의 커버리지를 본다. 재무 커버리지를 보면 재무만 먼저
    * 받은 연도를 자본변동도 받았다고 잘못 판단한다.
@@ -332,6 +369,9 @@ export class FactSyncService {
     return this.runSync(request, hooks, {
       includeFinancials: false,
       getCoveredYears: (symbols) => this.actionCoverage.getCoveredYears(symbols),
+      getCollectedYears: (symbols) =>
+        this.actionCoverage.getCollectedYears?.(symbols)
+          ?? this.actionCoverage.getCoveredYears(symbols),
       getUpdatedAtMs: (symbols) => this.actionCoverage.getUpdatedAtMs(symbols),
       fetch: async (scoped, sourceHooks) => {
         const actions = await this.source.fetchCorporateActions(scoped, sourceHooks);
@@ -367,8 +407,8 @@ export class FactSyncService {
   ): Promise<FactSyncReport> {
     /**
      * 중복 심볼은 접는다. `planFactSync` 가 Set 으로 접으므로 순회가 접지 않으면 실제
-     * 호출이 계획의 `calls` 를 넘고(`fnlttSinglAcntAll`·`irdsSttus` 에는 캐시가 없어
-     * 그대로 다시 쏜다) 화면의 예상 시간과 실행이 갈라진다. total 도 고유 종목 수여야
+     * work-unit이 계획보다 늘고 cache miss 원천 호출과 화면 예상도 함께 부푼다.
+     * total 도 고유 종목 수여야
      * 진행률이 100% 에 닿는다 (설계 §3).
      */
     const symbols = [...new Set(request.symbols)];
@@ -395,6 +435,7 @@ export class FactSyncService {
     // 최신 여부를 증명할 수 없으므로 명시적으로 중단한다. 단, 키 자체를 의도적으로
     // 설정하지 않은 환경은 이미 커버된 데이터 사용을 허용하는 기존 계약을 유지한다.
     const coveredBySymbol = strategy.getCoveredYears(symbols);
+    const collectedBySymbol = strategy.getCollectedYears(symbols);
     const coverageWatermarks = strategy.getUpdatedAtMs(symbols);
     let redisclosures: RedisclosureDetection | undefined;
     try {
@@ -402,7 +443,7 @@ export class FactSyncService {
         request.mode === 'INCREMENTAL'
           ? await this.detectRedisclosedYears(
               symbols,
-              coveredBySymbol,
+              collectedBySymbol,
               coverageWatermarks,
               strategy.includeFinancials,
               sourceHooks,
@@ -460,14 +501,22 @@ export class FactSyncService {
       let symbolGapCount = 0;
       try {
         for (const [yearIndex, year] of years.entries()) {
-          // 직전 연도의 주식총수 앵커도 요청하되, 소스 캐시는 이미 받은 응답을 재사용한다.
-          // quota는 캐시 miss를 포함한 실제 HTTP 시도마다 sourceHooks가 정확히 예약한다.
+          // protocol 불일치·신규 coverage는 원문 snapshot을 우선 재생한다. FULL 요청이나
+          // 공시검색이 새·정정공시를 찾아 강제한 연도만 DART 원천을 다시 읽는다.
+          const redisclosed = redisclosures?.forcedYearsBySymbol
+            .get(symbol)?.includes(year) === true;
+          const rawSnapshotPolicy = request.mode === 'FULL' || redisclosed
+            ? 'REFRESH' as const
+            : 'PREFER_CACHE' as const;
+          // 직전 연도의 주식총수 앵커도 요청한다. 같은 work-unit의 재무·자본변동은
+          // source 내부 request cache로 응답을 공유하고, 영속 cache hit는 quota를 쓰지 않는다.
           const shareYears = [year - 1, year];
           const scoped = {
             symbols: [symbol],
             years: [year],
             shareYears,
             consolidated: request.consolidated,
+            rawSnapshotPolicy,
           };
           const {
             financialFacts,
@@ -700,7 +749,7 @@ export class FactSyncService {
    */
   private async detectRedisclosedYears(
     symbols: readonly string[],
-    coveredBySymbol: ReadonlyMap<string, readonly number[]>,
+    collectedBySymbol: ReadonlyMap<string, readonly number[]>,
     watermarks: ReadonlyMap<string, number>,
     trackFinancialReceipts: boolean,
     sourceHooks: FactSourceRequestHooks,
@@ -735,7 +784,7 @@ export class FactSyncService {
         // 어느 covered 연도에 후속 공시가 생겼는지 목록으로 판별할 수 없다. 일부만
         // 갱신한 뒤 종목 watermark를 오늘로 옮기면 나머지 연도의 과거 공시가 영구히
         // 숨으므로, 이 종목의 covered 연도를 모두 한 번 다시 닫는다.
-        for (const year of coveredBySymbol.get(symbol) ?? []) {
+        for (const year of collectedBySymbol.get(symbol) ?? []) {
           addForced(symbol, year);
         }
         continue;

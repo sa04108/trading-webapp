@@ -2,10 +2,16 @@ import { describe, expect, it } from 'vitest';
 import {
   DartQuotaError,
   FactSourceNotConfiguredError,
+  type FetchFinancialsRequest,
 } from '../../src/server/modules/facts/application/ports.js';
 import type { CorpCodeResolver } from '../../src/server/modules/facts/infrastructure/dart/dart-corp-code-cache.js';
 import { createDartFactSource } from '../../src/server/modules/facts/infrastructure/dart/dart-fact-source.js';
 import { receiptDateToAsOfTsMs } from '../../src/server/modules/facts/infrastructure/dart/dart-report-parser.js';
+import type {
+  DartRawSnapshot,
+  DartRawSnapshotKey,
+  DartRawSnapshotStore,
+} from '../../src/server/modules/facts/infrastructure/dart/sqlite-dart-raw-snapshot-store.js';
 
 const LOGGER = { debug() {}, info() {}, warn() {}, error() {} } as never;
 
@@ -28,6 +34,30 @@ function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), { status: 200 });
 }
 
+class MemoryRawSnapshotStore implements DartRawSnapshotStore {
+  readonly snapshots = new Map<string, DartRawSnapshot>();
+
+  get(key: DartRawSnapshotKey): DartRawSnapshot | null {
+    return this.snapshots.get(this.key(key)) ?? null;
+  }
+
+  getMany(keys: readonly DartRawSnapshotKey[]): readonly (DartRawSnapshot | null)[] {
+    return keys.map((key) => this.get(key));
+  }
+
+  put(key: DartRawSnapshotKey, payload: unknown, fetchedAtMs: number): void {
+    // SQLite JSON 왕복과 같은 경계를 흉내 내 참조 공유가 테스트를 통과시키지 못하게 한다.
+    this.snapshots.set(this.key(key), {
+      payload: JSON.parse(JSON.stringify(payload)) as unknown,
+      fetchedAtMs,
+    });
+  }
+
+  private key(key: DartRawSnapshotKey): string {
+    return JSON.stringify(key);
+  }
+}
+
 describe('createDartFactSource — 미설정', () => {
   it('설정이 없으면 FactSourceNotConfiguredError 를 던진다', async () => {
     const source = createDartFactSource(null, LOGGER);
@@ -37,6 +67,178 @@ describe('createDartFactSource — 미설정', () => {
     await expect(
       source.fetchCorporateActions({ symbols: ['005930'], years: [2025], shareYears: [2024, 2025], consolidated: true }),
     ).rejects.toBeInstanceOf(FactSourceNotConfiguredError);
+  });
+});
+
+describe('createDartFactSource — 영속 원문 snapshot 재처리', () => {
+  it('전체 응답을 보존하고 다음 실행은 API key·corp_code 요청 없이 같은 팩트를 만든다', async () => {
+    const rawSnapshots = new MemoryRawSnapshotStore();
+    let liveCalls = 0;
+    const liveSource = createDartFactSource(
+      { baseUrl: 'https://dart.test', apiKey: 'k' },
+      LOGGER,
+      {
+        rawSnapshots,
+        sleep: async () => {},
+        corpCodeResolver: STUB_RESOLVER,
+        fetchImpl: (async (url: string | URL) => {
+          liveCalls += 1;
+          const target = String(url);
+          if (target.includes('fnlttSinglAcntAll') && target.includes('reprt_code=11013')) {
+            return jsonResponse({
+              status: '000',
+              message: '정상',
+              list: [
+                {
+                  rcept_no: '20250515000001',
+                  reprt_code: '11013',
+                  bsns_year: '2025',
+                  sj_div: 'BS',
+                  account_id: 'ifrs-full_CurrentAssets',
+                  account_nm: '유동자산',
+                  thstrm_amount: '500000',
+                  future_field: '파서가 아직 쓰지 않는 원문',
+                },
+                {
+                  rcept_no: '20250515000001',
+                  reprt_code: '11013',
+                  bsns_year: '2025',
+                  sj_div: 'CF',
+                  account_id: 'future_CashFlow',
+                  account_nm: '현재 미사용 계정',
+                  thstrm_amount: '1',
+                },
+              ],
+            });
+          }
+          if (target.includes('stockTotqySttus') && target.includes('reprt_code=11013')) {
+            return jsonResponse({
+              status: '000',
+              message: '정상',
+              list: [{
+                rcept_no: '20250515000001',
+                se: '보통주',
+                istc_totqy: '1000000',
+                stlm_dt: '2025-03-31',
+              }],
+            });
+          }
+          return jsonResponse({ status: '013', message: '조회된 데이터가 없습니다' });
+        }) as typeof fetch,
+      },
+    );
+    const liveRequest: FetchFinancialsRequest = {
+      symbols: ['005930'],
+      years: [2025],
+      shareYears: [2025],
+      consolidated: true,
+      rawSnapshotPolicy: 'REFRESH',
+    };
+    const liveFinancials = await liveSource.fetchFinancials(liveRequest);
+    const liveActions = await liveSource.fetchCorporateActions(liveRequest);
+    expect(liveCalls).toBeGreaterThan(0);
+    expect(liveSource.countRawSnapshotMisses?.({
+      ...liveRequest,
+      rawSnapshotPolicy: 'PREFER_CACHE',
+    }, true)).toBe(0);
+    expect(liveSource.countRawSnapshotMisses?.(liveRequest, true)).toBe(12);
+
+    const financialSnapshot = [...rawSnapshots.snapshots.entries()]
+      .find(([key]) => key.includes('FINANCIAL_STATEMENT') && key.includes('11013'))?.[1];
+    expect(financialSnapshot?.payload).toMatchObject({
+      list: [
+        { future_field: '파서가 아직 쓰지 않는 원문' },
+        { account_nm: '현재 미사용 계정' },
+      ],
+    });
+
+    let corpCodeResolutions = 0;
+    const replaySource = createDartFactSource(null, LOGGER, {
+      rawSnapshots,
+      corpCodeResolver: {
+        resolve: async () => {
+          corpCodeResolutions += 1;
+          return null;
+        },
+      },
+    });
+    const replayRequest: FetchFinancialsRequest = {
+      ...liveRequest,
+      rawSnapshotPolicy: 'PREFER_CACHE',
+    };
+    expect(await replaySource.fetchFinancials(replayRequest)).toEqual(liveFinancials);
+    expect(await replaySource.fetchCorporateActions(replayRequest)).toEqual(liveActions);
+    expect(corpCodeResolutions).toBe(0);
+  });
+
+  it('REFRESH는 기존 snapshot을 우회하고 새 원문으로 교체한다', async () => {
+    const rawSnapshots = new MemoryRawSnapshotStore();
+    rawSnapshots.put({
+      symbol: '005930',
+      endpoint: 'FINANCIAL_STATEMENT',
+      businessYear: 2025,
+      reportCode: '11013',
+      fsDiv: 'CFS',
+    }, {
+      status: '000',
+      message: '과거',
+      list: [{
+        rcept_no: '20250515000001',
+        reprt_code: '11013',
+        bsns_year: '2025',
+        sj_div: 'BS',
+        account_id: 'ifrs-full_CurrentAssets',
+        account_nm: '유동자산',
+        thstrm_amount: '1',
+      }],
+    }, 1);
+    let liveCalls = 0;
+    const source = createDartFactSource(
+      { baseUrl: 'https://dart.test', apiKey: 'k' },
+      LOGGER,
+      {
+        rawSnapshots,
+        sleep: async () => {},
+        corpCodeResolver: STUB_RESOLVER,
+        fetchImpl: (async (url: string | URL) => {
+          liveCalls += 1;
+          if (String(url).includes('fnlttSinglAcntAll') && String(url).includes('reprt_code=11013')) {
+            return jsonResponse({
+              status: '000',
+              message: '정정',
+              list: [{
+                rcept_no: '20250516000001',
+                reprt_code: '11013',
+                bsns_year: '2025',
+                sj_div: 'BS',
+                account_id: 'ifrs-full_CurrentAssets',
+                account_nm: '유동자산',
+                thstrm_amount: '2',
+              }],
+            });
+          }
+          return jsonResponse({ status: '013', message: '없음' });
+        }) as typeof fetch,
+      },
+    );
+
+    const result = await source.fetchFinancials({
+      symbols: ['005930'],
+      years: [2025],
+      shareYears: [],
+      consolidated: true,
+      rawSnapshotPolicy: 'REFRESH',
+    });
+
+    expect(liveCalls).toBe(4);
+    expect(result.facts.find((fact) => fact.field === 'CURRENT_ASSETS')?.value).toBe(2);
+    expect(rawSnapshots.get({
+      symbol: '005930',
+      endpoint: 'FINANCIAL_STATEMENT',
+      businessYear: 2025,
+      reportCode: '11013',
+      fsDiv: 'CFS',
+    })?.payload).toMatchObject({ message: '정정' });
   });
 });
 

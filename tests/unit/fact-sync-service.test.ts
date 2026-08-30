@@ -837,6 +837,45 @@ describe('FactSyncService — 데이터셋 버전 승격 (재현성 §9.5)', () 
 });
 
 describe('FactSyncService — 증분과 취소', () => {
+  it('완전한 raw snapshot은 coverage 재처리 계획을 DART 네트워크 작업으로 세지 않는다', () => {
+    const source = recordingSource();
+    source.countRawSnapshotMisses = (fetchRequest) =>
+      fetchRequest.rawSnapshotPolicy === 'REFRESH' ? 12 : 0;
+    const now = Date.UTC(2026, 7, 11);
+    const freshCoverage = fakeCoverage(
+      new Map(),
+      new Map([['005930', now - 60_000]]),
+    );
+    freshCoverage.getCollectedYears = () => new Map([['005930', [2025]]]);
+    const freshService = new FactSyncService(
+      source,
+      fakeRepository(),
+      LOGGER,
+      fakeVersions(),
+      { now: () => now },
+      freshCoverage,
+      fakeActionCoverage(),
+    );
+
+    expect(freshService.planFinancialSync(['005930'], 2025, 2025).calls).toBe(0);
+
+    const staleCoverage = fakeCoverage(
+      new Map(),
+      new Map([['005930', now - 100 * 86_400_000]]),
+    );
+    staleCoverage.getCollectedYears = () => new Map([['005930', [2025]]]);
+    const staleService = new FactSyncService(
+      source,
+      fakeRepository(),
+      LOGGER,
+      fakeVersions(),
+      { now: () => now },
+      staleCoverage,
+      fakeActionCoverage(),
+    );
+    expect(staleService.planFinancialSync(['005930'], 2025, 2025).calls).toBe(12);
+  });
+
   it('INCREMENTAL 은 fresh coverage를 건너뛰고 미수집 연도만 요청한다', async () => {
     const source = recordingSource();
     const now = Date.UTC(2022, 5, 1);
@@ -864,6 +903,37 @@ describe('FactSyncService — 증분과 취소', () => {
 
     expect(source.requests[0]?.years).toEqual([2022]);
     expect(source.requests[0]?.shareYears).toEqual([2021, 2022]);
+    expect(source.requests[0]?.rawSnapshotPolicy).toBe('PREFER_CACHE');
+  });
+
+  it('protocol만 무효이고 watermark가 오래됐으면 legacy 수집연도를 원천에서 갱신한다', async () => {
+    const source = recordingSource();
+    const now = Date.UTC(2026, 7, 11);
+    const coverage = fakeCoverage(
+      new Map(),
+      new Map([['005930', now - 100 * 86_400_000]]),
+    );
+    coverage.getCollectedYears = () => new Map([['005930', [2025]]]);
+    const service = new FactSyncService(
+      source,
+      fakeRepository(),
+      LOGGER,
+      fakeVersions(),
+      { now: () => now },
+      coverage,
+      fakeActionCoverage(),
+    );
+
+    await service.sync({
+      symbols: ['005930'],
+      fromYear: 2025,
+      toYear: 2025,
+      consolidated: true,
+      mode: 'INCREMENTAL',
+    });
+
+    expect(source.requests[0]?.years).toEqual([2025]);
+    expect(source.requests[0]?.rawSnapshotPolicy).toBe('REFRESH');
   });
 
   it('durable resume은 이미 커버한 현재연도 symbol-year도 다시 요청하지 않는다', async () => {
@@ -916,6 +986,9 @@ describe('FactSyncService — 증분과 취소', () => {
     expect(source.requests.map((request) => request.years)).toEqual([
       [2020], [2020], [2021], [2021], [2022], [2022],
     ]);
+    expect(source.requests.every(
+      (fetchRequest) => fetchRequest.rawSnapshotPolicy === 'REFRESH',
+    )).toBe(true);
   });
 
   it('종목을 저장한 직후 그 종목의 연도를 이력에 남긴다', async () => {
@@ -1224,9 +1297,9 @@ describe('FactSyncService — 증분과 취소', () => {
 });
 
 /**
- * 재무는 캐시가 없어 종목마다 그대로 다시 쏜다(dart-fact-source.ts 참고) — 분할 보정만
- * 필요한 전략에 그 비용을 물리지 않으려고 `syncCorporateActions` 를 낸다. 자본변동은
- * `shareRowsCache` 로 캐시되므로 이 경로는 비싸지 않다.
+ * 분할 보정만 필요한 전략에 재무제표 호출 비용을 물리지 않으려고
+ * `syncCorporateActions` 를 낸다. 원문 snapshot cache 유무와 무관하게 이 경로는
+ * fnlttSinglAcntAll을 호출하지 않아야 한다.
  */
 describe('FactSyncService — 공시 기반 강제 재수집 (INCREMENTAL)', () => {
   const DAY_MS = 86_400_000;
@@ -1307,6 +1380,7 @@ describe('FactSyncService — 공시 기반 강제 재수집 (INCREMENTAL)', () 
     await service(source, coverage).sync({ ...request, symbols: ['005930', '000660'] });
 
     expect(source.requests.map((r) => [r.symbols[0], ...r.years])).toEqual([['005930', 2025]]);
+    expect(source.requests[0]?.rawSnapshotPolicy).toBe('REFRESH');
   });
 
   it('watermark 당일의 같은 접수번호는 성공 후 다시 수집하지 않는다', async () => {

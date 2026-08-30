@@ -85,7 +85,7 @@ export function financialCoverageGapMessage(gap: FinancialCoverageGap): string {
     return (
       `DART 재무 수집 결과에 실행을 막는 원천·파서 gap이 남아 있습니다(필요 연도 ${years}): `
       + `${affected}${examples.length > 0 ? ` — 원인 예: ${examples.join(' / ')}` : ''}. `
-      + '원천·파서 문제를 수정하고 coverage protocol version을 갱신해 재수집하거나 '
+      + '원천·파서 문제를 수정하고 coverage protocol version을 갱신해 원문을 재처리하거나 '
       + '유니버스·기간을 조정하세요.'
     );
   }

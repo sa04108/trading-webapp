@@ -69,6 +69,12 @@ export interface FetchFinancialsRequest {
   readonly shareYears: readonly number[];
   /** true = 연결(CFS), false = 별도(OFS). 데이터셋 하나는 한 기준만 담는다 */
   readonly consolidated: boolean;
+  /**
+   * PREFER_CACHE는 영속 원문 snapshot을 먼저 재생하고 없는 요청만 원천에서 채운다.
+   * REFRESH는 정정공시·명시적 FULL 수집처럼 원천 최신성이 필요한 work unit이다.
+   * 생략 시 직접 어댑터 호출의 기존 의미를 지키기 위해 REFRESH로 동작한다.
+   */
+  readonly rawSnapshotPolicy?: 'PREFER_CACHE' | 'REFRESH';
 }
 
 /** 공시검색(list.json)이 돌려주는 정기공시 한 건 */
@@ -116,6 +122,15 @@ export interface FactSource {
     toDate: string,
     hooks?: FactSourceRequestHooks,
   ): Promise<readonly PeriodicFiling[]>;
+  /**
+   * 외부 호출 없이 재생할 수 없는 원문 snapshot 개수. 준비 단계의 DART-key 게이트가
+   * coverage 결측과 실제 네트워크 필요를 구분할 때 쓴다. 미구현 소스는 기존 호출량
+   * 추정을 그대로 사용한다.
+   */
+  countRawSnapshotMisses?(
+    request: FetchFinancialsRequest,
+    includeFinancials: boolean,
+  ): number;
 }
 
 /**

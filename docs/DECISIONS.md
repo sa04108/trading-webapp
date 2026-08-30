@@ -1753,3 +1753,25 @@
   않는다.
 - **재검증:** 자본변동 coverage protocol을 4로 올린다. 기존 nullable metadata가 없는
   자본변동 팩트는 필요한 연도부터 DART 원문으로 다시 수집해 연도 snapshot으로 교체한다.
+
+## D-083: DART 원문 snapshot을 보존해 coverage protocol 변경을 로컬 재처리한다
+
+- **문제:** 재무·자본변동 coverage protocol은 파서와 정렬 의미의 버전인데, 버전이
+  다르면 기존 coverage를 비운 뒤 종목·연도별 DART API를 모두 다시 호출했다. `facts`와
+  gap에는 정규화 결과와 축약 사유만 남아 같은 날짜 행 순서, 미사용 계정, 의도적으로
+  제외한 유상증자 같은 새 파서 입력을 복원할 수 없었다.
+- **결정 — 파서 전 원문을 영속한다:** `fnlttSinglAcntAll`, `stockTotqySttus`,
+  `irdsSttus`의 성공(000)·무자료(013) 응답 봉투 전체를 종목·엔드포인트·사업연도·
+  보고서·CFS/OFS 키로 SQLite에 저장한다. JSON 행 순서와 현재 미사용 필드도 보존하고
+  content hash가 어긋나거나 JSON/봉투가 깨지면 cache miss로 처리한다.
+- **결정 — 증분은 재생 우선, 최신화는 원천 우선이다:** protocol 불일치나 신규 coverage
+  work-unit은 원문 snapshot을 먼저 재생하고 없는 요청만 DART에서 채운다. FULL 수집,
+  새·정정공시가 확인된 연도, 90일 freshness 조회 하한보다 오래된 legacy 수집연도는
+  cache를 우회해 원천 snapshot을 교체한다. 따라서 parser version과 source freshness를
+  같은 신호로 취급하지 않는다.
+- **준비 게이트:** 필요한 원문 snapshot이 모두 있으면 coverage가 비어 있어도 DART-key
+  필요 계획을 0회로 본다. cache가 불완전하거나 stale refresh가 필요하면 기존처럼 키와
+  quota가 필요하다. 실제 cache hit는 물리 요청 hook과 일일 호출 원장을 증가시키지 않는다.
+- **배포 한계:** 이 변경 전에 수집한 데이터에는 원문 snapshot이 없다. 과거 결과를
+  역으로 복원하지 않으며, 그 연도는 다음 protocol 재검증 또는 정상 최신화에서 한 번
+  원천을 받아 cache를 만든다. 이후 parser-only 변경부터 로컬 재처리 이점을 얻는다.

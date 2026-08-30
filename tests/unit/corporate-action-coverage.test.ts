@@ -83,6 +83,7 @@ describe('SqliteCorporateActionCoverageStore', () => {
     }).run();
 
     expect(store.getCoveredYears(['005930']).get('005930')).toEqual([]);
+    expect(store.getCollectedYears(['005930']).get('005930')).toEqual([2025]);
 
     store.addCoverageResult('005930', [2025], [], 200);
     expect(store.getCoveredYears(['005930']).get('005930')).toEqual([2025]);
