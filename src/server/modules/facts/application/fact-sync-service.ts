@@ -909,14 +909,14 @@ export class FactSyncService {
   private async bumpVersionIfChanged(code: string, fingerprintBefore: string): Promise<void> {
     const fingerprintAfter = await this.storedFactsFingerprint(code);
     if (fingerprintAfter === fingerprintBefore) {
-      this.logger.info(
+      this.logger.debug(
         { module: 'facts', event: 'facts.version.unchanged', symbol: code },
         'fact content unchanged — symbol version not bumped',
       );
       return;
     }
     this.versions.bumpVersion(code, FACTS_SLICE, `facts:${fingerprintAfter}`, this.clock.now());
-    this.logger.info(
+    this.logger.debug(
       { module: 'facts', event: 'facts.version.bumped', symbol: code },
       'symbol fact version bumped',
     );
