@@ -101,17 +101,26 @@ function isAmbiguousSplitRow(row: DartIssuanceRow): boolean {
 /**
  * DART의 '주식분할'은 액면분할 증가뿐 아니라 회사분할 감소에도 쓰인다. 문자열만으로
  * 부호를 정하지 않고, 바로 전·후 분기 주식수와 그 사이 irdsSttus 전체 증감을 재생했을
- * 때 감소로 뒤집은 경우만 snapshot과 정확히 일치하면 회사분할로 확정한다.
+ * 때 증가·감소 중 정확히 일치하는 방향을 확정한다. 어느 방향도 맞지 않으면 원문 수량
+ * 모순으로 분리해 잘못된 fact를 만들지 않는다.
  */
-function inferredDecreasingSplitRows(
+interface AmbiguousSplitInference {
+  readonly increasingRows: ReadonlySet<DartIssuanceRow>;
+  readonly decreasingRows: ReadonlySet<DartIssuanceRow>;
+  readonly contradictedRows: ReadonlySet<DartIssuanceRow>;
+}
+
+function inferAmbiguousSplitRows(
   rows: readonly DartIssuanceRow[],
   sharesByPeriod: readonly SharesAtPeriod[],
-): ReadonlySet<DartIssuanceRow> {
+): AmbiguousSplitInference {
   const changes = rows.flatMap((row, order): OrderedIssuedShareChange[] => {
     const change = issuedShareChange(row);
     return change === null ? [] : [{ row, order, ...change }];
   });
-  const result = new Set<DartIssuanceRow>();
+  const increasingRows = new Set<DartIssuanceRow>();
+  const decreasingRows = new Set<DartIssuanceRow>();
+  const contradictedRows = new Set<DartIssuanceRow>();
 
   for (const target of changes) {
     if (!isAmbiguousSplitRow(target.row) || target.delta === null || target.delta <= 0) continue;
@@ -131,9 +140,62 @@ function inferredDecreasingSplitRows(
       0,
     );
     const decreaseAfter = defaultAfter - 2 * target.delta;
-    if (defaultAfter !== next.shares && decreaseAfter === next.shares) result.add(target.row);
+    if (defaultAfter === next.shares) increasingRows.add(target.row);
+    else if (decreaseAfter === next.shares) decreasingRows.add(target.row);
+    else contradictedRows.add(target.row);
   }
-  return result;
+  return { increasingRows, decreasingRows, contradictedRows };
+}
+
+function splitEventIdentity(row: DartIssuanceRow): string | null {
+  if (!isAmbiguousSplitRow(row)) return null;
+  const dateKey = normalizeDateKey(row.isu_dcrs_de);
+  if (dateKey === null) return null;
+  const stockKind = row.isu_dcrs_stock_knd?.replace(/\s/g, '') ?? '';
+  return `${dateKey}|${stockKind}`;
+}
+
+/**
+ * 최신 누적표의 분할 수량이 전후 주식수와 모순되면 같은 사건의 과거 공시 중 독립적인
+ * 주식수 snapshot으로 정확히 입증되는 행만 복구한다. 최신이라는 이유만으로 단위가
+ * 깨진 행을 쓰지 않되, 과거 값이 단순히 더 그럴듯하다는 추측만으로 정정공시를 되돌리지
+ * 않도록 일치 조건은 정확값으로 제한한다.
+ */
+function repairContradictedSplitRows(
+  latestRows: readonly DartIssuanceRow[],
+  earlierSnapshots: readonly (readonly DartIssuanceRow[])[],
+  sharesByPeriod: readonly SharesAtPeriod[],
+): readonly DartIssuanceRow[] {
+  const repaired = [...latestRows];
+
+  for (let index = 0; index < repaired.length; index += 1) {
+    const target = repaired[index]!;
+    const identity = splitEventIdentity(target);
+    if (identity === null) continue;
+    if (!inferAmbiguousSplitRows(repaired, sharesByPeriod).contradictedRows.has(target)) continue;
+
+    let replacement: DartIssuanceRow | undefined;
+    for (let snapshotIndex = earlierSnapshots.length - 1; snapshotIndex >= 0; snapshotIndex -= 1) {
+      const candidates = earlierSnapshots[snapshotIndex]!.filter(
+        (row) => splitEventIdentity(row) === identity,
+      );
+      for (const candidate of candidates) {
+        const patched = repaired.map((row, rowIndex) => rowIndex === index ? candidate : row);
+        const inference = inferAmbiguousSplitRows(patched, sharesByPeriod);
+        if (
+          inference.increasingRows.has(candidate)
+          || inference.decreasingRows.has(candidate)
+        ) {
+          replacement = candidate;
+          break;
+        }
+      }
+      if (replacement !== undefined) break;
+    }
+    if (replacement !== undefined) repaired[index] = replacement;
+  }
+
+  return repaired;
 }
 
 /** 공시검색 봉투 — 목록 API 만 페이지 정보를 함께 준다 */
@@ -671,6 +733,7 @@ export function createDartFactSource(
       // irdsSttus는 누적 스냅샷이다. 최신 제출 보고서가 이전 행을 정정·삭제할 수 있으므로
       // 행을 합치지 않고 전체 집합을 교체한다. 그대로 남은 이벤트만 최초 접수번호를 쓴다.
       const firstReceiptByKey = new Map<string, string>();
+      const issuanceSnapshots: (readonly DartIssuanceRow[])[] = [];
       let latestIssuanceRows: readonly DartIssuanceRow[] = [];
       for (const year of [...new Set(request.years)].sort((a, b) => a - b)) {
         for (const reportCode of filableReports(year)) {
@@ -703,18 +766,29 @@ export function createDartFactSource(
           // 제출된 빈 자본변동 스냅샷이므로 이전 집합을 비운다.
           if (rows.length > 0 || filedReports.has(`${year}:${reportCode}`)) {
             latestIssuanceRows = rows;
+            issuanceSnapshots.push(rows);
           }
         }
       }
-      const issuanceRows = latestIssuanceRows.map((row) => ({
+      const issuanceRows = repairContradictedSplitRows(
+        latestIssuanceRows,
+        issuanceSnapshots.slice(0, -1),
+        sharesByPeriod,
+      ).map((row) => ({
         ...row,
         rcept_no: firstReceiptByKey.get(issuanceKey(row)) ?? row.rcept_no,
       }));
-      const decreasingSplitRows = inferredDecreasingSplitRows(issuanceRows, sharesByPeriod);
+      const splitInference = inferAmbiguousSplitRows(issuanceRows, sharesByPeriod);
+      const decreasingSplitRows = splitInference.decreasingRows;
+      const contradictedSplitRows = splitInference.contradictedRows;
       // DART 응답의 같은 날짜 행 순서가 사건 순서다. 유상증자 다음 무상증자처럼
       // 날짜만으로는 분모를 복원할 수 없는 경우에도 target 행 앞까지만 정확히 재생한다.
       const issuedShareChanges = issuanceRows
         .flatMap((row, order): OrderedIssuedShareChange[] => {
+          if (contradictedSplitRows.has(row)) {
+            const dateKey = normalizeDateKey(row.isu_dcrs_de);
+            return dateKey === null ? [] : [{ row, order, dateKey, delta: null }];
+          }
           const change = issuedShareChange(
             row,
             decreasingSplitRows.has(row) ? 'DECREASE' : undefined,
@@ -748,9 +822,22 @@ export function createDartFactSource(
       };
 
       if (issuanceRows.length > 0) {
-        const parsed = parseIssuanceRows(symbol, issuanceRows, sharesBefore, {
-          directionForRow: (row) => decreasingSplitRows.has(row) ? 'DECREASE' : undefined,
-        });
+        for (const row of contradictedSplitRows) {
+          gaps.push({
+            symbol,
+            periodKey: normalizeDateKey(row.isu_dcrs_de) ?? row.isu_dcrs_de,
+            reason: `분기 발행주식수와 일치하지 않는 주식분할 변동 수량입니다: ${row.isu_dcrs_qy}`,
+            severity: 'BLOCKING',
+          });
+        }
+        const parsed = parseIssuanceRows(
+          symbol,
+          issuanceRows.filter((row) => !contradictedSplitRows.has(row)),
+          sharesBefore,
+          {
+            directionForRow: (row) => decreasingSplitRows.has(row) ? 'DECREASE' : undefined,
+          },
+        );
         for (const fact of parsed.facts) {
           // irdsSttus 는 자본변동 이력을 연도별로 누적 제공한다 — 같은 분할이 해마다
           // 다른 rcept_no 로 반복되고, asOfTsMs 가 다르면 저장소 dedupe 를 통과한다.

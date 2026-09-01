@@ -1400,6 +1400,124 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
     expect(result.gaps).toEqual([]);
   });
 
+  it('078070의 최신 1000배 이상 수량을 과거 분기 원문과 전후 주식수로 복구한다', async () => {
+    const shareRows = new Map([
+      ['2016:11011', { rcept_no: '20170331001578', istc_totqy: '21,200,000', stlm_dt: '2016-12-31' }],
+      ['2017:11013', { rcept_no: '20170515004631', istc_totqy: '16,076,045', stlm_dt: '2017-03-31' }],
+      ['2017:11012', { rcept_no: '20170814001289', istc_totqy: '16,076,045', stlm_dt: '2017-06-30' }],
+      ['2017:11014', { rcept_no: '20171114000706', istc_totqy: '16,076,045', stlm_dt: '2017-09-30' }],
+      ['2017:11011', { rcept_no: '20180402002261', istc_totqy: '16,076,045', stlm_dt: '2017-12-31' }],
+    ]);
+    const fetchImpl = (async (url: string) => {
+      const target = String(url);
+      const year = /bsns_year=(\d{4})/.exec(target)?.[1];
+      const reportCode = /reprt_code=(\d+)/.exec(target)?.[1];
+      if (target.includes('stockTotqySttus')) {
+        const row = shareRows.get(`${year}:${reportCode}`);
+        return row === undefined
+          ? jsonResponse({ status: '013', message: 'no data' })
+          : jsonResponse({ status: '000', message: '정상', list: [{ ...row, se: '보통주' }] });
+      }
+      if (target.includes('irdsSttus') && year === '2017') {
+        if (reportCode === '11013') {
+          return jsonResponse({
+            status: '000', message: '정상',
+            list: [{
+              isu_dcrs_de: '2017.03.02', isu_dcrs_stle: '주식분할',
+              isu_dcrs_stock_knd: '보통주', isu_dcrs_qy: '5,123,955',
+              rcept_no: '20170515004631',
+            }],
+          });
+        }
+        if (reportCode === '11012' || reportCode === '11014') {
+          return jsonResponse({
+            status: '000', message: '정상',
+            list: [{
+              isu_dcrs_de: '2017.03.02', isu_dcrs_stle: '-',
+              isu_dcrs_stock_knd: '보통주', isu_dcrs_qy: '5,123,955',
+              rcept_no: reportCode === '11012' ? '20170814001289' : '20171114000706',
+            }],
+          });
+        }
+        if (reportCode === '11011') {
+          return jsonResponse({
+            status: '000', message: '정상',
+            list: [{
+              isu_dcrs_de: '2017.03.02', isu_dcrs_stle: '주식분할',
+              isu_dcrs_stock_knd: '보통주', isu_dcrs_qy: '5,123,955,000',
+              rcept_no: '20180402002261',
+            }],
+          });
+        }
+      }
+      return jsonResponse({ status: '013', message: 'no data' });
+    }) as unknown as typeof fetch;
+    const source = createDartFactSource(
+      { baseUrl: 'https://opendart.fss.or.kr', apiKey: 'K' }, LOGGER,
+      { fetchImpl, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER },
+    );
+
+    const result = await source.fetchCorporateActions({
+      symbols: ['078070'], years: [2017], shareYears: [2016, 2017], consolidated: true,
+    });
+
+    expect(result.gaps).toEqual([]);
+    expect(result.facts).toContainEqual(expect.objectContaining({
+      key: '078070',
+      field: 'SPLIT_RATIO',
+      periodKey: '2017-03-02',
+      asOfTsMs: receiptDateToAsOfTsMs('20170515004631'),
+      value: 16_076_045 / 21_200_000,
+      corporateActionBeforeShares: 21_200_000,
+      corporateActionAfterShares: 16_076_045,
+    }));
+  });
+
+  it('전후 주식수와 모순되고 입증 가능한 과거 행도 없으면 잘못된 분할 fact를 만들지 않는다', async () => {
+    const fetchImpl = (async (url: string) => {
+      const target = String(url);
+      if (target.includes('stockTotqySttus') && target.includes('bsns_year=2016') && target.includes('reprt_code=11011')) {
+        return jsonResponse({
+          status: '000', message: '정상',
+          list: [{ rcept_no: '20170331001578', se: '보통주', istc_totqy: '21,200,000', stlm_dt: '2016-12-31' }],
+        });
+      }
+      if (target.includes('stockTotqySttus') && target.includes('bsns_year=2017') && target.includes('reprt_code=11013')) {
+        return jsonResponse({
+          status: '000', message: '정상',
+          list: [{ rcept_no: '20170515004631', se: '보통주', istc_totqy: '16,076,045', stlm_dt: '2017-03-31' }],
+        });
+      }
+      if (target.includes('irdsSttus') && target.includes('reprt_code=11011')) {
+        return jsonResponse({
+          status: '000', message: '정상',
+          list: [{
+            isu_dcrs_de: '2017.03.02', isu_dcrs_stle: '주식분할',
+            isu_dcrs_stock_knd: '보통주', isu_dcrs_qy: '5,123,955,000',
+            rcept_no: '20180402002261',
+          }],
+        });
+      }
+      return jsonResponse({ status: '013', message: 'no data' });
+    }) as unknown as typeof fetch;
+    const source = createDartFactSource(
+      { baseUrl: 'https://opendart.fss.or.kr', apiKey: 'K' }, LOGGER,
+      { fetchImpl, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER },
+    );
+
+    const result = await source.fetchCorporateActions({
+      symbols: ['078070'], years: [2017], shareYears: [2016, 2017], consolidated: true,
+    });
+
+    expect(result.facts.filter((fact) => fact.field === 'SPLIT_RATIO')).toEqual([]);
+    expect(result.gaps).toContainEqual(expect.objectContaining({
+      symbol: '078070',
+      periodKey: '2017-03-02',
+      reason: expect.stringContaining('분기 발행주식수와 일치하지 않는'),
+      severity: 'BLOCKING',
+    }));
+  });
+
   it('같은 분할 이벤트가 해마다 반복되면 가장 이른 공시 하나만 남는다', async () => {
     const fetchImpl = (async (url: string) => {
       const target = String(url);

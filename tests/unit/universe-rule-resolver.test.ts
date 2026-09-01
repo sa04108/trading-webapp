@@ -1392,7 +1392,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     expect(result.schedule[0]?.members.map((member) => member.symbol)).toEqual(['000002']);
   });
 
-  it('급하락 구간의 자본변동 실제 변경일을 확인할 수 없으면 READY 일정을 만들지 않는다', async () => {
+  it('가격 변동 방향에 맞는 문구로 자본변동 실제 변경일 확인 실패를 알린다', async () => {
     const candle = (symbol: string, offset: number, close: number): Candle => ({
       symbol, market: 'KR', timeframe: '1d', tsMs: PIPELINE_TS - offset * 86_400_000,
       open: close, high: close, low: close, close, volume: 1,
@@ -1413,7 +1413,11 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     await expect(resolver.resolveOrDescribeNeeds(
       pipelineRule([{ criterion: 'DECLINE', direction: 'LOW', limit: 1, lookbackTradingDays: 3 }]),
       period,
-    )).rejects.toThrow(/급하락 유니버스의 자본변동.*정렬할 수 없습니다/);
+    )).rejects.toThrow(/급하락 유니버스의 자본변동.*잘못된 급락률/);
+    await expect(resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'DECLINE', direction: 'HIGH', limit: 1, lookbackTradingDays: 3 }]),
+      period,
+    )).rejects.toThrow(/급상승 유니버스의 자본변동.*잘못된 급등률/);
   });
 
   it('급하락은 effective KST date 다음 날의 자본변동을 분할보정에서 제외한다', async () => {
@@ -1554,7 +1558,11 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     await expect(resolver.resolveOrDescribeNeeds(
       pipelineRule([{ criterion: 'DECLINE', direction: 'LOW', limit: 3, lookbackTradingDays: 3 }]),
       period,
-    )).rejects.toThrow(/보정 비율을 만들 수 없는 연도.*000002/);
+    )).rejects.toThrow(/급하락 유니버스의 자본변동 보정 비율.*000002/);
+    await expect(resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'DECLINE', direction: 'HIGH', limit: 3, lookbackTradingDays: 3 }]),
+      period,
+    )).rejects.toThrow(/급상승 유니버스의 자본변동 보정 비율.*000002/);
   });
 
   it('앞 stage 후보가 아직 미확정이면 자본변동 gap보다 해소 가능한 needs를 먼저 반환한다', async () => {

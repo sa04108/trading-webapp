@@ -761,11 +761,12 @@ export class UniverseRuleResolver {
           const gapAffectedCodes = new Set(relevantGaps.map((gap) => gap.symbol));
           if (gapAffectedCodes.size > 0) {
             if (stageReady && !hasUnresolvedStage) {
+              const directionLabel = stage.direction === 'HIGH' ? '급상승' : '급하락';
               const causes = relevantGaps.map((gap) => (
                 `${gap.symbol}(${gap.periodKey}: ${gap.reason})`
               )).join('; ');
               throw new Error(
-                '급하락 유니버스의 자본변동 보정 비율을 만들 수 없는 연도가 있습니다 — '
+                `${directionLabel} 유니버스의 자본변동 보정 비율을 만들 수 없는 연도가 있습니다 — `
                   + `대상: ${[...gapAffectedCodes].sort().join(', ')}. `
                   + `확인된 원인: ${causes}. `
                   + '해당 종목을 임의로 제외해 순위를 바꾸지 않고 준비를 중단했습니다.',
@@ -818,10 +819,12 @@ export class UniverseRuleResolver {
           if (relevantUnaligned.length > 0) {
             if (stageReady && !hasUnresolvedStage) {
               const symbols = [...new Set(relevantUnaligned.map((action) => action.symbol))].sort();
+              const directionLabel = stage.direction === 'HIGH' ? '급상승' : '급하락';
+              const returnLabel = stage.direction === 'HIGH' ? '급등률' : '급락률';
               throw new Error(
-                `급하락 유니버스의 자본변동 ${relevantUnaligned.length}건을 KRX 상장주식수 변경일과 `
+                `${directionLabel} 유니버스의 자본변동 ${relevantUnaligned.length}건을 KRX 상장주식수 변경일과 `
                   + `정렬할 수 없습니다 — 대상: ${symbols.join(', ')}. `
-                  + '잘못된 급락률로 종목을 선정하지 않도록 준비를 중단했습니다.',
+                  + `잘못된 ${returnLabel}로 종목을 선정하지 않도록 준비를 중단했습니다.`,
               );
             }
             // 앞 stage 또는 이 stage의 데이터가 아직 미해소면 그 needs를 먼저 채운 뒤
