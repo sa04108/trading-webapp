@@ -7,6 +7,37 @@ import { login } from './login';
  * mvp-flow.spec.ts 가 이미 다루므로 여기서는 URL 과 값 보존만 확인한다.
  */
 
+const CLONE_DRAFT_FIXTURE = {
+  request: {
+    strategyId: 'range-breakout',
+    parameters: {
+      lookbackBars: 10,
+      atrPeriod: 5,
+      stopAtrMultiplier: 2,
+      takeProfitAtrMultiplier: 3,
+      riskPerTradePercent: 2,
+    },
+    universeRule: {
+      markets: ['KOSPI'],
+      stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 }],
+      rebalanceInterval: { value: 1, unit: 'MONTH' },
+    },
+    timeframe: '1d',
+    period: { from: '2026-01-05', to: '2026-03-31' },
+    capital: { initialCash: 10_000_000, currency: 'KRW' },
+    execution: {
+      fillTiming: 'NEXT_BAR_OPEN',
+      commissionProfileId: 'kr-equity-default',
+      slippageProfileId: 'fixed-5bps',
+    },
+    risk: { maxPositions: 5 },
+    randomSeed: 42,
+  },
+  warnings: [],
+  blockers: [],
+  reusablePreview: null,
+};
+
 test('위저드 단계마다 URL 이 있고 뒤로가기가 직전 단계로 돌아간다', async ({ page }) => {
   await login(page);
 
@@ -325,6 +356,22 @@ test('모르는 단계 slug 는 첫 단계로 접힌다', async ({ page }) => {
 
 test('복제 진입의 ?from= 은 단계를 옮겨도 남는다', async ({ page }) => {
   await login(page);
+
+  // 단계 URL은 이미 시작한 세션이므로 slug 없는 진입의 원본 검증·초안 정리를 거치지
+  // 않는다. 없는 id를 쓰는 이유는 단계 이동 자체의 query 보존만 격리하기 위해서다.
+  await page.goto('/backtests/new/strategy?from=bt_nonexistent');
+  await expect(page).toHaveURL(/\/backtests\/new\/strategy\?from=bt_nonexistent$/);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+
+  // **단계 이동**도 쿼리를 지켜야 한다 — goToSlug 가
+  // location.search 를 다시 붙이지 않으면 '다음' 을 누른 순간 복제 맥락이 사라진다.
+  await page.getByRole('button', { name: /전고점 돌파/ }).click();
+  await page.getByRole('button', { name: '다음' }).click();
+  await expect(page).toHaveURL(/\/backtests\/new\/period\?from=bt_nonexistent$/);
+});
+
+test('존재하지 않는 복제 원본은 이전 위저드 작업을 지우지 않는다', async ({ page }) => {
+  await login(page);
   const saved = await page.evaluate(async () => {
     const response = await fetch('/api/v1/backtests/wizard-draft/strategy', {
       method: 'PUT',
@@ -339,23 +386,66 @@ test('복제 진입의 ?from= 은 단계를 옮겨도 남는다', async ({ page 
   });
   expect(saved).toBe(200);
 
-  // 없는 작업 id 로도 확인할 수 있다 — 초안 조회는 실패하고 위저드가 빈 폼을 보여주지만,
-  // 확인 대상은 리다이렉트가 쿼리를 잃지 않는지다.
   await page.goto('/backtests/new?from=bt_nonexistent');
-  await expect(page).toHaveURL(/\/backtests\/new\/strategy\?from=bt_nonexistent$/);
+  await expect(page.getByRole('alert')).toContainText('재설정 및 복제를 시작하지 못했습니다');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+
+  const candidate = await page.evaluate(async () => {
+    const response = await fetch('/api/v1/backtests/wizard-draft');
+    return response.json() as Promise<{
+      candidate: { sourceJobId: string | null; currentStep: string } | null;
+    }>;
+  });
+  expect(candidate.candidate).toMatchObject({
+    sourceJobId: null,
+    currentStep: 'period',
+  });
+});
+
+test('유효한 재설정 및 복제는 확인 팝업 없이 이전 작업을 버리고 새 맥락을 만든다', async ({
+  page,
+}) => {
+  await login(page);
+  await page.route('**/api/v1/backtests/bt_clone_fixture/clone-draft', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(CLONE_DRAFT_FIXTURE),
+    });
+  });
+  const saved = await page.evaluate(async () => {
+    const response = await fetch('/api/v1/backtests/wizard-draft/strategy', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        strategyId: 'range-breakout',
+        parameters: { lookbackBars: '17' },
+        currentStep: 'period',
+      }),
+    });
+    return response.status;
+  });
+  expect(saved).toBe(200);
+
+  await page.goto('/backtests/new?from=bt_clone_fixture');
+  await expect(page.getByRole('heading', { name: '재설정 및 복제' })).toBeVisible();
+  await expect(page).toHaveURL(/\/backtests\/new\/period\?from=bt_clone_fixture$/);
   await expect(page.getByRole('dialog')).toHaveCount(0);
 
   const previousDraft = await page.evaluate(async () => {
-    const response = await fetch('/api/v1/backtests/wizard-draft');
-    return response.json() as Promise<{ candidate: unknown }>;
+    const response = await fetch('/api/v1/backtests/wizard-draft/strategy');
+    return response.json() as Promise<{ draft: unknown }>;
   });
-  expect(previousDraft).toEqual({ candidate: null });
+  expect(previousDraft).toEqual({ draft: null });
 
-  // 진입 리다이렉트만이 아니라 **단계 이동**도 쿼리를 지켜야 한다 — goToSlug 가
-  // location.search 를 다시 붙이지 않으면 '다음' 을 누른 순간 복제 맥락이 사라진다.
-  await page.getByRole('button', { name: /전고점 돌파/ }).click();
-  await page.getByRole('button', { name: '다음' }).click();
-  await expect(page).toHaveURL(/\/backtests\/new\/period\?from=bt_nonexistent$/);
+  await expect.poll(async () => page.evaluate(async () => {
+    const response = await fetch(
+      '/api/v1/backtests/wizard-draft/strategy?sourceJobId=bt_clone_fixture',
+    );
+    const body = await response.json() as {
+      draft: { payload: { currentStep?: string } } | null;
+    };
+    return body.draft?.payload.currentStep ?? null;
+  })).toBe('period');
 });
 
 test('재설정 및 복제의 전략 단계는 종목과 비용 프로필을 미리 조회하지 않는다', async ({
@@ -366,35 +456,7 @@ test('재설정 및 복제의 전략 단계는 종목과 비용 프로필을 미
   await page.route('**/api/v1/backtests/bt_clone_fixture/clone-draft', async (route) => {
     await route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({
-        request: {
-          strategyId: 'range-breakout',
-          parameters: {
-            lookbackBars: 10,
-            atrPeriod: 5,
-            stopAtrMultiplier: 2,
-            takeProfitAtrMultiplier: 3,
-            riskPerTradePercent: 2,
-          },
-          universeRule: {
-            markets: ['KOSPI'],
-            stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 }],
-            rebalanceInterval: { value: 1, unit: 'MONTH' },
-          },
-          timeframe: '1d',
-          period: { from: '2026-01-05', to: '2026-03-31' },
-          capital: { initialCash: 10_000_000, currency: 'KRW' },
-          execution: {
-            fillTiming: 'NEXT_BAR_OPEN',
-            commissionProfileId: 'kr-equity-default',
-            slippageProfileId: 'fixed-5bps',
-          },
-          risk: { maxPositions: 5 },
-          randomSeed: 42,
-        },
-        warnings: [],
-        blockers: [],
-      }),
+      body: JSON.stringify(CLONE_DRAFT_FIXTURE),
     });
   });
 

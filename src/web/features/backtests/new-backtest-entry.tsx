@@ -12,7 +12,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ApiError } from '@/lib/api-client';
+import { api, ApiError } from '@/lib/api-client';
 import {
   clearAllBacktestWizardDrafts,
   loadBacktestWizardResumeCandidate,
@@ -42,7 +42,7 @@ export function NewBacktestEntry() {
   const queryClient = useQueryClient();
   const rawSourceJobId = new URLSearchParams(search).get('from');
   const sourceJobId = rawSourceJobId === null || rawSourceJobId === '' ? null : rawSourceJobId;
-  const resetStarted = useRef(false);
+  const resetStartedFor = useRef<string | null>(null);
 
   const candidateQuery = useQuery({
     queryKey: ['backtests', 'wizard-resume-candidate'],
@@ -52,7 +52,19 @@ export function NewBacktestEntry() {
   });
 
   const resetDrafts = useMutation({
-    mutationFn: clearAllBacktestWizardDrafts,
+    mutationFn: async () => {
+      // 임의의 `?from=` 주소만으로 보존 중인 초안을 지우지 않는다. 실제로 접근 가능한
+      // 복제 원본인지 먼저 확인하고, 성공한 결과 화면의 재설정·복제 진입만 명시적
+      // 새 시작으로 인정한다. 같은 key 를 써서 다음 화면의 조회도 이 결과를 재사용한다.
+      if (sourceJobId !== null) {
+        await queryClient.fetchQuery({
+          queryKey: ['backtests', sourceJobId, 'clone-draft'],
+          queryFn: () =>
+            api<unknown>(`/backtests/${encodeURIComponent(sourceJobId)}/clone-draft`),
+        });
+      }
+      await clearAllBacktestWizardDrafts();
+    },
     onSuccess: () => {
       queryClient.removeQueries({ queryKey: ['backtests', 'wizard-draft'] });
       queryClient.removeQueries({ queryKey: ['backtests', 'wizard-resume-candidate'] });
@@ -67,8 +79,12 @@ export function NewBacktestEntry() {
 
   // 결과의 재설정·복제 버튼은 기존 작업을 버리고 이 원본으로 새로 시작한다는 명시적 의도다.
   useEffect(() => {
-    if (sourceJobId === null || resetStarted.current) return;
-    resetStarted.current = true;
+    if (sourceJobId === null) {
+      resetStartedFor.current = null;
+      return;
+    }
+    if (resetStartedFor.current === sourceJobId) return;
+    resetStartedFor.current = sourceJobId;
     resetDrafts.mutate();
   }, [sourceJobId, resetDrafts]);
 
@@ -78,7 +94,7 @@ export function NewBacktestEntry() {
         <Alert variant="destructive" role="alert">
           <AlertDescription className="space-y-3">
             <p>
-              기존 위저드 작업을 정리하지 못했습니다 —
+              재설정 및 복제를 시작하지 못했습니다. 기존 위저드 작업을 확인한 뒤 다시 시도하세요 —
               {' '}
               {resetDrafts.error instanceof ApiError
                 ? resetDrafts.error.message
