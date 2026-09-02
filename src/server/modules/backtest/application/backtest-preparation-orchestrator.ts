@@ -290,14 +290,27 @@ export class BacktestPreparationOrchestrator {
       .find((row) => row.status === 'COMPLETED' && row.previewJson !== null);
     if (!completed) return null;
 
+    // protocol 변경이나 사후 손상으로 이미 재사용할 수 없는 preview라면, 모든
+    // 리밸런싱 날짜의 현재 유니버스를 다시 계산할 이유가 없다. 저장된 union만으로
+    // coverage를 먼저 탈락시키고, 통과한 preview에만 비싼 schedule stale 검증을 한다.
+    // action을 먼저 보는 것은 parser protocol 변경처럼 값싼 version 판정만으로
+    // 즉시 탈락할 수 있는 경로에서 재무 fact manifest 재해시까지 하지 않기 위해서다.
+    const storedPreview = this.getPreview(completed.id);
+    if (
+      !storedPreview
+      || this.corporateActionCoverageFailure(input, strategy, storedPreview.unionSymbols) !== null
+      || this.financialCoverageGap(input, strategy, storedPreview.unionSymbols) !== null
+    ) {
+      return null;
+    }
+
     const attempt = await this.deps.resolver.resolveOrDescribeNeeds(input.universeRule, input.period);
     if (attempt.kind !== 'READY' || isEmptySchedule(attempt.schedule)) return null;
-    const storedPreview = this.getPreview(completed.id);
     const currentPreview = this.buildPreview(input, attempt);
     // request hash가 같아도 종목 마스터·선정 지표가 갱신되면 최종 멤버십은 달라질
     // 수 있다. 이전 union에만 full facts/actions를 준비했으므로 다른 schedule을 완료
     // 결과처럼 돌려주지 않고 새 durable job을 시작하게 한다.
-    if (!storedPreview || storedPreview.scheduleHash !== currentPreview.scheduleHash) return null;
+    if (storedPreview.scheduleHash !== currentPreview.scheduleHash) return null;
     // 완료 뒤 coverage가 삭제·손상됐으면 cached 200을 계속 돌려 재준비 진입을 막지
     // 않는다. null을 돌려 라우트가 새 durable preparation을 시작하게 한다.
     if (this.financialCoverageGap(input, strategy, currentPreview.unionSymbols) !== null) return null;

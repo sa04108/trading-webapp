@@ -599,8 +599,16 @@ describe('BacktestPreparationOrchestrator 완료 preview coverage 불변식', ()
 
   it('완료 뒤 현재 protocol의 action coverage가 사라지면 ready/cached preview를 재사용하지 않는다', async () => {
     const actionCovered = new Map<string, readonly number[]>([['005930', [2025, 2026]]]);
+    let resolveCalls = 0;
     const ctx = makeDeps({
       strategies: new StrategyRegistry(),
+      resolver: {
+        resolveOrDescribeNeeds: async () => {
+          resolveCalls += 1;
+          return ready();
+        },
+        isPeriodCovered: () => true,
+      },
       actionCoverage: {
         getCoveredYears: (symbols: readonly string[]) => new Map<string, readonly number[]>(
           symbols.map((symbol) => [symbol, actionCovered.get(symbol) ?? []]),
@@ -623,7 +631,9 @@ describe('BacktestPreparationOrchestrator 완료 preview coverage 불변식', ()
     expect(orchestrator.getCachedPreview(valueInput)).not.toBeNull();
 
     actionCovered.set('005930', [2026]);
+    const callsBeforeInvalidatedRead = resolveCalls;
     expect(await orchestrator.getReadyPreview(valueInput)).toBeNull();
+    expect(resolveCalls).toBe(callsBeforeInvalidatedRead);
     expect(orchestrator.getCachedPreview(valueInput)).toBeNull();
 
     await orchestrator.stop();
