@@ -40,6 +40,7 @@ import { StrategyRegistry } from '../modules/strategy/application/strategy-regis
 import { strategyRequiresFinancialData } from '../modules/strategy/domain/strategy.js';
 import { JobOrchestrator, type JobEvent } from '../modules/backtest/application/job-orchestrator.js';
 import { JobQueue } from '../modules/backtest/application/job-queue.js';
+import { BacktestWizardDraftService } from '../modules/backtest/application/backtest-wizard-draft-service.js';
 import { ResultsService } from '../modules/backtest/application/results-service.js';
 import {
   createSeedCloneBatchJobListener,
@@ -112,6 +113,7 @@ export interface Container {
   readonly symbolService: SymbolService;
   readonly symbolInfoService: SymbolInfoService;
   readonly strategyRegistry: StrategyRegistry;
+  readonly backtestWizardDraftService: BacktestWizardDraftService;
   readonly jobQueue: JobQueue;
   readonly jobOrchestrator: JobOrchestrator;
   readonly remoteWorkerService: RemoteWorkerService;
@@ -364,6 +366,7 @@ export function createContainer(config: AppConfig): Container {
     externalApiUsage,
   });
   const resultsService = new ResultsService(database.db);
+  const backtestWizardDraftService = new BacktestWizardDraftService(database.db, clock);
 
   const jobQueue = new JobQueue(database, clock);
   const jobOrchestrator = new JobOrchestrator(jobQueue, config, logger, auditLog, clock);
@@ -528,6 +531,7 @@ export function createContainer(config: AppConfig): Container {
     symbolService,
     symbolInfoService,
     strategyRegistry,
+    backtestWizardDraftService,
     jobQueue,
     jobOrchestrator,
     remoteWorkerService,

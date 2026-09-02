@@ -33,6 +33,95 @@ test('위저드 단계마다 URL 이 있고 뒤로가기가 직전 단계로 돌
   await page.goForward();
   await expect(page).toHaveURL(/\/backtests\/new\/period$/);
 });
+test('새로고침 뒤에도 현재 단계와 단계별 입력·미리보기를 복원한다', async ({ page }) => {
+  await login(page);
+
+  await page.route('**/api/v1/benchmarks?**', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        benchmarkId: 'KOSPI',
+        points: [
+          { date: '2026-01-05', close: 2_500 },
+          { date: '2026-03-31', close: 2_600 },
+        ],
+        covered: true,
+        backfill: {
+          benchmarkId: null,
+          state: 'IDLE',
+          cursorDate: null,
+          from: null,
+          to: null,
+          error: null,
+        },
+      }),
+    });
+  });
+  await page.route('**/api/v1/backtests/universe-preview', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        schedule: [{
+          rebalanceDate: '2026-01-05',
+          effectiveDate: '2026-01-05',
+          members: [{ symbol: '005930' }],
+        }],
+        unionSymbols: ['005930'],
+        fundamentalSymbols: [],
+        scheduleHash: 'a'.repeat(64),
+        uncoveredDates: [],
+        periodCovered: true,
+        missingCandleSymbols: [],
+        warnings: [],
+      }),
+    });
+  });
+
+  await page.goto('/backtests/new');
+  await page.getByRole('button', { name: /전고점 돌파/ }).click();
+  await page.getByLabel('돌파 기준 봉 수', { exact: true }).fill('17');
+  await page.getByRole('button', { name: '다음' }).click();
+  await page.getByLabel('시작일').fill('2026-01-05');
+  await page.getByLabel('종료일').fill('2026-03-31');
+  await page.getByRole('button', { name: '다음' }).click();
+  await expect(page).toHaveURL(/\/backtests\/new\/universe$/);
+  await page.getByRole('button', { name: '미리보기' }).click();
+  await expect(page.getByText('리밸런스 일정')).toBeVisible();
+  await page.getByRole('button', { name: '다음' }).click();
+  await expect(page).toHaveURL(/\/backtests\/new\/capital$/);
+
+  await page.getByLabel('초기 자본 (KRW)').fill('12345678');
+  await page.getByLabel('동시 보유 종목 상한').fill('7');
+  await page.getByLabel('난수 시드').fill('99');
+
+  // 디바운스 저장 완료를 서버 응답으로 확인한 뒤 새 문서 탐색을 재현한다.
+  await expect.poll(async () => page.evaluate(async () => {
+    const response = await fetch('/api/v1/backtests/wizard-draft/capital');
+    const body = await response.json() as { draft: { payload: { initialCash: string } } | null };
+    return body.draft?.payload.initialCash ?? null;
+  })).toBe('12345678');
+  await expect.poll(async () => page.evaluate(async () => {
+    const response = await fetch('/api/v1/backtests/wizard-draft/universe');
+    const body = await response.json() as { draft: { payload: { lastPreview: unknown } } | null };
+    return body.draft?.payload.lastPreview !== null;
+  })).toBe(true);
+
+  await page.reload();
+  await expect(page).toHaveURL(/\/backtests\/new\/capital$/);
+  await expect(page.getByLabel('초기 자본 (KRW)')).toHaveValue('12345678');
+  await expect(page.getByLabel('동시 보유 종목 상한')).toHaveValue('7');
+  await expect(page.getByLabel('난수 시드')).toHaveValue('99');
+
+  await page.getByRole('button', { name: '이전' }).click();
+  await expect(page).toHaveURL(/\/backtests\/new\/universe$/);
+  await expect(page.getByText('리밸런스 일정')).toBeVisible();
+  await page.getByRole('button', { name: '이전' }).click();
+  await expect(page.getByLabel('시작일')).toHaveValue('2026-01-05');
+  await expect(page.getByLabel('종료일')).toHaveValue('2026-03-31');
+  await page.getByRole('button', { name: '이전' }).click();
+  await expect(page.getByLabel('돌파 기준 봉 수', { exact: true })).toHaveValue('17');
+});
+
 
 test('기간의 벤치마크가 부족하면 동기화 완료 전까지 유니버스 단계를 열지 않는다', async ({
   page,
