@@ -10,6 +10,12 @@ import type { BacktestWizardDraftService } from '../application/backtest-wizard-
 type PreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
 const stepParamsSchema = z.object({ step: backtestWizardDraftStepSchema });
+const clearQuerySchema = backtestWizardDraftContextSchema.extend({
+  all: z.literal('true').optional(),
+}).refine(
+  ({ all, sourceJobId }) => all === undefined || sourceJobId === undefined,
+  { message: 'all과 sourceJobId는 함께 사용할 수 없습니다.' },
+);
 
 function validationError(error: z.ZodError): string {
   return error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ');
@@ -20,6 +26,14 @@ export function registerBacktestWizardDraftRoutes(
   drafts: BacktestWizardDraftService,
   requireAuth: PreHandler,
 ): void {
+  app.get(
+    '/backtests/wizard-draft',
+    { preHandler: requireAuth },
+    async (request) => ({
+      candidate: drafts.getResumeCandidate(request.authUser!.id),
+    }),
+  );
+
   app.get(
     '/backtests/wizard-draft/:step',
     { preHandler: requireAuth },
@@ -73,11 +87,12 @@ export function registerBacktestWizardDraftRoutes(
     '/backtests/wizard-draft',
     { preHandler: requireAuth },
     async (request, reply) => {
-      const query = backtestWizardDraftContextSchema.safeParse(request.query);
+      const query = clearQuerySchema.safeParse(request.query);
       if (!query.success) {
         return reply.code(400).send({ error: validationError(query.error) });
       }
-      drafts.remove(request.authUser!.id, query.data.sourceJobId);
+      if (query.data.all === 'true') drafts.removeAll(request.authUser!.id);
+      else drafts.remove(request.authUser!.id, query.data.sourceJobId);
       return reply.code(204).send();
     },
   );

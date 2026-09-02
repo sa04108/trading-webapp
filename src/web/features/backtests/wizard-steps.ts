@@ -16,6 +16,10 @@
  * prefill.ts 와 같은 이유다 — tests/unit 이 이 모듈을 NodeNext 프로그램에 편입한다.
  */
 import type { WizardFormState } from './prefill.js';
+import {
+  BACKTEST_WIZARD_PAGE_STEPS,
+  type BacktestWizardPageStep,
+} from '../../../shared/schemas/backtest-wizard-draft.js';
 
 /**
  * '기간' 이 '유니버스' 보다 앞이다(리뷰 fix — 원래 유니버스가 먼저였다).
@@ -30,16 +34,9 @@ export const WIZARD_STEPS = ['전략', '기간', '유니버스', '자본·비용
  * 언제든 바뀌고, 바뀌면 공유된 옛 링크가 죽는다. 순서는 `WIZARD_STEPS` 와 같고, 두
  * 배열의 길이가 같은지는 단위 테스트가 지킨다.
  */
-export const WIZARD_STEP_SLUGS = [
-  'strategy',
-  'period',
-  'universe',
-  'capital',
-  'review',
-  'run',
-] as const;
+export const WIZARD_STEP_SLUGS = BACKTEST_WIZARD_PAGE_STEPS;
 
-export type WizardStepSlug = (typeof WIZARD_STEP_SLUGS)[number];
+export type WizardStepSlug = BacktestWizardPageStep;
 
 /** 범위 밖 인덱스는 첫 단계로 접는다 — 호출부가 따로 실패를 다루지 않게 한다 */
 export function stepSlug(index: number): WizardStepSlug {

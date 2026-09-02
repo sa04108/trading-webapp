@@ -33,6 +33,47 @@ test('위저드 단계마다 URL 이 있고 뒤로가기가 직전 단계로 돌
   await page.goForward();
   await expect(page).toHaveURL(/\/backtests\/new\/period$/);
 });
+test('다른 페이지로 나간 위저드는 신규 진입에서 동의를 받은 뒤 마지막 단계로 복원한다', async ({
+  page,
+}) => {
+  await login(page);
+
+  await page.goto('/backtests/new');
+  await page.getByRole('button', { name: /전고점 돌파/ }).click();
+  await page.getByRole('button', { name: '다음' }).click();
+  await page.getByLabel('시작일').fill('2026-01-05');
+  await page.getByLabel('종료일').fill('2026-03-31');
+
+  await expect.poll(async () => page.evaluate(async () => {
+    const response = await fetch('/api/v1/backtests/wizard-draft/strategy');
+    const body = await response.json() as {
+      draft: { payload: { currentStep?: string } } | null;
+    };
+    return body.draft?.payload.currentStep ?? null;
+  })).toBe('period');
+
+  await page.getByRole('link', { name: '대시보드' }).click();
+  await page.getByRole('link', { name: '빠른 백테스트' }).click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '이전에 준비하던 백테스트가 있습니다' }))
+    .toBeVisible();
+
+  await page.getByRole('button', { name: '이전 작업 이어서 하기' }).click();
+  await expect(page).toHaveURL(/\/backtests\/new\/period$/);
+  await expect(page.getByLabel('시작일')).toHaveValue('2026-01-05');
+  await expect(page.getByLabel('종료일')).toHaveValue('2026-03-31');
+
+  await page.getByRole('link', { name: '대시보드' }).click();
+  await page.getByRole('link', { name: '빠른 백테스트' }).click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await page.getByRole('button', { name: '새로 시작' }).click();
+  await expect(page).toHaveURL(/\/backtests\/new\/strategy$/);
+  await expect(page.getByRole('button', { name: /전고점 돌파/ })).toHaveAttribute(
+    'aria-pressed',
+    'false',
+  );
+});
+
 test('새로고침 뒤에도 현재 단계와 단계별 입력·미리보기를 복원한다', async ({ page }) => {
   await login(page);
 
@@ -284,10 +325,31 @@ test('모르는 단계 slug 는 첫 단계로 접힌다', async ({ page }) => {
 
 test('복제 진입의 ?from= 은 단계를 옮겨도 남는다', async ({ page }) => {
   await login(page);
+  const saved = await page.evaluate(async () => {
+    const response = await fetch('/api/v1/backtests/wizard-draft/strategy', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        strategyId: 'range-breakout',
+        parameters: { lookbackBars: '17' },
+        currentStep: 'period',
+      }),
+    });
+    return response.status;
+  });
+  expect(saved).toBe(200);
+
   // 없는 작업 id 로도 확인할 수 있다 — 초안 조회는 실패하고 위저드가 빈 폼을 보여주지만,
   // 확인 대상은 리다이렉트가 쿼리를 잃지 않는지다.
   await page.goto('/backtests/new?from=bt_nonexistent');
   await expect(page).toHaveURL(/\/backtests\/new\/strategy\?from=bt_nonexistent$/);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+
+  const previousDraft = await page.evaluate(async () => {
+    const response = await fetch('/api/v1/backtests/wizard-draft');
+    return response.json() as Promise<{ candidate: unknown }>;
+  });
+  expect(previousDraft).toEqual({ candidate: null });
 
   // 진입 리다이렉트만이 아니라 **단계 이동**도 쿼리를 지켜야 한다 — goToSlug 가
   // location.search 를 다시 붙이지 않으면 '다음' 을 누른 순간 복제 맥락이 사라진다.

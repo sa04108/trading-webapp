@@ -18,9 +18,9 @@ export async function login(page: Page): Promise<void> {
   await page.getByRole('button', { name: '로그인' }).click();
   await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
   // 실제 제품에서는 새 작성 초안을 로그인 뒤에도 보존한다. E2E는 같은 운영자와 서버를
-  // 모든 스펙이 공유하므로 테스트 시작마다 신규 작성 문맥만 지워 서로의 입력을 격리한다.
+  // 모든 스펙이 공유하므로 테스트 시작마다 모든 작성 문맥을 지워 서로의 입력을 격리한다.
   const cleared = await page.evaluate(async () => {
-    const response = await fetch('/api/v1/backtests/wizard-draft', { method: 'DELETE' });
+    const response = await fetch('/api/v1/backtests/wizard-draft?all=true', { method: 'DELETE' });
     return response.status;
   });
   if (cleared !== 204) {

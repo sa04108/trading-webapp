@@ -1,23 +1,164 @@
-import { Navigate, useLocation } from 'react-router';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useRef } from 'react';
+import { Navigate, useLocation, useNavigate } from 'react-router';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Skeleton } from '@/components/ui/skeleton';
+import { ApiError } from '@/lib/api-client';
+import {
+  clearAllBacktestWizardDrafts,
+  loadBacktestWizardResumeCandidate,
+  type BacktestWizardResumeCandidate,
+} from './wizard-draft-api';
 import { stepSlug } from './wizard-steps';
 
 /**
- * slug 없는 `/backtests/new` 진입을 첫 단계로 잇는다 — 북마크와 알림 링크가 끊기지
- * 않게 한다.
- *
- * `replace` 인 이유: push 로 하면 뒤로가기가 이 리다이렉트 원점으로 돌아와 곧바로 다시
- * 튕기는 루프가 된다.
- *
- * `search` 를 그대로 넘기는 이유: `?from=<jobId>` 복제 맥락이 여기서 사라지면 위저드가
- * 원본 설정을 채울 근거를 잃는다.
+ * slug 없는 진입만 작성 의도를 판정한다. 단계 URL은 새로고침·뒤로가기로 돌아오는
+ * 기존 세션이므로 여기서 다시 묻거나 초안을 지우지 않는다.
  */
+export function wizardResumeTarget(candidate: BacktestWizardResumeCandidate): {
+  pathname: string;
+  search: string;
+} {
+  return {
+    pathname: `/backtests/new/${candidate.currentStep}`,
+    search: candidate.sourceJobId === null
+      ? ''
+      : `?${new URLSearchParams({ from: candidate.sourceJobId })}`,
+  };
+}
+
 export function NewBacktestEntry() {
   const { search } = useLocation();
-  const sourceJobId = new URLSearchParams(search).get('from');
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const rawSourceJobId = new URLSearchParams(search).get('from');
+  const sourceJobId = rawSourceJobId === null || rawSourceJobId === '' ? null : rawSourceJobId;
+  const resetStarted = useRef(false);
+
+  const candidateQuery = useQuery({
+    queryKey: ['backtests', 'wizard-resume-candidate'],
+    queryFn: loadBacktestWizardResumeCandidate,
+    enabled: sourceJobId === null,
+    refetchOnMount: 'always',
+  });
+
+  const resetDrafts = useMutation({
+    mutationFn: clearAllBacktestWizardDrafts,
+    onSuccess: () => {
+      queryClient.removeQueries({ queryKey: ['backtests', 'wizard-draft'] });
+      queryClient.removeQueries({ queryKey: ['backtests', 'wizard-resume-candidate'] });
+      void navigate(
+        sourceJobId === null
+          ? { pathname: `/backtests/new/${stepSlug(0)}` }
+          : { pathname: `/backtests/new/${stepSlug(4)}`, search },
+        { replace: true },
+      );
+    },
+  });
+
+  // 결과의 재설정·복제 버튼은 기존 작업을 버리고 이 원본으로 새로 시작한다는 명시적 의도다.
+  useEffect(() => {
+    if (sourceJobId === null || resetStarted.current) return;
+    resetStarted.current = true;
+    resetDrafts.mutate();
+  }, [sourceJobId, resetDrafts]);
+
+  if (sourceJobId !== null) {
+    if (resetDrafts.isError) {
+      return (
+        <Alert variant="destructive" role="alert">
+          <AlertDescription className="space-y-3">
+            <p>
+              기존 위저드 작업을 정리하지 못했습니다 —
+              {' '}
+              {resetDrafts.error instanceof ApiError
+                ? resetDrafts.error.message
+                : '잠시 후 다시 시도하세요.'}
+            </p>
+            <Button variant="outline" onClick={() => resetDrafts.mutate()}>
+              다시 시도
+            </Button>
+          </AlertDescription>
+        </Alert>
+      );
+    }
+    return <Skeleton className="mx-auto h-64 w-full max-w-2xl" />;
+  }
+
+  if (candidateQuery.isPending || candidateQuery.isFetching) {
+    return <Skeleton className="mx-auto h-64 w-full max-w-2xl" />;
+  }
+  if (candidateQuery.isError) {
+    return (
+      <Alert variant="destructive" role="alert">
+        <AlertDescription className="space-y-3">
+          <p>이전에 작성하던 백테스트가 있는지 확인하지 못했습니다.</p>
+          <Button variant="outline" onClick={() => void candidateQuery.refetch()}>
+            다시 시도
+          </Button>
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
+  const candidate = candidateQuery.data;
+  if (candidate === null) {
+    return <Navigate to={`/backtests/new/${stepSlug(0)}`} replace />;
+  }
+
   return (
-    <Navigate
-      to={{ pathname: `/backtests/new/${stepSlug(sourceJobId ? 4 : 0)}`, search }}
-      replace
-    />
+    <Dialog open onOpenChange={() => undefined}>
+      <DialogContent
+        showCloseButton={false}
+        onEscapeKeyDown={(event) => event.preventDefault()}
+        onPointerDownOutside={(event) => event.preventDefault()}
+      >
+        <DialogHeader>
+          <DialogTitle>이전에 준비하던 백테스트가 있습니다</DialogTitle>
+          <DialogDescription>
+            {candidate.sourceJobId === null
+              ? '저장된 설정과 마지막 단계에서 계속할 수 있습니다.'
+              : '재설정 및 복제 중이던 설정과 마지막 단계에서 계속할 수 있습니다.'}
+          </DialogDescription>
+        </DialogHeader>
+        {resetDrafts.isError ? (
+          <Alert variant="destructive" role="alert">
+            <AlertDescription>
+              저장된 작업을 정리하지 못했습니다. 다시 시도하세요.
+            </AlertDescription>
+          </Alert>
+        ) : null}
+        <DialogFooter>
+          <Button
+            variant="outline"
+            disabled={resetDrafts.isPending}
+            onClick={() => resetDrafts.mutate()}
+          >
+            새로 시작
+          </Button>
+          <Button
+            disabled={resetDrafts.isPending}
+            onClick={() => {
+              queryClient.removeQueries({
+                queryKey: ['backtests', 'wizard-draft', candidate.sourceJobId],
+                exact: true,
+              });
+              void navigate(wizardResumeTarget(candidate), { replace: true });
+            }}
+          >
+            이전 작업 이어서 하기
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
