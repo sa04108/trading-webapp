@@ -61,6 +61,11 @@ import {
   WIZARD_STEPS,
   type StepGateState,
 } from './wizard-steps';
+import {
+  clearBacktestWizardDraft,
+  loadBacktestWizardDraft,
+  saveBacktestWizardDraftStep,
+} from './wizard-draft-api';
 
 interface CommissionProfileSummary {
   id: string;
@@ -215,6 +220,16 @@ export function NewBacktestWizard() {
   const [searchParams] = useSearchParams();
   const sourceJobId = searchParams.get('from');
 
+  const wizardDraftContextKey = sourceJobId ?? '__new__';
+  const wizardDraft = useQuery({
+    queryKey: ['backtests', 'wizard-draft', sourceJobId],
+    queryFn: () => loadBacktestWizardDraft(sourceJobId),
+  });
+  const hasStoredWizardDraft = wizardDraft.data !== undefined
+    && Object.keys(wizardDraft.data).length > 0;
+  const [restoredWizardDraftContext, setRestoredWizardDraftContext] = useState<string | null>(null);
+  const [draftSaveError, setDraftSaveError] = useState<string | null>(null);
+
   const draft = useQuery({
     queryKey: ['backtests', sourceJobId, 'clone-draft'],
     queryFn: () =>
@@ -296,6 +311,63 @@ export function NewBacktestWizard() {
   // 스키마 기본값은 입력 상태에 한 번 심는다. 렌더 시점에 빈 값을 기본값으로 되돌리면
   // 필드를 비울 수 없어 (전체 선택 후 삭제 → 즉시 기본값 복귀) 지우고 다시 쓰기가 막힌다.
   const seededFor = useRef<string | null>(null);
+  // 프리필은 원본 작업당 한 번만 — 사용자가 편집을 시작한 뒤 덮어쓰지 않는다.
+  const prefilledFrom = useRef<string | null>(null);
+
+  // 서버 초안 복원은 전략 스키마 기본값 시딩과 복제 프리필보다 먼저 한 번만 적용한다.
+  useEffect(() => {
+    if (!wizardDraft.isSuccess) return;
+    if (restoredWizardDraftContext === wizardDraftContextKey) return;
+    const saved = wizardDraft.data;
+    const savedStrategyId = saved.strategy?.strategyId ?? null;
+    if (savedStrategyId !== null && !strategies.data && !strategies.isError) return;
+
+    if (saved.strategy) {
+      const strategyExists = savedStrategyId === null
+        || strategies.data?.strategies.some((strategy) => strategy.id === savedStrategyId) === true;
+      const restoredStrategyId = strategyExists ? savedStrategyId : null;
+      setStrategyId(restoredStrategyId);
+      setParameters(restoredStrategyId === null ? {} : saved.strategy.parameters);
+      // 복원한 파라미터를 뒤늦게 도착한 스키마 기본값이 덮어쓰지 못하게 한다.
+      seededFor.current = restoredStrategyId;
+    }
+    if (saved.period) {
+      setFrom(saved.period.from);
+      setTo(saved.period.to);
+      setBenchmarkId(saved.period.benchmarkId);
+      setBenchmarkCoverageVerifiedFor(saved.period.benchmarkCoverageVerifiedFor);
+      setBenchmarkSyncRequiredFor(null);
+    }
+    if (saved.universe) {
+      setUniverseRule(saved.universe.universeRule);
+      setLastPreview(saved.universe.lastPreview);
+    }
+    if (saved.capital) {
+      setInitialCash(saved.capital.initialCash);
+      setMaxPositions(saved.capital.maxPositions);
+      setCommissionProfileId(saved.capital.commissionProfileId);
+      setSlippageProfileId(saved.capital.slippageProfileId);
+      setRandomSeed(saved.capital.randomSeed);
+    }
+    if (hasStoredWizardDraft) {
+      // 현재 URL 단계도 초안의 일부다. 실행 URL은 검토를 통과한 세션만 만들 수 있다.
+      const restoredStep = urlStep ?? 0;
+      setTraversed(Math.min(restoredStep, REVIEW_STEP));
+      setReviewPassed(restoredStep === RUN_STEP);
+      if (sourceJobId !== null) prefilledFrom.current = sourceJobId;
+    }
+    setRestoredWizardDraftContext(wizardDraftContextKey);
+  }, [
+    wizardDraft.isSuccess,
+    wizardDraft.data,
+    restoredWizardDraftContext,
+    wizardDraftContextKey,
+    hasStoredWizardDraft,
+    strategies.data,
+    strategies.isError,
+    sourceJobId,
+    urlStep,
+  ]);
   useEffect(() => {
     if (strategyId === null || paramSpecs.length === 0) return;
     if (seededFor.current === strategyId) return;
@@ -310,11 +382,10 @@ export function NewBacktestWizard() {
     );
   }, [strategyId, paramSpecs]);
 
-  // 프리필은 원본 작업당 한 번만 — 사용자가 편집을 시작한 뒤 덮어쓰지 않는다.
-  const prefilledFrom = useRef<string | null>(null);
   const [prefillNotes, setPrefillNotes] = useState<string[]>([]);
   useEffect(() => {
     if (sourceJobId === null || !draft.data) return;
+    if (wizardDraft.isPending || hasStoredWizardDraft) return;
     if (prefilledFrom.current === sourceJobId) return;
     // 카탈로그가 도착해야 사라진 참조를 판정할 수 있다
     if (!strategies.data) return;
@@ -344,7 +415,7 @@ export function NewBacktestWizard() {
     // 기본값 시딩 effect 가 원본 파라미터를 덮어쓰지 못하게 막는다.
     // 사용자가 전략을 직접 바꾸면 toggleStrategy 가 null 로 리셋해 정상 동작한다.
     seededFor.current = state.strategyId;
-  }, [sourceJobId, draft.data, strategies.data]);
+  }, [sourceJobId, draft.data, strategies.data, wizardDraft.isPending, hasStoredWizardDraft]);
 
   // 같은 카드를 다시 누르면 선택 해제 — 접힌 목록을 다시 펼치는 유일한 경로다
   const toggleStrategy = (id: string): void => {
@@ -423,12 +494,21 @@ export function NewBacktestWizard() {
           : '/backtests',
         body,
       ),
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
       toast.success('백테스트가 대기열에 추가되었습니다');
       // 201 이 실어 보낸 경고를 버리지 않는다 — 복제 경로(`backtest-detail-page.tsx`)와 같다.
       // 자본변동 gap 경고가 여기로 온다.
       // 흘리면 "수집했고 분할이 없었다" 와 "gap 이 나서 확인하지 못했다" 가 같아 보인다.
       for (const warning of data.warnings ?? []) toast.warning(warning, { duration: 10_000 });
+      try {
+        await clearBacktestWizardDraft(sourceJobId);
+        queryClient.removeQueries({
+          queryKey: ['backtests', 'wizard-draft', sourceJobId],
+          exact: true,
+        });
+      } catch {
+        toast.warning('완료된 위저드의 자동 저장 내용을 정리하지 못했습니다.');
+      }
       void navigate(`/backtests/${data.job.id}`);
     },
     onError: (error: unknown, variables) => {
@@ -679,11 +759,174 @@ export function NewBacktestWizard() {
     schemaFailed: schema.isError,
   });
 
-  // 프리필 중에는 폼을 감춘다 — 입력하던 값이 프리필에 덮이는 경합을 없앤다
-  const prefilling =
-    sourceJobId !== null &&
-    (prefilledFrom.current !== sourceJobId || cloneSchemaPending) &&
-    !prefillError;
+  // 서버 초안과 전략 스키마가 모두 복원될 때까지 빈 기본값으로 URL을 좁히지 않는다.
+  const draftRestorePending = wizardDraft.isPending
+    || (wizardDraft.isSuccess && restoredWizardDraftContext !== wizardDraftContextKey);
+  const storedDraftSchemaPending = hasStoredWizardDraft
+    && restoredWizardDraftContext === wizardDraftContextKey
+    && strategyId !== null
+    && schema.data === undefined
+    && !schema.isError;
+  const prefilling = draftRestorePending
+    || storedDraftSchemaPending
+    || (
+      sourceJobId !== null
+      && (prefilledFrom.current !== sourceJobId || cloneSchemaPending)
+      && !prefillError
+    );
+  const canAutosave = wizardDraft.isSuccess
+    && restoredWizardDraftContext === wizardDraftContextKey
+    && !prefilling
+    && (
+      sourceJobId === null
+      || hasStoredWizardDraft
+      || prefilledFrom.current === sourceJobId
+    );
+
+  useEffect(() => {
+    if (!canAutosave) return;
+    const timer = window.setTimeout(() => {
+      void saveBacktestWizardDraftStep(sourceJobId, 'strategy', {
+        strategyId,
+        parameters,
+      })
+        .then(() => setDraftSaveError(null))
+        .catch((error: unknown) => setDraftSaveError(
+          error instanceof ApiError ? error.message : '전략 단계 자동 저장에 실패했습니다.',
+        ));
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [canAutosave, sourceJobId, strategyId, parameters]);
+
+  useEffect(() => {
+    if (!canAutosave) return;
+    const timer = window.setTimeout(() => {
+      void saveBacktestWizardDraftStep(sourceJobId, 'period', {
+        from,
+        to,
+        benchmarkId,
+        benchmarkCoverageVerifiedFor,
+      })
+        .then(() => setDraftSaveError(null))
+        .catch((error: unknown) => setDraftSaveError(
+          error instanceof ApiError ? error.message : '기간 단계 자동 저장에 실패했습니다.',
+        ));
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [canAutosave, sourceJobId, from, to, benchmarkId, benchmarkCoverageVerifiedFor]);
+
+  useEffect(() => {
+    if (!canAutosave) return;
+    const timer = window.setTimeout(() => {
+      void saveBacktestWizardDraftStep(sourceJobId, 'universe', {
+        universeRule,
+        lastPreview,
+      })
+        .then(() => setDraftSaveError(null))
+        .catch((error: unknown) => setDraftSaveError(
+          error instanceof ApiError ? error.message : '유니버스 단계 자동 저장에 실패했습니다.',
+        ));
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [canAutosave, sourceJobId, universeRule, lastPreview]);
+
+  useEffect(() => {
+    if (!canAutosave) return;
+    const timer = window.setTimeout(() => {
+      void saveBacktestWizardDraftStep(sourceJobId, 'capital', {
+        initialCash,
+        maxPositions,
+        commissionProfileId,
+        slippageProfileId,
+        randomSeed,
+      })
+        .then(() => setDraftSaveError(null))
+        .catch((error: unknown) => setDraftSaveError(
+          error instanceof ApiError ? error.message : '자본·비용 단계 자동 저장에 실패했습니다.',
+        ));
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [
+    canAutosave,
+    sourceJobId,
+    initialCash,
+    maxPositions,
+    commissionProfileId,
+    slippageProfileId,
+    randomSeed,
+  ]);
+
+  // 디바운스가 끝나기 전에 새로고침해도 현재 화면의 입력은 keepalive 요청으로 내보낸다.
+  useEffect(() => {
+    if (!canAutosave) return;
+    const flushCurrentStep = (): void => {
+      if (step === 0) {
+        void saveBacktestWizardDraftStep(
+          sourceJobId,
+          'strategy',
+          { strategyId, parameters },
+          { keepalive: true },
+        ).catch(() => undefined);
+        return;
+      }
+      if (step === 1) {
+        void saveBacktestWizardDraftStep(
+          sourceJobId,
+          'period',
+          { from, to, benchmarkId, benchmarkCoverageVerifiedFor },
+          { keepalive: true },
+        ).catch(() => undefined);
+        return;
+      }
+      if (step === 2) {
+        // 시장 변경은 유니버스 규칙과 기본 벤치마크를 한 이벤트에서 함께 바꾼다.
+        void saveBacktestWizardDraftStep(
+          sourceJobId,
+          'period',
+          { from, to, benchmarkId, benchmarkCoverageVerifiedFor },
+          { keepalive: true },
+        ).catch(() => undefined);
+        void saveBacktestWizardDraftStep(
+          sourceJobId,
+          'universe',
+          { universeRule, lastPreview },
+          { keepalive: true },
+        ).catch(() => undefined);
+        return;
+      }
+      void saveBacktestWizardDraftStep(
+        sourceJobId,
+        'capital',
+        {
+          initialCash,
+          maxPositions,
+          commissionProfileId,
+          slippageProfileId,
+          randomSeed,
+        },
+        { keepalive: true },
+      ).catch(() => undefined);
+    };
+    window.addEventListener('pagehide', flushCurrentStep);
+    return () => window.removeEventListener('pagehide', flushCurrentStep);
+  }, [
+    canAutosave,
+    step,
+    sourceJobId,
+    strategyId,
+    parameters,
+    from,
+    to,
+    benchmarkId,
+    benchmarkCoverageVerifiedFor,
+    universeRule,
+    lastPreview,
+    initialCash,
+    maxPositions,
+    commissionProfileId,
+    slippageProfileId,
+    randomSeed,
+  ]);
 
   /**
    * URL 표기를 지금 그리고 있는 단계에 맞춘다. 좁히는 판단은 위 `step` 이 이미 했고,
@@ -734,6 +977,20 @@ export function NewBacktestWizard() {
           </AlertDescription>
         </Alert>
       ) : null}
+      {wizardDraft.isError ? (
+        <Alert variant="destructive" role="alert">
+          <AlertDescription>
+            저장된 작성 내용을 불러오지 못했습니다. 이 화면의 변경 내용은 자동 저장되지 않습니다.
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      {draftSaveError !== null ? (
+        <Alert variant="destructive" role="alert">
+          <AlertDescription>작성 내용을 자동 저장하지 못했습니다 — {draftSaveError}</AlertDescription>
+        </Alert>
+      ) : null}
+
 
       {(draft.data?.blockers ?? []).length > 0 ? (
         <Alert variant="destructive">
@@ -990,7 +1247,7 @@ export function NewBacktestWizard() {
             period={{ from, to }}
             strategyId={strategyId}
             parameters={parsedParameters}
-            initialResolved={sourcePreview}
+            initialResolved={lastPreview ?? sourcePreview}
             previewRetryToken={previewRetryToken}
             onPreviewResolved={handlePreviewResolved}
           />

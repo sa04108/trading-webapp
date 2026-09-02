@@ -24,6 +24,7 @@ import {
 import { registerSymbolRoutes } from '../modules/market-data/presentation/symbol-routes.js';
 import { registerStrategyRoutes } from '../modules/strategy/presentation/strategy-routes.js';
 import { registerBacktestRoutes } from '../modules/backtest/presentation/backtest-routes.js';
+import { registerBacktestWizardDraftRoutes } from '../modules/backtest/presentation/backtest-wizard-draft-routes.js';
 import { registerBacktestPreparationRoutes } from '../modules/backtest/presentation/backtest-preparation-routes.js';
 import { registerNotificationRoutes } from '../modules/notification/presentation/notification-routes.js';
 import { registerSymbolMasterRoutes } from '../modules/market-data/presentation/symbol-master-routes.js';
@@ -118,6 +119,11 @@ export async function buildServer(container: Container): Promise<FastifyInstance
         requireAuth,
       );
       registerStrategyRoutes(api, container.strategyRegistry, requireAuth);
+      registerBacktestWizardDraftRoutes(
+        api,
+        container.backtestWizardDraftService,
+        requireAuth,
+      );
       registerBacktestRoutes(
         api,
         {
