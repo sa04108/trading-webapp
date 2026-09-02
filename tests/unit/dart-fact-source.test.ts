@@ -1256,6 +1256,72 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
     stlm_dt: '2020-03-31',
   }];
 
+  it('033290의 자기주식 이익소각은 주가 보정 fact나 blocking gap을 만들지 않는다', async () => {
+    const fetchImpl = (async (url: string) => {
+      const target = String(url);
+      if (target.includes('irdsSttus') && target.includes('reprt_code=11011')) {
+        return jsonResponse({
+          status: '000', message: '정상',
+          list: [
+            {
+              isu_dcrs_de: '2017-01-23', isu_dcrs_stle: '무상감자',
+              isu_dcrs_stock_knd: '보통주', isu_dcrs_qy: '1,000,000',
+              rcept_no: '20180402000670',
+            },
+            {
+              isu_dcrs_de: '2017-05-26', isu_dcrs_stle: '무상감자',
+              isu_dcrs_stock_knd: '보통주', isu_dcrs_qy: '1,064,163',
+              rcept_no: '20180402000670',
+            },
+            {
+              isu_dcrs_de: '2017-12-20', isu_dcrs_stle: '무상감자',
+              isu_dcrs_stock_knd: '보통주', isu_dcrs_qy: '500,000',
+              rcept_no: '20180402000670',
+            },
+          ],
+        });
+      }
+      return jsonResponse({ status: '013', message: 'no data' });
+    }) as unknown as typeof fetch;
+    const source = createDartFactSource(
+      { baseUrl: 'https://opendart.fss.or.kr', apiKey: 'K' }, LOGGER,
+      { fetchImpl, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER },
+    );
+
+    const result = await source.fetchCorporateActions({
+      symbols: ['033290'], years: [2017], shareYears: [2016, 2017], consolidated: true,
+    });
+
+    expect(result).toEqual({ facts: [], gaps: [] });
+  });
+
+  it('068240의 발행형태가 빠진 로윈 합병신주는 blocking gap으로 만들지 않는다', async () => {
+    const fetchImpl = (async (url: string) => {
+      const target = String(url);
+      if (target.includes('irdsSttus') && target.includes('reprt_code=11011')) {
+        return jsonResponse({
+          status: '000', message: '정상',
+          list: [{
+            isu_dcrs_de: '2017.02.13', isu_dcrs_stle: '-',
+            isu_dcrs_stock_knd: '보통주', isu_dcrs_qy: '259,973',
+            rcept_no: '20180515000605',
+          }],
+        });
+      }
+      return jsonResponse({ status: '013', message: 'no data' });
+    }) as unknown as typeof fetch;
+    const source = createDartFactSource(
+      { baseUrl: 'https://opendart.fss.or.kr', apiKey: 'K' }, LOGGER,
+      { fetchImpl, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER },
+    );
+
+    const result = await source.fetchCorporateActions({
+      symbols: ['068240'], years: [2017], shareYears: [2016, 2017], consolidated: true,
+    });
+
+    expect(result).toEqual({ facts: [], gaps: [] });
+  });
+
   it('같은 날짜의 유상증자를 뒤이은 무상증자의 직전 주식수에 먼저 반영한다', async () => {
     const fetchImpl = (async (url: string) => {
       const target = String(url);
