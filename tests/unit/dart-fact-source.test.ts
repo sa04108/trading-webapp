@@ -1265,17 +1265,17 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
           list: [
             {
               isu_dcrs_de: '2017-01-23', isu_dcrs_stle: '무상감자',
-              isu_dcrs_stock_knd: '보통주', isu_dcrs_qy: '1,000,000',
+              isu_dcrs_stock_knd: '보통주', isu_dcrs_qy: '1,000,000,000',
               rcept_no: '20180402000670',
             },
             {
               isu_dcrs_de: '2017-05-26', isu_dcrs_stle: '무상감자',
-              isu_dcrs_stock_knd: '보통주', isu_dcrs_qy: '1,064,163',
+              isu_dcrs_stock_knd: '보통주', isu_dcrs_qy: '1,064,163,000',
               rcept_no: '20180402000670',
             },
             {
               isu_dcrs_de: '2017-12-20', isu_dcrs_stle: '무상감자',
-              isu_dcrs_stock_knd: '보통주', isu_dcrs_qy: '500,000',
+              isu_dcrs_stock_knd: '보통주', isu_dcrs_qy: '500,000,000',
               rcept_no: '20180402000670',
             },
           ],

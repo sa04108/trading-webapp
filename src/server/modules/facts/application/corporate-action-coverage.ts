@@ -3,7 +3,7 @@ import type { AppDatabase } from '../../../shared/db/database.js';
 import { symbolFactsState } from '../../../shared/db/schema.js';
 import { parseYears } from './fact-coverage-store.js';
 
-export const CORPORATE_ACTION_COVERAGE_PROTOCOL_VERSION = 6;
+export const CORPORATE_ACTION_COVERAGE_PROTOCOL_VERSION = 7;
 
 export interface CorporateActionGapDetail {
   readonly year: number;
