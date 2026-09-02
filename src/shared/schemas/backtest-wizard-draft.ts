@@ -44,15 +44,15 @@ const previewResultSchema = z.object({
   schedule: z.array(z.object({
     rebalanceDate: z.string().max(10),
     effectiveDate: z.string().max(10),
-    members: z.array(z.object({ symbol: z.string().min(1).max(32) })).max(200),
-  })).max(20_000),
-  unionSymbols: z.array(z.string().min(1).max(32)).max(200),
-  fundamentalSymbols: z.array(z.string().min(1).max(32)).max(200).optional(),
+    members: z.array(z.object({ symbol: z.string().min(1).max(32) })).max(200).readonly(),
+  })).max(20_000).readonly(),
+  unionSymbols: z.array(z.string().min(1).max(32)).max(200).readonly(),
+  fundamentalSymbols: z.array(z.string().min(1).max(32)).max(200).readonly().optional(),
   scheduleHash: z.string().min(1).max(128),
-  uncoveredDates: z.array(z.string().max(10)).max(20_000),
+  uncoveredDates: z.array(z.string().max(10)).max(20_000).readonly(),
   periodCovered: z.boolean(),
-  missingCandleSymbols: z.array(z.string().min(1).max(32)).max(200),
-  warnings: z.array(z.string().max(2_000)).max(1_000),
+  missingCandleSymbols: z.array(z.string().min(1).max(32)).max(200).readonly(),
+  warnings: z.array(z.string().max(2_000)).max(1_000).readonly(),
 });
 
 export const backtestWizardUniverseDraftSchema = z.object({
