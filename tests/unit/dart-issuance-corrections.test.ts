@@ -53,6 +53,20 @@ describe('applyDartIssuanceCorrections', () => {
     expect(corrected[0]?.isu_dcrs_stle).toBe('합병');
   });
 
+  it('063080의 발행형태 누락 행을 게임빌에버 합병신주로 복구한다', () => {
+    const corrected = applyDartIssuanceCorrections('063080', [row({
+      isu_dcrs_de: '2017.03.07',
+      isu_dcrs_stle: '-',
+      isu_dcrs_qy: '72,816',
+      rcept_no: '20180402000001',
+    })]);
+
+    expect(corrected[0]).toMatchObject({
+      isu_dcrs_stle: '합병',
+      isu_dcrs_qy: '72816',
+    });
+  });
+
   it('종목·날짜·종류·수량·기존 형태 중 하나라도 다르면 교정하지 않는다', () => {
     const source = row({
       isu_dcrs_de: '2017.02.13',
@@ -64,6 +78,11 @@ describe('applyDartIssuanceCorrections', () => {
     expect(applyDartIssuanceCorrections('999999', [{
       ...source,
       isu_dcrs_qy: '259,973',
+    }])[0]?.isu_dcrs_stle).toBe('-');
+    expect(applyDartIssuanceCorrections('063080', [{
+      ...source,
+      isu_dcrs_de: '2017.03.07',
+      isu_dcrs_qy: '72,817',
     }])[0]?.isu_dcrs_stle).toBe('-');
     const unexpectedScale = row({ isu_dcrs_qy: '2,000,000,000' });
     expect(applyDartIssuanceCorrections('033290', [unexpectedScale])[0])

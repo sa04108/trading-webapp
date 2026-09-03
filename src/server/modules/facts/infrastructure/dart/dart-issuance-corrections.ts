@@ -24,6 +24,9 @@ interface DartIssuanceCorrection {
  *   irdsSttus는 실제 주식수보다 1,000배 큰 수량도 반환하므로 검증된 두 값만 실제
  *   발행주식수 단위로 정규화한다.
  * - 068240 2017 기재정정 사업보고서(20180515000605): 로윈 소규모합병 신주 259,973주
+ * - 063080 2017 사업보고서(2018-04-02 최초제출, 2020-03-20 최종 정정):
+ *   게임빌에버 흡수합병 신주 72,816주. 전량 자기주식으로 편입됐으며 행의 날짜는
+ *   합병기일이 아닌 신주상장일이다.
  */
 const CORRECTIONS: readonly DartIssuanceCorrection[] = [
   {
@@ -59,6 +62,15 @@ const CORRECTIONS: readonly DartIssuanceCorrection[] = [
     stockKind: '보통주',
     sourceQuantities: [259_973],
     correctedQuantity: 259_973,
+    sourceStyle: '-',
+    correctedStyle: '합병',
+  },
+  {
+    symbol: '063080',
+    dateKey: '2017-03-07',
+    stockKind: '보통주',
+    sourceQuantities: [72_816],
+    correctedQuantity: 72_816,
     sourceStyle: '-',
     correctedStyle: '합병',
   },

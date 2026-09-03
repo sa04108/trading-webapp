@@ -1322,6 +1322,33 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
     expect(result).toEqual({ facts: [], gaps: [] });
   });
 
+  it('063080의 발행형태가 빠진 게임빌에버 합병신주는 blocking gap으로 만들지 않는다', async () => {
+    const fetchImpl = (async (url: string) => {
+      const target = String(url);
+      if (target.includes('irdsSttus') && target.includes('reprt_code=11011')) {
+        return jsonResponse({
+          status: '000', message: '정상',
+          list: [{
+            isu_dcrs_de: '2017.03.07', isu_dcrs_stle: '-',
+            isu_dcrs_stock_knd: '보통주', isu_dcrs_qy: '72,816',
+            rcept_no: '20180402000001',
+          }],
+        });
+      }
+      return jsonResponse({ status: '013', message: 'no data' });
+    }) as unknown as typeof fetch;
+    const source = createDartFactSource(
+      { baseUrl: 'https://opendart.fss.or.kr', apiKey: 'K' }, LOGGER,
+      { fetchImpl, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER },
+    );
+
+    const result = await source.fetchCorporateActions({
+      symbols: ['063080'], years: [2017], shareYears: [2016, 2017], consolidated: true,
+    });
+
+    expect(result).toEqual({ facts: [], gaps: [] });
+  });
+
   it('같은 날짜의 유상증자를 뒤이은 무상증자의 직전 주식수에 먼저 반영한다', async () => {
     const fetchImpl = (async (url: string) => {
       const target = String(url);
