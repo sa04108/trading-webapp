@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
-// 자격 증명은 한 곳에서만 — 시드 운영자가 바뀔 때 일부 스펙만 고쳐지는 일을 막는다
-import { PASSWORD, USERNAME } from './login';
+// 로그인과 테스트 간 위저드 초안 격리는 한 곳에서 관리한다.
+import { login } from './login';
 import { advanceFromPeriod } from './backtest-wizard';
 
 /**
@@ -135,12 +135,7 @@ test('full MVP flow', async ({ page }) => {
   });
 
   // 1. 로그인 (비밀번호 단일 단계, D-014)
-  await page.goto('/');
-  await expect(page).toHaveURL(/\/login/);
-  await page.getByLabel('사용자 이름').fill(USERNAME);
-  await page.getByLabel('비밀번호').fill(PASSWORD);
-  await page.getByRole('button', { name: '로그인' }).click();
-  await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
+  await login(page);
 
   // 2. 백테스트 생성 (6단계 위저드: 전략 → 기간 → 유니버스 → 자본·비용 → 검토 → 실행,
   // 스펙 2026-08-05 — 데이터셋·스냅샷 선택이 유니버스 규칙으로 바뀌었다)
@@ -399,11 +394,7 @@ test('rebalance schedule shows the applied trading day when a rebalance date fal
   // 가짜 KRX 서버가 정상 거래일로 응답한다.
   const previousTradingDate = `${Number(period.from.slice(0, 4)) - 1}-12-31`;
 
-  await page.goto('/login');
-  await page.getByLabel('사용자 이름').fill(USERNAME);
-  await page.getByLabel('비밀번호').fill(PASSWORD);
-  await page.getByRole('button', { name: '로그인' }).click();
-  await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
+  await login(page);
 
   await page.goto('/backtests/new');
   await page.getByRole('button', { name: /전고점 돌파/ }).click(); // 리밸런스 주기 기본값 1개월
@@ -458,11 +449,7 @@ test('backtest run completes using only KRX daily bars for a delisted stock', as
   // 기본 월간 리밸런스가 기간 안에 들어오도록 한 달 구간을 사용한다.
   const period = { from: '2026-04-01', to: '2026-04-30' };
 
-  await page.goto('/login');
-  await page.getByLabel('사용자 이름').fill(USERNAME);
-  await page.getByLabel('비밀번호').fill(PASSWORD);
-  await page.getByRole('button', { name: '로그인' }).click();
-  await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
+  await login(page);
 
   await page.goto('/backtests/new');
   await page.getByRole('button', { name: /전고점 돌파/ }).click();
@@ -511,11 +498,7 @@ test('backtest run completes using only KRX daily bars for a delisted stock', as
 test('mobile layout has no horizontal scroll on core screens (스펙 §38)', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'mobile', 'mobile 전용 검증');
 
-  await page.goto('/login');
-  await page.getByLabel('사용자 이름').fill(USERNAME);
-  await page.getByLabel('비밀번호').fill(PASSWORD);
-  await page.getByRole('button', { name: '로그인' }).click();
-  await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
+  await login(page);
 
   // /backtests/new/strategy 가 목록에 있는 이유: 단계 버튼 6개를 3열 × 2행으로 깔면서
   // 44px 터치 영역을 지킨다 — 390px 에서 가장 먼저 넘칠 화면이 여기다.

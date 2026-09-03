@@ -2,6 +2,19 @@ import { z } from 'zod';
 import { benchmarkIdSchema } from './benchmark.js';
 import { universeRuleSchema } from './universe-rule.js';
 
+/** 입력 단계뿐 아니라 검토·실행까지 포함한 위저드 페이지 slug. */
+export const BACKTEST_WIZARD_PAGE_STEPS = [
+  'strategy',
+  'period',
+  'universe',
+  'capital',
+  'review',
+  'run',
+] as const;
+
+export const backtestWizardPageStepSchema = z.enum(BACKTEST_WIZARD_PAGE_STEPS);
+export type BacktestWizardPageStep = z.infer<typeof backtestWizardPageStepSchema>;
+
 /**
  * 백테스트 위저드가 서버에 따로 저장하는 입력 단계.
  * 검토·실행은 앞 단계 입력에서 파생되므로 별도 payload를 만들지 않는다.
@@ -22,6 +35,8 @@ const parameterKeySchema = z.string().min(1).max(128);
 export const backtestWizardStrategyDraftSchema = z.object({
   strategyId: z.string().min(1).max(128).nullable(),
   parameters: z.record(parameterKeySchema, formTextSchema),
+  /** 다음 신규 진입에서 사용자가 복원을 수락했을 때 돌아갈 마지막 페이지. */
+  currentStep: backtestWizardPageStepSchema.optional(),
 });
 
 export const backtestWizardPeriodDraftSchema = z.object({

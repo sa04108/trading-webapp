@@ -347,6 +347,7 @@ async function startFakeKrxServer(): Promise<void> {
    * 실제로 이 경로를 탄다 — 그래서 무자료로 안전하게 응답해 실행이 막히지 않게 한다.
    */
   const dartNoData = async () => ({ status: '013', message: '조회된 데이타가 없습니다.' });
+  app.get('/api/list.json', dartNoData);
   app.get('/api/fnlttSinglAcntAll.json', dartNoData);
   app.get('/api/stockTotqySttus.json', dartNoData);
   app.get('/api/irdsSttus.json', dartNoData);

@@ -1,6 +1,7 @@
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import {
   backtestWizardDraftPayloadSchemas,
+  type BacktestWizardPageStep,
   type BacktestWizardDraftPayloadMap,
   type BacktestWizardDraftStep,
 } from '../../../../shared/schemas/backtest-wizard-draft.js';
@@ -11,6 +12,12 @@ import type { Clock } from '../../../shared/clock.js';
 export interface BacktestWizardDraft<S extends BacktestWizardDraftStep = BacktestWizardDraftStep> {
   readonly step: S;
   readonly payload: BacktestWizardDraftPayloadMap[S];
+  readonly updatedAtMs: number;
+}
+
+export interface BacktestWizardResumeCandidate {
+  readonly sourceJobId: string | null;
+  readonly currentStep: BacktestWizardPageStep;
   readonly updatedAtMs: number;
 }
 
@@ -58,6 +65,28 @@ export class BacktestWizardDraftService {
     };
   }
 
+  /** 사용자가 마지막으로 손댄 미완료 위저드 문맥과 돌아갈 페이지를 찾는다. */
+  getResumeCandidate(userId: string): BacktestWizardResumeCandidate | null {
+    const latest = this.db
+      .select({
+        context: backtestWizardDrafts.context,
+        updatedAtMs: backtestWizardDrafts.updatedAtMs,
+      })
+      .from(backtestWizardDrafts)
+      .where(eq(backtestWizardDrafts.userId, userId))
+      .orderBy(desc(backtestWizardDrafts.updatedAtMs))
+      .get();
+    if (!latest) return null;
+
+    const sourceJobId = latest.context === '' ? undefined : latest.context;
+    const strategy = this.get(userId, sourceJobId, 'strategy');
+    return {
+      sourceJobId: sourceJobId ?? null,
+      currentStep: strategy?.payload.currentStep ?? 'strategy',
+      updatedAtMs: latest.updatedAtMs,
+    };
+  }
+
   save<S extends BacktestWizardDraftStep>(
     userId: string,
     sourceJobId: string | undefined,
@@ -94,6 +123,13 @@ export class BacktestWizardDraftService {
         eq(backtestWizardDrafts.userId, userId),
         eq(backtestWizardDrafts.context, contextOf(sourceJobId)),
       ))
+      .run();
+  }
+
+  removeAll(userId: string): void {
+    this.db
+      .delete(backtestWizardDrafts)
+      .where(eq(backtestWizardDrafts.userId, userId))
       .run();
   }
 }

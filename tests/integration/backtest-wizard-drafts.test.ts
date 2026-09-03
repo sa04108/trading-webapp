@@ -27,9 +27,11 @@ describe('backtest wizard draft routes', () => {
 
   it('requires authentication for reading, saving, and clearing drafts', async () => {
     for (const [method, url, payload] of [
+      ['GET', '/api/v1/backtests/wizard-draft', undefined],
       ['GET', '/api/v1/backtests/wizard-draft/strategy', undefined],
       ['PUT', '/api/v1/backtests/wizard-draft/strategy', { strategyId: null, parameters: {} }],
       ['DELETE', '/api/v1/backtests/wizard-draft', undefined],
+      ['DELETE', '/api/v1/backtests/wizard-draft?all=true', undefined],
     ] as const) {
       const response = await ctx.app.inject({
         method,
@@ -124,6 +126,56 @@ describe('backtest wizard draft routes', () => {
     expect(clone.json().draft.payload).toEqual(clonePayload);
   });
 
+  it('returns the latest unfinished context and can clear every context explicitly', async () => {
+    await ctx.app.inject({
+      method: 'PUT',
+      url: '/api/v1/backtests/wizard-draft/strategy',
+      cookies: { qp_session: cookie },
+      payload: { strategyId: 'range-breakout', parameters: {}, currentStep: 'period' },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    await ctx.app.inject({
+      method: 'PUT',
+      url: '/api/v1/backtests/wizard-draft/strategy?sourceJobId=bt_source',
+      cookies: { qp_session: cookie },
+      payload: { strategyId: 'range-breakout', parameters: {}, currentStep: 'review' },
+    });
+
+    const candidate = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/v1/backtests/wizard-draft',
+      cookies: { qp_session: cookie },
+    });
+    expect(candidate.statusCode).toBe(200);
+    expect(candidate.json().candidate).toMatchObject({
+      sourceJobId: 'bt_source',
+      currentStep: 'review',
+      updatedAtMs: expect.any(Number),
+    });
+
+    const removed = await ctx.app.inject({
+      method: 'DELETE',
+      url: '/api/v1/backtests/wizard-draft?all=true',
+      cookies: { qp_session: cookie },
+    });
+    expect(removed.statusCode).toBe(204);
+
+    const emptyCandidate = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/v1/backtests/wizard-draft',
+      cookies: { qp_session: cookie },
+    });
+    expect(emptyCandidate.json()).toEqual({ candidate: null });
+    for (const query of ['', '?sourceJobId=bt_source']) {
+      const response = await ctx.app.inject({
+        method: 'GET',
+        url: `/api/v1/backtests/wizard-draft/strategy${query}`,
+        cookies: { qp_session: cookie },
+      });
+      expect(response.json()).toEqual({ draft: null });
+    }
+  });
+
   it('does not expose another user draft', async () => {
     await ctx.app.inject({
       method: 'PUT',
@@ -142,6 +194,12 @@ describe('backtest wizard draft routes', () => {
       cookies: { qp_session: otherCookie },
     });
     expect(response.json()).toEqual({ draft: null });
+    const candidate = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/v1/backtests/wizard-draft',
+      cookies: { qp_session: otherCookie },
+    });
+    expect(candidate.json()).toEqual({ candidate: null });
   });
 
   it('rejects unknown steps and malformed payloads', async () => {

@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
-// 자격 증명은 한 곳에서만 — mvp-flow.spec.ts 와 같은 관례(그 파일 헤더 참고)
-import { PASSWORD, USERNAME } from './login';
+// 로그인과 테스트 간 위저드 초안 격리는 한 곳에서 관리한다.
+import { login } from './login';
 import { advanceFromPeriod } from './backtest-wizard';
 
 /**
@@ -34,14 +34,6 @@ function pipelinePeriodFor(projectName: string): { from: string; to: string } {
   return projectName === 'mobile'
     ? { from: '2026-06-01', to: '2026-07-05' }
     : { from: '2026-08-01', to: '2026-09-05' };
-}
-
-async function login(page: import('@playwright/test').Page): Promise<void> {
-  await page.goto('/login');
-  await page.getByLabel('사용자 이름').fill(USERNAME);
-  await page.getByLabel('비밀번호').fill(PASSWORD);
-  await page.getByRole('button', { name: '로그인' }).click();
-  await expect(page.getByRole('heading', { name: '대시보드' })).toBeVisible();
 }
 
 test('새 전략 목록에 이익 가속·저PER·고ROE 순위가 있고 기본 보유 종목 수는 40이다', async ({
@@ -273,7 +265,7 @@ test('단계 추가·N 기본 복사·cascade 안내·순서 변경·주기 초�
   await page.getByRole('button', { name: '미리보기' }).click();
   const first = await initialPreview;
   if (first.status() === 202) {
-    await expect(page.getByText('데이터 준비')).toBeVisible();
+    await expect(page.getByText('데이터 준비', { exact: true })).toBeVisible();
     const completed = page.waitForResponse(
       (resp) =>
         resp.url().includes('/backtests/universe-preview') && resp.request().method() === 'POST',
@@ -297,6 +289,6 @@ test('단계 추가·N 기본 복사·cascade 안내·순서 변경·주기 초�
   await page.goto(`/backtests/new?from=${jobId}`);
   await expect(page.getByRole('heading', { name: '재설정 및 복제' })).toBeVisible();
   await page.getByRole('button', { name: '다음' }).click();
-  await page.getByRole('button', { name: '다음' }).click();
+  await expect(page).toHaveURL(new RegExp(`/backtests/new/universe\\?from=${jobId}$`));
   await expect(page.locator('#stage-direction-0')).toHaveValue('LOW');
 });

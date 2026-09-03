@@ -209,6 +209,8 @@ export function NewBacktestWizard() {
    */
   const [previewRetryToken, setPreviewRetryToken] = useState(0);
   const [sourceReuseRejected, setSourceReuseRejected] = useState(false);
+  const suppressDraftFlush = useRef(false);
+  const pageHiding = useRef(false);
 
   const strategies = useStrategies();
   const schema = useQuery({
@@ -495,6 +497,7 @@ export function NewBacktestWizard() {
         body,
       ),
     onSuccess: async (data) => {
+      suppressDraftFlush.current = true;
       toast.success('백테스트가 대기열에 추가되었습니다');
       // 201 이 실어 보낸 경고를 버리지 않는다 — 복제 경로(`backtest-detail-page.tsx`)와 같다.
       // 자본변동 gap 경고가 여기로 온다.
@@ -782,6 +785,26 @@ export function NewBacktestWizard() {
       || hasStoredWizardDraft
       || prefilledFrom.current === sourceJobId
     );
+  const currentDraftSnapshot = {
+    canAutosave,
+    sourceJobId,
+    currentStep: stepSlug(step),
+    strategyId,
+    parameters,
+    from,
+    to,
+    benchmarkId,
+    benchmarkCoverageVerifiedFor,
+    universeRule,
+    lastPreview,
+    initialCash,
+    maxPositions,
+    commissionProfileId,
+    slippageProfileId,
+    randomSeed,
+  };
+  const latestDraftSnapshot = useRef(currentDraftSnapshot);
+  latestDraftSnapshot.current = currentDraftSnapshot;
 
   useEffect(() => {
     if (!canAutosave) return;
@@ -789,6 +812,7 @@ export function NewBacktestWizard() {
       void saveBacktestWizardDraftStep(sourceJobId, 'strategy', {
         strategyId,
         parameters,
+        currentStep: stepSlug(step),
       })
         .then(() => setDraftSaveError(null))
         .catch((error: unknown) => setDraftSaveError(
@@ -796,7 +820,7 @@ export function NewBacktestWizard() {
         ));
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [canAutosave, sourceJobId, strategyId, parameters]);
+  }, [canAutosave, sourceJobId, strategyId, parameters, step]);
 
   useEffect(() => {
     if (!canAutosave) return;
@@ -860,15 +884,14 @@ export function NewBacktestWizard() {
   useEffect(() => {
     if (!canAutosave) return;
     const flushCurrentStep = (): void => {
-      if (step === 0) {
-        void saveBacktestWizardDraftStep(
-          sourceJobId,
-          'strategy',
-          { strategyId, parameters },
-          { keepalive: true },
-        ).catch(() => undefined);
-        return;
-      }
+      pageHiding.current = true;
+      void saveBacktestWizardDraftStep(
+        sourceJobId,
+        'strategy',
+        { strategyId, parameters, currentStep: stepSlug(step) },
+        { keepalive: true },
+      ).catch(() => undefined);
+      if (step === 0) return;
       if (step === 1) {
         void saveBacktestWizardDraftStep(
           sourceJobId,
@@ -907,8 +930,15 @@ export function NewBacktestWizard() {
         { keepalive: true },
       ).catch(() => undefined);
     };
+    const restoreAfterPageShow = (): void => {
+      pageHiding.current = false;
+    };
     window.addEventListener('pagehide', flushCurrentStep);
-    return () => window.removeEventListener('pagehide', flushCurrentStep);
+    window.addEventListener('pageshow', restoreAfterPageShow);
+    return () => {
+      window.removeEventListener('pagehide', flushCurrentStep);
+      window.removeEventListener('pageshow', restoreAfterPageShow);
+    };
   }, [
     canAutosave,
     step,
@@ -927,6 +957,36 @@ export function NewBacktestWizard() {
     slippageProfileId,
     randomSeed,
   ]);
+  // 라우터로 홈·목록 등 다른 페이지에 나가면 pagehide가 없으므로 unmount에서 즉시 저장한다.
+  useEffect(() => () => {
+    if (pageHiding.current || suppressDraftFlush.current) return;
+    const saved = latestDraftSnapshot.current;
+    if (!saved.canAutosave) return;
+    void Promise.all([
+      saveBacktestWizardDraftStep(saved.sourceJobId, 'strategy', {
+        strategyId: saved.strategyId,
+        parameters: saved.parameters,
+        currentStep: saved.currentStep,
+      }),
+      saveBacktestWizardDraftStep(saved.sourceJobId, 'period', {
+        from: saved.from,
+        to: saved.to,
+        benchmarkId: saved.benchmarkId,
+        benchmarkCoverageVerifiedFor: saved.benchmarkCoverageVerifiedFor,
+      }),
+      saveBacktestWizardDraftStep(saved.sourceJobId, 'universe', {
+        universeRule: saved.universeRule,
+        lastPreview: saved.lastPreview,
+      }),
+      saveBacktestWizardDraftStep(saved.sourceJobId, 'capital', {
+        initialCash: saved.initialCash,
+        maxPositions: saved.maxPositions,
+        commissionProfileId: saved.commissionProfileId,
+        slippageProfileId: saved.slippageProfileId,
+        randomSeed: saved.randomSeed,
+      }),
+    ]).catch(() => undefined);
+  }, []);
 
   /**
    * URL 표기를 지금 그리고 있는 단계에 맞춘다. 좁히는 판단은 위 `step` 이 이미 했고,
