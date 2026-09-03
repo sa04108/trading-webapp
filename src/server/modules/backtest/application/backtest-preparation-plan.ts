@@ -11,7 +11,7 @@ import {
 import type { UniverseDataNeed } from './universe-rule-resolver.js';
 
 /** 데이터 필요 범위의 의미가 바뀌면 완료된 이전 preparation을 재사용하지 않는다. */
-export const BACKTEST_PREPARATION_PLAN_VERSION = '5.0.0';
+export const BACKTEST_PREPARATION_PLAN_VERSION = '7.0.0';
 
 export interface BacktestPreparationPlan {
   readonly requestHash: string;
@@ -62,6 +62,10 @@ export function buildBacktestPreparationPlan(input: {
 
   const priceSymbols = new Set(resolutionNeeds.priceSymbols);
   let priceRange = resolutionNeeds.priceRange;
+  if (finalSymbols.length > 0) {
+    for (const symbol of finalSymbols) priceSymbols.add(symbol);
+    priceRange = widenRange(priceRange, request.period);
+  }
 
   // HTTP 요청은 기본값 필드를 생략할 수 있다. 전략 구현이 실제로 받는 것과 같은
   // Zod 파싱 결과를 메타데이터에도 넘겨야 undefined/NaN 워밍업이 되지 않는다.

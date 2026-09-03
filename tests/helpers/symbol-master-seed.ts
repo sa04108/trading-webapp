@@ -2,6 +2,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import type { Container } from '../../src/server/bootstrap/container.js';
 import {
   dailySelectionMetrics,
+  dailySelectionMetricCoverage,
   symbolMasterCoverage,
   symbolMasterMarketCaps,
   symbolMasterTradingDays,
@@ -86,6 +87,12 @@ export function seedSymbolMasterUniverse(
         marketCapKrw: row.marketCapKrw,
         volume: null,
         tradingValueKrw: null,
+      })),
+    ).onConflictDoNothing().run();
+    container.database.db.insert(dailySelectionMetricCoverage).values(
+      [...new Set(rebalanceDates)].map((date) => ({
+        date,
+        syncedAtMs: container.clock.now(),
       })),
     ).onConflictDoNothing().run();
   }

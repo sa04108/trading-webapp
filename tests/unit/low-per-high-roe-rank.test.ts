@@ -136,10 +136,11 @@ describe('저PER·고ROE 전략', () => {
     expect(lowPerHighRoeRankParameters.safeParse({ staleQuarters: 0 }).success).toBe(false);
     expect(lowPerHighRoeRankParameters.safeParse({ topN: 201 }).success).toBe(false);
     expect(lowPerHighRoeRankParameters.safeParse({ staleQuarters: 9 }).success).toBe(false);
-    expect(lowPerHighRoeRankStrategy.dataRequirements).toEqual({
+    expect(lowPerHighRoeRankStrategy.dataRequirements).toMatchObject({
       fundamentalLookbackQuarters: 4,
       requiresCorporateActions: true,
     });
+    expect(lowPerHighRoeRankStrategy.dataRequirements?.fundamentalsReady).toBeTypeOf('function');
   });
 
   it('실제 두 단계 리밸런스도 PER·ROE 순위 합과 seeded 동점을 쓴다', () => {

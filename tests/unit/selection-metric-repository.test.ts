@@ -43,7 +43,7 @@ describe('SelectionMetricRepository', () => {
     await t.close();
   });
 
-  it('거래대금 행이 없거나 전부 null 이면 해당 날짜를 다시 수집 대상으로 돌려준다', async () => {
+  it('지표 행이 있어도 coverage 표식이 없는 날짜는 다시 수집 대상으로 돌려준다', async () => {
     const t = await createTestApp();
     const repository = new SelectionMetricRepository(t.container.database.db);
     repository.upsertMany([{
@@ -59,6 +59,7 @@ describe('SelectionMetricRepository', () => {
       volume: null,
       tradingValueKrw: 3n,
     }]);
+    repository.markCoveredDates(['2026-08-08'], t.container.clock.now());
 
     expect(repository.findMissingTradingValueDates(['2026-08-06', '2026-08-07', '2026-08-08']))
       .toEqual(['2026-08-06', '2026-08-07']);
@@ -68,8 +69,8 @@ describe('SelectionMetricRepository', () => {
   it('일부 종목의 거래대금이 영영 null 이어도 ingest 흔적이 있는 날짜는 재수집하지 않는다', async () => {
     const t = await createTestApp();
     const repository = new SelectionMetricRepository(t.container.database.db);
-    // KRX 가 '-' 거래대금을 준 종목은 null 로 남는다. 같은 transaction 의 다른 종목이
-    // 값을 가지면 그 날짜는 이미 수집한 것이다.
+    // KRX 가 '-' 거래대금을 준 종목은 null 로 남는다. 값 유무와 별개로 API 조회를
+    // 완료한 날짜라는 표식이 있으면 재수집하지 않는다.
     repository.upsertMany([{
       date: '2026-08-07',
       standardCode: 'KR7005930003',
@@ -83,6 +84,7 @@ describe('SelectionMetricRepository', () => {
       volume: 5,
       tradingValueKrw: 6n,
     }]);
+    repository.markCoveredDates(['2026-08-07'], t.container.clock.now());
 
     expect(repository.findMissingTradingValueDates(['2026-08-07'])).toEqual([]);
     await t.close();
@@ -134,6 +136,7 @@ describe('SelectionMetricRepository', () => {
       date: '2026-08-07', standardCode: 'KR7005930003',
       marketCapKrw: 1n, volume: 2, tradingValueKrw: 3n,
     }]);
+    repository.markCoveredDates(['2026-08-07'], t.container.clock.now());
     const dates = ['2026-08-07', ...Array.from(
       { length: OVER_SQLITE_BIND_LIMIT - 1 },
       (_, index) => `2030-${String(Math.floor(index / 28) % 12 + 1).padStart(2, '0')}-${String(index % 28 + 1).padStart(2, '0')}-${index}`,

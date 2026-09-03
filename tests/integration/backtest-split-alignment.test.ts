@@ -158,6 +158,23 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
     ]).run();
   }
 
+  function removeSharesChange(): void {
+    const db = ctx.container.database.db;
+    db.delete(symbolMasterVersions).run();
+    db.insert(symbolMasterVersions).values({
+      standardCode: STANDARD_CODE,
+      validFromDate: '2000-01-01',
+      validToDate: null,
+      shortCode: SYMBOL,
+      name: SYMBOL,
+      market: 'KOSPI',
+      sharesOutstanding: '1000000',
+      instrumentType: 'COMMON_STOCK',
+      listedDate: null,
+      recordedAtMs: ctx.container.clock.now(),
+    }).run();
+  }
+
   async function submitBacktest(
     afterCreate?: (jobId: string) => void | Promise<void>,
   ): Promise<string> {
@@ -280,11 +297,14 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
     '짝이 될 상장주식수 변경이 없으면 왜곡된 결과를 만들지 않고 실패한다',
     { timeout: 90_000 },
     async () => {
-      const jobId = await submitBacktest();
+      // 정상 preparation은 정렬 불가 종목을 제외한다. 이 테스트는 제출 뒤 KRX
+      // 변경 이력이 사라진 drift를 만들어 worker의 마지막 fail-closed만 검증한다.
+      seedSharesChange();
+      const jobId = await submitBacktest(() => removeSharesChange());
       const job = ctx.container.jobQueue.getJob(jobId)!;
 
       expect(job.status).toBe('FAILED');
-      expect(job.error).toContain('실제 효력일을 KRX 상장주식수 변경과 정렬할 수 없어');
+      expect(job.error).toContain('실제 효력일을 KRX 상장주식수 변경과 정렬할 수 없는 상태');
       expect(job.error).toContain(SYMBOL);
       const full = ctx.container.resultsService.getFullExport(jobId);
       expect(full.run).toBeNull();
@@ -301,17 +321,19 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
     { timeout: 90_000 },
     async () => {
       seedSharesChange();
-      await ctx.container.factRepository.saveFacts([{
-        ...splitFact(),
-        asOfTsMs: Date.parse('2026-04-20T09:00:00Z'),
-        value: 2,
-      }]);
-
-      const jobId = await submitBacktest();
+      const jobId = await submitBacktest(async () => {
+        // preparation 완료 뒤 상충 fact가 추가된 drift에서 worker가 pin을 임의로
+        // 재선정하지 않고 실패하는지 확인한다.
+        await ctx.container.factRepository.saveFacts([{
+          ...splitFact(),
+          asOfTsMs: Date.parse('2026-04-20T09:00:00Z'),
+          value: 2,
+        }]);
+      });
       const job = ctx.container.jobQueue.getJob(jobId)!;
 
       expect(job.status).toBe('FAILED');
-      expect(job.error).toContain('실제 효력일을 KRX 상장주식수 변경과 정렬할 수 없어');
+      expect(job.error).toContain('실제 효력일을 KRX 상장주식수 변경과 정렬할 수 없는 상태');
       expect(job.error).toContain(SYMBOL);
       expect(ctx.container.resultsService.getFullExport(jobId).run).toBeNull();
     },
@@ -333,7 +355,7 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
       const job = ctx.container.jobQueue.getJob(jobId)!;
 
       expect(job.status).toBe('FAILED');
-      expect(job.error).toContain('자본변동 보정 비율을 만들 수 없는 연도');
+      expect(job.error).toContain('준비 완료 후 자본변동 보정 정보가 손상된 종목');
       expect(job.error).toContain(SYMBOL);
       const full = ctx.container.resultsService.getFullExport(jobId);
       expect(full.run).toBeNull();

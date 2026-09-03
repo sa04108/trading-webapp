@@ -71,7 +71,7 @@ describe('buildBacktestPreparationPlan', () => {
       strategyId: 'value-quality-rank',
       financial: { symbols: ['000660', '005930'], fromYear: 2025, toYear: 2026 },
       actions: { symbols: ['000660', '005930'], fromYear: 2025, toYear: 2026 },
-      price: { symbols: [], from: '2026-01-02', to: '2026-03-31' },
+      price: { symbols: ['000660', '005930'], from: '2026-01-02', to: '2026-03-31' },
     },
     {
       strategyId: 'ema-trend-switch',
@@ -187,7 +187,7 @@ describe('buildBacktestPreparationPlan', () => {
       fromYear: 2025,
       toYear: 2026,
     });
-    expect(plan.price.symbols).toEqual([]);
+    expect(plan.price.symbols).toEqual(['000660', '005930']);
   });
 
   it.each([
@@ -244,7 +244,7 @@ describe('buildBacktestPreparationPlan', () => {
     });
   });
 
-  it('급하락 stage는 Task 4의 후보와 정확한 가격 범위를 그대로 준비한다', () => {
+  it('급하락 stage 후보 범위와 최종 실행 유니버스 기간을 합쳐 준비한다', () => {
     const plan = buildBacktestPreparationPlan({
       request: {
         ...BASE_REQUEST,
@@ -265,9 +265,9 @@ describe('buildBacktestPreparationPlan', () => {
     expect(plan.financial.symbols).toEqual([]);
     expect(plan.actions.symbols).toEqual([]);
     expect(plan.price).toEqual({
-      symbols: ['005930', '035720'],
+      symbols: ['000660', '005930', '035720'],
       from: '2025-11-09',
-      to: '2026-01-02',
+      to: '2026-03-31',
     });
   });
 
@@ -285,7 +285,7 @@ describe('buildBacktestPreparationPlan', () => {
       strategy: strategy('action-only', { requiresCorporateActions: true }),
     });
 
-    expect(plan.price).toEqual({ symbols: [], ...BASE_REQUEST.period });
+    expect(plan.price).toEqual({ symbols: ['005930'], ...BASE_REQUEST.period });
     expect(plan.actions).toEqual({
       symbols: ['005930'],
       fromYear: 2024,

@@ -1,6 +1,9 @@
-import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { AppDatabase } from '../../../shared/db/database.js';
-import { dailySelectionMetrics } from '../../../shared/db/schema.js';
+import {
+  dailySelectionMetricCoverage,
+  dailySelectionMetrics,
+} from '../../../shared/db/schema.js';
 
 export interface DailySelectionMetric {
   readonly date: string;
@@ -29,6 +32,22 @@ const FULL_DATE_READ_THRESHOLD = 1_500;
 /** KRX 선정 지표의 bigint/text 변환을 이 저장소 경계에 가둔다. */
 export class SelectionMetricRepository {
   constructor(private readonly db: AppDatabase) {}
+
+  markCoveredDates(dates: readonly string[], syncedAtMs: number): void {
+    const uniqueDates = [...new Set(dates)];
+    for (let index = 0; index < uniqueDates.length; index += READ_BATCH_SIZE) {
+      this.db.insert(dailySelectionMetricCoverage)
+        .values(uniqueDates.slice(index, index + READ_BATCH_SIZE).map((date) => ({
+          date,
+          syncedAtMs,
+        })))
+        .onConflictDoUpdate({
+          target: dailySelectionMetricCoverage.date,
+          set: { syncedAtMs },
+        })
+        .run();
+    }
+  }
 
   upsertMany(rows: readonly DailySelectionMetric[]): void {
     // 5개 컬럼을 쓰므로 SQLite 999 bind 한도 아래의 190개씩 처리한다.
@@ -82,25 +101,20 @@ export class SelectionMetricRepository {
   }
 
   /**
-   * 거래대금 ingest 흔적이 전혀 없는 날짜만 돌려준다. KRX 일별 응답은 한 transaction
-   * 으로 쓰므로 non-null 행이 하나라도 있으면 그 날짜는 이미 수집한 것이다. "모든 행이
-   * non-null" 기준을 쓰면 KRX 가 끝내 값을 주지 않는 종목('-' 거래대금, 상장폐지 등)
-   * 하나가 그 날짜를 영원히 재수집 대상으로 만든다.
+   * 선정 지표 API 조회 완료 표식이 없는 날짜만 돌려준다. 값 행으로 추론하면 모든
+   * 거래대금이 '-'인 응답과 아직 조회하지 않은 날짜를 구분할 수 없다.
    */
   findMissingTradingValueDates(dates: readonly string[]): string[] {
     const requestedDates = [...new Set(dates)];
     if (requestedDates.length === 0) return [];
     const ingested = new Set<string>();
     for (let index = 0; index < requestedDates.length; index += READ_BATCH_SIZE) {
-      const rows = this.db.select({
-        date: dailySelectionMetrics.date,
-      })
-        .from(dailySelectionMetrics)
-        .where(and(
-          inArray(dailySelectionMetrics.date, requestedDates.slice(index, index + READ_BATCH_SIZE)),
-          isNotNull(dailySelectionMetrics.tradingValueKrw),
+      const rows = this.db.select({ date: dailySelectionMetricCoverage.date })
+        .from(dailySelectionMetricCoverage)
+        .where(inArray(
+          dailySelectionMetricCoverage.date,
+          requestedDates.slice(index, index + READ_BATCH_SIZE),
         ))
-        .groupBy(dailySelectionMetrics.date)
         .all();
       for (const row of rows) ingested.add(row.date);
     }

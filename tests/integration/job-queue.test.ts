@@ -26,6 +26,7 @@ import {
   seedCorporateActionCoverage,
   seedDailyBars,
   seedFinancialCoverage,
+  seedValueQualityFacts,
   yearRange,
 } from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
@@ -540,6 +541,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
   });
 
   it('2봉 랭킹 전략은 연속 실제 거래 봉 리밸런스를 enqueue 전에 거부한다', async () => {
+    await seedValueQualityFacts(ctx.container, ['005930']);
+    seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
     const before = ctx.container.jobQueue.countByStatus([
       'QUEUED', 'STARTING', 'RUNNING', 'CANCELLING', 'COMPLETED', 'FAILED', 'CANCELLED',
     ]);
@@ -947,7 +950,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(message).not.toMatch(/Too small|Invalid|expected/i);
   });
 
-  it('기간에 봉이 전혀 없는 제출을 제출 검증에서 거부한다 (D-025)', async () => {
+  it('기간에 봉이 전혀 없는 종목은 준비에서 제외하고 대체 후보가 없으면 완료하지 않는다', async () => {
     // 종목 마스터는 이 날짜를 커버하지만(coverage 는 넓은 고정 구간) 가격 데이터는
     // 2026-01-05 부터다 — 그보다 훨씬 앞선 구간은 확실히 0봉이다
     const noData = await ctx.app.inject({
@@ -956,11 +959,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       cookies: { qp_session: cookie },
       payload: { ...buildRequest(), period: { from: NO_CANDLE_DATE, to: '2020-12-31' } },
     });
-    expect(noData.statusCode).toBe(400);
-    const message = (noData.json() as { error: string }).error;
-    // 진단이 커버리지로 이어지도록 보유 범위를 담는다
-    expect(message).toContain('005930');
-    expect(message).toContain('2026-01-05');
+    expect(noData.statusCode).toBe(409);
+    expect((noData.json() as { error: string }).error).toBe('PREPARATION_REQUIRED');
   });
 
   it('리밸런스 적용에 필요한 최소 구간만 커버되면 기간 중 상장 상태를 모르므로 제출을 거부한다', async () => {
@@ -1039,7 +1039,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(ctx.container.resultsService.getRun(jobId)).toBeNull();
   });
 
-  it('복제도 같은 제출 검증을 거친다 — 봉 없는 기간은 거부한다 (D-025)', async () => {
+  it('복제 준비도 봉 없는 종목을 제외한다 — 대체 후보까지 없으면 준비가 필요하다', async () => {
     const job = ctx.container.jobQueue.enqueue({
       ...buildRequest(),
       period: { from: NO_CANDLE_DATE, to: '2020-12-31' },
@@ -1050,11 +1050,11 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       url: `/api/v1/backtests/${job.id}/clone`,
       cookies: { qp_session: cookie },
     });
-    expect(cloned.statusCode).toBe(400);
-    expect((cloned.json() as { error: string }).error).toContain('005930');
+    expect(cloned.statusCode).toBe(409);
+    expect((cloned.json() as { error: string }).error).toBe('PREPARATION_REQUIRED');
   });
 
-  it('복제도 재무 요구 검증을 거친다 — 재무 없는 데이터셋의 밸류 전략은 422', async () => {
+  it('복제 준비도 재무가 없는 종목을 제외한다 — 대체 후보까지 없으면 준비가 필요하다', async () => {
     const job = ctx.container.jobQueue.enqueue({
       ...buildRequest(),
       strategyId: 'value-quality-rank',
@@ -1066,8 +1066,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       url: `/api/v1/backtests/${job.id}/clone`,
       cookies: { qp_session: cookie },
     });
-    expect(cloned.statusCode).toBe(422);
-    expect((cloned.json() as { error: string }).error).toContain('coverage 기록은 있지만');
+    expect(cloned.statusCode).toBe(409);
+    expect((cloned.json() as { error: string }).error).toBe('PREPARATION_REQUIRED');
   });
 
   it.each([
@@ -1082,10 +1082,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
       risk: { maxPositions: 1 },
     };
-    await ctx.container.factRepository.saveFacts([{
-      scope: 'SYMBOL', key: '005930', field: 'NET_INCOME', periodKey: '2025Q4',
-      asOfTsMs: Date.parse('2025-12-31T00:00:00Z'), value: 1, unit: 'KRW',
-    }]);
+    await seedValueQualityFacts(ctx.container, ['005930']);
     seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
     const created = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: valueRequest,
@@ -1161,10 +1158,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
       risk: { maxPositions: 1 },
     };
-    await ctx.container.factRepository.saveFacts([{
-      scope: 'SYMBOL', key: '005930', field: 'NET_INCOME', periodKey: '2025Q4',
-      asOfTsMs: Date.parse('2025-12-31T00:00:00Z'), value: 1, unit: 'KRW',
-    }]);
+    await seedValueQualityFacts(ctx.container, ['005930']);
     seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
     const created = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: valueRequest,
@@ -1306,10 +1300,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
       risk: { maxPositions: 1 },
     };
-    await ctx.container.factRepository.saveFacts([{
-      scope: 'SYMBOL', key: '005930', field: 'NET_INCOME', periodKey: '2025Q4',
-      asOfTsMs: Date.parse('2025-12-31T00:00:00Z'), value: 1, unit: 'KRW',
-    }]);
+    await seedValueQualityFacts(ctx.container, ['005930']);
     seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
 
     const created = await ctx.app.inject({
@@ -1324,7 +1315,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(before.json().reusablePreview.fundamentalSymbols).toEqual(['005930']);
 
     ctx.container.database.db.delete(facts)
-      .where(and(eq(facts.key, '005930'), eq(facts.field, 'NET_INCOME')))
+      .where(eq(facts.key, '005930'))
       .run();
     await ctx.container.factRepository.saveFacts([{
       scope: 'SYMBOL', key: '005930', field: 'NET_INCOME', periodKey: '2026Q4',
@@ -1335,7 +1326,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       method: 'GET', url: `/api/v1/backtests/${sourceId}/clone-draft`, cookies: { qp_session: cookie },
     });
     expect(after.statusCode).toBe(200);
-    expect(after.json().reusablePreview.fundamentalSymbols).toEqual([]);
+    expect(after.json().reusablePreview).toBeNull();
 
     ctx.container.database.db.update(symbolFactsState)
       .set({ coveredYearsJson: JSON.stringify([2026]) })
@@ -1708,10 +1699,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
       risk: { maxPositions: 1 },
     };
-    await ctx.container.factRepository.saveFacts([{
-      scope: 'SYMBOL', key: '005930', field: 'NET_INCOME', periodKey: '2025Q4',
-      asOfTsMs: Date.parse('2025-12-31T00:00:00Z'), value: 1, unit: 'KRW',
-    }]);
+    await seedValueQualityFacts(ctx.container, ['005930']);
     seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
     const created = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: request,
@@ -1814,10 +1802,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
       risk: { maxPositions: 1 },
     };
-    await ctx.container.factRepository.saveFacts([{
-      scope: 'SYMBOL', key: '005930', field: 'NET_INCOME', periodKey: '2025Q4',
-      asOfTsMs: Date.parse('2025-12-31T00:00:00Z'), value: 1, unit: 'KRW',
-    }]);
+    await seedValueQualityFacts(ctx.container, ['005930']);
     seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
     const created = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: request,
@@ -1838,7 +1823,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const beforeJobCount = ctx.container.jobQueue.listJobs(500, 0).length;
 
     ctx.container.database.db.delete(facts)
-      .where(and(eq(facts.key, '005930'), eq(facts.field, 'NET_INCOME')))
+      .where(eq(facts.key, '005930'))
       .run();
     // coverage 무결성 단계는 다시 닫아 두고, 그 다음의 실제 PIT fact 관문이 비어 있는
     // snapshot을 막는지 확인한다.
@@ -1848,7 +1833,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
 
     const failed = ctx.container.seedCloneBatchService.get(batchId)!;
     expect(failed.batch.status).toBe('FAILED');
-    expect(failed.batch.error).toMatch(/coverage 기록은 있지만.*재무 데이터/);
+    expect(failed.batch.error).toMatch(/준비 완료 후.*PIT 재무.*005930/);
     expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
     expect(ctx.container.jobQueue.listJobs(500, 0)).toHaveLength(beforeJobCount);
   });
@@ -2204,9 +2189,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(body.blockers).toEqual([]);
   });
 
-  it('일부 종목만 봉이 없어도 확정 유니버스와 달라지므로 거부한다', async () => {
+  it('일부 종목만 봉이 없으면 그 종목을 제외하고 나머지로 제출한다', async () => {
     // 종목을 하나 더 등록하고 topN 을 2로 올려 유니버스에 넣되 봉은 넣지 않는다 —
-    // 다른 종목에 봉이 있다는 이유로 이 종목만 제외해 실행하면 안 된다.
+    // 준비가 이 종목만 제외하고 005930의 순위와 실행은 유지해야 한다.
     ctx.container.symbolService.addSymbol('000660', 'KR', null, 'KR7000660001');
     // 000660 도 unionSymbols 에 들어오므로 자본변동 게이트도 통과해 둬야 한다
     await seedCorporateActionCoverage(ctx.container, ['000660'], ACTION_COVERAGE_YEARS);
@@ -2217,12 +2202,14 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       cookies: { qp_session: cookie },
       payload: { ...buildRequest(), universeRule: universeRule(2) },
     });
-    expect(partial.statusCode).toBe(400);
-    expect((partial.json() as { error: string }).error).toContain('000660');
+    expect(partial.statusCode).toBe(201);
+    expect((partial.json() as { warnings: string[] }).warnings.join(' ')).toMatch(
+      /가격 정보를 온전히 확보할 수 없어 종목 000660을 매매 대상에서 제외/,
+    );
   });
 
   it('봉이 없는 원본도 초기 단계에서는 coverage 검증 없이 연다', async () => {
-    // 봉이 없는 기간은 제출 시 400이지만 유니버스 단계 전의 초안 복원을 막지 않는다.
+    // 봉이 없는 기간은 준비 완료 대상이 아니지만 유니버스 단계 전의 초안 복원을 막지 않는다.
     const request: BacktestRequest = {
       ...buildRequest(),
       period: { from: NO_CANDLE_DATE, to: '2020-12-31' },

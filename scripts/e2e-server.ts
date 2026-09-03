@@ -70,6 +70,7 @@ const KOSPI_BASE_ROWS = [
     SECUGRP_NM: '주권',
     SECT_TP_NM: null,
     KIND_STKCERT_TP_NM: '보통주',
+    LIST_SHRS: '5,969,782,550',
   },
   {
     ISU_CD: 'KR7005935008',
@@ -80,6 +81,7 @@ const KOSPI_BASE_ROWS = [
     SECUGRP_NM: '주권',
     SECT_TP_NM: null,
     KIND_STKCERT_TP_NM: '우선주',
+    LIST_SHRS: '822,886,700',
   },
   {
     ISU_CD: 'KR7900010009',
@@ -90,6 +92,7 @@ const KOSPI_BASE_ROWS = [
     SECUGRP_NM: '주권',
     SECT_TP_NM: null,
     KIND_STKCERT_TP_NM: '보통주',
+    LIST_SHRS: '1,000,000',
   },
 ];
 
@@ -203,6 +206,7 @@ const KOSDAQ_BASE_ROWS = [
     SECUGRP_NM: '주권',
     SECT_TP_NM: null,
     KIND_STKCERT_TP_NM: '보통주',
+    LIST_SHRS: '444,000,000',
   },
   {
     ISU_CD: 'KR7900099001',
@@ -213,6 +217,7 @@ const KOSDAQ_BASE_ROWS = [
     SECUGRP_NM: '주권',
     SECT_TP_NM: 'SPAC',
     KIND_STKCERT_TP_NM: '보통주',
+    LIST_SHRS: '5,000,000',
   },
 ];
 

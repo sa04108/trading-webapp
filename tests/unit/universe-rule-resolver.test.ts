@@ -1074,20 +1074,26 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
   });
 
   it.each(['MARKET_CAP', 'VOLUME', 'TRADING_VALUE', 'PER'] as const)(
-    'ingest 완료 날짜의 %s 후보 행 전체 누락은 부분 랭킹하지 않고 실패한다',
+    'ingest 완료 날짜의 %s 후보 행 누락은 그 종목을 제외하고 남은 후보를 랭킹한다',
     async (criterion) => {
       const resolver = makePipelineResolver({
         metrics: pipelineMetrics.slice(0, 2),
         missingTradingValueDates: [],
       });
 
-      await expect(resolver.resolveOrDescribeNeeds(
+      const result = await resolver.resolveOrDescribeNeeds(
         pipelineRule([{ criterion, direction: 'HIGH', limit: 3 }]),
         period,
-      )).rejects.toThrow(
-        `KRX 선정 지표 수집이 완료된 날짜에 ${criterion} 후보 행이 누락됐습니다 `
-          + `(${PIPELINE_DATE}): 000003`,
       );
+
+      expect(result.kind).toBe('READY');
+      if (result.kind !== 'READY') throw new Error('READY 여야 한다');
+      expect(result.schedule[0]?.members.some((member) => member.symbol === '000003')).toBe(false);
+      expect(result.dataExclusions).toContainEqual(expect.objectContaining({
+        symbol: '000003',
+        periodKey: PIPELINE_DATE,
+        category: 'KRX_SELECTION_METRIC',
+      }));
     },
   );
 
@@ -1392,7 +1398,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     expect(result.schedule[0]?.members.map((member) => member.symbol)).toEqual(['000002']);
   });
 
-  it('가격 변동 방향에 맞는 문구로 자본변동 실제 변경일 확인 실패를 알린다', async () => {
+  it('자본변동 실제 변경일을 확인할 수 없는 종목은 제외하고 차순위를 고른다', async () => {
     const candle = (symbol: string, offset: number, close: number): Candle => ({
       symbol, market: 'KR', timeframe: '1d', tsMs: PIPELINE_TS - offset * 86_400_000,
       open: close, high: close, low: close, close, volume: 1,
@@ -1410,14 +1416,21 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
       sharesChanges: [],
     });
 
-    await expect(resolver.resolveOrDescribeNeeds(
-      pipelineRule([{ criterion: 'DECLINE', direction: 'LOW', limit: 1, lookbackTradingDays: 3 }]),
-      period,
-    )).rejects.toThrow(/급하락 유니버스의 자본변동.*잘못된 급락률/);
-    await expect(resolver.resolveOrDescribeNeeds(
-      pipelineRule([{ criterion: 'DECLINE', direction: 'HIGH', limit: 1, lookbackTradingDays: 3 }]),
-      period,
-    )).rejects.toThrow(/급상승 유니버스의 자본변동.*잘못된 급등률/);
+    for (const direction of ['LOW', 'HIGH'] as const) {
+      const result = await resolver.resolveOrDescribeNeeds(
+        pipelineRule([{ criterion: 'DECLINE', direction, limit: 1, lookbackTradingDays: 3 }]),
+        period,
+      );
+      expect(result.kind).toBe('READY');
+      if (result.kind !== 'READY') throw new Error('fixture coverage가 완전해야 합니다.');
+      expect(result.schedule[0]?.members.map((member) => member.symbol)).toEqual(['000002']);
+      expect(result.corporateActionExclusions).toEqual([expect.objectContaining({
+        symbol: '000001',
+        year: 2025,
+        periodKey: '2025-05-13',
+        reason: 'KRX 상장주식수 변경일과 정렬할 수 없는 자본변동',
+      })]);
+    }
   });
 
   it('급하락은 effective KST date 다음 날의 자본변동을 분할보정에서 제외한다', async () => {

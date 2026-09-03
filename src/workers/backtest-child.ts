@@ -73,6 +73,7 @@ import {
   findFinancialCoverageGap,
 } from '../server/modules/backtest/application/backtest-financial-coverage.js';
 import { financialFactCutoffsFromCandles } from '../server/modules/backtest/application/backtest-financial-execution-window.js';
+import { findIncompleteFundamentalCheckpoints } from '../server/modules/backtest/application/backtest-financial-data-readiness.js';
 
 const cancellation = installCancellationHandlers();
 
@@ -444,8 +445,9 @@ async function main(): Promise<void> {
     // 숨긴다. 휴일은 marketTradingTsMs에 없으므로 요청 경계를 써도 전략 호출이 생기지 않는다.
     const tradeFromTsMs = fromTsMs;
 
-    // 일정에 선정됐는데 기간 내 봉이 하나도 없는 종목만 빼고 실행하면 유니버스가
-    // 달라진다. 급락 종목이 누락된 경우 특히 낙관 편향이므로 전체 실행을 중단한다.
+    // 정상 preparation은 기간 내 봉이 하나도 없는 종목을 제외하고 재순위화한다.
+    // 이 검사는 제출 뒤 데이터 삭제·직접 enqueue로 고정 schedule이 이미 달라진 경우의
+    // 사후 drift 방어선이다. worker가 임의로 재순위화하면 제출 pin이 깨진다.
     const symbolsWithBars = new Set(
       tradeCandles.map((candle) => candle.symbol),
     );
@@ -511,6 +513,28 @@ async function main(): Promise<void> {
       fact.field !== CORPORATE_ACTION_FIELD
       && fact.asOfTsMs <= (financialCutoffBySymbol.get(fact.key) ?? Number.NEGATIVE_INFINITY)
     ));
+    if (strategy.dataRequirements?.fundamentalsReady !== undefined) {
+      const validDatesBySymbol = new Map<string, string[]>();
+      for (const candle of tradeCandles) {
+        const dates = validDatesBySymbol.get(candle.symbol) ?? [];
+        dates.push(new Date(candle.tsMs).toISOString().slice(0, 10));
+        validDatesBySymbol.set(candle.symbol, dates);
+      }
+      const incomplete = findIncompleteFundamentalCheckpoints({
+        strategy,
+        parameters,
+        facts: financialFacts,
+        schedule,
+        validDatesBySymbol,
+      });
+      if (incomplete.length > 0) {
+        throw new Error(
+          '준비 완료 후 전략의 PIT 재무 계정·연속 분기·신선도 조건을 만족하지 못하게 된 '
+            + `종목이 있습니다: ${incomplete.map((item) => `${item.symbol}(${item.date})`).join(', ')} — `
+            + '실행 유니버스는 이미 고정되어 재순위할 수 없습니다. 미리보기를 다시 준비하세요.',
+        );
+      }
+    }
     const rawCorporateActionFacts: Fact[] = await factRepository.getFacts({
       scope: 'SYMBOL',
       keys: unionSymbols,
@@ -582,9 +606,9 @@ async function main(): Promise<void> {
     }).sort();
     if (actionCoverageMissingSymbols.length > 0) {
       throw new Error(
-        '자본변동 coverage가 부족해 백테스트를 중단했습니다 — '
-          + `대상 ${actionCoverageMissingSymbols.length}종목: `
-          + `${actionCoverageMissingSymbols.join(', ')}. 필요한 연도 데이터를 다시 준비하세요.`,
+        '준비 완료 후 자본변동 coverage가 사라진 종목이 있습니다 — '
+          + `대상 ${actionCoverageMissingSymbols.length}종목: ${actionCoverageMissingSymbols.join(', ')}. `
+          + '실행 유니버스는 이미 고정되어 재순위할 수 없습니다. 미리보기를 다시 준비하세요.',
       );
     }
     const gapDetailsBySymbol = readCorporateActionGapDetails(
@@ -614,10 +638,10 @@ async function main(): Promise<void> {
         `${gap.symbol}(${gap.periodKey}: ${gap.reason})`
       )).join('; ');
       throw new Error(
-        '자본변동 보정 비율을 만들 수 없는 연도가 있어 백테스트를 중단했습니다 — '
+        '준비 완료 후 자본변동 보정 정보가 손상된 종목이 있습니다 — '
           + `대상 ${actionGapSymbols.length}종목: ${actionGapSymbols.join(', ')}. `
           + `확인된 원인: ${causes}. `
-          + 'DART gap을 해소하고 자본변동 데이터를 다시 준비하세요.',
+          + '실행 유니버스는 이미 고정되어 재순위할 수 없습니다. 미리보기를 다시 준비하세요.',
       );
     }
     const unalignedForExecution = aligned.unaligned.filter(
@@ -632,41 +656,30 @@ async function main(): Promise<void> {
       ].sort();
       const shown = unalignedSymbols.slice(0, 10).join(', ');
       throw new Error(
-        `자본변동 ${unalignedForExecution.length}건의 실제 효력일을 KRX 상장주식수 변경과 정렬할 수 없어 `
-          + `백테스트를 중단했습니다 — 대상 ${unalignedSymbols.length}종목: ${shown}`
+        `준비 완료 후 자본변동 ${unalignedForExecution.length}건의 실제 효력일을 `
+          + `KRX 상장주식수 변경과 정렬할 수 없는 상태가 됐습니다 — 대상 ${unalignedSymbols.length}종목: ${shown}`
           + (unalignedSymbols.length > 10 ? ` 외 ${unalignedSymbols.length - 10}종목` : '')
           + '. DART 기준일로 그대로 실행하면 수량과 가격 단위가 어긋나 수익이 왜곡됩니다. '
-          + '종목 마스터를 기준일 전후 구간까지 수집한 뒤 다시 실행하세요.',
+          + '실행 유니버스는 이미 고정되어 재순위할 수 없습니다. 미리보기를 다시 준비하세요.',
       );
     }
 
     const corporateActionFacts = aligned.facts;
     const facts: Fact[] = [...financialFacts, ...corporateActionFacts];
-    // 아래 두 검사는 **재무** 팩트만 본다 — 분할만 기록된 종목은 재무가 없는 종목이다
-    if (strategyRequiresFinancialData(strategy) && financialFacts.length === 0) {
-      // 제출 검증이 걸렀어야 하는 상태다. 실행 중 데이터가 지워진 경우의 뒤늦은 방어선.
-      throw new Error(
-        '재무 coverage 기록은 있지만 마지막 실행 봉까지 사용 가능한 재무 데이터가 '
-          + '유니버스 전체에 없습니다. 수집 gap을 확인하거나 기간·유니버스·전략을 조정하세요.',
-      );
-    }
+    // 준비 뒤 fact가 사라진 종목 판정은 **재무** 팩트만 본다 — 분할만 기록된 종목은
+    // 재무가 없는 종목이다. 이 시점의 schedule은 이미 고정돼 재순위할 수 없다.
     if (strategyRequiresFinancialData(strategy)) {
-      // "facts:sync 리포트를 확인하세요" 는 지금 어디에도 없는 것을 가리킨다 — 그 리포트는
-      // 이미 닫혔을 수 있는 세션의 stdout 으로만 존재했다. 대신 실제로 로드된 팩트 키를
-      // 요청 유니버스와 맞춰 재무가 **하나도 없는** 종목을 직접 이름으로 밝힌다.
-      // (계정이 일부만 빠진 종목까지 여기서 가려내지는 못하므로 그 한계도 함께 남긴다.)
       const symbolsWithFacts = new Set(financialFacts.map((fact) => fact.key));
       const withoutFacts = unionSymbols.filter((s) => !symbolsWithFacts.has(s));
-      // 유니버스 상한이 200종목이라 캡이 없으면 경고 한 줄이 종목코드 200개가 된다 —
-      // 엔진의 포지션 상한 경고와 같은 10종목 캡을 쓴다 (engine.ts 의 buysDroppedByCap).
-      const shown = withoutFacts.slice(0, 10).join(', ');
+      if (withoutFacts.length > 0) {
+        throw new Error(
+          '준비 완료 후 마지막 실행 봉까지 사용 가능한 재무 데이터가 사라진 종목이 있습니다: '
+            + `${withoutFacts.join(', ')} — 실행 유니버스는 이미 고정되어 재순위할 수 없습니다. `
+            + '유니버스 미리보기를 다시 준비하세요.',
+        );
+      }
       datasetWarnings.push(
-        (withoutFacts.length > 0
-          ? `재무 데이터가 하나도 없어 랭킹에서 제외된 종목 ${withoutFacts.length}종목: ${shown}` +
-            (withoutFacts.length > 10 ? ` 외 ${withoutFacts.length - 10}종목` : '') +
-            '. '
-          : '') +
-          '재무 데이터는 공시 시점 기준입니다. 계정이 일부만 공시된 종목도 랭킹에서 빠질 수 있습니다.',
+        '재무 데이터는 공시 시점 기준입니다. 계정이 일부만 공시된 종목도 랭킹에서 빠질 수 있습니다.',
       );
     }
 

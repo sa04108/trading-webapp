@@ -857,6 +857,17 @@ export const dailySelectionMetrics = sqliteTable(
 );
 
 /**
+ * KRX 일별매매 API에서 선정 지표를 한 번 온전히 조회한 날짜.
+ *
+ * 지표 행과 분리한다. 거래대금이 모든 종목에서 '-'인 정상 응답은 non-null 값이
+ * 하나도 없어 행만으로 "미조회"와 구분할 수 없기 때문이다.
+ */
+export const dailySelectionMetricCoverage = sqliteTable('daily_selection_metric_coverage', {
+  date: text('date').primaryKey(),
+  syncedAtMs: integer('synced_at_ms').notNull(),
+});
+
+/**
  * 실제로 거래가 있었던 날짜만 담는다. 휴장일과 무변화 거래일은 이벤트 건수로
  * 구별되지 않으므로, "거래일이었다"는 사실 자체를 별도로 남겨야 재구성 앵커를
  * 정확히 짚을 수 있다.

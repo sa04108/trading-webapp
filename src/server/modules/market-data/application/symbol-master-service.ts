@@ -18,6 +18,7 @@ import type { Clock } from '../../../shared/clock.js';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import {
   dailySelectionMetrics,
+  dailySelectionMetricCoverage,
   facts,
   krxDailyBars,
   krxNonTradingDays,
@@ -35,7 +36,10 @@ import {
 import type { Logger } from '../../../shared/logger.js';
 import type { Candle } from '../domain/candle.js';
 import { isValidCandle } from '../domain/candle.js';
-import { classifyKrxIssue } from '../domain/krx-filter-policy.js';
+import {
+  classifyKrxIssue,
+  UnknownKrxClassificationError,
+} from '../domain/krx-filter-policy.js';
 import { addCalendarDays, isWeekendDate } from '../domain/kst-date.js';
 import { isNonTradingRow } from '../domain/non-trading-day.js';
 import {
@@ -589,6 +593,22 @@ export class SymbolMasterService {
     for (const row of kosdaqBaseInfo) {
       this.putEntry(fetched, row, 'KOSDAQ');
     }
+    this.preserveMissingBaseInfoEntries(
+      date,
+      fetched,
+      modeledBeforeWrite,
+      'KOSPI',
+      kospiTrades,
+      kospiBaseInfo,
+    );
+    this.preserveMissingBaseInfoEntries(
+      date,
+      fetched,
+      modeledBeforeWrite,
+      'KOSDAQ',
+      kosdaqTrades,
+      kosdaqBaseInfo,
+    );
 
     return this.persistTradingDay(date, fetched, kospiTrades, kosdaqTrades);
   }
@@ -1440,6 +1460,13 @@ export class SymbolMasterService {
         })
         .run();
     }
+    tx.insert(dailySelectionMetricCoverage)
+      .values({ date, syncedAtMs: this.deps.clock.now() })
+      .onConflictDoUpdate({
+        target: dailySelectionMetricCoverage.date,
+        set: { syncedAtMs: this.deps.clock.now() },
+      })
+      .run();
   }
 
   /** 주어진 날짜를 포함하는 수집 완료 구간이 있는지 */
@@ -1450,6 +1477,21 @@ export class SymbolMasterService {
       .where(and(lte(symbolMasterCoverage.startDate, date), gte(symbolMasterCoverage.endDate, date)))
       .get();
     return row !== undefined;
+  }
+
+  /** 수집 완료된 실제 KRX 거래일. legacy 주말 coverage 행은 제외한다. */
+  tradingDaysBetween(from: string, to: string): readonly string[] {
+    return this.deps.db
+      .select({ date: symbolMasterTradingDays.date })
+      .from(symbolMasterTradingDays)
+      .where(and(
+        gte(symbolMasterTradingDays.date, from),
+        lte(symbolMasterTradingDays.date, to),
+        storedTradingDateIsWeekday(),
+      ))
+      .orderBy(asc(symbolMasterTradingDays.date))
+      .all()
+      .map((row) => row.date);
   }
 
   /**
@@ -1911,22 +1953,50 @@ export class SymbolMasterService {
     return shortCode;
   }
 
-  /**
-   * classifyKrxIssue 로 instrumentType 을 매겨 유니버스에 넣는다. 분류 불가 응답은
-   * classifyKrxIssue 가 던진 UnknownKrxClassificationError 를 그대로 위로 전파한다 —
-   * 제외 대상도 전 종목 저장 원칙에 따라 여기서 걸러내지 않는다.
-   */
+  /** classifyKrxIssue 로 instrumentType 을 매겨 전 종목을 유니버스에 보관한다. */
   private putEntry(
     universe: Map<string, SymbolMasterEntry>,
     row: KrxIssueBaseInfoRow,
     market: KrxMarket,
   ): void {
-    if (universe.has(row.standardCode)) {
-      throw new Error(`KRX 기본정보 중복 표준코드(${market}, ${row.standardCode})`);
+    const duplicate = universe.get(row.standardCode);
+    if (duplicate !== undefined) {
+      universe.set(row.standardCode, {
+        ...duplicate,
+        instrumentType: 'UNKNOWN_CLASSIFICATION',
+      });
+      this.deps.logger.warn(
+        {
+          module: 'market-data',
+          event: 'symbol-master.duplicate-standard-code',
+          market,
+          standardCode: row.standardCode,
+          shortCodes: [...new Set([duplicate.shortCode, row.shortCode])],
+        },
+        'KRX 기본정보의 중복 표준코드를 비매매 상태로 격리한다',
+      );
+      return;
     }
-    const decision = classifyKrxIssue(row);
-    const instrumentType: SymbolMasterInstrumentType =
-      decision.kind === 'INCLUDE' ? decision.instrumentType : decision.reason;
+    let instrumentType: SymbolMasterInstrumentType;
+    try {
+      const decision = classifyKrxIssue(row);
+      instrumentType = decision.kind === 'INCLUDE' ? decision.instrumentType : decision.reason;
+    } catch (error) {
+      if (!(error instanceof UnknownKrxClassificationError)) throw error;
+      instrumentType = 'UNKNOWN_CLASSIFICATION';
+      this.deps.logger.warn(
+        {
+          module: 'market-data',
+          event: 'symbol-master.unknown-classification',
+          market,
+          standardCode: row.standardCode,
+          shortCode: row.shortCode,
+          field: error.field,
+          value: error.value,
+        },
+        'KRX 분류 필드를 해석할 수 없는 종목을 비매매 상태로 저장한다',
+      );
+    }
 
     let sharesOutstanding = row.listedShares;
     if (sharesOutstanding === null) {
@@ -1942,6 +2012,7 @@ export class SymbolMasterService {
         'KRX 기본정보에 상장주식수가 없어 0으로 채운다',
       );
       sharesOutstanding = '0';
+      if (instrumentType === 'COMMON_STOCK') instrumentType = 'MISSING_SHARES';
     }
 
     universe.set(row.standardCode, {
@@ -1953,6 +2024,55 @@ export class SymbolMasterService {
       instrumentType,
       listedDate: row.listedDate,
     });
+  }
+
+  /**
+   * 일별매매에는 있지만 기본정보 응답에서 한 종목만 빠진 경우 기존 identity를 보존한다.
+   * 응답 전체가 비거나 급감한 경우는 아래 완전성 검사에서 여전히 날짜 수집을 중단한다.
+   */
+  private preserveMissingBaseInfoEntries(
+    date: string,
+    fetched: Map<string, SymbolMasterEntry>,
+    modeled: UniverseState,
+    market: KrxMarket,
+    trades: readonly KrxDailyTradeRow[],
+    baseInfo: readonly KrxIssueBaseInfoRow[],
+  ): void {
+    const baseShortCodes = new Set(baseInfo.map((row) => row.shortCode));
+    const modeledByShortCode = new Map(
+      [...modeled.values()]
+        .filter((entry) => entry.market === market)
+        .map((entry) => [entry.shortCode, entry] as const),
+    );
+    for (const shortCode of new Set(trades.map((row) => row.shortCode))) {
+      if (baseShortCodes.has(shortCode)) continue;
+      const previous = modeledByShortCode.get(shortCode);
+      if (previous === undefined) {
+        this.deps.logger.warn(
+          { module: 'market-data', event: 'symbol-master.unidentified-trade-row', date, market, shortCode },
+          'KRX 일별매매 행에 대응하는 기본정보와 기존 identity가 없어 종목 마스터에서 제외한다',
+        );
+        continue;
+      }
+      // 같은 표준코드가 새 단축코드로 기본정보에 존재하면 identity 변경이다. 일별매매
+      // 응답에 남은 옛 단축코드를 "기본정보 누락"으로 해석해 새 버전을 덮어쓰지 않는다.
+      if (fetched.has(previous.standardCode)) continue;
+      fetched.set(previous.standardCode, {
+        ...previous,
+        instrumentType: 'MISSING_BASE_INFO',
+      });
+      this.deps.logger.warn(
+        {
+          module: 'market-data',
+          event: 'symbol-master.missing-base-info-row',
+          date,
+          market,
+          shortCode,
+          standardCode: previous.standardCode,
+        },
+        'KRX 기본정보가 누락된 거래 종목의 기존 identity를 비매매 상태로 보존한다',
+      );
+    }
   }
 
   /** 거래가 있는데 같은 시장의 기본정보가 비면 전체 상폐로 오염시키지 않고 수집을 중단한다. */

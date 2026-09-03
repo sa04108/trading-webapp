@@ -857,36 +857,66 @@ export class FactSyncService {
       const candidates = filings.flatMap((filing) => {
         const watermarkDate = watermarkDates.get(filing.stockCode);
         if (watermarkDate === undefined) return []; // 이번 요청 밖 종목이거나 blanket 처리됨
+        const forceCollectedYears = (): void => {
+          for (const year of collectedBySymbol.get(filing.stockCode) ?? []) {
+            addForced(filing.stockCode, year);
+          }
+        };
         // 접수일만 주는 API라 watermark 당일은 반드시 포함한다. 재무 경로의 중복은
         // 날짜 경계를 버리는 대신 아래의 영속 접수번호 체크포인트로 제거한다.
+        if (filing.receiptDate === null) {
+          forceCollectedYears();
+          this.logger.warn(
+            { module: 'facts', event: 'facts.filing-missing-receipt-date', symbol: filing.stockCode },
+            '접수일을 읽을 수 없는 DART 공시 종목의 수집 연도를 모두 다시 확인한다',
+          );
+          return [];
+        }
         if (filing.receiptDate < watermarkDate) return [];
         if (filing.businessYear === null) {
-          throw new Error(
-            `DART 정기공시 ${filing.receiptNo}의 사업연도를 보고서명에서 확인할 수 없습니다. `
-              + '어느 covered 연도를 다시 받아야 하는지 추정하지 않고 팩트 준비를 중단합니다.',
+          forceCollectedYears();
+          this.logger.warn(
+            {
+              module: 'facts',
+              event: 'facts.filing-missing-business-year',
+              symbol: filing.stockCode,
+              receiptNo: filing.receiptNo,
+            },
+            '사업연도를 읽을 수 없는 DART 공시 종목의 수집 연도를 모두 다시 확인한다',
           );
+          return [];
+        }
+        if (filing.receiptNo === null) {
+          addForced(filing.stockCode, filing.businessYear);
+          this.logger.warn(
+            { module: 'facts', event: 'facts.filing-missing-receipt-no', symbol: filing.stockCode },
+            '접수번호를 읽을 수 없는 DART 공시 종목·연도를 다시 확인한다',
+          );
+          return [];
         }
         return [{ filing, businessYear: filing.businessYear }];
       });
       const processedReceiptNos = trackFinancialReceipts
         ? this.coverage.getProcessedFilingReceiptNos(
-            candidates.map(({ filing }) => filing.receiptNo),
+            candidates.map(({ filing }) => filing.receiptNo as string),
           )
         : new Set<string>();
       const seenReceiptNos = new Set<string>();
 
       for (const { filing, businessYear } of candidates) {
-        if (seenReceiptNos.has(filing.receiptNo)) continue;
-        seenReceiptNos.add(filing.receiptNo);
-        if (processedReceiptNos.has(filing.receiptNo)) continue;
+        const receiptNo = filing.receiptNo as string;
+        const receiptDate = filing.receiptDate as string;
+        if (seenReceiptNos.has(receiptNo)) continue;
+        seenReceiptNos.add(receiptNo);
+        if (processedReceiptNos.has(receiptNo)) continue;
 
         addForced(filing.stockCode, businessYear);
         if (trackFinancialReceipts) {
           addPending({
-            receiptNo: filing.receiptNo,
+            receiptNo,
             symbol: filing.stockCode,
             businessYear,
-            receiptDate: filing.receiptDate,
+            receiptDate,
           });
         }
       }

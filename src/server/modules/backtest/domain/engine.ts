@@ -436,9 +436,9 @@ function* runBacktestSteps(
 
       const date = new Date(tsMs).toISOString().slice(0, 10);
       throw new Error(
-        `확정 유니버스 종목의 가격 봉이 거래일에 누락됐습니다: ${missingSymbols.join(', ')} (${date}). `
-          + '거래불가일·상장폐지로 확인되지 않아 후보 누락 상태의 실행을 중단합니다. '
-          + '기간 전체 KRX 데이터를 다시 준비하세요.',
+        `준비 완료 후 확정 유니버스 종목의 가격 봉이 사라졌습니다: ${missingSymbols.join(', ')} (${date}). `
+          + '거래불가일·상장폐지로 확인되지 않았고 실행 유니버스는 이미 고정되어 '
+          + '재순위할 수 없습니다. 미리보기를 다시 준비하세요.',
       );
     }
   }
@@ -522,9 +522,9 @@ function* runBacktestSteps(
     if (missingSymbols.length === 0) return;
     const date = new Date(tsMs).toISOString().slice(0, 10);
     throw new Error(
-      `보유 종목의 가격 봉이 거래일 중간에 누락됐습니다: ${missingSymbols.join(', ')} (${date}). `
-        + '거래불가일·상장폐지로 확인되지 않아 마지막 가격 평가를 중단합니다. '
-        + '기간 전체 KRX 데이터를 다시 준비하세요.',
+      `준비 완료 후 보유 종목의 가격 봉이 거래일 중간에 사라졌습니다: ${missingSymbols.join(', ')} (${date}). `
+        + '거래불가일·상장폐지로 확인되지 않았고 보유 포지션은 임의로 제거할 수 없습니다. '
+        + '미리보기를 다시 준비하세요.',
     );
   };
 

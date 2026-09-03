@@ -156,7 +156,7 @@ describe('엔진 거래불가일', () => {
       maxPositions: 5,
       marketTradingTsMs: [START, START + DAY, START + 2 * DAY],
     })).toThrow(
-      '보유 종목의 가격 봉이 거래일 중간에 누락됐습니다: A (2025-05-14)',
+      '준비 완료 후 보유 종목의 가격 봉이 거래일 중간에 사라졌습니다: A (2025-05-14)',
     );
   });
 
@@ -190,7 +190,7 @@ describe('엔진 거래불가일', () => {
       maxPositions: 5,
       marketTradingTsMs: [START, START + DAY, START + 2 * DAY],
     })).toThrow(
-      '보유 종목의 가격 봉이 거래일 중간에 누락됐습니다: A (2025-05-14)',
+      '준비 완료 후 보유 종목의 가격 봉이 거래일 중간에 사라졌습니다: A (2025-05-14)',
     );
   });
 
@@ -220,7 +220,7 @@ describe('엔진 거래불가일', () => {
       marketTradingTsMs: [START, START + DAY, START + 2 * DAY],
       universeSchedule: [{ fromTsMs: START, symbols: ['A', 'B'] }],
     })).toThrow(
-      '확정 유니버스 종목의 가격 봉이 거래일에 누락됐습니다: B (2025-05-13)',
+      '준비 완료 후 확정 유니버스 종목의 가격 봉이 사라졌습니다: B (2025-05-13)',
     );
   });
 
@@ -294,7 +294,7 @@ describe('엔진 거래불가일', () => {
       marketTradingTsMs: [START, START + DAY],
       universeSchedule: [{ fromTsMs: START, symbols: ['A', 'B'] }],
     })).toThrow(
-      '확정 유니버스 종목의 가격 봉이 거래일에 누락됐습니다: A, B (2025-05-13)',
+      '준비 완료 후 확정 유니버스 종목의 가격 봉이 사라졌습니다: A, B (2025-05-13)',
     );
   });
 });

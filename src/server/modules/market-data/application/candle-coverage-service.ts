@@ -110,6 +110,40 @@ export class CandleCoverageService {
     });
   }
 
+  /** 구간 안에서 worker 유효성 조건을 모두 만족하는 일봉 날짜를 종목별로 반환한다. */
+  getValidDatesByCodeBetween(
+    codes: readonly string[],
+    from: string,
+    to: string,
+  ): ReadonlyMap<string, readonly string[]> {
+    const result = new Map<string, string[]>();
+    for (const code of codes) result.set(code, []);
+    if (codes.length === 0) return result;
+    const rows = this.db
+      .select({ code: krxDailyBars.shortCode, date: krxDailyBars.date })
+      .from(krxDailyBars)
+      .where(and(
+        inArray(krxDailyBars.shortCode, [...codes]),
+        gte(krxDailyBars.date, from),
+        lte(krxDailyBars.date, to),
+        inArray(krxDailyBars.market, ['KOSPI', 'KOSDAQ']),
+        gt(krxDailyBars.open, 0),
+        gt(krxDailyBars.high, 0),
+        gt(krxDailyBars.low, 0),
+        gt(krxDailyBars.close, 0),
+        gte(krxDailyBars.volume, 0),
+        gte(krxDailyBars.high, krxDailyBars.low),
+        gte(krxDailyBars.high, krxDailyBars.open),
+        gte(krxDailyBars.high, krxDailyBars.close),
+        lte(krxDailyBars.low, krxDailyBars.open),
+        lte(krxDailyBars.low, krxDailyBars.close),
+      ))
+      .orderBy(asc(krxDailyBars.shortCode), asc(krxDailyBars.date))
+      .all();
+    for (const row of rows) result.get(row.code)?.push(row.date);
+    return result;
+  }
+
   /**
    * 종목별 닫힌 실행 구간 안에서 worker가 읽을 수 있는 마지막 유효 일봉을 찾는다.
    * 동적 유니버스에서 편출 뒤의 봉이나 상장폐지 뒤 재사용 코드의 봉을 재무 PIT 상한으로

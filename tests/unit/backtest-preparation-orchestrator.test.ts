@@ -45,13 +45,14 @@ function ready(symbols: readonly string[] = ['005930']) {
       rebalanceDate: '2026-01-05',
       effectiveDate: '2026-01-05',
       fromTsMs: Date.parse('2026-01-05T00:00:00Z'),
-      members: symbols.map((symbol) => ({
+    members: symbols.map((symbol) => ({
         symbol,
         standardCode: ENTRY.standardCode,
         marketCapKrw: '100',
         volume: 10,
         tradingValueKrw: '1000',
       })),
+      excludedNonTradingCount: 0,
     }],
     diagnostics: [{ rebalanceDate: '2026-01-05', effectiveDate: '2026-01-05', stages: [] }],
     unionEntries: new Map(symbols.map((symbol) => [symbol, { ...ENTRY, shortCode: symbol }])),
@@ -103,6 +104,8 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
       ensureTradingDay: async () => ({ effectiveTradingDate: '2026-01-05', ingestedDates: [] }),
       ensureSelectionMetrics: async () => undefined,
       ingestDate: async () => ({ kind: 'ALREADY_COVERED' }),
+      nonTradingDaysBetween: () => [],
+      delistedEventsBetween: () => [],
       sharesChangesBetween: (): Array<{
         shortCode: string; effectiveDate: string; ratio: number;
       }> => [],
@@ -130,6 +133,7 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
         }]),
       ),
     },
+    facts: { getFacts: async () => [] },
     dartDailyCallLimit: 40_000,
     ...overrides,
   };
@@ -273,8 +277,8 @@ describe('BacktestPreparationOrchestrator NEEDS_DATA DART gate', () => {
 describe('BacktestPreparationOrchestrator MARKET_DATA 진행 표시', () => {
   it('분모는 수집할 날짜 수이고 날짜마다 진행을 갱신한다', async () => {
     // 운영 리포트(2026-08-10): 분모가 심볼 수(예: 275)인데 시장 데이터는 날짜 단위로
-    // 돌아 진행이 phase 끝까지 0 에 머물렀다. metric 날짜 2개 + 가격 3일 = 5 를
-    // 분모로 두고 날짜마다 1씩 오르는지 고정한다.
+    // 돌아 진행이 phase 끝까지 0 에 머물렀다. 첫 resolve의 metric 2일+가격 3일과,
+    // final-union 실행기간 1일 수집을 각각 날짜 분모로 두는지 고정한다.
     let resolveCalls = 0;
     const marketNeeds = {
       kind: 'NEEDS_DATA' as const,
@@ -311,7 +315,7 @@ describe('BacktestPreparationOrchestrator MARKET_DATA 진행 표시', () => {
     // QUEUED→RUNNING 전이 직후의 snapshot 은 아직 분모를 못 받았다(total 0) —
     // 실제 수집이 시작된 snapshot 만 본다.
     const active = progress.filter((entry) => entry.total > 0);
-    expect(new Set(active.map((entry) => entry.total))).toEqual(new Set([5]));
+    expect(new Set(active.map((entry) => entry.total))).toEqual(new Set([5, 1]));
     expect(Math.max(...active.map((entry) => entry.done))).toBe(5);
     // 날짜마다 갱신 — 시작 0 과 완료 5 사이의 중간 값이 실제로 흐른다.
     expect(active.some((entry) => entry.done > 0 && entry.done < 5)).toBe(true);
@@ -411,6 +415,48 @@ describe('BacktestPreparationOrchestrator RESOLVING_STAGES 진행 표시', () =>
 
 
 describe('BacktestPreparationOrchestrator 자본변동 gap 제외', () => {
+  it('최종 종목의 자본변동 coverage를 만들 수 없으면 제외하고 차순위를 준비한다', async () => {
+    const ctx = makeDeps({
+      resolver: {
+        resolveOrDescribeNeeds: async (
+          _rule: PreparationInput['universeRule'],
+          _period: PreparationInput['period'],
+          hooks?: { excludedSymbols?: ReadonlySet<string> },
+        ) => ready(hooks?.excludedSymbols?.has('005930') ? ['000660'] : ['005930']),
+        isPeriodCovered: () => true,
+      },
+      strategies: {
+        get: (id: string) => id === INPUT.strategyId ? {
+          id,
+          version: '1.0.0',
+          name: id,
+          description: id,
+          parameterSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+          dataRequirements: { requiresCorporateActions: true },
+          initialize: () => ({}),
+          onBars: () => ({ orders: [] }),
+        } : null,
+      },
+      actionCoverage: {
+        getCoveredYears: (symbols: readonly string[]) => new Map(
+          symbols.map((symbol) => [symbol, symbol === '005930' ? [2026] : [2025, 2026]]),
+        ),
+        getGapYears: () => new Map<string, readonly number[]>(),
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const job = orchestrator.start(INPUT);
+    await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
+
+    expect(orchestrator.getPreview(job.id)?.unionSymbols).toEqual(['000660']);
+    expect(orchestrator.getPreview(job.id)?.warnings).toEqual([
+      expect.stringMatching(/자본변동.*종목 005930을 매매 대상에서 제외.*coverage/),
+    ]);
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
   it('final sync 뒤 새 최종 멤버의 보정 불가 gap도 제외하고 다시 차순위를 고른다', async () => {
     let resolveCalls = 0;
     const ctx = makeDeps({
@@ -456,11 +502,72 @@ describe('BacktestPreparationOrchestrator 자본변동 gap 제외', () => {
     const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
 
     const job = orchestrator.start(INPUT);
-    await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
+    await waitFor(() => ['COMPLETED', 'FAILED'].includes(orchestrator.get(job.id)?.status ?? ''));
 
+    expect(orchestrator.get(job.id)?.status).toBe('COMPLETED');
     expect(orchestrator.getPreview(job.id)?.unionSymbols).toEqual(['035420']);
     expect(orchestrator.getPreview(job.id)?.warnings).toEqual([
       expect.stringMatching(/종목 000660을 매매 대상에서 제외.*2025년.*상세 사유/),
+    ]);
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
+  it('최종 유니버스의 KRX 정렬 불가 종목도 제외하고 차순위를 고른다', async () => {
+    const ctx = makeDeps({
+      resolver: {
+        resolveOrDescribeNeeds: async (
+          _rule: PreparationInput['universeRule'],
+          _period: PreparationInput['period'],
+          hooks?: { excludedSymbols?: ReadonlySet<string> },
+        ) => ready(hooks?.excludedSymbols?.has('005930') ? ['000660'] : ['005930']),
+        isPeriodCovered: () => true,
+      },
+      strategies: {
+        get: (id: string) => id === INPUT.strategyId ? {
+          id,
+          version: '1.0.0',
+          name: id,
+          description: id,
+          parameterSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+          dataRequirements: { requiresCorporateActions: true },
+          initialize: () => ({}),
+          onBars: () => ({ orders: [] }),
+        } : null,
+      },
+      actionCoverage: {
+        getCoveredYears: (symbols: readonly string[]) => new Map(
+          symbols.map((symbol) => [symbol, [2025, 2026]]),
+        ),
+        getGapYears: () => new Map<string, readonly number[]>(),
+      },
+      facts: {
+        getFacts: async (query: { keys?: readonly string[] }) => (
+          query.keys?.includes('005930') === true
+            ? [{
+                scope: 'SYMBOL',
+                key: '005930',
+                field: 'SPLIT_RATIO',
+                periodKey: '2025-12-31',
+                asOfTsMs: Date.parse('2026-03-31T00:00:00Z'),
+                value: 2,
+                unit: 'RATIO',
+              }]
+            : []
+        ),
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const job = orchestrator.start(INPUT);
+    await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
+
+    const preview = orchestrator.getPreview(job.id);
+    expect(preview?.unionSymbols).toEqual(['000660']);
+    expect(preview?.warnings).toEqual([
+      expect.stringMatching(
+        /종목 005930을 매매 대상에서 제외.*2025-12-31.*KRX 상장주식수 변경일과 정렬할 수 없는/,
+      ),
     ]);
     await orchestrator.stop();
     ctx.handle.close();
@@ -545,6 +652,115 @@ describe('BacktestPreparationOrchestrator 자본변동 gap 제외', () => {
   });
 });
 
+describe('BacktestPreparationOrchestrator 종목별 외부 데이터 결손 제외', () => {
+  it('재무 전략의 PIT 재무가 0건인 종목을 제외하고 차순위를 준비한다', async () => {
+    const ctx = makeDeps({
+      resolver: {
+        resolveOrDescribeNeeds: async (
+          _rule: PreparationInput['universeRule'],
+          _period: PreparationInput['period'],
+          hooks?: { excludedSymbols?: ReadonlySet<string> },
+        ) => ready(hooks?.excludedSymbols?.has('005930') ? ['000660'] : ['005930']),
+        isPeriodCovered: () => true,
+      },
+      strategies: new StrategyRegistry(),
+      actionCoverage: {
+        getCoveredYears: (symbols: readonly string[]) => new Map(
+          symbols.map((symbol) => [symbol, [2025, 2026]]),
+        ),
+        getGapYears: () => new Map<string, readonly number[]>(),
+      },
+      candleCoverage: {
+        getCoverageBetween: (symbols: readonly string[]) => symbols.map((code) => ({
+          code,
+          firstTsMs: Date.parse('2026-01-05T00:00:00Z'),
+          lastTsMs: Date.parse('2026-01-05T00:00:00Z'),
+          barCount: 1,
+        })),
+        getLastTsInWindows: (windows: ReadonlyMap<string, unknown>) => new Map(
+          [...windows.keys()].map((symbol) => [symbol, Date.parse('2026-01-05T00:00:00Z')]),
+        ),
+      },
+      facts: {
+        getFacts: async (query: { keys?: readonly string[] }) => (
+          query.keys?.includes('000660') === true
+            ? [{
+                scope: 'SYMBOL',
+                key: '000660',
+                field: 'NET_INCOME',
+                periodKey: '2025Q4',
+                asOfTsMs: Date.parse('2026-01-04T00:00:00Z'),
+                value: 1,
+                unit: 'KRW',
+              }]
+            : []
+        ),
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const job = orchestrator.start({
+      ...INPUT,
+      strategyId: 'value-quality-rank',
+      parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+    });
+    await waitFor(() => ['COMPLETED', 'FAILED'].includes(orchestrator.get(job.id)?.status ?? ''));
+
+    expect(orchestrator.get(job.id)).toMatchObject({ status: 'COMPLETED', error: null });
+    expect(orchestrator.getPreview(job.id)?.unionSymbols).toEqual(['000660']);
+    expect(orchestrator.getPreview(job.id)?.warnings).toEqual([
+      expect.stringMatching(/DART 재무.*종목 005930을 매매 대상에서 제외.*재무 fact 없음/),
+    ]);
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
+  it('활성 거래일의 KRX 일봉이 빠진 종목을 제외하고 차순위를 준비한다', async () => {
+    const ctx = makeDeps({
+      resolver: {
+        resolveOrDescribeNeeds: async (
+          _rule: PreparationInput['universeRule'],
+          _period: PreparationInput['period'],
+          hooks?: { excludedSymbols?: ReadonlySet<string> },
+        ) => ready(hooks?.excludedSymbols?.has('005930') ? ['000660'] : ['005930']),
+        isPeriodCovered: () => true,
+      },
+      symbolMaster: {
+        ensureTradingDay: async () => ({ effectiveTradingDate: '2026-01-05', ingestedDates: [] }),
+        ensureSelectionMetrics: async () => undefined,
+        ingestDate: async () => ({ kind: 'ALREADY_COVERED' }),
+        isRangeCovered: () => true,
+        tradingDaysBetween: () => ['2026-01-05'],
+        nonTradingDaysBetween: () => [],
+        delistedEventsBetween: () => [],
+        sharesChangesBetween: () => [],
+      },
+      candleCoverage: {
+        getCoverageBetween: (symbols: readonly string[]) => symbols.map((code) => ({
+          code,
+          firstTsMs: Date.parse('2026-01-05T00:00:00Z'),
+          lastTsMs: Date.parse('2026-01-05T00:00:00Z'),
+          barCount: 1,
+        })),
+        getValidDatesByCodeBetween: (symbols: readonly string[]) => new Map(
+          symbols.map((symbol) => [symbol, symbol === '000660' ? ['2026-01-05'] : []]),
+        ),
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const job = orchestrator.start(INPUT);
+    await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
+
+    expect(orchestrator.getPreview(job.id)?.unionSymbols).toEqual(['000660']);
+    expect(orchestrator.getPreview(job.id)?.warnings).toEqual([
+      expect.stringMatching(/KRX 가격.*종목 005930을 매매 대상에서 제외.*일봉 1일 누락/),
+    ]);
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+});
+
 describe('BacktestPreparationOrchestrator 완료 preview coverage 불변식', () => {
   const valueInput: PreparationInput = {
     ...INPUT,
@@ -559,8 +775,16 @@ describe('BacktestPreparationOrchestrator 완료 preview coverage 불변식', ()
     getGapYears: () => new Map<string, readonly number[]>(),
   };
 
-  it('최종 종목의 필수 연도가 일부 빠지면 COMPLETED preview를 만들지 않는다', async () => {
+  it('최종 종목의 필수 연도가 일부 빠지고 대체 후보가 없으면 COMPLETED preview를 만들지 않는다', async () => {
     const ctx = makeDeps({
+      resolver: {
+        resolveOrDescribeNeeds: async (
+          _rule: PreparationInput['universeRule'],
+          _period: PreparationInput['period'],
+          hooks?: { excludedSymbols?: ReadonlySet<string> },
+        ) => ready(hooks?.excludedSymbols?.has('005930') ? [] : ['005930']),
+        isPeriodCovered: () => true,
+      },
       strategies: new StrategyRegistry(),
       actionCoverage: completeActionCoverage,
       factCoverage: {
@@ -574,7 +798,7 @@ describe('BacktestPreparationOrchestrator 완료 preview coverage 불변식', ()
     const job = orchestrator.start(valueInput);
     await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
 
-    expect(orchestrator.get(job.id)?.error).toMatch(/coverage.*2025~2026년.*005930/);
+    expect(orchestrator.get(job.id)?.error).toMatch(/선정된 종목이 없어 유니버스를 만들 수 없습니다/);
     expect(orchestrator.getPreview(job.id)).toBeNull();
     await orchestrator.stop();
     ctx.handle.close();

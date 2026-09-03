@@ -20,7 +20,13 @@ import {
 } from '../../src/server/modules/backtest/domain/cost-profiles.js';
 import { simulateFill } from '../../src/server/modules/backtest/domain/execution.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
-import { registerSymbols, seedCorporateActionCoverage, seedDailyBars, yearRange } from '../helpers/seed.js';
+import {
+  registerSymbols,
+  seedCorporateActionCoverage,
+  seedDailyBars,
+  seedValueQualityFacts,
+  yearRange,
+} from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 
 const DAY = 86_400_000;
@@ -351,17 +357,24 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     expect(full.trades[0]?.entryTsMs).toBe(Date.parse('2025-09-02T00:00:00Z'));
   });
 
-  it('확정 유니버스 중 기간 내 0봉 종목이 있으면 제출을 거부한다', async () => {
+  it('확정 유니버스 중 기간 내 0봉 종목만 제외하고 나머지로 제출한다', async () => {
     // topN=2 로 올리면 시총 2위(000660, 봉 없음)도 유니버스에 들어온다 —
-    // 그 종목만 제외해 schedule을 바꾸지 않고 제출 전에 중단한다.
+    // 준비에서 그 종목만 제외한 뒤 차순위가 없으면 남은 종목으로 계속한다.
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
       payload: buildRequest(2),
     });
-    expect(created.statusCode).toBe(400);
-    expect((created.json() as { error: string }).error).toContain('000660');
+    expect(created.statusCode).toBe(201);
+    expect((created.json() as { warnings: string[] }).warnings.join(' ')).toMatch(
+      /KRX 가격.*000660.*매매 대상에서 제외/,
+    );
+    const jobId = (created.json() as { job: { id: string } }).job.id;
+    const schedule = JSON.parse(
+      ctx.container.jobQueue.getJob(jobId)!.universeScheduleJson,
+    ) as Array<{ symbols: string[] }>;
+    expect([...new Set(schedule.flatMap((entry) => entry.symbols))]).toEqual(['005930']);
   });
 
   it('제출 뒤 기간 첫 거래일 봉이 사라져도 요청 시작 경계에서 중단한다', { timeout: 90_000 }, async () => {
@@ -435,7 +448,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     expect(ctx.container.resultsService.getRun(jobId)).toBeNull();
   });
 
-  it('마지막 실행 봉 뒤 공시만 있는 데이터셋에 밸류 전략을 제출하면 422 로 거부한다', async () => {
+  it('마지막 실행 봉 뒤 공시만 있는 종목은 준비에서 제외한다', async () => {
     await ctx.container.factRepository.saveFacts([{
       scope: 'SYMBOL', key: '005930', field: 'NET_INCOME', periodKey: '2025Q3',
       asOfTsMs: Date.parse('2025-10-31T01:00:00Z'), value: 1, unit: 'KRW',
@@ -461,17 +474,16 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
       },
     });
 
-    expect(response.statusCode).toBe(422);
-    expect(response.json().error).toContain('coverage 기록은 있지만');
-    expect(response.json().error).toContain('기간 종료일·유니버스·전략');
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toBe('PREPARATION_REQUIRED');
   });
 
   it('준비 확인 직후 일부 종목의 필수 연도 coverage가 사라져도 enqueue하지 않는다', async () => {
     seedDailyBars(ctx.container.database.db, buildDailyCandles('000660'));
-    await ctx.container.factRepository.saveFacts([{
-      scope: 'SYMBOL', key: '005930', field: 'NET_INCOME', periodKey: '2025Q1',
-      asOfTsMs: Date.parse('2025-07-31T00:00:00Z'), value: 1, unit: 'KRW',
-    }]);
+    await seedValueQualityFacts(ctx.container, ['005930', '000660'], {
+      latestPeriodKey: '2025Q2',
+      asOfTsMs: Date.parse('2025-07-31T00:00:00Z'),
+    });
     const payload: BacktestRequest = {
       strategyId: 'value-quality-rank',
       parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
@@ -970,7 +982,7 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
 
       const job = ctx.container.jobQueue.getJob(jobId)!;
       expect(job.status).toBe('FAILED');
-      expect(job.error).toContain('확정 유니버스 종목의 가격 봉이 거래일에 누락됐습니다: 000660');
+      expect(job.error).toContain('준비 완료 후 확정 유니버스 종목의 가격 봉이 사라졌습니다: 000660');
       expect(ctx.container.resultsService.getRun(jobId)).toBeNull();
     },
   );
@@ -1220,10 +1232,9 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
  * 급하락(20) 2` 3단계 규칙(매월 rule)을 실제 durable preparation job(202)부터
  * 완주까지 한 번에 태운다.
  *
- * 후보 7종목으로 단계별 배제를 실제로 겪는다: F·G는 시가총액 stage에서 이미
- * 빠지고, D·E는 시가총액 top5(A~E)에는 들되 재무(NET_INCOME)가 없어 PER stage에서
- * 빠진다 — 그래서 DART(financial fact) 요청은 정확히 {A,B,C,D,E} 만 받아야 한다(F·G는
- * 결코 요청되지 않는다). 급하락(20일) stage는 A·B·C 세 종목의 가격 추이를 서로 다르게
+ * 후보 7종목으로 단계별 배제를 실제로 겪는다. D·E의 재무가 없으면 전 기간 후보에서
+ * 제외하고 순위를 다시 채우므로 처음 순위 밖 F·G도 DART로 확인한 뒤 같은 이유로
+ * 제외한다. 급하락(20일) stage는 A·B·C 세 종목의 가격 추이를 서로 다르게
  * 둬 리밸런스 1(1월)엔 {A,B}, 리밸런스 2(2월)엔 {B,C}가 선정되도록 만든다 — A는
  * 멤버십을 잃고, C는 새로 들어온다.
  *
@@ -1317,7 +1328,7 @@ describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepar
   /**
    * 실제 DART 네트워크 없이 `factSyncService.sync` 만 감싼다 — 요청받은 symbol을
    * 기록하고(브리프의 `fakeDart.requestedSymbols()`/`callCount()` 에 대응), NET_INCOME
-   * 이 있는 symbol(A·B·C)만 실제로 저장한다. D·E는 재무가 전혀 없다고 응답하되
+   * 이 있는 symbol(A·B·C)만 실제로 저장한다. D·E·F·G는 재무가 전혀 없다고 응답하되
    * "시도했다" 는 coverage 만 남겨 오케스트레이터가 같은 요청을 영원히 반복하지 않게 한다 —
    * 실제 DART도 신규상장·미제출 분기에서 이렇게 응답한다(§013 무자료 상태).
    */
@@ -1395,8 +1406,8 @@ describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepar
         { standardCode: 'KR7000003000', shortCode: 'C', name: 'C', market: 'KOSPI', marketCapKrw: '300' },
         { standardCode: 'KR7000004000', shortCode: 'D', name: 'D', market: 'KOSPI', marketCapKrw: '200' },
         { standardCode: 'KR7000005000', shortCode: 'E', name: 'E', market: 'KOSPI', marketCapKrw: '100' },
-        // F·G는 시가총액 5위(=E) 보다 낮아 첫 stage에서 이미 떨어진다 — 이후 어떤 phase 도
-        // 이 둘을 요청하지 않는다.
+        // F·G는 최초 시가총액 5위 밖이지만 D·E가 데이터 결손으로 제외되면 차순위로
+        // 올라오므로 다음 안정화 phase에서 재무를 확인한다.
         { standardCode: 'KR7000006000', shortCode: 'F', name: 'F', market: 'KOSPI', marketCapKrw: '50' },
         { standardCode: 'KR7000007000', shortCode: 'G', name: 'G', market: 'KOSPI', marketCapKrw: '40' },
       ],
@@ -1447,12 +1458,13 @@ describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepar
       const completed = await waitForPreparation(jobId);
       expect(completed).toBe('COMPLETED');
 
-      // 3. DART(재무)는 두 phase로만 불린다 — F·G는 어느 phase에도 등장하지 않는다.
-      // ① 유니버스 PER stage의 필요(시가총액 top5 = A~E) ② 전략(저PER·고ROE)이
-      // 최종 확정 유니버스(A~C)에 요구하는 재무(dataRequirements.fundamentalLookbackQuarters)
-      expect(dartCalls).toHaveLength(2);
+      // 3. DART(재무)는 세 phase로 좁혀진다. ① 최초 PER 후보 A~E ② 재무가 없는
+      // D·E를 제외하고 순위를 다시 채우는 F·G ③ 최종 유니버스 A~C의 전략 재무.
+      // 결손 종목을 빼고도 원래 limit을 채우려면 처음 순위 밖 후보도 확인해야 한다.
+      expect(dartCalls).toHaveLength(3);
       expect([...dartCalls[0]!].sort()).toEqual(['A', 'B', 'C', 'D', 'E']);
-      expect([...dartCalls[1]!].sort()).toEqual(['A', 'B', 'C']);
+      expect([...dartCalls[1]!].sort()).toEqual(['F', 'G']);
+      expect([...dartCalls[2]!].sort()).toEqual(['A', 'B', 'C']);
       const callsAfterFirstPreparation = dartCalls.length;
 
       const ready = await ctx.app.inject({
@@ -1466,6 +1478,7 @@ describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepar
         schedule: Array<{ rebalanceDate: string; effectiveDate: string; members: Array<{ symbol: string }> }>;
         unionSymbols: string[];
         scheduleHash: string;
+        warnings: string[];
         diagnostics: Array<{
           rebalanceDate: string;
           effectiveDate: string;
@@ -1497,10 +1510,15 @@ describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepar
         members: [{ symbol: 'C' }, { symbol: 'B' }],
       });
       expect(preview.unionSymbols.slice().sort()).toEqual(['A', 'B', 'C']);
+      for (const symbol of ['D', 'E', 'F', 'G']) {
+        expect(preview.warnings.join(' ')).toMatch(
+          new RegExp(`DART 재무.*종목 ${symbol}을 매매 대상에서 제외`),
+        );
+      }
       for (const entry of preview.diagnostics) {
         const [marketCap, per, decline] = entry.stages;
-        expect(marketCap).toMatchObject({ criterion: 'MARKET_CAP', direction: 'HIGH', inputCount: 7, selectedCount: 5, excludedMissingCount: 0 });
-        expect(per).toMatchObject({ criterion: 'PER', direction: 'LOW', inputCount: 5, eligibleCount: 3, selectedCount: 3, excludedMissingCount: 2 });
+        expect(marketCap).toMatchObject({ criterion: 'MARKET_CAP', direction: 'HIGH', inputCount: 3, selectedCount: 3, excludedMissingCount: 0 });
+        expect(per).toMatchObject({ criterion: 'PER', direction: 'LOW', inputCount: 3, eligibleCount: 3, selectedCount: 3, excludedMissingCount: 0 });
         expect(decline).toMatchObject({ criterion: 'DECLINE', direction: 'LOW', inputCount: 3, selectedCount: 2 });
       }
 

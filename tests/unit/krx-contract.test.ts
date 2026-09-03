@@ -8,6 +8,7 @@ import {
 import {
   parseBaseInfoRows,
   parseDailyRows,
+  parseIndexClose,
   parseKrxEnvelope,
   parseNullableInt64,
 } from '../../src/server/modules/market-data/infrastructure/krx/krx-contract.js';
@@ -55,6 +56,15 @@ describe('parseKrxEnvelope', () => {
 
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ ISU_CD: 'KR7005930003', UNEXPECTED_FIELD: '허용' });
+  });
+});
+
+describe('parseIndexClose', () => {
+  it('무관한 malformed 행을 건너뛰고 정상 목표 지수를 읽는다', () => {
+    expect(parseIndexClose([
+      { IDX_NM: 123, CLSPRC_IDX: null },
+      { IDX_NM: '코스피', CLSPRC_IDX: '2,500.50' },
+    ], '코스피')).toBe(2500.5);
   });
 });
 

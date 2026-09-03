@@ -293,6 +293,20 @@ describe('KRX 과거 유니버스 어댑터', () => {
     );
   });
 
+  it('종목 한 행만 계약을 어기면 유효한 행은 보존하고 경고한다', async () => {
+    const captured = createCapturingLogger();
+    const { fetchImpl } = createFetch(() => krxJsonResponse(krxEnvelope([
+      dailyFixture(),
+      dailyFixture({ ISU_CD: '000660', MKTCAP: 'not-an-integer' }),
+    ])));
+    const source = createConfiguredSource({ fetchImpl, logger: captured.logger });
+
+    await expect(source.fetchDailyTrades('KOSPI', '2026-08-01')).resolves.toHaveLength(1);
+    expect(captured.calls.some(({ args }) => (
+      (args[0] as { event?: string }).event === 'krx.invalid-rows-skipped'
+    ))).toBe(true);
+  });
+
   it('429 재시도를 모두 소진하면 quota 오류로 바꾸고 물리 요청을 모두 센다', async () => {
     const captured = createCapturingLogger();
     let callsUsed = 0;

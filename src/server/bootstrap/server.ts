@@ -142,6 +142,7 @@ export async function buildServer(container: Container): Promise<FastifyInstance
           audit: container.auditLog,
           factCoverage: container.factCoverageStore,
           financialFacts: container.financialFactAvailabilityService,
+          facts: container.factRepository,
           dataRoot: container.config.dataRoot,
           maxQueuedBacktests: container.config.maxQueuedBacktests,
           clock: container.clock,

@@ -27,6 +27,7 @@ import type { Clock } from '../../../shared/clock.js';
 import type { AuditLogService } from '../../audit/audit-service.js';
 import type { FactCoverageStore } from '../../facts/application/fact-coverage-store.js';
 import type { FinancialFactAvailabilityService } from '../../facts/application/financial-fact-availability.js';
+import type { FactRepository } from '../../facts/application/ports.js';
 import type { ConsumedVersionSnapshot, SymbolService } from '../../market-data/application/symbol-service.js';
 import type { SymbolMasterService } from '../../market-data/application/symbol-master-service.js';
 import { sendIfKrxError, sendIfNotCovered } from './krx-error-mapping.js';
@@ -73,6 +74,7 @@ import {
   delistedEventsToTsMsBySymbol,
   financialFactCutoffsFromCoverage,
 } from '../application/backtest-financial-execution-window.js';
+import { findIncompleteFundamentalCheckpoints } from '../application/backtest-financial-data-readiness.js';
 import type {
   SeedCloneBatchDetail,
   SeedCloneBatchService,
@@ -84,7 +86,7 @@ type FundamentalsRequirementIssue =
   | { readonly kind: 'COVERAGE_GAP'; readonly message: string }
   | { readonly kind: 'INGESTION_GAP'; readonly message: string }
   | { readonly kind: 'CANDLE_GAP'; readonly message: string }
-  | { readonly kind: 'NO_PIT_FACTS'; readonly message: string };
+  | { readonly kind: 'STALE_FINANCIAL_DATA'; readonly message: string };
 
 export interface BacktestRouteDeps {
   readonly queue: JobQueue;
@@ -103,6 +105,7 @@ export interface BacktestRouteDeps {
   readonly factCoverage: FactCoverageStore;
   /** 자본변동을 제외한 실제 재무 fact가 종목별 PIT cutoff까지 존재하는 종목. */
   readonly financialFacts: Pick<FinancialFactAvailabilityService, 'symbolsWithFinancialFacts'>;
+  readonly facts: Pick<FactRepository, 'getFacts'>;
   readonly dataRoot: string;
   readonly maxQueuedBacktests: number;
   readonly clock: Clock;
@@ -693,24 +696,23 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
   };
 
   /**
-   * 재무 전략 데이터 요구 검사 — 통과시키면 실행 후 "거래 0건" 으로 끝나 원인을 알 수
-   * 없다 (D-025 와 같은 원칙: 조용히 빠지지 않는다). `validateSubmission` 이 만드는
+   * 재무 전략 데이터 요구 검사. `validateSubmission` 이 만드는
    * `errors` 배열에 합류시키지 않는 이유: 그 배열은 항상 400 으로 변환되는데, 이 조건은
-   * 요청 형식·데이터셋 상태가 아니라 "전략과 유니버스의 조합" 문제라 422 여야 한다.
+   * 요청 형식 오류가 아니라 준비 데이터의 현재성 문제이므로 재준비 가능한 409로 돌려준다.
    * 신규 제출·즉시 clone·재설정 clone·난수 seed 생성이 같은 검사를 거친다. 완료된
    * preparation의 coverage 현재성 검사를 통과한 직후 데이터가 지워지는 race도 이
    * enqueue 직전 관문에서 다시 걸린다. 재설정용 초안은 D-050에 따라 검사를 미룬다.
    */
-  const checkFundamentalsRequirement = (
+  const checkFundamentalsRequirement = async (
     body: BacktestRequest,
     unionSymbols: readonly string[],
     schedule: readonly LegacyUniverseScheduleEntry[],
-  ): FundamentalsRequirementIssue | null => {
+  ): Promise<FundamentalsRequirementIssue | null> => {
     const strategy = strategies.get(body.strategyId);
     if (strategy === null || !strategyRequiresFinancialData(strategy)) return null;
     // 일부 종목만 준비되지 않은 상태를 허용하면 그 종목이 랭킹 후보에서 조용히 빠져
-    // 성과가 낙관적으로 치우친다. 반면 필요한 연도를 모두 조회했지만 실제 공시가 0건인
-    // 종목은 정상적인 수집 결과이므로 coverage 결측과 구분해 허용하고 실행 경고를 남긴다.
+    // 성과가 낙관적으로 치우친다. coverage뿐 아니라 전략이 실제 읽는 계정·연속 분기·
+    // 신선도를 같은 PIT 시점으로 다시 확인한다.
     const gap = findFinancialCoverageGap({
       request: body,
       strategy,
@@ -740,22 +742,41 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
           + '일봉과 유니버스 데이터를 다시 준비하세요.',
       };
     }
-    if (financialFacts.symbolsWithFinancialFacts(factCutoffs).size > 0) return null;
+    const readiness = strategy.dataRequirements?.fundamentalsReady;
+    const missingFacts = readiness === undefined
+      ? (() => {
+          const symbolsWithFacts = financialFacts.symbolsWithFinancialFacts(factCutoffs);
+          return unionSymbols.filter((symbol) => !symbolsWithFacts.has(symbol));
+        })()
+      : findIncompleteFundamentalCheckpoints({
+          strategy,
+          parameters: body.parameters,
+          facts: await deps.facts.getFacts({ scope: 'SYMBOL', keys: unionSymbols }),
+          schedule,
+          validDatesBySymbol: candleCoverage.getValidDatesByCodeBetween(
+            unionSymbols,
+            body.period.from,
+            body.period.to,
+          ),
+        }).map((checkpoint) => checkpoint.symbol);
+    if (missingFacts.length === 0) return null;
+    // 정상 준비에서는 이 종목들이 이미 제외·재순위된다. 여기까지 왔다면 준비 확인과
+    // enqueue 사이에 fact가 삭제됐거나 고정 clone snapshot이 낡은 것이다.
     return {
-      kind: 'NO_PIT_FACTS',
+      kind: 'STALE_FINANCIAL_DATA',
       message:
-        '재무 coverage 기록은 있지만 마지막 실행 봉까지 사용 가능한 재무 데이터가 '
-        + `유니버스 전체에 없습니다: ${unionSymbols.join(', ')} — `
-        + '수집 gap을 확인하거나 기간 종료일·유니버스·전략을 조정하세요.',
+        `준비 완료 후 사용할 수 있는 재무 데이터가 사라진 종목이 있습니다: ${missingFacts.join(', ')} — `
+        + '유니버스 미리보기를 다시 준비하세요.',
     };
   };
 
   const sendFundamentalsIssue = (
     reply: FastifyReply,
     issue: FundamentalsRequirementIssue,
-  ): FastifyReply => issue.kind === 'COVERAGE_GAP' || issue.kind === 'CANDLE_GAP'
-    ? reply.code(409).send({ error: 'PREPARATION_REQUIRED', message: issue.message })
-    : reply.code(422).send({ error: issue.message });
+  ): FastifyReply => reply.code(409).send({
+    error: 'PREPARATION_REQUIRED',
+    message: issue.message,
+  });
 
   /**
    * 보유 종목 수(topN) × 동시 보유 상한(maxPositions) 정합성 검사.
@@ -797,17 +818,17 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    * 않는다. 전략 버전·전략 파라미터·기간·규칙 중 하나라도 달라지면 준비 hash가 달라져
    * 자연스럽게 null이다.
    */
-  const reusablePreviewFor = (
+  const reusablePreviewFor = async (
     job: BacktestJobRow,
     sourceRequest: BacktestRequest,
-  ): {
+  ): Promise<{
     preview: BacktestUniversePreview;
     schedule: LegacyUniverseScheduleEntry[];
     universe: ConsumedVersionSnapshot;
     provenancePin: ProvenancePin;
     benchmark: { pin: ReturnType<typeof benchmarkPinSchema.parse>; hash: string };
     response: BacktestUniversePreview & { fundamentalSymbols: string[] };
-  } | null => {
+  } | null> => {
     const preview = preparation.getCachedPreview(preparationInputOf(sourceRequest));
     const schedule = parseStoredSchedule(job);
     if (!preview || !schedule) return null;
@@ -876,6 +897,23 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       candles: candleCoverage,
     });
     const codesWithFundamentals = financialFacts.symbolsWithFinancialFacts(factCutoffs);
+    const sourceStrategy = strategies.get(sourceRequest.strategyId);
+    if (sourceStrategy && strategyRequiresFinancialData(sourceStrategy)) {
+      const incomplete = sourceStrategy.dataRequirements?.fundamentalsReady === undefined
+        ? resolved.unionSymbols.filter((code) => !codesWithFundamentals.has(code))
+        : findIncompleteFundamentalCheckpoints({
+            strategy: sourceStrategy,
+            parameters: sourceRequest.parameters,
+            facts: await deps.facts.getFacts({ scope: 'SYMBOL', keys: resolved.unionSymbols }),
+            schedule,
+            validDatesBySymbol: candleCoverage.getValidDatesByCodeBetween(
+              resolved.unionSymbols,
+              sourceRequest.period.from,
+              sourceRequest.period.to,
+            ),
+          });
+      if (incomplete.length > 0) return null;
+    }
     return {
       preview,
       schedule,
@@ -960,7 +998,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       });
     }
 
-    const fundamentalsIssue = checkFundamentalsRequirement(
+    const fundamentalsIssue = await checkFundamentalsRequirement(
       body,
       validated.resolved.unionSymbols,
       validated.resolved.schedule,
@@ -1058,7 +1096,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     );
     if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
     const cloneRequest = rebased.request;
-    const reusable = reusablePreviewFor(job, cloneRequest);
+    const reusable = await reusablePreviewFor(job, cloneRequest);
     let prepared: Awaited<ReturnType<typeof preparation.getReadyPreview>>;
     try {
       prepared = reusable?.preview
@@ -1097,7 +1135,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       });
     }
 
-    const fundamentalsIssue = checkFundamentalsRequirement(
+    const fundamentalsIssue = await checkFundamentalsRequirement(
       cloneRequest,
       validated.resolved.unionSymbols,
       validated.resolved.schedule,
@@ -1181,7 +1219,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       });
     }
 
-    const reusable = reusablePreviewFor(sourceJob, rebased.request);
+    const reusable = await reusablePreviewFor(sourceJob, rebased.request);
     if (!reusable) {
       return reply.code(409).send({
         error: 'PREVIEW_REQUIRED',
@@ -1196,7 +1234,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
         ...('uncoveredDates' in validated ? { uncoveredDates: validated.uncoveredDates } : {}),
       });
     }
-    const fundamentalsIssue = checkFundamentalsRequirement(
+    const fundamentalsIssue = await checkFundamentalsRequirement(
       body,
       validated.resolved.unionSymbols,
       validated.resolved.schedule,
@@ -1256,7 +1294,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const body = rebased.request;
     const staticErrors = validateStaticSubmission(body);
     if (staticErrors.length > 0) return reply.code(400).send({ error: staticErrors[0] });
-    const reusable = reusablePreviewFor(sourceJob, body);
+    const reusable = await reusablePreviewFor(sourceJob, body);
     if (!reusable) {
       return reply.code(409).send({
         error: 'PREVIEW_REQUIRED',
@@ -1267,7 +1305,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (!validated.ok) {
       return reply.code(validated.status).send({ error: validated.errors[0] });
     }
-    const fundamentalsIssue = checkFundamentalsRequirement(
+    const fundamentalsIssue = await checkFundamentalsRequirement(
       body,
       validated.resolved.unionSymbols,
       validated.resolved.schedule,
@@ -1302,7 +1340,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    * 비례해 느려진다. 유니버스·coverage 검증은 위저드의 유니버스 단계와 실제 제출에서
    * 수행한다. 이 route는 저장 요청 복원과 현재 스키마 재기준만 맡는다.
    */
-  app.get('/backtests/:id/clone-draft', { preHandler: requireAuth }, (request, reply) => {
+  app.get('/backtests/:id/clone-draft', { preHandler: requireAuth }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const job = queue.getJob(id);
     if (!job) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
@@ -1313,7 +1351,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     );
     if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
 
-    const reusable = reusablePreviewFor(job, rebased.request);
+    const reusable = await reusablePreviewFor(job, rebased.request);
     const identityBlocker = reusable === null
       ? null
       : pinnedScheduleIdentityError(reusable.schedule, symbolMaster);

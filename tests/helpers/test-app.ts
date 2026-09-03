@@ -7,6 +7,7 @@ import { loadConfig } from '../../src/server/bootstrap/config.js';
 import { createContainer, type Container } from '../../src/server/bootstrap/container.js';
 import { buildServer } from '../../src/server/bootstrap/server.js';
 import { newId } from '../../src/server/shared/ids.js';
+import { symbolMasterCoverage } from '../../src/server/shared/db/schema.js';
 
 export interface TestApp {
   app: FastifyInstance;
@@ -55,6 +56,8 @@ export async function createTestApp(
  * registry/coverage/DART 계약은 backtest-preparation.test.ts가 별도로 검증한다.
  */
 export function installPreparedSubmissionFixture(ctx: TestApp): void {
+  const readActualValidDates = ctx.container.candleCoverageService
+    .getValidDatesByCodeBetween.bind(ctx.container.candleCoverageService);
   const noWorkPlan = {
     yearsBySymbol: new Map(),
     shareYearsBySymbol: new Map(),
@@ -109,6 +112,16 @@ export function installPreparedSubmissionFixture(ctx: TestApp): void {
       failureMessage: null,
     };
   };
+  ctx.container.candleCoverageService.getValidDatesByCodeBetween = (codes, from, to) => {
+    const tradingDays = ctx.container.symbolMasterService.tradingDaysBetween(from, to);
+    const actual = readActualValidDates(codes, from, to);
+    return new Map(codes.map((code) => [
+      code,
+      (actual.get(code)?.length ?? 0) > 0
+        ? [...new Set([...(actual.get(code) ?? []), ...tradingDays])].sort()
+        : [],
+    ]));
+  };
 
   const waitForPreparation = async (jobId: string): Promise<boolean> => {
     const started = Date.now();
@@ -151,6 +164,15 @@ export function installPreparedSubmissionFixture(ctx: TestApp): void {
       body = (draft.json() as { request: BacktestRequest }).request;
     }
     if (body === undefined) return first;
+
+    // queue 이후를 검증하는 fixture이므로 preparation의 기간 전체 KRX 백필은 외부 호출
+    // 없이 완료된 것으로 만든다. 개별 테스트가 coverage drift를 검증할 때는 이 준비 뒤
+    // 행을 삭제·교체하므로 실제 제출/worker 방어선은 그대로 탄다.
+    ctx.container.database.db.insert(symbolMasterCoverage).values({
+      startDate: body.period.from,
+      endDate: body.period.to,
+      syncedAtMs: ctx.container.clock.now(),
+    }).run();
 
     const preparation = ctx.container.backtestPreparationOrchestrator.start({
       universeRule: body.universeRule,

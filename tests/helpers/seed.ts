@@ -96,6 +96,48 @@ export function seedFinancialCoverage(
   }
 }
 
+/** 밸류·퀄리티 전략이 실제로 읽는 최소 PIT 계정을 연속 4분기로 심는다. */
+export async function seedValueQualityFacts(
+  container: Container,
+  codes: readonly string[],
+  options: {
+    readonly latestPeriodKey?: `${number}Q${1 | 2 | 3 | 4}`;
+    readonly asOfTsMs?: number;
+  } = {},
+): Promise<void> {
+  const latestPeriodKey = options.latestPeriodKey ?? '2025Q4';
+  const latestYear = Number(latestPeriodKey.slice(0, 4));
+  const latestQuarter = Number(latestPeriodKey.slice(-1));
+  const latestOrdinal = latestYear * 4 + latestQuarter - 1;
+  const asOfTsMs = options.asOfTsMs ?? Date.parse('2025-12-31T00:00:00Z');
+  await container.factRepository.saveFacts(codes.flatMap((code) => {
+    const rows = Array.from({ length: 4 }, (_, offset) => {
+      const ordinal = latestOrdinal - offset;
+      return {
+        scope: 'SYMBOL' as const,
+        key: code,
+        field: 'OPERATING_INCOME',
+        periodKey: `${Math.floor(ordinal / 4)}Q${(ordinal % 4) + 1}`,
+        asOfTsMs,
+        value: 100,
+        unit: 'KRW',
+      };
+    });
+    for (const field of ['CURRENT_ASSETS', 'CURRENT_LIABILITIES', 'TANGIBLE_ASSETS']) {
+      rows.push({
+        scope: 'SYMBOL',
+        key: code,
+        field,
+        periodKey: latestPeriodKey,
+        asOfTsMs,
+        value: 100,
+        unit: 'KRW',
+      });
+    }
+    return rows;
+  }));
+}
+
 /**
  * 자본변동 수집 커버리지를 심는다 — 제출 게이트(Task 6)가 이 표시를 보고
  * 종목별 자본변동 이력을 실제로 수집했는지 판단한다.

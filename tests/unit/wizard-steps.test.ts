@@ -153,33 +153,26 @@ describe('stepJumpBlockReason', () => {
   });
 });
 
-/**
- * 재무 필요 전략 + 재무 없는 유니버스 게이트 (D-034 후속).
- * 완료 preview의 PIT 실제 재무 기준으로 전 종목이 비었을 때만 막고, 일부만 없으면
- * 통과시켜 worker 경고에 맡긴다. coverage 결측은 preview 완료 전에 막힌다(D-069).
- */
-describe('stepBlocker — 재무 조합 게이트 (단계 2)', () => {
+/** 정상적으로 조회했지만 PIT 재무가 없는 조합은 실행 결과 warning으로 남긴다. */
+describe('stepBlocker — 재무 무자료 허용 (단계 2)', () => {
   const base = {
     ...complete,
     unionSymbols: ['005930', '000660'],
     requiresFundamentals: true,
   };
 
-  it('전 종목에 재무가 없으면 막는다', () => {
-    const reason = stepBlocker(2, { ...base, symbolsWithFacts: [] });
-    expect(reason).toMatch(/coverage 기록은 있지만.*재무 데이터/);
-    expect(reason).toMatch(/기간 종료일·유니버스·전략/);
-    expect(reason).not.toContain('미리보기');
+  it('전 종목에 재무가 없어도 통과한다', () => {
+    expect(stepBlocker(2, { ...base, symbolsWithFacts: [] })).toBeNull();
   });
 
-  it('한 종목이라도 실제 PIT 재무가 있으면 통과한다 — 서버 422 와 같은 조건이다', () => {
+  it('한 종목이라도 실제 PIT 재무가 있으면 통과한다', () => {
     // 일부만 없는 경우는 거부 사유가 아니다: 신규 상장처럼 이력이 짧은 종목 하나 때문에
     // 유니버스 전체를 막지 않는다. 빠진 종목은 워커가 실행 경고에 이름으로 남긴다.
     expect(stepBlocker(2, { ...base, symbolsWithFacts: ['005930'] })).toBeNull();
   });
 
-  it('선택과 무관한 종목의 재무는 통과 근거가 아니다', () => {
-    expect(stepBlocker(2, { ...base, symbolsWithFacts: ['035420'] })).not.toBeNull();
+  it('선택과 무관한 종목에만 재무가 있어도 무자료 응답 자체는 막지 않는다', () => {
+    expect(stepBlocker(2, { ...base, symbolsWithFacts: ['035420'] })).toBeNull();
   });
 
   it('봉만 쓰는 전략은 재무가 없어도 통과한다', () => {
@@ -253,13 +246,13 @@ describe('reachableStepFromUrl', () => {
   });
 
   it('실제로 지나온 단계는 게이트가 뒤늦게 무너져도 유지된다 — 서 있던 자리에서 밀어내지 않는다', () => {
-    // 미리보기가 무효화한 ['symbols'] 재조회가 도착해 재무 게이트가 뒤집힌 상황
+    // 재무 무자료는 더 이상 유니버스 게이트를 무너뜨리지 않는다.
     const brokenUniverse: StepGateState = {
       ...complete,
       requiresFundamentals: true,
       symbolsWithFacts: [],
     };
-    expect(reachableStepFromUrl(brokenUniverse, fresh)).toBe(2);
+    expect(reachableStepFromUrl(brokenUniverse, fresh)).toBe(REVIEW_STEP);
     expect(reachableStepFromUrl(brokenUniverse, { traversed: REVIEW_STEP, reviewPassed: false })).toBe(
       REVIEW_STEP,
     );

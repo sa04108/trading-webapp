@@ -5,6 +5,7 @@ import { BENCHMARK_NAMES, type KrxBenchmarkId } from '../../../../../shared/sche
 import { RestClient } from '../../../../shared/rest-client.js';
 import {
   KrxApprovalExpiredError,
+  KrxContractError,
   KrxNotConfiguredError,
   KrxQuotaError,
   type KrxHistoricalUniverseSource,
@@ -188,7 +189,30 @@ export function createKrxHistoricalUniverseSource(
       throw new Error(SAFE_REQUEST_ERROR_MESSAGE);
     }
 
-    const rows = parseRows(parseKrxEnvelope(payload));
+    const rawRows = parseKrxEnvelope(payload);
+    const rows: T[] = [];
+    let firstContractError: KrxContractError | null = null;
+    let invalidRows = 0;
+    for (const rawRow of rawRows) {
+      try {
+        rows.push(...parseRows([rawRow]));
+      } catch (error) {
+        if (!(error instanceof KrxContractError)) throw error;
+        firstContractError ??= error;
+        invalidRows += 1;
+      }
+    }
+    // 한두 종목의 행 훼손은 후속 종목 제외로 격리한다. 응답 전체를 해석할 수 없으면
+    // 휴장/빈 응답과 구분할 수 없으므로 정상 coverage로 닫지 않는다.
+    if (rawRows.length > 0 && rows.length === 0 && firstContractError !== null) {
+      throw firstContractError;
+    }
+    if (invalidRows > 0) {
+      logger.warn(
+        { module: 'market-data', event: 'krx.invalid-rows-skipped', market, basDd, path, invalidRows },
+        'KRX 응답의 계약 위반 종목 행을 건너뛴다',
+      );
+    }
     logger.info(
       { module: 'market-data', event: 'krx.fetch', market, basDd, rows: rows.length, callsToday },
       'krx fetch ok',

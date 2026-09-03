@@ -225,6 +225,13 @@
       "when": 1788326552976,
       "tag": "0031_shiny_proemial_gods",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1788454759706,
+      "tag": "0032_late_wasp",
+      "breakpoints": true
     }
   ]
 }

@@ -3,7 +3,11 @@ import { get as httpGet, type IncomingMessage } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import type { PreparationInput } from '../../src/server/modules/backtest/application/backtest-preparation-orchestrator.js';
-import { dailySelectionMetrics, symbolFactsState } from '../../src/server/shared/db/schema.js';
+import {
+  dailySelectionMetricCoverage,
+  dailySelectionMetrics,
+  symbolFactsState,
+} from '../../src/server/shared/db/schema.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
 import {
   registerSymbols,
@@ -35,7 +39,9 @@ async function waitFor<T>(read: () => T, predicate: (value: T) => boolean): Prom
   for (;;) {
     const value = read();
     if (predicate(value)) return value;
-    if (Date.now() - started > 2_000) throw new Error('waitFor timeout');
+    if (Date.now() - started > 2_000) {
+      throw new Error(`waitFor timeout: ${JSON.stringify(value)}`);
+    }
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
@@ -64,6 +70,17 @@ describe('backtest preparation HTTP/SSE', () => {
     market: 'KOSPI' as const, marketCapKrw: '500000000000000',
   }], withActionCoverage = true) => {
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], entries);
+    seedDailyBars(ctx.container.database.db, entries.map((entry) => ({
+      symbol: entry.shortCode,
+      market: 'KR' as const,
+      timeframe: '1d' as const,
+      tsMs: Date.parse('2026-01-05T00:00:00Z'),
+      open: 100,
+      high: 110,
+      low: 90,
+      close: 105,
+      volume: 1_000,
+    })));
     if (withActionCoverage && entries.length > 0) {
       const symbols = entries.map((entry) => entry.shortCode);
       registerSymbols(ctx.container, 'KR', symbols);
@@ -429,6 +446,7 @@ describe('backtest preparation HTTP/SSE', () => {
 
   it('market-data만 NEEDS_DATA여도 value 전략의 알려진 후보가 있으면 DART 503이다', async () => {
     await seedReadyUniverse(undefined, false);
+    ctx.container.database.db.delete(dailySelectionMetricCoverage).run();
     const input = previewInput();
     const universeRule = {
       ...input.universeRule,
@@ -471,6 +489,7 @@ describe('backtest preparation HTTP/SSE', () => {
     registerSymbols(ctx.container, 'KR', ['005930']);
     await seedCorporateActionCoverage(ctx.container, ['005930'], [2025, 2026]);
     seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
+    ctx.container.database.db.delete(dailySelectionMetricCoverage).run();
     const input = previewInput();
     const preparation = {
       ...input,

@@ -81,6 +81,17 @@ function installPreparedPreviewFixture(ctx: TestApp): void {
     kind: 'ALREADY_COVERED',
   });
   ctx.container.symbolMasterService.ingestDate = noMarketSync;
+  const readActualValidDates = ctx.container.candleCoverageService
+    .getValidDatesByCodeBetween.bind(ctx.container.candleCoverageService);
+  ctx.container.candleCoverageService.getValidDatesByCodeBetween = (codes, from, to) => {
+    const actual = readActualValidDates(codes, from, to);
+    // 이 파일의 기존 preview 모양 테스트는 시장 sync를 no-op으로 격리한다. 전 종목이
+    // 빈 fixture일 때만 실행 봉 준비가 끝났다고 가정하고, 하나라도 실제 봉이 있으면
+    // production 검사를 그대로 써 종목별 가격 결손 제외 테스트가 가능하게 한다.
+    if ([...actual.values()].some((dates) => dates.length > 0)) return actual;
+    const assumedDates = ctx.container.symbolMasterService.tradingDaysBetween(from, to);
+    return new Map(codes.map((code) => [code, assumedDates.length > 0 ? assumedDates : [from]]));
+  };
   const rawInject = ctx.app.inject.bind(ctx.app);
   ctx.app.inject = (async (options: unknown) => {
     const request = options as { method?: string; url?: string; payload?: Record<string, unknown> };
@@ -255,6 +266,27 @@ describe('POST /backtests/universe-preview', () => {
       asOfTsMs: Date.UTC(2025, 2, 1),
       unit: 'RATIO',
     }]);
+    // 위 fact는 "자본변동 fact도 재무 보유로 세지 않는다"를 검증하기 위한 정상
+    // 분할이다. 준비 단계가 정렬 불가 종목으로 제외하지 않도록 KRX 실제 변경일을 맞춘다.
+    ctx.container.database.db.update(symbolMasterVersions)
+      .set({ validToDate: '2025-03-14' })
+      .where(eq(symbolMasterVersions.standardCode, 'KR7005930003'))
+      .run();
+    ctx.container.database.db.insert(symbolMasterVersions).values({
+      standardCode: 'KR7005930003',
+      validFromDate: '2025-03-14',
+      validToDate: null,
+      shortCode: '005930',
+      name: '삼성전자',
+      market: 'KOSPI',
+      sharesOutstanding: '2000000',
+      instrumentType: 'COMMON_STOCK',
+      listedDate: null,
+      recordedAtMs: ctx.container.clock.now(),
+    }).run();
+    // listEvents 는 변경 경계 직전 KRX 관측일이 있어야 첫 baseline 이 아니라
+    // 실제 SHARES_CHANGED 로 판정한다.
+    ctx.container.database.db.insert(symbolMasterTradingDays).values({ date: '2025-03-13' }).run();
     ctx.container.factCoverageStore.addCoveredYears('005930', [2025], Date.now());
 
     const res = await ctx.app.inject({
@@ -1259,8 +1291,8 @@ describe('POST /backtests/universe-preview — 3단계 파이프라인 진단 (T
       rebalanceDate: EFFECTIVE_DATE,
       effectiveDate: EFFECTIVE_DATE,
       stages: [
-        { criterion: 'MARKET_CAP', direction: 'HIGH', inputCount: 3, eligibleCount: 3, selectedCount: 3, excludedMissingCount: 0 },
-        { criterion: 'PER', direction: 'LOW', inputCount: 3, eligibleCount: 2, selectedCount: 2, excludedMissingCount: 1 },
+        { criterion: 'MARKET_CAP', direction: 'HIGH', inputCount: 2, eligibleCount: 2, selectedCount: 2, excludedMissingCount: 0 },
+        { criterion: 'PER', direction: 'LOW', inputCount: 2, eligibleCount: 2, selectedCount: 2, excludedMissingCount: 0 },
         { criterion: 'DECLINE', direction: 'LOW', inputCount: 2, eligibleCount: 2, selectedCount: 1, excludedMissingCount: 0 },
       ],
     });

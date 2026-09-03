@@ -190,7 +190,7 @@ test('full MVP flow', async ({ page }) => {
   );
   // 검토 줄은 데이터셋이 아니라 유니버스 규칙을 적는다(universe-summary.ts) — 실제
   // 리밸런스 결과 종목 수는 여기 적지 않는다(다시 미리보기해야 아는 값이라서다)
-  await expect(page.getByText('KOSPI · 시가총액 1 · 매월').first()).toBeVisible();
+  await expect(page.getByText('KOSPI · 시가총액 상위 1 · 매월').first()).toBeVisible();
 
   // 2-3. 상단 단계 버튼 — 뒤로는 자유롭게, 앞으로는 검토까지만
   await page.getByRole('button', { name: '3. 유니버스' }).click();
@@ -246,7 +246,7 @@ test('full MVP flow', async ({ page }) => {
   await expect(feeModelValue).toHaveCSS('overflow-wrap', 'anywhere');
   await expect(feeModelValue).not.toHaveCSS('text-overflow', 'ellipsis');
   // 5-1. 설명 줄은 실행에 사용한 유니버스 규칙을 적는다.
-  await expect(page.getByText('KOSPI · 시가총액 1 · 매월')).toBeVisible();
+  await expect(page.getByText('KOSPI · 시가총액 상위 1 · 매월')).toBeVisible();
   // 미청산 포지션도 거래 내역 표에서 확인한다.
   await expect(page.getByRole('row').filter({ hasText: '미청산' }).first()).toBeVisible();
   // 미청산 행이 있는 실행이므로 "마지막 확인일" 열이 뜬다 (Task 11) — lastPriceTsMs 가
@@ -318,9 +318,9 @@ test('full MVP flow', async ({ page }) => {
     .poll(() => page.url(), { timeout: 10_000 })
     .not.toBe(originalUrl);
 
-  // 7-1. 재무 조합 게이트 — 위저드는 종목을 직접 고르지 않으므로, 이 조합 판정은
-  // '유니버스' 단계에서 미리보기가 유니버스 종목을 확정한 뒤에만 이뤄진다
-  // (wizard-steps.ts `fundamentalsBlocker`). 픽스처의 005930 은 재무가 없다.
+  // 7-1. 재무 결손 제외 — 픽스처의 보통주 후보는 DART 재무가 없으므로 preparation이
+  // 종목별로 제외한다. 대체 가능한 정상 후보도 없어서 이 규칙으로는 빈 유니버스가 되고,
+  // 전체를 조용히 실행하는 대신 준비 실패 원인을 화면에 남긴다.
   await page.goto('/backtests/new');
   await page.getByRole('button', { name: /밸류·퀄리티 랭킹/ }).click();
   await page.getByRole('button', { name: '다음' }).click(); // 전략 → 기간
@@ -328,18 +328,24 @@ test('full MVP flow', async ({ page }) => {
   await page.getByLabel('종료일').fill(PERIOD.to);
   await advanceFromPeriod(page); // 기간 → 벤치마크 동기화(필요 시) → 유니버스
   await page.getByLabel('N', { exact: true }).fill(String(TOP_N));
-  // 이 전략은 리밸런스 주기 기본값이 3개월이라 이 기간엔 리밸런스 날짜가 하나뿐이고
-  // (PERIOD.from), 위 시나리오가 이미 그 날짜를 동기화해 둬서 곧바로 통과한다.
-  await previewAndSyncUniverse(page);
+  const incompletePreview = page.waitForResponse(
+    (resp) => resp.url().includes('/backtests/universe-preview')
+      && resp.request().method() === 'POST',
+  );
+  await page.getByRole('button', { name: '미리보기' }).click();
+  expect((await incompletePreview).status()).toBe(202);
+  await expect(page.getByText('준비 실패', { exact: true })).toBeVisible({
+    timeout: PREPARATION_WAIT_TIMEOUT_MS,
+  });
   await expect(
-    page.getByText(/재무 데이터가 필요하지만 이 유니버스에는 재무 있는 종목이 없습니다/),
+    page.getByRole('alert').filter({ hasText: '선정된 종목이 없어 유니버스를 만들 수 없습니다' }),
   ).toBeVisible();
   // 앞 단계로 가는 버튼이 잠기고 이유를 들고 있다. `disabled` 로 죽이지 않고
   // `aria-disabled` + title 로 두는 것이 §17 규칙이다 — 왜 못 가는지 모른 채 회색
   // 버튼만 보는 상태를 만들지 않는다. (그래서 클릭이 아니라 상태를 검증한다.)
   const capitalStep = page.getByRole('button', { name: '4. 자본·비용' });
   await expect(capitalStep).toHaveAttribute('aria-disabled', 'true');
-  await expect(capitalStep).toHaveAttribute('title', /재무 데이터가 필요하지만/);
+  await expect(capitalStep).toHaveAttribute('title', /유니버스 규칙을 미리보기/);
   await page.screenshot({ path: 'test-results/fundamentals-gate.png' });
 
   // 봉만 쓰는 전략으로 바꾸면 같은 유니버스가 통과한다 — 게이트가 전략에만 반응한다
@@ -350,9 +356,7 @@ test('full MVP flow', async ({ page }) => {
   // 전략을 바꾸면 리밸런스 주기(전략 파라미터 기반)도 바뀌어 이전 미리보기가
   // 무효화된다 — 다시 미리보기해야 한다(이미 동기화해 둔 날짜라 곧바로 통과한다).
   await previewAndSyncUniverse(page);
-  await expect(
-    page.getByText(/재무 데이터가 필요하지만 이 유니버스에는 재무 있는 종목이 없습니다/),
-  ).toHaveCount(0);
+  await expect(page.getByText('준비 실패', { exact: true })).toHaveCount(0);
 
   // 8. 로그아웃
   await page.getByRole('button', { name: '로그아웃' }).click();
@@ -390,9 +394,11 @@ test('rebalance schedule shows the applied trading day when a rebalance date fal
   page,
 }, testInfo) => {
   const period = holidayPeriodFor(testInfo.project.name);
-  // 1월 1일 리밸런스가 소급되면 닿는 직전 거래일 — 12월 31일은 '0101'로 끝나지 않아
-  // 가짜 KRX 서버가 정상 거래일로 응답한다.
-  const previousTradingDate = `${Number(period.from.slice(0, 4)) - 1}-12-31`;
+  // 1월 1일 리밸런스가 소급되면 닿는 직전 평일. 2017-12-31은 일요일이므로
+  // 데스크톱 고정 연도는 12월 29일까지 더 소급된다.
+  const previousTradingDate = testInfo.project.name === 'mobile'
+    ? '2024-12-31'
+    : '2017-12-29';
 
   await login(page);
 
@@ -422,11 +428,15 @@ test('rebalance schedule shows the applied trading day when a rebalance date fal
   await expect(page.getByText('리밸런스 일정')).toBeVisible();
 
   // 휴장 리밸런스 날짜(1월 1일)는 소급된 직전 거래일이 덧붙어 보이고, 정상 거래일
-  // (2월 1일)은 요청 날짜와 같아 아무것도 덧붙지 않는다 — 표기 규약(잡음 없음)이다.
+  // 이면 요청 날짜만 표시한다. 모바일 고정값인 2025-02-01은 토요일이므로 직전
+  // 금요일 적용일도 함께 표시한다 — 표기 규약(실제 적용일이 다를 때만 덧붙임)이다.
   await expect(
     page.getByRole('cell', { name: `${period.from} (적용 ${previousTradingDate})`, exact: true }),
   ).toBeVisible();
-  await expect(page.getByRole('cell', { name: period.to, exact: true })).toBeVisible();
+  const expectedEndLabel = testInfo.project.name === 'mobile'
+    ? `${period.to} (적용 2025-01-31)`
+    : period.to;
+  await expect(page.getByRole('cell', { name: expectedEndLabel, exact: true })).toBeVisible();
 });
 
 /**

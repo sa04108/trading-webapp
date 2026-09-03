@@ -309,7 +309,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
 
       const job = ctx.container.jobQueue.getJob(jobId)!;
       expect(job.status).toBe('FAILED');
-      expect(job.error).toMatch(/마지막 실행 봉.*재무 데이터/);
+      expect(job.error).toMatch(/준비 완료 후.*PIT 재무.*CHEAP/);
       expect(ctx.container.resultsService.getRun(jobId)).toBeNull();
     },
   );
@@ -370,14 +370,14 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
 
       const job = ctx.container.jobQueue.getJob(queued.id)!;
       expect(job.status).toBe('FAILED');
-      expect(job.error).toMatch(/마지막 실행 봉.*재무 데이터/);
+      expect(job.error).toMatch(/준비 완료 후.*PIT 재무.*CHEAP.*RICH/);
       expect(ctx.container.resultsService.getRun(queued.id)).toBeNull();
     },
   );
 
-  /** 재무가 없어 제외된 종목은 이름과 함께 경고한다. */
+  /** 준비에서 재무가 없어 제외된 종목은 이름과 함께 경고한다. */
   it(
-    '재무가 없는 종목을 이름으로 밝힌다',
+    '재무가 없는 종목을 준비에서 제외하고 이름을 밝힌다',
     { timeout: 90_000 },
     async () => {
       // 데이터셋·봉은 있지만 팩트가 없는 종목을 하나 더한다 — topN 을 3으로 올려
@@ -385,8 +385,8 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       registerSymbols(ctx.container, 'KR', ['NOFACTS']);
       // NOFACTS 도 unionSymbols 에 들어오므로 자본변동 게이트도 통과해 둬야 한다
       await seedCorporateActionCoverage(ctx.container, ['NOFACTS'], yearRange(2024, 2025));
-      // DART가 필수 연도를 모두 조회했지만 공시 행이 0건인 정상 상태다. 미수집
-      // coverage 결측과 달리 실행을 허용하고 해당 종목만 랭킹에서 제외해야 한다.
+      // DART가 필수 연도를 모두 조회했지만 공시 행이 0건인 상태다. 준비는 해당
+      // 종목을 매매 대상에서 제외하고 나머지 유니버스를 다시 확정해야 한다.
       seedFinancialCoverage(ctx.container, ['NOFACTS'], yearRange(2024, 2025));
       const extra: Candle[] = [];
       for (let index = 0; index < 40; index += 1) {
@@ -439,7 +439,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
 
       const run = ctx.container.resultsService.getRun(jobId)!;
       const warnings = JSON.parse(run.warningsJson ?? '[]') as string[];
-      const factWarning = warnings.find((w) => w.includes('재무 데이터가 하나도 없어'));
+      const factWarning = warnings.find((w) => w.includes('재무 정보를 온전히 확보할 수 없어'));
       expect(factWarning).toBeDefined();
       expect(factWarning).toContain('NOFACTS');
       // 재무가 있는 종목은 이 목록에 끼지 않는다

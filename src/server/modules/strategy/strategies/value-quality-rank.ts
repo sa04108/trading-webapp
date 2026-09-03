@@ -9,6 +9,7 @@ import type {
 } from '../domain/strategy.js';
 import {
   currentQuarterOrdinal,
+  isFreshQuarter,
   safePositiveMarketCap,
 } from './shared/fundamental-rank.js';
 import { rankDescending, type Scored } from './shared/rank.js';
@@ -168,7 +169,7 @@ export const valueQualityRankStrategy: TradingStrategy<
   ValueQualityRankState
 > = {
   id: 'value-quality-rank',
-  version: '2.3.0',
+  version: '2.4.0',
   name: '밸류·퀄리티 랭킹',
   description:
     '이익수익률(EBIT/EV)과 자본수익률(EBIT/투입자본) 순위를 합산해 상위 N 을 동일가중 보유합니다. 상장시점 재무제표가 수집된 데이터셋에서만 동작합니다.',
@@ -177,6 +178,22 @@ export const valueQualityRankStrategy: TradingStrategy<
   requiredRebalanceGapBars: 1,
   dataRequirements: {
     fundamentalLookbackQuarters: 4,
+    fundamentalsReady: (snapshot, tsMs, parameters) => (
+      snapshot.ttm('OPERATING_INCOME') !== null
+      && snapshot.get('CURRENT_ASSETS') !== null
+      && snapshot.get('CURRENT_LIABILITIES') !== null
+      && snapshot.get('TANGIBLE_ASSETS') !== null
+      && [
+        'OPERATING_INCOME',
+        'CURRENT_ASSETS',
+        'CURRENT_LIABILITIES',
+        'TANGIBLE_ASSETS',
+      ].every((field) => isFreshQuarter(
+        snapshot.periodKeyOf(field as FundamentalField),
+        tsMs,
+        parameters.staleQuarters,
+      ))
+    ),
     // 엔진의 포지션 수량 보정도 최종 유니버스 자본변동 이력을 소비한다.
     requiresCorporateActions: true,
   },

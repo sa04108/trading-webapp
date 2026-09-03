@@ -1668,7 +1668,7 @@ describe('FactSyncService — 공시 기반 강제 재수집 (INCREMENTAL)', () 
     expect(source.requests).toEqual([]);
   });
 
-  it('새 공시의 사업연도를 해석할 수 없으면 현재 연도로 추정하지 않고 중단한다', async () => {
+  it('새 공시의 사업연도를 해석할 수 없으면 해당 종목의 수집 연도를 모두 다시 받는다', async () => {
     const source = filingSource([{
       receiptNo: '20260810000009',
       stockCode: '005930',
@@ -1683,10 +1683,29 @@ describe('FactSyncService — 공시 기반 강제 재수집 (INCREMENTAL)', () 
 
     const report = await service(source, coverage).sync(request);
 
-    expect(source.requests).toEqual([]);
-    expect(report.stopReason).toBe('ERROR');
-    expect(report.failureMessage).toContain('사업연도를 보고서명에서 확인할 수 없습니다');
-    expect(coverage.getUpdatedAtMs(['005930']).get('005930')).toBe(watermark);
+    expect(source.requests.map((item) => item.years)).toEqual([[2024], [2025]]);
+    expect(report.stopReason).toBeNull();
+    expect(report.failureMessage).toBeNull();
+    expect(coverage.getUpdatedAtMs(['005930']).get('005930')).toBe(NOW);
+  });
+
+  it('접수번호를 해석할 수 없으면 해당 사업연도를 다시 받고 체크포인트는 만들지 않는다', async () => {
+    const source = filingSource([{
+      receiptNo: null,
+      stockCode: '005930',
+      businessYear: 2025,
+      receiptDate: '2026-08-10',
+    }]);
+    const coverage = fakeCoverage(
+      new Map([['005930', [2024, 2025]]]),
+      new Map([['005930', NOW - 5 * DAY_MS]]),
+    );
+
+    const report = await service(source, coverage).sync(request);
+
+    expect(source.requests.map((item) => item.years)).toEqual([[2025]]);
+    expect(report.stopReason).toBeNull();
+    expect(coverage.processedReceiptNos).toEqual(new Set());
   });
 
   it('stale watermark는 좁은 요청이어도 종목의 covered 연도를 모두 다시 받는다', async () => {

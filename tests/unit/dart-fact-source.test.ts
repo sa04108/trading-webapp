@@ -594,7 +594,7 @@ describe('createDartFactSource — 정기공시 목록 (list.json)', () => {
     expect(await source.listRecentPeriodicFilings('2026-05-01', '2026-05-02')).toEqual([]);
   });
 
-  it('상장사 공시에 접수번호가 없으면 중복 판정을 계속하지 않는다', async () => {
+  it('상장사 공시에 접수번호가 없어도 종목 행을 남겨 보수적 재수집으로 넘긴다', async () => {
     const source = createDartFactSource(
       { baseUrl: 'https://dart.test', apiKey: 'k' },
       LOGGER,
@@ -610,8 +610,36 @@ describe('createDartFactSource — 정기공시 목록 (list.json)', () => {
       },
     );
 
-    await expect(source.listRecentPeriodicFilings('2026-05-01', '2026-05-02'))
-      .rejects.toThrow('접수번호가 올바르지 않습니다');
+    await expect(source.listRecentPeriodicFilings('2026-05-01', '2026-05-02')).resolves.toEqual([{
+      receiptNo: null,
+      stockCode: '005930',
+      businessYear: 2026,
+      receiptDate: '2026-05-15',
+    }]);
+  });
+
+  it('공시 목록의 null·비문자 행은 다른 상장사 행의 최신성 판정을 막지 않는다', async () => {
+    const source = createDartFactSource(
+      { baseUrl: 'https://dart.test', apiKey: 'k' },
+      LOGGER,
+      {
+        fetchImpl: async () => jsonResponse({
+          status: '000',
+          message: '정상',
+          total_page: 1,
+          list: [null, { stock_code: 5930 }, filing({})],
+        }),
+        sleep: async () => {},
+        corpCodeResolver: STUB_RESOLVER,
+      },
+    );
+
+    await expect(source.listRecentPeriodicFilings('2026-05-01', '2026-05-02')).resolves.toEqual([{
+      receiptNo: '20260515000001',
+      stockCode: '005930',
+      businessYear: 2026,
+      receiptDate: '2026-05-15',
+    }]);
   });
 });
 
@@ -2042,5 +2070,74 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
     expect(
       result.gaps.some((gap) => gap.reason.includes('자본변동 비율이 공시마다 다릅니다')),
     ).toBe(false);
+  });
+});
+
+describe('createDartFactSource — 종목별 payload 결손 격리', () => {
+  it('한 종목의 재무 list 형식이 깨져도 gap을 남기고 다음 종목을 수집한다', async () => {
+    const source = createDartFactSource(
+      { baseUrl: 'https://opendart.fss.or.kr', apiKey: 'K' },
+      LOGGER,
+      {
+        sleep: async () => undefined,
+        corpCodeResolver: STUB_RESOLVER,
+        fetchImpl: (async (url: string) => {
+          const target = String(url);
+          if (target.includes('corp_code=corp-005930')) {
+            return jsonResponse({ status: '000', message: '정상', list: {} });
+          }
+          if (
+            target.includes('fnlttSinglAcntAll')
+            && target.includes('corp_code=corp-000660')
+            && target.includes('reprt_code=11013')
+          ) {
+            return jsonResponse({
+              status: '000',
+              message: '정상',
+              list: [{
+                rcept_no: '20250515000001', reprt_code: '11013', bsns_year: '2025',
+                sj_div: 'BS', account_id: 'ifrs-full_CurrentAssets', account_nm: '유동자산',
+                thstrm_amount: '100',
+              }],
+            });
+          }
+          return jsonResponse({ status: '013', message: 'no data' });
+        }) as typeof fetch,
+      },
+    );
+
+    const result = await source.fetchFinancials({
+      symbols: ['005930', '000660'],
+      years: [2025],
+      shareYears: [],
+      consolidated: true,
+    });
+
+    expect(result.gaps).toContainEqual(expect.objectContaining({
+      symbol: '005930',
+      severity: 'BLOCKING',
+      reason: expect.stringContaining('list 필드'),
+    }));
+    expect(result.facts).toContainEqual(expect.objectContaining({
+      key: '000660',
+      field: 'CURRENT_ASSETS',
+    }));
+  });
+
+  it('전역 정기공시 목록의 list 형식 오류는 성공으로 위장하지 않는다', async () => {
+    const source = createDartFactSource(
+      { baseUrl: 'https://opendart.fss.or.kr', apiKey: 'K' },
+      LOGGER,
+      {
+        sleep: async () => undefined,
+        corpCodeResolver: STUB_RESOLVER,
+        fetchImpl: (async () => jsonResponse({
+          status: '000', message: '정상', list: {},
+        })) as typeof fetch,
+      },
+    );
+
+    await expect(source.listRecentPeriodicFilings('2025-01-01', '2025-01-31'))
+      .rejects.toThrow(/정기공시 목록.*list 필드/);
   });
 });

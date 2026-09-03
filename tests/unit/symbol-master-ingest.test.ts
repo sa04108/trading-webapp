@@ -255,6 +255,82 @@ describe('SymbolMasterService.ingestDate', () => {
     await teardown(ctx);
   });
 
+  it('분류 필드를 해석할 수 없는 한 종목은 비매매 상태로 저장하고 날짜 수집을 완료한다', async () => {
+    const ctx = await setup();
+    ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
+    ctx.fake.setResponse('stk_isu_base_info', '20230102', {
+      body: krxEnvelope([baseInfoFixture({ SECUGRP_NM: '새로운증권분류' })]),
+    });
+
+    await expect(ctx.svc.ingestDate('2023-01-02')).resolves.toEqual({ kind: 'TRADING_DAY' });
+    expect(
+      ctx.svc.getUniverseAsOf('2023-01-02').get('KR7005930003')?.instrumentType,
+    ).toBe('UNKNOWN_CLASSIFICATION');
+    await teardown(ctx);
+  });
+
+  it('상장주식수가 없는 보통주는 비매매 상태로 저장하고 날짜 수집을 완료한다', async () => {
+    const ctx = await setup();
+    ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
+    ctx.fake.setResponse('stk_isu_base_info', '20230102', {
+      body: krxEnvelope([baseInfoFixture({ LIST_SHRS: '-' })]),
+    });
+
+    await expect(ctx.svc.ingestDate('2023-01-02')).resolves.toEqual({ kind: 'TRADING_DAY' });
+    expect(
+      ctx.svc.getUniverseAsOf('2023-01-02').get('KR7005930003'),
+    ).toMatchObject({ sharesOutstanding: '0', instrumentType: 'MISSING_SHARES' });
+    await teardown(ctx);
+  });
+
+  it('중복 표준코드 한 종목은 비매매 상태로 격리하고 날짜 수집을 완료한다', async () => {
+    const ctx = await setup();
+    ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
+    ctx.fake.setResponse('stk_isu_base_info', '20230102', {
+      body: krxEnvelope([
+        baseInfoFixture(),
+        baseInfoFixture({ ISU_SRT_CD: '005931', ISU_NM: '중복행' }),
+      ]),
+    });
+
+    await expect(ctx.svc.ingestDate('2023-01-02')).resolves.toEqual({ kind: 'TRADING_DAY' });
+    expect(
+      ctx.svc.getUniverseAsOf('2023-01-02').get('KR7005930003')?.instrumentType,
+    ).toBe('UNKNOWN_CLASSIFICATION');
+    await teardown(ctx);
+  });
+
+  it('일별매매에만 남은 한 종목은 기존 identity를 보존하고 비매매 상태로 바꾼다', async () => {
+    const ctx = await setup();
+    const secondBase = baseInfoFixture({
+      ISU_CD: 'KR7000660001',
+      ISU_SRT_CD: '000660',
+      ISU_NM: 'SK하이닉스',
+    });
+    const secondDaily = dailyFixture({ ISU_CD: '000660', ISU_NM: 'SK하이닉스' });
+    ctx.fake.setResponse('stk_bydd_trd', '20230102', {
+      body: krxEnvelope([dailyFixture(), secondDaily]),
+    });
+    ctx.fake.setResponse('stk_isu_base_info', '20230102', {
+      body: krxEnvelope([baseInfoFixture(), secondBase]),
+    });
+    await ctx.svc.ingestDate('2023-01-02');
+
+    ctx.fake.setResponse('stk_bydd_trd', '20230103', {
+      body: krxEnvelope([dailyFixture(), secondDaily]),
+    });
+    ctx.fake.setResponse('stk_isu_base_info', '20230103', {
+      body: krxEnvelope([baseInfoFixture()]),
+    });
+    await expect(ctx.svc.ingestDate('2023-01-03')).resolves.toEqual({ kind: 'TRADING_DAY' });
+
+    const preserved = ctx.svc.getUniverseAsOf('2023-01-03').get('KR7000660001');
+    expect(preserved).toMatchObject({ shortCode: '000660', instrumentType: 'MISSING_BASE_INFO' });
+    expect(ctx.svc.listEvents('2023-01-03', '2023-01-03').map((event) => event.eventType))
+      .toEqual(['TYPE_CHANGED']);
+    await teardown(ctx);
+  });
+
   it('같은 상태의 과거 날짜를 하루씩 prepend 해도 버전 행은 늘지 않는다', async () => {
     const ctx = await setup();
     for (const compactDate of ['20230104', '20230103', '20230102']) {

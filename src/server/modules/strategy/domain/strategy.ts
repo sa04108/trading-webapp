@@ -61,14 +61,23 @@ export interface TradingStrategy<TParameters, TState> {
   readonly name: string;
   readonly description: string;
   /**
-   * 상장시점 재무 없이는 의미 있는 신호를 낼 수 없는 전략. 제출 검증이 데이터셋의
-   * 재무 수집 여부를 확인해 거부한다 — 실행 후 "거래 0건" 으로 끝나면 원인을
-   * 알 수 없다. 봉만 쓰는 전략은 이 필드를 생략한다.
+   * 상장시점 재무 없이는 의미 있는 신호를 낼 수 없는 전략. preparation이 재무 수집과
+   * 종목별 완전성을 확인해 불완전 종목을 제외·재순위화한다. 봉만 쓰는 전략은 이 필드를
+   * 생략한다.
    */
   readonly requiresFundamentals?: boolean;
   /** 백테스트 준비 잡이 필요한 최소 데이터 범위를 전략 구현과 같은 곳에서 읽는다. */
   readonly dataRequirements?: {
     readonly fundamentalLookbackQuarters?: number;
+    /**
+     * 실제 리밸런스 시점에 이 전략이 종목을 평가할 최소 PIT 재무 입력이 있는지.
+     * 수익성 같은 자격 조건은 보지 않고, 계정·연속 분기·신선도 결손만 판정한다.
+     */
+    readonly fundamentalsReady?: (
+      snapshot: FundamentalSnapshot,
+      tsMs: number,
+      parameters: TParameters,
+    ) => boolean;
     readonly priceWarmupBars?: (parameters: TParameters) => number;
     readonly requiresCorporateActions?: boolean;
   };

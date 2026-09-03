@@ -149,7 +149,10 @@ export function parseIndexClose(
   if (rows.length === 0) return null;
   for (const rawRow of rows) {
     const parsed = indexRowSchema.safeParse(rawRow);
-    if (!parsed.success) throw contractErrorFromZod('지수 일별 행', parsed.error);
+    // 응답에는 여러 지수가 섞인다. 무관한 지수 한 행의 계약 위반 때문에 정상인
+    // 목표 지수까지 버리지 않고 건너뛴다. 목표 행도 해석할 수 없으면 결국 아래의
+    // "대표지수 행 없음"으로 전체 benchmark 결손이 드러난다.
+    if (!parsed.success) continue;
     if (parsed.data.IDX_NM !== expectedName) continue;
     const raw = (parsed.data.CLSPRC_IDX ?? '').replaceAll(',', '').trim();
     const close = Number(raw);

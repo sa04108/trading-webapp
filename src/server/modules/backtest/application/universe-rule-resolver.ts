@@ -32,6 +32,10 @@ import { PitFactView } from '../../facts/domain/pit-fact-view.js';
 import { splitAdjustedClose } from '../../strategy/strategies/shared/adjusted-price.js';
 import { assertSafeIdentitySelections } from './backtest-symbol-identity.js';
 import {
+  backtestDataExclusionKey,
+  type BacktestDataExclusion,
+} from './backtest-data-exclusion.js';
+import {
   compareShortCodes,
   rankUniverseStage,
   type UniverseStageDiagnostic,
@@ -137,6 +141,8 @@ export type UniverseResolveAttempt =
       readonly diagnostics: readonly RebalanceDiagnostic[];
       /** READY schedule 멤버를 자동 등록할 때 쓰는 실제 선정 시점의 master entry */
       readonly unionEntries: ReadonlyMap<string, SymbolMasterEntry>;
+      /** 외부 API 응답이 종목 단위로 불완전해 랭킹 입력에서 제외한 대상과 원인. */
+      readonly dataExclusions: readonly BacktestDataExclusion[];
       /** DECLINE 계산 중 온전한 자본변동 정보를 얻지 못해 제외한 종목과 원인. */
       readonly corporateActionExclusions: readonly RelevantCorporateActionGap[];
     }
@@ -161,24 +167,6 @@ export type UniverseResolveAttempt =
  */
 export function sumExcludedNonTrading(schedule: readonly LegacyUniverseScheduleEntry[]): number {
   return schedule.reduce((sum, entry) => sum + entry.excludedNonTradingCount, 0);
-}
-
-function assertSelectionMetricRowsComplete(
-  effectiveDate: string,
-  criterion: 'MARKET_CAP' | 'VOLUME' | 'TRADING_VALUE' | 'PER',
-  candidates: readonly Pick<SymbolMasterEntry, 'shortCode' | 'standardCode'>[],
-  metrics: ReadonlyMap<string, DailySelectionMetric>,
-): void {
-  const missing = candidates
-    .filter((entry) => !metrics.has(entry.standardCode))
-    .map((entry) => entry.shortCode)
-    .sort();
-  if (missing.length === 0) return;
-  throw new Error(
-    `KRX 선정 지표 수집이 완료된 날짜에 ${criterion} 후보 행이 누락됐습니다 `
-      + `(${effectiveDate}): ${missing.join(', ')}. `
-      + '누락 종목만 제외해 순위를 바꾸지 않고 준비를 중단했습니다.',
-  );
 }
 
 export class UniverseRuleResolver {
@@ -321,6 +309,10 @@ export class UniverseRuleResolver {
     const diagnostics: RebalanceDiagnostic[] = [];
     const unionEntries = new Map<string, SymbolMasterEntry>();
     const corporateActionExclusions = new Map<string, RelevantCorporateActionGap>();
+    const dataExclusions = new Map<string, BacktestDataExclusion>();
+    const recordDataExclusion = (exclusion: BacktestDataExclusion): void => {
+      dataExclusions.set(backtestDataExclusionKey(exclusion), exclusion);
+    };
     let candidateScopeKnown = true;
     // getUniverseAsOf가 각 effectiveDate에 실제 유효한 pair만 돌려주므로, 한 resolve
     // 안에서는 pair의 전체 생애 1:1 검증을 한 번만 하면 된다. 날짜까지 cache key에
@@ -483,6 +475,24 @@ export class UniverseRuleResolver {
           .map((row) => row.shortCode),
       );
       const universe = this.deps.symbolMaster.getUniverseAsOf(effectiveDate);
+      for (const entry of universe.values()) {
+        if (!rule.markets.includes(entry.market)) continue;
+        if (
+          entry.instrumentType !== 'UNKNOWN_CLASSIFICATION'
+          && entry.instrumentType !== 'MISSING_BASE_INFO'
+          && entry.instrumentType !== 'MISSING_SHARES'
+        ) continue;
+        recordDataExclusion({
+          symbol: entry.shortCode,
+          category: 'KRX_CLASSIFICATION',
+          periodKey: effectiveDate,
+          reason: entry.instrumentType === 'MISSING_BASE_INFO'
+            ? '일별매매에는 존재하지만 종목 기본정보 행 누락'
+            : entry.instrumentType === 'MISSING_SHARES'
+              ? '상장주식수 누락'
+              : '종목 분류 필드를 해석할 수 없음',
+        });
+      }
       const marketCandidates = [...universe.values()]
         .filter((entry) => (
           entry.instrumentType === 'COMMON_STOCK'
@@ -538,29 +548,25 @@ export class UniverseRuleResolver {
           if (isMetricDateMissing()) {
             dateSelectionMetricDates.add(effectiveDate);
             stageReady = false;
-          } else {
-            assertSelectionMetricRowsComplete(
-              effectiveDate,
-              stage.criterion,
-              candidates,
-              stageMetrics,
-            );
           }
           rows = candidates.map((entry) => ({
             standardCode: entry.standardCode,
             shortCode: entry.shortCode,
             value: stageMetrics.get(entry.standardCode)?.tradingValueKrw ?? null,
           }));
+          if (stageReady && !hasUnresolvedStage) {
+            for (const row of rows) {
+              if (row.value !== null) continue;
+              recordDataExclusion({
+                symbol: row.shortCode,
+                category: 'KRX_SELECTION_METRIC',
+                periodKey: effectiveDate,
+                reason: `${stage.criterion} 행 또는 값 누락`,
+              });
+            }
+          }
         } else if (stage.criterion === 'MARKET_CAP' || stage.criterion === 'VOLUME') {
           const stageMetrics = readDateMetrics(candidates);
-          if (!isMetricDateMissing()) {
-            assertSelectionMetricRowsComplete(
-              effectiveDate,
-              stage.criterion,
-              candidates,
-              stageMetrics,
-            );
-          }
           rows = candidates.map((entry) => ({
             standardCode: entry.standardCode,
             shortCode: entry.shortCode,
@@ -580,6 +586,17 @@ export class UniverseRuleResolver {
             dateSelectionMetricDates.add(effectiveDate);
             stageReady = false;
           }
+          if (stageReady && !hasUnresolvedStage) {
+            for (const row of rows) {
+              if (row.value !== null) continue;
+              recordDataExclusion({
+                symbol: row.shortCode,
+                category: 'KRX_SELECTION_METRIC',
+                periodKey: effectiveDate,
+                reason: `${stage.criterion} 행 또는 값 누락`,
+              });
+            }
+          }
         } else if (stage.criterion === 'PER' || stage.criterion === 'ROE') {
           // coverage·facts가 shortCode 키라, issuer가 다른 전 생애 데이터를 읽기 전에
           // 현재 후보의 양방향 identity가 전체 SCD에서 1:1인지 먼저 확인한다.
@@ -589,15 +606,25 @@ export class UniverseRuleResolver {
           // 재무 있음을 증명하지 못한다 (fact-coverage-store.ts 주석). coverage 는
           // 공시가 없던 연도도 시도 후 기록되므로 이 판정은 sync 한 번이면 수렴한다.
           const requiredYears = financialStageRequiredFactYears(effectiveDate, period);
-          const coveredBySymbol = factCoverage.getCoveredYears(
+          const coverageBySymbol = factCoverage.getCoverageState(
             candidates.map((entry) => entry.shortCode),
           );
           const missing = candidates.filter((entry) => {
-            const covered = new Set(coveredBySymbol.get(entry.shortCode) ?? []);
+            const covered = new Set(coverageBySymbol.get(entry.shortCode)?.verifiedYears ?? []);
             return requiredYears.some((year) => !covered.has(year));
           });
           for (const entry of missing) dateFactSymbols.add(entry.shortCode);
           if (missing.length > 0) stageReady = false;
+          const missingCoverageCodes = new Set(missing.map((entry) => entry.shortCode));
+          const blockedFinancialCodes = new Set(candidates.flatMap((entry) => {
+            if (missingCoverageCodes.has(entry.shortCode)) return [];
+            const blocking = new Set(
+              coverageBySymbol.get(entry.shortCode)?.blockingGapYears ?? [],
+            );
+            return requiredYears.some((year) => blocking.has(year))
+              ? [entry.shortCode]
+              : [];
+          }));
 
           const loaded = await facts.getFacts({
             scope: 'SYMBOL',
@@ -614,15 +641,9 @@ export class UniverseRuleResolver {
             if (isMetricDateMissing() && hasIncompleteMarketCaps) {
               dateSelectionMetricDates.add(effectiveDate);
               stageReady = false;
-            } else if (!isMetricDateMissing()) {
-              assertSelectionMetricRowsComplete(
-                effectiveDate,
-                stage.criterion,
-                candidates,
-                stageMetrics,
-              );
             }
             rows = exactRatioRankingRows(candidates, (entry) => {
+              if (blockedFinancialCodes.has(entry.shortCode)) return null;
               const cap = stageMetrics.get(entry.standardCode)?.marketCapKrw ?? null;
               const income = positiveNumberFraction(
                 view.fundamentals(entry.shortCode)?.ttm('NET_INCOME') ?? null,
@@ -631,8 +652,20 @@ export class UniverseRuleResolver {
                 ? null
                 : { numerator: cap * income.denominator, denominator: income.numerator };
             });
+            if (stageReady && !hasUnresolvedStage) {
+              for (const entry of candidates) {
+                if (stageMetrics.get(entry.standardCode)?.marketCapKrw != null) continue;
+                recordDataExclusion({
+                  symbol: entry.shortCode,
+                  category: 'KRX_SELECTION_METRIC',
+                  periodKey: effectiveDate,
+                  reason: 'PER 계산에 필요한 MARKET_CAP 행 또는 값 누락',
+                });
+              }
+            }
           } else {
             rows = exactRatioRankingRows(candidates, (entry) => {
+              if (blockedFinancialCodes.has(entry.shortCode)) return null;
               const snapshot = view.fundamentals(entry.shortCode);
               const income = positiveNumberFraction(snapshot?.ttm('NET_INCOME') ?? null);
               const equity = positiveNumberFraction(snapshot?.get('TOTAL_EQUITY') ?? null);
@@ -641,8 +674,47 @@ export class UniverseRuleResolver {
                 : {
                     numerator: income.numerator * equity.denominator,
                     denominator: income.denominator * equity.numerator,
-                  };
+                };
             });
+          }
+          if (stageReady && !hasUnresolvedStage) {
+            for (const entry of candidates) {
+              const state = coverageBySymbol.get(entry.shortCode);
+              if (blockedFinancialCodes.has(entry.shortCode)) {
+                const details = (state?.blockingGapDetails ?? [])
+                  .filter((detail) => requiredYears.includes(detail.year));
+                if (details.length === 0) {
+                  recordDataExclusion({
+                    symbol: entry.shortCode,
+                    category: 'DART_FINANCIAL',
+                    periodKey: requiredYears.join(','),
+                    reason: '필수 연도에 blocking 원천·파서 gap 존재',
+                  });
+                }
+                for (const detail of details) {
+                  recordDataExclusion({
+                    symbol: entry.shortCode,
+                    category: 'DART_FINANCIAL',
+                    periodKey: String(detail.year),
+                    reason: detail.examples.length > 0
+                      ? detail.examples.join(' / ')
+                      : 'blocking 원천·파서 gap 존재',
+                  });
+                }
+                continue;
+              }
+              const snapshot = view.fundamentals(entry.shortCode);
+              const missingRequiredValue = stage.criterion === 'PER'
+                ? snapshot?.ttm('NET_INCOME') == null
+                : snapshot?.ttm('NET_INCOME') == null || snapshot.get('TOTAL_EQUITY') == null;
+              if (!missingRequiredValue) continue;
+              recordDataExclusion({
+                symbol: entry.shortCode,
+                category: 'DART_FINANCIAL',
+                periodKey: effectiveDate,
+                reason: `${stage.criterion} 계산에 필요한 PIT 재무 값 누락`,
+              });
+            }
           }
         } else {
           // DECLINE은 일봉·자본변동을 shortCode로 읽는다. 과거 issuer의 봉이나 공시가
@@ -704,6 +776,15 @@ export class UniverseRuleResolver {
                 };
             for (const code of priceMissingCodes) datePriceSymbols.add(code);
             stageReady = false;
+          } else if (!hasUnresolvedStage) {
+            for (const code of priceMissingCodes) {
+              recordDataExclusion({
+                symbol: code,
+                category: 'KRX_PRICE',
+                periodKey: effectiveDate,
+                reason: `DECLINE 계산에 필요한 ${stage.lookbackTradingDays}개 거래일 일봉 부족`,
+              });
+            }
           }
 
           let actualFrom = effectiveDate;
@@ -777,6 +858,12 @@ export class UniverseRuleResolver {
                   `${gap.symbol}\0${gap.year}\0${gap.periodKey}\0${gap.reason}`,
                   gap,
                 );
+                recordDataExclusion({
+                  symbol: gap.symbol,
+                  category: 'DART_CORPORATE_ACTION',
+                  periodKey: `${gap.year}년/${gap.periodKey}`,
+                  reason: gap.reason,
+                });
               }
             } else {
               // 앞 stage나 가격/action coverage가 아직 미해소면 그 데이터를 먼저 채워
@@ -826,18 +913,31 @@ export class UniverseRuleResolver {
           });
           if (relevantUnaligned.length > 0) {
             if (stageReady && !hasUnresolvedStage) {
-              const symbols = [...new Set(relevantUnaligned.map((action) => action.symbol))].sort();
-              const directionLabel = stage.direction === 'HIGH' ? '급상승' : '급하락';
-              const returnLabel = stage.direction === 'HIGH' ? '급등률' : '급락률';
-              throw new Error(
-                `${directionLabel} 유니버스의 자본변동 ${relevantUnaligned.length}건을 KRX 상장주식수 변경일과 `
-                  + `정렬할 수 없습니다 — 대상: ${symbols.join(', ')}. `
-                  + `잘못된 ${returnLabel}로 종목을 선정하지 않도록 준비를 중단했습니다.`,
-              );
+              for (const action of relevantUnaligned) {
+                const exclusion: RelevantCorporateActionGap = {
+                  symbol: action.symbol,
+                  year: Number(action.periodKey.slice(0, 4)),
+                  periodKey: action.periodKey,
+                  reason: 'KRX 상장주식수 변경일과 정렬할 수 없는 자본변동',
+                  severity: 'BLOCKING',
+                };
+                excludedByActionGap.add(action.symbol);
+                corporateActionExclusions.set(
+                  `${exclusion.symbol}\0${exclusion.year}\0${exclusion.periodKey}\0${exclusion.reason}`,
+                  exclusion,
+                );
+                recordDataExclusion({
+                  symbol: exclusion.symbol,
+                  category: 'DART_CORPORATE_ACTION',
+                  periodKey: `${exclusion.year}년/${exclusion.periodKey}`,
+                  reason: exclusion.reason,
+                });
+              }
+            } else {
+              // 앞 stage 또는 이 stage의 데이터가 아직 미해소면 그 needs를 먼저 채운 뒤
+              // 실제 후보로 다시 판정한다. raw 날짜로 계산한 임시 순위는 확정하지 않는다.
+              stageReady = false;
             }
-            // 앞 stage 또는 이 stage의 데이터가 아직 미해소면 그 needs를 먼저 채운 뒤
-            // 실제 후보로 다시 판정한다. raw 날짜로 계산한 임시 순위는 확정하지 않는다.
-            stageReady = false;
           }
           const view = new PitFactView(aligned.facts);
           rows = candidates.map((entry) => {
@@ -979,6 +1079,12 @@ export class UniverseRuleResolver {
       schedule,
       diagnostics,
       unionEntries,
+      dataExclusions: [...dataExclusions.values()].sort((left, right) => (
+        left.symbol.localeCompare(right.symbol)
+        || left.category.localeCompare(right.category)
+        || left.periodKey.localeCompare(right.periodKey)
+        || left.reason.localeCompare(right.reason)
+      )),
       corporateActionExclusions: sortedCorporateActionExclusions,
     };
   }
