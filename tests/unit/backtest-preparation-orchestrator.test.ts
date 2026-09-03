@@ -55,6 +55,7 @@ function ready(symbols: readonly string[] = ['005930']) {
     }],
     diagnostics: [{ rebalanceDate: '2026-01-05', effectiveDate: '2026-01-05', stages: [] }],
     unionEntries: new Map(symbols.map((symbol) => [symbol, { ...ENTRY, shortCode: symbol }])),
+    corporateActionExclusions: [],
   };
 }
 
@@ -409,16 +410,22 @@ describe('BacktestPreparationOrchestrator RESOLVING_STAGES 진행 표시', () =>
 });
 
 
-describe('BacktestPreparationOrchestrator 자본변동 gap 차단', () => {
-  it('최종 유니버스의 관련 연도에 보정 불가 gap이 있으면 COMPLETED preview를 만들지 않는다', async () => {
+describe('BacktestPreparationOrchestrator 자본변동 gap 제외', () => {
+  it('final sync 뒤 새 최종 멤버의 보정 불가 gap도 제외하고 다시 차순위를 고른다', async () => {
     let resolveCalls = 0;
     const ctx = makeDeps({
       resolver: {
         // 첫 READY 뒤 final sync가 입력을 바꿔 멤버가 교체되는 경계. gap 검사가 첫
         // 005930만 보면 새 최종 멤버 000660의 결측을 놓친다.
-        resolveOrDescribeNeeds: async () => resolveCalls++ === 0
-          ? ready(['005930'])
-          : ready(['000660']),
+        resolveOrDescribeNeeds: async (
+          _rule: PreparationInput['universeRule'],
+          _period: PreparationInput['period'],
+          hooks?: { excludedSymbols?: ReadonlySet<string> },
+        ) => {
+          resolveCalls += 1;
+          if (resolveCalls === 1) return ready(['005930']);
+          return ready(hooks?.excludedSymbols?.has('000660') ? ['035420'] : ['000660']);
+        },
         isPeriodCovered: () => true,
       },
       strategies: {
@@ -435,8 +442,12 @@ describe('BacktestPreparationOrchestrator 자본변동 gap 차단', () => {
       },
       actionCoverage: {
         // 실행구간 2026-01-05의 정렬 역투영 범위는 2025년까지 걸친다.
-        getCoveredYears: () => new Map([['000660', [2025, 2026]]]),
-        getGapYears: () => new Map([['000660', [2025]]]),
+        getCoveredYears: (symbols: readonly string[]) => new Map(
+          symbols.map((symbol) => [symbol, [2025, 2026]]),
+        ),
+        getGapYears: (symbols: readonly string[]) => new Map(
+          symbols.map((symbol) => [symbol, symbol === '000660' ? [2025] : []]),
+        ),
       },
     });
     ctx.deps.symbolMaster.sharesChangesBetween = () => [
@@ -445,10 +456,12 @@ describe('BacktestPreparationOrchestrator 자본변동 gap 차단', () => {
     const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
 
     const job = orchestrator.start(INPUT);
-    await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
+    await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
 
-    expect(orchestrator.get(job.id)?.error).toMatch(/보정 비율을 만들 수 없는 연도.*000660/);
-    expect(orchestrator.getPreview(job.id)).toBeNull();
+    expect(orchestrator.getPreview(job.id)?.unionSymbols).toEqual(['035420']);
+    expect(orchestrator.getPreview(job.id)?.warnings).toEqual([
+      expect.stringMatching(/종목 000660을 매매 대상에서 제외.*2025년.*상세 사유/),
+    ]);
     await orchestrator.stop();
     ctx.handle.close();
   });
@@ -684,6 +697,68 @@ describe('BacktestPreparationOrchestrator 완료 preview coverage 불변식', ()
     }]);
     expect(await orchestrator.getReadyPreview(valueInput)).toBeNull();
     expect(orchestrator.getCachedPreview(valueInput)).toBeNull();
+
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
+  it('최종 종목의 blocking action gap은 전 기간에서 제외하고 차순위와 사유를 고정한다', async () => {
+    const seenExcludedSymbols: string[][] = [];
+    const gap = {
+      year: 2025,
+      periodKey: '2025-12-31',
+      reason: '분류할 수 없는 발행형태: -',
+      severity: 'BLOCKING' as const,
+    };
+    const ctx = makeDeps({
+      strategies: new StrategyRegistry(),
+      resolver: {
+        resolveOrDescribeNeeds: async (
+          _rule: PreparationInput['universeRule'],
+          _period: PreparationInput['period'],
+          hooks?: { excludedSymbols?: ReadonlySet<string> },
+        ) => {
+          const excluded = [...(hooks?.excludedSymbols ?? [])].sort();
+          seenExcludedSymbols.push(excluded);
+          return ready(excluded.includes('005930') ? ['000660'] : ['005930']);
+        },
+        isPeriodCovered: () => true,
+      },
+      actionCoverage: {
+        getCoveredYears: (symbols: readonly string[]) => new Map(
+          symbols.map((symbol) => [symbol, [2025, 2026]]),
+        ),
+        getGapYears: () => new Map([['005930', [2025]]]),
+        getGapDetails: (symbols: readonly string[]) => new Map(
+          symbols.map((symbol) => [symbol, symbol === '005930' ? [gap] : []]),
+        ),
+      },
+      factCoverage: {
+        getCoverageState: (symbols: readonly string[]) => new Map(
+          symbols.map((symbol) => [symbol, {
+            verifiedYears: [2025, 2026], blockingGapYears: [], blockingGapDetails: [],
+          }]),
+        ),
+      },
+    });
+    ctx.deps.symbolMaster.sharesChangesBetween = () => [
+      { shortCode: '005930', effectiveDate: '2026-01-05', ratio: 2 },
+    ];
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+
+    const job = orchestrator.start(valueInput);
+    await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
+
+    const preview = orchestrator.getPreview(job.id);
+    expect(preview?.unionSymbols).toEqual(['000660']);
+    expect(preview?.warnings).toEqual([
+      '자본변동 정보를 온전히 확보할 수 없어 종목 005930을 매매 대상에서 제외했습니다 — '
+        + '2025년/2025-12-31: 분류할 수 없는 발행형태: -.',
+    ]);
+    expect(seenExcludedSymbols).toContainEqual(['005930']);
+    const readyPreview = await orchestrator.getReadyPreview(valueInput);
+    expect(readyPreview?.scheduleHash).toBe(preview?.scheduleHash);
+    expect(readyPreview?.warnings).toEqual(preview?.warnings);
 
     await orchestrator.stop();
     ctx.handle.close();

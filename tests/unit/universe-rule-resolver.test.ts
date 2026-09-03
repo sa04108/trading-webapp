@@ -1537,7 +1537,7 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     expect(result.needs.priceRange).not.toBeNull();
   });
 
-  it('급하락 후보에 covered+gap 연도가 있으면 종목 제외로 순위를 바꾸지 않고 실패한다', async () => {
+  it('급등락 후보에 covered+gap 연도가 있으면 해당 종목을 제외하고 차순위를 채운다', async () => {
     const candle = (symbol: string, offset: number, close: number): Candle => ({
       symbol, market: 'KR', timeframe: '1d', tsMs: PIPELINE_TS - offset * 86_400_000,
       open: close, high: close, low: close, close, volume: 1,
@@ -1555,14 +1555,19 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
       ],
     });
 
-    await expect(resolver.resolveOrDescribeNeeds(
-      pipelineRule([{ criterion: 'DECLINE', direction: 'LOW', limit: 3, lookbackTradingDays: 3 }]),
-      period,
-    )).rejects.toThrow(/급하락 유니버스의 자본변동 보정 비율.*000002/);
-    await expect(resolver.resolveOrDescribeNeeds(
-      pipelineRule([{ criterion: 'DECLINE', direction: 'HIGH', limit: 3, lookbackTradingDays: 3 }]),
-      period,
-    )).rejects.toThrow(/급상승 유니버스의 자본변동 보정 비율.*000002/);
+    for (const direction of ['LOW', 'HIGH'] as const) {
+      const result = await resolver.resolveOrDescribeNeeds(
+        pipelineRule([{ criterion: 'DECLINE', direction, limit: 3, lookbackTradingDays: 3 }]),
+        period,
+      );
+      expect(result.kind).toBe('READY');
+      if (result.kind !== 'READY') throw new Error('fixture coverage가 완전해야 합니다.');
+      expect(result.schedule[0]?.members.map((member) => member.symbol))
+        .toEqual(['000001', '000003']);
+      expect(result.corporateActionExclusions).toEqual([
+        expect.objectContaining({ symbol: '000002', year: 2025, severity: 'BLOCKING' }),
+      ]);
+    }
   });
 
   it('앞 stage 후보가 아직 미확정이면 자본변동 gap보다 해소 가능한 needs를 먼저 반환한다', async () => {

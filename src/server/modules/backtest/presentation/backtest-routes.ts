@@ -547,7 +547,8 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    * requiresCorporateActions`·DECLINE stage 후보에 따라 최종 유니버스의 자본변동을
    * 이미 동기화해 둔다. 실전에 등록된 전략은 전부 이 조건을 충족한다
    * (tests/unit/backtest-preparation-plan.test.ts 전략별 표 참고) — 제출 시점에
-   * 다시 대조해도 잡을 수 있는 결측이 남지 않는다.
+   * 이미 동기화하고, 해소되지 않은 blocking gap 종목은 차순위를 다시 계산해 제외한다.
+   * 따라서 제출 시점에 다시 대조해도 선정 종목의 결측은 남지 않는다.
    *
    * `preparedPreview` 는 항상 있어야 한다 — 완료된 준비 없이 유니버스를 다시
    * 추측하는 옛 경로(`UniverseRuleResolver.resolve`, stages[0] 만 보는 stopgap)는
@@ -660,12 +661,12 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
 
     // 그래도 DART 공시 지연은 준비가 끝났다는 사실과 무관하게 남는 위험이라 경고는
     // 유지한다 — 최근 기간은 분할이 있었어도 아직 접수되지 않았을 수 있다.
-    const warnings: string[] = [];
+    const warnings = [...new Set(preparedPreview.warnings)];
     if (isRecentPeriodEnd(periodToTsRange(body.period).toTsMs, clock.now())) {
-      warnings.push(
-        '선택한 기간이 최근이라 아직 DART 에 공시되지 않은 자본변동이 있을 수 있습니다. ' +
-          '분할이 최근에 있었다면 결과에 반영되지 않았을 수 있습니다.',
-      );
+      const warning =
+        '선택한 기간이 최근이라 아직 DART 에 공시되지 않은 자본변동이 있을 수 있습니다. '
+          + '분할이 최근에 있었다면 결과에 반영되지 않았을 수 있습니다.';
+      if (!warnings.includes(warning)) warnings.push(warning);
     }
 
     // ③ 종목 버전 pin 은 기존 universeJson 메커니즘을 그대로 쓴다 — unionSymbols 기준.

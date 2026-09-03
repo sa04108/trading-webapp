@@ -80,6 +80,18 @@ function send(message: unknown): void {
   process.send?.(message);
 }
 
+function parseSubmitWarnings(raw: string | null): string[] {
+  if (raw === null) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((warning): warning is string => typeof warning === 'string')
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 async function main(): Promise<void> {
   const workerStartedAtMs = Date.now();
   let loadCompletedAtMs: number | null = null;
@@ -356,7 +368,9 @@ async function main(): Promise<void> {
           return acc;
         }, new Map<string, typeof symbolVersions.$inferSelect>()),
     );
-    const datasetWarnings: string[] = [];
+    // 준비 단계의 종목 제외 사유는 제출 응답에서 끝나지 않고 결과 warningsJson까지
+    // 이어져야 한다. 손상된 legacy JSON은 실행 전체를 막지 않고 빈 경고로 취급한다.
+    const datasetWarnings = parseSubmitWarnings(job.submitWarningsJson);
     // 리밸런스 기준일에 거래정지·무거래로 후보에서 빠진 종목 — resolve() 가 이미 세어
     // schedule 에 담아 뒀다(Task 6). 조용히 빠지면 "그날 왜 이 종목을 안 샀는지" 를
     // 사용자가 결과만 보고는 알 수 없다.
@@ -551,8 +565,9 @@ async function main(): Promise<void> {
     );
     // 파서가 자본변동 행을 보았지만 비율을 만들지 못하면 raw fact 자체가 없다.
     // aligner만 보면 "사건 없음"과 구분할 수 없으므로 coverage의 gap 연도를 마지막
-    // 실행 경계에서도 확인한다. 연도 단위 기록이라 관련 역투영 범위와 겹치면 보수적으로
-    // 전체 실행을 막는다 — 종목만 빼면 유니버스와 성과가 낙관적으로 바뀔 수 있다.
+    // 실행 경계에서도 확인한다. 정상 제출은 preparation이 해당 종목을 제외하고 차순위까지
+    // 고정한다. 여기서 발견되는 것은 제출 뒤 drift·직접 enqueue이므로, pin을 워커가 다시
+    // 써서 순위를 바꾸지 않고 전체 실행을 막는다.
     const relevantActionFromYear = Number(potentiallyRelevantFrom.slice(0, 4));
     const relevantActionToYear = Number(potentiallyRelevantTo.slice(0, 4));
     const requiredActionYears: number[] = [];

@@ -11,7 +11,7 @@ import {
 import type { UniverseDataNeed } from './universe-rule-resolver.js';
 
 /** 데이터 필요 범위의 의미가 바뀌면 완료된 이전 preparation을 재사용하지 않는다. */
-export const BACKTEST_PREPARATION_PLAN_VERSION = '4.0.0';
+export const BACKTEST_PREPARATION_PLAN_VERSION = '5.0.0';
 
 export interface BacktestPreparationPlan {
   readonly requestHash: string;

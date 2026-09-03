@@ -40,6 +40,7 @@ import {
 import {
   findRelevantCorporateActionGaps,
   readCorporateActionGapDetails,
+  type RelevantCorporateActionGap,
 } from './backtest-corporate-action-gaps.js';
 
 export interface LegacyUniverseScheduleEntry {
@@ -95,6 +96,8 @@ export interface UniverseResolveProgress {
 export interface UniverseResolveHooks {
   readonly onProgress?: (progress: UniverseResolveProgress) => void;
   readonly shouldStop?: () => boolean;
+  /** 준비 중 자본변동 원문 결손이 확인돼 전 기간 매매 대상에서 제외한 단축코드. */
+  readonly excludedSymbols?: ReadonlySet<string>;
 }
 
 export class UniverseResolutionCancelledError extends Error {
@@ -134,6 +137,8 @@ export type UniverseResolveAttempt =
       readonly diagnostics: readonly RebalanceDiagnostic[];
       /** READY schedule 멤버를 자동 등록할 때 쓰는 실제 선정 시점의 master entry */
       readonly unionEntries: ReadonlyMap<string, SymbolMasterEntry>;
+      /** DECLINE 계산 중 온전한 자본변동 정보를 얻지 못해 제외한 종목과 원인. */
+      readonly corporateActionExclusions: readonly RelevantCorporateActionGap[];
     }
   | {
       readonly kind: 'NEEDS_DATA';
@@ -315,6 +320,7 @@ export class UniverseRuleResolver {
     const schedule: UniverseScheduleEntry[] = [];
     const diagnostics: RebalanceDiagnostic[] = [];
     const unionEntries = new Map<string, SymbolMasterEntry>();
+    const corporateActionExclusions = new Map<string, RelevantCorporateActionGap>();
     let candidateScopeKnown = true;
     // getUniverseAsOf가 각 effectiveDate에 실제 유효한 pair만 돌려주므로, 한 resolve
     // 안에서는 pair의 전체 생애 1:1 검증을 한 번만 하면 된다. 날짜까지 cache key에
@@ -478,7 +484,11 @@ export class UniverseRuleResolver {
       );
       const universe = this.deps.symbolMaster.getUniverseAsOf(effectiveDate);
       const marketCandidates = [...universe.values()]
-        .filter((entry) => entry.instrumentType === 'COMMON_STOCK' && rule.markets.includes(entry.market));
+        .filter((entry) => (
+          entry.instrumentType === 'COMMON_STOCK'
+          && rule.markets.includes(entry.market)
+          && hooks.excludedSymbols?.has(entry.shortCode) !== true
+        ));
       const excludedNonTradingCount = marketCandidates
         .filter((entry) => nonTrading.has(entry.shortCode))
         .length;
@@ -727,9 +737,8 @@ export class UniverseRuleResolver {
           const { covered: coveredBySymbol, details: gapDetailsBySymbol } =
             readActionCoverage(actionCandidateCodes);
           // covered+gap 연도는 "수집했지만 DART 행을 보정 비율로 만들지 못한" 상태다
-          // (예: 발행형태/일자/직전 주식수 파싱 실패). 후보 하나만 결측 제외하면 그
-          // 종목이 원래 탈락시켰을 다른 종목이 대신 뽑혀 결과가 낙관적으로 바뀔 수 있다.
-          // 앞 stage가 확정된 뒤 실제 DECLINE 후보에 하나라도 걸리면 전체 준비를 막는다.
+          // (예: 발행형태/일자/직전 주식수 파싱 실패). coverage 자체가 덜 준비된 후보는
+          // 먼저 수집하고, 온전하지 않음이 확정된 후보는 순위 입력에서 제외한다.
           for (const code of actionCandidateCodes) {
             const covered = new Set(coveredBySymbol.get(code) ?? []);
             if (requiredYears.some((year) => !covered.has(year))) {
@@ -759,22 +768,21 @@ export class UniverseRuleResolver {
             },
           );
           const gapAffectedCodes = new Set(relevantGaps.map((gap) => gap.symbol));
+          const excludedByActionGap = new Set<string>();
           if (gapAffectedCodes.size > 0) {
             if (stageReady && !hasUnresolvedStage) {
-              const directionLabel = stage.direction === 'HIGH' ? '급상승' : '급하락';
-              const causes = relevantGaps.map((gap) => (
-                `${gap.symbol}(${gap.periodKey}: ${gap.reason})`
-              )).join('; ');
-              throw new Error(
-                `${directionLabel} 유니버스의 자본변동 보정 비율을 만들 수 없는 연도가 있습니다 — `
-                  + `대상: ${[...gapAffectedCodes].sort().join(', ')}. `
-                  + `확인된 원인: ${causes}. `
-                  + '해당 종목을 임의로 제외해 순위를 바꾸지 않고 준비를 중단했습니다.',
-              );
+              for (const gap of relevantGaps) {
+                excludedByActionGap.add(gap.symbol);
+                corporateActionExclusions.set(
+                  `${gap.symbol}\0${gap.year}\0${gap.periodKey}\0${gap.reason}`,
+                  gap,
+                );
+              }
+            } else {
+              // 앞 stage나 가격/action coverage가 아직 미해소면 그 데이터를 먼저 채워
+              // 실제 DECLINE 입력 후보를 좁힌 뒤 다시 판정한다.
+              stageReady = false;
             }
-            // 앞 stage나 가격/action coverage가 아직 미해소면 그 데이터를 먼저 채워
-            // 실제 DECLINE 입력 후보를 좁힌 뒤 다시 판정한다.
-            stageReady = false;
           }
 
           const loaded = await readActionFacts(codes);
@@ -833,6 +841,9 @@ export class UniverseRuleResolver {
           }
           const view = new PitFactView(aligned.facts);
           rows = candidates.map((entry) => {
+            if (excludedByActionGap.has(entry.shortCode)) {
+              return { standardCode: entry.standardCode, shortCode: entry.shortCode, value: null };
+            }
             const history = lookbackHistories.get(entry.shortCode) ?? [];
             if (history.length !== stage.lookbackTradingDays) {
               return { standardCode: entry.standardCode, shortCode: entry.shortCode, value: null };
@@ -955,7 +966,21 @@ export class UniverseRuleResolver {
         })),
       ),
     ]);
-    return { kind: 'READY', schedule, diagnostics, unionEntries };
+    const sortedCorporateActionExclusions = [...corporateActionExclusions.values()].sort(
+      (left, right) => (
+        left.symbol.localeCompare(right.symbol)
+        || left.year - right.year
+        || left.periodKey.localeCompare(right.periodKey)
+        || left.reason.localeCompare(right.reason)
+      ),
+    );
+    return {
+      kind: 'READY',
+      schedule,
+      diagnostics,
+      unionEntries,
+      corporateActionExclusions: sortedCorporateActionExclusions,
+    };
   }
 
   private requirePipelineDeps(): Required<Pick<

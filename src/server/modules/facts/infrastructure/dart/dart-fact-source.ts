@@ -22,7 +22,6 @@ import {
   createDartCorpCodeCache,
   type CorpCodeResolver,
 } from './dart-corp-code-cache.js';
-import { applyDartIssuanceCorrections } from './dart-issuance-corrections.js';
 import {
   parseAmount,
   parseFinancialRows,
@@ -771,17 +770,14 @@ export function createDartFactSource(
           }
         }
       }
-      const issuanceRows = applyDartIssuanceCorrections(
-        symbol,
-        repairContradictedSplitRows(
-          latestIssuanceRows,
-          issuanceSnapshots.slice(0, -1),
-          sharesByPeriod,
-        ).map((row) => ({
-          ...row,
-          rcept_no: firstReceiptByKey.get(issuanceKey(row)) ?? row.rcept_no,
-        })),
-      );
+      const issuanceRows = repairContradictedSplitRows(
+        latestIssuanceRows,
+        issuanceSnapshots.slice(0, -1),
+        sharesByPeriod,
+      ).map((row) => ({
+        ...row,
+        rcept_no: firstReceiptByKey.get(issuanceKey(row)) ?? row.rcept_no,
+      }));
       const splitInference = inferAmbiguousSplitRows(issuanceRows, sharesByPeriod);
       const decreasingSplitRows = splitInference.decreasingRows;
       const contradictedSplitRows = splitInference.contradictedRows;

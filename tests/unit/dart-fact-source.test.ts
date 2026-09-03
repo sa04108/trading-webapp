@@ -1256,7 +1256,7 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
     stlm_dt: '2020-03-31',
   }];
 
-  it('033290의 자기주식 이익소각은 주가 보정 fact나 blocking gap을 만들지 않는다', async () => {
+  it('033290의 API 수량·형태만으로 비율을 확정할 수 없으면 blocking gap을 남긴다', async () => {
     const fetchImpl = (async (url: string) => {
       const target = String(url);
       if (target.includes('irdsSttus') && target.includes('reprt_code=11011')) {
@@ -1292,10 +1292,21 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
       symbols: ['033290'], years: [2017], shareYears: [2016, 2017], consolidated: true,
     });
 
-    expect(result).toEqual({ facts: [], gaps: [] });
+    expect(result.facts).toEqual([]);
+    expect(result.gaps).toEqual([
+      expect.objectContaining({
+        symbol: '033290', periodKey: '2017-01-23', severity: 'BLOCKING',
+      }),
+      expect.objectContaining({
+        symbol: '033290', periodKey: '2017-05-26', severity: 'BLOCKING',
+      }),
+      expect.objectContaining({
+        symbol: '033290', periodKey: '2017-12-20', severity: 'BLOCKING',
+      }),
+    ]);
   });
 
-  it('068240의 발행형태가 빠진 로윈 합병신주는 blocking gap으로 만들지 않는다', async () => {
+  it('068240의 발행형태가 빠진 행은 종목별 보정 없이 blocking gap으로 남긴다', async () => {
     const fetchImpl = (async (url: string) => {
       const target = String(url);
       if (target.includes('irdsSttus') && target.includes('reprt_code=11011')) {
@@ -1319,10 +1330,18 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
       symbols: ['068240'], years: [2017], shareYears: [2016, 2017], consolidated: true,
     });
 
-    expect(result).toEqual({ facts: [], gaps: [] });
+    expect(result).toEqual({
+      facts: [],
+      gaps: [{
+        symbol: '068240',
+        periodKey: '2017.02.13',
+        reason: '분류할 수 없는 발행형태: -',
+        severity: 'BLOCKING',
+      }],
+    });
   });
 
-  it('063080의 발행형태가 빠진 게임빌에버 합병신주는 blocking gap으로 만들지 않는다', async () => {
+  it('063080의 발행형태가 빠진 행은 종목별 보정 없이 blocking gap으로 남긴다', async () => {
     const fetchImpl = (async (url: string) => {
       const target = String(url);
       if (target.includes('irdsSttus') && target.includes('reprt_code=11011')) {
@@ -1346,7 +1365,15 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
       symbols: ['063080'], years: [2017], shareYears: [2016, 2017], consolidated: true,
     });
 
-    expect(result).toEqual({ facts: [], gaps: [] });
+    expect(result).toEqual({
+      facts: [],
+      gaps: [{
+        symbol: '063080',
+        periodKey: '2017.03.07',
+        reason: '분류할 수 없는 발행형태: -',
+        severity: 'BLOCKING',
+      }],
+    });
   });
 
   it('같은 날짜의 유상증자를 뒤이은 무상증자의 직전 주식수에 먼저 반영한다', async () => {

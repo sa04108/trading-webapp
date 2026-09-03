@@ -31,6 +31,7 @@ import { UnsafeBacktestSymbolIdentityError } from './backtest-symbol-identity.js
 import {
   findRelevantCorporateActionGaps,
   readCorporateActionGapDetails,
+  type RelevantCorporateActionGap,
 } from './backtest-corporate-action-gaps.js';
 import {
   financialCoverageGapMessage,
@@ -100,6 +101,36 @@ const ACTIVE_STATUSES: readonly PreparationStatus[] = [
 const TERMINAL_STATUSES: readonly PreparationStatus[] = ['COMPLETED', 'FAILED', 'CANCELLED'];
 const MAX_FINAL_STABILIZATION_PASSES = 8;
 const MAX_RESOLUTION_PROGRESS_UPDATES = 100;
+
+function corporateActionExclusionKey(gap: RelevantCorporateActionGap): string {
+  return `${gap.symbol}\0${gap.year}\0${gap.periodKey}\0${gap.reason}`;
+}
+
+function corporateActionExclusionWarnings(
+  exclusions: readonly RelevantCorporateActionGap[],
+): string[] {
+  const bySymbol = new Map<string, RelevantCorporateActionGap[]>();
+  for (const exclusion of exclusions) {
+    const gaps = bySymbol.get(exclusion.symbol) ?? [];
+    if (!gaps.some((gap) => corporateActionExclusionKey(gap) === corporateActionExclusionKey(exclusion))) {
+      gaps.push(exclusion);
+      bySymbol.set(exclusion.symbol, gaps);
+    }
+  }
+  return [...bySymbol]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([symbol, gaps]) => {
+      const causes = gaps
+        .sort((left, right) => (
+          left.year - right.year
+          || left.periodKey.localeCompare(right.periodKey)
+          || left.reason.localeCompare(right.reason)
+        ))
+        .map((gap) => `${gap.year}년/${gap.periodKey}: ${gap.reason}`)
+        .join('; ');
+      return `자본변동 정보를 온전히 확보할 수 없어 종목 ${symbol}을 매매 대상에서 제외했습니다 — ${causes}.`;
+    });
+}
 
 const ALLOWED_TRANSITIONS: Readonly<Record<PreparationStatus, readonly PreparationStatus[]>> = {
   QUEUED: ['RUNNING'],
@@ -304,9 +335,9 @@ export class BacktestPreparationOrchestrator {
       return null;
     }
 
-    const attempt = await this.deps.resolver.resolveOrDescribeNeeds(input.universeRule, input.period);
-    if (attempt.kind !== 'READY' || isEmptySchedule(attempt.schedule)) return null;
-    const currentPreview = this.buildPreview(input, attempt);
+    const current = await this.resolveReadyPreviewWithKnownActionExclusions(input, strategy);
+    if (current === null || isEmptySchedule(current.attempt.schedule)) return null;
+    const currentPreview = this.buildPreview(input, current.attempt, current.exclusions);
     // request hash가 같아도 종목 마스터·선정 지표가 갱신되면 최종 멤버십은 달라질
     // 수 있다. 이전 union에만 full facts/actions를 준비했으므로 다른 schedule을 완료
     // 결과처럼 돌려주지 않고 새 durable job을 시작하게 한다.
@@ -317,8 +348,47 @@ export class BacktestPreparationOrchestrator {
     if (this.corporateActionCoverageFailure(input, strategy, currentPreview.unionSymbols) !== null) {
       return null;
     }
-    this.registerUniverse(attempt);
+    this.registerUniverse(current.attempt);
     return currentPreview;
+  }
+
+  /** 외부 호출 없이 현재 coverage에 이미 기록된 gap만 적용해 cached schedule을 재검증한다. */
+  private async resolveReadyPreviewWithKnownActionExclusions(
+    input: PreparationInput,
+    strategy: AnyTradingStrategy,
+  ): Promise<{
+    attempt: Extract<UniverseResolveAttempt, { kind: 'READY' }>;
+    exclusions: readonly RelevantCorporateActionGap[];
+  } | null> {
+    const excludedSymbols = new Set<string>();
+    const exclusions = new Map<string, RelevantCorporateActionGap>();
+    for (;;) {
+      const attempt = await this.deps.resolver.resolveOrDescribeNeeds(
+        input.universeRule,
+        input.period,
+        { excludedSymbols },
+      );
+      if (attempt.kind !== 'READY') return null;
+      if (this.recordCorporateActionExclusions(
+        attempt.corporateActionExclusions ?? [],
+        excludedSymbols,
+        exclusions,
+      )) continue;
+
+      const plan = buildBacktestPreparationPlan({
+        request: preparationRequest(input),
+        resolutionNeeds: EMPTY_NEEDS,
+        finalUniverseSymbols: unionSymbols(attempt.schedule),
+        strategy,
+      });
+      if (this.missingCorporateActionCoverageSymbols(plan.actions).length > 0) return null;
+      if (this.recordCorporateActionExclusions(
+        this.corporateActionGapsForPlan(plan.actions),
+        excludedSymbols,
+        exclusions,
+      )) continue;
+      return { attempt, exclusions: [...exclusions.values()] };
+    }
   }
 
   /** 라우트가 DART 미설정 503을 실제 sync 필요 요청에만 적용할 때 쓴다. */
@@ -487,11 +557,16 @@ export class BacktestPreparationOrchestrator {
       const strategy = this.requireStrategy(input);
       if (this.finishCancelledIfRequested(jobId)) return;
 
+      const excludedSymbols = new Set<string>();
+      const corporateActionExclusions = new Map<string, RelevantCorporateActionGap>();
+
       let finalAttempt = await this.resolveUntilReady(
         jobId,
         input,
         strategy,
-        await this.resolve(jobId, input),
+        await this.resolve(jobId, input, excludedSymbols),
+        excludedSymbols,
+        corporateActionExclusions,
       );
       if (finalAttempt === null) return;
 
@@ -526,13 +601,43 @@ export class BacktestPreparationOrchestrator {
           jobId,
           input,
           strategy,
-          await this.resolve(jobId, input),
+          await this.resolve(jobId, input, excludedSymbols),
+          excludedSymbols,
+          corporateActionExclusions,
         );
         if (resolved === null) return;
         finalAttempt = resolved;
         if (JSON.stringify(finalAttempt.schedule) !== beforeSignature) continue;
 
         this.assertCorporateActionCoverage(finalPlan.actions);
+        const relevantGaps = this.corporateActionGapsForPlan(finalPlan.actions);
+        if (relevantGaps.length > 0) {
+          const addedSymbol = this.recordCorporateActionExclusions(
+            relevantGaps,
+            excludedSymbols,
+            corporateActionExclusions,
+          );
+          if (!addedSymbol) {
+            throw new Error(
+              '자본변동 정보가 불완전해 제외한 종목이 최종 유니버스에 다시 포함됐습니다. '
+                + '유니버스 제외 조건 적용을 확인하세요.',
+            );
+          }
+          const retried = await this.resolveUntilReady(
+            jobId,
+            input,
+            strategy,
+            await this.resolve(jobId, input, excludedSymbols),
+            excludedSymbols,
+            corporateActionExclusions,
+          );
+          if (retried === null) return;
+          finalAttempt = retried;
+          // 결손 종목 제외는 단조롭게 후보를 줄이는 정책 적용이지 schedule 진동이 아니다.
+          // 차순위에도 결손이 이어질 수 있으므로 기존 안정화 8회 예산을 소비하지 않는다.
+          pass -= 1;
+          continue;
+        }
         this.assertFinancialCoverage(input, strategy, unionSymbols(finalAttempt.schedule));
         stabilized = true;
         break;
@@ -549,7 +654,11 @@ export class BacktestPreparationOrchestrator {
 
       this.persistAndEmit(jobId, { phase: 'FINALIZING' }, ['RUNNING']);
       this.registerUniverse(finalAttempt);
-      const preview = this.buildPreview(input, finalAttempt);
+      const preview = this.buildPreview(
+        input,
+        finalAttempt,
+        [...corporateActionExclusions.values()],
+      );
       this.persistAndEmit(
         jobId,
         { status: 'COMPLETED', previewJson: JSON.stringify(preview), nextResumeAtMs: null },
@@ -575,7 +684,11 @@ export class BacktestPreparationOrchestrator {
     }
   }
 
-  private async resolve(jobId: string, input: PreparationInput): Promise<UniverseResolveAttempt> {
+  private async resolve(
+    jobId: string,
+    input: PreparationInput,
+    excludedSymbols: ReadonlySet<string> = new Set(),
+  ): Promise<UniverseResolveAttempt> {
     this.persistAndEmit(jobId, {
       phase: 'RESOLVING_STAGES',
       doneSymbols: 0,
@@ -602,6 +715,7 @@ export class BacktestPreparationOrchestrator {
         }, ['RUNNING']);
       },
       shouldStop: () => this.cancelOrStopRequested(jobId),
+      excludedSymbols,
     });
   }
 
@@ -610,12 +724,23 @@ export class BacktestPreparationOrchestrator {
     input: PreparationInput,
     strategy: AnyTradingStrategy,
     initialAttempt: UniverseResolveAttempt,
+    excludedSymbols: Set<string>,
+    corporateActionExclusions: Map<string, RelevantCorporateActionGap>,
   ): Promise<Extract<UniverseResolveAttempt, { kind: 'READY' }> | null> {
     let attempt = initialAttempt;
     const seenNeeds = new Set<string>();
     for (;;) {
       if (this.finishCancelledIfRequested(jobId)) return null;
-      if (attempt.kind === 'READY') return attempt;
+      if (attempt.kind === 'READY') {
+        const addedSymbol = this.recordCorporateActionExclusions(
+          attempt.corporateActionExclusions ?? [],
+          excludedSymbols,
+          corporateActionExclusions,
+        );
+        if (!addedSymbol) return attempt;
+        attempt = await this.resolve(jobId, input, excludedSymbols);
+        continue;
+      }
       const signature = JSON.stringify(attempt.needs);
       if (seenNeeds.has(signature)) {
         this.fail(
@@ -643,7 +768,7 @@ export class BacktestPreparationOrchestrator {
         if (this.shouldReturnFromRun(jobId)) return null;
         // 시장 데이터가 아직 없는 iteration 의 DART 요구는 좁혀지지 않은 상한이다.
         // 시장 데이터를 먼저 채우고 재해소한 뒤 실제 후보에만 DART quota를 쓴다.
-        attempt = await this.resolve(jobId, input);
+        attempt = await this.resolve(jobId, input, excludedSymbols);
         continue;
       }
       if (hasDartWork) {
@@ -654,7 +779,7 @@ export class BacktestPreparationOrchestrator {
         const continued = await this.syncFacts(jobId, plan);
         if (!continued) return null;
       }
-      attempt = await this.resolve(jobId, input);
+      attempt = await this.resolve(jobId, input, excludedSymbols);
     }
   }
 
@@ -750,8 +875,12 @@ export class BacktestPreparationOrchestrator {
   }
 
   private assertCorporateActionCoverage(actions: BacktestPreparationPlan['actions']): void {
-    const failure = this.corporateActionCoverageFailureForPlan(actions);
-    if (failure !== null) throw new Error(failure);
+    const missing = this.missingCorporateActionCoverageSymbols(actions);
+    if (missing.length === 0) return;
+    throw new Error(
+      '최종 유니버스의 자본변동 coverage가 부족해 백테스트 준비를 중단했습니다 — '
+        + `대상: ${missing.join(', ')}. 필요한 연도 데이터를 다시 준비하세요.`,
+    );
   }
 
   private corporateActionCoverageFailureForPlan(
@@ -762,14 +891,29 @@ export class BacktestPreparationOrchestrator {
       return '최종 유니버스의 자본변동 coverage가 부족해 백테스트 준비를 중단했습니다 — '
         + `대상: ${missing.join(', ')}. 필요한 연도 데이터를 다시 준비하세요.`;
     }
+    const relevantGaps = this.corporateActionGapsForPlan(actions);
+    if (relevantGaps.length === 0) return null;
+    const affected = [...new Set(relevantGaps.map((gap) => gap.symbol))].sort();
+    const causes = relevantGaps.map((gap) => (
+      `${gap.symbol}(${gap.periodKey}: ${gap.reason})`
+    )).join('; ');
+    return `자본변동 보정 비율을 만들 수 없는 연도가 있어 백테스트 준비를 중단했습니다 — 대상: `
+      + `${affected.join(', ')}. 확인된 원인: ${causes}. `
+      + 'DART gap을 해소한 뒤 다시 준비하세요.';
+  }
+
+  private corporateActionGapsForPlan(
+    actions: BacktestPreparationPlan['actions'],
+  ): RelevantCorporateActionGap[] {
+    if (actions.symbols.length === 0) return [];
     const detailsBySymbol = readCorporateActionGapDetails(
       this.deps.actionCoverage,
       actions.symbols,
     );
-    if ([...detailsBySymbol.values()].every((details) => details.length === 0)) return null;
+    if ([...detailsBySymbol.values()].every((details) => details.length === 0)) return [];
     const executionFrom = `${actions.fromYear}-01-01`;
     const executionTo = `${actions.toYear}-12-31`;
-    const relevantGaps = findRelevantCorporateActionGaps(
+    return findRelevantCorporateActionGaps(
       detailsBySymbol,
       this.deps.symbolMaster.sharesChangesBetween(executionFrom, executionTo),
       {
@@ -779,14 +923,22 @@ export class BacktestPreparationOrchestrator {
         rawTo: executionTo,
       },
     );
-    if (relevantGaps.length === 0) return null;
-    const affected = [...new Set(relevantGaps.map((gap) => gap.symbol))].sort();
-    const causes = relevantGaps.map((gap) => (
-      `${gap.symbol}(${gap.periodKey}: ${gap.reason})`
-    )).join('; ');
-    return `자본변동 보정 비율을 만들 수 없는 연도가 있어 백테스트 준비를 중단했습니다 — 대상: `
-      + `${affected.join(', ')}. 확인된 원인: ${causes}. `
-      + 'DART gap을 해소한 뒤 다시 준비하세요.';
+  }
+
+  private recordCorporateActionExclusions(
+    gaps: readonly RelevantCorporateActionGap[],
+    excludedSymbols: Set<string>,
+    recorded: Map<string, RelevantCorporateActionGap>,
+  ): boolean {
+    let addedSymbol = false;
+    for (const gap of gaps) {
+      recorded.set(corporateActionExclusionKey(gap), gap);
+      if (!excludedSymbols.has(gap.symbol)) {
+        excludedSymbols.add(gap.symbol);
+        addedSymbol = true;
+      }
+    }
+    return addedSymbol;
   }
 
   private financialCoverageGap(
@@ -1120,6 +1272,7 @@ export class BacktestPreparationOrchestrator {
   private buildPreview(
     input: PreparationInput,
     attempt: Extract<UniverseResolveAttempt, { kind: 'READY' }>,
+    corporateActionExclusions: readonly RelevantCorporateActionGap[] = [],
   ): BacktestUniversePreview {
     const symbols = unionSymbols(attempt.schedule);
     const period = periodToTsRange(input.period);
@@ -1132,7 +1285,7 @@ export class BacktestPreparationOrchestrator {
     const missingCandleSymbols = this.deps.candleCoverage
       ? symbols.filter((symbol) => !this.deps.symbolService.exists(symbol) || !withBars.has(symbol))
       : [];
-    const warnings: string[] = [];
+    const warnings = corporateActionExclusionWarnings(corporateActionExclusions);
     if (input.universeRule.rebalanceInterval.unit === 'NONE') {
       const selected = new Set(symbols);
       const nonTradingBySymbol = new Map<string, string[]>();

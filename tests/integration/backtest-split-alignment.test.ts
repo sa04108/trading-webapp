@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import { CORPORATE_ACTION_FIELD, type Fact } from '../../src/server/modules/facts/domain/fact.js';
-import { symbolMasterVersions } from '../../src/server/shared/db/schema.js';
+import { backtestJobs, symbolMasterVersions } from '../../src/server/shared/db/schema.js';
+import { eq } from 'drizzle-orm';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import {
   createTestAdmin,
@@ -252,6 +253,26 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
       // 아무것도 사지 않아도 곡선은 평평하다 — 진입이 실제로 일어났는지 함께 못박는다
       expect(openSymbols).toEqual([SYMBOL]);
       expect(warnings.some((w) => w.includes('짝지어지지 않아'))).toBe(false);
+    },
+  );
+
+  it(
+    '제출 시점의 유니버스 제외 경고를 최종 결과에 보존한다',
+    { timeout: 90_000 },
+    async () => {
+      seedSharesChange();
+      const warning =
+        '자본변동 정보를 온전히 확보할 수 없어 종목 063080을 매매 대상에서 제외했습니다.';
+      const jobId = await submitBacktest((createdJobId) => {
+        ctx.container.database.db.update(backtestJobs)
+          .set({ submitWarningsJson: JSON.stringify([warning]) })
+          .where(eq(backtestJobs.id, createdJobId))
+          .run();
+      });
+
+      const run = ctx.container.resultsService.getRun(jobId);
+      expect(run).not.toBeNull();
+      expect(JSON.parse(run?.warningsJson ?? '[]')).toContain(warning);
     },
   );
 

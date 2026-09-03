@@ -77,7 +77,7 @@ describe('SqliteCorporateActionCoverageStore', () => {
       coveredYearsJson: '[]',
       actionCoveredYearsJson: '[2025]',
       actionGapYearsJson: null,
-      actionCoverageProtocolJson: '{"version":7,"years":[2025]}',
+      actionCoverageProtocolJson: '{"version":8,"years":[2025]}',
       updatedAtMs: 100,
       actionUpdatedAtMs: 100,
     }).run();

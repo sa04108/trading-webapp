@@ -747,7 +747,7 @@ export function UniverseRuleStep({
       {preview && !stale && preview.warnings.length > 0 ? (
         <Alert role="alert">
           <AlertDescription className="space-y-2">
-            <p>리밸런싱하지 않는 동안 다음 종목은 거래할 수 없는 시점이 있습니다.</p>
+            <p>유니버스 준비 과정에서 확인된 사항이 있습니다.</p>
             <ul className="list-disc space-y-1 pl-5">
               {preview.warnings.map((warning) => <li key={warning}>{warning}</li>)}
             </ul>

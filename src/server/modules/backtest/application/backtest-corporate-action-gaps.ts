@@ -50,11 +50,11 @@ export function readCorporateActionGapDetails(
 }
 
 /**
- * DART gap 중 KRX 상장주식수 변경과 날짜상 연결되는 것만 실행 차단 대상으로 고른다.
+ * DART gap 중 KRX 상장주식수 변경과 날짜상 연결되는 것만 매매 대상 제외 사유로 고른다.
  *
  * 상장 전 기준 주식수나 사건 없는 연도의 빈 앵커는 KRX 변경이 없으므로 제외된다.
  * 반대로 일자·발행형태가 깨진 행 주변에 실제 KRX 변경이 있으면 보정 비율을 만들
- * 근거가 부족한 것이므로 계속 차단한다. KRX 비율만으로 유상/무상을 추측하지 않는다.
+ * 근거가 부족한 것이므로 해당 종목을 제외한다. KRX 비율만으로 유상/무상을 추측하지 않는다.
  */
 export function findRelevantCorporateActionGaps(
   detailsBySymbol: ReadonlyMap<string, readonly CorporateActionGapDetail[]>,
