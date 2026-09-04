@@ -1,4 +1,4 @@
-onlyBuiltDependencies:
-  - better-sqlite3
-  - argon2
-  - esbuild
+allowBuilds:
+  better-sqlite3: true
+  argon2: true
+  esbuild: true
