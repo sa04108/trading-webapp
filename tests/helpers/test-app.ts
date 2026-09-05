@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { FastifyInstance } from 'fastify';
+import type { BacktestPreparationJobDto } from '../../src/server/modules/backtest/application/backtest-preparation-orchestrator.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { loadConfig } from '../../src/server/bootstrap/config.js';
 import { createContainer, type Container } from '../../src/server/bootstrap/container.js';
@@ -50,13 +51,52 @@ export async function createTestApp(
   };
 }
 
+export interface PreparedSubmissionFixtureOptions {
+  preparationTimeoutMs?: number;
+}
+
+const PREPARATION_FIXTURE_TIMEOUT_MS = 5_000;
+
+export async function waitForPreparationFixture(
+  readJob: () => BacktestPreparationJobDto | null,
+  jobId: string,
+  timeoutMs = PREPARATION_FIXTURE_TIMEOUT_MS,
+): Promise<boolean> {
+  const started = Date.now();
+  for (;;) {
+    const job = readJob();
+    if (job?.status === 'COMPLETED') return true;
+    if (job?.status === 'FAILED' || job?.status === 'CANCELLED') return false;
+    const elapsedMs = Date.now() - started;
+    if (elapsedMs >= timeoutMs) {
+      throw new Error(`preparation fixture timeout: ${JSON.stringify({
+        jobId,
+        elapsedMs,
+        status: job?.status ?? 'MISSING',
+        phase: job?.phase ?? null,
+        progress: job === null ? null : {
+          doneSymbols: job.doneSymbols,
+          totalSymbols: job.totalSymbols,
+          savedFacts: job.savedFacts,
+          gapCount: job.gapCount,
+        },
+        error: job?.error ?? null,
+      })}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
 /**
  * Task 6 이전부터 있던 제출/worker 통합 테스트가 관찰하려는 것은 queue 이후다.
  * 그 테스트들에서만 DART 외부 호출을 no-op으로 격리하고, 첫 409 뒤 동일 요청의
  * durable preparation을 완료한 다음 원 요청을 재시도한다. preparation 자체의 실제
  * registry/coverage/DART 계약은 backtest-preparation.test.ts가 별도로 검증한다.
  */
-export function installPreparedSubmissionFixture(ctx: TestApp): void {
+export function installPreparedSubmissionFixture(
+  ctx: TestApp,
+  fixtureOptions: PreparedSubmissionFixtureOptions = {},
+): void {
   const readActualValidDates = ctx.container.candleCoverageService
     .getValidDatesByCodeBetween.bind(ctx.container.candleCoverageService);
   const preparationPeriod = new AsyncLocalStorage<BacktestRequest['period']>();
@@ -152,17 +192,6 @@ export function installPreparedSubmissionFixture(ctx: TestApp): void {
     ]));
   };
 
-  const waitForPreparation = async (jobId: string): Promise<boolean> => {
-    const started = Date.now();
-    for (;;) {
-      const status = ctx.container.backtestPreparationOrchestrator.get(jobId)?.status;
-      if (status === 'COMPLETED') return true;
-      if (status === 'FAILED' || status === 'CANCELLED') return false;
-      if (Date.now() - started > 5_000) throw new Error('preparation fixture timeout');
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-  };
-
   const rawInject = ctx.app.inject.bind(ctx.app);
   ctx.app.inject = (async (options: unknown) => {
     const request = options as {
@@ -209,7 +238,11 @@ export function installPreparedSubmissionFixture(ctx: TestApp): void {
       strategyId: body.strategyId,
       parameters: body.parameters,
     });
-    if (!await waitForPreparation(preparationJob.id)) return first;
+    if (!await waitForPreparationFixture(
+      () => preparation.get(preparationJob.id),
+      preparationJob.id,
+      fixtureOptions.preparationTimeoutMs,
+    )) return first;
     return rawInject(options as never);
   }) as typeof ctx.app.inject;
 }

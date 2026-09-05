@@ -159,7 +159,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       payload: { username, password },
     });
     cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
-    installPreparedSubmissionFixture(ctx);
+    // 20년 월별 유니버스를 준비하는 취소 테스트도 포함한다. full suite의 병렬 부하에서
+    // 준비만 5초를 넘을 수 있으므로 이 파일의 fixture 준비 예산만 현실화한다.
+    installPreparedSubmissionFixture(ctx, { preparationTimeoutMs: 15_000 });
 
     registerSymbols(ctx.container, 'KR', ['005930']);
     dailyCandles = buildTrendingDailyCandles();
