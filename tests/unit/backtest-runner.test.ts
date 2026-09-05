@@ -72,15 +72,16 @@ function engineResult(cancelled = false): BacktestRunResult {
 }
 
 describe('BacktestRunner', () => {
-  it('계산 결과를 저장소 독립 artifact로 만들고 입력 경고를 앞에 합친다', async () => {
+  it('계산 결과를 저장소 독립 artifact로 만들고 종목 코드가 있는 준비 경고를 앞에 보존한다', async () => {
     const execute = vi.fn(async () => engineResult());
     const runner = new BacktestRunner(execute);
+    const preparationWarning = '준비 제외: 005930 종목의 가격 데이터가 없습니다.';
 
     const outcome = await runner.run(
       {} as AnyTradingStrategy,
       {} as BacktestRunInput,
       {},
-      ['input warning'],
+      [preparationWarning],
     );
 
     expect(execute).toHaveBeenCalledOnce();
@@ -89,7 +90,7 @@ describe('BacktestRunner', () => {
     expect(outcome.artifact).toMatchObject({
       schemaVersion: 1,
       processedBars: 10,
-      warnings: ['input warning', 'engine warning'],
+      warnings: [preparationWarning, 'engine warning'],
     });
     expect(outcome.artifact).not.toHaveProperty('fills');
     expect(outcome.artifact).not.toHaveProperty('cancelled');

@@ -80,7 +80,8 @@ describe('엔진 거래불가일', () => {
     const text = result.warnings.join('\n');
     // 사유를 정지로 밝힌다. 멤버십 일정 안전망 문구로 새면 사용자는 멀쩡한 전략을
     // 버그로 읽는다 — 접두사만 보는 단언으로는 그 회귀를 잡지 못한다.
-    expect(text).toContain('A 매수 거부: 그날 거래정지·무거래로 매수할 수 없는 종목입니다.');
+    expect(text).toContain('거래정지·무거래로 매수할 수 없어 거부된 종목 1개가 있습니다.');
+    expect(text).not.toMatch(/\bA\b/);
     expect(text).not.toContain('전략 버그 안전망');
   });
 
@@ -104,8 +105,11 @@ describe('엔진 거래불가일', () => {
     });
 
     const text = result.warnings.join('\n');
-    expect(text).toContain('A 매수 거부: 그날 거래정지·무거래로 매수할 수 없는 종목입니다.');
-    expect(text).toContain('A 매수 거부: 활성 멤버십 일정에 포함되지 않은 종목입니다 (전략 버그 안전망).');
+    expect(text).toContain('거래정지·무거래로 매수할 수 없어 거부된 종목 1개가 있습니다.');
+    expect(text).toContain(
+      '활성 멤버십 일정에 포함되지 않아 매수가 거부된 종목 1개가 있습니다 (전략 버그 안전망).',
+    );
+    expect(text).not.toMatch(/\bA\b/);
   });
 
   it('거래불가 종목이 없으면 그대로 매수한다', () => {
@@ -361,6 +365,18 @@ describe('상장폐지 청산', () => {
     expect(result.delistingLiquidations).toEqual([
       { symbol: 'A', tsMs: START + 3 * DAY, netPnl: trade?.netPnl },
     ]);
+    const liquidationWarning = result.warnings.find((warning) => (
+      warning.startsWith('상장폐지로 강제 청산한 종목')
+    ));
+    expect(liquidationWarning).toContain('상장폐지로 강제 청산한 종목 1건. 손익 합계');
+    expect(liquidationWarning).not.toContain(': A');
+    const reusedCodeWarning = result.warnings.find((warning) => (
+      warning.startsWith('단축코드 재사용을 발행사별로 구분할 수 없어')
+    ));
+    expect(reusedCodeWarning).toBe(
+      '단축코드 재사용을 발행사별로 구분할 수 없어 첫 상장폐지 이후 가격 봉을 제외한 종목 '
+        + '1건. 새 발행사의 수익 기회가 반영되지 않아 결과가 보수적일 수 있습니다.',
+    );
   });
 
   it('폐지 전 주문은 마지막 봉 시가에 체결하되 효력 시각까지 현금을 잠근다', () => {
@@ -490,8 +506,9 @@ describe('상장폐지 청산', () => {
     expect(result.fills.filter((fill) => fill.symbol === 'A')).toHaveLength(0);
     expect(result.openPositions.some((position) => position.symbol === 'A')).toBe(false);
     expect(result.warnings.join('\n')).toContain(
-      'A 주문 거부/폐기: 상장폐지 경계를 넘어 재사용된 단축코드의 후속 봉에 체결할 수 없습니다.',
+      '상장폐지 경계를 넘어 재사용된 단축코드의 후속 봉에는 주문을 체결할 수 없어 1개 종목의 주문을 거부하거나 폐기했습니다.',
     );
+    expect(result.warnings.join('\n')).not.toMatch(/\bA\b/);
   });
 
   it('폐지될 deferred BUY를 먼저 버려 정상 BUY의 포지션 슬롯을 보존한다', () => {
@@ -528,7 +545,7 @@ describe('상장폐지 청산', () => {
     expect(result.fills.filter((fill) => fill.symbol === 'B')).toMatchObject([
       { side: 'BUY', tsMs: START + 5 * DAY },
     ]);
-    expect(result.warnings.join('\n')).toContain('A 주문 거부/폐기: 상장폐지 경계를 넘어');
+    expect(result.warnings.join('\n')).toContain('상장폐지 경계를 넘어 재사용된 단축코드');
     expect(result.warnings.join('\n')).not.toContain('동시 보유 종목 상한');
   });
 
@@ -602,8 +619,8 @@ describe('상장폐지 청산', () => {
       { symbol: 'A', side: 'SELL', tsMs: START + 3 * DAY, reason: 'DELISTED' },
       { symbol: 'B', side: 'BUY', tsMs: START + 4 * DAY },
     ]);
-    expect(result.warnings.join('\n')).not.toContain('B 매수 거부: 그날 거래정지');
-    expect(result.warnings.join('\n')).not.toContain('B 매수 거부: 활성 멤버십');
+    expect(result.warnings.join('\n')).not.toContain('거래정지·무거래로 매수할 수 없어 거부된 종목');
+    expect(result.warnings.join('\n')).not.toContain('활성 멤버십 일정에 포함되지 않아 매수가 거부된 종목');
   });
 
   it('봉 없는 unrelated 폐지 이벤트가 강제청산 시도와 대체 BUY를 한 봉 앞당기지 않는다', () => {
@@ -727,7 +744,7 @@ describe('상장폐지 청산', () => {
     );
 
     expect(result.fills).toHaveLength(0);
-    expect(result.warnings.join('\n')).toContain('A 주문 거부/폐기: 상장폐지 경계를 넘어');
+    expect(result.warnings.join('\n')).toContain('상장폐지 경계를 넘어 재사용된 단축코드');
   });
 
   it('한 종목의 폐지 경계가 다른 종목의 다음 봉 체결을 막지 않는다', () => {
@@ -1005,7 +1022,7 @@ describe('상장폐지 청산', () => {
       { symbol: 'B', side: 'BUY', tsMs: START + 2 * DAY, price: 1_100 },
     ]);
     expect(result.openPositions.map((position) => position.symbol)).toEqual(['B']);
-    expect(result.warnings.join('\n')).toContain('A 주문 거부/폐기: 상장폐지 경계를 넘어');
+    expect(result.warnings.join('\n')).toContain('상장폐지 경계를 넘어 재사용된 단축코드');
     expect(result.warnings.join('\n')).not.toContain('동시 보유 종목 상한');
   });
 

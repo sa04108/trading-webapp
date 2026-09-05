@@ -26,6 +26,7 @@ import {
   type BacktestPreparationJob,
 } from './preparation-live';
 import { UniverseStageEditor } from './universe-stage-editor';
+import { PreparationIssuesCard } from './preparation-issues-card';
 
 /** 주기 unit 마다 허용하는 최댓값 — 스키마(universe-rule.ts rebalanceIntervalSchema)와 같은 값 */
 const REBALANCE_UNIT_MAX: Record<RebalanceInterval['unit'], number> = {
@@ -751,15 +752,7 @@ export function UniverseRuleStep({
       ) : null}
 
       {preview && !stale && preview.warnings.length > 0 ? (
-        <Alert role="alert">
-          <AlertDescription className="space-y-2">
-            <p>유니버스 준비 과정에서 확인된 사항이 있습니다.</p>
-            <ul className="list-disc space-y-1 pl-5">
-              {preview.warnings.map((warning) => <li key={warning}>{warning}</li>)}
-            </ul>
-            <p className="text-xs">경고를 확인한 뒤 그대로 진행할 수 있습니다.</p>
-          </AlertDescription>
-        </Alert>
+        <PreparationIssuesCard warnings={preview.warnings} />
       ) : null}
 
       {preview && fullSyncNeeded ? (

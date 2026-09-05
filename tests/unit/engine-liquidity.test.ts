@@ -51,7 +51,9 @@ describe('직전 거래 봉 participation + 현재 봉 총거래량 체결 한�
     const result = run([[{ symbol: 'A', side: 'BUY', quantity: 50 }]]);
     expect(result.fills.map((fill) => fill.quantity)).toEqual([10]);
     expect(result.openPositions[0]?.quantity).toBe(10);
-    expect(result.warnings.some((warning) => warning.includes('축소된 체결 시도 1건'))).toBe(true);
+    const warning = result.warnings.find((item) => item.includes('축소된 체결 시도 1건'));
+    expect(warning).toContain('영향을 받은 종목 1개');
+    expect(warning).not.toContain('대상 1종목: A');
   });
 
   it('같은 봉의 같은 종목 주문들이 하나의 거래량 한도를 공유한다', () => {

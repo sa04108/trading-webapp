@@ -134,7 +134,9 @@ describe('runBacktest — 멤버십 일정 기반 거래 대상 제한 (스펙 2
 
     const filledSymbols = new Set(result.fills.map((f) => f.symbol));
     expect(filledSymbols).toEqual(new Set(['A']));
-    expect(result.warnings.some((w) => w.includes('B'))).toBe(true);
+    const warning = result.warnings.find((item) => item.includes('활성 멤버십 일정'));
+    expect(warning).toContain('거부된 종목 1개');
+    expect(warning).not.toMatch(/\b[AB]\b/);
   });
 
   it('리밸런스 이탈 매도를 전략 매도와 한 건으로 접고, 청산 다음 봉에 신규 편입을 매수한다', () => {
@@ -297,11 +299,14 @@ describe('runBacktest — 멤버십 일정 기반 거래 대상 제한 (스펙 2
     });
 
     // B 는 매 봉마다(세 번) 매수를 시도하지만, 실제로 체결되는 것은 없고
-    // 경고는 종목당 한 줄로만 쌓여야 한다(폭주 방지).
+    // 경고는 사유별 한 줄과 영향받은 종목 수로만 남아야 한다(폭주·코드 저장 방지).
     const bFills = result.fills.filter((f) => f.symbol === 'B');
     expect(bFills).toHaveLength(0);
-    const bWarnings = result.warnings.filter((w) => w.includes('B') && w.includes('멤버십 일정'));
-    expect(bWarnings).toHaveLength(1);
+    const membershipWarnings = result.warnings.filter((w) => w.includes('멤버십 일정'));
+    expect(membershipWarnings).toEqual([
+      '활성 멤버십 일정에 포함되지 않아 매수가 거부된 종목 1개가 있습니다 (전략 버그 안전망).',
+    ]);
+    expect(membershipWarnings[0]).not.toMatch(/\b[AB]\b/);
   });
 
   it('일정이 미지정이면 tradableSymbols 는 null 이고 종목을 제한하지 않는다', () => {

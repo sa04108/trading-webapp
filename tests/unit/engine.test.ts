@@ -141,7 +141,47 @@ describe('runBacktest 이벤트 순서 (스펙 §9.1, §9.2)', () => {
       maxPositions: 5,
     });
     expect(result.fills).toHaveLength(0);
-    expect(result.warnings.some((w) => w.includes('현금 부족'))).toBe(true);
+    const cashWarning = result.warnings.find((warning) => warning.includes('현금 부족'));
+    expect(cashWarning).toBe('현금 부족으로 매수 주문 1건이 거부되었습니다.');
+    expect(cashWarning).not.toContain('A');
+    expect(cashWarning).not.toContain(new Date(START + HOUR).toISOString());
+  });
+
+  it('현금 부족 거부를 이벤트 수 한 줄로 합치고 종목 코드는 남기지 않는다', () => {
+    const strategy: TradingStrategy<unknown, { fired: boolean }> = {
+      id: 'cash-rejection-summary',
+      version: '1.0.0',
+      name: 'cash rejection summary',
+      description: 'cash rejection summary',
+      parameterSchema: z.unknown(),
+      initialize: () => ({ fired: false }),
+      onBars(_context, state) {
+        if (state.fired) return { orders: [] };
+        state.fired = true;
+        return {
+          orders: ['A', 'B'].map((symbol) => ({
+            symbol,
+            side: 'BUY' as const,
+            quantity: 1,
+          })),
+        };
+      },
+    };
+    const result = runBacktest(strategy as never, {
+      candles: ['A', 'B'].flatMap((symbol) => [
+        bar(0, 100, { symbol }),
+        bar(1, 100, { symbol }),
+      ]),
+      initialCash: 50,
+      execution: ZERO_COST,
+      parameters: {},
+      randomSeed: 42,
+      maxPositions: 5,
+    });
+
+    const cashWarnings = result.warnings.filter((warning) => warning.includes('현금 부족'));
+    expect(cashWarnings).toEqual(['현금 부족으로 매수 주문 2건이 거부되었습니다.']);
+    expect(cashWarnings[0]).not.toMatch(/\b[AB]\b/);
   });
 
   it('동시 매수 신호의 현금 배정 순서는 같은 seed에서 재현되고 seed를 바꾸면 달라진다', () => {
@@ -501,14 +541,12 @@ describe('runBacktest 이벤트 순서 (스펙 §9.1, §9.2)', () => {
     expect(result.metrics.maxConcurrentPositions).toBeLessThanOrEqual(1);
 
     // 상한에 걸려 버려진 주문은 조용히 사라지면 안 된다 — 그만큼 자본이 현금으로
-    // 남는데 자산 곡선은 정상처럼 보인다. 어느 종목이 몇 건 폐기됐는지 밝힌다.
+    // 남는데 자산 곡선은 정상처럼 보인다. 주문·종목 수만 밝히고 코드는 저장하지 않는다.
     const capWarning = result.warnings.find((warning) => warning.includes('동시 보유 종목 상한'));
     expect(capWarning).toBeDefined();
-    const filledSymbol = result.fills[0]?.symbol;
-    const droppedSymbol = filledSymbol === 'A' ? 'B' : 'A';
-    expect(capWarning).toContain(droppedSymbol);
-    expect(capWarning).not.toContain(`: ${filledSymbol}`);
     expect(capWarning).toContain('매수 주문 1건');
+    expect(capWarning).toContain('영향을 받은 종목 1개');
+    expect(capWarning).not.toMatch(/\b[AB]\b/);
   });
 
   it('상한에 걸린 주문이 없으면 상한 경고를 만들지 않는다', () => {

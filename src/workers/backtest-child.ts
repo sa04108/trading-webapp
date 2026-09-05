@@ -397,10 +397,10 @@ async function main(): Promise<void> {
       return (current?.version ?? 0) !== entry.version;
     });
     if (drifted.length > 0) {
+      const driftedSymbolCount = new Set(drifted.map((entry) => entry.code)).size;
       datasetWarnings.push(
-        `제출 이후 데이터가 변경된 종목이 있습니다: ${drifted
-          .map((entry) => `${entry.code}(${entry.slice})`)
-          .join(', ')} — 결과가 제출 당시 데이터와 다를 수 있습니다.`,
+        `제출 이후 데이터가 변경된 종목 ${driftedSymbolCount}개가 있습니다 — `
+          + '결과가 제출 당시 데이터와 다를 수 있습니다.',
       );
     }
     const pinnedUniverseJson = job.universeJson ?? '[]';

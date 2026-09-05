@@ -152,8 +152,9 @@ export interface BacktestRunResult {
  * 2.9.0: 거래 시작을 첫 발견 봉이 아닌 요청 시작일로 고정해 앞쪽 가격 공백도 실패시킨다.
  * 2.10.0: legacy 주말 경계를 거래일에서 제외해 리밸런스·warm-up 시계를 바로잡는다.
  * 2.11.0: 단주 현금정산 뒤 남은 포지션에 매수수수료 원가를 비례 배분한다.
+ * 2.12.0: 실행 경고에서 개별 종목 코드를 빼고 사유별 주문·종목 수로 요약한다.
  */
-export const ENGINE_VERSION = '2.11.0';
+export const ENGINE_VERSION = '2.12.0';
 
 const PROGRESS_INTERVAL_BARS = 500;
 const MS_PER_DAY = 86_400_000;
@@ -359,6 +360,7 @@ function* runBacktestSteps(
   const trades: Trade[] = [];
   const warnings: string[] = [];
   const delistingLiquidations: { symbol: string; tsMs: number; netPnl: number }[] = [];
+  let cashRejectedOrderCount = 0;
   /**
    * 동시 보유 상한에 걸려 폐기된 매수 주문 — 종목별 건수. 봉마다 경고를 쌓지 않고
    * 마지막에 한 줄로 접는다: 월간 리밸런스 12년이면 같은 사유가 천 건 넘게 쌓여
@@ -1124,18 +1126,35 @@ function* runBacktestSteps(
       `기간 종료 시점에 미청산 포지션 ${positions.size}건이 남아 있습니다 (평가금액에는 반영됨).`,
     );
   }
+  if (cashRejectedOrderCount > 0) {
+    warnings.push(`현금 부족으로 매수 주문 ${cashRejectedOrderCount}건이 거부되었습니다.`);
+  }
+  if (nonTradingRejectedSymbols.size > 0) {
+    warnings.push(
+      `거래정지·무거래로 매수할 수 없어 거부된 종목 ${nonTradingRejectedSymbols.size}개가 있습니다.`,
+    );
+  }
+  if (universeRejectedSymbols.size > 0) {
+    warnings.push(
+      `활성 멤버십 일정에 포함되지 않아 매수가 거부된 종목 ${universeRejectedSymbols.size}개가 있습니다 `
+        + '(전략 버그 안전망).',
+    );
+  }
+  if (retiredOrderRejectedSymbols.size > 0) {
+    warnings.push(
+      '상장폐지 경계를 넘어 재사용된 단축코드의 후속 봉에는 주문을 체결할 수 없어 '
+        + `${retiredOrderRejectedSymbols.size}개 종목의 주문을 거부하거나 폐기했습니다.`,
+    );
+  }
   if (buysDroppedByCap.size > 0) {
     // 이 폐기는 지금까지 모든 전략에서 보이지 않았다 — validateOrder 가 null 을
     // 반환하면 호출부가 그대로 버렸다. 전략이 상한보다 많은 종목을 편입하려 하면
     // 초과분만큼 자본이 현금으로 남는데 자산 곡선은 정상처럼 보인다.
     const total = [...buysDroppedByCap.values()].reduce((sum, count) => sum + count, 0);
-    const symbols = [...buysDroppedByCap.keys()].sort();
-    const shown = symbols.slice(0, 10).join(', ');
     warnings.push(
       `동시 보유 종목 상한(${input.maxPositions})에 걸려 매수 주문 ${total}건이 폐기되었습니다 ` +
-        `— 대상 ${symbols.length}종목: ${shown}` +
-        (symbols.length > 10 ? ` 외 ${symbols.length - 10}종목` : '') +
-        '. 그만큼 자본이 현금으로 남았습니다. 전략의 보유 종목 수를 상한 이하로 줄이거나 상한을 올리세요.',
+        `— 영향을 받은 종목 ${buysDroppedByCap.size}개. ` +
+        '그만큼 자본이 현금으로 남았습니다. 전략의 보유 종목 수를 상한 이하로 줄이거나 상한을 올리세요.',
     );
   }
   if (maxVolumeParticipationRate !== undefined) {
@@ -1144,16 +1163,14 @@ function* runBacktestSteps(
     const symbols = [...new Set([
       ...liquidityLimitedOrders.keys(),
       ...liquidityRejectedOrders.keys(),
-    ])].sort();
+    ])];
     warnings.push(
       `유동성 체결 한도: 직전 거래 봉 거래량의 ${maxVolumeParticipationRate * 100}%와 `
         + '현재 체결 봉 총거래량 중 작은 수량까지 체결합니다. '
         + '매수 잔량은 폐기하고 매도 잔량은 다음 거래 봉에서 재시도합니다. '
         + '상장폐지 강제정산은 마지막 거래 종가 전량 정산 모델을 유지해 이 한도에서 제외합니다.'
         + (limited + rejected > 0
-          ? ` 한도로 축소된 체결 시도 ${limited}건, 거부된 체결 시도 ${rejected}건 — 대상 ${symbols.length}종목: ${symbols.slice(0, 10).join(', ')}`
-            + (symbols.length > 10 ? ` 외 ${symbols.length - 10}종목` : '')
-            + '.'
+          ? ` 한도로 축소된 체결 시도 ${limited}건, 거부된 체결 시도 ${rejected}건 — 영향을 받은 종목 ${symbols.length}개.`
           : ''),
     );
   }
@@ -1201,11 +1218,8 @@ function* runBacktestSteps(
 
   if (delistingLiquidations.length > 0) {
     const netPnl = delistingLiquidations.reduce((sum, item) => sum + item.netPnl, 0);
-    const symbols = delistingLiquidations.map((item) => item.symbol).sort();
-    const shown = symbols.slice(0, 10).join(', ');
     warnings.push(
-      `상장폐지로 강제 청산한 종목 ${symbols.length}건: ${shown}`
-        + (symbols.length > 10 ? ` 외 ${symbols.length - 10}종목` : '')
+      `상장폐지로 강제 청산한 종목 ${delistingLiquidations.length}건`
         // 로캘을 못박는다. 지정하지 않으면 기계마다 1,234,567 과 1.234.567 로 갈려
         // 같은 실행의 warningsJson 이 달라진다 (재현성 §9.5).
         + `. 손익 합계 ${Math.round(netPnl).toLocaleString('ko-KR')}원. `
@@ -1213,12 +1227,9 @@ function* runBacktestSteps(
     );
   }
   if (ignoredPostDelistingCandleSymbols.size > 0) {
-    const ignoredSymbols = [...ignoredPostDelistingCandleSymbols].sort();
-    const shown = ignoredSymbols.slice(0, 10).join(', ');
     warnings.push(
       `단축코드 재사용을 발행사별로 구분할 수 없어 첫 상장폐지 이후 가격 봉을 제외한 종목 `
-        + `${ignoredSymbols.length}건: ${shown}`
-        + (ignoredSymbols.length > 10 ? ` 외 ${ignoredSymbols.length - 10}종목` : '')
+        + `${ignoredPostDelistingCandleSymbols.size}건`
         + '. 새 발행사의 수익 기회가 반영되지 않아 결과가 보수적일 수 있습니다.',
     );
   }
@@ -1398,9 +1409,6 @@ function* runBacktestSteps(
     if (!options.ignoreNonTrading && nonTradingNow?.has(order.symbol) === true) {
       if (!nonTradingRejectedSymbols.has(order.symbol)) {
         nonTradingRejectedSymbols.add(order.symbol);
-        warnings.push(
-          `${order.symbol} 매수 거부: 그날 거래정지·무거래로 매수할 수 없는 종목입니다.`,
-        );
       }
       return null;
     }
@@ -1414,9 +1422,6 @@ function* runBacktestSteps(
     if (membershipForValidation !== null && !membershipForValidation.has(order.symbol)) {
       if (!universeRejectedSymbols.has(order.symbol)) {
         universeRejectedSymbols.add(order.symbol);
-        warnings.push(
-          `${order.symbol} 매수 거부: 활성 멤버십 일정에 포함되지 않은 종목입니다 (전략 버그 안전망).`,
-        );
       }
       return null;
     }
@@ -1445,9 +1450,6 @@ function* runBacktestSteps(
   function warnRetiredOrder(symbol: string): void {
     if (retiredOrderRejectedSymbols.has(symbol)) return;
     retiredOrderRejectedSymbols.add(symbol);
-    warnings.push(
-      `${symbol} 주문 거부/폐기: 상장폐지 경계를 넘어 재사용된 단축코드의 후속 봉에 체결할 수 없습니다.`,
-    );
   }
 
   function executeOrder(
@@ -1485,7 +1487,7 @@ function* runBacktestSteps(
           cash / (fill.price * (1 + input.execution.cost.buyCommissionRate)),
         );
         if (affordable < input.execution.rules.minOrderQty) {
-          warnings.push(`${order.symbol} 매수 거부: 현금 부족 (${new Date(tsMs).toISOString()})`);
+          cashRejectedOrderCount += 1;
           return null;
         }
         fill = simulateFill(

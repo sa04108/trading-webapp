@@ -17,7 +17,6 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Checkbox } from '@/components/ui/checkbox';
 import { PageSizeInput, Pagination } from '@/components/pagination';
 import {
   Dialog,
@@ -55,7 +54,6 @@ import { exitReasonLabel } from './exit-reason';
 import { openPositionRows } from './open-position-rows';
 import { periodEndTsMs, staleDays } from './stale-days';
 import { parsePageSize } from '@/lib/page-size';
-import { pageWindow } from '@/lib/pagination';
 import { ParamHint } from './param-hint';
 import { extractNumberParams, paramLabel } from './param-specs';
 import {
@@ -98,7 +96,7 @@ import {
 } from './types';
 import { costSummary } from './cost-summary';
 import { costProfileLabel, slippageProfileLabel } from './profile-labels';
-import { groupWarnings } from './warning-groups';
+import { ResultWarnings } from './result-warnings';
 import { selectionMethodLabel, universeSourceLabel } from './universe-provenance';
 import { UniverseRebalancingSection } from './universe-rebalancing-section';
 import type { ProvenancePin } from '../../../shared/schemas/provenance-pin.js';
@@ -445,58 +443,6 @@ function TradesSection({
   );
 }
 
-function WarningsSection({ warnings }: { warnings: string[] }) {
-  const [grouped, setGrouped] = useState(true);
-  const [page, setPage] = useState(0);
-  const [pageSizeText, setPageSizeText] = useState('20');
-  const pageSize = parsePageSize(pageSizeText, 20);
-
-  const rows = grouped ? groupWarnings(warnings).map((group) => group.label) : warnings;
-  const { pageCount, currentPage, from, to } = pageWindow(rows.length, pageSize, page);
-  const visible = rows.slice(from, to);
-
-  return (
-    <Alert className="lg:col-span-2">
-      <AlertTitle>경고·한계</AlertTitle>
-      <AlertDescription>
-        <div className="mb-2 flex flex-wrap items-center gap-4">
-          <label className="flex items-center gap-1.5 text-xs">
-            <Checkbox
-              checked={grouped}
-              onCheckedChange={(checked) => {
-                setGrouped(checked === true);
-                setPage(0);
-              }}
-            />
-            묶어 보기
-          </label>
-          <PageSizeInput
-            value={pageSizeText}
-            label="경고 목록 페이지당 표시 수"
-            unit="건"
-            onChange={(nextValue) => {
-              setPageSizeText(nextValue);
-              setPage(0);
-            }}
-          />
-        </div>
-        <ul className="list-disc space-y-1 pl-4">
-          {visible.map((warning) => (
-            <li key={warning}>{warning}</li>
-          ))}
-        </ul>
-        <Pagination
-          className="mt-3"
-          ariaLabel="경고 목록 페이지 이동"
-          currentPage={currentPage}
-          pageCount={pageCount}
-          onPageChange={setPage}
-        />
-      </AlertDescription>
-    </Alert>
-  );
-}
-
 function RunMetadataCard({
   run,
   job,
@@ -617,7 +563,7 @@ function RunMetadataCard({
           ))}
         </CardContent>
       </Card>
-      {warnings.length > 0 ? <WarningsSection warnings={warnings} /> : null}
+      {warnings.length > 0 ? <ResultWarnings warnings={warnings} /> : null}
       <UniverseRebalancingSection entries={universeRebalancing} />
     </div>
   );
