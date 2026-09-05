@@ -50,7 +50,7 @@ function enqueueDraftSave<T>(key: string, write: () => Promise<T>): Promise<T> {
 }
 
 /** 같은 문서에서 막 시작한 unload/unmount 저장보다 진입 판정이 앞서는 경합을 막는다. */
-async function waitForPendingDraftSaves(): Promise<void> {
+export async function waitForPendingDraftSaves(): Promise<void> {
   while (pendingDraftSaves.size > 0) {
     await Promise.allSettled([...pendingDraftSaves]);
   }
@@ -80,11 +80,28 @@ export async function saveBacktestWizardDraftStep<S extends BacktestWizardDraftS
   payload: BacktestWizardDraftPayloadMap[S],
   options: { keepalive?: boolean } = {},
 ): Promise<void> {
+  const requestPayload = step === 'universe'
+    ? (() => {
+        const universePayload = payload as BacktestWizardDraftPayloadMap['universe'] & {
+          lastPreview: {
+            result: { preparationJobId?: string };
+          } | null;
+        };
+        return {
+          ...universePayload,
+          lastPreview: universePayload.lastPreview?.result.preparationJobId === undefined
+            ? null
+            : {
+                preparationJobId: universePayload.lastPreview.result.preparationJobId,
+              },
+        };
+      })()
+    : payload;
   const write = () =>
     api(`/backtests/wizard-draft/${step}${contextQuery(sourceJobId)}`, {
       method: 'PUT',
-      body: JSON.stringify(payload),
-      // 큰 유니버스 미리보기는 브라우저 keepalive body 상한을 넘을 수 있어 unload 때만 쓴다.
+      body: JSON.stringify(requestPayload),
+      // 유니버스 미리보기는 준비 작업 ID만 보내므로 keepalive body 상한을 넘지 않는다.
       keepalive: options.keepalive,
     });
   const key = JSON.stringify([sourceJobId, step]);

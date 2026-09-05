@@ -11,7 +11,8 @@ import {
 } from '../../../../shared/schemas/backtest-preparation.js';
 import type { Clock } from '../../../shared/clock.js';
 import type { DatabaseHandle } from '../../../shared/db/database.js';
-import { backtestPreparationJobs } from '../../../shared/db/schema.js';
+import { backtestPreparationJobs, externalApiDailyUsage } from '../../../shared/db/schema.js';
+import { PreparationReferenceService } from './preparation-reference-service.js';
 import { newId } from '../../../shared/ids.js';
 import type { Logger } from '../../../shared/logger.js';
 import type { ExternalApiUsage } from '../../../shared/db/external-api-usage.js';
@@ -106,6 +107,8 @@ export interface BacktestPreparationJobDto {
 }
 
 export interface BacktestUniversePreview {
+  /** 저장된 결과를 소유자와 연결하는 ID. 계산 중인 결과에는 아직 없다. */
+  readonly preparationJobId?: string;
   readonly schedule: readonly UniverseScheduleEntry[];
   readonly diagnostics: readonly RebalanceDiagnostic[];
   readonly stages: UniverseRule['stages'];
@@ -266,7 +269,7 @@ export class BacktestPreparationOrchestrator {
     }) ?? null;
   }
 
-  start(input: PreparationInput): BacktestPreparationJobDto {
+  start(input: PreparationInput, owner?: { userId: string; context: string }): BacktestPreparationJobDto {
     const strategy = this.requireStrategy(input);
     const requestHash = backtestPreparationRequestHash(input, strategy);
     // 읽기와 insert 사이에 다른 프로세스가 같은 hash를 넣을 수 있으므로 write lock을
@@ -283,7 +286,10 @@ export class BacktestPreparationOrchestrator {
         .orderBy(desc(backtestPreparationJobs.createdAtMs))
         .limit(1)
         .get();
-      if (existing) return { row: existing, inserted: false } as const;
+      if (existing) {
+        if (owner) this.bindWizard(owner.userId, owner.context, existing.id);
+        return { row: existing, inserted: false } as const;
+      }
 
       const now = this.deps.clock.now();
       const id = newId('prep');
@@ -291,6 +297,7 @@ export class BacktestPreparationOrchestrator {
         id,
         requestHash,
         requestJson: JSON.stringify(input),
+        lifecycleManaged: owner !== undefined,
         status: 'QUEUED',
         phase: 'MARKET_DATA',
         doneSymbols: 0,
@@ -304,6 +311,7 @@ export class BacktestPreparationOrchestrator {
       }).run();
       const row = this.getRow(id);
       if (!row) throw new Error('준비 작업을 저장하지 못했습니다.');
+      if (owner) this.bindWizard(owner.userId, owner.context, id);
       return { row, inserted: true } as const;
     }).immediate();
     if (!selected.inserted) return toDto(selected.row);
@@ -312,6 +320,10 @@ export class BacktestPreparationOrchestrator {
     if (!created) throw new Error('준비 작업을 저장하지 못했습니다.');
     this.queuePump();
     return created;
+  }
+
+  bindWizard(userId: string, context: string, preparationJobId: string): void {
+    new PreparationReferenceService(this.deps.database).bindWizard(userId, context, preparationJobId);
   }
 
   get(jobId: string): BacktestPreparationJobDto | null {
@@ -340,29 +352,30 @@ export class BacktestPreparationOrchestrator {
     const row = this.getRow(jobId);
     if (!row?.previewJson) return null;
     try {
-      return JSON.parse(row.previewJson) as BacktestUniversePreview;
+      return { ...JSON.parse(row.previewJson) as BacktestUniversePreview, preparationJobId: jobId };
     } catch (error) {
       this.deps.logger.warn(
         { module: 'backtest', event: 'preparation.preview.parse-failed', jobId, err: error },
-        'stored preparation preview is invalid',
+        '저장된 준비 미리보기가 올바르지 않습니다',
       );
       return null;
     }
   }
 
   /**
-   * 같은 준비 hash로 이미 완료한 미리보기를 DB에서만 읽는다.
+   * 지정한 preparation job ID의 완료 미리보기를 DB에서만 읽는다.
    *
-   * `getReadyPreview`와 달리 현재 종목 마스터를 다시 해소하지 않는다. 재설정 복제가
-   * 원본 job에 고정된 일정과 이 결과의 schedule hash를 대조한 뒤 원본 일정을 그대로
-   * 재사용할 때만 쓴다. 호출자가 그 대조 없이 신규 제출에 사용하면 stale 유니버스를
-   * 승인하게 되므로 일반 제출 경로는 계속 `getReadyPreview`를 써야 한다.
+   * 현재 종목 마스터를 다시 해소하지 않으므로, 원본 job에 고정된 일정과 저장된
+   * 미리보기의 schedule hash가 일치하는지 확인한 복제 경로에서만 사용한다. 신규 제출은
+   * 현재 사용자의 참조 행이 가리키는 검증 결과를 쓰는 `getReadyPreviewForWizard`를 사용한다.
    */
-  getCachedPreview(input: PreparationInput): BacktestUniversePreview | null {
+  getCachedPreview(input: PreparationInput, preparationJobId?: string): BacktestUniversePreview | null {
     const strategy = this.requireStrategy(input);
     const hash = backtestPreparationRequestHash(input, strategy);
-    const completedId = this.latestCompletedPreviewId(hash);
+    const completedId = preparationJobId ?? this.latestCompletedPreviewId(hash);
     if (completedId === null) return null;
+    const row = this.getDtoRow(completedId);
+    if (row?.status !== 'COMPLETED' || row.requestHash !== hash) return null;
     const preview = this.getPreview(completedId);
     if (
       !preview
@@ -374,27 +387,34 @@ export class BacktestPreparationOrchestrator {
     return preview;
   }
 
-  /** Production clone reuse performs its coverage checks in the isolated execution lane. */
-  async getCachedPreviewIsolated(input: PreparationInput): Promise<BacktestUniversePreview | null> {
-    if (this.execution === null) return this.getCachedPreview(input);
+  /** 복제 재사용의 coverage 검사는 격리된 실행 lane에서 수행한다. */
+  async getCachedPreviewIsolated(input: PreparationInput, preparationJobId?: string): Promise<BacktestUniversePreview | null> {
+    if (this.execution === null) return this.getCachedPreview(input, preparationJobId);
     if (!this.hasCompletedPreview(input)) return null;
-    return this.execution.getCachedPreview(input);
+    return this.execution.getCachedPreview(input, preparationJobId);
   }
 
-  /** HTTP preview lookup never schedules a resolver or waits for a child. */
-  getFreshPreviewDetails(input: PreparationInput): ReadyPreviewDetails | null {
+  /** HTTP 미리보기 조회는 resolver를 예약하거나 child 작업을 기다리지 않는다. */
+  getFreshPreviewDetails(input: PreparationInput, preparationJobId?: string): ReadyPreviewDetails | null {
     const strategy = this.requireStrategy(input);
-    return this.previewCache.get(backtestPreparationRequestHash(input, strategy));
+    return this.previewCache.get(backtestPreparationRequestHash(input, strategy), preparationJobId);
   }
 
-  /** 같은 요청 hash의 완료 결과를 현재 resolver로 다시 확인해 stale preview를 거른다. */
+  /** 신규 제출은 해당 사용자가 현재 참조하는 검증된 결과만 사용한다. */
+  getReadyPreviewForWizard(input: PreparationInput, userId: string): BacktestUniversePreview | null {
+    const owner = new PreparationReferenceService(this.deps.database).getWizard(userId);
+    if (!owner) return null;
+    return this.getFreshPreviewDetails(input, owner.preparationJobId)?.preview ?? null;
+  }
+
+  /** 기존 호환 경로에서 같은 요청의 완료 결과를 다시 확인해 오래된 미리보기를 거른다. */
   async getReadyPreview(
     input: PreparationInput,
     progressJobId?: string,
   ): Promise<BacktestUniversePreview | null> {
     if (this.execution !== null) {
-      // Submission can use the same certified snapshot. If data changed, its existing
-      // PREPARATION_REQUIRED response sends the wizard back to durable preparation.
+      // 제출은 같은 검증 snapshot을 사용할 수 있다. 데이터가 바뀌면 기존
+      // PREPARATION_REQUIRED 응답으로 위저드를 영속 준비 단계로 돌려보낸다.
       return this.getFreshPreviewDetails(input)?.preview ?? null;
     }
     const strategy = this.requireStrategy(input);
@@ -402,10 +422,10 @@ export class BacktestPreparationOrchestrator {
     const completedId = this.latestCompletedPreviewId(hash);
     if (completedId === null) return null;
 
-    // protocol 변경이나 사후 손상으로 이미 재사용할 수 없는 preview라면, 모든
+    // 프로토콜 변경이나 사후 손상으로 이미 재사용할 수 없는 미리보기라면, 모든
     // 리밸런싱 날짜의 현재 유니버스를 다시 계산할 이유가 없다. 저장된 union만으로
     // coverage를 먼저 탈락시키고, 통과한 preview에만 비싼 schedule stale 검증을 한다.
-    // action을 먼저 보는 것은 parser protocol 변경처럼 값싼 version 판정만으로
+    // 자본변동을 먼저 보는 것은 parser protocol 변경처럼 값싼 버전 판정만으로
     // 즉시 탈락할 수 있는 경로에서 재무 fact manifest 재해시까지 하지 않기 위해서다.
     const storedPreview = this.getPreview(completedId);
     if (
@@ -423,14 +443,14 @@ export class BacktestPreparationOrchestrator {
     // 수 있다. 이전 union에만 full facts/actions를 준비했으므로 다른 schedule을 완료
     // 결과처럼 돌려주지 않고 새 durable job을 시작하게 한다.
     if (storedPreview.scheduleHash !== currentPreview.scheduleHash) return null;
-    // 완료 뒤 coverage가 삭제·손상됐으면 cached 200을 계속 돌려 재준비 진입을 막지
+    // 완료 뒤 coverage가 삭제·손상됐으면 캐시된 200을 계속 돌려 재준비 진입을 막지
     // 않는다. null을 돌려 라우트가 새 durable preparation을 시작하게 한다.
     if (this.financialCoverageGap(input, strategy, currentPreview.unionSymbols) !== null) return null;
     if (this.corporateActionCoverageFailure(input, strategy, currentPreview.unionSymbols) !== null) {
       return null;
     }
     this.registerUniverse(current.attempt);
-    return currentPreview;
+    return { ...currentPreview, preparationJobId: completedId };
   }
 
   /** Preview route also moves its potentially wide fundamental presence query off the HTTP process. */
@@ -876,7 +896,7 @@ export class BacktestPreparationOrchestrator {
       this.deps.database.db.update(backtestPreparationJobs).set({
         status: 'COMPLETED',
         phase: 'FINALIZING',
-        previewJson: JSON.stringify(preview),
+        previewJson: JSON.stringify({ ...preview, preparationJobId: undefined }),
         updatedAtMs: now,
         completedAtMs: now,
         nextResumeAtMs: null,
@@ -1466,13 +1486,21 @@ export class BacktestPreparationOrchestrator {
       (row) => {
         // 운영에서는 모든 실제 DART attempt가 공유하는 원장을 본다. 원장을 주입하지
         // 않는 단위 테스트·옛 조립부만 준비 job 합계를 fallback으로 사용한다.
-        const total = this.deps.externalApiUsage?.callsUsed('DART', 'daily')
-          ?? this.deps.database.db
+        let total = this.deps.externalApiUsage?.callsUsed('DART', 'daily');
+        if (total === undefined) {
+          const legacyTotal = this.deps.database.db
             .select({ value: sql<number>`coalesce(sum(${backtestPreparationJobs.dartCallsUsed}), 0)` })
             .from(backtestPreparationJobs)
             .where(eq(backtestPreparationJobs.dartQuotaDateKst, quotaDate))
-            .get()?.value
-          ?? 0;
+            .get()?.value ?? 0;
+          const ledgerTotal = this.deps.database.db.select({ value: externalApiDailyUsage.callsUsed })
+            .from(externalApiDailyUsage).where(and(
+              eq(externalApiDailyUsage.api, 'DART'),
+              eq(externalApiDailyUsage.quotaScope, 'daily'),
+              eq(externalApiDailyUsage.usageDateKst, quotaDate),
+            )).get()?.value ?? 0;
+          total = Math.max(legacyTotal, ledgerTotal);
+        }
         const providerAlreadyExhausted =
           this.deps.externalApiUsage?.quotaExceeded('DART', 'daily') ?? false;
         if (providerAlreadyExhausted || total + 1 > this.dailyLimit) {
@@ -1482,6 +1510,16 @@ export class BacktestPreparationOrchestrator {
             dartQuotaDateKst: quotaDate,
             ...(row.dartQuotaDateKst === quotaDate ? {} : { dartCallsUsed: 0 }),
           };
+        }
+        if (!this.deps.externalApiUsage) {
+          // 구형 조립부에서도 작업 삭제가 일일 호출 예산을 되돌리지 않도록 원장에 남긴다.
+          this.deps.database.db.insert(externalApiDailyUsage).values({
+            api: 'DART', quotaScope: 'daily', usageDateKst: quotaDate,
+            callsUsed: total + 1, updatedAtMs: now,
+          }).onConflictDoUpdate({
+            target: [externalApiDailyUsage.api, externalApiDailyUsage.quotaScope, externalApiDailyUsage.usageDateKst],
+            set: { callsUsed: total + 1, updatedAtMs: now },
+          }).run();
         }
         return {
           dartQuotaDateKst: quotaDate,
@@ -1784,6 +1822,7 @@ export class BacktestPreparationOrchestrator {
   }
 
   private afterClaimedJobSettled(jobId: string): void {
+    new PreparationReferenceService(this.deps.database).collect();
     const current = this.getRow(jobId);
     if (!current) return;
     if (!this.stopping && current.status === 'WAITING_DAILY_QUOTA' && current.cancelRequested) {
@@ -1866,6 +1905,9 @@ export class BacktestPreparationOrchestrator {
     if (!changed || !snapshot) return snapshot;
     this.emitCurrent(jobId);
     this.deps.onJobUpdated?.(jobId);
+    if (TERMINAL_STATUSES.includes(snapshot.status)) {
+      new PreparationReferenceService(this.deps.database).collect();
+    }
     return snapshot;
   }
 }

@@ -61,7 +61,7 @@ async function execute(config: AppConfig, request: PreparationChildRequest): Pro
         value = await runtime.orchestrator.getReadyPreviewDetails(request.input);
         break;
       case 'GET_CACHED_PREVIEW':
-        value = runtime.orchestrator.getCachedPreview(request.input);
+        value = runtime.orchestrator.getCachedPreview(request.input, request.preparationJobId);
         break;
       case 'NEEDS_DART':
         value = await runtime.orchestrator.needsDart(request.input);

@@ -176,7 +176,7 @@ function installPreparedSubmissionFixture(ctx: TestApp): void {
   };
   const rawInject = ctx.app.inject.bind(ctx.app);
   ctx.app.inject = (async (options: unknown) => {
-    const request = options as { method?: string; url?: string; payload?: BacktestRequest };
+    const request = options as { method?: string; url?: string; payload?: BacktestRequest; cookies?: Record<string, string> };
     const first = await rawInject(options as never);
     if (
       request.method !== 'POST'
@@ -200,6 +200,18 @@ function installPreparedSubmissionFixture(ctx: TestApp): void {
     if (ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status !== 'COMPLETED') {
       return first;
     }
+    const preview = await rawInject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: request.cookies,
+      payload: {
+        universeRule: body.universeRule,
+        period: body.period,
+        strategyId: body.strategyId,
+        parameters: body.parameters,
+      },
+    });
+    if (preview.statusCode !== 200) return first;
     return rawInject(options as never);
   }) as typeof ctx.app.inject;
 }
@@ -516,7 +528,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
       .where(eq(symbolFactsState.code, '000660'))
       .run();
     // getReadyPreview의 현재성 확인과 실제 enqueue 사이 삭제 race를 직접 재현한다.
-    ctx.container.backtestPreparationOrchestrator.getReadyPreview = async () => prepared;
+    ctx.container.backtestPreparationOrchestrator.getReadyPreviewForWizard = () => prepared;
     ctx.container.factSyncService.sync = async () => ({
       savedFacts: 0,
       gaps: [],
@@ -822,17 +834,24 @@ describe('POST /backtests/:id/clone — 유니버스 자동 등록 (미리보기
     expect((cloned.json() as { error: string }).error).toBe('PREPARATION_REQUIRED');
     expect(ctx.container.symbolService.exists('900010')).toBe(false);
 
-    const preparation = ctx.container.backtestPreparationOrchestrator.start({
-      universeRule: request.universeRule,
-      period: request.period,
-      strategyId: request.strategyId,
-      parameters: request.parameters,
+    const started = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: request.universeRule,
+        period: request.period,
+        strategyId: request.strategyId,
+        parameters: request.parameters,
+      },
     });
+    expect(started.statusCode).toBe(202);
+    const preparationId = started.json<{ job: { id: string } }>().job.id;
     await waitFor(() => {
-      const status = ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status;
+      const status = ctx.container.backtestPreparationOrchestrator.get(preparationId)?.status;
       return status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED';
     }, 5_000);
-    expect(ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status).toBe('COMPLETED');
+    expect(ctx.container.backtestPreparationOrchestrator.get(preparationId)?.status).toBe('COMPLETED');
 
     // 최종 READY schedule을 확정할 때 등록한다. 이 경계가 preview/submit/clone 모두에
     // 하나뿐이므로 가격 데이터 탭과 실행 pin이 갈라지지 않는다.
@@ -840,14 +859,29 @@ describe('POST /backtests/:id/clone — 유니버스 자동 등록 (미리보기
     const coverage = ctx.container.candleCoverageService.getCoverage(['900010'])[0]!;
     expect(coverage.barCount).toBe(1);
 
-    // 자본변동 수집 게이트(Task 6)는 없앴다(Task 10) — 준비가 COMPLETED 라는
-    // 사실만으로 같은 요청의 복제가 곧바로 통과한다.
+    const ready = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie },
+      payload: {
+        universeRule: request.universeRule,
+        period: request.period,
+        strategyId: request.strategyId,
+        parameters: request.parameters,
+      },
+    });
+    expect(ready.statusCode).toBe(200);
+    expect(ready.json().preparationJobId).toBe(preparationId);
+
+    // COMPLETED 행만으로 통과하지 않고 현재 사용자의 wizard 참조가 연결된 결과를 재사용한다.
     const afterPreparation = await ctx.app.inject({
       method: 'POST',
       url: `/api/v1/backtests/${job.id}/clone`,
       cookies: { qp_session: cookie },
     });
     expect(afterPreparation.statusCode).toBe(201);
+    const clonedId = (afterPreparation.json() as { job: { id: string } }).job.id;
+    expect(ctx.container.jobQueue.getJob(clonedId)?.preparationJobId).toBe(preparationId);
   });
 });
 

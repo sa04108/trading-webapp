@@ -84,10 +84,10 @@ export class ForkedBacktestPreparationExecutor implements BacktestPreparationExe
     );
   }
 
-  getCachedPreview(input: PreparationInput): Promise<BacktestUniversePreview | null> {
+  getCachedPreview(input: PreparationInput, preparationJobId?: string): Promise<BacktestUniversePreview | null> {
     return this.enqueue(
-      { type: 'GET_CACHED_PREVIEW', input },
-      `cached:${canonicalJson(input)}`,
+      { type: 'GET_CACHED_PREVIEW', input, preparationJobId },
+      `cached:${preparationJobId ?? ''}:${canonicalJson(input)}`,
     );
   }
 

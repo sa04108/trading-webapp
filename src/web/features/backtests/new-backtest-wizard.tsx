@@ -62,9 +62,9 @@ import {
   type StepGateState,
 } from './wizard-steps';
 import {
-  clearBacktestWizardDraft,
   loadBacktestWizardDraft,
   saveBacktestWizardDraftStep,
+  waitForPendingDraftSaves,
 } from './wizard-draft-api';
 
 interface CommissionProfileSummary {
@@ -274,18 +274,22 @@ export function NewBacktestWizard() {
     strategyId: strategyId ?? '',
     parameters: typeof parsedParameters === 'string' ? {} : parsedParameters,
   };
-  const sourcePreview =
-    !sourceReuseRejected && draft.data?.reusablePreview
-      ? {
-          params: {
-            universeRule: draft.data.request.universeRule,
-            period: draft.data.request.period,
-            strategyId: draft.data.request.strategyId,
-            parameters: draft.data.request.parameters,
-          } satisfies PreviewParams,
-          result: draft.data.reusablePreview,
-        }
-      : null;
+  const sourcePreview = useMemo(
+    () =>
+      !sourceReuseRejected && draft.data?.reusablePreview
+        ? {
+            params: {
+              universeRule: draft.data.request.universeRule,
+              period: draft.data.request.period,
+              strategyId: draft.data.request.strategyId,
+              parameters: draft.data.request.parameters,
+            } satisfies PreviewParams,
+            result: draft.data.reusablePreview,
+          }
+        : null,
+    [sourceReuseRejected, draft.data],
+  );
+  const draftPreview = lastPreview ?? sourcePreview;
   const freshPreviewMatches =
     lastPreview !== null && sameUniverseParams(lastPreview.params, currentUniverseParams);
   const sourcePreviewMatches =
@@ -297,7 +301,13 @@ export function NewBacktestWizard() {
     : sourcePreviewMatches
       ? sourcePreview.result
       : null;
-  const reusingSourcePreview = !freshPreviewMatches && sourcePreviewMatches;
+  const reusingSourcePreview = sourcePreviewMatches && (
+    !freshPreviewMatches
+    || (
+      sourcePreview.result.preparationJobId !== undefined
+      && lastPreview?.result.preparationJobId === sourcePreview.result.preparationJobId
+    )
+  );
   const universePreviewOk =
     currentPreviewResult !== null &&
     currentPreviewResult.uncoveredDates.length === 0 &&
@@ -489,13 +499,17 @@ export function NewBacktestWizard() {
   };
 
   const submitMutation = useMutation({
-    mutationFn: ({ body, reuseSource }: { body: BacktestRequestBody; reuseSource: boolean }) =>
-      postJson<{ job: { id: string }; warnings?: string[] }>(
+    mutationFn: async ({ body, reuseSource }: { body: BacktestRequestBody; reuseSource: boolean }) => {
+      // 제출 직전 시작된 자동 저장까지 끝낸 뒤 서버의 원자적 초안 정리를 신뢰한다.
+      suppressDraftFlush.current = true;
+      await waitForPendingDraftSaves();
+      return postJson<{ job: { id: string }; warnings?: string[] }>(
         reuseSource && sourceJobId !== null
           ? `/backtests/${sourceJobId}/clone-configured`
           : '/backtests',
         body,
-      ),
+      );
+    },
     onSuccess: async (data) => {
       suppressDraftFlush.current = true;
       toast.success('백테스트가 대기열에 추가되었습니다');
@@ -503,18 +517,15 @@ export function NewBacktestWizard() {
       // 자본변동 gap 경고가 여기로 온다.
       // 흘리면 "수집했고 분할이 없었다" 와 "gap 이 나서 확인하지 못했다" 가 같아 보인다.
       for (const warning of data.warnings ?? []) toast.warning(warning, { duration: 10_000 });
-      try {
-        await clearBacktestWizardDraft(sourceJobId);
-        queryClient.removeQueries({
-          queryKey: ['backtests', 'wizard-draft', sourceJobId],
-          exact: true,
-        });
-      } catch {
-        toast.warning('완료된 위저드의 자동 저장 내용을 정리하지 못했습니다.');
-      }
+      queryClient.removeQueries({
+        queryKey: ['backtests', 'wizard-draft', sourceJobId],
+        exact: true,
+      });
       void navigate(`/backtests/${data.job.id}`);
     },
     onError: (error: unknown, variables) => {
+      // 제출이 실패하면 사용자가 수정할 수 있도록 자동 저장을 다시 켠다.
+      suppressDraftFlush.current = false;
       // 준비된 데이터가 아직 없다는 뜻이다(Task 6) — 검토·실행 단계에 머물며 같은
       // 사유를 빨간 배너로 띄우면 사용자는 "왜 실패했는지" 를 알 방법이 없다. 대신
       // 미리보기 단계로 돌려보내고 새 준비 요청을 바로 시작시킨다(브리프 5번).
@@ -780,6 +791,8 @@ export function NewBacktestWizard() {
   const canAutosave = wizardDraft.isSuccess
     && restoredWizardDraftContext === wizardDraftContextKey
     && !prefilling
+    && !submitMutation.isPending
+    && !submitMutation.isSuccess
     && (
       sourceJobId === null
       || hasStoredWizardDraft
@@ -796,7 +809,7 @@ export function NewBacktestWizard() {
     benchmarkId,
     benchmarkCoverageVerifiedFor,
     universeRule,
-    lastPreview,
+    lastPreview: draftPreview,
     initialCash,
     maxPositions,
     commissionProfileId,
@@ -809,6 +822,7 @@ export function NewBacktestWizard() {
   useEffect(() => {
     if (!canAutosave) return;
     const timer = window.setTimeout(() => {
+      if (suppressDraftFlush.current) return;
       void saveBacktestWizardDraftStep(sourceJobId, 'strategy', {
         strategyId,
         parameters,
@@ -825,6 +839,7 @@ export function NewBacktestWizard() {
   useEffect(() => {
     if (!canAutosave) return;
     const timer = window.setTimeout(() => {
+      if (suppressDraftFlush.current) return;
       void saveBacktestWizardDraftStep(sourceJobId, 'period', {
         from,
         to,
@@ -842,9 +857,10 @@ export function NewBacktestWizard() {
   useEffect(() => {
     if (!canAutosave) return;
     const timer = window.setTimeout(() => {
+      if (suppressDraftFlush.current) return;
       void saveBacktestWizardDraftStep(sourceJobId, 'universe', {
         universeRule,
-        lastPreview,
+        lastPreview: draftPreview,
       })
         .then(() => setDraftSaveError(null))
         .catch((error: unknown) => setDraftSaveError(
@@ -852,11 +868,12 @@ export function NewBacktestWizard() {
         ));
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [canAutosave, sourceJobId, universeRule, lastPreview]);
+  }, [canAutosave, sourceJobId, universeRule, draftPreview]);
 
   useEffect(() => {
     if (!canAutosave) return;
     const timer = window.setTimeout(() => {
+      if (suppressDraftFlush.current) return;
       void saveBacktestWizardDraftStep(sourceJobId, 'capital', {
         initialCash,
         maxPositions,
@@ -884,6 +901,7 @@ export function NewBacktestWizard() {
   useEffect(() => {
     if (!canAutosave) return;
     const flushCurrentStep = (): void => {
+      if (suppressDraftFlush.current) return;
       pageHiding.current = true;
       void saveBacktestWizardDraftStep(
         sourceJobId,
@@ -912,7 +930,7 @@ export function NewBacktestWizard() {
         void saveBacktestWizardDraftStep(
           sourceJobId,
           'universe',
-          { universeRule, lastPreview },
+          { universeRule, lastPreview: draftPreview },
           { keepalive: true },
         ).catch(() => undefined);
         return;
@@ -950,7 +968,7 @@ export function NewBacktestWizard() {
     benchmarkId,
     benchmarkCoverageVerifiedFor,
     universeRule,
-    lastPreview,
+    draftPreview,
     initialCash,
     maxPositions,
     commissionProfileId,
@@ -1306,6 +1324,7 @@ export function NewBacktestWizard() {
             onChange={changeUniverseRule}
             period={{ from, to }}
             strategyId={strategyId}
+            sourceJobId={sourceJobId}
             parameters={parsedParameters}
             initialResolved={lastPreview ?? sourcePreview}
             previewRetryToken={previewRetryToken}

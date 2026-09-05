@@ -1,5 +1,7 @@
 import { and, count, desc, eq, inArray, isNull } from 'drizzle-orm';
 import type { AppDatabase, DatabaseHandle } from '../../../shared/db/database.js';
+import { PreparationPreviewCache } from './preparation-preview-cache.js';
+import { PreparationReferenceError, PreparationReferenceService } from './preparation-reference-service.js';
 import { backtestJobs } from '../../../shared/db/schema.js';
 import type { Clock } from '../../../shared/clock.js';
 import { newId } from '../../../shared/ids.js';
@@ -21,6 +23,8 @@ export type BacktestJobStatus =
 export type BacktestJobRow = typeof backtestJobs.$inferSelect;
 
 export interface EnqueueMetadata {
+  readonly preparationJobId?: string | null;
+  readonly wizardOwner?: { readonly userId: string; readonly context?: string; readonly requireMatch?: boolean };
   readonly cloneBatchId?: string | null;
   readonly cloneSourceJobId?: string | null;
 }
@@ -87,25 +91,49 @@ export class JobQueue {
     benchmark?: { pin: BenchmarkPin; hash: string },
     metadata: EnqueueMetadata = {},
   ): BacktestJobRow {
-    const row: typeof backtestJobs.$inferInsert = {
-      id: newId('bt'),
-      status: 'QUEUED',
-      requestJson: JSON.stringify(request),
-      strategyId: request.strategyId,
-      universeRuleJson: JSON.stringify(request.universeRule),
-      universeScheduleJson: JSON.stringify(schedule),
-      provenancePinJson: provenancePin ? JSON.stringify(provenancePin) : null,
-      universeJson: pinnedUniverse ? JSON.stringify(pinnedUniverse.entries) : null,
-      universeHash: pinnedUniverse?.hash ?? null,
-      benchmarkJson: benchmark ? JSON.stringify(benchmark.pin) : null,
-      benchmarkHash: benchmark?.hash ?? null,
-      cloneBatchId: metadata.cloneBatchId ?? null,
-      cloneSourceJobId: metadata.cloneSourceJobId ?? null,
-      submitWarningsJson: submitWarnings.length > 0 ? JSON.stringify(submitWarnings) : null,
-      createdAtMs: this.clock.now(),
-    };
-    this.db.insert(backtestJobs).values(row).run();
-    return this.getJob(row.id) as BacktestJobRow;
+    return this.handle.sqlite.transaction(() => {
+      const references = new PreparationReferenceService(this.handle);
+      const preparationJobId = metadata.preparationJobId
+        ?? (metadata.cloneSourceJobId ? this.getJob(metadata.cloneSourceJobId)?.preparationJobId : null)
+        ?? null;
+      if (preparationJobId) references.requirePreparation(preparationJobId, true);
+      const owner = metadata.wizardOwner
+        ? references.getWizard(metadata.wizardOwner.userId, metadata.wizardOwner.context) : null;
+      if (metadata.wizardOwner?.requireMatch && (
+        !preparationJobId || owner?.preparationJobId !== preparationJobId
+        || !new PreparationPreviewCache(this.handle).isFresh(preparationJobId)
+      )) {
+        throw new PreparationReferenceError();
+      }
+      const row: typeof backtestJobs.$inferInsert = {
+        id: newId('bt'),
+        preparationJobId,
+        status: 'QUEUED',
+        requestJson: JSON.stringify(request),
+        strategyId: request.strategyId,
+        universeRuleJson: JSON.stringify(request.universeRule),
+        universeScheduleJson: JSON.stringify(schedule),
+        provenancePinJson: provenancePin ? JSON.stringify(provenancePin) : null,
+        universeJson: pinnedUniverse ? JSON.stringify(pinnedUniverse.entries) : null,
+        universeHash: pinnedUniverse?.hash ?? null,
+        benchmarkJson: benchmark ? JSON.stringify(benchmark.pin) : null,
+        benchmarkHash: benchmark?.hash ?? null,
+        cloneBatchId: metadata.cloneBatchId ?? null,
+        cloneSourceJobId: metadata.cloneSourceJobId ?? null,
+        submitWarningsJson: submitWarnings.length > 0 ? JSON.stringify(submitWarnings) : null,
+        createdAtMs: this.clock.now(),
+      };
+      this.db.insert(backtestJobs).values(row).run();
+      if (metadata.wizardOwner && preparationJobId) {
+        const context = metadata.wizardOwner.context ?? owner?.context;
+        if (context !== undefined) {
+          // 복제 화면을 빠르게 제출해 참조 자동 저장이 아직 없더라도 해당 초안은 정리한다.
+          references.finishWizard(metadata.wizardOwner.userId, context, preparationJobId);
+        }
+      }
+      references.collect();
+      return this.getJob(row.id) as BacktestJobRow;
+    }).immediate();
   }
 
   /** 원자적 작업 확보 — BEGIN IMMEDIATE (스펙 §10) */
@@ -525,10 +553,13 @@ export class JobQueue {
   }
 
   deleteJob(jobId: string): boolean {
-    const job = this.getJob(jobId);
-    if (!job || !TERMINAL_STATUSES.includes(job.status as BacktestJobStatus)) return false;
-    this.db.delete(backtestJobs).where(eq(backtestJobs.id, jobId)).run();
-    return true;
+    return this.handle.sqlite.transaction(() => {
+      const job = this.getJob(jobId);
+      if (!job || !TERMINAL_STATUSES.includes(job.status as BacktestJobStatus)) return false;
+      this.db.delete(backtestJobs).where(eq(backtestJobs.id, jobId)).run();
+      new PreparationReferenceService(this.handle).collect();
+      return true;
+    }).immediate();
   }
 
   countByStatus(statuses: BacktestJobStatus[]): number {

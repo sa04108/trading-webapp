@@ -226,6 +226,24 @@ describe('backtest preparation HTTP/SSE', () => {
     }]);
     await seedCorporateActionCoverage(ctx.container, ['005930'], [2026]);
 
+    // 준비 이후 원본을 다시 쓰면 영수증이 무효화되어 새 검증을 거쳐야 한다.
+    const stale = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/backtests',
+      cookies: { qp_session: cookie }, payload: request,
+    });
+    expect(stale.statusCode).toBe(409);
+    const refreshed = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/backtests/universe-preview',
+      cookies: { qp_session: cookie }, payload: preparation,
+    });
+    expect(refreshed.statusCode).toBe(202);
+    const refreshedId = refreshed.json<{ job: { id: string } }>().job.id;
+    expect(refreshedId).not.toBe(preparationId);
+    await waitFor(
+      () => ctx.container.backtestPreparationOrchestrator.get(refreshedId),
+      (job) => job?.status === 'COMPLETED',
+    );
+
     const created = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests',
       cookies: { qp_session: cookie }, payload: request,
@@ -233,6 +251,7 @@ describe('backtest preparation HTTP/SSE', () => {
     expect(created.statusCode).toBe(201);
     const jobId = created.json<{ job: { id: string } }>().job.id;
     const stored = ctx.container.jobQueue.getJob(jobId)!;
+    expect(stored.preparationJobId).toBe(refreshedId);
     const pinnedSchedule = JSON.parse(stored.universeScheduleJson);
     expect(pinnedSchedule).toEqual([{
       rebalanceDate: '2026-01-05',

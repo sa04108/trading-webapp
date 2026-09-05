@@ -56,17 +56,18 @@ const previewParamsSchema = z.object({
 });
 
 const previewResultSchema = z.object({
+  preparationJobId: z.string().min(1).optional(),
   schedule: z.array(z.object({
     rebalanceDate: z.string().max(10),
     effectiveDate: z.string().max(10),
     members: z.array(z.object({ symbol: z.string().min(1).max(32) })).max(200).readonly(),
   })).max(20_000).readonly(),
-  unionSymbols: z.array(z.string().min(1).max(32)).max(200).readonly(),
-  fundamentalSymbols: z.array(z.string().min(1).max(32)).max(200).readonly().optional(),
+  unionSymbols: z.array(z.string().min(1).max(32)).max(20_000).readonly(),
+  fundamentalSymbols: z.array(z.string().min(1).max(32)).max(20_000).readonly().optional(),
   scheduleHash: z.string().min(1).max(128),
   uncoveredDates: z.array(z.string().max(10)).max(20_000).readonly(),
   periodCovered: z.boolean(),
-  missingCandleSymbols: z.array(z.string().min(1).max(32)).max(200).readonly(),
+  missingCandleSymbols: z.array(z.string().min(1).max(32)).max(20_000).readonly(),
   warnings: z.array(z.string().max(2_000)).max(1_000).readonly(),
 });
 
@@ -96,6 +97,19 @@ export const backtestWizardDraftPayloadSchemas = {
   universe: backtestWizardUniverseDraftSchema,
   capital: backtestWizardCapitalDraftSchema,
 } as const;
+
+/** 저장 요청은 서버가 만든 미리보기 ID만 보내며 본문은 서버에서 복원한다. */
+export const backtestWizardDraftWritePayloadSchemas = {
+  ...backtestWizardDraftPayloadSchemas,
+  universe: z.object({
+    universeRule: universeRuleSchema,
+    lastPreview: z.object({ preparationJobId: z.string().min(1).max(128) }).nullable(),
+  }),
+};
+
+export type BacktestWizardDraftWritePayloadMap = {
+  [S in BacktestWizardDraftStep]: z.infer<(typeof backtestWizardDraftWritePayloadSchemas)[S]>;
+};
 
 export interface BacktestWizardDraftPayloadMap {
   strategy: z.infer<typeof backtestWizardStrategyDraftSchema>;

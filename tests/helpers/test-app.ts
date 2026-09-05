@@ -243,6 +243,18 @@ export function installPreparedSubmissionFixture(
       preparationJob.id,
       fixtureOptions.preparationTimeoutMs,
     )) return first;
+    const preview = await rawInject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: request.cookies,
+      payload: {
+        universeRule: body.universeRule,
+        period: body.period,
+        strategyId: body.strategyId,
+        parameters: body.parameters,
+      },
+    });
+    if (preview.statusCode !== 200) return first;
     return rawInject(options as never);
   }) as typeof ctx.app.inject;
 }

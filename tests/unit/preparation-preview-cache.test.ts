@@ -11,6 +11,7 @@ describe('PreparationPreviewCache source invalidation', () => {
   let writer: DatabaseHandle;
   let cache: PreparationPreviewCache;
   const preview = { schedule: [], unionSymbols: ['005930'], warnings: ['preserved warning'] };
+  const expectedPreview = { ...preview, preparationJobId: 'prep_test' };
 
   beforeEach(() => {
     directory = fs.mkdtempSync(path.join(os.tmpdir(), 'qp-preview-cache-'));
@@ -61,7 +62,7 @@ describe('PreparationPreviewCache source invalidation', () => {
       "UPDATE symbol_master_coverage SET end_date = '2026-01-06'", 'DELETE FROM symbol_master_coverage'],
   ])('%s inserts, updates and deletes from another connection invalidate the result', (_name, ...writes) => {
     for (const statement of writes) {
-      expect(cache.get('request')).toEqual({ preview, fundamentalSymbols: ['005930'] });
+      expect(cache.get('request')).toEqual({ preview: expectedPreview, fundamentalSymbols: ['005930'] });
       const revision = cache.revision();
       writer.sqlite.exec(statement);
       expect(cache.revision()).toBeGreaterThan(revision);
@@ -71,6 +72,11 @@ describe('PreparationPreviewCache source invalidation', () => {
   });
 
   it('bulk writes invalidate once, and a new validation detects the next write', () => {
+    expect(cache.get('request', 'wrong-preparation-id')).toBeNull();
+    expect(cache.get('request', 'prep_test')).toEqual({
+      preview: expectedPreview,
+      fundamentalSymbols: ['005930'],
+    });
     const revision = cache.revision();
     writer.sqlite.transaction(() => {
       for (let index = 0; index < 100; index += 1) {
@@ -95,7 +101,7 @@ describe('PreparationPreviewCache source invalidation', () => {
       throw new Error('rollback');
     })()).toThrow('rollback');
     expect(cache.revision()).toBe(revision);
-    expect(cache.get('request')?.preview).toEqual(preview);
+    expect(cache.get('request')?.preview).toEqual(expectedPreview);
   });
 
   it('job progress and notifications do not invalidate source validation', () => {
@@ -104,7 +110,7 @@ describe('PreparationPreviewCache source invalidation', () => {
       INSERT INTO notifications (id, type, severity, title, created_at_ms)
       VALUES ('notice', 'backtest', 'info', 'ready', 2)`);
     expect(cache.revision()).toBe(revision);
-    expect(cache.get('request')?.preview).toEqual(preview);
+    expect(cache.get('request')?.preview).toEqual(expectedPreview);
   });
 
   it.each([
@@ -124,7 +130,7 @@ describe('PreparationPreviewCache source invalidation', () => {
     database.close();
     database = openDatabase(path.join(directory, 'app.sqlite'));
     cache = new PreparationPreviewCache(database);
-    expect(cache.get('request')?.preview).toEqual(preview);
+    expect(cache.get('request')?.preview).toEqual(expectedPreview);
     writer.sqlite.exec("UPDATE symbols SET name = 'updated'");
     expect(cache.get('request')).toBeNull();
   });

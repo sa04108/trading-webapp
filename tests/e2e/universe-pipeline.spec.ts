@@ -286,9 +286,46 @@ test('단계 추가·N 기본 복사·cascade 안내·순서 변경·주기 초�
   await page.getByRole('button', { name: '백테스트 실행' }).click();
   await expect(page).toHaveURL(/\/backtests\/bt_/);
   const jobId = page.url().split('/').at(-1)!;
+  await expect.poll(async () => page.evaluate(async () => {
+    const response = await fetch('/api/v1/backtests/wizard-draft');
+    return (await response.json() as { candidate: unknown }).candidate;
+  })).toBeNull();
+  let clonePreviewRequests = 0;
+  page.on('request', (request) => {
+    if (
+      request.method() === 'POST'
+      && new URL(request.url()).pathname.endsWith('/backtests/universe-preview')
+    ) clonePreviewRequests += 1;
+  });
   await page.goto(`/backtests/new?from=${jobId}`);
+  await expect(page.getByRole('heading', { name: '재설정 및 복제' })).toBeVisible();
+  await expect.poll(async () => page.evaluate(async (sourceId) => {
+    const response = await fetch(`/api/v1/backtests/wizard-draft/universe?sourceJobId=${sourceId}`);
+    const body = await response.json() as {
+      draft: { payload: { lastPreview: { result?: { preparationJobId?: string } } | null } } | null;
+    };
+    return body.draft?.payload.lastPreview?.result?.preparationJobId ?? null;
+  }, jobId)).toBeTruthy();
+  await page.reload();
   await expect(page.getByRole('heading', { name: '재설정 및 복제' })).toBeVisible();
   await page.getByRole('button', { name: '다음' }).click();
   await expect(page).toHaveURL(new RegExp(`/backtests/new/universe\\?from=${jobId}$`));
   await expect(page.locator('#stage-direction-0')).toHaveValue('LOW');
+  expect(clonePreviewRequests).toBe(0);
+  await page.getByRole('button', { name: '다음' }).click();
+  await page.getByRole('button', { name: '다음' }).click();
+  await page.getByRole('button', { name: '다음' }).click();
+  const cloneSubmit = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST'
+      && new URL(response.url()).pathname === `/api/v1/backtests/${jobId}/clone-configured`
+      && response.status() === 201,
+  );
+  await page.getByRole('button', { name: '백테스트 실행' }).click();
+  await cloneSubmit;
+  await expect(page).toHaveURL(/\/backtests\/bt_/);
+  await expect.poll(async () => page.evaluate(async () => {
+    const response = await fetch('/api/v1/backtests/wizard-draft');
+    return (await response.json() as { candidate: unknown }).candidate;
+  })).toBeNull();
 });

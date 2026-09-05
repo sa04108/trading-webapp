@@ -17,7 +17,7 @@ export interface BacktestPreparationExecutionLane {
   runClaimedJob(jobId: string): Promise<void>;
   getReadyPreview(input: PreparationInput): Promise<BacktestUniversePreview | null>;
   getReadyPreviewDetails(input: PreparationInput): Promise<ReadyPreviewDetails | null>;
-  getCachedPreview(input: PreparationInput): Promise<BacktestUniversePreview | null>;
+  getCachedPreview(input: PreparationInput, preparationJobId?: string): Promise<BacktestUniversePreview | null>;
   needsDart(input: PreparationInput): Promise<boolean>;
   /** True when a queued/running child operation will settle only after cancellation completes. */
   cancel(jobId: string): boolean;
@@ -37,7 +37,7 @@ export type PreparationChildRequest =
   | { readonly type: 'RUN_JOB'; readonly jobId: string }
   | { readonly type: 'GET_READY_PREVIEW'; readonly input: PreparationInput }
   | { readonly type: 'GET_READY_PREVIEW_DETAILS'; readonly input: PreparationInput }
-  | { readonly type: 'GET_CACHED_PREVIEW'; readonly input: PreparationInput }
+  | { readonly type: 'GET_CACHED_PREVIEW'; readonly input: PreparationInput; readonly preparationJobId?: string }
   | { readonly type: 'NEEDS_DART'; readonly input: PreparationInput };
 
 export interface SerializedPreparationError {

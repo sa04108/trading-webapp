@@ -42,6 +42,7 @@ import { StrategyRegistry } from '../modules/strategy/application/strategy-regis
 import { strategyRequiresFinancialData } from '../modules/strategy/domain/strategy.js';
 import { JobOrchestrator, type JobEvent } from '../modules/backtest/application/job-orchestrator.js';
 import { JobQueue } from '../modules/backtest/application/job-queue.js';
+import { PreparationReferenceService } from '../modules/backtest/application/preparation-reference-service.js';
 import { BacktestWizardDraftService } from '../modules/backtest/application/backtest-wizard-draft-service.js';
 import { ResultsService } from '../modules/backtest/application/results-service.js';
 import {
@@ -183,6 +184,7 @@ export function createContainer(
   }
 
   const database = openDatabase(config.databasePath);
+  new PreparationReferenceService(database).initializeLegacyReferences();
   const clock = systemClock;
 
   // 무한 증가 방지: 만료 세션·오래된 로그인 시도·보존 기간 지난 감사 로그 정리.
@@ -401,7 +403,7 @@ export function createContainer(
     financialFacts: financialFactAvailabilityService,
   }, preparationExecution);
   const resultsService = new ResultsService(database.db);
-  const backtestWizardDraftService = new BacktestWizardDraftService(database.db, clock);
+  const backtestWizardDraftService = new BacktestWizardDraftService(database, clock);
 
   const jobQueue = new JobQueue(database, clock);
   const jobOrchestrator = new JobOrchestrator(jobQueue, config, logger, auditLog, clock);

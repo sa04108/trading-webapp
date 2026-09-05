@@ -1,3 +1,4 @@
+import { PreparationReferenceService } from './preparation-reference-service.js';
 import { randomInt } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { and, asc, desc, eq, inArray } from 'drizzle-orm';
@@ -25,6 +26,7 @@ export type SeedCloneBatchRow = typeof backtestCloneBatches.$inferSelect;
 export type SeedCloneBatchItemRow = typeof backtestCloneBatchItems.$inferSelect;
 
 export interface SeedCloneBatchSnapshot {
+  readonly preparationJobId?: string | null;
   readonly request: BacktestRequest;
   readonly schedule: readonly LegacyUniverseScheduleEntry[];
   readonly universe: ConsumedVersionSnapshot;
@@ -87,9 +89,13 @@ export class SeedCloneBatchService {
   create(sourceJobId: string, count: number, snapshot: SeedCloneBatchSnapshot): SeedCloneBatchDetail {
     const batchId = newId('btb');
     const seeds = uniqueSeeds(count, snapshot.request.randomSeed);
-    this.database.db.transaction((tx) => {
+    this.database.sqlite.transaction(() => {
+      const tx = this.database.db;
+      const preparationJobId = snapshot.preparationJobId ?? this.queue.getJob(sourceJobId)?.preparationJobId ?? null;
+      if (preparationJobId) new PreparationReferenceService(this.database).requirePreparation(preparationJobId, true);
       tx.insert(backtestCloneBatches).values({
         id: batchId,
+        preparationJobId,
         sourceJobId,
         strategyId: snapshot.request.strategyId,
         status: 'ACTIVE',
@@ -113,7 +119,7 @@ export class SeedCloneBatchService {
           state: 'PENDING',
         })),
       ).run();
-    });
+    }).immediate();
     this.pump();
     return this.get(batchId)!;
   }
@@ -178,7 +184,8 @@ export class SeedCloneBatchService {
             snapshot.provenancePin,
             snapshot.warnings,
             snapshot.benchmark,
-            { cloneBatchId: batch.id, cloneSourceJobId: batch.sourceJobId },
+            { cloneBatchId: batch.id, cloneSourceJobId: batch.sourceJobId,
+              preparationJobId: batch.preparationJobId },
           );
           this.database.db.update(backtestCloneBatchItems).set({
             state: 'DISPATCHED',
@@ -256,6 +263,7 @@ export class SeedCloneBatchService {
       const plan = this.collectDeletionPlan([batchId]);
       if (!plan) return 'NOT_DELETABLE';
       this.executeDeletionPlan(plan);
+      new PreparationReferenceService(this.database).collect();
       return 'DELETED';
     }).immediate();
   }
@@ -276,6 +284,7 @@ export class SeedCloneBatchService {
       if (!plan) return 'NOT_DELETABLE';
       this.executeDeletionPlan(plan);
       this.database.db.delete(backtestJobs).where(eq(backtestJobs.id, sourceJobId)).run();
+      new PreparationReferenceService(this.database).collect();
       return 'DELETED';
     }).immediate();
   }
@@ -407,6 +416,7 @@ function parseSnapshot(batch: SeedCloneBatchRow): SeedCloneBatchSnapshot {
     throw new Error('저장된 재현성 pin이 없습니다.');
   }
   return {
+    preparationJobId: batch.preparationJobId,
     request,
     schedule,
     universe: { entries: universeEntries, hash: batch.universeHash },

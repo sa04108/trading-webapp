@@ -3,11 +3,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { SqliteBacktestInputBundleBuilder } from '../../src/server/modules/backtest/infrastructure/sqlite-backtest-input-bundle-builder.js';
+import { eq } from 'drizzle-orm';
 import { openDatabase } from '../../src/server/shared/db/database.js';
 import {
   backtestJobs,
+  backtestPreparationJobs,
   symbolFactsState,
   symbolMasterCoverage,
+  preparationPreviewCache,
   symbols,
 } from '../../src/server/shared/db/schema.js';
 
@@ -54,8 +57,30 @@ describe('SqliteBacktestInputBundleBuilder', () => {
       { startDate: '2025-01-01', endDate: '2025-12-31', syncedAtMs: 30 },
       { startDate: '2026-01-01', endDate: '2026-12-31', syncedAtMs: 40 },
     ]).run();
+    const preparationPreview = {
+      schedule: [],
+      unionSymbols: ['SELECTED'],
+      warnings: [],
+    };
+    source.db.insert(backtestPreparationJobs).values({
+      id: 'prep_bundle',
+      requestHash: 'request-bundle',
+      requestJson: '{}',
+      status: 'COMPLETED',
+      phase: 'FINALIZING',
+      previewJson: JSON.stringify(preparationPreview),
+      createdAtMs: 1,
+      updatedAtMs: 1,
+    }).run();
+    source.db.insert(preparationPreviewCache).values({
+      jobId: 'prep_bundle',
+      dataRevision: 0,
+      validationVersion: 'test-version',
+      fundamentalSymbolsJson: JSON.stringify(['SELECTED']),
+    }).run();
     source.db.insert(backtestJobs).values({
       id: 'job_bundle_gap',
+      preparationJobId: 'prep_bundle',
       status: 'QUEUED',
       requestJson: '{}',
       strategyId: 'range-breakout',
@@ -67,7 +92,13 @@ describe('SqliteBacktestInputBundleBuilder', () => {
       }]),
       createdAtMs: 1,
     }).run();
-    source.close();
+    const centralSchedule = JSON.stringify([{
+      rebalanceDate: '2025-01-02',
+      effectiveTradingDate: '2025-01-02',
+      symbols: ['SELECTED'],
+    }]);
+    expect(source.db.select().from(backtestPreparationJobs).all()).toHaveLength(1);
+    expect(source.db.select().from(preparationPreviewCache).all()).toHaveLength(1);
 
     new SqliteBacktestInputBundleBuilder().build(
       sourcePath,
@@ -76,6 +107,13 @@ describe('SqliteBacktestInputBundleBuilder', () => {
     );
 
     const destination = openDatabase(destinationPath);
+    const bundledJob = destination.db.select().from(backtestJobs).where(
+      eq(backtestJobs.id, 'job_bundle_gap'),
+    ).get();
+    expect(bundledJob?.universeScheduleJson).toBe(centralSchedule);
+    expect(bundledJob?.preparationJobId).toBeNull();
+    expect(destination.db.select().from(backtestPreparationJobs).all()).toEqual([]);
+    expect(destination.db.select().from(preparationPreviewCache).all()).toEqual([]);
     const states = destination.db.select().from(symbolFactsState).all();
     expect(states).toHaveLength(1);
     expect(states[0]).toMatchObject({
@@ -90,5 +128,11 @@ describe('SqliteBacktestInputBundleBuilder', () => {
       { startDate: '2026-01-01', endDate: '2026-12-31', syncedAtMs: 40 },
     ]);
     destination.close();
+    expect(source.db.select().from(backtestPreparationJobs).all()).toMatchObject([{
+      id: 'prep_bundle',
+      previewJson: JSON.stringify(preparationPreview),
+    }]);
+    expect(source.db.select().from(preparationPreviewCache).all()).toHaveLength(1);
+    source.close();
   });
 });

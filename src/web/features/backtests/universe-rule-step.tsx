@@ -61,6 +61,8 @@ interface UniverseScheduleEntryDto {
 
 /** `POST /backtests/universe-preview` 응답 (스펙 2026-08-05, backtest-routes.ts 와 같은 모양) */
 export interface UniversePreviewResponseDto {
+  /** 준비 작업을 재사용할 때 서버가 발급한 준비 작업 ID. 구 서버 응답에는 없을 수 있다. */
+  readonly preparationJobId?: string;
   readonly schedule: readonly UniverseScheduleEntryDto[];
   readonly unionSymbols: readonly string[];
   /** unionSymbols 중 실제 재무 행이 있는 종목. 구 서버 응답에서는 없을 수 있다. */
@@ -163,6 +165,8 @@ export interface UniverseRuleStepProps {
   period: { from: string; to: string };
   /** 위저드 '전략' 단계가 고른 값 — 아직 못 골랐으면 null(이 단계에는 보통 그 뒤에만 온다) */
   strategyId: string | null;
+  /** 복제 원본 백테스트 ID. 신규 백테스트에서는 null이다. */
+  sourceJobId?: string | null;
   /**
    * 위저드가 이미 숫자로 파싱한 전략 파라미터. 파싱에 실패하면(필수값 미입력 등)
    * 그 사유 문장을 그대로 받는다 — 이 화면이 검증을 다시 하지 않는다
@@ -217,6 +221,7 @@ export function UniverseRuleStep({
   onChange,
   period,
   strategyId,
+  sourceJobId = null,
   parameters,
   initialResolved = null,
   previewRetryToken,
@@ -266,6 +271,7 @@ export function UniverseRuleStep({
           period: params.period,
           strategyId: params.strategyId,
           parameters: params.parameters,
+          ...(sourceJobId === null ? {} : { sourceJobId }),
         },
       ).then(({ status, data }) =>
         status === 202

@@ -29,6 +29,7 @@ import { registerBacktestPreparationRoutes } from '../modules/backtest/presentat
 import { registerNotificationRoutes } from '../modules/notification/presentation/notification-routes.js';
 import { registerSymbolMasterRoutes } from '../modules/market-data/presentation/symbol-master-routes.js';
 import { registerRemoteWorkerRoutes } from '../modules/backtest/presentation/remote-worker-routes.js';
+import { PreparationReferenceError } from '../modules/backtest/application/preparation-reference-service.js';
 import { PreparationExecutionBusyError } from '../modules/backtest/application/backtest-preparation-execution.js';
 
 const REMOTE_WORKER_CLAIM_PATH = '/api/internal/workers/jobs/claim';
@@ -103,6 +104,22 @@ export async function buildServer(container: Container): Promise<FastifyInstance
   // Caddy 의 encode zstd gzip 대체 (D-016). SSE 는 reply.hijack() 으로
   // onSend 훅을 우회하므로 압축의 영향을 받지 않는다.
   await app.register(fastifyCompress);
+
+  // 자식 API 플러그인이 등록 시점의 오류 처리기를 상속하므로 먼저 설치한다.
+  app.setErrorHandler((error: FastifyError, request, reply) => {
+    request.log.error({ err: error }, 'request failed');
+    if (error instanceof PreparationReferenceError) {
+      return reply.code(409).send({ error: 'PREPARATION_REQUIRED', message: error.message });
+    }
+    if (error instanceof PreparationExecutionBusyError) {
+      return reply.code(503).send({ error: error.message });
+    }
+    const statusCode = error.statusCode && error.statusCode >= 400 ? error.statusCode : 500;
+    // 스펙 §16: stack trace 미노출
+    reply.code(statusCode).send({
+      error: statusCode >= 500 ? 'Internal Server Error' : error.message,
+    });
+  });
 
   const authDeps = {
     authService: container.authService,
@@ -207,17 +224,6 @@ export async function buildServer(container: Container): Promise<FastifyInstance
     done();
   });
 
-  app.setErrorHandler((error: FastifyError, request, reply) => {
-    request.log.error({ err: error }, 'request failed');
-    if (error instanceof PreparationExecutionBusyError) {
-      return reply.code(503).send({ error: error.message });
-    }
-    const statusCode = error.statusCode && error.statusCode >= 400 ? error.statusCode : 500;
-    // 스펙 §16: stack trace 미노출
-    reply.code(statusCode).send({
-      error: statusCode >= 500 ? 'Internal Server Error' : error.message,
-    });
-  });
 
   const publicDir = resolvePublicDir();
   if (publicDir) {

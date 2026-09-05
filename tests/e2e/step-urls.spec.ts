@@ -129,26 +129,6 @@ test('새로고침 뒤에도 현재 단계와 단계별 입력·미리보기를 
       }),
     });
   });
-  await page.route('**/api/v1/backtests/universe-preview', async (route) => {
-    await route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify({
-        schedule: [{
-          rebalanceDate: '2026-01-05',
-          effectiveDate: '2026-01-05',
-          members: [{ symbol: '005930' }],
-        }],
-        unionSymbols: ['005930'],
-        fundamentalSymbols: [],
-        scheduleHash: 'a'.repeat(64),
-        uncoveredDates: [],
-        periodCovered: true,
-        missingCandleSymbols: [],
-        warnings: [],
-      }),
-    });
-  });
-
   await page.goto('/backtests/new');
   await page.getByRole('button', { name: /전고점 돌파/ }).click();
   await page.getByLabel('돌파 기준 봉 수', { exact: true }).fill('17');
@@ -157,7 +137,21 @@ test('새로고침 뒤에도 현재 단계와 단계별 입력·미리보기를 
   await page.getByLabel('종료일').fill('2026-03-31');
   await page.getByRole('button', { name: '다음' }).click();
   await expect(page).toHaveURL(/\/backtests\/new\/universe$/);
+  await page.locator('#stage-limit-0').fill('1');
+  const initialPreview = page.waitForResponse(
+    (resp) =>
+      resp.url().includes('/backtests/universe-preview') && resp.request().method() === 'POST',
+  );
   await page.getByRole('button', { name: '미리보기' }).click();
+  const firstPreview = await initialPreview;
+  if (firstPreview.status() === 202) {
+    await expect(page.getByText('데이터 준비', { exact: true })).toBeVisible();
+    await page.waitForResponse(
+      (resp) =>
+        resp.url().includes('/backtests/universe-preview') && resp.request().method() === 'POST',
+      { timeout: 200_000 },
+    );
+  }
   await expect(page.getByText('리밸런스 일정')).toBeVisible();
   await page.getByRole('button', { name: '다음' }).click();
   await expect(page).toHaveURL(/\/backtests\/new\/capital$/);
@@ -174,9 +168,13 @@ test('새로고침 뒤에도 현재 단계와 단계별 입력·미리보기를 
   })).toBe('12345678');
   await expect.poll(async () => page.evaluate(async () => {
     const response = await fetch('/api/v1/backtests/wizard-draft/universe');
-    const body = await response.json() as { draft: { payload: { lastPreview: unknown } } | null };
-    return body.draft?.payload.lastPreview !== null;
-  })).toBe(true);
+    const body = await response.json() as {
+      draft: {
+        payload: { lastPreview: { result?: { preparationJobId?: string } } | null }
+      } | null;
+    };
+    return body.draft?.payload.lastPreview?.result?.preparationJobId ?? null;
+  })).toBeTruthy();
 
   await page.reload();
   await expect(page).toHaveURL(/\/backtests\/new\/capital$/);

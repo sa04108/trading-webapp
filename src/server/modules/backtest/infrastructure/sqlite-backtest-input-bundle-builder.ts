@@ -59,9 +59,13 @@ export class SqliteBacktestInputBundleBuilder {
             JOIN bundle_symbols AS wanted ON wanted.code = value.short_code;
           `);
 
-          // 스키마는 같은 release가 만들고 소비하므로 컬럼 순서도 같다. job은 정확히 한 행만 복사한다.
+          // 실행 번들은 고정 일정을 자체 보유한다. 중앙 DB의 보존용 외래 키는 옮기지 않는다.
+          const jobColumns = (sqlite.pragma('table_info(backtest_jobs)') as Array<{ name: string }>)
+            .filter(({ name }) => name !== 'preparation_job_id')
+            .map(({ name }) => `"${name.replaceAll('"', '""')}"`).join(', ');
           sqlite.prepare(
-            'INSERT INTO main.backtest_jobs SELECT * FROM source.backtest_jobs WHERE id = ?',
+            `INSERT INTO main.backtest_jobs (${jobColumns})
+             SELECT ${jobColumns} FROM source.backtest_jobs WHERE id = ?`,
           ).run(jobId);
           sqlite.exec(`
             INSERT INTO main.symbols

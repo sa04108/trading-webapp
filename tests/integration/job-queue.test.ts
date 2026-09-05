@@ -799,7 +799,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
 
   it('준비 완료 뒤 발견된 종목 identity 오류를 신규 제출과 복제에서 422로 반환한다', async () => {
     const source = ctx.container.jobQueue.enqueue(buildRequest());
-    ctx.container.backtestPreparationOrchestrator.getReadyPreview = async () => {
+    ctx.container.backtestPreparationOrchestrator.getReadyPreviewForWizard = () => {
       throw new UnsafeBacktestSymbolIdentityError('기존 등록 종목의 표준코드가 선택된 증권과 다릅니다.');
     };
 
@@ -830,6 +830,12 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
     expect(created.statusCode).toBe(201);
     const sourceId = created.json().job.id as string;
+    // 미리보기를 읽은 뒤 등록 정보가 바뀌는 경합에서도 제출 검증이 직접 차단해야 한다.
+    const preview = ctx.container.backtestPreparationOrchestrator.getPreview(
+      ctx.container.jobQueue.getJob(sourceId)!.preparationJobId!,
+    );
+    vi.spyOn(ctx.container.backtestPreparationOrchestrator, 'getReadyPreviewForWizard')
+      .mockReturnValue(preview);
 
     ctx.container.database.db
       .update(symbols)
@@ -878,6 +884,12 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
     expect(created.statusCode).toBe(201);
     const sourceId = created.json().job.id as string;
+    // 미리보기 조회가 끝난 뒤 생긴 정체성 충돌을 실제 제출 검증 경계에 주입한다.
+    const preview = ctx.container.backtestPreparationOrchestrator.getPreview(
+      ctx.container.jobQueue.getJob(sourceId)!.preparationJobId!,
+    );
+    vi.spyOn(ctx.container.backtestPreparationOrchestrator, 'getReadyPreviewForWizard')
+      .mockReturnValue(preview);
 
     // 현재 일정과 겹치지 않는 과거 행이어도 shortCode 기반 봉·팩트에는 발행사 구분이
     // 없으므로 전체 생애 충돌이다.
@@ -979,6 +991,10 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       return status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED';
     }, 5_000);
     expect(ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status).toBe('COMPLETED');
+
+    // 준비 결과를 이미 읽은 뒤의 데이터 변경을 재현해 제출 자체의 방어선을 검증한다.
+    vi.spyOn(ctx.container.backtestPreparationOrchestrator, 'getReadyPreviewForWizard')
+      .mockReturnValue(ctx.container.backtestPreparationOrchestrator.getPreview(preparation.id));
 
     // 준비 뒤 전체 coverage를 리밸런스별 '적용 거래일~요청일' 섬으로 바꾼다.
     // 휴일 리밸런스는 직전 거래일까지 같은 커버 구간에 있어야 resolver가 일정을
@@ -1108,7 +1124,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     // 완료 cache 검사와 각 생성 관문의 TOCTOU를 강제로 연다. enqueue 직전 공통
     // predicate가 다시 잡아야 하며, job/batch 행은 하나도 늘면 안 된다.
     if (route === 'new') {
-      ctx.container.backtestPreparationOrchestrator.getReadyPreview = async () => cached;
+      ctx.container.backtestPreparationOrchestrator.getReadyPreviewForWizard = () => cached;
     } else {
       ctx.container.backtestPreparationOrchestrator.getCachedPreview = () => cached;
     }
@@ -1180,8 +1196,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     if (route === 'new' || route === 'clone') {
       // 자동 준비 fixture가 첫 409를 숨겨 두 번째 요청의 400으로 바꾸지 않게 하고,
       // 현재 preview 재계산보다 뒤인 validateSubmission 경계에서만 봉을 지운다.
-      vi.spyOn(ctx.container.backtestPreparationOrchestrator, 'getReadyPreview')
-        .mockResolvedValue(cached);
+      vi.spyOn(ctx.container.backtestPreparationOrchestrator, 'getReadyPreviewForWizard')
+        .mockReturnValue(cached);
       const failedPreparation = {
         id: 'prep_forced_failed',
         requestHash: 'forced',
@@ -1250,7 +1266,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
 
     // 이 경계 아래는 전체 기간의 유니버스 해소와 coverage 검증이다. 초안 조회는 이
     // 작업이 불가능한 상태에서도 저장 요청과 재기준 경고를 돌려줘야 한다.
-    ctx.container.backtestPreparationOrchestrator.getReadyPreview = async () => {
+    ctx.container.backtestPreparationOrchestrator.getReadyPreviewForWizard = () => {
       throw new Error('clone-draft가 유니버스 준비를 호출했습니다');
     };
 

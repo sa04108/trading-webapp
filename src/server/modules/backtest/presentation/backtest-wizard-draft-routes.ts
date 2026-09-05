@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
   backtestWizardDraftContextSchema,
-  backtestWizardDraftPayloadSchemas,
+  backtestWizardDraftWritePayloadSchemas,
   backtestWizardDraftStepSchema,
 } from '../../../../shared/schemas/backtest-wizard-draft.js';
 import type { BacktestWizardDraftService } from '../application/backtest-wizard-draft-service.js';
@@ -68,7 +68,7 @@ export function registerBacktestWizardDraftRoutes(
       if (!query.success) {
         return reply.code(400).send({ error: validationError(query.error) });
       }
-      const payload = backtestWizardDraftPayloadSchemas[params.data.step].safeParse(request.body);
+      const payload = backtestWizardDraftWritePayloadSchemas[params.data.step].safeParse(request.body);
       if (!payload.success) {
         return reply.code(400).send({ error: validationError(payload.error) });
       }

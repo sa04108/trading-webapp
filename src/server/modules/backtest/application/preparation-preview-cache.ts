@@ -35,15 +35,31 @@ export class PreparationPreviewCache {
     return row.revision;
   }
 
-  /** One SQL snapshot reads both the validation revision and its completed result. */
-  get(requestHash: string): ReadyPreviewDetails | null {
+  /** 제출 직전 쓰기 트랜잭션에서 본문을 다시 읽지 않고 검증 버전만 대조한다. */
+  isFresh(preparationJobId: string): boolean {
+    return this.database.db.select({ id: backtestPreparationJobs.id }).from(backtestPreparationJobs)
+      .innerJoin(preparationPreviewCache, eq(preparationPreviewCache.jobId, backtestPreparationJobs.id))
+      .where(and(
+        eq(backtestPreparationJobs.id, preparationJobId),
+        eq(backtestPreparationJobs.status, 'COMPLETED'),
+        eq(preparationPreviewCache.validationVersion, VALIDATION_VERSION),
+        eq(preparationPreviewCache.dataRevision, sql`(
+          SELECT revision FROM preparation_data_revision WHERE singleton = 1
+        )`),
+      )).get() !== undefined;
+  }
+
+  /** 같은 SQL 스냅샷에서 검증 버전과 완료된 본문을 함께 읽는다. */
+  get(requestHash: string, preparationJobId?: string): ReadyPreviewDetails | null {
     const row = this.database.db.select({
+      jobId: backtestPreparationJobs.id,
       previewJson: backtestPreparationJobs.previewJson,
       fundamentalSymbolsJson: preparationPreviewCache.fundamentalSymbolsJson,
     }).from(backtestPreparationJobs)
       .innerJoin(preparationPreviewCache, eq(preparationPreviewCache.jobId, backtestPreparationJobs.id))
       .where(and(
         eq(backtestPreparationJobs.requestHash, requestHash),
+        preparationJobId === undefined ? undefined : eq(backtestPreparationJobs.id, preparationJobId),
         eq(backtestPreparationJobs.status, 'COMPLETED'),
         eq(preparationPreviewCache.validationVersion, VALIDATION_VERSION),
         eq(preparationPreviewCache.dataRevision, sql`(
@@ -60,7 +76,7 @@ export class PreparationPreviewCache {
         || !fundamentalSymbols.every((symbol): symbol is string => typeof symbol === 'string')) {
         return null;
       }
-      return { preview, fundamentalSymbols };
+      return { preview: { ...preview, preparationJobId: row.jobId }, fundamentalSymbols };
     } catch {
       return null;
     }

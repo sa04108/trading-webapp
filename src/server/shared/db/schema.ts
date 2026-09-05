@@ -401,6 +401,8 @@ export const backtestPreparationJobs = sqliteTable(
     id: text('id').primaryKey(),
     requestHash: text('request_hash').notNull(),
     requestJson: text('request_json').notNull(),
+    /** 소유자 참조 이관이 끝난 준비 작업만 자동 정리한다. */
+    lifecycleManaged: integer('lifecycle_managed', { mode: 'boolean' }).notNull().default(false),
     status: text('status').notNull(),
     phase: text('phase').notNull(),
     doneSymbols: integer('done_symbols').notNull().default(0),
@@ -440,6 +442,14 @@ export const preparationPreviewCache = sqliteTable('preparation_preview_cache', 
   fundamentalSymbolsJson: text('fundamental_symbols_json').notNull(),
 });
 
+/** 사용자별 현재 위저드가 소유하는 준비 작업은 최대 한 개다. */
+export const preparationWizardReferences = sqliteTable('preparation_wizard_references', {
+  userId: text('user_id').primaryKey().references(() => users.id, { onDelete: 'cascade' }),
+  context: text('context').notNull(),
+  preparationJobId: text('preparation_job_id').notNull()
+    .references(() => backtestPreparationJobs.id, { onDelete: 'restrict' }),
+}, (table) => [index('idx_preparation_wizard_job').on(table.preparationJobId)]);
+
 // ── 백테스트 (스펙 §10, §12) ──────────────────────────────────────
 
 /**
@@ -472,6 +482,9 @@ export const backtestJobs = sqliteTable(
   'backtest_jobs',
   {
     id: text('id').primaryKey(),
+    /** 실패·취소된 작업도 복제할 수 있도록 제출 때 쓴 미리보기를 보존한다. */
+    preparationJobId: text('preparation_job_id')
+      .references(() => backtestPreparationJobs.id, { onDelete: 'restrict' }),
     // QUEUED | STARTING | RUNNING | CANCELLING | CANCELLED | COMPLETED | FAILED | INTERRUPTED
     status: text('status').notNull(),
     requestJson: text('request_json').notNull(),
@@ -531,6 +544,7 @@ export const backtestJobs = sqliteTable(
   (table) => [
     index('idx_backtest_jobs_status').on(table.status, table.createdAtMs),
     index('idx_backtest_jobs_created').on(table.createdAtMs),
+    index('idx_backtest_jobs_preparation').on(table.preparationJobId),
   ],
 );
 
@@ -542,6 +556,9 @@ export const backtestCloneBatches = sqliteTable(
   'backtest_clone_batches',
   {
     id: text('id').primaryKey(),
+    /** 아직 실제 작업으로 승격되지 않은 복제 항목도 미리보기를 보존한다. */
+    preparationJobId: text('preparation_job_id')
+      .references(() => backtestPreparationJobs.id, { onDelete: 'restrict' }),
     sourceJobId: text('source_job_id').notNull(),
     strategyId: text('strategy_id').notNull(),
     status: text('status').notNull(), // ACTIVE | CANCELLING | COMPLETED | FAILED | CANCELLED
@@ -561,6 +578,7 @@ export const backtestCloneBatches = sqliteTable(
   (table) => [
     index('idx_backtest_clone_batches_created').on(table.createdAtMs),
     index('idx_backtest_clone_batches_status').on(table.status, table.createdAtMs),
+    index('idx_backtest_clone_batches_preparation').on(table.preparationJobId),
   ],
 );
 

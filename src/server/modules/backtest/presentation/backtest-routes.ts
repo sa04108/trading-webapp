@@ -545,7 +545,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    * 순서는 uncovered 리밸런스 날짜(422) → 캔들 존재 검증(400) 이다(①②).
    *
    * 자본변동 수집 게이트(Task 6, 여기 있던 ③)는 Task 10에서 없앴다 — 제출은 이제
-   * 같은 requestHash 의 COMPLETED 준비(`preparation.getReadyPreview`)를 전제하고,
+   * 현재 사용자의 참조 행이 가리키는 exact preparation ID의 검증 결과를 전제하고,
    * 그 준비(`buildBacktestPreparationPlan`)가 전략의 `dataRequirements.
    * requiresCorporateActions`·DECLINE stage 후보에 따라 최종 유니버스의 자본변동을
    * 이미 동기화해 둔다. 실전에 등록된 전략은 전부 이 조건을 충족한다
@@ -591,7 +591,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     // 그 사이에 생긴 상장폐지·거래정지·종목 변경을 알 수 없다. 이 상태를 경고로만
     // 통과시키면 이미 없어진 종목을 계속 거래하는 낙관 편향이 생길 수 있으므로,
     // 기간 전체 KRX 마스터가 이어질 때까지 실행 생성 경로를 모두 막는다.
-    // cached clone preview는 resolver를 다시 돌리지 않으므로 저장된 boolean을 신뢰하지
+    // 복제 미리보기는 resolver를 다시 돌리지 않으므로 저장된 boolean을 신뢰하지
     // 않고 현재 coverage를 직접 확인한다. 그 사이 백필이 끝난 경우도 낡은 false로
     // 오거부하지 않는다.
     if (!symbolMaster.isRangeCovered(body.period.from, body.period.to)) {
@@ -605,8 +605,8 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       };
     }
 
-    // 완료된 preparation 뒤 등록 행이 바뀌거나, clone 계열이 resolver 재실행 없이
-    // cached preview를 재사용해도 shortCode 기반 봉·팩트를 다른 증권과 합치지 않는다.
+    // 완료된 preparation 뒤 등록 행이 바뀌거나, 복제 계열이 resolver 재실행 없이
+    // 저장된 미리보기를 재사용해도 shortCode 기반 봉·팩트를 다른 증권과 합치지 않는다.
     // schedule 원문을 보므로 unionEntries의 shortCode first-wins에도 의존하지 않는다.
     const identityError = pinnedScheduleIdentityError(
       resolved.schedule,
@@ -813,10 +813,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
   };
 
   /**
-   * 원본 job의 고정 일정과 같은 준비 결과가 현재 전략 버전 hash에도 남아 있을 때만
-   * 미리보기 재사용을 허용한다. DB 조회와 hash 비교뿐이라 종목 마스터를 다시 해소하지
-   * 않는다. 전략 버전·전략 파라미터·기간·규칙 중 하나라도 달라지면 준비 hash가 달라져
-   * 자연스럽게 null이다.
+   * 원본 job이 소유한 exact preparation ID의 검증 결과와 고정 schedule이 일치할 때만
+   * 복제 미리보기를 재사용한다. DB의 보존 snapshot과 hash를 확인하므로 종목 마스터를
+   * 다시 해소하지 않는다. 현재 요청의 전략·파라미터·기간·규칙이 다르면 검증에서 거부한다.
    */
   const reusablePreviewFor = async (
     job: BacktestJobRow,
@@ -829,7 +828,10 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     benchmark: { pin: ReturnType<typeof benchmarkPinSchema.parse>; hash: string };
     response: BacktestUniversePreview & { fundamentalSymbols: string[] };
   } | null> => {
-    const preview = await preparation.getCachedPreviewIsolated(preparationInputOf(sourceRequest));
+    if (job.preparationJobId === null) return null;
+    const preview = await preparation.getCachedPreviewIsolated(
+      preparationInputOf(sourceRequest), job.preparationJobId,
+    );
     const schedule = parseStoredSchedule(job);
     if (!preview || !schedule) return null;
     const resolved = preparedPreviewToResolved(preview);
@@ -964,7 +966,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     // 오류가 난다 — 같은 매핑(429/503/409)을 적용해야 네 줄 아래와 다른 500 이 되지 않는다.
     let prepared: Awaited<ReturnType<typeof preparation.getReadyPreview>>;
     try {
-      prepared = await preparation.getReadyPreview(preparationInputOf(body));
+      prepared = preparation.getReadyPreviewForWizard(preparationInputOf(body), request.authUser!.id);
     } catch (error) {
       if (sendIfKrxError(reply, error)) return reply;
       if (sendIfNotCovered(reply, error)) return reply;
@@ -1030,6 +1032,8 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       validated.provenancePin,
       validated.warnings,
       benchmark,
+      { preparationJobId: prepared.preparationJobId,
+        wizardOwner: { userId: request.authUser!.id, requireMatch: true } },
     );
     audit.record(request.authUser?.username ?? 'admin', 'backtest.created', {
       jobId: job.id,
@@ -1100,7 +1104,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     let prepared: Awaited<ReturnType<typeof preparation.getReadyPreview>>;
     try {
       prepared = reusable?.preview
-        ?? await preparation.getReadyPreview(preparationInputOf(cloneRequest));
+        ?? preparation.getReadyPreviewForWizard(preparationInputOf(cloneRequest), request.authUser!.id);
     } catch (error) {
       if (sendIfKrxError(reply, error)) return reply;
       if (sendIfNotCovered(reply, error)) return reply;
@@ -1167,7 +1171,8 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       reusable?.provenancePin ?? validated.provenancePin,
       cloneWarnings,
       reusable?.benchmark ?? benchmark,
-      { cloneSourceJobId: id },
+      { cloneSourceJobId: id, preparationJobId: prepared.preparationJobId,
+        ...(reusable ? {} : { wizardOwner: { userId: request.authUser!.id, requireMatch: true } }) },
     );
     audit.record(request.authUser?.username ?? 'admin', 'backtest.cloned', {
       sourceJobId: id,
@@ -1261,7 +1266,8 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       reusable.provenancePin,
       cloneWarnings,
       benchmark,
-      { cloneSourceJobId: id },
+      { cloneSourceJobId: id, preparationJobId: reusable.preview.preparationJobId,
+        wizardOwner: { userId: request.authUser!.id, context: id } },
     );
     audit.record(request.authUser?.username ?? 'admin', 'backtest.cloned-configured', {
       sourceJobId: id,
@@ -1319,6 +1325,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const benchmarkId = body.benchmarkId ?? 'KOSPI';
     const warnings = [...rebased.warnings, ...validated.warnings];
     const batch = seedCloneBatches.create(id, countBody.data.count, {
+      preparationJobId: reusable.preview.preparationJobId,
       request: { ...body, benchmarkId, timeframe: validated.timeframe },
       schedule: reusable.schedule,
       universe: reusable.universe,

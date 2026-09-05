@@ -8,8 +8,8 @@ import {
   PreparationInputError,
   UnsafeBacktestSymbolIdentityError,
   type BacktestPreparationOrchestrator,
-  type PreparationInput,
 } from '../application/backtest-preparation-orchestrator.js';
+import { PreparationReferenceError } from '../application/preparation-reference-service.js';
 import { PreparationExecutionBusyError } from '../application/backtest-preparation-execution.js';
 import type { FinancialFactAvailabilityService } from '../../facts/application/financial-fact-availability.js';
 import type { CandleCoverageService } from '../../market-data/application/candle-coverage-service.js';
@@ -34,6 +34,7 @@ const previewRequestSchema = z.object({
   }),
   strategyId: z.string().min(1),
   parameters: z.record(z.string(), z.unknown()),
+  sourceJobId: z.string().min(1).optional(),
 });
 
 export function registerBacktestPreparationRoutes(
@@ -57,7 +58,8 @@ export function registerBacktestPreparationRoutes(
         error: parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; '),
       });
     }
-    const input: PreparationInput = parsed.data;
+    const { sourceJobId, ...input } = parsed.data;
+    const owner = { userId: request.authUser!.id, context: sourceJobId ?? '' };
     if (input.period.from > input.period.to) {
       return reply.code(400).send({ error: '기간이 올바르지 않습니다 (from > to)' });
     }
@@ -68,13 +70,17 @@ export function registerBacktestPreparationRoutes(
     }
 
     try {
-      // An active same-input job is pure metadata. Return it before scheduling any expensive
-      // completed-preview revalidation so repeated POSTs cannot stack behind a running resolver.
+      // 같은 입력의 active job은 진행 상태만 담고 있다. 완료 미리보기를 다시 검증하는
+      // 비싼 작업을 예약하기 전에 먼저 반환해 반복 POST가 resolver 뒤에 쌓이지 않게 한다.
       const active = orchestrator.getActive(input);
-      if (active !== null) return reply.code(202).send({ job: active });
+      if (active !== null) {
+        orchestrator.bindWizard(owner.userId, owner.context, active.id);
+        return reply.code(202).send({ job: active });
+      }
 
       const ready = orchestrator.getFreshPreviewDetails(input);
       if (ready) {
+        orchestrator.bindWizard(owner.userId, owner.context, ready.preview.preparationJobId!);
         return reply.code(200).send({
           ...ready.preview,
           fundamentalSymbols: ready.fundamentalSymbols,
@@ -85,7 +91,7 @@ export function registerBacktestPreparationRoutes(
           error: 'DART API 키가 설정되지 않아 필요한 재무·자본변동 데이터를 동기화할 수 없습니다.',
         });
       }
-      return reply.code(202).send({ job: orchestrator.start(input) });
+      return reply.code(202).send({ job: orchestrator.start(input, owner) });
     } catch (error) {
       // resolver 경유 오류는 제출 라우트와 같은 코드로 매핑한다. 그 밖의 오류를
       // 일괄 400 으로 접으면 내부 wiring 결함까지 사용자 요청 문제로 둔갑한다 —
@@ -94,6 +100,9 @@ export function registerBacktestPreparationRoutes(
       if (sendIfNotCovered(reply, error)) return reply;
       if (error instanceof UnsafeBacktestSymbolIdentityError) {
         return reply.code(422).send({ error: error.message });
+      }
+      if (error instanceof PreparationReferenceError) {
+        return reply.code(409).send({ error: 'PREPARATION_REQUIRED', message: error.message });
       }
       if (error instanceof PreparationInputError) {
         return reply.code(400).send({ error: error.message });
