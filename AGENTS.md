@@ -5,17 +5,12 @@ These instructions apply to the entire repository.
 ## Request Handling
 
 - Understand the user's goal and relevant code flow before acting.
+- Write all code comments and docstrings in Korean.
 - For investigation, review, or design alone, stay read-only; if implementation intent is unclear, ask the user and wait before editing; when changes are clearly requested, proceed without reconfirmation, using reasonable defaults for minor details within the authorized scope.
-
-### Model ownership
-
-- Astra owns requirements interpretation, architecture, implementation planning, complex core implementation, root-cause analysis, API/DB contract changes, final review, and risk decisions.
-- Smaller models handle repetitive code generation, document formatting, test-case expansion, lint fixes, comment cleanup, simple renames, mechanical migrations, and preliminary log summaries within a defined scope. Escalate design, contract, or risk decisions to Astra.
-- Route routine work to a smaller model even for a single sequential task. Model selection and subagent use are separate decisions; smaller-model execution does not require a subagent.
-- Use model routing supported by the environment; if unavailable, report the limitation. Never claim a model switch or delegation that did not occur.
 
 ### Subagents
 
+- Assign repetitive code generation, document formatting, test-case expansion, lint fixes, comment cleanup, simple renames, mechanical migrations, and preliminary log summaries to smaller-model subagents within a defined scope. Escalate design, contract, or risk decisions to the main agent.
 - Subagents are opt-in: deliberately choose them per task, never spawn by default. Use them only for independent work with summarizable results, when isolating intermediate output protects the main context or parallel execution materially reduces elapsed time.
 - Prefer read-only subagents. For editing tasks, assign exclusive module ownership; never let multiple agents edit the same module concurrently.
 
