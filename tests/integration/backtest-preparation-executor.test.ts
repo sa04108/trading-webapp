@@ -14,6 +14,7 @@ import { registerSymbols, seedCorporateActionCoverage, seedDailyBars } from '../
 import type { PreparationInput } from '../../src/server/modules/backtest/application/backtest-preparation-orchestrator.js';
 import type {
   BacktestPreparationExecutionLane,
+  PreparationNotification,
   ReadyPreviewDetails,
 } from '../../src/server/modules/backtest/application/backtest-preparation-execution.js';
 import type { BacktestUniversePreview } from '../../src/server/modules/backtest/application/backtest-preparation-orchestrator.js';
@@ -139,7 +140,13 @@ describe('ForkedBacktestPreparationExecutor', () => {
 describe('production preparation factory HTTP path', () => {
   it('강제 forked container의 preview 요청이 실제 자식 판정을 거쳐 즉시 202를 반환한다', async () => {
     const config = testConfig();
-    const container = createContainer(config, { preparationExecution: 'forked' });
+    const relayedNotifications: PreparationNotification[] = [];
+    const container = createContainer(config, {
+      preparationExecution: 'forked',
+      preparationExecutorOptions: {
+        onNotificationCreated: (notification) => relayedNotifications.push(notification),
+      },
+    });
     const app = await buildServer(container);
     await app.ready();
     try {
@@ -188,6 +195,31 @@ describe('production preparation factory HTTP path', () => {
         () => container.backtestPreparationOrchestrator.get(id)?.status === 'COMPLETED',
         20_000,
       );
+      await waitFor(() => (
+        container.notificationService.list().length === 1 && relayedNotifications.length === 1
+      ));
+      const completed = await app.inject({
+        method: 'GET',
+        url: `/api/v1/backtests/preparation-jobs/${id}`,
+        cookies: { qp_session: cookie },
+      });
+      expect(completed.statusCode).toBe(200);
+      expect(completed.json()).toMatchObject({
+        job: { id, status: 'COMPLETED', overallProgress: 100 },
+      });
+      expect(container.notificationService.list()).toEqual([
+        expect.objectContaining({
+          type: 'backtest',
+          severity: 'info',
+          title: '유니버스 미리보기가 완료되었습니다',
+          link: '/backtests/new',
+        }),
+      ]);
+      expect(relayedNotifications).toEqual([
+        expect.objectContaining({
+          title: '유니버스 미리보기가 완료되었습니다',
+        }),
+      ]);
       // The actual child writes a receipt that the HTTP parent can immediately reuse.
       container.backtestPreparationOrchestrator.getReadyPreviewDetails = () => {
         throw new Error('HTTP must not revalidate the completed result');
@@ -198,8 +230,12 @@ describe('production preparation factory HTTP path', () => {
       });
       expect(replay.statusCode).toBe(200);
       expect(replay.json()).toMatchObject({ unionSymbols: ['005930'], fundamentalSymbols: [] });
+      expect(container.notificationService.list()).toHaveLength(1);
+      expect(relayedNotifications).toHaveLength(1);
       expect((await container.backtestPreparationOrchestrator.getReadyPreview(input))?.unionSymbols)
         .toEqual(['005930']);
+      expect(container.notificationService.list()).toHaveLength(1);
+      expect(relayedNotifications).toHaveLength(1);
       container.database.sqlite.exec("UPDATE krx_daily_bars SET close = close + 1");
       expect(await container.backtestPreparationOrchestrator.getReadyPreview(input)).toBeNull();
     } finally {
@@ -207,6 +243,35 @@ describe('production preparation factory HTTP path', () => {
       await container.close();
     }
   }, 45_000);
+
+  it('자식 spawn 실패를 FAILED로 기록하고 실패 알림을 한 건 만든다', async () => {
+    const config = testConfig();
+    const container = createContainer(config, {
+      preparationExecution: 'forked',
+      preparationExecutorOptions: {
+        childUrl: new URL('file:///definitely-missing/preparation-child.js'),
+      },
+    });
+    try {
+      const job = container.backtestPreparationOrchestrator.start(input);
+      await waitFor(
+        () => container.backtestPreparationOrchestrator.get(job.id)?.status === 'FAILED',
+        20_000,
+      );
+      await waitFor(() => container.notificationService.list().length === 1);
+
+      expect(container.notificationService.list()).toEqual([
+        expect.objectContaining({
+          type: 'backtest',
+          severity: 'error',
+          title: '유니버스 미리보기가 실패했습니다',
+          link: '/backtests/new',
+        }),
+      ]);
+    } finally {
+      await container.close();
+    }
+  }, 30_000);
 
   it('in-flight HTTP child가 막혀도 shutdown 순서가 bounded하게 drain을 끝낸다', async () => {
     const config = testConfig({ PREPARATION_EXECUTION_MAX_QUEUED: '7' });

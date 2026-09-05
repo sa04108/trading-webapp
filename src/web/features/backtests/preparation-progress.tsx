@@ -39,12 +39,6 @@ function quotaProvider(job: BacktestPreparationJob): 'KRX' | 'DART' {
   return job.phase === 'MARKET_DATA' ? 'KRX' : 'DART';
 }
 
-/** 0~100 정수. 분모가 0 이면(아직 계획을 못 받은 순간) 0 으로 둔다 */
-function progressPercent(done: number, total: number): number {
-  if (total <= 0) return 0;
-  return Math.round((done / total) * 100);
-}
-
 export interface PreparationProgressProps {
   readonly job: BacktestPreparationJob;
   readonly onCancel: () => void;
@@ -61,6 +55,9 @@ export interface PreparationProgressProps {
  */
 export function PreparationProgress({ job, onCancel, onRestart }: PreparationProgressProps) {
   const cancellable = !shouldCloseStream(job.status);
+  const overallProgress = job.status === 'COMPLETED'
+    ? 100
+    : Math.min(99, Math.max(0, Math.floor(job.overallProgress ?? 0)));
 
   return (
     <Card>
@@ -69,20 +66,20 @@ export function PreparationProgress({ job, onCancel, onRestart }: PreparationPro
         <CardDescription>{preparationStatusDescription(job)}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
-        {job.status === 'RUNNING' || job.status === 'WAITING_DAILY_QUOTA' ? (
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <span>{PHASE_LABELS[job.phase]}</span>
-              <span className="tabular-nums" aria-live="polite">
-                {job.doneSymbols} / {job.totalSymbols}
-              </span>
-            </div>
-            <Progress
-              value={progressPercent(job.doneSymbols, job.totalSymbols)}
-              aria-label="데이터 준비 진행률"
-            />
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span>전체 진행률 <span className="text-muted-foreground">(예상)</span></span>
+            <span className="tabular-nums" aria-live="polite">
+              {overallProgress}%
+            </span>
           </div>
-        ) : null}
+          <Progress
+            value={overallProgress}
+            aria-label="유니버스 미리보기 전체 진행률"
+            aria-valuenow={overallProgress}
+            aria-valuetext={`${overallProgress}%`}
+          />
+        </div>
 
         {job.status === 'WAITING_DAILY_QUOTA' ? (
           <Alert role="alert">
@@ -98,7 +95,7 @@ export function PreparationProgress({ job, onCancel, onRestart }: PreparationPro
         {job.status === 'QUEUED' || job.status === 'RUNNING' || job.status === 'WAITING_DAILY_QUOTA' ? (
           <p className="text-xs text-muted-foreground">
             준비는 서버에서 진행되므로 화면을 나가거나 브라우저를 닫아도 계속됩니다. 나중에
-            같은 조건으로 미리보기를 누르면 진행 상황을 다시 볼 수 있습니다.
+            같은 조건으로 미리보기를 누르면 진행 상황을 다시 볼 수 있으며, 완료·실패 결과는 알림에서 확인할 수 있습니다.
           </p>
         ) : null}
 

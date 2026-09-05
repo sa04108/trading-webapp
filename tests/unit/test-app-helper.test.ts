@@ -7,6 +7,7 @@ const activeJob = (overrides: Partial<BacktestPreparationJobDto> = {}): Backtest
   requestHash: 'hash',
   status: 'RUNNING',
   phase: 'RESOLVING_STAGES',
+  overallProgress: 5,
   doneSymbols: 7,
   totalSymbols: 12,
   savedFacts: 3,

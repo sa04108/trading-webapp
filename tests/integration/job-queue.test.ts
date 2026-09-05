@@ -1203,6 +1203,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
         requestHash: 'forced',
         status: 'FAILED' as const,
         phase: 'MARKET_DATA' as const,
+        overallProgress: 0,
         doneSymbols: 0,
         totalSymbols: 0,
         savedFacts: 0,

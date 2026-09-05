@@ -12,6 +12,7 @@ function job(overrides: Partial<BacktestPreparationJob>): BacktestPreparationJob
     requestHash: 'hash_1',
     status: 'QUEUED',
     phase: 'MARKET_DATA',
+    overallProgress: 0,
     doneSymbols: 0,
     totalSymbols: 0,
     savedFacts: 0,
@@ -28,19 +29,24 @@ describe('PreparationProgress', () => {
       <PreparationProgress job={job({ status: 'QUEUED' })} onCancel={() => undefined} />,
     );
     expect(html).toContain('데이터 준비 대기 중');
+    expect(html).toContain('0%');
     expect(html).toContain('취소');
   });
 
-  it('RUNNING 은 phase 문구와 진행 수치, 취소 버튼을 보여준다', () => {
+  it('RUNNING 은 단계 텍스트와 전체 진행률 하나, 취소 버튼을 보여준다', () => {
     const html = renderToStaticMarkup(
       <PreparationProgress
-        job={job({ status: 'RUNNING', phase: 'SYNCING_FACTS', doneSymbols: 3, totalSymbols: 10 })}
+        job={job({ status: 'RUNNING', phase: 'SYNCING_FACTS', doneSymbols: 3, totalSymbols: 10, overallProgress: 42 })}
         onCancel={() => undefined}
       />,
     );
     expect(html).toContain('재무');
-    expect(html).toContain('3');
-    expect(html).toContain('10');
+    expect(html).toContain('42%');
+    expect(html).toContain('aria-valuenow="42"');
+    expect(html.match(/role="progressbar"/g)).toHaveLength(1);
+    expect(html).not.toContain('3 / 10');
+    expect(html).not.toContain('30%');
+    expect(html.match(/DART 재무·자본변동 수집/g)).toHaveLength(1);
     expect(html).toContain('취소');
     // 진행 중 화면을 떠나도 준비가 계속된다는 안내 — 사용자가 붙어 있을 필요가 없다.
     expect(html).toContain('브라우저를 닫아도 계속됩니다');
@@ -63,6 +69,7 @@ describe('PreparationProgress', () => {
     const waitingJob = job({
       status: 'WAITING_DAILY_QUOTA',
       phase: 'SYNCING_FACTS',
+      overallProgress: 73,
       nextResumeAtMs: Date.UTC(2026, 7, 10, 15, 0, 0),
     });
     const html = renderToStaticMarkup(
@@ -70,6 +77,7 @@ describe('PreparationProgress', () => {
     );
     expect(html).toContain('일일 호출 한도');
     expect(html).toContain('DART 일일 호출 한도 해제 대기');
+    expect(html).toContain('73%');
     expect(html).toContain(formatPreparationResumeTime(waitingJob.nextResumeAtMs));
     expect(html).toContain('취소');
   });
@@ -93,6 +101,7 @@ describe('PreparationProgress', () => {
       <PreparationProgress job={job({ status: 'COMPLETED' })} onCancel={() => undefined} />,
     );
     expect(html).toContain('준비 완료');
+    expect(html).toContain('100%');
     expect(html).not.toContain('취소');
     expect(html).not.toContain('재시도');
     expect(html).not.toContain('다시 준비');

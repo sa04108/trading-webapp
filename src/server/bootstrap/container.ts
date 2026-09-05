@@ -17,6 +17,7 @@ import {
   createBacktestNotificationListener,
   createSeedCloneBatchNotificationListener,
 } from './notification-wiring.js';
+import { createPreparationNotificationListener } from './preparation-notification-wiring.js';
 import { AuthService } from '../modules/auth/application/auth-service.js';
 import type {
   LoginAttemptRepository,
@@ -373,6 +374,12 @@ export function createContainer(
 
   // 알림 리스너와 라우트가 같은 인스턴스를 봐야 한다 — 두 개를 만들면 등록 목록이 갈라진다
   const strategyRegistry = new StrategyRegistry();
+  const preparationNotificationListener = createPreparationNotificationListener({
+    database,
+    strategyName: (strategyId) => strategyRegistry.describe(strategyId)?.name ?? null,
+    notify: safeNotify,
+    logger,
+  });
   const preparationExecutionMode = options.preparationExecution
     ?? (config.nodeEnv === 'test' ? 'inline' : 'forked');
   const preparationExecution = options.preparationExecutionLane
@@ -401,6 +408,7 @@ export function createContainer(
     logger,
     externalApiUsage,
     financialFacts: financialFactAvailabilityService,
+    onJobFinished: preparationNotificationListener,
   }, preparationExecution);
   const resultsService = new ResultsService(database.db);
   const backtestWizardDraftService = new BacktestWizardDraftService(database, clock);

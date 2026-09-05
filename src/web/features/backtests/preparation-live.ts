@@ -27,6 +27,7 @@ export interface BacktestPreparationJob {
   readonly requestHash: string;
   readonly status: PreparationStatus;
   readonly phase: PreparationPhase;
+  readonly overallProgress: number;
   readonly doneSymbols: number;
   readonly totalSymbols: number;
   readonly savedFacts: number;

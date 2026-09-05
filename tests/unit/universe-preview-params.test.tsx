@@ -42,6 +42,7 @@ describe('previewRequestStatusMessage', () => {
     requestHash: 'hash_1',
     status: 'RUNNING',
     phase: 'MARKET_DATA',
+    overallProgress: 10,
     doneSymbols: 1,
     totalSymbols: 3,
     savedFacts: 0,

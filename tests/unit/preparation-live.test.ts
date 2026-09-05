@@ -99,6 +99,7 @@ describe('seedPreparationJob', () => {
       requestHash: 'hash_1',
       status: 'QUEUED',
       phase: 'MARKET_DATA',
+      overallProgress: 0,
       doneSymbols: 0,
       totalSymbols: 0,
       savedFacts: 0,

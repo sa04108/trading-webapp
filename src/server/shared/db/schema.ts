@@ -405,6 +405,8 @@ export const backtestPreparationJobs = sqliteTable(
     lifecycleManaged: integer('lifecycle_managed', { mode: 'boolean' }).notNull().default(false),
     status: text('status').notNull(),
     phase: text('phase').notNull(),
+    /** 재계산·재시작에도 감소하지 않는 미리보기 전체 예상 진행률. */
+    overallProgress: integer('overall_progress').notNull().default(0),
     doneSymbols: integer('done_symbols').notNull().default(0),
     totalSymbols: integer('total_symbols').notNull().default(0),
     savedFacts: integer('saved_facts').notNull().default(0),

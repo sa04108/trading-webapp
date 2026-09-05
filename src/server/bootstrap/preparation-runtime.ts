@@ -19,6 +19,7 @@ import { KrxDailyCandleRepository } from '../modules/market-data/infrastructure/
 import { StrategyRegistry } from '../modules/strategy/application/strategy-registry.js';
 import { NotificationService } from '../modules/notification/application/notification-service.js';
 import type { NotificationRow } from '../modules/notification/application/notification-service.js';
+import { createPreparationNotificationListener } from './preparation-notification-wiring.js';
 import { systemClock } from '../shared/clock.js';
 import { openDatabase } from '../shared/db/database.js';
 import { SqliteExternalApiUsage } from '../shared/db/external-api-usage.js';
@@ -31,8 +32,8 @@ export interface PreparationRuntime {
 }
 
 /**
- * Child-only dependency graph: no maintenance timers, HTTP server, backtest scheduler, remote
- * worker, notification listeners, or nested preparation executor are created here.
+ * 자식 프로세스에는 준비 작업과 종료·호출 한도 알림에 필요한 의존성만 구성한다.
+ * 유지보수 타이머, HTTP 서버, 백테스트 스케줄러, 원격 워커나 중첩 실행기는 만들지 않는다.
  */
 export function createPreparationRuntime(
   config: AppConfig,
@@ -45,6 +46,16 @@ export function createPreparationRuntime(
   const clock = systemClock;
   const audit = createAuditLogService(database.db, clock, logger);
   const notifications = new NotificationService(database.db, clock);
+  const strategyRegistry = new StrategyRegistry();
+  const preparationNotificationListener = createPreparationNotificationListener({
+    database,
+    strategyName: (strategyId) => strategyRegistry.describe(strategyId)?.name ?? null,
+    notify: (input) => {
+      const notification = notifications.create(input);
+      onNotificationCreated?.(notification);
+    },
+    logger,
+  });
   const externalApiUsage = new SqliteExternalApiUsage({
     database,
     clock,
@@ -120,7 +131,7 @@ export function createPreparationRuntime(
     factCoverage,
     actionCoverage,
     symbolMaster,
-    strategies: new StrategyRegistry(),
+    strategies: strategyRegistry,
     symbolService,
     candleCoverage,
     clock,
@@ -128,6 +139,7 @@ export function createPreparationRuntime(
     externalApiUsage,
     financialFacts,
     onJobUpdated,
+    onJobFinished: preparationNotificationListener,
   });
 
   return {

@@ -98,6 +98,7 @@ export interface BacktestPreparationJobDto {
   readonly requestHash: string;
   readonly status: PreparationStatus;
   readonly phase: PreparationPhase;
+  readonly overallProgress: number;
   readonly doneSymbols: number;
   readonly totalSymbols: number;
   readonly savedFacts: number;
@@ -128,6 +129,7 @@ type PreparationJobDtoRow = Pick<
   | 'requestHash'
   | 'status'
   | 'phase'
+  | 'overallProgress'
   | 'doneSymbols'
   | 'totalSymbols'
   | 'savedFacts'
@@ -142,11 +144,25 @@ const ACTIVE_STATUSES: readonly PreparationStatus[] = [
 const TERMINAL_STATUSES: readonly PreparationStatus[] = ['COMPLETED', 'FAILED', 'CANCELLED'];
 const MAX_FINAL_STABILIZATION_PASSES = 8;
 const MAX_RESOLUTION_PROGRESS_UPDATES = 100;
+
+type ProgressRange = readonly [start: number, end: number];
+
+/**
+ * 추가 수집량은 선정 결과에 따라 달라지므로 전체 진행률은 작업 비중으로 추정한다.
+ * 선정·필요 데이터 수집 0~60, 최종 종목 데이터 준비 60~85, 검증 85~99를 배정하고,
+ * 반복 계산과 quota 재개로 같은 구간을 다시 거쳐도 저장 경계에서 기존 최댓값을 유지한다.
+ * 실제 결과 저장이 완료된 작업만 100에 도달한다.
+ */
+function progressWithin([start, end]: ProgressRange, done: number, total: number): number {
+  const fraction = total > 0 ? Math.min(1, Math.max(0, done / total)) : 0;
+  return Math.floor(start + (end - start) * fraction);
+}
 const PREPARATION_DTO_SELECTION = {
   id: backtestPreparationJobs.id,
   requestHash: backtestPreparationJobs.requestHash,
   status: backtestPreparationJobs.status,
   phase: backtestPreparationJobs.phase,
+  overallProgress: backtestPreparationJobs.overallProgress,
   doneSymbols: backtestPreparationJobs.doneSymbols,
   totalSymbols: backtestPreparationJobs.totalSymbols,
   savedFacts: backtestPreparationJobs.savedFacts,
@@ -242,6 +258,8 @@ export interface BacktestPreparationOrchestratorDeps {
   readonly financialFacts: Pick<FinancialFactAvailabilityService, 'symbolsWithFinancialFacts'>;
   /** Child runtime uses this to tell the parent to re-read the durable DTO for SSE. */
   readonly onJobUpdated?: (jobId: string) => void;
+  /** 종료 상태를 저장한 실행 주체만 알림을 만든다. 부모의 SSE 재전송은 제외한다. */
+  readonly onJobFinished?: (job: BacktestPreparationJobDto) => void;
 }
 
 /**
@@ -740,6 +758,7 @@ export class BacktestPreparationOrchestrator {
           dataExclusions,
         );
         if (finalAttempt === null) return;
+        this.persistAndEmit(jobId, { overallProgress: 60 }, ['RUNNING']);
 
         // 최종 전략 데이터 sync 자체가 팩트/봉을 추가해 순위와 멤버십을 바꿀 수 있다.
         // A만 준비한 뒤 B로 바뀐 결과를 바로 완료하면 B의 자본변동·warm-up이 비어도
@@ -760,11 +779,11 @@ export class BacktestPreparationOrchestrator {
             strategy,
           });
           if (finalPlan.price.symbols.length > 0) {
-            await this.syncMarketData(jobId, [], finalPlan.price);
+            await this.syncMarketData(jobId, [], finalPlan.price, [60, 70]);
             if (this.shouldReturnFromRun(jobId)) return;
           }
           if (finalPlan.financial.symbols.length > 0 || finalPlan.actions.symbols.length > 0) {
-            const continued = await this.syncFacts(jobId, finalPlan);
+            const continued = await this.syncFacts(jobId, finalPlan, [70, 85]);
             if (!continued) return;
             for (const symbol of finalPlan.actions.symbols) attemptedActionSymbols.add(symbol);
           }
@@ -841,6 +860,7 @@ export class BacktestPreparationOrchestrator {
         // The same fresh validation previously ran inside the follow-up HTTP request.
         // Keep it inside the durable job, restarting exclusions against a single unchanged
         // source revision so repaired data cannot inherit an earlier exclusion decision.
+        this.persistAndEmit(jobId, { overallProgress: 85 }, ['RUNNING']);
         const revision = this.previewCache.beginValidation();
         const current = await this.resolveReadyPreviewWithKnownDataExclusions(
           input, strategy, jobId, attemptedActionSymbols,
@@ -886,6 +906,7 @@ export class BacktestPreparationOrchestrator {
     preview: BacktestUniversePreview,
     revision: number,
   ): boolean {
+    this.persistAndEmit(jobId, { phase: 'FINALIZING', overallProgress: 99 }, ['RUNNING']);
     const fundamentalSymbols = this.fundamentalSymbols(input, preview);
     const completed = this.deps.database.sqlite.transaction(() => {
       const row = this.getRow(jobId);
@@ -896,6 +917,7 @@ export class BacktestPreparationOrchestrator {
       this.deps.database.db.update(backtestPreparationJobs).set({
         status: 'COMPLETED',
         phase: 'FINALIZING',
+        overallProgress: 100,
         previewJson: JSON.stringify({ ...preview, preparationJobId: undefined }),
         updatedAtMs: now,
         completedAtMs: now,
@@ -905,6 +927,7 @@ export class BacktestPreparationOrchestrator {
       return true;
     }).immediate();
     if (completed) {
+      this.notifyFinished(jobId);
       this.emitCurrent(jobId);
       this.deps.onJobUpdated?.(jobId);
     }
@@ -917,8 +940,13 @@ export class BacktestPreparationOrchestrator {
     excludedSymbols: ReadonlySet<string> = new Set(),
     phase: 'RESOLVING_STAGES' | 'VALIDATING_RESULT' = 'RESOLVING_STAGES',
   ): Promise<UniverseResolveAttempt> {
+    // 기존 결과의 사전 재검증이 실패해도 본 작업을 시작하기 전에 높은 비율로 뛰지 않는다.
+    const validatingFinalResult = phase === 'VALIDATING_RESULT'
+      && (this.getDtoRow(jobId)?.overallProgress ?? 0) >= 85;
+    const progressRange: ProgressRange = validatingFinalResult ? [85, 99] : [0, 10];
     this.persistAndEmit(jobId, {
       phase,
+      overallProgress: progressRange[0],
       doneSymbols: 0,
       totalSymbols: 0,
     }, ['RUNNING']);
@@ -940,6 +968,7 @@ export class BacktestPreparationOrchestrator {
         this.persistAndEmit(jobId, {
           doneSymbols: completedRebalanceDates,
           totalSymbols: totalRebalanceDates,
+          overallProgress: progressWithin(progressRange, completedRebalanceDates, totalRebalanceDates),
         }, ['RUNNING']);
       },
       shouldStop: () => this.cancelOrStopRequested(jobId),
@@ -1016,6 +1045,7 @@ export class BacktestPreparationOrchestrator {
     jobId: string,
     selectionMetricDates: readonly string[],
     price: BacktestPreparationPlan['price'],
+    progressRange: ProgressRange = [10, 35],
   ): Promise<void> {
     // 이 phase 의 작업 단위는 심볼이 아니라 날짜다 — 심볼 수를 분모로 두면 warm-up
     // 몇 달치를 받는 동안 진행이 끝까지 0 에 머문다 (운영 리포트, 2026-08-10).
@@ -1029,13 +1059,17 @@ export class BacktestPreparationOrchestrator {
       phase: 'MARKET_DATA',
       doneSymbols: 0,
       totalSymbols: metricDates.length + priceDays,
+      overallProgress: progressRange[0],
     }, ['RUNNING']);
 
     for (const date of metricDates) {
       if (this.cancelOrStopRequested(jobId)) return;
       await this.deps.symbolMaster.ensureTradingDay(date);
       done += 1;
-      this.persistAndEmit(jobId, { doneSymbols: done }, ['RUNNING']);
+      this.persistAndEmit(jobId, {
+        doneSymbols: done,
+        overallProgress: progressWithin(progressRange, done, metricDates.length + priceDays),
+      }, ['RUNNING']);
     }
     await this.deps.symbolMaster.ensureSelectionMetrics(selectionMetricDates);
 
@@ -1045,19 +1079,33 @@ export class BacktestPreparationOrchestrator {
       if (this.cancelOrStopRequested(jobId)) return;
       await this.deps.symbolMaster.ingestDate(cursor);
       done += 1;
-      this.persistAndEmit(jobId, { doneSymbols: done }, ['RUNNING']);
+      this.persistAndEmit(jobId, {
+        doneSymbols: done,
+        overallProgress: progressWithin(progressRange, done, metricDates.length + priceDays),
+      }, ['RUNNING']);
       cursor = addCalendarDays(cursor, 1);
     }
   }
 
-  private async syncFacts(jobId: string, plan: BacktestPreparationPlan): Promise<boolean> {
-    this.persistAndEmit(jobId, { phase: 'SYNCING_FACTS' }, ['RUNNING']);
+  private async syncFacts(
+    jobId: string,
+    plan: BacktestPreparationPlan,
+    progressRange: ProgressRange = [35, 60],
+  ): Promise<boolean> {
+    this.persistAndEmit(jobId, {
+      phase: 'SYNCING_FACTS',
+      doneSymbols: 0,
+      totalSymbols: 0,
+      overallProgress: progressRange[0],
+    }, ['RUNNING']);
+    const total = plan.financial.symbols.length + plan.actions.symbols.length;
+    const financialEnd = progressWithin(progressRange, plan.financial.symbols.length, total);
     if (plan.financial.symbols.length > 0) {
       const report = await this.runFactRequest(jobId, 'FINANCIAL', {
         symbols: plan.financial.symbols,
         fromYear: plan.financial.fromYear,
         toYear: plan.financial.toYear,
-      });
+      }, [progressRange[0], financialEnd]);
       if (!this.consumeFactReport(jobId, report)) return false;
     }
 
@@ -1069,7 +1117,7 @@ export class BacktestPreparationOrchestrator {
         symbols: plan.actions.symbols,
         fromYear: plan.actions.fromYear,
         toYear: plan.actions.toYear,
-      });
+      }, [financialEnd, progressRange[1]]);
       if (!this.consumeFactReport(jobId, report)) return false;
     }
     return !this.shouldReturnFromRun(jobId);
@@ -1370,16 +1418,19 @@ export class BacktestPreparationOrchestrator {
     jobId: string,
     kind: 'FINANCIAL' | 'ACTIONS',
     request: { readonly symbols: readonly string[]; readonly fromYear: number; readonly toYear: number },
+    progressRange: ProgressRange,
   ): Promise<FactSyncReport> {
     this.persistAndEmit(jobId, {
       doneSymbols: 0,
       totalSymbols: new Set(request.symbols).size,
+      overallProgress: progressRange[0],
     }, ['RUNNING']);
     const hooks = {
       onSymbolDone: (progress: { index: number; total: number }): void => {
         this.persistAndEmit(jobId, {
           doneSymbols: progress.index,
           totalSymbols: progress.total,
+          overallProgress: progressWithin(progressRange, progress.index, progress.total),
         }, ['RUNNING']);
       },
       shouldStop: (): boolean => this.cancelOrStopRequested(jobId),
@@ -1866,6 +1917,19 @@ export class BacktestPreparationOrchestrator {
     }
   }
 
+  private notifyFinished(jobId: string): void {
+    const snapshot = this.get(jobId);
+    if (!snapshot) return;
+    try {
+      this.deps.onJobFinished?.(snapshot);
+    } catch (error) {
+      this.deps.logger.warn(
+        { module: 'backtest', event: 'preparation.notification-failed', jobId, err: error },
+        '미리보기 종료 알림을 전달하지 못했습니다.',
+      );
+    }
+  }
+
   /**
    * 모든 job UPDATE와 그 결과 event는 이 경계 하나를 통과한다. builder는
    * BEGIN IMMEDIATE 안에서 현재 row와 전역 quota 합계를 함께 읽을 수 있다.
@@ -1878,11 +1942,11 @@ export class BacktestPreparationOrchestrator {
   ): BacktestPreparationJobDto | null {
     const mutate = this.deps.database.sqlite.transaction(() => {
       const current = this.getRow(jobId);
-      if (!current) return false;
+      if (!current) return null;
       const currentStatus = current.status as PreparationStatus;
-      if (expectedStatuses && !expectedStatuses.includes(currentStatus)) return false;
+      if (expectedStatuses && !expectedStatuses.includes(currentStatus)) return null;
       const patch = typeof patchOrBuilder === 'function' ? patchOrBuilder(current) : patchOrBuilder;
-      if (patch === null) return false;
+      if (patch === null) return null;
       const nextStatus = patch.status as PreparationStatus | undefined;
       if (
         nextStatus !== undefined
@@ -1895,14 +1959,19 @@ export class BacktestPreparationOrchestrator {
       const terminal = nextStatus !== undefined && TERMINAL_STATUSES.includes(nextStatus);
       this.deps.database.db.update(backtestPreparationJobs).set({
         ...patch,
+        overallProgress: Math.max(
+          current.overallProgress,
+          Math.min(99, Math.max(0, patch.overallProgress ?? current.overallProgress)),
+        ),
         updatedAtMs: this.deps.clock.now(),
         ...(terminal ? { completedAtMs: this.deps.clock.now(), nextResumeAtMs: null } : {}),
       }).where(eq(backtestPreparationJobs.id, jobId)).run();
-      return true;
+      return { finished: terminal && nextStatus !== currentStatus };
     });
     const changed = mutate.immediate();
     const snapshot = this.get(jobId);
     if (!changed || !snapshot) return snapshot;
+    if (changed.finished) this.notifyFinished(jobId);
     this.emitCurrent(jobId);
     this.deps.onJobUpdated?.(jobId);
     if (TERMINAL_STATUSES.includes(snapshot.status)) {
@@ -1964,6 +2033,7 @@ function toDto(row: PreparationJobDtoRow): BacktestPreparationJobDto {
     requestHash: row.requestHash,
     status: row.status as PreparationStatus,
     phase: row.phase as PreparationPhase,
+    overallProgress: row.status === 'COMPLETED' ? 100 : row.overallProgress,
     doneSymbols: row.doneSymbols,
     totalSymbols: row.totalSymbols,
     savedFacts: row.savedFacts,

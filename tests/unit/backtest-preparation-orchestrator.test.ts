@@ -9,6 +9,7 @@ import { backtestPreparationJobs } from '../../src/server/shared/db/schema.js';
 import {
   BacktestPreparationOrchestrator,
   type PreparationInput,
+  type BacktestPreparationJobDto,
 } from '../../src/server/modules/backtest/application/backtest-preparation-orchestrator.js';
 import { backtestPreparationRequestHash } from '../../src/server/modules/backtest/application/backtest-preparation-plan.js';
 import { StrategyRegistry } from '../../src/server/modules/strategy/application/strategy-registry.js';
@@ -302,8 +303,10 @@ describe('BacktestPreparationOrchestrator MARKET_DATA 진행 표시', () => {
     const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
 
     const progress: { done: number; total: number }[] = [];
+    const overall: BacktestPreparationJobDto[] = [];
     const id = orchestrator.start(INPUT).id;
     const unsubscribe = orchestrator.subscribe(id, (job) => {
+      overall.push(job);
       // 생성 직후 QUEUED snapshot 도 기본 phase 가 MARKET_DATA 다 — 실제 수집 중
       // (RUNNING) 의 진행만 본다.
       if (job.status === 'RUNNING' && job.phase === 'MARKET_DATA') {
@@ -312,6 +315,20 @@ describe('BacktestPreparationOrchestrator MARKET_DATA 진행 표시', () => {
     });
     await waitFor(() => orchestrator.get(id)?.status === 'COMPLETED');
     unsubscribe();
+
+    expect(overall[0]?.overallProgress).toBe(0);
+    expect(overall.at(-1)?.overallProgress).toBe(100);
+    expect(overall.every((snapshot, index) => (
+      snapshot.overallProgress >= (overall[index - 1]?.overallProgress ?? 0)
+      && (snapshot.status === 'COMPLETED' || snapshot.overallProgress < 100)
+    ))).toBe(true);
+    expect(overall.some((snapshot) => snapshot.phase === 'MARKET_DATA'
+      && snapshot.overallProgress > 10 && snapshot.overallProgress < 35)).toBe(true);
+    expect(overall.some((snapshot) => snapshot.phase === 'RESOLVING_STAGES'
+      && snapshot.doneSymbols === 0 && snapshot.overallProgress >= 35)).toBe(true);
+    expect(ctx.handle.db.select({ progress: backtestPreparationJobs.overallProgress })
+      .from(backtestPreparationJobs).where(eq(backtestPreparationJobs.id, id)).get())
+      .toEqual({ progress: 100 });
 
     // QUEUED→RUNNING 전이 직후의 snapshot 은 아직 분모를 못 받았다(total 0) —
     // 실제 수집이 시작된 snapshot 만 본다.
@@ -406,8 +423,8 @@ describe('BacktestPreparationOrchestrator RESOLVING_STAGES 진행 표시', () =>
     unsubscribe();
 
     // 준비 흐름은 안정화 확인 때문에 resolver를 두 번 부른다. 각 호출은 0, 10, …,
-    // 1000의 최대 101개 durable update만 낸다.
-    expect(progress.length).toBeLessThanOrEqual(202);
+    // 1000의 최대 101개 durable update와 전체 진행률 구간 전환 2회를 합친 상한이다.
+    expect(progress.length).toBeLessThanOrEqual(204);
     expect(progress).toContainEqual({ done: 1_000, total: 1_000 });
     await orchestrator.stop();
     ctx.handle.close();
@@ -1480,7 +1497,7 @@ describe('BacktestPreparationOrchestrator recovery와 취소', () => {
       dartCallsUsed: 0, cancelRequested: false, createdAtMs: 1, updatedAtMs: 1,
     };
     ctx.handle.db.insert(backtestPreparationJobs).values([
-      { ...base, id: 'prep_running', requestHash: 'running', status: 'RUNNING' },
+      { ...base, id: 'prep_running', requestHash: 'running', status: 'RUNNING', overallProgress: 73 },
       { ...base, id: 'prep_due', requestHash: 'due', status: 'WAITING_DAILY_QUOTA', nextResumeAtMs: now },
       { ...base, id: 'prep_future', requestHash: 'future', status: 'WAITING_DAILY_QUOTA', nextResumeAtMs: now + 60_000 },
     ]).run();
@@ -1488,7 +1505,7 @@ describe('BacktestPreparationOrchestrator recovery와 취소', () => {
 
     orchestrator.recoverOrphaned();
 
-    expect(orchestrator.get('prep_running')?.status).toBe('QUEUED');
+    expect(orchestrator.get('prep_running')).toMatchObject({ status: 'QUEUED', overallProgress: 73 });
     expect(orchestrator.get('prep_due')?.status).toBe('QUEUED');
     expect(orchestrator.get('prep_future')?.status).toBe('WAITING_DAILY_QUOTA');
     await orchestrator.stop();
@@ -1582,10 +1599,13 @@ describe('BacktestPreparationOrchestrator quota resume와 terminal 결과', () =
     });
     const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
     const job = orchestrator.start(INPUT);
+    const overall: number[] = [];
+    const unsubscribe = orchestrator.subscribe(job.id, (snapshot) => overall.push(snapshot.overallProgress));
 
     await waitFor(() => orchestrator.get(job.id)?.status === 'WAITING_DAILY_QUOTA');
     expect(orchestrator.get(job.id)).toMatchObject({
       phase: 'MARKET_DATA',
+      overallProgress: 22,
       doneSymbols: 1,
       totalSymbols: 2,
       nextResumeAtMs: Date.parse('2026-01-05T15:00:00.000Z'),
@@ -1598,6 +1618,9 @@ describe('BacktestPreparationOrchestrator quota resume와 terminal 결과', () =
 
     // 01-05는 coverage로 건너뛰고, quota 응답 때문에 완료되지 않은 01-06만 재요청한다.
     expect(physicalRequests).toEqual(['2026-01-05', '2026-01-06', '2026-01-06']);
+    unsubscribe();
+    expect(overall.at(-1)).toBe(100);
+    expect(overall.every((value, index) => value >= (overall[index - 1] ?? 0))).toBe(true);
     await orchestrator.stop();
     ctx.handle.close();
   });
@@ -1800,5 +1823,58 @@ describe('BacktestPreparationOrchestrator quota resume와 terminal 결과', () =
     expect(orchestrator.get(job.id)?.error).toContain('정기공시 목록 조회 실패');
     await orchestrator.stop();
     ctx.handle.close();
+  });
+});
+
+
+describe('미리보기 종료 알림 경계', () => {
+  it.each(['COMPLETED', 'FAILED', 'CANCELLED'] as const)(
+    '%s는 재조회·재구독·반복 취소에도 한 번만 알린다',
+    async (status) => {
+      const finished: BacktestPreparationJobDto[] = [];
+      const ctx = makeDeps({
+        onJobFinished: (job: BacktestPreparationJobDto) => finished.push(job),
+        ...(status === 'FAILED' ? {
+          resolver: {
+            resolveOrDescribeNeeds: async () => { throw new Error('계산 실패'); },
+            isPeriodCovered: () => true,
+          },
+        } : {}),
+      });
+      const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+      try {
+        const job = orchestrator.start(INPUT);
+        if (status === 'CANCELLED') orchestrator.cancel(job.id);
+        await waitFor(() => orchestrator.get(job.id)?.status === status);
+        const unsubscribe = orchestrator.subscribe(job.id, () => undefined);
+        orchestrator.get(job.id);
+        orchestrator.cancel(job.id);
+        unsubscribe();
+        await orchestrator.stop();
+        expect(finished).toHaveLength(1);
+        expect(finished[0]).toMatchObject({ id: job.id, status });
+        expect(finished[0]?.overallProgress).toBe(status === 'COMPLETED' ? 100 : 0);
+      } finally {
+        await orchestrator.stop();
+        ctx.handle.close();
+      }
+    },
+  );
+
+  it('알림 전달이 실패해도 결과 저장과 구독자 완료 통지는 유지한다', async () => {
+    const ctx = makeDeps({ onJobFinished: () => { throw new Error('알림 저장 실패'); } });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    try {
+      const job = orchestrator.start(INPUT);
+      const received: string[] = [];
+      const unsubscribe = orchestrator.subscribe(job.id, (snapshot) => received.push(snapshot.status));
+      await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
+      expect(received).toContain('COMPLETED');
+      expect(orchestrator.getPreview(job.id)).not.toBeNull();
+      unsubscribe();
+    } finally {
+      await orchestrator.stop();
+      ctx.handle.close();
+    }
   });
 });
