@@ -48,6 +48,7 @@ describe('PreparationProgress', () => {
 
   it.each([
     ['RESOLVING_STAGES', '유니버스 선정 계산'],
+    ['VALIDATING_RESULT', '미리보기 결과 검증'],
     ['MARKET_DATA', 'KRX 시장 데이터 수집'],
     ['SYNCING_FACTS', 'DART 재무·자본변동 수집'],
     ['FINALIZING', '미리보기 결과 저장'],

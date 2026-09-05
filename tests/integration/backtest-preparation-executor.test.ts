@@ -188,6 +188,20 @@ describe('production preparation factory HTTP path', () => {
         () => container.backtestPreparationOrchestrator.get(id)?.status === 'COMPLETED',
         20_000,
       );
+      // The actual child writes a receipt that the HTTP parent can immediately reuse.
+      container.backtestPreparationOrchestrator.getReadyPreviewDetails = () => {
+        throw new Error('HTTP must not revalidate the completed result');
+      };
+      const replay = await app.inject({
+        method: 'POST', url: '/api/v1/backtests/universe-preview',
+        cookies: { qp_session: cookie }, payload: input,
+      });
+      expect(replay.statusCode).toBe(200);
+      expect(replay.json()).toMatchObject({ unionSymbols: ['005930'], fundamentalSymbols: [] });
+      expect((await container.backtestPreparationOrchestrator.getReadyPreview(input))?.unionSymbols)
+        .toEqual(['005930']);
+      container.database.sqlite.exec("UPDATE krx_daily_bars SET close = close + 1");
+      expect(await container.backtestPreparationOrchestrator.getReadyPreview(input)).toBeNull();
     } finally {
       await app.close();
       await container.close();
@@ -234,6 +248,59 @@ describe('production preparation factory HTTP path', () => {
 });
 
 describe('parent-owned preparation lifecycle', () => {
+  it('legacy completed preview revalidation returns a cancellable 202 without waiting for the child', async () => {
+    const config = testConfig({ DART_API_KEY: 'test-key' });
+    const lane = new FakeExecutionLane();
+    let release!: () => void;
+    lane.onRun = () => new Promise<void>((resolve) => { release = resolve; });
+    lane.onStop = () => release?.();
+    const container = createContainer(config, { preparationExecutionLane: lane });
+    const app = await buildServer(container);
+    await app.ready();
+    try {
+      const credentials = await createTestAdmin(container);
+      const login = await app.inject({ method: 'POST', url: '/api/v1/auth/login', payload: credentials });
+      const cookie = login.cookies.find((item) => item.name === 'qp_session')!.value;
+      container.database.db.insert(backtestPreparationJobs).values({
+        id: 'prep_legacy_completed',
+        requestHash: backtestPreparationRequestHash(input, container.strategyRegistry.get(input.strategyId)!),
+        requestJson: JSON.stringify(input),
+        status: 'COMPLETED', phase: 'FINALIZING',
+        previewJson: JSON.stringify({ unionSymbols: [] }),
+        createdAtMs: 1, updatedAtMs: 1,
+      }).run();
+      const request = {
+        method: 'POST' as const, url: '/api/v1/backtests/universe-preview',
+        cookies: { qp_session: cookie }, payload: input,
+      };
+      const first = await app.inject(request);
+      expect(first.statusCode).toBe(202);
+      const id = first.json<{ job: { id: string } }>().job.id;
+      expect(id).not.toBe('prep_legacy_completed');
+      await waitFor(() => lane.startedJobs.includes(id));
+      const repeated = await Promise.all([app.inject(request), app.inject(request)]);
+      for (const response of repeated) {
+        expect(response.statusCode).toBe(202);
+        expect(response.json()).toMatchObject({ job: { id, status: 'RUNNING' } });
+      }
+      expect(lane.startedJobs).toEqual([id]);
+      expect(lane.readyDetailsCalls).toBe(0);
+      expect((await app.inject({ method: 'GET', url: '/api/v1/health/ready' })).statusCode).toBe(200);
+      const cancelled = await app.inject({
+        method: 'POST', url: `/api/v1/backtests/preparation-jobs/${id}/cancel`,
+        cookies: { qp_session: cookie },
+      });
+      expect(cancelled.statusCode).toBe(200);
+      release();
+      await waitFor(() => container.backtestPreparationOrchestrator.get(id)?.status === 'CANCELLED');
+      expect(container.backtestPreparationOrchestrator.get('prep_legacy_completed')?.status).toBe('COMPLETED');
+    } finally {
+      release?.();
+      await app.close();
+      await container.close();
+    }
+  });
+
   it('동일 입력 active job HTTP는 heavy revalidation을 부르지 않고 같은 202를 반환한다', async () => {
     const config = testConfig();
     const lane = new FakeExecutionLane();

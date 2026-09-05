@@ -420,6 +420,26 @@ export const backtestPreparationJobs = sqliteTable(
   (table) => [index('preparation_jobs_hash_idx').on(table.requestHash, table.status)],
 );
 
+/** Market/fact writes advance this revision in the same SQLite transaction. */
+export const preparationDataRevision = sqliteTable(
+  'preparation_data_revision',
+  {
+    singleton: integer('singleton').primaryKey(),
+    revision: integer('revision').notNull().default(0),
+    armed: integer('armed', { mode: 'boolean' }).notNull().default(false),
+  },
+  (table) => [check('chk_preparation_revision_singleton', sql`${table.singleton} = 1`)],
+);
+
+/** Only a fully validated, unchanged data revision may reuse a completed preview. */
+export const preparationPreviewCache = sqliteTable('preparation_preview_cache', {
+  jobId: text('job_id').primaryKey()
+    .references(() => backtestPreparationJobs.id, { onDelete: 'cascade' }),
+  dataRevision: integer('data_revision').notNull(),
+  validationVersion: text('validation_version').notNull(),
+  fundamentalSymbolsJson: text('fundamental_symbols_json').notNull(),
+});
+
 // ── 백테스트 (스펙 §10, §12) ──────────────────────────────────────
 
 /**

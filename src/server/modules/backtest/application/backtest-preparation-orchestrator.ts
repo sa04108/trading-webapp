@@ -55,6 +55,7 @@ import {
   buildBacktestPreparationPlan,
   type BacktestPreparationPlan,
 } from './backtest-preparation-plan.js';
+import { PreparationPreviewCache } from './preparation-preview-cache.js';
 import { UniverseResolutionCancelledError } from './universe-rule-resolver.js';
 import {
   backtestDataExclusionKey,
@@ -85,6 +86,7 @@ export type PreparationStatus =
 export type PreparationPhase =
   | 'MARKET_DATA'
   | 'RESOLVING_STAGES'
+  | 'VALIDATING_RESULT'
   | 'SYNCING_FACTS'
   | 'FINALIZING';
 
@@ -250,12 +252,14 @@ export class BacktestPreparationOrchestrator {
   private runnerPromise: Promise<void> | null = null;
   private stopping = false;
   private readonly dailyLimit: number;
+  private readonly previewCache: PreparationPreviewCache;
   private readonly unsubscribeExecutionUpdates: (() => void) | null;
 
   constructor(
     private readonly deps: BacktestPreparationOrchestratorDeps,
     private readonly execution: BacktestPreparationExecutionLane | null = null,
   ) {
+    this.previewCache = new PreparationPreviewCache(deps.database);
     this.dailyLimit = deps.dartDailyCallLimit ?? DART_DAILY_CALL_LIMIT;
     this.unsubscribeExecutionUpdates = execution?.onJobUpdated((jobId) => {
       this.emitCurrent(jobId);
@@ -377,11 +381,21 @@ export class BacktestPreparationOrchestrator {
     return this.execution.getCachedPreview(input);
   }
 
+  /** HTTP preview lookup never schedules a resolver or waits for a child. */
+  getFreshPreviewDetails(input: PreparationInput): ReadyPreviewDetails | null {
+    const strategy = this.requireStrategy(input);
+    return this.previewCache.get(backtestPreparationRequestHash(input, strategy));
+  }
+
   /** 같은 요청 hash의 완료 결과를 현재 resolver로 다시 확인해 stale preview를 거른다. */
-  async getReadyPreview(input: PreparationInput): Promise<BacktestUniversePreview | null> {
+  async getReadyPreview(
+    input: PreparationInput,
+    progressJobId?: string,
+  ): Promise<BacktestUniversePreview | null> {
     if (this.execution !== null) {
-      if (!this.hasCompletedPreview(input)) return null;
-      return this.execution.getReadyPreview(input);
+      // Submission can use the same certified snapshot. If data changed, its existing
+      // PREPARATION_REQUIRED response sends the wizard back to durable preparation.
+      return this.getFreshPreviewDetails(input)?.preview ?? null;
     }
     const strategy = this.requireStrategy(input);
     const hash = backtestPreparationRequestHash(input, strategy);
@@ -402,7 +416,7 @@ export class BacktestPreparationOrchestrator {
       return null;
     }
 
-    const current = await this.resolveReadyPreviewWithKnownDataExclusions(input, strategy);
+    const current = await this.resolveReadyPreviewWithKnownDataExclusions(input, strategy, progressJobId);
     if (current === null || isEmptySchedule(current.attempt.schedule)) return null;
     const currentPreview = this.buildPreview(input, current.attempt, current.exclusions);
     // request hash가 같아도 종목 마스터·선정 지표가 갱신되면 최종 멤버십은 달라질
@@ -434,6 +448,8 @@ export class BacktestPreparationOrchestrator {
   private async resolveReadyPreviewWithKnownDataExclusions(
     input: PreparationInput,
     strategy: AnyTradingStrategy,
+    progressJobId?: string,
+    attemptedActionSymbols: ReadonlySet<string> = new Set(),
   ): Promise<{
     attempt: Extract<UniverseResolveAttempt, { kind: 'READY' }>;
     exclusions: readonly BacktestDataExclusion[];
@@ -441,11 +457,12 @@ export class BacktestPreparationOrchestrator {
     const excludedSymbols = new Set<string>();
     const exclusions = new Map<string, BacktestDataExclusion>();
     for (;;) {
-      const attempt = await this.deps.resolver.resolveOrDescribeNeeds(
-        input.universeRule,
-        input.period,
-        { excludedSymbols },
-      );
+      if (this.stopping || (progressJobId !== undefined && this.finishCancelledIfRequested(progressJobId))) {
+        return null;
+      }
+      const attempt = progressJobId === undefined
+        ? await this.deps.resolver.resolveOrDescribeNeeds(input.universeRule, input.period, { excludedSymbols })
+        : await this.resolve(progressJobId, input, excludedSymbols, 'VALIDATING_RESULT');
       if (attempt.kind !== 'READY') return null;
       if (this.recordDataExclusions(
         attempt.dataExclusions
@@ -460,7 +477,14 @@ export class BacktestPreparationOrchestrator {
         finalUniverseSymbols: unionSymbols(attempt.schedule),
         strategy,
       });
-      if (this.missingCorporateActionCoverageSymbols(plan.actions).length > 0) return null;
+      const missingCoverage = this.missingCorporateActionCoverageSymbols(plan.actions);
+      // Only the current durable run can prove that these candidates were actually
+      // collected and found unavailable. A newly selected, unprepared candidate must
+      // return to data preparation instead of silently disappearing from the ranking.
+      if (missingCoverage.some((symbol) => !attemptedActionSymbols.has(symbol))) return null;
+      if (this.recordDataExclusions(
+        this.corporateActionCoverageExclusions(plan.actions), excludedSymbols, exclusions,
+      )) continue;
       if (this.recordDataExclusions(
         [
           ...corporateActionDataExclusions(this.corporateActionGapsForPlan(plan.actions)),
@@ -472,7 +496,11 @@ export class BacktestPreparationOrchestrator {
             strategy,
             attempt.schedule,
           ),
-          ...await this.candleDataExclusions(input, attempt.schedule),
+          ...await this.candleDataExclusions(
+            input,
+            attempt.schedule,
+            () => this.stopping || (progressJobId !== undefined && this.cancelOrStopRequested(progressJobId)),
+          ),
         ],
         excludedSymbols,
         exclusions,
@@ -671,47 +699,19 @@ export class BacktestPreparationOrchestrator {
       const strategy = this.requireStrategy(input);
       if (this.finishCancelledIfRequested(jobId)) return;
 
-      const excludedSymbols = new Set<string>();
-      const dataExclusions = new Map<string, BacktestDataExclusion>();
+      // Legacy/stale completed previews are revalidated as durable work. The HTTP caller
+      // already has a 202 and can observe progress, disconnect, or cancel this job.
+      const previousRevision = this.previewCache.beginValidation();
+      const previous = await this.getReadyPreview(input, jobId);
+      if (this.finishCancelledIfRequested(jobId) || this.stopping) return;
+      if (previous !== null && this.completePreview(jobId, input, previous, previousRevision)) return;
 
-      let finalAttempt = await this.resolveUntilReady(
-        jobId,
-        input,
-        strategy,
-        await this.resolve(jobId, input, excludedSymbols),
-        excludedSymbols,
-        dataExclusions,
-      );
-      if (finalAttempt === null) return;
+      for (let validationPass = 0; validationPass < MAX_FINAL_STABILIZATION_PASSES; validationPass += 1) {
+        const excludedSymbols = new Set<string>();
+        const dataExclusions = new Map<string, BacktestDataExclusion>();
+        const attemptedActionSymbols = new Set<string>();
 
-      // 최종 전략 데이터 sync 자체가 팩트/봉을 추가해 순위와 멤버십을 바꿀 수 있다.
-      // A만 준비한 뒤 B로 바뀐 결과를 바로 완료하면 B의 자본변동·warm-up이 비어도
-      // 실행된다. 같은 schedule이 연속으로 확인될 때까지 새 멤버의 plan을 반복하고,
-      // 데이터 이상으로 계속 진동하면 무한 외부 호출 대신 상한에서 명시적으로 실패한다.
-      let stabilized = false;
-      for (let pass = 0; pass < MAX_FINAL_STABILIZATION_PASSES; pass += 1) {
-        if (isEmptySchedule(finalAttempt.schedule)) {
-          this.fail(jobId, '모든 리밸런싱 날짜에서 선정된 종목이 없어 유니버스를 만들 수 없습니다. 조건이나 데이터 이력을 확인하세요.');
-          return;
-        }
-        const beforeSignature = JSON.stringify(finalAttempt.schedule);
-        this.registerUniverse(finalAttempt);
-        const finalPlan = buildBacktestPreparationPlan({
-          request: preparationRequest(input),
-          resolutionNeeds: EMPTY_NEEDS,
-          finalUniverseSymbols: unionSymbols(finalAttempt.schedule),
-          strategy,
-        });
-        if (finalPlan.price.symbols.length > 0) {
-          await this.syncMarketData(jobId, [], finalPlan.price);
-          if (this.shouldReturnFromRun(jobId)) return;
-        }
-        if (finalPlan.financial.symbols.length > 0 || finalPlan.actions.symbols.length > 0) {
-          const continued = await this.syncFacts(jobId, finalPlan);
-          if (!continued) return;
-        }
-
-        const resolved = await this.resolveUntilReady(
+        let finalAttempt = await this.resolveUntilReady(
           jobId,
           input,
           strategy,
@@ -719,40 +719,37 @@ export class BacktestPreparationOrchestrator {
           excludedSymbols,
           dataExclusions,
         );
-        if (resolved === null) return;
-        finalAttempt = resolved;
-        if (JSON.stringify(finalAttempt.schedule) !== beforeSignature) continue;
+        if (finalAttempt === null) return;
 
-        const finalDataExclusions = [
-          ...this.corporateActionCoverageExclusions(finalPlan.actions),
-          ...corporateActionDataExclusions(this.corporateActionGapsForPlan(finalPlan.actions)),
-          ...corporateActionDataExclusions(
-            await this.corporateActionAlignmentExclusionsForPlan(finalPlan.actions),
-          ),
-          ...await this.financialDataExclusions(
-            input,
-            strategy,
-            finalAttempt.schedule,
-          ),
-          ...await this.candleDataExclusions(
-            input,
-            finalAttempt.schedule,
-            () => this.cancelOrStopRequested(jobId),
-          ),
-        ];
-        if (finalDataExclusions.length > 0) {
-          const addedSymbol = this.recordDataExclusions(
-            finalDataExclusions,
-            excludedSymbols,
-            dataExclusions,
-          );
-          if (!addedSymbol) {
-            throw new Error(
-              '불완전한 외부 데이터로 제외한 종목이 최종 유니버스에 다시 포함됐습니다. '
-                + '유니버스 제외 조건 적용을 확인하세요.',
-            );
+        // 최종 전략 데이터 sync 자체가 팩트/봉을 추가해 순위와 멤버십을 바꿀 수 있다.
+        // A만 준비한 뒤 B로 바뀐 결과를 바로 완료하면 B의 자본변동·warm-up이 비어도
+        // 실행된다. 같은 schedule이 연속으로 확인될 때까지 새 멤버의 plan을 반복하고,
+        // 데이터 이상으로 계속 진동하면 무한 외부 호출 대신 상한에서 명시적으로 실패한다.
+        let stabilized = false;
+        for (let pass = 0; pass < MAX_FINAL_STABILIZATION_PASSES; pass += 1) {
+          if (isEmptySchedule(finalAttempt.schedule)) {
+            this.fail(jobId, '모든 리밸런싱 날짜에서 선정된 종목이 없어 유니버스를 만들 수 없습니다. 조건이나 데이터 이력을 확인하세요.');
+            return;
           }
-          const retried = await this.resolveUntilReady(
+          const beforeSignature = JSON.stringify(finalAttempt.schedule);
+          this.registerUniverse(finalAttempt);
+          const finalPlan = buildBacktestPreparationPlan({
+            request: preparationRequest(input),
+            resolutionNeeds: EMPTY_NEEDS,
+            finalUniverseSymbols: unionSymbols(finalAttempt.schedule),
+            strategy,
+          });
+          if (finalPlan.price.symbols.length > 0) {
+            await this.syncMarketData(jobId, [], finalPlan.price);
+            if (this.shouldReturnFromRun(jobId)) return;
+          }
+          if (finalPlan.financial.symbols.length > 0 || finalPlan.actions.symbols.length > 0) {
+            const continued = await this.syncFacts(jobId, finalPlan);
+            if (!continued) return;
+            for (const symbol of finalPlan.actions.symbols) attemptedActionSymbols.add(symbol);
+          }
+
+          const resolved = await this.resolveUntilReady(
             jobId,
             input,
             strategy,
@@ -760,38 +757,88 @@ export class BacktestPreparationOrchestrator {
             excludedSymbols,
             dataExclusions,
           );
-          if (retried === null) return;
-          finalAttempt = retried;
-          // 결손 종목 제외는 단조롭게 후보를 줄이는 정책 적용이지 schedule 진동이 아니다.
-          // 차순위에도 결손이 이어질 수 있으므로 기존 안정화 8회 예산을 소비하지 않는다.
-          pass -= 1;
-          continue;
-        }
-        stabilized = true;
-        break;
-      }
-      if (!stabilized) {
-        this.fail(
-          jobId,
-          `최종 데이터 준비 후 유니버스가 ${MAX_FINAL_STABILIZATION_PASSES}회 안에 안정되지 않았습니다. `
-            + '순위 입력의 반복 변경이나 데이터 충돌을 확인하세요.',
-        );
-        return;
-      }
-      if (this.finishCancelledIfRequested(jobId)) return;
+          if (resolved === null) return;
+          finalAttempt = resolved;
+          if (JSON.stringify(finalAttempt.schedule) !== beforeSignature) continue;
 
-      this.persistAndEmit(jobId, { phase: 'FINALIZING' }, ['RUNNING']);
-      this.registerUniverse(finalAttempt);
-      const preview = this.buildPreview(
-        input,
-        finalAttempt,
-        [...dataExclusions.values()],
-      );
-      this.persistAndEmit(
-        jobId,
-        { status: 'COMPLETED', previewJson: JSON.stringify(preview), nextResumeAtMs: null },
-        ['RUNNING'],
-      );
+          const finalDataExclusions = [
+            ...this.corporateActionCoverageExclusions(finalPlan.actions),
+            ...corporateActionDataExclusions(this.corporateActionGapsForPlan(finalPlan.actions)),
+            ...corporateActionDataExclusions(
+              await this.corporateActionAlignmentExclusionsForPlan(finalPlan.actions),
+            ),
+            ...await this.financialDataExclusions(
+              input,
+              strategy,
+              finalAttempt.schedule,
+            ),
+            ...await this.candleDataExclusions(
+              input,
+              finalAttempt.schedule,
+              () => this.cancelOrStopRequested(jobId),
+            ),
+          ];
+          if (finalDataExclusions.length > 0) {
+            const addedSymbol = this.recordDataExclusions(
+              finalDataExclusions,
+              excludedSymbols,
+              dataExclusions,
+            );
+            if (!addedSymbol) {
+              throw new Error(
+                '불완전한 외부 데이터로 제외한 종목이 최종 유니버스에 다시 포함됐습니다. '
+                  + '유니버스 제외 조건 적용을 확인하세요.',
+              );
+            }
+            const retried = await this.resolveUntilReady(
+              jobId,
+              input,
+              strategy,
+              await this.resolve(jobId, input, excludedSymbols),
+              excludedSymbols,
+              dataExclusions,
+            );
+            if (retried === null) return;
+            finalAttempt = retried;
+            // 결손 종목 제외는 단조롭게 후보를 줄이는 정책 적용이지 schedule 진동이 아니다.
+            // 차순위에도 결손이 이어질 수 있으므로 기존 안정화 8회 예산을 소비하지 않는다.
+            pass -= 1;
+            continue;
+          }
+          stabilized = true;
+          break;
+        }
+        if (!stabilized) {
+          this.fail(
+            jobId,
+            `최종 데이터 준비 후 유니버스가 ${MAX_FINAL_STABILIZATION_PASSES}회 안에 안정되지 않았습니다. `
+              + '순위 입력의 반복 변경이나 데이터 충돌을 확인하세요.',
+          );
+          return;
+        }
+        if (this.finishCancelledIfRequested(jobId)) return;
+
+        // The same fresh validation previously ran inside the follow-up HTTP request.
+        // Keep it inside the durable job, restarting exclusions against a single unchanged
+        // source revision so repaired data cannot inherit an earlier exclusion decision.
+        const revision = this.previewCache.beginValidation();
+        const current = await this.resolveReadyPreviewWithKnownDataExclusions(
+          input, strategy, jobId, attemptedActionSymbols,
+        );
+        if (this.finishCancelledIfRequested(jobId) || this.stopping) return;
+        if (current !== null && !isEmptySchedule(current.attempt.schedule)) {
+          const preview = this.buildPreview(input, current.attempt, current.exclusions);
+          this.registerUniverse(current.attempt);
+          if (
+            this.financialCoverageGap(input, strategy, preview.unionSymbols) === null
+            && this.corporateActionCoverageFailure(input, strategy, preview.unionSymbols) === null
+            && this.completePreview(jobId, input, preview, revision)
+          ) return;
+        }
+        // A concurrent write or an unprepared new member needs a full pass with fresh
+        // exclusions. Keep the same durable job, and bound repeated source changes.
+      }
+      this.fail(jobId, '검증 중 데이터가 반복해서 변경되어 미리보기를 확정하지 못했습니다. 데이터 수집이 끝난 뒤 다시 준비하세요.');
     } catch (error) {
       if (this.stopping) return;
       if (error instanceof UniverseResolutionCancelledError) {
@@ -812,13 +859,46 @@ export class BacktestPreparationOrchestrator {
     }
   }
 
+  /** Publish the preview and its validation receipt atomically, before notifying SSE. */
+  private completePreview(
+    jobId: string,
+    input: PreparationInput,
+    preview: BacktestUniversePreview,
+    revision: number,
+  ): boolean {
+    const fundamentalSymbols = this.fundamentalSymbols(input, preview);
+    const completed = this.deps.database.sqlite.transaction(() => {
+      const row = this.getRow(jobId);
+      if (row?.status !== 'RUNNING' || row.cancelRequested || this.previewCache.revision() !== revision) {
+        return false;
+      }
+      const now = this.deps.clock.now();
+      this.deps.database.db.update(backtestPreparationJobs).set({
+        status: 'COMPLETED',
+        phase: 'FINALIZING',
+        previewJson: JSON.stringify(preview),
+        updatedAtMs: now,
+        completedAtMs: now,
+        nextResumeAtMs: null,
+      }).where(eq(backtestPreparationJobs.id, jobId)).run();
+      this.previewCache.store(jobId, revision, fundamentalSymbols);
+      return true;
+    }).immediate();
+    if (completed) {
+      this.emitCurrent(jobId);
+      this.deps.onJobUpdated?.(jobId);
+    }
+    return completed;
+  }
+
   private async resolve(
     jobId: string,
     input: PreparationInput,
     excludedSymbols: ReadonlySet<string> = new Set(),
+    phase: 'RESOLVING_STAGES' | 'VALIDATING_RESULT' = 'RESOLVING_STAGES',
   ): Promise<UniverseResolveAttempt> {
     this.persistAndEmit(jobId, {
-      phase: 'RESOLVING_STAGES',
+      phase,
       doneSymbols: 0,
       totalSymbols: 0,
     }, ['RUNNING']);

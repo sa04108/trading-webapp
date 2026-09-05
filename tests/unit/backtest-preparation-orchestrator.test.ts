@@ -134,6 +134,7 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
       ),
     },
     facts: { getFacts: async () => [] },
+    financialFacts: { symbolsWithFinancialFacts: () => new Set<string>() },
     dartDailyCallLimit: 40_000,
     ...overrides,
   };
@@ -1050,6 +1051,79 @@ describe('BacktestPreparationOrchestrator 완료 preview coverage 불변식', ()
 
     await orchestrator.stop();
     ctx.handle.close();
+  });
+});
+
+describe('BacktestPreparationOrchestrator durable preview validation', () => {
+  it('a source write during validation cannot certify a result from before that write', async () => {
+    let calls = 0;
+    let symbol = '005930';
+    const ctx = makeDeps();
+    ctx.deps.resolver.resolveOrDescribeNeeds = async () => {
+      calls += 1;
+      const result = ready([symbol]);
+      if (calls === 3) {
+        ctx.handle.sqlite.exec("INSERT INTO symbol_master_trading_days VALUES ('2026-01-06')");
+        symbol = '000660';
+      }
+      return result;
+    };
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    try {
+      const job = orchestrator.start(INPUT);
+      await waitFor(() => ['COMPLETED', 'FAILED'].includes(orchestrator.get(job.id)?.status ?? ''));
+      expect(orchestrator.get(job.id)?.status).toBe('COMPLETED');
+      expect(orchestrator.getFreshPreviewDetails(INPUT)?.preview.unionSymbols).toEqual(['000660']);
+      const validatedCalls = calls;
+      expect(orchestrator.getFreshPreviewDetails(INPUT)?.preview.unionSymbols).toEqual(['000660']);
+      expect(calls).toBe(validatedCalls);
+    } finally {
+      await orchestrator.stop();
+      ctx.handle.close();
+    }
+  });
+
+  it('repeated source changes terminate with an explicit error instead of an infinite requeue', async () => {
+    let calls = 0;
+    const ctx = makeDeps();
+    ctx.deps.resolver.resolveOrDescribeNeeds = async () => {
+      calls += 1;
+      ctx.handle.sqlite.exec("INSERT OR REPLACE INTO symbol_master_trading_days VALUES ('2026-01-06')");
+      return ready();
+    };
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    try {
+      const job = orchestrator.start(INPUT);
+      await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
+      expect(orchestrator.get(job.id)?.error).toMatch(/데이터가 반복해서 변경/);
+      expect(calls).toBe(24);
+      expect(orchestrator.getFreshPreviewDetails(INPUT)).toBeNull();
+    } finally {
+      await orchestrator.stop();
+      ctx.handle.close();
+    }
+  });
+
+  it('the final result validation remains observable and cancellable', async () => {
+    const gate = deferred<ReturnType<typeof ready>>();
+    let calls = 0;
+    const ctx = makeDeps();
+    ctx.deps.resolver.resolveOrDescribeNeeds = () => ++calls === 3 ? gate.promise : Promise.resolve(ready());
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    try {
+      const job = orchestrator.start(INPUT);
+      await waitFor(() => calls === 3);
+      expect(orchestrator.get(job.id)).toMatchObject({ status: 'RUNNING', phase: 'VALIDATING_RESULT' });
+      expect(orchestrator.getFreshPreviewDetails(INPUT)).toBeNull();
+      expect(orchestrator.cancel(job.id)).toBe(true);
+      gate.resolve(ready());
+      await waitFor(() => orchestrator.get(job.id)?.status === 'CANCELLED');
+      expect(orchestrator.getFreshPreviewDetails(INPUT)).toBeNull();
+    } finally {
+      gate.resolve(ready());
+      await orchestrator.stop();
+      ctx.handle.close();
+    }
   });
 });
 

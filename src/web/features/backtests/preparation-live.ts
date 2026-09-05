@@ -17,6 +17,7 @@ export type PreparationStatus =
 export type PreparationPhase =
   | 'MARKET_DATA'
   | 'RESOLVING_STAGES'
+  | 'VALIDATING_RESULT'
   | 'SYNCING_FACTS'
   | 'FINALIZING';
 

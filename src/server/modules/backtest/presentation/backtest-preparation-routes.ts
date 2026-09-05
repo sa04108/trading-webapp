@@ -73,7 +73,7 @@ export function registerBacktestPreparationRoutes(
       const active = orchestrator.getActive(input);
       if (active !== null) return reply.code(202).send({ job: active });
 
-      const ready = await orchestrator.getReadyPreviewDetails(input);
+      const ready = orchestrator.getFreshPreviewDetails(input);
       if (ready) {
         return reply.code(200).send({
           ...ready.preview,

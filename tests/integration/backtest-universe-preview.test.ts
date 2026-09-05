@@ -1,4 +1,5 @@
 import { eq } from 'drizzle-orm';
+import { preparationInputSchema } from '../../src/shared/schemas/backtest-preparation.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BacktestUniversePreview } from '../../src/server/modules/backtest/application/backtest-preparation-orchestrator.js';
 import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
@@ -558,15 +559,11 @@ describe('POST /backtests/universe-preview', () => {
       ctx.container.financialFactAvailabilityService,
       'symbolsWithFinancialFacts',
     );
-    const res = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
-      payload,
-    });
-
-    expect(res.statusCode).toBe(200);
-    expect((res.json() as { fundamentalSymbols: string[] }).fundamentalSymbols).toEqual([]);
+    // Availability is now computed by durable validation and persisted for HTTP reuse.
+    const details = await ctx.container.backtestPreparationOrchestrator.getReadyPreviewDetails(
+      preparationInputSchema.parse({ ...payload, strategyId: 'range-breakout', parameters: {} }),
+    );
+    expect(details?.fundamentalSymbols).toEqual([]);
     expect(availability).toHaveBeenCalledWith(new Map());
   });
 
