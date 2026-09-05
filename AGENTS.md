@@ -1,22 +1,36 @@
-# 작업 원칙
+# Working Principles
 
-이 지침은 저장소 전체에 적용한다.
+These instructions apply to the entire repository.
 
-## 요청 처리
+## Request Handling
 
-- 요청을 받으면 목적과 관련 코드 흐름을 먼저 파악한다.
-- 조사, 검토, 설계 요청이거나 구현 의도가 불분명하면 파일을 수정하지 않는다. 모호한 점, 논리적 충돌, 현실적인 대안과 권장안을 먼저 제시하고 필요한 결정을 확인한다.
-- 사용자가 구현, 수정, 추가, 삭제 등 코드 변경을 명시적으로 요청하면 바로 작업한다. 단, 안전 확인과 관련 코드 파악은 생략하지 않는다.
-- 합리적인 기본값으로 진행할 수 있는 사소한 모호함은 작업을 막지 말고, 선택한 가정을 결과와 함께 알린다.
+- Understand the user's goal and relevant code flow before acting.
+- For investigation, review, or design alone, stay read-only; if implementation intent is unclear, ask the user and wait before editing; when changes are clearly requested, proceed without reconfirmation, using reasonable defaults for minor details within the authorized scope.
 
-## Git 작업 방식
+### Model ownership
 
-- 수정 전에 `git status --short --branch`, 현재 브랜치, `git worktree list`를 확인한다. 기존 변경은 사용자 또는 다른 작업자의 것으로 간주해 덮어쓰거나 커밋에 섞지 않는다.
-- 현재 브랜치가 `main`이면 첫 수정 전에 작업을 설명하는 새 브랜치를 만든다.
-- 커밋 전에 현재 브랜치 또는 워크트리의 이름과 최근 커밋 이력을 현재 작업과 대조한다. 관련이 없으면 작업 전용 새 브랜치로 전환하고, 기존 체크아웃을 유지해야 하거나 다른 작업과 공유 중이면 별도 워크트리도 만든다.
-- 새 브랜치 혹은 새 워크트리로 작업을 진행하는 경우 최신 `main` 브랜치에서 시작한다.
-- 같은 저장소에서 다른 Codex 작업이 진행 중이면 충돌을 피하도록 별도 브랜치와 새 워크트리에서 작업한다.
-- 구현과 검증이 끝난 하나의 작업 단위마다 커밋한다. 관련 테스트와 문서는 같은 커밋에 포함하되, 자신의 변경만 경로를 명시해 스테이징하고 커밋 전 staged diff를 확인한다.
-- 검증에 실패한 변경은 완료로 간주하지 않는다. 해결할 수 없으면 커밋하지 말고 실패 내용과 원인을 보고한다.
-- 커밋 후 원격 저장소와 인증이 사용 가능하면 현재 브랜치를 푸시한다. 새 브랜치는 upstream을 설정한다. 푸시가 실패해도 커밋을 되돌리지 말고 실패 이유를 보고한다.
-- 사용자가 브랜치, 커밋 또는 푸시 방식을 별도로 지정하면 그 지시를 우선한다.
+- Astra owns requirements interpretation, architecture, implementation planning, complex core implementation, root-cause analysis, API/DB contract changes, final review, and risk decisions.
+- Smaller models handle repetitive code generation, document formatting, test-case expansion, lint fixes, comment cleanup, simple renames, mechanical migrations, and preliminary log summaries within a defined scope. Escalate design, contract, or risk decisions to Astra.
+- Route routine work to a smaller model even for a single sequential task. Model selection and subagent use are separate decisions; smaller-model execution does not require a subagent.
+- Use model routing supported by the environment; if unavailable, report the limitation. Never claim a model switch or delegation that did not occur.
+
+### Subagents
+
+- Subagents are opt-in: deliberately choose them per task, never spawn by default. Use them only for independent work with summarizable results, when isolating intermediate output protects the main context or parallel execution materially reduces elapsed time.
+- Prefer read-only subagents. For editing tasks, assign exclusive module ownership; never let multiple agents edit the same module concurrently.
+
+### Reporting
+
+- Summarize tool output and intermediate exploration; final reports contain only outcomes or changes, verification, and risks, including material assumptions or limitations.
+
+## Git Workflow
+
+- Before editing, inspect `git status --short --branch`, the current branch, and `git worktree list`. Treat existing changes as belonging to the user or another worker; never overwrite them or include them in your commit.
+- If the current branch is `main`, create a descriptive task branch before the first edit.
+- Before committing, compare the current branch or worktree name and recent commit history with the task. If they are unrelated, switch to a dedicated task branch; if the existing checkout must be preserved or is shared with another task, create a separate worktree as well.
+- Start every new branch or worktree from the latest `main`.
+- If another Codex task is active in the same repository, work in a separate branch and worktree to avoid conflicts.
+- Commit after each complete, verified unit of work. Include related tests and documentation in the same commit, stage only your changes by explicit path, and inspect the staged diff before committing.
+- A change that fails verification is incomplete. If the failure cannot be resolved, do not commit; report the failure and its cause.
+- After committing, push the current branch when the remote and authentication are available, setting the upstream for a new branch. If the push fails, keep the commit and report the reason.
+- Explicit user instructions about branches, commits, or pushes override this workflow.
