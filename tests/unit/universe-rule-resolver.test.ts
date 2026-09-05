@@ -351,6 +351,11 @@ function makePipelineResolver(options: {
   bulkCandleReads?: string[][];
   closePriceReads?: string[][];
   actionCoverageReads?: string[][];
+  sharesChangeReads?: Array<{
+    from: string;
+    to: string;
+    shortCodes: readonly string[] | undefined;
+  }>;
   validateIdentity?: (
     selections: readonly SymbolIdentitySelection[],
   ) => SymbolIdentityValidationResult;
@@ -395,9 +400,15 @@ function makePipelineResolver(options: {
         row.marketCapKrw === null ? [] : [[row.standardCode, row.marketCapKrw.toString()]],
       )),
       nonTradingDaysBetween: () => [],
-      sharesChangesBetween: (from: string, to: string) => sharesChanges.filter(
-        (change) => change.effectiveDate >= from && change.effectiveDate <= to,
-      ),
+      sharesChangesBetween: (from: string, to: string, shortCodes?: readonly string[]) => {
+        options.sharesChangeReads?.push({ from, to, shortCodes });
+        if (shortCodes?.length === 0) return [];
+        return sharesChanges.filter((change) => (
+          change.effectiveDate >= from
+          && change.effectiveDate <= to
+          && (shortCodes === undefined || shortCodes.includes(change.shortCode))
+        ));
+      },
       readIdentitySnapshot: (shortCodes: readonly string[], standardCodes: readonly string[]) => {
         const selectionsByPair = new Map<string, SymbolIdentitySelection>();
         for (let index = 0; index < shortCodes.length; index += 1) {
@@ -611,6 +622,28 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
       },
     )).rejects.toMatchObject({ name: 'UniverseResolutionCancelledError' });
     expect(identityReads).toEqual([]);
+  });
+
+  it('DECLINE 자본변동 그래프 사이에 event loop의 취소 요청을 처리한다', async () => {
+    const candle = (symbol: string, offset: number): Candle => ({
+      symbol, market: 'KR', timeframe: '1d', tsMs: PIPELINE_TS - offset * 86_400_000,
+      open: 100, high: 100, low: 100, close: 100, volume: 1,
+    });
+    const factReads: string[][] = [];
+    let stopped = false;
+    setImmediate(() => { stopped = true; });
+
+    await expect(makePipelineResolver({
+      candles: PIPELINE_ENTRIES.flatMap((entry) => [
+        candle(entry.shortCode, 2), candle(entry.shortCode, 1), candle(entry.shortCode, 0),
+      ]),
+      factReads,
+    }).resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'DECLINE', direction: 'LOW', limit: 1, lookbackTradingDays: 3 }]),
+      period,
+      { shouldStop: () => stopped },
+    )).rejects.toMatchObject({ name: 'UniverseResolutionCancelledError' });
+    expect(factReads).toEqual([['000001', '000002', '000003']]);
   });
 
   it('앞 단계가 후보 0을 확정하면 후속 short-keyed 저장소를 읽지 않는다', async () => {
@@ -1396,6 +1429,47 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     // 전체 그래프: 000001은 05-06 분할을 반영해 +100%, 따라서 +10%인 000002가 LOW다.
     // 관련 공시만 잘라 매칭하면 05-14가 더 가까운 05-17로 가서 000001이 0%로 잘못 뽑힌다.
     expect(result.schedule[0]?.members.map((member) => member.symbol)).toEqual(['000002']);
+  });
+
+  it('월별 반복 후보의 전체 자본변동 그래프는 호출 수명 동안 종목별 한 번만 준비한다', async () => {
+    const candle = (symbol: string, offset: number): Candle => ({
+      symbol, market: 'KR', timeframe: '1d', tsMs: PIPELINE_TS - offset * 86_400_000,
+      open: 100, high: 100, low: 100, close: 100, volume: 1,
+    });
+    const sharesChangeReads: Array<{
+      from: string;
+      to: string;
+      shortCodes: readonly string[] | undefined;
+    }> = [];
+    const factQueries: FactQuery[] = [];
+    const result = await makePipelineResolver({
+      candles: PIPELINE_ENTRIES.flatMap((entry) => [
+        candle(entry.shortCode, 2), candle(entry.shortCode, 1), candle(entry.shortCode, 0),
+      ]),
+      facts: [{
+        scope: 'SYMBOL', key: '000001', field: 'SPLIT_RATIO', periodKey: '2025-05-13',
+        asOfTsMs: PIPELINE_TS + 365 * 86_400_000, value: 2, unit: 'ratio',
+      }],
+      sharesChanges: [{ shortCode: '000001', effectiveDate: '2025-05-15', ratio: 2 }],
+      sharesChangeReads,
+      factQueries,
+    }).resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'DECLINE', direction: 'LOW', limit: 3, lookbackTradingDays: 3 }]),
+      { from: '2025-05-15', to: '2025-08-15' },
+    );
+
+    expect(result.kind).toBe('READY');
+    if (result.kind !== 'READY') throw new Error('fixture coverage가 완전해야 합니다.');
+    expect(result.schedule.length).toBeGreaterThan(1);
+    // 05-13 전체 raw graph 범위는 [R-30, R+90]. 날짜별 lookback용 좁은 조회와
+    // 달리 이 범위는 월별 stage가 반복돼도 한 번만 읽는다.
+    expect(sharesChangeReads.filter((read) => (
+      read.from === '2025-04-13' && read.to === '2025-08-11'
+    ))).toHaveLength(1);
+    expect(sharesChangeReads.every((read) => (
+      read.shortCodes?.join(',') === '000001,000002,000003'
+    ))).toBe(true);
+    expect(factQueries.filter((query) => query.fields?.includes('SPLIT_RATIO'))).toHaveLength(1);
   });
 
   it('자본변동 실제 변경일을 확인할 수 없는 종목은 제외하고 차순위를 고른다', async () => {

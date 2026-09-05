@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { FastifyInstance } from 'fastify';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { loadConfig } from '../../src/server/bootstrap/config.js';
@@ -58,6 +59,22 @@ export async function createTestApp(
 export function installPreparedSubmissionFixture(ctx: TestApp): void {
   const readActualValidDates = ctx.container.candleCoverageService
     .getValidDatesByCodeBetween.bind(ctx.container.candleCoverageService);
+  const preparationPeriod = new AsyncLocalStorage<BacktestRequest['period']>();
+  const preparation = ctx.container.backtestPreparationOrchestrator;
+  const runClaimedJob = preparation.runClaimedJob.bind(preparation);
+  preparation.runClaimedJob = (jobId) => {
+    const row = ctx.container.database.sqlite.prepare(
+      'SELECT request_json FROM backtest_preparation_jobs WHERE id = ?',
+    ).get(jobId) as { request_json: string } | undefined;
+    if (row === undefined) return runClaimedJob(jobId);
+    const input = JSON.parse(row.request_json) as { period: BacktestRequest['period'] };
+    return preparationPeriod.run(input.period, () => runClaimedJob(jobId));
+  };
+  const getReadyPreview = preparation.getReadyPreview.bind(preparation);
+  preparation.getReadyPreview = (input) => preparationPeriod.run(
+    input.period,
+    () => getReadyPreview(input),
+  );
   const noWorkPlan = {
     yearsBySymbol: new Map(),
     shareYearsBySymbol: new Map(),
@@ -114,11 +131,23 @@ export function installPreparedSubmissionFixture(ctx: TestApp): void {
   };
   ctx.container.candleCoverageService.getValidDatesByCodeBetween = (codes, from, to) => {
     const tradingDays = ctx.container.symbolMasterService.tradingDaysBetween(from, to);
-    const actual = readActualValidDates(codes, from, to);
+    // Production now validates in bounded ranges. This queue-focused fixture still models the
+    // old contract: one valid candle anywhere in the submitted period makes that symbol complete
+    // for preparation only. Scope the probe to that submitted period so a future candle cannot
+    // accidentally make an intentionally empty historical period look covered.
+    const scopedPeriod = preparationPeriod.getStore();
+    const actual = readActualValidDates(
+      codes,
+      scopedPeriod?.from ?? from,
+      scopedPeriod?.to ?? to,
+    );
     return new Map(codes.map((code) => [
       code,
       (actual.get(code)?.length ?? 0) > 0
-        ? [...new Set([...(actual.get(code) ?? []), ...tradingDays])].sort()
+        ? [...new Set([
+            ...(actual.get(code) ?? []).filter((date) => date >= from && date <= to),
+            ...tradingDays,
+          ])].sort()
         : [],
     ]));
   };
@@ -174,13 +203,13 @@ export function installPreparedSubmissionFixture(ctx: TestApp): void {
       syncedAtMs: ctx.container.clock.now(),
     }).run();
 
-    const preparation = ctx.container.backtestPreparationOrchestrator.start({
+    const preparationJob = preparation.start({
       universeRule: body.universeRule,
       period: body.period,
       strategyId: body.strategyId,
       parameters: body.parameters,
     });
-    if (!await waitForPreparation(preparation.id)) return first;
+    if (!await waitForPreparation(preparationJob.id)) return first;
     return rawInject(options as never);
   }) as typeof ctx.app.inject;
 }

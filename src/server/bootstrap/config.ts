@@ -56,6 +56,12 @@ const envSchema = z.object({
    * 동기화)가 쓸 여유로 남긴다.
    */
   KRX_DAILY_CALL_BUDGET: z.coerce.number().int().min(1).default(9000),
+  /** 준비 자식의 V8 old-space 상한. RSS 전체 상한과는 별개다. */
+  PREPARATION_CHILD_MAX_OLD_SPACE_MB: z.coerce.number().int().min(64).max(256).default(128),
+  /** Linux에서는 부모가 이 RSS를 주기적으로 감시해 초과 자식을 종료한다. */
+  PREPARATION_CHILD_MAX_RSS_MB: z.coerce.number().int().min(128).max(768).default(320),
+  /** HTTP revalidation 요청이 만들 수 있는 서로 다른 대기 작업 수. */
+  PREPARATION_EXECUTION_MAX_QUEUED: z.coerce.number().int().min(1).max(64).default(8),
 });
 
 export interface AppConfig {
@@ -93,6 +99,9 @@ export interface AppConfig {
   readonly krxApprovalExpiry: string | null;
   readonly syncMinFreeDiskMb: number;
   readonly krxDailyCallBudget: number;
+  readonly preparationChildMaxOldSpaceMb: number;
+  readonly preparationChildMaxRssMb: number;
+  readonly preparationExecutionMaxQueued: number;
 }
 
 export class ConfigError extends Error {
@@ -166,5 +175,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     krxApprovalExpiry: raw.KRX_APPROVAL_EXPIRY ?? null,
     syncMinFreeDiskMb: raw.SYNC_MIN_FREE_DISK_MB,
     krxDailyCallBudget: raw.KRX_DAILY_CALL_BUDGET,
+    preparationChildMaxOldSpaceMb: raw.PREPARATION_CHILD_MAX_OLD_SPACE_MB,
+    preparationChildMaxRssMb: raw.PREPARATION_CHILD_MAX_RSS_MB,
+    preparationExecutionMaxQueued: raw.PREPARATION_EXECUTION_MAX_QUEUED,
   };
 }

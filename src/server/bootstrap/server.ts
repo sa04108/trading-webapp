@@ -29,6 +29,7 @@ import { registerBacktestPreparationRoutes } from '../modules/backtest/presentat
 import { registerNotificationRoutes } from '../modules/notification/presentation/notification-routes.js';
 import { registerSymbolMasterRoutes } from '../modules/market-data/presentation/symbol-master-routes.js';
 import { registerRemoteWorkerRoutes } from '../modules/backtest/presentation/remote-worker-routes.js';
+import { PreparationExecutionBusyError } from '../modules/backtest/application/backtest-preparation-execution.js';
 
 const REMOTE_WORKER_CLAIM_PATH = '/api/internal/workers/jobs/claim';
 
@@ -208,6 +209,9 @@ export async function buildServer(container: Container): Promise<FastifyInstance
 
   app.setErrorHandler((error: FastifyError, request, reply) => {
     request.log.error({ err: error }, 'request failed');
+    if (error instanceof PreparationExecutionBusyError) {
+      return reply.code(503).send({ error: error.message });
+    }
     const statusCode = error.statusCode && error.statusCode >= 400 ? error.statusCode : 500;
     // 스펙 §16: stack trace 미노출
     reply.code(statusCode).send({

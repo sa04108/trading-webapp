@@ -19,6 +19,24 @@ async function main(): Promise<void> {
   await container.remoteResultUploadManager.cleanupOrphanedUploads();
   const app = await buildServer(container);
 
+  // Install signal handling before recovery can launch background child work. Graceful container
+  // close owns the bounded child termination and must finish before the process exits.
+  let shuttingDown = false;
+  const shutdown = async (signal: string): Promise<void> => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    container.logger.info({ module: 'bootstrap', event: 'server.stopping', signal }, 'shutting down');
+    const appClosing = app.close();
+    // Fastify drains in-flight handlers. Stop their isolated RPC lane concurrently or a blocked
+    // GET_READY/NEEDS_DART child could prevent app.close from ever reaching container.close.
+    await container.backtestPreparationOrchestrator.stop();
+    await appClosing;
+    await container.close();
+    process.exit(0);
+  };
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+
   // 부팅 복구는 포트를 열기 **전에** 끝낸다.
   // 열고 나서 하면 그 사이에 들어온 요청이 아직 안 거둔 `RUNNING` 행을 본다.
   // 지금은 두 줄이 붙어 있어 안전하지만, 사이에 `await` 이 하나만 끼어도 되살아난다.
@@ -47,19 +65,6 @@ async function main(): Promise<void> {
     { module: 'bootstrap', event: 'server.started', address: config.bindAddress, port: config.port },
     'server started',
   );
-
-  let shuttingDown = false;
-  const shutdown = async (signal: string): Promise<void> => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    container.logger.info({ module: 'bootstrap', event: 'server.stopping', signal }, 'shutting down');
-    await app.close();
-    await container.close();
-    process.exit(0);
-  };
-
-  process.on('SIGINT', () => void shutdown('SIGINT'));
-  process.on('SIGTERM', () => void shutdown('SIGTERM'));
 
   // 뒤에서 도는 작업(자본변동 수집 등)이 남긴 프로미스 거부를 마지막에 받는다.
   // 핸들러가 없으면 Node 가 프로세스를 그대로 죽인다.

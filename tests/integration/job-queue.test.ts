@@ -656,6 +656,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       cookies: { qp_session: cookie },
       payload: buildRequest(),
     });
+    expect(created.statusCode).toBe(201);
     const jobId = (created.json().job as { id: string }).id;
 
     const cancelled = await ctx.app.inject({

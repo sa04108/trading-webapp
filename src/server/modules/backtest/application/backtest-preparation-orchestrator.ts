@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { asc, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import {
   periodToTsRange,
   type BacktestRequest,
@@ -18,6 +18,7 @@ import type { ExternalApiUsage } from '../../../shared/db/external-api-usage.js'
 import type { CorporateActionCoverageStore } from '../../facts/application/corporate-action-coverage.js';
 import type { FactCoverageStore } from '../../facts/application/fact-coverage-store.js';
 import type { FactRepository } from '../../facts/application/ports.js';
+import type { FinancialFactAvailabilityService } from '../../facts/application/financial-fact-availability.js';
 import type { FactSyncService, FactSyncReport } from '../../facts/application/fact-sync-service.js';
 import { DART_DAILY_CALL_LIMIT } from '../../facts/domain/sync-plan.js';
 import { CORPORATE_ACTION_FIELD } from '../../facts/domain/fact.js';
@@ -48,6 +49,7 @@ import {
   type RelevantCorporateActionGap,
 } from './backtest-corporate-action-gaps.js';
 import { findFinancialCoverageGap } from './backtest-financial-coverage.js';
+import { findCandleDataExclusions } from './backtest-candle-data-exclusions.js';
 import {
   backtestPreparationRequestHash,
   buildBacktestPreparationPlan,
@@ -67,6 +69,10 @@ import type {
   UniverseRuleResolver,
   UniverseScheduleEntry,
 } from './universe-rule-resolver.js';
+import type {
+  BacktestPreparationExecutionLane,
+  ReadyPreviewDetails,
+} from './backtest-preparation-execution.js';
 
 export type PreparationStatus =
   | 'QUEUED'
@@ -111,6 +117,19 @@ export interface BacktestUniversePreview {
 
 type PreparationJobRow = typeof backtestPreparationJobs.$inferSelect;
 type PreparationJobPatch = Partial<typeof backtestPreparationJobs.$inferInsert>;
+type PreparationJobDtoRow = Pick<
+  PreparationJobRow,
+  | 'id'
+  | 'requestHash'
+  | 'status'
+  | 'phase'
+  | 'doneSymbols'
+  | 'totalSymbols'
+  | 'savedFacts'
+  | 'gapCount'
+  | 'nextResumeAtMs'
+  | 'error'
+>;
 
 const ACTIVE_STATUSES: readonly PreparationStatus[] = [
   'QUEUED', 'RUNNING', 'WAITING_DAILY_QUOTA',
@@ -118,6 +137,22 @@ const ACTIVE_STATUSES: readonly PreparationStatus[] = [
 const TERMINAL_STATUSES: readonly PreparationStatus[] = ['COMPLETED', 'FAILED', 'CANCELLED'];
 const MAX_FINAL_STABILIZATION_PASSES = 8;
 const MAX_RESOLUTION_PROGRESS_UPDATES = 100;
+const PREPARATION_DTO_SELECTION = {
+  id: backtestPreparationJobs.id,
+  requestHash: backtestPreparationJobs.requestHash,
+  status: backtestPreparationJobs.status,
+  phase: backtestPreparationJobs.phase,
+  doneSymbols: backtestPreparationJobs.doneSymbols,
+  totalSymbols: backtestPreparationJobs.totalSymbols,
+  savedFacts: backtestPreparationJobs.savedFacts,
+  gapCount: backtestPreparationJobs.gapCount,
+  nextResumeAtMs: backtestPreparationJobs.nextResumeAtMs,
+  error: backtestPreparationJobs.error,
+} as const;
+const PREPARATION_RECOVERY_SELECTION = {
+  ...PREPARATION_DTO_SELECTION,
+  requestJson: backtestPreparationJobs.requestJson,
+} as const;
 
 function corporateActionDataExclusions(
   gaps: readonly RelevantCorporateActionGap[],
@@ -199,6 +234,9 @@ export interface BacktestPreparationOrchestratorDeps {
   readonly dartDailyCallLimit?: number;
   /** 모든 DART 경로가 공유하는 영속 일일 호출 원장. */
   readonly externalApiUsage?: ExternalApiUsage;
+  readonly financialFacts: Pick<FinancialFactAvailabilityService, 'symbolsWithFinancialFacts'>;
+  /** Child runtime uses this to tell the parent to re-read the durable DTO for SSE. */
+  readonly onJobUpdated?: (jobId: string) => void;
 }
 
 /**
@@ -212,9 +250,16 @@ export class BacktestPreparationOrchestrator {
   private runnerPromise: Promise<void> | null = null;
   private stopping = false;
   private readonly dailyLimit: number;
+  private readonly unsubscribeExecutionUpdates: (() => void) | null;
 
-  constructor(private readonly deps: BacktestPreparationOrchestratorDeps) {
+  constructor(
+    private readonly deps: BacktestPreparationOrchestratorDeps,
+    private readonly execution: BacktestPreparationExecutionLane | null = null,
+  ) {
     this.dailyLimit = deps.dartDailyCallLimit ?? DART_DAILY_CALL_LIMIT;
+    this.unsubscribeExecutionUpdates = execution?.onJobUpdated((jobId) => {
+      this.emitCurrent(jobId);
+    }) ?? null;
   }
 
   start(input: PreparationInput): BacktestPreparationJobDto {
@@ -225,12 +270,15 @@ export class BacktestPreparationOrchestrator {
     // 두 문장을 잇는 것만으로는 single-flight가 아니다.
     const selected = this.deps.database.sqlite.transaction(() => {
       const existing = this.deps.database.db
-        .select()
+        .select(PREPARATION_DTO_SELECTION)
         .from(backtestPreparationJobs)
-        .where(eq(backtestPreparationJobs.requestHash, requestHash))
+        .where(and(
+          eq(backtestPreparationJobs.requestHash, requestHash),
+          inArray(backtestPreparationJobs.status, [...ACTIVE_STATUSES]),
+        ))
         .orderBy(desc(backtestPreparationJobs.createdAtMs))
-        .all()
-        .find((row) => ACTIVE_STATUSES.includes(row.status as PreparationStatus));
+        .limit(1)
+        .get();
       if (existing) return { row: existing, inserted: false } as const;
 
       const now = this.deps.clock.now();
@@ -263,7 +311,24 @@ export class BacktestPreparationOrchestrator {
   }
 
   get(jobId: string): BacktestPreparationJobDto | null {
-    const row = this.getRow(jobId);
+    const row = this.getDtoRow(jobId);
+    return row ? toDto(row) : null;
+  }
+
+  /** Cheap same-input fast path used before scheduling any child-process revalidation. */
+  getActive(input: PreparationInput): BacktestPreparationJobDto | null {
+    const strategy = this.requireStrategy(input);
+    const requestHash = backtestPreparationRequestHash(input, strategy);
+    const row = this.deps.database.db
+      .select(PREPARATION_DTO_SELECTION)
+      .from(backtestPreparationJobs)
+      .where(and(
+        eq(backtestPreparationJobs.requestHash, requestHash),
+        inArray(backtestPreparationJobs.status, [...ACTIVE_STATUSES]),
+      ))
+      .orderBy(desc(backtestPreparationJobs.createdAtMs))
+      .limit(1)
+      .get();
     return row ? toDto(row) : null;
   }
 
@@ -292,15 +357,9 @@ export class BacktestPreparationOrchestrator {
   getCachedPreview(input: PreparationInput): BacktestUniversePreview | null {
     const strategy = this.requireStrategy(input);
     const hash = backtestPreparationRequestHash(input, strategy);
-    const completed = this.deps.database.db
-      .select()
-      .from(backtestPreparationJobs)
-      .where(eq(backtestPreparationJobs.requestHash, hash))
-      .orderBy(desc(backtestPreparationJobs.createdAtMs))
-      .all()
-      .find((row) => row.status === 'COMPLETED' && row.previewJson !== null);
-    if (!completed) return null;
-    const preview = this.getPreview(completed.id);
+    const completedId = this.latestCompletedPreviewId(hash);
+    if (completedId === null) return null;
+    const preview = this.getPreview(completedId);
     if (
       !preview
       || this.financialCoverageGap(input, strategy, preview.unionSymbols) !== null
@@ -311,25 +370,30 @@ export class BacktestPreparationOrchestrator {
     return preview;
   }
 
+  /** Production clone reuse performs its coverage checks in the isolated execution lane. */
+  async getCachedPreviewIsolated(input: PreparationInput): Promise<BacktestUniversePreview | null> {
+    if (this.execution === null) return this.getCachedPreview(input);
+    if (!this.hasCompletedPreview(input)) return null;
+    return this.execution.getCachedPreview(input);
+  }
+
   /** 같은 요청 hash의 완료 결과를 현재 resolver로 다시 확인해 stale preview를 거른다. */
   async getReadyPreview(input: PreparationInput): Promise<BacktestUniversePreview | null> {
+    if (this.execution !== null) {
+      if (!this.hasCompletedPreview(input)) return null;
+      return this.execution.getReadyPreview(input);
+    }
     const strategy = this.requireStrategy(input);
     const hash = backtestPreparationRequestHash(input, strategy);
-    const completed = this.deps.database.db
-      .select()
-      .from(backtestPreparationJobs)
-      .where(eq(backtestPreparationJobs.requestHash, hash))
-      .orderBy(desc(backtestPreparationJobs.createdAtMs))
-      .all()
-      .find((row) => row.status === 'COMPLETED' && row.previewJson !== null);
-    if (!completed) return null;
+    const completedId = this.latestCompletedPreviewId(hash);
+    if (completedId === null) return null;
 
     // protocol 변경이나 사후 손상으로 이미 재사용할 수 없는 preview라면, 모든
     // 리밸런싱 날짜의 현재 유니버스를 다시 계산할 이유가 없다. 저장된 union만으로
     // coverage를 먼저 탈락시키고, 통과한 preview에만 비싼 schedule stale 검증을 한다.
     // action을 먼저 보는 것은 parser protocol 변경처럼 값싼 version 판정만으로
     // 즉시 탈락할 수 있는 경로에서 재무 fact manifest 재해시까지 하지 않기 위해서다.
-    const storedPreview = this.getPreview(completed.id);
+    const storedPreview = this.getPreview(completedId);
     if (
       !storedPreview
       || this.corporateActionCoverageFailure(input, strategy, storedPreview.unionSymbols) !== null
@@ -353,6 +417,17 @@ export class BacktestPreparationOrchestrator {
     }
     this.registerUniverse(current.attempt);
     return currentPreview;
+  }
+
+  /** Preview route also moves its potentially wide fundamental presence query off the HTTP process. */
+  async getReadyPreviewDetails(input: PreparationInput): Promise<ReadyPreviewDetails | null> {
+    if (this.execution !== null) {
+      if (!this.hasCompletedPreview(input)) return null;
+      return this.execution.getReadyPreviewDetails(input);
+    }
+    const preview = await this.getReadyPreview(input);
+    if (preview === null) return null;
+    return { preview, fundamentalSymbols: this.fundamentalSymbols(input, preview) };
   }
 
   /** 외부 호출 없이 현재 저장소에 확인되는 종목별 결손을 적용해 cached schedule을 재검증한다. */
@@ -397,7 +472,7 @@ export class BacktestPreparationOrchestrator {
             strategy,
             attempt.schedule,
           ),
-          ...this.candleDataExclusions(input, attempt.schedule),
+          ...await this.candleDataExclusions(input, attempt.schedule),
         ],
         excludedSymbols,
         exclusions,
@@ -408,6 +483,7 @@ export class BacktestPreparationOrchestrator {
 
   /** 라우트가 DART 미설정 503을 실제 sync 필요 요청에만 적용할 때 쓴다. */
   async needsDart(input: PreparationInput): Promise<boolean> {
+    if (this.execution !== null) return this.execution.needsDart(input);
     const strategy = this.requireStrategy(input);
     const attempt = await this.deps.resolver.resolveOrDescribeNeeds(input.universeRule, input.period);
     if (attempt.kind === 'NEEDS_DATA') {
@@ -454,13 +530,20 @@ export class BacktestPreparationOrchestrator {
   }
 
   cancel(jobId: string): boolean {
-    const current = this.getRow(jobId);
+    const current = this.getDtoRow(jobId);
     if (!current) return false;
     const status = current.status as PreparationStatus;
     if (TERMINAL_STATUSES.includes(status)) return true;
+    const executionWillSettle = this.execution?.cancel(jobId) ?? false;
     if (status === 'WAITING_DAILY_QUOTA') {
       this.clearResumeTimer(jobId);
-      this.persistAndEmit(jobId, { status: 'CANCELLED', cancelRequested: true }, ['WAITING_DAILY_QUOTA']);
+      this.persistAndEmit(
+        jobId,
+        executionWillSettle
+          ? { cancelRequested: true }
+          : { status: 'CANCELLED', cancelRequested: true },
+        ['WAITING_DAILY_QUOTA'],
+      );
       return true;
     }
     // QUEUED는 허용 전이표를 지키기 위해 cancelRequested만 남긴다. runner가
@@ -471,7 +554,11 @@ export class BacktestPreparationOrchestrator {
   }
 
   recoverOrphaned(): void {
-    const rows = this.deps.database.db.select().from(backtestPreparationJobs).all();
+    const rows = this.deps.database.db
+      .select(PREPARATION_RECOVERY_SELECTION)
+      .from(backtestPreparationJobs)
+      .where(inArray(backtestPreparationJobs.status, [...ACTIVE_STATUSES]))
+      .all();
     for (const row of rows) {
       const status = row.status as PreparationStatus;
       if (!ACTIVE_STATUSES.includes(status)) continue;
@@ -517,6 +604,8 @@ export class BacktestPreparationOrchestrator {
     for (const timer of this.resumeTimers.values()) clearTimeout(timer);
     this.resumeTimers.clear();
     this.listeners.clear();
+    this.unsubscribeExecutionUpdates?.();
+    await this.execution?.stop();
     await this.runnerPromise;
   }
 
@@ -549,14 +638,23 @@ export class BacktestPreparationOrchestrator {
     if (!claimed || claimed.status !== 'RUNNING') return;
 
     this.runnerActive = true;
-    const runner = this.run(claimed.id)
+    const runner = (this.execution?.runClaimedJob(claimed.id) ?? this.runClaimedJob(claimed.id))
       .catch((error: unknown) => {
+        const current = this.getRow(claimed.id);
+        if (!this.stopping && current?.status === 'RUNNING') {
+          if (current.cancelRequested) this.finishCancelledIfRequested(claimed.id);
+          else this.fail(
+            claimed.id,
+            error instanceof Error ? error.message : String(error),
+          );
+        }
         this.deps.logger.error(
           { module: 'backtest', event: 'preparation.unhandled', jobId: claimed.id, err: error },
           'backtest preparation rejected outside run handler',
         );
       })
       .finally(() => {
+        this.afterClaimedJobSettled(claimed.id);
         this.runnerActive = false;
         if (this.runnerPromise === runner) this.runnerPromise = null;
         if (!this.stopping) this.queuePump();
@@ -564,7 +662,8 @@ export class BacktestPreparationOrchestrator {
     this.runnerPromise = runner;
   }
 
-  private async run(jobId: string): Promise<void> {
+  /** Used by the isolated child after the parent has durably claimed QUEUED -> RUNNING. */
+  async runClaimedJob(jobId: string): Promise<void> {
     try {
       const row = this.getRow(jobId);
       if (!row) return;
@@ -635,7 +734,11 @@ export class BacktestPreparationOrchestrator {
             strategy,
             finalAttempt.schedule,
           ),
-          ...this.candleDataExclusions(input, finalAttempt.schedule),
+          ...await this.candleDataExclusions(
+            input,
+            finalAttempt.schedule,
+            () => this.cancelOrStopRequested(jobId),
+          ),
         ];
         if (finalDataExclusions.length > 0) {
           const addedSymbol = this.recordDataExclusions(
@@ -1101,77 +1204,66 @@ export class BacktestPreparationOrchestrator {
     return exclusions;
   }
 
+  private fundamentalSymbols(
+    input: PreparationInput,
+    preview: BacktestUniversePreview,
+  ): readonly string[] {
+    const candles = this.deps.candleCoverage;
+    if (candles?.getLastTsInWindows === undefined) return [];
+    const factCutoffs = financialFactCutoffsFromCoverage({
+      period: input.period,
+      schedule: preview.schedule.map((entry) => ({
+        rebalanceDate: entry.rebalanceDate,
+        symbols: entry.members.map((member) => member.symbol),
+      })),
+      delistedTsMsBySymbol: delistedEventsToTsMsBySymbol(
+        this.deps.symbolMaster.delistedEventsBetween(input.period.from, input.period.to),
+      ),
+      candles: candles as Pick<CandleCoverageService, 'getLastTsInWindows'>,
+    });
+    const available = this.deps.financialFacts.symbolsWithFinancialFacts(factCutoffs);
+    return preview.unionSymbols.filter((symbol) => available.has(symbol));
+  }
+
   /**
    * 기간 전체 KRX 수집이 끝난 뒤에도 활성 멤버에게 유효 봉이 없으면 그 종목만
    * 제외한다. 거래불가일과 최초 상장폐지 이후는 worker와 동일하게 정상 공백이다.
    */
-  private candleDataExclusions(
+  private async candleDataExclusions(
     input: PreparationInput,
     schedule: readonly UniverseScheduleEntry[],
-  ): BacktestDataExclusion[] {
+    shouldStop: () => boolean = () => this.stopping,
+  ): Promise<BacktestDataExclusion[]> {
     const readTradingDays = this.deps.symbolMaster.tradingDaysBetween;
     const readValidDates = this.deps.candleCoverage?.getValidDatesByCodeBetween;
     if (readTradingDays === undefined || readValidDates === undefined || schedule.length === 0) {
       return [];
     }
-    const symbols = unionSymbols(schedule);
-    if (symbols.length === 0) return [];
+    if (unionSymbols(schedule).length === 0) return [];
     const tradingDays = readTradingDays.call(
       this.deps.symbolMaster,
       input.period.from,
       input.period.to,
     );
-    const validDatesByCode = readValidDates.call(
-      this.deps.candleCoverage,
-      symbols,
-      input.period.from,
-      input.period.to,
-    );
-    const nonTrading = new Set(
-      this.deps.symbolMaster.nonTradingDaysBetween(input.period.from, input.period.to)
-        .map((row) => `${row.date}\0${row.shortCode}`),
-    );
-    const firstDelistedBySymbol = new Map<string, string>();
-    for (const event of this.deps.symbolMaster.delistedEventsBetween(
-      input.period.from,
-      input.period.to,
-    )) {
-      const previous = firstDelistedBySymbol.get(event.shortCode);
-      if (previous === undefined || event.effectiveDate < previous) {
-        firstDelistedBySymbol.set(event.shortCode, event.effectiveDate);
-      }
-    }
-    const validSets = new Map(
-      [...validDatesByCode].map(([symbol, dates]) => [symbol, new Set(dates)] as const),
-    );
-    const sortedSchedule = [...schedule].sort((left, right) => left.fromTsMs - right.fromTsMs);
-    const missing = new Map<string, { firstDate: string; count: number }>();
-    let scheduleIndex = 0;
-    for (const date of tradingDays) {
-      const tsMs = Date.parse(`${date}T00:00:00Z`);
-      while (
-        scheduleIndex + 1 < sortedSchedule.length
-        && (sortedSchedule[scheduleIndex + 1] as UniverseScheduleEntry).fromTsMs <= tsMs
-      ) scheduleIndex += 1;
-      const active = sortedSchedule[scheduleIndex] as UniverseScheduleEntry;
-      for (const member of active.members) {
-        if (nonTrading.has(`${date}\0${member.symbol}`)) continue;
-        const delistedDate = firstDelistedBySymbol.get(member.symbol);
-        if (delistedDate !== undefined && delistedDate <= date) continue;
-        if (validSets.get(member.symbol)?.has(date) === true) continue;
-        const previous = missing.get(member.symbol);
-        missing.set(member.symbol, {
-          firstDate: previous?.firstDate ?? date,
-          count: (previous?.count ?? 0) + 1,
-        });
-      }
-    }
-    return [...missing].map(([symbol, detail]) => ({
-      symbol,
-      category: 'KRX_PRICE' as const,
-      periodKey: detail.firstDate,
-      reason: `확정 유니버스 활성 기간의 KRX 일봉 ${detail.count}일 누락`,
-    }));
+    return findCandleDataExclusions({
+      period: input.period,
+      schedule,
+      tradingDays,
+      delistedEvents: this.deps.symbolMaster.delistedEventsBetween(
+        input.period.from,
+        input.period.to,
+      ),
+      readValidDates: (codes, from, to) => readValidDates.call(
+        this.deps.candleCoverage,
+        codes,
+        from,
+        to,
+      ),
+      readNonTradingDays: (from, to, codes) => (
+        this.deps.symbolMaster.nonTradingDaysBetween(from, to, codes)
+      ),
+      shouldStop,
+    });
   }
 
   private runFactRequest(
@@ -1553,7 +1645,9 @@ export class BacktestPreparationOrchestrator {
     return strategy;
   }
 
-  private normalizeRecoveredRequest(row: PreparationJobRow): void {
+  private normalizeRecoveredRequest(
+    row: PreparationJobDtoRow & Pick<PreparationJobRow, 'requestJson'>,
+  ): void {
     try {
       const input = parseStoredPreparationInput(row.requestJson);
       const strategy = this.requireStrategy(input);
@@ -1579,6 +1673,78 @@ export class BacktestPreparationOrchestrator {
       .from(backtestPreparationJobs)
       .where(eq(backtestPreparationJobs.id, jobId))
       .get() ?? null;
+  }
+
+  private getDtoRow(jobId: string): PreparationJobDtoRow | null {
+    return this.deps.database.db
+      .select(PREPARATION_DTO_SELECTION)
+      .from(backtestPreparationJobs)
+      .where(eq(backtestPreparationJobs.id, jobId))
+      .get() ?? null;
+  }
+
+  private hasCompletedPreview(input: PreparationInput): boolean {
+    const strategy = this.requireStrategy(input);
+    const requestHash = backtestPreparationRequestHash(input, strategy);
+    return this.latestCompletedPreviewId(requestHash) !== null;
+  }
+
+  private latestCompletedPreviewId(requestHash: string): string | null {
+    return this.deps.database.db
+      .select({ id: backtestPreparationJobs.id })
+      .from(backtestPreparationJobs)
+      .where(and(
+        eq(backtestPreparationJobs.requestHash, requestHash),
+        eq(backtestPreparationJobs.status, 'COMPLETED'),
+        isNotNull(backtestPreparationJobs.previewJson),
+      ))
+      .orderBy(desc(backtestPreparationJobs.createdAtMs))
+      .limit(1)
+      .get()?.id ?? null;
+  }
+
+  private afterClaimedJobSettled(jobId: string): void {
+    const current = this.getRow(jobId);
+    if (!current) return;
+    if (!this.stopping && current.status === 'WAITING_DAILY_QUOTA' && current.cancelRequested) {
+      this.persistAndEmit(
+        jobId,
+        { status: 'CANCELLED', error: '사용자가 준비 작업을 취소했습니다.' },
+        ['WAITING_DAILY_QUOTA'],
+      );
+      return;
+    }
+    if (!this.stopping && current.status === 'RUNNING' && current.cancelRequested) {
+      this.finishCancelledIfRequested(jobId);
+      return;
+    }
+    if (!this.stopping && current.status === 'RUNNING') {
+      this.fail(jobId, '준비 자식 프로세스가 완료 상태를 저장하지 않고 종료됐습니다.');
+      return;
+    }
+    if (
+      !this.stopping
+      && current.status === 'WAITING_DAILY_QUOTA'
+      && current.nextResumeAtMs !== null
+    ) {
+      this.scheduleResume(jobId, current.nextResumeAtMs);
+    }
+    this.emitCurrent(jobId);
+  }
+
+  private emitCurrent(jobId: string): void {
+    const snapshot = this.get(jobId);
+    if (!snapshot) return;
+    for (const listener of this.listeners.get(jobId) ?? []) {
+      try {
+        listener(snapshot);
+      } catch (error) {
+        this.deps.logger.warn(
+          { module: 'backtest', event: 'preparation.listener-failed', jobId, err: error },
+          'preparation listener failed',
+        );
+      }
+    }
   }
 
   /**
@@ -1618,16 +1784,8 @@ export class BacktestPreparationOrchestrator {
     const changed = mutate.immediate();
     const snapshot = this.get(jobId);
     if (!changed || !snapshot) return snapshot;
-    for (const listener of this.listeners.get(jobId) ?? []) {
-      try {
-        listener(snapshot);
-      } catch (error) {
-        this.deps.logger.warn(
-          { module: 'backtest', event: 'preparation.listener-failed', jobId, err: error },
-          'preparation listener failed',
-        );
-      }
-    }
+    this.emitCurrent(jobId);
+    this.deps.onJobUpdated?.(jobId);
     return snapshot;
   }
 }
@@ -1678,7 +1836,7 @@ function nextKstMidnightMs(nowMs: number): number {
   return Date.UTC(year, month - 1, day + 1) - 9 * 60 * 60 * 1000;
 }
 
-function toDto(row: PreparationJobRow): BacktestPreparationJobDto {
+function toDto(row: PreparationJobDtoRow): BacktestPreparationJobDto {
   return {
     id: row.id,
     requestHash: row.requestHash,

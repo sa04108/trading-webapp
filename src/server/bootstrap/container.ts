@@ -88,6 +88,11 @@ import { RemoteWorkerService } from '../modules/backtest/application/remote-work
 import { RemoteInputBundleManager } from '../modules/backtest/infrastructure/remote-input-bundle-manager.js';
 import { RemoteResultUploadManager } from '../modules/backtest/infrastructure/remote-result-upload-manager.js';
 import { ForkedRemoteResultCompleter } from '../modules/backtest/infrastructure/forked-remote-result-completer.js';
+import {
+  ForkedBacktestPreparationExecutor,
+  type ForkedPreparationExecutorOptions,
+} from '../modules/backtest/infrastructure/forked-backtest-preparation-executor.js';
+import type { BacktestPreparationExecutionLane } from '../modules/backtest/application/backtest-preparation-execution.js';
 import { kstDateOf } from '../modules/market-data/domain/kst-date.js';
 
 export interface SystemStatusProviders {
@@ -158,7 +163,18 @@ function readAppVersion(): string {
   }
 }
 
-export function createContainer(config: AppConfig): Container {
+export interface CreateContainerOptions {
+  /** Focused tests can retain deterministic inline dependencies; non-test app defaults to forked. */
+  readonly preparationExecution?: 'inline' | 'forked';
+  readonly preparationExecutorOptions?: ForkedPreparationExecutorOptions;
+  /** Narrow deterministic lifecycle seam; application callers should use preparationExecution. */
+  readonly preparationExecutionLane?: BacktestPreparationExecutionLane;
+}
+
+export function createContainer(
+  config: AppConfig,
+  options: CreateContainerOptions = {},
+): Container {
   configureZodLocale();
   const logger = createLogger(config);
 
@@ -355,6 +371,19 @@ export function createContainer(config: AppConfig): Container {
 
   // 알림 리스너와 라우트가 같은 인스턴스를 봐야 한다 — 두 개를 만들면 등록 목록이 갈라진다
   const strategyRegistry = new StrategyRegistry();
+  const preparationExecutionMode = options.preparationExecution
+    ?? (config.nodeEnv === 'test' ? 'inline' : 'forked');
+  const preparationExecution = options.preparationExecutionLane
+    ?? (preparationExecutionMode === 'forked'
+      ? new ForkedBacktestPreparationExecutor(config, logger, {
+          ...options.preparationExecutorOptions,
+          onNotificationCreated: (notification) => {
+            options.preparationExecutorOptions?.onNotificationCreated?.(notification);
+            // The child already inserted this row. Emit only, otherwise unread/list would duplicate it.
+            notificationService.events.emit('notification', notification);
+          },
+        })
+      : null);
   const backtestPreparationOrchestrator = new BacktestPreparationOrchestrator({
     database,
     resolver: universeRuleResolver,
@@ -369,7 +398,8 @@ export function createContainer(config: AppConfig): Container {
     clock,
     logger,
     externalApiUsage,
-  });
+    financialFacts: financialFactAvailabilityService,
+  }, preparationExecution);
   const resultsService = new ResultsService(database.db);
   const backtestWizardDraftService = new BacktestWizardDraftService(database.db, clock);
 

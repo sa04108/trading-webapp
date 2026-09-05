@@ -359,6 +359,13 @@ export class UniverseRuleResolver {
     const checkedActionCoverageSymbols = new Set<string>();
     const actionFactsBySymbol = new Map<string, Fact[]>();
     const checkedActionFactSymbols = new Set<string>();
+    // 자본변동 매칭은 종목별로 독립이다. resolve 호출 수명 동안 한 종목의 전체
+    // fact/change 그래프를 한 번만 준비해 월별 리밸런스마다 같은 min-cost flow를
+    // 다시 풀지 않는다. 다음 resolve는 새 Map을 만들어 sync 결과를 즉시 본다.
+    const alignedActionGraphBySymbol = new Map<
+      string,
+      ReturnType<typeof alignCorporateActionEffectiveDates>
+    >();
 
     const readActionCoverage = (
       codes: readonly string[],
@@ -400,6 +407,54 @@ export class UniverseRuleResolver {
         }
       }
       return requested.flatMap((code) => actionFactsBySymbol.get(code) ?? []);
+    };
+
+    const prepareActionGraphs = async (
+      codes: readonly string[],
+    ): Promise<ReadonlyMap<string, ReturnType<typeof alignCorporateActionEffectiveDates>>> => {
+      const requested = [...new Set(codes)];
+      const missing = requested.filter((code) => !alignedActionGraphBySymbol.has(code));
+      if (missing.length === 0) return alignedActionGraphBySymbol;
+
+      await readActionFacts(missing);
+      throwIfStopped();
+      const factsToPrepare = missing.flatMap((code) => actionFactsBySymbol.get(code) ?? []);
+      const rawRange = corporateActionRawDateRange(factsToPrepare);
+      const changes = rawRange === null
+        ? []
+        : this.deps.symbolMaster.sharesChangesBetween(
+            addCalendarDays(
+              rawRange.from,
+              -CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays,
+            ),
+            addCalendarDays(
+              rawRange.to,
+              CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays,
+            ),
+            missing,
+          );
+      const changesBySymbol = new Map<string, Array<(typeof changes)[number]>>();
+      for (const change of changes) {
+        const symbolChanges = changesBySymbol.get(change.shortCode) ?? [];
+        symbolChanges.push(change);
+        changesBySymbol.set(change.shortCode, symbolChanges);
+      }
+
+      // 한 종목의 전체 시간 그래프가 취소 가능한 최소 작업 단위다. 각 그래프 뒤에
+      // event loop를 넘겨 inline 실행에서도 HTTP/cancel 신호가 다음 종목 전에 처리된다.
+      for (const code of missing) {
+        throwIfStopped();
+        alignedActionGraphBySymbol.set(
+          code,
+          alignCorporateActionEffectiveDates(
+            actionFactsBySymbol.get(code) ?? [],
+            changesBySymbol.get(code) ?? [],
+          ),
+        );
+        await yieldToEventLoop();
+      }
+      throwIfStopped();
+      return alignedActionGraphBySymbol;
     };
 
     const assertFreshIdentitySelections = (
@@ -834,6 +889,7 @@ export class UniverseRuleResolver {
             : this.deps.symbolMaster.sharesChangesBetween(
                 executionChangeFrom,
                 effectiveDate,
+                actionCandidateCodes,
               );
           const relevantGaps = findRelevantCorporateActionGaps(
             new Map(actionCandidateCodes.map((code) => [
@@ -872,45 +928,33 @@ export class UniverseRuleResolver {
             }
           }
 
-          const loaded = await readActionFacts(codes);
-          throwIfStopped();
+          const actionGraphs = await prepareActionGraphs(codes);
           const rankableCodes = new Set(codes.filter((code) => (
             (lookbackHistories.get(code)?.length ?? 0) === stage.lookbackTradingDays
           )));
-          const rawActionFacts = loaded.filter((fact) => fact.field === CORPORATE_ACTION_FIELD);
-          const rawActionRange = corporateActionRawDateRange(rawActionFacts);
-          const sharesChanges = rawActionRange === null
-            ? []
-            : this.deps.symbolMaster.sharesChangesBetween(
-                addCalendarDays(
-                  rawActionRange.from,
-                  -CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays,
-                ),
-                addCalendarDays(
-                  rawActionRange.to,
-                  CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays,
-                ),
-              );
           // worker와 동일한 전체 fact/change 그래프를 먼저 정렬한다. 관련 fact만 잘라
           // 매칭하면 범위 밖 사건이 같은 change를 요구할 때 resolver와 worker가 한
-          // 사건을 서로 다른 날짜로 옮길 수 있다.
-          const aligned = alignCorporateActionEffectiveDates(rawActionFacts, sharesChanges);
-          const relevantUnaligned = aligned.unaligned.filter((action) => {
-            if (!rankableCodes.has(action.symbol)) return false;
-            const history = lookbackHistories.get(action.symbol) ?? [];
-            const first = history[0];
-            const last = history[history.length - 1];
-            if (first === undefined || last === undefined) return false;
-            const firstDate = new Date(first.tsMs).toISOString().slice(0, 10);
-            const lastDate = new Date(last.tsMs).toISOString().slice(0, 10);
-            return action.periodKey >= addCalendarDays(
-              firstDate,
-              1 - CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays,
-            ) && action.periodKey <= addCalendarDays(
-              lastDate,
-              CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays,
-            );
-          });
+          // 사건을 서로 다른 날짜로 옮길 수 있다. 그래프는 종목별로 독립이므로 호출
+          // 수명 cache의 per-symbol 결과를 합쳐도 전체 호출과 결과가 정확히 같다.
+          const alignedFacts = codes.flatMap((code) => actionGraphs.get(code)?.facts ?? []);
+          const relevantUnaligned = codes
+            .flatMap((code) => actionGraphs.get(code)?.unaligned ?? [])
+            .filter((action) => {
+              if (!rankableCodes.has(action.symbol)) return false;
+              const history = lookbackHistories.get(action.symbol) ?? [];
+              const first = history[0];
+              const last = history[history.length - 1];
+              if (first === undefined || last === undefined) return false;
+              const firstDate = new Date(first.tsMs).toISOString().slice(0, 10);
+              const lastDate = new Date(last.tsMs).toISOString().slice(0, 10);
+              return action.periodKey >= addCalendarDays(
+                firstDate,
+                1 - CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays,
+              ) && action.periodKey <= addCalendarDays(
+                lastDate,
+                CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays,
+              );
+            });
           if (relevantUnaligned.length > 0) {
             if (stageReady && !hasUnresolvedStage) {
               for (const action of relevantUnaligned) {
@@ -939,7 +983,7 @@ export class UniverseRuleResolver {
               stageReady = false;
             }
           }
-          const view = new PitFactView(aligned.facts);
+          const view = new PitFactView(alignedFacts);
           rows = candidates.map((entry) => {
             if (excludedByActionGap.has(entry.shortCode)) {
               return { standardCode: entry.standardCode, shortCode: entry.shortCode, value: null };
@@ -1122,6 +1166,10 @@ function yearsBetween(from: string, to: string): number[] {
     years.push(year);
   }
   return years;
+}
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
 }
 
 interface ExactPositiveRatio {

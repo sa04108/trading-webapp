@@ -196,6 +196,42 @@ describe('거래불가일 조회', () => {
     await teardown(ctx);
   });
 
+  it('요청한 코드만 500개씩 조회하고 중복 제거 뒤 전체 날짜·코드 순서를 유지한다', async () => {
+    const ctx = await setup();
+    ctx.t.container.database.db.insert(krxNonTradingDays).values([
+      { date: '2021-06-16', shortCode: '000500', market: 'KOSDAQ', lastClose: 500 },
+      { date: '2021-06-15', shortCode: '000500', market: 'KOSDAQ', lastClose: 501 },
+      { date: '2021-06-15', shortCode: '000499', market: 'KOSDAQ', lastClose: 499 },
+      { date: '2021-06-15', shortCode: '999999', market: 'KOSDAQ', lastClose: 999 },
+    ]).run();
+    const requestedCodes = [
+      ...Array.from({ length: 501 }, (_, index) => index.toString().padStart(6, '0')),
+      '000499',
+      '000500',
+    ];
+
+    expect(ctx.svc.nonTradingDaysBetween(
+      '2021-06-15',
+      '2021-06-16',
+      requestedCodes,
+    )).toEqual([
+      { date: '2021-06-15', shortCode: '000499', lastClose: 499 },
+      { date: '2021-06-15', shortCode: '000500', lastClose: 501 },
+      { date: '2021-06-16', shortCode: '000500', lastClose: 500 },
+    ]);
+    await teardown(ctx);
+  });
+
+  it('빈 코드 범위는 전체 조회가 아니라 즉시 빈 결과다', async () => {
+    const ctx = await setup();
+    ctx.t.container.database.db.insert(krxNonTradingDays).values({
+      date: '2021-06-15', shortCode: '215600', market: 'KOSDAQ', lastClose: 12_100,
+    }).run();
+
+    expect(ctx.svc.nonTradingDaysBetween('2021-06-15', '2021-06-15', [])).toEqual([]);
+    await teardown(ctx);
+  });
+
   it('구간 전체를 덮는 커버 행이 있어야 covered 다', async () => {
     const ctx = await setup();
     expect(ctx.svc.isNonTradingRangeCovered('2021-06-01', '2021-06-30')).toBe(false);

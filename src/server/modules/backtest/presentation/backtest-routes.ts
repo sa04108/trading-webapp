@@ -829,7 +829,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     benchmark: { pin: ReturnType<typeof benchmarkPinSchema.parse>; hash: string };
     response: BacktestUniversePreview & { fundamentalSymbols: string[] };
   } | null> => {
-    const preview = preparation.getCachedPreview(preparationInputOf(sourceRequest));
+    const preview = await preparation.getCachedPreviewIsolated(preparationInputOf(sourceRequest));
     const schedule = parseStoredSchedule(job);
     if (!preview || !schedule) return null;
     const resolved = preparedPreviewToResolved(preview);

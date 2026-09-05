@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
 import {
   dailySelectionMetrics,
@@ -239,12 +239,9 @@ describe('SymbolMasterService.isRangeCovered', () => {
   });
 });
 
-/**
- * DELISTED 이벤트는 `symbol_master_versions` 의 버전 경계를 비교해 파생한다.
- * 각 테스트는 경계일 앞의 관측 거래일을 coverage와 함께 심는다.
- */
+/** DELISTED 이벤트는 닫힌 SCD와 exact successor 유무로 파생한다. */
 describe('SymbolMasterService.delistedEventsBetween', () => {
-  it('DELISTED 이벤트의 oldValue 에서 shortCode 를 꺼낸다', async () => {
+  it('닫힌 SCD 행에서 shortCode 를 꺼낸다', async () => {
     const t = await createTestApp();
     const svc = makeService(t);
     insertCoverage(t, '2020-01-01', '2026-12-31');
@@ -359,6 +356,67 @@ describe('SymbolMasterService.delistedEventsBetween', () => {
       { shortCode: '900001', effectiveDate: '2026-03-10' },
       { shortCode: '005930', effectiveDate: '2026-05-01' },
     ]);
+    await t.close();
+  });
+
+  it('최초 관측 거래일에 닫힌 version은 baseline 폐지로 만들지 않는다', async () => {
+    const t = await createTestApp();
+    const svc = makeService(t);
+    insertCoverage(t, '2026-01-01', '2026-12-31');
+    insertVersion(
+      t,
+      entry({ standardCode: 'KR7000660001', shortCode: '000660' }),
+      '2020-01-01',
+      '2026-01-01',
+    );
+
+    expect(svc.delistedEventsBetween('2026-01-01', '2026-12-31')).toEqual([]);
+    await t.close();
+  });
+
+  it('같은 shortCode가 새 표준코드로 재상장해도 옛 표준코드의 실제 폐지는 보존한다', async () => {
+    const t = await createTestApp();
+    const svc = makeService(t);
+    insertCoverage(t, '2020-01-01', '2026-12-31');
+    insertVersion(
+      t,
+      entry({ standardCode: 'KR7000660001', shortCode: '000660', name: '옛 회사' }),
+      '2020-01-01',
+      '2026-03-10',
+    );
+    insertVersion(
+      t,
+      entry({ standardCode: 'KR7999999999', shortCode: '000660', name: '새 회사' }),
+      '2026-03-11',
+      null,
+    );
+
+    expect(svc.delistedEventsBetween('2026-01-01', '2026-12-31')).toEqual([
+      { shortCode: '000660', effectiveDate: '2026-03-10' },
+    ]);
+    await t.close();
+  });
+
+  it('closing SCD의 shortCode가 비어 있으면 폐지를 건너뛰고 경고한다', async () => {
+    const t = await createTestApp();
+    const svc = makeService(t);
+    const warn = vi.spyOn(t.container.logger, 'warn');
+    insertCoverage(t, '2020-01-01', '2026-12-31');
+    insertVersion(
+      t,
+      entry({ standardCode: 'KR7000660001', shortCode: '' }),
+      '2020-01-01',
+      '2026-03-10',
+    );
+
+    expect(svc.delistedEventsBetween('2026-01-01', '2026-12-31')).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'symbol-master.delisted-event-missing-short-code',
+        effectiveDate: '2026-03-10',
+      }),
+      expect.stringContaining('shortCode'),
+    );
     await t.close();
   });
 

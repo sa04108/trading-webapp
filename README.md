@@ -53,7 +53,12 @@ IP 를 등록제로 운영하기 때문이다. 프로비저닝이 아웃바운�
 `OUTBOUND_IP_URL` 로 지정한다.
 
 1GB 호스트의 운영 제약: 동시 백테스트 1개, 봉 수 상한 200만, 대규모 파라미터
-sweep 금지.
+sweep 금지. 유니버스 준비와 완료 미리보기 재검증은 직렬 child에서 실행하며 기본
+V8 old-space 128MiB, Linux RSS 감시 320MiB, 서로 다른 HTTP 대기 작업 8개로 제한한다.
+RSS 감시는 주기적 표본이라 hard limit가 아니며, 부모와 child를 합친 최종 경계는
+systemd `MemoryHigh=512M`/`MemoryMax=640M`이다. 준비 child와 local 백테스트 child는
+서로 다른 lane이라 동시에 실행될 수 있고, 둘 사이의 전역 메모리 admission은 없다.
+아래 준비 단독 계측은 외부 동기화·백테스트가 겹친 workload의 안전을 보장하지 않는다.
 
 배포 후 실행비용 표본은 `backtest:telemetry-report` CLI로 확인한다. 완료 10개, 입력
 규모 3종, 최소·최대 4배 차이가 모이기 전에는 병렬도 추천을 내지 않으며, 표본이 충분해도

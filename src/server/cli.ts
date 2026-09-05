@@ -6,7 +6,10 @@
  */
 import readline from 'node:readline';
 import { randomBytes } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { Writable } from 'node:stream';
+import { pathToFileURL } from 'node:url';
 import Database from 'better-sqlite3';
 import { loadConfig } from './bootstrap/config.js';
 import { createContainer } from './bootstrap/container.js';
@@ -373,6 +376,20 @@ async function main(): Promise<void> {
     case 'backtest:telemetry-report':
       backtestTelemetryReport(process.argv.slice(3));
       break;
+    case 'universe:benchmark': {
+      // 이 명령은 운영 산출물에 포함하지 않는 수동 도구다. 정적 import를 두면
+      // tsconfig.build의 rootDir 밖 scripts/가 서버 배포물로 끌려 들어온다.
+      // pnpm cli로 소스 트리에서 명시적으로 실행할 때만 동적으로 읽는다.
+      const entry = path.resolve(process.cwd(), 'scripts', 'manual', 'universe-benchmark.ts');
+      if (!fs.existsSync(entry)) {
+        throw new Error(`수동 벤치마크 도구를 찾을 수 없습니다: ${entry}`);
+      }
+      const benchmarkModule = await import(pathToFileURL(entry).href) as {
+        runUniverseBenchmarkCli(argv: readonly string[]): Promise<void>;
+      };
+      await benchmarkModule.runUniverseBenchmarkCli(process.argv.slice(3));
+      break;
+    }
     default:
       // 재무·자본변동 수집은 더 이상 CLI 명령이 아니다 — 백테스트 준비(preparation)가
       // 필요한 구간만 자동으로 수집한다(스펙 2026-08-09, D-049). 여기서 옛 `facts:sync`
@@ -388,6 +405,7 @@ async function main(): Promise<void> {
       console.log('  totp:enroll    TOTP 2단계 인증 등록·재발급 (CLI 전용)');
       console.log('  krx:backfill-non-trading  이미 수집한 구간의 거래불가일 채우기 (--from <날짜> --to <날짜>)');
       console.log('  backtest:telemetry-report  최근 실행 비용 보고서 (--since-days 30 [--worker-budget-mib N])');
+      console.log('  universe:benchmark  disposable DB 복제본에서 10년 유니버스 HTTP/SSE 성능 측정');
       process.exitCode = command ? 1 : 0;
   }
 }

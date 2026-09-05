@@ -13,6 +13,9 @@ describe('loadConfig', () => {
     expect(config.remoteBacktestLeaseSeconds).toBe(60);
     expect(config.remoteBacktestMaxAttempts).toBe(3);
     expect(config.maxQueuedBacktests).toBe(20);
+    expect(config.preparationChildMaxOldSpaceMb).toBe(128);
+    expect(config.preparationChildMaxRssMb).toBe(320);
+    expect(config.preparationExecutionMaxQueued).toBe(8);
     expect(config.sessionIdleTimeoutSeconds).toBe(43200);
     expect(config.sessionAbsoluteTimeoutSeconds).toBe(604800);
     expect(config.liveTradingEnabled).toBe(false);
@@ -50,6 +53,9 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ LOG_LEVEL: 'verbose' })).toThrow(ConfigError);
     expect(() => loadConfig({ BACKTEST_EXECUTION_MODE: 'remote' })).toThrow(ConfigError);
     expect(() => loadConfig({ BACKTEST_WORKER_TOKEN: 'short' })).toThrow(ConfigError);
+    expect(() => loadConfig({ PREPARATION_CHILD_MAX_OLD_SPACE_MB: '512' })).toThrow(ConfigError);
+    expect(() => loadConfig({ PREPARATION_CHILD_MAX_RSS_MB: '64' })).toThrow(ConfigError);
+    expect(() => loadConfig({ PREPARATION_EXECUTION_MAX_QUEUED: '0' })).toThrow(ConfigError);
   });
 
   it('requires a separate worker token in remote execution mode', () => {

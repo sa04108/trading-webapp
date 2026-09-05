@@ -834,6 +834,70 @@ describe('BacktestPreparationOrchestrator 완료 preview coverage 불변식', ()
     ctx.handle.close();
   });
 
+  it('같은 hash에서 최신 COMPLETED non-null preview 한 건만 재사용한다', async () => {
+    const ctx = makeDeps({
+      strategies: new StrategyRegistry(),
+      actionCoverage: completeActionCoverage,
+      factCoverage: {
+        getCoverageState: (symbols: readonly string[]) => new Map(
+          symbols.map((symbol) => [symbol, {
+            verifiedYears: [2025, 2026], blockingGapYears: [], blockingGapDetails: [],
+          }]),
+        ),
+      },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const job = orchestrator.start(valueInput);
+    await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
+
+    const row = ctx.handle.db.select().from(backtestPreparationJobs)
+      .where(eq(backtestPreparationJobs.id, job.id)).get();
+    const preview = orchestrator.getPreview(job.id);
+    expect(row).toBeDefined();
+    expect(preview).not.toBeNull();
+    if (!row || !preview) throw new Error('completed preview fixture missing');
+
+    ctx.handle.db.update(backtestPreparationJobs).set({
+      createdAtMs: 100,
+      previewJson: JSON.stringify({ ...preview, scheduleHash: 'stale-older-hash' }),
+    }).where(eq(backtestPreparationJobs.id, job.id)).run();
+    const base = {
+      requestHash: row.requestHash,
+      requestJson: row.requestJson,
+      phase: 'FINALIZING',
+      updatedAtMs: 200,
+    };
+    ctx.handle.db.insert(backtestPreparationJobs).values([
+      {
+        ...base,
+        id: 'prep_latest_reusable',
+        status: 'COMPLETED',
+        previewJson: JSON.stringify({ ...preview, warnings: ['latest reusable'] }),
+        createdAtMs: 200,
+      },
+      {
+        ...base,
+        id: 'prep_newer_completed_without_preview',
+        status: 'COMPLETED',
+        previewJson: null,
+        createdAtMs: 300,
+      },
+      {
+        ...base,
+        id: 'prep_newest_failed_with_preview',
+        status: 'FAILED',
+        previewJson: JSON.stringify({ ...preview, scheduleHash: 'failed-hash' }),
+        createdAtMs: 400,
+      },
+    ]).run();
+
+    expect(orchestrator.getCachedPreview(valueInput)?.warnings).toEqual(['latest reusable']);
+    expect(await orchestrator.getReadyPreview(valueInput)).not.toBeNull();
+
+    await orchestrator.stop();
+    ctx.handle.close();
+  });
+
   it('완료 뒤 현재 protocol의 action coverage가 사라지면 ready/cached preview를 재사용하지 않는다', async () => {
     const actionCovered = new Map<string, readonly number[]>([['005930', [2025, 2026]]]);
     let resolveCalls = 0;

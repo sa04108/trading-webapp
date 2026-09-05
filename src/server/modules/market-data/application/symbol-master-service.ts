@@ -14,6 +14,7 @@ import {
   or,
   sql,
 } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/sqlite-core';
 import type { Clock } from '../../../shared/clock.js';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import {
@@ -1497,21 +1498,46 @@ export class SymbolMasterService {
   /**
    * 구간 안의 거래불가일 전체. 날짜 오름차순, 같은 날짜 안에서는 코드 오름차순이다 —
    * 호출부가 이 순서를 그대로 해시에 넣을 수 있어야 재현성이 흔들리지 않는다.
+   * shortCodes를 주면 그 코드만 조회하며, 빈 목록은 전체 조회가 아니라 빈 결과다.
    */
   nonTradingDaysBetween(
     from: string,
     to: string,
+    shortCodes?: readonly string[],
   ): readonly { date: string; shortCode: string; lastClose: number }[] {
-    return this.deps.db
+    if (shortCodes !== undefined && shortCodes.length === 0) return [];
+
+    const requestedCodes = shortCodes === undefined ? undefined : [...new Set(shortCodes)];
+    const rows: { date: string; shortCode: string; lastClose: number }[] = [];
+    const load = (codes?: readonly string[]) => this.deps.db
       .select({
         date: krxNonTradingDays.date,
         shortCode: krxNonTradingDays.shortCode,
         lastClose: krxNonTradingDays.lastClose,
       })
       .from(krxNonTradingDays)
-      .where(and(gte(krxNonTradingDays.date, from), lte(krxNonTradingDays.date, to)))
-      .orderBy(asc(krxNonTradingDays.date), asc(krxNonTradingDays.shortCode))
+      .where(and(
+        gte(krxNonTradingDays.date, from),
+        lte(krxNonTradingDays.date, to),
+        codes === undefined ? undefined : inArray(krxNonTradingDays.shortCode, codes),
+      ))
       .all();
+    const append = (loaded: readonly { date: string; shortCode: string; lastClose: number }[]) => {
+      for (const row of loaded) rows.push(row);
+    };
+
+    if (requestedCodes === undefined) {
+      append(load());
+    } else {
+      for (let offset = 0; offset < requestedCodes.length; offset += 500) {
+        append(load(requestedCodes.slice(offset, offset + 500)));
+      }
+    }
+
+    return rows.sort(
+      (left, right) => left.date.localeCompare(right.date)
+        || left.shortCode.localeCompare(right.shortCode),
+    );
   }
 
   /**
@@ -1745,27 +1771,67 @@ export class SymbolMasterService {
    * [from, to] 구간에 효력이 발생한 상장폐지 이벤트. 백테스트 워커가 폐지 종목을
    * 청산하는 데 쓴다.
    *
-   * `symbol_master_events` 를 직접 읽지 않고 `listEvents` 를 거른다. 그 테이블은 SCD
-   * 이행(D-045) 전 legacy 이력일 뿐이라, 이행 후 발생한 폐지는 한 줄도 들어가지 않는다.
-   * 테이블을 읽으면 신규 폐지가 조용히 빠져 청산이 일어나지 않는데, 에러도 경고도 없이
-   * 결과만 낙관적으로 틀린다. "무엇이 폐지인가" 의 판정도 `diffUniverse` 한 곳에 남는다.
-   *
-   * shortCode 는 `oldValue` JSON 에서 꺼낸다. standardCode 만으로는 봉이 쓰는
-   * 단축코드와 이어지지 않는다 — `diffUniverse` 가 DELISTED 의 `oldValue` 에
-   * `SymbolMasterEntry` 전체를 넣으므로 정상 데이터라면 항상 있다. 파싱에 실패하거나
-   * shortCode 가 없는 행은 건너뛰고 경고를 남긴다. 조용히 버리면 워커가 왜 그 종목의
-   * 폐지를 반영하지 못했는지 아무도 추적할 수 없다.
+   * `symbol_master_events` 는 SCD 이행(D-045) 전 legacy 이력이라 읽지 않는다. 닫힌
+   * version의 validTo에 같은 표준코드 successor가 없으면 listEvents의 DELISTED와
+   * 같은 경계다. shortCode도 closing row에 있으므로 전체 이벤트 JSON을 만들 필요가 없다.
    */
   delistedEventsBetween(
     from: string,
     to: string,
   ): readonly { shortCode: string; effectiveDate: string }[] {
+    if (from > to) return [];
+    const firstObserved = this.deps.db
+      .select({ date: symbolMasterTradingDays.date })
+      .from(symbolMasterTradingDays)
+      .where(and(
+        lt(symbolMasterTradingDays.date, to),
+        storedTradingDateIsWeekday(),
+      ))
+      .orderBy(asc(symbolMasterTradingDays.date))
+      .get();
+    if (firstObserved === undefined) return [];
+
+    const closingVersions = alias(symbolMasterVersions, 'delisted_closing');
+    const exactSuccessors = alias(symbolMasterVersions, 'delisted_successor');
+    const projected = this.deps.db
+      .select({
+        standardCode: closingVersions.standardCode,
+        shortCode: closingVersions.shortCode,
+        effectiveDate: closingVersions.validToDate,
+      })
+      .from(closingVersions)
+      .leftJoin(
+        exactSuccessors,
+        and(
+          eq(exactSuccessors.standardCode, closingVersions.standardCode),
+          eq(exactSuccessors.validFromDate, closingVersions.validToDate),
+        ),
+      )
+      .where(and(
+        isNotNull(closingVersions.validToDate),
+        gte(closingVersions.validToDate, from),
+        lte(closingVersions.validToDate, to),
+        gt(closingVersions.validToDate, firstObserved.date),
+        isNull(exactSuccessors.id),
+      ))
+      .orderBy(asc(closingVersions.validToDate), asc(closingVersions.standardCode))
+      .all();
     const candidates: { standardCode: string; shortCode: string; effectiveDate: string }[] = [];
-    for (const event of this.listEvents(from, to)) {
-      if (event.eventType !== 'DELISTED') continue;
-      const shortCode = this.parseDelistedShortCode(event.oldValue, event.id, event.effectiveDate);
-      if (shortCode === undefined) continue;
-      candidates.push({ standardCode: event.standardCode, shortCode, effectiveDate: event.effectiveDate });
+    for (const row of projected) {
+      if (row.effectiveDate === null) continue;
+      if (row.shortCode.length === 0) {
+        this.deps.logger.warn(
+          {
+            module: 'market-data',
+            event: 'symbol-master.delisted-event-missing-short-code',
+            id: `${row.effectiveDate}:${row.standardCode}:DELISTED`,
+            effectiveDate: row.effectiveDate,
+          },
+          'DELISTED 경계의 closing SCD에 shortCode가 없어 건너뛴다',
+        );
+        continue;
+      }
+      candidates.push({ ...row, effectiveDate: row.effectiveDate });
     }
     if (candidates.length === 0) return [];
 
@@ -1825,13 +1891,14 @@ export class SymbolMasterService {
    * 액면분할에서 이 날이 곧 변경상장일이다. DART 가 주는 날짜는 분할 기준일이라
    * 그 사이 주권교체 정지 구간만큼 어긋난다.
    *
-   * `delistedEventsBetween` 과 같은 이유로 `symbol_master_events` 가 아니라
-   * `listEvents` 를 거른다 — 그 테이블은 SCD 이행(D-045) 전 legacy 이력이다.
-   * 저장소가 처음 관측한 날은 LISTED 라 여기 걸리지 않는다.
+   * `symbol_master_events` 는 SCD 이행(D-045) 전 legacy 이력이므로 읽지 않는다.
+   * 대신 맞닿은 SCD predecessor/after 행에서 주식수 경계만 직접 projection한다.
+   * 저장소가 처음 관측한 날은 listEvents와 같은 baseline guard로 제외한다.
    */
   sharesChangesBetween(
     from: string,
     to: string,
+    shortCodes?: readonly string[],
   ): readonly {
     shortCode: string;
     effectiveDate: string;
@@ -1839,27 +1906,70 @@ export class SymbolMasterService {
     beforeShares: number;
     afterShares: number;
   }[] {
-    const events = this.listEvents(from, to).filter((event) => event.eventType === 'SHARES_CHANGED');
-    if (events.length === 0) return [];
+    const requestedCodes = shortCodes === undefined ? undefined : [...new Set(shortCodes)];
+    if (requestedCodes?.length === 0 || from > to) return [];
 
-    // 단축코드는 이벤트에 없다 — SHARES_CHANGED 의 old/newValue 는 주식수 문자열뿐이다.
-    // 그 날 유효한 버전 행에서 읽는다. 봉·팩트가 쓰는 키가 단축코드라 표준코드로는 잇지 못한다.
-    const codes = [...new Set(events.map((event) => event.standardCode))];
-    const versions: { standardCode: string; validFromDate: string; validToDate: string | null; shortCode: string }[] = [];
-    for (let i = 0; i < codes.length; i += 500) {
-      versions.push(
-        ...this.deps.db
-          .select({
-            standardCode: symbolMasterVersions.standardCode,
-            validFromDate: symbolMasterVersions.validFromDate,
-            validToDate: symbolMasterVersions.validToDate,
-            shortCode: symbolMasterVersions.shortCode,
-          })
-          .from(symbolMasterVersions)
-          .where(inArray(symbolMasterVersions.standardCode, codes.slice(i, i + 500)))
-          .all(),
-      );
+    // listEvents와 같은 baseline guard다. 저장소가 처음 관측한 날의 validFrom은
+    // predecessor가 있더라도 이벤트가 아니며, weekday 거래일이 하나라도 그보다 앞서
+    // 관측된 경계부터만 diff로 인정한다.
+    const firstObserved = this.deps.db
+      .select({ date: symbolMasterTradingDays.date })
+      .from(symbolMasterTradingDays)
+      .where(and(
+        lt(symbolMasterTradingDays.date, to),
+        storedTradingDateIsWeekday(),
+      ))
+      .orderBy(asc(symbolMasterTradingDays.date))
+      .get();
+    if (firstObserved === undefined) return [];
+
+    const beforeVersions = alias(symbolMasterVersions, 'shares_before');
+    const afterVersions = alias(symbolMasterVersions, 'shares_after');
+    const readRows = (codes: readonly string[] | undefined) => this.deps.db
+      .select({
+        standardCode: afterVersions.standardCode,
+        shortCode: afterVersions.shortCode,
+        effectiveDate: afterVersions.validFromDate,
+        beforeShares: beforeVersions.sharesOutstanding,
+        afterShares: afterVersions.sharesOutstanding,
+      })
+      .from(afterVersions)
+      .innerJoin(
+        beforeVersions,
+        and(
+          eq(beforeVersions.standardCode, afterVersions.standardCode),
+          // idx_smv_code_from으로 직전 version을 한 건만 찾는다. validTo 경계끼리
+          // 바로 join하면 같은 날짜에 수천 종목이 닫힐 때 후보를 서로 반복 탐색한다.
+          sql`${beforeVersions.validFromDate} = (
+            SELECT max(candidate.valid_from_date)
+            FROM symbol_master_versions AS candidate
+            WHERE candidate.standard_code = ${afterVersions.standardCode}
+              AND candidate.valid_from_date < ${afterVersions.validFromDate}
+          )`,
+          eq(beforeVersions.validToDate, afterVersions.validFromDate),
+        ),
+      )
+      .where(and(
+        gte(afterVersions.validFromDate, from),
+        lte(afterVersions.validFromDate, to),
+        gt(afterVersions.validFromDate, firstObserved.date),
+        sql`${beforeVersions.sharesOutstanding} <> ${afterVersions.sharesOutstanding}`,
+        codes === undefined ? undefined : inArray(afterVersions.shortCode, codes),
+      ))
+      .orderBy(asc(afterVersions.validFromDate), asc(afterVersions.standardCode))
+      .all();
+
+    const rows = requestedCodes === undefined ? readRows(undefined) : [];
+    if (requestedCodes !== undefined) {
+      for (let index = 0; index < requestedCodes.length; index += 500) {
+        for (const row of readRows(requestedCodes.slice(index, index + 500))) rows.push(row);
+      }
     }
+    rows.sort((left, right) => (
+      left.effectiveDate.localeCompare(right.effectiveDate)
+      || left.shortCode.localeCompare(right.shortCode)
+      || left.standardCode.localeCompare(right.standardCode)
+    ));
 
     const result: {
       shortCode: string;
@@ -1868,20 +1978,13 @@ export class SymbolMasterService {
       beforeShares: number;
       afterShares: number;
     }[] = [];
-    for (const event of events) {
-      const before = Number(JSON.parse(event.oldValue ?? 'null') as unknown);
-      const after = Number(JSON.parse(event.newValue ?? 'null') as unknown);
+    for (const row of rows) {
+      const before = Number(row.beforeShares);
+      const after = Number(row.afterShares);
       if (!Number.isFinite(before) || !Number.isFinite(after) || before <= 0 || after <= 0) continue;
-      const version = versions.find(
-        (row) =>
-          row.standardCode === event.standardCode
-          && row.validFromDate <= event.effectiveDate
-          && (row.validToDate === null || row.validToDate > event.effectiveDate),
-      );
-      if (version === undefined) continue;
       result.push({
-        shortCode: version.shortCode,
-        effectiveDate: event.effectiveDate,
+        shortCode: row.shortCode,
+        effectiveDate: row.effectiveDate,
         ratio: after / before,
         beforeShares: before,
         afterShares: after,
@@ -1891,66 +1994,6 @@ export class SymbolMasterService {
       (a, b) =>
         a.effectiveDate.localeCompare(b.effectiveDate) || a.shortCode.localeCompare(b.shortCode),
     );
-  }
-
-  /**
-   * DELISTED 이벤트 한 건의 oldValue 에서 shortCode 를 꺼낸다. 실패하면 경고를 남기고 undefined 를 돌려준다.
-   *
-   * 아래 세 분기(oldValue 없음·파싱 실패·shortCode 없음)는 단위 테스트가 없다. `listEvents`
-   * 가 만드는 DELISTED oldValue 는 `diffUniverse` 가 항상 `SymbolMasterEntry` 전체를
-   * JSON.stringify 한 값이라 그 모양이 유지되는 한 이 분기들에 실제로 도달할 경로가 없다.
-   * 그래도 지우지 않는 이유는 diffUniverse 의 오래된 값이 언젠가 바뀔 수 있어서다 — 그때도
-   * 이 메서드가 throw 대신 skip+warn 으로 물러나야 손상된 이벤트 한 건이 백테스트 실행
-   * 전체를 끌고 내려가지 않는다.
-   */
-  private parseDelistedShortCode(
-    oldValue: string | null,
-    id: string,
-    effectiveDate: string,
-  ): string | undefined {
-    if (oldValue === null) {
-      this.deps.logger.warn(
-        {
-          module: 'market-data',
-          event: 'symbol-master.delisted-event-missing-old-value',
-          id,
-          effectiveDate,
-        },
-        'DELISTED 이벤트에 oldValue 가 없어 건너뛴다',
-      );
-      return undefined;
-    }
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(oldValue);
-    } catch {
-      this.deps.logger.warn(
-        {
-          module: 'market-data',
-          event: 'symbol-master.delisted-event-parse-failed',
-          id,
-          effectiveDate,
-        },
-        'DELISTED 이벤트의 oldValue 파싱에 실패해 건너뛴다',
-      );
-      return undefined;
-    }
-
-    const shortCode = (parsed as { shortCode?: unknown } | null)?.shortCode;
-    if (typeof shortCode !== 'string' || shortCode.length === 0) {
-      this.deps.logger.warn(
-        {
-          module: 'market-data',
-          event: 'symbol-master.delisted-event-missing-short-code',
-          id,
-          effectiveDate,
-        },
-        'DELISTED 이벤트의 oldValue 에 shortCode 가 없어 건너뛴다',
-      );
-      return undefined;
-    }
-    return shortCode;
   }
 
   /** classifyKrxIssue 로 instrumentType 을 매겨 전 종목을 유니버스에 보관한다. */
