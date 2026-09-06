@@ -119,3 +119,57 @@ KOSPI·KOSDAQ 추세용 입력은 각 `KOSPI-reference.json`, `KOSDAQ-reference.
 
 원문 가격에 접근할 수 없는 환경에서는 데이터 추출을 검증하는 합성 테스트와 코드
 검사까지만 재현할 수 있다. 실제 성과가 재현된 것으로 표시하지 않는다.
+
+## 2차 연구: QLD·GLD 고정 배분
+
+[추가 보고서](../../docs/research/diversified-strategy-report.md)의 남길 후보는 QLD 40%·GLD 60%
+월간 재조정이다. 수익 목표와 민감도는 통과했지만 **달러의 사전 샤프·낙폭 관문은 미달**이다.
+새 독립 홀드아웃으로 표시하지 않는다. 첫 연구의 실패 기록도 유지한다.
+
+보존 원문이 있는 환경에서는 다음 순서로 실행한다. 아래 `replay-*` 출력은 새 경로여야 한다.
+
+```bash
+"$TASK_PYTHON" scripts/research/diversified_data.py \
+  --data "$TASK_RESEARCH_DIR" --output "$TASK_RESEARCH_DIR/replay-diversified-panel"
+
+"$TASK_PYTHON" scripts/research/diversified_validation.py \
+  --panel "$TASK_RESEARCH_DIR/replay-diversified-panel" \
+  --fred "$TASK_RESEARCH_DIR/fred_diversified.jsonl" \
+  --issuer "$TASK_RESEARCH_DIR/us-diversification/QQQ-invesco-performance.json" \
+  --output "$TASK_RESEARCH_DIR/replay-diversified-validation.json"
+
+"$TASK_PYTHON" scripts/research/export_diversified_report.py \
+  --source "$TASK_RESEARCH_DIR/replay-diversified-validation.json" \
+  --panel "$TASK_RESEARCH_DIR/replay-diversified-panel" \
+  --development "$TASK_RESEARCH_DIR/diversified-development" \
+  --output "$TASK_RESEARCH_DIR/replay-diversified-report"
+```
+
+기본 계산기 단독 CLI는 기본 원금 10만 달러를 사용한다. 최종 보고서와 같은 1억원·
+초기 환전 조건은 `diversified_validation.py`가 적용하므로 단독 CLI 숫자를 원화 보고서와
+혼동하지 않는다. 전체 검증은 수분이 걸릴 수 있다.
+
+새 공개 원문은 `fetch_diversified.py NEW_ROOT/us-diversification`으로 수집한다.
+GLD의 2010년 이후 차트 두 조각은 기존 `fetch_etf_prices.py NEW_ROOT/us-etf`로 준비한다.
+FRED는 다음 네 시리즈를 한 파일로 수집할 수 있다.
+
+```bash
+"$TASK_PYTHON" scripts/research/fetch_fred.py \
+  --series NASDAQ100 DTB3 DEXKOUS IR3TIB01KRM156N \
+  --start 1999-01-01 --end 2026-09-04 \
+  --output NEW_ROOT/fred_diversified.jsonl
+```
+
+공식 NAV·분할·성과 API는 현재 자료를 제공하므로 나중에 조회하면 기준일과 원문 해시가
+바뀔 수 있다. 특히 Invesco 비교는 응답 `effectiveDate=2026-08-31`인 보존 원문을 사용해야
+이 보고서와 같은 날짜가 된다. 향후 분할을 포함하는 새 차트와 오래된 분할 CSV를 섞지 않는다.
+코드의 2025년 분할 일자 예외는 공식 적용일 근거와 함께 보존되어 있다.
+
+추가 개발 재현에는 `diversified_backtest.py`로 규약의 9개+3개 조합을 실행하고,
+`trend_diversified.py --panel PANEL --fred FRED --output NEW_FILE`로 추세 방어 개발 관문을
+실행한다. 과거 개발 조합은 당시의 단순 비용 모델을 썼다. Python의 `DiversifiedParameters`에
+`minimum_commission_usd=0, commission_per_share=0, sell_fee_rate=0`을 지정하고 원금
+10만 달러로 실행하면 초기 비용 모델을 복원한다. 보존된 +651.397483414% 결과의
+2,514일 평가액이 이 방식으로 정확히 재현되는 것을 확인했다. 현재 비용 모델의
+대조 계산으로 과거 원문 결과를 덮어쓰지 않는다. 추세 방어는 개발에서 실패했으므로 이후
+10년을 실행하는 명령을 제공하지 않는다.
