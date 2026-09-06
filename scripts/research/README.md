@@ -4,8 +4,10 @@
 이 디렉터리는 별도 연구 계산기이며 운영 전략 등록·주문·배포를 수행하지 않는다.
 
 Python 3.12와 `requirements.txt`의 고정 버전을 사용했다. 원문 시세·공시·시장 DB는
-Git에 넣지 않는다. 완료된 연구의 비공개 자료 경로는 이 작업 환경의
-`/tmp/strategy-research-private`이며 임시 디렉터리이므로 영구 보관을 보장하지 않는다.
+Git에 넣지 않는다. 최초 작업 자료는 `/tmp/strategy-research-private`에 있다. 이후
+원래 사용자 작업공간의 `data/reliable-strategy-reproduction/2026-09-06-8791951`에
+원자료·코드 사본을 보존하고 핵심 결과를 재실행했다.
+[보존 위치와 검증 결과](../../docs/research/reproduction-verification.md)를 참고한다.
 접속 호스트·개인키·API 키는 코드와 산출물에 포함되지 않는다.
 
 ## 기존 스냅샷에서 재실행
@@ -222,3 +224,21 @@ JSON에 있다. 원문 NAV·시장 패널·환율·CSV가 없으면 당시 실�
 ```bash
 "$TASK_PYTHON" -m unittest discover -s scripts/research -p 'test_*.py'
 ```
+
+
+## 임시 원본 외부의 보존 사본 사용
+
+원래 사용자 작업공간의 다음 패키지에서 `snapshot/`으로 이동한 뒤 앞의 명령을 실행한다.
+`TASK_RESEARCH_DIR`은 패키지의 `research-data/`로 지정한다. 재실행 출력은 기존 파일과
+다른 경로여야 한다. 검증 당시 Python 환경은 별도로 필요하며 고정 버전은
+`requirements.txt`와 패키지의 `REPLAY-VERIFICATION.json`에 있다.
+
+```bash
+TASK_REPRODUCTION_ROOT=/home/hyunbae204/work/trading-webapp/data/reliable-strategy-reproduction/2026-09-06-8791951
+TASK_RESEARCH_DIR="$TASK_REPRODUCTION_ROOT/research-data"
+cd "$TASK_REPRODUCTION_ROOT/snapshot"
+```
+
+`MANIFEST.json`에는 원자료·코드 2,619개 파일의 SHA-256이 있다. 해당 파일 목록의
+해시가 보고서의 보존 목록 해시와 일치하는지 먼저 확인할 수 있다. 이 사본은 같은
+로컬 디스크에 있으며 외부 백업이나 공급자 데이터의 정확성 인증을 뜻하지 않는다.

@@ -1,0 +1,58 @@
+{
+  "status": "REPRODUCTION_VERIFIED_STRATEGY_RISK_GATE_STILL_FAILED",
+  "source_commit": "8791951a99d9e42750eccf831791cf9f5757aecd",
+  "package_root": "/home/hyunbae204/work/trading-webapp/data/reliable-strategy-reproduction/2026-09-06-8791951",
+  "manifest_sha256": "c4178ba9aaef938f4b5dca92f759bfe9a3f4d7bcdd352f6f67fbe2dfd202764b",
+  "copied_files_hash_verified": 2619,
+  "copied_bytes": 1652061209,
+  "rebuilt_etf_panel_files_exact": 14,
+  "checks": [
+    {
+      "name": "distributions",
+      "all_json_values_exact": true,
+      "replay_sha256": "ced6d9e11d4e4c8f5e29d954a37cac8265db25c2006009542bd1d2fcc1150dac",
+      "baseline_sha256": "ced6d9e11d4e4c8f5e29d954a37cac8265db25c2006009542bd1d2fcc1150dac"
+    },
+    {
+      "name": "korea_validation",
+      "all_json_values_exact": true,
+      "replay_sha256": "6701de9907f47e51c87dee8e5a2cab4b7c2087bbb5cb669ea074bce96c5d70d3",
+      "baseline_sha256": "24a9e249a1191b68feacb1e6190fba813e8a974048748caff48a0f21f04d9dfb"
+    },
+    {
+      "name": "qqq_trend",
+      "all_json_values_exact": true,
+      "replay_sha256": "892799d9b8d0ab05cfdcf5186986112c45fdc44672a025921785a0f67eeb718a",
+      "baseline_sha256": "892799d9b8d0ab05cfdcf5186986112c45fdc44672a025921785a0f67eeb718a"
+    },
+    {
+      "name": "full_diversified_validation",
+      "all_performance_and_audit_values_exact": true,
+      "provenance_difference": "코드 해시는 8791951 스냅샷으로 갱신. FRED·운용사 해시는 동일.",
+      "replay_sha256": "ec4b7c7db0ec0c0e6dd7fbaa517de28b0eacfd6b94bab684ad014763b4b2e0f3",
+      "baseline_sha256": "d0175648662f0965d6e2128b18450637f2340723fa357a2a9558ab7450543c58",
+      "sensitivity_cases": 161
+    }
+  ],
+  "python": "3.12.3",
+  "dependencies": {
+    "numpy": "2.5.2",
+    "pandas": "3.0.5",
+    "scipy": "1.18.1",
+    "matplotlib": "3.11.1",
+    "openpyxl": "3.1.5",
+    "et-xmlfile": "2.0.0"
+  },
+  "runtime_note": "기존 고정 버전 Python 환경 사용. 재실행 코드·입력은 전부 보존 사본을 사용.",
+  "strategy_gate": {
+    "usd_sharpe": 0.9600396564798034,
+    "minimum_sharpe": 1.0,
+    "usd_mdd_pct": -35.19911904436407,
+    "minimum_mdd_pct": -35.0,
+    "passed": false
+  },
+  "limitations": [
+    "같은 로컬 디스크의 사본이며 원격 재해 복구 백업이 아님",
+    "입력 보존·재현이 배당 전체 원문 인증이나 미래 성과 입증은 아님"
+  ]
+}

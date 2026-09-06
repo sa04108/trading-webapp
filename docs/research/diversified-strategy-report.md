@@ -184,6 +184,8 @@ GLD NAV와 미국 종가는 평가 시점이 달라 차이가 모두 시세 오�
 - [전체 파생 결과 JSON](diversified-strategy-results.json): 체결·일별 평가액, 161개 민감도,
   위기·과거 구간, 원문·코드 해시, 추가 개발 조합과 판정.
 - [재현 절차](../../scripts/research/README.md): 비용과 입력을 고정한 실행 명령.
+- [원자료·코드 보존 및 재실행 대조](reproduction-verification.md): 임시 디렉터리 밖의
+  로컬 사본에서 전체 분산 검증과 초기 실패 결과를 재현한 기록.
 - [매매 계산기](../../scripts/research/diversified_backtest.py)와
   [검증기](../../scripts/research/diversified_validation.py).
 
