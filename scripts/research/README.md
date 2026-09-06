@@ -173,3 +173,52 @@ FRED는 다음 네 시리즈를 한 파일로 수집할 수 있다.
 2,514일 평가액이 이 방식으로 정확히 재현되는 것을 확인했다. 현재 비용 모델의
 대조 계산으로 과거 원문 결과를 덮어쓰지 않는다. 추세 방어는 개발에서 실패했으므로 이후
 10년을 실행하는 명령을 제공하지 않는다.
+
+## 분배금·오류 시가 추가 감사
+
+[추가 감사](../../docs/research/distribution-data-audit.md)는 20건·21건 분배금 가설을
+공식 QLD NAV 총수익과 대조한 뒤 같은 고정 전략의 현금 장부를 비교한다. 두 가설은
+인증된 이력이 아니며, 원문 전체의 누락 여부를 통과시킨 것으로 표시하지 않는다.
+가격수익 기본 모드는 이전 2,514일·238건 결과와 정확히 같다.
+
+실행 시점 입력 가설은 파생 JSON에 모두 보존돼 있다. 다음 명령으로 새 디렉터리에
+복원한다. 기존 경로를 덮어쓰지 않는다.
+
+```bash
+"$TASK_PYTHON" - "$TASK_RESEARCH_DIR/replay-distribution-inputs" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+snapshot = json.loads(Path('docs/research/distribution-data-audit.json').read_text())
+destination = Path(sys.argv[1])
+destination.mkdir(parents=True, exist_ok=False)
+for scenario in snapshot['scenarios']:
+    with (destination / (scenario['name'] + '.json')).open('x') as stream:
+        json.dump(scenario['input'], stream, ensure_ascii=False, indent=2)
+PY
+
+"$TASK_PYTHON" scripts/research/distribution_reconciliation.py \
+  --panel "$TASK_RESEARCH_DIR/diversified-panel-v2" \
+  --fred "$TASK_RESEARCH_DIR/fred_diversified.jsonl" \
+  --scenarios "$TASK_RESEARCH_DIR/replay-distribution-inputs" \
+  --performance "$TASK_RESEARCH_DIR/data-completion/etf_performance.csv" \
+  --prior-validation "$TASK_RESEARCH_DIR/diversified-validation/full-validation-v3.json" \
+  --output "$TASK_RESEARCH_DIR/replay-distribution-audit.json"
+```
+
+`--prior-validation`에는 기존 v3 원문 또는 같은 파라미터로 재현한 전체 검증 결과를
+전달한다. `--performance`에는 2026-08-31 기준 행이 있는 보존 공식 CSV가 필요하다.
+공개 주소는 `https://accounts.profunds.com/etfdata/etf_performance.csv`이며, 현재 월로
+갱신되는 파일이므로 나중의 다른 기준일을 조용히 대입하지 않는다. 원문 해시는 결과
+JSON에 있다. 원문 NAV·시장 패널·환율·CSV가 없으면 당시 실제 성과의 전체 재현을
+주장할 수 없다. `/tmp` 원문은 영구 보관소가 아니라는 기존 제한도 유지된다.
+
+계산기 Python 호출의 `distribution_scenario=`에 해당 JSON 객체를 전달하면 미검증
+가설임을 명시한 결과만 생성한다. 분배금 권리는 배당락일 시가 주문 전, 현금화는
+지급일 시가 주문 후다. `quote_worst`는 오류 봉의 공급된 시가·고가·저가·종가 전체에서
+불리한 값을 쓰는 진단이다. 기존 `range_worst`와 엄격 기본값 `fail`은 유지했다.
+
+```bash
+"$TASK_PYTHON" -m unittest discover -s scripts/research -p 'test_*.py'
+```
