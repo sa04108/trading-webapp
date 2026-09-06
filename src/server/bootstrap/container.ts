@@ -414,7 +414,6 @@ export function createContainer(
   const backtestWizardDraftService = new BacktestWizardDraftService(database, clock);
 
   const jobQueue = new JobQueue(database, clock);
-  const jobOrchestrator = new JobOrchestrator(jobQueue, config, logger, auditLog, clock);
   const remoteResultCompleter = new ForkedRemoteResultCompleter(config.databasePath);
   const remoteWorkerService = new RemoteWorkerService(
     jobQueue,
@@ -424,6 +423,12 @@ export function createContainer(
     auditLog,
     logger,
     remoteResultCompleter,
+  );
+  const jobOrchestrator = new JobOrchestrator(
+    jobQueue, config, logger, auditLog, clock,
+    config.backtestExecutionMode === 'remote'
+      ? (workerId) => remoteWorkerService.claimLocalFallback(workerId)
+      : (workerId) => jobQueue.claimNext(workerId),
   );
   const remoteInputBundleManager = new RemoteInputBundleManager(config.databasePath, config.tempRoot);
   const remoteResultUploadManager = new RemoteResultUploadManager(config.tempRoot);

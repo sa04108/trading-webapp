@@ -73,10 +73,12 @@ export class JobOrchestrator {
     private readonly logger: Logger,
     private readonly audit: AuditLogService,
     private readonly clock: Clock,
+    private readonly claimJob: (workerId: string) => BacktestJobRow | null =
+      (workerId) => queue.claimNext(workerId),
   ) {}
 
   start(): void {
-    this.recoverOrphaned(true);
+    this.recoverOrphaned(this.config.backtestExecutionMode === 'local');
     this.timer = setInterval(() => this.tick(), POLL_INTERVAL_MS);
     this.timer.unref();
   }
@@ -113,8 +115,15 @@ export class JobOrchestrator {
 
   /** 테스트용: 즉시 한 번 폴링 */
   tick(): void {
-    if (this.children.size >= this.config.maxConcurrentBacktests) return;
-    const job = this.queue.claimNext(this.workerId);
+    if (this.stopped || this.children.size >= this.config.maxConcurrentBacktests) return;
+    let job: BacktestJobRow | null;
+    try {
+      job = this.claimJob(this.workerId);
+    } catch (error) {
+      // 원격 결과 import가 SQLite 쓰기 잠금을 잡고 있으면 다음 폴링에서 다시 선점한다.
+      this.logger.warn({ module: 'backtest', err: error }, 'job claim failed; retrying next poll');
+      return;
+    }
     if (!job) return;
     this.spawn(job);
   }

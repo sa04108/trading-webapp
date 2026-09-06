@@ -43,11 +43,9 @@ async function main(): Promise<void> {
   //
   // CLI 서브커맨드도 같은 컨테이너를 만들지만 이 두 메서드는 부르지 않는다.
   // 서버 부팅 경로에서만 불러야 하는 근거는 `recoverOrphaned` 의 주석을 참고한다.
-  if (config.backtestExecutionMode === 'local') container.jobOrchestrator.start();
-  else {
-    // 이전 local 모드에서 서버와 함께 종료된 child 행만 INTERRUPTED로 정리한다.
-    // remote lease는 서버 재시작 뒤에도 worker가 heartbeat를 이어 갈 수 있으므로 보존한다.
-    container.jobOrchestrator.recoverOrphaned(false);
+  // remote 모드에서도 로컬 대체 실행기를 폴링하되, 살아 있는 원격 lease는 보존한다.
+  container.jobOrchestrator.start();
+  if (config.backtestExecutionMode === 'remote') {
     container.remoteWorkerService.start();
   }
   container.seedCloneBatchService.recover();

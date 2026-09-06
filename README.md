@@ -103,11 +103,16 @@ streaming 업로드한다. app과 worker의 Git SHA가 다르면 claim 자체가
 container 전환, 인증·SHA·protocol probe와 실패 rollback까지 수행한다.
 호스트에 생성하는 경로와 보존 정책은
 `/opt/quant-backtest-worker/managed-paths.json` manifest로 추적한다.
-애플리케이션 systemd unit이나 fallback은 없다. 개발 PC에서는 worker env를 넣고
+Worker 호스트에는 애플리케이션 systemd unit이 없다. 개발 PC에서는 worker env를 넣고
 `pnpm worker:remote`로 직접 실행할 수 있다. 실제 원격 동시 실행 수는 worker별
 `BACKTEST_WORKER_CONCURRENCY`로 조절하며 여러 worker PC도 같은 큐를 공유할 수 있다.
 처음에는 1로 시작하고 `backtest:telemetry-report`의 메모리·시간 표본을 근거로 올린다.
-remote 모드에서는 app의 `MAX_CONCURRENT_BACKTESTS`는 사용되지 않는다.
+remote 모드에서도 worker가 응답하지 않으면 app에서 로컬 실행으로 자동 전환한다.
+정상 worker 연락이 `REMOTE_BACKTEST_LEASE_SECONDS`(기본 60초) 동안 없고 유효한
+원격 lease도 없을 때, 같은 시간 이상 대기한 작업을 로컬에서 실행한다. 실행 중 연결이
+끊긴 작업은 lease 회수 뒤 대상이 되며, 원격 재시도 한도를 소진한 작업도 로컬로 넘긴다.
+로컬 동시 실행은 `MAX_CONCURRENT_BACKTESTS`(기본 1)를 따른다. worker가 복구되면
+후속 작업은 다시 원격 실행을 우선하며 이미 시작한 로컬 작업은 완료까지 유지한다.
 배포·전환·장애 복구 순서는 [원격 worker 운영 문서](docs/REMOTE_WORKER_OPERATIONS.md)를 따른다.
 
 Tailscale 에서 퍼블릭 + Caddy 로 옮긴 이유와 트레이드오프는

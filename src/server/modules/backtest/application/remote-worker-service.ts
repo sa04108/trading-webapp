@@ -51,6 +51,7 @@ function tokenHash(token: string): string {
 export class RemoteWorkerService {
   readonly events = new EventEmitter();
   private sweepTimer: NodeJS.Timeout | null = null;
+  private lastWorkerContactAtMs: number;
 
   constructor(
     private readonly queue: JobQueue,
@@ -61,9 +62,37 @@ export class RemoteWorkerService {
     private readonly logger: Logger,
     private readonly resultCompleter: RemoteResultCompleter,
     private readonly leaseTokenFactory: () => string = () => randomBytes(32).toString('base64url'),
-  ) {}
+  ) {
+    // 재시작 직후에는 worker가 다시 연결할 시간을 한 lease만큼 보장한다.
+    this.lastWorkerContactAtMs = clock.now();
+  }
+
+  /** 정상 worker 연락과 활성 lease가 모두 끊겼거나 원격 재시도를 소진한 작업을 선점한다. */
+  claimLocalFallback(workerId: string): BacktestJobRow | null {
+    const unavailableBeforeMs = this.clock.now() - this.leaseDurationMs();
+    const job = this.queue.claimNext(workerId, {
+      unavailableBeforeMs: this.lastWorkerContactAtMs <= unavailableBeforeMs
+        ? unavailableBeforeMs : null,
+      maxRemoteAttempts: this.config.remoteBacktestMaxAttempts,
+    });
+    if (job === null) return null;
+    const detail = {
+      jobId: job.id,
+      executionMode: 'local',
+      attempt: job.attempt,
+      reason: job.attempt >= this.config.remoteBacktestMaxAttempts
+        ? 'REMOTE_ATTEMPTS_EXHAUSTED' : 'REMOTE_WORKER_UNAVAILABLE',
+    };
+    this.logger.warn(
+      { module: 'backtest', event: 'backtest.local-fallback', ...detail },
+      'remote worker unavailable; starting local backtest',
+    );
+    this.recordAudit('backtest.local-fallback', detail);
+    return job;
+  }
 
   start(): void {
+    this.lastWorkerContactAtMs = this.clock.now();
     this.sweepExpiredLeases();
     const intervalMs = Math.max(5_000, Math.floor(this.leaseDurationMs() / 2));
     this.sweepTimer = setInterval(() => this.sweepExpiredLeases(), intervalMs);
@@ -80,6 +109,7 @@ export class RemoteWorkerService {
       return { status: 'VERSION_MISMATCH', expectedRunnerVersion: this.expectedRunnerVersion };
     }
     const nowMs = this.clock.now();
+    this.lastWorkerContactAtMs = nowMs;
     const leaseToken = this.leaseTokenFactory();
     const leaseExpiresAtMs = nowMs + this.leaseDurationMs();
     const remoteWorkerId = `remote:${workerId}`;
@@ -133,6 +163,7 @@ export class RemoteWorkerService {
       progressLabel: input.progressLabel ?? null,
     });
     if (status === null) return { status: 'STALE_LEASE' };
+    this.lastWorkerContactAtMs = nowMs;
     this.emitJob({
       jobId: input.jobId,
       kind: input.processedBars === undefined ? 'status' : 'progress',
@@ -163,6 +194,7 @@ export class RemoteWorkerService {
       progressLabel: null,
     });
     if (status === null) return { status: 'STALE_LEASE' };
+    this.lastWorkerContactAtMs = nowMs;
     return {
       status: 'ACCEPTED',
       cancelRequested: status === 'CANCELLING',
@@ -205,6 +237,7 @@ export class RemoteWorkerService {
       ...(input.error === undefined ? {} : { error: input.error }),
     });
     if (outcome === null) return 'STALE_LEASE';
+    this.lastWorkerContactAtMs = finishedAtMs;
 
     this.recordAudit('backtest.finished', {
       jobId: input.jobId,
@@ -264,6 +297,7 @@ export class RemoteWorkerService {
       return 'IDENTITY_REJECTED';
     }
     if (completed.status !== 'ACCEPTED') return completed.status;
+    this.lastWorkerContactAtMs = this.clock.now();
 
     this.recordAudit('backtest.finished', {
       jobId: input.jobId,

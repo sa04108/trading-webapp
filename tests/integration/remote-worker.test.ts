@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
@@ -131,6 +131,7 @@ describe('remote backtest worker lease API', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await ctx.close();
   });
 
@@ -161,6 +162,12 @@ describe('remote backtest worker lease API', () => {
   }
 
   function seedCurrentIdentity(): void {
+    // 여러 작업을 넣는 테스트에서도 종목 이력의 중복 구간 INSERT를 피한다.
+    const existing = ctx.container.database.db.select({ standardCode: symbolMasterVersions.standardCode })
+      .from(symbolMasterVersions)
+      .where(eq(symbolMasterVersions.standardCode, 'KR7005930003'))
+      .get();
+    if (existing !== undefined) return;
     ctx.container.database.db.insert(symbolMasterVersions).values({
       standardCode: 'KR7005930003',
       shortCode: '005930',
@@ -696,7 +703,138 @@ describe('remote backtest worker lease API', () => {
     expect(ctx.container.jobQueue.countByStatus(['STARTING', 'RUNNING'])).toBe(0);
   });
 
-  it('requeues one expired lease and fails after the configured attempt limit', async () => {
+  function controlClock() {
+    let nowMs = Date.now();
+    vi.spyOn(ctx.container.clock, 'now').mockImplementation(() => nowMs);
+    return (milliseconds: number) => { nowMs += milliseconds; };
+  }
+
+  it('worker가 없으면 대기 시간을 보장한 뒤 로컬에서 한 번만 선점한다', () => {
+    const advance = controlClock();
+    const job = enqueue();
+    const service = ctx.container.remoteWorkerService;
+    expect(service.claimLocalFallback('local-a')).toBeNull();
+    advance(14_999);
+    expect(service.claimLocalFallback('local-a')).toBeNull();
+    advance(1);
+    expect(service.claimLocalFallback('local-a')).toMatchObject({
+      id: job.id, status: 'STARTING', workerId: 'local-a', attempt: 0,
+    });
+    expect(service.claimLocalFallback('local-b')).toBeNull();
+  });
+
+  it('정상 빈 큐 poll은 대기 시간을 갱신하고 버전 불일치는 fallback을 막지 않는다', () => {
+    const advance = controlClock();
+    const service = ctx.container.remoteWorkerService;
+    advance(10_000);
+    expect(service.claim('worker-a', ctx.container.gitCommitSha).status).toBe('EMPTY');
+    const job = enqueue();
+    advance(14_999);
+    expect(service.claimLocalFallback('local-a')).toBeNull();
+    expect(service.claim('worker-old', 'wrong-version').status).toBe('VERSION_MISMATCH');
+    advance(1);
+    expect(service.claimLocalFallback('local-a')?.id).toBe(job.id);
+  });
+
+  it('heartbeat와 artifact 전송 lease가 유효하면 오래 대기한 작업도 원격에 남긴다', () => {
+    const advance = controlClock();
+    const service = ctx.container.remoteWorkerService;
+    const active = enqueue();
+    const claimed = service.claim('worker-a', ctx.container.gitCommitSha);
+    if (claimed.status !== 'CLAIMED') throw new Error('lease가 필요합니다');
+    const lease = { jobId: active.id, attempt: claimed.lease.attempt, leaseToken: claimed.lease.leaseToken };
+    const queued = enqueue();
+    advance(10_000);
+    expect(service.heartbeat(lease).status).toBe('ACCEPTED');
+    advance(10_000);
+    expect(service.claimLocalFallback('local-a')).toBeNull();
+    expect(service.reserveArtifactTransfer(lease).status).toBe('ACCEPTED');
+    advance(60_000);
+    service.sweepExpiredLeases();
+    expect(service.claimLocalFallback('local-a')).toBeNull();
+    expect(ctx.container.jobQueue.getJob(active.id)?.status).toBe('RUNNING');
+    expect(ctx.container.jobQueue.getJob(queued.id)?.status).toBe('QUEUED');
+  });
+
+  it('lease 만료 후 로컬 전환은 이전 원격 진행률과 결과 응답을 거부한다', async () => {
+    const advance = controlClock();
+    const service = ctx.container.remoteWorkerService;
+    const job = enqueue();
+    const claimed = service.claim('worker-a', ctx.container.gitCommitSha);
+    if (claimed.status !== 'CLAIMED') throw new Error('lease가 필요합니다');
+    const lease = { jobId: job.id, attempt: claimed.lease.attempt, leaseToken: claimed.lease.leaseToken };
+    service.heartbeat({ ...lease, processedBars: 10, totalBars: 100, progressLabel: '2026-01-15' });
+    advance(15_001);
+    service.sweepExpiredLeases();
+    expect(service.claimLocalFallback('local-a')).toMatchObject({
+      id: job.id, attempt: 1, workerId: 'local-a', status: 'STARTING',
+      progressBars: null, totalBars: null, progressLabel: null, error: null,
+      leaseTokenHash: null, leaseExpiresAtMs: null, runnerVersion: null,
+    });
+    expect(service.heartbeat(lease).status).toBe('STALE_LEASE');
+    expect(service.finish({ ...lease, outcome: 'FAILED' })).toBe('STALE_LEASE');
+    const artifactPath = path.join(ctx.dir, 'stale-result.sqlite');
+    writeResultArtifact(job, artifactPath);
+    const payload = fs.readFileSync(artifactPath);
+    const response = await ctx.app.inject({
+      method: 'PUT',
+      url: `/api/internal/workers/jobs/${job.id}/result?attempt=${lease.attempt}`,
+      headers: {
+        authorization: `Bearer ${WORKER_TOKEN}`,
+        'content-type': 'application/vnd.quant-platform.backtest-result+sqlite',
+        'x-lease-token': lease.leaseToken,
+        'x-content-sha256': createHash('sha256').update(payload).digest('hex'),
+      },
+      payload,
+    });
+    expect(response.statusCode).toBe(409);
+    expect(ctx.container.jobQueue.getJob(job.id)).toMatchObject({ status: 'STARTING', workerId: 'local-a' });
+    expect(ctx.container.resultsService.getTotalReturnPct(job.id)).toBeNull();
+  });
+
+  it('취소 요청한 원격 작업과 취소된 대기 작업은 로컬에서 재실행하지 않는다', () => {
+    const advance = controlClock();
+    const service = ctx.container.remoteWorkerService;
+    const active = enqueue();
+    expect(service.claim('worker-a', ctx.container.gitCommitSha).status).toBe('CLAIMED');
+    const queued = enqueue();
+    expect(ctx.container.jobOrchestrator.cancel(active.id)).toBe('CANCELLING');
+    expect(ctx.container.jobOrchestrator.cancel(queued.id)).toBe('CANCELLED');
+    advance(15_001);
+    service.sweepExpiredLeases();
+    expect(service.claimLocalFallback('local-a')).toBeNull();
+    expect(ctx.container.jobQueue.getJob(active.id)?.status).toBe('CANCELLED');
+    expect(ctx.container.jobQueue.getJob(queued.id)?.status).toBe('CANCELLED');
+  });
+
+  it('worker 복구 시 로컬 실행 중인 작업을 보존하고 다음 작업을 원격에서 선점한다', () => {
+    const advance = controlClock();
+    const service = ctx.container.remoteWorkerService;
+    const local = enqueue();
+    advance(15_001);
+    expect(service.claimLocalFallback('local-a')?.id).toBe(local.id);
+    const remote = enqueue();
+    advance(15_001);
+    const claimed = service.claim('worker-a', ctx.container.gitCommitSha);
+    expect(claimed).toMatchObject({ status: 'CLAIMED', lease: { job: { id: remote.id } } });
+    expect(ctx.container.jobQueue.getJob(local.id)?.workerId).toBe('local-a');
+    enqueue();
+    expect(service.claimLocalFallback('local-b')).toBeNull();
+  });
+
+  it('remote 모드의 로컬 실행기를 시작해도 유효한 원격 lease는 보존한다', () => {
+    const service = ctx.container.remoteWorkerService;
+    const job = enqueue();
+    const claimed = service.claim('worker-a', ctx.container.gitCommitSha);
+    if (claimed.status !== 'CLAIMED') throw new Error('lease가 필요합니다');
+    ctx.container.jobOrchestrator.start();
+    ctx.container.jobOrchestrator.stop();
+    expect(service.heartbeat({
+      jobId: job.id, attempt: claimed.lease.attempt, leaseToken: claimed.lease.leaseToken,
+    }).status).toBe('ACCEPTED');
+  });
+
+  it('requeues expired leases and falls back locally after the configured remote attempt limit', async () => {
     const job = enqueue();
     const first = (await claim()).json() as { attempt: number };
     expect(first.attempt).toBe(1);
@@ -731,9 +869,12 @@ describe('remote backtest worker lease API', () => {
       .run();
     ctx.container.remoteWorkerService.sweepExpiredLeases();
     expect(ctx.container.jobQueue.getJob(job.id)).toMatchObject({
-      status: 'FAILED',
+      status: 'QUEUED',
       attempt: 2,
-      workerId: 'remote:worker-a',
+      workerId: null,
+    });
+    expect(ctx.container.remoteWorkerService.claimLocalFallback('local-a')).toMatchObject({
+      id: job.id, status: 'STARTING', attempt: 2, workerId: 'local-a', error: null,
     });
   });
 
@@ -778,7 +919,7 @@ describe('remote backtest worker lease API', () => {
     expect(JSON.parse(audit.detailJson)).not.toHaveProperty('executionTelemetry');
   });
 
-  it('fails a queued retry that became exhausted after lowering max attempts', async () => {
+  it('원격 재시도 상한을 낮춰도 대기 작업을 보존하고 로컬에서 선점한다', async () => {
     const job = enqueue();
     await claim();
     ctx.container.database.db.update(backtestJobs)
@@ -790,12 +931,13 @@ describe('remote backtest worker lease API', () => {
 
     const recovered = ctx.container.jobQueue.recoverExpiredRemoteLeases(1);
 
-    expect(recovered).toEqual([{ jobId: job.id, status: 'FAILED', attempt: 1 }]);
+    expect(recovered).toEqual([]);
     expect(ctx.container.jobQueue.getJob(job.id)).toMatchObject({
-      status: 'FAILED',
-      attempt: 1,
-      completedAtMs: expect.any(Number),
+      status: 'QUEUED', attempt: 1, completedAtMs: null,
     });
+    expect(ctx.container.jobQueue.claimNext('local-a', {
+      unavailableBeforeMs: null, maxRemoteAttempts: 1,
+    })).toMatchObject({ id: job.id, status: 'STARTING', workerId: 'local-a' });
   });
 
   it('streams, validates, atomically imports, and idempotently accepts a result artifact', async () => {
@@ -1468,6 +1610,53 @@ describe('remote backtest worker lease API', () => {
       await stopProcess(supervisor);
     }
   }, 40_000);
+
+  it.each([false, true])('worker 무응답 시 실제 로컬 완료와 동시 실행 상한을 지킨다 (원격 선점: %s)', async (wasClaimed) => {
+    seedCurrentIdentity();
+    ctx.container.database.db.insert(symbolMasterCoverage).values({
+      startDate: '2026-01-05', endDate: '2026-02-05', syncedAtMs: Date.now(),
+    }).run();
+    await seedCorporateActionCoverage(ctx.container, ['005930'], yearRange(2025, 2026));
+    const candles: Candle[] = [];
+    for (let tsMs = Date.UTC(2026, 0, 5); tsMs <= Date.UTC(2026, 1, 5); tsMs += DAY_MS) {
+      const day = new Date(tsMs).getUTCDay();
+      if (day === 0 || day === 6) continue;
+      const sequence = candles.length;
+      candles.push({
+        symbol: '005930', market: 'KR', timeframe: '1d', tsMs,
+        open: 100 + sequence, high: 103 + sequence, low: 99 + sequence,
+        close: 102 + sequence, volume: 1_000,
+      });
+    }
+    seedDailyBars(ctx.container.database.db, candles);
+    const advance = controlClock();
+    const job = enqueue();
+    if (wasClaimed) {
+      expect(ctx.container.remoteWorkerService.claim('worker-a', ctx.container.gitCommitSha).status)
+        .toBe('CLAIMED');
+    }
+    const queued = enqueue();
+    ctx.container.jobOrchestrator.tick();
+    expect(ctx.container.jobQueue.getJob(job.id)?.status).toBe(wasClaimed ? 'STARTING' : 'QUEUED');
+    expect(ctx.container.jobOrchestrator.runningCount()).toBe(0);
+    advance(15_001);
+    ctx.container.remoteWorkerService.sweepExpiredLeases();
+    ctx.container.jobOrchestrator.tick();
+    ctx.container.jobOrchestrator.tick();
+    expect(ctx.container.jobOrchestrator.runningCount()).toBe(1);
+    expect(ctx.container.jobQueue.getJob(queued.id)?.status).toBe('QUEUED');
+    await waitForTerminalJob(ctx, job.id);
+    expect(ctx.container.jobQueue.getJob(job.id)).toMatchObject({
+      status: 'COMPLETED', workerId: `worker-${process.pid}`, attempt: wasClaimed ? 1 : 0,
+    });
+    expect(ctx.container.resultsService.getTotalReturnPct(job.id)).not.toBeNull();
+    const audit = ctx.container.database.sqlite.prepare(
+      "SELECT detail_json AS detailJson FROM audit_logs WHERE event = 'backtest.local-fallback'",
+    ).get() as { detailJson: string };
+    expect(JSON.parse(audit.detailJson)).toMatchObject({
+      jobId: job.id, executionMode: 'local', reason: 'REMOTE_WORKER_UNAVAILABLE',
+    });
+  });
 
   it('runs the real remote supervisor and child process end to end', async () => {
     seedCurrentIdentity();

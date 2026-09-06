@@ -145,7 +145,17 @@ env를 함께 갱신하며 전환 중 값이 다른 Worker는 401로 claim하지
 
 ## 6. 장애와 수동 롤백
 
-- Worker나 네트워크가 끊기면 lease 만료 뒤 같은 잡이 attempt 상한까지 재시도된다.
+- 정상 Worker의 claim·heartbeat 연락이 `REMOTE_BACKTEST_LEASE_SECONDS`(기본 60초)
+  동안 없고 유효한 remote lease도 없으면, 그 시간 이상 대기한 잡을 app의 로컬 child로
+  자동 실행한다. 앱 시작 직후에도 같은 연결 유예 시간을 둔다.
+- 실행 중 Worker나 네트워크가 끊기면 lease 만료·회수 후 위 조건으로 로컬 전환한다.
+  다른 Worker가 살아 있으면 원격 재시도를 우선하며, `REMOTE_BACKTEST_MAX_ATTEMPTS`를
+  소진한 잡은 로컬로 넘긴다. lease 회수 주기는 lease 시간의 절반(최소 5초)이다.
+- 입력·결과 artifact 전송 중에는 기존 15분 lease를 보존하므로 전송이 끊긴 경우에는
+  그 lease가 만료될 때까지 기다린다. 취소 중인 잡은 만료 후 취소로 종료한다.
+- 로컬 대체 실행은 app의 `MAX_CONCURRENT_BACKTESTS`(기본 1)를 따른다.
+  `backtest.local-fallback` 로그와 감사 기록에서 전환 이유를 확인할 수 있다.
+- Worker가 복구되면 후속 잡은 다시 원격 실행을 우선한다. 실행 중인 로컬 잡은 유지한다.
 - 늦게 도착한 이전 attempt 결과는 app이 거부한다.
 - app만 재시작해도 유효한 remote lease는 보존된다.
 - local로 돌아갈 때는 app을 local로 바꾸기 전에 Worker container를 중지한다. 활성 remote
