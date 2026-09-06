@@ -1815,6 +1815,59 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(ctx.container.jobQueue.listJobs(500, 0)).toHaveLength(beforeJobCount);
   });
 
+  it('재설정 복제는 검토에서 동기화한 벤치마크로 불완전한 원본 pin을 보완한다', async () => {
+    const body = buildRequest();
+    const created = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: body,
+    });
+    expect(created.statusCode).toBe(201);
+    const sourceId = created.json().job.id as string;
+    const source = ctx.container.jobQueue.getJob(sourceId)!;
+    expect(JSON.parse(source.benchmarkJson!).covered).toBe(false);
+    const coverage = vi.spyOn(ctx.container.benchmarkService, 'status').mockReturnValue({
+      covered: true,
+      points: [{ date: body.period.from, close: 2500 }, { date: body.period.to, close: 2600 }],
+    });
+    try {
+      const response = await ctx.app.inject({
+        method: 'POST', url: `/api/v1/backtests/${sourceId}/clone-configured`,
+        cookies: { qp_session: cookie }, payload: body,
+      });
+      expect(response.statusCode).toBe(201);
+      const cloned = ctx.container.jobQueue.getJob(response.json().job.id)!;
+      expect(JSON.parse(cloned.benchmarkJson!)).toMatchObject({ covered: true });
+      expect(cloned.benchmarkHash).not.toBe(source.benchmarkHash);
+      expect(ctx.container.jobQueue.getJob(sourceId)!.benchmarkJson).toBe(source.benchmarkJson);
+    } finally {
+      coverage.mockRestore();
+    }
+  });
+
+  it('난수 비의존 전략은 API로도 난수 복제 묶음을 만들 수 없다', async () => {
+    const created = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: buildRequest(),
+    });
+    expect(created.statusCode).toBe(201);
+    const sourceId = created.json().job.id as string;
+    const registry = ctx.container.strategyRegistry;
+    const strategy = registry.get(STRATEGY_ID)!;
+    const originalGet = registry.get.bind(registry);
+    const lookup = vi.spyOn(registry, 'get').mockImplementation((id) => id === STRATEGY_ID
+      ? { ...strategy, supportsRandomSeed: false }
+      : originalGet(id));
+    try {
+      const response = await ctx.app.inject({
+        method: 'POST', url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
+        cookies: { qp_session: cookie }, payload: { count: 10 },
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json().error).toContain('난수 시드의 영향을 받지 않아');
+      expect(ctx.container.seedCloneBatchService.list()).toHaveLength(0);
+    } finally {
+      lookup.mockRestore();
+    }
+  });
+
   it('재무 전략 난수 복제 대기 중 마지막 PIT 재무 행이 사라지면 추가 승격을 막는다', async () => {
     const request: BacktestRequest = {
       ...buildRequest(),

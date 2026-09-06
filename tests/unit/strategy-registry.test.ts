@@ -51,6 +51,7 @@ describe('재무 순위 전략 metadata', () => {
       id: 'earnings-acceleration-rank',
       version: '1.3.0',
       name: '이익 가속·가격 확인 순위',
+      supportsRandomSeed: true,
       requiresFundamentals: true,
       description: 'PIT 영업이익 가속과 양의 가격 모멘텀을 함께 순위화하는 동일가중 연구 전략',
     });
@@ -58,6 +59,7 @@ describe('재무 순위 전략 metadata', () => {
       id: 'low-per-high-roe-rank',
       version: '1.4.0',
       name: '저PER·고ROE 순위',
+      supportsRandomSeed: true,
       requiresFundamentals: true,
       description: 'PIT TTM 순이익 기준 저PER과 고ROE를 결합하는 동일가중 연구 전략',
     });
@@ -128,5 +130,19 @@ describe('requiresFundamentals 가 명시적으로 false 인 전략', () => {
     const custom = new StrategyRegistry([lookbackOnly]);
     expect(custom.list()[0]?.requiresFundamentals).toBe(true);
     expect(custom.requiresFundamentals('x')).toBe(true);
+  });
+});
+
+describe('난수 기능 지원 여부', () => {
+  it('현재 전략은 전략 내부 또는 동시 매수 순서에 난수를 사용한다', () => {
+    for (const strategy of registry.list()) {
+      expect(strategy.supportsRandomSeed, strategy.id).toBe(true);
+    }
+  });
+
+  it('명시적으로 비의존을 선언한 전략만 난수 기능을 비활성화한다', () => {
+    const strategy = registry.get('range-breakout')!;
+    const custom = new StrategyRegistry([{ ...strategy, supportsRandomSeed: false }]);
+    expect(custom.describe(strategy.id)?.supportsRandomSeed).toBe(false);
   });
 });

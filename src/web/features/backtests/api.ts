@@ -27,6 +27,8 @@ export interface StrategySummary {
    * 흘려보내 배지가 침묵하게 한다 (`strategyDataRequirement`).
    */
   requiresFundamentals?: boolean;
+  /** 생략된 옛 응답을 난수 비의존 전략으로 간주하지 않는다. */
+  supportsRandomSeed?: boolean;
 }
 
 /**

@@ -1254,8 +1254,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
 
     const benchmarkId = body.benchmarkId ?? 'KOSPI';
     const sourceBenchmarkId = rebased.request.benchmarkId ?? 'KOSPI';
+    // 검토 단계에서 누락분을 동기화했다면 불완전한 원본 pin을 다시 복제하지 않는다.
     const benchmark =
-      benchmarkId === sourceBenchmarkId
+      benchmarkId === sourceBenchmarkId && reusable.benchmark.pin.covered
         ? reusable.benchmark
         : benchmarks.pin(benchmarkId, body.period);
     const cloneWarnings = [...rebased.warnings, ...validated.warnings];
@@ -1286,6 +1287,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       return reply.code(409).send({
         error: '난수 시드 실험의 자식 실행에서는 새 난수 실험을 만들 수 없습니다. 원본 백테스트에서 시작하세요.',
       });
+    }
+    if (strategies.describe(sourceJob.strategyId)?.supportsRandomSeed === false) {
+      return reply.code(400).send({ error: '이 전략은 난수 시드의 영향을 받지 않아 새 난수로 복제할 수 없습니다.' });
     }
     const countBody = z.object({ count: z.number().int().min(1).max(100) }).safeParse(request.body);
     if (!countBody.success) {

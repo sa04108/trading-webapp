@@ -264,14 +264,11 @@ test('full MVP flow', async ({ page }) => {
   await tradesPagination.getByRole('button', { name: '첫 페이지' }).click();
   await expect(tradesPagination.getByRole('button', { name: '현재 1페이지' })).toBeVisible();
 
-  await expect(page.getByRole('navigation', { name: '경고 목록 페이지 이동' })).toHaveCount(0);
-  await page.getByLabel('경고 목록 페이지당 표시 수').fill('1');
-  const warningsPagination = page.getByRole('navigation', {
-    name: '경고 목록 페이지 이동',
-  });
-  await expect(warningsPagination.getByRole('button', { name: '현재 1페이지' })).toBeVisible();
-  await warningsPagination.getByRole('button', { name: '2페이지로 이동' }).click();
-  await expect(warningsPagination.getByRole('button', { name: '현재 2페이지' })).toBeVisible();
+  // 경고는 페이지 목록 대신 실행 중 경고와 계산 한계로 구분해 표시한다.
+  await expect(page.getByRole('region', { name: '실행 중 발생한 경고' }))
+    .toContainText('미청산 포지션');
+  await expect(page.getByRole('region', { name: '계산 방식·한계' }))
+    .toContainText('유동성 체결 한도');
 
   // 종목 표기: 위 스텁으로 '005930' 은 이름이 뜬다 — '삼성전자 (005930)' 형태로
   // 이름·코드가 둘 다 살아있어야 한다. SymbolLabel 이 이름 없이 코드만 렌더링하도록

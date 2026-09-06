@@ -447,6 +447,7 @@ function RunMetadataCard({
   run,
   job,
   strategyName,
+  supportsRandomSeed,
   timeframe,
   provenancePin,
   universeRebalancing,
@@ -454,6 +455,7 @@ function RunMetadataCard({
   run: RunMetadata;
   job: JobSummary;
   strategyName: string | undefined;
+  supportsRandomSeed: boolean;
   timeframe: string | null;
   provenancePin: ProvenancePin | null;
   universeRebalancing: readonly UniverseRebalancingEntryDto[];
@@ -516,7 +518,7 @@ function RunMetadataCard({
         ? `${run.slippageModelVersion} — ${slippageProfileLabel(slippageProfile)}`
         : run.slippageModelVersion,
     ],
-    ['난수 시드', String(run.randomSeed)],
+    ...(supportsRandomSeed ? [['난수 시드', String(run.randomSeed)] as [string, string]] : []),
     ['Git 커밋', run.gitCommitSha.slice(0, 12)],
     ['실행 시각', `${formatDateTime(run.startedAtMs)} ~ ${formatDateTime(run.completedAtMs)}`],
   ];
@@ -699,7 +701,9 @@ export function BacktestDetailPage() {
     );
   }
 
-  const strategyName = strategies.data?.strategies.find((s) => s.id === job.strategyId)?.name;
+  const strategy = strategies.data?.strategies.find((s) => s.id === job.strategyId);
+  const strategyName = strategy?.name;
+  const supportsRandomSeed = strategy?.supportsRandomSeed !== false;
   const resolvedTimeframe = resolveJobTimeframe(job);
 
   const running = !isTerminal(job.status);
@@ -748,6 +752,7 @@ export function BacktestDetailPage() {
                   <Button
                     variant="outline"
                     className="h-11 min-w-0 rounded-none border-0 border-l border-input focus-visible:z-10 focus-visible:ring-inset"
+                    disabled={!supportsRandomSeed || !strategy}
                     onClick={() => setSeedCloneOpen(true)}
                   >
                     <Dices data-icon="inline-start" />
@@ -880,6 +885,7 @@ export function BacktestDetailPage() {
             run={run}
             job={job}
             strategyName={strategyName}
+            supportsRandomSeed={supportsRandomSeed || strategy?.version !== run.strategyVersion}
             timeframe={resolvedTimeframe}
             provenancePin={provenancePin}
             universeRebalancing={universeRebalancing}
@@ -949,7 +955,8 @@ export function BacktestDetailPage() {
               inputMode="numeric"
               min={1}
               max={100}
-              value={seedCloneCount}
+              disabled={!supportsRandomSeed}
+              value={supportsRandomSeed ? seedCloneCount : ''}
               onChange={(event) => setSeedCloneCount(event.target.value)}
             />
             <p className="text-xs text-muted-foreground">
@@ -960,6 +967,7 @@ export function BacktestDetailPage() {
             <Button variant="outline" onClick={() => setSeedCloneOpen(false)}>취소</Button>
             <Button
               disabled={
+                !supportsRandomSeed ||
                 seedCloneMutation.isPending ||
                 !Number.isInteger(Number(seedCloneCount)) ||
                 Number(seedCloneCount) < 1 ||

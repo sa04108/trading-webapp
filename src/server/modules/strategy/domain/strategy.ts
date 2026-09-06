@@ -61,6 +61,12 @@ export interface TradingStrategy<TParameters, TState> {
   readonly name: string;
   readonly description: string;
   /**
+   * 전략의 동점 처리와 엔진의 동시 매수 순서까지 포함한 난수 의존 여부.
+   * 전체 실행이 시드와 무관함을 검증한 전략만 false를 선언한다. 생략하면 true다.
+   * 이 메타데이터는 UI·복제 가능 여부만 제어하고 매매 동작을 바꾸지 않는다.
+   */
+  readonly supportsRandomSeed?: boolean;
+  /**
    * 상장시점 재무 없이는 의미 있는 신호를 낼 수 없는 전략. preparation이 재무 수집과
    * 종목별 완전성을 확인해 불완전 종목을 제외·재순위화한다. 봉만 쓰는 전략은 이 필드를
    * 생략한다.

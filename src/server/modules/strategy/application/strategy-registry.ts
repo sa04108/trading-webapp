@@ -37,6 +37,7 @@ export interface StrategySummary {
    * 「봉 데이터만」이 붙는다 — 사용자가 피하려던 상황을 화면이 보증해 버린다.
    */
   readonly requiresFundamentals: boolean;
+  readonly supportsRandomSeed: boolean;
 }
 
 function toSummary(strategy: AnyTradingStrategy): StrategySummary {
@@ -45,6 +46,7 @@ function toSummary(strategy: AnyTradingStrategy): StrategySummary {
     version: strategy.version,
     name: strategy.name,
     description: strategy.description,
+    supportsRandomSeed: strategy.supportsRandomSeed !== false,
     requiresFundamentals: strategyRequiresFinancialData(strategy),
   };
 }

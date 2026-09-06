@@ -85,3 +85,25 @@ test('복제 액션 그룹은 모바일에서 2 + 1 패널로 이어진다', asy
     await expect(resetClone).toHaveCSS('border-top-width', '0px');
   }
 });
+
+test('난수 비의존 전략은 난수 복제를 비활성화하고 재현 정보에서 시드를 숨긴다', async ({ page }) => {
+  await login(page);
+  await page.route('**/api/v1/strategies', (route) => route.fulfill({ json: { strategies: [{
+    id: 'range-breakout', version: 'test-version', name: '검증 전략', description: '',
+    supportsRandomSeed: false,
+  }] } }));
+  await page.route(`**/api/v1/backtests/${JOB_ID}`, (route) => route.fulfill({ json: {
+    ...detail,
+    run: {
+      strategyId: 'range-breakout', strategyVersion: 'test-version', strategySourceHash: 'fixture',
+      parameterJson: '{}', universeHash: 'fixture', universeJson: '[]', engineVersion: 'test',
+      feeModelVersion: 'test', slippageModelVersion: 'test', randomSeed: 42, gitCommitSha: 'fixture',
+      warningsJson: null, openPositionsJson: null, startedAtMs: Date.UTC(2026, 0, 1), completedAtMs: Date.UTC(2026, 0, 1),
+    },
+  } }));
+  await page.goto(`/backtests/${JOB_ID}`);
+  await expect(page.getByRole('button', { name: '새 난수로 복제', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '그대로 복제', exact: true })).toBeEnabled();
+  await expect(page.getByText('재현 정보', { exact: true })).toBeVisible();
+  await expect(page.getByText('난수 시드', { exact: true })).toHaveCount(0);
+});
