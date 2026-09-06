@@ -1,31 +1,31 @@
 # Working Principles
 
-These instructions apply to the entire repository.
+These instructions apply repository-wide.
 
 ## Request Handling
 
 - Understand the user's goal and relevant code flow before acting.
-- Write all code comments and docstrings in Korean.
-- For investigation, review, or design alone, stay read-only; if implementation intent is unclear, ask the user and wait before editing; when changes are clearly requested, proceed without reconfirmation, using reasonable defaults for minor details within the authorized scope.
+- Write new or modified code comments and docstrings in Korean.
+- Stay read-only for investigation, review, or design-only requests. Ask and wait if implementation intent is unclear; when changes are clearly requested, proceed within scope using reasonable defaults for minor details.
 
-### Subagents
+## Subagents
 
-- Assign repetitive code generation, document formatting, test-case expansion, lint fixes, comment cleanup, simple renames, mechanical migrations, and preliminary log summaries to smaller-model subagents within a defined scope. Escalate design, contract, or risk decisions to the main agent.
-- Subagents are opt-in: deliberately choose them per task, never spawn by default. Use them only for independent work with summarizable results, when isolating intermediate output protects the main context or parallel execution materially reduces elapsed time.
-- Prefer read-only subagents. For editing tasks, assign exclusive module ownership; never let multiple agents edit the same module concurrently.
+- Prefer direct execution for small, sequential, or context-heavy tasks. Delegate only independent, bounded work whose expected benefit exceeds context-transfer and coordination costs; prefer cheaper capable models when available.
+- When spawning, prefer no inherited history using supported controls; include only necessary context and fork full history only when essential. Send a compact task packet: objective, relevant files or symbols, established findings and decisions, constraints, acceptance criteria, and validation commands.
+- Reuse an existing subagent for follow-ups that depend on its context. Avoid repeating exploration already covered by reliable findings.
+- Avoid parallel edits to the same files or tightly coupled code.
+- The root agent owns architecture, cross-cutting decisions, integration, and final verification.
 
-### Reporting
+## Reporting
 
-- Summarize tool output and intermediate exploration; final reports contain only outcomes or changes, verification, and risks, including material assumptions or limitations.
+- Keep tool output and intermediate updates concise. Root and subagent completion reports should contain only findings or changes, affected files, material decisions, verification results, and unresolved risks, assumptions, or limitations.
 
 ## Git Workflow
 
-- Before editing, inspect `git status --short --branch`, the current branch, and `git worktree list`. Treat existing changes as belonging to the user or another worker; never overwrite them or include them in your commit.
-- If the current branch is `main`, create a descriptive task branch before the first edit.
-- Before committing, compare the current branch or worktree name and recent commit history with the task. If they are unrelated, switch to a dedicated task branch; if the existing checkout must be preserved or is shared with another task, create a separate worktree as well.
-- Start every new branch or worktree from the latest `main`.
-- If another Codex task is active in the same repository, work in a separate branch and worktree to avoid conflicts.
-- Commit after each complete, verified unit of work. Include related tests and documentation in the same commit, stage only your changes by explicit path, and inspect the staged diff before committing.
-- A change that fails verification is incomplete. If the failure cannot be resolved, do not commit; report the failure and its cause.
-- After committing, push the current branch when the remote and authentication are available, setting the upstream for a new branch. If the push fails, keep the commit and report the reason.
-- Explicit user instructions about branches, commits, or pushes override this workflow.
+- Explicit user instructions about branches, commits, or pushes override these workflow defaults. The root agent manages branch/worktree setup, staging, commits, and pushes; subagents perform these operations only when explicitly delegated.
+- Before editing, inspect `git status --short --branch`, `git worktree list`, and recent commits. Preserve pre-existing changes, including staged changes; never overwrite them or include them in your commits.
+- Before the first edit, create a descriptive task branch if on `main`, an unrelated branch, or a detached HEAD. Use a separate branch and worktree for concurrent editing tasks or when the existing checkout must be preserved.
+- Base new independent tasks on freshly fetched remote `main`; if unavailable, use local `main` and report the limitation. Related subagent work must use the root's agreed task snapshot, including required parent changes.
+- Commit each complete unit with related tests and documentation only after required verification passes. If verification fails or is blocked, do not commit; report the cause.
+- Stage only task-owned changes by explicit path or hunk, and inspect the entire staged diff before committing.
+- After committing, push when the remote and authentication are available, setting upstream for new branches. If pushing is unavailable or fails, preserve the commit and report why.
