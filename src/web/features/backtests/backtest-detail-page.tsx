@@ -614,9 +614,6 @@ export function BacktestDetailPage() {
         method: 'POST',
       }),
     onSuccess: (data) => {
-      toast.success('복제되어 대기열에 추가되었습니다');
-      // 재기준된 항목은 조용히 넘기지 않는다 — 원본과 결과가 달라질 수 있다
-      for (const warning of data.warnings ?? []) toast.warning(warning, { duration: 10_000 });
       void queryClient.invalidateQueries({ queryKey: ['backtests'] });
       void navigate(`/backtests/${data.job.id}`);
     },
@@ -640,8 +637,6 @@ export function BacktestDetailPage() {
       ),
     onSuccess: (data) => {
       setSeedCloneOpen(false);
-      toast.success('새 난수 시드 실험을 시작했습니다');
-      for (const warning of data.warnings ?? []) toast.warning(warning, { duration: 10_000 });
       void queryClient.invalidateQueries({ queryKey: ['backtests'] });
       void queryClient.invalidateQueries({ queryKey: ['backtest-clone-batches'] });
       void navigate(`/backtests/batches/${data.batch.id}`);

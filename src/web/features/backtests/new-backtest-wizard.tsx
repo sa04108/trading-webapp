@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
-import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -513,11 +512,6 @@ export function NewBacktestWizard() {
     },
     onSuccess: async (data) => {
       suppressDraftFlush.current = true;
-      toast.success('백테스트가 대기열에 추가되었습니다');
-      // 201 이 실어 보낸 경고를 버리지 않는다 — 복제 경로(`backtest-detail-page.tsx`)와 같다.
-      // 자본변동 gap 경고가 여기로 온다.
-      // 흘리면 "수집했고 분할이 없었다" 와 "gap 이 나서 확인하지 못했다" 가 같아 보인다.
-      for (const warning of data.warnings ?? []) toast.warning(warning, { duration: 10_000 });
       queryClient.removeQueries({
         queryKey: ['backtests', 'wizard-draft', sourceJobId],
         exact: true,
