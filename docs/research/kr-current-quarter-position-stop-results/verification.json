@@ -1,0 +1,41 @@
+{
+  "asof": "2026-09-08",
+  "baseCommit": "04eed6d",
+  "status": "고정 실험·원본 대조 통과, 실전 채택 기준 미달",
+  "checks": [
+    {
+      "command": "python scripts/quarter-research/build_position_stop_evidence.py data/kr-quarter-research data/kr-quarter-research/position-stop/evidence",
+      "exitCode": 0,
+      "newAccounts": 369,
+      "reusedAccounts": 123
+    },
+    {
+      "command": "python -m py_compile scripts/quarter-research/build_position_stop_evidence.py",
+      "exitCode": 0
+    },
+    {
+      "command": "node --import tsx scripts/quarter-research/current-signals.ts data/kr-quarter-research/expanded/current-stock-input.json.gz scripts/quarter-research/configs/position-stop-12.json data/kr-quarter-research/position-stop/current-stop12-signals.json",
+      "exitCode": 0,
+      "candidateCount": 1,
+      "symbolCount": 200,
+      "firstTargetsAndOrdersEqualBaseline": true
+    }
+  ],
+  "unchangedTradingFiles": 29,
+  "unchangedTradingFilesReference": "04eed6d의 연구 매매 모듈 5개·엔진 domain·운영 전략 24개와 바이트 대조",
+  "priorCodeVerification": "../kr-current-quarter-entry-results/verification.json",
+  "newTradingCode": false,
+  "currentSourceSha256": {
+    "data/kr-quarter-research/position-stop/current-stop12-signals.json": "95ce050fe3aa0142a522b64eec4cba61daae23b0a1de3238f22fa5c380a17e68",
+    "data/kr-quarter-research/expanded/current-stock-input.json.gz": "78ea7d3d2fbb1e0f81735b31094feed5a843feb0f41a0f8fbc9ea4a3f769ea1f",
+    "data/kr-quarter-research/expanded/current-signals.json": "7e856041572da19881b0adc1c1407c292cca44baa6d173572b272cc4ae8d5009"
+  },
+  "publicFilesSha256": {
+    "all-summaries.csv": "9ca8fe22d73566986c2c6f34c893cf4caed45a6e61ae8935a664b9526380784b",
+    "nonoverlapping-accounts.json": "ad3d49d17315ac64eaf8a29533adcb5b416736da980dc200d720e467c0c7a906",
+    "evidence-manifest.json": "06b1be8c0287222af2f3ae35a9f3fecf708296723971fe8b869466ddfe4884e2",
+    "current-stop12-signals.json": "a0134b712a0719bcb021c1584463a70d7eb37d92b9aa79524eaecaef64973f55"
+  },
+  "deferredDiagnostics": "비중첩 과반 성공 기준 미달로 추가 월간·25/35% 조건·10/20bp 비용 평가는 실행하지 않음",
+  "note": "1,091개 직전 연구와 이번 369개는 서로 다른 실행이며 재사용 기본 123개를 새 계좌 수로 더하지 않는다. 같은 시장 역사에 대한 반복 조사이다."
+}

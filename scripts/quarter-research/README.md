@@ -138,3 +138,16 @@ pnpm exec vitest run tests/unit/quarter-research.test.ts tests/unit/recovery-qua
 가격 이력 옵션은 현재까지 발생한 미확인 사건 이후의 실제 일봉만 신호에 공급한다. 새 순위 결정과 다음 단계 매수 자격에 적용하되 보유 포지션의 실제 가격과 청산은 유지한다. 확인 대기는 처음 조건을 연속 충족한 날에 최초 순위를 정하고, 이후 원래 회전 일정으로 진행한다. `activation`은 조건 확인 완료 기록이며 실제 체결은 `fills`로 판단한다. 만기 청산 신호와 같은 날 확인돼도 주문은 위험 규칙에서 취소될 수 있다. 옵션이 없으면 기존 동작·결과 형식을 유지한다.
 
 집계기는 1,091개 원본 계좌·25개 요약의 해시와 실행 설정을 대조하고 전체 및 비중첩 통계를 다시 계산한다. 공개용 요약은 `docs/research/kr-current-quarter-entry-results/`, 해시 일치 원본은 로컬 `data/kr-quarter-research/entry/`에 있다. [진입일 후속 결과](../../docs/research/kr-current-quarter-entry-findings.md)에 가격 처리 전후, 모든 조건 문턱, 확인 대기와 현재 대기 상태를 함께 기록했다.
+
+
+## 종목 손절 단일 변수 진단
+
+`configs/position-stop-experiments.json`은 손절 6·12·16%의 개발 월간·조건부 검증·조건부 최근 9개 실험 목록이다. 나머지 매매 코드·위험 규칙은 진입일 연구 커밋 `04eed6d` 그대로다. 연속 확인 대기는 적용하지 않는다. 모든 조합을 완료한 뒤 아래 집계기로 369개 새 계좌와 123개 기본 계좌를 대조한다. 기본 8% 계좌는 `entry/monthly-development` 및 `entry/daily-{validation,confirmation}`에서 같은 시작점만 재사용한다.
+
+```bash
+node --import tsx scripts/quarter-research/quarter-engine.ts data/kr-quarter-research/expanded/stock-200-verified-input.json.gz data/kr-quarter-research/position-stop/reproduction-stop12-confirmation confirmation scripts/quarter-research/configs/position-stop-12.json 5 204 0 100000000 scripts/quarter-research/configs/entry-30-confirmation-options.json
+node --import tsx scripts/quarter-research/current-signals.ts data/kr-quarter-research/expanded/current-stock-input.json.gz scripts/quarter-research/configs/position-stop-12.json data/kr-quarter-research/position-stop/current-stop12-signals.json
+python scripts/quarter-research/build_position_stop_evidence.py data/kr-quarter-research data/kr-quarter-research/position-stop/evidence
+```
+
+[종목 손절 결과](../../docs/research/kr-current-quarter-position-stop-findings.md)에 모든 손절값과 비중첩 실패를 함께 기록했다. 추가 월간·비용 평가의 진행 기준을 충족하지 못했으므로 그 후속 평가는 실행하지 않았다. 현재 12% 손절 후보의 첫 목표는 기본 후보와 같지만 보유 후 경로가 달라질 수 있다.

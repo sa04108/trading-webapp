@@ -1,0 +1,13 @@
+[
+  {
+    "id": "recovery-60-3-stop12",
+    "strategyId": "recovery-rotation",
+    "topN": 3,
+    "parameters": {
+      "formationDays": 60,
+      "topN": 3,
+      "positionStopPct": 12
+    },
+    "rebalanceBars": 20
+  }
+]

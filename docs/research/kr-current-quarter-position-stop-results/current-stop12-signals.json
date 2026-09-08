@@ -1,0 +1,111 @@
+{
+  "asof": "2026-09-08",
+  "inputSha256": "78ea7d3d2fbb1e0f81735b31094feed5a843feb0f41a0f8fbc9ea4a3f769ea1f",
+  "engineVersion": "2.12.0",
+  "initialCash": 100000000,
+  "signals": [
+    {
+      "candidate": {
+        "id": "recovery-60-3-stop12",
+        "strategyId": "recovery-rotation",
+        "topN": 3,
+        "parameters": {
+          "formationDays": 60,
+          "topN": 3,
+          "positionStopPct": 12
+        },
+        "rebalanceBars": 20
+      },
+      "parameters": {
+        "formationDays": 60,
+        "topN": 3,
+        "targetAnnualVolatility": 0.3,
+        "positionStopPct": 12
+      },
+      "ordersAtLatestClose": [],
+      "pendingTargets": [
+        {
+          "symbol": "078930",
+          "weight": 0.1848904881645922
+        },
+        {
+          "symbol": "010950",
+          "weight": 0.1848904881645922
+        },
+        {
+          "symbol": "180640",
+          "weight": 0.1848904881645922
+        }
+      ],
+      "note": "오늘은 목표 선정 단계이며 다음 종가에 자격·가격을 재확인한 후 매수를 예약한다"
+    }
+  ],
+  "note": "연구 후보의 현재 신호이며 실전 채택이나 향후 수익 검증이 아니다. 미래 체결은 시뮬레이션하지 않았다.",
+  "selectedDiagnostics": [
+    {
+      "symbol": "010950",
+      "name": "S-Oil",
+      "market": "KOSPI",
+      "marketCap": 17945697044800,
+      "close": 159400,
+      "tradedAt": "2026-09-08T16:10:19+09:00",
+      "selectionMarketCap": "17743048019200",
+      "selectionAdv20": 55648379487.5,
+      "universeAsOf": "2026-09-07",
+      "valuation": null,
+      "lastBarTsMs": 1788825600000,
+      "return20": 0.1418338108882522,
+      "return60": 0.4308797127468582,
+      "return120": 0.5123339658444024,
+      "annualVol20": 0.5200126273676952,
+      "adv20": 56117406820,
+      "sma20": 147170,
+      "quality": null,
+      "quarterlyReady": false
+    },
+    {
+      "symbol": "078930",
+      "name": "GS",
+      "market": "KOSPI",
+      "marketCap": 11565489127500,
+      "close": 124500,
+      "tradedAt": "2026-09-08T16:10:16+09:00",
+      "selectionMarketCap": "11667674172000",
+      "selectionAdv20": 63084517947.5,
+      "universeAsOf": "2026-09-07",
+      "valuation": null,
+      "lastBarTsMs": 1788825600000,
+      "return20": 0.2795477903391572,
+      "return60": 0.7172413793103449,
+      "return120": 0.9983948635634028,
+      "annualVol20": 0.5961533771402959,
+      "adv20": 63990319110,
+      "sma20": 118645,
+      "quality": null,
+      "quarterlyReady": false
+    },
+    {
+      "symbol": "180640",
+      "name": "한진칼",
+      "market": "KOSPI",
+      "marketCap": 9907522203600,
+      "close": 148400,
+      "tradedAt": "2026-09-08T16:10:16+09:00",
+      "selectionMarketCap": "9940903343100",
+      "selectionAdv20": 11311990742.5,
+      "universeAsOf": "2026-09-07",
+      "valuation": null,
+      "lastBarTsMs": 1788825600000,
+      "return20": 0.27163667523564694,
+      "return60": 0.2376980817347789,
+      "return120": 0.27710843373493965,
+      "annualVol20": 0.5064161141185529,
+      "adv20": 11981535640,
+      "sma20": 127610,
+      "quality": null,
+      "quarterlyReady": false
+    }
+  ],
+  "universeCount": 200,
+  "historyQuarantineCount": 10
+}

@@ -1,0 +1,83 @@
+[
+  {
+    "directory": "position-stop/stop6-development",
+    "stage": "development",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "position-stop-6.json",
+    "options": "history-reset-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "position-stop/stop6-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "position-stop-6.json",
+    "options": "entry-30-validation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "position-stop/stop6-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "position-stop-6.json",
+    "options": "entry-30-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "position-stop/stop12-development",
+    "stage": "development",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "position-stop-12.json",
+    "options": "history-reset-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "position-stop/stop12-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "position-stop-12.json",
+    "options": "entry-30-validation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "position-stop/stop12-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "position-stop-12.json",
+    "options": "entry-30-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "position-stop/stop16-development",
+    "stage": "development",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "position-stop-16.json",
+    "options": "history-reset-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "position-stop/stop16-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "position-stop-16.json",
+    "options": "entry-30-validation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "position-stop/stop16-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "position-stop-16.json",
+    "options": "entry-30-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  }
+]
