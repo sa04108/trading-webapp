@@ -1,0 +1,3782 @@
+[
+  {
+    "kind": "seed",
+    "value": 205,
+    "stage": "validation",
+    "paired": [
+      {
+        "start": "2020-04-09",
+        "baseReturnPct": 11.684146132499995,
+        "returnPct": 11.42777422750003,
+        "returnDeltaPctPoints": -0.25637190499996443,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-10",
+        "baseReturnPct": 17.527434985,
+        "returnPct": 17.327531760000014,
+        "returnDeltaPctPoints": -0.1999032249999857,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-13",
+        "baseReturnPct": 9.88708142750001,
+        "returnPct": 9.88708142749999,
+        "returnDeltaPctPoints": -2.1316282072803006e-14,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2020-04-14",
+        "baseReturnPct": 11.2825392435,
+        "returnPct": 11.374965613499977,
+        "returnDeltaPctPoints": 0.092426369999977,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-16",
+        "baseReturnPct": 11.470001090000004,
+        "returnPct": 10.68466977000002,
+        "returnDeltaPctPoints": -0.7853313199999832,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-17",
+        "baseReturnPct": 9.97435633124999,
+        "returnPct": 9.97435633124999,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2020-04-20",
+        "baseReturnPct": 11.882689341500008,
+        "returnPct": 11.51815340650002,
+        "returnDeltaPctPoints": -0.3645359349999886,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-21",
+        "baseReturnPct": 14.503059915499982,
+        "returnPct": 14.314538960000034,
+        "returnDeltaPctPoints": -0.18852095549994807,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-22",
+        "baseReturnPct": 17.266433817500015,
+        "returnPct": 17.266433817500015,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-16",
+        "baseReturnPct": 10.20871349749999,
+        "returnPct": 15.736899397500004,
+        "returnDeltaPctPoints": 5.528185900000015,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-17",
+        "baseReturnPct": 8.742879640000002,
+        "returnPct": 8.900339560000003,
+        "returnDeltaPctPoints": 0.15745992000000086,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2020-06-18",
+        "baseReturnPct": 11.125491620000005,
+        "returnPct": 11.217580824999995,
+        "returnDeltaPctPoints": 0.09208920499998996,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-19",
+        "baseReturnPct": 10.907127821500007,
+        "returnPct": 10.972390491499983,
+        "returnDeltaPctPoints": 0.0652626699999761,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-22",
+        "baseReturnPct": 10.874724730000018,
+        "returnPct": 10.820763305000014,
+        "returnDeltaPctPoints": -0.053961425000004226,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-23",
+        "baseReturnPct": 11.950397680499991,
+        "returnPct": 12.833206298499999,
+        "returnDeltaPctPoints": 0.8828086180000074,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-24",
+        "baseReturnPct": 11.36301538450002,
+        "returnPct": 12.561145250000006,
+        "returnDeltaPctPoints": 1.1981298654999861,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-07-06",
+        "baseReturnPct": 19.318166822499983,
+        "returnPct": 19.514606307500017,
+        "returnDeltaPctPoints": 0.1964394850000346,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-07-10",
+        "baseReturnPct": 18.688110605,
+        "returnPct": 18.688110605,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2021-02-03",
+        "baseReturnPct": -14.05504273,
+        "returnPct": -14.109948735,
+        "returnDeltaPctPoints": -0.054906004999999425,
+        "baseTargetReached": false,
+        "targetReached": false
+      }
+    ]
+  },
+  {
+    "kind": "seed",
+    "value": 205,
+    "stage": "confirmation",
+    "paired": [
+      {
+        "start": "2024-09-02",
+        "baseReturnPct": 12.89861940999999,
+        "returnPct": 12.89861940999999,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-04-28",
+        "baseReturnPct": 11.015408045000008,
+        "returnPct": 11.015408045000008,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-04-29",
+        "baseReturnPct": 12.573800644999999,
+        "returnPct": 12.573800644999999,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-04-30",
+        "baseReturnPct": 10.463444970000001,
+        "returnPct": 10.29170841,
+        "returnDeltaPctPoints": -0.17173656000000115,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-05-02",
+        "baseReturnPct": 10.160006320000004,
+        "returnPct": 10.087298560000013,
+        "returnDeltaPctPoints": -0.07270775999999124,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-05-07",
+        "baseReturnPct": 11.033680210000018,
+        "returnPct": 11.033680210000018,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-11-17",
+        "baseReturnPct": 11.996482490000005,
+        "returnPct": 11.608728215000008,
+        "returnDeltaPctPoints": -0.38775427499999715,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-12-03",
+        "baseReturnPct": 10.043233690000019,
+        "returnPct": 9.66715040999999,
+        "returnDeltaPctPoints": -0.376083280000028,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2025-12-04",
+        "baseReturnPct": 20.81956260000002,
+        "returnPct": 20.82471184500003,
+        "returnDeltaPctPoints": 0.00514924500001257,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-12-05",
+        "baseReturnPct": 16.943949557499984,
+        "returnPct": 16.98777641,
+        "returnDeltaPctPoints": 0.043826852500014724,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-12-08",
+        "baseReturnPct": 13.455957730000012,
+        "returnPct": 13.465561120000036,
+        "returnDeltaPctPoints": 0.009603390000023637,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-12-09",
+        "baseReturnPct": 10.904969165000011,
+        "returnPct": 10.904969165000033,
+        "returnDeltaPctPoints": 2.1316282072803006e-14,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-03",
+        "baseReturnPct": 17.09481574499998,
+        "returnPct": 17.094815745000002,
+        "returnDeltaPctPoints": 2.1316282072803006e-14,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-04",
+        "baseReturnPct": 24.212516975,
+        "returnPct": 24.212516975,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-05",
+        "baseReturnPct": 19.689911555000016,
+        "returnPct": 19.351028745000008,
+        "returnDeltaPctPoints": -0.3388828100000083,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-06",
+        "baseReturnPct": 21.41202349000002,
+        "returnPct": 11.116368285,
+        "returnDeltaPctPoints": -10.29565520500002,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-09",
+        "baseReturnPct": 22.737454150000012,
+        "returnPct": 22.73745414999999,
+        "returnDeltaPctPoints": -2.1316282072803006e-14,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-10",
+        "baseReturnPct": 22.57652245999997,
+        "returnPct": 22.576522459999993,
+        "returnDeltaPctPoints": 2.1316282072803006e-14,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-11",
+        "baseReturnPct": 18.50197278000001,
+        "returnPct": 18.50197278000001,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-12",
+        "baseReturnPct": 13.519211595000025,
+        "returnPct": 13.443551030000013,
+        "returnDeltaPctPoints": -0.07566056500001217,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-13",
+        "baseReturnPct": -7.804380775000008,
+        "returnPct": -7.787626555000005,
+        "returnDeltaPctPoints": 0.016754220000003706,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-19",
+        "baseReturnPct": -10.174003897499983,
+        "returnPct": -10.011953655000006,
+        "returnDeltaPctPoints": 0.16205024249997635,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-20",
+        "baseReturnPct": -9.444850297499997,
+        "returnPct": -9.413792632500007,
+        "returnDeltaPctPoints": 0.031057664999989854,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-23",
+        "baseReturnPct": -7.140591963749987,
+        "returnPct": -7.056901363750001,
+        "returnDeltaPctPoints": 0.0836905999999864,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-24",
+        "baseReturnPct": -4.448871572499991,
+        "returnPct": -4.448871572499991,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-25",
+        "baseReturnPct": -11.352638082499977,
+        "returnPct": -11.3526380825,
+        "returnDeltaPctPoints": -2.3092638912203256e-14,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-26",
+        "baseReturnPct": -8.480707407499988,
+        "returnPct": -8.480707407499999,
+        "returnDeltaPctPoints": -1.0658141036401503e-14,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-27",
+        "baseReturnPct": 7.025251764999996,
+        "returnPct": 7.025251764999996,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-03-03",
+        "baseReturnPct": 9.662980200000003,
+        "returnPct": 6.882080572500016,
+        "returnDeltaPctPoints": -2.7808996274999878,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-03-05",
+        "baseReturnPct": -14.99564404499999,
+        "returnPct": -14.995644045,
+        "returnDeltaPctPoints": -1.0658141036401503e-14,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-03-18",
+        "baseReturnPct": -9.200023511499989,
+        "returnPct": -9.659990533499997,
+        "returnDeltaPctPoints": -0.45996702200000783,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-03-19",
+        "baseReturnPct": -10.325604044000015,
+        "returnPct": -10.325604044000002,
+        "returnDeltaPctPoints": 1.2434497875801753e-14,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-03-20",
+        "baseReturnPct": -10.797716161000015,
+        "returnPct": -11.110521662000005,
+        "returnDeltaPctPoints": -0.3128055009999908,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-04-08",
+        "baseReturnPct": -8.88502010750003,
+        "returnPct": 6.97507544,
+        "returnDeltaPctPoints": 15.86009554750003,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-04-09",
+        "baseReturnPct": 8.893101944999993,
+        "returnPct": 8.893101944999993,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-04-10",
+        "baseReturnPct": 11.87964812000002,
+        "returnPct": 11.164259132499987,
+        "returnDeltaPctPoints": -0.7153889875000328,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-13",
+        "baseReturnPct": 11.854617302499992,
+        "returnPct": 11.419731792499999,
+        "returnDeltaPctPoints": -0.43488550999999376,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-14",
+        "baseReturnPct": 14.733505294999993,
+        "returnPct": 14.733505294999993,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-15",
+        "baseReturnPct": 14.780227587500017,
+        "returnPct": 14.765374300000001,
+        "returnDeltaPctPoints": -0.014853287500015355,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-16",
+        "baseReturnPct": 15.125156455000033,
+        "returnPct": 15.118184772499976,
+        "returnDeltaPctPoints": -0.006971682500056531,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-17",
+        "baseReturnPct": 13.718787175000013,
+        "returnPct": 13.475413487499988,
+        "returnDeltaPctPoints": -0.24337368750002497,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-20",
+        "baseReturnPct": 8.861777490000012,
+        "returnPct": 8.861777489999989,
+        "returnDeltaPctPoints": -2.3092638912203256e-14,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-04-21",
+        "baseReturnPct": -4.282907229999989,
+        "returnPct": 22.016456179999988,
+        "returnDeltaPctPoints": 26.299363409999977,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-22",
+        "baseReturnPct": 11.389513675000007,
+        "returnPct": 11.389513675000007,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-23",
+        "baseReturnPct": 11.004373615000018,
+        "returnPct": 11.345608115000005,
+        "returnDeltaPctPoints": 0.34123449999998634,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-24",
+        "baseReturnPct": 15.522948915000011,
+        "returnPct": 15.776886440000016,
+        "returnDeltaPctPoints": 0.2539375250000049,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-27",
+        "baseReturnPct": 15.722747394999992,
+        "returnPct": 15.722747394999992,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-28",
+        "baseReturnPct": 13.129185585000002,
+        "returnPct": 13.129185585000002,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-29",
+        "baseReturnPct": 22.72136819499999,
+        "returnPct": 21.827692285000012,
+        "returnDeltaPctPoints": -0.8936759099999776,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-05-04",
+        "baseReturnPct": -9.206876290000011,
+        "returnPct": -5.272696144999999,
+        "returnDeltaPctPoints": 3.9341801450000116,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-05-06",
+        "baseReturnPct": 12.16251863500002,
+        "returnPct": 12.162518634999998,
+        "returnDeltaPctPoints": -2.1316282072803006e-14,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-05-07",
+        "baseReturnPct": -13.827679095,
+        "returnPct": -12.090013104999986,
+        "returnDeltaPctPoints": 1.7376659900000142,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-05-08",
+        "baseReturnPct": -17.186758227499986,
+        "returnPct": -17.186758227499976,
+        "returnDeltaPctPoints": 1.0658141036401503e-14,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-05-11",
+        "baseReturnPct": -11.343986062500012,
+        "returnPct": -11.3439860625,
+        "returnDeltaPctPoints": 1.0658141036401503e-14,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-05-12",
+        "baseReturnPct": -13.520183552499997,
+        "returnPct": -13.52018355250001,
+        "returnDeltaPctPoints": -1.2434497875801753e-14,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-05-13",
+        "baseReturnPct": 19.565349045000026,
+        "returnPct": 19.91250198000001,
+        "returnDeltaPctPoints": 0.3471529349999827,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-05-14",
+        "baseReturnPct": 19.583471095000004,
+        "returnPct": 19.583471094999982,
+        "returnDeltaPctPoints": -2.1316282072803006e-14,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-05-15",
+        "baseReturnPct": 14.383996295000001,
+        "returnPct": 14.326203654999992,
+        "returnDeltaPctPoints": -0.0577926400000095,
+        "baseTargetReached": true,
+        "targetReached": true
+      }
+    ]
+  },
+  {
+    "kind": "seed",
+    "value": 206,
+    "stage": "validation",
+    "paired": [
+      {
+        "start": "2020-04-09",
+        "baseReturnPct": 11.684146132499995,
+        "returnPct": 11.543651422500002,
+        "returnDeltaPctPoints": -0.14049470999999336,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-10",
+        "baseReturnPct": 17.527434985,
+        "returnPct": 16.39124757999999,
+        "returnDeltaPctPoints": -1.1361874050000083,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-13",
+        "baseReturnPct": 9.88708142750001,
+        "returnPct": 9.88708142749999,
+        "returnDeltaPctPoints": -2.1316282072803006e-14,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2020-04-14",
+        "baseReturnPct": 11.2825392435,
+        "returnPct": 11.49839531100001,
+        "returnDeltaPctPoints": 0.21585606750000963,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-16",
+        "baseReturnPct": 11.470001090000004,
+        "returnPct": 10.702944635000012,
+        "returnDeltaPctPoints": -0.7670564549999916,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-17",
+        "baseReturnPct": 9.97435633124999,
+        "returnPct": 9.97435633124999,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2020-04-20",
+        "baseReturnPct": 11.882689341500008,
+        "returnPct": 11.518153406499977,
+        "returnDeltaPctPoints": -0.36453593500003123,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-21",
+        "baseReturnPct": 14.503059915499982,
+        "returnPct": 14.314373132999991,
+        "returnDeltaPctPoints": -0.1886867824999907,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-22",
+        "baseReturnPct": 17.266433817500015,
+        "returnPct": 17.266433817500015,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-16",
+        "baseReturnPct": 10.20871349749999,
+        "returnPct": 10.803381382499989,
+        "returnDeltaPctPoints": 0.5946678849999998,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-17",
+        "baseReturnPct": 8.742879640000002,
+        "returnPct": 13.906626987500005,
+        "returnDeltaPctPoints": 5.163747347500003,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-18",
+        "baseReturnPct": 11.125491620000005,
+        "returnPct": 10.599877469999996,
+        "returnDeltaPctPoints": -0.5256141500000098,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-19",
+        "baseReturnPct": 10.907127821500007,
+        "returnPct": 10.445365173999988,
+        "returnDeltaPctPoints": -0.4617626475000183,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-22",
+        "baseReturnPct": 10.874724730000018,
+        "returnPct": 10.88152950000001,
+        "returnDeltaPctPoints": 0.006804769999991578,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-23",
+        "baseReturnPct": 11.950397680499991,
+        "returnPct": 12.833206298499999,
+        "returnDeltaPctPoints": 0.8828086180000074,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-24",
+        "baseReturnPct": 11.36301538450002,
+        "returnPct": 11.485142309000018,
+        "returnDeltaPctPoints": 0.12212692449999807,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-07-06",
+        "baseReturnPct": 19.318166822499983,
+        "returnPct": 19.62777683249999,
+        "returnDeltaPctPoints": 0.3096100100000072,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-07-10",
+        "baseReturnPct": 18.688110605,
+        "returnPct": 18.688110605,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2021-02-03",
+        "baseReturnPct": -14.05504273,
+        "returnPct": -14.373433879999997,
+        "returnDeltaPctPoints": -0.3183911499999965,
+        "baseTargetReached": false,
+        "targetReached": false
+      }
+    ]
+  },
+  {
+    "kind": "seed",
+    "value": 206,
+    "stage": "confirmation",
+    "paired": [
+      {
+        "start": "2024-09-02",
+        "baseReturnPct": 12.89861940999999,
+        "returnPct": 12.898619410000013,
+        "returnDeltaPctPoints": 2.3092638912203256e-14,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-04-28",
+        "baseReturnPct": 11.015408045000008,
+        "returnPct": 11.015408045000008,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-04-29",
+        "baseReturnPct": 12.573800644999999,
+        "returnPct": 12.573800645000022,
+        "returnDeltaPctPoints": 2.3092638912203256e-14,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-04-30",
+        "baseReturnPct": 10.463444970000001,
+        "returnPct": 10.402186599999986,
+        "returnDeltaPctPoints": -0.061258370000015105,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-05-02",
+        "baseReturnPct": 10.160006320000004,
+        "returnPct": 10.165825979999997,
+        "returnDeltaPctPoints": 0.005819659999993121,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-05-07",
+        "baseReturnPct": 11.033680210000018,
+        "returnPct": 11.033680210000018,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-11-17",
+        "baseReturnPct": 11.996482490000005,
+        "returnPct": 11.608728214999985,
+        "returnDeltaPctPoints": -0.38775427500002024,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-12-03",
+        "baseReturnPct": 10.043233690000019,
+        "returnPct": 9.663993565000006,
+        "returnDeltaPctPoints": -0.37924012500001325,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2025-12-04",
+        "baseReturnPct": 20.81956260000002,
+        "returnPct": 20.706898974999998,
+        "returnDeltaPctPoints": -0.11266362500002103,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-12-05",
+        "baseReturnPct": 16.943949557499984,
+        "returnPct": 16.98777641,
+        "returnDeltaPctPoints": 0.043826852500014724,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-12-08",
+        "baseReturnPct": 13.455957730000012,
+        "returnPct": 13.465561120000036,
+        "returnDeltaPctPoints": 0.009603390000023637,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-12-09",
+        "baseReturnPct": 10.904969165000011,
+        "returnPct": 10.90496916499999,
+        "returnDeltaPctPoints": -2.1316282072803006e-14,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-03",
+        "baseReturnPct": 17.09481574499998,
+        "returnPct": 17.09481574499998,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-04",
+        "baseReturnPct": 24.212516975,
+        "returnPct": 24.212516975,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-05",
+        "baseReturnPct": 19.689911555000016,
+        "returnPct": 19.22998207000002,
+        "returnDeltaPctPoints": -0.4599294849999964,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-06",
+        "baseReturnPct": 21.41202349000002,
+        "returnPct": 10.970823540000008,
+        "returnDeltaPctPoints": -10.441199950000012,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-09",
+        "baseReturnPct": 22.737454150000012,
+        "returnPct": 22.737454150000012,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-10",
+        "baseReturnPct": 22.57652245999997,
+        "returnPct": 22.576522460000014,
+        "returnDeltaPctPoints": 4.263256414560601e-14,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-11",
+        "baseReturnPct": 18.50197278000001,
+        "returnPct": 18.50197278000001,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-12",
+        "baseReturnPct": 13.519211595000025,
+        "returnPct": 14.030498445000017,
+        "returnDeltaPctPoints": 0.5112868499999923,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-13",
+        "baseReturnPct": -7.804380775000008,
+        "returnPct": -7.751144085000005,
+        "returnDeltaPctPoints": 0.05323669000000297,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-19",
+        "baseReturnPct": -10.174003897499983,
+        "returnPct": -10.188572587499989,
+        "returnDeltaPctPoints": -0.014568690000006157,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-20",
+        "baseReturnPct": -9.444850297499997,
+        "returnPct": -9.40499711724999,
+        "returnDeltaPctPoints": 0.03985318025000595,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-23",
+        "baseReturnPct": -7.140591963749987,
+        "returnPct": -7.071417998749996,
+        "returnDeltaPctPoints": 0.06917396499999118,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-24",
+        "baseReturnPct": -4.448871572499991,
+        "returnPct": -4.448871572499991,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-25",
+        "baseReturnPct": -11.352638082499977,
+        "returnPct": -11.3526380825,
+        "returnDeltaPctPoints": -2.3092638912203256e-14,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-26",
+        "baseReturnPct": -8.480707407499988,
+        "returnPct": -8.480707407499988,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-27",
+        "baseReturnPct": 7.025251764999996,
+        "returnPct": 7.025251764999996,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-03-03",
+        "baseReturnPct": 9.662980200000003,
+        "returnPct": 8.879294575000007,
+        "returnDeltaPctPoints": -0.7836856249999968,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-03-05",
+        "baseReturnPct": -14.99564404499999,
+        "returnPct": -14.995644045000011,
+        "returnDeltaPctPoints": -2.1316282072803006e-14,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-03-18",
+        "baseReturnPct": -9.200023511499989,
+        "returnPct": -9.970776419000005,
+        "returnDeltaPctPoints": -0.7707529075000163,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-03-19",
+        "baseReturnPct": -10.325604044000015,
+        "returnPct": -10.325604044000002,
+        "returnDeltaPctPoints": 1.2434497875801753e-14,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-03-20",
+        "baseReturnPct": -10.797716161000015,
+        "returnPct": -11.42600746100001,
+        "returnDeltaPctPoints": -0.6282912999999954,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-04-08",
+        "baseReturnPct": -8.88502010750003,
+        "returnPct": 9.806571715000011,
+        "returnDeltaPctPoints": 18.69159182250004,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-04-09",
+        "baseReturnPct": 8.893101944999993,
+        "returnPct": 8.89310194499997,
+        "returnDeltaPctPoints": -2.3092638912203256e-14,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-04-10",
+        "baseReturnPct": 11.87964812000002,
+        "returnPct": 11.636764789999997,
+        "returnDeltaPctPoints": -0.24288333000002282,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-13",
+        "baseReturnPct": 11.854617302499992,
+        "returnPct": 11.640194517500003,
+        "returnDeltaPctPoints": -0.21442278499998935,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-14",
+        "baseReturnPct": 14.733505294999993,
+        "returnPct": 14.733505294999993,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-15",
+        "baseReturnPct": 14.780227587500017,
+        "returnPct": 14.759237127500002,
+        "returnDeltaPctPoints": -0.020990460000014366,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-16",
+        "baseReturnPct": 15.125156455000033,
+        "returnPct": 15.11916255500001,
+        "returnDeltaPctPoints": -0.005993900000023089,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-17",
+        "baseReturnPct": 13.718787175000013,
+        "returnPct": 13.755972124999992,
+        "returnDeltaPctPoints": 0.03718494999997901,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-20",
+        "baseReturnPct": 8.861777490000012,
+        "returnPct": 8.861777490000012,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-04-21",
+        "baseReturnPct": -4.282907229999989,
+        "returnPct": -3.8371235800000014,
+        "returnDeltaPctPoints": 0.4457836499999872,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-04-22",
+        "baseReturnPct": 11.389513675000007,
+        "returnPct": 11.389513675000007,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-23",
+        "baseReturnPct": 11.004373615000018,
+        "returnPct": 11.017770514999992,
+        "returnDeltaPctPoints": 0.0133968999999734,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-24",
+        "baseReturnPct": 15.522948915000011,
+        "returnPct": 15.61584869000001,
+        "returnDeltaPctPoints": 0.09289977499999935,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-27",
+        "baseReturnPct": 15.722747394999992,
+        "returnPct": 15.722747394999992,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-28",
+        "baseReturnPct": 13.129185585000002,
+        "returnPct": 13.12918558499998,
+        "returnDeltaPctPoints": -2.1316282072803006e-14,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-29",
+        "baseReturnPct": 22.72136819499999,
+        "returnPct": 22.78297748500002,
+        "returnDeltaPctPoints": 0.06160929000003179,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-05-04",
+        "baseReturnPct": -9.206876290000011,
+        "returnPct": -5.261403595000003,
+        "returnDeltaPctPoints": 3.9454726950000083,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-05-06",
+        "baseReturnPct": 12.16251863500002,
+        "returnPct": 12.162518634999998,
+        "returnDeltaPctPoints": -2.1316282072803006e-14,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-05-07",
+        "baseReturnPct": -13.827679095,
+        "returnPct": -12.433227505,
+        "returnDeltaPctPoints": 1.394451590000001,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-05-08",
+        "baseReturnPct": -17.186758227499986,
+        "returnPct": -17.186758227499976,
+        "returnDeltaPctPoints": 1.0658141036401503e-14,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-05-11",
+        "baseReturnPct": -11.343986062500012,
+        "returnPct": -11.3439860625,
+        "returnDeltaPctPoints": 1.0658141036401503e-14,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-05-12",
+        "baseReturnPct": -13.520183552499997,
+        "returnPct": -13.520183552499997,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-05-13",
+        "baseReturnPct": 19.565349045000026,
+        "returnPct": 20.695420915000007,
+        "returnDeltaPctPoints": 1.1300718699999805,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-05-14",
+        "baseReturnPct": 19.583471095000004,
+        "returnPct": 19.583471095000004,
+        "returnDeltaPctPoints": 0.0,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-05-15",
+        "baseReturnPct": 14.383996295000001,
+        "returnPct": 14.422315445000034,
+        "returnDeltaPctPoints": 0.038319150000033275,
+        "baseTargetReached": true,
+        "targetReached": true
+      }
+    ]
+  },
+  {
+    "kind": "offset",
+    "value": 1,
+    "stage": "validation",
+    "paired": [
+      {
+        "start": "2020-04-09",
+        "baseReturnPct": 11.684146132499995,
+        "returnPct": 17.527434985,
+        "returnDeltaPctPoints": 5.843288852500004,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-10",
+        "baseReturnPct": 17.527434985,
+        "returnPct": 9.88708142750001,
+        "returnDeltaPctPoints": -7.640353557499989,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2020-04-13",
+        "baseReturnPct": 9.88708142750001,
+        "returnPct": 11.2825392435,
+        "returnDeltaPctPoints": 1.3954578159999897,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-14",
+        "baseReturnPct": 11.2825392435,
+        "returnPct": 11.470001090000004,
+        "returnDeltaPctPoints": 0.1874618465000033,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-16",
+        "baseReturnPct": 11.470001090000004,
+        "returnPct": 9.97435633124999,
+        "returnDeltaPctPoints": -1.4956447587500143,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2020-04-17",
+        "baseReturnPct": 9.97435633124999,
+        "returnPct": 11.882689341500008,
+        "returnDeltaPctPoints": 1.9083330102500184,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-20",
+        "baseReturnPct": 11.882689341500008,
+        "returnPct": 14.503059915499982,
+        "returnDeltaPctPoints": 2.620370573999974,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-21",
+        "baseReturnPct": 14.503059915499982,
+        "returnPct": 17.266433817500015,
+        "returnDeltaPctPoints": 2.7633739020000334,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-22",
+        "baseReturnPct": 17.266433817500015,
+        "returnPct": 18.149108899999987,
+        "returnDeltaPctPoints": 0.8826750824999721,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-16",
+        "baseReturnPct": 10.20871349749999,
+        "returnPct": 8.742879640000002,
+        "returnDeltaPctPoints": -1.4658338574999874,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2020-06-17",
+        "baseReturnPct": 8.742879640000002,
+        "returnPct": 11.125491620000005,
+        "returnDeltaPctPoints": 2.3826119800000036,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-18",
+        "baseReturnPct": 11.125491620000005,
+        "returnPct": 10.907127821500007,
+        "returnDeltaPctPoints": -0.21836379849999865,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-19",
+        "baseReturnPct": 10.907127821500007,
+        "returnPct": 10.874724730000018,
+        "returnDeltaPctPoints": -0.032403091499988435,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-22",
+        "baseReturnPct": 10.874724730000018,
+        "returnPct": 11.950397680499991,
+        "returnDeltaPctPoints": 1.075672950499973,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-23",
+        "baseReturnPct": 11.950397680499991,
+        "returnPct": 11.36301538450002,
+        "returnDeltaPctPoints": -0.587382295999971,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-24",
+        "baseReturnPct": 11.36301538450002,
+        "returnPct": 12.541172180000014,
+        "returnDeltaPctPoints": 1.1781567954999943,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-07-06",
+        "baseReturnPct": 19.318166822499983,
+        "returnPct": 9.573417607500012,
+        "returnDeltaPctPoints": -9.74474921499997,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2020-07-10",
+        "baseReturnPct": 18.688110605,
+        "returnPct": 24.937218800000018,
+        "returnDeltaPctPoints": 6.249108195000019,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2021-02-03",
+        "baseReturnPct": -14.05504273,
+        "returnPct": 14.615557211500008,
+        "returnDeltaPctPoints": 28.670599941500008,
+        "baseTargetReached": false,
+        "targetReached": true
+      }
+    ]
+  },
+  {
+    "kind": "offset",
+    "value": 1,
+    "stage": "confirmation",
+    "paired": [
+      {
+        "start": "2024-09-02",
+        "baseReturnPct": 12.89861940999999,
+        "returnPct": 14.519734677500008,
+        "returnDeltaPctPoints": 1.6211152675000182,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-04-28",
+        "baseReturnPct": 11.015408045000008,
+        "returnPct": 12.573800644999999,
+        "returnDeltaPctPoints": 1.5583925999999906,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-04-29",
+        "baseReturnPct": 12.573800644999999,
+        "returnPct": 10.463444970000001,
+        "returnDeltaPctPoints": -2.1103556749999974,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-04-30",
+        "baseReturnPct": 10.463444970000001,
+        "returnPct": 10.160006320000004,
+        "returnDeltaPctPoints": -0.3034386499999968,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-05-02",
+        "baseReturnPct": 10.160006320000004,
+        "returnPct": 11.033680210000018,
+        "returnDeltaPctPoints": 0.8736738900000134,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-05-07",
+        "baseReturnPct": 11.033680210000018,
+        "returnPct": 11.822398310000004,
+        "returnDeltaPctPoints": 0.7887180999999863,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-11-17",
+        "baseReturnPct": 11.996482490000005,
+        "returnPct": 13.470866005000005,
+        "returnDeltaPctPoints": 1.4743835149999995,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-12-03",
+        "baseReturnPct": 10.043233690000019,
+        "returnPct": 20.81956260000002,
+        "returnDeltaPctPoints": 10.77632891,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-12-04",
+        "baseReturnPct": 20.81956260000002,
+        "returnPct": 16.943949557499984,
+        "returnDeltaPctPoints": -3.875613042500035,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-12-05",
+        "baseReturnPct": 16.943949557499984,
+        "returnPct": 13.455957730000012,
+        "returnDeltaPctPoints": -3.4879918274999717,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-12-08",
+        "baseReturnPct": 13.455957730000012,
+        "returnPct": 10.904969165000011,
+        "returnDeltaPctPoints": -2.550988565000001,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-12-09",
+        "baseReturnPct": 10.904969165000011,
+        "returnPct": 12.91499974999999,
+        "returnDeltaPctPoints": 2.0100305849999778,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-03",
+        "baseReturnPct": 17.09481574499998,
+        "returnPct": 24.212516975,
+        "returnDeltaPctPoints": 7.117701230000019,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-04",
+        "baseReturnPct": 24.212516975,
+        "returnPct": 19.689911555000016,
+        "returnDeltaPctPoints": -4.522605419999984,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-05",
+        "baseReturnPct": 19.689911555000016,
+        "returnPct": 21.41202349000002,
+        "returnDeltaPctPoints": 1.7221119350000045,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-06",
+        "baseReturnPct": 21.41202349000002,
+        "returnPct": 22.737454150000012,
+        "returnDeltaPctPoints": 1.3254306599999914,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-09",
+        "baseReturnPct": 22.737454150000012,
+        "returnPct": 22.57652245999997,
+        "returnDeltaPctPoints": -0.16093169000004082,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-10",
+        "baseReturnPct": 22.57652245999997,
+        "returnPct": 18.50197278000001,
+        "returnDeltaPctPoints": -4.074549679999961,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-11",
+        "baseReturnPct": 18.50197278000001,
+        "returnPct": 13.519211595000025,
+        "returnDeltaPctPoints": -4.982761184999985,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-12",
+        "baseReturnPct": 13.519211595000025,
+        "returnPct": -7.804380775000008,
+        "returnDeltaPctPoints": -21.323592370000032,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-13",
+        "baseReturnPct": -7.804380775000008,
+        "returnPct": -10.174003897499983,
+        "returnDeltaPctPoints": -2.3696231224999744,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-19",
+        "baseReturnPct": -10.174003897499983,
+        "returnPct": -9.444850297499997,
+        "returnDeltaPctPoints": 0.7291535999999859,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-20",
+        "baseReturnPct": -9.444850297499997,
+        "returnPct": -7.140591963749987,
+        "returnDeltaPctPoints": 2.3042583337500098,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-23",
+        "baseReturnPct": -7.140591963749987,
+        "returnPct": -4.448871572499991,
+        "returnDeltaPctPoints": 2.691720391249996,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-24",
+        "baseReturnPct": -4.448871572499991,
+        "returnPct": -11.352638082499977,
+        "returnDeltaPctPoints": -6.903766509999986,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-25",
+        "baseReturnPct": -11.352638082499977,
+        "returnPct": -8.480707407499988,
+        "returnDeltaPctPoints": 2.871930674999989,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-26",
+        "baseReturnPct": -8.480707407499988,
+        "returnPct": 7.025251764999996,
+        "returnDeltaPctPoints": 15.505959172499985,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-27",
+        "baseReturnPct": 7.025251764999996,
+        "returnPct": 9.662980200000003,
+        "returnDeltaPctPoints": 2.6377284350000076,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-03-03",
+        "baseReturnPct": 9.662980200000003,
+        "returnPct": 13.916689613000033,
+        "returnDeltaPctPoints": 4.2537094130000295,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-03-05",
+        "baseReturnPct": -14.99564404499999,
+        "returnPct": -20.354732480000003,
+        "returnDeltaPctPoints": -5.359088435000013,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-03-18",
+        "baseReturnPct": -9.200023511499989,
+        "returnPct": -10.325604044000015,
+        "returnDeltaPctPoints": -1.1255805325000257,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-03-19",
+        "baseReturnPct": -10.325604044000015,
+        "returnPct": -10.797716161000015,
+        "returnDeltaPctPoints": -0.472112117,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-03-20",
+        "baseReturnPct": -10.797716161000015,
+        "returnPct": -15.255062427999999,
+        "returnDeltaPctPoints": -4.457346266999984,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-04-08",
+        "baseReturnPct": -8.88502010750003,
+        "returnPct": 8.893101944999993,
+        "returnDeltaPctPoints": 17.778122052500024,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-04-09",
+        "baseReturnPct": 8.893101944999993,
+        "returnPct": 11.87964812000002,
+        "returnDeltaPctPoints": 2.9865461750000275,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-10",
+        "baseReturnPct": 11.87964812000002,
+        "returnPct": 11.854617302499992,
+        "returnDeltaPctPoints": -0.02503081750002778,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-13",
+        "baseReturnPct": 11.854617302499992,
+        "returnPct": 14.733505294999993,
+        "returnDeltaPctPoints": 2.878887992500001,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-14",
+        "baseReturnPct": 14.733505294999993,
+        "returnPct": 14.780227587500017,
+        "returnDeltaPctPoints": 0.046722292500023244,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-15",
+        "baseReturnPct": 14.780227587500017,
+        "returnPct": 15.125156455000033,
+        "returnDeltaPctPoints": 0.34492886750001617,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-16",
+        "baseReturnPct": 15.125156455000033,
+        "returnPct": 13.718787175000013,
+        "returnDeltaPctPoints": -1.4063692800000194,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-17",
+        "baseReturnPct": 13.718787175000013,
+        "returnPct": 8.861777490000012,
+        "returnDeltaPctPoints": -4.857009685000001,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2026-04-20",
+        "baseReturnPct": 8.861777490000012,
+        "returnPct": -4.282907229999989,
+        "returnDeltaPctPoints": -13.14468472,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-04-21",
+        "baseReturnPct": -4.282907229999989,
+        "returnPct": 11.389513675000007,
+        "returnDeltaPctPoints": 15.672420904999996,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-22",
+        "baseReturnPct": 11.389513675000007,
+        "returnPct": 11.004373615000018,
+        "returnDeltaPctPoints": -0.3851400599999888,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-23",
+        "baseReturnPct": 11.004373615000018,
+        "returnPct": 15.522948915000011,
+        "returnDeltaPctPoints": 4.518575299999993,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-24",
+        "baseReturnPct": 15.522948915000011,
+        "returnPct": 15.722747394999992,
+        "returnDeltaPctPoints": 0.19979847999998057,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-27",
+        "baseReturnPct": 15.722747394999992,
+        "returnPct": 13.129185585000002,
+        "returnDeltaPctPoints": -2.59356180999999,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-28",
+        "baseReturnPct": 13.129185585000002,
+        "returnPct": 22.72136819499999,
+        "returnDeltaPctPoints": 9.592182609999988,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-29",
+        "baseReturnPct": 22.72136819499999,
+        "returnPct": 18.842828560000015,
+        "returnDeltaPctPoints": -3.8785396349999743,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-05-04",
+        "baseReturnPct": -9.206876290000011,
+        "returnPct": 12.16251863500002,
+        "returnDeltaPctPoints": 21.36939492500003,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-05-06",
+        "baseReturnPct": 12.16251863500002,
+        "returnPct": -13.827679095,
+        "returnDeltaPctPoints": -25.99019773000002,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2026-05-07",
+        "baseReturnPct": -13.827679095,
+        "returnPct": -17.186758227499986,
+        "returnDeltaPctPoints": -3.3590791324999856,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-05-08",
+        "baseReturnPct": -17.186758227499986,
+        "returnPct": -11.343986062500012,
+        "returnDeltaPctPoints": 5.842772164999975,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-05-11",
+        "baseReturnPct": -11.343986062500012,
+        "returnPct": -13.520183552499997,
+        "returnDeltaPctPoints": -2.1761974899999856,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-05-12",
+        "baseReturnPct": -13.520183552499997,
+        "returnPct": 19.565349045000026,
+        "returnDeltaPctPoints": 33.08553259750002,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-05-13",
+        "baseReturnPct": 19.565349045000026,
+        "returnPct": 19.583471095000004,
+        "returnDeltaPctPoints": 0.018122049999977463,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-05-14",
+        "baseReturnPct": 19.583471095000004,
+        "returnPct": 14.383996295000001,
+        "returnDeltaPctPoints": -5.199474800000003,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-05-15",
+        "baseReturnPct": 14.383996295000001,
+        "returnPct": 16.904452275000015,
+        "returnDeltaPctPoints": 2.5204559800000137,
+        "baseTargetReached": true,
+        "targetReached": true
+      }
+    ]
+  },
+  {
+    "kind": "offset",
+    "value": 2,
+    "stage": "validation",
+    "paired": [
+      {
+        "start": "2020-04-09",
+        "baseReturnPct": 11.684146132499995,
+        "returnPct": 9.88708142750001,
+        "returnDeltaPctPoints": -1.7970647049999844,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2020-04-10",
+        "baseReturnPct": 17.527434985,
+        "returnPct": 11.2825392435,
+        "returnDeltaPctPoints": -6.244895741499999,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-13",
+        "baseReturnPct": 9.88708142750001,
+        "returnPct": 11.470001090000004,
+        "returnDeltaPctPoints": 1.582919662499993,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-14",
+        "baseReturnPct": 11.2825392435,
+        "returnPct": 9.97435633124999,
+        "returnDeltaPctPoints": -1.308182912250011,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2020-04-16",
+        "baseReturnPct": 11.470001090000004,
+        "returnPct": 11.882689341500008,
+        "returnDeltaPctPoints": 0.4126882515000041,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-17",
+        "baseReturnPct": 9.97435633124999,
+        "returnPct": 14.503059915499982,
+        "returnDeltaPctPoints": 4.5287035842499925,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-20",
+        "baseReturnPct": 11.882689341500008,
+        "returnPct": 17.266433817500015,
+        "returnDeltaPctPoints": 5.3837444760000075,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-21",
+        "baseReturnPct": 14.503059915499982,
+        "returnPct": 18.149108899999987,
+        "returnDeltaPctPoints": 3.6460489845000055,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-22",
+        "baseReturnPct": 17.266433817500015,
+        "returnPct": 10.24445928500002,
+        "returnDeltaPctPoints": -7.021974532499996,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-16",
+        "baseReturnPct": 10.20871349749999,
+        "returnPct": 11.125491620000005,
+        "returnDeltaPctPoints": 0.9167781225000162,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-17",
+        "baseReturnPct": 8.742879640000002,
+        "returnPct": 10.907127821500007,
+        "returnDeltaPctPoints": 2.164248181500005,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-18",
+        "baseReturnPct": 11.125491620000005,
+        "returnPct": 10.874724730000018,
+        "returnDeltaPctPoints": -0.2507668899999871,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-19",
+        "baseReturnPct": 10.907127821500007,
+        "returnPct": 11.950397680499991,
+        "returnDeltaPctPoints": 1.0432698589999845,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-22",
+        "baseReturnPct": 10.874724730000018,
+        "returnPct": 11.36301538450002,
+        "returnDeltaPctPoints": 0.48829065450000186,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-23",
+        "baseReturnPct": 11.950397680499991,
+        "returnPct": 12.541172180000014,
+        "returnDeltaPctPoints": 0.5907744995000233,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-24",
+        "baseReturnPct": 11.36301538450002,
+        "returnPct": 10.420540600000017,
+        "returnDeltaPctPoints": -0.9424747845000034,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-07-06",
+        "baseReturnPct": 19.318166822499983,
+        "returnPct": 9.97427984999999,
+        "returnDeltaPctPoints": -9.343886972499993,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2020-07-10",
+        "baseReturnPct": 18.688110605,
+        "returnPct": 19.325874742500005,
+        "returnDeltaPctPoints": 0.6377641375000067,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2021-02-03",
+        "baseReturnPct": -14.05504273,
+        "returnPct": -15.277595124999998,
+        "returnDeltaPctPoints": -1.2225523949999975,
+        "baseTargetReached": false,
+        "targetReached": false
+      }
+    ]
+  },
+  {
+    "kind": "offset",
+    "value": 2,
+    "stage": "confirmation",
+    "paired": [
+      {
+        "start": "2024-09-02",
+        "baseReturnPct": 12.89861940999999,
+        "returnPct": 17.003321427500005,
+        "returnDeltaPctPoints": 4.104702017500015,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-04-28",
+        "baseReturnPct": 11.015408045000008,
+        "returnPct": 10.463444970000001,
+        "returnDeltaPctPoints": -0.5519630750000069,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-04-29",
+        "baseReturnPct": 12.573800644999999,
+        "returnPct": 10.160006320000004,
+        "returnDeltaPctPoints": -2.4137943249999942,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-04-30",
+        "baseReturnPct": 10.463444970000001,
+        "returnPct": 11.033680210000018,
+        "returnDeltaPctPoints": 0.5702352400000166,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-05-02",
+        "baseReturnPct": 10.160006320000004,
+        "returnPct": 11.822398310000004,
+        "returnDeltaPctPoints": 1.6623919899999997,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-05-07",
+        "baseReturnPct": 11.033680210000018,
+        "returnPct": 11.831135322499996,
+        "returnDeltaPctPoints": 0.7974551124999785,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-11-17",
+        "baseReturnPct": 11.996482490000005,
+        "returnPct": 14.952249650000017,
+        "returnDeltaPctPoints": 2.9557671600000113,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-12-03",
+        "baseReturnPct": 10.043233690000019,
+        "returnPct": 16.943949557499984,
+        "returnDeltaPctPoints": 6.900715867499965,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-12-04",
+        "baseReturnPct": 20.81956260000002,
+        "returnPct": 13.455957730000012,
+        "returnDeltaPctPoints": -7.363604870000007,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-12-05",
+        "baseReturnPct": 16.943949557499984,
+        "returnPct": 10.904969165000011,
+        "returnDeltaPctPoints": -6.0389803924999725,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-12-08",
+        "baseReturnPct": 13.455957730000012,
+        "returnPct": 12.91499974999999,
+        "returnDeltaPctPoints": -0.540957980000023,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-12-09",
+        "baseReturnPct": 10.904969165000011,
+        "returnPct": 11.773035004999999,
+        "returnDeltaPctPoints": 0.8680658399999874,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-03",
+        "baseReturnPct": 17.09481574499998,
+        "returnPct": 19.689911555000016,
+        "returnDeltaPctPoints": 2.5950958100000356,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-04",
+        "baseReturnPct": 24.212516975,
+        "returnPct": 21.41202349000002,
+        "returnDeltaPctPoints": -2.800493484999979,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-05",
+        "baseReturnPct": 19.689911555000016,
+        "returnPct": 22.737454150000012,
+        "returnDeltaPctPoints": 3.047542594999996,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-06",
+        "baseReturnPct": 21.41202349000002,
+        "returnPct": 22.57652245999997,
+        "returnDeltaPctPoints": 1.1644989699999506,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-09",
+        "baseReturnPct": 22.737454150000012,
+        "returnPct": 18.50197278000001,
+        "returnDeltaPctPoints": -4.235481370000002,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-10",
+        "baseReturnPct": 22.57652245999997,
+        "returnPct": 13.519211595000025,
+        "returnDeltaPctPoints": -9.057310864999947,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-11",
+        "baseReturnPct": 18.50197278000001,
+        "returnPct": -7.804380775000008,
+        "returnDeltaPctPoints": -26.30635355500002,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-12",
+        "baseReturnPct": 13.519211595000025,
+        "returnPct": -10.174003897499983,
+        "returnDeltaPctPoints": -23.69321549250001,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-13",
+        "baseReturnPct": -7.804380775000008,
+        "returnPct": -9.444850297499997,
+        "returnDeltaPctPoints": -1.6404695224999886,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-19",
+        "baseReturnPct": -10.174003897499983,
+        "returnPct": -7.140591963749987,
+        "returnDeltaPctPoints": 3.0334119337499956,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-20",
+        "baseReturnPct": -9.444850297499997,
+        "returnPct": -4.448871572499991,
+        "returnDeltaPctPoints": 4.995978725000006,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-23",
+        "baseReturnPct": -7.140591963749987,
+        "returnPct": -11.352638082499977,
+        "returnDeltaPctPoints": -4.21204611874999,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-24",
+        "baseReturnPct": -4.448871572499991,
+        "returnPct": -8.480707407499988,
+        "returnDeltaPctPoints": -4.031835834999997,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-25",
+        "baseReturnPct": -11.352638082499977,
+        "returnPct": 7.025251764999996,
+        "returnDeltaPctPoints": 18.377889847499972,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-26",
+        "baseReturnPct": -8.480707407499988,
+        "returnPct": 9.662980200000003,
+        "returnDeltaPctPoints": 18.14368760749999,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-27",
+        "baseReturnPct": 7.025251764999996,
+        "returnPct": 13.916689613000033,
+        "returnDeltaPctPoints": 6.891437848000037,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-03-03",
+        "baseReturnPct": 9.662980200000003,
+        "returnPct": -14.99564404499999,
+        "returnDeltaPctPoints": -24.65862424499999,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-03-05",
+        "baseReturnPct": -14.99564404499999,
+        "returnPct": -16.049643835000005,
+        "returnDeltaPctPoints": -1.0539997900000149,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-03-18",
+        "baseReturnPct": -9.200023511499989,
+        "returnPct": -10.797716161000015,
+        "returnDeltaPctPoints": -1.5976926495000257,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-03-19",
+        "baseReturnPct": -10.325604044000015,
+        "returnPct": -15.255062427999999,
+        "returnDeltaPctPoints": -4.929458383999984,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-03-20",
+        "baseReturnPct": -10.797716161000015,
+        "returnPct": -13.580354278500007,
+        "returnDeltaPctPoints": -2.7826381174999923,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-04-08",
+        "baseReturnPct": -8.88502010750003,
+        "returnPct": 11.87964812000002,
+        "returnDeltaPctPoints": 20.76466822750005,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-09",
+        "baseReturnPct": 8.893101944999993,
+        "returnPct": 11.854617302499992,
+        "returnDeltaPctPoints": 2.9615153574999997,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-10",
+        "baseReturnPct": 11.87964812000002,
+        "returnPct": 14.733505294999993,
+        "returnDeltaPctPoints": 2.8538571749999733,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-13",
+        "baseReturnPct": 11.854617302499992,
+        "returnPct": 14.780227587500017,
+        "returnDeltaPctPoints": 2.9256102850000243,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-14",
+        "baseReturnPct": 14.733505294999993,
+        "returnPct": 15.125156455000033,
+        "returnDeltaPctPoints": 0.3916511600000394,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-15",
+        "baseReturnPct": 14.780227587500017,
+        "returnPct": 13.718787175000013,
+        "returnDeltaPctPoints": -1.0614404125000032,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-16",
+        "baseReturnPct": 15.125156455000033,
+        "returnPct": 8.861777490000012,
+        "returnDeltaPctPoints": -6.263378965000021,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2026-04-17",
+        "baseReturnPct": 13.718787175000013,
+        "returnPct": -4.282907229999989,
+        "returnDeltaPctPoints": -18.001694405000002,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2026-04-20",
+        "baseReturnPct": 8.861777490000012,
+        "returnPct": 11.389513675000007,
+        "returnDeltaPctPoints": 2.527736184999995,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-21",
+        "baseReturnPct": -4.282907229999989,
+        "returnPct": 11.004373615000018,
+        "returnDeltaPctPoints": 15.287280845000007,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-22",
+        "baseReturnPct": 11.389513675000007,
+        "returnPct": 15.522948915000011,
+        "returnDeltaPctPoints": 4.133435240000004,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-23",
+        "baseReturnPct": 11.004373615000018,
+        "returnPct": 15.722747394999992,
+        "returnDeltaPctPoints": 4.718373779999974,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-24",
+        "baseReturnPct": 15.522948915000011,
+        "returnPct": 13.129185585000002,
+        "returnDeltaPctPoints": -2.3937633300000094,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-27",
+        "baseReturnPct": 15.722747394999992,
+        "returnPct": 22.72136819499999,
+        "returnDeltaPctPoints": 6.998620799999998,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-28",
+        "baseReturnPct": 13.129185585000002,
+        "returnPct": 18.842828560000015,
+        "returnDeltaPctPoints": 5.713642975000013,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-29",
+        "baseReturnPct": 22.72136819499999,
+        "returnPct": -9.206876290000011,
+        "returnDeltaPctPoints": -31.928244485,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2026-05-04",
+        "baseReturnPct": -9.206876290000011,
+        "returnPct": -13.827679095,
+        "returnDeltaPctPoints": -4.62080280499999,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-05-06",
+        "baseReturnPct": 12.16251863500002,
+        "returnPct": -17.186758227499986,
+        "returnDeltaPctPoints": -29.349276862500005,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2026-05-07",
+        "baseReturnPct": -13.827679095,
+        "returnPct": -11.343986062500012,
+        "returnDeltaPctPoints": 2.483693032499989,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-05-08",
+        "baseReturnPct": -17.186758227499986,
+        "returnPct": -13.520183552499997,
+        "returnDeltaPctPoints": 3.666574674999989,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-05-11",
+        "baseReturnPct": -11.343986062500012,
+        "returnPct": 19.565349045000026,
+        "returnDeltaPctPoints": 30.909335107500038,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-05-12",
+        "baseReturnPct": -13.520183552499997,
+        "returnPct": 19.583471095000004,
+        "returnDeltaPctPoints": 33.1036546475,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-05-13",
+        "baseReturnPct": 19.565349045000026,
+        "returnPct": 14.383996295000001,
+        "returnDeltaPctPoints": -5.181352750000025,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-05-14",
+        "baseReturnPct": 19.583471095000004,
+        "returnPct": 16.904452275000015,
+        "returnDeltaPctPoints": -2.679018819999989,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-05-15",
+        "baseReturnPct": 14.383996295000001,
+        "returnPct": 17.36233117499999,
+        "returnDeltaPctPoints": 2.9783348799999896,
+        "baseTargetReached": true,
+        "targetReached": true
+      }
+    ]
+  },
+  {
+    "kind": "offset",
+    "value": 3,
+    "stage": "validation",
+    "paired": [
+      {
+        "start": "2020-04-09",
+        "baseReturnPct": 11.684146132499995,
+        "returnPct": 11.2825392435,
+        "returnDeltaPctPoints": -0.40160688899999464,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-10",
+        "baseReturnPct": 17.527434985,
+        "returnPct": 11.470001090000004,
+        "returnDeltaPctPoints": -6.0574338949999955,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-13",
+        "baseReturnPct": 9.88708142750001,
+        "returnPct": 9.97435633124999,
+        "returnDeltaPctPoints": 0.0872749037499787,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2020-04-14",
+        "baseReturnPct": 11.2825392435,
+        "returnPct": 11.882689341500008,
+        "returnDeltaPctPoints": 0.6001500980000074,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-16",
+        "baseReturnPct": 11.470001090000004,
+        "returnPct": 14.503059915499982,
+        "returnDeltaPctPoints": 3.033058825499978,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-17",
+        "baseReturnPct": 9.97435633124999,
+        "returnPct": 17.266433817500015,
+        "returnDeltaPctPoints": 7.292077486250026,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-20",
+        "baseReturnPct": 11.882689341500008,
+        "returnPct": 18.149108899999987,
+        "returnDeltaPctPoints": 6.26641955849998,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-21",
+        "baseReturnPct": 14.503059915499982,
+        "returnPct": 10.24445928500002,
+        "returnDeltaPctPoints": -4.258600630499963,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-22",
+        "baseReturnPct": 17.266433817500015,
+        "returnPct": 17.63464656,
+        "returnDeltaPctPoints": 0.3682127424999848,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-16",
+        "baseReturnPct": 10.20871349749999,
+        "returnPct": 10.907127821500007,
+        "returnDeltaPctPoints": 0.6984143240000176,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-17",
+        "baseReturnPct": 8.742879640000002,
+        "returnPct": 10.874724730000018,
+        "returnDeltaPctPoints": 2.1318450900000165,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-18",
+        "baseReturnPct": 11.125491620000005,
+        "returnPct": 11.950397680499991,
+        "returnDeltaPctPoints": 0.8249060604999858,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-19",
+        "baseReturnPct": 10.907127821500007,
+        "returnPct": 11.36301538450002,
+        "returnDeltaPctPoints": 0.45588756300001343,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-22",
+        "baseReturnPct": 10.874724730000018,
+        "returnPct": 12.541172180000014,
+        "returnDeltaPctPoints": 1.6664474499999962,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-23",
+        "baseReturnPct": 11.950397680499991,
+        "returnPct": 10.420540600000017,
+        "returnDeltaPctPoints": -1.5298570804999745,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-24",
+        "baseReturnPct": 11.36301538450002,
+        "returnPct": 15.350306192500017,
+        "returnDeltaPctPoints": 3.9872908079999974,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-07-06",
+        "baseReturnPct": 19.318166822499983,
+        "returnPct": 16.552287877500007,
+        "returnDeltaPctPoints": -2.765878944999976,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-07-10",
+        "baseReturnPct": 18.688110605,
+        "returnPct": 16.924640989999972,
+        "returnDeltaPctPoints": -1.7634696150000266,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2021-02-03",
+        "baseReturnPct": -14.05504273,
+        "returnPct": 12.267950682000016,
+        "returnDeltaPctPoints": 26.322993412000017,
+        "baseTargetReached": false,
+        "targetReached": true
+      }
+    ]
+  },
+  {
+    "kind": "offset",
+    "value": 3,
+    "stage": "confirmation",
+    "paired": [
+      {
+        "start": "2024-09-02",
+        "baseReturnPct": 12.89861940999999,
+        "returnPct": 14.56794398000001,
+        "returnDeltaPctPoints": 1.66932457000002,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-04-28",
+        "baseReturnPct": 11.015408045000008,
+        "returnPct": 10.160006320000004,
+        "returnDeltaPctPoints": -0.8554017250000037,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-04-29",
+        "baseReturnPct": 12.573800644999999,
+        "returnPct": 11.033680210000018,
+        "returnDeltaPctPoints": -1.5401204349999809,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-04-30",
+        "baseReturnPct": 10.463444970000001,
+        "returnPct": 11.822398310000004,
+        "returnDeltaPctPoints": 1.358953340000003,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-05-02",
+        "baseReturnPct": 10.160006320000004,
+        "returnPct": 11.831135322499996,
+        "returnDeltaPctPoints": 1.6711290024999919,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-05-07",
+        "baseReturnPct": 11.033680210000018,
+        "returnPct": 13.13917281250001,
+        "returnDeltaPctPoints": 2.105492602499993,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-11-17",
+        "baseReturnPct": 11.996482490000005,
+        "returnPct": 10.923606075000025,
+        "returnDeltaPctPoints": -1.07287641499998,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-12-03",
+        "baseReturnPct": 10.043233690000019,
+        "returnPct": 13.455957730000012,
+        "returnDeltaPctPoints": 3.4127240399999934,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-12-04",
+        "baseReturnPct": 20.81956260000002,
+        "returnPct": 10.904969165000011,
+        "returnDeltaPctPoints": -9.914593435000008,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-12-05",
+        "baseReturnPct": 16.943949557499984,
+        "returnPct": 12.91499974999999,
+        "returnDeltaPctPoints": -4.028949807499995,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-12-08",
+        "baseReturnPct": 13.455957730000012,
+        "returnPct": 11.773035004999999,
+        "returnDeltaPctPoints": -1.6829227250000134,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-12-09",
+        "baseReturnPct": 10.904969165000011,
+        "returnPct": 12.679718909999993,
+        "returnDeltaPctPoints": 1.7747497449999816,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-03",
+        "baseReturnPct": 17.09481574499998,
+        "returnPct": 21.41202349000002,
+        "returnDeltaPctPoints": 4.31720774500004,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-04",
+        "baseReturnPct": 24.212516975,
+        "returnPct": 22.737454150000012,
+        "returnDeltaPctPoints": -1.4750628249999878,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-05",
+        "baseReturnPct": 19.689911555000016,
+        "returnPct": 22.57652245999997,
+        "returnDeltaPctPoints": 2.886610904999955,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-06",
+        "baseReturnPct": 21.41202349000002,
+        "returnPct": 18.50197278000001,
+        "returnDeltaPctPoints": -2.910050710000011,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-09",
+        "baseReturnPct": 22.737454150000012,
+        "returnPct": 13.519211595000025,
+        "returnDeltaPctPoints": -9.218242554999987,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-10",
+        "baseReturnPct": 22.57652245999997,
+        "returnPct": -7.804380775000008,
+        "returnDeltaPctPoints": -30.38090323499998,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-11",
+        "baseReturnPct": 18.50197278000001,
+        "returnPct": -10.174003897499983,
+        "returnDeltaPctPoints": -28.675976677499992,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-12",
+        "baseReturnPct": 13.519211595000025,
+        "returnPct": -9.444850297499997,
+        "returnDeltaPctPoints": -22.96406189250002,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-13",
+        "baseReturnPct": -7.804380775000008,
+        "returnPct": -7.140591963749987,
+        "returnDeltaPctPoints": 0.6637888112500212,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-19",
+        "baseReturnPct": -10.174003897499983,
+        "returnPct": -4.448871572499991,
+        "returnDeltaPctPoints": 5.725132324999992,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-20",
+        "baseReturnPct": -9.444850297499997,
+        "returnPct": -11.352638082499977,
+        "returnDeltaPctPoints": -1.9077877849999805,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-23",
+        "baseReturnPct": -7.140591963749987,
+        "returnPct": -8.480707407499988,
+        "returnDeltaPctPoints": -1.3401154437500011,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-24",
+        "baseReturnPct": -4.448871572499991,
+        "returnPct": 7.025251764999996,
+        "returnDeltaPctPoints": 11.474123337499986,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-25",
+        "baseReturnPct": -11.352638082499977,
+        "returnPct": 9.662980200000003,
+        "returnDeltaPctPoints": 21.01561828249998,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-26",
+        "baseReturnPct": -8.480707407499988,
+        "returnPct": 13.916689613000033,
+        "returnDeltaPctPoints": 22.397397020500023,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-27",
+        "baseReturnPct": 7.025251764999996,
+        "returnPct": -14.99564404499999,
+        "returnDeltaPctPoints": -22.020895809999985,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-03-03",
+        "baseReturnPct": 9.662980200000003,
+        "returnPct": -20.354732480000003,
+        "returnDeltaPctPoints": -30.017712680000006,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-03-05",
+        "baseReturnPct": -14.99564404499999,
+        "returnPct": 11.928680530000024,
+        "returnDeltaPctPoints": 26.924324575000014,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-03-18",
+        "baseReturnPct": -9.200023511499989,
+        "returnPct": -15.255062427999999,
+        "returnDeltaPctPoints": -6.05503891650001,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-03-19",
+        "baseReturnPct": -10.325604044000015,
+        "returnPct": -13.580354278500007,
+        "returnDeltaPctPoints": -3.2547502344999923,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-03-20",
+        "baseReturnPct": -10.797716161000015,
+        "returnPct": 11.766776445000016,
+        "returnDeltaPctPoints": 22.56449260600003,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-08",
+        "baseReturnPct": -8.88502010750003,
+        "returnPct": 11.854617302499992,
+        "returnDeltaPctPoints": 20.73963741000002,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-09",
+        "baseReturnPct": 8.893101944999993,
+        "returnPct": 14.733505294999993,
+        "returnDeltaPctPoints": 5.840403350000001,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-10",
+        "baseReturnPct": 11.87964812000002,
+        "returnPct": 14.780227587500017,
+        "returnDeltaPctPoints": 2.9005794674999965,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-13",
+        "baseReturnPct": 11.854617302499992,
+        "returnPct": 15.125156455000033,
+        "returnDeltaPctPoints": 3.2705391525000405,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-14",
+        "baseReturnPct": 14.733505294999993,
+        "returnPct": 13.718787175000013,
+        "returnDeltaPctPoints": -1.01471811999998,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-15",
+        "baseReturnPct": 14.780227587500017,
+        "returnPct": 8.861777490000012,
+        "returnDeltaPctPoints": -5.9184500975000045,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2026-04-16",
+        "baseReturnPct": 15.125156455000033,
+        "returnPct": -4.282907229999989,
+        "returnDeltaPctPoints": -19.408063685000023,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2026-04-17",
+        "baseReturnPct": 13.718787175000013,
+        "returnPct": 11.389513675000007,
+        "returnDeltaPctPoints": -2.3292735000000064,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-20",
+        "baseReturnPct": 8.861777490000012,
+        "returnPct": 11.004373615000018,
+        "returnDeltaPctPoints": 2.142596125000006,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-21",
+        "baseReturnPct": -4.282907229999989,
+        "returnPct": 15.522948915000011,
+        "returnDeltaPctPoints": 19.805856145,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-22",
+        "baseReturnPct": 11.389513675000007,
+        "returnPct": 15.722747394999992,
+        "returnDeltaPctPoints": 4.333233719999985,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-23",
+        "baseReturnPct": 11.004373615000018,
+        "returnPct": 13.129185585000002,
+        "returnDeltaPctPoints": 2.1248119699999837,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-24",
+        "baseReturnPct": 15.522948915000011,
+        "returnPct": 22.72136819499999,
+        "returnDeltaPctPoints": 7.198419279999978,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-27",
+        "baseReturnPct": 15.722747394999992,
+        "returnPct": 18.842828560000015,
+        "returnDeltaPctPoints": 3.1200811650000233,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-28",
+        "baseReturnPct": 13.129185585000002,
+        "returnPct": -9.206876290000011,
+        "returnDeltaPctPoints": -22.336061875000013,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2026-04-29",
+        "baseReturnPct": 22.72136819499999,
+        "returnPct": 12.16251863500002,
+        "returnDeltaPctPoints": -10.55884955999997,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-05-04",
+        "baseReturnPct": -9.206876290000011,
+        "returnPct": -17.186758227499986,
+        "returnDeltaPctPoints": -7.979881937499975,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-05-06",
+        "baseReturnPct": 12.16251863500002,
+        "returnPct": -11.343986062500012,
+        "returnDeltaPctPoints": -23.50650469750003,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2026-05-07",
+        "baseReturnPct": -13.827679095,
+        "returnPct": -13.520183552499997,
+        "returnDeltaPctPoints": 0.30749554250000344,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-05-08",
+        "baseReturnPct": -17.186758227499986,
+        "returnPct": 19.565349045000026,
+        "returnDeltaPctPoints": 36.75210727250001,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-05-11",
+        "baseReturnPct": -11.343986062500012,
+        "returnPct": 19.583471095000004,
+        "returnDeltaPctPoints": 30.927457157500015,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-05-12",
+        "baseReturnPct": -13.520183552499997,
+        "returnPct": 14.383996295000001,
+        "returnDeltaPctPoints": 27.904179847499996,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-05-13",
+        "baseReturnPct": 19.565349045000026,
+        "returnPct": 16.904452275000015,
+        "returnDeltaPctPoints": -2.6608967700000115,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-05-14",
+        "baseReturnPct": 19.583471095000004,
+        "returnPct": 17.36233117499999,
+        "returnDeltaPctPoints": -2.221139920000013,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-05-15",
+        "baseReturnPct": 14.383996295000001,
+        "returnPct": 16.163369534999994,
+        "returnDeltaPctPoints": 1.7793732399999929,
+        "baseTargetReached": true,
+        "targetReached": true
+      }
+    ]
+  },
+  {
+    "kind": "offset",
+    "value": 4,
+    "stage": "validation",
+    "paired": [
+      {
+        "start": "2020-04-09",
+        "baseReturnPct": 11.684146132499995,
+        "returnPct": 11.470001090000004,
+        "returnDeltaPctPoints": -0.21414504249999133,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-10",
+        "baseReturnPct": 17.527434985,
+        "returnPct": 9.97435633124999,
+        "returnDeltaPctPoints": -7.55307865375001,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2020-04-13",
+        "baseReturnPct": 9.88708142750001,
+        "returnPct": 11.882689341500008,
+        "returnDeltaPctPoints": 1.9956079139999972,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-14",
+        "baseReturnPct": 11.2825392435,
+        "returnPct": 9.160825380000004,
+        "returnDeltaPctPoints": -2.1217138634999966,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2020-04-16",
+        "baseReturnPct": 11.470001090000004,
+        "returnPct": 17.266433817500015,
+        "returnDeltaPctPoints": 5.796432727500012,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-17",
+        "baseReturnPct": 9.97435633124999,
+        "returnPct": 18.149108899999987,
+        "returnDeltaPctPoints": 8.174752568749998,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-20",
+        "baseReturnPct": 11.882689341500008,
+        "returnPct": 10.24445928500002,
+        "returnDeltaPctPoints": -1.6382300564999888,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-21",
+        "baseReturnPct": 14.503059915499982,
+        "returnPct": 17.63464656,
+        "returnDeltaPctPoints": 3.1315866445000182,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-04-22",
+        "baseReturnPct": 17.266433817500015,
+        "returnPct": -10.313948955000019,
+        "returnDeltaPctPoints": -27.580382772500034,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2020-06-16",
+        "baseReturnPct": 10.20871349749999,
+        "returnPct": 10.874724730000018,
+        "returnDeltaPctPoints": 0.6660112325000291,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-17",
+        "baseReturnPct": 8.742879640000002,
+        "returnPct": 11.950397680499991,
+        "returnDeltaPctPoints": 3.2075180404999895,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-18",
+        "baseReturnPct": 11.125491620000005,
+        "returnPct": 11.36301538450002,
+        "returnDeltaPctPoints": 0.23752376450001478,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-19",
+        "baseReturnPct": 10.907127821500007,
+        "returnPct": 12.541172180000014,
+        "returnDeltaPctPoints": 1.6340443585000077,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-22",
+        "baseReturnPct": 10.874724730000018,
+        "returnPct": 10.420540600000017,
+        "returnDeltaPctPoints": -0.4541841300000016,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-23",
+        "baseReturnPct": 11.950397680499991,
+        "returnPct": 15.350306192500017,
+        "returnDeltaPctPoints": 3.3999085120000263,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-06-24",
+        "baseReturnPct": 11.36301538450002,
+        "returnPct": 16.985816890000006,
+        "returnDeltaPctPoints": 5.622801505499986,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-07-06",
+        "baseReturnPct": 19.318166822499983,
+        "returnPct": 18.688110605,
+        "returnDeltaPctPoints": -0.630056217499984,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2020-07-10",
+        "baseReturnPct": 18.688110605,
+        "returnPct": 29.566566780000002,
+        "returnDeltaPctPoints": 10.878456175000004,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2021-02-03",
+        "baseReturnPct": -14.05504273,
+        "returnPct": 12.26967701149999,
+        "returnDeltaPctPoints": 26.32471974149999,
+        "baseTargetReached": false,
+        "targetReached": true
+      }
+    ]
+  },
+  {
+    "kind": "offset",
+    "value": 4,
+    "stage": "confirmation",
+    "paired": [
+      {
+        "start": "2024-09-02",
+        "baseReturnPct": 12.89861940999999,
+        "returnPct": 9.505393024999975,
+        "returnDeltaPctPoints": -3.3932263850000144,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2025-04-28",
+        "baseReturnPct": 11.015408045000008,
+        "returnPct": 11.033680210000018,
+        "returnDeltaPctPoints": 0.01827216500000972,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-04-29",
+        "baseReturnPct": 12.573800644999999,
+        "returnPct": 11.822398310000004,
+        "returnDeltaPctPoints": -0.7514023349999945,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-04-30",
+        "baseReturnPct": 10.463444970000001,
+        "returnPct": 11.831135322499996,
+        "returnDeltaPctPoints": 1.367690352499995,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-05-02",
+        "baseReturnPct": 10.160006320000004,
+        "returnPct": 13.13917281250001,
+        "returnDeltaPctPoints": 2.9791664925000063,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-05-07",
+        "baseReturnPct": 11.033680210000018,
+        "returnPct": 15.34279594250001,
+        "returnDeltaPctPoints": 4.309115732499992,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-11-17",
+        "baseReturnPct": 11.996482490000005,
+        "returnPct": 13.772603942500016,
+        "returnDeltaPctPoints": 1.7761214525000106,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-12-03",
+        "baseReturnPct": 10.043233690000019,
+        "returnPct": 10.904969165000011,
+        "returnDeltaPctPoints": 0.8617354749999926,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-12-04",
+        "baseReturnPct": 20.81956260000002,
+        "returnPct": 12.91499974999999,
+        "returnDeltaPctPoints": -7.90456285000003,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-12-05",
+        "baseReturnPct": 16.943949557499984,
+        "returnPct": 11.773035004999999,
+        "returnDeltaPctPoints": -5.170914552499985,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-12-08",
+        "baseReturnPct": 13.455957730000012,
+        "returnPct": 12.679718909999993,
+        "returnDeltaPctPoints": -0.7762388200000192,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2025-12-09",
+        "baseReturnPct": 10.904969165000011,
+        "returnPct": 9.647784819999995,
+        "returnDeltaPctPoints": -1.2571843450000166,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-03",
+        "baseReturnPct": 17.09481574499998,
+        "returnPct": 22.737454150000012,
+        "returnDeltaPctPoints": 5.6426384050000316,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-04",
+        "baseReturnPct": 24.212516975,
+        "returnPct": 22.57652245999997,
+        "returnDeltaPctPoints": -1.6359945150000286,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-05",
+        "baseReturnPct": 19.689911555000016,
+        "returnPct": 18.50197278000001,
+        "returnDeltaPctPoints": -1.1879387750000063,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-06",
+        "baseReturnPct": 21.41202349000002,
+        "returnPct": 13.519211595000025,
+        "returnDeltaPctPoints": -7.892811894999996,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-09",
+        "baseReturnPct": 22.737454150000012,
+        "returnPct": -7.804380775000008,
+        "returnDeltaPctPoints": -30.54183492500002,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-10",
+        "baseReturnPct": 22.57652245999997,
+        "returnPct": -10.174003897499983,
+        "returnDeltaPctPoints": -32.75052635749995,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-11",
+        "baseReturnPct": 18.50197278000001,
+        "returnPct": -9.444850297499997,
+        "returnDeltaPctPoints": -27.946823077500007,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-12",
+        "baseReturnPct": 13.519211595000025,
+        "returnPct": -7.140591963749987,
+        "returnDeltaPctPoints": -20.659803558750014,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-13",
+        "baseReturnPct": -7.804380775000008,
+        "returnPct": -4.448871572499991,
+        "returnDeltaPctPoints": 3.3555092025000173,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-19",
+        "baseReturnPct": -10.174003897499983,
+        "returnPct": -11.352638082499977,
+        "returnDeltaPctPoints": -1.1786341849999946,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-20",
+        "baseReturnPct": -9.444850297499997,
+        "returnPct": -8.480707407499988,
+        "returnDeltaPctPoints": 0.9641428900000086,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-23",
+        "baseReturnPct": -7.140591963749987,
+        "returnPct": 7.025251764999996,
+        "returnDeltaPctPoints": 14.165843728749984,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-24",
+        "baseReturnPct": -4.448871572499991,
+        "returnPct": 9.662980200000003,
+        "returnDeltaPctPoints": 14.111851772499994,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-25",
+        "baseReturnPct": -11.352638082499977,
+        "returnPct": 13.916689613000033,
+        "returnDeltaPctPoints": 25.26932769550001,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-02-26",
+        "baseReturnPct": -8.480707407499988,
+        "returnPct": -14.99564404499999,
+        "returnDeltaPctPoints": -6.514936637500002,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-02-27",
+        "baseReturnPct": 7.025251764999996,
+        "returnPct": -20.354732480000003,
+        "returnDeltaPctPoints": -27.379984245,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-03-03",
+        "baseReturnPct": 9.662980200000003,
+        "returnPct": -16.049643835000005,
+        "returnDeltaPctPoints": -25.712624035000008,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-03-05",
+        "baseReturnPct": -14.99564404499999,
+        "returnPct": 13.638407974,
+        "returnDeltaPctPoints": 28.634052018999988,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-03-18",
+        "baseReturnPct": -9.200023511499989,
+        "returnPct": -13.580354278500007,
+        "returnDeltaPctPoints": -4.380330767000018,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-03-19",
+        "baseReturnPct": -10.325604044000015,
+        "returnPct": 11.766776445000016,
+        "returnDeltaPctPoints": 22.09238048900003,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-03-20",
+        "baseReturnPct": -10.797716161000015,
+        "returnPct": 11.129351665999998,
+        "returnDeltaPctPoints": 21.927067827000013,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-08",
+        "baseReturnPct": -8.88502010750003,
+        "returnPct": 14.733505294999993,
+        "returnDeltaPctPoints": 23.618525402500023,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-09",
+        "baseReturnPct": 8.893101944999993,
+        "returnPct": 14.780227587500017,
+        "returnDeltaPctPoints": 5.887125642500024,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-10",
+        "baseReturnPct": 11.87964812000002,
+        "returnPct": 15.125156455000033,
+        "returnDeltaPctPoints": 3.2455083350000127,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-13",
+        "baseReturnPct": 11.854617302499992,
+        "returnPct": 13.718787175000013,
+        "returnDeltaPctPoints": 1.864169872500021,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-14",
+        "baseReturnPct": 14.733505294999993,
+        "returnPct": 8.861777490000012,
+        "returnDeltaPctPoints": -5.871727804999981,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2026-04-15",
+        "baseReturnPct": 14.780227587500017,
+        "returnPct": -4.282907229999989,
+        "returnDeltaPctPoints": -19.063134817500007,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2026-04-16",
+        "baseReturnPct": 15.125156455000033,
+        "returnPct": 11.389513675000007,
+        "returnDeltaPctPoints": -3.735642780000026,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-17",
+        "baseReturnPct": 13.718787175000013,
+        "returnPct": 11.004373615000018,
+        "returnDeltaPctPoints": -2.7144135599999952,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-20",
+        "baseReturnPct": 8.861777490000012,
+        "returnPct": 15.522948915000011,
+        "returnDeltaPctPoints": 6.661171424999999,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-21",
+        "baseReturnPct": -4.282907229999989,
+        "returnPct": 15.722747394999992,
+        "returnDeltaPctPoints": 20.00565462499998,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-22",
+        "baseReturnPct": 11.389513675000007,
+        "returnPct": 13.129185585000002,
+        "returnDeltaPctPoints": 1.7396719099999949,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-23",
+        "baseReturnPct": 11.004373615000018,
+        "returnPct": 22.72136819499999,
+        "returnDeltaPctPoints": 11.716994579999971,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-24",
+        "baseReturnPct": 15.522948915000011,
+        "returnPct": 18.842828560000015,
+        "returnDeltaPctPoints": 3.319879645000004,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-27",
+        "baseReturnPct": 15.722747394999992,
+        "returnPct": -9.206876290000011,
+        "returnDeltaPctPoints": -24.929623685000003,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2026-04-28",
+        "baseReturnPct": 13.129185585000002,
+        "returnPct": 12.16251863500002,
+        "returnDeltaPctPoints": -0.9666669499999827,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-04-29",
+        "baseReturnPct": 22.72136819499999,
+        "returnPct": -13.827679095,
+        "returnDeltaPctPoints": -36.54904728999999,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2026-05-04",
+        "baseReturnPct": -9.206876290000011,
+        "returnPct": -11.343986062500012,
+        "returnDeltaPctPoints": -2.1371097725000006,
+        "baseTargetReached": false,
+        "targetReached": false
+      },
+      {
+        "start": "2026-05-06",
+        "baseReturnPct": 12.16251863500002,
+        "returnPct": -13.520183552499997,
+        "returnDeltaPctPoints": -25.682702187500016,
+        "baseTargetReached": true,
+        "targetReached": false
+      },
+      {
+        "start": "2026-05-07",
+        "baseReturnPct": -13.827679095,
+        "returnPct": 19.565349045000026,
+        "returnDeltaPctPoints": 33.39302814000003,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-05-08",
+        "baseReturnPct": -17.186758227499986,
+        "returnPct": 19.583471095000004,
+        "returnDeltaPctPoints": 36.770229322499986,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-05-11",
+        "baseReturnPct": -11.343986062500012,
+        "returnPct": 14.383996295000001,
+        "returnDeltaPctPoints": 25.72798235750001,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-05-12",
+        "baseReturnPct": -13.520183552499997,
+        "returnPct": 16.904452275000015,
+        "returnDeltaPctPoints": 30.424635827500012,
+        "baseTargetReached": false,
+        "targetReached": true
+      },
+      {
+        "start": "2026-05-13",
+        "baseReturnPct": 19.565349045000026,
+        "returnPct": 17.36233117499999,
+        "returnDeltaPctPoints": -2.2030178700000356,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-05-14",
+        "baseReturnPct": 19.583471095000004,
+        "returnPct": 16.163369534999994,
+        "returnDeltaPctPoints": -3.4201015600000098,
+        "baseTargetReached": true,
+        "targetReached": true
+      },
+      {
+        "start": "2026-05-15",
+        "baseReturnPct": 14.383996295000001,
+        "returnPct": 17.758957394999996,
+        "returnDeltaPctPoints": 3.374961099999995,
+        "baseTargetReached": true,
+        "targetReached": true
+      }
+    ]
+  }
+]

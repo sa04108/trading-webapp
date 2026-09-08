@@ -16,7 +16,7 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def verify(root, directory, candidate, stage, options_path, input_path, stop, starts, slippage=5):
+def verify(root, directory, candidate, stage, options_path, input_path, stop, starts, slippage=5, seed=204):
     options = json.loads(options_path.read_text())
     summary_path = root / directory / f'{candidate["id"]}__summary.json'
     summary = json.loads(summary_path.read_text())
@@ -35,7 +35,7 @@ def verify(root, directory, candidate, stage, options_path, input_path, stop, st
         if (run.get("status") == "failed" or run["summary"] != w or run["candidate"] != candidate or run["options"] != options
                 or run["stage"] != stage or any(run[k] != v for k, v in hashes.items())
                 or run["risk"]["stopPct"] != stop or run["risk"]["targetPct"] != 10.5 or run["risk"]["initialCash"] != 100_000_000
-                or run["seed"] != 204 or run["slippageBps"] != slippage or run["engineVersion"] != "2.12.0"
+                or run["seed"] != seed or run["slippageBps"] != slippage or run["engineVersion"] != "2.12.0"
                 or run["strategyVersion"] != "2.2.1+history-reset.1"
                 or run["parameters"] != {"formationDays": 20, "skipDays": 0, "topN": 5, "absoluteMomentumFilter": True}
                 or w["end"] != end_of_quarter(w["start"]) or run["result"]["metrics"]["totalReturnPct"] != w["returnPct"]

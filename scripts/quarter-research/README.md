@@ -199,3 +199,15 @@ node --import tsx scripts/quarter-research/current-signals.ts data/kr-quarter-re
 ```
 
 집계 전 두 실험 목록의 모든 입력·출력·단계·비용·시드·옵션 조합을 지정 경로에서 완료해야 한다. 기본 집계 후 후속 집계를 실행한다. 위 `reproduction-*`는 전체 집계와 다른 별도 재현 경로다. 현재 신호는 두 중단 설정에서 최초 선정 종목이 같으며 계좌 중단 옵션은 이후 보유 경로에 작용한다. 조건별 성과·과거 실패·실제 낙폭·현재 선정과 검증 기록은 [계좌 중단 비교](../../docs/research/kr-current-quarter-account-stop-findings.md)에 있다.
+
+
+## 체결 시드·순위 선정 일정 민감도
+
+`configs/execution-stability-experiments.json`은 시드 205·206과 선정일 이동 1·2·3·4의 12개 실행·462개 계좌 목록이다. 원래 시드 204·이동 0 계좌 77개는 재사용한다. 후보와 원래 계좌 시작일·만기·위험 규칙은 계좌 중단 15% 비교 그대로다.
+
+```bash
+node --import tsx scripts/quarter-research/quarter-engine.ts data/kr-quarter-research/expanded/stock-200-verified-input.json.gz data/kr-quarter-research/execution-stability/reproduction-offset2-validation validation scripts/quarter-research/configs/account-stop-candidate.json 5 204 0 100000000 scripts/quarter-research/configs/execution-offset2-validation-options.json
+python scripts/quarter-research/build_execution_evidence.py data/kr-quarter-research data/kr-quarter-research/execution-stability/evidence
+```
+
+집계 전 실험 목록의 모든 조합을 지정 출력 경로에서 완료해야 한다. `rebalanceOffsetBars`는 최초 순위 선정과 뒤따르는 회전 신호를 실제 거래일만큼 늦추며 원래 만기를 늘리지 않는다. 생략은 0이며 0 이상 회전 주기 미만 정수만 허용한다. 이동 뒤 신호일이 없는 창은 거부한다. 위 `reproduction-*`는 별도 재현 경로다. [실행 민감도 결과](../../docs/research/kr-current-quarter-execution-stability-findings.md)에 기준 미달과 실제 목표에 미달한 청산 경로를 함께 기록했다.

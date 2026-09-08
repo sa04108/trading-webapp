@@ -1,0 +1,79 @@
+{
+  "asof": "2026-09-08",
+  "baseCommit": "445aea9",
+  "status": "코드·자료 대조 통과, 실행 일정 두 경우의 성과 기준 미달",
+  "checks": [
+    {
+      "command": "pnpm exec vitest run tests/unit/quarter-research.test.ts tests/unit/recovery-quarter.test.ts tests/unit/uncertain-history-quarter.test.ts tests/unit/confirmed-entry-quarter.test.ts",
+      "exitCode": 0,
+      "testFiles": 4,
+      "tests": 18,
+      "processSession": 49726
+    },
+    {
+      "command": "pnpm exec eslint scripts/quarter-research/*.ts tests/unit/quarter-research.test.ts tests/unit/recovery-quarter.test.ts tests/unit/uncertain-history-quarter.test.ts tests/unit/confirmed-entry-quarter.test.ts",
+      "exitCode": 0,
+      "processSession": 39373
+    },
+    {
+      "command": "pnpm exec tsc -p tsconfig.server.json --noEmit",
+      "exitCode": 0,
+      "processSession": 27886
+    },
+    {
+      "command": "python -m py_compile scripts/quarter-research/build_execution_evidence.py scripts/quarter-research/build_account_stop_evidence.py",
+      "exitCode": 0
+    },
+    {
+      "command": "python scripts/quarter-research/build_execution_evidence.py data/kr-quarter-research data/kr-quarter-research/execution-stability/evidence",
+      "exitCode": 0,
+      "newExperiments": 12,
+      "newAccounts": 462,
+      "reusedAccounts": 77,
+      "allSettingsPassed": false,
+      "processSession": 39399
+    },
+    {
+      "check": "일정 이동 생략 2020-04-09 계좌의 원본 바이트 대조",
+      "exitCode": 0,
+      "identical": true,
+      "sha256": "8c201bf3f0ffd61372ca2433e4e5815595b73869a4b1e7adb0298ae6d702ba2b",
+      "processSession": 6305
+    },
+    {
+      "check": "코드·입력·모든 개별 계좌와 요약 해시 대조",
+      "exitCode": 0,
+      "fileHashes": 553,
+      "codeAndSourceHashes": 57
+    }
+  ],
+  "nativeTradingCodeChanged": false,
+  "researchChange": "실제 거래일 기반 rebalanceOffsetBars와 유효성 검사, 집계기의 선택적 시드 인수",
+  "failedPerformanceSettings": [
+    {
+      "kind": "offset",
+      "value": 2,
+      "stage": "validation",
+      "nonoverlappingHits": 1,
+      "nonoverlappingCount": 3
+    },
+    {
+      "kind": "offset",
+      "value": 4,
+      "stage": "confirmation",
+      "nonoverlappingHits": 2,
+      "nonoverlappingCount": 4
+    }
+  ],
+  "goalComplete": false,
+  "unimplementedFollowup": "목표 청산 뒤 실제 10% 미달일 때 원래 만기·낙폭 제한 안에서 다시 거래하는 정책의 별도 평가",
+  "publicFilesSha256": {
+    "all-summaries.csv": "7ccdde95685b0c38def41633b4dac8b4b5ad652a5c7584f998255852898c1877",
+    "evidence-manifest.json": "b8b21336fd7b081312ba0a2c73e2fd3c96af9163edae2601853b997623b0196a",
+    "nonoverlapping-accounts.json": "4e71c47b96f38609769ce54889db4827007558ac3ba44463ff53c44835268093",
+    "paired.json": "847e85a136ab562bea2d795ce5b636ccc7a88d9159258c186d8f0f244610a95c",
+    "scheduleAudit.json": "12edcad5467680feb30e1229f61737d1d7a5e45d53a74ae6cddb701d97f2b05b",
+    "target-miss-audit.json": "c330d7fdf5514b945457832ffae1ed3688650521768b237a66f5108ecc0c4f36",
+    "target-misses.json": "cc6dfc1bad61c9becfdae0a6e0c02a3e12cd9553b2856f7e8851d106f0cbfb00"
+  }
+}

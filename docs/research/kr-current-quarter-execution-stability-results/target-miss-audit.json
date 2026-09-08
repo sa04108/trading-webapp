@@ -1,0 +1,83 @@
+{
+  "file": "data/kr-quarter-research/execution-stability/offset2-validation/momentum-20-5-monthly__2020-04-09.json",
+  "sha256": "84da7fbc0e8e939e3a5f3851ca529a33c8cafbf255a79d38a5d33ec2b1b7361c",
+  "start": "2020-04-09",
+  "end": "2020-07-08",
+  "signal": {
+    "date": "2020-05-06",
+    "reason": "계좌 목표 청산",
+    "equity": 111941554.5625
+  },
+  "signalReturnPct": 11.94155456249999,
+  "returnPct": 9.88708142750001,
+  "closed": true,
+  "targetReached": false,
+  "closingCommission": 16023.134999999998,
+  "closingTax": 267050,
+  "closingSlippage": 219150,
+  "equityDrop": 2054473.1349999905,
+  "remainingPriceMoveImpact": 1552249.9999999905,
+  "closingFills": [
+    {
+      "symbol": "005690",
+      "side": "SELL",
+      "quantity": 1139,
+      "price": 22850,
+      "grossAmount": 26026150,
+      "commission": 3903.9224999999997,
+      "tax": 65065,
+      "slippageCost": 56950,
+      "tsMs": 1588809600000,
+      "reason": "계좌 목표 청산"
+    },
+    {
+      "symbol": "068760",
+      "side": "SELL",
+      "quantity": 268,
+      "price": 72000,
+      "grossAmount": 19296000,
+      "commission": 2894.3999999999996,
+      "tax": 48240,
+      "slippageCost": 26800,
+      "tsMs": 1588809600000,
+      "reason": "계좌 목표 청산"
+    },
+    {
+      "symbol": "285130",
+      "side": "SELL",
+      "quantity": 242,
+      "price": 78000,
+      "grossAmount": 18876000,
+      "commission": 2831.3999999999996,
+      "tax": 47190,
+      "slippageCost": 24200,
+      "tsMs": 1588809600000,
+      "reason": "계좌 목표 청산"
+    },
+    {
+      "symbol": "085660",
+      "side": "SELL",
+      "quantity": 1183,
+      "price": 19750,
+      "grossAmount": 23364250,
+      "commission": 3504.6375,
+      "tax": 58410,
+      "slippageCost": 59150,
+      "tsMs": 1588809600000,
+      "reason": "계좌 목표 청산"
+    },
+    {
+      "symbol": "019170",
+      "side": "SELL",
+      "quantity": 1041,
+      "price": 18500,
+      "grossAmount": 19258500,
+      "commission": 2888.7749999999996,
+      "tax": 48145,
+      "slippageCost": 52050,
+      "tsMs": 1588809600000,
+      "reason": "계좌 목표 청산"
+    }
+  ],
+  "note": "완전 청산 뒤 실제 목표에 미달해도 기존 규칙은 새 진입을 막는다. 이 한 경로의 진단이며 재진입 시 수익이 좋아진다는 증거는 아니다."
+}

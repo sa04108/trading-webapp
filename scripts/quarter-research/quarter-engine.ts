@@ -120,6 +120,16 @@ export function parseAccountStopPct(value: unknown = 10): number {
   return value;
 }
 
+/** 휴장일을 건너뛴 실제 거래일에서 회전 신호를 옮기되 만기는 바꾸지 않는다. */
+export function rebalanceDates(days: readonly string[], period: number, offset: unknown = 0): string[] {
+  if (!Number.isSafeInteger(period) || period <= 0) throw new Error('회전 주기는 양의 정수여야 합니다');
+  if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0 || offset >= period) {
+    throw new Error('순위 선정 이동은 0 이상 회전 주기 미만의 정수여야 합니다');
+  }
+  if (days.length > 0 && offset >= days.length) throw new Error('이동 후 순위를 선정할 거래일이 없습니다');
+  return days.filter((_, i) => i >= offset && (i - offset) % period === 0);
+}
+
 export interface QuarterRisk {
   initialCash: number;
   tradeFromTsMs: number;
@@ -197,7 +207,7 @@ export function main(argv: string[]) {
   const [from, to] = STAGES[stage as keyof typeof STAGES];
   const effectiveTo = input.asof < to ? input.asof : to;
   const optionsBytes = optionsPath ? readFileSync(optionsPath) : null;
-  const options = optionsBytes ? JSON.parse(optionsBytes.toString()) as { starts?: string[]; resetUncertainHistory?: boolean; activationConfirmationBars?: number; accountStopPct?: number } : {};
+  const options = optionsBytes ? JSON.parse(optionsBytes.toString()) as { starts?: string[]; resetUncertainHistory?: boolean; activationConfirmationBars?: number; accountStopPct?: number; rebalanceOffsetBars?: number } : {};
   const accountStopPct = parseAccountStopPct(options.accountStopPct);
   const researchOptions = optionsBytes ? { options, optionsSha256: createHash('sha256').update(optionsBytes).digest('hex') } : {};
   const allWindows = options.starts ? windowsFromStarts(input.days, from, effectiveTo, options.starts, true)
@@ -247,7 +257,7 @@ export function main(argv: string[]) {
         : withConfirmedEntry(history?.strategy ?? base, input.macro, fromTsMs, options.activationConfirmationBars);
       const wrapper = withQuarterRisk(activation?.strategy ?? history?.strategy ?? base, risk);
       // 첫 진입은 시작일 종가 신호 이후이며 일정은 고정된 리밸런싱 간격을 따른다.
-      const schedule: BacktestUniverseScheduleEntry[] = window.tradingDays.filter((_, i) => i % (candidate.rebalanceBars ?? 5) === 0).map((date) => ({
+      const schedule: BacktestUniverseScheduleEntry[] = rebalanceDates(window.tradingDays, candidate.rebalanceBars ?? 5, options.rebalanceOffsetBars).map((date) => ({
         fromTsMs: Date.parse(date), symbols: input.members[Math.max(0, dayIndex.get(date)! - 1)]!,
       }));
       try {

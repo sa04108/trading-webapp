@@ -1,0 +1,3782 @@
+[
+  {
+    "kind": "seed",
+    "value": 205,
+    "stage": "validation",
+    "scheduleAudit": [
+      {
+        "start": "2020-04-09",
+        "firstRanking": "2020-04-09",
+        "earliestPossibleBuy": "2020-04-13",
+        "firstBuy": "2020-04-13",
+        "lastValuation": "2020-07-08",
+        "end": "2020-07-08"
+      },
+      {
+        "start": "2020-04-10",
+        "firstRanking": "2020-04-10",
+        "earliestPossibleBuy": "2020-04-14",
+        "firstBuy": "2020-04-14",
+        "lastValuation": "2020-07-09",
+        "end": "2020-07-09"
+      },
+      {
+        "start": "2020-04-13",
+        "firstRanking": "2020-04-13",
+        "earliestPossibleBuy": "2020-04-16",
+        "firstBuy": "2020-04-16",
+        "lastValuation": "2020-07-12",
+        "end": "2020-07-12"
+      },
+      {
+        "start": "2020-04-14",
+        "firstRanking": "2020-04-14",
+        "earliestPossibleBuy": "2020-04-17",
+        "firstBuy": "2020-04-17",
+        "lastValuation": "2020-07-13",
+        "end": "2020-07-13"
+      },
+      {
+        "start": "2020-04-16",
+        "firstRanking": "2020-04-16",
+        "earliestPossibleBuy": "2020-04-20",
+        "firstBuy": "2020-04-20",
+        "lastValuation": "2020-07-15",
+        "end": "2020-07-15"
+      },
+      {
+        "start": "2020-04-17",
+        "firstRanking": "2020-04-17",
+        "earliestPossibleBuy": "2020-04-21",
+        "firstBuy": "2020-04-21",
+        "lastValuation": "2020-07-16",
+        "end": "2020-07-16"
+      },
+      {
+        "start": "2020-04-20",
+        "firstRanking": "2020-04-20",
+        "earliestPossibleBuy": "2020-04-22",
+        "firstBuy": "2020-04-22",
+        "lastValuation": "2020-07-19",
+        "end": "2020-07-19"
+      },
+      {
+        "start": "2020-04-21",
+        "firstRanking": "2020-04-21",
+        "earliestPossibleBuy": "2020-04-23",
+        "firstBuy": "2020-04-23",
+        "lastValuation": "2020-07-20",
+        "end": "2020-07-20"
+      },
+      {
+        "start": "2020-04-22",
+        "firstRanking": "2020-04-22",
+        "earliestPossibleBuy": "2020-04-24",
+        "firstBuy": "2020-04-24",
+        "lastValuation": "2020-07-21",
+        "end": "2020-07-21"
+      },
+      {
+        "start": "2020-06-16",
+        "firstRanking": "2020-06-16",
+        "earliestPossibleBuy": "2020-06-18",
+        "firstBuy": "2020-06-18",
+        "lastValuation": "2020-09-15",
+        "end": "2020-09-15"
+      },
+      {
+        "start": "2020-06-17",
+        "firstRanking": "2020-06-17",
+        "earliestPossibleBuy": "2020-06-19",
+        "firstBuy": "2020-06-19",
+        "lastValuation": "2020-09-16",
+        "end": "2020-09-16"
+      },
+      {
+        "start": "2020-06-18",
+        "firstRanking": "2020-06-18",
+        "earliestPossibleBuy": "2020-06-22",
+        "firstBuy": "2020-06-22",
+        "lastValuation": "2020-09-17",
+        "end": "2020-09-17"
+      },
+      {
+        "start": "2020-06-19",
+        "firstRanking": "2020-06-19",
+        "earliestPossibleBuy": "2020-06-23",
+        "firstBuy": "2020-06-23",
+        "lastValuation": "2020-09-18",
+        "end": "2020-09-18"
+      },
+      {
+        "start": "2020-06-22",
+        "firstRanking": "2020-06-22",
+        "earliestPossibleBuy": "2020-06-24",
+        "firstBuy": "2020-06-24",
+        "lastValuation": "2020-09-21",
+        "end": "2020-09-21"
+      },
+      {
+        "start": "2020-06-23",
+        "firstRanking": "2020-06-23",
+        "earliestPossibleBuy": "2020-06-25",
+        "firstBuy": "2020-06-25",
+        "lastValuation": "2020-09-22",
+        "end": "2020-09-22"
+      },
+      {
+        "start": "2020-06-24",
+        "firstRanking": "2020-06-24",
+        "earliestPossibleBuy": "2020-06-26",
+        "firstBuy": "2020-06-26",
+        "lastValuation": "2020-09-23",
+        "end": "2020-09-23"
+      },
+      {
+        "start": "2020-07-06",
+        "firstRanking": "2020-07-06",
+        "earliestPossibleBuy": "2020-07-08",
+        "firstBuy": "2020-07-08",
+        "lastValuation": "2020-10-05",
+        "end": "2020-10-05"
+      },
+      {
+        "start": "2020-07-10",
+        "firstRanking": "2020-07-10",
+        "earliestPossibleBuy": "2020-07-14",
+        "firstBuy": "2020-07-14",
+        "lastValuation": "2020-10-09",
+        "end": "2020-10-09"
+      },
+      {
+        "start": "2021-02-03",
+        "firstRanking": "2021-02-03",
+        "earliestPossibleBuy": "2021-02-05",
+        "firstBuy": "2021-02-05",
+        "lastValuation": "2021-05-02",
+        "end": "2021-05-02"
+      }
+    ]
+  },
+  {
+    "kind": "seed",
+    "value": 205,
+    "stage": "confirmation",
+    "scheduleAudit": [
+      {
+        "start": "2024-09-02",
+        "firstRanking": "2024-09-02",
+        "earliestPossibleBuy": "2024-09-04",
+        "firstBuy": "2024-09-04",
+        "lastValuation": "2024-12-01",
+        "end": "2024-12-01"
+      },
+      {
+        "start": "2025-04-28",
+        "firstRanking": "2025-04-28",
+        "earliestPossibleBuy": "2025-04-30",
+        "firstBuy": "2025-04-30",
+        "lastValuation": "2025-07-27",
+        "end": "2025-07-27"
+      },
+      {
+        "start": "2025-04-29",
+        "firstRanking": "2025-04-29",
+        "earliestPossibleBuy": "2025-05-02",
+        "firstBuy": "2025-05-02",
+        "lastValuation": "2025-07-28",
+        "end": "2025-07-28"
+      },
+      {
+        "start": "2025-04-30",
+        "firstRanking": "2025-04-30",
+        "earliestPossibleBuy": "2025-05-07",
+        "firstBuy": "2025-05-07",
+        "lastValuation": "2025-07-29",
+        "end": "2025-07-29"
+      },
+      {
+        "start": "2025-05-02",
+        "firstRanking": "2025-05-02",
+        "earliestPossibleBuy": "2025-05-08",
+        "firstBuy": "2025-05-08",
+        "lastValuation": "2025-08-01",
+        "end": "2025-08-01"
+      },
+      {
+        "start": "2025-05-07",
+        "firstRanking": "2025-05-07",
+        "earliestPossibleBuy": "2025-05-09",
+        "firstBuy": "2025-05-09",
+        "lastValuation": "2025-08-06",
+        "end": "2025-08-06"
+      },
+      {
+        "start": "2025-11-17",
+        "firstRanking": "2025-11-17",
+        "earliestPossibleBuy": "2025-11-19",
+        "firstBuy": "2025-11-19",
+        "lastValuation": "2026-02-16",
+        "end": "2026-02-16"
+      },
+      {
+        "start": "2025-12-03",
+        "firstRanking": "2025-12-03",
+        "earliestPossibleBuy": "2025-12-05",
+        "firstBuy": "2025-12-05",
+        "lastValuation": "2026-03-02",
+        "end": "2026-03-02"
+      },
+      {
+        "start": "2025-12-04",
+        "firstRanking": "2025-12-04",
+        "earliestPossibleBuy": "2025-12-08",
+        "firstBuy": "2025-12-08",
+        "lastValuation": "2026-03-03",
+        "end": "2026-03-03"
+      },
+      {
+        "start": "2025-12-05",
+        "firstRanking": "2025-12-05",
+        "earliestPossibleBuy": "2025-12-09",
+        "firstBuy": "2025-12-09",
+        "lastValuation": "2026-03-04",
+        "end": "2026-03-04"
+      },
+      {
+        "start": "2025-12-08",
+        "firstRanking": "2025-12-08",
+        "earliestPossibleBuy": "2025-12-10",
+        "firstBuy": "2025-12-10",
+        "lastValuation": "2026-03-07",
+        "end": "2026-03-07"
+      },
+      {
+        "start": "2025-12-09",
+        "firstRanking": "2025-12-09",
+        "earliestPossibleBuy": "2025-12-11",
+        "firstBuy": "2025-12-11",
+        "lastValuation": "2026-03-08",
+        "end": "2026-03-08"
+      },
+      {
+        "start": "2026-02-03",
+        "firstRanking": "2026-02-03",
+        "earliestPossibleBuy": "2026-02-05",
+        "firstBuy": "2026-02-05",
+        "lastValuation": "2026-05-02",
+        "end": "2026-05-02"
+      },
+      {
+        "start": "2026-02-04",
+        "firstRanking": "2026-02-04",
+        "earliestPossibleBuy": "2026-02-06",
+        "firstBuy": "2026-02-06",
+        "lastValuation": "2026-05-03",
+        "end": "2026-05-03"
+      },
+      {
+        "start": "2026-02-05",
+        "firstRanking": "2026-02-05",
+        "earliestPossibleBuy": "2026-02-09",
+        "firstBuy": "2026-02-09",
+        "lastValuation": "2026-05-04",
+        "end": "2026-05-04"
+      },
+      {
+        "start": "2026-02-06",
+        "firstRanking": "2026-02-06",
+        "earliestPossibleBuy": "2026-02-10",
+        "firstBuy": "2026-02-10",
+        "lastValuation": "2026-05-05",
+        "end": "2026-05-05"
+      },
+      {
+        "start": "2026-02-09",
+        "firstRanking": "2026-02-09",
+        "earliestPossibleBuy": "2026-02-11",
+        "firstBuy": "2026-02-11",
+        "lastValuation": "2026-05-08",
+        "end": "2026-05-08"
+      },
+      {
+        "start": "2026-02-10",
+        "firstRanking": "2026-02-10",
+        "earliestPossibleBuy": "2026-02-12",
+        "firstBuy": "2026-02-12",
+        "lastValuation": "2026-05-09",
+        "end": "2026-05-09"
+      },
+      {
+        "start": "2026-02-11",
+        "firstRanking": "2026-02-11",
+        "earliestPossibleBuy": "2026-02-13",
+        "firstBuy": "2026-02-13",
+        "lastValuation": "2026-05-10",
+        "end": "2026-05-10"
+      },
+      {
+        "start": "2026-02-12",
+        "firstRanking": "2026-02-12",
+        "earliestPossibleBuy": "2026-02-19",
+        "firstBuy": "2026-02-19",
+        "lastValuation": "2026-05-11",
+        "end": "2026-05-11"
+      },
+      {
+        "start": "2026-02-13",
+        "firstRanking": "2026-02-13",
+        "earliestPossibleBuy": "2026-02-20",
+        "firstBuy": "2026-02-20",
+        "lastValuation": "2026-05-12",
+        "end": "2026-05-12"
+      },
+      {
+        "start": "2026-02-19",
+        "firstRanking": "2026-02-19",
+        "earliestPossibleBuy": "2026-02-23",
+        "firstBuy": "2026-02-23",
+        "lastValuation": "2026-05-18",
+        "end": "2026-05-18"
+      },
+      {
+        "start": "2026-02-20",
+        "firstRanking": "2026-02-20",
+        "earliestPossibleBuy": "2026-02-24",
+        "firstBuy": "2026-02-24",
+        "lastValuation": "2026-05-19",
+        "end": "2026-05-19"
+      },
+      {
+        "start": "2026-02-23",
+        "firstRanking": "2026-02-23",
+        "earliestPossibleBuy": "2026-02-25",
+        "firstBuy": "2026-02-25",
+        "lastValuation": "2026-05-22",
+        "end": "2026-05-22"
+      },
+      {
+        "start": "2026-02-24",
+        "firstRanking": "2026-02-24",
+        "earliestPossibleBuy": "2026-02-26",
+        "firstBuy": "2026-02-26",
+        "lastValuation": "2026-05-23",
+        "end": "2026-05-23"
+      },
+      {
+        "start": "2026-02-25",
+        "firstRanking": "2026-02-25",
+        "earliestPossibleBuy": "2026-02-27",
+        "firstBuy": "2026-02-27",
+        "lastValuation": "2026-05-24",
+        "end": "2026-05-24"
+      },
+      {
+        "start": "2026-02-26",
+        "firstRanking": "2026-02-26",
+        "earliestPossibleBuy": "2026-03-03",
+        "firstBuy": "2026-03-03",
+        "lastValuation": "2026-05-25",
+        "end": "2026-05-25"
+      },
+      {
+        "start": "2026-02-27",
+        "firstRanking": "2026-02-27",
+        "earliestPossibleBuy": "2026-03-04",
+        "firstBuy": "2026-03-04",
+        "lastValuation": "2026-05-26",
+        "end": "2026-05-26"
+      },
+      {
+        "start": "2026-03-03",
+        "firstRanking": "2026-03-03",
+        "earliestPossibleBuy": "2026-03-05",
+        "firstBuy": "2026-03-05",
+        "lastValuation": "2026-06-02",
+        "end": "2026-06-02"
+      },
+      {
+        "start": "2026-03-05",
+        "firstRanking": "2026-03-05",
+        "earliestPossibleBuy": "2026-03-09",
+        "firstBuy": "2026-03-09",
+        "lastValuation": "2026-06-04",
+        "end": "2026-06-04"
+      },
+      {
+        "start": "2026-03-18",
+        "firstRanking": "2026-03-18",
+        "earliestPossibleBuy": "2026-03-20",
+        "firstBuy": "2026-03-20",
+        "lastValuation": "2026-06-17",
+        "end": "2026-06-17"
+      },
+      {
+        "start": "2026-03-19",
+        "firstRanking": "2026-03-19",
+        "earliestPossibleBuy": "2026-03-23",
+        "firstBuy": "2026-03-23",
+        "lastValuation": "2026-06-18",
+        "end": "2026-06-18"
+      },
+      {
+        "start": "2026-03-20",
+        "firstRanking": "2026-03-20",
+        "earliestPossibleBuy": "2026-03-24",
+        "firstBuy": "2026-03-24",
+        "lastValuation": "2026-06-19",
+        "end": "2026-06-19"
+      },
+      {
+        "start": "2026-04-08",
+        "firstRanking": "2026-04-08",
+        "earliestPossibleBuy": "2026-04-10",
+        "firstBuy": "2026-04-10",
+        "lastValuation": "2026-07-07",
+        "end": "2026-07-07"
+      },
+      {
+        "start": "2026-04-09",
+        "firstRanking": "2026-04-09",
+        "earliestPossibleBuy": "2026-04-13",
+        "firstBuy": "2026-04-13",
+        "lastValuation": "2026-07-08",
+        "end": "2026-07-08"
+      },
+      {
+        "start": "2026-04-10",
+        "firstRanking": "2026-04-10",
+        "earliestPossibleBuy": "2026-04-14",
+        "firstBuy": "2026-04-14",
+        "lastValuation": "2026-07-09",
+        "end": "2026-07-09"
+      },
+      {
+        "start": "2026-04-13",
+        "firstRanking": "2026-04-13",
+        "earliestPossibleBuy": "2026-04-15",
+        "firstBuy": "2026-04-15",
+        "lastValuation": "2026-07-12",
+        "end": "2026-07-12"
+      },
+      {
+        "start": "2026-04-14",
+        "firstRanking": "2026-04-14",
+        "earliestPossibleBuy": "2026-04-16",
+        "firstBuy": "2026-04-16",
+        "lastValuation": "2026-07-13",
+        "end": "2026-07-13"
+      },
+      {
+        "start": "2026-04-15",
+        "firstRanking": "2026-04-15",
+        "earliestPossibleBuy": "2026-04-17",
+        "firstBuy": "2026-04-17",
+        "lastValuation": "2026-07-14",
+        "end": "2026-07-14"
+      },
+      {
+        "start": "2026-04-16",
+        "firstRanking": "2026-04-16",
+        "earliestPossibleBuy": "2026-04-20",
+        "firstBuy": "2026-04-20",
+        "lastValuation": "2026-07-15",
+        "end": "2026-07-15"
+      },
+      {
+        "start": "2026-04-17",
+        "firstRanking": "2026-04-17",
+        "earliestPossibleBuy": "2026-04-21",
+        "firstBuy": "2026-04-21",
+        "lastValuation": "2026-07-16",
+        "end": "2026-07-16"
+      },
+      {
+        "start": "2026-04-20",
+        "firstRanking": "2026-04-20",
+        "earliestPossibleBuy": "2026-04-22",
+        "firstBuy": "2026-04-22",
+        "lastValuation": "2026-07-19",
+        "end": "2026-07-19"
+      },
+      {
+        "start": "2026-04-21",
+        "firstRanking": "2026-04-21",
+        "earliestPossibleBuy": "2026-04-23",
+        "firstBuy": "2026-04-23",
+        "lastValuation": "2026-07-20",
+        "end": "2026-07-20"
+      },
+      {
+        "start": "2026-04-22",
+        "firstRanking": "2026-04-22",
+        "earliestPossibleBuy": "2026-04-24",
+        "firstBuy": "2026-04-24",
+        "lastValuation": "2026-07-21",
+        "end": "2026-07-21"
+      },
+      {
+        "start": "2026-04-23",
+        "firstRanking": "2026-04-23",
+        "earliestPossibleBuy": "2026-04-27",
+        "firstBuy": "2026-04-27",
+        "lastValuation": "2026-07-22",
+        "end": "2026-07-22"
+      },
+      {
+        "start": "2026-04-24",
+        "firstRanking": "2026-04-24",
+        "earliestPossibleBuy": "2026-04-28",
+        "firstBuy": "2026-04-28",
+        "lastValuation": "2026-07-23",
+        "end": "2026-07-23"
+      },
+      {
+        "start": "2026-04-27",
+        "firstRanking": "2026-04-27",
+        "earliestPossibleBuy": "2026-04-29",
+        "firstBuy": "2026-04-29",
+        "lastValuation": "2026-07-26",
+        "end": "2026-07-26"
+      },
+      {
+        "start": "2026-04-28",
+        "firstRanking": "2026-04-28",
+        "earliestPossibleBuy": "2026-04-30",
+        "firstBuy": "2026-04-30",
+        "lastValuation": "2026-07-27",
+        "end": "2026-07-27"
+      },
+      {
+        "start": "2026-04-29",
+        "firstRanking": "2026-04-29",
+        "earliestPossibleBuy": "2026-05-04",
+        "firstBuy": "2026-05-04",
+        "lastValuation": "2026-07-28",
+        "end": "2026-07-28"
+      },
+      {
+        "start": "2026-05-04",
+        "firstRanking": "2026-05-04",
+        "earliestPossibleBuy": "2026-05-07",
+        "firstBuy": "2026-05-07",
+        "lastValuation": "2026-08-03",
+        "end": "2026-08-03"
+      },
+      {
+        "start": "2026-05-06",
+        "firstRanking": "2026-05-06",
+        "earliestPossibleBuy": "2026-05-08",
+        "firstBuy": "2026-05-08",
+        "lastValuation": "2026-08-05",
+        "end": "2026-08-05"
+      },
+      {
+        "start": "2026-05-07",
+        "firstRanking": "2026-05-07",
+        "earliestPossibleBuy": "2026-05-11",
+        "firstBuy": "2026-05-11",
+        "lastValuation": "2026-08-06",
+        "end": "2026-08-06"
+      },
+      {
+        "start": "2026-05-08",
+        "firstRanking": "2026-05-08",
+        "earliestPossibleBuy": "2026-05-12",
+        "firstBuy": "2026-05-12",
+        "lastValuation": "2026-08-07",
+        "end": "2026-08-07"
+      },
+      {
+        "start": "2026-05-11",
+        "firstRanking": "2026-05-11",
+        "earliestPossibleBuy": "2026-05-13",
+        "firstBuy": "2026-05-13",
+        "lastValuation": "2026-08-10",
+        "end": "2026-08-10"
+      },
+      {
+        "start": "2026-05-12",
+        "firstRanking": "2026-05-12",
+        "earliestPossibleBuy": "2026-05-14",
+        "firstBuy": "2026-05-14",
+        "lastValuation": "2026-08-11",
+        "end": "2026-08-11"
+      },
+      {
+        "start": "2026-05-13",
+        "firstRanking": "2026-05-13",
+        "earliestPossibleBuy": "2026-05-15",
+        "firstBuy": "2026-05-15",
+        "lastValuation": "2026-08-12",
+        "end": "2026-08-12"
+      },
+      {
+        "start": "2026-05-14",
+        "firstRanking": "2026-05-14",
+        "earliestPossibleBuy": "2026-05-18",
+        "firstBuy": "2026-05-18",
+        "lastValuation": "2026-08-13",
+        "end": "2026-08-13"
+      },
+      {
+        "start": "2026-05-15",
+        "firstRanking": "2026-05-15",
+        "earliestPossibleBuy": "2026-05-19",
+        "firstBuy": "2026-05-19",
+        "lastValuation": "2026-08-14",
+        "end": "2026-08-14"
+      }
+    ]
+  },
+  {
+    "kind": "seed",
+    "value": 206,
+    "stage": "validation",
+    "scheduleAudit": [
+      {
+        "start": "2020-04-09",
+        "firstRanking": "2020-04-09",
+        "earliestPossibleBuy": "2020-04-13",
+        "firstBuy": "2020-04-13",
+        "lastValuation": "2020-07-08",
+        "end": "2020-07-08"
+      },
+      {
+        "start": "2020-04-10",
+        "firstRanking": "2020-04-10",
+        "earliestPossibleBuy": "2020-04-14",
+        "firstBuy": "2020-04-14",
+        "lastValuation": "2020-07-09",
+        "end": "2020-07-09"
+      },
+      {
+        "start": "2020-04-13",
+        "firstRanking": "2020-04-13",
+        "earliestPossibleBuy": "2020-04-16",
+        "firstBuy": "2020-04-16",
+        "lastValuation": "2020-07-12",
+        "end": "2020-07-12"
+      },
+      {
+        "start": "2020-04-14",
+        "firstRanking": "2020-04-14",
+        "earliestPossibleBuy": "2020-04-17",
+        "firstBuy": "2020-04-17",
+        "lastValuation": "2020-07-13",
+        "end": "2020-07-13"
+      },
+      {
+        "start": "2020-04-16",
+        "firstRanking": "2020-04-16",
+        "earliestPossibleBuy": "2020-04-20",
+        "firstBuy": "2020-04-20",
+        "lastValuation": "2020-07-15",
+        "end": "2020-07-15"
+      },
+      {
+        "start": "2020-04-17",
+        "firstRanking": "2020-04-17",
+        "earliestPossibleBuy": "2020-04-21",
+        "firstBuy": "2020-04-21",
+        "lastValuation": "2020-07-16",
+        "end": "2020-07-16"
+      },
+      {
+        "start": "2020-04-20",
+        "firstRanking": "2020-04-20",
+        "earliestPossibleBuy": "2020-04-22",
+        "firstBuy": "2020-04-22",
+        "lastValuation": "2020-07-19",
+        "end": "2020-07-19"
+      },
+      {
+        "start": "2020-04-21",
+        "firstRanking": "2020-04-21",
+        "earliestPossibleBuy": "2020-04-23",
+        "firstBuy": "2020-04-23",
+        "lastValuation": "2020-07-20",
+        "end": "2020-07-20"
+      },
+      {
+        "start": "2020-04-22",
+        "firstRanking": "2020-04-22",
+        "earliestPossibleBuy": "2020-04-24",
+        "firstBuy": "2020-04-24",
+        "lastValuation": "2020-07-21",
+        "end": "2020-07-21"
+      },
+      {
+        "start": "2020-06-16",
+        "firstRanking": "2020-06-16",
+        "earliestPossibleBuy": "2020-06-18",
+        "firstBuy": "2020-06-18",
+        "lastValuation": "2020-09-15",
+        "end": "2020-09-15"
+      },
+      {
+        "start": "2020-06-17",
+        "firstRanking": "2020-06-17",
+        "earliestPossibleBuy": "2020-06-19",
+        "firstBuy": "2020-06-19",
+        "lastValuation": "2020-09-16",
+        "end": "2020-09-16"
+      },
+      {
+        "start": "2020-06-18",
+        "firstRanking": "2020-06-18",
+        "earliestPossibleBuy": "2020-06-22",
+        "firstBuy": "2020-06-22",
+        "lastValuation": "2020-09-17",
+        "end": "2020-09-17"
+      },
+      {
+        "start": "2020-06-19",
+        "firstRanking": "2020-06-19",
+        "earliestPossibleBuy": "2020-06-23",
+        "firstBuy": "2020-06-23",
+        "lastValuation": "2020-09-18",
+        "end": "2020-09-18"
+      },
+      {
+        "start": "2020-06-22",
+        "firstRanking": "2020-06-22",
+        "earliestPossibleBuy": "2020-06-24",
+        "firstBuy": "2020-06-24",
+        "lastValuation": "2020-09-21",
+        "end": "2020-09-21"
+      },
+      {
+        "start": "2020-06-23",
+        "firstRanking": "2020-06-23",
+        "earliestPossibleBuy": "2020-06-25",
+        "firstBuy": "2020-06-25",
+        "lastValuation": "2020-09-22",
+        "end": "2020-09-22"
+      },
+      {
+        "start": "2020-06-24",
+        "firstRanking": "2020-06-24",
+        "earliestPossibleBuy": "2020-06-26",
+        "firstBuy": "2020-06-26",
+        "lastValuation": "2020-09-23",
+        "end": "2020-09-23"
+      },
+      {
+        "start": "2020-07-06",
+        "firstRanking": "2020-07-06",
+        "earliestPossibleBuy": "2020-07-08",
+        "firstBuy": "2020-07-08",
+        "lastValuation": "2020-10-05",
+        "end": "2020-10-05"
+      },
+      {
+        "start": "2020-07-10",
+        "firstRanking": "2020-07-10",
+        "earliestPossibleBuy": "2020-07-14",
+        "firstBuy": "2020-07-14",
+        "lastValuation": "2020-10-09",
+        "end": "2020-10-09"
+      },
+      {
+        "start": "2021-02-03",
+        "firstRanking": "2021-02-03",
+        "earliestPossibleBuy": "2021-02-05",
+        "firstBuy": "2021-02-05",
+        "lastValuation": "2021-05-02",
+        "end": "2021-05-02"
+      }
+    ]
+  },
+  {
+    "kind": "seed",
+    "value": 206,
+    "stage": "confirmation",
+    "scheduleAudit": [
+      {
+        "start": "2024-09-02",
+        "firstRanking": "2024-09-02",
+        "earliestPossibleBuy": "2024-09-04",
+        "firstBuy": "2024-09-04",
+        "lastValuation": "2024-12-01",
+        "end": "2024-12-01"
+      },
+      {
+        "start": "2025-04-28",
+        "firstRanking": "2025-04-28",
+        "earliestPossibleBuy": "2025-04-30",
+        "firstBuy": "2025-04-30",
+        "lastValuation": "2025-07-27",
+        "end": "2025-07-27"
+      },
+      {
+        "start": "2025-04-29",
+        "firstRanking": "2025-04-29",
+        "earliestPossibleBuy": "2025-05-02",
+        "firstBuy": "2025-05-02",
+        "lastValuation": "2025-07-28",
+        "end": "2025-07-28"
+      },
+      {
+        "start": "2025-04-30",
+        "firstRanking": "2025-04-30",
+        "earliestPossibleBuy": "2025-05-07",
+        "firstBuy": "2025-05-07",
+        "lastValuation": "2025-07-29",
+        "end": "2025-07-29"
+      },
+      {
+        "start": "2025-05-02",
+        "firstRanking": "2025-05-02",
+        "earliestPossibleBuy": "2025-05-08",
+        "firstBuy": "2025-05-08",
+        "lastValuation": "2025-08-01",
+        "end": "2025-08-01"
+      },
+      {
+        "start": "2025-05-07",
+        "firstRanking": "2025-05-07",
+        "earliestPossibleBuy": "2025-05-09",
+        "firstBuy": "2025-05-09",
+        "lastValuation": "2025-08-06",
+        "end": "2025-08-06"
+      },
+      {
+        "start": "2025-11-17",
+        "firstRanking": "2025-11-17",
+        "earliestPossibleBuy": "2025-11-19",
+        "firstBuy": "2025-11-19",
+        "lastValuation": "2026-02-16",
+        "end": "2026-02-16"
+      },
+      {
+        "start": "2025-12-03",
+        "firstRanking": "2025-12-03",
+        "earliestPossibleBuy": "2025-12-05",
+        "firstBuy": "2025-12-05",
+        "lastValuation": "2026-03-02",
+        "end": "2026-03-02"
+      },
+      {
+        "start": "2025-12-04",
+        "firstRanking": "2025-12-04",
+        "earliestPossibleBuy": "2025-12-08",
+        "firstBuy": "2025-12-08",
+        "lastValuation": "2026-03-03",
+        "end": "2026-03-03"
+      },
+      {
+        "start": "2025-12-05",
+        "firstRanking": "2025-12-05",
+        "earliestPossibleBuy": "2025-12-09",
+        "firstBuy": "2025-12-09",
+        "lastValuation": "2026-03-04",
+        "end": "2026-03-04"
+      },
+      {
+        "start": "2025-12-08",
+        "firstRanking": "2025-12-08",
+        "earliestPossibleBuy": "2025-12-10",
+        "firstBuy": "2025-12-10",
+        "lastValuation": "2026-03-07",
+        "end": "2026-03-07"
+      },
+      {
+        "start": "2025-12-09",
+        "firstRanking": "2025-12-09",
+        "earliestPossibleBuy": "2025-12-11",
+        "firstBuy": "2025-12-11",
+        "lastValuation": "2026-03-08",
+        "end": "2026-03-08"
+      },
+      {
+        "start": "2026-02-03",
+        "firstRanking": "2026-02-03",
+        "earliestPossibleBuy": "2026-02-05",
+        "firstBuy": "2026-02-05",
+        "lastValuation": "2026-05-02",
+        "end": "2026-05-02"
+      },
+      {
+        "start": "2026-02-04",
+        "firstRanking": "2026-02-04",
+        "earliestPossibleBuy": "2026-02-06",
+        "firstBuy": "2026-02-06",
+        "lastValuation": "2026-05-03",
+        "end": "2026-05-03"
+      },
+      {
+        "start": "2026-02-05",
+        "firstRanking": "2026-02-05",
+        "earliestPossibleBuy": "2026-02-09",
+        "firstBuy": "2026-02-09",
+        "lastValuation": "2026-05-04",
+        "end": "2026-05-04"
+      },
+      {
+        "start": "2026-02-06",
+        "firstRanking": "2026-02-06",
+        "earliestPossibleBuy": "2026-02-10",
+        "firstBuy": "2026-02-10",
+        "lastValuation": "2026-05-05",
+        "end": "2026-05-05"
+      },
+      {
+        "start": "2026-02-09",
+        "firstRanking": "2026-02-09",
+        "earliestPossibleBuy": "2026-02-11",
+        "firstBuy": "2026-02-11",
+        "lastValuation": "2026-05-08",
+        "end": "2026-05-08"
+      },
+      {
+        "start": "2026-02-10",
+        "firstRanking": "2026-02-10",
+        "earliestPossibleBuy": "2026-02-12",
+        "firstBuy": "2026-02-12",
+        "lastValuation": "2026-05-09",
+        "end": "2026-05-09"
+      },
+      {
+        "start": "2026-02-11",
+        "firstRanking": "2026-02-11",
+        "earliestPossibleBuy": "2026-02-13",
+        "firstBuy": "2026-02-13",
+        "lastValuation": "2026-05-10",
+        "end": "2026-05-10"
+      },
+      {
+        "start": "2026-02-12",
+        "firstRanking": "2026-02-12",
+        "earliestPossibleBuy": "2026-02-19",
+        "firstBuy": "2026-02-19",
+        "lastValuation": "2026-05-11",
+        "end": "2026-05-11"
+      },
+      {
+        "start": "2026-02-13",
+        "firstRanking": "2026-02-13",
+        "earliestPossibleBuy": "2026-02-20",
+        "firstBuy": "2026-02-20",
+        "lastValuation": "2026-05-12",
+        "end": "2026-05-12"
+      },
+      {
+        "start": "2026-02-19",
+        "firstRanking": "2026-02-19",
+        "earliestPossibleBuy": "2026-02-23",
+        "firstBuy": "2026-02-23",
+        "lastValuation": "2026-05-18",
+        "end": "2026-05-18"
+      },
+      {
+        "start": "2026-02-20",
+        "firstRanking": "2026-02-20",
+        "earliestPossibleBuy": "2026-02-24",
+        "firstBuy": "2026-02-24",
+        "lastValuation": "2026-05-19",
+        "end": "2026-05-19"
+      },
+      {
+        "start": "2026-02-23",
+        "firstRanking": "2026-02-23",
+        "earliestPossibleBuy": "2026-02-25",
+        "firstBuy": "2026-02-25",
+        "lastValuation": "2026-05-22",
+        "end": "2026-05-22"
+      },
+      {
+        "start": "2026-02-24",
+        "firstRanking": "2026-02-24",
+        "earliestPossibleBuy": "2026-02-26",
+        "firstBuy": "2026-02-26",
+        "lastValuation": "2026-05-23",
+        "end": "2026-05-23"
+      },
+      {
+        "start": "2026-02-25",
+        "firstRanking": "2026-02-25",
+        "earliestPossibleBuy": "2026-02-27",
+        "firstBuy": "2026-02-27",
+        "lastValuation": "2026-05-24",
+        "end": "2026-05-24"
+      },
+      {
+        "start": "2026-02-26",
+        "firstRanking": "2026-02-26",
+        "earliestPossibleBuy": "2026-03-03",
+        "firstBuy": "2026-03-03",
+        "lastValuation": "2026-05-25",
+        "end": "2026-05-25"
+      },
+      {
+        "start": "2026-02-27",
+        "firstRanking": "2026-02-27",
+        "earliestPossibleBuy": "2026-03-04",
+        "firstBuy": "2026-03-04",
+        "lastValuation": "2026-05-26",
+        "end": "2026-05-26"
+      },
+      {
+        "start": "2026-03-03",
+        "firstRanking": "2026-03-03",
+        "earliestPossibleBuy": "2026-03-05",
+        "firstBuy": "2026-03-05",
+        "lastValuation": "2026-06-02",
+        "end": "2026-06-02"
+      },
+      {
+        "start": "2026-03-05",
+        "firstRanking": "2026-03-05",
+        "earliestPossibleBuy": "2026-03-09",
+        "firstBuy": "2026-03-09",
+        "lastValuation": "2026-06-04",
+        "end": "2026-06-04"
+      },
+      {
+        "start": "2026-03-18",
+        "firstRanking": "2026-03-18",
+        "earliestPossibleBuy": "2026-03-20",
+        "firstBuy": "2026-03-20",
+        "lastValuation": "2026-06-17",
+        "end": "2026-06-17"
+      },
+      {
+        "start": "2026-03-19",
+        "firstRanking": "2026-03-19",
+        "earliestPossibleBuy": "2026-03-23",
+        "firstBuy": "2026-03-23",
+        "lastValuation": "2026-06-18",
+        "end": "2026-06-18"
+      },
+      {
+        "start": "2026-03-20",
+        "firstRanking": "2026-03-20",
+        "earliestPossibleBuy": "2026-03-24",
+        "firstBuy": "2026-03-24",
+        "lastValuation": "2026-06-19",
+        "end": "2026-06-19"
+      },
+      {
+        "start": "2026-04-08",
+        "firstRanking": "2026-04-08",
+        "earliestPossibleBuy": "2026-04-10",
+        "firstBuy": "2026-04-10",
+        "lastValuation": "2026-07-07",
+        "end": "2026-07-07"
+      },
+      {
+        "start": "2026-04-09",
+        "firstRanking": "2026-04-09",
+        "earliestPossibleBuy": "2026-04-13",
+        "firstBuy": "2026-04-13",
+        "lastValuation": "2026-07-08",
+        "end": "2026-07-08"
+      },
+      {
+        "start": "2026-04-10",
+        "firstRanking": "2026-04-10",
+        "earliestPossibleBuy": "2026-04-14",
+        "firstBuy": "2026-04-14",
+        "lastValuation": "2026-07-09",
+        "end": "2026-07-09"
+      },
+      {
+        "start": "2026-04-13",
+        "firstRanking": "2026-04-13",
+        "earliestPossibleBuy": "2026-04-15",
+        "firstBuy": "2026-04-15",
+        "lastValuation": "2026-07-12",
+        "end": "2026-07-12"
+      },
+      {
+        "start": "2026-04-14",
+        "firstRanking": "2026-04-14",
+        "earliestPossibleBuy": "2026-04-16",
+        "firstBuy": "2026-04-16",
+        "lastValuation": "2026-07-13",
+        "end": "2026-07-13"
+      },
+      {
+        "start": "2026-04-15",
+        "firstRanking": "2026-04-15",
+        "earliestPossibleBuy": "2026-04-17",
+        "firstBuy": "2026-04-17",
+        "lastValuation": "2026-07-14",
+        "end": "2026-07-14"
+      },
+      {
+        "start": "2026-04-16",
+        "firstRanking": "2026-04-16",
+        "earliestPossibleBuy": "2026-04-20",
+        "firstBuy": "2026-04-20",
+        "lastValuation": "2026-07-15",
+        "end": "2026-07-15"
+      },
+      {
+        "start": "2026-04-17",
+        "firstRanking": "2026-04-17",
+        "earliestPossibleBuy": "2026-04-21",
+        "firstBuy": "2026-04-21",
+        "lastValuation": "2026-07-16",
+        "end": "2026-07-16"
+      },
+      {
+        "start": "2026-04-20",
+        "firstRanking": "2026-04-20",
+        "earliestPossibleBuy": "2026-04-22",
+        "firstBuy": "2026-04-22",
+        "lastValuation": "2026-07-19",
+        "end": "2026-07-19"
+      },
+      {
+        "start": "2026-04-21",
+        "firstRanking": "2026-04-21",
+        "earliestPossibleBuy": "2026-04-23",
+        "firstBuy": "2026-04-23",
+        "lastValuation": "2026-07-20",
+        "end": "2026-07-20"
+      },
+      {
+        "start": "2026-04-22",
+        "firstRanking": "2026-04-22",
+        "earliestPossibleBuy": "2026-04-24",
+        "firstBuy": "2026-04-24",
+        "lastValuation": "2026-07-21",
+        "end": "2026-07-21"
+      },
+      {
+        "start": "2026-04-23",
+        "firstRanking": "2026-04-23",
+        "earliestPossibleBuy": "2026-04-27",
+        "firstBuy": "2026-04-27",
+        "lastValuation": "2026-07-22",
+        "end": "2026-07-22"
+      },
+      {
+        "start": "2026-04-24",
+        "firstRanking": "2026-04-24",
+        "earliestPossibleBuy": "2026-04-28",
+        "firstBuy": "2026-04-28",
+        "lastValuation": "2026-07-23",
+        "end": "2026-07-23"
+      },
+      {
+        "start": "2026-04-27",
+        "firstRanking": "2026-04-27",
+        "earliestPossibleBuy": "2026-04-29",
+        "firstBuy": "2026-04-29",
+        "lastValuation": "2026-07-26",
+        "end": "2026-07-26"
+      },
+      {
+        "start": "2026-04-28",
+        "firstRanking": "2026-04-28",
+        "earliestPossibleBuy": "2026-04-30",
+        "firstBuy": "2026-04-30",
+        "lastValuation": "2026-07-27",
+        "end": "2026-07-27"
+      },
+      {
+        "start": "2026-04-29",
+        "firstRanking": "2026-04-29",
+        "earliestPossibleBuy": "2026-05-04",
+        "firstBuy": "2026-05-04",
+        "lastValuation": "2026-07-28",
+        "end": "2026-07-28"
+      },
+      {
+        "start": "2026-05-04",
+        "firstRanking": "2026-05-04",
+        "earliestPossibleBuy": "2026-05-07",
+        "firstBuy": "2026-05-07",
+        "lastValuation": "2026-08-03",
+        "end": "2026-08-03"
+      },
+      {
+        "start": "2026-05-06",
+        "firstRanking": "2026-05-06",
+        "earliestPossibleBuy": "2026-05-08",
+        "firstBuy": "2026-05-08",
+        "lastValuation": "2026-08-05",
+        "end": "2026-08-05"
+      },
+      {
+        "start": "2026-05-07",
+        "firstRanking": "2026-05-07",
+        "earliestPossibleBuy": "2026-05-11",
+        "firstBuy": "2026-05-11",
+        "lastValuation": "2026-08-06",
+        "end": "2026-08-06"
+      },
+      {
+        "start": "2026-05-08",
+        "firstRanking": "2026-05-08",
+        "earliestPossibleBuy": "2026-05-12",
+        "firstBuy": "2026-05-12",
+        "lastValuation": "2026-08-07",
+        "end": "2026-08-07"
+      },
+      {
+        "start": "2026-05-11",
+        "firstRanking": "2026-05-11",
+        "earliestPossibleBuy": "2026-05-13",
+        "firstBuy": "2026-05-13",
+        "lastValuation": "2026-08-10",
+        "end": "2026-08-10"
+      },
+      {
+        "start": "2026-05-12",
+        "firstRanking": "2026-05-12",
+        "earliestPossibleBuy": "2026-05-14",
+        "firstBuy": "2026-05-14",
+        "lastValuation": "2026-08-11",
+        "end": "2026-08-11"
+      },
+      {
+        "start": "2026-05-13",
+        "firstRanking": "2026-05-13",
+        "earliestPossibleBuy": "2026-05-15",
+        "firstBuy": "2026-05-15",
+        "lastValuation": "2026-08-12",
+        "end": "2026-08-12"
+      },
+      {
+        "start": "2026-05-14",
+        "firstRanking": "2026-05-14",
+        "earliestPossibleBuy": "2026-05-18",
+        "firstBuy": "2026-05-18",
+        "lastValuation": "2026-08-13",
+        "end": "2026-08-13"
+      },
+      {
+        "start": "2026-05-15",
+        "firstRanking": "2026-05-15",
+        "earliestPossibleBuy": "2026-05-19",
+        "firstBuy": "2026-05-19",
+        "lastValuation": "2026-08-14",
+        "end": "2026-08-14"
+      }
+    ]
+  },
+  {
+    "kind": "offset",
+    "value": 1,
+    "stage": "validation",
+    "scheduleAudit": [
+      {
+        "start": "2020-04-09",
+        "firstRanking": "2020-04-10",
+        "earliestPossibleBuy": "2020-04-14",
+        "firstBuy": "2020-04-14",
+        "lastValuation": "2020-07-08",
+        "end": "2020-07-08"
+      },
+      {
+        "start": "2020-04-10",
+        "firstRanking": "2020-04-13",
+        "earliestPossibleBuy": "2020-04-16",
+        "firstBuy": "2020-04-16",
+        "lastValuation": "2020-07-09",
+        "end": "2020-07-09"
+      },
+      {
+        "start": "2020-04-13",
+        "firstRanking": "2020-04-14",
+        "earliestPossibleBuy": "2020-04-17",
+        "firstBuy": "2020-04-17",
+        "lastValuation": "2020-07-12",
+        "end": "2020-07-12"
+      },
+      {
+        "start": "2020-04-14",
+        "firstRanking": "2020-04-16",
+        "earliestPossibleBuy": "2020-04-20",
+        "firstBuy": "2020-04-20",
+        "lastValuation": "2020-07-13",
+        "end": "2020-07-13"
+      },
+      {
+        "start": "2020-04-16",
+        "firstRanking": "2020-04-17",
+        "earliestPossibleBuy": "2020-04-21",
+        "firstBuy": "2020-04-21",
+        "lastValuation": "2020-07-15",
+        "end": "2020-07-15"
+      },
+      {
+        "start": "2020-04-17",
+        "firstRanking": "2020-04-20",
+        "earliestPossibleBuy": "2020-04-22",
+        "firstBuy": "2020-04-22",
+        "lastValuation": "2020-07-16",
+        "end": "2020-07-16"
+      },
+      {
+        "start": "2020-04-20",
+        "firstRanking": "2020-04-21",
+        "earliestPossibleBuy": "2020-04-23",
+        "firstBuy": "2020-04-23",
+        "lastValuation": "2020-07-19",
+        "end": "2020-07-19"
+      },
+      {
+        "start": "2020-04-21",
+        "firstRanking": "2020-04-22",
+        "earliestPossibleBuy": "2020-04-24",
+        "firstBuy": "2020-04-24",
+        "lastValuation": "2020-07-20",
+        "end": "2020-07-20"
+      },
+      {
+        "start": "2020-04-22",
+        "firstRanking": "2020-04-23",
+        "earliestPossibleBuy": "2020-04-27",
+        "firstBuy": "2020-04-27",
+        "lastValuation": "2020-07-21",
+        "end": "2020-07-21"
+      },
+      {
+        "start": "2020-06-16",
+        "firstRanking": "2020-06-17",
+        "earliestPossibleBuy": "2020-06-19",
+        "firstBuy": "2020-06-19",
+        "lastValuation": "2020-09-15",
+        "end": "2020-09-15"
+      },
+      {
+        "start": "2020-06-17",
+        "firstRanking": "2020-06-18",
+        "earliestPossibleBuy": "2020-06-22",
+        "firstBuy": "2020-06-22",
+        "lastValuation": "2020-09-16",
+        "end": "2020-09-16"
+      },
+      {
+        "start": "2020-06-18",
+        "firstRanking": "2020-06-19",
+        "earliestPossibleBuy": "2020-06-23",
+        "firstBuy": "2020-06-23",
+        "lastValuation": "2020-09-17",
+        "end": "2020-09-17"
+      },
+      {
+        "start": "2020-06-19",
+        "firstRanking": "2020-06-22",
+        "earliestPossibleBuy": "2020-06-24",
+        "firstBuy": "2020-06-24",
+        "lastValuation": "2020-09-18",
+        "end": "2020-09-18"
+      },
+      {
+        "start": "2020-06-22",
+        "firstRanking": "2020-06-23",
+        "earliestPossibleBuy": "2020-06-25",
+        "firstBuy": "2020-06-25",
+        "lastValuation": "2020-09-21",
+        "end": "2020-09-21"
+      },
+      {
+        "start": "2020-06-23",
+        "firstRanking": "2020-06-24",
+        "earliestPossibleBuy": "2020-06-26",
+        "firstBuy": "2020-06-26",
+        "lastValuation": "2020-09-22",
+        "end": "2020-09-22"
+      },
+      {
+        "start": "2020-06-24",
+        "firstRanking": "2020-06-25",
+        "earliestPossibleBuy": "2020-06-29",
+        "firstBuy": "2020-06-29",
+        "lastValuation": "2020-09-23",
+        "end": "2020-09-23"
+      },
+      {
+        "start": "2020-07-06",
+        "firstRanking": "2020-07-07",
+        "earliestPossibleBuy": "2020-07-09",
+        "firstBuy": "2020-07-09",
+        "lastValuation": "2020-10-05",
+        "end": "2020-10-05"
+      },
+      {
+        "start": "2020-07-10",
+        "firstRanking": "2020-07-13",
+        "earliestPossibleBuy": "2020-07-15",
+        "firstBuy": "2020-07-15",
+        "lastValuation": "2020-10-09",
+        "end": "2020-10-09"
+      },
+      {
+        "start": "2021-02-03",
+        "firstRanking": "2021-02-04",
+        "earliestPossibleBuy": "2021-02-08",
+        "firstBuy": "2021-02-08",
+        "lastValuation": "2021-05-02",
+        "end": "2021-05-02"
+      }
+    ]
+  },
+  {
+    "kind": "offset",
+    "value": 1,
+    "stage": "confirmation",
+    "scheduleAudit": [
+      {
+        "start": "2024-09-02",
+        "firstRanking": "2024-09-03",
+        "earliestPossibleBuy": "2024-09-05",
+        "firstBuy": "2024-09-05",
+        "lastValuation": "2024-12-01",
+        "end": "2024-12-01"
+      },
+      {
+        "start": "2025-04-28",
+        "firstRanking": "2025-04-29",
+        "earliestPossibleBuy": "2025-05-02",
+        "firstBuy": "2025-05-02",
+        "lastValuation": "2025-07-27",
+        "end": "2025-07-27"
+      },
+      {
+        "start": "2025-04-29",
+        "firstRanking": "2025-04-30",
+        "earliestPossibleBuy": "2025-05-07",
+        "firstBuy": "2025-05-07",
+        "lastValuation": "2025-07-28",
+        "end": "2025-07-28"
+      },
+      {
+        "start": "2025-04-30",
+        "firstRanking": "2025-05-02",
+        "earliestPossibleBuy": "2025-05-08",
+        "firstBuy": "2025-05-08",
+        "lastValuation": "2025-07-29",
+        "end": "2025-07-29"
+      },
+      {
+        "start": "2025-05-02",
+        "firstRanking": "2025-05-07",
+        "earliestPossibleBuy": "2025-05-09",
+        "firstBuy": "2025-05-09",
+        "lastValuation": "2025-08-01",
+        "end": "2025-08-01"
+      },
+      {
+        "start": "2025-05-07",
+        "firstRanking": "2025-05-08",
+        "earliestPossibleBuy": "2025-05-12",
+        "firstBuy": "2025-05-12",
+        "lastValuation": "2025-08-06",
+        "end": "2025-08-06"
+      },
+      {
+        "start": "2025-11-17",
+        "firstRanking": "2025-11-18",
+        "earliestPossibleBuy": "2025-11-20",
+        "firstBuy": "2025-11-20",
+        "lastValuation": "2026-02-16",
+        "end": "2026-02-16"
+      },
+      {
+        "start": "2025-12-03",
+        "firstRanking": "2025-12-04",
+        "earliestPossibleBuy": "2025-12-08",
+        "firstBuy": "2025-12-08",
+        "lastValuation": "2026-03-02",
+        "end": "2026-03-02"
+      },
+      {
+        "start": "2025-12-04",
+        "firstRanking": "2025-12-05",
+        "earliestPossibleBuy": "2025-12-09",
+        "firstBuy": "2025-12-09",
+        "lastValuation": "2026-03-03",
+        "end": "2026-03-03"
+      },
+      {
+        "start": "2025-12-05",
+        "firstRanking": "2025-12-08",
+        "earliestPossibleBuy": "2025-12-10",
+        "firstBuy": "2025-12-10",
+        "lastValuation": "2026-03-04",
+        "end": "2026-03-04"
+      },
+      {
+        "start": "2025-12-08",
+        "firstRanking": "2025-12-09",
+        "earliestPossibleBuy": "2025-12-11",
+        "firstBuy": "2025-12-11",
+        "lastValuation": "2026-03-07",
+        "end": "2026-03-07"
+      },
+      {
+        "start": "2025-12-09",
+        "firstRanking": "2025-12-10",
+        "earliestPossibleBuy": "2025-12-12",
+        "firstBuy": "2025-12-12",
+        "lastValuation": "2026-03-08",
+        "end": "2026-03-08"
+      },
+      {
+        "start": "2026-02-03",
+        "firstRanking": "2026-02-04",
+        "earliestPossibleBuy": "2026-02-06",
+        "firstBuy": "2026-02-06",
+        "lastValuation": "2026-05-02",
+        "end": "2026-05-02"
+      },
+      {
+        "start": "2026-02-04",
+        "firstRanking": "2026-02-05",
+        "earliestPossibleBuy": "2026-02-09",
+        "firstBuy": "2026-02-09",
+        "lastValuation": "2026-05-03",
+        "end": "2026-05-03"
+      },
+      {
+        "start": "2026-02-05",
+        "firstRanking": "2026-02-06",
+        "earliestPossibleBuy": "2026-02-10",
+        "firstBuy": "2026-02-10",
+        "lastValuation": "2026-05-04",
+        "end": "2026-05-04"
+      },
+      {
+        "start": "2026-02-06",
+        "firstRanking": "2026-02-09",
+        "earliestPossibleBuy": "2026-02-11",
+        "firstBuy": "2026-02-11",
+        "lastValuation": "2026-05-05",
+        "end": "2026-05-05"
+      },
+      {
+        "start": "2026-02-09",
+        "firstRanking": "2026-02-10",
+        "earliestPossibleBuy": "2026-02-12",
+        "firstBuy": "2026-02-12",
+        "lastValuation": "2026-05-08",
+        "end": "2026-05-08"
+      },
+      {
+        "start": "2026-02-10",
+        "firstRanking": "2026-02-11",
+        "earliestPossibleBuy": "2026-02-13",
+        "firstBuy": "2026-02-13",
+        "lastValuation": "2026-05-09",
+        "end": "2026-05-09"
+      },
+      {
+        "start": "2026-02-11",
+        "firstRanking": "2026-02-12",
+        "earliestPossibleBuy": "2026-02-19",
+        "firstBuy": "2026-02-19",
+        "lastValuation": "2026-05-10",
+        "end": "2026-05-10"
+      },
+      {
+        "start": "2026-02-12",
+        "firstRanking": "2026-02-13",
+        "earliestPossibleBuy": "2026-02-20",
+        "firstBuy": "2026-02-20",
+        "lastValuation": "2026-05-11",
+        "end": "2026-05-11"
+      },
+      {
+        "start": "2026-02-13",
+        "firstRanking": "2026-02-19",
+        "earliestPossibleBuy": "2026-02-23",
+        "firstBuy": "2026-02-23",
+        "lastValuation": "2026-05-12",
+        "end": "2026-05-12"
+      },
+      {
+        "start": "2026-02-19",
+        "firstRanking": "2026-02-20",
+        "earliestPossibleBuy": "2026-02-24",
+        "firstBuy": "2026-02-24",
+        "lastValuation": "2026-05-18",
+        "end": "2026-05-18"
+      },
+      {
+        "start": "2026-02-20",
+        "firstRanking": "2026-02-23",
+        "earliestPossibleBuy": "2026-02-25",
+        "firstBuy": "2026-02-25",
+        "lastValuation": "2026-05-19",
+        "end": "2026-05-19"
+      },
+      {
+        "start": "2026-02-23",
+        "firstRanking": "2026-02-24",
+        "earliestPossibleBuy": "2026-02-26",
+        "firstBuy": "2026-02-26",
+        "lastValuation": "2026-05-22",
+        "end": "2026-05-22"
+      },
+      {
+        "start": "2026-02-24",
+        "firstRanking": "2026-02-25",
+        "earliestPossibleBuy": "2026-02-27",
+        "firstBuy": "2026-02-27",
+        "lastValuation": "2026-05-23",
+        "end": "2026-05-23"
+      },
+      {
+        "start": "2026-02-25",
+        "firstRanking": "2026-02-26",
+        "earliestPossibleBuy": "2026-03-03",
+        "firstBuy": "2026-03-03",
+        "lastValuation": "2026-05-24",
+        "end": "2026-05-24"
+      },
+      {
+        "start": "2026-02-26",
+        "firstRanking": "2026-02-27",
+        "earliestPossibleBuy": "2026-03-04",
+        "firstBuy": "2026-03-04",
+        "lastValuation": "2026-05-25",
+        "end": "2026-05-25"
+      },
+      {
+        "start": "2026-02-27",
+        "firstRanking": "2026-03-03",
+        "earliestPossibleBuy": "2026-03-05",
+        "firstBuy": "2026-03-05",
+        "lastValuation": "2026-05-26",
+        "end": "2026-05-26"
+      },
+      {
+        "start": "2026-03-03",
+        "firstRanking": "2026-03-04",
+        "earliestPossibleBuy": "2026-03-06",
+        "firstBuy": "2026-03-06",
+        "lastValuation": "2026-06-02",
+        "end": "2026-06-02"
+      },
+      {
+        "start": "2026-03-05",
+        "firstRanking": "2026-03-06",
+        "earliestPossibleBuy": "2026-03-10",
+        "firstBuy": "2026-03-10",
+        "lastValuation": "2026-06-04",
+        "end": "2026-06-04"
+      },
+      {
+        "start": "2026-03-18",
+        "firstRanking": "2026-03-19",
+        "earliestPossibleBuy": "2026-03-23",
+        "firstBuy": "2026-03-23",
+        "lastValuation": "2026-06-17",
+        "end": "2026-06-17"
+      },
+      {
+        "start": "2026-03-19",
+        "firstRanking": "2026-03-20",
+        "earliestPossibleBuy": "2026-03-24",
+        "firstBuy": "2026-03-24",
+        "lastValuation": "2026-06-18",
+        "end": "2026-06-18"
+      },
+      {
+        "start": "2026-03-20",
+        "firstRanking": "2026-03-23",
+        "earliestPossibleBuy": "2026-03-25",
+        "firstBuy": "2026-03-25",
+        "lastValuation": "2026-06-19",
+        "end": "2026-06-19"
+      },
+      {
+        "start": "2026-04-08",
+        "firstRanking": "2026-04-09",
+        "earliestPossibleBuy": "2026-04-13",
+        "firstBuy": "2026-04-13",
+        "lastValuation": "2026-07-07",
+        "end": "2026-07-07"
+      },
+      {
+        "start": "2026-04-09",
+        "firstRanking": "2026-04-10",
+        "earliestPossibleBuy": "2026-04-14",
+        "firstBuy": "2026-04-14",
+        "lastValuation": "2026-07-08",
+        "end": "2026-07-08"
+      },
+      {
+        "start": "2026-04-10",
+        "firstRanking": "2026-04-13",
+        "earliestPossibleBuy": "2026-04-15",
+        "firstBuy": "2026-04-15",
+        "lastValuation": "2026-07-09",
+        "end": "2026-07-09"
+      },
+      {
+        "start": "2026-04-13",
+        "firstRanking": "2026-04-14",
+        "earliestPossibleBuy": "2026-04-16",
+        "firstBuy": "2026-04-16",
+        "lastValuation": "2026-07-12",
+        "end": "2026-07-12"
+      },
+      {
+        "start": "2026-04-14",
+        "firstRanking": "2026-04-15",
+        "earliestPossibleBuy": "2026-04-17",
+        "firstBuy": "2026-04-17",
+        "lastValuation": "2026-07-13",
+        "end": "2026-07-13"
+      },
+      {
+        "start": "2026-04-15",
+        "firstRanking": "2026-04-16",
+        "earliestPossibleBuy": "2026-04-20",
+        "firstBuy": "2026-04-20",
+        "lastValuation": "2026-07-14",
+        "end": "2026-07-14"
+      },
+      {
+        "start": "2026-04-16",
+        "firstRanking": "2026-04-17",
+        "earliestPossibleBuy": "2026-04-21",
+        "firstBuy": "2026-04-21",
+        "lastValuation": "2026-07-15",
+        "end": "2026-07-15"
+      },
+      {
+        "start": "2026-04-17",
+        "firstRanking": "2026-04-20",
+        "earliestPossibleBuy": "2026-04-22",
+        "firstBuy": "2026-04-22",
+        "lastValuation": "2026-07-16",
+        "end": "2026-07-16"
+      },
+      {
+        "start": "2026-04-20",
+        "firstRanking": "2026-04-21",
+        "earliestPossibleBuy": "2026-04-23",
+        "firstBuy": "2026-04-23",
+        "lastValuation": "2026-07-19",
+        "end": "2026-07-19"
+      },
+      {
+        "start": "2026-04-21",
+        "firstRanking": "2026-04-22",
+        "earliestPossibleBuy": "2026-04-24",
+        "firstBuy": "2026-04-24",
+        "lastValuation": "2026-07-20",
+        "end": "2026-07-20"
+      },
+      {
+        "start": "2026-04-22",
+        "firstRanking": "2026-04-23",
+        "earliestPossibleBuy": "2026-04-27",
+        "firstBuy": "2026-04-27",
+        "lastValuation": "2026-07-21",
+        "end": "2026-07-21"
+      },
+      {
+        "start": "2026-04-23",
+        "firstRanking": "2026-04-24",
+        "earliestPossibleBuy": "2026-04-28",
+        "firstBuy": "2026-04-28",
+        "lastValuation": "2026-07-22",
+        "end": "2026-07-22"
+      },
+      {
+        "start": "2026-04-24",
+        "firstRanking": "2026-04-27",
+        "earliestPossibleBuy": "2026-04-29",
+        "firstBuy": "2026-04-29",
+        "lastValuation": "2026-07-23",
+        "end": "2026-07-23"
+      },
+      {
+        "start": "2026-04-27",
+        "firstRanking": "2026-04-28",
+        "earliestPossibleBuy": "2026-04-30",
+        "firstBuy": "2026-04-30",
+        "lastValuation": "2026-07-26",
+        "end": "2026-07-26"
+      },
+      {
+        "start": "2026-04-28",
+        "firstRanking": "2026-04-29",
+        "earliestPossibleBuy": "2026-05-04",
+        "firstBuy": "2026-05-04",
+        "lastValuation": "2026-07-27",
+        "end": "2026-07-27"
+      },
+      {
+        "start": "2026-04-29",
+        "firstRanking": "2026-04-30",
+        "earliestPossibleBuy": "2026-05-06",
+        "firstBuy": "2026-05-06",
+        "lastValuation": "2026-07-28",
+        "end": "2026-07-28"
+      },
+      {
+        "start": "2026-05-04",
+        "firstRanking": "2026-05-06",
+        "earliestPossibleBuy": "2026-05-08",
+        "firstBuy": "2026-05-08",
+        "lastValuation": "2026-08-03",
+        "end": "2026-08-03"
+      },
+      {
+        "start": "2026-05-06",
+        "firstRanking": "2026-05-07",
+        "earliestPossibleBuy": "2026-05-11",
+        "firstBuy": "2026-05-11",
+        "lastValuation": "2026-08-05",
+        "end": "2026-08-05"
+      },
+      {
+        "start": "2026-05-07",
+        "firstRanking": "2026-05-08",
+        "earliestPossibleBuy": "2026-05-12",
+        "firstBuy": "2026-05-12",
+        "lastValuation": "2026-08-06",
+        "end": "2026-08-06"
+      },
+      {
+        "start": "2026-05-08",
+        "firstRanking": "2026-05-11",
+        "earliestPossibleBuy": "2026-05-13",
+        "firstBuy": "2026-05-13",
+        "lastValuation": "2026-08-07",
+        "end": "2026-08-07"
+      },
+      {
+        "start": "2026-05-11",
+        "firstRanking": "2026-05-12",
+        "earliestPossibleBuy": "2026-05-14",
+        "firstBuy": "2026-05-14",
+        "lastValuation": "2026-08-10",
+        "end": "2026-08-10"
+      },
+      {
+        "start": "2026-05-12",
+        "firstRanking": "2026-05-13",
+        "earliestPossibleBuy": "2026-05-15",
+        "firstBuy": "2026-05-15",
+        "lastValuation": "2026-08-11",
+        "end": "2026-08-11"
+      },
+      {
+        "start": "2026-05-13",
+        "firstRanking": "2026-05-14",
+        "earliestPossibleBuy": "2026-05-18",
+        "firstBuy": "2026-05-18",
+        "lastValuation": "2026-08-12",
+        "end": "2026-08-12"
+      },
+      {
+        "start": "2026-05-14",
+        "firstRanking": "2026-05-15",
+        "earliestPossibleBuy": "2026-05-19",
+        "firstBuy": "2026-05-19",
+        "lastValuation": "2026-08-13",
+        "end": "2026-08-13"
+      },
+      {
+        "start": "2026-05-15",
+        "firstRanking": "2026-05-18",
+        "earliestPossibleBuy": "2026-05-20",
+        "firstBuy": "2026-05-20",
+        "lastValuation": "2026-08-14",
+        "end": "2026-08-14"
+      }
+    ]
+  },
+  {
+    "kind": "offset",
+    "value": 2,
+    "stage": "validation",
+    "scheduleAudit": [
+      {
+        "start": "2020-04-09",
+        "firstRanking": "2020-04-13",
+        "earliestPossibleBuy": "2020-04-16",
+        "firstBuy": "2020-04-16",
+        "lastValuation": "2020-07-08",
+        "end": "2020-07-08"
+      },
+      {
+        "start": "2020-04-10",
+        "firstRanking": "2020-04-14",
+        "earliestPossibleBuy": "2020-04-17",
+        "firstBuy": "2020-04-17",
+        "lastValuation": "2020-07-09",
+        "end": "2020-07-09"
+      },
+      {
+        "start": "2020-04-13",
+        "firstRanking": "2020-04-16",
+        "earliestPossibleBuy": "2020-04-20",
+        "firstBuy": "2020-04-20",
+        "lastValuation": "2020-07-12",
+        "end": "2020-07-12"
+      },
+      {
+        "start": "2020-04-14",
+        "firstRanking": "2020-04-17",
+        "earliestPossibleBuy": "2020-04-21",
+        "firstBuy": "2020-04-21",
+        "lastValuation": "2020-07-13",
+        "end": "2020-07-13"
+      },
+      {
+        "start": "2020-04-16",
+        "firstRanking": "2020-04-20",
+        "earliestPossibleBuy": "2020-04-22",
+        "firstBuy": "2020-04-22",
+        "lastValuation": "2020-07-15",
+        "end": "2020-07-15"
+      },
+      {
+        "start": "2020-04-17",
+        "firstRanking": "2020-04-21",
+        "earliestPossibleBuy": "2020-04-23",
+        "firstBuy": "2020-04-23",
+        "lastValuation": "2020-07-16",
+        "end": "2020-07-16"
+      },
+      {
+        "start": "2020-04-20",
+        "firstRanking": "2020-04-22",
+        "earliestPossibleBuy": "2020-04-24",
+        "firstBuy": "2020-04-24",
+        "lastValuation": "2020-07-19",
+        "end": "2020-07-19"
+      },
+      {
+        "start": "2020-04-21",
+        "firstRanking": "2020-04-23",
+        "earliestPossibleBuy": "2020-04-27",
+        "firstBuy": "2020-04-27",
+        "lastValuation": "2020-07-20",
+        "end": "2020-07-20"
+      },
+      {
+        "start": "2020-04-22",
+        "firstRanking": "2020-04-24",
+        "earliestPossibleBuy": "2020-04-28",
+        "firstBuy": "2020-04-28",
+        "lastValuation": "2020-07-21",
+        "end": "2020-07-21"
+      },
+      {
+        "start": "2020-06-16",
+        "firstRanking": "2020-06-18",
+        "earliestPossibleBuy": "2020-06-22",
+        "firstBuy": "2020-06-22",
+        "lastValuation": "2020-09-15",
+        "end": "2020-09-15"
+      },
+      {
+        "start": "2020-06-17",
+        "firstRanking": "2020-06-19",
+        "earliestPossibleBuy": "2020-06-23",
+        "firstBuy": "2020-06-23",
+        "lastValuation": "2020-09-16",
+        "end": "2020-09-16"
+      },
+      {
+        "start": "2020-06-18",
+        "firstRanking": "2020-06-22",
+        "earliestPossibleBuy": "2020-06-24",
+        "firstBuy": "2020-06-24",
+        "lastValuation": "2020-09-17",
+        "end": "2020-09-17"
+      },
+      {
+        "start": "2020-06-19",
+        "firstRanking": "2020-06-23",
+        "earliestPossibleBuy": "2020-06-25",
+        "firstBuy": "2020-06-25",
+        "lastValuation": "2020-09-18",
+        "end": "2020-09-18"
+      },
+      {
+        "start": "2020-06-22",
+        "firstRanking": "2020-06-24",
+        "earliestPossibleBuy": "2020-06-26",
+        "firstBuy": "2020-06-26",
+        "lastValuation": "2020-09-21",
+        "end": "2020-09-21"
+      },
+      {
+        "start": "2020-06-23",
+        "firstRanking": "2020-06-25",
+        "earliestPossibleBuy": "2020-06-29",
+        "firstBuy": "2020-06-29",
+        "lastValuation": "2020-09-22",
+        "end": "2020-09-22"
+      },
+      {
+        "start": "2020-06-24",
+        "firstRanking": "2020-06-26",
+        "earliestPossibleBuy": "2020-06-30",
+        "firstBuy": "2020-06-30",
+        "lastValuation": "2020-09-23",
+        "end": "2020-09-23"
+      },
+      {
+        "start": "2020-07-06",
+        "firstRanking": "2020-07-08",
+        "earliestPossibleBuy": "2020-07-10",
+        "firstBuy": "2020-07-10",
+        "lastValuation": "2020-10-05",
+        "end": "2020-10-05"
+      },
+      {
+        "start": "2020-07-10",
+        "firstRanking": "2020-07-14",
+        "earliestPossibleBuy": "2020-07-16",
+        "firstBuy": "2020-07-16",
+        "lastValuation": "2020-10-09",
+        "end": "2020-10-09"
+      },
+      {
+        "start": "2021-02-03",
+        "firstRanking": "2021-02-05",
+        "earliestPossibleBuy": "2021-02-09",
+        "firstBuy": "2021-02-09",
+        "lastValuation": "2021-05-02",
+        "end": "2021-05-02"
+      }
+    ]
+  },
+  {
+    "kind": "offset",
+    "value": 2,
+    "stage": "confirmation",
+    "scheduleAudit": [
+      {
+        "start": "2024-09-02",
+        "firstRanking": "2024-09-04",
+        "earliestPossibleBuy": "2024-09-06",
+        "firstBuy": "2024-09-06",
+        "lastValuation": "2024-12-01",
+        "end": "2024-12-01"
+      },
+      {
+        "start": "2025-04-28",
+        "firstRanking": "2025-04-30",
+        "earliestPossibleBuy": "2025-05-07",
+        "firstBuy": "2025-05-07",
+        "lastValuation": "2025-07-27",
+        "end": "2025-07-27"
+      },
+      {
+        "start": "2025-04-29",
+        "firstRanking": "2025-05-02",
+        "earliestPossibleBuy": "2025-05-08",
+        "firstBuy": "2025-05-08",
+        "lastValuation": "2025-07-28",
+        "end": "2025-07-28"
+      },
+      {
+        "start": "2025-04-30",
+        "firstRanking": "2025-05-07",
+        "earliestPossibleBuy": "2025-05-09",
+        "firstBuy": "2025-05-09",
+        "lastValuation": "2025-07-29",
+        "end": "2025-07-29"
+      },
+      {
+        "start": "2025-05-02",
+        "firstRanking": "2025-05-08",
+        "earliestPossibleBuy": "2025-05-12",
+        "firstBuy": "2025-05-12",
+        "lastValuation": "2025-08-01",
+        "end": "2025-08-01"
+      },
+      {
+        "start": "2025-05-07",
+        "firstRanking": "2025-05-09",
+        "earliestPossibleBuy": "2025-05-13",
+        "firstBuy": "2025-05-13",
+        "lastValuation": "2025-08-06",
+        "end": "2025-08-06"
+      },
+      {
+        "start": "2025-11-17",
+        "firstRanking": "2025-11-19",
+        "earliestPossibleBuy": "2025-11-21",
+        "firstBuy": "2025-11-21",
+        "lastValuation": "2026-02-16",
+        "end": "2026-02-16"
+      },
+      {
+        "start": "2025-12-03",
+        "firstRanking": "2025-12-05",
+        "earliestPossibleBuy": "2025-12-09",
+        "firstBuy": "2025-12-09",
+        "lastValuation": "2026-03-02",
+        "end": "2026-03-02"
+      },
+      {
+        "start": "2025-12-04",
+        "firstRanking": "2025-12-08",
+        "earliestPossibleBuy": "2025-12-10",
+        "firstBuy": "2025-12-10",
+        "lastValuation": "2026-03-03",
+        "end": "2026-03-03"
+      },
+      {
+        "start": "2025-12-05",
+        "firstRanking": "2025-12-09",
+        "earliestPossibleBuy": "2025-12-11",
+        "firstBuy": "2025-12-11",
+        "lastValuation": "2026-03-04",
+        "end": "2026-03-04"
+      },
+      {
+        "start": "2025-12-08",
+        "firstRanking": "2025-12-10",
+        "earliestPossibleBuy": "2025-12-12",
+        "firstBuy": "2025-12-12",
+        "lastValuation": "2026-03-07",
+        "end": "2026-03-07"
+      },
+      {
+        "start": "2025-12-09",
+        "firstRanking": "2025-12-11",
+        "earliestPossibleBuy": "2025-12-15",
+        "firstBuy": "2025-12-15",
+        "lastValuation": "2026-03-08",
+        "end": "2026-03-08"
+      },
+      {
+        "start": "2026-02-03",
+        "firstRanking": "2026-02-05",
+        "earliestPossibleBuy": "2026-02-09",
+        "firstBuy": "2026-02-09",
+        "lastValuation": "2026-05-02",
+        "end": "2026-05-02"
+      },
+      {
+        "start": "2026-02-04",
+        "firstRanking": "2026-02-06",
+        "earliestPossibleBuy": "2026-02-10",
+        "firstBuy": "2026-02-10",
+        "lastValuation": "2026-05-03",
+        "end": "2026-05-03"
+      },
+      {
+        "start": "2026-02-05",
+        "firstRanking": "2026-02-09",
+        "earliestPossibleBuy": "2026-02-11",
+        "firstBuy": "2026-02-11",
+        "lastValuation": "2026-05-04",
+        "end": "2026-05-04"
+      },
+      {
+        "start": "2026-02-06",
+        "firstRanking": "2026-02-10",
+        "earliestPossibleBuy": "2026-02-12",
+        "firstBuy": "2026-02-12",
+        "lastValuation": "2026-05-05",
+        "end": "2026-05-05"
+      },
+      {
+        "start": "2026-02-09",
+        "firstRanking": "2026-02-11",
+        "earliestPossibleBuy": "2026-02-13",
+        "firstBuy": "2026-02-13",
+        "lastValuation": "2026-05-08",
+        "end": "2026-05-08"
+      },
+      {
+        "start": "2026-02-10",
+        "firstRanking": "2026-02-12",
+        "earliestPossibleBuy": "2026-02-19",
+        "firstBuy": "2026-02-19",
+        "lastValuation": "2026-05-09",
+        "end": "2026-05-09"
+      },
+      {
+        "start": "2026-02-11",
+        "firstRanking": "2026-02-13",
+        "earliestPossibleBuy": "2026-02-20",
+        "firstBuy": "2026-02-20",
+        "lastValuation": "2026-05-10",
+        "end": "2026-05-10"
+      },
+      {
+        "start": "2026-02-12",
+        "firstRanking": "2026-02-19",
+        "earliestPossibleBuy": "2026-02-23",
+        "firstBuy": "2026-02-23",
+        "lastValuation": "2026-05-11",
+        "end": "2026-05-11"
+      },
+      {
+        "start": "2026-02-13",
+        "firstRanking": "2026-02-20",
+        "earliestPossibleBuy": "2026-02-24",
+        "firstBuy": "2026-02-24",
+        "lastValuation": "2026-05-12",
+        "end": "2026-05-12"
+      },
+      {
+        "start": "2026-02-19",
+        "firstRanking": "2026-02-23",
+        "earliestPossibleBuy": "2026-02-25",
+        "firstBuy": "2026-02-25",
+        "lastValuation": "2026-05-18",
+        "end": "2026-05-18"
+      },
+      {
+        "start": "2026-02-20",
+        "firstRanking": "2026-02-24",
+        "earliestPossibleBuy": "2026-02-26",
+        "firstBuy": "2026-02-26",
+        "lastValuation": "2026-05-19",
+        "end": "2026-05-19"
+      },
+      {
+        "start": "2026-02-23",
+        "firstRanking": "2026-02-25",
+        "earliestPossibleBuy": "2026-02-27",
+        "firstBuy": "2026-02-27",
+        "lastValuation": "2026-05-22",
+        "end": "2026-05-22"
+      },
+      {
+        "start": "2026-02-24",
+        "firstRanking": "2026-02-26",
+        "earliestPossibleBuy": "2026-03-03",
+        "firstBuy": "2026-03-03",
+        "lastValuation": "2026-05-23",
+        "end": "2026-05-23"
+      },
+      {
+        "start": "2026-02-25",
+        "firstRanking": "2026-02-27",
+        "earliestPossibleBuy": "2026-03-04",
+        "firstBuy": "2026-03-04",
+        "lastValuation": "2026-05-24",
+        "end": "2026-05-24"
+      },
+      {
+        "start": "2026-02-26",
+        "firstRanking": "2026-03-03",
+        "earliestPossibleBuy": "2026-03-05",
+        "firstBuy": "2026-03-05",
+        "lastValuation": "2026-05-25",
+        "end": "2026-05-25"
+      },
+      {
+        "start": "2026-02-27",
+        "firstRanking": "2026-03-04",
+        "earliestPossibleBuy": "2026-03-06",
+        "firstBuy": "2026-03-06",
+        "lastValuation": "2026-05-26",
+        "end": "2026-05-26"
+      },
+      {
+        "start": "2026-03-03",
+        "firstRanking": "2026-03-05",
+        "earliestPossibleBuy": "2026-03-09",
+        "firstBuy": "2026-03-09",
+        "lastValuation": "2026-06-02",
+        "end": "2026-06-02"
+      },
+      {
+        "start": "2026-03-05",
+        "firstRanking": "2026-03-09",
+        "earliestPossibleBuy": "2026-03-11",
+        "firstBuy": "2026-03-11",
+        "lastValuation": "2026-06-04",
+        "end": "2026-06-04"
+      },
+      {
+        "start": "2026-03-18",
+        "firstRanking": "2026-03-20",
+        "earliestPossibleBuy": "2026-03-24",
+        "firstBuy": "2026-03-24",
+        "lastValuation": "2026-06-17",
+        "end": "2026-06-17"
+      },
+      {
+        "start": "2026-03-19",
+        "firstRanking": "2026-03-23",
+        "earliestPossibleBuy": "2026-03-25",
+        "firstBuy": "2026-03-25",
+        "lastValuation": "2026-06-18",
+        "end": "2026-06-18"
+      },
+      {
+        "start": "2026-03-20",
+        "firstRanking": "2026-03-24",
+        "earliestPossibleBuy": "2026-03-26",
+        "firstBuy": "2026-03-26",
+        "lastValuation": "2026-06-19",
+        "end": "2026-06-19"
+      },
+      {
+        "start": "2026-04-08",
+        "firstRanking": "2026-04-10",
+        "earliestPossibleBuy": "2026-04-14",
+        "firstBuy": "2026-04-14",
+        "lastValuation": "2026-07-07",
+        "end": "2026-07-07"
+      },
+      {
+        "start": "2026-04-09",
+        "firstRanking": "2026-04-13",
+        "earliestPossibleBuy": "2026-04-15",
+        "firstBuy": "2026-04-15",
+        "lastValuation": "2026-07-08",
+        "end": "2026-07-08"
+      },
+      {
+        "start": "2026-04-10",
+        "firstRanking": "2026-04-14",
+        "earliestPossibleBuy": "2026-04-16",
+        "firstBuy": "2026-04-16",
+        "lastValuation": "2026-07-09",
+        "end": "2026-07-09"
+      },
+      {
+        "start": "2026-04-13",
+        "firstRanking": "2026-04-15",
+        "earliestPossibleBuy": "2026-04-17",
+        "firstBuy": "2026-04-17",
+        "lastValuation": "2026-07-12",
+        "end": "2026-07-12"
+      },
+      {
+        "start": "2026-04-14",
+        "firstRanking": "2026-04-16",
+        "earliestPossibleBuy": "2026-04-20",
+        "firstBuy": "2026-04-20",
+        "lastValuation": "2026-07-13",
+        "end": "2026-07-13"
+      },
+      {
+        "start": "2026-04-15",
+        "firstRanking": "2026-04-17",
+        "earliestPossibleBuy": "2026-04-21",
+        "firstBuy": "2026-04-21",
+        "lastValuation": "2026-07-14",
+        "end": "2026-07-14"
+      },
+      {
+        "start": "2026-04-16",
+        "firstRanking": "2026-04-20",
+        "earliestPossibleBuy": "2026-04-22",
+        "firstBuy": "2026-04-22",
+        "lastValuation": "2026-07-15",
+        "end": "2026-07-15"
+      },
+      {
+        "start": "2026-04-17",
+        "firstRanking": "2026-04-21",
+        "earliestPossibleBuy": "2026-04-23",
+        "firstBuy": "2026-04-23",
+        "lastValuation": "2026-07-16",
+        "end": "2026-07-16"
+      },
+      {
+        "start": "2026-04-20",
+        "firstRanking": "2026-04-22",
+        "earliestPossibleBuy": "2026-04-24",
+        "firstBuy": "2026-04-24",
+        "lastValuation": "2026-07-19",
+        "end": "2026-07-19"
+      },
+      {
+        "start": "2026-04-21",
+        "firstRanking": "2026-04-23",
+        "earliestPossibleBuy": "2026-04-27",
+        "firstBuy": "2026-04-27",
+        "lastValuation": "2026-07-20",
+        "end": "2026-07-20"
+      },
+      {
+        "start": "2026-04-22",
+        "firstRanking": "2026-04-24",
+        "earliestPossibleBuy": "2026-04-28",
+        "firstBuy": "2026-04-28",
+        "lastValuation": "2026-07-21",
+        "end": "2026-07-21"
+      },
+      {
+        "start": "2026-04-23",
+        "firstRanking": "2026-04-27",
+        "earliestPossibleBuy": "2026-04-29",
+        "firstBuy": "2026-04-29",
+        "lastValuation": "2026-07-22",
+        "end": "2026-07-22"
+      },
+      {
+        "start": "2026-04-24",
+        "firstRanking": "2026-04-28",
+        "earliestPossibleBuy": "2026-04-30",
+        "firstBuy": "2026-04-30",
+        "lastValuation": "2026-07-23",
+        "end": "2026-07-23"
+      },
+      {
+        "start": "2026-04-27",
+        "firstRanking": "2026-04-29",
+        "earliestPossibleBuy": "2026-05-04",
+        "firstBuy": "2026-05-04",
+        "lastValuation": "2026-07-26",
+        "end": "2026-07-26"
+      },
+      {
+        "start": "2026-04-28",
+        "firstRanking": "2026-04-30",
+        "earliestPossibleBuy": "2026-05-06",
+        "firstBuy": "2026-05-06",
+        "lastValuation": "2026-07-27",
+        "end": "2026-07-27"
+      },
+      {
+        "start": "2026-04-29",
+        "firstRanking": "2026-05-04",
+        "earliestPossibleBuy": "2026-05-07",
+        "firstBuy": "2026-05-07",
+        "lastValuation": "2026-07-28",
+        "end": "2026-07-28"
+      },
+      {
+        "start": "2026-05-04",
+        "firstRanking": "2026-05-07",
+        "earliestPossibleBuy": "2026-05-11",
+        "firstBuy": "2026-05-11",
+        "lastValuation": "2026-08-03",
+        "end": "2026-08-03"
+      },
+      {
+        "start": "2026-05-06",
+        "firstRanking": "2026-05-08",
+        "earliestPossibleBuy": "2026-05-12",
+        "firstBuy": "2026-05-12",
+        "lastValuation": "2026-08-05",
+        "end": "2026-08-05"
+      },
+      {
+        "start": "2026-05-07",
+        "firstRanking": "2026-05-11",
+        "earliestPossibleBuy": "2026-05-13",
+        "firstBuy": "2026-05-13",
+        "lastValuation": "2026-08-06",
+        "end": "2026-08-06"
+      },
+      {
+        "start": "2026-05-08",
+        "firstRanking": "2026-05-12",
+        "earliestPossibleBuy": "2026-05-14",
+        "firstBuy": "2026-05-14",
+        "lastValuation": "2026-08-07",
+        "end": "2026-08-07"
+      },
+      {
+        "start": "2026-05-11",
+        "firstRanking": "2026-05-13",
+        "earliestPossibleBuy": "2026-05-15",
+        "firstBuy": "2026-05-15",
+        "lastValuation": "2026-08-10",
+        "end": "2026-08-10"
+      },
+      {
+        "start": "2026-05-12",
+        "firstRanking": "2026-05-14",
+        "earliestPossibleBuy": "2026-05-18",
+        "firstBuy": "2026-05-18",
+        "lastValuation": "2026-08-11",
+        "end": "2026-08-11"
+      },
+      {
+        "start": "2026-05-13",
+        "firstRanking": "2026-05-15",
+        "earliestPossibleBuy": "2026-05-19",
+        "firstBuy": "2026-05-19",
+        "lastValuation": "2026-08-12",
+        "end": "2026-08-12"
+      },
+      {
+        "start": "2026-05-14",
+        "firstRanking": "2026-05-18",
+        "earliestPossibleBuy": "2026-05-20",
+        "firstBuy": "2026-05-20",
+        "lastValuation": "2026-08-13",
+        "end": "2026-08-13"
+      },
+      {
+        "start": "2026-05-15",
+        "firstRanking": "2026-05-19",
+        "earliestPossibleBuy": "2026-05-21",
+        "firstBuy": "2026-05-21",
+        "lastValuation": "2026-08-14",
+        "end": "2026-08-14"
+      }
+    ]
+  },
+  {
+    "kind": "offset",
+    "value": 3,
+    "stage": "validation",
+    "scheduleAudit": [
+      {
+        "start": "2020-04-09",
+        "firstRanking": "2020-04-14",
+        "earliestPossibleBuy": "2020-04-17",
+        "firstBuy": "2020-04-17",
+        "lastValuation": "2020-07-08",
+        "end": "2020-07-08"
+      },
+      {
+        "start": "2020-04-10",
+        "firstRanking": "2020-04-16",
+        "earliestPossibleBuy": "2020-04-20",
+        "firstBuy": "2020-04-20",
+        "lastValuation": "2020-07-09",
+        "end": "2020-07-09"
+      },
+      {
+        "start": "2020-04-13",
+        "firstRanking": "2020-04-17",
+        "earliestPossibleBuy": "2020-04-21",
+        "firstBuy": "2020-04-21",
+        "lastValuation": "2020-07-12",
+        "end": "2020-07-12"
+      },
+      {
+        "start": "2020-04-14",
+        "firstRanking": "2020-04-20",
+        "earliestPossibleBuy": "2020-04-22",
+        "firstBuy": "2020-04-22",
+        "lastValuation": "2020-07-13",
+        "end": "2020-07-13"
+      },
+      {
+        "start": "2020-04-16",
+        "firstRanking": "2020-04-21",
+        "earliestPossibleBuy": "2020-04-23",
+        "firstBuy": "2020-04-23",
+        "lastValuation": "2020-07-15",
+        "end": "2020-07-15"
+      },
+      {
+        "start": "2020-04-17",
+        "firstRanking": "2020-04-22",
+        "earliestPossibleBuy": "2020-04-24",
+        "firstBuy": "2020-04-24",
+        "lastValuation": "2020-07-16",
+        "end": "2020-07-16"
+      },
+      {
+        "start": "2020-04-20",
+        "firstRanking": "2020-04-23",
+        "earliestPossibleBuy": "2020-04-27",
+        "firstBuy": "2020-04-27",
+        "lastValuation": "2020-07-19",
+        "end": "2020-07-19"
+      },
+      {
+        "start": "2020-04-21",
+        "firstRanking": "2020-04-24",
+        "earliestPossibleBuy": "2020-04-28",
+        "firstBuy": "2020-04-28",
+        "lastValuation": "2020-07-20",
+        "end": "2020-07-20"
+      },
+      {
+        "start": "2020-04-22",
+        "firstRanking": "2020-04-27",
+        "earliestPossibleBuy": "2020-04-29",
+        "firstBuy": "2020-04-29",
+        "lastValuation": "2020-07-21",
+        "end": "2020-07-21"
+      },
+      {
+        "start": "2020-06-16",
+        "firstRanking": "2020-06-19",
+        "earliestPossibleBuy": "2020-06-23",
+        "firstBuy": "2020-06-23",
+        "lastValuation": "2020-09-15",
+        "end": "2020-09-15"
+      },
+      {
+        "start": "2020-06-17",
+        "firstRanking": "2020-06-22",
+        "earliestPossibleBuy": "2020-06-24",
+        "firstBuy": "2020-06-24",
+        "lastValuation": "2020-09-16",
+        "end": "2020-09-16"
+      },
+      {
+        "start": "2020-06-18",
+        "firstRanking": "2020-06-23",
+        "earliestPossibleBuy": "2020-06-25",
+        "firstBuy": "2020-06-25",
+        "lastValuation": "2020-09-17",
+        "end": "2020-09-17"
+      },
+      {
+        "start": "2020-06-19",
+        "firstRanking": "2020-06-24",
+        "earliestPossibleBuy": "2020-06-26",
+        "firstBuy": "2020-06-26",
+        "lastValuation": "2020-09-18",
+        "end": "2020-09-18"
+      },
+      {
+        "start": "2020-06-22",
+        "firstRanking": "2020-06-25",
+        "earliestPossibleBuy": "2020-06-29",
+        "firstBuy": "2020-06-29",
+        "lastValuation": "2020-09-21",
+        "end": "2020-09-21"
+      },
+      {
+        "start": "2020-06-23",
+        "firstRanking": "2020-06-26",
+        "earliestPossibleBuy": "2020-06-30",
+        "firstBuy": "2020-06-30",
+        "lastValuation": "2020-09-22",
+        "end": "2020-09-22"
+      },
+      {
+        "start": "2020-06-24",
+        "firstRanking": "2020-06-29",
+        "earliestPossibleBuy": "2020-07-01",
+        "firstBuy": "2020-07-01",
+        "lastValuation": "2020-09-23",
+        "end": "2020-09-23"
+      },
+      {
+        "start": "2020-07-06",
+        "firstRanking": "2020-07-09",
+        "earliestPossibleBuy": "2020-07-13",
+        "firstBuy": "2020-07-13",
+        "lastValuation": "2020-10-05",
+        "end": "2020-10-05"
+      },
+      {
+        "start": "2020-07-10",
+        "firstRanking": "2020-07-15",
+        "earliestPossibleBuy": "2020-07-17",
+        "firstBuy": "2020-07-17",
+        "lastValuation": "2020-10-09",
+        "end": "2020-10-09"
+      },
+      {
+        "start": "2021-02-03",
+        "firstRanking": "2021-02-08",
+        "earliestPossibleBuy": "2021-02-10",
+        "firstBuy": "2021-02-10",
+        "lastValuation": "2021-05-02",
+        "end": "2021-05-02"
+      }
+    ]
+  },
+  {
+    "kind": "offset",
+    "value": 3,
+    "stage": "confirmation",
+    "scheduleAudit": [
+      {
+        "start": "2024-09-02",
+        "firstRanking": "2024-09-05",
+        "earliestPossibleBuy": "2024-09-09",
+        "firstBuy": "2024-09-09",
+        "lastValuation": "2024-12-01",
+        "end": "2024-12-01"
+      },
+      {
+        "start": "2025-04-28",
+        "firstRanking": "2025-05-02",
+        "earliestPossibleBuy": "2025-05-08",
+        "firstBuy": "2025-05-08",
+        "lastValuation": "2025-07-27",
+        "end": "2025-07-27"
+      },
+      {
+        "start": "2025-04-29",
+        "firstRanking": "2025-05-07",
+        "earliestPossibleBuy": "2025-05-09",
+        "firstBuy": "2025-05-09",
+        "lastValuation": "2025-07-28",
+        "end": "2025-07-28"
+      },
+      {
+        "start": "2025-04-30",
+        "firstRanking": "2025-05-08",
+        "earliestPossibleBuy": "2025-05-12",
+        "firstBuy": "2025-05-12",
+        "lastValuation": "2025-07-29",
+        "end": "2025-07-29"
+      },
+      {
+        "start": "2025-05-02",
+        "firstRanking": "2025-05-09",
+        "earliestPossibleBuy": "2025-05-13",
+        "firstBuy": "2025-05-13",
+        "lastValuation": "2025-08-01",
+        "end": "2025-08-01"
+      },
+      {
+        "start": "2025-05-07",
+        "firstRanking": "2025-05-12",
+        "earliestPossibleBuy": "2025-05-14",
+        "firstBuy": "2025-05-14",
+        "lastValuation": "2025-08-06",
+        "end": "2025-08-06"
+      },
+      {
+        "start": "2025-11-17",
+        "firstRanking": "2025-11-20",
+        "earliestPossibleBuy": "2025-11-24",
+        "firstBuy": "2025-11-24",
+        "lastValuation": "2026-02-16",
+        "end": "2026-02-16"
+      },
+      {
+        "start": "2025-12-03",
+        "firstRanking": "2025-12-08",
+        "earliestPossibleBuy": "2025-12-10",
+        "firstBuy": "2025-12-10",
+        "lastValuation": "2026-03-02",
+        "end": "2026-03-02"
+      },
+      {
+        "start": "2025-12-04",
+        "firstRanking": "2025-12-09",
+        "earliestPossibleBuy": "2025-12-11",
+        "firstBuy": "2025-12-11",
+        "lastValuation": "2026-03-03",
+        "end": "2026-03-03"
+      },
+      {
+        "start": "2025-12-05",
+        "firstRanking": "2025-12-10",
+        "earliestPossibleBuy": "2025-12-12",
+        "firstBuy": "2025-12-12",
+        "lastValuation": "2026-03-04",
+        "end": "2026-03-04"
+      },
+      {
+        "start": "2025-12-08",
+        "firstRanking": "2025-12-11",
+        "earliestPossibleBuy": "2025-12-15",
+        "firstBuy": "2025-12-15",
+        "lastValuation": "2026-03-07",
+        "end": "2026-03-07"
+      },
+      {
+        "start": "2025-12-09",
+        "firstRanking": "2025-12-12",
+        "earliestPossibleBuy": "2025-12-16",
+        "firstBuy": "2025-12-16",
+        "lastValuation": "2026-03-08",
+        "end": "2026-03-08"
+      },
+      {
+        "start": "2026-02-03",
+        "firstRanking": "2026-02-06",
+        "earliestPossibleBuy": "2026-02-10",
+        "firstBuy": "2026-02-10",
+        "lastValuation": "2026-05-02",
+        "end": "2026-05-02"
+      },
+      {
+        "start": "2026-02-04",
+        "firstRanking": "2026-02-09",
+        "earliestPossibleBuy": "2026-02-11",
+        "firstBuy": "2026-02-11",
+        "lastValuation": "2026-05-03",
+        "end": "2026-05-03"
+      },
+      {
+        "start": "2026-02-05",
+        "firstRanking": "2026-02-10",
+        "earliestPossibleBuy": "2026-02-12",
+        "firstBuy": "2026-02-12",
+        "lastValuation": "2026-05-04",
+        "end": "2026-05-04"
+      },
+      {
+        "start": "2026-02-06",
+        "firstRanking": "2026-02-11",
+        "earliestPossibleBuy": "2026-02-13",
+        "firstBuy": "2026-02-13",
+        "lastValuation": "2026-05-05",
+        "end": "2026-05-05"
+      },
+      {
+        "start": "2026-02-09",
+        "firstRanking": "2026-02-12",
+        "earliestPossibleBuy": "2026-02-19",
+        "firstBuy": "2026-02-19",
+        "lastValuation": "2026-05-08",
+        "end": "2026-05-08"
+      },
+      {
+        "start": "2026-02-10",
+        "firstRanking": "2026-02-13",
+        "earliestPossibleBuy": "2026-02-20",
+        "firstBuy": "2026-02-20",
+        "lastValuation": "2026-05-09",
+        "end": "2026-05-09"
+      },
+      {
+        "start": "2026-02-11",
+        "firstRanking": "2026-02-19",
+        "earliestPossibleBuy": "2026-02-23",
+        "firstBuy": "2026-02-23",
+        "lastValuation": "2026-05-10",
+        "end": "2026-05-10"
+      },
+      {
+        "start": "2026-02-12",
+        "firstRanking": "2026-02-20",
+        "earliestPossibleBuy": "2026-02-24",
+        "firstBuy": "2026-02-24",
+        "lastValuation": "2026-05-11",
+        "end": "2026-05-11"
+      },
+      {
+        "start": "2026-02-13",
+        "firstRanking": "2026-02-23",
+        "earliestPossibleBuy": "2026-02-25",
+        "firstBuy": "2026-02-25",
+        "lastValuation": "2026-05-12",
+        "end": "2026-05-12"
+      },
+      {
+        "start": "2026-02-19",
+        "firstRanking": "2026-02-24",
+        "earliestPossibleBuy": "2026-02-26",
+        "firstBuy": "2026-02-26",
+        "lastValuation": "2026-05-18",
+        "end": "2026-05-18"
+      },
+      {
+        "start": "2026-02-20",
+        "firstRanking": "2026-02-25",
+        "earliestPossibleBuy": "2026-02-27",
+        "firstBuy": "2026-02-27",
+        "lastValuation": "2026-05-19",
+        "end": "2026-05-19"
+      },
+      {
+        "start": "2026-02-23",
+        "firstRanking": "2026-02-26",
+        "earliestPossibleBuy": "2026-03-03",
+        "firstBuy": "2026-03-03",
+        "lastValuation": "2026-05-22",
+        "end": "2026-05-22"
+      },
+      {
+        "start": "2026-02-24",
+        "firstRanking": "2026-02-27",
+        "earliestPossibleBuy": "2026-03-04",
+        "firstBuy": "2026-03-04",
+        "lastValuation": "2026-05-23",
+        "end": "2026-05-23"
+      },
+      {
+        "start": "2026-02-25",
+        "firstRanking": "2026-03-03",
+        "earliestPossibleBuy": "2026-03-05",
+        "firstBuy": "2026-03-05",
+        "lastValuation": "2026-05-24",
+        "end": "2026-05-24"
+      },
+      {
+        "start": "2026-02-26",
+        "firstRanking": "2026-03-04",
+        "earliestPossibleBuy": "2026-03-06",
+        "firstBuy": "2026-03-06",
+        "lastValuation": "2026-05-25",
+        "end": "2026-05-25"
+      },
+      {
+        "start": "2026-02-27",
+        "firstRanking": "2026-03-05",
+        "earliestPossibleBuy": "2026-03-09",
+        "firstBuy": "2026-03-09",
+        "lastValuation": "2026-05-26",
+        "end": "2026-05-26"
+      },
+      {
+        "start": "2026-03-03",
+        "firstRanking": "2026-03-06",
+        "earliestPossibleBuy": "2026-03-10",
+        "firstBuy": "2026-03-10",
+        "lastValuation": "2026-06-02",
+        "end": "2026-06-02"
+      },
+      {
+        "start": "2026-03-05",
+        "firstRanking": "2026-03-10",
+        "earliestPossibleBuy": "2026-03-12",
+        "firstBuy": "2026-03-12",
+        "lastValuation": "2026-06-04",
+        "end": "2026-06-04"
+      },
+      {
+        "start": "2026-03-18",
+        "firstRanking": "2026-03-23",
+        "earliestPossibleBuy": "2026-03-25",
+        "firstBuy": "2026-03-25",
+        "lastValuation": "2026-06-17",
+        "end": "2026-06-17"
+      },
+      {
+        "start": "2026-03-19",
+        "firstRanking": "2026-03-24",
+        "earliestPossibleBuy": "2026-03-26",
+        "firstBuy": "2026-03-26",
+        "lastValuation": "2026-06-18",
+        "end": "2026-06-18"
+      },
+      {
+        "start": "2026-03-20",
+        "firstRanking": "2026-03-25",
+        "earliestPossibleBuy": "2026-03-27",
+        "firstBuy": "2026-03-27",
+        "lastValuation": "2026-06-19",
+        "end": "2026-06-19"
+      },
+      {
+        "start": "2026-04-08",
+        "firstRanking": "2026-04-13",
+        "earliestPossibleBuy": "2026-04-15",
+        "firstBuy": "2026-04-15",
+        "lastValuation": "2026-07-07",
+        "end": "2026-07-07"
+      },
+      {
+        "start": "2026-04-09",
+        "firstRanking": "2026-04-14",
+        "earliestPossibleBuy": "2026-04-16",
+        "firstBuy": "2026-04-16",
+        "lastValuation": "2026-07-08",
+        "end": "2026-07-08"
+      },
+      {
+        "start": "2026-04-10",
+        "firstRanking": "2026-04-15",
+        "earliestPossibleBuy": "2026-04-17",
+        "firstBuy": "2026-04-17",
+        "lastValuation": "2026-07-09",
+        "end": "2026-07-09"
+      },
+      {
+        "start": "2026-04-13",
+        "firstRanking": "2026-04-16",
+        "earliestPossibleBuy": "2026-04-20",
+        "firstBuy": "2026-04-20",
+        "lastValuation": "2026-07-12",
+        "end": "2026-07-12"
+      },
+      {
+        "start": "2026-04-14",
+        "firstRanking": "2026-04-17",
+        "earliestPossibleBuy": "2026-04-21",
+        "firstBuy": "2026-04-21",
+        "lastValuation": "2026-07-13",
+        "end": "2026-07-13"
+      },
+      {
+        "start": "2026-04-15",
+        "firstRanking": "2026-04-20",
+        "earliestPossibleBuy": "2026-04-22",
+        "firstBuy": "2026-04-22",
+        "lastValuation": "2026-07-14",
+        "end": "2026-07-14"
+      },
+      {
+        "start": "2026-04-16",
+        "firstRanking": "2026-04-21",
+        "earliestPossibleBuy": "2026-04-23",
+        "firstBuy": "2026-04-23",
+        "lastValuation": "2026-07-15",
+        "end": "2026-07-15"
+      },
+      {
+        "start": "2026-04-17",
+        "firstRanking": "2026-04-22",
+        "earliestPossibleBuy": "2026-04-24",
+        "firstBuy": "2026-04-24",
+        "lastValuation": "2026-07-16",
+        "end": "2026-07-16"
+      },
+      {
+        "start": "2026-04-20",
+        "firstRanking": "2026-04-23",
+        "earliestPossibleBuy": "2026-04-27",
+        "firstBuy": "2026-04-27",
+        "lastValuation": "2026-07-19",
+        "end": "2026-07-19"
+      },
+      {
+        "start": "2026-04-21",
+        "firstRanking": "2026-04-24",
+        "earliestPossibleBuy": "2026-04-28",
+        "firstBuy": "2026-04-28",
+        "lastValuation": "2026-07-20",
+        "end": "2026-07-20"
+      },
+      {
+        "start": "2026-04-22",
+        "firstRanking": "2026-04-27",
+        "earliestPossibleBuy": "2026-04-29",
+        "firstBuy": "2026-04-29",
+        "lastValuation": "2026-07-21",
+        "end": "2026-07-21"
+      },
+      {
+        "start": "2026-04-23",
+        "firstRanking": "2026-04-28",
+        "earliestPossibleBuy": "2026-04-30",
+        "firstBuy": "2026-04-30",
+        "lastValuation": "2026-07-22",
+        "end": "2026-07-22"
+      },
+      {
+        "start": "2026-04-24",
+        "firstRanking": "2026-04-29",
+        "earliestPossibleBuy": "2026-05-04",
+        "firstBuy": "2026-05-04",
+        "lastValuation": "2026-07-23",
+        "end": "2026-07-23"
+      },
+      {
+        "start": "2026-04-27",
+        "firstRanking": "2026-04-30",
+        "earliestPossibleBuy": "2026-05-06",
+        "firstBuy": "2026-05-06",
+        "lastValuation": "2026-07-26",
+        "end": "2026-07-26"
+      },
+      {
+        "start": "2026-04-28",
+        "firstRanking": "2026-05-04",
+        "earliestPossibleBuy": "2026-05-07",
+        "firstBuy": "2026-05-07",
+        "lastValuation": "2026-07-27",
+        "end": "2026-07-27"
+      },
+      {
+        "start": "2026-04-29",
+        "firstRanking": "2026-05-06",
+        "earliestPossibleBuy": "2026-05-08",
+        "firstBuy": "2026-05-08",
+        "lastValuation": "2026-07-28",
+        "end": "2026-07-28"
+      },
+      {
+        "start": "2026-05-04",
+        "firstRanking": "2026-05-08",
+        "earliestPossibleBuy": "2026-05-12",
+        "firstBuy": "2026-05-12",
+        "lastValuation": "2026-08-03",
+        "end": "2026-08-03"
+      },
+      {
+        "start": "2026-05-06",
+        "firstRanking": "2026-05-11",
+        "earliestPossibleBuy": "2026-05-13",
+        "firstBuy": "2026-05-13",
+        "lastValuation": "2026-08-05",
+        "end": "2026-08-05"
+      },
+      {
+        "start": "2026-05-07",
+        "firstRanking": "2026-05-12",
+        "earliestPossibleBuy": "2026-05-14",
+        "firstBuy": "2026-05-14",
+        "lastValuation": "2026-08-06",
+        "end": "2026-08-06"
+      },
+      {
+        "start": "2026-05-08",
+        "firstRanking": "2026-05-13",
+        "earliestPossibleBuy": "2026-05-15",
+        "firstBuy": "2026-05-15",
+        "lastValuation": "2026-08-07",
+        "end": "2026-08-07"
+      },
+      {
+        "start": "2026-05-11",
+        "firstRanking": "2026-05-14",
+        "earliestPossibleBuy": "2026-05-18",
+        "firstBuy": "2026-05-18",
+        "lastValuation": "2026-08-10",
+        "end": "2026-08-10"
+      },
+      {
+        "start": "2026-05-12",
+        "firstRanking": "2026-05-15",
+        "earliestPossibleBuy": "2026-05-19",
+        "firstBuy": "2026-05-19",
+        "lastValuation": "2026-08-11",
+        "end": "2026-08-11"
+      },
+      {
+        "start": "2026-05-13",
+        "firstRanking": "2026-05-18",
+        "earliestPossibleBuy": "2026-05-20",
+        "firstBuy": "2026-05-20",
+        "lastValuation": "2026-08-12",
+        "end": "2026-08-12"
+      },
+      {
+        "start": "2026-05-14",
+        "firstRanking": "2026-05-19",
+        "earliestPossibleBuy": "2026-05-21",
+        "firstBuy": "2026-05-21",
+        "lastValuation": "2026-08-13",
+        "end": "2026-08-13"
+      },
+      {
+        "start": "2026-05-15",
+        "firstRanking": "2026-05-20",
+        "earliestPossibleBuy": "2026-05-22",
+        "firstBuy": "2026-05-22",
+        "lastValuation": "2026-08-14",
+        "end": "2026-08-14"
+      }
+    ]
+  },
+  {
+    "kind": "offset",
+    "value": 4,
+    "stage": "validation",
+    "scheduleAudit": [
+      {
+        "start": "2020-04-09",
+        "firstRanking": "2020-04-16",
+        "earliestPossibleBuy": "2020-04-20",
+        "firstBuy": "2020-04-20",
+        "lastValuation": "2020-07-08",
+        "end": "2020-07-08"
+      },
+      {
+        "start": "2020-04-10",
+        "firstRanking": "2020-04-17",
+        "earliestPossibleBuy": "2020-04-21",
+        "firstBuy": "2020-04-21",
+        "lastValuation": "2020-07-09",
+        "end": "2020-07-09"
+      },
+      {
+        "start": "2020-04-13",
+        "firstRanking": "2020-04-20",
+        "earliestPossibleBuy": "2020-04-22",
+        "firstBuy": "2020-04-22",
+        "lastValuation": "2020-07-12",
+        "end": "2020-07-12"
+      },
+      {
+        "start": "2020-04-14",
+        "firstRanking": "2020-04-21",
+        "earliestPossibleBuy": "2020-04-23",
+        "firstBuy": "2020-04-23",
+        "lastValuation": "2020-07-13",
+        "end": "2020-07-13"
+      },
+      {
+        "start": "2020-04-16",
+        "firstRanking": "2020-04-22",
+        "earliestPossibleBuy": "2020-04-24",
+        "firstBuy": "2020-04-24",
+        "lastValuation": "2020-07-15",
+        "end": "2020-07-15"
+      },
+      {
+        "start": "2020-04-17",
+        "firstRanking": "2020-04-23",
+        "earliestPossibleBuy": "2020-04-27",
+        "firstBuy": "2020-04-27",
+        "lastValuation": "2020-07-16",
+        "end": "2020-07-16"
+      },
+      {
+        "start": "2020-04-20",
+        "firstRanking": "2020-04-24",
+        "earliestPossibleBuy": "2020-04-28",
+        "firstBuy": "2020-04-28",
+        "lastValuation": "2020-07-19",
+        "end": "2020-07-19"
+      },
+      {
+        "start": "2020-04-21",
+        "firstRanking": "2020-04-27",
+        "earliestPossibleBuy": "2020-04-29",
+        "firstBuy": "2020-04-29",
+        "lastValuation": "2020-07-20",
+        "end": "2020-07-20"
+      },
+      {
+        "start": "2020-04-22",
+        "firstRanking": "2020-04-28",
+        "earliestPossibleBuy": "2020-05-04",
+        "firstBuy": "2020-05-04",
+        "lastValuation": "2020-07-21",
+        "end": "2020-07-21"
+      },
+      {
+        "start": "2020-06-16",
+        "firstRanking": "2020-06-22",
+        "earliestPossibleBuy": "2020-06-24",
+        "firstBuy": "2020-06-24",
+        "lastValuation": "2020-09-15",
+        "end": "2020-09-15"
+      },
+      {
+        "start": "2020-06-17",
+        "firstRanking": "2020-06-23",
+        "earliestPossibleBuy": "2020-06-25",
+        "firstBuy": "2020-06-25",
+        "lastValuation": "2020-09-16",
+        "end": "2020-09-16"
+      },
+      {
+        "start": "2020-06-18",
+        "firstRanking": "2020-06-24",
+        "earliestPossibleBuy": "2020-06-26",
+        "firstBuy": "2020-06-26",
+        "lastValuation": "2020-09-17",
+        "end": "2020-09-17"
+      },
+      {
+        "start": "2020-06-19",
+        "firstRanking": "2020-06-25",
+        "earliestPossibleBuy": "2020-06-29",
+        "firstBuy": "2020-06-29",
+        "lastValuation": "2020-09-18",
+        "end": "2020-09-18"
+      },
+      {
+        "start": "2020-06-22",
+        "firstRanking": "2020-06-26",
+        "earliestPossibleBuy": "2020-06-30",
+        "firstBuy": "2020-06-30",
+        "lastValuation": "2020-09-21",
+        "end": "2020-09-21"
+      },
+      {
+        "start": "2020-06-23",
+        "firstRanking": "2020-06-29",
+        "earliestPossibleBuy": "2020-07-01",
+        "firstBuy": "2020-07-01",
+        "lastValuation": "2020-09-22",
+        "end": "2020-09-22"
+      },
+      {
+        "start": "2020-06-24",
+        "firstRanking": "2020-06-30",
+        "earliestPossibleBuy": "2020-07-02",
+        "firstBuy": "2020-07-02",
+        "lastValuation": "2020-09-23",
+        "end": "2020-09-23"
+      },
+      {
+        "start": "2020-07-06",
+        "firstRanking": "2020-07-10",
+        "earliestPossibleBuy": "2020-07-14",
+        "firstBuy": "2020-07-14",
+        "lastValuation": "2020-10-05",
+        "end": "2020-10-05"
+      },
+      {
+        "start": "2020-07-10",
+        "firstRanking": "2020-07-16",
+        "earliestPossibleBuy": "2020-07-20",
+        "firstBuy": "2020-07-20",
+        "lastValuation": "2020-10-09",
+        "end": "2020-10-09"
+      },
+      {
+        "start": "2021-02-03",
+        "firstRanking": "2021-02-09",
+        "earliestPossibleBuy": "2021-02-15",
+        "firstBuy": "2021-02-15",
+        "lastValuation": "2021-05-02",
+        "end": "2021-05-02"
+      }
+    ]
+  },
+  {
+    "kind": "offset",
+    "value": 4,
+    "stage": "confirmation",
+    "scheduleAudit": [
+      {
+        "start": "2024-09-02",
+        "firstRanking": "2024-09-06",
+        "earliestPossibleBuy": "2024-09-10",
+        "firstBuy": "2024-09-10",
+        "lastValuation": "2024-12-01",
+        "end": "2024-12-01"
+      },
+      {
+        "start": "2025-04-28",
+        "firstRanking": "2025-05-07",
+        "earliestPossibleBuy": "2025-05-09",
+        "firstBuy": "2025-05-09",
+        "lastValuation": "2025-07-27",
+        "end": "2025-07-27"
+      },
+      {
+        "start": "2025-04-29",
+        "firstRanking": "2025-05-08",
+        "earliestPossibleBuy": "2025-05-12",
+        "firstBuy": "2025-05-12",
+        "lastValuation": "2025-07-28",
+        "end": "2025-07-28"
+      },
+      {
+        "start": "2025-04-30",
+        "firstRanking": "2025-05-09",
+        "earliestPossibleBuy": "2025-05-13",
+        "firstBuy": "2025-05-13",
+        "lastValuation": "2025-07-29",
+        "end": "2025-07-29"
+      },
+      {
+        "start": "2025-05-02",
+        "firstRanking": "2025-05-12",
+        "earliestPossibleBuy": "2025-05-14",
+        "firstBuy": "2025-05-14",
+        "lastValuation": "2025-08-01",
+        "end": "2025-08-01"
+      },
+      {
+        "start": "2025-05-07",
+        "firstRanking": "2025-05-13",
+        "earliestPossibleBuy": "2025-05-15",
+        "firstBuy": "2025-05-15",
+        "lastValuation": "2025-08-06",
+        "end": "2025-08-06"
+      },
+      {
+        "start": "2025-11-17",
+        "firstRanking": "2025-11-21",
+        "earliestPossibleBuy": "2025-11-25",
+        "firstBuy": "2025-11-25",
+        "lastValuation": "2026-02-16",
+        "end": "2026-02-16"
+      },
+      {
+        "start": "2025-12-03",
+        "firstRanking": "2025-12-09",
+        "earliestPossibleBuy": "2025-12-11",
+        "firstBuy": "2025-12-11",
+        "lastValuation": "2026-03-02",
+        "end": "2026-03-02"
+      },
+      {
+        "start": "2025-12-04",
+        "firstRanking": "2025-12-10",
+        "earliestPossibleBuy": "2025-12-12",
+        "firstBuy": "2025-12-12",
+        "lastValuation": "2026-03-03",
+        "end": "2026-03-03"
+      },
+      {
+        "start": "2025-12-05",
+        "firstRanking": "2025-12-11",
+        "earliestPossibleBuy": "2025-12-15",
+        "firstBuy": "2025-12-15",
+        "lastValuation": "2026-03-04",
+        "end": "2026-03-04"
+      },
+      {
+        "start": "2025-12-08",
+        "firstRanking": "2025-12-12",
+        "earliestPossibleBuy": "2025-12-16",
+        "firstBuy": "2025-12-16",
+        "lastValuation": "2026-03-07",
+        "end": "2026-03-07"
+      },
+      {
+        "start": "2025-12-09",
+        "firstRanking": "2025-12-15",
+        "earliestPossibleBuy": "2025-12-17",
+        "firstBuy": "2025-12-17",
+        "lastValuation": "2026-03-08",
+        "end": "2026-03-08"
+      },
+      {
+        "start": "2026-02-03",
+        "firstRanking": "2026-02-09",
+        "earliestPossibleBuy": "2026-02-11",
+        "firstBuy": "2026-02-11",
+        "lastValuation": "2026-05-02",
+        "end": "2026-05-02"
+      },
+      {
+        "start": "2026-02-04",
+        "firstRanking": "2026-02-10",
+        "earliestPossibleBuy": "2026-02-12",
+        "firstBuy": "2026-02-12",
+        "lastValuation": "2026-05-03",
+        "end": "2026-05-03"
+      },
+      {
+        "start": "2026-02-05",
+        "firstRanking": "2026-02-11",
+        "earliestPossibleBuy": "2026-02-13",
+        "firstBuy": "2026-02-13",
+        "lastValuation": "2026-05-04",
+        "end": "2026-05-04"
+      },
+      {
+        "start": "2026-02-06",
+        "firstRanking": "2026-02-12",
+        "earliestPossibleBuy": "2026-02-19",
+        "firstBuy": "2026-02-19",
+        "lastValuation": "2026-05-05",
+        "end": "2026-05-05"
+      },
+      {
+        "start": "2026-02-09",
+        "firstRanking": "2026-02-13",
+        "earliestPossibleBuy": "2026-02-20",
+        "firstBuy": "2026-02-20",
+        "lastValuation": "2026-05-08",
+        "end": "2026-05-08"
+      },
+      {
+        "start": "2026-02-10",
+        "firstRanking": "2026-02-19",
+        "earliestPossibleBuy": "2026-02-23",
+        "firstBuy": "2026-02-23",
+        "lastValuation": "2026-05-09",
+        "end": "2026-05-09"
+      },
+      {
+        "start": "2026-02-11",
+        "firstRanking": "2026-02-20",
+        "earliestPossibleBuy": "2026-02-24",
+        "firstBuy": "2026-02-24",
+        "lastValuation": "2026-05-10",
+        "end": "2026-05-10"
+      },
+      {
+        "start": "2026-02-12",
+        "firstRanking": "2026-02-23",
+        "earliestPossibleBuy": "2026-02-25",
+        "firstBuy": "2026-02-25",
+        "lastValuation": "2026-05-11",
+        "end": "2026-05-11"
+      },
+      {
+        "start": "2026-02-13",
+        "firstRanking": "2026-02-24",
+        "earliestPossibleBuy": "2026-02-26",
+        "firstBuy": "2026-02-26",
+        "lastValuation": "2026-05-12",
+        "end": "2026-05-12"
+      },
+      {
+        "start": "2026-02-19",
+        "firstRanking": "2026-02-25",
+        "earliestPossibleBuy": "2026-02-27",
+        "firstBuy": "2026-02-27",
+        "lastValuation": "2026-05-18",
+        "end": "2026-05-18"
+      },
+      {
+        "start": "2026-02-20",
+        "firstRanking": "2026-02-26",
+        "earliestPossibleBuy": "2026-03-03",
+        "firstBuy": "2026-03-03",
+        "lastValuation": "2026-05-19",
+        "end": "2026-05-19"
+      },
+      {
+        "start": "2026-02-23",
+        "firstRanking": "2026-02-27",
+        "earliestPossibleBuy": "2026-03-04",
+        "firstBuy": "2026-03-04",
+        "lastValuation": "2026-05-22",
+        "end": "2026-05-22"
+      },
+      {
+        "start": "2026-02-24",
+        "firstRanking": "2026-03-03",
+        "earliestPossibleBuy": "2026-03-05",
+        "firstBuy": "2026-03-05",
+        "lastValuation": "2026-05-23",
+        "end": "2026-05-23"
+      },
+      {
+        "start": "2026-02-25",
+        "firstRanking": "2026-03-04",
+        "earliestPossibleBuy": "2026-03-06",
+        "firstBuy": "2026-03-06",
+        "lastValuation": "2026-05-24",
+        "end": "2026-05-24"
+      },
+      {
+        "start": "2026-02-26",
+        "firstRanking": "2026-03-05",
+        "earliestPossibleBuy": "2026-03-09",
+        "firstBuy": "2026-03-09",
+        "lastValuation": "2026-05-25",
+        "end": "2026-05-25"
+      },
+      {
+        "start": "2026-02-27",
+        "firstRanking": "2026-03-06",
+        "earliestPossibleBuy": "2026-03-10",
+        "firstBuy": "2026-03-10",
+        "lastValuation": "2026-05-26",
+        "end": "2026-05-26"
+      },
+      {
+        "start": "2026-03-03",
+        "firstRanking": "2026-03-09",
+        "earliestPossibleBuy": "2026-03-11",
+        "firstBuy": "2026-03-11",
+        "lastValuation": "2026-06-02",
+        "end": "2026-06-02"
+      },
+      {
+        "start": "2026-03-05",
+        "firstRanking": "2026-03-11",
+        "earliestPossibleBuy": "2026-03-13",
+        "firstBuy": "2026-03-13",
+        "lastValuation": "2026-06-04",
+        "end": "2026-06-04"
+      },
+      {
+        "start": "2026-03-18",
+        "firstRanking": "2026-03-24",
+        "earliestPossibleBuy": "2026-03-26",
+        "firstBuy": "2026-03-26",
+        "lastValuation": "2026-06-17",
+        "end": "2026-06-17"
+      },
+      {
+        "start": "2026-03-19",
+        "firstRanking": "2026-03-25",
+        "earliestPossibleBuy": "2026-03-27",
+        "firstBuy": "2026-03-27",
+        "lastValuation": "2026-06-18",
+        "end": "2026-06-18"
+      },
+      {
+        "start": "2026-03-20",
+        "firstRanking": "2026-03-26",
+        "earliestPossibleBuy": "2026-03-30",
+        "firstBuy": "2026-03-30",
+        "lastValuation": "2026-06-19",
+        "end": "2026-06-19"
+      },
+      {
+        "start": "2026-04-08",
+        "firstRanking": "2026-04-14",
+        "earliestPossibleBuy": "2026-04-16",
+        "firstBuy": "2026-04-16",
+        "lastValuation": "2026-07-07",
+        "end": "2026-07-07"
+      },
+      {
+        "start": "2026-04-09",
+        "firstRanking": "2026-04-15",
+        "earliestPossibleBuy": "2026-04-17",
+        "firstBuy": "2026-04-17",
+        "lastValuation": "2026-07-08",
+        "end": "2026-07-08"
+      },
+      {
+        "start": "2026-04-10",
+        "firstRanking": "2026-04-16",
+        "earliestPossibleBuy": "2026-04-20",
+        "firstBuy": "2026-04-20",
+        "lastValuation": "2026-07-09",
+        "end": "2026-07-09"
+      },
+      {
+        "start": "2026-04-13",
+        "firstRanking": "2026-04-17",
+        "earliestPossibleBuy": "2026-04-21",
+        "firstBuy": "2026-04-21",
+        "lastValuation": "2026-07-12",
+        "end": "2026-07-12"
+      },
+      {
+        "start": "2026-04-14",
+        "firstRanking": "2026-04-20",
+        "earliestPossibleBuy": "2026-04-22",
+        "firstBuy": "2026-04-22",
+        "lastValuation": "2026-07-13",
+        "end": "2026-07-13"
+      },
+      {
+        "start": "2026-04-15",
+        "firstRanking": "2026-04-21",
+        "earliestPossibleBuy": "2026-04-23",
+        "firstBuy": "2026-04-23",
+        "lastValuation": "2026-07-14",
+        "end": "2026-07-14"
+      },
+      {
+        "start": "2026-04-16",
+        "firstRanking": "2026-04-22",
+        "earliestPossibleBuy": "2026-04-24",
+        "firstBuy": "2026-04-24",
+        "lastValuation": "2026-07-15",
+        "end": "2026-07-15"
+      },
+      {
+        "start": "2026-04-17",
+        "firstRanking": "2026-04-23",
+        "earliestPossibleBuy": "2026-04-27",
+        "firstBuy": "2026-04-27",
+        "lastValuation": "2026-07-16",
+        "end": "2026-07-16"
+      },
+      {
+        "start": "2026-04-20",
+        "firstRanking": "2026-04-24",
+        "earliestPossibleBuy": "2026-04-28",
+        "firstBuy": "2026-04-28",
+        "lastValuation": "2026-07-19",
+        "end": "2026-07-19"
+      },
+      {
+        "start": "2026-04-21",
+        "firstRanking": "2026-04-27",
+        "earliestPossibleBuy": "2026-04-29",
+        "firstBuy": "2026-04-29",
+        "lastValuation": "2026-07-20",
+        "end": "2026-07-20"
+      },
+      {
+        "start": "2026-04-22",
+        "firstRanking": "2026-04-28",
+        "earliestPossibleBuy": "2026-04-30",
+        "firstBuy": "2026-04-30",
+        "lastValuation": "2026-07-21",
+        "end": "2026-07-21"
+      },
+      {
+        "start": "2026-04-23",
+        "firstRanking": "2026-04-29",
+        "earliestPossibleBuy": "2026-05-04",
+        "firstBuy": "2026-05-04",
+        "lastValuation": "2026-07-22",
+        "end": "2026-07-22"
+      },
+      {
+        "start": "2026-04-24",
+        "firstRanking": "2026-04-30",
+        "earliestPossibleBuy": "2026-05-06",
+        "firstBuy": "2026-05-06",
+        "lastValuation": "2026-07-23",
+        "end": "2026-07-23"
+      },
+      {
+        "start": "2026-04-27",
+        "firstRanking": "2026-05-04",
+        "earliestPossibleBuy": "2026-05-07",
+        "firstBuy": "2026-05-07",
+        "lastValuation": "2026-07-26",
+        "end": "2026-07-26"
+      },
+      {
+        "start": "2026-04-28",
+        "firstRanking": "2026-05-06",
+        "earliestPossibleBuy": "2026-05-08",
+        "firstBuy": "2026-05-08",
+        "lastValuation": "2026-07-27",
+        "end": "2026-07-27"
+      },
+      {
+        "start": "2026-04-29",
+        "firstRanking": "2026-05-07",
+        "earliestPossibleBuy": "2026-05-11",
+        "firstBuy": "2026-05-11",
+        "lastValuation": "2026-07-28",
+        "end": "2026-07-28"
+      },
+      {
+        "start": "2026-05-04",
+        "firstRanking": "2026-05-11",
+        "earliestPossibleBuy": "2026-05-13",
+        "firstBuy": "2026-05-13",
+        "lastValuation": "2026-08-03",
+        "end": "2026-08-03"
+      },
+      {
+        "start": "2026-05-06",
+        "firstRanking": "2026-05-12",
+        "earliestPossibleBuy": "2026-05-14",
+        "firstBuy": "2026-05-14",
+        "lastValuation": "2026-08-05",
+        "end": "2026-08-05"
+      },
+      {
+        "start": "2026-05-07",
+        "firstRanking": "2026-05-13",
+        "earliestPossibleBuy": "2026-05-15",
+        "firstBuy": "2026-05-15",
+        "lastValuation": "2026-08-06",
+        "end": "2026-08-06"
+      },
+      {
+        "start": "2026-05-08",
+        "firstRanking": "2026-05-14",
+        "earliestPossibleBuy": "2026-05-18",
+        "firstBuy": "2026-05-18",
+        "lastValuation": "2026-08-07",
+        "end": "2026-08-07"
+      },
+      {
+        "start": "2026-05-11",
+        "firstRanking": "2026-05-15",
+        "earliestPossibleBuy": "2026-05-19",
+        "firstBuy": "2026-05-19",
+        "lastValuation": "2026-08-10",
+        "end": "2026-08-10"
+      },
+      {
+        "start": "2026-05-12",
+        "firstRanking": "2026-05-18",
+        "earliestPossibleBuy": "2026-05-20",
+        "firstBuy": "2026-05-20",
+        "lastValuation": "2026-08-11",
+        "end": "2026-08-11"
+      },
+      {
+        "start": "2026-05-13",
+        "firstRanking": "2026-05-19",
+        "earliestPossibleBuy": "2026-05-21",
+        "firstBuy": "2026-05-21",
+        "lastValuation": "2026-08-12",
+        "end": "2026-08-12"
+      },
+      {
+        "start": "2026-05-14",
+        "firstRanking": "2026-05-20",
+        "earliestPossibleBuy": "2026-05-22",
+        "firstBuy": "2026-05-22",
+        "lastValuation": "2026-08-13",
+        "end": "2026-08-13"
+      },
+      {
+        "start": "2026-05-15",
+        "firstRanking": "2026-05-21",
+        "earliestPossibleBuy": "2026-05-26",
+        "firstBuy": "2026-05-26",
+        "lastValuation": "2026-08-14",
+        "end": "2026-08-14"
+      }
+    ]
+  }
+]

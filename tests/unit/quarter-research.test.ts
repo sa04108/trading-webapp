@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { runBacktest } from '../../src/server/modules/backtest/domain/engine.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import type { AnyTradingStrategy } from '../../src/server/modules/strategy/domain/strategy.js';
-import { addMonths, delistingsThrough, parseAccountStopPct, quarterWindows, withQuarterRisk } from '../../scripts/quarter-research/quarter-engine.js';
+import { addMonths, delistingsThrough, parseAccountStopPct, quarterWindows, rebalanceDates, withQuarterRisk } from '../../scripts/quarter-research/quarter-engine.js';
 
 describe('3개월 연구의 기간과 실현 목표', () => {
   it('월말과 윤년을 포함해 3개월을 달력으로 계산한다', () => {
@@ -25,6 +25,36 @@ describe('3개월 연구의 기간과 실현 목표', () => {
     for (const value of [null, '20', 0, -1, 100, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(() => parseAccountStopPct(value)).toThrow('계좌 낙폭 중단');
     }
+  });
+
+  it('휴일을 만들지 않고 순위 선정 일정만 옮긴다', () => {
+    const days = ['2026-05-04', '2026-05-06', '2026-05-07', '2026-05-08', '2026-05-11', '2026-05-12'];
+    expect(rebalanceDates(days, 3)).toEqual([days[0], days[3]]);
+    expect(rebalanceDates(days, 3, 1)).toEqual([days[1], days[4]]);
+    expect(rebalanceDates(days, 3, 2)).toEqual([days[2], days[5]]);
+    expect(days.at(-1)).toBe('2026-05-12');
+    for (const offset of [null, '1', -1, .5, 3, Number.NaN]) {
+      expect(() => rebalanceDates(days, 3, offset)).toThrow('순위 선정 이동');
+    }
+    expect(() => rebalanceDates(days.slice(0, 2), 20, 2)).toThrow('거래일이 없습니다');
+    expect(() => rebalanceDates(days, 0)).toThrow('회전 주기');
+  });
+
+  it('옮긴 최초 신호 이전에는 주문이 없고 다음 실제 시가에 체결한다', () => {
+    const dates = ['2026-05-04', '2026-05-06', '2026-05-07', '2026-05-08', '2026-05-11'];
+    const ts = dates.map((d) => Date.parse(d));
+    const candles: Candle[] = ts.map((tsMs) => ({ symbol: 'A', tsMs, market: 'KR', venue: 'KOSPI', timeframe: '1d',
+      open: 100, high: 100, low: 100, close: 100, volume: 100000 }));
+    const strategy: AnyTradingStrategy = { id: 'shift-fixture', version: '1', name: '일정 검증', description: '일정 이전 주문 차단',
+      parameterSchema: z.object({}), initialize: () => ({}), onBars: (c) => ({ orders: c.isRebalanceBar ? [{ symbol: 'A', side: 'BUY', quantity: 1 }] : [] }) };
+    const result = runBacktest(strategy, { candles, initialCash: 10000, parameters: {}, maxPositions: 1, randomSeed: 204,
+      tradeFromTsMs: ts[0]!, resultPeriod: { fromTsMs: ts[0]!, toTsMs: ts.at(-1)! }, marketTradingTsMs: ts,
+      universeSchedule: rebalanceDates(dates, 20, 2).map((d) => ({ fromTsMs: Date.parse(d), symbols: ['A'] })),
+      execution: { cost: { id: 'test', version: '1', buyCommissionRate: 0, sellCommissionRate: 0, sellTaxRate: 0 },
+        slippage: { id: 'test', version: '1', bps: 0, fixed: 0 }, rules: { tickSize: 0, minOrderQty: 1 } } });
+    expect(result.fills).toHaveLength(1);
+    expect(result.fills[0]?.tsMs).toBe(ts[3]);
+    expect(result.equityPoints.at(-1)?.tsMs).toBe(ts.at(-1));
   });
 
   const buyer: AnyTradingStrategy = {
