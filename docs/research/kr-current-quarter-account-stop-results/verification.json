@@ -1,0 +1,83 @@
+{
+  "asof": "2026-09-08",
+  "baseCommit": "d5995a2",
+  "status": "기본·조건 문턱·비용 기준 통과, 우선 연구 후보 15%, 최종 채택 보류",
+  "checks": [
+    {
+      "command": "pnpm exec vitest run tests/unit/quarter-research.test.ts tests/unit/recovery-quarter.test.ts tests/unit/uncertain-history-quarter.test.ts tests/unit/confirmed-entry-quarter.test.ts",
+      "exitCode": 0,
+      "testFiles": 4,
+      "tests": 16,
+      "processSession": 1232
+    },
+    {
+      "command": "pnpm exec eslint scripts/quarter-research/*.ts tests/unit/quarter-research.test.ts tests/unit/recovery-quarter.test.ts tests/unit/uncertain-history-quarter.test.ts tests/unit/confirmed-entry-quarter.test.ts",
+      "exitCode": 0,
+      "processSession": 28600
+    },
+    {
+      "command": "pnpm exec tsc -p tsconfig.server.json --noEmit",
+      "exitCode": 0,
+      "processSession": 58537
+    },
+    {
+      "command": "python -m py_compile scripts/quarter-research/build_account_stop_evidence.py scripts/quarter-research/build_account_stop_diagnostics.py",
+      "exitCode": 0
+    },
+    {
+      "command": "python scripts/quarter-research/build_account_stop_evidence.py data/kr-quarter-research data/kr-quarter-research/account-stop/evidence",
+      "exitCode": 0,
+      "newExperiments": 4,
+      "newAccounts": 154,
+      "reusedAccounts": 77,
+      "processSession": 55324
+    },
+    {
+      "command": "python scripts/quarter-research/build_account_stop_diagnostics.py data/kr-quarter-research data/kr-quarter-research/account-stop/diagnostics",
+      "exitCode": 0,
+      "additionalExperiments": 18,
+      "additionalAccounts": 580,
+      "totalNewAccounts": 734,
+      "totalReusedAccounts": 108,
+      "processSession": 22337
+    },
+    {
+      "check": "옵션 생략 대표 2024-01-02 계좌와 원래 결과의 바이트 대조",
+      "exitCode": 0,
+      "identical": true,
+      "sha256": "ffd16f51a1e557555c4d2f15624cb84bfc7c0d140629fdef06d0c54e0ec3e47c",
+      "processSession": 49465
+    },
+    {
+      "check": "현재 입력 해시와 종가 시그널·선정 5종목의 사건 이후 21개 실제 일봉 수익 재계산",
+      "exitCode": 0,
+      "asof": "2026-09-08",
+      "signalCount": 5,
+      "noFutureFills": true,
+      "processSession": 83686
+    }
+  ],
+  "nativeTradingCodeChanged": false,
+  "researchChange": "accountStopPct 옵션 검증과 계좌 위험 값 전달; 기본 10% 및 기존 출력 유지",
+  "outstanding": [
+    "전체 연구 규칙의 체결 시드 변화와 리밸런싱 일정 검증",
+    "2011년 비중첩 실패·작은 표본·반복 탐색 한계",
+    "실제 자금 규모와 사용자 손실 허용 범위 미확정"
+  ],
+  "currentSourceSha256": {
+    "input": "78ea7d3d2fbb1e0f81735b31094feed5a843feb0f41a0f8fbc9ea4a3f769ea1f",
+    "signals": "d8c5baa2766eacf63f3c221a18cc81cc6ba234da261cf7a629a3dbb2add81e14"
+  },
+  "publicFilesSha256": {
+    "all-diagnostics.csv": "05f2edab4a636096e72ba4d9392200f33070196ca74546a796b688cec631a6de",
+    "all-summaries.csv": "9513482bc06093c59d3d32161cbf6ed8c88db4e773308e92ba25eb8533e04239",
+    "conditions.csv": "e3f1f18e39d1df46157f07708fc3f40bc1c7201d88e58a432d9f66b11aa16bfb",
+    "current-signal-audit.json": "108ab17a5052d3291b2d91beab2cabeae7e0afdf42cb0a1f4c2a08c7eaa07941",
+    "current-targets.json": "b9199b0cb141a37cad5c1e5011eb38cd7097040d41ff30ce1f5bc95596033311",
+    "diagnostics-evidence-manifest.json": "2933b9e409646364f0ae5087237154911de25dc56d1f1ef748c69c79812f3ef3",
+    "evidence-manifest.json": "4aae1e4ad51cf18b7f80e099b244e7974418bc6178824c49a39729a060e45f15",
+    "nonoverlapping-accounts.json": "e17a44533ca40bce187189b8545ee7e10a304d574c7c2572ea62ce7bc158820f",
+    "nonoverlapping-diagnostics.json": "f69bcb5b72ff259ee852d0a06c3a3f94c8548d62aa07976214209319d2f3349c",
+    "paired-accounts.json": "9ea97b72ab304fde4f7c48ccf21b4f365887ff8e5b634645cfe286ba52b09891"
+  }
+}

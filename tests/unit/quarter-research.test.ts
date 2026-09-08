@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { runBacktest } from '../../src/server/modules/backtest/domain/engine.js';
 import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
 import type { AnyTradingStrategy } from '../../src/server/modules/strategy/domain/strategy.js';
-import { addMonths, delistingsThrough, quarterWindows, withQuarterRisk } from '../../scripts/quarter-research/quarter-engine.js';
+import { addMonths, delistingsThrough, parseAccountStopPct, quarterWindows, withQuarterRisk } from '../../scripts/quarter-research/quarter-engine.js';
 
 describe('3개월 연구의 기간과 실현 목표', () => {
   it('월말과 윤년을 포함해 3개월을 달력으로 계산한다', () => {
@@ -16,6 +16,15 @@ describe('3개월 연구의 기간과 실현 목표', () => {
     const days = ['2023-09-01', '2023-09-04', '2023-10-02', '2023-11-01', '2023-11-30', '2023-12-01', '2024-01-02'];
     const windows = quarterWindows(days, '2023-01-01', '2023-12-31');
     expect(windows.map((w) => [w.start, w.end])).toEqual([['2023-09-01', '2023-11-30']]);
+  });
+
+  it('중단 기준을 생략하면 10%를 유지하고 잘못된 값은 거부한다', () => {
+    expect(parseAccountStopPct()).toBe(10);
+    expect(parseAccountStopPct(15)).toBe(15);
+    expect(parseAccountStopPct(20)).toBe(20);
+    for (const value of [null, '20', 0, -1, 100, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => parseAccountStopPct(value)).toThrow('계좌 낙폭 중단');
+    }
   });
 
   const buyer: AnyTradingStrategy = {
@@ -68,6 +77,17 @@ describe('3개월 연구의 기간과 실현 목표', () => {
     expect(result.openPositions).toHaveLength(1);
     expect(result.trades).toHaveLength(0);
     expect(result.equityPoints.at(-1)?.tsMs).toBe(end);
+  });
+
+  it('완화한 중단 기준은 같은 하락 경로의 청산 시점을 바꾼다', () => {
+    const prices: [number, number][] = [[100, 100], [100, 105], [100, 90], [88, 90], [150, 150], [150, 150]];
+    const tight = run(prices, parseAccountStopPct());
+    const loose = run(prices, parseAccountStopPct(20));
+    expect(tight.events[0]?.reason).toBe('계좌 낙폭 중단');
+    expect(loose.events[0]?.reason).toBe('계좌 목표 청산');
+    expect(loose.result.trades[0]?.exitTsMs).toBe(loose.days[5]);
+    expect(loose.result.metrics.totalReturnPct).toBeCloseTo(45);
+    expect(loose.result.openPositions).toHaveLength(0);
   });
 
   it('낙폭 중단 이후 반등해도 같은 계좌에서 재진입하지 않는다', () => {

@@ -1,0 +1,181 @@
+{
+  "asof": "2026-09-08",
+  "inputSha256": "78ea7d3d2fbb1e0f81735b31094feed5a843feb0f41a0f8fbc9ea4a3f769ea1f",
+  "signalSha256": "d8c5baa2766eacf63f3c221a18cc81cc6ba234da261cf7a629a3dbb2add81e14",
+  "candidate": {
+    "id": "momentum-20-5-monthly",
+    "strategyId": "cross-sectional-momentum",
+    "topN": 5,
+    "rebalanceBars": 20,
+    "parameters": {
+      "formationDays": 20,
+      "skipDays": 0,
+      "topN": 5
+    }
+  },
+  "accountStopPctCandidates": [
+    15,
+    20
+  ],
+  "targetSignalPct": 10.5,
+  "netTargetPct": 10,
+  "initialCash": 100000000,
+  "startCondition": {
+    "volatility30": true,
+    "positiveReturn20": true,
+    "aboveSma20": true
+  },
+  "macro": {
+    "date": "2026-09-08",
+    "tsMs": 1788825600000,
+    "kospi": 6954.52,
+    "kosdaq": 811.88,
+    "kospiSma20": 6760.334,
+    "kospiRet20": 0.1039516418346389,
+    "kospiSma60": 7192.3876666666665,
+    "kospiRet60": -0.1439136739532375,
+    "kospiSma120": 6984.315083333334,
+    "kospiRet120": 0.2531005342486734,
+    "kosdaqRet60": -0.21103930809970362,
+    "kospiVol20": 0.45445638705263447,
+    "kospiDrawdown60": -0.23698701526679855,
+    "breadth60": 0.5714285714285714,
+    "oil": 96.02,
+    "oilDate": "2026-09-01",
+    "oilRet20": 0.08008998875140594,
+    "wti": 91.48,
+    "wtiDate": "2026-09-01",
+    "wtiRet20": 0.11615422157149835,
+    "fx": 1379.41,
+    "fxDate": "2026-08-28",
+    "fxRet20": -0.03570804409677797,
+    "fed": 3.63,
+    "fedDate": "2026-09-01",
+    "fedRet20": 0.0,
+    "us10y": 4.79,
+    "us10yDate": "2026-09-01",
+    "us10yRet20": 0.019148936170212627,
+    "vix": 14.53,
+    "vixDate": "2026-09-04",
+    "rate": 3.0,
+    "rateDate": "2026-08-27",
+    "rateChange60": 0.5
+  },
+  "targets": [
+    {
+      "symbol": "000500",
+      "name": "가온전선",
+      "close": 227500,
+      "return20": 0.4536741214057507,
+      "annualVol20": 0.9567100472666944,
+      "adv20": 43147572040,
+      "lastBarTsMs": 1788825600000,
+      "indicativeWeight": 0.2
+    },
+    {
+      "symbol": "052690",
+      "name": "한전기술",
+      "close": 142600,
+      "return20": 0.4132804757185331,
+      "annualVol20": 1.1386913948208468,
+      "adv20": 58849909470,
+      "lastBarTsMs": 1788825600000,
+      "indicativeWeight": 0.2
+    },
+    {
+      "symbol": "181710",
+      "name": "NHN",
+      "close": 59900,
+      "return20": 0.43473053892215563,
+      "annualVol20": 1.4749764046761817,
+      "adv20": 25958332605,
+      "lastBarTsMs": 1788825600000,
+      "indicativeWeight": 0.2
+    },
+    {
+      "symbol": "336260",
+      "name": "두산퓨얼셀",
+      "close": 49250,
+      "return20": 0.4767616191904047,
+      "annualVol20": 1.0601338165696048,
+      "adv20": 49564737430,
+      "lastBarTsMs": 1788825600000,
+      "indicativeWeight": 0.2
+    },
+    {
+      "symbol": "403870",
+      "name": "HPSP",
+      "close": 53300,
+      "return20": 0.4424898511502029,
+      "annualVol20": 0.6197626979523848,
+      "adv20": 130585472992.5,
+      "lastBarTsMs": 1788825600000,
+      "indicativeWeight": 0.2
+    }
+  ],
+  "historyQuarantines": [
+    {
+      "symbol": "000500",
+      "date": "2026-06-30",
+      "ratio": 1.7995827371134585,
+      "type": "unresolved"
+    },
+    {
+      "symbol": "000880",
+      "date": "2026-08-25",
+      "ratio": 0.8330065703273688,
+      "type": "unresolved"
+    },
+    {
+      "symbol": "009830",
+      "date": "2026-06-15",
+      "ratio": 1.060179114471445,
+      "type": "unresolved"
+    },
+    {
+      "symbol": "011790",
+      "date": "2026-04-06",
+      "ratio": 1.063902107409925,
+      "type": "unresolved"
+    },
+    {
+      "symbol": "018880",
+      "date": "2025-11-13",
+      "ratio": 1.0758897006834787,
+      "type": "unresolved"
+    },
+    {
+      "symbol": "068270",
+      "date": "2026-06-04",
+      "ratio": 1.049135908535175,
+      "type": "unresolved"
+    },
+    {
+      "symbol": "196170",
+      "date": "2026-08-05",
+      "ratio": 1.2996306745741242,
+      "type": "unresolved"
+    },
+    {
+      "symbol": "207940",
+      "date": "2025-11-24",
+      "ratio": 0.6794659081930947,
+      "type": "unresolved"
+    },
+    {
+      "symbol": "010120",
+      "date": "2026-04-13",
+      "ratio": 5,
+      "type": "inferred-unit-change"
+    },
+    {
+      "symbol": "347850",
+      "date": "2025-11-13",
+      "ratio": 4,
+      "type": "inferred-unit-change"
+    }
+  ],
+  "note": "현재 종가의 목표 선정만 확인. 다음 종가의 거래 가능 상태·가격 확인과 이후 시가 체결을 거치므로 20%는 지시 비중이며 실제 체결 비중은 달라질 수 있다. 실거래 주문은 없다.",
+  "preferredResearchAccountStopPct": 15,
+  "adoption": "최종 채택 전 체결 시드·리밸런싱 일정 확인 필요"
+}

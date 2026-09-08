@@ -1,0 +1,200 @@
+[
+  {
+    "directory": "account-stop/stop10-development",
+    "stage": "development",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "account-stop-candidate.json",
+    "options": "account-stop-stop10-development-options.json",
+    "slippageBps": 5,
+    "seed": 204,
+    "accountStopPct": 10,
+    "diagnostic": "development"
+  },
+  {
+    "directory": "account-stop/stop10-earlier",
+    "stage": "earlier",
+    "input": "earlier/stock-200-input.json.gz",
+    "selection": "account-stop-candidate.json",
+    "options": "account-stop-stop10-earlier-options.json",
+    "slippageBps": 5,
+    "seed": 204,
+    "accountStopPct": 10,
+    "diagnostic": "earlier"
+  },
+  {
+    "directory": "account-stop/stop15-development",
+    "stage": "development",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "account-stop-candidate.json",
+    "options": "account-stop-stop15-development-options.json",
+    "slippageBps": 5,
+    "seed": 204,
+    "accountStopPct": 15,
+    "diagnostic": "development"
+  },
+  {
+    "directory": "account-stop/stop15-earlier",
+    "stage": "earlier",
+    "input": "earlier/stock-200-input.json.gz",
+    "selection": "account-stop-candidate.json",
+    "options": "account-stop-stop15-earlier-options.json",
+    "slippageBps": 5,
+    "seed": 204,
+    "accountStopPct": 15,
+    "diagnostic": "earlier"
+  },
+  {
+    "directory": "account-stop/stop20-development",
+    "stage": "development",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "account-stop-candidate.json",
+    "options": "account-stop-stop20-development-options.json",
+    "slippageBps": 5,
+    "seed": 204,
+    "accountStopPct": 20,
+    "diagnostic": "development"
+  },
+  {
+    "directory": "account-stop/stop20-earlier",
+    "stage": "earlier",
+    "input": "earlier/stock-200-input.json.gz",
+    "selection": "account-stop-candidate.json",
+    "options": "account-stop-stop20-earlier-options.json",
+    "slippageBps": 5,
+    "seed": 204,
+    "accountStopPct": 20,
+    "diagnostic": "earlier"
+  },
+  {
+    "directory": "account-stop/stop15-extra25-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "account-stop-candidate.json",
+    "options": "account-stop-stop15-extra25-validation-options.json",
+    "slippageBps": 5,
+    "seed": 204,
+    "accountStopPct": 15,
+    "diagnostic": "extra25"
+  },
+  {
+    "directory": "account-stop/stop15-cost10-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "account-stop-candidate.json",
+    "options": "account-stop-stop15-cost10-validation-options.json",
+    "slippageBps": 10,
+    "seed": 204,
+    "accountStopPct": 15,
+    "diagnostic": "cost"
+  },
+  {
+    "directory": "account-stop/stop15-cost20-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "account-stop-candidate.json",
+    "options": "account-stop-stop15-cost20-validation-options.json",
+    "slippageBps": 20,
+    "seed": 204,
+    "accountStopPct": 15,
+    "diagnostic": "cost"
+  },
+  {
+    "directory": "account-stop/stop15-extra25-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "account-stop-candidate.json",
+    "options": "account-stop-stop15-extra25-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 204,
+    "accountStopPct": 15,
+    "diagnostic": "extra25"
+  },
+  {
+    "directory": "account-stop/stop15-cost10-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "account-stop-candidate.json",
+    "options": "account-stop-stop15-cost10-confirmation-options.json",
+    "slippageBps": 10,
+    "seed": 204,
+    "accountStopPct": 15,
+    "diagnostic": "cost"
+  },
+  {
+    "directory": "account-stop/stop15-cost20-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "account-stop-candidate.json",
+    "options": "account-stop-stop15-cost20-confirmation-options.json",
+    "slippageBps": 20,
+    "seed": 204,
+    "accountStopPct": 15,
+    "diagnostic": "cost"
+  },
+  {
+    "directory": "account-stop/stop20-extra25-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "account-stop-candidate.json",
+    "options": "account-stop-stop20-extra25-validation-options.json",
+    "slippageBps": 5,
+    "seed": 204,
+    "accountStopPct": 20,
+    "diagnostic": "extra25"
+  },
+  {
+    "directory": "account-stop/stop20-cost10-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "account-stop-candidate.json",
+    "options": "account-stop-stop20-cost10-validation-options.json",
+    "slippageBps": 10,
+    "seed": 204,
+    "accountStopPct": 20,
+    "diagnostic": "cost"
+  },
+  {
+    "directory": "account-stop/stop20-cost20-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "account-stop-candidate.json",
+    "options": "account-stop-stop20-cost20-validation-options.json",
+    "slippageBps": 20,
+    "seed": 204,
+    "accountStopPct": 20,
+    "diagnostic": "cost"
+  },
+  {
+    "directory": "account-stop/stop20-extra25-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "account-stop-candidate.json",
+    "options": "account-stop-stop20-extra25-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 204,
+    "accountStopPct": 20,
+    "diagnostic": "extra25"
+  },
+  {
+    "directory": "account-stop/stop20-cost10-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "account-stop-candidate.json",
+    "options": "account-stop-stop20-cost10-confirmation-options.json",
+    "slippageBps": 10,
+    "seed": 204,
+    "accountStopPct": 20,
+    "diagnostic": "cost"
+  },
+  {
+    "directory": "account-stop/stop20-cost20-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "account-stop-candidate.json",
+    "options": "account-stop-stop20-cost20-confirmation-options.json",
+    "slippageBps": 20,
+    "seed": 204,
+    "accountStopPct": 20,
+    "diagnostic": "cost"
+  }
+]

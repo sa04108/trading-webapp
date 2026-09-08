@@ -1,0 +1,25 @@
+{
+  "resetUncertainHistory": true,
+  "starts": [
+    "2025-05-08",
+    "2025-05-09",
+    "2025-11-05",
+    "2025-11-06",
+    "2025-11-07",
+    "2025-11-10",
+    "2025-11-11",
+    "2025-11-12",
+    "2025-11-13",
+    "2025-12-12",
+    "2025-12-15",
+    "2025-12-17",
+    "2026-04-30"
+  ],
+  "dateSelection": {
+    "minimumVolatility": 0.25,
+    "positiveReturn20": true,
+    "aboveSma20": true,
+    "inputSha256": "e057c3e60a06d181bf9715380a32b0ef343590b495adad2562ac15c414b6d5c7"
+  },
+  "accountStopPct": 20
+}

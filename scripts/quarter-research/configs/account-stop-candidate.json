@@ -1,0 +1,13 @@
+[
+  {
+    "id": "momentum-20-5-monthly",
+    "strategyId": "cross-sectional-momentum",
+    "topN": 5,
+    "rebalanceBars": 20,
+    "parameters": {
+      "formationDays": 20,
+      "skipDays": 0,
+      "topN": 5
+    }
+  }
+]

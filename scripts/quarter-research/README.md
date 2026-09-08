@@ -180,3 +180,22 @@ python scripts/quarter-research/build_earlier_evidence.py data/kr-quarter-resear
 ```
 
 집계 전에는 실험 목록의 `primary`·`extra25` 두 출력 경로를 모두 완료해야 한다. 위 `reproduction-primary` 예시는 별도 계좌 재현용이다. 입력 생성기는 25·30·35% 전체 옵션을 다시 만들며, 25% 전용 추가 옵션은 25% 시작일에서 30% 시작일을 뺀 고정 파일이다. 바이트 재현에는 보존 원문, 같은 출력 파일명과 동일한 의존성 버전을 쓴다. 원자료는 Git에서 제외하며 공개 요약만 저장한다.
+
+
+## 계좌 낙폭 중단 가정 비교
+
+`configs/account-stop-experiments.json`은 기존 20일·5종목·20봉 회전 모멘텀에 계좌 중단 15·20%를 적용한 4개 실행·154개 계좌다. `accountStopPct` 옵션을 생략하면 기존 10%와 원래 출력 형식을 유지한다. 0 이하·100 이상·유한하지 않은 값·숫자가 아닌 값은 실행 전에 거부한다. 기존 10% 조건부 계좌 77개는 재사용한다.
+
+```bash
+node --import tsx scripts/quarter-research/quarter-engine.ts data/kr-quarter-research/expanded/stock-200-verified-input.json.gz data/kr-quarter-research/account-stop/reproduction-stop15-confirmation confirmation scripts/quarter-research/configs/account-stop-candidate.json 5 204 0 100000000 scripts/quarter-research/configs/account-stop-15-confirmation-options.json
+python scripts/quarter-research/build_account_stop_evidence.py data/kr-quarter-research data/kr-quarter-research/account-stop/evidence
+```
+
+두 값이 고정 진행 기준을 통과해 `account-stop-diagnostics-experiments.json`의 추가 18개 실행·580개 계좌를 진행했다. 개발 월간·2011년에는 기존 이력 처리와 같은 기준의 10% 대조군도 새로 실행한다. 25% 추가 날짜는 30% 계좌와 겹치지 않는 날짜만 실행하고, 35%는 부분집합을 다시 집계한다. `account-stop-condition-dates.json`에 문턱별 전체 날짜를 고정했다. 비용 평가는 원래 30% 날짜에서 슬리피지 10·20bp를 각각 적용한다.
+
+```bash
+python scripts/quarter-research/build_account_stop_diagnostics.py data/kr-quarter-research data/kr-quarter-research/account-stop/diagnostics
+node --import tsx scripts/quarter-research/current-signals.ts data/kr-quarter-research/expanded/current-stock-input.json.gz scripts/quarter-research/configs/account-stop-candidate.json data/kr-quarter-research/account-stop/current-signals.json
+```
+
+집계 전 두 실험 목록의 모든 입력·출력·단계·비용·시드·옵션 조합을 지정 경로에서 완료해야 한다. 기본 집계 후 후속 집계를 실행한다. 위 `reproduction-*`는 전체 집계와 다른 별도 재현 경로다. 현재 신호는 두 중단 설정에서 최초 선정 종목이 같으며 계좌 중단 옵션은 이후 보유 경로에 작용한다. 조건별 성과·과거 실패·실제 낙폭·현재 선정과 검증 기록은 [계좌 중단 비교](../../docs/research/kr-current-quarter-account-stop-findings.md)에 있다.

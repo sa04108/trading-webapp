@@ -112,6 +112,14 @@ export function windowsFromStarts(days: readonly string[], from: string, to: str
   });
 }
 
+/** 생략한 계좌 중단 기준은 유지하고 잘못된 위험 설정은 실행 전에 거부한다. */
+export function parseAccountStopPct(value: unknown = 10): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value >= 100) {
+    throw new Error('계좌 낙폭 중단은 0 초과 100 미만의 백분율이어야 합니다');
+  }
+  return value;
+}
+
 export interface QuarterRisk {
   initialCash: number;
   tradeFromTsMs: number;
@@ -189,7 +197,8 @@ export function main(argv: string[]) {
   const [from, to] = STAGES[stage as keyof typeof STAGES];
   const effectiveTo = input.asof < to ? input.asof : to;
   const optionsBytes = optionsPath ? readFileSync(optionsPath) : null;
-  const options = optionsBytes ? JSON.parse(optionsBytes.toString()) as { starts?: string[]; resetUncertainHistory?: boolean; activationConfirmationBars?: number } : {};
+  const options = optionsBytes ? JSON.parse(optionsBytes.toString()) as { starts?: string[]; resetUncertainHistory?: boolean; activationConfirmationBars?: number; accountStopPct?: number } : {};
+  const accountStopPct = parseAccountStopPct(options.accountStopPct);
   const researchOptions = optionsBytes ? { options, optionsSha256: createHash('sha256').update(optionsBytes).digest('hex') } : {};
   const allWindows = options.starts ? windowsFromStarts(input.days, from, effectiveTo, options.starts, true)
     : quarterWindows(input.days, from, effectiveTo);
@@ -232,7 +241,7 @@ export function main(argv: string[]) {
       const toTsMs = Date.parse(window.end);
       const warmupTs = fromTsMs - 400 * 86_400_000;
       const risk = { initialCash, tradeFromTsMs: fromTsMs,
-        lastSignalTsMs: Date.parse(window.tradingDays.at(-2)!), targetPct: 10.5, stopPct: 10 };
+        lastSignalTsMs: Date.parse(window.tradingDays.at(-2)!), targetPct: 10.5, stopPct: accountStopPct };
       const history = options.resetUncertainHistory ? withUncertainHistory(base, input.uncertainActions ?? [], fromTsMs) : null;
       const activation = options.activationConfirmationBars === undefined ? null
         : withConfirmedEntry(history?.strategy ?? base, input.macro, fromTsMs, options.activationConfirmationBars);

@@ -1,0 +1,44 @@
+[
+  {
+    "symbol": "000500",
+    "signalWindowStart": "2026-08-10",
+    "signalBars": 21,
+    "signalUsesOnlyActualBarsAfterQuarantinedEvent": true,
+    "pastEvents": [
+      {
+        "symbol": "000500",
+        "date": "2026-06-30",
+        "ratio": 1.7995827371134585,
+        "type": "unresolved"
+      }
+    ]
+  },
+  {
+    "symbol": "052690",
+    "signalWindowStart": "2026-08-10",
+    "signalBars": 21,
+    "signalUsesOnlyActualBarsAfterQuarantinedEvent": true,
+    "pastEvents": []
+  },
+  {
+    "symbol": "181710",
+    "signalWindowStart": "2026-08-10",
+    "signalBars": 21,
+    "signalUsesOnlyActualBarsAfterQuarantinedEvent": true,
+    "pastEvents": []
+  },
+  {
+    "symbol": "336260",
+    "signalWindowStart": "2026-08-10",
+    "signalBars": 21,
+    "signalUsesOnlyActualBarsAfterQuarantinedEvent": true,
+    "pastEvents": []
+  },
+  {
+    "symbol": "403870",
+    "signalWindowStart": "2026-08-10",
+    "signalBars": 21,
+    "signalUsesOnlyActualBarsAfterQuarantinedEvent": true,
+    "pastEvents": []
+  }
+]

@@ -1,0 +1,42 @@
+[
+  {
+    "directory": "account-stop/stop15-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "account-stop-candidate.json",
+    "options": "account-stop-15-validation-options.json",
+    "slippageBps": 5,
+    "seed": 204,
+    "accountStopPct": 15
+  },
+  {
+    "directory": "account-stop/stop15-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "account-stop-candidate.json",
+    "options": "account-stop-15-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 204,
+    "accountStopPct": 15
+  },
+  {
+    "directory": "account-stop/stop20-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "account-stop-candidate.json",
+    "options": "account-stop-20-validation-options.json",
+    "slippageBps": 5,
+    "seed": 204,
+    "accountStopPct": 20
+  },
+  {
+    "directory": "account-stop/stop20-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "account-stop-candidate.json",
+    "options": "account-stop-20-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 204,
+    "accountStopPct": 20
+  }
+]
