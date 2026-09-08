@@ -340,3 +340,12 @@ pnpm exec vitest run tests/unit/current-quarter-signals.test.ts tests/unit/rank-
 ```
 
 감사는 기존 현재 신호의 바이트 재현, 앞서 검증한 월별 종목군·입력 해시, 현재 상위 다섯 종목의 원문 21개 가격과 점수를 확인한다. 고변동 반등 조건은 별도로 대조하며, 그 조건의 충족을 수익 전망으로 표시하지 않는다. 합성 입력의 테스트에서는 실제 분기 엔진의 선정·다음 거래 봉 매수 판단·그 다음 봉 체결을 구분한다. 현재 가격을 연장해 미래 봉을 만들지 않는다. [현재 신호 결과](../../docs/research/kr-current-quarter-rank-retention-current-findings.md)에 관찰 범위와 남은 표본·자료 한계를 기록했다.
+
+
+## 최대 손실 전환의 원본 손익 분해
+
+```bash
+python scripts/quarter-research/audit_rank_retention_failure.py docs/research/kr-current-quarter-rank-retention-neighbors-results/extreme-account-audit.json data/kr-quarter-research/rank-retention-disposition/failure-attribution.json
+```
+
+이 감사는 보존된 최대 손실 전환 사례만 사후 분해한다. 같은 입력·옵션·위험·시드·기간, 단일 매수·전량 매도, 공통 종목의 최초 매수 동일성, 순현금과 계좌 수익 차이를 확인한다. 슬리피지를 체결 총액에서 다시 차감하지 않는다. 새 전략 성과나 인과 효과를 추정하지 않는다. [현재 목표의 판단과 남은 자료 의존성](../../docs/research/kr-current-quarter-disposition.md)에 현재 채택 미달과 공식 가격 대조의 승인 의존성을 기록했다.

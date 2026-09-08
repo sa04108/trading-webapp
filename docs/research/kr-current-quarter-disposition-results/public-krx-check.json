@@ -1,0 +1,14 @@
+{
+  "requestedDate": "20260908",
+  "url": "https://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd",
+  "requestMethod": "POST",
+  "authenticationUsed": false,
+  "productionEnvironmentAccessed": false,
+  "httpStatus": 400,
+  "errorType": "HTTPError",
+  "hasDatedPriceRows": false,
+  "anonymousRequestsThisTurn": 2,
+  "errorBodyCheckedOnSecondRequest": true,
+  "errorResponse": "LOGOUT",
+  "errorResponseSha256": "377b375adcc04b5ba5998c978372401a4c6327ccc218e17e383f72861085cb95"
+}

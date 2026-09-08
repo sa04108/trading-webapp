@@ -1,0 +1,65 @@
+{
+  "verifiedOnKst": "2026-09-09",
+  "dataAsOf": "2026-09-08",
+  "baseCommit": "b77cbf0",
+  "goalAchieved": false,
+  "strategyAdopted": false,
+  "newHistoricalAccounts": 0,
+  "failureAttribution": {
+    "sourceHashesMatch": true,
+    "sameInputOptionsRiskSeedCostsAndPeriod": true,
+    "commonInitialFillsIdentical": true,
+    "twoOriginalAccountsFullyClosedWithoutResumptionOrAffectedActions": true,
+    "perSymbolCashMatchesAccountReturn": true,
+    "componentsMatchReturnDifference": true,
+    "returnDifferencePctPoints": -32.986369740000036
+  },
+  "currentContextNonoverlappingCounts": {
+    "validation:all": 3,
+    "validation:export_growth": 0,
+    "validation:recovery": 1,
+    "validation:export_recovery": 0,
+    "confirmation:all": 4,
+    "confirmation:export_growth": 2,
+    "confirmation:recovery": 1,
+    "confirmation:export_recovery": 0
+  },
+  "tradingCodeAndTestsUnchangedFrom": "b77cbf0",
+  "applicablePriorCurrentAndRiskTestsPassed": 25,
+  "applicablePriorEslintAndServerTypecheckPassed": true,
+  "tradingTestsRerunThisChange": false,
+  "pythonCompilationAndFullAttributionPassed": true,
+  "currentKrx": {
+    "requestedDate": "20260908",
+    "plannedAuthenticatedApiCalls": 2,
+    "actualAuthenticatedApiCalls": 0,
+    "anonymousPublicCallsThisTurn": 2,
+    "publicHttpStatus": 400,
+    "datedPriceRowsObtained": false,
+    "productionAccessApprovalPending": true,
+    "publicErrorResponse": "LOGOUT"
+  },
+  "accessBlockerPersistedDuringCommits": [
+    "c034d7c",
+    "b99ed01",
+    "b77cbf0"
+  ],
+  "publicPushIsNotStrategyAdoptionGate": true,
+  "actualOrdersSent": 0,
+  "sourceSha256": {
+    "data/kr-quarter-research/rank-retention-diagnostics/context.json": "278a9191ed732e28d909afb3bb5ff0aac3645c069a6b2e7bbb523b04a79828cd",
+    "docs/research/kr-current-quarter-rank-retention-current-results/verification.json": "5c217333ec807649cdbe29db027b85615d938c1b7e34e8ce8ff7535db645b3a3",
+    "docs/research/kr-current-quarter-context-protocol.md": "ee5b34760ad82b9cdd96486b7e5621dcb457c2d2b20b441df5e55be7a7a17397",
+    "docs/research/kr-current-quarter-protocol.md": "32dde7eb0d3c01d81355a0d7e661b1026b546c98653244f30ccc64164228e179",
+    "data/kr-quarter-research/rank-retention-neighbors/evidence/manifest.json": "70a9cf903ae2b835c714ed2ceb89ac2175312c2ce60110c666d562d4ed2fdd32"
+  },
+  "publicArtifactSha256": {
+    "failure-attribution.json": "e2b42bd06717f890ac5cdb0286549f5201e2779914d4466d342e0d22516b7e0a",
+    "public-krx-check.json": "b2372c8ce3849713037952340a82bd6b2d71df939af165deba9df828c16315e7"
+  },
+  "remaining": [
+    "운영 인증 환경 접근 승인 후 당일 공식 일봉 대조",
+    "현재 환경을 뒷받침하는 별도 시장 관측과 당시 발표본 자료",
+    "현재와 과거 자료의 한계를 반영한 채택 재판단"
+  ]
+}

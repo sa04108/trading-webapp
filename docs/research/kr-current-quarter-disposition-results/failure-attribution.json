@@ -1,0 +1,373 @@
+{
+  "asof": "2026-09-08",
+  "baseCommit": "b77cbf0",
+  "caseSelection": "largestReturnDecrease",
+  "sourceSha256": {
+    "docs/research/kr-current-quarter-rank-retention-neighbors-results/extreme-account-audit.json": "0e1939ed8d5ab157157f74844432e6500f8dacd8f05af56599cbed883cd9557b"
+  },
+  "codeSha256": {
+    "/home/hyunbae204/work/trading-webapp/scripts/quarter-research/audit_rank_retention_failure.py": "bf477c3da688eedf58376830f235d3b0dd9e8218099215a3c55901bb31f7d37b"
+  },
+  "start": "2026-05-13",
+  "end": "2026-08-12",
+  "commonSymbols": [
+    "000500",
+    "036930",
+    "336260"
+  ],
+  "components": {
+    "common": {
+      "base": 11062296.225000001,
+      "neighbor": -5221220.984999998,
+      "deltaKrw": -16283517.209999999
+    },
+    "replaced": {
+      "base": 8503052.82,
+      "neighbor": -8199799.710000005,
+      "deltaKrw": -16702852.530000005
+    }
+  },
+  "checkpoints": [
+    {
+      "date": "2026-05-26",
+      "base": 114206519.35000001,
+      "neighbor": 106387303.69
+    },
+    {
+      "date": "2026-05-27",
+      "base": 119565349.04500002,
+      "neighbor": 104721703.69
+    },
+    {
+      "date": "2026-06-08",
+      "base": 119565349.04500002,
+      "neighbor": 81548103.69
+    },
+    {
+      "date": "2026-06-09",
+      "base": 119565349.04500002,
+      "neighbor": 86578979.30499999
+    }
+  ],
+  "runs": {
+    "base": {
+      "path": "data/kr-quarter-research/rank-retention/20-confirmation/rank-retention-20__2026-05-13.json",
+      "sha256": "18c019bf02efc6973cd0c95ef0cfcf823f3b9467f7ca85db4e029d5a94d334f9",
+      "rows": [
+        {
+          "symbol": "000500",
+          "netPnlKrw": 1500726.0,
+          "accountReturnContributionPct": 1.500726,
+          "buy": {
+            "symbol": "000500",
+            "side": "BUY",
+            "quantity": 50,
+            "price": 399500,
+            "grossAmount": 19975000,
+            "commission": 2996.2499999999995,
+            "tax": 0,
+            "slippageCost": 25000,
+            "tsMs": 1778803200000,
+            "reason": "REBALANCE_ENTRY"
+          },
+          "sell": {
+            "symbol": "000500",
+            "side": "SELL",
+            "quantity": 50,
+            "price": 430500,
+            "grossAmount": 21525000,
+            "commission": 3228.7499999999995,
+            "tax": 43049,
+            "slippageCost": 25000,
+            "tsMs": 1779840000000,
+            "reason": "계좌 목표 청산"
+          }
+        },
+        {
+          "symbol": "011070",
+          "netPnlKrw": 11115849.600000001,
+          "accountReturnContributionPct": 11.1158496,
+          "buy": {
+            "symbol": "011070",
+            "side": "BUY",
+            "quantity": 24,
+            "price": 799000,
+            "grossAmount": 19176000,
+            "commission": 2876.3999999999996,
+            "tax": 0,
+            "slippageCost": 24000,
+            "tsMs": 1778803200000,
+            "reason": "REBALANCE_ENTRY"
+          },
+          "sell": {
+            "symbol": "011070",
+            "side": "SELL",
+            "quantity": 24,
+            "price": 1265000,
+            "grossAmount": 30360000,
+            "commission": 4554,
+            "tax": 60720,
+            "slippageCost": 24000,
+            "tsMs": 1779840000000,
+            "reason": "계좌 목표 청산"
+          }
+        },
+        {
+          "symbol": "036930",
+          "netPnlKrw": 7657886.215,
+          "accountReturnContributionPct": 7.6578862149999996,
+          "buy": {
+            "symbol": "036930",
+            "side": "BUY",
+            "quantity": 119,
+            "price": 177600,
+            "grossAmount": 21134400,
+            "commission": 3170.16,
+            "tax": 0,
+            "slippageCost": 11900,
+            "tsMs": 1778803200000,
+            "reason": "REBALANCE_ENTRY"
+          },
+          "sell": {
+            "symbol": "036930",
+            "side": "SELL",
+            "quantity": 119,
+            "price": 242500,
+            "grossAmount": 28857500,
+            "commission": 4328.625,
+            "tax": 57715,
+            "slippageCost": 59500,
+            "tsMs": 1779840000000,
+            "reason": "계좌 목표 청산"
+          }
+        },
+        {
+          "symbol": "229640",
+          "netPnlKrw": -2612796.780000001,
+          "accountReturnContributionPct": -2.6127967800000014,
+          "buy": {
+            "symbol": "229640",
+            "side": "BUY",
+            "quantity": 218,
+            "price": 91600,
+            "grossAmount": 19968800,
+            "commission": 2995.3199999999997,
+            "tax": 0,
+            "slippageCost": 21800,
+            "tsMs": 1778803200000,
+            "reason": "REBALANCE_ENTRY"
+          },
+          "sell": {
+            "symbol": "229640",
+            "side": "SELL",
+            "quantity": 218,
+            "price": 79800,
+            "grossAmount": 17396400,
+            "commission": 2609.4599999999996,
+            "tax": 34792,
+            "slippageCost": 21800,
+            "tsMs": 1779840000000,
+            "reason": "계좌 목표 청산"
+          }
+        },
+        {
+          "symbol": "336260",
+          "netPnlKrw": 1903684.0100000016,
+          "accountReturnContributionPct": 1.9036840100000016,
+          "buy": {
+            "symbol": "336260",
+            "side": "BUY",
+            "quantity": 217,
+            "price": 90400,
+            "grossAmount": 19616800,
+            "commission": 2942.5199999999995,
+            "tax": 0,
+            "slippageCost": 21700,
+            "tsMs": 1778803200000,
+            "reason": "REBALANCE_ENTRY"
+          },
+          "sell": {
+            "symbol": "336260",
+            "side": "SELL",
+            "quantity": 217,
+            "price": 99400,
+            "grossAmount": 21569800,
+            "commission": 3235.47,
+            "tax": 43138,
+            "slippageCost": 21700,
+            "tsMs": 1779840000000,
+            "reason": "계좌 목표 청산"
+          }
+        }
+      ],
+      "returnPct": 19.565349045000026,
+      "riskEvents": [
+        {
+          "date": "2026-05-26",
+          "reason": "계좌 목표 청산",
+          "equity": 114206519.35000001
+        }
+      ]
+    },
+    "neighbor": {
+      "path": "data/kr-quarter-research/rank-retention-neighbors/formation25-confirmation/rank-retention-neighbor-formation25__2026-05-13.json",
+      "sha256": "76313bc5f6ab82b55d50ce50fea42ec6d78a70e6e4231d550238b902d0df1659",
+      "rows": [
+        {
+          "symbol": "000500",
+          "netPnlKrw": -3363793.75,
+          "accountReturnContributionPct": -3.36379375,
+          "buy": {
+            "symbol": "000500",
+            "side": "BUY",
+            "quantity": 50,
+            "price": 399500,
+            "grossAmount": 19975000,
+            "commission": 2996.2499999999995,
+            "tax": 0,
+            "slippageCost": 25000,
+            "tsMs": 1778803200000,
+            "reason": "REBALANCE_ENTRY"
+          },
+          "sell": {
+            "symbol": "000500",
+            "side": "SELL",
+            "quantity": 50,
+            "price": 333000,
+            "grossAmount": 16650000,
+            "commission": 2497.5,
+            "tax": 33300,
+            "slippageCost": 25000,
+            "tsMs": 1780963200000,
+            "reason": "계좌 낙폭 중단"
+          }
+        },
+        {
+          "symbol": "001440",
+          "netPnlKrw": -7983949.010000002,
+          "accountReturnContributionPct": -7.983949010000002,
+          "buy": {
+            "symbol": "001440",
+            "side": "BUY",
+            "quantity": 292,
+            "price": 65600,
+            "grossAmount": 19155200,
+            "commission": 2873.2799999999997,
+            "tax": 0,
+            "slippageCost": 29200,
+            "tsMs": 1778803200000,
+            "reason": "REBALANCE_ENTRY"
+          },
+          "sell": {
+            "symbol": "001440",
+            "side": "SELL",
+            "quantity": 292,
+            "price": 38350,
+            "grossAmount": 11198200,
+            "commission": 1679.7299999999998,
+            "tax": 22396,
+            "slippageCost": 14600,
+            "tsMs": 1780963200000,
+            "reason": "계좌 낙폭 중단"
+          }
+        },
+        {
+          "symbol": "036930",
+          "netPnlKrw": 2171906.8850000016,
+          "accountReturnContributionPct": 2.1719068850000016,
+          "buy": {
+            "symbol": "036930",
+            "side": "BUY",
+            "quantity": 119,
+            "price": 177600,
+            "grossAmount": 21134400,
+            "commission": 3170.16,
+            "tax": 0,
+            "slippageCost": 11900,
+            "tsMs": 1778803200000,
+            "reason": "REBALANCE_ENTRY"
+          },
+          "sell": {
+            "symbol": "036930",
+            "side": "SELL",
+            "quantity": 119,
+            "price": 196300,
+            "grossAmount": 23359700,
+            "commission": 3503.9549999999995,
+            "tax": 46719,
+            "slippageCost": 11900,
+            "tsMs": 1780963200000,
+            "reason": "계좌 낙폭 중단"
+          }
+        },
+        {
+          "symbol": "336260",
+          "netPnlKrw": -4029334.119999999,
+          "accountReturnContributionPct": -4.029334119999999,
+          "buy": {
+            "symbol": "336260",
+            "side": "BUY",
+            "quantity": 217,
+            "price": 90400,
+            "grossAmount": 19616800,
+            "commission": 2942.5199999999995,
+            "tax": 0,
+            "slippageCost": 21700,
+            "tsMs": 1778803200000,
+            "reason": "REBALANCE_ENTRY"
+          },
+          "sell": {
+            "symbol": "336260",
+            "side": "SELL",
+            "quantity": 217,
+            "price": 72000,
+            "grossAmount": 15624000,
+            "commission": 2343.6,
+            "tax": 31248,
+            "slippageCost": 21700,
+            "tsMs": 1780963200000,
+            "reason": "계좌 낙폭 중단"
+          }
+        },
+        {
+          "symbol": "402340",
+          "netPnlKrw": -215850.70000000298,
+          "accountReturnContributionPct": -0.21585070000000298,
+          "buy": {
+            "symbol": "402340",
+            "side": "BUY",
+            "quantity": 17,
+            "price": 1182000,
+            "grossAmount": 20094000,
+            "commission": 3014.1,
+            "tax": 0,
+            "slippageCost": 17000,
+            "tsMs": 1778803200000,
+            "reason": "REBALANCE_ENTRY"
+          },
+          "sell": {
+            "symbol": "402340",
+            "side": "SELL",
+            "quantity": 17,
+            "price": 1172000,
+            "grossAmount": 19924000,
+            "commission": 2988.6,
+            "tax": 39848,
+            "slippageCost": 17000,
+            "tsMs": 1780963200000,
+            "reason": "계좌 낙폭 중단"
+          }
+        }
+      ],
+      "returnPct": -13.421020695000008,
+      "riskEvents": [
+        {
+          "date": "2026-06-08",
+          "reason": "계좌 낙폭 중단",
+          "equity": 81548103.69
+        }
+      ]
+    }
+  },
+  "note": "동일 날짜 두 모형 계좌의 사후 손익 분해다. 반사실적 인과 효과나 새 후보 성과가 아니다. 슬리피지는 체결 총액에 반영되어 현금에서 이중 차감하지 않는다."
+}

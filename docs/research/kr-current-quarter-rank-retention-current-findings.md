@@ -41,3 +41,5 @@
 [인접 설정 확인](kr-current-quarter-rank-retention-neighbors-findings.md)과 [환경 진단](kr-current-quarter-rank-retention-diagnostics-findings.md)의 한계는 그대로다. 현재와 유사한 반등·중기 하락 조건의 비중첩 표본은 검증·최근 각 1개이고, 수출 성장까지 결합하면 각 0개다. 개발 월간·2011년 부진, 기업행위 불확실성, 거시 당시 발표본 미인증을 해결한 것으로 표시하지 않는다.
 
 현재 가격은 보존된 9월 8일 Npay 스냅샷이다. 해당 일자 KRX 원문 대조는 운영 인증 환경 접근이 자동 승인 검토에서 거절되어 아직 실행하지 못했다. 이번 작업에서 외부 시세를 새로 확보하거나 실주문을 보내지는 않았다. 현재 신호 확인을 근거로 즉시 투입 가능한 전략이라고 결론 내리지 않는다. 재현 순서는 [README](../../scripts/quarter-research/README.md)에 있다.
+
+최대 손실 전환의 원본 분해와 남은 자료·접근 의존성은 [현재 목표 판단](kr-current-quarter-disposition.md)에 이어 기록했다. 현재 관찰만으로 실전 채택하지 않는 판단은 유지한다.
