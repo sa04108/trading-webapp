@@ -1,0 +1,176 @@
+[
+  {
+    "id": "momentum-20-5-monthly",
+    "strategyId": "cross-sectional-momentum",
+    "topN": 5,
+    "parameters": {
+      "formationDays": 20,
+      "skipDays": 0,
+      "topN": 5
+    },
+    "rebalanceBars": 20
+  },
+  {
+    "id": "momentum-20-3-monthly",
+    "strategyId": "cross-sectional-momentum",
+    "topN": 3,
+    "parameters": {
+      "formationDays": 20,
+      "skipDays": 0,
+      "topN": 3
+    },
+    "rebalanceBars": 20
+  },
+  {
+    "id": "momentum-60-5-monthly",
+    "strategyId": "cross-sectional-momentum",
+    "topN": 5,
+    "parameters": {
+      "formationDays": 60,
+      "skipDays": 0,
+      "topN": 5
+    },
+    "rebalanceBars": 20
+  },
+  {
+    "id": "momentum-20-5",
+    "strategyId": "cross-sectional-momentum",
+    "topN": 5,
+    "parameters": {
+      "formationDays": 20,
+      "skipDays": 0,
+      "topN": 5
+    }
+  },
+  {
+    "id": "recovery-60-3-monthly",
+    "strategyId": "recovery-rotation",
+    "topN": 3,
+    "parameters": {
+      "formationDays": 60,
+      "topN": 3
+    },
+    "rebalanceBars": 20
+  },
+  {
+    "id": "recovery-40-3-monthly",
+    "strategyId": "recovery-rotation",
+    "topN": 3,
+    "parameters": {
+      "formationDays": 40,
+      "topN": 3
+    },
+    "rebalanceBars": 20
+  },
+  {
+    "id": "recovery-80-3-monthly",
+    "strategyId": "recovery-rotation",
+    "topN": 3,
+    "parameters": {
+      "formationDays": 80,
+      "topN": 3
+    },
+    "rebalanceBars": 20
+  },
+  {
+    "id": "quality-20-15",
+    "strategyId": "annual-quality-momentum",
+    "topN": 5,
+    "rebalanceBars": 20,
+    "parameters": {
+      "formationDays": 20,
+      "minGrowth": 0.15
+    }
+  },
+  {
+    "id": "quality-60-0",
+    "strategyId": "annual-quality-momentum",
+    "topN": 5,
+    "rebalanceBars": 20,
+    "parameters": {
+      "formationDays": 60,
+      "minGrowth": 0
+    }
+  },
+  {
+    "id": "quality-60-15",
+    "strategyId": "annual-quality-momentum",
+    "topN": 5,
+    "rebalanceBars": 20,
+    "parameters": {
+      "formationDays": 60,
+      "minGrowth": 0.15
+    }
+  },
+  {
+    "id": "quality-60-30",
+    "strategyId": "annual-quality-momentum",
+    "topN": 5,
+    "rebalanceBars": 20,
+    "parameters": {
+      "formationDays": 60,
+      "minGrowth": 0.3
+    }
+  },
+  {
+    "id": "quality-120-15",
+    "strategyId": "annual-quality-momentum",
+    "topN": 5,
+    "rebalanceBars": 20,
+    "parameters": {
+      "formationDays": 120,
+      "minGrowth": 0.15
+    }
+  },
+  {
+    "id": "rsi-2-30",
+    "strategyId": "rsi-reversion",
+    "topN": 5,
+    "rebalanceBars": 5,
+    "parameters": {
+      "rsiPeriod": 2,
+      "entryRsi": 30,
+      "exitRsi": 60,
+      "atrPeriod": 14,
+      "stopAtrMultiplier": 3,
+      "maxHoldBars": 10,
+      "riskPerTradePercent": 1,
+      "correlationBars": 60,
+      "correlationThreshold": 0.5
+    }
+  },
+  {
+    "id": "rsi-5-30",
+    "strategyId": "rsi-reversion",
+    "topN": 5,
+    "rebalanceBars": 5,
+    "parameters": {
+      "rsiPeriod": 5,
+      "entryRsi": 30,
+      "exitRsi": 60,
+      "atrPeriod": 14,
+      "stopAtrMultiplier": 3,
+      "maxHoldBars": 10,
+      "riskPerTradePercent": 1,
+      "correlationBars": 60,
+      "correlationThreshold": 0.5
+    }
+  },
+  {
+    "id": "rsi-14-30",
+    "strategyId": "rsi-reversion",
+    "topN": 5,
+    "rebalanceBars": 5,
+    "parameters": {
+      "rsiPeriod": 14,
+      "entryRsi": 30,
+      "exitRsi": 60,
+      "atrPeriod": 14,
+      "stopAtrMultiplier": 3,
+      "maxHoldBars": 10,
+      "riskPerTradePercent": 1,
+      "correlationBars": 60,
+      "correlationThreshold": 0.5
+    }
+  }
+]

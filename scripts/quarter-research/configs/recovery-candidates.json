@@ -1,0 +1,83 @@
+[
+  {
+    "id": "recovery-40-2",
+    "strategyId": "recovery-rotation",
+    "topN": 2,
+    "parameters": {
+      "formationDays": 40,
+      "topN": 2
+    }
+  },
+  {
+    "id": "recovery-40-3",
+    "strategyId": "recovery-rotation",
+    "topN": 3,
+    "parameters": {
+      "formationDays": 40,
+      "topN": 3
+    }
+  },
+  {
+    "id": "recovery-40-4",
+    "strategyId": "recovery-rotation",
+    "topN": 4,
+    "parameters": {
+      "formationDays": 40,
+      "topN": 4
+    }
+  },
+  {
+    "id": "recovery-60-2",
+    "strategyId": "recovery-rotation",
+    "topN": 2,
+    "parameters": {
+      "formationDays": 60,
+      "topN": 2
+    }
+  },
+  {
+    "id": "recovery-60-3",
+    "strategyId": "recovery-rotation",
+    "topN": 3,
+    "parameters": {
+      "formationDays": 60,
+      "topN": 3
+    }
+  },
+  {
+    "id": "recovery-60-4",
+    "strategyId": "recovery-rotation",
+    "topN": 4,
+    "parameters": {
+      "formationDays": 60,
+      "topN": 4
+    }
+  },
+  {
+    "id": "recovery-80-2",
+    "strategyId": "recovery-rotation",
+    "topN": 2,
+    "parameters": {
+      "formationDays": 80,
+      "topN": 2
+    }
+  },
+  {
+    "id": "recovery-80-3",
+    "strategyId": "recovery-rotation",
+    "topN": 3,
+    "parameters": {
+      "formationDays": 80,
+      "topN": 3
+    }
+  },
+  {
+    "id": "recovery-80-4",
+    "strategyId": "recovery-rotation",
+    "topN": 4,
+    "parameters": {
+      "formationDays": 80,
+      "topN": 4
+    }
+  }
+]

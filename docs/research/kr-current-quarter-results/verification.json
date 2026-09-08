@@ -1,0 +1,30 @@
+{
+  "typescript": {
+    "testFiles": 12,
+    "testCases": 213,
+    "status": "passed after correction of new regression fixture",
+    "commands": [
+      "pnpm exec vitest run (12 engine and research test files)",
+      "pnpm exec vitest run tests/unit/quarter-research.test.ts"
+    ]
+  },
+  "python": {
+    "testCases": 6,
+    "status": "passed",
+    "command": "python -m unittest discover -s scripts/quarter-research -p 'test_*.py' -v"
+  },
+  "eslint": "passed for all research TypeScript and three new test files",
+  "typecheck": "pnpm exec tsc -p tsconfig.server.json --noEmit passed",
+  "replay": {
+    "accounts": 58,
+    "fullAccountJsonEqual": true
+  },
+  "slippageStress": {
+    "accounts": 58,
+    "bps": 20,
+    "status": "completed"
+  },
+  "plot": "PNG visually inspected; SVG generated from the same figure",
+  "fullRepositoryTestSuite": "not run; production source unchanged",
+  "researchOutcome": "No candidate met adoption criteria; financial goal remains unachieved"
+}

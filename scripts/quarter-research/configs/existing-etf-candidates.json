@@ -1,0 +1,86 @@
+[
+  {
+    "id": "momentum-20-3",
+    "strategyId": "cross-sectional-momentum",
+    "topN": 3,
+    "parameters": {
+      "formationDays": 20,
+      "skipDays": 0,
+      "topN": 3
+    }
+  },
+  {
+    "id": "momentum-20-5",
+    "strategyId": "cross-sectional-momentum",
+    "topN": 5,
+    "parameters": {
+      "formationDays": 20,
+      "skipDays": 0,
+      "topN": 5
+    }
+  },
+  {
+    "id": "momentum-60-3",
+    "strategyId": "cross-sectional-momentum",
+    "topN": 3,
+    "parameters": {
+      "formationDays": 60,
+      "skipDays": 0,
+      "topN": 3
+    }
+  },
+  {
+    "id": "momentum-60-5",
+    "strategyId": "cross-sectional-momentum",
+    "topN": 5,
+    "parameters": {
+      "formationDays": 60,
+      "skipDays": 0,
+      "topN": 5
+    }
+  },
+  {
+    "id": "momentum-120-3",
+    "strategyId": "cross-sectional-momentum",
+    "topN": 3,
+    "parameters": {
+      "formationDays": 120,
+      "skipDays": 0,
+      "topN": 3
+    }
+  },
+  {
+    "id": "momentum-120-5",
+    "strategyId": "cross-sectional-momentum",
+    "topN": 5,
+    "parameters": {
+      "formationDays": 120,
+      "skipDays": 0,
+      "topN": 5
+    }
+  },
+  {
+    "id": "breakout-20",
+    "strategyId": "range-breakout",
+    "topN": 5,
+    "parameters": {
+      "lookbackBars": 20
+    }
+  },
+  {
+    "id": "breakout-40",
+    "strategyId": "range-breakout",
+    "topN": 5,
+    "parameters": {
+      "lookbackBars": 40
+    }
+  },
+  {
+    "id": "breakout-60",
+    "strategyId": "range-breakout",
+    "topN": 5,
+    "parameters": {
+      "lookbackBars": 60
+    }
+  }
+]

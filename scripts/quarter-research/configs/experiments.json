@@ -1,0 +1,98 @@
+[
+  {
+    "directory": "etf-development",
+    "input": "etf-input.json.gz",
+    "stage": "development",
+    "selection": "existing-etf-candidates.json"
+  },
+  {
+    "directory": "recovery-etf-development",
+    "input": "etf-input.json.gz",
+    "stage": "development",
+    "selection": "recovery-candidates.json"
+  },
+  {
+    "directory": "monthly-etf-development",
+    "input": "etf-input.json.gz",
+    "stage": "development",
+    "selection": "monthly-candidates.json"
+  },
+  {
+    "directory": "stock-development",
+    "input": "stock-50-input.json.gz",
+    "stage": "development",
+    "selection": "existing-etf-candidates.json"
+  },
+  {
+    "directory": "recovery-stock-development",
+    "input": "stock-50-input.json.gz",
+    "stage": "development",
+    "selection": "recovery-candidates.json"
+  },
+  {
+    "directory": "monthly-stock-development",
+    "input": "stock-50-input.json.gz",
+    "stage": "development",
+    "selection": "monthly-candidates.json"
+  },
+  {
+    "directory": "quality-development",
+    "input": "quality-stock-input.json.gz",
+    "stage": "development",
+    "selection": "quality-candidates.json"
+  },
+  {
+    "directory": "rsi-stock-development",
+    "input": "stock-50-input.json.gz",
+    "stage": "development",
+    "selection": "rsi-candidates.json"
+  },
+  {
+    "directory": "etf-validation",
+    "input": "etf-input.json.gz",
+    "stage": "validation",
+    "selection": "etf-frozen-diagnostics.json"
+  },
+  {
+    "directory": "stock-validation",
+    "input": "stock-50-input.json.gz",
+    "stage": "validation",
+    "selection": "stock-frozen-diagnostics.json"
+  },
+  {
+    "directory": "quality-validation",
+    "input": "quality-stock-input.json.gz",
+    "stage": "validation",
+    "selection": "quality-frozen.json"
+  },
+  {
+    "directory": "rsi-stock-validation",
+    "input": "stock-50-input.json.gz",
+    "stage": "validation",
+    "selection": "rsi-frozen.json"
+  },
+  {
+    "directory": "etf-confirmation",
+    "input": "etf-input.json.gz",
+    "stage": "confirmation",
+    "selection": "etf-frozen-diagnostics.json"
+  },
+  {
+    "directory": "stock-confirmation",
+    "input": "stock-50-input.json.gz",
+    "stage": "confirmation",
+    "selection": "stock-frozen-diagnostics.json"
+  },
+  {
+    "directory": "quality-confirmation",
+    "input": "quality-stock-input.json.gz",
+    "stage": "confirmation",
+    "selection": "quality-frozen.json"
+  },
+  {
+    "directory": "rsi-stock-confirmation",
+    "input": "stock-50-input.json.gz",
+    "stage": "confirmation",
+    "selection": "rsi-frozen.json"
+  }
+]

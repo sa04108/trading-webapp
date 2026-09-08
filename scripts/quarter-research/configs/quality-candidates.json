@@ -1,0 +1,92 @@
+[
+  {
+    "id": "quality-20-0",
+    "strategyId": "annual-quality-momentum",
+    "topN": 5,
+    "rebalanceBars": 20,
+    "parameters": {
+      "formationDays": 20,
+      "minGrowth": 0
+    }
+  },
+  {
+    "id": "quality-20-15",
+    "strategyId": "annual-quality-momentum",
+    "topN": 5,
+    "rebalanceBars": 20,
+    "parameters": {
+      "formationDays": 20,
+      "minGrowth": 0.15
+    }
+  },
+  {
+    "id": "quality-20-30",
+    "strategyId": "annual-quality-momentum",
+    "topN": 5,
+    "rebalanceBars": 20,
+    "parameters": {
+      "formationDays": 20,
+      "minGrowth": 0.3
+    }
+  },
+  {
+    "id": "quality-60-0",
+    "strategyId": "annual-quality-momentum",
+    "topN": 5,
+    "rebalanceBars": 20,
+    "parameters": {
+      "formationDays": 60,
+      "minGrowth": 0
+    }
+  },
+  {
+    "id": "quality-60-15",
+    "strategyId": "annual-quality-momentum",
+    "topN": 5,
+    "rebalanceBars": 20,
+    "parameters": {
+      "formationDays": 60,
+      "minGrowth": 0.15
+    }
+  },
+  {
+    "id": "quality-60-30",
+    "strategyId": "annual-quality-momentum",
+    "topN": 5,
+    "rebalanceBars": 20,
+    "parameters": {
+      "formationDays": 60,
+      "minGrowth": 0.3
+    }
+  },
+  {
+    "id": "quality-120-0",
+    "strategyId": "annual-quality-momentum",
+    "topN": 5,
+    "rebalanceBars": 20,
+    "parameters": {
+      "formationDays": 120,
+      "minGrowth": 0
+    }
+  },
+  {
+    "id": "quality-120-15",
+    "strategyId": "annual-quality-momentum",
+    "topN": 5,
+    "rebalanceBars": 20,
+    "parameters": {
+      "formationDays": 120,
+      "minGrowth": 0.15
+    }
+  },
+  {
+    "id": "quality-120-30",
+    "strategyId": "annual-quality-momentum",
+    "topN": 5,
+    "rebalanceBars": 20,
+    "parameters": {
+      "formationDays": 120,
+      "minGrowth": 0.3
+    }
+  }
+]
