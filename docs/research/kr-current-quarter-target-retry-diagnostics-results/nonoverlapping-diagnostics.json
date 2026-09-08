@@ -1,0 +1,2150 @@
+[
+  {
+    "directory": "target-retry-diagnostics/stop15-development",
+    "baseline": "account-stop/stop15-development",
+    "stage": "development",
+    "slippageBps": 5,
+    "diagnostic": "development",
+    "reused": false,
+    "baseAll": {
+      "count": 46,
+      "targetHits": 14,
+      "targetFrequencyPct": 30.434782608695656,
+      "medianPct": 0.032200164250001384,
+      "p10Pct": -15.14438861774999,
+      "worstPct": -18.925231098500017,
+      "lossFrequencyPct": 50.0,
+      "worstDrawdownPct": -20.21226813793351,
+      "unclosed": 2
+    },
+    "baseNonoverlapping": {
+      "count": 14,
+      "targetHits": 6,
+      "targetFrequencyPct": 42.857142857142854,
+      "medianPct": 0.1875260752499941,
+      "p10Pct": -11.345018409750011,
+      "worstPct": -16.237232430000002,
+      "lossFrequencyPct": 50.0,
+      "worstDrawdownPct": -16.492886949303642,
+      "unclosed": 1
+    },
+    "all": {
+      "count": 46,
+      "targetHits": 16,
+      "targetFrequencyPct": 34.78260869565217,
+      "medianPct": -0.36370086624998854,
+      "p10Pct": -15.14438861774999,
+      "worstPct": -18.925231098500017,
+      "lossFrequencyPct": 52.17391304347826,
+      "worstDrawdownPct": -20.66732349732692,
+      "unclosed": 2
+    },
+    "nonoverlapping": {
+      "count": 14,
+      "targetHits": 6,
+      "targetFrequencyPct": 42.857142857142854,
+      "medianPct": 0.1875260752499941,
+      "p10Pct": -11.345018409750011,
+      "worstPct": -16.237232430000002,
+      "lossFrequencyPct": 50.0,
+      "worstDrawdownPct": -16.492886949303642,
+      "unclosed": 1
+    },
+    "resumedAccounts": 3,
+    "resumptions": 3,
+    "failureToSuccess": 2,
+    "successToFailure": 0,
+    "returnWorsened": 1,
+    "extraFills": 30,
+    "extraCostsKrw": 1785196.18,
+    "passes": false,
+    "windows": [
+      {
+        "start": "2016-01-04",
+        "end": "2016-04-03",
+        "returnPct": -2.371057515999986,
+        "drawdownPct": -10.17268460082027,
+        "closed": true,
+        "targetReached": false,
+        "riskEvents": [
+          {
+            "date": "2016-03-31",
+            "reason": "3개월 만기 청산",
+            "equity": 97856325.38999999
+          }
+        ],
+        "affectedActions": [
+          {
+            "symbol": "018880",
+            "date": "2016-02-16",
+            "ratio": 5,
+            "type": "inferred-unit-change"
+          },
+          {
+            "symbol": "200130",
+            "date": "2016-01-15",
+            "ratio": 2,
+            "type": "inferred-unit-change"
+          }
+        ]
+      },
+      {
+        "start": "2016-05-02",
+        "end": "2016-08-01",
+        "returnPct": -16.237232430000002,
+        "drawdownPct": -16.492886949303642,
+        "closed": true,
+        "targetReached": false,
+        "riskEvents": [
+          {
+            "date": "2016-06-22",
+            "reason": "계좌 낙폭 중단",
+            "equity": 85245325
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2016-09-01",
+        "end": "2016-11-30",
+        "returnPct": 10.91681552999999,
+        "drawdownPct": -5.440673816432873,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2016-09-27",
+            "reason": "계좌 목표 청산",
+            "equity": 110506215.91499999
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2016-12-01",
+        "end": "2017-02-28",
+        "returnPct": -9.07682095900001,
+        "drawdownPct": -13.967168881906334,
+        "closed": true,
+        "targetReached": false,
+        "riskEvents": [
+          {
+            "date": "2017-02-27",
+            "reason": "3개월 만기 청산",
+            "equity": 90889850.17
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2017-03-02",
+        "end": "2017-06-01",
+        "returnPct": 11.007218158999986,
+        "drawdownPct": -1.0687781705344013,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2017-03-23",
+            "reason": "계좌 목표 청산",
+            "equity": 111199979.026
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2017-07-03",
+        "end": "2017-10-02",
+        "returnPct": -12.223349542500017,
+        "drawdownPct": -13.225246815000013,
+        "closed": false,
+        "targetReached": false,
+        "riskEvents": [
+          {
+            "date": "2017-09-28",
+            "reason": "3개월 만기 청산",
+            "equity": 87526330.96999998
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2017-10-10",
+        "end": "2018-01-09",
+        "returnPct": 11.389678544999992,
+        "drawdownPct": -5.125684369745331,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2017-10-24",
+            "reason": "계좌 목표 청산",
+            "equity": 111696409.50999999
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2018-02-01",
+        "end": "2018-04-30",
+        "returnPct": 10.832591252500002,
+        "drawdownPct": -5.154347455906394,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2018-03-08",
+            "reason": "계좌 목표 청산",
+            "equity": 111469320.685
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2018-05-02",
+        "end": "2018-08-01",
+        "returnPct": 16.663635993500026,
+        "drawdownPct": -5.40375395824576,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2018-05-14",
+            "reason": "계좌 목표 청산",
+            "equity": 117500594.539
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2018-09-03",
+        "end": "2018-12-02",
+        "returnPct": -9.295579099999996,
+        "drawdownPct": -15.634823904635597,
+        "closed": true,
+        "targetReached": false,
+        "riskEvents": [
+          {
+            "date": "2018-10-08",
+            "reason": "계좌 낙폭 중단",
+            "equity": 90704420.9
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2018-12-03",
+        "end": "2019-03-02",
+        "returnPct": -0.6694764174999701,
+        "drawdownPct": -7.611900336704924,
+        "closed": true,
+        "targetReached": false,
+        "riskEvents": [
+          {
+            "date": "2019-02-27",
+            "reason": "3개월 만기 청산",
+            "equity": 100080501.61500001
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2019-03-04",
+        "end": "2019-06-03",
+        "returnPct": -0.05792531500000697,
+        "drawdownPct": -7.903800554181817,
+        "closed": true,
+        "targetReached": false,
+        "riskEvents": [
+          {
+            "date": "2019-05-31",
+            "reason": "3개월 만기 청산",
+            "equity": 100800343.12249999
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2019-07-01",
+        "end": "2019-09-30",
+        "returnPct": 0.43297746549999516,
+        "drawdownPct": -10.314461027646804,
+        "closed": true,
+        "targetReached": false,
+        "riskEvents": [
+          {
+            "date": "2019-09-27",
+            "reason": "3개월 만기 청산",
+            "equity": 100694441.1755
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2019-10-01",
+        "end": "2019-12-31",
+        "returnPct": 14.134428310000025,
+        "drawdownPct": -0.1805812951285346,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2019-10-08",
+            "reason": "계좌 목표 청산",
+            "equity": 114340906.60000001
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "directory": "target-retry-diagnostics/stop15-earlier",
+    "baseline": "account-stop/stop15-earlier",
+    "stage": "earlier",
+    "slippageBps": 5,
+    "diagnostic": "earlier",
+    "reused": false,
+    "baseAll": {
+      "count": 24,
+      "targetHits": 5,
+      "targetFrequencyPct": 20.833333333333336,
+      "medianPct": -2.8713351617500162,
+      "p10Pct": -16.476536004200007,
+      "worstPct": -18.4603474225,
+      "lossFrequencyPct": 58.333333333333336,
+      "worstDrawdownPct": -18.713232883864183,
+      "unclosed": 1
+    },
+    "baseNonoverlapping": {
+      "count": 2,
+      "targetHits": 0,
+      "targetFrequencyPct": 0.0,
+      "medianPct": -14.68229427975002,
+      "p10Pct": -15.724955520350024,
+      "worstPct": -15.985620830500025,
+      "lossFrequencyPct": 100.0,
+      "worstDrawdownPct": -16.55836663550001,
+      "unclosed": 0
+    },
+    "all": {
+      "count": 24,
+      "targetHits": 5,
+      "targetFrequencyPct": 20.833333333333336,
+      "medianPct": -4.642458041750008,
+      "p10Pct": -16.476536004200007,
+      "worstPct": -18.4603474225,
+      "lossFrequencyPct": 62.5,
+      "worstDrawdownPct": -18.713232883864183,
+      "unclosed": 1
+    },
+    "nonoverlapping": {
+      "count": 2,
+      "targetHits": 0,
+      "targetFrequencyPct": 0.0,
+      "medianPct": -14.68229427975002,
+      "p10Pct": -15.724955520350024,
+      "worstPct": -15.985620830500025,
+      "lossFrequencyPct": 100.0,
+      "worstDrawdownPct": -16.55836663550001,
+      "unclosed": 0
+    },
+    "resumedAccounts": 1,
+    "resumptions": 1,
+    "failureToSuccess": 0,
+    "successToFailure": 0,
+    "returnWorsened": 1,
+    "extraFills": 30,
+    "extraCostsKrw": 2110603.9465,
+    "passes": false,
+    "windows": [
+      {
+        "start": "2011-09-07",
+        "end": "2011-12-06",
+        "returnPct": -13.378967729000014,
+        "drawdownPct": -16.55836663550001,
+        "closed": true,
+        "targetReached": false,
+        "riskEvents": [
+          {
+            "date": "2011-09-26",
+            "reason": "계좌 낙폭 중단",
+            "equity": 83441633.36449999
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2011-12-07",
+        "end": "2012-03-06",
+        "returnPct": -15.985620830500025,
+        "drawdownPct": -15.985620830500025,
+        "closed": true,
+        "targetReached": false,
+        "riskEvents": [
+          {
+            "date": "2012-02-27",
+            "reason": "계좌 낙폭 중단",
+            "equity": 84416223.09599999
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "directory": "target-retry-diagnostics/stop15-extra25-validation",
+    "baseline": "account-stop/stop15-extra25-validation",
+    "stage": "validation",
+    "slippageBps": 5,
+    "diagnostic": "extra25",
+    "reused": false,
+    "baseAll": {
+      "count": 18,
+      "targetHits": 9,
+      "targetFrequencyPct": 50.0,
+      "medianPct": 10.355184077500002,
+      "p10Pct": -15.718977237249998,
+      "worstPct": -18.458496435000004,
+      "lossFrequencyPct": 44.44444444444444,
+      "worstDrawdownPct": -18.88832901061549,
+      "unclosed": 0
+    },
+    "baseNonoverlapping": {
+      "count": 2,
+      "targetHits": 1,
+      "targetFrequencyPct": 50.0,
+      "medianPct": 3.3025215667500047,
+      "p10Pct": -8.57474829984998,
+      "worstPct": -11.544065766499978,
+      "lossFrequencyPct": 50.0,
+      "worstDrawdownPct": -18.756183809984293,
+      "unclosed": 0
+    },
+    "all": {
+      "count": 18,
+      "targetHits": 9,
+      "targetFrequencyPct": 50.0,
+      "medianPct": 10.355184077500002,
+      "p10Pct": -15.718977237249998,
+      "worstPct": -18.458496435000004,
+      "lossFrequencyPct": 44.44444444444444,
+      "worstDrawdownPct": -18.88832901061549,
+      "unclosed": 0
+    },
+    "nonoverlapping": {
+      "count": 2,
+      "targetHits": 1,
+      "targetFrequencyPct": 50.0,
+      "medianPct": 3.3025215667500047,
+      "p10Pct": -8.57474829984998,
+      "worstPct": -11.544065766499978,
+      "lossFrequencyPct": 50.0,
+      "worstDrawdownPct": -18.756183809984293,
+      "unclosed": 0
+    },
+    "resumedAccounts": 0,
+    "resumptions": 0,
+    "failureToSuccess": 0,
+    "successToFailure": 0,
+    "returnWorsened": 0,
+    "extraFills": 0,
+    "extraCostsKrw": 0.0,
+    "passes": false,
+    "windows": [
+      {
+        "start": "2020-04-23",
+        "end": "2020-07-22",
+        "returnPct": 18.149108899999987,
+        "drawdownPct": -8.672933846424247,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2020-06-22",
+            "reason": "계좌 목표 청산",
+            "equity": 116467008.96999998
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2021-01-19",
+        "end": "2021-04-18",
+        "returnPct": -11.544065766499978,
+        "drawdownPct": -18.756183809984293,
+        "closed": true,
+        "targetReached": false,
+        "riskEvents": [
+          {
+            "date": "2021-02-24",
+            "reason": "계좌 낙폭 중단",
+            "equity": 85141809.91600001
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "directory": "target-retry-diagnostics/stop15-cost10-validation",
+    "baseline": "account-stop/stop15-cost10-validation",
+    "stage": "validation",
+    "slippageBps": 10,
+    "diagnostic": "cost",
+    "reused": false,
+    "baseAll": {
+      "count": 19,
+      "targetHits": 15,
+      "targetFrequencyPct": 78.94736842105263,
+      "medianPct": 11.314276384500022,
+      "p10Pct": 9.65240827000001,
+      "worstPct": -14.05504273,
+      "lossFrequencyPct": 5.263157894736842,
+      "worstDrawdownPct": -16.772257267852297,
+      "unclosed": 0
+    },
+    "baseNonoverlapping": {
+      "count": 3,
+      "targetHits": 2,
+      "targetFrequencyPct": 66.66666666666666,
+      "medianPct": 11.638534357499996,
+      "p10Pct": -8.916327312500002,
+      "worstPct": -14.05504273,
+      "lossFrequencyPct": 33.33333333333333,
+      "worstDrawdownPct": -16.772257267852297,
+      "unclosed": 0
+    },
+    "all": {
+      "count": 19,
+      "targetHits": 18,
+      "targetFrequencyPct": 94.73684210526315,
+      "medianPct": 11.786342295000019,
+      "p10Pct": 10.696832023500008,
+      "worstPct": -14.05504273,
+      "lossFrequencyPct": 5.263157894736842,
+      "worstDrawdownPct": -16.772257267852297,
+      "unclosed": 0
+    },
+    "nonoverlapping": {
+      "count": 3,
+      "targetHits": 2,
+      "targetFrequencyPct": 66.66666666666666,
+      "medianPct": 11.638534357499996,
+      "p10Pct": -8.916327312500002,
+      "worstPct": -14.05504273,
+      "lossFrequencyPct": 33.33333333333333,
+      "worstDrawdownPct": -16.772257267852297,
+      "unclosed": 0
+    },
+    "resumedAccounts": 3,
+    "resumptions": 3,
+    "failureToSuccess": 3,
+    "successToFailure": 0,
+    "returnWorsened": 0,
+    "extraFills": 30,
+    "extraCostsKrw": 2236560.4225,
+    "passes": true,
+    "windows": [
+      {
+        "start": "2020-04-09",
+        "end": "2020-07-08",
+        "returnPct": 11.638534357499996,
+        "drawdownPct": -7.752731364411336,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2020-05-26",
+            "reason": "계좌 목표 청산",
+            "equity": 111326782.46249999
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2020-07-10",
+        "end": "2020-10-09",
+        "returnPct": 18.666137605,
+        "drawdownPct": -2.149008260637475,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-20",
+            "reason": "계좌 목표 청산",
+            "equity": 114485994.905
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2021-02-03",
+        "end": "2021-05-02",
+        "returnPct": -14.05504273,
+        "drawdownPct": -16.772257267852297,
+        "closed": true,
+        "targetReached": false,
+        "riskEvents": [
+          {
+            "date": "2021-02-24",
+            "reason": "계좌 낙폭 중단",
+            "equity": 83667359.95249999
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "directory": "target-retry-diagnostics/stop15-cost20-validation",
+    "baseline": "account-stop/stop15-cost20-validation",
+    "stage": "validation",
+    "slippageBps": 20,
+    "diagnostic": "cost",
+    "reused": false,
+    "baseAll": {
+      "count": 19,
+      "targetHits": 15,
+      "targetFrequencyPct": 78.94736842105263,
+      "medianPct": 11.436407594999976,
+      "p10Pct": 9.516840376000001,
+      "worstPct": -14.15954426999999,
+      "lossFrequencyPct": 5.263157894736842,
+      "worstDrawdownPct": -16.760184119995337,
+      "unclosed": 0
+    },
+    "baseNonoverlapping": {
+      "count": 3,
+      "targetHits": 2,
+      "targetFrequencyPct": 66.66666666666666,
+      "medianPct": 11.436407594999976,
+      "p10Pct": -9.040353896999996,
+      "worstPct": -14.15954426999999,
+      "lossFrequencyPct": 33.33333333333333,
+      "worstDrawdownPct": -16.760184119995337,
+      "unclosed": 0
+    },
+    "all": {
+      "count": 19,
+      "targetHits": 18,
+      "targetFrequencyPct": 94.73684210526315,
+      "medianPct": 13.601596983000007,
+      "p10Pct": 10.586673283699998,
+      "worstPct": -14.15954426999999,
+      "lossFrequencyPct": 5.263157894736842,
+      "worstDrawdownPct": -16.760184119995337,
+      "unclosed": 0
+    },
+    "nonoverlapping": {
+      "count": 3,
+      "targetHits": 2,
+      "targetFrequencyPct": 66.66666666666666,
+      "medianPct": 11.436407594999976,
+      "p10Pct": -9.040353896999996,
+      "worstPct": -14.15954426999999,
+      "lossFrequencyPct": 33.33333333333333,
+      "worstDrawdownPct": -16.760184119995337,
+      "unclosed": 0
+    },
+    "resumedAccounts": 3,
+    "resumptions": 3,
+    "failureToSuccess": 3,
+    "successToFailure": 0,
+    "returnWorsened": 0,
+    "extraFills": 30,
+    "extraCostsKrw": 2931516.1475,
+    "passes": true,
+    "windows": [
+      {
+        "start": "2020-04-09",
+        "end": "2020-07-08",
+        "returnPct": 11.436407594999976,
+        "drawdownPct": -7.7528263839650275,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2020-05-26",
+            "reason": "계좌 목표 청산",
+            "equity": 111148774.98749998
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2020-07-10",
+        "end": "2020-10-09",
+        "returnPct": 18.47632964000001,
+        "drawdownPct": -2.1513899417335725,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-20",
+            "reason": "계좌 목표 청산",
+            "equity": 114374428.17250001
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2021-02-03",
+        "end": "2021-05-02",
+        "returnPct": -14.15954426999999,
+        "drawdownPct": -16.760184119995337,
+        "closed": true,
+        "targetReached": false,
+        "riskEvents": [
+          {
+            "date": "2021-02-24",
+            "reason": "계좌 낙폭 중단",
+            "equity": 83608162.32249999
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "directory": "target-retry-diagnostics/stop15-extra25-confirmation",
+    "baseline": "account-stop/stop15-extra25-confirmation",
+    "stage": "confirmation",
+    "slippageBps": 5,
+    "diagnostic": "extra25",
+    "reused": false,
+    "baseAll": {
+      "count": 13,
+      "targetHits": 8,
+      "targetFrequencyPct": 61.53846153846154,
+      "medianPct": 10.731044180000016,
+      "p10Pct": -12.964771156,
+      "worstPct": -16.60184175749999,
+      "lossFrequencyPct": 30.76923076923077,
+      "worstDrawdownPct": -17.737128162499992,
+      "unclosed": 0
+    },
+    "baseNonoverlapping": {
+      "count": 3,
+      "targetHits": 2,
+      "targetFrequencyPct": 66.66666666666666,
+      "medianPct": 11.822398310000004,
+      "p10Pct": -3.6383379380000136,
+      "worstPct": -7.503522000000018,
+      "lossFrequencyPct": 33.33333333333333,
+      "worstDrawdownPct": -17.029608662636043,
+      "unclosed": 0
+    },
+    "all": {
+      "count": 13,
+      "targetHits": 9,
+      "targetFrequencyPct": 69.23076923076923,
+      "medianPct": 11.503593194999983,
+      "p10Pct": -12.964771156,
+      "worstPct": -16.60184175749999,
+      "lossFrequencyPct": 30.76923076923077,
+      "worstDrawdownPct": -17.737128162499992,
+      "unclosed": 0
+    },
+    "nonoverlapping": {
+      "count": 3,
+      "targetHits": 2,
+      "targetFrequencyPct": 66.66666666666666,
+      "medianPct": 11.822398310000004,
+      "p10Pct": -3.6383379380000136,
+      "worstPct": -7.503522000000018,
+      "lossFrequencyPct": 33.33333333333333,
+      "worstDrawdownPct": -17.029608662636043,
+      "unclosed": 0
+    },
+    "resumedAccounts": 1,
+    "resumptions": 1,
+    "failureToSuccess": 1,
+    "successToFailure": 0,
+    "returnWorsened": 0,
+    "extraFills": 10,
+    "extraCostsKrw": 490076.91000000003,
+    "passes": true,
+    "windows": [
+      {
+        "start": "2025-05-08",
+        "end": "2025-08-07",
+        "returnPct": 11.822398310000004,
+        "drawdownPct": -3.841362708270568,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2025-05-29",
+            "reason": "계좌 목표 청산",
+            "equity": 110996002.82
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2025-11-05",
+        "end": "2026-02-04",
+        "returnPct": -7.503522000000018,
+        "drawdownPct": -17.029608662636043,
+        "closed": true,
+        "targetReached": false,
+        "riskEvents": [
+          {
+            "date": "2025-11-24",
+            "reason": "계좌 낙폭 중단",
+            "equity": 89783529.49
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2026-04-30",
+        "end": "2026-07-29",
+        "returnPct": 18.842828560000015,
+        "drawdownPct": -9.708185423227667,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-22",
+            "reason": "계좌 목표 청산",
+            "equity": 114451107.815
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "directory": "target-retry-diagnostics/stop15-cost10-confirmation",
+    "baseline": "account-stop/stop15-cost10-confirmation",
+    "stage": "confirmation",
+    "slippageBps": 10,
+    "diagnostic": "cost",
+    "reused": false,
+    "baseAll": {
+      "count": 58,
+      "targetHits": 35,
+      "targetFrequencyPct": 60.3448275862069,
+      "medianPct": 11.177272080000012,
+      "p10Pct": -10.985660531450009,
+      "worstPct": -17.211133227499985,
+      "lossFrequencyPct": 31.03448275862069,
+      "worstDrawdownPct": -22.12028320910854,
+      "unclosed": 0
+    },
+    "baseNonoverlapping": {
+      "count": 4,
+      "targetHits": 3,
+      "targetFrequencyPct": 75.0,
+      "medianPct": 11.428317275,
+      "p10Pct": -3.8612218277499952,
+      "worstPct": -10.221755897499996,
+      "lossFrequencyPct": 25.0,
+      "worstDrawdownPct": -21.01019227767733,
+      "unclosed": 0
+    },
+    "all": {
+      "count": 58,
+      "targetHits": 39,
+      "targetFrequencyPct": 67.24137931034483,
+      "medianPct": 11.98679692500001,
+      "p10Pct": -10.985660531450009,
+      "worstPct": -17.211133227499985,
+      "lossFrequencyPct": 31.03448275862069,
+      "worstDrawdownPct": -22.12028320910854,
+      "unclosed": 0
+    },
+    "nonoverlapping": {
+      "count": 4,
+      "targetHits": 3,
+      "targetFrequencyPct": 75.0,
+      "medianPct": 11.428317275,
+      "p10Pct": -3.8612218277499952,
+      "worstPct": -10.221755897499996,
+      "lossFrequencyPct": 25.0,
+      "worstDrawdownPct": -21.01019227767733,
+      "unclosed": 0
+    },
+    "resumedAccounts": 5,
+    "resumptions": 6,
+    "failureToSuccess": 4,
+    "successToFailure": 0,
+    "returnWorsened": 1,
+    "extraFills": 50,
+    "extraCostsKrw": 2910588.736,
+    "passes": true,
+    "windows": [
+      {
+        "start": "2024-09-02",
+        "end": "2024-12-01",
+        "returnPct": 12.715819659999994,
+        "drawdownPct": -8.106444496392506,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2024-10-28",
+            "reason": "계좌 목표 청산",
+            "equity": 112615927.06499998
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2025-04-28",
+        "end": "2025-07-27",
+        "returnPct": 10.980024335000005,
+        "drawdownPct": -2.7950194749999935,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2025-05-21",
+            "reason": "계좌 목표 청산",
+            "equity": 111694480.525
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2025-11-17",
+        "end": "2026-02-16",
+        "returnPct": 11.876610214999994,
+        "drawdownPct": -12.388333328149004,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2025-12-29",
+            "reason": "계좌 목표 청산",
+            "equity": 111387942.6725
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2026-02-19",
+        "end": "2026-05-18",
+        "returnPct": -10.221755897499996,
+        "drawdownPct": -21.01019227767733,
+        "closed": true,
+        "targetReached": false,
+        "riskEvents": [
+          {
+            "date": "2026-03-04",
+            "reason": "계좌 낙폭 중단",
+            "equity": 81352554.05000001
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "directory": "target-retry-diagnostics/stop15-cost20-confirmation",
+    "baseline": "account-stop/stop15-cost20-confirmation",
+    "stage": "confirmation",
+    "slippageBps": 20,
+    "diagnostic": "cost",
+    "reused": false,
+    "baseAll": {
+      "count": 58,
+      "targetHits": 34,
+      "targetFrequencyPct": 58.620689655172406,
+      "medianPct": 10.906872945,
+      "p10Pct": -11.19022133619999,
+      "worstPct": -17.373971924999985,
+      "lossFrequencyPct": 31.03448275862069,
+      "worstDrawdownPct": -22.12708092448429,
+      "unclosed": 0
+    },
+    "baseNonoverlapping": {
+      "count": 4,
+      "targetHits": 3,
+      "targetFrequencyPct": 75.0,
+      "medianPct": 11.052002922499993,
+      "p10Pct": -4.103425243499997,
+      "worstPct": -10.460689739999996,
+      "lossFrequencyPct": 25.0,
+      "worstDrawdownPct": -21.009304141949304,
+      "unclosed": 0
+    },
+    "all": {
+      "count": 58,
+      "targetHits": 40,
+      "targetFrequencyPct": 68.96551724137932,
+      "medianPct": 12.013564568749992,
+      "p10Pct": -11.19022133619999,
+      "worstPct": -17.373971924999985,
+      "lossFrequencyPct": 31.03448275862069,
+      "worstDrawdownPct": -22.12708092448429,
+      "unclosed": 0
+    },
+    "nonoverlapping": {
+      "count": 4,
+      "targetHits": 3,
+      "targetFrequencyPct": 75.0,
+      "medianPct": 11.052002922499993,
+      "p10Pct": -4.103425243499997,
+      "worstPct": -10.460689739999996,
+      "lossFrequencyPct": 25.0,
+      "worstDrawdownPct": -21.009304141949304,
+      "unclosed": 0
+    },
+    "resumedAccounts": 6,
+    "resumptions": 6,
+    "failureToSuccess": 6,
+    "successToFailure": 0,
+    "returnWorsened": 0,
+    "extraFills": 60,
+    "extraCostsKrw": 5088757.934,
+    "passes": true,
+    "windows": [
+      {
+        "start": "2024-09-02",
+        "end": "2024-12-01",
+        "returnPct": 12.323803692500036,
+        "drawdownPct": -8.149082951082566,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2024-10-28",
+            "reason": "계좌 목표 청산",
+            "equity": 112310458.82750003
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2025-04-28",
+        "end": "2025-07-27",
+        "returnPct": 10.730191914999999,
+        "drawdownPct": -2.931439935000002,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2025-05-21",
+            "reason": "계좌 목표 청산",
+            "equity": 111558060.065
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2025-11-17",
+        "end": "2026-02-16",
+        "returnPct": 11.373813929999987,
+        "drawdownPct": -12.598439348431278,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2025-12-29",
+            "reason": "계좌 목표 청산",
+            "equity": 111038017.57
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2026-02-19",
+        "end": "2026-05-18",
+        "returnPct": -10.460689739999996,
+        "drawdownPct": -21.009304141949304,
+        "closed": true,
+        "targetReached": false,
+        "riskEvents": [
+          {
+            "date": "2026-03-04",
+            "reason": "계좌 낙폭 중단",
+            "equity": 81240354.17
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "directory": "target-retry/seed204-offset0-validation",
+    "baseline": "account-stop/stop15-validation",
+    "stage": "validation",
+    "slippageBps": 5,
+    "diagnostic": "primary",
+    "reused": true,
+    "baseAll": {
+      "count": 19,
+      "targetHits": 15,
+      "targetFrequencyPct": 78.94736842105263,
+      "medianPct": 11.36301538450002,
+      "p10Pct": 9.65824107000001,
+      "worstPct": -14.05504273,
+      "lossFrequencyPct": 5.263157894736842,
+      "worstDrawdownPct": -16.772257267852297,
+      "unclosed": 0
+    },
+    "baseNonoverlapping": {
+      "count": 3,
+      "targetHits": 2,
+      "targetFrequencyPct": 66.66666666666666,
+      "medianPct": 11.684146132499995,
+      "p10Pct": -8.907204957500001,
+      "worstPct": -14.05504273,
+      "lossFrequencyPct": 33.33333333333333,
+      "worstDrawdownPct": -16.772257267852297,
+      "unclosed": 0
+    },
+    "all": {
+      "count": 19,
+      "targetHits": 18,
+      "targetFrequencyPct": 94.73684210526315,
+      "medianPct": 11.810733257499994,
+      "p10Pct": 10.741522483500013,
+      "worstPct": -14.05504273,
+      "lossFrequencyPct": 5.263157894736842,
+      "worstDrawdownPct": -16.772257267852297,
+      "unclosed": 0
+    },
+    "nonoverlapping": {
+      "count": 3,
+      "targetHits": 2,
+      "targetFrequencyPct": 66.66666666666666,
+      "medianPct": 11.684146132499995,
+      "p10Pct": -8.907204957500001,
+      "worstPct": -14.05504273,
+      "lossFrequencyPct": 33.33333333333333,
+      "worstDrawdownPct": -16.772257267852297,
+      "unclosed": 0
+    },
+    "resumedAccounts": 3,
+    "resumptions": 3,
+    "failureToSuccess": 3,
+    "successToFailure": 0,
+    "returnWorsened": 0,
+    "extraFills": 30,
+    "extraCostsKrw": 2156508.0905000004,
+    "passes": true,
+    "windows": [
+      {
+        "start": "2020-04-09",
+        "end": "2020-07-08",
+        "returnPct": 11.684146132499995,
+        "drawdownPct": -7.752731364411336,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2020-05-26",
+            "reason": "계좌 목표 청산",
+            "equity": 111360327.05249998
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2020-07-10",
+        "end": "2020-10-09",
+        "returnPct": 18.688110605,
+        "drawdownPct": -2.1487736875070995,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-20",
+            "reason": "계좌 목표 청산",
+            "equity": 114496996.555
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2021-02-03",
+        "end": "2021-05-02",
+        "returnPct": -14.05504273,
+        "drawdownPct": -16.772257267852297,
+        "closed": true,
+        "targetReached": false,
+        "riskEvents": [
+          {
+            "date": "2021-02-24",
+            "reason": "계좌 낙폭 중단",
+            "equity": 83667359.95249999
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "directory": "target-retry/seed204-offset0-confirmation",
+    "baseline": "account-stop/stop15-confirmation",
+    "stage": "confirmation",
+    "slippageBps": 5,
+    "diagnostic": "primary",
+    "reused": true,
+    "baseAll": {
+      "count": 58,
+      "targetHits": 36,
+      "targetFrequencyPct": 62.06896551724138,
+      "medianPct": 11.211596942500012,
+      "p10Pct": -10.961597131450013,
+      "worstPct": -17.186758227499986,
+      "lossFrequencyPct": 31.03448275862069,
+      "worstDrawdownPct": -22.114609391012287,
+      "unclosed": 0
+    },
+    "baseNonoverlapping": {
+      "count": 4,
+      "targetHits": 3,
+      "targetFrequencyPct": 75.0,
+      "medianPct": 11.505945267500007,
+      "p10Pct": -3.8171803147499848,
+      "worstPct": -10.174003897499983,
+      "lossFrequencyPct": 25.0,
+      "worstDrawdownPct": -21.005317080936713,
+      "unclosed": 0
+    },
+    "all": {
+      "count": 58,
+      "targetHits": 40,
+      "targetFrequencyPct": 68.96551724137932,
+      "medianPct": 12.079500562500012,
+      "p10Pct": -10.961597131450013,
+      "worstPct": -17.186758227499986,
+      "lossFrequencyPct": 31.03448275862069,
+      "worstDrawdownPct": -22.114609391012287,
+      "unclosed": 0
+    },
+    "nonoverlapping": {
+      "count": 4,
+      "targetHits": 3,
+      "targetFrequencyPct": 75.0,
+      "medianPct": 11.505945267500007,
+      "p10Pct": -3.8171803147499848,
+      "worstPct": -10.174003897499983,
+      "lossFrequencyPct": 25.0,
+      "worstDrawdownPct": -21.005317080936713,
+      "unclosed": 0
+    },
+    "resumedAccounts": 4,
+    "resumptions": 4,
+    "failureToSuccess": 4,
+    "successToFailure": 0,
+    "returnWorsened": 0,
+    "extraFills": 40,
+    "extraCostsKrw": 2172534.0039999997,
+    "passes": true,
+    "windows": [
+      {
+        "start": "2024-09-02",
+        "end": "2024-12-01",
+        "returnPct": 12.89861940999999,
+        "drawdownPct": -8.102594001925967,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2024-10-28",
+            "reason": "계좌 목표 청산",
+            "equity": 112756383.62
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2025-04-28",
+        "end": "2025-07-27",
+        "returnPct": 11.015408045000008,
+        "drawdownPct": -2.771615965000007,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2025-05-21",
+            "reason": "계좌 목표 청산",
+            "equity": 111717884.035
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2025-11-17",
+        "end": "2026-02-16",
+        "returnPct": 11.996482490000005,
+        "drawdownPct": -12.33240658060517,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2025-12-29",
+            "reason": "계좌 목표 청산",
+            "equity": 111490872.9425
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2026-02-19",
+        "end": "2026-05-18",
+        "returnPct": -10.174003897499983,
+        "drawdownPct": -21.005317080936713,
+        "closed": true,
+        "targetReached": false,
+        "riskEvents": [
+          {
+            "date": "2026-03-04",
+            "reason": "계좌 낙폭 중단",
+            "equity": 81376457.635
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "stage": "validation",
+    "threshold": 0.25,
+    "baseAll": {
+      "count": 37,
+      "targetHits": 24,
+      "targetFrequencyPct": 64.86486486486487,
+      "medianPct": 11.125491620000005,
+      "p10Pct": -14.17426215350001,
+      "worstPct": -18.458496435000004,
+      "lossFrequencyPct": 24.324324324324326,
+      "worstDrawdownPct": -18.88832901061549,
+      "unclosed": 0
+    },
+    "baseNonoverlapping": {
+      "count": 3,
+      "targetHits": 2,
+      "targetFrequencyPct": 66.66666666666666,
+      "medianPct": 11.684146132499995,
+      "p10Pct": -6.898423386699983,
+      "worstPct": -11.544065766499978,
+      "lossFrequencyPct": 33.33333333333333,
+      "worstDrawdownPct": -18.756183809984293,
+      "unclosed": 0
+    },
+    "all": {
+      "count": 37,
+      "targetHits": 27,
+      "targetFrequencyPct": 72.97297297297297,
+      "medianPct": 11.470001090000004,
+      "p10Pct": -14.17426215350001,
+      "worstPct": -18.458496435000004,
+      "lossFrequencyPct": 24.324324324324326,
+      "worstDrawdownPct": -18.88832901061549,
+      "unclosed": 0
+    },
+    "nonoverlapping": {
+      "count": 3,
+      "targetHits": 2,
+      "targetFrequencyPct": 66.66666666666666,
+      "medianPct": 11.684146132499995,
+      "p10Pct": -6.898423386699983,
+      "worstPct": -11.544065766499978,
+      "lossFrequencyPct": 33.33333333333333,
+      "worstDrawdownPct": -18.756183809984293,
+      "unclosed": 0
+    },
+    "passes": true,
+    "windows": [
+      {
+        "start": "2020-04-09",
+        "end": "2020-07-08",
+        "returnPct": 11.684146132499995,
+        "drawdownPct": -7.752731364411336,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2020-05-26",
+            "reason": "계좌 목표 청산",
+            "equity": 111360327.05249998
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2020-07-10",
+        "end": "2020-10-09",
+        "returnPct": 18.688110605,
+        "drawdownPct": -2.1487736875070995,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-20",
+            "reason": "계좌 목표 청산",
+            "equity": 114496996.555
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2021-01-19",
+        "end": "2021-04-18",
+        "returnPct": -11.544065766499978,
+        "drawdownPct": -18.756183809984293,
+        "closed": true,
+        "targetReached": false,
+        "riskEvents": [
+          {
+            "date": "2021-02-24",
+            "reason": "계좌 낙폭 중단",
+            "equity": 85141809.91600001
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "stage": "validation",
+    "threshold": 0.3,
+    "baseAll": {
+      "count": 19,
+      "targetHits": 15,
+      "targetFrequencyPct": 78.94736842105263,
+      "medianPct": 11.36301538450002,
+      "p10Pct": 9.65824107000001,
+      "worstPct": -14.05504273,
+      "lossFrequencyPct": 5.263157894736842,
+      "worstDrawdownPct": -16.772257267852297,
+      "unclosed": 0
+    },
+    "baseNonoverlapping": {
+      "count": 3,
+      "targetHits": 2,
+      "targetFrequencyPct": 66.66666666666666,
+      "medianPct": 11.684146132499995,
+      "p10Pct": -8.907204957500001,
+      "worstPct": -14.05504273,
+      "lossFrequencyPct": 33.33333333333333,
+      "worstDrawdownPct": -16.772257267852297,
+      "unclosed": 0
+    },
+    "all": {
+      "count": 19,
+      "targetHits": 18,
+      "targetFrequencyPct": 94.73684210526315,
+      "medianPct": 11.810733257499994,
+      "p10Pct": 10.741522483500013,
+      "worstPct": -14.05504273,
+      "lossFrequencyPct": 5.263157894736842,
+      "worstDrawdownPct": -16.772257267852297,
+      "unclosed": 0
+    },
+    "nonoverlapping": {
+      "count": 3,
+      "targetHits": 2,
+      "targetFrequencyPct": 66.66666666666666,
+      "medianPct": 11.684146132499995,
+      "p10Pct": -8.907204957500001,
+      "worstPct": -14.05504273,
+      "lossFrequencyPct": 33.33333333333333,
+      "worstDrawdownPct": -16.772257267852297,
+      "unclosed": 0
+    },
+    "passes": true,
+    "windows": [
+      {
+        "start": "2020-04-09",
+        "end": "2020-07-08",
+        "returnPct": 11.684146132499995,
+        "drawdownPct": -7.752731364411336,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2020-05-26",
+            "reason": "계좌 목표 청산",
+            "equity": 111360327.05249998
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2020-07-10",
+        "end": "2020-10-09",
+        "returnPct": 18.688110605,
+        "drawdownPct": -2.1487736875070995,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-20",
+            "reason": "계좌 목표 청산",
+            "equity": 114496996.555
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2021-02-03",
+        "end": "2021-05-02",
+        "returnPct": -14.05504273,
+        "drawdownPct": -16.772257267852297,
+        "closed": true,
+        "targetReached": false,
+        "riskEvents": [
+          {
+            "date": "2021-02-24",
+            "reason": "계좌 낙폭 중단",
+            "equity": 83667359.95249999
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "stage": "validation",
+    "threshold": 0.35,
+    "baseAll": {
+      "count": 9,
+      "targetHits": 7,
+      "targetFrequencyPct": 77.77777777777779,
+      "medianPct": 11.684146132499995,
+      "p10Pct": 9.956901350499994,
+      "worstPct": 9.88708142750001,
+      "lossFrequencyPct": 0.0,
+      "worstDrawdownPct": -11.918097405000005,
+      "unclosed": 0
+    },
+    "baseNonoverlapping": {
+      "count": 1,
+      "targetHits": 1,
+      "targetFrequencyPct": 100.0,
+      "medianPct": 11.684146132499995,
+      "p10Pct": 11.684146132499995,
+      "worstPct": 11.684146132499995,
+      "lossFrequencyPct": 0.0,
+      "worstDrawdownPct": -7.752731364411336,
+      "unclosed": 0
+    },
+    "all": {
+      "count": 9,
+      "targetHits": 9,
+      "targetFrequencyPct": 100.0,
+      "medianPct": 11.882689341500008,
+      "p10Pct": 11.432508720700003,
+      "worstPct": 11.2825392435,
+      "lossFrequencyPct": 0.0,
+      "worstDrawdownPct": -11.918097405000005,
+      "unclosed": 0
+    },
+    "nonoverlapping": {
+      "count": 1,
+      "targetHits": 1,
+      "targetFrequencyPct": 100.0,
+      "medianPct": 11.684146132499995,
+      "p10Pct": 11.684146132499995,
+      "worstPct": 11.684146132499995,
+      "lossFrequencyPct": 0.0,
+      "worstDrawdownPct": -7.752731364411336,
+      "unclosed": 0
+    },
+    "passes": true,
+    "windows": [
+      {
+        "start": "2020-04-09",
+        "end": "2020-07-08",
+        "returnPct": 11.684146132499995,
+        "drawdownPct": -7.752731364411336,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2020-05-26",
+            "reason": "계좌 목표 청산",
+            "equity": 111360327.05249998
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "stage": "confirmation",
+    "threshold": 0.25,
+    "baseAll": {
+      "count": 71,
+      "targetHits": 44,
+      "targetFrequencyPct": 61.97183098591549,
+      "medianPct": 11.033680210000018,
+      "p10Pct": -11.343986062500012,
+      "worstPct": -17.186758227499986,
+      "lossFrequencyPct": 30.985915492957744,
+      "worstDrawdownPct": -22.114609391012287,
+      "unclosed": 0
+    },
+    "baseNonoverlapping": {
+      "count": 5,
+      "targetHits": 4,
+      "targetFrequencyPct": 80.0,
+      "medianPct": 12.16251863500002,
+      "p10Pct": -0.0959499820000076,
+      "worstPct": -7.503522000000018,
+      "lossFrequencyPct": 20.0,
+      "worstDrawdownPct": -17.029608662636043,
+      "unclosed": 0
+    },
+    "all": {
+      "count": 71,
+      "targetHits": 49,
+      "targetFrequencyPct": 69.01408450704226,
+      "medianPct": 11.854617302499992,
+      "p10Pct": -11.343986062500012,
+      "worstPct": -17.186758227499986,
+      "lossFrequencyPct": 30.985915492957744,
+      "worstDrawdownPct": -22.114609391012287,
+      "unclosed": 0
+    },
+    "nonoverlapping": {
+      "count": 5,
+      "targetHits": 4,
+      "targetFrequencyPct": 80.0,
+      "medianPct": 12.16251863500002,
+      "p10Pct": -0.0959499820000076,
+      "worstPct": -7.503522000000018,
+      "lossFrequencyPct": 20.0,
+      "worstDrawdownPct": -17.029608662636043,
+      "unclosed": 0
+    },
+    "passes": true,
+    "windows": [
+      {
+        "start": "2024-09-02",
+        "end": "2024-12-01",
+        "returnPct": 12.89861940999999,
+        "drawdownPct": -8.102594001925967,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2024-10-28",
+            "reason": "계좌 목표 청산",
+            "equity": 112756383.62
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2025-04-28",
+        "end": "2025-07-27",
+        "returnPct": 11.015408045000008,
+        "drawdownPct": -2.771615965000007,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2025-05-21",
+            "reason": "계좌 목표 청산",
+            "equity": 111717884.035
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2025-11-05",
+        "end": "2026-02-04",
+        "returnPct": -7.503522000000018,
+        "drawdownPct": -17.029608662636043,
+        "closed": true,
+        "targetReached": false,
+        "riskEvents": [
+          {
+            "date": "2025-11-24",
+            "reason": "계좌 낙폭 중단",
+            "equity": 89783529.49
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2026-02-05",
+        "end": "2026-05-04",
+        "returnPct": 19.689911555000016,
+        "drawdownPct": -4.379578534999995,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2026-02-26",
+            "reason": "계좌 목표 청산",
+            "equity": 114551021.465
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2026-05-06",
+        "end": "2026-08-05",
+        "returnPct": 12.16251863500002,
+        "drawdownPct": 0,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-11",
+            "reason": "계좌 목표 청산",
+            "equity": 112038189.19500001
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "stage": "confirmation",
+    "threshold": 0.3,
+    "baseAll": {
+      "count": 58,
+      "targetHits": 36,
+      "targetFrequencyPct": 62.06896551724138,
+      "medianPct": 11.211596942500012,
+      "p10Pct": -10.961597131450013,
+      "worstPct": -17.186758227499986,
+      "lossFrequencyPct": 31.03448275862069,
+      "worstDrawdownPct": -22.114609391012287,
+      "unclosed": 0
+    },
+    "baseNonoverlapping": {
+      "count": 4,
+      "targetHits": 3,
+      "targetFrequencyPct": 75.0,
+      "medianPct": 11.505945267500007,
+      "p10Pct": -3.8171803147499848,
+      "worstPct": -10.174003897499983,
+      "lossFrequencyPct": 25.0,
+      "worstDrawdownPct": -21.005317080936713,
+      "unclosed": 0
+    },
+    "all": {
+      "count": 58,
+      "targetHits": 40,
+      "targetFrequencyPct": 68.96551724137932,
+      "medianPct": 12.079500562500012,
+      "p10Pct": -10.961597131450013,
+      "worstPct": -17.186758227499986,
+      "lossFrequencyPct": 31.03448275862069,
+      "worstDrawdownPct": -22.114609391012287,
+      "unclosed": 0
+    },
+    "nonoverlapping": {
+      "count": 4,
+      "targetHits": 3,
+      "targetFrequencyPct": 75.0,
+      "medianPct": 11.505945267500007,
+      "p10Pct": -3.8171803147499848,
+      "worstPct": -10.174003897499983,
+      "lossFrequencyPct": 25.0,
+      "worstDrawdownPct": -21.005317080936713,
+      "unclosed": 0
+    },
+    "passes": true,
+    "windows": [
+      {
+        "start": "2024-09-02",
+        "end": "2024-12-01",
+        "returnPct": 12.89861940999999,
+        "drawdownPct": -8.102594001925967,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2024-10-28",
+            "reason": "계좌 목표 청산",
+            "equity": 112756383.62
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2025-04-28",
+        "end": "2025-07-27",
+        "returnPct": 11.015408045000008,
+        "drawdownPct": -2.771615965000007,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2025-05-21",
+            "reason": "계좌 목표 청산",
+            "equity": 111717884.035
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2025-11-17",
+        "end": "2026-02-16",
+        "returnPct": 11.996482490000005,
+        "drawdownPct": -12.33240658060517,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2025-12-29",
+            "reason": "계좌 목표 청산",
+            "equity": 111490872.9425
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2026-02-19",
+        "end": "2026-05-18",
+        "returnPct": -10.174003897499983,
+        "drawdownPct": -21.005317080936713,
+        "closed": true,
+        "targetReached": false,
+        "riskEvents": [
+          {
+            "date": "2026-03-04",
+            "reason": "계좌 낙폭 중단",
+            "equity": 81376457.635
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "stage": "confirmation",
+    "threshold": 0.35,
+    "baseAll": {
+      "count": 38,
+      "targetHits": 20,
+      "targetFrequencyPct": 52.63157894736842,
+      "medianPct": 11.196943645000012,
+      "p10Pct": -10.467237679100014,
+      "worstPct": -14.99564404499999,
+      "lossFrequencyPct": 36.84210526315789,
+      "worstDrawdownPct": -22.114609391012287,
+      "unclosed": 0
+    },
+    "baseNonoverlapping": {
+      "count": 3,
+      "targetHits": 3,
+      "targetFrequencyPct": 100.0,
+      "medianPct": 12.89861940999999,
+      "p10Pct": 12.309738790000013,
+      "worstPct": 12.16251863500002,
+      "lossFrequencyPct": 0.0,
+      "worstDrawdownPct": -8.102594001925967,
+      "unclosed": 0
+    },
+    "all": {
+      "count": 38,
+      "targetHits": 24,
+      "targetFrequencyPct": 63.1578947368421,
+      "medianPct": 12.418114039999995,
+      "p10Pct": -10.467237679100014,
+      "worstPct": -14.99564404499999,
+      "lossFrequencyPct": 36.84210526315789,
+      "worstDrawdownPct": -22.114609391012287,
+      "unclosed": 0
+    },
+    "nonoverlapping": {
+      "count": 3,
+      "targetHits": 3,
+      "targetFrequencyPct": 100.0,
+      "medianPct": 12.89861940999999,
+      "p10Pct": 12.309738790000013,
+      "worstPct": 12.16251863500002,
+      "lossFrequencyPct": 0.0,
+      "worstDrawdownPct": -8.102594001925967,
+      "unclosed": 0
+    },
+    "passes": true,
+    "windows": [
+      {
+        "start": "2024-09-02",
+        "end": "2024-12-01",
+        "returnPct": 12.89861940999999,
+        "drawdownPct": -8.102594001925967,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2024-10-28",
+            "reason": "계좌 목표 청산",
+            "equity": 112756383.62
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2026-02-05",
+        "end": "2026-05-04",
+        "returnPct": 19.689911555000016,
+        "drawdownPct": -4.379578534999995,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2026-02-26",
+            "reason": "계좌 목표 청산",
+            "equity": 114551021.465
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2026-05-06",
+        "end": "2026-08-05",
+        "returnPct": 12.16251863500002,
+        "drawdownPct": 0,
+        "closed": true,
+        "targetReached": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-11",
+            "reason": "계좌 목표 청산",
+            "equity": 112038189.19500001
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "stage": "earlier",
+    "threshold": 0.25,
+    "baseAll": {
+      "count": 24,
+      "targetHits": 5,
+      "targetFrequencyPct": 20.833333333333336,
+      "medianPct": -2.8713351617500162,
+      "p10Pct": -16.476536004200007,
+      "worstPct": -18.4603474225,
+      "lossFrequencyPct": 58.333333333333336,
+      "worstDrawdownPct": -18.713232883864183,
+      "unclosed": 1
+    },
+    "baseNonoverlapping": {
+      "count": 2,
+      "targetHits": 0,
+      "targetFrequencyPct": 0.0,
+      "medianPct": -14.68229427975002,
+      "p10Pct": -15.724955520350024,
+      "worstPct": -15.985620830500025,
+      "lossFrequencyPct": 100.0,
+      "worstDrawdownPct": -16.55836663550001,
+      "unclosed": 0
+    },
+    "all": {
+      "count": 24,
+      "targetHits": 5,
+      "targetFrequencyPct": 20.833333333333336,
+      "medianPct": -4.642458041750008,
+      "p10Pct": -16.476536004200007,
+      "worstPct": -18.4603474225,
+      "lossFrequencyPct": 62.5,
+      "worstDrawdownPct": -18.713232883864183,
+      "unclosed": 1
+    },
+    "nonoverlapping": {
+      "count": 2,
+      "targetHits": 0,
+      "targetFrequencyPct": 0.0,
+      "medianPct": -14.68229427975002,
+      "p10Pct": -15.724955520350024,
+      "worstPct": -15.985620830500025,
+      "lossFrequencyPct": 100.0,
+      "worstDrawdownPct": -16.55836663550001,
+      "unclosed": 0
+    },
+    "passes": false,
+    "windows": [
+      {
+        "start": "2011-09-07",
+        "end": "2011-12-06",
+        "returnPct": -13.378967729000014,
+        "drawdownPct": -16.55836663550001,
+        "closed": true,
+        "targetReached": false,
+        "riskEvents": [
+          {
+            "date": "2011-09-26",
+            "reason": "계좌 낙폭 중단",
+            "equity": 83441633.36449999
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2011-12-07",
+        "end": "2012-03-06",
+        "returnPct": -15.985620830500025,
+        "drawdownPct": -15.985620830500025,
+        "closed": true,
+        "targetReached": false,
+        "riskEvents": [
+          {
+            "date": "2012-02-27",
+            "reason": "계좌 낙폭 중단",
+            "equity": 84416223.09599999
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "stage": "earlier",
+    "threshold": 0.3,
+    "baseAll": {
+      "count": 18,
+      "targetHits": 4,
+      "targetFrequencyPct": 22.22222222222222,
+      "medianPct": -4.642458041750008,
+      "p10Pct": -16.196013047800015,
+      "worstPct": -18.4603474225,
+      "lossFrequencyPct": 55.55555555555556,
+      "worstDrawdownPct": -18.713232883864183,
+      "unclosed": 0
+    },
+    "baseNonoverlapping": {
+      "count": 2,
+      "targetHits": 0,
+      "targetFrequencyPct": 0.0,
+      "medianPct": -14.68229427975002,
+      "p10Pct": -15.724955520350024,
+      "worstPct": -15.985620830500025,
+      "lossFrequencyPct": 100.0,
+      "worstDrawdownPct": -16.55836663550001,
+      "unclosed": 0
+    },
+    "all": {
+      "count": 18,
+      "targetHits": 4,
+      "targetFrequencyPct": 22.22222222222222,
+      "medianPct": -7.499079126999997,
+      "p10Pct": -16.196013047800015,
+      "worstPct": -18.4603474225,
+      "lossFrequencyPct": 61.111111111111114,
+      "worstDrawdownPct": -18.713232883864183,
+      "unclosed": 0
+    },
+    "nonoverlapping": {
+      "count": 2,
+      "targetHits": 0,
+      "targetFrequencyPct": 0.0,
+      "medianPct": -14.68229427975002,
+      "p10Pct": -15.724955520350024,
+      "worstPct": -15.985620830500025,
+      "lossFrequencyPct": 100.0,
+      "worstDrawdownPct": -16.55836663550001,
+      "unclosed": 0
+    },
+    "passes": false,
+    "windows": [
+      {
+        "start": "2011-09-07",
+        "end": "2011-12-06",
+        "returnPct": -13.378967729000014,
+        "drawdownPct": -16.55836663550001,
+        "closed": true,
+        "targetReached": false,
+        "riskEvents": [
+          {
+            "date": "2011-09-26",
+            "reason": "계좌 낙폭 중단",
+            "equity": 83441633.36449999
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2011-12-07",
+        "end": "2012-03-06",
+        "returnPct": -15.985620830500025,
+        "drawdownPct": -15.985620830500025,
+        "closed": true,
+        "targetReached": false,
+        "riskEvents": [
+          {
+            "date": "2012-02-27",
+            "reason": "계좌 낙폭 중단",
+            "equity": 84416223.09599999
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "stage": "earlier",
+    "threshold": 0.35,
+    "baseAll": {
+      "count": 11,
+      "targetHits": 2,
+      "targetFrequencyPct": 18.181818181818183,
+      "medianPct": -12.775733394499989,
+      "p10Pct": -16.686928221499997,
+      "worstPct": -18.4603474225,
+      "lossFrequencyPct": 54.54545454545454,
+      "worstDrawdownPct": -18.713232883864183,
+      "unclosed": 0
+    },
+    "baseNonoverlapping": {
+      "count": 1,
+      "targetHits": 0,
+      "targetFrequencyPct": 0.0,
+      "medianPct": -13.378967729000014,
+      "p10Pct": -13.378967729000014,
+      "worstPct": -13.378967729000014,
+      "lossFrequencyPct": 100.0,
+      "worstDrawdownPct": -16.55836663550001,
+      "unclosed": 0
+    },
+    "all": {
+      "count": 11,
+      "targetHits": 2,
+      "targetFrequencyPct": 18.181818181818183,
+      "medianPct": -12.775733394499989,
+      "p10Pct": -16.686928221499997,
+      "worstPct": -18.4603474225,
+      "lossFrequencyPct": 63.63636363636363,
+      "worstDrawdownPct": -18.713232883864183,
+      "unclosed": 0
+    },
+    "nonoverlapping": {
+      "count": 1,
+      "targetHits": 0,
+      "targetFrequencyPct": 0.0,
+      "medianPct": -13.378967729000014,
+      "p10Pct": -13.378967729000014,
+      "worstPct": -13.378967729000014,
+      "lossFrequencyPct": 100.0,
+      "worstDrawdownPct": -16.55836663550001,
+      "unclosed": 0
+    },
+    "passes": false,
+    "windows": [
+      {
+        "start": "2011-09-07",
+        "end": "2011-12-06",
+        "returnPct": -13.378967729000014,
+        "drawdownPct": -16.55836663550001,
+        "closed": true,
+        "targetReached": false,
+        "riskEvents": [
+          {
+            "date": "2011-09-26",
+            "reason": "계좌 낙폭 중단",
+            "equity": 83441633.36449999
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  }
+]

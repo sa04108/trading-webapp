@@ -71,3 +71,5 @@ KOSPI 20일 연율 변동성 30% 이상, 20일 수익 양수, 20일 평균 위�
 집계기는 최초 재개 판단까지의 기존 현금·체결 경로, 재개 시점의 수량 0과 실제 현금, 원래 최고점의 낙폭, 전체 체결의 비용 합계를 다시 계산했다. 현금 사건·위험 한도·만기·체결 누락·비용 합계·재개 전 평가액을 각각 변조한 여섯 확인도 거부했다. 테스트 통과는 성과 목표의 입증을 대신하지 않는다.
 
 [전체 요약](kr-current-quarter-target-retry-results/all-summaries.csv), [비중첩 계좌](kr-current-quarter-target-retry-results/nonoverlapping-accounts.json), [증거 해시](kr-current-quarter-target-retry-results/evidence-manifest.json), [검증 기록](kr-current-quarter-target-retry-results/verification.json)을 보존한다. 원본 1,078개 계좌와 28개 요약은 로컬 `data/kr-quarter-research/`에 있으며 공개 요약만 버전 관리한다. 실행 명령과 집계 순서는 [연구 README](../../scripts/quarter-research/README.md)에 있다.
+
+[비용·조건·과거 구간 후속 진단](kr-current-quarter-target-retry-diagnostics-findings.md)이 이어진다. 이 문서의 첫 재개 비교와 당시 남아 있던 검증 항목은 그대로 보존한다.

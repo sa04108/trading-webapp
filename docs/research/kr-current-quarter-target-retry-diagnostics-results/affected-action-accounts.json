@@ -1,0 +1,152 @@
+[
+  {
+    "stage": "development",
+    "diagnostic": "development",
+    "start": "2016-01-04",
+    "end": "2016-04-03",
+    "returnPct": -2.371057515999986,
+    "drawdownPct": -10.17268460082027,
+    "targetReached": false,
+    "closed": true,
+    "affectedActions": [
+      {
+        "symbol": "018880",
+        "date": "2016-02-16",
+        "ratio": 5,
+        "type": "inferred-unit-change"
+      },
+      {
+        "symbol": "200130",
+        "date": "2016-01-15",
+        "ratio": 2,
+        "type": "inferred-unit-change"
+      }
+    ]
+  },
+  {
+    "stage": "development",
+    "diagnostic": "development",
+    "start": "2018-11-01",
+    "end": "2019-01-31",
+    "returnPct": 8.077259974999995,
+    "drawdownPct": -6.046916501420451,
+    "targetReached": false,
+    "closed": true,
+    "affectedActions": [
+      {
+        "symbol": "000100",
+        "date": "2018-12-27",
+        "ratio": 1.045015742516114,
+        "type": "unresolved"
+      }
+    ]
+  },
+  {
+    "stage": "earlier",
+    "diagnostic": "earlier",
+    "start": "2011-09-20",
+    "end": "2011-12-19",
+    "returnPct": 14.11103886999998,
+    "drawdownPct": -12.304949083146234,
+    "targetReached": false,
+    "closed": true,
+    "affectedActions": [
+      {
+        "symbol": "078160",
+        "date": "2011-10-07",
+        "ratio": 0.9672131147540983,
+        "type": "KRX 전일대비 기준가격 불연속"
+      }
+    ]
+  },
+  {
+    "stage": "validation",
+    "diagnostic": "extra25",
+    "start": "2021-01-22",
+    "end": "2021-04-21",
+    "returnPct": -18.458496435000004,
+    "drawdownPct": -18.458496435000004,
+    "targetReached": false,
+    "closed": true,
+    "affectedActions": [
+      {
+        "symbol": "268600",
+        "date": "2021-02-01",
+        "ratio": 2,
+        "type": "inferred-unit-change"
+      }
+    ]
+  },
+  {
+    "stage": "validation",
+    "diagnostic": "extra25",
+    "start": "2021-01-25",
+    "end": "2021-04-24",
+    "returnPct": -16.82440703999999,
+    "drawdownPct": -18.772193910000002,
+    "targetReached": false,
+    "closed": true,
+    "affectedActions": [
+      {
+        "symbol": "268600",
+        "date": "2021-02-01",
+        "ratio": 2,
+        "type": "inferred-unit-change"
+      }
+    ]
+  },
+  {
+    "stage": "validation",
+    "diagnostic": "extra25",
+    "start": "2021-01-26",
+    "end": "2021-04-25",
+    "returnPct": -12.445861679999993,
+    "drawdownPct": -18.88832901061549,
+    "targetReached": false,
+    "closed": true,
+    "affectedActions": [
+      {
+        "symbol": "268600",
+        "date": "2021-02-01",
+        "ratio": 2,
+        "type": "inferred-unit-change"
+      }
+    ]
+  },
+  {
+    "stage": "validation",
+    "diagnostic": "extra25",
+    "start": "2021-01-27",
+    "end": "2021-04-26",
+    "returnPct": -15.245221607500003,
+    "drawdownPct": -18.29917271559963,
+    "targetReached": false,
+    "closed": true,
+    "affectedActions": [
+      {
+        "symbol": "268600",
+        "date": "2021-02-01",
+        "ratio": 2,
+        "type": "inferred-unit-change"
+      }
+    ]
+  },
+  {
+    "stage": "validation",
+    "diagnostic": "extra25",
+    "start": "2021-02-17",
+    "end": "2021-05-16",
+    "returnPct": 11.114121172499992,
+    "drawdownPct": -13.097372684999996,
+    "targetReached": false,
+    "closed": true,
+    "affectedActions": [
+      {
+        "symbol": "096530",
+        "date": "2021-04-23",
+        "ratio": 2,
+        "type": "inferred-unit-change"
+      }
+    ]
+  }
+]

@@ -228,3 +228,15 @@ pnpm exec vitest run tests/unit/target-retry-quarter.test.ts tests/unit/quarter-
 첫 집계는 모든 `primary` 출력이 필요하고 `--include-conditional`은 후속 출력까지 요구한다. 위 `reproduction-*`는 별도 예시 경로다. `resumeAfterMissedTarget`의 기본값은 기존 영구 중단이다. `true`이면 목표 청산 뒤 전량 매도가 끝나 실제 비용 후 수익이 10% 미만일 때 정상 전략 판단을 재개한다. 원래 최고점·낙폭 기준·계좌 자금·만기는 유지하며 부분 청산, 실제 목표 확보, 낙폭 중단, 만기에서는 매수를 허용하지 않는다. 버전은 `+target-retry.1`로 구분하고 재개 현금을 위험 사건에 남긴다. 재개 직후 즉시 임의로 매수하지 않으며 원래 순위 선정·다음 봉 매수 단계를 따른다.
 
 집계기는 재개 시점의 현금과 수량을 체결 내역으로 다시 계산하고, 최초 재개 판단 이전 경로·재개하지 않은 계좌의 기존 결과·원래 만기·최고점 기준 낙폭·개별 비용을 대조한다. 추가 비용은 수수료·매도세·모형 슬리피지 합계이며 슬리피지를 현금에서 이중 차감하지 않는다. [재개 정책 결과](../../docs/research/kr-current-quarter-target-retry-findings.md)에 수익 감소 사례와 현재 조건의 부족한 표본도 함께 기록한다.
+
+
+## 재개 정책의 비용·조건·과거 구간 진단
+
+`configs/target-retry-diagnostics-experiments.json`은 재개 정책을 유지한 8개 실행·255개 추가 계좌 목록이다. 편도 슬리피지 10·20bp의 154개, 변동성 25%에만 추가되는 31개, 개발 월간 46개, 2011년 24개를 실행한다. 모든 실행이 완료된 뒤 같은 비용·시드·날짜의 기존 영구 중단 계좌와 대조한다. 직전 재개 비교의 기본 77개 계좌도 조건 집계에 재사용한다.
+
+```bash
+node --import tsx scripts/quarter-research/quarter-engine.ts data/kr-quarter-research/expanded/stock-200-verified-input.json.gz data/kr-quarter-research/target-retry-diagnostics/reproduction-cost20-confirmation confirmation scripts/quarter-research/configs/account-stop-candidate.json 20 204 0 100000000 scripts/quarter-research/configs/target-retry-diagnostic-stop15-cost20-confirmation-options.json
+python scripts/quarter-research/build_target_retry_diagnostics.py data/kr-quarter-research data/kr-quarter-research/target-retry-diagnostics/evidence
+```
+
+위 `reproduction-*`는 별도 예시 경로다. 집계기는 원래 고정 실험과 재개 옵션의 차이, 개별 원본 성과와 현금·비용·낙폭을 대조한다. 기존 25·30·35% 조건 날짜를 그대로 사용하며 35%와 2011년의 30·35%는 부분집합 집계다. 전체 비용·조건 결과와 과거 부진을 [후속 진단 결과](../../docs/research/kr-current-quarter-target-retry-diagnostics-findings.md)에 함께 보존한다.

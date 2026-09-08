@@ -1,0 +1,39 @@
+{
+  "verifiedOnKst": "2026-09-09",
+  "dataAsOf": "2026-09-08",
+  "newExperiments": 8,
+  "newAccounts": 255,
+  "reusedRetryAccounts": 77,
+  "baselineAccounts": 332,
+  "uniqueRawAndSummaryHashesChecked": 684,
+  "sourceAndCodeHashesMatch": true,
+  "fullManifestSha256": "bc2f4af41555a16ffeabff96312a52d35f0c4bf18dbaef8e71168fb34b4ad2ad",
+  "costAndCurrentStageThresholdsPassed": true,
+  "developmentAndEarlierPassed": false,
+  "newStrategyAdopted": false,
+  "resumedAccounts": 22,
+  "resumptions": 23,
+  "failureToSuccess": 19,
+  "returnWorsened": 3,
+  "unchangedNewResultsWithoutResume": 233,
+  "unclosedNewAccounts": 3,
+  "affectedActionNewAccounts": 8,
+  "checks": {
+    "tradingCodeAndTestsUnchangedFrom": "bb6af78",
+    "applicableVitestFilesPassed": 5,
+    "applicableVitestTestsPassed": 27,
+    "priorEslintAndServerTypecheckRemainApplicable": true,
+    "pythonCompilation": true,
+    "newRawAccountsAndBaselineCashRiskCostAudit": true,
+    "unclosedFinalVolumeLimitsChecked": 3,
+    "affectedActionsNeverCountedAsTargetSuccess": true
+  },
+  "limitations": [
+    "비용·조건 통과와 과거 국면 실패를 구분",
+    "인접 파라미터 확인 미완료",
+    "현재와 닮은 회복 조건 비중첩 표본은 단계별 1개",
+    "현재 수출 성장·회복 결합 조건 표본 없음",
+    "보유 중 미확인 기업행위가 있는 모형 수익은 불확실",
+    "실주문 없음"
+  ]
+}
