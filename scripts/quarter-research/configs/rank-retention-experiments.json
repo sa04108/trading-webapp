@@ -1,0 +1,74 @@
+[
+  {
+    "rebalanceBars": 20,
+    "directory": "rank-retention/20-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "rank-retention-20.json",
+    "options": "target-retry-seed204-offset0-validation-options.json",
+    "slippageBps": 5,
+    "seed": 204,
+    "baseline": "target-retry/seed204-offset0-validation",
+    "baselineSelection": "account-stop-candidate.json"
+  },
+  {
+    "rebalanceBars": 20,
+    "directory": "rank-retention/20-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "rank-retention-20.json",
+    "options": "target-retry-seed204-offset0-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 204,
+    "baseline": "target-retry/seed204-offset0-confirmation",
+    "baselineSelection": "account-stop-candidate.json"
+  },
+  {
+    "rebalanceBars": 15,
+    "directory": "rank-retention/15-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "rank-retention-15.json",
+    "options": "target-retry-seed204-offset0-validation-options.json",
+    "slippageBps": 5,
+    "seed": 204,
+    "baseline": "target-retry-neighbors/rebalance15-validation",
+    "baselineSelection": "target-retry-neighbor-rebalance15.json"
+  },
+  {
+    "rebalanceBars": 15,
+    "directory": "rank-retention/15-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "rank-retention-15.json",
+    "options": "target-retry-seed204-offset0-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 204,
+    "baseline": "target-retry-neighbors/rebalance15-confirmation",
+    "baselineSelection": "target-retry-neighbor-rebalance15.json"
+  },
+  {
+    "rebalanceBars": 25,
+    "directory": "rank-retention/25-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "rank-retention-25.json",
+    "options": "target-retry-seed204-offset0-validation-options.json",
+    "slippageBps": 5,
+    "seed": 204,
+    "baseline": "target-retry-neighbors/rebalance25-validation",
+    "baselineSelection": "target-retry-neighbor-rebalance25.json"
+  },
+  {
+    "rebalanceBars": 25,
+    "directory": "rank-retention/25-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "rank-retention-25.json",
+    "options": "target-retry-seed204-offset0-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 204,
+    "baseline": "target-retry-neighbors/rebalance25-confirmation",
+    "baselineSelection": "target-retry-neighbor-rebalance25.json"
+  }
+]

@@ -1,0 +1,74 @@
+{
+  "verifiedOnKst": "2026-09-09",
+  "dataAsOf": "2026-09-08",
+  "newExperiments": 6,
+  "newAccounts": 231,
+  "reusedAccounts": 231,
+  "uniqueRawAndSummaryHashesChecked": 474,
+  "sourceAndCodeHashesMatch": true,
+  "fullManifestSha256": "77f981585f16ee5b68bdd8fe9d779d07f8f8ab2524211e284e8e2b1464ea5a57",
+  "allSettingsPassed": true,
+  "newStrategyAdopted": false,
+  "researchCandidate": {
+    "strategyId": "rank-retention-momentum",
+    "formationDays": 20,
+    "topN": 5,
+    "retentionRank": 10,
+    "rebalanceBars": 20
+  },
+  "failureToSuccess": 1,
+  "successToFailure": 0,
+  "returnImproved": 7,
+  "returnWorsened": 6,
+  "unchangedResults": 218,
+  "extraFills": -19,
+  "extraCostsKrw": -1665438.1805,
+  "unclosedNewAccounts": 0,
+  "affectedActionNewAccounts": 1,
+  "checks": {
+    "vitestFilesPassed": 7,
+    "vitestTestsPassed": 50,
+    "vitestFiles": [
+      "rank-retention-quarter",
+      "target-retry-quarter",
+      "quarter-research",
+      "uncertain-history-quarter",
+      "confirmed-entry-quarter",
+      "recovery-quarter",
+      "cross-sectional-momentum"
+    ],
+    "eslintFiles": [
+      "scripts/quarter-research/rank-retention-momentum.ts",
+      "scripts/quarter-research/quarter-engine.ts",
+      "tests/unit/rank-retention-quarter.test.ts"
+    ],
+    "eslintPassed": true,
+    "serverTypecheckPassed": true,
+    "pythonCompilation": true,
+    "neutralRetentionMatchesNativeResultsWithTiesSeedsPartialFills": true,
+    "fixedCandidateDatesCashRiskCostsAndPositionLimits": true,
+    "firstBuysMatchBaselineForAllAccounts": true,
+    "affectedActionsNeverCountedAsTargetSuccess": true,
+    "defaultNativeAccountByteEqual": true,
+    "defaultReplaySha256": "8c201bf3f0ffd61372ca2433e4e5815595b73869a4b1e7adb0298ae6d702ba2b"
+  },
+  "publicArtifactSha256": {
+    "affected-action-accounts.json": "ce6207ea80f9ed92ea1143e15ea8de9b376c3592e524856e79352f4f2a103448",
+    "all-summaries.csv": "ed994a2eeb66f664874bfe61093084fcc59f8c16941e89864ba01f4276dcc17a",
+    "evidence-manifest.json": "89e981df16480eba62783e340d354cab44744fbc0903d0d653cadbf2c6c16213",
+    "motivation-case-audit.json": "1af83f83c7c2c00b15ca71c480e4fe852265da9b730e6c69c4061d4fb9252a5a",
+    "nonoverlapping-accounts.json": "86cf69a13aa3c2e0b564c7d3d4eeac9c2dc9186fd1c7d2251a2889179b2f12fb",
+    "paired-accounts.json": "1fd820fbde20c6efe7b7b44dd9ad5e69d7515808f52a68e726889fc6f375e0e4"
+  },
+  "limitations": [
+    "가설을 만든 과거 계좌 1개가 목표 성공으로 전환됨",
+    "231개 중 218개 결과는 기존과 동일",
+    "비용·시드·선정일·선정 기간·보유 수·과거 환경의 새 규칙 확인 미완료",
+    "반복한 같은 역사는 독립 관측 증가가 아님",
+    "현재와 닮은 회복 조건 비중첩 표본은 단계별 1개",
+    "현재 수출 성장·회복 결합 조건 표본 없음",
+    "실제 최대 낙폭은 15% 중단 기준을 넘음",
+    "기업행위 불확실성",
+    "실주문 없음"
+  ]
+}

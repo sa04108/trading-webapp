@@ -1,0 +1,5748 @@
+[
+  {
+    "rebalanceBars": 20,
+    "stage": "validation",
+    "paired": [
+      {
+        "start": "2020-04-09",
+        "end": "2020-07-08",
+        "resumptions": [],
+        "baseReturnPct": 11.684146132499995,
+        "returnPct": 11.684146132499995,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -7.752731364411336,
+        "drawdownPct": -7.752731364411336,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-05-26",
+            "reason": "계좌 목표 청산",
+            "equity": 111360327.05249998
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-04-10",
+        "end": "2020-07-09",
+        "resumptions": [],
+        "baseReturnPct": 17.527434985,
+        "returnPct": 17.527434985,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -11.918097405000005,
+        "drawdownPct": -11.918097405000005,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-05-14",
+            "reason": "계좌 목표 청산",
+            "equity": 118064802.595
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-04-13",
+        "end": "2020-07-12",
+        "resumptions": [
+          {
+            "date": "2020-05-07",
+            "cash": 109887081.42750001,
+            "realizedReturnPct": 9.88708142750001,
+            "originalPeak": 111941554.5625,
+            "drawdownPct": -1.8353087403774837,
+            "nextBuy": "2020-05-19"
+          }
+        ],
+        "baseReturnPct": 11.810733257499994,
+        "returnPct": 11.810733257499994,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -8.797089707863758,
+        "drawdownPct": -8.797089707863758,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-05-06",
+            "reason": "계좌 목표 청산",
+            "equity": 111941554.5625
+          },
+          {
+            "date": "2020-05-07",
+            "reason": "실제 목표 미달 후 재개",
+            "equity": 109887081.42750001
+          },
+          {
+            "date": "2020-05-25",
+            "reason": "계좌 목표 청산",
+            "equity": 112275501.63250001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-04-14",
+        "end": "2020-07-13",
+        "resumptions": [],
+        "baseReturnPct": 11.2825392435,
+        "returnPct": 11.2825392435,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -8.278275048680051,
+        "drawdownPct": -8.278275048680051,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-05-22",
+            "reason": "계좌 목표 청산",
+            "equity": 110684025.6485
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-04-16",
+        "end": "2020-07-15",
+        "resumptions": [],
+        "baseReturnPct": 11.470001090000004,
+        "returnPct": 13.171763662500013,
+        "returnDeltaPctPoints": 1.7017625725000087,
+        "baseDrawdownPct": -8.29614281361286,
+        "drawdownPct": -8.29614281361286,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": -96812.57250000024,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-05-29",
+            "reason": "계좌 목표 청산",
+            "equity": 112403522.2575
+          }
+        ],
+        "sameResult": false
+      },
+      {
+        "start": "2020-04-17",
+        "end": "2020-07-16",
+        "resumptions": [
+          {
+            "date": "2020-06-02",
+            "cash": 109974356.33125,
+            "realizedReturnPct": 9.97435633124999,
+            "originalPeak": 110626659.14324999,
+            "drawdownPct": -0.5896434160190367,
+            "nextBuy": "2020-06-19"
+          }
+        ],
+        "baseReturnPct": 14.211613713250015,
+        "returnPct": 14.211613713250015,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -10.90211520839901,
+        "drawdownPct": -10.90211520839901,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-06-01",
+            "reason": "계좌 목표 청산",
+            "equity": 110626659.14324999
+          },
+          {
+            "date": "2020-06-02",
+            "reason": "실제 목표 미달 후 재개",
+            "equity": 109974356.33125
+          },
+          {
+            "date": "2020-07-10",
+            "reason": "계좌 목표 청산",
+            "equity": 112741673.31225
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-04-20",
+        "end": "2020-07-19",
+        "resumptions": [],
+        "baseReturnPct": 11.882689341500008,
+        "returnPct": 15.990405216499992,
+        "returnDeltaPctPoints": 4.107715874999984,
+        "baseDrawdownPct": -8.380805637456291,
+        "drawdownPct": -7.071696868745992,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": -1,
+        "extraCostsKrw": -122015.875,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-06-22",
+            "reason": "계좌 목표 청산",
+            "equity": 115433098.6065
+          }
+        ],
+        "sameResult": false
+      },
+      {
+        "start": "2020-04-21",
+        "end": "2020-07-20",
+        "resumptions": [],
+        "baseReturnPct": 14.503059915499982,
+        "returnPct": 14.503059915499982,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -10.062699735649982,
+        "drawdownPct": -10.062699735649982,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-13",
+            "reason": "계좌 목표 청산",
+            "equity": 116616543.9265
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-04-22",
+        "end": "2020-07-21",
+        "resumptions": [],
+        "baseReturnPct": 17.266433817500015,
+        "returnPct": 17.266433817500015,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -9.696569678953859,
+        "drawdownPct": -9.696569678953859,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-06-22",
+            "reason": "계좌 목표 청산",
+            "equity": 115567762.555
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-06-16",
+        "end": "2020-09-15",
+        "resumptions": [],
+        "baseReturnPct": 10.20871349749999,
+        "returnPct": 10.20871349749999,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -11.4562430175,
+        "drawdownPct": -11.4562430175,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-15",
+            "reason": "계좌 목표 청산",
+            "equity": 110821767.69749999
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-06-17",
+        "end": "2020-09-16",
+        "resumptions": [
+          {
+            "date": "2020-07-14",
+            "cash": 108742879.64,
+            "realizedReturnPct": 8.742879640000002,
+            "originalPeak": 110748764.82699999,
+            "drawdownPct": -1.8112032130862765,
+            "nextBuy": "2020-07-17"
+          }
+        ],
+        "baseReturnPct": 15.342582337499987,
+        "returnPct": 15.342582337499987,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -10.494495173000008,
+        "drawdownPct": -10.494495173000008,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-13",
+            "reason": "계좌 목표 청산",
+            "equity": 110748764.82699999
+          },
+          {
+            "date": "2020-07-14",
+            "reason": "실제 목표 미달 후 재개",
+            "equity": 108742879.64
+          },
+          {
+            "date": "2020-07-17",
+            "reason": "계좌 목표 청산",
+            "equity": 112607072.1725
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-06-18",
+        "end": "2020-09-17",
+        "resumptions": [],
+        "baseReturnPct": 11.125491620000005,
+        "returnPct": 11.125491620000005,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -8.456145012499983,
+        "drawdownPct": -8.456145012499983,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-13",
+            "reason": "계좌 목표 청산",
+            "equity": 113175204.98750001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-06-19",
+        "end": "2020-09-18",
+        "resumptions": [],
+        "baseReturnPct": 10.907127821500007,
+        "returnPct": 10.907127821500007,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -8.566678341999989,
+        "drawdownPct": -8.566678341999989,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-13",
+            "reason": "계좌 목표 청산",
+            "equity": 112955941.658
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-06-22",
+        "end": "2020-09-21",
+        "resumptions": [],
+        "baseReturnPct": 10.874724730000018,
+        "returnPct": 10.874724730000018,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -10.7360468125,
+        "drawdownPct": -10.7360468125,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-13",
+            "reason": "계좌 목표 청산",
+            "equity": 113090453.1875
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-06-23",
+        "end": "2020-09-22",
+        "resumptions": [],
+        "baseReturnPct": 11.950397680499991,
+        "returnPct": 11.950397680499991,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -10.041211844999998,
+        "drawdownPct": -10.041211844999998,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-30",
+            "reason": "계좌 목표 청산",
+            "equity": 110622135.97299999
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-06-24",
+        "end": "2020-09-23",
+        "resumptions": [],
+        "baseReturnPct": 11.36301538450002,
+        "returnPct": 11.972501135000012,
+        "returnDeltaPctPoints": 0.6094857504999922,
+        "baseDrawdownPct": -10.407343437500005,
+        "drawdownPct": -10.407343437500005,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": -31395.75049999985,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-28",
+            "reason": "계좌 목표 청산",
+            "equity": 111589178.26999998
+          }
+        ],
+        "sameResult": false
+      },
+      {
+        "start": "2020-07-06",
+        "end": "2020-10-05",
+        "resumptions": [],
+        "baseReturnPct": 19.318166822499983,
+        "returnPct": 19.318166822499983,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -0.9379061611945239,
+        "drawdownPct": -0.9379061611945239,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-13",
+            "reason": "계좌 목표 청산",
+            "equity": 120447854.6725
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-07-10",
+        "end": "2020-10-09",
+        "resumptions": [],
+        "baseReturnPct": 18.688110605,
+        "returnPct": 18.688110605,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -2.1487736875070995,
+        "drawdownPct": -2.1487736875070995,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-20",
+            "reason": "계좌 목표 청산",
+            "equity": 114496996.555
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2021-02-03",
+        "end": "2021-05-02",
+        "resumptions": [],
+        "baseReturnPct": -14.05504273,
+        "returnPct": -14.05504273,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -16.772257267852297,
+        "drawdownPct": -16.772257267852297,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2021-02-24",
+            "reason": "계좌 낙폭 중단",
+            "equity": 83667359.95249999
+          }
+        ],
+        "sameResult": true
+      }
+    ]
+  },
+  {
+    "rebalanceBars": 20,
+    "stage": "confirmation",
+    "paired": [
+      {
+        "start": "2024-09-02",
+        "end": "2024-12-01",
+        "resumptions": [],
+        "baseReturnPct": 12.89861940999999,
+        "returnPct": 12.89861940999999,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -8.102594001925967,
+        "drawdownPct": -8.102594001925967,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2024-10-28",
+            "reason": "계좌 목표 청산",
+            "equity": 112756383.62
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2025-04-28",
+        "end": "2025-07-27",
+        "resumptions": [],
+        "baseReturnPct": 11.015408045000008,
+        "returnPct": 11.015408045000008,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -2.771615965000007,
+        "drawdownPct": -2.771615965000007,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2025-05-21",
+            "reason": "계좌 목표 청산",
+            "equity": 111717884.035
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2025-04-29",
+        "end": "2025-07-28",
+        "resumptions": [],
+        "baseReturnPct": 12.573800644999999,
+        "returnPct": 12.573800644999999,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -2.2630844891106228,
+        "drawdownPct": -2.2630844891106228,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2025-05-16",
+            "reason": "계좌 목표 청산",
+            "equity": 111946264.11000001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2025-04-30",
+        "end": "2025-07-29",
+        "resumptions": [],
+        "baseReturnPct": 10.463444970000001,
+        "returnPct": 10.463444970000001,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -4.5743110841874435,
+        "drawdownPct": -4.5743110841874435,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2025-05-27",
+            "reason": "계좌 목표 청산",
+            "equity": 111031319.545
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2025-05-02",
+        "end": "2025-08-01",
+        "resumptions": [],
+        "baseReturnPct": 10.160006320000004,
+        "returnPct": 10.160006320000004,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -2.322074057918,
+        "drawdownPct": -2.322074057918,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2025-05-21",
+            "reason": "계좌 목표 청산",
+            "equity": 111153724.42
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2025-05-07",
+        "end": "2025-08-06",
+        "resumptions": [],
+        "baseReturnPct": 11.033680210000018,
+        "returnPct": 11.033680210000018,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -4.322776264466722,
+        "drawdownPct": -4.322776264466722,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2025-05-27",
+            "reason": "계좌 목표 청산",
+            "equity": 111646917.50500001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2025-11-17",
+        "end": "2026-02-16",
+        "resumptions": [],
+        "baseReturnPct": 11.996482490000005,
+        "returnPct": 11.996482490000005,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -12.33240658060517,
+        "drawdownPct": -12.33240658060517,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2025-12-29",
+            "reason": "계좌 목표 청산",
+            "equity": 111490872.9425
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2025-12-03",
+        "end": "2026-03-02",
+        "resumptions": [],
+        "baseReturnPct": 10.043233690000019,
+        "returnPct": 10.043233690000019,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -8.95131162795172,
+        "drawdownPct": -8.95131162795172,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-01-29",
+            "reason": "계좌 목표 청산",
+            "equity": 111134775.19250001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2025-12-04",
+        "end": "2026-03-03",
+        "resumptions": [],
+        "baseReturnPct": 20.81956260000002,
+        "returnPct": 20.81956260000002,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -12.174815823424279,
+        "drawdownPct": -12.174815823424279,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-02-19",
+            "reason": "계좌 목표 청산",
+            "equity": 116552903.26500002
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2025-12-05",
+        "end": "2026-03-04",
+        "resumptions": [],
+        "baseReturnPct": 16.943949557499984,
+        "returnPct": 13.364713802500017,
+        "returnDeltaPctPoints": -3.579235754999967,
+        "baseDrawdownPct": -8.558167220000001,
+        "drawdownPct": -8.558167220000001,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": -1,
+        "extraCostsKrw": -82464.24499999988,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-01-15",
+            "reason": "계좌 목표 청산",
+            "equity": 110947106.155
+          }
+        ],
+        "sameResult": false
+      },
+      {
+        "start": "2025-12-08",
+        "end": "2026-03-07",
+        "resumptions": [],
+        "baseReturnPct": 13.455957730000012,
+        "returnPct": 13.455957730000012,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -7.3921011674329185,
+        "drawdownPct": -7.3921011674329185,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-01-15",
+            "reason": "계좌 목표 청산",
+            "equity": 111866088.35250002
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2025-12-09",
+        "end": "2026-03-08",
+        "resumptions": [],
+        "baseReturnPct": 10.904969165000011,
+        "returnPct": 10.904969165000011,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -8.585626484999986,
+        "drawdownPct": -8.585626484999986,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-01-13",
+            "reason": "계좌 목표 청산",
+            "equity": 111261836.73500001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-03",
+        "end": "2026-05-02",
+        "resumptions": [],
+        "baseReturnPct": 17.09481574499998,
+        "returnPct": 17.09481574499998,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -8.113971845000002,
+        "drawdownPct": -8.113971845000002,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-02-19",
+            "reason": "계좌 목표 청산",
+            "equity": 112959328.155
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-04",
+        "end": "2026-05-03",
+        "resumptions": [],
+        "baseReturnPct": 24.212516975,
+        "returnPct": 24.212516975,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -3.0959796909625914,
+        "drawdownPct": -3.0959796909625914,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-02-26",
+            "reason": "계좌 목표 청산",
+            "equity": 119299220.45
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-05",
+        "end": "2026-05-04",
+        "resumptions": [],
+        "baseReturnPct": 19.689911555000016,
+        "returnPct": 19.689911555000016,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -4.379578534999995,
+        "drawdownPct": -4.379578534999995,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-02-26",
+            "reason": "계좌 목표 청산",
+            "equity": 114551021.465
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-06",
+        "end": "2026-05-05",
+        "resumptions": [],
+        "baseReturnPct": 21.41202349000002,
+        "returnPct": 21.41202349000002,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -5.152896610000002,
+        "drawdownPct": -5.152896610000002,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-02-26",
+            "reason": "계좌 목표 청산",
+            "equity": 119251603.39
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-09",
+        "end": "2026-05-08",
+        "resumptions": [],
+        "baseReturnPct": 22.737454150000012,
+        "returnPct": 22.737454150000012,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": 0,
+        "drawdownPct": 0,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-02-19",
+            "reason": "계좌 목표 청산",
+            "equity": 122291778.14
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-10",
+        "end": "2026-05-09",
+        "resumptions": [],
+        "baseReturnPct": 22.57652245999997,
+        "returnPct": 22.57652245999997,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": 0,
+        "drawdownPct": 0,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-02-19",
+            "reason": "계좌 목표 청산",
+            "equity": 122053042.85499999
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-11",
+        "end": "2026-05-10",
+        "resumptions": [],
+        "baseReturnPct": 18.50197278000001,
+        "returnPct": 18.50197278000001,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": 0,
+        "drawdownPct": 0,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-02-19",
+            "reason": "계좌 목표 청산",
+            "equity": 117651525.67
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-12",
+        "end": "2026-05-11",
+        "resumptions": [],
+        "baseReturnPct": 13.519211595000025,
+        "returnPct": 13.519211595000025,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -4.822687626642508,
+        "drawdownPct": -4.822687626642508,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-02-26",
+            "reason": "계좌 목표 청산",
+            "equity": 112396708.7
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-13",
+        "end": "2026-05-12",
+        "resumptions": [],
+        "baseReturnPct": -7.804380775000008,
+        "returnPct": -7.804380775000008,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -22.114609391012287,
+        "drawdownPct": -22.114609391012287,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-04",
+            "reason": "계좌 낙폭 중단",
+            "equity": 82301112.79499999
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-19",
+        "end": "2026-05-18",
+        "resumptions": [],
+        "baseReturnPct": -10.174003897499983,
+        "returnPct": -10.174003897499983,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -21.005317080936713,
+        "drawdownPct": -21.005317080936713,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-04",
+            "reason": "계좌 낙폭 중단",
+            "equity": 81376457.635
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-20",
+        "end": "2026-05-19",
+        "resumptions": [],
+        "baseReturnPct": -9.444850297499997,
+        "returnPct": -9.444850297499997,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -21.403448206102414,
+        "drawdownPct": -21.403448206102414,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-04",
+            "reason": "계좌 낙폭 중단",
+            "equity": 81129052.745
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-23",
+        "end": "2026-05-22",
+        "resumptions": [],
+        "baseReturnPct": -7.140591963749987,
+        "returnPct": -7.140591963749987,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -21.294599776178615,
+        "drawdownPct": -21.294599776178615,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-04",
+            "reason": "계좌 낙폭 중단",
+            "equity": 83252696.09400001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-24",
+        "end": "2026-05-23",
+        "resumptions": [],
+        "baseReturnPct": -4.448871572499991,
+        "returnPct": -4.448871572499991,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -21.037891469407867,
+        "drawdownPct": -21.037891469407867,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-04",
+            "reason": "계좌 낙폭 중단",
+            "equity": 86521155.61000001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-25",
+        "end": "2026-05-24",
+        "resumptions": [],
+        "baseReturnPct": -11.352638082499977,
+        "returnPct": -11.352638082499977,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -21.28299707666075,
+        "drawdownPct": -21.28299707666075,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-04",
+            "reason": "계좌 낙폭 중단",
+            "equity": 79228713.16000001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-26",
+        "end": "2026-05-25",
+        "resumptions": [],
+        "baseReturnPct": -8.480707407499988,
+        "returnPct": -8.480707407499988,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -17.926990369999984,
+        "drawdownPct": -17.926990369999984,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-04",
+            "reason": "계좌 낙폭 중단",
+            "equity": 82073009.63000001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-27",
+        "end": "2026-05-26",
+        "resumptions": [
+          {
+            "date": "2026-03-09",
+            "cash": 107025251.765,
+            "realizedReturnPct": 7.025251764999996,
+            "originalPeak": 114483875.075,
+            "drawdownPct": -6.514998994499233,
+            "nextBuy": "2026-04-01"
+          }
+        ],
+        "baseReturnPct": 17.81937337799999,
+        "returnPct": 17.81937337799999,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -7.1351749249999985,
+        "drawdownPct": -7.1351749249999985,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-06",
+            "reason": "계좌 목표 청산",
+            "equity": 114483875.075
+          },
+          {
+            "date": "2026-03-09",
+            "reason": "실제 목표 미달 후 재개",
+            "equity": 107025251.765
+          },
+          {
+            "date": "2026-04-01",
+            "reason": "계좌 목표 청산",
+            "equity": 117427113.789
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-03-03",
+        "end": "2026-06-02",
+        "resumptions": [
+          {
+            "date": "2026-03-09",
+            "cash": 109662980.2,
+            "realizedReturnPct": 9.662980200000003,
+            "originalPeak": 113155106.16499999,
+            "drawdownPct": -3.0861408586439376,
+            "nextBuy": "2026-04-02"
+          }
+        ],
+        "baseReturnPct": 16.572168493000007,
+        "returnPct": 16.572168493000007,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -7.666574992515274,
+        "drawdownPct": -7.666574992515274,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-06",
+            "reason": "계좌 목표 청산",
+            "equity": 113155106.16499999
+          },
+          {
+            "date": "2026-03-09",
+            "reason": "실제 목표 미달 후 재개",
+            "equity": 109662980.2
+          },
+          {
+            "date": "2026-04-08",
+            "reason": "계좌 목표 청산",
+            "equity": 117517865.093
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-03-05",
+        "end": "2026-06-04",
+        "resumptions": [],
+        "baseReturnPct": -14.99564404499999,
+        "returnPct": -14.99564404499999,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -17.42346299613031,
+        "drawdownPct": -17.42346299613031,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-31",
+            "reason": "계좌 낙폭 중단",
+            "equity": 84390475.85000001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-03-18",
+        "end": "2026-06-17",
+        "resumptions": [],
+        "baseReturnPct": -9.200023511499989,
+        "returnPct": -9.200023511499989,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -15.301757863637878,
+        "drawdownPct": -15.301757863637878,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-04-02",
+            "reason": "계좌 낙폭 중단",
+            "equity": 88236075.037
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-03-19",
+        "end": "2026-06-18",
+        "resumptions": [],
+        "baseReturnPct": -10.325604044000015,
+        "returnPct": -10.325604044000015,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -15.665569136000013,
+        "drawdownPct": -15.665569136000013,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-31",
+            "reason": "계좌 낙폭 중단",
+            "equity": 84334430.864
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-03-20",
+        "end": "2026-06-19",
+        "resumptions": [],
+        "baseReturnPct": -10.797716161000015,
+        "returnPct": -10.797716161000015,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -16.855821838354114,
+        "drawdownPct": -16.855821838354114,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-31",
+            "reason": "계좌 낙폭 중단",
+            "equity": 83647054.6275
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-08",
+        "end": "2026-07-07",
+        "resumptions": [],
+        "baseReturnPct": -8.88502010750003,
+        "returnPct": -8.88502010750003,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -17.04331572512232,
+        "drawdownPct": -17.04331572512232,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-15",
+            "reason": "계좌 낙폭 중단",
+            "equity": 91493344.17249998
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-09",
+        "end": "2026-07-08",
+        "resumptions": [
+          {
+            "date": "2026-04-22",
+            "cash": 108893101.945,
+            "realizedReturnPct": 8.893101944999993,
+            "originalPeak": 110812409.14999999,
+            "drawdownPct": -1.7320327386817769,
+            "nextBuy": "2026-05-13"
+          }
+        ],
+        "baseReturnPct": 12.67370944499997,
+        "returnPct": 12.67370944499997,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -2.030890850000011,
+        "drawdownPct": -2.030890850000011,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-04-21",
+            "reason": "계좌 목표 청산",
+            "equity": 110812409.14999999
+          },
+          {
+            "date": "2026-04-22",
+            "reason": "실제 목표 미달 후 재개",
+            "equity": 108893101.945
+          },
+          {
+            "date": "2026-05-13",
+            "reason": "계좌 목표 청산",
+            "equity": 112348737.01999998
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-10",
+        "end": "2026-07-09",
+        "resumptions": [],
+        "baseReturnPct": 11.87964812000002,
+        "returnPct": 11.87964812000002,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -1.635929740675679,
+        "drawdownPct": -1.635929740675679,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-04-21",
+            "reason": "계좌 목표 청산",
+            "equity": 112158608.72999999
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-13",
+        "end": "2026-07-12",
+        "resumptions": [],
+        "baseReturnPct": 11.854617302499992,
+        "returnPct": 11.854617302499992,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -1.6226984343688522,
+        "drawdownPct": -1.6226984343688522,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-04-21",
+            "reason": "계좌 목표 청산",
+            "equity": 112182606.4425
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-14",
+        "end": "2026-07-13",
+        "resumptions": [],
+        "baseReturnPct": 14.733505294999993,
+        "returnPct": 14.733505294999993,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -1.8140841899999982,
+        "drawdownPct": -1.8140841899999982,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-04-24",
+            "reason": "계좌 목표 청산",
+            "equity": 113799215.81
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-15",
+        "end": "2026-07-14",
+        "resumptions": [],
+        "baseReturnPct": 14.780227587500017,
+        "returnPct": 14.780227587500017,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -0.3727938936280317,
+        "drawdownPct": -0.3727938936280317,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-04-22",
+            "reason": "계좌 목표 청산",
+            "equity": 111299607.4775
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-16",
+        "end": "2026-07-15",
+        "resumptions": [],
+        "baseReturnPct": 15.125156455000033,
+        "returnPct": 15.125156455000033,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -1.289291164999995,
+        "drawdownPct": -1.289291164999995,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-04-24",
+            "reason": "계좌 목표 청산",
+            "equity": 113776708.83500001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-17",
+        "end": "2026-07-16",
+        "resumptions": [],
+        "baseReturnPct": 13.718787175000013,
+        "returnPct": 13.718787175000013,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -1.4894834194477236,
+        "drawdownPct": -1.4894834194477236,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-04-28",
+            "reason": "계좌 목표 청산",
+            "equity": 114990502.4975
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-20",
+        "end": "2026-07-19",
+        "resumptions": [
+          {
+            "date": "2026-04-29",
+            "cash": 108861777.49000001,
+            "realizedReturnPct": 8.861777490000012,
+            "originalPeak": 110621105.86,
+            "drawdownPct": -1.590409313234098,
+            "nextBuy": "2026-05-22"
+          }
+        ],
+        "baseReturnPct": 18.73264607999998,
+        "returnPct": 18.73264607999998,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -1.590409313234098,
+        "drawdownPct": -1.590409313234098,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-04-28",
+            "reason": "계좌 목표 청산",
+            "equity": 110621105.86
+          },
+          {
+            "date": "2026-04-29",
+            "reason": "실제 목표 미달 후 재개",
+            "equity": 108861777.49000001
+          },
+          {
+            "date": "2026-05-22",
+            "reason": "계좌 목표 청산",
+            "equity": 115743877.98
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-21",
+        "end": "2026-07-20",
+        "resumptions": [],
+        "baseReturnPct": -4.282907229999989,
+        "returnPct": -4.282907229999989,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -15.428459882243361,
+        "drawdownPct": -15.428459882243361,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-20",
+            "reason": "계좌 낙폭 중단",
+            "equity": 90666123.235
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-22",
+        "end": "2026-07-21",
+        "resumptions": [],
+        "baseReturnPct": 11.389513675000007,
+        "returnPct": 11.389513675000007,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -2.6843949724305705,
+        "drawdownPct": -2.6843949724305705,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-11",
+            "reason": "계좌 목표 청산",
+            "equity": 111287898.6225
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-23",
+        "end": "2026-07-22",
+        "resumptions": [],
+        "baseReturnPct": 11.004373615000018,
+        "returnPct": 11.004373615000018,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -1.4619314185483456,
+        "drawdownPct": -1.4619314185483456,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-13",
+            "reason": "계좌 목표 청산",
+            "equity": 111456107.135
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-24",
+        "end": "2026-07-23",
+        "resumptions": [],
+        "baseReturnPct": 15.522948915000011,
+        "returnPct": 15.522948915000011,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -2.7308918645794655,
+        "drawdownPct": -2.7308918645794655,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-14",
+            "reason": "계좌 목표 청산",
+            "equity": 113414677.385
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-27",
+        "end": "2026-07-26",
+        "resumptions": [],
+        "baseReturnPct": 15.722747394999992,
+        "returnPct": 15.722747394999992,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -13.179948943983156,
+        "drawdownPct": -13.179948943983156,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-22",
+            "reason": "계좌 목표 청산",
+            "equity": 111667495.66000001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-28",
+        "end": "2026-07-27",
+        "resumptions": [],
+        "baseReturnPct": 13.129185585000002,
+        "returnPct": 13.129185585000002,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -1.120943675000008,
+        "drawdownPct": -1.120943675000008,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-11",
+            "reason": "계좌 목표 청산",
+            "equity": 112400856.32499999
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-29",
+        "end": "2026-07-28",
+        "resumptions": [],
+        "baseReturnPct": 22.72136819499999,
+        "returnPct": 22.72136819499999,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -11.4412837068405,
+        "drawdownPct": -11.4412837068405,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-22",
+            "reason": "계좌 목표 청산",
+            "equity": 117039027.1275
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-05-04",
+        "end": "2026-08-03",
+        "resumptions": [],
+        "baseReturnPct": -9.206876290000011,
+        "returnPct": -9.206876290000011,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -15.199088179188214,
+        "drawdownPct": -15.199088179188214,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-19",
+            "reason": "계좌 낙폭 중단",
+            "equity": 90960911.625
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-05-06",
+        "end": "2026-08-05",
+        "resumptions": [],
+        "baseReturnPct": 12.16251863500002,
+        "returnPct": 12.16251863500002,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": 0,
+        "drawdownPct": 0,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-11",
+            "reason": "계좌 목표 청산",
+            "equity": 112038189.19500001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-05-07",
+        "end": "2026-08-06",
+        "resumptions": [],
+        "baseReturnPct": -13.827679095,
+        "returnPct": -13.827679095,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -21.19174976405025,
+        "drawdownPct": -21.19174976405025,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-06-08",
+            "reason": "계좌 낙폭 중단",
+            "equity": 82711707.92
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-05-08",
+        "end": "2026-08-07",
+        "resumptions": [],
+        "baseReturnPct": -17.186758227499986,
+        "returnPct": -17.186758227499986,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -20.169068660956402,
+        "drawdownPct": -20.169068660956402,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-06-08",
+            "reason": "계좌 낙폭 중단",
+            "equity": 80299494.995
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-05-11",
+        "end": "2026-08-10",
+        "resumptions": [],
+        "baseReturnPct": -11.343986062500012,
+        "returnPct": -11.343986062500012,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -18.513112061753468,
+        "drawdownPct": -18.513112061753468,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-06-01",
+            "reason": "계좌 낙폭 중단",
+            "equity": 91096239.06
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-05-12",
+        "end": "2026-08-11",
+        "resumptions": [],
+        "baseReturnPct": -13.520183552499997,
+        "returnPct": -13.520183552499997,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -16.289192885108594,
+        "drawdownPct": -16.289192885108594,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-29",
+            "reason": "계좌 낙폭 중단",
+            "equity": 86861677.78
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-05-13",
+        "end": "2026-08-12",
+        "resumptions": [],
+        "baseReturnPct": 19.565349045000026,
+        "returnPct": 19.565349045000026,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -12.671080649999988,
+        "drawdownPct": -12.671080649999988,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-26",
+            "reason": "계좌 목표 청산",
+            "equity": 114206519.35000001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-05-14",
+        "end": "2026-08-13",
+        "resumptions": [],
+        "baseReturnPct": 19.583471095000004,
+        "returnPct": 19.583471095000004,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -5.277379220471323,
+        "drawdownPct": -5.277379220471323,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-21",
+            "reason": "계좌 목표 청산",
+            "equity": 115979286.045
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-05-15",
+        "end": "2026-08-14",
+        "resumptions": [],
+        "baseReturnPct": 14.383996295000001,
+        "returnPct": 14.383996295000001,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -9.941648999999996,
+        "drawdownPct": -9.941648999999996,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-22",
+            "reason": "계좌 목표 청산",
+            "equity": 110845451
+          }
+        ],
+        "sameResult": true
+      }
+    ]
+  },
+  {
+    "rebalanceBars": 15,
+    "stage": "validation",
+    "paired": [
+      {
+        "start": "2020-04-09",
+        "end": "2020-07-08",
+        "resumptions": [],
+        "baseReturnPct": 11.42847996249996,
+        "returnPct": 13.81047045999999,
+        "returnDeltaPctPoints": 2.3819904975000306,
+        "baseDrawdownPct": -9.14313203643805,
+        "drawdownPct": -9.14313203643805,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": -1,
+        "extraCostsKrw": -115240.49750000006,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-06-01",
+            "reason": "계좌 목표 청산",
+            "equity": 114064507.83999999
+          }
+        ],
+        "sameResult": false
+      },
+      {
+        "start": "2020-04-10",
+        "end": "2020-07-09",
+        "resumptions": [],
+        "baseReturnPct": 10.489903432500004,
+        "returnPct": 10.489903432500004,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -11.918097405000005,
+        "drawdownPct": -11.918097405000005,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-06-01",
+            "reason": "계좌 목표 청산",
+            "equity": 110839075.94250001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-04-13",
+        "end": "2020-07-12",
+        "resumptions": [
+          {
+            "date": "2020-05-07",
+            "cash": 109887081.42750001,
+            "realizedReturnPct": 9.88708142750001,
+            "originalPeak": 111941554.5625,
+            "drawdownPct": -1.8353087403774837,
+            "nextBuy": "2020-05-12"
+          },
+          {
+            "date": "2020-05-13",
+            "cash": 108921478.735,
+            "realizedReturnPct": 8.921478734999999,
+            "originalPeak": 111941554.5625,
+            "drawdownPct": -2.6979041333697107,
+            "nextBuy": "2020-06-02"
+          }
+        ],
+        "baseReturnPct": 10.104195285500017,
+        "returnPct": 10.104195285500017,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -11.166019225703373,
+        "drawdownPct": -11.166019225703373,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-05-06",
+            "reason": "계좌 목표 청산",
+            "equity": 111941554.5625
+          },
+          {
+            "date": "2020-05-07",
+            "reason": "실제 목표 미달 후 재개",
+            "equity": 109887081.42750001
+          },
+          {
+            "date": "2020-05-12",
+            "reason": "계좌 목표 청산",
+            "equity": 110682552.60000001
+          },
+          {
+            "date": "2020-05-13",
+            "reason": "실제 목표 미달 후 재개",
+            "equity": 108921478.735
+          },
+          {
+            "date": "2020-07-09",
+            "reason": "3개월 만기 청산",
+            "equity": 109175209.05850002
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-04-14",
+        "end": "2020-07-13",
+        "resumptions": [],
+        "baseReturnPct": 13.645355195749985,
+        "returnPct": 13.645355195749985,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -8.278275048680051,
+        "drawdownPct": -8.278275048680051,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-05-27",
+            "reason": "계좌 목표 청산",
+            "equity": 110946910.45824999
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-04-16",
+        "end": "2020-07-15",
+        "resumptions": [],
+        "baseReturnPct": 12.105143669999997,
+        "returnPct": 12.105143669999997,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -8.29614281361286,
+        "drawdownPct": -8.29614281361286,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-06-01",
+            "reason": "계좌 목표 청산",
+            "equity": 112626784.7575
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-04-17",
+        "end": "2020-07-16",
+        "resumptions": [],
+        "baseReturnPct": 11.95468876775001,
+        "returnPct": 11.95468876775001,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -4.293879978000015,
+        "drawdownPct": -4.293879978000015,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-05-29",
+            "reason": "계좌 목표 청산",
+            "equity": 111952289.56775
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-04-20",
+        "end": "2020-07-19",
+        "resumptions": [],
+        "baseReturnPct": 14.531495884000002,
+        "returnPct": 14.531495884000002,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -6.224167791567514,
+        "drawdownPct": -6.224167791567514,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-05-27",
+            "reason": "계좌 목표 청산",
+            "equity": 111679661.4365
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-04-21",
+        "end": "2020-07-20",
+        "resumptions": [],
+        "baseReturnPct": 15.075045977500023,
+        "returnPct": 15.075045977500023,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -8.051731566388332,
+        "drawdownPct": -8.051731566388332,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-06-05",
+            "reason": "계좌 목표 청산",
+            "equity": 112275676.62750001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-04-22",
+        "end": "2020-07-21",
+        "resumptions": [],
+        "baseReturnPct": 10.306526435000007,
+        "returnPct": 10.306526435000007,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -8.451277203094154,
+        "drawdownPct": -8.451277203094154,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-05-28",
+            "reason": "계좌 목표 청산",
+            "equity": 111019501.69250001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-06-16",
+        "end": "2020-09-15",
+        "resumptions": [],
+        "baseReturnPct": 27.85638020250001,
+        "returnPct": 27.85638020250001,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -11.4562430175,
+        "drawdownPct": -11.4562430175,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-20",
+            "reason": "계좌 목표 청산",
+            "equity": 119885541.3925
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-06-17",
+        "end": "2020-09-16",
+        "resumptions": [],
+        "baseReturnPct": 23.01366634900002,
+        "returnPct": 10.874206564,
+        "returnDeltaPctPoints": -12.13945978500002,
+        "baseDrawdownPct": -10.494495173000008,
+        "drawdownPct": -10.494495173000008,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": -1,
+        "extraCostsKrw": -87540.21500000008,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-13",
+            "reason": "계좌 목표 청산",
+            "equity": 112671641.954
+          }
+        ],
+        "sameResult": false
+      },
+      {
+        "start": "2020-06-18",
+        "end": "2020-09-17",
+        "resumptions": [],
+        "baseReturnPct": 17.86713621749998,
+        "returnPct": 10.139023914999989,
+        "returnDeltaPctPoints": -7.728112302499991,
+        "baseDrawdownPct": -8.456145012499983,
+        "drawdownPct": -8.456145012499983,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": -1,
+        "extraCostsKrw": -95287.69750000001,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-13",
+            "reason": "계좌 목표 청산",
+            "equity": 112328159.17999999
+          }
+        ],
+        "sameResult": false
+      },
+      {
+        "start": "2020-06-19",
+        "end": "2020-09-18",
+        "resumptions": [],
+        "baseReturnPct": 17.574383674500016,
+        "returnPct": 17.574383674500016,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -8.566678341999989,
+        "drawdownPct": -8.566678341999989,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-17",
+            "reason": "계좌 목표 청산",
+            "equity": 114227197.88450001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-06-22",
+        "end": "2020-09-21",
+        "resumptions": [],
+        "baseReturnPct": 10.874724730000018,
+        "returnPct": 10.874724730000018,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -10.7360468125,
+        "drawdownPct": -10.7360468125,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-13",
+            "reason": "계좌 목표 청산",
+            "equity": 113090453.1875
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-06-23",
+        "end": "2020-09-22",
+        "resumptions": [],
+        "baseReturnPct": 21.365285035000014,
+        "returnPct": 21.365285035000014,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -10.041211844999998,
+        "drawdownPct": -10.041211844999998,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-21",
+            "reason": "계좌 목표 청산",
+            "equity": 112573345.4975
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-06-24",
+        "end": "2020-09-23",
+        "resumptions": [],
+        "baseReturnPct": 28.230817367499995,
+        "returnPct": 28.230817367499995,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -10.407343437500005,
+        "drawdownPct": -10.407343437500005,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-22",
+            "reason": "계좌 목표 청산",
+            "equity": 120019786.67749998
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-07-06",
+        "end": "2020-10-05",
+        "resumptions": [],
+        "baseReturnPct": 19.318166822499983,
+        "returnPct": 19.318166822499983,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -0.9379061611945239,
+        "drawdownPct": -0.9379061611945239,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-13",
+            "reason": "계좌 목표 청산",
+            "equity": 120447854.6725
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-07-10",
+        "end": "2020-10-09",
+        "resumptions": [],
+        "baseReturnPct": 18.688110605,
+        "returnPct": 18.688110605,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -2.1487736875070995,
+        "drawdownPct": -2.1487736875070995,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-20",
+            "reason": "계좌 목표 청산",
+            "equity": 114496996.555
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2021-02-03",
+        "end": "2021-05-02",
+        "resumptions": [],
+        "baseReturnPct": -14.05504273,
+        "returnPct": -14.05504273,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -16.772257267852297,
+        "drawdownPct": -16.772257267852297,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2021-02-24",
+            "reason": "계좌 낙폭 중단",
+            "equity": 83667359.95249999
+          }
+        ],
+        "sameResult": true
+      }
+    ]
+  },
+  {
+    "rebalanceBars": 15,
+    "stage": "confirmation",
+    "paired": [
+      {
+        "start": "2024-09-02",
+        "end": "2024-12-01",
+        "resumptions": [],
+        "baseReturnPct": -8.363718215000004,
+        "returnPct": 16.306555417500014,
+        "returnDeltaPctPoints": 24.67027363250002,
+        "baseDrawdownPct": -15.677055472758838,
+        "drawdownPct": -8.175628401600788,
+        "baseTargetReached": false,
+        "targetReached": true,
+        "extraFills": -11,
+        "extraCostsKrw": -633123.6324999998,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2024-10-29",
+            "reason": "계좌 목표 청산",
+            "equity": 117173308.555
+          }
+        ],
+        "sameResult": false
+      },
+      {
+        "start": "2025-04-28",
+        "end": "2025-07-27",
+        "resumptions": [],
+        "baseReturnPct": 11.015408045000008,
+        "returnPct": 11.015408045000008,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -2.771615965000007,
+        "drawdownPct": -2.771615965000007,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2025-05-21",
+            "reason": "계좌 목표 청산",
+            "equity": 111717884.035
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2025-04-29",
+        "end": "2025-07-28",
+        "resumptions": [],
+        "baseReturnPct": 12.573800644999999,
+        "returnPct": 12.573800644999999,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -2.2630844891106228,
+        "drawdownPct": -2.2630844891106228,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2025-05-16",
+            "reason": "계좌 목표 청산",
+            "equity": 111946264.11000001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2025-04-30",
+        "end": "2025-07-29",
+        "resumptions": [],
+        "baseReturnPct": 16.707256650000012,
+        "returnPct": 14.775353067499996,
+        "returnDeltaPctPoints": -1.9319035825000164,
+        "baseDrawdownPct": -4.5743110841874435,
+        "drawdownPct": -4.5743110841874435,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": -2,
+        "extraCostsKrw": -61446.41749999998,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2025-06-04",
+            "reason": "계좌 목표 청산",
+            "equity": 113214277.1225
+          }
+        ],
+        "sameResult": false
+      },
+      {
+        "start": "2025-05-02",
+        "end": "2025-08-01",
+        "resumptions": [],
+        "baseReturnPct": 10.160006320000004,
+        "returnPct": 10.160006320000004,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -2.322074057918,
+        "drawdownPct": -2.322074057918,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2025-05-21",
+            "reason": "계좌 목표 청산",
+            "equity": 111153724.42
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2025-05-07",
+        "end": "2025-08-06",
+        "resumptions": [],
+        "baseReturnPct": 11.033680210000018,
+        "returnPct": 11.033680210000018,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -4.322776264466722,
+        "drawdownPct": -4.322776264466722,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2025-05-27",
+            "reason": "계좌 목표 청산",
+            "equity": 111646917.50500001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2025-11-17",
+        "end": "2026-02-16",
+        "resumptions": [],
+        "baseReturnPct": 13.127647700000011,
+        "returnPct": 13.127647700000011,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -8.190000291082878,
+        "drawdownPct": -8.190000291082878,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-01-09",
+            "reason": "계좌 목표 청산",
+            "equity": 112119946.02000003
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2025-12-03",
+        "end": "2026-03-02",
+        "resumptions": [],
+        "baseReturnPct": 22.244803637499988,
+        "returnPct": 22.244803637499988,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -7.52937062884701,
+        "drawdownPct": -7.52937062884701,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-01-21",
+            "reason": "계좌 목표 청산",
+            "equity": 117618294.425
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2025-12-04",
+        "end": "2026-03-03",
+        "resumptions": [],
+        "baseReturnPct": 12.899998980000005,
+        "returnPct": 12.899998980000005,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -9.30685703216525,
+        "drawdownPct": -9.30685703216525,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-01-19",
+            "reason": "계좌 목표 청산",
+            "equity": 111420049.13
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2025-12-05",
+        "end": "2026-03-04",
+        "resumptions": [],
+        "baseReturnPct": 14.194770620000007,
+        "returnPct": 14.194770620000007,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -8.558167220000001,
+        "drawdownPct": -8.558167220000001,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-01-09",
+            "reason": "계좌 목표 청산",
+            "equity": 113560417.9
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2025-12-08",
+        "end": "2026-03-07",
+        "resumptions": [],
+        "baseReturnPct": 13.440330850000004,
+        "returnPct": 13.440330850000004,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -7.3921011674329185,
+        "drawdownPct": -7.3921011674329185,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-01-13",
+            "reason": "계좌 목표 청산",
+            "equity": 114382821.44500001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2025-12-09",
+        "end": "2026-03-08",
+        "resumptions": [],
+        "baseReturnPct": 14.359929645000037,
+        "returnPct": 13.629850997500025,
+        "returnDeltaPctPoints": -0.7300786475000116,
+        "baseDrawdownPct": -8.585626484999986,
+        "drawdownPct": -8.585626484999986,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": -1,
+        "extraCostsKrw": -98671.35250000004,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-01-29",
+            "reason": "계좌 목표 청산",
+            "equity": 114312443.45750001
+          }
+        ],
+        "sameResult": false
+      },
+      {
+        "start": "2026-02-03",
+        "end": "2026-05-02",
+        "resumptions": [],
+        "baseReturnPct": 17.09481574499998,
+        "returnPct": 17.09481574499998,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -8.113971845000002,
+        "drawdownPct": -8.113971845000002,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-02-19",
+            "reason": "계좌 목표 청산",
+            "equity": 112959328.155
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-04",
+        "end": "2026-05-03",
+        "resumptions": [],
+        "baseReturnPct": 24.212516975,
+        "returnPct": 24.212516975,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -3.0959796909625914,
+        "drawdownPct": -3.0959796909625914,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-02-26",
+            "reason": "계좌 목표 청산",
+            "equity": 119299220.45
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-05",
+        "end": "2026-05-04",
+        "resumptions": [],
+        "baseReturnPct": 19.689911555000016,
+        "returnPct": 19.689911555000016,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -4.379578534999995,
+        "drawdownPct": -4.379578534999995,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-02-26",
+            "reason": "계좌 목표 청산",
+            "equity": 114551021.465
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-06",
+        "end": "2026-05-05",
+        "resumptions": [],
+        "baseReturnPct": 21.41202349000002,
+        "returnPct": 21.41202349000002,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -5.152896610000002,
+        "drawdownPct": -5.152896610000002,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-02-26",
+            "reason": "계좌 목표 청산",
+            "equity": 119251603.39
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-09",
+        "end": "2026-05-08",
+        "resumptions": [],
+        "baseReturnPct": 22.737454150000012,
+        "returnPct": 22.737454150000012,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": 0,
+        "drawdownPct": 0,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-02-19",
+            "reason": "계좌 목표 청산",
+            "equity": 122291778.14
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-10",
+        "end": "2026-05-09",
+        "resumptions": [],
+        "baseReturnPct": 22.57652245999997,
+        "returnPct": 22.57652245999997,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": 0,
+        "drawdownPct": 0,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-02-19",
+            "reason": "계좌 목표 청산",
+            "equity": 122053042.85499999
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-11",
+        "end": "2026-05-10",
+        "resumptions": [],
+        "baseReturnPct": 18.50197278000001,
+        "returnPct": 18.50197278000001,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": 0,
+        "drawdownPct": 0,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-02-19",
+            "reason": "계좌 목표 청산",
+            "equity": 117651525.67
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-12",
+        "end": "2026-05-11",
+        "resumptions": [],
+        "baseReturnPct": 13.519211595000025,
+        "returnPct": 13.519211595000025,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -4.822687626642508,
+        "drawdownPct": -4.822687626642508,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-02-26",
+            "reason": "계좌 목표 청산",
+            "equity": 112396708.7
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-13",
+        "end": "2026-05-12",
+        "resumptions": [],
+        "baseReturnPct": -7.804380775000008,
+        "returnPct": -7.804380775000008,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -22.114609391012287,
+        "drawdownPct": -22.114609391012287,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-04",
+            "reason": "계좌 낙폭 중단",
+            "equity": 82301112.79499999
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-19",
+        "end": "2026-05-18",
+        "resumptions": [],
+        "baseReturnPct": -10.174003897499983,
+        "returnPct": -10.174003897499983,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -21.005317080936713,
+        "drawdownPct": -21.005317080936713,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-04",
+            "reason": "계좌 낙폭 중단",
+            "equity": 81376457.635
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-20",
+        "end": "2026-05-19",
+        "resumptions": [],
+        "baseReturnPct": -9.444850297499997,
+        "returnPct": -9.444850297499997,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -21.403448206102414,
+        "drawdownPct": -21.403448206102414,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-04",
+            "reason": "계좌 낙폭 중단",
+            "equity": 81129052.745
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-23",
+        "end": "2026-05-22",
+        "resumptions": [],
+        "baseReturnPct": -7.140591963749987,
+        "returnPct": -7.140591963749987,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -21.294599776178615,
+        "drawdownPct": -21.294599776178615,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-04",
+            "reason": "계좌 낙폭 중단",
+            "equity": 83252696.09400001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-24",
+        "end": "2026-05-23",
+        "resumptions": [],
+        "baseReturnPct": -4.448871572499991,
+        "returnPct": -4.448871572499991,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -21.037891469407867,
+        "drawdownPct": -21.037891469407867,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-04",
+            "reason": "계좌 낙폭 중단",
+            "equity": 86521155.61000001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-25",
+        "end": "2026-05-24",
+        "resumptions": [],
+        "baseReturnPct": -11.352638082499977,
+        "returnPct": -11.352638082499977,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -21.28299707666075,
+        "drawdownPct": -21.28299707666075,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-04",
+            "reason": "계좌 낙폭 중단",
+            "equity": 79228713.16000001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-26",
+        "end": "2026-05-25",
+        "resumptions": [],
+        "baseReturnPct": -8.480707407499988,
+        "returnPct": -8.480707407499988,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -17.926990369999984,
+        "drawdownPct": -17.926990369999984,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-04",
+            "reason": "계좌 낙폭 중단",
+            "equity": 82073009.63000001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-27",
+        "end": "2026-05-26",
+        "resumptions": [
+          {
+            "date": "2026-03-09",
+            "cash": 107025251.765,
+            "realizedReturnPct": 7.025251764999996,
+            "originalPeak": 114483875.075,
+            "drawdownPct": -6.514998994499233,
+            "nextBuy": "2026-03-25"
+          }
+        ],
+        "baseReturnPct": -5.162025657500003,
+        "returnPct": -5.162025657500003,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -19.868939248080398,
+        "drawdownPct": -19.868939248080398,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-06",
+            "reason": "계좌 목표 청산",
+            "equity": 114483875.075
+          },
+          {
+            "date": "2026-03-09",
+            "reason": "실제 목표 미달 후 재개",
+            "equity": 107025251.765
+          },
+          {
+            "date": "2026-03-31",
+            "reason": "계좌 낙폭 중단",
+            "equity": 91737143.4875
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-03-03",
+        "end": "2026-06-02",
+        "resumptions": [
+          {
+            "date": "2026-03-09",
+            "cash": 109662980.2,
+            "realizedReturnPct": 9.662980200000003,
+            "originalPeak": 113155106.16499999,
+            "drawdownPct": -3.0861408586439376,
+            "nextBuy": "2026-03-26"
+          }
+        ],
+        "baseReturnPct": -5.389836367000012,
+        "returnPct": -5.389836367000012,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -20.07076260516537,
+        "drawdownPct": -20.07076260516537,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-06",
+            "reason": "계좌 목표 청산",
+            "equity": 113155106.16499999
+          },
+          {
+            "date": "2026-03-09",
+            "reason": "실제 목표 미달 후 재개",
+            "equity": 109662980.2
+          },
+          {
+            "date": "2026-03-31",
+            "reason": "계좌 낙폭 중단",
+            "equity": 90444013.431
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-03-05",
+        "end": "2026-06-04",
+        "resumptions": [],
+        "baseReturnPct": -12.101204780999986,
+        "returnPct": -12.101204780999986,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -17.44112703250905,
+        "drawdownPct": -17.44112703250905,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-31",
+            "reason": "계좌 낙폭 중단",
+            "equity": 84372423.79200001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-03-18",
+        "end": "2026-06-17",
+        "resumptions": [],
+        "baseReturnPct": -9.200023511499989,
+        "returnPct": -9.200023511499989,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -15.301757863637878,
+        "drawdownPct": -15.301757863637878,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-04-02",
+            "reason": "계좌 낙폭 중단",
+            "equity": 88236075.037
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-03-19",
+        "end": "2026-06-18",
+        "resumptions": [],
+        "baseReturnPct": -10.325604044000015,
+        "returnPct": -10.325604044000015,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -15.665569136000013,
+        "drawdownPct": -15.665569136000013,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-31",
+            "reason": "계좌 낙폭 중단",
+            "equity": 84334430.864
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-03-20",
+        "end": "2026-06-19",
+        "resumptions": [],
+        "baseReturnPct": -10.797716161000015,
+        "returnPct": -10.797716161000015,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -16.855821838354114,
+        "drawdownPct": -16.855821838354114,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-31",
+            "reason": "계좌 낙폭 중단",
+            "equity": 83647054.6275
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-08",
+        "end": "2026-07-07",
+        "resumptions": [],
+        "baseReturnPct": 14.781228194999985,
+        "returnPct": 14.781228194999985,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -8.989695830000011,
+        "drawdownPct": -8.989695830000011,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-14",
+            "reason": "계좌 목표 청산",
+            "equity": 112136421.9125
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-09",
+        "end": "2026-07-08",
+        "resumptions": [
+          {
+            "date": "2026-04-22",
+            "cash": 108893101.945,
+            "realizedReturnPct": 8.893101944999993,
+            "originalPeak": 110812409.14999999,
+            "drawdownPct": -1.7320327386817769,
+            "nextBuy": "2026-05-06"
+          }
+        ],
+        "baseReturnPct": 11.05999875000001,
+        "returnPct": 11.05999875000001,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -4.750765420029667,
+        "drawdownPct": -4.750765420029667,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-04-21",
+            "reason": "계좌 목표 청산",
+            "equity": 110812409.14999999
+          },
+          {
+            "date": "2026-04-22",
+            "reason": "실제 목표 미달 후 재개",
+            "equity": 108893101.945
+          },
+          {
+            "date": "2026-05-13",
+            "reason": "계좌 목표 청산",
+            "equity": 110546171.535
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-10",
+        "end": "2026-07-09",
+        "resumptions": [],
+        "baseReturnPct": 11.87964812000002,
+        "returnPct": 11.87964812000002,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -1.635929740675679,
+        "drawdownPct": -1.635929740675679,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-04-21",
+            "reason": "계좌 목표 청산",
+            "equity": 112158608.72999999
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-13",
+        "end": "2026-07-12",
+        "resumptions": [],
+        "baseReturnPct": 11.854617302499992,
+        "returnPct": 11.854617302499992,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -1.6226984343688522,
+        "drawdownPct": -1.6226984343688522,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-04-21",
+            "reason": "계좌 목표 청산",
+            "equity": 112182606.4425
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-14",
+        "end": "2026-07-13",
+        "resumptions": [],
+        "baseReturnPct": 14.733505294999993,
+        "returnPct": 14.733505294999993,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -1.8140841899999982,
+        "drawdownPct": -1.8140841899999982,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-04-24",
+            "reason": "계좌 목표 청산",
+            "equity": 113799215.81
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-15",
+        "end": "2026-07-14",
+        "resumptions": [],
+        "baseReturnPct": 14.780227587500017,
+        "returnPct": 14.780227587500017,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -0.3727938936280317,
+        "drawdownPct": -0.3727938936280317,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-04-22",
+            "reason": "계좌 목표 청산",
+            "equity": 111299607.4775
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-16",
+        "end": "2026-07-15",
+        "resumptions": [],
+        "baseReturnPct": 15.125156455000033,
+        "returnPct": 15.125156455000033,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -1.289291164999995,
+        "drawdownPct": -1.289291164999995,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-04-24",
+            "reason": "계좌 목표 청산",
+            "equity": 113776708.83500001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-17",
+        "end": "2026-07-16",
+        "resumptions": [],
+        "baseReturnPct": 13.718787175000013,
+        "returnPct": 13.718787175000013,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -1.4894834194477236,
+        "drawdownPct": -1.4894834194477236,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-04-28",
+            "reason": "계좌 목표 청산",
+            "equity": 114990502.4975
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-20",
+        "end": "2026-07-19",
+        "resumptions": [
+          {
+            "date": "2026-04-29",
+            "cash": 108861777.49000001,
+            "realizedReturnPct": 8.861777490000012,
+            "originalPeak": 110621105.86,
+            "drawdownPct": -1.590409313234098,
+            "nextBuy": "2026-05-15"
+          }
+        ],
+        "baseReturnPct": 20.752104449999997,
+        "returnPct": 20.752104449999997,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -13.92415422016644,
+        "drawdownPct": -13.92415422016644,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-04-28",
+            "reason": "계좌 목표 청산",
+            "equity": 110621105.86
+          },
+          {
+            "date": "2026-04-29",
+            "reason": "실제 목표 미달 후 재개",
+            "equity": 108861777.49000001
+          },
+          {
+            "date": "2026-05-22",
+            "reason": "계좌 목표 청산",
+            "equity": 117242652.48000002
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-21",
+        "end": "2026-07-20",
+        "resumptions": [],
+        "baseReturnPct": 18.085114339999997,
+        "returnPct": 17.914709515000006,
+        "returnDeltaPctPoints": -0.17040482499999143,
+        "baseDrawdownPct": -8.562266814814512,
+        "drawdownPct": -8.562266814814512,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": -97295.17499999993,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-21",
+            "reason": "계좌 목표 청산",
+            "equity": 112175471.465
+          }
+        ],
+        "sameResult": false
+      },
+      {
+        "start": "2026-04-22",
+        "end": "2026-07-21",
+        "resumptions": [],
+        "baseReturnPct": 11.389513675000007,
+        "returnPct": 11.389513675000007,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -2.6843949724305705,
+        "drawdownPct": -2.6843949724305705,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-11",
+            "reason": "계좌 목표 청산",
+            "equity": 111287898.6225
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-23",
+        "end": "2026-07-22",
+        "resumptions": [],
+        "baseReturnPct": 11.004373615000018,
+        "returnPct": 11.004373615000018,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -1.4619314185483456,
+        "drawdownPct": -1.4619314185483456,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-13",
+            "reason": "계좌 목표 청산",
+            "equity": 111456107.135
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-24",
+        "end": "2026-07-23",
+        "resumptions": [],
+        "baseReturnPct": 15.522948915000011,
+        "returnPct": 15.522948915000011,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -2.7308918645794655,
+        "drawdownPct": -2.7308918645794655,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-14",
+            "reason": "계좌 목표 청산",
+            "equity": 113414677.385
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-27",
+        "end": "2026-07-26",
+        "resumptions": [],
+        "baseReturnPct": 19.84461421500001,
+        "returnPct": 19.84461421500001,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -13.179948943983156,
+        "drawdownPct": -13.179948943983156,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-26",
+            "reason": "계좌 목표 청산",
+            "equity": 113793284.255
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-28",
+        "end": "2026-07-27",
+        "resumptions": [],
+        "baseReturnPct": 13.129185585000002,
+        "returnPct": 13.129185585000002,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -1.120943675000008,
+        "drawdownPct": -1.120943675000008,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-11",
+            "reason": "계좌 목표 청산",
+            "equity": 112400856.32499999
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-29",
+        "end": "2026-07-28",
+        "resumptions": [],
+        "baseReturnPct": 22.72136819499999,
+        "returnPct": 22.72136819499999,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -11.4412837068405,
+        "drawdownPct": -11.4412837068405,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-22",
+            "reason": "계좌 목표 청산",
+            "equity": 117039027.1275
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-05-04",
+        "end": "2026-08-03",
+        "resumptions": [],
+        "baseReturnPct": -9.206876290000011,
+        "returnPct": -9.206876290000011,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -15.199088179188214,
+        "drawdownPct": -15.199088179188214,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-19",
+            "reason": "계좌 낙폭 중단",
+            "equity": 90960911.625
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-05-06",
+        "end": "2026-08-05",
+        "resumptions": [],
+        "baseReturnPct": 12.16251863500002,
+        "returnPct": 12.16251863500002,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": 0,
+        "drawdownPct": 0,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-11",
+            "reason": "계좌 목표 청산",
+            "equity": 112038189.19500001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-05-07",
+        "end": "2026-08-06",
+        "resumptions": [],
+        "baseReturnPct": -19.695944249999997,
+        "returnPct": -19.116109689999984,
+        "returnDeltaPctPoints": 0.5798345600000125,
+        "baseDrawdownPct": -23.48577632287805,
+        "drawdownPct": -22.93330620408748,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": -71434.56000000006,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-06-04",
+            "reason": "계좌 낙폭 중단",
+            "equity": 84495246.78000002
+          }
+        ],
+        "sameResult": false
+      },
+      {
+        "start": "2026-05-08",
+        "end": "2026-08-07",
+        "resumptions": [],
+        "baseReturnPct": -18.838196647499995,
+        "returnPct": -18.838196647499995,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -19.311792045643283,
+        "drawdownPct": -19.311792045643283,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-06-04",
+            "reason": "계좌 낙폭 중단",
+            "equity": 85336186.2425
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-05-11",
+        "end": "2026-08-10",
+        "resumptions": [],
+        "baseReturnPct": -11.343986062500012,
+        "returnPct": -11.343986062500012,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -18.513112061753468,
+        "drawdownPct": -18.513112061753468,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-06-01",
+            "reason": "계좌 낙폭 중단",
+            "equity": 91096239.06
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-05-12",
+        "end": "2026-08-11",
+        "resumptions": [],
+        "baseReturnPct": -13.520183552499997,
+        "returnPct": -13.520183552499997,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -16.289192885108594,
+        "drawdownPct": -16.289192885108594,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-29",
+            "reason": "계좌 낙폭 중단",
+            "equity": 86861677.78
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-05-13",
+        "end": "2026-08-12",
+        "resumptions": [],
+        "baseReturnPct": 19.565349045000026,
+        "returnPct": 19.565349045000026,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -12.671080649999988,
+        "drawdownPct": -12.671080649999988,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-26",
+            "reason": "계좌 목표 청산",
+            "equity": 114206519.35000001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-05-14",
+        "end": "2026-08-13",
+        "resumptions": [],
+        "baseReturnPct": 19.583471095000004,
+        "returnPct": 19.583471095000004,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -5.277379220471323,
+        "drawdownPct": -5.277379220471323,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-21",
+            "reason": "계좌 목표 청산",
+            "equity": 115979286.045
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-05-15",
+        "end": "2026-08-14",
+        "resumptions": [],
+        "baseReturnPct": 14.383996295000001,
+        "returnPct": 14.383996295000001,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -9.941648999999996,
+        "drawdownPct": -9.941648999999996,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-22",
+            "reason": "계좌 목표 청산",
+            "equity": 110845451
+          }
+        ],
+        "sameResult": true
+      }
+    ]
+  },
+  {
+    "rebalanceBars": 25,
+    "stage": "validation",
+    "paired": [
+      {
+        "start": "2020-04-09",
+        "end": "2020-07-08",
+        "resumptions": [],
+        "baseReturnPct": 18.12130315749998,
+        "returnPct": 18.12130315749998,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -7.752731364411336,
+        "drawdownPct": -7.752731364411336,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-05-14",
+            "reason": "계좌 목표 청산",
+            "equity": 117879802.33999999
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-04-10",
+        "end": "2020-07-09",
+        "resumptions": [],
+        "baseReturnPct": 17.527434985,
+        "returnPct": 17.527434985,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -11.918097405000005,
+        "drawdownPct": -11.918097405000005,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-05-14",
+            "reason": "계좌 목표 청산",
+            "equity": 118064802.595
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-04-13",
+        "end": "2020-07-12",
+        "resumptions": [
+          {
+            "date": "2020-05-07",
+            "cash": 109887081.42750001,
+            "realizedReturnPct": 9.88708142750001,
+            "originalPeak": 111941554.5625,
+            "drawdownPct": -1.8353087403774837,
+            "nextBuy": "2020-05-26"
+          }
+        ],
+        "baseReturnPct": 11.277697089999993,
+        "returnPct": 11.277697089999993,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -8.797089707863758,
+        "drawdownPct": -8.797089707863758,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-05-06",
+            "reason": "계좌 목표 청산",
+            "equity": 111941554.5625
+          },
+          {
+            "date": "2020-05-07",
+            "reason": "실제 목표 미달 후 재개",
+            "equity": 109887081.42750001
+          },
+          {
+            "date": "2020-05-27",
+            "reason": "계좌 목표 청산",
+            "equity": 110529306.95750001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-04-14",
+        "end": "2020-07-13",
+        "resumptions": [],
+        "baseReturnPct": 11.982003016250008,
+        "returnPct": 11.982003016250008,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -8.278275048680051,
+        "drawdownPct": -8.278275048680051,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-05-29",
+            "reason": "계좌 목표 청산",
+            "equity": 111616768.37125
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-04-16",
+        "end": "2020-07-15",
+        "resumptions": [],
+        "baseReturnPct": 11.369156629999978,
+        "returnPct": 11.369156629999978,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -8.477229780342343,
+        "drawdownPct": -8.477229780342343,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-06-12",
+            "reason": "계좌 목표 청산",
+            "equity": 111504009.25999999
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-04-17",
+        "end": "2020-07-16",
+        "resumptions": [],
+        "baseReturnPct": 11.357496875499983,
+        "returnPct": 11.357496875499983,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -5.216980321812514,
+        "drawdownPct": -5.216980321812514,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-05-29",
+            "reason": "계좌 목표 청산",
+            "equity": 110742447.77049999
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-04-20",
+        "end": "2020-07-19",
+        "resumptions": [],
+        "baseReturnPct": 13.221753796750013,
+        "returnPct": 13.221753796750013,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -8.109858815150538,
+        "drawdownPct": -8.109858815150538,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-06-17",
+            "reason": "계좌 목표 청산",
+            "equity": 113515903.27425002
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-04-21",
+        "end": "2020-07-20",
+        "resumptions": [],
+        "baseReturnPct": 12.096280153499993,
+        "returnPct": 12.096280153499993,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -11.73144920067941,
+        "drawdownPct": -11.73144920067941,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-08",
+            "reason": "계좌 목표 청산",
+            "equity": 111205085.15349999
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-04-22",
+        "end": "2020-07-21",
+        "resumptions": [],
+        "baseReturnPct": 17.783605297500003,
+        "returnPct": 17.783605297500003,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -8.451277203094154,
+        "drawdownPct": -8.451277203094154,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-06-22",
+            "reason": "계좌 목표 청산",
+            "equity": 115951800.21750002
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-06-16",
+        "end": "2020-09-15",
+        "resumptions": [],
+        "baseReturnPct": 20.7683573425,
+        "returnPct": 20.7683573425,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -11.4562430175,
+        "drawdownPct": -11.4562430175,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-17",
+            "reason": "계좌 목표 청산",
+            "equity": 115859656.9825
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-06-17",
+        "end": "2020-09-16",
+        "resumptions": [
+          {
+            "date": "2020-07-14",
+            "cash": 108742879.64,
+            "realizedReturnPct": 8.742879640000002,
+            "originalPeak": 110748764.82699999,
+            "drawdownPct": -1.8112032130862765,
+            "nextBuy": "2020-07-24"
+          }
+        ],
+        "baseReturnPct": 16.504299217500005,
+        "returnPct": 16.504299217500005,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -10.494495173000008,
+        "drawdownPct": -10.494495173000008,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-13",
+            "reason": "계좌 목표 청산",
+            "equity": 110748764.82699999
+          },
+          {
+            "date": "2020-07-14",
+            "reason": "실제 목표 미달 후 재개",
+            "equity": 108742879.64
+          },
+          {
+            "date": "2020-07-24",
+            "reason": "계좌 목표 청산",
+            "equity": 111519988.0375
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-06-18",
+        "end": "2020-09-17",
+        "resumptions": [],
+        "baseReturnPct": 11.125491620000005,
+        "returnPct": 11.125491620000005,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -8.456145012499983,
+        "drawdownPct": -8.456145012499983,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-13",
+            "reason": "계좌 목표 청산",
+            "equity": 113175204.98750001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-06-19",
+        "end": "2020-09-18",
+        "resumptions": [],
+        "baseReturnPct": 10.907127821500007,
+        "returnPct": 10.907127821500007,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -8.566678341999989,
+        "drawdownPct": -8.566678341999989,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-13",
+            "reason": "계좌 목표 청산",
+            "equity": 112955941.658
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-06-22",
+        "end": "2020-09-21",
+        "resumptions": [],
+        "baseReturnPct": 10.874724730000018,
+        "returnPct": 10.874724730000018,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -10.7360468125,
+        "drawdownPct": -10.7360468125,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-13",
+            "reason": "계좌 목표 청산",
+            "equity": 113090453.1875
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-06-23",
+        "end": "2020-09-22",
+        "resumptions": [],
+        "baseReturnPct": 11.107406095500005,
+        "returnPct": 11.107406095500005,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -10.041211844999998,
+        "drawdownPct": -10.041211844999998,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-08-06",
+            "reason": "계좌 목표 청산",
+            "equity": 110887828.19250001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-06-24",
+        "end": "2020-09-23",
+        "resumptions": [],
+        "baseReturnPct": 15.881394297499995,
+        "returnPct": 15.881394297499995,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -10.407343437500005,
+        "drawdownPct": -10.407343437500005,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-08-25",
+            "reason": "계좌 목표 청산",
+            "equity": 115141464.07249999
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-07-06",
+        "end": "2020-10-05",
+        "resumptions": [],
+        "baseReturnPct": 19.318166822499983,
+        "returnPct": 19.318166822499983,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -0.9379061611945239,
+        "drawdownPct": -0.9379061611945239,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-13",
+            "reason": "계좌 목표 청산",
+            "equity": 120447854.6725
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2020-07-10",
+        "end": "2020-10-09",
+        "resumptions": [],
+        "baseReturnPct": 18.688110605,
+        "returnPct": 18.688110605,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -2.1487736875070995,
+        "drawdownPct": -2.1487736875070995,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2020-07-20",
+            "reason": "계좌 목표 청산",
+            "equity": 114496996.555
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2021-02-03",
+        "end": "2021-05-02",
+        "resumptions": [],
+        "baseReturnPct": -14.05504273,
+        "returnPct": -14.05504273,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -16.772257267852297,
+        "drawdownPct": -16.772257267852297,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2021-02-24",
+            "reason": "계좌 낙폭 중단",
+            "equity": 83667359.95249999
+          }
+        ],
+        "sameResult": true
+      }
+    ]
+  },
+  {
+    "rebalanceBars": 25,
+    "stage": "confirmation",
+    "paired": [
+      {
+        "start": "2024-09-02",
+        "end": "2024-12-01",
+        "resumptions": [],
+        "baseReturnPct": 10.240598307499994,
+        "returnPct": 16.6681084975,
+        "returnDeltaPctPoints": 6.427510190000007,
+        "baseDrawdownPct": -8.102594001925967,
+        "drawdownPct": -8.102594001925967,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": -72710.19000000006,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2024-10-24",
+            "reason": "계좌 목표 청산",
+            "equity": 113845845.9975
+          }
+        ],
+        "sameResult": false
+      },
+      {
+        "start": "2025-04-28",
+        "end": "2025-07-27",
+        "resumptions": [],
+        "baseReturnPct": 11.015408045000008,
+        "returnPct": 11.015408045000008,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -2.771615965000007,
+        "drawdownPct": -2.771615965000007,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2025-05-21",
+            "reason": "계좌 목표 청산",
+            "equity": 111717884.035
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2025-04-29",
+        "end": "2025-07-28",
+        "resumptions": [],
+        "baseReturnPct": 12.573800644999999,
+        "returnPct": 12.573800644999999,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -2.2630844891106228,
+        "drawdownPct": -2.2630844891106228,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2025-05-16",
+            "reason": "계좌 목표 청산",
+            "equity": 111946264.11000001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2025-04-30",
+        "end": "2025-07-29",
+        "resumptions": [],
+        "baseReturnPct": 10.463444970000001,
+        "returnPct": 10.463444970000001,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -4.5743110841874435,
+        "drawdownPct": -4.5743110841874435,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2025-05-27",
+            "reason": "계좌 목표 청산",
+            "equity": 111031319.545
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2025-05-02",
+        "end": "2025-08-01",
+        "resumptions": [],
+        "baseReturnPct": 10.160006320000004,
+        "returnPct": 10.160006320000004,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -2.322074057918,
+        "drawdownPct": -2.322074057918,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2025-05-21",
+            "reason": "계좌 목표 청산",
+            "equity": 111153724.42
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2025-05-07",
+        "end": "2025-08-06",
+        "resumptions": [],
+        "baseReturnPct": 11.033680210000018,
+        "returnPct": 11.033680210000018,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -4.322776264466722,
+        "drawdownPct": -4.322776264466722,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2025-05-27",
+            "reason": "계좌 목표 청산",
+            "equity": 111646917.50500001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2025-11-17",
+        "end": "2026-02-16",
+        "resumptions": [
+          {
+            "date": "2026-01-05",
+            "cash": 109402327.015,
+            "realizedReturnPct": 9.402327015000012,
+            "originalPeak": 110874318.19,
+            "drawdownPct": -1.3276213996441633,
+            "nextBuy": "2026-02-02"
+          }
+        ],
+        "baseReturnPct": 16.187165957500007,
+        "returnPct": 16.187165957500007,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -9.033049199076471,
+        "drawdownPct": -9.033049199076471,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-01-02",
+            "reason": "계좌 목표 청산",
+            "equity": 110874318.19
+          },
+          {
+            "date": "2026-01-05",
+            "reason": "실제 목표 미달 후 재개",
+            "equity": 109402327.015
+          },
+          {
+            "date": "2026-02-03",
+            "reason": "계좌 목표 청산",
+            "equity": 115692024.8875
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2025-12-03",
+        "end": "2026-03-02",
+        "resumptions": [],
+        "baseReturnPct": 1.2892746624999951,
+        "returnPct": 1.2892746624999951,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -14.830923214275426,
+        "drawdownPct": -14.830923214275426,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-02-26",
+            "reason": "3개월 만기 청산",
+            "equity": 99551510.54249999
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2025-12-04",
+        "end": "2026-03-03",
+        "resumptions": [],
+        "baseReturnPct": 14.92306054749999,
+        "returnPct": 14.92306054749999,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -7.6751359383435585,
+        "drawdownPct": -7.6751359383435585,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-01-15",
+            "reason": "계좌 목표 청산",
+            "equity": 113331676.72
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2025-12-05",
+        "end": "2026-03-04",
+        "resumptions": [],
+        "baseReturnPct": 11.010025230000009,
+        "returnPct": 11.010025230000009,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -8.558167220000001,
+        "drawdownPct": -8.558167220000001,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-01-14",
+            "reason": "계좌 목표 청산",
+            "equity": 111844532.78
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2025-12-08",
+        "end": "2026-03-07",
+        "resumptions": [],
+        "baseReturnPct": 12.871410790000004,
+        "returnPct": 12.871410790000004,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -7.3921011674329185,
+        "drawdownPct": -7.3921011674329185,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-01-09",
+            "reason": "계좌 목표 청산",
+            "equity": 112768754.555
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2025-12-09",
+        "end": "2026-03-08",
+        "resumptions": [],
+        "baseReturnPct": 12.447916415000005,
+        "returnPct": 12.447916415000005,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -8.585626484999986,
+        "drawdownPct": -8.585626484999986,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-01-13",
+            "reason": "계좌 목표 청산",
+            "equity": 111759473.51500002
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-03",
+        "end": "2026-05-02",
+        "resumptions": [],
+        "baseReturnPct": 17.09481574499998,
+        "returnPct": 17.09481574499998,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -8.113971845000002,
+        "drawdownPct": -8.113971845000002,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-02-19",
+            "reason": "계좌 목표 청산",
+            "equity": 112959328.155
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-04",
+        "end": "2026-05-03",
+        "resumptions": [],
+        "baseReturnPct": 24.212516975,
+        "returnPct": 24.212516975,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -3.0959796909625914,
+        "drawdownPct": -3.0959796909625914,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-02-26",
+            "reason": "계좌 목표 청산",
+            "equity": 119299220.45
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-05",
+        "end": "2026-05-04",
+        "resumptions": [],
+        "baseReturnPct": 19.689911555000016,
+        "returnPct": 19.689911555000016,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -4.379578534999995,
+        "drawdownPct": -4.379578534999995,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-02-26",
+            "reason": "계좌 목표 청산",
+            "equity": 114551021.465
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-06",
+        "end": "2026-05-05",
+        "resumptions": [],
+        "baseReturnPct": 21.41202349000002,
+        "returnPct": 21.41202349000002,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -5.152896610000002,
+        "drawdownPct": -5.152896610000002,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-02-26",
+            "reason": "계좌 목표 청산",
+            "equity": 119251603.39
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-09",
+        "end": "2026-05-08",
+        "resumptions": [],
+        "baseReturnPct": 22.737454150000012,
+        "returnPct": 22.737454150000012,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": 0,
+        "drawdownPct": 0,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-02-19",
+            "reason": "계좌 목표 청산",
+            "equity": 122291778.14
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-10",
+        "end": "2026-05-09",
+        "resumptions": [],
+        "baseReturnPct": 22.57652245999997,
+        "returnPct": 22.57652245999997,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": 0,
+        "drawdownPct": 0,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-02-19",
+            "reason": "계좌 목표 청산",
+            "equity": 122053042.85499999
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-11",
+        "end": "2026-05-10",
+        "resumptions": [],
+        "baseReturnPct": 18.50197278000001,
+        "returnPct": 18.50197278000001,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": 0,
+        "drawdownPct": 0,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-02-19",
+            "reason": "계좌 목표 청산",
+            "equity": 117651525.67
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-12",
+        "end": "2026-05-11",
+        "resumptions": [],
+        "baseReturnPct": 13.519211595000025,
+        "returnPct": 13.519211595000025,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -4.822687626642508,
+        "drawdownPct": -4.822687626642508,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-02-26",
+            "reason": "계좌 목표 청산",
+            "equity": 112396708.7
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-13",
+        "end": "2026-05-12",
+        "resumptions": [],
+        "baseReturnPct": -7.804380775000008,
+        "returnPct": -7.804380775000008,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -22.114609391012287,
+        "drawdownPct": -22.114609391012287,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-04",
+            "reason": "계좌 낙폭 중단",
+            "equity": 82301112.79499999
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-19",
+        "end": "2026-05-18",
+        "resumptions": [],
+        "baseReturnPct": -10.174003897499983,
+        "returnPct": -10.174003897499983,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -21.005317080936713,
+        "drawdownPct": -21.005317080936713,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-04",
+            "reason": "계좌 낙폭 중단",
+            "equity": 81376457.635
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-20",
+        "end": "2026-05-19",
+        "resumptions": [],
+        "baseReturnPct": -9.444850297499997,
+        "returnPct": -9.444850297499997,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -21.403448206102414,
+        "drawdownPct": -21.403448206102414,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-04",
+            "reason": "계좌 낙폭 중단",
+            "equity": 81129052.745
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-23",
+        "end": "2026-05-22",
+        "resumptions": [],
+        "baseReturnPct": -7.140591963749987,
+        "returnPct": -7.140591963749987,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -21.294599776178615,
+        "drawdownPct": -21.294599776178615,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-04",
+            "reason": "계좌 낙폭 중단",
+            "equity": 83252696.09400001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-24",
+        "end": "2026-05-23",
+        "resumptions": [],
+        "baseReturnPct": -4.448871572499991,
+        "returnPct": -4.448871572499991,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -21.037891469407867,
+        "drawdownPct": -21.037891469407867,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-04",
+            "reason": "계좌 낙폭 중단",
+            "equity": 86521155.61000001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-25",
+        "end": "2026-05-24",
+        "resumptions": [],
+        "baseReturnPct": -11.352638082499977,
+        "returnPct": -11.352638082499977,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -21.28299707666075,
+        "drawdownPct": -21.28299707666075,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-04",
+            "reason": "계좌 낙폭 중단",
+            "equity": 79228713.16000001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-26",
+        "end": "2026-05-25",
+        "resumptions": [],
+        "baseReturnPct": -8.480707407499988,
+        "returnPct": -8.480707407499988,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -17.926990369999984,
+        "drawdownPct": -17.926990369999984,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-04",
+            "reason": "계좌 낙폭 중단",
+            "equity": 82073009.63000001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-02-27",
+        "end": "2026-05-26",
+        "resumptions": [
+          {
+            "date": "2026-03-09",
+            "cash": 107025251.765,
+            "realizedReturnPct": 7.025251764999996,
+            "originalPeak": 114483875.075,
+            "drawdownPct": -6.514998994499233,
+            "nextBuy": "2026-04-08"
+          },
+          {
+            "date": "2026-04-13",
+            "cash": 108984979.692,
+            "realizedReturnPct": 8.984979692000007,
+            "originalPeak": 114483875.075,
+            "drawdownPct": -4.803205149544077,
+            "nextBuy": "2026-05-15"
+          }
+        ],
+        "baseReturnPct": -6.074636657999988,
+        "returnPct": -6.074636657999988,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -17.95756102729037,
+        "drawdownPct": -17.95756102729037,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-06",
+            "reason": "계좌 목표 청산",
+            "equity": 114483875.075
+          },
+          {
+            "date": "2026-03-09",
+            "reason": "실제 목표 미달 후 재개",
+            "equity": 107025251.765
+          },
+          {
+            "date": "2026-04-10",
+            "reason": "계좌 목표 청산",
+            "equity": 110971581.522
+          },
+          {
+            "date": "2026-04-13",
+            "reason": "실제 목표 미달 후 재개",
+            "equity": 108984979.692
+          },
+          {
+            "date": "2026-05-15",
+            "reason": "계좌 낙폭 중단",
+            "equity": 95330840.942
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-03-03",
+        "end": "2026-06-02",
+        "resumptions": [
+          {
+            "date": "2026-03-09",
+            "cash": 109662980.2,
+            "realizedReturnPct": 9.662980200000003,
+            "originalPeak": 113155106.16499999,
+            "drawdownPct": -3.0861408586439376,
+            "nextBuy": "2026-04-09"
+          }
+        ],
+        "baseReturnPct": 16.468012600000016,
+        "returnPct": 16.468012600000016,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -3.0861408586439376,
+        "drawdownPct": -3.0861408586439376,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-06",
+            "reason": "계좌 목표 청산",
+            "equity": 113155106.16499999
+          },
+          {
+            "date": "2026-03-09",
+            "reason": "실제 목표 미달 후 재개",
+            "equity": 109662980.2
+          },
+          {
+            "date": "2026-04-09",
+            "reason": "계좌 목표 청산",
+            "equity": 111687990.65
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-03-05",
+        "end": "2026-06-04",
+        "resumptions": [],
+        "baseReturnPct": -14.99564404499999,
+        "returnPct": -14.99564404499999,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -17.42346299613031,
+        "drawdownPct": -17.42346299613031,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-31",
+            "reason": "계좌 낙폭 중단",
+            "equity": 84390475.85000001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-03-18",
+        "end": "2026-06-17",
+        "resumptions": [],
+        "baseReturnPct": -9.200023511499989,
+        "returnPct": -9.200023511499989,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -15.301757863637878,
+        "drawdownPct": -15.301757863637878,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-04-02",
+            "reason": "계좌 낙폭 중단",
+            "equity": 88236075.037
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-03-19",
+        "end": "2026-06-18",
+        "resumptions": [],
+        "baseReturnPct": -10.325604044000015,
+        "returnPct": -10.325604044000015,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -15.665569136000013,
+        "drawdownPct": -15.665569136000013,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-31",
+            "reason": "계좌 낙폭 중단",
+            "equity": 84334430.864
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-03-20",
+        "end": "2026-06-19",
+        "resumptions": [],
+        "baseReturnPct": -10.797716161000015,
+        "returnPct": -10.797716161000015,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -16.855821838354114,
+        "drawdownPct": -16.855821838354114,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-31",
+            "reason": "계좌 낙폭 중단",
+            "equity": 83647054.6275
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-08",
+        "end": "2026-07-07",
+        "resumptions": [],
+        "baseReturnPct": -13.395914507500017,
+        "returnPct": -13.395914507500017,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -21.150311555880506,
+        "drawdownPct": -21.150311555880506,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-15",
+            "reason": "계좌 낙폭 중단",
+            "equity": 89864604.16999999
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-09",
+        "end": "2026-07-08",
+        "resumptions": [
+          {
+            "date": "2026-04-22",
+            "cash": 108893101.945,
+            "realizedReturnPct": 8.893101944999993,
+            "originalPeak": 110812409.14999999,
+            "drawdownPct": -1.7320327386817769,
+            "nextBuy": "2026-05-20"
+          }
+        ],
+        "baseReturnPct": 16.77856977500001,
+        "returnPct": 16.77856977500001,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -5.42077854012617,
+        "drawdownPct": -5.42077854012617,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-04-21",
+            "reason": "계좌 목표 청산",
+            "equity": 110812409.14999999
+          },
+          {
+            "date": "2026-04-22",
+            "reason": "실제 목표 미달 후 재개",
+            "equity": 108893101.945
+          },
+          {
+            "date": "2026-05-21",
+            "reason": "계좌 목표 청산",
+            "equity": 113465613.85499999
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-10",
+        "end": "2026-07-09",
+        "resumptions": [],
+        "baseReturnPct": 11.87964812000002,
+        "returnPct": 11.87964812000002,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -1.635929740675679,
+        "drawdownPct": -1.635929740675679,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-04-21",
+            "reason": "계좌 목표 청산",
+            "equity": 112158608.72999999
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-13",
+        "end": "2026-07-12",
+        "resumptions": [],
+        "baseReturnPct": 11.854617302499992,
+        "returnPct": 11.854617302499992,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -1.6226984343688522,
+        "drawdownPct": -1.6226984343688522,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-04-21",
+            "reason": "계좌 목표 청산",
+            "equity": 112182606.4425
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-14",
+        "end": "2026-07-13",
+        "resumptions": [],
+        "baseReturnPct": 14.733505294999993,
+        "returnPct": 14.733505294999993,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -1.8140841899999982,
+        "drawdownPct": -1.8140841899999982,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-04-24",
+            "reason": "계좌 목표 청산",
+            "equity": 113799215.81
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-15",
+        "end": "2026-07-14",
+        "resumptions": [],
+        "baseReturnPct": 14.780227587500017,
+        "returnPct": 14.780227587500017,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -0.3727938936280317,
+        "drawdownPct": -0.3727938936280317,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-04-22",
+            "reason": "계좌 목표 청산",
+            "equity": 111299607.4775
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-16",
+        "end": "2026-07-15",
+        "resumptions": [],
+        "baseReturnPct": 15.125156455000033,
+        "returnPct": 15.125156455000033,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -1.289291164999995,
+        "drawdownPct": -1.289291164999995,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-04-24",
+            "reason": "계좌 목표 청산",
+            "equity": 113776708.83500001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-17",
+        "end": "2026-07-16",
+        "resumptions": [],
+        "baseReturnPct": 13.718787175000013,
+        "returnPct": 13.718787175000013,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -1.4894834194477236,
+        "drawdownPct": -1.4894834194477236,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-04-28",
+            "reason": "계좌 목표 청산",
+            "equity": 114990502.4975
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-20",
+        "end": "2026-07-19",
+        "resumptions": [
+          {
+            "date": "2026-04-29",
+            "cash": 108861777.49000001,
+            "realizedReturnPct": 8.861777490000012,
+            "originalPeak": 110621105.86,
+            "drawdownPct": -1.590409313234098,
+            "nextBuy": "2026-06-01"
+          }
+        ],
+        "baseReturnPct": -19.578846549999984,
+        "returnPct": -19.578846549999984,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -27.3003530160153,
+        "drawdownPct": -27.3003530160153,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-04-28",
+            "reason": "계좌 목표 청산",
+            "equity": 110621105.86
+          },
+          {
+            "date": "2026-04-29",
+            "reason": "실제 목표 미달 후 재개",
+            "equity": 108861777.49000001
+          },
+          {
+            "date": "2026-06-05",
+            "reason": "계좌 낙폭 중단",
+            "equity": 92570644.42000002
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-21",
+        "end": "2026-07-20",
+        "resumptions": [],
+        "baseReturnPct": -4.282907229999989,
+        "returnPct": -4.282907229999989,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -15.428459882243361,
+        "drawdownPct": -15.428459882243361,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-20",
+            "reason": "계좌 낙폭 중단",
+            "equity": 90666123.235
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-22",
+        "end": "2026-07-21",
+        "resumptions": [],
+        "baseReturnPct": 11.389513675000007,
+        "returnPct": 11.389513675000007,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -2.6843949724305705,
+        "drawdownPct": -2.6843949724305705,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-11",
+            "reason": "계좌 목표 청산",
+            "equity": 111287898.6225
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-23",
+        "end": "2026-07-22",
+        "resumptions": [],
+        "baseReturnPct": 11.004373615000018,
+        "returnPct": 11.004373615000018,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -1.4619314185483456,
+        "drawdownPct": -1.4619314185483456,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-13",
+            "reason": "계좌 목표 청산",
+            "equity": 111456107.135
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-24",
+        "end": "2026-07-23",
+        "resumptions": [],
+        "baseReturnPct": 15.522948915000011,
+        "returnPct": 15.522948915000011,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -2.7308918645794655,
+        "drawdownPct": -2.7308918645794655,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-14",
+            "reason": "계좌 목표 청산",
+            "equity": 113414677.385
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-27",
+        "end": "2026-07-26",
+        "resumptions": [],
+        "baseReturnPct": 15.722747394999992,
+        "returnPct": 15.722747394999992,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -13.179948943983156,
+        "drawdownPct": -13.179948943983156,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-22",
+            "reason": "계좌 목표 청산",
+            "equity": 111667495.66000001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-28",
+        "end": "2026-07-27",
+        "resumptions": [],
+        "baseReturnPct": 13.129185585000002,
+        "returnPct": 13.129185585000002,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -1.120943675000008,
+        "drawdownPct": -1.120943675000008,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-11",
+            "reason": "계좌 목표 청산",
+            "equity": 112400856.32499999
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-04-29",
+        "end": "2026-07-28",
+        "resumptions": [],
+        "baseReturnPct": 22.72136819499999,
+        "returnPct": 22.72136819499999,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -11.4412837068405,
+        "drawdownPct": -11.4412837068405,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-22",
+            "reason": "계좌 목표 청산",
+            "equity": 117039027.1275
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-05-04",
+        "end": "2026-08-03",
+        "resumptions": [],
+        "baseReturnPct": -9.206876290000011,
+        "returnPct": -9.206876290000011,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -15.199088179188214,
+        "drawdownPct": -15.199088179188214,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-19",
+            "reason": "계좌 낙폭 중단",
+            "equity": 90960911.625
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-05-06",
+        "end": "2026-08-05",
+        "resumptions": [],
+        "baseReturnPct": 12.16251863500002,
+        "returnPct": 12.16251863500002,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": 0,
+        "drawdownPct": 0,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-11",
+            "reason": "계좌 목표 청산",
+            "equity": 112038189.19500001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-05-07",
+        "end": "2026-08-06",
+        "resumptions": [],
+        "baseReturnPct": -13.827679095,
+        "returnPct": -13.827679095,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -21.19174976405025,
+        "drawdownPct": -21.19174976405025,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-06-08",
+            "reason": "계좌 낙폭 중단",
+            "equity": 82711707.92
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-05-08",
+        "end": "2026-08-07",
+        "resumptions": [],
+        "baseReturnPct": -17.186758227499986,
+        "returnPct": -17.186758227499986,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -20.169068660956402,
+        "drawdownPct": -20.169068660956402,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-06-08",
+            "reason": "계좌 낙폭 중단",
+            "equity": 80299494.995
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-05-11",
+        "end": "2026-08-10",
+        "resumptions": [],
+        "baseReturnPct": -11.343986062500012,
+        "returnPct": -11.343986062500012,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -18.513112061753468,
+        "drawdownPct": -18.513112061753468,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-06-01",
+            "reason": "계좌 낙폭 중단",
+            "equity": 91096239.06
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-05-12",
+        "end": "2026-08-11",
+        "resumptions": [],
+        "baseReturnPct": -13.520183552499997,
+        "returnPct": -13.520183552499997,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -16.289192885108594,
+        "drawdownPct": -16.289192885108594,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-29",
+            "reason": "계좌 낙폭 중단",
+            "equity": 86861677.78
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-05-13",
+        "end": "2026-08-12",
+        "resumptions": [],
+        "baseReturnPct": 19.565349045000026,
+        "returnPct": 19.565349045000026,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -12.671080649999988,
+        "drawdownPct": -12.671080649999988,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-26",
+            "reason": "계좌 목표 청산",
+            "equity": 114206519.35000001
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-05-14",
+        "end": "2026-08-13",
+        "resumptions": [],
+        "baseReturnPct": 19.583471095000004,
+        "returnPct": 19.583471095000004,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -5.277379220471323,
+        "drawdownPct": -5.277379220471323,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-21",
+            "reason": "계좌 목표 청산",
+            "equity": 115979286.045
+          }
+        ],
+        "sameResult": true
+      },
+      {
+        "start": "2026-05-15",
+        "end": "2026-08-14",
+        "resumptions": [],
+        "baseReturnPct": 14.383996295000001,
+        "returnPct": 14.383996295000001,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -9.941648999999996,
+        "drawdownPct": -9.941648999999996,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-05-22",
+            "reason": "계좌 목표 청산",
+            "equity": 110845451
+          }
+        ],
+        "sameResult": true
+      }
+    ]
+  }
+]

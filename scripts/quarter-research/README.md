@@ -270,3 +270,20 @@ python -m unittest discover -s scripts/quarter-research -p test_current_selectio
 ```
 
 현재 감사는 원본 일정의 2015-01-19 기준점을 보존하고 검증된 2026-08-14 이후 결손 거래일을 확장한다. 09-01 게시·08-31 선정 시점, 이전 기본 출력의 바이트 동일성, 월말 종목군·상위 순위·실제 일봉 점수를 대조한다. 현재 신호 재현에는 원래 `account-stop/current-signals.json`과 보존된 `ebc7936` 생성기 Git 객체도 필요하다. 원자료와 생성 입력은 Git에서 제외한다. 전체 결과·실패와 한계는 [인접 파라미터 결과](../../docs/research/kr-current-quarter-target-retry-neighbors-findings.md)에 있다.
+
+
+## 보유 순위 완충 모멘텀
+
+연구 전략 `rank-retention-momentum`은 현재 적격 순위 10위 이내인 실제 보유 종목을 먼저 유지하고 빈 자리만 상위 순위로 채운다. 원래 양수 모멘텀·종목군·이력 조건과 동일가중 매도·다음 봉 매수 단계를 유지한다. `retentionRank`는 `topN` 이상 200 이하 정수이며 둘이 같으면 기존 횡단면 모멘텀과 같은 목표가 된다. 운영 레지스트리에는 등록하지 않고 분기 연구 CLI의 별도 분기에서만 사용한다.
+
+`configs/rank-retention-experiments.json`은 고정 10위 경계·5종목에 회전 15·20·25봉을 적용한 6개 실행·231개 계좌다. 기본 20봉과 인접 15·25봉의 같은 날짜 기존 계좌 231개를 대조한다. 출력 디렉터리는 실험 목록을 따르며 아래 `reproduction-*`는 별도 예시다.
+
+```bash
+node --import tsx scripts/quarter-research/quarter-engine.ts data/kr-quarter-research/expanded/stock-200-verified-input.json.gz data/kr-quarter-research/rank-retention/reproduction-15-confirmation confirmation scripts/quarter-research/configs/rank-retention-15.json 5 204 0 100000000 scripts/quarter-research/configs/target-retry-seed204-offset0-confirmation-options.json
+python scripts/quarter-research/build_rank_retention_evidence.py data/kr-quarter-research data/kr-quarter-research/rank-retention/evidence
+pnpm exec vitest run tests/unit/rank-retention-quarter.test.ts tests/unit/target-retry-quarter.test.ts tests/unit/quarter-research.test.ts tests/unit/uncertain-history-quarter.test.ts tests/unit/confirmed-entry-quarter.test.ts tests/unit/recovery-quarter.test.ts tests/unit/cross-sectional-momentum.test.ts
+```
+
+집계 전에 전체 실행이 필요하다. 집계기는 설정·원본 해시·목표 판정·재개 현금과 위험·보유 수를 대조하고, 현금 시작의 최초 매수가 같은지 확인한다. 전체 동일 날짜 비교와 기업행위 대상도 출력한다. 후보와 통과 규칙은 [사전 규칙](../../docs/research/kr-current-quarter-rank-retention-protocol.md)에 고정했다. 반복한 과거 탐색이며 독립적인 새 시장 관측이 아니다.
+
+첫 비교의 전체 성과·수익 감소·비용과 남은 확인 사항은 [보유 순위 완충 결과](../../docs/research/kr-current-quarter-rank-retention-findings.md)에 있다.

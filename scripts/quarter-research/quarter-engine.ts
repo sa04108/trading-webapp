@@ -1,3 +1,4 @@
+import { rankRetentionMomentum } from './rank-retention-momentum.js';
 import { withConfirmedEntry } from './confirmed-entry.js';
 import { withUncertainHistory } from './uncertain-history.js';
 import { createQuarterlyValue, type CapitalizationPoint, type ValuationObservation } from './quarterly-value.js';
@@ -252,7 +253,9 @@ export function main(argv: string[]) {
     }
     const base = candidate.strategyId === 'recovery-rotation'
       ? createRecoveryRotation(new Map(input.macro.map((m) => [m.tsMs, m]))) as AnyTradingStrategy
-      : candidate.strategyId === 'annual-quality-momentum'
+      : candidate.strategyId === 'rank-retention-momentum'
+        ? rankRetentionMomentum as AnyTradingStrategy
+        : candidate.strategyId === 'annual-quality-momentum'
         ? createAnnualQualityMomentum(input.annualObservations ?? [], new Map(input.macro.map((m) => [m.tsMs, m]))) as AnyTradingStrategy
         : candidate.strategyId === 'quarterly-earnings-research'
           ? createQuarterlyEarnings(input.quarterlyObservations ?? []) as AnyTradingStrategy

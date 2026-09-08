@@ -1,0 +1,14 @@
+[
+  {
+    "id": "rank-retention-15",
+    "strategyId": "rank-retention-momentum",
+    "topN": 5,
+    "rebalanceBars": 15,
+    "parameters": {
+      "formationDays": 20,
+      "skipDays": 0,
+      "topN": 5,
+      "retentionRank": 10
+    }
+  }
+]

@@ -61,3 +61,5 @@
 앞선 [과거 구간 실패](kr-current-quarter-target-retry-diagnostics-findings.md)와 재개 후 이익 상실 사례는 남는다. 현재와 닮은 회복 조건의 비중첩 표본은 검증·최근 각 1개, 수출 성장까지 합치면 각 0개다. 원래 현재 환경 판정에 필요한 단계별 비중첩 10개 기준을 충족하지 못한다. 이번 462개는 같은 역사에서 파라미터를 바꾼 반복 계좌로 독립 표본이 늘어난 것이 아니다. 여러 번 탐색한 검증·최근 구간을 새로운 미사용 평가로 표현하지 않는다. 거시 자료의 당시 발표본 인증과 기업행위 불확실성도 남으며 실주문은 보내지 않았다.
 
 [전체 요약](kr-current-quarter-target-retry-neighbors-results/all-summaries.csv), [비중첩 계좌](kr-current-quarter-target-retry-neighbors-results/nonoverlapping-accounts.json), [같은 날짜 비교](kr-current-quarter-target-retry-neighbors-results/paired-accounts.json), [증거 해시](kr-current-quarter-target-retry-neighbors-results/evidence-manifest.json)를 보존한다. 원본은 로컬 `data/kr-quarter-research/target-retry-neighbors/`, 재현 순서는 [README](../../scripts/quarter-research/README.md)에 있다.
+
+후속 [보유 순위 완충 모멘텀](kr-current-quarter-rank-retention-findings.md)을 별도 구현했다. 고정 10위 유지 경계에서 세 회전 주기의 첫 비교는 통과했지만, 앞선 결과와 표본·과거 환경 한계는 그대로 보존한다.

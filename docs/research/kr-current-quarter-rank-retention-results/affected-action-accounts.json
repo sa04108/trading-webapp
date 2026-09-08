@@ -1,0 +1,22 @@
+[
+  {
+    "rebalanceBars": 25,
+    "stage": "validation",
+    "file": "data/kr-quarter-research/rank-retention/25-validation/rank-retention-25__2020-06-23.json",
+    "sha256": "22e36b70beea772e174c107ddd10ee00c46e3dc3230875072fe5c8b1cec954fd",
+    "start": "2020-06-23",
+    "end": "2020-09-22",
+    "returnPct": 11.107406095500005,
+    "drawdownPct": -10.041211844999998,
+    "closed": true,
+    "targetReached": false,
+    "affectedActions": [
+      {
+        "symbol": "196170",
+        "date": "2020-07-23",
+        "ratio": 2,
+        "type": "inferred-unit-change"
+      }
+    ]
+  }
+]
