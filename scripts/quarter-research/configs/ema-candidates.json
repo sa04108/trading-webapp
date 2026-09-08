@@ -1,0 +1,110 @@
+[
+  {
+    "id": "ema-5-20-0.3",
+    "strategyId": "ema-trend-switch",
+    "topN": 5,
+    "rebalanceBars": 5,
+    "parameters": {
+      "fastEmaBars": 5,
+      "slowEmaBars": 20,
+      "entryThresholdPercent": 0.3,
+      "atrPeriod": 14,
+      "stopAtrMultiplier": 2,
+      "trailAtrMultiplier": 2,
+      "maxHoldBars": 20,
+      "riskPerTradePercent": 1,
+      "correlationBars": 60,
+      "correlationThreshold": 0.5
+    }
+  },
+  {
+    "id": "ema-5-20-1.0",
+    "strategyId": "ema-trend-switch",
+    "topN": 5,
+    "rebalanceBars": 5,
+    "parameters": {
+      "fastEmaBars": 5,
+      "slowEmaBars": 20,
+      "entryThresholdPercent": 1.0,
+      "atrPeriod": 14,
+      "stopAtrMultiplier": 2,
+      "trailAtrMultiplier": 2,
+      "maxHoldBars": 20,
+      "riskPerTradePercent": 1,
+      "correlationBars": 60,
+      "correlationThreshold": 0.5
+    }
+  },
+  {
+    "id": "ema-12-26-0.3",
+    "strategyId": "ema-trend-switch",
+    "topN": 5,
+    "rebalanceBars": 5,
+    "parameters": {
+      "fastEmaBars": 12,
+      "slowEmaBars": 26,
+      "entryThresholdPercent": 0.3,
+      "atrPeriod": 14,
+      "stopAtrMultiplier": 2,
+      "trailAtrMultiplier": 2,
+      "maxHoldBars": 20,
+      "riskPerTradePercent": 1,
+      "correlationBars": 60,
+      "correlationThreshold": 0.5
+    }
+  },
+  {
+    "id": "ema-12-26-1.0",
+    "strategyId": "ema-trend-switch",
+    "topN": 5,
+    "rebalanceBars": 5,
+    "parameters": {
+      "fastEmaBars": 12,
+      "slowEmaBars": 26,
+      "entryThresholdPercent": 1.0,
+      "atrPeriod": 14,
+      "stopAtrMultiplier": 2,
+      "trailAtrMultiplier": 2,
+      "maxHoldBars": 20,
+      "riskPerTradePercent": 1,
+      "correlationBars": 60,
+      "correlationThreshold": 0.5
+    }
+  },
+  {
+    "id": "ema-20-60-0.3",
+    "strategyId": "ema-trend-switch",
+    "topN": 5,
+    "rebalanceBars": 5,
+    "parameters": {
+      "fastEmaBars": 20,
+      "slowEmaBars": 60,
+      "entryThresholdPercent": 0.3,
+      "atrPeriod": 14,
+      "stopAtrMultiplier": 2,
+      "trailAtrMultiplier": 2,
+      "maxHoldBars": 20,
+      "riskPerTradePercent": 1,
+      "correlationBars": 60,
+      "correlationThreshold": 0.5
+    }
+  },
+  {
+    "id": "ema-20-60-1.0",
+    "strategyId": "ema-trend-switch",
+    "topN": 5,
+    "rebalanceBars": 5,
+    "parameters": {
+      "fastEmaBars": 20,
+      "slowEmaBars": 60,
+      "entryThresholdPercent": 1.0,
+      "atrPeriod": 14,
+      "stopAtrMultiplier": 2,
+      "trailAtrMultiplier": 2,
+      "maxHoldBars": 20,
+      "riskPerTradePercent": 1,
+      "correlationBars": 60,
+      "correlationThreshold": 0.5
+    }
+  }
+]

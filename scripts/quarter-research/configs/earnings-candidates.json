@@ -1,0 +1,101 @@
+[
+  {
+    "id": "earnings-60-3",
+    "strategyId": "quarterly-earnings-research",
+    "topN": 3,
+    "rebalanceBars": 20,
+    "parameters": {
+      "priceMomentumDays": 60,
+      "topN": 3,
+      "staleQuarters": 2
+    }
+  },
+  {
+    "id": "earnings-60-5",
+    "strategyId": "quarterly-earnings-research",
+    "topN": 5,
+    "rebalanceBars": 20,
+    "parameters": {
+      "priceMomentumDays": 60,
+      "topN": 5,
+      "staleQuarters": 2
+    }
+  },
+  {
+    "id": "earnings-60-8",
+    "strategyId": "quarterly-earnings-research",
+    "topN": 8,
+    "rebalanceBars": 20,
+    "parameters": {
+      "priceMomentumDays": 60,
+      "topN": 8,
+      "staleQuarters": 2
+    }
+  },
+  {
+    "id": "earnings-126-3",
+    "strategyId": "quarterly-earnings-research",
+    "topN": 3,
+    "rebalanceBars": 20,
+    "parameters": {
+      "priceMomentumDays": 126,
+      "topN": 3,
+      "staleQuarters": 2
+    }
+  },
+  {
+    "id": "earnings-126-5",
+    "strategyId": "quarterly-earnings-research",
+    "topN": 5,
+    "rebalanceBars": 20,
+    "parameters": {
+      "priceMomentumDays": 126,
+      "topN": 5,
+      "staleQuarters": 2
+    }
+  },
+  {
+    "id": "earnings-126-8",
+    "strategyId": "quarterly-earnings-research",
+    "topN": 8,
+    "rebalanceBars": 20,
+    "parameters": {
+      "priceMomentumDays": 126,
+      "topN": 8,
+      "staleQuarters": 2
+    }
+  },
+  {
+    "id": "earnings-252-3",
+    "strategyId": "quarterly-earnings-research",
+    "topN": 3,
+    "rebalanceBars": 20,
+    "parameters": {
+      "priceMomentumDays": 252,
+      "topN": 3,
+      "staleQuarters": 2
+    }
+  },
+  {
+    "id": "earnings-252-5",
+    "strategyId": "quarterly-earnings-research",
+    "topN": 5,
+    "rebalanceBars": 20,
+    "parameters": {
+      "priceMomentumDays": 252,
+      "topN": 5,
+      "staleQuarters": 2
+    }
+  },
+  {
+    "id": "earnings-252-8",
+    "strategyId": "quarterly-earnings-research",
+    "topN": 8,
+    "rebalanceBars": 20,
+    "parameters": {
+      "priceMomentumDays": 252,
+      "topN": 8,
+      "staleQuarters": 2
+    }
+  }
+]

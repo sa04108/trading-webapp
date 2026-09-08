@@ -1,3 +1,4 @@
+import { createQuarterlyEarnings, hasEightQuarters, quarterlySnapshot } from './quarterly-earnings.js';
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
@@ -34,13 +35,15 @@ const describe = (context: StrategyBarContext) => input.currentSymbols.map((symb
     return120: momentumScore(history, actions, 120, 0),
     annualVol20: Math.sqrt(changes.reduce((a, b) => a + (b - mean) ** 2, 0) / (changes.length - 1) * 252),
     adv20: recent.slice(-20).reduce((a, b) => a + b.close * b.volume, 0) / 20,
-    sma20: recent.slice(-20).reduce((a, b) => a + b.close, 0) / 20, quality };
+    sma20: recent.slice(-20).reduce((a, b) => a + b.close, 0) / 20, quality,
+    quarterlyReady: hasEightQuarters(quarterlySnapshot((input.quarterlyObservations ?? []).filter((r) => r.symbol === symbol.symbol), tsMs), tsMs) };
 });
 
 for (const candidate of candidates) {
   const base = (candidate.strategyId === 'recovery-rotation' ? createRecoveryRotation(macro)
     : candidate.strategyId === 'annual-quality-momentum' ? createAnnualQualityMomentum(input.annualObservations ?? [], macro)
-      : registry.get(candidate.strategyId)) as AnyTradingStrategy | undefined;
+      : candidate.strategyId === 'quarterly-earnings-research' ? createQuarterlyEarnings(input.quarterlyObservations ?? [])
+        : registry.get(candidate.strategyId)) as AnyTradingStrategy | undefined;
   if (!base) throw new Error(`전략 누락: ${candidate.strategyId}`);
   const parameters = base.parameterSchema.parse(candidate.parameters);
   const observer: AnyTradingStrategy = {

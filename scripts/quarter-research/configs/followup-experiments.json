@@ -1,0 +1,38 @@
+[
+  {
+    "directory": "followup/ema-development",
+    "input": "stock-50-input.json.gz",
+    "stage": "development",
+    "selection": "ema-candidates.json"
+  },
+  {
+    "directory": "followup/ema-validation",
+    "input": "stock-50-input.json.gz",
+    "stage": "validation",
+    "selection": "ema-frozen.json"
+  },
+  {
+    "directory": "followup/ema-confirmation",
+    "input": "stock-50-input.json.gz",
+    "stage": "confirmation",
+    "selection": "ema-frozen.json"
+  },
+  {
+    "directory": "followup/earnings-development",
+    "input": "followup/quarterly-stock-input.json.gz",
+    "stage": "development",
+    "selection": "earnings-candidates.json"
+  },
+  {
+    "directory": "followup/earnings-validation",
+    "input": "followup/quarterly-stock-input.json.gz",
+    "stage": "validation",
+    "selection": "earnings-frozen.json"
+  },
+  {
+    "directory": "followup/earnings-confirmation",
+    "input": "followup/quarterly-stock-input.json.gz",
+    "stage": "confirmation",
+    "selection": "earnings-frozen.json"
+  }
+]

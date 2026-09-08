@@ -1,3 +1,4 @@
+import { createQuarterlyEarnings, type QuarterObservation } from './quarterly-earnings.js';
 import { createAnnualQualityMomentum, type AnnualObservation } from './annual-quality-momentum.js';
 import { createRecoveryRotation } from './recovery-rotation.js';
 import { createHash } from 'node:crypto';
@@ -43,6 +44,7 @@ export interface ResearchInput {
   metadata: Record<string, unknown>;
   facts?: Fact[];
   annualObservations?: AnnualObservation[];
+  quarterlyObservations?: QuarterObservation[];
   delisted?: Record<string, number[]>;
   uncertainActions?: { symbol: string; date: string; ratio: number; type: string }[];
 }
@@ -184,11 +186,16 @@ export function main(argv: string[]) {
     if (candidate.strategyId === 'annual-quality-momentum' && !input.annualObservations?.length) {
       throw new Error('연간 실적 관측이 없는 입력입니다');
     }
+    if (candidate.strategyId === 'quarterly-earnings-research' && !input.quarterlyObservations?.length) {
+      throw new Error('분기 실적 관측이 없는 입력입니다');
+    }
     const base = candidate.strategyId === 'recovery-rotation'
       ? createRecoveryRotation(new Map(input.macro.map((m) => [m.tsMs, m]))) as AnyTradingStrategy
       : candidate.strategyId === 'annual-quality-momentum'
         ? createAnnualQualityMomentum(input.annualObservations ?? [], new Map(input.macro.map((m) => [m.tsMs, m]))) as AnyTradingStrategy
-        : registry.get(candidate.strategyId);
+        : candidate.strategyId === 'quarterly-earnings-research'
+          ? createQuarterlyEarnings(input.quarterlyObservations ?? []) as AnyTradingStrategy
+          : registry.get(candidate.strategyId);
     if (!base) throw new Error(`전략 누락: ${candidate.strategyId}`);
     const parameters = base.parameterSchema.parse(candidate.parameters);
     const results = [];

@@ -1,0 +1,755 @@
+{
+  "description": "성과 계산 전 시작 시점의 같은 회계기준 연속 8분기·신선도만 검사한다. 수익·가격 모멘텀 자격은 포함하지 않는다.",
+  "stages": [
+    {
+      "stage": "development",
+      "count": 46,
+      "anyData": 19,
+      "majorityData": 13,
+      "min": 0,
+      "max": 34,
+      "windows": [
+        {
+          "start": "2016-01-04",
+          "members": 50,
+          "eligible": 0,
+          "fraction": 0
+        },
+        {
+          "start": "2016-02-01",
+          "members": 50,
+          "eligible": 0,
+          "fraction": 0
+        },
+        {
+          "start": "2016-03-02",
+          "members": 50,
+          "eligible": 0,
+          "fraction": 0
+        },
+        {
+          "start": "2016-04-01",
+          "members": 50,
+          "eligible": 0,
+          "fraction": 0
+        },
+        {
+          "start": "2016-05-02",
+          "members": 50,
+          "eligible": 0,
+          "fraction": 0
+        },
+        {
+          "start": "2016-06-01",
+          "members": 50,
+          "eligible": 0,
+          "fraction": 0
+        },
+        {
+          "start": "2016-07-01",
+          "members": 50,
+          "eligible": 0,
+          "fraction": 0
+        },
+        {
+          "start": "2016-08-01",
+          "members": 50,
+          "eligible": 0,
+          "fraction": 0
+        },
+        {
+          "start": "2016-09-01",
+          "members": 50,
+          "eligible": 0,
+          "fraction": 0
+        },
+        {
+          "start": "2016-10-04",
+          "members": 50,
+          "eligible": 0,
+          "fraction": 0
+        },
+        {
+          "start": "2016-11-01",
+          "members": 50,
+          "eligible": 0,
+          "fraction": 0
+        },
+        {
+          "start": "2016-12-01",
+          "members": 50,
+          "eligible": 0,
+          "fraction": 0
+        },
+        {
+          "start": "2017-01-02",
+          "members": 50,
+          "eligible": 0,
+          "fraction": 0
+        },
+        {
+          "start": "2017-02-01",
+          "members": 50,
+          "eligible": 0,
+          "fraction": 0
+        },
+        {
+          "start": "2017-03-02",
+          "members": 50,
+          "eligible": 0,
+          "fraction": 0
+        },
+        {
+          "start": "2017-04-03",
+          "members": 50,
+          "eligible": 0,
+          "fraction": 0
+        },
+        {
+          "start": "2017-05-02",
+          "members": 50,
+          "eligible": 0,
+          "fraction": 0
+        },
+        {
+          "start": "2017-06-01",
+          "members": 50,
+          "eligible": 0,
+          "fraction": 0
+        },
+        {
+          "start": "2017-07-03",
+          "members": 50,
+          "eligible": 0,
+          "fraction": 0
+        },
+        {
+          "start": "2017-08-01",
+          "members": 50,
+          "eligible": 0,
+          "fraction": 0
+        },
+        {
+          "start": "2017-09-01",
+          "members": 50,
+          "eligible": 0,
+          "fraction": 0
+        },
+        {
+          "start": "2017-10-10",
+          "members": 50,
+          "eligible": 0,
+          "fraction": 0
+        },
+        {
+          "start": "2017-11-01",
+          "members": 50,
+          "eligible": 0,
+          "fraction": 0
+        },
+        {
+          "start": "2017-12-01",
+          "members": 50,
+          "eligible": 0,
+          "fraction": 0
+        },
+        {
+          "start": "2018-01-02",
+          "members": 50,
+          "eligible": 0,
+          "fraction": 0
+        },
+        {
+          "start": "2018-02-01",
+          "members": 50,
+          "eligible": 0,
+          "fraction": 0
+        },
+        {
+          "start": "2018-03-02",
+          "members": 50,
+          "eligible": 0,
+          "fraction": 0
+        },
+        {
+          "start": "2018-04-02",
+          "members": 50,
+          "eligible": 7,
+          "fraction": 0.14
+        },
+        {
+          "start": "2018-05-02",
+          "members": 50,
+          "eligible": 22,
+          "fraction": 0.44
+        },
+        {
+          "start": "2018-06-01",
+          "members": 50,
+          "eligible": 20,
+          "fraction": 0.4
+        },
+        {
+          "start": "2018-07-02",
+          "members": 50,
+          "eligible": 22,
+          "fraction": 0.44
+        },
+        {
+          "start": "2018-08-01",
+          "members": 50,
+          "eligible": 24,
+          "fraction": 0.48
+        },
+        {
+          "start": "2018-09-03",
+          "members": 50,
+          "eligible": 27,
+          "fraction": 0.54
+        },
+        {
+          "start": "2018-10-01",
+          "members": 50,
+          "eligible": 26,
+          "fraction": 0.52
+        },
+        {
+          "start": "2018-11-01",
+          "members": 50,
+          "eligible": 25,
+          "fraction": 0.5
+        },
+        {
+          "start": "2018-12-03",
+          "members": 50,
+          "eligible": 29,
+          "fraction": 0.58
+        },
+        {
+          "start": "2019-01-02",
+          "members": 50,
+          "eligible": 30,
+          "fraction": 0.6
+        },
+        {
+          "start": "2019-02-01",
+          "members": 50,
+          "eligible": 29,
+          "fraction": 0.58
+        },
+        {
+          "start": "2019-03-04",
+          "members": 50,
+          "eligible": 30,
+          "fraction": 0.6
+        },
+        {
+          "start": "2019-04-01",
+          "members": 50,
+          "eligible": 2,
+          "fraction": 0.04
+        },
+        {
+          "start": "2019-05-02",
+          "members": 50,
+          "eligible": 28,
+          "fraction": 0.56
+        },
+        {
+          "start": "2019-06-03",
+          "members": 50,
+          "eligible": 29,
+          "fraction": 0.58
+        },
+        {
+          "start": "2019-07-01",
+          "members": 50,
+          "eligible": 29,
+          "fraction": 0.58
+        },
+        {
+          "start": "2019-08-01",
+          "members": 50,
+          "eligible": 29,
+          "fraction": 0.58
+        },
+        {
+          "start": "2019-09-02",
+          "members": 50,
+          "eligible": 34,
+          "fraction": 0.68
+        },
+        {
+          "start": "2019-10-01",
+          "members": 50,
+          "eligible": 34,
+          "fraction": 0.68
+        }
+      ]
+    },
+    {
+      "stage": "validation",
+      "count": 45,
+      "anyData": 45,
+      "majorityData": 37,
+      "min": 19,
+      "max": 34,
+      "windows": [
+        {
+          "start": "2020-01-02",
+          "members": 50,
+          "eligible": 34,
+          "fraction": 0.68
+        },
+        {
+          "start": "2020-02-03",
+          "members": 50,
+          "eligible": 33,
+          "fraction": 0.66
+        },
+        {
+          "start": "2020-03-02",
+          "members": 50,
+          "eligible": 34,
+          "fraction": 0.68
+        },
+        {
+          "start": "2020-04-01",
+          "members": 50,
+          "eligible": 29,
+          "fraction": 0.58
+        },
+        {
+          "start": "2020-05-04",
+          "members": 50,
+          "eligible": 32,
+          "fraction": 0.64
+        },
+        {
+          "start": "2020-06-01",
+          "members": 50,
+          "eligible": 32,
+          "fraction": 0.64
+        },
+        {
+          "start": "2020-07-01",
+          "members": 50,
+          "eligible": 33,
+          "fraction": 0.66
+        },
+        {
+          "start": "2020-08-03",
+          "members": 50,
+          "eligible": 31,
+          "fraction": 0.62
+        },
+        {
+          "start": "2020-09-01",
+          "members": 50,
+          "eligible": 31,
+          "fraction": 0.62
+        },
+        {
+          "start": "2020-10-05",
+          "members": 50,
+          "eligible": 29,
+          "fraction": 0.58
+        },
+        {
+          "start": "2020-11-02",
+          "members": 50,
+          "eligible": 28,
+          "fraction": 0.56
+        },
+        {
+          "start": "2020-12-01",
+          "members": 50,
+          "eligible": 29,
+          "fraction": 0.58
+        },
+        {
+          "start": "2021-01-04",
+          "members": 50,
+          "eligible": 30,
+          "fraction": 0.6
+        },
+        {
+          "start": "2021-02-01",
+          "members": 50,
+          "eligible": 30,
+          "fraction": 0.6
+        },
+        {
+          "start": "2021-03-02",
+          "members": 50,
+          "eligible": 31,
+          "fraction": 0.62
+        },
+        {
+          "start": "2021-04-01",
+          "members": 50,
+          "eligible": 27,
+          "fraction": 0.54
+        },
+        {
+          "start": "2021-05-03",
+          "members": 50,
+          "eligible": 27,
+          "fraction": 0.54
+        },
+        {
+          "start": "2021-06-01",
+          "members": 50,
+          "eligible": 28,
+          "fraction": 0.56
+        },
+        {
+          "start": "2021-07-01",
+          "members": 50,
+          "eligible": 27,
+          "fraction": 0.54
+        },
+        {
+          "start": "2021-08-02",
+          "members": 50,
+          "eligible": 27,
+          "fraction": 0.54
+        },
+        {
+          "start": "2021-09-01",
+          "members": 50,
+          "eligible": 28,
+          "fraction": 0.56
+        },
+        {
+          "start": "2021-10-01",
+          "members": 50,
+          "eligible": 26,
+          "fraction": 0.52
+        },
+        {
+          "start": "2021-11-01",
+          "members": 50,
+          "eligible": 25,
+          "fraction": 0.5
+        },
+        {
+          "start": "2021-12-01",
+          "members": 50,
+          "eligible": 23,
+          "fraction": 0.46
+        },
+        {
+          "start": "2022-01-03",
+          "members": 50,
+          "eligible": 25,
+          "fraction": 0.5
+        },
+        {
+          "start": "2022-02-03",
+          "members": 50,
+          "eligible": 25,
+          "fraction": 0.5
+        },
+        {
+          "start": "2022-03-02",
+          "members": 50,
+          "eligible": 24,
+          "fraction": 0.48
+        },
+        {
+          "start": "2022-04-01",
+          "members": 50,
+          "eligible": 19,
+          "fraction": 0.38
+        },
+        {
+          "start": "2022-05-02",
+          "members": 50,
+          "eligible": 20,
+          "fraction": 0.4
+        },
+        {
+          "start": "2022-06-02",
+          "members": 50,
+          "eligible": 22,
+          "fraction": 0.44
+        },
+        {
+          "start": "2022-07-01",
+          "members": 50,
+          "eligible": 22,
+          "fraction": 0.44
+        },
+        {
+          "start": "2022-08-01",
+          "members": 50,
+          "eligible": 22,
+          "fraction": 0.44
+        },
+        {
+          "start": "2022-09-01",
+          "members": 50,
+          "eligible": 26,
+          "fraction": 0.52
+        },
+        {
+          "start": "2022-10-04",
+          "members": 50,
+          "eligible": 26,
+          "fraction": 0.52
+        },
+        {
+          "start": "2022-11-01",
+          "members": 50,
+          "eligible": 28,
+          "fraction": 0.56
+        },
+        {
+          "start": "2022-12-01",
+          "members": 50,
+          "eligible": 31,
+          "fraction": 0.62
+        },
+        {
+          "start": "2023-01-02",
+          "members": 50,
+          "eligible": 30,
+          "fraction": 0.6
+        },
+        {
+          "start": "2023-02-01",
+          "members": 50,
+          "eligible": 30,
+          "fraction": 0.6
+        },
+        {
+          "start": "2023-03-02",
+          "members": 50,
+          "eligible": 30,
+          "fraction": 0.6
+        },
+        {
+          "start": "2023-04-03",
+          "members": 50,
+          "eligible": 24,
+          "fraction": 0.48
+        },
+        {
+          "start": "2023-05-02",
+          "members": 50,
+          "eligible": 26,
+          "fraction": 0.52
+        },
+        {
+          "start": "2023-06-01",
+          "members": 50,
+          "eligible": 25,
+          "fraction": 0.5
+        },
+        {
+          "start": "2023-07-03",
+          "members": 50,
+          "eligible": 25,
+          "fraction": 0.5
+        },
+        {
+          "start": "2023-08-01",
+          "members": 50,
+          "eligible": 27,
+          "fraction": 0.54
+        },
+        {
+          "start": "2023-09-01",
+          "members": 50,
+          "eligible": 30,
+          "fraction": 0.6
+        }
+      ]
+    },
+    {
+      "stage": "confirmation",
+      "count": 29,
+      "anyData": 29,
+      "majorityData": 29,
+      "min": 28,
+      "max": 43,
+      "windows": [
+        {
+          "start": "2024-01-02",
+          "members": 50,
+          "eligible": 31,
+          "fraction": 0.62
+        },
+        {
+          "start": "2024-02-01",
+          "members": 50,
+          "eligible": 30,
+          "fraction": 0.6
+        },
+        {
+          "start": "2024-03-04",
+          "members": 50,
+          "eligible": 30,
+          "fraction": 0.6
+        },
+        {
+          "start": "2024-04-01",
+          "members": 50,
+          "eligible": 28,
+          "fraction": 0.56
+        },
+        {
+          "start": "2024-05-02",
+          "members": 50,
+          "eligible": 31,
+          "fraction": 0.62
+        },
+        {
+          "start": "2024-06-03",
+          "members": 50,
+          "eligible": 32,
+          "fraction": 0.64
+        },
+        {
+          "start": "2024-07-01",
+          "members": 50,
+          "eligible": 32,
+          "fraction": 0.64
+        },
+        {
+          "start": "2024-08-01",
+          "members": 50,
+          "eligible": 32,
+          "fraction": 0.64
+        },
+        {
+          "start": "2024-09-02",
+          "members": 50,
+          "eligible": 33,
+          "fraction": 0.66
+        },
+        {
+          "start": "2024-10-02",
+          "members": 50,
+          "eligible": 34,
+          "fraction": 0.68
+        },
+        {
+          "start": "2024-11-01",
+          "members": 50,
+          "eligible": 33,
+          "fraction": 0.66
+        },
+        {
+          "start": "2024-12-02",
+          "members": 50,
+          "eligible": 35,
+          "fraction": 0.7
+        },
+        {
+          "start": "2025-01-02",
+          "members": 50,
+          "eligible": 34,
+          "fraction": 0.68
+        },
+        {
+          "start": "2025-02-03",
+          "members": 50,
+          "eligible": 33,
+          "fraction": 0.66
+        },
+        {
+          "start": "2025-03-04",
+          "members": 50,
+          "eligible": 33,
+          "fraction": 0.66
+        },
+        {
+          "start": "2025-04-01",
+          "members": 50,
+          "eligible": 30,
+          "fraction": 0.6
+        },
+        {
+          "start": "2025-05-02",
+          "members": 50,
+          "eligible": 30,
+          "fraction": 0.6
+        },
+        {
+          "start": "2025-06-02",
+          "members": 50,
+          "eligible": 30,
+          "fraction": 0.6
+        },
+        {
+          "start": "2025-07-01",
+          "members": 50,
+          "eligible": 29,
+          "fraction": 0.58
+        },
+        {
+          "start": "2025-08-01",
+          "members": 50,
+          "eligible": 29,
+          "fraction": 0.58
+        },
+        {
+          "start": "2025-09-01",
+          "members": 50,
+          "eligible": 33,
+          "fraction": 0.66
+        },
+        {
+          "start": "2025-10-01",
+          "members": 50,
+          "eligible": 32,
+          "fraction": 0.64
+        },
+        {
+          "start": "2025-11-03",
+          "members": 50,
+          "eligible": 33,
+          "fraction": 0.66
+        },
+        {
+          "start": "2025-12-01",
+          "members": 50,
+          "eligible": 41,
+          "fraction": 0.82
+        },
+        {
+          "start": "2026-01-02",
+          "members": 50,
+          "eligible": 41,
+          "fraction": 0.82
+        },
+        {
+          "start": "2026-02-02",
+          "members": 50,
+          "eligible": 41,
+          "fraction": 0.82
+        },
+        {
+          "start": "2026-03-03",
+          "members": 50,
+          "eligible": 43,
+          "fraction": 0.86
+        },
+        {
+          "start": "2026-04-01",
+          "members": 50,
+          "eligible": 38,
+          "fraction": 0.76
+        },
+        {
+          "start": "2026-05-04",
+          "members": 50,
+          "eligible": 37,
+          "fraction": 0.74
+        }
+      ]
+    }
+  ]
+}

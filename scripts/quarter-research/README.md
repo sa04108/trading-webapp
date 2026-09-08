@@ -60,3 +60,22 @@ pnpm exec tsc -p tsconfig.server.json --noEmit
 ```
 
 RSI 개발 실행 중 평가 종료 뒤 상장폐지 일정이 엔진 시간축으로 넘어가던 연구 입력 문제가 발견됐다. 실패 응답은 `rsi-input-boundary-failure.json`에 보존하고 종료일 이후 일정을 제외해 다시 실행했다. 운영 엔진은 바꾸지 않았다. 기존 완료된 대표 후보의 재실행과 원본 계좌 결과 비교를 별도로 기록한다.
+
+## EMA·분기 실적 후속 탐색
+
+`configs/followup-experiments.json`은 `b3e80bf` 뒤 추가한 31개 실험 목록이다. 이전 `experiments.json` 집계와 구분한다. 원문은 `data/kr-quarter-research/followup/`에 보존했다.
+
+`fetch_quarterly.py`는 기존 앱 인증 환경 안에서 DART 다중회사 주요계정을 조회한다. `--codes-json`에는 중복 없는 8자리 DART 회사코드 JSON 배열을, `--env-file`에는 기존 앱 환경 파일을 지정한다. API 인증키는 파일에서 읽고 원응답만 표준 출력에 gzip으로 보낸다. `--usage-database`를 생략하면 같은 환경의 `DATABASE_PATH`를 읽기 전용으로 열어 일별 사용량을 확인한다. 호출 수는 자체 기록에만 남으며 앱 사용 원장에 쓰지 않는다. 다른 동시 수집기의 모든 호출까지 추적하는 전역 예약 장치는 아니다. 실제 수집은 123개 회사·92회, 사전 의미 확인은 4회였다.
+
+```bash
+python scripts/quarter-research/prepare_quarterly.py data/kr-quarter-research/followup/dart-quarterly.jsonl.gz data/kr-quarter-research/followup/dart-request-codes.json data/kr-quarter-research/followup/quarterly-observations.json
+node --import tsx scripts/quarter-research/quarterly-coverage.ts data/kr-quarter-research/stock-50-input.json.gz data/kr-quarter-research/followup/quarterly-observations.json data/kr-quarter-research/followup/quarterly-coverage.json
+python scripts/quarter-research/add_quarterly_inputs.py data/kr-quarter-research/stock-50-input.json.gz data/kr-quarter-research/followup/quarterly-observations.json data/kr-quarter-research/followup/quarterly-stock-input.json.gz
+node --import tsx scripts/quarter-research/quarter-engine.ts data/kr-quarter-research/followup/quarterly-stock-input.json.gz data/kr-quarter-research/followup/reproduction-earnings-confirmation confirmation scripts/quarter-research/configs/earnings-frozen.json
+python scripts/quarter-research/add_quarterly_inputs.py data/kr-quarter-research/current-stock-input.json.gz data/kr-quarter-research/followup/quarterly-observations.json data/kr-quarter-research/followup/quarterly-current-input.json.gz
+node --import tsx scripts/quarter-research/current-signals.ts data/kr-quarter-research/followup/quarterly-current-input.json.gz scripts/quarter-research/configs/earnings-frozen.json data/kr-quarter-research/followup/earnings-current-signals.json
+python scripts/quarter-research/build_followup_evidence.py data/kr-quarter-research data/kr-quarter-research/followup/evidence
+pnpm exec vitest run tests/unit/quarterly-earnings-research.test.ts tests/unit/earnings-acceleration-rank.test.ts
+```
+
+전체 집계를 재현하려면 `followup-experiments.json`의 단계·선택 파일 조합을 모두 완료해야 한다. EMA는 기존 주식 입력을 쓴다. 분기 실적은 당기·누적 차분 대조, 같은 회계기준, 두 보고서의 접수일 다음 날 적용을 검사한다. 2015년 분기 자료가 반환되지 않아 연속 8분기 조건을 충족한 첫 월간 시작점은 2018년 4월이다. 자료 충족 구간의 별도 요약도 보존한다. 상세 결과와 한계는 `docs/research/kr-current-quarter-followup-findings.md`에 있다.

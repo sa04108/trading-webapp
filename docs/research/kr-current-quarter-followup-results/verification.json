@@ -1,0 +1,42 @@
+{
+  "typescript": {
+    "testFiles": 6,
+    "testCases": 51,
+    "status": "passed",
+    "command": "pnpm exec vitest run tests/unit/quarter-research.test.ts tests/unit/quarterly-earnings-research.test.ts tests/unit/earnings-acceleration-rank.test.ts tests/unit/annual-quality-quarter.test.ts tests/unit/recovery-quarter.test.ts tests/unit/ema-trend-switch.test.ts"
+  },
+  "python": {
+    "testCases": 10,
+    "status": "passed",
+    "command": "python -m unittest discover -s scripts/quarter-research -p 'test_*.py'"
+  },
+  "eslint": "passed for research TypeScript and related research tests",
+  "typecheck": "pnpm exec tsc -p tsconfig.server.json --noEmit passed",
+  "quarterNormalizationReplay": {
+    "byteEqual": true,
+    "sha256": "d0e00ca772285585fffafa635e75ac53ace32d5070e5f4f9adea6a273f79dc48",
+    "observations": 8282,
+    "excluded": 399
+  },
+  "priorRouteReplay": {
+    "candidate": "momentum-20-5-monthly",
+    "start": "2024-01-02",
+    "fullAccountJsonEqual": true,
+    "originalSha256": "70172ffbf1f35e2ac223efc4334d1e1d9b847cafefb9f38add140024db71407c",
+    "replaySha256": "70172ffbf1f35e2ac223efc4334d1e1d9b847cafefb9f38add140024db71407c"
+  },
+  "accountEvidence": {
+    "completed": 1282,
+    "summaryCount": 31,
+    "inputHashesAndFullAccountSummaries": "checked by build_followup_evidence.py"
+  },
+  "currentSignals": {
+    "candidates": 5,
+    "symbols": 50,
+    "quarterlyReady": 45,
+    "futureFills": 0
+  },
+  "slippageAndSeedStress": "not extended: no candidate passed the initial performance criteria",
+  "fullRepositoryTestSuite": "not run; production source unchanged",
+  "researchOutcome": "No additional candidate supports live adoption; financial goal remains unachieved"
+}
