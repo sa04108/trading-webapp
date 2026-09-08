@@ -1,0 +1,54 @@
+{
+  "verifiedOnKst": "2026-09-09",
+  "dataAsOf": "2026-09-08",
+  "baseCommit": "b99ed01",
+  "currentCandidateExecuted": true,
+  "nativeCurrentOutputByteIdentical": true,
+  "universeCount": 200,
+  "currentTargetCount": 5,
+  "currentOrderIntentCount": 0,
+  "rawBarsCheckedPerTarget": 21,
+  "inputAndSourceHashesMatch": true,
+  "currentAuditCodeHashesMatch": true,
+  "unchangedHistoricalTradingTestAndLockFiles": 42,
+  "newHistoricalAccounts": 0,
+  "strategyAdopted": false,
+  "actualOrdersSent": 0,
+  "validation": {
+    "vitestFilesPassed": 4,
+    "uniqueVitestTestsPassed": 25,
+    "newCurrentSignalTestsPassed": 6,
+    "currentSignalTestsRerunAfterReadonlyTypeFix": true,
+    "eslintPassed": true,
+    "serverTypecheckPassed": true,
+    "pythonCompilation": true,
+    "syntheticQuarterEngineSelectionDecisionFillTimingVerified": true,
+    "currentDayMissingUnconfirmedBarRejected": true,
+    "confirmedHaltMissingBarExcludedFromSelection": true,
+    "futurePricesRejected": true,
+    "previousMonthlyUniverseInputHashesMatch": true
+  },
+  "currentSignalsSha256": "9513af028c48733c98dad7d8d5ba591d206cd71788be59657b31e6bfed63ff4c",
+  "nativeReplaySha256": "00384808dc9952ac253b8ab41280051d02909d9ae80f48b88d2ba91b5b380543",
+  "publicArtifactSha256": {
+    "current-audit.json": "22d3d4af4a58d69bad1904d06c33a644b7d0d97372d0f3dc1e36c7790f4de24b"
+  },
+  "checksSourceSha256": {
+    "/home/hyunbae204/work/trading-webapp/scripts/quarter-research/audit_rank_retention_current.py": "2fa766dab554aeaa1c5407db72c2926dd6e91b6ccade1ecc98cee1365b13ef8d",
+    "/home/hyunbae204/work/trading-webapp/scripts/quarter-research/current-signals.ts": "261e87435ac5f2af89f9d8b6ebe9cc4a0d62d791c15a5106bf8a15778c71ff05",
+    "/home/hyunbae204/work/trading-webapp/scripts/quarter-research/rank-retention-momentum.ts": "495e68117c1c22e3ca6140b3cdc105f10f3097aea5cef54665cacd2c142e0a81",
+    "/home/hyunbae204/work/trading-webapp/scripts/quarter-research/quarter-engine.ts": "e8e89af6a6a4308d5825c878bbdee34273e8909d8916ca1ae583e98cf93c79be",
+    "/home/hyunbae204/work/trading-webapp/scripts/quarter-research/uncertain-history.ts": "8f39fc17cbe1f99ef253f30c95df3b9d315be864c6e4a83368b2548c0e0ec546",
+    "tests/unit/current-quarter-signals.test.ts": "061fe7a1444d87c3896ec756a86606da4ddfe1df1effc85ba8f2b6925ac10703",
+    "pnpm-lock.yaml": "db587027cd2d8c4fda4a21b87de12c980bde1094a9f632d887bd55347319f715"
+  },
+  "limitations": [
+    "현재 관찰은 신규 현금 계좌의 선정 단계만 확인",
+    "기존 계좌 운용·미래 실제 체결 미검증",
+    "현재 유사 환경 비중첩 표본은 단계별 1개",
+    "수출 성장·회복 결합 표본 없음",
+    "개발 월간·2011년 부진 유지",
+    "현재 KRX 원문 대조는 운영 환경 접근 승인 대기",
+    "거시 당시 발표본과 기업행위 불확실성 유지"
+  ]
+}

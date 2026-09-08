@@ -1,0 +1,145 @@
+{
+  "asof": "2026-09-08",
+  "baseCommit": "b99ed01",
+  "candidate": {
+    "id": "rank-retention-20",
+    "strategyId": "rank-retention-momentum",
+    "topN": 5,
+    "rebalanceBars": 20,
+    "parameters": {
+      "formationDays": 20,
+      "skipDays": 0,
+      "topN": 5,
+      "retentionRank": 10
+    }
+  },
+  "initialCash": 100000000,
+  "observationScope": "신규 현금 계좌의 현재 선정 단계; 기존 계좌 상태·향후 가격·주문·체결은 재현하지 않음",
+  "nativeReplayByteIdentical": true,
+  "nativeSelectionAndDiagnosticsIdentical": true,
+  "universeCount": 200,
+  "universeSelectionAsOf": "2026-08-31",
+  "entryChecks": {
+    "volatilityAtLeast30Pct": true,
+    "return20Positive": true,
+    "aboveSma20": true
+  },
+  "entryConditionsMet": true,
+  "entryMacro": {
+    "date": "2026-09-08",
+    "kospi": 6954.52,
+    "kospiSma20": 6760.334,
+    "kospiRet20": 0.1039516418346389,
+    "kospiRet60": -0.1439136739532375,
+    "kospiVol20": 0.45445638705263447
+  },
+  "ordersAtLatestClose": [],
+  "pendingTargets": [
+    "000500",
+    "052690",
+    "181710",
+    "336260",
+    "403870"
+  ],
+  "targets": [
+    {
+      "rank": 1,
+      "symbol": "336260",
+      "name": "두산퓨얼셀",
+      "close": 49250,
+      "return20": 0.4767616191904047,
+      "adv20": 49564737430,
+      "annualVol20": 1.0601338165696048,
+      "scoreFirstDate": "2026-08-10",
+      "scoreFirstClose": 33350.0,
+      "scoreBars": 21,
+      "historyQuarantines": []
+    },
+    {
+      "rank": 2,
+      "symbol": "000500",
+      "name": "가온전선",
+      "close": 227500,
+      "return20": 0.4536741214057507,
+      "adv20": 43147572040,
+      "annualVol20": 0.9567100472666944,
+      "scoreFirstDate": "2026-08-10",
+      "scoreFirstClose": 156500.0,
+      "scoreBars": 21,
+      "historyQuarantines": [
+        {
+          "symbol": "000500",
+          "date": "2026-06-30",
+          "ratio": 1.7995827371134585,
+          "type": "unresolved"
+        }
+      ]
+    },
+    {
+      "rank": 3,
+      "symbol": "403870",
+      "name": "HPSP",
+      "close": 53300,
+      "return20": 0.4424898511502029,
+      "adv20": 130585472992.5,
+      "annualVol20": 0.6197626979523848,
+      "scoreFirstDate": "2026-08-10",
+      "scoreFirstClose": 36950.0,
+      "scoreBars": 21,
+      "historyQuarantines": []
+    },
+    {
+      "rank": 4,
+      "symbol": "181710",
+      "name": "NHN",
+      "close": 59900,
+      "return20": 0.43473053892215563,
+      "adv20": 25958332605,
+      "annualVol20": 1.4749764046761817,
+      "scoreFirstDate": "2026-08-10",
+      "scoreFirstClose": 41750.0,
+      "scoreBars": 21,
+      "historyQuarantines": []
+    },
+    {
+      "rank": 5,
+      "symbol": "052690",
+      "name": "한전기술",
+      "close": 142600,
+      "return20": 0.4132804757185331,
+      "adv20": 58849909470,
+      "annualVol20": 1.1386913948208468,
+      "scoreFirstDate": "2026-08-10",
+      "scoreFirstClose": 100900.0,
+      "scoreBars": 21,
+      "historyQuarantines": []
+    }
+  ],
+  "historyQuarantineCount": 10,
+  "futureCandlesUsed": false,
+  "sourceSha256": {
+    "data/kr-quarter-research/target-retry-neighbors/current-universe/monthly-input.json.gz": "1b78e0d864b91cb5454f8229f814fdd0c062d92adb12458c6db160307fab71bf",
+    "data/kr-quarter-research/rank-retention-current/current-signals.json": "9513af028c48733c98dad7d8d5ba591d206cd71788be59657b31e6bfed63ff4c",
+    "data/kr-quarter-research/rank-retention-current/native-replay.json": "00384808dc9952ac253b8ab41280051d02909d9ae80f48b88d2ba91b5b380543",
+    "data/kr-quarter-research/target-retry-neighbors/current-universe/monthly-signals.json": "00384808dc9952ac253b8ab41280051d02909d9ae80f48b88d2ba91b5b380543",
+    "/home/hyunbae204/work/trading-webapp/scripts/quarter-research/configs/rank-retention-20.json": "c59117214ec3b66977bc14cb3be9119a78d3d355207b048bca9b88014807725b",
+    "data/kr-quarter-research/target-retry-neighbors/current-universe/monthly-manifest.json": "c8b858b2eff065749bc85d8479e4baeed6bb3abcdaa9461584d7a1ebe47606cc",
+    "data/kr-quarter-research/target-retry-neighbors/current-universe/audit.json": "8fb6636081fc762a393f3bec02b01bd9109158fbaaec819b9300df4b948b4fda"
+  },
+  "codeSha256": {
+    "/home/hyunbae204/work/trading-webapp/scripts/quarter-research/audit_rank_retention_current.py": "2fa766dab554aeaa1c5407db72c2926dd6e91b6ccade1ecc98cee1365b13ef8d",
+    "/home/hyunbae204/work/trading-webapp/scripts/quarter-research/current-signals.ts": "261e87435ac5f2af89f9d8b6ebe9cc4a0d62d791c15a5106bf8a15778c71ff05",
+    "/home/hyunbae204/work/trading-webapp/scripts/quarter-research/rank-retention-momentum.ts": "495e68117c1c22e3ca6140b3cdc105f10f3097aea5cef54665cacd2c142e0a81",
+    "/home/hyunbae204/work/trading-webapp/scripts/quarter-research/quarter-engine.ts": "e8e89af6a6a4308d5825c878bbdee34273e8909d8916ca1ae583e98cf93c79be",
+    "/home/hyunbae204/work/trading-webapp/scripts/quarter-research/uncertain-history.ts": "8f39fc17cbe1f99ef253f30c95df3b9d315be864c6e4a83368b2548c0e0ec546",
+    "tests/unit/current-quarter-signals.test.ts": "061fe7a1444d87c3896ec756a86606da4ddfe1df1effc85ba8f2b6925ac10703",
+    "pnpm-lock.yaml": "db587027cd2d8c4fda4a21b87de12c980bde1094a9f632d887bd55347319f715"
+  },
+  "limitations": [
+    "현재 신호의 고변동 반등 조건은 별도 대조이며 이 CLI가 장기 계좌 운용을 대신하지 않음",
+    "현재와 유사한 역사 표본 부족",
+    "당일 KRX 원문 대조 미완료",
+    "미확인 기업행위와 거시 당시 발표본의 한계",
+    "현재 선정은 실전 채택이나 3개월 수익을 검증하지 않음"
+  ]
+}

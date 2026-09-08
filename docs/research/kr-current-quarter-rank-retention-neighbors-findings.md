@@ -52,3 +52,5 @@
 현재 월별 종목군과 9월 8일 Npay 가격 스냅샷을 유지했다. 해당 일자 KRX 원문 대조는 운영 인증 환경 접근이 자동 승인 검토에서 거절되어 아직 실행하지 못했다. 거시 당시 발표본 미인증과 기업행위 불확실성도 남는다. 추가 과거 파라미터 반복만으로 이 한계가 해결되지는 않는다.
 
 기본 20일·5종목·20봉·유지 10위를 연구 후보로 보존하며 실전 전략 채택과 실주문은 하지 않았다. [전체 집계](kr-current-quarter-rank-retention-neighbors-results/all-summaries.csv), [비중첩 계좌](kr-current-quarter-rank-retention-neighbors-results/nonoverlapping-accounts.json), 로컬 원본 `data/kr-quarter-research/rank-retention-neighbors/`와 [재현 절차](../../scripts/quarter-research/README.md)를 함께 보존한다.
+
+새 후보를 현재 신호 계산기에 직접 연결한 후속 확인은 [현재 신호 결과](kr-current-quarter-rank-retention-current-findings.md)에 기록했다. 위 과거 성과와 표본 한계는 그대로 유지한다.

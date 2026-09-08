@@ -325,3 +325,18 @@ python scripts/quarter-research/build_rank_retention_neighbors.py data/kr-quarte
 ```
 
 집계 전에 실험 목록의 모든 실행이 완료돼 있어야 한다. `reproduction-*`는 별도 예시 경로다. 집계기는 고정 후보·옵션·원본 해시와 실제 목표·현금·비용·낙폭·최초 매수 시점·보유 수를 대조한다. 같은 날짜의 기본 계좌보다 좋아진 경우와 나빠진 경우, 미확인 기업행위 보유, 기준 미달 설정의 비중첩 거래 경로를 함께 보존한다. [사전 규칙](../../docs/research/kr-current-quarter-rank-retention-neighbors-protocol.md)과 [전체 결과](../../docs/research/kr-current-quarter-rank-retention-neighbors-findings.md)를 참고한다. 이 반복 계좌 수는 현재 환경의 독립 시장 표본으로 더하지 않는다.
+
+
+## 보유 순위 완충 후보의 현재 신호
+
+`current-signals.ts`는 연구 후보 `rank-retention-momentum`을 직접 실행한다. 현재 전용 입력의 관찰일에 새 현금 계좌를 시작해 종목 선정과 주문 의도만 기록한다. 기준일·현재 일봉 결손·미래 가격을 검사하며, 확인된 거래정지의 일봉 결손은 허용하되 신규 매수 대상에서 제외한다. 기존 계좌의 위험·포지션 상태를 이어받는 운영 도구는 아니다.
+
+```bash
+mkdir -p data/kr-quarter-research/rank-retention-current
+node --import tsx scripts/quarter-research/current-signals.ts data/kr-quarter-research/target-retry-neighbors/current-universe/monthly-input.json.gz scripts/quarter-research/configs/rank-retention-20.json data/kr-quarter-research/rank-retention-current/current-signals.json
+node --import tsx scripts/quarter-research/current-signals.ts data/kr-quarter-research/target-retry-neighbors/current-universe/monthly-input.json.gz scripts/quarter-research/configs/account-stop-candidate.json data/kr-quarter-research/rank-retention-current/native-replay.json
+python scripts/quarter-research/audit_rank_retention_current.py data/kr-quarter-research data/kr-quarter-research/rank-retention-current/audit.json
+pnpm exec vitest run tests/unit/current-quarter-signals.test.ts tests/unit/rank-retention-quarter.test.ts tests/unit/target-retry-quarter.test.ts tests/unit/uncertain-history-quarter.test.ts
+```
+
+감사는 기존 현재 신호의 바이트 재현, 앞서 검증한 월별 종목군·입력 해시, 현재 상위 다섯 종목의 원문 21개 가격과 점수를 확인한다. 고변동 반등 조건은 별도로 대조하며, 그 조건의 충족을 수익 전망으로 표시하지 않는다. 합성 입력의 테스트에서는 실제 분기 엔진의 선정·다음 거래 봉 매수 판단·그 다음 봉 체결을 구분한다. 현재 가격을 연장해 미래 봉을 만들지 않는다. [현재 신호 결과](../../docs/research/kr-current-quarter-rank-retention-current-findings.md)에 관찰 범위와 남은 표본·자료 한계를 기록했다.
