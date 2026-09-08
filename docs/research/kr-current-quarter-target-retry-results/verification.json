@@ -1,0 +1,46 @@
+{
+  "verifiedOnKst": "2026-09-09",
+  "dataAsOf": "2026-09-08",
+  "newExperiments": 14,
+  "newAccounts": 539,
+  "reusedAccounts": 539,
+  "uniqueRawAndSummaryHashesChecked": 1106,
+  "fullManifestSha256": "ce0622fbc6a607c27b1cbc059eac19f7015d611212d7bbf419affadb4e726f5c",
+  "sourceAndCodeHashesMatch": true,
+  "allExecutedSettingsPassed": true,
+  "allNewAccountsClosed": true,
+  "affectedActionAccounts": 0,
+  "resumedAccounts": 48,
+  "unchangedResultsWithoutResume": 491,
+  "failureToSuccess": 44,
+  "successToFailure": 0,
+  "returnWorsened": 4,
+  "newStrategyAdopted": false,
+  "checks": {
+    "vitest": {
+      "filesPassed": 5,
+      "testsPassed": 27,
+      "command": "pnpm exec vitest run tests/unit/target-retry-quarter.test.ts tests/unit/quarter-research.test.ts tests/unit/uncertain-history-quarter.test.ts tests/unit/confirmed-entry-quarter.test.ts tests/unit/recovery-quarter.test.ts"
+    },
+    "eslint": "pnpm exec eslint scripts/quarter-research/quarter-engine.ts tests/unit/target-retry-quarter.test.ts",
+    "serverTypecheck": "pnpm exec tsc -p tsconfig.server.json --noEmit",
+    "pythonCompilation": true,
+    "tamperedEvidenceRejected": {
+      "cash_event": "rejected",
+      "risk_stop": "rejected",
+      "expiry": "rejected",
+      "missing_fill": "rejected",
+      "cost_total": "rejected",
+      "pre_resume_equity": "rejected"
+    },
+    "defaultReplayByteEqual": true,
+    "defaultReplaySha256": "8c201bf3f0ffd61372ca2433e4e5815595b73869a4b1e7adb0298ae6d702ba2b"
+  },
+  "limitations": [
+    "같은 역사 구간의 반복 비교이며 새 외표본이 아님",
+    "비중첩 표본은 검증 3개·최근 4개",
+    "현재의 수출 성장·회복 결합 조건 표본 없음",
+    "새 재개 정책의 비용·추가 역사·조건 문턱·인접 파라미터 검증 미완료",
+    "실주문 없음"
+  ]
+}

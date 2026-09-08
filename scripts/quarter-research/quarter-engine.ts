@@ -136,20 +136,37 @@ export interface QuarterRisk {
   lastSignalTsMs: number;
   targetPct: number;
   stopPct: number;
+  resumeAfterMissedTarget?: boolean;
 }
 
-/** 목표·낙폭 청산 이후 새 진입을 멈추고 미청산 포지션을 끝까지 기록한다. */
+/** 목표·낙폭 청산을 기록하고 선택한 정책에서만 실제 목표 미달 청산 뒤 재개한다. */
 export function withQuarterRisk(strategy: AnyTradingStrategy, risk: QuarterRisk) {
+  if (risk.resumeAfterMissedTarget !== undefined && typeof risk.resumeAfterMissedTarget !== 'boolean') {
+    throw new Error('실제 목표 미달 후 재개 설정은 불리언이어야 합니다');
+  }
+  if (risk.resumeAfterMissedTarget && (!Number.isFinite(risk.targetPct) || risk.targetPct < 10)) {
+    throw new Error('재개 정책의 평가 목표는 실제 수익 목표 10% 이상이어야 합니다');
+  }
   let peak = risk.initialCash;
   let stopped: string | null = null;
   const issued = new Set<string>();
   const events: { date: string; reason: string; equity: number }[] = [];
   const wrapped: AnyTradingStrategy = {
     ...strategy,
+    ...(risk.resumeAfterMissedTarget ? { version: `${strategy.version}+target-retry.1` } : {}),
     onBars(context, state, parameters) {
       const decision = strategy.onBars(context, state, parameters);
       if (context.tsMs < risk.tradeFromTsMs) return decision;
       peak = Math.max(peak, context.portfolio.equity);
+      // 전량 매도 후에도 실제 10%를 확보하지 못했다면 원래 최고점과 만기 아래에서 재개한다.
+      if (risk.resumeAfterMissedTarget && stopped === '계좌 목표 청산' && context.portfolio.positions.size === 0
+        && (context.portfolio.equity / risk.initialCash - 1) * 100 < 10) {
+        stopped = null;
+        issued.clear();
+        if (context.portfolio.equity > peak * (1 - risk.stopPct / 100) && context.tsMs < risk.lastSignalTsMs) {
+          events.push({ date: new Date(context.tsMs).toISOString().slice(0, 10), reason: '실제 목표 미달 후 재개', equity: context.portfolio.equity });
+        }
+      }
       if (!stopped) {
         if (context.portfolio.equity >= risk.initialCash * (1 + risk.targetPct / 100)) stopped = '계좌 목표 청산';
         else if (context.portfolio.equity <= peak * (1 - risk.stopPct / 100)) stopped = '계좌 낙폭 중단';
@@ -207,7 +224,7 @@ export function main(argv: string[]) {
   const [from, to] = STAGES[stage as keyof typeof STAGES];
   const effectiveTo = input.asof < to ? input.asof : to;
   const optionsBytes = optionsPath ? readFileSync(optionsPath) : null;
-  const options = optionsBytes ? JSON.parse(optionsBytes.toString()) as { starts?: string[]; resetUncertainHistory?: boolean; activationConfirmationBars?: number; accountStopPct?: number; rebalanceOffsetBars?: number } : {};
+  const options = optionsBytes ? JSON.parse(optionsBytes.toString()) as { starts?: string[]; resetUncertainHistory?: boolean; activationConfirmationBars?: number; accountStopPct?: number; rebalanceOffsetBars?: number; resumeAfterMissedTarget?: boolean } : {};
   const accountStopPct = parseAccountStopPct(options.accountStopPct);
   const researchOptions = optionsBytes ? { options, optionsSha256: createHash('sha256').update(optionsBytes).digest('hex') } : {};
   const allWindows = options.starts ? windowsFromStarts(input.days, from, effectiveTo, options.starts, true)
@@ -251,7 +268,8 @@ export function main(argv: string[]) {
       const toTsMs = Date.parse(window.end);
       const warmupTs = fromTsMs - 400 * 86_400_000;
       const risk = { initialCash, tradeFromTsMs: fromTsMs,
-        lastSignalTsMs: Date.parse(window.tradingDays.at(-2)!), targetPct: 10.5, stopPct: accountStopPct };
+        lastSignalTsMs: Date.parse(window.tradingDays.at(-2)!), targetPct: 10.5, stopPct: accountStopPct,
+        ...(options.resumeAfterMissedTarget === undefined ? {} : { resumeAfterMissedTarget: options.resumeAfterMissedTarget }) };
       const history = options.resetUncertainHistory ? withUncertainHistory(base, input.uncertainActions ?? [], fromTsMs) : null;
       const activation = options.activationConfirmationBars === undefined ? null
         : withConfirmedEntry(history?.strategy ?? base, input.macro, fromTsMs, options.activationConfirmationBars);
@@ -292,7 +310,7 @@ export function main(argv: string[]) {
         results.push(summary);
         writeFileSync(path.join(outputPath, `${candidate.id}__${window.start}.json`), JSON.stringify({
           candidate, stage, inputSha256: createHash('sha256').update(bytes).digest('hex'), parameters, risk, seed, slippageBps,
-          ...researchOptions, engineVersion: ENGINE_VERSION, strategyVersion: activation?.strategy.version ?? history?.strategy.version ?? base.version, summary, result,
+          ...researchOptions, engineVersion: ENGINE_VERSION, strategyVersion: wrapper.strategy.version, summary, result,
         }));
       } catch (error) {
         const failure = { candidate, stage, start: window.start, end: window.end, status: 'failed',

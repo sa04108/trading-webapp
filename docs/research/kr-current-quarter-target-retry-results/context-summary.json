@@ -1,0 +1,302 @@
+{
+  "asof": "2026-09-08",
+  "exportSourceSha256": "995d818bc1729bea3c4ebabbbc7981bee406ed164fc2a2ec2e3e41343027ab01",
+  "exportAvailability": "observation month start plus 90 calendar days; latest vintage, not certified point-in-time",
+  "currentKnownExport": {
+    "observed": "2026-06-01",
+    "available": "2026-08-30",
+    "value": 102170000000.0,
+    "yoy": 0.7075632836289856
+  },
+  "fullContextSha256": "225ed86ff04ef1cc0f31cfae83e268e0ed7ceaf9ebfd1487371cd08af18ca2b3",
+  "records": [
+    {
+      "directory": "target-retry/seed204-offset0-validation",
+      "candidate": {
+        "id": "momentum-20-5-monthly",
+        "strategyId": "cross-sectional-momentum",
+        "topN": 5,
+        "rebalanceBars": 20,
+        "parameters": {
+          "formationDays": 20,
+          "skipDays": 0,
+          "topN": 5
+        }
+      },
+      "stage": "validation",
+      "condition": "all",
+      "sourceSha256": "7b190165436f1b4ea363b9dfd76f252adc11d2edd3d7889a82e9163756687e5d",
+      "all": {
+        "count": 19,
+        "targetHits": 18,
+        "targetFrequencyPct": 94.73684210526315,
+        "medianPct": 11.810733257499994,
+        "p10Pct": 10.741522483500013,
+        "worstPct": -14.05504273,
+        "lossFrequencyPct": 5.263157894736842,
+        "worstDrawdownPct": -16.772257267852297,
+        "unclosed": 0
+      },
+      "nonoverlapping": {
+        "count": 3,
+        "targetHits": 2,
+        "targetFrequencyPct": 66.66666666666666,
+        "medianPct": 11.684146132499995,
+        "p10Pct": -8.907204957500001,
+        "worstPct": -14.05504273,
+        "lossFrequencyPct": 33.33333333333333,
+        "worstDrawdownPct": -16.772257267852297,
+        "unclosed": 0
+      },
+      "nonoverlappingStarts": [
+        "2020-04-09",
+        "2020-07-10",
+        "2021-02-03"
+      ]
+    },
+    {
+      "directory": "target-retry/seed204-offset0-validation",
+      "candidate": {
+        "id": "momentum-20-5-monthly",
+        "strategyId": "cross-sectional-momentum",
+        "topN": 5,
+        "rebalanceBars": 20,
+        "parameters": {
+          "formationDays": 20,
+          "skipDays": 0,
+          "topN": 5
+        }
+      },
+      "stage": "validation",
+      "condition": "export_growth",
+      "sourceSha256": "7b190165436f1b4ea363b9dfd76f252adc11d2edd3d7889a82e9163756687e5d",
+      "all": {
+        "count": 0
+      },
+      "nonoverlapping": {
+        "count": 0
+      },
+      "nonoverlappingStarts": []
+    },
+    {
+      "directory": "target-retry/seed204-offset0-validation",
+      "candidate": {
+        "id": "momentum-20-5-monthly",
+        "strategyId": "cross-sectional-momentum",
+        "topN": 5,
+        "rebalanceBars": 20,
+        "parameters": {
+          "formationDays": 20,
+          "skipDays": 0,
+          "topN": 5
+        }
+      },
+      "stage": "validation",
+      "condition": "recovery",
+      "sourceSha256": "7b190165436f1b4ea363b9dfd76f252adc11d2edd3d7889a82e9163756687e5d",
+      "all": {
+        "count": 9,
+        "targetHits": 9,
+        "targetFrequencyPct": 100.0,
+        "medianPct": 11.882689341500008,
+        "p10Pct": 11.432508720700003,
+        "worstPct": 11.2825392435,
+        "lossFrequencyPct": 0.0,
+        "worstDrawdownPct": -11.918097405000005,
+        "unclosed": 0
+      },
+      "nonoverlapping": {
+        "count": 1,
+        "targetHits": 1,
+        "targetFrequencyPct": 100.0,
+        "medianPct": 11.684146132499995,
+        "p10Pct": 11.684146132499995,
+        "worstPct": 11.684146132499995,
+        "lossFrequencyPct": 0.0,
+        "worstDrawdownPct": -7.752731364411336,
+        "unclosed": 0
+      },
+      "nonoverlappingStarts": [
+        "2020-04-09"
+      ]
+    },
+    {
+      "directory": "target-retry/seed204-offset0-validation",
+      "candidate": {
+        "id": "momentum-20-5-monthly",
+        "strategyId": "cross-sectional-momentum",
+        "topN": 5,
+        "rebalanceBars": 20,
+        "parameters": {
+          "formationDays": 20,
+          "skipDays": 0,
+          "topN": 5
+        }
+      },
+      "stage": "validation",
+      "condition": "export_recovery",
+      "sourceSha256": "7b190165436f1b4ea363b9dfd76f252adc11d2edd3d7889a82e9163756687e5d",
+      "all": {
+        "count": 0
+      },
+      "nonoverlapping": {
+        "count": 0
+      },
+      "nonoverlappingStarts": []
+    },
+    {
+      "directory": "target-retry/seed204-offset0-confirmation",
+      "candidate": {
+        "id": "momentum-20-5-monthly",
+        "strategyId": "cross-sectional-momentum",
+        "topN": 5,
+        "rebalanceBars": 20,
+        "parameters": {
+          "formationDays": 20,
+          "skipDays": 0,
+          "topN": 5
+        }
+      },
+      "stage": "confirmation",
+      "condition": "all",
+      "sourceSha256": "2ca47527900bcac681650a458e5496df4b39501c39631d90344e0380476199e8",
+      "all": {
+        "count": 58,
+        "targetHits": 40,
+        "targetFrequencyPct": 68.96551724137932,
+        "medianPct": 12.079500562500012,
+        "p10Pct": -10.961597131450013,
+        "worstPct": -17.186758227499986,
+        "lossFrequencyPct": 31.03448275862069,
+        "worstDrawdownPct": -22.114609391012287,
+        "unclosed": 0
+      },
+      "nonoverlapping": {
+        "count": 4,
+        "targetHits": 3,
+        "targetFrequencyPct": 75.0,
+        "medianPct": 11.505945267500007,
+        "p10Pct": -3.8171803147499848,
+        "worstPct": -10.174003897499983,
+        "lossFrequencyPct": 25.0,
+        "worstDrawdownPct": -21.005317080936713,
+        "unclosed": 0
+      },
+      "nonoverlappingStarts": [
+        "2024-09-02",
+        "2025-04-28",
+        "2025-11-17",
+        "2026-02-19"
+      ]
+    },
+    {
+      "directory": "target-retry/seed204-offset0-confirmation",
+      "candidate": {
+        "id": "momentum-20-5-monthly",
+        "strategyId": "cross-sectional-momentum",
+        "topN": 5,
+        "rebalanceBars": 20,
+        "parameters": {
+          "formationDays": 20,
+          "skipDays": 0,
+          "topN": 5
+        }
+      },
+      "stage": "confirmation",
+      "condition": "export_growth",
+      "sourceSha256": "2ca47527900bcac681650a458e5496df4b39501c39631d90344e0380476199e8",
+      "all": {
+        "count": 35,
+        "targetHits": 24,
+        "targetFrequencyPct": 68.57142857142857,
+        "medianPct": 12.16251863500002,
+        "p10Pct": -12.649704556500001,
+        "worstPct": -17.186758227499986,
+        "lossFrequencyPct": 31.428571428571427,
+        "worstDrawdownPct": -21.19174976405025,
+        "unclosed": 0
+      },
+      "nonoverlapping": {
+        "count": 2,
+        "targetHits": 2,
+        "targetFrequencyPct": 100.0,
+        "medianPct": 13.307701091500013,
+        "p10Pct": 10.696127170300018,
+        "worstPct": 10.043233690000019,
+        "lossFrequencyPct": 0.0,
+        "worstDrawdownPct": -8.95131162795172,
+        "unclosed": 0
+      },
+      "nonoverlappingStarts": [
+        "2025-12-03",
+        "2026-03-03"
+      ]
+    },
+    {
+      "directory": "target-retry/seed204-offset0-confirmation",
+      "candidate": {
+        "id": "momentum-20-5-monthly",
+        "strategyId": "cross-sectional-momentum",
+        "topN": 5,
+        "rebalanceBars": 20,
+        "parameters": {
+          "formationDays": 20,
+          "skipDays": 0,
+          "topN": 5
+        }
+      },
+      "stage": "confirmation",
+      "condition": "recovery",
+      "sourceSha256": "2ca47527900bcac681650a458e5496df4b39501c39631d90344e0380476199e8",
+      "all": {
+        "count": 1,
+        "targetHits": 1,
+        "targetFrequencyPct": 100.0,
+        "medianPct": 12.89861940999999,
+        "p10Pct": 12.89861940999999,
+        "worstPct": 12.89861940999999,
+        "lossFrequencyPct": 0.0,
+        "worstDrawdownPct": -8.102594001925967,
+        "unclosed": 0
+      },
+      "nonoverlapping": {
+        "count": 1,
+        "targetHits": 1,
+        "targetFrequencyPct": 100.0,
+        "medianPct": 12.89861940999999,
+        "p10Pct": 12.89861940999999,
+        "worstPct": 12.89861940999999,
+        "lossFrequencyPct": 0.0,
+        "worstDrawdownPct": -8.102594001925967,
+        "unclosed": 0
+      },
+      "nonoverlappingStarts": [
+        "2024-09-02"
+      ]
+    },
+    {
+      "directory": "target-retry/seed204-offset0-confirmation",
+      "candidate": {
+        "id": "momentum-20-5-monthly",
+        "strategyId": "cross-sectional-momentum",
+        "topN": 5,
+        "rebalanceBars": 20,
+        "parameters": {
+          "formationDays": 20,
+          "skipDays": 0,
+          "topN": 5
+        }
+      },
+      "stage": "confirmation",
+      "condition": "export_recovery",
+      "sourceSha256": "2ca47527900bcac681650a458e5496df4b39501c39631d90344e0380476199e8",
+      "all": {
+        "count": 0
+      },
+      "nonoverlapping": {
+        "count": 0
+      },
+      "nonoverlappingStarts": []
+    }
+  ]
+}

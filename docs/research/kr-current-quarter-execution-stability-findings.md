@@ -52,3 +52,5 @@
 TypeScript 4파일·18개 테스트, 관련 ESLint와 서버 타입 검사가 통과했다. Python 집계기 실행·컴파일도 통과했고, 재실행한 2020-04-09 기본 계좌 파일은 이전 원본과 바이트 단위로 같았다. 462개 새 계좌의 최초 매수가 이동한 최초 선정·다음 매수 신호보다 빠르지 않고, 원래 평가 시간축·위험 설정·시작 거시 상태가 같으며 만기 이후 체결이 없는 것을 모두 대조했다. 후보 성과 기준 미달과 코드·자료 대조 통과를 구분한다.
 
 [검증 기록](kr-current-quarter-execution-stability-results/verification.json), [전체 CSV](kr-current-quarter-execution-stability-results/all-summaries.csv), [비중첩 계좌](kr-current-quarter-execution-stability-results/nonoverlapping-accounts.json), [같은 날짜별 변화](kr-current-quarter-execution-stability-results/paired.json), [일정·최초 매수 감사](kr-current-quarter-execution-stability-results/scheduleAudit.json), [해시](kr-current-quarter-execution-stability-results/evidence-manifest.json)를 보존했다. 전체 원본은 로컬 `data/kr-quarter-research/execution-stability/`, 재현 절차는 연구 README에 있다. 이번 회차는 목표 전략의 검증을 진전시켰으나 목표 완료로 표시하지 않는다.
+
+후속 별도 정책인 [실제 목표 미달 청산 뒤 재개 비교](kr-current-quarter-target-retry-findings.md)가 이어진다. 이 문서의 기존 영구 중단 결과와 두 일정 실패는 그대로 보존한다.

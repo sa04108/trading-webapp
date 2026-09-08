@@ -211,3 +211,20 @@ python scripts/quarter-research/build_execution_evidence.py data/kr-quarter-rese
 ```
 
 집계 전 실험 목록의 모든 조합을 지정 출력 경로에서 완료해야 한다. `rebalanceOffsetBars`는 최초 순위 선정과 뒤따르는 회전 신호를 실제 거래일만큼 늦추며 원래 만기를 늘리지 않는다. 생략은 0이며 0 이상 회전 주기 미만 정수만 허용한다. 이동 뒤 신호일이 없는 창은 거부한다. 위 `reproduction-*`는 별도 재현 경로다. [실행 민감도 결과](../../docs/research/kr-current-quarter-execution-stability-findings.md)에 기준 미달과 실제 목표에 미달한 청산 경로를 함께 기록했다.
+
+
+## 실제 목표 미달 청산 뒤 매매 재개
+
+`configs/target-retry-experiments.json`은 별도 재개 정책의 초기 6개·조건부 후속 8개 실행 목록이다. `primary`는 시드 204·일정 이동 0·2·4의 231개 계좌이며, 모두 진행 기준을 통과한 뒤 `conditional`의 시드 204·이동 1·3과 시드 205·206·이동 0의 308개 계좌를 실행한다. 전체 실행은 새 539개와 같은 날짜의 기존 539개 계좌를 대조한다.
+
+```bash
+node --import tsx scripts/quarter-research/quarter-engine.ts data/kr-quarter-research/expanded/stock-200-verified-input.json.gz data/kr-quarter-research/target-retry/reproduction-offset2-validation validation scripts/quarter-research/configs/account-stop-candidate.json 5 204 0 100000000 scripts/quarter-research/configs/target-retry-seed204-offset2-validation-options.json
+python scripts/quarter-research/build_target_retry_evidence.py data/kr-quarter-research data/kr-quarter-research/target-retry/evidence
+python scripts/quarter-research/build_target_retry_evidence.py data/kr-quarter-research data/kr-quarter-research/target-retry/evidence --include-conditional
+python scripts/quarter-research/analyze_context.py data/kr-quarter-research data/kr-quarter-research/target-retry/context.json target-retry/seed204-offset0-validation target-retry/seed204-offset0-confirmation
+pnpm exec vitest run tests/unit/target-retry-quarter.test.ts tests/unit/quarter-research.test.ts tests/unit/uncertain-history-quarter.test.ts tests/unit/confirmed-entry-quarter.test.ts tests/unit/recovery-quarter.test.ts
+```
+
+첫 집계는 모든 `primary` 출력이 필요하고 `--include-conditional`은 후속 출력까지 요구한다. 위 `reproduction-*`는 별도 예시 경로다. `resumeAfterMissedTarget`의 기본값은 기존 영구 중단이다. `true`이면 목표 청산 뒤 전량 매도가 끝나 실제 비용 후 수익이 10% 미만일 때 정상 전략 판단을 재개한다. 원래 최고점·낙폭 기준·계좌 자금·만기는 유지하며 부분 청산, 실제 목표 확보, 낙폭 중단, 만기에서는 매수를 허용하지 않는다. 버전은 `+target-retry.1`로 구분하고 재개 현금을 위험 사건에 남긴다. 재개 직후 즉시 임의로 매수하지 않으며 원래 순위 선정·다음 봉 매수 단계를 따른다.
+
+집계기는 재개 시점의 현금과 수량을 체결 내역으로 다시 계산하고, 최초 재개 판단 이전 경로·재개하지 않은 계좌의 기존 결과·원래 만기·최고점 기준 낙폭·개별 비용을 대조한다. 추가 비용은 수수료·매도세·모형 슬리피지 합계이며 슬리피지를 현금에서 이중 차감하지 않는다. [재개 정책 결과](../../docs/research/kr-current-quarter-target-retry-findings.md)에 수익 감소 사례와 현재 조건의 부족한 표본도 함께 기록한다.
