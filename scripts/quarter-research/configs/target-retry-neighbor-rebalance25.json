@@ -1,0 +1,13 @@
+[
+  {
+    "id": "target-retry-neighbor-rebalance25",
+    "strategyId": "cross-sectional-momentum",
+    "topN": 5,
+    "rebalanceBars": 25,
+    "parameters": {
+      "formationDays": 20,
+      "skipDays": 0,
+      "topN": 5
+    }
+  }
+]

@@ -240,3 +240,33 @@ python scripts/quarter-research/build_target_retry_diagnostics.py data/kr-quarte
 ```
 
 위 `reproduction-*`는 별도 예시 경로다. 집계기는 원래 고정 실험과 재개 옵션의 차이, 개별 원본 성과와 현금·비용·낙폭을 대조한다. 기존 25·30·35% 조건 날짜를 그대로 사용하며 35%와 2011년의 30·35%는 부분집합 집계다. 전체 비용·조건 결과와 과거 부진을 [후속 진단 결과](../../docs/research/kr-current-quarter-target-retry-diagnostics-findings.md)에 함께 보존한다.
+
+
+## 재개 정책의 인접 파라미터와 현재 월별 종목군
+
+`configs/target-retry-neighbors-experiments.json`은 단일 변수 여섯 후보의 검증·최근 12개 실행·462개 계좌 목록이다. 선정 기간 21·25일, 보유 수 4·6개, 회전 주기 15·25봉을 비교하며 다른 설정은 20일·5종목·20봉 회전 재개 정책과 같다. 시작일·옵션은 기존 `target-retry-seed204-offset0-{stage}-options.json`을 그대로 사용하고 기본 77개 계좌는 재사용한다.
+
+```bash
+node --import tsx scripts/quarter-research/quarter-engine.ts data/kr-quarter-research/expanded/stock-200-verified-input.json.gz data/kr-quarter-research/target-retry-neighbors/reproduction-rebalance15-confirmation confirmation scripts/quarter-research/configs/target-retry-neighbor-rebalance15.json 5 204 0 100000000 scripts/quarter-research/configs/target-retry-seed204-offset0-confirmation-options.json
+python scripts/quarter-research/build_target_retry_neighbors.py data/kr-quarter-research data/kr-quarter-research/target-retry-neighbors/evidence
+```
+
+집계 전 실험 목록의 모든 출력이 필요하다. 위 `reproduction-*`는 별도 예시 경로다. 전체 이웃 통과 여부와 실패 설정의 비중첩 체결 경로·기업행위 대상을 별도 출력한다. `same_strategy=False`는 파라미터가 다른 계좌끼리 비교할 때만 사용하며, 재개 현금·위험·만기 검사를 유지한다. 기존 집계기의 기본 감사도 별도 경로에서 다시 실행해 확인할 수 있다.
+
+```bash
+python scripts/quarter-research/build_target_retry_evidence.py data/kr-quarter-research data/kr-quarter-research/target-retry-neighbors/default-helper-recheck --include-conditional
+```
+
+현재 관찰에서는 신호일과 종목군 자료 시점을 분리한다. `--universe-asof`를 생략하면 이전처럼 신호일 직전 거래일까지의 20일로 선정한다. 월별 규칙의 2026-09-08 신호는 08-31 기준 종목군을 사용한다. 저장 패널의 월말 시가총액·당시 분류와 기존 KRX 추가 원문을 사용하므로 API를 새로 호출하지 않는다. 아래 출력 디렉터리는 실행 전에 만든다. numpy가 설치된 Python 환경이 필요하다.
+
+```bash
+mkdir -p data/kr-quarter-research/target-retry-neighbors/current-universe
+python scripts/quarter-research/select_current_krx.py data/kr-quarter-research/expanded/current-provisional/manifest.json data/reliable-strategy-reproduction/2026-09-06-8791951/research-data/panel data/kr-quarter-research/etf-input.json.gz data/kr-quarter-research/target-retry-neighbors/current-universe/default-manifest.json --recent data/kr-quarter-research/expanded/current-krx.jsonl.gz data/kr-quarter-research/expanded/current-krx-kosdaq.jsonl.gz
+python scripts/quarter-research/select_current_krx.py data/kr-quarter-research/expanded/current-provisional/manifest.json data/reliable-strategy-reproduction/2026-09-06-8791951/research-data/panel data/kr-quarter-research/etf-input.json.gz data/kr-quarter-research/target-retry-neighbors/current-universe/monthly-manifest.json --recent data/kr-quarter-research/expanded/current-krx.jsonl.gz data/kr-quarter-research/expanded/current-krx-kosdaq.jsonl.gz --universe-asof 2026-08-31
+python scripts/quarter-research/prepare_current_inputs.py data/kr-quarter-research/expanded/stock-200-verified-input.json.gz data/kr-quarter-research/etf-input.json.gz data/kr-quarter-research/target-retry-neighbors/current-universe/monthly-manifest.json data/kr-quarter-research/target-retry-neighbors/current-universe/monthly-input.json.gz --quarantine-unresolved
+node --import tsx scripts/quarter-research/current-signals.ts data/kr-quarter-research/target-retry-neighbors/current-universe/monthly-input.json.gz scripts/quarter-research/configs/account-stop-candidate.json data/kr-quarter-research/target-retry-neighbors/current-universe/monthly-signals.json
+python scripts/quarter-research/audit_current_universe.py data/kr-quarter-research data/kr-quarter-research/target-retry-neighbors/current-universe/audit.json
+python -m unittest discover -s scripts/quarter-research -p test_current_selection.py
+```
+
+현재 감사는 원본 일정의 2015-01-19 기준점을 보존하고 검증된 2026-08-14 이후 결손 거래일을 확장한다. 09-01 게시·08-31 선정 시점, 이전 기본 출력의 바이트 동일성, 월말 종목군·상위 순위·실제 일봉 점수를 대조한다. 현재 신호 재현에는 원래 `account-stop/current-signals.json`과 보존된 `ebc7936` 생성기 Git 객체도 필요하다. 원자료와 생성 입력은 Git에서 제외한다. 전체 결과·실패와 한계는 [인접 파라미터 결과](../../docs/research/kr-current-quarter-target-retry-neighbors-findings.md)에 있다.

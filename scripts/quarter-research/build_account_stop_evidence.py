@@ -16,7 +16,9 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def verify(root, directory, candidate, stage, options_path, input_path, stop, starts, slippage=5, seed=204, strategy_version="2.2.1+history-reset.1"):
+def verify(root, directory, candidate, stage, options_path, input_path, stop, starts, slippage=5, seed=204, strategy_version="2.2.1+history-reset.1", expected_parameters=None):
+    if expected_parameters is None:
+        expected_parameters = {"formationDays": 20, "skipDays": 0, "topN": 5, "absoluteMomentumFilter": True}
     options = json.loads(options_path.read_text())
     summary_path = root / directory / f'{candidate["id"]}__summary.json'
     summary = json.loads(summary_path.read_text())
@@ -37,7 +39,7 @@ def verify(root, directory, candidate, stage, options_path, input_path, stop, st
                 or run["risk"]["stopPct"] != stop or run["risk"]["targetPct"] != 10.5 or run["risk"]["initialCash"] != 100_000_000
                 or run["seed"] != seed or run["slippageBps"] != slippage or run["engineVersion"] != "2.12.0"
                 or run["strategyVersion"] != strategy_version
-                or run["parameters"] != {"formationDays": 20, "skipDays": 0, "topN": 5, "absoluteMomentumFilter": True}
+                or run["parameters"] != expected_parameters
                 or w["end"] != end_of_quarter(w["start"]) or run["result"]["metrics"]["totalReturnPct"] != w["returnPct"]
                 or (len(run["result"]["openPositions"]) == 0) != w["closed"]
                 or w["targetReached"] != (w["closed"] and not w["affectedActions"] and w["returnPct"] >= 10)):

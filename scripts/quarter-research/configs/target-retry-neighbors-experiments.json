@@ -1,0 +1,122 @@
+[
+  {
+    "variant": "formation21",
+    "directory": "target-retry-neighbors/formation21-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "target-retry-neighbor-formation21.json",
+    "options": "target-retry-seed204-offset0-validation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "variant": "formation21",
+    "directory": "target-retry-neighbors/formation21-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "target-retry-neighbor-formation21.json",
+    "options": "target-retry-seed204-offset0-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "variant": "formation25",
+    "directory": "target-retry-neighbors/formation25-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "target-retry-neighbor-formation25.json",
+    "options": "target-retry-seed204-offset0-validation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "variant": "formation25",
+    "directory": "target-retry-neighbors/formation25-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "target-retry-neighbor-formation25.json",
+    "options": "target-retry-seed204-offset0-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "variant": "top4",
+    "directory": "target-retry-neighbors/top4-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "target-retry-neighbor-top4.json",
+    "options": "target-retry-seed204-offset0-validation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "variant": "top4",
+    "directory": "target-retry-neighbors/top4-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "target-retry-neighbor-top4.json",
+    "options": "target-retry-seed204-offset0-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "variant": "top6",
+    "directory": "target-retry-neighbors/top6-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "target-retry-neighbor-top6.json",
+    "options": "target-retry-seed204-offset0-validation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "variant": "top6",
+    "directory": "target-retry-neighbors/top6-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "target-retry-neighbor-top6.json",
+    "options": "target-retry-seed204-offset0-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "variant": "rebalance15",
+    "directory": "target-retry-neighbors/rebalance15-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "target-retry-neighbor-rebalance15.json",
+    "options": "target-retry-seed204-offset0-validation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "variant": "rebalance15",
+    "directory": "target-retry-neighbors/rebalance15-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "target-retry-neighbor-rebalance15.json",
+    "options": "target-retry-seed204-offset0-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "variant": "rebalance25",
+    "directory": "target-retry-neighbors/rebalance25-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "target-retry-neighbor-rebalance25.json",
+    "options": "target-retry-seed204-offset0-validation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "variant": "rebalance25",
+    "directory": "target-retry-neighbors/rebalance25-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "target-retry-neighbor-rebalance25.json",
+    "options": "target-retry-seed204-offset0-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  }
+]

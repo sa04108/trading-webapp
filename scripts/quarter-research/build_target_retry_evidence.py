@@ -17,7 +17,7 @@ def close(a, b):
     return math.isclose(a, b, rel_tol=1e-10, abs_tol=1e-6)
 
 
-def audit(run, base):
+def audit(run, base, same_strategy=True):
     if run["risk"] != base["risk"] | {"resumeAfterMissedTarget": True}:
         raise ValueError("재개 이외의 위험 설정이 달라졌습니다")
     points, fills = run["result"]["equityPoints"], run["result"]["fills"]
@@ -28,9 +28,9 @@ def audit(run, base):
         raise ValueError("원래 계좌 만기 이후의 체결")
     events = run["summary"]["riskEvents"]
     resumed = [e for e in events if e["reason"] == "실제 목표 미달 후 재개"]
-    if not resumed and run["result"] != base["result"]:
+    if same_strategy and not resumed and run["result"] != base["result"]:
         raise ValueError("재개하지 않은 계좌의 매매 결과가 달라졌습니다")
-    if resumed:
+    if same_strategy and resumed:
         first_ts = int(datetime.fromisoformat(resumed[0]["date"]).replace(tzinfo=timezone.utc).timestamp() * 1000)
         for key in ("fills", "equityPoints"):
             if [v for v in run["result"][key] if v["tsMs"] <= first_ts] != [v for v in base["result"][key] if v["tsMs"] <= first_ts]:

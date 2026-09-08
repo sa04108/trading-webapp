@@ -1,0 +1,56 @@
+[
+  {
+    "variant": "formation25",
+    "stage": "validation",
+    "file": "data/kr-quarter-research/target-retry-neighbors/formation25-validation/target-retry-neighbor-formation25__2020-06-24.json",
+    "sha256": "21c6c0636b9148669ac96e60c4c2674fe46acd2b56459b8df7776af18acbce30",
+    "start": "2020-06-24",
+    "end": "2020-09-23",
+    "returnPct": 14.865742338499999,
+    "drawdownPct": -10.986088120000003,
+    "closed": true,
+    "targetReached": false,
+    "riskEvents": [
+      {
+        "date": "2020-07-27",
+        "reason": "계좌 목표 청산",
+        "equity": 114463179.7525
+      }
+    ],
+    "affectedActions": [
+      {
+        "symbol": "196170",
+        "date": "2020-07-23",
+        "ratio": 2,
+        "type": "inferred-unit-change"
+      }
+    ]
+  },
+  {
+    "variant": "rebalance25",
+    "stage": "validation",
+    "file": "data/kr-quarter-research/target-retry-neighbors/rebalance25-validation/target-retry-neighbor-rebalance25__2020-06-23.json",
+    "sha256": "a339f3c38b53a564cdbdfb6ca7bec1a49d421a6959f0d917b40bfa8970a648ac",
+    "start": "2020-06-23",
+    "end": "2020-09-22",
+    "returnPct": 11.107406095500005,
+    "drawdownPct": -10.041211844999998,
+    "closed": true,
+    "targetReached": false,
+    "riskEvents": [
+      {
+        "date": "2020-08-06",
+        "reason": "계좌 목표 청산",
+        "equity": 110887828.19250001
+      }
+    ],
+    "affectedActions": [
+      {
+        "symbol": "196170",
+        "date": "2020-07-23",
+        "ratio": 2,
+        "type": "inferred-unit-change"
+      }
+    ]
+  }
+]

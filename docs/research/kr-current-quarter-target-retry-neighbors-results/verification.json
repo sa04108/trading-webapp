@@ -1,0 +1,99 @@
+{
+  "verifiedOnKst": "2026-09-09",
+  "dataAsOf": "2026-09-08",
+  "newExperiments": 12,
+  "newAccounts": 462,
+  "reusedAccounts": 77,
+  "uniqueRawAndSummaryHashesChecked": 553,
+  "sourceAndCodeHashesMatch": true,
+  "fullManifestSha256": "e2a706c7067c1d4aa0239e94542b314ecbc5be6bee9baf10afd92870ed6fbd7d",
+  "allNeighborSettingsPassed": false,
+  "failedSettings": [
+    {
+      "variant": "rebalance15",
+      "stage": "confirmation",
+      "all": {
+        "count": 58,
+        "targetHits": 39,
+        "targetFrequencyPct": 67.24137931034483,
+        "medianPct": 12.736899812500003,
+        "p10Pct": -10.961597131450013,
+        "worstPct": -19.695944249999997,
+        "lossFrequencyPct": 32.758620689655174,
+        "worstDrawdownPct": -23.48577632287805,
+        "unclosed": 0
+      },
+      "nonoverlapping": {
+        "count": 4,
+        "targetHits": 2,
+        "targetFrequencyPct": 50.0,
+        "medianPct": 1.325844915000002,
+        "p10Pct": -9.63091819274999,
+        "worstPct": -10.174003897499983,
+        "lossFrequencyPct": 50.0,
+        "worstDrawdownPct": -21.005317080936713,
+        "unclosed": 0
+      }
+    }
+  ],
+  "newStrategyAdopted": false,
+  "unclosedNewAccounts": 0,
+  "affectedActionNewAccounts": 2,
+  "checks": {
+    "pythonCompilation": true,
+    "currentSelectionPythonTestsPassed": 4,
+    "defaultHelperPairsReaudited": 539,
+    "defaultHelperRawAndSummaryHashesChecked": 1106,
+    "defaultHelperResultFilesByteEqual": {
+      "all-results.json": "7029867b6ff8f258815acdd819605d04f7651626c45c104f29f2a7031c8dce48",
+      "all-summaries.csv": "b922250e65ad94ac409798d05756823f53c10ca7875cec21edd07dec37772132",
+      "nonoverlapping-accounts.json": "d12de97e16f70102088ee8b659691066003c647b085f3000dddfefbcce0d06d4",
+      "paired-accounts.json": "c77350ee7cd0f1d95dc13e1bed9e3c19801cf1d1075dacdbc5290d9096d68068"
+    },
+    "fixedCandidateDatesCashRiskCostsAndPositionLimits": true,
+    "failedCohortInitialBuysIdentical": true,
+    "failedCohortNoTargetRetryInEitherSetting": true,
+    "affectedActionsNeverCountedAsTargetSuccess": true,
+    "tradingCodeAndTestsUnchangedFrom": "bb6af78",
+    "applicablePriorVitestFilesPassed": 5,
+    "applicablePriorVitestTestsPassed": 27,
+    "priorEslintAndServerTypecheckRemainApplicable": true,
+    "vitestRerunThisChange": false
+  },
+  "currentUniverse": {
+    "monthlyUniverseAsOf": "2026-08-31",
+    "membershipLookupDate": "2026-09-07",
+    "projectedLatestSourceSchedule": "2026-09-01",
+    "historicalCalendarPrefixMatchesFrom": "2015-02-02",
+    "historicalCalendarPrefixMatchesThrough": "2026-08-14",
+    "missingStoredDatesAfterValidatedCutoff": [
+      "2026-08-18",
+      "2026-08-19",
+      "2026-08-20",
+      "2026-08-24"
+    ],
+    "defaultManifestByteEqual": true,
+    "commonMembers": 196,
+    "signalsEqual": true,
+    "currentInputCandles": 50186
+  },
+  "publicArtifactSha256": {
+    "affected-action-accounts.json": "f74a825b2654bb8e5081a3ee802360d42bc74494009cb504a5338170bcc3f045",
+    "all-summaries.csv": "2d88205a83e5c526c7dbe5da1d975fd2db3db96ae9b3d30b0c3445faad64da7f",
+    "current-universe-audit.json": "8fb6636081fc762a393f3bec02b01bd9109158fbaaec819b9300df4b948b4fda",
+    "evidence-manifest.json": "61d86b03ae8e97dfe707e6b952635abe5dbc701b7af5cb26a67f2191560e1111",
+    "failed-setting-audit.json": "cc014a7554d4cc94456d0df31146a2a714387352399cfe67560d714a9ce2a6af",
+    "nonoverlapping-accounts.json": "6b0e7dfd98983aea8060d1038c91dc955e83913515a0122bca5d8d341c34bdee",
+    "paired-accounts.json": "abead4c1d410868e240e1ed53a917fc2215473ba2adec5657b8482f415ade869"
+  },
+  "limitations": [
+    "인접 회전 주기 확인 실패",
+    "여러 설정의 같은 역사 반복은 독립 표본 증가가 아님",
+    "개발 월간·2011년 부진과 재개 후 이익 상실 사례 유지",
+    "현재와 닮은 회복 조건 비중첩 표본은 단계별 1개",
+    "현재 수출 성장·회복 결합 조건 표본 없음",
+    "월말 종목군을 맞춘 현재 관찰이며 미래 성과 검증이 아님",
+    "미확인 기업행위의 가격·수량 보정 불확실성",
+    "실주문 없음"
+  ]
+}

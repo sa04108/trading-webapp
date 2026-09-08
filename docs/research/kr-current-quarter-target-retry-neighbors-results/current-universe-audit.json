@@ -1,0 +1,236 @@
+{
+  "asof": "2026-09-08",
+  "oldUniverseAsOf": "2026-09-07",
+  "monthlyUniverseAsOf": "2026-08-31",
+  "membershipLookupDate": "2026-09-07",
+  "projectedLatestSourceSchedule": "2026-09-01",
+  "historicalCalendarPrefixMatchesFrom": "2015-02-02",
+  "historicalCalendarPrefixMatchesThrough": "2026-08-14",
+  "missingStoredDatesAfterValidatedCutoff": [
+    "2026-08-18",
+    "2026-08-19",
+    "2026-08-20",
+    "2026-08-24"
+  ],
+  "defaultManifestByteEqual": true,
+  "commonMembers": 196,
+  "onlyDaily": [
+    {
+      "symbol": "005290",
+      "name": "동진쎄미켐"
+    },
+    {
+      "symbol": "009970",
+      "name": "영원무역홀딩스"
+    },
+    {
+      "symbol": "018670",
+      "name": "SK가스"
+    },
+    {
+      "symbol": "051600",
+      "name": "한전KPS"
+    }
+  ],
+  "onlyMonthly": [
+    {
+      "symbol": "001720",
+      "name": "신영증권"
+    },
+    {
+      "symbol": "007070",
+      "name": "GS리테일"
+    },
+    {
+      "symbol": "214150",
+      "name": "클래시스"
+    },
+    {
+      "symbol": "237690",
+      "name": "에스티팜"
+    }
+  ],
+  "signalsEqual": true,
+  "targets": [
+    {
+      "symbol": "000500",
+      "name": "가온전선",
+      "close": 227500,
+      "return20": 0.4536741214057507,
+      "annualVol20": 0.9567100472666944,
+      "selectionMarketCap": "6253297470000",
+      "selectionAdv20": 33608329962.5,
+      "universeAsOf": "2026-08-31",
+      "firstScoreBar": "2026-08-10",
+      "lastScoreBar": "2026-09-08",
+      "unresolvedEvents": [
+        {
+          "symbol": "000500",
+          "date": "2026-06-30",
+          "ratio": 1.7995827371134585,
+          "type": "unresolved"
+        }
+      ]
+    },
+    {
+      "symbol": "052690",
+      "name": "한전기술",
+      "close": 142600,
+      "return20": 0.4132804757185331,
+      "annualVol20": 1.1386913948208468,
+      "selectionMarketCap": "4448808000000",
+      "selectionAdv20": 34814249514.7,
+      "universeAsOf": "2026-08-31",
+      "firstScoreBar": "2026-08-10",
+      "lastScoreBar": "2026-09-08",
+      "unresolvedEvents": []
+    },
+    {
+      "symbol": "181710",
+      "name": "NHN",
+      "close": 59900,
+      "return20": 0.43473053892215563,
+      "annualVol20": 1.4749764046761817,
+      "selectionMarketCap": "2433558227700",
+      "selectionAdv20": 22418722130,
+      "universeAsOf": "2026-08-31",
+      "firstScoreBar": "2026-08-10",
+      "lastScoreBar": "2026-09-08",
+      "unresolvedEvents": []
+    },
+    {
+      "symbol": "336260",
+      "name": "두산퓨얼셀",
+      "close": 49250,
+      "return20": 0.4767616191904047,
+      "annualVol20": 1.0601338165696048,
+      "selectionMarketCap": "2957041728900",
+      "selectionAdv20": 36677633863.75,
+      "universeAsOf": "2026-08-31",
+      "firstScoreBar": "2026-08-10",
+      "lastScoreBar": "2026-09-08",
+      "unresolvedEvents": []
+    },
+    {
+      "symbol": "403870",
+      "name": "HPSP",
+      "close": 53300,
+      "return20": 0.4424898511502029,
+      "annualVol20": 0.6197626979523848,
+      "selectionMarketCap": "4131460000000",
+      "selectionAdv20": 119448814713.75,
+      "universeAsOf": "2026-08-31",
+      "firstScoreBar": "2026-08-10",
+      "lastScoreBar": "2026-09-08",
+      "unresolvedEvents": []
+    }
+  ],
+  "currentInputCandles": 50186,
+  "currentHistoryQuarantines": [
+    {
+      "symbol": "000500",
+      "date": "2026-06-30",
+      "ratio": 1.7995827371134585,
+      "type": "unresolved"
+    },
+    {
+      "symbol": "000880",
+      "date": "2026-08-25",
+      "ratio": 0.8330065703273688,
+      "type": "unresolved"
+    },
+    {
+      "symbol": "009830",
+      "date": "2026-06-15",
+      "ratio": 1.060179114471445,
+      "type": "unresolved"
+    },
+    {
+      "symbol": "011790",
+      "date": "2026-04-06",
+      "ratio": 1.063902107409925,
+      "type": "unresolved"
+    },
+    {
+      "symbol": "018880",
+      "date": "2025-11-13",
+      "ratio": 1.0758897006834787,
+      "type": "unresolved"
+    },
+    {
+      "symbol": "068270",
+      "date": "2026-06-04",
+      "ratio": 1.049135908535175,
+      "type": "unresolved"
+    },
+    {
+      "symbol": "196170",
+      "date": "2026-08-05",
+      "ratio": 1.2996306745741242,
+      "type": "unresolved"
+    },
+    {
+      "symbol": "207940",
+      "date": "2025-11-24",
+      "ratio": 0.6794659081930947,
+      "type": "unresolved"
+    },
+    {
+      "symbol": "010120",
+      "date": "2026-04-13",
+      "ratio": 5,
+      "type": "inferred-unit-change"
+    },
+    {
+      "symbol": "347850",
+      "date": "2025-11-13",
+      "ratio": 4,
+      "type": "inferred-unit-change"
+    }
+  ],
+  "currentInputSources": {
+    "manifestSha256": "c8b858b2eff065749bc85d8479e4baeed6bb3abcdaa9461584d7a1ebe47606cc",
+    "stockSha256": "e057c3e60a06d181bf9715380a32b0ef343590b495adad2562ac15c414b6d5c7",
+    "macroSha256": "1850d7825cdd695893f20bf18579ef58c92c4b460ffaa8aa544694f9145d5dc4",
+    "overlapMatches": 796,
+    "addedCandleCount": 3195,
+    "warmupCalendarChecked": true
+  },
+  "sourceSha256": {
+    "data/kr-quarter-research/expanded/source/input-200.json.gz": "c0537324b0ef792d0d403b3dc14e50f11b4eb47e17d98c403ab3641b3a75264f",
+    "data/kr-quarter-research/etf-input.json.gz": "1850d7825cdd695893f20bf18579ef58c92c4b460ffaa8aa544694f9145d5dc4",
+    "data/kr-quarter-research/expanded/current-liquid-manifest.json": "fe31e16acd150e341f6106151dc9f7241de5a97cbe66570e3ade7697c32f723c",
+    "data/kr-quarter-research/target-retry-neighbors/current-universe/default-manifest.json": "fe31e16acd150e341f6106151dc9f7241de5a97cbe66570e3ade7697c32f723c",
+    "data/kr-quarter-research/target-retry-neighbors/current-universe/monthly-manifest.json": "c8b858b2eff065749bc85d8479e4baeed6bb3abcdaa9461584d7a1ebe47606cc",
+    "data/kr-quarter-research/target-retry-neighbors/current-universe/monthly-input.json.gz": "1b78e0d864b91cb5454f8229f814fdd0c062d92adb12458c6db160307fab71bf",
+    "data/kr-quarter-research/target-retry-neighbors/current-universe/monthly-signals.json": "00384808dc9952ac253b8ab41280051d02909d9ae80f48b88d2ba91b5b380543",
+    "data/kr-quarter-research/account-stop/current-signals.json": "d8c5baa2766eacf63f3c221a18cc81cc6ba234da261cf7a629a3dbb2add81e14",
+    "data/kr-quarter-research/expanded/current-provisional/manifest.json": "4839f767fb0ca291d0717548a450906622176aee5f553c89f1483edf80b6ddc8",
+    "data/kr-quarter-research/expanded/current-krx.jsonl.gz": "869c687402d60fbf5ea1c3d4a8ba6b385dd11303e9d2f98446117b0900cc7803",
+    "data/kr-quarter-research/expanded/current-krx-kosdaq.jsonl.gz": "6068182a7f35159fa00a1b0312789f2798c65f2a6feb72580c434c149ee81e72",
+    "data/reliable-strategy-reproduction/2026-09-06-8791951/research-data/panel/days.npy": "39bb32356e3451c48c9bb2159f4c64c02f67a01c71eb58ec80114fcc0d694052",
+    "data/reliable-strategy-reproduction/2026-09-06-8791951/research-data/panel/codes.npy": "0435fd2a97e12fb3026f1818ecf666b1da6d6fccd9f3005e88f0442204220110",
+    "data/reliable-strategy-reproduction/2026-09-06-8791951/research-data/panel/value.npy": "f20ee2bcab39783a32815f079d7e849dbbc4bf1b2ebf5ec5ca6707d174ebd4a9",
+    "data/reliable-strategy-reproduction/2026-09-06-8791951/research-data/panel/open.npy": "e52507a4b3eb3fe3ebed5e417a91a169ca867d4976186850bab485416b01cb01",
+    "data/reliable-strategy-reproduction/2026-09-06-8791951/research-data/panel/high.npy": "f07c718cab2c9e1c1108f83eaa2153f8e057ccf4c5793e58091c799c35e4f3aa",
+    "data/reliable-strategy-reproduction/2026-09-06-8791951/research-data/panel/low.npy": "7648115f35b058515f824036743e8786ea8603a2ee6c0c087bf8bf7faf03c6dd",
+    "data/reliable-strategy-reproduction/2026-09-06-8791951/research-data/panel/close.npy": "353f2e947d4121f724f17008590da2fa153c59d71cc22c2ae4eb9c966fa96f68",
+    "data/reliable-strategy-reproduction/2026-09-06-8791951/research-data/panel/volume.npy": "519543d1a95eb491fb7c713bad11c8f6b42d2ec6550e7ce265352c3a7a2a0298",
+    "data/reliable-strategy-reproduction/2026-09-06-8791951/research-data/panel/common.npy": "d58ca1ff5e9e1e3c06e5564f1c522b3a4d88f46bfa08096df7bb5f73384277cd",
+    "data/reliable-strategy-reproduction/2026-09-06-8791951/research-data/panel/active.npy": "3abf5dee3f4dd7df90ffa0af4bc5b32504bbfa66be603e284b5338e356c13cbb",
+    "data/reliable-strategy-reproduction/2026-09-06-8791951/research-data/panel/nontrading.npy": "c62c2c353261102d170bbc2a1c03ad3c39204d9166d8735e1560f2f8e9276463",
+    "data/reliable-strategy-reproduction/2026-09-06-8791951/research-data/panel/cap.npy": "6df3575847be1704afc6d4f6233f8acb16f4c6bbb14d83bbdb091d608ca007ce"
+  },
+  "historicalBuilderCommit": "ebc7936",
+  "historicalBuilderSha256": "030a03664b321741868e06652e595d9faaf721737c88af8182fa074c4e4b1524",
+  "codeSha256": {
+    "/home/hyunbae204/work/trading-webapp/scripts/quarter-research/audit_current_universe.py": "878c37b87e6f15fcd65fedc4876598001d1887004d1c93a5238f359f461379c3",
+    "/home/hyunbae204/work/trading-webapp/scripts/quarter-research/select_current_krx.py": "b126b6f4194dd3cd9f259c83f66905f74fcc9fb2486b60de85bf5df5a091e539",
+    "/home/hyunbae204/work/trading-webapp/scripts/quarter-research/test_current_selection.py": "180af4baa1bec76c01b256198730100ee0e9840aedfa12a4b3774051f8c9c73d",
+    "/home/hyunbae204/work/trading-webapp/scripts/quarter-research/prepare_current_inputs.py": "8b07ac1c93f393e88d8ba75cac433571924d2f9963603ae7d4acc9a3f4b7ad8a",
+    "/home/hyunbae204/work/trading-webapp/scripts/quarter-research/prepare_stock_inputs.py": "bec682f3c14410047c780e0c2d9256aea64e5d2ff8df4000d4cbec3a3f77f012",
+    "/home/hyunbae204/work/trading-webapp/scripts/quarter-research/current-signals.ts": "2af447a104bc8e5031fa300a18f04e665b43a5894b7dbae207a1f07720307c56",
+    "/home/hyunbae204/work/trading-webapp/scripts/quarter-research/quarter-engine.ts": "f3c43a68aabb03741a72ff6117b85c75434653096945f4014da09900de3b2287"
+  },
+  "note": "현재 관찰의 종목군 시점을 과거 월별 규칙에 맞춘 결과이며 실전 채택·미래 수익 확인·주문 발송이 아니다."
+}

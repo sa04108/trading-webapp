@@ -1,0 +1,1206 @@
+[
+  {
+    "variant": "rebalance15",
+    "stage": "confirmation",
+    "passes": false,
+    "all": {
+      "count": 58,
+      "targetHits": 39,
+      "targetFrequencyPct": 67.24137931034483,
+      "medianPct": 12.736899812500003,
+      "p10Pct": -10.961597131450013,
+      "worstPct": -19.695944249999997,
+      "lossFrequencyPct": 32.758620689655174,
+      "worstDrawdownPct": -23.48577632287805,
+      "unclosed": 0
+    },
+    "nonoverlapping": {
+      "count": 4,
+      "targetHits": 2,
+      "targetFrequencyPct": 50.0,
+      "medianPct": 1.325844915000002,
+      "p10Pct": -9.63091819274999,
+      "worstPct": -10.174003897499983,
+      "lossFrequencyPct": 50.0,
+      "worstDrawdownPct": -21.005317080936713,
+      "unclosed": 0
+    },
+    "accounts": [
+      {
+        "start": "2024-09-02",
+        "end": "2024-12-01",
+        "resumptions": [],
+        "baseReturnPct": 12.89861940999999,
+        "returnPct": -8.363718215000004,
+        "returnDeltaPctPoints": -21.262337624999994,
+        "baseDrawdownPct": -8.102594001925967,
+        "drawdownPct": -15.677055472758838,
+        "baseTargetReached": true,
+        "targetReached": false,
+        "extraFills": 20,
+        "extraCostsKrw": 820237.6249999999,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2024-11-22",
+            "reason": "계좌 낙폭 중단",
+            "equity": 90974813.8275
+          }
+        ],
+        "firstDifferentEquityDate": "2024-09-27",
+        "base": {
+          "file": "data/kr-quarter-research/target-retry/seed204-offset0-confirmation/momentum-20-5-monthly__2024-09-02.json",
+          "sha256": "93ead431a830cb9db7362e243ec7af2f5d6fdea4279fa86ecf4fb64956fba826",
+          "riskEvents": [
+            {
+              "date": "2024-10-28",
+              "reason": "계좌 목표 청산",
+              "equity": 112756383.62
+            }
+          ],
+          "totalCostsKrw": 917830.59,
+          "fillGroups": [
+            {
+              "date": "2024-09-04",
+              "side": "BUY",
+              "reason": "REBALANCE_ENTRY",
+              "fills": [
+                {
+                  "symbol": "000100",
+                  "quantity": 138,
+                  "price": 142300
+                },
+                {
+                  "symbol": "112610",
+                  "quantity": 318,
+                  "price": 61100
+                },
+                {
+                  "symbol": "326030",
+                  "quantity": 180,
+                  "price": 106200
+                },
+                {
+                  "symbol": "237690",
+                  "quantity": 189,
+                  "price": 101200
+                },
+                {
+                  "symbol": "036460",
+                  "quantity": 375,
+                  "price": 51600
+                }
+              ]
+            },
+            {
+              "date": "2024-10-08",
+              "side": "SELL",
+              "reason": "REBALANCE_EXIT",
+              "fills": [
+                {
+                  "symbol": "000100",
+                  "quantity": 138,
+                  "price": 147100
+                },
+                {
+                  "symbol": "036460",
+                  "quantity": 375,
+                  "price": 44000
+                },
+                {
+                  "symbol": "112610",
+                  "quantity": 318,
+                  "price": 65900
+                },
+                {
+                  "symbol": "237690",
+                  "quantity": 189,
+                  "price": 106700
+                },
+                {
+                  "symbol": "326030",
+                  "quantity": 180,
+                  "price": 105500
+                }
+              ]
+            },
+            {
+              "date": "2024-10-10",
+              "side": "BUY",
+              "reason": "REBALANCE_ENTRY",
+              "fills": [
+                {
+                  "symbol": "011170",
+                  "quantity": 205,
+                  "price": 98600
+                },
+                {
+                  "symbol": "010130",
+                  "quantity": 25,
+                  "price": 762000
+                },
+                {
+                  "symbol": "450080",
+                  "quantity": 157,
+                  "price": 127700
+                },
+                {
+                  "symbol": "298040",
+                  "quantity": 55,
+                  "price": 372000
+                },
+                {
+                  "symbol": "079550",
+                  "quantity": 81,
+                  "price": 245000
+                }
+              ]
+            },
+            {
+              "date": "2024-10-29",
+              "side": "SELL",
+              "reason": "계좌 목표 청산",
+              "fills": [
+                {
+                  "symbol": "011170",
+                  "quantity": 205,
+                  "price": 93700
+                },
+                {
+                  "symbol": "010130",
+                  "quantity": 25,
+                  "price": 1334000
+                },
+                {
+                  "symbol": "450080",
+                  "quantity": 157,
+                  "price": 115700
+                },
+                {
+                  "symbol": "298040",
+                  "quantity": 55,
+                  "price": 398000
+                },
+                {
+                  "symbol": "079550",
+                  "quantity": 81,
+                  "price": 248000
+                }
+              ]
+            }
+          ]
+        },
+        "neighbor": {
+          "file": "data/kr-quarter-research/target-retry-neighbors/rebalance15-confirmation/target-retry-neighbor-rebalance15__2024-09-02.json",
+          "sha256": "e757b009c21533008b24eba6677e329749bdc569fab89d519a161b1022395081",
+          "riskEvents": [
+            {
+              "date": "2024-11-22",
+              "reason": "계좌 낙폭 중단",
+              "equity": 90974813.8275
+            }
+          ],
+          "totalCostsKrw": 1738068.2149999999,
+          "fillGroups": [
+            {
+              "date": "2024-09-04",
+              "side": "BUY",
+              "reason": "REBALANCE_ENTRY",
+              "fills": [
+                {
+                  "symbol": "000100",
+                  "quantity": 138,
+                  "price": 142300
+                },
+                {
+                  "symbol": "112610",
+                  "quantity": 318,
+                  "price": 61100
+                },
+                {
+                  "symbol": "326030",
+                  "quantity": 180,
+                  "price": 106200
+                },
+                {
+                  "symbol": "237690",
+                  "quantity": 189,
+                  "price": 101200
+                },
+                {
+                  "symbol": "036460",
+                  "quantity": 375,
+                  "price": 51600
+                }
+              ]
+            },
+            {
+              "date": "2024-09-27",
+              "side": "SELL",
+              "reason": "REBALANCE_TRIM",
+              "fills": [
+                {
+                  "symbol": "000100",
+                  "quantity": 1,
+                  "price": 151000
+                }
+              ]
+            },
+            {
+              "date": "2024-09-27",
+              "side": "SELL",
+              "reason": "REBALANCE_EXIT",
+              "fills": [
+                {
+                  "symbol": "036460",
+                  "quantity": 375,
+                  "price": 46800
+                },
+                {
+                  "symbol": "112610",
+                  "quantity": 318,
+                  "price": 71300
+                },
+                {
+                  "symbol": "237690",
+                  "quantity": 189,
+                  "price": 103100
+                },
+                {
+                  "symbol": "326030",
+                  "quantity": 180,
+                  "price": 108000
+                }
+              ]
+            },
+            {
+              "date": "2024-09-30",
+              "side": "BUY",
+              "reason": "REBALANCE_ENTRY",
+              "fills": [
+                {
+                  "symbol": "005070",
+                  "quantity": 157,
+                  "price": 130500
+                },
+                {
+                  "symbol": "000100",
+                  "quantity": 3,
+                  "price": 146400
+                },
+                {
+                  "symbol": "450080",
+                  "quantity": 156,
+                  "price": 132400
+                },
+                {
+                  "symbol": "180640",
+                  "quantity": 231,
+                  "price": 90300
+                },
+                {
+                  "symbol": "010130",
+                  "quantity": 28,
+                  "price": 707000
+                }
+              ]
+            },
+            {
+              "date": "2024-10-23",
+              "side": "SELL",
+              "reason": "REBALANCE_EXIT",
+              "fills": [
+                {
+                  "symbol": "000100",
+                  "quantity": 140,
+                  "price": 154000
+                },
+                {
+                  "symbol": "005070",
+                  "quantity": 157,
+                  "price": 102900
+                },
+                {
+                  "symbol": "010130",
+                  "quantity": 28,
+                  "price": 869000
+                },
+                {
+                  "symbol": "180640",
+                  "quantity": 231,
+                  "price": 93600
+                },
+                {
+                  "symbol": "450080",
+                  "quantity": 156,
+                  "price": 106500
+                }
+              ]
+            },
+            {
+              "date": "2024-10-24",
+              "side": "BUY",
+              "reason": "REBALANCE_ENTRY",
+              "fills": [
+                {
+                  "symbol": "141080",
+                  "quantity": 156,
+                  "price": 126100
+                },
+                {
+                  "symbol": "026960",
+                  "quantity": 955,
+                  "price": 20600
+                },
+                {
+                  "symbol": "009420",
+                  "quantity": 420,
+                  "price": 47400
+                },
+                {
+                  "symbol": "103140",
+                  "quantity": 288,
+                  "price": 69700
+                },
+                {
+                  "symbol": "079550",
+                  "quantity": 80,
+                  "price": 247000
+                }
+              ]
+            },
+            {
+              "date": "2024-11-13",
+              "side": "SELL",
+              "reason": "REBALANCE_EXIT",
+              "fills": [
+                {
+                  "symbol": "009420",
+                  "quantity": 420,
+                  "price": 43100
+                },
+                {
+                  "symbol": "026960",
+                  "quantity": 955,
+                  "price": 25300
+                },
+                {
+                  "symbol": "079550",
+                  "quantity": 80,
+                  "price": 255500
+                },
+                {
+                  "symbol": "103140",
+                  "quantity": 288,
+                  "price": 62400
+                },
+                {
+                  "symbol": "141080",
+                  "quantity": 156,
+                  "price": 131400
+                }
+              ]
+            },
+            {
+              "date": "2024-11-14",
+              "side": "BUY",
+              "reason": "REBALANCE_ENTRY",
+              "fills": [
+                {
+                  "symbol": "087010",
+                  "quantity": 182,
+                  "price": 116800
+                },
+                {
+                  "symbol": "007390",
+                  "quantity": 841,
+                  "price": 25000
+                },
+                {
+                  "symbol": "443060",
+                  "quantity": 143,
+                  "price": 141400
+                },
+                {
+                  "symbol": "272210",
+                  "quantity": 759,
+                  "price": 27550
+                },
+                {
+                  "symbol": "010130",
+                  "quantity": 19,
+                  "price": 952000
+                }
+              ]
+            },
+            {
+              "date": "2024-11-25",
+              "side": "SELL",
+              "reason": "계좌 낙폭 중단",
+              "fills": [
+                {
+                  "symbol": "087010",
+                  "quantity": 182,
+                  "price": 81400
+                },
+                {
+                  "symbol": "007390",
+                  "quantity": 841,
+                  "price": 21950
+                },
+                {
+                  "symbol": "443060",
+                  "quantity": 143,
+                  "price": 143000
+                },
+                {
+                  "symbol": "272210",
+                  "quantity": 759,
+                  "price": 25800
+                },
+                {
+                  "symbol": "010130",
+                  "quantity": 19,
+                  "price": 939000
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "start": "2025-04-28",
+        "end": "2025-07-27",
+        "resumptions": [],
+        "baseReturnPct": 11.015408045000008,
+        "returnPct": 11.015408045000008,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -2.771615965000007,
+        "drawdownPct": -2.771615965000007,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2025-05-21",
+            "reason": "계좌 목표 청산",
+            "equity": 111717884.035
+          }
+        ],
+        "firstDifferentEquityDate": null,
+        "base": {
+          "file": "data/kr-quarter-research/target-retry/seed204-offset0-confirmation/momentum-20-5-monthly__2025-04-28.json",
+          "sha256": "8fed4b3304c86e780bd894aadae9411958f141689e831ac31aff98e95b128921",
+          "riskEvents": [
+            {
+              "date": "2025-05-21",
+              "reason": "계좌 목표 청산",
+              "equity": 111717884.035
+            }
+          ],
+          "totalCostsKrw": 469691.95499999996,
+          "fillGroups": [
+            {
+              "date": "2025-04-30",
+              "side": "BUY",
+              "reason": "REBALANCE_ENTRY",
+              "fills": [
+                {
+                  "symbol": "009830",
+                  "quantity": 649,
+                  "price": 30300
+                },
+                {
+                  "symbol": "087010",
+                  "quantity": 114,
+                  "price": 174300
+                },
+                {
+                  "symbol": "298380",
+                  "quantity": 297,
+                  "price": 67300
+                },
+                {
+                  "symbol": "257720",
+                  "quantity": 549,
+                  "price": 36900
+                },
+                {
+                  "symbol": "010620",
+                  "quantity": 120,
+                  "price": 166600
+                }
+              ]
+            },
+            {
+              "date": "2025-05-22",
+              "side": "SELL",
+              "reason": "계좌 목표 청산",
+              "fills": [
+                {
+                  "symbol": "009830",
+                  "quantity": 649,
+                  "price": 37150
+                },
+                {
+                  "symbol": "087010",
+                  "quantity": 114,
+                  "price": 209000
+                },
+                {
+                  "symbol": "298380",
+                  "quantity": 297,
+                  "price": 65000
+                },
+                {
+                  "symbol": "257720",
+                  "quantity": 549,
+                  "price": 40250
+                },
+                {
+                  "symbol": "010620",
+                  "quantity": 120,
+                  "price": 180400
+                }
+              ]
+            }
+          ]
+        },
+        "neighbor": {
+          "file": "data/kr-quarter-research/target-retry-neighbors/rebalance15-confirmation/target-retry-neighbor-rebalance15__2025-04-28.json",
+          "sha256": "02b1e4641cabde8859897d84eb790d8aae93459a6600d6c3d192168b78fea192",
+          "riskEvents": [
+            {
+              "date": "2025-05-21",
+              "reason": "계좌 목표 청산",
+              "equity": 111717884.035
+            }
+          ],
+          "totalCostsKrw": 469691.95499999996,
+          "fillGroups": [
+            {
+              "date": "2025-04-30",
+              "side": "BUY",
+              "reason": "REBALANCE_ENTRY",
+              "fills": [
+                {
+                  "symbol": "009830",
+                  "quantity": 649,
+                  "price": 30300
+                },
+                {
+                  "symbol": "087010",
+                  "quantity": 114,
+                  "price": 174300
+                },
+                {
+                  "symbol": "298380",
+                  "quantity": 297,
+                  "price": 67300
+                },
+                {
+                  "symbol": "257720",
+                  "quantity": 549,
+                  "price": 36900
+                },
+                {
+                  "symbol": "010620",
+                  "quantity": 120,
+                  "price": 166600
+                }
+              ]
+            },
+            {
+              "date": "2025-05-22",
+              "side": "SELL",
+              "reason": "계좌 목표 청산",
+              "fills": [
+                {
+                  "symbol": "009830",
+                  "quantity": 649,
+                  "price": 37150
+                },
+                {
+                  "symbol": "087010",
+                  "quantity": 114,
+                  "price": 209000
+                },
+                {
+                  "symbol": "298380",
+                  "quantity": 297,
+                  "price": 65000
+                },
+                {
+                  "symbol": "257720",
+                  "quantity": 549,
+                  "price": 40250
+                },
+                {
+                  "symbol": "010620",
+                  "quantity": 120,
+                  "price": 180400
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "start": "2025-11-17",
+        "end": "2026-02-16",
+        "resumptions": [],
+        "baseReturnPct": 11.996482490000005,
+        "returnPct": 13.127647700000011,
+        "returnDeltaPctPoints": 1.131165210000006,
+        "baseDrawdownPct": -12.33240658060517,
+        "drawdownPct": -8.190000291082878,
+        "baseTargetReached": true,
+        "targetReached": true,
+        "extraFills": 8,
+        "extraCostsKrw": 290934.79000000004,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-01-09",
+            "reason": "계좌 목표 청산",
+            "equity": 112119946.02000003
+          }
+        ],
+        "firstDifferentEquityDate": "2025-12-09",
+        "base": {
+          "file": "data/kr-quarter-research/target-retry/seed204-offset0-confirmation/momentum-20-5-monthly__2025-11-17.json",
+          "sha256": "76c2e14f855bd346a77716ac3e374be346de06038b8108b0db73e69c620d3eaa",
+          "riskEvents": [
+            {
+              "date": "2025-12-29",
+              "reason": "계좌 목표 청산",
+              "equity": 111490872.9425
+            }
+          ],
+          "totalCostsKrw": 935367.51,
+          "fillGroups": [
+            {
+              "date": "2025-11-19",
+              "side": "BUY",
+              "reason": "REBALANCE_ENTRY",
+              "fills": [
+                {
+                  "symbol": "007660",
+                  "quantity": 161,
+                  "price": 123300
+                },
+                {
+                  "symbol": "226950",
+                  "quantity": 144,
+                  "price": 138800
+                },
+                {
+                  "symbol": "353200",
+                  "quantity": 393,
+                  "price": 50500
+                },
+                {
+                  "symbol": "298380",
+                  "quantity": 120,
+                  "price": 166800
+                },
+                {
+                  "symbol": "010120",
+                  "quantity": 43,
+                  "price": 462000
+                }
+              ]
+            },
+            {
+              "date": "2025-12-16",
+              "side": "SELL",
+              "reason": "REBALANCE_EXIT",
+              "fills": [
+                {
+                  "symbol": "007660",
+                  "quantity": 161,
+                  "price": 128400
+                },
+                {
+                  "symbol": "010120",
+                  "quantity": 43,
+                  "price": 483500
+                },
+                {
+                  "symbol": "226950",
+                  "quantity": 144,
+                  "price": 142000
+                },
+                {
+                  "symbol": "298380",
+                  "quantity": 120,
+                  "price": 195700
+                },
+                {
+                  "symbol": "353200",
+                  "quantity": 393,
+                  "price": 45750
+                }
+              ]
+            },
+            {
+              "date": "2025-12-17",
+              "side": "BUY",
+              "reason": "REBALANCE_ENTRY",
+              "fills": [
+                {
+                  "symbol": "030530",
+                  "quantity": 599,
+                  "price": 35500
+                },
+                {
+                  "symbol": "010130",
+                  "quantity": 15,
+                  "price": 1398000
+                },
+                {
+                  "symbol": "307950",
+                  "quantity": 73,
+                  "price": 290500
+                },
+                {
+                  "symbol": "204320",
+                  "quantity": 397,
+                  "price": 53200
+                },
+                {
+                  "symbol": "108490",
+                  "quantity": 64,
+                  "price": 296000
+                }
+              ]
+            },
+            {
+              "date": "2025-12-30",
+              "side": "SELL",
+              "reason": "계좌 목표 청산",
+              "fills": [
+                {
+                  "symbol": "030530",
+                  "quantity": 599,
+                  "price": 47750
+                },
+                {
+                  "symbol": "010130",
+                  "quantity": 15,
+                  "price": 1344000
+                },
+                {
+                  "symbol": "307950",
+                  "quantity": 73,
+                  "price": 317000
+                },
+                {
+                  "symbol": "204320",
+                  "quantity": 397,
+                  "price": 58300
+                },
+                {
+                  "symbol": "108490",
+                  "quantity": 64,
+                  "price": 267000
+                }
+              ]
+            }
+          ]
+        },
+        "neighbor": {
+          "file": "data/kr-quarter-research/target-retry-neighbors/rebalance15-confirmation/target-retry-neighbor-rebalance15__2025-11-17.json",
+          "sha256": "9ee4eb0bcbcb19945e82585ba99a0cdb4dc9e5f7d3cf5e23ab6247189c77bc69",
+          "riskEvents": [
+            {
+              "date": "2026-01-09",
+              "reason": "계좌 목표 청산",
+              "equity": 112119946.02000003
+            }
+          ],
+          "totalCostsKrw": 1226302.3,
+          "fillGroups": [
+            {
+              "date": "2025-11-19",
+              "side": "BUY",
+              "reason": "REBALANCE_ENTRY",
+              "fills": [
+                {
+                  "symbol": "007660",
+                  "quantity": 161,
+                  "price": 123300
+                },
+                {
+                  "symbol": "226950",
+                  "quantity": 144,
+                  "price": 138800
+                },
+                {
+                  "symbol": "353200",
+                  "quantity": 393,
+                  "price": 50500
+                },
+                {
+                  "symbol": "298380",
+                  "quantity": 120,
+                  "price": 166800
+                },
+                {
+                  "symbol": "010120",
+                  "quantity": 43,
+                  "price": 462000
+                }
+              ]
+            },
+            {
+              "date": "2025-12-09",
+              "side": "SELL",
+              "reason": "REBALANCE_EXIT",
+              "fills": [
+                {
+                  "symbol": "007660",
+                  "quantity": 161,
+                  "price": 140800
+                },
+                {
+                  "symbol": "010120",
+                  "quantity": 43,
+                  "price": 502000
+                },
+                {
+                  "symbol": "226950",
+                  "quantity": 144,
+                  "price": 121200
+                },
+                {
+                  "symbol": "353200",
+                  "quantity": 393,
+                  "price": 48600
+                }
+              ]
+            },
+            {
+              "date": "2025-12-09",
+              "side": "SELL",
+              "reason": "REBALANCE_TRIM",
+              "fills": [
+                {
+                  "symbol": "298380",
+                  "quantity": 9,
+                  "price": 189100
+                }
+              ]
+            },
+            {
+              "date": "2025-12-10",
+              "side": "BUY",
+              "reason": "REBALANCE_ENTRY",
+              "fills": [
+                {
+                  "symbol": "095340",
+                  "quantity": 188,
+                  "price": 108800
+                },
+                {
+                  "symbol": "111770",
+                  "quantity": 228,
+                  "price": 90100
+                },
+                {
+                  "symbol": "307950",
+                  "quantity": 68,
+                  "price": 299500
+                },
+                {
+                  "symbol": "204320",
+                  "quantity": 378,
+                  "price": 56000
+                }
+              ]
+            },
+            {
+              "date": "2026-01-02",
+              "side": "SELL",
+              "reason": "REBALANCE_EXIT",
+              "fills": [
+                {
+                  "symbol": "095340",
+                  "quantity": 188,
+                  "price": 112900
+                },
+                {
+                  "symbol": "111770",
+                  "quantity": 228,
+                  "price": 81700
+                },
+                {
+                  "symbol": "204320",
+                  "quantity": 378,
+                  "price": 59300
+                },
+                {
+                  "symbol": "298380",
+                  "quantity": 111,
+                  "price": 199700
+                }
+              ]
+            },
+            {
+              "date": "2026-01-02",
+              "side": "SELL",
+              "reason": "REBALANCE_TRIM",
+              "fills": [
+                {
+                  "symbol": "307950",
+                  "quantity": 4,
+                  "price": 326000
+                }
+              ]
+            },
+            {
+              "date": "2026-01-05",
+              "side": "BUY",
+              "reason": "REBALANCE_ENTRY",
+              "fills": [
+                {
+                  "symbol": "012330",
+                  "quantity": 58,
+                  "price": 371500
+                },
+                {
+                  "symbol": "041510",
+                  "quantity": 161,
+                  "price": 134800
+                },
+                {
+                  "symbol": "402340",
+                  "quantity": 54,
+                  "price": 408000
+                },
+                {
+                  "symbol": "030530",
+                  "quantity": 425,
+                  "price": 48200
+                }
+              ]
+            },
+            {
+              "date": "2026-01-12",
+              "side": "SELL",
+              "reason": "계좌 목표 청산",
+              "fills": [
+                {
+                  "symbol": "307950",
+                  "quantity": 64,
+                  "price": 475000
+                },
+                {
+                  "symbol": "012330",
+                  "quantity": 58,
+                  "price": 417500
+                },
+                {
+                  "symbol": "041510",
+                  "quantity": 161,
+                  "price": 114300
+                },
+                {
+                  "symbol": "402340",
+                  "quantity": 54,
+                  "price": 436000
+                },
+                {
+                  "symbol": "030530",
+                  "quantity": 425,
+                  "price": 39500
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "start": "2026-02-19",
+        "end": "2026-05-18",
+        "resumptions": [],
+        "baseReturnPct": -10.174003897499983,
+        "returnPct": -10.174003897499983,
+        "returnDeltaPctPoints": 0.0,
+        "baseDrawdownPct": -21.005317080936713,
+        "drawdownPct": -21.005317080936713,
+        "baseTargetReached": false,
+        "targetReached": false,
+        "extraFills": 0,
+        "extraCostsKrw": 0.0,
+        "closed": true,
+        "riskEvents": [
+          {
+            "date": "2026-03-04",
+            "reason": "계좌 낙폭 중단",
+            "equity": 81376457.635
+          }
+        ],
+        "firstDifferentEquityDate": null,
+        "base": {
+          "file": "data/kr-quarter-research/target-retry/seed204-offset0-confirmation/momentum-20-5-monthly__2026-02-19.json",
+          "sha256": "e97f5b94b328a0481463faad4e1e9408fc771676242e753064edb69e5266de45",
+          "riskEvents": [
+            {
+              "date": "2026-03-04",
+              "reason": "계좌 낙폭 중단",
+              "equity": 81376457.635
+            }
+          ],
+          "totalCostsKrw": 427003.89749999996,
+          "fillGroups": [
+            {
+              "date": "2026-02-23",
+              "side": "BUY",
+              "reason": "REBALANCE_ENTRY",
+              "fills": [
+                {
+                  "symbol": "000250",
+                  "quantity": 31,
+                  "price": 657000
+                },
+                {
+                  "symbol": "009830",
+                  "quantity": 377,
+                  "price": 54900
+                },
+                {
+                  "symbol": "214370",
+                  "quantity": 133,
+                  "price": 152400
+                },
+                {
+                  "symbol": "095340",
+                  "quantity": 106,
+                  "price": 188000
+                },
+                {
+                  "symbol": "006800",
+                  "quantity": 261,
+                  "price": 71600
+                }
+              ]
+            },
+            {
+              "date": "2026-03-05",
+              "side": "SELL",
+              "reason": "계좌 낙폭 중단",
+              "fills": [
+                {
+                  "symbol": "000250",
+                  "quantity": 31,
+                  "price": 729000
+                },
+                {
+                  "symbol": "009830",
+                  "quantity": 377,
+                  "price": 43750
+                },
+                {
+                  "symbol": "214370",
+                  "quantity": 133,
+                  "price": 117600
+                },
+                {
+                  "symbol": "095340",
+                  "quantity": 106,
+                  "price": 172500
+                },
+                {
+                  "symbol": "006800",
+                  "quantity": 261,
+                  "price": 65000
+                }
+              ]
+            }
+          ]
+        },
+        "neighbor": {
+          "file": "data/kr-quarter-research/target-retry-neighbors/rebalance15-confirmation/target-retry-neighbor-rebalance15__2026-02-19.json",
+          "sha256": "a81f5a0d3c9a26bc5dd1ca3f0d8e3a5d1565e12e0c47fc781c9ffcedf39c0ea7",
+          "riskEvents": [
+            {
+              "date": "2026-03-04",
+              "reason": "계좌 낙폭 중단",
+              "equity": 81376457.635
+            }
+          ],
+          "totalCostsKrw": 427003.89749999996,
+          "fillGroups": [
+            {
+              "date": "2026-02-23",
+              "side": "BUY",
+              "reason": "REBALANCE_ENTRY",
+              "fills": [
+                {
+                  "symbol": "000250",
+                  "quantity": 31,
+                  "price": 657000
+                },
+                {
+                  "symbol": "009830",
+                  "quantity": 377,
+                  "price": 54900
+                },
+                {
+                  "symbol": "214370",
+                  "quantity": 133,
+                  "price": 152400
+                },
+                {
+                  "symbol": "095340",
+                  "quantity": 106,
+                  "price": 188000
+                },
+                {
+                  "symbol": "006800",
+                  "quantity": 261,
+                  "price": 71600
+                }
+              ]
+            },
+            {
+              "date": "2026-03-05",
+              "side": "SELL",
+              "reason": "계좌 낙폭 중단",
+              "fills": [
+                {
+                  "symbol": "000250",
+                  "quantity": 31,
+                  "price": 729000
+                },
+                {
+                  "symbol": "009830",
+                  "quantity": 377,
+                  "price": 43750
+                },
+                {
+                  "symbol": "214370",
+                  "quantity": 133,
+                  "price": 117600
+                },
+                {
+                  "symbol": "095340",
+                  "quantity": 106,
+                  "price": 172500
+                },
+                {
+                  "symbol": "006800",
+                  "quantity": 261,
+                  "price": 65000
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  }
+]

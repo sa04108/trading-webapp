@@ -65,3 +65,5 @@
 앞선 [일정·시드 비교](kr-current-quarter-target-retry-findings.md)의 통과와 재개 후 손실 전환 사례를 유지한다. 현재와 닮은 회복 조건의 비중첩 표본은 여전히 검증·최근 각 1개, 수출 성장 조건까지 합치면 각 0개다. 반복 탐색과 당시 발표본을 인증하지 않은 거시 수정 자료의 한계도 남는다. 인접한 선정 기간·보유 수·회전 주기 확인은 아직 완료하지 않았다. 현재 환경에 대한 통계적 근거가 충분하다는 결론이나 자동매매 투입 승인을 대신하는 결과가 아니다. 실주문은 보내지 않았다.
 
 [전체 진단](kr-current-quarter-target-retry-diagnostics-results/all-diagnostics.csv), [조건별 요약](kr-current-quarter-target-retry-diagnostics-results/conditions.csv), [비중첩 계좌](kr-current-quarter-target-retry-diagnostics-results/nonoverlapping-diagnostics.json), [증거 해시](kr-current-quarter-target-retry-diagnostics-results/evidence-manifest.json), [검증 기록](kr-current-quarter-target-retry-diagnostics-results/verification.json)을 보존한다. 원본은 로컬 `data/kr-quarter-research/target-retry-diagnostics/`, 재현 순서는 [README](../../scripts/quarter-research/README.md)에 있다.
+
+후속 [인접 파라미터·현재 종목군 확인](kr-current-quarter-target-retry-neighbors-findings.md)을 완료했다. 여섯 이웃 중 15봉 회전의 최근 비중첩 기준이 미달했다. 위 수치는 당시 고정 결과로 보존하며 후속 결과로 덮어쓰지 않는다.
