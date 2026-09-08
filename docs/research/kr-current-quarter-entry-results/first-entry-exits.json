@@ -1,0 +1,167 @@
+[
+  {
+    "start": "2020-04-09",
+    "end": "2020-07-08",
+    "returnPct": -0.33567969999999114,
+    "drawdownPct": -4.3263445556496745,
+    "targetReached": false,
+    "closed": true,
+    "trades": 9,
+    "fills": 18,
+    "affectedActions": [],
+    "riskEvents": [
+      {
+        "date": "2020-07-07",
+        "reason": "3개월 만기 청산",
+        "equity": 99432949.665
+      }
+    ],
+    "stage": "validation",
+    "sellFillReasons": {
+      "종목 손절": 7,
+      "업종 순위·비중 조정": 1,
+      "3개월 만기 청산": 1
+    }
+  },
+  {
+    "start": "2020-07-10",
+    "end": "2020-10-09",
+    "returnPct": -7.560504103499999,
+    "drawdownPct": -7.875479628500004,
+    "targetReached": false,
+    "closed": true,
+    "trades": 9,
+    "fills": 18,
+    "affectedActions": [],
+    "riskEvents": [
+      {
+        "date": "2020-10-07",
+        "reason": "3개월 만기 청산",
+        "equity": 92439495.8965
+      }
+    ],
+    "stage": "validation",
+    "sellFillReasons": {
+      "종목 손절": 7,
+      "업종 순위·비중 조정": 1,
+      "시장 회복 조건 이탈": 1
+    }
+  },
+  {
+    "start": "2021-02-03",
+    "end": "2021-05-02",
+    "returnPct": -0.903143620000002,
+    "drawdownPct": -7.523967426541445,
+    "targetReached": false,
+    "closed": true,
+    "trades": 6,
+    "fills": 12,
+    "affectedActions": [],
+    "riskEvents": [
+      {
+        "date": "2021-04-29",
+        "reason": "3개월 만기 청산",
+        "equity": 98962227.28
+      }
+    ],
+    "stage": "validation",
+    "sellFillReasons": {
+      "종목 손절": 2,
+      "시장 회복 조건 이탈": 1,
+      "3개월 만기 청산": 3
+    }
+  },
+  {
+    "start": "2024-09-02",
+    "end": "2024-12-01",
+    "returnPct": 3.030207000000007,
+    "drawdownPct": -1.0411168693931105,
+    "targetReached": false,
+    "closed": true,
+    "trades": 7,
+    "fills": 13,
+    "affectedActions": [],
+    "riskEvents": [
+      {
+        "date": "2024-11-28",
+        "reason": "3개월 만기 청산",
+        "equity": 103030207
+      }
+    ],
+    "stage": "confirmation",
+    "sellFillReasons": {
+      "시장 회복 조건 이탈": 7
+    }
+  },
+  {
+    "start": "2025-04-28",
+    "end": "2025-07-27",
+    "returnPct": 6.536748817499993,
+    "drawdownPct": -8.634477562624099,
+    "targetReached": false,
+    "closed": true,
+    "trades": 9,
+    "fills": 18,
+    "affectedActions": [],
+    "riskEvents": [
+      {
+        "date": "2025-07-24",
+        "reason": "3개월 만기 청산",
+        "equity": 106746499.0775
+      }
+    ],
+    "stage": "confirmation",
+    "sellFillReasons": {
+      "업종 순위·비중 조정": 5,
+      "종목 손절": 2,
+      "3개월 만기 청산": 2
+    }
+  },
+  {
+    "start": "2025-11-17",
+    "end": "2026-02-16",
+    "returnPct": -1.9278505724999895,
+    "drawdownPct": -5.326137159133348,
+    "targetReached": false,
+    "closed": true,
+    "trades": 9,
+    "fills": 18,
+    "affectedActions": [],
+    "riskEvents": [
+      {
+        "date": "2026-02-12",
+        "reason": "3개월 만기 청산",
+        "equity": 98851730.18
+      }
+    ],
+    "stage": "confirmation",
+    "sellFillReasons": {
+      "종목 손절": 5,
+      "시장 회복 조건 이탈": 2,
+      "3개월 만기 청산": 2
+    }
+  },
+  {
+    "start": "2026-02-19",
+    "end": "2026-05-18",
+    "returnPct": -8.035123368999987,
+    "drawdownPct": -8.035123368999987,
+    "targetReached": false,
+    "closed": false,
+    "trades": 6,
+    "fills": 12,
+    "affectedActions": [],
+    "riskEvents": [
+      {
+        "date": "2026-05-15",
+        "reason": "3개월 만기 청산",
+        "equity": 92533820.951
+      }
+    ],
+    "stage": "confirmation",
+    "sellFillReasons": {
+      "종목 손절": 4,
+      "3개월 만기 청산": 2
+    }
+  }
+]

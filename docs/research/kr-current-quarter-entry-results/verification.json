@@ -1,0 +1,64 @@
+{
+  "asof": "2026-09-08",
+  "baseCommit": "214365a",
+  "status": "검증 통과, 수익 목표 미달",
+  "checks": [
+    {
+      "command": "pnpm exec vitest run tests/unit/quarter-research.test.ts tests/unit/recovery-quarter.test.ts tests/unit/confirmed-entry-quarter.test.ts tests/unit/uncertain-history-quarter.test.ts",
+      "exitCode": 0,
+      "files": 4,
+      "tests": 14
+    },
+    {
+      "command": "python -m unittest discover -s scripts/quarter-research -p 'test_*.py' -v",
+      "exitCode": 0,
+      "tests": 19,
+      "python": "/tmp/kr-regime-venv/bin/python"
+    },
+    {
+      "command": "pnpm exec eslint scripts/quarter-research/*.ts tests/unit/quarter-research.test.ts tests/unit/recovery-quarter.test.ts tests/unit/confirmed-entry-quarter.test.ts tests/unit/uncertain-history-quarter.test.ts",
+      "exitCode": 0
+    },
+    {
+      "command": "pnpm exec tsc -p tsconfig.server.json --noEmit",
+      "exitCode": 0
+    },
+    {
+      "command": "python scripts/quarter-research/build_entry_evidence.py data/kr-quarter-research data/kr-quarter-research/entry/evidence",
+      "exitCode": 0,
+      "summaryCount": 25,
+      "completedQuarterAccounts": 1091
+    }
+  ],
+  "defaultEngineReplay": {
+    "original": "data/kr-quarter-research/expanded/confirmation/recovery-60-3-monthly__2024-01-02.json",
+    "replay": "data/kr-quarter-research/entry/default-replay-final/recovery-60-3-monthly__2024-01-02.json",
+    "bytesEqual": true,
+    "sha256": "1ffdd29a062f8ca3a62adc9e58c6b6037d92ef3f11c1a4bee660f62542f24688"
+  },
+  "dateSelectionReplay": {
+    "sameBytes": [
+      "entry-development-options.json",
+      "entry-validation-options.json",
+      "entry-confirmation-options.json",
+      "date-audit.json"
+    ],
+    "method": "성과 입력 없이 새 임시 경로에서 생성한 바이트를 기존 고정 파일과 대조"
+  },
+  "publicFilesSha256": {
+    "all-summaries.csv": "8aa505be489dcff80f023feeef068b8d3f1dfa54a56c04408944c850da175809",
+    "conditions.csv": "218f77e758bd5142641252ce350383f15ca17b6844dfd75a46f958b1173f969d",
+    "monthly-comparison.json": "055cd236728d99811cdd590e90465a17b779ecb69a424d52eb7a7b731bc6fd50",
+    "nonoverlapping-accounts.json": "0f2534a6b717ee95e71beb27316fb08c0338cebd651ef836f305c3c0d08436d6",
+    "first-entry-exits.json": "d1e22945ba813720111d8fd804a349f926a354d35cae588c3b64fd76771c00a8",
+    "evidence-manifest.json": "b417bc6a97ed559c7c5d54c391761a729b6c1315d65adb2d0f989430610da962",
+    "current-confirmation-state.json": "5652f0c045248cbbe522f712f0a3db47c2a827a43fa7556291cecd042f34dc60"
+  },
+  "limitations": [
+    "동일한 시장 이력의 반복 탐색",
+    "미확인 기업행위 이력에 대한 사후 진단",
+    "중첩 계좌와 적은 비중첩 국면",
+    "가격 배당 제외 및 거시·공시 빈티지 한계",
+    "로컬 원문과 전체 계좌는 공개 저장소에 포함하지 않음"
+  ]
+}

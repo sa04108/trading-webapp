@@ -1,0 +1,68 @@
+{
+  "asof": "2026-09-08",
+  "inputPath": "data/kr-quarter-research/expanded/current-stock-input.json.gz",
+  "inputSha256": "78ea7d3d2fbb1e0f81735b31094feed5a843feb0f41a0f8fbc9ea4a3f769ea1f",
+  "codeSha256": "0fd4e04e0de4c23ed6ca89522ab02744f132b1382c7433e1aad528a1c6564a6f",
+  "points": [
+    {
+      "date": "2026-09-02",
+      "kospi": 6562.72,
+      "kospiSma20": 6672.157499999999,
+      "kospiRet20": 0.032044598557938064,
+      "kospiRet60": -0.12314798360859436,
+      "kospiVol20": 0.4778748460234954,
+      "streak": 0
+    },
+    {
+      "date": "2026-09-03",
+      "kospi": 6579.48,
+      "kospiSma20": 6671.2185,
+      "kospiRet20": -0.0028462049085669072,
+      "kospiRet60": -0.18741053708010325,
+      "kospiVol20": 0.45904370012819196,
+      "streak": 0
+    },
+    {
+      "date": "2026-09-04",
+      "kospi": 6687.21,
+      "kospiSma20": 6690.759999999999,
+      "kospiRet20": 0.06207217480520555,
+      "kospiRet60": -0.13499344183411333,
+      "kospiVol20": 0.42840694888818603,
+      "streak": 0
+    },
+    {
+      "date": "2026-09-07",
+      "kospi": 6995.39,
+      "kospiSma20": 6727.591,
+      "kospiRet20": 0.11769405170664515,
+      "kospiRet60": -0.0989908487303498,
+      "kospiVol20": 0.4525341802922827,
+      "streak": 1
+    },
+    {
+      "date": "2026-09-08",
+      "kospi": 6954.52,
+      "kospiSma20": 6760.334,
+      "kospiRet20": 0.1039516418346389,
+      "kospiRet60": -0.1439136739532375,
+      "kospiVol20": 0.45445638705263447,
+      "streak": 2
+    }
+  ],
+  "confirmation": [
+    {
+      "bars": 3,
+      "status": "현금 대기"
+    },
+    {
+      "bars": 5,
+      "status": "현금 대기"
+    },
+    {
+      "bars": 10,
+      "status": "현금 대기"
+    }
+  ],
+  "note": "조건 확인의 현재 상태이며 미래 충족이나 실제 주문·체결을 뜻하지 않는다. 대기해도 원래 계좌의 3개월 만기는 연장하지 않는다."
+}

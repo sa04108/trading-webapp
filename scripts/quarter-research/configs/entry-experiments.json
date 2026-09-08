@@ -1,0 +1,173 @@
+[
+  {
+    "directory": "entry/monthly-development",
+    "stage": "development",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "expanded-recovery.json",
+    "options": "history-reset-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "entry/monthly-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "expanded-recovery.json",
+    "options": "history-reset-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "entry/monthly-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "expanded-recovery.json",
+    "options": "history-reset-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "entry/daily-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "entry-candidates.json",
+    "options": "entry-validation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "entry/daily-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "entry-candidates.json",
+    "options": "entry-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "entry/cost10-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "expanded-recovery.json",
+    "options": "entry-30-validation-options.json",
+    "slippageBps": 10,
+    "seed": 204
+  },
+  {
+    "directory": "entry/cost10-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "expanded-recovery.json",
+    "options": "entry-30-confirmation-options.json",
+    "slippageBps": 10,
+    "seed": 204
+  },
+  {
+    "directory": "entry/cost20-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "expanded-recovery.json",
+    "options": "entry-30-validation-options.json",
+    "slippageBps": 20,
+    "seed": 204
+  },
+  {
+    "directory": "entry/cost20-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "expanded-recovery.json",
+    "options": "entry-30-confirmation-options.json",
+    "slippageBps": 20,
+    "seed": 204
+  },
+  {
+    "directory": "entry/seed205-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "expanded-recovery.json",
+    "options": "entry-30-validation-options.json",
+    "slippageBps": 5,
+    "seed": 205
+  },
+  {
+    "directory": "entry/seed205-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "expanded-recovery.json",
+    "options": "entry-30-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 205
+  },
+  {
+    "directory": "entry/seed206-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "expanded-recovery.json",
+    "options": "entry-30-validation-options.json",
+    "slippageBps": 5,
+    "seed": 206
+  },
+  {
+    "directory": "entry/seed206-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "expanded-recovery.json",
+    "options": "entry-30-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 206
+  },
+  {
+    "directory": "entry/confirm5-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "expanded-recovery.json",
+    "options": "entry-confirm5-validation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "entry/confirm5-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "expanded-recovery.json",
+    "options": "entry-confirm5-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "entry/confirm3-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "expanded-recovery.json",
+    "options": "entry-confirm3-validation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "entry/confirm3-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "expanded-recovery.json",
+    "options": "entry-confirm3-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "entry/confirm10-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "expanded-recovery.json",
+    "options": "entry-confirm10-validation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "entry/confirm10-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "expanded-recovery.json",
+    "options": "entry-confirm10-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  }
+]

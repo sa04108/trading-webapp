@@ -1,3 +1,5 @@
+import { withConfirmedEntry } from './confirmed-entry.js';
+import { withUncertainHistory } from './uncertain-history.js';
 import { createQuarterlyValue, type CapitalizationPoint, type ValuationObservation } from './quarterly-value.js';
 import { createQuarterlyEarnings, type QuarterObservation } from './quarterly-earnings.js';
 import { createAnnualQualityMomentum, type AnnualObservation } from './annual-quality-momentum.js';
@@ -87,12 +89,24 @@ export function addMonths(date: string, months: number): string {
 
 export function quarterWindows(days: readonly string[], from: string, to: string) {
   const firsts = days.filter((d, i) => d >= from && d <= to && (i === 0 || d.slice(0, 7) !== days[i - 1]!.slice(0, 7)));
-  return firsts.flatMap((start) => {
+  return windowsFromStarts(days, from, to, firsts);
+}
+
+/** 고정 시작일의 중복·미래 만기·거래일 오류를 조용히 제외하지 않는다. */
+export function windowsFromStarts(days: readonly string[], from: string, to: string, starts: readonly string[], strict = false) {
+  if (new Set(starts).size !== starts.length || starts.some((d, i) => i > 0 && d <= starts[i - 1]!)) throw new Error('시작일은 중복 없이 오름차순이어야 합니다');
+  return starts.flatMap((start) => {
     const endExclusive = addMonths(start, 3);
     const end = new Date(Date.parse(endExclusive) - 86_400_000).toISOString().slice(0, 10);
-    if (end > to) return [];
+    if (end > to || start < from || !days.includes(start)) {
+      if (strict) throw new Error(`평가 범위를 벗어난 고정 시작일: ${start}`);
+      return [];
+    }
     const tradingDays = days.filter((d) => d >= start && d < endExclusive);
-    if (tradingDays.length < 2) return [];
+    if (tradingDays.length < 2) {
+      if (strict) throw new Error(`청산할 실제 거래일이 부족한 시작점: ${start}`);
+      return [];
+    }
     return [{ start, end, tradingDays }];
   });
 }
@@ -162,9 +176,9 @@ function summarize(values: readonly { returnPct: number; drawdownPct: number; ta
 }
 
 export function main(argv: string[]) {
-  const [inputPath, outputPath, stage, selectionPath, slippageArg, seedArg, windowLimitArg, cashArg] = argv;
+  const [inputPath, outputPath, stage, selectionPath, slippageArg, seedArg, windowLimitArg, cashArg, optionsPath] = argv;
   if (!inputPath || !outputPath || !stage || !(stage in STAGES)) {
-    throw new Error('사용법: quarter-engine.ts input.gz output-dir development|validation|confirmation [selection.json] [slippage-bps] [seed] [window-limit-or-0] [initial-cash]');
+    throw new Error('사용법: quarter-engine.ts input.gz output-dir development|validation|confirmation [selection.json] [slippage-bps] [seed] [window-limit-or-0] [initial-cash] [options.json]');
   }
   const bytes = readFileSync(inputPath);
   const input = JSON.parse(gunzipSync(bytes).toString()) as ResearchInput;
@@ -173,7 +187,11 @@ export function main(argv: string[]) {
   const trials = selectionPath ? JSON.parse(readFileSync(selectionPath, 'utf8')) as Candidate[] : candidates();
   const [from, to] = STAGES[stage as keyof typeof STAGES];
   const effectiveTo = input.asof < to ? input.asof : to;
-  const allWindows = quarterWindows(input.days, from, effectiveTo);
+  const optionsBytes = optionsPath ? readFileSync(optionsPath) : null;
+  const options = optionsBytes ? JSON.parse(optionsBytes.toString()) as { starts?: string[]; resetUncertainHistory?: boolean; activationConfirmationBars?: number } : {};
+  const researchOptions = optionsBytes ? { options, optionsSha256: createHash('sha256').update(optionsBytes).digest('hex') } : {};
+  const allWindows = options.starts ? windowsFromStarts(input.days, from, effectiveTo, options.starts, true)
+    : quarterWindows(input.days, from, effectiveTo);
   const windowLimit = Number(windowLimitArg ?? 0);
   const windows = windowLimit > 0 ? allWindows.slice(0, windowLimit) : allWindows;
   const initialCash = Number(cashArg ?? 100_000_000);
@@ -214,7 +232,10 @@ export function main(argv: string[]) {
       const warmupTs = fromTsMs - 400 * 86_400_000;
       const risk = { initialCash, tradeFromTsMs: fromTsMs,
         lastSignalTsMs: Date.parse(window.tradingDays.at(-2)!), targetPct: 10.5, stopPct: 10 };
-      const wrapper = withQuarterRisk(base, risk);
+      const history = options.resetUncertainHistory ? withUncertainHistory(base, input.uncertainActions ?? [], fromTsMs) : null;
+      const activation = options.activationConfirmationBars === undefined ? null
+        : withConfirmedEntry(history?.strategy ?? base, input.macro, fromTsMs, options.activationConfirmationBars);
+      const wrapper = withQuarterRisk(activation?.strategy ?? history?.strategy ?? base, risk);
       // 첫 진입은 시작일 종가 신호 이후이며 일정은 고정된 리밸런싱 간격을 따른다.
       const schedule: BacktestUniverseScheduleEntry[] = window.tradingDays.filter((_, i) => i % (candidate.rebalanceBars ?? 5) === 0).map((date) => ({
         fromTsMs: Date.parse(date), symbols: input.members[Math.max(0, dayIndex.get(date)! - 1)]!,
@@ -244,12 +265,14 @@ export function main(argv: string[]) {
           drawdownPct: result.metrics.maxDrawdownPct, targetReached: closed && affectedActions.length === 0 && result.metrics.totalReturnPct >= 10,
           affectedActions,
           closed, trades: result.trades.length, fills: result.fills.length,
+          ...(history ? { historyResetAudit: history.audit() } : {}),
+          ...(activation ? { activation: activation.audit() } : {}),
           riskEvents: wrapper.events, startState: byDate.get(window.start),
           benchmarkKospiPct: (byDate.get(window.tradingDays.at(-1)!)!.kospi / byDate.get(window.start)!.kospi - 1) * 100 };
         results.push(summary);
         writeFileSync(path.join(outputPath, `${candidate.id}__${window.start}.json`), JSON.stringify({
           candidate, stage, inputSha256: createHash('sha256').update(bytes).digest('hex'), parameters, risk, seed, slippageBps,
-          engineVersion: ENGINE_VERSION, strategyVersion: base.version, summary, result,
+          ...researchOptions, engineVersion: ENGINE_VERSION, strategyVersion: activation?.strategy.version ?? history?.strategy.version ?? base.version, summary, result,
         }));
       } catch (error) {
         const failure = { candidate, stage, start: window.start, end: window.end, status: 'failed',
@@ -265,7 +288,7 @@ export function main(argv: string[]) {
       return true;
     });
     const summary = { candidate, stage, inputSha256: createHash('sha256').update(bytes).digest('hex'), parameters,
-      all: summarize(results), nonoverlapping: summarize(independent),
+      ...researchOptions, all: summarize(results), nonoverlapping: summarize(independent),
       windows: results, elapsedMs: Math.round(performance.now() - started) };
     writeFileSync(path.join(outputPath, `${candidate.id}__summary.json`), JSON.stringify(summary));
     process.stdout.write(`${JSON.stringify({ id: candidate.id, stage, ...summary.all, ms: summary.elapsedMs })}\n`);

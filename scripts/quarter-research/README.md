@@ -31,7 +31,7 @@ python scripts/quarter-research/add_annual_inputs.py data/kr-quarter-research/st
 node --import tsx scripts/quarter-research/quarter-engine.ts data/kr-quarter-research/stock-50-input.json.gz data/kr-quarter-research/reproduction-stock-confirmation confirmation scripts/quarter-research/configs/stock-frozen-diagnostics.json
 ```
 
-인수는 `입력.gz 출력폴더 단계 [후보.json] [슬리피지bp] [시드] [앞에서 실행할 창 수 또는 0] [초기현금]` 순서다. 단계는 `development`, `validation`, `confirmation`이다. 출력 폴더는 새 경로를 권장한다. 같은 경로를 재사용하면 같은 이름 결과를 덮어쓰므로 실패 원본은 먼저 보존해야 한다.
+인수는 `입력.gz 출력폴더 단계 [후보.json] [슬리피지bp] [시드] [앞에서 실행할 창 수 또는 0] [초기현금] [옵션.json]` 순서다. 단계는 `development`, `validation`, `confirmation`이다. 출력 폴더는 새 경로를 권장한다. 같은 경로를 재사용하면 같은 이름 결과를 덮어쓰므로 실패 원본은 먼저 보존해야 한다.
 
 월 첫 실제 거래일부터 달력 3개월 계좌를 시작하며 전체 창이 단계와 자료 기간 안에 있어야 한다. 기존 전략의 종가 신호·다음 시가 체결·두 단계 회전을 그대로 따른다. 주식 세금은 날짜별 프로필, ETF 세금은 0, 수수료는 편도 1.5bp, 기본 슬리피지는 5bp, 직전 거래량의 1% 체결 한도를 사용한다. ETF 가격 2천원 미만도 5원 호가를 적용하는 보수적 단순화가 있다.
 
@@ -119,3 +119,22 @@ python scripts/quarter-research/build_value_evidence.py data/kr-quarter-research
 현재 관찰의 `--quarantine-unresolved`는 모든 해당 종목에 미확인 기업행위 이후 실제 일봉만 제공한다. 과거 성과에 같은 처리를 소급 적용한 것은 아니다. 가격 결손 정정용 50종목 비교에는 이전 정책을 유지해 결손 보강의 영향만 측정했다. 이 두 현재 입력의 종목군·자료 적격성 정책을 구분한다.
 
 전체 집계에는 `value-experiments.json`의 모든 실행이 필요하다. 고정 비용·시드·입력 해시·개별 결과를 확인하고 초기 실패 파일은 성공 계좌 집계에 넣지 않는다. 관련 TypeScript 확인에는 `tests/unit/quarterly-value-research.test.ts`와 기존 `tests/unit/low-per-high-roe-rank.test.ts`를 포함한다. 최신 결과와 남은 과제는 `docs/research/kr-current-quarter-value-findings.md`에 있다.
+
+
+## 미확인 이력·모든 조건 발생일·확인 대기
+
+`configs/entry-experiments.json`의 19개 실행 조합은 후보별 25개 요약·1,091개 완료 계좌를 만든다. 앞선 결과를 덮어쓰지 않는 별도 후속 조사다. 실행기의 마지막 인수 `options.json`은 `starts`(중복 없는 오름차순 실제 거래일), `resetUncertainHistory`, `activationConfirmationBars`를 받는다. 고정 시작점 오류나 미완성 만기를 조용히 제외하지 않으며 옵션 원문 바이트의 해시를 모든 결과에 남긴다.
+
+```bash
+python scripts/quarter-research/prepare_entry_dates.py data/kr-quarter-research/expanded/stock-200-verified-input.json.gz scripts/quarter-research/configs data/kr-quarter-research/entry/date-audit.json
+node --import tsx scripts/quarter-research/quarter-engine.ts data/kr-quarter-research/expanded/stock-200-verified-input.json.gz data/kr-quarter-research/entry/reproduction-daily-confirmation confirmation scripts/quarter-research/configs/entry-candidates.json 5 204 0 100000000 scripts/quarter-research/configs/entry-confirmation-options.json
+node --import tsx scripts/quarter-research/quarter-engine.ts data/kr-quarter-research/expanded/stock-200-verified-input.json.gz data/kr-quarter-research/entry/reproduction-confirm5-confirmation confirmation scripts/quarter-research/configs/expanded-recovery.json 5 204 0 100000000 scripts/quarter-research/configs/entry-confirm5-confirmation-options.json
+python scripts/quarter-research/build_entry_evidence.py data/kr-quarter-research data/kr-quarter-research/entry/evidence
+pnpm exec vitest run tests/unit/quarter-research.test.ts tests/unit/recovery-quarter.test.ts tests/unit/uncertain-history-quarter.test.ts tests/unit/confirmed-entry-quarter.test.ts
+```
+
+날짜 생성기는 성과를 읽지 않고 25% 이상 변동성·20일 양수·20일 이동평균 위인 완성된 창을 고른다. `entry-30-*.json`은 같은 목록의 30% 부분집합이고 `entry-confirm{3,5,10}-*.json`은 그 시작점과 원래 만기를 유지한 최초 확인 대기다. 모든 실행을 재현하려면 실험 목록의 입력·선택·비용·시드·옵션 조합을 지정한 경로에서 완료한 뒤 집계기를 실행한다. 위 `reproduction-*` 예시는 별도 경로이므로 전체 집계 목록을 대체하지 않는다.
+
+가격 이력 옵션은 현재까지 발생한 미확인 사건 이후의 실제 일봉만 신호에 공급한다. 새 순위 결정과 다음 단계 매수 자격에 적용하되 보유 포지션의 실제 가격과 청산은 유지한다. 확인 대기는 처음 조건을 연속 충족한 날에 최초 순위를 정하고, 이후 원래 회전 일정으로 진행한다. `activation`은 조건 확인 완료 기록이며 실제 체결은 `fills`로 판단한다. 만기 청산 신호와 같은 날 확인돼도 주문은 위험 규칙에서 취소될 수 있다. 옵션이 없으면 기존 동작·결과 형식을 유지한다.
+
+집계기는 1,091개 원본 계좌·25개 요약의 해시와 실행 설정을 대조하고 전체 및 비중첩 통계를 다시 계산한다. 공개용 요약은 `docs/research/kr-current-quarter-entry-results/`, 해시 일치 원본은 로컬 `data/kr-quarter-research/entry/`에 있다. [진입일 후속 결과](../../docs/research/kr-current-quarter-entry-findings.md)에 가격 처리 전후, 모든 조건 문턱, 확인 대기와 현재 대기 상태를 함께 기록했다.

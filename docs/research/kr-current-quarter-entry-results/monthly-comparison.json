@@ -1,0 +1,348 @@
+[
+  {
+    "stage": "development",
+    "originalSha256": "e66bb17954b917defedcca5c0fbc044b2b0068cd1b392e619a016196d07254de",
+    "before": {
+      "count": 46,
+      "targetHits": 5,
+      "targetFrequencyPct": 10.869565217391305,
+      "medianPct": -1.9756175824999889,
+      "p10Pct": -7.879725377750008,
+      "worstPct": -11.587973680000008,
+      "lossFrequencyPct": 65.21739130434783,
+      "worstDrawdownPct": -12.348170808949543,
+      "unclosed": 1
+    },
+    "after": {
+      "count": 46,
+      "targetHits": 7,
+      "targetFrequencyPct": 15.217391304347828,
+      "medianPct": -0.7314558725000087,
+      "p10Pct": -7.875079143750002,
+      "worstPct": -11.587973680000008,
+      "lossFrequencyPct": 60.86956521739131,
+      "worstDrawdownPct": -11.920155872609806,
+      "unclosed": 1
+    },
+    "beforeNonoverlapping": {
+      "count": 14,
+      "targetHits": 2,
+      "targetFrequencyPct": 14.285714285714285,
+      "medianPct": -2.5683983387499945,
+      "p10Pct": -7.500053499499998,
+      "worstPct": -7.860878658000003,
+      "lossFrequencyPct": 78.57142857142857,
+      "worstDrawdownPct": -8.120446777774537,
+      "unclosed": 0
+    },
+    "afterNonoverlapping": {
+      "count": 14,
+      "targetHits": 3,
+      "targetFrequencyPct": 21.428571428571427,
+      "medianPct": -2.4924736249999913,
+      "p10Pct": -5.981398035250014,
+      "worstPct": -7.851586189999993,
+      "lossFrequencyPct": 71.42857142857143,
+      "worstDrawdownPct": -8.120446777774537,
+      "unclosed": 0
+    },
+    "changed": [
+      {
+        "start": "2016-10-04",
+        "beforePct": -2.0670104300000047,
+        "afterPct": -2.720348989999999,
+        "beforeHit": false,
+        "afterHit": false
+      },
+      {
+        "start": "2016-11-01",
+        "beforePct": -2.9685585674999904,
+        "afterPct": -0.04713287499999996,
+        "beforeHit": false,
+        "afterHit": false
+      },
+      {
+        "start": "2018-03-02",
+        "beforePct": -2.8358323304999877,
+        "afterPct": 2.3590590249999988,
+        "beforeHit": false,
+        "afterHit": false
+      },
+      {
+        "start": "2018-04-02",
+        "beforePct": -2.3009078545000006,
+        "afterPct": -1.20164074500001,
+        "beforeHit": false,
+        "afterHit": false
+      },
+      {
+        "start": "2018-08-01",
+        "beforePct": -1.1363777050000023,
+        "afterPct": -0.4085903150000014,
+        "beforeHit": false,
+        "afterHit": false
+      },
+      {
+        "start": "2018-09-03",
+        "beforePct": -1.9143360624999994,
+        "afterPct": -2.0935358700000073,
+        "beforeHit": false,
+        "afterHit": false
+      },
+      {
+        "start": "2019-01-02",
+        "beforePct": -10.574167677499979,
+        "afterPct": -11.200880844999983,
+        "beforeHit": false,
+        "afterHit": false
+      },
+      {
+        "start": "2019-08-01",
+        "beforePct": -4.375182042499992,
+        "afterPct": 17.400974870000006,
+        "beforeHit": false,
+        "afterHit": true
+      },
+      {
+        "start": "2019-09-02",
+        "beforePct": 3.0706730975000207,
+        "afterPct": -0.3498010875000235,
+        "beforeHit": false,
+        "afterHit": false
+      },
+      {
+        "start": "2019-10-01",
+        "beforePct": -7.860878658000003,
+        "afterPct": 11.364962765000008,
+        "beforeHit": false,
+        "afterHit": true
+      }
+    ]
+  },
+  {
+    "stage": "validation",
+    "originalSha256": "47ad68ef7c13daa16abf08b833e290b5eb7ef0eb5618de1c693c564f9807ccee",
+    "before": {
+      "count": 45,
+      "targetHits": 10,
+      "targetFrequencyPct": 22.22222222222222,
+      "medianPct": 2.2033612919999834,
+      "p10Pct": -4.581524271399995,
+      "worstPct": -7.314874161499995,
+      "lossFrequencyPct": 35.55555555555556,
+      "worstDrawdownPct": -10.260183368194253,
+      "unclosed": 1
+    },
+    "after": {
+      "count": 45,
+      "targetHits": 12,
+      "targetFrequencyPct": 26.666666666666668,
+      "medianPct": 0.9750333599999772,
+      "p10Pct": -4.7326918510000064,
+      "worstPct": -7.314874161499995,
+      "lossFrequencyPct": 33.33333333333333,
+      "worstDrawdownPct": -10.260183368194253,
+      "unclosed": 1
+    },
+    "beforeNonoverlapping": {
+      "count": 13,
+      "targetHits": 2,
+      "targetFrequencyPct": 15.384615384615385,
+      "medianPct": -0.8131836637499834,
+      "p10Pct": -4.775801223000005,
+      "worstPct": -7.314874161499995,
+      "lossFrequencyPct": 61.53846153846154,
+      "worstDrawdownPct": -8.940513054457867,
+      "unclosed": 0
+    },
+    "afterNonoverlapping": {
+      "count": 13,
+      "targetHits": 3,
+      "targetFrequencyPct": 23.076923076923077,
+      "medianPct": -0.38248385499999316,
+      "p10Pct": -4.775801223000005,
+      "worstPct": -7.314874161499995,
+      "lossFrequencyPct": 53.84615384615385,
+      "worstDrawdownPct": -8.940513054457867,
+      "unclosed": 0
+    },
+    "changed": [
+      {
+        "start": "2020-04-01",
+        "beforePct": 8.17971756,
+        "afterPct": 19.405701079999993,
+        "beforeHit": false,
+        "afterHit": true
+      },
+      {
+        "start": "2020-05-04",
+        "beforePct": 8.17971756,
+        "afterPct": 19.405701079999993,
+        "beforeHit": false,
+        "afterHit": true
+      },
+      {
+        "start": "2020-06-01",
+        "beforePct": 4.87003568500004,
+        "afterPct": 3.8155854474999806,
+        "beforeHit": false,
+        "afterHit": false
+      },
+      {
+        "start": "2021-06-01",
+        "beforePct": -3.938812137499992,
+        "afterPct": -6.310005937499996,
+        "beforeHit": false,
+        "afterHit": false
+      },
+      {
+        "start": "2021-09-01",
+        "beforePct": 3.5972596049999916,
+        "afterPct": 4.511923809999985,
+        "beforeHit": false,
+        "afterHit": false
+      },
+      {
+        "start": "2022-05-02",
+        "beforePct": -0.8131836637499834,
+        "afterPct": 2.643637624999995,
+        "beforeHit": false,
+        "afterHit": false
+      },
+      {
+        "start": "2022-06-02",
+        "beforePct": 4.65492754950001,
+        "afterPct": 7.877209175000011,
+        "beforeHit": false,
+        "afterHit": false
+      },
+      {
+        "start": "2023-04-03",
+        "beforePct": 2.2033612919999834,
+        "afterPct": 0.017821771999981806,
+        "beforeHit": false,
+        "afterHit": false
+      },
+      {
+        "start": "2023-05-02",
+        "beforePct": 2.667490734999989,
+        "afterPct": 0.4355128150000054,
+        "beforeHit": false,
+        "afterHit": false
+      },
+      {
+        "start": "2023-06-01",
+        "beforePct": -2.2469435270000115,
+        "afterPct": -4.334417760000009,
+        "beforeHit": false,
+        "afterHit": false
+      },
+      {
+        "start": "2023-08-01",
+        "beforePct": -5.304240820000028,
+        "afterPct": -6.2459557695,
+        "beforeHit": false,
+        "afterHit": false
+      },
+      {
+        "start": "2023-09-01",
+        "beforePct": -1.5217081699999913,
+        "afterPct": -2.8539789420000017,
+        "beforeHit": false,
+        "afterHit": false
+      }
+    ]
+  },
+  {
+    "stage": "confirmation",
+    "originalSha256": "deffdf06c2985b2101e34ab3a5a06fab8d15891534f3f6e19df4a6d15d158ea5",
+    "before": {
+      "count": 29,
+      "targetHits": 16,
+      "targetFrequencyPct": 55.172413793103445,
+      "medianPct": 11.009781525000006,
+      "p10Pct": -1.1920879039999943,
+      "worstPct": -2.053807154999987,
+      "lossFrequencyPct": 20.689655172413794,
+      "worstDrawdownPct": -9.370341384491143,
+      "unclosed": 0
+    },
+    "after": {
+      "count": 29,
+      "targetHits": 15,
+      "targetFrequencyPct": 51.724137931034484,
+      "medianPct": 10.370836254999993,
+      "p10Pct": -1.3441294380000124,
+      "worstPct": -2.0096234450000083,
+      "lossFrequencyPct": 20.689655172413794,
+      "worstDrawdownPct": -9.370341384491143,
+      "unclosed": 0
+    },
+    "beforeNonoverlapping": {
+      "count": 9,
+      "targetHits": 5,
+      "targetFrequencyPct": 55.55555555555556,
+      "medianPct": 10.370836254999993,
+      "p10Pct": -1.1920879039999943,
+      "worstPct": -1.509679350000026,
+      "lossFrequencyPct": 22.22222222222222,
+      "worstDrawdownPct": -9.370341384491143,
+      "unclosed": 0
+    },
+    "afterNonoverlapping": {
+      "count": 9,
+      "targetHits": 4,
+      "targetFrequencyPct": 44.44444444444444,
+      "medianPct": 3.692213164999991,
+      "p10Pct": -1.1920879039999943,
+      "worstPct": -1.509679350000026,
+      "lossFrequencyPct": 22.22222222222222,
+      "worstDrawdownPct": -9.370341384491143,
+      "unclosed": 0
+    },
+    "changed": [
+      {
+        "start": "2024-09-02",
+        "beforePct": 3.8006399649999967,
+        "afterPct": 3.030207000000007,
+        "beforeHit": false,
+        "afterHit": false
+      },
+      {
+        "start": "2025-01-02",
+        "beforePct": -0.5354229549999978,
+        "afterPct": -1.639520434999986,
+        "beforeHit": false,
+        "afterHit": false
+      },
+      {
+        "start": "2025-02-03",
+        "beforePct": -2.053807154999987,
+        "afterPct": -1.302741960000009,
+        "beforeHit": false,
+        "afterHit": false
+      },
+      {
+        "start": "2025-03-04",
+        "beforePct": 11.631802562500004,
+        "afterPct": 2.0838570925000077,
+        "beforeHit": true,
+        "afterHit": false
+      },
+      {
+        "start": "2025-04-01",
+        "beforePct": 11.856586497500011,
+        "afterPct": 11.22947729499999,
+        "beforeHit": true,
+        "afterHit": true
+      },
+      {
+        "start": "2025-05-02",
+        "beforePct": 11.009781525000006,
+        "afterPct": 10.72691507000001,
+        "beforeHit": true,
+        "afterHit": true
+      }
+    ]
+  }
+]

@@ -1,0 +1,10 @@
+{
+  "resetUncertainHistory": true,
+  "starts": [],
+  "dateSelection": {
+    "minimumVolatility": 0.25,
+    "positiveReturn20": true,
+    "aboveSma20": true,
+    "inputSha256": "e057c3e60a06d181bf9715380a32b0ef343590b495adad2562ac15c414b6d5c7"
+  }
+}
