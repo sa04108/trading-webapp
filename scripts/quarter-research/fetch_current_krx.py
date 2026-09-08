@@ -11,7 +11,20 @@ import time
 import urllib.request
 
 
-def fetch(env_path, markets=("KOSPI", "KOSDAQ"), through="20260908"):
+def collection_days(through, requested=None):
+    """현재 스냅샷의 허용 날짜 중 아직 필요한 날짜만 중복 없이 조회한다."""
+    allowed = ("20260818", "20260819", "20260820", "20260824", "20260904", "20260907", "20260908")
+    eligible = [d for d in allowed if d <= through]
+    if requested is None:
+        return eligible
+    if (not isinstance(requested, list) or not requested or any(not isinstance(d, str) or d not in eligible for d in requested)
+            or requested != sorted(set(requested))):
+        raise ValueError("조회 날짜는 허용 스냅샷 범위에서 중복 없이 정렬한 목록이어야 합니다")
+    return requested
+
+
+def fetch(env_path, markets=("KOSPI", "KOSDAQ"), through="20260908", days=None):
+    days = collection_days(through, days)
     environment = {}
     for line in env_path.read_text().splitlines():
         if "=" in line and not line.lstrip().startswith("#"):
@@ -25,7 +38,6 @@ def fetch(env_path, markets=("KOSPI", "KOSDAQ"), through="20260908"):
     if base != "https://data-dbg.krx.co.kr":
         raise ValueError("확인된 KRX 공식 주소만 사용합니다")
     database = sqlite3.connect(Path(environment["DATABASE_PATH"]).resolve().as_uri() + "?mode=ro", uri=True)
-    days = ("20260818", "20260819", "20260820", "20260824", "20260904", "20260907", "20260908")
     with gzip.GzipFile(fileobj=sys.stdout.buffer, mode="wb", mtime=0) as stream:
         def emit(row):
             stream.write((json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n").encode())
@@ -69,6 +81,7 @@ if __name__ == "__main__":
     parser.add_argument("--env-file", type=Path, required=True)
     parser.add_argument("--markets", choices=("KOSPI", "KOSDAQ"), nargs="+", default=["KOSPI", "KOSDAQ"])
     parser.add_argument("--through", choices=("20260907", "20260908"), default="20260908")
+    parser.add_argument("--days-json", help="허용 날짜 중 새로 조회할 YYYYMMDD 목록")
     args = parser.parse_args()
-    if not fetch(args.env_file, args.markets, args.through):
+    if not fetch(args.env_file, args.markets, args.through, json.loads(args.days_json) if args.days_json else None):
         raise SystemExit(1)

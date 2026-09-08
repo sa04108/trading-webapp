@@ -1,0 +1,286 @@
+{
+  "asof": "2026-09-08",
+  "exportSourceSha256": "995d818bc1729bea3c4ebabbbc7981bee406ed164fc2a2ec2e3e41343027ab01",
+  "exportAvailability": "observation month start plus 90 calendar days; latest vintage, not certified point-in-time",
+  "currentKnownExport": {
+    "observed": "2026-06-01",
+    "available": "2026-08-30",
+    "value": 102170000000.0,
+    "yoy": 0.7075632836289856
+  },
+  "sourceSha256": "278a9191ed732e28d909afb3bb5ff0aac3645c069a6b2e7bbb523b04a79828cd",
+  "records": [
+    {
+      "directory": "rank-retention/20-validation",
+      "candidate": {
+        "id": "rank-retention-20",
+        "strategyId": "rank-retention-momentum",
+        "topN": 5,
+        "rebalanceBars": 20,
+        "parameters": {
+          "formationDays": 20,
+          "skipDays": 0,
+          "topN": 5,
+          "retentionRank": 10
+        }
+      },
+      "stage": "validation",
+      "condition": "all",
+      "sourceSha256": "571d499ea0f4274c9d0657465018157be6edbc39defca6125df14c5b7c2b66d3",
+      "all": {
+        "count": 19,
+        "targetHits": 18,
+        "targetFrequencyPct": 94.73684210526315,
+        "medianPct": 11.972501135000012,
+        "p10Pct": 10.741522483500013,
+        "worstPct": -14.05504273,
+        "lossFrequencyPct": 5.263157894736842,
+        "worstDrawdownPct": -16.772257267852297,
+        "unclosed": 0
+      },
+      "nonoverlapping": {
+        "count": 3,
+        "targetHits": 2,
+        "targetFrequencyPct": 66.66666666666666,
+        "medianPct": 11.684146132499995,
+        "p10Pct": -8.907204957500001,
+        "worstPct": -14.05504273,
+        "lossFrequencyPct": 33.33333333333333,
+        "worstDrawdownPct": -16.772257267852297,
+        "unclosed": 0
+      }
+    },
+    {
+      "directory": "rank-retention/20-validation",
+      "candidate": {
+        "id": "rank-retention-20",
+        "strategyId": "rank-retention-momentum",
+        "topN": 5,
+        "rebalanceBars": 20,
+        "parameters": {
+          "formationDays": 20,
+          "skipDays": 0,
+          "topN": 5,
+          "retentionRank": 10
+        }
+      },
+      "stage": "validation",
+      "condition": "export_growth",
+      "sourceSha256": "571d499ea0f4274c9d0657465018157be6edbc39defca6125df14c5b7c2b66d3",
+      "all": {
+        "count": 0
+      },
+      "nonoverlapping": {
+        "count": 0
+      }
+    },
+    {
+      "directory": "rank-retention/20-validation",
+      "candidate": {
+        "id": "rank-retention-20",
+        "strategyId": "rank-retention-momentum",
+        "topN": 5,
+        "rebalanceBars": 20,
+        "parameters": {
+          "formationDays": 20,
+          "skipDays": 0,
+          "topN": 5,
+          "retentionRank": 10
+        }
+      },
+      "stage": "validation",
+      "condition": "recovery",
+      "sourceSha256": "571d499ea0f4274c9d0657465018157be6edbc39defca6125df14c5b7c2b66d3",
+      "all": {
+        "count": 9,
+        "targetHits": 9,
+        "targetFrequencyPct": 100.0,
+        "medianPct": 14.211613713250015,
+        "p10Pct": 11.603824754699996,
+        "worstPct": 11.2825392435,
+        "lossFrequencyPct": 0.0,
+        "worstDrawdownPct": -11.918097405000005,
+        "unclosed": 0
+      },
+      "nonoverlapping": {
+        "count": 1,
+        "targetHits": 1,
+        "targetFrequencyPct": 100.0,
+        "medianPct": 11.684146132499995,
+        "p10Pct": 11.684146132499995,
+        "worstPct": 11.684146132499995,
+        "lossFrequencyPct": 0.0,
+        "worstDrawdownPct": -7.752731364411336,
+        "unclosed": 0
+      }
+    },
+    {
+      "directory": "rank-retention/20-validation",
+      "candidate": {
+        "id": "rank-retention-20",
+        "strategyId": "rank-retention-momentum",
+        "topN": 5,
+        "rebalanceBars": 20,
+        "parameters": {
+          "formationDays": 20,
+          "skipDays": 0,
+          "topN": 5,
+          "retentionRank": 10
+        }
+      },
+      "stage": "validation",
+      "condition": "export_recovery",
+      "sourceSha256": "571d499ea0f4274c9d0657465018157be6edbc39defca6125df14c5b7c2b66d3",
+      "all": {
+        "count": 0
+      },
+      "nonoverlapping": {
+        "count": 0
+      }
+    },
+    {
+      "directory": "rank-retention/20-confirmation",
+      "candidate": {
+        "id": "rank-retention-20",
+        "strategyId": "rank-retention-momentum",
+        "topN": 5,
+        "rebalanceBars": 20,
+        "parameters": {
+          "formationDays": 20,
+          "skipDays": 0,
+          "topN": 5,
+          "retentionRank": 10
+        }
+      },
+      "stage": "confirmation",
+      "condition": "all",
+      "sourceSha256": "f002085d405a7f7fed3f3462d68e39e2799932c8a6f3b54e13743483b966a53e",
+      "all": {
+        "count": 58,
+        "targetHits": 40,
+        "targetFrequencyPct": 68.96551724137932,
+        "medianPct": 12.079500562500012,
+        "p10Pct": -10.961597131450013,
+        "worstPct": -17.186758227499986,
+        "lossFrequencyPct": 31.03448275862069,
+        "worstDrawdownPct": -22.114609391012287,
+        "unclosed": 0
+      },
+      "nonoverlapping": {
+        "count": 4,
+        "targetHits": 3,
+        "targetFrequencyPct": 75.0,
+        "medianPct": 11.505945267500007,
+        "p10Pct": -3.8171803147499848,
+        "worstPct": -10.174003897499983,
+        "lossFrequencyPct": 25.0,
+        "worstDrawdownPct": -21.005317080936713,
+        "unclosed": 0
+      }
+    },
+    {
+      "directory": "rank-retention/20-confirmation",
+      "candidate": {
+        "id": "rank-retention-20",
+        "strategyId": "rank-retention-momentum",
+        "topN": 5,
+        "rebalanceBars": 20,
+        "parameters": {
+          "formationDays": 20,
+          "skipDays": 0,
+          "topN": 5,
+          "retentionRank": 10
+        }
+      },
+      "stage": "confirmation",
+      "condition": "export_growth",
+      "sourceSha256": "f002085d405a7f7fed3f3462d68e39e2799932c8a6f3b54e13743483b966a53e",
+      "all": {
+        "count": 35,
+        "targetHits": 24,
+        "targetFrequencyPct": 68.57142857142857,
+        "medianPct": 12.16251863500002,
+        "p10Pct": -12.649704556500001,
+        "worstPct": -17.186758227499986,
+        "lossFrequencyPct": 31.428571428571427,
+        "worstDrawdownPct": -21.19174976405025,
+        "unclosed": 0
+      },
+      "nonoverlapping": {
+        "count": 2,
+        "targetHits": 2,
+        "targetFrequencyPct": 100.0,
+        "medianPct": 13.307701091500013,
+        "p10Pct": 10.696127170300018,
+        "worstPct": 10.043233690000019,
+        "lossFrequencyPct": 0.0,
+        "worstDrawdownPct": -8.95131162795172,
+        "unclosed": 0
+      }
+    },
+    {
+      "directory": "rank-retention/20-confirmation",
+      "candidate": {
+        "id": "rank-retention-20",
+        "strategyId": "rank-retention-momentum",
+        "topN": 5,
+        "rebalanceBars": 20,
+        "parameters": {
+          "formationDays": 20,
+          "skipDays": 0,
+          "topN": 5,
+          "retentionRank": 10
+        }
+      },
+      "stage": "confirmation",
+      "condition": "recovery",
+      "sourceSha256": "f002085d405a7f7fed3f3462d68e39e2799932c8a6f3b54e13743483b966a53e",
+      "all": {
+        "count": 1,
+        "targetHits": 1,
+        "targetFrequencyPct": 100.0,
+        "medianPct": 12.89861940999999,
+        "p10Pct": 12.89861940999999,
+        "worstPct": 12.89861940999999,
+        "lossFrequencyPct": 0.0,
+        "worstDrawdownPct": -8.102594001925967,
+        "unclosed": 0
+      },
+      "nonoverlapping": {
+        "count": 1,
+        "targetHits": 1,
+        "targetFrequencyPct": 100.0,
+        "medianPct": 12.89861940999999,
+        "p10Pct": 12.89861940999999,
+        "worstPct": 12.89861940999999,
+        "lossFrequencyPct": 0.0,
+        "worstDrawdownPct": -8.102594001925967,
+        "unclosed": 0
+      }
+    },
+    {
+      "directory": "rank-retention/20-confirmation",
+      "candidate": {
+        "id": "rank-retention-20",
+        "strategyId": "rank-retention-momentum",
+        "topN": 5,
+        "rebalanceBars": 20,
+        "parameters": {
+          "formationDays": 20,
+          "skipDays": 0,
+          "topN": 5,
+          "retentionRank": 10
+        }
+      },
+      "stage": "confirmation",
+      "condition": "export_recovery",
+      "sourceSha256": "f002085d405a7f7fed3f3462d68e39e2799932c8a6f3b54e13743483b966a53e",
+      "all": {
+        "count": 0
+      },
+      "nonoverlapping": {
+        "count": 0
+      }
+    }
+  ]
+}

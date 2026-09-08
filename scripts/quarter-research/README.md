@@ -287,3 +287,29 @@ pnpm exec vitest run tests/unit/rank-retention-quarter.test.ts tests/unit/target
 집계 전에 전체 실행이 필요하다. 집계기는 설정·원본 해시·목표 판정·재개 현금과 위험·보유 수를 대조하고, 현금 시작의 최초 매수가 같은지 확인한다. 전체 동일 날짜 비교와 기업행위 대상도 출력한다. 후보와 통과 규칙은 [사전 규칙](../../docs/research/kr-current-quarter-rank-retention-protocol.md)에 고정했다. 반복한 과거 탐색이며 독립적인 새 시장 관측이 아니다.
 
 첫 비교의 전체 성과·수익 감소·비용과 남은 확인 사항은 [보유 순위 완충 결과](../../docs/research/kr-current-quarter-rank-retention-findings.md)에 있다.
+
+
+## 보유 순위 완충 후보의 실행·비용·환경 진단
+
+`configs/rank-retention-diagnostics-experiments.json`은 기본 20일·5종목·20봉·유지 10위를 고정한 20개 실행·717개 새 계좌다. 실행 변화 462개, 비용 154개, 25% 추가 조건 31개, 개발 월간·2011년 70개를 포함한다. 기존 옵션·입력·날짜를 그대로 사용하고 동일 설정의 기존 재개 계좌와 대조한다. 최초 새 후보의 기본 77개는 재사용한다.
+
+```bash
+node --import tsx scripts/quarter-research/quarter-engine.ts data/kr-quarter-research/expanded/stock-200-verified-input.json.gz data/kr-quarter-research/rank-retention-diagnostics/reproduction-seed205-confirmation confirmation scripts/quarter-research/configs/rank-retention-20.json 5 205 0 100000000 scripts/quarter-research/configs/target-retry-seed205-offset0-confirmation-options.json
+python scripts/quarter-research/build_rank_retention_diagnostics.py data/kr-quarter-research data/kr-quarter-research/rank-retention-diagnostics/evidence
+python scripts/quarter-research/analyze_context.py data/kr-quarter-research data/kr-quarter-research/rank-retention-diagnostics/context.json rank-retention/20-validation rank-retention/20-confirmation
+```
+
+집계 전에 실험 목록의 모든 출력이 필요하며 `reproduction-*`는 별도 예시다. 집계기는 25·30·35%의 원래 날짜를 대조하고 실행·비용·현재 단계 문턱의 통과와 개발·2011년 성과를 구분한다. 최초 매수·현금·비용·위험·보유 수·목표 판정을 확인하고 미청산 계좌의 마지막 실제 거래량과 잔량을 별도로 감사한다. 단위 변경이 최종 매도 구간에 있거나 다른 미청산 경로가 나타나면 조용히 기존 한도를 대입하지 않고 추가 확인을 요구한다.
+
+전체 성과·과거 실패·잔량과 현재 표본 한계는 [후속 진단 결과](../../docs/research/kr-current-quarter-rank-retention-diagnostics-findings.md)에 있다.
+
+## 필요한 현재 KRX 날짜만 추가 수집
+
+`fetch_current_krx.py --days-json '["20260908"]'`는 보존된 스냅샷의 허용 날짜 중 지정한 날짜만 조회한다. 코스피·코스닥을 모두 지정하면 각각 한 번씩 호출한다. 생략하면 기존 날짜 목록을 사용하며 `--through`보다 이후 날짜·중복·역순·허용 범위 밖 날짜는 거부한다. 인증키는 기존 인증 환경에서 읽고 출력에 포함하지 않는다. 원문은 기존 파일을 덮어쓰지 않고 별도 gzip 파일로 보존한다. 사용량 원장은 읽기 전용이며 운영 배포나 주문 기능은 호출하지 않는다.
+
+```bash
+python scripts/quarter-research/fetch_current_krx.py --env-file /path/to/existing/app.env --days-json '["20260908"]' > current-krx-sep8.jsonl.gz
+python -m unittest discover -s scripts/quarter-research -p test_current_krx_fetch.py
+```
+
+수집기 테스트는 허용 날짜 검증과 두 시장의 날짜당 한 번 조회·원문 보존·사용량 원장 불변을 확인한다. 실제 시세 확보 여부는 별도 원문과 대조 결과로 확인해야 한다.

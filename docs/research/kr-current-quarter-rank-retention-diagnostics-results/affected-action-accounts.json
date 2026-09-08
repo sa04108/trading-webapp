@@ -1,0 +1,272 @@
+[
+  {
+    "directory": "rank-retention-diagnostics/stop15-development",
+    "stage": "development",
+    "diagnostic": "development",
+    "slippageBps": 5,
+    "seed": 204,
+    "rebalanceOffsetBars": 0,
+    "start": "2016-01-04",
+    "end": "2016-04-03",
+    "returnPct": -2.371057515999986,
+    "drawdownPct": -10.17268460082027,
+    "closed": true,
+    "targetReached": false,
+    "riskEvents": [
+      {
+        "date": "2016-03-31",
+        "reason": "3개월 만기 청산",
+        "equity": 97856325.38999999
+      }
+    ],
+    "affectedActions": [
+      {
+        "symbol": "018880",
+        "date": "2016-02-16",
+        "ratio": 5,
+        "type": "inferred-unit-change"
+      },
+      {
+        "symbol": "200130",
+        "date": "2016-01-15",
+        "ratio": 2,
+        "type": "inferred-unit-change"
+      }
+    ],
+    "file": "data/kr-quarter-research/rank-retention-diagnostics/stop15-development/rank-retention-20__2016-01-04.json",
+    "sha256": "066899feb58fa7de3fbf64477962fff071f7cf1f5807514052c8ac8a83f07a93",
+    "input": "data/kr-quarter-research/expanded/stock-200-verified-input.json.gz",
+    "matchesBaselineResult": true
+  },
+  {
+    "directory": "rank-retention-diagnostics/stop15-development",
+    "stage": "development",
+    "diagnostic": "development",
+    "slippageBps": 5,
+    "seed": 204,
+    "rebalanceOffsetBars": 0,
+    "start": "2018-11-01",
+    "end": "2019-01-31",
+    "returnPct": 8.077259974999995,
+    "drawdownPct": -6.046916501420451,
+    "closed": true,
+    "targetReached": false,
+    "riskEvents": [
+      {
+        "date": "2019-01-30",
+        "reason": "3개월 만기 청산",
+        "equity": 108077259.975
+      }
+    ],
+    "affectedActions": [
+      {
+        "symbol": "000100",
+        "date": "2018-12-27",
+        "ratio": 1.045015742516114,
+        "type": "unresolved"
+      }
+    ],
+    "file": "data/kr-quarter-research/rank-retention-diagnostics/stop15-development/rank-retention-20__2018-11-01.json",
+    "sha256": "b66ce0b46606a1bfca85dd6e23a22310eb9394b308b9f9aa730889df4f4e4689",
+    "input": "data/kr-quarter-research/expanded/stock-200-verified-input.json.gz",
+    "matchesBaselineResult": true
+  },
+  {
+    "directory": "rank-retention-diagnostics/stop15-earlier",
+    "stage": "earlier",
+    "diagnostic": "earlier",
+    "slippageBps": 5,
+    "seed": 204,
+    "rebalanceOffsetBars": 0,
+    "start": "2011-09-20",
+    "end": "2011-12-19",
+    "returnPct": 14.11103886999998,
+    "drawdownPct": -12.304949083146234,
+    "closed": true,
+    "targetReached": false,
+    "riskEvents": [
+      {
+        "date": "2011-10-14",
+        "reason": "계좌 목표 청산",
+        "equity": 112471492.70249999
+      }
+    ],
+    "affectedActions": [
+      {
+        "symbol": "078160",
+        "date": "2011-10-07",
+        "ratio": 0.9672131147540983,
+        "type": "KRX 전일대비 기준가격 불연속"
+      }
+    ],
+    "file": "data/kr-quarter-research/rank-retention-diagnostics/stop15-earlier/rank-retention-20__2011-09-20.json",
+    "sha256": "52688e54ab772a4b7a99aa5c50b8e6091cf78d5e6413dac7817f2b2eb1ab0057",
+    "input": "data/kr-quarter-research/earlier/stock-200-input.json.gz",
+    "matchesBaselineResult": true
+  },
+  {
+    "directory": "rank-retention-diagnostics/stop15-extra25-validation",
+    "stage": "validation",
+    "diagnostic": "extra25",
+    "slippageBps": 5,
+    "seed": 204,
+    "rebalanceOffsetBars": 0,
+    "start": "2021-01-22",
+    "end": "2021-04-21",
+    "returnPct": -18.458496435000004,
+    "drawdownPct": -18.458496435000004,
+    "closed": true,
+    "targetReached": false,
+    "riskEvents": [
+      {
+        "date": "2021-02-23",
+        "reason": "계좌 낙폭 중단",
+        "equity": 82468117.52
+      }
+    ],
+    "affectedActions": [
+      {
+        "symbol": "268600",
+        "date": "2021-02-01",
+        "ratio": 2,
+        "type": "inferred-unit-change"
+      }
+    ],
+    "file": "data/kr-quarter-research/rank-retention-diagnostics/stop15-extra25-validation/rank-retention-20__2021-01-22.json",
+    "sha256": "2d41ac3ec7f8c227d972b6778b1cc53eacf8b6a3ab98ed95b8574830d2634860",
+    "input": "data/kr-quarter-research/expanded/stock-200-verified-input.json.gz",
+    "matchesBaselineResult": true
+  },
+  {
+    "directory": "rank-retention-diagnostics/stop15-extra25-validation",
+    "stage": "validation",
+    "diagnostic": "extra25",
+    "slippageBps": 5,
+    "seed": 204,
+    "rebalanceOffsetBars": 0,
+    "start": "2021-01-25",
+    "end": "2021-04-24",
+    "returnPct": -16.82440703999999,
+    "drawdownPct": -18.772193910000002,
+    "closed": true,
+    "targetReached": false,
+    "riskEvents": [
+      {
+        "date": "2021-02-24",
+        "reason": "계좌 낙폭 중단",
+        "equity": 81227806.09
+      }
+    ],
+    "affectedActions": [
+      {
+        "symbol": "268600",
+        "date": "2021-02-01",
+        "ratio": 2,
+        "type": "inferred-unit-change"
+      }
+    ],
+    "file": "data/kr-quarter-research/rank-retention-diagnostics/stop15-extra25-validation/rank-retention-20__2021-01-25.json",
+    "sha256": "503bf8818bb2b295f01a33b7b318b52ac292ecda68047879317d062bf9396485",
+    "input": "data/kr-quarter-research/expanded/stock-200-verified-input.json.gz",
+    "matchesBaselineResult": true
+  },
+  {
+    "directory": "rank-retention-diagnostics/stop15-extra25-validation",
+    "stage": "validation",
+    "diagnostic": "extra25",
+    "slippageBps": 5,
+    "seed": 204,
+    "rebalanceOffsetBars": 0,
+    "start": "2021-01-26",
+    "end": "2021-04-25",
+    "returnPct": -12.445861679999993,
+    "drawdownPct": -18.88832901061549,
+    "closed": true,
+    "targetReached": false,
+    "riskEvents": [
+      {
+        "date": "2021-02-24",
+        "reason": "계좌 낙폭 중단",
+        "equity": 85392723.445
+      }
+    ],
+    "affectedActions": [
+      {
+        "symbol": "268600",
+        "date": "2021-02-01",
+        "ratio": 2,
+        "type": "inferred-unit-change"
+      }
+    ],
+    "file": "data/kr-quarter-research/rank-retention-diagnostics/stop15-extra25-validation/rank-retention-20__2021-01-26.json",
+    "sha256": "368fe6d64705997d4fef16cd7dbc99f2f9d1e73acccc0f2b3e1eed506da62b69",
+    "input": "data/kr-quarter-research/expanded/stock-200-verified-input.json.gz",
+    "matchesBaselineResult": true
+  },
+  {
+    "directory": "rank-retention-diagnostics/stop15-extra25-validation",
+    "stage": "validation",
+    "diagnostic": "extra25",
+    "slippageBps": 5,
+    "seed": 204,
+    "rebalanceOffsetBars": 0,
+    "start": "2021-01-27",
+    "end": "2021-04-26",
+    "returnPct": -15.245221607500003,
+    "drawdownPct": -18.29917271559963,
+    "closed": true,
+    "targetReached": false,
+    "riskEvents": [
+      {
+        "date": "2021-02-24",
+        "reason": "계좌 낙폭 중단",
+        "equity": 82710200.8475
+      }
+    ],
+    "affectedActions": [
+      {
+        "symbol": "268600",
+        "date": "2021-02-01",
+        "ratio": 2,
+        "type": "inferred-unit-change"
+      }
+    ],
+    "file": "data/kr-quarter-research/rank-retention-diagnostics/stop15-extra25-validation/rank-retention-20__2021-01-27.json",
+    "sha256": "a74523414862ea2546f556c814f23c15f56c40d96a45c3871ebe99cad049f8c1",
+    "input": "data/kr-quarter-research/expanded/stock-200-verified-input.json.gz",
+    "matchesBaselineResult": true
+  },
+  {
+    "directory": "rank-retention-diagnostics/stop15-extra25-validation",
+    "stage": "validation",
+    "diagnostic": "extra25",
+    "slippageBps": 5,
+    "seed": 204,
+    "rebalanceOffsetBars": 0,
+    "start": "2021-02-17",
+    "end": "2021-05-16",
+    "returnPct": 10.731779670000009,
+    "drawdownPct": -13.097372684999996,
+    "closed": true,
+    "targetReached": false,
+    "riskEvents": [
+      {
+        "date": "2021-04-26",
+        "reason": "계좌 목표 청산",
+        "equity": 111004906.29
+      }
+    ],
+    "affectedActions": [
+      {
+        "symbol": "096530",
+        "date": "2021-04-23",
+        "ratio": 2,
+        "type": "inferred-unit-change"
+      }
+    ],
+    "file": "data/kr-quarter-research/rank-retention-diagnostics/stop15-extra25-validation/rank-retention-20__2021-02-17.json",
+    "sha256": "c8847c90ba63fb823cb9784946b40d59c6b29630064aab7ac2a7c6956dcba6f9",
+    "input": "data/kr-quarter-research/expanded/stock-200-verified-input.json.gz",
+    "matchesBaselineResult": false
+  }
+]

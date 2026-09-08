@@ -1,0 +1,28 @@
+{
+  "checkedOnKst": "2026-09-09",
+  "dataAsOf": "2026-09-08",
+  "observations": [
+    {
+      "source": "https://www.bok.or.kr/portal/bbs/P0000559/view.do?menuNo=200690&nttId=11064191",
+      "published": "2026-08-27",
+      "baseRateFromPct": 2.75,
+      "baseRateToPct": 3.0,
+      "riskContext": "중동 긴장·에너지 가격 불확실성"
+    },
+    {
+      "source": "https://www.korea.kr/news/policyNewsView.do?newsId=156777515",
+      "observationMonth": "2026-08",
+      "cpiYoyPct": 3.1,
+      "excludingFoodEnergyYoyPct": 3.4,
+      "telecomBaseEffectRemovedApproxYoyPct": 2.5
+    },
+    {
+      "source": "https://www.eia.gov/outlooks/STEO/",
+      "displayedReleaseDate": "2026-08-11",
+      "displayedForecastCompleted": "2026-08-06",
+      "displayedNextReleaseDate": "2026-09-09",
+      "septemberForecastAvailableAtCheck": false
+    }
+  ],
+  "method": "공식 웹페이지 본문과 공개일 표시를 직접 확인했으며 미래 성과나 당시 발표본 시계열을 인증한 것은 아님"
+}

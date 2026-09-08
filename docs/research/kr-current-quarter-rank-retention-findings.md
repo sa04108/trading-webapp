@@ -47,3 +47,5 @@
 이번 새 규칙에 대한 비용·시드·선정일 이동·선정 기간·보유 수·과거 환경 확인은 아직 완료하지 않았다. 이전 재개 정책에서 확인한 개발 월간·2011년 부진이 이 규칙으로 해결됐다고 표시하지 않는다. 현재 유사 조건에 필요한 단계별 비중첩 10개 기준, 거시 자료의 당시 발표본 인증, 기업행위 불확실성도 이번 실행으로 해소되지 않았다. 기존 회복 조건의 비중첩 표본은 검증·최근 각 1개이고 수출 성장까지 합치면 각 0개다.
 
 현재 종목군의 월말 선정 보정은 [직전 결과](kr-current-quarter-target-retry-neighbors-findings.md)에 보존했다. 이번 비교는 미래 수익 확인이나 자동매매 투입 승인이 아니며 실주문은 보내지 않았다. [전체 요약](kr-current-quarter-rank-retention-results/all-summaries.csv), [비중첩 계좌](kr-current-quarter-rank-retention-results/nonoverlapping-accounts.json), [증거 해시](kr-current-quarter-rank-retention-results/evidence-manifest.json)를 남겼다. 로컬 원본은 `data/kr-quarter-research/rank-retention/`, 재현 순서는 [README](../../scripts/quarter-research/README.md)에 있다.
+
+후속 [실행·비용·환경 진단](kr-current-quarter-rank-retention-diagnostics-findings.md)의 717개 추가 계좌를 완료했다. 실행·비용·검증 및 최근 문턱은 통과했으나 개발 월간·2011년 부진과 현재 표본 부족은 남았다. 위 첫 비교 수치는 당시 결과로 보존한다.
