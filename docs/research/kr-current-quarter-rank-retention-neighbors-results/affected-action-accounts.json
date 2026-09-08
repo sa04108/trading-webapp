@@ -1,0 +1,29 @@
+[
+  {
+    "variant": "formation25",
+    "stage": "validation",
+    "file": "data/kr-quarter-research/rank-retention-neighbors/formation25-validation/rank-retention-neighbor-formation25__2020-06-24.json",
+    "sha256": "4608d0746d0f5694f0b1b850fe49336c6a6823ad7403ca9a6cad7b88d4ee0c39",
+    "start": "2020-06-24",
+    "end": "2020-09-23",
+    "returnPct": 14.865742338499999,
+    "drawdownPct": -10.986088120000003,
+    "closed": true,
+    "targetReached": false,
+    "riskEvents": [
+      {
+        "date": "2020-07-27",
+        "reason": "계좌 목표 청산",
+        "equity": 114463179.7525
+      }
+    ],
+    "affectedActions": [
+      {
+        "symbol": "196170",
+        "date": "2020-07-23",
+        "ratio": 2,
+        "type": "inferred-unit-change"
+      }
+    ]
+  }
+]

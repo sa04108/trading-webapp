@@ -1,0 +1,122 @@
+[
+  {
+    "variant": "formation21",
+    "directory": "rank-retention-neighbors/formation21-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "rank-retention-neighbor-formation21.json",
+    "options": "target-retry-seed204-offset0-validation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "variant": "formation21",
+    "directory": "rank-retention-neighbors/formation21-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "rank-retention-neighbor-formation21.json",
+    "options": "target-retry-seed204-offset0-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "variant": "formation25",
+    "directory": "rank-retention-neighbors/formation25-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "rank-retention-neighbor-formation25.json",
+    "options": "target-retry-seed204-offset0-validation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "variant": "formation25",
+    "directory": "rank-retention-neighbors/formation25-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "rank-retention-neighbor-formation25.json",
+    "options": "target-retry-seed204-offset0-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "variant": "top4",
+    "directory": "rank-retention-neighbors/top4-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "rank-retention-neighbor-top4.json",
+    "options": "target-retry-seed204-offset0-validation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "variant": "top4",
+    "directory": "rank-retention-neighbors/top4-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "rank-retention-neighbor-top4.json",
+    "options": "target-retry-seed204-offset0-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "variant": "top6",
+    "directory": "rank-retention-neighbors/top6-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "rank-retention-neighbor-top6.json",
+    "options": "target-retry-seed204-offset0-validation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "variant": "top6",
+    "directory": "rank-retention-neighbors/top6-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "rank-retention-neighbor-top6.json",
+    "options": "target-retry-seed204-offset0-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "variant": "retention7",
+    "directory": "rank-retention-neighbors/retention7-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "rank-retention-neighbor-retention7.json",
+    "options": "target-retry-seed204-offset0-validation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "variant": "retention7",
+    "directory": "rank-retention-neighbors/retention7-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "rank-retention-neighbor-retention7.json",
+    "options": "target-retry-seed204-offset0-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "variant": "retention12",
+    "directory": "rank-retention-neighbors/retention12-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "rank-retention-neighbor-retention12.json",
+    "options": "target-retry-seed204-offset0-validation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "variant": "retention12",
+    "directory": "rank-retention-neighbors/retention12-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "rank-retention-neighbor-retention12.json",
+    "options": "target-retry-seed204-offset0-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  }
+]

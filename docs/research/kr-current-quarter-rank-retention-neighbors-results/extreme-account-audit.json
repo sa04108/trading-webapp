@@ -1,0 +1,841 @@
+[
+  {
+    "selection": "worstReturn",
+    "variant": "top6",
+    "stage": "confirmation",
+    "paired": {
+      "start": "2026-05-07",
+      "end": "2026-08-06",
+      "resumptions": [],
+      "baseReturnPct": -13.827679095,
+      "returnPct": -22.888468547499986,
+      "returnDeltaPctPoints": -9.060789452499986,
+      "baseDrawdownPct": -21.19174976405025,
+      "drawdownPct": -25.556381676770854,
+      "baseTargetReached": false,
+      "targetReached": false,
+      "extraFills": 2,
+      "extraCostsKrw": -32010.547499999986,
+      "closed": true,
+      "riskEvents": [
+        {
+          "date": "2026-06-05",
+          "reason": "계좌 낙폭 중단",
+          "equity": 87335003.67500001
+        }
+      ],
+      "sameResult": false
+    },
+    "base": {
+      "file": "data/kr-quarter-research/rank-retention/20-confirmation/rank-retention-20__2026-05-07.json",
+      "sha256": "84191edb219bc267fd8852c3e3e0fb83bdd451e3a580d92f8c6e65ef5f40812e",
+      "riskEvents": [
+        {
+          "date": "2026-06-08",
+          "reason": "계좌 낙폭 중단",
+          "equity": 82711707.92
+        }
+      ],
+      "totalCostsKrw": 409179.095,
+      "fillGroups": [
+        {
+          "date": "2026-05-11",
+          "side": "BUY",
+          "reason": "REBALANCE_ENTRY",
+          "fills": [
+            {
+              "symbol": "001440",
+              "quantity": 276,
+              "price": 73800
+            },
+            {
+              "symbol": "062040",
+              "quantity": 60,
+              "price": 329000
+            },
+            {
+              "symbol": "402340",
+              "quantity": 18,
+              "price": 1176000
+            },
+            {
+              "symbol": "336260",
+              "quantity": 231,
+              "price": 88400
+            },
+            {
+              "symbol": "036930",
+              "quantity": 125,
+              "price": 146000
+            }
+          ]
+        },
+        {
+          "date": "2026-06-09",
+          "side": "SELL",
+          "reason": "계좌 낙폭 중단",
+          "fills": [
+            {
+              "symbol": "001440",
+              "quantity": 276,
+              "price": 38350
+            },
+            {
+              "symbol": "062040",
+              "quantity": 60,
+              "price": 224500
+            },
+            {
+              "symbol": "402340",
+              "quantity": 18,
+              "price": 1172000
+            },
+            {
+              "symbol": "336260",
+              "quantity": 231,
+              "price": 72000
+            },
+            {
+              "symbol": "036930",
+              "quantity": 125,
+              "price": 196300
+            }
+          ]
+        }
+      ]
+    },
+    "neighbor": {
+      "file": "data/kr-quarter-research/rank-retention-neighbors/top6-confirmation/rank-retention-neighbor-top6__2026-05-07.json",
+      "sha256": "3415d534a1fb5b1c3d7c16b5d296e9c5acaa0466d29103e5865c840db30a3143",
+      "riskEvents": [
+        {
+          "date": "2026-06-05",
+          "reason": "계좌 낙폭 중단",
+          "equity": 87335003.67500001
+        }
+      ],
+      "totalCostsKrw": 377168.5475,
+      "fillGroups": [
+        {
+          "date": "2026-05-11",
+          "side": "BUY",
+          "reason": "REBALANCE_ENTRY",
+          "fills": [
+            {
+              "symbol": "001440",
+              "quantity": 230,
+              "price": 73800
+            },
+            {
+              "symbol": "100790",
+              "quantity": 289,
+              "price": 60700
+            },
+            {
+              "symbol": "402340",
+              "quantity": 15,
+              "price": 1176000
+            },
+            {
+              "symbol": "062040",
+              "quantity": 50,
+              "price": 329000
+            },
+            {
+              "symbol": "336260",
+              "quantity": 193,
+              "price": 88400
+            },
+            {
+              "symbol": "036930",
+              "quantity": 98,
+              "price": 146000
+            }
+          ]
+        },
+        {
+          "date": "2026-06-08",
+          "side": "SELL",
+          "reason": "계좌 낙폭 중단",
+          "fills": [
+            {
+              "symbol": "001440",
+              "quantity": 230,
+              "price": 37350
+            },
+            {
+              "symbol": "100790",
+              "quantity": 289,
+              "price": 35950
+            },
+            {
+              "symbol": "402340",
+              "quantity": 15,
+              "price": 1109000
+            },
+            {
+              "symbol": "062040",
+              "quantity": 50,
+              "price": 197900
+            },
+            {
+              "symbol": "336260",
+              "quantity": 193,
+              "price": 73100
+            },
+            {
+              "symbol": "036930",
+              "quantity": 98,
+              "price": 180100
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "selection": "worstDrawdown",
+    "variant": "formation25",
+    "stage": "confirmation",
+    "paired": {
+      "start": "2026-04-22",
+      "end": "2026-07-21",
+      "resumptions": [
+        {
+          "date": "2026-05-08",
+          "cash": 107784875.46,
+          "realizedReturnPct": 7.784875459999996,
+          "originalPeak": 110871765.6225,
+          "drawdownPct": -2.784198614650335,
+          "nextBuy": "2026-05-27"
+        }
+      ],
+      "baseReturnPct": 11.389513675000007,
+      "returnPct": -18.801065260000016,
+      "returnDeltaPctPoints": -30.190578935000023,
+      "baseDrawdownPct": -2.6843949724305705,
+      "drawdownPct": -26.763198651973397,
+      "baseTargetReached": true,
+      "targetReached": false,
+      "extraFills": 10,
+      "extraCostsKrw": 377878.935,
+      "closed": true,
+      "riskEvents": [
+        {
+          "date": "2026-05-07",
+          "reason": "계좌 목표 청산",
+          "equity": 110871765.6225
+        },
+        {
+          "date": "2026-05-08",
+          "reason": "실제 목표 미달 후 재개",
+          "equity": 107784875.46
+        },
+        {
+          "date": "2026-06-05",
+          "reason": "계좌 낙폭 중단",
+          "equity": 93851377.79499999
+        }
+      ],
+      "sameResult": false
+    },
+    "base": {
+      "file": "data/kr-quarter-research/rank-retention/20-confirmation/rank-retention-20__2026-04-22.json",
+      "sha256": "f1359517a04337fbc191ec622c3aadd9c071e80844b151f4d7addf665448d7ec",
+      "riskEvents": [
+        {
+          "date": "2026-05-11",
+          "reason": "계좌 목표 청산",
+          "equity": 111287898.6225
+        }
+      ],
+      "totalCostsKrw": 522786.325,
+      "fillGroups": [
+        {
+          "date": "2026-04-24",
+          "side": "BUY",
+          "reason": "REBALANCE_ENTRY",
+          "fills": [
+            {
+              "symbol": "006400",
+              "quantity": 31,
+              "price": 649000
+            },
+            {
+              "symbol": "010060",
+              "quantity": 62,
+              "price": 322500
+            },
+            {
+              "symbol": "047040",
+              "quantity": 601,
+              "price": 33250
+            },
+            {
+              "symbol": "036930",
+              "quantity": 172,
+              "price": 116300
+            },
+            {
+              "symbol": "009150",
+              "quantity": 25,
+              "price": 783000
+            }
+          ]
+        },
+        {
+          "date": "2026-05-12",
+          "side": "SELL",
+          "reason": "계좌 목표 청산",
+          "fills": [
+            {
+              "symbol": "006400",
+              "quantity": 31,
+              "price": 675000
+            },
+            {
+              "symbol": "010060",
+              "quantity": 62,
+              "price": 320000
+            },
+            {
+              "symbol": "047040",
+              "quantity": 601,
+              "price": 32050
+            },
+            {
+              "symbol": "036930",
+              "quantity": 172,
+              "price": 165800
+            },
+            {
+              "symbol": "009150",
+              "quantity": 25,
+              "price": 911000
+            }
+          ]
+        }
+      ]
+    },
+    "neighbor": {
+      "file": "data/kr-quarter-research/rank-retention-neighbors/formation25-confirmation/rank-retention-neighbor-formation25__2026-04-22.json",
+      "sha256": "2be937a605715ff0750f470c0f1010a4a70b6acad9b570b1209d80b9ba597788",
+      "riskEvents": [
+        {
+          "date": "2026-05-07",
+          "reason": "계좌 목표 청산",
+          "equity": 110871765.6225
+        },
+        {
+          "date": "2026-05-08",
+          "reason": "실제 목표 미달 후 재개",
+          "equity": 107784875.46
+        },
+        {
+          "date": "2026-06-05",
+          "reason": "계좌 낙폭 중단",
+          "equity": 93851377.79499999
+        }
+      ],
+      "totalCostsKrw": 900665.26,
+      "fillGroups": [
+        {
+          "date": "2026-04-24",
+          "side": "BUY",
+          "reason": "REBALANCE_ENTRY",
+          "fills": [
+            {
+              "symbol": "009150",
+              "quantity": 25,
+              "price": 783000
+            },
+            {
+              "symbol": "036930",
+              "quantity": 172,
+              "price": 116300
+            },
+            {
+              "symbol": "375500",
+              "quantity": 204,
+              "price": 97500
+            },
+            {
+              "symbol": "047040",
+              "quantity": 601,
+              "price": 33250
+            },
+            {
+              "symbol": "011070",
+              "quantity": 38,
+              "price": 538000
+            }
+          ]
+        },
+        {
+          "date": "2026-05-08",
+          "side": "SELL",
+          "reason": "계좌 목표 청산",
+          "fills": [
+            {
+              "symbol": "009150",
+              "quantity": 25,
+              "price": 905000
+            },
+            {
+              "symbol": "036930",
+              "quantity": 172,
+              "price": 132300
+            },
+            {
+              "symbol": "375500",
+              "quantity": 204,
+              "price": 96800
+            },
+            {
+              "symbol": "047040",
+              "quantity": 601,
+              "price": 31950
+            },
+            {
+              "symbol": "011070",
+              "quantity": 38,
+              "price": 621000
+            }
+          ]
+        },
+        {
+          "date": "2026-05-27",
+          "side": "BUY",
+          "reason": "REBALANCE_ENTRY",
+          "fills": [
+            {
+              "symbol": "009150",
+              "quantity": 13,
+              "price": 1723000
+            },
+            {
+              "symbol": "000500",
+              "quantity": 50,
+              "price": 431500
+            },
+            {
+              "symbol": "336260",
+              "quantity": 216,
+              "price": 99600
+            },
+            {
+              "symbol": "036930",
+              "quantity": 91,
+              "price": 243500
+            },
+            {
+              "symbol": "011070",
+              "quantity": 15,
+              "price": 1267000
+            }
+          ]
+        },
+        {
+          "date": "2026-06-08",
+          "side": "SELL",
+          "reason": "계좌 낙폭 중단",
+          "fills": [
+            {
+              "symbol": "009150",
+              "quantity": 13,
+              "price": 1555000
+            },
+            {
+              "symbol": "000500",
+              "quantity": 50,
+              "price": 262000
+            },
+            {
+              "symbol": "336260",
+              "quantity": 216,
+              "price": 73100
+            },
+            {
+              "symbol": "036930",
+              "quantity": 91,
+              "price": 180100
+            },
+            {
+              "symbol": "011070",
+              "quantity": 15,
+              "price": 984000
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "selection": "largestReturnDecrease",
+    "variant": "formation25",
+    "stage": "confirmation",
+    "paired": {
+      "start": "2026-05-13",
+      "end": "2026-08-12",
+      "resumptions": [],
+      "baseReturnPct": 19.565349045000026,
+      "returnPct": -13.421020695000008,
+      "returnDeltaPctPoints": -32.986369740000036,
+      "baseDrawdownPct": -12.671080649999988,
+      "drawdownPct": -23.347898798505582,
+      "baseTargetReached": true,
+      "targetReached": false,
+      "extraFills": 0,
+      "extraCostsKrw": -132230.26000000007,
+      "closed": true,
+      "riskEvents": [
+        {
+          "date": "2026-06-08",
+          "reason": "계좌 낙폭 중단",
+          "equity": 81548103.69
+        }
+      ],
+      "sameResult": false
+    },
+    "base": {
+      "file": "data/kr-quarter-research/rank-retention/20-confirmation/rank-retention-20__2026-05-13.json",
+      "sha256": "18c019bf02efc6973cd0c95ef0cfcf823f3b9467f7ca85db4e029d5a94d334f9",
+      "riskEvents": [
+        {
+          "date": "2026-05-26",
+          "reason": "계좌 목표 청산",
+          "equity": 114206519.35000001
+        }
+      ],
+      "totalCostsKrw": 528750.9550000001,
+      "fillGroups": [
+        {
+          "date": "2026-05-15",
+          "side": "BUY",
+          "reason": "REBALANCE_ENTRY",
+          "fills": [
+            {
+              "symbol": "000500",
+              "quantity": 50,
+              "price": 399500
+            },
+            {
+              "symbol": "036930",
+              "quantity": 119,
+              "price": 177600
+            },
+            {
+              "symbol": "336260",
+              "quantity": 217,
+              "price": 90400
+            },
+            {
+              "symbol": "229640",
+              "quantity": 218,
+              "price": 91600
+            },
+            {
+              "symbol": "011070",
+              "quantity": 24,
+              "price": 799000
+            }
+          ]
+        },
+        {
+          "date": "2026-05-27",
+          "side": "SELL",
+          "reason": "계좌 목표 청산",
+          "fills": [
+            {
+              "symbol": "000500",
+              "quantity": 50,
+              "price": 430500
+            },
+            {
+              "symbol": "036930",
+              "quantity": 119,
+              "price": 242500
+            },
+            {
+              "symbol": "336260",
+              "quantity": 217,
+              "price": 99400
+            },
+            {
+              "symbol": "229640",
+              "quantity": 218,
+              "price": 79800
+            },
+            {
+              "symbol": "011070",
+              "quantity": 24,
+              "price": 1265000
+            }
+          ]
+        }
+      ]
+    },
+    "neighbor": {
+      "file": "data/kr-quarter-research/rank-retention-neighbors/formation25-confirmation/rank-retention-neighbor-formation25__2026-05-13.json",
+      "sha256": "76313bc5f6ab82b55d50ce50fea42ec6d78a70e6e4231d550238b902d0df1659",
+      "riskEvents": [
+        {
+          "date": "2026-06-08",
+          "reason": "계좌 낙폭 중단",
+          "equity": 81548103.69
+        }
+      ],
+      "totalCostsKrw": 396520.695,
+      "fillGroups": [
+        {
+          "date": "2026-05-15",
+          "side": "BUY",
+          "reason": "REBALANCE_ENTRY",
+          "fills": [
+            {
+              "symbol": "000500",
+              "quantity": 50,
+              "price": 399500
+            },
+            {
+              "symbol": "036930",
+              "quantity": 119,
+              "price": 177600
+            },
+            {
+              "symbol": "402340",
+              "quantity": 17,
+              "price": 1182000
+            },
+            {
+              "symbol": "336260",
+              "quantity": 217,
+              "price": 90400
+            },
+            {
+              "symbol": "001440",
+              "quantity": 292,
+              "price": 65600
+            }
+          ]
+        },
+        {
+          "date": "2026-06-09",
+          "side": "SELL",
+          "reason": "계좌 낙폭 중단",
+          "fills": [
+            {
+              "symbol": "000500",
+              "quantity": 50,
+              "price": 333000
+            },
+            {
+              "symbol": "036930",
+              "quantity": 119,
+              "price": 196300
+            },
+            {
+              "symbol": "402340",
+              "quantity": 17,
+              "price": 1172000
+            },
+            {
+              "symbol": "336260",
+              "quantity": 217,
+              "price": 72000
+            },
+            {
+              "symbol": "001440",
+              "quantity": 292,
+              "price": 38350
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "selection": "largestReturnIncrease",
+    "variant": "formation21",
+    "stage": "confirmation",
+    "paired": {
+      "start": "2026-05-04",
+      "end": "2026-08-03",
+      "resumptions": [],
+      "baseReturnPct": -9.206876290000011,
+      "returnPct": 22.586160055000004,
+      "returnDeltaPctPoints": 31.793036345000015,
+      "baseDrawdownPct": -15.199088179188214,
+      "drawdownPct": -9.366651523852854,
+      "baseTargetReached": false,
+      "targetReached": true,
+      "extraFills": 0,
+      "extraCostsKrw": 144263.6550000001,
+      "closed": true,
+      "riskEvents": [
+        {
+          "date": "2026-05-22",
+          "reason": "계좌 목표 청산",
+          "equity": 118280179.33500001
+        }
+      ],
+      "sameResult": false
+    },
+    "base": {
+      "file": "data/kr-quarter-research/rank-retention/20-confirmation/rank-retention-20__2026-05-04.json",
+      "sha256": "560ee46fcc3ba98af916deb3629aabbb84d89d6dee9fa693b18b820cbe672980",
+      "riskEvents": [
+        {
+          "date": "2026-05-19",
+          "reason": "계좌 낙폭 중단",
+          "equity": 90960911.625
+        }
+      ],
+      "totalCostsKrw": 425076.29,
+      "fillGroups": [
+        {
+          "date": "2026-05-07",
+          "side": "BUY",
+          "reason": "REBALANCE_ENTRY",
+          "fills": [
+            {
+              "symbol": "001440",
+              "quantity": 289,
+              "price": 69700
+            },
+            {
+              "symbol": "062040",
+              "quantity": 62,
+              "price": 324000
+            },
+            {
+              "symbol": "402340",
+              "quantity": 18,
+              "price": 1102000
+            },
+            {
+              "symbol": "103590",
+              "quantity": 140,
+              "price": 144100
+            },
+            {
+              "symbol": "036930",
+              "quantity": 154,
+              "price": 127800
+            }
+          ]
+        },
+        {
+          "date": "2026-05-20",
+          "side": "SELL",
+          "reason": "계좌 낙폭 중단",
+          "fills": [
+            {
+              "symbol": "001440",
+              "quantity": 289,
+              "price": 53100
+            },
+            {
+              "symbol": "062040",
+              "quantity": 62,
+              "price": 240500
+            },
+            {
+              "symbol": "402340",
+              "quantity": 18,
+              "price": 1063000
+            },
+            {
+              "symbol": "103590",
+              "quantity": 140,
+              "price": 102200
+            },
+            {
+              "symbol": "036930",
+              "quantity": 154,
+              "price": 176800
+            }
+          ]
+        }
+      ]
+    },
+    "neighbor": {
+      "file": "data/kr-quarter-research/rank-retention-neighbors/formation21-confirmation/rank-retention-neighbor-formation21__2026-05-04.json",
+      "sha256": "a6bb527e8599215d6a3994cb13180072fd28b885f49a086c5fd31f4a19b981f9",
+      "riskEvents": [
+        {
+          "date": "2026-05-22",
+          "reason": "계좌 목표 청산",
+          "equity": 118280179.33500001
+        }
+      ],
+      "totalCostsKrw": 569339.9450000001,
+      "fillGroups": [
+        {
+          "date": "2026-05-07",
+          "side": "BUY",
+          "reason": "REBALANCE_ENTRY",
+          "fills": [
+            {
+              "symbol": "001440",
+              "quantity": 289,
+              "price": 69700
+            },
+            {
+              "symbol": "036930",
+              "quantity": 156,
+              "price": 127800
+            },
+            {
+              "symbol": "402340",
+              "quantity": 18,
+              "price": 1102000
+            },
+            {
+              "symbol": "062040",
+              "quantity": 62,
+              "price": 324000
+            },
+            {
+              "symbol": "009150",
+              "quantity": 21,
+              "price": 927000
+            }
+          ]
+        },
+        {
+          "date": "2026-05-26",
+          "side": "SELL",
+          "reason": "계좌 목표 청산",
+          "fills": [
+            {
+              "symbol": "001440",
+              "quantity": 289,
+              "price": 55800
+            },
+            {
+              "symbol": "036930",
+              "quantity": 156,
+              "price": 228500
+            },
+            {
+              "symbol": "402340",
+              "quantity": 18,
+              "price": 1219000
+            },
+            {
+              "symbol": "062040",
+              "quantity": 62,
+              "price": 288000
+            },
+            {
+              "symbol": "009150",
+              "quantity": 21,
+              "price": 1465000
+            }
+          ]
+        }
+      ]
+    }
+  }
+]

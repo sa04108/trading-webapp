@@ -313,3 +313,15 @@ python -m unittest discover -s scripts/quarter-research -p test_current_krx_fetc
 ```
 
 수집기 테스트는 허용 날짜 검증과 두 시장의 날짜당 한 번 조회·원문 보존·사용량 원장 불변을 확인한다. 실제 시세 확보 여부는 별도 원문과 대조 결과로 확인해야 한다.
+
+
+## 보유 순위 완충 후보의 인접 파라미터
+
+`configs/rank-retention-neighbors-experiments.json`은 한 변수씩 바꾼 여섯 설정의 검증·최근 12개 실행·462개 새 계좌 목록이다. 선정 기간 21·25일, 보유 수 4·6개, 유지 순위 7·12위를 비교한다. 보유 수를 바꿀 때 유지 순위는 10위로 고정한다. 기본 20일·5종목·20봉·유지 10위의 77개는 같은 날짜 대조군으로 재사용한다.
+
+```bash
+node --import tsx scripts/quarter-research/quarter-engine.ts data/kr-quarter-research/expanded/stock-200-verified-input.json.gz data/kr-quarter-research/rank-retention-neighbors/reproduction-retention7-confirmation confirmation scripts/quarter-research/configs/rank-retention-neighbor-retention7.json 5 204 0 100000000 scripts/quarter-research/configs/target-retry-seed204-offset0-confirmation-options.json
+python scripts/quarter-research/build_rank_retention_neighbors.py data/kr-quarter-research data/kr-quarter-research/rank-retention-neighbors/evidence
+```
+
+집계 전에 실험 목록의 모든 실행이 완료돼 있어야 한다. `reproduction-*`는 별도 예시 경로다. 집계기는 고정 후보·옵션·원본 해시와 실제 목표·현금·비용·낙폭·최초 매수 시점·보유 수를 대조한다. 같은 날짜의 기본 계좌보다 좋아진 경우와 나빠진 경우, 미확인 기업행위 보유, 기준 미달 설정의 비중첩 거래 경로를 함께 보존한다. [사전 규칙](../../docs/research/kr-current-quarter-rank-retention-neighbors-protocol.md)과 [전체 결과](../../docs/research/kr-current-quarter-rank-retention-neighbors-findings.md)를 참고한다. 이 반복 계좌 수는 현재 환경의 독립 시장 표본으로 더하지 않는다.

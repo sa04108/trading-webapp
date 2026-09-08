@@ -85,3 +85,5 @@
 거래 TypeScript와 테스트는 `2141fe9` 그대로다. 해당 커밋의 7개 파일·50개 테스트, ESLint·서버 타입 검사·기본 계좌 바이트 재현이 적용되며 이번에 다시 거래 테스트를 실행한 것으로 표시하지 않는다. 새 Python 집계기 컴파일·전체 집계와 새·기존 원본 1,588개 및 요약 44개의 1,632개 해시·고정 설정·현금·비용·위험·최초 매수·조건 날짜를 대조했다. [검증 기록](kr-current-quarter-rank-retention-diagnostics-results/verification.json)에 적용 범위를 보존했다.
 
 선정 기간·보유 수·유지 경계의 새 후보 민감도 확인은 아직 남았다. 이번 통과는 현재 환경에 충분한 근거가 있다는 결론이나 실전 투입 승인을 대신하지 않는다. 실주문은 보내지 않았다. [전체 진단](kr-current-quarter-rank-retention-diagnostics-results/all-diagnostics.csv), [조건별 결과](kr-current-quarter-rank-retention-diagnostics-results/conditions.csv), [비중첩 계좌](kr-current-quarter-rank-retention-diagnostics-results/nonoverlapping-diagnostics.json), [증거 해시](kr-current-quarter-rank-retention-diagnostics-results/evidence-manifest.json)를 보존한다. 원본은 로컬 `data/kr-quarter-research/rank-retention-diagnostics/`, 재현 순서는 [README](../../scripts/quarter-research/README.md)에 있다.
+
+후속 선정 기간·보유 수·유지 경계의 확인은 [인접 파라미터 결과](kr-current-quarter-rank-retention-neighbors-findings.md)에 이어 기록한다. 위 결과와 당시 미완료 상태는 그대로 보존한다.

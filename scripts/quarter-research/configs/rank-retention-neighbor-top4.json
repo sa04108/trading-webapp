@@ -1,0 +1,14 @@
+[
+  {
+    "id": "rank-retention-neighbor-top4",
+    "strategyId": "rank-retention-momentum",
+    "topN": 4,
+    "rebalanceBars": 20,
+    "parameters": {
+      "formationDays": 20,
+      "skipDays": 0,
+      "topN": 4,
+      "retentionRank": 10
+    }
+  }
+]
