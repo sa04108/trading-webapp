@@ -1,0 +1,10 @@
+[
+  {
+    "strategyId": "trend-pullback",
+    "variant": "base",
+    "parameters": {
+      "entryRsi": 10
+    },
+    "regime": "low_rate"
+  }
+]

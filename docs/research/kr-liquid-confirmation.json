@@ -1,0 +1,243 @@
+{
+  "runs": [
+    {
+      "id": "cross-sectional-momentum__high_vol__base",
+      "stage": "confirmation",
+      "status": "completed",
+      "candidate": {
+        "strategyId": "cross-sectional-momentum",
+        "variant": "base",
+        "regime": "high_vol",
+        "parameters": {
+          "formationDays": 40,
+          "skipDays": 0,
+          "topN": 5
+        }
+      },
+      "parameters": {
+        "formationDays": 40,
+        "skipDays": 0,
+        "topN": 5,
+        "absoluteMomentumFilter": true
+      },
+      "metrics": {
+        "initialCash": 100000000,
+        "finalEquity": 75258001.3523,
+        "totalReturnPct": -24.741998647699994,
+        "cagrPct": -7.477259992731389,
+        "maxDrawdownPct": -30.131253863646336,
+        "maxDrawdownDurationMs": 43200000000,
+        "volatilityPct": 10.65882233021206,
+        "sharpe": -0.7012180837584843,
+        "sortino": -0.8028746258216262,
+        "calmar": -0.2481562840553668,
+        "winRate": 48.717948717948715,
+        "profitFactor": 0.3943884467975016,
+        "avgWin": 848029.9890105264,
+        "avgLoss": -2042728.421945,
+        "maxConsecutiveWins": 4,
+        "maxConsecutiveLosses": 4,
+        "tradeCount": 39,
+        "avgHoldingTimeMs": 425353846.15384614,
+        "maxConcurrentPositions": 5,
+        "totalCommission": 199932.64769999997,
+        "totalTax": 1108314,
+        "totalSlippage": 1746282
+      },
+      "closedPositionCount": 35,
+      "comparison": {
+        "activeDays": 58,
+        "episodes": 10,
+        "activeStrategyPct": -24.74199864769997,
+        "activeNdxKrwPct": 26.31510133047048,
+        "activeNdxUsdPct": 26.878890172435344,
+        "activeExcessPp": -51.05709997817045,
+        "fullNdxKrwPct": 196.98394380547475,
+        "fullNdxUsdPct": 170.95256203061084
+      },
+      "averageHoldingBars": 3.3846153846153846,
+      "maxHoldingBars": 12,
+      "affectedActions": [],
+      "inferredHeldActions": [],
+      "gates": {
+        "positiveNetReturn": false,
+        "beatsMatchedNdxKrw": false,
+        "atLeast30Trades": true,
+        "drawdownWithin25Pct": false,
+        "averageHoldingWithin20Bars": true,
+        "noUnresolvedHeldActions": true,
+        "noOpenPositions": true,
+        "noUnverifiedInferredHeldActions": true
+      }
+    },
+    {
+      "id": "cross-sectional-momentum__high_vol__nearby-a",
+      "stage": "confirmation",
+      "status": "completed",
+      "candidate": {
+        "strategyId": "cross-sectional-momentum",
+        "variant": "nearby-a",
+        "regime": "high_vol",
+        "parameters": {
+          "formationDays": 20,
+          "skipDays": 0,
+          "topN": 5
+        }
+      },
+      "parameters": {
+        "formationDays": 20,
+        "skipDays": 0,
+        "topN": 5,
+        "absoluteMomentumFilter": true
+      },
+      "metrics": {
+        "initialCash": 100000000,
+        "finalEquity": 102447996.39175,
+        "totalReturnPct": 2.447996391749996,
+        "cagrPct": 0.6634324526696211,
+        "maxDrawdownPct": -16.155279608975537,
+        "maxDrawdownDurationMs": 42595200000,
+        "volatilityPct": 10.757436629562118,
+        "sharpe": 0.11737421241722329,
+        "sortino": 0.17666052266155155,
+        "calmar": 0.04106598392150588,
+        "winRate": 59.523809523809526,
+        "profitFactor": 1.0699581737619408,
+        "avgWin": 1497611.2770500001,
+        "avgLoss": -2058369.7373235296,
+        "maxConsecutiveWins": 4,
+        "maxConsecutiveLosses": 3,
+        "tradeCount": 42,
+        "avgHoldingTimeMs": 432000000,
+        "maxConcurrentPositions": 5,
+        "totalCommission": 234804.60825000002,
+        "totalTax": 1358162,
+        "totalSlippage": 2068134
+      },
+      "closedPositionCount": 36,
+      "comparison": {
+        "activeDays": 58,
+        "episodes": 10,
+        "activeStrategyPct": 2.4479963917499736,
+        "activeNdxKrwPct": 26.31510133047048,
+        "activeNdxUsdPct": 26.878890172435344,
+        "activeExcessPp": -23.867104938720505,
+        "fullNdxKrwPct": 196.98394380547475,
+        "fullNdxUsdPct": 170.95256203061084
+      },
+      "averageHoldingBars": 3.4285714285714284,
+      "maxHoldingBars": 12,
+      "affectedActions": [],
+      "inferredHeldActions": [],
+      "gates": {
+        "positiveNetReturn": true,
+        "beatsMatchedNdxKrw": false,
+        "atLeast30Trades": true,
+        "drawdownWithin25Pct": true,
+        "averageHoldingWithin20Bars": true,
+        "noUnresolvedHeldActions": true,
+        "noOpenPositions": true,
+        "noUnverifiedInferredHeldActions": true
+      }
+    },
+    {
+      "id": "cross-sectional-momentum__high_vol__nearby-b",
+      "stage": "confirmation",
+      "status": "completed",
+      "candidate": {
+        "strategyId": "cross-sectional-momentum",
+        "variant": "nearby-b",
+        "regime": "high_vol",
+        "parameters": {
+          "formationDays": 60,
+          "skipDays": 0,
+          "topN": 5
+        }
+      },
+      "parameters": {
+        "formationDays": 60,
+        "skipDays": 0,
+        "topN": 5,
+        "absoluteMomentumFilter": true
+      },
+      "metrics": {
+        "initialCash": 100000000,
+        "finalEquity": 86323031.95830001,
+        "totalReturnPct": -13.676968041699988,
+        "cagrPct": -3.9413431867962756,
+        "maxDrawdownPct": -21.31218610773532,
+        "maxDrawdownDurationMs": 28598400000,
+        "volatilityPct": 10.687910662192738,
+        "sharpe": -0.3359593280466308,
+        "sortino": -0.4274610319688988,
+        "calmar": -0.1849337823380659,
+        "winRate": 59.45945945945946,
+        "profitFactor": 0.6113520910207777,
+        "avgWin": 977917.4997047448,
+        "avgLoss": -2346076.869013625,
+        "maxConsecutiveWins": 7,
+        "maxConsecutiveLosses": 4,
+        "tradeCount": 37,
+        "avgHoldingTimeMs": 485708108.1081081,
+        "maxConcurrentPositions": 5,
+        "totalCommission": 191658.04170000006,
+        "totalTax": 1086870,
+        "totalSlippage": 1583284
+      },
+      "closedPositionCount": 32,
+      "comparison": {
+        "activeDays": 58,
+        "episodes": 10,
+        "activeStrategyPct": -13.676968041700011,
+        "activeNdxKrwPct": 26.31510133047048,
+        "activeNdxUsdPct": 26.878890172435344,
+        "activeExcessPp": -39.99206937217049,
+        "fullNdxKrwPct": 196.98394380547475,
+        "fullNdxUsdPct": 170.95256203061084
+      },
+      "averageHoldingBars": 3.891891891891892,
+      "maxHoldingBars": 12,
+      "affectedActions": [],
+      "inferredHeldActions": [],
+      "gates": {
+        "positiveNetReturn": false,
+        "beatsMatchedNdxKrw": false,
+        "atLeast30Trades": true,
+        "drawdownWithin25Pct": true,
+        "averageHoldingWithin20Bars": true,
+        "noUnresolvedHeldActions": true,
+        "noOpenPositions": true,
+        "noUnverifiedInferredHeldActions": true
+      }
+    }
+  ],
+  "uncertainty": {
+    "cross-sectional-momentum__high_vol__base": {
+      "samples": 5000,
+      "blockTradingDays": 20,
+      "annualizedMatchedExcess95Pct": [
+        -30.43074150607431,
+        -1.3204408190048713
+      ],
+      "positiveHistoricalResampleFraction": 0.0096
+    },
+    "cross-sectional-momentum__high_vol__nearby-a": {
+      "samples": 5000,
+      "blockTradingDays": 20,
+      "annualizedMatchedExcess95Pct": [
+        -17.507611187111888,
+        3.641192992882815
+      ],
+      "positiveHistoricalResampleFraction": 0.1236
+    },
+    "cross-sectional-momentum__high_vol__nearby-b": {
+      "samples": 5000,
+      "blockTradingDays": 20,
+      "annualizedMatchedExcess95Pct": [
+        -25.59005990260955,
+        1.3241028126375112
+      ],
+      "positiveHistoricalResampleFraction": 0.0416
+    }
+  }
+}

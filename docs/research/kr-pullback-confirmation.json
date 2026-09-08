@@ -1,0 +1,78 @@
+{
+  "runs": [
+    {
+      "id": "trend-pullback__low_rate__base",
+      "stage": "confirmation",
+      "status": "completed",
+      "candidate": {
+        "strategyId": "trend-pullback",
+        "variant": "base",
+        "parameters": {
+          "entryRsi": 10
+        },
+        "regime": "low_rate"
+      },
+      "parameters": {
+        "trendBars": 60,
+        "rsiPeriod": 2,
+        "entryRsi": 10,
+        "exitRsi": 60,
+        "atrPeriod": 14,
+        "stopAtrMultiplier": 2,
+        "maxHoldBars": 5,
+        "topN": 5,
+        "maxPositionWeightPercent": 20
+      },
+      "metrics": {
+        "initialCash": 100000000,
+        "finalEquity": 100000000,
+        "totalReturnPct": 0,
+        "cagrPct": 0,
+        "maxDrawdownPct": 0,
+        "maxDrawdownDurationMs": 0,
+        "volatilityPct": 0,
+        "sharpe": null,
+        "sortino": null,
+        "calmar": null,
+        "winRate": null,
+        "profitFactor": null,
+        "avgWin": null,
+        "avgLoss": null,
+        "maxConsecutiveWins": 0,
+        "maxConsecutiveLosses": 0,
+        "tradeCount": 0,
+        "avgHoldingTimeMs": null,
+        "maxConcurrentPositions": 0,
+        "totalCommission": 0,
+        "totalTax": 0,
+        "totalSlippage": 0
+      },
+      "closedPositionCount": 0,
+      "comparison": {
+        "activeDays": 0,
+        "episodes": 0,
+        "activeStrategyPct": 0.0,
+        "activeNdxKrwPct": 0.0,
+        "activeNdxUsdPct": 0.0,
+        "activeExcessPp": 0.0,
+        "fullNdxKrwPct": 196.98394380547475,
+        "fullNdxUsdPct": 170.95256203061084
+      },
+      "averageHoldingBars": null,
+      "maxHoldingBars": null,
+      "affectedActions": [],
+      "inferredHeldActions": [],
+      "gates": {
+        "positiveNetReturn": false,
+        "beatsMatchedNdxKrw": false,
+        "atLeast30Trades": false,
+        "drawdownWithin25Pct": true,
+        "averageHoldingWithin20Bars": false,
+        "noUnresolvedHeldActions": true,
+        "noOpenPositions": true,
+        "noUnverifiedInferredHeldActions": true
+      }
+    }
+  ],
+  "uncertainty": {}
+}

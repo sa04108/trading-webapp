@@ -1,0 +1,10 @@
+[
+  {
+    "strategyId": "ema-trend-switch",
+    "variant": "base",
+    "regime": "high_vol",
+    "parameters": {
+      "maxHoldBars": 20
+    }
+  }
+]

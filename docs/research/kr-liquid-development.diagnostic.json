@@ -1,0 +1,10 @@
+[
+  {
+    "strategyId": "range-breakout",
+    "variant": "base",
+    "regime": "low_rate",
+    "parameters": {
+      "maxHoldBars": 20
+    }
+  }
+]

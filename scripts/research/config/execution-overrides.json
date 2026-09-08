@@ -1,0 +1,27 @@
+{
+  "nontrading": [
+    [
+      1507680000000,
+      [
+        "047810"
+      ]
+    ]
+  ],
+  "evidence": [
+    {
+      "symbol": "047810",
+      "date": "2017-10-11",
+      "classification": "거래정지일의 정규장 OHLC 부재: 주문 체결 불가",
+      "quote": [
+        0,
+        0,
+        0,
+        47700,
+        141
+      ],
+      "source": "https://fchart.stock.naver.com/sise.nhn?symbol=047810&timeframe=day&count=3000&requestType=0",
+      "sha256": "e2950f9e02ba3ff8cbc56e5162a5045fe066bc391c6c55ec8d3f4fd452e64e57",
+      "corroboration": "https://www.seoul.co.kr/news/economy/2017/10/11/20171011500057"
+    }
+  ]
+}

@@ -1,0 +1,89 @@
+{
+  "runs": [
+    {
+      "id": "ema-trend-switch__high_vol__base",
+      "stage": "confirmation",
+      "status": "completed",
+      "candidate": {
+        "strategyId": "ema-trend-switch",
+        "variant": "base",
+        "regime": "high_vol",
+        "parameters": {
+          "maxHoldBars": 20
+        }
+      },
+      "parameters": {
+        "fastEmaBars": 12,
+        "slowEmaBars": 26,
+        "entryThresholdPercent": 0.3,
+        "atrPeriod": 14,
+        "stopAtrMultiplier": 2,
+        "trailAtrMultiplier": 2,
+        "maxHoldBars": 20,
+        "riskPerTradePercent": 1,
+        "correlationBars": 60,
+        "correlationThreshold": 0.5
+      },
+      "metrics": {
+        "initialCash": 100000000,
+        "finalEquity": 103886382.36399992,
+        "totalReturnPct": 3.8863823639999184,
+        "cagrPct": 1.0478934041330934,
+        "maxDrawdownPct": -5.449952593369723,
+        "maxDrawdownDurationMs": 44236800000,
+        "volatilityPct": 3.63347898555553,
+        "sharpe": 0.31585957467176623,
+        "sortino": 0.5123387846787485,
+        "calmar": 0.1922756916102233,
+        "winRate": 44.871794871794876,
+        "profitFactor": 1.3186824248364684,
+        "avgWin": 459472.5676,
+        "avgLoss": -283608.3139999999,
+        "maxConsecutiveWins": 8,
+        "maxConsecutiveLosses": 9,
+        "tradeCount": 78,
+        "avgHoldingTimeMs": 302400000,
+        "maxConcurrentPositions": 5,
+        "totalCommission": 280716.6360000001,
+        "totalTax": 1660041,
+        "totalSlippage": 2599500
+      },
+      "closedPositionCount": 78,
+      "comparison": {
+        "activeDays": 57,
+        "episodes": 11,
+        "activeStrategyPct": 3.8863823640000073,
+        "activeNdxKrwPct": 27.082846150204997,
+        "activeNdxUsdPct": 29.110091635372815,
+        "activeExcessPp": -23.19646378620499,
+        "fullNdxKrwPct": 196.98394380547475,
+        "fullNdxUsdPct": 170.95256203061084
+      },
+      "averageHoldingBars": 2.4615384615384617,
+      "maxHoldingBars": 16,
+      "affectedActions": [],
+      "inferredHeldActions": [],
+      "gates": {
+        "positiveNetReturn": true,
+        "beatsMatchedNdxKrw": false,
+        "atLeast30Trades": true,
+        "drawdownWithin25Pct": true,
+        "averageHoldingWithin20Bars": true,
+        "noUnresolvedHeldActions": true,
+        "noOpenPositions": true,
+        "noUnverifiedInferredHeldActions": true
+      }
+    }
+  ],
+  "uncertainty": {
+    "ema-trend-switch__high_vol__base": {
+      "samples": 5000,
+      "blockTradingDays": 20,
+      "annualizedMatchedExcess95Pct": [
+        -15.195055232794553,
+        1.3841773220301286
+      ],
+      "positiveHistoricalResampleFraction": 0.061
+    }
+  }
+}

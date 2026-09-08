@@ -1,0 +1,12 @@
+[
+  {
+    "strategyId": "cross-sectional-momentum",
+    "variant": "nearby-a",
+    "regime": "high_vol",
+    "parameters": {
+      "formationDays": 20,
+      "skipDays": 0,
+      "topN": 5
+    }
+  }
+]
