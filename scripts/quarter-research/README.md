@@ -39,6 +39,8 @@ node --import tsx scripts/quarter-research/quarter-engine.ts data/kr-quarter-res
 
 ## 현재 신호와 집계
 
+아래는 초기 실행 경로다. 초기 현재 입력에는 네 거래일 결손이 있었으므로 최신 신호 재현에는 아래의 가격 정정 절차를 사용한다. 원래 증거 입력을 덮어쓰지 않는다.
+
 ```bash
 python scripts/quarter-research/fetch_current_stocks.py data/kr-quarter-research/current-stocks-20260908 data/reliable-strategy-reproduction/2026-09-06-8791951/research-data/panel
 python scripts/quarter-research/prepare_current_inputs.py data/kr-quarter-research/quality-stock-input.json.gz data/kr-quarter-research/etf-input.json.gz data/kr-quarter-research/current-stocks-20260908/manifest.json data/kr-quarter-research/current-stock-input.json.gz
@@ -46,7 +48,7 @@ node --import tsx scripts/quarter-research/current-signals.ts data/kr-quarter-re
 python scripts/quarter-research/build_evidence.py data/kr-quarter-research data/kr-quarter-research/evidence
 ```
 
-현재 신호 입력으로 과거 분기 성과를 실행하면 거부한다. 현재 가격 50종목은 원래 자료와 겹친 150일봉의 OHLCV 전부가 일치한다. 최신 기업행위의 공식 수집 범위는 기존 팩트까지만이며 이후의 일별 31% 초과 단위 변화는 중단·확인하도록 했다. 이 가격 변화 검사만으로 모든 기업행위가 검증되는 것은 아니다.
+현재 신호 입력으로 과거 분기 성과를 실행하면 거부한다. 초기 현재 가격은 겹친 150일봉의 OHLCV가 일치했지만 워밍업 중 빠진 네 거래일을 놓쳤다. 아래 정정 절차로 200개 결손 일봉을 보강하고 현재 신호를 다시 계산했다. 최신 기업행위의 공식 수집 범위는 기존 팩트까지만이며 이후의 일별 31% 초과 단위 변화는 중단·확인하도록 했다. 이 가격 변화 검사만으로 모든 기업행위가 검증되는 것은 아니다.
 
 연간 실적은 접수일 다음 날 이후에만 사용한다. 최신 정정값을 최초 공시일로 소급하지 않지만 과거 최초 공시 빈티지가 완전하지 않다. 2014년 연간 자료가 없어 두 해 실적이 필요한 전략은 2016년 상당 부분에서 진입 자격이 없다. FRED 일별 자료는 관측일 +7일, 수출은 월초 관측일 +90일의 공개 지연 가정이며 개정 이력을 갖춘 인증된 시점 자료가 아니다. 월별 물가와 국제 정세는 현재 환경 해석에 사용한다.
 
@@ -79,3 +81,41 @@ pnpm exec vitest run tests/unit/quarterly-earnings-research.test.ts tests/unit/e
 ```
 
 전체 집계를 재현하려면 `followup-experiments.json`의 단계·선택 파일 조합을 모두 완료해야 한다. EMA는 기존 주식 입력을 쓴다. 분기 실적은 당기·누적 차분 대조, 같은 회계기준, 두 보고서의 접수일 다음 날 적용을 검사한다. 2015년 분기 자료가 반환되지 않아 연속 8분기 조건을 충족한 첫 월간 시작점은 2018년 4월이다. 자료 충족 구간의 별도 요약도 보존한다. 상세 결과와 한계는 `docs/research/kr-current-quarter-followup-findings.md`에 있다.
+
+
+## 저PER·고ROE, 종목군 확대, 현재 가격 정정
+
+`configs/value-experiments.json`은 이 회차의 입력·후보·단계·슬리피지·시드 목록이다. 15개 개발 설정과 후속 진단을 합해 34개 실험이다. 새 DART 조회 없이 이전 원문을 재사용한다.
+
+```bash
+python scripts/quarter-research/prepare_valuation.py data/kr-quarter-research/followup/dart-quarterly.jsonl.gz data/kr-quarter-research/followup/dart-request-codes.json data/kr-quarter-research/value/valuation-observations.json
+python scripts/quarter-research/add_valuation_inputs.py data/kr-quarter-research/stock-50-input.json.gz data/kr-quarter-research/value/valuation-observations.json data/reliable-strategy-reproduction/2026-09-06-8791951/research-data/panel data/kr-quarter-research/value/valuation-stock-input.json.gz
+node --import tsx scripts/quarter-research/valuation-coverage.ts data/kr-quarter-research/value/valuation-stock-input.json.gz data/kr-quarter-research/value/valuation-coverage.json
+python scripts/quarter-research/repair_current_history.py data/kr-quarter-research/current-stocks-20260908/manifest.json data/kr-quarter-research/value/current-history-repair
+python scripts/quarter-research/prepare_current_inputs.py data/kr-quarter-research/quality-stock-input.json.gz data/kr-quarter-research/etf-input.json.gz data/kr-quarter-research/value/current-history-repair/manifest.json data/kr-quarter-research/value/repaired-current-stock-input.json.gz
+python scripts/quarter-research/add_quarterly_inputs.py data/kr-quarter-research/value/repaired-current-stock-input.json.gz data/kr-quarter-research/followup/quarterly-observations.json data/kr-quarter-research/value/repaired-quarterly-current-input.json.gz
+python scripts/quarter-research/add_current_valuation.py data/kr-quarter-research/value/repaired-quarterly-current-input.json.gz data/kr-quarter-research/value/valuation-observations.json data/kr-quarter-research/value/current-history-repair/manifest.json data/kr-quarter-research/value/complete-current-input.json.gz
+node --import tsx scripts/quarter-research/current-signals.ts data/kr-quarter-research/value/complete-current-input.json.gz scripts/quarter-research/configs/value-current-candidates.json data/kr-quarter-research/value/current-signals.json
+```
+
+200종목 원천은 이전 커밋 `ebc7936`의 `scripts/research/prepare_kr_regimes.py`를 보존된 연구 원자료에 `--universe-size 200 --ranking cap`으로 실행해 `expanded/source/input-200.json.gz`를 만들었다. 외부 원문의 해시가 같은 파일을 사용해야 정확히 재현된다. 한국항공우주 정지일은 설정에 기록한 DART 원문이 필요하다.
+
+```bash
+python scripts/quarter-research/prepare_stock_inputs.py data/kr-quarter-research/expanded/source/input-200.json.gz data/kr-quarter-research/etf-input.json.gz data/kr-quarter-research/expanded/stock-200-input.json.gz --end 2026-08-14
+python scripts/quarter-research/apply_verified_halt.py data/kr-quarter-research/expanded/stock-200-input.json.gz scripts/quarter-research/configs/kai-verified-halt.json data/kr-quarter-research/expanded/stock-200-verified-input.json.gz
+node --import tsx scripts/quarter-research/quarter-engine.ts data/kr-quarter-research/expanded/stock-200-verified-input.json.gz data/kr-quarter-research/expanded/reproduction-development development scripts/quarter-research/configs/expanded-candidates.json
+```
+
+현재 200종목은 Npay 3페이지씩의 두 시장 카탈로그와 종목당 시세표 2페이지를 받는다. 9월 7일까지의 완전한 실제 KRX 20거래일 거래대금으로 선정한다. `fetch_current_krx.py --env-file ...`는 기존 앱 인증 환경에서 실행하고 stdout을 로컬 원문 gzip 파일로 보존한다. 운영 사용량 원장은 읽기 전용이며 인증키는 밖으로 복사하지 않는다. 최초 두 시장·9월 8일까지 요청은 KOSPI 당일 빈 응답에서 멈췄다. 이 부분 원문도 보존하고 `--markets KOSDAQ --through 20260907`로 나머지 6일만 조회했다. 총 13회 요청·12회 자료 응답이며 동시 수집기의 모든 사용량을 예약하는 도구는 아니다.
+
+```bash
+python scripts/quarter-research/fetch_current_stocks.py data/kr-quarter-research/expanded/current-provisional data/reliable-strategy-reproduction/2026-09-06-8791951/research-data/panel --universe-size 250 --catalog-pages 3 --table-pages 2
+python scripts/quarter-research/select_current_krx.py data/kr-quarter-research/expanded/current-provisional/manifest.json data/reliable-strategy-reproduction/2026-09-06-8791951/research-data/panel data/kr-quarter-research/etf-input.json.gz data/kr-quarter-research/expanded/current-liquid-manifest.json --recent data/kr-quarter-research/expanded/current-krx.jsonl.gz data/kr-quarter-research/expanded/current-krx-kosdaq.jsonl.gz
+python scripts/quarter-research/prepare_current_inputs.py data/kr-quarter-research/expanded/stock-200-verified-input.json.gz data/kr-quarter-research/etf-input.json.gz data/kr-quarter-research/expanded/current-liquid-manifest.json data/kr-quarter-research/expanded/current-stock-input.json.gz --quarantine-unresolved
+node --import tsx scripts/quarter-research/current-signals.ts data/kr-quarter-research/expanded/current-stock-input.json.gz scripts/quarter-research/configs/expanded-frozen.json data/kr-quarter-research/expanded/current-signals.json
+python scripts/quarter-research/build_value_evidence.py data/kr-quarter-research data/kr-quarter-research/value/evidence
+```
+
+현재 관찰의 `--quarantine-unresolved`는 모든 해당 종목에 미확인 기업행위 이후 실제 일봉만 제공한다. 과거 성과에 같은 처리를 소급 적용한 것은 아니다. 가격 결손 정정용 50종목 비교에는 이전 정책을 유지해 결손 보강의 영향만 측정했다. 이 두 현재 입력의 종목군·자료 적격성 정책을 구분한다.
+
+전체 집계에는 `value-experiments.json`의 모든 실행이 필요하다. 고정 비용·시드·입력 해시·개별 결과를 확인하고 초기 실패 파일은 성공 계좌 집계에 넣지 않는다. 관련 TypeScript 확인에는 `tests/unit/quarterly-value-research.test.ts`와 기존 `tests/unit/low-per-high-roe-rank.test.ts`를 포함한다. 최신 결과와 남은 과제는 `docs/research/kr-current-quarter-value-findings.md`에 있다.

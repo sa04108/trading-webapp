@@ -1,3 +1,4 @@
+import { createQuarterlyValue, valuationSnapshot } from './quarterly-value.js';
 import { createQuarterlyEarnings, hasEightQuarters, quarterlySnapshot } from './quarterly-earnings.js';
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -30,7 +31,8 @@ const describe = (context: StrategyBarContext) => input.currentSymbols.map((symb
   const changes = recent.slice(1).map((c, i) => Math.log(c.close / recent[i]!.close));
   const mean = changes.reduce((a, b) => a + b, 0) / changes.length;
   const quality = annualQuality((input.annualObservations ?? []).filter((r) => r.code === symbol.symbol), tsMs, annualQualityParameters.parse({}));
-  return { ...symbol, close: history.at(-1)?.close, lastBarTsMs: history.at(-1)?.tsMs,
+  const valuation = valuationSnapshot((input.valuationObservations ?? []).filter((r) => r.symbol === symbol.symbol), tsMs);
+  return { ...symbol, valuation: valuation ? { netIncomeTtm: valuation.ttm('NET_INCOME'), totalEquity: valuation.get('TOTAL_EQUITY'), incomePeriod: valuation.periodKeyOf('NET_INCOME'), equityPeriod: valuation.periodKeyOf('TOTAL_EQUITY') } : null, close: history.at(-1)?.close, lastBarTsMs: history.at(-1)?.tsMs,
     return20: momentumScore(history, actions, 20, 0), return60: momentumScore(history, actions, 60, 0),
     return120: momentumScore(history, actions, 120, 0),
     annualVol20: Math.sqrt(changes.reduce((a, b) => a + (b - mean) ** 2, 0) / (changes.length - 1) * 252),
@@ -43,7 +45,8 @@ for (const candidate of candidates) {
   const base = (candidate.strategyId === 'recovery-rotation' ? createRecoveryRotation(macro)
     : candidate.strategyId === 'annual-quality-momentum' ? createAnnualQualityMomentum(input.annualObservations ?? [], macro)
       : candidate.strategyId === 'quarterly-earnings-research' ? createQuarterlyEarnings(input.quarterlyObservations ?? [])
-        : registry.get(candidate.strategyId)) as AnyTradingStrategy | undefined;
+        : candidate.strategyId === 'low-per-quarterly-research' ? createQuarterlyValue(input.valuationObservations ?? [], input.capitalizations ?? [])
+          : registry.get(candidate.strategyId)) as AnyTradingStrategy | undefined;
   if (!base) throw new Error(`전략 누락: ${candidate.strategyId}`);
   const parameters = base.parameterSchema.parse(candidate.parameters);
   const observer: AnyTradingStrategy = {
@@ -75,6 +78,7 @@ for (const candidate of candidates) {
 const output = { asof: input.asof, inputSha256: createHash('sha256').update(bytes).digest('hex'),
   engineVersion: ENGINE_VERSION, initialCash: 100_000_000, signals, diagnostics,
   sources: input.metadata.currentSources,
+  historyQuarantines: input.metadata.currentHistoryQuarantines ?? [],
   note: '연구 후보의 현재 신호이며 실전 채택이나 향후 수익 검증이 아니다. 미래 체결은 시뮬레이션하지 않았다.' };
 writeFileSync(outputPath, `${JSON.stringify(output, null, 2)}\n`);
 process.stdout.write(`${JSON.stringify({ output: outputPath, candidates: signals.length, symbols: diagnostics.length })}\n`);

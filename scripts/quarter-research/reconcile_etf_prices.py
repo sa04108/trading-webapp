@@ -13,9 +13,10 @@ import urllib.request
 from fetch_sources import ETFS
 
 
-def parse_table(raw):
+def parse_table(raw, *, nontrading=None):
     """스크립트를 실행하지 않고 날짜가 있는 시세 행의 일곱 셀만 읽는다."""
     rows = {}
+    found_nontrading = False
     for row in re.findall(r"<tr[^>]*>(.*?)</tr>", raw.decode("euc-kr", errors="replace"), flags=re.S):
         cells = [re.sub(r"\s+", "", html.unescape(re.sub(r"<[^>]*>", "", value)))
                  for value in re.findall(r"<td[^>]*>(.*?)</td>", row, flags=re.S)]
@@ -23,10 +24,15 @@ def parse_table(raw):
             continue
         date = cells[0].replace(".", "")
         close, open_, high, low, volume = [float(cells[i].replace(",", "")) for i in (1, 3, 4, 5, 6)]
+        if nontrading is not None and close > 0 and open_ == high == low == volume == 0:
+            # 거래 없는 날의 표시 종가는 실제 체결 일봉으로 만들지 않는다.
+            found_nontrading = True
+            nontrading[date] = {"open": open_, "high": high, "low": low, "close": close, "volume": volume}
+            continue
         if not 0 < low <= min(open_, close) <= max(open_, close) <= high or volume < 0:
             raise ValueError(f"일별 시세 원문의 OHLC가 유효하지 않습니다: {date}")
         rows[date] = {"open": open_, "high": high, "low": low, "close": close, "volume": volume}
-    if not rows:
+    if not rows and not found_nontrading:
         raise ValueError("가격 행이 없는 시세표입니다")
     return rows
 

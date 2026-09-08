@@ -1,0 +1,74 @@
+[
+  {
+    "directory": "value/development",
+    "stage": "development",
+    "input": "value/valuation-stock-input.json.gz",
+    "selection": "lowper-candidates.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "value/validation",
+    "stage": "validation",
+    "input": "value/valuation-stock-input.json.gz",
+    "selection": "lowper-frozen.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "value/confirmation",
+    "stage": "confirmation",
+    "input": "value/valuation-stock-input.json.gz",
+    "selection": "lowper-frozen.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "expanded/development-verified",
+    "stage": "development",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "expanded-candidates.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "expanded/validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-input.json.gz",
+    "selection": "expanded-frozen.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "expanded/confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-input.json.gz",
+    "selection": "expanded-frozen.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "expanded/cost20",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-input.json.gz",
+    "selection": "expanded-recovery.json",
+    "slippageBps": 20,
+    "seed": 204
+  },
+  {
+    "directory": "expanded/seed205",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-input.json.gz",
+    "selection": "expanded-recovery.json",
+    "slippageBps": 5,
+    "seed": 205
+  },
+  {
+    "directory": "expanded/seed206",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-input.json.gz",
+    "selection": "expanded-recovery.json",
+    "slippageBps": 5,
+    "seed": 206
+  }
+]

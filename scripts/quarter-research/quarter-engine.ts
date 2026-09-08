@@ -1,3 +1,4 @@
+import { createQuarterlyValue, type CapitalizationPoint, type ValuationObservation } from './quarterly-value.js';
 import { createQuarterlyEarnings, type QuarterObservation } from './quarterly-earnings.js';
 import { createAnnualQualityMomentum, type AnnualObservation } from './annual-quality-momentum.js';
 import { createRecoveryRotation } from './recovery-rotation.js';
@@ -45,6 +46,8 @@ export interface ResearchInput {
   facts?: Fact[];
   annualObservations?: AnnualObservation[];
   quarterlyObservations?: QuarterObservation[];
+  valuationObservations?: ValuationObservation[];
+  capitalizations?: CapitalizationPoint[];
   delisted?: Record<string, number[]>;
   uncertainActions?: { symbol: string; date: string; ratio: number; type: string }[];
 }
@@ -189,13 +192,18 @@ export function main(argv: string[]) {
     if (candidate.strategyId === 'quarterly-earnings-research' && !input.quarterlyObservations?.length) {
       throw new Error('분기 실적 관측이 없는 입력입니다');
     }
+    if (candidate.strategyId === 'low-per-quarterly-research' && (!input.valuationObservations?.length || !input.capitalizations?.length)) {
+      throw new Error('가치 평가에 필요한 분기 실적 또는 시가총액이 없는 입력입니다');
+    }
     const base = candidate.strategyId === 'recovery-rotation'
       ? createRecoveryRotation(new Map(input.macro.map((m) => [m.tsMs, m]))) as AnyTradingStrategy
       : candidate.strategyId === 'annual-quality-momentum'
         ? createAnnualQualityMomentum(input.annualObservations ?? [], new Map(input.macro.map((m) => [m.tsMs, m]))) as AnyTradingStrategy
         : candidate.strategyId === 'quarterly-earnings-research'
           ? createQuarterlyEarnings(input.quarterlyObservations ?? []) as AnyTradingStrategy
-          : registry.get(candidate.strategyId);
+          : candidate.strategyId === 'low-per-quarterly-research'
+            ? createQuarterlyValue(input.valuationObservations ?? [], input.capitalizations ?? []) as AnyTradingStrategy
+            : registry.get(candidate.strategyId);
     if (!base) throw new Error(`전략 누락: ${candidate.strategyId}`);
     const parameters = base.parameterSchema.parse(candidate.parameters);
     const results = [];

@@ -1,0 +1,45 @@
+[
+  {
+    "id": "momentum-20-5-monthly",
+    "strategyId": "cross-sectional-momentum",
+    "topN": 5,
+    "rebalanceBars": 20,
+    "parameters": {
+      "formationDays": 20,
+      "skipDays": 0,
+      "topN": 5
+    }
+  },
+  {
+    "id": "momentum-60-5-monthly",
+    "strategyId": "cross-sectional-momentum",
+    "topN": 5,
+    "rebalanceBars": 20,
+    "parameters": {
+      "formationDays": 60,
+      "skipDays": 0,
+      "topN": 5
+    }
+  },
+  {
+    "id": "momentum-120-5-monthly",
+    "strategyId": "cross-sectional-momentum",
+    "topN": 5,
+    "rebalanceBars": 20,
+    "parameters": {
+      "formationDays": 120,
+      "skipDays": 0,
+      "topN": 5
+    }
+  },
+  {
+    "id": "recovery-60-3-monthly",
+    "strategyId": "recovery-rotation",
+    "topN": 3,
+    "parameters": {
+      "formationDays": 60,
+      "topN": 3
+    },
+    "rebalanceBars": 20
+  }
+]

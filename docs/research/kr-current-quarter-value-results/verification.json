@@ -1,0 +1,99 @@
+{
+  "asof": "2026-09-08",
+  "baseCommit": "8a8ccaf",
+  "goalAchieved": false,
+  "typescript": {
+    "files": [
+      "quarter-research",
+      "annual-quality-quarter",
+      "recovery-quarter",
+      "quarterly-earnings-research",
+      "quarterly-value-research",
+      "low-per-high-roe-rank"
+    ],
+    "casesPassed": 35,
+    "status": "passed"
+  },
+  "python": {
+    "command": "/tmp/kr-regime-venv/bin/python -m unittest discover -s scripts/quarter-research -p 'test_*.py'",
+    "casesPassed": 19,
+    "status": "passed"
+  },
+  "eslint": {
+    "command": "pnpm exec eslint scripts/quarter-research/*.ts tests/unit/quarterly-value-research.test.ts",
+    "status": "passed"
+  },
+  "typecheck": {
+    "command": "pnpm exec tsc -p tsconfig.server.json --noEmit",
+    "status": "passed"
+  },
+  "accounts": {
+    "experiments": 34,
+    "developmentConfigurations": 15,
+    "completed": 1369,
+    "checks": [
+      "후보·단계·원래 입력 해시·개별 계좌와 요약 일치",
+      "실패 원본을 성공 계좌 집계에서 제외",
+      "고정 슬리피지·시드·초기자금·목표·낙폭 중단 규칙 일치"
+    ]
+  },
+  "replays": {
+    "operatingIncomeNormalization": "기본 영업이익 정규화 원문과 재실행이 바이트 단위로 같음",
+    "defaultStockPreparation": "기본 주식 준비의 압축 해제 객체가 이전 구현과 같음",
+    "currentTableReparse": 500,
+    "currentPriceCorrectionTargetsUnchanged": 18
+  },
+  "haltRepair": {
+    "failedFile": "data/kr-quarter-research/expanded/development/momentum-20-3-monthly__2017-08-01.json",
+    "failedSha256": "c600bdd96e2bf6be6166745288223e28fcfbf7972295baeca529acd18d3493a2",
+    "failure": {
+      "candidate": {
+        "id": "momentum-20-3-monthly",
+        "strategyId": "cross-sectional-momentum",
+        "topN": 3,
+        "rebalanceBars": 20,
+        "parameters": {
+          "formationDays": 20,
+          "skipDays": 0,
+          "topN": 3
+        }
+      },
+      "stage": "development",
+      "start": "2017-08-01",
+      "end": "2017-10-31",
+      "status": "failed",
+      "error": "준비 완료 후 확정 유니버스 종목의 가격 봉이 사라졌습니다: 047810 (2017-10-11). 거래불가일·상장폐지로 확인되지 않았고 실행 유니버스는 이미 고정되어 재순위할 수 없습니다. 미리보기를 다시 준비하세요."
+    },
+    "verifiedHaltConfiguration": "scripts/quarter-research/configs/kai-verified-halt.json",
+    "priceRowsUnchanged": 1220247,
+    "addedNontradingDate": "2017-10-11"
+  },
+  "api": {
+    "newDartAuthenticatedCalls": 0,
+    "krxRequests": 13,
+    "krxNonemptyResponses": 12,
+    "unavailableRequest": {
+      "market": "KOSPI",
+      "date": "2026-09-08",
+      "response": "OutBlock_1 empty"
+    },
+    "usageLedger": "읽기 전용 확인, 자체 요청 수 기록. 운영 원장 수정이나 전역 호출 예약 없음"
+  },
+  "current": {
+    "universeAsOf": "2026-09-07",
+    "signalAsOf": "2026-09-08",
+    "symbols": 200,
+    "candles": 50186,
+    "overlapOhlcvMatches": 796,
+    "addedCandles": 3195,
+    "unresolvedHistoryRestarts": 10,
+    "futureFills": 0
+  },
+  "limitations": [
+    "전체 저장소 테스트는 실행하지 않음",
+    "현재와 유사한 고변동성 반등의 독립 표본 부족",
+    "과거 보유 중 기업행위는 성공 제외하지만 신호 가격 이력의 미확인 사건 영향은 남음",
+    "현재 워밍업 재시작 정책을 과거 성과에 소급 적용하지 않음",
+    "최신 공시·거시 빈티지 및 배당·완전한 기업행위 처리 한계"
+  ]
+}

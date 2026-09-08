@@ -1,0 +1,62 @@
+[
+  {
+    "id": "lowper-3-5",
+    "strategyId": "low-per-quarterly-research",
+    "topN": 3,
+    "rebalanceBars": 5,
+    "parameters": {
+      "topN": 3,
+      "staleQuarters": 2
+    }
+  },
+  {
+    "id": "lowper-3-20",
+    "strategyId": "low-per-quarterly-research",
+    "topN": 3,
+    "rebalanceBars": 20,
+    "parameters": {
+      "topN": 3,
+      "staleQuarters": 2
+    }
+  },
+  {
+    "id": "lowper-5-5",
+    "strategyId": "low-per-quarterly-research",
+    "topN": 5,
+    "rebalanceBars": 5,
+    "parameters": {
+      "topN": 5,
+      "staleQuarters": 2
+    }
+  },
+  {
+    "id": "lowper-5-20",
+    "strategyId": "low-per-quarterly-research",
+    "topN": 5,
+    "rebalanceBars": 20,
+    "parameters": {
+      "topN": 5,
+      "staleQuarters": 2
+    }
+  },
+  {
+    "id": "lowper-8-5",
+    "strategyId": "low-per-quarterly-research",
+    "topN": 8,
+    "rebalanceBars": 5,
+    "parameters": {
+      "topN": 8,
+      "staleQuarters": 2
+    }
+  },
+  {
+    "id": "lowper-8-20",
+    "strategyId": "low-per-quarterly-research",
+    "topN": 8,
+    "rebalanceBars": 20,
+    "parameters": {
+      "topN": 8,
+      "staleQuarters": 2
+    }
+  }
+]

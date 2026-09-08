@@ -1,0 +1,537 @@
+{
+  "asof": "2026-09-08",
+  "inputSha256": "78ea7d3d2fbb1e0f81735b31094feed5a843feb0f41a0f8fbc9ea4a3f769ea1f",
+  "engineVersion": "2.12.0",
+  "initialCash": 100000000,
+  "signals": [
+    {
+      "candidate": {
+        "id": "momentum-20-5-monthly",
+        "strategyId": "cross-sectional-momentum",
+        "topN": 5,
+        "rebalanceBars": 20,
+        "parameters": {
+          "formationDays": 20,
+          "skipDays": 0,
+          "topN": 5
+        }
+      },
+      "parameters": {
+        "formationDays": 20,
+        "skipDays": 0,
+        "topN": 5,
+        "absoluteMomentumFilter": true
+      },
+      "ordersAtLatestClose": [],
+      "pendingTargets": [
+        "000500",
+        "052690",
+        "181710",
+        "336260",
+        "403870"
+      ],
+      "note": "오늘은 목표 선정 단계이며 다음 종가에 자격·가격을 재확인한 후 매수를 예약한다"
+    },
+    {
+      "candidate": {
+        "id": "momentum-60-5-monthly",
+        "strategyId": "cross-sectional-momentum",
+        "topN": 5,
+        "rebalanceBars": 20,
+        "parameters": {
+          "formationDays": 60,
+          "skipDays": 0,
+          "topN": 5
+        }
+      },
+      "parameters": {
+        "formationDays": 60,
+        "skipDays": 0,
+        "topN": 5,
+        "absoluteMomentumFilter": true
+      },
+      "ordersAtLatestClose": [],
+      "pendingTargets": [
+        "008930",
+        "078930",
+        "161890",
+        "181710",
+        "192820"
+      ],
+      "note": "오늘은 목표 선정 단계이며 다음 종가에 자격·가격을 재확인한 후 매수를 예약한다"
+    },
+    {
+      "candidate": {
+        "id": "momentum-120-5-monthly",
+        "strategyId": "cross-sectional-momentum",
+        "topN": 5,
+        "rebalanceBars": 20,
+        "parameters": {
+          "formationDays": 120,
+          "skipDays": 0,
+          "topN": 5
+        }
+      },
+      "parameters": {
+        "formationDays": 120,
+        "skipDays": 0,
+        "topN": 5,
+        "absoluteMomentumFilter": true
+      },
+      "ordersAtLatestClose": [],
+      "pendingTargets": [
+        "009150",
+        "036930",
+        "095610",
+        "131290",
+        "222800"
+      ],
+      "note": "오늘은 목표 선정 단계이며 다음 종가에 자격·가격을 재확인한 후 매수를 예약한다"
+    },
+    {
+      "candidate": {
+        "id": "recovery-60-3-monthly",
+        "strategyId": "recovery-rotation",
+        "topN": 3,
+        "parameters": {
+          "formationDays": 60,
+          "topN": 3
+        },
+        "rebalanceBars": 20
+      },
+      "parameters": {
+        "formationDays": 60,
+        "topN": 3,
+        "targetAnnualVolatility": 0.3,
+        "positionStopPct": 8
+      },
+      "ordersAtLatestClose": [],
+      "pendingTargets": [
+        {
+          "symbol": "078930",
+          "weight": 0.1848904881645922
+        },
+        {
+          "symbol": "010950",
+          "weight": 0.1848904881645922
+        },
+        {
+          "symbol": "180640",
+          "weight": 0.1848904881645922
+        }
+      ],
+      "note": "오늘은 목표 선정 단계이며 다음 종가에 자격·가격을 재확인한 후 매수를 예약한다"
+    }
+  ],
+  "diagnostics": [
+    {
+      "symbol": "009150",
+      "name": "삼성전기",
+      "market": "KOSPI",
+      "marketCap": 102330363520000,
+      "close": 1370000,
+      "tradedAt": "2026-09-08T16:10:22+09:00",
+      "selectionMarketCap": "108604633984000",
+      "selectionAdv20": 998313438998.05,
+      "universeAsOf": "2026-09-07",
+      "valuation": null,
+      "lastBarTsMs": 1788825600000,
+      "return20": 0.07535321821036112,
+      "return60": -0.20070011668611432,
+      "return120": 2.317191283292978,
+      "annualVol20": 0.7528679194142631,
+      "adv20": 1004725159200,
+      "sma20": 1393700,
+      "quality": null,
+      "quarterlyReady": false
+    },
+    {
+      "symbol": "010950",
+      "name": "S-Oil",
+      "market": "KOSPI",
+      "marketCap": 17945697044800,
+      "close": 159400,
+      "tradedAt": "2026-09-08T16:10:19+09:00",
+      "selectionMarketCap": "17743048019200",
+      "selectionAdv20": 55648379487.5,
+      "universeAsOf": "2026-09-07",
+      "valuation": null,
+      "lastBarTsMs": 1788825600000,
+      "return20": 0.1418338108882522,
+      "return60": 0.4308797127468582,
+      "return120": 0.5123339658444024,
+      "annualVol20": 0.5200126273676952,
+      "adv20": 56117406820,
+      "sma20": 147170,
+      "quality": null,
+      "quarterlyReady": false
+    },
+    {
+      "symbol": "078930",
+      "name": "GS",
+      "market": "KOSPI",
+      "marketCap": 11565489127500,
+      "close": 124500,
+      "tradedAt": "2026-09-08T16:10:16+09:00",
+      "selectionMarketCap": "11667674172000",
+      "selectionAdv20": 63084517947.5,
+      "universeAsOf": "2026-09-07",
+      "valuation": null,
+      "lastBarTsMs": 1788825600000,
+      "return20": 0.2795477903391572,
+      "return60": 0.7172413793103449,
+      "return120": 0.9983948635634028,
+      "annualVol20": 0.5961533771402959,
+      "adv20": 63990319110,
+      "sma20": 118645,
+      "quality": null,
+      "quarterlyReady": false
+    },
+    {
+      "symbol": "180640",
+      "name": "한진칼",
+      "market": "KOSPI",
+      "marketCap": 9907522203600,
+      "close": 148400,
+      "tradedAt": "2026-09-08T16:10:16+09:00",
+      "selectionMarketCap": "9940903343100",
+      "selectionAdv20": 11311990742.5,
+      "universeAsOf": "2026-09-07",
+      "valuation": null,
+      "lastBarTsMs": 1788825600000,
+      "return20": 0.27163667523564694,
+      "return60": 0.2376980817347789,
+      "return120": 0.27710843373493965,
+      "annualVol20": 0.5064161141185529,
+      "adv20": 11981535640,
+      "sma20": 127610,
+      "quality": null,
+      "quarterlyReady": false
+    },
+    {
+      "symbol": "036930",
+      "name": "주성엔지니어링",
+      "market": "KOSDAQ",
+      "marketCap": 9045226146600,
+      "close": 194600,
+      "tradedAt": "2026-09-08T16:10:18+09:00",
+      "selectionMarketCap": "8701265851200",
+      "selectionAdv20": 206217605307.5,
+      "universeAsOf": "2026-09-07",
+      "valuation": null,
+      "lastBarTsMs": 1788825600000,
+      "return20": 0.34392265193370175,
+      "return60": -0.1575757575757576,
+      "return120": 2.0358814352574104,
+      "annualVol20": 0.7014647815482518,
+      "adv20": 219914912050,
+      "sma20": 175810,
+      "quality": null,
+      "quarterlyReady": false
+    },
+    {
+      "symbol": "000500",
+      "name": "가온전선",
+      "market": "KOSPI",
+      "marketCap": 6774405592500,
+      "close": 227500,
+      "tradedAt": "2026-09-08T16:10:20+09:00",
+      "selectionMarketCap": "6982848841500",
+      "selectionAdv20": 41471521440,
+      "universeAsOf": "2026-09-07",
+      "valuation": null,
+      "lastBarTsMs": 1788825600000,
+      "return20": 0.4536741214057507,
+      "return60": null,
+      "return120": null,
+      "annualVol20": 0.9567100472666944,
+      "adv20": 43147572040,
+      "sma20": 185120,
+      "quality": null,
+      "quarterlyReady": false
+    },
+    {
+      "symbol": "052690",
+      "name": "한전기술",
+      "market": "KOSPI",
+      "marketCap": 5450172000000,
+      "close": 142600,
+      "tradedAt": "2026-09-08T16:10:18+09:00",
+      "selectionMarketCap": "4674306000000",
+      "selectionAdv20": 42922944445,
+      "universeAsOf": "2026-09-07",
+      "valuation": null,
+      "lastBarTsMs": 1788825600000,
+      "return20": 0.4132804757185331,
+      "return60": -0.057501652346331755,
+      "return120": -0.1728538283062645,
+      "annualVol20": 1.1386913948208468,
+      "adv20": 58849909470,
+      "sma20": 107945,
+      "quality": null,
+      "quarterlyReady": false
+    },
+    {
+      "symbol": "222800",
+      "name": "심텍",
+      "market": "KOSDAQ",
+      "marketCap": 4625260970400,
+      "close": 121800,
+      "tradedAt": "2026-09-08T16:10:22+09:00",
+      "selectionMarketCap": "4549312514400",
+      "selectionAdv20": 104284813335,
+      "universeAsOf": "2026-09-07",
+      "valuation": null,
+      "lastBarTsMs": 1788825600000,
+      "return20": 0.05090595340811044,
+      "return60": -0.06379707916986932,
+      "return120": 1.1749999999999998,
+      "annualVol20": 0.946068797556004,
+      "adv20": 104019625710,
+      "sma20": 115450,
+      "quality": null,
+      "quarterlyReady": false
+    },
+    {
+      "symbol": "403870",
+      "name": "HPSP",
+      "market": "KOSDAQ",
+      "marketCap": 4386590000000,
+      "close": 53300,
+      "tradedAt": "2026-09-08T16:10:18+09:00",
+      "selectionMarketCap": "4386590000000",
+      "selectionAdv20": 126593225282.5,
+      "universeAsOf": "2026-09-07",
+      "valuation": null,
+      "lastBarTsMs": 1788825600000,
+      "return20": 0.4424898511502029,
+      "return60": -0.2545454545454545,
+      "return120": 0.21550741163055864,
+      "annualVol20": 0.6197626979523848,
+      "adv20": 130585472992.5,
+      "sma20": 47082.5,
+      "quality": null,
+      "quarterlyReady": false
+    },
+    {
+      "symbol": "008930",
+      "name": "한미사이언스",
+      "market": "KOSPI",
+      "marketCap": 3946192435000,
+      "close": 57700,
+      "tradedAt": "2026-09-08T16:10:17+09:00",
+      "selectionMarketCap": "3706822010000",
+      "selectionAdv20": 27479311046.25,
+      "universeAsOf": "2026-09-07",
+      "valuation": null,
+      "lastBarTsMs": 1788825600000,
+      "return20": 0.262582056892779,
+      "return60": 0.9169435215946844,
+      "return120": 0.5786593707250343,
+      "annualVol20": 1.2303991481143008,
+      "adv20": 29770043292.5,
+      "sma20": 47297.5,
+      "quality": null,
+      "quarterlyReady": false
+    },
+    {
+      "symbol": "161890",
+      "name": "한국콜마",
+      "market": "KOSPI",
+      "marketCap": 3328315857000,
+      "close": 141000,
+      "tradedAt": "2026-09-08T16:10:17+09:00",
+      "selectionMarketCap": "3406212611100",
+      "selectionAdv20": 71131809377.5,
+      "universeAsOf": "2026-09-07",
+      "valuation": null,
+      "lastBarTsMs": 1788825600000,
+      "return20": 0.33144475920679883,
+      "return60": 0.6319444444444444,
+      "return120": 1.028776978417266,
+      "annualVol20": 0.9416450114114931,
+      "adv20": 73453906350,
+      "sma20": 142285,
+      "quality": null,
+      "quarterlyReady": false
+    },
+    {
+      "symbol": "336260",
+      "name": "두산퓨얼셀",
+      "market": "KOSPI",
+      "marketCap": 3225566005500,
+      "close": 49250,
+      "tradedAt": "2026-09-08T16:10:21+09:00",
+      "selectionMarketCap": "3268136927400",
+      "selectionAdv20": 48591097538.75,
+      "universeAsOf": "2026-09-07",
+      "valuation": null,
+      "lastBarTsMs": 1788825600000,
+      "return20": 0.4767616191904047,
+      "return60": -0.32626538987688103,
+      "return120": 0.14935822637106178,
+      "annualVol20": 1.0601338165696048,
+      "adv20": 49564737430,
+      "sma20": 41435,
+      "quality": null,
+      "quarterlyReady": false
+    },
+    {
+      "symbol": "192820",
+      "name": "코스맥스",
+      "market": "KOSPI",
+      "marketCap": 3007619885000,
+      "close": 265000,
+      "tradedAt": "2026-09-08T16:10:20+09:00",
+      "selectionMarketCap": "3109765466000",
+      "selectionAdv20": 49077411742.5,
+      "universeAsOf": "2026-09-07",
+      "valuation": null,
+      "lastBarTsMs": 1788825600000,
+      "return20": 0.3022113022113022,
+      "return60": 0.5717674970344009,
+      "return120": 0.5524311657879319,
+      "annualVol20": 0.7816598037393266,
+      "adv20": 51372602175,
+      "sma20": 269525,
+      "quality": null,
+      "quarterlyReady": false
+    },
+    {
+      "symbol": "095610",
+      "name": "테스",
+      "market": "KOSDAQ",
+      "marketCap": 2867216000000,
+      "close": 148100,
+      "tradedAt": "2026-09-08T16:10:22+09:00",
+      "selectionMarketCap": "2956272000000",
+      "selectionAdv20": 51218829402.5,
+      "universeAsOf": "2026-09-07",
+      "valuation": null,
+      "lastBarTsMs": 1788825600000,
+      "return20": 0.03856942496493687,
+      "return60": -0.18715697036223933,
+      "return120": 1.2405446293494706,
+      "annualVol20": 0.5834233465360713,
+      "adv20": 50469086835,
+      "sma20": 142060,
+      "quality": null,
+      "quarterlyReady": false
+    },
+    {
+      "symbol": "131290",
+      "name": "티에스이",
+      "market": "KOSDAQ",
+      "marketCap": 2831725824000,
+      "close": 256000,
+      "tradedAt": "2026-09-08T16:10:18+09:00",
+      "selectionMarketCap": "2892563683500",
+      "selectionAdv20": 32541169712.5,
+      "universeAsOf": "2026-09-07",
+      "valuation": null,
+      "lastBarTsMs": 1788825600000,
+      "return20": 0.12775330396475781,
+      "return60": -0.05360443622920519,
+      "return120": 1.2358078602620086,
+      "annualVol20": 0.863227837044382,
+      "adv20": 33181576025,
+      "sma20": 245600,
+      "quality": null,
+      "quarterlyReady": false
+    },
+    {
+      "symbol": "181710",
+      "name": "NHN",
+      "market": "KOSPI",
+      "marketCap": 1961913026100,
+      "close": 59900,
+      "tradedAt": "2026-09-08T16:10:18+09:00",
+      "selectionMarketCap": "2318922241200",
+      "selectionAdv20": 23330910611.25,
+      "universeAsOf": "2026-09-07",
+      "valuation": null,
+      "lastBarTsMs": 1788825600000,
+      "return20": 0.43473053892215563,
+      "return60": 0.5050251256281406,
+      "return120": 0.5478036175710594,
+      "annualVol20": 1.4749764046761817,
+      "adv20": 25958332605,
+      "sma20": 68545,
+      "quality": null,
+      "quarterlyReady": false
+    }
+  ],
+  "sources": {
+    "manifestSha256": "fe31e16acd150e341f6106151dc9f7241de5a97cbe66570e3ade7697c32f723c",
+    "stockSha256": "e057c3e60a06d181bf9715380a32b0ef343590b495adad2562ac15c414b6d5c7",
+    "macroSha256": "1850d7825cdd695893f20bf18579ef58c92c4b460ffaa8aa544694f9145d5dc4",
+    "overlapMatches": 796,
+    "addedCandleCount": 3195,
+    "warmupCalendarChecked": true
+  },
+  "historyQuarantines": [
+    {
+      "symbol": "000500",
+      "date": "2026-06-30",
+      "ratio": 1.7995827371134585,
+      "type": "unresolved"
+    },
+    {
+      "symbol": "000880",
+      "date": "2026-08-25",
+      "ratio": 0.8330065703273688,
+      "type": "unresolved"
+    },
+    {
+      "symbol": "009830",
+      "date": "2026-06-15",
+      "ratio": 1.060179114471445,
+      "type": "unresolved"
+    },
+    {
+      "symbol": "011790",
+      "date": "2026-04-06",
+      "ratio": 1.063902107409925,
+      "type": "unresolved"
+    },
+    {
+      "symbol": "018880",
+      "date": "2025-11-13",
+      "ratio": 1.0758897006834787,
+      "type": "unresolved"
+    },
+    {
+      "symbol": "068270",
+      "date": "2026-06-04",
+      "ratio": 1.049135908535175,
+      "type": "unresolved"
+    },
+    {
+      "symbol": "196170",
+      "date": "2026-08-05",
+      "ratio": 1.2996306745741242,
+      "type": "unresolved"
+    },
+    {
+      "symbol": "207940",
+      "date": "2025-11-24",
+      "ratio": 0.6794659081930947,
+      "type": "unresolved"
+    },
+    {
+      "symbol": "010120",
+      "date": "2026-04-13",
+      "ratio": 5,
+      "type": "inferred-unit-change"
+    },
+    {
+      "symbol": "347850",
+      "date": "2025-11-13",
+      "ratio": 4,
+      "type": "inferred-unit-change"
+    }
+  ],
+  "note": "연구 후보의 현재 신호이며 실전 채택이나 향후 수익 검증이 아니다. 미래 체결은 시뮬레이션하지 않았다.",
+  "fullSourceSha256": "7e856041572da19881b0adc1c1407c292cca44baa6d173572b272cc4ae8d5009",
+  "diagnosticsScope": "현재 네 후보의 목표 종목만 발췌했다. 전체 200종목 진단은 해시가 기록된 로컬 원문에 보존했다."
+}

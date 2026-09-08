@@ -22,11 +22,11 @@ def amount(value):
     return result if abs(result) <= 2 ** 53 - 1 else None
 
 
-def normalize(rows, mapping):
+def normalize(rows, mapping, account_names=("영업이익", "영업이익(손실)")):
     grouped = defaultdict(list)
     excluded = []
     for row in rows:
-        if row.get("account_nm", "").replace(" ", "") not in ("영업이익", "영업이익(손실)"):
+        if row.get("account_nm", "").replace(" ", "") not in account_names:
             continue
         code, basis = row.get("stock_code"), row.get("fs_div")
         key = (code, int(row["bsns_year"]), REPORT_QUARTER[row["reprt_code"]], basis)

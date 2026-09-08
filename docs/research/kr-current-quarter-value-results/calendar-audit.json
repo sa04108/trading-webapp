@@ -1,0 +1,19 @@
+{
+  "missingPanelDates": [
+    "2026-08-18",
+    "2026-08-19",
+    "2026-08-20",
+    "2026-08-24"
+  ],
+  "originalCurrentRawCandleCounts": {
+    "2026-08-18": 0,
+    "2026-08-19": 0,
+    "2026-08-20": 0,
+    "2026-08-24": 0
+  },
+  "completedStockExperimentsChecked": 103,
+  "completedStockAccountsChecked": 4324,
+  "lastCompletedEnd": "2026-08-03",
+  "overlappingCompletedAccounts": 0,
+  "newHistoricalBoundary": "2026-08-14"
+}

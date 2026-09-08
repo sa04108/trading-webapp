@@ -1,0 +1,14 @@
+{
+  "symbol": "047810",
+  "from": "2017-10-11",
+  "through": "2017-10-18",
+  "sourcePath": "data/kr-quarter-research/expanded/sources/kai-2017q3-investor-protection.html",
+  "sourceSha256": "6164ac31c934eed683b3024d4971365eea428fd753d5eb7c774b5e0d01fbca88",
+  "sourceUrl": "https://dart.fss.or.kr/report/viewer.do?rcpNo=20171114001514&dcmNo=5844913&eleId=30&offset=933600&length=23751&dtd=dart3.xsd",
+  "reportReceipt": "20171114001514",
+  "requiredPhrases": [
+    "2017년 10월 11일",
+    "2017년 10월 18일까지 주권매매거래가 정지되었습니다."
+  ],
+  "description": "한국항공우주 2017년 3분기 보고서 XI절의 거래정지 기간을 원래 KRX·Npay의 0 OHLC와 대조했다."
+}

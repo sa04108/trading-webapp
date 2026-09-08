@@ -1,0 +1,564 @@
+{
+  "oldCandidatesCompared": 20,
+  "currentCandidates": 24,
+  "changedCandidates": [
+    {
+      "candidate": "momentum-20-5-monthly",
+      "beforePending": [
+        "003670",
+        "006400",
+        "010950",
+        "066570",
+        "096770"
+      ],
+      "afterPending": [
+        "000660",
+        "005930",
+        "034730",
+        "042700",
+        "402340"
+      ],
+      "beforeOrders": [],
+      "afterOrders": []
+    },
+    {
+      "candidate": "momentum-20-3-monthly",
+      "beforePending": [
+        "003670",
+        "006400",
+        "010950"
+      ],
+      "afterPending": [
+        "000660",
+        "042700",
+        "402340"
+      ],
+      "beforeOrders": [],
+      "afterOrders": []
+    },
+    {
+      "candidate": "momentum-60-5-monthly",
+      "beforePending": [
+        "010950",
+        "086790",
+        "096770",
+        "138040",
+        "316140"
+      ],
+      "afterPending": [
+        "010950",
+        "055550",
+        "086790",
+        "096770",
+        "138040"
+      ],
+      "beforeOrders": [],
+      "afterOrders": []
+    },
+    {
+      "candidate": "momentum-20-5",
+      "beforePending": [
+        "003670",
+        "006400",
+        "010950",
+        "066570",
+        "096770"
+      ],
+      "afterPending": [
+        "000660",
+        "005930",
+        "034730",
+        "042700",
+        "402340"
+      ],
+      "beforeOrders": [],
+      "afterOrders": []
+    },
+    {
+      "candidate": "recovery-60-3-monthly",
+      "beforePending": [
+        {
+          "symbol": "010950",
+          "weight": 0.22158160229497206
+        },
+        {
+          "symbol": "138040",
+          "weight": 0.22158160229497206
+        },
+        {
+          "symbol": "086790",
+          "weight": 0.22158160229497206
+        }
+      ],
+      "afterPending": [
+        {
+          "symbol": "010950",
+          "weight": 0.2411539410493492
+        },
+        {
+          "symbol": "138040",
+          "weight": 0.2411539410493492
+        },
+        {
+          "symbol": "055550",
+          "weight": 0.2411539410493492
+        }
+      ],
+      "beforeOrders": [],
+      "afterOrders": []
+    },
+    {
+      "candidate": "recovery-40-3-monthly",
+      "beforePending": [
+        {
+          "symbol": "010950",
+          "weight": 0.1704564335801446
+        },
+        {
+          "symbol": "096770",
+          "weight": 0.1704564335801446
+        },
+        {
+          "symbol": "138040",
+          "weight": 0.1704564335801446
+        }
+      ],
+      "afterPending": [
+        {
+          "symbol": "010950",
+          "weight": 0.170020194840472
+        },
+        {
+          "symbol": "096770",
+          "weight": 0.170020194840472
+        },
+        {
+          "symbol": "267250",
+          "weight": 0.170020194840472
+        }
+      ],
+      "beforeOrders": [],
+      "afterOrders": []
+    },
+    {
+      "candidate": "recovery-80-3-monthly",
+      "beforePending": [
+        {
+          "symbol": "010950",
+          "weight": 0.16928699313802983
+        },
+        {
+          "symbol": "066570",
+          "weight": 0.16928699313802983
+        },
+        {
+          "symbol": "055550",
+          "weight": 0.16928699313802983
+        }
+      ],
+      "afterPending": [
+        {
+          "symbol": "010950",
+          "weight": 0.2411539410493492
+        },
+        {
+          "symbol": "138040",
+          "weight": 0.2411539410493492
+        },
+        {
+          "symbol": "055550",
+          "weight": 0.2411539410493492
+        }
+      ],
+      "beforeOrders": [],
+      "afterOrders": []
+    },
+    {
+      "candidate": "quality-20-15",
+      "beforePending": [
+        "000660",
+        "010130",
+        "267250",
+        "298040",
+        "402340"
+      ],
+      "afterPending": [
+        "000660",
+        "267250",
+        "402340"
+      ],
+      "beforeOrders": [],
+      "afterOrders": []
+    },
+    {
+      "candidate": "quality-60-0",
+      "beforePending": [
+        "010130",
+        "055550",
+        "086790",
+        "105560",
+        "207940"
+      ],
+      "afterPending": [
+        "055550",
+        "086790",
+        "105560",
+        "207940",
+        "267250"
+      ],
+      "beforeOrders": [],
+      "afterOrders": []
+    },
+    {
+      "candidate": "quality-60-15",
+      "beforePending": [
+        "010130",
+        "012450",
+        "207940",
+        "402340"
+      ],
+      "afterPending": [
+        "010130",
+        "207940",
+        "267250"
+      ],
+      "beforeOrders": [],
+      "afterOrders": []
+    },
+    {
+      "candidate": "quality-60-30",
+      "beforePending": [
+        "010130",
+        "012450",
+        "207940",
+        "402340"
+      ],
+      "afterPending": [
+        "010130",
+        "207940",
+        "267250"
+      ],
+      "beforeOrders": [],
+      "afterOrders": []
+    },
+    {
+      "candidate": "rsi-2-30",
+      "beforePending": null,
+      "afterPending": null,
+      "beforeOrders": [
+        {
+          "symbol": "000270",
+          "side": "BUY",
+          "quantity": 54,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "003670",
+          "side": "BUY",
+          "quantity": 28,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "005490",
+          "side": "BUY",
+          "quantity": 24,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "006400",
+          "side": "BUY",
+          "quantity": 10,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "010130",
+          "side": "BUY",
+          "quantity": 4,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "012330",
+          "side": "BUY",
+          "quantity": 12,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "018260",
+          "side": "BUY",
+          "quantity": 24,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "033780",
+          "side": "BUY",
+          "quantity": 63,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "035720",
+          "side": "BUY",
+          "quantity": 200,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "051910",
+          "side": "BUY",
+          "quantity": 20,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "138040",
+          "side": "BUY",
+          "quantity": 56,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "207940",
+          "side": "BUY",
+          "quantity": 6,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "373220",
+          "side": "BUY",
+          "quantity": 17,
+          "reason": "REVERSION"
+        }
+      ],
+      "afterOrders": [
+        {
+          "symbol": "000270",
+          "side": "BUY",
+          "quantity": 59,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "003670",
+          "side": "BUY",
+          "quantity": 29,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "005490",
+          "side": "BUY",
+          "quantity": 25,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "006400",
+          "side": "BUY",
+          "quantity": 10,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "010130",
+          "side": "BUY",
+          "quantity": 4,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "012330",
+          "side": "BUY",
+          "quantity": 13,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "018260",
+          "side": "BUY",
+          "quantity": 25,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "033780",
+          "side": "BUY",
+          "quantity": 68,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "035720",
+          "side": "BUY",
+          "quantity": 206,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "051910",
+          "side": "BUY",
+          "quantity": 21,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "138040",
+          "side": "BUY",
+          "quantity": 59,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "207940",
+          "side": "BUY",
+          "quantity": 6,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "373220",
+          "side": "BUY",
+          "quantity": 18,
+          "reason": "REVERSION"
+        }
+      ]
+    },
+    {
+      "candidate": "rsi-5-30",
+      "beforePending": null,
+      "afterPending": null,
+      "beforeOrders": [
+        {
+          "symbol": "012330",
+          "side": "BUY",
+          "quantity": 12,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "068270",
+          "side": "BUY",
+          "quantity": 52,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "196170",
+          "side": "BUY",
+          "quantity": 14,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "207940",
+          "side": "BUY",
+          "quantity": 6,
+          "reason": "REVERSION"
+        }
+      ],
+      "afterOrders": [
+        {
+          "symbol": "012330",
+          "side": "BUY",
+          "quantity": 13,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "068270",
+          "side": "BUY",
+          "quantity": 55,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "196170",
+          "side": "BUY",
+          "quantity": 14,
+          "reason": "REVERSION"
+        },
+        {
+          "symbol": "207940",
+          "side": "BUY",
+          "quantity": 6,
+          "reason": "REVERSION"
+        }
+      ]
+    },
+    {
+      "candidate": "earnings-60-5",
+      "beforePending": [
+        "034730",
+        "207940",
+        "055550",
+        "402340",
+        "105560"
+      ],
+      "afterPending": [
+        "034730",
+        "207940",
+        "055550",
+        "267250",
+        "105560"
+      ],
+      "beforeOrders": [],
+      "afterOrders": []
+    },
+    {
+      "candidate": "earnings-126-3",
+      "beforePending": [
+        "034730",
+        "402340",
+        "000660"
+      ],
+      "afterPending": [
+        "034730",
+        "402340",
+        "005930"
+      ],
+      "beforeOrders": [],
+      "afterOrders": []
+    },
+    {
+      "candidate": "earnings-126-5",
+      "beforePending": [
+        "034730",
+        "402340",
+        "000660",
+        "005930",
+        "010120"
+      ],
+      "afterPending": [
+        "034730",
+        "402340",
+        "005930",
+        "000660",
+        "010120"
+      ],
+      "beforeOrders": [],
+      "afterOrders": []
+    },
+    {
+      "candidate": "earnings-126-8",
+      "beforePending": [
+        "034730",
+        "402340",
+        "000660",
+        "005930",
+        "010120",
+        "298040",
+        "105560",
+        "055550"
+      ],
+      "afterPending": [
+        "034730",
+        "402340",
+        "005930",
+        "000660",
+        "010120",
+        "028260",
+        "000150",
+        "298040"
+      ],
+      "beforeOrders": [],
+      "afterOrders": []
+    },
+    {
+      "candidate": "earnings-252-5",
+      "beforePending": [
+        "402340",
+        "005930",
+        "034730",
+        "000660",
+        "298040"
+      ],
+      "afterPending": [
+        "402340",
+        "005930",
+        "000660",
+        "034730",
+        "010120"
+      ],
+      "beforeOrders": [],
+      "afterOrders": []
+    }
+  ]
+}
