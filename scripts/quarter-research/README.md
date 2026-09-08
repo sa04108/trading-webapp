@@ -31,7 +31,7 @@ python scripts/quarter-research/add_annual_inputs.py data/kr-quarter-research/st
 node --import tsx scripts/quarter-research/quarter-engine.ts data/kr-quarter-research/stock-50-input.json.gz data/kr-quarter-research/reproduction-stock-confirmation confirmation scripts/quarter-research/configs/stock-frozen-diagnostics.json
 ```
 
-인수는 `입력.gz 출력폴더 단계 [후보.json] [슬리피지bp] [시드] [앞에서 실행할 창 수 또는 0] [초기현금] [옵션.json]` 순서다. 단계는 `development`, `validation`, `confirmation`이다. 출력 폴더는 새 경로를 권장한다. 같은 경로를 재사용하면 같은 이름 결과를 덮어쓰므로 실패 원본은 먼저 보존해야 한다.
+인수는 `입력.gz 출력폴더 단계 [후보.json] [슬리피지bp] [시드] [앞에서 실행할 창 수 또는 0] [초기현금] [옵션.json]` 순서다. 단계는 `earlier`, `development`, `validation`, `confirmation`이다. 출력 폴더는 새 경로를 권장한다. 같은 경로를 재사용하면 같은 이름 결과를 덮어쓰므로 실패 원본은 먼저 보존해야 한다.
 
 월 첫 실제 거래일부터 달력 3개월 계좌를 시작하며 전체 창이 단계와 자료 기간 안에 있어야 한다. 기존 전략의 종가 신호·다음 시가 체결·두 단계 회전을 그대로 따른다. 주식 세금은 날짜별 프로필, ETF 세금은 0, 수수료는 편도 1.5bp, 기본 슬리피지는 5bp, 직전 거래량의 1% 체결 한도를 사용한다. ETF 가격 2천원 미만도 5원 호가를 적용하는 보수적 단순화가 있다.
 
@@ -163,3 +163,20 @@ python scripts/quarter-research/build_faster_evidence.py data/kr-quarter-researc
 ```
 
 집계 전에는 실험 목록의 모든 조합을 지정 경로에서 완료해야 한다. 40일 개발은 이전 가격 이력 정책이 달라 직접 비교하지 않는다. [기간 단축 결과](../../docs/research/kr-current-quarter-faster-recovery-findings.md)에 채택 실패와 미청산을 포함한 모든 결과를 기록했다.
+
+
+## 2011년 추가 역사 국면
+
+`configs/earlier-experiments.json`의 두 실행은 고정 후보 세 개로 72개 계좌를 만든다. 별도 `earlier` 단계는 2011~2014년이며 현재 확보 입력은 2011-01-03~2012-03-22다. 30% 조건의 18개 시작점과 25%에만 추가되는 6개를 실행하고 35% 부분집합은 재실행하지 않는다. [추가 국면 결과](../../docs/research/kr-current-quarter-earlier-findings.md)에 모두 실패한 결과와 자료 처리의 비교 한계를 기록했다.
+
+`fetch_earlier_krx.py --env-file ... --days-json 'YYYYMMDD 배열' --kinds daily basic`은 기존 앱 인증 환경 안에서 실행하고 stdout gzip을 로컬로 보존한다. 고정 수집 날짜는 `earlier-krx-dates.json`이다. 원본 `krx-sample.jsonl.gz`의 20110103·20110907 두 날짜는 두 종류를 함께 조회한 8개 응답이며, 나머지 302일은 종류별 `krx-daily.jsonl.gz`·`krx-basic.jsonl.gz`다. 이미 받은 날짜는 요청 목록에서 빼고 새 파일에 저장한다. 이 CLI는 원격 환경을 자동으로 찾거나 원문을 자동으로 합치지 않는다. 사용량 원장은 읽기 전용이며 다른 동시 수집기의 호출을 전역 예약하지 않는다.
+
+`fetch_earlier_sources.py --env-file ...`도 같은 인증 환경에서 FRED 관측 API를 호출하고 stdout gzip을 `fred-api.jsonl.gz`로 보존한다. 최초 공개 CSV 경로의 시간 초과 원문 기록은 `fetch-failures.json`에 별도로 남겼다. 인증키가 없는 공개 URL과 허용한 관측 필드만 결과에 남는다. 이전 Npay 지수·VIX·한국은행 저장 원문도 준비해야 한다.
+
+```bash
+python scripts/quarter-research/prepare_earlier_input.py data/kr-quarter-research/earlier data/kr-quarter-research/earlier/stock-200-input.json.gz scripts/quarter-research/configs
+node --import tsx scripts/quarter-research/quarter-engine.ts data/kr-quarter-research/earlier/stock-200-input.json.gz data/kr-quarter-research/earlier/reproduction-primary earlier scripts/quarter-research/configs/earlier-candidates.json 5 204 0 100000000 scripts/quarter-research/configs/earlier-30-options.json
+python scripts/quarter-research/build_earlier_evidence.py data/kr-quarter-research data/kr-quarter-research/earlier/evidence
+```
+
+집계 전에는 실험 목록의 `primary`·`extra25` 두 출력 경로를 모두 완료해야 한다. 위 `reproduction-primary` 예시는 별도 계좌 재현용이다. 입력 생성기는 25·30·35% 전체 옵션을 다시 만들며, 25% 전용 추가 옵션은 25% 시작일에서 30% 시작일을 뺀 고정 파일이다. 바이트 재현에는 보존 원문, 같은 출력 파일명과 동일한 의존성 버전을 쓴다. 원자료는 Git에서 제외하며 공개 요약만 저장한다.

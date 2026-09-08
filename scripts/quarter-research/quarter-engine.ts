@@ -61,6 +61,7 @@ export interface Candidate {
   rebalanceBars?: number;
 }
 export const STAGES = {
+  earlier: ['2011-01-01', '2014-12-31'],
   development: ['2016-01-01', '2019-12-31'],
   validation: ['2020-01-01', '2023-12-31'],
   confirmation: ['2024-01-01', '2026-09-08'],
@@ -178,7 +179,7 @@ function summarize(values: readonly { returnPct: number; drawdownPct: number; ta
 export function main(argv: string[]) {
   const [inputPath, outputPath, stage, selectionPath, slippageArg, seedArg, windowLimitArg, cashArg, optionsPath] = argv;
   if (!inputPath || !outputPath || !stage || !(stage in STAGES)) {
-    throw new Error('사용법: quarter-engine.ts input.gz output-dir development|validation|confirmation [selection.json] [slippage-bps] [seed] [window-limit-or-0] [initial-cash] [options.json]');
+    throw new Error('사용법: quarter-engine.ts input.gz output-dir earlier|development|validation|confirmation [selection.json] [slippage-bps] [seed] [window-limit-or-0] [initial-cash] [options.json]');
   }
   const bytes = readFileSync(inputPath);
   const input = JSON.parse(gunzipSync(bytes).toString()) as ResearchInput;

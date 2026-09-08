@@ -1,0 +1,18 @@
+{
+  "resetUncertainHistory": true,
+  "starts": [
+    "2011-10-28",
+    "2011-10-31",
+    "2011-11-01",
+    "2011-12-08",
+    "2011-12-09",
+    "2011-12-23"
+  ],
+  "dateSelection": {
+    "minimumVolatility": 0.25,
+    "positiveReturn20": true,
+    "aboveSma20": true,
+    "inputSha256": "2be87680feb65ead7a28fa13ae563b4b0075a608ff38c8863cd139b1cd5aac0c",
+    "note": "30% 기본 날짜는 기존 실행을 재사용하고 25%에서만 추가되는 날짜를 실행"
+  }
+}

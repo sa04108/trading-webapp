@@ -1,0 +1,21 @@
+{
+  "recordedAfterAttempt": true,
+  "attempts": [
+    {
+      "source": "FRED public CSV",
+      "series": "DCOILBRENTEU",
+      "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DCOILBRENTEU&cosd=2010-01-01&coed=2012-03-22",
+      "timeoutSeconds": 40,
+      "errorType": "TimeoutError",
+      "responseSaved": false,
+      "processSession": 7869,
+      "note": "실행 도구의 종료 기록을 사후 옮겼으며 정확한 요청 시각·서버 수신 여부는 기록하지 못했다."
+    }
+  ],
+  "recovery": {
+    "source": "FRED official authenticated observations API",
+    "successfulSeries": 5,
+    "raw": "fred-api.jsonl.gz",
+    "credentialsRemainInExistingAppEnvironment": true
+  }
+}

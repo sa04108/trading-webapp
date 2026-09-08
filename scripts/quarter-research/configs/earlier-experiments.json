@@ -1,0 +1,20 @@
+[
+  {
+    "directory": "earlier/primary",
+    "stage": "earlier",
+    "input": "earlier/stock-200-input.json.gz",
+    "selection": "earlier-candidates.json",
+    "options": "earlier-30-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "earlier/extra25",
+    "stage": "earlier",
+    "input": "earlier/stock-200-input.json.gz",
+    "selection": "earlier-candidates.json",
+    "options": "earlier-25-extra-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  }
+]

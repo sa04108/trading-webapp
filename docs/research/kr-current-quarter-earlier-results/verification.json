@@ -1,0 +1,75 @@
+{
+  "asof": "2026-09-08",
+  "baseCommit": "413a89a",
+  "protocolBaseCommit": "bc99bbd",
+  "status": "자료·실행 대조 통과, 세 후보 모두 추가 과거 국면 목표 실패",
+  "checks": [
+    {
+      "command": "python -m unittest discover -s scripts/quarter-research -p test_*.py -v",
+      "exitCode": 0,
+      "tests": 26,
+      "processSession": 94058
+    },
+    {
+      "command": "pnpm exec vitest run tests/unit/quarter-research.test.ts tests/unit/recovery-quarter.test.ts tests/unit/uncertain-history-quarter.test.ts tests/unit/confirmed-entry-quarter.test.ts",
+      "exitCode": 0,
+      "testFiles": 4,
+      "tests": 14,
+      "processSession": 6269
+    },
+    {
+      "check": "관련 연구 TypeScript 및 네 테스트의 ESLint",
+      "exitCode": 0,
+      "processSession": 88213
+    },
+    {
+      "command": "pnpm exec tsc -p tsconfig.server.json --noEmit",
+      "exitCode": 0,
+      "processSession": 12255
+    },
+    {
+      "check": "원문에서 전체 입력·날짜 옵션 재생성",
+      "exitCode": 0,
+      "sameInputBytes": true,
+      "sameDateOptionFiles": 3,
+      "inputSha256": "2be87680feb65ead7a28fa13ae563b4b0075a608ff38c8863cd139b1cd5aac0c",
+      "processSession": 89360
+    },
+    {
+      "check": "기본 옵션 2024-01-02 계좌 원본과 전체 바이트 대조",
+      "exitCode": 0,
+      "sameBytes": true,
+      "processSession": 49949
+    },
+    {
+      "command": "python scripts/quarter-research/build_earlier_evidence.py data/kr-quarter-research data/kr-quarter-research/earlier/evidence",
+      "exitCode": 0,
+      "accounts": 72,
+      "conditionSummaries": 9,
+      "allFillCommissionAndDatedTaxChecked": true,
+      "processSession": 83589
+    },
+    {
+      "check": "FRED 저장 원문의 공개 URL·관측 필드 허용 목록 검증",
+      "exitCode": 0,
+      "series": 5
+    }
+  ],
+  "resolvedVerificationFailures": [
+    "최초 집계기가 매도세 원 미만 절사를 반영하지 못해 중단했다. 기존 엔진의 시장별 세목 절사와 실제 봉의 거래 시장을 대조하도록 집계기를 수정한 뒤 전 계좌 검증을 통과했다.",
+    "재개 후 .venv/bin/python 경로가 없어 두 명령이 exit 127로 실행되지 않았다. 기존 /tmp/kr-regime-venv/bin/python 환경에서 다시 실행해 통과했다."
+  ],
+  "changes": "연구 earlier 날짜 단계·수집·입력 생성·집계·재현 문서 추가; 기존 매매 로직 변경 없음",
+  "limits": [
+    "24개 시작일의 반복 후보 계좌이며 비중첩 시장 구간은 두 개",
+    "기준가격 불연속을 보수적으로 격리했으며 기업행위·배당 총수익 및 당시 발표 빈티지가 완전하지 않음"
+  ],
+  "publicFilesSha256": {
+    "conditions.csv": "34af14b4aab9304e5058ae0059243ae55882448e3d572ce1e9e9f74b8a71c93e",
+    "date-audit.json": "9c2d4bf31cee8a88dcc7af4bed2a8d7b95f44d233c65119d2bc4e9ff59991adb",
+    "evidence-manifest.json": "2d7f91ca21506981bb49543b5899630bc48e3f7181c22953a19ecbbfdebd78de",
+    "fetch-failures.json": "02fe96620d0d2eea547b39f2f4daea83491eafe1f8fa36911a6c2f8a0025fbdb",
+    "input-diagnostics.json": "817590e61fe95f30a6fc41e12c38db3b8d293e8b7f7bc84d8d93eec5a71f816d",
+    "nonoverlapping-accounts.json": "04cdd10ca2af0c30229e08c1c9d8f35e62c8a1e48b936388625fd1dc6e222317"
+  }
+}
