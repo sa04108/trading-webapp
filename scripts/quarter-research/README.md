@@ -151,3 +151,15 @@ python scripts/quarter-research/build_position_stop_evidence.py data/kr-quarter-
 ```
 
 [종목 손절 결과](../../docs/research/kr-current-quarter-position-stop-findings.md)에 모든 손절값과 비중첩 실패를 함께 기록했다. 추가 월간·비용 평가의 진행 기준을 충족하지 못했으므로 그 후속 평가는 실행하지 않았다. 현재 12% 손절 후보의 첫 목표는 기본 후보와 같지만 보유 후 경로가 달라질 수 있다.
+
+
+## 회복 종목 선정 기간 단축
+
+`configs/faster-recovery-experiments.json`의 9개 실행은 회복 20일·3종목, 30일·3종목, 20일·5종목의 개발 월간·조건부 검증·조건부 최근 계좌를 만든다. 매매 코드와 기본 8% 손절을 유지하며 직전 12% 손절 결과와 결합하지 않는다. 새 369개 계좌와 이전 40·60일 설정의 동일 시작점 200개를 대조한다.
+
+```bash
+node --import tsx scripts/quarter-research/quarter-engine.ts data/kr-quarter-research/expanded/stock-200-verified-input.json.gz data/kr-quarter-research/faster-recovery/reproduction-20-3-confirmation confirmation scripts/quarter-research/configs/faster-recovery-20-3.json 5 204 0 100000000 scripts/quarter-research/configs/entry-30-confirmation-options.json
+python scripts/quarter-research/build_faster_evidence.py data/kr-quarter-research data/kr-quarter-research/faster-recovery/evidence
+```
+
+집계 전에는 실험 목록의 모든 조합을 지정 경로에서 완료해야 한다. 40일 개발은 이전 가격 이력 정책이 달라 직접 비교하지 않는다. [기간 단축 결과](../../docs/research/kr-current-quarter-faster-recovery-findings.md)에 채택 실패와 미청산을 포함한 모든 결과를 기록했다.

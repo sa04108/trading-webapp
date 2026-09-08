@@ -1,0 +1,2095 @@
+[
+  {
+    "formationDays": 20,
+    "topN": 3,
+    "stage": "development",
+    "reused": false,
+    "directory": "faster-recovery/20-3-development",
+    "all": {
+      "count": 46,
+      "targetHits": 4,
+      "targetFrequencyPct": 8.695652173913043,
+      "medianPct": -0.02356643749999998,
+      "p10Pct": -8.107905711249991,
+      "worstPct": -10.309843535000008,
+      "lossFrequencyPct": 50,
+      "worstDrawdownPct": -10.848789170207596,
+      "unclosed": 3
+    },
+    "nonoverlapping": {
+      "count": 14,
+      "targetHits": 2,
+      "targetFrequencyPct": 14.285714285714285,
+      "medianPct": -1.775543485750003,
+      "p10Pct": -6.0825902919000026,
+      "worstPct": -7.618719289999987,
+      "lossFrequencyPct": 57.14285714285714,
+      "worstDrawdownPct": -8.933700369999986,
+      "unclosed": 0
+    },
+    "windows": [
+      {
+        "start": "2016-01-04",
+        "end": "2016-04-03",
+        "returnPct": -5.868332925500008,
+        "drawdownPct": -6.330016588999998,
+        "targetReached": false,
+        "closed": true,
+        "trades": 6,
+        "fills": 12,
+        "riskEvents": [
+          {
+            "date": "2016-03-31",
+            "reason": "3개월 만기 청산",
+            "equity": 94358993.411
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2016-05-02",
+        "end": "2016-08-01",
+        "returnPct": -2.987959367500026,
+        "drawdownPct": -5.796894302330601,
+        "targetReached": false,
+        "closed": true,
+        "trades": 6,
+        "fills": 12,
+        "riskEvents": [
+          {
+            "date": "2016-07-29",
+            "reason": "3개월 만기 청산",
+            "equity": 97012040.63249998
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2016-09-01",
+        "end": "2016-11-30",
+        "returnPct": -7.618719289999987,
+        "drawdownPct": -8.933700369999986,
+        "targetReached": false,
+        "closed": true,
+        "trades": 7,
+        "fills": 13,
+        "riskEvents": [
+          {
+            "date": "2016-11-29",
+            "reason": "3개월 만기 청산",
+            "equity": 92381280.71000001
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2016-12-01",
+        "end": "2017-02-28",
+        "returnPct": 10.551369124999987,
+        "drawdownPct": -1.9625412061126335,
+        "targetReached": true,
+        "closed": true,
+        "trades": 3,
+        "fills": 6,
+        "riskEvents": [
+          {
+            "date": "2017-01-26",
+            "reason": "계좌 목표 청산",
+            "equity": 111446802.07499999
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2017-03-02",
+        "end": "2017-06-01",
+        "returnPct": 4.985806836000006,
+        "drawdownPct": -4.155550084725945,
+        "targetReached": false,
+        "closed": true,
+        "trades": 7,
+        "fills": 14,
+        "riskEvents": [
+          {
+            "date": "2017-05-31",
+            "reason": "3개월 만기 청산",
+            "equity": 105274841.31599998
+          }
+        ],
+        "affectedActions": [
+          {
+            "symbol": "009540",
+            "date": "2017-05-10",
+            "ratio": 1.0509584516900492,
+            "type": "unresolved"
+          }
+        ]
+      },
+      {
+        "start": "2017-07-03",
+        "end": "2017-10-02",
+        "returnPct": -1.2252716874999958,
+        "drawdownPct": -3.080401839523461,
+        "targetReached": false,
+        "closed": true,
+        "trades": 9,
+        "fills": 17,
+        "riskEvents": [
+          {
+            "date": "2017-09-28",
+            "reason": "3개월 만기 청산",
+            "equity": 98707185.005
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2017-10-10",
+        "end": "2018-01-09",
+        "returnPct": 14.959201299999991,
+        "drawdownPct": -6.52121662532843,
+        "targetReached": true,
+        "closed": true,
+        "trades": 6,
+        "fills": 12,
+        "riskEvents": [
+          {
+            "date": "2017-11-20",
+            "reason": "계좌 목표 청산",
+            "equity": 114784344.59999998
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2018-02-01",
+        "end": "2018-04-30",
+        "returnPct": -3.0531953050000116,
+        "drawdownPct": -3.6690098238305158,
+        "targetReached": false,
+        "closed": true,
+        "trades": 3,
+        "fills": 6,
+        "riskEvents": [
+          {
+            "date": "2018-04-27",
+            "reason": "3개월 만기 청산",
+            "equity": 96946804.695
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2018-05-02",
+        "end": "2018-08-01",
+        "returnPct": 6.042634572500005,
+        "drawdownPct": -0.7491311435116277,
+        "targetReached": false,
+        "closed": true,
+        "trades": 3,
+        "fills": 6,
+        "riskEvents": [
+          {
+            "date": "2018-07-31",
+            "reason": "3개월 만기 청산",
+            "equity": 106042634.5725
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2018-09-03",
+        "end": "2018-12-02",
+        "returnPct": 3.2134046950000217,
+        "drawdownPct": -0.10970150000000345,
+        "targetReached": false,
+        "closed": true,
+        "trades": 3,
+        "fills": 6,
+        "riskEvents": [
+          {
+            "date": "2018-11-29",
+            "reason": "3개월 만기 청산",
+            "equity": 103213404.69500002
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2018-12-03",
+        "end": "2019-03-02",
+        "returnPct": -2.869297486500011,
+        "drawdownPct": -4.1469638060862675,
+        "targetReached": false,
+        "closed": true,
+        "trades": 7,
+        "fills": 13,
+        "riskEvents": [
+          {
+            "date": "2019-02-27",
+            "reason": "3개월 만기 청산",
+            "equity": 97380091.0635
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2019-03-04",
+        "end": "2019-06-03",
+        "returnPct": -6.1744148775,
+        "drawdownPct": -6.566955625000004,
+        "targetReached": false,
+        "closed": true,
+        "trades": 9,
+        "fills": 18,
+        "riskEvents": [
+          {
+            "date": "2019-05-31",
+            "reason": "3개월 만기 청산",
+            "equity": 93825585.1225
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2019-07-01",
+        "end": "2019-09-30",
+        "returnPct": -2.32581528400001,
+        "drawdownPct": -2.381786880000014,
+        "targetReached": false,
+        "closed": true,
+        "trades": 3,
+        "fills": 6,
+        "riskEvents": [
+          {
+            "date": "2019-09-27",
+            "reason": "3개월 만기 청산",
+            "equity": 97674184.71599999
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2019-10-01",
+        "end": "2019-12-31",
+        "returnPct": 1.6593444574999783,
+        "drawdownPct": -4.081188818603277,
+        "targetReached": false,
+        "closed": true,
+        "trades": 9,
+        "fills": 18,
+        "riskEvents": [
+          {
+            "date": "2019-12-27",
+            "reason": "3개월 만기 청산",
+            "equity": 101659344.45749998
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "formationDays": 20,
+    "topN": 3,
+    "stage": "validation",
+    "reused": false,
+    "directory": "faster-recovery/20-3-validation",
+    "all": {
+      "count": 19,
+      "targetHits": 9,
+      "targetFrequencyPct": 47.368421052631575,
+      "medianPct": 3.666516872499992,
+      "p10Pct": -4.1555542615000025,
+      "worstPct": -6.408920224999992,
+      "lossFrequencyPct": 36.84210526315789,
+      "worstDrawdownPct": -9.16578151384756,
+      "unclosed": 0
+    },
+    "nonoverlapping": {
+      "count": 3,
+      "targetHits": 1,
+      "targetFrequencyPct": 33.33333333333333,
+      "medianPct": -0.3342516500000059,
+      "p10Pct": -1.430424742000005,
+      "worstPct": -1.7044680150000047,
+      "lossFrequencyPct": 66.66666666666666,
+      "worstDrawdownPct": -9.16578151384756,
+      "unclosed": 0
+    },
+    "windows": [
+      {
+        "start": "2020-04-09",
+        "end": "2020-07-08",
+        "returnPct": -1.7044680150000047,
+        "drawdownPct": -6.325928656451197,
+        "targetReached": false,
+        "closed": true,
+        "trades": 9,
+        "fills": 18,
+        "riskEvents": [
+          {
+            "date": "2020-07-07",
+            "reason": "3개월 만기 청산",
+            "equity": 98402181.91
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2020-07-10",
+        "end": "2020-10-09",
+        "returnPct": 10.674058794999986,
+        "drawdownPct": -2.9159012678911744,
+        "targetReached": true,
+        "closed": true,
+        "trades": 3,
+        "fills": 6,
+        "riskEvents": [
+          {
+            "date": "2020-08-06",
+            "reason": "계좌 목표 청산",
+            "equity": 110928941.955
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2021-02-03",
+        "end": "2021-05-02",
+        "returnPct": -0.3342516500000059,
+        "drawdownPct": -9.16578151384756,
+        "targetReached": false,
+        "closed": true,
+        "trades": 6,
+        "fills": 12,
+        "riskEvents": [
+          {
+            "date": "2021-04-29",
+            "reason": "3개월 만기 청산",
+            "equity": 99577703.29
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "formationDays": 20,
+    "topN": 3,
+    "stage": "confirmation",
+    "reused": false,
+    "directory": "faster-recovery/20-3-confirmation",
+    "all": {
+      "count": 58,
+      "targetHits": 30,
+      "targetFrequencyPct": 51.724137931034484,
+      "medianPct": 10.457068709874983,
+      "p10Pct": -4.185877198200004,
+      "worstPct": -10.014047635500011,
+      "lossFrequencyPct": 29.310344827586203,
+      "worstDrawdownPct": -11.618732884443638,
+      "unclosed": 0
+    },
+    "nonoverlapping": {
+      "count": 4,
+      "targetHits": 1,
+      "targetFrequencyPct": 25,
+      "medianPct": 2.888955658750009,
+      "p10Pct": -2.9442007039500018,
+      "worstPct": -4.043536070999998,
+      "lossFrequencyPct": 50,
+      "worstDrawdownPct": -8.914283445999994,
+      "unclosed": 0
+    },
+    "windows": [
+      {
+        "start": "2024-09-02",
+        "end": "2024-12-01",
+        "returnPct": -0.3790848475000108,
+        "drawdownPct": -1.0888734126631938,
+        "targetReached": false,
+        "closed": true,
+        "trades": 7,
+        "fills": 13,
+        "riskEvents": [
+          {
+            "date": "2024-11-28",
+            "reason": "3개월 만기 청산",
+            "equity": 99620915.15249999
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2025-04-28",
+        "end": "2025-07-27",
+        "returnPct": 13.185495945000003,
+        "drawdownPct": -4.104886682495634,
+        "targetReached": true,
+        "closed": true,
+        "trades": 6,
+        "fills": 12,
+        "riskEvents": [
+          {
+            "date": "2025-06-04",
+            "reason": "계좌 목표 청산",
+            "equity": 112298550.665
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2025-11-17",
+        "end": "2026-02-16",
+        "returnPct": 6.156996165000028,
+        "drawdownPct": -6.851246426909663,
+        "targetReached": false,
+        "closed": true,
+        "trades": 9,
+        "fills": 18,
+        "riskEvents": [
+          {
+            "date": "2026-02-12",
+            "reason": "3개월 만기 청산",
+            "equity": 107189488.38500002
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2026-02-19",
+        "end": "2026-05-18",
+        "returnPct": -4.043536070999998,
+        "drawdownPct": -8.914283445999994,
+        "targetReached": false,
+        "closed": true,
+        "trades": 6,
+        "fills": 12,
+        "riskEvents": [
+          {
+            "date": "2026-05-15",
+            "reason": "3개월 만기 청산",
+            "equity": 96883565.17899999
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "formationDays": 20,
+    "topN": 5,
+    "stage": "development",
+    "reused": false,
+    "directory": "faster-recovery/20-5-development",
+    "all": {
+      "count": 46,
+      "targetHits": 3,
+      "targetFrequencyPct": 6.521739130434782,
+      "medianPct": -0.5501376500000099,
+      "p10Pct": -6.158249727500009,
+      "worstPct": -10.944886381999996,
+      "lossFrequencyPct": 54.347826086956516,
+      "worstDrawdownPct": -10.944886381999996,
+      "unclosed": 3
+    },
+    "nonoverlapping": {
+      "count": 14,
+      "targetHits": 0,
+      "targetFrequencyPct": 0,
+      "medianPct": -1.699254359250002,
+      "p10Pct": -5.7330654595999935,
+      "worstPct": -10.013315590000015,
+      "lossFrequencyPct": 71.42857142857143,
+      "worstDrawdownPct": -10.013315590000015,
+      "unclosed": 1
+    },
+    "windows": [
+      {
+        "start": "2016-01-04",
+        "end": "2016-04-03",
+        "returnPct": -1.7092638435000085,
+        "drawdownPct": -3.225544373000011,
+        "targetReached": false,
+        "closed": false,
+        "trades": 10,
+        "fills": 20,
+        "riskEvents": [
+          {
+            "date": "2016-03-31",
+            "reason": "3개월 만기 청산",
+            "equity": 98554685.62699999
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2016-05-02",
+        "end": "2016-08-01",
+        "returnPct": -2.5331079574999915,
+        "drawdownPct": -3.8760549616163154,
+        "targetReached": false,
+        "closed": true,
+        "trades": 10,
+        "fills": 20,
+        "riskEvents": [
+          {
+            "date": "2016-07-29",
+            "reason": "3개월 만기 청산",
+            "equity": 97466892.0425
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2016-09-01",
+        "end": "2016-11-30",
+        "returnPct": -6.96711136999999,
+        "drawdownPct": -7.734803302499982,
+        "targetReached": false,
+        "closed": true,
+        "trades": 11,
+        "fills": 21,
+        "riskEvents": [
+          {
+            "date": "2016-11-29",
+            "reason": "3개월 만기 청산",
+            "equity": 93032888.63000001
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2016-12-01",
+        "end": "2017-02-28",
+        "returnPct": -1.2358947000000065,
+        "drawdownPct": -6.545806994829095,
+        "targetReached": false,
+        "closed": true,
+        "trades": 10,
+        "fills": 19,
+        "riskEvents": [
+          {
+            "date": "2017-02-27",
+            "reason": "3개월 만기 청산",
+            "equity": 98808882.29499999
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2017-03-02",
+        "end": "2017-06-01",
+        "returnPct": 11.214666573999988,
+        "drawdownPct": -4.785796354104244,
+        "targetReached": false,
+        "closed": true,
+        "trades": 13,
+        "fills": 26,
+        "riskEvents": [
+          {
+            "date": "2017-05-15",
+            "reason": "계좌 목표 청산",
+            "equity": 111043864.28149998
+          }
+        ],
+        "affectedActions": [
+          {
+            "symbol": "009540",
+            "date": "2017-05-10",
+            "ratio": 1.0509584516900492,
+            "type": "unresolved"
+          }
+        ]
+      },
+      {
+        "start": "2017-07-03",
+        "end": "2017-10-02",
+        "returnPct": -2.8536250020000042,
+        "drawdownPct": -5.6488606990988455,
+        "targetReached": false,
+        "closed": true,
+        "trades": 15,
+        "fills": 29,
+        "riskEvents": [
+          {
+            "date": "2017-09-28",
+            "reason": "3개월 만기 청산",
+            "equity": 97091161.983
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2017-10-10",
+        "end": "2018-01-09",
+        "returnPct": 2.5067946150000298,
+        "drawdownPct": -6.431338178757084,
+        "targetReached": false,
+        "closed": true,
+        "trades": 15,
+        "fills": 30,
+        "riskEvents": [
+          {
+            "date": "2018-01-08",
+            "reason": "3개월 만기 청산",
+            "equity": 102506794.61500004
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2018-02-01",
+        "end": "2018-04-30",
+        "returnPct": -1.6892448749999955,
+        "drawdownPct": -3.0793721914066707,
+        "targetReached": false,
+        "closed": true,
+        "trades": 5,
+        "fills": 10,
+        "riskEvents": [
+          {
+            "date": "2018-04-27",
+            "reason": "3개월 만기 청산",
+            "equity": 98310755.125
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2018-05-02",
+        "end": "2018-08-01",
+        "returnPct": 1.2417825250000014,
+        "drawdownPct": -2.436028909616672,
+        "targetReached": false,
+        "closed": true,
+        "trades": 5,
+        "fills": 10,
+        "riskEvents": [
+          {
+            "date": "2018-07-31",
+            "reason": "3개월 만기 청산",
+            "equity": 101241782.525
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2018-09-03",
+        "end": "2018-12-02",
+        "returnPct": 1.8082303599999738,
+        "drawdownPct": -0.7512726125000091,
+        "targetReached": false,
+        "closed": true,
+        "trades": 5,
+        "fills": 10,
+        "riskEvents": [
+          {
+            "date": "2018-11-29",
+            "reason": "3개월 만기 청산",
+            "equity": 101808230.35999998
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2018-12-03",
+        "end": "2019-03-02",
+        "returnPct": -2.133092119999991,
+        "drawdownPct": -2.9716153428879344,
+        "targetReached": false,
+        "closed": true,
+        "trades": 11,
+        "fills": 21,
+        "riskEvents": [
+          {
+            "date": "2019-02-27",
+            "reason": "3개월 만기 청산",
+            "equity": 98013597.83649999
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2019-03-04",
+        "end": "2019-06-03",
+        "returnPct": -10.013315590000015,
+        "drawdownPct": -10.013315590000015,
+        "targetReached": false,
+        "closed": true,
+        "trades": 15,
+        "fills": 30,
+        "riskEvents": [
+          {
+            "date": "2019-05-08",
+            "reason": "계좌 낙폭 중단",
+            "equity": 89986684.40999998
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2019-07-01",
+        "end": "2019-09-30",
+        "returnPct": -2.3471544234999975,
+        "drawdownPct": -2.4336353494999963,
+        "targetReached": false,
+        "closed": true,
+        "trades": 5,
+        "fills": 10,
+        "riskEvents": [
+          {
+            "date": "2019-09-27",
+            "reason": "3개월 만기 청산",
+            "equity": 97652845.5765
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2019-10-01",
+        "end": "2019-12-31",
+        "returnPct": -0.23475184200000276,
+        "drawdownPct": -6.137630383654946,
+        "targetReached": false,
+        "closed": true,
+        "trades": 15,
+        "fills": 30,
+        "riskEvents": [
+          {
+            "date": "2019-12-27",
+            "reason": "3개월 만기 청산",
+            "equity": 99765248.15799999
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "formationDays": 20,
+    "topN": 5,
+    "stage": "validation",
+    "reused": false,
+    "directory": "faster-recovery/20-5-validation",
+    "all": {
+      "count": 19,
+      "targetHits": 4,
+      "targetFrequencyPct": 21.052631578947366,
+      "medianPct": 3.4144077224999902,
+      "p10Pct": -1.0890078993000096,
+      "worstPct": -3.7005159525000053,
+      "lossFrequencyPct": 21.052631578947366,
+      "worstDrawdownPct": -8.359491251873862,
+      "unclosed": 0
+    },
+    "nonoverlapping": {
+      "count": 3,
+      "targetHits": 0,
+      "targetFrequencyPct": 0,
+      "medianPct": 1.4718263900000306,
+      "p10Pct": 0.8960899455999982,
+      "worstPct": 0.7521558344999901,
+      "lossFrequencyPct": 0,
+      "worstDrawdownPct": -7.822519830198161,
+      "unclosed": 0
+    },
+    "windows": [
+      {
+        "start": "2020-04-09",
+        "end": "2020-07-08",
+        "returnPct": 2.1878820625000017,
+        "drawdownPct": -4.70564241698116,
+        "targetReached": false,
+        "closed": true,
+        "trades": 15,
+        "fills": 30,
+        "riskEvents": [
+          {
+            "date": "2020-07-07",
+            "reason": "3개월 만기 청산",
+            "equity": 102208476.7925
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2020-07-10",
+        "end": "2020-10-09",
+        "returnPct": 0.7521558344999901,
+        "drawdownPct": -7.822519830198161,
+        "targetReached": false,
+        "closed": true,
+        "trades": 15,
+        "fills": 29,
+        "riskEvents": [
+          {
+            "date": "2020-10-07",
+            "reason": "3개월 만기 청산",
+            "equity": 100752155.8345
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2021-02-03",
+        "end": "2021-05-02",
+        "returnPct": 1.4718263900000306,
+        "drawdownPct": -6.589776928901814,
+        "targetReached": false,
+        "closed": true,
+        "trades": 10,
+        "fills": 20,
+        "riskEvents": [
+          {
+            "date": "2021-04-29",
+            "reason": "3개월 만기 청산",
+            "equity": 101879811.20500003
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "formationDays": 20,
+    "topN": 5,
+    "stage": "confirmation",
+    "reused": false,
+    "directory": "faster-recovery/20-5-confirmation",
+    "all": {
+      "count": 58,
+      "targetHits": 21,
+      "targetFrequencyPct": 36.206896551724135,
+      "medianPct": 5.534815530000015,
+      "p10Pct": -5.359923650350011,
+      "worstPct": -8.338081301999988,
+      "lossFrequencyPct": 18.96551724137931,
+      "worstDrawdownPct": -12.297804757174235,
+      "unclosed": 0
+    },
+    "nonoverlapping": {
+      "count": 4,
+      "targetHits": 1,
+      "targetFrequencyPct": 25,
+      "medianPct": 4.209058319249992,
+      "p10Pct": -3.9979213409500223,
+      "worstPct": -6.241310753500018,
+      "lossFrequencyPct": 25,
+      "worstDrawdownPct": -9.127611133500013,
+      "unclosed": 0
+    },
+    "windows": [
+      {
+        "start": "2024-09-02",
+        "end": "2024-12-01",
+        "returnPct": 1.2366539549999667,
+        "drawdownPct": -0.39010676381509013,
+        "targetReached": false,
+        "closed": true,
+        "trades": 10,
+        "fills": 20,
+        "riskEvents": [
+          {
+            "date": "2024-11-28",
+            "reason": "3개월 만기 청산",
+            "equity": 101236653.95499997
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2025-04-28",
+        "end": "2025-07-27",
+        "returnPct": 12.084907572499981,
+        "drawdownPct": -1.0879173061874359,
+        "targetReached": true,
+        "closed": true,
+        "trades": 10,
+        "fills": 20,
+        "riskEvents": [
+          {
+            "date": "2025-06-09",
+            "reason": "계좌 목표 청산",
+            "equity": 112241867.20249999
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2025-11-17",
+        "end": "2026-02-16",
+        "returnPct": 7.181462683500017,
+        "drawdownPct": -5.471142353403979,
+        "targetReached": false,
+        "closed": true,
+        "trades": 15,
+        "fills": 30,
+        "riskEvents": [
+          {
+            "date": "2026-02-12",
+            "reason": "3개월 만기 청산",
+            "equity": 108228260.14600001
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2026-02-19",
+        "end": "2026-05-18",
+        "returnPct": -6.241310753500018,
+        "drawdownPct": -9.127611133500013,
+        "targetReached": false,
+        "closed": true,
+        "trades": 10,
+        "fills": 20,
+        "riskEvents": [
+          {
+            "date": "2026-05-15",
+            "reason": "3개월 만기 청산",
+            "equity": 94599476.26149997
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "formationDays": 30,
+    "topN": 3,
+    "stage": "development",
+    "reused": false,
+    "directory": "faster-recovery/30-3-development",
+    "all": {
+      "count": 46,
+      "targetHits": 5,
+      "targetFrequencyPct": 10.869565217391305,
+      "medianPct": 0.8639431975000278,
+      "p10Pct": -6.578926153749998,
+      "worstPct": -10.78790987999999,
+      "lossFrequencyPct": 45.65217391304348,
+      "worstDrawdownPct": -11.045545486345498,
+      "unclosed": 4
+    },
+    "nonoverlapping": {
+      "count": 14,
+      "targetHits": 2,
+      "targetFrequencyPct": 14.285714285714285,
+      "medianPct": -1.6119181950000006,
+      "p10Pct": -8.959826960900001,
+      "worstPct": -10.78790987999999,
+      "lossFrequencyPct": 57.14285714285714,
+      "worstDrawdownPct": -11.045545486345498,
+      "unclosed": 0
+    },
+    "windows": [
+      {
+        "start": "2016-01-04",
+        "end": "2016-04-03",
+        "returnPct": -7.559379505499986,
+        "drawdownPct": -7.832677941499988,
+        "targetReached": false,
+        "closed": true,
+        "trades": 6,
+        "fills": 12,
+        "riskEvents": [
+          {
+            "date": "2016-03-31",
+            "reason": "3개월 만기 청산",
+            "equity": 92590742.0585
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2016-05-02",
+        "end": "2016-08-01",
+        "returnPct": 2.4072386874999907,
+        "drawdownPct": -2.1587106264737033,
+        "targetReached": false,
+        "closed": true,
+        "trades": 6,
+        "fills": 12,
+        "riskEvents": [
+          {
+            "date": "2016-07-29",
+            "reason": "3개월 만기 청산",
+            "equity": 102407238.68749999
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2016-09-01",
+        "end": "2016-11-30",
+        "returnPct": -10.78790987999999,
+        "drawdownPct": -10.78790987999999,
+        "targetReached": false,
+        "closed": true,
+        "trades": 6,
+        "fills": 12,
+        "riskEvents": [
+          {
+            "date": "2016-10-12",
+            "reason": "계좌 낙폭 중단",
+            "equity": 89212090.12
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2016-12-01",
+        "end": "2017-02-28",
+        "returnPct": -9.560018727500008,
+        "drawdownPct": -11.045545486345498,
+        "targetReached": false,
+        "closed": true,
+        "trades": 6,
+        "fills": 12,
+        "riskEvents": [
+          {
+            "date": "2017-02-14",
+            "reason": "계좌 낙폭 중단",
+            "equity": 90868004.425
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2017-03-02",
+        "end": "2017-06-01",
+        "returnPct": 8.085137907500005,
+        "drawdownPct": -3.3203558612919126,
+        "targetReached": false,
+        "closed": true,
+        "trades": 7,
+        "fills": 13,
+        "riskEvents": [
+          {
+            "date": "2017-05-31",
+            "reason": "3개월 만기 청산",
+            "equity": 108327873
+          }
+        ],
+        "affectedActions": [
+          {
+            "symbol": "009540",
+            "date": "2017-05-10",
+            "ratio": 1.0509584516900492,
+            "type": "unresolved"
+          }
+        ]
+      },
+      {
+        "start": "2017-07-03",
+        "end": "2017-10-02",
+        "returnPct": -2.4761516765000047,
+        "drawdownPct": -5.459262975753887,
+        "targetReached": false,
+        "closed": true,
+        "trades": 9,
+        "fills": 17,
+        "riskEvents": [
+          {
+            "date": "2017-09-28",
+            "reason": "3개월 만기 청산",
+            "equity": 97457465.54349999
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2017-10-10",
+        "end": "2018-01-09",
+        "returnPct": 14.959201299999991,
+        "drawdownPct": -6.52121662532843,
+        "targetReached": true,
+        "closed": true,
+        "trades": 6,
+        "fills": 12,
+        "riskEvents": [
+          {
+            "date": "2017-11-20",
+            "reason": "계좌 목표 청산",
+            "equity": 114784344.6
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2018-02-01",
+        "end": "2018-04-30",
+        "returnPct": -2.361929025000009,
+        "drawdownPct": -2.361929025000009,
+        "targetReached": false,
+        "closed": true,
+        "trades": 3,
+        "fills": 6,
+        "riskEvents": [
+          {
+            "date": "2018-04-27",
+            "reason": "3개월 만기 청산",
+            "equity": 97638070.975
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2018-05-02",
+        "end": "2018-08-01",
+        "returnPct": 2.186109855000029,
+        "drawdownPct": -2.282170574967246,
+        "targetReached": false,
+        "closed": true,
+        "trades": 3,
+        "fills": 6,
+        "riskEvents": [
+          {
+            "date": "2018-07-31",
+            "reason": "3개월 만기 청산",
+            "equity": 102186109.85500002
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2018-09-03",
+        "end": "2018-12-02",
+        "returnPct": 1.6852279274999882,
+        "drawdownPct": -1.8674975725000098,
+        "targetReached": false,
+        "closed": true,
+        "trades": 3,
+        "fills": 6,
+        "riskEvents": [
+          {
+            "date": "2018-11-29",
+            "reason": "3개월 만기 청산",
+            "equity": 101685227.9275
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2018-12-03",
+        "end": "2019-03-02",
+        "returnPct": -0.861907364999992,
+        "drawdownPct": -1.328028071948928,
+        "targetReached": false,
+        "closed": true,
+        "trades": 7,
+        "fills": 13,
+        "riskEvents": [
+          {
+            "date": "2019-02-27",
+            "reason": "3개월 만기 청산",
+            "equity": 99389785.79
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2019-03-04",
+        "end": "2019-06-03",
+        "returnPct": -3.0776584824999897,
+        "drawdownPct": -4.777337964279593,
+        "targetReached": false,
+        "closed": true,
+        "trades": 9,
+        "fills": 18,
+        "riskEvents": [
+          {
+            "date": "2019-05-31",
+            "reason": "3개월 만기 청산",
+            "equity": 96922341.51750001
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2019-07-01",
+        "end": "2019-09-30",
+        "returnPct": -2.682954267000004,
+        "drawdownPct": -2.682954267000004,
+        "targetReached": false,
+        "closed": true,
+        "trades": 3,
+        "fills": 6,
+        "riskEvents": [
+          {
+            "date": "2019-09-27",
+            "reason": "3개월 만기 청산",
+            "equity": 97317045.733
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2019-10-01",
+        "end": "2019-12-31",
+        "returnPct": 11.016830784999998,
+        "drawdownPct": -0.7303536281550449,
+        "targetReached": true,
+        "closed": true,
+        "trades": 3,
+        "fills": 6,
+        "riskEvents": [
+          {
+            "date": "2019-10-14",
+            "reason": "계좌 목표 청산",
+            "equity": 111833611.625
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "formationDays": 30,
+    "topN": 3,
+    "stage": "validation",
+    "reused": false,
+    "directory": "faster-recovery/30-3-validation",
+    "all": {
+      "count": 19,
+      "targetHits": 6,
+      "targetFrequencyPct": 31.57894736842105,
+      "medianPct": 2.9379982849999875,
+      "p10Pct": -1.9906509739999745,
+      "worstPct": -9.078708752500031,
+      "lossFrequencyPct": 26.31578947368421,
+      "worstDrawdownPct": -10.336687007059131,
+      "unclosed": 1
+    },
+    "nonoverlapping": {
+      "count": 3,
+      "targetHits": 1,
+      "targetFrequencyPct": 33.33333333333333,
+      "medianPct": 1.5763460174999855,
+      "p10Pct": -0.7869331565000026,
+      "worstPct": -1.3777529499999996,
+      "lossFrequencyPct": 33.33333333333333,
+      "worstDrawdownPct": -6.360169577430764,
+      "unclosed": 1
+    },
+    "windows": [
+      {
+        "start": "2020-04-09",
+        "end": "2020-07-08",
+        "returnPct": -1.3777529499999996,
+        "drawdownPct": -6.087303990604553,
+        "targetReached": false,
+        "closed": true,
+        "trades": 9,
+        "fills": 18,
+        "riskEvents": [
+          {
+            "date": "2020-07-07",
+            "reason": "3개월 만기 청산",
+            "equity": 98532116.585
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2020-07-10",
+        "end": "2020-10-09",
+        "returnPct": 17.34112964000001,
+        "drawdownPct": -1.356914750442073,
+        "targetReached": true,
+        "closed": true,
+        "trades": 3,
+        "fills": 6,
+        "riskEvents": [
+          {
+            "date": "2020-07-22",
+            "reason": "계좌 목표 청산",
+            "equity": 113739481.09
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2021-02-03",
+        "end": "2021-05-02",
+        "returnPct": 1.5763460174999855,
+        "drawdownPct": -6.360169577430764,
+        "targetReached": false,
+        "closed": false,
+        "trades": 6,
+        "fills": 12,
+        "riskEvents": [
+          {
+            "date": "2021-04-29",
+            "reason": "3개월 만기 청산",
+            "equity": 100492991.11749998
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "formationDays": 30,
+    "topN": 3,
+    "stage": "confirmation",
+    "reused": false,
+    "directory": "faster-recovery/30-3-confirmation",
+    "all": {
+      "count": 58,
+      "targetHits": 38,
+      "targetFrequencyPct": 65.51724137931035,
+      "medianPct": 11.263573415000018,
+      "p10Pct": -0.15741904000001727,
+      "worstPct": -8.338606468999998,
+      "lossFrequencyPct": 10.344827586206897,
+      "worstDrawdownPct": -9.516246604244415,
+      "unclosed": 0
+    },
+    "nonoverlapping": {
+      "count": 4,
+      "targetHits": 1,
+      "targetFrequencyPct": 25,
+      "medianPct": -0.8943984249999981,
+      "p10Pct": -6.477256296799993,
+      "worstPct": -8.338606468999998,
+      "lossFrequencyPct": 50,
+      "worstDrawdownPct": -8.338606468999998,
+      "unclosed": 0
+    },
+    "windows": [
+      {
+        "start": "2024-09-02",
+        "end": "2024-12-01",
+        "returnPct": -2.1341058949999825,
+        "drawdownPct": -2.818445455665175,
+        "targetReached": false,
+        "closed": true,
+        "trades": 6,
+        "fills": 12,
+        "riskEvents": [
+          {
+            "date": "2024-11-28",
+            "reason": "3개월 만기 청산",
+            "equity": 97865894.10500002
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2025-04-28",
+        "end": "2025-07-27",
+        "returnPct": 10.34958332,
+        "drawdownPct": -5.745096235509639,
+        "targetReached": true,
+        "closed": true,
+        "trades": 6,
+        "fills": 12,
+        "riskEvents": [
+          {
+            "date": "2025-06-04",
+            "reason": "계좌 목표 청산",
+            "equity": 110776498.87
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2025-11-17",
+        "end": "2026-02-16",
+        "returnPct": 0.34530904499998627,
+        "drawdownPct": -6.847552974387328,
+        "targetReached": false,
+        "closed": true,
+        "trades": 9,
+        "fills": 18,
+        "riskEvents": [
+          {
+            "date": "2026-02-12",
+            "reason": "3개월 만기 청산",
+            "equity": 101319293.5325
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2026-02-19",
+        "end": "2026-05-18",
+        "returnPct": -8.338606468999998,
+        "drawdownPct": -8.338606468999998,
+        "targetReached": false,
+        "closed": true,
+        "trades": 6,
+        "fills": 12,
+        "riskEvents": [
+          {
+            "date": "2026-05-15",
+            "reason": "3개월 만기 청산",
+            "equity": 92099060.771
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "formationDays": 40,
+    "topN": 3,
+    "stage": "validation",
+    "reused": true,
+    "directory": "entry/daily-validation",
+    "all": {
+      "count": 19,
+      "targetHits": 3,
+      "targetFrequencyPct": 15.789473684210526,
+      "medianPct": 0.4713404450000125,
+      "p10Pct": -5.527674867900021,
+      "worstPct": -8.775049229999986,
+      "lossFrequencyPct": 42.10526315789473,
+      "worstDrawdownPct": -11.073909197997567,
+      "unclosed": 0
+    },
+    "nonoverlapping": {
+      "count": 3,
+      "targetHits": 0,
+      "targetFrequencyPct": 0.0,
+      "medianPct": -2.2732405225000085,
+      "p10Pct": -3.4662613645000007,
+      "worstPct": -3.7645165749999987,
+      "lossFrequencyPct": 66.66666666666666,
+      "worstDrawdownPct": -10.295145516802906,
+      "unclosed": 0
+    },
+    "windows": [
+      {
+        "start": "2020-04-09",
+        "end": "2020-07-08",
+        "returnPct": -3.7645165749999987,
+        "drawdownPct": -5.357249332336744,
+        "targetReached": false,
+        "closed": true,
+        "trades": 9,
+        "fills": 18,
+        "riskEvents": [
+          {
+            "date": "2020-07-07",
+            "reason": "3개월 만기 청산",
+            "equity": 96388975.225
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2020-07-10",
+        "end": "2020-10-09",
+        "returnPct": -2.2732405225000085,
+        "drawdownPct": -10.295145516802906,
+        "targetReached": false,
+        "closed": true,
+        "trades": 6,
+        "fills": 12,
+        "riskEvents": [
+          {
+            "date": "2020-08-18",
+            "reason": "계좌 낙폭 중단",
+            "equity": 97674568.0025
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2021-02-03",
+        "end": "2021-05-02",
+        "returnPct": 4.03598906,
+        "drawdownPct": -6.9717118526236295,
+        "targetReached": false,
+        "closed": true,
+        "trades": 6,
+        "fills": 12,
+        "riskEvents": [
+          {
+            "date": "2021-04-29",
+            "reason": "3개월 만기 청산",
+            "equity": 103608165.5475
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "formationDays": 40,
+    "topN": 3,
+    "stage": "confirmation",
+    "reused": true,
+    "directory": "entry/daily-confirmation",
+    "all": {
+      "count": 58,
+      "targetHits": 39,
+      "targetFrequencyPct": 67.24137931034483,
+      "medianPct": 12.119780124999991,
+      "p10Pct": -0.03730544525000762,
+      "worstPct": -7.159277358000016,
+      "lossFrequencyPct": 10.344827586206897,
+      "worstDrawdownPct": -9.502819884182866,
+      "unclosed": 3
+    },
+    "nonoverlapping": {
+      "count": 4,
+      "targetHits": 1,
+      "targetFrequencyPct": 25.0,
+      "medianPct": -0.04493351749999541,
+      "p10Pct": -1.9564795143000047,
+      "worstPct": -2.683619724000008,
+      "lossFrequencyPct": 50.0,
+      "worstDrawdownPct": -6.848421304693142,
+      "unclosed": 1
+    },
+    "windows": [
+      {
+        "start": "2024-09-02",
+        "end": "2024-12-01",
+        "returnPct": 0.16995199000000571,
+        "drawdownPct": -1.0867934349999997,
+        "targetReached": false,
+        "closed": true,
+        "trades": 6,
+        "fills": 12,
+        "riskEvents": [
+          {
+            "date": "2024-11-28",
+            "reason": "3개월 만기 청산",
+            "equity": 100169951.99000001
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2025-04-28",
+        "end": "2025-07-27",
+        "returnPct": 11.25603503499999,
+        "drawdownPct": -5.926100811448065,
+        "targetReached": true,
+        "closed": true,
+        "trades": 4,
+        "fills": 10,
+        "riskEvents": [
+          {
+            "date": "2025-06-24",
+            "reason": "계좌 목표 청산",
+            "equity": 111369017.99499999
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2025-11-17",
+        "end": "2026-02-16",
+        "returnPct": -0.25981902499999654,
+        "drawdownPct": -6.848421304693142,
+        "targetReached": false,
+        "closed": true,
+        "trades": 9,
+        "fills": 18,
+        "riskEvents": [
+          {
+            "date": "2026-02-12",
+            "reason": "3개월 만기 청산",
+            "equity": 100709037.02000001
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2026-02-19",
+        "end": "2026-05-18",
+        "returnPct": -2.683619724000008,
+        "drawdownPct": -6.39429787400001,
+        "targetReached": false,
+        "closed": false,
+        "trades": 6,
+        "fills": 12,
+        "riskEvents": [
+          {
+            "date": "2026-05-15",
+            "reason": "3개월 만기 청산",
+            "equity": 98328372.87599999
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "formationDays": 60,
+    "topN": 3,
+    "stage": "development",
+    "reused": true,
+    "directory": "entry/monthly-development",
+    "all": {
+      "count": 46,
+      "targetHits": 7,
+      "targetFrequencyPct": 15.217391304347828,
+      "medianPct": -0.7314558725000087,
+      "p10Pct": -7.875079143750002,
+      "worstPct": -11.587973680000008,
+      "lossFrequencyPct": 60.86956521739131,
+      "worstDrawdownPct": -11.920155872609806,
+      "unclosed": 1
+    },
+    "nonoverlapping": {
+      "count": 14,
+      "targetHits": 3,
+      "targetFrequencyPct": 21.428571428571427,
+      "medianPct": -2.4924736249999913,
+      "p10Pct": -5.981398035250014,
+      "worstPct": -7.851586189999993,
+      "lossFrequencyPct": 71.42857142857143,
+      "worstDrawdownPct": -8.120446777774537,
+      "unclosed": 0
+    },
+    "windows": [
+      {
+        "start": "2016-01-04",
+        "end": "2016-04-03",
+        "returnPct": -2.4266281325000083,
+        "drawdownPct": -4.034885364408258,
+        "targetReached": false,
+        "closed": true,
+        "trades": 6,
+        "fills": 12,
+        "riskEvents": [
+          {
+            "date": "2016-03-31",
+            "reason": "3개월 만기 청산",
+            "equity": 97528023.16499999
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2016-05-02",
+        "end": "2016-08-01",
+        "returnPct": -2.5784775600000143,
+        "drawdownPct": -5.552703575000006,
+        "targetReached": false,
+        "closed": true,
+        "trades": 6,
+        "fills": 12,
+        "riskEvents": [
+          {
+            "date": "2016-07-29",
+            "reason": "3개월 만기 청산",
+            "equity": 97421522.43999998
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2016-09-01",
+        "end": "2016-11-30",
+        "returnPct": -6.67981055500001,
+        "drawdownPct": -8.091638498097954,
+        "targetReached": false,
+        "closed": true,
+        "trades": 6,
+        "fills": 12,
+        "riskEvents": [
+          {
+            "date": "2016-11-29",
+            "reason": "3개월 만기 청산",
+            "equity": 93320189.445
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2016-12-01",
+        "end": "2017-02-28",
+        "returnPct": -4.3517688225000235,
+        "drawdownPct": -8.120446777774537,
+        "targetReached": false,
+        "closed": true,
+        "trades": 6,
+        "fills": 12,
+        "riskEvents": [
+          {
+            "date": "2017-02-27",
+            "reason": "3개월 만기 청산",
+            "equity": 95580510.76749998
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2017-03-02",
+        "end": "2017-06-01",
+        "returnPct": 10.33431277500001,
+        "drawdownPct": -3.8134131262084425,
+        "targetReached": true,
+        "closed": true,
+        "trades": 11,
+        "fills": 20,
+        "riskEvents": [
+          {
+            "date": "2017-05-15",
+            "reason": "계좌 목표 청산",
+            "equity": 111104458.605
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2017-07-03",
+        "end": "2017-10-02",
+        "returnPct": -2.558319117499974,
+        "drawdownPct": -5.501178117024352,
+        "targetReached": false,
+        "closed": true,
+        "trades": 9,
+        "fills": 16,
+        "riskEvents": [
+          {
+            "date": "2017-09-28",
+            "reason": "3개월 만기 청산",
+            "equity": 97375035.62250002
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2017-10-10",
+        "end": "2018-01-09",
+        "returnPct": 12.198460212499974,
+        "drawdownPct": -7.28070381287843,
+        "targetReached": true,
+        "closed": true,
+        "trades": 6,
+        "fills": 12,
+        "riskEvents": [
+          {
+            "date": "2017-11-21",
+            "reason": "계좌 목표 청산",
+            "equity": 111100504.79749998
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2018-02-01",
+        "end": "2018-04-30",
+        "returnPct": -2.588545774999995,
+        "drawdownPct": -2.7268377214873407,
+        "targetReached": false,
+        "closed": true,
+        "trades": 3,
+        "fills": 6,
+        "riskEvents": [
+          {
+            "date": "2018-04-27",
+            "reason": "3개월 만기 청산",
+            "equity": 97411454.22500001
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2018-05-02",
+        "end": "2018-08-01",
+        "returnPct": 2.0165384550000054,
+        "drawdownPct": -2.1141020319594084,
+        "targetReached": false,
+        "closed": true,
+        "trades": 2,
+        "fills": 4,
+        "riskEvents": [
+          {
+            "date": "2018-07-31",
+            "reason": "3개월 만기 청산",
+            "equity": 102016538.45500001
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2018-09-03",
+        "end": "2018-12-02",
+        "returnPct": -2.0935358700000073,
+        "drawdownPct": -2.0935358700000073,
+        "targetReached": false,
+        "closed": true,
+        "trades": 3,
+        "fills": 6,
+        "riskEvents": [
+          {
+            "date": "2018-11-29",
+            "reason": "3개월 만기 청산",
+            "equity": 97906464.13
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2018-12-03",
+        "end": "2019-03-02",
+        "returnPct": -0.4713749899999953,
+        "drawdownPct": -2.545395956124197,
+        "targetReached": false,
+        "closed": true,
+        "trades": 6,
+        "fills": 12,
+        "riskEvents": [
+          {
+            "date": "2019-02-27",
+            "reason": "3개월 만기 청산",
+            "equity": 99603769.71400002
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2019-03-04",
+        "end": "2019-06-03",
+        "returnPct": -7.851586189999993,
+        "drawdownPct": -8.047290269999996,
+        "targetReached": false,
+        "closed": true,
+        "trades": 9,
+        "fills": 18,
+        "riskEvents": [
+          {
+            "date": "2019-05-31",
+            "reason": "3개월 만기 청산",
+            "equity": 92148413.81
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2019-07-01",
+        "end": "2019-09-30",
+        "returnPct": -3.196426732500013,
+        "drawdownPct": -3.196426732500013,
+        "targetReached": false,
+        "closed": true,
+        "trades": 3,
+        "fills": 6,
+        "riskEvents": [
+          {
+            "date": "2019-09-27",
+            "reason": "3개월 만기 청산",
+            "equity": 96803573.26749998
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2019-10-01",
+        "end": "2019-12-31",
+        "returnPct": 11.364962765000008,
+        "drawdownPct": -0.6442392775843131,
+        "targetReached": true,
+        "closed": true,
+        "trades": 3,
+        "fills": 6,
+        "riskEvents": [
+          {
+            "date": "2019-10-18",
+            "reason": "계좌 목표 청산",
+            "equity": 110875408.1675
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "formationDays": 60,
+    "topN": 3,
+    "stage": "validation",
+    "reused": true,
+    "directory": "entry/daily-validation",
+    "all": {
+      "count": 19,
+      "targetHits": 11,
+      "targetFrequencyPct": 57.89473684210527,
+      "medianPct": 10.762013714999984,
+      "p10Pct": -4.189856593999992,
+      "worstPct": -7.560504103499999,
+      "lossFrequencyPct": 31.57894736842105,
+      "worstDrawdownPct": -8.939597709206748,
+      "unclosed": 0
+    },
+    "nonoverlapping": {
+      "count": 3,
+      "targetHits": 0,
+      "targetFrequencyPct": 0.0,
+      "medianPct": -0.903143620000002,
+      "p10Pct": -6.229032006799999,
+      "worstPct": -7.560504103499999,
+      "lossFrequencyPct": 100.0,
+      "worstDrawdownPct": -7.875479628500004,
+      "unclosed": 0
+    },
+    "windows": [
+      {
+        "start": "2020-04-09",
+        "end": "2020-07-08",
+        "returnPct": -0.33567969999999114,
+        "drawdownPct": -4.3263445556496745,
+        "targetReached": false,
+        "closed": true,
+        "trades": 9,
+        "fills": 18,
+        "riskEvents": [
+          {
+            "date": "2020-07-07",
+            "reason": "3개월 만기 청산",
+            "equity": 99432949.665
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2020-07-10",
+        "end": "2020-10-09",
+        "returnPct": -7.560504103499999,
+        "drawdownPct": -7.875479628500004,
+        "targetReached": false,
+        "closed": true,
+        "trades": 9,
+        "fills": 18,
+        "riskEvents": [
+          {
+            "date": "2020-10-07",
+            "reason": "3개월 만기 청산",
+            "equity": 92439495.8965
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2021-02-03",
+        "end": "2021-05-02",
+        "returnPct": -0.903143620000002,
+        "drawdownPct": -7.523967426541445,
+        "targetReached": false,
+        "closed": true,
+        "trades": 6,
+        "fills": 12,
+        "riskEvents": [
+          {
+            "date": "2021-04-29",
+            "reason": "3개월 만기 청산",
+            "equity": 98962227.28
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  },
+  {
+    "formationDays": 60,
+    "topN": 3,
+    "stage": "confirmation",
+    "reused": true,
+    "directory": "entry/daily-confirmation",
+    "all": {
+      "count": 58,
+      "targetHits": 36,
+      "targetFrequencyPct": 62.06896551724138,
+      "medianPct": 11.32482788375,
+      "p10Pct": -0.7272900242499843,
+      "worstPct": -8.035123368999987,
+      "lossFrequencyPct": 12.068965517241379,
+      "worstDrawdownPct": -8.861861673760618,
+      "unclosed": 2
+    },
+    "nonoverlapping": {
+      "count": 4,
+      "targetHits": 0,
+      "targetFrequencyPct": 0.0,
+      "medianPct": 0.5511782137500087,
+      "p10Pct": -6.202941530049987,
+      "worstPct": -8.035123368999987,
+      "lossFrequencyPct": 50.0,
+      "worstDrawdownPct": -8.634477562624099,
+      "unclosed": 1
+    },
+    "windows": [
+      {
+        "start": "2024-09-02",
+        "end": "2024-12-01",
+        "returnPct": 3.030207000000007,
+        "drawdownPct": -1.0411168693931105,
+        "targetReached": false,
+        "closed": true,
+        "trades": 7,
+        "fills": 13,
+        "riskEvents": [
+          {
+            "date": "2024-11-28",
+            "reason": "3개월 만기 청산",
+            "equity": 103030207
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2025-04-28",
+        "end": "2025-07-27",
+        "returnPct": 6.536748817499993,
+        "drawdownPct": -8.634477562624099,
+        "targetReached": false,
+        "closed": true,
+        "trades": 9,
+        "fills": 18,
+        "riskEvents": [
+          {
+            "date": "2025-07-24",
+            "reason": "3개월 만기 청산",
+            "equity": 106746499.0775
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2025-11-17",
+        "end": "2026-02-16",
+        "returnPct": -1.9278505724999895,
+        "drawdownPct": -5.326137159133348,
+        "targetReached": false,
+        "closed": true,
+        "trades": 9,
+        "fills": 18,
+        "riskEvents": [
+          {
+            "date": "2026-02-12",
+            "reason": "3개월 만기 청산",
+            "equity": 98851730.18
+          }
+        ],
+        "affectedActions": []
+      },
+      {
+        "start": "2026-02-19",
+        "end": "2026-05-18",
+        "returnPct": -8.035123368999987,
+        "drawdownPct": -8.035123368999987,
+        "targetReached": false,
+        "closed": false,
+        "trades": 6,
+        "fills": 12,
+        "riskEvents": [
+          {
+            "date": "2026-05-15",
+            "reason": "3개월 만기 청산",
+            "equity": 92533820.951
+          }
+        ],
+        "affectedActions": []
+      }
+    ]
+  }
+]

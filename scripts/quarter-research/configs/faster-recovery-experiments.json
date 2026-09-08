@@ -1,0 +1,83 @@
+[
+  {
+    "directory": "faster-recovery/20-3-development",
+    "stage": "development",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "faster-recovery-20-3.json",
+    "options": "history-reset-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "faster-recovery/20-3-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "faster-recovery-20-3.json",
+    "options": "entry-30-validation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "faster-recovery/20-3-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "faster-recovery-20-3.json",
+    "options": "entry-30-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "faster-recovery/30-3-development",
+    "stage": "development",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "faster-recovery-30-3.json",
+    "options": "history-reset-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "faster-recovery/30-3-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "faster-recovery-30-3.json",
+    "options": "entry-30-validation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "faster-recovery/30-3-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "faster-recovery-30-3.json",
+    "options": "entry-30-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "faster-recovery/20-5-development",
+    "stage": "development",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "faster-recovery-20-5.json",
+    "options": "history-reset-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "faster-recovery/20-5-validation",
+    "stage": "validation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "faster-recovery-20-5.json",
+    "options": "entry-30-validation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  },
+  {
+    "directory": "faster-recovery/20-5-confirmation",
+    "stage": "confirmation",
+    "input": "expanded/stock-200-verified-input.json.gz",
+    "selection": "faster-recovery-20-5.json",
+    "options": "entry-30-confirmation-options.json",
+    "slippageBps": 5,
+    "seed": 204
+  }
+]

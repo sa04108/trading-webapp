@@ -1,0 +1,29 @@
+{
+  "asof": "2026-09-08",
+  "baseCommit": "bc99bbd",
+  "status": "원본 대조 통과, 실전 채택 기준 미달",
+  "checks": [
+    {
+      "command": "python scripts/quarter-research/build_faster_evidence.py data/kr-quarter-research data/kr-quarter-research/faster-recovery/evidence",
+      "exitCode": 0,
+      "newExperiments": 9,
+      "newAccounts": 369,
+      "reusedAccounts": 200
+    },
+    {
+      "command": "python -m py_compile scripts/quarter-research/build_faster_evidence.py",
+      "exitCode": 0
+    }
+  ],
+  "unchangedTradingFiles": 29,
+  "unchangedTradingFilesReference": "bc99bbd와 바이트 대조",
+  "newTradingCode": false,
+  "priorCodeVerification": "../kr-current-quarter-entry-results/verification.json",
+  "publicFilesSha256": {
+    "all-summaries.csv": "5af825c541861d7285e046df2a0f37df83148699357173e9e8866025f6b68011",
+    "nonoverlapping-accounts.json": "9433920669a58cf717e713aa248185fb03046b1807b84128ba2753237b4e90a1",
+    "evidence-manifest.json": "c91deaa2becd73ac844e774e8152b8914eaadce4a3666760d993df5d135811a6"
+  },
+  "deferredDiagnostics": "전체·비중첩 진행 기준 미달로 추가 월간·25/35% 조건·10/20bp 비용 및 현재 신호 계산을 실행하지 않음",
+  "note": "재사용 200개를 새 계좌 수로 더하지 않는다. 같은 시장 역사에 대한 반복 탐색이다."
+}

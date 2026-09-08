@@ -1,0 +1,12 @@
+[
+  {
+    "id": "recovery-20-5-monthly",
+    "strategyId": "recovery-rotation",
+    "topN": 5,
+    "parameters": {
+      "formationDays": 20,
+      "topN": 5
+    },
+    "rebalanceBars": 20
+  }
+]
