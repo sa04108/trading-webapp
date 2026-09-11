@@ -1,3 +1,6 @@
+import type { PeriodValidationDto } from '../../../../shared/schemas/period-validation.js';
+import type { DatabaseHandle } from '../../../shared/db/database.js';
+import { registerPeriodValidationRoutes } from './period-validation-routes.js';
 import { createHash } from 'node:crypto';
 import type { EventEmitter } from 'node:events';
 import os from 'node:os';
@@ -89,6 +92,8 @@ type FundamentalsRequirementIssue =
   | { readonly kind: 'STALE_FINANCIAL_DATA'; readonly message: string };
 
 export interface BacktestRouteDeps {
+  readonly database: DatabaseHandle;
+  readonly onValidationFinished?: (experiment: PeriodValidationDto) => void;
   readonly queue: JobQueue;
   readonly orchestrator: JobOrchestrator;
   /** local child와 remote worker가 발행하는 모든 job 상태/진행 이벤트. */
@@ -941,6 +946,51 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     return `대기 중인 백테스트가 ${queued}건으로 상한(${deps.maxQueuedBacktests})에 도달했습니다. 완료되거나 취소된 뒤 제출하세요.`;
   };
 
+  const validations = registerPeriodValidationRoutes(app, {
+    database: deps.database, clock, queue, results, strategies, preparation,
+    onFinished: deps.onValidationFinished,
+    validateRequest: (body) => {
+      const errors = validateStaticSubmission(body);
+      const capacity = checkPositionCapacity(body);
+      return capacity ? [...errors, capacity] : errors;
+    },
+    cancelJob: (jobId) => { orchestrator.cancel(jobId); },
+    buildEnqueue: async (body, prepared) => {
+      if (queueDepthError()) return null;
+      const resourceError = await checkResources(deps.dataRoot);
+      if (resourceError) throw new Error(resourceError);
+      const validated = await validateSubmission(body, prepared);
+      if (!validated.ok) throw new Error(validated.errors[0]);
+      const fundamentals = await checkFundamentalsRequirement(body, validated.resolved.unionSymbols, validated.resolved.schedule);
+      if (fundamentals) throw new Error(fundamentals.message);
+      if (symbolMaster.tradingDaysBetween(body.period.from, body.period.to).length < 2) {
+        throw new Error('각 독립 평가 구간에는 실제 시장 거래일이 2개 이상 필요합니다.');
+      }
+      const strategy = strategies.get(body.strategyId)!;
+      const parameters = strategy.parameterSchema.parse(body.parameters);
+      const warmupBars = Math.ceil(Math.max(0, strategy.dataRequirements?.priceWarmupBars?.(parameters) ?? 0,
+        ...body.universeRule.stages.map((stage) => stage.criterion === 'DECLINE' ? stage.lookbackTradingDays : 0)));
+      const prior = deps.database.sqlite.prepare(`
+        SELECT COUNT(*) AS count FROM (
+          SELECT date FROM symbol_master_trading_days WHERE date < ? ORDER BY date DESC LIMIT ?
+        )
+      `).get(body.period.from, warmupBars) as { count: number };
+      if (prior.count < warmupBars) {
+        throw new Error(`독립 평가 시작 전 지표 준비 데이터가 부족합니다 (필요 ${warmupBars}거래일, 확보 ${prior.count}거래일). 과거 데이터를 준비한 뒤 다시 실행하세요.`);
+      }
+      const benchmarkId = body.benchmarkId ?? 'KOSPI';
+      const benchmark = benchmarks.pin(benchmarkId, body.period);
+      return () => {
+        if (queueDepthError()) return null;
+        return queue.enqueue(
+          { ...body, benchmarkId, timeframe: validated.timeframe }, validated.resolved.schedule,
+          validated.universe, validated.provenancePin, validated.warnings, benchmark,
+          { preparationJobId: prepared.preparationJobId },
+        );
+      };
+    },
+  }, requireAuth);
+
   app.get('/backtests/profiles', { preHandler: requireAuth }, async () => ({
     commissionProfiles: listCostProfiles(),
     slippageProfiles: listSlippageProfiles(),
@@ -1453,6 +1503,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
 
   app.delete('/backtests/:id', { preHandler: requireAuth }, async (request, reply) => {
     const { id } = request.params as { id: string };
+    if (validations.referencesJob(id) || validations.list(id).length > 0) {
+      return reply.code(409).send({ error: '연결된 기간 검증 실험을 먼저 삭제하세요.' });
+    }
     const result = seedCloneBatches.deleteSourceJob(id);
     if (result === 'NOT_FOUND') {
       return reply.code(404).send({ error: '백테스트를 찾을 수 없습니다' });

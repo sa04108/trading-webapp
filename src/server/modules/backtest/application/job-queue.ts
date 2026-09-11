@@ -1,4 +1,4 @@
-import { and, count, desc, eq, inArray, isNull } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { AppDatabase, DatabaseHandle } from '../../../shared/db/database.js';
 import { PreparationPreviewCache } from './preparation-preview-cache.js';
 import { PreparationReferenceError, PreparationReferenceService } from './preparation-reference-service.js';
@@ -446,7 +446,9 @@ export class JobQueue {
     return this.db
       .select()
       .from(backtestJobs)
-      .where(isNull(backtestJobs.cloneBatchId))
+      .where(and(isNull(backtestJobs.cloneBatchId), sql`NOT EXISTS (
+        SELECT 1 FROM backtest_validation_trials v WHERE v.job_id = ${backtestJobs.id}
+      )`))
       .orderBy(desc(backtestJobs.createdAtMs))
       .limit(limit)
       .offset(offset)

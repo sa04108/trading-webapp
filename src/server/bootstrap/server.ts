@@ -166,6 +166,20 @@ export async function buildServer(container: Container): Promise<FastifyInstance
           clock: container.clock,
           benchmarks: container.benchmarkService,
           seedCloneBatches: container.seedCloneBatchService,
+          database: container.database,
+          onValidationFinished: (experiment) => {
+            try {
+              container.notificationService.create({
+                type: 'backtest', severity: experiment.status === 'FAILED' ? 'error' : 'info',
+                title: experiment.status === 'COMPLETED' ? '기간 검증이 완료되었습니다'
+                  : experiment.status === 'FAILED' ? '기간 검증이 실패했습니다' : '기간 검증이 취소되었습니다',
+                body: experiment.error ?? `${experiment.plan.folds.length}개 구간 · ${experiment.plan.totalRuns}회 실행 계획`,
+                link: `/backtests/${experiment.sourceJobId}#period-validation`,
+              });
+            } catch (error) {
+              api.log.warn({ err: error }, '기간 검증 종료 알림 생성 실패');
+            }
+          },
         },
         requireAuth,
       );

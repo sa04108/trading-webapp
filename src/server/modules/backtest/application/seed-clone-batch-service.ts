@@ -274,6 +274,7 @@ export class SeedCloneBatchService {
       const source = this.queue.getJob(sourceJobId);
       if (!source) return 'NOT_FOUND';
       if (!this.queue.isTerminal(source.status)) return 'NOT_DELETABLE';
+      if (this.hasValidationReference(sourceJobId)) return 'NOT_DELETABLE';
 
       const batches = this.database.db
         .select({ id: backtestCloneBatches.id })
@@ -315,6 +316,7 @@ export class SeedCloneBatchService {
 
       for (const { job } of detail.items) {
         if (!job) continue;
+        if (this.hasValidationReference(job.id)) return null;
         jobIds.add(job.id);
         const descendants = this.database.db
           .select({ id: backtestCloneBatches.id })
@@ -326,6 +328,13 @@ export class SeedCloneBatchService {
     }
 
     return { batchIds: [...batchIds], jobIds: [...jobIds] };
+  }
+
+  private hasValidationReference(jobId: string): boolean {
+    return this.database.sqlite.prepare(`
+      SELECT 1 FROM backtest_validations WHERE source_job_id = ?
+      UNION ALL SELECT 1 FROM backtest_validation_trials WHERE job_id = ? LIMIT 1
+    `).get(jobId, jobId) !== undefined;
   }
 
   private executeDeletionPlan(plan: SeedCloneDeletionPlan): void {

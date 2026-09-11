@@ -518,7 +518,9 @@ export function createContainer(
     },
   );
   const backtestNotificationListener = createBacktestNotificationListener({
-    queue: jobQueue,
+    queue: { getJob: (jobId) => database.sqlite.prepare(
+      'SELECT 1 FROM backtest_validation_trials WHERE job_id = ?',
+    ).get(jobId) ? null : jobQueue.getJob(jobId) },
     strategyName: (strategyId) => strategyRegistry.describe(strategyId)?.name ?? null,
     totalReturnPct: (jobId) => resultsService.getTotalReturnPct(jobId),
     notify: safeNotify,

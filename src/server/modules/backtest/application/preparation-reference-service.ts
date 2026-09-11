@@ -76,6 +76,8 @@ export class PreparationReferenceService {
           WHERE b.preparation_job_id = backtest_preparation_jobs.id)
         AND NOT EXISTS (SELECT 1 FROM preparation_wizard_references w
           WHERE w.preparation_job_id = backtest_preparation_jobs.id)
+        AND NOT EXISTS (SELECT 1 FROM backtest_validation_trials v
+          WHERE v.preparation_job_id = backtest_preparation_jobs.id)
     `).run().changes;
   }
 

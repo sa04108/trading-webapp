@@ -1,3 +1,4 @@
+import { PeriodValidationSection } from './period-validation-section';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowDown,
@@ -822,6 +823,7 @@ export function BacktestDetailPage() {
       {completed && metrics ? (
         <>
           <MetricCards metrics={metrics} benchmark={benchmark} />
+          <PeriodValidationSection key={id} jobId={id} request={job.request} />
 
           {benchmark && !benchmark.available ? (
             <Alert>

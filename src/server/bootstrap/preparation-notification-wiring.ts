@@ -54,6 +54,13 @@ export function createPreparationNotificationListener(deps: {
 
     // 알림 실패가 준비 작업의 종료 전이를 되돌리면 안 된다.
     try {
+      // 실험 내부 준비는 실험 종료 알림으로 묶되, 위저드가 함께 쓰면 기존 알림을 유지한다.
+      const internal = deps.database.sqlite.prepare(`
+        SELECT 1 FROM backtest_validation_trials v WHERE v.preparation_job_id = ?
+          AND NOT EXISTS (SELECT 1 FROM preparation_wizard_references w WHERE w.preparation_job_id = ?)
+        LIMIT 1
+      `).get(job.id, job.id);
+      if (internal) return;
       const row = deps.database.db
         .select({ requestJson: backtestPreparationJobs.requestJson })
         .from(backtestPreparationJobs)
