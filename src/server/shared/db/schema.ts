@@ -413,6 +413,8 @@ export const backtestPreparationJobs = sqliteTable(
     gapCount: integer('gap_count').notNull().default(0),
     dartQuotaDateKst: text('dart_quota_date_kst'),
     dartCallsUsed: integer('dart_calls_used').notNull().default(0),
+    /** 오류로 예약한 자동 재시도 횟수는 서버·자식 재시작에도 유지한다. */
+    retryCount: integer('retry_count').notNull().default(0),
     nextResumeAtMs: integer('next_resume_at_ms'),
     previewJson: text('preview_json'),
     error: text('error'),

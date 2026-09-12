@@ -1,0 +1,1 @@
+ALTER TABLE `backtest_preparation_jobs` ADD `retry_count` integer DEFAULT 0 NOT NULL;

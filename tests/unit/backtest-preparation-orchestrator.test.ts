@@ -3,17 +3,18 @@ import os from 'node:os';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { eq } from 'drizzle-orm';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../../src/server/shared/db/database.js';
 import { backtestPreparationJobs } from '../../src/server/shared/db/schema.js';
 import {
   BacktestPreparationOrchestrator,
+  PreparationInputError,
   type PreparationInput,
   type BacktestPreparationJobDto,
 } from '../../src/server/modules/backtest/application/backtest-preparation-orchestrator.js';
 import { backtestPreparationRequestHash } from '../../src/server/modules/backtest/application/backtest-preparation-plan.js';
 import { StrategyRegistry } from '../../src/server/modules/strategy/application/strategy-registry.js';
-import { KrxQuotaError } from '../../src/server/modules/market-data/application/ports.js';
+import { KrxNotConfiguredError, KrxQuotaError } from '../../src/server/modules/market-data/application/ports.js';
 import type { SymbolMasterEntry } from '../../src/server/modules/market-data/domain/symbol-master.js';
 
 const LOGGER = { debug() {}, info() {}, warn() {}, error() {} } as never;
@@ -1100,7 +1101,7 @@ describe('BacktestPreparationOrchestrator durable preview validation', () => {
     }
   });
 
-  it('repeated source changes terminate with an explicit error instead of an infinite requeue', async () => {
+  it('검증 중 데이터가 반복 변경되면 오류를 남기고 제한된 자동 재시도를 예약한다', async () => {
     let calls = 0;
     const ctx = makeDeps();
     ctx.deps.resolver.resolveOrDescribeNeeds = async () => {
@@ -1111,7 +1112,8 @@ describe('BacktestPreparationOrchestrator durable preview validation', () => {
     const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
     try {
       const job = orchestrator.start(INPUT);
-      await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
+      await waitFor(() => orchestrator.get(job.id)?.retryCount === 1);
+      expect(orchestrator.get(job.id)?.status).toBe('QUEUED');
       expect(orchestrator.get(job.id)?.error).toMatch(/데이터가 반복해서 변경/);
       expect(calls).toBe(24);
       expect(orchestrator.getFreshPreviewDetails(INPUT)).toBeNull();
@@ -1788,7 +1790,7 @@ describe('BacktestPreparationOrchestrator quota resume와 terminal 결과', () =
     ctx.handle.close();
   });
 
-  it('공시 목록 실패로 FactSync가 ERROR를 반환하면 준비 잡도 FAILED가 된다', async () => {
+  it('공시 목록 실패로 FactSync가 ERROR를 반환하면 같은 작업의 자동 재시도를 예약한다', async () => {
     const ctx = makeDeps({
       resolver: {
         resolveOrDescribeNeeds: async () => ({
@@ -1819,7 +1821,8 @@ describe('BacktestPreparationOrchestrator quota resume와 terminal 결과', () =
     const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
     const job = orchestrator.start(INPUT);
 
-    await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
+    await waitFor(() => orchestrator.get(job.id)?.retryCount === 1);
+    expect(orchestrator.get(job.id)).toMatchObject({ status: 'QUEUED', retryCount: 1 });
     expect(orchestrator.get(job.id)?.error).toContain('정기공시 목록 조회 실패');
     await orchestrator.stop();
     ctx.handle.close();
@@ -1836,7 +1839,7 @@ describe('미리보기 종료 알림 경계', () => {
         onJobFinished: (job: BacktestPreparationJobDto) => finished.push(job),
         ...(status === 'FAILED' ? {
           resolver: {
-            resolveOrDescribeNeeds: async () => { throw new Error('계산 실패'); },
+            resolveOrDescribeNeeds: async () => { throw new PreparationInputError('잘못된 계산 입력'); },
             isPeriodCovered: () => true,
           },
         } : {}),
@@ -1877,4 +1880,175 @@ describe('미리보기 종료 알림 경계', () => {
       ctx.handle.close();
     }
   });
+});
+
+
+describe('미리보기 자동 재시도', () => {
+  it('5·10·20초 후 같은 작업을 재시도하고 한도 소진 시 한 번만 실패를 알린다', async () => {
+    vi.useFakeTimers();
+    const finished = vi.fn();
+    const resolve = vi.fn(async () => { throw new Error('일시적인 계산 오류'); });
+    const ctx = makeDeps({
+      clock: { now: () => Date.now() },
+      resolver: { resolveOrDescribeNeeds: resolve, isPeriodCovered: () => true },
+      onJobFinished: finished,
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    try {
+      const job = orchestrator.start(INPUT);
+      await vi.advanceTimersByTimeAsync(0);
+      for (const [index, delay] of [5_000, 10_000, 20_000].entries()) {
+        expect(orchestrator.get(job.id)).toMatchObject({
+          status: 'QUEUED', retryCount: index + 1,
+          nextResumeAtMs: Date.now() + delay, error: '일시적인 계산 오류',
+        });
+        expect(orchestrator.start(INPUT).id).toBe(job.id);
+        expect(finished).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(delay - 1);
+        expect(resolve).toHaveBeenCalledTimes(index + 1);
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      expect(resolve).toHaveBeenCalledTimes(4);
+      expect(orchestrator.get(job.id)).toMatchObject({
+        status: 'FAILED', retryCount: 3, nextResumeAtMs: null,
+        error: '자동 재시도 3회 후에도 준비하지 못했습니다: 일시적인 계산 오류',
+      });
+      expect(finished).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(resolve).toHaveBeenCalledTimes(4);
+    } finally {
+      await orchestrator.stop();
+      ctx.handle.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it('일시 오류 뒤에는 저장된 진행률을 유지하고 결과를 완성한다', async () => {
+    vi.useFakeTimers();
+    const finished = vi.fn();
+    const ctx = makeDeps({ clock: { now: () => Date.now() }, onJobFinished: finished });
+    let failed = false;
+    const resolve = vi.fn(async () => {
+      if (!failed) {
+        failed = true;
+        ctx.handle.db.update(backtestPreparationJobs).set({ overallProgress: 65 }).run();
+        throw new Error('연결 끊김');
+      }
+      return ready();
+    });
+    ctx.deps.resolver.resolveOrDescribeNeeds = resolve;
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    try {
+      const job = orchestrator.start(INPUT);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(orchestrator.get(job.id)).toMatchObject({ status: 'QUEUED', overallProgress: 65 });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(orchestrator.get(job.id)).toMatchObject({
+        id: job.id, status: 'COMPLETED', retryCount: 1, overallProgress: 100,
+        nextResumeAtMs: null, error: null,
+      });
+      expect(orchestrator.getPreview(job.id)).not.toBeNull();
+      expect(finished).toHaveBeenCalledTimes(1);
+      expect(finished.mock.calls[0]?.[0].status).toBe('COMPLETED');
+    } finally {
+      await orchestrator.stop();
+      ctx.handle.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it('재시도 대기 중 취소하면 즉시 닫고 다시 실행하지 않는다', async () => {
+    vi.useFakeTimers();
+    const resolve = vi.fn(async () => { throw new Error('연결 끊김'); });
+    const ctx = makeDeps({
+      clock: { now: () => Date.now() },
+      resolver: { resolveOrDescribeNeeds: resolve, isPeriodCovered: () => true },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    try {
+      const job = orchestrator.start(INPUT);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(orchestrator.get(job.id)?.retryCount).toBe(1);
+      orchestrator.cancel(job.id);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(orchestrator.get(job.id)).toMatchObject({ status: 'CANCELLED', nextResumeAtMs: null });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(resolve).toHaveBeenCalledTimes(1);
+    } finally {
+      await orchestrator.stop();
+      ctx.handle.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it('재시도 대기 중 서버가 재시작돼도 횟수와 예약 시각을 유지한다', async () => {
+    vi.useFakeTimers();
+    const resolve = vi.fn(async () => { throw new Error('연결 끊김'); });
+    const ctx = makeDeps({
+      clock: { now: () => Date.now() },
+      resolver: { resolveOrDescribeNeeds: resolve, isPeriodCovered: () => true },
+    });
+    let orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    try {
+      const job = orchestrator.start(INPUT);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await orchestrator.stop();
+      orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+      orchestrator.recoverOrphaned();
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(resolve).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(resolve).toHaveBeenCalledTimes(2);
+      expect(orchestrator.get(job.id)).toMatchObject({
+        status: 'QUEUED', retryCount: 2, nextResumeAtMs: Date.now() + 10_000,
+      });
+    } finally {
+      await orchestrator.stop();
+      ctx.handle.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it('재시도 대기 작업이 다른 입력의 준비를 막지 않는다', async () => {
+    vi.useFakeTimers();
+    let failed = false;
+    const ctx = makeDeps({
+      clock: { now: () => Date.now() },
+      resolver: { resolveOrDescribeNeeds: async () => {
+        if (!failed) { failed = true; throw new Error('연결 끊김'); }
+        return ready();
+      }, isPeriodCovered: () => true },
+    });
+    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    try {
+      const first = orchestrator.start(INPUT);
+      await vi.advanceTimersByTimeAsync(0);
+      const second = orchestrator.start({ ...INPUT, parameters: { variant: 1 } });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(orchestrator.get(first.id)).toMatchObject({ status: 'QUEUED', retryCount: 1 });
+      expect(orchestrator.get(second.id)?.status).toBe('COMPLETED');
+    } finally {
+      await orchestrator.stop();
+      ctx.handle.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([new PreparationInputError('입력 오류'), new KrxNotConfiguredError()])(
+    '%s는 재시도 없이 실패로 마친다', async (error) => {
+      const ctx = makeDeps({
+        resolver: { resolveOrDescribeNeeds: async () => { throw error; }, isPeriodCovered: () => true },
+      });
+      const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+      try {
+        const job = orchestrator.start(INPUT);
+        await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
+        expect(orchestrator.get(job.id)).toMatchObject({ retryCount: 0, nextResumeAtMs: null, error: error.message });
+      } finally {
+        await orchestrator.stop();
+        ctx.handle.close();
+      }
+    },
+  );
 });

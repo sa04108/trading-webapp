@@ -32,6 +32,7 @@ export interface BacktestPreparationJob {
   readonly totalSymbols: number;
   readonly savedFacts: number;
   readonly gapCount: number;
+  readonly retryCount?: number;
   readonly nextResumeAtMs: number | null;
   readonly error: string | null;
 }

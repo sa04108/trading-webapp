@@ -12,6 +12,7 @@ const activeJob = (overrides: Partial<BacktestPreparationJobDto> = {}): Backtest
   totalSymbols: 12,
   savedFacts: 3,
   gapCount: 1,
+  retryCount: 0,
   nextResumeAtMs: null,
   error: null,
   ...overrides,

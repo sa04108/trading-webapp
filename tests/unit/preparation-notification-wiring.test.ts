@@ -21,6 +21,7 @@ function job(status: BacktestPreparationJobDto['status'], error: string | null =
     totalSymbols: 1,
     savedFacts: 0,
     gapCount: 0,
+    retryCount: 0,
     nextResumeAtMs: null,
     error,
   } satisfies BacktestPreparationJobDto;

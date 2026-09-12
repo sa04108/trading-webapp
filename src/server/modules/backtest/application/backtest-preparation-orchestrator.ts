@@ -29,7 +29,7 @@ import {
   corporateActionRawDateRange,
 } from '../../facts/domain/corporate-action-effective-date.js';
 import type { CandleCoverageService } from '../../market-data/application/candle-coverage-service.js';
-import { KrxQuotaError } from '../../market-data/application/ports.js';
+import { KrxNotConfiguredError, KrxQuotaError } from '../../market-data/application/ports.js';
 import type { SymbolMasterService } from '../../market-data/application/symbol-master-service.js';
 import { addCalendarDays, kstDateOf } from '../../market-data/domain/kst-date.js';
 import type { SymbolService } from '../../market-data/application/symbol-service.js';
@@ -103,6 +103,7 @@ export interface BacktestPreparationJobDto {
   readonly totalSymbols: number;
   readonly savedFacts: number;
   readonly gapCount: number;
+  readonly retryCount: number;
   readonly nextResumeAtMs: number | null;
   readonly error: string | null;
 }
@@ -134,6 +135,7 @@ type PreparationJobDtoRow = Pick<
   | 'totalSymbols'
   | 'savedFacts'
   | 'gapCount'
+  | 'retryCount'
   | 'nextResumeAtMs'
   | 'error'
 >;
@@ -167,6 +169,7 @@ const PREPARATION_DTO_SELECTION = {
   totalSymbols: backtestPreparationJobs.totalSymbols,
   savedFacts: backtestPreparationJobs.savedFacts,
   gapCount: backtestPreparationJobs.gapCount,
+  retryCount: backtestPreparationJobs.retryCount,
   nextResumeAtMs: backtestPreparationJobs.nextResumeAtMs,
   error: backtestPreparationJobs.error,
 } as const;
@@ -188,12 +191,15 @@ function corporateActionDataExclusions(
 
 const ALLOWED_TRANSITIONS: Readonly<Record<PreparationStatus, readonly PreparationStatus[]>> = {
   QUEUED: ['RUNNING'],
-  RUNNING: ['WAITING_DAILY_QUOTA', 'COMPLETED', 'FAILED', 'CANCELLED'],
+  RUNNING: ['QUEUED', 'WAITING_DAILY_QUOTA', 'COMPLETED', 'FAILED', 'CANCELLED'],
   WAITING_DAILY_QUOTA: ['QUEUED', 'CANCELLED'],
   COMPLETED: [],
   FAILED: [],
   CANCELLED: [],
 };
+
+// 반복 장애가 무한 실행으로 이어지지 않도록 최초 실행 뒤 5·10·20초 간격으로 재시도한다.
+const RETRY_DELAYS_MS = [5_000, 10_000, 20_000] as const;
 
 const EMPTY_NEEDS: UniverseDataNeed = {
   factSymbols: [],
@@ -614,7 +620,8 @@ export class BacktestPreparationOrchestrator {
     }
     // QUEUED는 허용 전이표를 지키기 위해 cancelRequested만 남긴다. runner가
     // QUEUED→RUNNING을 확보한 직후 RUNNING→CANCELLED로 닫는다.
-    this.persistAndEmit(jobId, { cancelRequested: true }, ['QUEUED', 'RUNNING']);
+    this.clearResumeTimer(jobId);
+    this.persistAndEmit(jobId, { cancelRequested: true, nextResumeAtMs: null }, ['QUEUED', 'RUNNING']);
     this.queuePump();
     return true;
   }
@@ -630,9 +637,10 @@ export class BacktestPreparationOrchestrator {
       if (!ACTIVE_STATUSES.includes(status)) continue;
       this.normalizeRecoveredRequest(row);
       if (status === 'RUNNING') {
-        // 복구 전이는 정상 실행 전이표의 유일한 예외다. 죽은 runner를 다시 큐에
-        // 올려야 이미 저장된 symbol-year를 INCREMENTAL로 이어받을 수 있다.
-        this.persistAndEmit(row.id, { status: 'QUEUED' }, ['RUNNING'], true);
+        // 죽은 실행 주체를 다시 큐에 올려 저장된 symbol-year를 증분 수집으로 이어받는다.
+        this.persistAndEmit(row.id, { status: 'QUEUED' }, ['RUNNING']);
+      } else if (status === 'QUEUED' && row.nextResumeAtMs !== null) {
+        this.scheduleResume(row.id, row.nextResumeAtMs);
       } else if (status === 'WAITING_DAILY_QUOTA') {
         if (row.nextResumeAtMs !== null && row.nextResumeAtMs <= this.deps.clock.now()) {
           this.persistAndEmit(
@@ -684,7 +692,12 @@ export class BacktestPreparationOrchestrator {
     const next = this.deps.database.db
       .select({ id: backtestPreparationJobs.id })
       .from(backtestPreparationJobs)
-      .where(eq(backtestPreparationJobs.status, 'QUEUED'))
+      .where(and(
+        eq(backtestPreparationJobs.status, 'QUEUED'),
+        sql`(${backtestPreparationJobs.nextResumeAtMs} IS NULL
+          OR ${backtestPreparationJobs.nextResumeAtMs} <= ${this.deps.clock.now()}
+          OR ${backtestPreparationJobs.cancelRequested} = 1)`,
+      ))
       .orderBy(asc(backtestPreparationJobs.createdAtMs))
       .get();
     if (!next) return;
@@ -697,22 +710,23 @@ export class BacktestPreparationOrchestrator {
           .from(backtestPreparationJobs)
           .where(eq(backtestPreparationJobs.status, 'RUNNING'))
           .get();
-        return running ? null : { status: 'RUNNING', error: null };
+        return running ? null : { status: 'RUNNING', error: null, nextResumeAtMs: null };
       },
       ['QUEUED'],
     );
     if (!claimed || claimed.status !== 'RUNNING') return;
 
     this.runnerActive = true;
-    const runner = (this.execution?.runClaimedJob(claimed.id) ?? this.runClaimedJob(claimed.id))
+    this.clearResumeTimer(claimed.id);
+    const runner = Promise.resolve().then(() => {
+      if (this.stopping || this.finishCancelledIfRequested(claimed.id)) return;
+      return this.execution?.runClaimedJob(claimed.id) ?? this.runClaimedJob(claimed.id);
+    })
       .catch((error: unknown) => {
         const current = this.getRow(claimed.id);
         if (!this.stopping && current?.status === 'RUNNING') {
           if (current.cancelRequested) this.finishCancelledIfRequested(claimed.id);
-          else this.fail(
-            claimed.id,
-            error instanceof Error ? error.message : String(error),
-          );
+          else this.retryOrFail(claimed.id, error);
         }
         this.deps.logger.error(
           { module: 'backtest', event: 'preparation.unhandled', jobId: claimed.id, err: error },
@@ -878,7 +892,7 @@ export class BacktestPreparationOrchestrator {
         // A concurrent write or an unprepared new member needs a full pass with fresh
         // exclusions. Keep the same durable job, and bound repeated source changes.
       }
-      this.fail(jobId, '검증 중 데이터가 반복해서 변경되어 미리보기를 확정하지 못했습니다. 데이터 수집이 끝난 뒤 다시 준비하세요.');
+      this.retryOrFail(jobId, '검증 중 데이터가 반복해서 변경되어 미리보기를 확정하지 못했습니다.');
     } catch (error) {
       if (this.stopping) return;
       if (error instanceof UniverseResolutionCancelledError) {
@@ -890,12 +904,11 @@ export class BacktestPreparationOrchestrator {
         this.waitForKrxDailyQuota(jobId, error.message);
         return;
       }
-      const message = error instanceof Error ? error.message : String(error);
       this.deps.logger.error(
         { module: 'backtest', event: 'preparation.failed', jobId, err: error },
         'backtest preparation failed',
       );
-      this.fail(jobId, message);
+      this.retryOrFail(jobId, error);
     }
   }
 
@@ -1495,7 +1508,7 @@ export class BacktestPreparationOrchestrator {
       return false;
     }
     if (report.stopReason === 'ERROR') {
-      this.fail(jobId, report.failureMessage ?? 'DART 데이터 동기화에 실패했습니다.');
+      this.retryOrFail(jobId, report.failureMessage ?? 'DART 데이터 동기화에 실패했습니다.');
       return false;
     }
     return true;
@@ -1598,14 +1611,14 @@ export class BacktestPreparationOrchestrator {
       if (this.stopping) return;
       const current = this.getRow(jobId);
       if (
-        current?.status === 'WAITING_DAILY_QUOTA'
+        (current?.status === 'WAITING_DAILY_QUOTA' || current?.status === 'QUEUED')
         && current.nextResumeAtMs !== null
         && current.nextResumeAtMs <= this.deps.clock.now()
       ) {
         this.persistAndEmit(
           jobId,
           { status: 'QUEUED', nextResumeAtMs: null },
-          ['WAITING_DAILY_QUOTA'],
+          ['WAITING_DAILY_QUOTA', 'QUEUED'],
         );
         this.queuePump();
       }
@@ -1639,6 +1652,34 @@ export class BacktestPreparationOrchestrator {
     if (this.stopping) return true;
     if (this.finishCancelledIfRequested(jobId)) return true;
     return this.getRow(jobId)?.status !== 'RUNNING';
+  }
+
+  /** 자식 종료와 수집·계산 예외를 같은 영속 작업에서 제한된 횟수만 다시 실행한다. */
+  private retryOrFail(jobId: string, error: unknown): void {
+    if (this.stopping || this.finishCancelledIfRequested(jobId)) return;
+    const message = error instanceof Error ? error.message : String(error);
+    if (
+      error instanceof PreparationInputError
+      || error instanceof UnsafeBacktestSymbolIdentityError
+      || error instanceof KrxNotConfiguredError
+    ) {
+      this.fail(jobId, message);
+      return;
+    }
+    this.persistAndEmit(jobId, (row) => {
+      if (row.cancelRequested) return { status: 'CANCELLED', error: '사용자가 준비 작업을 취소했습니다.' };
+      const delay = RETRY_DELAYS_MS[row.retryCount];
+      if (delay === undefined) {
+        return { status: 'FAILED', error: `자동 재시도 ${row.retryCount}회 후에도 준비하지 못했습니다: ${message}` };
+      }
+      return {
+        status: 'QUEUED',
+        retryCount: row.retryCount + 1,
+        nextResumeAtMs: this.deps.clock.now() + delay,
+        error: message,
+      };
+    }, ['RUNNING']);
+    // 재개 타이머는 자식이 완전히 종료된 뒤 부모의 afterClaimedJobSettled에서 건다.
   }
 
   private fail(jobId: string, error: string): void {
@@ -1874,7 +1915,7 @@ export class BacktestPreparationOrchestrator {
 
   private afterClaimedJobSettled(jobId: string): void {
     new PreparationReferenceService(this.deps.database).collect();
-    const current = this.getRow(jobId);
+    let current = this.getRow(jobId);
     if (!current) return;
     if (!this.stopping && current.status === 'WAITING_DAILY_QUOTA' && current.cancelRequested) {
       this.persistAndEmit(
@@ -1889,12 +1930,13 @@ export class BacktestPreparationOrchestrator {
       return;
     }
     if (!this.stopping && current.status === 'RUNNING') {
-      this.fail(jobId, '준비 자식 프로세스가 완료 상태를 저장하지 않고 종료됐습니다.');
-      return;
+      this.retryOrFail(jobId, '준비 자식 프로세스가 완료 상태를 저장하지 않고 종료됐습니다.');
+      current = this.getRow(jobId);
+      if (!current) return;
     }
     if (
       !this.stopping
-      && current.status === 'WAITING_DAILY_QUOTA'
+      && (current.status === 'WAITING_DAILY_QUOTA' || current.status === 'QUEUED')
       && current.nextResumeAtMs !== null
     ) {
       this.scheduleResume(jobId, current.nextResumeAtMs);
@@ -1938,7 +1980,6 @@ export class BacktestPreparationOrchestrator {
     jobId: string,
     patchOrBuilder: PreparationJobPatch | ((row: PreparationJobRow) => PreparationJobPatch | null),
     expectedStatuses?: readonly PreparationStatus[],
-    recoveryTransition = false,
   ): BacktestPreparationJobDto | null {
     const mutate = this.deps.database.sqlite.transaction(() => {
       const current = this.getRow(jobId);
@@ -1951,7 +1992,6 @@ export class BacktestPreparationOrchestrator {
       if (
         nextStatus !== undefined
         && nextStatus !== currentStatus
-        && !(recoveryTransition && currentStatus === 'RUNNING' && nextStatus === 'QUEUED')
         && !ALLOWED_TRANSITIONS[currentStatus].includes(nextStatus)
       ) {
         throw new Error(`허용되지 않은 준비 작업 상태 전이: ${currentStatus} -> ${nextStatus}`);
@@ -2038,6 +2078,7 @@ function toDto(row: PreparationJobDtoRow): BacktestPreparationJobDto {
     totalSymbols: row.totalSymbols,
     savedFacts: row.savedFacts,
     gapCount: row.gapCount,
+    retryCount: row.retryCount,
     nextResumeAtMs: row.nextResumeAtMs,
     error: row.error,
   };

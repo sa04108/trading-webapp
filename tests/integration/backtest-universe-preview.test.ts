@@ -37,10 +37,13 @@ const marketCapRule = (
   rebalanceInterval,
 });
 
-async function waitForPreparation(ctx: TestApp, jobId: string): Promise<'COMPLETED' | 'FAILED' | 'CANCELLED'> {
+async function waitForPreparation(ctx: TestApp, jobId: string): Promise<'COMPLETED' | 'FAILED' | 'CANCELLED' | 'QUEUED'> {
   const started = Date.now();
   for (;;) {
-    const status = ctx.container.backtestPreparationOrchestrator.get(jobId)?.status;
+    const job = ctx.container.backtestPreparationOrchestrator.get(jobId);
+    const status = job?.status;
+    // 비동기 재시도는 완료 미리보기로 바꾸지 않고 원래 202 응답을 유지한다.
+    if (job?.status === 'QUEUED' && job.nextResumeAtMs !== null) return 'QUEUED';
     if (status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED') return status;
     if (Date.now() - started > 2_000) throw new Error('preparation timeout');
     await new Promise((resolve) => setTimeout(resolve, 5));

@@ -21,7 +21,7 @@ const PHASE_LABELS: Record<PreparationPhase, string> = {
 export function preparationStatusDescription(job: BacktestPreparationJob): string {
   switch (job.status) {
     case 'QUEUED':
-      return '데이터 준비 대기 중';
+      return job.nextResumeAtMs !== null ? '오류 후 자동 재시도 대기 중' : '데이터 준비 대기 중';
     case 'RUNNING':
       return PHASE_LABELS[job.phase];
     case 'WAITING_DAILY_QUOTA':
@@ -80,6 +80,16 @@ export function PreparationProgress({ job, onCancel, onRestart }: PreparationPro
             aria-valuetext={`${overallProgress}%`}
           />
         </div>
+
+        {job.status === 'QUEUED' && job.nextResumeAtMs !== null ? (
+          <Alert role="status">
+            <AlertDescription>
+              오류로 준비가 중단되어 {formatPreparationResumeTime(job.nextResumeAtMs)}에
+              자동으로 재시도합니다{job.retryCount ? ` (${job.retryCount}/3회)` : ''}.
+              {job.error ? <span className="block">{job.error}</span> : null}
+            </AlertDescription>
+          </Alert>
+        ) : null}
 
         {job.status === 'WAITING_DAILY_QUOTA' ? (
           <Alert role="alert">

@@ -138,12 +138,13 @@ describe('ForkedBacktestPreparationExecutor', () => {
 });
 
 describe('production preparation factory HTTP path', () => {
-  it('강제 forked container의 preview 요청이 실제 자식 판정을 거쳐 즉시 202를 반환한다', async () => {
+  it.each([false, true])('forked preview는 즉시 202를 반환하고 자식 강제 종료(%s) 뒤에도 결과를 완성한다', async (crashFirst) => {
     const config = testConfig();
     const relayedNotifications: PreparationNotification[] = [];
     const container = createContainer(config, {
       preparationExecution: 'forked',
       preparationExecutorOptions: {
+        ...(crashFirst ? { childUrl: new URL('../fixtures/preparation-retry-child.ts', import.meta.url) } : {}),
         onNotificationCreated: (notification) => relayedNotifications.push(notification),
       },
     });
@@ -191,6 +192,11 @@ describe('production preparation factory HTTP path', () => {
       expect(response.statusCode).toBe(202);
       expect(response.json()).toMatchObject({ job: { status: 'QUEUED' } });
       const id = response.json<{ job: { id: string } }>().job.id;
+      if (crashFirst) {
+        await waitFor(() => container.backtestPreparationOrchestrator.get(id)?.retryCount === 1, 20_000);
+        expect(container.backtestPreparationOrchestrator.get(id)).toMatchObject({ status: 'QUEUED' });
+        expect(container.notificationService.list()).toHaveLength(0);
+      }
       await waitFor(
         () => container.backtestPreparationOrchestrator.get(id)?.status === 'COMPLETED',
         20_000,
@@ -205,7 +211,7 @@ describe('production preparation factory HTTP path', () => {
       });
       expect(completed.statusCode).toBe(200);
       expect(completed.json()).toMatchObject({
-        job: { id, status: 'COMPLETED', overallProgress: 100 },
+        job: { id, status: 'COMPLETED', overallProgress: 100, retryCount: crashFirst ? 1 : 0 },
       });
       expect(container.notificationService.list()).toEqual([
         expect.objectContaining({
@@ -244,7 +250,7 @@ describe('production preparation factory HTTP path', () => {
     }
   }, 45_000);
 
-  it('자식 spawn 실패를 FAILED로 기록하고 실패 알림을 한 건 만든다', async () => {
+  it('자식 spawn 실패는 3회 재시도한 뒤 실패 알림을 한 건 만든다', async () => {
     const config = testConfig();
     const container = createContainer(config, {
       preparationExecution: 'forked',
@@ -256,8 +262,9 @@ describe('production preparation factory HTTP path', () => {
       const job = container.backtestPreparationOrchestrator.start(input);
       await waitFor(
         () => container.backtestPreparationOrchestrator.get(job.id)?.status === 'FAILED',
-        20_000,
+        50_000,
       );
+      expect(container.backtestPreparationOrchestrator.get(job.id)).toMatchObject({ retryCount: 3 });
       await waitFor(() => container.notificationService.list().length === 1);
 
       expect(container.notificationService.list()).toEqual([
@@ -271,7 +278,7 @@ describe('production preparation factory HTTP path', () => {
     } finally {
       await container.close();
     }
-  }, 30_000);
+  }, 60_000);
 
   it('in-flight HTTP child가 막혀도 shutdown 순서가 bounded하게 drain을 끝낸다', async () => {
     const config = testConfig({ PREPARATION_EXECUTION_MAX_QUEUED: '7' });
@@ -453,7 +460,10 @@ describe('parent-owned preparation lifecycle', () => {
         status: 'QUEUED',
       });
       expect(Date.now() - startedAt).toBeLessThan(100);
-      await waitFor(() => container.backtestPreparationOrchestrator.get('prep_orphan')?.status === 'FAILED');
+      await waitFor(() => container.backtestPreparationOrchestrator.get('prep_orphan')?.retryCount === 1);
+      expect(container.backtestPreparationOrchestrator.get('prep_orphan')).toMatchObject({
+        status: 'QUEUED', retryCount: 1, error: '준비 자식 프로세스가 완료 상태를 저장하지 않고 종료됐습니다.',
+      });
     } finally {
       await container.close();
     }

@@ -33,6 +33,24 @@ describe('PreparationProgress', () => {
     expect(html).toContain('취소');
   });
 
+  it('자동 재시도 대기에는 사유·예정 시각·횟수와 취소 버튼을 표시한다', () => {
+    const waitingJob = job({
+      status: 'QUEUED', retryCount: 2, overallProgress: 65,
+      nextResumeAtMs: Date.UTC(2026, 7, 10, 15, 0, 10),
+      error: '자식 프로세스 종료',
+    });
+    const html = renderToStaticMarkup(
+      <PreparationProgress job={waitingJob} onCancel={() => undefined} onRestart={() => undefined} />,
+    );
+    expect(html).toContain('오류 후 자동 재시도 대기 중');
+    expect(html).toContain('자동으로 재시도합니다 (2/3회)');
+    expect(html).toContain('자식 프로세스 종료');
+    expect(html).toContain(formatPreparationResumeTime(waitingJob.nextResumeAtMs));
+    expect(html).toContain('65%');
+    expect(html).toContain('취소');
+    expect(html).not.toContain('다시 준비');
+  });
+
   it('RUNNING 은 단계 텍스트와 전체 진행률 하나, 취소 버튼을 보여준다', () => {
     const html = renderToStaticMarkup(
       <PreparationProgress

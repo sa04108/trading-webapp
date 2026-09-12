@@ -1208,6 +1208,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
         totalSymbols: 0,
         savedFacts: 0,
         gapCount: 0,
+        retryCount: 0,
         nextResumeAtMs: null,
         error: 'forced test failure',
       };
