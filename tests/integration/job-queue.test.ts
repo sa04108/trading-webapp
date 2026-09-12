@@ -1223,8 +1223,13 @@ describe('backtest job queue (스펙 §10, §14)', () => {
 
     const candleCoverage = ctx.container.candleCoverageService;
     const getCoverageBetween = candleCoverage.getCoverageBetween.bind(candleCoverage);
+    let removedAfterSubmissionCheck = false;
     vi.spyOn(candleCoverage, 'getCoverageBetween').mockImplementation((...args) => {
       const rows = getCoverageBetween(...args);
+      // 월별 재무 집계가 아니라 제출의 전체기간 coverage 확인 직후에만 경합을 만든다.
+      if (args[1] !== Date.parse(valueRequest.period.from)
+        || args[2] !== Date.parse(`${valueRequest.period.to}T23:59:59.999Z`)) return rows;
+      removedAfterSubmissionCheck = true;
       ctx.container.database.db.delete(krxDailyBars)
         .where(and(
           eq(krxDailyBars.shortCode, '005930'),
@@ -1254,6 +1259,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       ...(payload === undefined ? {} : { payload }),
     });
 
+    expect(removedAfterSubmissionCheck).toBe(true);
     expect(rejected.statusCode).toBe(409);
     expect(rejected.json()).toMatchObject({ error: 'PREPARATION_REQUIRED' });
     expect((rejected.json() as { message: string }).message).toContain('005930');

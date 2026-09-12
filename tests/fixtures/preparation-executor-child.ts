@@ -21,6 +21,14 @@ process.on('message', (message: Message) => {
     // Intentionally block signal/IPC callbacks. The parent deadline must still terminate us.
     for (;;) { /* test fixture */ }
   }
+  if (message.request.jobId === 'heap-oom') {
+    // 실제 OOM이나 core dump 없이 분할된 stderr와 비정상 종료를 재현한다.
+    process.stderr.write('FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of');
+    setTimeout(() => {
+      process.stderr.write(' memory\n', () => process.exit(1));
+    }, 10);
+    return;
+  }
   if (message.request.jobId === 'notify') {
     process.send?.({
       type: 'NOTIFICATION_CREATED',

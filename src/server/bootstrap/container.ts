@@ -1,11 +1,12 @@
 import fs from 'node:fs';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, lte } from 'drizzle-orm';
+import { facts as factsTable } from '../shared/db/schema.js';
+import type { Fact } from '../modules/facts/domain/fact.js';
 import { periodToTsRange } from '../../shared/schemas/backtest-request.js';
 import type { AppConfig } from './config.js';
 import { readGitCommitSha } from '../shared/build-info.js';
 import { createLogger, type Logger } from '../shared/logger.js';
 import { openDatabase, type DatabaseHandle } from '../shared/db/database.js';
-import { facts as factsTable } from '../shared/db/schema.js';
 import { SqliteExternalApiUsage, type ExternalApiUsage } from '../shared/db/external-api-usage.js';
 import { pruneExpiredRows } from '../shared/db/maintenance.js';
 import { systemClock, type Clock } from '../shared/clock.js';
@@ -61,7 +62,6 @@ import {
 } from '../modules/facts/application/fact-coverage-store.js';
 import { FactSyncService } from '../modules/facts/application/fact-sync-service.js';
 import { FinancialFactAvailabilityService } from '../modules/facts/application/financial-fact-availability.js';
-import type { Fact } from '../modules/facts/domain/fact.js';
 import { createDartFactSource } from '../modules/facts/infrastructure/dart/dart-fact-source.js';
 import { SqliteDartRawSnapshotStore } from '../modules/facts/infrastructure/dart/sqlite-dart-raw-snapshot-store.js';
 import { SqliteFactRepository } from '../modules/facts/infrastructure/sqlite-fact-repository.js';
@@ -84,7 +84,7 @@ import {
   delistedEventsToTsMsBySymbol,
   financialFactCutoffsFromCoverage,
 } from '../modules/backtest/application/backtest-financial-execution-window.js';
-import { findIncompleteFundamentalCheckpoints } from '../modules/backtest/application/backtest-financial-data-readiness.js';
+import { findIncompleteFundamentalCheckpointsFromCoverageSync } from '../modules/backtest/application/backtest-financial-data-readiness.js';
 import { BenchmarkService } from '../modules/market-data/application/benchmark-service.js';
 import { RemoteWorkerService } from '../modules/backtest/application/remote-worker-service.js';
 import { RemoteInputBundleManager } from '../modules/backtest/infrastructure/remote-input-bundle-manager.js';
@@ -495,18 +495,18 @@ export function createContainer(
               .symbolsWithFinancialFacts(financialCutoffs);
             return symbols.filter((symbol) => !symbolsWithFacts.has(symbol));
           })()
-        : findIncompleteFundamentalCheckpoints({
+        : findIncompleteFundamentalCheckpointsFromCoverageSync({
             strategy,
             parameters: request.parameters,
-            facts: database.db.select().from(factsTable)
-              .where(and(eq(factsTable.scope, 'SYMBOL'), inArray(factsTable.key, symbols)))
-              .all() as Fact[],
+            readFacts: (query) => database.db.select().from(factsTable)
+              .where(and(
+                eq(factsTable.scope, 'SYMBOL'),
+                inArray(factsTable.key, [...query.keys!]),
+                lte(factsTable.asOfTsMs, query.asOfMaxTsMs!),
+              )).all() as Fact[],
             schedule,
-            validDatesBySymbol: candleCoverageService.getValidDatesByCodeBetween(
-              symbols,
-              request.period.from,
-              request.period.to,
-            ),
+            candles: candleCoverageService,
+            period: request.period,
           }).map((checkpoint) => checkpoint.symbol);
       if (incomplete.length > 0) {
         throw new Error(

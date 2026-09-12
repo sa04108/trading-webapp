@@ -77,7 +77,7 @@ import {
   delistedEventsToTsMsBySymbol,
   financialFactCutoffsFromCoverage,
 } from '../application/backtest-financial-execution-window.js';
-import { findIncompleteFundamentalCheckpoints } from '../application/backtest-financial-data-readiness.js';
+import { findIncompleteFundamentalCheckpointsFromCoverage } from '../application/backtest-financial-data-readiness.js';
 import type {
   SeedCloneBatchDetail,
   SeedCloneBatchService,
@@ -753,17 +753,14 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
           const symbolsWithFacts = financialFacts.symbolsWithFinancialFacts(factCutoffs);
           return unionSymbols.filter((symbol) => !symbolsWithFacts.has(symbol));
         })()
-      : findIncompleteFundamentalCheckpoints({
+      : (await findIncompleteFundamentalCheckpointsFromCoverage({
           strategy,
           parameters: body.parameters,
-          facts: await deps.facts.getFacts({ scope: 'SYMBOL', keys: unionSymbols }),
+          facts: deps.facts,
           schedule,
-          validDatesBySymbol: candleCoverage.getValidDatesByCodeBetween(
-            unionSymbols,
-            body.period.from,
-            body.period.to,
-          ),
-        }).map((checkpoint) => checkpoint.symbol);
+          candles: candleCoverage,
+          period: body.period,
+        })).map((checkpoint) => checkpoint.symbol);
     if (missingFacts.length === 0) return null;
     // 정상 준비에서는 이 종목들이 이미 제외·재순위된다. 여기까지 왔다면 준비 확인과
     // enqueue 사이에 fact가 삭제됐거나 고정 clone snapshot이 낡은 것이다.
@@ -908,16 +905,13 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (sourceStrategy && strategyRequiresFinancialData(sourceStrategy)) {
       const incomplete = sourceStrategy.dataRequirements?.fundamentalsReady === undefined
         ? resolved.unionSymbols.filter((code) => !codesWithFundamentals.has(code))
-        : findIncompleteFundamentalCheckpoints({
+        : await findIncompleteFundamentalCheckpointsFromCoverage({
             strategy: sourceStrategy,
             parameters: sourceRequest.parameters,
-            facts: await deps.facts.getFacts({ scope: 'SYMBOL', keys: resolved.unionSymbols }),
+            facts: deps.facts,
             schedule,
-            validDatesBySymbol: candleCoverage.getValidDatesByCodeBetween(
-              resolved.unionSymbols,
-              sourceRequest.period.from,
-              sourceRequest.period.to,
-            ),
+            candles: candleCoverage,
+            period: sourceRequest.period,
           });
       if (incomplete.length > 0) return null;
     }

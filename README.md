@@ -60,6 +60,12 @@ systemd `MemoryHigh=512M`/`MemoryMax=640M`이다. 준비 child와 local 백테�
 서로 다른 lane이라 동시에 실행될 수 있고, 둘 사이의 전역 메모리 admission은 없다.
 아래 준비 단독 계측은 외부 동기화·백테스트가 겹친 workload의 안전을 보장하지 않는다.
 
+재무 전략의 준비·제출·복제 검증은 전체기간 일봉 날짜를 적재하지 않고, SQL 집계로
+각 편입 구간의 첫 실행일을 찾는다. PIT 재무 평가와 PER·ROE 선정은 32종목씩 처리하며,
+재무 coverage 해시도 작은 묶음으로 계산한다. V8 heap OOM은 작업 오류에 메모리 부족과
+상한을 명시하고, 서버 로그에서 jobId·child PID·요청 종류를 연결한다. 같은 조건의 실패를
+자동 재시도하는 로직은 포함하지 않는다. [재현과 검증 결과](docs/universe-preview-execution-findings.md)를 참고한다.
+
 완료 미리보기의 HTTP 조회는 SQLite에 저장된 검증 결과를 반환한다. 시장·재무·가격·
 종목 정체성 데이터의 첫 INSERT/UPDATE/DELETE가 같은 transaction에서 검증 버전을
 무효화한다. 대량 수집의 나머지 행은 버전을 반복 갱신하지 않으며, 다음 검증 전에 변경

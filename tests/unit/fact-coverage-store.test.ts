@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { SqliteFactCoverageStore } from '../../src/server/modules/facts/application/fact-coverage-store.js';
 import { openDatabase } from '../../src/server/shared/db/database.js';
@@ -142,6 +143,38 @@ describe('SqliteFactCoverageStore', () => {
     expect(store.getCoveredYears().get('005930')).toEqual([]);
     expect(store.getCollectedYears().get('005930')).toEqual([2024, 2025]);
     database.close();
+  });
+
+  it('여러 연도·정정 공시의 기존 배열 직렬화 manifest 해시를 그대로 유지한다', () => {
+    const { store, database } = setup();
+    try {
+      database.db.insert(facts).values([
+        { scope: 'SYMBOL', key: '005930', field: 'NET_INCOME', periodKey: '2025Q1', asOfTsMs: 20, value: 120, unit: 'KRW' },
+        { scope: 'SYMBOL', key: '005930', field: 'TOTAL_EQUITY', periodKey: '2024Q4', asOfTsMs: 10, value: 1000, unit: 'KRW' },
+        { scope: 'SYMBOL', key: '005930', field: 'NET_INCOME', periodKey: '2025Q1', asOfTsMs: 10, value: 100, unit: 'KRW' },
+        { scope: 'SYMBOL', key: '005930', field: 'TOTAL_EQUITY', periodKey: '2025Q1', asOfTsMs: 10, value: 1100, unit: 'KRW' },
+        { scope: 'SYMBOL', key: '005930', field: 'SPLIT_RATIO', periodKey: '2025-01-01', asOfTsMs: 10, value: 2, unit: 'RATIO' },
+      ]).run();
+      store.addCoverageResult('005930', [2024, 2025, 2026], [], 100);
+      const raw = database.db.select().from(symbolFactsState).get()!.financialCoverageProtocolJson!;
+      const protocol = JSON.parse(raw) as { manifests: { year: number; factCount: number; factContentHash: string }[] };
+      const hash = (rows: unknown[][]) => createHash('sha256')
+        .update(rows.map((row) => JSON.stringify(row)).join('\n')).digest('hex');
+      expect(protocol.manifests).toEqual([
+        expect.objectContaining({ year: 2024, factCount: 1, factContentHash: hash([
+          ['TOTAL_EQUITY', '2024Q4', 10, 1000, 'KRW'],
+        ]) }),
+        expect.objectContaining({ year: 2025, factCount: 3, factContentHash: hash([
+          ['NET_INCOME', '2025Q1', 10, 100, 'KRW'],
+          ['NET_INCOME', '2025Q1', 20, 120, 'KRW'],
+          ['TOTAL_EQUITY', '2025Q1', 10, 1100, 'KRW'],
+        ]) }),
+        expect.objectContaining({ year: 2026, factCount: 0, factContentHash: hash([]) }),
+      ]);
+      expect(store.getCoveredYears().get('005930')).toEqual([2024, 2025, 2026]);
+    } finally {
+      database.close();
+    }
   });
 
   it('기록 당시 재무 snapshot과 일치할 때만 연도를 검증 완료로 돌려준다', () => {

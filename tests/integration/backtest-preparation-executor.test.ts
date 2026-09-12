@@ -86,6 +86,24 @@ describe('ForkedBacktestPreparationExecutor', () => {
     await executor.stop();
   });
 
+  it('분할된 V8 OOM stderr를 메모리 부족 오류로 전달하고 다음 요청을 처리한다', async () => {
+    const config = testConfig();
+    const executor = new ForkedBacktestPreparationExecutor(config, createLogger(config), {
+      childUrl: fixtureUrl,
+    });
+    try {
+      await expect(executor.runClaimedJob('heap-oom')).rejects.toThrow(
+        /JavaScript 힙 메모리가 부족합니다.*128 MiB/,
+      );
+      await expect(executor.needsDart(input)).resolves.toBe(false);
+      const spawns = fs.readFileSync(path.join(config.tempRoot, 'preparation-child-spawns'), 'utf8')
+        .trim().split('\n');
+      expect(spawns).toHaveLength(2);
+    } finally {
+      await executor.stop();
+    }
+  });
+
   it('spawn 실패가 lane을 영구 대기 상태로 남기지 않는다', async () => {
     const config = testConfig();
     const executor = new ForkedBacktestPreparationExecutor(config, createLogger(config), {

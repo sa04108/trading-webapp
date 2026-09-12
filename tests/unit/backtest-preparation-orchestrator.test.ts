@@ -702,15 +702,16 @@ describe('BacktestPreparationOrchestrator 종목별 외부 데이터 결손 제�
       facts: {
         getFacts: async (query: { keys?: readonly string[] }) => (
           query.keys?.includes('000660') === true
-            ? [{
-                scope: 'SYMBOL',
-                key: '000660',
-                field: 'NET_INCOME',
-                periodKey: '2025Q4',
-                asOfTsMs: Date.parse('2026-01-04T00:00:00Z'),
-                value: 1,
-                unit: 'KRW',
-              }]
+            ? [
+                ...['2025Q1', '2025Q2', '2025Q3', '2025Q4'].map((periodKey) => ({
+                  scope: 'SYMBOL', key: '000660', field: 'OPERATING_INCOME', periodKey,
+                  asOfTsMs: Date.parse('2026-01-04T00:00:00Z'), value: 1, unit: 'KRW',
+                })),
+                ...['CURRENT_ASSETS', 'CURRENT_LIABILITIES', 'TANGIBLE_ASSETS'].map((field) => ({
+                  scope: 'SYMBOL', key: '000660', field, periodKey: '2025Q4',
+                  asOfTsMs: Date.parse('2026-01-04T00:00:00Z'), value: 1, unit: 'KRW',
+                })),
+              ]
             : []
         ),
       },
@@ -727,7 +728,7 @@ describe('BacktestPreparationOrchestrator 종목별 외부 데이터 결손 제�
     expect(orchestrator.get(job.id)).toMatchObject({ status: 'COMPLETED', error: null });
     expect(orchestrator.getPreview(job.id)?.unionSymbols).toEqual(['000660']);
     expect(orchestrator.getPreview(job.id)?.warnings).toEqual([
-      expect.stringMatching(/DART 재무.*종목 005930을 매매 대상에서 제외.*재무 fact 없음/),
+      expect.stringMatching(/DART 재무.*종목 005930을 매매 대상에서 제외.*PIT 재무 계정/),
     ]);
     await orchestrator.stop();
     ctx.handle.close();

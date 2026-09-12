@@ -1,3 +1,4 @@
+import type { SymbolMasterEntry } from '../../src/server/modules/market-data/domain/symbol-master.js';
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { createKrxHistoricalUniverseSource } from '../../src/server/modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
@@ -329,6 +330,7 @@ function pipelineRule(stages: UniverseRule['stages']): UniverseRule {
 }
 
 function makePipelineResolver(options: {
+  entries?: readonly SymbolMasterEntry[];
   metrics?: readonly DailySelectionMetric[];
   missingTradingValueDates?: readonly string[];
   facts?: readonly Fact[];
@@ -363,6 +365,7 @@ function makePipelineResolver(options: {
   unregisteredFactShortCodes?: readonly string[];
   uncoveredBarShortCodes?: readonly string[];
 } = {}): UniverseRuleResolver {
+  const entries = options.entries ?? PIPELINE_ENTRIES;
   const metrics = options.metrics ?? pipelineMetrics;
   const facts = options.facts ?? [
     ...netIncomeFacts('000001', [1]),
@@ -370,7 +373,7 @@ function makePipelineResolver(options: {
     ...netIncomeFacts('000003', [5, 5, 5, 5]),
   ];
   const financiallyCoveredSymbols = new Set(
-    options.financiallyCoveredSymbols ?? PIPELINE_ENTRIES.map((entry) => entry.shortCode),
+    options.financiallyCoveredSymbols ?? entries.map((entry) => entry.shortCode),
   );
   const sharesChanges = options.sharesChanges ?? facts.flatMap((fact): SharesChange[] => (
     fact.field === 'SPLIT_RATIO'
@@ -384,7 +387,7 @@ function makePipelineResolver(options: {
   );
   const candles = options.candles ?? [];
   const actionCoverage = options.actionCoverage ?? new Map(
-    PIPELINE_ENTRIES.map((entry) => [entry.shortCode, [2025] as const]),
+    entries.map((entry) => [entry.shortCode, [2025] as const]),
   );
   const actionGaps = options.actionGaps ?? new Map<string, readonly number[]>();
 
@@ -395,7 +398,7 @@ function makePipelineResolver(options: {
       effectiveTradingDateWithinCoverage: (rebalanceDate: string) => options.masterCovered === false
         ? undefined
         : options.effectiveTradingDate?.(rebalanceDate) ?? PIPELINE_DATE,
-      getUniverseAsOf: () => new Map(PIPELINE_ENTRIES.map((entry) => [entry.standardCode, entry])),
+      getUniverseAsOf: () => new Map(entries.map((entry) => [entry.standardCode, entry])),
       getMarketCapsAt: async () => new Map(metrics.flatMap((row) =>
         row.marketCapKrw === null ? [] : [[row.standardCode, row.marketCapKrw.toString()]],
       )),
@@ -414,7 +417,7 @@ function makePipelineResolver(options: {
         for (let index = 0; index < shortCodes.length; index += 1) {
           const shortCode = shortCodes[index]!;
           const standardCode = standardCodes[index]
-            ?? PIPELINE_ENTRIES.find((entry) => entry.shortCode === shortCode)?.standardCode
+            ?? entries.find((entry) => entry.shortCode === shortCode)?.standardCode
             ?? `UNKNOWN-${shortCode}`;
           selectionsByPair.set(`${shortCode}\0${standardCode}`, {
             shortCode,
@@ -674,6 +677,34 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     expect(identityReads).toEqual([]);
   });
 
+
+  it.each(['PER', 'ROE'] as const)('%s는 많은 후보를 나눠 평가해도 전체 순위를 보존한다', async (criterion) => {
+    const entries = Array.from({ length: 101 }, (_, index) => ({
+      ...PIPELINE_ENTRIES[0]!,
+      shortCode: String(index + 1).padStart(6, '0'),
+      standardCode: `KR7${String(index + 1).padStart(9, '0')}`,
+    }));
+    const facts = entries.flatMap((entry, index) => [
+      ...netIncomeFacts(entry.shortCode, [index + 1, index + 1, index + 1, index + 1]),
+      { scope: 'SYMBOL' as const, key: entry.shortCode, field: 'TOTAL_EQUITY', periodKey: '2025Q1',
+        asOfTsMs: PIPELINE_TS - 1, value: 1000, unit: 'KRW' },
+    ]);
+    const queries: FactQuery[] = [];
+    const result = await makePipelineResolver({
+      entries,
+      facts,
+      factQueries: queries,
+      metrics: entries.map((entry) => ({ ...pipelineMetrics[0]!, standardCode: entry.standardCode, marketCapKrw: 1000n })),
+    }).resolveOrDescribeNeeds(pipelineRule([
+      { criterion, direction: criterion === 'PER' ? 'LOW' : 'HIGH', limit: 2 },
+    ]), period);
+    expect(result.kind).toBe('READY');
+    if (result.kind !== 'READY') throw new Error('재무 순위가 확정되어야 합니다.');
+    expect(result.schedule[0]?.members.map((member) => member.symbol)).toEqual(['000101', '000100']);
+    expect(queries).toHaveLength(4);
+    expect(queries.flatMap((query) => query.keys ?? [])).toEqual(entries.map((entry) => entry.shortCode));
+    expect(queries.every((query) => query.keys!.length <= 32)).toBe(true);
+  });
 
   it('PER 후보 identity가 모호하면 coverage와 fact를 읽기 전에 실패한다', async () => {
     const identityReads: SymbolIdentitySelection[][] = [];

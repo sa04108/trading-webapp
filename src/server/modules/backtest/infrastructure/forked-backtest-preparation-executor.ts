@@ -24,6 +24,7 @@ import { SymbolMasterNotCoveredError } from '../../market-data/application/symbo
 const CANCEL_TERM_DELAY_MS = 750;
 const CANCEL_KILL_DELAY_MS = 2_500;
 const RSS_POLL_INTERVAL_MS = 1_000;
+const STDERR_TAIL_LIMIT = 8_000;
 
 interface QueueEntry<T = unknown> {
   readonly request: PreparationChildRequest;
@@ -173,6 +174,14 @@ export class ForkedBacktestPreparationExecutor implements BacktestPreparationExe
     }
     let response: PreparationChildMessage | null = null;
     let processError: Error | null = null;
+    let stderrTail = '';
+    let heapOutOfMemory = false;
+    const childContext = {
+      module: 'preparation-child',
+      childPid: child.pid,
+      requestType: entry.request.type,
+      ...(entry.request.type === 'RUN_JOB' ? { jobId: entry.request.jobId } : {}),
+    };
     let resolveSettled!: () => void;
     const settled = new Promise<void>((resolve) => { resolveSettled = resolve; });
     const active: ActiveExecution = { entry, child, settled, cancelRequested: false };
@@ -187,11 +196,15 @@ export class ForkedBacktestPreparationExecutor implements BacktestPreparationExe
     });
 
     child.stdout?.on('data', (chunk: Buffer) => this.logger.debug(
-      { module: 'preparation-child' }, chunk.toString().trim(),
+      childContext, chunk.toString().trim(),
     ));
-    child.stderr?.on('data', (chunk: Buffer) => this.logger.warn(
-      { module: 'preparation-child' }, chunk.toString().trim(),
-    ));
+    child.stderr?.on('data', (chunk: Buffer) => {
+      // 청크 경계에서 잘린 fatal 문구도 판별하되 원문을 작업 오류나 UI에 노출하지 않는다.
+      const combined = stderrTail + chunk.toString();
+      heapOutOfMemory ||= /FATAL ERROR:[^\r\n]*JavaScript heap out of memory/.test(combined);
+      stderrTail = combined.slice(-STDERR_TAIL_LIMIT);
+      this.logger.warn(childContext, chunk.toString().trim());
+    });
     child.on('message', (raw: unknown) => {
       if (!isPreparationChildMessage(raw)) {
         processError = new Error('준비 자식 프로세스가 잘못된 IPC 메시지를 보냈습니다.');
@@ -243,8 +256,20 @@ export class ForkedBacktestPreparationExecutor implements BacktestPreparationExe
       } else if (response?.type === 'ERROR') {
         entry.reject(rehydrateError(response.error));
       } else {
-        entry.reject(processError ?? new Error(
-          `준비 자식 프로세스가 결과 없이 종료됐습니다 (code=${String(code)}, signal=${String(signal)}).`,
+        this.logger.error({
+          ...childContext,
+          event: 'preparation.child-exit',
+          code,
+          signal,
+          heapOutOfMemory,
+          maxOldSpaceMb: this.config.preparationChildMaxOldSpaceMb,
+          maxRssMb: this.config.preparationChildMaxRssMb,
+        }, '준비 자식 프로세스가 결과를 반환하지 못했습니다.');
+        entry.reject(new Error(heapOutOfMemory
+          ? `준비 자식 프로세스의 JavaScript 힙 메모리가 부족합니다 `
+            + `(힙 상한=${this.config.preparationChildMaxOldSpaceMb} MiB, `
+            + `code=${String(code)}, signal=${String(signal)}).`
+          : `준비 자식 프로세스가 결과 없이 종료됐습니다 (code=${String(code)}, signal=${String(signal)}).`,
         ));
       }
       resolveSettled();

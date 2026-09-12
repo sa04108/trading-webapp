@@ -8,6 +8,8 @@ full preparation의 결정적 메모리 병목은 별도로 `candleDataExclusion
 
 직접 비교 수치는 운영 데이터가 아닌 결정적 합성 SQLite와 `tsx` source runtime에서 얻었다. 별도로 bounded candle 검증까지 적용한 실제 `dist` 서버의 HTTP/cgroup exact 2,000종목 시나리오는 최종 기본값인 128 MiB old-space와 320 MiB child RSS guard에서 완료됐다. 다만 production snapshot export 승인이 없어 운영 데이터 전후 profiling은 하지 못했다.
 
+2026-09-12 추가 조사에서는 아래 초기 benchmark가 `rsi-reversion`을 사용해 재무 전략의 `fundamentalsReady` 경로를 검증하지 않았음이 확인됐다. `financialDataExclusions`에 남아 있던 전체기간 날짜 적재의 수정 및 재현은 문서 마지막 절에 기록한다.
+
 ## 직접 비교 방법
 
 - 기준 코드는 `8ba3cff` detached worktree, 변경 코드는 `fix/universe-preview-execution` worktree를 사용했다.
@@ -97,3 +99,33 @@ bounded 경로의 192 MiB old-space 교차 검증도 실제 `dist/server/bootstr
 completion 중 readiness 1,554회와 replay 중 768회는 모두 실패가 없었고 최대 응답은 각각 224.2 ms와 219.6 ms였다. 취소 검증도 3.900초에 통과했다. cgroup peak는 537,391,104 B(512.5 MiB), `memory.high` event는 12,057회였으며 max, OOM, OOM-kill event는 모두 0회였다. 서비스 stop까지 완료했고 상세 결과는 `/tmp/qp-cgroup-universe-bounded.pN5jLR/cgroup-final-result.json`에 보존했다. 이로써 192 MiB old-space 조건의 exact 2,000종목 end-to-end 완료와 HTTP 격리·취소 복구를 확인했다.
 
 최종 기본값으로 선택한 128 MiB old-space의 표준 CLI exact 2,000종목 검증도 116.768초에 `COMPLETED`로 끝났고 READY replay는 56.882초에 HTTP 200을 반환했다. schedule 및 semantic hash는 최종 cgroup 결과와 정확히 같았다. child peak는 304.3 MiB로 320 MiB guard 아래였고 raw process-tree RSS는 585.7 MiB, PSS는 493.2 MiB였다. readiness 2,137회는 실패가 없었으며 p95 14.3 ms, 최대 179.2 ms였고 취소는 3.682초에 완료됐다. 상세 결과는 `/tmp/universe-http-final-2000-oldspace128.json`에 있다.
+
+
+## 2026-09-12 재무 전략의 반복 SIGABRT
+
+운영 `a40a9d9`의 준비 자식은 11:25, 11:38, 11:44 KST에 모두 V8 `JavaScript heap out of memory` fatal 로그를 남기고 SIGABRT로 종료했다. 마지막 GC 뒤에도 약 125~127 MiB가 남아 있었고, old-space 설정은 128 MiB였다. 당시 서비스 cgroup의 `oom`과 `oom_kill`은 0이었다. 자동 재시도 커밋 `17887b4`는 운영에 배포되지 않았으며 이번 수정 브랜치에도 포함하지 않는다.
+
+실패 요청은 2016-08-01~2026-09-12, KOSPI 시총 200→거래대금 50, 월별, `low-per-high-roe-rank`였다. `financialDataExclusions`가 union 전체 facts를 보존한 상태에서 전체기간 유효 일봉 날짜를 `.all()`로 적재하고, readiness 함수가 날짜 배열·Set을 추가로 만들었다. 기존 `candleDataExclusions`의 31일 단위 개선과 별개로 남아 있던 경로다. `RESOLVING_STAGES`, 122/122, 85% 상태만으로는 후속 재무 검증의 할당 실패를 구분할 수 없었다.
+
+운영 DB의 읽기 전용 집계에서 원천 결손 제외 전 초기 순위는 275종목, 유효 날짜 607,309행, facts 93,313행이었다. 운영 snapshot을 반출하지 않고 이 총량을 맞춘 합성 SQLite로 기존 날짜 조회 중 SIGABRT를 재현했다. 장애 당시 JS heap snapshot과 최종 제외 이후의 정확한 schedule은 없으므로 합성 입력을 운영 원본 재현으로 해석하지 않는다.
+
+수정은 다음 경계를 함께 처리한다.
+
+- 준비·제출·복제·시드 실험은 기존 `getCoverageBetween` SQL 집계의 첫 봉 날짜를 이용한다. 각 편입 구간의 첫 실행일에 실제 봉이 있는 종목만 checkpoint로 남긴다.
+- PIT 뷰는 32종목씩 만들고 해당 묶음의 마지막 checkpoint보다 뒤인 공시는 읽지 않는다. 비동기 경로는 집계와 facts 묶음 사이에 이벤트 루프를 양보해 취소를 처리한다. 동기 시드 큐도 같은 batch 생성기와 PIT 판정 함수를 사용한다.
+- PER·ROE 단계는 32종목씩 해당 시점의 순이익 TTM과 자본총계만 계산하고 원본 facts와 뷰를 해제한다. 전체 후보의 순위 계산은 기존 정밀 비율 비교를 유지한다.
+- coverage manifest는 32종목씩 조회하며 정렬 순서대로 SHA-256에 값을 공급한다. 전체 직렬화 문자열을 보존하지 않고 기존 줄바꿈·빈 연도·정정 공시 해시를 유지한다.
+- 자식 stderr에서 V8 OOM을 구분해 작업에 힙 부족과 상한을 표시한다. 로그에는 jobId, child PID, 요청 종류, 종료 code/signal과 설정 상한을 연결한다. 재시도나 heap 상향은 추가하지 않는다.
+
+`tests/integration/financial-readiness-memory.test.ts`는 275종목·날짜 607,309행·facts 93,313행을 생성하고 실제 Node 자식에서 검증한다. 개선된 비동기/동기 경로는 old-space 128 MiB에서 완료하며, 기존 256 MiB 경로와 모두 제외 54종목, 결과 SHA-256 `26d3e0b2acc437027da5534275128995908226b5dae65aa9a4c7cb22f53891fe`로 일치한다. 이 회귀 테스트는 전체 날짜 조회를 호출하면 실패하고, facts 묶음 32종목 및 관측 max RSS 320 MiB 미만도 검사한다. 두 실행은 같은 Node 24.19.0 및 `--max-semi-space-size=1`을 사용한다. 운영 Node 24.18.0과 버전·호스트가 다르며, 아래 실제 준비 cgroup 검증은 별도로 수행한다.
+
+집중 의미 검증은 휴장일, 거래정지, 편출 경계와 재편입, 기간 밖 봉, 뒤늦은 공시, 정정 공시, 초반 미준비 후 정상화, 취소, 101개 후보의 PER·ROE 순위, 기존 저장 manifest 해시를 포함한다. 제출 경합 fixture는 새 월별 집계가 아니라 원래 검사 대상인 전체기간 제출 coverage 조회 직후에만 봉을 삭제하도록 보완했으며, 4개 경로의 409와 job/batch 미생성 assertion은 유지했다.
+
+재현 명령: `pnpm exec vitest run tests/integration/financial-readiness-memory.test.ts --maxWorkers=1`.
+
+
+최종 빌드의 실제 `ForkedBacktestPreparationExecutor` 검증도 별도 user systemd cgroup에서 수행했다. `MemoryHigh=512 MiB`, `MemoryMax=640 MiB`, 기본 old-space 128 MiB, RSS guard 320 MiB를 사용했고 child semi-space는 별도로 지정하지 않았다. 합성 275종목, 일봉 765,600행, facts 164,945행, 2016-09-01~2026-09-02 KOSDAQ 시총 200→거래대금 50 및 `low-per-high-roe-rank` 입력이 70.188초에 `COMPLETED`로 끝났다. schedule 121개, union 275종목, warnings 0개였고 완료 preview 재조회는 81ms에 성공했다. child RSS를 100ms 간격으로 읽은 최대 관측값은 136.5 MiB, cgroup `high`, `max`, `oom`, `oom_kill` 이벤트는 모두 0이었다. 서비스도 정상 종료했다.
+
+이 수치는 준비 실행과 완료 결과 재조회 검증이다. HTTP readiness·동시 백테스트·외부 수집은 함께 부하를 주지 않았고, 다른 로컬 테스트와 CPU 경합이 있었으므로 wall 시간을 운영 성능 보장으로 사용하지 않는다. 결과는 `/tmp/qp-financial-full-PeYYAq/result.json`, 실행 로그는 `/tmp/qp-financial-full-run.log`에 보존했다. 입력 생성기는 `/tmp/qp-financial-full-seed.mts`, 실행기는 `/tmp/qp-financial-full-run.mjs`에 있다.
+
+최종 정적 검증 `pnpm typecheck`, `pnpm lint`, `pnpm build`는 모두 통과했다. 전체 Vitest 174개 파일·1,996개 테스트 실행에서는 173개 파일·1,993개 테스트가 통과하고 위 제출 경합 fixture 3건이 실패했다. 제품 코드는 그대로 두고 삭제 시점 fixture를 수정한 뒤 `tests/integration/job-queue.test.ts` 전체 63개 테스트를 다시 실행해 모두 통과했으며, 해당 파일 린트와 diff 공백 검사도 통과했다. 전체 실행 로그는 `/tmp/qp-financial-memory-full-tests-final.log`, 수정 후 재검증 로그는 `/tmp/qp-financial-memory-job-queue-final.log`에 있다.

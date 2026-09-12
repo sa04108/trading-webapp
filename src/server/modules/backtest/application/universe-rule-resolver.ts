@@ -681,13 +681,9 @@ export class UniverseRuleResolver {
               : [];
           }));
 
-          const loaded = await facts.getFacts({
-            scope: 'SYMBOL',
-            keys: candidates.map((entry) => entry.shortCode),
-          });
-          throwIfStopped();
-          const view = new PitFactView(loaded);
-          view.advanceTo(kstEndOfDayMs(effectiveDate));
+          const financialValues = await loadFinancialRankingValues(
+            facts, candidates.map((entry) => entry.shortCode), kstEndOfDayMs(effectiveDate), throwIfStopped,
+          );
           if (stage.criterion === 'PER') {
             const stageMetrics = readDateMetrics(candidates);
             const hasIncompleteMarketCaps = candidates.some((entry) => (
@@ -701,7 +697,7 @@ export class UniverseRuleResolver {
               if (blockedFinancialCodes.has(entry.shortCode)) return null;
               const cap = stageMetrics.get(entry.standardCode)?.marketCapKrw ?? null;
               const income = positiveNumberFraction(
-                view.fundamentals(entry.shortCode)?.ttm('NET_INCOME') ?? null,
+                financialValues.get(entry.shortCode)?.netIncomeTtm ?? null,
               );
               return cap === null || cap <= 0n || income === null
                 ? null
@@ -721,9 +717,9 @@ export class UniverseRuleResolver {
           } else {
             rows = exactRatioRankingRows(candidates, (entry) => {
               if (blockedFinancialCodes.has(entry.shortCode)) return null;
-              const snapshot = view.fundamentals(entry.shortCode);
-              const income = positiveNumberFraction(snapshot?.ttm('NET_INCOME') ?? null);
-              const equity = positiveNumberFraction(snapshot?.get('TOTAL_EQUITY') ?? null);
+              const values = financialValues.get(entry.shortCode);
+              const income = positiveNumberFraction(values?.netIncomeTtm ?? null);
+              const equity = positiveNumberFraction(values?.totalEquity ?? null);
               return income === null || equity === null
                 ? null
                 : {
@@ -758,10 +754,10 @@ export class UniverseRuleResolver {
                 }
                 continue;
               }
-              const snapshot = view.fundamentals(entry.shortCode);
+              const values = financialValues.get(entry.shortCode);
               const missingRequiredValue = stage.criterion === 'PER'
-                ? snapshot?.ttm('NET_INCOME') == null
-                : snapshot?.ttm('NET_INCOME') == null || snapshot.get('TOTAL_EQUITY') == null;
+                ? values?.netIncomeTtm == null
+                : values?.netIncomeTtm == null || values?.totalEquity == null;
               if (!missingRequiredValue) continue;
               recordDataExclusion({
                 symbol: entry.shortCode,
@@ -1222,6 +1218,44 @@ function exactRatioRankingRows(
     shortCode: entry.shortCode,
     value: rankByCode.get(entry.standardCode) ?? null,
   }));
+}
+
+interface FinancialRankingValues {
+  readonly netIncomeTtm: number | null;
+  readonly totalEquity: number | null;
+}
+
+/** 후보 전체의 공시 이력 대신 각 종목의 해당 시점 순위 입력 두 값만 보존한다. */
+async function loadFinancialRankingValues(
+  facts: FactRepository,
+  symbols: readonly string[],
+  asOfMaxTsMs: number,
+  throwIfStopped: () => void,
+): Promise<ReadonlyMap<string, FinancialRankingValues>> {
+  const result = new Map<string, FinancialRankingValues>();
+  for (let offset = 0; offset < symbols.length; offset += 32) {
+    throwIfStopped();
+    await readBatch(symbols.slice(offset, offset + 32));
+    await yieldToEventLoop();
+  }
+  throwIfStopped();
+  return result;
+
+  async function readBatch(keys: readonly string[]): Promise<void> {
+    const loaded = await facts.getFacts({
+      scope: 'SYMBOL', keys, fields: ['NET_INCOME', 'TOTAL_EQUITY'], asOfMaxTsMs,
+    });
+    throwIfStopped();
+    const view = new PitFactView(loaded);
+    view.advanceTo(asOfMaxTsMs);
+    for (const symbol of keys) {
+      const snapshot = view.fundamentals(symbol);
+      result.set(symbol, {
+        netIncomeTtm: snapshot?.ttm('NET_INCOME') ?? null,
+        totalEquity: snapshot?.get('TOTAL_EQUITY') ?? null,
+      });
+    }
+  }
 }
 
 async function loadCandleHistories(

@@ -63,7 +63,7 @@ import {
   backtestDataExclusionWarnings,
   type BacktestDataExclusion,
 } from './backtest-data-exclusion.js';
-import { findIncompleteFundamentalCheckpoints } from './backtest-financial-data-readiness.js';
+import { findIncompleteFundamentalCheckpointsFromCoverage } from './backtest-financial-data-readiness.js';
 import type {
   RebalanceDiagnostic,
   UniverseDataNeed,
@@ -533,6 +533,7 @@ export class BacktestPreparationOrchestrator {
             input,
             strategy,
             attempt.schedule,
+            () => this.stopping || (progressJobId !== undefined && this.cancelOrStopRequested(progressJobId)),
           ),
           ...await this.candleDataExclusions(
             input,
@@ -810,6 +811,7 @@ export class BacktestPreparationOrchestrator {
               input,
               strategy,
               finalAttempt.schedule,
+              () => this.cancelOrStopRequested(jobId),
             ),
             ...await this.candleDataExclusions(
               input,
@@ -1265,6 +1267,7 @@ export class BacktestPreparationOrchestrator {
     input: PreparationInput,
     strategy: AnyTradingStrategy,
     schedule: readonly UniverseScheduleEntry[],
+    shouldStop?: () => boolean,
   ): Promise<BacktestDataExclusion[]> {
     const symbols = unionSymbols(schedule);
     const gap = this.financialCoverageGap(input, strategy, symbols);
@@ -1302,25 +1305,21 @@ export class BacktestPreparationOrchestrator {
       candles: candleCoverage as Pick<CandleCoverageService, 'getLastTsInWindows'>,
     });
     if (cutoffs.size === 0) return exclusions;
-    const facts = await this.deps.facts.getFacts({ scope: 'SYMBOL', keys: symbols });
     const fundamentalsReady = strategy.dataRequirements?.fundamentalsReady;
-    const readValidDates = candleCoverage.getValidDatesByCodeBetween;
-    if (fundamentalsReady !== undefined && readValidDates !== undefined) {
-      const validDatesByCode = readValidDates.call(
-        candleCoverage,
-        symbols,
-        input.period.from,
-        input.period.to,
-      );
-      for (const checkpoint of findIncompleteFundamentalCheckpoints({
+    if (fundamentalsReady !== undefined) {
+      for (const checkpoint of await findIncompleteFundamentalCheckpointsFromCoverage({
         strategy,
         parameters: input.parameters,
-        facts,
+        facts: this.deps.facts,
+        candles: candleCoverage,
+        period: input.period,
+        throwIfStopped: () => {
+          if (shouldStop?.()) throw new UniverseResolutionCancelledError();
+        },
         schedule: schedule.map((entry) => ({
           rebalanceDate: entry.rebalanceDate,
           symbols: entry.members.map((member) => member.symbol),
         })),
-        validDatesBySymbol: validDatesByCode,
       })) {
         if (exclusions.some((item) => item.symbol === checkpoint.symbol)) continue;
         exclusions.push({
@@ -1332,14 +1331,7 @@ export class BacktestPreparationOrchestrator {
       }
       return exclusions;
     }
-    const available = new Set(
-      facts
-        .filter((fact) => (
-          fact.field !== CORPORATE_ACTION_FIELD
-          && fact.asOfTsMs <= (cutoffs.get(fact.key) ?? -1)
-        ))
-        .map((fact) => fact.key),
-    );
+    const available = this.deps.financialFacts.symbolsWithFinancialFacts(cutoffs);
     for (const [symbol, cutoff] of cutoffs) {
       if (available.has(symbol) || exclusions.some((item) => item.symbol === symbol)) continue;
       exclusions.push({

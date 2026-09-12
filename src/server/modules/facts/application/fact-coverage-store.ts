@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, type Hash } from 'node:crypto';
 import { and, asc, eq, inArray, ne } from 'drizzle-orm';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import {
@@ -301,13 +301,16 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
     const requested = new Map(
       [...yearsByCode].map(([code, years]) => [code, new Set(years.filter(validYear))]),
     );
-    const canonicalRows = new Map<string, string[]>();
+    // 정렬된 조회를 순서대로 해시해 전체 facts와 직렬화 문자열의 중복 적재를 피한다.
+    const manifests = new Map<string, { factCount: number; hash: Hash }>();
     for (const [code, years] of requested) {
-      for (const year of years) canonicalRows.set(`${code}:${year}`, []);
+      for (const year of years) {
+        manifests.set(`${code}:${year}`, { factCount: 0, hash: createHash('sha256') });
+      }
     }
     const codes = [...requested.keys()];
-    for (let offset = 0; offset < codes.length; offset += 500) {
-      const chunk = codes.slice(offset, offset + 500);
+    for (let offset = 0; offset < codes.length; offset += 32) {
+      const chunk = codes.slice(offset, offset + 32);
       if (chunk.length === 0) continue;
       const rows = this.db
         .select({
@@ -334,18 +337,21 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
       for (const row of rows) {
         const year = periodKeyYear(row.periodKey);
         if (year === null || !requested.get(row.code)?.has(year)) continue;
-        canonicalRows.get(`${row.code}:${year}`)?.push(JSON.stringify([
+        const manifest = manifests.get(`${row.code}:${year}`)!;
+        if (manifest.factCount > 0) manifest.hash.update('\n');
+        manifest.hash.update(JSON.stringify([
           row.field,
           row.periodKey,
           row.asOfTsMs,
           row.value,
           row.unit,
         ]));
+        manifest.factCount += 1;
       }
     }
-    return new Map([...canonicalRows].map(([key, rows]) => [key, {
-      factCount: rows.length,
-      factContentHash: createHash('sha256').update(rows.join('\n')).digest('hex'),
+    return new Map([...manifests].map(([key, manifest]) => [key, {
+      factCount: manifest.factCount,
+      factContentHash: manifest.hash.digest('hex'),
     }]));
   }
 }
