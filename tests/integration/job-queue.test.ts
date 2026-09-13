@@ -1133,6 +1133,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       // 결측을 다시 채우지 않아 최초 409 응답 자체와 job 불변을 관찰한다.
       ctx.container.factSyncService.sync = async () => ({
         savedFacts: 0,
+        gapCount: 0,
         gaps: [],
         stoppedAtSymbol: null,
         stopReason: null,

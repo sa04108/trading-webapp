@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { and, eq, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, min, or, sql } from 'drizzle-orm';
 import type { AppDatabase } from '../../../../shared/db/database.js';
 import { dartRawApiSnapshots } from '../../../../shared/db/schema.js';
 import type { DartReportCode } from './dart-report-parser.js';
@@ -14,6 +14,24 @@ import {
 /** 응답 JSON과 해시를 함께 저장해 손상된 cache를 원천 응답으로 오인하지 않게 한다. */
 export class SqliteDartRawSnapshotStore implements DartRawSnapshotStore {
   constructor(private readonly db: AppDatabase) {}
+
+  getOldestFetchedAtMs(symbols: readonly string[]): ReadonlyMap<string, number> {
+    const result = new Map<string, number>();
+    const unique = [...new Set(symbols)];
+    for (let offset = 0; offset < unique.length; offset += 500) {
+      const rows = this.db.select({
+        code: dartRawApiSnapshots.code,
+        fetchedAtMs: min(dartRawApiSnapshots.fetchedAtMs),
+      }).from(dartRawApiSnapshots)
+        .where(inArray(dartRawApiSnapshots.code, unique.slice(offset, offset + 500)))
+        .groupBy(dartRawApiSnapshots.code)
+        .all();
+      for (const row of rows) {
+        if (row.fetchedAtMs !== null) result.set(row.code, row.fetchedAtMs);
+      }
+    }
+    return result;
+  }
 
   get(key: DartRawSnapshotKey): DartRawSnapshot | null {
     return this.parseRow(this.db

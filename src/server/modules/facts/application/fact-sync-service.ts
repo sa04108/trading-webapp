@@ -52,6 +52,8 @@ export interface FactSyncRequest {
  * 모두 다시 받는 보수적 규칙으로 되돌린다.
  */
 const FILING_LOOKBACK_MAX_DAYS = 90;
+const REPORT_GAP_LIMIT = 100;
+const REPORT_GAP_REASON_MAX_CHARS = 240;
 
 /** 실제 DART 요청 직전 quota 예약이 거절됐음을 내부 흐름에 전달한다. */
 class DartDailyQuotaReachedError extends Error {
@@ -92,6 +94,9 @@ export interface FactSyncHooks {
 
 export interface FactSyncReport {
   readonly savedFacts: number;
+  /** 예시 보관 상한과 무관한 전체 결손 건수. */
+  readonly gapCount: number;
+  /** 최대 100건의 진단 예시. 실행 차단 판정에는 저장된 연도별 coverage를 사용한다. */
   readonly gaps: readonly FactIngestionGap[];
   /** 중단된 종목코드. 완주하면 null */
   readonly stoppedAtSymbol: string | null;
@@ -324,13 +329,47 @@ export class FactSyncService {
     }), false);
   }
 
+  /**
+   * 완료 전 중단된 종목도 저장 원문 이후의 공시를 확인하고 재사용할 수 있다.
+   * 0은 미완료 표시일 뿐 1970년 수집 데이터가 아니다. 기존 완료 watermark는
+   * 보존하며, 원문 시각은 최신성 확인의 하한으로만 사용한다.
+   */
+  private collectionWatermarks(
+    symbols: readonly string[],
+    collected: ReadonlyMap<string, readonly number[]>,
+    completed: ReadonlyMap<string, number>,
+  ): ReadonlyMap<string, number> {
+    const result = new Map(completed);
+    const incomplete = symbols.filter((symbol) => (
+      (completed.get(symbol) ?? 0) <= 0 || (collected.get(symbol)?.length ?? 0) === 0
+    ));
+    const raw = this.source.getRawSnapshotWatermarks?.(incomplete) ?? new Map<string, number>();
+    for (const symbol of incomplete) {
+      const fetchedAtMs = raw.get(symbol);
+      if (fetchedAtMs !== undefined && fetchedAtMs > 0) {
+        const previous = completed.get(symbol) ?? 0;
+        result.set(symbol, previous > 0 ? Math.min(previous, fetchedAtMs) : fetchedAtMs);
+      } else if ((collected.get(symbol)?.length ?? 0) === 0) {
+        result.delete(symbol);
+      }
+    }
+    return result;
+  }
+
+  private isStaleWatermark(updatedAtMs: number): boolean {
+    return kstDateOf(updatedAtMs)
+      < addCalendarDays(kstDateOf(this.clock.now()), -FILING_LOOKBACK_MAX_DAYS);
+  }
+
   private withRawSnapshotMisses(plan: FactSyncPlan, includeFinancials: boolean): FactSyncPlan {
     if (this.source.countRawSnapshotMisses === undefined) return plan;
     const symbols = [...plan.yearsBySymbol.keys()];
     const coverage = includeFinancials ? this.coverage : this.actionCoverage;
     const collectedBySymbol = coverage.getCollectedYears?.(symbols)
       ?? coverage.getCoveredYears(symbols);
-    const updatedAtBySymbol = coverage.getUpdatedAtMs(symbols);
+    const updatedAtBySymbol = this.collectionWatermarks(
+      symbols, collectedBySymbol, coverage.getUpdatedAtMs(symbols),
+    );
     const groups = new Map<string, {
       symbols: string[];
       years: readonly number[];
@@ -340,11 +379,8 @@ export class FactSyncService {
     for (const [symbol, years] of plan.yearsBySymbol) {
       const collected = collectedBySymbol.get(symbol) ?? [];
       const updatedAtMs = updatedAtBySymbol.get(symbol);
-      const staleWatermark = updatedAtMs !== undefined
-        && kstDateOf(updatedAtMs)
-          < addCalendarDays(kstDateOf(this.clock.now()), -FILING_LOOKBACK_MAX_DAYS)
-        && collected.length > 0;
-      const forceRefresh = updatedAtMs === undefined || collected.length === 0 || staleWatermark;
+      const staleWatermark = updatedAtMs !== undefined && this.isStaleWatermark(updatedAtMs);
+      const forceRefresh = updatedAtMs === undefined || staleWatermark;
       // 실행의 stale 경로는 요청 범위와 무관하게 legacy 수집 연도를 모두 강제한다.
       // plan이 이미 covered인 종목을 0회로 잘못 보고 DART-key 게이트를 통과시키지 않도록
       // 같은 연도를 호출량에도 포함한다.
@@ -446,6 +482,7 @@ export class FactSyncService {
     const todayKstDate = kstDateOf(this.clock.now());
 
     const gaps: FactIngestionGap[] = [];
+    let gapCount = 0;
     let savedFacts = 0;
     let doneSymbols = 0;
     let stoppedAtSymbol: string | null = null;
@@ -468,6 +505,9 @@ export class FactSyncService {
     const coveredBySymbol = strategy.getCoveredYears(symbols);
     const collectedBySymbol = strategy.getCollectedYears(symbols);
     const coverageWatermarks = strategy.getUpdatedAtMs(symbols);
+    const freshnessWatermarks = this.collectionWatermarks(
+      symbols, collectedBySymbol, coverageWatermarks,
+    );
     let redisclosures: RedisclosureDetection | undefined;
     let unverifiedFreshnessSymbols: ReadonlySet<string>;
     try {
@@ -476,7 +516,7 @@ export class FactSyncService {
           ? await this.detectRedisclosedYears(
               symbols,
               collectedBySymbol,
-              coverageWatermarks,
+              freshnessWatermarks,
               strategy.includeFinancials,
               sourceHooks,
             )
@@ -534,16 +574,16 @@ export class FactSyncService {
       let symbolSavedFacts = 0;
       let symbolGapCount = 0;
       const rawSnapshotScope = {};
-      const hasCollectedHistory = coverageWatermarks.has(symbol)
-        && (collectedBySymbol.get(symbol)?.length ?? 0) > 0;
+      const watermark = freshnessWatermarks.get(symbol);
+      const canReplayRawSnapshots = watermark !== undefined && !this.isStaleWatermark(watermark);
       try {
         for (const [yearIndex, year] of years.entries()) {
-          // 검증 watermark가 있는 protocol 불일치는 원문 snapshot을 우선 재생한다.
-          // 최초 수집, FULL 요청, 새·정정공시가 확인된 연도는 DART 원천을 다시 읽는다.
+          // 중단 전 원문도 공시 조회 하한을 증명하면 재사용한다. 새·정정공시,
+          // FULL 또는 최신성을 확인할 수 없는 오래된 원문은 원천에서 다시 읽는다.
           const redisclosed = redisclosures?.forcedYearsBySymbol
             .get(symbol)?.includes(year) === true;
           const rawSnapshotPolicy = (
-            request.mode === 'FULL' || redisclosed || !hasCollectedHistory
+            request.mode === 'FULL' || redisclosed || !canReplayRawSnapshots
           ) ? 'REFRESH' as const : 'PREFER_CACHE' as const;
           // 직전 연도의 주식총수 앵커도 요청한다. 같은 work-unit의 재무·자본변동은
           // source 내부 request cache로 응답을 공유하고, 영속 cache hit는 quota를 쓰지 않는다.
@@ -613,7 +653,13 @@ export class FactSyncService {
           savedFacts += persistedFactCount;
           symbolSavedFacts += persistedFactCount;
           symbolGapCount += currentFinancialGaps.length + currentActionGaps.length;
-          gaps.push(...currentFinancialGaps, ...currentActionGaps);
+          gapCount += currentFinancialGaps.length + currentActionGaps.length;
+          for (const batch of [currentFinancialGaps, currentActionGaps]) {
+            for (const gap of batch) {
+              if (gaps.length >= REPORT_GAP_LIMIT) break;
+              gaps.push({ ...gap, reason: gap.reason.slice(0, REPORT_GAP_REASON_MAX_CHARS) });
+            }
+          }
           await this.bumpVersionIfChanged(symbol, fingerprintBefore);
 
           const completedAtMs = this.clock.now();
@@ -695,7 +741,7 @@ export class FactSyncService {
         module: 'facts',
         event: 'facts.synced',
         savedFacts,
-        gapCount: gaps.length,
+        gapCount,
         stoppedAtSymbol,
         // 중단됐다는 사실만으로는 운영자가 실패와 취소를 구분할 수 없다
         stopReason,
@@ -705,6 +751,7 @@ export class FactSyncService {
 
     return {
       savedFacts,
+      gapCount,
       gaps,
       stoppedAtSymbol,
       stopReason,
@@ -746,6 +793,7 @@ export class FactSyncService {
       );
       return {
         savedFacts: 0,
+        gapCount: 0,
         gaps: [],
         stoppedAtSymbol,
         stopReason: 'DAILY_QUOTA',
@@ -767,6 +815,7 @@ export class FactSyncService {
     );
     return {
       savedFacts: 0,
+      gapCount: 0,
       gaps: [],
       stoppedAtSymbol,
       stopReason: 'ERROR',
@@ -896,11 +945,12 @@ export class FactSyncService {
         }
         return [{ filing, businessYear: filing.businessYear }];
       });
-      const processedReceiptNos = trackFinancialReceipts
-        ? this.coverage.getProcessedFilingReceiptNos(
-            candidates.map(({ filing }) => filing.receiptNo as string),
-          )
-        : new Set<string>();
+      // 재무 sync는 같은 연도의 자본변동 snapshot도 저장한 뒤 접수번호를 닫는다.
+      // 뒤따르는 자본변동 sync가 같은 공시를 다시 원천 조회하지 않게 공유한다.
+      // 자본변동 전용 수집은 재무 접수번호를 기록하지 않는다.
+      const processedReceiptNos = this.coverage.getProcessedFilingReceiptNos(
+        candidates.map(({ filing }) => filing.receiptNo as string),
+      );
       const seenReceiptNos = new Set<string>();
 
       for (const { filing, businessYear } of candidates) {

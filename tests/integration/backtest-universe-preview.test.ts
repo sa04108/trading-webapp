@@ -71,6 +71,7 @@ function installPreparedPreviewFixture(ctx: TestApp): void {
     }
     return {
       savedFacts: 0,
+      gapCount: 0,
       gaps: [],
       stoppedAtSymbol: null,
       stopReason: null,

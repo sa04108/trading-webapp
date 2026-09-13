@@ -118,8 +118,8 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
       addSymbol: () => undefined,
     },
     factSync: {
-      sync: async () => ({ savedFacts: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
-      syncCorporateActions: async () => ({ savedFacts: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
+      sync: async () => ({ savedFacts: 0, gapCount: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
+      syncCorporateActions: async () => ({ savedFacts: 0, gapCount: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
     },
     actionCoverage: {
       getCoveredYears: () => new Map<string, readonly number[]>(),
@@ -158,8 +158,8 @@ const MARKET_ONLY_NEEDS = {
 
 function dartPlanningDeps() {
   return {
-    sync: async () => ({ savedFacts: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
-    syncCorporateActions: async () => ({ savedFacts: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
+    sync: async () => ({ savedFacts: 0, gapCount: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
+    syncCorporateActions: async () => ({ savedFacts: 0, gapCount: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
     planFinancialSync: (symbols: readonly string[]) => ({ calls: symbols.length }),
     planCorporateActionSync: (symbols: readonly string[]) => ({ calls: symbols.length }),
   };
@@ -615,7 +615,7 @@ describe('BacktestPreparationOrchestrator 자본변동 gap 제외', () => {
         } : null,
       },
       factSync: {
-        sync: async () => ({ savedFacts: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
+        sync: async () => ({ savedFacts: 0, gapCount: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
         syncCorporateActions: async (request: {
           symbols: readonly string[];
           fromYear: number;
@@ -627,7 +627,7 @@ describe('BacktestPreparationOrchestrator 자본변동 gap 제외', () => {
             for (let year = request.fromYear; year <= request.toYear; year += 1) years.push(year);
             covered.set(symbol, years);
           }
-          return { savedFacts: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null };
+          return { savedFacts: 0, gapCount: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null };
         },
       },
       actionCoverage: {
@@ -1454,13 +1454,14 @@ describe('BacktestPreparationOrchestrator recovery와 취소', () => {
           hooks.onSymbolDone?.({ index: 1, total: 1 });
           return {
             savedFacts: 1,
+            gapCount: 0,
             gaps: [],
             stoppedAtSymbol: hooks.shouldStop?.() ? '005930' : null,
             stopReason: hooks.shouldStop?.() ? 'CANCELLED' : null,
             failureMessage: null,
           };
         },
-        syncCorporateActions: async () => ({ savedFacts: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
+        syncCorporateActions: async () => ({ savedFacts: 0, gapCount: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
       },
     });
     const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
@@ -1533,13 +1534,14 @@ describe('BacktestPreparationOrchestrator recovery와 취소', () => {
           await continueAfterCancel.promise;
           return {
             savedFacts: 1,
+            gapCount: 0,
             gaps: [],
             stoppedAtSymbol: hooks.shouldStop?.() ? '000660' : null,
             stopReason: hooks.shouldStop?.() ? 'CANCELLED' : null,
             failureMessage: hooks.shouldStop?.() ? '사용자가 취소했습니다.' : null,
           };
         },
-        syncCorporateActions: async () => ({ savedFacts: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
+        syncCorporateActions: async () => ({ savedFacts: 0, gapCount: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
       },
     });
     const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
@@ -1683,12 +1685,13 @@ describe('BacktestPreparationOrchestrator quota resume와 terminal 결과', () =
       factSync: {
         sync: async () => ({
           savedFacts: 3,
-          gaps: [],
+          gapCount: 280_924,
+          gaps: [{ symbol: '005930', periodKey: '2025Q1', reason: '진단 예시', severity: 'INFORMATIONAL' }],
           stoppedAtSymbol: '005930',
           stopReason: 'DAILY_QUOTA',
           failureMessage: 'DART 실제 응답으로 호출 한도를 확인했습니다.',
         }),
-        syncCorporateActions: async () => ({ savedFacts: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
+        syncCorporateActions: async () => ({ savedFacts: 0, gapCount: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
       },
       externalApiUsage: {
         recordCall: () => 0,
@@ -1708,6 +1711,7 @@ describe('BacktestPreparationOrchestrator quota resume와 terminal 결과', () =
     const waiting = orchestrator.get(job.id);
     expect(waiting?.error).toContain('실제 응답');
     expect(waiting?.savedFacts).toBe(3);
+    expect(waiting?.gapCount).toBe(280_924);
     expect(waiting?.nextResumeAtMs).toBe(Date.parse('2026-01-05T15:00:00.000Z'));
     expect(quotaReports).toEqual(['DART 실제 응답으로 호출 한도를 확인했습니다.']);
 
@@ -1748,15 +1752,15 @@ describe('BacktestPreparationOrchestrator quota resume와 terminal 결과', () =
             }
             const decision = hooks.beforeDartRequest?.();
             if (decision === 'PAUSE_DAILY_QUOTA') {
-              return { savedFacts: 0, gaps: [], stoppedAtSymbol: symbol, stopReason: 'DAILY_QUOTA', failureMessage: 'quota' };
+              return { savedFacts: 0, gapCount: 0, gaps: [], stoppedAtSymbol: symbol, stopReason: 'DAILY_QUOTA', failureMessage: 'quota' };
             }
             requestedSymbols.push(symbol);
             completedSymbols.add(symbol);
             hooks.onSymbolDone?.({ index: index + 1, total: request.symbols.length });
           }
-          return { savedFacts: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null };
+          return { savedFacts: 0, gapCount: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null };
         },
-        syncCorporateActions: async () => ({ savedFacts: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
+        syncCorporateActions: async () => ({ savedFacts: 0, gapCount: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
       },
     });
     const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
@@ -1809,12 +1813,13 @@ describe('BacktestPreparationOrchestrator quota resume와 terminal 결과', () =
       factSync: {
         sync: async () => ({
           savedFacts: 0,
+          gapCount: 0,
           gaps: [],
           stoppedAtSymbol: '005930',
           stopReason: 'ERROR',
           failureMessage: '정기공시 목록 조회 실패',
         }),
-        syncCorporateActions: async () => ({ savedFacts: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
+        syncCorporateActions: async () => ({ savedFacts: 0, gapCount: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
       },
     });
     const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);

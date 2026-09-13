@@ -296,6 +296,26 @@ describe('factsFingerprint', () => {
 });
 
 describe('FactSyncService', () => {
+  it('리포트 예시 상한 뒤의 BLOCKING 결손도 전체 건수와 coverage에 반영한다', async () => {
+    const coverage = fakeCoverage();
+    const gaps: FactIngestionResult['gaps'] = Array.from({ length: 250 }, (_, index) => ({
+      symbol: '005930', periodKey: '2025Q1', reason: `결손 ${index}: ${'가'.repeat(500)}`,
+      severity: index === 249 ? 'BLOCKING' : 'INFORMATIONAL',
+    }));
+    const service = new FactSyncService(
+      fakeSource({ facts: [], gaps }, { facts: [], gaps: [] }), fakeRepository(), LOGGER,
+      fakeVersions(), CLOCK, coverage, fakeActionCoverage(),
+    );
+    const report = await service.sync({
+      symbols: ['005930'], fromYear: 2025, toYear: 2025, consolidated: true, mode: 'FULL',
+    });
+    expect(report.gapCount).toBe(250);
+    expect(report.gaps).toHaveLength(100);
+    expect(report.gaps.every((gap) => gap.reason.length <= 240)).toBe(true);
+    expect(coverage.results[0]?.gaps).toEqual(gaps);
+    expect(coverage.getCoverageState().get('005930')?.blockingGapYears).toEqual([2025]);
+  });
+
   it('두 소스의 gap 합집합이 리포트에 도달한다', async () => {
     const financials: FactIngestionResult = {
       facts: [fact('CURRENT_ASSETS', 1)],

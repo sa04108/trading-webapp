@@ -150,6 +150,7 @@ function installPreparedSubmissionFixture(ctx: TestApp): void {
     }
     return {
       savedFacts: 0,
+      gapCount: 0,
       gaps: [],
       stoppedAtSymbol: null,
       stopReason: null,
@@ -168,6 +169,7 @@ function installPreparedSubmissionFixture(ctx: TestApp): void {
     }
     return {
       savedFacts: 0,
+      gapCount: 0,
       gaps: [],
       stoppedAtSymbol: null,
       stopReason: null,
@@ -531,6 +533,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     ctx.container.backtestPreparationOrchestrator.getReadyPreviewForWizard = () => prepared;
     ctx.container.factSyncService.sync = async () => ({
       savedFacts: 0,
+      gapCount: 0,
       gaps: [],
       stoppedAtSymbol: null,
       stopReason: null,
@@ -1395,7 +1398,7 @@ describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepar
           ctx.container.clock.now(),
         );
       }
-      return { savedFacts: facts.length, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null };
+      return { savedFacts: facts.length, gapCount: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null };
     }) as typeof ctx.container.factSyncService.sync;
   }
 
@@ -1414,6 +1417,7 @@ describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepar
     // 직접 커버리지를 심어 DART 왕복 없이 통과시킨다(이 파일 상단 관례와 동일).
     ctx.container.factSyncService.syncCorporateActions = (async () => ({
       savedFacts: 0,
+      gapCount: 0,
       gaps: [],
       stoppedAtSymbol: null,
       stopReason: null,

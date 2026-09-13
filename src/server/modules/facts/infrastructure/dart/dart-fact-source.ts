@@ -920,24 +920,14 @@ export function createDartFactSource(
     if (dartConfig === null || client === null) throw new FactSourceNotConfiguredError();
     const filings: PeriodicFiling[] = [];
     for (let pageNo = 1; pageNo <= FILING_LIST_MAX_PAGES; pageNo += 1) {
-      const query = new URLSearchParams({
-        crtfc_key: dartConfig.apiKey,
+      const envelope: DartListEnvelope = await liveCall<DartFilingRow>('/api/list.json', {
         bgn_de: fromDate.replaceAll('-', ''),
         end_de: toDate.replaceAll('-', ''),
-        pblntf_ty: 'A', // 정기공시(사업·반기·분기보고서) — 정정도 같은 유형으로 온다
+        pblntf_ty: 'A', // 정기공시와 정정공시를 같은 한도 원장으로 조회한다.
         page_no: String(pageNo),
         page_count: '100',
-      });
-      const envelope = await client.request<DartListEnvelope>(
-        'default',
-        `/api/list.json?${query.toString()}`,
-        {},
-        { beforeAttempt: hooks.beforeRequest },
-      );
+      }, hooks);
       if (envelope.status === NO_DATA_STATUS) return filings;
-      if (envelope.status !== OK_STATUS) {
-        throw new Error(`DART 응답 오류 ${envelope.status}: ${envelope.message}`);
-      }
       if (!Array.isArray(envelope.list)) {
         throw new Error('DART 정기공시 목록의 list 필드가 배열 형식이 아닙니다.');
       }
@@ -984,5 +974,6 @@ export function createDartFactSource(
     fetchCorporateActions,
     listRecentPeriodicFilings,
     countRawSnapshotMisses,
+    getRawSnapshotWatermarks: (symbols) => options.rawSnapshots?.getOldestFetchedAtMs(symbols) ?? new Map(),
   };
 }

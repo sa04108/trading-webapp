@@ -127,6 +127,8 @@ export interface FactSource {
     toDate: string,
     hooks?: FactSourceRequestHooks,
   ): Promise<readonly PeriodicFiling[]>;
+  /** 중단 전 저장한 원문의 가장 이른 수집 시각. 완료 이력이 없는 종목의 공시 재확인 하한이다. */
+  getRawSnapshotWatermarks?(symbols: readonly string[]): ReadonlyMap<string, number>;
   /**
    * 외부 호출 없이 재생할 수 없는 원문 snapshot 개수. 준비 단계의 DART-key 게이트가
    * coverage 결측과 실제 네트워크 필요를 구분할 때 쓴다. 미구현 소스는 기존 호출량

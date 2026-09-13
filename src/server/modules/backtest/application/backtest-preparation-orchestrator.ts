@@ -1449,14 +1449,14 @@ export class BacktestPreparationOrchestrator {
       const snapshot = current?.status === 'WAITING_DAILY_QUOTA'
         ? this.persistAndEmit(jobId, (row) => ({
             savedFacts: row.savedFacts + report.savedFacts,
-            gapCount: row.gapCount + report.gaps.length,
+            gapCount: row.gapCount + report.gapCount,
             ...(report.failureMessage ? { error: report.failureMessage } : {}),
           }), ['WAITING_DAILY_QUOTA'])
         : this.persistAndEmit(jobId, (row) => ({
             status: 'WAITING_DAILY_QUOTA',
             nextResumeAtMs: nextKstMidnightMs(now),
             savedFacts: row.savedFacts + report.savedFacts,
-            gapCount: row.gapCount + report.gaps.length,
+            gapCount: row.gapCount + report.gapCount,
             ...(report.failureMessage ? { error: report.failureMessage } : {}),
           }), ['RUNNING']);
       this.deps.externalApiUsage?.reportQuotaExceeded(
@@ -1472,7 +1472,7 @@ export class BacktestPreparationOrchestrator {
 
     this.persistAndEmit(jobId, (row) => ({
       savedFacts: row.savedFacts + report.savedFacts,
-      gapCount: row.gapCount + report.gaps.length,
+      gapCount: row.gapCount + report.gapCount,
       ...(report.failureMessage ? { error: report.failureMessage } : {}),
     }));
     if (report.stopReason === 'CANCELLED') {

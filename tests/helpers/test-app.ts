@@ -141,6 +141,7 @@ export function installPreparedSubmissionFixture(
     }
     return {
       savedFacts: 0,
+      gapCount: 0,
       gaps: [],
       stoppedAtSymbol: null,
       stopReason: null,
@@ -163,6 +164,7 @@ export function installPreparedSubmissionFixture(
     }
     return {
       savedFacts: 0,
+      gapCount: 0,
       gaps: [],
       stoppedAtSymbol: null,
       stopReason: null,

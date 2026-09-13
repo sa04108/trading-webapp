@@ -27,6 +27,19 @@ function setup() {
 }
 
 describe('SqliteDartRawSnapshotStore', () => {
+  it('재개용 시각은 요청 종목의 모든 원문 중 가장 이른 값이고 없는 종목은 만들지 않는다', () => {
+    const { database, store } = setup();
+    try {
+      store.put(KEY, { status: '013', message: '없음' }, 200);
+      store.put({ ...KEY, endpoint: 'SHARE_STATUS', fsDiv: 'NONE' }, { status: '013' }, 100);
+      expect(store.getOldestFetchedAtMs(['005930', '005930', '000660'])).toEqual(new Map([['005930', 100]]));
+      expect(store.getOldestFetchedAtMs(['000660'])).toEqual(new Map());
+      expect(store.getOldestFetchedAtMs([])).toEqual(new Map());
+    } finally {
+      database.close();
+    }
+  });
+
   it('미사용 필드와 행 순서를 포함한 응답 봉투를 그대로 저장하고 교체한다', () => {
     const { database, store } = setup();
     try {

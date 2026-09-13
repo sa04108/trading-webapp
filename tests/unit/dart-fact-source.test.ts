@@ -37,6 +37,16 @@ function jsonResponse(body: unknown): Response {
 class MemoryRawSnapshotStore implements DartRawSnapshotStore {
   readonly snapshots = new Map<string, DartRawSnapshot>();
 
+  getOldestFetchedAtMs(symbols: readonly string[]): ReadonlyMap<string, number> {
+    const result = new Map<string, number>();
+    for (const [keyJson, snapshot] of this.snapshots) {
+      const key = JSON.parse(keyJson) as DartRawSnapshotKey;
+      if (!symbols.includes(key.symbol)) continue;
+      result.set(key.symbol, Math.min(result.get(key.symbol) ?? Infinity, snapshot.fetchedAtMs));
+    }
+    return result;
+  }
+
   get(key: DartRawSnapshotKey): DartRawSnapshot | null {
     return this.snapshots.get(this.key(key)) ?? null;
   }
@@ -489,6 +499,70 @@ describe('createDartFactSource — 미래 보고서 생략', () => {
 });
 
 describe('createDartFactSource — 정기공시 목록 (list.json)', () => {
+  it('목록의 페이지와 HTTP 재시도를 모두 실제 호출 원장에 기록한다', async () => {
+    let physical = 0;
+    let recorded = 0;
+    let reserved = 0;
+    const source = createDartFactSource({ baseUrl: 'https://dart.test', apiKey: 'k' }, LOGGER, {
+      sleep: async () => {},
+      usage: {
+        recordCall: () => ++recorded, callsUsed: () => recorded, maxCallsUsed: () => recorded,
+        quotaExceeded: () => false, reportQuotaExceeded: () => true,
+      },
+      fetchImpl: async () => {
+        physical += 1;
+        if (physical === 1) return new Response('일시 오류', { status: 500 });
+        return jsonResponse({ status: '000', total_page: 2, list: [] });
+      },
+    });
+    await source.listRecentPeriodicFilings('2026-09-12', '2026-09-13', {
+      beforeRequest: () => { reserved += 1; },
+    });
+    expect({ physical, recorded, reserved }).toEqual({ physical: 3, recorded: 3, reserved: 3 });
+  });
+
+  it.each(['020', '429'])('목록 한도 응답 %s를 원장에 남기고 이후 호출을 차단한다', async (status) => {
+    let physical = 0;
+    let recorded = 0;
+    let exceeded = false;
+    let reports = 0;
+    const source = createDartFactSource({ baseUrl: 'https://dart.test', apiKey: 'k' }, LOGGER, {
+      sleep: async () => {},
+      usage: {
+        recordCall: () => ++recorded, callsUsed: () => recorded, maxCallsUsed: () => recorded,
+        quotaExceeded: () => exceeded,
+        reportQuotaExceeded: () => { reports += 1; exceeded = true; return true; },
+      },
+      fetchImpl: async () => {
+        physical += 1;
+        return status === '429' ? new Response('한도', { status: 429 })
+          : jsonResponse({ status, message: '요청 제한을 초과하였습니다.' });
+      },
+    });
+    await expect(source.listRecentPeriodicFilings('2026-09-12', '2026-09-13')).rejects.toBeInstanceOf(DartQuotaError);
+    const before = physical;
+    await expect(source.listRecentPeriodicFilings('2026-09-12', '2026-09-13')).rejects.toBeInstanceOf(DartQuotaError);
+    expect(physical).toBe(before);
+    expect(recorded).toBe(physical);
+    expect(reports).toBe(1);
+  });
+
+  it('목록 quota 예약이 거절되면 물리 호출과 원장 증가가 모두 없다', async () => {
+    let physical = 0;
+    let recorded = 0;
+    const source = createDartFactSource({ baseUrl: 'https://dart.test', apiKey: 'k' }, LOGGER, {
+      usage: {
+        recordCall: () => ++recorded, callsUsed: () => recorded, maxCallsUsed: () => recorded,
+        quotaExceeded: () => false, reportQuotaExceeded: () => true,
+      },
+      fetchImpl: async () => { physical += 1; return jsonResponse({ status: '013' }); },
+    });
+    await expect(source.listRecentPeriodicFilings('2026-09-12', '2026-09-13', {
+      beforeRequest: () => { throw new Error('예약 거절'); },
+    })).rejects.toThrow('예약 거절');
+    expect({ physical, recorded }).toEqual({ physical: 0, recorded: 0 });
+  });
+
   const filing = (over: Record<string, string>) => ({
     corp_code: '00126380',
     corp_name: '삼성전자',
