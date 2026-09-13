@@ -1,1 +1,0 @@
-ALTER TABLE `datasets` ADD `universe_snapshot_id` text REFERENCES universe_snapshots(id);

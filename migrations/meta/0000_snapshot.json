@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "679fa76e-22ee-48b9-a9e9-881522af72c9",
+  "id": "672390b2-0698-43cd-b43d-ef53dc24b19a",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "audit_logs": {
@@ -53,6 +53,283 @@
         }
       },
       "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "backtest_clone_batch_items": {
+      "name": "backtest_clone_batch_items",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "batch_id": {
+          "name": "batch_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ordinal": {
+          "name": "ordinal",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "random_seed": {
+          "name": "random_seed",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "job_id": {
+          "name": "job_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "uq_backtest_clone_batch_item_ordinal": {
+          "name": "uq_backtest_clone_batch_item_ordinal",
+          "columns": [
+            "batch_id",
+            "ordinal"
+          ],
+          "isUnique": true
+        },
+        "uq_backtest_clone_batch_item_seed": {
+          "name": "uq_backtest_clone_batch_item_seed",
+          "columns": [
+            "batch_id",
+            "random_seed"
+          ],
+          "isUnique": true
+        },
+        "uq_backtest_clone_batch_item_job": {
+          "name": "uq_backtest_clone_batch_item_job",
+          "columns": [
+            "job_id"
+          ],
+          "isUnique": true
+        },
+        "idx_backtest_clone_batch_items_pending": {
+          "name": "idx_backtest_clone_batch_items_pending",
+          "columns": [
+            "batch_id",
+            "state"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "backtest_clone_batch_items_batch_id_backtest_clone_batches_id_fk": {
+          "name": "backtest_clone_batch_items_batch_id_backtest_clone_batches_id_fk",
+          "tableFrom": "backtest_clone_batch_items",
+          "tableTo": "backtest_clone_batches",
+          "columnsFrom": [
+            "batch_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "backtest_clone_batch_items_job_id_backtest_jobs_id_fk": {
+          "name": "backtest_clone_batch_items_job_id_backtest_jobs_id_fk",
+          "tableFrom": "backtest_clone_batch_items",
+          "tableTo": "backtest_jobs",
+          "columnsFrom": [
+            "job_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "backtest_clone_batches": {
+      "name": "backtest_clone_batches",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "preparation_job_id": {
+          "name": "preparation_job_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "source_job_id": {
+          "name": "source_job_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "strategy_id": {
+          "name": "strategy_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "total_count": {
+          "name": "total_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "request_json": {
+          "name": "request_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "universe_schedule_json": {
+          "name": "universe_schedule_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "provenance_pin_json": {
+          "name": "provenance_pin_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "universe_json": {
+          "name": "universe_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "universe_hash": {
+          "name": "universe_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "benchmark_json": {
+          "name": "benchmark_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "benchmark_hash": {
+          "name": "benchmark_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "submit_warnings_json": {
+          "name": "submit_warnings_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "error": {
+          "name": "error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at_ms": {
+          "name": "created_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "completed_at_ms": {
+          "name": "completed_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_backtest_clone_batches_created": {
+          "name": "idx_backtest_clone_batches_created",
+          "columns": [
+            "created_at_ms"
+          ],
+          "isUnique": false
+        },
+        "idx_backtest_clone_batches_status": {
+          "name": "idx_backtest_clone_batches_status",
+          "columns": [
+            "status",
+            "created_at_ms"
+          ],
+          "isUnique": false
+        },
+        "idx_backtest_clone_batches_preparation": {
+          "name": "idx_backtest_clone_batches_preparation",
+          "columns": [
+            "preparation_job_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "backtest_clone_batches_preparation_job_id_backtest_preparation_jobs_id_fk": {
+          "name": "backtest_clone_batches_preparation_job_id_backtest_preparation_jobs_id_fk",
+          "tableFrom": "backtest_clone_batches",
+          "tableTo": "backtest_preparation_jobs",
+          "columnsFrom": [
+            "preparation_job_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {}
@@ -189,6 +466,13 @@
           "notNull": true,
           "autoincrement": false
         },
+        "preparation_job_id": {
+          "name": "preparation_job_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "status": {
           "name": "status",
           "type": "text",
@@ -210,11 +494,25 @@
           "notNull": true,
           "autoincrement": false
         },
-        "dataset_id": {
-          "name": "dataset_id",
+        "universe_rule_json": {
+          "name": "universe_rule_json",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
+          "autoincrement": false
+        },
+        "universe_schedule_json": {
+          "name": "universe_schedule_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "provenance_pin_json": {
+          "name": "provenance_pin_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
           "autoincrement": false
         },
         "universe_json": {
@@ -226,6 +524,34 @@
         },
         "universe_hash": {
           "name": "universe_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "benchmark_json": {
+          "name": "benchmark_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "benchmark_hash": {
+          "name": "benchmark_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "clone_batch_id": {
+          "name": "clone_batch_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "clone_source_job_id": {
+          "name": "clone_source_job_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
@@ -259,6 +585,13 @@
           "notNull": false,
           "autoincrement": false
         },
+        "submit_warnings_json": {
+          "name": "submit_warnings_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "worker_id": {
           "name": "worker_id",
           "type": "text",
@@ -269,6 +602,49 @@
         "pid": {
           "name": "pid",
           "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "attempt": {
+          "name": "attempt",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "lease_token_hash": {
+          "name": "lease_token_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "lease_expires_at_ms": {
+          "name": "lease_expires_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "runner_version": {
+          "name": "runner_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "result_schema_version": {
+          "name": "result_schema_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "result_checksum": {
+          "name": "result_checksum",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
@@ -310,9 +686,30 @@
             "created_at_ms"
           ],
           "isUnique": false
+        },
+        "idx_backtest_jobs_preparation": {
+          "name": "idx_backtest_jobs_preparation",
+          "columns": [
+            "preparation_job_id"
+          ],
+          "isUnique": false
         }
       },
-      "foreignKeys": {},
+      "foreignKeys": {
+        "backtest_jobs_preparation_job_id_backtest_preparation_jobs_id_fk": {
+          "name": "backtest_jobs_preparation_job_id_backtest_preparation_jobs_id_fk",
+          "tableFrom": "backtest_jobs",
+          "tableTo": "backtest_preparation_jobs",
+          "columnsFrom": [
+            "preparation_job_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {}
@@ -464,6 +861,173 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
+    "backtest_preparation_jobs": {
+      "name": "backtest_preparation_jobs",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "request_hash": {
+          "name": "request_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "request_json": {
+          "name": "request_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "lifecycle_managed": {
+          "name": "lifecycle_managed",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "phase": {
+          "name": "phase",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "overall_progress": {
+          "name": "overall_progress",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "done_symbols": {
+          "name": "done_symbols",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "total_symbols": {
+          "name": "total_symbols",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "saved_facts": {
+          "name": "saved_facts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "gap_count": {
+          "name": "gap_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "dart_quota_date_kst": {
+          "name": "dart_quota_date_kst",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "dart_calls_used": {
+          "name": "dart_calls_used",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "next_resume_at_ms": {
+          "name": "next_resume_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "preview_json": {
+          "name": "preview_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "error": {
+          "name": "error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "cancel_requested": {
+          "name": "cancel_requested",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "created_at_ms": {
+          "name": "created_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at_ms": {
+          "name": "updated_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "completed_at_ms": {
+          "name": "completed_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "preparation_jobs_hash_idx": {
+          "name": "preparation_jobs_hash_idx",
+          "columns": [
+            "request_hash",
+            "status"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
     "backtest_runs": {
       "name": "backtest_runs",
       "columns": {
@@ -509,8 +1073,15 @@
           "notNull": true,
           "autoincrement": false
         },
-        "dataset_id": {
-          "name": "dataset_id",
+        "universe_rule_json": {
+          "name": "universe_rule_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "schedule_hash": {
+          "name": "schedule_hash",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -565,6 +1136,13 @@
           "notNull": true,
           "autoincrement": false
         },
+        "provenance_pin_json": {
+          "name": "provenance_pin_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "warnings_json": {
           "name": "warnings_json",
           "type": "text",
@@ -607,80 +1185,6 @@
         "backtest_runs_job_id_backtest_jobs_id_fk": {
           "name": "backtest_runs_job_id_backtest_jobs_id_fk",
           "tableFrom": "backtest_runs",
-          "tableTo": "backtest_jobs",
-          "columnsFrom": [
-            "job_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
-    "backtest_symbol_metrics": {
-      "name": "backtest_symbol_metrics",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "integer",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": true
-        },
-        "job_id": {
-          "name": "job_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "symbol": {
-          "name": "symbol",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "trade_count": {
-          "name": "trade_count",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "net_pnl": {
-          "name": "net_pnl",
-          "type": "real",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "win_rate": {
-          "name": "win_rate",
-          "type": "real",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "idx_backtest_symbol_job": {
-          "name": "idx_backtest_symbol_job",
-          "columns": [
-            "job_id"
-          ],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "backtest_symbol_metrics_job_id_backtest_jobs_id_fk": {
-          "name": "backtest_symbol_metrics_job_id_backtest_jobs_id_fk",
-          "tableFrom": "backtest_symbol_metrics",
           "tableTo": "backtest_jobs",
           "columnsFrom": [
             "job_id"
@@ -827,6 +1331,652 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
+    "backtest_validation_trials": {
+      "name": "backtest_validation_trials",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "validation_id": {
+          "name": "validation_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "fold": {
+          "name": "fold",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "role": {
+          "name": "role",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "candidate": {
+          "name": "candidate",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "request_json": {
+          "name": "request_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "preparation_job_id": {
+          "name": "preparation_job_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "job_id": {
+          "name": "job_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "backtest_validation_trials_job_id_unique": {
+          "name": "backtest_validation_trials_job_id_unique",
+          "columns": [
+            "job_id"
+          ],
+          "isUnique": true
+        },
+        "idx_validation_trial_parent": {
+          "name": "idx_validation_trial_parent",
+          "columns": [
+            "validation_id",
+            "fold"
+          ],
+          "isUnique": false
+        },
+        "idx_validation_trial_preparation": {
+          "name": "idx_validation_trial_preparation",
+          "columns": [
+            "preparation_job_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "backtest_validation_trials_validation_id_backtest_validations_id_fk": {
+          "name": "backtest_validation_trials_validation_id_backtest_validations_id_fk",
+          "tableFrom": "backtest_validation_trials",
+          "tableTo": "backtest_validations",
+          "columnsFrom": [
+            "validation_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "backtest_validation_trials_preparation_job_id_backtest_preparation_jobs_id_fk": {
+          "name": "backtest_validation_trials_preparation_job_id_backtest_preparation_jobs_id_fk",
+          "tableFrom": "backtest_validation_trials",
+          "tableTo": "backtest_preparation_jobs",
+          "columnsFrom": [
+            "preparation_job_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "backtest_validation_trials_job_id_backtest_jobs_id_fk": {
+          "name": "backtest_validation_trials_job_id_backtest_jobs_id_fk",
+          "tableFrom": "backtest_validation_trials",
+          "tableTo": "backtest_jobs",
+          "columnsFrom": [
+            "job_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "backtest_validations": {
+      "name": "backtest_validations",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "source_job_id": {
+          "name": "source_job_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "request_json": {
+          "name": "request_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "config_json": {
+          "name": "config_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "plan_json": {
+          "name": "plan_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "strategy_version": {
+          "name": "strategy_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "strategy_source_hash": {
+          "name": "strategy_source_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "engine_version": {
+          "name": "engine_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "git_commit_sha": {
+          "name": "git_commit_sha",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "fold": {
+          "name": "fold",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "phase": {
+          "name": "phase",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'PREPARING_TRAIN'"
+        },
+        "data_revision": {
+          "name": "data_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "error": {
+          "name": "error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at_ms": {
+          "name": "created_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_validation_source": {
+          "name": "idx_validation_source",
+          "columns": [
+            "source_job_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "backtest_wizard_drafts": {
+      "name": "backtest_wizard_drafts",
+      "columns": {
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "context": {
+          "name": "context",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "step": {
+          "name": "step",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "payload_json": {
+          "name": "payload_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at_ms": {
+          "name": "updated_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_backtest_wizard_drafts_updated": {
+          "name": "idx_backtest_wizard_drafts_updated",
+          "columns": [
+            "updated_at_ms"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "backtest_wizard_drafts_user_id_users_id_fk": {
+          "name": "backtest_wizard_drafts_user_id_users_id_fk",
+          "tableFrom": "backtest_wizard_drafts",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "backtest_wizard_drafts_user_id_context_step_pk": {
+          "columns": [
+            "user_id",
+            "context",
+            "step"
+          ],
+          "name": "backtest_wizard_drafts_user_id_context_step_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "chk_backtest_wizard_drafts_step": {
+          "name": "chk_backtest_wizard_drafts_step",
+          "value": "\"backtest_wizard_drafts\".\"step\" IN ('strategy', 'period', 'universe', 'capital')"
+        }
+      }
+    },
+    "benchmark_daily_values": {
+      "name": "benchmark_daily_values",
+      "columns": {
+        "benchmark_id": {
+          "name": "benchmark_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "date": {
+          "name": "date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "close": {
+          "name": "close",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "synced_at_ms": {
+          "name": "synced_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_benchmark_daily_values_date": {
+          "name": "idx_benchmark_daily_values_date",
+          "columns": [
+            "date"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "benchmark_daily_values_benchmark_id_date_pk": {
+          "columns": [
+            "benchmark_id",
+            "date"
+          ],
+          "name": "benchmark_daily_values_benchmark_id_date_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "daily_selection_metric_coverage": {
+      "name": "daily_selection_metric_coverage",
+      "columns": {
+        "date": {
+          "name": "date",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "synced_at_ms": {
+          "name": "synced_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "daily_selection_metrics": {
+      "name": "daily_selection_metrics",
+      "columns": {
+        "date": {
+          "name": "date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "standard_code": {
+          "name": "standard_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "market_cap_krw": {
+          "name": "market_cap_krw",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "volume": {
+          "name": "volume",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "trading_value_krw": {
+          "name": "trading_value_krw",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "daily_selection_metrics_date_standard_code_pk": {
+          "columns": [
+            "date",
+            "standard_code"
+          ],
+          "name": "daily_selection_metrics_date_standard_code_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "dart_financial_filing_receipts": {
+      "name": "dart_financial_filing_receipts",
+      "columns": {
+        "receipt_no": {
+          "name": "receipt_no",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "code": {
+          "name": "code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "business_year": {
+          "name": "business_year",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "receipt_date": {
+          "name": "receipt_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "processed_at_ms": {
+          "name": "processed_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_dart_financial_filing_receipts_code_year": {
+          "name": "idx_dart_financial_filing_receipts_code_year",
+          "columns": [
+            "code",
+            "business_year"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "dart_financial_filing_receipts_code_symbols_code_fk": {
+          "name": "dart_financial_filing_receipts_code_symbols_code_fk",
+          "tableFrom": "dart_financial_filing_receipts",
+          "tableTo": "symbols",
+          "columnsFrom": [
+            "code"
+          ],
+          "columnsTo": [
+            "code"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "dart_raw_api_snapshots": {
+      "name": "dart_raw_api_snapshots",
+      "columns": {
+        "code": {
+          "name": "code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "endpoint": {
+          "name": "endpoint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "business_year": {
+          "name": "business_year",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "report_code": {
+          "name": "report_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "fs_div": {
+          "name": "fs_div",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "payload_json": {
+          "name": "payload_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "content_hash": {
+          "name": "content_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "fetched_at_ms": {
+          "name": "fetched_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_dart_raw_api_snapshots_fetched_at": {
+          "name": "idx_dart_raw_api_snapshots_fetched_at",
+          "columns": [
+            "fetched_at_ms"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "dart_raw_api_snapshots_code_symbols_code_fk": {
+          "name": "dart_raw_api_snapshots_code_symbols_code_fk",
+          "tableFrom": "dart_raw_api_snapshots",
+          "tableTo": "symbols",
+          "columnsFrom": [
+            "code"
+          ],
+          "columnsTo": [
+            "code"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "dart_raw_api_snapshots_code_endpoint_business_year_report_code_fs_div_pk": {
+          "columns": [
+            "code",
+            "endpoint",
+            "business_year",
+            "report_code",
+            "fs_div"
+          ],
+          "name": "dart_raw_api_snapshots_code_endpoint_business_year_report_code_fs_div_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "chk_dart_raw_api_snapshots_endpoint": {
+          "name": "chk_dart_raw_api_snapshots_endpoint",
+          "value": "\"dart_raw_api_snapshots\".\"endpoint\" IN ('FINANCIAL_STATEMENT', 'SHARE_STATUS', 'ISSUANCE_STATUS')"
+        },
+        "chk_dart_raw_api_snapshots_report_code": {
+          "name": "chk_dart_raw_api_snapshots_report_code",
+          "value": "\"dart_raw_api_snapshots\".\"report_code\" IN ('11013', '11012', '11014', '11011')"
+        },
+        "chk_dart_raw_api_snapshots_fs_div": {
+          "name": "chk_dart_raw_api_snapshots_fs_div",
+          "value": "\"dart_raw_api_snapshots\".\"fs_div\" IN ('CFS', 'OFS', 'NONE')"
+        }
+      }
+    },
     "data_sync_jobs": {
       "name": "data_sync_jobs",
       "columns": {
@@ -921,6 +2071,13 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
+        },
+        "failed_symbols_json": {
+          "name": "failed_symbols_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         }
       },
       "indexes": {
@@ -937,109 +2094,43 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
-    "dataset_symbols": {
-      "name": "dataset_symbols",
+    "external_api_daily_usage": {
+      "name": "external_api_daily_usage",
       "columns": {
-        "id": {
-          "name": "id",
+        "api": {
+          "name": "api",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "quota_scope": {
+          "name": "quota_scope",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "usage_date_kst": {
+          "name": "usage_date_kst",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "calls_used": {
+          "name": "calls_used",
           "type": "integer",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": true
-        },
-        "dataset_id": {
-          "name": "dataset_id",
-          "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "autoincrement": false
+          "autoincrement": false,
+          "default": 0
         },
-        "code": {
-          "name": "code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "idx_dataset_symbols_dataset_code": {
-          "name": "idx_dataset_symbols_dataset_code",
-          "columns": [
-            "dataset_id",
-            "code"
-          ],
-          "isUnique": true
-        },
-        "idx_dataset_symbols_code": {
-          "name": "idx_dataset_symbols_code",
-          "columns": [
-            "code"
-          ],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "dataset_symbols_dataset_id_datasets_id_fk": {
-          "name": "dataset_symbols_dataset_id_datasets_id_fk",
-          "tableFrom": "dataset_symbols",
-          "tableTo": "datasets",
-          "columnsFrom": [
-            "dataset_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "dataset_symbols_code_symbols_code_fk": {
-          "name": "dataset_symbols_code_symbols_code_fk",
-          "tableFrom": "dataset_symbols",
-          "tableTo": "symbols",
-          "columnsFrom": [
-            "code"
-          ],
-          "columnsTo": [
-            "code"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
-    "datasets": {
-      "name": "datasets",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "name": {
-          "name": "name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "description": {
-          "name": "description",
-          "type": "text",
+        "quota_exceeded_at_ms": {
+          "name": "quota_exceeded_at_ms",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false
-        },
-        "created_at_ms": {
-          "name": "created_at_ms",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
           "autoincrement": false
         },
         "updated_at_ms": {
@@ -1051,12 +2142,349 @@
         }
       },
       "indexes": {
-        "datasets_name_unique": {
-          "name": "datasets_name_unique",
+        "idx_external_api_daily_usage_date": {
+          "name": "idx_external_api_daily_usage_date",
           "columns": [
-            "name"
+            "usage_date_kst"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "external_api_daily_usage_api_quota_scope_usage_date_kst_pk": {
+          "columns": [
+            "api",
+            "quota_scope",
+            "usage_date_kst"
+          ],
+          "name": "external_api_daily_usage_api_quota_scope_usage_date_kst_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "facts": {
+      "name": "facts",
+      "columns": {
+        "scope": {
+          "name": "scope",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "key": {
+          "name": "key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "field": {
+          "name": "field",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "period_key": {
+          "name": "period_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "as_of_ts_ms": {
+          "name": "as_of_ts_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "value": {
+          "name": "value",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "unit": {
+          "name": "unit",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "corporate_action_before_shares": {
+          "name": "corporate_action_before_shares",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "corporate_action_after_shares": {
+          "name": "corporate_action_after_shares",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_facts_pit": {
+          "name": "idx_facts_pit",
+          "columns": [
+            "scope",
+            "key",
+            "field",
+            "as_of_ts_ms"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "facts_scope_key_field_period_key_as_of_ts_ms_pk": {
+          "columns": [
+            "scope",
+            "key",
+            "field",
+            "period_key",
+            "as_of_ts_ms"
+          ],
+          "name": "facts_scope_key_field_period_key_as_of_ts_ms_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "chk_facts_scope": {
+          "name": "chk_facts_scope",
+          "value": "\"facts\".\"scope\" IN ('SYMBOL', 'MACRO')"
+        }
+      }
+    },
+    "fred_benchmark_coverage": {
+      "name": "fred_benchmark_coverage",
+      "columns": {
+        "benchmark_id": {
+          "name": "benchmark_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "start_date": {
+          "name": "start_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "end_date": {
+          "name": "end_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "synced_at_ms": {
+          "name": "synced_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "fred_benchmark_coverage_benchmark_id_start_date_end_date_pk": {
+          "columns": [
+            "benchmark_id",
+            "start_date",
+            "end_date"
+          ],
+          "name": "fred_benchmark_coverage_benchmark_id_start_date_end_date_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "krx_daily_bars": {
+      "name": "krx_daily_bars",
+      "columns": {
+        "short_code": {
+          "name": "short_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "date": {
+          "name": "date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "market": {
+          "name": "market",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "open": {
+          "name": "open",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "high": {
+          "name": "high",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "low": {
+          "name": "low",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "close": {
+          "name": "close",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "volume": {
+          "name": "volume",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_krx_daily_bars_date": {
+          "name": "idx_krx_daily_bars_date",
+          "columns": [
+            "date"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "krx_daily_bars_short_code_date_pk": {
+          "columns": [
+            "short_code",
+            "date"
+          ],
+          "name": "krx_daily_bars_short_code_date_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "krx_non_trading_coverage": {
+      "name": "krx_non_trading_coverage",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "start_date": {
+          "name": "start_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "end_date": {
+          "name": "end_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "synced_at_ms": {
+          "name": "synced_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "krx_non_trading_days": {
+      "name": "krx_non_trading_days",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "date": {
+          "name": "date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "short_code": {
+          "name": "short_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "market": {
+          "name": "market",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "last_close": {
+          "name": "last_close",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_kntd_date_code": {
+          "name": "idx_kntd_date_code",
+          "columns": [
+            "date",
+            "short_code"
           ],
           "isUnique": true
+        },
+        "idx_kntd_date": {
+          "name": "idx_kntd_date",
+          "columns": [
+            "date"
+          ],
+          "isUnique": false
         }
       },
       "foreignKeys": {},
@@ -1114,6 +2542,237 @@
         }
       },
       "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "notifications": {
+      "name": "notifications",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "type": {
+          "name": "type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "severity": {
+          "name": "severity",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "body": {
+          "name": "body",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "link": {
+          "name": "link",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "read": {
+          "name": "read",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "created_at_ms": {
+          "name": "created_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_notifications_created": {
+          "name": "idx_notifications_created",
+          "columns": [
+            "created_at_ms"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "preparation_data_revision": {
+      "name": "preparation_data_revision",
+      "columns": {
+        "singleton": {
+          "name": "singleton",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "revision": {
+          "name": "revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "armed": {
+          "name": "armed",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "chk_preparation_revision_singleton": {
+          "name": "chk_preparation_revision_singleton",
+          "value": "\"preparation_data_revision\".\"singleton\" = 1"
+        }
+      }
+    },
+    "preparation_preview_cache": {
+      "name": "preparation_preview_cache",
+      "columns": {
+        "job_id": {
+          "name": "job_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "data_revision": {
+          "name": "data_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "validation_version": {
+          "name": "validation_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "fundamental_symbols_json": {
+          "name": "fundamental_symbols_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "preparation_preview_cache_job_id_backtest_preparation_jobs_id_fk": {
+          "name": "preparation_preview_cache_job_id_backtest_preparation_jobs_id_fk",
+          "tableFrom": "preparation_preview_cache",
+          "tableTo": "backtest_preparation_jobs",
+          "columnsFrom": [
+            "job_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "preparation_wizard_references": {
+      "name": "preparation_wizard_references",
+      "columns": {
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "context": {
+          "name": "context",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "preparation_job_id": {
+          "name": "preparation_job_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_preparation_wizard_job": {
+          "name": "idx_preparation_wizard_job",
+          "columns": [
+            "preparation_job_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "preparation_wizard_references_user_id_users_id_fk": {
+          "name": "preparation_wizard_references_user_id_users_id_fk",
+          "tableFrom": "preparation_wizard_references",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "preparation_wizard_references_preparation_job_id_backtest_preparation_jobs_id_fk": {
+          "name": "preparation_wizard_references_preparation_job_id_backtest_preparation_jobs_id_fk",
+          "tableFrom": "preparation_wizard_references",
+          "tableTo": "backtest_preparation_jobs",
+          "columnsFrom": [
+            "preparation_job_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {}
@@ -1300,11 +2959,60 @@
           "notNull": true,
           "autoincrement": false
         },
+        "financial_coverage_protocol_json": {
+          "name": "financial_coverage_protocol_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "action_covered_years_json": {
+          "name": "action_covered_years_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "action_gap_years_json": {
+          "name": "action_gap_years_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "action_gap_details_json": {
+          "name": "action_gap_details_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "action_coverage_protocol_json": {
+          "name": "action_coverage_protocol_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "updated_at_ms": {
           "name": "updated_at_ms",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
+          "autoincrement": false
+        },
+        "financial_updated_at_ms": {
+          "name": "financial_updated_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "action_updated_at_ms": {
+          "name": "action_updated_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
           "autoincrement": false
         }
       },
@@ -1327,6 +3035,517 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {}
+    },
+    "symbol_master_checkpoint_symbols": {
+      "name": "symbol_master_checkpoint_symbols",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "checkpoint_id": {
+          "name": "checkpoint_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "standard_code": {
+          "name": "standard_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "short_code": {
+          "name": "short_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "market": {
+          "name": "market",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "shares_outstanding": {
+          "name": "shares_outstanding",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "instrument_type": {
+          "name": "instrument_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "listed_date": {
+          "name": "listed_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_smcs_checkpoint_code": {
+          "name": "idx_smcs_checkpoint_code",
+          "columns": [
+            "checkpoint_id",
+            "standard_code"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "symbol_master_checkpoint_symbols_checkpoint_id_symbol_master_checkpoints_id_fk": {
+          "name": "symbol_master_checkpoint_symbols_checkpoint_id_symbol_master_checkpoints_id_fk",
+          "tableFrom": "symbol_master_checkpoint_symbols",
+          "tableTo": "symbol_master_checkpoints",
+          "columnsFrom": [
+            "checkpoint_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "symbol_master_checkpoints": {
+      "name": "symbol_master_checkpoints",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "checkpoint_date": {
+          "name": "checkpoint_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "verified_at_ms": {
+          "name": "verified_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "mismatch_json": {
+          "name": "mismatch_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at_ms": {
+          "name": "created_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "symbol_master_checkpoints_checkpoint_date_unique": {
+          "name": "symbol_master_checkpoints_checkpoint_date_unique",
+          "columns": [
+            "checkpoint_date"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "symbol_master_coverage": {
+      "name": "symbol_master_coverage",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "start_date": {
+          "name": "start_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "end_date": {
+          "name": "end_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "synced_at_ms": {
+          "name": "synced_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "symbol_master_events": {
+      "name": "symbol_master_events",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "effective_date": {
+          "name": "effective_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "standard_code": {
+          "name": "standard_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "event_type": {
+          "name": "event_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "old_value": {
+          "name": "old_value",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "new_value": {
+          "name": "new_value",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "observed_span_start": {
+          "name": "observed_span_start",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at_ms": {
+          "name": "created_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_sme_effective": {
+          "name": "idx_sme_effective",
+          "columns": [
+            "effective_date"
+          ],
+          "isUnique": false
+        },
+        "idx_sme_code_effective": {
+          "name": "idx_sme_code_effective",
+          "columns": [
+            "standard_code",
+            "effective_date"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "symbol_master_market_caps": {
+      "name": "symbol_master_market_caps",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "date": {
+          "name": "date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "standard_code": {
+          "name": "standard_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "market_cap_krw": {
+          "name": "market_cap_krw",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_smmc_date_code": {
+          "name": "idx_smmc_date_code",
+          "columns": [
+            "date",
+            "standard_code"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "symbol_master_storage_state": {
+      "name": "symbol_master_storage_state",
+      "columns": {
+        "singleton": {
+          "name": "singleton",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "phase": {
+          "name": "phase",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "migrated_at_ms": {
+          "name": "migrated_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "chk_sms_singleton": {
+          "name": "chk_sms_singleton",
+          "value": "\"symbol_master_storage_state\".\"singleton\" = 1"
+        },
+        "chk_sms_phase": {
+          "name": "chk_sms_phase",
+          "value": "\"symbol_master_storage_state\".\"phase\" IN ('PENDING', 'ACTIVE')"
+        }
+      }
+    },
+    "symbol_master_trading_days": {
+      "name": "symbol_master_trading_days",
+      "columns": {
+        "date": {
+          "name": "date",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "symbol_master_versions": {
+      "name": "symbol_master_versions",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "standard_code": {
+          "name": "standard_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "valid_from_date": {
+          "name": "valid_from_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "valid_to_date": {
+          "name": "valid_to_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "short_code": {
+          "name": "short_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "market": {
+          "name": "market",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "shares_outstanding": {
+          "name": "shares_outstanding",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "instrument_type": {
+          "name": "instrument_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "listed_date": {
+          "name": "listed_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "recorded_at_ms": {
+          "name": "recorded_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_smv_code_from": {
+          "name": "idx_smv_code_from",
+          "columns": [
+            "standard_code",
+            "valid_from_date"
+          ],
+          "isUnique": true
+        },
+        "idx_smv_open_code": {
+          "name": "idx_smv_open_code",
+          "columns": [
+            "standard_code"
+          ],
+          "isUnique": true,
+          "where": "\"symbol_master_versions\".\"valid_to_date\" IS NULL"
+        },
+        "idx_smv_short_code": {
+          "name": "idx_smv_short_code",
+          "columns": [
+            "short_code"
+          ],
+          "isUnique": false
+        },
+        "idx_smv_asof": {
+          "name": "idx_smv_asof",
+          "columns": [
+            "valid_from_date",
+            "valid_to_date"
+          ],
+          "isUnique": false
+        },
+        "idx_smv_valid_to": {
+          "name": "idx_smv_valid_to",
+          "columns": [
+            "valid_to_date"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "chk_smv_valid_range": {
+          "name": "chk_smv_valid_range",
+          "value": "\"symbol_master_versions\".\"valid_to_date\" IS NULL OR \"symbol_master_versions\".\"valid_to_date\" > \"symbol_master_versions\".\"valid_from_date\""
+        }
+      }
     },
     "symbol_slices": {
       "name": "symbol_slices",
@@ -1509,6 +3728,13 @@
           "notNull": false,
           "autoincrement": false
         },
+        "standard_code": {
+          "name": "standard_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "created_at_ms": {
           "name": "created_at_ms",
           "type": "integer",
@@ -1524,6 +3750,13 @@
             "market"
           ],
           "isUnique": false
+        },
+        "idx_symbols_standard_code": {
+          "name": "idx_symbols_standard_code",
+          "columns": [
+            "standard_code"
+          ],
+          "isUnique": true
         }
       },
       "foreignKeys": {},

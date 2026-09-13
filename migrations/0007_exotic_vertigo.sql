@@ -1,1 +1,0 @@
-ALTER TABLE `data_sync_jobs` ADD `failed_symbols_json` text;

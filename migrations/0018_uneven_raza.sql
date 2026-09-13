@@ -1,1 +1,0 @@
-DROP TABLE `fact_storage_state`;
