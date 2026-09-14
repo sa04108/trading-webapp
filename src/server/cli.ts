@@ -1,3 +1,4 @@
+import { backupDatabase, restoreDatabase } from './shared/db/database-backup.js';
 /**
  * 서버 CLI (스펙 §16): 관리자 생성은 CLI 에서만 가능하다.
  *
@@ -19,6 +20,7 @@ import {
   type NumericDistribution,
 } from './modules/backtest/application/backtest-telemetry-report.js';
 import { newId } from './shared/ids.js';
+import { migrateSplitDatabase } from './shared/db/split-database-migration.js';
 
 function ask(question: string, hidden = false): Promise<string> {
   const muted = new Writable({
@@ -59,6 +61,8 @@ function ask(question: string, hidden = false): Promise<string> {
 async function dbPrepare(): Promise<void> {
   const config = loadConfig();
   const startedAtMs = Date.now();
+  const migration = migrateSplitDatabase(config.databasePath);
+  if (migration.backupPath) console.log(`분리 전 원본 DB 보존: ${migration.backupPath}`);
   const container = createContainer(config);
   try {
     console.log(`DB 준비 완료 (${Date.now() - startedAtMs}ms): ${config.databasePath}`);
@@ -361,6 +365,14 @@ function backtestTelemetryReport(argv: readonly string[]): void {
 async function main(): Promise<void> {
   const command = process.argv[2];
   switch (command) {
+    case 'db:backup':
+    case 'db:restore': {
+      const file = process.argv[3];
+      if (!file) throw new Error('백업 파일 경로가 필요합니다');
+      const config = loadConfig();
+      await (command === 'db:backup' ? backupDatabase : restoreDatabase)(config.databasePath, file);
+      break;
+    }
     case 'db:prepare':
       await dbPrepare();
       break;

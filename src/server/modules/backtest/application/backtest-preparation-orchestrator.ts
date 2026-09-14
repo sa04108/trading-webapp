@@ -1,3 +1,4 @@
+import { AgentDataRequired } from '../../../../shared/agent-protocol.js';
 import { createHash } from 'node:crypto';
 import { and, asc, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import {
@@ -72,7 +73,6 @@ import type {
   UniverseScheduleEntry,
 } from './universe-rule-resolver.js';
 import type {
-  BacktestPreparationExecutionLane,
   ReadyPreviewDetails,
 } from './backtest-preparation-execution.js';
 
@@ -80,6 +80,7 @@ export type PreparationStatus =
   | 'QUEUED'
   | 'RUNNING'
   | 'WAITING_DAILY_QUOTA'
+  | 'WAITING_DATA'
   | 'COMPLETED'
   | 'FAILED'
   | 'CANCELLED';
@@ -139,7 +140,7 @@ type PreparationJobDtoRow = Pick<
 >;
 
 const ACTIVE_STATUSES: readonly PreparationStatus[] = [
-  'QUEUED', 'RUNNING', 'WAITING_DAILY_QUOTA',
+  'QUEUED', 'RUNNING', 'WAITING_DAILY_QUOTA', 'WAITING_DATA',
 ];
 const TERMINAL_STATUSES: readonly PreparationStatus[] = ['COMPLETED', 'FAILED', 'CANCELLED'];
 const MAX_FINAL_STABILIZATION_PASSES = 8;
@@ -188,8 +189,9 @@ function corporateActionDataExclusions(
 
 const ALLOWED_TRANSITIONS: Readonly<Record<PreparationStatus, readonly PreparationStatus[]>> = {
   QUEUED: ['RUNNING'],
-  RUNNING: ['WAITING_DAILY_QUOTA', 'COMPLETED', 'FAILED', 'CANCELLED'],
+  RUNNING: ['WAITING_DATA', 'WAITING_DAILY_QUOTA', 'COMPLETED', 'FAILED', 'CANCELLED'],
   WAITING_DAILY_QUOTA: ['QUEUED', 'CANCELLED'],
+  WAITING_DATA: ['QUEUED', 'CANCELLED', 'FAILED'],
   COMPLETED: [],
   FAILED: [],
   CANCELLED: [],
@@ -219,6 +221,10 @@ const UNKNOWN_CANDIDATE_PROBE = '__UNKNOWN_FUTURE_UNIVERSE_CANDIDATE__';
 
 export interface BacktestPreparationOrchestratorDeps {
   readonly database: DatabaseHandle;
+  /** 에이전트는 원본 스냅샷에 쓰지 않고 부족한 범위를 서버에 반환한다. */
+  readonly snapshotMode?: boolean;
+  /** 중앙 서버에서는 영속 상태만 관리하고 계산 큐는 에이전트에 맡긴다. */
+  readonly agentManaged?: boolean;
   readonly resolver: Pick<UniverseRuleResolver, 'resolveOrDescribeNeeds' | 'isPeriodCovered'>;
   readonly factSync: Pick<
     FactSyncService,
@@ -274,17 +280,13 @@ export class BacktestPreparationOrchestrator {
   private stopping = false;
   private readonly dailyLimit: number;
   private readonly previewCache: PreparationPreviewCache;
-  private readonly unsubscribeExecutionUpdates: (() => void) | null;
 
   constructor(
     private readonly deps: BacktestPreparationOrchestratorDeps,
-    private readonly execution: BacktestPreparationExecutionLane | null = null,
   ) {
     this.previewCache = new PreparationPreviewCache(deps.database);
     this.dailyLimit = deps.dartDailyCallLimit ?? DART_DAILY_CALL_LIMIT;
-    this.unsubscribeExecutionUpdates = execution?.onJobUpdated((jobId) => {
-      this.emitCurrent(jobId);
-    }) ?? null;
+
   }
 
   start(input: PreparationInput, owner?: { userId: string; context: string }): BacktestPreparationJobDto {
@@ -388,6 +390,7 @@ export class BacktestPreparationOrchestrator {
    * 현재 사용자의 참조 행이 가리키는 검증 결과를 쓰는 `getReadyPreviewForWizard`를 사용한다.
    */
   getCachedPreview(input: PreparationInput, preparationJobId?: string): BacktestUniversePreview | null {
+    if (this.deps.agentManaged) return this.getFreshPreviewDetails(input, preparationJobId)?.preview ?? null;
     const strategy = this.requireStrategy(input);
     const hash = backtestPreparationRequestHash(input, strategy);
     const completedId = preparationJobId ?? this.latestCompletedPreviewId(hash);
@@ -405,11 +408,9 @@ export class BacktestPreparationOrchestrator {
     return preview;
   }
 
-  /** 복제 재사용의 coverage 검사는 격리된 실행 lane에서 수행한다. */
+  /** 복제는 게시된 검증 결과와 현재 데이터 revision을 확인한다. */
   async getCachedPreviewIsolated(input: PreparationInput, preparationJobId?: string): Promise<BacktestUniversePreview | null> {
-    if (this.execution === null) return this.getCachedPreview(input, preparationJobId);
-    if (!this.hasCompletedPreview(input)) return null;
-    return this.execution.getCachedPreview(input, preparationJobId);
+    return this.getCachedPreview(input, preparationJobId);
   }
 
   /** HTTP 미리보기 조회는 resolver를 예약하거나 child 작업을 기다리지 않는다. */
@@ -430,7 +431,7 @@ export class BacktestPreparationOrchestrator {
     input: PreparationInput,
     progressJobId?: string,
   ): Promise<BacktestUniversePreview | null> {
-    if (this.execution !== null) {
+    if (this.deps.agentManaged) {
       // 제출은 같은 검증 snapshot을 사용할 수 있다. 데이터가 바뀌면 기존
       // PREPARATION_REQUIRED 응답으로 위저드를 영속 준비 단계로 돌려보낸다.
       return this.getFreshPreviewDetails(input)?.preview ?? null;
@@ -471,12 +472,9 @@ export class BacktestPreparationOrchestrator {
     return { ...currentPreview, preparationJobId: completedId };
   }
 
-  /** Preview route also moves its potentially wide fundamental presence query off the HTTP process. */
+  /** 운영 서버는 에이전트가 저장한 검증 결과를 읽는다. */
   async getReadyPreviewDetails(input: PreparationInput): Promise<ReadyPreviewDetails | null> {
-    if (this.execution !== null) {
-      if (!this.hasCompletedPreview(input)) return null;
-      return this.execution.getReadyPreviewDetails(input);
-    }
+    if (this.deps.agentManaged) return this.getFreshPreviewDetails(input);
     const preview = await this.getReadyPreview(input);
     if (preview === null) return null;
     return { preview, fundamentalSymbols: this.fundamentalSymbols(input, preview) };
@@ -550,7 +548,7 @@ export class BacktestPreparationOrchestrator {
 
   /** 라우트가 DART 미설정 503을 실제 sync 필요 요청에만 적용할 때 쓴다. */
   async needsDart(input: PreparationInput): Promise<boolean> {
-    if (this.execution !== null) return this.execution.needsDart(input);
+    if (this.deps.agentManaged) return false;
     const strategy = this.requireStrategy(input);
     const attempt = await this.deps.resolver.resolveOrDescribeNeeds(input.universeRule, input.period);
     if (attempt.kind === 'NEEDS_DATA') {
@@ -601,14 +599,15 @@ export class BacktestPreparationOrchestrator {
     if (!current) return false;
     const status = current.status as PreparationStatus;
     if (TERMINAL_STATUSES.includes(status)) return true;
-    const executionWillSettle = this.execution?.cancel(jobId) ?? false;
+    if (status === 'WAITING_DATA') {
+      this.persistAndEmit(jobId, { status: 'CANCELLED', cancelRequested: true }, ['WAITING_DATA']);
+      return true;
+    }
     if (status === 'WAITING_DAILY_QUOTA') {
       this.clearResumeTimer(jobId);
       this.persistAndEmit(
         jobId,
-        executionWillSettle
-          ? { cancelRequested: true }
-          : { status: 'CANCELLED', cancelRequested: true },
+        { status: 'CANCELLED', cancelRequested: true },
         ['WAITING_DAILY_QUOTA'],
       );
       return true;
@@ -620,7 +619,18 @@ export class BacktestPreparationOrchestrator {
     return true;
   }
 
+  /** 외부 계산 상태를 UI 구독과 종료 알림에 반영한다. */
+  agentJobUpdated(jobId: string): void {
+    this.emitCurrent(jobId);
+    const job = this.get(jobId);
+    if (job && this.isTerminal(job.status)) this.notifyFinished(jobId);
+  }
+
   recoverOrphaned(): void {
+    if (this.deps.agentManaged) {
+      this.deps.database.sqlite.prepare("UPDATE backtest_preparation_jobs SET status = 'QUEUED', next_resume_at_ms = NULL WHERE status = 'WAITING_DAILY_QUOTA'").run();
+      return;
+    }
     const rows = this.deps.database.db
       .select(PREPARATION_RECOVERY_SELECTION)
       .from(backtestPreparationJobs)
@@ -671,8 +681,6 @@ export class BacktestPreparationOrchestrator {
     for (const timer of this.resumeTimers.values()) clearTimeout(timer);
     this.resumeTimers.clear();
     this.listeners.clear();
-    this.unsubscribeExecutionUpdates?.();
-    await this.execution?.stop();
     await this.runnerPromise;
   }
 
@@ -681,7 +689,7 @@ export class BacktestPreparationOrchestrator {
   }
 
   private pump(): void {
-    if (this.stopping || this.runnerActive) return;
+    if (this.deps.agentManaged || this.stopping || this.runnerActive) return;
     const next = this.deps.database.db
       .select({ id: backtestPreparationJobs.id })
       .from(backtestPreparationJobs)
@@ -705,7 +713,7 @@ export class BacktestPreparationOrchestrator {
     if (!claimed || claimed.status !== 'RUNNING') return;
 
     this.runnerActive = true;
-    const runner = (this.execution?.runClaimedJob(claimed.id) ?? this.runClaimedJob(claimed.id))
+    const runner = this.runClaimedJob(claimed.id)
       .catch((error: unknown) => {
         const current = this.getRow(claimed.id);
         if (!this.stopping && current?.status === 'RUNNING') {
@@ -882,6 +890,7 @@ export class BacktestPreparationOrchestrator {
       }
       this.fail(jobId, '검증 중 데이터가 반복해서 변경되어 미리보기를 확정하지 못했습니다. 데이터 수집이 끝난 뒤 다시 준비하세요.');
     } catch (error) {
+      if (error instanceof AgentDataRequired) throw error;
       if (this.stopping) return;
       if (error instanceof UniverseResolutionCancelledError) {
         if (this.finishCancelledIfRequested(jobId)) return;
@@ -1055,6 +1064,15 @@ export class BacktestPreparationOrchestrator {
     const metricDates = [...new Set(selectionMetricDates)];
     const priceIngestNeeded = price.symbols.length > 0
       && this.deps.symbolMaster.isRangeCovered?.(price.from, price.to) !== true;
+    if (this.deps.snapshotMode) {
+      const missing = new Set(metricDates.filter((date) => !this.deps.symbolMaster.isRangeCovered(date, date)));
+      if (priceIngestNeeded) {
+        for (let date = price.from; date <= price.to; date = addCalendarDays(date, 1)) {
+          if (!this.deps.symbolMaster.isRangeCovered(date, date)) missing.add(date);
+        }
+      }
+      if (missing.size > 0) throw new AgentDataRequired({ kind: 'MARKET', dates: [...missing].sort() });
+    }
     const priceDays = priceIngestNeeded ? calendarDaysInclusive(price.from, price.to) : 0;
     let done = 0;
     this.persistAndEmit(jobId, {
@@ -1654,6 +1672,7 @@ export class BacktestPreparationOrchestrator {
   }
 
   private registerUniverse(attempt: Extract<UniverseResolveAttempt, { kind: 'READY' }>): void {
+    this.requestMissingRegistrations([...attempt.unionEntries.values()]);
     const checked = new Set<string>();
     for (const scheduleEntry of attempt.schedule) {
       for (const member of scheduleEntry.members) {
@@ -1682,6 +1701,10 @@ export class BacktestPreparationOrchestrator {
     attempt: Extract<UniverseResolveAttempt, { kind: 'NEEDS_DATA' }>,
     symbols: readonly string[],
   ): void {
+    this.requestMissingRegistrations(symbols.flatMap((symbol) => {
+      const entry = attempt.unionEntries.get(symbol);
+      return entry ? [entry] : [];
+    }));
     for (const symbol of new Set(symbols)) {
       const entry = attempt.unionEntries.get(symbol);
       if (!entry) {
@@ -1698,6 +1721,13 @@ export class BacktestPreparationOrchestrator {
    * 단축코드가 같다는 이유만으로 기존 종목을 과거 KRX 증권과 자동 병합하지 않는다.
    * 봉·팩트가 아직 단축코드 키라 잘못 병합하면 다른 회사의 데이터가 한 상태로 이어진다.
    */
+  private requestMissingRegistrations(entries: readonly SymbolMasterEntry[]): void {
+    if (!this.deps.snapshotMode) return;
+    const symbols = entries.filter((entry) => this.deps.symbolService.getRegisteredIdentity(entry.shortCode) === null)
+      .map((entry) => ({ symbol: entry.shortCode, standardCode: entry.standardCode }));
+    if (symbols.length > 0) throw new AgentDataRequired({ kind: 'REGISTER', symbols });
+  }
+
   private registerOrVerifySymbol(entry: SymbolMasterEntry): void {
     const registered = this.deps.symbolService.getRegisteredIdentity(entry.shortCode);
     const standardOwner = this.deps.symbolService

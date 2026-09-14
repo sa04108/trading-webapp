@@ -264,7 +264,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     expect(created.statusCode).toBe(201);
     const jobId = (created.json().job as { id: string }).id;
 
-    ctx.container.jobOrchestrator.tick();
+    await ctx.startAgent();
     await waitFor(() => {
       const job = ctx.container.jobQueue.getJob(jobId);
       return job !== null && ctx.container.jobQueue.isTerminal(job.status);
@@ -346,7 +346,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     expect(created.statusCode).toBe(201);
     const jobId = (created.json().job as { id: string }).id;
 
-    ctx.container.jobOrchestrator.tick();
+    await ctx.startAgent();
     await waitFor(() => {
       const job = ctx.container.jobQueue.getJob(jobId);
       return job !== null && ctx.container.jobQueue.isTerminal(job.status);
@@ -413,7 +413,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
         eq(krxDailyBars.date, request.period.from),
       ))
       .run();
-    ctx.container.jobOrchestrator.tick();
+    await ctx.startAgent();
     await waitFor(() => {
       const job = ctx.container.jobQueue.getJob(jobId);
       return job !== null && ctx.container.jobQueue.isTerminal(job.status);
@@ -450,7 +450,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
         lte(krxDailyBars.date, request.period.to),
       ))
       .run();
-    ctx.container.jobOrchestrator.tick();
+    await ctx.startAgent();
     await waitFor(() => {
       const job = ctx.container.jobQueue.getJob(jobId);
       return job !== null && ctx.container.jobQueue.isTerminal(job.status);
@@ -694,7 +694,7 @@ describe('KRX 전용 일봉으로 백테스트 실행 (워커의 부모-자식 �
     expect(created.statusCode).toBe(201);
     const jobId = (created.json().job as { id: string }).id;
 
-    ctx.container.jobOrchestrator.tick();
+    await ctx.startAgent();
     await waitFor(() => {
       const job = ctx.container.jobQueue.getJob(jobId);
       return job !== null && ctx.container.jobQueue.isTerminal(job.status);
@@ -1011,7 +1011,7 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
       expect(created.statusCode).toBe(201);
       const jobId = (created.json().job as { id: string }).id;
 
-      ctx.container.jobOrchestrator.tick();
+      await ctx.startAgent();
       await waitFor(() => {
         const job = ctx.container.jobQueue.getJob(jobId);
         return job !== null && ctx.container.jobQueue.isTerminal(job.status);
@@ -1071,7 +1071,7 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
       expect(created.statusCode).toBe(201);
       const jobId = (created.json().job as { id: string }).id;
 
-      ctx.container.jobOrchestrator.tick();
+      await ctx.startAgent();
       await waitFor(() => {
         const job = ctx.container.jobQueue.getJob(jobId);
         return job !== null && ctx.container.jobQueue.isTerminal(job.status);
@@ -1167,7 +1167,7 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
       expect(created.statusCode).toBe(201);
       const jobId = (created.json().job as { id: string }).id;
 
-      ctx.container.jobOrchestrator.tick();
+      await ctx.startAgent();
       await waitFor(() => {
         const job = ctx.container.jobQueue.getJob(jobId);
         return job !== null && ctx.container.jobQueue.isTerminal(job.status);
@@ -1238,7 +1238,7 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
       expect(created.statusCode).toBe(201);
       const jobId = (created.json().job as { id: string }).id;
 
-      ctx.container.jobOrchestrator.tick();
+      await ctx.startAgent();
       await waitFor(() => {
         const job = ctx.container.jobQueue.getJob(jobId);
         return job !== null && ctx.container.jobQueue.isTerminal(job.status);
@@ -1599,7 +1599,7 @@ describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepar
         preview.schedule.map((entry) => entry.members.map((member) => member.symbol)),
       );
 
-      ctx.container.jobOrchestrator.tick();
+      await ctx.startAgent();
       await waitFor(() => {
         const job = ctx.container.jobQueue.getJob(backtestJobId);
         return job !== null && ctx.container.jobQueue.isTerminal(job.status);

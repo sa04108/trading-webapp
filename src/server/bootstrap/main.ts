@@ -9,26 +9,21 @@ async function main(): Promise<void> {
   const config = loadConfig();
   if (
     config.nodeEnv === 'production'
-    && config.backtestExecutionMode === 'remote'
     && readGitCommitSha(config.nodeEnv) === 'unknown'
   ) {
-    throw new Error('remote 실행에는 dist/build-info.json의 Git SHA가 필요합니다');
+    throw new Error('에이전트 실행에는 dist/build-info.json의 Git SHA가 필요합니다');
   }
   const container = createContainer(config);
-  await container.remoteInputBundleManager.cleanupOrphanedBundles();
   await container.remoteResultUploadManager.cleanupOrphanedUploads();
   const app = await buildServer(container);
 
-  // Install signal handling before recovery can launch background child work. Graceful container
-  // close owns the bounded child termination and must finish before the process exits.
+  // 복구 작업을 시작하기 전에 종료 신호를 처리한다.
   let shuttingDown = false;
   const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
     container.logger.info({ module: 'bootstrap', event: 'server.stopping', signal }, 'shutting down');
     const appClosing = app.close();
-    // Fastify drains in-flight handlers. Stop their isolated RPC lane concurrently or a blocked
-    // GET_READY/NEEDS_DART child could prevent app.close from ever reaching container.close.
     await container.backtestPreparationOrchestrator.stop();
     await appClosing;
     await container.close();
@@ -43,11 +38,9 @@ async function main(): Promise<void> {
   //
   // CLI 서브커맨드도 같은 컨테이너를 만들지만 이 두 메서드는 부르지 않는다.
   // 서버 부팅 경로에서만 불러야 하는 근거는 `recoverOrphaned` 의 주석을 참고한다.
-  // remote 모드에서도 로컬 대체 실행기를 폴링하되, 살아 있는 원격 lease는 보존한다.
+  // 유효한 에이전트 리스는 재접속할 수 있도록 보존한다.
   container.jobOrchestrator.start();
-  if (config.backtestExecutionMode === 'remote') {
-    container.remoteWorkerService.start();
-  }
+  container.agentCoordinator.start();
   container.seedCloneBatchService.recover();
   container.backtestPreparationOrchestrator.recoverOrphaned();
 

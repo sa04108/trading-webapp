@@ -1,4 +1,3 @@
-import path from 'node:path';
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import type {
@@ -128,7 +127,7 @@ describe('SqliteBacktestResultWriter final precondition', () => {
 
   it('최종 검사부터 결과 저장까지 다른 연결의 SCD write가 끼어들지 못한다', async () => {
     const ctx = await createTestApp();
-    const competing = new Database(path.join(ctx.dir, 'app.sqlite'), { timeout: 0 });
+    const competing = new Database(ctx.container.database.dataPath, { timeout: 0 });
     try {
       const context = seedJob(ctx, 'bt_writer_lock');
       ctx.container.database.db.insert(symbolMasterVersions).values({

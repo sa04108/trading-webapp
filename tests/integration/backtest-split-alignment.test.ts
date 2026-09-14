@@ -216,7 +216,7 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
     const jobId = (created.json().job as { id: string }).id;
 
     await afterCreate?.(jobId);
-    ctx.container.jobOrchestrator.tick();
+    await ctx.startAgent();
     await waitFor(() => {
       const job = ctx.container.jobQueue.getJob(jobId);
       return job !== null && ctx.container.jobQueue.isTerminal(job.status);

@@ -52,28 +52,10 @@ IP 를 등록제로 운영하기 때문이다. 프로비저닝이 아웃바운�
 시도한다(특정 업체에 묶지 않기 위해서다) — 다른 엔드포인트를 쓰려면
 `OUTBOUND_IP_URL` 로 지정한다.
 
-1GB 호스트의 운영 제약: 동시 백테스트 1개, 봉 수 상한 200만, 대규모 파라미터
-sweep 금지. 유니버스 준비와 완료 미리보기 재검증은 직렬 child에서 실행하며 기본
-V8 old-space 128MiB, Linux RSS 감시 320MiB, 서로 다른 HTTP 대기 작업 8개로 제한한다.
-RSS 감시는 주기적 표본이라 hard limit가 아니며, 부모와 child를 합친 최종 경계는
-systemd `MemoryHigh=512M`/`MemoryMax=640M`이다. 준비 child와 local 백테스트 child는
-서로 다른 lane이라 동시에 실행될 수 있고, 둘 사이의 전역 메모리 admission은 없다.
-아래 준비 단독 계측은 외부 동기화·백테스트가 겹친 workload의 안전을 보장하지 않는다.
-
-재무 전략의 준비·제출·복제 검증은 전체기간 일봉 날짜를 적재하지 않고, SQL 집계로
-각 편입 구간의 첫 실행일을 찾는다. PIT 재무 평가와 PER·ROE 선정은 32종목씩 처리하며,
-재무 coverage 해시도 작은 묶음으로 계산한다. V8 heap OOM은 작업 오류에 메모리 부족과
-상한을 명시하고, 서버 로그에서 jobId·child PID·요청 종류를 연결한다. 같은 조건의 실패를
-자동 재시도하는 로직은 포함하지 않는다. [재현과 검증 결과](docs/universe-preview-execution-findings.md)를 참고한다.
-
-완료 미리보기의 HTTP 조회는 SQLite에 저장된 검증 결과를 반환한다. 시장·재무·가격·
-종목 정체성 데이터의 첫 INSERT/UPDATE/DELETE가 같은 transaction에서 검증 버전을
-무효화한다. 대량 수집의 나머지 행은 버전을 반복 갱신하지 않으며, 다음 검증 전에 변경
-추적을 다시 활성화한다. 완료 결과는 검증 시작부터 저장까지 버전이 유지된 경우에만 재사용한다.
-세션·알림·준비 진행률 갱신은 데이터 버전에 영향을 주지 않는다. 데이터 변경이나 배포
-버전 변경으로 재검증이 필요하면 HTTP는 202 준비 작업을 반환하고, 결과 검증의 진행률과
-취소를 기존 SSE/폴링으로 제공한다. 이전 릴리스의 완료 결과도 처음 한 번은 이 검증을
-거친다. 재검증·완료 결과는 재시작 뒤에도 SQLite에서 복원된다.
+유니버스 계산과 백테스트는 Linux 계산 에이전트에서 실행한다. 운영 서버는 API 수집,
+영속 작업 큐, 버전별 계산 DB 게시와 결과 저장을 담당한다. 완료 미리보기는 DB에 저장한
+검증 결과를 반환하며, 계산 데이터 revision 또는 실행 버전이 달라지면 다시 준비한다.
+운영 상태 변경은 계산 데이터 revision에 영향을 주지 않는다.
 
 준비 결과의 보존은 참조 카운터가 아니라 외래 키와 실제 참조로 관리한다. 백테스트 job은
 제출 시점부터 삭제될 때까지 정확한 `preparationJobId`를 소유하며 실패·취소 job도 포함한다.
@@ -90,39 +72,17 @@ job이 삭제될 때까지 참조를 유지한다. 사용자별 현재 wizard �
 신규 백테스트는 최신 데이터로 다시 검증하고, 원본 복제는 보존 snapshot과 기존 정합성 검사를
 함께 사용한다.
 
-배포 후 실행비용 표본은 `backtest:telemetry-report` CLI로 확인한다. 완료 10개, 입력
-규모 3종, 최소·최대 4배 차이가 모이기 전에는 병렬도 추천을 내지 않으며, 표본이 충분해도
-이 1GB 호스트의 동시성은 1로 유지한다. 운영용 `systemd-run` 전체 명령은 명세 §28.2에
-있다.
+### 다운로드형 Linux 계산 에이전트
 
-### 별도 PC 원격 백테스트 worker
+설정 화면에서 장치 토큰을 발급하고 Linux 클라이언트를 내려받아 `./quant-agent install`을
+실행한다. 클라이언트가 서버에 먼저 WSS로 연결하고 대기하며 부모 프로세스가 여러 계산
+자식을 관리한다. CPU·메모리·병렬도는 가용 자원으로 자동 결정한다. Docker와 worker.env는
+사용하지 않는다. Windows에서는 WSL2를 사용한다.
 
-기본값은 그대로 `BACKTEST_EXECUTION_MODE=local`, `MAX_CONCURRENT_BACKTESTS=1`이다.
-Lightsail에서 계산을 빼려면 app을 `remote`로 바꾸고, 같은 릴리스 아티팩트를 별도 PC에
-서 Docker Compose Worker image로 실행한다. Worker는 인바운드 포트를 열지 않고
-app HTTPS로 작업을 long-poll한 뒤, job 전용 SQLite 입력을 받아 계산하고 결과 SQLite를
-streaming 업로드한다. app과 worker의 Git SHA가 다르면 claim 자체가 거부된다.
-
-설정 예시는 `infra/app.env.example`, `infra/worker.env.example`에 있다. Worker 호스트는
-`scripts/bootstrap-worker.sh`로 Docker와 전용 경로만 준비한다. 이후 수동
-`pnpm run deploy`가 app과 worker에 같은 release를 배포하고 checksum 검증,
-container 전환, 인증·SHA·protocol probe와 실패 rollback까지 수행한다.
-호스트에 생성하는 경로와 보존 정책은
-`/opt/quant-backtest-worker/managed-paths.json` manifest로 추적한다.
-Worker 호스트에는 애플리케이션 systemd unit이 없다. 개발 PC에서는 worker env를 넣고
-`pnpm worker:remote`로 직접 실행할 수 있다. 실제 원격 동시 실행 수는 worker별
-`BACKTEST_WORKER_CONCURRENCY`로 조절하며 여러 worker PC도 같은 큐를 공유할 수 있다.
-처음에는 1로 시작하고 `backtest:telemetry-report`의 메모리·시간 표본을 근거로 올린다.
-remote 모드에서도 worker가 응답하지 않으면 app에서 로컬 실행으로 자동 전환한다.
-정상 worker 연락이 `REMOTE_BACKTEST_LEASE_SECONDS`(기본 60초) 동안 없고 유효한
-원격 lease도 없을 때, 같은 시간 이상 대기한 작업을 로컬에서 실행한다. 실행 중 연결이
-끊긴 작업은 lease 회수 뒤 대상이 되며, 원격 재시도 한도를 소진한 작업도 로컬로 넘긴다.
-로컬 동시 실행은 `MAX_CONCURRENT_BACKTESTS`(기본 1)를 따른다. worker가 복구되면
-후속 작업은 다시 원격 실행을 우선하며 이미 시작한 로컬 작업은 완료까지 유지한다.
-배포·전환·장애 복구 순서는 [원격 worker 운영 문서](docs/REMOTE_WORKER_OPERATIONS.md)를 따른다.
-
-Tailscale 에서 퍼블릭 + Caddy 로 옮긴 이유와 트레이드오프는
-[docs/DECISIONS.md](docs/DECISIONS.md) 의 D-017 에 있다.
+운영 DB와 계산 데이터 DB를 분리한다. 에이전트에는 버전·해시가 있는 계산 스냅샷만
+전달하며 API 키는 서버에 둔다. 데이터 부족 작업은 수집 큐에서 기다리고 준비된 작업을
+먼저 실행한다. 설치, 재접속, 업데이트, DB 분리·복원 절차는
+[에이전트 운영 문서](docs/AGENT_OPERATIONS.md)를 참고한다.
 
 ### 사전 준비 (1회)
 
@@ -208,34 +168,18 @@ passphrase 가 있으면 `ssh-add` 로 agent 에 먼저 올린다 — 접속 확
 
 ### 첫 배포와 계정
 
-프로젝트 루트의 배포 설정 예제를 복사해 app과 worker 접속 정보를 채운다.
-실제 `deploy.env`는 Git에서 제외되며 runtime 비밀값은 넣지 않는다. SSH config를
-사용한다면 `QP_APP_HOST`·`QP_WORKER_HOST`에 Host alias를 쓰고 나머지 접속 값은 비워도 된다.
+프로젝트 루트의 배포 설정 예제를 복사해 운영 앱의 SSH 접속 정보를 채운다.
+`deploy.env`는 Git에서 제외되며 runtime 비밀값은 넣지 않는다.
 
 ```bash
 cp deploy.env.example deploy.env
-```
-
-배포는 자동으로 시작되지 않는다. 공식 명령은 `pnpm run deploy` 하나이며
-`QP_APP_HOST`와 `QP_WORKER_HOST`가 모두 있어야 한다. 두 SSH preflight를 먼저 통과한 뒤
-공통 release를 한 번만 생성하고 app, worker 순서로 준비한다.
-
-```bash
 pnpm run deploy
 ```
 
-`deploy.env`는 app/worker별로 `HOST`, `SSH_USER`, `SSH_KEY`, `SSH_PORT`, `SSH_JUMP`,
-`SSH_HOST_KEY`, `SSH_OPTS`를 지원한다. 별도 설정 파일을 선택하는 CLI 인자는 없다.
-app과 worker에 서로 다른 키·포트·점프 호스트를 지정할 수 있다.
-
-`app`과 `worker`는 배포 component 이름으로 고정한다. `deploy.mjs`가 SSH/SCP로 시도별
-원격 임시 디렉터리에 파일을 전송하고 node-local transaction을 실행한 뒤 그 디렉터리를
-정리한다. 매 배포마다 실행 중 image의 Git SHA와 관계없이 새 worker image를 검증하고
-container를 재생성한다.
-
-app과 worker는 이전 release·DB snapshot·Compose·image를 보존한 채 새 버전의 readiness를
-각각 통과한다. 둘 중 하나라도 실패하면 worker, app 역순으로 양쪽을 배포 전 상태로
-롤백한다. 두 readiness가 모두 확인된 뒤에만 성공으로 확정하고 과거 정상 산출물을 정리한다.
+`QP_APP_HOST`와 필요한 `QP_APP_SSH_*` 설정만 사용한다. 배포는 앱·Linux 클라이언트를
+같은 Git 버전으로 검증하고 패키징한 뒤 앱 서버에 게시한다. 장치별 SSH 배포는 없다.
+서비스를 중지하고 두 DB를 함께 백업한 뒤 마이그레이션하며 readiness 실패 시 코드와
+DB를 복원한다. 에이전트는 연결 후 서버 버전에 맞는 클라이언트를 자동으로 받는다.
 
 배포 후 app 노드에서 관리자 생성과 TOTP 등록을 순서대로 한다 (정확한 명령은 bootstrap
 출력에 나온다):
@@ -255,7 +199,7 @@ TOTP 등록·재발급은 CLI 에서만 할 수 있다 — 웹 세션이 탈취�
 ```
 src/server/modules/{auth,strategy,market-data,backtest,broker,audit,system}
 src/workers/backtest-child.ts              # 실제 백테스트 계산 자식 프로세스
-src/workers/remote-backtest-supervisor.ts  # 원격 lease/heartbeat/업로드 supervisor
+src/agent/                               # Linux 설치·연결·캐시·자원 관리
 src/web                          # React + shadcn/ui (모바일 우선)
 src/shared                       # 웹·서버 공유 스키마
 ```

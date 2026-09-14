@@ -107,7 +107,7 @@ $RECYCLE.BIN/
 # Built Visual Studio Code Extensions
 *.vsix
 ### Project
-data/
+/data/
 .e2e-data/
 test-results/
 playwright-report/

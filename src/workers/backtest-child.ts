@@ -109,7 +109,8 @@ async function main(): Promise<void> {
     throw new Error('BACKTEST_JOB_ID / DATABASE_PATH 환경변수가 필요합니다');
   }
 
-  const handle = openDatabase(databasePath);
+  const handle = openDatabase(databasePath, process.env.AGENT_DATA_PATH ? { dataPath: process.env.AGENT_DATA_PATH, dataReadonly: true } : {});
+  const maxBars = process.env.AGENT_MAX_BARS ? Number(process.env.AGENT_MAX_BARS) : MAX_BACKTEST_BARS;
   const db = handle.db;
 
   const finish = (
@@ -426,9 +427,9 @@ async function main(): Promise<void> {
     })) {
       candles.push(candle);
       // 제출 검증의 추정 상한을 실측으로 다시 지킨다 — 제출 후 import 로 봉이 는 경우의 방어선
-      if (candles.length > MAX_BACKTEST_BARS) {
+      if (candles.length > maxBars) {
         throw new Error(
-          `봉 수가 상한(${MAX_BACKTEST_BARS.toLocaleString()})을 넘습니다. 기간이나 종목 수를 줄이세요.`,
+          `봉 수가 상한(${maxBars.toLocaleString()})을 넘습니다. 기간이나 종목 수를 줄이세요.`,
         );
       }
     }

@@ -1,0 +1,1 @@
+ALTER TABLE `backtest_jobs` ADD `estimated_bars` integer DEFAULT 0 NOT NULL;

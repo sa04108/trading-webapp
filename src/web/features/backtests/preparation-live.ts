@@ -10,6 +10,7 @@ export type PreparationStatus =
   | 'QUEUED'
   | 'RUNNING'
   | 'WAITING_DAILY_QUOTA'
+  | 'WAITING_DATA'
   | 'COMPLETED'
   | 'FAILED'
   | 'CANCELLED';

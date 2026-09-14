@@ -3,34 +3,24 @@ import { readGitCommitSha } from '../../../shared/build-info.js';
 import type { DatabaseHandle } from '../../../shared/db/database.js';
 import {
   backtestPreparationJobs,
-  preparationDataRevision,
+  datasetState,
   preparationPreviewCache,
 } from '../../../shared/db/schema.js';
 import type { ReadyPreviewDetails } from './backtest-preparation-execution.js';
 
 // Deployment changes invalidate validation even when source data and request hashes match.
 // Bump the protocol for source-runtime changes that affect preview validation.
-const VALIDATION_VERSION = `1:${readGitCommitSha()}`;
+const VALIDATION_VERSION = `2:${readGitCommitSha()}`;
 
 export class PreparationPreviewCache {
   constructor(private readonly database: DatabaseHandle) {}
 
-  /**
-   * Arm invalidation before reading source data. The first subsequent write advances
-   * the revision and disarms it; later rows in a bulk import need no revision write.
-   * Concurrent validators may re-arm it, but cannot undo an earlier invalidation.
-   */
-  beginValidation(): number {
-    return this.database.sqlite.transaction(() => {
-      this.database.db.update(preparationDataRevision).set({ armed: true })
-        .where(eq(preparationDataRevision.singleton, 1)).run();
-      return this.revision();
-    }).immediate();
-  }
+  /** 계산 DB는 읽기 전용 스냅샷에서도 같은 원본 버전으로 검증한다. */
+  beginValidation(): number { return this.revision(); }
 
   revision(): number {
-    const row = this.database.db.select().from(preparationDataRevision)
-      .where(eq(preparationDataRevision.singleton, 1)).get();
+    const row = this.database.db.select().from(datasetState)
+      .where(eq(datasetState.singleton, 1)).get();
     if (row === undefined) throw new Error('미리보기 데이터 버전 정보가 없습니다.');
     return row.revision;
   }
@@ -44,7 +34,7 @@ export class PreparationPreviewCache {
         eq(backtestPreparationJobs.status, 'COMPLETED'),
         eq(preparationPreviewCache.validationVersion, VALIDATION_VERSION),
         eq(preparationPreviewCache.dataRevision, sql`(
-          SELECT revision FROM preparation_data_revision WHERE singleton = 1
+          SELECT revision FROM dataset_state WHERE singleton = 1
         )`),
       )).get() !== undefined;
   }
@@ -63,7 +53,7 @@ export class PreparationPreviewCache {
         eq(backtestPreparationJobs.status, 'COMPLETED'),
         eq(preparationPreviewCache.validationVersion, VALIDATION_VERSION),
         eq(preparationPreviewCache.dataRevision, sql`(
-          SELECT revision FROM preparation_data_revision WHERE singleton = 1
+          SELECT revision FROM dataset_state WHERE singleton = 1
         )`),
       ))
       .orderBy(desc(backtestPreparationJobs.createdAtMs))

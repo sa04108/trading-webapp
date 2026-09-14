@@ -1,5 +1,8 @@
 # Universe preview execution findings
 
+> 이전 서버 내 직렬 child 구조의 역사적 계측 기록이다. D-093에서 해당 실행기와 비교용 수동 스크립트를 폐기했다. 현재 설치·실행 기준은 [Linux 에이전트 운영](AGENT_OPERATIONS.md)이다.
+
+
 ## 결론
 
 10년 월별 universe preview의 CPU 병목은 계산 규칙 자체가 아니라, 각 리밸런싱 날짜마다 전체 symbol-master 이벤트를 재구성하고 그 결과를 다시 탐색하던 경로였다. `sharesChangesBetween`을 인접 SCD 행의 SQL projection으로 바꾸고, resolver가 종목별 전체 corporate-action graph를 한 번만 준비하도록 한 뒤 합성 2,000종목 입력에서 동일 결과를 유지하면서 직접 resolver 실행 시간이 573.3초에서 35.2초로 줄었다. `delistedEventsBetween`의 별도 projection도 동일 빈 결과를 유지하면서 1.57초에서 0.18초로 줄었다.

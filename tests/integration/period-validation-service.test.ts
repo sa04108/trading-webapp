@@ -201,7 +201,7 @@ describe('독립 구간 검증 실행', () => {
   it('데이터 revision이 바뀌면 기존 후보를 다른 데이터로 이어 비교하지 않는다', async () => {
     const experiment = service.create(sourceId, optimized);
     await until(() => service.get(experiment.id)!.trials.some((trial) => trial.jobId));
-    database.sqlite.exec('UPDATE preparation_data_revision SET revision = revision + 1');
+    database.sqlite.exec('UPDATE dataset_state SET revision = revision + 1');
     await service.pump();
     await service.pump();
     expect(service.get(experiment.id)).toMatchObject({ status: 'FAILED', error: expect.stringContaining('데이터가 변경') });

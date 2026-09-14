@@ -129,7 +129,7 @@ cleanup_incomplete_snapshot() {
       ;;
   esac
   final_snapshot="/var/lib/quant-platform/backups/pre-deploy-${release_name}.sqlite"
-  sudo rm -f -- "${snapshot}" "${snapshot}-journal" "${snapshot}-wal" "${snapshot}-shm" \
+  sudo rm -f -- "${snapshot}" "${snapshot}-journal" "${snapshot}-wal" "${snapshot}-shm" "${snapshot}.data" "${snapshot}.json" \
     "${final_snapshot}.deploy-in-progress" "${final_snapshot}.deploy-failed"
 }
 
@@ -152,7 +152,7 @@ cleanup_failed_deploy_artifacts() {
 
   if [ -n "${db_snapshot}" ]; then
     sudo rm -f -- "${db_snapshot}" "${db_snapshot}-journal" "${db_snapshot}-wal" \
-      "${db_snapshot}-shm" "${db_snapshot}.deploy-in-progress" \
+      "${db_snapshot}-shm" "${db_snapshot}.data" "${db_snapshot}.json" "${db_snapshot}.deploy-in-progress" \
       "${db_snapshot}.deploy-failed" "${db_snapshot}.deploy-succeeded" || return 1
   fi
   if [ -n "${failed_release}" ]; then
@@ -247,6 +247,9 @@ cleanup_remote_deploy() {
     fi
     if [ "${SNAPSHOT_CREATED:-0}" -eq 1 ]; then
       failed_snapshot="${DB_SNAPSHOT:-}"
+    fi
+    if [ "${SERVICE_STOPPED_BEFORE_SWITCH:-0}" -eq 1 ]; then
+      sudo systemctl start quant-platform && wait_for_ready || echo '이전 서비스 재시작 실패' >&2
     fi
     if [ -n "${failed_release}" ] || [ -n "${failed_snapshot}" ]; then
       cleanup_failed_deploy_artifacts "${failed_release}" "${failed_snapshot}" || true
@@ -369,9 +372,9 @@ rollback_app_transaction() {
   if [ "${rollback_ok}" -eq 1 ]; then
     if [ "${TRANSACTION_DB_EXISTED}" = 1 ]; then
       if [ -n "${TRANSACTION_DB_SNAPSHOT}" ] && sudo test -f "${TRANSACTION_DB_SNAPSHOT}" &&
-        sudo cp "${TRANSACTION_DB_SNAPSHOT}" /var/lib/quant-platform/app.sqlite &&
-        sudo rm -f /var/lib/quant-platform/app.sqlite-journal \
-          /var/lib/quant-platform/app.sqlite-wal /var/lib/quant-platform/app.sqlite-shm; then
+        sudo env DATABASE_PATH=/var/lib/quant-platform/app.sqlite /usr/local/bin/node "${release_dir}/dist/server/cli.js" db:restore "${TRANSACTION_DB_SNAPSHOT}" &&
+        sudo chown quant:quant /var/lib/quant-platform/app.sqlite &&
+        { ! sudo test -f /var/lib/quant-platform/app.data.sqlite || sudo chown quant:quant /var/lib/quant-platform/app.data.sqlite; }; then
         echo 'DB를 배포 전 스냅샷으로 복원했습니다' >&2
       else
         rollback_ok=0
@@ -380,7 +383,10 @@ rollback_app_transaction() {
       sudo rm -f /var/lib/quant-platform/app.sqlite \
         /var/lib/quant-platform/app.sqlite-journal \
         /var/lib/quant-platform/app.sqlite-wal \
-        /var/lib/quant-platform/app.sqlite-shm || rollback_ok=0
+        /var/lib/quant-platform/app.sqlite-shm \
+        /var/lib/quant-platform/app.data.sqlite \
+        /var/lib/quant-platform/app.data.sqlite-wal \
+        /var/lib/quant-platform/app.data.sqlite-shm || rollback_ok=0
     fi
   fi
   if [ "${rollback_ok}" -eq 1 ]; then
@@ -456,7 +462,7 @@ cleanup_successful_app_artifacts() {
     | while IFS= read -r snapshot; do
         if validate_deploy_snapshot "${snapshot}"; then
           sudo rm -f -- "${snapshot}" "${snapshot}-journal" "${snapshot}-wal" \
-            "${snapshot}-shm" "${snapshot}.deploy-succeeded" || exit 1
+            "${snapshot}-shm" "${snapshot}.data" "${snapshot}.json" "${snapshot}.deploy-succeeded" || exit 1
         fi
       done; then
     snapshot_cleanup_ok=0
@@ -546,6 +552,7 @@ case "${PHASE}" in
     DB_PATH="/var/lib/quant-platform/app.sqlite"
     DB_SNAPSHOT="/var/lib/quant-platform/backups/pre-deploy-${RELEASE}.sqlite"
     DB_SNAPSHOT_INCOMPLETE="/var/lib/quant-platform/backups/.pre-deploy-${RELEASE}.sqlite.incomplete"
+    SERVICE_STOPPED_BEFORE_SWITCH=0
     DEPLOY_DB_SNAPSHOT=""
     DEPLOY_PHASE=pre-switch
     RELEASE_STAGING_CREATED=0
@@ -579,6 +586,8 @@ case "${PHASE}" in
 
     PREVIOUS_RELEASE="$(resolve_current_release)"
     DB_EXISTED=0
+    sudo systemctl stop quant-platform
+    SERVICE_STOPPED_BEFORE_SWITCH=1
     if sudo test -f "${DB_PATH}"; then
       DB_EXISTED=1
       if sudo test -e "${DB_SNAPSHOT}" || sudo test -e "${DB_SNAPSHOT_INCOMPLETE}"; then
@@ -588,7 +597,11 @@ case "${PHASE}" in
       sudo touch "${DB_SNAPSHOT}.deploy-in-progress"
       SNAPSHOT_CREATED=1
       SNAPSHOT_INCOMPLETE_OWNED=1
-      sudo sqlite3 "${DB_PATH}" ".backup '${DB_SNAPSHOT_INCOMPLETE}'"
+      sudo env DATABASE_PATH="${DB_PATH}" /usr/local/bin/node "${RELEASE_STAGING}/dist/server/cli.js" db:backup "${DB_SNAPSHOT_INCOMPLETE}"
+      if sudo test -f "${DB_SNAPSHOT_INCOMPLETE}.data"; then
+        sudo mv "${DB_SNAPSHOT_INCOMPLETE}.data" "${DB_SNAPSHOT}.data"
+      fi
+      sudo mv "${DB_SNAPSHOT_INCOMPLETE}.json" "${DB_SNAPSHOT}.json"
       sudo mv "${DB_SNAPSHOT_INCOMPLETE}" "${DB_SNAPSHOT}"
       SNAPSHOT_INCOMPLETE_OWNED=0
       DEPLOY_DB_SNAPSHOT="${DB_SNAPSHOT}"

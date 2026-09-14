@@ -1,11 +1,8 @@
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-
-type DeployTarget = 'app' | 'worker';
 
 const roots: string[] = [];
 const releaseGitSha = 'a'.repeat(40);
@@ -19,30 +16,21 @@ function writeExecutable(file: string, content: string) {
   fs.chmodSync(file, 0o755);
 }
 
-function prepareHarness(configuredTargets: DeployTarget[]) {
+function prepareHarness(configured = true) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'deploy-orchestrator-'));
   roots.push(root);
   const bin = path.join(root, 'bin');
   const scripts = path.join(root, 'scripts');
-  const dockerInfra = path.join(root, 'infra', 'docker');
   fs.mkdirSync(bin);
   fs.mkdirSync(scripts);
-  fs.mkdirSync(dockerInfra, { recursive: true });
   fs.copyFileSync('scripts/deploy.mjs', path.join(scripts, 'deploy.mjs'));
   fs.writeFileSync(path.join(scripts, 'deploy-app.sh'), '#!/bin/bash\n');
-  fs.writeFileSync(path.join(scripts, 'deploy-worker.sh'), '#!/bin/bash\n');
-  fs.writeFileSync(path.join(dockerInfra, 'compose.worker.yaml'), 'services: {}\n');
-  const manifest = '{"managedPaths":[]}\n';
-  fs.writeFileSync(path.join(root, 'infra', 'worker-host-manifest.json'), manifest);
-
   const commandLog = path.join(root, 'commands.log');
   const appKey = path.join(root, 'app.pem');
-  const workerKey = path.join(root, 'worker.pem');
   fs.writeFileSync(appKey, 'app-key');
-  fs.writeFileSync(workerKey, 'worker-key');
 
   const settings: string[] = [];
-  if (configuredTargets.includes('app')) {
+  if (configured) {
     settings.push(
       'QP_APP_HOST=app.example.com',
       'QP_APP_SSH_USER=app-user',
@@ -51,17 +39,6 @@ function prepareHarness(configuredTargets: DeployTarget[]) {
       'QP_APP_SSH_HOST_KEY=yes',
       'QP_APP_SSH_JUMP=app-jump.example.com',
       'QP_APP_SSH_OPTS="-o ServerAliveInterval=30 -o \'SetEnv=QP_TEST=value with spaces\'"',
-    );
-  }
-  if (configuredTargets.includes('worker')) {
-    settings.push(
-      'QP_WORKER_HOST=worker-user@worker.example.com',
-      'QP_WORKER_SSH_USER=worker-user',
-      `QP_WORKER_SSH_KEY=${workerKey}`,
-      'QP_WORKER_SSH_PORT=2200',
-      'QP_WORKER_SSH_HOST_KEY=accept-new',
-      'QP_WORKER_SSH_JUMP=',
-      'QP_WORKER_SSH_OPTS=',
     );
   }
   fs.writeFileSync(path.join(root, 'deploy.env'), `${settings.join('\n')}\n`);
@@ -87,11 +64,10 @@ while (index < args.length && args[index].startsWith('-')) {
 }
 const target = args[index];
 const command = args.slice(index + 1).join(' ');
-const component = target.includes('app.example.com') ? 'app' : 'worker';
-const required = component === 'app'
-  ? [process.env.APP_KEY, 'Port=2222', 'ProxyJump=app-jump.example.com',
-    'StrictHostKeyChecking=yes', 'ServerAliveInterval=30', 'SetEnv=QP_TEST=value with spaces']
-  : [process.env.WORKER_KEY, 'Port=2200', 'StrictHostKeyChecking=accept-new'];
+if (!target.includes('app.example.com')) process.exit(90);
+const component = 'app';
+const required = [process.env.APP_KEY, 'Port=2222', 'ProxyJump=app-jump.example.com',
+    'StrictHostKeyChecking=yes', 'ServerAliveInterval=30', 'SetEnv=QP_TEST=value with spaces'];
 for (const value of required) {
   if (!options.includes(value)) {
     process.stderr.write('missing SSH option: ' + value + '\\n');
@@ -102,26 +78,13 @@ let event = '';
 if (command.includes('/etc/quant-platform/app.env')) {
   event = 'ssh:app:preflight';
   if (!options.includes('BatchMode=yes') || !options.includes('ConnectTimeout=15')) process.exit(92);
-} else if (command.includes('/etc/quant-platform/worker.env')) {
-  event = 'ssh:worker:preflight';
-  if (!options.includes('BatchMode=yes') || !options.includes('ConnectTimeout=15')) process.exit(92);
-  if (!command.includes(process.env.MANIFEST_SHA)) process.exit(93);
 } else if (command.includes('mktemp -d /tmp/quant-app-deploy.')) {
   event = 'ssh:app:mktemp';
-} else if (command.includes('mktemp -d /tmp/quant-worker-deploy.')) {
-  event = 'ssh:worker:mktemp';
 } else if (command.includes('/deploy-app.sh')) {
   for (const phase of ['prepare', 'verify', 'commit', 'finalize', 'rollback']) {
     if (command.includes("'" + phase + "'")) event = 'ssh:app:' + phase;
   }
   if (!event) process.exit(99);
-} else if (command.includes('/deploy-worker.sh')) {
-  for (const phase of ['prepare', 'verify', 'commit', 'finalize', 'rollback']) {
-    if (command.includes("'" + phase + "'")) event = 'ssh:worker:' + phase;
-  }
-  if (!event) process.exit(99);
-  if (!command.includes('sudo -n /bin/bash')) process.exit(94);
-  if (event === 'ssh:worker:prepare' && !command.includes(process.env.RELEASE_GIT_SHA)) process.exit(98);
 } else if (command.includes('/bin/rm -rf --')) {
   event = 'ssh:' + component + ':cleanup';
 } else {
@@ -130,7 +93,6 @@ if (command.includes('/etc/quant-platform/app.env')) {
 }
 fs.appendFileSync(process.env.COMMAND_LOG, event + '\\n');
 if (event === 'ssh:app:mktemp') process.stdout.write('/tmp/quant-app-deploy.fakeapp\\n');
-if (event === 'ssh:worker:mktemp') process.stdout.write('/tmp/quant-worker-deploy.fakeworker\\n');
 const failEvents = (process.env.FAIL_EVENTS ?? '').split(',').filter(Boolean);
 if (failEvents.includes(event)) process.exit(42);
 `);
@@ -152,11 +114,10 @@ while (index < args.length && args[index].startsWith('-')) {
 }
 const operands = args.slice(index);
 const destination = operands.at(-1);
-const component = destination.includes('app.example.com') ? 'app' : 'worker';
-const required = component === 'app'
-  ? [process.env.APP_KEY, 'Port=2222', 'ProxyJump=app-jump.example.com',
-    'StrictHostKeyChecking=yes', 'ServerAliveInterval=30', 'SetEnv=QP_TEST=value with spaces']
-  : [process.env.WORKER_KEY, 'Port=2200', 'StrictHostKeyChecking=accept-new'];
+if (!destination.includes('app.example.com')) process.exit(90);
+const component = 'app';
+const required = [process.env.APP_KEY, 'Port=2222', 'ProxyJump=app-jump.example.com',
+    'StrictHostKeyChecking=yes', 'ServerAliveInterval=30', 'SetEnv=QP_TEST=value with spaces'];
 for (const value of required) {
   if (!options.includes(value)) process.exit(96);
 }
@@ -181,12 +142,6 @@ if (script === 'build-release.sh') {
     gitSha: process.env.RELEASE_GIT_SHA,
   }));
   fs.appendFileSync(process.env.COMMAND_LOG, 'build-release\\n');
-} else if (script === 'build-worker-image.sh') {
-  const releaseName = args[3];
-  const output = args[4];
-  fs.writeFileSync(path.join(output, 'quant-backtest-worker-' + releaseName + '.tar'), 'image');
-  fs.writeFileSync(path.join(output, 'quant-backtest-worker-' + releaseName + '.tar.sha256'), 'checksum');
-  fs.appendFileSync(process.env.COMMAND_LOG, 'build-worker-image:' + releaseName + '\\n');
 } else {
   process.exit(97);
 }
@@ -199,10 +154,8 @@ fs.appendFileSync(process.env.COMMAND_LOG, 'docker:' + process.argv.slice(2).joi
     ...process.env,
     PATH: `${bin}:${process.env.PATH}`,
     APP_KEY: appKey,
-    WORKER_KEY: workerKey,
     COMMAND_LOG: commandLog,
     RELEASE_GIT_SHA: releaseGitSha,
-    MANIFEST_SHA: createHash('sha256').update(manifest).digest('hex'),
   };
   return { commandLog, environment, root };
 }
@@ -223,148 +176,65 @@ function readCommands(harness: ReturnType<typeof prepareHarness>) {
   return fs.readFileSync(harness.commandLog, 'utf8').trim().split('\n');
 }
 
-describe('direct SSH deployment orchestrator', () => {
-  it('deploys app and worker together with the only supported command', () => {
-    const harness = prepareHarness(['app', 'worker']);
+describe('앱과 다운로드 파일 배포', () => {
+  it('앱 SSH 설정만으로 릴리스를 게시한다', () => {
+    const harness = prepareHarness();
     const result = execute(harness);
-    const output = `${result.stdout}${result.stderr}`;
-    expect(result.status, output).toBe(0);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(readCommands(harness)).toEqual([
-      'ssh:app:preflight',
-      'ssh:worker:preflight',
-      'docker:info',
-      'docker:buildx version',
-      'build-release',
-      'build-worker-image:20260818-120000-abcdef1',
-      'ssh:app:mktemp',
+      'ssh:app:preflight', 'build-release', 'ssh:app:mktemp',
       'scp:app:quant-platform-20260818-120000-abcdef1.tar.gz,quant-platform-20260818-120000-abcdef1.tar.gz.sha256,deploy-app.sh',
-      'ssh:worker:mktemp',
-      'scp:worker:quant-backtest-worker-20260818-120000-abcdef1.tar,quant-backtest-worker-20260818-120000-abcdef1.tar.sha256,compose.worker.yaml,deploy-worker.sh',
-      'ssh:app:prepare',
-      'ssh:worker:prepare',
-      'ssh:app:verify',
-      'ssh:worker:verify',
-      'ssh:app:commit',
-      'ssh:worker:commit',
-      'ssh:app:finalize',
-      'ssh:worker:finalize',
-      'ssh:worker:cleanup',
-      'ssh:app:cleanup',
+      'ssh:app:prepare', 'ssh:app:verify', 'ssh:app:commit', 'ssh:app:finalize', 'ssh:app:cleanup',
     ]);
-    expect(output).toContain('배포 순서: app -> worker');
+    expect(result.stdout).toContain('다운로드 클라이언트 게시 완료');
   });
 
-  it('requires both app and worker hosts', () => {
-    for (const [configuredTargets, missingHost] of [
-      [['app'] as DeployTarget[], 'QP_WORKER_HOST'],
-      [['worker'] as DeployTarget[], 'QP_APP_HOST'],
-    ] as const) {
-      const harness = prepareHarness(configuredTargets);
-      const result = execute(harness);
-      const output = `${result.stdout}${result.stderr}`;
-      expect(result.status).not.toBe(0);
-      expect(output).toContain(`deploy.env의 ${missingHost}가 필요합니다`);
-      expect(readCommands(harness)).toEqual([]);
-    }
-  });
-
-  it('rolls app back without touching worker when app preparation fails', () => {
-    const harness = prepareHarness(['app', 'worker']);
-    const result = execute(harness, { FAIL_EVENTS: 'ssh:app:prepare' });
-    expect(result.status).toBe(42);
-    expect(readCommands(harness)).toContain('ssh:app:rollback');
-    expect(readCommands(harness)).not.toContain('ssh:worker:prepare');
-    expect(readCommands(harness)).not.toContain('ssh:worker:rollback');
-  });
-
-  it('rolls worker and app back when worker preparation fails', () => {
-    const harness = prepareHarness(['app', 'worker']);
-    const result = execute(harness, { FAIL_EVENTS: 'ssh:worker:prepare' });
-    const output = `${result.stdout}${result.stderr}`;
-    expect(result.status).toBe(42);
-    expect(readCommands(harness).slice(-5)).toEqual([
-      'ssh:worker:prepare',
-      'ssh:worker:rollback',
-      'ssh:app:rollback',
-      'ssh:worker:cleanup',
-      'ssh:app:cleanup',
-    ]);
-    expect(output).toContain('worker 통합 롤백');
-    expect(output).toContain('app 통합 롤백');
-  });
-
-  it('rolls both prepared components back when final readiness fails', () => {
-    const harness = prepareHarness(['app', 'worker']);
-    const result = execute(harness, { FAIL_EVENTS: 'ssh:worker:verify' });
-    expect(result.status).toBe(42);
-    expect(readCommands(harness)).toContain('ssh:worker:rollback');
-    expect(readCommands(harness)).toContain('ssh:app:rollback');
-    expect(readCommands(harness)).not.toContain('ssh:app:finalize');
-  });
-
-  it('rolls both components back when either commit fails', () => {
-    const harness = prepareHarness(['app', 'worker']);
-    const result = execute(harness, { FAIL_EVENTS: 'ssh:worker:commit' });
-    expect(result.status).toBe(42);
-    expect(readCommands(harness)).toContain('ssh:app:commit');
-    expect(readCommands(harness)).toContain('ssh:worker:rollback');
-    expect(readCommands(harness)).toContain('ssh:app:rollback');
-    expect(readCommands(harness)).not.toContain('ssh:app:finalize');
-  });
-
-  it('reports rollback failure together with the deployment failure', () => {
-    const harness = prepareHarness(['app', 'worker']);
-    const result = execute(harness, {
-      FAIL_EVENTS: 'ssh:worker:prepare,ssh:app:rollback',
-    });
-    const output = `${result.stdout}${result.stderr}`;
-    expect(result.status).toBe(42);
-    expect(output).toContain('통합 롤백 실패');
-    expect(output).toContain('app: ssh가 종료 코드 42로 실패했습니다');
-  });
-
-  it('attempts both finalizers after commit even when app cleanup fails', () => {
-    const harness = prepareHarness(['app', 'worker']);
-    const result = execute(harness, { FAIL_EVENTS: 'ssh:app:finalize' });
-    const output = `${result.stdout}${result.stderr}`;
-    const commands = readCommands(harness);
-    expect(result.status).toBe(42);
-    expect(commands).toContain('ssh:app:finalize');
-    expect(commands).toContain('ssh:worker:finalize');
-    expect(commands).not.toContain('ssh:worker:rollback');
-    expect(commands).not.toContain('ssh:app:rollback');
-    expect(output).toContain('app·worker commit 완료 후 정리 실패');
-    expect(output).toContain('app: ssh가 종료 코드 42로 실패했습니다');
-  });
-
-  it('rejects invalid builder metadata before uploading artifacts', () => {
-    const harness = prepareHarness(['app', 'worker']);
-    const result = execute(harness, {
-      RELEASE_METADATA: JSON.stringify({
-        releaseName: '../outside',
-        gitSha: releaseGitSha,
-      }),
-    });
-    const output = `${result.stdout}${result.stderr}`;
+  it('앱 호스트가 없으면 빌드나 SSH를 실행하지 않는다', () => {
+    const harness = prepareHarness(false);
+    const result = execute(harness);
     expect(result.status).not.toBe(0);
-    expect(output).toContain('release metadata의 releaseName이 올바르지 않습니다');
-    expect(readCommands(harness)).toEqual([
-      'ssh:app:preflight',
-      'ssh:worker:preflight',
-      'docker:info',
-      'docker:buildx version',
-      'build-release',
-    ]);
+    expect(result.stderr).toContain('QP_APP_HOST');
+    expect(readCommands(harness)).toEqual([]);
   });
 
-  it('requires the fixed project-root deploy.env', () => {
-    const harness = prepareHarness(['app', 'worker']);
+  it.each(['prepare', 'verify', 'commit'])('%s 실패 시 앱과 DB를 복원한다', (phase) => {
+    const harness = prepareHarness();
+    const result = execute(harness, { FAIL_EVENTS: `ssh:app:${phase}` });
+    expect(result.status).toBe(42);
+    expect(readCommands(harness)).toContain('ssh:app:rollback');
+    expect(readCommands(harness)).not.toContain('ssh:app:finalize');
+    expect(readCommands(harness).at(-1)).toBe('ssh:app:cleanup');
+  });
+
+  it('복원도 실패하면 원래 실패와 복원 실패를 함께 알린다', () => {
+    const harness = prepareHarness();
+    const result = execute(harness, { FAIL_EVENTS: 'ssh:app:prepare,ssh:app:rollback' });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('앱·DB 복원 실패');
+    expect(result.stderr).toContain('42');
+  });
+
+  it('commit 후 정리 실패는 운영 버전을 다시 되돌리지 않는다', () => {
+    const harness = prepareHarness();
+    const result = execute(harness, { FAIL_EVENTS: 'ssh:app:finalize' });
+    expect(result.status).toBe(42);
+    expect(readCommands(harness)).not.toContain('ssh:app:rollback');
+    expect(readCommands(harness).at(-1)).toBe('ssh:app:cleanup');
+  });
+
+  it('잘못된 릴리스 경로를 업로드 전에 거부한다', () => {
+    const harness = prepareHarness();
+    const result = execute(harness, { RELEASE_METADATA: JSON.stringify({ releaseName: '../outside', gitSha: releaseGitSha }) });
+    expect(result.status).not.toBe(0);
+    expect(readCommands(harness)).toEqual(['ssh:app:preflight', 'build-release']);
+  });
+
+  it('프로젝트 루트 deploy.env가 필요하다', () => {
+    const harness = prepareHarness();
     fs.rmSync(path.join(harness.root, 'deploy.env'));
     const result = execute(harness);
-    const output = `${result.stdout}${result.stderr}`;
     expect(result.status).not.toBe(0);
-    expect(output).toContain('배포 환경 파일이 없습니다');
-    expect(output).toContain('cp deploy.env.example deploy.env');
+    expect(result.stderr).toContain('배포 환경 파일이 없습니다');
     expect(readCommands(harness)).toEqual([]);
   });
 });

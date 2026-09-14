@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import type { AppConfig } from '../../../bootstrap/config.js';
+import { AGENT_LEASE_MS, AGENT_MAX_ATTEMPTS } from '../../../../shared/agent-protocol.js';
 import type { Clock } from '../../../shared/clock.js';
 import type { Logger } from '../../../shared/logger.js';
 import { isPersistenceUnavailableError } from '../../../shared/db/sqlite-errors.js';
@@ -51,11 +51,9 @@ function tokenHash(token: string): string {
 export class RemoteWorkerService {
   readonly events = new EventEmitter();
   private sweepTimer: NodeJS.Timeout | null = null;
-  private lastWorkerContactAtMs: number;
 
   constructor(
     private readonly queue: JobQueue,
-    private readonly config: AppConfig,
     private readonly expectedRunnerVersion: string,
     private readonly clock: Clock,
     private readonly audit: AuditLogService,
@@ -64,35 +62,9 @@ export class RemoteWorkerService {
     private readonly leaseTokenFactory: () => string = () => randomBytes(32).toString('base64url'),
   ) {
     // 재시작 직후에는 worker가 다시 연결할 시간을 한 lease만큼 보장한다.
-    this.lastWorkerContactAtMs = clock.now();
-  }
-
-  /** 정상 worker 연락과 활성 lease가 모두 끊겼거나 원격 재시도를 소진한 작업을 선점한다. */
-  claimLocalFallback(workerId: string): BacktestJobRow | null {
-    const unavailableBeforeMs = this.clock.now() - this.leaseDurationMs();
-    const job = this.queue.claimNext(workerId, {
-      unavailableBeforeMs: this.lastWorkerContactAtMs <= unavailableBeforeMs
-        ? unavailableBeforeMs : null,
-      maxRemoteAttempts: this.config.remoteBacktestMaxAttempts,
-    });
-    if (job === null) return null;
-    const detail = {
-      jobId: job.id,
-      executionMode: 'local',
-      attempt: job.attempt,
-      reason: job.attempt >= this.config.remoteBacktestMaxAttempts
-        ? 'REMOTE_ATTEMPTS_EXHAUSTED' : 'REMOTE_WORKER_UNAVAILABLE',
-    };
-    this.logger.warn(
-      { module: 'backtest', event: 'backtest.local-fallback', ...detail },
-      'remote worker unavailable; starting local backtest',
-    );
-    this.recordAudit('backtest.local-fallback', detail);
-    return job;
   }
 
   start(): void {
-    this.lastWorkerContactAtMs = this.clock.now();
     this.sweepExpiredLeases();
     const intervalMs = Math.max(5_000, Math.floor(this.leaseDurationMs() / 2));
     this.sweepTimer = setInterval(() => this.sweepExpiredLeases(), intervalMs);
@@ -104,12 +76,11 @@ export class RemoteWorkerService {
     this.sweepTimer = null;
   }
 
-  claim(workerId: string, runnerVersion: string): RemoteClaimResult {
+  claim(workerId: string, runnerVersion: string, maxBars = Number.MAX_SAFE_INTEGER): RemoteClaimResult {
     if (runnerVersion !== this.expectedRunnerVersion) {
       return { status: 'VERSION_MISMATCH', expectedRunnerVersion: this.expectedRunnerVersion };
     }
     const nowMs = this.clock.now();
-    this.lastWorkerContactAtMs = nowMs;
     const leaseToken = this.leaseTokenFactory();
     const leaseExpiresAtMs = nowMs + this.leaseDurationMs();
     const remoteWorkerId = `remote:${workerId}`;
@@ -118,7 +89,8 @@ export class RemoteWorkerService {
       leaseTokenHash: tokenHash(leaseToken),
       leaseExpiresAtMs,
       runnerVersion,
-      maxAttempts: this.config.remoteBacktestMaxAttempts,
+      maxAttempts: AGENT_MAX_ATTEMPTS,
+      maxBars,
     });
     if (job === null) return { status: 'EMPTY' };
 
@@ -163,7 +135,6 @@ export class RemoteWorkerService {
       progressLabel: input.progressLabel ?? null,
     });
     if (status === null) return { status: 'STALE_LEASE' };
-    this.lastWorkerContactAtMs = nowMs;
     this.emitJob({
       jobId: input.jobId,
       kind: input.processedBars === undefined ? 'status' : 'progress',
@@ -194,7 +165,6 @@ export class RemoteWorkerService {
       progressLabel: null,
     });
     if (status === null) return { status: 'STALE_LEASE' };
-    this.lastWorkerContactAtMs = nowMs;
     return {
       status: 'ACCEPTED',
       cancelRequested: status === 'CANCELLING',
@@ -223,6 +193,7 @@ export class RemoteWorkerService {
     readonly attempt: number;
     readonly leaseToken: string;
     readonly outcome: 'FAILED' | 'CANCELLED';
+    readonly cancelPath?: 'IPC' | 'SIGTERM' | 'SIGKILL';
     readonly error?: string;
     readonly telemetry?: BacktestExecutionTelemetry;
   }): RemoteFinishResult {
@@ -237,11 +208,11 @@ export class RemoteWorkerService {
       ...(input.error === undefined ? {} : { error: input.error }),
     });
     if (outcome === null) return 'STALE_LEASE';
-    this.lastWorkerContactAtMs = finishedAtMs;
 
     this.recordAudit('backtest.finished', {
       jobId: input.jobId,
       status: outcome,
+      ...(input.cancelPath ? { cancelPath: input.cancelPath } : {}),
       durationMs: finishedAtMs - (job?.startedAtMs ?? job?.createdAtMs ?? finishedAtMs),
       executionMode: 'remote',
       attempt: input.attempt,
@@ -297,7 +268,6 @@ export class RemoteWorkerService {
       return 'IDENTITY_REJECTED';
     }
     if (completed.status !== 'ACCEPTED') return completed.status;
-    this.lastWorkerContactAtMs = this.clock.now();
 
     this.recordAudit('backtest.finished', {
       jobId: input.jobId,
@@ -318,7 +288,7 @@ export class RemoteWorkerService {
   sweepExpiredLeases(): void {
     let recovered: ReturnType<JobQueue['recoverExpiredRemoteLeases']>;
     try {
-      recovered = this.queue.recoverExpiredRemoteLeases(this.config.remoteBacktestMaxAttempts);
+      recovered = this.queue.recoverExpiredRemoteLeases(AGENT_MAX_ATTEMPTS);
     } catch (error) {
       // 결과 import처럼 별도 프로세스가 긴 SQLite write transaction을 잡는 동안에는
       // busy_timeout을 넘길 수 있다. 주기 timer의 예외를 밖으로 던지면 Node의
@@ -371,6 +341,6 @@ export class RemoteWorkerService {
   }
 
   private leaseDurationMs(): number {
-    return this.config.remoteBacktestLeaseSeconds * 1_000;
+    return AGENT_LEASE_MS;
   }
 }

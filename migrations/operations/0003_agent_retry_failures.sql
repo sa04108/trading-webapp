@@ -1,0 +1,1 @@
+ALTER TABLE `backtest_jobs` ADD `lease_failures` integer DEFAULT 0 NOT NULL;

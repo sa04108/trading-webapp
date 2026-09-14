@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# app과 Docker Worker가 공유하는 검증된 release archive를 한 번 만든다.
+# 운영 앱과 다운로드용 Linux 클라이언트를 같은 릴리스에 포함한다.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -106,6 +106,11 @@ build_release() {
   RELEASE_BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   printf '{"gitSha":"%s","builtAt":"%s"}\n' \
     "${RELEASE_GIT_SHA}" "${RELEASE_BUILT_AT}" > "${REPO_ROOT}/dist/build-info.json"
+
+  (
+    cd "${REPO_ROOT}"
+    pnpm build:agent --prepared
+  )
 
   echo "==> 공통 release archive 생성: ${release_archive}"
   tar -C "${REPO_ROOT}" -czf "${release_archive}" \

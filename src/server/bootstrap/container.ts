@@ -1,3 +1,9 @@
+import { AgentRegistry } from '../modules/agents/application/agent-registry.js';
+import { DatasetSnapshots } from '../modules/agents/application/dataset-snapshots.js';
+import { AgentPreparationQueue } from '../modules/agents/application/agent-preparation-queue.js';
+import { AgentDataQueue, AgentCollectionPaused } from '../modules/agents/application/agent-data-queue.js';
+import { AgentCoordinator } from '../modules/agents/application/agent-coordinator.js';
+import path from 'node:path';
 import fs from 'node:fs';
 import { and, eq, inArray, lte } from 'drizzle-orm';
 import { facts as factsTable } from '../shared/db/schema.js';
@@ -87,14 +93,8 @@ import {
 import { findIncompleteFundamentalCheckpointsFromCoverageSync } from '../modules/backtest/application/backtest-financial-data-readiness.js';
 import { BenchmarkService } from '../modules/market-data/application/benchmark-service.js';
 import { RemoteWorkerService } from '../modules/backtest/application/remote-worker-service.js';
-import { RemoteInputBundleManager } from '../modules/backtest/infrastructure/remote-input-bundle-manager.js';
 import { RemoteResultUploadManager } from '../modules/backtest/infrastructure/remote-result-upload-manager.js';
 import { ForkedRemoteResultCompleter } from '../modules/backtest/infrastructure/forked-remote-result-completer.js';
-import {
-  ForkedBacktestPreparationExecutor,
-  type ForkedPreparationExecutorOptions,
-} from '../modules/backtest/infrastructure/forked-backtest-preparation-executor.js';
-import type { BacktestPreparationExecutionLane } from '../modules/backtest/application/backtest-preparation-execution.js';
 import { kstDateOf } from '../modules/market-data/domain/kst-date.js';
 
 export interface SystemStatusProviders {
@@ -128,7 +128,7 @@ export interface Container {
   readonly jobQueue: JobQueue;
   readonly jobOrchestrator: JobOrchestrator;
   readonly remoteWorkerService: RemoteWorkerService;
-  readonly remoteInputBundleManager: RemoteInputBundleManager;
+  readonly agentCoordinator: AgentCoordinator;
   readonly remoteResultUploadManager: RemoteResultUploadManager;
   readonly resultsService: ResultsService;
   readonly seedCloneBatchService: SeedCloneBatchService;
@@ -166,11 +166,8 @@ function readAppVersion(): string {
 }
 
 export interface CreateContainerOptions {
-  /** Focused tests can retain deterministic inline dependencies; non-test app defaults to forked. */
-  readonly preparationExecution?: 'inline' | 'forked';
-  readonly preparationExecutorOptions?: ForkedPreparationExecutorOptions;
-  /** Narrow deterministic lifecycle seam; application callers should use preparationExecution. */
-  readonly preparationExecutionLane?: BacktestPreparationExecutionLane;
+  /** 계산 규칙 단위 테스트만 같은 프로세스에 의존성을 주입한다. */
+  readonly inlinePreparation?: boolean;
 }
 
 export function createContainer(
@@ -380,21 +377,9 @@ export function createContainer(
     notify: safeNotify,
     logger,
   });
-  const preparationExecutionMode = options.preparationExecution
-    ?? (config.nodeEnv === 'test' ? 'inline' : 'forked');
-  const preparationExecution = options.preparationExecutionLane
-    ?? (preparationExecutionMode === 'forked'
-      ? new ForkedBacktestPreparationExecutor(config, logger, {
-          ...options.preparationExecutorOptions,
-          onNotificationCreated: (notification) => {
-            options.preparationExecutorOptions?.onNotificationCreated?.(notification);
-            // The child already inserted this row. Emit only, otherwise unread/list would duplicate it.
-            notificationService.events.emit('notification', notification);
-          },
-        })
-      : null);
   const backtestPreparationOrchestrator = new BacktestPreparationOrchestrator({
     database,
+    agentManaged: !(options.inlinePreparation ?? config.nodeEnv === 'test'),
     resolver: universeRuleResolver,
     factSync: factSyncService,
     facts: factRepository,
@@ -409,7 +394,7 @@ export function createContainer(
     externalApiUsage,
     financialFacts: financialFactAvailabilityService,
     onJobFinished: preparationNotificationListener,
-  }, preparationExecution);
+  });
   const resultsService = new ResultsService(database.db);
   const backtestWizardDraftService = new BacktestWizardDraftService(database, clock);
 
@@ -417,20 +402,52 @@ export function createContainer(
   const remoteResultCompleter = new ForkedRemoteResultCompleter(config.databasePath);
   const remoteWorkerService = new RemoteWorkerService(
     jobQueue,
-    config,
     readGitCommitSha(config.nodeEnv),
     clock,
     auditLog,
     logger,
     remoteResultCompleter,
   );
-  const jobOrchestrator = new JobOrchestrator(
-    jobQueue, config, logger, auditLog, clock,
-    config.backtestExecutionMode === 'remote'
-      ? (workerId) => remoteWorkerService.claimLocalFallback(workerId)
-      : (workerId) => jobQueue.claimNext(workerId),
-  );
-  const remoteInputBundleManager = new RemoteInputBundleManager(config.databasePath, config.tempRoot);
+  const jobOrchestrator = new JobOrchestrator(jobQueue, auditLog);
+  const registry = new AgentRegistry(database);
+  const snapshots = new DatasetSnapshots(database, path.join(path.dirname(config.databasePath), 'datasets'));
+  const preparations = new AgentPreparationQueue(database, (jobId) => backtestPreparationOrchestrator.agentJobUpdated(jobId));
+  const dataQueue = new AgentDataQueue(database, snapshots, async (request, shouldStop) => {
+    if (request.kind === 'MARKET') {
+      for (const date of request.dates) {
+        if (shouldStop()) return;
+        await symbolMasterService.ensureTradingDay(date);
+      }
+    } else if (request.kind === 'SELECTION') {
+      await symbolMasterService.ensureSelectionMetrics(request.dates);
+    } else if (request.kind === 'REGISTER') {
+      for (const entry of request.symbols) {
+        const registered = symbolService.getRegisteredIdentity(entry.symbol);
+        if (registered) {
+          if (registered.standardCode !== entry.standardCode) throw new Error('종목 표준코드가 기존 등록과 다릅니다');
+          continue;
+        }
+        const row = database.sqlite.prepare('SELECT name FROM symbol_master_versions WHERE short_code = ? AND standard_code = ? LIMIT 1')
+          .get(entry.symbol, entry.standardCode) as { name: string } | undefined;
+        if (!row) throw new Error('수집된 종목 마스터에 없는 표준코드입니다');
+        symbolService.addSymbol(entry.symbol, 'KR', row.name, entry.standardCode);
+      }
+    } else {
+      const input = { ...request, mode: 'INCREMENTAL' as const, consolidated: true };
+      const report = request.kind === 'FINANCIAL'
+        ? await factSyncService.sync(input, { shouldStop })
+        : await factSyncService.syncCorporateActions(input, { shouldStop });
+      if (report.stopReason === 'DAILY_QUOTA') {
+        const next = Math.floor((clock.now() + 9 * 3600_000) / 86400_000 + 1) * 86400_000 - 9 * 3600_000;
+        throw new AgentCollectionPaused(report.failureMessage ?? 'DART 일일 호출 한도 대기', next);
+      }
+      if (report.stopReason === 'ERROR') throw new Error(report.failureMessage ?? 'DART 수집 실패');
+    }
+  }, (kind, jobId, error) => {
+    if (kind === 'PREPARATION') preparations.resume(jobId, error);
+  }, logger);
+  const agentCoordinator = new AgentCoordinator(database, registry, snapshots, preparations, dataQueue,
+    remoteWorkerService, jobQueue, readGitCommitSha(config.nodeEnv), logger);
   const remoteResultUploadManager = new RemoteResultUploadManager(config.tempRoot);
   const seedCloneBatchService = new SeedCloneBatchService(
     database,
@@ -537,32 +554,9 @@ export function createContainer(
       );
     }
   };
-  const cleanupRemoteInput = (event: JobEvent): void => {
-    if (event.kind !== 'status') return;
-    try {
-      const job = jobQueue.getJob(event.jobId);
-      if (
-        job === null
-        || job.attempt === 0
-        || !['CANCELLED', 'COMPLETED', 'FAILED', 'INTERRUPTED'].includes(job.status)
-      ) return;
-      void remoteInputBundleManager.removeJob(event.jobId).catch((error) => {
-        logger.warn(
-          { module: 'backtest', event: 'backtest.remote-input-cleanup-failed', jobId: event.jobId, err: error },
-          'remote input bundle cleanup failed',
-        );
-      });
-    } catch (error) {
-      logger.warn(
-        { module: 'backtest', event: 'backtest.remote-input-cleanup-failed', jobId: event.jobId, err: error },
-        'remote input bundle cleanup failed',
-      );
-    }
-  };
   for (const source of [jobOrchestrator.events, remoteWorkerService.events]) {
     source.on('job', backtestNotificationListener);
     source.on('job', seedBatchJobListener);
-    source.on('job', cleanupRemoteInput);
   }
   seedCloneBatchService.events.on(
     'batch',
@@ -606,7 +600,7 @@ export function createContainer(
     jobQueue,
     jobOrchestrator,
     remoteWorkerService,
-    remoteInputBundleManager,
+    agentCoordinator,
     remoteResultUploadManager,
     resultsService,
     seedCloneBatchService,
@@ -625,8 +619,7 @@ export function createContainer(
       if (closing !== null) return closing;
       closing = (async () => {
         clearInterval(pruneTimer);
-        jobOrchestrator.stop();
-        remoteWorkerService.stop();
+        await agentCoordinator.stop();
         // FactSync는 symbol 단위 저장이 끝난 뒤 멈춘다. 이 경계를 기다리기 전에
         // SQLite를 닫으면 저장 callback이 닫힌 자원을 다시 건드린다.
         await backtestPreparationOrchestrator.stop();

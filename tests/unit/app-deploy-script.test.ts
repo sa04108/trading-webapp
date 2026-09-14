@@ -40,10 +40,8 @@ describe('deploy script failure workflow', () => {
     const output = `${result.stdout}${result.stderr}`;
 
     expect(result.status).toBe(0);
-    expect(output).toMatch(/sudo:cp .*pre-deploy-new-release\.sqlite .*app\.sqlite/);
-    expect(output).toMatch(
-      /sudo:rm -f .*app\.sqlite-journal .*app\.sqlite-wal .*app\.sqlite-shm/,
-    );
+    expect(output).toMatch(/sudo:env DATABASE_PATH=.*app\.sqlite .*node .*new-release\/dist\/server\/cli.js db:restore .*pre-deploy-new-release\.sqlite/);
+    expect(output).toContain('sudo:chown quant:quant /var/lib/quant-platform/app.data.sqlite');
     expect(output).toContain('sudo:ln -sfn /opt/quant-platform/releases/old-release');
     expect(output).toContain('sudo:systemctl restart quant-platform');
     expect(output).toContain(
@@ -362,11 +360,11 @@ describe('deploy script failure workflow', () => {
     expect(deploy).toContain('rollback_app_transaction');
     expect(deploy).toMatch(/finalize\)\s+read_transaction_state[\s\S]*verify_current_app_release/);
     expect(orchestrator).toContain('stageAppDeployment(');
-    expect(orchestrator).toContain("runAppPhase(appDeployment, 'prepare')");
-    expect(orchestrator).toContain("runAppPhase(appDeployment, 'verify')");
-    expect(orchestrator).toContain("runAppPhase(appDeployment, 'commit')");
-    expect(orchestrator).toContain("runAppPhase(appDeployment, 'finalize')");
-    expect(orchestrator).toContain("runAppPhase(appDeployment, 'rollback')");
+    expect(orchestrator).toContain("runAppPhase(deployment, 'prepare')");
+    expect(orchestrator).toContain("runAppPhase(deployment, 'verify')");
+    expect(orchestrator).toContain("runAppPhase(deployment, 'commit')");
+    expect(orchestrator).toContain("runAppPhase(deployment, 'finalize')");
+    expect(orchestrator).toContain("runAppPhase(deployment, 'rollback')");
   });
 
   it('is a syntactically valid node-local transaction script', () => {

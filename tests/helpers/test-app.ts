@@ -1,3 +1,4 @@
+import { AgentClient } from '../../src/agent/client.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -15,12 +16,14 @@ export interface TestApp {
   app: FastifyInstance;
   container: Container;
   dir: string;
+  startAgent(): Promise<void>;
   close(): Promise<void>;
 }
 
 export async function createTestApp(
   env: Record<string, string> = {},
   configure?: (app: FastifyInstance) => void,
+  agentPreparation = false,
 ): Promise<TestApp> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qp-test-'));
   const config = loadConfig({
@@ -34,16 +37,26 @@ export async function createTestApp(
     LOG_LEVEL: 'error',
     ...env,
   });
-  const container = createContainer(config);
+  const container = createContainer(config, { inlinePreparation: !agentPreparation });
   const app = await buildServer(container);
   configure?.(app); // 테스트 전용 라우트 등록 등 — ready() 전에만 가능
   await app.ready();
 
+  let agent: AgentClient | null = null;
   return {
     app,
     container,
     dir,
+    async startAgent() {
+      if (agent) return;
+      const address = await app.listen({ host: '127.0.0.1', port: 0 });
+      const credential = container.agentCoordinator.registry.issue('integration-test');
+      container.agentCoordinator.start();
+      agent = new AgentClient({ serverUrl: address, token: credential.token }, path.join(dir, 'agent'), undefined, () => undefined);
+      agent.start();
+    },
     async close() {
+      await agent?.stop();
       await app.close();
       await container.close();
       fs.rmSync(dir, { recursive: true, force: true });

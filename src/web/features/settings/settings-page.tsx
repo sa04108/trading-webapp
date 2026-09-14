@@ -1,3 +1,4 @@
+import { AgentSettings } from './agent-settings';
 import { useQuery } from '@tanstack/react-query';
 import { useTheme } from 'next-themes';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -69,6 +70,8 @@ export function SettingsPage() {
           </div>
         </CardContent>
       </Card>
+
+      <AgentSettings />
 
       <Card>
         <CardHeader>

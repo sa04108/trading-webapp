@@ -39,6 +39,7 @@ const REDACT_PATHS = [
   '*.leaseToken',
   '*.backtestWorkerToken',
   '*.BACKTEST_WORKER_TOKEN',
+  'req.headers["x-agent-lease-token"]',
   '*.totp',
   '*.recoveryCode',
   '*.awsSecretAccessKey',

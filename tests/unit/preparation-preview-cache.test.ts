@@ -71,7 +71,7 @@ describe('PreparationPreviewCache source invalidation', () => {
     }
   });
 
-  it('bulk writes invalidate once, and a new validation detects the next write', () => {
+  it('대량 쓰기와 이후 변경을 읽기 전용 revision 조회로 감지한다', () => {
     expect(cache.get('request', 'wrong-preparation-id')).toBeNull();
     expect(cache.get('request', 'prep_test')).toEqual({
       preview: expectedPreview,
@@ -83,7 +83,7 @@ describe('PreparationPreviewCache source invalidation', () => {
         writer.sqlite.exec("UPDATE symbols SET name = 'changed'");
       }
     })();
-    expect(cache.revision()).toBe(revision + 1);
+    expect(cache.revision()).toBeGreaterThan(revision);
     expect(cache.get('request')).toBeNull();
     const next = cache.beginValidation();
     const concurrent = new PreparationPreviewCache(writer);

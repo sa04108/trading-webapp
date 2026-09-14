@@ -2,11 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Fastify, {
-  LogController,
   type FastifyError,
   type FastifyInstance,
-  type FastifyReply,
-  type FastifyRequest,
 } from 'fastify';
 import fastifyCompress from '@fastify/compress';
 import fastifyCookie from '@fastify/cookie';
@@ -28,48 +25,10 @@ import { registerBacktestWizardDraftRoutes } from '../modules/backtest/presentat
 import { registerBacktestPreparationRoutes } from '../modules/backtest/presentation/backtest-preparation-routes.js';
 import { registerNotificationRoutes } from '../modules/notification/presentation/notification-routes.js';
 import { registerSymbolMasterRoutes } from '../modules/market-data/presentation/symbol-master-routes.js';
-import { registerRemoteWorkerRoutes } from '../modules/backtest/presentation/remote-worker-routes.js';
+import fastifyWebsocket from '@fastify/websocket';
+import { registerAgentControlRoutes, registerAgentManagementRoutes } from '../modules/agents/presentation/agent-routes.js';
+import { AGENT_MAX_MESSAGE_BYTES } from '../../shared/agent-protocol.js';
 import { PreparationReferenceError } from '../modules/backtest/application/preparation-reference-service.js';
-import { PreparationExecutionBusyError } from '../modules/backtest/application/backtest-preparation-execution.js';
-
-const REMOTE_WORKER_CLAIM_PATH = '/api/internal/workers/jobs/claim';
-
-function isRemoteWorkerClaim(request: FastifyRequest): boolean {
-  return request.method === 'POST'
-    && (request.url === REMOTE_WORKER_CLAIM_PATH
-      || request.url.startsWith(`${REMOTE_WORKER_CLAIM_PATH}?`));
-}
-
-/** 정상 long-poll access log는 debug로 낮추고 인증·버전·서버 오류는 기존 레벨로 남긴다. */
-class AppLogController extends LogController {
-  override incomingRequest(
-    request: FastifyRequest,
-    reply: FastifyReply,
-    metadata?: Record<string, unknown>,
-  ): void {
-    if (isRemoteWorkerClaim(request)) {
-      request.log.debug({ req: request }, 'incoming request');
-      return;
-    }
-    super.incomingRequest(request, reply, metadata);
-  }
-
-  override requestCompleted(
-    error: Error | null,
-    request: FastifyRequest,
-    reply: FastifyReply,
-    metadata?: Record<string, unknown>,
-  ): void {
-    const isSuccessfulClaim = error === null
-      && isRemoteWorkerClaim(request)
-      && (reply.statusCode === 200 || reply.statusCode === 204);
-    if (isSuccessfulClaim) {
-      reply.log.debug({ res: reply, responseTime: reply.elapsedTime }, 'request completed');
-      return;
-    }
-    super.requestCompleted(error, request, reply, metadata);
-  }
-}
 
 function resolvePublicDir(): string | null {
   // 빌드 후: dist/server/bootstrap → dist/public.
@@ -89,12 +48,13 @@ export async function buildServer(container: Container): Promise<FastifyInstance
 
   const app = Fastify({
     logger: buildPinoOptions(config),
-    logController: new AppLogController(),
     trustProxy: config.trustProxyLoopback ? '127.0.0.1' : false,
     bodyLimit: 10 * 1024 * 1024,
   });
 
+  app.addHook('preClose', async () => { await container.agentCoordinator.stop(); });
   registerSecurity(app);
+  await app.register(fastifyWebsocket, { options: { maxPayload: AGENT_MAX_MESSAGE_BYTES } });
 
   await app.register(fastifyCookie, { secret: config.sessionSecret });
   await app.register(fastifyMultipart, {
@@ -110,9 +70,6 @@ export async function buildServer(container: Container): Promise<FastifyInstance
     request.log.error({ err: error }, 'request failed');
     if (error instanceof PreparationReferenceError) {
       return reply.code(409).send({ error: 'PREPARATION_REQUIRED', message: error.message });
-    }
-    if (error instanceof PreparationExecutionBusyError) {
-      return reply.code(503).send({ error: error.message });
     }
     const statusCode = error.statusCode && error.statusCode >= 400 ? error.statusCode : 500;
     // 스펙 §16: stack trace 미노출
@@ -130,6 +87,7 @@ export async function buildServer(container: Container): Promise<FastifyInstance
   await app.register(
     async (api) => {
       registerSystemRoutes(api, container, requireAuth);
+      registerAgentManagementRoutes(api, container.agentCoordinator, requireAuth);
       registerAuthRoutes(api, authDeps);
       registerSymbolRoutes(
         api,
@@ -163,6 +121,7 @@ export async function buildServer(container: Container): Promise<FastifyInstance
           facts: container.factRepository,
           dataRoot: container.config.dataRoot,
           maxQueuedBacktests: container.config.maxQueuedBacktests,
+          maxBacktestBars: () => container.agentCoordinator.maxBacktestBars(),
           clock: container.clock,
           benchmarks: container.benchmarkService,
           seedCloneBatches: container.seedCloneBatchService,
@@ -208,21 +167,10 @@ export async function buildServer(container: Container): Promise<FastifyInstance
     { prefix: '/api/v1' },
   );
 
-  // local 모드에서도 token을 미리 설정하면 Worker 배포 probe가 STANDBY를 반환한다.
-  // 실제 job API는 registerRemoteWorkerRoutes가 remote 모드에서만 등록한다.
-  if (config.backtestWorkerToken !== null) {
-    await app.register(
-      async (workerApi) => registerRemoteWorkerRoutes(workerApi, {
-        service: container.remoteWorkerService,
-        inputBundles: container.remoteInputBundleManager,
-        resultUploads: container.remoteResultUploadManager,
-        workerToken: config.backtestWorkerToken!,
-        executionMode: config.backtestExecutionMode,
-        expectedRunnerVersion: container.gitCommitSha,
-      }),
-      { prefix: '/api/internal/workers' },
-    );
-  }
+  await app.register(async (api) => {
+    registerAgentControlRoutes(api, container.agentCoordinator, container.remoteResultUploadManager);
+  }, { prefix: '/api/agents' });
+
 
   // 종목 마스터 일일 동기화 스케줄러 — JobOrchestrator 와 달리 이 타이머는 여기 server.ts
   // 에서 직접 잡는다(스케줄러 자체는 내부 타이머를 두지 않는다). unref() 로 테스트·CLI

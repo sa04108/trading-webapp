@@ -2,7 +2,6 @@
 // 수동 배포 진입점: build는 로컬에서, 전송은 SSH/SCP로, 전환은 노드 로컬 transaction으로 수행한다.
 
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { error as logError, log } from 'node:console';
 import {
   existsSync,
@@ -19,7 +18,6 @@ import { fileURLToPath } from 'node:url';
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, '..');
 const DEPLOY_ENV_FILE = path.join(REPO_ROOT, 'deploy.env');
-const DEPLOY_COMPONENTS = ['app', 'worker'];
 const APP_PREFLIGHT = [
   'set -eu',
   'for command_name in bash flock sqlite3 corepack systemctl systemd-run curl; do',
@@ -28,24 +26,6 @@ const APP_PREFLIGHT = [
   'sudo -n true',
   'sudo -n test -f /etc/quant-platform/app.env',
   'sudo -n test -f /etc/systemd/system/quant-platform.service',
-].join('\n');
-const WORKER_PREFLIGHT = [
-  'set -eu',
-  'expected_manifest_sha="$1"',
-  'for command_name in bash flock docker sha256sum; do',
-  '  command -v "${command_name}" >/dev/null',
-  'done',
-  'sudo -n docker version >/dev/null',
-  'sudo -n docker compose version >/dev/null',
-  'sudo -n test -f /etc/quant-platform/worker.env',
-  'sudo -n test -f /opt/quant-backtest-worker/compose.yaml',
-  'sudo -n test -f /opt/quant-backtest-worker/managed-paths.json',
-  'actual_manifest_sha="$(sudo -n sha256sum /opt/quant-backtest-worker/managed-paths.json)"',
-  'actual_manifest_sha="${actual_manifest_sha%% *}"',
-  '[ "${actual_manifest_sha}" = "${expected_manifest_sha}" ] || {',
-  '  echo "Worker 관리 manifest가 현재 저장소와 다릅니다. bootstrap-worker.sh를 다시 실행하세요." >&2',
-  '  exit 1',
-  '}',
 ].join('\n');
 
 class DeployError extends Error {
@@ -74,9 +54,7 @@ function setting(settings, name) {
   return settings[name]?.trim() ?? '';
 }
 
-function componentPrefix(component) {
-  return component === 'app' ? 'QP_APP' : 'QP_WORKER';
-}
+function componentPrefix() { return 'QP_APP'; }
 
 function expandHome(value) {
   return value.startsWith('~/') ? path.join(homedir(), value.slice(2)) : value;
@@ -258,32 +236,19 @@ function runRemoteBash(connection, script, args = [], options = {}) {
   run('ssh', [...sshArguments(connection, options), remoteCommand], options);
 }
 
-function preflight(connection, workerManifestSha) {
-  if (connection.component === 'app') {
-    runRemoteBash(connection, APP_PREFLIGHT, [], { batch: true, quiet: true });
-    return;
-  }
-  runRemoteBash(
-    connection,
-    WORKER_PREFLIGHT,
-    [workerManifestSha],
-    { batch: true, quiet: true },
-  );
+function preflight(connection) {
+  runRemoteBash(connection, APP_PREFLIGHT, [], { batch: true, quiet: true });
 }
 
 function validateRemoteDirectory(remoteDirectory, component) {
-  const pattern = component === 'app'
-    ? /^\/tmp\/quant-app-deploy\.[a-zA-Z0-9]+$/
-    : /^\/tmp\/quant-worker-deploy\.[a-zA-Z0-9]+$/;
+  const pattern = /^\/tmp\/quant-app-deploy\.[a-zA-Z0-9]+$/;
   if (!pattern.test(remoteDirectory)) {
     throw new DeployError(`${component} 원격 임시 경로가 올바르지 않습니다: ${remoteDirectory}`);
   }
 }
 
 function createRemoteDirectory(connection) {
-  const template = connection.component === 'app'
-    ? '/tmp/quant-app-deploy.XXXXXX'
-    : '/tmp/quant-worker-deploy.XXXXXX';
+  const template = '/tmp/quant-app-deploy.XXXXXX';
   const remoteDirectory = capture('ssh', [
     ...sshArguments(connection),
     `mktemp -d ${template}`,
@@ -340,34 +305,6 @@ function stageAppDeployment(connection, releaseArchive, releaseChecksum, release
   };
 }
 
-function stageWorkerDeployment(
-  connection,
-  imageArchive,
-  imageChecksum,
-  composeFile,
-  releaseName,
-  releaseGitSha,
-  manifestSha,
-) {
-  const remoteDirectory = stageFiles(connection, [
-    imageArchive,
-    imageChecksum,
-    composeFile,
-    path.join(SCRIPT_DIR, 'deploy-worker.sh'),
-  ]);
-  return {
-    connection,
-    releaseName,
-    releaseGitSha,
-    manifestSha,
-    remoteDirectory,
-    remoteArchive: path.posix.join(remoteDirectory, path.basename(imageArchive)),
-    remoteChecksum: path.posix.join(remoteDirectory, path.basename(imageChecksum)),
-    remoteCompose: path.posix.join(remoteDirectory, 'compose.worker.yaml'),
-    remoteScript: path.posix.join(remoteDirectory, 'deploy-worker.sh'),
-  };
-}
-
 function runAppPhase(deployment, phase) {
   const args = phase === 'prepare'
     ? [
@@ -383,60 +320,6 @@ function runAppPhase(deployment, phase) {
     ...args.map(shellQuote),
   ].join(' ');
   run('ssh', [...sshArguments(deployment.connection), command]);
-}
-
-function runWorkerPhase(deployment, phase) {
-  const args = phase === 'prepare'
-    ? [
-        phase,
-        deployment.remoteArchive,
-        deployment.remoteChecksum,
-        deployment.remoteCompose,
-        `quant-platform-backtest-worker:${deployment.releaseName}`,
-        deployment.releaseGitSha,
-        deployment.manifestSha,
-      ]
-    : [phase, deployment.releaseName];
-  const command = [
-    'sudo',
-    '-n',
-    '/bin/bash',
-    shellQuote(deployment.remoteScript),
-    ...args.map(shellQuote),
-  ].join(' ');
-  run('ssh', [...sshArguments(deployment.connection), command]);
-}
-
-function finalizeDeployments(appDeployment, workerDeployment) {
-  const finalizationErrors = [];
-  let exitCode = 1;
-  const finalizers = [
-    ['app', () => runAppPhase(appDeployment, 'finalize')],
-    ['worker', () => runWorkerPhase(workerDeployment, 'finalize')],
-  ];
-
-  for (const [component, finalize] of finalizers) {
-    try {
-      finalize();
-    } catch (error) {
-      if (finalizationErrors.length === 0 && error instanceof DeployError) {
-        exitCode = error.exitCode;
-      }
-      const message = error instanceof Error ? error.message : String(error);
-      finalizationErrors.push(`${component}: ${message}`);
-    }
-  }
-
-  if (finalizationErrors.length > 0) {
-    throw new DeployError(
-      `app·worker commit 완료 후 정리 실패:\n${finalizationErrors.join('\n')}`,
-      exitCode,
-    );
-  }
-}
-
-function sha256File(file) {
-  return createHash('sha256').update(readFileSync(file)).digest('hex');
 }
 
 function readReleaseMetadata(metadataFile, artifactDirectory) {
@@ -466,153 +349,37 @@ function readReleaseMetadata(metadataFile, artifactDirectory) {
 }
 
 function main() {
-  if (process.platform !== 'linux') {
-    throw new DeployError(`통합 배포는 Linux에서만 지원합니다: ${process.platform}`);
-  }
+  if (process.platform !== 'linux') throw new DeployError('배포는 Linux에서 실행하세요');
   const settings = readDeploySettings();
-  const connections = new Map(DEPLOY_COMPONENTS.map((component) => [
-    component,
-    readConnection(component, settings),
-  ]));
-
-  const composeFile = path.join(REPO_ROOT, 'infra', 'docker', 'compose.worker.yaml');
-  const manifestFile = path.join(REPO_ROOT, 'infra', 'worker-host-manifest.json');
-  if (!existsSync(composeFile)) {
-    throw new DeployError(`worker Compose 파일이 없습니다: ${composeFile}`);
-  }
-  if (!existsSync(manifestFile)) {
-    throw new DeployError(`worker manifest 파일이 없습니다: ${manifestFile}`);
-  }
-  const workerSettings = {
-    composeFile,
-    manifestSha: sha256File(manifestFile),
-  };
-
+  const connection = readConnection('app', settings);
   const artifactDirectory = mkdtempSync(path.join(tmpdir(), 'quant-deploy-'));
-  let appDeployment = null;
-  let workerDeployment = null;
-  let appAttempted = false;
-  let workerAttempted = false;
-  let transactionCommitted = false;
+  let deployment = null;
+  let attempted = false;
+  let committed = false;
   try {
-    log(`==> 배포 설정: ${DEPLOY_ENV_FILE}`);
-    log('==> 배포 순서: app -> worker');
-
-    for (const component of DEPLOY_COMPONENTS) {
-      log(`==> ${component} preflight`);
-      preflight(
-        connections.get(component),
-        component === 'worker' ? workerSettings.manifestSha : '',
-      );
-    }
-    run('docker', ['info'], { quiet: true });
-    run('docker', ['buildx', 'version'], { quiet: true });
-
-    log('==> 공통 release 검증·생성');
-    const releaseMetadataFile = path.join(artifactDirectory, 'release-metadata.json');
-    run('bash', [
-      path.join(SCRIPT_DIR, 'build-release.sh'),
-      artifactDirectory,
-      releaseMetadataFile,
-    ]);
-    const {
-      releaseArchive,
-      releaseChecksum,
-      releaseName,
-      gitSha: releaseGitSha,
-    } = readReleaseMetadata(releaseMetadataFile, artifactDirectory);
-
-    log('==> worker image 사전 생성');
-    run('bash', [
-      path.join(SCRIPT_DIR, 'build-worker-image.sh'),
-      releaseArchive,
-      releaseChecksum,
-      releaseName,
-      artifactDirectory,
-    ]);
-    const workerImageArchive = path.join(artifactDirectory, `quant-backtest-worker-${releaseName}.tar`);
-    const workerImageChecksum = `${workerImageArchive}.sha256`;
-    if (!existsSync(workerImageArchive) || !existsSync(workerImageChecksum)) {
-      throw new DeployError('worker image archive 또는 checksum이 생성되지 않았습니다');
-    }
-
-    log('==> app 배포 파일 업로드');
-    appDeployment = stageAppDeployment(
-      connections.get('app'),
-      releaseArchive,
-      releaseChecksum,
-      releaseName,
-    );
-    log('==> worker 배포 파일 업로드');
-    workerDeployment = stageWorkerDeployment(
-      connections.get('worker'),
-      workerImageArchive,
-      workerImageChecksum,
-      workerSettings.composeFile,
-      releaseName,
-      releaseGitSha,
-      workerSettings.manifestSha,
-    );
-
-    log('==> app 준비·readiness');
-    appAttempted = true;
-    runAppPhase(appDeployment, 'prepare');
-
-    log('==> worker 준비·readiness');
-    workerAttempted = true;
-    runWorkerPhase(workerDeployment, 'prepare');
-
-    log('==> app·worker commit 전 최종 readiness');
-    runAppPhase(appDeployment, 'verify');
-    runWorkerPhase(workerDeployment, 'verify');
-
-    log('==> app·worker 배포 commit');
-    runAppPhase(appDeployment, 'commit');
-    runWorkerPhase(workerDeployment, 'commit');
-    transactionCommitted = true;
-
-    log('==> app·worker 이전 배포 산출물 정리');
-    finalizeDeployments(appDeployment, workerDeployment);
-
-    log(`==> app, worker 배포 완료: ${releaseName}`);
+    preflight(connection);
+    const metadataFile = path.join(artifactDirectory, 'release-metadata.json');
+    log('==> 운영 앱과 Linux 클라이언트 검증·패키징');
+    run('bash', [path.join(SCRIPT_DIR, 'build-release.sh'), artifactDirectory, metadataFile]);
+    const release = readReleaseMetadata(metadataFile, artifactDirectory);
+    deployment = stageAppDeployment(connection, release.releaseArchive, release.releaseChecksum, release.releaseName);
+    attempted = true;
+    runAppPhase(deployment, 'prepare');
+    runAppPhase(deployment, 'verify');
+    runAppPhase(deployment, 'commit');
+    committed = true;
+    runAppPhase(deployment, 'finalize');
+    log(`==> 앱과 다운로드 클라이언트 게시 완료: ${release.releaseName}`);
   } catch (error) {
-    if (!transactionCommitted) {
-      const rollbackErrors = [];
-      if (workerAttempted && workerDeployment) {
-        try {
-          logError('==> worker 통합 롤백');
-          runWorkerPhase(workerDeployment, 'rollback');
-        } catch (rollbackError) {
-          rollbackErrors.push(`worker: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
-        }
-      }
-      if (appAttempted && appDeployment) {
-        try {
-          logError('==> app 통합 롤백');
-          runAppPhase(appDeployment, 'rollback');
-        } catch (rollbackError) {
-          rollbackErrors.push(`app: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
-        }
-      }
-      if (rollbackErrors.length > 0) {
-        const originalMessage = error instanceof Error ? error.message : String(error);
-        const exitCode = error instanceof DeployError ? error.exitCode : 1;
-        throw new DeployError(
-          `${originalMessage}\n통합 롤백 실패:\n${rollbackErrors.join('\n')}`,
-          exitCode,
-        );
-      }
+    if (attempted && !committed && deployment) {
+      try { runAppPhase(deployment, 'rollback'); }
+      catch (rollbackError) { throw new DeployError(`${error.message}\n앱·DB 복원 실패: ${rollbackError.message}`); }
     }
     throw error;
   } finally {
-    for (const deployment of [workerDeployment, appDeployment]) {
-      if (!deployment) continue;
-      try {
-        removeRemoteDirectory(deployment.connection, deployment.remoteDirectory);
-      } catch (cleanupError) {
-        const message = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
-        logError(`${deployment.connection.component} 원격 임시 디렉터리 정리 실패: ${message}`);
-      }
+    if (deployment) {
+      try { removeRemoteDirectory(connection, deployment.remoteDirectory); }
+      catch (error) { logError(`배포 임시 파일 정리 실패: ${error.message}`); }
     }
     rmSync(artifactDirectory, { recursive: true, force: true });
   }

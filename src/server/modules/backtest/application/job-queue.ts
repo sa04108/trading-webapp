@@ -23,6 +23,7 @@ export type BacktestJobStatus =
 export type BacktestJobRow = typeof backtestJobs.$inferSelect;
 
 export interface EnqueueMetadata {
+  readonly estimatedBars?: number;
   readonly preparationJobId?: string | null;
   readonly wizardOwner?: { readonly userId: string; readonly context?: string; readonly requireMatch?: boolean };
   readonly cloneBatchId?: string | null;
@@ -42,7 +43,7 @@ export interface RemoteLeaseHeartbeat {
 
 export interface ExpiredRemoteLease {
   readonly jobId: string;
-  readonly status: 'QUEUED' | 'CANCELLED';
+  readonly status: 'QUEUED' | 'CANCELLED' | 'FAILED';
   readonly attempt: number;
 }
 
@@ -109,6 +110,7 @@ export class JobQueue {
         id: newId('bt'),
         preparationJobId,
         status: 'QUEUED',
+        estimatedBars: metadata.estimatedBars ?? (metadata.cloneSourceJobId ? this.getJob(metadata.cloneSourceJobId)?.estimatedBars : 0) ?? 0,
         requestJson: JSON.stringify(request),
         strategyId: request.strategyId,
         universeRuleJson: JSON.stringify(request.universeRule),
@@ -136,48 +138,6 @@ export class JobQueue {
     }).immediate();
   }
 
-  /** 원자적 작업 확보 — BEGIN IMMEDIATE (스펙 §10) */
-  claimNext(workerId: string, fallback?: {
-    readonly unavailableBeforeMs: number | null;
-    readonly maxRemoteAttempts: number;
-  }): BacktestJobRow | null {
-    const nowMs = this.clock.now();
-    const stmt = this.handle.sqlite.prepare(
-      `UPDATE backtest_jobs
-       SET status = 'STARTING', started_at_ms = ?, worker_id = ?,
-           pid = NULL, lease_token_hash = NULL, lease_expires_at_ms = NULL,
-           runner_version = NULL, error = NULL, completed_at_ms = NULL,
-           progress_bars = NULL, total_bars = NULL, progress_label = NULL
-       WHERE id = (
-         SELECT id FROM backtest_jobs
-         WHERE status = 'QUEUED'
-         ${fallback === undefined ? '' : `AND (
-           attempt >= @maxRemoteAttempts
-           OR (
-             created_at_ms <= @unavailableBeforeMs
-             AND NOT EXISTS (
-               SELECT 1 FROM backtest_jobs
-               WHERE worker_id LIKE 'remote:%'
-                 AND status IN ('STARTING', 'RUNNING', 'CANCELLING')
-                 AND lease_expires_at_ms >= @nowMs
-             )
-           )
-         )`}
-         ORDER BY created_at_ms ASC
-         LIMIT 1
-       )
-       RETURNING id`,
-    );
-    const claim = this.handle.sqlite.transaction(() => {
-      const row = (fallback === undefined
-        ? stmt.get(nowMs, workerId)
-        : stmt.get({ ...fallback, nowMs }, nowMs, workerId)) as { id: string } | undefined;
-      return row?.id ?? null;
-    });
-    const claimedId = claim.immediate();
-    return claimedId ? this.getJob(claimedId) : null;
-  }
-
   /** 원격 worker용 원자적 claim. attempt가 올라가므로 이전 lease의 늦은 응답은 무효다. */
   claimNextRemote(options: {
     readonly workerId: string;
@@ -185,6 +145,7 @@ export class JobQueue {
     readonly leaseExpiresAtMs: number;
     readonly runnerVersion: string;
     readonly maxAttempts: number;
+    readonly maxBars?: number;
   }): BacktestJobRow | null {
     const stmt = this.handle.sqlite.prepare(
       `UPDATE backtest_jobs
@@ -202,7 +163,7 @@ export class JobQueue {
            progress_label = NULL
        WHERE id = (
          SELECT id FROM backtest_jobs
-         WHERE status = 'QUEUED' AND attempt < ?
+         WHERE status = 'QUEUED' AND lease_failures < ? AND estimated_bars <= ?
          ORDER BY created_at_ms ASC
          LIMIT 1
        )
@@ -216,6 +177,7 @@ export class JobQueue {
         options.leaseExpiresAtMs,
         options.runnerVersion,
         options.maxAttempts,
+        options.maxBars ?? Number.MAX_SAFE_INTEGER,
       ) as { id: string } | undefined;
       return row?.id ?? null;
     });
@@ -370,17 +332,17 @@ export class JobQueue {
     return complete.immediate();
   }
 
-  /** 만료 lease는 대기열로 돌려 로컬 대체 실행도 허용하고, 취소 중인 작업만 종료한다. */
+  /** 만료된 계산 리스만 실패로 세고 재배정한다. 클라이언트 업데이트는 실패가 아니다. */
   recoverExpiredRemoteLeases(maxAttempts: number): ExpiredRemoteLease[] {
     const nowMs = this.clock.now();
     const expired = this.handle.sqlite.prepare(
-      `SELECT id, status, attempt
+      `SELECT id, status, attempt, lease_failures
        FROM backtest_jobs
        WHERE worker_id LIKE 'remote:%'
          AND status IN ('STARTING', 'RUNNING', 'CANCELLING')
          AND lease_expires_at_ms < ?
        ORDER BY created_at_ms ASC`,
-    ).all(nowMs) as Array<{ id: string; status: BacktestJobStatus; attempt: number }>;
+    ).all(nowMs) as Array<{ id: string; status: BacktestJobStatus; attempt: number; lease_failures: number }>;
     if (expired.length === 0) return [];
 
     const recover = this.handle.sqlite.transaction(() => {
@@ -388,10 +350,10 @@ export class JobQueue {
       for (const job of expired) {
         const status: ExpiredRemoteLease['status'] = job.status === 'CANCELLING'
           ? 'CANCELLED'
-          : 'QUEUED';
+          : job.lease_failures + 1 >= maxAttempts ? 'FAILED' : 'QUEUED';
         const result = this.handle.sqlite.prepare(
           `UPDATE backtest_jobs
-           SET status = ?,
+           SET status = ?, lease_failures = lease_failures + 1,
                worker_id = CASE WHEN ? = 'QUEUED' THEN NULL ELSE worker_id END,
                pid = NULL,
                lease_token_hash = NULL,
@@ -407,11 +369,8 @@ export class JobQueue {
           status,
           status,
           status,
-          status === 'QUEUED'
-            ? job.attempt >= maxAttempts
-              ? '원격 worker 재시도 한도에 도달하여 로컬 실행을 대기합니다.'
-              : `원격 worker lease가 만료되어 ${job.attempt + 1}번째 시도를 대기합니다.`
-            : null,
+          status === 'FAILED' ? '에이전트 재시도 한도에 도달했습니다.'
+            : status === 'QUEUED' ? `에이전트 lease가 만료되어 ${job.attempt + 1}번째 시도를 대기합니다.` : null,
           status === 'QUEUED' ? null : nowMs,
           job.id,
           job.attempt,
@@ -526,22 +485,6 @@ export class JobQueue {
       }
     }
     return recovered;
-  }
-
-  /** 로컬 실행 모드로 전환할 때 더는 갱신할 endpoint가 없는 원격 lease를 명시적으로 닫는다. */
-  interruptActiveRemoteLeases(): string[] {
-    const rows = this.handle.sqlite.prepare(
-      `UPDATE backtest_jobs
-       SET status = 'INTERRUPTED',
-           error = '서버가 로컬 실행 모드로 전환되어 원격 worker lease를 종료했습니다.',
-           completed_at_ms = ?,
-           lease_token_hash = NULL,
-           lease_expires_at_ms = NULL
-       WHERE worker_id LIKE 'remote:%'
-         AND status IN ('STARTING', 'RUNNING', 'CANCELLING')
-       RETURNING id`,
-    ).all(this.clock.now()) as Array<{ id: string }>;
-    return rows.map((row) => row.id);
   }
 
   deleteJob(jobId: string): boolean {

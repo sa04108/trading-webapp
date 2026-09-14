@@ -77,6 +77,7 @@ fi
       'typecheck',
       'test',
       'build',
+      'build:agent --prepared',
     ]);
     expect(fs.readFileSync(headCheckLog, 'utf8').trim().split('\n')).toHaveLength(2);
     expect(JSON.parse(fs.readFileSync(metadataFile, 'utf8'))).toEqual({

@@ -24,6 +24,8 @@ export function preparationStatusDescription(job: BacktestPreparationJob): strin
       return '데이터 준비 대기 중';
     case 'RUNNING':
       return PHASE_LABELS[job.phase];
+    case 'WAITING_DATA':
+      return '서버에서 필요한 데이터를 수집하는 중';
     case 'WAITING_DAILY_QUOTA':
       return `${quotaProvider(job)} 일일 호출 한도 해제 대기`;
     case 'COMPLETED':
@@ -92,9 +94,9 @@ export function PreparationProgress({ job, onCancel, onRestart }: PreparationPro
 
         {/* 준비 job 은 서버에 영속된다(Task 6) — 진행 중에 화면을 떠나도 잃는 것이
             없다는 사실을 알려야 사용자가 수집이 끝날 때까지 붙어 있지 않는다. */}
-        {job.status === 'QUEUED' || job.status === 'RUNNING' || job.status === 'WAITING_DAILY_QUOTA' ? (
+        {job.status === 'QUEUED' || job.status === 'RUNNING' || job.status === 'WAITING_DAILY_QUOTA' || job.status === 'WAITING_DATA' ? (
           <p className="text-xs text-muted-foreground">
-            준비는 서버에서 진행되므로 화면을 나가거나 브라우저를 닫아도 계속됩니다. 나중에
+            백그라운드 준비 작업은 화면을 나가거나 브라우저를 닫아도 계속됩니다. 나중에
             같은 조건으로 미리보기를 누르면 진행 상황을 다시 볼 수 있으며, 완료·실패 결과는 알림에서 확인할 수 있습니다.
           </p>
         ) : null}

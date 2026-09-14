@@ -113,6 +113,7 @@ export interface BacktestRouteDeps {
   readonly facts: Pick<FactRepository, 'getFacts'>;
   readonly dataRoot: string;
   readonly maxQueuedBacktests: number;
+  readonly maxBacktestBars?: () => number;
   readonly clock: Clock;
   readonly benchmarks: BenchmarkService;
   readonly seedCloneBatches: SeedCloneBatchService;
@@ -452,7 +453,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     codes: readonly string[],
     errors: string[],
     coverageCheck: (codes: readonly string[]) => string | null,
-  ): { universe: ConsumedVersionSnapshot; timeframe: '1d' } | null => {
+  ): { universe: ConsumedVersionSnapshot; timeframe: '1d'; estimatedBars: number } | null => {
     const consumed = '1d' as const;
 
     // 유니버스 전체가 미등록이면 여기서 먼저 끊는다(리뷰 finding, 2026-08-08).
@@ -490,15 +491,16 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       fromTsMs,
       toTsMs,
     );
-    if (estimated > MAX_BACKTEST_BARS) {
+    const maxBars = deps.maxBacktestBars?.() ?? MAX_BACKTEST_BARS;
+    if (estimated > maxBars) {
       errors.push(
         `예상 봉 수가 상한을 넘습니다 (추정 ${estimated.toLocaleString()}봉 > ` +
-          `${MAX_BACKTEST_BARS.toLocaleString()}봉). 기간이나 종목 수를 줄이세요.`,
+          `${maxBars.toLocaleString()}봉). 기간이나 종목 수를 줄이세요.`,
       );
       return null;
     }
 
-    return { universe, timeframe: consumed };
+    return { universe, timeframe: consumed, estimatedBars: estimated };
   };
 
   type ValidationResult =
@@ -506,6 +508,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
         readonly ok: true;
         readonly universe: ConsumedVersionSnapshot;
         readonly timeframe: '1d';
+        readonly estimatedBars: number;
         readonly provenancePin: ProvenancePin;
         readonly resolved: ResolvedUniverse;
         readonly warnings: readonly string[];
@@ -694,6 +697,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       ok: true,
       universe: resolvedConsumption.universe,
       timeframe: resolvedConsumption.timeframe,
+      estimatedBars: resolvedConsumption.estimatedBars,
       provenancePin,
       resolved,
       warnings,
@@ -979,7 +983,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
         return queue.enqueue(
           { ...body, benchmarkId, timeframe: validated.timeframe }, validated.resolved.schedule,
           validated.universe, validated.provenancePin, validated.warnings, benchmark,
-          { preparationJobId: prepared.preparationJobId },
+          { estimatedBars: validated.estimatedBars, preparationJobId: prepared.preparationJobId },
         );
       };
     },
@@ -1076,7 +1080,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       validated.provenancePin,
       validated.warnings,
       benchmark,
-      { preparationJobId: prepared.preparationJobId,
+      { estimatedBars: validated.estimatedBars, preparationJobId: prepared.preparationJobId,
         wizardOwner: { userId: request.authUser!.id, requireMatch: true } },
     );
     audit.record(request.authUser?.username ?? 'admin', 'backtest.created', {
@@ -1215,7 +1219,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       reusable?.provenancePin ?? validated.provenancePin,
       cloneWarnings,
       reusable?.benchmark ?? benchmark,
-      { cloneSourceJobId: id, preparationJobId: prepared.preparationJobId,
+      { estimatedBars: validated.estimatedBars, cloneSourceJobId: id, preparationJobId: prepared.preparationJobId,
         ...(reusable ? {} : { wizardOwner: { userId: request.authUser!.id, requireMatch: true } }) },
     );
     audit.record(request.authUser?.username ?? 'admin', 'backtest.cloned', {
@@ -1311,7 +1315,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       reusable.provenancePin,
       cloneWarnings,
       benchmark,
-      { cloneSourceJobId: id, preparationJobId: reusable.preview.preparationJobId,
+      { estimatedBars: validated.estimatedBars, cloneSourceJobId: id, preparationJobId: reusable.preview.preparationJobId,
         wizardOwner: { userId: request.authUser!.id, context: id } },
     );
     audit.record(request.authUser?.username ?? 'admin', 'backtest.cloned-configured', {

@@ -256,8 +256,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const jobId = (created.json().job as { id: string; status: string }).id;
     expect(created.json().job.status).toBe('QUEUED');
 
-    // 오케스트레이터 수동 tick → 자식 프로세스 실행
-    ctx.container.jobOrchestrator.tick();
+    // 에이전트가 연결되어 스냅샷을 받은 뒤 자식 프로세스를 실행한다.
+    await ctx.startAgent();
     await waitFor(() => {
       const job = ctx.container.jobQueue.getJob(jobId);
       return job !== null && ctx.container.jobQueue.isTerminal(job.status);
@@ -482,7 +482,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       recordedAtMs: ctx.container.clock.now(),
     }).run();
 
-    ctx.container.jobOrchestrator.tick();
+    await ctx.startAgent();
     await waitFor(() => {
       const job = ctx.container.jobQueue.getJob(jobId);
       return job !== null && ctx.container.jobQueue.isTerminal(job.status);
@@ -579,9 +579,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const first = queue.enqueue(buildRequest());
     const second = queue.enqueue(buildRequest());
 
-    const claimA = queue.claimNext('w1');
-    const claimB = queue.claimNext('w2');
-    const claimC = queue.claimNext('w3');
+    const claimA = queue.claimNextRemote({ workerId: 'remote:w1', leaseTokenHash: 'a'.repeat(64), leaseExpiresAtMs: Date.now() + 90_000, runnerVersion: 'test', maxAttempts: 3 });
+    const claimB = queue.claimNextRemote({ workerId: 'remote:w2', leaseTokenHash: 'a'.repeat(64), leaseExpiresAtMs: Date.now() + 90_000, runnerVersion: 'test', maxAttempts: 3 });
+    const claimC = queue.claimNextRemote({ workerId: 'remote:w3', leaseTokenHash: 'a'.repeat(64), leaseExpiresAtMs: Date.now() + 90_000, runnerVersion: 'test', maxAttempts: 3 });
 
     expect(claimA?.id).toBe(first.id);
     expect(claimB?.id).toBe(second.id);
@@ -610,7 +610,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       // IPC 리스너가 플래그를 세팅한다는 사실은 worker-cancellation.test.ts 가 증명한다.
       // 그 플래그가 실행 도중 실제로 관찰된다는 사실(D-042)은 engine.test.ts 의
       // runBacktestCancellable 취소 테스트가 증명한다.
-      ctx.container.jobOrchestrator.tick();
+      await ctx.startAgent();
+      await waitFor(() => ctx.container.jobQueue.getJob(jobId)?.status === 'STARTING', 30_000);
       const cancelled = await ctx.app.inject({
         method: 'POST',
         url: `/api/v1/backtests/${jobId}/cancel`,
@@ -684,7 +685,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
   it('never regresses a terminal status via late progress or status writes (C1)', () => {
     const queue = ctx.container.jobQueue;
     const job = queue.enqueue(buildRequest());
-    queue.claimNext('w1'); // QUEUED → STARTING
+    queue.claimNextRemote({ workerId: 'remote:w1', leaseTokenHash: 'a'.repeat(64), leaseExpiresAtMs: Date.now() + 90_000, runnerVersion: 'test', maxAttempts: 3 }); // QUEUED → STARTING
     queue.markRunning(job.id); // STARTING → RUNNING
     expect(queue.getJob(job.id)!.status).toBe('RUNNING');
 
@@ -702,7 +703,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
   it('does not let progress writes disturb CANCELLING (C1)', () => {
     const queue = ctx.container.jobQueue;
     const job = queue.enqueue(buildRequest());
-    queue.claimNext('w1');
+    queue.claimNextRemote({ workerId: 'remote:w1', leaseTokenHash: 'a'.repeat(64), leaseExpiresAtMs: Date.now() + 90_000, runnerVersion: 'test', maxAttempts: 3 });
     queue.markRunning(job.id);
     queue.setStatus(job.id, 'CANCELLING', {}, ['RUNNING', 'STARTING']);
 
@@ -724,7 +725,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(queue.getJob(job.id)!.error).toContain('복제');
   });
 
-  it('preserves live remote leases on remote restart and interrupts them on local mode switch', () => {
+  it('서버 재시작은 유효한 에이전트 리스를 보존한다', () => {
     const queue = ctx.container.jobQueue;
     const job = queue.enqueue(buildRequest());
     queue.claimNextRemote({
@@ -737,12 +738,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
 
     expect(queue.recoverInterrupted(() => false)).not.toContain(job.id);
     expect(queue.getJob(job.id)?.status).toBe('STARTING');
-    expect(queue.interruptActiveRemoteLeases()).toContain(job.id);
-    expect(queue.getJob(job.id)).toMatchObject({
-      status: 'INTERRUPTED',
-      leaseTokenHash: null,
-      leaseExpiresAtMs: null,
-    });
+
   });
 
   it('refuses to delete non-terminal jobs', async () => {
@@ -1046,7 +1042,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
         })),
     ).run();
 
-    ctx.container.jobOrchestrator.tick();
+    await ctx.startAgent();
     await waitFor(() => {
       const job = ctx.container.jobQueue.getJob(jobId);
       return job !== null && ctx.container.jobQueue.isTerminal(job.status);
@@ -1982,7 +1978,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
 
     expect(
-      ctx.container.jobQueue.setStatus(runningJob.id, 'CANCELLED', {}, ['RUNNING']),
+      ctx.container.jobQueue.setStatus(runningJob.id, 'CANCELLED', {}, ['CANCELLING']),
     ).toBe(true);
     ctx.container.seedCloneBatchService.onJobStatusChanged();
 

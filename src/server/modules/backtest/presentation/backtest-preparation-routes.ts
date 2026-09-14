@@ -10,7 +10,6 @@ import {
   type BacktestPreparationOrchestrator,
 } from '../application/backtest-preparation-orchestrator.js';
 import { PreparationReferenceError } from '../application/preparation-reference-service.js';
-import { PreparationExecutionBusyError } from '../application/backtest-preparation-execution.js';
 import type { FinancialFactAvailabilityService } from '../../facts/application/financial-fact-availability.js';
 import type { CandleCoverageService } from '../../market-data/application/candle-coverage-service.js';
 import type { SymbolMasterService } from '../../market-data/application/symbol-master-service.js';
@@ -106,9 +105,6 @@ export function registerBacktestPreparationRoutes(
       }
       if (error instanceof PreparationInputError) {
         return reply.code(400).send({ error: error.message });
-      }
-      if (error instanceof PreparationExecutionBusyError) {
-        return reply.code(503).send({ error: error.message });
       }
       throw error;
     }

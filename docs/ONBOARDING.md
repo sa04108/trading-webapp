@@ -106,7 +106,8 @@ src/server/modules/
 src/server/shared/        db(스키마·마이그레이션 러너·정리 작업), logger, 보안 헤더, ids
 src/shared/schemas/       웹·서버가 공유하는 Zod 스키마 (백테스트 요청 등)
 src/web/features/         화면 단위 (auth, backtests, dashboard, datasets, settings)
-src/workers/              backtest-child.ts + remote-backtest-supervisor.ts
+src/workers/              백테스트 계산·스냅샷 게시 자식
+src/agent/                Linux 클라이언트 설치·연결·데이터 캐시
 migrations/               Drizzle 마이그레이션 — 0000 하나뿐인 이유는 §9
 infra/, scripts/          app 노드 프로비저닝·배포·백업 (§10)
 tests/                    unit / integration / e2e / architecture
@@ -163,15 +164,11 @@ CSRF 는 Origin==Host 검사, 비밀값은 Pino redaction 목록으로 로그에
 
 ## 9. DB 와 마이그레이션
 
-- 스키마 정의: `src/server/shared/db/schema.ts` (Drizzle). 부팅 시 마이그레이션이
-  자동 적용된다.
-- 스키마를 바꾸면 `pnpm db:generate` 로 마이그레이션을 생성한다.
-- 마이그레이션 이력은 첫 운영 배포 이후 스쿼시하지 않고 새 파일을 추가한다 (D-015).
-  현재 제품 단계에서는 파괴적 변경도 허용하되 app 배포가 서비스 중지 후 DB snapshot을 만들고
-  코드·DB를 함께 롤백한다. expand-contract는 스키마와 디스크 사용량이 안정된 뒤 재검토한다
-  (D-010, D-063).
-- 로컬 DB 는 `./data/app.sqlite`. 꼬였으면 지우고 `pnpm cli admin:create` 부터
-  다시 하면 된다 (개발 데이터는 버려도 되는 것만 둔다).
+- 운영 스키마는 `operations-schema.ts`, 계산 데이터는 `data-schema.ts`다. `schema.ts`가 함께 export한다.
+- `pnpm db:generate`는 두 DB의 독립 migration을 생성한다. 기존 migration은 수정·스쿼시하지 않는다.
+- 로컬 기본 경로는 `./data/app.sqlite`와 `./data/app.data.sqlite`다. 두 파일은 동일 dataset ID여야 한다.
+- 기존 단일 DB는 쓰기를 중지하고 `pnpm cli db:prepare`로 분리한다. 원본 백업과 복구 journal을 남긴다.
+- 백업·복원은 두 파일과 해시 명세를 함께 다룬다. [DB 전환 절차](AGENT_OPERATIONS.md#db-마이그레이션과-복원)를 따른다.
 
 ## 10. 개발 시작하기
 
@@ -208,30 +205,17 @@ CSV 형식: `timestamp,open,high,low,close,volume` (ISO 8601 UTC 또는 epoch ms
 ## 11. 배포 개요 (요약 — 원문은 README 배포 절)
 
 ```bash
-./scripts/bootstrap-app.sh             # app 노드 1회 준비
-./scripts/bootstrap-worker.sh          # worker 노드 1회 준비
+./scripts/bootstrap-app.sh
 cp deploy.env.example deploy.env
-pnpm run deploy                       # app과 worker를 순서대로 통합 배포
-./scripts/backup.sh                    # SQLite·exports 백업
+pnpm run deploy
 ```
 
-- `deploy.env`는 app/worker별 SSH 호스트·사용자·키·포트·점프 호스트와 추가 옵션만 담으며,
-  두 호스트가 모두 필요하다.
-  runtime 비밀값은 원격 `app.env`·`worker.env`에만 둔다.
-- `deploy.mjs`는 로컬 OpenSSH로 app과 worker를 순차 준비하고 양쪽 readiness를 확인한다.
-  한쪽이라도 실패하면 worker, app 역순으로 양쪽을 롤백한다. 노드에는 상주 agent를 설치하지
-  않는다.
-- deploy-app.sh는 app 노드에서 실행되는 transaction이다. 재시작 직전 SQLite snapshot을
-  만들고 실패 시 코드·DB를 함께 롤백한다. 성공 뒤 과거 release와 snapshot은 남기지 않는다.
-- deploy-worker.sh는 worker 노드의 Docker image transaction이다. 양쪽 성공 확정 뒤 현재 image만,
-  rollback 성공 시 이전 image만 남긴다. rollback 검증 실패 시에는 양쪽을 보존한다.
-  `build-release.sh` archive를 image에 넣고 content checksum과 인증·SHA·protocol probe를
-  통과해야 전환한다 (D-061).
-- 독립 복원 스크립트는 제공하지 않는다. 백업 복구 절차와 격리 복구 검증은 Phase 7
-  disaster runbook 에서 함께 설계한다 (D-031).
-- 주의: `provision-app.sh` 는 **POSIX sh** 다 — bash 문법(배열, `[[ ]]`, pipefail) 금지.
-  `bootstrap-app.sh`/`deploy-app.sh`와 Worker 스크립트는 bash. `provision-worker.sh`와 container
-  entrypoint는 POSIX sh다. 셸 스크립트는 전부 LF (`.gitattributes` 강제).
+- `deploy.env`에는 앱 SSH 설정만 있으며 API 키는 서버 `app.env`에 둔다.
+- 배포는 앱과 같은 버전의 다운로드형 Linux 클라이언트를 게시한다.
+- 장치는 클라이언트를 다운로드해 일반 사용자 systemd 백그라운드 서비스로 설치한다.
+  Docker나 worker.env가 필요하지 않다. 연결·설치·복구는 [에이전트 운영](AGENT_OPERATIONS.md)을 참고한다.
+- 앱 배포는 서비스 쓰기를 중지하고 운영·계산 DB를 백업하며 실패 시 코드와 DB를 복원한다.
+- `provision-app.sh`는 POSIX sh, `bootstrap-app.sh`와 `deploy-app.sh`는 bash다. 셸 파일은 LF를 유지한다.
 
 ## 12. 작업 관례
 

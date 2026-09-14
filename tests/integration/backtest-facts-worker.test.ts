@@ -181,7 +181,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       expect(created.statusCode).toBe(201);
       const jobId = (created.json().job as { id: string }).id;
 
-      ctx.container.jobOrchestrator.tick();
+      await ctx.startAgent();
       await waitFor(() => {
         const job = ctx.container.jobQueue.getJob(jobId);
         return job !== null && ctx.container.jobQueue.isTerminal(job.status);
@@ -240,7 +240,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
         .set({ coveredYearsJson: JSON.stringify([2025]) })
         .where(eq(symbolFactsState.code, 'RICH'))
         .run();
-      ctx.container.jobOrchestrator.tick();
+      await ctx.startAgent();
       await waitFor(() => {
         const job = ctx.container.jobQueue.getJob(jobId);
         return job !== null && ctx.container.jobQueue.isTerminal(job.status);
@@ -301,7 +301,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       // 아니라 종목별 마지막 실행 봉 PIT 관문을 검증하게 한다.
       seedFinancialCoverage(ctx.container, ['CHEAP', 'RICH'], yearRange(2024, 2025));
 
-      ctx.container.jobOrchestrator.tick();
+      await ctx.startAgent();
       await waitFor(() => {
         const job = ctx.container.jobQueue.getJob(jobId);
         return job !== null && ctx.container.jobQueue.isTerminal(job.status);
@@ -362,7 +362,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       }]);
       seedFinancialCoverage(ctx.container, ['CHEAP', 'RICH'], yearRange(2024, 2025));
 
-      ctx.container.jobOrchestrator.tick();
+      await ctx.startAgent();
       await waitFor(() => {
         const job = ctx.container.jobQueue.getJob(queued.id);
         return job !== null && ctx.container.jobQueue.isTerminal(job.status);
@@ -427,7 +427,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       expect(created.statusCode).toBe(201);
       const jobId = (created.json().job as { id: string }).id;
 
-      ctx.container.jobOrchestrator.tick();
+      await ctx.startAgent();
       await waitFor(() => {
         const job = ctx.container.jobQueue.getJob(jobId);
         return job !== null && ctx.container.jobQueue.isTerminal(job.status);
@@ -620,7 +620,7 @@ describe('워커의 자본변동 팩트 배선 — 접수일이 기간 종료 �
       expect(created.statusCode).toBe(201);
       const jobId = (created.json().job as { id: string }).id;
 
-      ctx.container.jobOrchestrator.tick();
+      await ctx.startAgent();
       await waitFor(() => {
         const job = ctx.container.jobQueue.getJob(jobId);
         return job !== null && ctx.container.jobQueue.isTerminal(job.status);
@@ -797,7 +797,7 @@ describe('이익 가속·가격 확인 순위 워커 배선 — PIT 공시 경�
     expect(created.statusCode).toBe(201);
     const jobId = (created.json().job as { id: string }).id;
 
-    ctx.container.jobOrchestrator.tick();
+    await ctx.startAgent();
     await waitFor(() => {
       const job = ctx.container.jobQueue.getJob(jobId);
       return job !== null && ctx.container.jobQueue.isTerminal(job.status);
@@ -916,7 +916,7 @@ describe('저PER·고ROE 순위 워커 배선 — PIT 공시 경계 (Task 12)', 
     expect(created.statusCode).toBe(201);
     const jobId = (created.json().job as { id: string }).id;
 
-    ctx.container.jobOrchestrator.tick();
+    await ctx.startAgent();
     await waitFor(() => {
       const job = ctx.container.jobQueue.getJob(jobId);
       return job !== null && ctx.container.jobQueue.isTerminal(job.status);

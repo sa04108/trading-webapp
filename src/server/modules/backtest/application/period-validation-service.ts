@@ -1,4 +1,3 @@
-import { PreparationExecutionBusyError } from './backtest-preparation-execution.js';
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import {
   buildPeriodValidationPlan, periodValidationConfigSchema, selectValidationCandidate,
@@ -259,7 +258,6 @@ export class PeriodValidationService {
         await this.runGroup(experiment, group, training);
       }
     } catch (error) {
-      if (error instanceof PreparationExecutionBusyError) return;
       if (!this.samePhase(experiment)) return;
       this.deps.database.db.update(backtestValidations).set({
         status: 'CANCELLING', error: error instanceof Error ? error.message : String(error),
