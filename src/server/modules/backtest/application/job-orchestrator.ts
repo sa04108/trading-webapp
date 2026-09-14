@@ -14,7 +14,7 @@ export class JobOrchestrator {
   constructor(private readonly queue: JobQueue, private readonly audit: AuditLogService) {}
 
   start(): void {
-    for (const jobId of this.queue.recoverInterrupted(() => false)) {
+    for (const jobId of this.queue.recoverUnleasedJobs()) {
       this.events.emit('job', { jobId, kind: 'status' } satisfies JobEvent);
     }
   }

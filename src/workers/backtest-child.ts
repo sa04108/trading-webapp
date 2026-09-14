@@ -1,7 +1,7 @@
 /**
  * 백테스트 자식 프로세스 (스펙 §5):
- * 부모의 HTTP 이벤트 루프·메모리와 격리되어 입력 로드 → 엔진 실행 → 결과 저장을 수행한다.
- * 환경변수는 §5 화이트리스트만 받는다. 종료 전 최종 상태를 DB 에 직접 기록한다.
+ * 에이전트가 만든 계산 프로세스에서 입력 로드 → 엔진 실행 → 결과 파일 생성을 수행한다.
+ * 실행 인자는 에이전트가 전달하며, 종료 상태는 작업 전용 DB에 기록한다.
  */
 import { and, asc, desc, eq, gte, inArray, lt, lte, sql } from 'drizzle-orm';
 import { pino } from 'pino';
@@ -33,13 +33,11 @@ import {
   assertPinnedScheduleExecutionDates,
   assertSafePinnedScheduleIdentities,
   calculatePinnedScheduleHash,
-  UnsafeBacktestSymbolIdentityError,
 } from '../server/modules/backtest/application/backtest-symbol-identity.js';
 import {
   findRelevantCorporateActionGaps,
   readCorporateActionGapDetails,
 } from '../server/modules/backtest/application/backtest-corporate-action-gaps.js';
-import { MAX_BACKTEST_BARS } from '../server/modules/backtest/domain/bar-estimate.js';
 import { ENGINE_VERSION } from '../server/modules/backtest/domain/engine.js';
 import {
   getCostProfile,
@@ -63,7 +61,6 @@ import { SymbolMasterService } from '../server/modules/market-data/application/s
 import { StrategyRegistry } from '../server/modules/strategy/application/strategy-registry.js';
 import { strategyRequiresFinancialData } from '../server/modules/strategy/domain/strategy.js';
 import { strategySourceHash } from '../server/modules/strategy/application/strategy-source-hash.js';
-import { SqliteBacktestResultWriter } from '../server/modules/backtest/infrastructure/sqlite-backtest-result-writer.js';
 import { SqliteBacktestResultArtifactWriter } from '../server/modules/backtest/infrastructure/sqlite-backtest-result-artifact-writer.js';
 import { backtestRequestSchema, periodToTsRange } from '../shared/schemas/backtest-request.js';
 import type { ProvenancePin } from '../shared/schemas/provenance-pin.js';
@@ -103,14 +100,16 @@ async function main(): Promise<void> {
   let inputSize: { candleCount: number; factCount: number; symbolCount: number } | null = null;
   let outputSize: BacktestArtifactSize | null = null;
 
-  const jobId = process.env.BACKTEST_JOB_ID ?? process.argv[2];
+  const jobId = process.env.BACKTEST_JOB_ID;
   const databasePath = process.env.DATABASE_PATH;
-  if (!jobId || !databasePath) {
-    throw new Error('BACKTEST_JOB_ID / DATABASE_PATH 환경변수가 필요합니다');
+  const dataPath = process.env.DATA_SNAPSHOT_PATH;
+  const resultPath = process.env.BACKTEST_RESULT_PATH;
+  const maxBars = Number(process.env.WORKER_MAX_BARS);
+  if (!jobId || !databasePath || !dataPath || !resultPath || !Number.isSafeInteger(maxBars) || maxBars <= 0) {
+    throw new Error('에이전트가 전달한 작업·스냅샷·결과 경로와 워커 봉 한도가 필요합니다');
   }
 
-  const handle = openDatabase(databasePath, process.env.AGENT_DATA_PATH ? { dataPath: process.env.AGENT_DATA_PATH, dataReadonly: true } : {});
-  const maxBars = process.env.AGENT_MAX_BARS ? Number(process.env.AGENT_MAX_BARS) : MAX_BACKTEST_BARS;
+  const handle = openDatabase(databasePath, { dataPath, dataReadonly: true });
   const db = handle.db;
 
   const finish = (
@@ -755,55 +754,8 @@ async function main(): Promise<void> {
 
     // 재현성 메타데이터 (스펙 §9.5) — 해시 규칙은 strategySourceHash 주석 참고
     const sourceHash = strategySourceHash(strategy);
-    const resultPath = process.env.BACKTEST_RESULT_PATH;
     const resultCompletedAtMs = Date.now();
-    const assertCurrentExecutionIdentity = (): void => {
-      const current = db.select({
-        requestJson: backtestJobs.requestJson,
-        strategyId: backtestJobs.strategyId,
-        universeRuleJson: backtestJobs.universeRuleJson,
-        universeScheduleJson: backtestJobs.universeScheduleJson,
-        provenancePinJson: backtestJobs.provenancePinJson,
-        universeJson: backtestJobs.universeJson,
-        universeHash: backtestJobs.universeHash,
-      }).from(backtestJobs).where(eq(backtestJobs.id, jobId)).get();
-      if (
-        current === undefined
-        || current.requestJson !== job.requestJson
-        || current.strategyId !== job.strategyId
-        || current.universeRuleJson !== job.universeRuleJson
-        || current.universeScheduleJson !== job.universeScheduleJson
-        || current.provenancePinJson !== job.provenancePinJson
-        || current.universeJson !== job.universeJson
-        || current.universeHash !== job.universeHash
-      ) {
-        throw new UnsafeBacktestSymbolIdentityError(
-          '결과 저장 전에 백테스트 실행 pin이 변경됐습니다.',
-        );
-      }
-      // 이 callback은 local writer의 IMMEDIATE transaction 안에서 실행된다.
-      // 따라서 row와 SCD를 확인한 뒤 결과/COMPLETED까지 다른 writer가 끼어들 수 없다.
-      assertSafePinnedScheduleIdentities(schedule, { symbolMaster });
-    };
-    const resultWriter = resultPath
-      ? new SqliteBacktestResultArtifactWriter(resultPath)
-      : new SqliteBacktestResultWriter(
-          handle,
-          assertCurrentExecutionIdentity,
-          () => db.update(backtestJobs)
-            .set({
-              status: 'COMPLETED',
-              error: null,
-              progressBars: artifact.processedBars,
-              totalBars: artifact.processedBars,
-              completedAtMs: resultCompletedAtMs,
-            })
-            .where(and(
-              eq(backtestJobs.id, jobId),
-              inArray(backtestJobs.status, ['STARTING', 'RUNNING']),
-            ))
-            .run().changes === 1,
-        );
+    const resultWriter = new SqliteBacktestResultArtifactWriter(resultPath);
     resultWriter.write({
       jobId,
       strategyId: strategy.id,
@@ -828,19 +780,12 @@ async function main(): Promise<void> {
     }, artifact);
     persistCompletedAtMs = Date.now();
 
-    // 로컬 DB writer는 결과와 COMPLETED를 같은 transaction에서 확정했다. 원격
-    // artifact 모드는 bundle 안의 상태를 부모 supervisor가 읽으므로 여기서 끝낸다.
+    // 작업 전용 DB의 완료 상태를 부모 에이전트가 읽어 결과 파일을 서버에 전달한다.
     outcome = 'COMPLETED';
-    if (resultPath) {
-      db.update(backtestJobs)
-        .set({
-          progressBars: artifact.processedBars,
-          totalBars: artifact.processedBars,
-        })
-        .where(eq(backtestJobs.id, jobId))
-        .run();
-      finish('COMPLETED');
-    }
+    db.update(backtestJobs)
+      .set({ progressBars: artifact.processedBars, totalBars: artifact.processedBars })
+      .where(eq(backtestJobs.id, jobId)).run();
+    finish('COMPLETED');
     activeStage = null;
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);

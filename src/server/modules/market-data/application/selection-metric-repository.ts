@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import type { AppDatabase } from '../../../shared/db/database.js';
 import {
   dailySelectionMetricCoverage,
@@ -32,46 +32,6 @@ const FULL_DATE_READ_THRESHOLD = 1_500;
 /** KRX 선정 지표의 bigint/text 변환을 이 저장소 경계에 가둔다. */
 export class SelectionMetricRepository {
   constructor(private readonly db: AppDatabase) {}
-
-  markCoveredDates(dates: readonly string[], syncedAtMs: number): void {
-    const uniqueDates = [...new Set(dates)];
-    for (let index = 0; index < uniqueDates.length; index += READ_BATCH_SIZE) {
-      this.db.insert(dailySelectionMetricCoverage)
-        .values(uniqueDates.slice(index, index + READ_BATCH_SIZE).map((date) => ({
-          date,
-          syncedAtMs,
-        })))
-        .onConflictDoUpdate({
-          target: dailySelectionMetricCoverage.date,
-          set: { syncedAtMs },
-        })
-        .run();
-    }
-  }
-
-  upsertMany(rows: readonly DailySelectionMetric[]): void {
-    // 5개 컬럼을 쓰므로 SQLite 999 bind 한도 아래의 190개씩 처리한다.
-    for (let index = 0; index < rows.length; index += 190) {
-      const values = rows.slice(index, index + 190).map((row) => ({
-        date: row.date,
-        standardCode: row.standardCode,
-        marketCapKrw: row.marketCapKrw?.toString() ?? null,
-        volume: row.volume,
-        tradingValueKrw: row.tradingValueKrw?.toString() ?? null,
-      }));
-      this.db.insert(dailySelectionMetrics)
-        .values(values)
-        .onConflictDoUpdate({
-          target: [dailySelectionMetrics.date, dailySelectionMetrics.standardCode],
-          set: {
-            marketCapKrw: sql`excluded.market_cap_krw`,
-            volume: sql`excluded.volume`,
-            tradingValueKrw: sql`excluded.trading_value_krw`,
-          },
-        })
-        .run();
-    }
-  }
 
   getAt(date: string, standardCodes: readonly string[]): ReadonlyMap<string, DailySelectionMetric> {
     const uniqueCodes = [...new Set(standardCodes)];

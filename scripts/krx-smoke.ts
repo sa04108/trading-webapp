@@ -396,7 +396,7 @@ function checkJoinIntegrity(
 async function checkCalendarEdges(results: CheckResult[], source: KrxHistoricalUniverseSource, nowMs: number): Promise<void> {
   const recentDate = publishedThroughDate(nowMs);
 
-  async function once(label: string, date: string): Promise<{ readonly rows: number; readonly error: string | null }> {
+  async function once(date: string): Promise<{ readonly rows: number; readonly error: string | null }> {
     try {
       const rows = await source.fetchDailyTrades('KOSPI', date);
       return { rows: rows.length, error: null };
@@ -405,9 +405,9 @@ async function checkCalendarEdges(results: CheckResult[], source: KrxHistoricalU
     }
   }
 
-  const holiday = await once('휴장일', KNOWN_HOLIDAY_DATE);
-  const old = await once('과거일', KRX_DATA_EPOCH);
-  const recent = await once('최근 공개일', recentDate);
+  const holiday = await once(KNOWN_HOLIDAY_DATE);
+  const old = await once(KRX_DATA_EPOCH);
+  const recent = await once(recentDate);
 
   console.log(`     휴장일 ${KNOWN_HOLIDAY_DATE}: ${holiday.error ?? `${holiday.rows}행`}`);
   console.log(`     과거일(공식 시작일) ${KRX_DATA_EPOCH}: ${old.error ?? `${old.rows}행`}`);

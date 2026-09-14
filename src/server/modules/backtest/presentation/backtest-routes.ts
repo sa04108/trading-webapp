@@ -96,7 +96,7 @@ export interface BacktestRouteDeps {
   readonly onValidationFinished?: (experiment: PeriodValidationDto) => void;
   readonly queue: JobQueue;
   readonly orchestrator: JobOrchestrator;
-  /** local child와 remote worker가 발행하는 모든 job 상태/진행 이벤트. */
+  /** 로컬·원격 에이전트의 임대 관리가 발행하는 작업 상태·진행 이벤트. */
   readonly jobEvents: readonly EventEmitter[];
   readonly results: ResultsService;
   readonly strategies: StrategyRegistry;
@@ -242,7 +242,7 @@ function parseStoredSchedule(job: BacktestJobRow): LegacyUniverseScheduleEntry[]
   }
 }
 
-/** 준비 job의 staged schedule을 기존 worker가 소비하는 pin 모양으로 좁힌다. */
+/** 준비 job의 staged schedule을 계산 worker가 소비하는 pin 모양으로 좁힌다. */
 function preparedPreviewToResolved(preview: BacktestUniversePreview): ResolvedUniverse {
   const schedule = preview.schedule.map((entry) => ({
     rebalanceDate: entry.rebalanceDate,

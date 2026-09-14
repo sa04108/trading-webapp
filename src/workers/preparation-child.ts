@@ -1,7 +1,7 @@
 import { openDatabase } from '../server/shared/db/database.js';
 import { backtestPreparationJobs } from '../server/shared/db/schema.js';
 import { AgentDataRequired, type AgentLease } from '../shared/agent-protocol.js';
-import { createAgentPreparation } from './preparation-runtime.js';
+import { createPreparationWorkerRuntime } from './preparation-runtime.js';
 
 process.once('message', (input: { lease: AgentLease; jobPath: string; dataPath: string }) => {
   void run(input).catch((error: unknown) => {
@@ -13,14 +13,14 @@ process.once('message', (input: { lease: AgentLease; jobPath: string; dataPath: 
 
 async function run(input: { lease: AgentLease; jobPath: string; dataPath: string }): Promise<void> {
   const database = openDatabase(input.jobPath, { dataPath: input.dataPath, dataReadonly: true });
-  let orchestrator: ReturnType<typeof createAgentPreparation> | undefined;
+  let orchestrator: ReturnType<typeof createPreparationWorkerRuntime> | undefined;
   try {
     database.db.insert(backtestPreparationJobs).values({
       id: input.lease.jobId, requestHash: String(input.lease.payload.requestHash),
       requestJson: String(input.lease.payload.requestJson), status: 'RUNNING', phase: 'MARKET_DATA',
       createdAtMs: Date.now(), updatedAtMs: Date.now(),
     }).onConflictDoUpdate({ target: backtestPreparationJobs.id, set: { status: 'RUNNING', cancelRequested: false } }).run();
-    orchestrator = createAgentPreparation(database, () => {
+    orchestrator = createPreparationWorkerRuntime(database, () => {
       const progress = orchestrator?.get(input.lease.jobId);
       if (progress) process.send?.({ type: 'PROGRESS', progress });
     });

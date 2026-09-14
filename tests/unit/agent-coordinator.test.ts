@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { RemoteResultArtifactRejectedError } from '../../src/server/modules/backtest/application/backtest-result-artifact.js';
+import { BacktestResultArtifactRejectedError } from '../../src/server/modules/backtest/application/backtest-result-artifact.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { WebSocket } from 'ws';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -88,7 +88,7 @@ describe('연결과 리스 수명 분리', () => {
     enqueue();
     const claim = ctx.container.agentCoordinator.backtests.claim(id, ctx.container.agentCoordinator.runnerVersion);
     if (claim.status !== 'CLAIMED') throw new Error('리스 배정 실패');
-    vi.spyOn(ctx.container.agentCoordinator.backtests, 'complete').mockRejectedValue(new RemoteResultArtifactRejectedError('invalid sqlite'));
+    vi.spyOn(ctx.container.agentCoordinator.backtests, 'complete').mockRejectedValue(new BacktestResultArtifactRejectedError('invalid sqlite'));
     const payload = Buffer.from('invalid');
     const response = await ctx.app.inject({ method: 'POST', url: '/api/agents/jobs/job-one/result',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/vnd.quant-platform.backtest-result+sqlite',
@@ -134,7 +134,7 @@ describe('이벤트로 대기 큐 재배정', () => {
     await vi.waitFor(() => expect(ctx.container.agentCoordinator.maxBacktestBars()).toBe(8_000_000));
     const job = ctx.container.jobQueue.enqueue(request);
     await vi.waitFor(() => expect(peer.job()?.jobId).toBe(job.id));
-    expect(ctx.container.jobQueue.getJob(job.id)).toMatchObject({ attempt: 1, workerId: `remote:${id}` });
+    expect(ctx.container.jobQueue.getJob(job.id)).toMatchObject({ attempt: 1, agentId: id });
   });
 
   it('슬롯이 없어 대기하던 작업은 capacity가 생기면 주기 타이머 없이 배정한다', async () => {

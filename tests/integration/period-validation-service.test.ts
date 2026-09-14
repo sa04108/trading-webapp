@@ -1,3 +1,4 @@
+import { readBacktestJobs } from '../helpers/backtest-jobs.js';
 import Fastify from 'fastify';
 import { registerPeriodValidationRoutes } from '../../src/server/modules/backtest/presentation/period-validation-routes.js';
 import fs from 'node:fs';
@@ -153,7 +154,7 @@ describe('독립 구간 검증 실행', () => {
     service = new PeriodValidationService(deps);
     await Promise.all([service.pump(), service.pump(), service.pump()]);
     expect(service.get(experiment.id)!.trials.map((trial) => trial.jobId)).toEqual(ids);
-    expect(queue.listJobs()).toHaveLength(3);
+    expect(readBacktestJobs(database)).toHaveLength(3);
   });
 
   it('서로 다른 복구 인스턴스가 동시에 제출해도 같은 후보는 한 번만 생성한다', async () => {
@@ -163,7 +164,7 @@ describe('독립 구간 검증 실행', () => {
     try {
       await Promise.all([service.pump(), other.pump()]);
       expect(service.get(experiment.id)!.trials.filter((trial) => trial.jobId)).toHaveLength(1);
-      expect(queue.listJobs()).toHaveLength(2);
+      expect(readBacktestJobs(database)).toHaveLength(2);
     } finally { await other.stop(); }
   });
 
@@ -234,7 +235,7 @@ describe('독립 구간 검증 실행', () => {
     await pumping;
     await service.pump();
     expect(service.get(experiment.id)!.status).toBe('CANCELLED');
-    expect(queue.listJobs()).toHaveLength(1);
+    expect(readBacktestJobs(database)).toHaveLength(1);
   });
 
   it('HTTP 인증·미리보기·생성·취소·삭제 경로가 같은 실험 계약을 따른다', async () => {

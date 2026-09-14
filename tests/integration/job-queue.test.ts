@@ -1,3 +1,4 @@
+import { readBacktestJobs } from '../helpers/backtest-jobs.js';
 import { and, desc, eq, gte, lte } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ENGINE_VERSION } from '../../src/server/modules/backtest/domain/engine.js';
@@ -579,9 +580,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const first = queue.enqueue(buildRequest());
     const second = queue.enqueue(buildRequest());
 
-    const claimA = queue.claimNextRemote({ workerId: 'remote:w1', leaseTokenHash: 'a'.repeat(64), leaseExpiresAtMs: Date.now() + 90_000, runnerVersion: 'test', maxAttempts: 3 });
-    const claimB = queue.claimNextRemote({ workerId: 'remote:w2', leaseTokenHash: 'a'.repeat(64), leaseExpiresAtMs: Date.now() + 90_000, runnerVersion: 'test', maxAttempts: 3 });
-    const claimC = queue.claimNextRemote({ workerId: 'remote:w3', leaseTokenHash: 'a'.repeat(64), leaseExpiresAtMs: Date.now() + 90_000, runnerVersion: 'test', maxAttempts: 3 });
+    const claimA = queue.claimNextLease({ agentId: 'agent-1', leaseTokenHash: 'a'.repeat(64), leaseExpiresAtMs: Date.now() + 90_000, runnerVersion: 'test', maxAttempts: 3 });
+    const claimB = queue.claimNextLease({ agentId: 'agent-2', leaseTokenHash: 'a'.repeat(64), leaseExpiresAtMs: Date.now() + 90_000, runnerVersion: 'test', maxAttempts: 3 });
+    const claimC = queue.claimNextLease({ agentId: 'agent-3', leaseTokenHash: 'a'.repeat(64), leaseExpiresAtMs: Date.now() + 90_000, runnerVersion: 'test', maxAttempts: 3 });
 
     expect(claimA?.id).toBe(first.id);
     expect(claimB?.id).toBe(second.id);
@@ -685,14 +686,14 @@ describe('backtest job queue (스펙 §10, §14)', () => {
   it('never regresses a terminal status via late progress or status writes (C1)', () => {
     const queue = ctx.container.jobQueue;
     const job = queue.enqueue(buildRequest());
-    queue.claimNextRemote({ workerId: 'remote:w1', leaseTokenHash: 'a'.repeat(64), leaseExpiresAtMs: Date.now() + 90_000, runnerVersion: 'test', maxAttempts: 3 }); // QUEUED → STARTING
-    queue.markRunning(job.id); // STARTING → RUNNING
+    queue.claimNextLease({ agentId: 'agent-1', leaseTokenHash: 'a'.repeat(64), leaseExpiresAtMs: Date.now() + 90_000, runnerVersion: 'test', maxAttempts: 3 }); // QUEUED → STARTING
+    queue.heartbeatLease({ jobId: job.id, attempt: 1, leaseTokenHash: 'a'.repeat(64), nowMs: Date.now(), nextLeaseExpiresAtMs: Date.now() + 90_000, processedBars: null, totalBars: null, progressLabel: null }); // STARTING → RUNNING
     expect(queue.getJob(job.id)!.status).toBe('RUNNING');
 
     // 자식이 COMPLETED 를 기록한 뒤 늦게 도착한 진행률·전이 시도들
     queue.setStatus(job.id, 'COMPLETED');
-    queue.updateProgress(job.id, 999, 999, 'late');
-    queue.markRunning(job.id);
+    queue.heartbeatLease({ jobId: job.id, attempt: 1, leaseTokenHash: 'a'.repeat(64), nowMs: Date.now(), nextLeaseExpiresAtMs: Date.now() + 90_000, processedBars: 999, totalBars: 999, progressLabel: 'late' });
+    queue.heartbeatLease({ jobId: job.id, attempt: 1, leaseTokenHash: 'a'.repeat(64), nowMs: Date.now(), nextLeaseExpiresAtMs: Date.now() + 90_000, processedBars: null, totalBars: null, progressLabel: null });
     expect(queue.setStatus(job.id, 'FAILED', {}, ['STARTING', 'RUNNING'])).toBe(false);
 
     const final = queue.getJob(job.id)!;
@@ -703,12 +704,12 @@ describe('backtest job queue (스펙 §10, §14)', () => {
   it('does not let progress writes disturb CANCELLING (C1)', () => {
     const queue = ctx.container.jobQueue;
     const job = queue.enqueue(buildRequest());
-    queue.claimNextRemote({ workerId: 'remote:w1', leaseTokenHash: 'a'.repeat(64), leaseExpiresAtMs: Date.now() + 90_000, runnerVersion: 'test', maxAttempts: 3 });
-    queue.markRunning(job.id);
+    queue.claimNextLease({ agentId: 'agent-1', leaseTokenHash: 'a'.repeat(64), leaseExpiresAtMs: Date.now() + 90_000, runnerVersion: 'test', maxAttempts: 3 });
+    queue.heartbeatLease({ jobId: job.id, attempt: 1, leaseTokenHash: 'a'.repeat(64), nowMs: Date.now(), nextLeaseExpiresAtMs: Date.now() + 90_000, processedBars: null, totalBars: null, progressLabel: null });
     queue.setStatus(job.id, 'CANCELLING', {}, ['RUNNING', 'STARTING']);
 
-    queue.updateProgress(job.id, 50, 100, 'mid'); // 취소 중 진행률은 상태를 못 바꾼다
-    queue.markRunning(job.id);
+    queue.heartbeatLease({ jobId: job.id, attempt: 1, leaseTokenHash: 'a'.repeat(64), nowMs: Date.now(), nextLeaseExpiresAtMs: Date.now() + 90_000, processedBars: 50, totalBars: 100, progressLabel: 'mid' }); // 취소 중 진행률은 상태를 못 바꾼다
+    queue.heartbeatLease({ jobId: job.id, attempt: 1, leaseTokenHash: 'a'.repeat(64), nowMs: Date.now(), nextLeaseExpiresAtMs: Date.now() + 90_000, processedBars: null, totalBars: null, progressLabel: null });
     expect(queue.getJob(job.id)!.status).toBe('CANCELLING');
     // 진행률 자체는 활성 상태라 반영된다
     expect(queue.getJob(job.id)!.progressBars).toBe(50);
@@ -719,7 +720,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const job = queue.enqueue(buildRequest());
     queue.setStatus(job.id, 'RUNNING', { pid: 999_999_999 });
 
-    const recovered = queue.recoverInterrupted(() => false);
+    const recovered = queue.recoverUnleasedJobs();
     expect(recovered).toContain(job.id);
     expect(queue.getJob(job.id)!.status).toBe('INTERRUPTED');
     expect(queue.getJob(job.id)!.error).toContain('복제');
@@ -728,15 +729,15 @@ describe('backtest job queue (스펙 §10, §14)', () => {
   it('서버 재시작은 유효한 에이전트 리스를 보존한다', () => {
     const queue = ctx.container.jobQueue;
     const job = queue.enqueue(buildRequest());
-    queue.claimNextRemote({
-      workerId: 'remote:worker-a',
+    queue.claimNextLease({
+      agentId: 'agent-a',
       leaseTokenHash: 'a'.repeat(64),
       leaseExpiresAtMs: Date.now() + 60_000,
       runnerVersion: 'release-a',
       maxAttempts: 3,
     });
 
-    expect(queue.recoverInterrupted(() => false)).not.toContain(job.id);
+    expect(queue.recoverUnleasedJobs()).not.toContain(job.id);
     expect(queue.getJob(job.id)?.status).toBe('STARTING');
 
   });
@@ -902,7 +903,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       recordedAtMs: ctx.container.clock.now(),
     }).run();
 
-    const beforeJobs = ctx.container.jobQueue.listJobs(500, 0).length;
+    const beforeJobs = readBacktestJobs(ctx.container.database).length;
     const beforeBatches = ctx.container.seedCloneBatchService.list().length;
     const attempts = [
       await ctx.app.inject({
@@ -935,7 +936,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       expect((response.json() as { error: string }).error)
         .toMatch(/단축코드 005930.*여러 표준코드/);
     }
-    expect(ctx.container.jobQueue.listJobs(500, 0)).toHaveLength(beforeJobs);
+    expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobs);
     expect(ctx.container.seedCloneBatchService.list()).toHaveLength(beforeBatches);
 
     const draft = await ctx.app.inject({
@@ -1136,7 +1137,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
         failureMessage: null,
       });
     }
-    const beforeJobs = ctx.container.jobQueue.listJobs(500, 0).length;
+    const beforeJobs = readBacktestJobs(ctx.container.database).length;
     const beforeBatches = ctx.container.seedCloneBatchService.list().length;
     const url = route === 'new'
       ? '/api/v1/backtests'
@@ -1158,7 +1159,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(rejected.statusCode).toBe(409);
     expect((rejected.json() as { error: string }).error).toBe('PREPARATION_REQUIRED');
     expect((rejected.json() as { message: string }).message).toMatch(/coverage.*2025~2026년.*005930/);
-    expect(ctx.container.jobQueue.listJobs(500, 0)).toHaveLength(beforeJobs);
+    expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobs);
     expect(ctx.container.seedCloneBatchService.list()).toHaveLength(beforeBatches);
   });
 
@@ -1237,7 +1238,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       return rows;
     });
 
-    const beforeJobs = ctx.container.jobQueue.listJobs(500, 0).length;
+    const beforeJobs = readBacktestJobs(ctx.container.database).length;
     const beforeBatches = ctx.container.seedCloneBatchService.list().length;
     const url = route === 'new'
       ? '/api/v1/backtests'
@@ -1260,7 +1261,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(rejected.statusCode).toBe(409);
     expect(rejected.json()).toMatchObject({ error: 'PREPARATION_REQUIRED' });
     expect((rejected.json() as { message: string }).message).toContain('005930');
-    expect(ctx.container.jobQueue.listJobs(500, 0)).toHaveLength(beforeJobs);
+    expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobs);
     expect(ctx.container.seedCloneBatchService.list()).toHaveLength(beforeBatches);
   });
 
@@ -1646,7 +1647,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const before = ctx.container.seedCloneBatchService.get(batchId)!;
     expect(before.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
     const child = before.items.find(({ item }) => item.state === 'DISPATCHED')!.job!;
-    const beforeJobCount = ctx.container.jobQueue.listJobs(500, 0).length;
+    const beforeJobCount = readBacktestJobs(ctx.container.database).length;
 
     ctx.container.database.db.insert(symbolMasterVersions).values({
       standardCode: 'KR7999999999',
@@ -1668,7 +1669,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(failed.batch.status).toBe('FAILED');
     expect(failed.batch.error).toMatch(/단축코드 005930.*여러 표준코드/);
     expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
-    expect(ctx.container.jobQueue.listJobs(500, 0)).toHaveLength(beforeJobCount);
+    expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobCount);
   });
 
   it('난수 복제 대기 중 기간 coverage가 사라지면 다음 자식 승격 전에 묶음을 실패시킨다', async () => {
@@ -1693,7 +1694,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const before = ctx.container.seedCloneBatchService.get(batchId)!;
     expect(before.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
     const child = before.items.find(({ item }) => item.state === 'DISPATCHED')!.job!;
-    const beforeJobCount = ctx.container.jobQueue.listJobs(500, 0).length;
+    const beforeJobCount = readBacktestJobs(ctx.container.database).length;
 
     ctx.container.database.db.delete(symbolMasterCoverage).run();
     ctx.container.database.db.insert(symbolMasterCoverage).values(
@@ -1712,7 +1713,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(failed.batch.status).toBe('FAILED');
     expect(failed.batch.error).toContain('기간 전체');
     expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
-    expect(ctx.container.jobQueue.listJobs(500, 0)).toHaveLength(beforeJobCount);
+    expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobCount);
   });
 
   it('재무 전략 난수 복제 대기 중 필수 연도 coverage가 사라지면 추가 승격을 막는다', async () => {
@@ -1742,7 +1743,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const before = ctx.container.seedCloneBatchService.get(batchId)!;
     expect(before.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
     const child = before.items.find(({ item }) => item.state === 'DISPATCHED')!.job!;
-    const beforeJobCount = ctx.container.jobQueue.listJobs(500, 0).length;
+    const beforeJobCount = readBacktestJobs(ctx.container.database).length;
 
     ctx.container.database.db.update(symbolFactsState)
       .set({ coveredYearsJson: JSON.stringify([2026]) })
@@ -1755,7 +1756,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(failed.batch.status).toBe('FAILED');
     expect(failed.batch.error).toMatch(/coverage.*2025~2026년.*005930/);
     expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
-    expect(ctx.container.jobQueue.listJobs(500, 0)).toHaveLength(beforeJobCount);
+    expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobCount);
   });
 
   it('난수 복제 대기 중 기간 일봉이 사라지면 다음 자식 승격 전에 묶음을 실패시킨다', async () => {
@@ -1797,7 +1798,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const before = ctx.container.seedCloneBatchService.get(batchId)!;
     expect(before.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
     const child = before.items.find(({ item }) => item.state === 'DISPATCHED')!.job!;
-    const beforeJobCount = ctx.container.jobQueue.listJobs(500, 0).length;
+    const beforeJobCount = readBacktestJobs(ctx.container.database).length;
 
     ctx.container.database.db
       .delete(krxDailyBars)
@@ -1815,7 +1816,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(failed.batch.status).toBe('FAILED');
     expect(failed.batch.error).toMatch(/000660.*일봉|일봉.*000660/);
     expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
-    expect(ctx.container.jobQueue.listJobs(500, 0)).toHaveLength(beforeJobCount);
+    expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobCount);
   });
 
   it('재설정 복제는 검토에서 동기화한 벤치마크로 불완전한 원본 pin을 보완한다', async () => {
@@ -1896,7 +1897,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const batchId = response.json().batch.id as string;
     const before = ctx.container.seedCloneBatchService.get(batchId)!;
     const child = before.items.find(({ item }) => item.state === 'DISPATCHED')!.job!;
-    const beforeJobCount = ctx.container.jobQueue.listJobs(500, 0).length;
+    const beforeJobCount = readBacktestJobs(ctx.container.database).length;
 
     ctx.container.database.db.delete(facts)
       .where(eq(facts.key, '005930'))
@@ -1911,7 +1912,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(failed.batch.status).toBe('FAILED');
     expect(failed.batch.error).toMatch(/준비 완료 후.*PIT 재무.*005930/);
     expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
-    expect(ctx.container.jobQueue.listJobs(500, 0)).toHaveLength(beforeJobCount);
+    expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobCount);
   });
 
   it('난수 시드 실험 취소는 새 승격을 막고 대기 중인 자식도 취소한다', async () => {
@@ -2353,7 +2354,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       expect((rejected.json() as { error: string }).error).toContain('대기');
 
       // 복제도 같은 상한을 받는다
-      const queued = small.container.jobQueue.listJobs(1, 0)[0]!;
+      const queued = readBacktestJobs(small.container.database)[0]!;
       const clonedOverLimit = await small.app.inject({
         method: 'POST',
         url: `/api/v1/backtests/${queued.id}/clone`,

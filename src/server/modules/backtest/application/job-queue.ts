@@ -31,7 +31,7 @@ export interface EnqueueMetadata {
   readonly cloneSourceJobId?: string | null;
 }
 
-export interface RemoteLeaseHeartbeat {
+export interface LeaseHeartbeat {
   readonly jobId: string;
   readonly attempt: number;
   readonly leaseTokenHash: string;
@@ -42,13 +42,13 @@ export interface RemoteLeaseHeartbeat {
   readonly progressLabel: string | null;
 }
 
-export interface ExpiredRemoteLease {
+export interface ExpiredLease {
   readonly jobId: string;
   readonly status: 'QUEUED' | 'CANCELLED' | 'FAILED';
   readonly attempt: number;
 }
 
-export type CompleteRemoteResult =
+export type CompleteLeasedResult =
   | 'ACCEPTED'
   | 'IDEMPOTENT'
   | 'IDENTITY_REJECTED'
@@ -142,9 +142,9 @@ export class JobQueue {
     return job;
   }
 
-  /** 원격 worker용 원자적 claim. attempt가 올라가므로 이전 lease의 늦은 응답은 무효다. */
-  claimNextRemote(options: {
-    readonly workerId: string;
+  /** 에이전트에 작업을 임대하는 원자적 claim. attempt가 올라가므로 이전 lease의 늦은 응답은 무효다. */
+  claimNextLease(options: {
+    readonly agentId: string;
     readonly leaseTokenHash: string;
     readonly leaseExpiresAtMs: number;
     readonly runnerVersion: string;
@@ -155,7 +155,7 @@ export class JobQueue {
       `UPDATE backtest_jobs
        SET status = 'STARTING',
            started_at_ms = COALESCE(started_at_ms, ?),
-           worker_id = ?,
+           agent_id = ?,
            pid = NULL,
            attempt = attempt + 1,
            lease_token_hash = ?,
@@ -176,7 +176,7 @@ export class JobQueue {
     const claim = this.handle.sqlite.transaction(() => {
       const row = stmt.get(
         this.clock.now(),
-        options.workerId,
+        options.agentId,
         options.leaseTokenHash,
         options.leaseExpiresAtMs,
         options.runnerVersion,
@@ -190,7 +190,7 @@ export class JobQueue {
   }
 
   /** heartbeat와 lease 연장을 한 조건부 UPDATE로 처리해 만료 직후의 부활을 막는다. */
-  heartbeatRemote(input: RemoteLeaseHeartbeat): BacktestJobStatus | null {
+  heartbeatLease(input: LeaseHeartbeat): BacktestJobStatus | null {
     const row = this.handle.sqlite.prepare(
       `UPDATE backtest_jobs
        SET status = CASE WHEN status = 'STARTING' THEN 'RUNNING' ELSE status END,
@@ -217,7 +217,7 @@ export class JobQueue {
     return row?.status ?? null;
   }
 
-  finishRemote(input: {
+  finishLease(input: {
     readonly jobId: string;
     readonly attempt: number;
     readonly leaseTokenHash: string;
@@ -250,7 +250,7 @@ export class JobQueue {
   }
 
   /** 결과 import와 COMPLETED 전이를 같은 SQLite transaction으로 묶는다. */
-  completeRemote(input: {
+  completeLeasedResult(input: {
     readonly jobId: string;
     readonly attempt: number;
     readonly leaseTokenHash: string;
@@ -261,8 +261,8 @@ export class JobQueue {
     /** 같은 IMMEDIATE transaction에서 결과 import 직전 재검증한다. 오류 문자열이면 FAILED. */
     readonly validate: (current: BacktestJobRow) => string | null;
     readonly persist: () => void;
-  }): CompleteRemoteResult {
-    const complete = this.handle.sqlite.transaction((): CompleteRemoteResult => {
+  }): CompleteLeasedResult {
+    const complete = this.handle.sqlite.transaction((): CompleteLeasedResult => {
       const current = this.getJob(input.jobId);
       if (
         current?.status === 'COMPLETED'
@@ -337,12 +337,12 @@ export class JobQueue {
   }
 
   /** 만료된 계산 리스만 실패로 세고 재배정한다. 클라이언트 업데이트는 실패가 아니다. */
-  recoverExpiredRemoteLeases(maxAttempts: number): ExpiredRemoteLease[] {
+  recoverExpiredLeases(maxAttempts: number): ExpiredLease[] {
     const nowMs = this.clock.now();
     const expired = this.handle.sqlite.prepare(
       `SELECT id, status, attempt, lease_failures
        FROM backtest_jobs
-       WHERE worker_id LIKE 'remote:%'
+       WHERE agent_id IS NOT NULL
          AND status IN ('STARTING', 'RUNNING', 'CANCELLING')
          AND lease_expires_at_ms < ?
        ORDER BY created_at_ms ASC`,
@@ -350,15 +350,15 @@ export class JobQueue {
     if (expired.length === 0) return [];
 
     const recover = this.handle.sqlite.transaction(() => {
-      const recovered: ExpiredRemoteLease[] = [];
+      const recovered: ExpiredLease[] = [];
       for (const job of expired) {
-        const status: ExpiredRemoteLease['status'] = job.status === 'CANCELLING'
+        const status: ExpiredLease['status'] = job.status === 'CANCELLING'
           ? 'CANCELLED'
           : job.lease_failures + 1 >= maxAttempts ? 'FAILED' : 'QUEUED';
         const result = this.handle.sqlite.prepare(
           `UPDATE backtest_jobs
            SET status = ?, lease_failures = lease_failures + 1,
-               worker_id = CASE WHEN ? = 'QUEUED' THEN NULL ELSE worker_id END,
+               agent_id = CASE WHEN ? = 'QUEUED' THEN NULL ELSE agent_id END,
                pid = NULL,
                lease_token_hash = NULL,
                lease_expires_at_ms = NULL,
@@ -389,16 +389,6 @@ export class JobQueue {
 
   getJob(jobId: string): BacktestJobRow | null {
     return this.db.select().from(backtestJobs).where(eq(backtestJobs.id, jobId)).get() ?? null;
-  }
-
-  listJobs(limit = 50, offset = 0): BacktestJobRow[] {
-    return this.db
-      .select()
-      .from(backtestJobs)
-      .orderBy(desc(backtestJobs.createdAtMs))
-      .limit(limit)
-      .offset(offset)
-      .all();
   }
 
   /**
@@ -444,49 +434,20 @@ export class JobQueue {
     return result.changes > 0;
   }
 
-  /** 첫 진행률 수신 시 1회 전이 — STARTING 이 아닐 때는 아무것도 하지 않는다 */
-  markRunning(jobId: string): void {
-    this.setStatus(jobId, 'RUNNING', {}, ['STARTING']);
-  }
-
-  /** 진행률만 갱신한다. 상태는 건드리지 않으며, 활성 상태가 아니면 무시된다. */
-  updateProgress(
-    jobId: string,
-    progressBars: number,
-    totalBars: number,
-    progressLabel: string | null,
-  ): void {
-    this.db
-      .update(backtestJobs)
-      .set({ progressBars, totalBars, progressLabel })
-      .where(and(eq(backtestJobs.id, jobId), inArray(backtestJobs.status, ACTIVE_STATUSES)))
-      .run();
-  }
-
-  /** 재시작 복구 (스펙 §10): 살아있는 프로세스가 없는 활성 작업을 INTERRUPTED 로 */
-  recoverInterrupted(isPidAlive: (pid: number) => boolean): string[] {
-    const active = this.db
-      .select()
-      .from(backtestJobs)
-      .where(inArray(backtestJobs.status, ACTIVE_STATUSES))
-      .all()
-      // 원격 job의 생존성은 OS pid가 아니라 lease로 판정한다. 서버 재시작 직후 pid=null을
-      // 이유로 INTERRUPTED 처리하면 살아 있는 worker의 heartbeat/result가 모두 stale이 된다.
-      .filter((job) => job.workerId?.startsWith('remote:') !== true);
-
+  /** 에이전트 임대가 없는 과거 활성 작업을 서버 재시작 시 중단 처리한다. */
+  recoverUnleasedJobs(): string[] {
+    const active = this.db.select({ id: backtestJobs.id }).from(backtestJobs)
+      .where(and(inArray(backtestJobs.status, ACTIVE_STATUSES), isNull(backtestJobs.agentId)))
+      .all();
     const recovered: string[] = [];
     for (const job of active) {
-      const alive = job.pid !== null && isPidAlive(job.pid);
-      if (!alive) {
-        // 죽은 자식이 종료 직전에 남긴 쓰기와 경합하지 않도록 여기서도 활성 상태일 때만 쓴다
-        const written = this.setStatus(
-          job.id,
-          'INTERRUPTED',
-          { error: '서버 재시작으로 작업이 중단되었습니다. 복제 후 재실행하세요.' },
-          ACTIVE_STATUSES,
-        );
-        if (written) recovered.push(job.id);
-      }
+      // 임대가 있는 작업은 에이전트의 heartbeat와 만료 시각으로 복구한다.
+      const written = this.setStatus(
+        job.id, 'INTERRUPTED',
+        { error: '서버 재시작으로 작업이 중단되었습니다. 복제 후 재실행하세요.' },
+        ACTIVE_STATUSES,
+      );
+      if (written) recovered.push(job.id);
     }
     return recovered;
   }

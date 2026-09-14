@@ -1,3 +1,4 @@
+import { readBacktestJobs } from '../helpers/backtest-jobs.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
@@ -127,6 +128,6 @@ describe('seed clone preparation ownership', () => {
     expect(() => seedBatchService.create(source.id, 2, snapshot('missing-preparation')))
       .toThrow();
     expect(seedBatchService.list()).toEqual([]);
-    expect(ctx.container.jobQueue.listJobs(100, 0)).toHaveLength(1);
+    expect(readBacktestJobs(ctx.container.database)).toHaveLength(1);
   });
 });

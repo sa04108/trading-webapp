@@ -3,8 +3,9 @@ import os from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readMigrationFiles } from 'drizzle-orm/migrator';
 import { openDatabase } from '../../src/server/shared/db/database.js';
-import { dataDatabasePath, datasetIdentity } from '../../src/server/shared/db/database-layout.js';
+import { dataDatabasePath, datasetIdentity, initializeDatabaseIdentity, migrateDatabaseRole } from '../../src/server/shared/db/database-layout.js';
 import { DATA_TABLE_NAMES, OPERATIONAL_TABLE_NAMES } from '../../src/server/shared/db/database-tables.js';
 import { migrateSplitDatabase } from '../../src/server/shared/db/split-database-migration.js';
 
@@ -26,8 +27,8 @@ function legacyDatabase(): void {
       INSERT INTO symbols (code, market, created_at_ms) VALUES ('005930', 'KR', 1);
       INSERT INTO facts (scope, key, field, period_key, as_of_ts_ms, value, unit)
         VALUES ('SYMBOL', '005930', 'NET_INCOME', '2025Q4', 1, 42, 'KRW');
-      INSERT INTO backtest_jobs (id, status, request_json, strategy_id, universe_rule_json, universe_schedule_json, created_at_ms)
-        VALUES ('job', 'COMPLETED', '{}', 'range-breakout', '{}', '[]', 1);
+      INSERT INTO backtest_jobs (id, status, request_json, strategy_id, universe_rule_json, universe_schedule_json, created_at_ms, worker_id)
+        VALUES ('job', 'COMPLETED', '{}', 'range-breakout', '{}', '[]', 1, 'remote:legacy-agent');
       INSERT INTO external_api_daily_usage (api, quota_scope, usage_date_kst, calls_used, updated_at_ms)
         VALUES ('DART', 'daily', '2026-09-14', 127, 1);
       INSERT INTO audit_logs (id, actor, event, created_at_ms) VALUES (99, 'user', 'retained', 1);
@@ -95,12 +96,15 @@ describe('기존 단일 DB 이전', () => {
     expect(result.status).toBe('MIGRATED');
     expect(result.backupPath).toBeDefined();
     const backup = new Database(result.backupPath!, { readonly: true });
-    try { expect(tables(backup)).toEqual(expect.arrayContaining(['users', 'symbols'])); } finally { backup.close(); }
+    try {
+      expect(tables(backup)).toEqual(expect.arrayContaining(['users', 'symbols']));
+      expect(backup.prepare('SELECT worker_id FROM backtest_jobs').get()).toEqual({ worker_id: 'remote:legacy-agent' });
+    } finally { backup.close(); }
     const handle = openDatabase(file);
     try {
       expect(handle.sqlite.prepare('SELECT password_hash FROM users').get()).toEqual({ password_hash: 'private-hash' });
       expect(handle.sqlite.prepare('SELECT value FROM facts').get()).toEqual({ value: 42 });
-      expect(handle.sqlite.prepare('SELECT id, status FROM backtest_jobs').get()).toEqual({ id: 'job', status: 'COMPLETED' });
+      expect(handle.sqlite.prepare('SELECT id, status, agent_id FROM backtest_jobs').get()).toEqual({ id: 'job', status: 'COMPLETED', agent_id: 'legacy-agent' });
       expect(handle.sqlite.prepare('SELECT calls_used FROM external_api_daily_usage').get()).toEqual({ calls_used: 127 });
       handle.sqlite.exec("INSERT INTO audit_logs (actor, event, created_at_ms) VALUES ('user', 'next', 1)");
       expect(handle.sqlite.prepare('SELECT id FROM audit_logs').get()).toEqual({ id: 100 });
@@ -192,5 +196,45 @@ describe('두 DB의 배포 백업과 복원', () => {
     await restoreDatabase(file, backup);
     expect(fs.existsSync(dataDatabasePath(file))).toBe(false);
     expect(migrateSplitDatabase(file).status).toBe('MIGRATED');
+  });
+});
+
+describe('기존 분리 DB의 에이전트 소유권 이행', () => {
+  it('활성 임대·완료 결과·소유자 없는 작업을 보존하고 반복 실행해도 ID를 다시 자르지 않는다', () => {
+    const data = new Database(dataDatabasePath(file));
+    migrateDatabaseRole(data, 'data', 'main');
+    const datasetId = initializeDatabaseIdentity(data, 'main');
+    data.close();
+    const previous = new Database(file);
+    previous.exec('CREATE TABLE __drizzle_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT NOT NULL, created_at NUMERIC NOT NULL)');
+    for (const migration of readMigrationFiles({ migrationsFolder: 'migrations/operations' }).slice(0, 4)) {
+      for (const sql of migration.sql) previous.exec(sql);
+      previous.prepare('INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)').run(migration.hash, migration.folderMillis);
+    }
+    previous.prepare('INSERT INTO operational_database_state (singleton, dataset_id) VALUES (1, ?)').run(datasetId);
+    const insert = previous.prepare(`INSERT INTO backtest_jobs
+      (id, status, request_json, strategy_id, universe_rule_json, universe_schedule_json, created_at_ms,
+       worker_id, attempt, lease_token_hash, lease_expires_at_ms, result_checksum, result_schema_version)
+      VALUES (?, ?, '{}', 'test', '{}', '[]', 1, ?, 2, 'token-hash', 9999999999999, 'checksum', 1)`);
+    insert.run('active', 'RUNNING', 'remote:agent-a');
+    insert.run('local', 'STARTING', 'remote:server-local');
+    insert.run('completed', 'COMPLETED', 'remote:remote:historical-id');
+    insert.run('queued', 'QUEUED', null);
+    previous.close();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect(migrateSplitDatabase(file).status).toBe('ALREADY_SPLIT');
+      const handle = openDatabase(file);
+      try {
+        expect(handle.sqlite.prepare('SELECT id, agent_id FROM backtest_jobs ORDER BY id').all()).toEqual([
+          { id: 'active', agent_id: 'agent-a' }, { id: 'completed', agent_id: 'remote:historical-id' },
+          { id: 'local', agent_id: 'server-local' }, { id: 'queued', agent_id: null },
+        ]);
+        expect(handle.sqlite.prepare("SELECT status, attempt, lease_token_hash, lease_expires_at_ms, result_checksum, result_schema_version FROM backtest_jobs WHERE id = 'active'").get()).toEqual({
+          status: 'RUNNING', attempt: 2, lease_token_hash: 'token-hash', lease_expires_at_ms: 9999999999999,
+          result_checksum: 'checksum', result_schema_version: 1,
+        });
+        expect((handle.sqlite.pragma('table_info(backtest_jobs)') as Array<{ name: string }>).map(({ name }) => name)).not.toContain('worker_id');
+      } finally { handle.close(); }
+    }
   });
 });

@@ -114,11 +114,6 @@ export async function saveBacktestWizardDraftStep<S extends BacktestWizardDraftS
   );
 }
 
-export async function clearBacktestWizardDraft(sourceJobId: string | null): Promise<void> {
-  await waitForPendingDraftSaves();
-  await api(`/backtests/wizard-draft${contextQuery(sourceJobId)}`, { method: 'DELETE' });
-}
-
 export async function clearAllBacktestWizardDrafts(): Promise<void> {
   await waitForPendingDraftSaves();
   await api('/backtests/wizard-draft?all=true', { method: 'DELETE' });

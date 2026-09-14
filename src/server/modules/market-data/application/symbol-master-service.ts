@@ -44,12 +44,7 @@ import {
 import { addCalendarDays, isWeekendDate } from '../domain/kst-date.js';
 import { isNonTradingRow } from '../domain/non-trading-day.js';
 import {
-  inferUniqueSymbolIdentities,
-  validateSymbolIdentityLifetime,
   type KnownSymbolIdentityVersion,
-  type SymbolIdentityInferenceResult,
-  type SymbolIdentitySelection,
-  type SymbolIdentityValidationResult,
 } from '../domain/symbol-identity-lifetime.js';
 import type {
   KrxDailyTradeRow,
@@ -830,43 +825,10 @@ export class SymbolMasterService {
   }
 
   /**
-   * 선택된 (단축코드, 표준코드)를 알려진 SCD 전체 생애와 대조한다.
-   *
-   * 단축코드와 표준코드 양쪽으로 연관 행을 batch 조회한다. 어느 한쪽만 조회하면
-   * 단축코드 재사용 또는 표준코드의 단축코드 변경 중 한 방향을 놓치므로 둘 다 읽고,
-   * 겹쳐 읽은 행은 id로 제거한 뒤 공통 도메인 validator에 넘긴다.
-   */
-  validateIdentityLifetime(
-    selections: readonly SymbolIdentitySelection[],
-  ): SymbolIdentityValidationResult {
-    if (selections.length === 0) return { safe: true, conflicts: [] };
-    const snapshot = this.readIdentitySnapshot(
-      selections.map((selection) => selection.shortCode),
-      selections.map((selection) => selection.standardCode),
-      false,
-    );
-    return validateSymbolIdentityLifetime(selections, snapshot.versions);
-  }
-
-  /**
-   * 표준코드가 없는 legacy schedule의 단축코드를 전체 SCD 생애에서 보수적으로 추론한다.
-   * short→standard를 먼저 읽은 뒤, 발견한 모든 standard의 전체 버전을 다시 읽어
-   * 반대 방향도 1:1임을 확인한다. unknown/ambiguous 코드는 identity를 돌려주지 않는다.
-   */
-  inferUniqueLifetimeIdentities(
-    shortCodes: readonly string[],
-  ): SymbolIdentityInferenceResult {
-    if (shortCodes.length === 0) return { safe: true, identities: [], conflicts: [] };
-    const requested = [...new Set(shortCodes)];
-    const snapshot = this.readIdentitySnapshot(requested, [], false);
-    return inferUniqueSymbolIdentities(requested, snapshot.versions);
-  }
-
-  /**
    * SCD 양방향 이력과 현재 등록 identity를 하나의 SQLite read snapshot으로 읽는다.
    * legacy short→standard→short 추론, modern pair 검증, 등록 owner 확인이 서로 다른
    * commit을 섞으면 순간적으로 false-safe가 될 수 있으므로 모든 batch SELECT를 한
-   * transaction에 둔다. includeRegistrations=false는 resolver의 후보 조기 검사용이다.
+   * transaction에 둔다. 등록 행 포함 여부는 호출 경계에서 지정한다.
    */
   readIdentitySnapshot(
     shortCodes: readonly string[],

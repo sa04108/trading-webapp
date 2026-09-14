@@ -243,11 +243,11 @@ export class AgentClient {
       finally { database.close(); }
     }
     const ts = import.meta.url.endsWith('.ts');
-    const target = lease.kind === 'PREPARATION' ? `./preparation-child.${ts ? 'ts' : 'js'}` : `../workers/backtest-child.${ts ? 'ts' : 'js'}`;
+    const target = lease.kind === 'PREPARATION' ? `../workers/preparation-child.${ts ? 'ts' : 'js'}` : `../workers/backtest-child.${ts ? 'ts' : 'js'}`;
     const child = fork(fileURLToPath(new URL(target, import.meta.url)), [], {
       execArgv: [`--max-old-space-size=${this.admission.heapMb}`, ...(ts ? ['--import', 'tsx'] : [])],
       env: { NODE_ENV: 'production', DATABASE_PATH: jobPath, BACKTEST_JOB_ID: lease.jobId,
-        AGENT_DATA_PATH: dataPath, AGENT_MAX_BARS: String(this.admission.maxBars), BACKTEST_RESULT_PATH: path.join(directory, 'result.sqlite') },
+        DATA_SNAPSHOT_PATH: dataPath, WORKER_MAX_BARS: String(this.admission.maxBars), BACKTEST_RESULT_PATH: path.join(directory, 'result.sqlite') },
       stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
     });
     if (child.pid) { try { os.setPriority(child.pid, 10); } catch { /* 우선순위 조정 불가 시 기본값을 사용한다. */ } }

@@ -7,10 +7,7 @@ import { backupDatabase, restoreDatabase } from './shared/db/database-backup.js'
  */
 import readline from 'node:readline';
 import { randomBytes } from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
 import { Writable } from 'node:stream';
-import { pathToFileURL } from 'node:url';
 import Database from 'better-sqlite3';
 import { loadConfig } from './bootstrap/config.js';
 import { createContainer } from './bootstrap/container.js';
@@ -217,7 +214,7 @@ interface TelemetryReportCliOptions {
   readonly sinceDays: number;
   readonly limit: number;
   readonly format: 'text' | 'json';
-  readonly workerBudgetBytes?: number;
+  readonly agentBudgetBytes?: number;
 }
 
 function parsePositiveNumber(flag: string, raw: string | undefined): number {
@@ -232,7 +229,7 @@ function parseTelemetryReportOptions(argv: readonly string[]): TelemetryReportCl
   let sinceDays = 30;
   let limit = 1_000;
   let format: 'text' | 'json' = 'text';
-  let workerBudgetBytes: number | undefined;
+  let agentBudgetBytes: number | undefined;
 
   for (let index = 0; index < argv.length; index += 2) {
     const flag = argv[index];
@@ -251,8 +248,8 @@ function parseTelemetryReportOptions(argv: readonly string[]): TelemetryReportCl
         }
         format = value;
         break;
-      case '--worker-budget-mib':
-        workerBudgetBytes = parsePositiveNumber(flag, value) * 1024 ** 2;
+      case '--agent-budget-mib':
+        agentBudgetBytes = parsePositiveNumber(flag, value) * 1024 ** 2;
         break;
       default:
         throw new Error(`지원하지 않는 옵션입니다: ${flag ?? '(없음)'}`);
@@ -264,7 +261,7 @@ function parseTelemetryReportOptions(argv: readonly string[]): TelemetryReportCl
     sinceDays,
     limit,
     format,
-    ...(workerBudgetBytes === undefined ? {} : { workerBudgetBytes }),
+    ...(agentBudgetBytes === undefined ? {} : { agentBudgetBytes }),
   };
 }
 
@@ -311,9 +308,9 @@ function backtestTelemetryReport(argv: readonly string[]): void {
       availableEventCount: available.count,
       sinceMs,
       untilMs,
-      ...(options.workerBudgetBytes === undefined
+      ...(options.agentBudgetBytes === undefined
         ? {}
-        : { workerBudgetBytes: options.workerBudgetBytes }),
+        : { agentBudgetBytes: options.agentBudgetBytes }),
     });
 
     if (options.format === 'json') {
@@ -343,7 +340,6 @@ function backtestTelemetryReport(argv: readonly string[]): void {
     console.log(
       `결과 payload: ${formatDistribution(report.distributions.output.estimatedPayloadBytes, formatBytes)}`,
     );
-    console.log('현 $7 Lightsail 동시성: 1 유지 (웹과 child가 같은 640MiB cgroup을 공유)');
 
     if (!report.readiness.readyForSizing) {
       console.log('용량 산정: 표본 부족');
@@ -352,9 +348,9 @@ function backtestTelemetryReport(argv: readonly string[]): void {
     }
     console.log(`worker 계획 메모리(p95 + 25%): ${formatBytes(report.sizing.plannedBytesPerWorker!)}`);
     if (report.sizing.memoryConcurrencyCap === null) {
-      console.log('전용 worker 메모리 상한: --worker-budget-mib를 지정하면 계산합니다.');
+      console.log('에이전트 메모리 예산별 동시성: --agent-budget-mib를 지정하면 계산합니다.');
     } else {
-      console.log(`전용 worker 메모리 기준 동시성 상한: ${report.sizing.memoryConcurrencyCap}`);
+      console.log(`에이전트 메모리 예산 기준 동시성 상한: ${report.sizing.memoryConcurrencyCap}`);
     }
     console.log(`15분 순차 seed shard 후보: ${report.sizing.sequentialSeedsPerShardCandidate}개`);
   } finally {
@@ -388,20 +384,6 @@ async function main(): Promise<void> {
     case 'backtest:telemetry-report':
       backtestTelemetryReport(process.argv.slice(3));
       break;
-    case 'universe:benchmark': {
-      // 이 명령은 운영 산출물에 포함하지 않는 수동 도구다. 정적 import를 두면
-      // tsconfig.build의 rootDir 밖 scripts/가 서버 배포물로 끌려 들어온다.
-      // pnpm cli로 소스 트리에서 명시적으로 실행할 때만 동적으로 읽는다.
-      const entry = path.resolve(process.cwd(), 'scripts', 'manual', 'universe-benchmark.ts');
-      if (!fs.existsSync(entry)) {
-        throw new Error(`수동 벤치마크 도구를 찾을 수 없습니다: ${entry}`);
-      }
-      const benchmarkModule = await import(pathToFileURL(entry).href) as {
-        runUniverseBenchmarkCli(argv: readonly string[]): Promise<void>;
-      };
-      await benchmarkModule.runUniverseBenchmarkCli(process.argv.slice(3));
-      break;
-    }
     default:
       // 재무·자본변동 수집은 더 이상 CLI 명령이 아니다 — 백테스트 준비(preparation)가
       // 필요한 구간만 자동으로 수집한다(스펙 2026-08-09, D-049). 여기서 옛 `facts:sync`
@@ -413,11 +395,12 @@ async function main(): Promise<void> {
       }
       console.log('사용법: cli <command>');
       console.log('  db:prepare     스키마·데이터 마이그레이션 적용 (서비스 기동 전에 실행)');
+      console.log('  db:backup      두 DB 백업 (<파일 경로>)');
+      console.log('  db:restore     두 DB 복원 (<백업 파일 경로>)');
       console.log('  admin:create   관리자 계정 생성');
       console.log('  totp:enroll    TOTP 2단계 인증 등록·재발급 (CLI 전용)');
       console.log('  krx:backfill-non-trading  이미 수집한 구간의 거래불가일 채우기 (--from <날짜> --to <날짜>)');
-      console.log('  backtest:telemetry-report  최근 실행 비용 보고서 (--since-days 30 [--worker-budget-mib N])');
-      console.log('  universe:benchmark  disposable DB 복제본에서 10년 유니버스 HTTP/SSE 성능 측정');
+      console.log('  backtest:telemetry-report  최근 실행 비용 보고서 (--since-days 30 [--agent-budget-mib N])');
       process.exitCode = command ? 1 : 0;
   }
 }

@@ -61,6 +61,8 @@ describe('backtest:telemetry-report CLI', () => {
         'backtest:telemetry-report',
         '--since-days',
         '1',
+        '--agent-budget-mib',
+        '512',
         '--format',
         'json',
       ],
@@ -77,7 +79,25 @@ describe('backtest:telemetry-report CLI', () => {
       events: { available: 1, scanned: 1, withoutTelemetry: 0, invalidTelemetry: 0 },
       samples: { valid: 1, completed: 1 },
       readiness: { readyForSizing: false },
-      sizing: { localLightsailConcurrency: 1, memoryConcurrencyCap: null },
+      sizing: { agentBudgetBytes: 512 * 1024 ** 2, memoryConcurrencyCap: null },
     });
+  });
+});
+
+
+describe('서버 CLI 진입점', () => {
+  it('도움말은 삭제된 벤치마크를 노출하지 않고 해당 명령을 명확히 거부한다', () => {
+    const invoke = (args: string[]) => spawnSync(process.execPath, ['--import', 'tsx', 'src/server/cli.ts', ...args], {
+      encoding: 'utf8', env: { ...process.env, NODE_ENV: 'test' },
+    });
+    const help = invoke([]);
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain('db:backup');
+    expect(help.stdout).toContain('--agent-budget-mib');
+    expect(help.stdout).not.toContain('universe:benchmark');
+    const removed = invoke(['universe:benchmark']);
+    expect(removed.status).toBe(1);
+    expect(removed.stderr).toContain('지원하지 않는 명령입니다: universe:benchmark');
+    expect(removed.stderr).not.toContain('수동 벤치마크 도구');
   });
 });

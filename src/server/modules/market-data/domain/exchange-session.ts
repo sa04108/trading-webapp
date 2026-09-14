@@ -70,21 +70,3 @@ export function toLocalTime(tsMs: number, session: ExchangeSession): LocalTime {
   const minuteOfDay = Math.floor((localMs - dayIndex * MS_PER_DAY) / MS_PER_MINUTE);
   return { dayIndex, minuteOfDay, dayOfWeek: dayOfWeekFromDayIndex(dayIndex) };
 }
-
-/** 현지 (dayIndex, minuteOfDay) → UTC epoch ms */
-export function fromLocalTime(
-  dayIndex: number,
-  minuteOfDay: number,
-  session: ExchangeSession,
-): number {
-  return dayIndex * MS_PER_DAY + minuteOfDay * MS_PER_MINUTE - session.utcOffsetMinutes * MS_PER_MINUTE;
-}
-
-/** 세션 내 시간봉 시작 분 목록 (마지막 봉은 부분 봉일 수 있다) */
-export function hourlyBucketStarts(session: ExchangeSession): number[] {
-  const starts: number[] = [];
-  for (let minute = session.openMinutes; minute < session.closeMinutes; minute += 60) {
-    starts.push(minute);
-  }
-  return starts;
-}

@@ -68,14 +68,14 @@ describe('에이전트 리스와 데이터 대기', () => {
     const insert = database.sqlite.prepare("INSERT INTO backtest_jobs (id, status, request_json, strategy_id, universe_rule_json, universe_schedule_json, created_at_ms, estimated_bars) VALUES (?, 'QUEUED', '{}', 'test', '{}', '[]', ?, ?)");
     insert.run('large', 1, 4_000_000); insert.run('small', 2, 1000);
     const queue = new JobQueue(database, { now: () => Date.now() });
-    const options = { workerId: `remote:${clientId}`, leaseTokenHash: 'a'.repeat(64), leaseExpiresAtMs: Date.now() + 90_000, runnerVersion: 'test', maxAttempts: 3, maxBars: 2000 };
-    expect(queue.claimNextRemote(options)?.id).toBe('small');
-    expect(queue.claimNextRemote(options)).toBeNull();
-    expect(queue.claimNextRemote({ ...options, maxBars: 5_000_000 })?.id).toBe('large');
+    const options = { agentId: clientId, leaseTokenHash: 'a'.repeat(64), leaseExpiresAtMs: Date.now() + 90_000, runnerVersion: 'test', maxAttempts: 3, maxBars: 2000 };
+    expect(queue.claimNextLease(options)?.id).toBe('small');
+    expect(queue.claimNextLease(options)).toBeNull();
+    expect(queue.claimNextLease({ ...options, maxBars: 5_000_000 })?.id).toBe('large');
     for (let attempt = 1; attempt <= 3; attempt++) {
       database.sqlite.prepare("UPDATE backtest_jobs SET lease_expires_at_ms = 1 WHERE id = 'small'").run();
-      queue.recoverExpiredRemoteLeases(3);
-      if (attempt < 3) expect(queue.claimNextRemote(options)?.id).toBe('small');
+      queue.recoverExpiredLeases(3);
+      if (attempt < 3) expect(queue.claimNextLease(options)?.id).toBe('small');
     }
     expect(queue.getJob('small')?.status).toBe('FAILED');
   });

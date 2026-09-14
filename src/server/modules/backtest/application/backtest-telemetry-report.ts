@@ -71,11 +71,9 @@ export interface BacktestTelemetryReport {
     };
   };
   readonly sizing: {
-    /** 웹과 child가 같은 cgroup인 현 Lightsail에서는 표본과 무관하게 1을 유지한다. */
-    readonly localLightsailConcurrency: 1;
-    readonly workerBudgetBytes: number | null;
+    readonly agentBudgetBytes: number | null;
     readonly plannedBytesPerWorker: number | null;
-    /** 메모리만 본 상한. 실제 전용 worker 병렬도는 CPU 슬롯과 이 값 중 작은 쪽이다. */
+    /** 메모리만 본 상한. 실제 에이전트의 worker 수는 CPU 슬롯과 이 값 중 작은 쪽이다. */
     readonly memoryConcurrencyCap: number | null;
     /** 한 worker가 seed를 순차 실행할 때 15분 이내가 되도록 잡은 계획 후보. */
     readonly sequentialSeedsPerShardCandidate: number | null;
@@ -130,8 +128,8 @@ export function buildBacktestTelemetryReport(options: {
   readonly availableEventCount: number;
   readonly sinceMs: number;
   readonly untilMs: number;
-  /** OS·controller 메모리를 제외하고 전용 worker 프로세스들에 배정할 수 있는 예산. */
-  readonly workerBudgetBytes?: number;
+  /** OS·부모 프로세스 몫을 제외하고 에이전트가 여러 worker에 나눠 줄 전체 메모리 예산. */
+  readonly agentBudgetBytes?: number;
 }): BacktestTelemetryReport {
   const telemetry: BacktestExecutionTelemetry[] = [];
   let withoutTelemetry = 0;
@@ -176,12 +174,12 @@ export function buildBacktestTelemetryReport(options: {
 
   const peakRssBytes = distribution(completed.map((sample) => sample.peakRssBytes));
   const totalDurationMs = distribution(completed.map((sample) => sample.durationsMs.total));
-  const workerBudgetBytes = options.workerBudgetBytes ?? null;
+  const agentBudgetBytes = options.agentBudgetBytes ?? null;
   const plannedBytesPerWorker = readyForSizing && peakRssBytes !== null
     ? Math.ceil(peakRssBytes.p95 * WORKER_HEADROOM_RATIO)
     : null;
-  const memoryConcurrencyCap = plannedBytesPerWorker !== null && workerBudgetBytes !== null
-    ? Math.max(0, Math.floor(workerBudgetBytes / plannedBytesPerWorker))
+  const memoryConcurrencyCap = plannedBytesPerWorker !== null && agentBudgetBytes !== null
+    ? Math.max(0, Math.floor(agentBudgetBytes / plannedBytesPerWorker))
     : null;
   const sequentialSeedsPerShardCandidate = readyForSizing && totalDurationMs !== null
     ? Math.max(
@@ -242,8 +240,7 @@ export function buildBacktestTelemetryReport(options: {
       },
     },
     sizing: {
-      localLightsailConcurrency: 1,
-      workerBudgetBytes,
+      agentBudgetBytes,
       plannedBytesPerWorker,
       memoryConcurrencyCap,
       sequentialSeedsPerShardCandidate,

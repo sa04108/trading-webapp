@@ -3,7 +3,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { RemoteResultArtifactRejectedError } from '../../backtest/application/backtest-result-artifact.js';
+import { BacktestResultArtifactRejectedError } from '../../backtest/application/backtest-result-artifact.js';
 import { MAX_BACKTEST_RESULT_ARTIFACT_BYTES, InvalidBacktestResultArtifactError } from '../../backtest/infrastructure/sqlite-backtest-result-artifact-importer.js';
 import { backtestExecutionTelemetrySchema } from '../../backtest/application/backtest-execution-telemetry.js';
 import type { AgentCoordinator } from '../application/agent-coordinator.js';
@@ -82,7 +82,7 @@ export function registerAgentControlRoutes(app: FastifyInstance, coordinator: Ag
       const status = await coordinator.backtests.complete({ ...identity, checksum, artifactPath: artifact.path, telemetry });
       return reply.code(status === 'ACCEPTED' || status === 'IDEMPOTENT' ? 200 : 409).send({ status });
     } catch (error) {
-      if (error instanceof RemoteResultArtifactRejectedError || error instanceof InvalidBacktestResultArtifactError || error instanceof z.ZodError) return reply.code(422).send({ error: '결과 파일 검증에 실패했습니다' });
+      if (error instanceof BacktestResultArtifactRejectedError || error instanceof InvalidBacktestResultArtifactError || error instanceof z.ZodError) return reply.code(422).send({ error: '결과 파일 검증에 실패했습니다' });
       throw error;
     } finally { clearInterval(renewal); await artifact?.cleanup(); }
   });

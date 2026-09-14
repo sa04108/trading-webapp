@@ -5,7 +5,7 @@ import {
   symbolMasterVersions,
   symbols,
 } from '../../src/server/shared/db/schema.js';
-import type { SymbolIdentitySelection } from '../../src/server/modules/market-data/domain/symbol-identity-lifetime.js';
+import { inferUniqueSymbolIdentities, validateSymbolIdentityLifetime, type SymbolIdentitySelection } from '../../src/server/modules/market-data/domain/symbol-identity-lifetime.js';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
 
 interface VersionInput {
@@ -28,7 +28,7 @@ function insertVersion(t: TestApp, version: VersionInput): void {
   }).run();
 }
 
-describe('SymbolMasterService.validateIdentityLifetime', () => {
+describe('종목 이력 snapshot과 생애 검증', () => {
   it('선택 pair와 알려진 전체 생애가 1:1이면 안전하다', async () => {
     const t = await createTestApp();
     insertVersion(t, {
@@ -36,7 +36,7 @@ describe('SymbolMasterService.validateIdentityLifetime', () => {
       validFromDate: '2000-01-01', validToDate: null,
     });
 
-    expect(t.container.symbolMasterService.validateIdentityLifetime([{
+    expect(validateLifetime(t, [{
       standardCode: 'KR7000000001', shortCode: '000001', effectiveDate: '2020-01-02',
     }])).toEqual({ safe: true, conflicts: [] });
     await t.close();
@@ -258,7 +258,7 @@ describe('SymbolMasterService.validateIdentityLifetime', () => {
       validFromDate: '2020-01-01', validToDate: null,
     });
 
-    expect(t.container.symbolMasterService.validateIdentityLifetime([{
+    expect(validateLifetime(t, [{
       standardCode: 'KR7000000001', shortCode: '000001', effectiveDate: '2024-01-02',
     }])).toEqual({
       safe: false,
@@ -282,7 +282,7 @@ describe('SymbolMasterService.validateIdentityLifetime', () => {
       validFromDate: '2010-01-01', validToDate: null,
     });
 
-    expect(t.container.symbolMasterService.validateIdentityLifetime([{
+    expect(validateLifetime(t, [{
       standardCode: 'KR7000000001', shortCode: '000001', effectiveDate: '2021-01-04',
     }])).toEqual({
       safe: false,
@@ -306,7 +306,7 @@ describe('SymbolMasterService.validateIdentityLifetime', () => {
       validFromDate: '2020-01-01', validToDate: null,
     });
 
-    expect(t.container.symbolMasterService.validateIdentityLifetime([{
+    expect(validateLifetime(t, [{
       standardCode: 'KR7000000001', shortCode: '000001', effectiveDate: '2021-05-03',
     }])).toEqual({
       safe: false,
@@ -343,7 +343,7 @@ describe('SymbolMasterService.validateIdentityLifetime', () => {
       validFromDate: '2021-01-01', validToDate: null,
     });
 
-    expect(t.container.symbolMasterService.validateIdentityLifetime([
+    expect(validateLifetime(t, [
       { standardCode: 'KR7000000001', shortCode: '000001', effectiveDate: '2005-01-03' },
       { standardCode: 'KR7000000001', shortCode: '000001', effectiveDate: '2022-01-03' },
     ])).toEqual({ safe: true, conflicts: [] });
@@ -381,7 +381,7 @@ describe('SymbolMasterService.validateIdentityLifetime', () => {
       validFromDate: '1990-01-01', validToDate: '2000-01-01',
     });
 
-    expect(t.container.symbolMasterService.validateIdentityLifetime(selections))
+    expect(validateLifetime(t, selections))
       .toEqual({
         safe: false,
         conflicts: [
@@ -411,7 +411,7 @@ describe('SymbolMasterService.validateIdentityLifetime', () => {
       validFromDate: '2020-01-01', validToDate: null,
     });
 
-    expect(t.container.symbolMasterService.inferUniqueLifetimeIdentities([
+    expect(inferLifetime(t, [
       '000001', '000001',
     ])).toEqual({
       safe: true,
@@ -436,7 +436,7 @@ describe('SymbolMasterService.validateIdentityLifetime', () => {
       validFromDate: '2010-01-01', validToDate: null,
     });
 
-    expect(t.container.symbolMasterService.inferUniqueLifetimeIdentities([
+    expect(inferLifetime(t, [
       '999999', '000001',
     ])).toEqual({
       safe: false,
@@ -458,3 +458,14 @@ describe('SymbolMasterService.validateIdentityLifetime', () => {
     await t.close();
   });
 });
+
+function validateLifetime(t: TestApp, selections: readonly SymbolIdentitySelection[]) {
+  const snapshot = t.container.symbolMasterService.readIdentitySnapshot(
+    selections.map((selection) => selection.shortCode), selections.map((selection) => selection.standardCode), false,
+  );
+  return validateSymbolIdentityLifetime(selections, snapshot.versions);
+}
+function inferLifetime(t: TestApp, shortCodes: readonly string[]) {
+  const snapshot = t.container.symbolMasterService.readIdentitySnapshot(shortCodes, [], false);
+  return inferUniqueSymbolIdentities(shortCodes, snapshot.versions);
+}

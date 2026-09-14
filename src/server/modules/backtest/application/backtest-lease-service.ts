@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { AGENT_LEASE_MS, AGENT_MAX_ATTEMPTS } from '../../../../shared/agent-protocol.js';
+import { AGENT_LEASE_MS, AGENT_MAX_ATTEMPTS, LOCAL_AGENT_ID } from '../../../../shared/agent-protocol.js';
 import type { Clock } from '../../../shared/clock.js';
 import type { Logger } from '../../../shared/logger.js';
 import { isPersistenceUnavailableError } from '../../../shared/db/sqlite-errors.js';
@@ -9,12 +9,12 @@ import type { BacktestExecutionTelemetry } from './backtest-execution-telemetry.
 import type { BacktestJobRow, JobQueue } from './job-queue.js';
 import type { JobEvent } from './job-orchestrator.js';
 import {
-  RemoteResultImportInternalError,
-  RemoteResultPersistenceUnavailableError,
-  type RemoteResultCompleter,
+  BacktestResultImportInternalError,
+  BacktestResultPersistenceUnavailableError,
+  type BacktestResultCompleter,
 } from './backtest-result-artifact.js';
 
-export interface RemoteJobLease {
+export interface BacktestJobLease {
   readonly job: BacktestJobRow;
   readonly attempt: number;
   readonly leaseToken: string;
@@ -22,18 +22,18 @@ export interface RemoteJobLease {
   readonly runnerVersion: string;
 }
 
-export type RemoteClaimResult =
-  | { readonly status: 'CLAIMED'; readonly lease: RemoteJobLease }
+export type BacktestClaimResult =
+  | { readonly status: 'CLAIMED'; readonly lease: BacktestJobLease }
   | { readonly status: 'EMPTY' }
   | { readonly status: 'VERSION_MISMATCH'; readonly expectedRunnerVersion: string };
 
-export type RemoteHeartbeatResult =
+export type BacktestHeartbeatResult =
   | { readonly status: 'ACCEPTED'; readonly cancelRequested: boolean; readonly leaseExpiresAtMs: number }
   | { readonly status: 'STALE_LEASE' };
-export type RemoteResultTransferResult = RemoteHeartbeatResult | { readonly status: 'IDEMPOTENT' };
+export type BacktestResultTransferResult = BacktestHeartbeatResult | { readonly status: 'IDEMPOTENT' };
 
-export type RemoteFinishResult = 'ACCEPTED' | 'STALE_LEASE';
-export type RemoteCompleteResult =
+export type BacktestFinishResult = 'ACCEPTED' | 'STALE_LEASE';
+export type BacktestCompleteResult =
   | 'ACCEPTED'
   | 'IDEMPOTENT'
   | 'IDENTITY_REJECTED'
@@ -45,10 +45,10 @@ function tokenHash(token: string): string {
 }
 
 /**
- * Lightsail control plane의 원격 worker lease 수명주기.
+ * 서버가 로컬·원격 에이전트에 발급한 백테스트 임대의 수명주기를 관리한다.
  * 네트워크·HTTP는 모르고, token 원문은 claim 응답 이후 메모리에도 보관하지 않는다.
  */
-export class RemoteWorkerService {
+export class BacktestLeaseService {
   readonly events = new EventEmitter();
   private sweepTimer: NodeJS.Timeout | null = null;
 
@@ -58,11 +58,9 @@ export class RemoteWorkerService {
     private readonly clock: Clock,
     private readonly audit: AuditLogService,
     private readonly logger: Logger,
-    private readonly resultCompleter: RemoteResultCompleter,
+    private readonly resultCompleter: BacktestResultCompleter,
     private readonly leaseTokenFactory: () => string = () => randomBytes(32).toString('base64url'),
-  ) {
-    // 재시작 직후에는 worker가 다시 연결할 시간을 한 lease만큼 보장한다.
-  }
+  ) {}
 
   start(): void {
     this.sweepExpiredLeases();
@@ -76,16 +74,15 @@ export class RemoteWorkerService {
     this.sweepTimer = null;
   }
 
-  claim(workerId: string, runnerVersion: string, maxBars = Number.MAX_SAFE_INTEGER): RemoteClaimResult {
+  claim(agentId: string, runnerVersion: string, maxBars = Number.MAX_SAFE_INTEGER): BacktestClaimResult {
     if (runnerVersion !== this.expectedRunnerVersion) {
       return { status: 'VERSION_MISMATCH', expectedRunnerVersion: this.expectedRunnerVersion };
     }
     const nowMs = this.clock.now();
     const leaseToken = this.leaseTokenFactory();
     const leaseExpiresAtMs = nowMs + this.leaseDurationMs();
-    const remoteWorkerId = `remote:${workerId}`;
-    const job = this.queue.claimNextRemote({
-      workerId: remoteWorkerId,
+    const job = this.queue.claimNextLease({
+      agentId,
       leaseTokenHash: tokenHash(leaseToken),
       leaseExpiresAtMs,
       runnerVersion,
@@ -94,9 +91,9 @@ export class RemoteWorkerService {
     });
     if (job === null) return { status: 'EMPTY' };
 
-    this.recordAudit('backtest.remote-leased', {
+    this.recordAudit('backtest.leased', {
       jobId: job.id,
-      workerId: remoteWorkerId,
+      agentId,
       attempt: job.attempt,
       leaseExpiresAtMs,
       runnerVersion,
@@ -121,10 +118,10 @@ export class RemoteWorkerService {
     readonly processedBars?: number;
     readonly totalBars?: number;
     readonly progressLabel?: string | null;
-  }): RemoteHeartbeatResult {
+  }): BacktestHeartbeatResult {
     const nowMs = this.clock.now();
     const leaseExpiresAtMs = nowMs + this.leaseDurationMs();
-    const status = this.queue.heartbeatRemote({
+    const status = this.queue.heartbeatLease({
       jobId: input.jobId,
       attempt: input.attempt,
       leaseTokenHash: tokenHash(input.leaseToken),
@@ -151,10 +148,10 @@ export class RemoteWorkerService {
     readonly jobId: string;
     readonly attempt: number;
     readonly leaseToken: string;
-  }): RemoteHeartbeatResult {
+  }): BacktestHeartbeatResult {
     const nowMs = this.clock.now();
     const leaseExpiresAtMs = nowMs + Math.max(this.leaseDurationMs(), ARTIFACT_TRANSFER_LEASE_MS);
-    const status = this.queue.heartbeatRemote({
+    const status = this.queue.heartbeatLease({
       jobId: input.jobId,
       attempt: input.attempt,
       leaseTokenHash: tokenHash(input.leaseToken),
@@ -178,7 +175,7 @@ export class RemoteWorkerService {
     readonly attempt: number;
     readonly leaseToken: string;
     readonly checksum: string;
-  }): RemoteResultTransferResult {
+  }): BacktestResultTransferResult {
     const job = this.queue.getJob(input.jobId);
     if (
       job?.status === 'COMPLETED'
@@ -196,10 +193,10 @@ export class RemoteWorkerService {
     readonly cancelPath?: 'IPC' | 'SIGTERM' | 'SIGKILL';
     readonly error?: string;
     readonly telemetry?: BacktestExecutionTelemetry;
-  }): RemoteFinishResult {
+  }): BacktestFinishResult {
     const job = this.queue.getJob(input.jobId);
     const finishedAtMs = this.clock.now();
-    const outcome = this.queue.finishRemote({
+    const outcome = this.queue.finishLease({
       jobId: input.jobId,
       attempt: input.attempt,
       leaseTokenHash: tokenHash(input.leaseToken),
@@ -214,7 +211,7 @@ export class RemoteWorkerService {
       status: outcome,
       ...(input.cancelPath ? { cancelPath: input.cancelPath } : {}),
       durationMs: finishedAtMs - (job?.startedAtMs ?? job?.createdAtMs ?? finishedAtMs),
-      executionMode: 'remote',
+      executionMode: job?.agentId === LOCAL_AGENT_ID ? 'local' : 'remote',
       attempt: input.attempt,
       // CANCELLING과 worker FAILED 보고가 경합하면 DB의 실제 결과는 CANCELLED다.
       // 그때 FAILED telemetry를 CANCELLED 감사 행에 붙이지 않는다.
@@ -231,18 +228,18 @@ export class RemoteWorkerService {
     readonly artifactPath: string;
     readonly checksum: string;
     readonly telemetry?: BacktestExecutionTelemetry;
-  }): Promise<RemoteCompleteResult> {
+  }): Promise<BacktestCompleteResult> {
     let job: BacktestJobRow | null;
     try {
       job = this.queue.getJob(input.jobId);
     } catch (error) {
       if (isPersistenceUnavailableError(error)) {
-        throw new RemoteResultPersistenceUnavailableError(
+        throw new BacktestResultPersistenceUnavailableError(
           '결과 저장 직전 중앙 작업 정보를 일시적으로 읽을 수 없습니다.',
           { cause: error },
         );
       }
-      throw new RemoteResultImportInternalError(
+      throw new BacktestResultImportInternalError(
         '결과 저장 직전 중앙 작업 정보를 읽는 데 실패했습니다.',
         { cause: error },
       );
@@ -261,7 +258,7 @@ export class RemoteWorkerService {
         status: 'FAILED',
         durationMs: completed.completedAtMs
           - (job?.startedAtMs ?? job?.createdAtMs ?? completed.completedAtMs),
-        executionMode: 'remote',
+        executionMode: job?.agentId === LOCAL_AGENT_ID ? 'local' : 'remote',
         attempt: input.attempt,
       });
       this.emitJob({ jobId: input.jobId, kind: 'status' });
@@ -274,7 +271,7 @@ export class RemoteWorkerService {
       status: 'COMPLETED',
       durationMs: completed.completedAtMs
         - (job?.startedAtMs ?? job?.createdAtMs ?? completed.completedAtMs),
-      executionMode: 'remote',
+      executionMode: job?.agentId === LOCAL_AGENT_ID ? 'local' : 'remote',
       attempt: input.attempt,
       resultSchemaVersion: completed.schemaVersion,
       resultChecksum: input.checksum,
@@ -286,16 +283,16 @@ export class RemoteWorkerService {
   }
 
   sweepExpiredLeases(): void {
-    let recovered: ReturnType<JobQueue['recoverExpiredRemoteLeases']>;
+    let recovered: ReturnType<JobQueue['recoverExpiredLeases']>;
     try {
-      recovered = this.queue.recoverExpiredRemoteLeases(AGENT_MAX_ATTEMPTS);
+      recovered = this.queue.recoverExpiredLeases(AGENT_MAX_ATTEMPTS);
     } catch (error) {
       // 결과 import처럼 별도 프로세스가 긴 SQLite write transaction을 잡는 동안에는
       // busy_timeout을 넘길 수 있다. 주기 timer의 예외를 밖으로 던지면 Node의
       // uncaughtException이 되어 웹/control plane 전체가 종료되므로 다음 sweep에서 재시도한다.
       this.logger.warn(
-        { module: 'backtest', event: 'backtest.remote-lease-sweep-failed', err: error },
-        'remote lease sweep failed — retrying next cycle',
+        { module: 'backtest', event: 'backtest.lease-sweep-failed', err: error },
+        '백테스트 임대 회수 실패 — 다음 주기에 재시도합니다',
       );
       return;
     }
@@ -303,14 +300,14 @@ export class RemoteWorkerService {
       this.logger.warn(
         {
           module: 'backtest',
-          event: 'backtest.remote-lease-expired',
+          event: 'backtest.lease-expired',
           jobId: item.jobId,
           attempt: item.attempt,
           status: item.status,
         },
-        'remote backtest lease expired',
+        '백테스트 임대 만료',
       );
-      this.recordAudit('backtest.remote-lease-expired', { ...item });
+      this.recordAudit('backtest.lease-expired', { ...item });
       this.emitJob({ jobId: item.jobId, kind: 'status' });
     }
   }
@@ -319,11 +316,11 @@ export class RemoteWorkerService {
     try {
       this.audit.record('system', event, detail);
     } catch (error) {
-      // lease/status는 이미 중앙 DB에 확정됐다. 부가 감사 기록 실패 때문에 worker에 5xx를
+      // lease/status는 이미 중앙 DB에 확정됐다. 부가 감사 기록 실패 때문에 에이전트에 5xx를
       // 돌려 같은 계산을 재시도시키지 않고 구조화 로그를 남긴다.
       this.logger.warn(
-        { module: 'backtest', event: 'backtest.remote-audit-failed', auditEvent: event, err: error },
-        'remote backtest audit write failed',
+        { module: 'backtest', event: 'backtest.audit-failed', auditEvent: event, err: error },
+        '백테스트 감사 기록 실패',
       );
     }
   }
@@ -334,8 +331,8 @@ export class RemoteWorkerService {
     } catch (error) {
       // 알림·seed batch 승격 같은 후속 listener가 핵심 lease 응답을 실패로 바꾸지 않게 한다.
       this.logger.warn(
-        { module: 'backtest', event: 'backtest.remote-listener-failed', jobId: event.jobId, err: error },
-        'remote backtest event listener failed',
+        { module: 'backtest', event: 'backtest.listener-failed', jobId: event.jobId, err: error },
+        '백테스트 이벤트 리스너 실패',
       );
     }
   }

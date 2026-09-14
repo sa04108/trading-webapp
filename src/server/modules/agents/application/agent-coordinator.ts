@@ -1,22 +1,21 @@
 import path from 'node:path';
 import { AgentClient } from '../../../../agent/client.js';
 import { availableServerResources } from '../../../../agent/resources.js';
-import { RemoteResultArtifactRejectedError } from '../../backtest/application/backtest-result-artifact.js';
+import { BacktestResultArtifactRejectedError } from '../../backtest/application/backtest-result-artifact.js';
 import { InvalidBacktestResultArtifactError } from '../../backtest/infrastructure/sqlite-backtest-result-artifact-importer.js';
 import { backtestExecutionTelemetrySchema } from '../../backtest/application/backtest-execution-telemetry.js';
 import type { WebSocket } from 'ws';
 import { MAX_BACKTEST_BARS } from '../../../shared/backtest-limits.js';
 import type { DatabaseHandle } from '../../../shared/db/database.js';
 import type { Logger } from '../../../shared/logger.js';
-import type { RemoteWorkerService } from '../../backtest/application/remote-worker-service.js';
+import type { BacktestLeaseService } from '../../backtest/application/backtest-lease-service.js';
 import type { JobQueue } from '../../backtest/application/job-queue.js';
-import { agentMessageSchema, type AgentMessage, type AgentLease, type ServerAgentMessage, type DatasetManifest } from '../../../../shared/agent-protocol.js';
+import { LOCAL_AGENT_ID, agentMessageSchema, type AgentMessage, type AgentLease, type ServerAgentMessage, type DatasetManifest } from '../../../../shared/agent-protocol.js';
 import type { AgentRegistry } from './agent-registry.js';
 import type { DatasetSnapshots } from './dataset-snapshots.js';
 import type { AgentPreparationQueue } from './agent-preparation-queue.js';
 import type { AgentDataQueue } from './agent-data-queue.js';
 
-export const LOCAL_AGENT_ID = 'server-local';
 interface Connection { socket: { readonly readyState: number; send(data: string): void; close(code?: number, reason?: string): void; terminate(): void }; ready: boolean; slots: number; maxBars: number; datasetVersion: number; lastMessageAt: number }
 
 /** PC가 먼저 만든 연결로 서버가 작업을 전달한다. 연결과 작업 lease의 수명은 분리한다. */
@@ -38,7 +37,7 @@ export class AgentCoordinator {
     readonly snapshots: DatasetSnapshots,
     readonly preparations: AgentPreparationQueue,
     readonly dataQueue: AgentDataQueue,
-    readonly backtests: RemoteWorkerService,
+    readonly backtests: BacktestLeaseService,
     private readonly queue: JobQueue,
     readonly runnerVersion: string,
     private readonly logger: Logger,
@@ -155,13 +154,13 @@ export class AgentCoordinator {
   /** 버전 변경 시 이전 토큰을 먼저 폐기하고 재배정한다. 늦은 결과는 반영하지 않는다. */
   invalidateClientLeases(clientId: string): void {
     const preparations = this.database.sqlite.prepare("SELECT j.id FROM backtest_preparation_jobs j JOIN agent_preparation_leases l ON l.job_id = j.id WHERE client_id = ? AND j.status = 'RUNNING'").all(clientId) as Array<{ id: string }>;
-    const backtests = this.database.sqlite.prepare("SELECT id FROM backtest_jobs WHERE worker_id = ? AND status IN ('STARTING', 'RUNNING', 'CANCELLING')").all(`remote:${clientId}`) as Array<{ id: string }>;
+    const backtests = this.database.sqlite.prepare("SELECT id FROM backtest_jobs WHERE agent_id = ? AND status IN ('STARTING', 'RUNNING', 'CANCELLING')").all(clientId) as Array<{ id: string }>;
     this.database.sqlite.transaction(() => {
       for (const { id } of preparations) {
         this.database.sqlite.prepare("UPDATE backtest_preparation_jobs SET status = CASE WHEN cancel_requested = 1 THEN 'CANCELLED' ELSE 'QUEUED' END, updated_at_ms = ? WHERE id = ?").run(Date.now(), id);
         this.database.sqlite.prepare('UPDATE agent_preparation_leases SET lease_token_hash = NULL, lease_expires_at_ms = NULL WHERE job_id = ?').run(id);
       }
-      this.database.sqlite.prepare("UPDATE backtest_jobs SET status = CASE WHEN status = 'CANCELLING' THEN 'CANCELLED' ELSE 'QUEUED' END, worker_id = NULL, lease_token_hash = NULL, lease_expires_at_ms = NULL WHERE worker_id = ? AND status IN ('STARTING', 'RUNNING', 'CANCELLING')").run(`remote:${clientId}`);
+      this.database.sqlite.prepare("UPDATE backtest_jobs SET status = CASE WHEN status = 'CANCELLING' THEN 'CANCELLED' ELSE 'QUEUED' END, agent_id = NULL, lease_token_hash = NULL, lease_expires_at_ms = NULL WHERE agent_id = ? AND status IN ('STARTING', 'RUNNING', 'CANCELLING')").run(clientId);
     })();
     for (const { id } of preparations) this.preparations.resume(id);
     for (const { id } of backtests) this.backtests.events.emit('job', { jobId: id, kind: 'status' });
@@ -172,7 +171,7 @@ export class AgentCoordinator {
     return Math.max(MAX_BACKTEST_BARS, ...capacities);
   }
 
-  ownsBacktest(clientId: string, jobId: string): boolean { return this.queue.getJob(jobId)?.workerId === `remote:${clientId}`; }
+  ownsBacktest(clientId: string, jobId: string): boolean { return this.queue.getJob(jobId)?.agentId === clientId; }
 
   /** 큐 등록·슬롯 반환·재연결은 주기 타이머를 기다리지 않고 배정을 깨운다. */
   readonly wake = (): void => {
@@ -286,7 +285,7 @@ export class AgentCoordinator {
             const status = await this.backtests.complete({ ...identity, artifactPath: input.artifactPath, telemetry: input.telemetry });
             return status === 'ACCEPTED' || status === 'IDEMPOTENT' ? 200 : 409;
           } catch (error) {
-            if (error instanceof RemoteResultArtifactRejectedError || error instanceof InvalidBacktestResultArtifactError) return 422;
+            if (error instanceof BacktestResultArtifactRejectedError || error instanceof InvalidBacktestResultArtifactError) return 422;
             throw error;
           }
         },
@@ -308,7 +307,7 @@ export class AgentCoordinator {
       for (const [id, connection] of peers) {
         if (id !== LOCAL_AGENT_ID && (Date.now() - connection.lastMessageAt > 60_000 || !this.registry.active(id))) connection.socket.terminate();
         else {
-          const cancelled = this.database.sqlite.prepare("SELECT id AS jobId, attempt FROM backtest_jobs WHERE worker_id = ? AND status = 'CANCELLING'").all(`remote:${id}`) as Array<{ jobId: string; attempt: number }>;
+          const cancelled = this.database.sqlite.prepare("SELECT id AS jobId, attempt FROM backtest_jobs WHERE agent_id = ? AND status = 'CANCELLING'").all(id) as Array<{ jobId: string; attempt: number }>;
           for (const job of cancelled) this.send(connection, { type: 'LEASE', kind: 'BACKTEST', ...job, accepted: true, cancelRequested: true });
           const preparations = this.database.sqlite.prepare("SELECT j.id AS jobId, l.attempt FROM backtest_preparation_jobs j JOIN agent_preparation_leases l ON l.job_id = j.id WHERE l.client_id = ? AND j.status = 'RUNNING' AND j.cancel_requested = 1").all(id) as Array<{ jobId: string; attempt: number }>;
           for (const job of preparations) this.send(connection, { type: 'LEASE', kind: 'PREPARATION', ...job, accepted: true, cancelRequested: true });
@@ -319,14 +318,9 @@ export class AgentCoordinator {
   }
 
   private activeLeaseCount(clientId: string): number {
-    const backtests = this.database.sqlite.prepare("SELECT COUNT(*) AS n FROM backtest_jobs WHERE worker_id = ? AND status IN ('STARTING', 'RUNNING', 'CANCELLING')").get(`remote:${clientId}`) as { n: number };
+    const backtests = this.database.sqlite.prepare("SELECT COUNT(*) AS n FROM backtest_jobs WHERE agent_id = ? AND status IN ('STARTING', 'RUNNING', 'CANCELLING')").get(clientId) as { n: number };
     const preparations = this.database.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_preparation_leases l JOIN backtest_preparation_jobs j ON j.id = l.job_id WHERE client_id = ? AND j.status = 'RUNNING'").get(clientId) as { n: number };
     return backtests.n + preparations.n;
-  }
-
-  manifestForBacktest(jobId: string): DatasetManifest | null {
-    const row = this.database.sqlite.prepare('SELECT dataset_version AS version FROM agent_backtest_datasets WHERE job_id = ?').get(jobId) as { version: number } | undefined;
-    return row ? this.snapshots.get(row.version) : null;
   }
 
   stop(): Promise<void> {

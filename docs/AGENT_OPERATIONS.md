@@ -4,6 +4,17 @@ Linux 또는 WSL2 장치에서 다운로드한 클라이언트가 상주한다. 
 데이터 캐시, 자원 측정과 결과 재전송을 담당하고 유니버스·백테스트는 자식 프로세스에서 계산한다.
 Docker, 장치 SSH 배포, worker.env, GPU 실행은 사용하지 않는다.
 
+명칭은 다음과 같이 구분한다.
+
+| 명칭 | 책임 | 코드 |
+| --- | --- | --- |
+| agent | N개의 worker 관리, 서버 연결, 자원·캐시·재전송 관리 | `src/agent/`, 서버 `AgentCoordinator` |
+| worker | 동시에 하나의 job 계산 | `src/workers/backtest-child.ts`, `preparation-child.ts` |
+| 임대 관리 | 어느 agent가 작업을 맡았는지와 만료·완료 검증 | `BacktestLeaseService`, `backtest_jobs.agent_id` |
+
+작업 전용 내부 환경 인자는 에이전트가 자식을 만들 때 전달한다. 예를 들어
+`WORKER_MAX_BARS`는 자동 측정한 worker당 한도이며 사용자가 작성하는 설정 파일이 아니다.
+
 ```mermaid
 flowchart LR
   PC[Linux 에이전트] -->|먼저 WSS 연결| APP[운영 서버]
@@ -167,3 +178,12 @@ pnpm run deploy        # 앱 SSH 배포 + 같은 Git 버전 클라이언트 파�
 `app.env`에 남는다. 옛 worker 환경변수, Docker image·Compose, worker bootstrap·deploy 경로는
 제거했다. 장치에 SSH하거나 장치별 runtime env를 배포하지 않는다. 클라이언트 파일은 앱
 릴리스와 함께 교체되며 실패 시 코드와 DB 백업 세트를 함께 복원한다.
+
+
+## 기존 명칭의 DB 이행
+
+운영 마이그레이션 `0004_agent_ownership`은 `backtest_jobs.worker_id`를 `agent_id`로
+이름 변경하고 값의 `remote:` 접두사를 한 번 제거한다. 상태·attempt·임대 token hash·만료
+시각·완료 결과는 보존한다. 기존 단일 DB를 처음 분리할 때도 같은 변환을 적용하며,
+백업 원본에는 기존 이름과 값이 그대로 남는다. 과거 마이그레이션과 결정 이력의 이름은
+당시 스키마를 설명하므로 유지한다. 과거 비밀 키 이름의 로그 마스킹도 유지한다.

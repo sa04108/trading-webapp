@@ -72,9 +72,6 @@ import type {
   UniverseRuleResolver,
   UniverseScheduleEntry,
 } from './universe-rule-resolver.js';
-import type {
-  ReadyPreviewDetails,
-} from './backtest-preparation-execution.js';
 
 export type PreparationStatus =
   | 'QUEUED'
@@ -106,6 +103,11 @@ export interface BacktestPreparationJobDto {
   readonly gapCount: number;
   readonly nextResumeAtMs: number | null;
   readonly error: string | null;
+}
+
+export interface ReadyPreviewDetails {
+  readonly preview: BacktestUniversePreview;
+  readonly fundamentalSymbols: readonly string[];
 }
 
 export interface BacktestUniversePreview {
@@ -1872,12 +1874,6 @@ export class BacktestPreparationOrchestrator {
       .from(backtestPreparationJobs)
       .where(eq(backtestPreparationJobs.id, jobId))
       .get() ?? null;
-  }
-
-  private hasCompletedPreview(input: PreparationInput): boolean {
-    const strategy = this.requireStrategy(input);
-    const requestHash = backtestPreparationRequestHash(input, strategy);
-    return this.latestCompletedPreviewId(requestHash) !== null;
   }
 
   private latestCompletedPreviewId(requestHash: string): string | null {

@@ -92,9 +92,9 @@ import {
 } from '../modules/backtest/application/backtest-financial-execution-window.js';
 import { findIncompleteFundamentalCheckpointsFromCoverageSync } from '../modules/backtest/application/backtest-financial-data-readiness.js';
 import { BenchmarkService } from '../modules/market-data/application/benchmark-service.js';
-import { RemoteWorkerService } from '../modules/backtest/application/remote-worker-service.js';
+import { BacktestLeaseService } from '../modules/backtest/application/backtest-lease-service.js';
 import { RemoteResultUploadManager } from '../modules/backtest/infrastructure/remote-result-upload-manager.js';
-import { ForkedRemoteResultCompleter } from '../modules/backtest/infrastructure/forked-remote-result-completer.js';
+import { ForkedBacktestResultCompleter } from '../modules/backtest/infrastructure/forked-backtest-result-completer.js';
 import { kstDateOf } from '../modules/market-data/domain/kst-date.js';
 
 export interface SystemStatusProviders {
@@ -127,7 +127,7 @@ export interface Container {
   readonly backtestWizardDraftService: BacktestWizardDraftService;
   readonly jobQueue: JobQueue;
   readonly jobOrchestrator: JobOrchestrator;
-  readonly remoteWorkerService: RemoteWorkerService;
+  readonly backtestLeaseService: BacktestLeaseService;
   readonly agentCoordinator: AgentCoordinator;
   readonly remoteResultUploadManager: RemoteResultUploadManager;
   readonly resultsService: ResultsService;
@@ -400,14 +400,14 @@ export function createContainer(
   const backtestWizardDraftService = new BacktestWizardDraftService(database, clock);
 
   const jobQueue = new JobQueue(database, clock);
-  const remoteResultCompleter = new ForkedRemoteResultCompleter(config.databasePath);
-  const remoteWorkerService = new RemoteWorkerService(
+  const backtestResultCompleter = new ForkedBacktestResultCompleter(config.databasePath);
+  const backtestLeaseService = new BacktestLeaseService(
     jobQueue,
     readGitCommitSha(config.nodeEnv),
     clock,
     auditLog,
     logger,
-    remoteResultCompleter,
+    backtestResultCompleter,
   );
   const jobOrchestrator = new JobOrchestrator(jobQueue, auditLog);
   const registry = new AgentRegistry(database);
@@ -451,7 +451,7 @@ export function createContainer(
     if (kind === 'PREPARATION') preparations.resume(jobId, error);
   }, logger);
   const agentCoordinator = new AgentCoordinator(database, registry, snapshots, preparations, dataQueue,
-    remoteWorkerService, jobQueue, readGitCommitSha(config.nodeEnv), logger);
+    backtestLeaseService, jobQueue, readGitCommitSha(config.nodeEnv), logger);
   const remoteResultUploadManager = new RemoteResultUploadManager(config.tempRoot);
   const seedCloneBatchService = new SeedCloneBatchService(
     database,
@@ -558,7 +558,7 @@ export function createContainer(
       );
     }
   };
-  for (const source of [jobOrchestrator.events, remoteWorkerService.events]) {
+  for (const source of [jobOrchestrator.events, backtestLeaseService.events]) {
     source.on('job', backtestNotificationListener);
     source.on('job', seedBatchJobListener);
   }
@@ -603,7 +603,7 @@ export function createContainer(
     backtestWizardDraftService,
     jobQueue,
     jobOrchestrator,
-    remoteWorkerService,
+    backtestLeaseService,
     agentCoordinator,
     remoteResultUploadManager,
     resultsService,

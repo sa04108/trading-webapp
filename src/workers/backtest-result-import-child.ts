@@ -7,8 +7,8 @@ import {
   SqliteBacktestResultArtifactImporter,
 } from '../server/modules/backtest/infrastructure/sqlite-backtest-result-artifact-importer.js';
 import {
-  RemoteResultPersistenceUnavailableError,
-  type RemoteResultCompletionOutput,
+  BacktestResultPersistenceUnavailableError,
+  type BacktestResultCompletionOutput,
 } from '../server/modules/backtest/application/backtest-result-artifact.js';
 import { backtestRequestSchema } from '../shared/schemas/backtest-request.js';
 import type { ProvenancePin } from '../shared/schemas/provenance-pin.js';
@@ -39,7 +39,7 @@ function requiredInteger(name: string): number {
   return value;
 }
 
-function send(output: RemoteResultCompletionOutput): void {
+function send(output: BacktestResultCompletionOutput): void {
   process.send?.({ type: 'completed', output });
 }
 
@@ -133,7 +133,7 @@ function main(): void {
         includeRegistrations,
       ),
     };
-    const status = queue.completeRemote({
+    const status = queue.completeLeasedResult({
       jobId,
       attempt,
       leaseTokenHash,
@@ -190,7 +190,7 @@ function main(): void {
             return `결과 저장 직전 종목 identity 검증 실패: ${error.message}`;
           }
           if (isPersistenceUnavailableError(error)) {
-            throw new RemoteResultPersistenceUnavailableError(
+            throw new BacktestResultPersistenceUnavailableError(
               '결과 import transaction에서 종목 identity를 확인할 수 없습니다.',
               { cause: error },
             );
@@ -217,7 +217,7 @@ try {
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
   if (
-    error instanceof RemoteResultPersistenceUnavailableError
+    error instanceof BacktestResultPersistenceUnavailableError
     || (
       error instanceof BacktestResultPersistenceError
       && isPersistenceUnavailableError(error)

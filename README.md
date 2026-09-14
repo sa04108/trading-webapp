@@ -200,8 +200,8 @@ TOTP 등록·재발급은 CLI 에서만 할 수 있다 — 웹 세션이 탈취�
 
 ```
 src/server/modules/{auth,strategy,market-data,backtest,broker,audit,system}
-src/workers/backtest-child.ts              # 실제 백테스트 계산 자식 프로세스
-src/agent/                               # Linux 설치·연결·캐시·자원 관리
+src/workers/                            # 한 번에 한 job을 계산하는 자식 프로세스
+src/agent/                              # N개 worker의 Linux 설치·연결·캐시·자원 관리
 src/web                          # React + shadcn/ui (모바일 우선)
 src/shared                       # 웹·서버 공유 스키마
 ```

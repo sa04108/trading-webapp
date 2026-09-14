@@ -1,35 +1,35 @@
 import { fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import type {
-  RemoteResultCompletionInput,
-  RemoteResultCompletionOutput,
+  BacktestResultCompletionInput,
+  BacktestResultCompletionOutput,
 } from '../application/backtest-result-artifact.js';
 import {
-  RemoteResultArtifactRejectedError,
-  RemoteResultImportInternalError,
-  RemoteResultPersistenceUnavailableError,
-  type RemoteResultCompleter,
+  BacktestResultArtifactRejectedError,
+  BacktestResultImportInternalError,
+  BacktestResultPersistenceUnavailableError,
+  type BacktestResultCompleter,
 } from '../application/backtest-result-artifact.js';
 
 type ChildMessage =
-  | { readonly type: 'completed'; readonly output: RemoteResultCompletionOutput }
+  | { readonly type: 'completed'; readonly output: BacktestResultCompletionOutput }
   | { readonly type: 'result-persistence-unavailable'; readonly error: string }
   | { readonly type: 'invalid-result-artifact'; readonly error: string }
   | { readonly type: 'result-import-internal-error'; readonly error: string };
 
 /** 결과 검증·수백만 행 import를 한 번에 하나씩 별도 child에서 수행한다. */
-export class ForkedRemoteResultCompleter implements RemoteResultCompleter {
+export class ForkedBacktestResultCompleter implements BacktestResultCompleter {
   private tail: Promise<void> = Promise.resolve();
 
   constructor(private readonly databasePath: string) {}
 
-  complete(input: RemoteResultCompletionInput): Promise<RemoteResultCompletionOutput> {
+  complete(input: BacktestResultCompletionInput): Promise<BacktestResultCompletionOutput> {
     const completion = this.tail.then(() => this.completeOnce(input));
     this.tail = completion.then(() => undefined, () => undefined);
     return completion;
   }
 
-  private completeOnce(input: RemoteResultCompletionInput): Promise<RemoteResultCompletionOutput> {
+  private completeOnce(input: BacktestResultCompletionInput): Promise<BacktestResultCompletionOutput> {
     const isTsRuntime = import.meta.url.endsWith('.ts');
     const childUrl = new URL(
       `../../../../workers/backtest-result-import-child.${isTsRuntime ? 'ts' : 'js'}`,
@@ -51,7 +51,7 @@ export class ForkedRemoteResultCompleter implements RemoteResultCompleter {
         stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
       });
       let stderr = '';
-      let output: RemoteResultCompletionOutput | null = null;
+      let output: BacktestResultCompletionOutput | null = null;
       let persistenceError: string | null = null;
       let artifactError: string | null = null;
       let internalError: string | null = null;
@@ -72,11 +72,11 @@ export class ForkedRemoteResultCompleter implements RemoteResultCompleter {
       child.once('exit', (code, signal) => {
         if (code === 0 && output !== null) resolve(output);
         else if (persistenceError !== null) {
-          reject(new RemoteResultPersistenceUnavailableError(persistenceError));
+          reject(new BacktestResultPersistenceUnavailableError(persistenceError));
         } else if (artifactError !== null) {
-          reject(new RemoteResultArtifactRejectedError(artifactError));
+          reject(new BacktestResultArtifactRejectedError(artifactError));
         } else if (internalError !== null) {
-          reject(new RemoteResultImportInternalError(internalError));
+          reject(new BacktestResultImportInternalError(internalError));
         }
         else reject(new Error(
           `결과 import child 실패 (code=${code}, signal=${signal ?? 'none'}): ${stderr.trim()}`,

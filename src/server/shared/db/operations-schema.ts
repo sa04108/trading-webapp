@@ -324,14 +324,14 @@ export const backtestJobs = sqliteTable(
      * null 은 경고가 없었거나 이 컬럼이 생기기 전에 만들어진 job 이다.
      */
     submitWarningsJson: text('submit_warnings_json'),
-    workerId: text('worker_id'),
+    agentId: text('agent_id'),
     pid: integer('pid'),
-    /** 원격 worker lease attempt. 새 claim마다 증가해 이전 worker의 늦은 완료를 거부한다. */
+    /** 에이전트 임대 시도 번호. 새 claim마다 증가해 이전 시도의 늦은 완료를 거부한다. */
     attempt: integer('attempt').notNull().default(0),
     /** lease 원문은 저장하지 않고 SHA-256만 저장한다. */
     leaseTokenHash: text('lease_token_hash'),
     leaseExpiresAtMs: integer('lease_expires_at_ms'),
-    /** 서버와 worker가 같은 계산 코드를 실행하는지 확인하는 git SHA. */
+    /** 서버와 에이전트가 같은 계산 코드를 실행하는지 확인하는 git SHA. */
     runnerVersion: text('runner_version'),
     resultSchemaVersion: integer('result_schema_version'),
     resultChecksum: text('result_checksum'),

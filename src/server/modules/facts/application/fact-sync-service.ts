@@ -514,7 +514,6 @@ export class FactSyncService {
       redisclosures =
         request.mode === 'INCREMENTAL'
           ? await this.detectRedisclosedYears(
-              symbols,
               collectedBySymbol,
               freshnessWatermarks,
               strategy.includeFinancials,
@@ -840,7 +839,6 @@ export class FactSyncService {
    * 전파한다.
    */
   private async detectRedisclosedYears(
-    symbols: readonly string[],
     collectedBySymbol: ReadonlyMap<string, readonly number[]>,
     watermarks: ReadonlyMap<string, number>,
     trackFinancialReceipts: boolean,

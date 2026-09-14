@@ -20,7 +20,7 @@ import { StrategyRegistry } from '../server/modules/strategy/application/strateg
 import { AgentDataRequired } from '../shared/agent-protocol.js';
 
 /** API 어댑터와 자격 증명 없이 같은 계산·결손 검증 코드를 실행한다. */
-export function createAgentPreparation(database: DatabaseHandle, onJobUpdated?: (jobId: string) => void): BacktestPreparationOrchestrator {
+export function createPreparationWorkerRuntime(database: DatabaseHandle, onJobUpdated?: (jobId: string) => void): BacktestPreparationOrchestrator {
   const clock = systemClock;
   const logger = pino({ level: 'warn' });
   const audit = createAuditLogService(database.db, clock, logger);

@@ -37,14 +37,3 @@ export function isValidCandle(candle: Candle): boolean {
   if (low > open || low > close) return false;
   return true;
 }
-
-/** 시간순 정렬 + 같은 (심볼, ts) 중복 제거(뒤에 온 것이 이긴다 — idempotent 재수집, 스펙 §11) */
-export function normalizeCandles(candles: readonly Candle[]): Candle[] {
-  const byKey = new Map<string, Candle>();
-  for (const candle of candles) {
-    byKey.set(`${candle.symbol}:${candle.market}:${candle.timeframe}:${candle.tsMs}`, candle);
-  }
-  return [...byKey.values()].sort((a, b) =>
-    a.symbol === b.symbol ? a.tsMs - b.tsMs : a.symbol < b.symbol ? -1 : 1,
-  );
-}

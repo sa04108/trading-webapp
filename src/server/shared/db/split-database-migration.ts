@@ -99,13 +99,21 @@ function publishSplit(journal: SplitJournal): void {
 function copyTables(sqlite: Database.Database, tables: readonly string[], destination: string): void {
   for (const table of tables) {
     const name = sqlIdentifier(table);
-    const columns = (sqlite.pragma(`main.table_info(${name})`) as Array<{ name: string }>)
-      .map(({ name: column }) => sqlIdentifier(column)).join(', ');
-    if (!columns) throw new Error(`기존 DB에 필수 테이블이 없습니다: ${table}`);
-    sqlite.exec(`DELETE FROM ${destination}.${name}; INSERT INTO ${destination}.${name} (${columns}) SELECT ${columns} FROM main.${name};`);
+    const sourceColumns = (sqlite.pragma(`main.table_info(${name})`) as Array<{ name: string }>);
+    if (!sourceColumns.length) throw new Error(`기존 DB에 필수 테이블이 없습니다: ${table}`);
+    // 단일 DB는 과거 컬럼을 유지한다. 최신 운영 스키마로 옮길 때만 소유자 명칭을 이행한다.
+    const columns = sourceColumns.map(({ name: column }) =>
+      sqlIdentifier(table === 'backtest_jobs' && column === 'worker_id' ? 'agent_id' : column)).join(', ');
+    const sourceValues = sourceColumns.map(({ name: column }) => {
+      const identifier = sqlIdentifier(column);
+      return table === 'backtest_jobs' && column === 'worker_id'
+        ? `CASE WHEN ${identifier} GLOB 'remote:*' THEN substr(${identifier}, 8) ELSE ${identifier} END`
+        : identifier;
+    }).join(', ');
+    sqlite.exec(`DELETE FROM ${destination}.${name}; INSERT INTO ${destination}.${name} (${columns}) SELECT ${sourceValues} FROM main.${name};`);
     const originalCount = sqlite.prepare(`SELECT COUNT(*) AS n FROM main.${name}`).get() as { n: number };
     const copiedCount = sqlite.prepare(`SELECT COUNT(*) AS n FROM ${destination}.${name}`).get() as { n: number };
-    const difference = sqlite.prepare(`SELECT 1 FROM (SELECT ${columns} FROM main.${name} EXCEPT SELECT ${columns} FROM ${destination}.${name}) LIMIT 1`).get();
+    const difference = sqlite.prepare(`SELECT 1 FROM (SELECT ${sourceValues} FROM main.${name} EXCEPT SELECT ${columns} FROM ${destination}.${name}) LIMIT 1`).get();
     if (originalCount.n !== copiedCount.n || difference !== undefined) throw new Error(`이전한 데이터가 원본과 다릅니다: ${table}`);
   }
   if (tableExists(sqlite, 'sqlite_sequence', destination)) {

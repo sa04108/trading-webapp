@@ -107,7 +107,7 @@ export async function buildServer(container: Container): Promise<FastifyInstance
           orchestrator: container.jobOrchestrator,
           jobEvents: [
             container.jobOrchestrator.events,
-            container.remoteWorkerService.events,
+            container.backtestLeaseService.events,
           ],
           results: container.resultsService,
           strategies: container.strategyRegistry,

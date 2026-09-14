@@ -14,6 +14,7 @@ const REDACT_PATHS = [
   'password',
   'token',
   'leaseToken',
+  // 폐기된 설정 이름도 외부 입력·과거 오류에 섞이면 비밀 값이므로 가린다.
   'backtestWorkerToken',
   'BACKTEST_WORKER_TOKEN',
   'totp',

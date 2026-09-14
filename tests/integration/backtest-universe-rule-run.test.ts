@@ -1,3 +1,4 @@
+import { readBacktestJobs } from '../helpers/backtest-jobs.js';
 import { createHash } from 'node:crypto';
 import { and, eq, gte, isNull, lte } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -539,7 +540,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
       stopReason: null,
       failureMessage: null,
     });
-    const beforeCount = ctx.container.jobQueue.listJobs(100, 0).length;
+    const beforeCount = readBacktestJobs(ctx.container.database).length;
     const rejected = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
@@ -550,7 +551,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     expect(rejected.statusCode).toBe(409);
     expect(rejected.json().error).toBe('PREPARATION_REQUIRED');
     expect(rejected.json().message).toMatch(/coverage.*2024~2025년.*000660/);
-    expect(ctx.container.jobQueue.listJobs(100, 0)).toHaveLength(beforeCount);
+    expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeCount);
   });
 
   /**

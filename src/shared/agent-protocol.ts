@@ -1,3 +1,6 @@
+/** 운영 서버 내부 에이전트도 독립 에이전트와 같은 임대 소유권을 사용한다. */
+export const LOCAL_AGENT_ID = 'server-local';
+
 import { z } from 'zod';
 import { isoDateSchema } from './schemas/backtest-request.js';
 

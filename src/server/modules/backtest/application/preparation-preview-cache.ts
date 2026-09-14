@@ -6,7 +6,7 @@ import {
   datasetState,
   preparationPreviewCache,
 } from '../../../shared/db/schema.js';
-import type { ReadyPreviewDetails } from './backtest-preparation-execution.js';
+import type { ReadyPreviewDetails } from './backtest-preparation-orchestrator.js';
 
 // Deployment changes invalidate validation even when source data and request hashes match.
 // Bump the protocol for source-runtime changes that affect preview validation.

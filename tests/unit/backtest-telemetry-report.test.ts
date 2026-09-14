@@ -57,7 +57,7 @@ describe('backtest telemetry report', () => {
       availableEventCount: rows.length,
       sinceMs: 0,
       untilMs: 2_000,
-      workerBudgetBytes: 400 * 1024 ** 2,
+      agentBudgetBytes: 400 * 1024 ** 2,
     });
 
     expect(report.samples).toMatchObject({
@@ -78,8 +78,7 @@ describe('backtest telemetry report', () => {
     });
     expect(report.distributions.durationsMs.total?.p95).toBe(11_100);
     expect(report.sizing).toEqual({
-      localLightsailConcurrency: 1,
-      workerBudgetBytes: 400 * 1024 ** 2,
+      agentBudgetBytes: 400 * 1024 ** 2,
       plannedBytesPerWorker: 125 * 1024 ** 2,
       memoryConcurrencyCap: 3,
       sequentialSeedsPerShardCandidate: 25,
@@ -100,7 +99,7 @@ describe('backtest telemetry report', () => {
       availableEventCount: 8,
       sinceMs: 0,
       untilMs: 4,
-      workerBudgetBytes: 400 * 1024 ** 2,
+      agentBudgetBytes: 400 * 1024 ** 2,
     });
 
     expect(report.events).toEqual({
@@ -118,7 +117,6 @@ describe('backtest telemetry report', () => {
       '최소·최대 입력 규모 차이가 4배보다 작습니다 (1.0배).',
     ]);
     expect(report.sizing).toMatchObject({
-      localLightsailConcurrency: 1,
       plannedBytesPerWorker: null,
       memoryConcurrencyCap: null,
       sequentialSeedsPerShardCandidate: null,
