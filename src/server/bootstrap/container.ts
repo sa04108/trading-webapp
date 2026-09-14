@@ -394,6 +394,7 @@ export function createContainer(
     externalApiUsage,
     financialFacts: financialFactAvailabilityService,
     onJobFinished: preparationNotificationListener,
+    onJobUpdated: () => agentCoordinator.wake(),
   });
   const resultsService = new ResultsService(database.db);
   const backtestWizardDraftService = new BacktestWizardDraftService(database, clock);
@@ -411,7 +412,10 @@ export function createContainer(
   const jobOrchestrator = new JobOrchestrator(jobQueue, auditLog);
   const registry = new AgentRegistry(database);
   const snapshots = new DatasetSnapshots(database, path.join(path.dirname(config.databasePath), 'datasets'));
-  const preparations = new AgentPreparationQueue(database, (jobId) => backtestPreparationOrchestrator.agentJobUpdated(jobId));
+  const preparations = new AgentPreparationQueue(database, (jobId) => {
+    backtestPreparationOrchestrator.agentJobUpdated(jobId);
+    agentCoordinator.wake();
+  });
   const dataQueue = new AgentDataQueue(database, snapshots, async (request, shouldStop) => {
     if (request.kind === 'MARKET') {
       for (const date of request.dates) {

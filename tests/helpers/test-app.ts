@@ -51,7 +51,7 @@ export async function createTestApp(
       if (agent) return;
       const address = await app.listen({ host: '127.0.0.1', port: 0 });
       const credential = container.agentCoordinator.registry.issue('integration-test');
-      container.agentCoordinator.start();
+      container.agentCoordinator.start({ local: false });
       agent = new AgentClient({ serverUrl: address, token: credential.token }, path.join(dir, 'agent'), undefined, () => undefined);
       agent.start();
     },

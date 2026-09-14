@@ -31,6 +31,15 @@ describe('에이전트 자동 자원 배정', () => {
     expect(large.slots).toBeLessThan(normal.slots);
     expect(large.maxBars).toBeGreaterThanOrEqual(8_000_000);
   });
+  it('운영 서버는 CPU와 메모리 여유분을 더 남기고 포화 시 새 계산을 받지 않는다', () => {
+    const sample = { cpus: 8, total: 16 * GIB, available: 12 * GIB, load: 0 };
+    const remote = calculateResources(sample, 0);
+    const local = calculateResources(sample, 0, 0, true, 0, true);
+    expect(local.slots).toBeLessThan(remote.slots);
+    expect(local.reserveBytes).toBe(4 * GIB);
+    expect(calculateResources({ ...sample, load: 8 }, 0, 0, true, 0, true).slots).toBe(0);
+    expect(calculateResources({ ...sample, available: GIB }, 1, 0, true, 0, true).slots).toBe(1);
+  });
   it('설정은 서버 주소와 장치 토큰만 받는다', () => {
     const settings = { serverUrl: 'https://quant.example.com', token: 'a'.repeat(48) };
     expect(agentSettingsSchema.safeParse(settings).success).toBe(true);

@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import { and, count, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { AppDatabase, DatabaseHandle } from '../../../shared/db/database.js';
 import { PreparationPreviewCache } from './preparation-preview-cache.js';
@@ -63,6 +64,7 @@ export const TERMINAL_STATUSES: BacktestJobStatus[] = [
 
 /** SQLite 지속성 작업 큐 (스펙 §10) */
 export class JobQueue {
+  readonly events = new EventEmitter();
   private readonly db: AppDatabase;
 
   constructor(
@@ -92,7 +94,7 @@ export class JobQueue {
     benchmark?: { pin: BenchmarkPin; hash: string },
     metadata: EnqueueMetadata = {},
   ): BacktestJobRow {
-    return this.handle.sqlite.transaction(() => {
+    const job = this.handle.sqlite.transaction(() => {
       const references = new PreparationReferenceService(this.handle);
       const preparationJobId = metadata.preparationJobId
         ?? (metadata.cloneSourceJobId ? this.getJob(metadata.cloneSourceJobId)?.preparationJobId : null)
@@ -136,6 +138,8 @@ export class JobQueue {
       references.collect();
       return this.getJob(row.id) as BacktestJobRow;
     }).immediate();
+    this.events.emit('queued', job.id);
+    return job;
   }
 
   /** 원격 worker용 원자적 claim. attempt가 올라가므로 이전 lease의 늦은 응답은 무효다. */

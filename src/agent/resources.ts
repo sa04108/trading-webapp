@@ -14,13 +14,15 @@ export interface AgentResources { cpus: number; availableBytes: number; reserveB
 export interface ResourceSample { cpus: number; available: number; total: number; load: number }
 
 /** 측정값을 분리해 메모리 압력과 큰 장치의 실행 한도를 검증한다. */
-export function calculateResources(sample: ResourceSample, running: number, observedJobRss = 0, profiled = true, requestedBars = 0): AgentResources {
+export function calculateResources(sample: ResourceSample, running: number, observedJobRss = 0, profiled = true, requestedBars = 0, server = false): AgentResources {
   const cpus = Math.max(1, Math.floor(sample.cpus));
-  const reserveBytes = Math.max(256 * MIB, sample.total * 0.1);
+  const reserveBytes = Math.max(256 * MIB, sample.total * (server ? 0.25 : 0.1));
   const availableBytes = Math.max(0, sample.available - reserveBytes);
   const estimated = Math.max(requestedBars * 1280, observedJobRss * 1.35, Math.min(sample.total / cpus, 512 * MIB));
   const otherLoad = Math.max(0, sample.load - running);
-  const cpuSlots = Math.max(1, cpus - Math.floor(otherLoad));
+  // 운영 서버에서는 요청 처리용 CPU 여유를 남기고 포화 상태에서 계산을 추가하지 않는다.
+  const cpuBudget = server ? Math.max(1, cpus - Math.max(1, Math.ceil(cpus * 0.25))) : cpus;
+  const cpuSlots = server && otherLoad >= cpus ? 0 : Math.max(server ? 0 : 1, cpuBudget - Math.floor(otherLoad));
   const possible = Math.min(cpuSlots, running + Math.floor(availableBytes / Math.max(128 * MIB, estimated)));
   // 첫 계산의 실제 RSS를 관찰하기 전에는 하나만 실행하고 그 슬롯에 가용 예산을 준다.
   const slots = Math.max(running, profiled ? possible : Math.min(1, possible));
@@ -30,7 +32,7 @@ export function calculateResources(sample: ResourceSample, running: number, obse
 }
 
 /** 현재 cgroup과 상위 cgroup의 제한까지 적용한다. CPU affinity도 넘지 않는다. */
-export function availableResources(running: number, observedJobRss = 0, profiled = true, requestedBars = 0): AgentResources {
+export function availableResources(running: number, observedJobRss = 0, profiled = true, requestedBars = 0, server = false): AgentResources {
   let cpus = os.availableParallelism();
   const memoryAvailable = /MemAvailable:\s+(\d+) kB/.exec(read('/proc/meminfo') ?? '');
   let available = Math.min(process.availableMemory(), memoryAvailable?.[1] ? Number(memoryAvailable[1]) * 1024 : os.freemem());
@@ -49,10 +51,14 @@ export function availableResources(running: number, observedJobRss = 0, profiled
     if (directory === root) break;
     directory = path.dirname(directory);
   }
-  return calculateResources({ cpus, available, total, load: os.loadavg()[0]! }, running, observedJobRss, profiled, requestedBars);
+  return calculateResources({ cpus, available, total, load: os.loadavg()[0]! }, running, observedJobRss, profiled, requestedBars, server);
 }
 
 export function processRss(pid: number): number {
   const match = /VmRSS:\s+(\d+) kB/.exec(read(`/proc/${pid}/status`) ?? '');
   return match?.[1] ? Number(match[1]) * 1024 : 0;
 }
+
+/** 운영 서비스와 같은 장치의 계산은 더 넓은 자원 여유분을 보존한다. */
+export const availableServerResources: typeof availableResources = (running, observed, profiled, requestedBars) =>
+  availableResources(running, observed, profiled, requestedBars, true);

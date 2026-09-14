@@ -1,3 +1,8 @@
+import path from 'node:path';
+import { AgentClient } from '../../../../agent/client.js';
+import { availableServerResources } from '../../../../agent/resources.js';
+import { RemoteResultArtifactRejectedError } from '../../backtest/application/backtest-result-artifact.js';
+import { InvalidBacktestResultArtifactError } from '../../backtest/infrastructure/sqlite-backtest-result-artifact-importer.js';
 import { backtestExecutionTelemetrySchema } from '../../backtest/application/backtest-execution-telemetry.js';
 import type { WebSocket } from 'ws';
 import { MAX_BACKTEST_BARS } from '../../../shared/backtest-limits.js';
@@ -11,7 +16,8 @@ import type { DatasetSnapshots } from './dataset-snapshots.js';
 import type { AgentPreparationQueue } from './agent-preparation-queue.js';
 import type { AgentDataQueue } from './agent-data-queue.js';
 
-interface Connection { socket: WebSocket; ready: boolean; slots: number; maxBars: number; datasetVersion: number; lastMessageAt: number; assigning: boolean }
+export const LOCAL_AGENT_ID = 'server-local';
+interface Connection { socket: { readonly readyState: number; send(data: string): void; close(code?: number, reason?: string): void; terminate(): void }; ready: boolean; slots: number; maxBars: number; datasetVersion: number; lastMessageAt: number }
 
 /** PC가 먼저 만든 연결로 서버가 작업을 전달한다. 연결과 작업 lease의 수명은 분리한다. */
 export class AgentCoordinator {
@@ -19,6 +25,12 @@ export class AgentCoordinator {
   private timer: NodeJS.Timeout | null = null;
   private stopped = false;
   private lastPrunedAt = 0;
+  private dispatching: Promise<void> | null = null;
+  private dispatchRequested = false;
+  private localClient: AgentClient | null = null;
+  private localConnection: Connection | null = null;
+  private refreshingLocal = false;
+  private closing: Promise<void> | null = null;
 
   constructor(
     private readonly database: DatabaseHandle,
@@ -30,19 +42,25 @@ export class AgentCoordinator {
     private readonly queue: JobQueue,
     readonly runnerVersion: string,
     private readonly logger: Logger,
-  ) {}
+  ) {
+    this.queue.events.on('queued', this.wake);
+    this.backtests.events.on('job', this.wake);
+  }
 
-  start(): void {
+  start(options: { local?: boolean } = {}): void {
+    if (this.timer || this.stopped) return;
     this.dataQueue.recover();
     this.backtests.start();
     this.timer = setInterval(() => this.tick(), 2000);
     this.timer.unref();
+    if (options.local !== false) this.startLocal();
+    this.wake();
   }
 
   connect(clientId: string, socket: WebSocket): void {
     if (this.stopped) { socket.close(1012, 'server stopping'); return; }
     this.connections.get(clientId)?.socket.close(4001, 'connection replaced');
-    const connection: Connection = { socket, ready: false, slots: 0, maxBars: 0, datasetVersion: 0, lastMessageAt: Date.now(), assigning: false };
+    const connection: Connection = { socket, ready: false, slots: 0, maxBars: 0, datasetVersion: 0, lastMessageAt: Date.now() };
     this.connections.set(clientId, connection);
     // 비동기 DB 게시 전에 수신기를 등록해야 HELLO가 유실되지 않는다.
     let tail = Promise.resolve();
@@ -60,7 +78,10 @@ export class AgentCoordinator {
       });
     });
     socket.on('error', (error) => this.logger.debug({ err: error, clientId }, '에이전트 연결 오류'));
-    socket.once('close', () => { if (this.connections.get(clientId) === connection) this.connections.delete(clientId); });
+    socket.once('close', () => {
+      if (this.connections.get(clientId) === connection) this.connections.delete(clientId);
+      this.wake();
+    });
   }
 
   private send(connection: Connection, message: ServerAgentMessage): void {
@@ -70,12 +91,15 @@ export class AgentCoordinator {
   private async message(clientId: string, connection: Connection, message: AgentMessage): Promise<void> {
     if (message.type === 'HELLO') {
       if (message.runnerVersion !== this.runnerVersion) {
+        connection.ready = false;
+        connection.slots = 0;
         this.invalidateClientLeases(clientId);
         this.send(connection, { type: 'UPDATE_REQUIRED', runnerVersion: this.runnerVersion });
         return;
       }
       connection.ready = true;
       this.send(connection, { type: 'WELCOME', runnerVersion: this.runnerVersion });
+      if (clientId === LOCAL_AGENT_ID) { this.wake(); return; }
       const dataset = await this.snapshots.ensureLatest();
       this.send(connection, { type: 'DATASET', dataset });
       return;
@@ -85,7 +109,7 @@ export class AgentCoordinator {
       connection.slots = message.slots;
       connection.maxBars = message.maxBars;
       connection.datasetVersion = message.datasetVersion;
-      await this.assign(clientId, connection);
+      if (!this.refreshingLocal || clientId !== LOCAL_AGENT_ID) this.wake();
       return;
     }
     const identity = { jobId: message.jobId, attempt: message.attempt, leaseToken: message.leaseToken };
@@ -144,38 +168,130 @@ export class AgentCoordinator {
   }
 
   maxBacktestBars(): number {
-    const capacities = [...this.connections.values()].filter((c) => c.ready && c.socket.readyState === 1 && c.maxBars > 0).map((c) => c.maxBars);
-    return capacities.length > 0 ? Math.max(...capacities) : MAX_BACKTEST_BARS;
+    const capacities = [...this.connections.values(), ...(this.localConnection ? [this.localConnection] : [])].filter((c) => c.ready && c.socket.readyState === 1 && c.maxBars > 0).map((c) => c.maxBars);
+    return Math.max(MAX_BACKTEST_BARS, ...capacities);
   }
 
   ownsBacktest(clientId: string, jobId: string): boolean { return this.queue.getJob(jobId)?.workerId === `remote:${clientId}`; }
 
-  private async assign(clientId: string, connection: Connection): Promise<void> {
-    if (connection.assigning || !connection.ready || connection.slots <= 0 || this.stopped) return;
-    connection.assigning = true;
-    try {
-      const dataset = await this.snapshots.ensureLatest();
-      if (this.connections.get(clientId) !== connection || connection.socket.readyState !== 1) return;
-      if (connection.datasetVersion !== dataset.version) { this.send(connection, { type: 'DATASET', dataset }); return; }
-      let active = this.activeLeaseCount(clientId);
-      while (connection.slots > active) {
-        // 이미 데이터가 준비된 백테스트를 먼저 주고, 남는 슬롯에 유니버스 계산을 배정한다.
-        let lease: AgentLease | null = null;
-        const claim = this.backtests.claim(clientId, this.runnerVersion, connection.maxBars);
-        if (claim.status === 'CLAIMED') {
-          const job = claim.lease.job;
-          this.database.sqlite.prepare('INSERT INTO agent_backtest_datasets (job_id, dataset_version) VALUES (?, ?) ON CONFLICT(job_id) DO UPDATE SET dataset_version = excluded.dataset_version').run(job.id, dataset.version);
-          lease = { kind: 'BACKTEST', jobId: job.id, attempt: claim.lease.attempt, leaseToken: claim.lease.leaseToken, leaseExpiresAtMs: claim.lease.leaseExpiresAtMs, dataset, payload: { ...job, preparationJobId: null } };
-        } else lease = this.preparations.claim(clientId, dataset);
-        if (!lease) {
-          const waiting = this.database.sqlite.prepare("SELECT estimated_bars AS bars FROM backtest_jobs WHERE status = 'QUEUED' ORDER BY created_at_ms LIMIT 1").get() as { bars: number } | undefined;
-          if (waiting && waiting.bars > connection.maxBars) this.send(connection, { type: 'DEMAND', estimatedBars: waiting.bars });
-          break;
-        }
-        active += 1;
-        this.send(connection, { type: 'JOB', lease });
+  /** 큐 등록·슬롯 반환·재연결은 주기 타이머를 기다리지 않고 배정을 깨운다. */
+  readonly wake = (): void => {
+    if (this.stopped) return;
+    this.dispatchRequested = true;
+    if (this.dispatching) return;
+    this.dispatching = Promise.resolve().then(async () => {
+      while (this.dispatchRequested && !this.stopped) {
+        this.dispatchRequested = false;
+        await this.dispatch();
       }
-    } finally { connection.assigning = false; }
+    }).catch((error: unknown) => this.logger.warn({ err: error }, '계산 작업 배정 실패'))
+      .finally(() => { this.dispatching = null; if (this.dispatchRequested && !this.stopped) this.wake(); });
+  };
+
+  private hasQueuedWork(): boolean {
+    return !!this.database.sqlite.prepare("SELECT 1 FROM backtest_jobs WHERE status = 'QUEUED' UNION ALL SELECT 1 FROM backtest_preparation_jobs WHERE status = 'QUEUED' AND cancel_requested = 0 LIMIT 1").get();
+  }
+
+  private available(clientId: string, connection: Connection): boolean {
+    return connection.ready && connection.socket.readyState === 1 && connection.slots > this.activeLeaseCount(clientId)
+      && (clientId === LOCAL_AGENT_ID || Date.now() - connection.lastMessageAt <= 60_000 && this.registry.active(clientId));
+  }
+
+  private async dispatch(): Promise<void> {
+    if (!this.hasQueuedWork()) return;
+    this.refreshLocalCapacity();
+    if (![...this.connections].some(([id, connection]) => this.available(id, connection))
+      && !(this.localConnection && this.available(LOCAL_AGENT_ID, this.localConnection))) return;
+    const dataset = await this.snapshots.ensureLatest();
+    if (this.stopped) return;
+    // 게시를 기다리는 동안 연결된 장치까지 다시 확인한 뒤 서버의 계산 슬롯을 사용한다.
+    for (const [id, connection] of this.connections) this.assign(id, connection, dataset);
+    if (this.localClient && this.localConnection) {
+      this.refreshLocalCapacity();
+      this.assign(LOCAL_AGENT_ID, this.localConnection, dataset);
+    }
+  }
+
+  private refreshLocalCapacity(): void {
+    this.refreshingLocal = true;
+    try { this.localClient?.refreshCapacity(); } finally { this.refreshingLocal = false; }
+  }
+
+  private assign(clientId: string, connection: Connection, dataset: DatasetManifest): void {
+    if (!this.available(clientId, connection) || this.stopped) return;
+    if (connection.datasetVersion !== dataset.version) { this.send(connection, { type: 'DATASET', dataset }); return; }
+    let active = this.activeLeaseCount(clientId);
+    while (connection.slots > active) {
+      let lease: AgentLease | null;
+      const claim = this.backtests.claim(clientId, this.runnerVersion, connection.maxBars);
+      if (claim.status === 'CLAIMED') {
+        const job = claim.lease.job;
+        this.database.sqlite.prepare('INSERT INTO agent_backtest_datasets (job_id, dataset_version) VALUES (?, ?) ON CONFLICT(job_id) DO UPDATE SET dataset_version = excluded.dataset_version').run(job.id, dataset.version);
+        lease = { kind: 'BACKTEST', jobId: job.id, attempt: claim.lease.attempt, leaseToken: claim.lease.leaseToken, leaseExpiresAtMs: claim.lease.leaseExpiresAtMs, dataset, payload: { ...job, preparationJobId: null } };
+      } else lease = this.preparations.claim(clientId, dataset);
+      if (!lease) {
+        const waiting = this.database.sqlite.prepare("SELECT estimated_bars AS bars FROM backtest_jobs WHERE status = 'QUEUED' ORDER BY created_at_ms LIMIT 1").get() as { bars: number } | undefined;
+        if (waiting && waiting.bars > connection.maxBars) this.send(connection, { type: 'DEMAND', estimatedBars: waiting.bars });
+        break;
+      }
+      active += 1;
+      this.send(connection, { type: 'JOB', lease });
+    }
+  }
+
+  private startLocal(): void {
+    let receive: (message: ServerAgentMessage) => void = () => undefined;
+    let open = true;
+    let tail = Promise.resolve();
+    const connection: Connection = {
+      socket: {
+        get readyState() { return open ? 1 : 3; },
+        send: (data) => queueMicrotask(() => { if (open) receive(JSON.parse(data) as ServerAgentMessage); }),
+        close: () => { open = false; },
+        terminate: () => { open = false; },
+      },
+      ready: false, slots: 0, maxBars: 0, datasetVersion: 0, lastMessageAt: Date.now(),
+    };
+    this.localConnection = connection;
+    const cache = {
+      current: null as DatasetManifest | null,
+      syncing: false,
+      synchronize: async (manifest: DatasetManifest) => { cache.current = manifest; },
+      file: (manifest: DatasetManifest) => this.snapshots.file(manifest),
+      // 게시 파일 보존은 중앙 스케줄러가 원격·로컬 리스를 함께 보고 결정한다.
+      prune: () => undefined,
+      stop: async () => undefined,
+    };
+    this.localClient = new AgentClient({ serverUrl: 'http://localhost', token: '' },
+      path.join(path.dirname(this.database.dataPath), 'server-agent'), undefined,
+      (message) => this.logger.info({ module: 'local-agent' }, message), {
+        runnerVersion: this.runnerVersion, cache, resources: availableServerResources,
+        connect: (listener) => { receive = listener; },
+        close: () => connection.socket.terminate(),
+        send: (message) => {
+          if (!open || this.stopped) return;
+          // 배정 직전 자원 측정은 같은 호출 안에서 반영하고 나머지 메시지는 순서대로 처리한다.
+          if (message.type === 'CAPACITY') void this.message(LOCAL_AGENT_ID, connection, message);
+          else tail = tail.then(() => this.stopped ? undefined : this.message(LOCAL_AGENT_ID, connection, message))
+            .catch((error: unknown) => this.logger.warn({ err: error }, '로컬 계산 메시지 처리 실패'));
+        },
+        upload: async (input, signal) => {
+          signal.throwIfAborted();
+          if (!this.ownsBacktest(LOCAL_AGENT_ID, input.lease.jobId)) return 409;
+          const identity = { jobId: input.lease.jobId, attempt: input.lease.attempt, leaseToken: input.lease.leaseToken, checksum: input.sha256 };
+          const reserved = this.backtests.reserveResultTransfer(identity);
+          if (reserved.status === 'IDEMPOTENT') return 200;
+          if (reserved.status === 'STALE_LEASE' || reserved.cancelRequested) return 409;
+          try {
+            const status = await this.backtests.complete({ ...identity, artifactPath: input.artifactPath, telemetry: input.telemetry });
+            return status === 'ACCEPTED' || status === 'IDEMPOTENT' ? 200 : 409;
+          } catch (error) {
+            if (error instanceof RemoteResultArtifactRejectedError || error instanceof InvalidBacktestResultArtifactError) return 422;
+            throw error;
+          }
+        },
+      });
+    this.localClient.start();
   }
 
   private tick(): void {
@@ -188,16 +304,17 @@ export class AgentCoordinator {
         this.snapshots.prune(new Set(rows.map((row) => row.version)));
         this.lastPrunedAt = Date.now();
       }
-      for (const [id, connection] of this.connections) {
-        if (Date.now() - connection.lastMessageAt > 60_000 || !this.registry.active(id)) connection.socket.terminate();
+      const peers = [...this.connections, ...(this.localConnection ? [[LOCAL_AGENT_ID, this.localConnection] as const] : [])];
+      for (const [id, connection] of peers) {
+        if (id !== LOCAL_AGENT_ID && (Date.now() - connection.lastMessageAt > 60_000 || !this.registry.active(id))) connection.socket.terminate();
         else {
           const cancelled = this.database.sqlite.prepare("SELECT id AS jobId, attempt FROM backtest_jobs WHERE worker_id = ? AND status = 'CANCELLING'").all(`remote:${id}`) as Array<{ jobId: string; attempt: number }>;
           for (const job of cancelled) this.send(connection, { type: 'LEASE', kind: 'BACKTEST', ...job, accepted: true, cancelRequested: true });
           const preparations = this.database.sqlite.prepare("SELECT j.id AS jobId, l.attempt FROM backtest_preparation_jobs j JOIN agent_preparation_leases l ON l.job_id = j.id WHERE l.client_id = ? AND j.status = 'RUNNING' AND j.cancel_requested = 1").all(id) as Array<{ jobId: string; attempt: number }>;
           for (const job of preparations) this.send(connection, { type: 'LEASE', kind: 'PREPARATION', ...job, accepted: true, cancelRequested: true });
-          void this.assign(id, connection).catch((error: unknown) => this.logger.warn({ err: error }, '에이전트 작업 배정 실패'));
         }
       }
+      this.wake();
     } catch (error) { this.logger.warn({ err: error }, '에이전트 스케줄러 주기 처리 실패'); }
   }
 
@@ -212,13 +329,25 @@ export class AgentCoordinator {
     return row ? this.snapshots.get(row.version) : null;
   }
 
-  async stop(): Promise<void> {
+  stop(): Promise<void> {
+    if (this.closing) return this.closing;
     this.stopped = true;
+    this.queue.events.off('queued', this.wake);
+    this.backtests.events.off('job', this.wake);
+    this.closing = this.shutdown();
+    return this.closing;
+  }
+
+  private async shutdown(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
     for (const { socket } of this.connections.values()) socket.terminate();
     this.connections.clear();
+    await this.localClient?.stop();
+    // 서버 자식의 종료를 확인한 뒤에만 로컬 리스를 반환한다. 원격 리스는 만료까지 유지한다.
+    if (this.localClient) this.invalidateClientLeases(LOCAL_AGENT_ID);
     this.backtests.stop();
     await this.dataQueue.stop();
     await this.snapshots.stop();
+    await this.dispatching;
   }
 }

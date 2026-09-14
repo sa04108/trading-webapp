@@ -16,6 +16,19 @@ import { AgentDatasetCache, durableJson } from './dataset-cache.js';
 import type { AgentSettings } from './config.js';
 
 type FinishMessage = Extract<AgentMessage, { type: 'FINISH' | 'NEEDS_DATA' }>;
+export interface AgentResultUpload { lease: AgentLease; artifactPath: string; sha256: string; telemetry?: BacktestExecutionTelemetry }
+
+/** 서버 내부 실행도 동일한 계산·리스·outbox를 사용하고 전송 경계만 바꾼다. */
+export interface AgentRuntimeAdapter {
+  runnerVersion: string;
+  cache: Pick<AgentDatasetCache, 'current' | 'syncing' | 'synchronize' | 'file' | 'prune' | 'stop'>;
+  connect(receive: (message: ServerAgentMessage) => void): void;
+  send(message: AgentMessage): void;
+  close(): void;
+  upload(input: AgentResultUpload, signal: AbortSignal): Promise<number>;
+  resources: typeof availableResources;
+}
+
 interface Outbox { lease: AgentLease; message?: FinishMessage; artifactPath?: string; sha256?: string; telemetry?: BacktestExecutionTelemetry }
 interface Running { lease: AgentLease; child: ChildProcess; directory: string; jobPath: string; progress?: Extract<AgentMessage, { type: 'HEARTBEAT' }>['progress']; preparationProgress?: Extract<AgentMessage, { type: 'HEARTBEAT' }>['preparationProgress']; peakRss: number; budgetBytes: number; resourceError?: string; cancellation: boolean; cancelPath?: 'IPC' | 'SIGTERM' | 'SIGKILL'; telemetry?: BacktestExecutionTelemetry; timers: NodeJS.Timeout[] }
 
@@ -34,7 +47,7 @@ export class AgentClient {
   private readonly uploads = new Map<string, Promise<void>>();
   private readonly uploadAborts = new Map<string, AbortController>();
   private readonly finishing = new Set<Promise<void>>();
-  private readonly cache: AgentDatasetCache;
+  private readonly cache: AgentRuntimeAdapter['cache'];
   private observedRss = 0;
   private profiled = false;
   private requestedBars = 0;
@@ -44,9 +57,10 @@ export class AgentClient {
 
   constructor(readonly settings: AgentSettings, readonly directory: string,
     private readonly onUpdateRequired?: (runnerVersion: string) => Promise<void>,
-    private readonly log: (message: string) => void = console.log) {
+    private readonly log: (message: string) => void = console.log,
+    private readonly runtime?: AgentRuntimeAdapter) {
     fs.mkdirSync(path.join(directory, 'jobs'), { recursive: true, mode: 0o700 });
-    this.cache = new AgentDatasetCache(path.join(directory, 'datasets'), settings);
+    this.cache = runtime?.cache ?? new AgentDatasetCache(path.join(directory, 'datasets'), settings);
   }
 
   start(): void {
@@ -89,6 +103,27 @@ export class AgentClient {
 
   private connect(): void {
     if (this.stopping) return;
+    if (this.runtime) {
+      this.runtime.connect((message) => {
+        if (this.stopping) return;
+        try { this.message(message); }
+        catch (error) {
+          const reason = this.error(error);
+          this.log(`로컬 계산 메시지 처리 오류: ${reason}`);
+          if (message.type !== 'JOB') return;
+          const running = this.running.get(this.key(message.lease));
+          if (running) { running.resourceError = reason; this.cancel(running); return; }
+          const finish: FinishMessage = { type: 'FINISH', ...this.identity(message.lease), outcome: 'FAILED', error: reason.slice(0, 2000) };
+          const entry: Outbox = { lease: message.lease, message: finish };
+          this.outbox.set(this.key(message.lease), entry);
+          try { durableJson(path.join(this.directory, 'jobs', this.key(message.lease), 'outbox.json'), entry); }
+          catch { /* 저장소 장애라도 살아 있는 서버에는 실패 결과를 전달한다. */ }
+          this.send(finish);
+        }
+      });
+      this.send({ type: 'HELLO', protocolVersion: AGENT_PROTOCOL_VERSION, runnerVersion: this.runtime.runnerVersion });
+      return;
+    }
     const url = new URL('/api/agents/connect', this.settings.serverUrl);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     const socket = new WebSocket(url, { headers: { authorization: `Bearer ${this.settings.token}` }, handshakeTimeout: 15_000, maxPayload: AGENT_MAX_MESSAGE_BYTES });
@@ -111,7 +146,8 @@ export class AgentClient {
   }
 
   private send(message: AgentMessage): void {
-    if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(message));
+    if (this.runtime) this.runtime.send(message);
+    else if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(message));
   }
 
   private message(message: ServerAgentMessage): void {
@@ -128,7 +164,10 @@ export class AgentClient {
         });
       } else this.log('운영 서버에 맞는 클라이언트 업데이트를 기다립니다');
     } else if (message.type === 'DEMAND') {
-      if (Number.isSafeInteger(message.estimatedBars) && message.estimatedBars >= 0) this.requestedBars = message.estimatedBars;
+      if (Number.isSafeInteger(message.estimatedBars) && message.estimatedBars >= 0 && this.requestedBars !== message.estimatedBars) {
+        this.requestedBars = message.estimatedBars;
+        this.capacity();
+      }
     } else if (message.type === 'DATASET') {
       void this.cache.synchronize(message.dataset).then(() => { this.prune(); this.capacity(); })
         .catch((error: unknown) => { this.log(`데이터 동기화 재시도 예정: ${this.error(error)}`); });
@@ -150,9 +189,12 @@ export class AgentClient {
     }
   }
 
+  /** 로컬 배정 직전에도 현재 자원을 다시 측정한다. */
+  refreshCapacity(): void { this.capacity(); }
+
   private capacity(): void {
     if (!this.ready) return;
-    this.admission = availableResources(this.running.size, this.observedRss, this.profiled, this.requestedBars);
+    this.admission = (this.runtime?.resources ?? availableResources)(this.running.size, this.observedRss, this.profiled, this.requestedBars);
     const slots = this.admission.slots;
     this.send({ type: 'CAPACITY', slots: this.cache.syncing || this.updating ? 0 : slots, datasetVersion: this.cache.current?.version ?? 0, maxBars: this.admission.maxBars });
   }
@@ -268,20 +310,27 @@ export class AgentClient {
     const abort = new AbortController();
     this.uploadAborts.set(key, abort);
     try {
+      const status = this.runtime
+        ? await this.runtime.upload({ lease: entry.lease, artifactPath: entry.artifactPath!, sha256: entry.sha256!, telemetry: entry.telemetry }, abort.signal)
+        : await this.uploadRemote(entry, abort.signal);
+      if (status >= 200 && status < 300 || status === 409) this.acknowledge(this.key(entry.lease));
+      else if ([400, 413, 415, 422].includes(status)) {
+        entry.message = { type: 'FINISH', ...this.identity(entry.lease), outcome: 'FAILED', error: `서버가 결과 파일을 거부했습니다 (HTTP ${status})` };
+        durableJson(path.join(this.directory, 'jobs', key, 'outbox.json'), entry);
+        this.send(entry.message);
+      } else throw new Error(`HTTP ${status}`);
+    } finally { this.uploadAborts.delete(key); }
+  }
+
+  private async uploadRemote(entry: Outbox, signal: AbortSignal): Promise<number> {
     const response = await fetch(`${this.settings.serverUrl}/api/agents/jobs/${entry.lease.jobId}/result`, {
-      method: 'POST', redirect: 'error', signal: AbortSignal.any([abort.signal, AbortSignal.timeout(15 * 60_000)]),
+      method: 'POST', redirect: 'error', signal: AbortSignal.any([signal, AbortSignal.timeout(15 * 60_000)]),
       headers: { authorization: `Bearer ${this.settings.token}`, 'content-type': 'application/vnd.quant-platform.backtest-result+sqlite',
         'content-length': String(fs.statSync(entry.artifactPath!).size), 'x-agent-attempt': String(entry.lease.attempt), 'x-agent-lease-token': entry.lease.leaseToken, 'x-content-sha256': entry.sha256!, ...(entry.telemetry ? { 'x-agent-telemetry': JSON.stringify(entry.telemetry) } : {}) },
       body: fs.createReadStream(entry.artifactPath!) as unknown as RequestInit['body'], duplex: 'half',
     } as RequestInit);
     await response.arrayBuffer();
-    if (response.ok || response.status === 409) this.acknowledge(this.key(entry.lease));
-    else if ([400, 413, 415, 422].includes(response.status)) {
-      entry.message = { type: 'FINISH', ...this.identity(entry.lease), outcome: 'FAILED', error: `서버가 결과 파일을 거부했습니다 (HTTP ${response.status})` };
-      durableJson(path.join(this.directory, 'jobs', key, 'outbox.json'), entry);
-      this.send(entry.message);
-    } else throw new Error(`HTTP ${response.status}`);
-    } finally { this.uploadAborts.delete(key); }
+    return response.status;
   }
 
   private acknowledge(key: string): void {
@@ -325,6 +374,7 @@ export class AgentClient {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     if (this.sampleTimer) clearInterval(this.sampleTimer);
     this.socket?.terminate();
+    this.runtime?.close();
     for (const abort of this.uploadAborts.values()) abort.abort();
     await this.cancelChildren();
     await Promise.all([...this.uploads.values()]);

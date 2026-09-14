@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { WebSocket } from 'ws';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
+import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import type { AgentLease, ServerAgentMessage } from '../../src/shared/agent-protocol.js';
 
 class Peer extends EventEmitter {
@@ -95,6 +96,18 @@ describe('연결과 리스 수명 분리', () => {
     expect(response.statusCode).toBe(422);
   });
 
+  it('준비된 연결도 실행 버전이 달라지면 유휴 실행기에서 즉시 제외한다', async () => {
+    const peer = await connect(); capacity(peer);
+    await vi.waitFor(() => expect(ctx.container.agentCoordinator.maxBacktestBars()).toBe(8_000_000));
+    peer.submit({ type: 'HELLO', protocolVersion: 1, runnerVersion: 'previous-release' });
+    await vi.waitFor(() => expect(peer.received.some((message) => message.type === 'UPDATE_REQUIRED')).toBe(true));
+    const job = ctx.container.jobQueue.enqueue(request);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(peer.job()).toBeUndefined();
+    expect(ctx.container.jobQueue.getJob(job.id)?.status).toBe('QUEUED');
+    expect(ctx.container.agentCoordinator.maxBacktestBars()).toBe(2_000_000);
+  });
+
   it('장치 토큰은 해시만 저장하고 해제한 장치는 다시 인증할 수 없다', () => {
     const registry = ctx.container.agentCoordinator.registry;
     const credential = registry.issue('second');
@@ -103,5 +116,44 @@ describe('연결과 리스 수명 분리', () => {
     registry.revoke(credential.id);
     expect(registry.authenticate(credential.token)).toBeNull();
     expect(ctx.container.agentCoordinator.maxBacktestBars()).toBe(2_000_000);
+  });
+});
+
+const request: BacktestRequest = {
+  strategyId: 'range-breakout', parameters: {},
+  universeRule: { markets: ['KOSPI'], stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 }], rebalanceInterval: { unit: 'DAY', value: 1 } },
+  period: { from: '2026-01-05', to: '2026-01-05' },
+  capital: { initialCash: 1_000_000, currency: 'KRW' },
+  execution: { fillTiming: 'NEXT_BAR_OPEN', commissionProfileId: 'zero-cost', slippageProfileId: 'zero-slippage' },
+  risk: { maxPositions: 1 }, randomSeed: 1,
+};
+
+describe('이벤트로 대기 큐 재배정', () => {
+  it('유휴 에이전트가 이미 연결된 상태에서 새 작업을 등록하면 타이머 없이 배정한다', async () => {
+    const peer = await connect(); capacity(peer);
+    await vi.waitFor(() => expect(ctx.container.agentCoordinator.maxBacktestBars()).toBe(8_000_000));
+    const job = ctx.container.jobQueue.enqueue(request);
+    await vi.waitFor(() => expect(peer.job()?.jobId).toBe(job.id));
+    expect(ctx.container.jobQueue.getJob(job.id)).toMatchObject({ attempt: 1, workerId: `remote:${id}` });
+  });
+
+  it('슬롯이 없어 대기하던 작업은 capacity가 생기면 주기 타이머 없이 배정한다', async () => {
+    const peer = await connect(); capacity(peer, 0);
+    const job = ctx.container.jobQueue.enqueue(request);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(ctx.container.jobQueue.getJob(job.id)?.status).toBe('QUEUED');
+    capacity(peer, 1);
+    await vi.waitFor(() => expect(peer.job()?.jobId).toBe(job.id));
+  });
+
+  it('작업 완료로 슬롯이 반환되면 다음 capacity 통지 전에도 대기 작업을 배정한다', async () => {
+    const peer = await connect(); capacity(peer);
+    ctx.container.jobQueue.enqueue(request);
+    const next = ctx.container.jobQueue.enqueue({ ...request, randomSeed: 2 });
+    await vi.waitFor(() => expect(peer.job()).toBeDefined());
+    const lease = peer.job()!;
+    peer.submit({ type: 'FINISH', kind: 'BACKTEST', jobId: lease.jobId, attempt: lease.attempt, leaseToken: lease.leaseToken, outcome: 'FAILED', error: '계산 실패' });
+    await vi.waitFor(() => expect(peer.received.filter((message) => message.type === 'JOB').map((message) => message.lease.jobId)).toContain(next.id));
+    expect(ctx.container.jobQueue.getJob(next.id)?.attempt).toBe(1);
   });
 });
