@@ -14,6 +14,8 @@ process.once('message', (input: { lease: AgentLease; jobPath: string; dataPath: 
 async function run(input: { lease: AgentLease; jobPath: string; dataPath: string }): Promise<void> {
   const database = openDatabase(input.jobPath, { dataPath: input.dataPath, dataReadonly: true });
   let orchestrator: ReturnType<typeof createPreparationWorkerRuntime> | undefined;
+  let stop: (() => void) | undefined;
+  let onMessage: ((message: { type: string }) => void) | undefined;
   try {
     database.db.insert(backtestPreparationJobs).values({
       id: input.lease.jobId, requestHash: String(input.lease.payload.requestHash),
@@ -24,10 +26,11 @@ async function run(input: { lease: AgentLease; jobPath: string; dataPath: string
       const progress = orchestrator?.get(input.lease.jobId);
       if (progress) process.send?.({ type: 'PROGRESS', progress });
     });
-    const stop = () => { orchestrator?.cancel(input.lease.jobId); };
+    stop = () => { orchestrator?.cancel(input.lease.jobId); };
+    onMessage = (message: { type: string }) => { if (message.type === 'cancel') stop?.(); };
     process.on('SIGTERM', stop);
     process.on('disconnect', stop);
-    process.on('message', (message: { type: string }) => { if (message.type === 'cancel') stop(); });
+    process.on('message', onMessage);
     await orchestrator.runClaimedJob(input.lease.jobId);
     const job = orchestrator.get(input.lease.jobId);
     const row = database.sqlite.prepare('SELECT preview_json AS preview, data_revision AS dataRevision, fundamental_symbols_json AS fundamentalSymbols FROM backtest_preparation_jobs LEFT JOIN preparation_preview_cache ON job_id = id WHERE id = ?').get(input.lease.jobId) as { preview: string | null; dataRevision: number | null; fundamentalSymbols: string | null };
@@ -37,6 +40,12 @@ async function run(input: { lease: AgentLease; jobPath: string; dataPath: string
     if (error instanceof AgentDataRequired) process.send?.({ type: 'NEEDS_DATA', request: error.request });
     else process.send?.({ type: 'FINISH', outcome: 'FAILED', error: error instanceof Error ? error.message : String(error) });
   } finally {
+    // 자체 IPC 종료가 취소 처리로 되돌아가 닫힌 작업 DB를 읽지 않도록 먼저 해제한다.
+    if (stop) {
+      process.off('SIGTERM', stop);
+      process.off('disconnect', stop);
+    }
+    if (onMessage) process.off('message', onMessage);
     await orchestrator?.stop();
     database.close();
     if (process.connected) process.disconnect();
