@@ -33,9 +33,9 @@ export interface ExecutionRules {
   readonly tickSize: number;
   /** KRX 보통주 체결일·시장·가격대별 호가단위 프로파일 */
   readonly tickSizeProfile?: {
-    readonly id: 'krx-equity';
+    readonly id: "krx-equity";
     readonly version: string;
-    readonly market: 'KOSPI' | 'KOSDAQ';
+    readonly market: "KOSPI" | "KOSDAQ";
   };
   /** 직전 거래 봉 거래량 중 한 봉에서 체결할 수 있는 최대 비율. 미지정이면 제한 없음 */
   readonly maxVolumeParticipationRate?: number;
@@ -49,7 +49,7 @@ export interface ExecutionProfile {
   readonly rules: ExecutionRules;
 }
 
-export type OrderSide = 'BUY' | 'SELL';
+export type OrderSide = "BUY" | "SELL";
 
 export interface OrderIntent {
   readonly symbol: string;

@@ -1,4 +1,8 @@
-import type { UniverseCriterion, UniverseDirection, UniverseRule } from './universe-rule.js';
+import type {
+  UniverseCriterion,
+  UniverseDirection,
+  UniverseRule,
+} from "./universe-rule.js";
 
 /**
  * 백테스트 실행의 유니버스 출처 pin (Task 12, REVIEW §9.2).
@@ -50,9 +54,9 @@ export interface RebalanceDiagnosticSnapshot {
  * 시각과 별도로 남긴다.
  */
 export interface OrderedUniversePipelineProvenancePin {
-  readonly sourceKind: 'SYMBOL_MASTER';
+  readonly sourceKind: "SYMBOL_MASTER";
   readonly filterPolicyVersion: string | null;
-  readonly selectionMethod: 'ORDERED_UNIVERSE_PIPELINE';
+  readonly selectionMethod: "ORDERED_UNIVERSE_PIPELINE";
   readonly universeRule: UniverseRule;
   /**
    * 멤버십 일정의 집계 해시. 리밸런스 날짜별 종목 구성이 제출 시점과 같았는지
@@ -72,12 +76,11 @@ export interface OrderedUniversePipelineProvenancePin {
  * (`TOP_MARKET_CAP_N`·`MANUAL_FROM_KRX_SNAPSHOT` 등)을 가리지 않고 그대로 담는다.
  */
 export interface LegacyTopMarketCapProvenancePin {
-  readonly sourceKind: 'SYMBOL_MASTER';
+  readonly sourceKind: "SYMBOL_MASTER";
   readonly filterPolicyVersion: string | null;
   readonly selectionMethod: string | null;
   readonly scheduleHash: string | null;
 }
 
 export type ProvenancePin =
-  | OrderedUniversePipelineProvenancePin
-  | LegacyTopMarketCapProvenancePin;
+  OrderedUniversePipelineProvenancePin | LegacyTopMarketCapProvenancePin;

@@ -3,75 +3,88 @@
  * 에이전트가 만든 계산 프로세스에서 입력 로드 → 엔진 실행 → 결과 파일 생성을 수행한다.
  * 실행 인자는 에이전트가 전달하며, 종료 상태는 작업 전용 DB에 기록한다.
  */
-import { and, asc, desc, eq, gte, inArray, lt, lte, sql } from 'drizzle-orm';
-import { pino } from 'pino';
-import { agentLeaseSchema, type AgentLease } from '../../shared/agent-protocol.js';
-import { readGitCommitSha } from '../shared/build-info.js';
-import { readRuntimeVersions } from '../shared/runtime-versions.js';
-import { systemClock } from '../shared/clock.js';
-import { openDatabase } from '../shared/db/database.js';
+import { and, asc, desc, eq, gte, inArray, lt, lte, sql } from "drizzle-orm";
+import { pino } from "pino";
+import {
+  agentLeaseSchema,
+  type AgentLease,
+} from "../../shared/agent-protocol.js";
+import { readGitCommitSha } from "../shared/build-info.js";
+import { readRuntimeVersions } from "../shared/runtime-versions.js";
+import { systemClock } from "../shared/clock.js";
+import { openDatabase } from "../shared/db/database.js";
 import {
   backtestJobs,
   symbolMasterTradingDays,
   symbolVersions,
   symbols as symbolsTable,
-} from '../shared/db/schema.js';
+} from "../shared/db/schema.js";
 import {
   sumExcludedNonTrading,
   type LegacyUniverseScheduleEntry,
-} from '../modules/backtest/application/universe-rule-resolver.js';
+} from "../modules/backtest/application/universe-rule-resolver.js";
 import type {
   BacktestExecutionOutcome,
   BacktestExecutionStage,
-} from '../modules/backtest/application/backtest-execution-telemetry.js';
+} from "../modules/backtest/application/backtest-execution-telemetry.js";
 import {
   measureBacktestArtifact,
   type BacktestArtifactSize,
-} from '../modules/backtest/application/backtest-result-artifact.js';
-import { BacktestRunner } from '../modules/backtest/application/backtest-runner.js';
+} from "../modules/backtest/application/backtest-result-artifact.js";
+import { BacktestRunner } from "../modules/backtest/application/backtest-runner.js";
 import {
   assertPinnedScheduleHash,
   assertPinnedScheduleExecutionDates,
   assertSafePinnedScheduleIdentities,
   calculatePinnedScheduleHash,
-} from '../modules/backtest/application/backtest-symbol-identity.js';
+} from "../modules/backtest/application/backtest-symbol-identity.js";
 import {
   findRelevantCorporateActionGaps,
   readCorporateActionGapDetails,
-} from '../modules/backtest/application/backtest-corporate-action-gaps.js';
-import { ENGINE_VERSION } from '../modules/backtest/domain/engine.js';
+} from "../modules/backtest/application/backtest-corporate-action-gaps.js";
+import { ENGINE_VERSION } from "../modules/backtest/domain/engine.js";
 import {
   getCostProfile,
   getKrxExecutionRules,
   getSlippageProfile,
-} from '../modules/backtest/domain/cost-profiles.js';
-import { SqliteFactRepository } from '../modules/facts/infrastructure/sqlite-fact-repository.js';
-import { SqliteCorporateActionCoverageStore } from '../modules/facts/application/corporate-action-coverage.js';
-import { SqliteFactCoverageStore } from '../modules/facts/application/fact-coverage-store.js';
-import { CORPORATE_ACTION_FIELD, type Fact } from '../modules/facts/domain/fact.js';
+} from "../modules/backtest/domain/cost-profiles.js";
+import { SqliteFactRepository } from "../modules/facts/infrastructure/sqlite-fact-repository.js";
+import { SqliteCorporateActionCoverageStore } from "../modules/facts/application/corporate-action-coverage.js";
+import { SqliteFactCoverageStore } from "../modules/facts/application/fact-coverage-store.js";
+import {
+  CORPORATE_ACTION_FIELD,
+  type Fact,
+} from "../modules/facts/domain/fact.js";
 import {
   alignCorporateActionEffectiveDates,
   CORPORATE_ACTION_ALIGNMENT_WINDOW,
   corporateActionRawDateRange,
-} from '../modules/facts/domain/corporate-action-effective-date.js';
-import type { Candle, Market, Timeframe } from '../modules/market-data/domain/candle.js';
-import { addCalendarDays } from '../modules/market-data/domain/kst-date.js';
-import { KrxDailyCandleRepository } from '../modules/market-data/infrastructure/krx-daily-candle-repository.js';
-import type { KrxHistoricalUniverseSource } from '../modules/market-data/application/ports.js';
-import { SymbolMasterService } from '../modules/market-data/application/symbol-master-service.js';
-import { StrategyRegistry } from '../modules/strategy/application/strategy-registry.js';
-import { strategyRequiresFinancialData } from '../modules/strategy/domain/strategy.js';
-import { strategySourceHash } from '../modules/strategy/application/strategy-source-hash.js';
-import { SqliteBacktestResultArtifactWriter } from '../modules/backtest/infrastructure/sqlite-backtest-result-artifact-writer.js';
-import { backtestRequestSchema, periodToTsRange } from '../../shared/schemas/backtest-request.js';
-import type { ProvenancePin } from '../../shared/schemas/provenance-pin.js';
-import { installCancellationHandlers } from './cancellation.js';
+} from "../modules/facts/domain/corporate-action-effective-date.js";
+import type {
+  Candle,
+  Market,
+  Timeframe,
+} from "../modules/market-data/domain/candle.js";
+import { addCalendarDays } from "../modules/market-data/domain/kst-date.js";
+import { KrxDailyCandleRepository } from "../modules/market-data/infrastructure/krx-daily-candle-repository.js";
+import type { KrxHistoricalUniverseSource } from "../modules/market-data/application/ports.js";
+import { SymbolMasterService } from "../modules/market-data/application/symbol-master-service.js";
+import { StrategyRegistry } from "../modules/strategy/application/strategy-registry.js";
+import { strategyRequiresFinancialData } from "../modules/strategy/domain/strategy.js";
+import { strategySourceHash } from "../modules/strategy/application/strategy-source-hash.js";
+import { SqliteBacktestResultArtifactWriter } from "../modules/backtest/infrastructure/sqlite-backtest-result-artifact-writer.js";
+import {
+  backtestRequestSchema,
+  periodToTsRange,
+} from "../../shared/schemas/backtest-request.js";
+import type { ProvenancePin } from "../../shared/schemas/provenance-pin.js";
+import { installCancellationHandlers } from "./cancellation.js";
 import {
   financialCoverageGapMessage,
   findFinancialCoverageGap,
-} from '../modules/backtest/application/backtest-financial-coverage.js';
-import { financialFactCutoffsFromCandles } from '../modules/backtest/application/backtest-financial-execution-window.js';
-import { findIncompleteFundamentalCheckpoints } from '../modules/backtest/application/backtest-financial-data-readiness.js';
+} from "../modules/backtest/application/backtest-financial-coverage.js";
+import { financialFactCutoffsFromCandles } from "../modules/backtest/application/backtest-financial-execution-window.js";
+import { findIncompleteFundamentalCheckpoints } from "../modules/backtest/application/backtest-financial-data-readiness.js";
 
 const cancellation = installCancellationHandlers();
 
@@ -84,7 +97,9 @@ function parseSubmitWarnings(raw: string | null): string[] {
   try {
     const parsed = JSON.parse(raw) as unknown;
     return Array.isArray(parsed)
-      ? parsed.filter((warning): warning is string => typeof warning === 'string')
+      ? parsed.filter(
+          (warning): warning is string => typeof warning === "string",
+        )
       : [];
   } catch {
     return [];
@@ -98,9 +113,13 @@ async function main(input: { lease: AgentLease }): Promise<void> {
   let loadCompletedAtMs: number | null = null;
   let runCompletedAtMs: number | null = null;
   let persistCompletedAtMs: number | null = null;
-  let activeStage: BacktestExecutionStage | null = 'LOAD';
-  let outcome: BacktestExecutionOutcome = 'FAILED';
-  let inputSize: { candleCount: number; factCount: number; symbolCount: number } | null = null;
+  let activeStage: BacktestExecutionStage | null = "LOAD";
+  let outcome: BacktestExecutionOutcome = "FAILED";
+  let inputSize: {
+    candleCount: number;
+    factCount: number;
+    symbolCount: number;
+  } | null = null;
   let outputSize: BacktestArtifactSize | null = null;
 
   const jobId = process.env.BACKTEST_JOB_ID;
@@ -108,57 +127,74 @@ async function main(input: { lease: AgentLease }): Promise<void> {
   const dataPath = process.env.DATA_SNAPSHOT_PATH;
   const resultPath = process.env.BACKTEST_RESULT_PATH;
   const maxBars = Number(process.env.WORKER_MAX_BARS);
-  if (!jobId || !databasePath || !dataPath || !resultPath || !Number.isSafeInteger(maxBars) || maxBars <= 0) {
-    throw new Error('에이전트가 전달한 작업·스냅샷·결과 경로와 워커 봉 한도가 필요합니다');
+  if (
+    !jobId ||
+    !databasePath ||
+    !dataPath ||
+    !resultPath ||
+    !Number.isSafeInteger(maxBars) ||
+    maxBars <= 0
+  ) {
+    throw new Error(
+      "에이전트가 전달한 작업·스냅샷·결과 경로와 워커 봉 한도가 필요합니다",
+    );
   }
 
-  if (lease.kind !== 'BACKTEST' || lease.jobId !== jobId) throw new Error('백테스트 임대와 작업 실행 인자가 다릅니다');
+  if (lease.kind !== "BACKTEST" || lease.jobId !== jobId)
+    throw new Error("백테스트 임대와 작업 실행 인자가 다릅니다");
 
   const handle = openDatabase(databasePath, { dataPath, dataReadonly: true });
   const db = handle.db;
 
   const finish = (
-    requestedStatus: 'COMPLETED' | 'FAILED' | 'CANCELLED',
+    requestedStatus: "COMPLETED" | "FAILED" | "CANCELLED",
     error?: string,
-  ): 'COMPLETED' | 'FAILED' | 'CANCELLED' | null => {
+  ): "COMPLETED" | "FAILED" | "CANCELLED" | null => {
     // 취소 요청과 오류 처리를 한 UPDATE에서 판정한다. 상태를 SELECT한 뒤 FAILED를
     // 쓰는 두 단계라면 그 사이 부모가 CANCELLING으로 바꿔도 실패가 취소를 덮어쓴다.
-    const updated = handle.sqlite.prepare(
-      `UPDATE backtest_jobs
+    const updated = handle.sqlite
+      .prepare(
+        `UPDATE backtest_jobs
        SET status = CASE WHEN status = 'CANCELLING' THEN 'CANCELLED' ELSE ? END,
            error = CASE WHEN status = 'CANCELLING' THEN NULL ELSE ? END,
            completed_at_ms = ?
        WHERE id = ?
          AND status NOT IN ('CANCELLED', 'COMPLETED', 'FAILED', 'INTERRUPTED')
        RETURNING status`,
-    ).get(
-      requestedStatus,
-      error ?? null,
-      Date.now(),
-      jobId,
-    ) as { status: 'COMPLETED' | 'FAILED' | 'CANCELLED' } | undefined;
+      )
+      .get(requestedStatus, error ?? null, Date.now(), jobId) as
+      { status: "COMPLETED" | "FAILED" | "CANCELLED" } | undefined;
     if (updated !== undefined) return updated.status;
 
     // 부모 exit handler가 아주 먼저 terminal로 확정한 경우에도 telemetry/exit code가
     // 실제 상태를 따르도록 이미 저장된 결론을 읽는다.
-    const existing = db.select({ status: backtestJobs.status })
+    const existing = db
+      .select({ status: backtestJobs.status })
       .from(backtestJobs)
       .where(eq(backtestJobs.id, jobId))
       .get()?.status;
-    return existing === 'COMPLETED' || existing === 'FAILED' || existing === 'CANCELLED'
+    return existing === "COMPLETED" ||
+      existing === "FAILED" ||
+      existing === "CANCELLED"
       ? existing
       : null;
   };
 
   try {
-    const job = db.select().from(backtestJobs).where(eq(backtestJobs.id, jobId)).get();
+    const job = db
+      .select()
+      .from(backtestJobs)
+      .where(eq(backtestJobs.id, jobId))
+      .get();
     if (!job) throw new Error(`job not found: ${jobId}`);
 
     // 스키마 변경 이전에 저장된 요청은 zod 원문 대신 이해 가능한 메시지로 실패시킨다
-    const parsedRequest = backtestRequestSchema.safeParse(JSON.parse(job.requestJson));
+    const parsedRequest = backtestRequestSchema.safeParse(
+      JSON.parse(job.requestJson),
+    );
     if (!parsedRequest.success) {
       throw new Error(
-        '저장된 요청이 현재 요청 스키마와 호환되지 않습니다. 복제 대신 새 백테스트를 생성하세요.',
+        "저장된 요청이 현재 요청 스키마와 호환되지 않습니다. 복제 대신 새 백테스트를 생성하세요.",
       );
     }
     const request = parsedRequest.data;
@@ -166,24 +202,35 @@ async function main(input: { lease: AgentLease }): Promise<void> {
     const registry = new StrategyRegistry();
     const strategy = registry.get(request.strategyId);
     if (!strategy) throw new Error(`unknown strategy: ${request.strategyId}`);
-    const validated = registry.validateParameters(request.strategyId, request.parameters);
-    if (!validated.ok) throw new Error(`invalid parameters: ${validated.error}`);
+    const validated = registry.validateParameters(
+      request.strategyId,
+      request.parameters,
+    );
+    if (!validated.ok)
+      throw new Error(`invalid parameters: ${validated.error}`);
     const parameters = validated.value as Record<string, unknown>;
 
     const costProfile = getCostProfile(request.execution.commissionProfileId);
-    const slippageProfile = getSlippageProfile(request.execution.slippageProfileId);
-    if (!costProfile || !slippageProfile) throw new Error('unknown cost/slippage profile');
+    const slippageProfile = getSlippageProfile(
+      request.execution.slippageProfileId,
+    );
+    if (!costProfile || !slippageProfile)
+      throw new Error("unknown cost/slippage profile");
 
     // 워커·엔진의 유일한 유니버스 소스는 제출 시점에 pin 한 멤버십 일정이다 (스펙
     // 2026-08-05) — `request.universeRule` 은 규칙일 뿐, 실제로 어떤 종목이었는지는
     // 여기 job.universeScheduleJson 에 이미 확정돼 있다. 워커가 규칙을 다시 해석하면
     // 대기 중 종목 마스터가 갱신됐을 때 제출 시점과 다른 유니버스로 돌게 된다.
-    const schedule = JSON.parse(job.universeScheduleJson) as LegacyUniverseScheduleEntry[];
+    const schedule = JSON.parse(
+      job.universeScheduleJson,
+    ) as LegacyUniverseScheduleEntry[];
     // Date.parse 결과가 NaN인 일정을 엔진에 넘기면 리밸런스가 영원히 실행되지 않은 채
     // 0-trade 결과가 정상 완료될 수 있으므로 flatMap/map보다 먼저 막는다.
     assertPinnedScheduleExecutionDates(schedule);
     const loadedScheduleHash = calculatePinnedScheduleHash(schedule);
-    const unionSymbols = [...new Set(schedule.flatMap((entry) => entry.symbols))].sort();
+    const unionSymbols = [
+      ...new Set(schedule.flatMap((entry) => entry.symbols)),
+    ].sort();
     // 엔진에 넘길 멤버십 일정 — rebalanceDate 를 periodToTsRange 와 같은 자정 규칙으로
     // ms 로 바꾼다. 두 곳이 각자 계산하면 제출·미리보기는 맞는데 실행부만 하루 어긋나는
     // D-024 류의 불일치가 생긴다. entry.effectiveTradingDate 는 resolver 가 유니버스·
@@ -207,9 +254,17 @@ async function main(input: { lease: AgentLease }): Promise<void> {
     // 워커는 저장된 종목 마스터만 조회한다. 필요한 데이터 수집은 서버에 요청한다.
     const unusedKrxSource: KrxHistoricalUniverseSource = {
       fetchIssueBaseInfo: () =>
-        Promise.reject(new Error('워커는 종목 마스터를 읽기 전용으로만 쓴다 — KRX 를 부르지 않는다')),
+        Promise.reject(
+          new Error(
+            "워커는 종목 마스터를 읽기 전용으로만 쓴다 — KRX 를 부르지 않는다",
+          ),
+        ),
       fetchDailyTrades: () =>
-        Promise.reject(new Error('워커는 종목 마스터를 읽기 전용으로만 쓴다 — KRX 를 부르지 않는다')),
+        Promise.reject(
+          new Error(
+            "워커는 종목 마스터를 읽기 전용으로만 쓴다 — KRX 를 부르지 않는다",
+          ),
+        ),
       todayMaxEndpointCallCount: () => 0,
     };
     const symbolMaster = new SymbolMasterService({
@@ -217,7 +272,7 @@ async function main(input: { lease: AgentLease }): Promise<void> {
       collectionVersion,
       source: unusedKrxSource,
       clock: systemClock,
-      logger: pino({ level: 'warn' }),
+      logger: pino({ level: "warn" }),
     });
     // HTTP 제출을 거치지 않은 직접 enqueue, 배포 전 QUEUED, 지연 seed 승격과
     // 원격 bundle 모두 이 최종 경계를 지난다. standardCode가 엔진 입력에서 사라지기
@@ -236,8 +291,8 @@ async function main(input: { lease: AgentLease }): Promise<void> {
     // 날짜만 안다고 기간 사이의 상장폐지·거래정지·코드 변경까지 안다고 볼 수 없다.
     if (!symbolMaster.isRangeCovered(request.period.from, request.period.to)) {
       throw new Error(
-        '종목 마스터가 백테스트 기간 전체를 커버하지 않습니다 — '
-          + '기간 전체 KRX 데이터를 동기화한 뒤 다시 실행하세요.',
+        "종목 마스터가 백테스트 기간 전체를 커버하지 않습니다 — " +
+          "기간 전체 KRX 데이터를 동기화한 뒤 다시 실행하세요.",
       );
     }
 
@@ -245,42 +300,55 @@ async function main(input: { lease: AgentLease }): Promise<void> {
     // (krx-daily-candle-repository.ts). 여기서 같은 규칙을 쓰지 않으면 하루 어긋난다(D-024 류).
     const unionSymbolSet = new Set(unionSymbols);
     const nonTradingSymbolsByTsMs = new Map<number, Set<string>>();
-    const strategyWarmupBars = strategy.dataRequirements?.priceWarmupBars?.(parameters) ?? 0;
+    const strategyWarmupBars =
+      strategy.dataRequirements?.priceWarmupBars?.(parameters) ?? 0;
     const declineWarmupBars = request.universeRule.stages.reduce(
-      (maximum, stage) => stage.criterion === 'DECLINE'
-        ? Math.max(maximum, stage.lookbackTradingDays)
-        : maximum,
+      (maximum, stage) =>
+        stage.criterion === "DECLINE"
+          ? Math.max(maximum, stage.lookbackTradingDays)
+          : maximum,
       0,
     );
-    const warmupBars = Math.ceil(Math.max(0, strategyWarmupBars, declineWarmupBars));
-    const priorTradingDays = warmupBars === 0
-      ? []
-      : db
-          .select({ date: symbolMasterTradingDays.date })
-          .from(symbolMasterTradingDays)
-          .where(and(
-            lt(symbolMasterTradingDays.date, request.period.from),
-            // 0005 legacy 이행의 주말 경계를 warm-up N일로 세지 않는다.
-            sql`strftime('%w', ${symbolMasterTradingDays.date}) NOT IN ('0', '6')`,
-          ))
-          .orderBy(desc(symbolMasterTradingDays.date))
-          .limit(warmupBars)
-          .all();
-    const warmupFromDate = priorTradingDays[priorTradingDays.length - 1]?.date
-      ?? request.period.from;
+    const warmupBars = Math.ceil(
+      Math.max(0, strategyWarmupBars, declineWarmupBars),
+    );
+    const priorTradingDays =
+      warmupBars === 0
+        ? []
+        : db
+            .select({ date: symbolMasterTradingDays.date })
+            .from(symbolMasterTradingDays)
+            .where(
+              and(
+                lt(symbolMasterTradingDays.date, request.period.from),
+                // 0005 legacy 이행의 주말 경계를 warm-up N일로 세지 않는다.
+                sql`strftime('%w', ${symbolMasterTradingDays.date}) NOT IN ('0', '6')`,
+              ),
+            )
+            .orderBy(desc(symbolMasterTradingDays.date))
+            .limit(warmupBars)
+            .all();
+    const warmupFromDate =
+      priorTradingDays[priorTradingDays.length - 1]?.date ??
+      request.period.from;
     const marketTradingTsMs = db
       .select({ date: symbolMasterTradingDays.date })
       .from(symbolMasterTradingDays)
-      .where(and(
-        gte(symbolMasterTradingDays.date, warmupFromDate),
-        lte(symbolMasterTradingDays.date, request.period.to),
-        sql`strftime('%w', ${symbolMasterTradingDays.date}) NOT IN ('0', '6')`,
-      ))
+      .where(
+        and(
+          gte(symbolMasterTradingDays.date, warmupFromDate),
+          lte(symbolMasterTradingDays.date, request.period.to),
+          sql`strftime('%w', ${symbolMasterTradingDays.date}) NOT IN ('0', '6')`,
+        ),
+      )
       .orderBy(asc(symbolMasterTradingDays.date))
       .all()
       .map((row) => Date.parse(`${row.date}T00:00:00Z`));
 
-    for (const row of symbolMaster.nonTradingDaysBetween(warmupFromDate, request.period.to)) {
+    for (const row of symbolMaster.nonTradingDaysBetween(
+      warmupFromDate,
+      request.period.to,
+    )) {
       if (!unionSymbolSet.has(row.shortCode)) continue;
       const ts = Date.parse(`${row.date}T00:00:00Z`);
       const set = nonTradingSymbolsByTsMs.get(ts) ?? new Set<string>();
@@ -301,7 +369,10 @@ async function main(input: { lease: AgentLease }): Promise<void> {
     // 한 코드가 기간 안에서 두 번 폐지될 수 있다. 하나만 남기면 뒤 폐지가 앞 폐지를
     // 덮어써, 앞 회사를 들고 있던 포지션이 뒷 회사의 종가로 청산된다.
     const delistedTsMsBySymbol = new Map<string, number[]>();
-    for (const event of symbolMaster.delistedEventsBetween(request.period.from, request.period.to)) {
+    for (const event of symbolMaster.delistedEventsBetween(
+      request.period.from,
+      request.period.to,
+    )) {
       if (!unionSymbolSet.has(event.shortCode)) continue;
       const list = delistedTsMsBySymbol.get(event.shortCode) ?? [];
       list.push(Date.parse(`${event.effectiveDate}T00:00:00Z`));
@@ -323,8 +394,8 @@ async function main(input: { lease: AgentLease }): Promise<void> {
     if (universeMarkets.length !== 1) {
       throw new Error(
         universeMarkets.length === 0
-          ? '유니버스 종목이 등록돼 있지 않습니다'
-          : `유니버스가 여러 시장에 걸쳐 있습니다: ${universeMarkets.join(', ')}`,
+          ? "유니버스 종목이 등록돼 있지 않습니다"
+          : `유니버스가 여러 시장에 걸쳐 있습니다: ${universeMarkets.join(", ")}`,
       );
     }
     const datasetMarket = universeMarkets[0] as Market;
@@ -333,7 +404,12 @@ async function main(input: { lease: AgentLease }): Promise<void> {
     // 다르면 대기 중 동기화가 데이터를 바꿨다는 뜻이다. 현재 데이터를 실행하는 구조라
     // 물리적 스냅샷 격리가 없으므로 경고로 명시한다. 종목 데이터가 데이터셋 간에
     // 공유되므로 "다른 사람이 이 종목을 동기화했다" 도 같은 경로로 잡힌다.
-    const pinnedEntries: Array<{ code: string; slice: string; version: number; contentHash: string }> =
+    const pinnedEntries: Array<{
+      code: string;
+      slice: string;
+      version: number;
+      contentHash: string;
+    }> =
       job.universeJson === null
         ? []
         : (JSON.parse(job.universeJson) as Array<{
@@ -350,7 +426,8 @@ async function main(input: { lease: AgentLease }): Promise<void> {
         .reduce((acc, row) => {
           const key = `${row.code}:${row.slice}`;
           const prev = acc.get(key);
-          if (prev === undefined || row.version > prev.version) acc.set(key, row);
+          if (prev === undefined || row.version > prev.version)
+            acc.set(key, row);
           return acc;
         }, new Map<string, typeof symbolVersions.$inferSelect>()),
     );
@@ -363,16 +440,16 @@ async function main(input: { lease: AgentLease }): Promise<void> {
     const excludedNonTradingTotal = sumExcludedNonTrading(schedule);
     if (excludedNonTradingTotal > 0) {
       datasetWarnings.push(
-        `리밸런스 기준일에 거래정지·무거래여서 유니버스 후보에서 제외된 종목 ${excludedNonTradingTotal}건 `
-          + '(중복 포함). 그날 실제로 매수할 수 없는 종목입니다.',
+        `리밸런스 기준일에 거래정지·무거래여서 유니버스 후보에서 제외된 종목 ${excludedNonTradingTotal}건 ` +
+          "(중복 포함). 그날 실제로 매수할 수 없는 종목입니다.",
       );
     }
     // warm-up 봉이 모자라면 전략이 첫 리밸런스 bar 를 지표 미준비로 건너뛰어
     // 한 주기 동안 현금이 놀 수 있다 — 조용히 지나가면 결과만 보고는 알 수 없다.
     if (warmupBars > 0 && priorTradingDays.length < warmupBars) {
       datasetWarnings.push(
-        `기간 시작 전 warm-up 거래일이 부족합니다 (필요 ${warmupBars}일, 확보 ${priorTradingDays.length}일). `
-          + '첫 리밸런스에서 지표가 준비되지 않아 주문이 나가지 않을 수 있습니다.',
+        `기간 시작 전 warm-up 거래일이 부족합니다 (필요 ${warmupBars}일, 확보 ${priorTradingDays.length}일). ` +
+          "첫 리밸런스에서 지표가 준비되지 않아 주문이 나가지 않을 수 있습니다.",
       );
     }
     // 서버가 제출 시점에 조립한 pin(Task 12)은 위에서 일정 원문과 대조했다.
@@ -382,20 +459,21 @@ async function main(input: { lease: AgentLease }): Promise<void> {
       return (current?.version ?? 0) !== entry.version;
     });
     if (drifted.length > 0) {
-      const driftedSymbolCount = new Set(drifted.map((entry) => entry.code)).size;
+      const driftedSymbolCount = new Set(drifted.map((entry) => entry.code))
+        .size;
       datasetWarnings.push(
-        `제출 이후 데이터가 변경된 종목 ${driftedSymbolCount}개가 있습니다 — `
-          + '결과가 제출 당시 데이터와 다를 수 있습니다.',
+        `제출 이후 데이터가 변경된 종목 ${driftedSymbolCount}개가 있습니다 — ` +
+          "결과가 제출 당시 데이터와 다를 수 있습니다.",
       );
     }
-    const pinnedUniverseJson = job.universeJson ?? '[]';
-    const pinnedUniverseHash = job.universeHash ?? 'unknown';
+    const pinnedUniverseJson = job.universeJson ?? "[]";
+    const pinnedUniverseHash = job.universeHash ?? "unknown";
 
     // 캔들 로드 (스펙 §11).
     // 새 요청은 스키마가 timeframe 을 '1d' 하나로만 허용한다(D-041, backtest-request.ts).
     // 아래 repository(KrxDailyCandleRepository)는 어차피 봉 주기를 보지 않고 KRX
     // 일봉만 돌려준다 — timeframe 은 이제 표시·에러 메시지용 값이다.
-    const timeframe = (request.timeframe ?? '1d') as Timeframe;
+    const timeframe = (request.timeframe ?? "1d") as Timeframe;
     // 봉은 KRX 일봉 하나뿐이다(container.ts 조립부와 같은 모양) — db 는 위에서 이미 연
     // handle 을 재사용한다. 워커가 잡 조회로 이미 DB 를 열어 둔 상태라 새로 열 이유가 없다.
     const repository = new KrxDailyCandleRepository(db);
@@ -417,8 +495,9 @@ async function main(input: { lease: AgentLease }): Promise<void> {
         );
       }
     }
-    const tradeCandles = candles
-      .filter((candle) => candle.tsMs >= fromTsMs && candle.tsMs <= toTsMs);
+    const tradeCandles = candles.filter(
+      (candle) => candle.tsMs >= fromTsMs && candle.tsMs <= toTsMs,
+    );
     if (tradeCandles.length === 0) {
       // 어떤 timeframe 을 찾았는지 밝힌다 — 커버리지가 정상인데 실패하면 여기서 갈린다
       throw new Error(
@@ -439,8 +518,8 @@ async function main(input: { lease: AgentLease }): Promise<void> {
     const emptySymbols = unionSymbols.filter((s) => !symbolsWithBars.has(s));
     if (emptySymbols.length > 0) {
       throw new Error(
-        `선택한 기간에 ${timeframe} 봉이 없는 유니버스 종목이 있어 백테스트를 중단했습니다: `
-          + `${emptySymbols.join(', ')}. 기간 전체 KRX 데이터를 동기화하거나 유니버스를 조정하세요.`,
+        `선택한 기간에 ${timeframe} 봉이 없는 유니버스 종목이 있어 백테스트를 중단했습니다: ` +
+          `${emptySymbols.join(", ")}. 기간 전체 KRX 데이터를 동기화하거나 유니버스를 조정하세요.`,
       );
     }
 
@@ -482,22 +561,24 @@ async function main(input: { lease: AgentLease }): Promise<void> {
     );
     if (missingExecutionSymbols.length > 0) {
       throw new Error(
-        '실제 편입 기간·상장폐지 이전에 실행 가능한 일봉이 없는 유니버스 종목이 있어 '
-        + `백테스트를 중단했습니다: ${missingExecutionSymbols.join(', ')}. `
-        + '일봉과 유니버스 데이터를 다시 준비하세요.',
+        "실제 편입 기간·상장폐지 이전에 실행 가능한 일봉이 없는 유니버스 종목이 있어 " +
+          `백테스트를 중단했습니다: ${missingExecutionSymbols.join(", ")}. ` +
+          "일봉과 유니버스 데이터를 다시 준비하세요.",
       );
     }
     const lastExecutionTsMs = Math.max(...financialCutoffBySymbol.values());
     const financialFacts: Fact[] = (
       await factRepository.getFacts({
-        scope: 'SYMBOL',
+        scope: "SYMBOL",
         keys: unionSymbols,
         asOfMaxTsMs: lastExecutionTsMs,
       })
-    ).filter((fact) => (
-      fact.field !== CORPORATE_ACTION_FIELD
-      && fact.asOfTsMs <= (financialCutoffBySymbol.get(fact.key) ?? Number.NEGATIVE_INFINITY)
-    ));
+    ).filter(
+      (fact) =>
+        fact.field !== CORPORATE_ACTION_FIELD &&
+        fact.asOfTsMs <=
+          (financialCutoffBySymbol.get(fact.key) ?? Number.NEGATIVE_INFINITY),
+    );
     if (strategy.dataRequirements?.fundamentalsReady !== undefined) {
       const validDatesBySymbol = new Map<string, string[]>();
       for (const candle of tradeCandles) {
@@ -514,14 +595,14 @@ async function main(input: { lease: AgentLease }): Promise<void> {
       });
       if (incomplete.length > 0) {
         throw new Error(
-          '준비 완료 후 전략의 PIT 재무 계정·연속 분기·신선도 조건을 만족하지 못하게 된 '
-            + `종목이 있습니다: ${incomplete.map((item) => `${item.symbol}(${item.date})`).join(', ')} — `
-            + '실행 유니버스는 이미 고정되어 재순위할 수 없습니다. 미리보기를 다시 준비하세요.',
+          "준비 완료 후 전략의 PIT 재무 계정·연속 분기·신선도 조건을 만족하지 못하게 된 " +
+            `종목이 있습니다: ${incomplete.map((item) => `${item.symbol}(${item.date})`).join(", ")} — ` +
+            "실행 유니버스는 이미 고정되어 재순위할 수 없습니다. 미리보기를 다시 준비하세요.",
         );
       }
     }
     const rawCorporateActionFacts: Fact[] = await factRepository.getFacts({
-      scope: 'SYMBOL',
+      scope: "SYMBOL",
       keys: unionSymbols,
       fields: [CORPORATE_ACTION_FIELD],
     });
@@ -536,19 +617,23 @@ async function main(input: { lease: AgentLease }): Promise<void> {
     // resolver와 같은 전체 raw fact/change 그래프를 정렬해야 주변 사건이 같은 change를
     // 요구해도 schedule 계산과 실제 실행에서 효력일 배정이 갈리지 않는다.
     const rawActionRange = corporateActionRawDateRange(rawCorporateActionFacts);
-    const sharesChanges = rawActionRange === null
-      ? []
-      : symbolMaster.sharesChangesBetween(
-          addCalendarDays(
-            rawActionRange.from,
-            -CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays,
-          ),
-          addCalendarDays(
-            rawActionRange.to,
-            CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays,
-          ),
-        );
-    const aligned = alignCorporateActionEffectiveDates(rawCorporateActionFacts, sharesChanges);
+    const sharesChanges =
+      rawActionRange === null
+        ? []
+        : symbolMaster.sharesChangesBetween(
+            addCalendarDays(
+              rawActionRange.from,
+              -CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays,
+            ),
+            addCalendarDays(
+              rawActionRange.to,
+              CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays,
+            ),
+          );
+    const aligned = alignCorporateActionEffectiveDates(
+      rawCorporateActionFacts,
+      sharesChanges,
+    );
 
     // 실제 효력일을 확인하지 못한 자본변동은 원래 DART 기준일로 실행하지 않는다.
     // 기준일에는 분할 전 가격인데 수량만 늘어 자산·수익률이 비율 배로 튈 수 있기 때문이다.
@@ -562,8 +647,13 @@ async function main(input: { lease: AgentLease }): Promise<void> {
     // 첫 봉이다. 빈 수년을 기준으로 coverage를 요구하면 준비 plan보다 과도한 옛 연도를
     // 막으면서도 결과 정확도는 늘지 않는다.
     const firstLoadedCandleDate = new Date(
-      candles.reduce((minimum, candle) => Math.min(minimum, candle.tsMs), Number.POSITIVE_INFINITY),
-    ).toISOString().slice(0, 10);
+      candles.reduce(
+        (minimum, candle) => Math.min(minimum, candle.tsMs),
+        Number.POSITIVE_INFINITY,
+      ),
+    )
+      .toISOString()
+      .slice(0, 10);
     const potentiallyRelevantFrom = addCalendarDays(
       firstLoadedCandleDate,
       -CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays,
@@ -580,20 +670,28 @@ async function main(input: { lease: AgentLease }): Promise<void> {
     const relevantActionFromYear = Number(potentiallyRelevantFrom.slice(0, 4));
     const relevantActionToYear = Number(potentiallyRelevantTo.slice(0, 4));
     const requiredActionYears: number[] = [];
-    for (let year = relevantActionFromYear; year <= relevantActionToYear; year += 1) {
+    for (
+      let year = relevantActionFromYear;
+      year <= relevantActionToYear;
+      year += 1
+    ) {
       requiredActionYears.push(year);
     }
-    const actionCoverage = new SqliteCorporateActionCoverageStore(db, { collectionVersion });
+    const actionCoverage = new SqliteCorporateActionCoverageStore(db, {
+      collectionVersion,
+    });
     const coveredActionYears = actionCoverage.getCoveredYears(unionSymbols);
-    const actionCoverageMissingSymbols = unionSymbols.filter((symbol) => {
-      const covered = new Set(coveredActionYears.get(symbol) ?? []);
-      return requiredActionYears.some((year) => !covered.has(year));
-    }).sort();
+    const actionCoverageMissingSymbols = unionSymbols
+      .filter((symbol) => {
+        const covered = new Set(coveredActionYears.get(symbol) ?? []);
+        return requiredActionYears.some((year) => !covered.has(year));
+      })
+      .sort();
     if (actionCoverageMissingSymbols.length > 0) {
       throw new Error(
-        '준비 완료 후 자본변동 coverage가 사라진 종목이 있습니다 — '
-          + `대상 ${actionCoverageMissingSymbols.length}종목: ${actionCoverageMissingSymbols.join(', ')}. `
-          + '실행 유니버스는 이미 고정되어 재순위할 수 없습니다. 미리보기를 다시 준비하세요.',
+        "준비 완료 후 자본변동 coverage가 사라진 종목이 있습니다 — " +
+          `대상 ${actionCoverageMissingSymbols.length}종목: ${actionCoverageMissingSymbols.join(", ")}. ` +
+          "실행 유니버스는 이미 고정되어 재순위할 수 없습니다. 미리보기를 다시 준비하세요.",
       );
     }
     const gapDetailsBySymbol = readCorporateActionGapDetails(
@@ -601,12 +699,13 @@ async function main(input: { lease: AgentLease }): Promise<void> {
       unionSymbols,
     );
     const gapExecutionFrom = addCalendarDays(firstLoadedCandleDate, 1);
-    const gapSharesChanges = gapExecutionFrom > request.period.to
-      ? []
-      : symbolMaster.sharesChangesBetween(
-          gapExecutionFrom,
-          request.period.to,
-        );
+    const gapSharesChanges =
+      gapExecutionFrom > request.period.to
+        ? []
+        : symbolMaster.sharesChangesBetween(
+            gapExecutionFrom,
+            request.period.to,
+          );
     const relevantGaps = findRelevantCorporateActionGaps(
       gapDetailsBySymbol,
       gapSharesChanges,
@@ -618,34 +717,37 @@ async function main(input: { lease: AgentLease }): Promise<void> {
       },
     );
     if (relevantGaps.length > 0) {
-      const actionGapSymbols = [...new Set(relevantGaps.map((gap) => gap.symbol))].sort();
-      const causes = relevantGaps.map((gap) => (
-        `${gap.symbol}(${gap.periodKey}: ${gap.reason})`
-      )).join('; ');
+      const actionGapSymbols = [
+        ...new Set(relevantGaps.map((gap) => gap.symbol)),
+      ].sort();
+      const causes = relevantGaps
+        .map((gap) => `${gap.symbol}(${gap.periodKey}: ${gap.reason})`)
+        .join("; ");
       throw new Error(
-        '준비 완료 후 자본변동 보정 정보가 손상된 종목이 있습니다 — '
-          + `대상 ${actionGapSymbols.length}종목: ${actionGapSymbols.join(', ')}. `
-          + `확인된 원인: ${causes}. `
-          + '실행 유니버스는 이미 고정되어 재순위할 수 없습니다. 미리보기를 다시 준비하세요.',
+        "준비 완료 후 자본변동 보정 정보가 손상된 종목이 있습니다 — " +
+          `대상 ${actionGapSymbols.length}종목: ${actionGapSymbols.join(", ")}. ` +
+          `확인된 원인: ${causes}. ` +
+          "실행 유니버스는 이미 고정되어 재순위할 수 없습니다. 미리보기를 다시 준비하세요.",
       );
     }
     const unalignedForExecution = aligned.unaligned.filter(
-      (action) => (
-        action.periodKey >= potentiallyRelevantFrom
-        && action.periodKey <= potentiallyRelevantTo
-      ),
+      (action) =>
+        action.periodKey >= potentiallyRelevantFrom &&
+        action.periodKey <= potentiallyRelevantTo,
     );
     if (unalignedForExecution.length > 0) {
       const unalignedSymbols = [
         ...new Set(unalignedForExecution.map((action) => action.symbol)),
       ].sort();
-      const shown = unalignedSymbols.slice(0, 10).join(', ');
+      const shown = unalignedSymbols.slice(0, 10).join(", ");
       throw new Error(
-        `준비 완료 후 자본변동 ${unalignedForExecution.length}건의 실제 효력일을 `
-          + `KRX 상장주식수 변경과 정렬할 수 없는 상태가 됐습니다 — 대상 ${unalignedSymbols.length}종목: ${shown}`
-          + (unalignedSymbols.length > 10 ? ` 외 ${unalignedSymbols.length - 10}종목` : '')
-          + '. DART 기준일로 그대로 실행하면 수량과 가격 단위가 어긋나 수익이 왜곡됩니다. '
-          + '실행 유니버스는 이미 고정되어 재순위할 수 없습니다. 미리보기를 다시 준비하세요.',
+        `준비 완료 후 자본변동 ${unalignedForExecution.length}건의 실제 효력일을 ` +
+          `KRX 상장주식수 변경과 정렬할 수 없는 상태가 됐습니다 — 대상 ${unalignedSymbols.length}종목: ${shown}` +
+          (unalignedSymbols.length > 10
+            ? ` 외 ${unalignedSymbols.length - 10}종목`
+            : "") +
+          ". DART 기준일로 그대로 실행하면 수량과 가격 단위가 어긋나 수익이 왜곡됩니다. " +
+          "실행 유니버스는 이미 고정되어 재순위할 수 없습니다. 미리보기를 다시 준비하세요.",
       );
     }
 
@@ -658,13 +760,13 @@ async function main(input: { lease: AgentLease }): Promise<void> {
       const withoutFacts = unionSymbols.filter((s) => !symbolsWithFacts.has(s));
       if (withoutFacts.length > 0) {
         throw new Error(
-          '준비 완료 후 마지막 실행 봉까지 사용 가능한 재무 데이터가 사라진 종목이 있습니다: '
-            + `${withoutFacts.join(', ')} — 실행 유니버스는 이미 고정되어 재순위할 수 없습니다. `
-            + '유니버스 미리보기를 다시 준비하세요.',
+          "준비 완료 후 마지막 실행 봉까지 사용 가능한 재무 데이터가 사라진 종목이 있습니다: " +
+            `${withoutFacts.join(", ")} — 실행 유니버스는 이미 고정되어 재순위할 수 없습니다. ` +
+            "유니버스 미리보기를 다시 준비하세요.",
         );
       }
       datasetWarnings.push(
-        '재무 데이터는 공시 시점 기준입니다. 계정이 일부만 공시된 종목도 랭킹에서 빠질 수 있습니다.',
+        "재무 데이터는 공시 시점 기준입니다. 계정이 일부만 공시된 종목도 랭킹에서 빠질 수 있습니다.",
       );
     }
 
@@ -678,58 +780,66 @@ async function main(input: { lease: AgentLease }): Promise<void> {
       symbolCount: unionSymbols.length,
     };
     loadCompletedAtMs = Date.now();
-    activeStage = 'RUN';
+    activeStage = "RUN";
     const startedAtMs = Date.now();
     let lastProgressSentAt = 0;
 
     // 우아한 취소를 위해 주기적으로 이벤트 루프에 양보하는 버전을 쓴다 —
     // 근거는 engine.ts 의 CANCEL_YIELD_INTERVAL_BARS 주석 참고.
     const runner = new BacktestRunner();
-    const runOutcome = await runner.run(strategy, {
-      candles,
-      initialCash: request.capital.initialCash,
-      execution: {
-        cost: costProfile,
-        slippage: slippageProfile,
-        rules: getKrxExecutionRules(request.universeRule.markets[0]!),
+    const runOutcome = await runner.run(
+      strategy,
+      {
+        candles,
+        initialCash: request.capital.initialCash,
+        execution: {
+          cost: costProfile,
+          slippage: slippageProfile,
+          rules: getKrxExecutionRules(request.universeRule.markets[0]!),
+        },
+        parameters,
+        randomSeed: request.randomSeed,
+        maxPositions: request.risk.maxPositions,
+        facts,
+        tradeFromTsMs,
+        // 조회 구간의 toTsMs는 23:59:59.999라 일봉 날짜와 중복된다. 성과 기간은
+        // Candle.tsMs와 같은 UTC 자정 날짜로 넘겨 실제 point가 경계에 있으면 재사용한다.
+        resultPeriod: {
+          fromTsMs,
+          toTsMs: Date.parse(`${request.period.to}T00:00:00Z`),
+        },
+        universeSchedule,
+        nonTradingSymbolsByTsMs,
+        marketTradingTsMs,
+        nonTradingCoveredPeriod,
+        delistedTsMsBySymbol,
       },
-      parameters,
-      randomSeed: request.randomSeed,
-      maxPositions: request.risk.maxPositions,
-      facts,
-      tradeFromTsMs,
-      // 조회 구간의 toTsMs는 23:59:59.999라 일봉 날짜와 중복된다. 성과 기간은
-      // Candle.tsMs와 같은 UTC 자정 날짜로 넘겨 실제 point가 경계에 있으면 재사용한다.
-      resultPeriod: {
-        fromTsMs,
-        toTsMs: Date.parse(`${request.period.to}T00:00:00Z`),
+      {
+        shouldCancel: () => cancellation.isRequested(),
+        onProgress: ({ processedBars, totalBars, currentTsMs }) => {
+          const now = Date.now();
+          if (now - lastProgressSentAt < 200 && processedBars < totalBars)
+            return;
+          lastProgressSentAt = now;
+          // 엔진은 시간 우선으로 돌기 때문에 "현재 심볼" 은 존재하지 않는다 — 처리 중인 날짜를 표시
+          const progressLabel = new Date(currentTsMs)
+            .toISOString()
+            .slice(0, 10);
+          send({ type: "progress", processedBars, totalBars, progressLabel });
+        },
       },
-      universeSchedule,
-      nonTradingSymbolsByTsMs,
-      marketTradingTsMs,
-      nonTradingCoveredPeriod,
-      delistedTsMsBySymbol,
-    }, {
-      shouldCancel: () => cancellation.isRequested(),
-      onProgress: ({ processedBars, totalBars, currentTsMs }) => {
-        const now = Date.now();
-        if (now - lastProgressSentAt < 200 && processedBars < totalBars) return;
-        lastProgressSentAt = now;
-        // 엔진은 시간 우선으로 돌기 때문에 "현재 심볼" 은 존재하지 않는다 — 처리 중인 날짜를 표시
-        const progressLabel = new Date(currentTsMs).toISOString().slice(0, 10);
-        send({ type: 'progress', processedBars, totalBars, progressLabel });
-      },
-    }, datasetWarnings);
+      datasetWarnings,
+    );
     runCompletedAtMs = Date.now();
 
-    if (runOutcome.status === 'CANCELLED') {
+    if (runOutcome.status === "CANCELLED") {
       activeStage = null;
-      outcome = 'CANCELLED';
-      finish('CANCELLED');
+      outcome = "CANCELLED";
+      finish("CANCELLED");
       return;
     }
     const artifact = runOutcome.artifact;
-    activeStage = 'PERSIST';
+    activeStage = "PERSIST";
     outputSize = measureBacktestArtifact(artifact);
 
     // 계산이 오래 걸리는 동안 중앙 종목 마스터 수집이 과거 alias를 새로 발견할 수
@@ -741,67 +851,88 @@ async function main(input: { lease: AgentLease }): Promise<void> {
     const sourceHash = strategySourceHash(strategy);
     const resultCompletedAtMs = Date.now();
     const resultWriter = new SqliteBacktestResultArtifactWriter(resultPath);
-    resultWriter.write({
-      jobId,
-      strategyId: strategy.id,
-      strategyVersion: strategy.version,
-      strategySourceHash: sourceHash,
-      parameterJson: JSON.stringify(parameters),
-      universeRuleJson: job.universeRuleJson,
-      // provenance pin이 없는 legacy/direct job도 실제 소비 schedule hash는 반드시 남긴다.
-      scheduleHash: loadedScheduleHash,
-      universeJson: pinnedUniverseJson,
-      universeHash: pinnedUniverseHash,
-      engineVersion: ENGINE_VERSION,
-      executionVersion: readRuntimeVersions().executionVersion,
-      feeModelVersion: `${costProfile.id}@${costProfile.version}`,
-      slippageModelVersion: `${slippageProfile.id}@${slippageProfile.version}`,
-      randomSeed: request.randomSeed,
-      gitCommitSha: readGitCommitSha(),
-      // run 은 pin 원문을 그대로 복사한다 — job 이 사라져도(보존 정책 등) 실행
-      // 기록 자체가 provenance 를 답할 수 있어야 한다.
-      provenancePinJson: job.provenancePinJson,
-      startedAtMs,
-      completedAtMs: resultCompletedAtMs,
-    }, artifact);
+    resultWriter.write(
+      {
+        jobId,
+        strategyId: strategy.id,
+        strategyVersion: strategy.version,
+        strategySourceHash: sourceHash,
+        parameterJson: JSON.stringify(parameters),
+        universeRuleJson: job.universeRuleJson,
+        // provenance pin이 없는 legacy/direct job도 실제 소비 schedule hash는 반드시 남긴다.
+        scheduleHash: loadedScheduleHash,
+        universeJson: pinnedUniverseJson,
+        universeHash: pinnedUniverseHash,
+        engineVersion: ENGINE_VERSION,
+        executionVersion: readRuntimeVersions().executionVersion,
+        feeModelVersion: `${costProfile.id}@${costProfile.version}`,
+        slippageModelVersion: `${slippageProfile.id}@${slippageProfile.version}`,
+        randomSeed: request.randomSeed,
+        gitCommitSha: readGitCommitSha(),
+        // run 은 pin 원문을 그대로 복사한다 — job 이 사라져도(보존 정책 등) 실행
+        // 기록 자체가 provenance 를 답할 수 있어야 한다.
+        provenancePinJson: job.provenancePinJson,
+        startedAtMs,
+        completedAtMs: resultCompletedAtMs,
+      },
+      artifact,
+    );
     persistCompletedAtMs = Date.now();
 
     // 작업 전용 DB의 완료 상태를 부모 에이전트가 읽어 결과 파일을 서버에 전달한다.
-    outcome = 'COMPLETED';
+    outcome = "COMPLETED";
     db.update(backtestJobs)
-      .set({ progressBars: artifact.processedBars, totalBars: artifact.processedBars })
-      .where(eq(backtestJobs.id, jobId)).run();
-    finish('COMPLETED');
+      .set({
+        progressBars: artifact.processedBars,
+        totalBars: artifact.processedBars,
+      })
+      .where(eq(backtestJobs.id, jobId))
+      .run();
+    finish("COMPLETED");
     activeStage = null;
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     const cancellationRequested = cancellation.isRequested();
     const finalStatus = finish(
-      cancellationRequested ? 'CANCELLED' : 'FAILED',
+      cancellationRequested ? "CANCELLED" : "FAILED",
       cancellationRequested ? undefined : reason,
     );
-    const cancelled = finalStatus === 'CANCELLED';
-    outcome = finalStatus === 'COMPLETED' ? 'COMPLETED' : cancelled ? 'CANCELLED' : 'FAILED';
+    const cancelled = finalStatus === "CANCELLED";
+    outcome =
+      finalStatus === "COMPLETED"
+        ? "COMPLETED"
+        : cancelled
+          ? "CANCELLED"
+          : "FAILED";
     // 원격 supervisor는 input.sqlite의 FAILED 행을 볼 수 없고 stderr를 중앙 finish
     // 사유로 전달한다. 자체 메시지만 쓰고 수신 측이 2KB로 자른다.
-    if (outcome === 'FAILED') process.stderr.write(`${reason}\n`);
-    process.exitCode = outcome === 'FAILED' ? 1 : 0;
+    if (outcome === "FAILED") process.stderr.write(`${reason}\n`);
+    process.exitCode = outcome === "FAILED" ? 1 : 0;
   } finally {
     const finishedAtMs = Date.now();
     const loadEnd = loadCompletedAtMs ?? finishedAtMs;
     const runEnd = runCompletedAtMs ?? finishedAtMs;
-    const persistEnd = persistCompletedAtMs
-      ?? (outcome === 'FAILED' && runCompletedAtMs !== null ? finishedAtMs : runEnd);
+    const persistEnd =
+      persistCompletedAtMs ??
+      (outcome === "FAILED" && runCompletedAtMs !== null
+        ? finishedAtMs
+        : runEnd);
     send({
-      type: 'telemetry',
+      type: "telemetry",
       telemetry: {
         schemaVersion: 1,
         outcome,
-        failedStage: outcome === 'FAILED' ? activeStage : null,
+        failedStage: outcome === "FAILED" ? activeStage : null,
         durationsMs: {
           load: Math.max(0, loadEnd - workerStartedAtMs),
-          run: loadCompletedAtMs === null ? 0 : Math.max(0, runEnd - loadCompletedAtMs),
-          persist: runCompletedAtMs === null ? 0 : Math.max(0, persistEnd - runCompletedAtMs),
+          run:
+            loadCompletedAtMs === null
+              ? 0
+              : Math.max(0, runEnd - loadCompletedAtMs),
+          persist:
+            runCompletedAtMs === null
+              ? 0
+              : Math.max(0, persistEnd - runCompletedAtMs),
           total: Math.max(0, finishedAtMs - workerStartedAtMs),
         },
         peakRssBytes: process.resourceUsage().maxRSS * 1024,
@@ -813,7 +944,7 @@ async function main(input: { lease: AgentLease }): Promise<void> {
   }
 }
 
-process.once('message', (input: { lease: AgentLease }) => {
+process.once("message", (input: { lease: AgentLease }) => {
   void main(input).then(
     () => setTimeout(() => process.exit(process.exitCode ?? 0), 50),
     (error) => {

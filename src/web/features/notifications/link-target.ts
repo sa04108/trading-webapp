@@ -10,6 +10,6 @@ export function targetApiPath(link: string | null): string | null {
   if (!match) return null;
   const id = match[1];
   // /backtests/new 는 상세가 아니라 마법사다 — 잡 id 로 물으면 늘 404 가 돌아온다
-  if (id === 'new') return null;
+  if (id === "new") return null;
   return `/backtests/${id}`;
 }

@@ -1,12 +1,12 @@
 import type {
   CorporateActionCoverageStore,
   CorporateActionGapDetail,
-} from '../../facts/application/corporate-action-coverage.js';
+} from "../../facts/application/corporate-action-coverage.js";
 import {
   CORPORATE_ACTION_ALIGNMENT_WINDOW,
   type SharesChange,
-} from '../../facts/domain/corporate-action-effective-date.js';
-import { addCalendarDays } from '../../market-data/domain/kst-date.js';
+} from "../../facts/domain/corporate-action-effective-date.js";
+import { addCalendarDays } from "../../market-data/domain/kst-date.js";
 
 export interface RelevantCorporateActionGap extends CorporateActionGapDetail {
   readonly symbol: string;
@@ -23,7 +23,7 @@ export interface CorporateActionGapWindow {
 
 type GapCoverageReader = Pick<
   CorporateActionCoverageStore,
-  'getGapYears' | 'getGapDetails'
+  "getGapYears" | "getGapDetails"
 >;
 
 /**
@@ -41,9 +41,9 @@ export function readCorporateActionGapDetails(
       symbol,
       years.map((year) => ({
         year,
-        periodKey: '-',
-        reason: '상세 사유가 저장되지 않은 자본변동 gap',
-        severity: 'BLOCKING' as const,
+        periodKey: "-",
+        reason: "상세 사유가 저장되지 않은 자본변동 gap",
+        severity: "BLOCKING" as const,
       })),
     ]),
   );
@@ -63,7 +63,10 @@ export function findRelevantCorporateActionGaps(
 ): RelevantCorporateActionGap[] {
   const changesBySymbol = new Map<string, SharesChange[]>();
   for (const change of sharesChanges) {
-    if (change.effectiveDate < window.executionFrom || change.effectiveDate > window.executionTo) {
+    if (
+      change.effectiveDate < window.executionFrom ||
+      change.effectiveDate > window.executionTo
+    ) {
       continue;
     }
     const changes = changesBySymbol.get(change.shortCode) ?? [];
@@ -78,7 +81,7 @@ export function findRelevantCorporateActionGaps(
     const changes = changesBySymbol.get(symbol) ?? [];
     if (changes.length === 0) continue;
     for (const detail of details) {
-      if (detail.severity !== 'BLOCKING') continue;
+      if (detail.severity !== "BLOCKING") continue;
       const rawDate = normalizedExactDate(detail.periodKey);
       if (rawDate === null) {
         if (detail.year < rawFromYear || detail.year > rawToYear) continue;
@@ -92,20 +95,25 @@ export function findRelevantCorporateActionGaps(
           rawDate,
           CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays,
         );
-        if (!changes.some((change) => (
-          change.effectiveDate >= firstMatchingChange
-          && change.effectiveDate <= lastMatchingChange
-        ))) continue;
+        if (
+          !changes.some(
+            (change) =>
+              change.effectiveDate >= firstMatchingChange &&
+              change.effectiveDate <= lastMatchingChange,
+          )
+        )
+          continue;
       }
       relevant.push({ symbol, ...detail });
     }
   }
-  return relevant.sort((left, right) => (
-    left.symbol.localeCompare(right.symbol)
-    || left.year - right.year
-    || left.periodKey.localeCompare(right.periodKey)
-    || left.reason.localeCompare(right.reason)
-  ));
+  return relevant.sort(
+    (left, right) =>
+      left.symbol.localeCompare(right.symbol) ||
+      left.year - right.year ||
+      left.periodKey.localeCompare(right.periodKey) ||
+      left.reason.localeCompare(right.reason),
+  );
 }
 
 function normalizedExactDate(periodKey: string): string | null {
@@ -113,7 +121,8 @@ function normalizedExactDate(periodKey: string): string | null {
   if (!match) return null;
   const normalized = `${match[1]}-${match[2]}-${match[3]}`;
   const parsed = new Date(`${normalized}T00:00:00Z`);
-  return Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== normalized
+  return Number.isNaN(parsed.getTime()) ||
+    parsed.toISOString().slice(0, 10) !== normalized
     ? null
     : normalized;
 }

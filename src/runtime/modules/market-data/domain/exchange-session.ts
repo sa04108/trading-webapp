@@ -1,4 +1,4 @@
-import type { Market } from './candle.js';
+import type { Market } from "./candle.js";
 
 /**
  * 거래소 정규 세션 정의. MVP 는 고정 UTC 오프셋만 지원한다 (KR: KST, DST 없음).
@@ -21,8 +21,10 @@ export const KR_SESSION: ExchangeSession = {
 
 export class UnsupportedMarketSessionError extends Error {
   constructor(market: Market) {
-    super(`${market} 시장의 거래 시간은 아직 지원하지 않습니다 (일광 절약 시간제 미지원)`);
-    this.name = 'UnsupportedMarketSessionError';
+    super(
+      `${market} 시장의 거래 시간은 아직 지원하지 않습니다 (일광 절약 시간제 미지원)`,
+    );
+    this.name = "UnsupportedMarketSessionError";
   }
 }
 
@@ -67,6 +69,8 @@ export function dayOfWeekFromDayIndex(dayIndex: number): number {
 export function toLocalTime(tsMs: number, session: ExchangeSession): LocalTime {
   const localMs = tsMs + session.utcOffsetMinutes * MS_PER_MINUTE;
   const dayIndex = Math.floor(localMs / MS_PER_DAY);
-  const minuteOfDay = Math.floor((localMs - dayIndex * MS_PER_DAY) / MS_PER_MINUTE);
+  const minuteOfDay = Math.floor(
+    (localMs - dayIndex * MS_PER_DAY) / MS_PER_MINUTE,
+  );
   return { dayIndex, minuteOfDay, dayOfWeek: dayOfWeekFromDayIndex(dayIndex) };
 }

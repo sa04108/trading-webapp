@@ -1,22 +1,33 @@
-import type { Clock } from '../../../../../runtime/shared/clock.js';
-import type { Logger } from '../../../../shared/logger.js';
-import type { ExternalApiUsage } from '../../../../shared/db/external-api-usage.js';
-import { BENCHMARK_NAMES, type KrxBenchmarkId } from '../../../../../shared/schemas/benchmark.js';
-import { RestClient } from '../../../../shared/rest-client.js';
+import type { Clock } from "../../../../../runtime/shared/clock.js";
+import type { Logger } from "../../../../shared/logger.js";
+import type { ExternalApiUsage } from "../../../../shared/db/external-api-usage.js";
+import {
+  BENCHMARK_NAMES,
+  type KrxBenchmarkId,
+} from "../../../../../shared/schemas/benchmark.js";
+import { RestClient } from "../../../../shared/rest-client.js";
 import {
   KrxApprovalExpiredError,
   KrxContractError,
   KrxNotConfiguredError,
   KrxQuotaError,
   type KrxHistoricalUniverseSource,
-} from '../../../../../runtime/modules/market-data/application/ports.js';
-import { isoToBasDd, kstDateOf } from '../../../../../runtime/modules/market-data/domain/kst-date.js';
+} from "../../../../../runtime/modules/market-data/application/ports.js";
+import {
+  isoToBasDd,
+  kstDateOf,
+} from "../../../../../runtime/modules/market-data/domain/kst-date.js";
 import type {
   KrxDailyTradeRow,
   KrxIssueBaseInfoRow,
   KrxMarket,
-} from '../../../../../runtime/modules/market-data/domain/krx-universe-types.js';
-import { parseBaseInfoRows, parseDailyRows, parseIndexClose, parseKrxEnvelope } from './krx-contract.js';
+} from "../../../../../runtime/modules/market-data/domain/krx-universe-types.js";
+import {
+  parseBaseInfoRows,
+  parseDailyRows,
+  parseIndexClose,
+  parseKrxEnvelope,
+} from "./krx-contract.js";
 
 export interface KrxConfig {
   readonly baseUrl: string;
@@ -24,28 +35,31 @@ export interface KrxConfig {
   readonly approvalExpiry: string | null;
 }
 
-const PATHS: Record<KrxMarket, { readonly base: string; readonly daily: string }> = {
+const PATHS: Record<
+  KrxMarket,
+  { readonly base: string; readonly daily: string }
+> = {
   KOSPI: {
-    base: '/svc/apis/sto/stk_isu_base_info',
-    daily: '/svc/apis/sto/stk_bydd_trd',
+    base: "/svc/apis/sto/stk_isu_base_info",
+    daily: "/svc/apis/sto/stk_bydd_trd",
   },
   KOSDAQ: {
-    base: '/svc/apis/sto/ksq_isu_base_info',
-    daily: '/svc/apis/sto/ksq_bydd_trd',
+    base: "/svc/apis/sto/ksq_isu_base_info",
+    daily: "/svc/apis/sto/ksq_bydd_trd",
   },
 };
 
 const BENCHMARK_PATHS: Record<KrxBenchmarkId, string> = {
-  KOSPI: '/svc/apis/idx/kospi_dd_trd',
-  KOSDAQ: '/svc/apis/idx/kosdaq_dd_trd',
+  KOSPI: "/svc/apis/idx/kospi_dd_trd",
+  KOSDAQ: "/svc/apis/idx/kosdaq_dd_trd",
 };
 
-const SAFE_REQUEST_ERROR_MESSAGE = 'KRX Open API 요청에 실패했습니다.';
+const SAFE_REQUEST_ERROR_MESSAGE = "KRX Open API 요청에 실패했습니다.";
 
 function readCaughtErrorMessage(value: unknown): string | null {
   try {
     if (!(value instanceof Error)) return null;
-    return typeof value.message === 'string' ? value.message : null;
+    return typeof value.message === "string" ? value.message : null;
   } catch {
     return null;
   }
@@ -107,7 +121,7 @@ export function createKrxHistoricalUniverseSource(
   }
 
   function todayMaxEndpointCallCount(): number {
-    if (options.usage) return options.usage.maxCallsUsed('KRX');
+    if (options.usage) return options.usage.maxCallsUsed("KRX");
     const today = currentDate();
     removeStaleCounts(today);
     let max = 0;
@@ -118,11 +132,11 @@ export function createKrxHistoricalUniverseSource(
   }
 
   function quotaWasExceeded(path: string): boolean {
-    return options.usage?.quotaExceeded('KRX', path) ?? false;
+    return options.usage?.quotaExceeded("KRX", path) ?? false;
   }
 
   function recordCall(today: string, path: string): number {
-    if (options.usage) return options.usage.recordCall('KRX', path);
+    if (options.usage) return options.usage.recordCall("KRX", path);
     removeStaleCounts(today);
     const key = countKey(today, path);
     const callsToday = (callCounts.get(key) ?? 0) + 1;
@@ -131,7 +145,7 @@ export function createKrxHistoricalUniverseSource(
   }
 
   function reportQuotaExceeded(path: string, error: KrxQuotaError): void {
-    options.usage?.reportQuotaExceeded('KRX', path, error.message);
+    options.usage?.reportQuotaExceeded("KRX", path, error.message);
   }
 
   function ensureApprovalIsValid(today: string): void {
@@ -151,24 +165,29 @@ export function createKrxHistoricalUniverseSource(
     if (quotaWasExceeded(path)) throw new KrxQuotaError();
 
     const basDd = isoToBasDd(isoDate);
-    let callsToday = options.usage?.callsUsed('KRX', path) ?? 0;
+    let callsToday = options.usage?.callsUsed("KRX", path) ?? 0;
     let payload: unknown;
     try {
-      payload = await client.request<unknown>('default', `${path}?basDd=${basDd}`, {
-        method: 'GET',
-        headers: { AUTH_KEY: configured.apiKey },
-      }, {
-        // 재시도도 공급자 입장에서는 별도 HTTP 요청이다. 실제 attempt 직전에 기록해야
-        // 429/5xx 재시도가 오늘 예산에서 사라지지 않는다.
-        beforeAttempt: () => {
-          callsToday = recordCall(today, path);
+      payload = await client.request<unknown>(
+        "default",
+        `${path}?basDd=${basDd}`,
+        {
+          method: "GET",
+          headers: { AUTH_KEY: configured.apiKey },
         },
-      });
+        {
+          // 재시도도 공급자 입장에서는 별도 HTTP 요청이다. 실제 attempt 직전에 기록해야
+          // 429/5xx 재시도가 오늘 예산에서 사라지지 않는다.
+          beforeAttempt: () => {
+            callsToday = recordCall(today, path);
+          },
+        },
+      );
     } catch (error) {
       const message = readCaughtErrorMessage(error);
 
       // RestClient가 구조화된 HTTP 오류를 아직 제공하지 않아 상태 코드를 메시지로 구분한다.
-      if (message?.startsWith('REST 요청 실패: 429')) {
+      if (message?.startsWith("REST 요청 실패: 429")) {
         const quotaError = new KrxQuotaError();
         reportQuotaExceeded(path, quotaError);
         throw quotaError;
@@ -176,9 +195,9 @@ export function createKrxHistoricalUniverseSource(
       if (message !== null) {
         // 실패 본문과 외부 오류 메타데이터에 인증키가 있을 수 있어 안전한 메시지만 새 오류로 옮긴다.
         const sanitizedMessage =
-          configured.apiKey === ''
+          configured.apiKey === ""
             ? message
-            : message.replaceAll(configured.apiKey, '[REDACTED]');
+            : message.replaceAll(configured.apiKey, "[REDACTED]");
         // 원본 cause와 custom 필드를 연결하면 인증키가 다시 노출될 수 있다.
         // eslint-disable-next-line preserve-caught-error
         throw new Error(sanitizedMessage);
@@ -204,18 +223,36 @@ export function createKrxHistoricalUniverseSource(
     }
     // 한두 종목의 행 훼손은 후속 종목 제외로 격리한다. 응답 전체를 해석할 수 없으면
     // 휴장/빈 응답과 구분할 수 없으므로 정상 coverage로 닫지 않는다.
-    if (rawRows.length > 0 && rows.length === 0 && firstContractError !== null) {
+    if (
+      rawRows.length > 0 &&
+      rows.length === 0 &&
+      firstContractError !== null
+    ) {
       throw firstContractError;
     }
     if (invalidRows > 0) {
       logger.warn(
-        { module: 'market-data', event: 'krx.invalid-rows-skipped', market, basDd, path, invalidRows },
-        'KRX 응답의 계약 위반 종목 행을 건너뛴다',
+        {
+          module: "market-data",
+          event: "krx.invalid-rows-skipped",
+          market,
+          basDd,
+          path,
+          invalidRows,
+        },
+        "KRX 응답의 계약 위반 종목 행을 건너뛴다",
       );
     }
     logger.info(
-      { module: 'market-data', event: 'krx.fetch', market, basDd, rows: rows.length, callsToday },
-      'krx fetch ok',
+      {
+        module: "market-data",
+        event: "krx.fetch",
+        market,
+        basDd,
+        rows: rows.length,
+        callsToday,
+      },
+      "krx fetch ok",
     );
     return rows;
   }
@@ -231,7 +268,10 @@ export function createKrxHistoricalUniverseSource(
       isoDate: string,
     ): Promise<readonly KrxDailyTradeRow[]> =>
       fetchRows(market, isoDate, PATHS[market].daily, parseDailyRows),
-    fetchBenchmarkClose: async (benchmarkId: KrxBenchmarkId, isoDate: string): Promise<number | null> => {
+    fetchBenchmarkClose: async (
+      benchmarkId: KrxBenchmarkId,
+      isoDate: string,
+    ): Promise<number | null> => {
       const rows = await fetchRows(
         benchmarkId,
         isoDate,

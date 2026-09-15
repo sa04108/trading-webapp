@@ -1,33 +1,39 @@
-import { z } from 'zod';
-import { benchmarkIdSchema } from './benchmark.js';
-import { universeRuleSchema } from './universe-rule.js';
+import { z } from "zod";
+import { benchmarkIdSchema } from "./benchmark.js";
+import { universeRuleSchema } from "./universe-rule.js";
 
 /** 입력 단계뿐 아니라 검토·실행까지 포함한 위저드 페이지 slug. */
 export const BACKTEST_WIZARD_PAGE_STEPS = [
-  'strategy',
-  'period',
-  'universe',
-  'capital',
-  'review',
-  'run',
+  "strategy",
+  "period",
+  "universe",
+  "capital",
+  "review",
+  "run",
 ] as const;
 
 export const backtestWizardPageStepSchema = z.enum(BACKTEST_WIZARD_PAGE_STEPS);
-export type BacktestWizardPageStep = z.infer<typeof backtestWizardPageStepSchema>;
+export type BacktestWizardPageStep = z.infer<
+  typeof backtestWizardPageStepSchema
+>;
 
 /**
  * 백테스트 위저드가 서버에 따로 저장하는 입력 단계.
  * 검토·실행은 앞 단계 입력에서 파생되므로 별도 payload를 만들지 않는다.
  */
 export const BACKTEST_WIZARD_DRAFT_STEPS = [
-  'strategy',
-  'period',
-  'universe',
-  'capital',
+  "strategy",
+  "period",
+  "universe",
+  "capital",
 ] as const;
 
-export const backtestWizardDraftStepSchema = z.enum(BACKTEST_WIZARD_DRAFT_STEPS);
-export type BacktestWizardDraftStep = z.infer<typeof backtestWizardDraftStepSchema>;
+export const backtestWizardDraftStepSchema = z.enum(
+  BACKTEST_WIZARD_DRAFT_STEPS,
+);
+export type BacktestWizardDraftStep = z.infer<
+  typeof backtestWizardDraftStepSchema
+>;
 
 const formTextSchema = z.string().max(256);
 const parameterKeySchema = z.string().min(1).max(128);
@@ -57,17 +63,32 @@ const previewParamsSchema = z.object({
 
 const previewResultSchema = z.object({
   preparationJobId: z.string().min(1).optional(),
-  schedule: z.array(z.object({
-    rebalanceDate: z.string().max(10),
-    effectiveDate: z.string().max(10),
-    members: z.array(z.object({ symbol: z.string().min(1).max(32) })).max(200).readonly(),
-  })).max(20_000).readonly(),
+  schedule: z
+    .array(
+      z.object({
+        rebalanceDate: z.string().max(10),
+        effectiveDate: z.string().max(10),
+        members: z
+          .array(z.object({ symbol: z.string().min(1).max(32) }))
+          .max(200)
+          .readonly(),
+      }),
+    )
+    .max(20_000)
+    .readonly(),
   unionSymbols: z.array(z.string().min(1).max(32)).max(20_000).readonly(),
-  fundamentalSymbols: z.array(z.string().min(1).max(32)).max(20_000).readonly().optional(),
+  fundamentalSymbols: z
+    .array(z.string().min(1).max(32))
+    .max(20_000)
+    .readonly()
+    .optional(),
   scheduleHash: z.string().min(1).max(128),
   uncoveredDates: z.array(z.string().max(10)).max(20_000).readonly(),
   periodCovered: z.boolean(),
-  missingCandleSymbols: z.array(z.string().min(1).max(32)).max(20_000).readonly(),
+  missingCandleSymbols: z
+    .array(z.string().min(1).max(32))
+    .max(20_000)
+    .readonly(),
   warnings: z.array(z.string().max(2_000)).max(1_000).readonly(),
 });
 
@@ -77,10 +98,12 @@ export const backtestWizardUniverseDraftSchema = z.object({
    * 성공한 미리보기와 그 입력을 함께 보존한다. 현재 입력과 같은지는 복원 후에도
    * `sameUniverseParams`로 다시 판정하므로, 낡은 성공이 새 입력의 게이트를 열지 않는다.
    */
-  lastPreview: z.object({
-    params: previewParamsSchema,
-    result: previewResultSchema,
-  }).nullable(),
+  lastPreview: z
+    .object({
+      params: previewParamsSchema,
+      result: previewResultSchema,
+    })
+    .nullable(),
 });
 
 export const backtestWizardCapitalDraftSchema = z.object({
@@ -103,12 +126,16 @@ export const backtestWizardDraftWritePayloadSchemas = {
   ...backtestWizardDraftPayloadSchemas,
   universe: z.object({
     universeRule: universeRuleSchema,
-    lastPreview: z.object({ preparationJobId: z.string().min(1).max(128) }).nullable(),
+    lastPreview: z
+      .object({ preparationJobId: z.string().min(1).max(128) })
+      .nullable(),
   }),
 };
 
 export type BacktestWizardDraftWritePayloadMap = {
-  [S in BacktestWizardDraftStep]: z.infer<(typeof backtestWizardDraftWritePayloadSchemas)[S]>;
+  [S in BacktestWizardDraftStep]: z.infer<
+    (typeof backtestWizardDraftWritePayloadSchemas)[S]
+  >;
 };
 
 export interface BacktestWizardDraftPayloadMap {

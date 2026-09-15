@@ -3,8 +3,8 @@ import {
   type BacktestWizardPageStep,
   type BacktestWizardDraftPayloadMap,
   type BacktestWizardDraftStep,
-} from '../../../shared/schemas/backtest-wizard-draft.js';
-import { api } from '../../lib/api-client.js';
+} from "../../../shared/schemas/backtest-wizard-draft.js";
+import { api } from "../../lib/api-client.js";
 
 export type BacktestWizardDraftBundle = {
   [S in BacktestWizardDraftStep]?: BacktestWizardDraftPayloadMap[S];
@@ -40,10 +40,12 @@ function enqueueDraftSave<T>(key: string, write: () => Promise<T>): Promise<T> {
   lastDraftSaveByKey.set(key, request);
   void request.then(
     () => {
-      if (lastDraftSaveByKey.get(key) === request) lastDraftSaveByKey.delete(key);
+      if (lastDraftSaveByKey.get(key) === request)
+        lastDraftSaveByKey.delete(key);
     },
     () => {
-      if (lastDraftSaveByKey.get(key) === request) lastDraftSaveByKey.delete(key);
+      if (lastDraftSaveByKey.get(key) === request)
+        lastDraftSaveByKey.delete(key);
     },
   );
   return trackDraftSave(request);
@@ -57,7 +59,7 @@ export async function waitForPendingDraftSaves(): Promise<void> {
 }
 
 function contextQuery(sourceJobId: string | null): string {
-  if (sourceJobId === null) return '';
+  if (sourceJobId === null) return "";
   return `?${new URLSearchParams({ sourceJobId })}`;
 }
 
@@ -65,41 +67,53 @@ export async function loadBacktestWizardDraft(
   sourceJobId: string | null,
 ): Promise<BacktestWizardDraftBundle> {
   const query = contextQuery(sourceJobId);
-  const entries = await Promise.all(BACKTEST_WIZARD_DRAFT_STEPS.map(async (step) => {
-    const response = await api<{
-      draft: { payload: BacktestWizardDraftPayloadMap[typeof step] } | null;
-    }>(`/backtests/wizard-draft/${step}${query}`);
-    return response.draft === null ? null : [step, response.draft.payload] as const;
-  }));
-  return Object.fromEntries(entries.filter((entry) => entry !== null)) as BacktestWizardDraftBundle;
+  const entries = await Promise.all(
+    BACKTEST_WIZARD_DRAFT_STEPS.map(async (step) => {
+      const response = await api<{
+        draft: { payload: BacktestWizardDraftPayloadMap[typeof step] } | null;
+      }>(`/backtests/wizard-draft/${step}${query}`);
+      return response.draft === null
+        ? null
+        : ([step, response.draft.payload] as const);
+    }),
+  );
+  return Object.fromEntries(
+    entries.filter((entry) => entry !== null),
+  ) as BacktestWizardDraftBundle;
 }
 
-export async function saveBacktestWizardDraftStep<S extends BacktestWizardDraftStep>(
+export async function saveBacktestWizardDraftStep<
+  S extends BacktestWizardDraftStep,
+>(
   sourceJobId: string | null,
   step: S,
   payload: BacktestWizardDraftPayloadMap[S],
   options: { keepalive?: boolean } = {},
 ): Promise<void> {
-  const requestPayload = step === 'universe'
-    ? (() => {
-        const universePayload = payload as BacktestWizardDraftPayloadMap['universe'] & {
-          lastPreview: {
-            result: { preparationJobId?: string };
-          } | null;
-        };
-        return {
-          ...universePayload,
-          lastPreview: universePayload.lastPreview?.result.preparationJobId === undefined
-            ? null
-            : {
-                preparationJobId: universePayload.lastPreview.result.preparationJobId,
-              },
-        };
-      })()
-    : payload;
+  const requestPayload =
+    step === "universe"
+      ? (() => {
+          const universePayload =
+            payload as BacktestWizardDraftPayloadMap["universe"] & {
+              lastPreview: {
+                result: { preparationJobId?: string };
+              } | null;
+            };
+          return {
+            ...universePayload,
+            lastPreview:
+              universePayload.lastPreview?.result.preparationJobId === undefined
+                ? null
+                : {
+                    preparationJobId:
+                      universePayload.lastPreview.result.preparationJobId,
+                  },
+          };
+        })()
+      : payload;
   const write = () =>
     api(`/backtests/wizard-draft/${step}${contextQuery(sourceJobId)}`, {
-      method: 'PUT',
+      method: "PUT",
       body: JSON.stringify(requestPayload),
       // 유니버스 미리보기는 준비 작업 ID만 보내므로 keepalive body 상한을 넘지 않는다.
       keepalive: options.keepalive,
@@ -107,24 +121,20 @@ export async function saveBacktestWizardDraftStep<S extends BacktestWizardDraftS
   const key = JSON.stringify([sourceJobId, step]);
   // pagehide에서는 브라우저가 문서를 곧 폐기하므로 Promise queue 뒤에 두지 않고
   // keepalive 요청을 즉시 시작한다. SPA unmount와 평상시 자동 저장은 순서를 보장한다.
-  await (
-    options.keepalive
-      ? trackDraftSave(write())
-      : enqueueDraftSave(key, write)
-  );
+  await (options.keepalive
+    ? trackDraftSave(write())
+    : enqueueDraftSave(key, write));
 }
 
 export async function clearAllBacktestWizardDrafts(): Promise<void> {
   await waitForPendingDraftSaves();
-  await api('/backtests/wizard-draft?all=true', { method: 'DELETE' });
+  await api("/backtests/wizard-draft?all=true", { method: "DELETE" });
 }
 
-export async function loadBacktestWizardResumeCandidate(): Promise<
-  BacktestWizardResumeCandidate | null
-> {
+export async function loadBacktestWizardResumeCandidate(): Promise<BacktestWizardResumeCandidate | null> {
   await waitForPendingDraftSaves();
-  const response = await api<{ candidate: BacktestWizardResumeCandidate | null }>(
-    '/backtests/wizard-draft',
-  );
+  const response = await api<{
+    candidate: BacktestWizardResumeCandidate | null;
+  }>("/backtests/wizard-draft");
   return response.candidate;
 }

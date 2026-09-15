@@ -1,35 +1,54 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
-import { toast } from 'sonner';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { api, ApiError, postJson, postJsonWithStatus } from '@/lib/api-client';
-import { rebalanceIntervalFitsPeriod } from '../../../shared/schemas/rebalance-interval.js';
-import type { RebalanceInterval, UniverseRule } from '../../../shared/schemas/universe-rule.js';
-import type { SymbolMasterCoverageDto } from '../../../shared/schemas/symbol-master.js';
-import { PreparationProgress, preparationStatusDescription } from './preparation-progress';
+} from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { api, ApiError, postJson, postJsonWithStatus } from "@/lib/api-client";
+import { rebalanceIntervalFitsPeriod } from "../../../shared/schemas/rebalance-interval.js";
+import type {
+  RebalanceInterval,
+  UniverseRule,
+} from "../../../shared/schemas/universe-rule.js";
+import type { SymbolMasterCoverageDto } from "../../../shared/schemas/symbol-master.js";
+import {
+  PreparationProgress,
+  preparationStatusDescription,
+} from "./preparation-progress";
 import {
   isPreparingCurrentParams,
   seedPreparationJob,
   usePreparationLive,
   type BacktestPreparationJob,
-} from './preparation-live';
-import { UniverseStageEditor } from './universe-stage-editor';
-import { PreparationIssuesCard } from './preparation-issues-card';
+} from "./preparation-live";
+import { UniverseStageEditor } from "./universe-stage-editor";
+import { PreparationIssuesCard } from "./preparation-issues-card";
 
 /** 주기 unit 마다 허용하는 최댓값 — 스키마(universe-rule.ts rebalanceIntervalSchema)와 같은 값 */
-const REBALANCE_UNIT_MAX: Record<RebalanceInterval['unit'], number> = {
+const REBALANCE_UNIT_MAX: Record<RebalanceInterval["unit"], number> = {
   NONE: 1,
   DAY: 365,
   WEEK: 52,
@@ -38,17 +57,20 @@ const REBALANCE_UNIT_MAX: Record<RebalanceInterval['unit'], number> = {
 };
 
 /** unit 마다 필드 모양이 다른 discriminated union 이라 값을 조립하는 지점을 한 곳에 모은다 */
-function buildRebalanceInterval(unit: RebalanceInterval['unit'], value: number): RebalanceInterval {
+function buildRebalanceInterval(
+  unit: RebalanceInterval["unit"],
+  value: number,
+): RebalanceInterval {
   switch (unit) {
-    case 'NONE':
+    case "NONE":
       return { unit, value: 1 };
-    case 'DAY':
+    case "DAY":
       return { unit, value };
-    case 'WEEK':
+    case "WEEK":
       return { unit, value };
-    case 'MONTH':
+    case "MONTH":
       return { unit, value };
-    case 'YEAR':
+    case "YEAR":
       return { unit, value: 1 };
   }
 }
@@ -106,7 +128,10 @@ export interface PreviewParams {
  * 작업 requestHash 자체가 달라지므로, 유니버스·기간이 같아도 이전 미리보기는
  * 더 이상 지금 요청과 같은 것이 아니다.
  */
-export function sameUniverseParams(a: PreviewParams, b: PreviewParams): boolean {
+export function sameUniverseParams(
+  a: PreviewParams,
+  b: PreviewParams,
+): boolean {
   return (
     canonicalJson(a.universeRule) === canonicalJson(b.universeRule) &&
     a.period.from === b.period.from &&
@@ -119,7 +144,7 @@ export function sameUniverseParams(a: PreviewParams, b: PreviewParams): boolean 
 function canonicalJson(value: unknown): string {
   const canonicalize = (entry: unknown): unknown => {
     if (Array.isArray(entry)) return entry.map(canonicalize);
-    if (entry !== null && typeof entry === 'object') {
+    if (entry !== null && typeof entry === "object") {
       return Object.fromEntries(
         Object.entries(entry)
           .sort(([left], [right]) => left.localeCompare(right))
@@ -136,8 +161,8 @@ function canonicalJson(value: unknown): string {
  * 모두 성공으로 쓴다(Task 6). 몸통 모양이 달라 status 코드로만 가른다.
  */
 export type UniversePreviewStartResponse =
-  | { readonly kind: 'READY'; readonly preview: UniversePreviewResponseDto }
-  | { readonly kind: 'PREPARING'; readonly job: BacktestPreparationJob };
+  | { readonly kind: "READY"; readonly preview: UniversePreviewResponseDto }
+  | { readonly kind: "PREPARING"; readonly job: BacktestPreparationJob };
 
 /**
  * 미리보기 버튼 아래에 표시할 현재 작업. 첫 POST는 외부 API를 바로 부르는 요청이
@@ -150,11 +175,11 @@ export function previewRequestStatusMessage(
   liveJob: BacktestPreparationJob | null,
 ): string | null {
   if (requestPending) {
-    return 'SQLite에 저장된 미리보기와 시장·재무 데이터 상태를 확인하고 있습니다.';
+    return "SQLite에 저장된 미리보기와 시장·재무 데이터 상태를 확인하고 있습니다.";
   }
   if (!preparingCurrentParams || liveJob === null) return null;
-  if (liveJob.status === 'COMPLETED') {
-    return '데이터 준비 완료 · 미리보기 결과 확인 중';
+  if (liveJob.status === "COMPLETED") {
+    return "데이터 준비 완료 · 미리보기 결과 확인 중";
   }
   return preparationStatusDescription(liveJob);
 }
@@ -175,7 +200,10 @@ export interface UniverseRuleStepProps {
    */
   parameters: Record<string, number> | string;
   /** 재설정 복제가 서버에서 검증해 가져온 원본 미리보기. */
-  initialResolved?: { readonly params: PreviewParams; readonly result: UniversePreviewResponseDto } | null;
+  initialResolved?: {
+    readonly params: PreviewParams;
+    readonly result: UniversePreviewResponseDto;
+  } | null;
   /**
    * 제출이 409 PREPARATION_REQUIRED 로 거절되면 부모가 이 값을 올려 새 준비 요청을
    * 시작하라고 신호한다(Task 10, 브리프 5번). 값 자체(증가하는 정수)는 의미가 없다 —
@@ -187,7 +215,10 @@ export interface UniverseRuleStepProps {
    * 그대로 올려 보낸다. **유효성 판정 자체는 하지 않는다** — 부모가 지금 값과 비교해
    * 판정한다(아래 컴포넌트 주석 참고). 이 컴포넌트는 그 판정에 필요한 원재료만 전달한다.
    */
-  onPreviewResolved: (params: PreviewParams, result: UniversePreviewResponseDto) => void;
+  onPreviewResolved: (
+    params: PreviewParams,
+    result: UniversePreviewResponseDto,
+  ) => void;
 }
 
 /**
@@ -248,11 +279,13 @@ export function UniverseRuleStep({
   // 마지막으로 성공(READY)한 미리보기 원재료 — previewMutation.data 는 이제
   // READY/PREPARING 두 모양을 다 담는 discriminated union 이라, 화면에 그릴 "완성된
   // 미리보기" 는 이 state 로 따로 붙잡아 둔다.
-  const [resolved, setResolved] = useState<{ params: PreviewParams; result: UniversePreviewResponseDto } | null>(
-    initialResolved,
-  );
+  const [resolved, setResolved] = useState<{
+    params: PreviewParams;
+    result: UniversePreviewResponseDto;
+  } | null>(initialResolved);
   useEffect(() => {
-    if (resolved === null && initialResolved !== null) setResolved(initialResolved);
+    if (resolved === null && initialResolved !== null)
+      setResolved(initialResolved);
   }, [initialResolved, resolved]);
   // 준비 작업(job)이 도는 동안만 채워진다 — 완료·취소·실패로 끝나면 비운다.
   const [preparingJobId, setPreparingJobId] = useState<string | null>(null);
@@ -264,23 +297,27 @@ export function UniverseRuleStep({
   const lastHandledRetryToken = useRef(0);
 
   const previewMutation = useMutation({
-    mutationFn: (params: PreviewParams): Promise<UniversePreviewStartResponse> =>
-      postJsonWithStatus<UniversePreviewResponseDto | { job: BacktestPreparationJob }>(
-        '/backtests/universe-preview',
-        {
-          universeRule: params.universeRule,
-          period: params.period,
-          strategyId: params.strategyId,
-          parameters: params.parameters,
-          ...(sourceJobId === null ? {} : { sourceJobId }),
-        },
-      ).then(({ status, data }) =>
+    mutationFn: (
+      params: PreviewParams,
+    ): Promise<UniversePreviewStartResponse> =>
+      postJsonWithStatus<
+        UniversePreviewResponseDto | { job: BacktestPreparationJob }
+      >("/backtests/universe-preview", {
+        universeRule: params.universeRule,
+        period: params.period,
+        strategyId: params.strategyId,
+        parameters: params.parameters,
+        ...(sourceJobId === null ? {} : { sourceJobId }),
+      }).then(({ status, data }) =>
         status === 202
-          ? { kind: 'PREPARING', job: (data as { job: BacktestPreparationJob }).job }
-          : { kind: 'READY', preview: data as UniversePreviewResponseDto },
+          ? {
+              kind: "PREPARING",
+              job: (data as { job: BacktestPreparationJob }).job,
+            }
+          : { kind: "READY", preview: data as UniversePreviewResponseDto },
       ),
     onSuccess: (startResponse, params) => {
-      if (startResponse.kind === 'PREPARING') {
+      if (startResponse.kind === "PREPARING") {
         preparingParamsRef.current = params;
         seedPreparationJob(queryClient, startResponse.job);
         setPreparingJobId(startResponse.job.id);
@@ -300,19 +337,24 @@ export function UniverseRuleStep({
   const { job: liveJob } = usePreparationLive(preparingJobId);
 
   const cancelPreparationMutation = useMutation({
-    mutationFn: () => api(`/backtests/preparation-jobs/${preparingJobId}/cancel`, { method: 'POST' }),
+    mutationFn: () =>
+      api(`/backtests/preparation-jobs/${preparingJobId}/cancel`, {
+        method: "POST",
+      }),
     onError: (error: unknown) => {
       // 취소 실패를 삼키면 사용자는 버튼을 눌렀는데 아무 일도 안 일어난 것처럼 본다.
-      toast.error(error instanceof ApiError ? error.message : '취소하지 못했습니다.');
+      toast.error(
+        error instanceof ApiError ? error.message : "취소하지 못했습니다.",
+      );
     },
   });
 
-  const paramsReady = typeof parameters !== 'string';
+  const paramsReady = typeof parameters !== "string";
   const strategyReady = strategyId !== null;
   const currentParams: PreviewParams = {
     universeRule: value,
     period,
-    strategyId: strategyId ?? '',
+    strategyId: strategyId ?? "",
     parameters: paramsReady ? parameters : {},
   };
 
@@ -321,7 +363,7 @@ export function UniverseRuleStep({
   // 그 사이 규칙·기간·전략·파라미터가 바뀌었으면 낡은 결과이므로 반영하지 않는다 —
   // stale 안내가 이미 "다시 미리보기하세요" 를 보여준다(위 컴포넌트 주석 참고).
   useEffect(() => {
-    if (!liveJob || liveJob.status !== 'COMPLETED') return;
+    if (!liveJob || liveJob.status !== "COMPLETED") return;
     const preparedParams = preparingParamsRef.current;
     if (preparedParams === null) return;
     preparingParamsRef.current = null;
@@ -347,13 +389,17 @@ export function UniverseRuleStep({
   const preview = resolved?.result ?? null;
   // 이 컴포넌트가 화면에 떠 있는 동안 "다시 미리보기하세요" 안내를 보여줄 뿐이다 —
   // 실제 다음 단계 게이트는 부모가 판정한다(위 컴포넌트 주석 참고).
-  const stale = resolved !== null && !sameUniverseParams(resolved.params, currentParams);
+  const stale =
+    resolved !== null && !sameUniverseParams(resolved.params, currentParams);
 
-  const periodReady = period.from !== '' && period.to !== '' && period.from <= period.to;
+  const periodReady =
+    period.from !== "" && period.to !== "" && period.from <= period.to;
   // 기간이 아직 없으면 이 판정 자체가 의미가 없다 — periodReady 부재 안내가 이미 따로 뜬다.
   const intervalFitsPeriod =
-    !periodReady || rebalanceIntervalFitsPeriod(period, value.rebalanceInterval);
-  const canPreview = periodReady && intervalFitsPeriod && strategyReady && paramsReady;
+    !periodReady ||
+    rebalanceIntervalFitsPeriod(period, value.rebalanceInterval);
+  const canPreview =
+    periodReady && intervalFitsPeriod && strategyReady && paramsReady;
   // 지금 값과 같은 params 로 시작된 job 이 아직 진행 중일 때만 버튼을 잠근다
   // (코디네이터 리뷰 finding 1) — 추적 중인 job 이 있다는 사실만으로 잠그면,
   // WAITING_DAILY_QUOTA 로 하루를 넘겨 기다리는 job 을 rule A 로 시작시킨 뒤
@@ -368,10 +414,12 @@ export function UniverseRuleStep({
   // COMPLETED를 받은 렌더와 위 effect가 최종 200 preview를 다시 요청하는 렌더
   // 사이에도 버튼을 풀지 않는다. 준비가 매우 빨리 끝나면 이 한 프레임도 사용자가
   // 제보한 "조회 중 → 미리보기" 깜빡임으로 보일 수 있다.
-  const completingPreview = liveJob?.status === 'COMPLETED'
-    && preparingParamsRef.current !== null
-    && sameUniverseParams(preparingParamsRef.current, currentParams);
-  const previewBusy = previewMutation.isPending || preparing || completingPreview;
+  const completingPreview =
+    liveJob?.status === "COMPLETED" &&
+    preparingParamsRef.current !== null &&
+    sameUniverseParams(preparingParamsRef.current, currentParams);
+  const previewBusy =
+    previewMutation.isPending || preparing || completingPreview;
   const previewStatus = previewRequestStatusMessage(
     previewMutation.isPending,
     preparing || completingPreview,
@@ -390,14 +438,15 @@ export function UniverseRuleStep({
   // 아무 일도 일어나지 않는다. 그 상태로 남은 종목은 KRX 에도 데이터가 없다는 뜻이라
   // 아래 별도 안내가 맡는다.
   const fullSyncNeeded =
-    preview !== null && (preview.uncoveredDates.length > 0 || !preview.periodCovered);
+    preview !== null &&
+    (preview.uncoveredDates.length > 0 || !preview.periodCovered);
 
   /** 위 fullSyncNeeded 가 뜬 이유를 우선순위대로 설명한다 — 리밸런스 날짜 > 기간 전체 */
   const fullSyncReason = (result: UniversePreviewResponseDto): string => {
     if (result.uncoveredDates.length > 0) {
       return `종목 마스터가 리밸런스 날짜 ${result.uncoveredDates.length}개를 아직 커버하지 않습니다.`;
     }
-    return '기간 중 일부 날짜의 KRX 데이터가 아직 없습니다.';
+    return "기간 중 일부 날짜의 KRX 데이터가 아직 없습니다.";
   };
 
   // 기간을 이미 다 커버했는데도(periodCovered) 여전히 봉이 없는 종목이
@@ -406,7 +455,9 @@ export function UniverseRuleStep({
   // 기간이 아직 미커버인 동안은 이 알림을 띄우지 않는다.
   // "기간 전체 동기화"부터 먼저 시도해야 하기 때문이다.
   const missingCandlesAfterFullSync =
-    preview !== null && preview.periodCovered && preview.missingCandleSymbols.length > 0;
+    preview !== null &&
+    preview.periodCovered &&
+    preview.missingCandleSymbols.length > 0;
 
   /**
    * 지금 도는(또는 방금 끝난) 백필의 대상 구간이 이 화면이 요청한 period.from~to 를
@@ -452,40 +503,52 @@ export function UniverseRuleStep({
     let backfillCompleted = false;
 
     try {
-      await postJson<unknown>('/symbol-master/backfill', {
+      await postJson<unknown>("/symbol-master/backfill", {
         fromDate: period.from,
         toDate: period.to,
       });
 
-      let status = (await api<SymbolMasterCoverageDto>('/symbol-master/coverage')).backfill;
-      while (status.state === 'RUNNING') {
-        if (!backfillCoversRequestedPeriod(status.targetStartDate, status.targetEndDate)) {
+      let status = (
+        await api<SymbolMasterCoverageDto>("/symbol-master/coverage")
+      ).backfill;
+      while (status.state === "RUNNING") {
+        if (
+          !backfillCoversRequestedPeriod(
+            status.targetStartDate,
+            status.targetEndDate,
+          )
+        ) {
           setBackfillError(
-            '다른 구간 수집이 진행 중입니다 — 끝나면 다시 눌러 주세요.',
+            "다른 구간 수집이 진행 중입니다 — 끝나면 다시 눌러 주세요.",
           );
           return; // finally 에서 backfillRunning 을 내린다 — 이 진행은 우리 요청이 아니므로 재미리보기도 하지 않는다.
         }
         setBackfillCursor(status.cursorDate);
         await new Promise((resolve) => setTimeout(resolve, 1_000));
-        status = (await api<SymbolMasterCoverageDto>('/symbol-master/coverage')).backfill;
+        status = (await api<SymbolMasterCoverageDto>("/symbol-master/coverage"))
+          .backfill;
       }
 
-      if (status.state === 'BUDGET_EXHAUSTED') {
+      if (status.state === "BUDGET_EXHAUSTED") {
         setBackfillError(
-          `오늘 수집 한도에 도달했습니다 (진행: ${status.cursorDate ?? '?'}) — 잠시 후 다시 시도하세요`,
+          `오늘 수집 한도에 도달했습니다 (진행: ${status.cursorDate ?? "?"}) — 잠시 후 다시 시도하세요`,
         );
-      } else if (status.state === 'FAILED') {
-        setBackfillError(status.error ?? '기간 동기화에 실패했습니다');
+      } else if (status.state === "FAILED") {
+        setBackfillError(status.error ?? "기간 동기화에 실패했습니다");
       } else {
         backfillCompleted = true;
       }
     } catch (error) {
-      setBackfillError(error instanceof ApiError ? error.message : '기간 동기화에 실패했습니다');
+      setBackfillError(
+        error instanceof ApiError
+          ? error.message
+          : "기간 동기화에 실패했습니다",
+      );
     } finally {
       setBackfillRunning(false);
     }
 
-    await queryClient.invalidateQueries({ queryKey: ['symbol-master'] });
+    await queryClient.invalidateQueries({ queryKey: ["symbol-master"] });
     if (resolved === null) return;
 
     // 부분 진행(BUDGET_EXHAUSTED·FAILED)이었어도 다시 물어야 남은 미커버 날짜가
@@ -503,19 +566,25 @@ export function UniverseRuleStep({
     } catch {
       return; // previewMutation.isError 알림이 이미 안내한다
     }
-    if (refreshed.kind !== 'READY' || refreshed.preview.uncoveredDates.length === 0) return;
+    if (
+      refreshed.kind !== "READY" ||
+      refreshed.preview.uncoveredDates.length === 0
+    )
+      return;
 
     try {
       for (const date of refreshed.preview.uncoveredDates) {
-        await postJson('/symbol-master/sync', { date });
+        await postJson("/symbol-master/sync", { date });
       }
     } catch (error) {
       setBackfillError(
-        error instanceof ApiError ? error.message : '남은 리밸런스 날짜를 소급하지 못했습니다',
+        error instanceof ApiError
+          ? error.message
+          : "남은 리밸런스 날짜를 소급하지 못했습니다",
       );
       return;
     }
-    await queryClient.invalidateQueries({ queryKey: ['symbol-master'] });
+    await queryClient.invalidateQueries({ queryKey: ["symbol-master"] });
     runPreview(resolved.params);
   };
 
@@ -525,9 +594,9 @@ export function UniverseRuleStep({
         <CardHeader>
           <CardTitle className="text-base">유니버스 규칙</CardTitle>
           <CardDescription>
-            {value.rebalanceInterval.unit === 'NONE'
-              ? '백테스트 시작에 아래 단계를 한 번 적용하고 종목을 유지'
-              : '리밸런스 날짜마다 아래 단계를 순서대로 적용해 유니버스를 다시 구성'}
+            {value.rebalanceInterval.unit === "NONE"
+              ? "백테스트 시작에 아래 단계를 한 번 적용하고 종목을 유지"
+              : "리밸런스 날짜마다 아래 단계를 순서대로 적용해 유니버스를 다시 구성"}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -536,7 +605,7 @@ export function UniverseRuleStep({
             <Select
               value={value.markets[0]}
               onValueChange={(next) =>
-                onChange({ ...value, markets: [next as 'KOSPI' | 'KOSDAQ'] })
+                onChange({ ...value, markets: [next as "KOSPI" | "KOSDAQ"] })
               }
             >
               <SelectTrigger id="universe-market" className="h-11 w-32">
@@ -565,28 +634,36 @@ export function UniverseRuleStep({
                 className="h-11 w-24"
                 min={1}
                 max={REBALANCE_UNIT_MAX[value.rebalanceInterval.unit]}
-                disabled={value.rebalanceInterval.unit === 'NONE' || value.rebalanceInterval.unit === 'YEAR'}
+                disabled={
+                  value.rebalanceInterval.unit === "NONE" ||
+                  value.rebalanceInterval.unit === "YEAR"
+                }
                 value={rebalanceIntervalText}
                 onChange={(e) => {
                   const text = e.target.value;
                   setRebalanceIntervalText(text);
 
-                  if (text.trim() === '') return;
+                  if (text.trim() === "") return;
                   const n = Number(text);
                   const max = REBALANCE_UNIT_MAX[value.rebalanceInterval.unit];
                   if (!Number.isInteger(n) || n < 1 || n > max) return;
 
                   onChange({
                     ...value,
-                    rebalanceInterval: buildRebalanceInterval(value.rebalanceInterval.unit, n),
+                    rebalanceInterval: buildRebalanceInterval(
+                      value.rebalanceInterval.unit,
+                      n,
+                    ),
                   });
                 }}
                 onBlur={() => {
                   const text = rebalanceIntervalText.trim();
                   const n = Number(text);
 
-                  if (text === '' || !Number.isInteger(n)) {
-                    setRebalanceIntervalText(String(value.rebalanceInterval.value));
+                  if (text === "" || !Number.isInteger(n)) {
+                    setRebalanceIntervalText(
+                      String(value.rebalanceInterval.value),
+                    );
                     return;
                   }
 
@@ -611,15 +688,22 @@ export function UniverseRuleStep({
               <Select
                 value={value.rebalanceInterval.unit}
                 onValueChange={(next) => {
-                  const unit = next as RebalanceInterval['unit'];
+                  const unit = next as RebalanceInterval["unit"];
                   const max = REBALANCE_UNIT_MAX[unit];
-                  const clamped = unit === 'NONE' || unit === 'YEAR'
-                    ? 1
-                    : Math.min(value.rebalanceInterval.value, max);
-                  onChange({ ...value, rebalanceInterval: buildRebalanceInterval(unit, clamped) });
+                  const clamped =
+                    unit === "NONE" || unit === "YEAR"
+                      ? 1
+                      : Math.min(value.rebalanceInterval.value, max);
+                  onChange({
+                    ...value,
+                    rebalanceInterval: buildRebalanceInterval(unit, clamped),
+                  });
                 }}
               >
-                <SelectTrigger id="rebalance-interval-unit" className="h-11 w-24">
+                <SelectTrigger
+                  id="rebalance-interval-unit"
+                  className="h-11 w-24"
+                >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -637,38 +721,46 @@ export function UniverseRuleStep({
               onClick={() => runPreview(currentParams)}
             >
               {previewMutation.isPending
-                ? '저장 데이터 확인 중…'
+                ? "저장 데이터 확인 중…"
                 : preparing
-                  ? '데이터 준비 중…'
+                  ? "데이터 준비 중…"
                   : completingPreview
-                    ? '결과 확인 중…'
-                    : '미리보기'}
+                    ? "결과 확인 중…"
+                    : "미리보기"}
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            기간 {period.from || '?'} ~ {period.to || '?'}
+            기간 {period.from || "?"} ~ {period.to || "?"}
           </p>
           {previewStatus !== null ? (
-            <p className="text-sm text-muted-foreground" role="status" aria-live="polite">
+            <p
+              className="text-sm text-muted-foreground"
+              role="status"
+              aria-live="polite"
+            >
               {previewStatus}
             </p>
           ) : null}
           {!periodReady ? (
             <Alert variant="destructive" role="alert">
-              <AlertDescription>먼저 '기간' 단계에서 기간을 입력하세요</AlertDescription>
+              <AlertDescription>
+                먼저 '기간' 단계에서 기간을 입력하세요
+              </AlertDescription>
             </Alert>
           ) : null}
           {periodReady && !intervalFitsPeriod ? (
             <Alert variant="destructive" role="alert">
               <AlertDescription>
-                리밸런스 주기가 기간보다 길어 리밸런스가 한 번도 일어나지 않습니다 — 주기를
-                줄이거나 기간을 늘리세요.
+                리밸런스 주기가 기간보다 길어 리밸런스가 한 번도 일어나지
+                않습니다 — 주기를 줄이거나 기간을 늘리세요.
               </AlertDescription>
             </Alert>
           ) : null}
           {!strategyReady ? (
             <Alert variant="destructive" role="alert">
-              <AlertDescription>먼저 '전략' 단계에서 전략을 선택하세요</AlertDescription>
+              <AlertDescription>
+                먼저 '전략' 단계에서 전략을 선택하세요
+              </AlertDescription>
             </Alert>
           ) : null}
           {strategyReady && !paramsReady ? (
@@ -681,7 +773,7 @@ export function UniverseRuleStep({
               <AlertDescription>
                 {previewMutation.error instanceof ApiError
                   ? previewMutation.error.message
-                  : '미리보기에 실패했습니다'}
+                  : "미리보기에 실패했습니다"}
               </AlertDescription>
             </Alert>
           ) : null}
@@ -693,7 +785,7 @@ export function UniverseRuleStep({
           job={liveJob}
           onCancel={() => cancelPreparationMutation.mutate()}
           onRestart={
-            liveJob.status === 'FAILED' || liveJob.status === 'CANCELLED'
+            liveJob.status === "FAILED" || liveJob.status === "CANCELLED"
               ? () => {
                   preparingParamsRef.current = null;
                   setPreparingJobId(null);
@@ -710,8 +802,8 @@ export function UniverseRuleStep({
             <CardTitle className="text-base">리밸런스 일정</CardTitle>
             <CardDescription>
               {stale
-                ? '규칙이나 기간이 바뀌었습니다 — 다시 미리보기하세요.'
-                : value.rebalanceInterval.unit === 'NONE'
+                ? "규칙이나 기간이 바뀌었습니다 — 다시 미리보기하세요."
+                : value.rebalanceInterval.unit === "NONE"
                   ? `종목 ${preview.unionSymbols.length}개 · 최초 선정 후 유지`
                   : `종목 ${preview.unionSymbols.length}개 · 리밸런스 ${preview.schedule.length}회`}
             </CardDescription>
@@ -734,7 +826,7 @@ export function UniverseRuleStep({
                             있을 때만 알려주면 된다(브리프 표기 규약) */}
                         {entry.effectiveDate !== entry.rebalanceDate ? (
                           <span className="text-muted-foreground">
-                            {' '}
+                            {" "}
                             (적용 {entry.effectiveDate})
                           </span>
                         ) : null}
@@ -759,12 +851,12 @@ export function UniverseRuleStep({
         <Alert variant="destructive" role="alert">
           <AlertDescription className="space-y-2">
             <p>
-              {fullSyncReason(preview)} 기간 전체를 동기화해야 미리보기를 완성할 수 있습니다 —
-              봉이 없는 종목이 있을 때 먼저 시도할 방법입니다.
+              {fullSyncReason(preview)} 기간 전체를 동기화해야 미리보기를 완성할
+              수 있습니다 — 봉이 없는 종목이 있을 때 먼저 시도할 방법입니다.
             </p>
             {preview.uncoveredDates.length > 0 ? (
               <p className="text-xs tabular-nums opacity-80">
-                {preview.uncoveredDates.join(', ')}
+                {preview.uncoveredDates.join(", ")}
               </p>
             ) : null}
             <Button
@@ -777,13 +869,14 @@ export function UniverseRuleStep({
               {backfillRunning
                 ? backfillCursor
                   ? `동기화 중… ${backfillCursor}`
-                  : '동기화 중…'
-                : '기간 전체 동기화'}
+                  : "동기화 중…"
+                : "기간 전체 동기화"}
             </Button>
             {backfillRunning ? (
               <p className="text-xs opacity-80">
-                동기화는 서버에서 진행되므로 화면을 나가거나 브라우저를 닫아도 계속됩니다.
-                나중에 돌아와서 미리보기를 다시 누르면 그 사이 수집된 데이터가 반영됩니다.
+                동기화는 서버에서 진행되므로 화면을 나가거나 브라우저를 닫아도
+                계속됩니다. 나중에 돌아와서 미리보기를 다시 누르면 그 사이
+                수집된 데이터가 반영됩니다.
               </p>
             ) : null}
           </AlertDescription>
@@ -801,9 +894,11 @@ export function UniverseRuleStep({
       {preview && missingCandlesAfterFullSync ? (
         <Alert variant="destructive" role="alert">
           <AlertDescription className="space-y-2">
-            <p>다음 종목은 아직 봉 데이터가 없어 백테스트를 실행할 수 없습니다.</p>
+            <p>
+              다음 종목은 아직 봉 데이터가 없어 백테스트를 실행할 수 없습니다.
+            </p>
             <p className="text-xs text-muted-foreground wrap-anywhere">
-              {preview.missingCandleSymbols.join(', ')}
+              {preview.missingCandleSymbols.join(", ")}
             </p>
             {/* 기간을 이미 다 채운 상태에서만 이 블록이 뜬다. 그런데도 봉이
                 없다면 KRX 에도 이 종목의 일봉이 없다는 뜻이다. 봉 수집 경로가

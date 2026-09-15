@@ -1,4 +1,4 @@
-export type LimitedExternalApi = 'DART' | 'KRX';
+export type LimitedExternalApi = "DART" | "KRX";
 
 export interface ExternalApiQuotaExceededEvent {
   readonly api: LimitedExternalApi;

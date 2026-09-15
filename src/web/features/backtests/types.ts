@@ -1,15 +1,15 @@
-import type { UniverseRule } from '../../../shared/schemas/universe-rule.js';
-import type { BenchmarkId } from '../../../shared/schemas/benchmark.js';
+import type { UniverseRule } from "../../../shared/schemas/universe-rule.js";
+import type { BenchmarkId } from "../../../shared/schemas/benchmark.js";
 
 export type BacktestStatus =
-  | 'QUEUED'
-  | 'STARTING'
-  | 'RUNNING'
-  | 'CANCELLING'
-  | 'CANCELLED'
-  | 'COMPLETED'
-  | 'FAILED'
-  | 'INTERRUPTED';
+  | "QUEUED"
+  | "STARTING"
+  | "RUNNING"
+  | "CANCELLING"
+  | "CANCELLED"
+  | "COMPLETED"
+  | "FAILED"
+  | "INTERRUPTED";
 
 /**
  * 백테스트 제출 바디 (스펙 2026-08-05) — 서버의 `backtestRequestSchema` 와 같은 계약이다.
@@ -27,11 +27,11 @@ export interface BacktestRequestBody {
   universeRule: UniverseRule;
   benchmarkId?: BenchmarkId;
   /** 소비 봉 주기 — 미지정은 유니버스가 가진 슬라이스로 유일하게 정해지는 값 */
-  timeframe?: '1m' | '1h' | '1d';
+  timeframe?: "1m" | "1h" | "1d";
   period: { from: string; to: string };
-  capital: { initialCash: number; currency: 'KRW' };
+  capital: { initialCash: number; currency: "KRW" };
   execution: {
-    fillTiming: 'NEXT_BAR_OPEN';
+    fillTiming: "NEXT_BAR_OPEN";
     commissionProfileId: string;
     slippageProfileId: string;
   };
@@ -62,8 +62,9 @@ export interface JobSummary {
   metrics?: BacktestMetrics | null;
 }
 
-export type SeedCloneBatchStatus = 'ACTIVE' | 'CANCELLING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
-export type SeedCloneItemStatus = 'PENDING' | 'DELETED' | BacktestStatus;
+export type SeedCloneBatchStatus =
+  "ACTIVE" | "CANCELLING" | "COMPLETED" | "FAILED" | "CANCELLED";
+export type SeedCloneItemStatus = "PENDING" | "DELETED" | BacktestStatus;
 
 export interface SeedCloneBatchSummary {
   id: string;
@@ -194,10 +195,10 @@ export interface TradeRow {
 }
 
 export const TERMINAL_STATUSES: BacktestStatus[] = [
-  'CANCELLED',
-  'COMPLETED',
-  'FAILED',
-  'INTERRUPTED',
+  "CANCELLED",
+  "COMPLETED",
+  "FAILED",
+  "INTERRUPTED",
 ];
 
 export function isTerminal(status: BacktestStatus): boolean {

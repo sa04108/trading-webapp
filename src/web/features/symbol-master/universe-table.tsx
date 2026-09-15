@@ -1,17 +1,17 @@
-import { useEffect, useMemo, useState } from 'react';
-import { PageSizeInput, Pagination } from '@/components/pagination';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { useEffect, useMemo, useState } from "react";
+import { PageSizeInput, Pagination } from "@/components/pagination";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select';
-import { Skeleton } from '@/components/ui/skeleton';
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
   TableBody,
@@ -19,19 +19,19 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table';
-import { formatCompactNumber, formatDateTime } from '@/lib/format';
-import { parsePageSize } from '@/lib/page-size';
-import { pageWindow } from '@/lib/pagination';
+} from "@/components/ui/table";
+import { formatCompactNumber, formatDateTime } from "@/lib/format";
+import { parsePageSize } from "@/lib/page-size";
+import { pageWindow } from "@/lib/pagination";
 import type {
   SymbolMasterCoverageDto,
   SymbolMasterEntryDto,
   SymbolMasterUniverseDto,
-} from '../../../shared/schemas/symbol-master.js';
-import { findNearestTradingDate } from './timeline-model';
+} from "../../../shared/schemas/symbol-master.js";
+import { findNearestTradingDate } from "./timeline-model";
 
-type MarketFilter = 'ALL' | 'KOSPI' | 'KOSDAQ';
-type TypeFilter = 'ALL' | 'COMMON_STOCK' | 'OTHER';
+type MarketFilter = "ALL" | "KOSPI" | "KOSDAQ";
+type TypeFilter = "ALL" | "COMMON_STOCK" | "OTHER";
 
 function matchesQuery(entry: SymbolMasterEntryDto, query: string): boolean {
   const needle = query.trim().toLowerCase();
@@ -68,11 +68,11 @@ export function UniverseTable({
   onSyncThisDate: () => void;
   onJumpToDate: (date: string) => void;
 }) {
-  const [query, setQuery] = useState('');
-  const [market, setMarket] = useState<MarketFilter>('ALL');
-  const [type, setType] = useState<TypeFilter>('ALL');
+  const [query, setQuery] = useState("");
+  const [market, setMarket] = useState<MarketFilter>("ALL");
+  const [type, setType] = useState<TypeFilter>("ALL");
   const [page, setPage] = useState(0);
-  const [pageSizeText, setPageSizeText] = useState('20');
+  const [pageSizeText, setPageSizeText] = useState("20");
   const pageSize = parsePageSize(pageSizeText, 20);
 
   // 날짜를 옮기면 다른 유니버스다 — 47페이지에 머무른 채 새 날짜를 보여주면
@@ -85,9 +85,11 @@ export function UniverseTable({
     if (universe === null) return [];
     return universe.symbols.filter((entry) => {
       if (!matchesQuery(entry, query)) return false;
-      if (market !== 'ALL' && entry.market !== market) return false;
-      if (type === 'COMMON_STOCK' && entry.instrumentType !== 'COMMON_STOCK') return false;
-      if (type === 'OTHER' && entry.instrumentType === 'COMMON_STOCK') return false;
+      if (market !== "ALL" && entry.market !== market) return false;
+      if (type === "COMMON_STOCK" && entry.instrumentType !== "COMMON_STOCK")
+        return false;
+      if (type === "OTHER" && entry.instrumentType === "COMMON_STOCK")
+        return false;
       return true;
     });
   }, [universe, query, market, type]);
@@ -122,7 +124,11 @@ export function UniverseTable({
               이 날짜 동기화
             </Button>
             {nearest !== null ? (
-              <Button size="sm" variant="outline" onClick={() => onJumpToDate(nearest)}>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => onJumpToDate(nearest)}
+              >
                 가장 가까운 수집일({nearest})로 이동
               </Button>
             ) : null}
@@ -132,13 +138,17 @@ export function UniverseTable({
     );
   }
 
-  const { pageCount, currentPage, from, to } = pageWindow(filtered.length, pageSize, page);
+  const { pageCount, currentPage, from, to } = pageWindow(
+    filtered.length,
+    pageSize,
+    page,
+  );
   const visible = filtered.slice(from, to);
 
   return (
     <div className="space-y-2">
       <p className="text-sm text-muted-foreground">
-        {date} 기준 {universe.symbols.length}종목 · 마지막 수집{' '}
+        {date} 기준 {universe.symbols.length}종목 · 마지막 수집{" "}
         {formatDateTime(coverage?.lastSyncedAtMs ?? null)}
       </p>
 
@@ -216,10 +226,12 @@ export function UniverseTable({
               <TableBody>
                 {visible.map((entry) => (
                   <TableRow key={entry.standardCode}>
-                    <TableCell className="font-mono text-xs">{entry.shortCode}</TableCell>
+                    <TableCell className="font-mono text-xs">
+                      {entry.shortCode}
+                    </TableCell>
                     <TableCell>
                       <span className="font-medium">{entry.name}</span>
-                      {entry.instrumentType !== 'COMMON_STOCK' ? (
+                      {entry.instrumentType !== "COMMON_STOCK" ? (
                         <Badge variant="outline" className="ml-1.5">
                           {entry.instrumentType}
                         </Badge>
@@ -229,7 +241,7 @@ export function UniverseTable({
                     <TableCell className="text-right tabular-nums">
                       {formatCompactNumber(Number(entry.sharesOutstanding))}주
                     </TableCell>
-                    <TableCell>{entry.listedDate ?? '-'}</TableCell>
+                    <TableCell>{entry.listedDate ?? "-"}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -239,7 +251,7 @@ export function UniverseTable({
             ariaLabel="종목 목록 페이지 이동"
             currentPage={currentPage}
             pageCount={pageCount}
-            total={{ count: filtered.length, unit: '종목' }}
+            total={{ count: filtered.length, unit: "종목" }}
             onPageChange={setPage}
           />
         </div>

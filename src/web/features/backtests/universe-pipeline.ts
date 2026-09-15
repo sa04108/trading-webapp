@@ -3,7 +3,7 @@ import {
   type UniverseCriterion,
   type UniverseDirection,
   type UniverseStage,
-} from '../../../shared/schemas/universe-rule.js';
+} from "../../../shared/schemas/universe-rule.js";
 
 /** 첫 단계만 이 값까지 허용한다 — 뒤 단계는 항상 직전 단계 값이 상한이다 (스키마와 같은 값) */
 export const FIRST_STAGE_LIMIT_MAX = 200;
@@ -46,12 +46,14 @@ export function addStage(
     throw new Error(`이미 사용한 기준은 다시 추가할 수 없습니다: ${criterion}`);
   }
   if (stages.length >= MAX_STAGE_COUNT) {
-    throw new Error(`유니버스 단계는 최대 ${MAX_STAGE_COUNT}개까지 추가할 수 있습니다.`);
+    throw new Error(
+      `유니버스 단계는 최대 ${MAX_STAGE_COUNT}개까지 추가할 수 있습니다.`,
+    );
   }
   const previous = stages[stages.length - 1];
   const limit = previous ? previous.limit : FIRST_STAGE_LIMIT_MAX;
   const newStage: UniverseStage =
-    criterion === 'DECLINE'
+    criterion === "DECLINE"
       ? {
           criterion,
           direction: PREFERRED_STAGE_DIRECTION[criterion],
@@ -62,9 +64,12 @@ export function addStage(
   return cascadeLimits([...stages, newStage]);
 }
 
-export function removeStage(stages: readonly UniverseStage[], index: number): PipelineUpdate {
+export function removeStage(
+  stages: readonly UniverseStage[],
+  index: number,
+): PipelineUpdate {
   if (stages.length <= 1) {
-    throw new Error('유니버스 단계는 최소 1개가 있어야 합니다.');
+    throw new Error("유니버스 단계는 최소 1개가 있어야 합니다.");
   }
   return cascadeLimits(stages.filter((_, i) => i !== index));
 }
@@ -89,7 +94,9 @@ export function changeStageLimit(
   index: number,
   limit: number,
 ): PipelineUpdate {
-  const next = stages.map((stage, i) => (i === index ? { ...stage, limit } : stage));
+  const next = stages.map((stage, i) =>
+    i === index ? { ...stage, limit } : stage,
+  );
   return cascadeLimits(next);
 }
 
@@ -101,14 +108,18 @@ export function changeStageCriterion(
   return {
     stages: stages.map((stage, i): UniverseStage => {
       if (i !== index) return stage;
-      return criterion === 'DECLINE'
+      return criterion === "DECLINE"
         ? {
             criterion,
             direction: PREFERRED_STAGE_DIRECTION[criterion],
             limit: stage.limit,
             lookbackTradingDays: DEFAULT_DECLINE_LOOKBACK_TRADING_DAYS,
           }
-        : { criterion, direction: PREFERRED_STAGE_DIRECTION[criterion], limit: stage.limit };
+        : {
+            criterion,
+            direction: PREFERRED_STAGE_DIRECTION[criterion],
+            limit: stage.limit,
+          };
     }),
     changedIndices: [],
   };
@@ -120,7 +131,9 @@ export function changeStageDirection(
   direction: UniverseDirection,
 ): PipelineUpdate {
   return {
-    stages: stages.map((stage, i) => (i === index ? { ...stage, direction } : stage)),
+    stages: stages.map((stage, i) =>
+      i === index ? { ...stage, direction } : stage,
+    ),
     changedIndices: [],
   };
 }
@@ -133,7 +146,10 @@ export function changeStageDirection(
  * `maxLimit` 을 확인해야 500 같은 값을 타이핑해도 universeRuleSchema 의 절대
  * 상한(1~200)을 벗어난 rule 이 상태에 만들어지지 않는다.
  */
-export function parseStageLimitInput(raw: string, maxLimit: number): number | null {
+export function parseStageLimitInput(
+  raw: string,
+  maxLimit: number,
+): number | null {
   const n = Number(raw);
   if (!Number.isInteger(n) || n < 1 || n > maxLimit) return null;
   return n;
@@ -145,16 +161,19 @@ export function normalizeStageLimitInput(
   maxLimit: number,
 ): number {
   const text = raw.trim();
-  if (text === '') return fallback;
+  if (text === "") return fallback;
   const n = Number(text);
   if (!Number.isInteger(n)) return fallback;
   return Math.min(maxLimit, Math.max(1, n));
 }
 
 /** 가격 변동 산정기간 원문을 입력 완료 시점에 1~252 거래일로 확정한다. */
-export function normalizePriceChangeLookbackInput(raw: string, fallback: number): number {
+export function normalizePriceChangeLookbackInput(
+  raw: string,
+  fallback: number,
+): number {
   const text = raw.trim();
-  if (text === '') return fallback;
+  if (text === "") return fallback;
   const n = Number(text);
   if (!Number.isInteger(n)) return fallback;
   return Math.min(252, Math.max(1, n));

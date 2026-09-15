@@ -1,96 +1,113 @@
-import type { PeriodValidationDto } from '../../../../shared/schemas/period-validation.js';
-import type { DatabaseHandle } from '../../../../runtime/shared/db/database.js';
-import { registerPeriodValidationRoutes } from './period-validation-routes.js';
-import { PreparationReferenceService } from '../application/preparation-reference-service.js';
-import { createHash } from 'node:crypto';
-import type { EventEmitter } from 'node:events';
-import os from 'node:os';
-import fs from 'node:fs';
-import type { FastifyBaseLogger, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { z } from 'zod';
+import type { PeriodValidationDto } from "../../../../shared/schemas/period-validation.js";
+import type { DatabaseHandle } from "../../../../runtime/shared/db/database.js";
+import { registerPeriodValidationRoutes } from "./period-validation-routes.js";
+import { PreparationReferenceService } from "../application/preparation-reference-service.js";
+import { createHash } from "node:crypto";
+import type { EventEmitter } from "node:events";
+import os from "node:os";
+import fs from "node:fs";
+import type {
+  FastifyBaseLogger,
+  FastifyInstance,
+  FastifyReply,
+  FastifyRequest,
+} from "fastify";
+import { z } from "zod";
 import {
   backtestRequestSchema,
   periodToTsRange,
   type BacktestRequest,
-} from '../../../../shared/schemas/backtest-request.js';
-import type { ProvenancePin } from '../../../../shared/schemas/provenance-pin.js';
+} from "../../../../shared/schemas/backtest-request.js";
+import type { ProvenancePin } from "../../../../shared/schemas/provenance-pin.js";
 import {
   universeCriterionSchema,
   universeDirectionSchema,
   universeRuleSchema,
-} from '../../../../shared/schemas/universe-rule.js';
-import type { UniverseRebalancingEntryDto } from '../../../../shared/schemas/universe-rebalancing.js';
+} from "../../../../shared/schemas/universe-rule.js";
+import type { UniverseRebalancingEntryDto } from "../../../../shared/schemas/universe-rebalancing.js";
 import {
   DEFAULT_TRADE_SORT_DIRECTION,
   DEFAULT_TRADE_SORT_KEY,
   SORT_DIRECTIONS,
   TRADE_SORT_KEYS,
-} from '../../../../shared/schemas/trade-sort.js';
-import { SECURITY_HEADERS } from '../../../shared/security.js';
-import type { Clock } from '../../../../runtime/shared/clock.js';
-import type { AuditLogService } from '../../../../runtime/modules/audit/audit-service.js';
-import type { FactCoverageStore } from '../../../../runtime/modules/facts/application/fact-coverage-store.js';
-import type { FinancialFactAvailabilityService } from '../../../../runtime/modules/facts/application/financial-fact-availability.js';
-import type { FactRepository } from '../../../../runtime/modules/facts/application/ports.js';
-import type { ConsumedVersionSnapshot, SymbolService } from '../../../../runtime/modules/market-data/application/symbol-service.js';
-import type { SymbolMasterService } from '../../../../runtime/modules/market-data/application/symbol-master-service.js';
-import { sendIfKrxError, sendIfNotCovered } from './krx-error-mapping.js';
-import { KRX_FILTER_POLICY_VERSION } from '../../../../runtime/modules/market-data/domain/krx-filter-policy.js';
+} from "../../../../shared/schemas/trade-sort.js";
+import { SECURITY_HEADERS } from "../../../shared/security.js";
+import type { Clock } from "../../../../runtime/shared/clock.js";
+import type { AuditLogService } from "../../../../runtime/modules/audit/audit-service.js";
+import type { FactCoverageStore } from "../../../../runtime/modules/facts/application/fact-coverage-store.js";
+import type { FinancialFactAvailabilityService } from "../../../../runtime/modules/facts/application/financial-fact-availability.js";
+import type { FactRepository } from "../../../../runtime/modules/facts/application/ports.js";
+import type {
+  ConsumedVersionSnapshot,
+  SymbolService,
+} from "../../../../runtime/modules/market-data/application/symbol-service.js";
+import type { SymbolMasterService } from "../../../../runtime/modules/market-data/application/symbol-master-service.js";
+import { sendIfKrxError, sendIfNotCovered } from "./krx-error-mapping.js";
+import { KRX_FILTER_POLICY_VERSION } from "../../../../runtime/modules/market-data/domain/krx-filter-policy.js";
 import type {
   CandleCoverageRow,
   CandleCoverageService,
-} from '../../../../runtime/modules/market-data/application/candle-coverage-service.js';
-import type { StrategyRegistry } from '../../../../runtime/modules/strategy/application/strategy-registry.js';
-import { strategyRequiresFinancialData } from '../../../../runtime/modules/strategy/domain/strategy.js';
-import type { BenchmarkService } from '../../market-data/application/benchmark-service.js';
-import { benchmarkPinSchema } from '../../../../shared/schemas/benchmark.js';
-import { estimateBars, MAX_BACKTEST_BARS } from '../domain/bar-estimate.js';
+} from "../../../../runtime/modules/market-data/application/candle-coverage-service.js";
+import type { StrategyRegistry } from "../../../../runtime/modules/strategy/application/strategy-registry.js";
+import { strategyRequiresFinancialData } from "../../../../runtime/modules/strategy/domain/strategy.js";
+import type { BenchmarkService } from "../../market-data/application/benchmark-service.js";
+import { benchmarkPinSchema } from "../../../../shared/schemas/benchmark.js";
+import { estimateBars, MAX_BACKTEST_BARS } from "../domain/bar-estimate.js";
 import {
   getCostProfile,
   getSlippageProfile,
   listCostProfiles,
   listSlippageProfiles,
-} from '../../../../runtime/modules/backtest/domain/cost-profiles.js';
+} from "../../../../runtime/modules/backtest/domain/cost-profiles.js";
 import {
   findRebalanceSpacingViolation,
   rebalanceSpacingViolationMessage,
-} from '../../../../runtime/modules/backtest/domain/rebalance-spacing.js';
-import type { JobOrchestrator, JobEvent } from '../application/job-orchestrator.js';
-import type { BacktestJobRow, JobQueue } from '../application/job-queue.js';
-import type { ResultsService } from '../application/results-service.js';
-import { rebaseStoredRequest } from '../application/stored-request.js';
-import { summarizeUniverseRebalancing } from '../application/universe-rebalancing.js';
-import type { LegacyUniverseScheduleEntry, ResolvedUniverse } from '../../../../runtime/modules/backtest/application/universe-rule-resolver.js';
+} from "../../../../runtime/modules/backtest/domain/rebalance-spacing.js";
+import type {
+  JobOrchestrator,
+  JobEvent,
+} from "../application/job-orchestrator.js";
+import type { BacktestJobRow, JobQueue } from "../application/job-queue.js";
+import type { ResultsService } from "../application/results-service.js";
+import { rebaseStoredRequest } from "../application/stored-request.js";
+import { summarizeUniverseRebalancing } from "../application/universe-rebalancing.js";
+import type {
+  LegacyUniverseScheduleEntry,
+  ResolvedUniverse,
+} from "../../../../runtime/modules/backtest/application/universe-rule-resolver.js";
 import {
   PreparationInputError,
   UnsafeBacktestSymbolIdentityError,
   type BacktestPreparationOrchestrator,
   type BacktestUniversePreview,
   type PreparationInput,
-} from '../../../../runtime/modules/backtest/application/backtest-preparation-orchestrator.js';
-import { backtestPreparationRequestHash } from '../../../../runtime/modules/backtest/application/backtest-preparation-plan.js';
-import { assertSafePinnedScheduleIdentities } from '../../../../runtime/modules/backtest/application/backtest-symbol-identity.js';
+} from "../../../../runtime/modules/backtest/application/backtest-preparation-orchestrator.js";
+import { backtestPreparationRequestHash } from "../../../../runtime/modules/backtest/application/backtest-preparation-plan.js";
+import { assertSafePinnedScheduleIdentities } from "../../../../runtime/modules/backtest/application/backtest-symbol-identity.js";
 import {
   financialCoverageGapMessage,
   findFinancialCoverageGap,
-} from '../../../../runtime/modules/backtest/application/backtest-financial-coverage.js';
+} from "../../../../runtime/modules/backtest/application/backtest-financial-coverage.js";
 import {
   delistedEventsToTsMsBySymbol,
   financialFactCutoffsFromCoverage,
-} from '../../../../runtime/modules/backtest/application/backtest-financial-execution-window.js';
-import { findIncompleteFundamentalCheckpointsFromCoverage } from '../../../../runtime/modules/backtest/application/backtest-financial-data-readiness.js';
+} from "../../../../runtime/modules/backtest/application/backtest-financial-execution-window.js";
+import { findIncompleteFundamentalCheckpointsFromCoverage } from "../../../../runtime/modules/backtest/application/backtest-financial-data-readiness.js";
 import type {
   SeedCloneBatchDetail,
   SeedCloneBatchService,
-} from '../application/seed-clone-batch-service.js';
+} from "../application/seed-clone-batch-service.js";
 
-type PreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+type PreHandler = (
+  request: FastifyRequest,
+  reply: FastifyReply,
+) => Promise<void>;
 
 type FundamentalsRequirementIssue =
-  | { readonly kind: 'COVERAGE_GAP'; readonly message: string }
-  | { readonly kind: 'INGESTION_GAP'; readonly message: string }
-  | { readonly kind: 'CANDLE_GAP'; readonly message: string }
-  | { readonly kind: 'STALE_FINANCIAL_DATA'; readonly message: string };
+  | { readonly kind: "COVERAGE_GAP"; readonly message: string }
+  | { readonly kind: "INGESTION_GAP"; readonly message: string }
+  | { readonly kind: "CANDLE_GAP"; readonly message: string }
+  | { readonly kind: "STALE_FINANCIAL_DATA"; readonly message: string };
 
 export interface BacktestRouteDeps {
   readonly database: DatabaseHandle;
@@ -110,8 +127,11 @@ export interface BacktestRouteDeps {
   /** 재무 요구 검사(422)가 보는 SQLite coverage store. */
   readonly factCoverage: FactCoverageStore;
   /** 자본변동을 제외한 실제 재무 fact가 종목별 PIT cutoff까지 존재하는 종목. */
-  readonly financialFacts: Pick<FinancialFactAvailabilityService, 'symbolsWithFinancialFacts'>;
-  readonly facts: Pick<FactRepository, 'getFacts'>;
+  readonly financialFacts: Pick<
+    FinancialFactAvailabilityService,
+    "symbolsWithFinancialFacts"
+  >;
+  readonly facts: Pick<FactRepository, "getFacts">;
   readonly dataRoot: string;
   readonly maxQueuedBacktests: number;
   readonly maxBacktestBars?: () => number;
@@ -123,7 +143,8 @@ export interface BacktestRouteDeps {
 const MIN_FREE_DISK_BYTES = 500 * 1024 * 1024;
 const MIN_FREE_MEMORY_BYTES = 75 * 1024 * 1024;
 
-const isoDate = (tsMs: number): string => new Date(tsMs).toISOString().slice(0, 10);
+const isoDate = (tsMs: number): string =>
+  new Date(tsMs).toISOString().slice(0, 10);
 
 /**
  * 자본변동 수량은 사업보고서의 증자·감자 현황에서 읽는다.
@@ -148,7 +169,7 @@ function isRecentPeriodEnd(toTsMs: number, nowMs: number): boolean {
  */
 function availableMemoryBytes(): number {
   try {
-    const meminfo = fs.readFileSync('/proc/meminfo', 'utf8');
+    const meminfo = fs.readFileSync("/proc/meminfo", "utf8");
     const match = /MemAvailable:\s+(\d+)\s*kB/.exec(meminfo);
     if (match) return Number(match[1]) * 1024;
   } catch {
@@ -184,8 +205,10 @@ function preparationInputOf(body: BacktestRequest): PreparationInput {
   };
 }
 
-function scheduleHash(schedule: readonly LegacyUniverseScheduleEntry[]): string {
-  return createHash('sha256').update(JSON.stringify(schedule)).digest('hex');
+function scheduleHash(
+  schedule: readonly LegacyUniverseScheduleEntry[],
+): string {
+  return createHash("sha256").update(JSON.stringify(schedule)).digest("hex");
 }
 
 function pinnedScheduleIdentityError(
@@ -196,43 +219,52 @@ function pinnedScheduleIdentityError(
     assertSafePinnedScheduleIdentities(schedule, { symbolMaster });
     return null;
   } catch (error) {
-    if (error instanceof UnsafeBacktestSymbolIdentityError) return error.message;
+    if (error instanceof UnsafeBacktestSymbolIdentityError)
+      return error.message;
     throw error;
   }
 }
 
 const consumedVersionSnapshotSchema = z.object({
-  entries: z.array(z.object({
-    code: z.string(),
-    slice: z.string(),
-    version: z.number().int().nonnegative(),
-    contentHash: z.string(),
-  })),
+  entries: z.array(
+    z.object({
+      code: z.string(),
+      slice: z.string(),
+      version: z.number().int().nonnegative(),
+      contentHash: z.string(),
+    }),
+  ),
   hash: z.string(),
 });
 
 const orderedProvenancePinSchema = z.object({
-  sourceKind: z.literal('SYMBOL_MASTER'),
+  sourceKind: z.literal("SYMBOL_MASTER"),
   filterPolicyVersion: z.string().nullable(),
-  selectionMethod: z.literal('ORDERED_UNIVERSE_PIPELINE'),
+  selectionMethod: z.literal("ORDERED_UNIVERSE_PIPELINE"),
   universeRule: universeRuleSchema,
   scheduleHash: z.string(),
-  diagnostics: z.array(z.object({
-    rebalanceDate: z.string(),
-    effectiveDate: z.string(),
-    stages: z.array(z.object({
-      criterion: universeCriterionSchema,
-      direction: universeDirectionSchema,
-      inputCount: z.number().int().nonnegative(),
-      eligibleCount: z.number().int().nonnegative(),
-      selectedCount: z.number().int().nonnegative(),
-      excludedMissingCount: z.number().int().nonnegative(),
-    })),
-  })),
+  diagnostics: z.array(
+    z.object({
+      rebalanceDate: z.string(),
+      effectiveDate: z.string(),
+      stages: z.array(
+        z.object({
+          criterion: universeCriterionSchema,
+          direction: universeDirectionSchema,
+          inputCount: z.number().int().nonnegative(),
+          eligibleCount: z.number().int().nonnegative(),
+          selectedCount: z.number().int().nonnegative(),
+          excludedMissingCount: z.number().int().nonnegative(),
+        }),
+      ),
+    }),
+  ),
   preparedAtMs: z.number().int().nonnegative(),
 });
 
-function parseStoredSchedule(job: BacktestJobRow): LegacyUniverseScheduleEntry[] | null {
+function parseStoredSchedule(
+  job: BacktestJobRow,
+): LegacyUniverseScheduleEntry[] | null {
   try {
     const parsed: unknown = JSON.parse(job.universeScheduleJson);
     return Array.isArray(parsed) && parsed.length > 0
@@ -244,7 +276,9 @@ function parseStoredSchedule(job: BacktestJobRow): LegacyUniverseScheduleEntry[]
 }
 
 /** 준비 job의 staged schedule을 계산 worker가 소비하는 pin 모양으로 좁힌다. */
-function preparedPreviewToResolved(preview: BacktestUniversePreview): ResolvedUniverse {
+function preparedPreviewToResolved(
+  preview: BacktestUniversePreview,
+): ResolvedUniverse {
   const schedule = preview.schedule.map((entry) => ({
     rebalanceDate: entry.rebalanceDate,
     effectiveTradingDate: entry.effectiveDate,
@@ -258,7 +292,9 @@ function preparedPreviewToResolved(preview: BacktestUniversePreview): ResolvedUn
     unionEntries: new Map(),
     // worker가 실제 소비하는 legacy JSON 자체의 hash여야 provenance pin을 독립적으로
     // 재계산할 수 있다. staged hash는 preparation preview 안에 그대로 보존된다.
-    scheduleHash: createHash('sha256').update(JSON.stringify(schedule)).digest('hex'),
+    scheduleHash: createHash("sha256")
+      .update(JSON.stringify(schedule))
+      .digest("hex"),
     uncoveredDates: [...preview.uncoveredDates],
   };
 }
@@ -277,7 +313,10 @@ function parseProvenancePin(
   try {
     return JSON.parse(provenancePinJson) as ProvenancePin;
   } catch (error) {
-    logger.warn({ event: 'backtest.provenance_pin.parse_failed', jobId, err: error }, 'provenancePinJson 파싱에 실패해 pin 없이 응답한다');
+    logger.warn(
+      { event: "backtest.provenance_pin.parse_failed", jobId, err: error },
+      "provenancePinJson 파싱에 실패해 pin 없이 응답한다",
+    );
     return null;
   }
 }
@@ -288,12 +327,14 @@ function parseUniverseRebalancing(
   logger: FastifyBaseLogger,
 ): UniverseRebalancingEntryDto[] {
   try {
-    const schedule = JSON.parse(universeScheduleJson) as LegacyUniverseScheduleEntry[];
+    const schedule = JSON.parse(
+      universeScheduleJson,
+    ) as LegacyUniverseScheduleEntry[];
     return summarizeUniverseRebalancing(schedule);
   } catch (error) {
     logger.warn(
-      { event: 'backtest.universe_schedule.parse_failed', jobId, err: error },
-      'universeScheduleJson 파싱에 실패해 종목 리밸런싱 요약 없이 응답한다',
+      { event: "backtest.universe_schedule.parse_failed", jobId, err: error },
+      "universeScheduleJson 파싱에 실패해 종목 리밸런싱 요약 없이 응답한다",
     );
     return [];
   }
@@ -301,12 +342,12 @@ function parseUniverseRebalancing(
 
 async function checkResources(dataRoot: string): Promise<string | null> {
   if (availableMemoryBytes() < MIN_FREE_MEMORY_BYTES) {
-    return '여유 메모리가 부족해 새 백테스트를 시작할 수 없습니다. 실행 중인 작업이 끝난 뒤 다시 시도하세요.';
+    return "여유 메모리가 부족해 새 백테스트를 시작할 수 없습니다. 실행 중인 작업이 끝난 뒤 다시 시도하세요.";
   }
   try {
     const stats = await fs.promises.statfs(dataRoot);
     if (stats.bavail * stats.bsize < MIN_FREE_DISK_BYTES) {
-      return '디스크 공간이 부족해 새 백테스트를 시작할 수 없습니다. 저장 공간을 확보한 뒤 다시 시도하세요.';
+      return "디스크 공간이 부족해 새 백테스트를 시작할 수 없습니다. 저장 공간을 확보한 뒤 다시 시도하세요.";
     }
   } catch {
     // statfs 실패 시 가드를 건너뛴다
@@ -314,7 +355,11 @@ async function checkResources(dataRoot: string): Promise<string | null> {
   return null;
 }
 
-export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRouteDeps, requireAuth: PreHandler): void {
+export function registerBacktestRoutes(
+  app: FastifyInstance,
+  deps: BacktestRouteDeps,
+  requireAuth: PreHandler,
+): void {
   const {
     queue,
     orchestrator,
@@ -335,18 +380,25 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
 
   const serializeJobSummary = (job: BacktestJobRow) => ({
     ...serializeJob(job),
-    metrics: job.status === 'COMPLETED' ? results.getMetrics(job.id) : null,
+    metrics: job.status === "COMPLETED" ? results.getMetrics(job.id) : null,
   });
 
-  const serializeBatch = (detail: SeedCloneBatchDetail, includeItems: boolean) => {
+  const serializeBatch = (
+    detail: SeedCloneBatchDetail,
+    includeItems: boolean,
+  ) => {
     const statuses = detail.items.map(({ item, job }) => {
-      if (item.state === 'PENDING') return 'PENDING';
-      if (item.state === 'CANCELLED') return 'CANCELLED';
-      return job?.status ?? 'DELETED';
+      if (item.state === "PENDING") return "PENDING";
+      if (item.state === "CANCELLED") return "CANCELLED";
+      return job?.status ?? "DELETED";
     });
-    const count = (status: string) => statuses.filter((value) => value === status).length;
-    const runningCount = statuses.filter((status) =>
-      status === 'STARTING' || status === 'RUNNING' || status === 'CANCELLING',
+    const count = (status: string) =>
+      statuses.filter((value) => value === status).length;
+    const runningCount = statuses.filter(
+      (status) =>
+        status === "STARTING" ||
+        status === "RUNNING" ||
+        status === "CANCELLING",
     ).length;
     const response = {
       id: detail.batch.id,
@@ -354,14 +406,14 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       strategyId: detail.batch.strategyId,
       status: detail.batch.status,
       totalCount: detail.batch.totalCount,
-      pendingCount: count('PENDING'),
-      queuedCount: count('QUEUED'),
+      pendingCount: count("PENDING"),
+      queuedCount: count("QUEUED"),
       runningCount,
-      completedCount: count('COMPLETED'),
-      failedCount: count('FAILED'),
-      cancelledCount: count('CANCELLED'),
-      interruptedCount: count('INTERRUPTED'),
-      deletedCount: count('DELETED'),
+      completedCount: count("COMPLETED"),
+      failedCount: count("FAILED"),
+      cancelledCount: count("CANCELLED"),
+      interruptedCount: count("INTERRUPTED"),
+      deletedCount: count("DELETED"),
       request: JSON.parse(detail.batch.requestJson) as unknown,
       error: detail.batch.error,
       createdAtMs: detail.batch.createdAtMs,
@@ -374,11 +426,12 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
         ordinal: item.ordinal,
         randomSeed: item.randomSeed,
         jobId: job?.id ?? null,
-        status: item.state === 'PENDING'
-          ? 'PENDING'
-          : item.state === 'CANCELLED'
-            ? 'CANCELLED'
-            : job?.status ?? 'DELETED',
+        status:
+          item.state === "PENDING"
+            ? "PENDING"
+            : item.state === "CANCELLED"
+              ? "CANCELLED"
+              : (job?.status ?? "DELETED"),
         metrics: job ? results.getMetrics(job.id) : null,
       })),
     };
@@ -396,9 +449,13 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    * 워커(`backtest-child.ts`)에서 늦게 죽는다.
    */
   const registeredCoverage = (codes: readonly string[]): CandleCoverageRow[] =>
-    candleCoverage.getCoverage(codes).map((row) =>
-      symbolService.exists(row.code) ? row : { code: row.code, firstTsMs: null, lastTsMs: null, barCount: 0 },
-    );
+    candleCoverage
+      .getCoverage(codes)
+      .map((row) =>
+        symbolService.exists(row.code)
+          ? row
+          : { code: row.code, firstTsMs: null, lastTsMs: null, barCount: 0 },
+      );
 
   /**
    * 기간 × 종목별 커버리지 검사. 전체 이력 min/max가 아니라 요청 기간 안에서 worker와
@@ -412,15 +469,26 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
   ): string | null => {
     const { fromTsMs, toTsMs } = periodToTsRange(period);
     const inPeriod = new Map(
-      candleCoverage.getCoverageBetween(codes, fromTsMs, toTsMs)
-        .map((row) => [
-          row.code,
-          symbolService.exists(row.code)
-            ? row
-            : { code: row.code, firstTsMs: null, lastTsMs: null, barCount: 0 },
-        ] as const),
+      candleCoverage
+        .getCoverageBetween(codes, fromTsMs, toTsMs)
+        .map(
+          (row) =>
+            [
+              row.code,
+              symbolService.exists(row.code)
+                ? row
+                : {
+                    code: row.code,
+                    firstTsMs: null,
+                    lastTsMs: null,
+                    barCount: 0,
+                  },
+            ] as const,
+        ),
     );
-    const allHistory = new Map(registeredCoverage(codes).map((row) => [row.code, row]));
+    const allHistory = new Map(
+      registeredCoverage(codes).map((row) => [row.code, row]),
+    );
 
     const ranges: string[] = [];
     for (const symbol of codes) {
@@ -428,7 +496,10 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       if (current && current.barCount > 0) continue;
       const full = allHistory.get(symbol);
       ranges.push(
-        !full || full.barCount === 0 || full.firstTsMs === null || full.lastTsMs === null
+        !full ||
+          full.barCount === 0 ||
+          full.firstTsMs === null ||
+          full.lastTsMs === null
           ? `${symbol}: 수집된 데이터 없음`
           : `${symbol}: ${isoDate(full.firstTsMs)} ~ ${isoDate(full.lastTsMs)}`,
       );
@@ -436,7 +507,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
 
     return ranges.length === 0
       ? null
-      : `선택한 기간에 일봉이 없는 유니버스 종목이 있습니다. 보유 범위 — ${ranges.join(', ')}`;
+      : `선택한 기간에 일봉이 없는 유니버스 종목이 있습니다. 보유 범위 — ${ranges.join(", ")}`;
   };
 
   /**
@@ -454,24 +525,33 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     codes: readonly string[],
     errors: string[],
     coverageCheck: (codes: readonly string[]) => string | null,
-  ): { universe: ConsumedVersionSnapshot; timeframe: '1d'; estimatedBars: number } | null => {
-    const consumed = '1d' as const;
+  ): {
+    universe: ConsumedVersionSnapshot;
+    timeframe: "1d";
+    estimatedBars: number;
+  } | null => {
+    const consumed = "1d" as const;
 
     // 유니버스 전체가 미등록이면 여기서 먼저 끊는다(리뷰 finding, 2026-08-08).
     // registeredCoverage 만 쓰면 이 경우도 "일봉이 없습니다" 로 뭉뚱그려진다.
     // krx_daily_bars 는 등록과 무관해 실제로는 봉이 있을 수 있으므로, 원인을
     // 등록 누락으로 정확히 짚어 준다.
-    if (codes.length > 0 && codes.every((code) => !symbolService.exists(code))) {
+    if (
+      codes.length > 0 &&
+      codes.every((code) => !symbolService.exists(code))
+    ) {
       errors.push(
-        `선택한 종목이 등록돼 있지 않습니다: ${codes.join(', ')} — 유니버스 미리보기를 ` +
-          '실행해 종목을 등록한 뒤 다시 제출하세요.',
+        `선택한 종목이 등록돼 있지 않습니다: ${codes.join(", ")} — 유니버스 미리보기를 ` +
+          "실행해 종목을 등록한 뒤 다시 제출하세요.",
       );
       return null;
     }
 
     const hasData = registeredCoverage(codes).some((row) => row.barCount > 0);
     if (!hasData) {
-      errors.push('선택한 종목에 수집된 일봉이 없습니다 — 종목 마스터 수집을 먼저 실행하세요.');
+      errors.push(
+        "선택한 종목에 수집된 일봉이 없습니다 — 종목 마스터 수집을 먼저 실행하세요.",
+      );
       return null;
     }
 
@@ -508,14 +588,19 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     | {
         readonly ok: true;
         readonly universe: ConsumedVersionSnapshot;
-        readonly timeframe: '1d';
+        readonly timeframe: "1d";
         readonly estimatedBars: number;
         readonly provenancePin: ProvenancePin;
         readonly resolved: ResolvedUniverse;
         readonly warnings: readonly string[];
       }
     | { readonly ok: false; readonly status: 400; readonly errors: string[] }
-    | { readonly ok: false; readonly status: 422; readonly errors: string[]; readonly uncoveredDates?: readonly string[] };
+    | {
+        readonly ok: false;
+        readonly status: 422;
+        readonly errors: string[];
+        readonly uncoveredDates?: readonly string[];
+      };
 
   /** 준비 hash를 조회하기 전에 끝낼 수 있는 요청 자체의 검증. */
   const validateStaticSubmission = (body: BacktestRequest): string[] => {
@@ -531,13 +616,13 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       if (!paramCheck.ok) errors.push(paramCheck.error);
     }
     if (body.period.from > body.period.to) {
-      errors.push('기간이 올바르지 않습니다 (from > to)');
+      errors.push("기간이 올바르지 않습니다 (from > to)");
     }
     if (!getCostProfile(body.execution.commissionProfileId)) {
-      errors.push('알 수 없는 수수료 프로파일');
+      errors.push("알 수 없는 수수료 프로파일");
     }
     if (!getSlippageProfile(body.execution.slippageProfileId)) {
-      errors.push('알 수 없는 슬리피지 프로파일');
+      errors.push("알 수 없는 슬리피지 프로파일");
     }
     return errors;
   };
@@ -589,8 +674,8 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
         ok: false,
         status: 422,
         errors: [
-          `종목 마스터가 다음 리밸런스 날짜를 커버하지 않습니다: ${resolved.uncoveredDates.join(', ')} — ` +
-            '데이터 탭에서 해당 날짜를 동기화한 뒤 다시 시도하세요.',
+          `종목 마스터가 다음 리밸런스 날짜를 커버하지 않습니다: ${resolved.uncoveredDates.join(", ")} — ` +
+            "데이터 탭에서 해당 날짜를 동기화한 뒤 다시 시도하세요.",
         ],
         uncoveredDates: resolved.uncoveredDates,
       };
@@ -608,8 +693,8 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
         ok: false,
         status: 422,
         errors: [
-          '종목 마스터가 백테스트 기간 전체를 커버하지 않습니다 — '
-            + '유니버스 미리보기에서 기간 전체 동기화를 완료한 뒤 다시 제출하세요.',
+          "종목 마스터가 백테스트 기간 전체를 커버하지 않습니다 — " +
+            "유니버스 미리보기에서 기간 전체 동기화를 완료한 뒤 다시 제출하세요.",
         ],
       };
     }
@@ -638,7 +723,10 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       return {
         ok: false,
         status: 400,
-        errors: universeErrors.length > 0 ? universeErrors : ['제출을 검증할 수 없습니다'],
+        errors:
+          universeErrors.length > 0
+            ? universeErrors
+            : ["제출을 검증할 수 없습니다"],
       };
     }
 
@@ -676,8 +764,8 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     const warnings = [...new Set(preparedPreview.warnings)];
     if (isRecentPeriodEnd(periodToTsRange(body.period).toTsMs, clock.now())) {
       const warning =
-        '선택한 기간이 최근이라 아직 DART 에 공시되지 않은 자본변동이 있을 수 있습니다. '
-          + '분할이 최근에 있었다면 결과에 반영되지 않았을 수 있습니다.';
+        "선택한 기간이 최근이라 아직 DART 에 공시되지 않은 자본변동이 있을 수 있습니다. " +
+        "분할이 최근에 있었다면 결과에 반영되지 않았을 수 있습니다.";
       if (!warnings.includes(warning)) warnings.push(warning);
     }
 
@@ -685,9 +773,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     // ④ provenancePin — 순서형 유니버스 파이프라인(Task 11, 스펙 2026-08-09)은 늘 이
     // 모양이다. preparedPreview 가 항상 있으므로 diagnostics 도 늘 그 값에서 나온다.
     const provenancePin: ProvenancePin = {
-      sourceKind: 'SYMBOL_MASTER',
+      sourceKind: "SYMBOL_MASTER",
       filterPolicyVersion: KRX_FILTER_POLICY_VERSION,
-      selectionMethod: 'ORDERED_UNIVERSE_PIPELINE',
+      selectionMethod: "ORDERED_UNIVERSE_PIPELINE",
       universeRule: body.universeRule,
       scheduleHash: resolved.scheduleHash,
       diagnostics: preparedPreview.diagnostics,
@@ -719,7 +807,8 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     schedule: readonly LegacyUniverseScheduleEntry[],
   ): Promise<FundamentalsRequirementIssue | null> => {
     const strategy = strategies.get(body.strategyId);
-    if (strategy === null || !strategyRequiresFinancialData(strategy)) return null;
+    if (strategy === null || !strategyRequiresFinancialData(strategy))
+      return null;
     // 일부 종목만 준비되지 않은 상태를 허용하면 그 종목이 랭킹 후보에서 조용히 빠져
     // 성과가 낙관적으로 치우친다. coverage뿐 아니라 전략이 실제 읽는 계정·연속 분기·
     // 신선도를 같은 PIT 시점으로 다시 확인한다.
@@ -731,7 +820,10 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     });
     if (gap !== null) {
       return {
-        kind: gap.kind === 'BLOCKING_INGESTION_GAP' ? 'INGESTION_GAP' : 'COVERAGE_GAP',
+        kind:
+          gap.kind === "BLOCKING_INGESTION_GAP"
+            ? "INGESTION_GAP"
+            : "COVERAGE_GAP",
         message: financialCoverageGapMessage(gap),
       };
     }
@@ -743,47 +835,56 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       ),
       candles: candleCoverage,
     });
-    const missingCutoffs = [...new Set(unionSymbols)].filter((symbol) => !factCutoffs.has(symbol));
+    const missingCutoffs = [...new Set(unionSymbols)].filter(
+      (symbol) => !factCutoffs.has(symbol),
+    );
     if (missingCutoffs.length > 0) {
       return {
-        kind: 'CANDLE_GAP',
+        kind: "CANDLE_GAP",
         message:
-          `실제 편입 기간·상장폐지 이전에 실행 가능한 일봉이 없는 종목이 있습니다: ${missingCutoffs.join(', ')} — `
-          + '일봉과 유니버스 데이터를 다시 준비하세요.',
+          `실제 편입 기간·상장폐지 이전에 실행 가능한 일봉이 없는 종목이 있습니다: ${missingCutoffs.join(", ")} — ` +
+          "일봉과 유니버스 데이터를 다시 준비하세요.",
       };
     }
     const readiness = strategy.dataRequirements?.fundamentalsReady;
-    const missingFacts = readiness === undefined
-      ? (() => {
-          const symbolsWithFacts = financialFacts.symbolsWithFinancialFacts(factCutoffs);
-          return unionSymbols.filter((symbol) => !symbolsWithFacts.has(symbol));
-        })()
-      : (await findIncompleteFundamentalCheckpointsFromCoverage({
-          strategy,
-          parameters: body.parameters,
-          facts: deps.facts,
-          schedule,
-          candles: candleCoverage,
-          period: body.period,
-        })).map((checkpoint) => checkpoint.symbol);
+    const missingFacts =
+      readiness === undefined
+        ? (() => {
+            const symbolsWithFacts =
+              financialFacts.symbolsWithFinancialFacts(factCutoffs);
+            return unionSymbols.filter(
+              (symbol) => !symbolsWithFacts.has(symbol),
+            );
+          })()
+        : (
+            await findIncompleteFundamentalCheckpointsFromCoverage({
+              strategy,
+              parameters: body.parameters,
+              facts: deps.facts,
+              schedule,
+              candles: candleCoverage,
+              period: body.period,
+            })
+          ).map((checkpoint) => checkpoint.symbol);
     if (missingFacts.length === 0) return null;
     // 정상 준비에서는 이 종목들이 이미 제외·재순위된다. 여기까지 왔다면 준비 확인과
     // enqueue 사이에 fact가 삭제됐거나 고정 clone snapshot이 낡은 것이다.
     return {
-      kind: 'STALE_FINANCIAL_DATA',
+      kind: "STALE_FINANCIAL_DATA",
       message:
-        `준비 완료 후 사용할 수 있는 재무 데이터가 사라진 종목이 있습니다: ${missingFacts.join(', ')} — `
-        + '유니버스 미리보기를 다시 준비하세요.',
+        `준비 완료 후 사용할 수 있는 재무 데이터가 사라진 종목이 있습니다: ${missingFacts.join(", ")} — ` +
+        "유니버스 미리보기를 다시 준비하세요.",
     };
   };
 
   const sendFundamentalsIssue = (
     reply: FastifyReply,
     issue: FundamentalsRequirementIssue,
-  ): FastifyReply => reply.code(409).send({
-    error: 'PREPARATION_REQUIRED',
-    message: issue.message,
-  });
+  ): FastifyReply =>
+    reply.code(409).send({
+      error: "PREPARATION_REQUIRED",
+      message: issue.message,
+    });
 
   /**
    * 보유 종목 수(topN) × 동시 보유 상한(maxPositions) 정합성 검사.
@@ -806,16 +907,20 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       body.parameters,
     );
     // 파라미터 자체가 스키마를 통과하지 못하는 경우는 validateSubmission 이 400 으로 말한다
-    if (!validated.ok || typeof validated.value !== 'object' || validated.value === null) {
+    if (
+      !validated.ok ||
+      typeof validated.value !== "object" ||
+      validated.value === null
+    ) {
       return null;
     }
-    const topN = (validated.value as Record<string, unknown>)['topN'];
-    if (typeof topN !== 'number' || !Number.isFinite(topN)) return null;
+    const topN = (validated.value as Record<string, unknown>)["topN"];
+    if (typeof topN !== "number" || !Number.isFinite(topN)) return null;
     if (topN <= body.risk.maxPositions) return null;
     return (
       `보유 종목 수(${topN})가 최대 동시 보유 종목 수(${body.risk.maxPositions})보다 큽니다. ` +
       `초과분 ${topN - body.risk.maxPositions}종목은 편입되지 못하고 그만큼 자본이 현금으로 남습니다. ` +
-      '보유 종목 수를 줄이거나 최대 동시 보유 종목 수를 그 이상으로 올리세요.'
+      "보유 종목 수를 줄이거나 최대 동시 보유 종목 수를 그 이상으로 올리세요."
     );
   };
 
@@ -832,12 +937,16 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     schedule: LegacyUniverseScheduleEntry[];
     universe: ConsumedVersionSnapshot;
     provenancePin: ProvenancePin;
-    benchmark: { pin: ReturnType<typeof benchmarkPinSchema.parse>; hash: string };
+    benchmark: {
+      pin: ReturnType<typeof benchmarkPinSchema.parse>;
+      hash: string;
+    };
     response: BacktestUniversePreview & { fundamentalSymbols: string[] };
   } | null> => {
     if (job.preparationJobId === null) return null;
     const preview = await preparation.getCachedPreviewIsolated(
-      preparationInputOf(sourceRequest), job.preparationJobId,
+      preparationInputOf(sourceRequest),
+      job.preparationJobId,
     );
     const schedule = parseStoredSchedule(job);
     if (!preview || !schedule) return null;
@@ -852,13 +961,16 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
         hash: job.universeHash,
       });
       if (!parsed.success) return null;
-      const actualHash = createHash('sha256')
+      const actualHash = createHash("sha256")
         .update(
           parsed.data.entries
-            .map((entry) => `${entry.code}:${entry.slice}:${entry.version}:${entry.contentHash}`)
-            .join('|'),
+            .map(
+              (entry) =>
+                `${entry.code}:${entry.slice}:${entry.version}:${entry.contentHash}`,
+            )
+            .join("|"),
         )
-        .digest('hex');
+        .digest("hex");
       if (actualHash !== parsed.data.hash) return null;
       universe = parsed.data;
     } catch {
@@ -868,18 +980,26 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     if (job.provenancePinJson === null) return null;
     let provenancePin: ProvenancePin;
     try {
-      const parsed = orderedProvenancePinSchema.safeParse(JSON.parse(job.provenancePinJson));
-      if (!parsed.success || parsed.data.scheduleHash !== resolved.scheduleHash) return null;
+      const parsed = orderedProvenancePinSchema.safeParse(
+        JSON.parse(job.provenancePinJson),
+      );
+      if (!parsed.success || parsed.data.scheduleHash !== resolved.scheduleHash)
+        return null;
       provenancePin = parsed.data;
     } catch {
       return null;
     }
 
     if (job.benchmarkJson === null || job.benchmarkHash === null) return null;
-    let benchmark: { pin: ReturnType<typeof benchmarkPinSchema.parse>; hash: string };
+    let benchmark: {
+      pin: ReturnType<typeof benchmarkPinSchema.parse>;
+      hash: string;
+    };
     try {
-      const parsed = benchmarkPinSchema.safeParse(JSON.parse(job.benchmarkJson));
-      const requestedBenchmarkId = sourceRequest.benchmarkId ?? 'KOSPI';
+      const parsed = benchmarkPinSchema.safeParse(
+        JSON.parse(job.benchmarkJson),
+      );
+      const requestedBenchmarkId = sourceRequest.benchmarkId ?? "KOSPI";
       if (
         !parsed.success ||
         parsed.data.benchmarkId !== requestedBenchmarkId ||
@@ -888,9 +1008,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       ) {
         return null;
       }
-      const actualHash = createHash('sha256')
+      const actualHash = createHash("sha256")
         .update(JSON.stringify(parsed.data))
-        .digest('hex');
+        .digest("hex");
       if (actualHash !== job.benchmarkHash) return null;
       benchmark = { pin: parsed.data, hash: job.benchmarkHash };
     } catch {
@@ -901,23 +1021,30 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       period: sourceRequest.period,
       schedule,
       delistedTsMsBySymbol: delistedEventsToTsMsBySymbol(
-        symbolMaster.delistedEventsBetween(sourceRequest.period.from, sourceRequest.period.to),
+        symbolMaster.delistedEventsBetween(
+          sourceRequest.period.from,
+          sourceRequest.period.to,
+        ),
       ),
       candles: candleCoverage,
     });
-    const codesWithFundamentals = financialFacts.symbolsWithFinancialFacts(factCutoffs);
+    const codesWithFundamentals =
+      financialFacts.symbolsWithFinancialFacts(factCutoffs);
     const sourceStrategy = strategies.get(sourceRequest.strategyId);
     if (sourceStrategy && strategyRequiresFinancialData(sourceStrategy)) {
-      const incomplete = sourceStrategy.dataRequirements?.fundamentalsReady === undefined
-        ? resolved.unionSymbols.filter((code) => !codesWithFundamentals.has(code))
-        : await findIncompleteFundamentalCheckpointsFromCoverage({
-            strategy: sourceStrategy,
-            parameters: sourceRequest.parameters,
-            facts: deps.facts,
-            schedule,
-            candles: candleCoverage,
-            period: sourceRequest.period,
-          });
+      const incomplete =
+        sourceStrategy.dataRequirements?.fundamentalsReady === undefined
+          ? resolved.unionSymbols.filter(
+              (code) => !codesWithFundamentals.has(code),
+            )
+          : await findIncompleteFundamentalCheckpointsFromCoverage({
+              strategy: sourceStrategy,
+              parameters: sourceRequest.parameters,
+              facts: deps.facts,
+              schedule,
+              candles: candleCoverage,
+              period: sourceRequest.period,
+            });
       if (incomplete.length > 0) return null;
     }
     return {
@@ -928,8 +1055,8 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       benchmark,
       response: {
         ...preview,
-        fundamentalSymbols: resolved.unionSymbols.filter(
-          (code) => codesWithFundamentals.has(code),
+        fundamentalSymbols: resolved.unionSymbols.filter((code) =>
+          codesWithFundamentals.has(code),
         ),
       },
     };
@@ -940,163 +1067,220 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    * 429 는 507(호스트 자원 부족)과 구분한다: 사용자가 할 일이 다르다(기다리거나 취소).
    */
   const queueDepthError = (): string | null => {
-    const queued = queue.countByStatus(['QUEUED']);
+    const queued = queue.countByStatus(["QUEUED"]);
     if (queued < deps.maxQueuedBacktests) return null;
     return `대기 중인 백테스트가 ${queued}건으로 상한(${deps.maxQueuedBacktests})에 도달했습니다. 완료되거나 취소된 뒤 제출하세요.`;
   };
 
-  const validations = registerPeriodValidationRoutes(app, {
-    database: deps.database, clock, queue, results, strategies, preparation,
-    collectPreparations: () => new PreparationReferenceService(deps.database).collect(),
-    onFinished: deps.onValidationFinished,
-    validateRequest: (body) => {
-      const errors = validateStaticSubmission(body);
-      const capacity = checkPositionCapacity(body);
-      return capacity ? [...errors, capacity] : errors;
-    },
-    cancelJob: (jobId) => { orchestrator.cancel(jobId); },
-    buildEnqueue: async (body, prepared) => {
-      if (queueDepthError()) return null;
-      const resourceError = await checkResources(deps.dataRoot);
-      if (resourceError) throw new Error(resourceError);
-      const validated = await validateSubmission(body, prepared);
-      if (!validated.ok) throw new Error(validated.errors[0]);
-      const fundamentals = await checkFundamentalsRequirement(body, validated.resolved.unionSymbols, validated.resolved.schedule);
-      if (fundamentals) throw new Error(fundamentals.message);
-      if (symbolMaster.tradingDaysBetween(body.period.from, body.period.to).length < 2) {
-        throw new Error('각 독립 평가 구간에는 실제 시장 거래일이 2개 이상 필요합니다.');
-      }
-      const strategy = strategies.get(body.strategyId)!;
-      const parameters = strategy.parameterSchema.parse(body.parameters);
-      const warmupBars = Math.ceil(Math.max(0, strategy.dataRequirements?.priceWarmupBars?.(parameters) ?? 0,
-        ...body.universeRule.stages.map((stage) => stage.criterion === 'DECLINE' ? stage.lookbackTradingDays : 0)));
-      const prior = deps.database.sqlite.prepare(`
+  const validations = registerPeriodValidationRoutes(
+    app,
+    {
+      database: deps.database,
+      clock,
+      queue,
+      results,
+      strategies,
+      preparation,
+      collectPreparations: () =>
+        new PreparationReferenceService(deps.database).collect(),
+      onFinished: deps.onValidationFinished,
+      validateRequest: (body) => {
+        const errors = validateStaticSubmission(body);
+        const capacity = checkPositionCapacity(body);
+        return capacity ? [...errors, capacity] : errors;
+      },
+      cancelJob: (jobId) => {
+        orchestrator.cancel(jobId);
+      },
+      buildEnqueue: async (body, prepared) => {
+        if (queueDepthError()) return null;
+        const resourceError = await checkResources(deps.dataRoot);
+        if (resourceError) throw new Error(resourceError);
+        const validated = await validateSubmission(body, prepared);
+        if (!validated.ok) throw new Error(validated.errors[0]);
+        const fundamentals = await checkFundamentalsRequirement(
+          body,
+          validated.resolved.unionSymbols,
+          validated.resolved.schedule,
+        );
+        if (fundamentals) throw new Error(fundamentals.message);
+        if (
+          symbolMaster.tradingDaysBetween(body.period.from, body.period.to)
+            .length < 2
+        ) {
+          throw new Error(
+            "각 독립 평가 구간에는 실제 시장 거래일이 2개 이상 필요합니다.",
+          );
+        }
+        const strategy = strategies.get(body.strategyId)!;
+        const parameters = strategy.parameterSchema.parse(body.parameters);
+        const warmupBars = Math.ceil(
+          Math.max(
+            0,
+            strategy.dataRequirements?.priceWarmupBars?.(parameters) ?? 0,
+            ...body.universeRule.stages.map((stage) =>
+              stage.criterion === "DECLINE" ? stage.lookbackTradingDays : 0,
+            ),
+          ),
+        );
+        const prior = deps.database.sqlite
+          .prepare(
+            `
         SELECT COUNT(*) AS count FROM (
           SELECT date FROM symbol_master_trading_days WHERE date < ? ORDER BY date DESC LIMIT ?
         )
-      `).get(body.period.from, warmupBars) as { count: number };
-      if (prior.count < warmupBars) {
-        throw new Error(`독립 평가 시작 전 지표 준비 데이터가 부족합니다 (필요 ${warmupBars}거래일, 확보 ${prior.count}거래일). 과거 데이터를 준비한 뒤 다시 실행하세요.`);
-      }
-      const benchmarkId = body.benchmarkId ?? 'KOSPI';
-      const benchmark = benchmarks.pin(benchmarkId, body.period);
-      return () => {
-        if (queueDepthError()) return null;
-        return queue.enqueue(
-          { ...body, benchmarkId, timeframe: validated.timeframe }, validated.resolved.schedule,
-          validated.universe, validated.provenancePin, validated.warnings, benchmark,
-          { estimatedBars: validated.estimatedBars, preparationJobId: prepared.preparationJobId },
-        );
-      };
+      `,
+          )
+          .get(body.period.from, warmupBars) as { count: number };
+        if (prior.count < warmupBars) {
+          throw new Error(
+            `독립 평가 시작 전 지표 준비 데이터가 부족합니다 (필요 ${warmupBars}거래일, 확보 ${prior.count}거래일). 과거 데이터를 준비한 뒤 다시 실행하세요.`,
+          );
+        }
+        const benchmarkId = body.benchmarkId ?? "KOSPI";
+        const benchmark = benchmarks.pin(benchmarkId, body.period);
+        return () => {
+          if (queueDepthError()) return null;
+          return queue.enqueue(
+            { ...body, benchmarkId, timeframe: validated.timeframe },
+            validated.resolved.schedule,
+            validated.universe,
+            validated.provenancePin,
+            validated.warnings,
+            benchmark,
+            {
+              estimatedBars: validated.estimatedBars,
+              preparationJobId: prepared.preparationJobId,
+            },
+          );
+        };
+      },
     },
-  }, requireAuth);
+    requireAuth,
+  );
 
-  app.get('/backtests/profiles', { preHandler: requireAuth }, async () => ({
+  app.get("/backtests/profiles", { preHandler: requireAuth }, async () => ({
     commissionProfiles: listCostProfiles(),
     slippageProfiles: listSlippageProfiles(),
   }));
 
-  app.post('/backtests', { preHandler: requireAuth }, async (request, reply) => {
-    const parsed = backtestRequestSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send({
-        error: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
-      });
-    }
-    const body = parsed.data;
-
-    // 잘못된 요청을 PREPARATION_REQUIRED로 가리면 사용자는 완료할 수 없는 준비를
-    // 시작하게 된다. 외부 데이터와 무관한 검증은 preparation hash 조회보다 먼저 한다.
-    const staticErrors = validateStaticSubmission(body);
-    if (staticErrors.length > 0) {
-      return reply.code(400).send({ error: staticErrors[0] });
-    }
-
-    // getReadyPreview 도 resolver 를 거치므로 validateSubmission 과 같은 KRX/coverage
-    // 오류가 난다 — 같은 매핑(429/503/409)을 적용해야 네 줄 아래와 다른 500 이 되지 않는다.
-    let prepared: Awaited<ReturnType<typeof preparation.getReadyPreview>>;
-    try {
-      prepared = preparation.getReadyPreviewForWizard(preparationInputOf(body), request.authUser!.id);
-    } catch (error) {
-      if (sendIfKrxError(reply, error)) return reply;
-      if (sendIfNotCovered(reply, error)) return reply;
-      if (error instanceof UnsafeBacktestSymbolIdentityError) {
-        return reply.code(422).send({ error: error.message });
+  app.post(
+    "/backtests",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const parsed = backtestRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: parsed.error.issues
+            .map((i) => `${i.path.join(".")}: ${i.message}`)
+            .join("; "),
+        });
       }
-      if (error instanceof PreparationInputError) {
-        return reply.code(400).send({ error: error.message });
+      const body = parsed.data;
+
+      // 잘못된 요청을 PREPARATION_REQUIRED로 가리면 사용자는 완료할 수 없는 준비를
+      // 시작하게 된다. 외부 데이터와 무관한 검증은 preparation hash 조회보다 먼저 한다.
+      const staticErrors = validateStaticSubmission(body);
+      if (staticErrors.length > 0) {
+        return reply.code(400).send({ error: staticErrors[0] });
       }
-      throw error;
-    }
-    if (!prepared) {
-      return reply.code(409).send({
-        error: 'PREPARATION_REQUIRED',
-        message: '동일한 조건의 데이터 준비를 먼저 완료하세요.',
+
+      // getReadyPreview 도 resolver 를 거치므로 validateSubmission 과 같은 KRX/coverage
+      // 오류가 난다 — 같은 매핑(429/503/409)을 적용해야 네 줄 아래와 다른 500 이 되지 않는다.
+      let prepared: Awaited<ReturnType<typeof preparation.getReadyPreview>>;
+      try {
+        prepared = preparation.getReadyPreviewForWizard(
+          preparationInputOf(body),
+          request.authUser!.id,
+        );
+      } catch (error) {
+        if (sendIfKrxError(reply, error)) return reply;
+        if (sendIfNotCovered(reply, error)) return reply;
+        if (error instanceof UnsafeBacktestSymbolIdentityError) {
+          return reply.code(422).send({ error: error.message });
+        }
+        if (error instanceof PreparationInputError) {
+          return reply.code(400).send({ error: error.message });
+        }
+        throw error;
+      }
+      if (!prepared) {
+        return reply.code(409).send({
+          error: "PREPARATION_REQUIRED",
+          message: "동일한 조건의 데이터 준비를 먼저 완료하세요.",
+        });
+      }
+
+      let validated: Awaited<ReturnType<typeof validateSubmission>>;
+      try {
+        validated = await validateSubmission(body, prepared);
+      } catch (error) {
+        if (sendIfKrxError(reply, error)) return reply;
+        if (sendIfNotCovered(reply, error)) return reply;
+        throw error;
+      }
+      if (!validated.ok) {
+        return reply.code(validated.status).send({
+          error: validated.errors[0] ?? "제출을 검증할 수 없습니다",
+          ...("uncoveredDates" in validated
+            ? { uncoveredDates: validated.uncoveredDates }
+            : {}),
+        });
+      }
+
+      const fundamentalsIssue = await checkFundamentalsRequirement(
+        body,
+        validated.resolved.unionSymbols,
+        validated.resolved.schedule,
+      );
+      if (fundamentalsIssue) {
+        return sendFundamentalsIssue(reply, fundamentalsIssue);
+      }
+
+      const capacityError = checkPositionCapacity(body);
+      if (capacityError) {
+        return reply.code(422).send({ error: capacityError });
+      }
+
+      const queueError = queueDepthError();
+      if (queueError) return reply.code(429).send({ error: queueError });
+
+      const resourceError = await checkResources(deps.dataRoot);
+      if (resourceError) return reply.code(507).send({ error: resourceError });
+
+      // 해소한 소비 봉을 요청에 박아 저장한다 — 워커가 다시 추론하면 두 곳의 규칙이
+      // 갈라질 수 있고, 실행 기록도 "무엇을 소비했나" 에 답하지 못한다.
+      // provenancePin 은 여기서 조립한 것 그대로 저장한다 — 클라이언트가 준 값이 아니다.
+      const benchmarkId = body.benchmarkId ?? "KOSPI";
+      const benchmark = benchmarks.pin(benchmarkId, body.period);
+      const job = queue.enqueue(
+        { ...body, benchmarkId, timeframe: validated.timeframe },
+        validated.resolved.schedule,
+        validated.universe,
+        validated.provenancePin,
+        validated.warnings,
+        benchmark,
+        {
+          estimatedBars: validated.estimatedBars,
+          preparationJobId: prepared.preparationJobId,
+          wizardOwner: { userId: request.authUser!.id, requireMatch: true },
+        },
+      );
+      audit.record(request.authUser?.username ?? "admin", "backtest.created", {
+        jobId: job.id,
+        strategyId: body.strategyId,
+        universeRule: body.universeRule,
+        scheduleHash: validated.provenancePin.scheduleHash,
+        benchmarkId,
+        benchmarkHash: benchmark.hash,
       });
-    }
+      return reply
+        .code(201)
+        .send({ job: serializeJob(job), warnings: validated.warnings });
+    },
+  );
 
-    let validated: Awaited<ReturnType<typeof validateSubmission>>;
-    try {
-      validated = await validateSubmission(body, prepared);
-    } catch (error) {
-      if (sendIfKrxError(reply, error)) return reply;
-      if (sendIfNotCovered(reply, error)) return reply;
-      throw error;
-    }
-    if (!validated.ok) {
-      return reply.code(validated.status).send({
-        error: validated.errors[0] ?? '제출을 검증할 수 없습니다',
-        ...('uncoveredDates' in validated ? { uncoveredDates: validated.uncoveredDates } : {}),
-      });
-    }
-
-    const fundamentalsIssue = await checkFundamentalsRequirement(
-      body,
-      validated.resolved.unionSymbols,
-      validated.resolved.schedule,
-    );
-    if (fundamentalsIssue) {
-      return sendFundamentalsIssue(reply, fundamentalsIssue);
-    }
-
-    const capacityError = checkPositionCapacity(body);
-    if (capacityError) {
-      return reply.code(422).send({ error: capacityError });
-    }
-
-    const queueError = queueDepthError();
-    if (queueError) return reply.code(429).send({ error: queueError });
-
-    const resourceError = await checkResources(deps.dataRoot);
-    if (resourceError) return reply.code(507).send({ error: resourceError });
-
-    // 해소한 소비 봉을 요청에 박아 저장한다 — 워커가 다시 추론하면 두 곳의 규칙이
-    // 갈라질 수 있고, 실행 기록도 "무엇을 소비했나" 에 답하지 못한다.
-    // provenancePin 은 여기서 조립한 것 그대로 저장한다 — 클라이언트가 준 값이 아니다.
-    const benchmarkId = body.benchmarkId ?? 'KOSPI';
-    const benchmark = benchmarks.pin(benchmarkId, body.period);
-    const job = queue.enqueue(
-      { ...body, benchmarkId, timeframe: validated.timeframe },
-      validated.resolved.schedule,
-      validated.universe,
-      validated.provenancePin,
-      validated.warnings,
-      benchmark,
-      { estimatedBars: validated.estimatedBars, preparationJobId: prepared.preparationJobId,
-        wizardOwner: { userId: request.authUser!.id, requireMatch: true } },
-    );
-    audit.record(request.authUser?.username ?? 'admin', 'backtest.created', {
-      jobId: job.id,
-      strategyId: body.strategyId,
-      universeRule: body.universeRule,
-      scheduleHash: validated.provenancePin.scheduleHash,
-      benchmarkId,
-      benchmarkHash: benchmark.hash,
-    });
-    return reply.code(201).send({ job: serializeJob(job), warnings: validated.warnings });
-  });
-
-  app.get('/backtests', { preHandler: requireAuth }, async (request, reply) => {
+  app.get("/backtests", { preHandler: requireAuth }, async (request, reply) => {
     const parsedQuery = z
       .object({
         limit: z.coerce.number().int().min(1).max(200).default(50),
@@ -1104,7 +1288,9 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
       })
       .safeParse(request.query ?? {});
     if (!parsedQuery.success) {
-      return reply.code(400).send({ error: '쿼리 파라미터가 올바르지 않습니다 (limit/offset)' });
+      return reply
+        .code(400)
+        .send({ error: "쿼리 파라미터가 올바르지 않습니다 (limit/offset)" });
     }
     const query = parsedQuery.data;
     const jobs = queue.listTopLevelJobs(query.limit, query.offset);
@@ -1113,126 +1299,167 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     };
   });
 
-  app.get('/backtests/:id', { preHandler: requireAuth }, async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const job = queue.getJob(id);
-    if (!job) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
-    return {
-      job: serializeJob(job),
-      run: results.getRun(id),
-      metrics: results.getMetrics(id),
-      benchmark: results.getBenchmark(id),
-      // job 이 제출 시점부터 갖고 있다 — run 완료를 기다릴 필요가 없다 (Task 12).
-      // 완료 후에는 backtestRuns.provenancePinJson 에 같은 값이 복사돼 있다.
-      provenancePin: parseProvenancePin(job.provenancePinJson, id, request.log),
-      universeRebalancing: parseUniverseRebalancing(job.universeScheduleJson, id, request.log),
-    };
-  });
+  app.get(
+    "/backtests/:id",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const job = queue.getJob(id);
+      if (!job)
+        return reply.code(404).send({ error: "작업을 찾을 수 없습니다" });
+      return {
+        job: serializeJob(job),
+        run: results.getRun(id),
+        metrics: results.getMetrics(id),
+        benchmark: results.getBenchmark(id),
+        // job 이 제출 시점부터 갖고 있다 — run 완료를 기다릴 필요가 없다 (Task 12).
+        // 완료 후에는 backtestRuns.provenancePinJson 에 같은 값이 복사돼 있다.
+        provenancePin: parseProvenancePin(
+          job.provenancePinJson,
+          id,
+          request.log,
+        ),
+        universeRebalancing: parseUniverseRebalancing(
+          job.universeScheduleJson,
+          id,
+          request.log,
+        ),
+      };
+    },
+  );
 
-  app.post('/backtests/:id/cancel', { preHandler: requireAuth }, async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const outcome = orchestrator.cancel(id);
-    if (outcome === 'NOT_CANCELLABLE') {
-      return reply.code(409).send({ error: '취소할 수 없는 상태입니다' });
-    }
-    return { status: outcome };
-  });
-
-  app.post('/backtests/:id/clone', { preHandler: requireAuth }, async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const job = queue.getJob(id);
-    if (!job) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
-    // 복제는 §10 이 지정한 중단 작업 복구 경로다 — 스키마·전략 버전이 올라갔다고 막지 않고,
-    // 현재 기준으로 재기준한 뒤 무엇이 달라졌는지 경고로 알린다.
-    const rebased = rebaseStoredRequest(
-      job.requestJson,
-      strategies.get(job.strategyId)?.version ?? null,
-    );
-    if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
-    const cloneRequest = rebased.request;
-    const reusable = await reusablePreviewFor(job, cloneRequest);
-    let prepared: Awaited<ReturnType<typeof preparation.getReadyPreview>>;
-    try {
-      prepared = reusable?.preview
-        ?? preparation.getReadyPreviewForWizard(preparationInputOf(cloneRequest), request.authUser!.id);
-    } catch (error) {
-      if (sendIfKrxError(reply, error)) return reply;
-      if (sendIfNotCovered(reply, error)) return reply;
-      if (error instanceof UnsafeBacktestSymbolIdentityError) {
-        return reply.code(422).send({ error: error.message });
+  app.post(
+    "/backtests/:id/cancel",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const outcome = orchestrator.cancel(id);
+      if (outcome === "NOT_CANCELLABLE") {
+        return reply.code(409).send({ error: "취소할 수 없는 상태입니다" });
       }
-      if (error instanceof PreparationInputError) {
-        return reply.code(400).send({ error: error.message });
+      return { status: outcome };
+    },
+  );
+
+  app.post(
+    "/backtests/:id/clone",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const job = queue.getJob(id);
+      if (!job)
+        return reply.code(404).send({ error: "작업을 찾을 수 없습니다" });
+      // 복제는 §10 이 지정한 중단 작업 복구 경로다 — 스키마·전략 버전이 올라갔다고 막지 않고,
+      // 현재 기준으로 재기준한 뒤 무엇이 달라졌는지 경고로 알린다.
+      const rebased = rebaseStoredRequest(
+        job.requestJson,
+        strategies.get(job.strategyId)?.version ?? null,
+      );
+      if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
+      const cloneRequest = rebased.request;
+      const reusable = await reusablePreviewFor(job, cloneRequest);
+      let prepared: Awaited<ReturnType<typeof preparation.getReadyPreview>>;
+      try {
+        prepared =
+          reusable?.preview ??
+          preparation.getReadyPreviewForWizard(
+            preparationInputOf(cloneRequest),
+            request.authUser!.id,
+          );
+      } catch (error) {
+        if (sendIfKrxError(reply, error)) return reply;
+        if (sendIfNotCovered(reply, error)) return reply;
+        if (error instanceof UnsafeBacktestSymbolIdentityError) {
+          return reply.code(422).send({ error: error.message });
+        }
+        if (error instanceof PreparationInputError) {
+          return reply.code(400).send({ error: error.message });
+        }
+        throw error;
       }
-      throw error;
-    }
-    if (!prepared) {
-      return reply.code(409).send({
-        error: 'PREPARATION_REQUIRED',
-        message: '동일한 조건의 데이터 준비를 먼저 완료하세요.',
+      if (!prepared) {
+        return reply.code(409).send({
+          error: "PREPARATION_REQUIRED",
+          message: "동일한 조건의 데이터 준비를 먼저 완료하세요.",
+        });
+      }
+      // 재기준 후에도 새 제출이다 — POST 와 동일한 검증 관문을 거치고 버전을 다시 고정한다.
+      let validated: Awaited<ReturnType<typeof validateSubmission>>;
+      try {
+        // 완료된 preparation이 같은 staged schedule을 이미 등록·고정했다.
+        validated = await validateSubmission(cloneRequest, prepared);
+      } catch (error) {
+        if (sendIfKrxError(reply, error)) return reply;
+        if (sendIfNotCovered(reply, error)) return reply;
+        throw error;
+      }
+      if (!validated.ok) {
+        return reply.code(validated.status).send({
+          error: validated.errors[0] ?? "제출을 검증할 수 없습니다",
+          ...("uncoveredDates" in validated
+            ? { uncoveredDates: validated.uncoveredDates }
+            : {}),
+        });
+      }
+
+      const fundamentalsIssue = await checkFundamentalsRequirement(
+        cloneRequest,
+        validated.resolved.unionSymbols,
+        validated.resolved.schedule,
+      );
+      if (fundamentalsIssue) {
+        return sendFundamentalsIssue(reply, fundamentalsIssue);
+      }
+
+      const capacityError = checkPositionCapacity(cloneRequest);
+      if (capacityError) {
+        return reply.code(422).send({ error: capacityError });
+      }
+
+      const queueError = queueDepthError();
+      if (queueError) return reply.code(429).send({ error: queueError });
+
+      // §34 리소스 가드도 관문의 일부다 — 복제라고 디스크·메모리 한계를 넘어설 이유는 없다
+      const resourceError = await checkResources(deps.dataRoot);
+      if (resourceError) return reply.code(507).send({ error: resourceError });
+
+      // 응답과 저장이 같은 합집합을 써야 한다 — 한쪽만 고치면 화면과 기록이 갈라진다
+      const benchmarkId = cloneRequest.benchmarkId ?? "KOSPI";
+      const benchmark = benchmarks.pin(benchmarkId, cloneRequest.period);
+      const cloneWarnings = [...rebased.warnings, ...validated.warnings];
+      const cloned = queue.enqueue(
+        { ...cloneRequest, benchmarkId, timeframe: validated.timeframe },
+        reusable?.schedule ?? validated.resolved.schedule,
+        reusable?.universe ?? validated.universe,
+        reusable?.provenancePin ?? validated.provenancePin,
+        cloneWarnings,
+        reusable?.benchmark ?? benchmark,
+        {
+          estimatedBars: validated.estimatedBars,
+          cloneSourceJobId: id,
+          preparationJobId: prepared.preparationJobId,
+          ...(reusable
+            ? {}
+            : {
+                wizardOwner: {
+                  userId: request.authUser!.id,
+                  requireMatch: true,
+                },
+              }),
+        },
+      );
+      audit.record(request.authUser?.username ?? "admin", "backtest.cloned", {
+        sourceJobId: id,
+        jobId: cloned.id,
+        ...(rebased.warnings.length > 0
+          ? { rebaseWarnings: rebased.warnings }
+          : {}),
       });
-    }
-    // 재기준 후에도 새 제출이다 — POST 와 동일한 검증 관문을 거치고 버전을 다시 고정한다.
-    let validated: Awaited<ReturnType<typeof validateSubmission>>;
-    try {
-      // 완료된 preparation이 같은 staged schedule을 이미 등록·고정했다.
-      validated = await validateSubmission(cloneRequest, prepared);
-    } catch (error) {
-      if (sendIfKrxError(reply, error)) return reply;
-      if (sendIfNotCovered(reply, error)) return reply;
-      throw error;
-    }
-    if (!validated.ok) {
-      return reply.code(validated.status).send({
-        error: validated.errors[0] ?? '제출을 검증할 수 없습니다',
-        ...('uncoveredDates' in validated ? { uncoveredDates: validated.uncoveredDates } : {}),
-      });
-    }
-
-    const fundamentalsIssue = await checkFundamentalsRequirement(
-      cloneRequest,
-      validated.resolved.unionSymbols,
-      validated.resolved.schedule,
-    );
-    if (fundamentalsIssue) {
-      return sendFundamentalsIssue(reply, fundamentalsIssue);
-    }
-
-    const capacityError = checkPositionCapacity(cloneRequest);
-    if (capacityError) {
-      return reply.code(422).send({ error: capacityError });
-    }
-
-    const queueError = queueDepthError();
-    if (queueError) return reply.code(429).send({ error: queueError });
-
-    // §34 리소스 가드도 관문의 일부다 — 복제라고 디스크·메모리 한계를 넘어설 이유는 없다
-    const resourceError = await checkResources(deps.dataRoot);
-    if (resourceError) return reply.code(507).send({ error: resourceError });
-
-    // 응답과 저장이 같은 합집합을 써야 한다 — 한쪽만 고치면 화면과 기록이 갈라진다
-    const benchmarkId = cloneRequest.benchmarkId ?? 'KOSPI';
-    const benchmark = benchmarks.pin(benchmarkId, cloneRequest.period);
-    const cloneWarnings = [...rebased.warnings, ...validated.warnings];
-    const cloned = queue.enqueue(
-      { ...cloneRequest, benchmarkId, timeframe: validated.timeframe },
-      reusable?.schedule ?? validated.resolved.schedule,
-      reusable?.universe ?? validated.universe,
-      reusable?.provenancePin ?? validated.provenancePin,
-      cloneWarnings,
-      reusable?.benchmark ?? benchmark,
-      { estimatedBars: validated.estimatedBars, cloneSourceJobId: id, preparationJobId: prepared.preparationJobId,
-        ...(reusable ? {} : { wizardOwner: { userId: request.authUser!.id, requireMatch: true } }) },
-    );
-    audit.record(request.authUser?.username ?? 'admin', 'backtest.cloned', {
-      sourceJobId: id,
-      jobId: cloned.id,
-      ...(rebased.warnings.length > 0 ? { rebaseWarnings: rebased.warnings } : {}),
-    });
-    return reply
-      .code(201)
-      .send({ job: serializeJob(cloned), warnings: cloneWarnings });
-  });
+      return reply
+        .code(201)
+        .send({ job: serializeJob(cloned), warnings: cloneWarnings });
+    },
+  );
 
   /**
    * 재설정 위저드가 원본 준비 결과를 재사용해 제출하는 경로. 클라이언트의 "미리보기
@@ -1240,160 +1467,216 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    * 서버에서 다시 대조한다. 자본·비용·벤치마크·보유 상한·시드만 바뀐 경우에는 이
    * hash가 그대로라 전체 유니버스 해소 없이 검증 단계에서 바로 복제할 수 있다.
    */
-  app.post('/backtests/:id/clone-configured', { preHandler: requireAuth }, async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const sourceJob = queue.getJob(id);
-    if (!sourceJob) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
+  app.post(
+    "/backtests/:id/clone-configured",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const sourceJob = queue.getJob(id);
+      if (!sourceJob)
+        return reply.code(404).send({ error: "작업을 찾을 수 없습니다" });
 
-    const parsed = backtestRequestSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send({
-        error: parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; '),
+      const parsed = backtestRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: parsed.error.issues
+            .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+            .join("; "),
+        });
+      }
+      const body = parsed.data;
+      const staticErrors = validateStaticSubmission(body);
+      if (staticErrors.length > 0)
+        return reply.code(400).send({ error: staticErrors[0] });
+
+      const rebased = rebaseStoredRequest(
+        sourceJob.requestJson,
+        strategies.get(sourceJob.strategyId)?.version ?? null,
+      );
+      if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
+      const strategy = strategies.get(body.strategyId);
+      if (!strategy)
+        return reply
+          .code(400)
+          .send({ error: `알 수 없는 전략: ${body.strategyId}` });
+      const sourceStrategy = strategies.get(rebased.request.strategyId);
+      if (
+        !sourceStrategy ||
+        backtestPreparationRequestHash(body, strategy) !==
+          backtestPreparationRequestHash(rebased.request, sourceStrategy)
+      ) {
+        return reply.code(409).send({
+          error: "PREVIEW_REQUIRED",
+          message:
+            "유니버스 준비에 영향을 주는 설정이 바뀌었습니다. 미리보기를 다시 실행하세요.",
+        });
+      }
+
+      const reusable = await reusablePreviewFor(sourceJob, rebased.request);
+      if (!reusable) {
+        return reply.code(409).send({
+          error: "PREVIEW_REQUIRED",
+          message:
+            "원본의 준비 결과를 안전하게 재사용할 수 없습니다. 미리보기를 다시 실행하세요.",
+        });
+      }
+
+      const validated = await validateSubmission(body, reusable.preview);
+      if (!validated.ok) {
+        return reply.code(validated.status).send({
+          error: validated.errors[0] ?? "제출을 검증할 수 없습니다",
+          ...("uncoveredDates" in validated
+            ? { uncoveredDates: validated.uncoveredDates }
+            : {}),
+        });
+      }
+      const fundamentalsIssue = await checkFundamentalsRequirement(
+        body,
+        validated.resolved.unionSymbols,
+        validated.resolved.schedule,
+      );
+      if (fundamentalsIssue)
+        return sendFundamentalsIssue(reply, fundamentalsIssue);
+      const capacityError = checkPositionCapacity(body);
+      if (capacityError) return reply.code(422).send({ error: capacityError });
+      const queueError = queueDepthError();
+      if (queueError) return reply.code(429).send({ error: queueError });
+      const resourceError = await checkResources(deps.dataRoot);
+      if (resourceError) return reply.code(507).send({ error: resourceError });
+
+      const benchmarkId = body.benchmarkId ?? "KOSPI";
+      const sourceBenchmarkId = rebased.request.benchmarkId ?? "KOSPI";
+      // 검토 단계에서 누락분을 동기화했다면 불완전한 원본 pin을 다시 복제하지 않는다.
+      const benchmark =
+        benchmarkId === sourceBenchmarkId && reusable.benchmark.pin.covered
+          ? reusable.benchmark
+          : benchmarks.pin(benchmarkId, body.period);
+      const cloneWarnings = [...rebased.warnings, ...validated.warnings];
+      const cloned = queue.enqueue(
+        { ...body, benchmarkId, timeframe: validated.timeframe },
+        reusable.schedule,
+        reusable.universe,
+        reusable.provenancePin,
+        cloneWarnings,
+        benchmark,
+        {
+          estimatedBars: validated.estimatedBars,
+          cloneSourceJobId: id,
+          preparationJobId: reusable.preview.preparationJobId,
+          wizardOwner: { userId: request.authUser!.id, context: id },
+        },
+      );
+      audit.record(
+        request.authUser?.username ?? "admin",
+        "backtest.cloned-configured",
+        {
+          sourceJobId: id,
+          jobId: cloned.id,
+          reusedUniverse: true,
+          ...(rebased.warnings.length > 0
+            ? { rebaseWarnings: rebased.warnings }
+            : {}),
+        },
+      );
+      return reply
+        .code(201)
+        .send({ job: serializeJob(cloned), warnings: cloneWarnings });
+    },
+  );
+
+  app.post(
+    "/backtests/:id/clone-random-seeds",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const sourceJob = queue.getJob(id);
+      if (!sourceJob)
+        return reply.code(404).send({ error: "작업을 찾을 수 없습니다" });
+      if (sourceJob.cloneBatchId !== null) {
+        return reply.code(409).send({
+          error:
+            "난수 시드 실험의 자식 실행에서는 새 난수 실험을 만들 수 없습니다. 원본 백테스트에서 시작하세요.",
+        });
+      }
+      if (
+        strategies.describe(sourceJob.strategyId)?.supportsRandomSeed === false
+      ) {
+        return reply
+          .code(400)
+          .send({
+            error:
+              "이 전략은 난수 시드의 영향을 받지 않아 새 난수로 복제할 수 없습니다.",
+          });
+      }
+      const countBody = z
+        .object({ count: z.number().int().min(1).max(100) })
+        .safeParse(request.body);
+      if (!countBody.success) {
+        return reply
+          .code(400)
+          .send({ error: "실행 개수는 1~100 사이의 정수여야 합니다." });
+      }
+
+      const rebased = rebaseStoredRequest(
+        sourceJob.requestJson,
+        strategies.get(sourceJob.strategyId)?.version ?? null,
+      );
+      if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
+      const body = rebased.request;
+      const staticErrors = validateStaticSubmission(body);
+      if (staticErrors.length > 0)
+        return reply.code(400).send({ error: staticErrors[0] });
+      const reusable = await reusablePreviewFor(sourceJob, body);
+      if (!reusable) {
+        return reply.code(409).send({
+          error: "PREVIEW_REQUIRED",
+          message:
+            "원본의 준비 결과를 안전하게 재사용할 수 없습니다. 재설정 및 복제에서 미리보기를 완료하세요.",
+        });
+      }
+      const validated = await validateSubmission(body, reusable.preview);
+      if (!validated.ok) {
+        return reply
+          .code(validated.status)
+          .send({ error: validated.errors[0] });
+      }
+      const fundamentalsIssue = await checkFundamentalsRequirement(
+        body,
+        validated.resolved.unionSymbols,
+        validated.resolved.schedule,
+      );
+      if (fundamentalsIssue)
+        return sendFundamentalsIssue(reply, fundamentalsIssue);
+      const capacityError = checkPositionCapacity(body);
+      if (capacityError) return reply.code(422).send({ error: capacityError });
+      const resourceError = await checkResources(deps.dataRoot);
+      if (resourceError) return reply.code(507).send({ error: resourceError });
+
+      const benchmarkId = body.benchmarkId ?? "KOSPI";
+      const warnings = [...rebased.warnings, ...validated.warnings];
+      const batch = seedCloneBatches.create(id, countBody.data.count, {
+        preparationJobId: reusable.preview.preparationJobId,
+        request: { ...body, benchmarkId, timeframe: validated.timeframe },
+        schedule: reusable.schedule,
+        universe: reusable.universe,
+        provenancePin: reusable.provenancePin,
+        benchmark: reusable.benchmark,
+        warnings,
       });
-    }
-    const body = parsed.data;
-    const staticErrors = validateStaticSubmission(body);
-    if (staticErrors.length > 0) return reply.code(400).send({ error: staticErrors[0] });
-
-    const rebased = rebaseStoredRequest(
-      sourceJob.requestJson,
-      strategies.get(sourceJob.strategyId)?.version ?? null,
-    );
-    if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
-    const strategy = strategies.get(body.strategyId);
-    if (!strategy) return reply.code(400).send({ error: `알 수 없는 전략: ${body.strategyId}` });
-    const sourceStrategy = strategies.get(rebased.request.strategyId);
-    if (
-      !sourceStrategy ||
-      backtestPreparationRequestHash(body, strategy) !==
-        backtestPreparationRequestHash(rebased.request, sourceStrategy)
-    ) {
-      return reply.code(409).send({
-        error: 'PREVIEW_REQUIRED',
-        message: '유니버스 준비에 영향을 주는 설정이 바뀌었습니다. 미리보기를 다시 실행하세요.',
-      });
-    }
-
-    const reusable = await reusablePreviewFor(sourceJob, rebased.request);
-    if (!reusable) {
-      return reply.code(409).send({
-        error: 'PREVIEW_REQUIRED',
-        message: '원본의 준비 결과를 안전하게 재사용할 수 없습니다. 미리보기를 다시 실행하세요.',
-      });
-    }
-
-    const validated = await validateSubmission(body, reusable.preview);
-    if (!validated.ok) {
-      return reply.code(validated.status).send({
-        error: validated.errors[0] ?? '제출을 검증할 수 없습니다',
-        ...('uncoveredDates' in validated ? { uncoveredDates: validated.uncoveredDates } : {}),
-      });
-    }
-    const fundamentalsIssue = await checkFundamentalsRequirement(
-      body,
-      validated.resolved.unionSymbols,
-      validated.resolved.schedule,
-    );
-    if (fundamentalsIssue) return sendFundamentalsIssue(reply, fundamentalsIssue);
-    const capacityError = checkPositionCapacity(body);
-    if (capacityError) return reply.code(422).send({ error: capacityError });
-    const queueError = queueDepthError();
-    if (queueError) return reply.code(429).send({ error: queueError });
-    const resourceError = await checkResources(deps.dataRoot);
-    if (resourceError) return reply.code(507).send({ error: resourceError });
-
-    const benchmarkId = body.benchmarkId ?? 'KOSPI';
-    const sourceBenchmarkId = rebased.request.benchmarkId ?? 'KOSPI';
-    // 검토 단계에서 누락분을 동기화했다면 불완전한 원본 pin을 다시 복제하지 않는다.
-    const benchmark =
-      benchmarkId === sourceBenchmarkId && reusable.benchmark.pin.covered
-        ? reusable.benchmark
-        : benchmarks.pin(benchmarkId, body.period);
-    const cloneWarnings = [...rebased.warnings, ...validated.warnings];
-    const cloned = queue.enqueue(
-      { ...body, benchmarkId, timeframe: validated.timeframe },
-      reusable.schedule,
-      reusable.universe,
-      reusable.provenancePin,
-      cloneWarnings,
-      benchmark,
-      { estimatedBars: validated.estimatedBars, cloneSourceJobId: id, preparationJobId: reusable.preview.preparationJobId,
-        wizardOwner: { userId: request.authUser!.id, context: id } },
-    );
-    audit.record(request.authUser?.username ?? 'admin', 'backtest.cloned-configured', {
-      sourceJobId: id,
-      jobId: cloned.id,
-      reusedUniverse: true,
-      ...(rebased.warnings.length > 0 ? { rebaseWarnings: rebased.warnings } : {}),
-    });
-    return reply.code(201).send({ job: serializeJob(cloned), warnings: cloneWarnings });
-  });
-
-  app.post('/backtests/:id/clone-random-seeds', { preHandler: requireAuth }, async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const sourceJob = queue.getJob(id);
-    if (!sourceJob) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
-    if (sourceJob.cloneBatchId !== null) {
-      return reply.code(409).send({
-        error: '난수 시드 실험의 자식 실행에서는 새 난수 실험을 만들 수 없습니다. 원본 백테스트에서 시작하세요.',
-      });
-    }
-    if (strategies.describe(sourceJob.strategyId)?.supportsRandomSeed === false) {
-      return reply.code(400).send({ error: '이 전략은 난수 시드의 영향을 받지 않아 새 난수로 복제할 수 없습니다.' });
-    }
-    const countBody = z.object({ count: z.number().int().min(1).max(100) }).safeParse(request.body);
-    if (!countBody.success) {
-      return reply.code(400).send({ error: '실행 개수는 1~100 사이의 정수여야 합니다.' });
-    }
-
-    const rebased = rebaseStoredRequest(
-      sourceJob.requestJson,
-      strategies.get(sourceJob.strategyId)?.version ?? null,
-    );
-    if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
-    const body = rebased.request;
-    const staticErrors = validateStaticSubmission(body);
-    if (staticErrors.length > 0) return reply.code(400).send({ error: staticErrors[0] });
-    const reusable = await reusablePreviewFor(sourceJob, body);
-    if (!reusable) {
-      return reply.code(409).send({
-        error: 'PREVIEW_REQUIRED',
-        message: '원본의 준비 결과를 안전하게 재사용할 수 없습니다. 재설정 및 복제에서 미리보기를 완료하세요.',
-      });
-    }
-    const validated = await validateSubmission(body, reusable.preview);
-    if (!validated.ok) {
-      return reply.code(validated.status).send({ error: validated.errors[0] });
-    }
-    const fundamentalsIssue = await checkFundamentalsRequirement(
-      body,
-      validated.resolved.unionSymbols,
-      validated.resolved.schedule,
-    );
-    if (fundamentalsIssue) return sendFundamentalsIssue(reply, fundamentalsIssue);
-    const capacityError = checkPositionCapacity(body);
-    if (capacityError) return reply.code(422).send({ error: capacityError });
-    const resourceError = await checkResources(deps.dataRoot);
-    if (resourceError) return reply.code(507).send({ error: resourceError });
-
-    const benchmarkId = body.benchmarkId ?? 'KOSPI';
-    const warnings = [...rebased.warnings, ...validated.warnings];
-    const batch = seedCloneBatches.create(id, countBody.data.count, {
-      preparationJobId: reusable.preview.preparationJobId,
-      request: { ...body, benchmarkId, timeframe: validated.timeframe },
-      schedule: reusable.schedule,
-      universe: reusable.universe,
-      provenancePin: reusable.provenancePin,
-      benchmark: reusable.benchmark,
-      warnings,
-    });
-    audit.record(request.authUser?.username ?? 'admin', 'backtest.seed-clone-batch.created', {
-      sourceJobId: id,
-      batchId: batch.batch.id,
-      count: countBody.data.count,
-    });
-    return reply.code(201).send({ batch: serializeBatch(batch, false), warnings });
-  });
+      audit.record(
+        request.authUser?.username ?? "admin",
+        "backtest.seed-clone-batch.created",
+        {
+          sourceJobId: id,
+          batchId: batch.batch.id,
+          count: countBody.data.count,
+        },
+      );
+      return reply
+        .code(201)
+        .send({ batch: serializeBatch(batch, false), warnings });
+    },
+  );
 
   /**
    * 재설정 및 복제용 초안 (D-025). 첫 화면은 저장 요청과 전략만 필요하다. 여기서 전체
@@ -1401,59 +1684,71 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
    * 비례해 느려진다. 유니버스·coverage 검증은 위저드의 유니버스 단계와 실제 제출에서
    * 수행한다. 이 route는 저장 요청 복원과 현재 스키마 재기준만 맡는다.
    */
-  app.get('/backtests/:id/clone-draft', { preHandler: requireAuth }, async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const job = queue.getJob(id);
-    if (!job) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
+  app.get(
+    "/backtests/:id/clone-draft",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const job = queue.getJob(id);
+      if (!job)
+        return reply.code(404).send({ error: "작업을 찾을 수 없습니다" });
 
-    const rebased = rebaseStoredRequest(
-      job.requestJson,
-      strategies.get(job.strategyId)?.version ?? null,
-    );
-    if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
+      const rebased = rebaseStoredRequest(
+        job.requestJson,
+        strategies.get(job.strategyId)?.version ?? null,
+      );
+      if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
 
-    const reusable = await reusablePreviewFor(job, rebased.request);
-    const identityBlocker = reusable === null
-      ? null
-      : pinnedScheduleIdentityError(reusable.schedule, symbolMaster);
-    const currentMissingCandleSymbols = reusable === null
-      ? []
-      : (() => {
-          const symbols = [...new Set(
-            reusable.schedule.flatMap((entry) => entry.symbols),
-          )].sort();
-          const { fromTsMs, toTsMs } = periodToTsRange(rebased.request.period);
-          const withBars = new Set(
-            candleCoverage.getCoverageBetween(symbols, fromTsMs, toTsMs)
-              .filter((row) => row.barCount > 0)
-              .map((row) => row.code),
-          );
-          return symbols.filter(
-            (symbol) => !symbolService.exists(symbol) || !withBars.has(symbol),
-          );
-        })();
-    const reusablePreview = identityBlocker === null && reusable !== null
-      ? {
-          ...reusable.response,
-          // cached preview는 resolver를 다시 실행하지 않는다. 전체 KRX coverage와
-          // 현재 일봉 보유 상태를 모두 덮어 위저드가 낡은 성공 판정을 믿고
-          // 동기화 단계를 건너뛰지 않게 한다.
-          periodCovered: symbolMaster.isRangeCovered(
-            rebased.request.period.from,
-            rebased.request.period.to,
-          ),
-          missingCandleSymbols: currentMissingCandleSymbols,
-        }
-      : null;
-    return {
-      request: rebased.request,
-      warnings: rebased.warnings,
-      blockers: identityBlocker === null ? [] : [identityBlocker],
-      reusablePreview,
-    };
-  });
+      const reusable = await reusablePreviewFor(job, rebased.request);
+      const identityBlocker =
+        reusable === null
+          ? null
+          : pinnedScheduleIdentityError(reusable.schedule, symbolMaster);
+      const currentMissingCandleSymbols =
+        reusable === null
+          ? []
+          : (() => {
+              const symbols = [
+                ...new Set(reusable.schedule.flatMap((entry) => entry.symbols)),
+              ].sort();
+              const { fromTsMs, toTsMs } = periodToTsRange(
+                rebased.request.period,
+              );
+              const withBars = new Set(
+                candleCoverage
+                  .getCoverageBetween(symbols, fromTsMs, toTsMs)
+                  .filter((row) => row.barCount > 0)
+                  .map((row) => row.code),
+              );
+              return symbols.filter(
+                (symbol) =>
+                  !symbolService.exists(symbol) || !withBars.has(symbol),
+              );
+            })();
+      const reusablePreview =
+        identityBlocker === null && reusable !== null
+          ? {
+              ...reusable.response,
+              // cached preview는 resolver를 다시 실행하지 않는다. 전체 KRX coverage와
+              // 현재 일봉 보유 상태를 모두 덮어 위저드가 낡은 성공 판정을 믿고
+              // 동기화 단계를 건너뛰지 않게 한다.
+              periodCovered: symbolMaster.isRangeCovered(
+                rebased.request.period.from,
+                rebased.request.period.to,
+              ),
+              missingCandleSymbols: currentMissingCandleSymbols,
+            }
+          : null;
+      return {
+        request: rebased.request,
+        warnings: rebased.warnings,
+        blockers: identityBlocker === null ? [] : [identityBlocker],
+        reusablePreview,
+      };
+    },
+  );
 
-  app.get('/backtest-clone-batches', { preHandler: requireAuth }, () => {
+  app.get("/backtest-clone-batches", { preHandler: requireAuth }, () => {
     const batches = seedCloneBatches.list();
     const sourceJobIds = new Set(batches.map(({ batch }) => batch.sourceJobId));
     const sourceJobs = [...sourceJobIds].flatMap((sourceJobId) => {
@@ -1466,151 +1761,221 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
     };
   });
 
-  app.get('/backtest-clone-batches/:id', { preHandler: requireAuth }, (request, reply) => {
-    const { id } = request.params as { id: string };
-    const batch = seedCloneBatches.get(id);
-    if (!batch) return reply.code(404).send({ error: '난수 시드 실험을 찾을 수 없습니다' });
-    return { batch: serializeBatch(batch, true) };
-  });
+  app.get(
+    "/backtest-clone-batches/:id",
+    { preHandler: requireAuth },
+    (request, reply) => {
+      const { id } = request.params as { id: string };
+      const batch = seedCloneBatches.get(id);
+      if (!batch)
+        return reply
+          .code(404)
+          .send({ error: "난수 시드 실험을 찾을 수 없습니다" });
+      return { batch: serializeBatch(batch, true) };
+    },
+  );
 
-  app.post('/backtest-clone-batches/:id/cancel', { preHandler: requireAuth }, (request, reply) => {
-    const { id } = request.params as { id: string };
-    const batch = seedCloneBatches.cancel(id);
-    if (!batch) return reply.code(404).send({ error: '난수 시드 실험을 찾을 수 없습니다' });
-    for (const { job } of batch.items) {
-      if (job && !queue.isTerminal(job.status)) orchestrator.cancel(job.id);
-    }
-    audit.record(request.authUser?.username ?? 'admin', 'backtest.seed-clone-batch.cancelled', {
-      batchId: id,
-    });
-    return { batch: serializeBatch(seedCloneBatches.get(id)!, false) };
-  });
+  app.post(
+    "/backtest-clone-batches/:id/cancel",
+    { preHandler: requireAuth },
+    (request, reply) => {
+      const { id } = request.params as { id: string };
+      const batch = seedCloneBatches.cancel(id);
+      if (!batch)
+        return reply
+          .code(404)
+          .send({ error: "난수 시드 실험을 찾을 수 없습니다" });
+      for (const { job } of batch.items) {
+        if (job && !queue.isTerminal(job.status)) orchestrator.cancel(job.id);
+      }
+      audit.record(
+        request.authUser?.username ?? "admin",
+        "backtest.seed-clone-batch.cancelled",
+        {
+          batchId: id,
+        },
+      );
+      return { batch: serializeBatch(seedCloneBatches.get(id)!, false) };
+    },
+  );
 
-  app.delete('/backtest-clone-batches/:id', { preHandler: requireAuth }, (request, reply) => {
-    const { id } = request.params as { id: string };
-    const result = seedCloneBatches.delete(id);
-    if (result === 'NOT_FOUND') {
-      return reply.code(404).send({ error: '난수 시드 실험을 찾을 수 없습니다' });
-    }
-    if (result === 'NOT_DELETABLE') {
-      return reply.code(409).send({ error: '실행 중인 난수 시드 실험은 취소 완료 후 삭제할 수 있습니다' });
-    }
-    audit.record(request.authUser?.username ?? 'admin', 'backtest.seed-clone-batch.deleted', {
-      batchId: id,
-    });
-    return reply.code(204).send();
-  });
+  app.delete(
+    "/backtest-clone-batches/:id",
+    { preHandler: requireAuth },
+    (request, reply) => {
+      const { id } = request.params as { id: string };
+      const result = seedCloneBatches.delete(id);
+      if (result === "NOT_FOUND") {
+        return reply
+          .code(404)
+          .send({ error: "난수 시드 실험을 찾을 수 없습니다" });
+      }
+      if (result === "NOT_DELETABLE") {
+        return reply
+          .code(409)
+          .send({
+            error: "실행 중인 난수 시드 실험은 취소 완료 후 삭제할 수 있습니다",
+          });
+      }
+      audit.record(
+        request.authUser?.username ?? "admin",
+        "backtest.seed-clone-batch.deleted",
+        {
+          batchId: id,
+        },
+      );
+      return reply.code(204).send();
+    },
+  );
 
-  app.delete('/backtests/:id', { preHandler: requireAuth }, async (request, reply) => {
-    const { id } = request.params as { id: string };
-    if (validations.referencesJob(id) || validations.list(id).length > 0) {
-      return reply.code(409).send({ error: '연결된 기간 검증 실험을 먼저 삭제하세요.' });
-    }
-    const result = seedCloneBatches.deleteSourceJob(id);
-    if (result === 'NOT_FOUND') {
-      return reply.code(404).send({ error: '백테스트를 찾을 수 없습니다' });
-    }
-    if (result === 'NOT_DELETABLE') {
-      return reply.code(409).send({
-        error: '실행 중인 백테스트나 난수 시드 실험은 취소 완료 후 삭제할 수 있습니다',
+  app.delete(
+    "/backtests/:id",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      if (validations.referencesJob(id) || validations.list(id).length > 0) {
+        return reply
+          .code(409)
+          .send({ error: "연결된 기간 검증 실험을 먼저 삭제하세요." });
+      }
+      const result = seedCloneBatches.deleteSourceJob(id);
+      if (result === "NOT_FOUND") {
+        return reply.code(404).send({ error: "백테스트를 찾을 수 없습니다" });
+      }
+      if (result === "NOT_DELETABLE") {
+        return reply.code(409).send({
+          error:
+            "실행 중인 백테스트나 난수 시드 실험은 취소 완료 후 삭제할 수 있습니다",
+        });
+      }
+      audit.record(request.authUser?.username ?? "admin", "backtest.deleted", {
+        jobId: id,
       });
-    }
-    audit.record(request.authUser?.username ?? 'admin', 'backtest.deleted', { jobId: id });
-    return reply.code(204).send();
-  });
+      return reply.code(204).send();
+    },
+  );
 
-  app.get('/backtests/:id/trades', { preHandler: requireAuth }, async (request, reply) => {
-    const { id } = request.params as { id: string };
-    if (!queue.getJob(id)) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
-    const parsedQuery = z
-      .object({
-        limit: z.coerce.number().int().min(1).max(500).default(100),
-        offset: z.coerce.number().int().min(0).default(0),
-        symbol: z.string().optional(),
-        // 모르는 축은 400 이다 — 조용히 기본 정렬로 떨어뜨리면 화면은 「순손익순」을
-        // 표시한 채 청산순 목록을 보여 주고, 그 어긋남은 아무 데도 적히지 않는다.
-        sort: z.enum(TRADE_SORT_KEYS).default(DEFAULT_TRADE_SORT_KEY),
-        dir: z.enum(SORT_DIRECTIONS).default(DEFAULT_TRADE_SORT_DIRECTION),
-      })
-      .safeParse(request.query ?? {});
-    if (!parsedQuery.success) {
-      return reply
-        .code(400)
-        .send({ error: '쿼리 파라미터가 올바르지 않습니다 (limit/offset/symbol/sort/dir)' });
-    }
-    const query = parsedQuery.data;
-    return results.getTrades(id, {
-      limit: query.limit,
-      offset: query.offset,
-      sort: query.sort,
-      direction: query.dir,
-      ...(query.symbol !== undefined ? { symbol: query.symbol } : {}),
-    });
-  });
+  app.get(
+    "/backtests/:id/trades",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      if (!queue.getJob(id))
+        return reply.code(404).send({ error: "작업을 찾을 수 없습니다" });
+      const parsedQuery = z
+        .object({
+          limit: z.coerce.number().int().min(1).max(500).default(100),
+          offset: z.coerce.number().int().min(0).default(0),
+          symbol: z.string().optional(),
+          // 모르는 축은 400 이다 — 조용히 기본 정렬로 떨어뜨리면 화면은 「순손익순」을
+          // 표시한 채 청산순 목록을 보여 주고, 그 어긋남은 아무 데도 적히지 않는다.
+          sort: z.enum(TRADE_SORT_KEYS).default(DEFAULT_TRADE_SORT_KEY),
+          dir: z.enum(SORT_DIRECTIONS).default(DEFAULT_TRADE_SORT_DIRECTION),
+        })
+        .safeParse(request.query ?? {});
+      if (!parsedQuery.success) {
+        return reply
+          .code(400)
+          .send({
+            error:
+              "쿼리 파라미터가 올바르지 않습니다 (limit/offset/symbol/sort/dir)",
+          });
+      }
+      const query = parsedQuery.data;
+      return results.getTrades(id, {
+        limit: query.limit,
+        offset: query.offset,
+        sort: query.sort,
+        direction: query.dir,
+        ...(query.symbol !== undefined ? { symbol: query.symbol } : {}),
+      });
+    },
+  );
 
-  app.get('/backtests/:id/series', { preHandler: requireAuth }, async (request, reply) => {
-    const { id } = request.params as { id: string };
-    if (!queue.getJob(id)) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
-    return results.getChartSeries(id);
-  });
+  app.get(
+    "/backtests/:id/series",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      if (!queue.getJob(id))
+        return reply.code(404).send({ error: "작업을 찾을 수 없습니다" });
+      return results.getChartSeries(id);
+    },
+  );
 
-  app.get('/backtests/:id/export', { preHandler: requireAuth }, async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const job = queue.getJob(id);
-    if (!job) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
-    reply.header('content-disposition', `attachment; filename="backtest-${id}.json"`);
-    const fullExport = results.getFullExport(id);
-    return { job: serializeJob(job), ...fullExport };
-  });
+  app.get(
+    "/backtests/:id/export",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const job = queue.getJob(id);
+      if (!job)
+        return reply.code(404).send({ error: "작업을 찾을 수 없습니다" });
+      reply.header(
+        "content-disposition",
+        `attachment; filename="backtest-${id}.json"`,
+      );
+      const fullExport = results.getFullExport(id);
+      return { job: serializeJob(job), ...fullExport };
+    },
+  );
 
   /** SSE 진행률 (스펙 §14). 연결이 끊기면 클라이언트는 polling 으로 fallback 한다. */
-  app.get('/backtests/:id/events', { preHandler: requireAuth }, async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const job = queue.getJob(id);
-    if (!job) return reply.code(404).send({ error: '작업을 찾을 수 없습니다' });
+  app.get(
+    "/backtests/:id/events",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const job = queue.getJob(id);
+      if (!job)
+        return reply.code(404).send({ error: "작업을 찾을 수 없습니다" });
 
-    reply.hijack();
-    // hijack 은 onSend hook 을 우회하므로 §16 보안 헤더를 직접 포함한다
-    reply.raw.writeHead(200, {
-      ...SECURITY_HEADERS,
-      'content-type': 'text/event-stream',
-      'cache-control': 'no-cache',
-      connection: 'keep-alive',
-      'x-accel-buffering': 'no',
-    });
+      reply.hijack();
+      // hijack 은 onSend hook 을 우회하므로 §16 보안 헤더를 직접 포함한다
+      reply.raw.writeHead(200, {
+        ...SECURITY_HEADERS,
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+        connection: "keep-alive",
+        "x-accel-buffering": "no",
+      });
 
-    const writeSnapshot = (): BacktestJobRow | null => {
-      const current = queue.getJob(id);
-      if (current) {
-        reply.raw.write(`data: ${JSON.stringify(serializeJob(current))}\n\n`);
+      const writeSnapshot = (): BacktestJobRow | null => {
+        const current = queue.getJob(id);
+        if (current) {
+          reply.raw.write(`data: ${JSON.stringify(serializeJob(current))}\n\n`);
+        }
+        return current;
+      };
+
+      const first = writeSnapshot();
+      if (!first || queue.isTerminal(first.status)) {
+        reply.raw.end();
+        return;
       }
-      return current;
-    };
 
-    const first = writeSnapshot();
-    if (!first || queue.isTerminal(first.status)) {
-      reply.raw.end();
-      return;
-    }
+      const listener = (event: JobEvent): void => {
+        if (event.jobId !== id) return;
+        const current = writeSnapshot();
+        if (current && queue.isTerminal(current.status)) cleanup();
+      };
+      const heartbeat = setInterval(
+        () => reply.raw.write(":heartbeat\n\n"),
+        15_000,
+      );
+      heartbeat.unref();
 
-    const listener = (event: JobEvent): void => {
-      if (event.jobId !== id) return;
-      const current = writeSnapshot();
-      if (current && queue.isTerminal(current.status)) cleanup();
-    };
-    const heartbeat = setInterval(() => reply.raw.write(':heartbeat\n\n'), 15_000);
-    heartbeat.unref();
+      const cleanup = (): void => {
+        clearInterval(heartbeat);
+        for (const source of jobEvents) source.off("job", listener);
+        reply.raw.end();
+      };
 
-    const cleanup = (): void => {
-      clearInterval(heartbeat);
-      for (const source of jobEvents) source.off('job', listener);
-      reply.raw.end();
-    };
-
-    for (const source of jobEvents) source.on('job', listener);
-    request.raw.on('close', () => {
-      clearInterval(heartbeat);
-      for (const source of jobEvents) source.off('job', listener);
-    });
-  });
+      for (const source of jobEvents) source.on("job", listener);
+      request.raw.on("close", () => {
+        clearInterval(heartbeat);
+        for (const source of jobEvents) source.off("job", listener);
+      });
+    },
+  );
 }

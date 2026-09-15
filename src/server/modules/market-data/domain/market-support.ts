@@ -1,5 +1,8 @@
-import { ALL_MARKETS, type Market } from '../../../../runtime/modules/market-data/domain/candle.js';
-import { hasMarketSession } from '../../../../runtime/modules/market-data/domain/exchange-session.js';
+import {
+  ALL_MARKETS,
+  type Market,
+} from "../../../../runtime/modules/market-data/domain/candle.js";
+import { hasMarketSession } from "../../../../runtime/modules/market-data/domain/exchange-session.js";
 
 export interface MarketSupport {
   readonly market: Market;
@@ -23,17 +26,24 @@ export function listMarketSupport(): readonly MarketSupport[] {
     const datasetsSupported = hasMarketSession(market);
     // DART 는 국내 공시 기관이다 — US 세션이 정의된 뒤에도 남는 제약이라 세션과
     // 따로 판단한다
-    const factsSupported = market === 'KR';
+    const factsSupported = market === "KR";
     if (datasetsSupported && factsSupported) {
       return { market, datasetsSupported, factsSupported, reason: null };
     }
     const reasons: string[] = [];
     if (!datasetsSupported) {
-      reasons.push('거래 시간 정의가 없어 데이터셋을 만들 수 없습니다 (일광 절약 시간제 미지원)');
+      reasons.push(
+        "거래 시간 정의가 없어 데이터셋을 만들 수 없습니다 (일광 절약 시간제 미지원)",
+      );
     }
     if (!factsSupported) {
-      reasons.push('재무 데이터 수집은 국내 종목만 지원합니다');
+      reasons.push("재무 데이터 수집은 국내 종목만 지원합니다");
     }
-    return { market, datasetsSupported, factsSupported, reason: `${reasons.join('. ')}.` };
+    return {
+      market,
+      datasetsSupported,
+      factsSupported,
+      reason: `${reasons.join(". ")}.`,
+    };
   });
 }

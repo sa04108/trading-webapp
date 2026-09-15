@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from "zod";
 
 /**
  * 종목 마스터 API DTO — 웹과 서버가 공유한다.
@@ -11,7 +11,7 @@ export const symbolMasterEntryDtoSchema = z.object({
   standardCode: z.string(),
   shortCode: z.string(),
   name: z.string(),
-  market: z.enum(['KOSPI', 'KOSDAQ']),
+  market: z.enum(["KOSPI", "KOSDAQ"]),
   sharesOutstanding: z.string(),
   instrumentType: z.string(),
   listedDate: z.string().nullable(),
@@ -24,7 +24,9 @@ export const symbolMasterUniverseDtoSchema = z.object({
   // covered=false 면 빈 배열이다 — SymbolMasterNotCoveredError 를 던지는 대신 이 형태로 응답한다.
   symbols: z.array(symbolMasterEntryDtoSchema),
 });
-export type SymbolMasterUniverseDto = z.infer<typeof symbolMasterUniverseDtoSchema>;
+export type SymbolMasterUniverseDto = z.infer<
+  typeof symbolMasterUniverseDtoSchema
+>;
 
 export const symbolMasterCoverageDtoSchema = z.object({
   ranges: z.array(z.object({ startDate: z.string(), endDate: z.string() })),
@@ -32,7 +34,7 @@ export const symbolMasterCoverageDtoSchema = z.object({
   tradingDates: z.array(z.string()),
   lastSyncedAtMs: z.number().nullable(),
   backfill: z.object({
-    state: z.enum(['IDLE', 'RUNNING', 'BUDGET_EXHAUSTED', 'FAILED']),
+    state: z.enum(["IDLE", "RUNNING", "BUDGET_EXHAUSTED", "FAILED"]),
     cursorDate: z.string().nullable(),
     /**
      * 지금 도는(또는 마지막) 백필의 대상 구간. 위저드가 자기 요청 범위와 비교해
@@ -45,7 +47,9 @@ export const symbolMasterCoverageDtoSchema = z.object({
     error: z.string().nullable(),
   }),
 });
-export type SymbolMasterCoverageDto = z.infer<typeof symbolMasterCoverageDtoSchema>;
+export type SymbolMasterCoverageDto = z.infer<
+  typeof symbolMasterCoverageDtoSchema
+>;
 
 export const symbolMasterSyncDtoSchema = z.object({
   requestedDate: z.string(),

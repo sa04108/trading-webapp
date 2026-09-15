@@ -1,20 +1,20 @@
-import type { BacktestRequest } from '../../../../shared/schemas/backtest-request.js';
-import type { FactCoverageStore } from '../../facts/application/fact-coverage-store.js';
-import { derivePreparationFactYearRange } from '../../market-data/domain/fact-year-range.js';
+import type { BacktestRequest } from "../../../../shared/schemas/backtest-request.js";
+import type { FactCoverageStore } from "../../facts/application/fact-coverage-store.js";
+import { derivePreparationFactYearRange } from "../../market-data/domain/fact-year-range.js";
 import {
   strategyRequiresFinancialData,
   type AnyTradingStrategy,
-} from '../../strategy/domain/strategy.js';
+} from "../../strategy/domain/strategy.js";
 
 export type FinancialCoverageGap =
   | {
-      readonly kind: 'MISSING_OR_CORRUPT';
+      readonly kind: "MISSING_OR_CORRUPT";
       readonly fromYear: number;
       readonly toYear: number;
       readonly missingSymbols: readonly string[];
     }
   | {
-      readonly kind: 'BLOCKING_INGESTION_GAP';
+      readonly kind: "BLOCKING_INGESTION_GAP";
       readonly fromYear: number;
       readonly toYear: number;
       readonly affected: readonly {
@@ -30,16 +30,22 @@ export type FinancialCoverageGap =
  * 수 있으므로 coverage 결측과 구분한다.
  */
 export function findFinancialCoverageGap(input: {
-  readonly request: Pick<BacktestRequest, 'period' | 'universeRule'>;
+  readonly request: Pick<BacktestRequest, "period" | "universeRule">;
   readonly strategy: AnyTradingStrategy;
   readonly symbols: readonly string[];
-  readonly coverage: Pick<FactCoverageStore, 'getCoverageState'>;
+  readonly coverage: Pick<FactCoverageStore, "getCoverageState">;
 }): FinancialCoverageGap | null {
-  if (!strategyRequiresFinancialData(input.strategy) || input.symbols.length === 0) return null;
+  if (
+    !strategyRequiresFinancialData(input.strategy) ||
+    input.symbols.length === 0
+  )
+    return null;
 
   const universeLookbackQuarters = input.request.universeRule.stages.some(
-    (stage) => stage.criterion === 'PER' || stage.criterion === 'ROE',
-  ) ? 4 : 0;
+    (stage) => stage.criterion === "PER" || stage.criterion === "ROE",
+  )
+    ? 4
+    : 0;
   const { fromYear, toYear } = derivePreparationFactYearRange(
     input.request.period,
     Math.max(
@@ -57,7 +63,7 @@ export function findFinancialCoverageGap(input: {
     return requiredYears.some((year) => !covered.has(year));
   });
   if (missingSymbols.length > 0) {
-    return { kind: 'MISSING_OR_CORRUPT', fromYear, toYear, missingSymbols };
+    return { kind: "MISSING_OR_CORRUPT", fromYear, toYear, missingSymbols };
   }
   const affected = symbols.flatMap((symbol) => {
     const state = stateBySymbol.get(symbol);
@@ -70,28 +76,31 @@ export function findFinancialCoverageGap(input: {
   });
   return affected.length === 0
     ? null
-    : { kind: 'BLOCKING_INGESTION_GAP', fromYear, toYear, affected };
+    : { kind: "BLOCKING_INGESTION_GAP", fromYear, toYear, affected };
 }
 
 export function financialCoverageGapMessage(gap: FinancialCoverageGap): string {
-  const years = gap.fromYear === gap.toYear
-    ? `${gap.fromYear}년`
-    : `${gap.fromYear}~${gap.toYear}년`;
-  if (gap.kind === 'BLOCKING_INGESTION_GAP') {
+  const years =
+    gap.fromYear === gap.toYear
+      ? `${gap.fromYear}년`
+      : `${gap.fromYear}~${gap.toYear}년`;
+  if (gap.kind === "BLOCKING_INGESTION_GAP") {
     const affected = gap.affected
-      .map(({ symbol, years: gapYears }) => `${symbol}(${gapYears.join(', ')})`)
-      .join(', ');
-    const examples = [...new Set(gap.affected.flatMap((item) => item.examples))].slice(0, 3);
+      .map(({ symbol, years: gapYears }) => `${symbol}(${gapYears.join(", ")})`)
+      .join(", ");
+    const examples = [
+      ...new Set(gap.affected.flatMap((item) => item.examples)),
+    ].slice(0, 3);
     return (
-      `DART 재무 수집 결과에 실행을 막는 원천·파서 gap이 남아 있습니다(필요 연도 ${years}): `
-      + `${affected}${examples.length > 0 ? ` — 원인 예: ${examples.join(' / ')}` : ''}. `
-      + '원천·파서 문제를 수정하고 coverage protocol version을 갱신해 원문을 재처리하거나 '
-      + '유니버스·기간을 조정하세요.'
+      `DART 재무 수집 결과에 실행을 막는 원천·파서 gap이 남아 있습니다(필요 연도 ${years}): ` +
+      `${affected}${examples.length > 0 ? ` — 원인 예: ${examples.join(" / ")}` : ""}. ` +
+      "원천·파서 문제를 수정하고 coverage protocol version을 갱신해 원문을 재처리하거나 " +
+      "유니버스·기간을 조정하세요."
     );
   }
   return (
-    `재무 수집 coverage가 부족한 유니버스 종목이 있습니다(필요 연도 ${years}): `
-    + `${gap.missingSymbols.join(', ')} — 미리보기를 다시 실행해 데이터 준비를 완료하세요. `
-    + 'DART 일일 한도로 대기 중이면 다음 날 자동으로 재개됩니다.'
+    `재무 수집 coverage가 부족한 유니버스 종목이 있습니다(필요 연도 ${years}): ` +
+    `${gap.missingSymbols.join(", ")} — 미리보기를 다시 실행해 데이터 준비를 완료하세요. ` +
+    "DART 일일 한도로 대기 중이면 다음 날 자동으로 재개됩니다."
   );
 }

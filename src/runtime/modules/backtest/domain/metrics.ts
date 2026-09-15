@@ -5,7 +5,7 @@ import type {
   Fill,
   MonthlyReturn,
   Trade,
-} from './types.js';
+} from "./types.js";
 
 const MS_PER_DAY = 86_400_000;
 const TRADING_DAYS_PER_YEAR = 252;
@@ -17,14 +17,21 @@ function mean(values: readonly number[]): number {
 function std(values: readonly number[]): number {
   if (values.length < 2) return 0;
   const m = mean(values);
-  return Math.sqrt(values.reduce((sum, v) => sum + (v - m) ** 2, 0) / (values.length - 1));
+  return Math.sqrt(
+    values.reduce((sum, v) => sum + (v - m) ** 2, 0) / (values.length - 1),
+  );
 }
 
-export function computeDrawdownSeries(equityPoints: readonly EquityPoint[]): DrawdownPoint[] {
+export function computeDrawdownSeries(
+  equityPoints: readonly EquityPoint[],
+): DrawdownPoint[] {
   let peak = -Infinity;
   return equityPoints.map((point) => {
     peak = Math.max(peak, point.equity);
-    return { tsMs: point.tsMs, drawdown: peak > 0 ? point.equity / peak - 1 : 0 };
+    return {
+      tsMs: point.tsMs,
+      drawdown: peak > 0 ? point.equity / peak - 1 : 0,
+    };
   });
 }
 
@@ -34,7 +41,9 @@ interface DrawdownStats {
 }
 
 /** 최대 낙폭과 낙폭 기간(peak → 회복 또는 마지막 시점) */
-export function computeDrawdownStats(equityPoints: readonly EquityPoint[]): DrawdownStats {
+export function computeDrawdownStats(
+  equityPoints: readonly EquityPoint[],
+): DrawdownStats {
   let peak = -Infinity;
   let peakTs = 0;
   let drawdownStartTs: number | null = null;
@@ -61,11 +70,17 @@ export function computeDrawdownStats(equityPoints: readonly EquityPoint[]): Draw
     maxDuration = Math.max(maxDuration, last.tsMs - drawdownStartTs);
   }
 
-  return { maxDrawdownPct: maxDrawdown * 100, maxDrawdownDurationMs: maxDuration };
+  return {
+    maxDrawdownPct: maxDrawdown * 100,
+    maxDrawdownDurationMs: maxDuration,
+  };
 }
 
 /** UTC 일 단위 마지막 equity 로 리샘플한 일별 수익률 (변동성·Sharpe·Sortino 용) */
-function dailyReturns(equityPoints: readonly EquityPoint[], initialCash: number): number[] {
+function dailyReturns(
+  equityPoints: readonly EquityPoint[],
+  initialCash: number,
+): number[] {
   const lastByDay = new Map<number, number>();
   for (const point of equityPoints) {
     lastByDay.set(Math.floor(point.tsMs / MS_PER_DAY), point.equity);
@@ -96,7 +111,12 @@ export function computeMonthlyReturns(
     const key = `${year}-${month}`;
     const previous = lastByMonth.get(key);
     if (previous === undefined || point.tsMs >= previous.tsMs) {
-      lastByMonth.set(key, { year, month, equity: point.equity, tsMs: point.tsMs });
+      lastByMonth.set(key, {
+        year,
+        month,
+        equity: point.equity,
+        tsMs: point.tsMs,
+      });
     }
   }
   const months = [...lastByMonth.values()].sort((a, b) =>
@@ -143,7 +163,8 @@ export function computeMetrics(
    */
   dailyReturnEquityPoints: readonly EquityPoint[] = equityPoints,
 ): BacktestMetrics {
-  const finalEquity = equityPoints[equityPoints.length - 1]?.equity ?? initialCash;
+  const finalEquity =
+    equityPoints[equityPoints.length - 1]?.equity ?? initialCash;
   const totalReturnPct = (finalEquity / initialCash - 1) * 100;
 
   const firstTs = equityPoints[0]?.tsMs ?? 0;
@@ -154,11 +175,15 @@ export function computeMetrics(
       ? ((finalEquity / initialCash) ** (365 / elapsedDays) - 1) * 100
       : null;
 
-  const { maxDrawdownPct, maxDrawdownDurationMs } = computeDrawdownStats(equityPoints);
+  const { maxDrawdownPct, maxDrawdownDurationMs } =
+    computeDrawdownStats(equityPoints);
 
   const daily = dailyReturns(dailyReturnEquityPoints, initialCash);
   const dailyStd = std(daily);
-  const volatilityPct = daily.length >= 2 ? dailyStd * Math.sqrt(TRADING_DAYS_PER_YEAR) * 100 : null;
+  const volatilityPct =
+    daily.length >= 2
+      ? dailyStd * Math.sqrt(TRADING_DAYS_PER_YEAR) * 100
+      : null;
   const sharpe =
     daily.length >= 2 && dailyStd > 0
       ? (mean(daily) / dailyStd) * Math.sqrt(TRADING_DAYS_PER_YEAR)
@@ -166,15 +191,18 @@ export function computeMetrics(
   // Sortino의 downside deviation은 음수 표본끼리의 표준편차가 아니라,
   // 전체 관측일에서 목표수익률(0)을 밑돈 편차의 제곱평균제곱근이다.
   // 하락일이 한 번뿐이거나 같은 하락률이 반복돼도 위험이 0이 되지 않는다.
-  const downsideDeviation = daily.length > 0
-    ? Math.sqrt(mean(daily.map((value) => Math.min(value, 0) ** 2)))
-    : 0;
+  const downsideDeviation =
+    daily.length > 0
+      ? Math.sqrt(mean(daily.map((value) => Math.min(value, 0) ** 2)))
+      : 0;
   const sortino =
     daily.length >= 2 && downsideDeviation > 0
       ? (mean(daily) / downsideDeviation) * Math.sqrt(TRADING_DAYS_PER_YEAR)
       : null;
   const calmar =
-    cagrPct !== null && maxDrawdownPct < 0 ? cagrPct / Math.abs(maxDrawdownPct) : null;
+    cagrPct !== null && maxDrawdownPct < 0
+      ? cagrPct / Math.abs(maxDrawdownPct)
+      : null;
 
   const wins = trades.filter((t) => t.netPnl > 0);
   const losses = trades.filter((t) => t.netPnl <= 0);

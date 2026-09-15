@@ -1,9 +1,9 @@
-import { createHash } from 'node:crypto';
-import { z } from 'zod';
-import type { AnyTradingStrategy } from '../domain/strategy.js';
+import { createHash } from "node:crypto";
+import { z } from "zod";
+import type { AnyTradingStrategy } from "../domain/strategy.js";
 
 /** 해시에서 제외하는 표시용 필드 — 값 검증에 영향이 없다 */
-const PRESENTATION_KEYS = new Set(['title', 'description']);
+const PRESENTATION_KEYS = new Set(["title", "description"]);
 
 /**
  * JSON 스키마에서 표시용 필드(`title`/`description`)를 재귀 제거한다.
@@ -12,7 +12,7 @@ const PRESENTATION_KEYS = new Set(['title', 'description']);
  */
 function stripPresentation(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stripPresentation);
-  if (value === null || typeof value !== 'object') return value;
+  if (value === null || typeof value !== "object") return value;
   const result: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
     if (PRESENTATION_KEYS.has(key)) continue;
@@ -31,9 +31,9 @@ function stripPresentation(value: unknown): unknown {
  */
 export function strategySourceHash(strategy: AnyTradingStrategy): string {
   const schema = z.toJSONSchema(strategy.parameterSchema as z.ZodType);
-  return createHash('sha256')
+  return createHash("sha256")
     .update(strategy.id)
     .update(strategy.version)
     .update(JSON.stringify(stripPresentation(schema)))
-    .digest('hex');
+    .digest("hex");
 }

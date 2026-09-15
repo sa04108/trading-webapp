@@ -10,7 +10,7 @@ export class ApiError extends Error {
     public readonly details?: unknown,
   ) {
     super(message);
-    this.name = 'ApiError';
+    this.name = "ApiError";
   }
 }
 
@@ -30,10 +30,10 @@ async function throwApiError(response: Response): Promise<never> {
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api/v1${path}`, {
-    credentials: 'same-origin',
+    credentials: "same-origin",
     ...init,
     headers: {
-      ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(init?.body ? { "Content-Type": "application/json" } : {}),
       ...init?.headers,
     },
   });
@@ -46,7 +46,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const postJson = <T>(path: string, body: unknown): Promise<T> =>
-  api<T>(path, { method: 'POST', body: JSON.stringify(body) });
+  api<T>(path, { method: "POST", body: JSON.stringify(body) });
 
 /**
  * 성공 응답의 status 코드까지 필요한 호출에 쓴다.
@@ -61,9 +61,9 @@ export async function postJsonWithStatus<T>(
   body: unknown,
 ): Promise<{ status: number; data: T }> {
   const response = await fetch(`/api/v1${path}`, {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json' },
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   if (!response.ok) return throwApiError(response);
@@ -76,4 +76,4 @@ export async function postJsonWithStatus<T>(
  * 메서드를 고민하지 않게 한다.
  */
 export const patchJson = <T>(path: string, body: unknown): Promise<T> =>
-  api<T>(path, { method: 'PATCH', body: JSON.stringify(body) });
+  api<T>(path, { method: "PATCH", body: JSON.stringify(body) });

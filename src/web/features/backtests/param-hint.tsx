@@ -1,5 +1,5 @@
-import { InfoHint } from '@/components/info-hint';
-import { paramLabel, paramMetaLine, type NumberParamSpec } from './param-specs';
+import { InfoHint } from "@/components/info-hint";
+import { paramLabel, paramMetaLine, type NumberParamSpec } from "./param-specs";
 
 /** 파라미터 설명 툴팁 — 여닫는 동작은 InfoHint 가 책임진다 */
 export function ParamHint({ spec }: { spec: NumberParamSpec }) {

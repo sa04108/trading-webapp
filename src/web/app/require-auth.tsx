@@ -1,7 +1,7 @@
-import { useQuery } from '@tanstack/react-query';
-import { Navigate, Outlet } from 'react-router';
-import { api, ApiError } from '@/lib/api-client';
-import { Skeleton } from '@/components/ui/skeleton';
+import { useQuery } from "@tanstack/react-query";
+import { Navigate, Outlet } from "react-router";
+import { api, ApiError } from "@/lib/api-client";
+import { Skeleton } from "@/components/ui/skeleton";
 
 export interface AuthUser {
   id: string;
@@ -10,8 +10,8 @@ export interface AuthUser {
 
 export function useAuthUser() {
   return useQuery<AuthUser, ApiError>({
-    queryKey: ['auth', 'me'],
-    queryFn: () => api<AuthUser>('/auth/me'),
+    queryKey: ["auth", "me"],
+    queryFn: () => api<AuthUser>("/auth/me"),
     retry: false,
     staleTime: 60_000,
   });

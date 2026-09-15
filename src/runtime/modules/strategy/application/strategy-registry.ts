@@ -1,15 +1,15 @@
-import { z } from 'zod';
+import { z } from "zod";
 import {
   strategyRequiresFinancialData,
   type AnyTradingStrategy,
-} from '../domain/strategy.js';
-import { crossSectionalMomentumStrategy } from '../strategies/cross-sectional-momentum.js';
-import { earningsAccelerationRankStrategy } from '../strategies/earnings-acceleration-rank.js';
-import { emaTrendSwitchStrategy } from '../strategies/ema-trend-switch.js';
-import { lowPerHighRoeRankStrategy } from '../strategies/low-per-high-roe-rank.js';
-import { rangeBreakoutStrategy } from '../strategies/range-breakout.js';
-import { rsiReversionStrategy } from '../strategies/rsi-reversion.js';
-import { valueQualityRankStrategy } from '../strategies/value-quality-rank.js';
+} from "../domain/strategy.js";
+import { crossSectionalMomentumStrategy } from "../strategies/cross-sectional-momentum.js";
+import { earningsAccelerationRankStrategy } from "../strategies/earnings-acceleration-rank.js";
+import { emaTrendSwitchStrategy } from "../strategies/ema-trend-switch.js";
+import { lowPerHighRoeRankStrategy } from "../strategies/low-per-high-roe-rank.js";
+import { rangeBreakoutStrategy } from "../strategies/range-breakout.js";
+import { rsiReversionStrategy } from "../strategies/rsi-reversion.js";
+import { valueQualityRankStrategy } from "../strategies/value-quality-rank.js";
 
 /**
  * 코드 등록식 전략 레지스트리 (스펙 §2.5):
@@ -82,17 +82,28 @@ export class StrategyRegistry {
   getParameterJsonSchema(strategyId: string): Record<string, unknown> | null {
     const strategy = this.get(strategyId);
     if (!strategy) return null;
-    return z.toJSONSchema(strategy.parameterSchema as z.ZodType) as Record<string, unknown>;
+    return z.toJSONSchema(strategy.parameterSchema as z.ZodType) as Record<
+      string,
+      unknown
+    >;
   }
 
-  validateParameters(strategyId: string, parameters: unknown): { ok: true; value: unknown } | { ok: false; error: string } {
+  validateParameters(
+    strategyId: string,
+    parameters: unknown,
+  ): { ok: true; value: unknown } | { ok: false; error: string } {
     const strategy = this.get(strategyId);
-    if (!strategy) return { ok: false, error: `알 수 없는 전략: ${strategyId}` };
-    const result = (strategy.parameterSchema as z.ZodType).safeParse(parameters);
+    if (!strategy)
+      return { ok: false, error: `알 수 없는 전략: ${strategyId}` };
+    const result = (strategy.parameterSchema as z.ZodType).safeParse(
+      parameters,
+    );
     if (!result.success) {
       return {
         ok: false,
-        error: result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
+        error: result.error.issues
+          .map((i) => `${i.path.join(".")}: ${i.message}`)
+          .join("; "),
       };
     }
     return { ok: true, value: result.data };

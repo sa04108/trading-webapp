@@ -1,17 +1,22 @@
-import { ChevronLeft, ChevronRight } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
-import { Button } from '@/components/ui/button';
+import { ChevronLeft, ChevronRight } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Button } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select';
-import { addMonths, buildMonthGrid, formatMonth, monthOf } from '@/lib/calendar-month';
-import { cn } from '@/lib/utils';
+} from "@/components/ui/select";
+import {
+  addMonths,
+  buildMonthGrid,
+  formatMonth,
+  monthOf,
+} from "@/lib/calendar-month";
+import { cn } from "@/lib/utils";
 
-const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'] as const;
+const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"] as const;
 
 /**
  * 날짜 하나를 고르는 달력.
@@ -73,7 +78,7 @@ export function Calendar({
   };
 
   return (
-    <div className={cn('w-full select-none', className)}>
+    <div className={cn("w-full select-none", className)}>
       <div className="flex items-center gap-1.5">
         <Button
           type="button"
@@ -88,7 +93,10 @@ export function Calendar({
         </Button>
 
         <div className="flex flex-1 items-center justify-center gap-1">
-          <Select value={year} onValueChange={(next) => goToMonth(`${next}-${monthNumber}`)}>
+          <Select
+            value={year}
+            onValueChange={(next) => goToMonth(`${next}-${monthNumber}`)}
+          >
             <SelectTrigger size="sm" aria-label="연도">
               <SelectValue />
             </SelectTrigger>
@@ -100,12 +108,17 @@ export function Calendar({
               ))}
             </SelectContent>
           </Select>
-          <Select value={monthNumber} onValueChange={(next) => goToMonth(`${year}-${next}`)}>
+          <Select
+            value={monthNumber}
+            onValueChange={(next) => goToMonth(`${year}-${next}`)}
+          >
             <SelectTrigger size="sm" aria-label="월">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0')).map((m) => (
+              {Array.from({ length: 12 }, (_, i) =>
+                String(i + 1).padStart(2, "0"),
+              ).map((m) => (
                 <SelectItem key={m} value={m}>
                   {Number(m)}월
                 </SelectItem>
@@ -127,14 +140,24 @@ export function Calendar({
         </Button>
       </div>
 
-      <div className="mt-2 grid grid-cols-7 gap-0.5" role="grid" aria-label={formatMonth(month)}>
+      <div
+        className="mt-2 grid grid-cols-7 gap-0.5"
+        role="grid"
+        aria-label={formatMonth(month)}
+      >
         {WEEKDAYS.map((label) => (
-          <div key={label} className="py-1 text-center text-xs text-muted-foreground">
+          <div
+            key={label}
+            className="py-1 text-center text-xs text-muted-foreground"
+          >
             {label}
           </div>
         ))}
         {cells.map((cell) => {
-          const disabled = cell.date < min || cell.date > max || isDateDisabled?.(cell.date) === true;
+          const disabled =
+            cell.date < min ||
+            cell.date > max ||
+            isDateDisabled?.(cell.date) === true;
           const selected = cell.date === value;
           return (
             <button
@@ -148,12 +171,13 @@ export function Calendar({
               disabled={disabled}
               onClick={() => onSelect(cell.date)}
               className={cn(
-                'relative flex h-8 items-center justify-center rounded-md text-sm tabular-nums transition-colors',
-                'hover:bg-accent hover:text-accent-foreground',
-                'focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none',
-                cell.outside && 'text-muted-foreground/50',
-                disabled && 'pointer-events-none opacity-30',
-                selected && 'bg-primary text-primary-foreground hover:bg-primary',
+                "relative flex h-8 items-center justify-center rounded-md text-sm tabular-nums transition-colors",
+                "hover:bg-accent hover:text-accent-foreground",
+                "focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
+                cell.outside && "text-muted-foreground/50",
+                disabled && "pointer-events-none opacity-30",
+                selected &&
+                  "bg-primary text-primary-foreground hover:bg-primary",
               )}
             >
               {cell.day}
@@ -161,8 +185,8 @@ export function Calendar({
                 <span
                   aria-hidden
                   className={cn(
-                    'absolute bottom-1 size-1 rounded-full',
-                    selected ? 'bg-primary-foreground' : 'bg-primary/60',
+                    "absolute bottom-1 size-1 rounded-full",
+                    selected ? "bg-primary-foreground" : "bg-primary/60",
                   )}
                 />
               ) : null}

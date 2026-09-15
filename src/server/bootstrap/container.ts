@@ -1,93 +1,103 @@
-import { AgentRegistry } from '../modules/agents/application/agent-registry.js';
-import { DatasetSnapshots } from '../modules/agents/application/dataset-snapshots.js';
-import { AgentPreparationQueue } from '../modules/agents/application/agent-preparation-queue.js';
-import { createAgentCollectionRuntime } from '../modules/agents/application/agent-collection-runtime.js';
-import { AgentDataQueue } from '../modules/agents/application/agent-data-queue.js';
-import { AgentCoordinator } from '../modules/agents/application/agent-coordinator.js';
-import path from 'node:path';
-import fs from 'node:fs';
-import { and, eq, inArray, lte } from 'drizzle-orm';
-import { facts as factsTable } from '../../runtime/shared/db/data-schema.js';
-import type { Fact } from '../../runtime/modules/facts/domain/fact.js';
-import { periodToTsRange } from '../../shared/schemas/backtest-request.js';
-import type { AppConfig } from './config.js';
-import { readRuntimeVersions } from '../../runtime/shared/runtime-versions.js';
-import { readGitCommitSha } from '../../runtime/shared/build-info.js';
-import { createLogger, type Logger } from '../shared/logger.js';
-import { openDatabase, type DatabaseHandle } from '../../runtime/shared/db/database.js';
-import { SqliteExternalApiUsage, type ExternalApiUsage } from '../shared/db/external-api-usage.js';
-import { pruneExpiredRows } from '../shared/db/maintenance.js';
-import { systemClock, type Clock } from '../../runtime/shared/clock.js';
-import { configureZodLocale } from '../shared/zod-locale.js';
-import { createAuditLogService, type AuditLogService } from '../../runtime/modules/audit/audit-service.js';
-import { NotificationService } from '../modules/notification/application/notification-service.js';
-import type { NotificationInput } from '../modules/notification/application/notification-service.js';
+import { AgentRegistry } from "../modules/agents/application/agent-registry.js";
+import { DatasetSnapshots } from "../modules/agents/application/dataset-snapshots.js";
+import { AgentPreparationQueue } from "../modules/agents/application/agent-preparation-queue.js";
+import { createAgentCollectionRuntime } from "../modules/agents/application/agent-collection-runtime.js";
+import { AgentDataQueue } from "../modules/agents/application/agent-data-queue.js";
+import { AgentCoordinator } from "../modules/agents/application/agent-coordinator.js";
+import path from "node:path";
+import fs from "node:fs";
+import { and, eq, inArray, lte } from "drizzle-orm";
+import { facts as factsTable } from "../../runtime/shared/db/data-schema.js";
+import type { Fact } from "../../runtime/modules/facts/domain/fact.js";
+import { periodToTsRange } from "../../shared/schemas/backtest-request.js";
+import type { AppConfig } from "./config.js";
+import { readRuntimeVersions } from "../../runtime/shared/runtime-versions.js";
+import { readGitCommitSha } from "../../runtime/shared/build-info.js";
+import { createLogger, type Logger } from "../shared/logger.js";
+import {
+  openDatabase,
+  type DatabaseHandle,
+} from "../../runtime/shared/db/database.js";
+import {
+  SqliteExternalApiUsage,
+  type ExternalApiUsage,
+} from "../shared/db/external-api-usage.js";
+import { pruneExpiredRows } from "../shared/db/maintenance.js";
+import { systemClock, type Clock } from "../../runtime/shared/clock.js";
+import { configureZodLocale } from "../shared/zod-locale.js";
+import {
+  createAuditLogService,
+  type AuditLogService,
+} from "../../runtime/modules/audit/audit-service.js";
+import { NotificationService } from "../modules/notification/application/notification-service.js";
+import type { NotificationInput } from "../modules/notification/application/notification-service.js";
 import {
   createBacktestNotificationListener,
   createSeedCloneBatchNotificationListener,
-} from './notification-wiring.js';
-import { createPreparationNotificationListener } from './preparation-notification-wiring.js';
-import { AuthService } from '../modules/auth/application/auth-service.js';
+} from "./notification-wiring.js";
+import { createPreparationNotificationListener } from "./preparation-notification-wiring.js";
+import { AuthService } from "../modules/auth/application/auth-service.js";
 import type {
   LoginAttemptRepository,
   PasswordHasher,
   SessionRepository,
   TotpService,
   UserRepository,
-} from '../modules/auth/application/ports.js';
-import { argon2PasswordHasher } from '../modules/auth/infrastructure/argon2-password-hasher.js';
-import { otpauthTotpService } from '../modules/auth/infrastructure/otpauth-totp.js';
+} from "../modules/auth/application/ports.js";
+import { argon2PasswordHasher } from "../modules/auth/infrastructure/argon2-password-hasher.js";
+import { otpauthTotpService } from "../modules/auth/infrastructure/otpauth-totp.js";
 import {
   createSqliteLoginAttemptRepository,
   createSqliteSessionRepository,
   createSqliteUserRepository,
-} from '../modules/auth/infrastructure/sqlite-repositories.js';
-import { SymbolInfoService } from '../modules/market-data/application/symbol-info-service.js';
-import type { SymbolService } from '../../runtime/modules/market-data/application/symbol-service.js';
-import { CandleCoverageService } from '../../runtime/modules/market-data/application/candle-coverage-service.js';
-import type { CandleRepository } from '../../runtime/modules/market-data/application/ports.js';
-import { createTossStockInfoSource } from '../modules/broker/infrastructure/toss/toss-stock-info-source.js';
-import { KrxDailyCandleRepository } from '../../runtime/modules/market-data/infrastructure/krx-daily-candle-repository.js';
-import { StrategyRegistry } from '../../runtime/modules/strategy/application/strategy-registry.js';
-import { strategyRequiresFinancialData } from '../../runtime/modules/strategy/domain/strategy.js';
-import { JobOrchestrator, type JobEvent } from '../modules/backtest/application/job-orchestrator.js';
-import { JobQueue } from '../modules/backtest/application/job-queue.js';
-import { PreparationReferenceService } from '../modules/backtest/application/preparation-reference-service.js';
-import { BacktestWizardDraftService } from '../modules/backtest/application/backtest-wizard-draft-service.js';
-import { ResultsService } from '../modules/backtest/application/results-service.js';
+} from "../modules/auth/infrastructure/sqlite-repositories.js";
+import { SymbolInfoService } from "../modules/market-data/application/symbol-info-service.js";
+import type { SymbolService } from "../../runtime/modules/market-data/application/symbol-service.js";
+import { CandleCoverageService } from "../../runtime/modules/market-data/application/candle-coverage-service.js";
+import type { CandleRepository } from "../../runtime/modules/market-data/application/ports.js";
+import { createTossStockInfoSource } from "../modules/broker/infrastructure/toss/toss-stock-info-source.js";
+import { KrxDailyCandleRepository } from "../../runtime/modules/market-data/infrastructure/krx-daily-candle-repository.js";
+import { StrategyRegistry } from "../../runtime/modules/strategy/application/strategy-registry.js";
+import { strategyRequiresFinancialData } from "../../runtime/modules/strategy/domain/strategy.js";
+import {
+  JobOrchestrator,
+  type JobEvent,
+} from "../modules/backtest/application/job-orchestrator.js";
+import { JobQueue } from "../modules/backtest/application/job-queue.js";
+import { PreparationReferenceService } from "../modules/backtest/application/preparation-reference-service.js";
+import { BacktestWizardDraftService } from "../modules/backtest/application/backtest-wizard-draft-service.js";
+import { ResultsService } from "../modules/backtest/application/results-service.js";
 import {
   createSeedCloneBatchJobListener,
   SeedCloneBatchService,
-} from '../modules/backtest/application/seed-clone-batch-service.js';
-import type { FactRepository } from '../../runtime/modules/facts/application/ports.js';
-import type { CorporateActionCoverageStore } from '../../runtime/modules/facts/application/corporate-action-coverage.js';
-import type { FactCoverageStore } from '../../runtime/modules/facts/application/fact-coverage-store.js';
-import type { FactSyncService } from '../modules/facts/application/fact-sync-service.js';
-import { FinancialFactAvailabilityService } from '../../runtime/modules/facts/application/financial-fact-availability.js';
-import { createFredBenchmarkSource } from '../modules/market-data/infrastructure/fred/fred-benchmark-source.js';
-import type { SymbolMasterService } from '../../runtime/modules/market-data/application/symbol-master-service.js';
-import type { SymbolMasterBackfill } from '../modules/market-data/application/symbol-master-backfill.js';
-import type { SymbolMasterScheduler } from '../modules/market-data/application/symbol-master-scheduler.js';
-import { SelectionMetricRepository } from '../../runtime/modules/market-data/application/selection-metric-repository.js';
-import { UniverseRuleResolver } from '../../runtime/modules/backtest/application/universe-rule-resolver.js';
-import { BacktestPreparationOrchestrator } from '../../runtime/modules/backtest/application/backtest-preparation-orchestrator.js';
-import {
-  assertSafePinnedScheduleIdentities,
-} from '../../runtime/modules/backtest/application/backtest-symbol-identity.js';
+} from "../modules/backtest/application/seed-clone-batch-service.js";
+import type { FactRepository } from "../../runtime/modules/facts/application/ports.js";
+import type { CorporateActionCoverageStore } from "../../runtime/modules/facts/application/corporate-action-coverage.js";
+import type { FactCoverageStore } from "../../runtime/modules/facts/application/fact-coverage-store.js";
+import type { FactSyncService } from "../modules/facts/application/fact-sync-service.js";
+import { FinancialFactAvailabilityService } from "../../runtime/modules/facts/application/financial-fact-availability.js";
+import { createFredBenchmarkSource } from "../modules/market-data/infrastructure/fred/fred-benchmark-source.js";
+import type { SymbolMasterService } from "../../runtime/modules/market-data/application/symbol-master-service.js";
+import type { SymbolMasterBackfill } from "../modules/market-data/application/symbol-master-backfill.js";
+import type { SymbolMasterScheduler } from "../modules/market-data/application/symbol-master-scheduler.js";
+import { SelectionMetricRepository } from "../../runtime/modules/market-data/application/selection-metric-repository.js";
+import { UniverseRuleResolver } from "../../runtime/modules/backtest/application/universe-rule-resolver.js";
+import { BacktestPreparationOrchestrator } from "../../runtime/modules/backtest/application/backtest-preparation-orchestrator.js";
+import { assertSafePinnedScheduleIdentities } from "../../runtime/modules/backtest/application/backtest-symbol-identity.js";
 import {
   financialCoverageGapMessage,
   findFinancialCoverageGap,
-} from '../../runtime/modules/backtest/application/backtest-financial-coverage.js';
+} from "../../runtime/modules/backtest/application/backtest-financial-coverage.js";
 import {
   delistedEventsToTsMsBySymbol,
   financialFactCutoffsFromCoverage,
-} from '../../runtime/modules/backtest/application/backtest-financial-execution-window.js';
-import { findIncompleteFundamentalCheckpointsFromCoverageSync } from '../../runtime/modules/backtest/application/backtest-financial-data-readiness.js';
-import { BenchmarkService } from '../modules/market-data/application/benchmark-service.js';
-import { BacktestLeaseService } from '../modules/backtest/application/backtest-lease-service.js';
-import { RemoteResultUploadManager } from '../modules/backtest/infrastructure/remote-result-upload-manager.js';
-import { ForkedBacktestResultCompleter } from '../modules/backtest/infrastructure/forked-backtest-result-completer.js';
-import { kstDateOf } from '../../runtime/modules/market-data/domain/kst-date.js';
+} from "../../runtime/modules/backtest/application/backtest-financial-execution-window.js";
+import { findIncompleteFundamentalCheckpointsFromCoverageSync } from "../../runtime/modules/backtest/application/backtest-financial-data-readiness.js";
+import { BenchmarkService } from "../modules/market-data/application/benchmark-service.js";
+import { BacktestLeaseService } from "../modules/backtest/application/backtest-lease-service.js";
+import { RemoteResultUploadManager } from "../modules/backtest/infrastructure/remote-result-upload-manager.js";
+import { ForkedBacktestResultCompleter } from "../modules/backtest/infrastructure/forked-backtest-result-completer.js";
+import { kstDateOf } from "../../runtime/modules/market-data/domain/kst-date.js";
 
 export interface SystemStatusProviders {
   queueLength: () => number;
@@ -147,13 +157,13 @@ export interface Container {
 
 function readAppVersion(): string {
   try {
-    const packageJsonUrl = new URL('../../../package.json', import.meta.url);
-    const parsed = JSON.parse(fs.readFileSync(packageJsonUrl, 'utf8')) as {
+    const packageJsonUrl = new URL("../../../package.json", import.meta.url);
+    const parsed = JSON.parse(fs.readFileSync(packageJsonUrl, "utf8")) as {
       version?: string;
     };
-    return parsed.version ?? '0.0.0';
+    return parsed.version ?? "0.0.0";
   } catch {
-    return '0.0.0';
+    return "0.0.0";
   }
 }
 
@@ -169,7 +179,12 @@ export function createContainer(
   configureZodLocale();
   const logger = createLogger(config);
 
-  for (const dir of [config.dataRoot, config.importRoot, config.exportRoot, config.tempRoot]) {
+  for (const dir of [
+    config.dataRoot,
+    config.importRoot,
+    config.exportRoot,
+    config.tempRoot,
+  ]) {
     fs.mkdirSync(dir, { recursive: true });
   }
 
@@ -191,19 +206,25 @@ export function createContainer(
   };
   if (pruneOptions.auditLogRetentionMs > 0) {
     logger.info(
-      { module: 'maintenance', auditLogRetentionDays: config.auditLogRetentionDays },
-      'audit log retention active',
+      {
+        module: "maintenance",
+        auditLogRetentionDays: config.auditLogRetentionDays,
+      },
+      "audit log retention active",
     );
   }
-  const prune = (phase: 'boot' | 'periodic'): void => {
+  const prune = (phase: "boot" | "periodic"): void => {
     try {
       pruneExpiredRows(database.db, clock.now(), pruneOptions);
     } catch (error) {
-      logger.warn({ module: 'maintenance', phase, err: error }, 'prune failed — skipping cycle');
+      logger.warn(
+        { module: "maintenance", phase, err: error },
+        "prune failed — skipping cycle",
+      );
     }
   };
-  prune('boot');
-  const pruneTimer = setInterval(() => prune('periodic'), 6 * 3_600_000);
+  prune("boot");
+  const pruneTimer = setInterval(() => prune("periodic"), 6 * 3_600_000);
   pruneTimer.unref();
 
   const auditLog = createAuditLogService(database.db, clock, logger);
@@ -214,8 +235,8 @@ export function createContainer(
       notificationService.create(input);
     } catch (error) {
       logger.warn(
-        { module: 'notification', event: 'notify.failed', err: error },
-        'notification create failed',
+        { module: "notification", event: "notify.failed", err: error },
+        "notification create failed",
       );
     }
   };
@@ -225,19 +246,21 @@ export function createContainer(
     currentDateKst: kstDateOf,
     onQuotaExceeded: (event) => {
       safeNotify({
-        type: 'data-sync',
-        severity: 'error',
+        type: "data-sync",
+        severity: "error",
         title: `${event.api} API 호출 한도 초과`,
         body:
           `${event.message}\n` +
-          `${event.usageDateKst} (KST) 기록 호출 수: ${event.callsUsed.toLocaleString('ko-KR')}회`,
-        link: event.api === 'KRX' ? '/datasets/master' : null,
+          `${event.usageDateKst} (KST) 기록 호출 수: ${event.callsUsed.toLocaleString("ko-KR")}회`,
+        link: event.api === "KRX" ? "/datasets/master" : null,
       });
     },
   });
   const userRepository = createSqliteUserRepository(database.db, logger);
   const sessionRepository = createSqliteSessionRepository(database.db);
-  const loginAttemptRepository = createSqliteLoginAttemptRepository(database.db);
+  const loginAttemptRepository = createSqliteLoginAttemptRepository(
+    database.db,
+  );
 
   const authService = new AuthService({
     users: userRepository,
@@ -259,12 +282,28 @@ export function createContainer(
   // 종목 등록·이름·재무 버전 체인만 SymbolService 가 맡는다.
   // 봉 수집·CSV 가져오기·슬라이스 커버리지는 이 커밋(Task 5,
   // 2026-08-07-price-data-removal)이 걷어냈다. 그래서 이제 봉 저장소를 주입받지 않는다.
-  const collection = createAgentCollectionRuntime({ database, config, clock, logger, auditLog, externalApiUsage });
+  const collection = createAgentCollectionRuntime({
+    database,
+    config,
+    clock,
+    logger,
+    auditLog,
+    externalApiUsage,
+  });
   const {
-    symbolService, factRepository, factCoverageStore, actionCoverageStore, factSyncService,
-    krxSource, symbolMasterService, symbolMasterBackfill, symbolMasterScheduler,
+    symbolService,
+    factRepository,
+    factCoverageStore,
+    actionCoverageStore,
+    factSyncService,
+    krxSource,
+    symbolMasterService,
+    symbolMasterBackfill,
+    symbolMasterScheduler,
   } = collection;
-  const financialFactAvailabilityService = new FinancialFactAvailabilityService(database.db);
+  const financialFactAvailabilityService = new FinancialFactAvailabilityService(
+    database.db,
+  );
   // 증권사 선택은 조립부 전용 지식 (§2.4) — 애플리케이션은 StockInfoSource 만 안다.
   // 자격 증명 미설정이면 어댑터가 포트 에러를 던지는 비활성 소스가 된다.
   const stockInfoSource = createTossStockInfoSource(
@@ -279,10 +318,17 @@ export function createContainer(
   );
   // 로컬 폴백(symbolService)을 함께 넘긴다 — 증권사가 모르거나 조회에 실패한 코드도
   // 종목 마스터가 채워 둔 이름이 있으면 그걸로 보여준다 (자격 증명 미설정 환경도 포함).
-  const symbolInfoService = new SymbolInfoService(stockInfoSource, clock, logger, symbolService);
+  const symbolInfoService = new SymbolInfoService(
+    stockInfoSource,
+    clock,
+    logger,
+    symbolService,
+  );
 
   const fredSource = createFredBenchmarkSource(
-    config.fredApiKey ? { baseUrl: config.fredBaseUrl, apiKey: config.fredApiKey } : null,
+    config.fredApiKey
+      ? { baseUrl: config.fredBaseUrl, apiKey: config.fredApiKey }
+      : null,
     logger,
   );
 
@@ -309,16 +355,19 @@ export function createContainer(
 
   // 알림 리스너와 라우트가 같은 인스턴스를 봐야 한다 — 두 개를 만들면 등록 목록이 갈라진다
   const strategyRegistry = new StrategyRegistry();
-  const preparationNotificationListener = createPreparationNotificationListener({
-    database,
-    strategyName: (strategyId) => strategyRegistry.describe(strategyId)?.name ?? null,
-    notify: safeNotify,
-    logger,
-  });
+  const preparationNotificationListener = createPreparationNotificationListener(
+    {
+      database,
+      strategyName: (strategyId) =>
+        strategyRegistry.describe(strategyId)?.name ?? null,
+      notify: safeNotify,
+      logger,
+    },
+  );
   const backtestPreparationOrchestrator = new BacktestPreparationOrchestrator({
     references: new PreparationReferenceService(database),
     database,
-    agentManaged: !(options.inlinePreparation ?? config.nodeEnv === 'test'),
+    agentManaged: !(options.inlinePreparation ?? config.nodeEnv === "test"),
     resolver: universeRuleResolver,
     factSync: factSyncService,
     facts: factRepository,
@@ -336,10 +385,15 @@ export function createContainer(
     onJobUpdated: () => agentCoordinator.wake(),
   });
   const resultsService = new ResultsService(database.db);
-  const backtestWizardDraftService = new BacktestWizardDraftService(database, clock);
+  const backtestWizardDraftService = new BacktestWizardDraftService(
+    database,
+    clock,
+  );
 
   const jobQueue = new JobQueue(database, clock);
-  const backtestResultCompleter = new ForkedBacktestResultCompleter(config.databasePath);
+  const backtestResultCompleter = new ForkedBacktestResultCompleter(
+    config.databasePath,
+  );
   const backtestLeaseService = new BacktestLeaseService(
     jobQueue,
     readRuntimeVersions().executionVersion,
@@ -350,17 +404,38 @@ export function createContainer(
   );
   const jobOrchestrator = new JobOrchestrator(jobQueue, auditLog);
   const registry = new AgentRegistry(database);
-  const snapshots = new DatasetSnapshots(database, path.join(path.dirname(config.databasePath), 'datasets'));
+  const snapshots = new DatasetSnapshots(
+    database,
+    path.join(path.dirname(config.databasePath), "datasets"),
+  );
   const preparations = new AgentPreparationQueue(database, (jobId) => {
     backtestPreparationOrchestrator.agentJobUpdated(jobId);
     agentCoordinator.wake();
   });
-  const dataQueue = new AgentDataQueue(database, snapshots, collection.collect, (kind, jobId, error) => {
-    if (kind === 'PREPARATION') preparations.resume(jobId, error);
-  }, logger);
-  const agentCoordinator = new AgentCoordinator(database, registry, snapshots, preparations, dataQueue,
-    backtestLeaseService, jobQueue, readRuntimeVersions().agentVersion, logger, readRuntimeVersions().executionVersion);
-  const remoteResultUploadManager = new RemoteResultUploadManager(config.tempRoot);
+  const dataQueue = new AgentDataQueue(
+    database,
+    snapshots,
+    collection.collect,
+    (kind, jobId, error) => {
+      if (kind === "PREPARATION") preparations.resume(jobId, error);
+    },
+    logger,
+  );
+  const agentCoordinator = new AgentCoordinator(
+    database,
+    registry,
+    snapshots,
+    preparations,
+    dataQueue,
+    backtestLeaseService,
+    jobQueue,
+    readRuntimeVersions().agentVersion,
+    logger,
+    readRuntimeVersions().executionVersion,
+  );
+  const remoteResultUploadManager = new RemoteResultUploadManager(
+    config.tempRoot,
+  );
   const seedCloneBatchService = new SeedCloneBatchService(
     database,
     jobQueue,
@@ -370,23 +445,33 @@ export function createContainer(
       assertSafePinnedScheduleIdentities(schedule, {
         symbolMaster: symbolMasterService,
       });
-      if (!symbolMasterService.isRangeCovered(request.period.from, request.period.to)) {
+      if (
+        !symbolMasterService.isRangeCovered(
+          request.period.from,
+          request.period.to,
+        )
+      ) {
         throw new Error(
-          '종목 마스터가 백테스트 기간 전체를 커버하지 않습니다 — '
-            + '기간 전체 KRX 데이터를 동기화한 뒤 난수 시드 실험을 다시 시작하세요.',
+          "종목 마스터가 백테스트 기간 전체를 커버하지 않습니다 — " +
+            "기간 전체 KRX 데이터를 동기화한 뒤 난수 시드 실험을 다시 시작하세요.",
         );
       }
-      const symbols = [...new Set(schedule.flatMap((entry) => entry.symbols))].sort();
+      const symbols = [
+        ...new Set(schedule.flatMap((entry) => entry.symbols)),
+      ].sort();
       const { fromTsMs, toTsMs } = periodToTsRange(request.period);
-      const periodCoverage = candleCoverageService
-        .getCoverageBetween(symbols, fromTsMs, toTsMs);
+      const periodCoverage = candleCoverageService.getCoverageBetween(
+        symbols,
+        fromTsMs,
+        toTsMs,
+      );
       const missingSymbols = periodCoverage
         .filter((row) => row.barCount === 0)
         .map((row) => row.code);
       if (missingSymbols.length > 0) {
         throw new Error(
-          `선택한 기간에 일봉이 없는 유니버스 종목이 있습니다: ${missingSymbols.join(', ')} — `
-            + '일봉을 동기화한 뒤 난수 시드 실험을 다시 시작하세요.',
+          `선택한 기간에 일봉이 없는 유니버스 종목이 있습니다: ${missingSymbols.join(", ")} — ` +
+            "일봉을 동기화한 뒤 난수 시드 실험을 다시 시작하세요.",
         );
       }
       const strategy = strategyRegistry.get(request.strategyId);
@@ -407,82 +492,111 @@ export function createContainer(
         period: request.period,
         schedule,
         delistedTsMsBySymbol: delistedEventsToTsMsBySymbol(
-          symbolMasterService.delistedEventsBetween(request.period.from, request.period.to),
+          symbolMasterService.delistedEventsBetween(
+            request.period.from,
+            request.period.to,
+          ),
         ),
         candles: candleCoverageService,
       });
-      const missingCutoffs = symbols.filter((symbol) => !financialCutoffs.has(symbol));
+      const missingCutoffs = symbols.filter(
+        (symbol) => !financialCutoffs.has(symbol),
+      );
       if (missingCutoffs.length > 0) {
         throw new Error(
-          `실제 편입 기간·상장폐지 이전에 실행 가능한 일봉이 없는 종목이 있습니다: ${missingCutoffs.join(', ')} — `
-          + '일봉과 유니버스 데이터를 다시 준비한 뒤 난수 시드 실험을 다시 시작하세요.',
+          `실제 편입 기간·상장폐지 이전에 실행 가능한 일봉이 없는 종목이 있습니다: ${missingCutoffs.join(", ")} — ` +
+            "일봉과 유니버스 데이터를 다시 준비한 뒤 난수 시드 실험을 다시 시작하세요.",
         );
       }
-      const incomplete = strategy.dataRequirements?.fundamentalsReady === undefined
-        ? (() => {
-            const symbolsWithFacts = financialFactAvailabilityService
-              .symbolsWithFinancialFacts(financialCutoffs);
-            return symbols.filter((symbol) => !symbolsWithFacts.has(symbol));
-          })()
-        : findIncompleteFundamentalCheckpointsFromCoverageSync({
-            strategy,
-            parameters: request.parameters,
-            readFacts: (query) => database.db.select().from(factsTable)
-              .where(and(
-                eq(factsTable.scope, 'SYMBOL'),
-                inArray(factsTable.key, [...query.keys!]),
-                lte(factsTable.asOfTsMs, query.asOfMaxTsMs!),
-              )).all() as Fact[],
-            schedule,
-            candles: candleCoverageService,
-            period: request.period,
-          }).map((checkpoint) => checkpoint.symbol);
+      const incomplete =
+        strategy.dataRequirements?.fundamentalsReady === undefined
+          ? (() => {
+              const symbolsWithFacts =
+                financialFactAvailabilityService.symbolsWithFinancialFacts(
+                  financialCutoffs,
+                );
+              return symbols.filter((symbol) => !symbolsWithFacts.has(symbol));
+            })()
+          : findIncompleteFundamentalCheckpointsFromCoverageSync({
+              strategy,
+              parameters: request.parameters,
+              readFacts: (query) =>
+                database.db
+                  .select()
+                  .from(factsTable)
+                  .where(
+                    and(
+                      eq(factsTable.scope, "SYMBOL"),
+                      inArray(factsTable.key, [...query.keys!]),
+                      lte(factsTable.asOfTsMs, query.asOfMaxTsMs!),
+                    ),
+                  )
+                  .all() as Fact[],
+              schedule,
+              candles: candleCoverageService,
+              period: request.period,
+            }).map((checkpoint) => checkpoint.symbol);
       if (incomplete.length > 0) {
         throw new Error(
-          '준비 완료 후 전략이 요구하는 PIT 재무 입력이 사라진 종목이 있습니다: '
-            + `${incomplete.join(', ')} — 고정된 난수 시드 실험 유니버스를 재순위할 수 없으므로 `
-            + '새 미리보기를 준비한 뒤 실험을 다시 시작하세요.',
+          "준비 완료 후 전략이 요구하는 PIT 재무 입력이 사라진 종목이 있습니다: " +
+            `${incomplete.join(", ")} — 고정된 난수 시드 실험 유니버스를 재순위할 수 없으므로 ` +
+            "새 미리보기를 준비한 뒤 실험을 다시 시작하세요.",
         );
       }
     },
   );
   const backtestNotificationListener = createBacktestNotificationListener({
-    queue: { getJob: (jobId) => database.sqlite.prepare(
-      'SELECT 1 FROM backtest_validation_trials WHERE job_id = ?',
-    ).get(jobId) ? null : jobQueue.getJob(jobId) },
-    strategyName: (strategyId) => strategyRegistry.describe(strategyId)?.name ?? null,
+    queue: {
+      getJob: (jobId) =>
+        database.sqlite
+          .prepare("SELECT 1 FROM backtest_validation_trials WHERE job_id = ?")
+          .get(jobId)
+          ? null
+          : jobQueue.getJob(jobId),
+    },
+    strategyName: (strategyId) =>
+      strategyRegistry.describe(strategyId)?.name ?? null,
     totalReturnPct: (jobId) => resultsService.getTotalReturnPct(jobId),
     notify: safeNotify,
     logger,
   });
-  const rawSeedBatchJobListener = createSeedCloneBatchJobListener(seedCloneBatchService);
+  const rawSeedBatchJobListener = createSeedCloneBatchJobListener(
+    seedCloneBatchService,
+  );
   const seedBatchJobListener = (event: JobEvent): void => {
     try {
       rawSeedBatchJobListener(event);
     } catch (error) {
       logger.warn(
-        { module: 'backtest', event: 'backtest.seed-batch-listener-failed', jobId: event.jobId, err: error },
-        'seed batch job listener failed',
+        {
+          module: "backtest",
+          event: "backtest.seed-batch-listener-failed",
+          jobId: event.jobId,
+          err: error,
+        },
+        "seed batch job listener failed",
       );
     }
   };
   for (const source of [jobOrchestrator.events, backtestLeaseService.events]) {
-    source.on('job', backtestNotificationListener);
-    source.on('job', seedBatchJobListener);
+    source.on("job", backtestNotificationListener);
+    source.on("job", seedBatchJobListener);
   }
   seedCloneBatchService.events.on(
-    'batch',
+    "batch",
     createSeedCloneBatchNotificationListener({
       getBatch: (batchId) => seedCloneBatchService.get(batchId),
-      strategyName: (strategyId) => strategyRegistry.describe(strategyId)?.name ?? null,
+      strategyName: (strategyId) =>
+        strategyRegistry.describe(strategyId)?.name ?? null,
       notify: safeNotify,
       logger,
     }),
   );
 
   const systemStatus: SystemStatusProviders = {
-    queueLength: () => jobQueue.countByStatus(['QUEUED']),
-    runningJobs: () => jobQueue.countByStatus(['STARTING', 'RUNNING', 'CANCELLING']),
+    queueLength: () => jobQueue.countByStatus(["QUEUED"]),
+    runningJobs: () =>
+      jobQueue.countByStatus(["STARTING", "RUNNING", "CANCELLING"]),
   };
 
   let closing: Promise<void> | null = null;

@@ -1,4 +1,4 @@
-import type { Rng } from '../../../backtest/domain/seeded-rng.js';
+import type { Rng } from "../../../backtest/domain/seeded-rng.js";
 
 /**
  * 역상관 종목 그룹핑 — "같은 기초자산의 레버리지·인버스" 를 상품 메타데이터 없이
@@ -56,7 +56,10 @@ export function buildCorrelationGroups(
 ): Map<string, string> {
   const symbols = [...closesBySymbol.keys()].sort();
   const returns = new Map(
-    symbols.map((symbol) => [symbol, logReturns(closesBySymbol.get(symbol) ?? [])]),
+    symbols.map((symbol) => [
+      symbol,
+      logReturns(closesBySymbol.get(symbol) ?? []),
+    ]),
   );
 
   return buildGroups(symbols, (left, right) => {
@@ -74,7 +77,9 @@ function buildGroups(
 ): Map<string, string> {
   const sorted = [...symbols].sort();
 
-  const parent = new Map<string, string>(sorted.map((symbol) => [symbol, symbol]));
+  const parent = new Map<string, string>(
+    sorted.map((symbol) => [symbol, symbol]),
+  );
   const find = (symbol: string): string => {
     let root = symbol;
     while (parent.get(root) !== root) root = parent.get(root) as string;
@@ -116,9 +121,9 @@ export function selectSeededGroupEntries<T extends GroupEntryCandidate>(
   rng: Rng,
 ): T[] {
   const byGroup = new Map<string, T[]>();
-  for (const candidate of [...candidates].sort((left, right) => (
-    left.symbol < right.symbol ? -1 : left.symbol > right.symbol ? 1 : 0
-  ))) {
+  for (const candidate of [...candidates].sort((left, right) =>
+    left.symbol < right.symbol ? -1 : left.symbol > right.symbol ? 1 : 0,
+  )) {
     const group = byGroup.get(candidate.group) ?? [];
     group.push(candidate);
     byGroup.set(candidate.group, group);
@@ -254,10 +259,15 @@ function pairHasEnoughCommonTimestamps(
   correlationBars: number,
 ): boolean {
   if (correlationBars <= 0) return true;
-  if (left === undefined || right === undefined || Math.min(left.size, right.size) < correlationBars) {
+  if (
+    left === undefined ||
+    right === undefined ||
+    Math.min(left.size, right.size) < correlationBars
+  ) {
     return false;
   }
-  const [smaller, larger] = left.size <= right.size ? [left, right] : [right, left];
+  const [smaller, larger] =
+    left.size <= right.size ? [left, right] : [right, left];
   let commonCount = 0;
   for (const tsMs of smaller.keys()) {
     if (!larger.has(tsMs)) continue;
@@ -276,13 +286,20 @@ function unmeasurablePairs(
   for (let leftIndex = 0; leftIndex < symbols.length; leftIndex += 1) {
     const leftSymbol = symbols[leftIndex] as string;
     const left = warmup.closesBySymbol.get(leftSymbol);
-    for (let rightIndex = leftIndex + 1; rightIndex < symbols.length; rightIndex += 1) {
+    for (
+      let rightIndex = leftIndex + 1;
+      rightIndex < symbols.length;
+      rightIndex += 1
+    ) {
       const rightSymbol = symbols[rightIndex] as string;
-      if (pairHasEnoughCommonTimestamps(
-        left,
-        warmup.closesBySymbol.get(rightSymbol),
-        correlationBars,
-      )) continue;
+      if (
+        pairHasEnoughCommonTimestamps(
+          left,
+          warmup.closesBySymbol.get(rightSymbol),
+          correlationBars,
+        )
+      )
+        continue;
       let partners = pairs.get(leftSymbol);
       if (!partners) {
         partners = new Set();
@@ -302,11 +319,14 @@ function hasNewlyMeasurablePair(
   for (const [leftSymbol, rightSymbols] of pairs) {
     const left = warmup.closesBySymbol.get(leftSymbol);
     for (const rightSymbol of rightSymbols) {
-      if (pairHasEnoughCommonTimestamps(
-        left,
-        warmup.closesBySymbol.get(rightSymbol),
-        correlationBars,
-      )) return true;
+      if (
+        pairHasEnoughCommonTimestamps(
+          left,
+          warmup.closesBySymbol.get(rightSymbol),
+          correlationBars,
+        )
+      )
+        return true;
     }
   }
   return false;
@@ -326,7 +346,8 @@ export function tryBuildGroups(
 ): Map<string, string> | null {
   if (symbols.length === 0) return new Map();
   const ready = symbols.some(
-    (symbol) => (warmup.closesBySymbol.get(symbol)?.size ?? 0) >= correlationBars,
+    (symbol) =>
+      (warmup.closesBySymbol.get(symbol)?.size ?? 0) >= correlationBars,
   );
   if (!ready) return null;
 
@@ -364,31 +385,46 @@ export function updateCorrelationGrouping(
   input: UpdateCorrelationGroupingInput,
 ): readonly string[] {
   const membership = input.activeUniverseSymbols;
-  const symbols = membership === null
-    ? input.allSymbols
-    : input.allSymbols.filter((symbol) => membership.has(symbol));
+  const symbols =
+    membership === null
+      ? input.allSymbols
+      : input.allSymbols.filter((symbol) => membership.has(symbol));
   const membershipChanged = !sameSymbols(symbols, input.state.groupedSymbols);
   input.state.groupedSymbols = symbols;
 
   const warmup = input.state.warmup;
   const readyCount = symbols.filter(
-    (symbol) => (warmup.closesBySymbol.get(symbol)?.size ?? 0) >= input.correlationBars,
+    (symbol) =>
+      (warmup.closesBySymbol.get(symbol)?.size ?? 0) >= input.correlationBars,
   ).length;
   if (
     input.state.groupOf !== null &&
     !membershipChanged &&
     !input.isRebalanceBar &&
     readyCount <= input.state.groupReadyCount &&
-    !hasNewlyMeasurablePair(warmup, input.state.unmeasurablePairs, input.correlationBars)
+    !hasNewlyMeasurablePair(
+      warmup,
+      input.state.unmeasurablePairs,
+      input.correlationBars,
+    )
   ) {
     return symbols;
   }
 
-  const groupOf = tryBuildGroups(warmup, symbols, input.correlationBars, input.threshold);
+  const groupOf = tryBuildGroups(
+    warmup,
+    symbols,
+    input.correlationBars,
+    input.threshold,
+  );
   if (groupOf !== null) {
     input.state.groupOf = groupOf;
     input.state.groupReadyCount = readyCount;
-    input.state.unmeasurablePairs = unmeasurablePairs(warmup, symbols, input.correlationBars);
+    input.state.unmeasurablePairs = unmeasurablePairs(
+      warmup,
+      symbols,
+      input.correlationBars,
+    );
   } else if (membershipChanged) {
     input.state.groupOf = null;
     input.state.groupReadyCount = readyCount;
@@ -410,11 +446,17 @@ export function correlationWarmupWarnings(
     ),
   );
   return [
-    `${strategyName}: 상관 그룹 워밍업 부족 (필요 ${correlationBars}봉, `
-      + `확보 최대 ${maxBars}봉). 워밍업 중에는 신규 진입을 평가하지 않습니다.`,
+    `${strategyName}: 상관 그룹 워밍업 부족 (필요 ${correlationBars}봉, ` +
+      `확보 최대 ${maxBars}봉). 워밍업 중에는 신규 진입을 평가하지 않습니다.`,
   ];
 }
 
-function sameSymbols(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((symbol, index) => symbol === right[index]);
+function sameSymbols(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((symbol, index) => symbol === right[index])
+  );
 }

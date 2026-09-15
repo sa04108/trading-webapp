@@ -1,30 +1,33 @@
-import { z } from 'zod';
+import { z } from "zod";
 import type {
   StrategyBarContext,
   StrategyDecision,
   StrategyInitializeContext,
   TradingStrategy,
-} from '../domain/strategy.js';
+} from "../domain/strategy.js";
 import {
   isFreshQuarter,
   rankLowPerHighRoe,
   safePositiveMarketCap,
   type LowPerHighRoeCandidate,
-} from './shared/fundamental-rank.js';
-import { planBuyPhase, planSellPhase } from './shared/two-phase-rebalance.js';
+} from "./shared/fundamental-rank.js";
+import { planBuyPhase, planSellPhase } from "./shared/two-phase-rebalance.js";
 
 export const lowPerHighRoeRankParameters = z.object({
   topN: z.number().int().min(1).max(200).default(40).meta({
-    title: '보유 종목 수',
-    description: 'PER과 ROE 순위 합이 작은 상위 몇 종목을 동일가중으로 보유할지 정합니다.',
+    title: "보유 종목 수",
+    description:
+      "PER과 ROE 순위 합이 작은 상위 몇 종목을 동일가중으로 보유할지 정합니다.",
   }),
   staleQuarters: z.number().int().min(1).max(8).default(2).meta({
-    title: '허용 공시 지연 (분기)',
-    description: '순이익과 자본총계 공시가 뒤처져도 허용할 최대 분기 수입니다.',
+    title: "허용 공시 지연 (분기)",
+    description: "순이익과 자본총계 공시가 뒤처져도 허용할 최대 분기 수입니다.",
   }),
 });
 
-export type LowPerHighRoeRankParameters = z.infer<typeof lowPerHighRoeRankParameters>;
+export type LowPerHighRoeRankParameters = z.infer<
+  typeof lowPerHighRoeRankParameters
+>;
 
 export interface LowPerHighRoeRankState {
   readonly symbols: readonly string[];
@@ -35,29 +38,29 @@ export const lowPerHighRoeRankStrategy: TradingStrategy<
   LowPerHighRoeRankParameters,
   LowPerHighRoeRankState
 > = {
-  id: 'low-per-high-roe-rank',
-  version: '1.4.0',
-  name: '저PER·고ROE 순위',
+  id: "low-per-high-roe-rank",
+  version: "1.4.0",
+  name: "저PER·고ROE 순위",
   requiresFundamentals: true,
-  description: 'PIT TTM 순이익 기준 저PER과 고ROE를 결합하는 동일가중 연구 전략',
+  description:
+    "PIT TTM 순이익 기준 저PER과 고ROE를 결합하는 동일가중 연구 전략",
   parameterSchema: lowPerHighRoeRankParameters,
   requiredRebalanceGapBars: 1,
   dataRequirements: {
     fundamentalLookbackQuarters: 4,
-    fundamentalsReady: (snapshot, tsMs, parameters) => (
-      snapshot.ttm('NET_INCOME') !== null
-      && snapshot.get('TOTAL_EQUITY') !== null
-      && isFreshQuarter(
-        snapshot.periodKeyOf('NET_INCOME'),
+    fundamentalsReady: (snapshot, tsMs, parameters) =>
+      snapshot.ttm("NET_INCOME") !== null &&
+      snapshot.get("TOTAL_EQUITY") !== null &&
+      isFreshQuarter(
+        snapshot.periodKeyOf("NET_INCOME"),
         tsMs,
         parameters.staleQuarters,
-      )
-      && isFreshQuarter(
-        snapshot.periodKeyOf('TOTAL_EQUITY'),
+      ) &&
+      isFreshQuarter(
+        snapshot.periodKeyOf("TOTAL_EQUITY"),
         tsMs,
         parameters.staleQuarters,
-      )
-    ),
+      ),
     requiresCorporateActions: true,
   },
 
@@ -87,37 +90,50 @@ export const lowPerHighRoeRankStrategy: TradingStrategy<
     // 진행하면 후보 0 → 목표 0 → 전량 청산이 매 리밸런스 반복되므로 보유를 유지한다.
     // 생산 schedule은 activeUniverseSymbols가 있으므로 아래 완전성 검사로 보낸다.
     if (
-      context.activeUniverseSymbols === null
-      && state.symbols.every((symbol) => context.selectionMetric(symbol) === null)
+      context.activeUniverseSymbols === null &&
+      state.symbols.every((symbol) => context.selectionMetric(symbol) === null)
     ) {
       return { orders: [] };
     }
 
     const candidates: LowPerHighRoeCandidate[] = [];
     for (const symbol of state.symbols) {
-      if (context.tradableSymbols !== null && !context.tradableSymbols.has(symbol)) continue;
+      if (
+        context.tradableSymbols !== null &&
+        !context.tradableSymbols.has(symbol)
+      )
+        continue;
       const metric = context.selectionMetric(symbol);
       const marketCapKrw = metric?.marketCapKrw ?? undefined;
       if (
-        context.activeUniverseSymbols !== null
-        && (marketCapKrw === undefined || safePositiveMarketCap(marketCapKrw) === null)
+        context.activeUniverseSymbols !== null &&
+        (marketCapKrw === undefined ||
+          safePositiveMarketCap(marketCapKrw) === null)
       ) {
         throw new Error(
-          `저PER·고ROE 랭킹에 필요한 유효한 KRX 시가총액이 없습니다: ${symbol}. `
-            + '해당 리밸런스 날짜의 선정 지표를 다시 준비하세요.',
+          `저PER·고ROE 랭킹에 필요한 유효한 KRX 시가총액이 없습니다: ${symbol}. ` +
+            "해당 리밸런스 날짜의 선정 지표를 다시 준비하세요.",
         );
       }
       if (marketCapKrw === undefined) continue;
       const snapshot = context.fundamentals(symbol);
       if (!snapshot) continue;
       if (
-        !isFreshQuarter(snapshot.periodKeyOf('NET_INCOME'), context.tsMs, parameters.staleQuarters)
-        || !isFreshQuarter(snapshot.periodKeyOf('TOTAL_EQUITY'), context.tsMs, parameters.staleQuarters)
+        !isFreshQuarter(
+          snapshot.periodKeyOf("NET_INCOME"),
+          context.tsMs,
+          parameters.staleQuarters,
+        ) ||
+        !isFreshQuarter(
+          snapshot.periodKeyOf("TOTAL_EQUITY"),
+          context.tsMs,
+          parameters.staleQuarters,
+        )
       ) {
         continue;
       }
-      const netIncomeTtm = snapshot.ttm('NET_INCOME');
-      const totalEquity = snapshot.get('TOTAL_EQUITY');
+      const netIncomeTtm = snapshot.ttm("NET_INCOME");
+      const totalEquity = snapshot.get("TOTAL_EQUITY");
       if (netIncomeTtm === null || totalEquity === null) continue;
       candidates.push({ symbol, marketCapKrw, netIncomeTtm, totalEquity });
     }

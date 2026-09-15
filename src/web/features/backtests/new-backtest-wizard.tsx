@@ -1,53 +1,71 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useLocation,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select';
-import { Separator } from '@/components/ui/separator';
-import { Skeleton } from '@/components/ui/skeleton';
-import { api, ApiError, postJson } from '@/lib/api-client';
-import { cn } from '@/lib/utils';
-import { formatKrw, timeframeLabel } from '@/lib/format';
-import { wizardTimeframes } from '@/features/datasets/dataset-slices';
-import { costProfileLabel, slippageProfileLabel } from './profile-labels';
-import { useStockNames } from '@/lib/use-stock-names';
-import { isCloneStrategySchemaPending, requestToFormState } from './prefill';
-import { ParamHint } from './param-hint';
-import { extractNumberParams, paramLabel, type NumberParamSpec } from './param-specs';
-import { StrategyDataBadge } from './strategy-data-badge';
-import { useStrategies } from './api';
-import { STRATEGY_DATA_DETAILS, strategyDataRequirement } from './strategy-data-requirement';
-import { SymbolLabel } from '@/components/symbol-label';
-import { formatUniverseRuleSummary } from './universe-summary';
+} from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
+import { api, ApiError, postJson } from "@/lib/api-client";
+import { cn } from "@/lib/utils";
+import { formatKrw, timeframeLabel } from "@/lib/format";
+import { wizardTimeframes } from "@/features/datasets/dataset-slices";
+import { costProfileLabel, slippageProfileLabel } from "./profile-labels";
+import { useStockNames } from "@/lib/use-stock-names";
+import { isCloneStrategySchemaPending, requestToFormState } from "./prefill";
+import { ParamHint } from "./param-hint";
+import {
+  extractNumberParams,
+  paramLabel,
+  type NumberParamSpec,
+} from "./param-specs";
+import { StrategyDataBadge } from "./strategy-data-badge";
+import { useStrategies } from "./api";
+import {
+  STRATEGY_DATA_DETAILS,
+  strategyDataRequirement,
+} from "./strategy-data-requirement";
+import { SymbolLabel } from "@/components/symbol-label";
+import { formatUniverseRuleSummary } from "./universe-summary";
 import {
   clampSymbolName,
   formatSymbolLabel,
   SYMBOL_SUMMARY_LIMIT,
-} from './symbol-summary';
+} from "./symbol-summary";
 import {
   sameUniverseParams,
   UniverseRuleStep,
   type PreviewParams,
   type UniversePreviewResponseDto,
-} from './universe-rule-step';
-import type { UniverseRule } from '../../../shared/schemas/universe-rule.js';
-import { MAX_RANDOM_SEED } from '../../../shared/schemas/backtest-request.js';
+} from "./universe-rule-step";
+import type { UniverseRule } from "../../../shared/schemas/universe-rule.js";
+import { MAX_RANDOM_SEED } from "../../../shared/schemas/backtest-request.js";
 import {
   BENCHMARK_IDS,
   BENCHMARK_NAMES,
   type BenchmarkId,
-} from '../../../shared/schemas/benchmark.js';
-import type { BacktestRequestBody } from './types';
+} from "../../../shared/schemas/benchmark.js";
+import type { BacktestRequestBody } from "./types";
 import {
   navigableStepLimit,
   reachableStepFromUrl,
@@ -59,12 +77,12 @@ import {
   stepSlug,
   WIZARD_STEPS,
   type StepGateState,
-} from './wizard-steps';
+} from "./wizard-steps";
 import {
   loadBacktestWizardDraft,
   saveBacktestWizardDraftStep,
   waitForPendingDraftSaves,
-} from './wizard-draft-api';
+} from "./wizard-draft-api";
 
 interface CommissionProfileSummary {
   id: string;
@@ -84,7 +102,7 @@ interface SlippageProfileSummary {
 
 interface BenchmarkBackfillStatus {
   benchmarkId: BenchmarkId | null;
-  state: 'IDLE' | 'RUNNING' | 'FAILED';
+  state: "IDLE" | "RUNNING" | "FAILED";
   cursorDate: string | null;
   from: string | null;
   to: string | null;
@@ -99,19 +117,19 @@ interface BenchmarkCoverageResponse {
 // 마크업 테스트(universe-stage-editor-markup.test.tsx)도 이 두 값을 그대로 임포트해
 // "신규 진입 기본값" 계약을 고정한다 — 위저드 밖에서 다시 선언하면 두 곳이 어긋날 수 있다.
 export const DEFAULT_UNIVERSE_RULE: UniverseRule = {
-  markets: ['KOSPI'],
-  stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 200 }],
-  rebalanceInterval: { value: 1, unit: 'MONTH' },
+  markets: ["KOSPI"],
+  stages: [{ criterion: "MARKET_CAP", direction: "HIGH", limit: 200 }],
+  rebalanceInterval: { value: 1, unit: "MONTH" },
 };
 
 // 스키마 기본값(risk.maxPositions default 40, max 200 — backtest-request.ts)과 같은 값이다.
-export const DEFAULT_MAX_POSITIONS = '40';
+export const DEFAULT_MAX_POSITIONS = "40";
 
 export function shouldRejectSourceReuse(
   reuseSource: boolean,
-  preparationErrorCode: 'PREPARATION_REQUIRED' | 'PREVIEW_REQUIRED',
+  preparationErrorCode: "PREPARATION_REQUIRED" | "PREVIEW_REQUIRED",
 ): boolean {
-  return reuseSource || preparationErrorCode === 'PREVIEW_REQUIRED';
+  return reuseSource || preparationErrorCode === "PREVIEW_REQUIRED";
 }
 
 /**
@@ -128,9 +146,9 @@ function parseStrategyParameters(
 ): Record<string, number> | string {
   const parsed: Record<string, number> = {};
   for (const spec of paramSpecs) {
-    const raw = parameters[spec.key] ?? '';
+    const raw = parameters[spec.key] ?? "";
     const label = paramLabel(spec);
-    if (raw === '') {
+    if (raw === "") {
       if (spec.optional) continue;
       return `${label} 을(를) 입력하세요`;
     }
@@ -169,8 +187,10 @@ export function NewBacktestWizard() {
    * 않는다. 시장·단계(최대 5개)·리밸런스 주기만 고르면 실제 종목 구성은 제출 시점에
    * 서버가 리밸런스 날짜별로 재구성한다 (`UniverseRuleResolver`).
    */
-  const [universeRule, setUniverseRule] = useState<UniverseRule>(DEFAULT_UNIVERSE_RULE);
-  const [benchmarkId, setBenchmarkId] = useState<BenchmarkId>('KOSPI');
+  const [universeRule, setUniverseRule] = useState<UniverseRule>(
+    DEFAULT_UNIVERSE_RULE,
+  );
+  const [benchmarkId, setBenchmarkId] = useState<BenchmarkId>("KOSPI");
   /**
    * `UniverseRuleStep` 이 마지막으로 성공시킨 미리보기 원재료(그때 쓴 params·결과) —
    * **판정 결과가 아니라 원재료만** 저장한다(리뷰 fix). `universePreviewOk`·
@@ -183,23 +203,25 @@ export function NewBacktestWizard() {
     params: PreviewParams;
     result: UniversePreviewResponseDto;
   } | null>(null);
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
-  const [initialCash, setInitialCash] = useState('10000000');
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [initialCash, setInitialCash] = useState("10000000");
   // 스키마 기본값 40 (backtest-request.ts risk.maxPositions default) — 등록된 전략들의
   // topN 기본값(없음/10/20/최대 200)이 모두 이 값만으로 제출 게이트(topN > maxPositions
   // 422)를 통과한다.
   const [maxPositions, setMaxPositions] = useState(DEFAULT_MAX_POSITIONS);
-  const [commissionProfileId, setCommissionProfileId] = useState('kr-equity-default');
-  const [slippageProfileId, setSlippageProfileId] = useState('fixed-5bps');
-  const [randomSeed, setRandomSeed] = useState('42');
+  const [commissionProfileId, setCommissionProfileId] =
+    useState("kr-equity-default");
+  const [slippageProfileId, setSlippageProfileId] = useState("fixed-5bps");
+  const [randomSeed, setRandomSeed] = useState("42");
   const [stepError, setStepError] = useState<string | null>(null);
   // `다음`을 눌러 부족함을 확인한 현재 벤치마크/기간만 동기화 대상으로 표시한다.
   // 입력 변경 시 두 상태를 함께 비워 이전 판정이 새 입력의 버튼·단계 잠금을 바꾸지 않는다.
-  const [benchmarkSyncRequiredFor, setBenchmarkSyncRequiredFor] = useState<string | null>(null);
-  const [benchmarkCoverageVerifiedFor, setBenchmarkCoverageVerifiedFor] = useState<string | null>(
-    null,
-  );
+  const [benchmarkSyncRequiredFor, setBenchmarkSyncRequiredFor] = useState<
+    string | null
+  >(null);
+  const [benchmarkCoverageVerifiedFor, setBenchmarkCoverageVerifiedFor] =
+    useState<string | null>(null);
   const benchmarkCheckId = useRef(0);
   /**
    * 제출이 409 PREPARATION_REQUIRED 로 거절되면(Task 10, 브리프 5번) 이 값을 올려
@@ -213,41 +235,48 @@ export function NewBacktestWizard() {
 
   const strategies = useStrategies();
   const schema = useQuery({
-    queryKey: ['strategies', strategyId, 'schema'],
-    queryFn: () => api<{ schema: Record<string, unknown> }>(`/strategies/${strategyId}/schema`),
+    queryKey: ["strategies", strategyId, "schema"],
+    queryFn: () =>
+      api<{ schema: Record<string, unknown> }>(
+        `/strategies/${strategyId}/schema`,
+      ),
     enabled: strategyId !== null,
   });
 
   const [searchParams] = useSearchParams();
-  const sourceJobId = searchParams.get('from');
+  const sourceJobId = searchParams.get("from");
 
-  const wizardDraftContextKey = sourceJobId ?? '__new__';
+  const wizardDraftContextKey = sourceJobId ?? "__new__";
   const wizardDraft = useQuery({
-    queryKey: ['backtests', 'wizard-draft', sourceJobId],
+    queryKey: ["backtests", "wizard-draft", sourceJobId],
     queryFn: () => loadBacktestWizardDraft(sourceJobId),
   });
-  const hasStoredWizardDraft = wizardDraft.data !== undefined
-    && Object.keys(wizardDraft.data).length > 0;
-  const [restoredWizardDraftContext, setRestoredWizardDraftContext] = useState<string | null>(null);
+  const hasStoredWizardDraft =
+    wizardDraft.data !== undefined && Object.keys(wizardDraft.data).length > 0;
+  const [restoredWizardDraftContext, setRestoredWizardDraftContext] = useState<
+    string | null
+  >(null);
   const [draftSaveError, setDraftSaveError] = useState<string | null>(null);
 
   const draft = useQuery({
-    queryKey: ['backtests', sourceJobId, 'clone-draft'],
+    queryKey: ["backtests", sourceJobId, "clone-draft"],
     queryFn: () =>
       api<{
         request: BacktestRequestBody;
         warnings: string[];
         blockers: string[];
         reusablePreview: UniversePreviewResponseDto | null;
-      }>(
-        `/backtests/${sourceJobId}/clone-draft`,
-      ),
+      }>(`/backtests/${sourceJobId}/clone-draft`),
     enabled: sourceJobId !== null,
   });
 
-  const selectedStrategy = strategies.data?.strategies.find((s) => s.id === strategyId) ?? null;
+  const selectedStrategy =
+    strategies.data?.strategies.find((s) => s.id === strategyId) ?? null;
   const supportsRandomSeed = selectedStrategy?.supportsRandomSeed !== false;
-  const paramSpecs = useMemo(() => extractNumberParams(schema.data?.schema), [schema.data]);
+  const paramSpecs = useMemo(
+    () => extractNumberParams(schema.data?.schema),
+    [schema.data],
+  );
   // 미리보기 요청·검토 단계 제출이 같은 파싱을 쓴다(위 parseStrategyParameters 주석
   // 참고) — 문자열이면 아직 파싱에 실패한 상태라는 뜻이다.
   const parsedParameters = useMemo(
@@ -271,8 +300,8 @@ export function NewBacktestWizard() {
   const currentUniverseParams: PreviewParams = {
     universeRule,
     period: { from, to },
-    strategyId: strategyId ?? '',
-    parameters: typeof parsedParameters === 'string' ? {} : parsedParameters,
+    strategyId: strategyId ?? "",
+    parameters: typeof parsedParameters === "string" ? {} : parsedParameters,
   };
   const sourcePreview = useMemo(
     () =>
@@ -291,9 +320,11 @@ export function NewBacktestWizard() {
   );
   const draftPreview = lastPreview ?? sourcePreview;
   const freshPreviewMatches =
-    lastPreview !== null && sameUniverseParams(lastPreview.params, currentUniverseParams);
+    lastPreview !== null &&
+    sameUniverseParams(lastPreview.params, currentUniverseParams);
   const sourcePreviewMatches =
-    sourcePreview !== null && sameUniverseParams(sourcePreview.params, currentUniverseParams);
+    sourcePreview !== null &&
+    sameUniverseParams(sourcePreview.params, currentUniverseParams);
   // 새 미리보기를 우선하고, 없으면 서버가 검증한 원본 결과를 쓴다. 관련 설정을 바꿨다가
   // 원본 값으로 되돌리면 sourcePreviewMatches가 다시 true가 되어 즉시 복원된다.
   const currentPreviewResult = freshPreviewMatches
@@ -301,24 +332,28 @@ export function NewBacktestWizard() {
     : sourcePreviewMatches
       ? sourcePreview.result
       : null;
-  const reusingSourcePreview = sourcePreviewMatches && (
-    !freshPreviewMatches
-    || (
-      sourcePreview.result.preparationJobId !== undefined
-      && lastPreview?.result.preparationJobId === sourcePreview.result.preparationJobId
-    )
-  );
+  const reusingSourcePreview =
+    sourcePreviewMatches &&
+    (!freshPreviewMatches ||
+      (sourcePreview.result.preparationJobId !== undefined &&
+        lastPreview?.result.preparationJobId ===
+          sourcePreview.result.preparationJobId));
   const universePreviewOk =
     currentPreviewResult !== null &&
     currentPreviewResult.uncoveredDates.length === 0 &&
     currentPreviewResult.periodCovered &&
     currentPreviewResult.missingCandleSymbols.length === 0;
   /** 그 미리보기가 확정한 종목 목록 — 위저드 나머지 단계(재무 게이트·검토)가 본다 */
-  const unionSymbols = currentPreviewResult !== null && universePreviewOk ? currentPreviewResult.unionSymbols : [];
+  const unionSymbols =
+    currentPreviewResult !== null && universePreviewOk
+      ? currentPreviewResult.unionSymbols
+      : [];
 
   const stockNames = useStockNames(unionSymbols);
-  const nameOf = (symbol: string): string | null => stockNames.get(symbol)?.name ?? null;
-  const symbolLabel = (symbol: string): string => formatSymbolLabel(symbol, nameOf(symbol));
+  const nameOf = (symbol: string): string | null =>
+    stockNames.get(symbol)?.name ?? null;
+  const symbolLabel = (symbol: string): string =>
+    formatSymbolLabel(symbol, nameOf(symbol));
 
   // 스키마 기본값은 입력 상태에 한 번 심는다. 렌더 시점에 빈 값을 기본값으로 되돌리면
   // 필드를 비울 수 없어 (전체 선택 후 삭제 → 즉시 기본값 복귀) 지우고 다시 쓰기가 막힌다.
@@ -332,14 +367,20 @@ export function NewBacktestWizard() {
     if (restoredWizardDraftContext === wizardDraftContextKey) return;
     const saved = wizardDraft.data;
     const savedStrategyId = saved.strategy?.strategyId ?? null;
-    if (savedStrategyId !== null && !strategies.data && !strategies.isError) return;
+    if (savedStrategyId !== null && !strategies.data && !strategies.isError)
+      return;
 
     if (saved.strategy) {
-      const strategyExists = savedStrategyId === null
-        || strategies.data?.strategies.some((strategy) => strategy.id === savedStrategyId) === true;
+      const strategyExists =
+        savedStrategyId === null ||
+        strategies.data?.strategies.some(
+          (strategy) => strategy.id === savedStrategyId,
+        ) === true;
       const restoredStrategyId = strategyExists ? savedStrategyId : null;
       setStrategyId(restoredStrategyId);
-      setParameters(restoredStrategyId === null ? {} : saved.strategy.parameters);
+      setParameters(
+        restoredStrategyId === null ? {} : saved.strategy.parameters,
+      );
       // 복원한 파라미터를 뒤늦게 도착한 스키마 기본값이 덮어쓰지 못하게 한다.
       seededFor.current = restoredStrategyId;
     }
@@ -347,7 +388,9 @@ export function NewBacktestWizard() {
       setFrom(saved.period.from);
       setTo(saved.period.to);
       setBenchmarkId(saved.period.benchmarkId);
-      setBenchmarkCoverageVerifiedFor(saved.period.benchmarkCoverageVerifiedFor);
+      setBenchmarkCoverageVerifiedFor(
+        saved.period.benchmarkCoverageVerifiedFor,
+      );
       setBenchmarkSyncRequiredFor(null);
     }
     if (saved.universe) {
@@ -388,7 +431,7 @@ export function NewBacktestWizard() {
       Object.fromEntries(
         paramSpecs.map((spec) => [
           spec.key,
-          spec.defaultValue !== undefined ? String(spec.defaultValue) : '',
+          spec.defaultValue !== undefined ? String(spec.defaultValue) : "",
         ]),
       ),
     );
@@ -427,7 +470,13 @@ export function NewBacktestWizard() {
     // 기본값 시딩 effect 가 원본 파라미터를 덮어쓰지 못하게 막는다.
     // 사용자가 전략을 직접 바꾸면 toggleStrategy 가 null 로 리셋해 정상 동작한다.
     seededFor.current = state.strategyId;
-  }, [sourceJobId, draft.data, strategies.data, wizardDraft.isPending, hasStoredWizardDraft]);
+  }, [
+    sourceJobId,
+    draft.data,
+    strategies.data,
+    wizardDraft.isPending,
+    hasStoredWizardDraft,
+  ]);
 
   // 같은 카드를 다시 누르면 선택 해제 — 접힌 목록을 다시 펼치는 유일한 경로다
   const toggleStrategy = (id: string): void => {
@@ -438,10 +487,15 @@ export function NewBacktestWizard() {
   };
 
   const changeUniverseRule = (next: UniverseRule): void => {
-    const previousMarket = universeRule.markets.length === 1 ? universeRule.markets[0] : null;
+    const previousMarket =
+      universeRule.markets.length === 1 ? universeRule.markets[0] : null;
     setUniverseRule(next);
     const nextBenchmark = next.markets.length === 1 ? next.markets[0]! : null;
-    if (previousMarket === benchmarkId && nextBenchmark !== null && nextBenchmark !== benchmarkId) {
+    if (
+      previousMarket === benchmarkId &&
+      nextBenchmark !== null &&
+      nextBenchmark !== benchmarkId
+    ) {
       benchmarkCheckId.current += 1;
       setBenchmarkCoverageVerifiedFor(null);
       setBenchmarkSyncRequiredFor(null);
@@ -451,7 +505,8 @@ export function NewBacktestWizard() {
     }
   };
 
-  const paramValue = (spec: NumberParamSpec): string => parameters[spec.key] ?? '';
+  const paramValue = (spec: NumberParamSpec): string =>
+    parameters[spec.key] ?? "";
 
   // UniverseRuleStep 이 성공한 미리보기마다 그때 쓴 params·결과를 그대로 올려보낸다 —
   // 유효성 판정은 여기(부모)가 매 렌더 다시 한다(위 currentUniverseParams 주석 참고).
@@ -464,19 +519,22 @@ export function NewBacktestWizard() {
 
   // 위저드는 항상 timeframe 을 명시해 만든다(§9.5) — BacktestRequestBody 의 timeframe 이
   // optional 인 건 옛 잡과의 호환 때문이지, 이 화면이 만드는 요청과는 무관하다.
-  const buildRequest = (): (BacktestRequestBody & { timeframe: '1d' }) | string => {
-    if (!selectedStrategy) return '전략을 선택하세요';
-    if (!universePreviewOk) return '유니버스 규칙을 미리보기하고 경고를 모두 해결하세요';
-    if (!from || !to || from > to) return '기간이 올바르지 않습니다';
+  const buildRequest = ():
+    (BacktestRequestBody & { timeframe: "1d" }) | string => {
+    if (!selectedStrategy) return "전략을 선택하세요";
+    if (!universePreviewOk)
+      return "유니버스 규칙을 미리보기하고 경고를 모두 해결하세요";
+    if (!from || !to || from > to) return "기간이 올바르지 않습니다";
     const cash = Number(initialCash);
-    if (!Number.isFinite(cash) || cash <= 0) return '초기 자본이 올바르지 않습니다';
+    if (!Number.isFinite(cash) || cash <= 0)
+      return "초기 자본이 올바르지 않습니다";
     const positions = Number(maxPositions);
     // 상한 200 은 스키마(backtest-request.ts risk.maxPositions max)와 같은 값이다.
     if (!Number.isInteger(positions) || positions < 1 || positions > 200) {
-      return '동시 보유 종목 상한은 1~200 이어야 합니다';
+      return "동시 보유 종목 상한은 1~200 이어야 합니다";
     }
 
-    if (typeof parsedParameters === 'string') return parsedParameters;
+    if (typeof parsedParameters === "string") return parsedParameters;
     const seed = supportsRandomSeed ? Number(randomSeed) : 42;
     if (!Number.isInteger(seed) || seed < 0 || seed > MAX_RANDOM_SEED) {
       return `난수 시드는 0~${MAX_RANDOM_SEED.toLocaleString()} 사이의 정수여야 합니다`;
@@ -491,29 +549,39 @@ export function NewBacktestWizard() {
       // KRX 일봉이 유일한 출처라 고를 것 없이 이 값 하나로 고정한다.
       timeframe: wizardTimeframes[0],
       period: { from, to },
-      capital: { initialCash: cash, currency: 'KRW' },
-      execution: { fillTiming: 'NEXT_BAR_OPEN', commissionProfileId, slippageProfileId },
+      capital: { initialCash: cash, currency: "KRW" },
+      execution: {
+        fillTiming: "NEXT_BAR_OPEN",
+        commissionProfileId,
+        slippageProfileId,
+      },
       risk: { maxPositions: positions },
       randomSeed: seed,
     };
   };
 
   const submitMutation = useMutation({
-    mutationFn: async ({ body, reuseSource }: { body: BacktestRequestBody; reuseSource: boolean }) => {
+    mutationFn: async ({
+      body,
+      reuseSource,
+    }: {
+      body: BacktestRequestBody;
+      reuseSource: boolean;
+    }) => {
       // 제출 직전 시작된 자동 저장까지 끝낸 뒤 서버의 원자적 초안 정리를 신뢰한다.
       suppressDraftFlush.current = true;
       await waitForPendingDraftSaves();
       return postJson<{ job: { id: string }; warnings?: string[] }>(
         reuseSource && sourceJobId !== null
           ? `/backtests/${sourceJobId}/clone-configured`
-          : '/backtests',
+          : "/backtests",
         body,
       );
     },
     onSuccess: async (data) => {
       suppressDraftFlush.current = true;
       queryClient.removeQueries({
-        queryKey: ['backtests', 'wizard-draft', sourceJobId],
+        queryKey: ["backtests", "wizard-draft", sourceJobId],
         exact: true,
       });
       void navigate(`/backtests/${data.job.id}`);
@@ -529,7 +597,8 @@ export function NewBacktestWizard() {
       if (
         error instanceof ApiError &&
         error.status === 409 &&
-        (error.message === 'PREPARATION_REQUIRED' || error.message === 'PREVIEW_REQUIRED')
+        (error.message === "PREPARATION_REQUIRED" ||
+          error.message === "PREVIEW_REQUIRED")
       ) {
         setLastPreview(null);
         // 설정 복제는 원본 preview를 재사용하는 동안에도 enqueue 직전 데이터가 사라져
@@ -542,7 +611,9 @@ export function NewBacktestWizard() {
         goToSlug(recordTraversal(2));
         return;
       }
-      setStepError(error instanceof ApiError ? error.message : '제출에 실패했습니다');
+      setStepError(
+        error instanceof ApiError ? error.message : "제출에 실패했습니다",
+      );
     },
   });
 
@@ -574,8 +645,8 @@ export function NewBacktestWizard() {
   const step = urlStep === null ? 0 : Math.min(urlStep, reachable);
   const navLimit = navigableStepLimit(step, gate);
   const benchmarkCheckActive = step === 1 || step >= REVIEW_STEP;
-  const benchmarkCheckRequired = benchmarkSyncRequiredFor === benchmarkPeriodKey
-    || step >= REVIEW_STEP;
+  const benchmarkCheckRequired =
+    benchmarkSyncRequiredFor === benchmarkPeriodKey || step >= REVIEW_STEP;
 
   // fetchQuery 응답이 돌아오기 전에 사용자가 기간·벤치마크·단계를 바꿀 수 있다. 응답이
   // 확인한 입력과 지금 화면 입력이 같은지 완료 시점에 다시 비교해 낡은 성공으로 다음
@@ -583,77 +654,90 @@ export function NewBacktestWizard() {
   const benchmarkCheckContext = useRef({ periodKey: benchmarkPeriodKey, step });
   benchmarkCheckContext.current = { periodKey: benchmarkPeriodKey, step };
   const benchmarkCoverage = useQuery({
-    queryKey: ['benchmarks', benchmarkId, from, to],
-    queryFn: () => api<BenchmarkCoverageResponse>(
-      `/benchmarks?${new URLSearchParams({ benchmarkId, from, to })}`,
-    ),
+    queryKey: ["benchmarks", benchmarkId, from, to],
+    queryFn: () =>
+      api<BenchmarkCoverageResponse>(
+        `/benchmarks?${new URLSearchParams({ benchmarkId, from, to })}`,
+      ),
     // 복원된 초안의 확인 기록은 현재 커버리지를 보장하지 않으므로 검토·실행에서 재조회한다.
-    enabled: benchmarkCheckActive && benchmarkCheckRequired && Boolean(from && to && from <= to),
+    enabled:
+      benchmarkCheckActive &&
+      benchmarkCheckRequired &&
+      Boolean(from && to && from <= to),
     staleTime: 0,
-    refetchInterval: (query) => query.state.data?.backfill.state === 'RUNNING' ? 1_000 : false,
+    refetchInterval: (query) =>
+      query.state.data?.backfill.state === "RUNNING" ? 1_000 : false,
   });
   const benchmarkBackfill = useMutation<
     BenchmarkBackfillStatus,
     Error,
     { benchmarkId: BenchmarkId; from: string; to: string }
   >({
-    mutationFn: (body) => postJson('/benchmarks/backfill', body),
+    mutationFn: (body) => postJson("/benchmarks/backfill", body),
     onSuccess: (status, variables) => {
-      const queryKey = ['benchmarks', variables.benchmarkId, variables.from, variables.to] as const;
+      const queryKey = [
+        "benchmarks",
+        variables.benchmarkId,
+        variables.from,
+        variables.to,
+      ] as const;
       queryClient.setQueryData<BenchmarkCoverageResponse>(
         queryKey,
-        (current) => current ? { ...current, backfill: status } : current,
+        (current) => (current ? { ...current, backfill: status } : current),
       );
       void queryClient.invalidateQueries({ queryKey });
     },
     onError: (error, variables) => {
       const failedPeriodKey = `${variables.benchmarkId}:${variables.from}:${variables.to}`;
       if (
-        (benchmarkCheckContext.current.step !== 1 && benchmarkCheckContext.current.step < REVIEW_STEP)
-        || benchmarkCheckContext.current.periodKey !== failedPeriodKey
-      ) return;
-      setStepError(error.message || '벤치마크 동기화를 시작하지 못했습니다');
+        (benchmarkCheckContext.current.step !== 1 &&
+          benchmarkCheckContext.current.step < REVIEW_STEP) ||
+        benchmarkCheckContext.current.periodKey !== failedPeriodKey
+      )
+        return;
+      setStepError(error.message || "벤치마크 동기화를 시작하지 못했습니다");
     },
   });
   const benchmarkNeedsSync =
-    benchmarkCheckActive
-    && benchmarkCheckRequired
-    && !benchmarkCoverage.isError
-    && benchmarkCoverage.data?.covered === false;
+    benchmarkCheckActive &&
+    benchmarkCheckRequired &&
+    !benchmarkCoverage.isError &&
+    benchmarkCoverage.data?.covered === false;
   const benchmarkSyncing =
-    benchmarkCheckActive
-    && (
-      benchmarkBackfill.isPending
-      || (!benchmarkCoverage.isError && benchmarkCoverage.data?.backfill.state === 'RUNNING')
-    );
+    benchmarkCheckActive &&
+    (benchmarkBackfill.isPending ||
+      (!benchmarkCoverage.isError &&
+        benchmarkCoverage.data?.backfill.state === "RUNNING"));
   const benchmarkCoverageFailed =
-    benchmarkCheckActive
-    && benchmarkCheckRequired
-    && benchmarkCoverage.isError;
+    benchmarkCheckActive && benchmarkCheckRequired && benchmarkCoverage.isError;
   const benchmarkBackfillFailed =
-    benchmarkCoverage.data?.backfill.state === 'FAILED'
-    && benchmarkCoverage.data.backfill.benchmarkId === benchmarkId
-    && benchmarkCoverage.data.backfill.from === from
-    && benchmarkCoverage.data.backfill.to === to;
+    benchmarkCoverage.data?.backfill.state === "FAILED" &&
+    benchmarkCoverage.data.backfill.benchmarkId === benchmarkId &&
+    benchmarkCoverage.data.backfill.from === from &&
+    benchmarkCoverage.data.backfill.to === to;
 
   useEffect(() => {
     if (
-      benchmarkSyncRequiredFor === benchmarkPeriodKey
-      && benchmarkCoverage.data?.covered === true
+      benchmarkSyncRequiredFor === benchmarkPeriodKey &&
+      benchmarkCoverage.data?.covered === true
     ) {
       setStepError(null);
     }
-  }, [benchmarkCoverage.data?.covered, benchmarkPeriodKey, benchmarkSyncRequiredFor]);
+  }, [
+    benchmarkCoverage.data?.covered,
+    benchmarkPeriodKey,
+    benchmarkSyncRequiredFor,
+  ]);
 
   // 비용 프로필은 자본·비용 단계에서만 표시한다. 실제 렌더 단계에 묶어 갈 수 없는
   // deep link가 첫 단계로 접힐 때도 불필요한 조회를 시작하지 않는다.
   const profiles = useQuery({
-    queryKey: ['backtests', 'profiles'],
+    queryKey: ["backtests", "profiles"],
     queryFn: () =>
       api<{
         commissionProfiles: CommissionProfileSummary[];
         slippageProfiles: SlippageProfileSummary[];
-      }>('/backtests/profiles'),
+      }>("/backtests/profiles"),
     enabled: step === 3,
   });
 
@@ -663,7 +747,10 @@ export function NewBacktestWizard() {
    */
   const goToSlug = (target: number, options?: { replace?: boolean }): void => {
     void navigate(
-      { pathname: `/backtests/new/${stepSlug(target)}`, search: location.search },
+      {
+        pathname: `/backtests/new/${stepSlug(target)}`,
+        search: location.search,
+      },
       options,
     );
   };
@@ -692,23 +779,27 @@ export function NewBacktestWizard() {
     const checkId = ++benchmarkCheckId.current;
     const checkedPeriodKey = benchmarkPeriodKey;
     const checkedStep = step;
-    const stillCurrent = (): boolean => benchmarkCheckId.current === checkId
-      && benchmarkCheckContext.current.step === checkedStep
-      && benchmarkCheckContext.current.periodKey === checkedPeriodKey;
+    const stillCurrent = (): boolean =>
+      benchmarkCheckId.current === checkId &&
+      benchmarkCheckContext.current.step === checkedStep &&
+      benchmarkCheckContext.current.periodKey === checkedPeriodKey;
     try {
       // 전역 캐시 유효기간이나 초안의 과거 확인값으로 검토·최종 제출을 통과시키지 않는다.
       const coverage = await queryClient.fetchQuery({
-        queryKey: ['benchmarks', benchmarkId, from, to],
-        queryFn: () => api<BenchmarkCoverageResponse>(
-          `/benchmarks?${new URLSearchParams({ benchmarkId, from, to })}`,
-        ),
+        queryKey: ["benchmarks", benchmarkId, from, to],
+        queryFn: () =>
+          api<BenchmarkCoverageResponse>(
+            `/benchmarks?${new URLSearchParams({ benchmarkId, from, to })}`,
+          ),
         staleTime: 0,
       });
       if (!stillCurrent()) return false;
       if (!coverage.covered) {
         setBenchmarkCoverageVerifiedFor(null);
         setBenchmarkSyncRequiredFor(checkedPeriodKey);
-        setStepError('벤치마크 기간 데이터가 부족합니다. 동기화한 뒤 다음 단계로 진행하세요.');
+        setStepError(
+          "벤치마크 기간 데이터가 부족합니다. 동기화한 뒤 다음 단계로 진행하세요.",
+        );
         return false;
       }
       setBenchmarkCoverageVerifiedFor(checkedPeriodKey);
@@ -721,7 +812,7 @@ export function NewBacktestWizard() {
       setStepError(
         coverageError instanceof ApiError
           ? coverageError.message
-          : '벤치마크 기간을 확인하지 못했습니다',
+          : "벤치마크 기간을 확인하지 못했습니다",
       );
       return false;
     }
@@ -737,7 +828,7 @@ export function NewBacktestWizard() {
       setStepError(error);
       return;
     }
-    if (benchmarkCheckActive && !await verifyBenchmarkCoverage()) return;
+    if (benchmarkCheckActive && !(await verifyBenchmarkCoverage())) return;
     // 검토를 지났다는 사실을 여기서만 세운다 — 실행 단계 URL 의 유일한 열쇠다
     if (step === REVIEW_STEP) setReviewPassed(true);
     goToSlug(recordTraversal(Math.min(step + 1, RUN_STEP)));
@@ -756,7 +847,7 @@ export function NewBacktestWizard() {
   const reviewSymbols = unionSymbols;
   const reviewShownSymbols = reviewSymbols.slice(0, SYMBOL_SUMMARY_LIMIT);
   const reviewRestCount = reviewSymbols.length - reviewShownSymbols.length;
-  const symbolsFullText = reviewSymbols.map(symbolLabel).join(', ');
+  const symbolsFullText = reviewSymbols.map(symbolLabel).join(", ");
 
   // 초안·전략 카탈로그·원본 전략 스키마 중 하나라도 실패하면 프리필 effect 는 영영
   // 끝나지 않는다. 오류를 드러내고 폼으로 돌아가 사용자가 직접 복구할 수 있게 한다.
@@ -764,7 +855,9 @@ export function NewBacktestWizard() {
     sourceJobId !== null &&
     (draft.isError ||
       strategies.isError ||
-      (prefilledFrom.current === sourceJobId && strategyId !== null && schema.isError));
+      (prefilledFrom.current === sourceJobId &&
+        strategyId !== null &&
+        schema.isError));
 
   // 초안이 먼저 들어오고 전략 스키마가 늦게 오는 경우도 프리필 중이다. 스키마 없이
   // 원본 파라미터를 파싱하면 {}가 되어 원본 미리보기 재사용과 검토 단계가 잘못 닫힌다.
@@ -777,30 +870,31 @@ export function NewBacktestWizard() {
   });
 
   // 서버 초안과 전략 스키마가 모두 복원될 때까지 빈 기본값으로 URL을 좁히지 않는다.
-  const draftRestorePending = wizardDraft.isPending
-    || (wizardDraft.isSuccess && restoredWizardDraftContext !== wizardDraftContextKey);
-  const storedDraftSchemaPending = hasStoredWizardDraft
-    && restoredWizardDraftContext === wizardDraftContextKey
-    && strategyId !== null
-    && schema.data === undefined
-    && !schema.isError;
-  const prefilling = draftRestorePending
-    || storedDraftSchemaPending
-    || (
-      sourceJobId !== null
-      && (prefilledFrom.current !== sourceJobId || cloneSchemaPending)
-      && !prefillError
-    );
-  const canAutosave = wizardDraft.isSuccess
-    && restoredWizardDraftContext === wizardDraftContextKey
-    && !prefilling
-    && !submitMutation.isPending
-    && !submitMutation.isSuccess
-    && (
-      sourceJobId === null
-      || hasStoredWizardDraft
-      || prefilledFrom.current === sourceJobId
-    );
+  const draftRestorePending =
+    wizardDraft.isPending ||
+    (wizardDraft.isSuccess &&
+      restoredWizardDraftContext !== wizardDraftContextKey);
+  const storedDraftSchemaPending =
+    hasStoredWizardDraft &&
+    restoredWizardDraftContext === wizardDraftContextKey &&
+    strategyId !== null &&
+    schema.data === undefined &&
+    !schema.isError;
+  const prefilling =
+    draftRestorePending ||
+    storedDraftSchemaPending ||
+    (sourceJobId !== null &&
+      (prefilledFrom.current !== sourceJobId || cloneSchemaPending) &&
+      !prefillError);
+  const canAutosave =
+    wizardDraft.isSuccess &&
+    restoredWizardDraftContext === wizardDraftContextKey &&
+    !prefilling &&
+    !submitMutation.isPending &&
+    !submitMutation.isSuccess &&
+    (sourceJobId === null ||
+      hasStoredWizardDraft ||
+      prefilledFrom.current === sourceJobId);
   const currentDraftSnapshot = {
     canAutosave,
     sourceJobId,
@@ -826,15 +920,19 @@ export function NewBacktestWizard() {
     if (!canAutosave) return;
     const timer = window.setTimeout(() => {
       if (suppressDraftFlush.current) return;
-      void saveBacktestWizardDraftStep(sourceJobId, 'strategy', {
+      void saveBacktestWizardDraftStep(sourceJobId, "strategy", {
         strategyId,
         parameters,
         currentStep: stepSlug(step),
       })
         .then(() => setDraftSaveError(null))
-        .catch((error: unknown) => setDraftSaveError(
-          error instanceof ApiError ? error.message : '전략 단계 자동 저장에 실패했습니다.',
-        ));
+        .catch((error: unknown) =>
+          setDraftSaveError(
+            error instanceof ApiError
+              ? error.message
+              : "전략 단계 자동 저장에 실패했습니다.",
+          ),
+        );
     }, 300);
     return () => window.clearTimeout(timer);
   }, [canAutosave, sourceJobId, strategyId, parameters, step]);
@@ -843,32 +941,47 @@ export function NewBacktestWizard() {
     if (!canAutosave) return;
     const timer = window.setTimeout(() => {
       if (suppressDraftFlush.current) return;
-      void saveBacktestWizardDraftStep(sourceJobId, 'period', {
+      void saveBacktestWizardDraftStep(sourceJobId, "period", {
         from,
         to,
         benchmarkId,
         benchmarkCoverageVerifiedFor,
       })
         .then(() => setDraftSaveError(null))
-        .catch((error: unknown) => setDraftSaveError(
-          error instanceof ApiError ? error.message : '기간 단계 자동 저장에 실패했습니다.',
-        ));
+        .catch((error: unknown) =>
+          setDraftSaveError(
+            error instanceof ApiError
+              ? error.message
+              : "기간 단계 자동 저장에 실패했습니다.",
+          ),
+        );
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [canAutosave, sourceJobId, from, to, benchmarkId, benchmarkCoverageVerifiedFor]);
+  }, [
+    canAutosave,
+    sourceJobId,
+    from,
+    to,
+    benchmarkId,
+    benchmarkCoverageVerifiedFor,
+  ]);
 
   useEffect(() => {
     if (!canAutosave) return;
     const timer = window.setTimeout(() => {
       if (suppressDraftFlush.current) return;
-      void saveBacktestWizardDraftStep(sourceJobId, 'universe', {
+      void saveBacktestWizardDraftStep(sourceJobId, "universe", {
         universeRule,
         lastPreview: draftPreview,
       })
         .then(() => setDraftSaveError(null))
-        .catch((error: unknown) => setDraftSaveError(
-          error instanceof ApiError ? error.message : '유니버스 단계 자동 저장에 실패했습니다.',
-        ));
+        .catch((error: unknown) =>
+          setDraftSaveError(
+            error instanceof ApiError
+              ? error.message
+              : "유니버스 단계 자동 저장에 실패했습니다.",
+          ),
+        );
     }, 300);
     return () => window.clearTimeout(timer);
   }, [canAutosave, sourceJobId, universeRule, draftPreview]);
@@ -877,7 +990,7 @@ export function NewBacktestWizard() {
     if (!canAutosave) return;
     const timer = window.setTimeout(() => {
       if (suppressDraftFlush.current) return;
-      void saveBacktestWizardDraftStep(sourceJobId, 'capital', {
+      void saveBacktestWizardDraftStep(sourceJobId, "capital", {
         initialCash,
         maxPositions,
         commissionProfileId,
@@ -885,9 +998,13 @@ export function NewBacktestWizard() {
         randomSeed,
       })
         .then(() => setDraftSaveError(null))
-        .catch((error: unknown) => setDraftSaveError(
-          error instanceof ApiError ? error.message : '자본·비용 단계 자동 저장에 실패했습니다.',
-        ));
+        .catch((error: unknown) =>
+          setDraftSaveError(
+            error instanceof ApiError
+              ? error.message
+              : "자본·비용 단계 자동 저장에 실패했습니다.",
+          ),
+        );
     }, 300);
     return () => window.clearTimeout(timer);
   }, [
@@ -908,7 +1025,7 @@ export function NewBacktestWizard() {
       pageHiding.current = true;
       void saveBacktestWizardDraftStep(
         sourceJobId,
-        'strategy',
+        "strategy",
         { strategyId, parameters, currentStep: stepSlug(step) },
         { keepalive: true },
       ).catch(() => undefined);
@@ -916,7 +1033,7 @@ export function NewBacktestWizard() {
       if (step === 1) {
         void saveBacktestWizardDraftStep(
           sourceJobId,
-          'period',
+          "period",
           { from, to, benchmarkId, benchmarkCoverageVerifiedFor },
           { keepalive: true },
         ).catch(() => undefined);
@@ -926,13 +1043,13 @@ export function NewBacktestWizard() {
         // 시장 변경은 유니버스 규칙과 기본 벤치마크를 한 이벤트에서 함께 바꾼다.
         void saveBacktestWizardDraftStep(
           sourceJobId,
-          'period',
+          "period",
           { from, to, benchmarkId, benchmarkCoverageVerifiedFor },
           { keepalive: true },
         ).catch(() => undefined);
         void saveBacktestWizardDraftStep(
           sourceJobId,
-          'universe',
+          "universe",
           { universeRule, lastPreview: draftPreview },
           { keepalive: true },
         ).catch(() => undefined);
@@ -940,7 +1057,7 @@ export function NewBacktestWizard() {
       }
       void saveBacktestWizardDraftStep(
         sourceJobId,
-        'capital',
+        "capital",
         {
           initialCash,
           maxPositions,
@@ -954,11 +1071,11 @@ export function NewBacktestWizard() {
     const restoreAfterPageShow = (): void => {
       pageHiding.current = false;
     };
-    window.addEventListener('pagehide', flushCurrentStep);
-    window.addEventListener('pageshow', restoreAfterPageShow);
+    window.addEventListener("pagehide", flushCurrentStep);
+    window.addEventListener("pageshow", restoreAfterPageShow);
     return () => {
-      window.removeEventListener('pagehide', flushCurrentStep);
-      window.removeEventListener('pageshow', restoreAfterPageShow);
+      window.removeEventListener("pagehide", flushCurrentStep);
+      window.removeEventListener("pageshow", restoreAfterPageShow);
     };
   }, [
     canAutosave,
@@ -979,35 +1096,38 @@ export function NewBacktestWizard() {
     randomSeed,
   ]);
   // 라우터로 홈·목록 등 다른 페이지에 나가면 pagehide가 없으므로 unmount에서 즉시 저장한다.
-  useEffect(() => () => {
-    if (pageHiding.current || suppressDraftFlush.current) return;
-    const saved = latestDraftSnapshot.current;
-    if (!saved.canAutosave) return;
-    void Promise.all([
-      saveBacktestWizardDraftStep(saved.sourceJobId, 'strategy', {
-        strategyId: saved.strategyId,
-        parameters: saved.parameters,
-        currentStep: saved.currentStep,
-      }),
-      saveBacktestWizardDraftStep(saved.sourceJobId, 'period', {
-        from: saved.from,
-        to: saved.to,
-        benchmarkId: saved.benchmarkId,
-        benchmarkCoverageVerifiedFor: saved.benchmarkCoverageVerifiedFor,
-      }),
-      saveBacktestWizardDraftStep(saved.sourceJobId, 'universe', {
-        universeRule: saved.universeRule,
-        lastPreview: saved.lastPreview,
-      }),
-      saveBacktestWizardDraftStep(saved.sourceJobId, 'capital', {
-        initialCash: saved.initialCash,
-        maxPositions: saved.maxPositions,
-        commissionProfileId: saved.commissionProfileId,
-        slippageProfileId: saved.slippageProfileId,
-        randomSeed: saved.randomSeed,
-      }),
-    ]).catch(() => undefined);
-  }, []);
+  useEffect(
+    () => () => {
+      if (pageHiding.current || suppressDraftFlush.current) return;
+      const saved = latestDraftSnapshot.current;
+      if (!saved.canAutosave) return;
+      void Promise.all([
+        saveBacktestWizardDraftStep(saved.sourceJobId, "strategy", {
+          strategyId: saved.strategyId,
+          parameters: saved.parameters,
+          currentStep: saved.currentStep,
+        }),
+        saveBacktestWizardDraftStep(saved.sourceJobId, "period", {
+          from: saved.from,
+          to: saved.to,
+          benchmarkId: saved.benchmarkId,
+          benchmarkCoverageVerifiedFor: saved.benchmarkCoverageVerifiedFor,
+        }),
+        saveBacktestWizardDraftStep(saved.sourceJobId, "universe", {
+          universeRule: saved.universeRule,
+          lastPreview: saved.lastPreview,
+        }),
+        saveBacktestWizardDraftStep(saved.sourceJobId, "capital", {
+          initialCash: saved.initialCash,
+          maxPositions: saved.maxPositions,
+          commissionProfileId: saved.commissionProfileId,
+          slippageProfileId: saved.slippageProfileId,
+          randomSeed: saved.randomSeed,
+        }),
+      ]).catch(() => undefined);
+    },
+    [],
+  );
 
   /**
    * URL 표기를 지금 그리고 있는 단계에 맞춘다. 좁히는 판단은 위 `step` 이 이미 했고,
@@ -1042,7 +1162,7 @@ export function NewBacktestWizard() {
   return (
     <div className="mx-auto max-w-2xl space-y-4">
       <h2 className="text-lg font-semibold">
-        {sourceJobId !== null ? '재설정 및 복제' : '새 백테스트'}
+        {sourceJobId !== null ? "재설정 및 복제" : "새 백테스트"}
       </h2>
 
       {prefillError ? (
@@ -1051,27 +1171,29 @@ export function NewBacktestWizard() {
             {draft.isError
               ? draft.error instanceof ApiError
                 ? draft.error.message
-                : '원본 설정을 불러올 수 없습니다'
+                : "원본 설정을 불러올 수 없습니다"
               : strategies.isError
-                ? '전략 목록을 불러올 수 없어 원본 설정을 채우지 못했습니다 — 처음부터 선택하세요.'
-                : '원본 전략의 파라미터 스키마를 불러올 수 없습니다 — 전략을 다시 선택하세요.'}
+                ? "전략 목록을 불러올 수 없어 원본 설정을 채우지 못했습니다 — 처음부터 선택하세요."
+                : "원본 전략의 파라미터 스키마를 불러올 수 없습니다 — 전략을 다시 선택하세요."}
           </AlertDescription>
         </Alert>
       ) : null}
       {wizardDraft.isError ? (
         <Alert variant="destructive" role="alert">
           <AlertDescription>
-            저장된 작성 내용을 불러오지 못했습니다. 이 화면의 변경 내용은 자동 저장되지 않습니다.
+            저장된 작성 내용을 불러오지 못했습니다. 이 화면의 변경 내용은 자동
+            저장되지 않습니다.
           </AlertDescription>
         </Alert>
       ) : null}
 
       {draftSaveError !== null ? (
         <Alert variant="destructive" role="alert">
-          <AlertDescription>작성 내용을 자동 저장하지 못했습니다 — {draftSaveError}</AlertDescription>
+          <AlertDescription>
+            작성 내용을 자동 저장하지 못했습니다 — {draftSaveError}
+          </AlertDescription>
         </Alert>
       ) : null}
-
 
       {(draft.data?.blockers ?? []).length > 0 ? (
         <Alert variant="destructive">
@@ -1090,9 +1212,11 @@ export function NewBacktestWizard() {
         <Alert>
           <AlertDescription>
             <ul className="list-disc pl-5">
-              {[...(draft.data?.warnings ?? []), ...prefillNotes].map((note) => (
-                <li key={note}>{note}</li>
-              ))}
+              {[...(draft.data?.warnings ?? []), ...prefillNotes].map(
+                (note) => (
+                  <li key={note}>{note}</li>
+                ),
+              )}
             </ul>
           </AlertDescription>
         </Alert>
@@ -1111,7 +1235,7 @@ export function NewBacktestWizard() {
                 <li key={label}>
                   <button
                     type="button"
-                    aria-current={current ? 'step' : undefined}
+                    aria-current={current ? "step" : undefined}
                     // disabled 대신 aria-disabled — 포커스와 클릭을 살려 두고 왜 못
                     // 가는지 오류 영역에 문장으로 알린다 (스펙 §17 접근성)
                     aria-disabled={lockReason !== null}
@@ -1121,12 +1245,12 @@ export function NewBacktestWizard() {
                       else goToStep(index);
                     }}
                     className={cn(
-                      'flex min-h-11 w-full items-center justify-center rounded-lg px-1.5 text-center text-xs transition-colors',
+                      "flex min-h-11 w-full items-center justify-center rounded-lg px-1.5 text-center text-xs transition-colors",
                       current
-                        ? 'bg-primary font-medium text-primary-foreground'
+                        ? "bg-primary font-medium text-primary-foreground"
                         : lockReason !== null
-                          ? 'cursor-not-allowed bg-muted/40 text-muted-foreground'
-                          : 'bg-muted text-foreground hover:bg-muted/70',
+                          ? "cursor-not-allowed bg-muted/40 text-muted-foreground"
+                          : "bg-muted text-foreground hover:bg-muted/70",
                     )}
                   >
                     {index + 1}. {label}
@@ -1154,16 +1278,22 @@ export function NewBacktestWizard() {
               const collapsed = strategyId !== null && !selected;
               // 배지는 모든 카드에, 풀어 쓴 한 줄은 고른 카드에만 — 목록을 훑는 동안은
               // 배지만으로 충분하고, 고른 뒤에는 무엇이 개입하는지 문장으로 확인시킨다
-              const requirement = strategyDataRequirement(strategy.requiresFundamentals);
+              const requirement = strategyDataRequirement(
+                strategy.requiresFundamentals,
+              );
               const dataDetail =
-                selected && requirement !== null ? STRATEGY_DATA_DETAILS[requirement] : null;
+                selected && requirement !== null
+                  ? STRATEGY_DATA_DETAILS[requirement]
+                  : null;
               return (
                 <div
                   key={strategy.id}
                   // grid-rows 0fr↔1fr 은 height:auto 를 트랜지션하는 표준 방법이다
                   className={cn(
-                    'grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none',
-                    collapsed ? 'grid-rows-[0fr] opacity-0' : 'grid-rows-[1fr] opacity-100',
+                    "grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none",
+                    collapsed
+                      ? "grid-rows-[0fr] opacity-0"
+                      : "grid-rows-[1fr] opacity-100",
                   )}
                   // 접힌 카드는 클릭·탭 이동·스크린리더에서 모두 빠진다
                   inert={collapsed}
@@ -1177,13 +1307,15 @@ export function NewBacktestWizard() {
                         aria-pressed={selected}
                         onClick={() => toggleStrategy(strategy.id)}
                         className={cn(
-                          'w-full rounded-xl border p-4 text-left transition-colors',
-                          selected ? 'border-primary bg-muted/50' : 'hover:bg-muted/30',
+                          "w-full rounded-xl border p-4 text-left transition-colors",
+                          selected
+                            ? "border-primary bg-muted/50"
+                            : "hover:bg-muted/30",
                         )}
                       >
                         <div className="flex items-start justify-between gap-2">
                           <p className="font-medium">
-                            {strategy.name}{' '}
+                            {strategy.name}{" "}
                             <span className="text-xs text-muted-foreground">
                               v{strategy.version}
                             </span>
@@ -1192,9 +1324,13 @@ export function NewBacktestWizard() {
                             requiresFundamentals={strategy.requiresFundamentals}
                           />
                         </div>
-                        <p className="mt-1 text-sm text-muted-foreground">{strategy.description}</p>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          {strategy.description}
+                        </p>
                         {dataDetail ? (
-                          <p className="mt-2 text-xs text-muted-foreground">{dataDetail}</p>
+                          <p className="mt-2 text-xs text-muted-foreground">
+                            {dataDetail}
+                          </p>
                         ) : null}
                         {/* 데이터 요구 문장과 붙으면 한 덩어리로 읽힌다 — 조작 안내는
                             설명이 아니므로 간격으로 떼어 놓는다 */}
@@ -1214,7 +1350,9 @@ export function NewBacktestWizard() {
             <Card className="animate-in fade-in slide-in-from-bottom-2 duration-200 motion-reduce:animate-none">
               <CardHeader>
                 <CardTitle className="text-base">파라미터</CardTitle>
-                <CardDescription>검증된 범위 내에서만 조정할 수 있습니다.</CardDescription>
+                <CardDescription>
+                  검증된 범위 내에서만 조정할 수 있습니다.
+                </CardDescription>
               </CardHeader>
               <CardContent className="grid grid-cols-2 gap-4">
                 {paramSpecs.map((spec) => (
@@ -1222,7 +1360,7 @@ export function NewBacktestWizard() {
                     <div className="flex items-center gap-1">
                       <Label htmlFor={`param-${spec.key}`} className="text-xs">
                         {paramLabel(spec)}
-                        {spec.optional ? ' (선택)' : ''}
+                        {spec.optional ? " (선택)" : ""}
                       </Label>
                       <ParamHint spec={spec} />
                     </div>
@@ -1233,10 +1371,13 @@ export function NewBacktestWizard() {
                       className="h-11"
                       min={spec.minimum}
                       max={spec.maximum}
-                      step={spec.isInteger ? 1 : 'any'}
+                      step={spec.isInteger ? 1 : "any"}
                       value={paramValue(spec)}
                       onChange={(e) =>
-                        setParameters((prev) => ({ ...prev, [spec.key]: e.target.value }))
+                        setParameters((prev) => ({
+                          ...prev,
+                          [spec.key]: e.target.value,
+                        }))
                       }
                     />
                   </div>
@@ -1293,7 +1434,9 @@ export function NewBacktestWizard() {
                   </SelectTrigger>
                   <SelectContent>
                     {BENCHMARK_IDS.map((id) => (
-                      <SelectItem key={id} value={id}>{BENCHMARK_NAMES[id]}</SelectItem>
+                      <SelectItem key={id} value={id}>
+                        {BENCHMARK_NAMES[id]}
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -1303,8 +1446,8 @@ export function NewBacktestWizard() {
           {benchmarkBackfillFailed ? (
             <Alert variant="destructive" role="alert">
               <AlertDescription>
-                벤치마크 동기화에 실패했습니다 —{' '}
-                {benchmarkCoverage.data?.backfill.error ?? '알 수 없는 오류'}
+                벤치마크 동기화에 실패했습니다 —{" "}
+                {benchmarkCoverage.data?.backfill.error ?? "알 수 없는 오류"}
               </AlertDescription>
             </Alert>
           ) : null}
@@ -1313,7 +1456,7 @@ export function NewBacktestWizard() {
               <AlertDescription>
                 {benchmarkCoverage.error instanceof Error
                   ? benchmarkCoverage.error.message
-                  : '벤치마크 기간을 다시 확인하지 못했습니다'}
+                  : "벤치마크 기간을 다시 확인하지 못했습니다"}
               </AlertDescription>
             </Alert>
           ) : null}
@@ -1337,14 +1480,16 @@ export function NewBacktestWizard() {
           {reusingSourcePreview ? (
             <Alert role="status">
               <AlertDescription>
-                원본 백테스트에 고정된 유니버스 구성을 재사용합니다. 기간·유니버스·전략
-                또는 전략 파라미터를 바꾸면 새 미리보기가 필요합니다.
+                원본 백테스트에 고정된 유니버스 구성을 재사용합니다.
+                기간·유니버스·전략 또는 전략 파라미터를 바꾸면 새 미리보기가
+                필요합니다.
               </AlertDescription>
             </Alert>
           ) : sourcePreview !== null && !sourcePreviewMatches ? (
             <Alert variant="destructive" role="alert">
               <AlertDescription>
-                유니버스 준비에 영향을 주는 설정이 변경되었습니다. 미리보기를 다시 실행하세요.
+                유니버스 준비에 영향을 주는 설정이 변경되었습니다. 미리보기를
+                다시 실행하세요.
               </AlertDescription>
             </Alert>
           ) : null}
@@ -1377,29 +1522,39 @@ export function NewBacktestWizard() {
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-1">
                 <Label htmlFor="commission">수수료 프로파일</Label>
-                <Select value={commissionProfileId} onValueChange={setCommissionProfileId}>
+                <Select
+                  value={commissionProfileId}
+                  onValueChange={setCommissionProfileId}
+                >
                   <SelectTrigger id="commission" className="h-11 w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {(profiles.data?.commissionProfiles ?? []).map((profile) => (
-                      <SelectItem key={profile.id} value={profile.id}>
-                        {profile.id} (v{profile.version}) — {costProfileLabel(profile)}
-                      </SelectItem>
-                    ))}
+                    {(profiles.data?.commissionProfiles ?? []).map(
+                      (profile) => (
+                        <SelectItem key={profile.id} value={profile.id}>
+                          {profile.id} (v{profile.version}) —{" "}
+                          {costProfileLabel(profile)}
+                        </SelectItem>
+                      ),
+                    )}
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-1">
                 <Label htmlFor="slippage">슬리피지 프로파일</Label>
-                <Select value={slippageProfileId} onValueChange={setSlippageProfileId}>
+                <Select
+                  value={slippageProfileId}
+                  onValueChange={setSlippageProfileId}
+                >
                   <SelectTrigger id="slippage" className="h-11 w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     {(profiles.data?.slippageProfiles ?? []).map((profile) => (
                       <SelectItem key={profile.id} value={profile.id}>
-                        {profile.id} (v{profile.version}) — {slippageProfileLabel(profile)}
+                        {profile.id} (v{profile.version}) —{" "}
+                        {slippageProfileLabel(profile)}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -1430,7 +1585,7 @@ export function NewBacktestWizard() {
                 min={0}
                 max={MAX_RANDOM_SEED}
                 disabled={!supportsRandomSeed}
-                value={supportsRandomSeed ? randomSeed : ''}
+                value={supportsRandomSeed ? randomSeed : ""}
                 onChange={(e) => setRandomSeed(e.target.value)}
               />
             </div>
@@ -1440,21 +1595,30 @@ export function NewBacktestWizard() {
 
       {!prefilling && step >= REVIEW_STEP ? (
         <div className="space-y-3">
-          <Alert variant={benchmarkNeedsSync || benchmarkCoverageFailed || benchmarkBackfillFailed ? 'destructive' : 'default'} role="status">
+          <Alert
+            variant={
+              benchmarkNeedsSync ||
+              benchmarkCoverageFailed ||
+              benchmarkBackfillFailed
+                ? "destructive"
+                : "default"
+            }
+            role="status"
+          >
             <AlertDescription>
               {benchmarkSyncing
-                ? '벤치마크 기간 데이터를 동기화하고 있습니다.'
+                ? "벤치마크 기간 데이터를 동기화하고 있습니다."
                 : benchmarkCoverage.isFetching
-                  ? '벤치마크 기간 동기화 여부를 확인하고 있습니다.'
+                  ? "벤치마크 기간 동기화 여부를 확인하고 있습니다."
                   : benchmarkCoverageFailed
-                    ? '벤치마크 기간을 확인하지 못했습니다. 다시 확인해 주세요.'
+                    ? "벤치마크 기간을 확인하지 못했습니다. 다시 확인해 주세요."
                     : benchmarkBackfillFailed
-                      ? `벤치마크 동기화에 실패했습니다 — ${benchmarkCoverage.data?.backfill.error ?? '알 수 없는 오류'}`
+                      ? `벤치마크 동기화에 실패했습니다 — ${benchmarkCoverage.data?.backfill.error ?? "알 수 없는 오류"}`
                       : benchmarkNeedsSync
-                        ? '벤치마크 기간 데이터가 부족합니다. 동기화한 뒤 진행하세요.'
+                        ? "벤치마크 기간 데이터가 부족합니다. 동기화한 뒤 진행하세요."
                         : benchmarkCoverage.data?.covered
-                          ? '벤치마크 기간 동기화를 확인했습니다.'
-                          : '벤치마크 기간 확인이 필요합니다.'}
+                          ? "벤치마크 기간 동기화를 확인했습니다."
+                          : "벤치마크 기간 확인이 필요합니다."}
             </AlertDescription>
           </Alert>
           {reusingSourcePreview ? (
@@ -1464,102 +1628,120 @@ export function NewBacktestWizard() {
               </AlertDescription>
             </Alert>
           ) : null}
-          {typeof request === 'string' ? (
-          <Alert variant="destructive">
-            <AlertDescription>{request}</AlertDescription>
-          </Alert>
-        ) : request ? (
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">
-                {step === REVIEW_STEP ? '검토' : '실행'}
-              </CardTitle>
-              <CardDescription>제출 전 설정을 확인하세요.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-2 text-sm">
-              <div className="flex justify-between gap-3">
-                <span className="shrink-0 text-muted-foreground">전략</span>
-                {/* 버전은 요청이 아니라 레지스트리에서 읽는다 (D-029) — 실행되는 것도
+          {typeof request === "string" ? (
+            <Alert variant="destructive">
+              <AlertDescription>{request}</AlertDescription>
+            </Alert>
+          ) : request ? (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">
+                  {step === REVIEW_STEP ? "검토" : "실행"}
+                </CardTitle>
+                <CardDescription>제출 전 설정을 확인하세요.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm">
+                <div className="flex justify-between gap-3">
+                  <span className="shrink-0 text-muted-foreground">전략</span>
+                  {/* 버전은 요청이 아니라 레지스트리에서 읽는다 (D-029) — 실행되는 것도
                     제출 시점에 등록돼 있는 전략이다. 데이터 요구 배지를 여기 한 번 더
                     두는 이유: 제출 직전이 재무 개입을 알아차릴 마지막 지점이다 */}
-                <span className="flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1">
-                  <span>
-                    {request.strategyId}
-                    {selectedStrategy ? ` v${selectedStrategy.version}` : ''}
+                  <span className="flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1">
+                    <span>
+                      {request.strategyId}
+                      {selectedStrategy ? ` v${selectedStrategy.version}` : ""}
+                    </span>
+                    <StrategyDataBadge
+                      requiresFundamentals={
+                        selectedStrategy?.requiresFundamentals
+                      }
+                    />
                   </span>
-                  <StrategyDataBadge
-                    requiresFundamentals={selectedStrategy?.requiresFundamentals}
-                  />
-                </span>
-              </div>
-              <Separator />
-              <div className="flex justify-between gap-3">
-                <span className="shrink-0 text-muted-foreground">유니버스 규칙</span>
-                {/* 단계형 편집기(Task 9)가 시가총액 외 기준·다단계를 허용한 뒤로는 첫
+                </div>
+                <Separator />
+                <div className="flex justify-between gap-3">
+                  <span className="shrink-0 text-muted-foreground">
+                    유니버스 규칙
+                  </span>
+                  {/* 단계형 편집기(Task 9)가 시가총액 외 기준·다단계를 허용한 뒤로는 첫
                     단계만 읽는 하드코딩된 문구가 실제 규칙과 어긋날 수 있다 — 상세
                     화면과 같은 요약 함수를 그대로 쓴다(리뷰에서 재현된 회귀). */}
-                <span>{formatUniverseRuleSummary(request.universeRule)}</span>
-              </div>
-              <Separator />
-              <div className="flex justify-between gap-3">
-                {/* 라벨은 줄어들지 않고('종목' 이 '종'+'목' 으로 쪼개지지 않게), 값은
+                  <span>{formatUniverseRuleSummary(request.universeRule)}</span>
+                </div>
+                <Separator />
+                <div className="flex justify-between gap-3">
+                  {/* 라벨은 줄어들지 않고('종목' 이 '종'+'목' 으로 쪼개지지 않게), 값은
                     min-w-0 로 줄어들 수 있어야 truncate 가 동작한다 */}
-                <span className="shrink-0 text-muted-foreground">종목</span>
-                <span className="flex min-w-0 flex-col items-end" title={symbolsFullText}>
-                  {reviewShownSymbols.map((symbol) => (
-                    <SymbolLabel
-                      key={symbol}
-                      symbol={symbol}
-                      name={clampSymbolName(nameOf(symbol))}
-                      className="max-w-full"
-                    />
-                  ))}
-                  {reviewRestCount > 0 ? (
-                    <span className="text-muted-foreground">외 {reviewRestCount}종목</span>
-                  ) : null}
-                </span>
-              </div>
-              <Separator />
-              <div className="flex justify-between gap-3">
-                <span className="shrink-0 text-muted-foreground">봉 주기</span>
-                <span>{timeframeLabel(request.timeframe)}</span>
-              </div>
-              <Separator />
-              <div className="flex justify-between gap-3">
-                <span className="shrink-0 text-muted-foreground">기간</span>
-                <span>
-                  {request.period.from} ~ {request.period.to}
-                </span>
-              </div>
-              <Separator />
-              <div className="flex justify-between gap-3">
-                <span className="shrink-0 text-muted-foreground">벤치마크</span>
-                <span>{BENCHMARK_NAMES[request.benchmarkId ?? 'KOSPI']}</span>
-              </div>
-              <Separator />
-              <div className="flex justify-between gap-3">
-                <span className="shrink-0 text-muted-foreground">초기 자본</span>
-                <span>{formatKrw(request.capital.initialCash)}</span>
-              </div>
-              <Separator />
-              <div className="flex justify-between gap-3">
-                <span className="shrink-0 text-muted-foreground">비용</span>
-                <span>
-                  {request.execution.commissionProfileId} / {request.execution.slippageProfileId}
-                </span>
-              </div>
-              <Separator />
-              <div className="flex justify-between gap-3">
-                <span className="shrink-0 text-muted-foreground">파라미터</span>
-                <span className="text-right font-mono text-xs">
-                  {Object.entries(request.parameters)
-                    .map(([k, v]) => `${k}=${String(v)}`)
-                    .join(' ')}
-                </span>
-              </div>
-            </CardContent>
-          </Card>
-        ) : null}
+                  <span className="shrink-0 text-muted-foreground">종목</span>
+                  <span
+                    className="flex min-w-0 flex-col items-end"
+                    title={symbolsFullText}
+                  >
+                    {reviewShownSymbols.map((symbol) => (
+                      <SymbolLabel
+                        key={symbol}
+                        symbol={symbol}
+                        name={clampSymbolName(nameOf(symbol))}
+                        className="max-w-full"
+                      />
+                    ))}
+                    {reviewRestCount > 0 ? (
+                      <span className="text-muted-foreground">
+                        외 {reviewRestCount}종목
+                      </span>
+                    ) : null}
+                  </span>
+                </div>
+                <Separator />
+                <div className="flex justify-between gap-3">
+                  <span className="shrink-0 text-muted-foreground">
+                    봉 주기
+                  </span>
+                  <span>{timeframeLabel(request.timeframe)}</span>
+                </div>
+                <Separator />
+                <div className="flex justify-between gap-3">
+                  <span className="shrink-0 text-muted-foreground">기간</span>
+                  <span>
+                    {request.period.from} ~ {request.period.to}
+                  </span>
+                </div>
+                <Separator />
+                <div className="flex justify-between gap-3">
+                  <span className="shrink-0 text-muted-foreground">
+                    벤치마크
+                  </span>
+                  <span>{BENCHMARK_NAMES[request.benchmarkId ?? "KOSPI"]}</span>
+                </div>
+                <Separator />
+                <div className="flex justify-between gap-3">
+                  <span className="shrink-0 text-muted-foreground">
+                    초기 자본
+                  </span>
+                  <span>{formatKrw(request.capital.initialCash)}</span>
+                </div>
+                <Separator />
+                <div className="flex justify-between gap-3">
+                  <span className="shrink-0 text-muted-foreground">비용</span>
+                  <span>
+                    {request.execution.commissionProfileId} /{" "}
+                    {request.execution.slippageProfileId}
+                  </span>
+                </div>
+                <Separator />
+                <div className="flex justify-between gap-3">
+                  <span className="shrink-0 text-muted-foreground">
+                    파라미터
+                  </span>
+                  <span className="text-right font-mono text-xs">
+                    {Object.entries(request.parameters)
+                      .map(([k, v]) => `${k}=${String(v)}`)
+                      .join(" ")}
+                  </span>
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
         </div>
       ) : null}
 
@@ -1576,9 +1758,10 @@ export function NewBacktestWizard() {
           <Button
             className="h-11"
             disabled={
-              benchmarkSyncing
-              || (benchmarkCheckActive && benchmarkCoverage.isFetching)
-              || (step === RUN_STEP && (typeof request === 'string' || submitMutation.isPending))
+              benchmarkSyncing ||
+              (benchmarkCheckActive && benchmarkCoverage.isFetching) ||
+              (step === RUN_STEP &&
+                (typeof request === "string" || submitMutation.isPending))
             }
             onClick={() => {
               if (benchmarkNeedsSync) {
@@ -1587,10 +1770,13 @@ export function NewBacktestWizard() {
                 return;
               }
               if (step === RUN_STEP) {
-                if (request && typeof request !== 'string') {
+                if (request && typeof request !== "string") {
                   void verifyBenchmarkCoverage().then((verified) => {
                     if (verified) {
-                      submitMutation.mutate({ body: request, reuseSource: reusingSourcePreview });
+                      submitMutation.mutate({
+                        body: request,
+                        reuseSource: reusingSourcePreview,
+                      });
                     }
                   });
                 }
@@ -1600,16 +1786,18 @@ export function NewBacktestWizard() {
             }}
           >
             {benchmarkSyncing
-              ? '동기화 중…'
+              ? "동기화 중…"
               : benchmarkNeedsSync
-                ? '동기화'
+                ? "동기화"
                 : benchmarkCoverageFailed
-                  ? '다시 확인'
+                  ? "다시 확인"
                   : benchmarkCheckActive && benchmarkCoverage.isFetching
-                    ? '확인 중…'
+                    ? "확인 중…"
                     : step === RUN_STEP
-                      ? submitMutation.isPending ? '제출 중…' : '백테스트 실행'
-                      : '다음'}
+                      ? submitMutation.isPending
+                        ? "제출 중…"
+                        : "백테스트 실행"
+                      : "다음"}
           </Button>
         </div>
       )}

@@ -1,22 +1,31 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Dices, Plus } from 'lucide-react';
-import { useState } from 'react';
-import { Link } from 'react-router';
-import { toast } from 'sonner';
-import { InfoHint } from '@/components/info-hint';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Progress } from '@/components/ui/progress';
-import { Skeleton } from '@/components/ui/skeleton';
-import { api } from '@/lib/api-client';
-import { useBacktests, useSeedCloneBatches, useStrategies } from './api';
-import { formatDateTime, formatSignedPct, pnlClass, timeframeLabel } from '@/lib/format';
-import { groupJobsByStrategy } from './job-groups';
-import { resolveJobTimeframe } from './job-timeframe';
-import { StatusBadge } from './status-badge';
-import { formatUniverseRuleSummary } from './universe-summary';
-import { isTerminal, type JobSummary, type SeedCloneBatchSummary } from './types';
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Dices, Plus } from "lucide-react";
+import { useState } from "react";
+import { Link } from "react-router";
+import { toast } from "sonner";
+import { InfoHint } from "@/components/info-hint";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Progress } from "@/components/ui/progress";
+import { Skeleton } from "@/components/ui/skeleton";
+import { api } from "@/lib/api-client";
+import { useBacktests, useSeedCloneBatches, useStrategies } from "./api";
+import {
+  formatDateTime,
+  formatSignedPct,
+  pnlClass,
+  timeframeLabel,
+} from "@/lib/format";
+import { groupJobsByStrategy } from "./job-groups";
+import { resolveJobTimeframe } from "./job-timeframe";
+import { StatusBadge } from "./status-badge";
+import { formatUniverseRuleSummary } from "./universe-summary";
+import {
+  isTerminal,
+  type JobSummary,
+  type SeedCloneBatchSummary,
+} from "./types";
 
 export function deletableBacktestIds(jobs: readonly JobSummary[]): string[] {
   return jobs.filter((job) => isTerminal(job.status)).map((job) => job.id);
@@ -34,8 +43,12 @@ export function groupSeedBatchesBySource(
   return grouped;
 }
 
-export function hasActiveSeedBatch(batches: readonly SeedCloneBatchSummary[]): boolean {
-  return batches.some((batch) => batch.status === 'ACTIVE' || batch.status === 'CANCELLING');
+export function hasActiveSeedBatch(
+  batches: readonly SeedCloneBatchSummary[],
+): boolean {
+  return batches.some(
+    (batch) => batch.status === "ACTIVE" || batch.status === "CANCELLING",
+  );
 }
 
 /** 기본 50개 목록 밖 원본도 배치 API가 돌려준 요약으로 복원한다. */
@@ -54,7 +67,8 @@ export function toggleAllBacktests(
   selected: ReadonlySet<string>,
   deletableIds: readonly string[],
 ): ReadonlySet<string> {
-  const allSelected = deletableIds.length > 0 && deletableIds.every((id) => selected.has(id));
+  const allSelected =
+    deletableIds.length > 0 && deletableIds.every((id) => selected.has(id));
   return allSelected ? new Set() : new Set(deletableIds);
 }
 
@@ -89,9 +103,9 @@ export function BacktestJobCard({
           </span>
         </div>
         <div className="text-xs text-muted-foreground">
-          {formatUniverseRuleSummary(job.request.universeRule)} · {job.request.period.from} ~{' '}
-          {job.request.period.to}
-          {timeframe ? ` · ${timeframeLabel(timeframe)}` : ''}
+          {formatUniverseRuleSummary(job.request.universeRule)} ·{" "}
+          {job.request.period.from} ~ {job.request.period.to}
+          {timeframe ? ` · ${timeframeLabel(timeframe)}` : ""}
         </div>
         {running && progress !== null ? (
           <div className="space-y-1">
@@ -99,7 +113,7 @@ export function BacktestJobCard({
             <p className="text-xs text-muted-foreground">{progress}%</p>
           </div>
         ) : null}
-        {job.status === 'COMPLETED' && job.metrics ? (
+        {job.status === "COMPLETED" && job.metrics ? (
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
             <span className={pnlClass(job.metrics.totalReturnPct)}>
               수익률 {formatSignedPct(job.metrics.totalReturnPct)}
@@ -110,10 +124,14 @@ export function BacktestJobCard({
             <span className="text-muted-foreground">
               MDD {formatSignedPct(job.metrics.maxDrawdownPct)}
             </span>
-            <span className="text-muted-foreground">매도 체결 {job.metrics.tradeCount}건</span>
+            <span className="text-muted-foreground">
+              매도 체결 {job.metrics.tradeCount}건
+            </span>
           </div>
         ) : null}
-        {job.error ? <p className="text-xs text-destructive">{job.error}</p> : null}
+        {job.error ? (
+          <p className="text-xs text-destructive">{job.error}</p>
+        ) : null}
       </CardContent>
     </Card>
   );
@@ -163,8 +181,12 @@ export function SeedCloneBatchCard({
   removing?: boolean;
   onRemove?: () => void;
 }) {
-  const terminal = batch.completedCount + batch.failedCount + batch.cancelledCount
-    + batch.interruptedCount + batch.deletedCount;
+  const terminal =
+    batch.completedCount +
+    batch.failedCount +
+    batch.cancelledCount +
+    batch.interruptedCount +
+    batch.deletedCount;
   const progress = Math.round((terminal / batch.totalCount) * 100);
   const card = (
     <Card className="transition-colors hover:bg-muted/40">
@@ -172,20 +194,30 @@ export function SeedCloneBatchCard({
         <div className="flex flex-wrap items-center gap-2">
           <Dices className="size-4" />
           <span className="font-medium">난수 시드 {batch.totalCount}개</span>
-          <span className="ml-auto text-xs text-muted-foreground">{formatDateTime(batch.createdAtMs)}</span>
+          <span className="ml-auto text-xs text-muted-foreground">
+            {formatDateTime(batch.createdAtMs)}
+          </span>
         </div>
-        <Progress value={progress} aria-label={`난수 시드 실험 진행률 ${progress}%`} />
+        <Progress
+          value={progress}
+          aria-label={`난수 시드 실험 진행률 ${progress}%`}
+        />
         <p className="text-xs text-muted-foreground">
-          완료 {batch.completedCount} · 실행 {batch.runningCount} · 실행 대기 {batch.queuedCount}
-          {' · '}묶음 대기 {batch.pendingCount} · 실패 {batch.failedCount}
+          완료 {batch.completedCount} · 실행 {batch.runningCount} · 실행 대기{" "}
+          {batch.queuedCount}
+          {" · "}묶음 대기 {batch.pendingCount} · 실패 {batch.failedCount}
         </p>
       </CardContent>
     </Card>
   );
   if (!editing) {
-    return <Link to={`/backtests/batches/${batch.id}`} className="block">{card}</Link>;
+    return (
+      <Link to={`/backtests/batches/${batch.id}`} className="block">
+        {card}
+      </Link>
+    );
   }
-  const active = batch.status === 'ACTIVE' || batch.status === 'CANCELLING';
+  const active = batch.status === "ACTIVE" || batch.status === "CANCELLING";
   return (
     <div className="flex items-center gap-2">
       <div className="min-w-0 flex-1">{card}</div>
@@ -193,7 +225,11 @@ export function SeedCloneBatchCard({
         variant="destructive"
         size="sm"
         disabled={active || removing}
-        title={active ? '실행 중인 실험은 취소 완료 후 삭제할 수 있습니다' : undefined}
+        title={
+          active
+            ? "실행 중인 실험은 취소 완료 후 삭제할 수 있습니다"
+            : undefined
+        }
         onClick={onRemove}
       >
         실험 삭제
@@ -207,7 +243,9 @@ export function BacktestsPage() {
   const { data, isLoading } = useBacktests(5_000);
   const batchesQuery = useSeedCloneBatches(5_000);
   const strategies = useStrategies();
-  const strategyById = new Map((strategies.data?.strategies ?? []).map((s) => [s.id, s]));
+  const strategyById = new Map(
+    (strategies.data?.strategies ?? []).map((s) => [s.id, s]),
+  );
   const jobs = mergeBacktestSources(
     (data?.jobs ?? []).filter((job) => !job.cloneBatchId),
     batchesQuery.data?.sourceJobs ?? [],
@@ -220,11 +258,14 @@ export function BacktestsPage() {
   const [editing, setEditing] = useState(false);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const selectedIds = deletableIds.filter((id) => selected.has(id));
-  const allSelected = deletableIds.length > 0 && selectedIds.length === deletableIds.length;
+  const allSelected =
+    deletableIds.length > 0 && selectedIds.length === deletableIds.length;
 
   const remove = useMutation({
     mutationFn: (ids: string[]) =>
-      Promise.all(ids.map((id) => api(`/backtests/${id}`, { method: 'DELETE' }))),
+      Promise.all(
+        ids.map((id) => api(`/backtests/${id}`, { method: "DELETE" })),
+      ),
     onSuccess: (_result, ids) => {
       toast.success(`백테스트 ${ids.length}개를 삭제했습니다`);
       setSelected(new Set());
@@ -232,18 +273,23 @@ export function BacktestsPage() {
     },
     onError: (error) => toast.error(error.message),
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: ['backtests'] });
-      void queryClient.invalidateQueries({ queryKey: ['backtest-clone-batches'] });
+      void queryClient.invalidateQueries({ queryKey: ["backtests"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["backtest-clone-batches"],
+      });
     },
   });
 
   const removeBatch = useMutation({
-    mutationFn: (id: string) => api(`/backtest-clone-batches/${id}`, { method: 'DELETE' }),
-    onSuccess: () => toast.success('난수 시드 실험을 삭제했습니다'),
+    mutationFn: (id: string) =>
+      api(`/backtest-clone-batches/${id}`, { method: "DELETE" }),
+    onSuccess: () => toast.success("난수 시드 실험을 삭제했습니다"),
     onError: (error) => toast.error(error.message),
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: ['backtests'] });
-      void queryClient.invalidateQueries({ queryKey: ['backtest-clone-batches'] });
+      void queryClient.invalidateQueries({ queryKey: ["backtests"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["backtest-clone-batches"],
+      });
     },
   });
 
@@ -265,7 +311,9 @@ export function BacktestsPage() {
               <label className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Checkbox
                   checked={allSelected}
-                  onCheckedChange={() => setSelected(toggleAllBacktests(selected, deletableIds))}
+                  onCheckedChange={() =>
+                    setSelected(toggleAllBacktests(selected, deletableIds))
+                  }
                   aria-label="전체 선택"
                 />
                 전체 선택
@@ -297,7 +345,7 @@ export function BacktestsPage() {
                 setSelected(new Set());
               }}
             >
-              {editing ? '완료' : '편집'}
+              {editing ? "완료" : "편집"}
             </Button>
           ) : null}
           <Button asChild className="h-11">
@@ -320,7 +368,9 @@ export function BacktestsPage() {
             return (
               <section key={group.strategyId} className="space-y-3">
                 <div className="flex items-center gap-1.5">
-                  <h3 className="text-sm font-semibold">{strategy?.name ?? group.strategyId}</h3>
+                  <h3 className="text-sm font-semibold">
+                    {strategy?.name ?? group.strategyId}
+                  </h3>
                   {strategy?.description ? (
                     <InfoHint label={`${strategy.name} 전략 설명`}>
                       <p className="leading-relaxed">{strategy.description}</p>
@@ -346,7 +396,10 @@ export function BacktestsPage() {
                               key={batch.id}
                               batch={batch}
                               editing={editing}
-                              removing={removeBatch.isPending && removeBatch.variables === batch.id}
+                              removing={
+                                removeBatch.isPending &&
+                                removeBatch.variables === batch.id
+                              }
                               onRemove={() => removeBatch.mutate(batch.id)}
                             />
                           ))}

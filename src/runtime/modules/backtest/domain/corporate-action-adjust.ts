@@ -46,7 +46,10 @@ export function adjustForRatio(
   // - 1e-9 는 배정밀도 부동소수점의 최소 오차 단위(약 2.2e-16)보다 훨씬 크다
   // - 그러면서도 0.5 보다는 훨씬 작아 실제 단주를 놓치지 않는다
   const epsilon = 1e-9;
-  const whole = Math.abs(raw - Math.round(raw)) < epsilon ? Math.round(raw) : Math.floor(raw);
+  const whole =
+    Math.abs(raw - Math.round(raw)) < epsilon
+      ? Math.round(raw)
+      : Math.floor(raw);
   const fraction = raw - whole;
 
   return {

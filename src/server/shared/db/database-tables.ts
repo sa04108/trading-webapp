@@ -16,5 +16,5 @@ export const DATA_TABLE_NAMES = [
   "symbol_master_trading_days",
   "symbol_master_versions",
   "symbol_versions",
-  "symbols"
+  "symbols",
 ] as const;

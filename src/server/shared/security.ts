@@ -1,20 +1,20 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance } from "fastify";
 
-const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 /**
  * 스펙 §16 보안 헤더. onSend hook 과, hook 을 우회하는 응답(예: SSE 의
  * reply.hijack())이 같은 목록을 공유한다.
  */
 export const SECURITY_HEADERS: Readonly<Record<string, string>> = {
-  'Content-Security-Policy':
+  "Content-Security-Policy":
     "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'",
   // TLS 종단은 tailscale serve 지만 HTTP 응답 정책은 앱 책임이다 (D-016) —
   // 엣지를 무엇으로 바꾸든 헤더가 따라다닌다.
-  'Strict-Transport-Security': 'max-age=31536000',
-  'X-Content-Type-Options': 'nosniff',
-  'X-Frame-Options': 'DENY',
-  'Referrer-Policy': 'no-referrer',
+  "Strict-Transport-Security": "max-age=31536000",
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "no-referrer",
 };
 
 /**
@@ -23,13 +23,13 @@ export const SECURITY_HEADERS: Readonly<Record<string, string>> = {
  * (앱은 자신의 공인 주소를 모르므로 Host 헤더 기준으로 판정한다 — 인프라 비인지 원칙)
  */
 export function registerSecurity(app: FastifyInstance): void {
-  app.addHook('onSend', async (_request, reply) => {
+  app.addHook("onSend", async (_request, reply) => {
     for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
       reply.header(name, value);
     }
   });
 
-  app.addHook('preHandler', async (request, reply) => {
+  app.addHook("preHandler", async (request, reply) => {
     if (!MUTATING_METHODS.has(request.method)) return;
     const origin = request.headers.origin;
     if (!origin) return; // 브라우저가 아닌 클라이언트(CLI 등)
@@ -37,10 +37,10 @@ export function registerSecurity(app: FastifyInstance): void {
     try {
       originHost = new URL(origin).host;
     } catch {
-      return reply.code(403).send({ error: 'Origin 이 올바르지 않습니다' });
+      return reply.code(403).send({ error: "Origin 이 올바르지 않습니다" });
     }
     if (originHost !== request.headers.host) {
-      return reply.code(403).send({ error: '교차 출처 요청이 거부되었습니다' });
+      return reply.code(403).send({ error: "교차 출처 요청이 거부되었습니다" });
     }
   });
 }

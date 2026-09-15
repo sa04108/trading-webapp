@@ -1,6 +1,10 @@
-import { Info } from 'lucide-react';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { Info } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 /**
  * 설명 툴팁 (ⓘ 아이콘).
@@ -10,7 +14,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
  * 그래서 open 을 직접 들고 Radix 의 자동 개폐를 쓰지 않는다. 대신 닫는 경로를
  * 직접 챙긴다 — 다시 탭, Escape, 포커스 이탈, 바깥 영역 탭.
  */
-export function InfoHint({ label, children }: { label: string; children: ReactNode }) {
+export function InfoHint({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
@@ -21,8 +31,8 @@ export function InfoHint({ label, children }: { label: string; children: ReactNo
       if (triggerRef.current?.contains(event.target as Node)) return;
       setOpen(false);
     };
-    document.addEventListener('pointerdown', onPointerDown);
-    return () => document.removeEventListener('pointerdown', onPointerDown);
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [open]);
 
   return (
@@ -37,13 +47,17 @@ export function InfoHint({ label, children }: { label: string; children: ReactNo
           onClick={() => setOpen((prev) => !prev)}
           onBlur={() => setOpen(false)}
           onKeyDown={(e) => {
-            if (e.key === 'Escape') setOpen(false);
+            if (e.key === "Escape") setOpen(false);
           }}
         >
           <Info className="size-3.5" aria-hidden />
         </button>
       </TooltipTrigger>
-      <TooltipContent side="top" align="start" className="max-w-xs flex-col items-start gap-1">
+      <TooltipContent
+        side="top"
+        align="start"
+        className="max-w-xs flex-col items-start gap-1"
+      >
         {children}
       </TooltipContent>
     </Tooltip>

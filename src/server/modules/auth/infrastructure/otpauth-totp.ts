@@ -1,7 +1,7 @@
-import * as OTPAuth from 'otpauth';
-import type { TotpService } from '../application/ports.js';
+import * as OTPAuth from "otpauth";
+import type { TotpService } from "../application/ports.js";
 
-const ISSUER = 'Quant Platform';
+const ISSUER = "Quant Platform";
 const DIGITS = 6;
 const PERIOD_SEC = 30;
 
@@ -25,7 +25,7 @@ export const otpauthTotpService: TotpService = {
 
   buildUri(secret: string, username: string): string {
     const parsed = parseSecret(secret);
-    if (!parsed) throw new Error('TOTP secret 이 올바른 base32 가 아닙니다');
+    if (!parsed) throw new Error("TOTP secret 이 올바른 base32 가 아닙니다");
     return new OTPAuth.TOTP({
       issuer: ISSUER,
       label: username,

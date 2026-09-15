@@ -1,5 +1,5 @@
-import { PeriodValidationSection } from './period-validation-section';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { PeriodValidationSection } from "./period-validation-section";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowDown,
   ArrowUp,
@@ -10,15 +10,15 @@ import {
   SlidersHorizontal,
   Trash2,
   XCircle,
-} from 'lucide-react';
-import { useMemo, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router';
-import { toast } from 'sonner';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { PageSizeInput, Pagination } from '@/components/pagination';
+} from "lucide-react";
+import { useMemo, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router";
+import { toast } from "sonner";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { PageSizeInput, Pagination } from "@/components/pagination";
 import {
   Dialog,
   DialogContent,
@@ -26,18 +26,18 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
-import { Progress } from '@/components/ui/progress';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+} from "@/components/ui/dialog";
+import { Progress } from "@/components/ui/progress";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select';
-import { Skeleton } from '@/components/ui/skeleton';
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
   TableBody,
@@ -45,18 +45,23 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table';
-import { api, ApiError } from '@/lib/api-client';
-import { cn } from '@/lib/utils';
-import { SymbolLabel } from '@/components/symbol-label';
-import { useStockNames } from '@/lib/use-stock-names';
-import { useBacktestLive, useBacktestSeries, useBacktestTrades, useStrategies } from './api';
-import { exitReasonLabel } from './exit-reason';
-import { openPositionRows } from './open-position-rows';
-import { periodEndTsMs, staleDays } from './stale-days';
-import { parsePageSize } from '@/lib/page-size';
-import { ParamHint } from './param-hint';
-import { extractNumberParams, paramLabel } from './param-specs';
+} from "@/components/ui/table";
+import { api, ApiError } from "@/lib/api-client";
+import { cn } from "@/lib/utils";
+import { SymbolLabel } from "@/components/symbol-label";
+import { useStockNames } from "@/lib/use-stock-names";
+import {
+  useBacktestLive,
+  useBacktestSeries,
+  useBacktestTrades,
+  useStrategies,
+} from "./api";
+import { exitReasonLabel } from "./exit-reason";
+import { openPositionRows } from "./open-position-rows";
+import { periodEndTsMs, staleDays } from "./stale-days";
+import { parsePageSize } from "@/lib/page-size";
+import { ParamHint } from "./param-hint";
+import { extractNumberParams, paramLabel } from "./param-specs";
 import {
   formatDate,
   formatDateTime,
@@ -67,15 +72,15 @@ import {
   formatSignedPct,
   pnlClass,
   timeframeLabel,
-} from '@/lib/format';
+} from "@/lib/format";
 import {
   BenchmarkComparisonChart,
   DrawdownChart,
   EquityChart,
   MonthlyReturnsChart,
-} from './result-charts';
-import { resolveJobTimeframe } from './job-timeframe';
-import { StatusBadge } from './status-badge';
+} from "./result-charts";
+import { resolveJobTimeframe } from "./job-timeframe";
+import { StatusBadge } from "./status-badge";
 import {
   ariaSortValue,
   DEFAULT_TRADE_SORT,
@@ -86,26 +91,35 @@ import {
   tradeSortSummary,
   type TradeSort,
   type TradeSortKey,
-} from './trade-sort';
-import { formatUniverseRuleSummary } from './universe-summary';
+} from "./trade-sort";
+import { formatUniverseRuleSummary } from "./universe-summary";
 import {
   isTerminal,
   type BacktestMetrics,
   type BenchmarkResult,
   type JobSummary,
   type RunMetadata,
-} from './types';
-import { costSummary } from './cost-summary';
-import { costProfileLabel, slippageProfileLabel } from './profile-labels';
-import { ResultWarnings } from './result-warnings';
-import { selectionMethodLabel, universeSourceLabel } from './universe-provenance';
-import { UniverseRebalancingSection } from './universe-rebalancing-section';
-import type { ProvenancePin } from '../../../shared/schemas/provenance-pin.js';
-import type { UniverseRebalancingEntryDto } from '../../../shared/schemas/universe-rebalancing.js';
+} from "./types";
+import { costSummary } from "./cost-summary";
+import { costProfileLabel, slippageProfileLabel } from "./profile-labels";
+import { ResultWarnings } from "./result-warnings";
+import {
+  selectionMethodLabel,
+  universeSourceLabel,
+} from "./universe-provenance";
+import { UniverseRebalancingSection } from "./universe-rebalancing-section";
+import type { ProvenancePin } from "../../../shared/schemas/provenance-pin.js";
+import type { UniverseRebalancingEntryDto } from "../../../shared/schemas/universe-rebalancing.js";
 
 const RESULT_PAGE_SIZE = 10;
 
-function MetricCards({ metrics, benchmark }: { metrics: BacktestMetrics; benchmark: BenchmarkResult | null }) {
+function MetricCards({
+  metrics,
+  benchmark,
+}: {
+  metrics: BacktestMetrics;
+  benchmark: BenchmarkResult | null;
+}) {
   const cost = costSummary(metrics);
   const cards: Array<{
     label: string;
@@ -115,40 +129,54 @@ function MetricCards({ metrics, benchmark }: { metrics: BacktestMetrics; benchma
     cardClassName?: string;
   }> = [
     {
-      label: '누적 수익률',
+      label: "누적 수익률",
       value: formatSignedPct(metrics.totalReturnPct),
       className: pnlClass(metrics.totalReturnPct),
     },
-    { label: 'CAGR', value: formatSignedPct(metrics.cagrPct), className: pnlClass(metrics.cagrPct) },
     {
-      label: 'MDD',
+      label: "CAGR",
+      value: formatSignedPct(metrics.cagrPct),
+      className: pnlClass(metrics.cagrPct),
+    },
+    {
+      label: "MDD",
       value: formatSignedPct(metrics.maxDrawdownPct),
       className: pnlClass(metrics.maxDrawdownPct),
     },
-    { label: 'Sharpe', value: formatNumber(metrics.sharpe), className: '' },
+    { label: "Sharpe", value: formatNumber(metrics.sharpe), className: "" },
     {
-      label: '승률 (매도 체결 기준)',
-      value: metrics.winRate === null ? '-' : `${metrics.winRate.toFixed(1)}%`,
-      className: '',
+      label: "승률 (매도 체결 기준)",
+      value: metrics.winRate === null ? "-" : `${metrics.winRate.toFixed(1)}%`,
+      className: "",
     },
-    { label: '매도 체결 수 (부분청산 포함)', value: `${metrics.tradeCount}건`, className: '' },
     {
-      label: '총 비용',
+      label: "매도 체결 수 (부분청산 포함)",
+      value: `${metrics.tradeCount}건`,
+      className: "",
+    },
+    {
+      label: "총 비용",
       value: cost.totalText,
-      className: '',
+      className: "",
       detail: cost.detailText,
-      cardClassName: 'col-span-full',
+      cardClassName: "col-span-full",
     },
   ];
-  if (benchmark?.available && benchmark.totalReturnPct !== null && benchmark.excessReturnPct !== null) {
-    cards.splice(1, 0,
+  if (
+    benchmark?.available &&
+    benchmark.totalReturnPct !== null &&
+    benchmark.excessReturnPct !== null
+  ) {
+    cards.splice(
+      1,
+      0,
       {
         label: `${benchmark.name} 수익률`,
         value: formatSignedPct(benchmark.totalReturnPct),
         className: pnlClass(benchmark.totalReturnPct),
       },
       {
-        label: '초과 수익률',
+        label: "초과 수익률",
         value: formatSignedPct(benchmark.excessReturnPct),
         className: pnlClass(benchmark.excessReturnPct),
       },
@@ -157,12 +185,24 @@ function MetricCards({ metrics, benchmark }: { metrics: BacktestMetrics; benchma
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
       {cards.map((card) => (
-        <Card key={card.label} className={'cardClassName' in card ? card.cardClassName : undefined}>
+        <Card
+          key={card.label}
+          className={"cardClassName" in card ? card.cardClassName : undefined}
+        >
           <CardContent className="px-4 py-3">
             <p className="text-xs text-muted-foreground">{card.label}</p>
-            <p className={cn('text-lg font-semibold tabular-nums', card.className)}>{card.value}</p>
-            {'detail' in card && card.detail ? (
-              <p className="mt-1 text-xs text-muted-foreground tabular-nums">{card.detail}</p>
+            <p
+              className={cn(
+                "text-lg font-semibold tabular-nums",
+                card.className,
+              )}
+            >
+              {card.value}
+            </p>
+            {"detail" in card && card.detail ? (
+              <p className="mt-1 text-xs text-muted-foreground tabular-nums">
+                {card.detail}
+              </p>
             ) : null}
           </CardContent>
         </Card>
@@ -187,13 +227,13 @@ function SortableHead({
   sortKey: TradeSortKey;
   sort: TradeSort;
   onSort: (key: TradeSortKey) => void;
-  align?: 'right';
+  align?: "right";
 }) {
   const active = sort.key === sortKey;
   return (
     <TableHead
       aria-sort={ariaSortValue(sort, sortKey)}
-      className={align === 'right' ? 'text-right' : undefined}
+      className={align === "right" ? "text-right" : undefined}
     >
       <Button
         variant="ghost"
@@ -205,7 +245,7 @@ function SortableHead({
       >
         {TRADE_SORT_LABELS[sortKey]}
         {active ? (
-          sort.direction === 'ASC' ? (
+          sort.direction === "ASC" ? (
             <ArrowUp />
           ) : (
             <ArrowDown />
@@ -233,7 +273,7 @@ function TradesSection({
   periodTo: string;
   nameOf: (symbol: string) => string | null;
 }) {
-  const [symbol, setSymbol] = useState<string>('ALL');
+  const [symbol, setSymbol] = useState<string>("ALL");
   const [page, setPage] = useState(0);
   const [pageSizeText, setPageSizeText] = useState(String(RESULT_PAGE_SIZE));
   const [sort, setSort] = useState<TradeSort>(DEFAULT_TRADE_SORT);
@@ -245,7 +285,7 @@ function TradesSection({
       offset: page * pageSize,
       sort: sort.key,
       dir: sort.direction,
-      ...(symbol !== 'ALL' ? { symbol } : {}),
+      ...(symbol !== "ALL" ? { symbol } : {}),
     },
     true,
   );
@@ -259,7 +299,10 @@ function TradesSection({
   };
   const openRows =
     page === 0
-      ? sortOpenRows(openPositionRows(run?.openPositionsJson ?? null, symbol, periodTo), sort)
+      ? sortOpenRows(
+          openPositionRows(run?.openPositionsJson ?? null, symbol, periodTo),
+          sort,
+        )
       : [];
   // 봉 tsMs 규약(UTC 자정)과 맞춰야 한다 — 기간 종료일까지 거래된 정상 종목의 마지막
   // 확인일도 이 값과 같다. KST 자정·23:59:59 같은 다른 규약을 쓰면 반나절 가까이
@@ -305,7 +348,9 @@ function TradesSection({
         {isLoading ? (
           <Skeleton className="h-32 w-full" />
         ) : trades.length === 0 && openRows.length === 0 ? (
-          <p className="py-4 text-center text-sm text-muted-foreground">거래가 없습니다.</p>
+          <p className="py-4 text-center text-sm text-muted-foreground">
+            거래가 없습니다.
+          </p>
         ) : (
           <div className="overflow-x-auto">
             <Table>
@@ -315,17 +360,39 @@ function TradesSection({
                       코드 문자열 순서가 사람에게 뜻이 없다. 누를 수 있게 두면 골랐는데
                       순서가 그대로인 상태가 된다 (D-027·D-038 과 같은 방향) */}
                   <TableHead>종목</TableHead>
-                  <SortableHead sortKey="QUANTITY" sort={sort} onSort={changeSort} align="right" />
-                  <SortableHead sortKey="ENTRY_TS" sort={sort} onSort={changeSort} />
-                  <SortableHead sortKey="EXIT_TS" sort={sort} onSort={changeSort} />
-                  <SortableHead sortKey="NET_PNL" sort={sort} onSort={changeSort} align="right" />
+                  <SortableHead
+                    sortKey="QUANTITY"
+                    sort={sort}
+                    onSort={changeSort}
+                    align="right"
+                  />
+                  <SortableHead
+                    sortKey="ENTRY_TS"
+                    sort={sort}
+                    onSort={changeSort}
+                  />
+                  <SortableHead
+                    sortKey="EXIT_TS"
+                    sort={sort}
+                    onSort={changeSort}
+                  />
+                  <SortableHead
+                    sortKey="NET_PNL"
+                    sort={sort}
+                    onSort={changeSort}
+                    align="right"
+                  />
                   <SortableHead
                     sortKey="RETURN_PCT"
                     sort={sort}
                     onSort={changeSort}
                     align="right"
                   />
-                  <SortableHead sortKey="HOLDING_TIME" sort={sort} onSort={changeSort} />
+                  <SortableHead
+                    sortKey="HOLDING_TIME"
+                    sort={sort}
+                    onSort={changeSort}
+                  />
                   {/* 미청산 행에만 값이 있다 — 매도 체결 행은 이미 매도일이 있어 별도로
                       "확인일" 을 말할 필요가 없다. 정렬 축으로 두지 않는 이유는 사유와 같다 */}
                   <TableHead>마지막 확인일</TableHead>
@@ -334,30 +401,51 @@ function TradesSection({
               </TableHeader>
               <TableBody>
                 {openRows.map((row) => {
-                  const stale = staleDays(row.lastPriceTsMs, periodEndMsForStale);
+                  const stale = staleDays(
+                    row.lastPriceTsMs,
+                    periodEndMsForStale,
+                  );
                   return (
-                    <TableRow key={`open-${row.symbol}`} className="bg-muted/40">
+                    <TableRow
+                      key={`open-${row.symbol}`}
+                      className="bg-muted/40"
+                    >
                       <TableCell className="font-medium">
-                        <SymbolLabel symbol={row.symbol} name={nameOf(row.symbol)} />
+                        <SymbolLabel
+                          symbol={row.symbol}
+                          name={nameOf(row.symbol)}
+                        />
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">{row.quantity}</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {row.quantity}
+                      </TableCell>
                       <TableCell className="whitespace-nowrap text-xs">
                         {formatDateTime(row.entryTsMs)}
                         <br />
-                        <span className="text-muted-foreground">{formatKrw(row.entryPrice)}</span>
+                        <span className="text-muted-foreground">
+                          {formatKrw(row.entryPrice)}
+                        </span>
                       </TableCell>
                       <TableCell className="whitespace-nowrap text-xs">
                         <Badge variant="outline">미청산</Badge>
                         <br />
-                        <span className="text-muted-foreground">{formatKrw(row.lastPrice)}</span>
+                        <span className="text-muted-foreground">
+                          {formatKrw(row.lastPrice)}
+                        </span>
                       </TableCell>
                       <TableCell
-                        className={cn('text-right tabular-nums', pnlClass(row.unrealizedPnl))}
+                        className={cn(
+                          "text-right tabular-nums",
+                          pnlClass(row.unrealizedPnl),
+                        )}
                       >
                         {formatSignedKrw(row.unrealizedPnl)}
                       </TableCell>
                       <TableCell
-                        className={cn('text-right tabular-nums', pnlClass(row.returnPct))}
+                        className={cn(
+                          "text-right tabular-nums",
+                          pnlClass(row.returnPct),
+                        )}
                       >
                         {formatSignedPct(row.returnPct)}
                       </TableCell>
@@ -366,35 +454,52 @@ function TradesSection({
                       </TableCell>
                       <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
                         {formatDate(row.lastPriceTsMs)}
-                        {stale > 0 ? ` (${stale}일 경과)` : ''}
+                        {stale > 0 ? ` (${stale}일 경과)` : ""}
                       </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">미청산</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        미청산
+                      </TableCell>
                     </TableRow>
                   );
                 })}
                 {trades.map((trade) => (
                   <TableRow key={trade.id}>
                     <TableCell className="font-medium">
-                      <SymbolLabel symbol={trade.symbol} name={nameOf(trade.symbol)} />
+                      <SymbolLabel
+                        symbol={trade.symbol}
+                        name={nameOf(trade.symbol)}
+                      />
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">{trade.quantity}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {trade.quantity}
+                    </TableCell>
                     <TableCell className="whitespace-nowrap text-xs">
                       {formatDateTime(trade.entryTsMs)}
                       <br />
-                      <span className="text-muted-foreground">{formatKrw(trade.entryPrice)}</span>
+                      <span className="text-muted-foreground">
+                        {formatKrw(trade.entryPrice)}
+                      </span>
                     </TableCell>
                     <TableCell className="whitespace-nowrap text-xs">
                       {formatDateTime(trade.exitTsMs)}
                       <br />
-                      <span className="text-muted-foreground">{formatKrw(trade.exitPrice)}</span>
+                      <span className="text-muted-foreground">
+                        {formatKrw(trade.exitPrice)}
+                      </span>
                     </TableCell>
                     <TableCell
-                      className={cn('text-right tabular-nums', pnlClass(trade.netPnl))}
+                      className={cn(
+                        "text-right tabular-nums",
+                        pnlClass(trade.netPnl),
+                      )}
                     >
                       {formatSignedKrw(trade.netPnl)}
                     </TableCell>
                     <TableCell
-                      className={cn('text-right tabular-nums', pnlClass(trade.returnPct))}
+                      className={cn(
+                        "text-right tabular-nums",
+                        pnlClass(trade.returnPct),
+                      )}
                     >
                       {formatSignedPct(trade.returnPct)}
                     </TableCell>
@@ -402,7 +507,9 @@ function TradesSection({
                       {formatDuration(trade.holdingTimeMs)}
                     </TableCell>
                     {/* 매도 체결 행에는 "마지막 확인일" 개념이 없다 — 매도일이 그 역할이다 */}
-                    <TableCell className="text-xs text-muted-foreground">-</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      -
+                    </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {exitReasonLabel(trade.exitReason)}
                     </TableCell>
@@ -416,20 +523,22 @@ function TradesSection({
           <p className="mt-2 text-xs text-muted-foreground">
             {tradeSortSummary(sort)}으로 정렬했습니다.
             {openRows.length > 0
-              ? ' 미청산 행은 첫 페이지 맨 위에 고정되고 같은 축으로 함께 정렬됩니다 — 매도 체결 행과 한 줄로 섞이지는 않습니다.'
-              : ''}
+              ? " 미청산 행은 첫 페이지 맨 위에 고정되고 같은 축으로 함께 정렬됩니다 — 매도 체결 행과 한 줄로 섞이지는 않습니다."
+              : ""}
           </p>
         ) : null}
         {trades.length > 0 ? (
           <p className="mt-1 text-xs text-muted-foreground">
-            매도 체결 행은 부분청산도 각각 한 건으로 집계합니다. 진입일·보유기간은
-            해당 포지션의 최초 진입 기준이고, 진입가는 매도 직전의 이동평균 매수가입니다.
+            매도 체결 행은 부분청산도 각각 한 건으로 집계합니다.
+            진입일·보유기간은 해당 포지션의 최초 진입 기준이고, 진입가는 매도
+            직전의 이동평균 매수가입니다.
           </p>
         ) : null}
         {openRows.length > 0 ? (
           <p className="mt-1 text-xs text-muted-foreground">
-            미청산 행의 손익은 기간 종료 시점 종가 기준 평가치입니다 (매도 비용 미반영). 누적
-            수익률·자산 곡선에는 포함되지만 승률·profit factor·매도 체결 수에는 포함되지 않습니다.
+            미청산 행의 손익은 기간 종료 시점 종가 기준 평가치입니다 (매도 비용
+            미반영). 누적 수익률·자산 곡선에는 포함되지만 승률·profit
+            factor·매도 체결 수에는 포함되지 않습니다.
           </p>
         ) : null}
         <Pagination
@@ -461,12 +570,17 @@ function RunMetadataCard({
   provenancePin: ProvenancePin | null;
   universeRebalancing: readonly UniverseRebalancingEntryDto[];
 }) {
-  const warnings = run.warningsJson ? (JSON.parse(run.warningsJson) as string[]) : [];
+  const warnings = run.warningsJson
+    ? (JSON.parse(run.warningsJson) as string[])
+    : [];
   // 라벨·설명은 서버 스키마에서 읽는다 (위저드와 같은 캐시 키).
   // 실패하거나 아직 안 왔으면 원본 키로 표시한다 — 파라미터 값 표시를 막지 않는다.
   const schema = useQuery({
-    queryKey: ['strategies', run.strategyId, 'schema'],
-    queryFn: () => api<{ schema: Record<string, unknown> }>(`/strategies/${run.strategyId}/schema`),
+    queryKey: ["strategies", run.strategyId, "schema"],
+    queryFn: () =>
+      api<{ schema: Record<string, unknown> }>(
+        `/strategies/${run.strategyId}/schema`,
+      ),
   });
   const specByKey = new Map(
     extractNumberParams(schema.data?.schema).map((spec) => [spec.key, spec]),
@@ -474,7 +588,7 @@ function RunMetadataCard({
   // 요율은 현재 레지스트리에서 찾되 id@version 이 정확히 일치할 때만 붙인다 —
   // 세율이 바뀐 뒤의 레지스트리 값을 구버전 실행에 붙이면 재현 정보가 거짓말한다
   const profiles = useQuery({
-    queryKey: ['backtests', 'profiles'],
+    queryKey: ["backtests", "profiles"],
     queryFn: () =>
       api<{
         commissionProfiles: Array<{
@@ -485,8 +599,13 @@ function RunMetadataCard({
           sellTaxRate: number;
           sellTaxRateSchedule?: Array<{ fromTsMs: number; rate: number }>;
         }>;
-        slippageProfiles: Array<{ id: string; version: string; bps: number; fixed: number }>;
-      }>('/backtests/profiles'),
+        slippageProfiles: Array<{
+          id: string;
+          version: string;
+          bps: number;
+          fixed: number;
+        }>;
+      }>("/backtests/profiles"),
   });
   const feeProfile = profiles.data?.commissionProfiles.find(
     (p) => `${p.id}@${p.version}` === run.feeModelVersion,
@@ -496,32 +615,39 @@ function RunMetadataCard({
   );
   const rows: Array<[string, string]> = [
     [
-      '전략',
+      "전략",
       strategyName
         ? `${strategyName} (${run.strategyId} v${run.strategyVersion})`
         : `${run.strategyId} v${run.strategyVersion}`,
     ],
-    ['전략 해시', run.strategySourceHash.slice(0, 16)],
+    ["전략 해시", run.strategySourceHash.slice(0, 16)],
     // 잡은 더 이상 datasetId 를 갖지 않는다(스펙 2026-08-05) — 유니버스 출처는
     // provenancePin 에서만 읽는다 (Task 14).
-    ['유니버스 출처', universeSourceLabel(provenancePin)],
-    ['선정 방식', selectionMethodLabel(provenancePin?.selectionMethod ?? null)],
-    ['봉 주기', timeframe ? timeframeLabel(timeframe) : '-'],
-    ['유니버스 해시', run.universeHash.slice(0, 16)],
-    ['엔진 버전', run.engineVersion],
+    ["유니버스 출처", universeSourceLabel(provenancePin)],
+    ["선정 방식", selectionMethodLabel(provenancePin?.selectionMethod ?? null)],
+    ["봉 주기", timeframe ? timeframeLabel(timeframe) : "-"],
+    ["유니버스 해시", run.universeHash.slice(0, 16)],
+    ["엔진 버전", run.engineVersion],
     [
-      '수수료 모델',
-      feeProfile ? `${run.feeModelVersion} — ${costProfileLabel(feeProfile)}` : run.feeModelVersion,
+      "수수료 모델",
+      feeProfile
+        ? `${run.feeModelVersion} — ${costProfileLabel(feeProfile)}`
+        : run.feeModelVersion,
     ],
     [
-      '슬리피지 모델',
+      "슬리피지 모델",
       slippageProfile
         ? `${run.slippageModelVersion} — ${slippageProfileLabel(slippageProfile)}`
         : run.slippageModelVersion,
     ],
-    ...(supportsRandomSeed ? [['난수 시드', String(run.randomSeed)] as [string, string]] : []),
-    ['Git 커밋', run.gitCommitSha.slice(0, 12)],
-    ['실행 시각', `${formatDateTime(run.startedAtMs)} ~ ${formatDateTime(run.completedAtMs)}`],
+    ...(supportsRandomSeed
+      ? [["난수 시드", String(run.randomSeed)] as [string, string]]
+      : []),
+    ["Git 커밋", run.gitCommitSha.slice(0, 12)],
+    [
+      "실행 시각",
+      `${formatDateTime(run.startedAtMs)} ~ ${formatDateTime(run.completedAtMs)}`,
+    ],
   ];
   return (
     <div className="grid gap-4 lg:grid-cols-2">
@@ -533,7 +659,10 @@ function RunMetadataCard({
           {Object.entries(job.request.parameters).map(([key, value]) => {
             const spec = specByKey.get(key);
             return (
-              <div key={key} className="flex items-center justify-between gap-2">
+              <div
+                key={key}
+                className="flex items-center justify-between gap-2"
+              >
                 <span className="flex items-center gap-1 text-muted-foreground">
                   {spec ? paramLabel(spec) : key}
                   {spec ? <ParamHint spec={spec} /> : null}
@@ -561,7 +690,9 @@ function RunMetadataCard({
                   잘리는 자리가 하필 숫자다. wrap-anywhere 를 쓰는 이유: 해시·id·
                   `id@version` 은 공백이 없어 break-words 로는 한 줄을 넘겨도 쪼개지지
                   않는다 (min-content 가 문자열 전체다). */}
-              <span className="text-right font-mono text-xs leading-5 wrap-anywhere">{value}</span>
+              <span className="text-right font-mono text-xs leading-5 wrap-anywhere">
+                {value}
+              </span>
             </div>
           ))}
         </CardContent>
@@ -573,12 +704,12 @@ function RunMetadataCard({
 }
 
 export function BacktestDetailPage() {
-  const { id = '' } = useParams();
+  const { id = "" } = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [seedCloneOpen, setSeedCloneOpen] = useState(false);
-  const [seedCloneCount, setSeedCloneCount] = useState('10');
+  const [seedCloneCount, setSeedCloneCount] = useState("10");
 
   const {
     job,
@@ -591,42 +722,51 @@ export function BacktestDetailPage() {
     isError,
     error,
   } = useBacktestLive(id);
-  const completed = job?.status === 'COMPLETED';
+  const completed = job?.status === "COMPLETED";
   const { data: series } = useBacktestSeries(id, completed === true);
 
   // `series.symbols` 는 거래 내역에 종목 이름을 붙일 목록이다 — 거래가 0건인 종목은 빠진다.
   const resolvedSymbols = useMemo(() => series?.symbols ?? [], [series]);
   // 거래 내역에 이름을 붙이기 위해 전 종목을 한 번에 조회한다.
   const stockNames = useStockNames(resolvedSymbols);
-  const nameOf = (symbol: string): string | null => stockNames.get(symbol)?.name ?? null;
+  const nameOf = (symbol: string): string | null =>
+    stockNames.get(symbol)?.name ?? null;
 
   const cancelMutation = useMutation({
-    mutationFn: () => api(`/backtests/${id}/cancel`, { method: 'POST' }),
+    mutationFn: () => api(`/backtests/${id}/cancel`, { method: "POST" }),
     onSuccess: () => {
-      toast.info('취소를 요청했습니다');
-      void queryClient.invalidateQueries({ queryKey: ['backtests', id] });
+      toast.info("취소를 요청했습니다");
+      void queryClient.invalidateQueries({ queryKey: ["backtests", id] });
     },
-    onError: () => toast.error('취소할 수 없는 상태입니다'),
+    onError: () => toast.error("취소할 수 없는 상태입니다"),
   });
 
   const cloneMutation = useMutation({
     mutationFn: () =>
-      api<{ job: { id: string }; warnings?: string[] }>(`/backtests/${id}/clone`, {
-        method: 'POST',
-      }),
+      api<{ job: { id: string }; warnings?: string[] }>(
+        `/backtests/${id}/clone`,
+        {
+          method: "POST",
+        },
+      ),
     onSuccess: (data) => {
-      void queryClient.invalidateQueries({ queryKey: ['backtests'] });
+      void queryClient.invalidateQueries({ queryKey: ["backtests"] });
       void navigate(`/backtests/${data.job.id}`);
     },
     onError: (error: unknown) => {
       if (
-        error instanceof ApiError
-        && (error.message === 'PREPARATION_REQUIRED' || error.message === 'PREVIEW_REQUIRED')
+        error instanceof ApiError &&
+        (error.message === "PREPARATION_REQUIRED" ||
+          error.message === "PREVIEW_REQUIRED")
       ) {
-        toast.error('현재 데이터를 다시 준비해야 합니다. 재설정 및 복제에서 미리보기를 완료하세요.');
+        toast.error(
+          "현재 데이터를 다시 준비해야 합니다. 재설정 및 복제에서 미리보기를 완료하세요.",
+        );
         return;
       }
-      toast.error(error instanceof ApiError ? error.message : '복제에 실패했습니다');
+      toast.error(
+        error instanceof ApiError ? error.message : "복제에 실패했습니다",
+      );
     },
   });
 
@@ -634,33 +774,44 @@ export function BacktestDetailPage() {
     mutationFn: (count: number) =>
       api<{ batch: { id: string }; warnings?: string[] }>(
         `/backtests/${id}/clone-random-seeds`,
-        { method: 'POST', body: JSON.stringify({ count }) },
+        { method: "POST", body: JSON.stringify({ count }) },
       ),
     onSuccess: (data) => {
       setSeedCloneOpen(false);
-      void queryClient.invalidateQueries({ queryKey: ['backtests'] });
-      void queryClient.invalidateQueries({ queryKey: ['backtest-clone-batches'] });
+      void queryClient.invalidateQueries({ queryKey: ["backtests"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["backtest-clone-batches"],
+      });
       void navigate(`/backtests/batches/${data.batch.id}`);
     },
     onError: (error: unknown) => {
       if (
-        error instanceof ApiError
-        && (error.message === 'PREPARATION_REQUIRED' || error.message === 'PREVIEW_REQUIRED')
+        error instanceof ApiError &&
+        (error.message === "PREPARATION_REQUIRED" ||
+          error.message === "PREVIEW_REQUIRED")
       ) {
-        toast.error('현재 데이터를 다시 준비해야 합니다. 재설정 및 복제에서 미리보기를 완료하세요.');
+        toast.error(
+          "현재 데이터를 다시 준비해야 합니다. 재설정 및 복제에서 미리보기를 완료하세요.",
+        );
         return;
       }
-      toast.error(error instanceof ApiError ? error.message : '새 난수 복제에 실패했습니다');
+      toast.error(
+        error instanceof ApiError
+          ? error.message
+          : "새 난수 복제에 실패했습니다",
+      );
     },
   });
 
   const deleteMutation = useMutation({
-    mutationFn: () => api(`/backtests/${id}`, { method: 'DELETE' }),
+    mutationFn: () => api(`/backtests/${id}`, { method: "DELETE" }),
     onSuccess: () => {
-      toast.success('삭제되었습니다');
-      void queryClient.invalidateQueries({ queryKey: ['backtests'] });
-      void queryClient.invalidateQueries({ queryKey: ['backtest-clone-batches'] });
-      void navigate('/backtests');
+      toast.success("삭제되었습니다");
+      void queryClient.invalidateQueries({ queryKey: ["backtests"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["backtest-clone-batches"],
+      });
+      void navigate("/backtests");
     },
     onError: (error) => toast.error(error.message),
   });
@@ -677,8 +828,8 @@ export function BacktestDetailPage() {
           <AlertTitle>결과를 불러올 수 없습니다</AlertTitle>
           <AlertDescription>
             {notFound
-              ? '이미 삭제되었거나 존재하지 않는 백테스트입니다.'
-              : (error?.message ?? '알 수 없는 오류입니다.')}
+              ? "이미 삭제되었거나 존재하지 않는 백테스트입니다."
+              : (error?.message ?? "알 수 없는 오류입니다.")}
           </AlertDescription>
         </Alert>
         <Button variant="ghost" asChild>
@@ -697,7 +848,9 @@ export function BacktestDetailPage() {
     );
   }
 
-  const strategy = strategies.data?.strategies.find((s) => s.id === job.strategyId);
+  const strategy = strategies.data?.strategies.find(
+    (s) => s.id === job.strategyId,
+  );
   const strategyName = strategy?.name;
   const supportsRandomSeed = strategy?.supportsRandomSeed !== false;
   const resolvedTimeframe = resolveJobTimeframe(job);
@@ -711,12 +864,14 @@ export function BacktestDetailPage() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
-        <h2 className="text-lg font-semibold">{strategyName ?? job.strategyId}</h2>
+        <h2 className="text-lg font-semibold">
+          {strategyName ?? job.strategyId}
+        </h2>
         <StatusBadge status={job.status} />
         <div
           className={cn(
-            'flex flex-wrap items-center gap-2',
-            running ? 'ml-auto' : 'w-full justify-end sm:ml-auto sm:w-auto',
+            "flex flex-wrap items-center gap-2",
+            running ? "ml-auto" : "w-full justify-end sm:ml-auto sm:w-auto",
           )}
         >
           {running ? (
@@ -724,7 +879,7 @@ export function BacktestDetailPage() {
               variant="destructive"
               className="h-11"
               onClick={() => cancelMutation.mutate()}
-              disabled={cancelMutation.isPending || job.status === 'CANCELLING'}
+              disabled={cancelMutation.isPending || job.status === "CANCELLING"}
             >
               <XCircle data-icon="inline-start" />
               취소
@@ -751,17 +906,16 @@ export function BacktestDetailPage() {
                     disabled={!supportsRandomSeed || !strategy}
                     onClick={() => setSeedCloneOpen(true)}
                   >
-                    <Dices data-icon="inline-start" />
-                    새 난수로 복제
+                    <Dices data-icon="inline-start" />새 난수로 복제
                   </Button>
                 ) : null}
                 <Button
                   variant="outline"
                   className={cn(
-                    'h-11 min-w-0 rounded-none border-0 border-input focus-visible:z-10 focus-visible:ring-inset',
+                    "h-11 min-w-0 rounded-none border-0 border-input focus-visible:z-10 focus-visible:ring-inset",
                     job.cloneBatchId === null
-                      ? 'col-span-2 border-t sm:col-span-1 sm:border-l sm:border-t-0'
-                      : 'border-l',
+                      ? "col-span-2 border-t sm:col-span-1 sm:border-l sm:border-t-0"
+                      : "border-l",
                   )}
                   asChild
                 >
@@ -779,7 +933,11 @@ export function BacktestDetailPage() {
                   </a>
                 </Button>
               ) : null}
-              <Button variant="ghost" className="h-11" onClick={() => setDeleteOpen(true)}>
+              <Button
+                variant="ghost"
+                className="h-11"
+                onClick={() => setDeleteOpen(true)}
+              >
                 <Trash2 data-icon="inline-start" />
                 삭제
               </Button>
@@ -789,8 +947,9 @@ export function BacktestDetailPage() {
       </div>
 
       <p className="text-sm text-muted-foreground">
-        {formatUniverseRuleSummary(job.request.universeRule)} · {job.request.period.from} ~{' '}
-        {job.request.period.to} · 생성 {formatDateTime(job.createdAtMs)}
+        {formatUniverseRuleSummary(job.request.universeRule)} ·{" "}
+        {job.request.period.from} ~ {job.request.period.to} · 생성{" "}
+        {formatDateTime(job.createdAtMs)}
       </p>
 
       {running ? (
@@ -799,15 +958,17 @@ export function BacktestDetailPage() {
             <div className="flex items-center justify-between text-sm">
               <span>진행률</span>
               <span className="tabular-nums" aria-live="polite">
-                {progress !== null ? `${progress}%` : '준비 중'}
+                {progress !== null ? `${progress}%` : "준비 중"}
                 {job.progressBars !== null && job.totalBars !== null
                   ? ` (${job.progressBars.toLocaleString()} / ${job.totalBars.toLocaleString()} 봉)`
-                  : ''}
+                  : ""}
               </span>
             </div>
             <Progress value={progress ?? 0} aria-label="백테스트 진행률" />
             {job.progressLabel ? (
-              <p className="text-xs text-muted-foreground">처리 중: {job.progressLabel}</p>
+              <p className="text-xs text-muted-foreground">
+                처리 중: {job.progressLabel}
+              </p>
             ) : null}
           </CardContent>
         </Card>
@@ -841,10 +1002,12 @@ export function BacktestDetailPage() {
                 )} (${formatSignedPct(metrics.totalReturnPct)})${
                   series.totalEquityPoints > series.equity.length
                     ? ` · ${series.totalEquityPoints}포인트를 ${series.equity.length}포인트로 축약 표시`
-                    : ''
+                    : ""
                 }`}
               />
-              {benchmark?.available && benchmark.totalReturnPct !== null && benchmark.excessReturnPct !== null ? (
+              {benchmark?.available &&
+              benchmark.totalReturnPct !== null &&
+              benchmark.excessReturnPct !== null ? (
                 <BenchmarkComparisonChart
                   strategy={series.equity}
                   benchmark={series.benchmark}
@@ -860,7 +1023,6 @@ export function BacktestDetailPage() {
                 )}`}
               />
               <MonthlyReturnsChart monthly={series.monthly} />
-
             </div>
           ) : (
             <Skeleton className="h-60 w-full" />
@@ -882,7 +1044,9 @@ export function BacktestDetailPage() {
             run={run}
             job={job}
             strategyName={strategyName}
-            supportsRandomSeed={supportsRandomSeed || strategy?.version !== run.strategyVersion}
+            supportsRandomSeed={
+              supportsRandomSeed || strategy?.version !== run.strategyVersion
+            }
             timeframe={resolvedTimeframe}
             provenancePin={provenancePin}
             universeRebalancing={universeRebalancing}
@@ -890,12 +1054,17 @@ export function BacktestDetailPage() {
         </>
       ) : null}
 
-      {job.status === 'INTERRUPTED' ? (
+      {job.status === "INTERRUPTED" ? (
         <Alert>
           <AlertTitle>중단된 작업</AlertTitle>
           <AlertDescription>
-            서버 재시작으로 중단되었습니다. 자동 재실행되지 않으니 복제를 사용하세요.
-            <Button variant="link" className="h-auto p-0 pl-2" onClick={() => cloneMutation.mutate()}>
+            서버 재시작으로 중단되었습니다. 자동 재실행되지 않으니 복제를
+            사용하세요.
+            <Button
+              variant="link"
+              className="h-auto p-0 pl-2"
+              onClick={() => cloneMutation.mutate()}
+            >
               복제
             </Button>
           </AlertDescription>
@@ -939,9 +1108,9 @@ export function BacktestDetailPage() {
           <DialogHeader>
             <DialogTitle>새 난수로 일괄 복제</DialogTitle>
             <DialogDescription>
-              다른 설정과 원본 유니버스는 그대로 유지하고 각 실행에 서로 다른 32비트
-              난수 시드를 부여합니다. 시드가 달라도 난수가 쓰이는 상황이 없으면 결과가
-              같을 수 있습니다.
+              다른 설정과 원본 유니버스는 그대로 유지하고 각 실행에 서로 다른
+              32비트 난수 시드를 부여합니다. 시드가 달라도 난수가 쓰이는 상황이
+              없으면 결과가 같을 수 있습니다.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-1">
@@ -953,7 +1122,7 @@ export function BacktestDetailPage() {
               min={1}
               max={100}
               disabled={!supportsRandomSeed}
-              value={supportsRandomSeed ? seedCloneCount : ''}
+              value={supportsRandomSeed ? seedCloneCount : ""}
               onChange={(event) => setSeedCloneCount(event.target.value)}
             />
             <p className="text-xs text-muted-foreground">
@@ -961,7 +1130,9 @@ export function BacktestDetailPage() {
             </p>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setSeedCloneOpen(false)}>취소</Button>
+            <Button variant="outline" onClick={() => setSeedCloneOpen(false)}>
+              취소
+            </Button>
             <Button
               disabled={
                 !supportsRandomSeed ||
@@ -972,7 +1143,9 @@ export function BacktestDetailPage() {
               }
               onClick={() => seedCloneMutation.mutate(Number(seedCloneCount))}
             >
-              {seedCloneMutation.isPending ? '생성 중…' : `${seedCloneCount || '0'}개 생성 및 실행`}
+              {seedCloneMutation.isPending
+                ? "생성 중…"
+                : `${seedCloneCount || "0"}개 생성 및 실행`}
             </Button>
           </DialogFooter>
         </DialogContent>

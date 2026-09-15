@@ -1,16 +1,14 @@
-import type { DartReportCode } from './dart-report-parser.js';
+import type { DartReportCode } from "./dart-report-parser.js";
 
 export type DartRawSnapshotEndpoint =
-  | 'FINANCIAL_STATEMENT'
-  | 'SHARE_STATUS'
-  | 'ISSUANCE_STATUS';
+  "FINANCIAL_STATEMENT" | "SHARE_STATUS" | "ISSUANCE_STATUS";
 
 export interface DartRawSnapshotKey {
   readonly symbol: string;
   readonly endpoint: DartRawSnapshotEndpoint;
   readonly businessYear: number;
   readonly reportCode: DartReportCode;
-  readonly fsDiv: 'CFS' | 'OFS' | 'NONE';
+  readonly fsDiv: "CFS" | "OFS" | "NONE";
 }
 
 export interface DartRawSnapshot {
@@ -38,5 +36,5 @@ export function dartRawSnapshotKeyId(key: DartRawSnapshotKey): string {
     key.businessYear,
     key.reportCode,
     key.fsDiv,
-  ].join(':');
+  ].join(":");
 }

@@ -21,18 +21,21 @@ export function extractNumberParams(
   schema: Record<string, unknown> | undefined,
 ): NumberParamSpec[] {
   if (!schema) return [];
-  const properties = (schema.properties ?? {}) as Record<string, Record<string, unknown>>;
+  const properties = (schema.properties ?? {}) as Record<
+    string,
+    Record<string, unknown>
+  >;
   const required = new Set((schema.required as string[] | undefined) ?? []);
   return Object.entries(properties)
-    .filter(([, def]) => def.type === 'number' || def.type === 'integer')
+    .filter(([, def]) => def.type === "number" || def.type === "integer")
     .map(([key, def]) => ({
       key,
-      ...(typeof def.minimum === 'number' ? { minimum: def.minimum } : {}),
-      ...(typeof def.maximum === 'number' ? { maximum: def.maximum } : {}),
-      ...(typeof def.default === 'number' ? { defaultValue: def.default } : {}),
-      ...(typeof def.title === 'string' ? { label: def.title } : {}),
-      ...(typeof def.description === 'string' ? { help: def.description } : {}),
-      isInteger: def.type === 'integer',
+      ...(typeof def.minimum === "number" ? { minimum: def.minimum } : {}),
+      ...(typeof def.maximum === "number" ? { maximum: def.maximum } : {}),
+      ...(typeof def.default === "number" ? { defaultValue: def.default } : {}),
+      ...(typeof def.title === "string" ? { label: def.title } : {}),
+      ...(typeof def.description === "string" ? { help: def.description } : {}),
+      isInteger: def.type === "integer",
       optional: !required.has(key),
     }));
 }
@@ -53,6 +56,6 @@ export function paramMetaLine(spec: NumberParamSpec): string {
     parts.push(`${spec.maximum} 이하`);
   }
   if (spec.defaultValue !== undefined) parts.push(`기본 ${spec.defaultValue}`);
-  else if (spec.optional) parts.push('선택 입력');
-  return parts.join(' · ');
+  else if (spec.optional) parts.push("선택 입력");
+  return parts.join(" · ");
 }

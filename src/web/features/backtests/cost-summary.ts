@@ -1,5 +1,5 @@
-import { formatKrw } from '../../lib/format.js';
-import type { BacktestMetrics } from './types.js';
+import { formatKrw } from "../../lib/format.js";
+import type { BacktestMetrics } from "./types.js";
 
 /**
  * 총 비용 카드 문자열 (설계 2026-07-30-backtest-result-display-design.md §1).
@@ -17,7 +17,9 @@ export function costSummary(metrics: BacktestMetrics): {
   const total = roundedCommission + roundedTax + roundedSlippage;
 
   const slippagePct =
-    metrics.initialCash > 0 ? (metrics.totalSlippage / metrics.initialCash) * 100 : 0;
+    metrics.initialCash > 0
+      ? (metrics.totalSlippage / metrics.initialCash) * 100
+      : 0;
   return {
     totalText: formatKrw(total),
     detailText:

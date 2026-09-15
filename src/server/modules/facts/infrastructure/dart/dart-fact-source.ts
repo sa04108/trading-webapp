@@ -1,8 +1,8 @@
-import type { Clock } from '../../../../../runtime/shared/clock.js';
-import type { Logger } from '../../../../shared/logger.js';
-import type { ExternalApiUsage } from '../../../../shared/db/external-api-usage.js';
-import { RestClient } from '../../../../shared/rest-client.js';
-import { kstDateOf } from '../../../../../runtime/modules/market-data/domain/kst-date.js';
+import type { Clock } from "../../../../../runtime/shared/clock.js";
+import type { Logger } from "../../../../shared/logger.js";
+import type { ExternalApiUsage } from "../../../../shared/db/external-api-usage.js";
+import { RestClient } from "../../../../shared/rest-client.js";
+import { kstDateOf } from "../../../../../runtime/modules/market-data/domain/kst-date.js";
 import {
   DartQuotaError,
   FactSourceNotConfiguredError,
@@ -12,16 +12,16 @@ import {
   type FactSourceRequestHooks,
   type FetchFinancialsRequest,
   type PeriodicFiling,
-} from '../../../../../runtime/modules/facts/application/ports.js';
-import type { Fact } from '../../../../../runtime/modules/facts/domain/fact.js';
+} from "../../../../../runtime/modules/facts/application/ports.js";
+import type { Fact } from "../../../../../runtime/modules/facts/domain/fact.js";
 import {
   DART_MIN_INTERVAL_MS,
   filableReportCount,
-} from '../../../../../runtime/modules/facts/domain/sync-plan.js';
+} from "../../../../../runtime/modules/facts/domain/sync-plan.js";
 import {
   createDartCorpCodeCache,
   type CorpCodeResolver,
-} from './dart-corp-code-cache.js';
+} from "./dart-corp-code-cache.js";
 import {
   parseAmount,
   parseFinancialRows,
@@ -34,12 +34,12 @@ import {
   type DartFinancialRow,
   type DartIssuanceRow,
   type DartReportCode,
-} from './dart-report-parser.js';
+} from "./dart-report-parser.js";
 import type {
   DartRawSnapshotKey,
   DartRawSnapshotStore,
-} from './dart-raw-snapshot-store.js';
-import { dartRawSnapshotKeyId } from './dart-raw-snapshot-store.js';
+} from "./dart-raw-snapshot-store.js";
+import { dartRawSnapshotKeyId } from "./dart-raw-snapshot-store.js";
 
 export interface DartConfig {
   /** 예: https://opendart.fss.or.kr */
@@ -72,18 +72,18 @@ interface DartFilingRow {
 }
 
 function readDartString(row: unknown, field: string): string | null {
-  if (typeof row !== 'object' || row === null) return null;
+  if (typeof row !== "object" || row === null) return null;
   const value = (row as Record<string, unknown>)[field];
-  return typeof value === 'string' ? value : null;
+  return typeof value === "string" ? value : null;
 }
 
 function issuanceKey(row: DartIssuanceRow): string {
   return [
-    readDartString(row, 'isu_dcrs_de') ?? '',
-    readDartString(row, 'isu_dcrs_stle') ?? '',
-    readDartString(row, 'isu_dcrs_stock_knd') ?? '',
-    readDartString(row, 'isu_dcrs_qy') ?? '',
-  ].join('|');
+    readDartString(row, "isu_dcrs_de") ?? "",
+    readDartString(row, "isu_dcrs_stle") ?? "",
+    readDartString(row, "isu_dcrs_stock_knd") ?? "",
+    readDartString(row, "isu_dcrs_qy") ?? "",
+  ].join("|");
 }
 
 interface SharesAtPeriod {
@@ -99,10 +99,12 @@ interface OrderedIssuedShareChange {
 }
 
 function isAmbiguousSplitRow(row: DartIssuanceRow): boolean {
-  const rawStyle = readDartString(row, 'isu_dcrs_stle');
+  const rawStyle = readDartString(row, "isu_dcrs_stle");
   if (rawStyle === null) return false;
-  const style = rawStyle.replace(/\s/g, '');
-  return style.includes('분할') && !style.includes('병합') && !style.includes('감자');
+  const style = rawStyle.replace(/\s/g, "");
+  return (
+    style.includes("분할") && !style.includes("병합") && !style.includes("감자")
+  );
 }
 
 /**
@@ -130,7 +132,12 @@ function inferAmbiguousSplitRows(
   const contradictedRows = new Set<DartIssuanceRow>();
 
   for (const target of changes) {
-    if (!isAmbiguousSplitRow(target.row) || target.delta === null || target.delta <= 0) continue;
+    if (
+      !isAmbiguousSplitRow(target.row) ||
+      target.delta === null ||
+      target.delta <= 0
+    )
+      continue;
     let anchor: SharesAtPeriod | undefined;
     let next: SharesAtPeriod | undefined;
     for (const snapshot of sharesByPeriod) {
@@ -138,14 +145,14 @@ function inferAmbiguousSplitRows(
       else if (next === undefined) next = snapshot;
     }
     if (anchor === undefined || next === undefined) continue;
-    const interval = changes.filter((change) => (
-      change.dateKey > anchor.dateKey && change.dateKey <= next.dateKey
-    ));
-    if (interval.some((change) => change.delta === null)) continue;
-    const defaultAfter = anchor.shares + interval.reduce(
-      (sum, change) => sum + (change.delta ?? 0),
-      0,
+    const interval = changes.filter(
+      (change) =>
+        change.dateKey > anchor.dateKey && change.dateKey <= next.dateKey,
     );
+    if (interval.some((change) => change.delta === null)) continue;
+    const defaultAfter =
+      anchor.shares +
+      interval.reduce((sum, change) => sum + (change.delta ?? 0), 0);
     const decreaseAfter = defaultAfter - 2 * target.delta;
     if (defaultAfter === next.shares) increasingRows.add(target.row);
     else if (decreaseAfter === next.shares) decreasingRows.add(target.row);
@@ -156,10 +163,11 @@ function inferAmbiguousSplitRows(
 
 function splitEventIdentity(row: DartIssuanceRow): string | null {
   if (!isAmbiguousSplitRow(row)) return null;
-  const rawDate = readDartString(row, 'isu_dcrs_de');
+  const rawDate = readDartString(row, "isu_dcrs_de");
   const dateKey = rawDate === null ? null : normalizeDateKey(rawDate);
   if (dateKey === null) return null;
-  const stockKind = readDartString(row, 'isu_dcrs_stock_knd')?.replace(/\s/g, '') ?? '';
+  const stockKind =
+    readDartString(row, "isu_dcrs_stock_knd")?.replace(/\s/g, "") ?? "";
   return `${dateKey}|${stockKind}`;
 }
 
@@ -180,19 +188,30 @@ function repairContradictedSplitRows(
     const target = repaired[index]!;
     const identity = splitEventIdentity(target);
     if (identity === null) continue;
-    if (!inferAmbiguousSplitRows(repaired, sharesByPeriod).contradictedRows.has(target)) continue;
+    if (
+      !inferAmbiguousSplitRows(repaired, sharesByPeriod).contradictedRows.has(
+        target,
+      )
+    )
+      continue;
 
     let replacement: DartIssuanceRow | undefined;
-    for (let snapshotIndex = earlierSnapshots.length - 1; snapshotIndex >= 0; snapshotIndex -= 1) {
+    for (
+      let snapshotIndex = earlierSnapshots.length - 1;
+      snapshotIndex >= 0;
+      snapshotIndex -= 1
+    ) {
       const candidates = earlierSnapshots[snapshotIndex]!.filter(
         (row) => splitEventIdentity(row) === identity,
       );
       for (const candidate of candidates) {
-        const patched = repaired.map((row, rowIndex) => rowIndex === index ? candidate : row);
+        const patched = repaired.map((row, rowIndex) =>
+          rowIndex === index ? candidate : row,
+        );
         const inference = inferAmbiguousSplitRows(patched, sharesByPeriod);
         if (
-          inference.increasingRows.has(candidate)
-          || inference.decreasingRows.has(candidate)
+          inference.increasingRows.has(candidate) ||
+          inference.decreasingRows.has(candidate)
         ) {
           replacement = candidate;
           break;
@@ -226,10 +245,10 @@ const REPORT_NAME_YEAR_PATTERN = /\((\d{4})\.\d{2}\)/;
 const FILING_LIST_MAX_PAGES = 200;
 
 /** 조회 결과 없음 — 에러가 아니다 (신규 상장·미제출 분기) */
-const NO_DATA_STATUS = '013';
-const OK_STATUS = '000';
-const DAILY_QUOTA_STATUS = '020';
-const DART_QUOTA_SCOPE = 'daily';
+const NO_DATA_STATUS = "013";
+const OK_STATUS = "000";
+const DAILY_QUOTA_STATUS = "020";
+const DART_QUOTA_SCOPE = "daily";
 
 /**
  * DART OpenAPI 어댑터.
@@ -266,35 +285,38 @@ export function createDartFactSource(
   // 아래의 실제 HTTP attempt hook에서 직접 센다.
   const filableReports = (year: number): readonly DartReportCode[] =>
     REPORT_ORDER.filter(
-      (code) => REPORT_CODE_TO_QUARTER[code] <= filableReportCount(year, kstDateOf(clock.now())),
+      (code) =>
+        REPORT_CODE_TO_QUARTER[code] <=
+        filableReportCount(year, kstDateOf(clock.now())),
     );
 
-  const client = dartConfig === null
-    ? null
-    : new RestClient({
-        baseUrl: dartConfig.baseUrl,
-        logger,
-        ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
-        ...(options.sleep ? { sleep: options.sleep } : {}),
-        // 목적은 일일 한도 절약이 아니라 초당 폭주 방지다. 이 값을 화면 추정치와 공유하기
-        // 위해 domain/sync-plan.ts 에서 가져온다 — 두 곳에 숫자를 두면 한쪽만 고쳐진다.
-        groupMinIntervalMs: { default: DART_MIN_INTERVAL_MS },
-      });
+  const client =
+    dartConfig === null
+      ? null
+      : new RestClient({
+          baseUrl: dartConfig.baseUrl,
+          logger,
+          ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+          ...(options.sleep ? { sleep: options.sleep } : {}),
+          // 목적은 일일 한도 절약이 아니라 초당 폭주 방지다. 이 값을 화면 추정치와 공유하기
+          // 위해 domain/sync-plan.ts 에서 가져온다 — 두 곳에 숫자를 두면 한쪽만 고쳐진다.
+          groupMinIntervalMs: { default: DART_MIN_INTERVAL_MS },
+        });
 
   function reportQuotaExceeded(message?: string): never {
     const error = new DartQuotaError(message);
-    options.usage?.reportQuotaExceeded('DART', DART_QUOTA_SCOPE, error.message);
+    options.usage?.reportQuotaExceeded("DART", DART_QUOTA_SCOPE, error.message);
     throw error;
   }
 
   function beforePhysicalRequest(beforeRequest?: () => void): void {
     // 공급자가 이미 오늘 한도 소진을 확인해 준 뒤에는 재시도 자체를 보내지 않는다.
-    if (options.usage?.quotaExceeded('DART', DART_QUOTA_SCOPE)) {
+    if (options.usage?.quotaExceeded("DART", DART_QUOTA_SCOPE)) {
       throw new DartQuotaError();
     }
     // 준비 orchestrator의 로컬 예산 판정이 먼저다. 거절된 요청은 물리 호출 수가 아니다.
     beforeRequest?.();
-    options.usage?.recordCall('DART', DART_QUOTA_SCOPE);
+    options.usage?.recordCall("DART", DART_QUOTA_SCOPE);
   }
 
   async function liveCall<T>(
@@ -302,26 +324,35 @@ export function createDartFactSource(
     params: Record<string, string>,
     hooks: FactSourceRequestHooks = {},
   ): Promise<DartEnvelope<T>> {
-    if (dartConfig === null || client === null) throw new FactSourceNotConfiguredError();
-    const query = new URLSearchParams({ crtfc_key: dartConfig.apiKey, ...params });
+    if (dartConfig === null || client === null)
+      throw new FactSourceNotConfiguredError();
+    const query = new URLSearchParams({
+      crtfc_key: dartConfig.apiKey,
+      ...params,
+    });
     let envelope: DartEnvelope<T>;
     try {
       envelope = await client.request<DartEnvelope<T>>(
-        'default',
+        "default",
         `${path}?${query.toString()}`,
         {},
         { beforeAttempt: () => beforePhysicalRequest(hooks.beforeRequest) },
       );
     } catch (error) {
       if (error instanceof DartQuotaError) throw error;
-      if (error instanceof Error && error.message.startsWith('REST 요청 실패: 429')) {
+      if (
+        error instanceof Error &&
+        error.message.startsWith("REST 요청 실패: 429")
+      ) {
         reportQuotaExceeded();
       }
       throw error;
     }
     if (envelope.status === NO_DATA_STATUS) return envelope;
     if (envelope.status === DAILY_QUOTA_STATUS) {
-      reportQuotaExceeded(`DART 일일 호출 한도를 초과했습니다: ${envelope.message}`);
+      reportQuotaExceeded(
+        `DART 일일 호출 한도를 초과했습니다: ${envelope.message}`,
+      );
     }
     if (envelope.status !== OK_STATUS) {
       // 인증 실패·한도 초과를 빈 결과로 흡수하면 "수집했는데 0건" 으로 오해된다
@@ -331,7 +362,7 @@ export function createDartFactSource(
   }
 
   function rowsFromSnapshot<T>(payload: unknown): readonly T[] | null {
-    if (typeof payload !== 'object' || payload === null) return null;
+    if (typeof payload !== "object" || payload === null) return null;
     const envelope = payload as Partial<DartEnvelope<T>>;
     if (envelope.status === NO_DATA_STATUS) return [];
     if (envelope.status !== OK_STATUS) return null;
@@ -346,25 +377,26 @@ export function createDartFactSource(
     request: FetchFinancialsRequest,
     includeFinancials: boolean,
   ): number {
-    const forceRefresh = request.rawSnapshotPolicy === 'REFRESH';
-    const fsDiv = request.consolidated ? 'CFS' : 'OFS';
+    const forceRefresh = request.rawSnapshotPolicy === "REFRESH";
+    const fsDiv = request.consolidated ? "CFS" : "OFS";
     const keys: DartRawSnapshotKey[] = [];
     for (const symbol of new Set(request.symbols)) {
       for (const year of new Set(request.years)) {
         for (const reportCode of filableReports(year)) {
-          if (includeFinancials) keys.push({
-            symbol,
-            endpoint: 'FINANCIAL_STATEMENT',
-            businessYear: year,
-            reportCode,
-            fsDiv,
-          });
+          if (includeFinancials)
+            keys.push({
+              symbol,
+              endpoint: "FINANCIAL_STATEMENT",
+              businessYear: year,
+              reportCode,
+              fsDiv,
+            });
           keys.push({
             symbol,
-            endpoint: 'ISSUANCE_STATUS',
+            endpoint: "ISSUANCE_STATUS",
             businessYear: year,
             reportCode,
-            fsDiv: 'NONE',
+            fsDiv: "NONE",
           });
         }
       }
@@ -372,23 +404,25 @@ export function createDartFactSource(
         for (const reportCode of filableReports(year)) {
           keys.push({
             symbol,
-            endpoint: 'SHARE_STATUS',
+            endpoint: "SHARE_STATUS",
             businessYear: year,
             reportCode,
-            fsDiv: 'NONE',
+            fsDiv: "NONE",
           });
         }
       }
     }
     if (forceRefresh) return keys.length;
-    return options.rawSnapshots?.countMissing(
-      keys,
-      (payload) => rowsFromSnapshot(payload) !== null,
-    ) ?? keys.length;
+    return (
+      options.rawSnapshots?.countMissing(
+        keys,
+        (payload) => rowsFromSnapshot(payload) !== null,
+      ) ?? keys.length
+    );
   }
 
   interface RequestRowsEntry {
-    readonly policy: 'PREFER_CACHE' | 'REFRESH';
+    readonly policy: "PREFER_CACHE" | "REFRESH";
     readonly rows: Promise<readonly unknown[]>;
     readonly token: object;
   }
@@ -397,10 +431,7 @@ export function createDartFactSource(
   // 실제 갱신한 응답은 뒤의 REFRESH/PREFER_CACHE 모두 재사용하고, PREFER_CACHE로 읽은
   // 낡을 수 있는 응답은 뒤의 REFRESH가 우회한다. WeakMap이라 sync가 끝나면 다음 실행의
   // 최신화를 막는 전역 cache로 남지 않는다.
-  const requestRows = new WeakMap<
-    object,
-    Map<string, RequestRowsEntry>
-  >();
+  const requestRows = new WeakMap<object, Map<string, RequestRowsEntry>>();
 
   class CorpCodeMissingError extends Error {}
   class DartSymbolPayloadError extends Error {}
@@ -414,18 +445,20 @@ export function createDartFactSource(
     hooks: FactSourceRequestHooks,
   ): Promise<readonly T[]> {
     const scope = request.rawSnapshotScope ?? request;
-    const policy = request.rawSnapshotPolicy ?? 'REFRESH';
-    const requestCache = requestRows.get(scope) ?? new Map<string, RequestRowsEntry>();
+    const policy = request.rawSnapshotPolicy ?? "REFRESH";
+    const requestCache =
+      requestRows.get(scope) ?? new Map<string, RequestRowsEntry>();
     requestRows.set(scope, requestCache);
     const cacheKey = snapshotCacheKey(key);
     const pending = requestCache.get(cacheKey);
     if (
-      pending !== undefined
-      && (policy === 'PREFER_CACHE' || pending.policy === 'REFRESH')
-    ) return pending.rows as Promise<readonly T[]>;
+      pending !== undefined &&
+      (policy === "PREFER_CACHE" || pending.policy === "REFRESH")
+    )
+      return pending.rows as Promise<readonly T[]>;
 
     const load = async (): Promise<readonly T[]> => {
-      if (policy === 'PREFER_CACHE') {
+      if (policy === "PREFER_CACHE") {
         const snapshot = options.rawSnapshots?.get(key);
         if (snapshot !== null && snapshot !== undefined) {
           const cachedRows = rowsFromSnapshot<T>(snapshot.payload);
@@ -438,7 +471,9 @@ export function createDartFactSource(
       const envelope = await liveCall<T>(path, params(corpCode), hooks);
       const liveRows = rowsFromSnapshot<T>(envelope);
       if (liveRows === null) {
-        throw new DartSymbolPayloadError('DART 응답의 list 필드가 배열 형식이 아닙니다');
+        throw new DartSymbolPayloadError(
+          "DART 응답의 list 필드가 배열 형식이 아닙니다",
+        );
       }
       options.rawSnapshots?.put(key, envelope, clock.now());
       return liveRows;
@@ -447,7 +482,8 @@ export function createDartFactSource(
     const rows = load().catch((error: unknown) => {
       // PREFER_CACHE가 진행 중인 동안 REFRESH가 같은 키를 교체할 수 있다. 먼저 시작한
       // promise의 실패가 뒤의 유효한 entry까지 지우지 않도록 identity를 확인한다.
-      if (requestCache.get(cacheKey)?.token === token) requestCache.delete(cacheKey);
+      if (requestCache.get(cacheKey)?.token === token)
+        requestCache.delete(cacheKey);
       throw error;
     });
     const entry = { policy, rows, token };
@@ -466,13 +502,16 @@ export function createDartFactSource(
       );
       if (response.status === 429) reportQuotaExceeded();
       if (!response.ok) {
-        throw new Error(`DART 종목 코드 목록을 내려받지 못했습니다 (HTTP ${response.status})`);
+        throw new Error(
+          `DART 종목 코드 목록을 내려받지 못했습니다 (HTTP ${response.status})`,
+        );
       }
       const body = Buffer.from(await response.arrayBuffer());
       // corpCode.xml은 정상일 때 ZIP이지만 오류일 때 HTTP 200 XML 봉투를 돌려줄 수 있다.
       // ZIP 파서 오류로 바뀌기 전에 020을 명시적인 quota 오류로 보존한다.
-      const errorEnvelope = body.subarray(0, 512).toString('utf8');
-      if (/<status>\s*020\s*<\/status>/.test(errorEnvelope)) reportQuotaExceeded();
+      const errorEnvelope = body.subarray(0, 512).toString("utf8");
+      if (/<status>\s*020\s*<\/status>/.test(errorEnvelope))
+        reportQuotaExceeded();
       return body;
     });
 
@@ -485,9 +524,8 @@ export function createDartFactSource(
       if (dartConfig === null && options.corpCodeResolver === undefined) {
         return Promise.reject(new FactSourceNotConfiguredError());
       }
-      pending ??= corpCodes.resolve(
-        symbol,
-        () => beforePhysicalRequest(hooks.beforeRequest),
+      pending ??= corpCodes.resolve(symbol, () =>
+        beforePhysicalRequest(hooks.beforeRequest),
       );
       return pending;
     };
@@ -505,12 +543,12 @@ export function createDartFactSource(
       request,
       {
         symbol,
-        endpoint: 'SHARE_STATUS',
+        endpoint: "SHARE_STATUS",
         businessYear: year,
         reportCode,
-        fsDiv: 'NONE',
+        fsDiv: "NONE",
       },
-      '/api/stockTotqySttus.json',
+      "/api/stockTotqySttus.json",
       resolveCorpCode,
       (corpCode) => ({
         corp_code: corpCode,
@@ -524,15 +562,19 @@ export function createDartFactSource(
   /** 응답 행에서 '보통주' 행만 골라낸다. se 가 문자열이 아니면(필드명이 바뀐 경우)
    *  .replace 가 TypeError 를 던지므로 typeof 로 먼저 막는다 — 그런 행은 매칭 실패로
    *  취급해 호출부가 gap 을 남기게 한다. */
-  function findCommonShareRow(rows: readonly DartShareRow[]): DartShareRow | undefined {
-    return rows.find((row) => readDartString(row, 'se')?.replace(/\s/g, '') === '보통주');
+  function findCommonShareRow(
+    rows: readonly DartShareRow[],
+  ): DartShareRow | undefined {
+    return rows.find(
+      (row) => readDartString(row, "se")?.replace(/\s/g, "") === "보통주",
+    );
   }
 
   /** istc_totqy 가 문자열이 아니면 parseAmount 가 아니라 여기서 먼저 null 로 떨어뜨린다
    *  — 그래야 "발행주식수를 읽을 수 없습니다" gap 으로 이어지지 bare TypeError 로
    *  전체 수집이 죽지 않는다. */
   function readShareAmount(row: DartShareRow): number | null {
-    const amount = readDartString(row, 'istc_totqy');
+    const amount = readDartString(row, "istc_totqy");
     return amount === null ? null : parseAmount(amount);
   }
 
@@ -542,135 +584,146 @@ export function createDartFactSource(
   ): Promise<FactIngestionResult> {
     const facts: Fact[] = [];
     const gaps: FactIngestionGap[] = [];
-    const fsDiv = request.consolidated ? 'CFS' : 'OFS';
+    const fsDiv = request.consolidated ? "CFS" : "OFS";
 
     for (const symbol of request.symbols) {
       const factStart = facts.length;
       const gapStart = gaps.length;
       const resolveCorpCode = lazyCorpCode(symbol, hooks);
       try {
+        for (const year of request.years) {
+          const rowsByReport = new Map<
+            DartReportCode,
+            readonly DartFinancialRow[]
+          >();
 
-      for (const year of request.years) {
-        const rowsByReport = new Map<DartReportCode, readonly DartFinancialRow[]>();
-
-        for (const reportCode of filableReports(year)) {
-          const rows = await rawRows<DartFinancialRow>(
-            request,
-            {
-              symbol,
-              endpoint: 'FINANCIAL_STATEMENT',
-              businessYear: year,
-              reportCode,
-              fsDiv,
-            },
-            '/api/fnlttSinglAcntAll.json',
-            resolveCorpCode,
-            (corpCode) => ({
-              corp_code: corpCode,
-              bsns_year: String(year),
-              reprt_code: reportCode,
-              fs_div: fsDiv,
-            }),
-            hooks,
-          );
-          // 손익·재무상태표만 쓴다 — 현금흐름표·자본변동표는 이 전략들이 보지 않는다.
-          // 파서가 소비하지 않는 통계(sj_div)를 애초에 걸러 넘겨야 '매핑되지 않은
-          // 계정' gap 이 CF·SCE 행 수백 개로 부풀지 않는다.
-          //
-          // bsns_year 도 요청한 year 로 걸러 넘긴다: 파서는 버킷의 기준 연도를 배열의
-          // 첫 행(rows[0].bsns_year)에서 가져온다 — 만약 API 가 다른 사업연도의 행을
-          // 섞어 반환하고 하필 그 행이 배열 맨 앞에 오면, 기준 연도 자체가 틀어져
-          // 실제로는 맞는 나머지 행 전부가 gap 이 된다(다수결이 뒤집힌다). 요청 자체가
-          // bsns_year=year 로 스코프되어 있으므로 여기서 한 번 더 걸러도 손해가 없고,
-          // 첫 행이 항상 올바른 연도를 가리키도록 보장한다.
-          const relevant = rows.filter((row) => {
-            const statement = readDartString(row, 'sj_div');
-            return (statement === 'BS' || statement === 'IS' || statement === 'CIS')
-              && readDartString(row, 'bsns_year') === String(year);
-          });
-          if (relevant.length > 0) {
-            rowsByReport.set(reportCode, relevant);
-          } else if (rows.length > 0) {
-            // 행은 왔는데 필터를 통과한 게 하나도 없다 — sj_div/bsns_year 필드 이름이나
-            // 값이 기대와 다르면 이렇게 된다. 조용히 넘기면 이 보고서 전체가 이유 없이
-            // 사라진 것처럼 보이므로(파서 호출 자체가 스킵되어 gap 도 안 남는다) 여기서
-            // 명시적으로 gap 을 남긴다 — 파일 헤더가 약속하는 "조용히 0 이 되지 않는다"
-            // 를 이 필터 통과 시점에도 지킨다.
-            gaps.push({
-              symbol,
-              periodKey: `${year}Q${REPORT_CODE_TO_QUARTER[reportCode]}`,
-              // 값(행 수)은 반드시 괄호 안이나 콜론 뒤에 둔다 — CLI 의 gap 묶기는
-              // 첫 ':' 또는 '(' 앞까지를 버킷 라벨로 쓰므로, 앞부분에 값이 섞이면
-              // 같은 실패 유형이 값마다 다른 버킷으로 쪼개져 리포트가 커진다.
-              reason: `응답 행이 모두 필터에서 제외됐습니다 (sj_div/bsns_year 필드 확인, ${rows.length}행)`,
-              severity: 'BLOCKING',
+          for (const reportCode of filableReports(year)) {
+            const rows = await rawRows<DartFinancialRow>(
+              request,
+              {
+                symbol,
+                endpoint: "FINANCIAL_STATEMENT",
+                businessYear: year,
+                reportCode,
+                fsDiv,
+              },
+              "/api/fnlttSinglAcntAll.json",
+              resolveCorpCode,
+              (corpCode) => ({
+                corp_code: corpCode,
+                bsns_year: String(year),
+                reprt_code: reportCode,
+                fs_div: fsDiv,
+              }),
+              hooks,
+            );
+            // 손익·재무상태표만 쓴다 — 현금흐름표·자본변동표는 이 전략들이 보지 않는다.
+            // 파서가 소비하지 않는 통계(sj_div)를 애초에 걸러 넘겨야 '매핑되지 않은
+            // 계정' gap 이 CF·SCE 행 수백 개로 부풀지 않는다.
+            //
+            // bsns_year 도 요청한 year 로 걸러 넘긴다: 파서는 버킷의 기준 연도를 배열의
+            // 첫 행(rows[0].bsns_year)에서 가져온다 — 만약 API 가 다른 사업연도의 행을
+            // 섞어 반환하고 하필 그 행이 배열 맨 앞에 오면, 기준 연도 자체가 틀어져
+            // 실제로는 맞는 나머지 행 전부가 gap 이 된다(다수결이 뒤집힌다). 요청 자체가
+            // bsns_year=year 로 스코프되어 있으므로 여기서 한 번 더 걸러도 손해가 없고,
+            // 첫 행이 항상 올바른 연도를 가리키도록 보장한다.
+            const relevant = rows.filter((row) => {
+              const statement = readDartString(row, "sj_div");
+              return (
+                (statement === "BS" ||
+                  statement === "IS" ||
+                  statement === "CIS") &&
+                readDartString(row, "bsns_year") === String(year)
+              );
             });
+            if (relevant.length > 0) {
+              rowsByReport.set(reportCode, relevant);
+            } else if (rows.length > 0) {
+              // 행은 왔는데 필터를 통과한 게 하나도 없다 — sj_div/bsns_year 필드 이름이나
+              // 값이 기대와 다르면 이렇게 된다. 조용히 넘기면 이 보고서 전체가 이유 없이
+              // 사라진 것처럼 보이므로(파서 호출 자체가 스킵되어 gap 도 안 남는다) 여기서
+              // 명시적으로 gap 을 남긴다 — 파일 헤더가 약속하는 "조용히 0 이 되지 않는다"
+              // 를 이 필터 통과 시점에도 지킨다.
+              gaps.push({
+                symbol,
+                periodKey: `${year}Q${REPORT_CODE_TO_QUARTER[reportCode]}`,
+                // 값(행 수)은 반드시 괄호 안이나 콜론 뒤에 둔다 — CLI 의 gap 묶기는
+                // 첫 ':' 또는 '(' 앞까지를 버킷 라벨로 쓰므로, 앞부분에 값이 섞이면
+                // 같은 실패 유형이 값마다 다른 버킷으로 쪼개져 리포트가 커진다.
+                reason: `응답 행이 모두 필터에서 제외됐습니다 (sj_div/bsns_year 필드 확인, ${rows.length}행)`,
+                severity: "BLOCKING",
+              });
+            }
+          }
+
+          if (rowsByReport.size > 0) {
+            const parsed = parseFinancialRows(symbol, rowsByReport);
+            facts.push(...parsed.facts);
+            gaps.push(...parsed.gaps);
           }
         }
 
-        if (rowsByReport.size > 0) {
-          const parsed = parseFinancialRows(symbol, rowsByReport);
-          facts.push(...parsed.facts);
-          gaps.push(...parsed.gaps);
-        }
-      }
-
-      // 발행주식수 — 정기보고서별로 조회하고 그 보고서의 분기에 붙인다. DART
-      // stockTotqySttus 는 사업보고서뿐 아니라 분기·반기보고서에도 '주식의 총수
-      // 현황' 섹션을 담고 있어 네 보고서 모두 조회 대상이다.
-      //
-      // shareYears 는 years 의 각 연도마다 직전 1년을 더한 집합이라 원소 수가 다르다 —
-      // 재무 루프 안에 두면 연도가 어긋나므로 별도 루프로 돈다.
-      for (const year of request.shareYears) {
-        for (const reportCode of filableReports(year)) {
-          const shareRows = await fetchShareRows(
-            request,
-            symbol,
-            year,
-            reportCode,
-            resolveCorpCode,
-            hooks,
-          );
-          // 보통주만 쓴다 — 시가총액은 봉 종가(보통주 가격) × 보통주 수다.
-          // '합계' 행을 쓰면 우선주가 섞여 시가총액이 과대계상된다.
-          const common = findCommonShareRow(shareRows);
-          const periodKey = `${year}Q${REPORT_CODE_TO_QUARTER[reportCode]}`;
-          if (common) {
-            const value = readShareAmount(common);
-            const asOf = receiptDateToAsOfTsMs(readDartString(common, 'rcept_no') ?? '');
-            if (value === null || value <= 0 || asOf === null) {
+        // 발행주식수 — 정기보고서별로 조회하고 그 보고서의 분기에 붙인다. DART
+        // stockTotqySttus 는 사업보고서뿐 아니라 분기·반기보고서에도 '주식의 총수
+        // 현황' 섹션을 담고 있어 네 보고서 모두 조회 대상이다.
+        //
+        // shareYears 는 years 의 각 연도마다 직전 1년을 더한 집합이라 원소 수가 다르다 —
+        // 재무 루프 안에 두면 연도가 어긋나므로 별도 루프로 돈다.
+        for (const year of request.shareYears) {
+          for (const reportCode of filableReports(year)) {
+            const shareRows = await fetchShareRows(
+              request,
+              symbol,
+              year,
+              reportCode,
+              resolveCorpCode,
+              hooks,
+            );
+            // 보통주만 쓴다 — 시가총액은 봉 종가(보통주 가격) × 보통주 수다.
+            // '합계' 행을 쓰면 우선주가 섞여 시가총액이 과대계상된다.
+            const common = findCommonShareRow(shareRows);
+            const periodKey = `${year}Q${REPORT_CODE_TO_QUARTER[reportCode]}`;
+            if (common) {
+              const value = readShareAmount(common);
+              const asOf = receiptDateToAsOfTsMs(
+                readDartString(common, "rcept_no") ?? "",
+              );
+              if (value === null || value <= 0 || asOf === null) {
+                gaps.push({
+                  symbol,
+                  periodKey,
+                  reason: `발행주식수를 읽을 수 없습니다: ${readDartString(common, "istc_totqy") ?? "(없음)"}`,
+                  severity: "BLOCKING",
+                });
+              } else {
+                facts.push({
+                  scope: "SYMBOL",
+                  key: symbol,
+                  field: "SHARES_OUTSTANDING",
+                  periodKey,
+                  asOfTsMs: asOf,
+                  value,
+                  unit: "SHARES",
+                });
+              }
+            } else if (shareRows.length > 0) {
+              // 응답에 행은 있는데 '보통주' 로 매칭되는 행이 없다 — se 표기가 예상과 다를 수
+              // 있으므로 조용히 넘기지 않고 gap 으로 남긴다 (그렇지 않으면 시가총액이 조용히
+              // 계산 불가 상태가 되어도 수집 리포트에는 드러나지 않는다)
               gaps.push({
                 symbol,
                 periodKey,
-                reason: `발행주식수를 읽을 수 없습니다: ${readDartString(common, 'istc_totqy') ?? '(없음)'}`,
-                severity: 'BLOCKING',
-              });
-            } else {
-              facts.push({
-                scope: 'SYMBOL',
-                key: symbol,
-                field: 'SHARES_OUTSTANDING',
-                periodKey,
-                asOfTsMs: asOf,
-                value,
-                unit: 'SHARES',
+                reason: `'보통주' 행을 찾을 수 없습니다 (se 값: ${shareRows.map((row) => readDartString(row, "se") ?? "(없음)").join(", ")})`,
+                severity: "BLOCKING",
               });
             }
-          } else if (shareRows.length > 0) {
-            // 응답에 행은 있는데 '보통주' 로 매칭되는 행이 없다 — se 표기가 예상과 다를 수
-            // 있으므로 조용히 넘기지 않고 gap 으로 남긴다 (그렇지 않으면 시가총액이 조용히
-            // 계산 불가 상태가 되어도 수집 리포트에는 드러나지 않는다)
-            gaps.push({
-              symbol,
-              periodKey,
-              reason: `'보통주' 행을 찾을 수 없습니다 (se 값: ${shareRows.map((row) => readDartString(row, 'se') ?? '(없음)').join(', ')})`,
-              severity: 'BLOCKING',
-            });
           }
         }
-      }
       } catch (error) {
-        if (!(error instanceof CorpCodeMissingError || error instanceof DartSymbolPayloadError)) {
+        if (!(
+          error instanceof CorpCodeMissingError ||
+          error instanceof DartSymbolPayloadError
+        )) {
           throw error;
         }
         // cache가 일부만 있고 나머지 원천 요청에 필요한 corp_code가 없으면 부분 결과를
@@ -679,11 +732,12 @@ export function createDartFactSource(
         gaps.splice(gapStart);
         gaps.push({
           symbol,
-          periodKey: '-',
-          reason: error instanceof CorpCodeMissingError
-            ? 'DART corp_code 매핑에 없는 종목코드입니다'
-            : error.message,
-          severity: 'BLOCKING',
+          periodKey: "-",
+          reason:
+            error instanceof CorpCodeMissingError
+              ? "DART corp_code 매핑에 없는 종목코드입니다"
+              : error.message,
+          severity: "BLOCKING",
         });
       }
     }
@@ -703,208 +757,233 @@ export function createDartFactSource(
       const gapStart = gaps.length;
       const resolveCorpCode = lazyCorpCode(symbol, hooks);
       try {
+        // 같은 (field, periodKey) 자본변동을 접는다 — 아래 루프 주석 참고. 심볼 루프
+        // 안에서 매번 새로 만든다 — 바깥에 두고 매 심볼 끝에 clear() 하는 방식은, 나중에
+        // 누군가 clear() 호출 앞에 continue 를 추가하면 이전 심볼의 항목이 다음 심볼로
+        // 새어나가는데(이 맵의 키에는 symbol 이 들어있지 않다) 그 실수를 컴파일러도
+        // 테스트도 아닌 리뷰에만 의존해 잡아야 한다 — 스코프 자체를 좁혀 구조적으로
+        // 불가능하게 만든다.
+        const actionByKey = new Map<string, Fact>();
 
-      // 같은 (field, periodKey) 자본변동을 접는다 — 아래 루프 주석 참고. 심볼 루프
-      // 안에서 매번 새로 만든다 — 바깥에 두고 매 심볼 끝에 clear() 하는 방식은, 나중에
-      // 누군가 clear() 호출 앞에 continue 를 추가하면 이전 심볼의 항목이 다음 심볼로
-      // 새어나가는데(이 맵의 키에는 symbol 이 들어있지 않다) 그 실수를 컴파일러도
-      // 테스트도 아닌 리뷰에만 의존해 잡아야 한다 — 스코프 자체를 좁혀 구조적으로
-      // 불가능하게 만든다.
-      const actionByKey = new Map<string, Fact>();
+        /** 'YYYY-MM-DD' → 그 시점의 발행주식수. DART 표가 명시한 기준일을 쓴다. */
+        const sharesByPeriod: SharesAtPeriod[] = [];
+        const filedReports = new Set<string>();
 
-      /** 'YYYY-MM-DD' → 그 시점의 발행주식수. DART 표가 명시한 기준일을 쓴다. */
-      const sharesByPeriod: SharesAtPeriod[] = [];
-      const filedReports = new Set<string>();
-
-      // 앵커 때문에 shareYears 를 돈다 — 대상 연도만 읽으면 그 연도 연초 이벤트의
-      // 직전 발행주식수가 없어 비율이 gap 이 되고, 불연속 구간의 앵커가 빠지면 구멍
-      // 건너편의 낡은 공시가 분모로 잡혀 gap 도 없이 틀린다 (domain/sync-plan.ts 참고)
-      for (const year of request.shareYears) {
-        for (const reportCode of filableReports(year)) {
-          const shareRows = await fetchShareRows(
-            request,
-            symbol,
-            year,
-            reportCode,
-            resolveCorpCode,
-            hooks,
-          );
-          if (shareRows.length > 0) filedReports.add(`${year}:${reportCode}`);
-          const common = findCommonShareRow(shareRows);
-          if (!common) continue;
-          const shares = readShareAmount(common);
-          const rawSettlementDate = readDartString(common, 'stlm_dt');
-          const dateKey = rawSettlementDate === null ? null : normalizeDateKey(rawSettlementDate);
-          if (shares === null || shares <= 0 || dateKey === null) {
-            // '-' 주식총수는 사건이 아니라 비율 계산용 앵커 부재다. 실제 보정 대상
-            // 사건이 이 앵커를 필요로 할 때 파서가 사건 날짜와 함께 gap을 남긴다.
-            continue;
-          }
-          sharesByPeriod.push({ dateKey, shares });
-        }
-      }
-      sharesByPeriod.sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1));
-
-      // irdsSttus는 누적 스냅샷이다. 최신 제출 보고서가 이전 행을 정정·삭제할 수 있으므로
-      // 행을 합치지 않고 전체 집합을 교체한다. 그대로 남은 이벤트만 최초 접수번호를 쓴다.
-      const firstReceiptByKey = new Map<string, string>();
-      const issuanceSnapshots: (readonly DartIssuanceRow[])[] = [];
-      let latestIssuanceRows: readonly DartIssuanceRow[] = [];
-      for (const year of [...new Set(request.years)].sort((a, b) => a - b)) {
-        for (const reportCode of filableReports(year)) {
-          const rows = await rawRows<DartIssuanceRow>(
-            request,
-            {
+        // 앵커 때문에 shareYears 를 돈다 — 대상 연도만 읽으면 그 연도 연초 이벤트의
+        // 직전 발행주식수가 없어 비율이 gap 이 되고, 불연속 구간의 앵커가 빠지면 구멍
+        // 건너편의 낡은 공시가 분모로 잡혀 gap 도 없이 틀린다 (domain/sync-plan.ts 참고)
+        for (const year of request.shareYears) {
+          for (const reportCode of filableReports(year)) {
+            const shareRows = await fetchShareRows(
+              request,
               symbol,
-              endpoint: 'ISSUANCE_STATUS',
-              businessYear: year,
+              year,
               reportCode,
-              fsDiv: 'NONE',
-            },
-            '/api/irdsSttus.json',
-            resolveCorpCode,
-            (corpCode) => ({
-              corp_code: corpCode,
-              bsns_year: String(year),
-              reprt_code: reportCode,
-            }),
-            hooks,
-          );
-          for (const row of rows) {
-            const key = issuanceKey(row);
-            const receiptNo = readDartString(row, 'rcept_no');
-            const firstReceipt = firstReceiptByKey.get(key);
-            if (receiptNo !== null && (firstReceipt === undefined || receiptNo < firstReceipt)) {
-              firstReceiptByKey.set(key, receiptNo);
+              resolveCorpCode,
+              hooks,
+            );
+            if (shareRows.length > 0) filedReports.add(`${year}:${reportCode}`);
+            const common = findCommonShareRow(shareRows);
+            if (!common) continue;
+            const shares = readShareAmount(common);
+            const rawSettlementDate = readDartString(common, "stlm_dt");
+            const dateKey =
+              rawSettlementDate === null
+                ? null
+                : normalizeDateKey(rawSettlementDate);
+            if (shares === null || shares <= 0 || dateKey === null) {
+              // '-' 주식총수는 사건이 아니라 비율 계산용 앵커 부재다. 실제 보정 대상
+              // 사건이 이 앵커를 필요로 할 때 파서가 사건 날짜와 함께 gap을 남긴다.
+              continue;
+            }
+            sharesByPeriod.push({ dateKey, shares });
+          }
+        }
+        sharesByPeriod.sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1));
+
+        // irdsSttus는 누적 스냅샷이다. 최신 제출 보고서가 이전 행을 정정·삭제할 수 있으므로
+        // 행을 합치지 않고 전체 집합을 교체한다. 그대로 남은 이벤트만 최초 접수번호를 쓴다.
+        const firstReceiptByKey = new Map<string, string>();
+        const issuanceSnapshots: (readonly DartIssuanceRow[])[] = [];
+        let latestIssuanceRows: readonly DartIssuanceRow[] = [];
+        for (const year of [...new Set(request.years)].sort((a, b) => a - b)) {
+          for (const reportCode of filableReports(year)) {
+            const rows = await rawRows<DartIssuanceRow>(
+              request,
+              {
+                symbol,
+                endpoint: "ISSUANCE_STATUS",
+                businessYear: year,
+                reportCode,
+                fsDiv: "NONE",
+              },
+              "/api/irdsSttus.json",
+              resolveCorpCode,
+              (corpCode) => ({
+                corp_code: corpCode,
+                bsns_year: String(year),
+                reprt_code: reportCode,
+              }),
+              hooks,
+            );
+            for (const row of rows) {
+              const key = issuanceKey(row);
+              const receiptNo = readDartString(row, "rcept_no");
+              const firstReceipt = firstReceiptByKey.get(key);
+              if (
+                receiptNo !== null &&
+                (firstReceipt === undefined || receiptNo < firstReceipt)
+              ) {
+                firstReceiptByKey.set(key, receiptNo);
+              }
+            }
+            // 013(아직 미제출)은 빈 배열이지만, 같은 보고서의 주식총수가 있으면 실제로
+            // 제출된 빈 자본변동 스냅샷이므로 이전 집합을 비운다.
+            if (rows.length > 0 || filedReports.has(`${year}:${reportCode}`)) {
+              latestIssuanceRows = rows;
+              issuanceSnapshots.push(rows);
             }
           }
-          // 013(아직 미제출)은 빈 배열이지만, 같은 보고서의 주식총수가 있으면 실제로
-          // 제출된 빈 자본변동 스냅샷이므로 이전 집합을 비운다.
-          if (rows.length > 0 || filedReports.has(`${year}:${reportCode}`)) {
-            latestIssuanceRows = rows;
-            issuanceSnapshots.push(rows);
-          }
         }
-      }
-      const issuanceRows = repairContradictedSplitRows(
-        latestIssuanceRows,
-        issuanceSnapshots.slice(0, -1),
-        sharesByPeriod,
-      ).map((row) => ({
-        ...row,
-        rcept_no: firstReceiptByKey.get(issuanceKey(row))
-          ?? readDartString(row, 'rcept_no')
-          ?? '',
-      }));
-      const splitInference = inferAmbiguousSplitRows(issuanceRows, sharesByPeriod);
-      const decreasingSplitRows = splitInference.decreasingRows;
-      const contradictedSplitRows = splitInference.contradictedRows;
-      // DART 응답의 같은 날짜 행 순서가 사건 순서다. 유상증자 다음 무상증자처럼
-      // 날짜만으로는 분모를 복원할 수 없는 경우에도 target 행 앞까지만 정확히 재생한다.
-      const issuedShareChanges = issuanceRows
-        .flatMap((row, order): OrderedIssuedShareChange[] => {
-          if (contradictedSplitRows.has(row)) {
-            const rawDate = readDartString(row, 'isu_dcrs_de');
-            const dateKey = rawDate === null ? null : normalizeDateKey(rawDate);
-            return dateKey === null ? [] : [{ row, order, dateKey, delta: null }];
-          }
-          const change = issuedShareChange(
-            row,
-            decreasingSplitRows.has(row) ? 'DECREASE' : undefined,
-          );
-          return change === null ? [] : [{ row, order, ...change }];
-        })
-        .sort((a, b) => a.dateKey.localeCompare(b.dateKey) || a.order - b.order);
-      const rowOrder = new Map(issuanceRows.map((row, order) => [row, order]));
-
-      const sharesBefore = (dateKey: string, targetRow: DartIssuanceRow): number | null => {
-        let anchor: SharesAtPeriod | null = null;
-        for (const entry of sharesByPeriod) {
-          if (entry.dateKey >= dateKey) break;
-          anchor = entry;
-        }
-        if (anchor === null) return null;
-        const targetOrder = rowOrder.get(targetRow);
-        if (targetOrder === undefined) return null;
-        let shares = anchor.shares;
-        for (const change of issuedShareChanges) {
-          if (change.dateKey <= anchor.dateKey) continue;
-          if (
-            change.dateKey > dateKey
-            || (change.dateKey === dateKey && change.order >= targetOrder)
-          ) break;
-          if (change.delta === null) return null;
-          shares += change.delta;
-          if (shares <= 0) return null;
-        }
-        return shares;
-      };
-
-      if (issuanceRows.length > 0) {
-        for (const row of contradictedSplitRows) {
-          gaps.push({
-            symbol,
-            periodKey: (() => {
-              const rawDate = readDartString(row, 'isu_dcrs_de') ?? '-';
-              return normalizeDateKey(rawDate) ?? rawDate;
-            })(),
-            reason: `분기 발행주식수와 일치하지 않는 주식분할 변동 수량입니다: ${readDartString(row, 'isu_dcrs_qy') ?? '(없음)'}`,
-            severity: 'BLOCKING',
-          });
-        }
-        const parsed = parseIssuanceRows(
-          symbol,
-          issuanceRows.filter((row) => !contradictedSplitRows.has(row)),
-          sharesBefore,
-          {
-            directionForRow: (row) => decreasingSplitRows.has(row) ? 'DECREASE' : undefined,
-          },
+        const issuanceRows = repairContradictedSplitRows(
+          latestIssuanceRows,
+          issuanceSnapshots.slice(0, -1),
+          sharesByPeriod,
+        ).map((row) => ({
+          ...row,
+          rcept_no:
+            firstReceiptByKey.get(issuanceKey(row)) ??
+            readDartString(row, "rcept_no") ??
+            "",
+        }));
+        const splitInference = inferAmbiguousSplitRows(
+          issuanceRows,
+          sharesByPeriod,
         );
-        for (const fact of parsed.facts) {
-          // irdsSttus 는 자본변동 이력을 연도별로 누적 제공한다 — 같은 분할이 해마다
-          // 다른 rcept_no 로 반복되고, asOfTsMs 가 다르면 저장소 dedupe 를 통과한다.
-          // 그대로 두면 adjusted-price 가 비율을 곱해 2:1 분할이 2년치에서 factor 4 가
-          // 된다. 같은 (field, periodKey) 는 가장 이른 공시만 남긴다.
-          const key = `${fact.field} ${fact.periodKey}`;
-          const existing = actionByKey.get(key);
-          if (!existing) {
-            actionByKey.set(key, fact);
-            continue;
+        const decreasingSplitRows = splitInference.decreasingRows;
+        const contradictedSplitRows = splitInference.contradictedRows;
+        // DART 응답의 같은 날짜 행 순서가 사건 순서다. 유상증자 다음 무상증자처럼
+        // 날짜만으로는 분모를 복원할 수 없는 경우에도 target 행 앞까지만 정확히 재생한다.
+        const issuedShareChanges = issuanceRows
+          .flatMap((row, order): OrderedIssuedShareChange[] => {
+            if (contradictedSplitRows.has(row)) {
+              const rawDate = readDartString(row, "isu_dcrs_de");
+              const dateKey =
+                rawDate === null ? null : normalizeDateKey(rawDate);
+              return dateKey === null
+                ? []
+                : [{ row, order, dateKey, delta: null }];
+            }
+            const change = issuedShareChange(
+              row,
+              decreasingSplitRows.has(row) ? "DECREASE" : undefined,
+            );
+            return change === null ? [] : [{ row, order, ...change }];
+          })
+          .sort(
+            (a, b) => a.dateKey.localeCompare(b.dateKey) || a.order - b.order,
+          );
+        const rowOrder = new Map(
+          issuanceRows.map((row, order) => [row, order]),
+        );
+
+        const sharesBefore = (
+          dateKey: string,
+          targetRow: DartIssuanceRow,
+        ): number | null => {
+          let anchor: SharesAtPeriod | null = null;
+          for (const entry of sharesByPeriod) {
+            if (entry.dateKey >= dateKey) break;
+            anchor = entry;
           }
-          if (
-            existing.value !== fact.value
-            || (existing.corporateActionBeforeShares ?? null)
-              !== (fact.corporateActionBeforeShares ?? null)
-            || (existing.corporateActionAfterShares ?? null)
-              !== (fact.corporateActionAfterShares ?? null)
-          ) {
+          if (anchor === null) return null;
+          const targetOrder = rowOrder.get(targetRow);
+          if (targetOrder === undefined) return null;
+          let shares = anchor.shares;
+          for (const change of issuedShareChanges) {
+            if (change.dateKey <= anchor.dateKey) continue;
+            if (
+              change.dateKey > dateKey ||
+              (change.dateKey === dateKey && change.order >= targetOrder)
+            )
+              break;
+            if (change.delta === null) return null;
+            shares += change.delta;
+            if (shares <= 0) return null;
+          }
+          return shares;
+        };
+
+        if (issuanceRows.length > 0) {
+          for (const row of contradictedSplitRows) {
             gaps.push({
               symbol,
-              periodKey: fact.periodKey,
-              reason: `같은 기준일의 자본변동 수치가 공시마다 다릅니다 (${existing.value} vs ${fact.value})`,
-              severity: 'BLOCKING',
+              periodKey: (() => {
+                const rawDate = readDartString(row, "isu_dcrs_de") ?? "-";
+                return normalizeDateKey(rawDate) ?? rawDate;
+              })(),
+              reason: `분기 발행주식수와 일치하지 않는 주식분할 변동 수량입니다: ${readDartString(row, "isu_dcrs_qy") ?? "(없음)"}`,
+              severity: "BLOCKING",
             });
-            continue;
           }
-          if (fact.asOfTsMs < existing.asOfTsMs) actionByKey.set(key, fact);
+          const parsed = parseIssuanceRows(
+            symbol,
+            issuanceRows.filter((row) => !contradictedSplitRows.has(row)),
+            sharesBefore,
+            {
+              directionForRow: (row) =>
+                decreasingSplitRows.has(row) ? "DECREASE" : undefined,
+            },
+          );
+          for (const fact of parsed.facts) {
+            // irdsSttus 는 자본변동 이력을 연도별로 누적 제공한다 — 같은 분할이 해마다
+            // 다른 rcept_no 로 반복되고, asOfTsMs 가 다르면 저장소 dedupe 를 통과한다.
+            // 그대로 두면 adjusted-price 가 비율을 곱해 2:1 분할이 2년치에서 factor 4 가
+            // 된다. 같은 (field, periodKey) 는 가장 이른 공시만 남긴다.
+            const key = `${fact.field} ${fact.periodKey}`;
+            const existing = actionByKey.get(key);
+            if (!existing) {
+              actionByKey.set(key, fact);
+              continue;
+            }
+            if (
+              existing.value !== fact.value ||
+              (existing.corporateActionBeforeShares ?? null) !==
+                (fact.corporateActionBeforeShares ?? null) ||
+              (existing.corporateActionAfterShares ?? null) !==
+                (fact.corporateActionAfterShares ?? null)
+            ) {
+              gaps.push({
+                symbol,
+                periodKey: fact.periodKey,
+                reason: `같은 기준일의 자본변동 수치가 공시마다 다릅니다 (${existing.value} vs ${fact.value})`,
+                severity: "BLOCKING",
+              });
+              continue;
+            }
+            if (fact.asOfTsMs < existing.asOfTsMs) actionByKey.set(key, fact);
+          }
+          gaps.push(...parsed.gaps);
         }
-        gaps.push(...parsed.gaps);
-      }
 
-      facts.push(...actionByKey.values());
+        facts.push(...actionByKey.values());
       } catch (error) {
-        if (!(error instanceof CorpCodeMissingError || error instanceof DartSymbolPayloadError)) {
+        if (!(
+          error instanceof CorpCodeMissingError ||
+          error instanceof DartSymbolPayloadError
+        )) {
           throw error;
         }
         facts.splice(factStart);
         gaps.splice(gapStart);
         gaps.push({
           symbol,
-          periodKey: '-',
-          reason: error instanceof CorpCodeMissingError
-            ? 'DART corp_code 매핑에 없는 종목코드입니다'
-            : error.message,
-          severity: 'BLOCKING',
+          periodKey: "-",
+          reason:
+            error instanceof CorpCodeMissingError
+              ? "DART corp_code 매핑에 없는 종목코드입니다"
+              : error.message,
+          severity: "BLOCKING",
         });
       }
     }
@@ -917,42 +996,55 @@ export function createDartFactSource(
     toDate: string,
     hooks: FactSourceRequestHooks = {},
   ): Promise<readonly PeriodicFiling[]> {
-    if (dartConfig === null || client === null) throw new FactSourceNotConfiguredError();
+    if (dartConfig === null || client === null)
+      throw new FactSourceNotConfiguredError();
     const filings: PeriodicFiling[] = [];
     for (let pageNo = 1; pageNo <= FILING_LIST_MAX_PAGES; pageNo += 1) {
-      const envelope: DartListEnvelope = await liveCall<DartFilingRow>('/api/list.json', {
-        bgn_de: fromDate.replaceAll('-', ''),
-        end_de: toDate.replaceAll('-', ''),
-        pblntf_ty: 'A', // 정기공시와 정정공시를 같은 한도 원장으로 조회한다.
-        page_no: String(pageNo),
-        page_count: '100',
-      }, hooks);
+      const envelope: DartListEnvelope = await liveCall<DartFilingRow>(
+        "/api/list.json",
+        {
+          bgn_de: fromDate.replaceAll("-", ""),
+          end_de: toDate.replaceAll("-", ""),
+          pblntf_ty: "A", // 정기공시와 정정공시를 같은 한도 원장으로 조회한다.
+          page_no: String(pageNo),
+          page_count: "100",
+        },
+        hooks,
+      );
       if (envelope.status === NO_DATA_STATUS) return filings;
       if (!Array.isArray(envelope.list)) {
-        throw new Error('DART 정기공시 목록의 list 필드가 배열 형식이 아닙니다.');
+        throw new Error(
+          "DART 정기공시 목록의 list 필드가 배열 형식이 아닙니다.",
+        );
       }
       for (const row of envelope.list) {
         // 종목코드 없는 비상장 제출자 — 이 시스템의 종목과 만날 수 없다
-        const stockCode = readDartString(row, 'stock_code')?.trim() ?? '';
+        const stockCode = readDartString(row, "stock_code")?.trim() ?? "";
         if (!/^\d{6}$/.test(stockCode)) continue;
-        const rawDate = readDartString(row, 'rcept_dt') ?? '';
+        const rawDate = readDartString(row, "rcept_dt") ?? "";
         const receiptDate = /^\d{8}$/.test(rawDate)
           ? `${rawDate.slice(0, 4)}-${rawDate.slice(4, 6)}-${rawDate.slice(6, 8)}`
           : null;
-        const receiptNo = readDartString(row, 'rcept_no')?.trim() ?? '';
+        const receiptNo = readDartString(row, "rcept_no")?.trim() ?? "";
         const validReceiptNo = /^\d{14}$/.test(receiptNo) ? receiptNo : null;
-        const yearMatch = REPORT_NAME_YEAR_PATTERN.exec(readDartString(row, 'report_nm') ?? '');
-        if (receiptDate === null || validReceiptNo === null || yearMatch === null) {
+        const yearMatch = REPORT_NAME_YEAR_PATTERN.exec(
+          readDartString(row, "report_nm") ?? "",
+        );
+        if (
+          receiptDate === null ||
+          validReceiptNo === null ||
+          yearMatch === null
+        ) {
           logger.warn(
             {
-              module: 'facts',
-              event: 'dart.periodic-filing-incomplete',
+              module: "facts",
+              event: "dart.periodic-filing-incomplete",
               stockCode,
               hasReceiptNo: validReceiptNo !== null,
               hasReceiptDate: receiptDate !== null,
               hasBusinessYear: yearMatch !== null,
             },
-            'DART 정기공시 목록의 불완전한 종목 행을 보수적 재수집 대상으로 남긴다',
+            "DART 정기공시 목록의 불완전한 종목 행을 보수적 재수집 대상으로 남긴다",
           );
         }
         filings.push({
@@ -974,6 +1066,7 @@ export function createDartFactSource(
     fetchCorporateActions,
     listRecentPeriodicFilings,
     countRawSnapshotMisses,
-    getRawSnapshotWatermarks: (symbols) => options.rawSnapshots?.getOldestFetchedAtMs(symbols) ?? new Map(),
+    getRawSnapshotWatermarks: (symbols) =>
+      options.rawSnapshots?.getOldestFetchedAtMs(symbols) ?? new Map(),
   };
 }

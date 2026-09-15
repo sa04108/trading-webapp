@@ -1,5 +1,5 @@
-import type { FactSyncMode, FactSyncPlan } from '../domain/sync-plan.js';
-import type { FactIngestionGap } from './ports.js';
+import type { FactSyncMode, FactSyncPlan } from "../domain/sync-plan.js";
+import type { FactIngestionGap } from "./ports.js";
 
 export interface FactSyncRequest {
   readonly symbols: readonly string[];
@@ -36,7 +36,7 @@ export interface FactSyncHooks {
   /**
    * 실제 DART HTTP attempt 직전에 1건을 예약한다. 목록 페이지와 재시도도 각각 호출된다.
    */
-  beforeDartRequest?(): 'CONTINUE' | 'PAUSE_DAILY_QUOTA';
+  beforeDartRequest?(): "CONTINUE" | "PAUSE_DAILY_QUOTA";
 }
 
 export interface FactSyncReport {
@@ -51,15 +51,29 @@ export interface FactSyncReport {
    * 중단 원인. 호출부가 잡 상태를 FAILED/CANCELLED 로 갈라야 하므로
    * stoppedAtSymbol 만으로는 부족하다.
    */
-  readonly stopReason: 'ERROR' | 'CANCELLED' | 'DAILY_QUOTA' | null;
+  readonly stopReason: "ERROR" | "CANCELLED" | "DAILY_QUOTA" | null;
   /** 중단 사유 + 이어받는 방법을 담은 한국어 안내. 완주하면 null */
   readonly failureMessage: string | null;
 }
 
 /** 서버 수집 구현과 스냅샷 worker가 공유하는 수집 계약이다. */
 export interface FactSyncPort {
-  planFinancialSync(symbols: readonly string[], fromYear: number, toYear: number): FactSyncPlan;
-  planCorporateActionSync(symbols: readonly string[], fromYear: number, toYear: number): FactSyncPlan;
-  sync(request: FactSyncRequest, hooks?: FactSyncHooks): Promise<FactSyncReport>;
-  syncCorporateActions(request: FactSyncRequest, hooks?: FactSyncHooks): Promise<FactSyncReport>;
+  planFinancialSync(
+    symbols: readonly string[],
+    fromYear: number,
+    toYear: number,
+  ): FactSyncPlan;
+  planCorporateActionSync(
+    symbols: readonly string[],
+    fromYear: number,
+    toYear: number,
+  ): FactSyncPlan;
+  sync(
+    request: FactSyncRequest,
+    hooks?: FactSyncHooks,
+  ): Promise<FactSyncReport>;
+  syncCorporateActions(
+    request: FactSyncRequest,
+    hooks?: FactSyncHooks,
+  ): Promise<FactSyncReport>;
 }

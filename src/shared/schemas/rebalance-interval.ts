@@ -1,5 +1,5 @@
-import type { BacktestPeriod } from './backtest-request.js';
-import type { RebalanceInterval } from './universe-rule.js';
+import type { BacktestPeriod } from "./backtest-request.js";
+import type { RebalanceInterval } from "./universe-rule.js";
 
 function toUtcDate(iso: string): Date {
   return new Date(`${iso}T00:00:00Z`);
@@ -37,17 +37,18 @@ export function addRebalanceInterval(
   interval: RebalanceInterval,
   multiple = 1,
 ): string {
-  if (interval.unit === 'NONE') return anchor;
-  if (interval.unit === 'DAY') return addUtcDays(anchor, interval.value * multiple);
-  if (interval.unit === 'WEEK') return addUtcDays(anchor, interval.value * multiple * 7);
+  if (interval.unit === "NONE") return anchor;
+  if (interval.unit === "DAY")
+    return addUtcDays(anchor, interval.value * multiple);
+  if (interval.unit === "WEEK")
+    return addUtcDays(anchor, interval.value * multiple * 7);
 
   const date = toUtcDate(anchor);
   const year = date.getUTCFullYear();
   const monthIndex = date.getUTCMonth();
   const day = date.getUTCDate();
-  const addedMonths = interval.unit === 'MONTH'
-    ? interval.value * multiple
-    : 12 * multiple;
+  const addedMonths =
+    interval.unit === "MONTH" ? interval.value * multiple : 12 * multiple;
   const totalMonths = monthIndex + addedMonths;
   const targetYear = year + Math.floor(totalMonths / 12);
   const targetMonthIndex = ((totalMonths % 12) + 12) % 12;
@@ -59,12 +60,13 @@ export function computeRebalanceDates(
   period: BacktestPeriod,
   interval: RebalanceInterval,
 ): string[] {
-  if (interval.unit === 'NONE') return [period.from];
+  if (interval.unit === "NONE") return [period.from];
   const dates: string[] = [];
   for (let multiple = 0; ; multiple += 1) {
-    const date = multiple === 0
-      ? period.from
-      : addRebalanceInterval(period.from, interval, multiple);
+    const date =
+      multiple === 0
+        ? period.from
+        : addRebalanceInterval(period.from, interval, multiple);
     if (date > period.to) return dates;
     dates.push(date);
   }
@@ -74,6 +76,8 @@ export function rebalanceIntervalFitsPeriod(
   period: BacktestPeriod,
   interval: RebalanceInterval,
 ): boolean {
-  if (interval.unit === 'NONE') return true;
-  return addRebalanceInterval(period.from, interval) <= addUtcDays(period.to, 1);
+  if (interval.unit === "NONE") return true;
+  return (
+    addRebalanceInterval(period.from, interval) <= addUtcDays(period.to, 1)
+  );
 }

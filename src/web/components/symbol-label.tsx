@@ -1,4 +1,4 @@
-import { cn } from '@/lib/utils';
+import { cn } from "@/lib/utils";
 
 /**
  * `이름 (코드)` 렌더. **코드는 절대 잘리지 않는다.**
@@ -24,7 +24,7 @@ export function SymbolLabel({
 }) {
   if (!name) return <span className={className}>{symbol}</span>;
   return (
-    <span className={cn('flex items-baseline gap-1', className)}>
+    <span className={cn("flex items-baseline gap-1", className)}>
       <span className="max-w-40 truncate" title={name}>
         {name}
       </span>

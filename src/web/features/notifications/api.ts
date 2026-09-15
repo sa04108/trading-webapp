@@ -1,19 +1,19 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
-import { api } from '@/lib/api-client';
-import type { NotificationItem } from './types';
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import { api } from "@/lib/api-client";
+import type { NotificationItem } from "./types";
 
 export function useNotifications() {
   return useQuery({
-    queryKey: ['notifications', 'list'],
-    queryFn: () => api<{ notifications: NotificationItem[] }>('/notifications'),
+    queryKey: ["notifications", "list"],
+    queryFn: () => api<{ notifications: NotificationItem[] }>("/notifications"),
   });
 }
 
 export function useUnreadCount(pollingFallback: boolean) {
   return useQuery({
-    queryKey: ['notifications', 'unread-count'],
-    queryFn: () => api<{ count: number }>('/notifications/unread-count'),
+    queryKey: ["notifications", "unread-count"],
+    queryFn: () => api<{ count: number }>("/notifications/unread-count"),
     // SSE 가 죽었을 때만 폴링 — 평소에는 push 가 invalidate 한다
     refetchInterval: pollingFallback ? 60_000 : false,
   });
@@ -30,16 +30,16 @@ export function useNotificationStream(): boolean {
 
   useEffect(() => {
     if (sourceRef.current || sseFailed) return;
-    const source = new EventSource('/api/v1/notifications/events');
+    const source = new EventSource("/api/v1/notifications/events");
     sourceRef.current = source;
     const refreshNotifications = () => {
       // 내용은 쓰지 않는다 — 목록·카운트 쿼리를 무효화하면 화면이 알아서 당겨 온다
-      void queryClient.invalidateQueries({ queryKey: ['notifications'] });
+      void queryClient.invalidateQueries({ queryKey: ["notifications"] });
     };
     source.onmessage = refreshNotifications;
     // 서버가 listener를 붙인 직후 보내는 재동기화 신호. 최초 REST 조회와 SSE 구독
     // 사이에 생긴 알림도 이 재조회로 회수한다.
-    source.addEventListener('sync', refreshNotifications);
+    source.addEventListener("sync", refreshNotifications);
     source.onerror = () => {
       source.close();
       sourceRef.current = null;

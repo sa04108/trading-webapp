@@ -1,10 +1,10 @@
-import { readRuntimeVersions } from '../../../shared/runtime-versions.js';
-import { and, eq, inArray } from 'drizzle-orm';
-import type { AppDatabase } from '../../../shared/db/database.js';
+import { readRuntimeVersions } from "../../../shared/runtime-versions.js";
+import { and, eq, inArray } from "drizzle-orm";
+import type { AppDatabase } from "../../../shared/db/database.js";
 import {
   dailySelectionMetricCoverage,
   dailySelectionMetrics,
-} from '../../../shared/db/schema.js';
+} from "../../../shared/db/schema.js";
 
 export interface DailySelectionMetric {
   readonly date: string;
@@ -14,13 +14,16 @@ export interface DailySelectionMetric {
   readonly tradingValueKrw: bigint | null;
 }
 
-function fromRow(row: typeof dailySelectionMetrics.$inferSelect): DailySelectionMetric {
+function fromRow(
+  row: typeof dailySelectionMetrics.$inferSelect,
+): DailySelectionMetric {
   return {
     date: row.date,
     standardCode: row.standardCode,
     marketCapKrw: row.marketCapKrw === null ? null : BigInt(row.marketCapKrw),
     volume: row.volume,
-    tradingValueKrw: row.tradingValueKrw === null ? null : BigInt(row.tradingValueKrw),
+    tradingValueKrw:
+      row.tradingValueKrw === null ? null : BigInt(row.tradingValueKrw),
   };
 }
 
@@ -34,31 +37,46 @@ const FULL_DATE_READ_THRESHOLD = 1_500;
 export class SelectionMetricRepository {
   private readonly collectionVersion: string;
 
-  constructor(private readonly db: AppDatabase, options?: { readonly collectionVersion: string }) {
-    this.collectionVersion = options?.collectionVersion ?? readRuntimeVersions().collectionVersion;
+  constructor(
+    private readonly db: AppDatabase,
+    options?: { readonly collectionVersion: string },
+  ) {
+    this.collectionVersion =
+      options?.collectionVersion ?? readRuntimeVersions().collectionVersion;
   }
 
-  getAt(date: string, standardCodes: readonly string[]): ReadonlyMap<string, DailySelectionMetric> {
+  getAt(
+    date: string,
+    standardCodes: readonly string[],
+  ): ReadonlyMap<string, DailySelectionMetric> {
     const uniqueCodes = [...new Set(standardCodes)];
     const metrics = new Map<string, DailySelectionMetric>();
     if (uniqueCodes.length >= FULL_DATE_READ_THRESHOLD) {
       const requested = new Set(uniqueCodes);
-      const rows = this.db.select()
+      const rows = this.db
+        .select()
         .from(dailySelectionMetrics)
         .where(eq(dailySelectionMetrics.date, date))
         .all();
       for (const row of rows) {
-        if (requested.has(row.standardCode)) metrics.set(row.standardCode, fromRow(row));
+        if (requested.has(row.standardCode))
+          metrics.set(row.standardCode, fromRow(row));
       }
       return metrics;
     }
     for (let index = 0; index < uniqueCodes.length; index += READ_BATCH_SIZE) {
-      const rows = this.db.select()
+      const rows = this.db
+        .select()
         .from(dailySelectionMetrics)
-        .where(and(
-          eq(dailySelectionMetrics.date, date),
-          inArray(dailySelectionMetrics.standardCode, uniqueCodes.slice(index, index + READ_BATCH_SIZE)),
-        ))
+        .where(
+          and(
+            eq(dailySelectionMetrics.date, date),
+            inArray(
+              dailySelectionMetrics.standardCode,
+              uniqueCodes.slice(index, index + READ_BATCH_SIZE),
+            ),
+          ),
+        )
         .all();
       for (const row of rows) metrics.set(row.standardCode, fromRow(row));
     }
@@ -73,13 +91,26 @@ export class SelectionMetricRepository {
     const requestedDates = [...new Set(dates)];
     if (requestedDates.length === 0) return [];
     const ingested = new Set<string>();
-    for (let index = 0; index < requestedDates.length; index += READ_BATCH_SIZE) {
-      const rows = this.db.select({ date: dailySelectionMetricCoverage.date })
+    for (
+      let index = 0;
+      index < requestedDates.length;
+      index += READ_BATCH_SIZE
+    ) {
+      const rows = this.db
+        .select({ date: dailySelectionMetricCoverage.date })
         .from(dailySelectionMetricCoverage)
-        .where(and(
-          eq(dailySelectionMetricCoverage.collectionVersion, this.collectionVersion),
-          inArray(dailySelectionMetricCoverage.date, requestedDates.slice(index, index + READ_BATCH_SIZE)),
-        ))
+        .where(
+          and(
+            eq(
+              dailySelectionMetricCoverage.collectionVersion,
+              this.collectionVersion,
+            ),
+            inArray(
+              dailySelectionMetricCoverage.date,
+              requestedDates.slice(index, index + READ_BATCH_SIZE),
+            ),
+          ),
+        )
         .all();
       for (const row of rows) ingested.add(row.date);
     }

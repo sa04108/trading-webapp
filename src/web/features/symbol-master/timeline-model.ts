@@ -13,7 +13,7 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 /** 'YYYY-MM-DD' 를 UTC 자정 기준 밀리초로 바꾼다 — 로컬 타임존에 흔들리지 않게 한다 */
 export function dateToUtcMs(date: string): number {
-  const parts = date.split('-');
+  const parts = date.split("-");
   const year = Number(parts[0]);
   const month = Number(parts[1]);
   const day = Number(parts[2]);
@@ -24,8 +24,8 @@ export function dateToUtcMs(date: string): number {
 function utcMsToDate(ms: number): string {
   const d = new Date(ms);
   const year = d.getUTCFullYear();
-  const month = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(d.getUTCDate()).padStart(2, '0');
+  const month = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 }
 
@@ -37,7 +37,11 @@ const clampPct = (pct: number): number => Math.min(100, Math.max(0, pct));
  * rangeStart==rangeEnd 면 구간 길이가 0이라 나눗셈이 정의되지 않는다 — 이때는
  * 항상 0을 돌려준다(0으로 나누는 대신 방어).
  */
-export function dateToPct(rangeStart: string, rangeEnd: string, date: string): number {
+export function dateToPct(
+  rangeStart: string,
+  rangeEnd: string,
+  date: string,
+): number {
   const startMs = dateToUtcMs(rangeStart);
   const endMs = dateToUtcMs(rangeEnd);
   if (startMs === endMs) return 0;
@@ -53,7 +57,11 @@ export function dateToPct(rangeStart: string, rangeEnd: string, date: string): n
  * 값은 항상 실제 거래일(자정 기준)을 가리켜야 하기 때문이다. rangeStart==rangeEnd
  * 면 구간 길이가 0이라 항상 rangeStart 를 돌려준다.
  */
-export function pctToDate(rangeStart: string, rangeEnd: string, pct: number): string {
+export function pctToDate(
+  rangeStart: string,
+  rangeEnd: string,
+  pct: number,
+): string {
   const startMs = dateToUtcMs(rangeStart);
   const endMs = dateToUtcMs(rangeEnd);
   if (startMs === endMs) return rangeStart;
@@ -122,9 +130,9 @@ export function findNearestTradingDate(
     const candidateMs = dateToUtcMs(candidate);
     const distance = Math.abs(candidateMs - targetMs);
     if (
-      best === null
-      || distance < best.distance
-      || (distance === best.distance && candidateMs < best.dateMs)
+      best === null ||
+      distance < best.distance ||
+      (distance === best.distance && candidateMs < best.dateMs)
     ) {
       best = { date: candidate, dateMs: candidateMs, distance };
     }
@@ -142,10 +150,16 @@ export function isWeekendDate(date: string): boolean {
  * [min, max] 안에서 date와 가장 가까운 평일을 찾는다. 같은 거리면 과거를 택한다.
  * 거래소 휴일은 별도 거래일 정보 없이는 추측하지 않고, 확실한 주말만 건너뛴다.
  */
-export function findNearestWeekday(date: string, min: string, max: string): string | null {
+export function findNearestWeekday(
+  date: string,
+  min: string,
+  max: string,
+): string | null {
   if (min > max) return null;
   const bounded = date < min ? min : date > max ? max : date;
-  const maxDistance = Math.ceil((dateToUtcMs(max) - dateToUtcMs(min)) / MS_PER_DAY);
+  const maxDistance = Math.ceil(
+    (dateToUtcMs(max) - dateToUtcMs(min)) / MS_PER_DAY,
+  );
   for (let distance = 0; distance <= maxDistance; distance += 1) {
     const before = addDays(bounded, -distance);
     if (before >= min && !isWeekendDate(before)) return before;

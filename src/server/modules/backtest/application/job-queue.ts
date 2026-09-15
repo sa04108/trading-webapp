@@ -1,32 +1,42 @@
-import { EventEmitter } from 'node:events';
-import { and, count, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
-import type { AppDatabase, DatabaseHandle } from '../../../../runtime/shared/db/database.js';
-import { PreparationPreviewCache } from '../../../../runtime/modules/backtest/application/preparation-preview-cache.js';
-import { PreparationReferenceError, PreparationReferenceService } from './preparation-reference-service.js';
-import { backtestJobs } from '../../../../runtime/shared/db/operations-schema.js';
-import type { Clock } from '../../../../runtime/shared/clock.js';
-import { newId } from '../../../../runtime/shared/ids.js';
-import type { BacktestRequest } from '../../../../shared/schemas/backtest-request.js';
-import type { ProvenancePin } from '../../../../shared/schemas/provenance-pin.js';
-import type { LegacyUniverseScheduleEntry } from '../../../../runtime/modules/backtest/application/universe-rule-resolver.js';
-import type { BenchmarkPin } from '../../../../shared/schemas/benchmark.js';
+import { EventEmitter } from "node:events";
+import { and, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import type {
+  AppDatabase,
+  DatabaseHandle,
+} from "../../../../runtime/shared/db/database.js";
+import { PreparationPreviewCache } from "../../../../runtime/modules/backtest/application/preparation-preview-cache.js";
+import {
+  PreparationReferenceError,
+  PreparationReferenceService,
+} from "./preparation-reference-service.js";
+import { backtestJobs } from "../../../../runtime/shared/db/operations-schema.js";
+import type { Clock } from "../../../../runtime/shared/clock.js";
+import { newId } from "../../../../runtime/shared/ids.js";
+import type { BacktestRequest } from "../../../../shared/schemas/backtest-request.js";
+import type { ProvenancePin } from "../../../../shared/schemas/provenance-pin.js";
+import type { LegacyUniverseScheduleEntry } from "../../../../runtime/modules/backtest/application/universe-rule-resolver.js";
+import type { BenchmarkPin } from "../../../../shared/schemas/benchmark.js";
 
 export type BacktestJobStatus =
-  | 'QUEUED'
-  | 'STARTING'
-  | 'RUNNING'
-  | 'CANCELLING'
-  | 'CANCELLED'
-  | 'COMPLETED'
-  | 'FAILED'
-  | 'INTERRUPTED';
+  | "QUEUED"
+  | "STARTING"
+  | "RUNNING"
+  | "CANCELLING"
+  | "CANCELLED"
+  | "COMPLETED"
+  | "FAILED"
+  | "INTERRUPTED";
 
 export type BacktestJobRow = typeof backtestJobs.$inferSelect;
 
 export interface EnqueueMetadata {
   readonly estimatedBars?: number;
   readonly preparationJobId?: string | null;
-  readonly wizardOwner?: { readonly userId: string; readonly context?: string; readonly requireMatch?: boolean };
+  readonly wizardOwner?: {
+    readonly userId: string;
+    readonly context?: string;
+    readonly requireMatch?: boolean;
+  };
   readonly cloneBatchId?: string | null;
   readonly cloneSourceJobId?: string | null;
 }
@@ -44,22 +54,23 @@ export interface LeaseHeartbeat {
 
 export interface ExpiredLease {
   readonly jobId: string;
-  readonly status: 'QUEUED' | 'CANCELLED' | 'FAILED';
+  readonly status: "QUEUED" | "CANCELLED" | "FAILED";
   readonly attempt: number;
 }
 
 export type CompleteLeasedResult =
-  | 'ACCEPTED'
-  | 'IDEMPOTENT'
-  | 'IDENTITY_REJECTED'
-  | 'STALE_LEASE';
+  "ACCEPTED" | "IDEMPOTENT" | "IDENTITY_REJECTED" | "STALE_LEASE";
 
-const ACTIVE_STATUSES: BacktestJobStatus[] = ['STARTING', 'RUNNING', 'CANCELLING'];
+const ACTIVE_STATUSES: BacktestJobStatus[] = [
+  "STARTING",
+  "RUNNING",
+  "CANCELLING",
+];
 export const TERMINAL_STATUSES: BacktestJobStatus[] = [
-  'CANCELLED',
-  'COMPLETED',
-  'FAILED',
-  'INTERRUPTED',
+  "CANCELLED",
+  "COMPLETED",
+  "FAILED",
+  "INTERRUPTED",
 ];
 
 /** SQLite 지속성 작업 큐 (스펙 §10) */
@@ -94,51 +105,77 @@ export class JobQueue {
     benchmark?: { pin: BenchmarkPin; hash: string },
     metadata: EnqueueMetadata = {},
   ): BacktestJobRow {
-    const job = this.handle.sqlite.transaction(() => {
-      const references = new PreparationReferenceService(this.handle);
-      const preparationJobId = metadata.preparationJobId
-        ?? (metadata.cloneSourceJobId ? this.getJob(metadata.cloneSourceJobId)?.preparationJobId : null)
-        ?? null;
-      if (preparationJobId) references.requirePreparation(preparationJobId, true);
-      const owner = metadata.wizardOwner
-        ? references.getWizard(metadata.wizardOwner.userId, metadata.wizardOwner.context) : null;
-      if (metadata.wizardOwner?.requireMatch && (
-        !preparationJobId || owner?.preparationJobId !== preparationJobId
-        || !new PreparationPreviewCache(this.handle).isFresh(preparationJobId)
-      )) {
-        throw new PreparationReferenceError();
-      }
-      const row: typeof backtestJobs.$inferInsert = {
-        id: newId('bt'),
-        preparationJobId,
-        status: 'QUEUED',
-        estimatedBars: metadata.estimatedBars ?? (metadata.cloneSourceJobId ? this.getJob(metadata.cloneSourceJobId)?.estimatedBars : 0) ?? 0,
-        requestJson: JSON.stringify(request),
-        strategyId: request.strategyId,
-        universeRuleJson: JSON.stringify(request.universeRule),
-        universeScheduleJson: JSON.stringify(schedule),
-        provenancePinJson: provenancePin ? JSON.stringify(provenancePin) : null,
-        universeJson: pinnedUniverse ? JSON.stringify(pinnedUniverse.entries) : null,
-        universeHash: pinnedUniverse?.hash ?? null,
-        benchmarkJson: benchmark ? JSON.stringify(benchmark.pin) : null,
-        benchmarkHash: benchmark?.hash ?? null,
-        cloneBatchId: metadata.cloneBatchId ?? null,
-        cloneSourceJobId: metadata.cloneSourceJobId ?? null,
-        submitWarningsJson: submitWarnings.length > 0 ? JSON.stringify(submitWarnings) : null,
-        createdAtMs: this.clock.now(),
-      };
-      this.db.insert(backtestJobs).values(row).run();
-      if (metadata.wizardOwner && preparationJobId) {
-        const context = metadata.wizardOwner.context ?? owner?.context;
-        if (context !== undefined) {
-          // 복제 화면을 빠르게 제출해 참조 자동 저장이 아직 없더라도 해당 초안은 정리한다.
-          references.finishWizard(metadata.wizardOwner.userId, context, preparationJobId);
+    const job = this.handle.sqlite
+      .transaction(() => {
+        const references = new PreparationReferenceService(this.handle);
+        const preparationJobId =
+          metadata.preparationJobId ??
+          (metadata.cloneSourceJobId
+            ? this.getJob(metadata.cloneSourceJobId)?.preparationJobId
+            : null) ??
+          null;
+        if (preparationJobId)
+          references.requirePreparation(preparationJobId, true);
+        const owner = metadata.wizardOwner
+          ? references.getWizard(
+              metadata.wizardOwner.userId,
+              metadata.wizardOwner.context,
+            )
+          : null;
+        if (
+          metadata.wizardOwner?.requireMatch &&
+          (!preparationJobId ||
+            owner?.preparationJobId !== preparationJobId ||
+            !new PreparationPreviewCache(this.handle).isFresh(preparationJobId))
+        ) {
+          throw new PreparationReferenceError();
         }
-      }
-      references.collect();
-      return this.getJob(row.id) as BacktestJobRow;
-    }).immediate();
-    this.events.emit('queued', job.id);
+        const row: typeof backtestJobs.$inferInsert = {
+          id: newId("bt"),
+          preparationJobId,
+          status: "QUEUED",
+          estimatedBars:
+            metadata.estimatedBars ??
+            (metadata.cloneSourceJobId
+              ? this.getJob(metadata.cloneSourceJobId)?.estimatedBars
+              : 0) ??
+            0,
+          requestJson: JSON.stringify(request),
+          strategyId: request.strategyId,
+          universeRuleJson: JSON.stringify(request.universeRule),
+          universeScheduleJson: JSON.stringify(schedule),
+          provenancePinJson: provenancePin
+            ? JSON.stringify(provenancePin)
+            : null,
+          universeJson: pinnedUniverse
+            ? JSON.stringify(pinnedUniverse.entries)
+            : null,
+          universeHash: pinnedUniverse?.hash ?? null,
+          benchmarkJson: benchmark ? JSON.stringify(benchmark.pin) : null,
+          benchmarkHash: benchmark?.hash ?? null,
+          cloneBatchId: metadata.cloneBatchId ?? null,
+          cloneSourceJobId: metadata.cloneSourceJobId ?? null,
+          submitWarningsJson:
+            submitWarnings.length > 0 ? JSON.stringify(submitWarnings) : null,
+          createdAtMs: this.clock.now(),
+        };
+        this.db.insert(backtestJobs).values(row).run();
+        if (metadata.wizardOwner && preparationJobId) {
+          const context = metadata.wizardOwner.context ?? owner?.context;
+          if (context !== undefined) {
+            // 복제 화면을 빠르게 제출해 참조 자동 저장이 아직 없더라도 해당 초안은 정리한다.
+            references.finishWizard(
+              metadata.wizardOwner.userId,
+              context,
+              preparationJobId,
+            );
+          }
+        }
+        references.collect();
+        return this.getJob(row.id) as BacktestJobRow;
+      })
+      .immediate();
+    this.events.emit("queued", job.id);
     return job;
   }
 
@@ -191,8 +228,9 @@ export class JobQueue {
 
   /** heartbeat와 lease 연장을 한 조건부 UPDATE로 처리해 만료 직후의 부활을 막는다. */
   heartbeatLease(input: LeaseHeartbeat): BacktestJobStatus | null {
-    const row = this.handle.sqlite.prepare(
-      `UPDATE backtest_jobs
+    const row = this.handle.sqlite
+      .prepare(
+        `UPDATE backtest_jobs
        SET status = CASE WHEN status = 'STARTING' THEN 'RUNNING' ELSE status END,
            lease_expires_at_ms = ?,
            progress_bars = COALESCE(?, progress_bars),
@@ -204,16 +242,17 @@ export class JobQueue {
          AND lease_expires_at_ms >= ?
          AND status IN ('STARTING', 'RUNNING', 'CANCELLING')
        RETURNING status`,
-    ).get(
-      input.nextLeaseExpiresAtMs,
-      input.processedBars,
-      input.totalBars,
-      input.progressLabel,
-      input.jobId,
-      input.attempt,
-      input.leaseTokenHash,
-      input.nowMs,
-    ) as { status: BacktestJobStatus } | undefined;
+      )
+      .get(
+        input.nextLeaseExpiresAtMs,
+        input.processedBars,
+        input.totalBars,
+        input.progressLabel,
+        input.jobId,
+        input.attempt,
+        input.leaseTokenHash,
+        input.nowMs,
+      ) as { status: BacktestJobStatus } | undefined;
     return row?.status ?? null;
   }
 
@@ -222,11 +261,12 @@ export class JobQueue {
     readonly attempt: number;
     readonly leaseTokenHash: string;
     readonly nowMs: number;
-    readonly status: 'FAILED' | 'CANCELLED';
+    readonly status: "FAILED" | "CANCELLED";
     readonly error?: string;
-  }): 'FAILED' | 'CANCELLED' | null {
-    const row = this.handle.sqlite.prepare(
-      `UPDATE backtest_jobs
+  }): "FAILED" | "CANCELLED" | null {
+    const row = this.handle.sqlite
+      .prepare(
+        `UPDATE backtest_jobs
        SET status = CASE WHEN status = 'CANCELLING' THEN 'CANCELLED' ELSE ? END,
            error = CASE WHEN status = 'CANCELLING' THEN NULL ELSE ? END,
            completed_at_ms = ?,
@@ -237,15 +277,16 @@ export class JobQueue {
          AND lease_expires_at_ms >= ?
          AND status IN ('STARTING', 'RUNNING', 'CANCELLING')
        RETURNING status`,
-    ).get(
-      input.status,
-      input.error ?? null,
-      input.nowMs,
-      input.jobId,
-      input.attempt,
-      input.leaseTokenHash,
-      input.nowMs,
-    ) as { status: 'FAILED' | 'CANCELLED' } | undefined;
+      )
+      .get(
+        input.status,
+        input.error ?? null,
+        input.nowMs,
+        input.jobId,
+        input.attempt,
+        input.leaseTokenHash,
+        input.nowMs,
+      ) as { status: "FAILED" | "CANCELLED" } | undefined;
     return row?.status ?? null;
   }
 
@@ -262,51 +303,59 @@ export class JobQueue {
     readonly validate: (current: BacktestJobRow) => string | null;
     readonly persist: () => void;
   }): CompleteLeasedResult {
-    const complete = this.handle.sqlite.transaction((): CompleteLeasedResult => {
-      const current = this.getJob(input.jobId);
-      if (
-        current?.status === 'COMPLETED'
-        && current.attempt === input.attempt
-        && current.resultSchemaVersion === input.resultSchemaVersion
-        && current.resultChecksum === input.resultChecksum
-      ) return 'IDEMPOTENT';
-      if (
-        current === null
-        || (current.status !== 'STARTING' && current.status !== 'RUNNING')
-        || current.attempt !== input.attempt
-        || current.leaseTokenHash !== input.leaseTokenHash
-        || current.leaseExpiresAtMs === null
-        || current.leaseExpiresAtMs < input.nowMs
-      ) return 'STALE_LEASE';
+    const complete = this.handle.sqlite.transaction(
+      (): CompleteLeasedResult => {
+        const current = this.getJob(input.jobId);
+        if (
+          current?.status === "COMPLETED" &&
+          current.attempt === input.attempt &&
+          current.resultSchemaVersion === input.resultSchemaVersion &&
+          current.resultChecksum === input.resultChecksum
+        )
+          return "IDEMPOTENT";
+        if (
+          current === null ||
+          (current.status !== "STARTING" && current.status !== "RUNNING") ||
+          current.attempt !== input.attempt ||
+          current.leaseTokenHash !== input.leaseTokenHash ||
+          current.leaseExpiresAtMs === null ||
+          current.leaseExpiresAtMs < input.nowMs
+        )
+          return "STALE_LEASE";
 
-      const validationError = input.validate(current);
-      if (validationError !== null) {
-        const completedAtMs = this.clock.now();
-        const rejected = this.handle.sqlite.prepare(
-          `UPDATE backtest_jobs
+        const validationError = input.validate(current);
+        if (validationError !== null) {
+          const completedAtMs = this.clock.now();
+          const rejected = this.handle.sqlite
+            .prepare(
+              `UPDATE backtest_jobs
            SET status = 'FAILED', error = ?, completed_at_ms = ?,
                lease_token_hash = NULL, lease_expires_at_ms = NULL
            WHERE id = ?
              AND attempt = ?
              AND lease_token_hash = ?
              AND status IN ('STARTING', 'RUNNING')`,
-        ).run(
-          validationError,
-          completedAtMs,
-          input.jobId,
-          input.attempt,
-          input.leaseTokenHash,
-        );
-        if (rejected.changes !== 1) {
-          throw new Error('종목 identity 거부 후 job 실패 전이에 실패했습니다');
+            )
+            .run(
+              validationError,
+              completedAtMs,
+              input.jobId,
+              input.attempt,
+              input.leaseTokenHash,
+            );
+          if (rejected.changes !== 1) {
+            throw new Error(
+              "종목 identity 거부 후 job 실패 전이에 실패했습니다",
+            );
+          }
+          return "IDENTITY_REJECTED";
         }
-        return 'IDENTITY_REJECTED';
-      }
 
-      input.persist();
-      const completedAtMs = this.clock.now();
-      const result = this.handle.sqlite.prepare(
-        `UPDATE backtest_jobs
+        input.persist();
+        const completedAtMs = this.clock.now();
+        const result = this.handle.sqlite
+          .prepare(
+            `UPDATE backtest_jobs
          SET status = 'COMPLETED',
              progress_bars = ?,
              total_bars = ?,
@@ -320,43 +369,57 @@ export class JobQueue {
            AND attempt = ?
            AND lease_token_hash = ?
            AND status IN ('STARTING', 'RUNNING')`,
-      ).run(
-        input.processedBars,
-        input.processedBars,
-        completedAtMs,
-        input.resultSchemaVersion,
-        input.resultChecksum,
-        input.jobId,
-        input.attempt,
-        input.leaseTokenHash,
-      );
-      if (result.changes !== 1) throw new Error('결과 import 후 job 완료 전이에 실패했습니다');
-      return 'ACCEPTED';
-    });
+          )
+          .run(
+            input.processedBars,
+            input.processedBars,
+            completedAtMs,
+            input.resultSchemaVersion,
+            input.resultChecksum,
+            input.jobId,
+            input.attempt,
+            input.leaseTokenHash,
+          );
+        if (result.changes !== 1)
+          throw new Error("결과 import 후 job 완료 전이에 실패했습니다");
+        return "ACCEPTED";
+      },
+    );
     return complete.immediate();
   }
 
   /** 만료된 계산 리스만 실패로 세고 재배정한다. 클라이언트 업데이트는 실패가 아니다. */
   recoverExpiredLeases(maxAttempts: number): ExpiredLease[] {
     const nowMs = this.clock.now();
-    const expired = this.handle.sqlite.prepare(
-      `SELECT id, status, attempt, lease_failures
+    const expired = this.handle.sqlite
+      .prepare(
+        `SELECT id, status, attempt, lease_failures
        FROM backtest_jobs
        WHERE agent_id IS NOT NULL
          AND status IN ('STARTING', 'RUNNING', 'CANCELLING')
          AND lease_expires_at_ms < ?
        ORDER BY created_at_ms ASC`,
-    ).all(nowMs) as Array<{ id: string; status: BacktestJobStatus; attempt: number; lease_failures: number }>;
+      )
+      .all(nowMs) as Array<{
+      id: string;
+      status: BacktestJobStatus;
+      attempt: number;
+      lease_failures: number;
+    }>;
     if (expired.length === 0) return [];
 
     const recover = this.handle.sqlite.transaction(() => {
       const recovered: ExpiredLease[] = [];
       for (const job of expired) {
-        const status: ExpiredLease['status'] = job.status === 'CANCELLING'
-          ? 'CANCELLED'
-          : job.lease_failures + 1 >= maxAttempts ? 'FAILED' : 'QUEUED';
-        const result = this.handle.sqlite.prepare(
-          `UPDATE backtest_jobs
+        const status: ExpiredLease["status"] =
+          job.status === "CANCELLING"
+            ? "CANCELLED"
+            : job.lease_failures + 1 >= maxAttempts
+              ? "FAILED"
+              : "QUEUED";
+        const result = this.handle.sqlite
+          .prepare(
+            `UPDATE backtest_jobs
            SET status = ?, lease_failures = lease_failures + 1,
                agent_id = CASE WHEN ? = 'QUEUED' THEN NULL ELSE agent_id END,
                pid = NULL,
@@ -369,18 +432,23 @@ export class JobQueue {
              AND attempt = ?
              AND lease_expires_at_ms < ?
              AND status IN ('STARTING', 'RUNNING', 'CANCELLING')`,
-        ).run(
-          status,
-          status,
-          status,
-          status === 'FAILED' ? '에이전트 재시도 한도에 도달했습니다.'
-            : status === 'QUEUED' ? `에이전트 lease가 만료되어 ${job.attempt + 1}번째 시도를 대기합니다.` : null,
-          status === 'QUEUED' ? null : nowMs,
-          job.id,
-          job.attempt,
-          nowMs,
-        );
-        if (result.changes > 0) recovered.push({ jobId: job.id, status, attempt: job.attempt });
+          )
+          .run(
+            status,
+            status,
+            status,
+            status === "FAILED"
+              ? "에이전트 재시도 한도에 도달했습니다."
+              : status === "QUEUED"
+                ? `에이전트 lease가 만료되어 ${job.attempt + 1}번째 시도를 대기합니다.`
+                : null,
+            status === "QUEUED" ? null : nowMs,
+            job.id,
+            job.attempt,
+            nowMs,
+          );
+        if (result.changes > 0)
+          recovered.push({ jobId: job.id, status, attempt: job.attempt });
       }
       return recovered;
     });
@@ -388,7 +456,13 @@ export class JobQueue {
   }
 
   getJob(jobId: string): BacktestJobRow | null {
-    return this.db.select().from(backtestJobs).where(eq(backtestJobs.id, jobId)).get() ?? null;
+    return (
+      this.db
+        .select()
+        .from(backtestJobs)
+        .where(eq(backtestJobs.id, jobId))
+        .get() ?? null
+    );
   }
 
   /**
@@ -399,9 +473,14 @@ export class JobQueue {
     return this.db
       .select()
       .from(backtestJobs)
-      .where(and(isNull(backtestJobs.cloneBatchId), sql`NOT EXISTS (
+      .where(
+        and(
+          isNull(backtestJobs.cloneBatchId),
+          sql`NOT EXISTS (
         SELECT 1 FROM backtest_validation_trials v WHERE v.job_id = ${backtestJobs.id}
-      )`))
+      )`,
+        ),
+      )
       .orderBy(desc(backtestJobs.createdAtMs))
       .limit(limit)
       .offset(offset)
@@ -420,7 +499,10 @@ export class JobQueue {
   ): boolean {
     const terminal = TERMINAL_STATUSES.includes(status);
     const where = expectedCurrent
-      ? and(eq(backtestJobs.id, jobId), inArray(backtestJobs.status, expectedCurrent))
+      ? and(
+          eq(backtestJobs.id, jobId),
+          inArray(backtestJobs.status, expectedCurrent),
+        )
       : eq(backtestJobs.id, jobId);
     const result = this.db
       .update(backtestJobs)
@@ -436,15 +518,25 @@ export class JobQueue {
 
   /** 에이전트 임대가 없는 과거 활성 작업을 서버 재시작 시 중단 처리한다. */
   recoverUnleasedJobs(): string[] {
-    const active = this.db.select({ id: backtestJobs.id }).from(backtestJobs)
-      .where(and(inArray(backtestJobs.status, ACTIVE_STATUSES), isNull(backtestJobs.agentId)))
+    const active = this.db
+      .select({ id: backtestJobs.id })
+      .from(backtestJobs)
+      .where(
+        and(
+          inArray(backtestJobs.status, ACTIVE_STATUSES),
+          isNull(backtestJobs.agentId),
+        ),
+      )
       .all();
     const recovered: string[] = [];
     for (const job of active) {
       // 임대가 있는 작업은 에이전트의 heartbeat와 만료 시각으로 복구한다.
       const written = this.setStatus(
-        job.id, 'INTERRUPTED',
-        { error: '서버 재시작으로 작업이 중단되었습니다. 복제 후 재실행하세요.' },
+        job.id,
+        "INTERRUPTED",
+        {
+          error: "서버 재시작으로 작업이 중단되었습니다. 복제 후 재실행하세요.",
+        },
         ACTIVE_STATUSES,
       );
       if (written) recovered.push(job.id);
@@ -453,13 +545,19 @@ export class JobQueue {
   }
 
   deleteJob(jobId: string): boolean {
-    return this.handle.sqlite.transaction(() => {
-      const job = this.getJob(jobId);
-      if (!job || !TERMINAL_STATUSES.includes(job.status as BacktestJobStatus)) return false;
-      this.db.delete(backtestJobs).where(eq(backtestJobs.id, jobId)).run();
-      new PreparationReferenceService(this.handle).collect();
-      return true;
-    }).immediate();
+    return this.handle.sqlite
+      .transaction(() => {
+        const job = this.getJob(jobId);
+        if (
+          !job ||
+          !TERMINAL_STATUSES.includes(job.status as BacktestJobStatus)
+        )
+          return false;
+        this.db.delete(backtestJobs).where(eq(backtestJobs.id, jobId)).run();
+        new PreparationReferenceService(this.handle).collect();
+        return true;
+      })
+      .immediate();
   }
 
   countByStatus(statuses: BacktestJobStatus[]): number {

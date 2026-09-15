@@ -1,20 +1,27 @@
-import { and, asc, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 import {
   DEFAULT_TRADE_SORT_DIRECTION,
   DEFAULT_TRADE_SORT_KEY,
   type SortDirection,
   type TradeSortKey,
-} from '../../../../shared/schemas/trade-sort.js';
-import type { AppDatabase } from '../../../../runtime/shared/db/database.js';
+} from "../../../../shared/schemas/trade-sort.js";
+import type { AppDatabase } from "../../../../runtime/shared/db/database.js";
 import {
   BENCHMARK_NAMES,
   benchmarkIdSchema,
   benchmarkPinSchema,
   type BenchmarkId,
-} from '../../../../shared/schemas/benchmark.js';
-import { backtestJobs } from '../../../../runtime/shared/db/operations-schema.js';
-import { backtestDrawdownPoints, backtestEquityPoints, backtestMetrics, backtestMonthlyReturns, backtestRuns, backtestTrades } from '../../../shared/db/backtest-result-schema.js';
-import { downsampleLttb } from './downsample.js';
+} from "../../../../shared/schemas/benchmark.js";
+import { backtestJobs } from "../../../../runtime/shared/db/operations-schema.js";
+import {
+  backtestDrawdownPoints,
+  backtestEquityPoints,
+  backtestMetrics,
+  backtestMonthlyReturns,
+  backtestRuns,
+  backtestTrades,
+} from "../../../shared/db/backtest-result-schema.js";
+import { downsampleLttb } from "./downsample.js";
 
 const CHART_MAX_POINTS = 1_000;
 
@@ -39,7 +46,13 @@ export class ResultsService {
   constructor(private readonly db: AppDatabase) {}
 
   getRun(jobId: string) {
-    return this.db.select().from(backtestRuns).where(eq(backtestRuns.jobId, jobId)).get() ?? null;
+    return (
+      this.db
+        .select()
+        .from(backtestRuns)
+        .where(eq(backtestRuns.jobId, jobId))
+        .get() ?? null
+    );
   }
 
   getMetrics(jobId: string): Record<string, unknown> | null {
@@ -48,7 +61,9 @@ export class ResultsService {
       .from(backtestMetrics)
       .where(eq(backtestMetrics.jobId, jobId))
       .get();
-    return row ? (JSON.parse(row.metricsJson) as Record<string, unknown>) : null;
+    return row
+      ? (JSON.parse(row.metricsJson) as Record<string, unknown>)
+      : null;
   }
 
   /**
@@ -76,7 +91,7 @@ export class ResultsService {
       .get();
     if (!job) return null;
 
-    let requestedId: BenchmarkId = 'KOSPI';
+    let requestedId: BenchmarkId = "KOSPI";
     try {
       const request = JSON.parse(job.requestJson) as { benchmarkId?: unknown };
       const parsedId = benchmarkIdSchema.safeParse(request.benchmarkId);
@@ -98,24 +113,36 @@ export class ResultsService {
       points: [] as Array<{ tsMs: number; value: number }>,
     });
 
-    if (!job.benchmarkJson) return unavailable('이 작업에는 벤치마크 데이터가 고정되지 않았습니다.');
+    if (!job.benchmarkJson)
+      return unavailable("이 작업에는 벤치마크 데이터가 고정되지 않았습니다.");
     let parsed: ReturnType<typeof benchmarkPinSchema.safeParse>;
     try {
       parsed = benchmarkPinSchema.safeParse(JSON.parse(job.benchmarkJson));
     } catch {
-      return unavailable('고정된 벤치마크 데이터를 읽을 수 없습니다.');
+      return unavailable("고정된 벤치마크 데이터를 읽을 수 없습니다.");
     }
-    if (!parsed.success) return unavailable('고정된 벤치마크 데이터 형식이 올바르지 않습니다.');
+    if (!parsed.success)
+      return unavailable("고정된 벤치마크 데이터 형식이 올바르지 않습니다.");
     const pin = parsed.data;
     if (pin.points.length < 2) {
-      return unavailable(`${pin.name} 수익률 계산에 필요한 거래일 데이터가 2개 미만입니다.`);
+      return unavailable(
+        `${pin.name} 수익률 계산에 필요한 거래일 데이터가 2개 미만입니다.`,
+      );
     }
     if (!pin.covered) {
-      return unavailable(`${pin.name} 데이터가 백테스트 기간을 완전히 커버하지 않습니다.`);
+      return unavailable(
+        `${pin.name} 데이터가 백테스트 기간을 완전히 커버하지 않습니다.`,
+      );
     }
-    const metrics = this.getMetrics(jobId) as { totalReturnPct?: unknown } | null;
-    const strategyReturn = typeof metrics?.totalReturnPct === 'number' ? metrics.totalReturnPct : null;
-    if (strategyReturn === null) return unavailable('백테스트 수익률이 아직 계산되지 않았습니다.');
+    const metrics = this.getMetrics(jobId) as {
+      totalReturnPct?: unknown;
+    } | null;
+    const strategyReturn =
+      typeof metrics?.totalReturnPct === "number"
+        ? metrics.totalReturnPct
+        : null;
+    if (strategyReturn === null)
+      return unavailable("백테스트 수익률이 아직 계산되지 않았습니다.");
 
     const first = pin.points[0]!.close;
     const last = pin.points.at(-1)!.close;
@@ -132,7 +159,7 @@ export class ResultsService {
       },
       points: pin.points.map((point) => ({
         tsMs: Date.parse(`${point.date}T00:00:00Z`),
-        value: point.close / first * 100,
+        value: (point.close / first) * 100,
       })),
     };
   }
@@ -161,9 +188,16 @@ export class ResultsService {
       .select()
       .from(backtestMonthlyReturns)
       .where(eq(backtestMonthlyReturns.jobId, jobId))
-      .orderBy(asc(backtestMonthlyReturns.year), asc(backtestMonthlyReturns.month))
+      .orderBy(
+        asc(backtestMonthlyReturns.year),
+        asc(backtestMonthlyReturns.month),
+      )
       .all()
-      .map((row) => ({ year: row.year, month: row.month, returnPct: row.returnPct }));
+      .map((row) => ({
+        year: row.year,
+        month: row.month,
+        returnPct: row.returnPct,
+      }));
     const symbols = this.db
       .selectDistinct({ symbol: backtestTrades.symbol })
       .from(backtestTrades)
@@ -196,10 +230,13 @@ export class ResultsService {
     },
   ) {
     const conditions = [eq(backtestTrades.jobId, jobId)];
-    if (options.symbol) conditions.push(eq(backtestTrades.symbol, options.symbol));
+    if (options.symbol)
+      conditions.push(eq(backtestTrades.symbol, options.symbol));
     const column = TRADE_SORT_COLUMNS[options.sort ?? DEFAULT_TRADE_SORT_KEY];
     const primary =
-      (options.direction ?? DEFAULT_TRADE_SORT_DIRECTION) === 'DESC' ? desc(column) : asc(column);
+      (options.direction ?? DEFAULT_TRADE_SORT_DIRECTION) === "DESC"
+        ? desc(column)
+        : asc(column);
     const trades = this.db
       .select()
       .from(backtestTrades)
@@ -226,7 +263,10 @@ export class ResultsService {
       run: this.getRun(jobId),
       metrics: this.getMetrics(jobId),
       equityPoints: this.db
-        .select({ tsMs: backtestEquityPoints.tsMs, equity: backtestEquityPoints.equity })
+        .select({
+          tsMs: backtestEquityPoints.tsMs,
+          equity: backtestEquityPoints.equity,
+        })
         .from(backtestEquityPoints)
         .where(eq(backtestEquityPoints.jobId, jobId))
         .orderBy(asc(backtestEquityPoints.tsMs))
@@ -241,7 +281,10 @@ export class ResultsService {
         .select()
         .from(backtestMonthlyReturns)
         .where(eq(backtestMonthlyReturns.jobId, jobId))
-        .orderBy(asc(backtestMonthlyReturns.year), asc(backtestMonthlyReturns.month))
+        .orderBy(
+          asc(backtestMonthlyReturns.year),
+          asc(backtestMonthlyReturns.month),
+        )
         .all(),
       benchmark: this.getBenchmark(jobId),
     };

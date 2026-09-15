@@ -116,13 +116,20 @@ export function newRollingMax(): RollingMaxState {
 }
 
 /** 창이 window 를 넘으면 가장 오래된 값을 버린다 */
-export function pushRollingMax(state: RollingMaxState, value: number, window: number): void {
+export function pushRollingMax(
+  state: RollingMaxState,
+  value: number,
+  window: number,
+): void {
   state.values.push(value);
   while (state.values.length > window) state.values.shift();
 }
 
 /** 창이 아직 window 개로 차지 않았으면 null — 판단 불가를 값으로 위장하지 않는다 */
-export function rollingMaxValue(state: RollingMaxState, window: number): number | null {
+export function rollingMaxValue(
+  state: RollingMaxState,
+  window: number,
+): number | null {
   if (state.values.length < window) return null;
   let max = state.values[0] as number;
   for (const value of state.values) if (value > max) max = value;
@@ -152,11 +159,22 @@ export interface RsiState {
 }
 
 export function newRsi(): RsiState {
-  return { avgGain: null, avgLoss: null, prevClose: null, changesSeen: 0, sumGain: 0, sumLoss: 0 };
+  return {
+    avgGain: null,
+    avgLoss: null,
+    prevClose: null,
+    changesSeen: 0,
+    sumGain: 0,
+    sumLoss: 0,
+  };
 }
 
 /** Wilder RSI — 첫 period 개 변화는 단순평균으로 시딩, 이후 Wilder 평활 */
-export function updateRsi(state: RsiState, close: number, period: number): void {
+export function updateRsi(
+  state: RsiState,
+  close: number,
+  period: number,
+): void {
   if (state.prevClose === null) {
     state.prevClose = close;
     return;

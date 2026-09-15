@@ -1,26 +1,35 @@
-import { KR_SESSION } from '../../../../../runtime/modules/market-data/domain/exchange-session.js';
-import type { FactIngestionGap } from '../../../../../runtime/modules/facts/application/ports.js';
-import { CORPORATE_ACTION_FIELD, type Fact, type FundamentalField } from '../../../../../runtime/modules/facts/domain/fact.js';
-import { resolveAccount } from './dart-account-map.js';
+import { KR_SESSION } from "../../../../../runtime/modules/market-data/domain/exchange-session.js";
+import type { FactIngestionGap } from "../../../../../runtime/modules/facts/application/ports.js";
+import {
+  CORPORATE_ACTION_FIELD,
+  type Fact,
+  type FundamentalField,
+} from "../../../../../runtime/modules/facts/domain/fact.js";
+import { resolveAccount } from "./dart-account-map.js";
 
 /** 정기보고서 코드 (DART reprt_code) */
-export type DartReportCode = '11013' | '11012' | '11014' | '11011';
+export type DartReportCode = "11013" | "11012" | "11014" | "11011";
 
 /** 보고서가 커버하는 누적 분기 수. 1Q=1, 반기=2, 3Q=3, 사업보고서=4 */
 export const REPORT_CODE_TO_QUARTER: Record<DartReportCode, 1 | 2 | 3 | 4> = {
-  '11013': 1,
-  '11012': 2,
-  '11014': 3,
-  '11011': 4,
+  "11013": 1,
+  "11012": 2,
+  "11014": 3,
+  "11011": 4,
 };
 
 /** 분기 순서(1Q→반기→3Q→사업보고서). `Object.keys(REPORT_CODE_TO_QUARTER)` 는 키가
  *  숫자처럼 보여 사전식이 아니라 수치 순으로 정렬되므로(사업보고서 코드가 가장 먼저 옴)
  *  호출부가 분기 순서를 원하면 이 상수를 써야 한다. */
-export const REPORT_ORDER: readonly DartReportCode[] = ['11013', '11012', '11014', '11011'];
+export const REPORT_ORDER: readonly DartReportCode[] = [
+  "11013",
+  "11012",
+  "11014",
+  "11011",
+];
 
 /** 이 파서가 실제로 소비하는 재무제표 구분. CF(현금흐름표)·SCE(자본변동표)는 의도된 제외다 */
-const CONSUMED_STATEMENTS: ReadonlySet<string> = new Set(['BS', 'IS', 'CIS']);
+const CONSUMED_STATEMENTS: ReadonlySet<string> = new Set(["BS", "IS", "CIS"]);
 
 export interface DartFinancialRow {
   readonly rcept_no: string;
@@ -73,18 +82,18 @@ const AMOUNT_PATTERN = /^-?(\d{1,3}(,\d{3})*|\d+)(\.\d+)?$/;
 
 export function parseAmount(raw: string): number | null {
   const trimmed = raw.trim();
-  if (trimmed === '') return null;
+  if (trimmed === "") return null;
 
-  const hasOpenParen = trimmed.startsWith('(');
-  const hasCloseParen = trimmed.endsWith(')');
+  const hasOpenParen = trimmed.startsWith("(");
+  const hasCloseParen = trimmed.endsWith(")");
   if (hasOpenParen !== hasCloseParen) return null; // 괄호가 한쪽만 있으면 형식 오류
   const negative = hasOpenParen;
 
   const inner = negative ? trimmed.slice(1, -1) : trimmed;
-  if (inner.includes('(') || inner.includes(')')) return null; // 괄호가 양끝이 아닌 곳에 있으면 형식 오류
+  if (inner.includes("(") || inner.includes(")")) return null; // 괄호가 양끝이 아닌 곳에 있으면 형식 오류
   if (!AMOUNT_PATTERN.test(inner)) return null;
 
-  const value = Number(inner.replace(/,/g, ''));
+  const value = Number(inner.replace(/,/g, ""));
   if (!Number.isFinite(value)) return null;
   return negative ? -Math.abs(value) : value;
 }
@@ -95,7 +104,12 @@ export function parseAmount(raw: string): number | null {
  * 달력 날짜가 아니었다는 뜻이므로 null 로 되돌린다 — 틀린 날짜로 asOf 나
  * periodKey 를 만드는 것보다 gap 이 낫다.
  */
-function isCalendarDateValid(utcMs: number, year: string, month: string, day: string): boolean {
+function isCalendarDateValid(
+  utcMs: number,
+  year: string,
+  month: string,
+  day: string,
+): boolean {
   const parsed = new Date(utcMs);
   return (
     parsed.getUTCFullYear() === Number(year) &&
@@ -108,9 +122,17 @@ function isCalendarDateValid(utcMs: number, year: string, month: string, day: st
 export function receiptDateToAsOfTsMs(rceptNo: string): number | null {
   const match = /^(\d{4})(\d{2})(\d{2})/.exec(rceptNo.trim());
   if (!match) return null;
-  const [, year, month, day] = match as unknown as [string, string, string, string];
+  const [, year, month, day] = match as unknown as [
+    string,
+    string,
+    string,
+    string,
+  ];
   const utcMidnight = Date.parse(`${year}-${month}-${day}T00:00:00Z`);
-  if (Number.isNaN(utcMidnight) || !isCalendarDateValid(utcMidnight, year, month, day)) {
+  if (
+    Number.isNaN(utcMidnight) ||
+    !isCalendarDateValid(utcMidnight, year, month, day)
+  ) {
     return null;
   }
   // 현지 자정 → UTC 로 옮기고 18:00 만큼 더한다
@@ -125,10 +147,18 @@ export function receiptDateToAsOfTsMs(rceptNo: string): number | null {
 export function normalizeDateKey(raw: string): string | null {
   const match = /(\d{4})\D+(\d{1,2})\D+(\d{1,2})/.exec(raw.trim());
   if (!match) return null;
-  const [, year, month, day] = match as unknown as [string, string, string, string];
-  const key = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  const [, year, month, day] = match as unknown as [
+    string,
+    string,
+    string,
+    string,
+  ];
+  const key = `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
   const parsedMs = Date.parse(`${key}T00:00:00Z`);
-  if (Number.isNaN(parsedMs) || !isCalendarDateValid(parsedMs, year, month, day)) {
+  if (
+    Number.isNaN(parsedMs) ||
+    !isCalendarDateValid(parsedMs, year, month, day)
+  ) {
     return null;
   }
   return key;
@@ -149,9 +179,9 @@ function isReportCode(value: string): value is DartReportCode {
  * 예외가 아니라 그 필드 이름을 밝히는 gap 이 된다.
  */
 function readString(row: unknown, field: string): string | null {
-  if (typeof row !== 'object' || row === null) return null;
+  if (typeof row !== "object" || row === null) return null;
   const value = (row as Record<string, unknown>)[field];
-  return typeof value === 'string' ? value : null;
+  return typeof value === "string" ? value : null;
 }
 
 /** 분기 하나의 손익 누적값 — 어느 보고서(행)에서 왔는지 asOf 도 함께 들고 다닌다 */
@@ -194,7 +224,7 @@ export function parseFinancialRows(
     const rows = rowsByReport.get(report);
     if (!rows || rows.length === 0) continue;
     const quarter = REPORT_CODE_TO_QUARTER[report];
-    const year = rows[0]?.bsns_year ?? '';
+    const year = rows[0]?.bsns_year ?? "";
     const periodKey = `${year}Q${quarter}`;
     yearByReport.set(report, year);
 
@@ -209,7 +239,7 @@ export function parseFinancialRows(
           symbol,
           periodKey,
           reason: `보고서 코드가 일치하지 않습니다: ${row.reprt_code} (기대값 ${report})`,
-          severity: 'BLOCKING',
+          severity: "BLOCKING",
         });
         continue;
       }
@@ -220,8 +250,8 @@ export function parseFinancialRows(
         gaps.push({
           symbol,
           periodKey,
-          reason: `행의 사업연도가 버킷 기준 연도와 다릅니다: ${row.bsns_year} vs ${year}, ${readString(row, 'account_nm') ?? '계정명 없음'}`,
-          severity: 'BLOCKING',
+          reason: `행의 사업연도가 버킷 기준 연도와 다릅니다: ${row.bsns_year} vs ${year}, ${readString(row, "account_nm") ?? "계정명 없음"}`,
+          severity: "BLOCKING",
         });
         continue;
       }
@@ -233,13 +263,13 @@ export function parseFinancialRows(
 
       // asOf 는 행 단위로 구한다 — 정정공시 등으로 버킷 안에 rcept_no 가 섞일 수
       // 있어 rows[0] 하나만 대표로 쓰면 다른 행의 asOf 를 잘못 물려받는다
-      const rceptNo = readString(row, 'rcept_no');
+      const rceptNo = readString(row, "rcept_no");
       if (rceptNo === null) {
         gaps.push({
           symbol,
           periodKey,
-          reason: '응답 필드를 읽을 수 없습니다: rcept_no',
-          severity: 'BLOCKING',
+          reason: "응답 필드를 읽을 수 없습니다: rcept_no",
+          severity: "BLOCKING",
         });
         continue;
       }
@@ -249,21 +279,21 @@ export function parseFinancialRows(
           symbol,
           periodKey,
           reason: `접수번호를 읽을 수 없습니다: ${rceptNo}`,
-          severity: 'BLOCKING',
+          severity: "BLOCKING",
         });
         continue;
       }
 
       // account_id·account_nm 은 resolveAccount 안에서 .trim()/.replace() 를 타므로
       // 여기서 문자열임을 확인한다 — 이름이 바뀐 필드는 gap 이지 예외가 아니다
-      const accountId = readString(row, 'account_id');
-      const accountName = readString(row, 'account_nm');
+      const accountId = readString(row, "account_id");
+      const accountName = readString(row, "account_nm");
       if (accountId === null || accountName === null) {
         gaps.push({
           symbol,
           periodKey,
-          reason: `응답 필드를 읽을 수 없습니다: ${accountId === null ? 'account_id' : 'account_nm'}`,
-          severity: 'BLOCKING',
+          reason: `응답 필드를 읽을 수 없습니다: ${accountId === null ? "account_id" : "account_nm"}`,
+          severity: "BLOCKING",
         });
         continue;
       }
@@ -274,32 +304,36 @@ export function parseFinancialRows(
           symbol,
           periodKey,
           reason: `매핑되지 않은 계정: ${accountName} (${accountId})`,
-          severity: 'INFORMATIONAL',
+          severity: "INFORMATIONAL",
         });
         continue;
       }
 
       const statementMatches =
-        rule.statement === 'BS' ? row.sj_div === 'BS' : row.sj_div === 'IS' || row.sj_div === 'CIS';
+        rule.statement === "BS"
+          ? row.sj_div === "BS"
+          : row.sj_div === "IS" || row.sj_div === "CIS";
       if (!statementMatches) {
         gaps.push({
           symbol,
           periodKey,
           reason: `계정 유형이 일치하지 않습니다: ${accountName} (sj_div=${row.sj_div}, 기대값=${rule.statement})`,
-          severity: 'BLOCKING',
+          severity: "BLOCKING",
         });
         continue;
       }
 
-      if (rule.statement === 'BS') {
-        const rawAmount = readString(row, 'thstrm_amount');
+      if (rule.statement === "BS") {
+        const rawAmount = readString(row, "thstrm_amount");
         const amount = rawAmount === null ? null : parseAmount(rawAmount);
         if (amount === null) {
           gaps.push({
             symbol,
             periodKey,
-            reason: `금액을 읽을 수 없습니다: ${accountName}` + (rawAmount === null ? ' (thstrm_amount 필드 확인)' : ''),
-            severity: 'BLOCKING',
+            reason:
+              `금액을 읽을 수 없습니다: ${accountName}` +
+              (rawAmount === null ? " (thstrm_amount 필드 확인)" : ""),
+            severity: "BLOCKING",
           });
           continue;
         }
@@ -310,39 +344,44 @@ export function parseFinancialRows(
               symbol,
               periodKey,
               reason: `같은 보고서 안에서 ${rule.field} 값이 서로 다릅니다 (${previouslySeen} vs ${amount})`,
-              severity: 'BLOCKING',
+              severity: "BLOCKING",
             });
           }
           continue;
         }
         seenBsInReport.set(rule.field, amount);
         facts.push({
-          scope: 'SYMBOL',
+          scope: "SYMBOL",
           key: symbol,
           field: rule.field,
           periodKey,
           asOfTsMs: asOf,
           value: amount,
-          unit: 'KRW',
+          unit: "KRW",
         });
         continue;
       }
 
       // IS/CIS — 누적값을 모아두고 아래에서 차분한다. thstrm_add_amount 가 빈
       // 문자열인 제출사도 있어 '있으면 쓴다' 가 아니라 '내용이 있으면 쓴다' 로 판단한다
-      const addAmount = readString(row, 'thstrm_add_amount');
-      const cumulativeRaw = addAmount?.trim() ? addAmount : readString(row, 'thstrm_amount');
+      const addAmount = readString(row, "thstrm_add_amount");
+      const cumulativeRaw = addAmount?.trim()
+        ? addAmount
+        : readString(row, "thstrm_amount");
       const amount = cumulativeRaw === null ? null : parseAmount(cumulativeRaw);
       if (amount === null) {
         gaps.push({
           symbol,
           periodKey,
-          reason: `금액을 읽을 수 없습니다: ${accountName}` + (cumulativeRaw === null ? ' (thstrm_amount 필드 확인)' : ''),
-          severity: 'BLOCKING',
+          reason:
+            `금액을 읽을 수 없습니다: ${accountName}` +
+            (cumulativeRaw === null ? " (thstrm_amount 필드 확인)" : ""),
+          severity: "BLOCKING",
         });
         continue;
       }
-      const byQuarter = cumulative.get(rule.field) ?? new Map<number, CumulativePoint>();
+      const byQuarter =
+        cumulative.get(rule.field) ?? new Map<number, CumulativePoint>();
       const existing = byQuarter.get(quarter);
       if (existing !== undefined) {
         if (existing.value !== amount) {
@@ -350,7 +389,7 @@ export function parseFinancialRows(
             symbol,
             periodKey,
             reason: `같은 보고서 안에서 ${rule.field} 누적값이 서로 다릅니다 (${existing.value} vs ${amount})`,
-            severity: 'BLOCKING',
+            severity: "BLOCKING",
           });
         }
         continue;
@@ -366,18 +405,18 @@ export function parseFinancialRows(
       const current = byQuarter.get(quarter);
       if (current === undefined) continue;
 
-      const year = yearByReport.get(report) ?? '';
+      const year = yearByReport.get(report) ?? "";
       const periodKey = `${year}Q${quarter}`;
 
       if (quarter === 1) {
         facts.push({
-          scope: 'SYMBOL',
+          scope: "SYMBOL",
           key: symbol,
           field,
           periodKey,
           asOfTsMs: current.asOfTsMs,
           value: current.value,
-          unit: 'KRW',
+          unit: "KRW",
         });
         continue;
       }
@@ -388,32 +427,35 @@ export function parseFinancialRows(
           symbol,
           periodKey,
           reason: `직전 분기 누적값이 없어 ${field} 단독값을 만들 수 없습니다`,
-          severity: 'BLOCKING',
+          severity: "BLOCKING",
         });
         continue;
       }
 
       // 전기 누적값이 다른 사업연도에서 온 것이면(버킷 배정 오류) 차분하지 않는다
       const previousReport = REPORT_ORDER[quarter - 2];
-      const previousYear = previousReport !== undefined ? yearByReport.get(previousReport) : undefined;
+      const previousYear =
+        previousReport !== undefined
+          ? yearByReport.get(previousReport)
+          : undefined;
       if (previousYear === undefined || previousYear !== year) {
         gaps.push({
           symbol,
           periodKey,
-          reason: `직전 분기가 다른 사업연도입니다 (${previousYear ?? '알수없음'} → ${year}) — ${field} 단독값을 만들 수 없습니다`,
-          severity: 'BLOCKING',
+          reason: `직전 분기가 다른 사업연도입니다 (${previousYear ?? "알수없음"} → ${year}) — ${field} 단독값을 만들 수 없습니다`,
+          severity: "BLOCKING",
         });
         continue;
       }
 
       facts.push({
-        scope: 'SYMBOL',
+        scope: "SYMBOL",
         key: symbol,
         field,
         periodKey,
         asOfTsMs: current.asOfTsMs,
         value: current.value - previous.value,
-        unit: 'KRW',
+        unit: "KRW",
       });
     }
   }
@@ -421,30 +463,32 @@ export function parseFinancialRows(
   return { facts, gaps };
 }
 
-type CapitalChangeDirection = 'INCREASE' | 'DECREASE' | 'SKIP';
-type PriceActionDirection = Exclude<CapitalChangeDirection, 'SKIP'>;
+type CapitalChangeDirection = "INCREASE" | "DECREASE" | "SKIP";
+type PriceActionDirection = Exclude<CapitalChangeDirection, "SKIP">;
 
 export interface IssuanceParsingOptions {
   /** 분기 주식수 snapshot이 DART의 모호한 '주식분할' 증감 방향을 입증한 경우만 덮는다. */
-  readonly directionForRow?: (row: DartIssuanceRow) => PriceActionDirection | undefined;
+  readonly directionForRow?: (
+    row: DartIssuanceRow,
+  ) => PriceActionDirection | undefined;
 }
 
 const NON_HOLDER_INCREASE = [
-  '유상증자',
-  '전환권행사',
-  '신주인수권행사',
-  '주식매수선택권행사',
-  '합병',
+  "유상증자",
+  "전환권행사",
+  "신주인수권행사",
+  "주식매수선택권행사",
+  "합병",
 ];
-const NON_HOLDER_DECREASE = ['소각', '상환'];
+const NON_HOLDER_DECREASE = ["소각", "상환"];
 
 function normalizedStyle(row: DartIssuanceRow): string | null {
-  return readString(row, 'isu_dcrs_stle')?.replace(/\s/g, '') ?? null;
+  return readString(row, "isu_dcrs_stle")?.replace(/\s/g, "") ?? null;
 }
 
 function isCommonIssuanceRow(row: DartIssuanceRow): boolean {
-  const kind = readString(row, 'isu_dcrs_stock_knd');
-  return kind === null || kind.replace(/\s/g, '').includes('보통');
+  const kind = readString(row, "isu_dcrs_stock_knd");
+  return kind === null || kind.replace(/\s/g, "").includes("보통");
 }
 
 /**
@@ -458,11 +502,16 @@ function isCommonIssuanceRow(row: DartIssuanceRow): boolean {
  * 버리면 앞으로 추가되거나 이름이 바뀐 발행형태가 가격 보정 없이 새어나간다.
  */
 function classifyCapitalChange(style: string): CapitalChangeDirection | null {
-  if (style.includes('유상')) return 'SKIP';
-  if (style.includes('병합') || style.includes('감자')) return 'DECREASE';
-  if (style.includes('분할') || style.includes('무상') || style.includes('주식배당')) return 'INCREASE';
-  if (NON_HOLDER_INCREASE.some((token) => style.includes(token))) return 'SKIP';
-  if (NON_HOLDER_DECREASE.some((token) => style.includes(token))) return 'SKIP';
+  if (style.includes("유상")) return "SKIP";
+  if (style.includes("병합") || style.includes("감자")) return "DECREASE";
+  if (
+    style.includes("분할") ||
+    style.includes("무상") ||
+    style.includes("주식배당")
+  )
+    return "INCREASE";
+  if (NON_HOLDER_INCREASE.some((token) => style.includes(token))) return "SKIP";
+  if (NON_HOLDER_DECREASE.some((token) => style.includes(token))) return "SKIP";
   return null;
 }
 
@@ -478,25 +527,29 @@ export function issuedShareChange(
   directionOverride?: PriceActionDirection,
 ): IssuedShareChange | null {
   if (!isCommonIssuanceRow(row)) return null;
-  const rawDate = readString(row, 'isu_dcrs_de');
+  const rawDate = readString(row, "isu_dcrs_de");
   if (rawDate === null) return null;
   const dateKey = normalizeDateKey(rawDate);
   if (dateKey === null) return null;
 
   const style = normalizedStyle(row);
-  const rawQuantity = readString(row, 'isu_dcrs_qy');
+  const rawQuantity = readString(row, "isu_dcrs_qy");
   const quantity = rawQuantity === null ? null : parseAmount(rawQuantity);
-  if (style === null || classifyCapitalChange(style) === null || quantity === null || quantity <= 0) {
+  if (
+    style === null ||
+    classifyCapitalChange(style) === null ||
+    quantity === null ||
+    quantity <= 0
+  ) {
     return { dateKey, delta: null };
   }
-  const decrease = directionOverride === 'DECREASE' || (
-    directionOverride === undefined && (
-      style.includes('병합') ||
-      style.includes('감자') ||
-      style.includes('소각') ||
-      style.includes('상환')
-    )
-  );
+  const decrease =
+    directionOverride === "DECREASE" ||
+    (directionOverride === undefined &&
+      (style.includes("병합") ||
+        style.includes("감자") ||
+        style.includes("소각") ||
+        style.includes("상환")));
   return { dateKey, delta: decrease ? -quantity : quantity };
 }
 
@@ -525,44 +578,45 @@ export function parseIssuanceRows(
     if (!isCommonIssuanceRow(row)) continue;
     // 필드 이름이 어긋난 첫 실행에서 bare TypeError 로 수집 전체가 죽지 않게 한다
     // (readString 주석 참고). 날짜부터 읽는 이유: gap 의 periodKey 에 쓰인다.
-    const rawDate = readString(row, 'isu_dcrs_de');
-    const gapPeriodKey = rawDate ?? '-';
+    const rawDate = readString(row, "isu_dcrs_de");
+    const gapPeriodKey = rawDate ?? "-";
 
-    const rawStyle = readString(row, 'isu_dcrs_stle');
+    const rawStyle = readString(row, "isu_dcrs_stle");
     // DART가 누적 표의 첫 줄에 넣는 '-/-'는 상장 전·표 시작 시점의 기준 주식수다.
     // 증감 사건이 아니므로 발행형태 미분류 gap으로 만들지 않는다.
-    if (rawDate?.trim() === '-' && rawStyle?.trim() === '-') continue;
+    if (rawDate?.trim() === "-" && rawStyle?.trim() === "-") continue;
 
     if (rawStyle === null) {
       gaps.push({
         symbol,
         periodKey: gapPeriodKey,
-        reason: '응답 필드를 읽을 수 없습니다: isu_dcrs_stle (발행형태)',
-        severity: 'BLOCKING',
+        reason: "응답 필드를 읽을 수 없습니다: isu_dcrs_stle (발행형태)",
+        severity: "BLOCKING",
       });
       continue;
     }
-    const style = rawStyle.replace(/\s/g, '');
-    const direction = options.directionForRow?.(row) ?? classifyCapitalChange(style);
+    const style = rawStyle.replace(/\s/g, "");
+    const direction =
+      options.directionForRow?.(row) ?? classifyCapitalChange(style);
 
     if (direction === null) {
       gaps.push({
         symbol,
         periodKey: gapPeriodKey,
         reason: `분류할 수 없는 발행형태: ${rawStyle}`,
-        severity: 'BLOCKING',
+        severity: "BLOCKING",
       });
       continue;
     }
     // 유상증자·유상감자는 현금이 오간 것이라 의도된 제외다 — gap 을 남기지 않는다
-    if (direction === 'SKIP') continue;
+    if (direction === "SKIP") continue;
 
     if (rawDate === null) {
       gaps.push({
         symbol,
         periodKey: gapPeriodKey,
-        reason: '응답 필드를 읽을 수 없습니다: isu_dcrs_de (자본변동 일자)',
-        severity: 'BLOCKING',
+        reason: "응답 필드를 읽을 수 없습니다: isu_dcrs_de (자본변동 일자)",
+        severity: "BLOCKING",
       });
       continue;
     }
@@ -572,18 +626,18 @@ export function parseIssuanceRows(
         symbol,
         periodKey: rawDate,
         reason: `자본변동 일자를 읽을 수 없습니다: ${rawDate}`,
-        severity: 'BLOCKING',
+        severity: "BLOCKING",
       });
       continue;
     }
 
-    const rawQuantity = readString(row, 'isu_dcrs_qy');
+    const rawQuantity = readString(row, "isu_dcrs_qy");
     if (rawQuantity === null) {
       gaps.push({
         symbol,
         periodKey: dateKey,
-        reason: '응답 필드를 읽을 수 없습니다: isu_dcrs_qy (변동 수량)',
-        severity: 'BLOCKING',
+        reason: "응답 필드를 읽을 수 없습니다: isu_dcrs_qy (변동 수량)",
+        severity: "BLOCKING",
       });
       continue;
     }
@@ -593,7 +647,7 @@ export function parseIssuanceRows(
         symbol,
         periodKey: dateKey,
         reason: `변동 수량을 읽을 수 없습니다: ${rawQuantity}`,
-        severity: 'BLOCKING',
+        severity: "BLOCKING",
       });
       continue;
     }
@@ -603,31 +657,33 @@ export function parseIssuanceRows(
       gaps.push({
         symbol,
         periodKey: dateKey,
-        reason: '이벤트 직전 발행주식수를 알 수 없어 보정 비율을 만들 수 없습니다',
-        severity: 'BLOCKING',
+        reason:
+          "이벤트 직전 발행주식수를 알 수 없어 보정 비율을 만들 수 없습니다",
+        severity: "BLOCKING",
       });
       continue;
     }
 
-    const afterShares = direction === 'DECREASE' ? prior - quantity : prior + quantity;
+    const afterShares =
+      direction === "DECREASE" ? prior - quantity : prior + quantity;
     const ratio = afterShares / prior;
     if (!Number.isFinite(ratio) || ratio <= 0) {
       gaps.push({
         symbol,
         periodKey: dateKey,
         reason: `보정 비율이 유효하지 않습니다: ${ratio}`,
-        severity: 'BLOCKING',
+        severity: "BLOCKING",
       });
       continue;
     }
 
-    const rceptNo = readString(row, 'rcept_no');
+    const rceptNo = readString(row, "rcept_no");
     if (rceptNo === null) {
       gaps.push({
         symbol,
         periodKey: dateKey,
-        reason: '응답 필드를 읽을 수 없습니다: rcept_no (접수번호)',
-        severity: 'BLOCKING',
+        reason: "응답 필드를 읽을 수 없습니다: rcept_no (접수번호)",
+        severity: "BLOCKING",
       });
       continue;
     }
@@ -637,19 +693,19 @@ export function parseIssuanceRows(
         symbol,
         periodKey: dateKey,
         reason: `접수번호를 읽을 수 없습니다: ${rceptNo}`,
-        severity: 'BLOCKING',
+        severity: "BLOCKING",
       });
       continue;
     }
 
     facts.push({
-      scope: 'SYMBOL',
+      scope: "SYMBOL",
       key: symbol,
       field: CORPORATE_ACTION_FIELD,
       periodKey: dateKey,
       asOfTsMs: asOf,
       value: ratio,
-      unit: 'RATIO',
+      unit: "RATIO",
       corporateActionBeforeShares: prior,
       corporateActionAfterShares: afterShares,
     });

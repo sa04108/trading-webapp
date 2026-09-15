@@ -7,6 +7,8 @@
  * 추론할 수 없으므로 null 이고, 화면은 「기록 없음」으로 표시한다 — 없는 근거로
  * 추측한 값을 "실제로 소비한 봉" 이라고 적으면 그게 더 나쁘다.
  */
-export function resolveJobTimeframe(job: { request: { timeframe?: string } }): string | null {
+export function resolveJobTimeframe(job: {
+  request: { timeframe?: string };
+}): string | null {
   return job.request.timeframe ?? null;
 }

@@ -1,9 +1,12 @@
-import { setImmediate } from 'node:timers/promises';
-import type { FactQuery, FactRepository } from '../../facts/application/ports.js';
-import type { CandleCoverageService } from '../../market-data/application/candle-coverage-service.js';
-import type { Fact } from '../../facts/domain/fact.js';
-import { PitFactView } from '../../facts/domain/pit-fact-view.js';
-import type { AnyTradingStrategy } from '../../strategy/domain/strategy.js';
+import { setImmediate } from "node:timers/promises";
+import type {
+  FactQuery,
+  FactRepository,
+} from "../../facts/application/ports.js";
+import type { CandleCoverageService } from "../../market-data/application/candle-coverage-service.js";
+import type { Fact } from "../../facts/domain/fact.js";
+import { PitFactView } from "../../facts/domain/pit-fact-view.js";
+import type { AnyTradingStrategy } from "../../strategy/domain/strategy.js";
 
 export interface FinancialReadinessScheduleEntry {
   readonly rebalanceDate: string;
@@ -27,7 +30,7 @@ interface CoverageReadinessInput {
   readonly parameters: unknown;
   readonly period: { readonly from: string; readonly to: string };
   readonly schedule: readonly FinancialReadinessScheduleEntry[];
-  readonly candles: Pick<CandleCoverageService, 'getCoverageBetween'>;
+  readonly candles: Pick<CandleCoverageService, "getCoverageBetween">;
   readonly throwIfStopped?: () => void;
 }
 
@@ -38,46 +41,70 @@ interface ReadinessBatch {
 
 /** SQL 집계와 종목 묶음 사이에 취소 IPC를 처리하고 이전 facts와 PIT 뷰를 해제한다. */
 export async function findIncompleteFundamentalCheckpointsFromCoverage(
-  input: CoverageReadinessInput & { readonly facts: Pick<FactRepository, 'getFacts'> },
+  input: CoverageReadinessInput & {
+    readonly facts: Pick<FactRepository, "getFacts">;
+  },
 ): Promise<IncompleteFundamentalCheckpoint[]> {
-  if (input.strategy.dataRequirements?.fundamentalsReady === undefined) return [];
+  if (input.strategy.dataRequirements?.fundamentalsReady === undefined)
+    return [];
   const parameters = input.strategy.parameterSchema.parse(input.parameters);
   const incomplete: IncompleteFundamentalCheckpoint[] = [];
   for (const batch of readinessBatches(input)) {
-    if (batch !== null) incomplete.push(...await evaluateBatch(batch));
+    if (batch !== null) incomplete.push(...(await evaluateBatch(batch)));
     await setImmediate();
   }
   input.throwIfStopped?.();
-  return incomplete.sort((left, right) => left.symbol.localeCompare(right.symbol));
+  return incomplete.sort((left, right) =>
+    left.symbol.localeCompare(right.symbol),
+  );
 
-  async function evaluateBatch(batch: ReadinessBatch): Promise<IncompleteFundamentalCheckpoint[]> {
+  async function evaluateBatch(
+    batch: ReadinessBatch,
+  ): Promise<IncompleteFundamentalCheckpoint[]> {
     const facts = await input.facts.getFacts(batch.query);
     input.throwIfStopped?.();
-    return evaluateCheckpoints(input.strategy, parameters, facts, batch.checkpoints);
+    return evaluateCheckpoints(
+      input.strategy,
+      parameters,
+      facts,
+      batch.checkpoints,
+    );
   }
 }
 
 /** 동기 큐 승격 관문도 같은 SQL 집계와 종목별 메모리 상한을 적용한다. */
 export function findIncompleteFundamentalCheckpointsFromCoverageSync(
-  input: CoverageReadinessInput & { readonly readFacts: (query: FactQuery) => readonly Fact[] },
+  input: CoverageReadinessInput & {
+    readonly readFacts: (query: FactQuery) => readonly Fact[];
+  },
 ): IncompleteFundamentalCheckpoint[] {
-  if (input.strategy.dataRequirements?.fundamentalsReady === undefined) return [];
+  if (input.strategy.dataRequirements?.fundamentalsReady === undefined)
+    return [];
   const parameters = input.strategy.parameterSchema.parse(input.parameters);
   const incomplete: IncompleteFundamentalCheckpoint[] = [];
   for (const batch of readinessBatches(input)) {
     if (batch === null) continue;
-    incomplete.push(...evaluateCheckpoints(
-      input.strategy, parameters, input.readFacts(batch.query), batch.checkpoints,
-    ));
+    incomplete.push(
+      ...evaluateCheckpoints(
+        input.strategy,
+        parameters,
+        input.readFacts(batch.query),
+        batch.checkpoints,
+      ),
+    );
   }
-  return incomplete.sort((left, right) => left.symbol.localeCompare(right.symbol));
+  return incomplete.sort((left, right) =>
+    left.symbol.localeCompare(right.symbol),
+  );
 }
 
 /** 전체 날짜 대신 첫 실행일만 보존한다. null은 비동기 호출자의 이벤트 루프 양보 지점이다. */
-function* readinessBatches(input: CoverageReadinessInput): Generator<ReadinessBatch | null> {
-  const schedule = [...input.schedule].sort((left, right) => (
-    left.rebalanceDate.localeCompare(right.rebalanceDate)
-  ));
+function* readinessBatches(
+  input: CoverageReadinessInput,
+): Generator<ReadinessBatch | null> {
+  const schedule = [...input.schedule].sort((left, right) =>
+    left.rebalanceDate.localeCompare(right.rebalanceDate),
+  );
   const checkpointsBySymbol = new Map<string, FundamentalCheckpoint[]>();
   const periodFrom = Date.parse(`${input.period.from}T00:00:00Z`);
   const periodTo = Date.parse(`${input.period.to}T00:00:00Z`);
@@ -87,16 +114,28 @@ function* readinessBatches(input: CoverageReadinessInput): Generator<ReadinessBa
     input.throwIfStopped?.();
     const entry = schedule[index]!;
     const next = schedule[index + 1];
-    const from = Math.max(periodFrom, Date.parse(`${entry.rebalanceDate}T00:00:00Z`));
-    const to = next === undefined ? periodTo : Math.min(
-      periodTo, Date.parse(`${next.rebalanceDate}T00:00:00Z`) - DAY_MS,
+    const from = Math.max(
+      periodFrom,
+      Date.parse(`${entry.rebalanceDate}T00:00:00Z`),
     );
+    const to =
+      next === undefined
+        ? periodTo
+        : Math.min(
+            periodTo,
+            Date.parse(`${next.rebalanceDate}T00:00:00Z`) - DAY_MS,
+          );
     if (from > to || entry.symbols.length === 0) continue;
     // 집계 결과는 구간 길이에 관계없이 종목 수 이하의 행만 반환한다.
-    const coverage = input.candles.getCoverageBetween([...new Set(entry.symbols)], from, to);
+    const coverage = input.candles.getCoverageBetween(
+      [...new Set(entry.symbols)],
+      from,
+      to,
+    );
     let executionTsMs = Number.POSITIVE_INFINITY;
     for (const row of coverage) {
-      if (row.firstTsMs !== null) executionTsMs = Math.min(executionTsMs, row.firstTsMs);
+      if (row.firstTsMs !== null)
+        executionTsMs = Math.min(executionTsMs, row.firstTsMs);
     }
     if (!Number.isFinite(executionTsMs)) continue;
     const date = new Date(executionTsMs).toISOString().slice(0, 10);
@@ -109,13 +148,20 @@ function* readinessBatches(input: CoverageReadinessInput): Generator<ReadinessBa
   }
 
   const symbols = [...checkpointsBySymbol.keys()].sort();
-  for (let offset = 0; offset < symbols.length; offset += FACT_SYMBOL_BATCH_SIZE) {
+  for (
+    let offset = 0;
+    offset < symbols.length;
+    offset += FACT_SYMBOL_BATCH_SIZE
+  ) {
     input.throwIfStopped?.();
     const keys = symbols.slice(offset, offset + FACT_SYMBOL_BATCH_SIZE);
-    const checkpoints = keys.flatMap((symbol) => checkpointsBySymbol.get(symbol)!);
+    const checkpoints = keys.flatMap((symbol) =>
+      checkpointsBySymbol.get(symbol)!,
+    );
     let asOfMaxTsMs = Number.NEGATIVE_INFINITY;
-    for (const checkpoint of checkpoints) asOfMaxTsMs = Math.max(asOfMaxTsMs, checkpoint.tsMs);
-    yield { query: { scope: 'SYMBOL', keys, asOfMaxTsMs }, checkpoints };
+    for (const checkpoint of checkpoints)
+      asOfMaxTsMs = Math.max(asOfMaxTsMs, checkpoint.tsMs);
+    yield { query: { scope: "SYMBOL", keys, asOfMaxTsMs }, checkpoints };
   }
 }
 
@@ -138,17 +184,18 @@ export function findIncompleteFundamentalCheckpoints(input: {
   if (fundamentalsReady === undefined) return [];
   const parameters = input.strategy.parameterSchema.parse(input.parameters);
   const datesBySymbol = new Map(
-    [...input.validDatesBySymbol].map(([symbol, dates]) => [
-      symbol,
-      [...new Set(dates)].sort(),
-    ] as const),
+    [...input.validDatesBySymbol].map(
+      ([symbol, dates]) => [symbol, [...new Set(dates)].sort()] as const,
+    ),
   );
   const dateSetsBySymbol = new Map(
-    [...datesBySymbol].map(([symbol, dates]) => [symbol, new Set(dates)] as const),
+    [...datesBySymbol].map(
+      ([symbol, dates]) => [symbol, new Set(dates)] as const,
+    ),
   );
-  const schedule = [...input.schedule].sort((left, right) => (
-    left.rebalanceDate.localeCompare(right.rebalanceDate)
-  ));
+  const schedule = [...input.schedule].sort((left, right) =>
+    left.rebalanceDate.localeCompare(right.rebalanceDate),
+  );
   const checkpoints = new Map<string, FundamentalCheckpoint>();
 
   for (let index = 0; index < schedule.length; index += 1) {
@@ -160,18 +207,29 @@ export function findIncompleteFundamentalCheckpoints(input: {
         datesBySymbol.get(symbol) ?? [],
         entry.rebalanceDate,
       );
-      if (candidate === undefined || (nextDate !== undefined && candidate >= nextDate)) continue;
-      if (executionDate === undefined || candidate < executionDate) executionDate = candidate;
+      if (
+        candidate === undefined ||
+        (nextDate !== undefined && candidate >= nextDate)
+      )
+        continue;
+      if (executionDate === undefined || candidate < executionDate)
+        executionDate = candidate;
     }
     if (executionDate === undefined) continue;
     const tsMs = Date.parse(`${executionDate}T00:00:00Z`);
     for (const symbol of entry.symbols) {
       if (dateSetsBySymbol.get(symbol)?.has(executionDate) !== true) continue;
-      checkpoints.set(`${tsMs}\0${symbol}`, { symbol, date: executionDate, tsMs });
+      checkpoints.set(`${tsMs}\0${symbol}`, {
+        symbol,
+        date: executionDate,
+        tsMs,
+      });
     }
   }
 
-  return evaluateCheckpoints(input.strategy, parameters, input.facts, [...checkpoints.values()]);
+  return evaluateCheckpoints(input.strategy, parameters, input.facts, [
+    ...checkpoints.values(),
+  ]);
 }
 
 /** 메모리 입력을 가진 worker와 SQL 집계 경로가 같은 PIT 판정 규칙을 사용한다. */
@@ -185,12 +243,16 @@ function evaluateCheckpoints(
   const view = new PitFactView(facts);
   const firstIncomplete = new Map<string, IncompleteFundamentalCheckpoint>();
   const readySymbols = new Set<string>();
-  for (const checkpoint of [...checkpoints].sort((left, right) => (
-    left.tsMs - right.tsMs || left.symbol.localeCompare(right.symbol)
-  ))) {
+  for (const checkpoint of [...checkpoints].sort(
+    (left, right) =>
+      left.tsMs - right.tsMs || left.symbol.localeCompare(right.symbol),
+  )) {
     view.advanceTo(checkpoint.tsMs);
     const snapshot = view.fundamentals(checkpoint.symbol);
-    if (snapshot !== null && fundamentalsReady(snapshot, checkpoint.tsMs, parameters)) {
+    if (
+      snapshot !== null &&
+      fundamentalsReady(snapshot, checkpoint.tsMs, parameters)
+    ) {
       readySymbols.add(checkpoint.symbol);
       continue;
     }
@@ -206,7 +268,10 @@ function evaluateCheckpoints(
     .sort((left, right) => left.symbol.localeCompare(right.symbol));
 }
 
-function firstDateOnOrAfter(dates: readonly string[], target: string): string | undefined {
+function firstDateOnOrAfter(
+  dates: readonly string[],
+  target: string,
+): string | undefined {
   let low = 0;
   let high = dates.length;
   while (low < high) {

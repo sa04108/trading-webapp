@@ -1,10 +1,16 @@
-import type { Clock } from '../../../../runtime/shared/clock.js';
-import type { Logger } from '../../../shared/logger.js';
-import { addCalendarDays, kstDateOf } from '../../../../runtime/modules/market-data/domain/kst-date.js';
-import { KrxQuotaError, type KrxHistoricalUniverseSource } from '../../../../runtime/modules/market-data/application/ports.js';
-import type { SymbolMasterService } from '../../../../runtime/modules/market-data/application/symbol-master-service.js';
+import type { Clock } from "../../../../runtime/shared/clock.js";
+import type { Logger } from "../../../shared/logger.js";
+import {
+  addCalendarDays,
+  kstDateOf,
+} from "../../../../runtime/modules/market-data/domain/kst-date.js";
+import {
+  KrxQuotaError,
+  type KrxHistoricalUniverseSource,
+} from "../../../../runtime/modules/market-data/application/ports.js";
+import type { SymbolMasterService } from "../../../../runtime/modules/market-data/application/symbol-master-service.js";
 
-export type BackfillState = 'IDLE' | 'RUNNING' | 'BUDGET_EXHAUSTED' | 'FAILED';
+export type BackfillState = "IDLE" | "RUNNING" | "BUDGET_EXHAUSTED" | "FAILED";
 
 export interface BackfillStatus {
   readonly state: BackfillState;
@@ -45,7 +51,7 @@ const CALLS_PER_ENDPOINT_PER_DATE = 1;
 export class SymbolMasterBackfill {
   private readonly deps: SymbolMasterBackfillDeps;
   private readonly dailyCallBudget: number;
-  private state: BackfillState = 'IDLE';
+  private state: BackfillState = "IDLE";
   private cursorDate: string | null = null;
   private targetStartDate: string | null = null;
   private targetEndDate: string | null = null;
@@ -77,12 +83,12 @@ export class SymbolMasterBackfill {
    * 오늘까지 계속 이어져 필요 이상으로 KRX 호출 예산을 쓴다.
    */
   start(fromDate: string, toDate?: string): void {
-    if (this.state === 'RUNNING') return;
+    if (this.state === "RUNNING") return;
 
     this.targetStartDate = fromDate;
     this.targetEndDate = toDate ?? null;
     this.stopRequested = false;
-    this.state = 'RUNNING';
+    this.state = "RUNNING";
     this.cursorDate = fromDate;
     this.error = null;
 
@@ -110,18 +116,19 @@ export class SymbolMasterBackfill {
       while (cursor <= upperBound) {
         if (this.stopRequested) {
           this.cursorDate = cursor;
-          this.state = 'IDLE';
+          this.state = "IDLE";
           return;
         }
 
         // 가장 많이 쓴 엔드포인트를 기준으로 본다 — 한도가 엔드포인트마다 따로 걸리므로
         // 그중 하나라도 예산을 넘기면 멈춰야 한다.
         if (
-          this.deps.source.todayMaxEndpointCallCount() + CALLS_PER_ENDPOINT_PER_DATE >
+          this.deps.source.todayMaxEndpointCallCount() +
+            CALLS_PER_ENDPOINT_PER_DATE >
           this.dailyCallBudget
         ) {
           this.cursorDate = cursor;
-          this.state = 'BUDGET_EXHAUSTED';
+          this.state = "BUDGET_EXHAUSTED";
           return;
         }
 
@@ -131,18 +138,23 @@ export class SymbolMasterBackfill {
       }
 
       this.cursorDate = null;
-      this.state = 'IDLE';
+      this.state = "IDLE";
     } catch (error) {
       if (error instanceof KrxQuotaError) {
         // cursorDate 는 실패한 바로 그 날짜에 남겨 둔다 — 재개 지점 표시용이다.
-        this.state = 'BUDGET_EXHAUSTED';
+        this.state = "BUDGET_EXHAUSTED";
         return;
       }
       this.error = error instanceof Error ? error.message : String(error);
-      this.state = 'FAILED';
+      this.state = "FAILED";
       this.deps.logger.error(
-        { module: 'market-data', event: 'symbol-master.backfill-failed', cursorDate: this.cursorDate, error: this.error },
-        '종목 마스터 백필이 날짜 처리 중 실패했다',
+        {
+          module: "market-data",
+          event: "symbol-master.backfill-failed",
+          cursorDate: this.cursorDate,
+          error: this.error,
+        },
+        "종목 마스터 백필이 날짜 처리 중 실패했다",
       );
     }
   }

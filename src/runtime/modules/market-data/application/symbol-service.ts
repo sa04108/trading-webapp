@@ -1,12 +1,15 @@
-import { createHash } from 'node:crypto';
-import { and, count, desc, eq, inArray } from 'drizzle-orm';
-import type { AppDatabase } from '../../../shared/db/database.js';
-import { symbolVersions, symbols as symbolsTable } from '../../../shared/db/schema.js';
-import type { Clock } from '../../../shared/clock.js';
-import { newId } from '../../../shared/ids.js';
-import type { AuditLogService } from '../../audit/audit-service.js';
-import { SYMBOL_PATTERN, type Market } from '../domain/candle.js';
-import { getSessionForMarket } from '../domain/exchange-session.js';
+import { createHash } from "node:crypto";
+import { and, count, desc, eq, inArray } from "drizzle-orm";
+import type { AppDatabase } from "../../../shared/db/database.js";
+import {
+  symbolVersions,
+  symbols as symbolsTable,
+} from "../../../shared/db/schema.js";
+import type { Clock } from "../../../shared/clock.js";
+import { newId } from "../../../shared/ids.js";
+import type { AuditLogService } from "../../audit/audit-service.js";
+import { SYMBOL_PATTERN, type Market } from "../domain/candle.js";
+import { getSessionForMarket } from "../domain/exchange-session.js";
 
 /** 등록 직후 내부 호출부가 받는 종목 요약 */
 export interface SymbolSummary {
@@ -29,7 +32,7 @@ export interface RegisteredSymbolIdentity {
  * (예: `exchange-session.js`) — 그래서 원천을 여기 하나로 두고, 손으로 맞추던
  * 중복 상수를 없앴다(리뷰 finding, 2026-08-08).
  */
-export const FACTS_SLICE = 'FACTS';
+export const FACTS_SLICE = "FACTS";
 
 /** 실행이 소비한 (종목, 축, 버전, 해시) 한 칸 — §9.5 재현성 스냅샷의 구성 요소 */
 export interface ConsumedVersionEntry {
@@ -69,12 +72,18 @@ export class SymbolService {
 
   /** 대시보드 상태 카드용 집계. 전체 행을 API로 내리지 않고 DB에서 수만 센다. */
   countSymbols(): number {
-    return this.db.select({ value: count() }).from(symbolsTable).get()?.value ?? 0;
+    return (
+      this.db.select({ value: count() }).from(symbolsTable).get()?.value ?? 0
+    );
   }
 
   /** 종목 하나만 조회한다. 등록 결과 확인과 테스트 준비가 공유한다. */
   getSymbol(code: string): SymbolSummary | null {
-    const row = this.db.select().from(symbolsTable).where(eq(symbolsTable.code, code)).get();
+    const row = this.db
+      .select()
+      .from(symbolsTable)
+      .where(eq(symbolsTable.code, code))
+      .get();
     return row ? this.toSummary(row) : null;
   }
 
@@ -84,7 +93,10 @@ export class SymbolService {
    */
   getRegisteredIdentity(code: string): RegisteredSymbolIdentity | null {
     const row = this.db
-      .select({ code: symbolsTable.code, standardCode: symbolsTable.standardCode })
+      .select({
+        code: symbolsTable.code,
+        standardCode: symbolsTable.standardCode,
+      })
       .from(symbolsTable)
       .where(eq(symbolsTable.code, code))
       .get();
@@ -92,9 +104,14 @@ export class SymbolService {
   }
 
   /** 표준코드가 이미 다른 단축코드에 등록됐는지 자동 등록 전에 확인한다. */
-  getRegisteredIdentityByStandardCode(standardCode: string): RegisteredSymbolIdentity | null {
+  getRegisteredIdentityByStandardCode(
+    standardCode: string,
+  ): RegisteredSymbolIdentity | null {
     const row = this.db
-      .select({ code: symbolsTable.code, standardCode: symbolsTable.standardCode })
+      .select({
+        code: symbolsTable.code,
+        standardCode: symbolsTable.standardCode,
+      })
       .from(symbolsTable)
       .where(eq(symbolsTable.standardCode, standardCode))
       .get();
@@ -107,7 +124,13 @@ export class SymbolService {
   }
 
   exists(code: string): boolean {
-    return this.db.select().from(symbolsTable).where(eq(symbolsTable.code, code)).get() !== undefined;
+    return (
+      this.db
+        .select()
+        .from(symbolsTable)
+        .where(eq(symbolsTable.code, code))
+        .get() !== undefined
+    );
   }
 
   /**
@@ -131,15 +154,25 @@ export class SymbolService {
 
     this.db
       .insert(symbolsTable)
-      .values({ code, market, name, standardCode, createdAtMs: this.clock.now() })
+      .values({
+        code,
+        market,
+        name,
+        standardCode,
+        createdAtMs: this.clock.now(),
+      })
       .run();
-    this.audit.record('system', 'symbol.added', { code, market });
+    this.audit.record("system", "symbol.added", { code, market });
     return this.getSymbol(code)!;
   }
 
   /** 외부 조회로 받은 이름을 채운다 — 실패하면 null 로 남기고 화면은 코드만 쓴다 */
   setName(code: string, name: string | null): void {
-    this.db.update(symbolsTable).set({ name }).where(eq(symbolsTable.code, code)).run();
+    this.db
+      .update(symbolsTable)
+      .set({ name })
+      .where(eq(symbolsTable.code, code))
+      .run();
   }
 
   /**
@@ -149,16 +182,23 @@ export class SymbolService {
    * 이름이 없는 행은 결과에서 뺀다 — 폴백은 "이름을 안다" 는 확신이 있을 때만 채워야
    * 한다.
    */
-  getLocalNames(codes: readonly string[]): Map<string, { name: string; market: Market }> {
+  getLocalNames(
+    codes: readonly string[],
+  ): Map<string, { name: string; market: Market }> {
     const result = new Map<string, { name: string; market: Market }>();
     if (codes.length === 0) return result;
     const rows = this.db
-      .select({ code: symbolsTable.code, name: symbolsTable.name, market: symbolsTable.market })
+      .select({
+        code: symbolsTable.code,
+        name: symbolsTable.name,
+        market: symbolsTable.market,
+      })
       .from(symbolsTable)
       .where(inArray(symbolsTable.code, [...codes]))
       .all();
     for (const row of rows) {
-      if (row.name) result.set(row.code, { name: row.name, market: row.market as Market });
+      if (row.name)
+        result.set(row.code, { name: row.name, market: row.market as Market });
     }
     return result;
   }
@@ -170,11 +210,15 @@ export class SymbolService {
     const latest = this.db
       .select()
       .from(symbolVersions)
-      .where(and(eq(symbolVersions.code, code), eq(symbolVersions.slice, slice)))
+      .where(
+        and(eq(symbolVersions.code, code), eq(symbolVersions.slice, slice)),
+      )
       .orderBy(desc(symbolVersions.version))
       .limit(1)
       .get();
-    return latest ? { version: latest.version, contentHash: latest.contentHash } : null;
+    return latest
+      ? { version: latest.version, contentHash: latest.contentHash }
+      : null;
   }
 
   /**
@@ -210,12 +254,16 @@ export class SymbolService {
         code,
         slice: FACTS_SLICE,
         version: latest?.version ?? 0,
-        contentHash: latest?.contentHash ?? '',
+        contentHash: latest?.contentHash ?? "",
       };
     });
-    const hash = createHash('sha256')
-      .update(entries.map((e) => `${e.code}:${e.slice}:${e.version}:${e.contentHash}`).join('|'))
-      .digest('hex');
+    const hash = createHash("sha256")
+      .update(
+        entries
+          .map((e) => `${e.code}:${e.slice}:${e.version}:${e.contentHash}`)
+          .join("|"),
+      )
+      .digest("hex");
     return { entries, hash };
   }
 
@@ -226,15 +274,20 @@ export class SymbolService {
    * 지금은 재무 수집(`FactSyncService`)만 이 메서드를 부른다 — 봉 버전 체인은 CSV
    * 가져오기·증권사 동기화와 함께 사라졌다(Task 5, 2026-08-07-price-data-removal).
    */
-  bumpVersion(code: string, slice: string, fingerprintSeed: string, nowMs: number): void {
+  bumpVersion(
+    code: string,
+    slice: string,
+    fingerprintSeed: string,
+    nowMs: number,
+  ): void {
     const latest = this.getLatestVersion(code, slice);
-    const contentHash = createHash('sha256')
-      .update(`${latest?.contentHash ?? ''}:${fingerprintSeed}`)
-      .digest('hex');
+    const contentHash = createHash("sha256")
+      .update(`${latest?.contentHash ?? ""}:${fingerprintSeed}`)
+      .digest("hex");
     this.db
       .insert(symbolVersions)
       .values({
-        id: newId('sv'),
+        id: newId("sv"),
         code,
         slice,
         version: (latest?.version ?? 0) + 1,

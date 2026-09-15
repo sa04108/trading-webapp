@@ -1,8 +1,8 @@
-import { configureZodLocale } from '../shared/zod-locale.js';
-import { loadConfig } from './config.js';
-import { createContainer } from './container.js';
-import { buildServer } from './server.js';
-import { readRuntimeVersions } from '../../runtime/shared/runtime-versions.js';
+import { configureZodLocale } from "../shared/zod-locale.js";
+import { loadConfig } from "./config.js";
+import { createContainer } from "./container.js";
+import { buildServer } from "./server.js";
+import { readRuntimeVersions } from "../../runtime/shared/runtime-versions.js";
 
 async function main(): Promise<void> {
   configureZodLocale();
@@ -17,15 +17,18 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
-    container.logger.info({ module: 'bootstrap', event: 'server.stopping', signal }, 'shutting down');
+    container.logger.info(
+      { module: "bootstrap", event: "server.stopping", signal },
+      "shutting down",
+    );
     const appClosing = app.close();
     await container.backtestPreparationOrchestrator.stop();
     await appClosing;
     await container.close();
     process.exit(0);
   };
-  process.on('SIGINT', () => void shutdown('SIGINT'));
-  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
   // 부팅 복구는 포트를 열기 **전에** 끝낸다.
   // 열고 나서 하면 그 사이에 들어온 요청이 아직 안 거둔 `RUNNING` 행을 본다.
@@ -43,22 +46,35 @@ async function main(): Promise<void> {
   const withoutTotp = container.userRepository.listUsernamesWithoutTotp();
   if (withoutTotp.length > 0) {
     container.logger.warn(
-      { module: 'bootstrap', event: 'auth.totp.not-enrolled', usernames: withoutTotp },
-      'TOTP 미등록 계정 — 퍼블릭 노출 전에 totp:enroll 로 등록하라 (D-017)',
+      {
+        module: "bootstrap",
+        event: "auth.totp.not-enrolled",
+        usernames: withoutTotp,
+      },
+      "TOTP 미등록 계정 — 퍼블릭 노출 전에 totp:enroll 로 등록하라 (D-017)",
     );
   }
   container.logger.info(
-    { module: 'bootstrap', event: 'server.started', address: config.bindAddress, port: config.port },
-    'server started',
+    {
+      module: "bootstrap",
+      event: "server.started",
+      address: config.bindAddress,
+      port: config.port,
+    },
+    "server started",
   );
 
   // 뒤에서 도는 작업(자본변동 수집 등)이 남긴 프로미스 거부를 마지막에 받는다.
   // 핸들러가 없으면 Node 가 프로세스를 그대로 죽인다.
   // 종료 중에 닫힌 DB 를 만나 죽는 것이 실제로 밟히는 경로다.
-  process.on('unhandledRejection', (reason: unknown) => {
+  process.on("unhandledRejection", (reason: unknown) => {
     container.logger.error(
-      { module: 'bootstrap', event: 'process.unhandled-rejection', err: reason },
-      'unhandled promise rejection',
+      {
+        module: "bootstrap",
+        event: "process.unhandled-rejection",
+        err: reason,
+      },
+      "unhandled promise rejection",
     );
   });
 }

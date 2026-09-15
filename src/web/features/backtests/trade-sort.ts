@@ -6,8 +6,8 @@ import {
   DEFAULT_TRADE_SORT_KEY,
   type SortDirection,
   type TradeSortKey,
-} from '../../../shared/schemas/trade-sort.js';
-import type { OpenPositionRow } from './open-position-rows.js';
+} from "../../../shared/schemas/trade-sort.js";
+import type { OpenPositionRow } from "./open-position-rows.js";
 
 export type { SortDirection, TradeSortKey };
 
@@ -23,12 +23,12 @@ export const DEFAULT_TRADE_SORT: TradeSort = {
 
 /** 열 머리글에 적히는 이름. 테이블 폭을 아끼려고 짧게 쓴다 */
 export const TRADE_SORT_LABELS: Record<TradeSortKey, string> = {
-  EXIT_TS: '매도',
-  ENTRY_TS: '최초 진입',
-  QUANTITY: '수량',
-  NET_PNL: '순손익',
-  RETURN_PCT: '수익률',
-  HOLDING_TIME: '보유기간',
+  EXIT_TS: "매도",
+  ENTRY_TS: "최초 진입",
+  QUANTITY: "수량",
+  NET_PNL: "순손익",
+  RETURN_PCT: "수익률",
+  HOLDING_TIME: "보유기간",
 };
 
 /**
@@ -40,12 +40,12 @@ export const TRADE_SORT_DIRECTION_LABELS: Record<
   TradeSortKey,
   Record<SortDirection, string>
 > = {
-  EXIT_TS: { ASC: '빠른', DESC: '느린' },
-  ENTRY_TS: { ASC: '빠른', DESC: '느린' },
-  QUANTITY: { ASC: '낮은', DESC: '높은' },
-  NET_PNL: { ASC: '낮은', DESC: '높은' },
-  RETURN_PCT: { ASC: '낮은', DESC: '높은' },
-  HOLDING_TIME: { ASC: '짧은', DESC: '긴' },
+  EXIT_TS: { ASC: "빠른", DESC: "느린" },
+  ENTRY_TS: { ASC: "빠른", DESC: "느린" },
+  QUANTITY: { ASC: "낮은", DESC: "높은" },
+  NET_PNL: { ASC: "낮은", DESC: "높은" },
+  RETURN_PCT: { ASC: "낮은", DESC: "높은" },
+  HOLDING_TIME: { ASC: "짧은", DESC: "긴" },
 };
 
 /**
@@ -56,18 +56,21 @@ export const TRADE_SORT_DIRECTION_LABELS: Record<
  * 오름차순으로 시작하면 사람마다 두 번 눌러야 하는 열이 생긴다.
  */
 const FIRST_DIRECTION: Record<TradeSortKey, SortDirection> = {
-  EXIT_TS: 'ASC',
-  ENTRY_TS: 'ASC',
-  QUANTITY: 'DESC',
-  NET_PNL: 'DESC',
-  RETURN_PCT: 'DESC',
-  HOLDING_TIME: 'DESC',
+  EXIT_TS: "ASC",
+  ENTRY_TS: "ASC",
+  QUANTITY: "DESC",
+  NET_PNL: "DESC",
+  RETURN_PCT: "DESC",
+  HOLDING_TIME: "DESC",
 };
 
 /** 같은 축을 다시 누르면 방향만 뒤집고, 다른 축으로 옮기면 그 축의 첫 방향으로 간다 */
-export function nextTradeSort(current: TradeSort, key: TradeSortKey): TradeSort {
+export function nextTradeSort(
+  current: TradeSort,
+  key: TradeSortKey,
+): TradeSort {
   if (current.key !== key) return { key, direction: FIRST_DIRECTION[key] };
-  return { key, direction: current.direction === 'ASC' ? 'DESC' : 'ASC' };
+  return { key, direction: current.direction === "ASC" ? "DESC" : "ASC" };
 }
 
 /** 누르면 어떻게 될지 — 버튼 `title` 이다. 지금 상태가 아니라 **다음** 상태를 적는다 */
@@ -80,9 +83,9 @@ export function tradeSortHint(current: TradeSort, key: TradeSortKey): string {
 export function ariaSortValue(
   current: TradeSort,
   key: TradeSortKey,
-): 'ascending' | 'descending' | 'none' {
-  if (current.key !== key) return 'none';
-  return current.direction === 'ASC' ? 'ascending' : 'descending';
+): "ascending" | "descending" | "none" {
+  if (current.key !== key) return "none";
+  return current.direction === "ASC" ? "ascending" : "descending";
 }
 
 /** 정렬 상태 한 줄 요약 — 표 밑에 지금 무슨 순서인지 적는다 */
@@ -92,19 +95,19 @@ export function tradeSortSummary(sort: TradeSort): string {
 
 function openRowValue(row: OpenPositionRow, key: TradeSortKey): number | null {
   switch (key) {
-    case 'QUANTITY':
+    case "QUANTITY":
       return row.quantity;
-    case 'ENTRY_TS':
+    case "ENTRY_TS":
       return row.entryTsMs;
-    case 'NET_PNL':
+    case "NET_PNL":
       // 청산 손익이 없으므로 평가 손익으로 줄을 세운다 — 열에 표시되는 값과 같다
       return row.unrealizedPnl;
-    case 'RETURN_PCT':
+    case "RETURN_PCT":
       return row.returnPct;
-    case 'HOLDING_TIME':
+    case "HOLDING_TIME":
       return row.holdingTimeMs;
     // 매도 체결 시각이 없다. 「미청산」끼리는 이 축에서 전부 동률이라 심볼 순으로 떨어진다
-    case 'EXIT_TS':
+    case "EXIT_TS":
       return null;
   }
 }
@@ -127,7 +130,7 @@ export function sortOpenRows(
     const aValue = openRowValue(a, sort.key);
     const bValue = openRowValue(b, sort.key);
     if (aValue !== null && bValue !== null && aValue !== bValue) {
-      return sort.direction === 'DESC' ? bValue - aValue : aValue - bValue;
+      return sort.direction === "DESC" ? bValue - aValue : aValue - bValue;
     }
     return a.symbol < b.symbol ? -1 : a.symbol > b.symbol ? 1 : 0;
   });

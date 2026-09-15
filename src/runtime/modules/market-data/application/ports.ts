@@ -1,20 +1,20 @@
-import type { Candle, Market, Timeframe } from '../domain/candle.js';
+import type { Candle, Market, Timeframe } from "../domain/candle.js";
 import type {
   KrxDailyTradeRow,
   KrxIssueBaseInfoRow,
   KrxMarket,
-} from '../domain/krx-universe-types.js';
+} from "../domain/krx-universe-types.js";
 import type {
   BenchmarkPoint,
   FredBenchmarkId,
   KrxBenchmarkId,
-} from '../../../../shared/schemas/benchmark.js';
+} from "../../../../shared/schemas/benchmark.js";
 
 export type {
   KrxDailyTradeRow,
   KrxIssueBaseInfoRow,
   KrxMarket,
-} from '../domain/krx-universe-types.js';
+} from "../domain/krx-universe-types.js";
 
 /** 스펙 §8 시장 데이터 Port */
 export interface CandleQuery {
@@ -51,14 +51,27 @@ export interface CandleRepository {
     query: CandleQuery,
   ): Promise<ReadonlyMap<string, readonly ClosePricePoint[]>>;
   /** 저장된 봉의 시작 시각 목록 (coverage 계산용) */
-  getTimestamps(market: Market, timeframe: Timeframe, symbol: string): Promise<number[]>;
+  getTimestamps(
+    market: Market,
+    timeframe: Timeframe,
+    symbol: string,
+  ): Promise<number[]>;
 }
 
 export interface KrxHistoricalUniverseSource {
-  fetchIssueBaseInfo(market: KrxMarket, isoDate: string): Promise<readonly KrxIssueBaseInfoRow[]>;
-  fetchDailyTrades(market: KrxMarket, isoDate: string): Promise<readonly KrxDailyTradeRow[]>;
+  fetchIssueBaseInfo(
+    market: KrxMarket,
+    isoDate: string,
+  ): Promise<readonly KrxIssueBaseInfoRow[]>;
+  fetchDailyTrades(
+    market: KrxMarket,
+    isoDate: string,
+  ): Promise<readonly KrxDailyTradeRow[]>;
   /** 해당 날짜의 대표지수 종가. 휴장일은 null이다. 테스트용 옛 소스는 생략할 수 있다. */
-  fetchBenchmarkClose?(benchmarkId: KrxBenchmarkId, isoDate: string): Promise<number | null>;
+  fetchBenchmarkClose?(
+    benchmarkId: KrxBenchmarkId,
+    isoDate: string,
+  ): Promise<number | null>;
   /**
    * 오늘(KST) 가장 많이 부른 엔드포인트의 호출 수. KRX 한도가 엔드포인트마다 따로 걸려 있어
    * 총합으로 재면 남은 여력을 실제보다 적게 본다.
@@ -110,49 +123,57 @@ export interface StockInfoSource {
 
 export class StockInfoSourceNotConfiguredError extends Error {
   constructor() {
-    super('증권사 API 자격 증명이 설정되지 않았습니다. 종목 이름 조회에 필요합니다.');
-    this.name = 'StockInfoSourceNotConfiguredError';
+    super(
+      "증권사 API 자격 증명이 설정되지 않았습니다. 종목 이름 조회에 필요합니다.",
+    );
+    this.name = "StockInfoSourceNotConfiguredError";
   }
 }
 
 export class KrxNotConfiguredError extends Error {
   constructor() {
-    super('KRX Open API 키와 API별 승인이 필요합니다. 키를 설정하고 필요한 API 사용 승인을 받으세요.');
-    this.name = 'KrxNotConfiguredError';
+    super(
+      "KRX Open API 키와 API별 승인이 필요합니다. 키를 설정하고 필요한 API 사용 승인을 받으세요.",
+    );
+    this.name = "KrxNotConfiguredError";
   }
 }
 
 export class FredNotConfiguredError extends Error {
   constructor() {
-    super('FRED API 키가 설정되지 않았습니다. FRED_API_KEY를 설정하세요.');
-    this.name = 'FredNotConfiguredError';
+    super("FRED API 키가 설정되지 않았습니다. FRED_API_KEY를 설정하세요.");
+    this.name = "FredNotConfiguredError";
   }
 }
 
 export class FredContractError extends Error {
-  constructor(message = 'FRED 응답이 예상한 계약과 다릅니다.') {
+  constructor(message = "FRED 응답이 예상한 계약과 다릅니다.") {
     super(message);
-    this.name = 'FredContractError';
+    this.name = "FredContractError";
   }
 }
 
 export class KrxApprovalExpiredError extends Error {
-  constructor(message = 'KRX Open API 사용 승인이 만료되었습니다. API별 승인 상태를 확인하세요.') {
+  constructor(
+    message = "KRX Open API 사용 승인이 만료되었습니다. API별 승인 상태를 확인하세요.",
+  ) {
     super(message);
-    this.name = 'KrxApprovalExpiredError';
+    this.name = "KrxApprovalExpiredError";
   }
 }
 
 export class KrxContractError extends Error {
-  constructor(message = 'KRX 응답이 예상한 계약과 다릅니다.') {
+  constructor(message = "KRX 응답이 예상한 계약과 다릅니다.") {
     super(message);
-    this.name = 'KrxContractError';
+    this.name = "KrxContractError";
   }
 }
 
 export class KrxQuotaError extends Error {
-  constructor(message = 'KRX Open API 호출 한도를 초과했습니다. 잠시 후 다시 시도하세요.') {
+  constructor(
+    message = "KRX Open API 호출 한도를 초과했습니다. 잠시 후 다시 시도하세요.",
+  ) {
     super(message);
-    this.name = 'KrxQuotaError';
+    this.name = "KrxQuotaError";
   }
 }

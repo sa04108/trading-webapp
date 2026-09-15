@@ -21,17 +21,17 @@ export interface SymbolIdentityPair {
 
 export type SymbolIdentityConflict =
   | {
-      readonly kind: 'SHORT_CODE_REUSED';
+      readonly kind: "SHORT_CODE_REUSED";
       readonly shortCode: string;
       readonly standardCodes: readonly string[];
     }
   | {
-      readonly kind: 'STANDARD_CODE_REASSIGNED';
+      readonly kind: "STANDARD_CODE_REASSIGNED";
       readonly standardCode: string;
       readonly shortCodes: readonly string[];
     }
   | {
-      readonly kind: 'PAIR_NOT_EFFECTIVE';
+      readonly kind: "PAIR_NOT_EFFECTIVE";
       readonly shortCode: string;
       readonly standardCode: string;
       readonly effectiveDate: string;
@@ -47,10 +47,10 @@ export interface SymbolIdentityValidationResult {
 export type SymbolIdentityInferenceConflict =
   | Extract<
       SymbolIdentityConflict,
-      { readonly kind: 'SHORT_CODE_REUSED' | 'STANDARD_CODE_REASSIGNED' }
+      { readonly kind: "SHORT_CODE_REUSED" | "STANDARD_CODE_REASSIGNED" }
     >
   | {
-      readonly kind: 'SHORT_CODE_UNKNOWN';
+      readonly kind: "SHORT_CODE_UNKNOWN";
       readonly shortCode: string;
     };
 
@@ -61,7 +61,11 @@ export interface SymbolIdentityInferenceResult {
   readonly conflicts: readonly SymbolIdentityInferenceConflict[];
 }
 
-function addToSetMap(map: Map<string, Set<string>>, key: string, value: string): void {
+function addToSetMap(
+  map: Map<string, Set<string>>,
+  key: string,
+  value: string,
+): void {
   const values = map.get(key) ?? new Set<string>();
   values.add(value);
   map.set(key, values);
@@ -77,14 +81,24 @@ function pairKey(pair: SymbolIdentityPair): string {
   return `${pair.standardCode}\u0000${pair.shortCode}`;
 }
 
-function comparePair(left: SymbolIdentityPair, right: SymbolIdentityPair): number {
-  return left.standardCode.localeCompare(right.standardCode)
-    || left.shortCode.localeCompare(right.shortCode);
+function comparePair(
+  left: SymbolIdentityPair,
+  right: SymbolIdentityPair,
+): number {
+  return (
+    left.standardCode.localeCompare(right.standardCode) ||
+    left.shortCode.localeCompare(right.shortCode)
+  );
 }
 
-function isEffective(version: KnownSymbolIdentityVersion, date: string): boolean {
-  return version.validFromDate <= date
-    && (version.validToDate === null || version.validToDate > date);
+function isEffective(
+  version: KnownSymbolIdentityVersion,
+  date: string,
+): boolean {
+  return (
+    version.validFromDate <= date &&
+    (version.validToDate === null || version.validToDate > date)
+  );
 }
 
 /**
@@ -117,18 +131,22 @@ export function validateSymbolIdentityLifetime(
   }
 
   const conflicts: SymbolIdentityConflict[] = [];
-  for (const [shortCode, standards] of [...standardsByShort].sort(([a], [b]) => a.localeCompare(b))) {
+  for (const [shortCode, standards] of [...standardsByShort].sort(([a], [b]) =>
+    a.localeCompare(b),
+  )) {
     if (standards.size <= 1) continue;
     conflicts.push({
-      kind: 'SHORT_CODE_REUSED',
+      kind: "SHORT_CODE_REUSED",
       shortCode,
       standardCodes: [...standards].sort(),
     });
   }
-  for (const [standardCode, shorts] of [...shortsByStandard].sort(([a], [b]) => a.localeCompare(b))) {
+  for (const [standardCode, shorts] of [...shortsByStandard].sort(([a], [b]) =>
+    a.localeCompare(b),
+  )) {
     if (shorts.size <= 1) continue;
     conflicts.push({
-      kind: 'STANDARD_CODE_REASSIGNED',
+      kind: "STANDARD_CODE_REASSIGNED",
       standardCode,
       shortCodes: [...shorts].sort(),
     });
@@ -142,11 +160,13 @@ export function validateSymbolIdentityLifetime(
     );
   }
   for (const selection of [...effectiveSelections.values()].sort(
-    (a, b) => a.effectiveDate.localeCompare(b.effectiveDate) || comparePair(a, b),
+    (a, b) =>
+      a.effectiveDate.localeCompare(b.effectiveDate) || comparePair(a, b),
   )) {
     const effectiveDate = selection.effectiveDate;
-    const exactPairIsEffective = (versionsByPair.get(pairKey(selection)) ?? [])
-      .some((version) => isEffective(version, effectiveDate));
+    const exactPairIsEffective = (
+      versionsByPair.get(pairKey(selection)) ?? []
+    ).some((version) => isEffective(version, effectiveDate));
     if (exactPairIsEffective) continue;
 
     const activePairsByKey = new Map<string, SymbolIdentityPair>();
@@ -156,11 +176,14 @@ export function validateSymbolIdentityLifetime(
     ];
     for (const version of connectedVersions) {
       if (!isEffective(version, effectiveDate)) continue;
-      const pair = { shortCode: version.shortCode, standardCode: version.standardCode };
+      const pair = {
+        shortCode: version.shortCode,
+        standardCode: version.standardCode,
+      };
       activePairsByKey.set(pairKey(pair), pair);
     }
     conflicts.push({
-      kind: 'PAIR_NOT_EFFECTIVE',
+      kind: "PAIR_NOT_EFFECTIVE",
       shortCode: selection.shortCode,
       standardCode: selection.standardCode,
       effectiveDate,
@@ -187,21 +210,27 @@ export function inferUniqueSymbolIdentities(
   }
 
   const requested = [...new Set(requestedShortCodes)].sort();
-  const reused: Extract<SymbolIdentityInferenceConflict, { kind: 'SHORT_CODE_REUSED' }>[] = [];
-  const unknown: Extract<SymbolIdentityInferenceConflict, { kind: 'SHORT_CODE_UNKNOWN' }>[] = [];
+  const reused: Extract<
+    SymbolIdentityInferenceConflict,
+    { kind: "SHORT_CODE_REUSED" }
+  >[] = [];
+  const unknown: Extract<
+    SymbolIdentityInferenceConflict,
+    { kind: "SHORT_CODE_UNKNOWN" }
+  >[] = [];
   const ambiguousStandards = new Set<string>();
   const identities: SymbolIdentityPair[] = [];
 
   for (const shortCode of requested) {
     const standards = standardsByShort.get(shortCode);
     if (standards === undefined || standards.size === 0) {
-      unknown.push({ kind: 'SHORT_CODE_UNKNOWN', shortCode });
+      unknown.push({ kind: "SHORT_CODE_UNKNOWN", shortCode });
       continue;
     }
     const sortedStandards = [...standards].sort();
     if (sortedStandards.length > 1) {
       reused.push({
-        kind: 'SHORT_CODE_REUSED',
+        kind: "SHORT_CODE_REUSED",
         shortCode,
         standardCodes: sortedStandards,
       });
@@ -214,7 +243,8 @@ export function inferUniqueSymbolIdentities(
     }
 
     const standardCode = sortedStandards[0]!;
-    const linkedShorts = shortsByStandard.get(standardCode) ?? new Set<string>();
+    const linkedShorts =
+      shortsByStandard.get(standardCode) ?? new Set<string>();
     if (linkedShorts.size > 1) {
       ambiguousStandards.add(standardCode);
       continue;
@@ -224,12 +254,16 @@ export function inferUniqueSymbolIdentities(
 
   const reassigned: Extract<
     SymbolIdentityInferenceConflict,
-    { kind: 'STANDARD_CODE_REASSIGNED' }
+    { kind: "STANDARD_CODE_REASSIGNED" }
   >[] = [...ambiguousStandards].sort().map((standardCode) => ({
-    kind: 'STANDARD_CODE_REASSIGNED',
+    kind: "STANDARD_CODE_REASSIGNED",
     standardCode,
     shortCodes: [...(shortsByStandard.get(standardCode) ?? [])].sort(),
   }));
-  const conflicts: SymbolIdentityInferenceConflict[] = [...reused, ...reassigned, ...unknown];
+  const conflicts: SymbolIdentityInferenceConflict[] = [
+    ...reused,
+    ...reassigned,
+    ...unknown,
+  ];
   return { safe: conflicts.length === 0, identities, conflicts };
 }

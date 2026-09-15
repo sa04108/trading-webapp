@@ -9,17 +9,17 @@
  * 뒤집혀 「전체 중 손익 1위」가 아니라 「이 10건 중 1위」가 나온다.
  */
 export const TRADE_SORT_KEYS = [
-  'EXIT_TS',
-  'ENTRY_TS',
-  'QUANTITY',
-  'NET_PNL',
-  'RETURN_PCT',
-  'HOLDING_TIME',
+  "EXIT_TS",
+  "ENTRY_TS",
+  "QUANTITY",
+  "NET_PNL",
+  "RETURN_PCT",
+  "HOLDING_TIME",
 ] as const;
 
 export type TradeSortKey = (typeof TRADE_SORT_KEYS)[number];
 
-export const SORT_DIRECTIONS = ['ASC', 'DESC'] as const;
+export const SORT_DIRECTIONS = ["ASC", "DESC"] as const;
 
 export type SortDirection = (typeof SORT_DIRECTIONS)[number];
 
@@ -29,5 +29,5 @@ export type SortDirection = (typeof SORT_DIRECTIONS)[number];
  * 정렬 파라미터가 없던 시절의 순서 그대로다. 기본값을 바꾸면 저장된 링크와 export 가
  * 가리키는 순서가 달라지고, 그 차이는 어디에도 적혀 있지 않다.
  */
-export const DEFAULT_TRADE_SORT_KEY: TradeSortKey = 'EXIT_TS';
-export const DEFAULT_TRADE_SORT_DIRECTION: SortDirection = 'ASC';
+export const DEFAULT_TRADE_SORT_KEY: TradeSortKey = "EXIT_TS";
+export const DEFAULT_TRADE_SORT_DIRECTION: SortDirection = "ASC";

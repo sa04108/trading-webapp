@@ -1,29 +1,35 @@
-import { createHash } from 'node:crypto';
-import { and, eq, inArray, min, or, sql } from 'drizzle-orm';
-import type { AppDatabase } from '../../../../../runtime/shared/db/database.js';
-import { dartRawApiSnapshots } from '../../../../shared/db/collection-schema.js';
-import type { DartReportCode } from './dart-report-parser.js';
+import { createHash } from "node:crypto";
+import { and, eq, inArray, min, or, sql } from "drizzle-orm";
+import type { AppDatabase } from "../../../../../runtime/shared/db/database.js";
+import { dartRawApiSnapshots } from "../../../../shared/db/collection-schema.js";
+import type { DartReportCode } from "./dart-report-parser.js";
 import {
   dartRawSnapshotKeyId,
   type DartRawSnapshot,
   type DartRawSnapshotEndpoint,
   type DartRawSnapshotKey,
   type DartRawSnapshotStore,
-} from './dart-raw-snapshot-store.js';
+} from "./dart-raw-snapshot-store.js";
 
 /** 응답 JSON과 해시를 함께 저장해 손상된 cache를 원천 응답으로 오인하지 않게 한다. */
 export class SqliteDartRawSnapshotStore implements DartRawSnapshotStore {
   constructor(private readonly db: AppDatabase) {}
 
-  getOldestFetchedAtMs(symbols: readonly string[]): ReadonlyMap<string, number> {
+  getOldestFetchedAtMs(
+    symbols: readonly string[],
+  ): ReadonlyMap<string, number> {
     const result = new Map<string, number>();
     const unique = [...new Set(symbols)];
     for (let offset = 0; offset < unique.length; offset += 500) {
-      const rows = this.db.select({
-        code: dartRawApiSnapshots.code,
-        fetchedAtMs: min(dartRawApiSnapshots.fetchedAtMs),
-      }).from(dartRawApiSnapshots)
-        .where(inArray(dartRawApiSnapshots.code, unique.slice(offset, offset + 500)))
+      const rows = this.db
+        .select({
+          code: dartRawApiSnapshots.code,
+          fetchedAtMs: min(dartRawApiSnapshots.fetchedAtMs),
+        })
+        .from(dartRawApiSnapshots)
+        .where(
+          inArray(dartRawApiSnapshots.code, unique.slice(offset, offset + 500)),
+        )
         .groupBy(dartRawApiSnapshots.code)
         .all();
       for (const row of rows) {
@@ -34,17 +40,21 @@ export class SqliteDartRawSnapshotStore implements DartRawSnapshotStore {
   }
 
   get(key: DartRawSnapshotKey): DartRawSnapshot | null {
-    return this.parseRow(this.db
-      .select()
-      .from(dartRawApiSnapshots)
-      .where(and(
-        eq(dartRawApiSnapshots.code, key.symbol),
-        eq(dartRawApiSnapshots.endpoint, key.endpoint),
-        eq(dartRawApiSnapshots.businessYear, key.businessYear),
-        eq(dartRawApiSnapshots.reportCode, key.reportCode),
-        eq(dartRawApiSnapshots.fsDiv, key.fsDiv),
-      ))
-      .get());
+    return this.parseRow(
+      this.db
+        .select()
+        .from(dartRawApiSnapshots)
+        .where(
+          and(
+            eq(dartRawApiSnapshots.code, key.symbol),
+            eq(dartRawApiSnapshots.endpoint, key.endpoint),
+            eq(dartRawApiSnapshots.businessYear, key.businessYear),
+            eq(dartRawApiSnapshots.reportCode, key.reportCode),
+            eq(dartRawApiSnapshots.fsDiv, key.fsDiv),
+          ),
+        )
+        .get(),
+    );
   }
 
   countMissing(
@@ -60,24 +70,36 @@ export class SqliteDartRawSnapshotStore implements DartRawSnapshotStore {
       const rows = this.db
         .select()
         .from(dartRawApiSnapshots)
-        .where(or(...batch.map((key) => and(
-          eq(dartRawApiSnapshots.code, key.symbol),
-          eq(dartRawApiSnapshots.endpoint, key.endpoint),
-          eq(dartRawApiSnapshots.businessYear, key.businessYear),
-          eq(dartRawApiSnapshots.reportCode, key.reportCode),
-          eq(dartRawApiSnapshots.fsDiv, key.fsDiv),
-        ))))
+        .where(
+          or(
+            ...batch.map((key) =>
+              and(
+                eq(dartRawApiSnapshots.code, key.symbol),
+                eq(dartRawApiSnapshots.endpoint, key.endpoint),
+                eq(dartRawApiSnapshots.businessYear, key.businessYear),
+                eq(dartRawApiSnapshots.reportCode, key.reportCode),
+                eq(dartRawApiSnapshots.fsDiv, key.fsDiv),
+              ),
+            ),
+          ),
+        )
         .all();
-      const byKey = new Map(rows.map((row) => [dartRawSnapshotKeyId({
-        symbol: row.code,
-        endpoint: row.endpoint as DartRawSnapshotEndpoint,
-        businessYear: row.businessYear,
-        reportCode: row.reportCode as DartReportCode,
-        fsDiv: row.fsDiv as DartRawSnapshotKey['fsDiv'],
-      }), row]));
+      const byKey = new Map(
+        rows.map((row) => [
+          dartRawSnapshotKeyId({
+            symbol: row.code,
+            endpoint: row.endpoint as DartRawSnapshotEndpoint,
+            businessYear: row.businessYear,
+            reportCode: row.reportCode as DartReportCode,
+            fsDiv: row.fsDiv as DartRawSnapshotKey["fsDiv"],
+          }),
+          row,
+        ]),
+      );
       for (const key of batch) {
         const snapshot = this.parseRow(byKey.get(dartRawSnapshotKeyId(key)));
-        if (snapshot === null || !isValidPayload(snapshot.payload)) missing += 1;
+        if (snapshot === null || !isValidPayload(snapshot.payload))
+          missing += 1;
       }
     }
     return missing;
@@ -86,9 +108,13 @@ export class SqliteDartRawSnapshotStore implements DartRawSnapshotStore {
   private parseRow(
     row: typeof dartRawApiSnapshots.$inferSelect | undefined,
   ): DartRawSnapshot | null {
-    if (row === undefined || hash(row.payloadJson) !== row.contentHash) return null;
+    if (row === undefined || hash(row.payloadJson) !== row.contentHash)
+      return null;
     try {
-      return { payload: JSON.parse(row.payloadJson) as unknown, fetchedAtMs: row.fetchedAtMs };
+      return {
+        payload: JSON.parse(row.payloadJson) as unknown,
+        fetchedAtMs: row.fetchedAtMs,
+      };
     } catch {
       return null;
     }
@@ -97,7 +123,7 @@ export class SqliteDartRawSnapshotStore implements DartRawSnapshotStore {
   put(key: DartRawSnapshotKey, payload: unknown, fetchedAtMs: number): void {
     const payloadJson = JSON.stringify(payload);
     if (payloadJson === undefined) {
-      throw new Error('DART 원문 snapshot을 JSON으로 직렬화할 수 없습니다.');
+      throw new Error("DART 원문 snapshot을 JSON으로 직렬화할 수 없습니다.");
     }
     this.db
       .insert(dartRawApiSnapshots)
@@ -130,5 +156,5 @@ export class SqliteDartRawSnapshotStore implements DartRawSnapshotStore {
 }
 
 function hash(value: string): string {
-  return createHash('sha256').update(value).digest('hex');
+  return createHash("sha256").update(value).digest("hex");
 }

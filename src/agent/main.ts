@@ -1,3 +1,6 @@
-import { runAgentCli } from './cli.js';
+import { runAgentCli } from "./cli.js";
 
-runAgentCli().catch((error: unknown) => { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; });
+runAgentCli().catch((error: unknown) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+});

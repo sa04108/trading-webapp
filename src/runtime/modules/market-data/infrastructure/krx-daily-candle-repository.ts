@@ -1,19 +1,19 @@
-import { and, asc, eq, gt, gte, inArray, lte } from 'drizzle-orm';
-import type { AppDatabase } from '../../../shared/db/database.js';
-import { krxDailyBars } from '../../../shared/db/schema.js';
+import { and, asc, eq, gt, gte, inArray, lte } from "drizzle-orm";
+import type { AppDatabase } from "../../../shared/db/database.js";
+import { krxDailyBars } from "../../../shared/db/schema.js";
 import {
   isValidCandle,
   SYMBOL_PATTERN,
   type Candle,
   type Market,
   type Timeframe,
-} from '../domain/candle.js';
-import type { KrxMarket } from '../domain/krx-universe-types.js';
+} from "../domain/candle.js";
+import type { KrxMarket } from "../domain/krx-universe-types.js";
 import type {
   CandleQuery,
   CandleRepository,
   ClosePricePoint,
-} from '../application/ports.js';
+} from "../application/ports.js";
 
 const MS_PER_DAY = 86_400_000;
 /**
@@ -87,13 +87,15 @@ export class KrxDailyCandleRepository implements CandleRepository {
    * 본다. `Timeframe` 은 '1d' 하나뿐이라 더 볼 것이 없다.
    */
   private supports(market: Market): boolean {
-    return market === 'KR';
+    return market === "KR";
   }
 
   private rows(symbol: string, fromTsMs?: number, toTsMs?: number) {
     const conditions = [eq(krxDailyBars.shortCode, symbol)];
-    if (fromTsMs !== undefined) conditions.push(gte(krxDailyBars.date, ceilToDate(fromTsMs)));
-    if (toTsMs !== undefined) conditions.push(lte(krxDailyBars.date, floorToDate(toTsMs)));
+    if (fromTsMs !== undefined)
+      conditions.push(gte(krxDailyBars.date, ceilToDate(fromTsMs)));
+    if (toTsMs !== undefined)
+      conditions.push(lte(krxDailyBars.date, floorToDate(toTsMs)));
 
     return this.db
       .select()
@@ -113,13 +115,15 @@ export class KrxDailyCandleRepository implements CandleRepository {
     symbols: readonly string[],
     fromTsMs?: number,
     toTsMs?: number,
-  ): ReadonlyMap<string, typeof krxDailyBars.$inferSelect[]> {
+  ): ReadonlyMap<string, (typeof krxDailyBars.$inferSelect)[]> {
     const uniqueSymbols = [...new Set(symbols)];
-    const grouped = new Map<string, typeof krxDailyBars.$inferSelect[]>();
+    const grouped = new Map<string, (typeof krxDailyBars.$inferSelect)[]>();
     if (uniqueSymbols.length === 0) return grouped;
     const conditions = [inArray(krxDailyBars.shortCode, uniqueSymbols)];
-    if (fromTsMs !== undefined) conditions.push(gte(krxDailyBars.date, ceilToDate(fromTsMs)));
-    if (toTsMs !== undefined) conditions.push(lte(krxDailyBars.date, floorToDate(toTsMs)));
+    if (fromTsMs !== undefined)
+      conditions.push(gte(krxDailyBars.date, ceilToDate(fromTsMs)));
+    if (toTsMs !== undefined)
+      conditions.push(lte(krxDailyBars.date, floorToDate(toTsMs)));
     const rows = this.db
       .select()
       .from(krxDailyBars)
@@ -134,8 +138,15 @@ export class KrxDailyCandleRepository implements CandleRepository {
     return grouped;
   }
 
-  private *candlesForSymbols(query: CandleQuery, symbols: readonly string[]): Iterable<Candle> {
-    const rowsBySymbol = this.rowsBySymbol(symbols, query.fromTsMs, query.toTsMs);
+  private *candlesForSymbols(
+    query: CandleQuery,
+    symbols: readonly string[],
+  ): Iterable<Candle> {
+    const rowsBySymbol = this.rowsBySymbol(
+      symbols,
+      query.fromTsMs,
+      query.toTsMs,
+    );
     for (const symbol of symbols) {
       for (const row of rowsBySymbol.get(symbol) ?? []) {
         const candle = toCandle(row, symbol, query.market, query.timeframe);
@@ -147,8 +158,15 @@ export class KrxDailyCandleRepository implements CandleRepository {
   async *getCandles(query: CandleQuery): AsyncIterable<Candle> {
     if (!this.supports(query.market)) return;
 
-    for (let index = 0; index < query.symbols.length; index += READ_SYMBOL_BATCH_SIZE) {
-      const symbols = query.symbols.slice(index, index + READ_SYMBOL_BATCH_SIZE);
+    for (
+      let index = 0;
+      index < query.symbols.length;
+      index += READ_SYMBOL_BATCH_SIZE
+    ) {
+      const symbols = query.symbols.slice(
+        index,
+        index + READ_SYMBOL_BATCH_SIZE,
+      );
       yield* this.candlesForSymbols(query, symbols);
     }
   }
@@ -156,9 +174,14 @@ export class KrxDailyCandleRepository implements CandleRepository {
   async getCandlesArray(query: CandleQuery): Promise<readonly Candle[]> {
     if (!this.supports(query.market)) return [];
     const candles: Candle[] = [];
-    for (let index = 0; index < query.symbols.length; index += READ_SYMBOL_BATCH_SIZE) {
+    for (
+      let index = 0;
+      index < query.symbols.length;
+      index += READ_SYMBOL_BATCH_SIZE
+    ) {
       const batch = query.symbols.slice(index, index + READ_SYMBOL_BATCH_SIZE);
-      for (const candle of this.candlesForSymbols(query, batch)) candles.push(candle);
+      for (const candle of this.candlesForSymbols(query, batch))
+        candles.push(candle);
     }
     return candles;
   }
@@ -169,12 +192,19 @@ export class KrxDailyCandleRepository implements CandleRepository {
     const grouped = new Map<string, ClosePricePoint[]>();
     if (!this.supports(query.market)) return grouped;
     const uniqueSymbols = [...new Set(query.symbols)];
-    for (let index = 0; index < uniqueSymbols.length; index += READ_SYMBOL_BATCH_SIZE) {
-      const symbols = uniqueSymbols.slice(index, index + READ_SYMBOL_BATCH_SIZE);
+    for (
+      let index = 0;
+      index < uniqueSymbols.length;
+      index += READ_SYMBOL_BATCH_SIZE
+    ) {
+      const symbols = uniqueSymbols.slice(
+        index,
+        index + READ_SYMBOL_BATCH_SIZE,
+      );
       if (symbols.length === 0) continue;
       const conditions = [
         inArray(krxDailyBars.shortCode, symbols),
-        inArray(krxDailyBars.market, ['KOSPI', 'KOSDAQ']),
+        inArray(krxDailyBars.market, ["KOSPI", "KOSDAQ"]),
         gt(krxDailyBars.open, 0),
         gt(krxDailyBars.high, 0),
         gt(krxDailyBars.low, 0),
@@ -204,7 +234,12 @@ export class KrxDailyCandleRepository implements CandleRepository {
         .all();
       for (const row of rows) {
         const tsMs = dateToTsMs(row.date);
-        if (!SYMBOL_PATTERN.test(row.symbol) || !Number.isFinite(tsMs) || tsMs <= 0) continue;
+        if (
+          !SYMBOL_PATTERN.test(row.symbol) ||
+          !Number.isFinite(tsMs) ||
+          tsMs <= 0
+        )
+          continue;
         const values = grouped.get(row.symbol) ?? [];
         values.push({ symbol: row.symbol, tsMs, close: row.close });
         grouped.set(row.symbol, values);
@@ -213,7 +248,11 @@ export class KrxDailyCandleRepository implements CandleRepository {
     return grouped;
   }
 
-  async getTimestamps(market: Market, _timeframe: Timeframe, symbol: string): Promise<number[]> {
+  async getTimestamps(
+    market: Market,
+    _timeframe: Timeframe,
+    symbol: string,
+  ): Promise<number[]> {
     if (!this.supports(market)) return [];
     return this.rows(symbol)
       .map((row) => toCandle(row, symbol, market, _timeframe))

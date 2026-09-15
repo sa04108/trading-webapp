@@ -1,11 +1,11 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import Database from 'better-sqlite3';
+import fs from "node:fs";
+import path from "node:path";
+import Database from "better-sqlite3";
 import type {
   BacktestResultArtifact,
   BacktestResultWriteContext,
   BacktestResultWriter,
-} from '../application/backtest-result-artifact.js';
+} from "../application/backtest-result-artifact.js";
 
 /** 필수 실행 버전이 추가된 저장 형식이며 엔진 결과의 schemaVersion과 별개다. */
 export const BACKTEST_RESULT_ARTIFACT_SCHEMA_VERSION = 2;
@@ -14,16 +14,26 @@ export const BACKTEST_RESULT_ARTIFACT_SCHEMA_VERSION = 2;
 export class SqliteBacktestResultArtifactWriter implements BacktestResultWriter {
   constructor(private readonly artifactPath: string) {}
 
-  write(context: BacktestResultWriteContext, artifact: BacktestResultArtifact): void {
+  write(
+    context: BacktestResultWriteContext,
+    artifact: BacktestResultArtifact,
+  ): void {
     if (fs.existsSync(this.artifactPath)) {
-      throw new Error(`결과 artifact 대상이 이미 존재합니다: ${this.artifactPath}`);
+      throw new Error(
+        `결과 artifact 대상이 이미 존재합니다: ${this.artifactPath}`,
+      );
     }
-    fs.mkdirSync(path.dirname(this.artifactPath), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(path.dirname(this.artifactPath), {
+      recursive: true,
+      mode: 0o700,
+    });
     const sqlite = new Database(this.artifactPath);
     try {
-      sqlite.pragma('journal_mode = DELETE');
-      sqlite.pragma('synchronous = FULL');
-      sqlite.pragma(`user_version = ${BACKTEST_RESULT_ARTIFACT_SCHEMA_VERSION}`);
+      sqlite.pragma("journal_mode = DELETE");
+      sqlite.pragma("synchronous = FULL");
+      sqlite.pragma(
+        `user_version = ${BACKTEST_RESULT_ARTIFACT_SCHEMA_VERSION}`,
+      );
       sqlite.exec(`
         CREATE TABLE artifact_manifest (
           singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -65,23 +75,25 @@ export class SqliteBacktestResultArtifactWriter implements BacktestResultWriter 
       `);
 
       const write = sqlite.transaction(() => {
-        sqlite.prepare(
-          `INSERT INTO artifact_manifest
+        sqlite
+          .prepare(
+            `INSERT INTO artifact_manifest
            (singleton, schema_version, context_json, summary_json)
            VALUES (1, ?, ?, ?)`,
-        ).run(
-          BACKTEST_RESULT_ARTIFACT_SCHEMA_VERSION,
-          JSON.stringify(context),
-          JSON.stringify({
-            metrics: artifact.metrics,
-            openPositions: artifact.openPositions,
-            warnings: artifact.warnings,
-            processedBars: artifact.processedBars,
-          }),
-        );
+          )
+          .run(
+            BACKTEST_RESULT_ARTIFACT_SCHEMA_VERSION,
+            JSON.stringify(context),
+            JSON.stringify({
+              metrics: artifact.metrics,
+              openPositions: artifact.openPositions,
+              warnings: artifact.warnings,
+              processedBars: artifact.processedBars,
+            }),
+          );
 
         const equity = sqlite.prepare(
-          'INSERT INTO equity_points (sequence, ts_ms, equity) VALUES (?, ?, ?)',
+          "INSERT INTO equity_points (sequence, ts_ms, equity) VALUES (?, ?, ?)",
         );
         for (let index = 0; index < artifact.equityPoints.length; index += 1) {
           const point = artifact.equityPoints[index]!;
@@ -89,9 +101,13 @@ export class SqliteBacktestResultArtifactWriter implements BacktestResultWriter 
         }
 
         const drawdown = sqlite.prepare(
-          'INSERT INTO drawdown_points (sequence, ts_ms, drawdown) VALUES (?, ?, ?)',
+          "INSERT INTO drawdown_points (sequence, ts_ms, drawdown) VALUES (?, ?, ?)",
         );
-        for (let index = 0; index < artifact.drawdownPoints.length; index += 1) {
+        for (
+          let index = 0;
+          index < artifact.drawdownPoints.length;
+          index += 1
+        ) {
           const point = artifact.drawdownPoints[index]!;
           drawdown.run(index, point.tsMs, point.drawdown);
         }
@@ -122,9 +138,13 @@ export class SqliteBacktestResultArtifactWriter implements BacktestResultWriter 
         }
 
         const monthly = sqlite.prepare(
-          'INSERT INTO monthly_returns (sequence, year, month, return_pct) VALUES (?, ?, ?, ?)',
+          "INSERT INTO monthly_returns (sequence, year, month, return_pct) VALUES (?, ?, ?, ?)",
         );
-        for (let index = 0; index < artifact.monthlyReturns.length; index += 1) {
+        for (
+          let index = 0;
+          index < artifact.monthlyReturns.length;
+          index += 1
+        ) {
           const value = artifact.monthlyReturns[index]!;
           monthly.run(index, value.year, value.month, value.returnPct);
         }

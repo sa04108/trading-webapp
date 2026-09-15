@@ -15,11 +15,11 @@
  * 컴포넌트 테스트 환경 없이 단위 테스트할 수 있다. 확장자 .js 와 별칭(@/) 회피는
  * prefill.ts 와 같은 이유다 — tests/unit 이 이 모듈을 NodeNext 프로그램에 편입한다.
  */
-import type { WizardFormState } from './prefill.js';
+import type { WizardFormState } from "./prefill.js";
 import {
   BACKTEST_WIZARD_PAGE_STEPS,
   type BacktestWizardPageStep,
-} from '../../../shared/schemas/backtest-wizard-draft.js';
+} from "../../../shared/schemas/backtest-wizard-draft.js";
 
 /**
  * '기간' 이 '유니버스' 보다 앞이다(리뷰 fix — 원래 유니버스가 먼저였다).
@@ -27,7 +27,14 @@ import {
  * 뒤에 있으면 유니버스 단계에 들어갈 때 기간이 아직 없어 미리보기를 만들 수 없는
  * 교착이 생긴다. 기간을 먼저 확정해야 유니버스 단계가 그 값을 그대로 쓸 수 있다.
  */
-export const WIZARD_STEPS = ['전략', '기간', '유니버스', '자본·비용', '검토', '실행'] as const;
+export const WIZARD_STEPS = [
+  "전략",
+  "기간",
+  "유니버스",
+  "자본·비용",
+  "검토",
+  "실행",
+] as const;
 
 /**
  * URL 에 쓰는 단계 이름. 화면 라벨(`WIZARD_STEPS`)에서 만들지 않는다 — 라벨은 문구라
@@ -45,11 +52,11 @@ export function stepSlug(index: number): WizardStepSlug {
 
 /** 모르는 slug 는 null. 호출부(위저드)가 첫 단계로 되돌린다 */
 export function stepIndexOf(slug: string | undefined): number | null {
-  const index = (WIZARD_STEP_SLUGS as readonly string[]).indexOf(slug ?? '');
+  const index = (WIZARD_STEP_SLUGS as readonly string[]).indexOf(slug ?? "");
   return index === -1 ? null : index;
 }
 
-const REVIEW_LABEL = '검토';
+const REVIEW_LABEL = "검토";
 
 /** 앞으로 한 번에 갈 수 있는 마지막 단계 */
 export const REVIEW_STEP = WIZARD_STEPS.indexOf(REVIEW_LABEL);
@@ -62,7 +69,10 @@ export const RUN_STEP = WIZARD_STEPS.length - 1;
  * 단계의 buildRequest 가 요청을 만들면서 한 번에 검사하고, 그 오류는 검토 화면에
  * 그대로 뜬다. 게이트가 같은 검사를 중복하면 규칙이 둘이 된다.
  */
-export type StepGateState = Pick<WizardFormState, 'strategyId' | 'from' | 'to' | 'initialCash'> & {
+export type StepGateState = Pick<
+  WizardFormState,
+  "strategyId" | "from" | "to" | "initialCash"
+> & {
   /**
    * 현재 벤치마크·기간의 커버리지를 서버에서 확인했는지. 기간 입력만으로 상단 단계
    * 버튼이나 브라우저 앞으로가기가 비동기 확인을 건너뛰지 못하게 공통 게이트가 본다.
@@ -102,23 +112,28 @@ export type StepGateState = Pick<WizardFormState, 'strategyId' | 'from' | 'to' |
 };
 
 /** 이 단계를 아직 떠날 수 없는 이유. null 이면 통과 */
-export function stepBlocker(index: number, state: StepGateState): string | null {
+export function stepBlocker(
+  index: number,
+  state: StepGateState,
+): string | null {
   switch (index) {
     case 0:
-      return state.strategyId ? null : '전략을 선택하세요';
+      return state.strategyId ? null : "전략을 선택하세요";
     case 1:
-      if (!state.from || !state.to) return '시작일과 종료일을 입력하세요';
-      if (state.from > state.to) return '시작일이 종료일보다 늦습니다';
-      if (!state.benchmarkCoverageOk) return '벤치마크 기간을 확인하세요';
+      if (!state.from || !state.to) return "시작일과 종료일을 입력하세요";
+      if (state.from > state.to) return "시작일이 종료일보다 늦습니다";
+      if (!state.benchmarkCoverageOk) return "벤치마크 기간을 확인하세요";
       return null;
     case 2:
       if (!state.universePreviewOk) {
-        return '유니버스 규칙을 미리보기하고 경고를 모두 해결하세요';
+        return "유니버스 규칙을 미리보기하고 경고를 모두 해결하세요";
       }
       return null;
     case 3: {
       const cash = Number(state.initialCash);
-      return Number.isFinite(cash) && cash > 0 ? null : '초기 자본이 올바르지 않습니다';
+      return Number.isFinite(cash) && cash > 0
+        ? null
+        : "초기 자본이 올바르지 않습니다";
     }
     default:
       return null;
@@ -127,7 +142,9 @@ export function stepBlocker(index: number, state: StepGateState): string | null 
 
 /** 통과하지 못한 첫 단계. 전부 통과면 -1 */
 export function firstIncompleteStep(state: StepGateState): number {
-  return WIZARD_STEPS.findIndex((_, index) => stepBlocker(index, state) !== null);
+  return WIZARD_STEPS.findIndex(
+    (_, index) => stepBlocker(index, state) !== null,
+  );
 }
 
 /** 앞으로 갈 수 있는 상한. 현재 단계를 근거로 삼지 않는 순수한 값이다 */
@@ -142,7 +159,10 @@ function forwardStepLimit(state: StepGateState): number {
  * n 단계에 들어가려면 그 앞이 모두 통과해야 하므로, 첫 미완료 단계가 곧 앞으로의
  * 상한이다. 현재 단계는 언제나 포함된다 — 뒤로 갈 길은 막지 않는다.
  */
-export function navigableStepLimit(currentStep: number, state: StepGateState): number {
+export function navigableStepLimit(
+  currentStep: number,
+  state: StepGateState,
+): number {
   return Math.max(currentStep, forwardStepLimit(state));
 }
 
@@ -175,9 +195,15 @@ export interface UrlStepAccess {
  * 고친 뒤 앞으로가기로 제출 화면에 되돌아오는 길을 막아야 하기 때문이다 — 위저드가
  * 검토보다 앞선 단계로 돌아갈 때 이 플래그를 끈다.
  */
-export function reachableStepFromUrl(state: StepGateState, access: UrlStepAccess): number {
+export function reachableStepFromUrl(
+  state: StepGateState,
+  access: UrlStepAccess,
+): number {
   if (access.reviewPassed) return RUN_STEP;
-  return Math.max(Math.min(access.traversed, REVIEW_STEP), forwardStepLimit(state));
+  return Math.max(
+    Math.min(access.traversed, REVIEW_STEP),
+    forwardStepLimit(state),
+  );
 }
 
 /**
@@ -191,7 +217,8 @@ export function stepJumpBlockReason(
   state: StepGateState,
 ): string | null {
   if (index <= navigableStepLimit(currentStep, state)) return null;
-  if (index === RUN_STEP) return `'${REVIEW_LABEL}' 단계에서 '다음' 을 눌러 진행하세요`;
+  if (index === RUN_STEP)
+    return `'${REVIEW_LABEL}' 단계에서 '다음' 을 눌러 진행하세요`;
   const blocked = firstIncompleteStep(state);
   const label = WIZARD_STEPS[blocked];
   const reason = blocked === -1 ? null : stepBlocker(blocked, state);

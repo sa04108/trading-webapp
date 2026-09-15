@@ -1,28 +1,36 @@
-import { CalendarDays as CalendarIcon, ChevronLeft, ChevronRight } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router';
-import { toast } from 'sonner';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Button } from '@/components/ui/button';
-import { Calendar } from '@/components/ui/calendar';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { CoverageTimeline } from './coverage-timeline';
-import { EventsSidebar } from './events-sidebar';
-import { addDays, findNearestWeekday, isWeekendDate } from './timeline-model';
-import { UniverseTable } from './universe-table';
+import {
+  CalendarDays as CalendarIcon,
+  ChevronLeft,
+  ChevronRight,
+} from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router";
+import { toast } from "sonner";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Calendar } from "@/components/ui/calendar";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { CoverageTimeline } from "./coverage-timeline";
+import { EventsSidebar } from "./events-sidebar";
+import { addDays, findNearestWeekday, isWeekendDate } from "./timeline-model";
+import { UniverseTable } from "./universe-table";
 import {
   useSymbolMasterCoverage,
   useSymbolMasterSync,
   useSymbolMasterUniverse,
-} from './use-symbol-master';
+} from "./use-symbol-master";
 
-const AUTO_SYNC_STORAGE_KEY = 'symbolMaster.autoSync';
+const AUTO_SYNC_STORAGE_KEY = "symbolMaster.autoSync";
 
 /** localStorage 접근은 사생활 보호 모드 등에서 던질 수 있어 항상 감싼다 */
 function readAutoSync(): boolean {
   try {
-    return window.localStorage.getItem(AUTO_SYNC_STORAGE_KEY) === 'true';
+    return window.localStorage.getItem(AUTO_SYNC_STORAGE_KEY) === "true";
   } catch {
     return false;
   }
@@ -39,8 +47,8 @@ function writeAutoSync(value: boolean): void {
 /** 사용자 로컬 달력 기준 오늘 — 타임라인 오른쪽 끝은 서버가 아니라 화면을 보는 시점이다 */
 function todayIso(): string {
   const now = new Date();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
   return `${now.getFullYear()}-${month}-${day}`;
 }
 
@@ -71,23 +79,30 @@ export function SymbolMasterPanel() {
 
   const today = todayIso();
   const sortedRanges = useMemo(
-    () => [...(coverage?.ranges ?? [])].sort((a, b) => a.startDate.localeCompare(b.startDate)),
+    () =>
+      [...(coverage?.ranges ?? [])].sort((a, b) =>
+        a.startDate.localeCompare(b.startDate),
+      ),
     [coverage],
   );
   const sortedTradingDates = useMemo(
     () => [...(coverage?.tradingDates ?? [])].sort(),
     [coverage],
   );
-  const tradingDateSet = useMemo(() => new Set(sortedTradingDates), [sortedTradingDates]);
+  const tradingDateSet = useMemo(
+    () => new Set(sortedTradingDates),
+    [sortedTradingDates],
+  );
   const firstCoverageDate = sortedRanges[0]?.startDate ?? null;
-  const firstDisplayDate = firstCoverageDate === null
-    ? null
-    : findNearestWeekday(firstCoverageDate, firstCoverageDate, today);
+  const firstDisplayDate =
+    firstCoverageDate === null
+      ? null
+      : findNearestWeekday(firstCoverageDate, firstCoverageDate, today);
   const hasCoverage = firstDisplayDate !== null;
   const rangeStart = firstDisplayDate ?? today;
   const rangeEnd = today;
   const lastCoverageDate = sortedRanges.reduce(
-    (max, range) => range.endDate > max ? range.endDate : max,
+    (max, range) => (range.endDate > max ? range.endDate : max),
     sortedRanges[0]?.endDate ?? rangeStart,
   );
   const lastCoveredDate = hasCoverage
@@ -99,11 +114,15 @@ export function SymbolMasterPanel() {
     return findNearestWeekday(date, rangeStart, rangeEnd) ?? date;
   };
 
-  const dateParam = params.get('date');
+  const dateParam = params.get("date");
   const requestedDate = dateParam ?? lastCoveredDate ?? today;
   // URL 에 낀 날짜가 현재 타임라인 범위 밖일 수 있다(coverage 가 바뀌었거나 손으로 편집) — 안으로 붙인다
   const clampedDate =
-    requestedDate < rangeStart ? rangeStart : requestedDate > rangeEnd ? rangeEnd : requestedDate;
+    requestedDate < rangeStart
+      ? rangeStart
+      : requestedDate > rangeEnd
+        ? rangeEnd
+        : requestedDate;
   const committedDate = normalizeDate(clampedDate);
 
   const [previewDate, setPreviewDate] = useState<string | null>(null);
@@ -111,16 +130,18 @@ export function SymbolMasterPanel() {
 
   const setDate = (next: string): void => {
     const nextParams = new URLSearchParams(params);
-    nextParams.set('date', normalizeDate(next));
+    nextParams.set("date", normalizeDate(next));
     setParams(nextParams, { replace: true });
   };
 
-  const { universe, isLoading: universeLoading } = useSymbolMasterUniverse(committedDate);
+  const { universe, isLoading: universeLoading } =
+    useSymbolMasterUniverse(committedDate);
   const syncMutation = useSymbolMasterSync();
 
   const symbolNames = useMemo(() => {
     const map = new Map<string, string>();
-    for (const entry of universe?.symbols ?? []) map.set(entry.standardCode, entry.name);
+    for (const entry of universe?.symbols ?? [])
+      map.set(entry.standardCode, entry.name);
     return map;
   }, [universe]);
 
@@ -130,7 +151,7 @@ export function SymbolMasterPanel() {
   // 고착 버그). 성공/실패를 구분해야 실패 시 빈 상태(수동 버튼 2개)로 돌아갈 수 있다.
   const [autoSyncState, setAutoSyncState] = useState<{
     date: string;
-    status: 'pending' | 'error';
+    status: "pending" | "error";
   } | null>(null);
 
   useEffect(() => {
@@ -138,7 +159,7 @@ export function SymbolMasterPanel() {
     if (!autoSync) return;
     if (autoSyncState !== null && autoSyncState.date === committedDate) return;
     if (syncMutation.isPending) return;
-    setAutoSyncState({ date: committedDate, status: 'pending' });
+    setAutoSyncState({ date: committedDate, status: "pending" });
     syncMutation.mutate(
       { date: committedDate },
       {
@@ -148,22 +169,24 @@ export function SymbolMasterPanel() {
         // 같은 날짜를 한 번 더 동기화하게 된다. covered:true 가 실제로 도착하면
         // 첫 줄 guard 가 알아서 멈춘다.
         onError: (error) => {
-          setAutoSyncState({ date: committedDate, status: 'error' });
-          toast.error(errorMessage(error, '자동 동기화 실패'));
+          setAutoSyncState({ date: committedDate, status: "error" });
+          toast.error(errorMessage(error, "자동 동기화 실패"));
         },
       },
     );
   }, [universe, autoSync, committedDate, syncMutation, autoSyncState]);
 
   const autoSyncing =
-    autoSyncState !== null && autoSyncState.date === committedDate && autoSyncState.status === 'pending';
+    autoSyncState !== null &&
+    autoSyncState.date === committedDate &&
+    autoSyncState.status === "pending";
 
   const syncThisDate = (): void => {
     syncMutation.mutate(
       { date: committedDate },
       {
         onSuccess: () => toast.success(`${committedDate} 동기화 완료`),
-        onError: (error) => toast.error(errorMessage(error, '동기화 실패')),
+        onError: (error) => toast.error(errorMessage(error, "동기화 실패")),
       },
     );
   };
@@ -192,22 +215,27 @@ export function SymbolMasterPanel() {
 
   return (
     <div className="space-y-4">
-      {backfill?.state === 'RUNNING' ? (
+      {backfill?.state === "RUNNING" ? (
         <Alert>
           <AlertDescription>
-            과거 데이터 백필 진행 중 — {backfill.cursorDate ?? '진행 중'}. 수집은 서버에서
-            진행되므로 화면을 나가거나 브라우저를 닫아도 계속됩니다.
+            과거 데이터 백필 진행 중 — {backfill.cursorDate ?? "진행 중"}.
+            수집은 서버에서 진행되므로 화면을 나가거나 브라우저를 닫아도
+            계속됩니다.
           </AlertDescription>
         </Alert>
       ) : null}
-      {backfill?.state === 'FAILED' ? (
+      {backfill?.state === "FAILED" ? (
         <Alert variant="destructive">
-          <AlertDescription>백필 실패 — {backfill.error ?? '알 수 없는 오류'}</AlertDescription>
+          <AlertDescription>
+            백필 실패 — {backfill.error ?? "알 수 없는 오류"}
+          </AlertDescription>
         </Alert>
       ) : null}
-      {backfill?.state === 'BUDGET_EXHAUSTED' ? (
+      {backfill?.state === "BUDGET_EXHAUSTED" ? (
         <Alert>
-          <AlertDescription>오늘 호출 예산 소진 — 내일 자동 재개</AlertDescription>
+          <AlertDescription>
+            오늘 호출 예산 소진 — 내일 자동 재개
+          </AlertDescription>
         </Alert>
       ) : null}
 

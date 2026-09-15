@@ -1,6 +1,6 @@
-import { Buffer } from 'node:buffer';
-import { z } from 'zod';
-import type { BacktestRunResult } from '../domain/engine.js';
+import { Buffer } from "node:buffer";
+import { z } from "zod";
+import type { BacktestRunResult } from "../domain/engine.js";
 
 /**
  * 계산 프로세스와 영속 저장소 사이의 버전된 결과 계약.
@@ -11,12 +11,12 @@ import type { BacktestRunResult } from '../domain/engine.js';
  */
 export interface BacktestResultArtifact {
   readonly schemaVersion: 1;
-  readonly metrics: BacktestRunResult['metrics'];
-  readonly openPositions: BacktestRunResult['openPositions'];
-  readonly equityPoints: BacktestRunResult['equityPoints'];
-  readonly drawdownPoints: BacktestRunResult['drawdownPoints'];
-  readonly trades: BacktestRunResult['trades'];
-  readonly monthlyReturns: BacktestRunResult['monthlyReturns'];
+  readonly metrics: BacktestRunResult["metrics"];
+  readonly openPositions: BacktestRunResult["openPositions"];
+  readonly equityPoints: BacktestRunResult["equityPoints"];
+  readonly drawdownPoints: BacktestRunResult["drawdownPoints"];
+  readonly trades: BacktestRunResult["trades"];
+  readonly monthlyReturns: BacktestRunResult["monthlyReturns"];
   readonly warnings: readonly string[];
   readonly processedBars: number;
 }
@@ -47,26 +47,30 @@ const positiveNumber = finiteNumber.positive();
 const nonNegativeNumber = finiteNumber.nonnegative();
 const nonNegativeInteger = z.number().int().nonnegative();
 
-export const backtestResultWriteContextSchema: z.ZodType<BacktestResultWriteContext> = z.object({
-  jobId: z.string().min(1).max(128),
-  strategyId: z.string().min(1).max(128),
-  strategyVersion: z.string().min(1).max(128),
-  strategySourceHash: z.string().min(1).max(256),
-  parameterJson: z.string().max(10 * 1024 * 1024),
-  universeRuleJson: z.string().max(10 * 1024 * 1024),
-  scheduleHash: z.string().min(1).max(256),
-  universeJson: z.string().max(10 * 1024 * 1024),
-  universeHash: z.string().min(1).max(256),
-  engineVersion: z.string().min(1).max(128),
-  executionVersion: z.string().min(1).max(128),
-  feeModelVersion: z.string().min(1).max(128),
-  slippageModelVersion: z.string().min(1).max(128),
-  randomSeed: nonNegativeInteger,
-  gitCommitSha: z.string().min(1).max(128),
-  provenancePinJson: z.string().max(10 * 1024 * 1024).nullable(),
-  startedAtMs: nonNegativeInteger,
-  completedAtMs: nonNegativeInteger,
-});
+export const backtestResultWriteContextSchema: z.ZodType<BacktestResultWriteContext> =
+  z.object({
+    jobId: z.string().min(1).max(128),
+    strategyId: z.string().min(1).max(128),
+    strategyVersion: z.string().min(1).max(128),
+    strategySourceHash: z.string().min(1).max(256),
+    parameterJson: z.string().max(10 * 1024 * 1024),
+    universeRuleJson: z.string().max(10 * 1024 * 1024),
+    scheduleHash: z.string().min(1).max(256),
+    universeJson: z.string().max(10 * 1024 * 1024),
+    universeHash: z.string().min(1).max(256),
+    engineVersion: z.string().min(1).max(128),
+    executionVersion: z.string().min(1).max(128),
+    feeModelVersion: z.string().min(1).max(128),
+    slippageModelVersion: z.string().min(1).max(128),
+    randomSeed: nonNegativeInteger,
+    gitCommitSha: z.string().min(1).max(128),
+    provenancePinJson: z
+      .string()
+      .max(10 * 1024 * 1024)
+      .nullable(),
+    startedAtMs: nonNegativeInteger,
+    completedAtMs: nonNegativeInteger,
+  });
 
 export const backtestResultSummarySchema = z.object({
   metrics: z.object({
@@ -93,18 +97,24 @@ export const backtestResultSummarySchema = z.object({
     totalTax: finiteNumber.nonnegative(),
     totalSlippage: finiteNumber.nonnegative(),
   }),
-  openPositions: z.array(z.object({
-    symbol: z.string().min(1).max(32),
-    quantity: positiveNumber,
-    avgEntryPrice: positiveNumber,
-    entryTsMs: nonNegativeInteger,
-    lastPrice: positiveNumber,
-    lastPriceTsMs: nonNegativeInteger,
-    unrealizedPnl: finiteNumber,
-    returnPct: finiteNumber,
-  }).refine((position) => position.lastPriceTsMs >= position.entryTsMs, {
-    message: 'lastPriceTsMs는 entryTsMs보다 빠를 수 없습니다',
-  })).max(1_000),
+  openPositions: z
+    .array(
+      z
+        .object({
+          symbol: z.string().min(1).max(32),
+          quantity: positiveNumber,
+          avgEntryPrice: positiveNumber,
+          entryTsMs: nonNegativeInteger,
+          lastPrice: positiveNumber,
+          lastPriceTsMs: nonNegativeInteger,
+          unrealizedPnl: finiteNumber,
+          returnPct: finiteNumber,
+        })
+        .refine((position) => position.lastPriceTsMs >= position.entryTsMs, {
+          message: "lastPriceTsMs는 entryTsMs보다 빠를 수 없습니다",
+        }),
+    )
+    .max(1_000),
   warnings: z.array(z.string().max(4_000)).max(1_000),
   processedBars: nonNegativeInteger,
 });
@@ -120,7 +130,10 @@ export interface ValidatedBacktestResultArtifact {
 }
 
 export interface BacktestResultArtifactImporter {
-  validate(artifactPath: string, expectedJobId: string): ValidatedBacktestResultArtifact;
+  validate(
+    artifactPath: string,
+    expectedJobId: string,
+  ): ValidatedBacktestResultArtifact;
   /** 호출자가 연 영속 transaction 안에서 실행한다. */
   write(artifact: ValidatedBacktestResultArtifact): void;
 }
@@ -135,7 +148,8 @@ export interface BacktestResultCompletionInput {
 }
 
 export interface BacktestResultCompletionOutput {
-  readonly status: 'ACCEPTED' | 'IDEMPOTENT' | 'IDENTITY_REJECTED' | 'STALE_LEASE';
+  readonly status:
+    "ACCEPTED" | "IDEMPOTENT" | "IDENTITY_REJECTED" | "STALE_LEASE";
   readonly schemaVersion: number;
   readonly rowCount: number;
   readonly processedBars: number;
@@ -146,7 +160,7 @@ export interface BacktestResultCompletionOutput {
 export class BacktestResultPersistenceUnavailableError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
-    this.name = 'BacktestResultPersistenceUnavailableError';
+    this.name = "BacktestResultPersistenceUnavailableError";
   }
 }
 
@@ -154,7 +168,7 @@ export class BacktestResultPersistenceUnavailableError extends Error {
 export class BacktestResultArtifactRejectedError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
-    this.name = 'BacktestResultArtifactRejectedError';
+    this.name = "BacktestResultArtifactRejectedError";
   }
 }
 
@@ -162,18 +176,23 @@ export class BacktestResultArtifactRejectedError extends Error {
 export class BacktestResultImportInternalError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
-    this.name = 'BacktestResultImportInternalError';
+    this.name = "BacktestResultImportInternalError";
   }
 }
 
 /** 무거운 artifact 검증·중앙 DB import를 HTTP 이벤트 루프 밖에서 수행하는 port. */
 export interface BacktestResultCompleter {
-  complete(input: BacktestResultCompletionInput): Promise<BacktestResultCompletionOutput>;
+  complete(
+    input: BacktestResultCompletionInput,
+  ): Promise<BacktestResultCompletionOutput>;
 }
 
 /** 저장 구현을 로컬 SQLite에서 artifact importer로 교체할 때 지켜야 할 port. */
 export interface BacktestResultWriter {
-  write(context: BacktestResultWriteContext, artifact: BacktestResultArtifact): void;
+  write(
+    context: BacktestResultWriteContext,
+    artifact: BacktestResultArtifact,
+  ): void;
 }
 
 export interface BacktestArtifactSize {
@@ -188,17 +207,20 @@ export interface BacktestArtifactSize {
 }
 
 function jsonBytes(value: unknown): number {
-  return Buffer.byteLength(JSON.stringify(value), 'utf8');
+  return Buffer.byteLength(JSON.stringify(value), "utf8");
 }
 
 /**
  * 결과 전체를 JSON.stringify해서 메모리를 한 번 더 쓰지 않고 크기를 추정한다.
  * 1GB Lightsail에서 계측 때문에 OOM 위험을 키우지 않는 것이 정확한 직렬화 크기보다 중요하다.
  */
-export function measureBacktestArtifact(artifact: BacktestResultArtifact): BacktestArtifactSize {
-  let estimatedPayloadBytes = jsonBytes(artifact.metrics)
-    + jsonBytes(artifact.warnings)
-    + jsonBytes(artifact.openPositions);
+export function measureBacktestArtifact(
+  artifact: BacktestResultArtifact,
+): BacktestArtifactSize {
+  let estimatedPayloadBytes =
+    jsonBytes(artifact.metrics) +
+    jsonBytes(artifact.warnings) +
+    jsonBytes(artifact.openPositions);
 
   // equity/drawdown은 각각 숫자 두 개, monthly return은 숫자 세 개를 저장한다.
   estimatedPayloadBytes += artifact.equityPoints.length * 16;
@@ -206,18 +228,19 @@ export function measureBacktestArtifact(artifact: BacktestResultArtifact): Backt
   estimatedPayloadBytes += artifact.monthlyReturns.length * 24;
   for (const trade of artifact.trades) {
     // Trade의 숫자 필드 10개 + 가변 문자열. SQLite 행/page overhead는 의도적으로 제외한다.
-    estimatedPayloadBytes += 80 + Buffer.byteLength(trade.symbol, 'utf8');
+    estimatedPayloadBytes += 80 + Buffer.byteLength(trade.symbol, "utf8");
     if (trade.exitReason !== undefined) {
-      estimatedPayloadBytes += Buffer.byteLength(trade.exitReason, 'utf8');
+      estimatedPayloadBytes += Buffer.byteLength(trade.exitReason, "utf8");
     }
   }
 
   return {
-    rowCount: 2
-      + artifact.equityPoints.length
-      + artifact.drawdownPoints.length
-      + artifact.trades.length
-      + artifact.monthlyReturns.length,
+    rowCount:
+      2 +
+      artifact.equityPoints.length +
+      artifact.drawdownPoints.length +
+      artifact.trades.length +
+      artifact.monthlyReturns.length,
     estimatedPayloadBytes,
     equityPointCount: artifact.equityPoints.length,
     drawdownPointCount: artifact.drawdownPoints.length,

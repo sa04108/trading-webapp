@@ -1,4 +1,4 @@
-import type { SeedCloneBatchItem } from './types';
+import type { SeedCloneBatchItem } from "./types";
 
 export interface MetricDistributionSummary {
   readonly count: number;
@@ -18,21 +18,28 @@ export interface SeedCloneMetricSummary {
   readonly worstSeed: number;
 }
 
-function summarizeDistribution(values: readonly number[]): MetricDistributionSummary | null {
-  const finiteValues = values.filter(Number.isFinite).sort((left, right) => left - right);
+function summarizeDistribution(
+  values: readonly number[],
+): MetricDistributionSummary | null {
+  const finiteValues = values
+    .filter(Number.isFinite)
+    .sort((left, right) => left - right);
   if (finiteValues.length === 0) return null;
 
   const count = finiteValues.length;
   const mean = finiteValues.reduce((sum, value) => sum + value, 0) / count;
   const middle = Math.floor(count / 2);
-  const median = count % 2 === 0
-    ? (finiteValues[middle - 1]! + finiteValues[middle]!) / 2
-    : finiteValues[middle]!;
-  const sampleStdDev = count < 2
-    ? null
-    : Math.sqrt(
-      finiteValues.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (count - 1),
-    );
+  const median =
+    count % 2 === 0
+      ? (finiteValues[middle - 1]! + finiteValues[middle]!) / 2
+      : finiteValues[middle]!;
+  const sampleStdDev =
+    count < 2
+      ? null
+      : Math.sqrt(
+          finiteValues.reduce((sum, value) => sum + (value - mean) ** 2, 0) /
+            (count - 1),
+        );
 
   return {
     count,
@@ -49,12 +56,15 @@ export function summarizeSeedCloneMetrics(
   items: readonly SeedCloneBatchItem[],
 ): SeedCloneMetricSummary | null {
   const completed = items.filter(
-    (item) => item.status === 'COMPLETED' && item.metrics !== null,
+    (item) => item.status === "COMPLETED" && item.metrics !== null,
   );
   if (completed.length === 0) return null;
 
   const byReturn = completed
-    .map((item) => ({ seed: item.randomSeed, value: item.metrics!.totalReturnPct }))
+    .map((item) => ({
+      seed: item.randomSeed,
+      value: item.metrics!.totalReturnPct,
+    }))
     .filter(({ value }) => Number.isFinite(value))
     .sort((left, right) => left.value - right.value);
   const totalReturn = summarizeDistribution(byReturn.map(({ value }) => value));
@@ -64,7 +74,9 @@ export function summarizeSeedCloneMetrics(
   if (!totalReturn || !maxDrawdown || byReturn.length === 0) return null;
 
   const sharpe = summarizeDistribution(
-    completed.flatMap((item) => item.metrics!.sharpe === null ? [] : [item.metrics!.sharpe]),
+    completed.flatMap((item) =>
+      item.metrics!.sharpe === null ? [] : [item.metrics!.sharpe],
+    ),
   );
 
   return {

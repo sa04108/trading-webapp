@@ -1,27 +1,33 @@
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { z } from 'zod';
-import { universeRuleSchema } from '../../../../shared/schemas/universe-rule.js';
-import { isoDateSchema } from '../../../../shared/schemas/backtest-request.js';
-import { rebalanceIntervalFitsPeriod } from '../../../../shared/schemas/rebalance-interval.js';
-import { SECURITY_HEADERS } from '../../../shared/security.js';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { z } from "zod";
+import { universeRuleSchema } from "../../../../shared/schemas/universe-rule.js";
+import { isoDateSchema } from "../../../../shared/schemas/backtest-request.js";
+import { rebalanceIntervalFitsPeriod } from "../../../../shared/schemas/rebalance-interval.js";
+import { SECURITY_HEADERS } from "../../../shared/security.js";
 import {
   PreparationInputError,
   UnsafeBacktestSymbolIdentityError,
   type BacktestPreparationOrchestrator,
-} from '../../../../runtime/modules/backtest/application/backtest-preparation-orchestrator.js';
-import { PreparationReferenceError } from '../application/preparation-reference-service.js';
-import type { FinancialFactAvailabilityService } from '../../../../runtime/modules/facts/application/financial-fact-availability.js';
-import type { CandleCoverageService } from '../../../../runtime/modules/market-data/application/candle-coverage-service.js';
-import type { SymbolMasterService } from '../../../../runtime/modules/market-data/application/symbol-master-service.js';
-import { sendIfKrxError, sendIfNotCovered } from './krx-error-mapping.js';
+} from "../../../../runtime/modules/backtest/application/backtest-preparation-orchestrator.js";
+import { PreparationReferenceError } from "../application/preparation-reference-service.js";
+import type { FinancialFactAvailabilityService } from "../../../../runtime/modules/facts/application/financial-fact-availability.js";
+import type { CandleCoverageService } from "../../../../runtime/modules/market-data/application/candle-coverage-service.js";
+import type { SymbolMasterService } from "../../../../runtime/modules/market-data/application/symbol-master-service.js";
+import { sendIfKrxError, sendIfNotCovered } from "./krx-error-mapping.js";
 
-type PreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+type PreHandler = (
+  request: FastifyRequest,
+  reply: FastifyReply,
+) => Promise<void>;
 
 export interface BacktestPreparationRouteDeps {
   readonly orchestrator: BacktestPreparationOrchestrator;
-  readonly financialFacts: Pick<FinancialFactAvailabilityService, 'symbolsWithFinancialFacts'>;
-  readonly candles: Pick<CandleCoverageService, 'getLastTsInWindows'>;
-  readonly symbolMaster: Pick<SymbolMasterService, 'delistedEventsBetween'>;
+  readonly financialFacts: Pick<
+    FinancialFactAvailabilityService,
+    "symbolsWithFinancialFacts"
+  >;
+  readonly candles: Pick<CandleCoverageService, "getLastTsInWindows">;
+  readonly symbolMaster: Pick<SymbolMasterService, "delistedEventsBetween">;
   readonly dartApiKeyAvailable: boolean;
 }
 
@@ -46,104 +52,138 @@ export function registerBacktestPreparationRoutes(
 
   // Fastify는 open SSE가 있으면 일반 connection drain 전에 기다릴 수 있다. preClose는
   // 그 기다림보다 먼저 실행되므로 heartbeat·구독·reply를 라우트가 명시적으로 닫는다.
-  app.addHook('preClose', async () => {
+  app.addHook("preClose", async () => {
     for (const cleanup of [...activeStreams]) cleanup();
   });
 
-  app.post('/backtests/universe-preview', { preHandler: requireAuth }, async (request, reply) => {
-    const parsed = previewRequestSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send({
-        error: parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; '),
-      });
-    }
-    const { sourceJobId, ...input } = parsed.data;
-    const owner = { userId: request.authUser!.id, context: sourceJobId ?? '' };
-    if (input.period.from > input.period.to) {
-      return reply.code(400).send({ error: '기간이 올바르지 않습니다 (from > to)' });
-    }
-    // 제출 스키마(backtest-request.ts superRefine)와 같은 검사다 — 여기서 걸러내지
-    // 않으면 준비가 끝난 뒤 제출 시점에야 400 이 나 준비가 헛수고가 된다.
-    if (!rebalanceIntervalFitsPeriod(input.period, input.universeRule.rebalanceInterval)) {
-      return reply.code(400).send({ error: '리밸런싱 주기가 백테스트 전체 기간을 초과합니다.' });
-    }
-
-    try {
-      // 같은 입력의 active job은 진행 상태만 담고 있다. 완료 미리보기를 다시 검증하는
-      // 비싼 작업을 예약하기 전에 먼저 반환해 반복 POST가 resolver 뒤에 쌓이지 않게 한다.
-      const active = orchestrator.getActive(input);
-      if (active !== null) {
-        orchestrator.bindWizard(owner.userId, owner.context, active.id);
-        return reply.code(202).send({ job: active });
-      }
-
-      const ready = orchestrator.getFreshPreviewDetails(input);
-      if (ready) {
-        orchestrator.bindWizard(owner.userId, owner.context, ready.preview.preparationJobId!);
-        return reply.code(200).send({
-          ...ready.preview,
-          fundamentalSymbols: ready.fundamentalSymbols,
+  app.post(
+    "/backtests/universe-preview",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const parsed = previewRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: parsed.error.issues
+            .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+            .join("; "),
         });
       }
-      if (!deps.dartApiKeyAvailable && await orchestrator.needsDart(input)) {
-        return reply.code(503).send({
-          error: 'DART API 키가 설정되지 않아 필요한 재무·자본변동 데이터를 동기화할 수 없습니다.',
-        });
+      const { sourceJobId, ...input } = parsed.data;
+      const owner = {
+        userId: request.authUser!.id,
+        context: sourceJobId ?? "",
+      };
+      if (input.period.from > input.period.to) {
+        return reply
+          .code(400)
+          .send({ error: "기간이 올바르지 않습니다 (from > to)" });
       }
-      return reply.code(202).send({ job: orchestrator.start(input, owner) });
-    } catch (error) {
-      // resolver 경유 오류는 제출 라우트와 같은 코드로 매핑한다. 그 밖의 오류를
-      // 일괄 400 으로 접으면 내부 wiring 결함까지 사용자 요청 문제로 둔갑한다 —
-      // 알려진 사용자 오류(미지 전략 등)만 400, 나머지는 500 처리기로 던진다.
-      if (sendIfKrxError(reply, error)) return reply;
-      if (sendIfNotCovered(reply, error)) return reply;
-      if (error instanceof UnsafeBacktestSymbolIdentityError) {
-        return reply.code(422).send({ error: error.message });
+      // 제출 스키마(backtest-request.ts superRefine)와 같은 검사다 — 여기서 걸러내지
+      // 않으면 준비가 끝난 뒤 제출 시점에야 400 이 나 준비가 헛수고가 된다.
+      if (
+        !rebalanceIntervalFitsPeriod(
+          input.period,
+          input.universeRule.rebalanceInterval,
+        )
+      ) {
+        return reply
+          .code(400)
+          .send({ error: "리밸런싱 주기가 백테스트 전체 기간을 초과합니다." });
       }
-      if (error instanceof PreparationReferenceError) {
-        return reply.code(409).send({ error: 'PREPARATION_REQUIRED', message: error.message });
-      }
-      if (error instanceof PreparationInputError) {
-        return reply.code(400).send({ error: error.message });
-      }
-      throw error;
-    }
-  });
 
-  app.get('/backtests/preparation-jobs/:id', { preHandler: requireAuth }, async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const job = orchestrator.get(id);
-    if (!job) return reply.code(404).send({ error: '준비 작업을 찾을 수 없습니다.' });
-    return { job };
-  });
+      try {
+        // 같은 입력의 active job은 진행 상태만 담고 있다. 완료 미리보기를 다시 검증하는
+        // 비싼 작업을 예약하기 전에 먼저 반환해 반복 POST가 resolver 뒤에 쌓이지 않게 한다.
+        const active = orchestrator.getActive(input);
+        if (active !== null) {
+          orchestrator.bindWizard(owner.userId, owner.context, active.id);
+          return reply.code(202).send({ job: active });
+        }
+
+        const ready = orchestrator.getFreshPreviewDetails(input);
+        if (ready) {
+          orchestrator.bindWizard(
+            owner.userId,
+            owner.context,
+            ready.preview.preparationJobId!,
+          );
+          return reply.code(200).send({
+            ...ready.preview,
+            fundamentalSymbols: ready.fundamentalSymbols,
+          });
+        }
+        if (
+          !deps.dartApiKeyAvailable &&
+          (await orchestrator.needsDart(input))
+        ) {
+          return reply.code(503).send({
+            error:
+              "DART API 키가 설정되지 않아 필요한 재무·자본변동 데이터를 동기화할 수 없습니다.",
+          });
+        }
+        return reply.code(202).send({ job: orchestrator.start(input, owner) });
+      } catch (error) {
+        // resolver 경유 오류는 제출 라우트와 같은 코드로 매핑한다. 그 밖의 오류를
+        // 일괄 400 으로 접으면 내부 wiring 결함까지 사용자 요청 문제로 둔갑한다 —
+        // 알려진 사용자 오류(미지 전략 등)만 400, 나머지는 500 처리기로 던진다.
+        if (sendIfKrxError(reply, error)) return reply;
+        if (sendIfNotCovered(reply, error)) return reply;
+        if (error instanceof UnsafeBacktestSymbolIdentityError) {
+          return reply.code(422).send({ error: error.message });
+        }
+        if (error instanceof PreparationReferenceError) {
+          return reply
+            .code(409)
+            .send({ error: "PREPARATION_REQUIRED", message: error.message });
+        }
+        if (error instanceof PreparationInputError) {
+          return reply.code(400).send({ error: error.message });
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.get(
+    "/backtests/preparation-jobs/:id",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const job = orchestrator.get(id);
+      if (!job)
+        return reply.code(404).send({ error: "준비 작업을 찾을 수 없습니다." });
+      return { job };
+    },
+  );
 
   app.post(
-    '/backtests/preparation-jobs/:id/cancel',
+    "/backtests/preparation-jobs/:id/cancel",
     { preHandler: requireAuth },
     async (request, reply) => {
       const { id } = request.params as { id: string };
       if (!orchestrator.cancel(id)) {
-        return reply.code(404).send({ error: '준비 작업을 찾을 수 없습니다.' });
+        return reply.code(404).send({ error: "준비 작업을 찾을 수 없습니다." });
       }
       return { job: orchestrator.get(id) };
     },
   );
 
   app.get(
-    '/backtests/preparation-jobs/:id/events',
+    "/backtests/preparation-jobs/:id/events",
     { preHandler: requireAuth },
     async (request, reply) => {
       const { id } = request.params as { id: string };
       const initial = orchestrator.get(id);
-      if (!initial) return reply.code(404).send({ error: '준비 작업을 찾을 수 없습니다.' });
+      if (!initial)
+        return reply.code(404).send({ error: "준비 작업을 찾을 수 없습니다." });
 
       reply.hijack();
       reply.raw.writeHead(200, {
         ...SECURITY_HEADERS,
-        'content-type': 'text/event-stream',
-        'cache-control': 'no-cache',
-        connection: 'keep-alive',
-        'x-accel-buffering': 'no',
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+        connection: "keep-alive",
+        "x-accel-buffering": "no",
       });
       const write = (job: typeof initial): void => {
         reply.raw.write(`data: ${JSON.stringify(job)}\n\n`);
@@ -152,7 +192,10 @@ export function registerBacktestPreparationRoutes(
       let unsubscribe = (): void => {};
       let subscribing = true;
       let terminalDuringSubscribe = false;
-      const heartbeat = setInterval(() => reply.raw.write(':heartbeat\n\n'), 15_000);
+      const heartbeat = setInterval(
+        () => reply.raw.write(":heartbeat\n\n"),
+        15_000,
+      );
       heartbeat.unref();
       const cleanup = (): void => {
         if (closed) return;
@@ -174,7 +217,7 @@ export function registerBacktestPreparationRoutes(
       });
       subscribing = false;
       if (terminalDuringSubscribe) cleanup();
-      request.raw.on('close', cleanup);
+      request.raw.on("close", cleanup);
     },
   );
 }

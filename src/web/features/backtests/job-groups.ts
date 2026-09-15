@@ -3,9 +3,9 @@
  * API 정렬 순서에 기대지 않고 여기서 명시적으로 정렬한다 —
  * 그룹 내부는 최신순, 그룹끼리는 그룹 내 최신 잡 기준 내림차순.
  */
-export function groupJobsByStrategy<T extends { strategyId: string; createdAtMs: number }>(
-  jobs: readonly T[],
-): Array<{ strategyId: string; jobs: T[] }> {
+export function groupJobsByStrategy<
+  T extends { strategyId: string; createdAtMs: number },
+>(jobs: readonly T[]): Array<{ strategyId: string; jobs: T[] }> {
   const byStrategy = new Map<string, T[]>();
   for (const job of jobs) {
     const list = byStrategy.get(job.strategyId) ?? [];
@@ -17,5 +17,7 @@ export function groupJobsByStrategy<T extends { strategyId: string; createdAtMs:
       strategyId,
       jobs: [...grouped].sort((a, b) => b.createdAtMs - a.createdAtMs),
     }))
-    .sort((a, b) => (b.jobs[0]?.createdAtMs ?? 0) - (a.jobs[0]?.createdAtMs ?? 0));
+    .sort(
+      (a, b) => (b.jobs[0]?.createdAtMs ?? 0) - (a.jobs[0]?.createdAtMs ?? 0),
+    );
 }

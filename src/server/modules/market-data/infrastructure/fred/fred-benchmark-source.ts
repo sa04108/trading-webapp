@@ -1,12 +1,12 @@
-import { z } from 'zod';
-import type { FredBenchmarkId } from '../../../../../shared/schemas/benchmark.js';
-import { RestClient } from '../../../../shared/rest-client.js';
-import type { Logger } from '../../../../shared/logger.js';
+import { z } from "zod";
+import type { FredBenchmarkId } from "../../../../../shared/schemas/benchmark.js";
+import { RestClient } from "../../../../shared/rest-client.js";
+import type { Logger } from "../../../../shared/logger.js";
 import {
   FredContractError,
   FredNotConfiguredError,
   type FredBenchmarkSource,
-} from '../../../../../runtime/modules/market-data/application/ports.js';
+} from "../../../../../runtime/modules/market-data/application/ports.js";
 
 export interface FredConfig {
   readonly baseUrl: string;
@@ -14,20 +14,27 @@ export interface FredConfig {
 }
 
 const responseSchema = z.object({
-  observations: z.array(z.object({
-    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    value: z.string(),
-  })),
+  observations: z.array(
+    z.object({
+      date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      value: z.string(),
+    }),
+  ),
 });
 
 export function createFredBenchmarkSource(
   config: FredConfig | null,
   logger: Logger,
-  options: { fetchImpl?: typeof fetch; sleep?: (ms: number) => Promise<void> } = {},
+  options: {
+    fetchImpl?: typeof fetch;
+    sleep?: (ms: number) => Promise<void>;
+  } = {},
 ): FredBenchmarkSource {
   if (config === null) {
     return {
-      fetchBenchmarkRange: async () => { throw new FredNotConfiguredError(); },
+      fetchBenchmarkRange: async () => {
+        throw new FredNotConfiguredError();
+      },
     };
   }
 
@@ -39,22 +46,33 @@ export function createFredBenchmarkSource(
   });
 
   return {
-    fetchBenchmarkRange: async (benchmarkId: FredBenchmarkId, from: string, to: string) => {
+    fetchBenchmarkRange: async (
+      benchmarkId: FredBenchmarkId,
+      from: string,
+      to: string,
+    ) => {
       const query = new URLSearchParams({
         series_id: benchmarkId,
         observation_start: from,
         observation_end: to,
-        file_type: 'json',
+        file_type: "json",
         api_key: config.apiKey,
       });
       let payload: unknown;
       try {
-        payload = await client.request('default', `/fred/series/observations?${query}`);
+        payload = await client.request(
+          "default",
+          `/fred/series/observations?${query}`,
+        );
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'FRED API 요청에 실패했습니다.';
-        const sanitizedMessage = config.apiKey === ''
-          ? message
-          : message.replaceAll(config.apiKey, '[REDACTED]');
+        const message =
+          error instanceof Error
+            ? error.message
+            : "FRED API 요청에 실패했습니다.";
+        const sanitizedMessage =
+          config.apiKey === ""
+            ? message
+            : message.replaceAll(config.apiKey, "[REDACTED]");
         // 원본 cause·name·custom field에 요청 URL과 API 키가 있을 수 있어 연결하지 않는다.
         // eslint-disable-next-line preserve-caught-error
         throw new Error(sanitizedMessage);
@@ -64,7 +82,7 @@ export function createFredBenchmarkSource(
       if (!parsed.success) throw new FredContractError();
 
       const points = parsed.data.observations.flatMap(({ date, value }) => {
-        if (value === '.') return [];
+        if (value === ".") return [];
         const close = Number(value);
         if (date < from || date > to || !Number.isFinite(close) || close <= 0) {
           throw new FredContractError();
@@ -72,8 +90,15 @@ export function createFredBenchmarkSource(
         return [{ date, close }];
       });
       logger.info(
-        { module: 'market-data', event: 'fred.fetch', benchmarkId, from, to, rows: points.length },
-        'fred fetch ok',
+        {
+          module: "market-data",
+          event: "fred.fetch",
+          benchmarkId,
+          from,
+          to,
+          rows: points.length,
+        },
+        "fred fetch ok",
       );
       return points;
     },

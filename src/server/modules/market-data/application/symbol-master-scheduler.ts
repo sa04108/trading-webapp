@@ -1,8 +1,12 @@
-import type { Clock } from '../../../../runtime/shared/clock.js';
-import type { Logger } from '../../../shared/logger.js';
-import { addCalendarDays, kstDateOf, kstHourOf } from '../../../../runtime/modules/market-data/domain/kst-date.js';
-import type { SymbolMasterBackfill } from './symbol-master-backfill.js';
-import type { SymbolMasterService } from '../../../../runtime/modules/market-data/application/symbol-master-service.js';
+import type { Clock } from "../../../../runtime/shared/clock.js";
+import type { Logger } from "../../../shared/logger.js";
+import {
+  addCalendarDays,
+  kstDateOf,
+  kstHourOf,
+} from "../../../../runtime/modules/market-data/domain/kst-date.js";
+import type { SymbolMasterBackfill } from "./symbol-master-backfill.js";
+import type { SymbolMasterService } from "../../../../runtime/modules/market-data/application/symbol-master-service.js";
 
 export interface SymbolMasterSchedulerDeps {
   readonly service: SymbolMasterService;
@@ -65,23 +69,27 @@ export class SymbolMasterScheduler {
 
     // 백필 상태 확인 — RUNNING 중이면 스케줄러의 갭 채움은 건너뜀
     const backfillStatus = this.deps.backfill.status();
-    const backfillRunning = backfillStatus.state === 'RUNNING';
+    const backfillRunning = backfillStatus.state === "RUNNING";
 
     // 마지막 커버일 < 어제 이고 백필이 RUNNING 아니면 갭 보정
     if (
-      !backfillRunning
-      && lastCoverageEndDate !== undefined
-      && lastCoverageEndDate < yesterday
+      !backfillRunning &&
+      lastCoverageEndDate !== undefined &&
+      lastCoverageEndDate < yesterday
     ) {
       const nextDate = addCalendarDays(lastCoverageEndDate, 1);
-      for (let cursor = nextDate; cursor <= yesterday; cursor = addCalendarDays(cursor, 1)) {
+      for (
+        let cursor = nextDate;
+        cursor <= yesterday;
+        cursor = addCalendarDays(cursor, 1)
+      ) {
         try {
           await this.deps.service.ingestDate(cursor);
         } catch (error) {
           this.deps.logger.warn(
             {
-              module: 'market-data',
-              event: 'symbol-master.scheduler-ingest-error',
+              module: "market-data",
+              event: "symbol-master.scheduler-ingest-error",
               date: cursor,
               error: error instanceof Error ? error.message : String(error),
             },
@@ -94,8 +102,8 @@ export class SymbolMasterScheduler {
 
     // 백필이 BUDGET_EXHAUSTED 면 재개
     if (
-      backfillStatus.state === 'BUDGET_EXHAUSTED'
-      && backfillStatus.targetStartDate !== null
+      backfillStatus.state === "BUDGET_EXHAUSTED" &&
+      backfillStatus.targetStartDate !== null
     ) {
       this.deps.backfill.start(backfillStatus.targetStartDate);
     }

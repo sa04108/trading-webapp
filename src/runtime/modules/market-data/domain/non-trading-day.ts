@@ -1,4 +1,4 @@
-import type { KrxDailyTradeRow } from './krx-universe-types.js';
+import type { KrxDailyTradeRow } from "./krx-universe-types.js";
 
 /**
  * KRX 일별매매정보 행이 "그날 거래할 수 없었던" 행인지 본다.
@@ -15,11 +15,11 @@ import type { KrxDailyTradeRow } from './krx-universe-types.js';
  */
 export function isNonTradingRow(row: KrxDailyTradeRow): boolean {
   return (
-    row.open === 0
-    && row.high === 0
-    && row.low === 0
-    && row.volume === 0
-    && row.close !== null
-    && row.close > 0
+    row.open === 0 &&
+    row.high === 0 &&
+    row.low === 0 &&
+    row.volume === 0 &&
+    row.close !== null &&
+    row.close > 0
   );
 }

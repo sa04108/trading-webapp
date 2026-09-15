@@ -1,26 +1,32 @@
-import type { AppConfig } from '../../../bootstrap/config.js';
-import type { DatabaseHandle } from '../../../../runtime/shared/db/database.js';
-import type { Clock } from '../../../../runtime/shared/clock.js';
-import type { Logger } from '../../../shared/logger.js';
-import type { AuditLogService } from '../../../../runtime/modules/audit/audit-service.js';
-import type { ExternalApiUsage } from '../../../shared/db/external-api-usage.js';
-import type { AgentDataRequest } from '../../../../shared/agent-protocol.js';
-import { readRuntimeVersions } from '../../../../runtime/shared/runtime-versions.js';
-import { SymbolService } from '../../../../runtime/modules/market-data/application/symbol-service.js';
-import { SymbolMasterService } from '../../../../runtime/modules/market-data/application/symbol-master-service.js';
-import { SymbolMasterBackfill } from '../../market-data/application/symbol-master-backfill.js';
-import { SymbolMasterScheduler } from '../../market-data/application/symbol-master-scheduler.js';
-import { SqliteFactRepository } from '../../../../runtime/modules/facts/infrastructure/sqlite-fact-repository.js';
-import { SqliteFactCoverageStore } from '../../../../runtime/modules/facts/application/fact-coverage-store.js';
-import { SqliteCorporateActionCoverageStore } from '../../../../runtime/modules/facts/application/corporate-action-coverage.js';
-import { FactSyncService } from '../../facts/application/fact-sync-service.js';
-import { createDartFactSource } from '../../facts/infrastructure/dart/dart-fact-source.js';
-import { SqliteDartRawSnapshotStore } from '../../facts/infrastructure/dart/sqlite-dart-raw-snapshot-store.js';
-import { createKrxHistoricalUniverseSource } from '../../market-data/infrastructure/krx/krx-historical-universe-source.js';
-import { AgentCollectionPaused } from './agent-data-queue.js';
+import type { AppConfig } from "../../../bootstrap/config.js";
+import type { DatabaseHandle } from "../../../../runtime/shared/db/database.js";
+import type { Clock } from "../../../../runtime/shared/clock.js";
+import type { Logger } from "../../../shared/logger.js";
+import type { AuditLogService } from "../../../../runtime/modules/audit/audit-service.js";
+import type { ExternalApiUsage } from "../../../shared/db/external-api-usage.js";
+import type { AgentDataRequest } from "../../../../shared/agent-protocol.js";
+import { readRuntimeVersions } from "../../../../runtime/shared/runtime-versions.js";
+import { SymbolService } from "../../../../runtime/modules/market-data/application/symbol-service.js";
+import { SymbolMasterService } from "../../../../runtime/modules/market-data/application/symbol-master-service.js";
+import { SymbolMasterBackfill } from "../../market-data/application/symbol-master-backfill.js";
+import { SymbolMasterScheduler } from "../../market-data/application/symbol-master-scheduler.js";
+import { SqliteFactRepository } from "../../../../runtime/modules/facts/infrastructure/sqlite-fact-repository.js";
+import { SqliteFactCoverageStore } from "../../../../runtime/modules/facts/application/fact-coverage-store.js";
+import { SqliteCorporateActionCoverageStore } from "../../../../runtime/modules/facts/application/corporate-action-coverage.js";
+import { FactSyncService } from "../../facts/application/fact-sync-service.js";
+import { createDartFactSource } from "../../facts/infrastructure/dart/dart-fact-source.js";
+import { SqliteDartRawSnapshotStore } from "../../facts/infrastructure/dart/sqlite-dart-raw-snapshot-store.js";
+import { createKrxHistoricalUniverseSource } from "../../market-data/infrastructure/krx/krx-historical-universe-source.js";
+import { AgentCollectionPaused } from "./agent-data-queue.js";
 
-type CollectionConfig = Pick<AppConfig,
-  'dartApiKey' | 'dartBaseUrl' | 'krxApiKey' | 'krxBaseUrl' | 'krxApprovalExpiry' | 'krxDailyCallBudget'
+type CollectionConfig = Pick<
+  AppConfig,
+  | "dartApiKey"
+  | "dartBaseUrl"
+  | "krxApiKey"
+  | "krxBaseUrl"
+  | "krxApprovalExpiry"
+  | "krxDailyCallBudget"
 >;
 
 /** 수집 버전 그래프의 진입점. 서버가 실제 사용하는 구현과 데이터 요구 처리기를 함께 조립한다. */
@@ -39,7 +45,9 @@ export function createAgentCollectionRuntime(input: {
   const factRepository = new SqliteFactRepository(database.db);
   const dartRawSnapshots = new SqliteDartRawSnapshotStore(database.db);
   const factSource = createDartFactSource(
-    config.dartApiKey ? { baseUrl: config.dartBaseUrl, apiKey: config.dartApiKey } : null,
+    config.dartApiKey
+      ? { baseUrl: config.dartBaseUrl, apiKey: config.dartApiKey }
+      : null,
     logger,
     // 미래 보고서 생략(filableReportCount)이 sync 계획과 같은 시각을 봐야 한다
     { clock, usage: externalApiUsage, rawSnapshots: dartRawSnapshots },
@@ -47,10 +55,15 @@ export function createAgentCollectionRuntime(input: {
   // 팩트도 백테스트 입력이다 — 캔들과 같은 버전 체인에 올린다 (§9.5).
   // SymbolService 를 통째로 넘기지 않고 좁은 포트(SymbolVersionBumper)로 받는다.
   // 팩트와 coverage가 같은 SQLite 백업·트랜잭션 경계에 있으므로 파일 교차 검사는 없다.
-  const factCoverageStore = new SqliteFactCoverageStore(database.db, { collectionVersion });
+  const factCoverageStore = new SqliteFactCoverageStore(database.db, {
+    collectionVersion,
+  });
   // 자본변동 전용 수집(Task 5)이 갱신하는 별도 커버리지 — 재무 커버리지와 컬럼이
   // 다르다 (corporate-action-coverage.ts 헤더 참고).
-  const actionCoverageStore = new SqliteCorporateActionCoverageStore(database.db, { collectionVersion });
+  const actionCoverageStore = new SqliteCorporateActionCoverageStore(
+    database.db,
+    { collectionVersion },
+  );
   const factSyncService = new FactSyncService(
     factSource,
     factRepository,
@@ -67,7 +80,11 @@ export function createAgentCollectionRuntime(input: {
   // 소스를 직접 쓴다.
   const krxSource = createKrxHistoricalUniverseSource(
     config.krxApiKey
-      ? { baseUrl: config.krxBaseUrl, apiKey: config.krxApiKey, approvalExpiry: config.krxApprovalExpiry }
+      ? {
+          baseUrl: config.krxBaseUrl,
+          apiKey: config.krxApiKey,
+          approvalExpiry: config.krxApprovalExpiry,
+        }
       : null,
     clock,
     logger,
@@ -94,41 +111,72 @@ export function createAgentCollectionRuntime(input: {
     clock,
     logger,
   });
-  const collect = async (request: AgentDataRequest, shouldStop: () => boolean): Promise<void> => {
-    if (request.kind === 'MARKET') {
+  const collect = async (
+    request: AgentDataRequest,
+    shouldStop: () => boolean,
+  ): Promise<void> => {
+    if (request.kind === "MARKET") {
       for (const date of request.dates) {
         if (shouldStop()) return;
         await symbolMasterService.ensureTradingDay(date);
       }
-    } else if (request.kind === 'SELECTION') {
+    } else if (request.kind === "SELECTION") {
       await symbolMasterService.ensureSelectionMetrics(request.dates);
-    } else if (request.kind === 'REGISTER') {
+    } else if (request.kind === "REGISTER") {
       for (const entry of request.symbols) {
         const registered = symbolService.getRegisteredIdentity(entry.symbol);
         if (registered) {
-          if (registered.standardCode !== entry.standardCode) throw new Error('종목 표준코드가 기존 등록과 다릅니다');
+          if (registered.standardCode !== entry.standardCode)
+            throw new Error("종목 표준코드가 기존 등록과 다릅니다");
           continue;
         }
-        const row = database.sqlite.prepare('SELECT name FROM symbol_master_versions WHERE short_code = ? AND standard_code = ? LIMIT 1')
-          .get(entry.symbol, entry.standardCode) as { name: string } | undefined;
-        if (!row) throw new Error('수집된 종목 마스터에 없는 표준코드입니다');
-        symbolService.addSymbol(entry.symbol, 'KR', row.name, entry.standardCode);
+        const row = database.sqlite
+          .prepare(
+            "SELECT name FROM symbol_master_versions WHERE short_code = ? AND standard_code = ? LIMIT 1",
+          )
+          .get(entry.symbol, entry.standardCode) as
+          { name: string } | undefined;
+        if (!row) throw new Error("수집된 종목 마스터에 없는 표준코드입니다");
+        symbolService.addSymbol(
+          entry.symbol,
+          "KR",
+          row.name,
+          entry.standardCode,
+        );
       }
     } else {
-      const input = { ...request, mode: 'INCREMENTAL' as const, consolidated: true };
-      const report = request.kind === 'FINANCIAL'
-        ? await factSyncService.sync(input, { shouldStop })
-        : await factSyncService.syncCorporateActions(input, { shouldStop });
-      if (report.stopReason === 'DAILY_QUOTA') {
-        const next = Math.floor((clock.now() + 9 * 3600_000) / 86400_000 + 1) * 86400_000 - 9 * 3600_000;
-        throw new AgentCollectionPaused(report.failureMessage ?? 'DART 일일 호출 한도 대기', next);
+      const input = {
+        ...request,
+        mode: "INCREMENTAL" as const,
+        consolidated: true,
+      };
+      const report =
+        request.kind === "FINANCIAL"
+          ? await factSyncService.sync(input, { shouldStop })
+          : await factSyncService.syncCorporateActions(input, { shouldStop });
+      if (report.stopReason === "DAILY_QUOTA") {
+        const next =
+          Math.floor((clock.now() + 9 * 3600_000) / 86400_000 + 1) * 86400_000 -
+          9 * 3600_000;
+        throw new AgentCollectionPaused(
+          report.failureMessage ?? "DART 일일 호출 한도 대기",
+          next,
+        );
       }
-      if (report.stopReason === 'ERROR') throw new Error(report.failureMessage ?? 'DART 수집 실패');
+      if (report.stopReason === "ERROR")
+        throw new Error(report.failureMessage ?? "DART 수집 실패");
     }
-
   };
   return {
-    symbolService, factRepository, factCoverageStore, actionCoverageStore, factSyncService,
-    krxSource, symbolMasterService, symbolMasterBackfill, symbolMasterScheduler, collect,
+    symbolService,
+    factRepository,
+    factCoverageStore,
+    actionCoverageStore,
+    factSyncService,
+    krxSource,
+    symbolMasterService,
+    symbolMasterBackfill,
+    symbolMasterScheduler,
+    collect,
   };
 }

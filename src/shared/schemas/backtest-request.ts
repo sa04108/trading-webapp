@@ -1,7 +1,10 @@
-import { z } from 'zod';
-import { benchmarkIdSchema } from './benchmark.js';
-import { universeRuleSchema } from './universe-rule.js';
-import { isCalendarDate, rebalanceIntervalFitsPeriod } from './rebalance-interval.js';
+import { z } from "zod";
+import { benchmarkIdSchema } from "./benchmark.js";
+import { universeRuleSchema } from "./universe-rule.js";
+import {
+  isCalendarDate,
+  rebalanceIntervalFitsPeriod,
+} from "./rebalance-interval.js";
 
 export interface BacktestPeriod {
   readonly from: string;
@@ -15,8 +18,8 @@ export interface BacktestPeriod {
  */
 export const isoDateSchema = z
   .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, '날짜 형식이 올바르지 않습니다 (YYYY-MM-DD)')
-  .refine(isCalendarDate, { message: '존재하지 않는 날짜입니다' });
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "날짜 형식이 올바르지 않습니다 (YYYY-MM-DD)")
+  .refine(isCalendarDate, { message: "존재하지 않는 날짜입니다" });
 
 /** 엔진 RNG가 `>>> 0`으로 소비하는 실제 32비트 시드 범위. */
 export const MAX_RANDOM_SEED = 0xffff_ffff;
@@ -39,50 +42,63 @@ export const MAX_RANDOM_SEED = 0xffff_ffff;
  * (`UniverseRuleResolver`). 옛 필드로 저장된 요청은 이 스키마로 파싱되지 않는다 —
  * 기존 백테스트 잡·런 데이터는 이 변경과 함께 마이그레이션이 정리한다(보존 대상 아님).
  */
-export const backtestRequestSchema = z.object({
-  strategyId: z.string().min(1),
-  parameters: z.record(z.string(), z.unknown()),
-  universeRule: universeRuleSchema,
-  /** 비교 기준. 미지정 옛 요청은 제출 경계에서 KOSPI로 재기준한다. */
-  benchmarkId: benchmarkIdSchema.optional(),
-  /** 소비 봉 주기. KRX 일봉이 유일한 출처라 일봉뿐이다 (설계 2026-08-07-price-data-removal). */
-  timeframe: z.literal('1d').optional(),
-  period: z.object({
-    from: isoDateSchema,
-    to: isoDateSchema,
-  }),
-  capital: z.object({
-    initialCash: z.number().positive(),
-    currency: z.literal('KRW'),
-  }),
-  execution: z.object({
-    fillTiming: z.literal('NEXT_BAR_OPEN'),
-    commissionProfileId: z.string().min(1),
-    slippageProfileId: z.string().min(1),
-  }),
-  /** 엔진 리스크 상한 (§9.2-6) — 전략 파라미터가 아니라 요청의 명시 필드다 */
-  risk: z.object({
-    maxPositions: z.number().int().min(1).max(200).default(40),
-  }).default({ maxPositions: 40 }),
-  randomSeed: z.number().int().min(0).max(MAX_RANDOM_SEED).default(42),
-}).superRefine((request, ctx) => {
-  const issue = (message: string): void => {
-    ctx.addIssue({ code: 'custom', message });
-  };
-  const lastLimit = request.universeRule.stages.at(-1)!.limit;
-  if (
-    request.period.from <= request.period.to &&
-    !rebalanceIntervalFitsPeriod(request.period, request.universeRule.rebalanceInterval)
-  ) {
-    issue('리밸런싱 주기가 백테스트 전체 기간을 초과합니다.');
-  }
-  if (typeof request.parameters.topN === 'number' && request.parameters.topN > request.risk.maxPositions) {
-    issue('전략 topN은 동시 보유 상한 이하여야 합니다.');
-  }
-  if (typeof request.parameters.topN === 'number' && request.parameters.topN > lastLimit) {
-    issue('전략 topN은 최종 유니버스 N 이하여야 합니다.');
-  }
-});
+export const backtestRequestSchema = z
+  .object({
+    strategyId: z.string().min(1),
+    parameters: z.record(z.string(), z.unknown()),
+    universeRule: universeRuleSchema,
+    /** 비교 기준. 미지정 옛 요청은 제출 경계에서 KOSPI로 재기준한다. */
+    benchmarkId: benchmarkIdSchema.optional(),
+    /** 소비 봉 주기. KRX 일봉이 유일한 출처라 일봉뿐이다 (설계 2026-08-07-price-data-removal). */
+    timeframe: z.literal("1d").optional(),
+    period: z.object({
+      from: isoDateSchema,
+      to: isoDateSchema,
+    }),
+    capital: z.object({
+      initialCash: z.number().positive(),
+      currency: z.literal("KRW"),
+    }),
+    execution: z.object({
+      fillTiming: z.literal("NEXT_BAR_OPEN"),
+      commissionProfileId: z.string().min(1),
+      slippageProfileId: z.string().min(1),
+    }),
+    /** 엔진 리스크 상한 (§9.2-6) — 전략 파라미터가 아니라 요청의 명시 필드다 */
+    risk: z
+      .object({
+        maxPositions: z.number().int().min(1).max(200).default(40),
+      })
+      .default({ maxPositions: 40 }),
+    randomSeed: z.number().int().min(0).max(MAX_RANDOM_SEED).default(42),
+  })
+  .superRefine((request, ctx) => {
+    const issue = (message: string): void => {
+      ctx.addIssue({ code: "custom", message });
+    };
+    const lastLimit = request.universeRule.stages.at(-1)!.limit;
+    if (
+      request.period.from <= request.period.to &&
+      !rebalanceIntervalFitsPeriod(
+        request.period,
+        request.universeRule.rebalanceInterval,
+      )
+    ) {
+      issue("리밸런싱 주기가 백테스트 전체 기간을 초과합니다.");
+    }
+    if (
+      typeof request.parameters.topN === "number" &&
+      request.parameters.topN > request.risk.maxPositions
+    ) {
+      issue("전략 topN은 동시 보유 상한 이하여야 합니다.");
+    }
+    if (
+      typeof request.parameters.topN === "number" &&
+      request.parameters.topN > lastLimit
+    ) {
+      issue("전략 topN은 최종 유니버스 N 이하여야 합니다.");
+    }
+  });
 
 export type BacktestRequest = z.infer<typeof backtestRequestSchema>;
 

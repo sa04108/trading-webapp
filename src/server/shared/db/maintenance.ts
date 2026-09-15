@@ -1,8 +1,8 @@
-import { lt, or } from 'drizzle-orm';
-import type { AppDatabase } from '../../../runtime/shared/db/database.js';
-import { auditLogs } from '../../../runtime/shared/db/operations-schema.js';
-import { loginAttempts, sessions } from './auth-schema.js';
-import { notifications } from './notification-schema.js';
+import { lt, or } from "drizzle-orm";
+import type { AppDatabase } from "../../../runtime/shared/db/database.js";
+import { auditLogs } from "../../../runtime/shared/db/operations-schema.js";
+import { loginAttempts, sessions } from "./auth-schema.js";
+import { notifications } from "./notification-schema.js";
 
 /** 로그인 시도는 잠금 판정 창(15분)에만 쓰인다 — 하루면 충분하고 감사 기록은 audit_logs 가 담당 */
 const LOGIN_ATTEMPT_RETENTION_MS = 24 * 3_600_000;
@@ -23,7 +23,11 @@ export interface PruneOptions {
  * 무한 증가 방지 정리 (부팅 시 + 주기 실행).
  * 만료 세션(대기 TOTP 포함)·오래된 로그인 시도·보존 기간 지난 감사 로그를 삭제한다.
  */
-export function pruneExpiredRows(db: AppDatabase, nowMs: number, options: PruneOptions): void {
+export function pruneExpiredRows(
+  db: AppDatabase,
+  nowMs: number,
+  options: PruneOptions,
+): void {
   db.delete(sessions)
     .where(
       or(
@@ -42,7 +46,9 @@ export function pruneExpiredRows(db: AppDatabase, nowMs: number, options: PruneO
   }
   if (options.notificationRetentionMs > 0) {
     db.delete(notifications)
-      .where(lt(notifications.createdAtMs, nowMs - options.notificationRetentionMs))
+      .where(
+        lt(notifications.createdAtMs, nowMs - options.notificationRetentionMs),
+      )
       .run();
   }
 }

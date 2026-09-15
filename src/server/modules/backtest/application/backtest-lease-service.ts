@@ -1,18 +1,22 @@
-import { createHash, randomBytes } from 'node:crypto';
-import { EventEmitter } from 'node:events';
-import { AGENT_LEASE_MS, AGENT_MAX_ATTEMPTS, LOCAL_AGENT_ID } from '../../../../shared/agent-protocol.js';
-import type { Clock } from '../../../../runtime/shared/clock.js';
-import type { Logger } from '../../../shared/logger.js';
-import { isPersistenceUnavailableError } from '../../../shared/db/sqlite-errors.js';
-import type { AuditLogService } from '../../../../runtime/modules/audit/audit-service.js';
-import type { BacktestExecutionTelemetry } from '../../../../runtime/modules/backtest/application/backtest-execution-telemetry.js';
-import type { BacktestJobRow, JobQueue } from './job-queue.js';
-import type { JobEvent } from './job-orchestrator.js';
+import { createHash, randomBytes } from "node:crypto";
+import { EventEmitter } from "node:events";
+import {
+  AGENT_LEASE_MS,
+  AGENT_MAX_ATTEMPTS,
+  LOCAL_AGENT_ID,
+} from "../../../../shared/agent-protocol.js";
+import type { Clock } from "../../../../runtime/shared/clock.js";
+import type { Logger } from "../../../shared/logger.js";
+import { isPersistenceUnavailableError } from "../../../shared/db/sqlite-errors.js";
+import type { AuditLogService } from "../../../../runtime/modules/audit/audit-service.js";
+import type { BacktestExecutionTelemetry } from "../../../../runtime/modules/backtest/application/backtest-execution-telemetry.js";
+import type { BacktestJobRow, JobQueue } from "./job-queue.js";
+import type { JobEvent } from "./job-orchestrator.js";
 import {
   BacktestResultImportInternalError,
   BacktestResultPersistenceUnavailableError,
   type BacktestResultCompleter,
-} from '../../../../runtime/modules/backtest/application/backtest-result-artifact.js';
+} from "../../../../runtime/modules/backtest/application/backtest-result-artifact.js";
 
 export interface BacktestJobLease {
   readonly job: BacktestJobRow;
@@ -23,25 +27,30 @@ export interface BacktestJobLease {
 }
 
 export type BacktestClaimResult =
-  | { readonly status: 'CLAIMED'; readonly lease: BacktestJobLease }
-  | { readonly status: 'EMPTY' }
-  | { readonly status: 'VERSION_MISMATCH'; readonly expectedRunnerVersion: string };
+  | { readonly status: "CLAIMED"; readonly lease: BacktestJobLease }
+  | { readonly status: "EMPTY" }
+  | {
+      readonly status: "VERSION_MISMATCH";
+      readonly expectedRunnerVersion: string;
+    };
 
 export type BacktestHeartbeatResult =
-  | { readonly status: 'ACCEPTED'; readonly cancelRequested: boolean; readonly leaseExpiresAtMs: number }
-  | { readonly status: 'STALE_LEASE' };
-export type BacktestResultTransferResult = BacktestHeartbeatResult | { readonly status: 'IDEMPOTENT' };
+  | {
+      readonly status: "ACCEPTED";
+      readonly cancelRequested: boolean;
+      readonly leaseExpiresAtMs: number;
+    }
+  | { readonly status: "STALE_LEASE" };
+export type BacktestResultTransferResult =
+  BacktestHeartbeatResult | { readonly status: "IDEMPOTENT" };
 
-export type BacktestFinishResult = 'ACCEPTED' | 'STALE_LEASE';
+export type BacktestFinishResult = "ACCEPTED" | "STALE_LEASE";
 export type BacktestCompleteResult =
-  | 'ACCEPTED'
-  | 'IDEMPOTENT'
-  | 'IDENTITY_REJECTED'
-  | 'STALE_LEASE';
+  "ACCEPTED" | "IDEMPOTENT" | "IDENTITY_REJECTED" | "STALE_LEASE";
 const ARTIFACT_TRANSFER_LEASE_MS = 15 * 60_000;
 
 function tokenHash(token: string): string {
-  return createHash('sha256').update(token).digest('hex');
+  return createHash("sha256").update(token).digest("hex");
 }
 
 /**
@@ -59,7 +68,8 @@ export class BacktestLeaseService {
     private readonly audit: AuditLogService,
     private readonly logger: Logger,
     private readonly resultCompleter: BacktestResultCompleter,
-    private readonly leaseTokenFactory: () => string = () => randomBytes(32).toString('base64url'),
+    private readonly leaseTokenFactory: () => string = () =>
+      randomBytes(32).toString("base64url"),
   ) {}
 
   start(): void {
@@ -74,9 +84,16 @@ export class BacktestLeaseService {
     this.sweepTimer = null;
   }
 
-  claim(agentId: string, runnerVersion: string, maxBars = Number.MAX_SAFE_INTEGER): BacktestClaimResult {
+  claim(
+    agentId: string,
+    runnerVersion: string,
+    maxBars = Number.MAX_SAFE_INTEGER,
+  ): BacktestClaimResult {
     if (runnerVersion !== this.expectedRunnerVersion) {
-      return { status: 'VERSION_MISMATCH', expectedRunnerVersion: this.expectedRunnerVersion };
+      return {
+        status: "VERSION_MISMATCH",
+        expectedRunnerVersion: this.expectedRunnerVersion,
+      };
     }
     const nowMs = this.clock.now();
     const leaseToken = this.leaseTokenFactory();
@@ -89,18 +106,18 @@ export class BacktestLeaseService {
       maxAttempts: AGENT_MAX_ATTEMPTS,
       maxBars,
     });
-    if (job === null) return { status: 'EMPTY' };
+    if (job === null) return { status: "EMPTY" };
 
-    this.recordAudit('backtest.leased', {
+    this.recordAudit("backtest.leased", {
       jobId: job.id,
       agentId,
       attempt: job.attempt,
       leaseExpiresAtMs,
       runnerVersion,
     });
-    this.emitJob({ jobId: job.id, kind: 'status' });
+    this.emitJob({ jobId: job.id, kind: "status" });
     return {
-      status: 'CLAIMED',
+      status: "CLAIMED",
       lease: {
         job,
         attempt: job.attempt,
@@ -131,14 +148,14 @@ export class BacktestLeaseService {
       totalBars: input.totalBars ?? null,
       progressLabel: input.progressLabel ?? null,
     });
-    if (status === null) return { status: 'STALE_LEASE' };
+    if (status === null) return { status: "STALE_LEASE" };
     this.emitJob({
       jobId: input.jobId,
-      kind: input.processedBars === undefined ? 'status' : 'progress',
+      kind: input.processedBars === undefined ? "status" : "progress",
     });
     return {
-      status: 'ACCEPTED',
-      cancelRequested: status === 'CANCELLING',
+      status: "ACCEPTED",
+      cancelRequested: status === "CANCELLING",
       leaseExpiresAtMs,
     };
   }
@@ -150,7 +167,8 @@ export class BacktestLeaseService {
     readonly leaseToken: string;
   }): BacktestHeartbeatResult {
     const nowMs = this.clock.now();
-    const leaseExpiresAtMs = nowMs + Math.max(this.leaseDurationMs(), ARTIFACT_TRANSFER_LEASE_MS);
+    const leaseExpiresAtMs =
+      nowMs + Math.max(this.leaseDurationMs(), ARTIFACT_TRANSFER_LEASE_MS);
     const status = this.queue.heartbeatLease({
       jobId: input.jobId,
       attempt: input.attempt,
@@ -161,10 +179,10 @@ export class BacktestLeaseService {
       totalBars: null,
       progressLabel: null,
     });
-    if (status === null) return { status: 'STALE_LEASE' };
+    if (status === null) return { status: "STALE_LEASE" };
     return {
-      status: 'ACCEPTED',
-      cancelRequested: status === 'CANCELLING',
+      status: "ACCEPTED",
+      cancelRequested: status === "CANCELLING",
       leaseExpiresAtMs,
     };
   }
@@ -178,10 +196,11 @@ export class BacktestLeaseService {
   }): BacktestResultTransferResult {
     const job = this.queue.getJob(input.jobId);
     if (
-      job?.status === 'COMPLETED'
-      && job.attempt === input.attempt
-      && job.resultChecksum === input.checksum
-    ) return { status: 'IDEMPOTENT' };
+      job?.status === "COMPLETED" &&
+      job.attempt === input.attempt &&
+      job.resultChecksum === input.checksum
+    )
+      return { status: "IDEMPOTENT" };
     return this.reserveArtifactTransfer(input);
   }
 
@@ -189,8 +208,8 @@ export class BacktestLeaseService {
     readonly jobId: string;
     readonly attempt: number;
     readonly leaseToken: string;
-    readonly outcome: 'FAILED' | 'CANCELLED';
-    readonly cancelPath?: 'IPC' | 'SIGTERM' | 'SIGKILL';
+    readonly outcome: "FAILED" | "CANCELLED";
+    readonly cancelPath?: "IPC" | "SIGTERM" | "SIGKILL";
     readonly error?: string;
     readonly telemetry?: BacktestExecutionTelemetry;
   }): BacktestFinishResult {
@@ -204,21 +223,24 @@ export class BacktestLeaseService {
       status: input.outcome,
       ...(input.error === undefined ? {} : { error: input.error }),
     });
-    if (outcome === null) return 'STALE_LEASE';
+    if (outcome === null) return "STALE_LEASE";
 
-    this.recordAudit('backtest.finished', {
+    this.recordAudit("backtest.finished", {
       jobId: input.jobId,
       status: outcome,
       ...(input.cancelPath ? { cancelPath: input.cancelPath } : {}),
-      durationMs: finishedAtMs - (job?.startedAtMs ?? job?.createdAtMs ?? finishedAtMs),
-      executionMode: job?.agentId === LOCAL_AGENT_ID ? 'local' : 'remote',
+      durationMs:
+        finishedAtMs - (job?.startedAtMs ?? job?.createdAtMs ?? finishedAtMs),
+      executionMode: job?.agentId === LOCAL_AGENT_ID ? "local" : "remote",
       attempt: input.attempt,
       // CANCELLING과 worker FAILED 보고가 경합하면 DB의 실제 결과는 CANCELLED다.
       // 그때 FAILED telemetry를 CANCELLED 감사 행에 붙이지 않는다.
-      ...(input.telemetry?.outcome === outcome ? { executionTelemetry: input.telemetry } : {}),
+      ...(input.telemetry?.outcome === outcome
+        ? { executionTelemetry: input.telemetry }
+        : {}),
     });
-    this.emitJob({ jobId: input.jobId, kind: 'status' });
-    return 'ACCEPTED';
+    this.emitJob({ jobId: input.jobId, kind: "status" });
+    return "ACCEPTED";
   }
 
   async complete(input: {
@@ -235,12 +257,12 @@ export class BacktestLeaseService {
     } catch (error) {
       if (isPersistenceUnavailableError(error)) {
         throw new BacktestResultPersistenceUnavailableError(
-          '결과 저장 직전 중앙 작업 정보를 일시적으로 읽을 수 없습니다.',
+          "결과 저장 직전 중앙 작업 정보를 일시적으로 읽을 수 없습니다.",
           { cause: error },
         );
       }
       throw new BacktestResultImportInternalError(
-        '결과 저장 직전 중앙 작업 정보를 읽는 데 실패했습니다.',
+        "결과 저장 직전 중앙 작업 정보를 읽는 데 실패했습니다.",
         { cause: error },
       );
     }
@@ -252,38 +274,42 @@ export class BacktestLeaseService {
       checksum: input.checksum,
       expectedRunnerVersion: this.expectedRunnerVersion,
     });
-    if (completed.status === 'IDENTITY_REJECTED') {
-      this.recordAudit('backtest.finished', {
+    if (completed.status === "IDENTITY_REJECTED") {
+      this.recordAudit("backtest.finished", {
         jobId: input.jobId,
-        status: 'FAILED',
-        durationMs: completed.completedAtMs
-          - (job?.startedAtMs ?? job?.createdAtMs ?? completed.completedAtMs),
-        executionMode: job?.agentId === LOCAL_AGENT_ID ? 'local' : 'remote',
+        status: "FAILED",
+        durationMs:
+          completed.completedAtMs -
+          (job?.startedAtMs ?? job?.createdAtMs ?? completed.completedAtMs),
+        executionMode: job?.agentId === LOCAL_AGENT_ID ? "local" : "remote",
         attempt: input.attempt,
       });
-      this.emitJob({ jobId: input.jobId, kind: 'status' });
-      return 'IDENTITY_REJECTED';
+      this.emitJob({ jobId: input.jobId, kind: "status" });
+      return "IDENTITY_REJECTED";
     }
-    if (completed.status !== 'ACCEPTED') return completed.status;
+    if (completed.status !== "ACCEPTED") return completed.status;
 
-    this.recordAudit('backtest.finished', {
+    this.recordAudit("backtest.finished", {
       jobId: input.jobId,
-      status: 'COMPLETED',
-      durationMs: completed.completedAtMs
-        - (job?.startedAtMs ?? job?.createdAtMs ?? completed.completedAtMs),
-      executionMode: job?.agentId === LOCAL_AGENT_ID ? 'local' : 'remote',
+      status: "COMPLETED",
+      durationMs:
+        completed.completedAtMs -
+        (job?.startedAtMs ?? job?.createdAtMs ?? completed.completedAtMs),
+      executionMode: job?.agentId === LOCAL_AGENT_ID ? "local" : "remote",
       attempt: input.attempt,
       resultSchemaVersion: completed.schemaVersion,
       resultChecksum: input.checksum,
       resultRowCount: completed.rowCount,
-      ...(input.telemetry === undefined ? {} : { executionTelemetry: input.telemetry }),
+      ...(input.telemetry === undefined
+        ? {}
+        : { executionTelemetry: input.telemetry }),
     });
-    this.emitJob({ jobId: input.jobId, kind: 'status' });
-    return 'ACCEPTED';
+    this.emitJob({ jobId: input.jobId, kind: "status" });
+    return "ACCEPTED";
   }
 
   sweepExpiredLeases(): void {
-    let recovered: ReturnType<JobQueue['recoverExpiredLeases']>;
+    let recovered: ReturnType<JobQueue["recoverExpiredLeases"]>;
     try {
       recovered = this.queue.recoverExpiredLeases(AGENT_MAX_ATTEMPTS);
     } catch (error) {
@@ -291,48 +317,62 @@ export class BacktestLeaseService {
       // busy_timeout을 넘길 수 있다. 주기 timer의 예외를 밖으로 던지면 Node의
       // uncaughtException이 되어 웹/control plane 전체가 종료되므로 다음 sweep에서 재시도한다.
       this.logger.warn(
-        { module: 'backtest', event: 'backtest.lease-sweep-failed', err: error },
-        '백테스트 임대 회수 실패 — 다음 주기에 재시도합니다',
+        {
+          module: "backtest",
+          event: "backtest.lease-sweep-failed",
+          err: error,
+        },
+        "백테스트 임대 회수 실패 — 다음 주기에 재시도합니다",
       );
       return;
     }
     for (const item of recovered) {
       this.logger.warn(
         {
-          module: 'backtest',
-          event: 'backtest.lease-expired',
+          module: "backtest",
+          event: "backtest.lease-expired",
           jobId: item.jobId,
           attempt: item.attempt,
           status: item.status,
         },
-        '백테스트 임대 만료',
+        "백테스트 임대 만료",
       );
-      this.recordAudit('backtest.lease-expired', { ...item });
-      this.emitJob({ jobId: item.jobId, kind: 'status' });
+      this.recordAudit("backtest.lease-expired", { ...item });
+      this.emitJob({ jobId: item.jobId, kind: "status" });
     }
   }
 
   private recordAudit(event: string, detail: Record<string, unknown>): void {
     try {
-      this.audit.record('system', event, detail);
+      this.audit.record("system", event, detail);
     } catch (error) {
       // lease/status는 이미 중앙 DB에 확정됐다. 부가 감사 기록 실패 때문에 에이전트에 5xx를
       // 돌려 같은 계산을 재시도시키지 않고 구조화 로그를 남긴다.
       this.logger.warn(
-        { module: 'backtest', event: 'backtest.audit-failed', auditEvent: event, err: error },
-        '백테스트 감사 기록 실패',
+        {
+          module: "backtest",
+          event: "backtest.audit-failed",
+          auditEvent: event,
+          err: error,
+        },
+        "백테스트 감사 기록 실패",
       );
     }
   }
 
   private emitJob(event: JobEvent): void {
     try {
-      this.events.emit('job', event);
+      this.events.emit("job", event);
     } catch (error) {
       // 알림·seed batch 승격 같은 후속 listener가 핵심 lease 응답을 실패로 바꾸지 않게 한다.
       this.logger.warn(
-        { module: 'backtest', event: 'backtest.listener-failed', jobId: event.jobId, err: error },
-        '백테스트 이벤트 리스너 실패',
+        {
+          module: "backtest",
+          event: "backtest.listener-failed",
+          jobId: event.jobId,
+          err: error,
+        },
+        "백테스트 이벤트 리스너 실패",
       );
     }
   }

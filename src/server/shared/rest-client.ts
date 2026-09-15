@@ -1,4 +1,4 @@
-import type { Logger } from './logger.js';
+import type { Logger } from "./logger.js";
 
 /**
  * 공통 REST 클라이언트 (스펙 §13):
@@ -9,7 +9,9 @@ import type { Logger } from './logger.js';
  * 증권사 어댑터와 DART 어댑터가 공유한다 — 그래서 modules/broker 가 아니라 shared 에 있다.
  */
 export interface TokenProvider {
-  issueToken(fetchImpl: typeof fetch): Promise<{ accessToken: string; expiresAtMs: number }>;
+  issueToken(
+    fetchImpl: typeof fetch,
+  ): Promise<{ accessToken: string; expiresAtMs: number }>;
 }
 
 export interface RestClientOptions {
@@ -51,7 +53,9 @@ export class RestClient {
 
   constructor(private readonly options: RestClientOptions) {
     this.fetchImpl = options.fetchImpl ?? fetch;
-    this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.sleep =
+      options.sleep ??
+      ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.random = options.random ?? Math.random;
     this.clock = options.clock ?? (() => Date.now());
     this.maxRetries = options.maxRetries ?? 4;
@@ -61,7 +65,10 @@ export class RestClient {
     const provider = this.options.tokenProvider;
     if (!provider) return null;
     const now = this.clock();
-    if (!this.token || this.token.expiresAtMs - TOKEN_REFRESH_MARGIN_MS <= now) {
+    if (
+      !this.token ||
+      this.token.expiresAtMs - TOKEN_REFRESH_MARGIN_MS <= now
+    ) {
       this.token = await provider.issueToken(this.fetchImpl);
     }
     return this.token.accessToken;
@@ -70,7 +77,7 @@ export class RestClient {
   private async respectRateLimit(group: string): Promise<void> {
     const minInterval =
       this.options.groupMinIntervalMs?.[group] ??
-      this.options.groupMinIntervalMs?.['default'] ??
+      this.options.groupMinIntervalMs?.["default"] ??
       DEFAULT_MIN_INTERVAL_MS;
     const lastCallAt = this.lastCallAtByGroup.get(group) ?? 0;
     const waitMs = lastCallAt + minInterval - this.clock();
@@ -81,7 +88,11 @@ export class RestClient {
   async request<T>(
     group: string,
     path: string,
-    init: { method?: string; body?: unknown; headers?: Record<string, string> } = {},
+    init: {
+      method?: string;
+      body?: unknown;
+      headers?: Record<string, string>;
+    } = {},
     hooks: RestRequestHooks = {},
   ): Promise<T> {
     let attempt = 0;
@@ -92,10 +103,12 @@ export class RestClient {
       hooks.beforeAttempt?.();
 
       const response = await this.fetchImpl(`${this.options.baseUrl}${path}`, {
-        method: init.method ?? 'GET',
+        method: init.method ?? "GET",
         headers: {
           ...(token !== null ? { authorization: `Bearer ${token}` } : {}),
-          ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
+          ...(init.body !== undefined
+            ? { "content-type": "application/json" }
+            : {}),
           ...init.headers,
         },
         ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
@@ -107,7 +120,11 @@ export class RestClient {
 
       // 토큰 인증일 때만 401 재발급을 시도한다 — 쿼리 키 방식에서 401 은 키가
       // 틀린 것이므로 재시도가 의미 없다
-      if (response.status === 401 && attempt === 0 && this.options.tokenProvider) {
+      if (
+        response.status === 401 &&
+        attempt === 0 &&
+        this.options.tokenProvider
+      ) {
         this.token = null;
         attempt += 1;
         continue;
@@ -115,19 +132,29 @@ export class RestClient {
 
       const retryable = response.status === 429 || response.status >= 500;
       if (!retryable || attempt >= this.maxRetries) {
-        const body = await response.text().catch(() => '');
-        throw new Error(`REST 요청 실패: ${response.status} ${body.slice(0, 200)}`);
+        const body = await response.text().catch(() => "");
+        throw new Error(
+          `REST 요청 실패: ${response.status} ${body.slice(0, 200)}`,
+        );
       }
 
-      const retryAfterHeader = response.headers.get('retry-after');
-      const retryAfterMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 : Number.NaN;
+      const retryAfterHeader = response.headers.get("retry-after");
+      const retryAfterMs = retryAfterHeader
+        ? Number(retryAfterHeader) * 1000
+        : Number.NaN;
       const backoffMs = Number.isFinite(retryAfterMs)
         ? retryAfterMs
         : Math.min(30_000, 500 * 2 ** attempt) * (0.5 + this.random() / 2);
 
       this.options.logger.warn(
-        { module: 'rest-client', event: 'rest.retry', status: response.status, attempt, backoffMs },
-        'retrying REST request',
+        {
+          module: "rest-client",
+          event: "rest.retry",
+          status: response.status,
+          attempt,
+          backoffMs,
+        },
+        "retrying REST request",
       );
       await this.sleep(backoffMs);
       attempt += 1;

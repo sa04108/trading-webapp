@@ -1,8 +1,15 @@
-import type { z } from 'zod';
-import type { Candle } from '../../market-data/domain/candle.js';
-import type { OrderIntent, Position, SelectionMetricPin } from '../../backtest/domain/types.js';
-import type { Rng } from '../../backtest/domain/seeded-rng.js';
-import type { CorporateAction, FundamentalSnapshot } from '../../facts/domain/fact.js';
+import type { z } from "zod";
+import type { Candle } from "../../market-data/domain/candle.js";
+import type {
+  OrderIntent,
+  Position,
+  SelectionMetricPin,
+} from "../../backtest/domain/types.js";
+import type { Rng } from "../../backtest/domain/seeded-rng.js";
+import type {
+  CorporateAction,
+  FundamentalSnapshot,
+} from "../../facts/domain/fact.js";
 
 /** 전략이 보는 포트폴리오 스냅샷 (읽기 전용) */
 export interface PortfolioView {
@@ -99,13 +106,20 @@ export interface TradingStrategy<TParameters, TState> {
 
   initialize(context: StrategyInitializeContext): TState;
 
-  onBars(context: StrategyBarContext, state: TState, parameters: TParameters): StrategyDecision;
+  onBars(
+    context: StrategyBarContext,
+    state: TState,
+    parameters: TParameters,
+  ): StrategyDecision;
 
   /**
    * 모든 봉 처리가 끝난 뒤 결과에 덧붙일 전략별 진단 경고다.
    * 주문이 한 건도 없었던 이유처럼 봉 처리 중에는 확정할 수 없는 상태를 설명한다.
    */
-  completionWarnings?(state: TState, parameters: TParameters): readonly string[];
+  completionWarnings?(
+    state: TState,
+    parameters: TParameters,
+  ): readonly string[];
 
   /**
    * 보유 종목에 자본변동이 걸린 시점에 엔진이 부르는 선택 훅이다.
@@ -136,11 +150,13 @@ export interface TradingStrategy<TParameters, TState> {
 export function strategyRequiresFinancialData<TParameters, TState>(
   strategy: Pick<
     TradingStrategy<TParameters, TState>,
-    'requiresFundamentals' | 'dataRequirements'
+    "requiresFundamentals" | "dataRequirements"
   >,
 ): boolean {
-  return strategy.requiresFundamentals === true
-    || (strategy.dataRequirements?.fundamentalLookbackQuarters ?? 0) > 0;
+  return (
+    strategy.requiresFundamentals === true ||
+    (strategy.dataRequirements?.fundamentalLookbackQuarters ?? 0) > 0
+  );
 }
 
 /**

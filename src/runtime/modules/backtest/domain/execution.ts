@@ -1,5 +1,5 @@
-import type { ExecutionProfile, Fill, OrderIntent } from './types.js';
-import { sellTaxAmount, tickSizeAt } from './cost-profiles.js';
+import type { ExecutionProfile, Fill, OrderIntent } from "./types.js";
+import { sellTaxAmount, tickSizeAt } from "./cost-profiles.js";
 
 /**
  * 다음 봉 시가 체결 (스펙 §9.1):
@@ -11,26 +11,38 @@ export function simulateFill(
   nextBarOpen: number,
   tsMs: number,
   profile: ExecutionProfile,
-  venue?: 'KOSPI' | 'KOSDAQ',
+  venue?: "KOSPI" | "KOSDAQ",
 ): Fill {
   const { cost, slippage, rules } = profile;
   const slip = nextBarOpen * (slippage.bps / 10_000) + slippage.fixed;
-  const slippedPrice = intent.side === 'BUY' ? nextBarOpen + slip : nextBarOpen - slip;
+  const slippedPrice =
+    intent.side === "BUY" ? nextBarOpen + slip : nextBarOpen - slip;
   const tickSize = tickSizeAt(rules, slippedPrice, tsMs, venue);
 
   let price: number;
-  if (intent.side === 'BUY') {
-    price = roundToTick(slippedPrice, tickSize, 'up');
+  if (intent.side === "BUY") {
+    price = roundToTick(slippedPrice, tickSize, "up");
   } else {
-    price = roundToTick(Math.max(slippedPrice, tickSize || 0.0001), tickSize, 'down');
+    price = roundToTick(
+      Math.max(slippedPrice, tickSize || 0.0001),
+      tickSize,
+      "down",
+    );
   }
 
   const grossAmount = price * intent.quantity;
   const commission =
-    grossAmount * (intent.side === 'BUY' ? cost.buyCommissionRate : cost.sellCommissionRate);
-  const tax = intent.side === 'SELL'
-    ? sellTaxAmount(cost, grossAmount, tsMs, venue ?? rules.tickSizeProfile?.market)
-    : 0;
+    grossAmount *
+    (intent.side === "BUY" ? cost.buyCommissionRate : cost.sellCommissionRate);
+  const tax =
+    intent.side === "SELL"
+      ? sellTaxAmount(
+          cost,
+          grossAmount,
+          tsMs,
+          venue ?? rules.tickSizeProfile?.market,
+        )
+      : 0;
   const slippageCost = Math.abs(price - nextBarOpen) * intent.quantity;
 
   return {
@@ -57,9 +69,14 @@ export function proceedsFromSell(fill: Fill): number {
   return fill.grossAmount - fill.commission - fill.tax;
 }
 
-export function roundToTick(price: number, tickSize: number, direction: 'up' | 'down'): number {
+export function roundToTick(
+  price: number,
+  tickSize: number,
+  direction: "up" | "down",
+): number {
   if (tickSize <= 0) return price;
   const ticks = price / tickSize;
-  const rounded = direction === 'up' ? Math.ceil(ticks - 1e-9) : Math.floor(ticks + 1e-9);
+  const rounded =
+    direction === "up" ? Math.ceil(ticks - 1e-9) : Math.floor(ticks + 1e-9);
   return rounded * tickSize;
 }

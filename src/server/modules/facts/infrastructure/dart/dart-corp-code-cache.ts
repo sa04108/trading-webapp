@@ -1,4 +1,4 @@
-import { inflateRawSync } from 'node:zlib';
+import { inflateRawSync } from "node:zlib";
 
 export interface CorpCodeResolver {
   /** 종목코드 → DART corp_code. 매핑에 없으면 null */
@@ -20,10 +20,13 @@ const METHOD_DEFLATE = 8;
  * CRC32 는 검증하지 않는다 — inflate 가 깨진 데이터에서 이미 던진다.
  */
 export function extractSingleFileFromZip(zip: Buffer): Buffer {
-  if (zip.length < FIXED_HEADER_BYTES || zip.readUInt32LE(0) !== LOCAL_FILE_HEADER_SIGNATURE) {
+  if (
+    zip.length < FIXED_HEADER_BYTES ||
+    zip.readUInt32LE(0) !== LOCAL_FILE_HEADER_SIGNATURE
+  ) {
     // DART 는 인증 실패 시 ZIP 대신 XML 에러 본문을 준다 — 여기서 명확히 실패시킨다
     throw new Error(
-      'ZIP 형식이 아닙니다. DART 가 오류 응답을 보냈을 수 있습니다 (API 키를 확인하세요).',
+      "ZIP 형식이 아닙니다. DART 가 오류 응답을 보냈을 수 있습니다 (API 키를 확인하세요).",
     );
   }
 
@@ -62,10 +65,14 @@ function tagValue(block: string, tag: string): string | null {
 export function parseCorpCodeXml(xml: string): Map<string, string> {
   const map = new Map<string, string>();
   LIST_PATTERN.lastIndex = 0;
-  for (let match = LIST_PATTERN.exec(xml); match !== null; match = LIST_PATTERN.exec(xml)) {
+  for (
+    let match = LIST_PATTERN.exec(xml);
+    match !== null;
+    match = LIST_PATTERN.exec(xml)
+  ) {
     const block = match[1] as string;
-    const stockCode = tagValue(block, 'stock_code');
-    const corpCode = tagValue(block, 'corp_code');
+    const stockCode = tagValue(block, "stock_code");
+    const corpCode = tagValue(block, "corp_code");
     if (!stockCode || !corpCode) continue;
     map.set(stockCode, corpCode);
   }
@@ -89,7 +96,9 @@ export function createDartCorpCodeCache(
     pending = (async () => {
       // 캐시 miss에서만 실제 다운로드가 생긴다. quota도 이 경계에서 한 번만 차감한다.
       beforeRequest?.();
-      return parseCorpCodeXml(extractSingleFileFromZip(await fetchXmlZip()).toString('utf8'));
+      return parseCorpCodeXml(
+        extractSingleFileFromZip(await fetchXmlZip()).toString("utf8"),
+      );
     })().catch((error: unknown) => {
       pending = null; // 실패는 캐시하지 않는다
       throw error;
@@ -98,7 +107,10 @@ export function createDartCorpCodeCache(
   };
 
   return {
-    async resolve(symbol: string, beforeRequest?: () => void): Promise<string | null> {
+    async resolve(
+      symbol: string,
+      beforeRequest?: () => void,
+    ): Promise<string | null> {
       return (await load(beforeRequest)).get(symbol) ?? null;
     },
   };

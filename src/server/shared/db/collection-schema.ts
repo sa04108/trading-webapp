@@ -1,5 +1,12 @@
-import { sql } from 'drizzle-orm';
-import { check, index, integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { sql } from "drizzle-orm";
+import {
+  check,
+  index,
+  integer,
+  primaryKey,
+  sqliteTable,
+  text,
+} from "drizzle-orm/sqlite-core";
 
 /**
  * 외부 API 일일 호출 원장.
@@ -9,19 +16,19 @@ import { check, index, integer, primaryKey, sqliteTable, text } from 'drizzle-or
  * (`daily`), KRX는 엔드포인트별 경로를 쓴다.
  */
 export const externalApiDailyUsage = sqliteTable(
-  'external_api_daily_usage',
+  "external_api_daily_usage",
   {
-    api: text('api').notNull(),
-    quotaScope: text('quota_scope').notNull(),
-    usageDateKst: text('usage_date_kst').notNull(),
-    callsUsed: integer('calls_used').notNull().default(0),
+    api: text("api").notNull(),
+    quotaScope: text("quota_scope").notNull(),
+    usageDateKst: text("usage_date_kst").notNull(),
+    callsUsed: integer("calls_used").notNull().default(0),
     /** 공급자 응답 또는 로컬 예산 판정으로 그날 한도 소진을 확인한 최초 시각 */
-    quotaExceededAtMs: integer('quota_exceeded_at_ms'),
-    updatedAtMs: integer('updated_at_ms').notNull(),
+    quotaExceededAtMs: integer("quota_exceeded_at_ms"),
+    updatedAtMs: integer("updated_at_ms").notNull(),
   },
   (table) => [
     primaryKey({ columns: [table.api, table.quotaScope, table.usageDateKst] }),
-    index('idx_external_api_daily_usage_date').on(table.usageDateKst),
+    index("idx_external_api_daily_usage_date").on(table.usageDateKst),
   ],
 );
 
@@ -34,18 +41,17 @@ export const externalApiDailyUsage = sqliteTable(
  * 아니므로 저장하지 않는다.
  */
 export const dartRawApiSnapshots = sqliteTable(
-  'dart_raw_api_snapshots',
+  "dart_raw_api_snapshots",
   {
-    code: text('code')
-      .notNull(),
-    endpoint: text('endpoint').notNull(),
-    businessYear: integer('business_year').notNull(),
-    reportCode: text('report_code').notNull(),
+    code: text("code").notNull(),
+    endpoint: text("endpoint").notNull(),
+    businessYear: integer("business_year").notNull(),
+    reportCode: text("report_code").notNull(),
     /** 재무제표만 CFS/OFS, 나머지 엔드포인트는 NONE */
-    fsDiv: text('fs_div').notNull(),
-    payloadJson: text('payload_json').notNull(),
-    contentHash: text('content_hash').notNull(),
-    fetchedAtMs: integer('fetched_at_ms').notNull(),
+    fsDiv: text("fs_div").notNull(),
+    payloadJson: text("payload_json").notNull(),
+    contentHash: text("content_hash").notNull(),
+    fetchedAtMs: integer("fetched_at_ms").notNull(),
   },
   (table) => [
     primaryKey({
@@ -57,17 +63,17 @@ export const dartRawApiSnapshots = sqliteTable(
         table.fsDiv,
       ],
     }),
-    index('idx_dart_raw_api_snapshots_fetched_at').on(table.fetchedAtMs),
+    index("idx_dart_raw_api_snapshots_fetched_at").on(table.fetchedAtMs),
     check(
-      'chk_dart_raw_api_snapshots_endpoint',
+      "chk_dart_raw_api_snapshots_endpoint",
       sql`${table.endpoint} IN ('FINANCIAL_STATEMENT', 'SHARE_STATUS', 'ISSUANCE_STATUS')`,
     ),
     check(
-      'chk_dart_raw_api_snapshots_report_code',
+      "chk_dart_raw_api_snapshots_report_code",
       sql`${table.reportCode} IN ('11013', '11012', '11014', '11011')`,
     ),
     check(
-      'chk_dart_raw_api_snapshots_fs_div',
+      "chk_dart_raw_api_snapshots_fs_div",
       sql`${table.fsDiv} IN ('CFS', 'OFS', 'NONE')`,
     ),
   ],

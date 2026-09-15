@@ -1,4 +1,4 @@
-import type { SymbolMasterEntry } from './symbol-master.js';
+import type { SymbolMasterEntry } from "./symbol-master.js";
 
 /** SCD Type 2 반개구간 [validFromDate, validToDate). null 종료일은 +∞ 다. */
 export interface SymbolMasterVersionSegment {
@@ -9,13 +9,13 @@ export interface SymbolMasterVersionSegment {
 }
 
 const ENTRY_FIELDS = [
-  'standardCode',
-  'shortCode',
-  'name',
-  'market',
-  'sharesOutstanding',
-  'instrumentType',
-  'listedDate',
+  "standardCode",
+  "shortCode",
+  "name",
+  "market",
+  "sharesOutstanding",
+  "instrumentType",
+  "listedDate",
 ] as const satisfies ReadonlyArray<keyof SymbolMasterEntry>;
 
 /** 저장하는 종목 상태 전체가 같은지 비교한다. */
@@ -27,11 +27,17 @@ export function sameSymbolMasterEntry(
   return ENTRY_FIELDS.every((field) => left[field] === right[field]);
 }
 
-function endsBeforeOrAt(segment: SymbolMasterVersionSegment, date: string): boolean {
+function endsBeforeOrAt(
+  segment: SymbolMasterVersionSegment,
+  date: string,
+): boolean {
   return segment.validToDate !== null && segment.validToDate <= date;
 }
 
-function startsAfterOrAt(segment: SymbolMasterVersionSegment, date: string | null): boolean {
+function startsAfterOrAt(
+  segment: SymbolMasterVersionSegment,
+  date: string | null,
+): boolean {
   return date !== null && segment.validFromDate >= date;
 }
 
@@ -39,19 +45,28 @@ function normalizeTimeline(
   segments: readonly SymbolMasterVersionSegment[],
 ): SymbolMasterVersionSegment[] {
   const sorted = [...segments]
-    .filter((segment) => segment.validToDate === null || segment.validFromDate < segment.validToDate)
+    .filter(
+      (segment) =>
+        segment.validToDate === null ||
+        segment.validFromDate < segment.validToDate,
+    )
     .sort((a, b) => a.validFromDate.localeCompare(b.validFromDate));
   const normalized: SymbolMasterVersionSegment[] = [];
 
   for (const segment of sorted) {
     const previous = normalized.at(-1);
     if (previous !== undefined) {
-      if (previous.validToDate === null || previous.validToDate > segment.validFromDate) {
-        throw new Error(`종목 버전 구간이 겹친다: ${segment.entry.standardCode}`);
+      if (
+        previous.validToDate === null ||
+        previous.validToDate > segment.validFromDate
+      ) {
+        throw new Error(
+          `종목 버전 구간이 겹친다: ${segment.entry.standardCode}`,
+        );
       }
       if (
-        previous.validToDate === segment.validFromDate
-        && sameSymbolMasterEntry(previous.entry, segment.entry)
+        previous.validToDate === segment.validFromDate &&
+        sameSymbolMasterEntry(previous.entry, segment.entry)
       ) {
         normalized[normalized.length - 1] = {
           ...previous,
@@ -94,8 +109,8 @@ export function overlayVersionTimeline(
       pieces.push({ ...segment, validToDate: fromDate });
     }
     if (
-      toDate !== null
-      && (segment.validToDate === null || segment.validToDate > toDate)
+      toDate !== null &&
+      (segment.validToDate === null || segment.validToDate > toDate)
     ) {
       pieces.push({ ...segment, validFromDate: toDate });
     }

@@ -1,8 +1,8 @@
-export type NotificationSeverity = 'info' | 'error';
+export type NotificationSeverity = "info" | "error";
 
 export interface NotificationItem {
   id: string;
-  type: 'backtest' | 'data-sync';
+  type: "backtest" | "data-sync";
   severity: NotificationSeverity;
   title: string;
   body: string | null;

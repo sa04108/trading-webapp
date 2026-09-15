@@ -2,7 +2,7 @@
 const KST_OFFSET_MS = 540 * 60 * 1000;
 const DAY_MS = 86_400_000;
 
-export const KRX_DATA_EPOCH = '2010-01-04';
+export const KRX_DATA_EPOCH = "2010-01-04";
 
 export function kstDateOf(tsMs: number): string {
   return new Date(tsMs + KST_OFFSET_MS).toISOString().slice(0, 10);
@@ -13,7 +13,9 @@ export function kstHourOf(tsMs: number): number {
 }
 
 export function addCalendarDays(isoDate: string, days: number): string {
-  return new Date(Date.parse(`${isoDate}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
+  return new Date(Date.parse(`${isoDate}T00:00:00Z`) + days * DAY_MS)
+    .toISOString()
+    .slice(0, 10);
 }
 
 /** ISO 달력일이 토·일요일인지 본다. KRX 거래일 후보를 거를 때 사용한다. */
@@ -23,7 +25,7 @@ export function isWeekendDate(isoDate: string): boolean {
 }
 
 export function isoToBasDd(isoDate: string): string {
-  return isoDate.replaceAll('-', '');
+  return isoDate.replaceAll("-", "");
 }
 
 export function basDdToIso(basDd: string): string {

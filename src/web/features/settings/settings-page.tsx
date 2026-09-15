@@ -1,17 +1,17 @@
-import { AgentSettings } from './agent-settings';
-import { useQuery } from '@tanstack/react-query';
-import { useTheme } from 'next-themes';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Label } from '@/components/ui/label';
+import { AgentSettings } from "./agent-settings";
+import { useQuery } from "@tanstack/react-query";
+import { useTheme } from "next-themes";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select';
-import { Separator } from '@/components/ui/separator';
-import { api } from '@/lib/api-client';
+} from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
+import { api } from "@/lib/api-client";
 
 interface SystemInfo {
   name: string;
@@ -26,7 +26,7 @@ interface SystemInfo {
 }
 
 function formatBytes(bytes: number | null): string {
-  if (bytes === null) return '-';
+  if (bytes === null) return "-";
   if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
   if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
   return `${(bytes / 1024).toFixed(1)} KB`;
@@ -41,8 +41,8 @@ function formatUptime(seconds: number): string {
 export function SettingsPage() {
   const { theme, setTheme } = useTheme();
   const { data: info } = useQuery({
-    queryKey: ['system', 'info'],
-    queryFn: () => api<SystemInfo>('/system/info'),
+    queryKey: ["system", "info"],
+    queryFn: () => api<SystemInfo>("/system/info"),
     refetchInterval: 30_000,
   });
 

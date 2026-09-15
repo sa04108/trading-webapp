@@ -5,7 +5,7 @@
  * 표시가 빠진 것과 구분되지 않는다. 봉 지표만으로 매매하려는 사용자에게는 "이 전략은
  * 재무를 안 본다" 가 "이 전략은 재무를 본다" 와 같은 무게의 정보다.
  */
-export type StrategyDataRequirement = 'FUNDAMENTALS' | 'BARS_ONLY';
+export type StrategyDataRequirement = "FUNDAMENTALS" | "BARS_ONLY";
 
 /**
  * 필드가 없으면 null — 배지를 아예 안 그린다. `undefined` 를 false 로 뭉개면 재무
@@ -16,12 +16,12 @@ export function strategyDataRequirement(
   requiresFundamentals: boolean | undefined,
 ): StrategyDataRequirement | null {
   if (requiresFundamentals === undefined) return null;
-  return requiresFundamentals ? 'FUNDAMENTALS' : 'BARS_ONLY';
+  return requiresFundamentals ? "FUNDAMENTALS" : "BARS_ONLY";
 }
 
 export const STRATEGY_DATA_LABELS: Record<StrategyDataRequirement, string> = {
-  FUNDAMENTALS: '재무 필요',
-  BARS_ONLY: '봉 데이터만',
+  FUNDAMENTALS: "재무 필요",
+  BARS_ONLY: "봉 데이터만",
 };
 
 /**
@@ -33,6 +33,7 @@ export const STRATEGY_DATA_LABELS: Record<StrategyDataRequirement, string> = {
 // 카드를 옮겨 다닐 때 뒷절만 읽고도 차이가 잡힌다
 export const STRATEGY_DATA_DETAILS: Record<StrategyDataRequirement, string> = {
   FUNDAMENTALS:
-    '시세 봉과 함께 재무제표가 신호에 개입합니다 — 재무를 수집한 데이터셋에서만 실행됩니다.',
-  BARS_ONLY: '시세 봉(OHLCV)만 사용합니다 — 재무제표는 신호에 개입하지 않습니다.',
+    "시세 봉과 함께 재무제표가 신호에 개입합니다 — 재무를 수집한 데이터셋에서만 실행됩니다.",
+  BARS_ONLY:
+    "시세 봉(OHLCV)만 사용합니다 — 재무제표는 신호에 개입하지 않습니다.",
 };

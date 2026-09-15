@@ -34,18 +34,24 @@ export function computeRebalanceActivations(
   let scheduleIndex = 0;
   let activatedScheduleIndex = -1;
 
-  for (let timelineIndex = 0; timelineIndex < sortedTimeline.length; timelineIndex += 1) {
+  for (
+    let timelineIndex = 0;
+    timelineIndex < sortedTimeline.length;
+    timelineIndex += 1
+  ) {
     const tsMs = sortedTimeline[timelineIndex] as number;
     while (
-      scheduleIndex + 1 < sortedSchedule.length
-      && (sortedSchedule[scheduleIndex + 1] as { fromTsMs: number }).fromTsMs <= tsMs
+      scheduleIndex + 1 < sortedSchedule.length &&
+      (sortedSchedule[scheduleIndex + 1] as { fromTsMs: number }).fromTsMs <=
+        tsMs
     ) {
       scheduleIndex += 1;
     }
 
     if (tradeFromTsMs !== undefined && tsMs < tradeFromTsMs) continue;
     if (activatedScheduleIndex === scheduleIndex) continue;
-    if ((sortedSchedule[scheduleIndex] as { fromTsMs: number }).fromTsMs > tsMs) continue;
+    if ((sortedSchedule[scheduleIndex] as { fromTsMs: number }).fromTsMs > tsMs)
+      continue;
 
     activations.push({ tsMs, timelineIndex, scheduleIndex });
     activatedScheduleIndex = scheduleIndex;
@@ -62,7 +68,11 @@ export function findRebalanceSpacingViolation(
   tradeFromTsMs?: number,
 ): RebalanceSpacingViolation | null {
   if (requiredGapBars <= 0) return null;
-  const activations = computeRebalanceActivations(timeline, schedule, tradeFromTsMs);
+  const activations = computeRebalanceActivations(
+    timeline,
+    schedule,
+    tradeFromTsMs,
+  );
   for (let index = 1; index < activations.length; index += 1) {
     const previous = activations[index - 1] as RebalanceActivation;
     const current = activations[index] as RebalanceActivation;
@@ -77,11 +87,15 @@ export function rebalanceSpacingViolationMessage(
   requiredGapBars: number,
   violation: RebalanceSpacingViolation,
 ): string {
-  const previousDate = new Date(violation.previous.tsMs).toISOString().slice(0, 10);
-  const currentDate = new Date(violation.current.tsMs).toISOString().slice(0, 10);
+  const previousDate = new Date(violation.previous.tsMs)
+    .toISOString()
+    .slice(0, 10);
+  const currentDate = new Date(violation.current.tsMs)
+    .toISOString()
+    .slice(0, 10);
   return (
-    `${strategyName} 전략은 매도 다음 실제 거래 봉을 매수 단계로 사용하므로 연속 리밸런스를 처리할 수 없습니다. `
-    + `${previousDate}와 ${currentDate} 활성화 사이의 비리밸런스 거래 봉은 `
-    + `${violation.gapBars}개입니다(최소 ${requiredGapBars}개 필요). 리밸런싱 주기를 늘리세요.`
+    `${strategyName} 전략은 매도 다음 실제 거래 봉을 매수 단계로 사용하므로 연속 리밸런스를 처리할 수 없습니다. ` +
+    `${previousDate}와 ${currentDate} 활성화 사이의 비리밸런스 거래 봉은 ` +
+    `${violation.gapBars}개입니다(최소 ${requiredGapBars}개 필요). 리밸런싱 주기를 늘리세요.`
   );
 }

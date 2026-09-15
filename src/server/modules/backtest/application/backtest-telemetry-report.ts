@@ -2,7 +2,7 @@ import {
   backtestExecutionTelemetrySchema,
   type BacktestExecutionStage,
   type BacktestExecutionTelemetry,
-} from '../../../../runtime/modules/backtest/application/backtest-execution-telemetry.js';
+} from "../../../../runtime/modules/backtest/application/backtest-execution-telemetry.js";
 
 const MIN_COMPLETED_SAMPLES = 10;
 const MIN_DISTINCT_INPUT_SHAPES = 3;
@@ -99,19 +99,27 @@ function distribution(values: readonly number[]): NumericDistribution | null {
   };
 }
 
-function parseTelemetry(detailJson: string | null): ParsedTelemetry | 'MISSING' | 'INVALID' {
-  if (detailJson === null) return 'MISSING';
+function parseTelemetry(
+  detailJson: string | null,
+): ParsedTelemetry | "MISSING" | "INVALID" {
+  if (detailJson === null) return "MISSING";
   let detail: unknown;
   try {
     detail = JSON.parse(detailJson);
   } catch {
-    return 'INVALID';
+    return "INVALID";
   }
-  if (typeof detail !== 'object' || detail === null || !('executionTelemetry' in detail)) {
-    return 'MISSING';
+  if (
+    typeof detail !== "object" ||
+    detail === null ||
+    !("executionTelemetry" in detail)
+  ) {
+    return "MISSING";
   }
-  const parsed = backtestExecutionTelemetrySchema.safeParse(detail.executionTelemetry);
-  return parsed.success ? { telemetry: parsed.data } : 'INVALID';
+  const parsed = backtestExecutionTelemetrySchema.safeParse(
+    detail.executionTelemetry,
+  );
+  return parsed.success ? { telemetry: parsed.data } : "INVALID";
 }
 
 function inputShape(telemetry: BacktestExecutionTelemetry): string | null {
@@ -120,7 +128,7 @@ function inputShape(telemetry: BacktestExecutionTelemetry): string | null {
     telemetry.input.candleCount,
     telemetry.input.factCount,
     telemetry.input.symbolCount,
-  ].join(':');
+  ].join(":");
 }
 
 export function buildBacktestTelemetryReport(options: {
@@ -136,29 +144,44 @@ export function buildBacktestTelemetryReport(options: {
   let invalidTelemetry = 0;
   for (const row of options.rows) {
     const parsed = parseTelemetry(row.detailJson);
-    if (parsed === 'MISSING') withoutTelemetry += 1;
-    else if (parsed === 'INVALID') invalidTelemetry += 1;
+    if (parsed === "MISSING") withoutTelemetry += 1;
+    else if (parsed === "INVALID") invalidTelemetry += 1;
     else telemetry.push(parsed.telemetry);
   }
 
-  const completed = telemetry.filter((sample) => sample.outcome === 'COMPLETED');
+  const completed = telemetry.filter(
+    (sample) => sample.outcome === "COMPLETED",
+  );
   const completedWithInput = completed.filter(
-    (sample): sample is BacktestExecutionTelemetry & { input: NonNullable<BacktestExecutionTelemetry['input']> } =>
-      sample.input !== null,
+    (
+      sample,
+    ): sample is BacktestExecutionTelemetry & {
+      input: NonNullable<BacktestExecutionTelemetry["input"]>;
+    } => sample.input !== null,
   );
   const completedWithOutput = completed.filter(
-    (sample): sample is BacktestExecutionTelemetry & { output: NonNullable<BacktestExecutionTelemetry['output']> } =>
-      sample.output !== null,
+    (
+      sample,
+    ): sample is BacktestExecutionTelemetry & {
+      output: NonNullable<BacktestExecutionTelemetry["output"]>;
+    } => sample.output !== null,
   );
-  const distinctInputShapes = new Set(completed.map(inputShape).filter((shape) => shape !== null)).size;
-  const inputLoads = completedWithInput.map((sample) => sample.input.candleCount + sample.input.factCount);
+  const distinctInputShapes = new Set(
+    completed.map(inputShape).filter((shape) => shape !== null),
+  ).size;
+  const inputLoads = completedWithInput.map(
+    (sample) => sample.input.candleCount + sample.input.factCount,
+  );
   const inputLoadRange = distribution(inputLoads);
-  const inputScaleRatio = inputLoadRange === null
-    ? null
-    : inputLoadRange.max / Math.max(1, inputLoadRange.min);
+  const inputScaleRatio =
+    inputLoadRange === null
+      ? null
+      : inputLoadRange.max / Math.max(1, inputLoadRange.min);
   const reasons: string[] = [];
   if (completed.length < MIN_COMPLETED_SAMPLES) {
-    reasons.push(`완료 표본이 ${MIN_COMPLETED_SAMPLES}개보다 적습니다 (${completed.length}개).`);
+    reasons.push(
+      `완료 표본이 ${MIN_COMPLETED_SAMPLES}개보다 적습니다 (${completed.length}개).`,
+    );
   }
   if (distinctInputShapes < MIN_DISTINCT_INPUT_SHAPES) {
     reasons.push(
@@ -167,28 +190,42 @@ export function buildBacktestTelemetryReport(options: {
   }
   if (inputScaleRatio === null || inputScaleRatio < MIN_INPUT_SCALE_RATIO) {
     reasons.push(
-      `최소·최대 입력 규모 차이가 ${MIN_INPUT_SCALE_RATIO}배보다 작습니다 (${inputScaleRatio?.toFixed(1) ?? '없음'}배).`,
+      `최소·최대 입력 규모 차이가 ${MIN_INPUT_SCALE_RATIO}배보다 작습니다 (${inputScaleRatio?.toFixed(1) ?? "없음"}배).`,
     );
   }
   const readyForSizing = reasons.length === 0;
 
-  const peakRssBytes = distribution(completed.map((sample) => sample.peakRssBytes));
-  const totalDurationMs = distribution(completed.map((sample) => sample.durationsMs.total));
+  const peakRssBytes = distribution(
+    completed.map((sample) => sample.peakRssBytes),
+  );
+  const totalDurationMs = distribution(
+    completed.map((sample) => sample.durationsMs.total),
+  );
   const agentBudgetBytes = options.agentBudgetBytes ?? null;
-  const plannedBytesPerWorker = readyForSizing && peakRssBytes !== null
-    ? Math.ceil(peakRssBytes.p95 * WORKER_HEADROOM_RATIO)
-    : null;
-  const memoryConcurrencyCap = plannedBytesPerWorker !== null && agentBudgetBytes !== null
-    ? Math.max(0, Math.floor(agentBudgetBytes / plannedBytesPerWorker))
-    : null;
-  const sequentialSeedsPerShardCandidate = readyForSizing && totalDurationMs !== null
-    ? Math.max(
-        1,
-        Math.min(MAX_SEEDS_PER_SHARD, Math.floor(SEED_SHARD_RUNTIME_TARGET_MS / totalDurationMs.p95)),
-      )
-    : null;
+  const plannedBytesPerWorker =
+    readyForSizing && peakRssBytes !== null
+      ? Math.ceil(peakRssBytes.p95 * WORKER_HEADROOM_RATIO)
+      : null;
+  const memoryConcurrencyCap =
+    plannedBytesPerWorker !== null && agentBudgetBytes !== null
+      ? Math.max(0, Math.floor(agentBudgetBytes / plannedBytesPerWorker))
+      : null;
+  const sequentialSeedsPerShardCandidate =
+    readyForSizing && totalDurationMs !== null
+      ? Math.max(
+          1,
+          Math.min(
+            MAX_SEEDS_PER_SHARD,
+            Math.floor(SEED_SHARD_RUNTIME_TARGET_MS / totalDurationMs.p95),
+          ),
+        )
+      : null;
 
-  const failedStages: Record<BacktestExecutionStage, number> = { LOAD: 0, RUN: 0, PERSIST: 0 };
+  const failedStages: Record<BacktestExecutionStage, number> = {
+    LOAD: 0,
+    RUN: 0,
+    PERSIST: 0,
+  };
   for (const sample of telemetry) {
     if (sample.failedStage !== null) failedStages[sample.failedStage] += 1;
   }
@@ -206,8 +243,9 @@ export function buildBacktestTelemetryReport(options: {
     samples: {
       valid: telemetry.length,
       completed: completed.length,
-      failed: telemetry.filter((sample) => sample.outcome === 'FAILED').length,
-      cancelled: telemetry.filter((sample) => sample.outcome === 'CANCELLED').length,
+      failed: telemetry.filter((sample) => sample.outcome === "FAILED").length,
+      cancelled: telemetry.filter((sample) => sample.outcome === "CANCELLED")
+        .length,
       failedStages,
       distinctInputShapes,
       inputScaleRatio,
@@ -224,18 +262,30 @@ export function buildBacktestTelemetryReport(options: {
       durationsMs: {
         load: distribution(completed.map((sample) => sample.durationsMs.load)),
         run: distribution(completed.map((sample) => sample.durationsMs.run)),
-        persist: distribution(completed.map((sample) => sample.durationsMs.persist)),
+        persist: distribution(
+          completed.map((sample) => sample.durationsMs.persist),
+        ),
         total: totalDurationMs,
       },
       input: {
-        candles: distribution(completedWithInput.map((sample) => sample.input.candleCount)),
-        facts: distribution(completedWithInput.map((sample) => sample.input.factCount)),
-        symbols: distribution(completedWithInput.map((sample) => sample.input.symbolCount)),
+        candles: distribution(
+          completedWithInput.map((sample) => sample.input.candleCount),
+        ),
+        facts: distribution(
+          completedWithInput.map((sample) => sample.input.factCount),
+        ),
+        symbols: distribution(
+          completedWithInput.map((sample) => sample.input.symbolCount),
+        ),
       },
       output: {
-        rows: distribution(completedWithOutput.map((sample) => sample.output.rowCount)),
+        rows: distribution(
+          completedWithOutput.map((sample) => sample.output.rowCount),
+        ),
         estimatedPayloadBytes: distribution(
-          completedWithOutput.map((sample) => sample.output.estimatedPayloadBytes),
+          completedWithOutput.map(
+            (sample) => sample.output.estimatedPayloadBytes,
+          ),
         ),
       },
     },

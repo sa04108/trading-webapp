@@ -1,7 +1,10 @@
-import type { UniverseRebalancingEntryDto } from '../../../../shared/schemas/universe-rebalancing.js';
-import type { LegacyUniverseScheduleEntry } from '../../../../runtime/modules/backtest/application/universe-rule-resolver.js';
+import type { UniverseRebalancingEntryDto } from "../../../../shared/schemas/universe-rebalancing.js";
+import type { LegacyUniverseScheduleEntry } from "../../../../runtime/modules/backtest/application/universe-rule-resolver.js";
 
-function differenceCount(left: ReadonlySet<string>, right: ReadonlySet<string>): number {
+function differenceCount(
+  left: ReadonlySet<string>,
+  right: ReadonlySet<string>,
+): number {
   let count = 0;
   for (const symbol of left) {
     if (!right.has(symbol)) count += 1;
@@ -19,7 +22,7 @@ export function summarizeUniverseRebalancing(
     if (previous === null) {
       previous = current;
       return {
-        kind: 'INITIAL',
+        kind: "INITIAL",
         rebalanceDate: entry.rebalanceDate,
         effectiveDate: entry.effectiveTradingDate,
         memberCount: current.size,
@@ -30,7 +33,7 @@ export function summarizeUniverseRebalancing(
     const removedCount = differenceCount(previous, current);
     previous = current;
     return {
-      kind: 'CHANGE',
+      kind: "CHANGE",
       rebalanceDate: entry.rebalanceDate,
       effectiveDate: entry.effectiveTradingDate,
       addedCount,

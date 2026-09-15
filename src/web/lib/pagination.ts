@@ -5,7 +5,11 @@ export interface PageWindow {
   readonly to: number;
 }
 
-export function pageWindow(total: number, pageSize: number, page: number): PageWindow {
+export function pageWindow(
+  total: number,
+  pageSize: number,
+  page: number,
+): PageWindow {
   const size = Math.max(1, pageSize);
   const pageCount = Math.max(1, Math.ceil(total / size));
   const currentPage = Math.min(Math.max(0, page), pageCount - 1);
@@ -19,8 +23,14 @@ export function visiblePageNumbers(
   maxVisible: number,
 ): number[] {
   const safePageCount = Math.max(1, Math.trunc(pageCount));
-  const safeCurrentPage = Math.min(Math.max(0, Math.trunc(currentPage)), safePageCount - 1);
-  const visibleCount = Math.min(safePageCount, Math.max(1, Math.trunc(maxVisible)));
+  const safeCurrentPage = Math.min(
+    Math.max(0, Math.trunc(currentPage)),
+    safePageCount - 1,
+  );
+  const visibleCount = Math.min(
+    safePageCount,
+    Math.max(1, Math.trunc(maxVisible)),
+  );
   const half = Math.floor(visibleCount / 2);
   const start = Math.min(
     Math.max(0, safeCurrentPage - half),

@@ -1,8 +1,8 @@
-import { eq, inArray } from 'drizzle-orm';
-import type { AppDatabase } from '../../../shared/db/database.js';
-import { readRuntimeVersions } from '../../../shared/runtime-versions.js';
-import { symbolFactsState } from '../../../shared/db/schema.js';
-import { parseYears } from './fact-coverage-store.js';
+import { eq, inArray } from "drizzle-orm";
+import type { AppDatabase } from "../../../shared/db/database.js";
+import { readRuntimeVersions } from "../../../shared/runtime-versions.js";
+import { symbolFactsState } from "../../../shared/db/schema.js";
+import { parseYears } from "./fact-coverage-store.js";
 
 export const CORPORATE_ACTION_COVERAGE_PROTOCOL_VERSION = 10;
 
@@ -10,7 +10,7 @@ export interface CorporateActionGapDetail {
   readonly year: number;
   readonly periodKey: string;
   readonly reason: string;
-  readonly severity: 'BLOCKING' | 'INFORMATIONAL';
+  readonly severity: "BLOCKING" | "INFORMATIONAL";
 }
 
 interface ActionCoverageProtocol {
@@ -19,18 +19,27 @@ interface ActionCoverageProtocol {
   readonly years: readonly number[];
 }
 
-function parseProtocolYears(raw: string | null, collectionVersion: string): number[] {
+function parseProtocolYears(
+  raw: string | null,
+  collectionVersion: string,
+): number[] {
   if (raw === null) return [];
   try {
     const parsed = JSON.parse(raw) as Partial<ActionCoverageProtocol>;
     if (
-      parsed.version !== CORPORATE_ACTION_COVERAGE_PROTOCOL_VERSION
-      || parsed.collectionVersion !== collectionVersion
-      || !Array.isArray(parsed.years)
-    ) return [];
-    return [...new Set(parsed.years.filter(
-      (year): year is number => Number.isInteger(year) && year >= 1900 && year <= 2200,
-    ))].sort((left, right) => left - right);
+      parsed.version !== CORPORATE_ACTION_COVERAGE_PROTOCOL_VERSION ||
+      parsed.collectionVersion !== collectionVersion ||
+      !Array.isArray(parsed.years)
+    )
+      return [];
+    return [
+      ...new Set(
+        parsed.years.filter(
+          (year): year is number =>
+            Number.isInteger(year) && year >= 1900 && year <= 2200,
+        ),
+      ),
+    ].sort((left, right) => left - right);
   } catch {
     return [];
   }
@@ -41,35 +50,45 @@ function parseGapDetails(raw: string | null): CorporateActionGapDetail[] {
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.flatMap((candidate): CorporateActionGapDetail[] => {
-      if (typeof candidate !== 'object' || candidate === null) return [];
-      const row = candidate as Partial<CorporateActionGapDetail>;
-      if (
-        typeof row.year !== 'number'
-        || !Number.isInteger(row.year)
-        || row.year < 1900
-        || row.year > 2200
-        || typeof row.periodKey !== 'string'
-        || typeof row.reason !== 'string'
-        || (row.severity !== 'BLOCKING' && row.severity !== 'INFORMATIONAL')
-      ) return [];
-      return [{
-        year: row.year,
-        periodKey: row.periodKey,
-        reason: row.reason,
-        severity: row.severity,
-      }];
-    }).sort(compareGapDetails);
+    return parsed
+      .flatMap((candidate): CorporateActionGapDetail[] => {
+        if (typeof candidate !== "object" || candidate === null) return [];
+        const row = candidate as Partial<CorporateActionGapDetail>;
+        if (
+          typeof row.year !== "number" ||
+          !Number.isInteger(row.year) ||
+          row.year < 1900 ||
+          row.year > 2200 ||
+          typeof row.periodKey !== "string" ||
+          typeof row.reason !== "string" ||
+          (row.severity !== "BLOCKING" && row.severity !== "INFORMATIONAL")
+        )
+          return [];
+        return [
+          {
+            year: row.year,
+            periodKey: row.periodKey,
+            reason: row.reason,
+            severity: row.severity,
+          },
+        ];
+      })
+      .sort(compareGapDetails);
   } catch {
     return [];
   }
 }
 
-function compareGapDetails(left: CorporateActionGapDetail, right: CorporateActionGapDetail): number {
-  return left.year - right.year
-    || left.periodKey.localeCompare(right.periodKey)
-    || left.reason.localeCompare(right.reason)
-    || left.severity.localeCompare(right.severity);
+function compareGapDetails(
+  left: CorporateActionGapDetail,
+  right: CorporateActionGapDetail,
+): number {
+  return (
+    left.year - right.year ||
+    left.periodKey.localeCompare(right.periodKey) ||
+    left.reason.localeCompare(right.reason) ||
+    left.severity.localeCompare(right.severity)
+  );
 }
 
 function uniqueGapDetails(
@@ -88,9 +107,9 @@ function uniqueGapDetails(
 function legacyGapDetail(year: number): CorporateActionGapDetail {
   return {
     year,
-    periodKey: '-',
-    reason: '상세 사유가 저장되지 않은 자본변동 gap',
-    severity: 'BLOCKING',
+    periodKey: "-",
+    reason: "상세 사유가 저장되지 않은 자본변동 gap",
+    severity: "BLOCKING",
   };
 }
 
@@ -107,11 +126,17 @@ function legacyGapDetail(year: number): CorporateActionGapDetail {
  */
 export interface CorporateActionCoverageStore {
   /** 종목 → 자본변동 수집 완료 연도 (오름차순). 인자를 주면 그 종목만 */
-  getCoveredYears(codes?: readonly string[]): ReadonlyMap<string, readonly number[]>;
+  getCoveredYears(
+    codes?: readonly string[],
+  ): ReadonlyMap<string, readonly number[]>;
   /** protocol 검증 전 legacy 수집 연도. freshness 판정 외에는 쓰지 않는다. */
-  getCollectedYears?(codes?: readonly string[]): ReadonlyMap<string, readonly number[]>;
+  getCollectedYears?(
+    codes?: readonly string[],
+  ): ReadonlyMap<string, readonly number[]>;
   /** 종목 → 자본변동 수집이 실패한 연도 (오름차순). 인자를 주면 그 종목만 */
-  getGapYears(codes?: readonly string[]): ReadonlyMap<string, readonly number[]>;
+  getGapYears(
+    codes?: readonly string[],
+  ): ReadonlyMap<string, readonly number[]>;
   /** 종목 → 자본변동 수집 실패 상세. 구버전 연도만 있으면 보수적인 상세를 합성한다. */
   getGapDetails?(
     codes?: readonly string[],
@@ -119,7 +144,11 @@ export interface CorporateActionCoverageStore {
   /** 종목 → 마지막 자본변동 coverage 기록 시각. 재무 watermark와 독립적이다. */
   getUpdatedAtMs(codes: readonly string[]): ReadonlyMap<string, number>;
   /** 종목 하나의 완료 연도를 합집합으로 더한다. */
-  addCoveredYears(symbol: string, years: readonly number[], nowMs: number): void;
+  addCoveredYears(
+    symbol: string,
+    years: readonly number[],
+    nowMs: number,
+  ): void;
   /** 종목 하나의 gap 연도를 합집합으로 더한다. */
   addGapYears(symbol: string, years: readonly number[], nowMs: number): void;
   /** coverage는 합치고 완료 연도의 gap·상세는 최신 결과로 교체한다. */
@@ -135,9 +164,13 @@ export interface CorporateActionCoverageStore {
 export class SqliteCorporateActionCoverageStore implements CorporateActionCoverageStore {
   private readonly collectionVersion: string;
 
-  constructor(private readonly db: AppDatabase, options?: { readonly collectionVersion: string }) {
+  constructor(
+    private readonly db: AppDatabase,
+    options?: { readonly collectionVersion: string },
+  ) {
     // 임대 스냅샷을 읽을 때는 서버가 요구한 수집 버전만 호환 기준으로 삼는다.
-    this.collectionVersion = options?.collectionVersion ?? readRuntimeVersions().collectionVersion;
+    this.collectionVersion =
+      options?.collectionVersion ?? readRuntimeVersions().collectionVersion;
   }
 
   private readForCodes<T>(
@@ -154,7 +187,9 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
     return rows;
   }
 
-  getCoveredYears(codes?: readonly string[]): ReadonlyMap<string, readonly number[]> {
+  getCoveredYears(
+    codes?: readonly string[],
+  ): ReadonlyMap<string, readonly number[]> {
     const result = new Map<string, readonly number[]>();
     const rows = this.readForCodes(codes, (batch) => {
       const query = this.db
@@ -170,17 +205,24 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
     for (const row of rows) {
       // 구버전은 periodKey='-' gap을 버리고도 legacy coverage를 닫았다. 현재 프로토콜로
       // 실제 재수집한 연도만 신뢰해, 선택 유니버스의 필요한 연도만 on-demand로 연다.
-      result.set(row.code, parseProtocolYears(row.protocol, this.collectionVersion));
+      result.set(
+        row.code,
+        parseProtocolYears(row.protocol, this.collectionVersion),
+      );
     }
     return result;
   }
 
-  getCollectedYears(codes?: readonly string[]): ReadonlyMap<string, readonly number[]> {
-    return this.readYears('actionCoveredYearsJson', codes);
+  getCollectedYears(
+    codes?: readonly string[],
+  ): ReadonlyMap<string, readonly number[]> {
+    return this.readYears("actionCoveredYearsJson", codes);
   }
 
-  getGapYears(codes?: readonly string[]): ReadonlyMap<string, readonly number[]> {
-    return this.readYears('actionGapYearsJson', codes);
+  getGapYears(
+    codes?: readonly string[],
+  ): ReadonlyMap<string, readonly number[]> {
+    return this.readYears("actionGapYearsJson", codes);
   }
 
   getGapDetails(
@@ -202,12 +244,15 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
     for (const row of rows) {
       const details = parseGapDetails(row.details);
       const detailedYears = new Set(details.map((detail) => detail.year));
-      result.set(row.code, uniqueGapDetails([
-        ...details,
-        ...parseYears(row.years)
-          .filter((year) => !detailedYears.has(year))
-          .map(legacyGapDetail),
-      ]));
+      result.set(
+        row.code,
+        uniqueGapDetails([
+          ...details,
+          ...parseYears(row.years)
+            .filter((year) => !detailedYears.has(year))
+            .map(legacyGapDetail),
+        ]),
+      );
     }
     return result;
   }
@@ -231,7 +276,11 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
     return result;
   }
 
-  addCoveredYears(symbol: string, years: readonly number[], nowMs: number): void {
+  addCoveredYears(
+    symbol: string,
+    years: readonly number[],
+    nowMs: number,
+  ): void {
     this.addCoverageResult(symbol, years, [], nowMs);
   }
 
@@ -242,10 +291,12 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
       .from(symbolFactsState)
       .where(eq(symbolFactsState.code, symbol))
       .get();
-    const mergedYears = [...new Set([
-      ...(existing ? parseYears(existing.actionGapYearsJson) : []),
-      ...years,
-    ])].sort((a, b) => a - b);
+    const mergedYears = [
+      ...new Set([
+        ...(existing ? parseYears(existing.actionGapYearsJson) : []),
+        ...years,
+      ]),
+    ].sort((a, b) => a - b);
     const details = uniqueGapDetails([
       ...(existing ? parseGapDetails(existing.actionGapDetailsJson) : []),
       ...years.map(legacyGapDetail),
@@ -267,7 +318,7 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
       .insert(symbolFactsState)
       .values({
         code: symbol,
-        coveredYearsJson: '[]',
+        coveredYearsJson: "[]",
         ...values,
       })
       .run();
@@ -283,36 +334,60 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
     if (coveredYears.length === 0) return;
     const completed = new Set(coveredYears);
     if (gapYears.some((year) => !completed.has(year))) {
-      throw new Error('자본변동 gap 연도는 이번에 완료한 coverage 연도 안에 있어야 합니다.');
+      throw new Error(
+        "자본변동 gap 연도는 이번에 완료한 coverage 연도 안에 있어야 합니다.",
+      );
     }
-    if (gapDetails.some((detail) => !completed.has(detail.year) || !gapYears.includes(detail.year))) {
-      throw new Error('자본변동 gap 상세는 이번에 발견한 gap 연도 안에 있어야 합니다.');
+    if (
+      gapDetails.some(
+        (detail) =>
+          !completed.has(detail.year) || !gapYears.includes(detail.year),
+      )
+    ) {
+      throw new Error(
+        "자본변동 gap 상세는 이번에 발견한 gap 연도 안에 있어야 합니다.",
+      );
     }
     const existing = this.db
       .select()
       .from(symbolFactsState)
       .where(eq(symbolFactsState.code, symbol))
       .get();
-    const mergedCovered = [...new Set([
-      ...(existing ? parseYears(existing.actionCoveredYearsJson) : []),
-      ...coveredYears,
-    ])].sort((a, b) => a - b);
-    const verifiedYears = [...new Set([
-      ...(existing ? parseProtocolYears(existing.actionCoverageProtocolJson, this.collectionVersion) : []),
-      ...coveredYears,
-    ])].sort((a, b) => a - b);
+    const mergedCovered = [
+      ...new Set([
+        ...(existing ? parseYears(existing.actionCoveredYearsJson) : []),
+        ...coveredYears,
+      ]),
+    ].sort((a, b) => a - b);
+    const verifiedYears = [
+      ...new Set([
+        ...(existing
+          ? parseProtocolYears(
+              existing.actionCoverageProtocolJson,
+              this.collectionVersion,
+            )
+          : []),
+        ...coveredYears,
+      ]),
+    ].sort((a, b) => a - b);
     // 팩트 저장소가 같은 work-unit 연도의 자본변동 snapshot을 먼저 교체하므로, 이번에
     // 완료한 연도의 옛 gap도 함께 제거한 뒤 최신 결과만 남길 수 있다. 다른 연도 gap은
     // 그 연도를 다시 받기 전까지 보존한다.
-    const mergedGaps = [...new Set([
-      ...(existing ? parseYears(existing.actionGapYearsJson) : [])
-        .filter((year) => !completed.has(year)),
-      ...gapYears,
-    ])].sort((a, b) => a - b);
-    const currentDetails = gapDetails.length > 0 ? gapDetails : gapYears.map(legacyGapDetail);
+    const mergedGaps = [
+      ...new Set([
+        ...(existing ? parseYears(existing.actionGapYearsJson) : []).filter(
+          (year) => !completed.has(year),
+        ),
+        ...gapYears,
+      ]),
+    ].sort((a, b) => a - b);
+    const currentDetails =
+      gapDetails.length > 0 ? gapDetails : gapYears.map(legacyGapDetail);
     const mergedGapDetails = uniqueGapDetails([
-      ...(existing ? parseGapDetails(existing.actionGapDetailsJson) : [])
-        .filter((detail) => !completed.has(detail.year)),
+      ...(existing
+        ? parseGapDetails(existing.actionGapDetailsJson)
+        : []
+      ).filter((detail) => !completed.has(detail.year)),
       ...currentDetails,
     ]);
     const values = {
@@ -337,18 +412,21 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
     }
     this.db
       .insert(symbolFactsState)
-      .values({ code: symbol, coveredYearsJson: '[]', ...values })
+      .values({ code: symbol, coveredYearsJson: "[]", ...values })
       .run();
   }
 
   private readYears(
-    column: 'actionCoveredYearsJson' | 'actionGapYearsJson',
+    column: "actionCoveredYearsJson" | "actionGapYearsJson",
     codes?: readonly string[],
   ): ReadonlyMap<string, readonly number[]> {
     const result = new Map<string, readonly number[]>();
     const rows = this.readForCodes(codes, (batch) => {
       const query = this.db
-        .select({ code: symbolFactsState.code, years: symbolFactsState[column] })
+        .select({
+          code: symbolFactsState.code,
+          years: symbolFactsState[column],
+        })
         .from(symbolFactsState);
       return batch === undefined
         ? query.all()

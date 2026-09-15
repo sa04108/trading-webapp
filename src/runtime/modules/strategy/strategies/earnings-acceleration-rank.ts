@@ -1,38 +1,42 @@
-import { z } from 'zod';
-import type { FundamentalSnapshot } from '../../facts/domain/fact.js';
-import type { Candle } from '../../market-data/domain/candle.js';
+import { z } from "zod";
+import type { FundamentalSnapshot } from "../../facts/domain/fact.js";
+import type { Candle } from "../../market-data/domain/candle.js";
 import type {
   StrategyBarContext,
   StrategyDecision,
   StrategyInitializeContext,
   TradingStrategy,
-} from '../domain/strategy.js';
-import { splitAdjustedClose } from './shared/adjusted-price.js';
+} from "../domain/strategy.js";
+import { splitAdjustedClose } from "./shared/adjusted-price.js";
 import {
   combineRanks,
   isFreshQuarter,
   ordinalRank,
   scoreEarningsAcceleration,
   type EarningsAccelerationInput,
-} from './shared/fundamental-rank.js';
-import { planBuyPhase, planSellPhase } from './shared/two-phase-rebalance.js';
+} from "./shared/fundamental-rank.js";
+import { planBuyPhase, planSellPhase } from "./shared/two-phase-rebalance.js";
 
 export const earningsAccelerationRankParameters = z.object({
   topN: z.number().int().min(1).max(200).default(40).meta({
-    title: '보유 종목 수',
-    description: '순위 합이 작은 상위 몇 종목을 동일가중으로 보유할지 정합니다.',
+    title: "보유 종목 수",
+    description:
+      "순위 합이 작은 상위 몇 종목을 동일가중으로 보유할지 정합니다.",
   }),
   priceMomentumDays: z.number().int().min(60).max(252).default(126).meta({
-    title: '가격 모멘텀 기간 (봉 수)',
-    description: '재무 성장 신호를 확인할 분할보정 가격 수익률 기간입니다.',
+    title: "가격 모멘텀 기간 (봉 수)",
+    description: "재무 성장 신호를 확인할 분할보정 가격 수익률 기간입니다.",
   }),
   staleQuarters: z.number().int().min(1).max(8).default(2).meta({
-    title: '허용 공시 지연 (분기)',
-    description: '영업이익 최신 분기가 현재 분기보다 뒤처져도 허용할 최대 분기 수입니다.',
+    title: "허용 공시 지연 (분기)",
+    description:
+      "영업이익 최신 분기가 현재 분기보다 뒤처져도 허용할 최대 분기 수입니다.",
   }),
 });
 
-export type EarningsAccelerationRankParameters = z.infer<typeof earningsAccelerationRankParameters>;
+export type EarningsAccelerationRankParameters = z.infer<
+  typeof earningsAccelerationRankParameters
+>;
 
 export interface EarningsAccelerationRankState {
   readonly symbols: readonly string[];
@@ -47,7 +51,7 @@ interface ScoredCandidate {
 
 function priceMomentum(
   history: readonly Candle[],
-  actions: ReturnType<StrategyBarContext['corporateActions']>,
+  actions: ReturnType<StrategyBarContext["corporateActions"]>,
   days: number,
 ): number | null {
   const endIndex = history.length - 1;
@@ -55,7 +59,13 @@ function priceMomentum(
   if (startIndex < 0) return null;
   const start = splitAdjustedClose(history, actions, startIndex);
   const end = splitAdjustedClose(history, actions, endIndex);
-  if (start === null || end === null || !Number.isFinite(start) || !Number.isFinite(end) || start <= 0) {
+  if (
+    start === null ||
+    end === null ||
+    !Number.isFinite(start) ||
+    !Number.isFinite(end) ||
+    start <= 0
+  ) {
     return null;
   }
   const result = end / start - 1;
@@ -67,7 +77,7 @@ function earningsInput(
   momentum: number,
 ): EarningsAccelerationInput | null {
   const quarters = Array.from({ length: 8 }, (_, offset) =>
-    snapshot.quarter('OPERATING_INCOME', offset),
+    snapshot.quarter("OPERATING_INCOME", offset),
   );
   if (quarters.some((quarter) => quarter === null)) return null;
   return {
@@ -87,27 +97,36 @@ export const earningsAccelerationRankStrategy: TradingStrategy<
   EarningsAccelerationRankParameters,
   EarningsAccelerationRankState
 > = {
-  id: 'earnings-acceleration-rank',
-  version: '1.3.0',
-  name: '이익 가속·가격 확인 순위',
+  id: "earnings-acceleration-rank",
+  version: "1.3.0",
+  name: "이익 가속·가격 확인 순위",
   requiresFundamentals: true,
-  description: 'PIT 영업이익 가속과 양의 가격 모멘텀을 함께 순위화하는 동일가중 연구 전략',
+  description:
+    "PIT 영업이익 가속과 양의 가격 모멘텀을 함께 순위화하는 동일가중 연구 전략",
   parameterSchema: earningsAccelerationRankParameters,
   requiredRebalanceGapBars: 1,
   dataRequirements: {
     fundamentalLookbackQuarters: 8,
     fundamentalsReady: (snapshot, tsMs, parameters) => {
-      const quarters = Array.from({ length: 8 }, (_, offset) => (
-        snapshot.quarter('OPERATING_INCOME', offset)
-      ));
-      return quarters.every((quarter) => quarter !== null)
-        && isFreshQuarter(quarters[0]?.periodKey ?? null, tsMs, parameters.staleQuarters);
+      const quarters = Array.from({ length: 8 }, (_, offset) =>
+        snapshot.quarter("OPERATING_INCOME", offset),
+      );
+      return (
+        quarters.every((quarter) => quarter !== null) &&
+        isFreshQuarter(
+          quarters[0]?.periodKey ?? null,
+          tsMs,
+          parameters.staleQuarters,
+        )
+      );
     },
     priceWarmupBars: (parameters) => parameters.priceMomentumDays,
     requiresCorporateActions: true,
   },
 
-  initialize(context: StrategyInitializeContext): EarningsAccelerationRankState {
+  initialize(
+    context: StrategyInitializeContext,
+  ): EarningsAccelerationRankState {
     return { symbols: [...context.symbols], pendingTargets: null };
   },
 
@@ -131,11 +150,21 @@ export const earningsAccelerationRankStrategy: TradingStrategy<
 
     const candidates: ScoredCandidate[] = [];
     for (const symbol of state.symbols) {
-      if (context.tradableSymbols !== null && !context.tradableSymbols.has(symbol)) continue;
+      if (
+        context.tradableSymbols !== null &&
+        !context.tradableSymbols.has(symbol)
+      )
+        continue;
       const snapshot = context.fundamentals(symbol);
       if (!snapshot) continue;
-      const latestQuarter = snapshot.quarter('OPERATING_INCOME', 0);
-      if (!isFreshQuarter(latestQuarter?.periodKey ?? null, context.tsMs, parameters.staleQuarters)) {
+      const latestQuarter = snapshot.quarter("OPERATING_INCOME", 0);
+      if (
+        !isFreshQuarter(
+          latestQuarter?.periodKey ?? null,
+          context.tsMs,
+          parameters.staleQuarters,
+        )
+      ) {
         continue;
       }
       const momentum = priceMomentum(
@@ -159,14 +188,14 @@ export const earningsAccelerationRankStrategy: TradingStrategy<
     const growthRanks = ordinalRank(
       candidates,
       (candidate) => candidate.ttmGrowth,
-      'DESC',
+      "DESC",
       (candidate) => candidate.symbol,
       context.rng,
     );
     const momentumRanks = ordinalRank(
       candidates,
       (candidate) => candidate.priceMomentum,
-      'DESC',
+      "DESC",
       (candidate) => candidate.symbol,
       context.rng,
     );

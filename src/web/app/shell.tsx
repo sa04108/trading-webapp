@@ -1,18 +1,30 @@
-import { useMutation } from '@tanstack/react-query';
-import { Bell, Database, FlaskConical, LayoutDashboard, LogOut, Moon, Settings, Sun } from 'lucide-react';
-import { useTheme } from 'next-themes';
-import { NavLink, Outlet, useNavigate } from 'react-router';
-import { Button } from '@/components/ui/button';
-import { api } from '@/lib/api-client';
-import { cn } from '@/lib/utils';
-import { useNotificationStream, useUnreadCount } from '../features/notifications/api';
-import { queryClient } from './query-client';
+import { useMutation } from "@tanstack/react-query";
+import {
+  Bell,
+  Database,
+  FlaskConical,
+  LayoutDashboard,
+  LogOut,
+  Moon,
+  Settings,
+  Sun,
+} from "lucide-react";
+import { useTheme } from "next-themes";
+import { NavLink, Outlet, useNavigate } from "react-router";
+import { Button } from "@/components/ui/button";
+import { api } from "@/lib/api-client";
+import { cn } from "@/lib/utils";
+import {
+  useNotificationStream,
+  useUnreadCount,
+} from "../features/notifications/api";
+import { queryClient } from "./query-client";
 
 const NAV_ITEMS = [
-  { to: '/', label: '대시보드', icon: LayoutDashboard, end: true },
-  { to: '/backtests', label: '백테스트', icon: FlaskConical, end: false },
-  { to: '/datasets', label: '데이터', icon: Database, end: false },
-  { to: '/settings', label: '설정', icon: Settings, end: false },
+  { to: "/", label: "대시보드", icon: LayoutDashboard, end: true },
+  { to: "/backtests", label: "백테스트", icon: FlaskConical, end: false },
+  { to: "/datasets", label: "데이터", icon: Database, end: false },
+  { to: "/settings", label: "설정", icon: Settings, end: false },
 ] as const;
 
 function NotificationBell() {
@@ -27,13 +39,13 @@ function NotificationBell() {
       variant="ghost"
       size="icon"
       className="relative size-11"
-      aria-label={count > 0 ? `알림 ${count}건` : '알림'}
-      onClick={() => void navigate('/notifications')}
+      aria-label={count > 0 ? `알림 ${count}건` : "알림"}
+      onClick={() => void navigate("/notifications")}
     >
       <Bell className="size-5" />
       {count > 0 && (
         <span className="absolute right-1.5 top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-medium leading-none text-white">
-          {count > 99 ? '99+' : count}
+          {count > 99 ? "99+" : count}
         </span>
       )}
     </Button>
@@ -48,7 +60,7 @@ function ThemeToggle() {
       size="icon"
       className="size-11"
       aria-label="테마 전환"
-      onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}
+      onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
     >
       <Sun className="size-5 dark:hidden" />
       <Moon className="hidden size-5 dark:block" />
@@ -59,10 +71,10 @@ function ThemeToggle() {
 function LogoutButton() {
   const navigate = useNavigate();
   const logout = useMutation({
-    mutationFn: () => api('/auth/logout', { method: 'POST' }),
+    mutationFn: () => api("/auth/logout", { method: "POST" }),
     onSettled: () => {
       queryClient.clear();
-      void navigate('/login', { replace: true });
+      void navigate("/login", { replace: true });
     },
   });
   return (
@@ -88,10 +100,10 @@ function SidebarNav() {
           end={end}
           className={({ isActive }) =>
             cn(
-              'flex h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors',
+              "flex h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors",
               isActive
-                ? 'bg-accent text-accent-foreground'
-                : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                ? "bg-accent text-accent-foreground"
+                : "text-muted-foreground hover:bg-muted hover:text-foreground",
             )
           }
         >
@@ -117,8 +129,8 @@ function BottomNav() {
             end={end}
             className={({ isActive }) =>
               cn(
-                'flex min-h-14 flex-col items-center justify-center gap-1 text-xs',
-                isActive ? 'text-foreground' : 'text-muted-foreground',
+                "flex min-h-14 flex-col items-center justify-center gap-1 text-xs",
+                isActive ? "text-foreground" : "text-muted-foreground",
               )
             }
           >
@@ -143,7 +155,9 @@ export function AppShell() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-10 flex h-14 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur">
-          <span className="text-sm font-semibold md:hidden">Quant Platform</span>
+          <span className="text-sm font-semibold md:hidden">
+            Quant Platform
+          </span>
           <div className="ml-auto flex items-center">
             <NotificationBell />
             <ThemeToggle />

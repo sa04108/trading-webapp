@@ -1,4 +1,4 @@
-import { readRuntimeVersions } from '../../../shared/runtime-versions.js';
+import { readRuntimeVersions } from "../../../shared/runtime-versions.js";
 import {
   and,
   asc,
@@ -13,10 +13,10 @@ import {
   lte,
   or,
   sql,
-} from 'drizzle-orm';
-import { alias } from 'drizzle-orm/sqlite-core';
-import type { Clock } from '../../../shared/clock.js';
-import type { AppDatabase } from '../../../shared/db/database.js';
+} from "drizzle-orm";
+import { alias } from "drizzle-orm/sqlite-core";
+import type { Clock } from "../../../shared/clock.js";
+import type { AppDatabase } from "../../../shared/db/database.js";
 import {
   dailySelectionMetrics,
   dailySelectionMetricCoverage,
@@ -29,38 +29,36 @@ import {
   symbolMasterTradingDays,
   symbolMasterVersions,
   symbols as registeredSymbols,
-} from '../../../shared/db/schema.js';
-import type { Logger } from 'pino';
-import type { Candle } from '../domain/candle.js';
-import { isValidCandle } from '../domain/candle.js';
+} from "../../../shared/db/schema.js";
+import type { Logger } from "pino";
+import type { Candle } from "../domain/candle.js";
+import { isValidCandle } from "../domain/candle.js";
 import {
   classifyKrxIssue,
   UnknownKrxClassificationError,
-} from '../domain/krx-filter-policy.js';
-import { addCalendarDays, isWeekendDate } from '../domain/kst-date.js';
-import { isNonTradingRow } from '../domain/non-trading-day.js';
-import {
-  type KnownSymbolIdentityVersion,
-} from '../domain/symbol-identity-lifetime.js';
+} from "../domain/krx-filter-policy.js";
+import { addCalendarDays, isWeekendDate } from "../domain/kst-date.js";
+import { isNonTradingRow } from "../domain/non-trading-day.js";
+import { type KnownSymbolIdentityVersion } from "../domain/symbol-identity-lifetime.js";
 import type {
   KrxDailyTradeRow,
   KrxIssueBaseInfoRow,
   KrxMarket,
-} from '../domain/krx-universe-types.js';
+} from "../domain/krx-universe-types.js";
 import {
   diffUniverse,
   type SymbolMasterEntry,
   type SymbolMasterEventDraft,
   type SymbolMasterInstrumentType,
   type UniverseState,
-} from '../domain/symbol-master.js';
+} from "../domain/symbol-master.js";
 import {
   overlayVersionTimeline,
   sameSymbolMasterEntry,
   type SymbolMasterVersionSegment,
-} from '../domain/symbol-master-version.js';
-import { SelectionMetricRepository } from './selection-metric-repository.js';
-import type { KrxHistoricalUniverseSource } from './ports.js';
+} from "../domain/symbol-master-version.js";
+import { SelectionMetricRepository } from "./selection-metric-repository.js";
+import type { KrxHistoricalUniverseSource } from "./ports.js";
 
 /** 0005 legacy 이행이 거래일 테이블에 남긴 주말 경계를 실제 거래일에서 제외한다. */
 function storedTradingDateIsWeekday() {
@@ -72,7 +70,9 @@ export interface SymbolMasterEventRow extends SymbolMasterEventDraft {
 }
 type SymbolMasterCoverageRow = typeof symbolMasterCoverage.$inferSelect;
 type SymbolMasterVersionRow = typeof symbolMasterVersions.$inferSelect;
-type IdentityVersionWithId = KnownSymbolIdentityVersion & { readonly id: number };
+type IdentityVersionWithId = KnownSymbolIdentityVersion & {
+  readonly id: number;
+};
 
 interface IdentityCoverageGap {
   /** null은 알려진 첫 identity보다 앞선 외측 구간을 뜻한다. */
@@ -90,8 +90,9 @@ function unsafeIdentityCoverageGaps(
 ): readonly IdentityCoverageGap[] {
   if (versions.length === 0) return [{ from: null, to: null }];
   const sorted = [...versions].sort(
-    (left, right) => left.validFromDate.localeCompare(right.validFromDate)
-      || left.id - right.id,
+    (left, right) =>
+      left.validFromDate.localeCompare(right.validFromDate) ||
+      left.id - right.id,
   );
   const first = sorted[0]!;
   const gaps: IdentityCoverageGap[] = [{ from: null, to: first.validFromDate }];
@@ -102,18 +103,12 @@ function unsafeIdentityCoverageGaps(
     if (componentEnd === null) break;
     if (version.validFromDate <= componentEnd) {
       if (
-        version.validToDate === null
-        || version.validToDate > componentEnd
-        || (
-          version.validToDate === componentEnd
-          && (
-            version.validFromDate > endOwner.validFromDate
-            || (
-              version.validFromDate === endOwner.validFromDate
-              && version.id > endOwner.id
-            )
-          )
-        )
+        version.validToDate === null ||
+        version.validToDate > componentEnd ||
+        (version.validToDate === componentEnd &&
+          (version.validFromDate > endOwner.validFromDate ||
+            (version.validFromDate === endOwner.validFromDate &&
+              version.id > endOwner.id)))
       ) {
         componentEnd = version.validToDate;
         endOwner = version;
@@ -158,14 +153,14 @@ export interface SymbolIdentitySnapshot {
 export class SymbolMasterNotCoveredError extends Error {
   constructor(readonly date: string) {
     super(`종목 마스터가 ${date} 를 커버하지 않는다`);
-    this.name = 'SymbolMasterNotCoveredError';
+    this.name = "SymbolMasterNotCoveredError";
   }
 }
 
 export type IngestResult =
-  | { readonly kind: 'TRADING_DAY' }
-  | { readonly kind: 'HOLIDAY' }
-  | { readonly kind: 'ALREADY_COVERED' };
+  | { readonly kind: "TRADING_DAY" }
+  | { readonly kind: "HOLIDAY" }
+  | { readonly kind: "ALREADY_COVERED" };
 
 /** ensureTradingDay 의 소급 수집 결과 — 조회 앵커 확보 여부와 실제 수집한 날짜들을 담는다 */
 export interface EnsureTradingDayResult {
@@ -185,7 +180,9 @@ const DEFAULT_MAX_LOOKBACK_DAYS = 10;
 
 /** KRX 계약 파서가 검증한 원문을 bigint 정밀도 손실 없이 DB text 로 정규화한다. */
 function metricDecimalText(raw: string | null): string | null {
-  return raw === null ? null : BigInt(raw.replaceAll(',', '').trim()).toString();
+  return raw === null
+    ? null
+    : BigInt(raw.replaceAll(",", "").trim()).toString();
 }
 
 export class SymbolMasterService {
@@ -203,12 +200,16 @@ export class SymbolMasterService {
    * `writeMarketCaps` 로 같은 (date, standardCode) 행을 넣으려 해 idx_smmc_date_code
    * UNIQUE 위반으로 하나가 죽는다. 다른 date 는 서로 막지 않고 각자 진행된다.
    */
-  private readonly inflightMarketCaps = new Map<string, Promise<ReadonlyMap<string, string>>>();
+  private readonly inflightMarketCaps = new Map<
+    string,
+    Promise<ReadonlyMap<string, string>>
+  >();
 
   private readonly collectionVersion: string;
 
   constructor(private readonly deps: SymbolMasterServiceDeps) {
-    this.collectionVersion = deps.collectionVersion ?? readRuntimeVersions().collectionVersion;
+    this.collectionVersion =
+      deps.collectionVersion ?? readRuntimeVersions().collectionVersion;
   }
 
   /**
@@ -249,7 +250,7 @@ export class SymbolMasterService {
     const ingestedDates: string[] = [];
     const ingestAndRecord = async (target: string): Promise<void> => {
       const result = await this.ingestDate(target);
-      if (result.kind !== 'ALREADY_COVERED') ingestedDates.push(target);
+      if (result.kind !== "ALREADY_COVERED") ingestedDates.push(target);
     };
 
     await ingestAndRecord(date);
@@ -262,7 +263,11 @@ export class SymbolMasterService {
       resolved = this.effectiveTradingDateWithinCoverage(date);
     }
 
-    return { requestedDate: date, effectiveTradingDate: resolved ?? null, ingestedDates };
+    return {
+      requestedDate: date,
+      effectiveTradingDate: resolved ?? null,
+      ingestedDates,
+    };
   }
 
   /**
@@ -285,7 +290,11 @@ export class SymbolMasterService {
       .select({ startDate: symbolMasterCoverage.startDate })
       .from(symbolMasterCoverage)
       .where(
-        and(eq(symbolMasterCoverage.collectionVersion, this.collectionVersion), lte(symbolMasterCoverage.startDate, date), gte(symbolMasterCoverage.endDate, date)),
+        and(
+          eq(symbolMasterCoverage.collectionVersion, this.collectionVersion),
+          lte(symbolMasterCoverage.startDate, date),
+          gte(symbolMasterCoverage.endDate, date),
+        ),
       )
       .get();
     if (covering === undefined) return undefined;
@@ -308,43 +317,65 @@ export class SymbolMasterService {
 
   private async ingestDateUnguarded(date: string): Promise<IngestResult> {
     if (this.isCovered(date)) {
-      return { kind: 'ALREADY_COVERED' };
+      return { kind: "ALREADY_COVERED" };
     }
 
     // 두 시장 모두 거래가 없으면 휴장이다. 기본정보는 휴장에도 조회되는 정적 데이터라
     // 거래 유무로만 거래일 여부를 가른다.
-    const kospiTrades = await this.deps.source.fetchDailyTrades('KOSPI', date);
-    const kosdaqTrades = await this.deps.source.fetchDailyTrades('KOSDAQ', date);
+    const kospiTrades = await this.deps.source.fetchDailyTrades("KOSPI", date);
+    const kosdaqTrades = await this.deps.source.fetchDailyTrades(
+      "KOSDAQ",
+      date,
+    );
     if (kospiTrades.length === 0 && kosdaqTrades.length === 0) {
       return this.deps.db.transaction((tx) => {
         // 다른 서비스 인스턴스가 fetch 사이에 같은 휴장일을 커밋했을 수 있다.
-        if (this.isCoveredIn(tx, date)) return { kind: 'ALREADY_COVERED' } as const;
+        if (this.isCoveredIn(tx, date))
+          return { kind: "ALREADY_COVERED" } as const;
         this.mergeCoverage(tx, date);
         // 휴장일도 거래불가 커버로 남긴다. 응답 0행을 실제로 확인했으니 "봤는데 없었다" 가
         // 맞고, 주말·공휴일을 비워 두면 앞뒤 거래일 구간이 이어지지 않아 커버 판정이 끊긴다.
         this.mergeNonTradingCoverage(tx, date, date);
-        return { kind: 'HOLIDAY' } as const;
+        return { kind: "HOLIDAY" } as const;
       });
     }
 
-    const kospiBaseInfo = await this.deps.source.fetchIssueBaseInfo('KOSPI', date);
-    const kosdaqBaseInfo = await this.deps.source.fetchIssueBaseInfo('KOSDAQ', date);
+    const kospiBaseInfo = await this.deps.source.fetchIssueBaseInfo(
+      "KOSPI",
+      date,
+    );
+    const kosdaqBaseInfo = await this.deps.source.fetchIssueBaseInfo(
+      "KOSDAQ",
+      date,
+    );
     const modeledBeforeWrite = this.readUniverseAsOfInternal(date);
-    this.assertBaseInfoPresent(date, 'KOSPI', kospiTrades, kospiBaseInfo, modeledBeforeWrite);
-    this.assertBaseInfoPresent(date, 'KOSDAQ', kosdaqTrades, kosdaqBaseInfo, modeledBeforeWrite);
+    this.assertBaseInfoPresent(
+      date,
+      "KOSPI",
+      kospiTrades,
+      kospiBaseInfo,
+      modeledBeforeWrite,
+    );
+    this.assertBaseInfoPresent(
+      date,
+      "KOSDAQ",
+      kosdaqTrades,
+      kosdaqBaseInfo,
+      modeledBeforeWrite,
+    );
 
     const fetched = new Map<string, SymbolMasterEntry>();
     for (const row of kospiBaseInfo) {
-      this.putEntry(fetched, row, 'KOSPI');
+      this.putEntry(fetched, row, "KOSPI");
     }
     for (const row of kosdaqBaseInfo) {
-      this.putEntry(fetched, row, 'KOSDAQ');
+      this.putEntry(fetched, row, "KOSDAQ");
     }
     this.preserveMissingBaseInfoEntries(
       date,
       fetched,
       modeledBeforeWrite,
-      'KOSPI',
+      "KOSPI",
       kospiTrades,
       kospiBaseInfo,
     );
@@ -352,7 +383,7 @@ export class SymbolMasterService {
       date,
       fetched,
       modeledBeforeWrite,
-      'KOSDAQ',
+      "KOSDAQ",
       kosdaqTrades,
       kosdaqBaseInfo,
     );
@@ -372,7 +403,8 @@ export class SymbolMasterService {
   ): IngestResult {
     return this.deps.db.transaction((tx) => {
       // fetch 중 같은 날짜의 다른 요청이 먼저 커밋했을 수 있다.
-      if (this.isCoveredIn(tx, date)) return { kind: 'ALREADY_COVERED' } as const;
+      if (this.isCoveredIn(tx, date))
+        return { kind: "ALREADY_COVERED" } as const;
 
       const nextTradingDate = this.nextTradingDate(date, tx);
       const nextBoundaryDate = this.nextVersionBoundary(date, tx);
@@ -380,21 +412,33 @@ export class SymbolMasterService {
         .filter((value): value is string => value !== undefined)
         .sort()[0];
       const modeled = this.readUniverseAsOfInternal(date, tx);
-      const preservedFuture = nextObservationDate === undefined
-        ? undefined
-        : this.readUniverseAsOfInternal(nextObservationDate, tx);
+      const preservedFuture =
+        nextObservationDate === undefined
+          ? undefined
+          : this.readUniverseAsOfInternal(nextObservationDate, tx);
       const changedCodes = new Set<string>();
       for (const code of new Set([...modeled.keys(), ...fetched.keys()])) {
-        if (!sameSymbolMasterEntry(modeled.get(code), fetched.get(code))) changedCodes.add(code);
+        if (!sameSymbolMasterEntry(modeled.get(code), fetched.get(code)))
+          changedCodes.add(code);
       }
-      this.overlayUniverseInterval(tx, date, nextObservationDate ?? null, fetched, changedCodes);
+      this.overlayUniverseInterval(
+        tx,
+        date,
+        nextObservationDate ?? null,
+        fetched,
+        changedCodes,
+      );
 
       this.mergeCoverage(tx, date);
       this.recordTradingDay(tx, date);
       this.writeDailyBars(tx, date, kospiTrades, kosdaqTrades);
       this.writeSelectionMetrics(tx, date, fetched, kospiTrades, kosdaqTrades);
       this.mergeNonTradingCoverage(tx, date, date);
-      this.assertUniversesEqual(this.readUniverseAsOfInternal(date, tx), fetched, date);
+      this.assertUniversesEqual(
+        this.readUniverseAsOfInternal(date, tx),
+        fetched,
+        date,
+      );
       if (nextObservationDate !== undefined && preservedFuture !== undefined) {
         this.assertUniversesEqual(
           this.readUniverseAsOfInternal(nextObservationDate, tx),
@@ -403,22 +447,30 @@ export class SymbolMasterService {
         );
       }
 
-      return { kind: 'TRADING_DAY' } as const;
+      return { kind: "TRADING_DAY" } as const;
     });
   }
 
-  private readUniverseAsOfInternal(date: string, db: AppDatabase = this.deps.db): UniverseState {
+  private readUniverseAsOfInternal(
+    date: string,
+    db: AppDatabase = this.deps.db,
+  ): UniverseState {
     const rows = db
       .select()
       .from(symbolMasterVersions)
       .where(
         and(
           lte(symbolMasterVersions.validFromDate, date),
-          or(isNull(symbolMasterVersions.validToDate), gt(symbolMasterVersions.validToDate, date)),
+          or(
+            isNull(symbolMasterVersions.validToDate),
+            gt(symbolMasterVersions.validToDate, date),
+          ),
         ),
       )
       .all();
-    return new Map(rows.map((row) => [row.standardCode, this.entryFromVersion(row)]));
+    return new Map(
+      rows.map((row) => [row.standardCode, this.entryFromVersion(row)]),
+    );
   }
 
   private entryFromVersion(row: SymbolMasterVersionRow): SymbolMasterEntry {
@@ -450,7 +502,10 @@ export class SymbolMasterService {
         .select()
         .from(symbolMasterVersions)
         .where(inArray(symbolMasterVersions.standardCode, chunk))
-        .orderBy(asc(symbolMasterVersions.standardCode), asc(symbolMasterVersions.validFromDate))
+        .orderBy(
+          asc(symbolMasterVersions.standardCode),
+          asc(symbolMasterVersions.validFromDate),
+        )
         .all()) {
         const rows = rowsByCode.get(row.standardCode) ?? [];
         rows.push(row);
@@ -461,7 +516,9 @@ export class SymbolMasterService {
     const recordedAtMs = this.deps.clock.now();
     const replacements: (typeof symbolMasterVersions.$inferInsert)[] = [];
     for (const code of codes) {
-      const existing: SymbolMasterVersionSegment[] = (rowsByCode.get(code) ?? []).map((row) => ({
+      const existing: SymbolMasterVersionSegment[] = (
+        rowsByCode.get(code) ?? []
+      ).map((row) => ({
         validFromDate: row.validFromDate,
         validToDate: row.validToDate,
         entry: this.entryFromVersion(row),
@@ -494,29 +551,41 @@ export class SymbolMasterService {
     // 합쳐지므로 날짜를 역순으로 추가해도 행 수가 늘지 않는다.
     for (let i = 0; i < codes.length; i += 500) {
       tx.delete(symbolMasterVersions)
-        .where(inArray(symbolMasterVersions.standardCode, codes.slice(i, i + 500)))
+        .where(
+          inArray(symbolMasterVersions.standardCode, codes.slice(i, i + 500)),
+        )
         .run();
     }
     for (let i = 0; i < replacements.length; i += 200) {
-      tx.insert(symbolMasterVersions).values(replacements.slice(i, i + 200)).run();
+      tx.insert(symbolMasterVersions)
+        .values(replacements.slice(i, i + 200))
+        .run();
     }
   }
 
-  private nextTradingDate(date: string, db: AppDatabase = this.deps.db): string | undefined {
+  private nextTradingDate(
+    date: string,
+    db: AppDatabase = this.deps.db,
+  ): string | undefined {
     return db
       .select({ date: symbolMasterTradingDays.date })
       .from(symbolMasterTradingDays)
-      .where(and(
-        gt(symbolMasterTradingDays.date, date),
-        storedTradingDateIsWeekday(),
-      ))
+      .where(
+        and(
+          gt(symbolMasterTradingDays.date, date),
+          storedTradingDateIsWeekday(),
+        ),
+      )
       .orderBy(asc(symbolMasterTradingDays.date))
       .limit(1)
       .get()?.date;
   }
 
   /** trading_days 누락에도 기존 SCD 경계를 덮지 않도록 가장 가까운 미래 경계를 찾는다. */
-  private nextVersionBoundary(date: string, db: AppDatabase = this.deps.db): string | undefined {
+  private nextVersionBoundary(
+    date: string,
+    db: AppDatabase = this.deps.db,
+  ): string | undefined {
     const nextStart = db
       .select({ date: symbolMasterVersions.validFromDate })
       .from(symbolMasterVersions)
@@ -524,34 +593,49 @@ export class SymbolMasterService {
       .orderBy(asc(symbolMasterVersions.validFromDate))
       .limit(1)
       .get()?.date;
-    const nextEnd = db
-      .select({ date: symbolMasterVersions.validToDate })
-      .from(symbolMasterVersions)
-      .where(
-        and(
-          isNotNull(symbolMasterVersions.validToDate),
-          gt(symbolMasterVersions.validToDate, date),
-        ),
-      )
-      .orderBy(asc(symbolMasterVersions.validToDate))
-      .limit(1)
-      .get()?.date ?? undefined;
+    const nextEnd =
+      db
+        .select({ date: symbolMasterVersions.validToDate })
+        .from(symbolMasterVersions)
+        .where(
+          and(
+            isNotNull(symbolMasterVersions.validToDate),
+            gt(symbolMasterVersions.validToDate, date),
+          ),
+        )
+        .orderBy(asc(symbolMasterVersions.validToDate))
+        .limit(1)
+        .get()?.date ?? undefined;
     return [nextStart, nextEnd]
       .filter((value): value is string => value !== undefined)
       .sort()[0];
   }
 
   private isCoveredIn(db: AppDatabase, date: string): boolean {
-    return db
-      .select({ id: symbolMasterCoverage.id })
-      .from(symbolMasterCoverage)
-      .where(and(eq(symbolMasterCoverage.collectionVersion, this.collectionVersion), lte(symbolMasterCoverage.startDate, date), gte(symbolMasterCoverage.endDate, date)))
-      .get() !== undefined;
+    return (
+      db
+        .select({ id: symbolMasterCoverage.id })
+        .from(symbolMasterCoverage)
+        .where(
+          and(
+            eq(symbolMasterCoverage.collectionVersion, this.collectionVersion),
+            lte(symbolMasterCoverage.startDate, date),
+            gte(symbolMasterCoverage.endDate, date),
+          ),
+        )
+        .get() !== undefined
+    );
   }
 
-  private assertUniversesEqual(actual: UniverseState, expected: UniverseState, date: string): void {
+  private assertUniversesEqual(
+    actual: UniverseState,
+    expected: UniverseState,
+    date: string,
+  ): void {
     if (actual.size !== expected.size) {
-      throw new Error(`SCD 저장 검증 실패(${date}): ${actual.size}종목 != ${expected.size}종목`);
+      throw new Error(
+        `SCD 저장 검증 실패(${date}): ${actual.size}종목 != ${expected.size}종목`,
+      );
     }
     for (const [code, entry] of expected) {
       if (!sameSymbolMasterEntry(actual.get(code), entry)) {
@@ -566,7 +650,8 @@ export class SymbolMasterService {
    * 다른 구간의 열린 버전을 끌어오지 않는다.
    */
   getUniverseAsOf(date: string): UniverseState {
-    if (!this.canResolveUniverseAsOf(date)) throw new SymbolMasterNotCoveredError(date);
+    if (!this.canResolveUniverseAsOf(date))
+      throw new SymbolMasterNotCoveredError(date);
     return this.readUniverseAsOfInternal(date);
   }
 
@@ -613,74 +698,108 @@ export class SymbolMasterService {
       };
       const readVersionsByShort = (codes: readonly string[]): void => {
         for (let i = 0; i < codes.length; i += 500) {
-          rememberVersions(tx
-            .select({
-              id: symbolMasterVersions.id,
-              shortCode: symbolMasterVersions.shortCode,
-              standardCode: symbolMasterVersions.standardCode,
-              validFromDate: symbolMasterVersions.validFromDate,
-              validToDate: symbolMasterVersions.validToDate,
-            })
-            .from(symbolMasterVersions)
-            .where(inArray(symbolMasterVersions.shortCode, codes.slice(i, i + 500)))
-            .all());
+          rememberVersions(
+            tx
+              .select({
+                id: symbolMasterVersions.id,
+                shortCode: symbolMasterVersions.shortCode,
+                standardCode: symbolMasterVersions.standardCode,
+                validFromDate: symbolMasterVersions.validFromDate,
+                validToDate: symbolMasterVersions.validToDate,
+              })
+              .from(symbolMasterVersions)
+              .where(
+                inArray(
+                  symbolMasterVersions.shortCode,
+                  codes.slice(i, i + 500),
+                ),
+              )
+              .all(),
+          );
         }
       };
       const readVersionsByStandard = (codes: readonly string[]): void => {
         for (let i = 0; i < codes.length; i += 500) {
-          rememberVersions(tx
-            .select({
-              id: symbolMasterVersions.id,
-              shortCode: symbolMasterVersions.shortCode,
-              standardCode: symbolMasterVersions.standardCode,
-              validFromDate: symbolMasterVersions.validFromDate,
-              validToDate: symbolMasterVersions.validToDate,
-            })
-            .from(symbolMasterVersions)
-            .where(inArray(symbolMasterVersions.standardCode, codes.slice(i, i + 500)))
-            .all());
+          rememberVersions(
+            tx
+              .select({
+                id: symbolMasterVersions.id,
+                shortCode: symbolMasterVersions.shortCode,
+                standardCode: symbolMasterVersions.standardCode,
+                validFromDate: symbolMasterVersions.validFromDate,
+                validToDate: symbolMasterVersions.validToDate,
+              })
+              .from(symbolMasterVersions)
+              .where(
+                inArray(
+                  symbolMasterVersions.standardCode,
+                  codes.slice(i, i + 500),
+                ),
+              )
+              .all(),
+          );
         }
       };
 
       readVersionsByShort(requestedShorts);
-      const connectedStandards = [...new Set([
-        ...requestedStandards,
-        ...[...versionsById.values()].map((version) => version.standardCode),
-      ])].sort();
+      const connectedStandards = [
+        ...new Set([
+          ...requestedStandards,
+          ...[...versionsById.values()].map((version) => version.standardCode),
+        ]),
+      ].sort();
       readVersionsByStandard(connectedStandards);
 
-      const registrationsByCode = new Map<string, KnownRegisteredSymbolIdentity>();
-      const rememberRegistrations = (rows: readonly KnownRegisteredSymbolIdentity[]): void => {
+      const registrationsByCode = new Map<
+        string,
+        KnownRegisteredSymbolIdentity
+      >();
+      const rememberRegistrations = (
+        rows: readonly KnownRegisteredSymbolIdentity[],
+      ): void => {
         for (const row of rows) registrationsByCode.set(row.code, row);
       };
       if (includeRegistrations) {
         for (let i = 0; i < requestedShorts.length; i += 500) {
-          rememberRegistrations(tx
-            .select({
-              code: registeredSymbols.code,
-              standardCode: registeredSymbols.standardCode,
-            })
-            .from(registeredSymbols)
-            .where(inArray(registeredSymbols.code, requestedShorts.slice(i, i + 500)))
-            .all());
+          rememberRegistrations(
+            tx
+              .select({
+                code: registeredSymbols.code,
+                standardCode: registeredSymbols.standardCode,
+              })
+              .from(registeredSymbols)
+              .where(
+                inArray(
+                  registeredSymbols.code,
+                  requestedShorts.slice(i, i + 500),
+                ),
+              )
+              .all(),
+          );
         }
         for (let i = 0; i < connectedStandards.length; i += 500) {
-          rememberRegistrations(tx
-            .select({
-              code: registeredSymbols.code,
-              standardCode: registeredSymbols.standardCode,
-            })
-            .from(registeredSymbols)
-            .where(inArray(
-              registeredSymbols.standardCode,
-              connectedStandards.slice(i, i + 500),
-            ))
-            .all());
+          rememberRegistrations(
+            tx
+              .select({
+                code: registeredSymbols.code,
+                standardCode: registeredSymbols.standardCode,
+              })
+              .from(registeredSymbols)
+              .where(
+                inArray(
+                  registeredSymbols.standardCode,
+                  connectedStandards.slice(i, i + 500),
+                ),
+              )
+              .all(),
+          );
         }
       }
 
       const unregisteredShorts = includeRegistrations
-        ? requestedShorts.filter((shortCode) => !registrationsByCode.has(shortCode))
+        ? requestedShorts.filter(
+            (shortCode) => !registrationsByCode.has(shortCode),
+          )
         : [];
       const unregisteredFactShortCodes = new Set<string>();
       const uncoveredBarShortCodes = new Set<string>();
@@ -689,7 +808,7 @@ export class SymbolMasterService {
         for (const row of tx
           .select({ shortCode: facts.key })
           .from(facts)
-          .where(and(eq(facts.scope, 'SYMBOL'), inArray(facts.key, chunk)))
+          .where(and(eq(facts.scope, "SYMBOL"), inArray(facts.key, chunk)))
           .groupBy(facts.key)
           .all()) {
           unregisteredFactShortCodes.add(row.shortCode);
@@ -722,11 +841,16 @@ export class SymbolMasterService {
           .all();
         for (const bound of bounds) {
           if (bound.minDate === null || bound.maxDate === null) continue;
-          const gaps = unsafeIdentityCoverageGaps(versionsByShort.get(bound.shortCode) ?? []);
+          const gaps = unsafeIdentityCoverageGaps(
+            versionsByShort.get(bound.shortCode) ?? [],
+          );
           for (const gap of gaps) {
             if (
-              (gap.from === null && (gap.to === null || bound.minDate < gap.to))
-              || (gap.to === null && gap.from !== null && bound.maxDate >= gap.from)
+              (gap.from === null &&
+                (gap.to === null || bound.minDate < gap.to)) ||
+              (gap.to === null &&
+                gap.from !== null &&
+                bound.maxDate >= gap.from)
             ) {
               uncoveredBarShortCodes.add(bound.shortCode);
               break;
@@ -735,11 +859,13 @@ export class SymbolMasterService {
             const uncovered = tx
               .select({ date: krxDailyBars.date })
               .from(krxDailyBars)
-              .where(and(
-                eq(krxDailyBars.shortCode, bound.shortCode),
-                gte(krxDailyBars.date, gap.from),
-                lt(krxDailyBars.date, gap.to),
-              ))
+              .where(
+                and(
+                  eq(krxDailyBars.shortCode, bound.shortCode),
+                  gte(krxDailyBars.date, gap.from),
+                  lt(krxDailyBars.date, gap.to),
+                ),
+              )
               .limit(1)
               .all();
             if (uncovered.length > 0) {
@@ -750,11 +876,14 @@ export class SymbolMasterService {
         }
       }
 
-      const versions = [...versionsById.values()].map(({ id: _id, ...version }) => version).sort(
-        (left, right) => left.standardCode.localeCompare(right.standardCode)
-          || left.validFromDate.localeCompare(right.validFromDate)
-          || left.shortCode.localeCompare(right.shortCode),
-      );
+      const versions = [...versionsById.values()]
+        .map(({ id: _id, ...version }) => version)
+        .sort(
+          (left, right) =>
+            left.standardCode.localeCompare(right.standardCode) ||
+            left.validFromDate.localeCompare(right.validFromDate) ||
+            left.shortCode.localeCompare(right.shortCode),
+        );
       const registrations = [...registrationsByCode.values()].sort(
         (left, right) => left.code.localeCompare(right.code),
       );
@@ -799,13 +928,29 @@ export class SymbolMasterService {
     if (requestedDates.length === 0) return;
 
     this.backfillSelectionMetricVolume(requestedDates);
-    const repository = new SelectionMetricRepository(this.deps.db, { collectionVersion: this.collectionVersion });
-    for (const date of repository.findMissingTradingValueDates(requestedDates)) {
+    const repository = new SelectionMetricRepository(this.deps.db, {
+      collectionVersion: this.collectionVersion,
+    });
+    for (const date of repository.findMissingTradingValueDates(
+      requestedDates,
+    )) {
       const universe = this.getUniverseAsOf(date);
-      const kospiTrades = await this.deps.source.fetchDailyTrades('KOSPI', date);
-      const kosdaqTrades = await this.deps.source.fetchDailyTrades('KOSDAQ', date);
+      const kospiTrades = await this.deps.source.fetchDailyTrades(
+        "KOSPI",
+        date,
+      );
+      const kosdaqTrades = await this.deps.source.fetchDailyTrades(
+        "KOSDAQ",
+        date,
+      );
       this.deps.db.transaction((tx) => {
-        this.writeSelectionMetrics(tx, date, universe, kospiTrades, kosdaqTrades);
+        this.writeSelectionMetrics(
+          tx,
+          date,
+          universe,
+          kospiTrades,
+          kosdaqTrades,
+        );
       });
     }
   }
@@ -816,10 +961,11 @@ export class SymbolMasterService {
    */
   private backfillSelectionMetricVolume(dates: readonly string[]): void {
     for (const date of dates) {
-      const bars = this.deps.db.select({
-        shortCode: krxDailyBars.shortCode,
-        volume: krxDailyBars.volume,
-      })
+      const bars = this.deps.db
+        .select({
+          shortCode: krxDailyBars.shortCode,
+          volume: krxDailyBars.volume,
+        })
         .from(krxDailyBars)
         .where(eq(krxDailyBars.date, date))
         .all();
@@ -829,32 +975,60 @@ export class SymbolMasterService {
       for (const entry of this.getUniverseAsOf(date).values()) {
         standardCodeByShortCode.set(entry.shortCode, entry.standardCode);
       }
-      const codes = [...new Set(bars
-        .map((bar) => standardCodeByShortCode.get(bar.shortCode))
-        .filter((code): code is string => code !== undefined))];
+      const codes = [
+        ...new Set(
+          bars
+            .map((bar) => standardCodeByShortCode.get(bar.shortCode))
+            .filter((code): code is string => code !== undefined),
+        ),
+      ];
       if (codes.length === 0) continue;
-      const existingVolumes = new Map(this.deps.db.select({
-        standardCode: dailySelectionMetrics.standardCode,
-        volume: dailySelectionMetrics.volume,
-      })
-        .from(dailySelectionMetrics)
-        .where(and(
-          eq(dailySelectionMetrics.date, date),
-          inArray(dailySelectionMetrics.standardCode, codes),
-        ))
-        .all()
-        .map((row) => [row.standardCode, row.volume]));
+      const existingVolumes = new Map(
+        this.deps.db
+          .select({
+            standardCode: dailySelectionMetrics.standardCode,
+            volume: dailySelectionMetrics.volume,
+          })
+          .from(dailySelectionMetrics)
+          .where(
+            and(
+              eq(dailySelectionMetrics.date, date),
+              inArray(dailySelectionMetrics.standardCode, codes),
+            ),
+          )
+          .all()
+          .map((row) => [row.standardCode, row.volume]),
+      );
       const rows = bars.flatMap((bar) => {
         const standardCode = standardCodeByShortCode.get(bar.shortCode);
-        const existingVolume = standardCode === undefined ? undefined : existingVolumes.get(standardCode);
-        if (standardCode === undefined || (existingVolume !== null && existingVolume !== undefined)) return [];
-        return [{ date, standardCode, marketCapKrw: null, volume: bar.volume, tradingValueKrw: null }];
+        const existingVolume =
+          standardCode === undefined
+            ? undefined
+            : existingVolumes.get(standardCode);
+        if (
+          standardCode === undefined ||
+          (existingVolume !== null && existingVolume !== undefined)
+        )
+          return [];
+        return [
+          {
+            date,
+            standardCode,
+            marketCapKrw: null,
+            volume: bar.volume,
+            tradingValueKrw: null,
+          },
+        ];
       });
       for (let index = 0; index < rows.length; index += 190) {
-        this.deps.db.insert(dailySelectionMetrics)
+        this.deps.db
+          .insert(dailySelectionMetrics)
           .values(rows.slice(index, index + 190))
           .onConflictDoUpdate({
-            target: [dailySelectionMetrics.date, dailySelectionMetrics.standardCode],
+            target: [
+              dailySelectionMetrics.date,
+              dailySelectionMetrics.standardCode,
+            ],
             set: { volume: sql`excluded.volume` },
           })
           .run();
@@ -862,8 +1036,11 @@ export class SymbolMasterService {
     }
   }
 
-  private async getMarketCapsAtUnguarded(date: string): Promise<ReadonlyMap<string, string>> {
-    if (!this.canResolveUniverseAsOf(date)) throw new SymbolMasterNotCoveredError(date);
+  private async getMarketCapsAtUnguarded(
+    date: string,
+  ): Promise<ReadonlyMap<string, string>> {
+    if (!this.canResolveUniverseAsOf(date))
+      throw new SymbolMasterNotCoveredError(date);
 
     const cached = this.readCachedMarketCaps(date);
     if (cached !== undefined) return cached;
@@ -874,8 +1051,11 @@ export class SymbolMasterService {
       standardCodeByShortCode.set(entry.shortCode, entry.standardCode);
     }
 
-    const kospiTrades = await this.deps.source.fetchDailyTrades('KOSPI', date);
-    const kosdaqTrades = await this.deps.source.fetchDailyTrades('KOSDAQ', date);
+    const kospiTrades = await this.deps.source.fetchDailyTrades("KOSPI", date);
+    const kosdaqTrades = await this.deps.source.fetchDailyTrades(
+      "KOSDAQ",
+      date,
+    );
 
     const marketCaps = new Map<string, string>();
     for (const row of [...kospiTrades, ...kosdaqTrades]) {
@@ -887,19 +1067,21 @@ export class SymbolMasterService {
         // 마스터가 모르는 단축코드다 — 분류 정책 밖 종목 등으로 생길 수 있어 건너뛰고 경고만 남긴다.
         this.deps.logger.warn(
           {
-            module: 'market-data',
-            event: 'symbol-master.market-cap-unknown-short-code',
+            module: "market-data",
+            event: "symbol-master.market-cap-unknown-short-code",
             date,
             shortCode: row.shortCode,
           },
-          '시총 조회 중 마스터에 없는 단축코드를 건너뛴다',
+          "시총 조회 중 마스터에 없는 단축코드를 건너뛴다",
         );
         continue;
       }
       marketCaps.set(standardCode, row.marketCapRaw);
     }
 
-    this.deps.db.transaction((tx) => this.writeMarketCaps(tx, date, marketCaps));
+    this.deps.db.transaction((tx) =>
+      this.writeMarketCaps(tx, date, marketCaps),
+    );
     return marketCaps;
   }
 
@@ -908,7 +1090,9 @@ export class SymbolMasterService {
    * 매번 KRX 를 재조회하게 되지만, 그런 날짜는 애초에 커버 밖으로 걸러지는 경우가
    * 대부분이라 수용한다.
    */
-  private readCachedMarketCaps(date: string): ReadonlyMap<string, string> | undefined {
+  private readCachedMarketCaps(
+    date: string,
+  ): ReadonlyMap<string, string> | undefined {
     const rows = this.deps.db
       .select({
         standardCode: symbolMasterMarketCaps.standardCode,
@@ -927,13 +1111,17 @@ export class SymbolMasterService {
     date: string,
     marketCaps: ReadonlyMap<string, string>,
   ): void {
-    const rows = [...marketCaps.entries()].map(([standardCode, marketCapKrw]) => ({
-      date,
-      standardCode,
-      marketCapKrw,
-    }));
+    const rows = [...marketCaps.entries()].map(
+      ([standardCode, marketCapKrw]) => ({
+        date,
+        standardCode,
+        marketCapKrw,
+      }),
+    );
     for (let i = 0; i < rows.length; i += 500) {
-      tx.insert(symbolMasterMarketCaps).values(rows.slice(i, i + 500)).run();
+      tx.insert(symbolMasterMarketCaps)
+        .values(rows.slice(i, i + 500))
+        .run();
     }
   }
 
@@ -941,7 +1129,11 @@ export class SymbolMasterService {
    * 수집 완료 구간 목록 — startDate 오름차순. syncedAtMs 는 coverage API 가
    * lastSyncedAtMs(구간들의 최댓값)를 계산하는 데 쓴다.
    */
-  coverageRanges(): { startDate: string; endDate: string; syncedAtMs: number }[] {
+  coverageRanges(): {
+    startDate: string;
+    endDate: string;
+    syncedAtMs: number;
+  }[] {
     return this.deps.db
       .select({
         startDate: symbolMasterCoverage.startDate,
@@ -989,10 +1181,12 @@ export class SymbolMasterService {
     const row = this.deps.db
       .select({ date: symbolMasterTradingDays.date })
       .from(symbolMasterTradingDays)
-      .where(and(
-        lte(symbolMasterTradingDays.date, date),
-        storedTradingDateIsWeekday(),
-      ))
+      .where(
+        and(
+          lte(symbolMasterTradingDays.date, date),
+          storedTradingDateIsWeekday(),
+        ),
+      )
       .orderBy(desc(symbolMasterTradingDays.date))
       .limit(1)
       .get();
@@ -1005,7 +1199,10 @@ export class SymbolMasterService {
    * 트랜잭션 안에서 불러야 한다 — 따로 두면 중간에 죽었을 때 거래일 기록만 빠진다.
    */
   private recordTradingDay(tx: AppDatabase, date: string): void {
-    tx.insert(symbolMasterTradingDays).values({ date }).onConflictDoNothing().run();
+    tx.insert(symbolMasterTradingDays)
+      .values({ date })
+      .onConflictDoNothing()
+      .run();
   }
 
   /**
@@ -1034,8 +1231,8 @@ export class SymbolMasterService {
     kosdaqTrades: readonly KrxDailyTradeRow[],
   ): void {
     const byMarket: readonly [KrxMarket, readonly KrxDailyTradeRow[]][] = [
-      ['KOSPI', kospiTrades],
-      ['KOSDAQ', kosdaqTrades],
+      ["KOSPI", kospiTrades],
+      ["KOSDAQ", kosdaqTrades],
     ];
 
     // Candle.tsMs 규약은 그 거래일의 UTC 자정이다 (krx-daily-candle-repository.ts 참고).
@@ -1048,11 +1245,11 @@ export class SymbolMasterService {
     for (const [market, trades] of byMarket) {
       for (const trade of trades) {
         if (
-          trade.open === null
-          || trade.high === null
-          || trade.low === null
-          || trade.close === null
-          || trade.volume === null
+          trade.open === null ||
+          trade.high === null ||
+          trade.low === null ||
+          trade.close === null ||
+          trade.volume === null
         ) {
           skipped += 1;
           continue;
@@ -1068,8 +1265,8 @@ export class SymbolMasterService {
         }
         const candle: Candle = {
           symbol: trade.shortCode,
-          market: 'KR',
-          timeframe: '1d',
+          market: "KR",
+          timeframe: "1d",
           tsMs,
           open: trade.open,
           high: trade.high,
@@ -1098,25 +1295,35 @@ export class SymbolMasterService {
     // 봉이 조용히 빠진 채로 백테스트가 도는 것을 운영자가 알아야 한다.
     if (skipped > 0) {
       this.deps.logger.warn(
-        { module: 'market-data', event: 'symbol-master.daily-bars-skipped', date, skipped },
-        '가격·거래량 중 null 값이 있는 일봉 행을 건너뛴다',
+        {
+          module: "market-data",
+          event: "symbol-master.daily-bars-skipped",
+          date,
+          skipped,
+        },
+        "가격·거래량 중 null 값이 있는 일봉 행을 건너뛴다",
       );
     }
     if (invalidCount > 0) {
       this.deps.logger.warn(
-        { module: 'market-data', event: 'symbol-master.daily-bars-invalid', date, invalidCount },
-        'OHLC 값이 서로 어긋난 일봉 행을 건너뛴다',
+        {
+          module: "market-data",
+          event: "symbol-master.daily-bars-invalid",
+          date,
+          invalidCount,
+        },
+        "OHLC 값이 서로 어긋난 일봉 행을 건너뛴다",
       );
     }
     if (nonTradingRows.length > 0) {
       this.deps.logger.info(
         {
-          module: 'market-data',
-          event: 'symbol-master.non-trading-days',
+          module: "market-data",
+          event: "symbol-master.non-trading-days",
           date,
           count: nonTradingRows.length,
         },
-        '거래정지·무거래로 봉이 없는 종목을 기록한다',
+        "거래정지·무거래로 봉이 없는 종목을 기록한다",
       );
     }
 
@@ -1127,8 +1334,12 @@ export class SymbolMasterService {
         .onConflictDoUpdate({
           target: [krxDailyBars.shortCode, krxDailyBars.date],
           set: {
-            market: sql`excluded.market`, open: sql`excluded.open`, high: sql`excluded.high`,
-            low: sql`excluded.low`, close: sql`excluded.close`, volume: sql`excluded.volume`,
+            market: sql`excluded.market`,
+            open: sql`excluded.open`,
+            high: sql`excluded.high`,
+            low: sql`excluded.low`,
+            close: sql`excluded.close`,
+            volume: sql`excluded.volume`,
           },
         })
         .run();
@@ -1138,7 +1349,10 @@ export class SymbolMasterService {
         .values(nonTradingRows.slice(i, i + 500))
         .onConflictDoUpdate({
           target: [krxNonTradingDays.date, krxNonTradingDays.shortCode],
-          set: { market: sql`excluded.market`, lastClose: sql`excluded.last_close` },
+          set: {
+            market: sql`excluded.market`,
+            lastClose: sql`excluded.last_close`,
+          },
         })
         .run();
     }
@@ -1172,7 +1386,10 @@ export class SymbolMasterService {
       tx.insert(dailySelectionMetrics)
         .values(rows.slice(index, index + 190))
         .onConflictDoUpdate({
-          target: [dailySelectionMetrics.date, dailySelectionMetrics.standardCode],
+          target: [
+            dailySelectionMetrics.date,
+            dailySelectionMetrics.standardCode,
+          ],
           // 재조회가 KRX 빈 값을 받더라도 migration 으로 옮긴 cap·기존 보강값은 지우지 않는다.
           set: {
             marketCapKrw: sql`coalesce(excluded.market_cap_krw, daily_selection_metrics.market_cap_krw)`,
@@ -1183,10 +1400,17 @@ export class SymbolMasterService {
         .run();
     }
     tx.insert(dailySelectionMetricCoverage)
-      .values({ date, syncedAtMs: this.deps.clock.now(), collectionVersion: this.collectionVersion })
+      .values({
+        date,
+        syncedAtMs: this.deps.clock.now(),
+        collectionVersion: this.collectionVersion,
+      })
       .onConflictDoUpdate({
         target: dailySelectionMetricCoverage.date,
-        set: { syncedAtMs: this.deps.clock.now(), collectionVersion: this.collectionVersion },
+        set: {
+          syncedAtMs: this.deps.clock.now(),
+          collectionVersion: this.collectionVersion,
+        },
       })
       .run();
   }
@@ -1196,7 +1420,13 @@ export class SymbolMasterService {
     const row = this.deps.db
       .select({ id: symbolMasterCoverage.id })
       .from(symbolMasterCoverage)
-      .where(and(eq(symbolMasterCoverage.collectionVersion, this.collectionVersion), lte(symbolMasterCoverage.startDate, date), gte(symbolMasterCoverage.endDate, date)))
+      .where(
+        and(
+          eq(symbolMasterCoverage.collectionVersion, this.collectionVersion),
+          lte(symbolMasterCoverage.startDate, date),
+          gte(symbolMasterCoverage.endDate, date),
+        ),
+      )
       .get();
     return row !== undefined;
   }
@@ -1206,11 +1436,13 @@ export class SymbolMasterService {
     return this.deps.db
       .select({ date: symbolMasterTradingDays.date })
       .from(symbolMasterTradingDays)
-      .where(and(
-        gte(symbolMasterTradingDays.date, from),
-        lte(symbolMasterTradingDays.date, to),
-        storedTradingDateIsWeekday(),
-      ))
+      .where(
+        and(
+          gte(symbolMasterTradingDays.date, from),
+          lte(symbolMasterTradingDays.date, to),
+          storedTradingDateIsWeekday(),
+        ),
+      )
       .orderBy(asc(symbolMasterTradingDays.date))
       .all()
       .map((row) => row.date);
@@ -1228,22 +1460,30 @@ export class SymbolMasterService {
   ): readonly { date: string; shortCode: string; lastClose: number }[] {
     if (shortCodes !== undefined && shortCodes.length === 0) return [];
 
-    const requestedCodes = shortCodes === undefined ? undefined : [...new Set(shortCodes)];
+    const requestedCodes =
+      shortCodes === undefined ? undefined : [...new Set(shortCodes)];
     const rows: { date: string; shortCode: string; lastClose: number }[] = [];
-    const load = (codes?: readonly string[]) => this.deps.db
-      .select({
-        date: krxNonTradingDays.date,
-        shortCode: krxNonTradingDays.shortCode,
-        lastClose: krxNonTradingDays.lastClose,
-      })
-      .from(krxNonTradingDays)
-      .where(and(
-        gte(krxNonTradingDays.date, from),
-        lte(krxNonTradingDays.date, to),
-        codes === undefined ? undefined : inArray(krxNonTradingDays.shortCode, codes),
-      ))
-      .all();
-    const append = (loaded: readonly { date: string; shortCode: string; lastClose: number }[]) => {
+    const load = (codes?: readonly string[]) =>
+      this.deps.db
+        .select({
+          date: krxNonTradingDays.date,
+          shortCode: krxNonTradingDays.shortCode,
+          lastClose: krxNonTradingDays.lastClose,
+        })
+        .from(krxNonTradingDays)
+        .where(
+          and(
+            gte(krxNonTradingDays.date, from),
+            lte(krxNonTradingDays.date, to),
+            codes === undefined
+              ? undefined
+              : inArray(krxNonTradingDays.shortCode, codes),
+          ),
+        )
+        .all();
+    const append = (
+      loaded: readonly { date: string; shortCode: string; lastClose: number }[],
+    ) => {
       for (const row of loaded) rows.push(row);
     };
 
@@ -1256,8 +1496,9 @@ export class SymbolMasterService {
     }
 
     return rows.sort(
-      (left, right) => left.date.localeCompare(right.date)
-        || left.shortCode.localeCompare(right.shortCode),
+      (left, right) =>
+        left.date.localeCompare(right.date) ||
+        left.shortCode.localeCompare(right.shortCode),
     );
   }
 
@@ -1302,19 +1543,27 @@ export class SymbolMasterService {
    * 받았는데 거래불가 종목만 0건인 날은 커버로 남긴다. "봤는데 없었다" 와 "안 봤다"
    * 는 끝까지 갈라야 한다.
    */
-  async backfillNonTradingDays(from: string, to: string): Promise<{ dates: number; rows: number }> {
+  async backfillNonTradingDays(
+    from: string,
+    to: string,
+  ): Promise<{ dates: number; rows: number }> {
     let dates = 0;
     let rows = 0;
     for (let date = from; date <= to; date = addCalendarDays(date, 1)) {
       const byMarket: readonly [KrxMarket, readonly KrxDailyTradeRow[]][] = [
-        ['KOSPI', await this.deps.source.fetchDailyTrades('KOSPI', date)],
-        ['KOSDAQ', await this.deps.source.fetchDailyTrades('KOSDAQ', date)],
+        ["KOSPI", await this.deps.source.fetchDailyTrades("KOSPI", date)],
+        ["KOSDAQ", await this.deps.source.fetchDailyTrades("KOSDAQ", date)],
       ];
       const values: (typeof krxNonTradingDays.$inferInsert)[] = [];
       for (const [market, trades] of byMarket) {
         for (const trade of trades) {
           if (trade.close === null || !isNonTradingRow(trade)) continue;
-          values.push({ shortCode: trade.shortCode, date, market, lastClose: trade.close });
+          values.push({
+            shortCode: trade.shortCode,
+            date,
+            market,
+            lastClose: trade.close,
+          });
         }
       }
       if (byMarket.every(([, trades]) => trades.length === 0)) continue;
@@ -1325,7 +1574,10 @@ export class SymbolMasterService {
       // 조회했기 때문이다 — 하루씩만 넣으면 주말에서 구간이 끊긴다.
       this.deps.db.transaction((tx) => {
         for (let i = 0; i < values.length; i += 500) {
-          tx.insert(krxNonTradingDays).values(values.slice(i, i + 500)).onConflictDoNothing().run();
+          tx.insert(krxNonTradingDays)
+            .values(values.slice(i, i + 500))
+            .onConflictDoNothing()
+            .run();
         }
         this.mergeNonTradingCoverage(tx, from, date);
       });
@@ -1334,7 +1586,9 @@ export class SymbolMasterService {
     // 한 날짜도 응답이 없으면 본 것이 없다 — 커버를 남기지 않는다
     if (dates === 0) return { dates, rows };
     // 마지막 응답일 뒤의 날짜(구간 끝이 주말·휴장인 경우)까지 넓힌다. 그 날짜들도 조회는 했다.
-    this.deps.db.transaction((tx) => this.mergeNonTradingCoverage(tx, from, to));
+    this.deps.db.transaction((tx) =>
+      this.mergeNonTradingCoverage(tx, from, to),
+    );
     return { dates, rows };
   }
 
@@ -1350,27 +1604,41 @@ export class SymbolMasterService {
    * 따로 두면 중간에 죽었을 때 거래불가일 행은 들어갔는데 커버는 안 남은 상태가 되고,
    * 그 날짜는 재수집 게이트에 막혀 영영 커버로 바뀌지 않는다.
    */
-  private mergeNonTradingCoverage(tx: AppDatabase, startDate: string, endDate: string): void {
+  private mergeNonTradingCoverage(
+    tx: AppDatabase,
+    startDate: string,
+    endDate: string,
+  ): void {
     // 하루 차이로 맞닿은 구간까지 합치려고 양쪽을 하루씩 넓혀 겹침을 본다
     const touchStart = addCalendarDays(startDate, -1);
     const touchEnd = addCalendarDays(endDate, 1);
 
     let mergedStart = startDate;
     let mergedEnd = endDate;
-    const ranges = tx.select().from(krxNonTradingCoverage).where(eq(krxNonTradingCoverage.collectionVersion, this.collectionVersion)).all();
+    const ranges = tx
+      .select()
+      .from(krxNonTradingCoverage)
+      .where(
+        eq(krxNonTradingCoverage.collectionVersion, this.collectionVersion),
+      )
+      .all();
     for (const range of ranges) {
       if (range.endDate < touchStart || range.startDate > touchEnd) continue;
       if (range.startDate < mergedStart) mergedStart = range.startDate;
       if (range.endDate > mergedEnd) mergedEnd = range.endDate;
-      tx.delete(krxNonTradingCoverage).where(eq(krxNonTradingCoverage.id, range.id)).run();
+      tx.delete(krxNonTradingCoverage)
+        .where(eq(krxNonTradingCoverage.id, range.id))
+        .run();
     }
 
-    tx.insert(krxNonTradingCoverage).values({
-      startDate: mergedStart,
-      endDate: mergedEnd,
-      collectionVersion: this.collectionVersion,
-      syncedAtMs: this.deps.clock.now(),
-    }).run();
+    tx.insert(krxNonTradingCoverage)
+      .values({
+        startDate: mergedStart,
+        endDate: mergedEnd,
+        collectionVersion: this.collectionVersion,
+        syncedAtMs: this.deps.clock.now(),
+      })
+      .run();
   }
 
   /**
@@ -1389,7 +1657,9 @@ export class SymbolMasterService {
    * 사이에 커서가 못 닿는 틈이 있으면 그 자리에서 false 로 끊는다.
    */
   isRangeCovered(from: string, to: string): boolean {
-    const ranges = this.coverageRanges().filter((range) => range.endDate >= from && range.startDate <= to);
+    const ranges = this.coverageRanges().filter(
+      (range) => range.endDate >= from && range.startDate <= to,
+    );
     let cursor = from;
     for (const range of ranges) {
       if (range.startDate > cursor) return false; // 이 구간 앞에 빈 날짜가 있다
@@ -1424,10 +1694,9 @@ export class SymbolMasterService {
     const observedDates = this.deps.db
       .select({ date: symbolMasterTradingDays.date })
       .from(symbolMasterTradingDays)
-      .where(and(
-        lt(symbolMasterTradingDays.date, to),
-        storedTradingDateIsWeekday(),
-      ))
+      .where(
+        and(lt(symbolMasterTradingDays.date, to), storedTradingDateIsWeekday()),
+      )
       .orderBy(asc(symbolMasterTradingDays.date))
       .all()
       .map((row) => row.date);
@@ -1442,12 +1711,15 @@ export class SymbolMasterService {
       return observedDates[low - 1];
     };
 
-    const boundaries = new Map<string, {
-      date: string;
-      standardCode: string;
-      before?: SymbolMasterEntry;
-      after?: SymbolMasterEntry;
-    }>();
+    const boundaries = new Map<
+      string,
+      {
+        date: string;
+        standardCode: string;
+        before?: SymbolMasterEntry;
+        after?: SymbolMasterEntry;
+      }
+    >();
     const boundary = (date: string, standardCode: string) => {
       const key = `${date}|${standardCode}`;
       const value = boundaries.get(key) ?? { date, standardCode };
@@ -1457,10 +1729,16 @@ export class SymbolMasterService {
 
     for (const row of rows) {
       if (row.validFromDate >= from && row.validFromDate <= to) {
-        boundary(row.validFromDate, row.standardCode).after = this.entryFromVersion(row);
+        boundary(row.validFromDate, row.standardCode).after =
+          this.entryFromVersion(row);
       }
-      if (row.validToDate !== null && row.validToDate >= from && row.validToDate <= to) {
-        boundary(row.validToDate, row.standardCode).before = this.entryFromVersion(row);
+      if (
+        row.validToDate !== null &&
+        row.validToDate >= from &&
+        row.validToDate <= to
+      ) {
+        boundary(row.validToDate, row.standardCode).before =
+          this.entryFromVersion(row);
       }
     }
 
@@ -1469,12 +1747,14 @@ export class SymbolMasterService {
       const observedSpanStart = previousObservedDate(item.date);
       // 저장소가 처음 관측한 baseline 전 종목을 신규상장으로 오인하지 않는다.
       if (observedSpanStart === undefined) continue;
-      const previous: UniverseState = item.before === undefined
-        ? new Map()
-        : new Map([[item.standardCode, item.before]]);
-      const next: UniverseState = item.after === undefined
-        ? new Map()
-        : new Map([[item.standardCode, item.after]]);
+      const previous: UniverseState =
+        item.before === undefined
+          ? new Map()
+          : new Map([[item.standardCode, item.before]]);
+      const next: UniverseState =
+        item.after === undefined
+          ? new Map()
+          : new Map([[item.standardCode, item.after]]);
       for (const draft of diffUniverse(previous, next, {
         effectiveDate: item.date,
         observedSpanStart,
@@ -1486,8 +1766,11 @@ export class SymbolMasterService {
       }
     }
 
-    return events.sort((a, b) =>
-      a.effectiveDate.localeCompare(b.effectiveDate) || a.id.localeCompare(b.id));
+    return events.sort(
+      (a, b) =>
+        a.effectiveDate.localeCompare(b.effectiveDate) ||
+        a.id.localeCompare(b.id),
+    );
   }
 
   /**
@@ -1505,16 +1788,15 @@ export class SymbolMasterService {
     const firstObserved = this.deps.db
       .select({ date: symbolMasterTradingDays.date })
       .from(symbolMasterTradingDays)
-      .where(and(
-        lt(symbolMasterTradingDays.date, to),
-        storedTradingDateIsWeekday(),
-      ))
+      .where(
+        and(lt(symbolMasterTradingDays.date, to), storedTradingDateIsWeekday()),
+      )
       .orderBy(asc(symbolMasterTradingDays.date))
       .get();
     if (firstObserved === undefined) return [];
 
-    const closingVersions = alias(symbolMasterVersions, 'delisted_closing');
-    const exactSuccessors = alias(symbolMasterVersions, 'delisted_successor');
+    const closingVersions = alias(symbolMasterVersions, "delisted_closing");
+    const exactSuccessors = alias(symbolMasterVersions, "delisted_successor");
     const projected = this.deps.db
       .select({
         standardCode: closingVersions.standardCode,
@@ -1529,27 +1811,36 @@ export class SymbolMasterService {
           eq(exactSuccessors.validFromDate, closingVersions.validToDate),
         ),
       )
-      .where(and(
-        isNotNull(closingVersions.validToDate),
-        gte(closingVersions.validToDate, from),
-        lte(closingVersions.validToDate, to),
-        gt(closingVersions.validToDate, firstObserved.date),
-        isNull(exactSuccessors.id),
-      ))
-      .orderBy(asc(closingVersions.validToDate), asc(closingVersions.standardCode))
+      .where(
+        and(
+          isNotNull(closingVersions.validToDate),
+          gte(closingVersions.validToDate, from),
+          lte(closingVersions.validToDate, to),
+          gt(closingVersions.validToDate, firstObserved.date),
+          isNull(exactSuccessors.id),
+        ),
+      )
+      .orderBy(
+        asc(closingVersions.validToDate),
+        asc(closingVersions.standardCode),
+      )
       .all();
-    const candidates: { standardCode: string; shortCode: string; effectiveDate: string }[] = [];
+    const candidates: {
+      standardCode: string;
+      shortCode: string;
+      effectiveDate: string;
+    }[] = [];
     for (const row of projected) {
       if (row.effectiveDate === null) continue;
       if (row.shortCode.length === 0) {
         this.deps.logger.warn(
           {
-            module: 'market-data',
-            event: 'symbol-master.delisted-event-missing-short-code',
+            module: "market-data",
+            event: "symbol-master.delisted-event-missing-short-code",
             id: `${row.effectiveDate}:${row.standardCode}:DELISTED`,
             effectiveDate: row.effectiveDate,
           },
-          'DELISTED 경계의 closing SCD에 shortCode가 없어 건너뛴다',
+          "DELISTED 경계의 closing SCD에 shortCode가 없어 건너뛴다",
         );
         continue;
       }
@@ -1565,7 +1856,9 @@ export class SymbolMasterService {
     // 진짜 재상장은 이 필터에 걸리지 않는다. 단축코드를 재사용해 다른 회사가 들어와도
     // 표준코드는 언제나 새로 발급되기 때문이다 — 폐지된 표준코드가 되살아나는 일은 없다.
     // 그래서 이 조건은 결측만 걸러내고 실제 폐지는 그대로 남긴다.
-    const codes = [...new Set(candidates.map((candidate) => candidate.standardCode))];
+    const codes = [
+      ...new Set(candidates.map((candidate) => candidate.standardCode)),
+    ];
     const reopenedFromDates = new Map<string, string[]>();
     // SQLite 바인딩 변수 상한에 걸리지 않게 다른 조회와 같은 크기로 끊는다
     for (let i = 0; i < codes.length; i += 500) {
@@ -1575,7 +1868,9 @@ export class SymbolMasterService {
           validFromDate: symbolMasterVersions.validFromDate,
         })
         .from(symbolMasterVersions)
-        .where(inArray(symbolMasterVersions.standardCode, codes.slice(i, i + 500)))
+        .where(
+          inArray(symbolMasterVersions.standardCode, codes.slice(i, i + 500)),
+        )
         .all()) {
         const dates = reopenedFromDates.get(row.standardCode) ?? [];
         dates.push(row.validFromDate);
@@ -1585,22 +1880,25 @@ export class SymbolMasterService {
 
     const result: { shortCode: string; effectiveDate: string }[] = [];
     for (const candidate of candidates) {
-      const reopened = (reopenedFromDates.get(candidate.standardCode) ?? []).some(
-        (validFromDate) => validFromDate > candidate.effectiveDate,
-      );
+      const reopened = (
+        reopenedFromDates.get(candidate.standardCode) ?? []
+      ).some((validFromDate) => validFromDate > candidate.effectiveDate);
       if (reopened) {
         this.deps.logger.warn(
           {
-            module: 'market-data',
-            event: 'symbol-master.delisting-suppressed',
+            module: "market-data",
+            event: "symbol-master.delisting-suppressed",
             standardCode: candidate.standardCode,
             effectiveDate: candidate.effectiveDate,
           },
-          '폐지 뒤 같은 표준코드가 다시 열려 있어 폐지로 보지 않는다 — KRX 기초정보 결측으로 본다',
+          "폐지 뒤 같은 표준코드가 다시 열려 있어 폐지로 보지 않는다 — KRX 기초정보 결측으로 본다",
         );
         continue;
       }
-      result.push({ shortCode: candidate.shortCode, effectiveDate: candidate.effectiveDate });
+      result.push({
+        shortCode: candidate.shortCode,
+        effectiveDate: candidate.effectiveDate,
+      });
     }
     return result;
   }
@@ -1627,7 +1925,8 @@ export class SymbolMasterService {
     beforeShares: number;
     afterShares: number;
   }[] {
-    const requestedCodes = shortCodes === undefined ? undefined : [...new Set(shortCodes)];
+    const requestedCodes =
+      shortCodes === undefined ? undefined : [...new Set(shortCodes)];
     if (requestedCodes?.length === 0 || from > to) return [];
 
     // listEvents와 같은 baseline guard다. 저장소가 처음 관측한 날의 validFrom은
@@ -1636,61 +1935,70 @@ export class SymbolMasterService {
     const firstObserved = this.deps.db
       .select({ date: symbolMasterTradingDays.date })
       .from(symbolMasterTradingDays)
-      .where(and(
-        lt(symbolMasterTradingDays.date, to),
-        storedTradingDateIsWeekday(),
-      ))
+      .where(
+        and(lt(symbolMasterTradingDays.date, to), storedTradingDateIsWeekday()),
+      )
       .orderBy(asc(symbolMasterTradingDays.date))
       .get();
     if (firstObserved === undefined) return [];
 
-    const beforeVersions = alias(symbolMasterVersions, 'shares_before');
-    const afterVersions = alias(symbolMasterVersions, 'shares_after');
-    const readRows = (codes: readonly string[] | undefined) => this.deps.db
-      .select({
-        standardCode: afterVersions.standardCode,
-        shortCode: afterVersions.shortCode,
-        effectiveDate: afterVersions.validFromDate,
-        beforeShares: beforeVersions.sharesOutstanding,
-        afterShares: afterVersions.sharesOutstanding,
-      })
-      .from(afterVersions)
-      .innerJoin(
-        beforeVersions,
-        and(
-          eq(beforeVersions.standardCode, afterVersions.standardCode),
-          // idx_smv_code_from으로 직전 version을 한 건만 찾는다. validTo 경계끼리
-          // 바로 join하면 같은 날짜에 수천 종목이 닫힐 때 후보를 서로 반복 탐색한다.
-          sql`${beforeVersions.validFromDate} = (
+    const beforeVersions = alias(symbolMasterVersions, "shares_before");
+    const afterVersions = alias(symbolMasterVersions, "shares_after");
+    const readRows = (codes: readonly string[] | undefined) =>
+      this.deps.db
+        .select({
+          standardCode: afterVersions.standardCode,
+          shortCode: afterVersions.shortCode,
+          effectiveDate: afterVersions.validFromDate,
+          beforeShares: beforeVersions.sharesOutstanding,
+          afterShares: afterVersions.sharesOutstanding,
+        })
+        .from(afterVersions)
+        .innerJoin(
+          beforeVersions,
+          and(
+            eq(beforeVersions.standardCode, afterVersions.standardCode),
+            // idx_smv_code_from으로 직전 version을 한 건만 찾는다. validTo 경계끼리
+            // 바로 join하면 같은 날짜에 수천 종목이 닫힐 때 후보를 서로 반복 탐색한다.
+            sql`${beforeVersions.validFromDate} = (
             SELECT max(candidate.valid_from_date)
             FROM symbol_master_versions AS candidate
             WHERE candidate.standard_code = ${afterVersions.standardCode}
               AND candidate.valid_from_date < ${afterVersions.validFromDate}
           )`,
-          eq(beforeVersions.validToDate, afterVersions.validFromDate),
-        ),
-      )
-      .where(and(
-        gte(afterVersions.validFromDate, from),
-        lte(afterVersions.validFromDate, to),
-        gt(afterVersions.validFromDate, firstObserved.date),
-        sql`${beforeVersions.sharesOutstanding} <> ${afterVersions.sharesOutstanding}`,
-        codes === undefined ? undefined : inArray(afterVersions.shortCode, codes),
-      ))
-      .orderBy(asc(afterVersions.validFromDate), asc(afterVersions.standardCode))
-      .all();
+            eq(beforeVersions.validToDate, afterVersions.validFromDate),
+          ),
+        )
+        .where(
+          and(
+            gte(afterVersions.validFromDate, from),
+            lte(afterVersions.validFromDate, to),
+            gt(afterVersions.validFromDate, firstObserved.date),
+            sql`${beforeVersions.sharesOutstanding} <> ${afterVersions.sharesOutstanding}`,
+            codes === undefined
+              ? undefined
+              : inArray(afterVersions.shortCode, codes),
+          ),
+        )
+        .orderBy(
+          asc(afterVersions.validFromDate),
+          asc(afterVersions.standardCode),
+        )
+        .all();
 
     const rows = requestedCodes === undefined ? readRows(undefined) : [];
     if (requestedCodes !== undefined) {
       for (let index = 0; index < requestedCodes.length; index += 500) {
-        for (const row of readRows(requestedCodes.slice(index, index + 500))) rows.push(row);
+        for (const row of readRows(requestedCodes.slice(index, index + 500)))
+          rows.push(row);
       }
     }
-    rows.sort((left, right) => (
-      left.effectiveDate.localeCompare(right.effectiveDate)
-      || left.shortCode.localeCompare(right.shortCode)
-      || left.standardCode.localeCompare(right.standardCode)
-    ));
+    rows.sort(
+      (left, right) =>
+        left.effectiveDate.localeCompare(right.effectiveDate) ||
+        left.shortCode.localeCompare(right.shortCode) ||
+        left.standardCode.localeCompare(right.standardCode),
+    );
 
     const result: {
       shortCode: string;
@@ -1702,7 +2010,13 @@ export class SymbolMasterService {
     for (const row of rows) {
       const before = Number(row.beforeShares);
       const after = Number(row.afterShares);
-      if (!Number.isFinite(before) || !Number.isFinite(after) || before <= 0 || after <= 0) continue;
+      if (
+        !Number.isFinite(before) ||
+        !Number.isFinite(after) ||
+        before <= 0 ||
+        after <= 0
+      )
+        continue;
       result.push({
         shortCode: row.shortCode,
         effectiveDate: row.effectiveDate,
@@ -1713,7 +2027,8 @@ export class SymbolMasterService {
     }
     return result.sort(
       (a, b) =>
-        a.effectiveDate.localeCompare(b.effectiveDate) || a.shortCode.localeCompare(b.shortCode),
+        a.effectiveDate.localeCompare(b.effectiveDate) ||
+        a.shortCode.localeCompare(b.shortCode),
     );
   }
 
@@ -1727,38 +2042,39 @@ export class SymbolMasterService {
     if (duplicate !== undefined) {
       universe.set(row.standardCode, {
         ...duplicate,
-        instrumentType: 'UNKNOWN_CLASSIFICATION',
+        instrumentType: "UNKNOWN_CLASSIFICATION",
       });
       this.deps.logger.warn(
         {
-          module: 'market-data',
-          event: 'symbol-master.duplicate-standard-code',
+          module: "market-data",
+          event: "symbol-master.duplicate-standard-code",
           market,
           standardCode: row.standardCode,
           shortCodes: [...new Set([duplicate.shortCode, row.shortCode])],
         },
-        'KRX 기본정보의 중복 표준코드를 비매매 상태로 격리한다',
+        "KRX 기본정보의 중복 표준코드를 비매매 상태로 격리한다",
       );
       return;
     }
     let instrumentType: SymbolMasterInstrumentType;
     try {
       const decision = classifyKrxIssue(row);
-      instrumentType = decision.kind === 'INCLUDE' ? decision.instrumentType : decision.reason;
+      instrumentType =
+        decision.kind === "INCLUDE" ? decision.instrumentType : decision.reason;
     } catch (error) {
       if (!(error instanceof UnknownKrxClassificationError)) throw error;
-      instrumentType = 'UNKNOWN_CLASSIFICATION';
+      instrumentType = "UNKNOWN_CLASSIFICATION";
       this.deps.logger.warn(
         {
-          module: 'market-data',
-          event: 'symbol-master.unknown-classification',
+          module: "market-data",
+          event: "symbol-master.unknown-classification",
           market,
           standardCode: row.standardCode,
           shortCode: row.shortCode,
           field: error.field,
           value: error.value,
         },
-        'KRX 분류 필드를 해석할 수 없는 종목을 비매매 상태로 저장한다',
+        "KRX 분류 필드를 해석할 수 없는 종목을 비매매 상태로 저장한다",
       );
     }
 
@@ -1768,15 +2084,15 @@ export class SymbolMasterService {
       // 0으로 채우되 운영이 놓치지 않도록 경고를 남긴다.
       this.deps.logger.warn(
         {
-          module: 'market-data',
-          event: 'symbol-master.shares-missing',
+          module: "market-data",
+          event: "symbol-master.shares-missing",
           standardCode: row.standardCode,
           market,
         },
-        'KRX 기본정보에 상장주식수가 없어 0으로 채운다',
+        "KRX 기본정보에 상장주식수가 없어 0으로 채운다",
       );
-      sharesOutstanding = '0';
-      if (instrumentType === 'COMMON_STOCK') instrumentType = 'MISSING_SHARES';
+      sharesOutstanding = "0";
+      if (instrumentType === "COMMON_STOCK") instrumentType = "MISSING_SHARES";
     }
 
     universe.set(row.standardCode, {
@@ -1813,8 +2129,14 @@ export class SymbolMasterService {
       const previous = modeledByShortCode.get(shortCode);
       if (previous === undefined) {
         this.deps.logger.warn(
-          { module: 'market-data', event: 'symbol-master.unidentified-trade-row', date, market, shortCode },
-          'KRX 일별매매 행에 대응하는 기본정보와 기존 identity가 없어 종목 마스터에서 제외한다',
+          {
+            module: "market-data",
+            event: "symbol-master.unidentified-trade-row",
+            date,
+            market,
+            shortCode,
+          },
+          "KRX 일별매매 행에 대응하는 기본정보와 기존 identity가 없어 종목 마스터에서 제외한다",
         );
         continue;
       }
@@ -1823,18 +2145,18 @@ export class SymbolMasterService {
       if (fetched.has(previous.standardCode)) continue;
       fetched.set(previous.standardCode, {
         ...previous,
-        instrumentType: 'MISSING_BASE_INFO',
+        instrumentType: "MISSING_BASE_INFO",
       });
       this.deps.logger.warn(
         {
-          module: 'market-data',
-          event: 'symbol-master.missing-base-info-row',
+          module: "market-data",
+          event: "symbol-master.missing-base-info-row",
           date,
           market,
           shortCode,
           standardCode: previous.standardCode,
         },
-        'KRX 기본정보가 누락된 거래 종목의 기존 identity를 비매매 상태로 보존한다',
+        "KRX 기본정보가 누락된 거래 종목의 기존 identity를 비매매 상태로 보존한다",
       );
     }
   }
@@ -1847,7 +2169,9 @@ export class SymbolMasterService {
     baseInfo: readonly KrxIssueBaseInfoRow[],
     modeled: UniverseState,
   ): void {
-    const modeledCount = [...modeled.values()].filter((entry) => entry.market === market).length;
+    const modeledCount = [...modeled.values()].filter(
+      (entry) => entry.market === market,
+    ).length;
     if (baseInfo.length === 0 && (trades.length > 0 || modeledCount > 0)) {
       throw new Error(`KRX ${market} 기본정보가 비어 있다(${date})`);
     }
@@ -1865,22 +2189,31 @@ export class SymbolMasterService {
   private mergeCoverage(tx: AppDatabase, date: string): void {
     const before = addCalendarDays(date, -1);
     const after = addCalendarDays(date, 1);
-    const ranges = tx.select().from(symbolMasterCoverage).where(eq(symbolMasterCoverage.collectionVersion, this.collectionVersion)).all();
+    const ranges = tx
+      .select()
+      .from(symbolMasterCoverage)
+      .where(eq(symbolMasterCoverage.collectionVersion, this.collectionVersion))
+      .all();
     const beforeRange = ranges.find((range) => range.endDate === before);
     const afterRange = ranges.find((range) => range.startDate === after);
 
-    const toRemove: SymbolMasterCoverageRow[] = [beforeRange, afterRange].filter(
-      (range): range is SymbolMasterCoverageRow => range !== undefined,
-    );
+    const toRemove: SymbolMasterCoverageRow[] = [
+      beforeRange,
+      afterRange,
+    ].filter((range): range is SymbolMasterCoverageRow => range !== undefined);
     for (const range of toRemove) {
-      tx.delete(symbolMasterCoverage).where(eq(symbolMasterCoverage.id, range.id)).run();
+      tx.delete(symbolMasterCoverage)
+        .where(eq(symbolMasterCoverage.id, range.id))
+        .run();
     }
 
-    tx.insert(symbolMasterCoverage).values({
-      collectionVersion: this.collectionVersion,
-      startDate: beforeRange?.startDate ?? date,
-      endDate: afterRange?.endDate ?? date,
-      syncedAtMs: this.deps.clock.now(),
-    }).run();
+    tx.insert(symbolMasterCoverage)
+      .values({
+        collectionVersion: this.collectionVersion,
+        startDate: beforeRange?.startDate ?? date,
+        endDate: afterRange?.endDate ?? date,
+        syncedAtMs: this.deps.clock.now(),
+      })
+      .run();
   }
 }

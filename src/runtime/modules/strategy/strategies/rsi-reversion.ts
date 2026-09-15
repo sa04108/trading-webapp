@@ -1,11 +1,11 @@
-import { z } from 'zod';
-import type { OrderIntent } from '../../backtest/domain/types.js';
+import { z } from "zod";
+import type { OrderIntent } from "../../backtest/domain/types.js";
 import type {
   StrategyBarContext,
   StrategyDecision,
   TradingStrategy,
   StrategyInitializeContext,
-} from '../domain/strategy.js';
+} from "../domain/strategy.js";
 import {
   newAtr,
   newRsi,
@@ -16,7 +16,7 @@ import {
   updateRsi,
   type AtrState,
   type RsiState,
-} from './shared/indicators.js';
+} from "./shared/indicators.js";
 import {
   correlationWarmupWarnings,
   newCorrelationGroupingState,
@@ -25,15 +25,15 @@ import {
   selectSeededGroupEntries,
   updateCorrelationGrouping,
   type CorrelationGroupingState,
-} from './shared/pair-groups.js';
-import { riskQuantity } from './shared/position-sizing.js';
+} from "./shared/pair-groups.js";
+import { riskQuantity } from "./shared/position-sizing.js";
 import {
   confirmEntry,
   holdLimitReached,
   newHolding,
   scaleHoldingPrices,
   type HoldingState,
-} from './shared/trailing-stop.js';
+} from "./shared/trailing-stop.js";
 
 /**
  * RSI 되돌림 (설계 2026-07-30-swing-strategies-design.md §4).
@@ -45,50 +45,54 @@ import {
 export const rsiReversionParameters = z
   .object({
     rsiPeriod: z.number().int().min(2).max(100).default(14).meta({
-      title: 'RSI 계산 기간',
-      description: '과매도·회복을 재는 RSI 의 봉 수입니다. 짧으면 민감하고 잦은 신호가 납니다.',
+      title: "RSI 계산 기간",
+      description:
+        "과매도·회복을 재는 RSI 의 봉 수입니다. 짧으면 민감하고 잦은 신호가 납니다.",
     }),
     entryRsi: z.number().min(5).max(45).default(30).meta({
-      title: '진입 RSI',
-      description: 'RSI 가 이 값 이하로 내려간 종목을 삽니다. 낮게 잡을수록 깊은 과매도만 잡습니다.',
+      title: "진입 RSI",
+      description:
+        "RSI 가 이 값 이하로 내려간 종목을 삽니다. 낮게 잡을수록 깊은 과매도만 잡습니다.",
     }),
     exitRsi: z.number().min(50).max(95).default(55).meta({
-      title: '청산 RSI',
-      description: '보유 중 RSI 가 이 값 이상으로 회복하면 팝니다.',
+      title: "청산 RSI",
+      description: "보유 중 RSI 가 이 값 이상으로 회복하면 팝니다.",
     }),
     atrPeriod: z.number().int().min(2).max(100).default(14).meta({
-      title: '변동성(ATR) 계산 기간',
-      description: '손절 폭과 주문 수량의 기준이 되는 변동성을 몇 개 봉으로 평균낼지 정합니다.',
+      title: "변동성(ATR) 계산 기간",
+      description:
+        "손절 폭과 주문 수량의 기준이 되는 변동성을 몇 개 봉으로 평균낼지 정합니다.",
     }),
     stopAtrMultiplier: z.number().positive().max(20).default(2).meta({
-      title: '손절 폭 (변동성 배수)',
+      title: "손절 폭 (변동성 배수)",
       description:
-        '진입가에서 변동성 × 이 값만큼 내려가면 손절합니다. 고정 손절선이며 고점을 따라 움직이지 않습니다.',
+        "진입가에서 변동성 × 이 값만큼 내려가면 손절합니다. 고정 손절선이며 고점을 따라 움직이지 않습니다.",
     }),
     // 라벨에 "(선택)" 을 쓰지 않는다 — 위저드가 optional 파라미터에 붙여준다
     maxHoldBars: z.number().int().min(1).max(10_000).optional().meta({
-      title: '최대 보유 봉 수',
+      title: "최대 보유 봉 수",
       description:
-        '이 봉 수를 넘기면 신호와 무관하게 팝니다. 일봉 기준으로 20이면 약 1달입니다. 비우면 제한이 없습니다.',
+        "이 봉 수를 넘기면 신호와 무관하게 팝니다. 일봉 기준으로 20이면 약 1달입니다. 비우면 제한이 없습니다.",
     }),
     riskPerTradePercent: z.number().positive().max(5).default(1).meta({
-      title: '1회 거래 리스크 (%)',
-      description: '한 번의 거래에서 감당할 자본 비율입니다. 주문 수량 = 자본 × 이 비율 ÷ 손절 폭.',
+      title: "1회 거래 리스크 (%)",
+      description:
+        "한 번의 거래에서 감당할 자본 비율입니다. 주문 수량 = 자본 × 이 비율 ÷ 손절 폭.",
     }),
     correlationBars: z.number().int().min(20).max(500).default(60).meta({
-      title: '상관 계산 봉 수',
+      title: "상관 계산 봉 수",
       description:
-        '활성 종목 중 이 봉 수를 확보한 종목이 생기면 종목쌍별 상관을 계산해 반대로 움직이는 종목들을 한 묶음으로 봅니다. 이 구간에는 진입하지 않습니다.',
+        "활성 종목 중 이 봉 수를 확보한 종목이 생기면 종목쌍별 상관을 계산해 반대로 움직이는 종목들을 한 묶음으로 봅니다. 이 구간에는 진입하지 않습니다.",
     }),
     correlationThreshold: z.number().min(0.1).max(0.95).default(0.5).meta({
-      title: '역상관 판정 기준',
+      title: "역상관 판정 기준",
       description:
-        '상관계수가 이 값보다 강하게 반대(-)면 같은 묶음으로 봅니다. 같은 묶음에서는 한 종목만 보유합니다.',
+        "상관계수가 이 값보다 강하게 반대(-)면 같은 묶음으로 봅니다. 같은 묶음에서는 한 종목만 보유합니다.",
     }),
   })
   .refine((value) => value.entryRsi < value.exitRsi, {
-    message: '진입 RSI 는 청산 RSI 보다 작아야 합니다',
-    path: ['entryRsi'],
+    message: "진입 RSI 는 청산 RSI 보다 작아야 합니다",
+    path: ["entryRsi"],
   });
 
 export type RsiReversionParameters = z.infer<typeof rsiReversionParameters>;
@@ -113,20 +117,24 @@ function getSymbolState(state: RsiReversionState, symbol: string): SymbolState {
   return symbolState;
 }
 
-export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiReversionState> = {
-  id: 'rsi-reversion',
-  version: '1.1.2',
-  name: 'RSI 되돌림',
+export const rsiReversionStrategy: TradingStrategy<
+  RsiReversionParameters,
+  RsiReversionState
+> = {
+  id: "rsi-reversion",
+  version: "1.1.2",
+  name: "RSI 되돌림",
   description:
-    'RSI 과매도 종목을 사서 RSI 가 회복하면 팝니다. 반대로 움직이는 종목(예: 레버리지·인버스 쌍)을 ' +
-    '함께 넣으면 같은 묶음에서 한 종목만 보유합니다.',
+    "RSI 과매도 종목을 사서 RSI 가 회복하면 팝니다. 반대로 움직이는 종목(예: 레버리지·인버스 쌍)을 " +
+    "함께 넣으면 같은 묶음에서 한 종목만 보유합니다.",
   parameterSchema: rsiReversionParameters,
   dataRequirements: {
-    priceWarmupBars: (parameters) => Math.max(
-      parameters.rsiPeriod + 1,
-      parameters.atrPeriod,
-      parameters.correlationBars,
-    ),
+    priceWarmupBars: (parameters) =>
+      Math.max(
+        parameters.rsiPeriod + 1,
+        parameters.atrPeriod,
+        parameters.correlationBars,
+      ),
     requiresCorporateActions: true,
   },
 
@@ -145,7 +153,9 @@ export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiRe
   ): StrategyDecision {
     const orders: OrderIntent[] = [];
     // 심볼 사전순 고정 — 같은 봉에서 여러 종목이 신호를 내도 순서가 재현된다
-    const sortedBars = [...context.bars.entries()].sort(([a], [b]) => (a < b ? -1 : 1));
+    const sortedBars = [...context.bars.entries()].sort(([a], [b]) =>
+      a < b ? -1 : 1,
+    );
     const barSymbols = sortedBars.map(([symbol]) => symbol);
 
     // 1) 지표 갱신 + 상관 워밍업 누적 (봉 시각과 함께 — pair-groups.ts 참고)
@@ -194,21 +204,30 @@ export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiRe
       if (symbolState.holding.exitPending) continue;
 
       if (symbolState.holding.stopLevel === null) {
-        confirmEntry(symbolState.holding, position.avgEntryPrice, parameters.stopAtrMultiplier);
+        confirmEntry(
+          symbolState.holding,
+          position.avgEntryPrice,
+          parameters.stopAtrMultiplier,
+        );
       }
 
       const rsi = rsiValue(symbolState.rsi);
       const stop = symbolState.holding.stopLevel;
       const reason =
         rsi !== null && rsi >= parameters.exitRsi
-          ? 'RSI_EXIT'
+          ? "RSI_EXIT"
           : stop !== null && bar.close < stop
-            ? 'STOP'
+            ? "STOP"
             : holdLimitReached(symbolState.holding, parameters.maxHoldBars)
-              ? 'TIME'
+              ? "TIME"
               : null;
       if (reason !== null) {
-        orders.push({ symbol, side: 'SELL', quantity: position.quantity, reason });
+        orders.push({
+          symbol,
+          side: "SELL",
+          quantity: position.quantity,
+          reason,
+        });
         symbolState.holding.exitPending = true;
       }
     }
@@ -220,7 +239,10 @@ export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiRe
       for (const symbol of currentSymbols) {
         const position = context.portfolio.positions.get(symbol);
         const holding = state.bySymbol.get(symbol)?.holding;
-        if ((position && position.quantity > 0) || holding?.pendingEntry === true) {
+        if (
+          (position && position.quantity > 0) ||
+          holding?.pendingEntry === true
+        ) {
           claimed.add(groupOf.get(symbol) ?? symbol);
         }
       }
@@ -233,7 +255,10 @@ export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiRe
       }> = [];
       for (const symbol of barSymbols) {
         const symbolState = getSymbolState(state, symbol);
-        if (context.tradableSymbols !== null && !context.tradableSymbols.has(symbol)) {
+        if (
+          context.tradableSymbols !== null &&
+          !context.tradableSymbols.has(symbol)
+        ) {
           symbolState.holding.pendingEntry = false;
           continue;
         }
@@ -269,10 +294,13 @@ export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiRe
         });
       }
 
-      for (const candidate of selectSeededGroupEntries(candidates, context.rng)) {
+      for (const candidate of selectSeededGroupEntries(
+        candidates,
+        context.rng,
+      )) {
         const { symbol, quantity, entryAtr } = candidate;
         const symbolState = getSymbolState(state, symbol);
-        orders.push({ symbol, side: 'BUY', quantity, reason: 'REVERSION' });
+        orders.push({ symbol, side: "BUY", quantity, reason: "REVERSION" });
         symbolState.holding = newHolding();
         symbolState.holding.pendingEntry = true;
         symbolState.holding.entryAtr = entryAtr;
@@ -283,7 +311,11 @@ export const rsiReversionStrategy: TradingStrategy<RsiReversionParameters, RsiRe
   },
 
   completionWarnings(state, parameters) {
-    return correlationWarmupWarnings(state, parameters.correlationBars, 'RSI 되돌림');
+    return correlationWarmupWarnings(
+      state,
+      parameters.correlationBars,
+      "RSI 되돌림",
+    );
   },
 
   // 분할 등 자본변동이 걸린 종목의 가격 상태를 같은 비율로 내린다.

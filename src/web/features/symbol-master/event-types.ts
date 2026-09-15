@@ -6,18 +6,18 @@
  * 하나 늘 때 한쪽만 고쳐도 눈치채기 어렵다.
  */
 const EVENT_TYPE_LABELS = {
-  LISTED: '신규상장',
-  DELISTED: '상장폐지',
-  MARKET_MOVED: '시장이전',
-  SHARES_CHANGED: '주식수 변경',
-  NAME_CHANGED: '종목명 변경',
-  TYPE_CHANGED: '유형 변경',
-  SHORT_CODE_CHANGED: '단축코드 변경',
-  LISTED_DATE_CHANGED: '상장일 변경',
+  LISTED: "신규상장",
+  DELISTED: "상장폐지",
+  MARKET_MOVED: "시장이전",
+  SHARES_CHANGED: "주식수 변경",
+  NAME_CHANGED: "종목명 변경",
+  TYPE_CHANGED: "유형 변경",
+  SHORT_CODE_CHANGED: "단축코드 변경",
+  LISTED_DATE_CHANGED: "상장일 변경",
 } as const;
 
 export type SymbolMasterEventType = keyof typeof EVENT_TYPE_LABELS;
-export type EventTypeFilter = 'ALL' | SymbolMasterEventType;
+export type EventTypeFilter = "ALL" | SymbolMasterEventType;
 
 export function eventTypeLabel(eventType: string): string {
   return EVENT_TYPE_LABELS[eventType as SymbolMasterEventType] ?? eventType;
@@ -34,17 +34,19 @@ export interface EventTypeFilterOption {
  * 돌아가 버린다.
  */
 export const EVENT_TYPE_FILTER_OPTIONS: readonly EventTypeFilterOption[] = [
-  { value: 'ALL', label: '전체 보기' },
-  ...(Object.keys(EVENT_TYPE_LABELS) as SymbolMasterEventType[]).map((value) => ({
-    value,
-    label: EVENT_TYPE_LABELS[value],
-  })),
+  { value: "ALL", label: "전체 보기" },
+  ...(Object.keys(EVENT_TYPE_LABELS) as SymbolMasterEventType[]).map(
+    (value) => ({
+      value,
+      label: EVENT_TYPE_LABELS[value],
+    }),
+  ),
 ];
 
 export function filterEventsByType<T extends { readonly eventType: string }>(
   events: readonly T[],
   filter: EventTypeFilter | string,
 ): readonly T[] {
-  if (filter === 'ALL') return events;
+  if (filter === "ALL") return events;
   return events.filter((event) => event.eventType === filter);
 }

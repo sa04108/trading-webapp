@@ -3,13 +3,13 @@ import {
   useQuery,
   useQueryClient,
   type UseMutationResult,
-} from '@tanstack/react-query';
-import { type ApiError, api, postJson } from '@/lib/api-client';
+} from "@tanstack/react-query";
+import { type ApiError, api, postJson } from "@/lib/api-client";
 import type {
   SymbolMasterCoverageDto,
   SymbolMasterEventDto,
   SymbolMasterUniverseDto,
-} from '../../../shared/schemas/symbol-master.js';
+} from "../../../shared/schemas/symbol-master.js";
 
 /**
  * 종목 마스터 커버리지 — 백필 진행 상태를 화면에 반영해야 해서 staleTime 을
@@ -22,8 +22,8 @@ export function useSymbolMasterCoverage(): {
   refetch: () => void;
 } {
   const { data, isLoading, refetch } = useQuery({
-    queryKey: ['symbol-master', 'coverage'],
-    queryFn: () => api<SymbolMasterCoverageDto>('/symbol-master/coverage'),
+    queryKey: ["symbol-master", "coverage"],
+    queryFn: () => api<SymbolMasterCoverageDto>("/symbol-master/coverage"),
     staleTime: 10_000,
   });
   return {
@@ -41,8 +41,9 @@ export function useSymbolMasterUniverse(date: string | null): {
   isLoading: boolean;
 } {
   const { data, isLoading } = useQuery({
-    queryKey: ['symbol-master', 'universe', date],
-    queryFn: () => api<SymbolMasterUniverseDto>(`/symbol-master/universe?date=${date}`),
+    queryKey: ["symbol-master", "universe", date],
+    queryFn: () =>
+      api<SymbolMasterUniverseDto>(`/symbol-master/universe?date=${date}`),
     enabled: date !== null,
   });
   return { universe: data ?? null, isLoading };
@@ -54,8 +55,11 @@ export function useSymbolMasterEvents(
   to: string,
 ): { events: readonly SymbolMasterEventDto[]; isLoading: boolean } {
   const { data, isLoading } = useQuery({
-    queryKey: ['symbol-master', 'events', from, to],
-    queryFn: () => api<{ events: SymbolMasterEventDto[] }>(`/symbol-master/events?from=${from}&to=${to}`),
+    queryKey: ["symbol-master", "events", from, to],
+    queryFn: () =>
+      api<{ events: SymbolMasterEventDto[] }>(
+        `/symbol-master/events?from=${from}&to=${to}`,
+      ),
   });
   return { events: data?.events ?? [], isLoading };
 }
@@ -67,12 +71,17 @@ export function useSymbolMasterEvents(
  * 시작하는 쿼리를 통째로 무효화한다 — 어느 쿼리가 영향받는지 개별적으로
  * 추적하는 것보다 한 번에 지우는 편이 안전하다.
  */
-export function useSymbolMasterSync(): UseMutationResult<unknown, ApiError, { date: string }> {
+export function useSymbolMasterSync(): UseMutationResult<
+  unknown,
+  ApiError,
+  { date: string }
+> {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: { date: string }) => postJson<unknown>('/symbol-master/sync', input),
+    mutationFn: (input: { date: string }) =>
+      postJson<unknown>("/symbol-master/sync", input),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['symbol-master'] });
+      void queryClient.invalidateQueries({ queryKey: ["symbol-master"] });
     },
   });
 }

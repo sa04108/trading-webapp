@@ -1,11 +1,11 @@
-import type { Clock } from '../../../../runtime/shared/clock.js';
-import type { Logger } from '../../../shared/logger.js';
-import { SYMBOL_PATTERN } from '../../../../runtime/modules/market-data/domain/candle.js';
+import type { Clock } from "../../../../runtime/shared/clock.js";
+import type { Logger } from "../../../shared/logger.js";
+import { SYMBOL_PATTERN } from "../../../../runtime/modules/market-data/domain/candle.js";
 import {
   StockInfoSourceNotConfiguredError,
   type StockInfo,
   type StockInfoSource,
-} from '../../../../runtime/modules/market-data/application/ports.js';
+} from "../../../../runtime/modules/market-data/application/ports.js";
 
 const DEFAULT_TTL_MS = 24 * 3600 * 1000; // 종목명은 사실상 불변 — 상장폐지 반영 정도면 충분
 
@@ -20,10 +20,14 @@ interface CacheEntry {
  * 에 심어 뒀는데 조회 경로가 그걸 안 보면, 멀쩡히 상장된 종목도 이름을 잃는다.
  */
 export interface LocalSymbolNameSource {
-  getLocalNames(codes: readonly string[]): ReadonlyMap<string, { name: string; market: string }>;
+  getLocalNames(
+    codes: readonly string[],
+  ): ReadonlyMap<string, { name: string; market: string }>;
 }
 
-const NO_LOCAL_NAMES: LocalSymbolNameSource = { getLocalNames: () => new Map() };
+const NO_LOCAL_NAMES: LocalSymbolNameSource = {
+  getLocalNames: () => new Map(),
+};
 
 /**
  * 종목 코드 → 이름 조회 (설계 2026-07-28-broker-sync-design.md 후속).
@@ -44,7 +48,8 @@ export class SymbolInfoService {
   async lookup(symbols: readonly string[]): Promise<StockInfo[]> {
     const unique = [...new Set(symbols)];
     for (const symbol of unique) {
-      if (!SYMBOL_PATTERN.test(symbol)) throw new Error(`invalid symbol: ${symbol}`);
+      if (!SYMBOL_PATTERN.test(symbol))
+        throw new Error(`invalid symbol: ${symbol}`);
     }
 
     const now = this.clock.now();
@@ -55,7 +60,8 @@ export class SymbolInfoService {
 
     if (misses.length > 0) {
       try {
-        const { stocks, failedSymbols } = await this.source.getStockInfo(misses);
+        const { stocks, failedSymbols } =
+          await this.source.getStockInfo(misses);
         const bySymbol = new Map(stocks.map((info) => [info.symbol, info]));
         const failed = new Set(failedSymbols);
         for (const symbol of misses) {
@@ -63,13 +69,20 @@ export class SymbolInfoService {
           // "이번엔 못 물어봤다" 이므로, 다음 조회에서 다시 시도돼야 한다. 성공한
           // 청크의 응답에 없었던 코드만 null 로 부정 캐시한다(원래 캐시 의미 유지).
           if (failed.has(symbol)) continue;
-          this.cache.set(symbol, { info: bySymbol.get(symbol) ?? null, cachedAtMs: now });
+          this.cache.set(symbol, {
+            info: bySymbol.get(symbol) ?? null,
+            cachedAtMs: now,
+          });
         }
       } catch (error) {
         if (!(error instanceof StockInfoSourceNotConfiguredError)) {
           this.logger.warn(
-            { module: 'market-data', event: 'symbol-info.lookup.failed', err: error },
-            'stock info lookup failed — returning cached names only',
+            {
+              module: "market-data",
+              event: "symbol-info.lookup.failed",
+              err: error,
+            },
+            "stock info lookup failed — returning cached names only",
           );
         }
         // 미설정·조회 실패 모두 misses 는 캐시하지 않는다 — 재시도가 가능해야 한다.
@@ -109,7 +122,7 @@ export class SymbolInfoService {
             name: found.name,
             englishName: null,
             market: found.market,
-            status: '',
+            status: "",
             sharesOutstanding: null,
           });
         }

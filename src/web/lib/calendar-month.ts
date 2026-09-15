@@ -15,14 +15,14 @@ export interface CalendarCell {
 
 /** 'YYYY-MM' 를 연·월 숫자로 쪼갠다 */
 function parseMonth(month: string): { year: number; monthIndex: number } {
-  const parts = month.split('-');
+  const parts = month.split("-");
   return { year: Number(parts[0]), monthIndex: Number(parts[1]) - 1 };
 }
 
 function toIso(ms: number): string {
   const d = new Date(ms);
-  const month = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(d.getUTCDate()).padStart(2, '0');
+  const month = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
   return `${d.getUTCFullYear()}-${month}-${day}`;
 }
 
@@ -36,7 +36,7 @@ export function addMonths(month: string, delta: number): string {
   const { year, monthIndex } = parseMonth(month);
   const total = year * 12 + monthIndex + delta;
   const nextYear = Math.floor(total / 12);
-  const nextMonth = String((total % 12) + 1).padStart(2, '0');
+  const nextMonth = String((total % 12) + 1).padStart(2, "0");
   return `${nextYear}-${nextMonth}`;
 }
 

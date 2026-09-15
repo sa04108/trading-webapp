@@ -1,7 +1,7 @@
-import type { AppDatabase } from '../../shared/db/database.js';
-import { auditLogs } from '../../shared/db/schema.js';
-import type { Clock } from '../../shared/clock.js';
-import type { Logger } from 'pino';
+import type { AppDatabase } from "../../shared/db/database.js";
+import { auditLogs } from "../../shared/db/schema.js";
+import type { Clock } from "../../shared/clock.js";
+import type { Logger } from "pino";
 
 /** 스펙 §34 감사 로그: DB 저장 + 구조화 로그 동시 기록 */
 export interface AuditLogService {
@@ -24,7 +24,7 @@ export function createAuditLogService(
           createdAtMs,
         })
         .run();
-      logger.info({ module: 'audit', event, actor, ...detail }, event);
+      logger.info({ module: "audit", event, actor, ...detail }, event);
     },
   };
 }

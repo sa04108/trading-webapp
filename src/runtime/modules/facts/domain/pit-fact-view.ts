@@ -1,4 +1,4 @@
-import { KR_SESSION } from '../../market-data/domain/exchange-session.js';
+import { KR_SESSION } from "../../market-data/domain/exchange-session.js";
 import {
   CORPORATE_ACTION_FIELD,
   FLOW_FIELDS,
@@ -6,7 +6,7 @@ import {
   type Fact,
   type FundamentalField,
   type FundamentalSnapshot,
-} from './fact.js';
+} from "./fact.js";
 
 const MS_PER_MINUTE = 60_000;
 const QUARTER_PATTERN = /^(\d{4})Q([1-4])$/;
@@ -96,7 +96,8 @@ export class PitFactView {
       if (a.asOfTsMs !== b.asOfTsMs) return a.asOfTsMs - b.asOfTsMs;
       if (a.key !== b.key) return a.key < b.key ? -1 : 1;
       if (a.field !== b.field) return a.field < b.field ? -1 : 1;
-      if (a.periodKey !== b.periodKey) return a.periodKey < b.periodKey ? -1 : 1;
+      if (a.periodKey !== b.periodKey)
+        return a.periodKey < b.periodKey ? -1 : 1;
       return a.value - b.value;
     });
 
@@ -113,7 +114,7 @@ export class PitFactView {
     // 것은 룩어헤드가 아니다 (설계 §3.4 가 명시).
     const timed: Fact[] = [];
     for (const fact of sorted) {
-      if (fact.scope === 'SYMBOL' && fact.field === CORPORATE_ACTION_FIELD) {
+      if (fact.scope === "SYMBOL" && fact.field === CORPORATE_ACTION_FIELD) {
         this.absorbCorporateAction(fact);
         continue;
       }
@@ -145,12 +146,22 @@ export class PitFactView {
         if (!fieldEntry || fieldEntry.latestQuarter === null) return null;
         // 이 계정 자신의 최신 분기를 쓴다 — 전역 커서가 아니다. 다른 계정이
         // 커서를 몇 분기 앞서 밀었어도 느린 주기의 계정은 값을 잃지 않는다.
-        const found = fieldEntry.byPeriod.get(ordinalToPeriodKey(fieldEntry.latestQuarter));
+        const found = fieldEntry.byPeriod.get(
+          ordinalToPeriodKey(fieldEntry.latestQuarter),
+        );
         return found ? found.value : null;
       },
-      quarter(field: FundamentalField, offset = 0): { periodKey: string; value: number } | null {
+      quarter(
+        field: FundamentalField,
+        offset = 0,
+      ): { periodKey: string; value: number } | null {
         const fieldEntry = entry.fields.get(field);
-        if (!fieldEntry || fieldEntry.latestQuarter === null || !Number.isInteger(offset) || offset < 0) {
+        if (
+          !fieldEntry ||
+          fieldEntry.latestQuarter === null ||
+          !Number.isInteger(offset) ||
+          offset < 0
+        ) {
           return null;
         }
         const periodKey = ordinalToPeriodKey(fieldEntry.latestQuarter - offset);
@@ -239,7 +250,12 @@ export class PitFactView {
    */
   private absorbCorporateAction(fact: Fact): void {
     const effectiveTsMs = localDateToUtcMs(fact.periodKey);
-    if (effectiveTsMs === null || !Number.isFinite(fact.value) || fact.value <= 0) return;
+    if (
+      effectiveTsMs === null ||
+      !Number.isFinite(fact.value) ||
+      fact.value <= 0
+    )
+      return;
     const entry = this.entryFor(fact.key);
 
     const existing = entry.actionsByPeriod.get(fact.periodKey);
@@ -248,7 +264,10 @@ export class PitFactView {
         // 같은 이벤트의 중복 — 비율은 그대로 두고 접수일만 가장 이른 것으로 접는다.
         // 접수일을 접어두지 않으면 뒤이어 오는 비율 충돌의 승자가 입력 순서로 갈린다.
         if (fact.asOfTsMs < existing.asOfTsMs) {
-          entry.actionsByPeriod.set(fact.periodKey, { ...existing, asOfTsMs: fact.asOfTsMs });
+          entry.actionsByPeriod.set(fact.periodKey, {
+            ...existing,
+            asOfTsMs: fact.asOfTsMs,
+          });
         }
         return;
       }
@@ -264,12 +283,15 @@ export class PitFactView {
     });
     // periodKey 하나당 한 칸이므로 effectiveTsMs 에 동률이 없다 — 정렬이 결정적이다
     entry.actions = [...entry.actionsByPeriod.values()]
-      .map((action) => ({ effectiveTsMs: action.effectiveTsMs, ratio: action.ratio }))
+      .map((action) => ({
+        effectiveTsMs: action.effectiveTsMs,
+        ratio: action.ratio,
+      }))
       .sort((a, b) => a.effectiveTsMs - b.effectiveTsMs);
   }
 
   private absorb(fact: Fact): void {
-    if (fact.scope !== 'SYMBOL') return; // MACRO 는 이 뷰가 다루지 않는다
+    if (fact.scope !== "SYMBOL") return; // MACRO 는 이 뷰가 다루지 않는다
 
     // 분기 키('YYYYQn')만 재무 스냅샷에 들어간다. 연간('YYYYFY')은 스코프 밖 —
     // 이 플랜의 두 전략 모두 분기 데이터만 쓴다. SPLIT_RATIO 는 생성 시점에 이미
@@ -286,7 +308,10 @@ export class PitFactView {
     const existing = field.byPeriod.get(fact.periodKey);
     // asOfTsMs 오름차순으로 흡수하므로 뒤에 온 것이 더 늦은 공시 = 재집계다
     if (!existing || fact.asOfTsMs >= existing.asOfTsMs) {
-      field.byPeriod.set(fact.periodKey, { value: fact.value, asOfTsMs: fact.asOfTsMs });
+      field.byPeriod.set(fact.periodKey, {
+        value: fact.value,
+        asOfTsMs: fact.asOfTsMs,
+      });
     }
     if (field.latestQuarter === null || ordinal > field.latestQuarter) {
       field.latestQuarter = ordinal;

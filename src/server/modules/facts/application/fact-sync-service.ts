@@ -1,29 +1,47 @@
-import type { FactSyncRequest, FactSyncHooks, FactSyncReport } from '../../../../runtime/modules/facts/application/fact-sync-port.js';
-export type { FactSyncRequest, FactSyncProgress, FactSyncHooks, FactSyncReport } from '../../../../runtime/modules/facts/application/fact-sync-port.js';
-import { createHash } from 'node:crypto';
-import type { Clock } from '../../../../runtime/shared/clock.js';
-import type { Logger } from '../../../shared/logger.js';
-import { addCalendarDays, kstDateOf } from '../../../../runtime/modules/market-data/domain/kst-date.js';
-import { CORPORATE_ACTION_FIELD, type Fact } from '../../../../runtime/modules/facts/domain/fact.js';
+import type {
+  FactSyncRequest,
+  FactSyncHooks,
+  FactSyncReport,
+} from "../../../../runtime/modules/facts/application/fact-sync-port.js";
+export type {
+  FactSyncRequest,
+  FactSyncProgress,
+  FactSyncHooks,
+  FactSyncReport,
+} from "../../../../runtime/modules/facts/application/fact-sync-port.js";
+import { createHash } from "node:crypto";
+import type { Clock } from "../../../../runtime/shared/clock.js";
+import type { Logger } from "../../../shared/logger.js";
+import {
+  addCalendarDays,
+  kstDateOf,
+} from "../../../../runtime/modules/market-data/domain/kst-date.js";
+import {
+  CORPORATE_ACTION_FIELD,
+  type Fact,
+} from "../../../../runtime/modules/facts/domain/fact.js";
 import {
   DART_DAILY_CALL_LIMIT,
   DART_MIN_INTERVAL_MS,
   planFactSync,
   type FactSyncPlan,
-} from '../../../../runtime/modules/facts/domain/sync-plan.js';
+} from "../../../../runtime/modules/facts/domain/sync-plan.js";
 // 원천은 market-data(symbol-service.ts) 쪽이다 — market-data 는 facts 를 몰라도
 // 되지만(§7) facts 는 이미 market-data 를 안다(예: exchange-session.js 사용).
 // 손으로 맞추던 중복 상수를 없앴다(리뷰 finding, 2026-08-08).
-import { FACTS_SLICE } from '../../../../runtime/modules/market-data/application/symbol-service.js';
+import { FACTS_SLICE } from "../../../../runtime/modules/market-data/application/symbol-service.js";
 import type {
   CorporateActionCoverageStore,
   CorporateActionGapDetail,
-} from '../../../../runtime/modules/facts/application/corporate-action-coverage.js';
+} from "../../../../runtime/modules/facts/application/corporate-action-coverage.js";
 import type {
   FactCoverageStore,
   FinancialFilingCheckpoint,
-} from '../../../../runtime/modules/facts/application/fact-coverage-store.js';
-import { DartQuotaError, FactSourceNotConfiguredError } from '../../../../runtime/modules/facts/application/ports.js';
+} from "../../../../runtime/modules/facts/application/fact-coverage-store.js";
+import {
+  DartQuotaError,
+  FactSourceNotConfiguredError,
+} from "../../../../runtime/modules/facts/application/ports.js";
 import type {
   FactIngestionGap,
   FactRepository,
@@ -32,7 +50,7 @@ import type {
   FetchFinancialsRequest,
   PeriodicFiling,
   SymbolVersionBumper,
-} from '../../../../runtime/modules/facts/application/ports.js';
+} from "../../../../runtime/modules/facts/application/ports.js";
 
 /**
  * 공시검색(watermark 기반 재수집 판정)의 최대 되짚기 일수. 이보다 오래된 watermark 는
@@ -46,13 +64,16 @@ const REPORT_GAP_REASON_MAX_CHARS = 240;
 /** 실제 DART 요청 직전 quota 예약이 거절됐음을 내부 흐름에 전달한다. */
 class DartDailyQuotaReachedError extends Error {
   constructor() {
-    super('DART 일일 호출 한도에 도달했습니다.');
-    this.name = 'DartDailyQuotaReachedError';
+    super("DART 일일 호출 한도에 도달했습니다.");
+    this.name = "DartDailyQuotaReachedError";
   }
 }
 
 function isDartDailyQuotaError(error: unknown): boolean {
-  return error instanceof DartDailyQuotaReachedError || error instanceof DartQuotaError;
+  return (
+    error instanceof DartDailyQuotaReachedError ||
+    error instanceof DartQuotaError
+  );
 }
 
 /**
@@ -64,9 +85,13 @@ interface SyncStrategy {
   /** 재무 접수번호 체크포인트까지 기록하는 경로인지 구분한다. */
   readonly includeFinancials: boolean;
   /** 증분 계획이 기준으로 삼을 커버리지. 경로마다 다른 저장소를 본다. */
-  getCoveredYears(symbols: readonly string[]): ReadonlyMap<string, readonly number[]>;
+  getCoveredYears(
+    symbols: readonly string[],
+  ): ReadonlyMap<string, readonly number[]>;
   /** current protocol과 무관한 실제 과거 수집 연도. freshness 확인에만 쓴다. */
-  getCollectedYears(symbols: readonly string[]): ReadonlyMap<string, readonly number[]>;
+  getCollectedYears(
+    symbols: readonly string[],
+  ): ReadonlyMap<string, readonly number[]>;
   /** 공시검색 하한. 재무와 자본변동이 각자의 watermark를 제공한다. */
   getUpdatedAtMs(symbols: readonly string[]): ReadonlyMap<string, number>;
   /**
@@ -135,27 +160,27 @@ function assertFetchedFactScopes(
   for (const fact of financialFacts) {
     const year = factPeriodYear(fact);
     if (
-      fact.scope !== 'SYMBOL'
-      || fact.key !== symbol
-      || fact.field === CORPORATE_ACTION_FIELD
-      || year === null
-      || !allowedFinancialYears.has(year)
+      fact.scope !== "SYMBOL" ||
+      fact.key !== symbol ||
+      fact.field === CORPORATE_ACTION_FIELD ||
+      year === null ||
+      !allowedFinancialYears.has(year)
     ) {
       throw new Error(
-        `DART 재무 응답이 요청 범위를 벗어났습니다: `
-          + `${fact.scope}/${fact.key}/${fact.field}/${fact.periodKey}`,
+        `DART 재무 응답이 요청 범위를 벗어났습니다: ` +
+          `${fact.scope}/${fact.key}/${fact.field}/${fact.periodKey}`,
       );
     }
   }
   for (const fact of actionFacts) {
     if (
-      fact.scope !== 'SYMBOL'
-      || fact.key !== symbol
-      || fact.field !== CORPORATE_ACTION_FIELD
+      fact.scope !== "SYMBOL" ||
+      fact.key !== symbol ||
+      fact.field !== CORPORATE_ACTION_FIELD
     ) {
       throw new Error(
-        `DART 자본변동 응답이 요청 범위를 벗어났습니다: `
-          + `${fact.scope}/${fact.key}/${fact.field}/${fact.periodKey}`,
+        `DART 자본변동 응답이 요청 범위를 벗어났습니다: ` +
+          `${fact.scope}/${fact.key}/${fact.field}/${fact.periodKey}`,
       );
     }
   }
@@ -190,19 +215,29 @@ export class FactSyncService {
    * 그 사실을 남긴다. 남기지 않으면 `syncCorporateActions` 가 이미 받은 연도를
    * 재무 없이 다시 청구한다.
    */
-  async sync(request: FactSyncRequest, hooks: FactSyncHooks = {}): Promise<FactSyncReport> {
+  async sync(
+    request: FactSyncRequest,
+    hooks: FactSyncHooks = {},
+  ): Promise<FactSyncReport> {
     return this.runSync(request, hooks, {
       includeFinancials: true,
       getCoveredYears: (symbols) => this.coverage.getCoveredYears(symbols),
       getCollectedYears: (symbols) =>
-        this.coverage.getCollectedYears?.(symbols) ?? this.coverage.getCoveredYears(symbols),
+        this.coverage.getCollectedYears?.(symbols) ??
+        this.coverage.getCoveredYears(symbols),
       getUpdatedAtMs: (symbols) => this.coverage.getUpdatedAtMs(symbols),
       fetch: async (scoped, sourceHooks) => {
         // 같은 work-unit의 두 fetch는 request 객체를 공유한다. source가 주식총수 응답을
         // 한 번만 읽고, protocol 재처리에서는 세 DART 엔드포인트 원문도 영속 cache에서
         // 재생한다(dart-fact-source.ts의 requestRows·rawSnapshots 참고).
-        const financials = await this.source.fetchFinancials(scoped, sourceHooks);
-        const actions = await this.source.fetchCorporateActions(scoped, sourceHooks);
+        const financials = await this.source.fetchFinancials(
+          scoped,
+          sourceHooks,
+        );
+        const actions = await this.source.fetchCorporateActions(
+          scoped,
+          sourceHooks,
+        );
         return {
           financialFacts: financials.facts,
           actionFacts: actions.facts,
@@ -211,7 +246,13 @@ export class FactSyncService {
           actionGaps: actions.gaps,
         };
       },
-      recordCoverage: (symbol, years, financialGaps, actionGapDetails, nowMs) => {
+      recordCoverage: (
+        symbol,
+        years,
+        financialGaps,
+        actionGapDetails,
+        nowMs,
+      ) => {
         // action 결과를 먼저 원자적으로 남긴다. 반대 순서에서 action write가 실패하면
         // 재무 coverage가 이 work-unit을 완료로 만들어 다음 incremental retry가
         // gap 기록 없이 통째로 건너뛴다. 재무 write가 뒤에서 실패하는 경우에는 재무
@@ -242,14 +283,17 @@ export class FactSyncService {
     toYear: number,
   ): FactSyncPlan {
     const unique = [...new Set(symbols)];
-    return this.withRawSnapshotMisses(planFactSync({
-      symbols: unique,
-      fromYear,
-      toYear,
-      todayKstDate: kstDateOf(this.clock.now()),
-      coveredBySymbol: this.coverage.getCoveredYears(unique),
-      mode: 'INCREMENTAL',
-    }), true);
+    return this.withRawSnapshotMisses(
+      planFactSync({
+        symbols: unique,
+        fromYear,
+        toYear,
+        todayKstDate: kstDateOf(this.clock.now()),
+        coveredBySymbol: this.coverage.getCoveredYears(unique),
+        mode: "INCREMENTAL",
+      }),
+      true,
+    );
   }
 
   /**
@@ -265,14 +309,17 @@ export class FactSyncService {
     toYear: number,
   ): FactSyncPlan {
     const unique = [...new Set(symbols)];
-    return this.withRawSnapshotMisses(planFactSync({
-      symbols: unique,
-      fromYear,
-      toYear,
-      todayKstDate: kstDateOf(this.clock.now()),
-      coveredBySymbol: this.actionCoverage.getCoveredYears(unique),
-      mode: 'INCREMENTAL',
-    }), false);
+    return this.withRawSnapshotMisses(
+      planFactSync({
+        symbols: unique,
+        fromYear,
+        toYear,
+        todayKstDate: kstDateOf(this.clock.now()),
+        coveredBySymbol: this.actionCoverage.getCoveredYears(unique),
+        mode: "INCREMENTAL",
+      }),
+      false,
+    );
   }
 
   /**
@@ -286,15 +333,22 @@ export class FactSyncService {
     completed: ReadonlyMap<string, number>,
   ): ReadonlyMap<string, number> {
     const result = new Map(completed);
-    const incomplete = symbols.filter((symbol) => (
-      (completed.get(symbol) ?? 0) <= 0 || (collected.get(symbol)?.length ?? 0) === 0
-    ));
-    const raw = this.source.getRawSnapshotWatermarks?.(incomplete) ?? new Map<string, number>();
+    const incomplete = symbols.filter(
+      (symbol) =>
+        (completed.get(symbol) ?? 0) <= 0 ||
+        (collected.get(symbol)?.length ?? 0) === 0,
+    );
+    const raw =
+      this.source.getRawSnapshotWatermarks?.(incomplete) ??
+      new Map<string, number>();
     for (const symbol of incomplete) {
       const fetchedAtMs = raw.get(symbol);
       if (fetchedAtMs !== undefined && fetchedAtMs > 0) {
         const previous = completed.get(symbol) ?? 0;
-        result.set(symbol, previous > 0 ? Math.min(previous, fetchedAtMs) : fetchedAtMs);
+        result.set(
+          symbol,
+          previous > 0 ? Math.min(previous, fetchedAtMs) : fetchedAtMs,
+        );
       } else if ((collected.get(symbol)?.length ?? 0) === 0) {
         result.delete(symbol);
       }
@@ -303,42 +357,59 @@ export class FactSyncService {
   }
 
   private isStaleWatermark(updatedAtMs: number): boolean {
-    return kstDateOf(updatedAtMs)
-      < addCalendarDays(kstDateOf(this.clock.now()), -FILING_LOOKBACK_MAX_DAYS);
+    return (
+      kstDateOf(updatedAtMs) <
+      addCalendarDays(kstDateOf(this.clock.now()), -FILING_LOOKBACK_MAX_DAYS)
+    );
   }
 
-  private withRawSnapshotMisses(plan: FactSyncPlan, includeFinancials: boolean): FactSyncPlan {
+  private withRawSnapshotMisses(
+    plan: FactSyncPlan,
+    includeFinancials: boolean,
+  ): FactSyncPlan {
     if (this.source.countRawSnapshotMisses === undefined) return plan;
     const symbols = [...plan.yearsBySymbol.keys()];
     const coverage = includeFinancials ? this.coverage : this.actionCoverage;
-    const collectedBySymbol = coverage.getCollectedYears?.(symbols)
-      ?? coverage.getCoveredYears(symbols);
+    const collectedBySymbol =
+      coverage.getCollectedYears?.(symbols) ??
+      coverage.getCoveredYears(symbols);
     const updatedAtBySymbol = this.collectionWatermarks(
-      symbols, collectedBySymbol, coverage.getUpdatedAtMs(symbols),
+      symbols,
+      collectedBySymbol,
+      coverage.getUpdatedAtMs(symbols),
     );
-    const groups = new Map<string, {
-      symbols: string[];
-      years: readonly number[];
-      shareYears: readonly number[];
-      policy: 'PREFER_CACHE' | 'REFRESH';
-    }>();
+    const groups = new Map<
+      string,
+      {
+        symbols: string[];
+        years: readonly number[];
+        shareYears: readonly number[];
+        policy: "PREFER_CACHE" | "REFRESH";
+      }
+    >();
     for (const [symbol, years] of plan.yearsBySymbol) {
       const collected = collectedBySymbol.get(symbol) ?? [];
       const updatedAtMs = updatedAtBySymbol.get(symbol);
-      const staleWatermark = updatedAtMs !== undefined && this.isStaleWatermark(updatedAtMs);
+      const staleWatermark =
+        updatedAtMs !== undefined && this.isStaleWatermark(updatedAtMs);
       const forceRefresh = updatedAtMs === undefined || staleWatermark;
       // 실행의 stale 경로는 요청 범위와 무관하게 legacy 수집 연도를 모두 강제한다.
       // plan이 이미 covered인 종목을 0회로 잘못 보고 DART-key 게이트를 통과시키지 않도록
       // 같은 연도를 호출량에도 포함한다.
       const requestedYears = staleWatermark
-        ? [...new Set([...years, ...collected])].sort((left, right) => left - right)
+        ? [...new Set([...years, ...collected])].sort(
+            (left, right) => left - right,
+          )
         : years;
       if (requestedYears.length === 0) continue;
       const shareYears = staleWatermark
-        ? [...new Set(requestedYears.flatMap((year) => [year - 1, year]))]
-            .sort((left, right) => left - right)
+        ? [...new Set(requestedYears.flatMap((year) => [year - 1, year]))].sort(
+            (left, right) => left - right,
+          )
         : (plan.shareYearsBySymbol.get(symbol) ?? []);
-      const policy = forceRefresh ? 'REFRESH' as const : 'PREFER_CACHE' as const;
+      const policy = forceRefresh
+        ? ("REFRESH" as const)
+        : ("PREFER_CACHE" as const);
       const groupKey = JSON.stringify([policy, requestedYears, shareYears]);
       const group = groups.get(groupKey) ?? {
         symbols: [],
@@ -351,13 +422,16 @@ export class FactSyncService {
     }
     let calls = 0;
     for (const group of groups.values()) {
-      calls += this.source.countRawSnapshotMisses({
-        symbols: group.symbols,
-        years: group.years,
-        shareYears: group.shareYears,
-        consolidated: true,
-        rawSnapshotPolicy: group.policy,
-      }, includeFinancials);
+      calls += this.source.countRawSnapshotMisses(
+        {
+          symbols: group.symbols,
+          years: group.years,
+          shareYears: group.shareYears,
+          consolidated: true,
+          rawSnapshotPolicy: group.policy,
+        },
+        includeFinancials,
+      );
     }
     return {
       ...plan,
@@ -381,13 +455,17 @@ export class FactSyncService {
   ): Promise<FactSyncReport> {
     return this.runSync(request, hooks, {
       includeFinancials: false,
-      getCoveredYears: (symbols) => this.actionCoverage.getCoveredYears(symbols),
+      getCoveredYears: (symbols) =>
+        this.actionCoverage.getCoveredYears(symbols),
       getCollectedYears: (symbols) =>
-        this.actionCoverage.getCollectedYears?.(symbols)
-          ?? this.actionCoverage.getCoveredYears(symbols),
+        this.actionCoverage.getCollectedYears?.(symbols) ??
+        this.actionCoverage.getCoveredYears(symbols),
       getUpdatedAtMs: (symbols) => this.actionCoverage.getUpdatedAtMs(symbols),
       fetch: async (scoped, sourceHooks) => {
-        const actions = await this.source.fetchCorporateActions(scoped, sourceHooks);
+        const actions = await this.source.fetchCorporateActions(
+          scoped,
+          sourceHooks,
+        );
         return {
           financialFacts: [],
           actionFacts: actions.facts,
@@ -396,7 +474,13 @@ export class FactSyncService {
           actionGaps: actions.gaps,
         };
       },
-      recordCoverage: (symbol, years, _financialGaps, actionGapDetails, nowMs) => {
+      recordCoverage: (
+        symbol,
+        years,
+        _financialGaps,
+        actionGapDetails,
+        nowMs,
+      ) => {
         this.actionCoverage.addCoverageResult(
           symbol,
           years,
@@ -432,14 +516,14 @@ export class FactSyncService {
     let savedFacts = 0;
     let doneSymbols = 0;
     let stoppedAtSymbol: string | null = null;
-    let stopReason: 'ERROR' | 'CANCELLED' | 'DAILY_QUOTA' | null = null;
+    let stopReason: "ERROR" | "CANCELLED" | "DAILY_QUOTA" | null = null;
     let failureReason: string | null = null;
     const sourceHooks: FactSourceRequestHooks =
       hooks.beforeDartRequest === undefined
         ? {}
         : {
             beforeRequest: () => {
-              if (hooks.beforeDartRequest?.() === 'PAUSE_DAILY_QUOTA') {
+              if (hooks.beforeDartRequest?.() === "PAUSE_DAILY_QUOTA") {
                 throw new DartDailyQuotaReachedError();
               }
             },
@@ -452,13 +536,15 @@ export class FactSyncService {
     const collectedBySymbol = strategy.getCollectedYears(symbols);
     const coverageWatermarks = strategy.getUpdatedAtMs(symbols);
     const freshnessWatermarks = this.collectionWatermarks(
-      symbols, collectedBySymbol, coverageWatermarks,
+      symbols,
+      collectedBySymbol,
+      coverageWatermarks,
     );
     let redisclosures: RedisclosureDetection | undefined;
     let unverifiedFreshnessSymbols: ReadonlySet<string>;
     try {
       redisclosures =
-        request.mode === 'INCREMENTAL'
+        request.mode === "INCREMENTAL"
           ? await this.detectRedisclosedYears(
               collectedBySymbol,
               freshnessWatermarks,
@@ -466,16 +552,17 @@ export class FactSyncService {
               sourceHooks,
             )
           : undefined;
-      unverifiedFreshnessSymbols = redisclosures?.unverifiedFreshnessSymbols ?? new Set();
+      unverifiedFreshnessSymbols =
+        redisclosures?.unverifiedFreshnessSymbols ?? new Set();
     } catch (error) {
       if (error instanceof FactSourceNotConfiguredError) {
         unverifiedFreshnessSymbols = new Set(symbols);
         this.logger.warn(
           {
-            module: 'facts',
-            event: 'facts.filings.lookup-skipped-unconfigured',
+            module: "facts",
+            event: "facts.filings.lookup-skipped-unconfigured",
           },
-          'DART is not configured — skipping filing freshness lookup for already covered data',
+          "DART is not configured — skipping filing freshness lookup for already covered data",
         );
         redisclosures = undefined;
       } else {
@@ -498,7 +585,7 @@ export class FactSyncService {
       // 저장분과 이력이 어긋난다
       if (hooks.shouldStop?.()) {
         stoppedAtSymbol = symbol;
-        stopReason = 'CANCELLED';
+        stopReason = "CANCELLED";
         break;
       }
 
@@ -520,16 +607,19 @@ export class FactSyncService {
       let symbolGapCount = 0;
       const rawSnapshotScope = {};
       const watermark = freshnessWatermarks.get(symbol);
-      const canReplayRawSnapshots = watermark !== undefined && !this.isStaleWatermark(watermark);
+      const canReplayRawSnapshots =
+        watermark !== undefined && !this.isStaleWatermark(watermark);
       try {
         for (const [yearIndex, year] of years.entries()) {
           // 중단 전 원문도 공시 조회 하한을 증명하면 재사용한다. 새·정정공시,
           // FULL 또는 최신성을 확인할 수 없는 오래된 원문은 원천에서 다시 읽는다.
-          const redisclosed = redisclosures?.forcedYearsBySymbol
-            .get(symbol)?.includes(year) === true;
-          const rawSnapshotPolicy = (
-            request.mode === 'FULL' || redisclosed || !canReplayRawSnapshots
-          ) ? 'REFRESH' as const : 'PREFER_CACHE' as const;
+          const redisclosed =
+            redisclosures?.forcedYearsBySymbol.get(symbol)?.includes(year) ===
+            true;
+          const rawSnapshotPolicy =
+            request.mode === "FULL" || redisclosed || !canReplayRawSnapshots
+              ? ("REFRESH" as const)
+              : ("PREFER_CACHE" as const);
           // 직전 연도의 주식총수 앵커도 요청한다. 같은 work-unit의 재무·자본변동은
           // source 내부 request cache로 응답을 공유하고, 영속 cache hit는 quota를 쓰지 않는다.
           const shareYears = [year - 1, year];
@@ -541,20 +631,23 @@ export class FactSyncService {
             rawSnapshotScope,
             rawSnapshotPolicy,
           };
-          const {
+          const { financialFacts, actionFacts, financialGaps, actionGaps } =
+            await strategy.fetch(scoped, sourceHooks);
+          assertFetchedFactScopes(
+            symbol,
+            shareYears,
             financialFacts,
             actionFacts,
-            financialGaps,
-            actionGaps,
-          } = await strategy.fetch(scoped, sourceHooks);
-          assertFetchedFactScopes(symbol, shareYears, financialFacts, actionFacts);
+          );
 
           // `fetchFinancials` 는 전년도 발행주식수 앵커도 함께 읽을 수 있다. 그 앵커를
           // 이번 재무 연도의 결과처럼 저장하면 전년도 snapshot/manifest가 coverage를
           // 닫지 않은 채 바뀐다. 비자본변동 재무는 정확히 현재 work-unit 연도만
           // 원자적으로 교체한다. 자본변동도 이벤트 연도별 최신 snapshot만 남긴다.
           const financialSnapshot = financialFacts.filter(
-            (fact) => fact.field !== CORPORATE_ACTION_FIELD && factPeriodYear(fact) === year,
+            (fact) =>
+              fact.field !== CORPORATE_ACTION_FIELD &&
+              factPeriodYear(fact) === year,
           );
           const currentFinancialGaps = financialGaps.filter((gap) => {
             const gapYear = /^\d{4}/.test(gap.periodKey)
@@ -563,17 +656,18 @@ export class FactSyncService {
             return gapYear === null || gapYear === year;
           });
           const actionSnapshot = actionFacts.filter(
-            (fact) => fact.field === CORPORATE_ACTION_FIELD && factPeriodYear(fact) === year,
+            (fact) =>
+              fact.field === CORPORATE_ACTION_FIELD &&
+              factPeriodYear(fact) === year,
           );
           const currentActionGaps = actionGapsForYear(actionGaps, year);
-          const currentActionGapDetails: CorporateActionGapDetail[] = currentActionGaps.map(
-            (gap) => ({
+          const currentActionGapDetails: CorporateActionGapDetail[] =
+            currentActionGaps.map((gap) => ({
               year,
               periodKey: gap.periodKey,
               reason: gap.reason,
               severity: gap.severity,
-            }),
-          );
+            }));
 
           // work unit마다 저장·커버리지를 닫는다 — 다음 연도 전에 quota로 멈춰도 이
           // 연도는 증분 재실행에서 건너뛸 수 있다.
@@ -594,15 +688,20 @@ export class FactSyncService {
           // 저장 성공이 리포트의 확정 경계다. 뒤의 coverage나 버전 갱신이 실패해도
           // repository에는 이미 팩트가 남았으므로, 이 수치를 먼저 반영해야 보고서가
           // 실제 영속 상태와 어긋나지 않는다.
-          const persistedFactCount = financialSnapshot.length + actionSnapshot.length;
+          const persistedFactCount =
+            financialSnapshot.length + actionSnapshot.length;
           savedFacts += persistedFactCount;
           symbolSavedFacts += persistedFactCount;
-          symbolGapCount += currentFinancialGaps.length + currentActionGaps.length;
+          symbolGapCount +=
+            currentFinancialGaps.length + currentActionGaps.length;
           gapCount += currentFinancialGaps.length + currentActionGaps.length;
           for (const batch of [currentFinancialGaps, currentActionGaps]) {
             for (const gap of batch) {
               if (gaps.length >= REPORT_GAP_LIMIT) break;
-              gaps.push({ ...gap, reason: gap.reason.slice(0, REPORT_GAP_REASON_MAX_CHARS) });
+              gaps.push({
+                ...gap,
+                reason: gap.reason.slice(0, REPORT_GAP_REASON_MAX_CHARS),
+              });
             }
           }
           await this.bumpVersionIfChanged(symbol, fingerprintBefore);
@@ -612,7 +711,8 @@ export class FactSyncService {
             // 접수번호를 먼저 닫는다. 여기서 실패했는데 coverage watermark부터 전진하면
             // 다음 날 조회 하한 밖으로 밀려 실패한 체크포인트를 다시 볼 수 없다.
             this.coverage.addProcessedFilings(
-              redisclosures?.pendingFinancialFilings.get(symbol)?.get(year) ?? [],
+              redisclosures?.pendingFinancialFilings.get(symbol)?.get(year) ??
+                [],
               completedAtMs,
             );
           }
@@ -622,11 +722,12 @@ export class FactSyncService {
           // API key가 없어 공시 목록을 확인하지 못한 로컬 재처리는 파서 coverage만
           // 갱신한다. watermark까지 현재로 당기면 기존 watermark 이후 정정공시가 나중
           // API 설정 시 조회 하한 밖으로 사라지므로 마지막으로 검증한 시각을 보존한다.
-          const coverageTimestamp = yearIndex === years.length - 1
-            ? (unverifiedFreshnessSymbols.has(symbol)
+          const coverageTimestamp =
+            yearIndex === years.length - 1
+              ? unverifiedFreshnessSymbols.has(symbol)
                 ? (coverageWatermarks.get(symbol) ?? 0)
-                : completedAtMs)
-            : (coverageWatermarks.get(symbol) ?? 0);
+                : completedAtMs
+              : (coverageWatermarks.get(symbol) ?? 0);
           strategy.recordCoverage(
             symbol,
             [year],
@@ -647,15 +748,15 @@ export class FactSyncService {
       } catch (error) {
         if (isDartDailyQuotaError(error)) {
           stoppedAtSymbol = symbol;
-          stopReason = 'DAILY_QUOTA';
+          stopReason = "DAILY_QUOTA";
           this.logger.info(
             {
-              module: 'facts',
-              event: 'facts.sync.daily-quota-reached',
+              module: "facts",
+              event: "facts.sync.daily-quota-reached",
               symbol,
               savedFacts,
             },
-            'fact sync paused before exceeding the DART daily quota',
+            "fact sync paused before exceeding the DART daily quota",
           );
           break;
         }
@@ -663,19 +764,19 @@ export class FactSyncService {
         // 그대로 던지면 지금까지 저장한 것을 알려줄 자리가 없다 — 리포트로 되돌려
         // CLI 가 어디까지 갔는지, 어떻게 이어받는지 말하게 한다.
         stoppedAtSymbol = symbol;
-        stopReason = 'ERROR';
+        stopReason = "ERROR";
         failureReason = error instanceof Error ? error.message : String(error);
         this.logger.error(
           {
-            module: 'facts',
-            event: 'facts.sync.aborted',
+            module: "facts",
+            event: "facts.sync.aborted",
             symbol,
             symbolIndex: index + 1,
             symbolTotal: symbols.length,
             savedFacts,
             err: error,
           },
-          'fact sync aborted — earlier symbols are already saved',
+          "fact sync aborted — earlier symbols are already saved",
         );
         break;
       }
@@ -683,15 +784,15 @@ export class FactSyncService {
 
     this.logger.info(
       {
-        module: 'facts',
-        event: 'facts.synced',
+        module: "facts",
+        event: "facts.synced",
         savedFacts,
         gapCount,
         stoppedAtSymbol,
         // 중단됐다는 사실만으로는 운영자가 실패와 취소를 구분할 수 없다
         stopReason,
       },
-      'fact sync finished',
+      "fact sync finished",
     );
 
     return {
@@ -703,20 +804,20 @@ export class FactSyncService {
       failureMessage:
         stoppedAtSymbol === null
           ? null
-          : stopReason === 'CANCELLED'
+          : stopReason === "CANCELLED"
             ? `수집이 사용자 요청으로 취소됐습니다 ` +
               `(${doneSymbols}/${symbols.length}종목 완료). ` +
               `수집된 팩트 ${savedFacts}건은 저장됐습니다 — 다시 실행하면 남은 종목만 이어받습니다.`
-            : stopReason === 'DAILY_QUOTA'
+            : stopReason === "DAILY_QUOTA"
               ? `DART 일일 호출 한도에 도달해 ${stoppedAtSymbol} 수집을 잠시 멈췄습니다 ` +
                 `(${doneSymbols}/${symbols.length}종목 완료). ` +
                 `여기까지 수집된 팩트 ${savedFacts}건은 이미 저장됐습니다 — 다음 실행은 ` +
                 `남은 연도부터 이어받습니다.`
-            : `수집이 ${stoppedAtSymbol} 에서 중단됐습니다 ` +
-              `(${doneSymbols}/${symbols.length}종목 완료). ` +
-              `사유: ${failureReason ?? '알 수 없음'}. ` +
-              `여기까지 수집된 팩트 ${savedFacts}건은 이미 저장됐습니다 — 다시 실행하면 ` +
-              `남은 구간만 이어받습니다.`,
+              : `수집이 ${stoppedAtSymbol} 에서 중단됐습니다 ` +
+                `(${doneSymbols}/${symbols.length}종목 완료). ` +
+                `사유: ${failureReason ?? "알 수 없음"}. ` +
+                `여기까지 수집된 팩트 ${savedFacts}건은 이미 저장됐습니다 — 다시 실행하면 ` +
+                `남은 구간만 이어받습니다.`,
     };
   }
 
@@ -729,43 +830,43 @@ export class FactSyncService {
     if (isDartDailyQuotaError(error)) {
       this.logger.info(
         {
-          module: 'facts',
-          event: 'facts.sync.daily-quota-reached',
-          stage: 'planning',
+          module: "facts",
+          event: "facts.sync.daily-quota-reached",
+          stage: "planning",
           stoppedAtSymbol,
         },
-        'fact sync planning paused before exceeding the DART daily quota',
+        "fact sync planning paused before exceeding the DART daily quota",
       );
       return {
         savedFacts: 0,
         gapCount: 0,
         gaps: [],
         stoppedAtSymbol,
-        stopReason: 'DAILY_QUOTA',
+        stopReason: "DAILY_QUOTA",
         failureMessage:
-          'DART 일일 호출 한도에 도달해 증분 수집 계획 생성을 멈췄습니다. ' +
-          '한도 초과 요청은 보내지 않았습니다 — 다음 실행에서 공시 목록 조회부터 다시 시작합니다.',
+          "DART 일일 호출 한도에 도달해 증분 수집 계획 생성을 멈췄습니다. " +
+          "한도 초과 요청은 보내지 않았습니다 — 다음 실행에서 공시 목록 조회부터 다시 시작합니다.",
       };
     }
 
     const reason = error instanceof Error ? error.message : String(error);
     this.logger.error(
       {
-        module: 'facts',
-        event: 'facts.sync.planning-failed',
+        module: "facts",
+        event: "facts.sync.planning-failed",
         stoppedAtSymbol,
         err: error,
       },
-      'fact sync planning failed — fact collection was not started',
+      "fact sync planning failed — fact collection was not started",
     );
     return {
       savedFacts: 0,
       gapCount: 0,
       gaps: [],
       stoppedAtSymbol,
-      stopReason: 'ERROR',
+      stopReason: "ERROR",
       failureMessage:
-        '증분 수집 계획 생성 중 정기공시 목록 또는 워터마크 조회에 실패했습니다. ' +
+        "증분 수집 계획 생성 중 정기공시 목록 또는 워터마크 조회에 실패했습니다. " +
         `사유: ${reason}. 팩트 수집은 시작하지 않았습니다 — 원인을 해결한 뒤 다시 실행하세요.`,
     };
   }
@@ -803,9 +904,13 @@ export class FactSyncService {
       forced.set(symbol, years);
     };
     const addPending = (checkpoint: FinancialFilingCheckpoint): void => {
-      const byYear = pending.get(checkpoint.symbol) ?? new Map<number, FinancialFilingCheckpoint[]>();
+      const byYear =
+        pending.get(checkpoint.symbol) ??
+        new Map<number, FinancialFilingCheckpoint[]>();
       const filings = byYear.get(checkpoint.businessYear) ?? [];
-      if (!filings.some((filing) => filing.receiptNo === checkpoint.receiptNo)) {
+      if (
+        !filings.some((filing) => filing.receiptNo === checkpoint.receiptNo)
+      ) {
         filings.push(checkpoint);
       }
       byYear.set(checkpoint.businessYear, filings);
@@ -832,7 +937,11 @@ export class FactSyncService {
     if (fromDate !== null) {
       let filings: readonly PeriodicFiling[];
       try {
-        filings = await this.source.listRecentPeriodicFilings(fromDate, today, sourceHooks);
+        filings = await this.source.listRecentPeriodicFilings(
+          fromDate,
+          today,
+          sourceHooks,
+        );
       } catch (error) {
         // 일부 종목은 stale이고 일부는 fresh인 혼합 요청에서 DART 미설정 오류를 바깥
         // catch로 보내면, 이미 계산한 stale 강제 연도까지 통째로 사라진다. fresh 종목은
@@ -860,8 +969,12 @@ export class FactSyncService {
         if (filing.receiptDate === null) {
           forceCollectedYears();
           this.logger.warn(
-            { module: 'facts', event: 'facts.filing-missing-receipt-date', symbol: filing.stockCode },
-            '접수일을 읽을 수 없는 DART 공시 종목의 수집 연도를 모두 다시 확인한다',
+            {
+              module: "facts",
+              event: "facts.filing-missing-receipt-date",
+              symbol: filing.stockCode,
+            },
+            "접수일을 읽을 수 없는 DART 공시 종목의 수집 연도를 모두 다시 확인한다",
           );
           return [];
         }
@@ -870,20 +983,24 @@ export class FactSyncService {
           forceCollectedYears();
           this.logger.warn(
             {
-              module: 'facts',
-              event: 'facts.filing-missing-business-year',
+              module: "facts",
+              event: "facts.filing-missing-business-year",
               symbol: filing.stockCode,
               receiptNo: filing.receiptNo,
             },
-            '사업연도를 읽을 수 없는 DART 공시 종목의 수집 연도를 모두 다시 확인한다',
+            "사업연도를 읽을 수 없는 DART 공시 종목의 수집 연도를 모두 다시 확인한다",
           );
           return [];
         }
         if (filing.receiptNo === null) {
           addForced(filing.stockCode, filing.businessYear);
           this.logger.warn(
-            { module: 'facts', event: 'facts.filing-missing-receipt-no', symbol: filing.stockCode },
-            '접수번호를 읽을 수 없는 DART 공시 종목·연도를 다시 확인한다',
+            {
+              module: "facts",
+              event: "facts.filing-missing-receipt-no",
+              symbol: filing.stockCode,
+            },
+            "접수번호를 읽을 수 없는 DART 공시 종목·연도를 다시 확인한다",
           );
           return [];
         }
@@ -930,19 +1047,27 @@ export class FactSyncService {
    * 돌려줬는지가 아니라 저장 결과가 기준이어야 같은 내용을 다시 수집했을 때 버전이
    * 헛돌지 않는다.
    */
-  private async bumpVersionIfChanged(code: string, fingerprintBefore: string): Promise<void> {
+  private async bumpVersionIfChanged(
+    code: string,
+    fingerprintBefore: string,
+  ): Promise<void> {
     const fingerprintAfter = await this.storedFactsFingerprint(code);
     if (fingerprintAfter === fingerprintBefore) {
       this.logger.debug(
-        { module: 'facts', event: 'facts.version.unchanged', symbol: code },
-        'fact content unchanged — symbol version not bumped',
+        { module: "facts", event: "facts.version.unchanged", symbol: code },
+        "fact content unchanged — symbol version not bumped",
       );
       return;
     }
-    this.versions.bumpVersion(code, FACTS_SLICE, `facts:${fingerprintAfter}`, this.clock.now());
+    this.versions.bumpVersion(
+      code,
+      FACTS_SLICE,
+      `facts:${fingerprintAfter}`,
+      this.clock.now(),
+    );
     this.logger.debug(
-      { module: 'facts', event: 'facts.version.bumped', symbol: code },
-      'symbol fact version bumped',
+      { module: "facts", event: "facts.version.bumped", symbol: code },
+      "symbol fact version bumped",
     );
   }
 
@@ -951,7 +1076,10 @@ export class FactSyncService {
    * 흔들리지 않는다. (MACRO 스코프는 이 수집 경로가 만들지 않는다.)
    */
   private async storedFactsFingerprint(code: string): Promise<string> {
-    const facts = await this.repository.getFacts({ scope: 'SYMBOL', keys: [code] });
+    const facts = await this.repository.getFacts({
+      scope: "SYMBOL",
+      keys: [code],
+    });
     return factsFingerprint(facts);
   }
 }
@@ -975,5 +1103,5 @@ export function factsFingerprint(facts: readonly Fact[]): string {
       ]),
     )
     .sort();
-  return createHash('sha256').update(rows.join('\n')).digest('hex');
+  return createHash("sha256").update(rows.join("\n")).digest("hex");
 }

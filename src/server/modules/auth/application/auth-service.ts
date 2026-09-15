@@ -1,6 +1,6 @@
-import { randomBytes } from 'node:crypto';
-import type { Clock } from '../../../../runtime/shared/clock.js';
-import { isLoginLocked, isSessionExpired } from '../domain/session-policy.js';
+import { randomBytes } from "node:crypto";
+import type { Clock } from "../../../../runtime/shared/clock.js";
+import { isLoginLocked, isSessionExpired } from "../domain/session-policy.js";
 import type {
   LoginAttemptRepository,
   PasswordHasher,
@@ -9,21 +9,21 @@ import type {
   TotpService,
   UserRecord,
   UserRepository,
-} from './ports.js';
+} from "./ports.js";
 
 const LOGIN_FAILURE_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_FAILURE_LIMIT = 5;
 
 export type LoginResult =
-  | { readonly status: 'SUCCESS'; readonly sessionId: string }
-  | { readonly status: 'TOTP_REQUIRED'; readonly sessionId: string }
-  | { readonly status: 'INVALID_CREDENTIALS' }
-  | { readonly status: 'LOCKED' };
+  | { readonly status: "SUCCESS"; readonly sessionId: string }
+  | { readonly status: "TOTP_REQUIRED"; readonly sessionId: string }
+  | { readonly status: "INVALID_CREDENTIALS" }
+  | { readonly status: "LOCKED" };
 
 export type TotpVerifyResult =
-  | { readonly status: 'SUCCESS'; readonly sessionId: string }
-  | { readonly status: 'INVALID' }
-  | { readonly status: 'LOCKED' };
+  | { readonly status: "SUCCESS"; readonly sessionId: string }
+  | { readonly status: "INVALID" }
+  | { readonly status: "LOCKED" };
 
 export interface AuthenticatedUser {
   readonly id: string;
@@ -47,7 +47,7 @@ export interface AuthServiceDeps {
 }
 
 function newSessionId(): string {
-  return randomBytes(32).toString('hex');
+  return randomBytes(32).toString("hex");
 }
 
 export class AuthService {
@@ -59,7 +59,7 @@ export class AuthService {
   private readonly dummyHashPromise: Promise<string>;
 
   constructor(private readonly deps: AuthServiceDeps) {
-    this.dummyHashPromise = deps.passwordHasher.hash('timing-equalizer-dummy');
+    this.dummyHashPromise = deps.passwordHasher.hash("timing-equalizer-dummy");
     // ready() 를 기다리지 않는 경로에서도 unhandled rejection 이 되지 않게 한다
     void this.dummyHashPromise.catch(() => undefined);
   }
@@ -78,14 +78,22 @@ export class AuthService {
    * 비밀번호 1단계. TOTP 등록 계정은 pending 세션을 발급하고 verifyTotp 가 2단계를 맡는다 (D-017).
    * 어느 경로든 서버가 발급하지 않은 쿠키 값은 인증된 세션이 되지 않는다.
    */
-  async login(username: string, password: string, ip: string): Promise<LoginResult> {
-    const { users, sessions, loginAttempts, passwordHasher, clock, audit } = this.deps;
+  async login(
+    username: string,
+    password: string,
+    ip: string,
+  ): Promise<LoginResult> {
+    const { users, sessions, loginAttempts, passwordHasher, clock, audit } =
+      this.deps;
     const now = clock.now();
 
-    const recentFailures = loginAttempts.countRecentFailures(username, now - LOGIN_FAILURE_WINDOW_MS);
+    const recentFailures = loginAttempts.countRecentFailures(
+      username,
+      now - LOGIN_FAILURE_WINDOW_MS,
+    );
     if (isLoginLocked(recentFailures, LOGIN_FAILURE_LIMIT)) {
-      audit.record(username, 'auth.login.locked', { ip });
-      return { status: 'LOCKED' };
+      audit.record(username, "auth.login.locked", { ip });
+      return { status: "LOCKED" };
     }
 
     const user = users.findByUsername(username);
@@ -99,8 +107,8 @@ export class AuthService {
 
     if (!user || !passwordOk) {
       loginAttempts.record(username, ip, false, now);
-      audit.record(username, 'auth.login.failure', { ip });
-      return { status: 'INVALID_CREDENTIALS' };
+      audit.record(username, "auth.login.failure", { ip });
+      return { status: "INVALID_CREDENTIALS" };
     }
 
     const requiresTotp = user.totpEnabled;
@@ -117,34 +125,38 @@ export class AuthService {
       // 감사 로그를 남긴다 — 2단계에서 막히는 시도는 "비밀번호가 샜다" 의 가장 강한
       // 신호인데, 성공도 실패도 아니라는 이유로 아무 기록 없이 지나가면 그 신호가
       // login_attempts 에도 audit 에도 남지 않는다.
-      audit.record(username, 'auth.login.totp-required', { ip });
-      return { status: 'TOTP_REQUIRED', sessionId: session.id };
+      audit.record(username, "auth.login.totp-required", { ip });
+      return { status: "TOTP_REQUIRED", sessionId: session.id };
     }
 
     loginAttempts.record(username, ip, true, now);
-    audit.record(username, 'auth.login.success', { ip });
-    return { status: 'SUCCESS', sessionId: session.id };
+    audit.record(username, "auth.login.success", { ip });
+    return { status: "SUCCESS", sessionId: session.id };
   }
 
   /** 2단계: TOTP 또는 복구 코드 검증. 성공 시 세션 ID 회전(스펙 §16). */
-  async verifyTotp(pendingSessionId: string, token: string, ip: string): Promise<TotpVerifyResult> {
+  async verifyTotp(
+    pendingSessionId: string,
+    token: string,
+    ip: string,
+  ): Promise<TotpVerifyResult> {
     const { users, sessions, loginAttempts, totp, clock, audit } = this.deps;
     const now = clock.now();
 
     const pending = sessions.findById(pendingSessionId);
     if (!pending || !pending.pendingTotp || this.isExpired(pending, now)) {
-      return { status: 'INVALID' };
+      return { status: "INVALID" };
     }
     const user = users.findById(pending.userId);
-    if (!user || !user.totpSecret) return { status: 'INVALID' };
+    if (!user || !user.totpSecret) return { status: "INVALID" };
 
     const recentFailures = loginAttempts.countRecentFailures(
       user.username,
       now - LOGIN_FAILURE_WINDOW_MS,
     );
     if (isLoginLocked(recentFailures, LOGIN_FAILURE_LIMIT)) {
-      audit.record(user.username, 'auth.login.locked', { ip });
-      return { status: 'LOCKED' };
+      audit.record(user.username, "auth.login.locked", { ip });
+      return { status: "LOCKED" };
     }
 
     const normalizedToken = token.trim();
@@ -156,19 +168,20 @@ export class AuthService {
       // 때문에 한 코드가 90초간 유효하므로, 이 차단이 없으면 어깨너머로 본 코드
       // 하나로 공격자가 자기 pending 세션을 정식 세션으로 바꿀 수 있다.
       verified = users.consumeTotpStep(user.id, step, now);
-      if (!verified) audit.record(user.username, 'auth.totp.replay', { ip });
+      if (!verified) audit.record(user.username, "auth.totp.replay", { ip });
     } else if (!/^\d{6}$/.test(normalizedToken)) {
       // 6자리 숫자는 복구 코드가 될 수 없다 (복구 코드는 hex 10자, cli.ts).
       // 이 가드가 없으면 오타 한 번마다 Argon2 검증이 최대 8회 돈다 — 1GB/2vCPU
       // 호스트에서 libuv 스레드풀을 메워 로그인 전체를 정지시킨다.
       verified = await this.consumeRecoveryCode(user, normalizedToken, now);
-      if (verified) audit.record(user.username, 'auth.recovery-code.used', { ip });
+      if (verified)
+        audit.record(user.username, "auth.recovery-code.used", { ip });
     }
 
     if (!verified) {
       loginAttempts.record(user.username, ip, false, now);
-      audit.record(user.username, 'auth.totp.failure', { ip });
-      return { status: 'INVALID' };
+      audit.record(user.username, "auth.totp.failure", { ip });
+      return { status: "INVALID" };
     }
 
     // 세션 회전: pending 세션 폐기 후 새 세션 발급
@@ -183,8 +196,8 @@ export class AuthService {
     sessions.create(session);
 
     loginAttempts.record(user.username, ip, true, now);
-    audit.record(user.username, 'auth.login.success', { ip, totp: true });
-    return { status: 'SUCCESS', sessionId: session.id };
+    audit.record(user.username, "auth.login.success", { ip, totp: true });
+    return { status: "SUCCESS", sessionId: session.id };
   }
 
   logout(sessionId: string): void {
@@ -192,7 +205,7 @@ export class AuthService {
     this.deps.sessions.delete(sessionId);
     if (session) {
       const user = this.deps.users.findById(session.userId);
-      this.deps.audit.record(user?.username ?? session.userId, 'auth.logout');
+      this.deps.audit.record(user?.username ?? session.userId, "auth.logout");
     }
   }
 

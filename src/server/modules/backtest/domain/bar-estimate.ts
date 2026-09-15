@@ -5,7 +5,7 @@
  * 여기서는 기존 import 경로(`bar-estimate.js` 에서 MAX_BACKTEST_BARS 를 가져오던
  * 코드)를 깨지 않기 위해 그대로 re-export 한다.
  */
-export { MAX_BACKTEST_BARS } from '../../../shared/backtest-limits.js';
+export { MAX_BACKTEST_BARS } from "../../../shared/backtest-limits.js";
 
 export interface CoverageSpan {
   readonly symbol: string;
@@ -29,8 +29,15 @@ export function estimateBars(
   let total = 0;
   for (const symbol of symbols) {
     const row = bySymbol.get(symbol);
-    if (!row || row.barCount === 0 || row.firstTsMs === null || row.lastTsMs === null) continue;
-    const overlap = Math.min(row.lastTsMs, toTsMs) - Math.max(row.firstTsMs, fromTsMs);
+    if (
+      !row ||
+      row.barCount === 0 ||
+      row.firstTsMs === null ||
+      row.lastTsMs === null
+    )
+      continue;
+    const overlap =
+      Math.min(row.lastTsMs, toTsMs) - Math.max(row.firstTsMs, fromTsMs);
     if (overlap < 0) continue;
     const span = row.lastTsMs - row.firstTsMs;
     const fraction = span <= 0 ? 1 : Math.min(1, overlap / span);

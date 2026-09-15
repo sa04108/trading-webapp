@@ -1,9 +1,12 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
-import { api } from '@/lib/api-client';
-import type { SortDirection, TradeSortKey } from '../../../shared/schemas/trade-sort.js';
-import type { ProvenancePin } from '../../../shared/schemas/provenance-pin.js';
-import type { UniverseRebalancingEntryDto } from '../../../shared/schemas/universe-rebalancing.js';
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import { api } from "@/lib/api-client";
+import type {
+  SortDirection,
+  TradeSortKey,
+} from "../../../shared/schemas/trade-sort.js";
+import type { ProvenancePin } from "../../../shared/schemas/provenance-pin.js";
+import type { UniverseRebalancingEntryDto } from "../../../shared/schemas/universe-rebalancing.js";
 import {
   isTerminal,
   type BacktestMetrics,
@@ -14,7 +17,7 @@ import {
   type SeedCloneBatchDetail,
   type SeedCloneBatchSummary,
   type TradeRow,
-} from './types';
+} from "./types";
 
 export interface StrategySummary {
   id: string;
@@ -38,38 +41,42 @@ export interface StrategySummary {
  */
 export function useStrategies() {
   return useQuery({
-    queryKey: ['strategies'],
-    queryFn: () => api<{ strategies: StrategySummary[] }>('/strategies'),
+    queryKey: ["strategies"],
+    queryFn: () => api<{ strategies: StrategySummary[] }>("/strategies"),
     staleTime: 5 * 60_000,
   });
 }
 
 export function useBacktests(refetchIntervalMs?: number) {
   return useQuery({
-    queryKey: ['backtests'],
-    queryFn: () => api<{ jobs: JobSummary[] }>('/backtests'),
+    queryKey: ["backtests"],
+    queryFn: () => api<{ jobs: JobSummary[] }>("/backtests"),
     refetchInterval: refetchIntervalMs ?? false,
   });
 }
 
 export function useSeedCloneBatches(refetchIntervalMs?: number) {
   return useQuery({
-    queryKey: ['backtest-clone-batches'],
-    queryFn: () => api<{
-      batches: SeedCloneBatchSummary[];
-      sourceJobs: JobSummary[];
-    }>('/backtest-clone-batches'),
+    queryKey: ["backtest-clone-batches"],
+    queryFn: () =>
+      api<{
+        batches: SeedCloneBatchSummary[];
+        sourceJobs: JobSummary[];
+      }>("/backtest-clone-batches"),
     refetchInterval: refetchIntervalMs ?? false,
   });
 }
 
 export function useSeedCloneBatch(batchId: string) {
   return useQuery({
-    queryKey: ['backtest-clone-batches', batchId],
-    queryFn: () => api<{ batch: SeedCloneBatchDetail }>(`/backtest-clone-batches/${batchId}`),
+    queryKey: ["backtest-clone-batches", batchId],
+    queryFn: () =>
+      api<{ batch: SeedCloneBatchDetail }>(
+        `/backtest-clone-batches/${batchId}`,
+      ),
     refetchInterval: (query) => {
       const status = query.state.data?.batch.status;
-      return status === 'ACTIVE' || status === 'CANCELLING' ? 2_000 : false;
+      return status === "ACTIVE" || status === "CANCELLING" ? 2_000 : false;
     },
   });
 }
@@ -95,7 +102,7 @@ export function useBacktestLive(jobId: string) {
   const sourceRef = useRef<EventSource | null>(null);
 
   const detail = useQuery({
-    queryKey: ['backtests', jobId],
+    queryKey: ["backtests", jobId],
     queryFn: () => api<BacktestDetail>(`/backtests/${jobId}`),
     refetchInterval: (query) => {
       const status = query.state.data?.job.status;
@@ -124,7 +131,7 @@ export function useBacktestLive(jobId: string) {
       if (isTerminal(payload.status)) {
         source.close();
         sourceRef.current = null;
-        void queryClient.invalidateQueries({ queryKey: ['backtests'] });
+        void queryClient.invalidateQueries({ queryKey: ["backtests"] });
       }
     };
     source.onerror = () => {
@@ -156,7 +163,7 @@ export function useBacktestLive(jobId: string) {
 
 export function useBacktestSeries(jobId: string, enabled: boolean) {
   return useQuery({
-    queryKey: ['backtests', jobId, 'series'],
+    queryKey: ["backtests", jobId, "series"],
     queryFn: () => api<SeriesResponse>(`/backtests/${jobId}/series`),
     enabled,
     staleTime: Infinity,
@@ -181,10 +188,13 @@ export function useBacktestTrades(
     sort: options.sort,
     dir: options.dir,
   });
-  if (options.symbol) params.set('symbol', options.symbol);
+  if (options.symbol) params.set("symbol", options.symbol);
   return useQuery({
-    queryKey: ['backtests', jobId, 'trades', options],
-    queryFn: () => api<{ trades: TradeRow[]; total: number }>(`/backtests/${jobId}/trades?${params}`),
+    queryKey: ["backtests", jobId, "trades", options],
+    queryFn: () =>
+      api<{ trades: TradeRow[]; total: number }>(
+        `/backtests/${jobId}/trades?${params}`,
+      ),
     enabled,
     staleTime: Infinity,
   });

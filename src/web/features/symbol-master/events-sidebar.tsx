@@ -1,26 +1,26 @@
-import { useEffect, useMemo, useState } from 'react';
-import { PageSizeInput, Pagination } from '@/components/pagination';
-import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { useEffect, useMemo, useState } from "react";
+import { PageSizeInput, Pagination } from "@/components/pagination";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select';
-import { Skeleton } from '@/components/ui/skeleton';
-import { parsePageSize } from '@/lib/page-size';
-import { pageWindow } from '@/lib/pagination';
-import { useSymbolMasterEvents } from './use-symbol-master';
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import { parsePageSize } from "@/lib/page-size";
+import { pageWindow } from "@/lib/pagination";
+import { useSymbolMasterEvents } from "./use-symbol-master";
 import {
   EVENT_TYPE_FILTER_OPTIONS,
   eventTypeLabel,
   filterEventsByType,
   type EventTypeFilter,
-} from './event-types';
-import { addDays } from './timeline-model';
-import type { SymbolMasterEventDto } from '../../../shared/schemas/symbol-master.js';
+} from "./event-types";
+import { addDays } from "./timeline-model";
+import type { SymbolMasterEventDto } from "../../../shared/schemas/symbol-master.js";
 
 /**
  * 이벤트가 관측된 시점의 근사 여부를 판단한다.
@@ -37,7 +37,8 @@ function previousBusinessDay(date: string): string {
   const d = new Date(`${date}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() - 1);
   const day = d.getUTCDay();
-  if (day === 0) d.setUTCDate(d.getUTCDate() - 2); // 일요일 → 금요일
+  if (day === 0)
+    d.setUTCDate(d.getUTCDate() - 2); // 일요일 → 금요일
   else if (day === 6) d.setUTCDate(d.getUTCDate() - 1); // 토요일 → 금요일
   return d.toISOString().slice(0, 10);
 }
@@ -61,11 +62,11 @@ function EventRow({
       </div>
       <p className="text-xs text-muted-foreground">
         {event.effectiveDate}
-        {approximate ? ` (${event.observedSpanStart} 이후)` : ''}
+        {approximate ? ` (${event.observedSpanStart} 이후)` : ""}
       </p>
       {event.oldValue !== null || event.newValue !== null ? (
         <p className="text-xs text-muted-foreground">
-          {event.oldValue ?? '-'} → {event.newValue ?? '-'}
+          {event.oldValue ?? "-"} → {event.newValue ?? "-"}
         </p>
       ) : null}
     </li>
@@ -84,9 +85,9 @@ export function EventsSidebar({
   const to = addDays(date, 14);
   const { events, isLoading } = useSymbolMasterEvents(from, to);
 
-  const [typeFilter, setTypeFilter] = useState<EventTypeFilter>('ALL');
+  const [typeFilter, setTypeFilter] = useState<EventTypeFilter>("ALL");
   const [page, setPage] = useState(0);
-  const [pageSizeText, setPageSizeText] = useState('10');
+  const [pageSizeText, setPageSizeText] = useState("10");
   const pageSize = parsePageSize(pageSizeText, 10);
 
   // 날짜가 바뀌면 다른 구간의 이벤트다 — 보던 페이지 번호를 물려주면 안 된다.
@@ -95,15 +96,20 @@ export function EventsSidebar({
     setPage(0);
   }, [date]);
 
-  const filtered = useMemo(() => filterEventsByType(events, typeFilter), [events, typeFilter]);
-  const { pageCount, currentPage, from: sliceFrom, to: sliceTo } = pageWindow(
-    filtered.length,
-    pageSize,
-    page,
+  const filtered = useMemo(
+    () => filterEventsByType(events, typeFilter),
+    [events, typeFilter],
   );
+  const {
+    pageCount,
+    currentPage,
+    from: sliceFrom,
+    to: sliceTo,
+  } = pageWindow(filtered.length, pageSize, page);
   const visible = filtered.slice(sliceFrom, sliceTo);
   const filterLabel =
-    EVENT_TYPE_FILTER_OPTIONS.find((option) => option.value === typeFilter)?.label ?? '';
+    EVENT_TYPE_FILTER_OPTIONS.find((option) => option.value === typeFilter)
+      ?.label ?? "";
 
   return (
     <Card>
@@ -158,7 +164,11 @@ export function EventsSidebar({
           <>
             <ul className="divide-y">
               {visible.map((event) => (
-                <EventRow key={event.id} event={event} symbolNames={symbolNames} />
+                <EventRow
+                  key={event.id}
+                  event={event}
+                  symbolNames={symbolNames}
+                />
               ))}
             </ul>
             <Pagination
@@ -167,7 +177,7 @@ export function EventsSidebar({
               pageCount={pageCount}
               // 사이드바가 320px 라 번호 버튼 3개가 상한이다 — 그 이상은 카드 밖으로 넘친다
               maxPageNumbers={3}
-              total={{ count: filtered.length, unit: '건' }}
+              total={{ count: filtered.length, unit: "건" }}
               onPageChange={setPage}
             />
           </>

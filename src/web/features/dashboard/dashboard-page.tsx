@@ -1,17 +1,17 @@
-import { useQuery } from '@tanstack/react-query';
-import { ArrowRight, Plus } from 'lucide-react';
-import { Link } from 'react-router';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Progress } from '@/components/ui/progress';
-import { Skeleton } from '@/components/ui/skeleton';
-import { api } from '@/lib/api-client';
-import { cn } from '@/lib/utils';
-import { useBacktests, useStrategies } from '../backtests/api';
-import { strategyLabel } from '../backtests/strategy-label';
-import { formatDateTime, formatSignedPct, pnlClass } from '@/lib/format';
-import { StatusBadge } from '../backtests/status-badge';
-import { isTerminal } from '../backtests/types';
+import { useQuery } from "@tanstack/react-query";
+import { ArrowRight, Plus } from "lucide-react";
+import { Link } from "react-router";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
+import { Skeleton } from "@/components/ui/skeleton";
+import { api } from "@/lib/api-client";
+import { cn } from "@/lib/utils";
+import { useBacktests, useStrategies } from "../backtests/api";
+import { strategyLabel } from "../backtests/strategy-label";
+import { formatDateTime, formatSignedPct, pnlClass } from "@/lib/format";
+import { StatusBadge } from "../backtests/status-badge";
+import { isTerminal } from "../backtests/types";
 
 interface SystemInfo {
   version: string;
@@ -25,7 +25,7 @@ interface SystemInfo {
 }
 
 function formatGb(bytes: number | null): string {
-  if (bytes === null) return '-';
+  if (bytes === null) return "-";
   return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 }
 
@@ -33,14 +33,16 @@ export function DashboardPage() {
   const { data: backtests, isLoading } = useBacktests(5_000);
   const { data: strategyList } = useStrategies();
   const { data: info } = useQuery({
-    queryKey: ['system', 'info'],
-    queryFn: () => api<SystemInfo>('/system/info'),
+    queryKey: ["system", "info"],
+    queryFn: () => api<SystemInfo>("/system/info"),
     refetchInterval: 30_000,
   });
   const jobs = backtests?.jobs ?? [];
   const strategies = strategyList?.strategies;
   const active = jobs.filter((job) => !isTerminal(job.status));
-  const recentCompleted = jobs.filter((job) => job.status === 'COMPLETED').slice(0, 3);
+  const recentCompleted = jobs
+    .filter((job) => job.status === "COMPLETED")
+    .slice(0, 3);
 
   return (
     <div className="space-y-4">
@@ -63,22 +65,30 @@ export function DashboardPage() {
             {isLoading ? (
               <Skeleton className="h-16 w-full" />
             ) : active.length === 0 ? (
-              <p className="text-sm text-muted-foreground">실행 중인 백테스트가 없습니다.</p>
+              <p className="text-sm text-muted-foreground">
+                실행 중인 백테스트가 없습니다.
+              </p>
             ) : (
               active.map((job) => {
                 const progress =
-                  job.progressBars !== null && job.totalBars !== null && job.totalBars > 0
+                  job.progressBars !== null &&
+                  job.totalBars !== null &&
+                  job.totalBars > 0
                     ? Math.round((job.progressBars / job.totalBars) * 100)
                     : null;
                 return (
-                  <Link key={job.id} to={`/backtests/${job.id}`} className="block space-y-1">
+                  <Link
+                    key={job.id}
+                    to={`/backtests/${job.id}`}
+                    className="block space-y-1"
+                  >
                     <div className="flex items-center gap-2 text-sm">
                       <span className="font-medium">
                         {strategyLabel(job.strategyId, strategies)}
                       </span>
                       <StatusBadge status={job.status} />
                       <span className="ml-auto text-xs text-muted-foreground">
-                        {progress !== null ? `${progress}%` : ''}
+                        {progress !== null ? `${progress}%` : ""}
                       </span>
                     </div>
                     <Progress value={progress ?? 0} />
@@ -95,7 +105,9 @@ export function DashboardPage() {
           </CardHeader>
           <CardContent className="space-y-2">
             {recentCompleted.length === 0 ? (
-              <p className="text-sm text-muted-foreground">완료된 결과가 없습니다.</p>
+              <p className="text-sm text-muted-foreground">
+                완료된 결과가 없습니다.
+              </p>
             ) : (
               recentCompleted.map((job) => (
                 <Link
@@ -103,12 +115,19 @@ export function DashboardPage() {
                   to={`/backtests/${job.id}`}
                   className="flex items-center gap-2 text-sm"
                 >
-                  <span className="font-medium">{strategyLabel(job.strategyId, strategies)}</span>
+                  <span className="font-medium">
+                    {strategyLabel(job.strategyId, strategies)}
+                  </span>
                   <span className="text-xs text-muted-foreground">
                     {formatDateTime(job.completedAtMs)}
                   </span>
                   {job.metrics ? (
-                    <span className={cn('ml-auto tabular-nums', pnlClass(job.metrics.totalReturnPct))}>
+                    <span
+                      className={cn(
+                        "ml-auto tabular-nums",
+                        pnlClass(job.metrics.totalReturnPct),
+                      )}
+                    >
                       {formatSignedPct(job.metrics.totalReturnPct)}
                     </span>
                   ) : null}
@@ -127,15 +146,21 @@ export function DashboardPage() {
             {info ? (
               info.registeredSymbolCount > 0 ? (
                 <p>
-                  등록 종목 {info.registeredSymbolCount}개 —{' '}
-                  <Link to="/datasets/master" className="underline underline-offset-4">
+                  등록 종목 {info.registeredSymbolCount}개 —{" "}
+                  <Link
+                    to="/datasets/master"
+                    className="underline underline-offset-4"
+                  >
                     종목 마스터 보기
                   </Link>
                 </p>
               ) : (
                 <p className="text-muted-foreground">
-                  등록된 종목이 없습니다.{' '}
-                  <Link to="/datasets/master" className="underline underline-offset-4">
+                  등록된 종목이 없습니다.{" "}
+                  <Link
+                    to="/datasets/master"
+                    className="underline underline-offset-4"
+                  >
                     종목 마스터에서 시작하기
                   </Link>
                 </p>
@@ -154,11 +179,17 @@ export function DashboardPage() {
             {info ? (
               <div className="grid grid-cols-2 gap-x-4 gap-y-1">
                 <span className="text-muted-foreground">대기 작업</span>
-                <span className="text-right tabular-nums">{info.queueLength}</span>
+                <span className="text-right tabular-nums">
+                  {info.queueLength}
+                </span>
                 <span className="text-muted-foreground">실행 작업</span>
-                <span className="text-right tabular-nums">{info.runningJobs}</span>
+                <span className="text-right tabular-nums">
+                  {info.runningJobs}
+                </span>
                 <span className="text-muted-foreground">남은 디스크</span>
-                <span className="text-right tabular-nums">{formatGb(info.freeDiskBytes)}</span>
+                <span className="text-right tabular-nums">
+                  {formatGb(info.freeDiskBytes)}
+                </span>
                 <span className="text-muted-foreground">여유 메모리</span>
                 <span className="text-right tabular-nums">
                   {formatGb(info.freeMemoryBytes)}

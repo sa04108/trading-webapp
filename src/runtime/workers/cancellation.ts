@@ -1,6 +1,6 @@
 export interface CancellationEventSource {
-  on(event: 'message', listener: (message: unknown) => void): unknown;
-  on(event: 'SIGTERM', listener: () => void): unknown;
+  on(event: "message", listener: (message: unknown) => void): unknown;
+  on(event: "SIGTERM", listener: () => void): unknown;
 }
 
 export interface CancellationState {
@@ -12,17 +12,17 @@ export function installCancellationHandlers(
 ): CancellationState {
   let requested = false;
 
-  source.on('message', (message: unknown) => {
+  source.on("message", (message: unknown) => {
     if (
-      typeof message === 'object' &&
+      typeof message === "object" &&
       message !== null &&
-      'type' in message &&
-      message.type === 'cancel'
+      "type" in message &&
+      message.type === "cancel"
     ) {
       requested = true;
     }
   });
-  source.on('SIGTERM', () => {
+  source.on("SIGTERM", () => {
     requested = true;
   });
 

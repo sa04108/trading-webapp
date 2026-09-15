@@ -8,7 +8,10 @@ export interface XyPoint {
  * Recharts(SVG) 모바일 성능을 위해 차트 시리즈를 ~threshold 포인트로 줄인다 (docs/DECISIONS.md D-005).
  * 지표 계산에는 절대 사용하지 않는다 — 표시 전용.
  */
-export function downsampleLttb(points: readonly XyPoint[], threshold: number): XyPoint[] {
+export function downsampleLttb(
+  points: readonly XyPoint[],
+  threshold: number,
+): XyPoint[] {
   if (threshold >= points.length || threshold < 3) return [...points];
 
   const sampled: XyPoint[] = [];
@@ -19,7 +22,10 @@ export function downsampleLttb(points: readonly XyPoint[], threshold: number): X
 
   for (let bucket = 0; bucket < threshold - 2; bucket += 1) {
     const rangeStart = Math.floor((bucket + 1) * bucketSize) + 1;
-    const rangeEnd = Math.min(Math.floor((bucket + 2) * bucketSize) + 1, points.length);
+    const rangeEnd = Math.min(
+      Math.floor((bucket + 2) * bucketSize) + 1,
+      points.length,
+    );
 
     // 다음 bucket 의 평균점
     let avgX = 0;

@@ -1,4 +1,4 @@
-import type { Fact, FactScope } from '../domain/fact.js';
+import type { Fact, FactScope } from "../domain/fact.js";
 
 export interface FactQuery {
   readonly scope: FactScope;
@@ -38,7 +38,7 @@ export interface FactIngestionGap {
   readonly periodKey: string;
   readonly reason: string;
   /** BLOCKING은 결과를 왜곡할 수 있어 실행을 막고, INFORMATIONAL은 미사용 계정 등이다. */
-  readonly severity: 'BLOCKING' | 'INFORMATIONAL';
+  readonly severity: "BLOCKING" | "INFORMATIONAL";
 }
 
 export interface FactIngestionResult {
@@ -79,7 +79,7 @@ export interface FetchFinancialsRequest {
    * REFRESH는 정정공시·명시적 FULL 수집처럼 원천 최신성이 필요한 work unit이다.
    * 생략 시 직접 어댑터 호출의 기존 의미를 지키기 위해 REFRESH로 동작한다.
    */
-  readonly rawSnapshotPolicy?: 'PREFER_CACHE' | 'REFRESH';
+  readonly rawSnapshotPolicy?: "PREFER_CACHE" | "REFRESH";
 }
 
 /** 공시검색(list.json)이 돌려주는 정기공시 한 건 */
@@ -128,7 +128,9 @@ export interface FactSource {
     hooks?: FactSourceRequestHooks,
   ): Promise<readonly PeriodicFiling[]>;
   /** 중단 전 저장한 원문의 가장 이른 수집 시각. 완료 이력이 없는 종목의 공시 재확인 하한이다. */
-  getRawSnapshotWatermarks?(symbols: readonly string[]): ReadonlyMap<string, number>;
+  getRawSnapshotWatermarks?(
+    symbols: readonly string[],
+  ): ReadonlyMap<string, number>;
   /**
    * 외부 호출 없이 재생할 수 없는 원문 snapshot 개수. 준비 단계의 DART-key 게이트가
    * coverage 결측과 실제 네트워크 필요를 구분할 때 쓴다. 미구현 소스는 기존 호출량
@@ -150,20 +152,27 @@ export interface FactSource {
  * 두면서도 서로의 체인을 밀지 않는다.
  */
 export interface SymbolVersionBumper {
-  bumpVersion(code: string, slice: string, fingerprintSeed: string, nowMs: number): void;
+  bumpVersion(
+    code: string,
+    slice: string,
+    fingerprintSeed: string,
+    nowMs: number,
+  ): void;
 }
 
 export class FactSourceNotConfiguredError extends Error {
   constructor() {
-    super('DART 인증키가 설정되지 않아 재무 데이터를 수집할 수 없습니다.');
-    this.name = 'FactSourceNotConfiguredError';
+    super("DART 인증키가 설정되지 않아 재무 데이터를 수집할 수 없습니다.");
+    this.name = "FactSourceNotConfiguredError";
   }
 }
 
 /** DART가 실제 응답으로 알리거나 영속 원장에 이미 기록된 일일 호출 한도 소진. */
 export class DartQuotaError extends Error {
-  constructor(message = 'DART 일일 호출 한도를 초과했습니다. 다음 KST 날짜에 다시 시도합니다.') {
+  constructor(
+    message = "DART 일일 호출 한도를 초과했습니다. 다음 KST 날짜에 다시 시도합니다.",
+  ) {
     super(message);
-    this.name = 'DartQuotaError';
+    this.name = "DartQuotaError";
   }
 }

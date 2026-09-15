@@ -1,6 +1,6 @@
-export const KRX_CONTRACT_VERSION = 'v1';
+export const KRX_CONTRACT_VERSION = "v1";
 
-export type KrxMarket = 'KOSPI' | 'KOSDAQ';
+export type KrxMarket = "KOSPI" | "KOSDAQ";
 
 export interface KrxIssueBaseInfoRow {
   /** 기본 ISU_CD — 표준 종목코드다. */

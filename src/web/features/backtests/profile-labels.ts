@@ -13,21 +13,34 @@ export function costProfileLabel(profile: {
   sellTaxRate: number;
   sellTaxRateSchedule?: readonly { rate: number }[];
 }): string {
-  const { buyCommissionRate: buy, sellCommissionRate: sell, sellTaxRate: tax } = profile;
-  const scheduledTaxRates = profile.sellTaxRateSchedule?.map((entry) => entry.rate) ?? [];
+  const {
+    buyCommissionRate: buy,
+    sellCommissionRate: sell,
+    sellTaxRate: tax,
+  } = profile;
+  const scheduledTaxRates =
+    profile.sellTaxRateSchedule?.map((entry) => entry.rate) ?? [];
   const taxRates = scheduledTaxRates.length > 0 ? scheduledTaxRates : [tax];
   const minTax = Math.min(...taxRates);
   const maxTax = Math.max(...taxRates);
-  if (buy === 0 && sell === 0 && maxTax === 0) return '무비용';
+  if (buy === 0 && sell === 0 && maxTax === 0) return "무비용";
   const commission =
-    buy === sell ? `수수료 ${percent(buy)}` : `수수료 매수 ${percent(buy)} · 매도 ${percent(sell)}`;
-  const taxLabel = minTax === maxTax
-    ? `매도세 ${percent(minTax)}`
-    : `매도세 기간별 ${percent(minTax)}~${percent(maxTax)}`;
+    buy === sell
+      ? `수수료 ${percent(buy)}`
+      : `수수료 매수 ${percent(buy)} · 매도 ${percent(sell)}`;
+  const taxLabel =
+    minTax === maxTax
+      ? `매도세 ${percent(minTax)}`
+      : `매도세 기간별 ${percent(minTax)}~${percent(maxTax)}`;
   return `${commission} · ${taxLabel}`;
 }
 
-export function slippageProfileLabel(profile: { bps: number; fixed: number }): string {
-  if (profile.bps === 0 && profile.fixed === 0) return '무슬리피지';
-  return profile.fixed > 0 ? `${profile.bps}bp + ${profile.fixed}원` : `${profile.bps}bp`;
+export function slippageProfileLabel(profile: {
+  bps: number;
+  fixed: number;
+}): string {
+  if (profile.bps === 0 && profile.fixed === 0) return "무슬리피지";
+  return profile.fixed > 0
+    ? `${profile.bps}bp + ${profile.fixed}원`
+    : `${profile.bps}bp`;
 }

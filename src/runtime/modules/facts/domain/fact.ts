@@ -2,7 +2,7 @@
  * 상장시점(point-in-time) 팩트 — 재무·거시 지표를 장(long) 포맷 하나로 담는다.
  * 새 지표를 추가할 때 스키마 마이그레이션이 없다는 것이 이 모양의 이유다.
  */
-export type FactScope = 'SYMBOL' | 'MACRO';
+export type FactScope = "SYMBOL" | "MACRO";
 
 export interface Fact {
   readonly scope: FactScope;
@@ -22,28 +22,28 @@ export interface Fact {
 
 /** 전략이 참조하는 재무 계정. 문자열 리터럴 유니온이라 오타가 컴파일에서 잡힌다. */
 export type FundamentalField =
-  | 'OPERATING_INCOME'
-  | 'NET_INCOME'
-  | 'CURRENT_ASSETS'
-  | 'CURRENT_LIABILITIES'
-  | 'TANGIBLE_ASSETS'
-  | 'CASH_AND_EQUIVALENTS'
-  | 'SHORT_TERM_INVESTMENTS'
-  | 'SHORT_TERM_BORROWINGS'
-  | 'CURRENT_LONG_TERM_DEBT'
-  | 'BONDS'
-  | 'LONG_TERM_BORROWINGS'
-  | 'TOTAL_EQUITY'
-  | 'SHARES_OUTSTANDING';
+  | "OPERATING_INCOME"
+  | "NET_INCOME"
+  | "CURRENT_ASSETS"
+  | "CURRENT_LIABILITIES"
+  | "TANGIBLE_ASSETS"
+  | "CASH_AND_EQUIVALENTS"
+  | "SHORT_TERM_INVESTMENTS"
+  | "SHORT_TERM_BORROWINGS"
+  | "CURRENT_LONG_TERM_DEBT"
+  | "BONDS"
+  | "LONG_TERM_BORROWINGS"
+  | "TOTAL_EQUITY"
+  | "SHARES_OUTSTANDING";
 
 /** 손익 계정 — 분기 단독값이며 TTM 합산 대상 */
-export const FLOW_FIELDS = ['OPERATING_INCOME', 'NET_INCOME'] as const;
+export const FLOW_FIELDS = ["OPERATING_INCOME", "NET_INCOME"] as const;
 
 /**
  * 자본변동 이벤트는 값이 '비율' 이라 재무 계정과 성질이 다르다 — 별도 field 로 둔다.
  * periodKey = 효력 발생일('YYYY-MM-DD', 거래소 현지 날짜), value = 주식수 증가 배수.
  */
-export const CORPORATE_ACTION_FIELD = 'SPLIT_RATIO';
+export const CORPORATE_ACTION_FIELD = "SPLIT_RATIO";
 
 export interface CorporateAction {
   /** 효력 발생일의 거래소 현지 자정을 UTC 로 옮긴 시각 */
@@ -56,7 +56,10 @@ export interface FundamentalSnapshot {
   /** 이 시점까지 공시된 것 중 가장 최근 분기의 값 */
   get(field: FundamentalField): number | null;
   /** field 자신의 최신 분기에서 offset만큼 정확히 이전인 calendar quarter의 값 */
-  quarter(field: FundamentalField, offset?: number): { periodKey: string; value: number } | null;
+  quarter(
+    field: FundamentalField,
+    offset?: number,
+  ): { periodKey: string; value: number } | null;
   /** endOffset부터 직전 4개 calendar quarter 합. flow가 아니거나 구멍이 있으면 null */
   ttm(field: FundamentalField, endOffset?: number): number | null;
   /**

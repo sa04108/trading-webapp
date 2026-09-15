@@ -1,5 +1,5 @@
-import type { OrderIntent, Position } from '../../../backtest/domain/types.js';
-import type { Candle } from '../../../market-data/domain/candle.js';
+import type { OrderIntent, Position } from "../../../backtest/domain/types.js";
+import type { Candle } from "../../../market-data/domain/candle.js";
 
 export interface SellPhaseInput {
   /** 이번 리밸런스의 목표 보유 종목 */
@@ -43,9 +43,9 @@ export function planSellPhase(input: SellPhaseInput): readonly OrderIntent[] {
     if (!targetSet.has(position.symbol)) {
       orders.push({
         symbol: position.symbol,
-        side: 'SELL',
+        side: "SELL",
         quantity: position.quantity,
-        reason: 'REBALANCE_EXIT',
+        reason: "REBALANCE_EXIT",
       });
       continue;
     }
@@ -58,9 +58,9 @@ export function planSellPhase(input: SellPhaseInput): readonly OrderIntent[] {
     if (excessQuantity < 1) continue;
     orders.push({
       symbol: position.symbol,
-      side: 'SELL',
+      side: "SELL",
       quantity: excessQuantity,
-      reason: 'REBALANCE_TRIM',
+      reason: "REBALANCE_TRIM",
     });
   }
 
@@ -90,7 +90,7 @@ export function planBuyPhase(
     const heldQuantity = input.positions.get(symbol)?.quantity ?? 0;
     const quantity = Math.floor(targetQuantity - heldQuantity);
     if (quantity < 1) continue;
-    orders.push({ symbol, side: 'BUY', quantity, reason: 'REBALANCE_ENTRY' });
+    orders.push({ symbol, side: "BUY", quantity, reason: "REBALANCE_ENTRY" });
   }
   return orders;
 }

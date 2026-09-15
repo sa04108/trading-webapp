@@ -1,9 +1,14 @@
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { pageNumberLimitForWidth, visiblePageNumbers } from '@/lib/pagination';
-import { cn } from '@/lib/utils';
+import {
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+} from "lucide-react";
+import { useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { pageNumberLimitForWidth, visiblePageNumbers } from "@/lib/pagination";
+import { cn } from "@/lib/utils";
 
 export interface PaginationProps {
   readonly currentPage: number;
@@ -24,10 +29,11 @@ function usePageNumberLimit(): 5 | 7 | 9 {
   const [limit, setLimit] = useState<5 | 7 | 9>(5);
 
   useEffect(() => {
-    const update = (): void => setLimit(pageNumberLimitForWidth(window.innerWidth));
+    const update = (): void =>
+      setLimit(pageNumberLimitForWidth(window.innerWidth));
     update();
-    window.addEventListener('resize', update);
-    return () => window.removeEventListener('resize', update);
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
   }, []);
 
   return limit;
@@ -43,19 +49,29 @@ export function Pagination({
   className,
 }: PaginationProps) {
   const widthLimit = usePageNumberLimit();
-  const maxVisible = Math.max(1, Math.min(widthLimit, maxPageNumbers ?? widthLimit));
+  const maxVisible = Math.max(
+    1,
+    Math.min(widthLimit, maxPageNumbers ?? widthLimit),
+  );
   const safePageCount = Math.max(1, Math.trunc(pageCount));
-  const safeCurrentPage = Math.min(Math.max(0, Math.trunc(currentPage)), safePageCount - 1);
+  const safeCurrentPage = Math.min(
+    Math.max(0, Math.trunc(currentPage)),
+    safePageCount - 1,
+  );
 
   if (safePageCount <= 1) return null;
 
-  const pageNumbers = visiblePageNumbers(safeCurrentPage, safePageCount, maxVisible);
+  const pageNumbers = visiblePageNumbers(
+    safeCurrentPage,
+    safePageCount,
+    maxVisible,
+  );
   const changePage = (nextPage: number): void => {
     onPageChange(Math.min(Math.max(0, nextPage), safePageCount - 1));
   };
 
   return (
-    <nav aria-label={ariaLabel} className={cn('space-y-1.5', className)}>
+    <nav aria-label={ariaLabel} className={cn("space-y-1.5", className)}>
       <div className="flex items-center justify-center gap-1">
         <Button
           type="button"
@@ -85,11 +101,15 @@ export function Pagination({
             <Button
               key={pageNumber}
               type="button"
-              variant={isCurrent ? 'secondary' : 'ghost'}
+              variant={isCurrent ? "secondary" : "ghost"}
               size="icon"
-              aria-label={isCurrent ? `현재 ${pageNumber}페이지` : `${pageNumber}페이지로 이동`}
-              aria-current={isCurrent ? 'page' : undefined}
-              className={cn('text-xs tabular-nums', isCurrent && 'font-bold')}
+              aria-label={
+                isCurrent
+                  ? `현재 ${pageNumber}페이지`
+                  : `${pageNumber}페이지로 이동`
+              }
+              aria-current={isCurrent ? "page" : undefined}
+              className={cn("text-xs tabular-nums", isCurrent && "font-bold")}
               onClick={() => changePage(pageIndex)}
             >
               {pageNumber}
@@ -120,7 +140,8 @@ export function Pagination({
       </div>
       {total ? (
         <p className="text-center text-xs text-muted-foreground">
-          총 {total.count}{total.unit}
+          총 {total.count}
+          {total.unit}
         </p>
       ) : null}
     </nav>
@@ -131,10 +152,15 @@ export interface PageSizeInputProps {
   readonly value: string;
   readonly onChange: (nextValue: string) => void;
   readonly label: string;
-  readonly unit: '종목' | '건';
+  readonly unit: "종목" | "건";
 }
 
-export function PageSizeInput({ value, onChange, label, unit }: PageSizeInputProps) {
+export function PageSizeInput({
+  value,
+  onChange,
+  label,
+  unit,
+}: PageSizeInputProps) {
   return (
     <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
       페이지당

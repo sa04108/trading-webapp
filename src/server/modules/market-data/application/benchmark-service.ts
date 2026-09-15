@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
-import { and, asc, eq, gte, lte } from 'drizzle-orm';
+import { createHash } from "node:crypto";
+import { and, asc, eq, gte, lte } from "drizzle-orm";
 import {
   BENCHMARK_NAMES,
   BENCHMARK_SOURCES,
@@ -7,19 +7,27 @@ import {
   type BenchmarkId,
   type BenchmarkPin,
   type FredBenchmarkId,
-} from '../../../../shared/schemas/benchmark.js';
-import type { AppDatabase } from '../../../../runtime/shared/db/database.js';
-import { benchmarkDailyValues, fredBenchmarkCoverage, symbolMasterCoverage, symbolMasterTradingDays } from '../../../../runtime/shared/db/data-schema.js';
-import type { Clock } from '../../../../runtime/shared/clock.js';
-import type { Logger } from '../../../shared/logger.js';
-import { addCalendarDays, isWeekendDate } from '../../../../runtime/modules/market-data/domain/kst-date.js';
+} from "../../../../shared/schemas/benchmark.js";
+import type { AppDatabase } from "../../../../runtime/shared/db/database.js";
+import {
+  benchmarkDailyValues,
+  fredBenchmarkCoverage,
+  symbolMasterCoverage,
+  symbolMasterTradingDays,
+} from "../../../../runtime/shared/db/data-schema.js";
+import type { Clock } from "../../../../runtime/shared/clock.js";
+import type { Logger } from "../../../shared/logger.js";
+import {
+  addCalendarDays,
+  isWeekendDate,
+} from "../../../../runtime/modules/market-data/domain/kst-date.js";
 import {
   KrxNotConfiguredError,
   type FredBenchmarkSource,
   type KrxHistoricalUniverseSource,
-} from '../../../../runtime/modules/market-data/application/ports.js';
+} from "../../../../runtime/modules/market-data/application/ports.js";
 
-export type BenchmarkBackfillState = 'IDLE' | 'RUNNING' | 'FAILED';
+export type BenchmarkBackfillState = "IDLE" | "RUNNING" | "FAILED";
 
 export interface BenchmarkBackfillStatus {
   benchmarkId: BenchmarkId | null;
@@ -30,8 +38,10 @@ export interface BenchmarkBackfillStatus {
   error: string | null;
 }
 
-function isFredBenchmarkId(benchmarkId: BenchmarkId): benchmarkId is FredBenchmarkId {
-  return BENCHMARK_SOURCES[benchmarkId] === 'FRED_API';
+function isFredBenchmarkId(
+  benchmarkId: BenchmarkId,
+): benchmarkId is FredBenchmarkId {
+  return BENCHMARK_SOURCES[benchmarkId] === "FRED_API";
 }
 
 interface DateRange {
@@ -61,26 +71,38 @@ function isCalendarRangeAccountedFor(
 
 export class BenchmarkService {
   private backfill: BenchmarkBackfillStatus = {
-    benchmarkId: null, state: 'IDLE', cursorDate: null, from: null, to: null, error: null,
+    benchmarkId: null,
+    state: "IDLE",
+    cursorDate: null,
+    from: null,
+    to: null,
+    error: null,
   };
 
-  constructor(private readonly deps: {
-    db: AppDatabase;
-    krxSource: KrxHistoricalUniverseSource;
-    fredSource: FredBenchmarkSource;
-    clock: Clock;
-    logger: Logger;
-  }) {}
+  constructor(
+    private readonly deps: {
+      db: AppDatabase;
+      krxSource: KrxHistoricalUniverseSource;
+      fredSource: FredBenchmarkSource;
+      clock: Clock;
+      logger: Logger;
+    },
+  ) {}
 
   list(benchmarkId: BenchmarkId, from: string, to: string) {
     return this.deps.db
-      .select({ date: benchmarkDailyValues.date, close: benchmarkDailyValues.close })
+      .select({
+        date: benchmarkDailyValues.date,
+        close: benchmarkDailyValues.close,
+      })
       .from(benchmarkDailyValues)
-      .where(and(
-        eq(benchmarkDailyValues.benchmarkId, benchmarkId),
-        gte(benchmarkDailyValues.date, from),
-        lte(benchmarkDailyValues.date, to),
-      ))
+      .where(
+        and(
+          eq(benchmarkDailyValues.benchmarkId, benchmarkId),
+          gte(benchmarkDailyValues.date, from),
+          lte(benchmarkDailyValues.date, to),
+        ),
+      )
       .orderBy(asc(benchmarkDailyValues.date))
       .all();
   }
@@ -103,27 +125,40 @@ export class BenchmarkService {
     const tradingDays = this.deps.db
       .select({ date: symbolMasterTradingDays.date })
       .from(symbolMasterTradingDays)
-      .where(and(gte(symbolMasterTradingDays.date, from), lte(symbolMasterTradingDays.date, to)))
+      .where(
+        and(
+          gte(symbolMasterTradingDays.date, from),
+          lte(symbolMasterTradingDays.date, to),
+        ),
+      )
       .orderBy(asc(symbolMasterTradingDays.date))
       .all()
       // 0005 legacy 이행은 이벤트 경계일도 최선 추정 거래일로 넣었다. 주말은 확실히
       // 잘못된 추정이므로 벤치마크 누락 거래일로 세지 않는다.
       .filter(({ date }) => !isWeekendDate(date));
     const dates = new Set(points.map((point) => point.date));
-    const missingTradingDays = tradingDays.filter(({ date }) => !dates.has(date)).length;
+    const missingTradingDays = tradingDays.filter(
+      ({ date }) => !dates.has(date),
+    ).length;
     const masterCoverage = this.deps.db
       .select({
         startDate: symbolMasterCoverage.startDate,
         endDate: symbolMasterCoverage.endDate,
       })
       .from(symbolMasterCoverage)
-      .where(and(
-        lte(symbolMasterCoverage.startDate, to),
-        gte(symbolMasterCoverage.endDate, from),
-      ))
+      .where(
+        and(
+          lte(symbolMasterCoverage.startDate, to),
+          gte(symbolMasterCoverage.endDate, from),
+        ),
+      )
       .orderBy(asc(symbolMasterCoverage.startDate))
       .all();
-    const benchmarkCoverage = this.benchmarkCoverageRanges(benchmarkId, from, to);
+    const benchmarkCoverage = this.benchmarkCoverageRanges(
+      benchmarkId,
+      from,
+      to,
+    );
 
     // 달력일마다 "왜 벤치마크 행이 없을 수 있는지"를 설명할 수 있어야 한다.
     // - 벤치마크 값 자체가 있으면 종목 마스터 coverage가 하루 늦어도 충분한 증거다.
@@ -134,13 +169,11 @@ export class BenchmarkService {
     return {
       points,
       covered:
-        missingTradingDays === 0
-        && isCalendarRangeAccountedFor(
-          from,
-          to,
-          dates,
-          [...masterCoverage, ...benchmarkCoverage],
-        ),
+        missingTradingDays === 0 &&
+        isCalendarRangeAccountedFor(from, to, dates, [
+          ...masterCoverage,
+          ...benchmarkCoverage,
+        ]),
     };
   }
 
@@ -150,55 +183,81 @@ export class BenchmarkService {
     to: string,
   ): DateRange[] {
     return this.deps.db
-      .select({ startDate: fredBenchmarkCoverage.startDate, endDate: fredBenchmarkCoverage.endDate })
+      .select({
+        startDate: fredBenchmarkCoverage.startDate,
+        endDate: fredBenchmarkCoverage.endDate,
+      })
       .from(fredBenchmarkCoverage)
-      .where(and(
-        eq(fredBenchmarkCoverage.benchmarkId, benchmarkId),
-        lte(fredBenchmarkCoverage.startDate, to),
-        gte(fredBenchmarkCoverage.endDate, from),
-      ))
+      .where(
+        and(
+          eq(fredBenchmarkCoverage.benchmarkId, benchmarkId),
+          lte(fredBenchmarkCoverage.startDate, to),
+          gte(fredBenchmarkCoverage.endDate, from),
+        ),
+      )
       .orderBy(asc(fredBenchmarkCoverage.startDate))
       .all();
   }
 
-  private saveBenchmarkCoverage(benchmarkId: BenchmarkId, from: string, to: string): void {
+  private saveBenchmarkCoverage(
+    benchmarkId: BenchmarkId,
+    from: string,
+    to: string,
+  ): void {
     const syncedAtMs = this.deps.clock.now();
-    this.deps.db.insert(fredBenchmarkCoverage).values({
-      benchmarkId,
-      startDate: from,
-      endDate: to,
-      syncedAtMs,
-    }).onConflictDoUpdate({
-      target: [
-        fredBenchmarkCoverage.benchmarkId,
-        fredBenchmarkCoverage.startDate,
-        fredBenchmarkCoverage.endDate,
-      ],
-      set: { syncedAtMs },
-    }).run();
+    this.deps.db
+      .insert(fredBenchmarkCoverage)
+      .values({
+        benchmarkId,
+        startDate: from,
+        endDate: to,
+        syncedAtMs,
+      })
+      .onConflictDoUpdate({
+        target: [
+          fredBenchmarkCoverage.benchmarkId,
+          fredBenchmarkCoverage.startDate,
+          fredBenchmarkCoverage.endDate,
+        ],
+        set: { syncedAtMs },
+      })
+      .run();
   }
 
-  private savePoints(benchmarkId: BenchmarkId, points: readonly BenchmarkPoint[]): void {
+  private savePoints(
+    benchmarkId: BenchmarkId,
+    points: readonly BenchmarkPoint[],
+  ): void {
     if (points.length === 0) return;
     const syncedAtMs = this.deps.clock.now();
     this.deps.db.transaction((tx) => {
       for (const { date, close } of points) {
-        tx.insert(benchmarkDailyValues).values({
-          benchmarkId,
-          date,
-          close,
-          syncedAtMs,
-        }).onConflictDoUpdate({
-          target: [benchmarkDailyValues.benchmarkId, benchmarkDailyValues.date],
-          set: { close, syncedAtMs },
-        }).run();
+        tx.insert(benchmarkDailyValues)
+          .values({
+            benchmarkId,
+            date,
+            close,
+            syncedAtMs,
+          })
+          .onConflictDoUpdate({
+            target: [
+              benchmarkDailyValues.benchmarkId,
+              benchmarkDailyValues.date,
+            ],
+            set: { close, syncedAtMs },
+          })
+          .run();
       }
     });
   }
 
   async syncDate(benchmarkId: BenchmarkId, date: string): Promise<void> {
     if (isFredBenchmarkId(benchmarkId)) {
-      const points = await this.deps.fredSource.fetchBenchmarkRange(benchmarkId, date, date);
+      const points = await this.deps.fredSource.fetchBenchmarkRange(
+        benchmarkId,
+        date,
+        date,
+      );
       this.savePoints(benchmarkId, points);
       this.saveBenchmarkCoverage(benchmarkId, date, date);
       return;
@@ -213,9 +272,20 @@ export class BenchmarkService {
     this.saveBenchmarkCoverage(benchmarkId, date, date);
   }
 
-  startBackfill(benchmarkId: BenchmarkId, from: string, to: string): BenchmarkBackfillStatus {
-    if (this.backfill.state === 'RUNNING') return this.backfill;
-    this.backfill = { benchmarkId, state: 'RUNNING', cursorDate: from, from, to, error: null };
+  startBackfill(
+    benchmarkId: BenchmarkId,
+    from: string,
+    to: string,
+  ): BenchmarkBackfillStatus {
+    if (this.backfill.state === "RUNNING") return this.backfill;
+    this.backfill = {
+      benchmarkId,
+      state: "RUNNING",
+      cursorDate: from,
+      from,
+      to,
+      error: null,
+    };
     void this.runBackfill(benchmarkId, from, to);
     return this.backfill;
   }
@@ -224,36 +294,73 @@ export class BenchmarkService {
     return this.backfill;
   }
 
-  private async runBackfill(benchmarkId: BenchmarkId, from: string, to: string): Promise<void> {
+  private async runBackfill(
+    benchmarkId: BenchmarkId,
+    from: string,
+    to: string,
+  ): Promise<void> {
     try {
       if (isFredBenchmarkId(benchmarkId)) {
-        const points = await this.deps.fredSource.fetchBenchmarkRange(benchmarkId, from, to);
+        const points = await this.deps.fredSource.fetchBenchmarkRange(
+          benchmarkId,
+          from,
+          to,
+        );
         this.savePoints(benchmarkId, points);
         this.saveBenchmarkCoverage(benchmarkId, from, to);
-        this.backfill = { benchmarkId, state: 'IDLE', cursorDate: null, from, to, error: null };
+        this.backfill = {
+          benchmarkId,
+          state: "IDLE",
+          cursorDate: null,
+          from,
+          to,
+          error: null,
+        };
         return;
       }
 
-      const existingDates = new Set(this.list(benchmarkId, from, to).map(({ date }) => date));
+      const existingDates = new Set(
+        this.list(benchmarkId, from, to).map(({ date }) => date),
+      );
       for (let date = from; date <= to; date = addCalendarDays(date, 1)) {
         this.backfill.cursorDate = date;
         if (isWeekendDate(date) || existingDates.has(date)) continue;
         await this.syncDate(benchmarkId, date);
       }
-      this.backfill = { benchmarkId, state: 'IDLE', cursorDate: null, from, to, error: null };
+      this.backfill = {
+        benchmarkId,
+        state: "IDLE",
+        cursorDate: null,
+        from,
+        to,
+        error: null,
+      };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.backfill = {
-        benchmarkId, state: 'FAILED', cursorDate: this.backfill.cursorDate, from, to, error: message,
+        benchmarkId,
+        state: "FAILED",
+        cursorDate: this.backfill.cursorDate,
+        from,
+        to,
+        error: message,
       };
       this.deps.logger.error(
-        { module: 'market-data', event: 'benchmark.backfill-failed', date: this.backfill.cursorDate, error: message },
-        '벤치마크 백필이 날짜 처리 중 실패했다',
+        {
+          module: "market-data",
+          event: "benchmark.backfill-failed",
+          date: this.backfill.cursorDate,
+          error: message,
+        },
+        "벤치마크 백필이 날짜 처리 중 실패했다",
       );
     }
   }
 
-  pin(benchmarkId: BenchmarkId, period: { from: string; to: string }): {
+  pin(
+    benchmarkId: BenchmarkId,
+    period: { from: string; to: string },
+  ): {
     pin: BenchmarkPin;
     hash: string;
   } {
@@ -262,14 +369,14 @@ export class BenchmarkService {
       benchmarkId,
       name: BENCHMARK_NAMES[benchmarkId],
       source: BENCHMARK_SOURCES[benchmarkId],
-      sourceVersion: 'v1',
+      sourceVersion: "v1",
       period,
       points: status.points,
       covered: status.covered,
     };
     return {
       pin,
-      hash: createHash('sha256').update(JSON.stringify(pin)).digest('hex'),
+      hash: createHash("sha256").update(JSON.stringify(pin)).digest("hex"),
     };
   }
 }

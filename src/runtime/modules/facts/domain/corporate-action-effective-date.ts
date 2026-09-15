@@ -1,4 +1,4 @@
-import { CORPORATE_ACTION_FIELD, type Fact } from './fact.js';
+import { CORPORATE_ACTION_FIELD, type Fact } from "./fact.js";
 
 /**
  * KRX 기초정보에서 관측한 상장주식수 변경 하나.
@@ -60,40 +60,52 @@ const RATIO_ERROR_SCALE = 1_000_000;
 const MS_PER_DAY = 86_400_000;
 
 function dayDistance(a: string, b: string): number {
-  return Math.round(Math.abs(Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`)) / MS_PER_DAY);
+  return Math.round(
+    Math.abs(Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`)) /
+      MS_PER_DAY,
+  );
 }
 
 function signedDayOffset(from: string, to: string): number {
-  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / MS_PER_DAY);
+  return Math.round(
+    (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) /
+      MS_PER_DAY,
+  );
 }
 
 function isPositiveSafeInteger(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
-function compositeEndpointMatchError(fact: Fact, change: SharesChange): number | null {
+function compositeEndpointMatchError(
+  fact: Fact,
+  change: SharesChange,
+): number | null {
   const factBefore = fact.corporateActionBeforeShares;
   const factAfter = fact.corporateActionAfterShares;
   const krxBefore = change.beforeShares;
   const krxAfter = change.afterShares;
   if (
-    !isPositiveSafeInteger(factBefore)
-    || !isPositiveSafeInteger(factAfter)
-    || !isPositiveSafeInteger(krxBefore)
-    || !isPositiveSafeInteger(krxAfter)
-    || factAfter !== krxAfter
-    || Math.abs(factAfter / factBefore - fact.value) > 1e-12
-    || Math.abs(krxAfter / krxBefore - change.ratio) > 1e-12
-  ) return null;
+    !isPositiveSafeInteger(factBefore) ||
+    !isPositiveSafeInteger(factAfter) ||
+    !isPositiveSafeInteger(krxBefore) ||
+    !isPositiveSafeInteger(krxAfter) ||
+    factAfter !== krxAfter ||
+    Math.abs(factAfter / factBefore - fact.value) > 1e-12 ||
+    Math.abs(krxAfter / krxBefore - change.ratio) > 1e-12
+  )
+    return null;
 
   const direction = Math.sign(factAfter - factBefore);
-  if (direction === 0 || direction !== Math.sign(krxAfter - krxBefore)) return null;
+  if (direction === 0 || direction !== Math.sign(krxAfter - krxBefore))
+    return null;
   // KRX 한 경계에 유상증자와 가격 보정 사건이 같은 방향으로 합쳐진 경우만 허용한다.
   // 최종 주식수의 정확 일치만으로 멀리 떨어진 무관한 변경을 오짝하지 않게 사건 직전
   // DART 주식수도 KRX 구간 내부에 있어야 한다.
-  const eventStartsInsideChange = direction > 0
-    ? krxBefore <= factBefore && factBefore < factAfter
-    : krxBefore >= factBefore && factBefore > factAfter;
+  const eventStartsInsideChange =
+    direction > 0
+      ? krxBefore <= factBefore && factBefore < factAfter
+      : krxBefore >= factBefore && factBefore > factAfter;
   if (!eventStartsInsideChange) return null;
 
   // KRX 경계에 함께 반영된 비가격 증감 규모를 비용으로 쓰되 기존 비용 상한은 넘지 않는다.
@@ -104,16 +116,21 @@ function ratioMatchError(fact: Fact, change: SharesChange): number | null {
   const factRatio = fact.value;
   const sharesRatio = change.ratio;
   if (
-    !Number.isFinite(factRatio)
-    || !Number.isFinite(sharesRatio)
-    || factRatio <= 0
-    || sharesRatio <= 0
-  ) return null;
+    !Number.isFinite(factRatio) ||
+    !Number.isFinite(sharesRatio) ||
+    factRatio <= 0 ||
+    sharesRatio <= 0
+  )
+    return null;
   const factChange = factRatio - 1;
   const sharesChange = sharesRatio - 1;
   // 증가와 감소는 같은 사건일 수 없다. total ratio끼리 비교하면 1.02와 0.98도
   // 불과 3.9% 차이로 보여 무상증자와 감자를 잘못 짝지을 수 있다.
-  if (factChange === 0 || sharesChange === 0 || Math.sign(factChange) !== Math.sign(sharesChange)) {
+  if (
+    factChange === 0 ||
+    sharesChange === 0 ||
+    Math.sign(factChange) !== Math.sign(sharesChange)
+  ) {
     return null;
   }
   // 작은 자본변동에서는 총 비율보다 변화분의 크기를 함께 비교한다.
@@ -135,17 +152,39 @@ interface FlowEdge {
   readonly cost: number;
 }
 
-function addFlowEdge(graph: FlowEdge[][], from: number, to: number, cost: number): FlowEdge {
-  const forward: FlowEdge = { to, reverse: graph[to]!.length, capacity: 1, cost };
-  const reverse: FlowEdge = { to: from, reverse: graph[from]!.length, capacity: 0, cost: -cost };
+function addFlowEdge(
+  graph: FlowEdge[][],
+  from: number,
+  to: number,
+  cost: number,
+): FlowEdge {
+  const forward: FlowEdge = {
+    to,
+    reverse: graph[to]!.length,
+    capacity: 1,
+    cost,
+  };
+  const reverse: FlowEdge = {
+    to: from,
+    reverse: graph[from]!.length,
+    capacity: 0,
+    cost: -cost,
+  };
   graph[from]!.push(forward);
   graph[to]!.push(reverse);
   return forward;
 }
 
-function sendMinimumCostFlow(graph: FlowEdge[][], source: number, sink: number, count: number): void {
+function sendMinimumCostFlow(
+  graph: FlowEdge[][],
+  source: number,
+  sink: number,
+  count: number,
+): void {
   for (let sent = 0; sent < count; sent += 1) {
-    const distances = Array<number>(graph.length).fill(Number.POSITIVE_INFINITY);
+    const distances = Array<number>(graph.length).fill(
+      Number.POSITIVE_INFINITY,
+    );
     const previousNodes = Array<number>(graph.length).fill(-1);
     const previousEdges = Array<number>(graph.length).fill(-1);
     distances[source] = 0;
@@ -157,7 +196,11 @@ function sendMinimumCostFlow(graph: FlowEdge[][], source: number, sink: number, 
       let changed = false;
       for (let from = 0; from < graph.length; from += 1) {
         if (!Number.isFinite(distances[from])) continue;
-        for (let edgeIndex = 0; edgeIndex < graph[from]!.length; edgeIndex += 1) {
+        for (
+          let edgeIndex = 0;
+          edgeIndex < graph[from]!.length;
+          edgeIndex += 1
+        ) {
           const edge = graph[from]![edgeIndex]!;
           if (edge.capacity === 0) continue;
           const candidate = distances[from]! + edge.cost;
@@ -172,7 +215,7 @@ function sendMinimumCostFlow(graph: FlowEdge[][], source: number, sink: number, 
     }
 
     if (previousNodes[sink] === -1) {
-      throw new Error('자본변동 날짜 배정 그래프에 완전 매칭이 없습니다.');
+      throw new Error("자본변동 날짜 배정 그래프에 완전 매칭이 없습니다.");
     }
     for (let node = sink; node !== source;) {
       const previousNode = previousNodes[node]!;
@@ -185,20 +228,26 @@ function sendMinimumCostFlow(graph: FlowEdge[][], source: number, sink: number, 
 }
 
 function compareFacts(left: Fact, right: Fact): number {
-  return left.periodKey.localeCompare(right.periodKey)
-    || left.value - right.value
-    || (left.corporateActionBeforeShares ?? 0) - (right.corporateActionBeforeShares ?? 0)
-    || (left.corporateActionAfterShares ?? 0) - (right.corporateActionAfterShares ?? 0)
-    || left.asOfTsMs - right.asOfTsMs
-    || left.scope.localeCompare(right.scope);
+  return (
+    left.periodKey.localeCompare(right.periodKey) ||
+    left.value - right.value ||
+    (left.corporateActionBeforeShares ?? 0) -
+      (right.corporateActionBeforeShares ?? 0) ||
+    (left.corporateActionAfterShares ?? 0) -
+      (right.corporateActionAfterShares ?? 0) ||
+    left.asOfTsMs - right.asOfTsMs ||
+    left.scope.localeCompare(right.scope)
+  );
 }
 
 function hasSameActionMeasurement(left: Fact, right: Fact): boolean {
-  return left.value === right.value
-    && (left.corporateActionBeforeShares ?? null)
-      === (right.corporateActionBeforeShares ?? null)
-    && (left.corporateActionAfterShares ?? null)
-      === (right.corporateActionAfterShares ?? null);
+  return (
+    left.value === right.value &&
+    (left.corporateActionBeforeShares ?? null) ===
+      (right.corporateActionBeforeShares ?? null) &&
+    (left.corporateActionAfterShares ?? null) ===
+      (right.corporateActionAfterShares ?? null)
+  );
 }
 
 /**
@@ -225,17 +274,30 @@ function matchSymbolActions(
   // 판정할 근거가 없다. fact와 맞는 행 하나만 골라 쓰면 다른 행이 진짜일 때 수량이
   // 크게 어긋나므로, 완전히 같은 비율의 중복만 허용하고 상충 날짜는 후보에서 뺀다.
   const orderedChangeDates = [...changesByDate]
-    .filter(([, changes]) => new Set(changes.map((change) => JSON.stringify([
-      change.ratio,
-      change.beforeShares ?? null,
-      change.afterShares ?? null,
-    ]))).size === 1)
+    .filter(
+      ([, changes]) =>
+        new Set(
+          changes.map((change) =>
+            JSON.stringify([
+              change.ratio,
+              change.beforeShares ?? null,
+              change.afterShares ?? null,
+            ]),
+          ),
+        ).size === 1,
+    )
     .map(([date]) => date)
     .sort();
-  const candidatesByFact = new Map<Fact, Map<string, { distance: number; ratioError: number }>>();
+  const candidatesByFact = new Map<
+    Fact,
+    Map<string, { distance: number; ratioError: number }>
+  >();
   const allDates = new Set(orderedActions.map((fact) => fact.periodKey));
   for (const fact of orderedActions) {
-    const candidates = new Map<string, { distance: number; ratioError: number }>();
+    const candidates = new Map<
+      string,
+      { distance: number; ratioError: number }
+    >();
     if (unmatchableActions.has(fact)) {
       candidatesByFact.set(fact, candidates);
       continue;
@@ -243,9 +305,10 @@ function matchSymbolActions(
     for (const date of orderedChangeDates) {
       const offset = signedDayOffset(fact.periodKey, date);
       if (
-        offset < -CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays
-        || offset > CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays
-      ) continue;
+        offset < -CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays ||
+        offset > CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays
+      )
+        continue;
       const ratioErrors = (changesByDate.get(date) ?? []).flatMap((change) => {
         const error = ratioMatchError(fact, change);
         return error === null ? [] : [error];
@@ -273,7 +336,8 @@ function matchSymbolActions(
   );
   const maximumRatioError = Math.ceil(2 * RATIO_TOLERANCE * RATIO_ERROR_SCALE);
   const distancePriority = orderedActions.length * maximumRatioError + 1;
-  const maximumAlignedCost = maximumDistance * distancePriority + maximumRatioError;
+  const maximumAlignedCost =
+    maximumDistance * distancePriority + maximumRatioError;
   const unalignedPenalty = orderedActions.length * maximumAlignedCost + 1;
   const assignmentEdges: {
     readonly fact: Fact;
@@ -292,12 +356,21 @@ function matchSymbolActions(
       aligned: true,
     }));
     if (!candidates.has(fact.periodKey)) {
-      assignments.push({ date: fact.periodKey, cost: unalignedPenalty, aligned: false });
+      assignments.push({
+        date: fact.periodKey,
+        cost: unalignedPenalty,
+        aligned: false,
+      });
     }
-    for (const { date, cost, aligned } of assignments.sort((left, right) => (
-      left.date.localeCompare(right.date)
-    ))) {
-      const edge = addFlowEdge(graph, factNode, firstDateNode + dateIndexes.get(date)!, cost);
+    for (const { date, cost, aligned } of assignments.sort((left, right) =>
+      left.date.localeCompare(right.date),
+    )) {
+      const edge = addFlowEdge(
+        graph,
+        factNode,
+        firstDateNode + dateIndexes.get(date)!,
+        cost,
+      );
       assignmentEdges.push({ fact, date, aligned, edge });
     }
   });
@@ -355,9 +428,9 @@ export function alignCorporateActionEffectiveDates(
       conflictingPeriodKeys.add(key);
     }
     if (
-      existing === undefined
-      || fact.asOfTsMs < existing.asOfTsMs
-      || (fact.asOfTsMs === existing.asOfTsMs && fact.value < existing.value)
+      existing === undefined ||
+      fact.asOfTsMs < existing.asOfTsMs ||
+      (fact.asOfTsMs === existing.asOfTsMs && fact.value < existing.value)
     ) {
       actionsByPeriod.set(key, fact);
     }
@@ -366,7 +439,9 @@ export function alignCorporateActionEffectiveDates(
   if (actions.length === 0) return { facts: [...facts], unaligned: [] };
   const retainedActions = new Set(actions);
   const conflictedActions = new Set(
-    actions.filter((fact) => conflictingPeriodKeys.has(`${fact.scope}|${fact.key}|${fact.periodKey}`)),
+    actions.filter((fact) =>
+      conflictingPeriodKeys.has(`${fact.scope}|${fact.key}|${fact.periodKey}`),
+    ),
   );
 
   const changesBySymbol = new Map<string, SharesChange[]>();
@@ -394,11 +469,16 @@ export function alignCorporateActionEffectiveDates(
 
   const unaligned: UnalignedAction[] = actions
     .filter((fact) => !movedTo.has(fact))
-    .map((fact) => ({ symbol: fact.key, periodKey: fact.periodKey, ratio: fact.value }));
+    .map((fact) => ({
+      symbol: fact.key,
+      periodKey: fact.periodKey,
+      ratio: fact.value,
+    }));
 
   return {
     facts: facts.flatMap((fact) => {
-      if (fact.field === CORPORATE_ACTION_FIELD && !retainedActions.has(fact)) return [];
+      if (fact.field === CORPORATE_ACTION_FIELD && !retainedActions.has(fact))
+        return [];
       const moved = movedTo.get(fact);
       return [moved === undefined ? fact : { ...fact, periodKey: moved }];
     }),

@@ -1,9 +1,12 @@
-import fs from 'node:fs';
-import os from 'node:os';
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import type { Container } from '../../../bootstrap/container.js';
+import fs from "node:fs";
+import os from "node:os";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { Container } from "../../../bootstrap/container.js";
 
-type PreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+type PreHandler = (
+  request: FastifyRequest,
+  reply: FastifyReply,
+) => Promise<void>;
 
 function fileSizeOrZero(filePath: string): number {
   try {
@@ -28,20 +31,20 @@ export function registerSystemRoutes(
   container: Container,
   requireAuth: PreHandler,
 ): void {
-  app.get('/health/live', async () => ({ status: 'ok' }));
+  app.get("/health/live", async () => ({ status: "ok" }));
 
-  app.get('/health/ready', async (_request, reply) => {
+  app.get("/health/ready", async (_request, reply) => {
     try {
-      container.database.sqlite.prepare('SELECT 1').get();
+      container.database.sqlite.prepare("SELECT 1").get();
       fs.accessSync(container.config.dataRoot, fs.constants.W_OK);
-      return { status: 'ready' };
+      return { status: "ready" };
     } catch {
-      return reply.code(503).send({ status: 'not_ready' });
+      return reply.code(503).send({ status: "not_ready" });
     }
   });
 
-  app.get('/system/info', { preHandler: requireAuth }, async () => ({
-    name: 'quant-platform',
+  app.get("/system/info", { preHandler: requireAuth }, async () => ({
+    name: "quant-platform",
     version: container.appVersion,
     gitCommitSha: container.gitCommitSha,
     uptimeSeconds: Math.floor(process.uptime()),

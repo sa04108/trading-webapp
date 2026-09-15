@@ -1,11 +1,14 @@
-import type { Logger } from '../../../../shared/logger.js';
+import type { Logger } from "../../../../shared/logger.js";
 import {
   StockInfoSourceNotConfiguredError,
   type StockInfo,
   type StockInfoBatchResult,
   type StockInfoSource,
-} from '../../../../../runtime/modules/market-data/application/ports.js';
-import { RestClient, type TokenProvider } from '../../../../shared/rest-client.js';
+} from "../../../../../runtime/modules/market-data/application/ports.js";
+import {
+  RestClient,
+  type TokenProvider,
+} from "../../../../shared/rest-client.js";
 
 export interface TossConfig {
   readonly baseUrl: string; // https://openapi.tossinvest.com — 실전 환경만 제공 (모의 없음)
@@ -21,7 +24,7 @@ const LOOKUP_CHUNK = 200;
  * 정렬에만 쓰이므로, 한 종목의 이상한 값 때문에 200종목 응답 전체를 버릴 이유가 없다.
  */
 function optionalDecimal(value: unknown): number | null {
-  if (typeof value !== 'string' || value.trim() === '') return null;
+  if (typeof value !== "string" || value.trim() === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
@@ -56,10 +59,10 @@ export function createTossStockInfoSource(
   const tokenProvider: TokenProvider = {
     async issueToken(fetchImpl) {
       const response = await fetchImpl(`${config.baseUrl}/oauth2/token`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({
-          grant_type: 'client_credentials',
+          grant_type: "client_credentials",
           client_id: config.clientId,
           client_secret: config.clientSecret,
         }).toString(),
@@ -67,9 +70,17 @@ export function createTossStockInfoSource(
       if (!response.ok) {
         throw new Error(`toss token issue failed: ${response.status}`);
       }
-      const body = (await response.json()) as { access_token?: string; expires_in?: number };
-      if (typeof body.access_token !== 'string' || typeof body.expires_in !== 'number') {
-        throw new Error('toss token 응답에 access_token/expires_in 이 없습니다');
+      const body = (await response.json()) as {
+        access_token?: string;
+        expires_in?: number;
+      };
+      if (
+        typeof body.access_token !== "string" ||
+        typeof body.expires_in !== "number"
+      ) {
+        throw new Error(
+          "toss token 응답에 access_token/expires_in 이 없습니다",
+        );
       }
       return {
         accessToken: body.access_token,
@@ -88,35 +99,42 @@ export function createTossStockInfoSource(
   });
 
   return {
-    async getStockInfo(symbols: readonly string[]): Promise<StockInfoBatchResult> {
+    async getStockInfo(
+      symbols: readonly string[],
+    ): Promise<StockInfoBatchResult> {
       const stocks: StockInfo[] = [];
       const failedSymbols: string[] = [];
       // GET /api/v1/stocks 는 콤마 구분 최대 200건
       for (let offset = 0; offset < symbols.length; offset += LOOKUP_CHUNK) {
         const chunk = symbols.slice(offset, offset + LOOKUP_CHUNK);
         try {
-          const query = new URLSearchParams({ symbols: chunk.join(',') });
-          const page = await client.request<{ result?: readonly Record<string, unknown>[] }>(
-            'stock',
-            `/api/v1/stocks?${query}`,
-          );
+          const query = new URLSearchParams({ symbols: chunk.join(",") });
+          const page = await client.request<{
+            result?: readonly Record<string, unknown>[];
+          }>("stock", `/api/v1/stocks?${query}`);
           if (!Array.isArray(page.result)) {
-            throw new Error('toss stocks 응답에 result 배열이 없습니다');
+            throw new Error("toss stocks 응답에 result 배열이 없습니다");
           }
           // 청크 전체가 검증을 통과한 뒤에만 stocks 에 합친다 — 페이지 뒷부분에서
           // throw 하면, 이미 파싱한 앞부분만 살아남아 이 청크가 "일부 성공"이 되는
           // 것을 막는다. 청크는 성공 아니면 실패, 둘 중 하나다.
           const chunkStocks: StockInfo[] = [];
           for (const raw of page.result) {
-            if (typeof raw.symbol !== 'string' || typeof raw.name !== 'string') {
-              throw new Error('toss stocks 응답 항목에 symbol/name 이 없습니다');
+            if (
+              typeof raw.symbol !== "string" ||
+              typeof raw.name !== "string"
+            ) {
+              throw new Error(
+                "toss stocks 응답 항목에 symbol/name 이 없습니다",
+              );
             }
             chunkStocks.push({
               symbol: raw.symbol,
               name: raw.name,
-              englishName: typeof raw.englishName === 'string' ? raw.englishName : null,
-              market: typeof raw.market === 'string' ? raw.market : '',
-              status: typeof raw.status === 'string' ? raw.status : '',
+              englishName:
+                typeof raw.englishName === "string" ? raw.englishName : null,
+              market: typeof raw.market === "string" ? raw.market : "",
+              status: typeof raw.status === "string" ? raw.status : "",
               sharesOutstanding: optionalDecimal(raw.sharesOutstanding),
             });
           }
@@ -131,12 +149,12 @@ export function createTossStockInfoSource(
           failedSymbols.push(...chunk);
           logger.warn(
             {
-              module: 'market-data',
-              event: 'toss.get-stock-info.chunk-failed',
+              module: "market-data",
+              event: "toss.get-stock-info.chunk-failed",
               symbols: chunk,
               err: error,
             },
-            'toss stock info chunk lookup failed — skipping this chunk',
+            "toss stock info chunk lookup failed — skipping this chunk",
           );
         }
       }

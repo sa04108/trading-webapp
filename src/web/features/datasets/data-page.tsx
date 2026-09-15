@@ -1,5 +1,5 @@
-import { Navigate, NavLink, Outlet, useSearchParams } from 'react-router';
-import { cn } from '@/lib/utils';
+import { Navigate, NavLink, Outlet, useSearchParams } from "react-router";
+import { cn } from "@/lib/utils";
 
 /**
  * 데이터 화면 — 종목 마스터와 벤치마크를 경로로 나눈다.
@@ -12,17 +12,23 @@ export function DataPage() {
     <div className="space-y-4">
       <h2 className="text-lg font-semibold">데이터</h2>
       <nav aria-label="데이터 구획" className="flex gap-2">
-        {([
-          ['/datasets/master', '종목 마스터'],
-          ['/datasets/benchmarks', '벤치마크'],
-        ] as const).map(([to, label]) => (
+        {(
+          [
+            ["/datasets/master", "종목 마스터"],
+            ["/datasets/benchmarks", "벤치마크"],
+          ] as const
+        ).map(([to, label]) => (
           <NavLink
             key={to}
             to={to}
-            className={({ isActive }) => cn(
-              'rounded-md px-3 py-2 text-sm font-medium',
-              isActive ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground',
-            )}
+            className={({ isActive }) =>
+              cn(
+                "rounded-md px-3 py-2 text-sm font-medium",
+                isActive
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground",
+              )
+            }
           >
             {label}
           </NavLink>
@@ -48,12 +54,15 @@ export function DatasetsIndexRedirect() {
   const [params] = useSearchParams();
 
   const rest = new URLSearchParams(params);
-  rest.delete('tab');
+  rest.delete("tab");
   const search = rest.toString();
 
   return (
     <Navigate
-      to={{ pathname: '/datasets/master', search: search === '' ? '' : `?${search}` }}
+      to={{
+        pathname: "/datasets/master",
+        search: search === "" ? "" : `?${search}`,
+      }}
       replace
     />
   );

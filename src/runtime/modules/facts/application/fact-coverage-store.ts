@@ -1,14 +1,14 @@
-import { createHash, type Hash } from 'node:crypto';
-import { and, asc, eq, inArray, ne } from 'drizzle-orm';
-import type { AppDatabase } from '../../../shared/db/database.js';
-import { readRuntimeVersions } from '../../../shared/runtime-versions.js';
+import { createHash, type Hash } from "node:crypto";
+import { and, asc, eq, inArray, ne } from "drizzle-orm";
+import type { AppDatabase } from "../../../shared/db/database.js";
+import { readRuntimeVersions } from "../../../shared/runtime-versions.js";
 import {
   dartFinancialFilingReceipts,
   facts as factRows,
   symbolFactsState,
-} from '../../../shared/db/schema.js';
-import { CORPORATE_ACTION_FIELD } from '../domain/fact.js';
-import type { FactIngestionGap } from './ports.js';
+} from "../../../shared/db/schema.js";
+import { CORPORATE_ACTION_FIELD } from "../domain/fact.js";
+import type { FactIngestionGap } from "./ports.js";
 
 export const FINANCIAL_COVERAGE_PROTOCOL_VERSION = 2;
 const GAP_EXAMPLE_LIMIT = 10;
@@ -65,16 +65,26 @@ export interface FinancialFilingCheckpoint {
  */
 export interface FactCoverageStore {
   /** 종목 → 수집 완료 연도 (오름차순). 인자를 주면 그 종목만 */
-  getCoveredYears(codes?: readonly string[]): ReadonlyMap<string, readonly number[]>;
+  getCoveredYears(
+    codes?: readonly string[],
+  ): ReadonlyMap<string, readonly number[]>;
   /**
    * protocol 검증과 무관하게 과거에 원천 수집을 완료한 연도. 오래된 watermark의
    * freshness를 판정할 때만 쓴다. 실행 가능 여부에는 반드시 getCoveredYears를 쓴다.
    */
-  getCollectedYears?(codes?: readonly string[]): ReadonlyMap<string, readonly number[]>;
+  getCollectedYears?(
+    codes?: readonly string[],
+  ): ReadonlyMap<string, readonly number[]>;
   /** manifest 무결성과 blocking ingestion gap을 한 번에 읽는다. */
-  getCoverageState(codes?: readonly string[]): ReadonlyMap<string, FinancialCoverageState>;
+  getCoverageState(
+    codes?: readonly string[],
+  ): ReadonlyMap<string, FinancialCoverageState>;
   /** 종목 하나의 완료 연도를 합집합으로 더한다. 팩트 저장 직후에 부른다. */
-  addCoveredYears(symbol: string, years: readonly number[], nowMs: number): void;
+  addCoveredYears(
+    symbol: string,
+    years: readonly number[],
+    nowMs: number,
+  ): void;
   /** 실제 수집 gap과 현재 fact snapshot manifest를 coverage와 함께 기록한다. */
   addCoverageResult(
     symbol: string,
@@ -88,7 +98,9 @@ export interface FactCoverageStore {
    */
   getUpdatedAtMs(codes: readonly string[]): ReadonlyMap<string, number>;
   /** 후보 중 이미 재무 수집에 반영한 DART 접수번호 */
-  getProcessedFilingReceiptNos(receiptNos: readonly string[]): ReadonlySet<string>;
+  getProcessedFilingReceiptNos(
+    receiptNos: readonly string[],
+  ): ReadonlySet<string>;
   /** 팩트 저장과 버전 반영에 성공한 공시만 멱등하게 기록한다 */
   addProcessedFilings(
     filings: readonly FinancialFilingCheckpoint[],
@@ -99,21 +111,36 @@ export interface FactCoverageStore {
 export class SqliteFactCoverageStore implements FactCoverageStore {
   private readonly collectionVersion: string;
 
-  constructor(private readonly db: AppDatabase, options?: { readonly collectionVersion: string }) {
+  constructor(
+    private readonly db: AppDatabase,
+    options?: { readonly collectionVersion: string },
+  ) {
     // 스냅샷 워커는 패키지 빌드 당시 값 대신 서버가 임대에 고정한 수집 버전을 사용한다.
-    this.collectionVersion = options?.collectionVersion ?? readRuntimeVersions().collectionVersion;
+    this.collectionVersion =
+      options?.collectionVersion ?? readRuntimeVersions().collectionVersion;
   }
 
-  getCoveredYears(codes?: readonly string[]): ReadonlyMap<string, readonly number[]> {
+  getCoveredYears(
+    codes?: readonly string[],
+  ): ReadonlyMap<string, readonly number[]> {
     return new Map(
-      [...this.getCoverageState(codes)].map(([code, state]) => [code, state.verifiedYears]),
+      [...this.getCoverageState(codes)].map(([code, state]) => [
+        code,
+        state.verifiedYears,
+      ]),
     );
   }
 
-  getCollectedYears(codes?: readonly string[]): ReadonlyMap<string, readonly number[]> {
+  getCollectedYears(
+    codes?: readonly string[],
+  ): ReadonlyMap<string, readonly number[]> {
     const requested = codes === undefined ? null : new Set(codes);
     return new Map(
-      this.db.select({ code: symbolFactsState.code, years: symbolFactsState.coveredYearsJson })
+      this.db
+        .select({
+          code: symbolFactsState.code,
+          years: symbolFactsState.coveredYearsJson,
+        })
         .from(symbolFactsState)
         .all()
         .filter((row) => requested === null || requested.has(row.code))
@@ -121,31 +148,49 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
     );
   }
 
-  getCoverageState(codes?: readonly string[]): ReadonlyMap<string, FinancialCoverageState> {
+  getCoverageState(
+    codes?: readonly string[],
+  ): ReadonlyMap<string, FinancialCoverageState> {
     const requested = codes === undefined ? null : new Set(codes);
-    const rows = this.db.select().from(symbolFactsState).all()
+    const rows = this.db
+      .select()
+      .from(symbolFactsState)
+      .all()
       .filter((row) => requested === null || requested.has(row.code));
     const protocols = new Map(
-      rows.map((row) => [row.code, parseFinancialCoverageProtocol(row.financialCoverageProtocolJson, this.collectionVersion)]),
-    );
-    const actual = this.actualFactManifests(new Map(
-      [...protocols].map(([code, protocol]) => [
-        code,
-        protocol?.manifests.map((manifest) => manifest.year) ?? [],
+      rows.map((row) => [
+        row.code,
+        parseFinancialCoverageProtocol(
+          row.financialCoverageProtocolJson,
+          this.collectionVersion,
+        ),
       ]),
-    ));
+    );
+    const actual = this.actualFactManifests(
+      new Map(
+        [...protocols].map(([code, protocol]) => [
+          code,
+          protocol?.manifests.map((manifest) => manifest.year) ?? [],
+        ]),
+      ),
+    );
     const result = new Map<string, FinancialCoverageState>();
     for (const row of rows) {
       const protocol = protocols.get(row.code);
       if (protocol === null || protocol === undefined) {
         result.set(row.code, {
-          verifiedYears: [], blockingGapYears: [], blockingGapDetails: [],
+          verifiedYears: [],
+          blockingGapYears: [],
+          blockingGapDetails: [],
         });
         continue;
       }
       const verified: number[] = [];
       const blocking: number[] = [];
-      const blockingDetails: Array<{ year: number; examples: readonly string[] }> = [];
+      const blockingDetails: Array<{
+        year: number;
+        examples: readonly string[];
+      }> = [];
       // 기존 컬럼도 운영·복구 도구가 coverage를 열 때 쓰는 공개 상태다. protocol만
       // 신뢰해 둘이 갈라진 상태를 승인하면 coveredYearsJson에서 연도를 제거해도 제출이
       // 통과한다. 두 기록의 교집합만 완료로 본다.
@@ -154,10 +199,11 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
         if (!legacyCovered.has(manifest.year)) continue;
         const current = actual.get(`${row.code}:${manifest.year}`);
         if (
-          current === undefined
-          || current.factCount !== manifest.factCount
-          || current.factContentHash !== manifest.factContentHash
-        ) continue;
+          current === undefined ||
+          current.factCount !== manifest.factCount ||
+          current.factContentHash !== manifest.factContentHash
+        )
+          continue;
         verified.push(manifest.year);
         if (manifest.blockingGapCount > 0) {
           blocking.push(manifest.year);
@@ -170,7 +216,9 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
       result.set(row.code, {
         verifiedYears: verified.sort((left, right) => left - right),
         blockingGapYears: blocking.sort((left, right) => left - right),
-        blockingGapDetails: blockingDetails.sort((left, right) => left.year - right.year),
+        blockingGapDetails: blockingDetails.sort(
+          (left, right) => left.year - right.year,
+        ),
       });
     }
     return result;
@@ -178,17 +226,23 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
 
   getUpdatedAtMs(codes: readonly string[]): ReadonlyMap<string, number> {
     const rows = this.db
-      .select({ code: symbolFactsState.code, updatedAtMs: symbolFactsState.financialUpdatedAtMs })
+      .select({
+        code: symbolFactsState.code,
+        updatedAtMs: symbolFactsState.financialUpdatedAtMs,
+      })
       .from(symbolFactsState)
       .all();
     const result = new Map<string, number>();
     for (const row of rows) {
-      if (codes.includes(row.code) && row.updatedAtMs !== null) result.set(row.code, row.updatedAtMs);
+      if (codes.includes(row.code) && row.updatedAtMs !== null)
+        result.set(row.code, row.updatedAtMs);
     }
     return result;
   }
 
-  getProcessedFilingReceiptNos(receiptNos: readonly string[]): ReadonlySet<string> {
+  getProcessedFilingReceiptNos(
+    receiptNos: readonly string[],
+  ): ReadonlySet<string> {
     const result = new Set<string>();
     // SQLite 빌드별 바인드 변수 상한보다 충분히 작게 나눠 조회한다.
     for (let offset = 0; offset < receiptNos.length; offset += 500) {
@@ -208,7 +262,9 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
     filings: readonly FinancialFilingCheckpoint[],
     processedAtMs: number,
   ): void {
-    const unique = [...new Map(filings.map((filing) => [filing.receiptNo, filing])).values()];
+    const unique = [
+      ...new Map(filings.map((filing) => [filing.receiptNo, filing])).values(),
+    ];
     // 한 행이 바인드 변수 5개를 쓰므로 100건씩 넣어 구형 SQLite의 상한도 넘지 않는다.
     for (let offset = 0; offset < unique.length; offset += 100) {
       const chunk = unique.slice(offset, offset + 100);
@@ -229,7 +285,11 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
     }
   }
 
-  addCoveredYears(symbol: string, years: readonly number[], nowMs: number): void {
+  addCoveredYears(
+    symbol: string,
+    years: readonly number[],
+    nowMs: number,
+  ): void {
     this.addCoverageResult(symbol, years, [], nowMs);
   }
 
@@ -243,16 +303,22 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
     // "수집됨" 과 "수집할 게 없었음" 이 구분되지 않는다
     if (years.length === 0) return;
     if (years.some((year) => !validYear(year))) {
-      throw new Error(`재무 coverage 연도가 유효하지 않습니다: ${years.join(', ')}`);
+      throw new Error(
+        `재무 coverage 연도가 유효하지 않습니다: ${years.join(", ")}`,
+      );
     }
     const normalizedYears = [...new Set(years)].sort((a, b) => a - b);
     if (gaps.some((gap) => gap.symbol !== symbol)) {
-      throw new Error(`재무 coverage gap의 종목코드가 요청 종목 ${symbol}과 다릅니다.`);
+      throw new Error(
+        `재무 coverage gap의 종목코드가 요청 종목 ${symbol}과 다릅니다.`,
+      );
     }
     // better-sqlite3의 동기 연결에서 열린 transaction 안으로 같은 db 객체의 SELECT를
     // 중첩시키지 않는다. 수집 서비스는 snapshot 교체를 await한 직후 이 메서드를
     // 동기 호출하므로 여기서 읽은 내용이 바로 기록할 manifest다.
-    const actual = this.actualFactManifests(new Map([[symbol, normalizedYears]]));
+    const actual = this.actualFactManifests(
+      new Map([[symbol, normalizedYears]]),
+    );
     this.db.transaction((tx) => {
       const existing = tx
         .select()
@@ -260,16 +326,22 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
         .where(eq(symbolFactsState.code, symbol))
         .get();
       const existingProtocol = parseFinancialCoverageProtocol(
-        existing?.financialCoverageProtocolJson ?? null, this.collectionVersion,
+        existing?.financialCoverageProtocolJson ?? null,
+        this.collectionVersion,
       );
       const byYear = new Map(
-        (existingProtocol?.manifests ?? []).map((manifest) => [manifest.year, manifest]),
+        (existingProtocol?.manifests ?? []).map((manifest) => [
+          manifest.year,
+          manifest,
+        ]),
       );
       for (const year of normalizedYears) {
         const current = actual.get(`${symbol}:${year}`) ?? emptyFactManifest();
         const yearGaps = gaps.filter((gap) => gapAppliesToYear(gap, year));
-        const blocking = yearGaps.filter((gap) => gap.severity === 'BLOCKING');
-        const informational = yearGaps.filter((gap) => gap.severity === 'INFORMATIONAL');
+        const blocking = yearGaps.filter((gap) => gap.severity === "BLOCKING");
+        const informational = yearGaps.filter(
+          (gap) => gap.severity === "INFORMATIONAL",
+        );
         byYear.set(year, {
           year,
           ...current,
@@ -280,39 +352,57 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
           informationalGapHash: gapHash(informational),
         });
       }
-      const merged = [...new Set([
-        ...(existing ? parseYears(existing.coveredYearsJson) : []),
-        ...normalizedYears,
-      ])].sort((a, b) => a - b);
+      const merged = [
+        ...new Set([
+          ...(existing ? parseYears(existing.coveredYearsJson) : []),
+          ...normalizedYears,
+        ]),
+      ].sort((a, b) => a - b);
       const values = {
         coveredYearsJson: JSON.stringify(merged),
         financialCoverageProtocolJson: JSON.stringify({
           version: FINANCIAL_COVERAGE_PROTOCOL_VERSION,
           collectionVersion: this.collectionVersion,
-          manifests: [...byYear.values()].sort((left, right) => left.year - right.year),
+          manifests: [...byYear.values()].sort(
+            (left, right) => left.year - right.year,
+          ),
         } satisfies FinancialCoverageProtocol),
         financialUpdatedAtMs: nowMs,
       };
 
       if (existing) {
-        tx.update(symbolFactsState).set(values).where(eq(symbolFactsState.code, symbol)).run();
+        tx.update(symbolFactsState)
+          .set(values)
+          .where(eq(symbolFactsState.code, symbol))
+          .run();
         return;
       }
-      tx.insert(symbolFactsState).values({ code: symbol, ...values }).run();
+      tx.insert(symbolFactsState)
+        .values({ code: symbol, ...values })
+        .run();
     });
   }
 
   private actualFactManifests(
     yearsByCode: ReadonlyMap<string, readonly number[]>,
-  ): ReadonlyMap<string, Pick<FinancialYearManifest, 'factCount' | 'factContentHash'>> {
+  ): ReadonlyMap<
+    string,
+    Pick<FinancialYearManifest, "factCount" | "factContentHash">
+  > {
     const requested = new Map(
-      [...yearsByCode].map(([code, years]) => [code, new Set(years.filter(validYear))]),
+      [...yearsByCode].map(([code, years]) => [
+        code,
+        new Set(years.filter(validYear)),
+      ]),
     );
     // 정렬된 조회를 순서대로 해시해 전체 facts와 직렬화 문자열의 중복 적재를 피한다.
     const manifests = new Map<string, { factCount: number; hash: Hash }>();
     for (const [code, years] of requested) {
       for (const year of years) {
-        manifests.set(`${code}:${year}`, { factCount: 0, hash: createHash('sha256') });
+        manifests.set(`${code}:${year}`, {
+          factCount: 0,
+          hash: createHash("sha256"),
+        });
       }
     }
     const codes = [...requested.keys()];
@@ -329,11 +419,13 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
           unit: factRows.unit,
         })
         .from(factRows)
-        .where(and(
-          eq(factRows.scope, 'SYMBOL'),
-          inArray(factRows.key, chunk),
-          ne(factRows.field, CORPORATE_ACTION_FIELD),
-        ))
+        .where(
+          and(
+            eq(factRows.scope, "SYMBOL"),
+            inArray(factRows.key, chunk),
+            ne(factRows.field, CORPORATE_ACTION_FIELD),
+          ),
+        )
         .orderBy(
           asc(factRows.key),
           asc(factRows.field),
@@ -345,59 +437,91 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
         const year = periodKeyYear(row.periodKey);
         if (year === null || !requested.get(row.code)?.has(year)) continue;
         const manifest = manifests.get(`${row.code}:${year}`)!;
-        if (manifest.factCount > 0) manifest.hash.update('\n');
-        manifest.hash.update(JSON.stringify([
-          row.field,
-          row.periodKey,
-          row.asOfTsMs,
-          row.value,
-          row.unit,
-        ]));
+        if (manifest.factCount > 0) manifest.hash.update("\n");
+        manifest.hash.update(
+          JSON.stringify([
+            row.field,
+            row.periodKey,
+            row.asOfTsMs,
+            row.value,
+            row.unit,
+          ]),
+        );
         manifest.factCount += 1;
       }
     }
-    return new Map([...manifests].map(([key, manifest]) => [key, {
-      factCount: manifest.factCount,
-      factContentHash: manifest.hash.digest('hex'),
-    }]));
+    return new Map(
+      [...manifests].map(([key, manifest]) => [
+        key,
+        {
+          factCount: manifest.factCount,
+          factContentHash: manifest.hash.digest("hex"),
+        },
+      ]),
+    );
   }
 }
 
-function parseFinancialCoverageProtocol(raw: string | null, collectionVersion: string): FinancialCoverageProtocol | null {
+function parseFinancialCoverageProtocol(
+  raw: string | null,
+  collectionVersion: string,
+): FinancialCoverageProtocol | null {
   if (raw === null) return null;
   try {
     const parsed = JSON.parse(raw) as Partial<FinancialCoverageProtocol>;
     if (
-      parsed.version !== FINANCIAL_COVERAGE_PROTOCOL_VERSION
-      || parsed.collectionVersion !== collectionVersion
-      || !Array.isArray(parsed.manifests)
-    ) return null;
+      parsed.version !== FINANCIAL_COVERAGE_PROTOCOL_VERSION ||
+      parsed.collectionVersion !== collectionVersion ||
+      !Array.isArray(parsed.manifests)
+    )
+      return null;
     const manifests = parsed.manifests.filter(isFinancialYearManifest);
     if (manifests.length !== parsed.manifests.length) return null;
-    if (new Set(manifests.map((manifest) => manifest.year)).size !== manifests.length) return null;
-    return { version: FINANCIAL_COVERAGE_PROTOCOL_VERSION, collectionVersion, manifests };
+    if (
+      new Set(manifests.map((manifest) => manifest.year)).size !==
+      manifests.length
+    )
+      return null;
+    return {
+      version: FINANCIAL_COVERAGE_PROTOCOL_VERSION,
+      collectionVersion,
+      manifests,
+    };
   } catch {
     return null;
   }
 }
 
-function isFinancialYearManifest(value: unknown): value is FinancialYearManifest {
-  if (typeof value !== 'object' || value === null) return false;
+function isFinancialYearManifest(
+  value: unknown,
+): value is FinancialYearManifest {
+  if (typeof value !== "object" || value === null) return false;
   const manifest = value as Partial<FinancialYearManifest>;
-  return validYear(manifest.year)
-    && Number.isInteger(manifest.factCount) && manifest.factCount! >= 0
-    && typeof manifest.factContentHash === 'string' && /^[a-f0-9]{64}$/.test(manifest.factContentHash)
-    && Number.isInteger(manifest.blockingGapCount) && manifest.blockingGapCount! >= 0
-    && typeof manifest.blockingGapHash === 'string' && /^[a-f0-9]{64}$/.test(manifest.blockingGapHash)
-    && Array.isArray(manifest.blockingGapExamples)
-    && manifest.blockingGapExamples.every((example) => typeof example === 'string')
-    && Number.isInteger(manifest.informationalGapCount) && manifest.informationalGapCount! >= 0
-    && typeof manifest.informationalGapHash === 'string'
-    && /^[a-f0-9]{64}$/.test(manifest.informationalGapHash);
+  return (
+    validYear(manifest.year) &&
+    Number.isInteger(manifest.factCount) &&
+    manifest.factCount! >= 0 &&
+    typeof manifest.factContentHash === "string" &&
+    /^[a-f0-9]{64}$/.test(manifest.factContentHash) &&
+    Number.isInteger(manifest.blockingGapCount) &&
+    manifest.blockingGapCount! >= 0 &&
+    typeof manifest.blockingGapHash === "string" &&
+    /^[a-f0-9]{64}$/.test(manifest.blockingGapHash) &&
+    Array.isArray(manifest.blockingGapExamples) &&
+    manifest.blockingGapExamples.every(
+      (example) => typeof example === "string",
+    ) &&
+    Number.isInteger(manifest.informationalGapCount) &&
+    manifest.informationalGapCount! >= 0 &&
+    typeof manifest.informationalGapHash === "string" &&
+    /^[a-f0-9]{64}$/.test(manifest.informationalGapHash)
+  );
 }
 
 function validYear(value: unknown): value is number {
-  return Number.isInteger(value) && Number(value) >= 1900 && Number(value) <= 2200;
+  return (
+    Number.isInteger(value) && Number(value) >= 1900 && Number(value) <= 2200
+  );
 }
 
 function periodKeyYear(periodKey: string): number | null {
@@ -413,30 +537,42 @@ function gapAppliesToYear(gap: FactIngestionGap, year: number): boolean {
 }
 
 function gapHash(gaps: readonly FactIngestionGap[]): string {
-  return createHash('sha256')
-    .update([...gaps]
-      .sort((left, right) => left.periodKey.localeCompare(right.periodKey)
-        || left.reason.localeCompare(right.reason))
-      .map((gap) => JSON.stringify([gap.severity, gap.periodKey, gap.reason]))
-      .join('\n'))
-    .digest('hex');
+  return createHash("sha256")
+    .update(
+      [...gaps]
+        .sort(
+          (left, right) =>
+            left.periodKey.localeCompare(right.periodKey) ||
+            left.reason.localeCompare(right.reason),
+        )
+        .map((gap) => JSON.stringify([gap.severity, gap.periodKey, gap.reason]))
+        .join("\n"),
+    )
+    .digest("hex");
 }
 
 function gapExamples(gaps: readonly FactIngestionGap[]): string[] {
-  return [...new Set(gaps.map((gap) => {
-    const example = `${gap.periodKey}: ${gap.reason}`;
-    return example.length <= GAP_EXAMPLE_MAX_CHARS
-      ? example
-      : `${example.slice(0, GAP_EXAMPLE_MAX_CHARS - 1)}…`;
-  }))]
+  return [
+    ...new Set(
+      gaps.map((gap) => {
+        const example = `${gap.periodKey}: ${gap.reason}`;
+        return example.length <= GAP_EXAMPLE_MAX_CHARS
+          ? example
+          : `${example.slice(0, GAP_EXAMPLE_MAX_CHARS - 1)}…`;
+      }),
+    ),
+  ]
     .sort()
     .slice(0, GAP_EXAMPLE_LIMIT);
 }
 
-function emptyFactManifest(): Pick<FinancialYearManifest, 'factCount' | 'factContentHash'> {
+function emptyFactManifest(): Pick<
+  FinancialYearManifest,
+  "factCount" | "factContentHash"
+> {
   return {
     factCount: 0,
-    factContentHash: createHash('sha256').update('').digest('hex'),
+    factContentHash: createHash("sha256").update("").digest("hex"),
   };
 }
 
@@ -452,7 +588,9 @@ export function parseYears(json: string | null): readonly number[] {
   try {
     const parsed: unknown = JSON.parse(json);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((year): year is number => typeof year === 'number').sort((a, b) => a - b);
+    return parsed
+      .filter((year): year is number => typeof year === "number")
+      .sort((a, b) => a - b);
   } catch {
     return [];
   }

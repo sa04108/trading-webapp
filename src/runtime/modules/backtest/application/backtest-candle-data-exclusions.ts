@@ -1,5 +1,5 @@
-import type { BacktestDataExclusion } from './backtest-data-exclusion.js';
-import { UniverseResolutionCancelledError } from './universe-rule-resolver.js';
+import type { BacktestDataExclusion } from "./backtest-data-exclusion.js";
+import { UniverseResolutionCancelledError } from "./universe-rule-resolver.js";
 
 const MAX_BATCH_CALENDAR_DAYS = 31;
 const DAY_MS = 86_400_000;
@@ -55,7 +55,9 @@ export async function findCandleDataExclusions(
   input: CandleDataExclusionInput,
 ): Promise<BacktestDataExclusion[]> {
   if (input.schedule.length === 0 || input.tradingDays.length === 0) return [];
-  const sortedSchedule = [...input.schedule].sort((left, right) => left.fromTsMs - right.fromTsMs);
+  const sortedSchedule = [...input.schedule].sort(
+    (left, right) => left.fromTsMs - right.fromTsMs,
+  );
   const activeDays = activeTradingDays(input.tradingDays, sortedSchedule);
   const firstDelistedBySymbol = firstDelistedDates(input.delistedEvents);
   const missing = new Map<string, { firstDate: string; count: number }>();
@@ -63,7 +65,8 @@ export async function findCandleDataExclusions(
 
   let cursor = 0;
   while (cursor < activeDays.length) {
-    if (input.shouldStop?.() === true) throw new UniverseResolutionCancelledError();
+    if (input.shouldStop?.() === true)
+      throw new UniverseResolutionCancelledError();
     const first = activeDays[cursor] as ActiveTradingDay;
     let end = cursor;
     while (end + 1 < activeDays.length) {
@@ -73,12 +76,19 @@ export async function findCandleDataExclusions(
       end += 1;
     }
     const last = activeDays[end] as ActiveTradingDay;
-    const validDatesByCode = input.readValidDates(first.queryCodes, first.date, last.date);
+    const validDatesByCode = input.readValidDates(
+      first.queryCodes,
+      first.date,
+      last.date,
+    );
     const validSets = new Map(
-      [...validDatesByCode].map(([symbol, dates]) => [symbol, new Set(dates)] as const),
+      [...validDatesByCode].map(
+        ([symbol, dates]) => [symbol, new Set(dates)] as const,
+      ),
     );
     const nonTrading = new Set(
-      input.readNonTradingDays(first.date, last.date, first.queryCodes)
+      input
+        .readNonTradingDays(first.date, last.date, first.queryCodes)
         .map((row) => `${row.date}\0${row.shortCode}`),
     );
 
@@ -100,13 +110,14 @@ export async function findCandleDataExclusions(
     cursor = end + 1;
     if (cursor < activeDays.length) {
       await yieldControl();
-      if (input.shouldStop?.() === true) throw new UniverseResolutionCancelledError();
+      if (input.shouldStop?.() === true)
+        throw new UniverseResolutionCancelledError();
     }
   }
 
   return [...missing].map(([symbol, detail]) => ({
     symbol,
-    category: 'KRX_PRICE',
+    category: "KRX_PRICE",
     periodKey: detail.firstDate,
     reason: `확정 유니버스 활성 기간의 KRX 일봉 ${detail.count}일 누락`,
   }));
@@ -116,25 +127,30 @@ function activeTradingDays(
   tradingDays: readonly string[],
   sortedSchedule: readonly CandleScheduleEntry[],
 ): ActiveTradingDay[] {
-  const memberCache = new Map<CandleScheduleEntry, {
-    readonly members: readonly string[];
-    readonly queryCodes: readonly string[];
-    readonly membershipKey: string;
-  }>();
+  const memberCache = new Map<
+    CandleScheduleEntry,
+    {
+      readonly members: readonly string[];
+      readonly queryCodes: readonly string[];
+      readonly membershipKey: string;
+    }
+  >();
   const result: ActiveTradingDay[] = [];
   let scheduleIndex = 0;
   for (const date of tradingDays) {
     const tsMs = Date.parse(`${date}T00:00:00Z`);
     while (
-      scheduleIndex + 1 < sortedSchedule.length
-      && (sortedSchedule[scheduleIndex + 1] as CandleScheduleEntry).fromTsMs <= tsMs
-    ) scheduleIndex += 1;
+      scheduleIndex + 1 < sortedSchedule.length &&
+      (sortedSchedule[scheduleIndex + 1] as CandleScheduleEntry).fromTsMs <=
+        tsMs
+    )
+      scheduleIndex += 1;
     const active = sortedSchedule[scheduleIndex] as CandleScheduleEntry;
     let cached = memberCache.get(active);
     if (cached === undefined) {
       const members = active.members.map((member) => member.symbol);
       const queryCodes = [...new Set(members)].sort();
-      cached = { members, queryCodes, membershipKey: queryCodes.join('\0') };
+      cached = { members, queryCodes, membershipKey: queryCodes.join("\0") };
       memberCache.set(active, cached);
     }
     result.push({ date, tsMs, ...cached });
@@ -142,7 +158,9 @@ function activeTradingDays(
   return result;
 }
 
-function firstDelistedDates(events: readonly DelistedEvent[]): ReadonlyMap<string, string> {
+function firstDelistedDates(
+  events: readonly DelistedEvent[],
+): ReadonlyMap<string, string> {
   const result = new Map<string, string>();
   for (const event of events) {
     const previous = result.get(event.shortCode);

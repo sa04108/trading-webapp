@@ -2,7 +2,7 @@
 // import 해 tsconfig.server.json 의 NodeNext 프로그램에 편입되는데, 거기서는 확장자 없는
 // 상대 import 가 에러다 (prefill.ts·wizard-steps.ts 와 같은 이유). 이 모듈은 DOM 을
 // 쓰지 않고 별칭(@/) import 도 쓰지 않는다.
-import type { ProvenancePin } from '../../../shared/schemas/provenance-pin.js';
+import type { ProvenancePin } from "../../../shared/schemas/provenance-pin.js";
 
 /**
  * 백테스트 결과 화면에 쓰는 유니버스 출처 문구 (Task 14, REVIEW §9.3).
@@ -32,14 +32,15 @@ import type { ProvenancePin } from '../../../shared/schemas/provenance-pin.js';
 
 /** RunMetadataCard 「유니버스 출처」행 값. */
 export function universeSourceLabel(pin: ProvenancePin | null): string {
-  if (pin === null) return '-';
-  return '종목 마스터 (유니버스 규칙)';
+  if (pin === null) return "-";
+  return "종목 마스터 (유니버스 규칙)";
 }
 
 /** RunMetadataCard 「선정 방식」행 값 — 서버 코드값을 사람이 읽는 문구로 바꾼다. */
 export function selectionMethodLabel(method: string | null): string {
-  if (method === 'ORDERED_UNIVERSE_PIPELINE') return '순서형 유니버스 파이프라인';
-  if (method === 'TOP_MARKET_CAP_N') return '시가총액 상위 N종목';
-  if (method === 'MANUAL_FROM_KRX_SNAPSHOT') return '수동 선택';
-  return '-';
+  if (method === "ORDERED_UNIVERSE_PIPELINE")
+    return "순서형 유니버스 파이프라인";
+  if (method === "TOP_MARKET_CAP_N") return "시가총액 상위 N종목";
+  if (method === "MANUAL_FROM_KRX_SNAPSHOT") return "수동 선택";
+  return "-";
 }

@@ -2,25 +2,29 @@
 // `tests/unit/preparation-live.test.ts` 가 이 모듈을 가져오는데, 그 테스트는
 // `tsconfig.server.json` 의 NodeNext 프로그램에 편입된다 — `@/` alias 는 vite·
 // tsconfig.web.json 에만 있어 그 프로그램에서는 풀리지 않는다.
-import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
-import { api } from '../../lib/api-client.js';
+import {
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import { api } from "../../lib/api-client.js";
 
 export type PreparationStatus =
-  | 'QUEUED'
-  | 'RUNNING'
-  | 'WAITING_DAILY_QUOTA'
-  | 'WAITING_DATA'
-  | 'COMPLETED'
-  | 'FAILED'
-  | 'CANCELLED';
+  | "QUEUED"
+  | "RUNNING"
+  | "WAITING_DAILY_QUOTA"
+  | "WAITING_DATA"
+  | "COMPLETED"
+  | "FAILED"
+  | "CANCELLED";
 
 export type PreparationPhase =
-  | 'MARKET_DATA'
-  | 'RESOLVING_STAGES'
-  | 'VALIDATING_RESULT'
-  | 'SYNCING_FACTS'
-  | 'FINALIZING';
+  | "MARKET_DATA"
+  | "RESOLVING_STAGES"
+  | "VALIDATING_RESULT"
+  | "SYNCING_FACTS"
+  | "FINALIZING";
 
 /** `backtest-preparation-orchestrator.ts` 의 `BacktestPreparationJobDto` 와 같은 모양 */
 export interface BacktestPreparationJob {
@@ -45,17 +49,21 @@ export interface PreparationLiveResult {
 }
 
 export const preparationJobQueryKey = (jobId: string | null) =>
-  ['preparation-jobs', jobId] as const;
+  ["preparation-jobs", jobId] as const;
 
 /** 202 응답에 이미 들어 있는 job을 상세 GET보다 먼저 화면에 반영한다. */
 export function seedPreparationJob(
-  queryClient: Pick<QueryClient, 'setQueryData'>,
+  queryClient: Pick<QueryClient, "setQueryData">,
   job: BacktestPreparationJob,
 ): void {
   queryClient.setQueryData(preparationJobQueryKey(job.id), { job });
 }
 
-const TERMINAL_STATUSES: readonly PreparationStatus[] = ['COMPLETED', 'FAILED', 'CANCELLED'];
+const TERMINAL_STATUSES: readonly PreparationStatus[] = [
+  "COMPLETED",
+  "FAILED",
+  "CANCELLED",
+];
 
 /** terminal 상태면 SSE 도 폴링도 더 돌 이유가 없다 — 값이 다시 바뀌지 않는다 */
 export function shouldCloseStream(status: PreparationStatus): boolean {
@@ -111,18 +119,18 @@ export function isPreparingCurrentParams<TParams>(
   return paramsEqual(trackedParams, currentParams);
 }
 
-const KST_RESUME_FORMATTER = new Intl.DateTimeFormat('ko-KR', {
-  timeZone: 'Asia/Seoul',
-  month: 'long',
-  day: 'numeric',
-  hour: '2-digit',
-  minute: '2-digit',
+const KST_RESUME_FORMATTER = new Intl.DateTimeFormat("ko-KR", {
+  timeZone: "Asia/Seoul",
+  month: "long",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
   hour12: false,
 });
 
 /** "8월 11일 00:00 (KST)" — 외부 API 일일 호출 한도로 멈췄을 때 다음 재개 시각을 알린다 */
 export function formatPreparationResumeTime(tsMs: number | null): string {
-  if (tsMs === null) return '알 수 없음';
+  if (tsMs === null) return "알 수 없음";
   return `${KST_RESUME_FORMATTER.format(tsMs)} (KST)`;
 }
 
@@ -134,9 +142,13 @@ export function formatPreparationResumeTime(tsMs: number | null): string {
  * 캐시된 미리보기 조회가 있다면(예: 같은 조건으로 다시 미리보기를 부른 화면) 이
  * job 의 결과가 반영되지 않은 낡은 상태로 남지 않는다.
  */
-export function usePreparationLive(jobId: string | null): PreparationLiveResult {
+export function usePreparationLive(
+  jobId: string | null,
+): PreparationLiveResult {
   const queryClient = useQueryClient();
-  const [ssePayload, setSsePayload] = useState<BacktestPreparationJob | null>(null);
+  const [ssePayload, setSsePayload] = useState<BacktestPreparationJob | null>(
+    null,
+  );
   const [sseFailed, setSseFailed] = useState(false);
   const sourceRef = useRef<EventSource | null>(null);
   // terminal 알림(캐시 무효화)을 잡 하나당 한 번만 보낸다 — SSE·폴링 모두 같은
@@ -152,9 +164,13 @@ export function usePreparationLive(jobId: string | null): PreparationLiveResult 
 
   const detail = useQuery({
     queryKey: preparationJobQueryKey(jobId),
-    queryFn: () => api<{ job: BacktestPreparationJob }>(`/backtests/preparation-jobs/${jobId}`),
+    queryFn: () =>
+      api<{ job: BacktestPreparationJob }>(
+        `/backtests/preparation-jobs/${jobId}`,
+      ),
     enabled: jobId !== null,
-    refetchInterval: (query) => pollInterval(query.state.data?.job.status ?? null, sseFailed),
+    refetchInterval: (query) =>
+      pollInterval(query.state.data?.job.status ?? null, sseFailed),
   });
 
   const status = ssePayload?.status ?? detail.data?.job.status ?? null;
@@ -167,7 +183,9 @@ export function usePreparationLive(jobId: string | null): PreparationLiveResult 
     }
     if (sourceRef.current || sseFailed) return;
 
-    const source = new EventSource(`/api/v1/backtests/preparation-jobs/${jobId}/events`);
+    const source = new EventSource(
+      `/api/v1/backtests/preparation-jobs/${jobId}/events`,
+    );
     sourceRef.current = source;
     source.onmessage = (event) => {
       setSsePayload(JSON.parse(event.data as string) as BacktestPreparationJob);
@@ -186,7 +204,7 @@ export function usePreparationLive(jobId: string | null): PreparationLiveResult 
   const job: BacktestPreparationJob | null =
     ssePayload && detail.data && ssePayload.id === detail.data.job.id
       ? { ...detail.data.job, ...ssePayload }
-      : detail.data?.job ?? null;
+      : (detail.data?.job ?? null);
 
   // SSE·폴링 어느 경로로 terminal 이 왔든 여기 한 곳에서만 무효화한다 — 위 두
   // 갈래에 각각 심으면 어느 한쪽이 늦게 도착했을 때 중복 호출을 다시 걱정해야 한다.
@@ -194,7 +212,9 @@ export function usePreparationLive(jobId: string | null): PreparationLiveResult 
     if (!job || !shouldCloseStream(job.status)) return;
     if (invalidatedForJob.current === job.id) return;
     invalidatedForJob.current = job.id;
-    void queryClient.invalidateQueries({ queryKey: ['universe-preview', job.requestHash] });
+    void queryClient.invalidateQueries({
+      queryKey: ["universe-preview", job.requestHash],
+    });
   }, [job, queryClient]);
 
   return {

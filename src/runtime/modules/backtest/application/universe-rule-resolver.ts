@@ -1,51 +1,54 @@
-import { createHash } from 'node:crypto';
-import type { Logger } from 'pino';
-import type { SymbolMasterEntry } from '../../market-data/domain/symbol-master.js';
-import type { SymbolIdentitySelection } from '../../market-data/domain/symbol-identity-lifetime.js';
-import type { SymbolMasterService } from '../../market-data/application/symbol-master-service.js';
-import type { UniverseRule } from '../../../../shared/schemas/universe-rule.js';
-import type { BacktestPeriod } from '../../../../shared/schemas/backtest-request.js';
-import { computeRebalanceDates as computeSharedRebalanceDates } from '../../../../shared/schemas/rebalance-interval.js';
-import { addCalendarDays, kstEndOfDayMs } from '../../market-data/domain/kst-date.js';
+import { createHash } from "node:crypto";
+import type { Logger } from "pino";
+import type { SymbolMasterEntry } from "../../market-data/domain/symbol-master.js";
+import type { SymbolIdentitySelection } from "../../market-data/domain/symbol-identity-lifetime.js";
+import type { SymbolMasterService } from "../../market-data/application/symbol-master-service.js";
+import type { UniverseRule } from "../../../../shared/schemas/universe-rule.js";
+import type { BacktestPeriod } from "../../../../shared/schemas/backtest-request.js";
+import { computeRebalanceDates as computeSharedRebalanceDates } from "../../../../shared/schemas/rebalance-interval.js";
+import {
+  addCalendarDays,
+  kstEndOfDayMs,
+} from "../../market-data/domain/kst-date.js";
 import type {
   DailySelectionMetric,
   SelectionMetricRepository,
-} from '../../market-data/application/selection-metric-repository.js';
+} from "../../market-data/application/selection-metric-repository.js";
 import type {
   CandleRepository,
   ClosePricePoint,
-} from '../../market-data/application/ports.js';
-import type { FactRepository } from '../../facts/application/ports.js';
-import type { FactCoverageStore } from '../../facts/application/fact-coverage-store.js';
+} from "../../market-data/application/ports.js";
+import type { FactRepository } from "../../facts/application/ports.js";
+import type { FactCoverageStore } from "../../facts/application/fact-coverage-store.js";
 import type {
   CorporateActionCoverageStore,
   CorporateActionGapDetail,
-} from '../../facts/application/corporate-action-coverage.js';
-import { derivePreparationFactYearRange } from '../../market-data/domain/fact-year-range.js';
+} from "../../facts/application/corporate-action-coverage.js";
+import { derivePreparationFactYearRange } from "../../market-data/domain/fact-year-range.js";
 import {
   alignCorporateActionEffectiveDates,
   CORPORATE_ACTION_ALIGNMENT_WINDOW,
   corporateActionRawDateRange,
-} from '../../facts/domain/corporate-action-effective-date.js';
-import { CORPORATE_ACTION_FIELD, type Fact } from '../../facts/domain/fact.js';
-import { PitFactView } from '../../facts/domain/pit-fact-view.js';
-import { splitAdjustedClose } from '../../strategy/strategies/shared/adjusted-price.js';
-import { assertSafeIdentitySelections } from './backtest-symbol-identity.js';
+} from "../../facts/domain/corporate-action-effective-date.js";
+import { CORPORATE_ACTION_FIELD, type Fact } from "../../facts/domain/fact.js";
+import { PitFactView } from "../../facts/domain/pit-fact-view.js";
+import { splitAdjustedClose } from "../../strategy/strategies/shared/adjusted-price.js";
+import { assertSafeIdentitySelections } from "./backtest-symbol-identity.js";
 import {
   backtestDataExclusionKey,
   type BacktestDataExclusion,
-} from './backtest-data-exclusion.js';
+} from "./backtest-data-exclusion.js";
 import {
   compareShortCodes,
   rankUniverseStage,
   type UniverseStageDiagnostic,
   type UniverseStageValue,
-} from './universe-stage-ranking.js';
+} from "./universe-stage-ranking.js";
 import {
   findRelevantCorporateActionGaps,
   readCorporateActionGapDetails,
   type RelevantCorporateActionGap,
-} from './backtest-corporate-action-gaps.js';
+} from "./backtest-corporate-action-gaps.js";
 
 export interface LegacyUniverseScheduleEntry {
   readonly rebalanceDate: string; // ISO
@@ -106,8 +109,8 @@ export interface UniverseResolveHooks {
 
 export class UniverseResolutionCancelledError extends Error {
   constructor() {
-    super('유니버스 해소가 취소되었습니다.');
-    this.name = 'UniverseResolutionCancelledError';
+    super("유니버스 해소가 취소되었습니다.");
+    this.name = "UniverseResolutionCancelledError";
   }
 }
 
@@ -136,7 +139,7 @@ export interface RebalanceDiagnostic {
 
 export type UniverseResolveAttempt =
   | {
-      readonly kind: 'READY';
+      readonly kind: "READY";
       readonly schedule: readonly UniverseScheduleEntry[];
       readonly diagnostics: readonly RebalanceDiagnostic[];
       /** READY schedule 멤버를 자동 등록할 때 쓰는 실제 선정 시점의 master entry */
@@ -147,7 +150,7 @@ export type UniverseResolveAttempt =
       readonly corporateActionExclusions: readonly RelevantCorporateActionGap[];
     }
   | {
-      readonly kind: 'NEEDS_DATA';
+      readonly kind: "NEEDS_DATA";
       readonly needs: UniverseDataNeed;
       /** false면 아직 수집하지 않은 master 날짜가 있어 unionEntries가 후보 전체를 덮지 않는다. */
       readonly candidateScopeKnown: boolean;
@@ -165,8 +168,13 @@ export type UniverseResolveAttempt =
  * job.universeScheduleJson 에 저장된 일정만 받으므로, 합산을 여기 한 곳에 두고
  * 양쪽이 같은 함수를 부르게 한다.
  */
-export function sumExcludedNonTrading(schedule: readonly LegacyUniverseScheduleEntry[]): number {
-  return schedule.reduce((sum, entry) => sum + entry.excludedNonTradingCount, 0);
+export function sumExcludedNonTrading(
+  schedule: readonly LegacyUniverseScheduleEntry[],
+): number {
+  return schedule.reduce(
+    (sum, entry) => sum + entry.excludedNonTradingCount,
+    0,
+  );
 }
 
 export class UniverseRuleResolver {
@@ -178,7 +186,10 @@ export class UniverseRuleResolver {
    * 있는 부분 커버리지는 이 메서드로 따로 잡아야 한다(symbol-master-service.ts
    * `isRangeCovered` 주석 — 운영에서 확인된 버그의 정확한 원인).
    */
-  isPeriodCovered(period: { readonly from: string; readonly to: string }): boolean {
+  isPeriodCovered(period: {
+    readonly from: string;
+    readonly to: string;
+  }): boolean {
     return this.deps.symbolMaster.isRangeCovered(period.from, period.to);
   }
 
@@ -236,23 +247,33 @@ export class UniverseRuleResolver {
     }
 
     for (const date of rebalanceDates) {
-      const effectiveTradingDate = this.deps.symbolMaster.effectiveTradingDateWithinCoverage(date);
-      if (!this.deps.symbolMaster.isCovered(date) || effectiveTradingDate === undefined) {
+      const effectiveTradingDate =
+        this.deps.symbolMaster.effectiveTradingDateWithinCoverage(date);
+      if (
+        !this.deps.symbolMaster.isCovered(date) ||
+        effectiveTradingDate === undefined
+      ) {
         uncoveredDates.push(date);
         continue;
       }
 
-      const universe = this.deps.symbolMaster.getUniverseAsOf(effectiveTradingDate);
+      const universe =
+        this.deps.symbolMaster.getUniverseAsOf(effectiveTradingDate);
       const candidates: SymbolMasterEntry[] = [];
       for (const entry of universe.values()) {
-        if (entry.instrumentType === 'COMMON_STOCK' && rule.markets.includes(entry.market)) {
+        if (
+          entry.instrumentType === "COMMON_STOCK" &&
+          rule.markets.includes(entry.market)
+        ) {
           candidates.push(entry);
         }
       }
 
-      const nonTrading = nonTradingByDate.get(effectiveTradingDate) ?? new Set<string>();
+      const nonTrading =
+        nonTradingByDate.get(effectiveTradingDate) ?? new Set<string>();
       let excludedNonTradingCount = 0;
-      const marketCaps = await this.deps.symbolMaster.getMarketCapsAt(effectiveTradingDate);
+      const marketCaps =
+        await this.deps.symbolMaster.getMarketCapsAt(effectiveTradingDate);
       const ranked: { entry: SymbolMasterEntry; marketCap: bigint }[] = [];
       for (const entry of candidates) {
         // 그날 거래할 수 없으면 시총이 아무리 커도 살 수 없다 — 후보에 두면 그 자리가 헛돈다.
@@ -267,8 +288,10 @@ export class UniverseRuleResolver {
       }
       const direction = rule.stages[0]!.direction;
       ranked.sort((a, b) => {
-        const valueOrder = a.marketCap === b.marketCap ? 0 : a.marketCap < b.marketCap ? -1 : 1;
-        if (valueOrder !== 0) return direction === 'LOW' ? valueOrder : -valueOrder;
+        const valueOrder =
+          a.marketCap === b.marketCap ? 0 : a.marketCap < b.marketCap ? -1 : 1;
+        if (valueOrder !== 0)
+          return direction === "LOW" ? valueOrder : -valueOrder;
         return compareShortCodes(a.entry.shortCode, b.entry.shortCode);
       });
 
@@ -278,12 +301,20 @@ export class UniverseRuleResolver {
       const symbols = top.map(({ entry }) => entry.shortCode);
       for (const { entry } of top) {
         unionSymbols.add(entry.shortCode);
-        if (!unionEntries.has(entry.shortCode)) unionEntries.set(entry.shortCode, entry);
+        if (!unionEntries.has(entry.shortCode))
+          unionEntries.set(entry.shortCode, entry);
       }
-      schedule.push({ rebalanceDate: date, effectiveTradingDate, symbols, excludedNonTradingCount });
+      schedule.push({
+        rebalanceDate: date,
+        effectiveTradingDate,
+        symbols,
+        excludedNonTradingCount,
+      });
     }
 
-    const scheduleHash = createHash('sha256').update(JSON.stringify(schedule)).digest('hex');
+    const scheduleHash = createHash("sha256")
+      .update(JSON.stringify(schedule))
+      .digest("hex");
 
     return {
       schedule,
@@ -299,7 +330,8 @@ export class UniverseRuleResolver {
     period: BacktestPeriod,
     hooks: UniverseResolveHooks = {},
   ): Promise<UniverseResolveAttempt> {
-    const { selectionMetrics, candles, facts, factCoverage, actionCoverage } = this.requirePipelineDeps();
+    const { selectionMetrics, candles, facts, factCoverage, actionCoverage } =
+      this.requirePipelineDeps();
     const factSymbols = new Set<string>();
     const actionSymbols = new Set<string>();
     const priceSymbols = new Set<string>();
@@ -308,7 +340,10 @@ export class UniverseRuleResolver {
     const schedule: UniverseScheduleEntry[] = [];
     const diagnostics: RebalanceDiagnostic[] = [];
     const unionEntries = new Map<string, SymbolMasterEntry>();
-    const corporateActionExclusions = new Map<string, RelevantCorporateActionGap>();
+    const corporateActionExclusions = new Map<
+      string,
+      RelevantCorporateActionGap
+    >();
     const dataExclusions = new Map<string, BacktestDataExclusion>();
     const recordDataExclusion = (exclusion: BacktestDataExclusion): void => {
       dataExclusions.set(backtestDataExclusionKey(exclusion), exclusion);
@@ -319,43 +354,67 @@ export class UniverseRuleResolver {
     // 넣으면 DAY 일정에서 같은 200종목을 수천 번 DB 조회하게 된다. 호출 수명 캐시라
     // 다음 resolve/ingest의 변경은 숨기지 않는다.
     const validatedIdentityPairs = new Set<string>();
-    const rebalanceDates = computeSharedRebalanceDates(period, rule.rebalanceInterval);
+    const rebalanceDates = computeSharedRebalanceDates(
+      period,
+      rule.rebalanceInterval,
+    );
     let completedRebalanceDates = 0;
-    hooks.onProgress?.({ completedRebalanceDates, totalRebalanceDates: rebalanceDates.length });
+    hooks.onProgress?.({
+      completedRebalanceDates,
+      totalRebalanceDates: rebalanceDates.length,
+    });
 
     const throwIfStopped = (): void => {
-      if (hooks.shouldStop?.() === true) throw new UniverseResolutionCancelledError();
+      if (hooks.shouldStop?.() === true)
+        throw new UniverseResolutionCancelledError();
     };
     const reportDateCompleted = (): void => {
       completedRebalanceDates += 1;
-      hooks.onProgress?.({ completedRebalanceDates, totalRebalanceDates: rebalanceDates.length });
+      hooks.onProgress?.({
+        completedRebalanceDates,
+        totalRebalanceDates: rebalanceDates.length,
+      });
     };
     const effectiveDateByRebalance = new Map<string, string>();
     for (const rebalanceDate of rebalanceDates) {
       throwIfStopped();
-      const effectiveDate = this.deps.symbolMaster
-        .effectiveTradingDateWithinCoverage(rebalanceDate);
-      if (this.deps.symbolMaster.isCovered(rebalanceDate) && effectiveDate !== undefined) {
+      const effectiveDate =
+        this.deps.symbolMaster.effectiveTradingDateWithinCoverage(
+          rebalanceDate,
+        );
+      if (
+        this.deps.symbolMaster.isCovered(rebalanceDate) &&
+        effectiveDate !== undefined
+      ) {
         effectiveDateByRebalance.set(rebalanceDate, effectiveDate);
       }
     }
-    const stagesUseMetricIngestState = rule.stages.some((stage) => (
-      stage.criterion === 'MARKET_CAP'
-      || stage.criterion === 'VOLUME'
-      || stage.criterion === 'TRADING_VALUE'
-      || stage.criterion === 'PER'
-    ));
-    const missingMetricDates = new Set(stagesUseMetricIngestState
-      ? selectionMetrics.findMissingTradingValueDates(
-          [...new Set(effectiveDateByRebalance.values())],
-        )
-      : []);
-    const observedIdentitySelections = new Map<string, SymbolIdentitySelection>();
+    const stagesUseMetricIngestState = rule.stages.some(
+      (stage) =>
+        stage.criterion === "MARKET_CAP" ||
+        stage.criterion === "VOLUME" ||
+        stage.criterion === "TRADING_VALUE" ||
+        stage.criterion === "PER",
+    );
+    const missingMetricDates = new Set(
+      stagesUseMetricIngestState
+        ? selectionMetrics.findMissingTradingValueDates([
+            ...new Set(effectiveDateByRebalance.values()),
+          ])
+        : [],
+    );
+    const observedIdentitySelections = new Map<
+      string,
+      SymbolIdentitySelection
+    >();
     // resolver 자체는 준비 sync를 수행하지 않는다. 한 호출 안에서는 월별 후보가
     // 반복돼도 같은 shortCode를 다시 읽지 않고 일관된 스냅샷을 사용한다.
     // 다음 resolve는 새 Map을 만들어 그 사이 완료된 sync 결과를 본다.
     const actionCoveredYears = new Map<string, readonly number[]>();
-    const actionGapDetails = new Map<string, readonly CorporateActionGapDetail[]>();
+    const actionGapDetails = new Map<
+      string,
+      readonly CorporateActionGapDetail[]
+    >();
     const checkedActionCoverageSymbols = new Set<string>();
     const actionFactsBySymbol = new Map<string, Fact[]>();
     const checkedActionFactSymbols = new Set<string>();
@@ -373,7 +432,9 @@ export class UniverseRuleResolver {
       covered: ReadonlyMap<string, readonly number[]>;
       details: ReadonlyMap<string, readonly CorporateActionGapDetail[]>;
     } => {
-      const missing = [...new Set(codes)].filter((code) => !checkedActionCoverageSymbols.has(code));
+      const missing = [...new Set(codes)].filter(
+        (code) => !checkedActionCoverageSymbols.has(code),
+      );
       if (missing.length > 0) {
         const covered = actionCoverage.getCoveredYears(missing);
         const details = readCorporateActionGapDetails(actionCoverage, missing);
@@ -381,19 +442,24 @@ export class UniverseRuleResolver {
           checkedActionCoverageSymbols.add(code);
           const coveredYears = covered.get(code);
           const gapDetails = details.get(code);
-          if (coveredYears !== undefined) actionCoveredYears.set(code, coveredYears);
+          if (coveredYears !== undefined)
+            actionCoveredYears.set(code, coveredYears);
           if (gapDetails !== undefined) actionGapDetails.set(code, gapDetails);
         }
       }
       return { covered: actionCoveredYears, details: actionGapDetails };
     };
 
-    const readActionFacts = async (codes: readonly string[]): Promise<Fact[]> => {
+    const readActionFacts = async (
+      codes: readonly string[],
+    ): Promise<Fact[]> => {
       const requested = [...new Set(codes)];
-      const missing = requested.filter((code) => !checkedActionFactSymbols.has(code));
+      const missing = requested.filter(
+        (code) => !checkedActionFactSymbols.has(code),
+      );
       if (missing.length > 0) {
         const loaded = await facts.getFacts({
-          scope: 'SYMBOL',
+          scope: "SYMBOL",
           keys: missing,
           fields: [CORPORATE_ACTION_FIELD],
         });
@@ -411,29 +477,39 @@ export class UniverseRuleResolver {
 
     const prepareActionGraphs = async (
       codes: readonly string[],
-    ): Promise<ReadonlyMap<string, ReturnType<typeof alignCorporateActionEffectiveDates>>> => {
+    ): Promise<
+      ReadonlyMap<string, ReturnType<typeof alignCorporateActionEffectiveDates>>
+    > => {
       const requested = [...new Set(codes)];
-      const missing = requested.filter((code) => !alignedActionGraphBySymbol.has(code));
+      const missing = requested.filter(
+        (code) => !alignedActionGraphBySymbol.has(code),
+      );
       if (missing.length === 0) return alignedActionGraphBySymbol;
 
       await readActionFacts(missing);
       throwIfStopped();
-      const factsToPrepare = missing.flatMap((code) => actionFactsBySymbol.get(code) ?? []);
+      const factsToPrepare = missing.flatMap(
+        (code) => actionFactsBySymbol.get(code) ?? [],
+      );
       const rawRange = corporateActionRawDateRange(factsToPrepare);
-      const changes = rawRange === null
-        ? []
-        : this.deps.symbolMaster.sharesChangesBetween(
-            addCalendarDays(
-              rawRange.from,
-              -CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays,
-            ),
-            addCalendarDays(
-              rawRange.to,
-              CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays,
-            ),
-            missing,
-          );
-      const changesBySymbol = new Map<string, Array<(typeof changes)[number]>>();
+      const changes =
+        rawRange === null
+          ? []
+          : this.deps.symbolMaster.sharesChangesBetween(
+              addCalendarDays(
+                rawRange.from,
+                -CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays,
+              ),
+              addCalendarDays(
+                rawRange.to,
+                CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays,
+              ),
+              missing,
+            );
+      const changesBySymbol = new Map<
+        string,
+        Array<(typeof changes)[number]>
+      >();
       for (const change of changes) {
         const symbolChanges = changesBySymbol.get(change.shortCode) ?? [];
         symbolChanges.push(change);
@@ -463,10 +539,13 @@ export class UniverseRuleResolver {
       const uniqueByDateAndPair = new Map<string, SymbolIdentitySelection>();
       for (const selection of candidates) {
         const key = `${selection.effectiveDate}\0${selection.shortCode}\0${selection.standardCode}`;
-        if (!uniqueByDateAndPair.has(key)) uniqueByDateAndPair.set(key, selection);
+        if (!uniqueByDateAndPair.has(key))
+          uniqueByDateAndPair.set(key, selection);
       }
       if (uniqueByDateAndPair.size > 0) {
-        assertSafeIdentitySelections(this.deps.symbolMaster, [...uniqueByDateAndPair.values()]);
+        assertSafeIdentitySelections(this.deps.symbolMaster, [
+          ...uniqueByDateAndPair.values(),
+        ]);
       }
     };
 
@@ -496,23 +575,26 @@ export class UniverseRuleResolver {
     };
 
     const validateCandidateIdentities = (
-      entries: readonly Pick<SymbolMasterEntry, 'shortCode' | 'standardCode'>[],
+      entries: readonly Pick<SymbolMasterEntry, "shortCode" | "standardCode">[],
       effectiveDate: string,
     ): void => {
-      validateIdentitySelections(entries.map((entry) => ({
-        shortCode: entry.shortCode,
-        standardCode: entry.standardCode,
-        effectiveDate,
-      })));
+      validateIdentitySelections(
+        entries.map((entry) => ({
+          shortCode: entry.shortCode,
+          standardCode: entry.standardCode,
+          effectiveDate,
+        })),
+      );
     };
 
     const widenPriceRange = (from: string, to: string): void => {
-      priceRange = priceRange === null
-        ? { from, to }
-        : {
-            from: from < priceRange.from ? from : priceRange.from,
-            to: to > priceRange.to ? to : priceRange.to,
-          };
+      priceRange =
+        priceRange === null
+          ? { from, to }
+          : {
+              from: from < priceRange.from ? from : priceRange.from,
+              to: to > priceRange.to ? to : priceRange.to,
+            };
     };
 
     for (const rebalanceDate of rebalanceDates) {
@@ -526,37 +608,40 @@ export class UniverseRuleResolver {
       }
 
       const nonTrading = new Set(
-        this.deps.symbolMaster.nonTradingDaysBetween(effectiveDate, effectiveDate)
+        this.deps.symbolMaster
+          .nonTradingDaysBetween(effectiveDate, effectiveDate)
           .map((row) => row.shortCode),
       );
       const universe = this.deps.symbolMaster.getUniverseAsOf(effectiveDate);
       for (const entry of universe.values()) {
         if (!rule.markets.includes(entry.market)) continue;
         if (
-          entry.instrumentType !== 'UNKNOWN_CLASSIFICATION'
-          && entry.instrumentType !== 'MISSING_BASE_INFO'
-          && entry.instrumentType !== 'MISSING_SHARES'
-        ) continue;
+          entry.instrumentType !== "UNKNOWN_CLASSIFICATION" &&
+          entry.instrumentType !== "MISSING_BASE_INFO" &&
+          entry.instrumentType !== "MISSING_SHARES"
+        )
+          continue;
         recordDataExclusion({
           symbol: entry.shortCode,
-          category: 'KRX_CLASSIFICATION',
+          category: "KRX_CLASSIFICATION",
           periodKey: effectiveDate,
-          reason: entry.instrumentType === 'MISSING_BASE_INFO'
-            ? '일별매매에는 존재하지만 종목 기본정보 행 누락'
-            : entry.instrumentType === 'MISSING_SHARES'
-              ? '상장주식수 누락'
-              : '종목 분류 필드를 해석할 수 없음',
+          reason:
+            entry.instrumentType === "MISSING_BASE_INFO"
+              ? "일별매매에는 존재하지만 종목 기본정보 행 누락"
+              : entry.instrumentType === "MISSING_SHARES"
+                ? "상장주식수 누락"
+                : "종목 분류 필드를 해석할 수 없음",
         });
       }
-      const marketCandidates = [...universe.values()]
-        .filter((entry) => (
-          entry.instrumentType === 'COMMON_STOCK'
-          && rule.markets.includes(entry.market)
-          && hooks.excludedSymbols?.has(entry.shortCode) !== true
-        ));
-      const excludedNonTradingCount = marketCandidates
-        .filter((entry) => nonTrading.has(entry.shortCode))
-        .length;
+      const marketCandidates = [...universe.values()].filter(
+        (entry) =>
+          entry.instrumentType === "COMMON_STOCK" &&
+          rule.markets.includes(entry.market) &&
+          hooks.excludedSymbols?.has(entry.shortCode) !== true,
+      );
+      const excludedNonTradingCount = marketCandidates.filter((entry) =>
+        nonTrading.has(entry.shortCode),
+      ).length;
       let candidates = marketCandidates
         .filter((entry) => !nonTrading.has(entry.shortCode))
         .sort((a, b) => compareShortCodes(a.shortCode, b.shortCode));
@@ -572,10 +657,14 @@ export class UniverseRuleResolver {
       const dateMetrics = new Map<string, DailySelectionMetric>();
       const checkedDateMetricCodes = new Set<string>();
       const readDateMetrics = (
-        entries: readonly Pick<SymbolMasterEntry, 'standardCode'>[],
+        entries: readonly Pick<SymbolMasterEntry, "standardCode">[],
       ): ReadonlyMap<string, DailySelectionMetric> => {
-        const requested = [...new Set(entries.map((entry) => entry.standardCode))];
-        const missing = requested.filter((code) => !checkedDateMetricCodes.has(code));
+        const requested = [
+          ...new Set(entries.map((entry) => entry.standardCode)),
+        ];
+        const missing = requested.filter(
+          (code) => !checkedDateMetricCodes.has(code),
+        );
         if (missing.length > 0) {
           const loaded = selectionMetrics.getAt(effectiveDate, missing);
           for (const code of missing) checkedDateMetricCodes.add(code);
@@ -598,7 +687,7 @@ export class UniverseRuleResolver {
         let stageReady = true;
         let rows: UniverseStageValue[];
 
-        if (stage.criterion === 'TRADING_VALUE') {
+        if (stage.criterion === "TRADING_VALUE") {
           const stageMetrics = readDateMetrics(candidates);
           if (isMetricDateMissing()) {
             dateSelectionMetricDates.add(effectiveDate);
@@ -607,37 +696,39 @@ export class UniverseRuleResolver {
           rows = candidates.map((entry) => ({
             standardCode: entry.standardCode,
             shortCode: entry.shortCode,
-            value: stageMetrics.get(entry.standardCode)?.tradingValueKrw ?? null,
+            value:
+              stageMetrics.get(entry.standardCode)?.tradingValueKrw ?? null,
           }));
           if (stageReady && !hasUnresolvedStage) {
             for (const row of rows) {
               if (row.value !== null) continue;
               recordDataExclusion({
                 symbol: row.shortCode,
-                category: 'KRX_SELECTION_METRIC',
+                category: "KRX_SELECTION_METRIC",
                 periodKey: effectiveDate,
                 reason: `${stage.criterion} 행 또는 값 누락`,
               });
             }
           }
-        } else if (stage.criterion === 'MARKET_CAP' || stage.criterion === 'VOLUME') {
+        } else if (
+          stage.criterion === "MARKET_CAP" ||
+          stage.criterion === "VOLUME"
+        ) {
           const stageMetrics = readDateMetrics(candidates);
           rows = candidates.map((entry) => ({
             standardCode: entry.standardCode,
             shortCode: entry.shortCode,
-            value: stage.criterion === 'MARKET_CAP'
-              ? stageMetrics.get(entry.standardCode)?.marketCapKrw ?? null
-              : stageMetrics.get(entry.standardCode)?.volume ?? null,
+            value:
+              stage.criterion === "MARKET_CAP"
+                ? (stageMetrics.get(entry.standardCode)?.marketCapKrw ?? null)
+                : (stageMetrics.get(entry.standardCode)?.volume ?? null),
           }));
           // 0014 migration 은 시총만 복사하고 volume 은 ensureSelectionMetrics 의
           // backfill 이 채운다. KRX ingest 흔적이 없는 날짜에서 값이 비면 결측 제외로
           // 추측하지 않고 TRADING_VALUE 와 같은 신호로 metric 수집을 요구한다 —
           // 한 번의 ingest 로 채워질 수 있는 결측이기 때문이다. ingest 된 날짜의
           // null 은 구조적 결측이므로 그대로 제외한다.
-          if (
-            rows.some((row) => row.value === null)
-            && isMetricDateMissing()
-          ) {
+          if (rows.some((row) => row.value === null) && isMetricDateMissing()) {
             dateSelectionMetricDates.add(effectiveDate);
             stageReady = false;
           }
@@ -646,13 +737,13 @@ export class UniverseRuleResolver {
               if (row.value !== null) continue;
               recordDataExclusion({
                 symbol: row.shortCode,
-                category: 'KRX_SELECTION_METRIC',
+                category: "KRX_SELECTION_METRIC",
                 periodKey: effectiveDate,
                 reason: `${stage.criterion} 행 또는 값 누락`,
               });
             }
           }
-        } else if (stage.criterion === 'PER' || stage.criterion === 'ROE') {
+        } else if (stage.criterion === "PER" || stage.criterion === "ROE") {
           // coverage·facts가 shortCode 키라, issuer가 다른 전 생애 데이터를 읽기 전에
           // 현재 후보의 양방향 identity가 전체 SCD에서 1:1인지 먼저 확인한다.
           validateCandidateIdentities(candidates, effectiveDate);
@@ -660,57 +751,75 @@ export class UniverseRuleResolver {
           // 자본변동 전용 수집도 fact 행을 남기므로 행 존재는
           // 재무 있음을 증명하지 못한다 (fact-coverage-store.ts 주석). coverage 는
           // 공시가 없던 연도도 시도 후 기록되므로 이 판정은 sync 한 번이면 수렴한다.
-          const requiredYears = financialStageRequiredFactYears(effectiveDate, period);
+          const requiredYears = financialStageRequiredFactYears(
+            effectiveDate,
+            period,
+          );
           const coverageBySymbol = factCoverage.getCoverageState(
             candidates.map((entry) => entry.shortCode),
           );
           const missing = candidates.filter((entry) => {
-            const covered = new Set(coverageBySymbol.get(entry.shortCode)?.verifiedYears ?? []);
+            const covered = new Set(
+              coverageBySymbol.get(entry.shortCode)?.verifiedYears ?? [],
+            );
             return requiredYears.some((year) => !covered.has(year));
           });
           for (const entry of missing) dateFactSymbols.add(entry.shortCode);
           if (missing.length > 0) stageReady = false;
-          const missingCoverageCodes = new Set(missing.map((entry) => entry.shortCode));
-          const blockedFinancialCodes = new Set(candidates.flatMap((entry) => {
-            if (missingCoverageCodes.has(entry.shortCode)) return [];
-            const blocking = new Set(
-              coverageBySymbol.get(entry.shortCode)?.blockingGapYears ?? [],
-            );
-            return requiredYears.some((year) => blocking.has(year))
-              ? [entry.shortCode]
-              : [];
-          }));
+          const missingCoverageCodes = new Set(
+            missing.map((entry) => entry.shortCode),
+          );
+          const blockedFinancialCodes = new Set(
+            candidates.flatMap((entry) => {
+              if (missingCoverageCodes.has(entry.shortCode)) return [];
+              const blocking = new Set(
+                coverageBySymbol.get(entry.shortCode)?.blockingGapYears ?? [],
+              );
+              return requiredYears.some((year) => blocking.has(year))
+                ? [entry.shortCode]
+                : [];
+            }),
+          );
 
           const financialValues = await loadFinancialRankingValues(
-            facts, candidates.map((entry) => entry.shortCode), kstEndOfDayMs(effectiveDate), throwIfStopped,
+            facts,
+            candidates.map((entry) => entry.shortCode),
+            kstEndOfDayMs(effectiveDate),
+            throwIfStopped,
           );
-          if (stage.criterion === 'PER') {
+          if (stage.criterion === "PER") {
             const stageMetrics = readDateMetrics(candidates);
-            const hasIncompleteMarketCaps = candidates.some((entry) => (
-              stageMetrics.get(entry.standardCode)?.marketCapKrw == null
-            ));
+            const hasIncompleteMarketCaps = candidates.some(
+              (entry) =>
+                stageMetrics.get(entry.standardCode)?.marketCapKrw == null,
+            );
             if (isMetricDateMissing() && hasIncompleteMarketCaps) {
               dateSelectionMetricDates.add(effectiveDate);
               stageReady = false;
             }
             rows = exactRatioRankingRows(candidates, (entry) => {
               if (blockedFinancialCodes.has(entry.shortCode)) return null;
-              const cap = stageMetrics.get(entry.standardCode)?.marketCapKrw ?? null;
+              const cap =
+                stageMetrics.get(entry.standardCode)?.marketCapKrw ?? null;
               const income = positiveNumberFraction(
                 financialValues.get(entry.shortCode)?.netIncomeTtm ?? null,
               );
               return cap === null || cap <= 0n || income === null
                 ? null
-                : { numerator: cap * income.denominator, denominator: income.numerator };
+                : {
+                    numerator: cap * income.denominator,
+                    denominator: income.numerator,
+                  };
             });
             if (stageReady && !hasUnresolvedStage) {
               for (const entry of candidates) {
-                if (stageMetrics.get(entry.standardCode)?.marketCapKrw != null) continue;
+                if (stageMetrics.get(entry.standardCode)?.marketCapKrw != null)
+                  continue;
                 recordDataExclusion({
                   symbol: entry.shortCode,
-                  category: 'KRX_SELECTION_METRIC',
+                  category: "KRX_SELECTION_METRIC",
                   periodKey: effectiveDate,
-                  reason: 'PER 계산에 필요한 MARKET_CAP 행 또는 값 누락',
+                  reason: "PER 계산에 필요한 MARKET_CAP 행 또는 값 누락",
                 });
               }
             }
@@ -718,50 +827,57 @@ export class UniverseRuleResolver {
             rows = exactRatioRankingRows(candidates, (entry) => {
               if (blockedFinancialCodes.has(entry.shortCode)) return null;
               const values = financialValues.get(entry.shortCode);
-              const income = positiveNumberFraction(values?.netIncomeTtm ?? null);
-              const equity = positiveNumberFraction(values?.totalEquity ?? null);
+              const income = positiveNumberFraction(
+                values?.netIncomeTtm ?? null,
+              );
+              const equity = positiveNumberFraction(
+                values?.totalEquity ?? null,
+              );
               return income === null || equity === null
                 ? null
                 : {
                     numerator: income.numerator * equity.denominator,
                     denominator: income.denominator * equity.numerator,
-                };
+                  };
             });
           }
           if (stageReady && !hasUnresolvedStage) {
             for (const entry of candidates) {
               const state = coverageBySymbol.get(entry.shortCode);
               if (blockedFinancialCodes.has(entry.shortCode)) {
-                const details = (state?.blockingGapDetails ?? [])
-                  .filter((detail) => requiredYears.includes(detail.year));
+                const details = (state?.blockingGapDetails ?? []).filter(
+                  (detail) => requiredYears.includes(detail.year),
+                );
                 if (details.length === 0) {
                   recordDataExclusion({
                     symbol: entry.shortCode,
-                    category: 'DART_FINANCIAL',
-                    periodKey: requiredYears.join(','),
-                    reason: '필수 연도에 blocking 원천·파서 gap 존재',
+                    category: "DART_FINANCIAL",
+                    periodKey: requiredYears.join(","),
+                    reason: "필수 연도에 blocking 원천·파서 gap 존재",
                   });
                 }
                 for (const detail of details) {
                   recordDataExclusion({
                     symbol: entry.shortCode,
-                    category: 'DART_FINANCIAL',
+                    category: "DART_FINANCIAL",
                     periodKey: String(detail.year),
-                    reason: detail.examples.length > 0
-                      ? detail.examples.join(' / ')
-                      : 'blocking 원천·파서 gap 존재',
+                    reason:
+                      detail.examples.length > 0
+                        ? detail.examples.join(" / ")
+                        : "blocking 원천·파서 gap 존재",
                   });
                 }
                 continue;
               }
               const values = financialValues.get(entry.shortCode);
-              const missingRequiredValue = stage.criterion === 'PER'
-                ? values?.netIncomeTtm == null
-                : values?.netIncomeTtm == null || values?.totalEquity == null;
+              const missingRequiredValue =
+                stage.criterion === "PER"
+                  ? values?.netIncomeTtm == null
+                  : values?.netIncomeTtm == null || values?.totalEquity == null;
               if (!missingRequiredValue) continue;
               recordDataExclusion({
                 symbol: entry.shortCode,
-                category: 'DART_FINANCIAL',
+                category: "DART_FINANCIAL",
                 periodKey: effectiveDate,
                 reason: `${stage.criterion} 계산에 필요한 PIT 재무 값 누락`,
               });
@@ -786,15 +902,22 @@ export class UniverseRuleResolver {
             -(stage.lookbackTradingDays + 14),
           );
           const histories = await loadCandleHistories(
-            candles, codes, optimisticFrom, effectiveDate,
+            candles,
+            codes,
+            optimisticFrom,
+            effectiveDate,
           );
           throwIfStopped();
           const expandedCodes = codes.filter(
-            (code) => (histories.get(code)?.length ?? 0) < stage.lookbackTradingDays,
+            (code) =>
+              (histories.get(code)?.length ?? 0) < stage.lookbackTradingDays,
           );
           if (expandedCodes.length > 0) {
             const expanded = await loadCandleHistories(
-              candles, expandedCodes, requiredFrom, effectiveDate,
+              candles,
+              expandedCodes,
+              requiredFrom,
+              effectiveDate,
             );
             throwIfStopped();
             for (const code of expandedCodes) {
@@ -808,7 +931,9 @@ export class UniverseRuleResolver {
             ]),
           );
           const priceMissingCodes = codes.filter(
-            (code) => (lookbackHistories.get(code)?.length ?? 0) < stage.lookbackTradingDays,
+            (code) =>
+              (lookbackHistories.get(code)?.length ?? 0) <
+              stage.lookbackTradingDays,
           );
           const warmupMissing = priceMissingCodes.length > 0;
           // symbol_master_coverage 는 해당 날짜의 두 KRX 시장 응답을 실제로 받아
@@ -816,22 +941,30 @@ export class UniverseRuleResolver {
           // N봉이 안 되는 종목은 재수집 가능한 누락이 아니라 신규 상장·장기 거래정지
           // 같은 구조적 짧은 이력이다. 이 경우 value=null로 랭킹에서 제외하고 다시
           // priceSymbols를 내지 않아 preparation이 같은 범위를 영원히 반복하지 않게 한다.
-          const priceFetchRequired = warmupMissing
-            && !this.deps.symbolMaster.isRangeCovered(requiredFrom, effectiveDate);
+          const priceFetchRequired =
+            warmupMissing &&
+            !this.deps.symbolMaster.isRangeCovered(requiredFrom, effectiveDate);
           if (priceFetchRequired) {
-            datePrice.range = datePrice.range === null
-              ? { from: requiredFrom, to: effectiveDate }
-              : {
-                  from: requiredFrom < datePrice.range.from ? requiredFrom : datePrice.range.from,
-                  to: effectiveDate > datePrice.range.to ? effectiveDate : datePrice.range.to,
-                };
+            datePrice.range =
+              datePrice.range === null
+                ? { from: requiredFrom, to: effectiveDate }
+                : {
+                    from:
+                      requiredFrom < datePrice.range.from
+                        ? requiredFrom
+                        : datePrice.range.from,
+                    to:
+                      effectiveDate > datePrice.range.to
+                        ? effectiveDate
+                        : datePrice.range.to,
+                  };
             for (const code of priceMissingCodes) datePriceSymbols.add(code);
             stageReady = false;
           } else if (!hasUnresolvedStage) {
             for (const code of priceMissingCodes) {
               recordDataExclusion({
                 symbol: code,
-                category: 'KRX_PRICE',
+                category: "KRX_PRICE",
                 periodKey: effectiveDate,
                 reason: `DECLINE 계산에 필요한 ${stage.lookbackTradingDays}개 거래일 일봉 부족`,
               });
@@ -853,7 +986,9 @@ export class UniverseRuleResolver {
           const actionCandidateCodes = priceFetchRequired
             ? codes
             : codes.filter((code) => !priceMissingCodes.includes(code));
-          const actionExecutionFrom = priceFetchRequired ? requiredFrom : actualFrom;
+          const actionExecutionFrom = priceFetchRequired
+            ? requiredFrom
+            : actualFrom;
           // DECLINE 수익률에 영향을 줄 실제 변경일 E는 첫 봉 다음 날~마지막 봉이다.
           // DART 기준일 R은 E보다 최대 90일 앞, 30일 뒤일 수 있으므로 인접 연도까지
           // coverage가 닫히기 전에는 raw fact가 없다는 이유로 READY를 만들지 않는다.
@@ -880,18 +1015,21 @@ export class UniverseRuleResolver {
             }
           }
           const executionChangeFrom = addCalendarDays(actionExecutionFrom, 1);
-          const executionSharesChanges = executionChangeFrom > effectiveDate
-            ? []
-            : this.deps.symbolMaster.sharesChangesBetween(
-                executionChangeFrom,
-                effectiveDate,
-                actionCandidateCodes,
-              );
+          const executionSharesChanges =
+            executionChangeFrom > effectiveDate
+              ? []
+              : this.deps.symbolMaster.sharesChangesBetween(
+                  executionChangeFrom,
+                  effectiveDate,
+                  actionCandidateCodes,
+                );
           const relevantGaps = findRelevantCorporateActionGaps(
-            new Map(actionCandidateCodes.map((code) => [
-              code,
-              gapDetailsBySymbol.get(code) ?? [],
-            ])),
+            new Map(
+              actionCandidateCodes.map((code) => [
+                code,
+                gapDetailsBySymbol.get(code) ?? [],
+              ]),
+            ),
             executionSharesChanges,
             {
               executionFrom: executionChangeFrom,
@@ -900,7 +1038,9 @@ export class UniverseRuleResolver {
               rawTo: relevantRawTo,
             },
           );
-          const gapAffectedCodes = new Set(relevantGaps.map((gap) => gap.symbol));
+          const gapAffectedCodes = new Set(
+            relevantGaps.map((gap) => gap.symbol),
+          );
           const excludedByActionGap = new Set<string>();
           if (gapAffectedCodes.size > 0) {
             if (stageReady && !hasUnresolvedStage) {
@@ -912,7 +1052,7 @@ export class UniverseRuleResolver {
                 );
                 recordDataExclusion({
                   symbol: gap.symbol,
-                  category: 'DART_CORPORATE_ACTION',
+                  category: "DART_CORPORATE_ACTION",
                   periodKey: `${gap.year}년/${gap.periodKey}`,
                   reason: gap.reason,
                 });
@@ -925,14 +1065,20 @@ export class UniverseRuleResolver {
           }
 
           const actionGraphs = await prepareActionGraphs(codes);
-          const rankableCodes = new Set(codes.filter((code) => (
-            (lookbackHistories.get(code)?.length ?? 0) === stage.lookbackTradingDays
-          )));
+          const rankableCodes = new Set(
+            codes.filter(
+              (code) =>
+                (lookbackHistories.get(code)?.length ?? 0) ===
+                stage.lookbackTradingDays,
+            ),
+          );
           // worker와 동일한 전체 fact/change 그래프를 먼저 정렬한다. 관련 fact만 잘라
           // 매칭하면 범위 밖 사건이 같은 change를 요구할 때 resolver와 worker가 한
           // 사건을 서로 다른 날짜로 옮길 수 있다. 그래프는 종목별로 독립이므로 호출
           // 수명 cache의 per-symbol 결과를 합쳐도 전체 호출과 결과가 정확히 같다.
-          const alignedFacts = codes.flatMap((code) => actionGraphs.get(code)?.facts ?? []);
+          const alignedFacts = codes.flatMap(
+            (code) => actionGraphs.get(code)?.facts ?? [],
+          );
           const relevantUnaligned = codes
             .flatMap((code) => actionGraphs.get(code)?.unaligned ?? [])
             .filter((action) => {
@@ -943,12 +1089,17 @@ export class UniverseRuleResolver {
               if (first === undefined || last === undefined) return false;
               const firstDate = new Date(first.tsMs).toISOString().slice(0, 10);
               const lastDate = new Date(last.tsMs).toISOString().slice(0, 10);
-              return action.periodKey >= addCalendarDays(
-                firstDate,
-                1 - CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays,
-              ) && action.periodKey <= addCalendarDays(
-                lastDate,
-                CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays,
+              return (
+                action.periodKey >=
+                  addCalendarDays(
+                    firstDate,
+                    1 - CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays,
+                  ) &&
+                action.periodKey <=
+                  addCalendarDays(
+                    lastDate,
+                    CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays,
+                  )
               );
             });
           if (relevantUnaligned.length > 0) {
@@ -958,8 +1109,8 @@ export class UniverseRuleResolver {
                   symbol: action.symbol,
                   year: Number(action.periodKey.slice(0, 4)),
                   periodKey: action.periodKey,
-                  reason: 'KRX 상장주식수 변경일과 정렬할 수 없는 자본변동',
-                  severity: 'BLOCKING',
+                  reason: "KRX 상장주식수 변경일과 정렬할 수 없는 자본변동",
+                  severity: "BLOCKING",
                 };
                 excludedByActionGap.add(action.symbol);
                 corporateActionExclusions.set(
@@ -968,7 +1119,7 @@ export class UniverseRuleResolver {
                 );
                 recordDataExclusion({
                   symbol: exclusion.symbol,
-                  category: 'DART_CORPORATE_ACTION',
+                  category: "DART_CORPORATE_ACTION",
                   periodKey: `${exclusion.year}년/${exclusion.periodKey}`,
                   reason: exclusion.reason,
                 });
@@ -982,19 +1133,39 @@ export class UniverseRuleResolver {
           const view = new PitFactView(alignedFacts);
           rows = candidates.map((entry) => {
             if (excludedByActionGap.has(entry.shortCode)) {
-              return { standardCode: entry.standardCode, shortCode: entry.shortCode, value: null };
+              return {
+                standardCode: entry.standardCode,
+                shortCode: entry.shortCode,
+                value: null,
+              };
             }
             const history = lookbackHistories.get(entry.shortCode) ?? [];
             if (history.length !== stage.lookbackTradingDays) {
-              return { standardCode: entry.standardCode, shortCode: entry.shortCode, value: null };
+              return {
+                standardCode: entry.standardCode,
+                shortCode: entry.shortCode,
+                value: null,
+              };
             }
-            const actions = view.corporateActions(entry.shortCode, kstEndOfDayMs(effectiveDate));
+            const actions = view.corporateActions(
+              entry.shortCode,
+              kstEndOfDayMs(effectiveDate),
+            );
             const first = splitAdjustedClose(history, actions, 0);
-            const last = splitAdjustedClose(history, actions, history.length - 1);
-            const value = first === null || last === null || first <= 0
-              ? null
-              : (last / first) - 1;
-            return { standardCode: entry.standardCode, shortCode: entry.shortCode, value };
+            const last = splitAdjustedClose(
+              history,
+              actions,
+              history.length - 1,
+            );
+            const value =
+              first === null || last === null || first <= 0
+                ? null
+                : last / first - 1;
+            return {
+              standardCode: entry.standardCode,
+              shortCode: entry.shortCode,
+              value,
+            };
           });
         }
 
@@ -1010,7 +1181,9 @@ export class UniverseRuleResolver {
           // 앞 stage 결과와 무관하게 final empty라는 단조로운 증명이다.
           if (ranked.diagnostic.eligibleCount === 0) candidates = [];
         } else {
-          const byStandardCode = new Map(candidates.map((entry) => [entry.standardCode, entry]));
+          const byStandardCode = new Map(
+            candidates.map((entry) => [entry.standardCode, entry]),
+          );
           candidates = ranked.selectedCodes.flatMap((code) => {
             const entry = byStandardCode.get(code);
             return entry === undefined ? [] : [entry];
@@ -1022,13 +1195,12 @@ export class UniverseRuleResolver {
         // 시총·거래대금에서 탈락할 ambiguous shortCode 때문에 과잉 차단되므로, 시장
         // 데이터를 먼저 준비하고 다음 resolve에서 좁혀진 후보로 재개한다.
         if (
-          !stageReady
-          && (
-            stage.criterion === 'MARKET_CAP'
-            || stage.criterion === 'VOLUME'
-            || stage.criterion === 'TRADING_VALUE'
-          )
-        ) break;
+          !stageReady &&
+          (stage.criterion === "MARKET_CAP" ||
+            stage.criterion === "VOLUME" ||
+            stage.criterion === "TRADING_VALUE")
+        )
+          break;
       }
 
       // 이 날짜의 완전한 후보 상한이 비었다면 앞 unresolved stage가
@@ -1038,15 +1210,22 @@ export class UniverseRuleResolver {
         for (const symbol of dateFactSymbols) factSymbols.add(symbol);
         for (const symbol of dateActionSymbols) actionSymbols.add(symbol);
         for (const symbol of datePriceSymbols) priceSymbols.add(symbol);
-        for (const date of dateSelectionMetricDates) selectionMetricDates.add(date);
-        if (datePrice.range !== null) widenPriceRange(datePrice.range.from, datePrice.range.to);
+        for (const date of dateSelectionMetricDates)
+          selectionMetricDates.add(date);
+        if (datePrice.range !== null)
+          widenPriceRange(datePrice.range.from, datePrice.range.to);
       }
 
       const finalMetrics = readDateMetrics(candidates);
       for (const entry of candidates) {
-        if (!unionEntries.has(entry.shortCode)) unionEntries.set(entry.shortCode, entry);
+        if (!unionEntries.has(entry.shortCode))
+          unionEntries.set(entry.shortCode, entry);
       }
-      diagnostics.push({ rebalanceDate, effectiveDate, stages: stageDiagnostics });
+      diagnostics.push({
+        rebalanceDate,
+        effectiveDate,
+        stages: stageDiagnostics,
+      });
       schedule.push({
         rebalanceDate,
         effectiveDate,
@@ -1067,11 +1246,11 @@ export class UniverseRuleResolver {
     }
 
     if (
-      factSymbols.size > 0
-      || actionSymbols.size > 0
-      || priceSymbols.size > 0
-      || selectionMetricDates.size > 0
-      || priceRange !== null
+      factSymbols.size > 0 ||
+      actionSymbols.size > 0 ||
+      priceSymbols.size > 0 ||
+      selectionMetricDates.size > 0 ||
+      priceRange !== null
     ) {
       // short-keyed 저장소를 읽는 동안 await 경계에서 SCD가 바뀌었을 수 있다.
       // stage cache를 우회해 반환 직전에 한 번 더 확인해야 준비 작업이 stale pair로
@@ -1080,7 +1259,7 @@ export class UniverseRuleResolver {
       throwIfStopped();
       assertFreshIdentitySelections([...observedIdentitySelections.values()]);
       return {
-        kind: 'NEEDS_DATA',
+        kind: "NEEDS_DATA",
         candidateScopeKnown,
         unionEntries,
         needs: {
@@ -1106,36 +1285,51 @@ export class UniverseRuleResolver {
         })),
       ),
     ]);
-    const sortedCorporateActionExclusions = [...corporateActionExclusions.values()].sort(
-      (left, right) => (
-        left.symbol.localeCompare(right.symbol)
-        || left.year - right.year
-        || left.periodKey.localeCompare(right.periodKey)
-        || left.reason.localeCompare(right.reason)
-      ),
+    const sortedCorporateActionExclusions = [
+      ...corporateActionExclusions.values(),
+    ].sort(
+      (left, right) =>
+        left.symbol.localeCompare(right.symbol) ||
+        left.year - right.year ||
+        left.periodKey.localeCompare(right.periodKey) ||
+        left.reason.localeCompare(right.reason),
     );
     return {
-      kind: 'READY',
+      kind: "READY",
       schedule,
       diagnostics,
       unionEntries,
-      dataExclusions: [...dataExclusions.values()].sort((left, right) => (
-        left.symbol.localeCompare(right.symbol)
-        || left.category.localeCompare(right.category)
-        || left.periodKey.localeCompare(right.periodKey)
-        || left.reason.localeCompare(right.reason)
-      )),
+      dataExclusions: [...dataExclusions.values()].sort(
+        (left, right) =>
+          left.symbol.localeCompare(right.symbol) ||
+          left.category.localeCompare(right.category) ||
+          left.periodKey.localeCompare(right.periodKey) ||
+          left.reason.localeCompare(right.reason),
+      ),
       corporateActionExclusions: sortedCorporateActionExclusions,
     };
   }
 
-  private requirePipelineDeps(): Required<Pick<
-    UniverseRuleResolverDeps,
-    'selectionMetrics' | 'candles' | 'facts' | 'factCoverage' | 'actionCoverage'
-  >> {
-    const { selectionMetrics, candles, facts, factCoverage, actionCoverage } = this.deps;
-    if (!selectionMetrics || !candles || !facts || !factCoverage || !actionCoverage) {
-      throw new Error('유니버스 선정 파이프라인 의존성이 연결되지 않았습니다.');
+  private requirePipelineDeps(): Required<
+    Pick<
+      UniverseRuleResolverDeps,
+      | "selectionMetrics"
+      | "candles"
+      | "facts"
+      | "factCoverage"
+      | "actionCoverage"
+    >
+  > {
+    const { selectionMetrics, candles, facts, factCoverage, actionCoverage } =
+      this.deps;
+    if (
+      !selectionMetrics ||
+      !candles ||
+      !facts ||
+      !factCoverage ||
+      !actionCoverage
+    ) {
+      throw new Error("유니버스 선정 파이프라인 의존성이 연결되지 않았습니다.");
     }
     return { selectionMetrics, candles, facts, factCoverage, actionCoverage };
   }
@@ -1147,7 +1341,10 @@ export class UniverseRuleResolver {
  * (`derivePreparationFactYearRange(period, 4)`)로 클램프한다 — 그보다 이른 연도를
  * 요구하면 어떤 sync 도 채울 수 없어 준비 작업이 같은 needs 를 반복하다 실패한다.
  */
-function financialStageRequiredFactYears(effectiveDate: string, period: BacktestPeriod): number[] {
+function financialStageRequiredFactYears(
+  effectiveDate: string,
+  period: BacktestPeriod,
+): number[] {
   const planRange = derivePreparationFactYearRange(period, 4);
   const effectiveYear = Number(effectiveDate.slice(0, 4));
   const fromYear = Math.max(effectiveYear - 1, planRange.fromYear);
@@ -1158,7 +1355,11 @@ function financialStageRequiredFactYears(effectiveDate: string, period: Backtest
 
 function yearsBetween(from: string, to: string): number[] {
   const years: number[] = [];
-  for (let year = Number(from.slice(0, 4)); year <= Number(to.slice(0, 4)); year += 1) {
+  for (
+    let year = Number(from.slice(0, 4));
+    year <= Number(to.slice(0, 4));
+    year += 1
+  ) {
     years.push(year);
   }
   return years;
@@ -1173,11 +1374,13 @@ interface ExactPositiveRatio {
   readonly denominator: bigint;
 }
 
-function positiveNumberFraction(value: number | null): ExactPositiveRatio | null {
+function positiveNumberFraction(
+  value: number | null,
+): ExactPositiveRatio | null {
   if (value === null || !Number.isFinite(value) || value <= 0) return null;
-  const [coefficient, exponentText] = value.toString().toLowerCase().split('e');
+  const [coefficient, exponentText] = value.toString().toLowerCase().split("e");
   const exponent = exponentText === undefined ? 0 : Number(exponentText);
-  const [whole, fraction = ''] = coefficient!.split('.');
+  const [whole, fraction = ""] = coefficient!.split(".");
   const digits = `${whole}${fraction}`;
   if (!/^\d+$/.test(digits)) return null;
   let numerator = BigInt(digits);
@@ -1207,7 +1410,10 @@ function exactRatioRankingRows(
     if (index > 0) {
       const previous = ratios[index - 1]!;
       const current = ratios[index]!;
-      if (previous.numerator * current.denominator !== current.numerator * previous.denominator) {
+      if (
+        previous.numerator * current.denominator !==
+        current.numerator * previous.denominator
+      ) {
         rank += 1;
       }
     }
@@ -1243,7 +1449,10 @@ async function loadFinancialRankingValues(
 
   async function readBatch(keys: readonly string[]): Promise<void> {
     const loaded = await facts.getFacts({
-      scope: 'SYMBOL', keys, fields: ['NET_INCOME', 'TOTAL_EQUITY'], asOfMaxTsMs,
+      scope: "SYMBOL",
+      keys,
+      fields: ["NET_INCOME", "TOTAL_EQUITY"],
+      asOfMaxTsMs,
     });
     throwIfStopped();
     const view = new PitFactView(loaded);
@@ -1251,8 +1460,8 @@ async function loadFinancialRankingValues(
     for (const symbol of keys) {
       const snapshot = view.fundamentals(symbol);
       result.set(symbol, {
-        netIncomeTtm: snapshot?.ttm('NET_INCOME') ?? null,
-        totalEquity: snapshot?.get('TOTAL_EQUITY') ?? null,
+        netIncomeTtm: snapshot?.ttm("NET_INCOME") ?? null,
+        totalEquity: snapshot?.get("TOTAL_EQUITY") ?? null,
       });
     }
   }
@@ -1266,8 +1475,8 @@ async function loadCandleHistories(
 ): Promise<Map<string, ClosePricePoint[]>> {
   const histories = new Map<string, ClosePricePoint[]>();
   const query = {
-    market: 'KR',
-    timeframe: '1d',
+    market: "KR",
+    timeframe: "1d",
     symbols,
     // fromDate 의 KST 자정부터 — 직전 달력일의 끝 다음 ms 가 그 경계다.
     fromTsMs: kstEndOfDayMs(addCalendarDays(fromDate, -1)) + 1,

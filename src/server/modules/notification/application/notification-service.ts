@@ -1,12 +1,12 @@
-import { EventEmitter } from 'node:events';
-import { count, desc, eq, inArray } from 'drizzle-orm';
-import type { AppDatabase } from '../../../../runtime/shared/db/database.js';
-import { notifications } from '../../../shared/db/notification-schema.js';
-import type { Clock } from '../../../../runtime/shared/clock.js';
-import { newId } from '../../../../runtime/shared/ids.js';
+import { EventEmitter } from "node:events";
+import { count, desc, eq, inArray } from "drizzle-orm";
+import type { AppDatabase } from "../../../../runtime/shared/db/database.js";
+import { notifications } from "../../../shared/db/notification-schema.js";
+import type { Clock } from "../../../../runtime/shared/clock.js";
+import { newId } from "../../../../runtime/shared/ids.js";
 
-export type NotificationType = 'backtest' | 'data-sync';
-export type NotificationSeverity = 'info' | 'error';
+export type NotificationType = "backtest" | "data-sync";
+export type NotificationSeverity = "info" | "error";
 
 export interface NotificationInput {
   readonly type: NotificationType;
@@ -39,7 +39,7 @@ export class NotificationService {
 
   create(input: NotificationInput): NotificationRow {
     const row: NotificationRow = {
-      id: newId('ntf'),
+      id: newId("ntf"),
       type: input.type,
       severity: input.severity,
       title: input.title,
@@ -49,7 +49,7 @@ export class NotificationService {
       createdAtMs: this.clock.now(),
     };
     this.db.insert(notifications).values(row).run();
-    this.events.emit('notification', row);
+    this.events.emit("notification", row);
     return row;
   }
 
@@ -72,12 +72,19 @@ export class NotificationService {
   }
 
   markAllRead(): void {
-    this.db.update(notifications).set({ read: true }).where(eq(notifications.read, false)).run();
+    this.db
+      .update(notifications)
+      .set({ read: true })
+      .where(eq(notifications.read, false))
+      .run();
   }
 
   remove(ids: readonly string[]): void {
     if (ids.length === 0) return; // inArray 는 빈 배열에서 던진다
-    this.db.delete(notifications).where(inArray(notifications.id, [...ids])).run();
+    this.db
+      .delete(notifications)
+      .where(inArray(notifications.id, [...ids]))
+      .run();
   }
 
   removeAll(): void {

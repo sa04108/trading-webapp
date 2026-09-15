@@ -1,5 +1,5 @@
-import argon2 from 'argon2';
-import type { PasswordHasher } from '../application/ports.js';
+import argon2 from "argon2";
+import type { PasswordHasher } from "../application/ports.js";
 
 /** 스펙 §16: Argon2id. 1GB RAM 호스트를 고려해 memoryCost 는 보수적으로 설정한다. */
 export const argon2PasswordHasher: PasswordHasher = {

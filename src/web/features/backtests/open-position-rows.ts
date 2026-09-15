@@ -1,4 +1,4 @@
-import type { OpenPositionSnapshot } from './types.js';
+import type { OpenPositionSnapshot } from "./types.js";
 
 /** 거래 내역 테이블 상단에 고정 표시할 미청산 행 모델 */
 export interface OpenPositionRow {
@@ -32,7 +32,7 @@ export function openPositionRows(
   }
   const periodEndMs = Date.parse(`${periodTo}T23:59:59+09:00`);
   return positions
-    .filter((p) => symbolFilter === 'ALL' || p.symbol === symbolFilter)
+    .filter((p) => symbolFilter === "ALL" || p.symbol === symbolFilter)
     .map((p) => ({
       symbol: p.symbol,
       quantity: p.quantity,

@@ -2,9 +2,9 @@
 // tsconfig.server.json 의 NodeNext 프로그램에 편입되는데, 거기서는 확장자 없는 상대
 // import 가 에러다 (tests/unit/api-client.test.ts 와 같은 이유). 따라서 이
 // 모듈은 계속 DOM 을 쓰지 않고 별칭(@/) import 도 쓰지 않아야 한다.
-import type { UniverseRule } from '../../../shared/schemas/universe-rule.js';
-import type { BacktestRequestBody } from './types.js';
-import type { BenchmarkId } from '../../../shared/schemas/benchmark.js';
+import type { UniverseRule } from "../../../shared/schemas/universe-rule.js";
+import type { BacktestRequestBody } from "./types.js";
+import type { BenchmarkId } from "../../../shared/schemas/benchmark.js";
 
 /** 위저드 입력 상태 — 폼이므로 전부 문자열로 보관한다 (universeRule 은 예외다, 아래 참고) */
 export interface WizardFormState {
@@ -46,7 +46,9 @@ export interface CloneSchemaPrefillState {
  * 스키마 없이 원본 파라미터를 파싱하면 빈 객체가 되어, 재사용 가능한 원본 미리보기를
  * 다른 설정으로 오판하고 URL 단계까지 앞쪽으로 접는 경합이 생긴다.
  */
-export function isCloneStrategySchemaPending(state: CloneSchemaPrefillState): boolean {
+export function isCloneStrategySchemaPending(
+  state: CloneSchemaPrefillState,
+): boolean {
   return (
     state.sourceJobId !== null &&
     state.prefilledSourceJobId === state.sourceJobId &&
@@ -75,7 +77,9 @@ export function requestToFormState(
 
   const strategyExists = catalog.strategyIds.includes(request.strategyId);
   if (!strategyExists) {
-    notes.push(`전략 ${request.strategyId} 이 더 이상 등록돼 있지 않습니다 — 다시 고르세요.`);
+    notes.push(
+      `전략 ${request.strategyId} 이 더 이상 등록돼 있지 않습니다 — 다시 고르세요.`,
+    );
   }
 
   return {
@@ -84,12 +88,15 @@ export function requestToFormState(
       // 전략이 없으면 파라미터도 의미가 없다 — 새로 고른 전략의 기본값이 채워진다
       parameters: strategyExists
         ? Object.fromEntries(
-            Object.entries(request.parameters).map(([key, value]) => [key, String(value)]),
+            Object.entries(request.parameters).map(([key, value]) => [
+              key,
+              String(value),
+            ]),
           )
         : {},
-      timeframe: request.timeframe ?? '',
+      timeframe: request.timeframe ?? "",
       universeRule: request.universeRule,
-      benchmarkId: request.benchmarkId ?? 'KOSPI',
+      benchmarkId: request.benchmarkId ?? "KOSPI",
       from: request.period.from,
       to: request.period.to,
       initialCash: String(request.capital.initialCash),

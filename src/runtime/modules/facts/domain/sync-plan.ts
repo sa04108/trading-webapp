@@ -42,10 +42,10 @@ export const DART_DAILY_CALL_LIMIT = 40_000;
  */
 export const DART_CORPORATE_ACTION_CALLS_PER_YEAR = 4;
 
-export type FactSyncMode = 'FULL' | 'INCREMENTAL';
+export type FactSyncMode = "FULL" | "INCREMENTAL";
 
 /** 분기 누적 보고서의 대상 기간 말일 (1Q·반기·3Q·사업보고서 순). */
-const QUARTER_END_MONTH_DAYS = ['03-31', '06-30', '09-30', '12-31'] as const;
+const QUARTER_END_MONTH_DAYS = ["03-31", "06-30", "09-30", "12-31"] as const;
 
 /**
  * 오늘(KST) 기준으로 존재할 수 있는 `year` 사업연도 정기보고서 수 (0~4).
@@ -90,7 +90,7 @@ export interface FactSyncWorkUnit {
  * 실행 경로는 `FactSourceRequestHooks.beforeRequest`로 물리적인 요청을 직접 센다.
  */
 export function estimateDartCalls(
-  work: Omit<FactSyncWorkUnit, 'estimatedDartCalls'> | FactSyncWorkUnit,
+  work: Omit<FactSyncWorkUnit, "estimatedDartCalls"> | FactSyncWorkUnit,
   todayKstDate: string,
   requestedShareYears: ReadonlySet<number> = new Set(),
   includeFinancials = true,
@@ -138,7 +138,8 @@ export interface PlanFactSyncArgs {
 
 export function planFactSync(args: PlanFactSyncArgs): FactSyncPlan {
   const target: number[] = [];
-  for (let year = args.fromYear; year <= args.toYear; year += 1) target.push(year);
+  for (let year = args.fromYear; year <= args.toYear; year += 1)
+    target.push(year);
 
   const yearsBySymbol = new Map<string, readonly number[]>();
   const shareYearsBySymbol = new Map<string, readonly number[]>();
@@ -147,11 +148,14 @@ export function planFactSync(args: PlanFactSyncArgs): FactSyncPlan {
   // 같은 종목이 두 번 들어와도 한 번만 계획한다 — 호출 수가 부풀면 예상 시간도 부푼다
   for (const symbol of new Set(args.symbols)) {
     const forced = new Set(args.forcedYearsBySymbol?.get(symbol) ?? []);
-    const symbolTarget = args.mode === 'INCREMENTAL'
-      ? [...new Set([...target, ...forced])].sort((left, right) => left - right)
-      : target;
+    const symbolTarget =
+      args.mode === "INCREMENTAL"
+        ? [...new Set([...target, ...forced])].sort(
+            (left, right) => left - right,
+          )
+        : target;
     const years =
-      args.mode === 'FULL'
+      args.mode === "FULL"
         ? target
         : incrementalYears(
             symbolTarget,
@@ -172,7 +176,8 @@ export function planFactSync(args: PlanFactSyncArgs): FactSyncPlan {
         args.todayKstDate,
         requestedShareYears,
       );
-      for (const shareYear of workShareYears) requestedShareYears.add(shareYear);
+      for (const shareYear of workShareYears)
+        requestedShareYears.add(shareYear);
     }
   }
 
@@ -223,7 +228,9 @@ export interface CorporateActionSyncEstimate {
  * 연도당 `irdsSttus` 최대 4회, `shareYear` 당 `stockTotqySttus` 최대 4회다
  * (`dart-fact-source.ts` 의 `fetchCorporateActions` 참고).
  */
-export function estimateCorporateActionSyncCost(plan: FactSyncPlan): CorporateActionSyncEstimate {
+export function estimateCorporateActionSyncCost(
+  plan: FactSyncPlan,
+): CorporateActionSyncEstimate {
   let calls = 0;
   for (const [symbol, years] of plan.yearsBySymbol) {
     const requestedShareYears = new Set<number>();

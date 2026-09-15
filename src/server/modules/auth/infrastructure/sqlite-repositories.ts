@@ -1,14 +1,18 @@
-import { and, count, eq, gt, isNull, lt, or } from 'drizzle-orm';
-import type { AppDatabase } from '../../../../runtime/shared/db/database.js';
-import type { Logger } from '../../../shared/logger.js';
-import { loginAttempts, sessions, users } from '../../../shared/db/auth-schema.js';
+import { and, count, eq, gt, isNull, lt, or } from "drizzle-orm";
+import type { AppDatabase } from "../../../../runtime/shared/db/database.js";
+import type { Logger } from "../../../shared/logger.js";
+import {
+  loginAttempts,
+  sessions,
+  users,
+} from "../../../shared/db/auth-schema.js";
 import type {
   LoginAttemptRepository,
   SessionRecord,
   SessionRepository,
   UserRecord,
   UserRepository,
-} from '../application/ports.js';
+} from "../application/ports.js";
 
 /**
  * 손상된 JSON 이 로그인 전체를 500 으로 무너뜨리지 않게 막는다. 이 함수는
@@ -23,20 +27,26 @@ function parseRecoveryCodeHashes(
   if (!json) return [];
   try {
     const parsed: unknown = JSON.parse(json);
-    if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== 'string')) {
-      throw new Error('문자열 배열이 아닙니다');
+    if (
+      !Array.isArray(parsed) ||
+      parsed.some((item) => typeof item !== "string")
+    ) {
+      throw new Error("문자열 배열이 아닙니다");
     }
     return parsed as string[];
   } catch (error) {
     logger?.error(
-      { module: 'auth', userId, err: error },
-      'recovery_code_hashes_json 을 읽을 수 없습니다 — 복구 코드 없음으로 처리합니다',
+      { module: "auth", userId, err: error },
+      "recovery_code_hashes_json 을 읽을 수 없습니다 — 복구 코드 없음으로 처리합니다",
     );
     return [];
   }
 }
 
-function toUserRecord(row: typeof users.$inferSelect, logger?: Logger): UserRecord {
+function toUserRecord(
+  row: typeof users.$inferSelect,
+  logger?: Logger,
+): UserRecord {
   return {
     id: row.id,
     username: row.username,
@@ -44,14 +54,25 @@ function toUserRecord(row: typeof users.$inferSelect, logger?: Logger): UserReco
     totpSecret: row.totpSecret,
     totpEnabled: row.totpEnabled,
     totpLastUsedStep: row.totpLastUsedStep,
-    recoveryCodeHashes: parseRecoveryCodeHashes(row.recoveryCodeHashesJson, row.id, logger),
+    recoveryCodeHashes: parseRecoveryCodeHashes(
+      row.recoveryCodeHashesJson,
+      row.id,
+      logger,
+    ),
   };
 }
 
-export function createSqliteUserRepository(db: AppDatabase, logger?: Logger): UserRepository {
+export function createSqliteUserRepository(
+  db: AppDatabase,
+  logger?: Logger,
+): UserRepository {
   return {
     findByUsername(username) {
-      const row = db.select().from(users).where(eq(users.username, username)).get();
+      const row = db
+        .select()
+        .from(users)
+        .where(eq(users.username, username))
+        .get();
       return row ? toUserRecord(row, logger) : null;
     },
     findById(id) {
@@ -92,7 +113,10 @@ export function createSqliteUserRepository(db: AppDatabase, logger?: Logger): Us
         if (index === -1) return false; // 다른 요청이 먼저 소비했다
         const remaining = current.filter((_, i) => i !== index);
         tx.update(users)
-          .set({ recoveryCodeHashesJson: JSON.stringify(remaining), updatedAtMs: nowMs })
+          .set({
+            recoveryCodeHashesJson: JSON.stringify(remaining),
+            updatedAtMs: nowMs,
+          })
           .where(eq(users.id, userId))
           .run();
         return true;
@@ -107,7 +131,10 @@ export function createSqliteUserRepository(db: AppDatabase, logger?: Logger): Us
         .where(
           and(
             eq(users.id, userId),
-            or(isNull(users.totpLastUsedStep), lt(users.totpLastUsedStep, step)),
+            or(
+              isNull(users.totpLastUsedStep),
+              lt(users.totpLastUsedStep, step),
+            ),
           ),
         )
         .run();
@@ -138,7 +165,9 @@ export function createSqliteUserRepository(db: AppDatabase, logger?: Logger): Us
   };
 }
 
-export function createSqliteSessionRepository(db: AppDatabase): SessionRepository {
+export function createSqliteSessionRepository(
+  db: AppDatabase,
+): SessionRepository {
   return {
     create(session: SessionRecord) {
       db.insert(sessions)
@@ -156,7 +185,10 @@ export function createSqliteSessionRepository(db: AppDatabase): SessionRepositor
       return row ?? null;
     },
     touch(id, nowMs) {
-      db.update(sessions).set({ lastSeenAtMs: nowMs }).where(eq(sessions.id, id)).run();
+      db.update(sessions)
+        .set({ lastSeenAtMs: nowMs })
+        .where(eq(sessions.id, id))
+        .run();
     },
     delete(id) {
       db.delete(sessions).where(eq(sessions.id, id)).run();
@@ -164,7 +196,9 @@ export function createSqliteSessionRepository(db: AppDatabase): SessionRepositor
   };
 }
 
-export function createSqliteLoginAttemptRepository(db: AppDatabase): LoginAttemptRepository {
+export function createSqliteLoginAttemptRepository(
+  db: AppDatabase,
+): LoginAttemptRepository {
   return {
     record(username, ip, success, nowMs) {
       db.insert(loginAttempts)

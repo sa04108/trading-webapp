@@ -1,10 +1,18 @@
-import { and, eq, max, sql } from 'drizzle-orm';
-import type { Clock } from '../../../runtime/shared/clock.js';
-import type { DatabaseHandle } from '../../../runtime/shared/db/database.js';
-import { externalApiDailyUsage } from './collection-schema.js';
+import { and, eq, max, sql } from "drizzle-orm";
+import type { Clock } from "../../../runtime/shared/clock.js";
+import type { DatabaseHandle } from "../../../runtime/shared/db/database.js";
+import { externalApiDailyUsage } from "./collection-schema.js";
 
-import type { LimitedExternalApi, ExternalApiQuotaExceededEvent, ExternalApiUsage } from '../../../runtime/shared/external-api-usage.js';
-export type { LimitedExternalApi, ExternalApiQuotaExceededEvent, ExternalApiUsage } from '../../../runtime/shared/external-api-usage.js';
+import type {
+  LimitedExternalApi,
+  ExternalApiQuotaExceededEvent,
+  ExternalApiUsage,
+} from "../../../runtime/shared/external-api-usage.js";
+export type {
+  LimitedExternalApi,
+  ExternalApiQuotaExceededEvent,
+  ExternalApiUsage,
+} from "../../../runtime/shared/external-api-usage.js";
 
 export interface SqliteExternalApiUsageOptions {
   readonly database: DatabaseHandle;
@@ -25,26 +33,32 @@ export class SqliteExternalApiUsage implements ExternalApiUsage {
   recordCall(api: LimitedExternalApi, quotaScope: string): number {
     const usageDateKst = this.today();
     const now = this.options.clock.now();
-    return this.options.database.sqlite.transaction(() => {
-      this.options.database.db.insert(externalApiDailyUsage).values({
-        api,
-        quotaScope,
-        usageDateKst,
-        callsUsed: 1,
-        updatedAtMs: now,
-      }).onConflictDoUpdate({
-        target: [
-          externalApiDailyUsage.api,
-          externalApiDailyUsage.quotaScope,
-          externalApiDailyUsage.usageDateKst,
-        ],
-        set: {
-          callsUsed: sql`${externalApiDailyUsage.callsUsed} + 1`,
-          updatedAtMs: now,
-        },
-      }).run();
-      return this.rowFor(api, quotaScope, usageDateKst)?.callsUsed ?? 0;
-    }).immediate();
+    return this.options.database.sqlite
+      .transaction(() => {
+        this.options.database.db
+          .insert(externalApiDailyUsage)
+          .values({
+            api,
+            quotaScope,
+            usageDateKst,
+            callsUsed: 1,
+            updatedAtMs: now,
+          })
+          .onConflictDoUpdate({
+            target: [
+              externalApiDailyUsage.api,
+              externalApiDailyUsage.quotaScope,
+              externalApiDailyUsage.usageDateKst,
+            ],
+            set: {
+              callsUsed: sql`${externalApiDailyUsage.callsUsed} + 1`,
+              updatedAtMs: now,
+            },
+          })
+          .run();
+        return this.rowFor(api, quotaScope, usageDateKst)?.callsUsed ?? 0;
+      })
+      .immediate();
   }
 
   callsUsed(api: LimitedExternalApi, quotaScope: string): number {
@@ -52,14 +66,18 @@ export class SqliteExternalApiUsage implements ExternalApiUsage {
   }
 
   maxCallsUsed(api: LimitedExternalApi): number {
-    return this.options.database.db
-      .select({ callsUsed: max(externalApiDailyUsage.callsUsed) })
-      .from(externalApiDailyUsage)
-      .where(and(
-        eq(externalApiDailyUsage.api, api),
-        eq(externalApiDailyUsage.usageDateKst, this.today()),
-      ))
-      .get()?.callsUsed ?? 0;
+    return (
+      this.options.database.db
+        .select({ callsUsed: max(externalApiDailyUsage.callsUsed) })
+        .from(externalApiDailyUsage)
+        .where(
+          and(
+            eq(externalApiDailyUsage.api, api),
+            eq(externalApiDailyUsage.usageDateKst, this.today()),
+          ),
+        )
+        .get()?.callsUsed ?? 0
+    );
   }
 
   quotaExceeded(api: LimitedExternalApi, quotaScope: string): boolean {
@@ -74,29 +92,35 @@ export class SqliteExternalApiUsage implements ExternalApiUsage {
   ): boolean {
     const usageDateKst = this.today();
     const now = this.options.clock.now();
-    const result = this.options.database.sqlite.transaction(() => {
-      const current = this.rowFor(api, quotaScope, usageDateKst);
-      if (current?.quotaExceededAtMs != null) {
-        return { first: false, callsUsed: current.callsUsed };
-      }
+    const result = this.options.database.sqlite
+      .transaction(() => {
+        const current = this.rowFor(api, quotaScope, usageDateKst);
+        if (current?.quotaExceededAtMs != null) {
+          return { first: false, callsUsed: current.callsUsed };
+        }
 
-      this.options.database.db.insert(externalApiDailyUsage).values({
-        api,
-        quotaScope,
-        usageDateKst,
-        callsUsed: current?.callsUsed ?? 0,
-        quotaExceededAtMs: now,
-        updatedAtMs: now,
-      }).onConflictDoUpdate({
-        target: [
-          externalApiDailyUsage.api,
-          externalApiDailyUsage.quotaScope,
-          externalApiDailyUsage.usageDateKst,
-        ],
-        set: { quotaExceededAtMs: now, updatedAtMs: now },
-      }).run();
-      return { first: true, callsUsed: current?.callsUsed ?? 0 };
-    }).immediate();
+        this.options.database.db
+          .insert(externalApiDailyUsage)
+          .values({
+            api,
+            quotaScope,
+            usageDateKst,
+            callsUsed: current?.callsUsed ?? 0,
+            quotaExceededAtMs: now,
+            updatedAtMs: now,
+          })
+          .onConflictDoUpdate({
+            target: [
+              externalApiDailyUsage.api,
+              externalApiDailyUsage.quotaScope,
+              externalApiDailyUsage.usageDateKst,
+            ],
+            set: { quotaExceededAtMs: now, updatedAtMs: now },
+          })
+          .run();
+        return { first: true, callsUsed: current?.callsUsed ?? 0 };
+      })
+      .immediate();
 
     if (result.first) {
       this.options.onQuotaExceeded?.({
@@ -114,15 +138,21 @@ export class SqliteExternalApiUsage implements ExternalApiUsage {
     return this.options.currentDateKst(this.options.clock.now());
   }
 
-  private rowFor(api: LimitedExternalApi, quotaScope: string, usageDateKst: string) {
+  private rowFor(
+    api: LimitedExternalApi,
+    quotaScope: string,
+    usageDateKst: string,
+  ) {
     return this.options.database.db
       .select()
       .from(externalApiDailyUsage)
-      .where(and(
-        eq(externalApiDailyUsage.api, api),
-        eq(externalApiDailyUsage.quotaScope, quotaScope),
-        eq(externalApiDailyUsage.usageDateKst, usageDateKst),
-      ))
+      .where(
+        and(
+          eq(externalApiDailyUsage.api, api),
+          eq(externalApiDailyUsage.quotaScope, quotaScope),
+          eq(externalApiDailyUsage.usageDateKst, usageDateKst),
+        ),
+      )
       .get();
   }
 }

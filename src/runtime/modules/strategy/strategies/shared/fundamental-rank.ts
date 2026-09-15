@@ -1,6 +1,12 @@
-import { quarterOrdinal } from '../../../facts/domain/pit-fact-view.js';
-import { KR_SESSION, toLocalTime } from '../../../market-data/domain/exchange-session.js';
-import { shuffleInPlace, type Rng } from '../../../backtest/domain/seeded-rng.js';
+import { quarterOrdinal } from "../../../facts/domain/pit-fact-view.js";
+import {
+  KR_SESSION,
+  toLocalTime,
+} from "../../../market-data/domain/exchange-session.js";
+import {
+  shuffleInPlace,
+  type Rng,
+} from "../../../backtest/domain/seeded-rng.js";
 
 export interface EarningsAccelerationInput {
   q0: number;
@@ -31,7 +37,9 @@ const MAX_SAFE_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 export function currentQuarterOrdinal(atTsMs: number): number {
   const { dayIndex } = toLocalTime(atTsMs, KR_SESSION);
   const localDate = new Date(dayIndex * MS_PER_DAY);
-  return localDate.getUTCFullYear() * 4 + Math.floor(localDate.getUTCMonth() / 3);
+  return (
+    localDate.getUTCFullYear() * 4 + Math.floor(localDate.getUTCMonth() / 3)
+  );
 }
 
 export function isFreshQuarter(
@@ -40,10 +48,10 @@ export function isFreshQuarter(
   staleQuarters: number,
 ): boolean {
   if (
-    periodKey === null
-    || !Number.isFinite(atTsMs)
-    || !Number.isInteger(staleQuarters)
-    || staleQuarters < 0
+    periodKey === null ||
+    !Number.isFinite(atTsMs) ||
+    !Number.isInteger(staleQuarters) ||
+    staleQuarters < 0
   ) {
     return false;
   }
@@ -66,10 +74,8 @@ function shuffleEqualRanges<T>(
   if (rng === undefined) return;
   for (let start = 0; start < sorted.length;) {
     let end = start + 1;
-    while (
-      end < sorted.length
-      && equal(sorted[start] as T, sorted[end] as T)
-    ) end += 1;
+    while (end < sorted.length && equal(sorted[start] as T, sorted[end] as T))
+      end += 1;
     if (end - start > 1) {
       const tied = sorted.slice(start, end);
       shuffleInPlace(tied, rng);
@@ -82,7 +88,7 @@ function shuffleEqualRanges<T>(
 export function ordinalRank<T>(
   rows: readonly T[],
   value: (row: T) => number,
-  direction: 'ASC' | 'DESC',
+  direction: "ASC" | "DESC",
   code: (row: T) => string,
   rng?: Rng,
 ): Map<T, number> {
@@ -95,15 +101,19 @@ export function ordinalRank<T>(
     if (leftValue === rightValue || (!leftFinite && !rightFinite)) {
       return compareCodes(code(left), code(right));
     }
-    return direction === 'ASC' ? leftValue - rightValue : rightValue - leftValue;
+    return direction === "ASC"
+      ? leftValue - rightValue
+      : rightValue - leftValue;
   });
   shuffleEqualRanges(
     sorted,
     (left, right) => {
       const leftValue = value(left);
       const rightValue = value(right);
-      return leftValue === rightValue
-        || (!Number.isFinite(leftValue) && !Number.isFinite(rightValue));
+      return (
+        leftValue === rightValue ||
+        (!Number.isFinite(leftValue) && !Number.isFinite(rightValue))
+      );
     },
     rng,
   );
@@ -116,27 +126,43 @@ export function combineRanks<T>(
   code: (row: T) => string,
   rng?: Rng,
 ): T[] {
-  const scored = rows.map((row) => ({
-    row,
-    rankSum: ranks.reduce(
-      (sum, rank) => sum + (rank.get(row) ?? Number.POSITIVE_INFINITY),
-      0,
-    ),
-  })).sort((left, right) => (
-    left.rankSum === right.rankSum
-      ? compareCodes(code(left.row), code(right.row))
-      : left.rankSum - right.rankSum
-  ));
-  shuffleEqualRanges(scored, (left, right) => left.rankSum === right.rankSum, rng);
+  const scored = rows
+    .map((row) => ({
+      row,
+      rankSum: ranks.reduce(
+        (sum, rank) => sum + (rank.get(row) ?? Number.POSITIVE_INFINITY),
+        0,
+      ),
+    }))
+    .sort((left, right) =>
+      left.rankSum === right.rankSum
+        ? compareCodes(code(left.row), code(right.row))
+        : left.rankSum - right.rankSum,
+    );
+  shuffleEqualRanges(
+    scored,
+    (left, right) => left.rankSum === right.rankSum,
+    rng,
+  );
   return scored.map(({ row }) => row);
 }
 
 export function scoreEarningsAcceleration(
   input: EarningsAccelerationInput,
 ): { ttmGrowth: number; priceMomentum: number } | null {
-  const quarters = [input.q0, input.q1, input.q2, input.q3, input.q4, input.q5, input.q6, input.q7];
+  const quarters = [
+    input.q0,
+    input.q1,
+    input.q2,
+    input.q3,
+    input.q4,
+    input.q5,
+    input.q6,
+    input.q7,
+  ];
   if (quarters.some((value) => !Number.isFinite(value))) return null;
-  if (!Number.isFinite(input.priceMomentum) || input.priceMomentum <= 0) return null;
+  if (!Number.isFinite(input.priceMomentum) || input.priceMomentum <= 0)
+    return null;
 
   // 스펙 §8.2: 양수 조건은 두 TTM 합과 YoY 분모 q4·q5 에만 건다. 개별 분기 전부에
   // 걸면 한 분기 적자였지만 TTM 이 견조한 기업까지 잘못 제외한다. 음수→양수 전환
@@ -150,11 +176,11 @@ export function scoreEarningsAcceleration(
   const latestQuarterYoy = input.q0 / input.q4 - 1;
   const previousQuarterYoy = input.q1 / input.q5 - 1;
   if (
-    !Number.isFinite(ttmGrowth)
-    || ttmGrowth <= 0
-    || !Number.isFinite(latestQuarterYoy)
-    || !Number.isFinite(previousQuarterYoy)
-    || latestQuarterYoy <= previousQuarterYoy
+    !Number.isFinite(ttmGrowth) ||
+    ttmGrowth <= 0 ||
+    !Number.isFinite(latestQuarterYoy) ||
+    !Number.isFinite(previousQuarterYoy) ||
+    latestQuarterYoy <= previousQuarterYoy
   ) {
     return null;
   }
@@ -177,17 +203,18 @@ export function scoreLowPerHighRoe(
 ): { per: number; roe: number } | null {
   const marketCap = safePositiveMarketCap(input.marketCapKrw);
   if (
-    marketCap === null
-    || !Number.isFinite(input.netIncomeTtm)
-    || input.netIncomeTtm <= 0
-    || !Number.isFinite(input.totalEquity)
-    || input.totalEquity <= 0
+    marketCap === null ||
+    !Number.isFinite(input.netIncomeTtm) ||
+    input.netIncomeTtm <= 0 ||
+    !Number.isFinite(input.totalEquity) ||
+    input.totalEquity <= 0
   ) {
     return null;
   }
   const per = marketCap / input.netIncomeTtm;
   const roe = input.netIncomeTtm / input.totalEquity;
-  if (!Number.isFinite(per) || per <= 0 || !Number.isFinite(roe) || roe <= 0) return null;
+  if (!Number.isFinite(per) || per <= 0 || !Number.isFinite(roe) || roe <= 0)
+    return null;
   return { per, roe };
 }
 
@@ -202,18 +229,21 @@ export function rankLowPerHighRoe(
   const perRanks = ordinalRank(
     scored,
     (entry) => entry.per,
-    'ASC',
+    "ASC",
     (entry) => entry.row.symbol,
     rng,
   );
   const roeRanks = ordinalRank(
     scored,
     (entry) => entry.roe,
-    'DESC',
+    "DESC",
     (entry) => entry.row.symbol,
     rng,
   );
-  return combineRanks(scored, [perRanks, roeRanks], (entry) => entry.row.symbol, rng).map(
-    (entry) => entry.row,
-  );
+  return combineRanks(
+    scored,
+    [perRanks, roeRanks],
+    (entry) => entry.row.symbol,
+    rng,
+  ).map((entry) => entry.row);
 }

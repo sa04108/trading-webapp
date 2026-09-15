@@ -23,6 +23,9 @@ export function isSessionExpired(
 }
 
 /** 로그인 rate limit 판정: 최근 windowMs 내 실패 횟수가 limit 이상이면 잠금 */
-export function isLoginLocked(recentFailureCount: number, limit: number): boolean {
+export function isLoginLocked(
+  recentFailureCount: number,
+  limit: number,
+): boolean {
   return recentFailureCount >= limit;
 }

@@ -1,8 +1,13 @@
-import { useMemo, useState } from 'react';
-import { Slider } from '@/components/ui/slider';
-import { cn } from '@/lib/utils';
-import type { SymbolMasterCoverageDto } from '../../../shared/schemas/symbol-master.js';
-import { buildTimelineSegments, dateToPct, dateToUtcMs, pctToDate } from './timeline-model';
+import { useMemo, useState } from "react";
+import { Slider } from "@/components/ui/slider";
+import { cn } from "@/lib/utils";
+import type { SymbolMasterCoverageDto } from "../../../shared/schemas/symbol-master.js";
+import {
+  buildTimelineSegments,
+  dateToPct,
+  dateToUtcMs,
+  pctToDate,
+} from "./timeline-model";
 
 /**
  * 커버리지 슬라이더 — 날짜를 정확히(일 단위로) 고르되, 드래그 중에는 아무것도
@@ -50,7 +55,7 @@ export function CoverageTimeline({
   const step = 100 / totalDays;
 
   return (
-    <div className={cn('relative min-w-48 flex-1', className)}>
+    <div className={cn("relative min-w-48 flex-1", className)}>
       <Slider
         value={[valuePct]}
         min={0}
@@ -74,8 +79,14 @@ export function CoverageTimeline({
         {segments.map((segment) => (
           <span
             key={`${segment.startPct}-${segment.endPct}`}
-            className={cn('absolute inset-y-0', segment.covered ? 'bg-primary/60' : 'bg-muted')}
-            style={{ left: `${segment.startPct}%`, width: `${segment.endPct - segment.startPct}%` }}
+            className={cn(
+              "absolute inset-y-0",
+              segment.covered ? "bg-primary/60" : "bg-muted",
+            )}
+            style={{
+              left: `${segment.startPct}%`,
+              width: `${segment.endPct - segment.startPct}%`,
+            }}
           />
         ))}
       </div>

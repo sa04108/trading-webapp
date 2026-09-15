@@ -1,10 +1,10 @@
-import type { KrxMarket } from './krx-universe-types.js';
+import type { KrxMarket } from "./krx-universe-types.js";
 
-export type Market = 'KR' | 'US';
+export type Market = "KR" | "US";
 /** 선언된 시장 전체. 타입과 값 목록이 떨어져 있으면 시장을 추가할 때 한쪽만 고쳐진다. */
-export const ALL_MARKETS: readonly Market[] = ['KR', 'US'];
+export const ALL_MARKETS: readonly Market[] = ["KR", "US"];
 /** 봉 주기. KRX 일별매매가 유일한 봉 출처라 일봉뿐이다. */
-export type Timeframe = '1d';
+export type Timeframe = "1d";
 
 /** tsMs 는 봉 시작 시각의 UTC epoch milliseconds (스펙 §11: UTC 저장) */
 export interface Candle {
@@ -31,7 +31,12 @@ export function isValidCandle(candle: Candle): boolean {
     if (!Number.isFinite(value) || value <= 0) return false;
   }
   if (!Number.isFinite(volume) || volume < 0) return false;
-  if (candle.venue !== undefined && candle.venue !== 'KOSPI' && candle.venue !== 'KOSDAQ') return false;
+  if (
+    candle.venue !== undefined &&
+    candle.venue !== "KOSPI" &&
+    candle.venue !== "KOSDAQ"
+  )
+    return false;
   if (high < low) return false;
   if (high < open || high < close) return false;
   if (low > open || low > close) return false;

@@ -1,6 +1,6 @@
-import { z } from 'zod';
-import { isoDateSchema } from './backtest-request.js';
-import { universeRuleSchema } from './universe-rule.js';
+import { z } from "zod";
+import { isoDateSchema } from "./backtest-request.js";
+import { universeRuleSchema } from "./universe-rule.js";
 
 /** Durable preparation jobs store this request subset, not a full backtest request. */
 export const preparationInputSchema = z.object({
