@@ -45,6 +45,7 @@ flowchart LR
 
    arm64 패키지는 압축 파일명을 `quant-agent-linux-arm64.tar.gz`로 바꾼다.
    서버 HTTPS 주소와 Agent 토큰을 입력하면 사용자 systemd 서비스가 시작된다.
+   토큰은 입력하거나 붙여 넣은 원문 그대로 터미널에 표시된다.
 
 Node 런타임과 필요한 패키지를 클라이언트에 포함하므로 장치에 Node·pnpm을 설치하지 않는다.
 Linux glibc 환경과 tar, 사용자 systemd가 필요하다. `dist/clients/manifest.json`에 빌드 환경의
@@ -68,6 +69,37 @@ loginctl enable-linger "$USER"
 WSL2는 Linux의 systemd를 활성화해야 한다. Windows 절전·종료나 WSL 종료 동안에는
 작업할 수 없다. systemd 없이 직접 실행할 때는 `./quant-agent setup` 후
 `./quant-agent run`을 사용하며 자동 업데이트 후 종료 코드 75가 나면 실행 관리자가 재시작해야 한다.
+
+## 클라이언트 명령어
+
+아래 명령은 패키지 압축을 푼 디렉터리에서 일반 사용자로 실행한다.
+
+| 명령어 | 동작 |
+| --- | --- |
+| `./quant-agent` | 명령을 생략하면 `install`을 실행한다. |
+| `./quant-agent install` | 클라이언트를 사용자 경로에 설치하고 systemd 서비스를 등록·활성화한다. 설정 파일이 없을 때만 서버 주소와 토큰을 입력받으며, 기존 설정은 그대로 사용한다. |
+| `./quant-agent setup` | 서버 주소와 토큰을 입력받아 설정 파일을 생성하거나 덮어쓴다. 서비스 설치나 재시작은 수행하지 않는다. |
+| `./quant-agent run` | 현재 터미널에서 Agent를 실행한다. 설정 파일이 없으면 먼저 서버 주소와 토큰을 입력받는다. `Ctrl+C`로 종료한다. |
+| `./quant-agent --check` | 클라이언트의 Git 버전과 Linux 아키텍처를 출력하고 종료한다. 서버에 연결하거나 설정을 변경하지 않는다. |
+
+`install`, `setup`, `run` 뒤에 `--state 경로`를 붙이면 설정·데이터 캐시·작업 상태를 저장할
+디렉터리를 지정할 수 있다. 예: `./quant-agent setup --state /home/사용자/agent-state`.
+`install --state 경로`로 설치한 서비스는 해당 경로를 사용하므로, 이후 `setup`이나 `run`에도
+같은 경로를 지정한다. 서버 주소와 토큰을 입력하는 모든 명령에서 토큰 원문이 표시된다.
+
+설치 후 기본 설치 경로의 클라이언트로 서버 주소나 토큰을 변경하려면 다음과 같이 실행한다.
+`setup`은 실행 중인 서비스에 설정을 즉시 반영하지 않으므로 저장 후 서비스를 재시작한다.
+
+```bash
+~/.local/share/quant-agent/current/quant-agent setup
+systemctl --user restart quant-agent
+```
+
+`XDG_DATA_HOME`을 지정해 설치했다면 실행 파일은 해당 경로 아래 `quant-agent/current/quant-agent`에 있다.
+별도 `--state` 경로를 사용했다면 위 `setup` 명령에도 같은 옵션을 붙인다.
+서비스 상태 확인·재시작·중지는 앞서 안내한 `systemctl --user` 명령으로 수행한다.
+
+## 설정과 자원 관리
 
 기본 경로는 다음과 같다. XDG 경로와 `--state 경로`로 상태 위치를 바꿀 수 있다.
 

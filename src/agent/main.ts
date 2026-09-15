@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline/promises';
-import { Writable } from 'node:stream';
 import { AgentClient } from './client.js';
 import { defaultStateDirectory, readSettings, writeSettings } from './config.js';
 import { activate, downloadUpdate, installService } from './install.js';
@@ -18,16 +17,11 @@ async function main(): Promise<void> {
   const command = args[0] ?? 'install';
   if (!['install', 'run', 'setup'].includes(command)) throw new Error('사용법: quant-agent [install|run|setup] [--state 경로]');
   if (command === 'setup' || !fs.existsSync(path.join(state, 'settings.json'))) {
-    if (!process.stdin.isTTY) throw new Error('먼저 quant-agent setup으로 서버 주소와 장치 토큰을 설정하세요');
-    let muted = false;
-    const output = new Writable({ write(chunk, _encoding, done) { if (!muted) process.stdout.write(chunk); done(); } });
-    const prompt = createInterface({ input: process.stdin, output, terminal: true });
+    if (!process.stdin.isTTY) throw new Error('먼저 quant-agent setup으로 서버 주소와 Agent 토큰을 설정하세요');
+    const prompt = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
     try {
       const serverUrl = (await prompt.question('운영 서버 주소: ')).trim();
-      const answer = prompt.question('운영 화면에서 발급한 장치 토큰: ');
-      muted = true;
-      const token = (await answer).trim();
-      muted = false; process.stdout.write('\n');
+      const token = (await prompt.question('운영 화면에서 발급한 Agent 토큰: ')).trim();
       writeSettings(state, { serverUrl, token });
     } finally { prompt.close(); }
   }
