@@ -16,10 +16,7 @@ function command(program: string, args: string[]): void {
 function systemdQuote(value: string): string { return `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('%', '%%')}"`; }
 
 export function activate(source: string, version: string, destination = installRoot()): void {
-  if (!/^[a-f0-9]{40,64}$/.test(version)) throw new Error('클라이언트 버전 형식이 올바르지 않습니다');
-  if (!fs.existsSync(path.join(source, 'bin/node')) || !fs.existsSync(path.join(source, 'quant-agent'))) throw new Error('빌드된 Linux 클라이언트 패키지에서 설치하세요');
-  const metadata = JSON.parse(fs.readFileSync(path.join(source, 'dist/build-info.json'), 'utf8')) as { gitSha: string };
-  if (metadata.gitSha !== version) throw new Error('클라이언트 패키지의 버전이 다릅니다');
+  verifyPackage(source, version);
   fs.mkdirSync(path.join(destination, 'releases'), { recursive: true, mode: 0o700 });
   const release = path.join(destination, 'releases', version);
   if (path.resolve(source) !== release && !fs.existsSync(release)) {
@@ -29,6 +26,7 @@ export function activate(source: string, version: string, destination = installR
     command(path.join(staging, 'bin/node'), [path.join(staging, 'dist/agent/main.js'), '--check']);
     fs.renameSync(staging, release);
   }
+  verifyPackage(release, version);
   command(path.join(release, 'bin/node'), [path.join(release, 'dist/agent/main.js'), '--check']);
   const current = path.join(destination, 'current');
   const previous = fs.existsSync(current) ? fs.realpathSync(current) : null;
@@ -39,6 +37,13 @@ export function activate(source: string, version: string, destination = installR
     const candidate = path.join(destination, 'releases', name);
     if (/^[a-f0-9]{40,64}$/.test(name) && candidate !== release && candidate !== previous) fs.rmSync(candidate, { recursive: true, force: true });
   }
+}
+
+function verifyPackage(source: string, version: string): void {
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(version)) throw new Error('클라이언트 버전 형식이 올바르지 않습니다');
+  if (!fs.existsSync(path.join(source, 'bin/node')) || !fs.existsSync(path.join(source, 'quant-agent'))) throw new Error('빌드된 Linux 클라이언트 패키지에서 설치하세요');
+  const metadata = JSON.parse(fs.readFileSync(path.join(source, 'dist/build-info.json'), 'utf8')) as { gitSha: string };
+  if (metadata.gitSha !== version) throw new Error('클라이언트 패키지의 버전이 다릅니다');
 }
 
 export function installService(source: string, version: string, state: string): void {
@@ -55,19 +60,25 @@ export function installService(source: string, version: string, state: string): 
   if (linger.status !== 0) console.log('로그아웃 후 상시 실행 설정을 완료하지 못했습니다. 관리자가 loginctl enable-linger 사용자명으로 활성화하세요.');
 }
 
-const packageManifestSchema = z.object({ runnerVersion: z.string(), clients: z.array(z.object({ arch: z.string(), file: z.string().regex(/^quant-agent-linux-(x64|arm64)\.tar\.gz$/), sha256: z.string().regex(/^[a-f0-9]{64}$/), bytes: z.number().int().positive() })) });
+const packageManifestSchema = z.object({ runnerVersion: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/), clients: z.array(z.object({ arch: z.enum(['x64', 'arm64']), file: z.string().regex(/^quant-agent-linux-(x64|arm64)\.tar\.gz$/), sha256: z.string().regex(/^[a-f0-9]{64}$/), bytes: z.number().int().positive() })) });
 
-export async function downloadUpdate(settings: AgentSettings, version: string, directory: string): Promise<string> {
+export type ClientManifest = z.infer<typeof packageManifestSchema>;
+
+export async function fetchClientManifest(settings: AgentSettings): Promise<ClientManifest> {
   const headers = { authorization: `Bearer ${settings.token}` };
   const response = await fetch(`${settings.serverUrl}/api/agents/client/latest`, { headers, redirect: 'error', signal: AbortSignal.timeout(30_000) });
   if (!response.ok) throw new Error(`클라이언트 명세 조회 실패: HTTP ${response.status}`);
-  const manifest = packageManifestSchema.parse(await response.json());
+  return packageManifestSchema.parse(await response.json());
+}
+
+export async function downloadUpdate(settings: AgentSettings, version: string, directory: string, manifest?: ClientManifest): Promise<string> {
+  manifest ??= await fetchClientManifest(settings);
   if (manifest.runnerVersion !== version) throw new Error('운영 서버와 게시된 클라이언트 버전이 다릅니다');
-  const client = manifest.clients.find((entry) => entry.arch === process.arch);
+  const client = manifest.clients.find((entry) => entry.arch === process.arch && entry.file === `quant-agent-linux-${process.arch}.tar.gz`);
   if (!client) throw new Error('현재 CPU 아키텍처의 클라이언트가 게시되지 않았습니다');
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   const archive = path.join(directory, 'client.tar.gz.part');
-  const result = await fetch(`${settings.serverUrl}/api/agents/client/${client.file}`, { headers, redirect: 'error', signal: AbortSignal.timeout(15 * 60_000) });
+  const result = await fetch(`${settings.serverUrl}/api/agents/client/${client.file}`, { headers: { authorization: `Bearer ${settings.token}` }, redirect: 'error', signal: AbortSignal.timeout(15 * 60_000) });
   if (!result.ok || !result.body) throw new Error(`클라이언트 다운로드 실패: HTTP ${result.status}`);
   const hash = createHash('sha256');
   let bytes = 0;
@@ -83,6 +94,7 @@ export async function downloadUpdate(settings: AgentSettings, version: string, d
   const unpacked = path.join(directory, 'unpacked');
   fs.rmSync(unpacked, { recursive: true, force: true }); fs.mkdirSync(unpacked);
   command('tar', ['--no-same-owner', '-xzf', archive, '-C', unpacked]);
+  verifyPackage(unpacked, version);
   command(path.join(unpacked, 'bin/node'), [path.join(unpacked, 'dist/agent/main.js'), '--check']);
   return unpacked;
 }

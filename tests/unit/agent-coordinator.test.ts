@@ -1,4 +1,6 @@
 import { EventEmitter } from 'node:events';
+import fs from 'node:fs';
+import path from 'node:path';
 import { BacktestResultArtifactRejectedError } from '../../src/server/modules/backtest/application/backtest-result-artifact.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { WebSocket } from 'ws';
@@ -106,6 +108,28 @@ describe('연결과 리스 수명 분리', () => {
     expect(peer.job()).toBeUndefined();
     expect(ctx.container.jobQueue.getJob(job.id)?.status).toBe('QUEUED');
     expect(ctx.container.agentCoordinator.maxBacktestBars()).toBe(2_000_000);
+  });
+
+  it('클라이언트 다운로드는 연결 이력 없이 유효한 토큰으로 허용하고 해제 후에는 거부한다', async () => {
+    const exists = fs.existsSync;
+    const files = new Set([
+      path.resolve('dist/clients/manifest.json'),
+      path.resolve('dist/clients/quant-agent-linux-x64.tar.gz'),
+    ]);
+    vi.spyOn(fs, 'existsSync').mockImplementation((file) => files.has(String(file)) ? false : exists(file));
+    const endpoints = ['/api/agents/client/latest', '/api/agents/client/quant-agent-linux-x64.tar.gz'];
+    for (const url of endpoints) {
+      expect((await ctx.app.inject({ method: 'GET', url })).statusCode).toBe(401);
+      expect((await ctx.app.inject({ method: 'GET', url, headers: { authorization: `Bearer ${'x'.repeat(48)}` } })).statusCode).toBe(401);
+    }
+    const headers = { authorization: `Bearer ${token}` };
+    // 게시 파일이 없어도 인증을 통과해 명세는 503, 패키지는 404까지 도달한다.
+    expect((await ctx.app.inject({ method: 'GET', url: endpoints[0]!, headers })).statusCode).toBe(503);
+    expect((await ctx.app.inject({ method: 'GET', url: endpoints[1]!, headers })).statusCode).toBe(404);
+    ctx.container.agentCoordinator.registry.revoke(id);
+    for (const url of endpoints) {
+      expect((await ctx.app.inject({ method: 'GET', url, headers })).statusCode).toBe(401);
+    }
   });
 
   it('장치 토큰은 해시만 저장하고 해제한 장치는 다시 인증할 수 없다', () => {
